@@ -50,6 +50,7 @@ import { CODE_LENS_DEFAULT, loadCodeLensPref } from './code-lens-pref';
 import { TREE_SITTER_DEFAULT, loadTreeSitterPref } from './tree-sitter-pref';
 import { FIND_SEED_DEFAULT, loadFindSeedPref } from './find-pref';
 import { AUTOSAVE_MODE_DEFAULT, loadAutosavePref } from './autosave-pref';
+import { DOUBLE_SHIFT_DEFAULT, loadDoubleShiftPref } from './search-everywhere-pref';
 import { NAME_COLOR_DEFAULT, loadNameColorPref } from './semantic-color-pref';
 import { DIRECT_MODE_DEFAULT, loadDirectMode } from './direct-mode';
 import { loadThemeChoice, THEME_PREF_DEFAULT } from './theme-pref';
@@ -178,6 +179,8 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'general.zenLimitWidth', section: 'general', sectionLabel: '通用', label: '编辑器居中限宽', keywords: ['居中 限宽 宽度'], key: 'general.zenLimitWidth' },
   // 可选面板的显示开关（用户 2026-10-27 反馈 5）：真源 `panel-visibility.ts`，缺省收起
   { id: 'general.panel.kojo-xml', section: 'general', sectionLabel: '通用', label: '「口上 XML」面板', keywords: ['xml 面板 活动栏 侧栏 显示 收起'], key: 'general.panel.kojo-xml' },
+  // 全局搜索呼出腿（2026-10-28 体验对等批）：页面上「搜索」组那一行，行序在「面板」之后、「封存」之前
+  { id: 'general.doubleShiftSearch', section: 'general', sectionLabel: '通用', label: '双击 Shift 呼出全局搜索', keywords: ['search everywhere 全局搜索 综合搜索 双击 shift 快捷'], key: 'general.doubleShiftSearch', isModified: () => loadDoubleShiftPref() !== DOUBLE_SHIFT_DEFAULT },
   { id: 'general.sealed', section: 'general', sectionLabel: '通用', label: '显示已封存功能', keywords: ['封存 sealed 实验'], key: 'general.sealed' },
   { id: 'general.layout', section: 'general', sectionLabel: '通用', label: '重置布局', keywords: ['布局 侧栏 面板 分屏'], key: 'general.layout' },
 

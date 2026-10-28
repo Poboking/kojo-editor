@@ -104,6 +104,11 @@ const GROUP_AND_PROJECT_SPECS: readonly KeybindingSpec[] = [
   { id: 'workbench.enlargeActiveGroup', title: '放大焦点编辑器组', category: '工作台', keys: 'ctrl+alt+=', rebindable: true, note: '键盘调分隔条；相邻那组同步让出份额' },
   { id: 'workbench.shrinkActiveGroup', title: '缩小焦点编辑器组', category: '工作台', keys: 'ctrl+alt+-', rebindable: true, note: '键盘调分隔条；一成下限为止' },
   { id: 'workbench.focusExplorer', title: '聚焦资源管理器', category: '布局', keys: 'ctrl+shift+e', rebindable: true, note: '打开主侧栏「口上文件」并把键盘焦点交给树' },
+  // 全局搜索（2026-10-28 体验对等批 · Search Everywhere）：**刻意不带缺省单键**——
+  // 缺省呼出腿是「双击 Shift」，`chordFromEvent` 表达不了纯修饰键连击，走全局处理器的时间窗特判
+  // （与 `layout.toggleZen` 的 `ctrl+k z` 同形态；判定纯函数在 `search-everywhere-trigger.ts`）。
+  // 标题与 `ShellLayout` 的 shellCommands 逐字相同（键位页与面板两处一个名字）。
+  { id: 'workbench.searchEverywhere', title: '全局搜索（Search Everywhere）', category: '工作台', rebindable: true, note: '双击 Shift 呼出（设置里可关）；面板内 Alt+1..4 / Ctrl+Tab 切范围' },
   { id: 'workbench.closeProject', title: '关闭项目', category: '项目', rebindable: true },
   { id: 'workbench.openProjectFolder', title: '打开项目文件夹…', category: '项目', rebindable: true },
   { id: 'workbench.openRecentProjects', title: '打开最近项目…', category: '项目', rebindable: true, note: '与项目名旁「更多」菜单同一张表' },

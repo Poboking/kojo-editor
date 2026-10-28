@@ -7,6 +7,8 @@ import { setDirectMode } from './direct-mode';
 import { setPanelVirtualize } from './panel-prefs';
 import { setNameColorPref } from './semantic-color-pref';
 import { setTreeSitterPref, useTreeSitterPref } from './tree-sitter-pref';
+// 双击 Shift 呼出全局搜索（2026-10-28 体验对等批）：开关真源在 localStorage（照 tree-sitter 先例，本行自订阅）
+import { setDoubleShiftPref, useDoubleShiftPref } from './search-everywhere-pref';
 import { SUGGEST_DELAY_MAX, SUGGEST_DELAY_MIN, SUGGEST_DELAY_STEP } from './suggest-pref';
 // 幽灵文本三格的区间常量（IC 批 A 车道）：真源与夹取都在 `inline-completion-pref.ts`，本页只排版
 import {
@@ -442,6 +444,9 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
           {/* 可选面板（用户 2026-10-27 反馈 5）：「口上 XML」这类"只在特定工程里才有内容"
               的面板缺省不进活动栏，勾一下才请出来。 */}
           <OptionalPanelRow />
+
+          {/* 全局搜索呼出腿（2026-10-28 体验对等批）：双击 Shift 的开关 */}
+          <DoubleShiftSearchRow />
 
           {/* 封存总闸（sealed.ts，2026-10-13 试用反馈批）：两只暂不投入的面板整体封存，
               设置页只留这一个总开关；勾选 = 临时恢复（代码未删，随时可以再关）。
@@ -1174,6 +1179,30 @@ function OptionalPanelRow(): ReactElement {
               label="「口上 XML」面板"
             />
           }
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 「双击 Shift 呼出全局搜索」那一行（2026-10-28 体验对等批）。
+ *
+ * 自订阅 `search-everywhere-pref.ts`（照 `OptionalPanelRow` / `TreeSitterRow` 先例：
+ * 带订阅的行抽成组件，`SETTINGS_SECTIONS` 里不许用 hook）。关掉只是**摘掉那条呼出腿**——
+ * `workbench.searchEverywhere` 命令仍在面板里（文案必须这么说，否则作者以为功能没了）。
+ */
+function DoubleShiftSearchRow(): ReactElement {
+  const on = useDoubleShiftPref();
+  return (
+    <div className="settings-group">
+      <div role="heading" aria-level={4} className="settings-group-title">搜索</div>
+      <div className="settings-kit-row" data-settings-key="general.doubleShiftSearch">
+        <KitField
+          as="label"
+          title="双击 Shift 呼出全局搜索"
+          description="连按两下 Shift 打开「命令 / 文件 / 符号」一屏综合搜索（面板内 Alt+1..4 或 Ctrl+Tab 切范围）。关掉后仍可从命令面板搜「全局搜索」打开它，只是不再响应双击。"
+          control={<Switch checked={on} onChange={setDoubleShiftPref} label="双击 Shift 呼出全局搜索" />}
         />
       </div>
     </div>

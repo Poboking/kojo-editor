@@ -1,4 +1,13 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import type { EditorCommandContext, EditorDocumentSymbol, EditorWorkspaceSymbol } from '@kojo/plugin-api';
 import type { CommandEntry } from './commands';
 import { isTauri } from '../bridge/invoke';
@@ -26,6 +35,7 @@ import { isComposingEvent } from './shell-keys';
 import {
   activeSymbolKey,
   commandItems,
+  commandRows,
   lineFromKey,
   MODE_TEXT,
   parsePaletteMode,
@@ -35,6 +45,13 @@ import {
   type HitRanges,
 } from './palette-search';
 import {
+  planSearchEverywhereKey,
+  searchEverywhereView,
+  SE_TAB_TEXT,
+  TEXT_SEARCH_ACTION_KEY,
+  type SearchEverywhereTab,
+} from './search-everywhere';
+import {
   pickWorkspaceSymbols,
   symbolPickerItems,
   symbolPickerKey,
@@ -42,6 +59,9 @@ import {
   type WorkspaceSymbolCollection,
 } from './workspace-symbols';
 import './palette.css';
+
+/** `commandRows` 的显示层判据已搬进 `palette-search.ts`（综合档纯视图也要用它）；原样再导出，旧调用方与守门测试一行不改 */
+export { commandRows } from './palette-search';
 
 /**
  * 命令面板 / 快速打开 / 工作区符号（2026-10-11 UI 重设计批 P2；D2 2026-10-15 加符号）。
@@ -127,6 +147,12 @@ interface PickerProps {
   surface: PaletteSurfaceId;
   /** 符号行的「跳转」落点：面板自己给（文件行 / 命令行没有这一项） */
   onJump?: (target: PaletteRowTarget) => void;
+  /**
+   * 面板级附加键钩子（2026-10-28 全局搜索批，**additive**：现有三个面板一行不改）。
+   * 合成让位之后、列表导航（↑↓/Enter/Esc）之前调用；返回 `true` = 这一键已被消费，
+   * 列表导航不再执行。Search Everywhere 用它吃 Alt+1..4 / Ctrl+Tab 族切档。
+   */
+  onPanelKey?: (e: ReactKeyboardEvent<HTMLDivElement>) => boolean;
 }
 
 type PaletteVariant = 'default' | 'commands' | 'palette';
@@ -156,49 +182,9 @@ function marked(text: string, ranges: HitRanges | undefined): ReactNode {
 }
 
 /**
- * 去掉前缀后平移命中区间，并裁掉落在被切掉那截里的高亮。
- * 整段都被裁光 ⇒ `undefined`（这行不再高亮，而不是画半枚 `<mark>`）。
+ * 命令条目的**显示层整形**（把主行里的分类名挪到分组标签）判据已搬进
+ * `palette-search.commandRows`——综合档纯视图与两面共用同一份整形，此处只 re-export（见文件头）。
  */
-function shiftRanges(ranges: HitRanges | undefined, cut: number): HitRanges | undefined {
-  if (ranges === undefined) return undefined;
-  const out: [number, number][] = [];
-  for (const [start, end] of ranges) {
-    const s = Math.max(start, cut) - cut;
-    const e = end - cut;
-    if (e > s) out.push([s, e]);
-  }
-  return out.length > 0 ? out : undefined;
-}
-
-/**
- * 命令条目的**显示层整形**：把 `commandItems` 拼在主行里的分类名挪到分组标签上
- * （`工作台: 全部保存` → 分组「工作台」+ 主行「全部保存」）。
- *
- * **只动形状、不动判定**：过滤与排序仍是 `commands.filterCommands` 那一条尺子（按
- * category + title 稳定排序 ⇒ 同类的条目必然相邻，分组标签只需在换组那一行插一条）。
- * 分类真源取命令注册表的 `category` 字段，不去拆主行文本反推；主行去掉前缀后命中原点
- * 左移，故命中区间跟着平移（查询只命中分类名时整行不再高亮——分组标题本身就是答案）。
- */
-export function commandRows(items: readonly PickerItem[], commands: readonly CommandEntry[]): PickerItem[] {
-  const categoryById = new Map<string, string>();
-  for (const c of commands) if (c.category !== undefined) categoryById.set(c.id, c.category);
-  return items.map((it) => {
-    const cat = categoryById.get(it.key);
-    if (cat === undefined) return it;
-    const prefix = `${cat}: `;
-    // 分组标签：MRU 置顶那几条已由 `commandItems` 打上「最近使用」（WS-16），
-    // 这里只给**没标过**的行补分类名。反过来把「最近使用」盖掉，置顶就只剩顺序、
-    // 作者看不出这一节为什么在顶上（而分类名仍在主行前缀里被剥掉，两头都没了）。
-    const next: PickerItem = { ...it, group: it.group ?? cat };
-    if (it.primary.startsWith(prefix)) {
-      next.primary = it.primary.slice(prefix.length);
-      const shifted = shiftRanges(it.ranges, prefix.length);
-      if (shifted !== undefined) next.ranges = shifted;
-      else delete next.ranges;
-    }
-    return next;
-  });
-}
 
 /* ------------------- 行右键菜单（1023 覆盖面批 · WP2.6 / WP4.9 / WP3.3） ------------------- */
 
@@ -319,6 +305,7 @@ function Picker({
   variant = 'default',
   surface,
   onJump,
+  onPanelKey,
 }: PickerProps): ReactElement {
   const notify = useNotify();
   /**
@@ -399,6 +386,8 @@ function Picker({
           // 合成期：一个键都不消费（拼音候选窗自己要用这些键）
           // 判据用**原生事件**——`isComposing` 在 React 合成事件上没有转发，而它正是主判据。
           if (isComposingEvent(e.nativeEvent, composingRef.current)) return;
+          // 面板级附加键（Search Everywhere 的切档族）：消费即止，不碰列表导航
+          if (onPanelKey?.(e) === true) return;
           if (e.key === 'Escape') {
             e.stopPropagation();
             onClose();
@@ -790,6 +779,156 @@ export function WorkspaceSymbols({
         if (symbol !== undefined) onPickSymbol(symbol);
       }}
       {...(overflow !== null ? { footnote: overflow } : {})}
+    />
+  );
+}
+
+export interface SearchEverywhereProps {
+  /** 与 F1 同一张注册表（综合档的「命令」类就是它，不另造词表） */
+  commands: readonly CommandEntry[];
+  commandCtx: EditorCommandContext;
+  /** 文件候选：与 `Ctrl+P` 同一份（宿主 `mergeCandidatePaths` 下传） */
+  files: readonly string[];
+  recent?: readonly string[];
+  /**
+   * 工作区符号应答（宿主经 `ui.editor.languageService` 槽问一次的合并结果）。
+   * 与 `WorkspaceSymbols.fetchSymbols` 同一口径：身份每帧可变 ⇒ 只经 ref 读。
+   */
+  fetchSymbols(query: string): WorkspaceSymbolCollection;
+  onOpenFile(path: string): void;
+  onPickSymbol(symbol: EditorWorkspaceSymbol): void;
+  /** 底部动作行：把词递给既有 `SearchPanel` 那条流式检索链（面板自己不发检索） */
+  onFullTextSearch(term: string): void;
+  onClose(): void;
+}
+
+/**
+ * 全局搜索（Search Everywhere，2026-10-28 体验对等批，对标 IDEA 的双击 Shift）。
+ *
+ * 一屏三类的**综合档** + 三个单档：命令 / 文件 / 符号都吃现成同步数据源，
+ * 分组与跨类统一排序的判据全在 `search-everywhere.ts`（纯函数、可单测），这里只渲染与接线。
+ * 全文检索那条流式链**不合并进来**：底部恒挂一条「在项目内全文搜索…」动作行，
+ * Enter 把词交还给 `onFullTextSearch`（壳层折成既有 `setQuery` + 搜索视图聚焦，零新通道）。
+ *
+ * 切档键（Alt+1..4 / Ctrl+Tab / Ctrl+Shift+Tab）经 `onPanelKey` 钩子消费；
+ * `preventDefault` 之后全局键位那条腿会看见 `defaultPrevented` 而让位
+ * （`Ctrl+Tab` 本是全球「切标签」的键，面板在前台时归面板自己用——IDEA 同款手感）。
+ * 前缀兼容零改动：`>`/`@`/`:` 仍只属于 `Ctrl+P`，这里的输入框没有首字符开关。
+ */
+export function SearchEverywhere({
+  commands,
+  commandCtx,
+  files,
+  recent,
+  fetchSymbols,
+  onOpenFile,
+  onPickSymbol,
+  onFullTextSearch,
+  onClose,
+}: SearchEverywhereProps): ReactElement {
+  const [query, setQuery] = useState('');
+  const [tab, setTab] = useState<SearchEverywhereTab>('all');
+  const fetchRef = useRef(fetchSymbols);
+  fetchRef.current = fetchSymbols;
+
+  /** 符号候选按击键问一次（查询代价按击键计、不按渲染计——与 `WorkspaceSymbols` 同纪律） */
+  const collected = useMemo(() => fetchRef.current(query), [query]);
+  /** 命令最近使用：挂载那一拍读一次；MRU 只服务「命令」类，档位切换不记账（语义不扩） */
+  const commandMru = useMemo(() => loadCommandMru(), []);
+
+  const view = useMemo(
+    () =>
+      searchEverywhereView({
+        tab,
+        term: query,
+        commands,
+        commandCtx,
+        commandRecent: commandMru,
+        files,
+        ...(recent === undefined ? {} : { filesRecent: recent }),
+        symbols: collected,
+        symbolSource: null,
+        activeFile: null,
+      }),
+    [tab, query, commands, commandCtx, commandMru, files, recent, collected],
+  );
+
+  /** 符号键 → 符号本体（选中/右键「跳转」按同一个 `symbolPickerKey` 反查，不拆键字符串） */
+  const symbolByKey = useMemo(() => {
+    const map = new Map<string, EditorWorkspaceSymbol>();
+    for (const s of collected.symbols) map.set(symbolPickerKey(s), s);
+    return map;
+  }, [collected]);
+
+  /** 行 + 右键菜单载荷（与 `QuickOpen` 同一组 target 构造器；动作行没有载荷 ⇒ 走根路由下一级） */
+  const rows = useMemo(
+    () =>
+      view.items.map((it) => {
+        if (it.key === TEXT_SEARCH_ACTION_KEY) return it;
+        const symbol = symbolByKey.get(it.key);
+        if (symbol !== undefined) {
+          return { ...it, menu: symbolRowTarget(symbol.filePath, symbol.line, symbol.name, it.primary) };
+        }
+        if (commands.some((c) => c.id === it.key)) {
+          return { ...it, menu: commandRowTarget(it.key, it.primary) };
+        }
+        return { ...it, menu: fileRowTarget(it.key, it.primary) };
+      }),
+    [view.items, symbolByKey, commands],
+  );
+
+  return (
+    <Picker
+      placeholder={SE_TAB_TEXT[tab].placeholder}
+      emptyText={view.emptyText}
+      query={query}
+      onQuery={setQuery}
+      items={rows}
+      onPick={(key) => {
+        if (key === TEXT_SEARCH_ACTION_KEY) {
+          onClose();
+          onFullTextSearch(query);
+          return;
+        }
+        const symbol = symbolByKey.get(key);
+        if (symbol !== undefined) {
+          onClose();
+          onPickSymbol(symbol);
+          return;
+        }
+        const cmd = commands.find((c) => c.id === key);
+        if (cmd !== undefined) {
+          onClose();
+          // 记账在执行之前（与 `QuickOpen` 的 `>` 同口径：按意图计数，不按结果计数）
+          recordCommandUse(key);
+          void cmd.run(commandCtx);
+          return;
+        }
+        onClose();
+        onOpenFile(key);
+      }}
+      onClose={onClose}
+      variant="palette"
+      surface="palette"
+      footnote={view.footnote}
+      onPanelKey={(e) => {
+        const next = planSearchEverywhereKey(
+          { key: e.key, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey, metaKey: e.metaKey },
+          tab,
+        );
+        if (next === null) return false;
+        e.preventDefault();
+        setTab(next);
+        return true;
+      }}
+      onJump={(target) => {
+        // 符号行的「跳转」= 与点这一行同一条通道（`onPickSymbol` ⇒ `editor.revealLocation`）
+        const symbol = collected.symbols.find(
+          (s) => s.filePath === target.path && s.line === target.line && s.name === target.symbolName,
+        );
+        onClose();
+        if (symbol !== undefined) onPickSymbol(symbol);
+      }}
     />
   );
 }

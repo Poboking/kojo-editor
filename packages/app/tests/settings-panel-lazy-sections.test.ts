@@ -92,12 +92,14 @@ describe('设置页只挂当前一节（懒挂载）', () => {
     const keys = [...html.matchAll(/data-settings-key="([^"]+)"/g)].map((m) => m[1]!);
     expect(keys.length).toBeGreaterThan(0);
     // 「通用」节的行序（自上而下）：写作模式 / 居中限宽 → 面板（口上 XML 显示开关，
-    // 用户 2026-10-27 反馈 5）→ 封存功能 → 布局。缺省收起的面板也**有**这一行：它管的是
+    // 用户 2026-10-27 反馈 5）→ 搜索（双击 Shift 呼出全局搜索，2026-10-28 体验对等批新增行）
+    // → 封存功能 → 布局。缺省收起的面板也**有**这一行：它管的是
     // 活动栏入口，与面板当前显不显示无关。
     expect(keys.filter((k) => k.startsWith('general.'))).toEqual([
       'general.zen',
       'general.zenLimitWidth',
       'general.panel.kojo-xml',
+      'general.doubleShiftSearch',
       'general.sealed',
       'general.layout',
     ]);

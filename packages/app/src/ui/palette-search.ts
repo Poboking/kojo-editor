@@ -370,6 +370,58 @@ export function orderCommandsByMru(
 }
 
 /**
+ * 命令条目的**显示层整形**：把 `commandItems` 拼在主行里的分类名挪到分组标签上
+ * （`工作台: 全部保存` → 分组「工作台」+ 主行「全部保存」）。
+ *
+ * **只动形状、不动判定**：过滤与排序仍是 `commands.filterCommands` 那一条尺子（按
+ * category + title 稳定排序 ⇒ 同类的条目必然相邻，分组标签只需在换组那一行插一条）。
+ * 分类真源取命令注册表的 `category` 字段，不去拆主行文本反推；主行去掉前缀后命中原点
+ * 左移，故命中区间跟着平移（查询只命中分类名时整行不再高亮——分组标题本身就是答案）。
+ *
+ * （2026-10-28 全局搜索批：本函数从 `Palette.tsx` 搬进来并原样再导出——综合档的纯视图
+ * `search-everywhere.ts` 也要用它做显示层整形，而它不许反向 import 渲染层；
+ * 判据逐字未动，`palette-groups.test.ts` 仍从 `Palette` 一侧钉住行为。）
+ */
+export function commandRows(items: readonly QuickOpenItem[], commands: readonly CommandEntry[]): QuickOpenItem[] {
+  const categoryById = new Map<string, string>();
+  for (const c of commands) if (c.category !== undefined) categoryById.set(c.id, c.category);
+  return items.map((it) => {
+    const cat = categoryById.get(it.key);
+    if (cat === undefined) return it;
+    const prefix = `${cat}: `;
+    // 分组标签：MRU 置顶那几条已由 `commandItems` 打上「最近使用」（WS-16），
+    // 这里只给**没标过**的行补分类名。反过来把「最近使用」盖掉，置顶就只剩顺序、
+    // 作者看不出这一节为什么在顶上（而分类名仍在主行前缀里被剥掉，两头都没了）。
+    // `QuickOpenItem` 各字段是 readonly ⇒ 整行一次构造出来，不再逐字段改写（搬家的唯一机械改动）。
+    if (!it.primary.startsWith(prefix)) return { ...it, group: it.group ?? cat };
+    const shifted = shiftRanges(it.ranges, prefix.length);
+    // 剥前缀后必须**丢掉旧 ranges**（整段落进分类名 ⇒ 这行不再高亮，而不是拿原下标画错位置）
+    const { ranges: _dropped, ...rest } = it;
+    return {
+      ...rest,
+      group: it.group ?? cat,
+      primary: it.primary.slice(prefix.length),
+      ...(shifted !== undefined ? { ranges: shifted } : {}),
+    };
+  });
+}
+
+/**
+ * 去掉前缀后平移命中区间，并裁掉落在被切掉那截里的高亮。
+ * 整段都被裁光 ⇒ `undefined`（这行不再高亮，而不是画半枚 `<mark>`）。
+ */
+function shiftRanges(ranges: HitRanges | undefined, cut: number): HitRanges | undefined {
+  if (ranges === undefined) return undefined;
+  const out: [number, number][] = [];
+  for (const [start, end] of ranges) {
+    const s = Math.max(start, cut) - cut;
+    const e = end - cut;
+    if (e > s) out.push([s, e]);
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
  * 命令 → 面板条目（**F1 命令面板与 Ctrl+P 的 `>` 共用这一份**）：
  * 过滤判据是 `filterCommands` 一条（分类名也参与匹配，作者记得的是"工作台"而不是 id），
  * 高亮只在标题真含/含子序列时画——只在 id 里命中就不画，不做假高亮。

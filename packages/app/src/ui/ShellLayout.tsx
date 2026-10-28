@@ -213,6 +213,7 @@ import { MONACO_COMMAND_SPECS } from './monaco-command-specs';
 import {
   CommandPalette,
   QuickOpen,
+  SearchEverywhere,
   WorkspaceSymbols,
   type PaletteReveal,
 } from './Palette';
@@ -253,10 +254,15 @@ import {
   bindSearchPrefs,
   requestReplaceFocus,
   requestSearchFocus,
+  setQuery as setSearchStoreQuery,
   snapshot as searchStateSnapshot,
   subscribe as subscribeSearchState,
   unbindSearchPrefs,
 } from './search-store';
+// 全局搜索（Search Everywhere，2026-10-28 体验对等批）：双击 Shift 的判定是纯函数
+// （`search-everywhere-trigger`，单测钉窗口与抑制条件），开关读数照 `tree-sitter-pref` 先例走 localStorage 真源。
+import { planDoubleClickShift, type ShiftKeyFrame } from './search-everywhere-trigger';
+import { useDoubleShiftPref } from './search-everywhere-pref';
 import { Icon } from './icons';
 import { SettingsPanel, type SettingsSectionId } from './SettingsPanel';
 import { toggleFullscreen } from './window-fullscreen';
@@ -1332,6 +1338,8 @@ export function ShellLayout(props: Props): ReactElement {
   const [quickOpen, setQuickOpen] = useState(false);
   /** 工作区符号面板（D2 · Ctrl+T）：与上面两个 picker 同一层 Esc 优先级 */
   const [symbolsOpen, setSymbolsOpen] = useState(false);
+  /** 全局搜索（Search Everywhere，2026-10-28 体验对等批）：综合档；双击 Shift / 命令面板呼出 */
+  const [searchEverywhereOpen, setSearchEverywhereOpen] = useState(false);
   const [activeOverlay, setActiveOverlay] = useState<{ id: string; payload?: unknown } | null>(null);
   const overlayRef = useRef(activeOverlay);
   overlayRef.current = activeOverlay;
@@ -1380,7 +1388,17 @@ export function ShellLayout(props: Props): ReactElement {
     [],
   );
   const pickerRef = useRef(false);
-  pickerRef.current = paletteOpen || quickOpen || symbolsOpen;
+  pickerRef.current = paletteOpen || quickOpen || symbolsOpen || searchEverywhereOpen;
+  /**
+   * 双击 Shift 呼出全局搜索（2026-10-28 体验对等批）的两样壳层账：
+   * - `doubleShiftPendingRef`：窗口内的纯 Shift 连击清单（判定本体是纯函数，这里只存账本）；
+   * - `doubleShiftOnRef`：偏好读数镜像——全局键处理器那个 effect 挂载一次不重挂，
+   *   闭包里读不到最新 state，照 zen/settings 那批 ref 镜像的既有写法走。
+   */
+  const doubleShiftPendingRef = useRef<readonly ShiftKeyFrame[]>([]);
+  const doubleShiftOn = useDoubleShiftPref();
+  const doubleShiftOnRef = useRef(doubleShiftOn);
+  doubleShiftOnRef.current = doubleShiftOn;
   /**
    * 项目名旁「更多」菜单的锚点（C-1a 工具栏分组批）：null = 关。
    * 「关闭项目」是破坏性动作，从右侧视图开关那一排收拢到这里（菜单项 danger 危险色），
@@ -2013,6 +2031,12 @@ export function ShellLayout(props: Props): ReactElement {
       // 没项目 / 索引没建好时命令仍要**按得下去**——面板里那句原因才是给作者的答复；
       // 把它灰掉就成了"按了没反应"（铁律 4）。
       { id: 'workbench.workspaceSymbols', title: '转到工作区符号', keybinding: effectiveKeybindingOf('workbench.workspaceSymbols'), run: () => setSymbolsOpen(true) },
+      // 全局搜索（Search Everywhere，2026-10-28 体验对等批）：一屏三类的综合档。
+      // **无缺省单键**——呼出腿是「双击 Shift」，`chordFromEvent` 表达不了纯修饰键连击，
+      // 与 Ctrl+K Z 和弦同形走全局处理器的时间窗特判（判定纯函数在 `search-everywhere-trigger.ts`）；
+      // 键位表登记在**懒半** `keybinding-specs-commands.ts`（本命令不吃右键菜单面，开机图不涨字节）。
+      // 与上面两条同形态**不给 `when`**：没项目时综合档仍有命令/文件两类可点，灰掉就是"按了没反应"。
+      { id: 'workbench.searchEverywhere', title: '全局搜索（Search Everywhere）', keybinding: effectiveKeybindingOf('workbench.searchEverywhere'), run: () => setSearchEverywhereOpen(true) },
       // 全文搜索（2026-10-15 检索批）：打开侧栏「搜索」视图 + 请求输入框聚焦。
       // 激活单位是视图 key（单独成视图的面板 = `panel:<id>`，见 layout.organizePanels）；
       // 聚焦意图发进 search-store（面板订阅 focusNonce 落地）——壳层不知道面板内部的输入框。
@@ -2341,6 +2365,21 @@ export function ShellLayout(props: Props): ReactElement {
     [kernel],
   );
 
+  /**
+   * 综合档底部动作行 ⇒ 全文检索（2026-10-28 体验对等批）：**词递给既有链，不合并流式结果**。
+   * 三步全是现成的：`setQuery` 落检索词（SearchPanel 打字即搜那条防抖腿会自己接住）、
+   * `requestSearchFocus` 聚焦检索框、activate 把「搜索」视图翻上屏——与 `workbench.searchInFiles`
+   * 同一条通道，壳层不认识检索内部。
+   */
+  const handOffFullTextSearch = useCallback(
+    (term: string) => {
+      setSearchStoreQuery(term);
+      requestSearchFocus();
+      dispatch({ type: 'activate', container: 'sidebar', key: 'panel:kojo.search' });
+    },
+    [dispatch],
+  );
+
   // 工作台 API 注册（编辑器区空态动作按钮反向取 picker/命令入口）
   useEffect(() => {
     const api: WorkbenchApi = {
@@ -2449,6 +2488,35 @@ export function ShellLayout(props: Props): ReactElement {
       if (e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && k === 'k') {
         chordAt = Date.now();
         return;
+      }
+      // 双击 Shift ⇒ 全局搜索（2026-10-28 体验对等批；IDEA 同款）。形态照上面 Ctrl+K 和弦的先例：
+      // 注册表表达不了「纯修饰键连击」，判定抽成纯函数（`planDoubleClickShift`，单测钉窗口/打断/抑制），
+      // 这里只喂事件、记清单。位置在三层早退**之后**：输入法合成期与真输入面（改名框/过滤框）到不了这里；
+      // Monaco 的隐藏 textarea 被 `isEditableKeyTarget` 放行——**编辑器里照常触发**（IDEA 的行为，本功能的价值所在）。
+      // 抑制条件全在纯函数 opts 里：偏好关（命令仍在、这条腿不响应）与前台已有面板/浮层/设置。
+      // 触发那拍 `preventDefault` 吃掉连击：清单已清空，第三下 Shift 只是下一组的第一下；
+      // 修饰键的 keyup 照常到达 Monaco，键盘修饰态不会停在"等待大写"的怪状态。
+      if (e.key === 'Shift' || doubleShiftPendingRef.current.length > 0) {
+        const now = Date.now();
+        const frame: ShiftKeyFrame = {
+          key: e.key,
+          ctrlKey: e.ctrlKey,
+          altKey: e.altKey,
+          metaKey: e.metaKey,
+          atMs: now,
+          // 按住 Shift 的自动重复不算双击（判定见纯函数的 `key-repeat` 分支）
+          repeat: e.repeat,
+        };
+        const plan = planDoubleClickShift([...doubleShiftPendingRef.current, frame], now, {
+          enabled: doubleShiftOnRef.current,
+          frontBusy: pickerRef.current || overlayRef.current !== null || settingsRef.current,
+        });
+        doubleShiftPendingRef.current = plan.pending;
+        if (plan.fire) {
+          e.preventDefault();
+          setSearchEverywhereOpen(true);
+          return;
+        }
       }
       if (e.key === 'Escape') {
         // 命中哪一层由 shell-keys 单源判定；picker 内部已 stopPropagation，全局侧原样让位。
@@ -3617,6 +3685,21 @@ export function ShellLayout(props: Props): ReactElement {
           notice={workspaceSymbolNoticeFor}
           onPickSymbol={revealWorkspaceSymbol}
           onClose={() => setSymbolsOpen(false)}
+        />
+      ) : null}
+      {searchEverywhereOpen ? (
+        <SearchEverywhere
+          commands={registry}
+          commandCtx={commandCtx}
+          files={quickOpenFiles ?? []}
+          {...(quickOpenRecent !== undefined ? { recent: quickOpenRecent } : {})}
+          fetchSymbols={fetchWorkspaceSymbols}
+          onOpenFile={(path) => {
+            if (onOpenFile) onOpenFile(path);
+          }}
+          onPickSymbol={revealWorkspaceSymbol}
+          onFullTextSearch={handOffFullTextSearch}
+          onClose={() => setSearchEverywhereOpen(false)}
         />
       ) : null}
       {shownOverlay ? (
