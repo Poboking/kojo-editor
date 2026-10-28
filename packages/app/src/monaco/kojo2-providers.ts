@@ -1,156 +1,110 @@
 /**
- * Kojo 2.0 的 **Monaco 语言服务三件**（K2-EDITOR-PROVIDERS）：补全 / 悬停 / 转定义。
+ * Kojo 2.0 的补全与悬停：**契约 → Monaco 的翻译层**（B3c，2026-10-28 供方交给插件）。
  *
- * ## 分层：本文件只做"纯模型 → Monaco 协议"
+ * ## 这一格里只剩"翻译"，判据一枚都不许留
  *
- * batch-3 交来的四个纯模型（`kojo2-completion.ts` / `kojo2-hover.ts` / `kojo2-definition.ts` /
- * `kojo2-declarations.ts`）已经回答完"这一格该给什么"：源码 + 1 基行列进，候选 / 事实 / 落点出。
- * 本文件是**唯一**把它们翻成 `CompletionItem` / `Hover` / `LocationLink` 的地方——零语法判读、
- * 不写第二份候选词表。唯一多解的一趟源码是"声明类候选那一轮的 `documentation`"
- * （悬停正文住在声明事实上，见 {@link kojo2CompletionItems} 的注）；锚点 / 事件 / 域符号轮次不付这份成本。
+ * 本文件曾经同时住着三类东西：**语言判据**（触发字符、名字段怎么切、声明索引、悬停正文的
+ * Markdown 措辞、adapter 的三路投影）、**供方编排**（问谁、怎么合并）与 **Monaco 协议翻译**。
+ * B3c 把前两类整块搬走：判据的唯一落点是 `@kojo/kojo-lang`（`completion.ts` /
+ * `completion-snippets.ts` / `hover.ts`），作答的是插件 `@kojo/plugin-kojo-lang` 在
+ * `ui.editor.languageService` 槽里登记的 `kojo2-completion` / `kojo2-hover` 两枚贡献。
+ * 这里若再留一份判据当"兜底"，同一格就有了两份答案——两枚 provider 并存时 Monaco 的合并
+ * 顺序不可控，"补全少一条 / 悬停多一段"从此只能靠注册顺序解释（B3b 删原生 DefinitionProvider
+ * 是同一条理由，那条理由现在更硬）。
  *
- * 三枚 provider **只挂 `kojo2` 语言 id**（`monaco.languages.register*Provider` 的第一个参数即
- * language selector；v1 的 `.kojo` / `.erb` 面由 `registerForLanguageServices` 各挂各的，
- * 两边不重叠）。
+ * ## 留下的三件事，每一件都是"插件看不到"的宿主事实
  *
- * ## 展开视图（K2-EXPAND-VIEW）：只借同一枚 provider 追加
+ * 1. **model → 请求**：`path`（`model.uri.fsPath`；插件拿它去查展开编译成品的登记表，
+ *    取不到就是没有文件身份 ⇒ 少展开那一段，**不猜**）、`languageId` / `version`（原样取自
+ *    model，宿主不改写、不猜）、全文，以及当前项目（`kernel.project.current()`——项目事实
+ *    只在内核里，插件只能从请求里读）。构造一律走 legs 的 `completionRequestOf` /
+ *    `hoverRequestOf`（与 `formattingRequestOf` 同源形状）：手抄一份对象字面量，抄漏
+ *    `version` 的那条腿就废掉了供方的过期复核，而这类失准只在"改完文件后的第一次应答"里
+ *    出现，事后极难归因。合并与单答裁决也一律在 legs（`collectCompletionItems` 并集去重 /
+ *    `collectHoverResult` 第一家作答），provider 里不写第二份。
+ * 2. **响应 → Monaco 协议**：`range` → `IRange`、`filterText` 透传、`documentation` 按
+ *    `documentationFormat` 分 Markdown / 纯文本、`insertTextFormat` 决定要不要打开模板插入
+ *    通道（见下）。
+ * 3. **图标表**：`kojo2CompletionKindOf` 吃**契约档**（`EditorCompletionItemKind` 十二档）、
+ *    吐 Monaco 枚举。这是本文件唯一保留的映射——挑哪枚图标是编辑器的事，插件看不到 Monaco；
+ *    宿主也不许给某一档另发明第二重语义。
  *
- * 模板 / 池 / 随机展开的"调用处 ↦ 定义处 ↦ 产物行"全在纯模型 `kojo2-expand-view.ts` 里判完；
- * 本文件只做两件 additive 的事：
- * - **悬停**：光标在**调用行**上时，在声明正文之后追加一段展开 Markdown（同一个 `contents`
- *   数组的第二项，**不新造第二个 `HoverProvider`** —— Monaco 多 provider 的合并顺序不可控）；
- * - **转定义**：光标在**展开体的源行**上时，在声明落点之后追加两条 `LocationLink`
- *   （调用处 / 定义处），同样挂在**同一枚** provider 的返回数组里。
+ * adapter 事实**不再由宿主注入**：插件经 `@kojo/kojo-lang/adapter-source` 登记簿在请求时
+ * 现取，并且只认 `adapter.id === request.project.adapterId` 的那一枚（对不上 ⇒ `# 机` /
+ * `@织` / 事件参数 / 颜绘参数四路零候选，其余照给）。装配点因此不再传
+ * `{ adapter, getFilePath, getCompile, completion }`——那四格注入面连同它们背后的判据副本
+ * 一起没了，留下的只有"这份 model 是谁"。
  *
- * 编译成品由 `ui/kojo2-expand-compile.ts` 的模块级登记表提供（面板挂载时登记自己的
- * `compileCache.getLastCompile`）：**绝不二次编译**，也不缓存第二份 source map。登记表空
- * （或这份文件还没编译成功）⇒ 两处行为与 batch-4 逐字一致。
+ * ## 插入语义：`kind: 'snippet'` ≠ `insertTextFormat: 'snippet'`
  *
- * ## 零游戏知识（audit A 的硬约束）
- * 本文件**不 import 任何 adapter 包**：事件名住在 `# 机` 的候选里，而候选由
- * `kojo2CompletionAt(query, { adapter })` 经 core 的 `eventNames(adapter)` 派生；域符号同样由
- * 纯模型从 core 的 `KOJO_DOMAIN_SYMBOL_NAMES` 取。adapter 由**调用方注入**
- * （{@link Kojo2ProviderOptions.adapter}），可以是值也可以是一枚 getter——后者让宿主按当前
- * 项目**请求时现取**，项目开闭不必重装 provider。
+ * 2.0 有两类候选都叫 snippet，但只有一类带占位符：块级骨架（一整块 `# 模 …` 的模板）要按
+ * 模板落地，`# 模` 的**声明名**只是借那一枚图标、名字里没有槽位。契约因此把两件事拆成两格，
+ * 本层的规则逐字照这格走：
+ * - `InsertAsSnippet` **只随 `insertTextFormat === 'snippet'` 下发**。若"凡 kind 是 snippet
+ *   就开模板"，声明名里的 `$` / `}` 会被当成槽位吞掉——挑图标这件事顺手改了插入语义；
+ * - 桩 Monaco 缺 `CompletionItemKind.Snippet` 或缺 `CompletionItemInsertTextRule` 时
+ *   **丢弃该档**（与删判据之前那枚守卫等价）：既不许把 `undefined` 写进 `kind`，也不许把
+ *   占位符当字面文本插进缓冲——插进去的垃圾比少一条候选更难撤。只有"纯图标"的那一路
+ *   （`kind: 'snippet'` 而不带 `insertTextFormat`）在缺枚举时退到 `Text`：少一枚颜色，
+ *   不撤一条真候选。
  *
- * ## 失败面：一律空结果，绝不抛进 Monaco
+ * ## 悬停：无人应答 ⇒ `undefined`，不是空串
  *
- * Monaco 把 provider 的 throw 吞成"这个功能突然没了"（悬浮不弹、补全闪一下、F12 没反应），
- * 作者看不到任何原因。所以三条腿都自带 try/catch：
- * - 取文失败 / 位置越界 / 模型没有 uri ⇒ 空结果；
- * - adapter getter 抛错 / 没有 adapter ⇒ 只是 `# 机` 那一路零候选（**不猜内置事件**），
- *   同文件语义（悬停 / 转定义 / 声明名单）照常工作——那两条腿本来就不需要游戏知识，
- *   让它们陪着 adapter 一起静默，等于"没开项目时编辑器整片哑"；
- * - 注册半途抛错 ⇒ 先撤回已挂上的那几枚，再外抛（与
- *   `installKojo2SemanticTokensProvider` 的"全有或全无"同口径，由宿主统一回滚）。
+ * 契约的单答口径里 `contents === ''` 是**作答**（"这家认这篇，但这一格没话说"），
+ * `undefined` 才是弃权。Monaco 的悬停取**第一家非空**，所以"没有供方应答"必须如实交回
+ * `undefined`——交回 `{ contents: '' }` 会把本该接手的下一路（v1 那枚词义悬浮）顶掉，作者
+ * 读到的是浮层凭空没了。"作答但没话说"则是另一种处置：本层交回 `undefined`（不弹浮层），
+ * 但**不再去问下一家**——单答裁决已经在 legs 收口，这里只是把"不弹"翻给 Monaco。
+ * 展开视图那一段现在由插件的 hover 供方与声明段合成**一条** `contents`（`'\n\n'` 相连，
+ * 正文逐字相同）；与今天的差别只是 Monaco 从"两个 part"变成"一个 part 两段"。
  *
- * ## 开关与 disposal
+ * ## 注册：共享收口，不再点名语言 id
  *
- * 补全 / 悬停是**只读语言面**（K2-SURFACE-DEFAULT）：不读切流开关，装配即注册。返回的
- * disposable 幂等，且逐枚 try/catch——一枚撤不掉不许带走其余。
+ * 两枚 provider 都经 `registerForLanguageServices(monaco, register, 'completion' | 'hover')`
+ * 挂上：它覆盖每一门 `languageServices: true` 的语言，**并上** descriptor 的 `slotServices`
+ * 点了这一枚能力名的语言（kojo2 由 `monaco/languages.ts` 点名）。当年那两枚"注册调用的第一个
+ * 参数直接写死 `KOJO2_LANGUAGE_ID`"的自建注册已删除（闸门正是按那两条形状 grep 归零的）。
+ * 落到 ERB / kojo1 上的这一枚此刻不会给出任何候选（没有供方答 completion / hover），交回的
+ * 是空结果——v1 那两门的自有装配（`erb-completion.ts` / `kojo-hover.ts`）零改动，等 B4/B5
+ * 把它们的供方也交进槽。
  *
- * ## 已知边界（真壳才验得到）
+ * ## 失败面与 disposal（与删判据之前同一条纪律，没有改弱）
  *
- * - `triggerCharacters` 只覆盖五锚点与 `{`；声明词 / 事件名后的候选仍靠 Monaco 的
- *   `quickSuggestions` 与手动触发（与 v1 `.kojo` 面同一条产品口径）；
- * - 文档注释（`documentation`）只给"声明"类候选（悬停正文取同一份
- *   `kojo2-hover.ts` 的 `kojo2HoverLines`，不另写一套措辞）；锚点 / 声明词 / 事件 / 域符号
- *   的说明在 `detail` 上，不编一段悬停正文。
+ * - 每一轮各带 try-catch：取文失败 / 没有编辑器实例（`requireKernel` 抛）/ 编排抛 ⇒ 补全交回
+ *   `{ suggestions: [] }`、悬停交回 `undefined`。Monaco 把 provider 的 throw 吞成"这个功能
+ *   突然没了"，作者读不出任何原因，空结果是它读得懂的形状；
+ * - 单枚贡献自己抛错由 legs 的 `provideOf` 隔离（warn 带贡献 id），一条坏腿不许带走其余；
+ * - 注册半途抛错 ⇒ 先撤回已挂上的那几枚再外抛（宿主那一侧的"全有或全无"回滚才有东西可撤）；
+ *   返回的 disposable 幂等，且逐枚 try-catch——一枚撤不掉不许带走其余。
+ *
+ * ## 开关
+ *
+ * 补全 / 悬停是**只读语言面**（K2-SURFACE-DEFAULT）：不读切流开关，装配即注册。
+ * 转定义（B3b）与语义着色都不在本文件；折叠与引用仍由各枚 `installKojo2*` 自建。
  */
 import type * as Monaco from './entry';
-import { projectEventArgs, type GameAdapter } from '@kojo/kojo-core';
-import { KOJO2_LANGUAGE_ID } from './kojo2-language';
-import { kojo2ExpandCompilationFor, type Kojo2ExpandCompileSource } from '../ui/kojo2-expand-compile';
+import type {
+  EditorCompletionItem,
+  EditorCompletionItemKind,
+  EditorHoverResult,
+  EditorLanguageRange,
+} from '@kojo/plugin-api';
+// 叶子，不是桶：引 `@kojo/kojo-lang` 会把整包挂上首屏（`ps10-eager-graph` 的叶子纪律）。
+// 这里只取触发字符——"哪些字符算触发"是语言知识，宿主不再留第二份。
+import { KOJO2_COMPLETION_TRIGGER_CHARS } from '@kojo/kojo-lang/completion';
+import { requireKernel } from '../ui/editor-pane-registry';
 import {
-  expandViewAt,
-  expandViewMarkdown,
-  type Kojo2ExpandCompilation,
-  type Kojo2ExpandView,
-} from '@kojo/kojo-lang';
-import { kojo2CompletionAt, type Kojo2CompletionCandidate, type Kojo2CompletionOptions, type Kojo2FaceTemplates } from './kojo2-completion';
-import {
-  kojo2SnippetCandidatesAt,
-  type Kojo2CompletionSnippet,
-} from './kojo2-completion-snippets';
-import { kojo2HoverAt, kojo2HoverLines, type Kojo2HoverResult } from './kojo2-hover';
-import {
-  KOJO2_DECL_WORD_BY_KIND,
-  kojo2DocumentOf,
-  kojo2TokenSpanAt,
-  type Kojo2Declaration,
-  type Kojo2DeclarationKind,
-} from '@kojo/kojo-lang';
+  collectCompletionItems,
+  collectHoverResult,
+  completionRequestOf,
+  hoverRequestOf,
+} from './kojo-language-service-legs';
+import { registerForLanguageServices } from './register-dialects';
 
-/* ============================== 注入面 ============================== */
+/* ============================== 宿主事实（model → 请求） ============================== */
 
-/**
- * adapter 注入面：直接给一枚（测试 / 单项目），或给一枚 getter 让宿主**请求时现取**
- * （项目可开可关，缓存会把上一个项目的事件目录带过来）。
- */
-export type Kojo2AdapterSource =
-  | GameAdapter
-  | null
-  | undefined
-  | (() => GameAdapter | null | undefined);
-
-/**
- * 「这份 model 背后是哪个文件」的注入位。
- *
- * 只给转定义用：纯模型交回的是**同文件**落点（`line/column/endColumn`），`targetUri` 得由宿主
- * 补。回 `null` / 抛错 ⇒ 退回 `model.uri`（model 池本来就是 `Uri.file(path)` 建的，
- * 真壳里这条路逐字够用；注入位是给"派生 model / 未来跨面"留的正规口）。
- */
-export type Kojo2FilePathSource = (model: Monaco.editor.ITextModel) => string | null;
-
-/** 安装器的注入面（生产全部走缺省；测试注入假 adapter / 假路径） */
-export interface Kojo2ProviderOptions {
-  /** 当前项目 adapter；`# 机` 事件名的唯一来源（缺省 = 不猜任何内置事件） */
-  readonly adapter?: Kojo2AdapterSource;
-  /** 文件身份（只服务 `LocationLink.targetUri`；缺省 = 沿用 `model.uri`） */
-  readonly getFilePath?: Kojo2FilePathSource;
-  /**
-   * **展开视图的编译成品**（K2-EXPAND-VIEW）：按文件路径取"那一次编译的产物 + 同源 source map"。
-   *
-   * 缺省 = 问模块级登记表 {@link kojo2ExpandCompilationFor}（面板挂载时登记了自己的编译缓存，
-   * 见 `ui/kojo2-expand-compile.ts`）；两边都取不到 ⇒ 悬停 / 转定义**逐字保持**无展开段的旧行为
-   * （零注册零行为，不新造第二个 provider）。
-   */
-  readonly getCompile?: Kojo2ExpandCompileSource;
-  /**
-   * 补全的**宿主投影**（K2-COMPLETE-ARGS-FACE / K2-COMPLETE-DATA）：事件参数形状 /
-   * `@颜绘` 参数 / 行尾提示名。
-   *
-   * 每一项缺省时各自回落到 adapter 的契约字段（事件目录现投影 / `presentation.faceTemplates` /
-   * `presentation.hintNames`；旧 adapter 没有这些字段 ⇒ 对应候选位零候选，不猜）。
-   * 显式注入优先——宿主可换投影而不换 adapter。
-   */
-  readonly completion?: Omit<Kojo2CompletionOptions, 'adapter'>;
-}
-
-/* ============================== 常量 ============================== */
-
-/**
- * 补全触发字符：五锚点 + `{`（`{…}` 是表达式位，与 v1 `.kojo` 的糖位触发同一产品口径）。
- * 其余位置靠 `quickSuggestions` 与手动触发——纯模型自己会按前缀裁剪，触发多了不产生噪声候选。
- */
-export const KOJO2_COMPLETION_TRIGGER_CHARS: readonly string[] = Object.freeze([
-  '#',
-  '@',
-  '>',
-  '?',
-  '!',
-  '{',
-  // `(`：行尾表演提示组 `(心形)` 的提示名位（K2-COMPLETE-ARGS-FACE）。
-  '(',
-]);
-
-/** 没有可查的声明索引时用的空表（避免每轮都建一份） */
-const NO_DECLARATIONS: ReadonlyMap<string, Kojo2Declaration> = new Map<string, Kojo2Declaration>();
-
-/* ============================== 小工具（全部不抛） ============================== */
-
-/** 取整篇源文；取不到（模型已 dispose / 桩 model）⇒ `null`（调用方给空结果） */
-function sourceOf(model: Monaco.editor.ITextModel): string | null {
+/** 取整篇源文；模型已 dispose / 桩 model ⇒ `null`（调用方给空结果，绝不抛进 Monaco） */
+function textOf(model: Monaco.editor.ITextModel): string | null {
   try {
     const text = model.getValue();
     return typeof text === 'string' ? text : null;
@@ -159,499 +113,266 @@ function sourceOf(model: Monaco.editor.ITextModel): string | null {
   }
 }
 
-/** 取某一行原文（Monaco API 优先；桩 model 缺这一格时退回整篇切行） */
-function lineTextOf(model: Monaco.editor.ITextModel, line: number): string {
-  try {
-    if (typeof model.getLineContent === 'function') {
-      const text = model.getLineContent(line);
-      if (typeof text === 'string') return text;
-    }
-  } catch {
-    /* 越界 / 桩 model：走下面的整篇切行 */
-  }
-  const source = sourceOf(model);
-  if (source === null) return '';
-  return source.split(/\r\n|\r|\n/)[line - 1] ?? '';
-}
-
-/** adapter 现取；getter 抛错 = 这一轮没有 adapter（不抛进 Monaco） */
-function adapterAt(source: Kojo2AdapterSource): GameAdapter | undefined {
-  if (source === null || source === undefined) return undefined;
-  if (typeof source === 'function') {
-    try {
-      return source() ?? undefined;
-    } catch {
-      return undefined;
-    }
-  }
-  return source;
-}
-
-/* ============================== CompletionItemKind 映射 ============================== */
-
 /**
- * adapter 的 `eventCatalog` → 补全参数形状投影（`# 机 <事件> <参数…>` 的参数名候选）。
+ * 这份 model 背后是哪个文件。
  *
- * 投影是 core 的纯函数；按 adapter **对象身份**记忆化（`WeakMap`）：项目切换会换一枚 adapter，
- * 旧项目的目录不会被带到新项目上。投影抛错 ⇒ `undefined`（参数位零候选，不猜）。
+ * 桩 model 没有 `uri` ⇒ `''`（= 没有文件身份）：插件据此**少给**要路径的那一部分
+ * （悬停的展开段查的是编译成品登记表），其余从源文能证明的照常作答——不猜路径。
  */
-const EVENT_ARGS_CACHE = new WeakMap<GameAdapter, ReturnType<typeof projectEventArgs>>();
+function pathOfModel(model: Monaco.editor.ITextModel): string {
+  const fsPath = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
+  return typeof fsPath === 'string' ? fsPath : '';
+}
 
-function eventArgsOf(adapter: GameAdapter): ReturnType<typeof projectEventArgs> | undefined {
-  const cached = EVENT_ARGS_CACHE.get(adapter);
-  if (cached !== undefined) return cached;
+/** 此刻按哪门语言着色（`getLanguageId` 原样取；桩 model 缺这一格 ⇒ 键不出现） */
+function languageIdOf(model: Monaco.editor.ITextModel): string | undefined {
   try {
-    const projected = projectEventArgs(adapter.eventCatalog);
-    EVENT_ARGS_CACHE.set(adapter, projected);
-    return projected;
+    const id = model.getLanguageId();
+    return typeof id === 'string' && id.length > 0 ? id : undefined;
   } catch {
     return undefined;
   }
 }
 
-/**
- * adapter 声明的 `@颜绘` 参数候选（K2-COMPLETE-DATA）与行尾提示名：**现取**契约字段。
- *
- * 与 {@link eventArgsOf} 同一条纪律：数据住 adapter，语言层只读；项目切换会换一枚 adapter，
- * 字段本身是引用、不需要缓存。字段缺省（旧 adapter）/ 读取抛错 ⇒ `undefined` ⇒ 各格零候选，
- * 不猜任何内置词。显式注入的 `completion.faceTemplates` / `completion.hintNames` 优先。
- */
-function faceTemplatesOf(adapter: GameAdapter): Kojo2FaceTemplates | undefined {
+/** 第几版（供方复核应答是否过期用；取不到 ⇒ 键不出现，而不是补一个假版本号） */
+function versionOf(model: Monaco.editor.ITextModel): number | undefined {
   try {
-    return adapter.presentation.faceTemplates;
+    const version = model.getVersionId();
+    return Number.isFinite(version) ? version : undefined;
   } catch {
     return undefined;
   }
 }
 
-function hintNamesOf(adapter: GameAdapter): readonly string[] | undefined {
-  try {
-    return adapter.presentation.hintNames;
-  } catch {
-    return undefined;
-  }
+/** model → 请求身份三格（`identity` 的"缺省就不出现"口径由 legs 的构造器守住，这里不另写） */
+function identityOf(model: Monaco.editor.ITextModel): {
+  readonly path: string;
+  readonly languageId?: string;
+  readonly version?: number;
+} {
+  const languageId = languageIdOf(model);
+  const version = versionOf(model);
+  return {
+    path: pathOfModel(model),
+    ...(languageId !== undefined ? { languageId } : {}),
+    ...(version !== undefined ? { version } : {}),
+  };
 }
 
-/**
- * 声明种类 → Monaco `CompletionItemKind`（比五档粗分更贴作者直觉的一层细分）。
- * 表里没有的种类 ⇒ `Text`（**不猜**：新种类先当纯文本显示，而不是借邻居的颜色）。
- */
-function completionKindOfDeclaration(
-  K: typeof Monaco.languages.CompletionItemKind,
-  kind: Kojo2DeclarationKind | undefined,
-): Monaco.languages.CompletionItemKind {
-  switch (kind) {
-    case 'variable':
-      return K.Variable;
-    case 'constant':
-      return K.Constant;
-    case 'table':
-      return K.Struct;
-    case 'pool':
-      return K.Enum;
-    case 'template':
-      return K.Snippet;
-    case 'function':
-      return K.Function;
-    case 'scene':
-      return K.Module;
-    default:
-      return K.Text;
-  }
-}
+/* ============================== 契约档 → Monaco 枚举 ============================== */
 
 /**
- * 候选的语义类别 → Monaco `CompletionItemKind`（导出的**单一映射层**，测试直接钉这张表）。
+ * 契约的十二档 → Monaco `CompletionItemKind`（**简报§四的表倒过来读**：插件那侧已经把
+ * 语义类别翻成中性档，这里只负责"这一档挑哪枚图标"）。
  *
- * 分档理由：`# @ > ? !` 是语法标点 ⇒ `Operator`；声明词是保留词族 ⇒ `Keyword`；事件目录是
- * 游戏事实 ⇒ `Event`；域符号（我 / 你 / 她）是代词变量 ⇒ `Variable`；声明名按种类细分。
- * 未知类别 ⇒ `Text`（缺省方向永远是"少说"，不是"借一个像的色"）。
+ * 未知档 ⇒ `Text`：缺省方向永远是"少说"，不是"借一个像的色"。`snippet` 档缺枚举时同样退
+ * `Text`（见文件头「插入语义」一节——**不带** `insertTextFormat` 的那一路才走到这里，带模板
+ * 插入的那一路在 `toMonacoCompletionItem` 里已经先过了枚举闸并整档丢弃）。
  */
 export function kojo2CompletionKindOf(
   monaco: typeof Monaco,
-  candidate: Kojo2CompletionCandidate,
+  kind: EditorCompletionItemKind | undefined,
 ): Monaco.languages.CompletionItemKind {
   const K = monaco.languages.CompletionItemKind;
-  switch (candidate.kind) {
-    case 'anchor':
+  switch (kind) {
+    case 'operator':
       return K.Operator;
-    case 'declarationWord':
+    case 'keyword':
       return K.Keyword;
+    case 'function':
+      return K.Function;
+    case 'variable':
+      return K.Variable;
+    case 'value':
+      return K.Value;
     case 'event':
       return K.Event;
-    case 'domainSymbol':
-      return K.Variable;
-    case 'declaration':
-      return completionKindOfDeclaration(K, candidate.declarationKind);
-    // K2-COMPLETE-ARGS-FACE 的新候选位（细分映射只在此处；纯函数层只给语义类别）
-    case 'eventArgument':
-      return K.Value;
-    case 'valueType':
-    case 'storagePeriod':
-      return K.Keyword;
-    case 'templateParam':
-      return K.Variable;
-    case 'faceObject':
-      return K.Variable;
-    case 'faceArgument':
-      return K.Value;
-    case 'templateSlot':
-    case 'hintName':
+    case 'constant':
+      return K.Constant;
+    case 'struct':
+      return K.Struct;
+    case 'enum':
+      return K.Enum;
+    case 'module':
+      return K.Module;
+    case 'snippet':
+      return K.Snippet !== undefined ? K.Snippet : K.Text;
+    case 'text':
       return K.Text;
     default:
       return K.Text;
   }
 }
 
-/* ============================== 声明索引（只为 documentation） ============================== */
+/* ============================== 契约 → Monaco（补全） ============================== */
 
 /**
- * 候选名 → 声明事实（只在本轮确实有"声明"类候选时才建；见
- * {@link kojo2CompletionItems} 的注——documentation 要的是悬停正文，而悬停正文住在声明事实上）。
+ * 契约区间 → Monaco `IRange`（两侧口径逐字相同：1 基、尾列半开、单行）。
  *
- * 键有两份：`种类\u0000名字`（精确）与裸名字（兜底）。**先建者胜**：同名声明由 core 报错，
- * 编辑器在错误状态下也得给出一条确定的说明，而不是随机挑一条。
+ * 非法坐标 ⇒ **不给区间**（交回 Monaco 自己的现行口径）并 warn 出候选名：一个越界 / 倒置的
+ * 区间会让**整轮**补全在 Monaco 内部炸掉，而"这一条按缺省词段替换"只是精度少一点——宁可少
+ * 一格精确，不可整轮凭空消失（与 legs 的 `usableRangeEdits` 同一条处置）。
  */
-function declarationsOf(source: string): ReadonlyMap<string, Kojo2Declaration> {
-  const map = new Map<string, Kojo2Declaration>();
-  for (const declaration of kojo2DocumentOf(source).declarations) {
-    const typed = `${declaration.kind}\u0000${declaration.name}`;
-    if (!map.has(typed)) map.set(typed, declaration);
-    if (!map.has(declaration.name)) map.set(declaration.name, declaration);
-  }
-  return map;
-}
-
-/** 候选 → 它对应的声明（种类精确优先，再按名字兜底） */
-function declarationFor(
-  candidate: Kojo2CompletionCandidate,
-  declarations: ReadonlyMap<string, Kojo2Declaration>,
-): Kojo2Declaration | undefined {
-  if (candidate.declarationKind !== undefined) {
-    const exact = declarations.get(`${candidate.declarationKind}\u0000${candidate.label}`);
-    if (exact !== undefined) return exact;
-  }
-  return declarations.get(candidate.label);
-}
-
-/**
- * 悬停正文的 Markdown 形态（**唯一**渲染口径：悬停面与补全的 documentation 共用）。
- * 与 `kojo-hover.ts` 的既有写法同形：首段 `**名字**（种类）`，其余每行一段。
- */
-export function kojo2HoverMarkdown(hover: Kojo2HoverResult): string {
-  return [`**${hover.name}**（${hover.kind}）`, ...hover.lines].join('\n\n');
-}
-
-/** 声明事实 → 同一形态的 Markdown（种类文案取 core 词表，与悬停的 `x声明` 逐字同构） */
-function declarationMarkdown(declaration: Kojo2Declaration): string {
-  return [
-    `**${declaration.name}**（${KOJO2_DECL_WORD_BY_KIND[declaration.kind]}声明）`,
-    ...kojo2HoverLines(declaration),
-  ].join('\n\n');
-}
-
-/* ============================== 区间 ============================== */
-
-/**
- * 光标处名字段的替换区间（1 基、尾列半开）。
- *
- * 用**声明索引的同一枚** `kojo2TokenSpanAt`（纯模型裁前缀用的就是它），不另写一套"什么算名字
- * 字符"——两套判据会漂成"补全列表按一种前缀算、替换区间按另一种算"，上屏就是多一个字 / 少一字。
- * 名字段外（行首 / 空格后）⇒ 零宽区间（插在光标处）。
- */
-function tokenRangeAt(line: number, lineText: string, column: number): Monaco.IRange {
-  const col0 = Math.min(Math.max(column - 1, 0), lineText.length);
-  const span = kojo2TokenSpanAt(lineText, col0);
-  if (span === null) {
-    return { startLineNumber: line, startColumn: column, endLineNumber: line, endColumn: column };
-  }
-  return {
-    startLineNumber: line,
-    startColumn: span.start + 1,
-    endLineNumber: line,
-    endColumn: span.end + 1,
-  };
-}
-
-/* ============================== 补全 ============================== */
-
-/**
- * 一条候选 → `CompletionItem`。
- *
- * 四个字段的口径：
- * - `range` = 光标处**整个名字段**（不是"到光标为止"）：`# 变|量` 补成 `# 变量` 时，替换的是
- *   整枚名字，否则会拼出 `变量量`；
- * - `insertText` = 纯模型给的原文名（本层不塞括号 / snippet：调用形态不归补全管）；
- * - `filterText` = `label`：2.0 名字区分大小写、也没有拼音键，显示名就是匹配键
- *   （v1 的拼音补齐是另一套候选源的事，不在这一层猜）；
- * - `sortText` = 纯模型的排名键（锚点 `0_` / 声明词 `1_` / 事件 `2_` / 域符号 `3_` /
- *   声明 `4_`），直接把"该先看见谁"从模型带过来，本层不改写。
- */
-function completionItemOf(
-  monaco: typeof Monaco,
-  candidate: Kojo2CompletionCandidate,
-  range: Monaco.IRange,
-  declarations: ReadonlyMap<string, Kojo2Declaration>,
-): Monaco.languages.CompletionItem {
-  const declaration = declarationFor(candidate, declarations);
-  return {
-    label: candidate.label,
-    kind: kojo2CompletionKindOf(monaco, candidate),
-    insertText: candidate.insertText,
-    detail: candidate.detail,
-    sortText: candidate.sortText,
-    filterText: candidate.label,
-    range,
-    ...(declaration === undefined
-      ? {}
-      : { documentation: { value: declarationMarkdown(declaration) } }),
-  };
-}
-
-/**
- * 一轮补全的全部候选（导出仅为可单测：宿主只经 provider 调它）。
- *
- * 文档索引**只在真有声明类候选时**才建（`kojo2CompletionAt` 已经解过一次源码；这一枚是为了
- * 拿声明事实拼 `documentation`，属于第二趟解析）。锚点 / 事件 / 域符号轮次完全不走这条路。
- */
-export function kojo2CompletionItems(
-  monaco: typeof Monaco,
-  model: Monaco.editor.ITextModel,
-  position: Monaco.Position,
-  adapter: GameAdapter | undefined,
-  completion?: Omit<Kojo2CompletionOptions, 'adapter'>,
-): Monaco.languages.CompletionItem[] {
-  const source = sourceOf(model);
-  if (source === null) return [];
-  const query = { source, line: position.lineNumber, column: position.column };
-  const eventArgs =
-    completion?.eventArgs ?? (adapter === undefined ? undefined : eventArgsOf(adapter));
-  // K2-COMPLETE-DATA：宿主没显式注入时，从 adapter 的契约字段现取（旧 adapter 没有 ⇒ 零候选）
-  const faceTemplates =
-    completion?.faceTemplates ?? (adapter === undefined ? undefined : faceTemplatesOf(adapter));
-  const hintNames =
-    completion?.hintNames ?? (adapter === undefined ? undefined : hintNamesOf(adapter));
-  const candidates = kojo2CompletionAt(query, {
-    ...(completion ?? {}),
-    ...(eventArgs === undefined ? {} : { eventArgs }),
-    ...(adapter === undefined ? {} : { adapter }),
-    ...(faceTemplates === undefined ? {} : { faceTemplates }),
-    ...(hintNames === undefined ? {} : { hintNames }),
-  });
-  const lineText = lineTextOf(model, position.lineNumber);
-  const range = tokenRangeAt(position.lineNumber, lineText, position.column);
-  const declarations = candidates.some((candidate) => candidate.kind === 'declaration')
-    ? declarationsOf(source)
-    : NO_DECLARATIONS;
-  const items = candidates.map((candidate) =>
-    completionItemOf(monaco, candidate, range, declarations),
-  );
-  // 块级 snippets（K2-COMPLETE-SNIPPET）：只由**宿主翻译层**在行首追加；纯函数永不产 snippet。
-  // 宿主 monaco 缺 `Snippet` 档 / 规则枚举时整段跳过（老桩 / 精简宿主不因此整轮补全闪空）。
-  if (
-    monaco.languages.CompletionItemKind.Snippet !== undefined &&
-    monaco.languages.CompletionItemInsertTextRule?.InsertAsSnippet !== undefined
-  ) {
-    for (const snippet of kojo2SnippetCandidatesAt(query)) {
-      items.push(snippetCompletionItemOf(monaco, snippet, range));
-    }
-  }
-  return items;
-}
-
-/** 一条块级 snippet → `CompletionItem`（`InsertAsSnippet` 只在宿主翻译层打开）。 */
-function snippetCompletionItemOf(
-  monaco: typeof Monaco,
-  snippet: Kojo2CompletionSnippet,
-  range: Monaco.IRange,
-): Monaco.languages.CompletionItem {
-  return {
-    label: snippet.label,
-    kind: monaco.languages.CompletionItemKind.Snippet,
-    insertText: snippet.insertText,
-    insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
-    detail: snippet.detail,
-    sortText: snippet.sortText,
-    filterText: snippet.label,
-    range,
-  };
-}
-
-/* ============================== 展开视图的取数缝（K2-EXPAND-VIEW） ============================== */
-
-/**
- * 这份 model 背后的文件路径（注入的身份优先，其次 `model.uri.fsPath`）。
- *
- * 要的是**路径**（去问编译缓存），不是 Uri 对象——转定义那条腿已经在 B3b 归插件，
- * 它当年另有一个 `targetUriOf`（`Uri.file(path)` 可以失败，那就退回 `model.uri`），
- * 随那条腿一起删了。
- * 桩 model 没有 uri ⇒ `null`（展开段不出现，其余腿不受影响）。
- */
-function filePathOfModel(
-  model: Monaco.editor.ITextModel,
-  getFilePath: Kojo2FilePathSource | undefined,
-): string | null {
-  if (getFilePath !== undefined) {
-    try {
-      const path = getFilePath(model);
-      if (typeof path === 'string' && path.length > 0) return path;
-    } catch {
-      /* 身份取不到：退回 model.uri（下面） */
-    }
-  }
-  const uri = (model as unknown as { uri?: { fsPath?: unknown } }).uri;
-  if (uri !== null && typeof uri === 'object' && typeof uri.fsPath === 'string' && uri.fsPath.length > 0) {
-    return uri.fsPath;
-  }
-  return null;
-}
-
-/**
- * 光标处的展开视图（取不到 = `null`，**不抛**）。
- *
- * 编译成品是**诊断那一轮**的缓存（`compileCache.getLastCompile`）：这里绝不二次编译——
- * 展开视图要显示的产物行与屏上预览、波浪线必须是同一份字节。缓存里没有这一份 ⇒ `null`
- * （作者还没停手 / 这份文件还没编译成功）。
- */
-function expandViewFor(
-  model: Monaco.editor.ITextModel,
-  position: Monaco.Position,
-  getFilePath: Kojo2FilePathSource | undefined,
-  getCompile: Kojo2ExpandCompileSource | undefined,
-): Kojo2ExpandView | null {
-  const filePath = filePathOfModel(model, getFilePath);
-  if (filePath === null) return null;
-  let compilation: Kojo2ExpandCompilation | null;
-  try {
-    compilation = getCompile === undefined ? kojo2ExpandCompilationFor(filePath) : getCompile(filePath);
-  } catch {
-    return null; // 缓存读取端抛错 = 这一份取不到（悬停 / 转定义照旧给别的事实）
-  }
-  if (compilation === null || compilation === undefined) return null;
-  try {
-    const view = expandViewAt(
-      compilation.compiled,
-      compilation.sourceMapModel,
-      { line: position.lineNumber, column: position.column },
-      { source: sourceOf(model) ?? undefined },
+function monacoRangeOf(range: EditorLanguageRange | undefined, label: string): Monaco.IRange | undefined {
+  if (range === undefined) return undefined;
+  if (!Number.isFinite(range.line) || !Number.isFinite(range.startColumn) || !Number.isFinite(range.endColumn)) {
+    console.warn(
+      `[kojo2-providers] 候选 '${label}' 的区间坐标非法（${range.line}:${range.startColumn}..${range.endColumn}），改由编辑器按缺省区间处理`,
     );
-    return view.kind === 'expand' ? view : null;
-  } catch {
-    return null; // 展开视图是附加段：它挂了不许带走声明悬停 / 转定义
+    return undefined;
   }
-}
-
-/** span → Monaco 区间（1 基；span 可以是跨行的，`LocationLink.range` 允许） */
-function rangeOfSpan(span: { readonly start: { readonly line: number; readonly column: number }; readonly end: { readonly line: number; readonly column: number } }): Monaco.IRange {
   return {
-    startLineNumber: span.start.line,
-    startColumn: span.start.column,
-    endLineNumber: span.end.line,
-    endColumn: span.end.column,
+    startLineNumber: range.line,
+    startColumn: range.startColumn,
+    endLineNumber: range.line,
+    // 尾列不许早于首列：契约写了"须 ≥ startColumn"，这里兜住违约的那一枚，别把它交给 Monaco
+    endColumn: Math.max(range.endColumn, range.startColumn),
   };
 }
 
-/* ============================== 悬停 ============================== */
-
-/** 悬停的可选注入面（缺省 = 不注入文件身份、不取编译缓存：与 batch-4 逐字一致） */
-export interface Kojo2HoverOptions {
-  readonly getFilePath?: Kojo2FilePathSource;
-  readonly getCompile?: Kojo2ExpandCompileSource;
-  /**
-   * 当前方言的 2.0 事实（LAU-D2）：`# 机` / `@织` 的事件名讲的是**方言**事实，
-   * 与补全 / 签名吃**同一枚** adapter（同一张登记簿、同一个 getter）。
-   * 缺省 / 取不到 ⇒ 事件名不给悬停（不猜），其余声明事实照旧。
-   */
-  readonly adapter?: GameAdapter | null;
-}
-
-/** 转定义的附加注入面（只服务展开视图的编译成品；缺省 = 问模块级登记表） */
-export interface Kojo2ExpandLookupOptions {
-  readonly getCompile?: Kojo2ExpandCompileSource;
+/**
+ * `documentation` 的两种形态（按 `documentationFormat` 分，缺省 `'text'` = 旧行为逐字不变）：
+ * - `'markdown'` ⇒ `IMarkdownString`（`{ value }`，与今天宿主 / `kojo-hover.ts` 同一写法）；
+ * - 缺省 ⇒ **原样纯文本字符串**（Monaco 这一格收 `string | IMarkdownString`，宿主不替供方
+ *   包装、不猜渲染、更不编一套"把纯文本转成 Markdown"的转义判据）。
+ */
+function documentationOf(item: EditorCompletionItem): string | Monaco.IMarkdownString | undefined {
+  if (item.documentation === undefined) return undefined;
+  return item.documentationFormat === 'markdown' ? { value: item.documentation } : item.documentation;
 }
 
 /**
- * 悬停结果（声明事实 + **追加**展开段；`undefined` = 此处没有可讲的事实）。
+ * 供方**没给** `range` 时的宿主缺省区间（契约口径：补全 = 光标所在词的区间）。
  *
- * 展开段只挂在**调用行**命中时（`view.via === 'call-site'`）：光标已在展开体的源行上时，
- * 作者要看的是"这一行是谁展开出来的"，那是转定义那一条腿的事（两条 LocationLink），
- * 不在悬停里再贴一遍同样的产物。两段 Markdown **同一枚 provider 的两个 contents**：
- * Monaco 多 provider 的合并顺序不可控，绝不为展开视图新造第二个 `HoverProvider`。
+ * Monaco 0.57 的 `CompletionItem.range` 是必填字段，所以"没有区间"在这一层落不成
+ * `undefined`，只能落回宿主自己的现行口径：`getWordAtPosition` 的那一段（词外 ⇒ 零宽插在
+ * 光标处）。这一条**不是**语言判据——"什么算一个词"是编辑器通用词法，2.0 的名字段边界
+ * 由供方给（`kojo2CompletionRangeAt`），今天每一枚候选都带着它；这里的缺省只服务
+ * "别家供方没给"那种情形，与本语言的候选集无关。
  */
-export function kojo2HoverOf(
-  model: Monaco.editor.ITextModel,
-  position: Monaco.Position,
-  options: Kojo2HoverOptions = {},
-): Monaco.languages.Hover | undefined {
-  const source = sourceOf(model);
-  if (source === null) return undefined;
-  const hover = kojo2HoverAt(
-    {
-      source,
-      line: position.lineNumber,
-      column: position.column,
-    },
-    { adapter: options.adapter ?? null },
-  );
-  const expand = expandViewFor(model, position, options.getFilePath, options.getCompile);
-  const expandSegment =
-    expand !== null && expand.via === 'call-site' ? expandViewMarkdown(expand) : null;
-  if (hover === undefined && expandSegment === null) return undefined;
-  const contents: Monaco.IMarkdownString[] = [];
-  if (hover !== undefined) contents.push({ value: kojo2HoverMarkdown(hover) });
-  if (expandSegment !== null) contents.push(expandSegment);
-  if (hover !== undefined) {
-    return {
-      contents,
-      range: {
-        startLineNumber: position.lineNumber,
-        startColumn: hover.startColumn,
-        endLineNumber: position.lineNumber,
-        endColumn: hover.endColumn,
-      },
-    };
+function wordRangeAt(model: Monaco.editor.ITextModel, position: Monaco.Position): Monaco.IRange {
+  let word: { startColumn: number; endColumn: number } | undefined;
+  try {
+    word = model.getWordAtPosition(position) ?? undefined;
+  } catch {
+    word = undefined; // 桩 model / 越界：零宽插入点，不猜任何边界
   }
-  // 只有展开段（`@随机` 块头这类没有声明事实的位置）：区间取调用处 span（单行、精确）
-  return { contents, range: expand === null ? undefined : rangeOfSpan(expand.callSite) };
+  return {
+    startLineNumber: position.lineNumber,
+    startColumn: word?.startColumn ?? position.column,
+    endLineNumber: position.lineNumber,
+    endColumn: word?.endColumn ?? position.column,
+  };
+}
+
+/**
+ * 一条契约候选 → 一枚 Monaco `CompletionItem`（导出仅为可单测：装配只经 provider 调它）。
+ *
+ * 返回 `undefined` = **这一档整枚丢弃**，只有一种情形：带占位符的模板候选落在缺枚举的宿主上
+ * （见文件头「插入语义」）。其余字段一律透传，本层不改写排名、不补第二份措辞：
+ * `insertText` 缺省 = `label`（契约口径），`range` 缺省 = 宿主现行词段口径（`fallbackRange`）。
+ */
+export function toMonacoCompletionItem(
+  monaco: typeof Monaco,
+  item: EditorCompletionItem,
+  fallbackRange: Monaco.IRange,
+): Monaco.languages.CompletionItem | undefined {
+  const K = monaco.languages.CompletionItemKind;
+  const rules = monaco.languages.CompletionItemInsertTextRule;
+  const asSnippet = item.insertTextFormat === 'snippet';
+  if (asSnippet && (K.Snippet === undefined || rules?.InsertAsSnippet === undefined)) return undefined;
+  const documentation = documentationOf(item);
+  // 供方给的区间优先；非法 / 缺席才落回宿主缺省（见 `wordRangeAt` 的注）
+  const range = monacoRangeOf(item.range, item.label) ?? fallbackRange;
+  return {
+    label: item.label,
+    kind: kojo2CompletionKindOf(monaco, item.kind),
+    insertText: item.insertText ?? item.label,
+    detail: item.detail,
+    sortText: item.sortText,
+    filterText: item.filterText,
+    documentation,
+    range,
+    // 只在供方**显式**声明模板时才开这条通道：图标档（`kind: 'snippet'` 而无
+    // `insertTextFormat`）绝不开——否则 `# 模` 的声明名会按模板解释自己的名字。
+    ...(asSnippet ? { insertTextRules: rules!.InsertAsSnippet } : {}),
+  };
+}
+
+/** 全部候选 → Monaco 数组（被丢弃的那几枚如实少掉，不占位、不改写成别的档） */
+export function toMonacoCompletionItems(
+  monaco: typeof Monaco,
+  items: readonly EditorCompletionItem[],
+  fallbackRange: Monaco.IRange,
+): Monaco.languages.CompletionItem[] {
+  const out: Monaco.languages.CompletionItem[] = [];
+  for (const item of items) {
+    const translated = toMonacoCompletionItem(monaco, item, fallbackRange);
+    if (translated !== undefined) out.push(translated);
+  }
+  return out;
+}
+
+/* ============================== 契约 → Monaco（悬停） ============================== */
+
+/**
+ * 契约悬停 → Monaco `Hover`。三条处置的区分是这一层的**全部内容**：
+ * - `result === undefined`（无人应答 / 全体弃权）⇒ `undefined`：下一路（v1 词义悬浮）
+ *   还在，绝不用空串把它顶掉；
+ * - `contents === ''`（有人作答、明确说这一格没话说）⇒ 同样 `undefined`（不弹浮层），
+ *   但单答裁决已在 legs 收口，**不会再问下一家**；
+ * - 有正文 ⇒ 一段 `IMarkdownString`，`range` 在场就落 `IRange`。
+ *
+ * **两档落成的形状**：Monaco 0.57 的 `Hover.contents` 只收 `IMarkdownString[]`（本仓 v1
+ * 悬停 `kojo-hover.ts` 交回的也是 `{ value }`），所以 `'markdown'` 与缺省 `'text'` 在浮层这一格
+ * 上同形——差别落在补全的 `documentation` 上（那一格 Monaco 收 `string`，见 `documentationOf`）。
+ * 本层不替纯文本编一套 Markdown 转义，也不把一段正文拆回多个 part（拆分顺序属渲染判据，
+ * 不在翻译层）。
+ */
+export function toMonacoHover(result: EditorHoverResult | undefined): Monaco.languages.Hover | undefined {
+  if (result === undefined) return undefined;
+  if (result.contents === '') return undefined;
+  const range = monacoRangeOf(result.range, '悬停');
+  return {
+    contents: [{ value: result.contents }],
+    ...(range === undefined ? {} : { range }),
+  };
 }
 
 /* ============================== 安装 ============================== */
 
 /**
- * 为 `kojo2` 语言注册**两枚** provider（补全 / 悬停），返回**幂等**的 disposable。
+ * 注册**两枚**语言服务 provider（补全 / 悬停），返回**幂等**的 disposable。
  *
- * **无条件注册**（K2-SURFACE-DEFAULT：补全 / 悬停是只读语言面）。注册半途抛错 ⇒ 撤回已挂上的那几枚再外抛（宿主那一侧的
- * "全有或全无"回滚才有东西可撤）。两条 provider 腿的错误面收在各自体内：任何一腿抛错都
- * 只让**那一轮**空结果，编辑器不受影响。
+ * 不传任何注入面（B3c 的交付口径）：adapter / 文件身份 / 编译成品 / 补全投影都由插件供方
+ * 自己在请求时现取，宿主只负责"这份 model 是谁 + 当前项目是什么"。
  *
- * **转定义不在这一批里了**（B3b，2026-10-24）：那条腿的判据与展开落点都已归插件
- * `@kojo/plugin-kojo-lang`，由 descriptor 的 `slotServices: ['definition']` 经共享收口
- * （`kojo-definition.ts` 的 `installDefinitionProvider`）挂上。这里**绝不能**再注册一枚
- * `DefinitionProvider`：Monaco 多 provider 的合并顺序不可控，`F12` 到底跳哪一条就变得
- * 不可断言——这条理由当年就写在这里，删掉这条腿之后它更硬。
+ * 无条件注册（K2-SURFACE-DEFAULT）。注册半途抛错 ⇒ 撤回已挂上的那几枚再外抛；两条腿的错误
+ * 面收在各自体内：任何一腿抛错都只让**那一轮**空结果，编辑器不受影响。
  */
-export function installKojo2LanguageProviders(
-  monaco: typeof Monaco,
-  options: Kojo2ProviderOptions = {},
-): Monaco.IDisposable {
-
-  const adapterSource: Kojo2AdapterSource = options.adapter;
-  const getFilePath = options.getFilePath;
-  const getCompile = options.getCompile;
-
+export function installKojo2LanguageProviders(monaco: typeof Monaco): Monaco.IDisposable {
   const completionProvider: Monaco.languages.CompletionItemProvider = {
     triggerCharacters: [...KOJO2_COMPLETION_TRIGGER_CHARS],
-    provideCompletionItems(model, position) {
+    provideCompletionItems(model, position, context) {
       try {
-        return {
-          suggestions: kojo2CompletionItems(
-            monaco,
-            model,
-            position,
-            adapterAt(adapterSource),
-            options.completion,
+        const text = textOf(model);
+        if (text === null) return { suggestions: [] };
+        const kernel = requireKernel();
+        // 合并 / 去重在 legs（`collectCompletionItems`），这里只做协议翻译——provider 里
+        // 再写一份合并，就是第二套"谁的答案算数"的判据。
+        const items = collectCompletionItems(
+          kernel.slots.query('ui.editor.languageService'),
+          completionRequestOf(
+            identityOf(model),
+            text,
+            position.lineNumber,
+            position.column,
+            kernel.project.current(),
+            // 触发字符**原样递**：键入的那一个字符是不是触发符，判据在语言层
+            context?.triggerCharacter,
           ),
-        };
+        );
+        return { suggestions: toMonacoCompletionItems(monaco, items, wordRangeAt(model, position)) };
       } catch {
         // Monaco 把 throw 吞成"补全闪一下没了"；空列表是它能读出"这里没有候选"的唯一形状。
         return { suggestions: [] };
@@ -662,15 +383,18 @@ export function installKojo2LanguageProviders(
   const hoverProvider: Monaco.languages.HoverProvider = {
     provideHover(model, position) {
       try {
-        // 展开段与声明悬停**同一个** provider 的两个 contents（K2-EXPAND-VIEW）：
-        // 不新造第二个 HoverProvider——Monaco 多 provider 的合并顺序不可控。
-        // LAU-D2：adapter 每轮现取（项目可开可关），只服务 `# 机` / `@织` 的事件名——
-        // 悬停是六类服务里最后一条没有方言来源的腿（钉子见 `tests/kojo2-hover-event.test.ts`）。
-        return kojo2HoverOf(model, position, {
-          getFilePath,
-          getCompile,
-          adapter: adapterAt(adapterSource) ?? null,
-        });
+        const text = textOf(model);
+        if (text === null) return undefined;
+        const kernel = requireKernel();
+        // 声明段 + 展开段由**同一家**供方合成一条 `contents`（K2-EXPAND-VIEW 的分家）：
+        // 这里不新造第二个 HoverProvider，也不把两段拆回两个 part——Monaco 多 provider 的
+        // 合并顺序不可控，当年写下的那条理由现在照旧成立。
+        return toMonacoHover(
+          collectHoverResult(
+            kernel.slots.query('ui.editor.languageService'),
+            hoverRequestOf(identityOf(model), text, position.lineNumber, position.column, kernel.project.current()),
+          ),
+        );
       } catch {
         return undefined;
       }
@@ -679,12 +403,26 @@ export function installKojo2LanguageProviders(
 
   const registrations: Monaco.IDisposable[] = [];
   try {
-    // 语言 selector 形态：只认 `kojo2`（v1 的 `.kojo` / `.erb` 各由 `registerForLanguageServices`
-    // 挂自己的方言表，这里不重不漏）。
+    // **逐枚 push，不写成 `push(a, b)`**：两枚的求值都在参数位上，第二枚抛错时第一枚的句柄
+    // 还没进数组，catch 里就是"无东西可撤"——那正是本批删掉的原生安装器当年承诺过的
+    // "全有或全无"（旧注释：注册半途抛错 ⇒ 撤回已挂上的那几枚再外抛）。分开 push 之后，
+    // completion 已挂、hover 抛错 ⇒ 这枚 completion 句柄留在数组里被撤掉，语义与旧实现一致。
     registrations.push(
-      monaco.languages.registerCompletionItemProvider(KOJO2_LANGUAGE_ID, completionProvider),
+      registerForLanguageServices(
+        monaco,
+        (m, id) => m.languages.registerCompletionItemProvider(id, completionProvider),
+        // B3c：带能力名 —— descriptor 的 `slotServices` 点了 `completion` 的语言（kojo2）
+        // 也挂这一枚；供方是插件，宿主侧零原生判据。
+        'completion',
+      ),
     );
-    registrations.push(monaco.languages.registerHoverProvider(KOJO2_LANGUAGE_ID, hoverProvider));
+    registrations.push(
+      registerForLanguageServices(
+        monaco,
+        (m, id) => m.languages.registerHoverProvider(id, hoverProvider),
+        'hover',
+      ),
+    );
   } catch (error) {
     for (const registration of registrations) {
       try {

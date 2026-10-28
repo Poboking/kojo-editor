@@ -105,9 +105,10 @@ import { resolveDocumentDialect } from '../dialect-binding';
 import { registerKojo2ExpandCompileSource } from '../kojo2-expand-compile';
 import { isKojo2DiagnosticsPath } from '../kojo2-diagnostics-gate';
 import { revealLocationOf } from '../../monaco/reveal-position';
-// K2 batch-4 + 入口 A（2026-10-24）：2.0 语言服务的 adapter 注入源。**不再**静态引用
-// 具体 adapter——改从宿主组合根（bootstrap）的登记簿按当前项目现取（见该处头注）。
-// 语言层（`monaco/kojo2-providers.ts`）自身零游戏名词，具体 adapter 由组合根注入。
+// K2 batch-4 + 入口 A（2026-10-24）：2.0 语言服务的 adapter 来源。**不再**静态引用
+// 具体 adapter——按当前项目从宿主组合根（bootstrap）的登记簿现取（见该处头注）。
+// B3c（2026-10-28）起补全 / 悬停的 adapter 由插件经 `@kojo/kojo-lang/adapter-source`
+// 登记表**在请求时现取**，宿主不再向语言层注入；这里这枚 getter 只剩签名帮助还在吃。
 import { kojo2AdapterForProject, kojo2SurfaceForProject } from '../../bootstrap';
 import type { Notify } from '../NotificationCenter';
 

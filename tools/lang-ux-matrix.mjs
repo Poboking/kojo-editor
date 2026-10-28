@@ -344,7 +344,10 @@ export const CAPABILITIES = Object.freeze([
     providerApi: 'registerCompletionItemProvider',
     unitTests: {
       erb: ['packages/app/tests/erb-completion.test.ts'],
-      kojo2: ['packages/app/tests/kojo2-completion.test.ts'],
+      // B3c（2026-10-28）：补全判据整块搬进 `@kojo/kojo-lang`，配套单测随之搬家
+      // `app/tests/kojo2-completion.test.ts` → `kojo-lang/tests/completion.test.ts`。
+      // 判据不变——这里证的仍是「这条能力有单测在册（文件在 + 真有 it）」，只是取证落点搬家。
+      kojo2: ['packages/kojo-lang/tests/completion.test.ts'],
     },
     manual: {
       steps: [
@@ -361,7 +364,7 @@ export const CAPABILITIES = Object.freeze([
     providerApi: 'registerHoverProvider',
     unitTests: {
       erb: ['packages/app/tests/kojo-hover.test.ts'],
-      kojo2: ['packages/app/tests/kojo2-hover-definition.test.ts'],
+      kojo2: ['packages/kojo-lang/tests/hover.test.ts'],
     },
     manual: {
       steps: [
@@ -378,7 +381,10 @@ export const CAPABILITIES = Object.freeze([
     providerApi: 'registerDefinitionProvider',
     unitTests: {
       erb: ['packages/app/tests/kojo-definition.test.ts'],
-      kojo2: ['packages/app/tests/kojo2-hover-definition.test.ts'],
+      // B3c（2026-10-28）：这枚与 hover 同落点——原 `app/tests/kojo2-hover-definition.test.ts`
+      // 是「悬停 + 转定义」两半合一的闸，整枚搬进包后叫 `hover.test.ts`，两半都还在（断言未减）。
+      // 判据不变：证的仍是「转定义有单测在册」，只是取证落点搬家。
+      kojo2: ['packages/kojo-lang/tests/hover.test.ts'],
     },
     manual: {
       steps: [

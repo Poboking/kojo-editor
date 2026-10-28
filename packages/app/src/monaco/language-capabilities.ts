@@ -17,7 +17,9 @@
  *   同一枚 provider 挂到每一门声明 `languageServices: true` 的语言上；或语言无关的共享上屏腿
  *   （v1 的波浪线 = `ui.editor.decorator` 槽 → `setModelMarkers`，ERB / `.kojo` 同一份）；
  * - `self` —— 该语言**专属模块**自建 provider：注册调用里直接写自己的语言 id
- *   （`.erb` 的补全 / 改名，2.0 的各枚 `installKojo2*` 一并算这一档）；
+ *   （`.erb` 的补全 / 改名，2.0 的各枚 `installKojo2*` 里**仍直接写语言 id** 的那些一并算
+ *   这一档；B3c 起 `installKojo2LanguageProviders` 的补全 / 悬停改走带能力名的共享收口，
+ *   故记 `shared`，别按模块名猜档位）；
  * - `{ exempt }` —— **已知缺口**，`exempt` 必须是人话理由，且**必须点名下一步接什么**
  *   （2.0 的批次八待接线项要写模块文件名）。闸门对"标了豁免、模块却已经被宿主装配点
  *   `ui/editor-global-providers.ts` 接上"的项会红：那是"接线了忘改矩阵"，不是豁免。
@@ -227,11 +229,12 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
 /**
  * Kojo 2.0 的状态表。
  *
- * 13 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
+ * 11 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
  * `ui/editor-global-providers.ts` 的 2.0 段），且**装配点无条件调用**（K2-SURFACE-DEFAULT：
  * 语言面不读切流开关，`language-parity.test.ts` 逐格对拍"装配点真调了 + 安装器自己不读开关"）；
- * 3 枚 `shared` 是**已交给插件**的三条腿（`outline` 自 B2、`definition` 自 B3b、`inlay` 自 B2c），
- * 宿主只经 `registerForLanguageServices` 带能力名挂上、判据全在 `@kojo/plugin-kojo-lang`；
+ * 5 枚 `shared` 是**已交给插件**的五条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
+ * `completion` 与 `hover` 自 B3c），宿主只经 `registerForLanguageServices` 带能力名挂上、
+ * 判据全在 `@kojo/kojo-lang` + 供方 `@kojo/plugin-kojo-lang`；
  * `brackets` / `preview` 与 ERB 同档（语言配置 / Monaco 内建）；`diagnostics` 是 `self`：
  * 2.0 有自己的诊断链（`ui/kojo2-problem-sync.ts` → `setModelMarkers(...,
  * KOJO2_PROBLEM_MARKER_OWNER, …)`，与 v1 的 decorator 腿并行、不共用），同样属语言面
@@ -278,8 +281,13 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
       exempt:
         '纯模型 monaco/kojo2-callhierarchy.ts 已交付，宿主面板 ui/CallHierarchyOverlay.tsx 已按 model 语言分派消费（批次十）；Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83），待装配点 ui/editor-global-providers.ts 接 installKojo2CallHierarchyProvider 后改 self',
     },
-    [LanguageCapability.Completion]: 'self',
-    [LanguageCapability.Hover]: 'self',
+    // B3c（2026-10-28）：2.0 的补全与悬停走**共享收口**——`monaco/kojo2-providers.ts` 的
+    // `installKojo2LanguageProviders` 带能力名 `completion` / `hover` 经
+    // `registerForLanguageServices` 挂上（descriptor 点名 `slotServices`），宿主侧零原生
+    // 注册、零判据；供方 = 插件 `@kojo/plugin-kojo-lang`（候选组装 / 区间 / Markdown 措辞
+    // 全在 `@kojo/kojo-lang`，含悬停的展开段）。
+    [LanguageCapability.Completion]: 'shared',
+    [LanguageCapability.Hover]: 'shared',
     // B3b（2026-10-24）：2.0 的转定义改走**共享收口**（`kojo-definition.ts` 的
     // `installDefinitionProvider`，descriptor 点名 `slotServices: ['definition']`），
     // 宿主侧零原生 provider；供方 = 插件 `@kojo/plugin-kojo-lang`（含展开体那两条落点）。

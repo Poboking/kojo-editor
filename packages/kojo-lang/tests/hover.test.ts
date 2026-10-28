@@ -9,6 +9,11 @@
  * - 位置门：台词正文 / `@原生` 体内不悬停、不跳；`{…}` 插值内例外。
  *
  * 期望值全部从 core AST / 同一份声明索引取，不在测试里复写声明名或行号。
+ *
+ * B3c 车道 2（2026-10-28）：本闸从 `packages/app/tests/kojo2-hover-definition.test.ts` **整枚搬进
+ * 包**（悬停判据住在 `src/hover.ts`、转定义判据早就在 `src/definition.ts`，两条闸因此同处）。
+ * 文件名按搬入的那枚叶子叫 `hover.test.ts`，内容仍是悬停 + 转定义两半；断言一条未减（27 条），
+ * 只换了 import 出处与夹具落点（`tests/fixtures/kojo2/`，逐字节相同）。
  */
 
 import { readFileSync } from 'node:fs';
@@ -22,8 +27,8 @@ import {
   type Kojo2DeclarationKind,
   type Kojo2Query,
 } from '@kojo/kojo-lang';
-import { kojo2HoverAt } from '../src/monaco/kojo2-hover';
-import { kojo2DefinitionAt } from '../src/monaco/kojo2-definition';
+import { kojo2HoverAt } from '../src/hover';
+import { kojo2DefinitionAt } from '../src/definition';
 
 const FIXTURE = readFileSync(
   path.join(import.meta.dirname, 'fixtures', 'kojo2', 'hover-definition.kojo2'),

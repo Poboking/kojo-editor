@@ -80,7 +80,7 @@ import {
   type Kojo2Document,
 } from '@kojo/kojo-lang';
 import { isNameChar } from './kojo-completion-position';
-import { kojo2EventSitesOf, type Kojo2EventSite } from './kojo2-event-sites';
+import { kojo2EventSitesOf, type Kojo2EventSite } from '@kojo/kojo-lang/event-sites';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import type { Kojo2ProjectIndex, Kojo2ProjectSymbolRef } from './kojo2-project-index';
 
@@ -90,7 +90,7 @@ import type { Kojo2ProjectIndex, Kojo2ProjectSymbolRef } from './kojo2-project-i
 const TABLE_WORD = KOJO_DECL_WORDS[5];
 const VARIABLE_WORD = KOJO_DECL_WORDS[3];
 
-/** `@函`（core `KOJO_DISPATCH_WORDS` 位序 §2.1）；`@织` 的判据已随事件挂点搬进 `kojo2-event-sites.ts` */
+/** `@函`（core `KOJO_DISPATCH_WORDS` 位序 §2.1）；`@织` 的判据已随事件挂点搬进 `@kojo/kojo-lang/event-sites` */
 const FUNCTION_WORD = KOJO_DISPATCH_WORDS[8];
 
 /**
@@ -320,7 +320,7 @@ function declarationFactsOf(document: Kojo2Document): DeclarationFact[] {
  * {@link EventGroup} 决定（有 `# 机` 时 `# 机` 是声明，否则最早 `@织` 是锚点）。
  *
  * **判据不在这里**（LAU-D2）：`# 机` / `@织` 的名字段只有一个投影
- * （`kojo2-event-sites.ts`），引用面 / 悬停 / `dialect lint` 三处共用它。本函数只把
+ * （`@kojo/kojo-lang/event-sites`，B3c 起住包），引用面 / 悬停 / `dialect lint` 三处共用它。本函数只把
  * 那一份搬成引用面的内部形状，绝不另扫一遍。
  */
 function eventAttestationsOf(document: Kojo2Document): EventAttestation[] {

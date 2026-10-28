@@ -16,24 +16,18 @@ import { SUGAR_LEXICON_WORDS, type SugarLexiconWord } from '@kojo/kojo-vocab/key
 /**
  * 空白判据**单源**：字符集与 `kojo-sugar` lexer 逐字一致（它处处接受 `[ \t\u3000]+`，
  * `时机　本番：` 这类全角缩进/分隔能编译）。此前补全侧四套写法并存（`[ \t]` / `\s` / 自持全角），
- * 口径以"能编译的那一套"为准 ⇒ 收在此处一份，消费者只拼它。
+ * 口径以"能编译的那一套"为准 ⇒ 只此一份。
  * NBSP 一类**故意不收**：lexer 不认，补全也不能认（否则补得上、编译炸）。
+ *
+ * B3c 车道 2：这四枚**实现**搬进语言面库 `@kojo/kojo-lang/completion`——2.0 补全的供方从这一批
+ * 起是插件（`@kojo/plugin-kojo-lang`），插件读不到 `packages/app/src/**`，而它组装候选时判的
+ * "行首 / 槽位空白"必须和这里同一份（两份字符集 = 补全按一种算、转译器按另一种编，上屏就是
+ * "补得上、编译炸"）。宿主这文件因此改成**原样 re-export**，v1 侧全部 import 点一字不改
+ * （与 `isNameChar` / `insideInterpolation` 当年同一条纪律），本地**不留第二份**。
  */
-export const BLANK_CLASS_STR = '\\t \\u3000';
+import { BLANK_CLASS_STR, BLANK_RE, isAllBlank, isBlank } from '@kojo/kojo-lang/completion';
 
-/** 单字符空白判定用正则（同一字符集，非另一份手抄） */
-export const BLANK_RE: RegExp = new RegExp(`[${BLANK_CLASS_STR}]`);
-
-const ALL_BLANK_RE = new RegExp(`^[${BLANK_CLASS_STR}]*$`);
-
-export function isBlank(ch: string): boolean {
-  return BLANK_RE.test(ch);
-}
-
-/** text 全为空白视为真；空串视为真（行首判定用：光标之前只有空白） */
-export function isAllBlank(text: string): boolean {
-  return ALL_BLANK_RE.test(text);
-}
+export { BLANK_CLASS_STR, BLANK_RE, isAllBlank, isBlank };
 
 /**
  * 字符类由各段**码位区间**拼出（与 `kojo-sugar` 的 `identifier-chars.ts` 同口径）：
@@ -41,7 +35,8 @@ export function isAllBlank(text: string): boolean {
  *
  * B1 起**标识符字符集搬进语言面库**（`@kojo/kojo-lang` 的 `name-chars`）：它同时是
  * `kojo2-declarations` 切声明名的判据，而语言面库不能反过来 import 宿主。
- * 本模块只保留"行内位置"这一层（空白 / 字符串 / 注释 / 插值 / 名字段 / 关键字锚），
+ * 本模块只保留"行内位置"这一层（字符串 / 注释 / 插值 / 名字段 / 关键字锚；空白那四枚见上面
+ * 那段，B3c 起也住包），
  * `isNameChar` 与 `isCjk` 按原样 re-export，既有 15 个 import 点一字不改。
  */
 import { NAME_CHAR_CLASS, isCjk, isNameChar } from '@kojo/kojo-lang/name-chars';

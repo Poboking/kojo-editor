@@ -4,9 +4,8 @@
  *
  * ## 分层
  * 本文件是**纯函数**：源码文本 + 1 基行列进，事实出。零 IO、零 Monaco、零注册——
- * 宿主只把结果翻成 `monaco.languages.Hover` 的 `contents` / `range`（注册由 CUTOVER 收口）。
- * 声明索引住在 `kojo2-declarations.ts`（与转定义 / 补全共用同一份），本文件只负责
- * "光标下是哪条声明"与"这条声明怎么讲给作者看"。
+ * 消费方只把结果翻成悬停面的 `contents` / `range`。声明索引住在 `declarations.ts`
+ * （与转定义 / 补全共用同一份），本文件只负责"光标下是哪条声明"与"这条声明怎么讲给作者看"。
  *
  * ## 位置门
  * - `@原生` 围栏体内不悬停（原文不解释）；
@@ -16,11 +15,22 @@
  * ## 事实口径
  * 名字、类型、初值、参数、表体行数全部来自 core 的 AST（`kojo2-declarations.ts` 搬运）；
  * 读不到就少说一行，**不编默认值**（例如没写初值就不写"初值：0"）。
+ *
+ * ## B3c 车道 2：为什么住在包 + 为什么带 Markdown 措辞
+ *
+ * 悬停的**供方**从 B3c 起是插件（`@kojo/plugin-kojo-lang`），插件读不到 `packages/app/src/**`。
+ * 于是正文与措辞都得跟着判据走：{@link kojo2HoverMarkdown} 与 {@link kojo2DeclarationMarkdown}
+ * 原住 `monaco/kojo2-providers.ts`（私有 `declarationMarkdown` 与导出的 `kojo2HoverMarkdown`），
+ * 它们决定补全 `documentation` 与悬停正文的**字面**——留在宿主，插件就交不出这两段文字。
+ * 搬入是**纯搬家**：首段 `**名字**（种类）`、其余每行一段、`\n\n` 相连的口径逐字不动；
+ * 两枚函数共用同一个 `kojo2HoverLines`，不另写第二套措辞。唯一的文字改动是文件里那两句
+ * 举例提到了具体游戏名（本包闸钉"零游戏名词"，扫的是正文含注释），改成"某方言 / 另一方言"，
+ * 语义与判据一字未动。
  */
 
-import { insideInterpolation } from './kojo-completion-position';
+import { insideInterpolation } from './interpolation';
 import { findEvent, type EventSpec, type GameAdapter } from '@kojo/kojo-core';
-import { kojo2EventSiteAt, kojo2EventSitesOf, type Kojo2EventSite } from './kojo2-event-sites';
+import { kojo2EventSiteAt, kojo2EventSitesOf, type Kojo2EventSite } from './event-sites';
 import {
   KOJO2_DECL_WORD_BY_KIND,
   kojo2DeclarationAt,
@@ -36,7 +46,7 @@ import {
   type Kojo2Declaration,
   type Kojo2Document,
   type Kojo2Query,
-} from '@kojo/kojo-lang';
+} from './declarations';
 
 /** 一次悬停的结果：显示名 / 声明种类 / 屏上区间 + 事实正文 + 声明落点。 */
 export interface Kojo2HoverResult {
@@ -140,6 +150,24 @@ function truncate(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
+/* ============================== Markdown 措辞（B3c 自宿主搬入） ============================== */
+
+/**
+ * 悬停结果的 Markdown 形态（**唯一**渲染口径：悬停面与补全的 documentation 共用）。
+ * 与 `kojo-hover.ts` 的既有写法同形：首段 `**名字**（种类）`，其余每行一段。
+ */
+export function kojo2HoverMarkdown(hover: Kojo2HoverResult): string {
+  return [`**${hover.name}**（${hover.kind}）`, ...hover.lines].join('\n\n');
+}
+
+/** 声明事实 → 同一形态的 Markdown（种类文案取 core 词表，与悬停的 `x声明` 逐字同构） */
+export function kojo2DeclarationMarkdown(declaration: Kojo2Declaration): string {
+  return [
+    `**${declaration.name}**（${KOJO2_DECL_WORD_BY_KIND[declaration.kind]}声明）`,
+    ...kojo2HoverLines(declaration),
+  ].join('\n\n');
+}
+
 /* ============================== 事件挂点（LAU-D2） ============================== */
 
 /** 悬停的可选注入面（LAU-D2：`adapter` 让 `# 机` / `@织` 的事件名讲得出方言事实） */
@@ -175,10 +203,11 @@ function looksLikeAnchorLine(text: string): boolean {
 /**
  * 事件挂点的悬停正文（LAU-D2）：**方言事实**，不是本文件事实。
  *
- * 这是六类服务里"悬停"那条腿此前唯一没有方言来源的格子——`# 机 训练` 在 eraTW 下是
- * "引擎的 `EVENTTRAIN`"，在 eraFL 下根本没有这个事件；两枚 adapter 喂同一份文本，悬停必须
- * 说得不一样（§5.2 "事实面 = 既有 `GameAdapter`"）。目录里有 ⇒ 讲引擎落点 / 派发模型 /
- * 优先级 / 参数形状；目录里没有 ⇒ 如实说"这个方言没有它"，并列出可用事件（不猜）。
+ * 这是六类服务里"悬停"那条腿此前唯一没有方言来源的格子——同一行 `# 机 <事件>` 在**能编出
+ * 这个事件**的方言里讲的是引擎落点，在**目录里没有它**的方言里只能如实说"没有这个事件"；
+ * 两枚方言 adapter 喂同一份文本，悬停必须说得不一样（§5.2 "事实面 = 既有 `GameAdapter`"）。
+ * 目录里有 ⇒ 讲引擎落点 / 派发模型 / 优先级 / 参数形状；目录里没有 ⇒ 如实说"这个方言没有它"，
+ * 并列出可用事件（不猜）。
  */
 export function kojo2EventHoverLines(
   spec: EventSpec | undefined,

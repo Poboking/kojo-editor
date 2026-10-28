@@ -110,13 +110,14 @@ const JSON_DESCRIPTOR: LanguageDescriptor = {
  * - 认 **`.kojo`（主场，2026-10-27 起从 v1 手里接过）与 `.kojo2`（旧名，兼容）**；
  *   v1 的 descriptor 只剩 `.kojo1`，两边不重叠；
  * - **不声明 `languageServices`**：通用双注册那 11 枚 provider 是 v1 语义的供方，挂到
- *   `kojo2` 上只会拿空结果顶掉 Monaco 内建行为（2.0 的 provider 由各枚 `installKojo2*`
- *   自建、各自只认 `kojo2` 语言 id）；声明面由 `capabilities` 与闸门负责；
+ *   `kojo2` 上只会拿空结果顶掉 Monaco 内建行为（2.0 自建的那几枚——折叠 / 引用 / 缩进 /
+ *   格式化 / 高亮 / 扩选——各自只认 `kojo2` 语言 id）；声明面由 `capabilities` 与闸门负责；
  * - **`slotServices`（B2 起）**：只点名**确实已由插件接管**的那几条腿。今天是
- *   `documentSymbol`（B2）、`inlayHint`（B2c）与 `definition`（B3b）——这三条的原生
- *   provider 已在对应批次删除，唯一供方都是 `@kojo/plugin-kojo-lang`。其余能力
- *   （折叠 / 悬停 / 补全 / 引用）仍由各枚 `installKojo2*` 自建，**不能**在这里提前声明：
- *   声明了就是挂上一枚没人应答的空 provider，而折叠那枚的空结果会顶掉 Monaco 的缩进折叠；
+ *   `documentSymbol`（B2）、`inlayHint`（B2c）、`definition`（B3b），以及 B3c（2026-10-28）
+ *   补上的 `completion` 与 `hover`——这五条的原生 provider 已在对应批次删除，唯一供方都是
+ *   `@kojo/plugin-kojo-lang`，注册走共享收口（`registerForLanguageServices` 带能力名那一枚）。
+ *   仍**不声明**的两条是折叠与引用：它们还由各枚 `installKojo2*` 自建，提前声明就是给
+ *   `kojo2` 挂上一枚没人应答的空 provider，而折叠那枚的空结果会顶掉 Monaco 的缩进折叠；
  * - **不声明 `structure`**：`monaco/tree-sitter/kojo2-runtime.ts` 只导出主线程单例
  *   （`getKojo2TreeSitterRuntime`：parse / captures）与内核类型，**没有**
  *   `StructureLanguageRuntime`（`runtimeWasmUrl` / `grammarWasmUrl` / `createWorker`）这一层
@@ -135,7 +136,7 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
   label: 'kojo',
   matchesPath: (filePath) => isKojo2SourcePath(filePath),
   register: registerKojo2Language,
-  slotServices: ['documentSymbol', 'inlayHint', 'definition'],
+  slotServices: ['documentSymbol', 'inlayHint', 'definition', 'completion', 'hover'],
   capabilities: KOJO2_CAPABILITIES,
 };
 

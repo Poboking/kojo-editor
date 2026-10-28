@@ -54,6 +54,11 @@ const ALLOWED_PACKAGES = new Set([
   // B3a：展开体落点要"那一次编译的成品"，登记表已搬进语言面库。
   '@kojo/kojo-lang/expand-compile',
   '@kojo/kojo-lang/expand-view',
+  // B3c：补全 / 悬停供方——候选组装 / 块级 snippets / 悬停正文与 Markdown 措辞都在包里
+  // （`event-sites` 那枚判据由 `hover.ts` 包内自用，插件这一侧不直接 import）。
+  '@kojo/kojo-lang/completion',
+  '@kojo/kojo-lang/completion-snippets',
+  '@kojo/kojo-lang/hover',
   // B4：语言面供方交数据（词法 / 语言配置 / 主题声明）。三枚都是**纯数据叶子**，
   // 引它们不会把 Monaco 带进插件——契约类型才是这一层的形状来源。
   '@kojo/kojo-lang/monarch',
@@ -68,8 +73,8 @@ describe('@kojo/plugin-kojo-lang 是纯插件（零 Monaco / 零 React / 零 IO 
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // request / definition / symbols / inlay / monaco-language / plugin / index
-    expect(files).toHaveLength(7);
+    // request / completion / definition / hover / symbols / inlay / monaco-language / plugin / index
+    expect(files).toHaveLength(9);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

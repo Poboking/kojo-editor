@@ -39,6 +39,13 @@ export * from './expand-view';
 export * from './symbols';
 export * from './definition';
 export * from './inlay';
+// B3c 车道 2：2.0 **补全与悬停的判据**整块从宿主 `monaco/kojo2-*.ts` 搬进本包
+// （候选组装 / 块级 snippets / 悬停正文与 Markdown 措辞 / 事件挂点）。理由同 `definition`：
+// 供方是插件，插件读不到宿主，判据留在宿主就会长出第二份。开机侧一律引叶子。
+export * from './completion';
+export * from './completion-snippets';
+export * from './hover';
+export * from './event-sites';
 export * from './adapter-source';
 export * from './expand-compile';
 // B4：角色表与角色调色板（架构 §7.2「角色表住 SDK 不住 app」）——**开机侧引叶子**，

@@ -265,6 +265,11 @@ export default defineConfig({
       '@kojo/kojo-lang/symbols': r('../kojo-lang/src/symbols.ts'),
       '@kojo/kojo-lang/definition': r('../kojo-lang/src/definition.ts'),
       '@kojo/kojo-lang/inlay': r('../kojo-lang/src/inlay.ts'),
+      // B3c 车道 2：补全 / 悬停的判据叶子（同样必须排在桶之前）。
+      '@kojo/kojo-lang/completion': r('../kojo-lang/src/completion.ts'),
+      '@kojo/kojo-lang/completion-snippets': r('../kojo-lang/src/completion-snippets.ts'),
+      '@kojo/kojo-lang/hover': r('../kojo-lang/src/hover.ts'),
+      '@kojo/kojo-lang/event-sites': r('../kojo-lang/src/event-sites.ts'),
       '@kojo/kojo-lang/adapter-source': r('../kojo-lang/src/adapter-source.ts'),
       '@kojo/kojo-lang/expand-compile': r('../kojo-lang/src/expand-compile.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('../kojo-sdk/src/semantic-roles.ts'),

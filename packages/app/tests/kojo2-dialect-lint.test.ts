@@ -26,7 +26,7 @@ import {
   kojo2DialectLintProblems,
   lintKojo2Dialect,
 } from '../src/monaco/kojo2-dialect-lint';
-import { kojo2EventSitesOf } from '../src/monaco/kojo2-event-sites';
+import { kojo2EventSitesOf } from '@kojo/kojo-lang/event-sites';
 import { kojo2DocumentOf } from '@kojo/kojo-lang';
 
 /* ============================== 基座 ============================== */

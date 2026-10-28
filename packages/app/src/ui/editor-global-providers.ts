@@ -1799,15 +1799,21 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // `.kojo` 的解析器切换、存储服务。本装配点今天只剩一枚安装器留在开关里：K2 batch-5 的
     // **一键迁移 code action**（见下）——它的每个动作都把 v1 写法改写进缓冲，属迁移入口。
     globalDisposers.push(installKojo2SemanticTokensProvider(monaco));
-    // K2 batch-4：三枚语言服务 provider（补全 / 悬停 / 转定义），语言 id 只认 `kojo2`。
-    // adapter 走组合根注入的 getter —— 项目切换 / 槽位变化都不必重装 provider；
-    // 没注入 / 取不到 ⇒ 只有 `# 机` 那一路零候选（同文件语义照常工作）。
-    globalDisposers.push(
-      installKojo2LanguageProviders(
-        monaco,
-        kojo2Adapter === undefined ? {} : { adapter: kojo2Adapter },
-      ),
-    );
+    // K2 batch-4 → **B3c（2026-10-28）**：这一枚安装器只剩补全 / 悬停两腿，且**不传注入面**。
+    // 转定义早在 B3b 归插件；本批把判据（触发字符 / 名字段区间 / 声明索引 / Markdown 措辞 /
+    // adapter 三路投影）整块搬进 `@kojo/kojo-lang`，作答的是插件 `@kojo/plugin-kojo-lang` 在
+    // `ui.editor.languageService` 上的 `kojo2-completion` / `kojo2-hover` 两枚贡献，注册走
+    // `registerForLanguageServices(..., 'completion' | 'hover')` 的共享收口（kojo2 由
+    // descriptor 的 `slotServices` 点名）。
+    //
+    // **留下的必须是插件看不到的宿主事实**：`installKojo2LanguageProviders(monaco)` 之后，
+    // 这里不再传 `{ adapter, getFilePath, getCompile, completion }`——adapter 由插件经
+    // `@kojo/kojo-lang/adapter-source` 登记簿（本函数开头那枚 `registerKojo2AdapterSource`）
+    // 在请求时现取并核过 `adapter.id === project.adapterId`；文件身份 / 版本 / 项目事实由
+    // provider 自己从 model 与内核现取（`requireKernel()`）。**判据一律在插件与包，宿主一份
+    // 都不留**——留一份当兜底就是两枚 provider 并存，Monaco 的合并顺序不可控。
+    // `kojo2Adapter` 这格注入面本批只剩签名帮助还在吃它（`installKojo2SignatureHelpProvider`）。
+    globalDisposers.push(installKojo2LanguageProviders(monaco));
     if (isKojo2CutoverEnabled()) {
       // K2 batch-5：Kojo 2.0 一键迁移 code action（裸旁白 / 裸引号 / 心形 / 着色 / 随机 /
       // 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进），语言 id 只认 `kojo2`。
@@ -1833,8 +1839,9 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // K2 batch-7：格式化器只服务显式格式化动作（不接保存链路——作者不按 Shift+Alt+F /
     // Ctrl+K Ctrl+F 就不动缓冲内容）；格式化属语言面，无条件装配。
     globalDisposers.push(installKojo2DocumentFormatter(monaco));
-    // K2 batch-8：ERB/kojo2 同权面——7 枚语言服务 + 选区格式化。补全的事件参数形状
-    // 与 `faceTemplates` / `hintNames` 都在 `kojo2-providers` 里按 adapter 现取
+    // K2 batch-8：ERB/kojo2 同权面——7 枚语言服务 + 选区格式化。B3c 之后补全的事件参数形状
+    // 与 `faceTemplates` / `hintNames` 都不在这条腿上了：三路投影住在 `@kojo/kojo-lang`
+    // （`kojo2CompletionOptionsFromAdapter`），由插件供方在请求时按 adapter 现取
     //（本层仍零游戏名词；旧 adapter 缺字段 ⇒ 对应候选位零候选，不猜）。
     // K2 batch-9：引用面换成**项目级**（`kojo2ProjectIndex` 由宿主喂；索引空时自动退回同文件）。
     globalDisposers.push(

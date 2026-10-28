@@ -56,7 +56,13 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     // + B4 的 2.0 语言面本体：词表 / Monarch 状态机 / 语言配置 / 三套主题装配
     // − B5a：语义角色表**搬去 `@kojo/kojo-sdk/semantic-roles`**（架构 §7「角色表住 SDK」），
     //   本包不再持有那一枚；角色调色板（theme-rules）留在这里——它是**装配数据**不是契约。
-    expect(files).toHaveLength(17);
+    // + B3c 车道 2（2026-10-28）：2.0 **补全 / 悬停的判据**整块从宿主 `monaco/kojo2-*.ts` 搬进来
+    //   四枚——`completion`（含 v1 侧也共用的空白族）/ `completion-snippets` / `hover`（含两段
+    //   Markdown 措辞）/ `event-sites`。理由与 `definition` 那条一模一样：B3c 起这两条腿的**供方
+    //   是插件** `@kojo/plugin-kojo-lang`，插件看不见 `packages/app/src/**`，判据留在宿主就等于
+    //   逼插件（以及引用面 / 方言 lint 这两枚非 Monaco 消费者）各抄一份。搬进来没带来任何新的
+    //   外部依赖：四枚只值引 `@kojo/kojo-core`（下面白名单那格当场验），其余全走同包相对路径。
+    expect(files).toHaveLength(21);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

@@ -3,14 +3,14 @@
  *
  * ## 分工
  * 本文件是**纯函数组装**：源码 + 1 基行列进，候选数组出；零 IO、零 Monaco、零注册。
- * 宿主（CUTOVER）只做 Monaco 翻译：候选 → `monaco.languages.CompletionItem`、
- * `triggerCharacters` / `range` / `CompletionItemKind` 由宿主那一侧决定。
+ * 消费方（B3c 起＝插件供方 + 宿主共享收口）只做协议翻译：候选 → `CompletionItem`、
+ * `triggerCharacters` / `range` / 图标档位由翻译那一侧决定。
  *
  * ## 候选源（全部从公共入口派生，不手抄词表）
  * - **锚点**：`# @ > ? !` 五枚语法标点（core 没有"锚点"常量；它们是标点，不是词表）；
  * - **声明词**：`@kojo/kojo-core` 的 `KOJO_DECL_WORDS`；
  * - **`# 机` 事件**：当前项目 adapter 的 `eventCatalog`（宿主经 core 的 `eventNames` 注入；
- *   Monaco 语言层不 import 具体 adapter——解耦审计 A 项把这一层钉成"零游戏名词"）；
+ *   语言面库不 import 具体 adapter——解耦审计 A 项把这一层钉成"零游戏名词"）；
  * - **`@织` 事件**：与 `# 机` **同一枚**事件名单（`eventNames` 投影，不另立第二份）；
  * - **域符号**：`@kojo/kojo-core` 的 `KOJO_DOMAIN_SYMBOL_NAMES`（`我 / 你 / 她`）；
  * - **表 / 池 / 模 / 函名单**：本文件声明的名字（`kojo2-declarations.ts` 的同一份索引）；
@@ -31,11 +31,33 @@
  * 本函数只按**已输入前缀**裁一遍（让纯函数可单测、也减少宿主侧噪音）；Monaco 仍会按
  * `filterText` 再过滤，两层不冲突。候选的 `insertText` 一律是原文名字，**不在这里塞括号 /
  * snippet**——调用形态是宿主翻译层的决定，纯函数不替它猜。块级 snippets 因此住
- * `kojo2-completion-snippets.ts`（数据 + 行首门），由宿主按 `kind: 'snippet'` 追加。
+ * `completion-snippets.ts`（数据 + 行首门），由宿主按 `kind: 'snippet'` 追加。
  *
  * ## 未注入 = 零候选（不猜）
  * 事件参数 / 颜绘参数 / 行尾提示名这三路的事实都只存在于**当前项目**（adapter 或工程数据），
  * 语言层不内置任何一条；宿主没注入就返回空数组，而不是借一个"像的"词兜底。
+ *
+ * ## B3c 车道 2：为什么本文件住在包里、并且比宿主那版多五格
+ *
+ * 补全的**供方**从 B3c 起是插件（`@kojo/plugin-kojo-lang`），插件读不到 `packages/app/src/**`；
+ * 判据留在宿主 = 插件只能复制一份去应答 = 两份候选集迟早漂移。搬入是**纯搬家**（候选集、
+ * 顺序、detail、sortText、位置门逐字不变），同时把简报 §二.5 点名的"住在
+ * `monaco/kojo2-providers.ts` 里的判据"一并接进来——它们不是翻译，插件拿不到就没法给
+ * `range` 与 `documentation`：
+ * - {@link KOJO2_COMPLETION_TRIGGER_CHARS}（原宿主常量，逐字同值）；
+ * - {@link kojo2CompletionRangeAt}（原 `tokenRangeAt`；返回形状换成 1 基 / 尾列半开三元组，
+ *   内部仍是同一枚 `kojo2TokenSpanAt`）；
+ * - {@link kojo2DeclarationIndexFor}（原 `declarationsOf`：键两枚、先建者胜）；
+ * - {@link kojo2DeclarationForCandidate}（原 `declarationFor`：种类精确优先、名字兜底）；
+ * - {@link kojo2CompletionOptionsFromAdapter}（原 `eventArgsOf` / `faceTemplatesOf` /
+ *   `hintNamesOf` 三枚投影合成一枚；逐格保持"缺省 ⇒ 零候选、不猜"，含原有的 WeakMap 记忆化）。
+ *
+ * ## blank 族为什么也住这一枚（而不是新开一枚叶子）
+ * `BLANK_CLASS_STR` / `BLANK_RE` / `isBlank` / `isAllBlank` 是**行首 / 槽位判据的地基**，
+ * 本文件的 `headPartsOf` / `scanSlot` / `templateSlotCandidates` 与 `completion-snippets.ts`
+ * 的行首门都吃它；宿主 v1 那侧（`kojo-completion-position.ts`）原样 re-export 这四枚，
+ * 于是"能编译的空白集"仍只有一份。派工单允许"另开一枚空白叶子"与"并进 completion"二选一，
+ * 本车选后者：单独开一枚只会多一条子路径导出与一条 alias，而消费者一枚都没有增加。
  */
 
 import {
@@ -46,14 +68,10 @@ import {
   KOJO_STORAGE_WORDS,
   KOJO_TYPE_WORDS,
   eventNames,
+  projectEventArgs,
   type GameAdapter,
 } from '@kojo/kojo-core';
-import {
-  insideInterpolation,
-  insideStringOrComment,
-  isAllBlank,
-  isBlank,
-} from './kojo-completion-position';
+import { insideInterpolation, insideStringOrComment } from './interpolation';
 import {
   KOJO2_DECL_WORD_BY_KIND,
   KOJO2_MACHINE_WORD,
@@ -66,19 +84,58 @@ import {
   type Kojo2DeclarationKind,
   type Kojo2Document,
   type Kojo2Query,
-} from '@kojo/kojo-lang';
+} from './declarations';
 import {
   KOJO2_DISPATCH_WORDS,
   KOJO2_INDENT_WIDTH,
   KOJO2_NATIVE_FENCE_WORD,
   KOJO2_TEMPLATE_SLOT,
-} from './kojo2-lexicon';
+} from './lexicon';
+
+/* ============================== 空白判据（单源；宿主 v1 侧 re-export 这四枚） ============================== */
+
+/**
+ * 空白判据**单源**：字符集与 `kojo-sugar` lexer 逐字一致（它处处接受 `[ \t\u3000]+`，
+ * `时机　本番：` 这类全角缩进/分隔能编译）。此前补全侧四套写法并存（`[ \t]` / `\s` / 自持全角），
+ * 口径以"能编译的那一套"为准 ⇒ 收在此处一份，消费者只拼它。
+ * NBSP 一类**故意不收**：lexer 不认，补全也不能认（否则补得上、编译炸）。
+ */
+export const BLANK_CLASS_STR = '\\t \\u3000';
+
+/** 单字符空白判定用正则（同一字符集，非另一份手抄） */
+export const BLANK_RE: RegExp = new RegExp(`[${BLANK_CLASS_STR}]`);
+
+const ALL_BLANK_RE = new RegExp(`^[${BLANK_CLASS_STR}]*$`);
+
+export function isBlank(ch: string): boolean {
+  return BLANK_RE.test(ch);
+}
+
+/** text 全为空白视为真；空串视为真（行首判定用：光标之前只有空白） */
+export function isAllBlank(text: string): boolean {
+  return ALL_BLANK_RE.test(text);
+}
 
 /**
  * 五锚点（`#` 声明 / `@` 调度 / `>` 旁白 / `?` 条件 / `!` 触发）。
  * core 没有"锚点"常量——这是**语法标点**，不是词表；本文件只此一处写它们。
  */
 export const KOJO2_ANCHOR_CHARS = ['#', '@', '>', '?', '!'] as const;
+
+/**
+ * 补全触发字符：五锚点 + `{`（`{…}` 是表达式位，与 v1 `.kojo` 的糖位触发同一产品口径）。
+ * 其余位置靠 `quickSuggestions` 与手动触发——纯模型自己会按前缀裁剪，触发多了不产生噪声候选。
+ */
+export const KOJO2_COMPLETION_TRIGGER_CHARS: readonly string[] = Object.freeze([
+  '#',
+  '@',
+  '>',
+  '?',
+  '!',
+  '{',
+  // `(`：行尾表演提示组 `(心形)` 的提示名位（K2-COMPLETE-ARGS-FACE）。
+  '(',
+]);
 
 /** adapter 事件目录的**名字投影**（顺序 = `eventCatalog.events` 表序；零手抄）。 */
 export function kojo2EventNamesOf(adapter: GameAdapter): readonly string[] {
@@ -97,11 +154,11 @@ const VARIABLE_WORD = KOJO2_DECL_WORD_BY_KIND.variable;
 const CONSTANT_WORD = KOJO2_DECL_WORD_BY_KIND.constant;
 
 /**
- * 候选的语义类别（宿主据此映射 Monaco `CompletionItemKind`）。
+ * 候选的语义类别（消费方据此挑图标档位，宿主再映射 Monaco `CompletionItemKind`）。
  *
  * `eventArgument` / `valueType` / `storagePeriod` / `templateParam` / `templateSlot` /
  * `faceObject` / `faceArgument` / `hintName` 是 K2-COMPLETE-ARGS-FACE 的 additive 档；
- * 宿主映射缺省落 `Text`（**不借邻居的颜色**），细分映射由翻译层按这一枚决定。
+ * 映射缺省落 `Text`（**不借邻居的颜色**），细分映射由翻译层按这一枚决定。
  */
 export type Kojo2CompletionKind =
   | 'anchor'
@@ -170,7 +227,7 @@ export interface Kojo2FaceTemplates {
 }
 
 /**
- * 可选注入。事件名单**不从本模块的 import 里来**（Monaco 语言层零游戏名词）：
+ * 可选注入。事件名单**不从本模块的 import 里来**（语言面库零游戏名词）：
  * 宿主把当前项目 adapter 交进来，事件名由 core 的 `eventNames` 派生；测试可直接给
  * `events` 覆盖（两路都缺 ⇒ `# 机` 只给零候选，不猜任何内置事件）。
  *
@@ -859,4 +916,131 @@ export function kojo2CompletionAt(
 /** 行首 `?`（裸条件行 / 刚敲完锚点）：core 把它归 `unknown`，语义上仍是条件位。 */
 function isConditionSlot(before: string): boolean {
   return /^[ \t\u3000]*\?/.test(before);
+}
+
+/* ============================== 翻译层要用的三枚判据（B3c 自宿主搬入） ============================== */
+
+/**
+ * 补全项的**替换区间**（1 基行号 + 1 基首列 / 尾列半开；零宽 = 插在光标处）。
+ *
+ * 用**声明索引的同一枚** `kojo2TokenSpanAt`（`kojo2CompletionAt` 裁前缀用的就是它），不另写
+ * 一套"什么算名字字符"——两套判据会漂成"补全列表按一种前缀算、替换区间按另一种算"，上屏就是
+ * 多一个字 / 少一字（原宿主 `kojo2-providers.ts::tokenRangeAt` 逐字搬来，只把返回形状从
+ * `Monaco.IRange` 换成契约口径的三元组：`startLineNumber` / `endLineNumber` 由消费方按 `line` 补）。
+ */
+export function kojo2CompletionRangeAt(
+  line: number,
+  lineText: string,
+  column: number,
+): { readonly line: number; readonly startColumn: number; readonly endColumn: number } {
+  const col0 = Math.min(Math.max(column - 1, 0), lineText.length);
+  const span = kojo2TokenSpanAt(lineText, col0);
+  if (span === null) return { line, startColumn: column, endColumn: column };
+  return { line, startColumn: span.start + 1, endColumn: span.end + 1 };
+}
+
+/**
+ * 候选名 → 声明事实的**索引**（只在确实有"声明"类候选时才建；`documentation` 要的是声明正文）。
+ *
+ * 键有两份：`种类\u0000名字`（精确）与裸名字（兜底）。**先建者胜**：同名声明由 core 报错，
+ * 编辑器在错误状态下也得给出一条确定的说明，而不是随机挑一条。（原宿主 `declarationsOf` 逐字搬来。）
+ */
+export function kojo2DeclarationIndexFor(
+  source: string,
+): ReadonlyMap<string, Kojo2Declaration> {
+  const map = new Map<string, Kojo2Declaration>();
+  for (const declaration of kojo2DocumentOf(source).declarations) {
+    const typed = `${declaration.kind}\u0000${declaration.name}`;
+    if (!map.has(typed)) map.set(typed, declaration);
+    if (!map.has(declaration.name)) map.set(declaration.name, declaration);
+  }
+  return map;
+}
+
+/**
+ * 候选 → 它对应的声明（种类精确优先，再按名字兜底）。
+ * （原宿主 `declarationFor` 逐字搬来。）
+ */
+export function kojo2DeclarationForCandidate(
+  candidate: Kojo2CompletionCandidate,
+  declarations: ReadonlyMap<string, Kojo2Declaration>,
+): Kojo2Declaration | undefined {
+  if (candidate.declarationKind !== undefined) {
+    const exact = declarations.get(`${candidate.declarationKind}\u0000${candidate.label}`);
+    if (exact !== undefined) return exact;
+  }
+  return declarations.get(candidate.label);
+}
+
+/**
+ * adapter 的 `eventCatalog` → 补全参数形状投影（`# 机 <事件> <参数…>` 的参数名候选）。
+ *
+ * 投影是 core 的纯函数；按 adapter **对象身份**记忆化（`WeakMap`）：项目切换会换一枚 adapter，
+ * 旧项目的目录不会被带到新项目上。投影抛错 ⇒ `undefined`（参数位零候选，不猜）。
+ */
+const EVENT_ARGS_CACHE = new WeakMap<GameAdapter, Kojo2EventArgumentMap>();
+
+function eventArgsOf(adapter: GameAdapter): Kojo2EventArgumentMap | undefined {
+  const cached = EVENT_ARGS_CACHE.get(adapter);
+  if (cached !== undefined) return cached;
+  try {
+    // `MigrateEventArgs` 与 `Kojo2EventArgumentMap` 逐格同构（core 的迁移端子集），不写 cast。
+    const projected: Kojo2EventArgumentMap = projectEventArgs(adapter.eventCatalog);
+    EVENT_ARGS_CACHE.set(adapter, projected);
+    return projected;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * adapter 声明的 `@颜绘` 参数候选（K2-COMPLETE-DATA）与行尾提示名：**现取**契约字段。
+ *
+ * 与 {@link eventArgsOf} 同一条纪律：数据住 adapter，语言层只读；项目切换会换一枚 adapter，
+ * 字段本身是引用、不需要缓存。字段缺省（旧 adapter）/ 读取抛错 ⇒ `undefined` ⇒ 各格零候选，
+ * 不猜任何内置词。
+ */
+function faceTemplatesOf(adapter: GameAdapter): Kojo2FaceTemplates | undefined {
+  try {
+    return adapter.presentation.faceTemplates;
+  } catch {
+    return undefined;
+  }
+}
+
+function hintNamesOf(adapter: GameAdapter): readonly string[] | undefined {
+  try {
+    return adapter.presentation.hintNames;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 三枚 adapter 投影**合成一枚**出口（B3c：原宿主 `eventArgsOf` / `faceTemplatesOf` /
+ * `hintNamesOf` 三条各自调用点的集合形态）。
+ *
+ * 逐格保持今天的口径：
+ * - 每一路**各自** try/catch：某一路读不到只让那一路零候选，另外两路照旧；
+ * - 三路全缺省 ⇒ `undefined`（调用方"没有注入面"，与今天的 `completion` 缺省完全同形）；
+ * - 返回值里**只放真取到的键**（缺省的键不写成 `undefined`，免得调用方展开后把
+ *   `hintNames: undefined` 当成"显式空白名单"）。
+ *
+ * `events` 不从 adapter 投影（事件名位由 `kojo2CompletionAt` 自己按 `adapter` 派生），
+ * 故本函数永不设置它。
+ */
+export function kojo2CompletionOptionsFromAdapter(
+  adapter: GameAdapter,
+): Omit<Kojo2CompletionOptions, 'adapter'> | undefined {
+  const eventArgs = eventArgsOf(adapter);
+  const faceTemplates = faceTemplatesOf(adapter);
+  const hintNames = hintNamesOf(adapter);
+  if (eventArgs === undefined && faceTemplates === undefined && hintNames === undefined) {
+    return undefined;
+  }
+  return {
+    ...(eventArgs === undefined ? {} : { eventArgs }),
+    ...(faceTemplates === undefined ? {} : { faceTemplates }),
+    ...(hintNames === undefined ? {} : { hintNames }),
+  };
 }

@@ -23,6 +23,11 @@ export const config = defineConfig({
       '@kojo/kojo-lang/symbols': r('./packages/kojo-lang/src/symbols.ts'),
       '@kojo/kojo-lang/definition': r('./packages/kojo-lang/src/definition.ts'),
       '@kojo/kojo-lang/inlay': r('./packages/kojo-lang/src/inlay.ts'),
+      // B3c 车道 2：补全 / 悬停的判据叶子（同样必须排在桶之前）。
+      '@kojo/kojo-lang/completion': r('./packages/kojo-lang/src/completion.ts'),
+      '@kojo/kojo-lang/completion-snippets': r('./packages/kojo-lang/src/completion-snippets.ts'),
+      '@kojo/kojo-lang/hover': r('./packages/kojo-lang/src/hover.ts'),
+      '@kojo/kojo-lang/event-sites': r('./packages/kojo-lang/src/event-sites.ts'),
       '@kojo/kojo-lang/adapter-source': r('./packages/kojo-lang/src/adapter-source.ts'),
       '@kojo/kojo-lang/expand-compile': r('./packages/kojo-lang/src/expand-compile.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('./packages/kojo-sdk/src/semantic-roles.ts'),
@@ -55,8 +60,12 @@ export const config = defineConfig({
       '@kojo/plugin-erb-parser': r('./packages/plugins/erb-parser/src/index.ts'),
       '@kojo/plugin-eratw-adapter': r('./packages/plugins/eratw-adapter/src/index.ts'),
       // 2.0 面叶子（SDK B5 收尾）：conformance 第二列改走包面，不再按相对路径直捅别人的 src。
-      // 叶子排在桶之前——将来若给本包加桶别名，这一行必须留在它上面。
+      // 叶子排在桶之前——将来若给本包加桶别名，这两行必须留在它上面（B3c 就加了一枚桶）。
       '@kojo/plugin-erafl-adapter/kojo2': r('./packages/plugins/erafl-adapter/src/kojo2/index.ts'),
+      // B3c 车道 2：搬进 `packages/kojo-lang/tests` 的补全闸要拿 eraFL 的 adapter 做
+      // "同一份文本、两个方言"的对拍（原在 `packages/app/tests` 时靠 app 的 node_modules 解析，
+      // 换到 kojo-lang 就没有那枚 workspace 链接了）；与上面 `plugin-eratw-adapter` 同一条路。
+      '@kojo/plugin-erafl-adapter': r('./packages/plugins/erafl-adapter/src/index.ts'),
       '@kojo/plugin-eraakumamaid-adapter': r('./packages/plugins/eraakumamaid-adapter/src/index.ts'),
       '@kojo/plugin-erakoumakan-adapter': r('./packages/plugins/erakoumakan-adapter/src/index.ts'),
       '@kojo/plugin-erasqc-adapter': r('./packages/plugins/erasqc-adapter/src/index.ts'),

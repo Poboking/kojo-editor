@@ -10,7 +10,7 @@
  *
  * | # | 检查 | 码 | 判据从哪来 |
  * |---|---|---|---|
- * | 1 | 事件名不在 `eventCatalog` 里 | `core/event/unknown` | 本模块（事件挂点 ＝ `kojo2-event-sites.ts`） |
+ * | 1 | 事件名不在 `eventCatalog` 里 | `core/event/unknown` | 本模块（事件挂点 ＝ `@kojo/kojo-lang/event-sites`，B3c 起住包） |
  * | 2 | 事件写在了错误的载体上 | `core/event/wrong-carrier` | 本模块（`carriers[].validates` ＋ 已解析的 `carrier`） |
  * | 3 | 名字不在 `domainSymbols` 里 | `core/expr/unknown-symbol` | **同一次编译的诊断**（sema 判据，零重算） |
  * | 4 | 只读别名 / 常量出现在赋值左值 | `core/expr/readonly-target` / `core/expr/assign-to-constant` | 同上 |
@@ -58,7 +58,7 @@ import {
   kojo2DocumentOf,
   type Kojo2Document,
 } from '@kojo/kojo-lang';
-import { kojo2EventSitesOf, type Kojo2EventSite } from './kojo2-event-sites';
+import { kojo2EventSitesOf, type Kojo2EventSite } from '@kojo/kojo-lang/event-sites';
 import type { EditorProblem } from '../ui/problem-store';
 
 /** 体检清单的来源标签（问题面板那一列；与 `Kojo 2.0` 波浪线那条分开说得出"谁报的"） */

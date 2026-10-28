@@ -21,7 +21,8 @@
  *
  * 不选 JS `\s` 的宽集，理由取既有单源结论（不是本批新立的口径）：
  *
- * - `packages/app/src/monaco/kojo-completion-position.ts`：`BLANK_CLASS_STR = '\\t \\u3000'`
+ * - `packages/kojo-lang/src/completion.ts`（B3c 起空白单源住这里；原宿主落点 `monaco/kojo-completion-position.ts`
+ *   已是它的 re-export）：`BLANK_CLASS_STR = '\\t \\u3000'`
  *   并注明「NBSP 一类**故意不收**：lexer 不认，补全也不能认（否则补得上、编译炸）」；
  * - `packages/app/tests/completion-blank-class.test.ts` 钉住 `isBlank('\u00a0') === false`；
  * - `packages/app/src/monaco/erb-completion.ts` 已把第四套 `/^\s*$/` 收敛到同一单源；

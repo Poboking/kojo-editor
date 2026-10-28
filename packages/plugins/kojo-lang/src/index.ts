@@ -9,7 +9,9 @@
  * 那几条测试）要把**这一枚对象**喂进登记表，不能自己按字段抄一遍——抄了就是第二份判据。
  */
 export { createKojoLangPlugin } from './plugin';
+export { provideCompletion } from './completion';
 export { provideDefinition } from './definition';
+export { provideHover } from './hover';
 export { provideDocumentSymbols, symbolFactsToTree } from './symbols';
 export { provideInlayHints, toEditorInlayHints } from './inlay';
 export { isKojo2Request } from './request';

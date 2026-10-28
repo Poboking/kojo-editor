@@ -8,29 +8,18 @@
  *    没注入 adapter ⇒ `# 机` 零候选（不猜内置事件）；
  * 3. **provider 层真的把 adapter 送进去了**（不是只有纯函数能吃到）；
  * 4. **未绑定不猜**（§9-9）：adapter 取不到时事件名不给悬停、补全零事件候选。
+ *
+ * B3c 车道 2（2026-10-28）：判据搬进 `@kojo/kojo-lang` 后本闸**留在 app 侧**（它证的是
+ * "方言事实真的进了供方"），补全 / 悬停 / Markdown 措辞三处 import 改成包面叶子；车道 5 把
+ * 最后一处"宿主翻译腿"换成**插件供方**（`provideHover`）——事实与条数一条未改。
  */
 import { describe, expect, it } from 'vitest';
 import { eventNames } from '@kojo/kojo-core';
 import { ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter';
 import { ERAFL_GAME_ADAPTER } from '@kojo/plugin-erafl-adapter';
-import type * as Monaco from '../src/monaco/entry';
-import { kojo2CompletionAt, type Kojo2CompletionCandidate } from '../src/monaco/kojo2-completion';
-import { kojo2HoverAt } from '../src/monaco/kojo2-hover';
-import { kojo2HoverMarkdown, kojo2HoverOf } from '../src/monaco/kojo2-providers';
-import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
-
-/** 桩 model：只有 `kojo2HoverOf` 真正用到的那几格 */
-function fakeModel(text: string): Monaco.editor.ITextModel {
-  const rows = text.split(/\r\n|\r|\n/);
-  return {
-    getValue: () => text,
-    getLineContent: (line: number) => rows[line - 1] ?? '',
-    getLineCount: () => rows.length,
-    getLanguageId: () => KOJO2_LANGUAGE_ID,
-    isDisposed: () => false,
-    uri: { fsPath: 'D:/proj/口上/12/场景.kojo2' },
-  } as unknown as Monaco.editor.ITextModel;
-}
+import { provideHover } from '@kojo/plugin-kojo-lang';
+import { kojo2CompletionAt, type Kojo2CompletionCandidate } from '@kojo/kojo-lang/completion';
+import { kojo2HoverAt, kojo2HoverMarkdown } from '@kojo/kojo-lang/hover';
 
 /** `# 机 训练` 的 `训练` 在第 1 行第 5 列（行尾再停一格也算在名字上） */
 const AT_EVENT_NAME = { line: 1, column: 5 };
@@ -83,14 +72,26 @@ describe('悬停 · 事件名讲的是方言事实', () => {
 });
 
 describe('provider 层 · adapter 真的被送进悬停', () => {
-  it('`kojo2HoverOf` 带 adapter 时事件名有话可说，不带时保持空结果', () => {
-    const model = fakeModel(MACHINE_LINE);
-    const position = { lineNumber: 1, column: 5 } as Monaco.Position;
-    const withFacts = kojo2HoverOf(model, position, { adapter: ERATW_GAME_ADAPTER });
+  /** 宿主/插件共用的请求形状（`languageId` 与 `path` 两格是"认不认这篇"的判据） */
+  function hoverRequestAt(line: number, column: number) {
+    return {
+      kind: 'hover' as const,
+      path: 'D:/proj/口上/12/场景.kojo2',
+      text: MACHINE_LINE,
+      line,
+      column,
+      project: null,
+      languageId: 'kojo2',
+    };
+  }
+
+  it('插件供方带 adapter 时事件名有话可说，不带时保持弃权', () => {
+    const withFacts = provideHover(hoverRequestAt(1, 5), { adapter: ERATW_GAME_ADAPTER });
     expect(withFacts).toBeDefined();
-    const markdown = (withFacts!.contents[0] as { value: string }).value;
-    expect(markdown).toContain('EVENTTRAIN');
-    expect(kojo2HoverOf(model, position)).toBeUndefined();
+    expect(withFacts!.contents).toContain('EVENTTRAIN');
+    // B3c 契约新格：正文是 Markdown（措辞在包，供方只声明渲染口径）
+    expect(withFacts!.format).toBe('markdown');
+    expect(provideHover(hoverRequestAt(1, 5))).toBeUndefined();
   });
 
   it('悬停正文走同一个 Markdown 口径（`**名字**（种类）`）', () => {

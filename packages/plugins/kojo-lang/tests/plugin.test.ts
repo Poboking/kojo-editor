@@ -14,7 +14,8 @@
  *    （`type` / `parameter` / `text`）。**必须三档互不相同**——塌成一档的表现是
  *    "表档摘要被画成形参色"，作者会以为那是个参数；
  * 7. **adapter 注入**：命名集合的绑定名只能来自 adapter，注入才给、不注入不猜；
- * 8. **插件装配**：三枚贡献都注册、id 稳定、只注册一次。
+ * 8. **插件装配**：五枚语言服务贡献 + 一枚语言面都注册、id 稳定、只注册一次。
+ * （补全 / 悬停两条腿的判据在 `completion-hover.test.ts`，B3c。）
  */
 import { describe, expect, it } from 'vitest';
 import type { MonacoLanguageSurface, PluginContext } from '@kojo/plugin-api';
@@ -247,7 +248,7 @@ describe('inlayHint 供方', () => {
 });
 
 describe('插件装配', () => {
-  it('注册三枚语言服务 + 一枚语言面，id 稳定、order 相同', () => {
+  it('注册五枚语言服务 + 一枚语言面，id 稳定、order 相同', () => {
     const registered: { slot: string; item: { id: string; order?: number } }[] = [];
     const ctx = {
       pluginId: 'kojo-lang',
@@ -266,10 +267,15 @@ describe('插件装配', () => {
       'kojo2-definition',
       'kojo2-symbols',
       'kojo2-inlay',
+      // B3c：补全 / 悬停**分枚注册**（completion 并集型、hover 单答型，三态口径不同，不许塞进同一枚 provide）
+      'kojo2-completion',
+      'kojo2-hover',
       // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
       'kojo2-monaco-language',
     ]);
     expect(registered.map((r) => r.slot)).toEqual([
+      'ui.editor.languageService',
+      'ui.editor.languageService',
       'ui.editor.languageService',
       'ui.editor.languageService',
       'ui.editor.languageService',

@@ -15,9 +15,16 @@
  * **同一个函数、同一份偏移**（`parser.ts::parseMachineDecl` / `parseWeaveDecl` 都是
  * `splitSpaces(...)[0].text`），所以"哪个词算事件名"不存在第二套判据。
  *
- * 特意**不**复用 `kojo2-completion.ts` 的 `machineEventSlotPrefix`：那是**光标位**的判据
+ * 特意**不**复用 `completion.ts` 的 `machineEventSlotPrefix`：那是**光标位**的判据
  * （"光标此刻是不是在写事件名"），只在光标那一行上成立；本模块回答的是"这一篇里有哪些
  * 事件挂点"，两者用途不同。共用的是更下面那一层（core 词法行 + `splitSpaces`）。
+ *
+ * ## 为什么住在包不住宿主（B3c 车道 2 搬入）
+ *
+ * 这枚叶子的三个消费方里，**两个不是 Monaco 面**（引用面、方言 lint），而第三个（悬停）的
+ * 供方从 B3c 起是插件——插件读不到 `packages/app/src/**`。判据留在宿主就等于逼每个消费方
+ * 各抄一份（正是本文件头注要防的那件事）。搬入是**纯搬家**：判据、偏移、导出名一字未动，
+ * 只有 `Kojo2Document` 的 import 从包桶改成同包相对路径。
  */
 
 import {
@@ -26,7 +33,7 @@ import {
   splitSpaces,
   type KojoLexLine,
 } from '@kojo/kojo-core';
-import type { Kojo2Document } from '@kojo/kojo-lang';
+import type { Kojo2Document } from './declarations';
 
 /** `# 机`（声明词，core 位序 §3.3） */
 const MACHINE_WORD = KOJO_DECL_WORDS[2];

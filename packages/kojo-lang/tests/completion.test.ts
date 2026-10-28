@@ -7,6 +7,10 @@
  * - 名单零手抄：事件与 adapter `ERATW_EVENT_CATALOG` 逐项相等，声明词与 core
  *   `KOJO_DECL_WORDS` 同引用，域符号与 core `KOJO_DOMAIN_SYMBOL_NAMES` 同引用；
  * - 候选只按前缀裁剪，不做 Monaco 翻译（`insertText` 就是原文名）。
+ *
+ * B3c 车道 2（2026-10-28）：本闸从 `packages/app/tests/kojo2-completion.test.ts` **整枚搬进包**
+ * ——判据住了包（`src/completion.ts`），闸就住包，否则"包改了、宿主闸还绿"。断言一条未减
+ * （82 条），只换了 import 出处与夹具落点（`tests/fixtures/kojo2/`，逐字节相同）。
  */
 
 import { readFileSync } from 'node:fs';
@@ -33,14 +37,14 @@ import {
   kojo2EventNamesOf,
   type Kojo2CompletionCandidate,
   type Kojo2CompletionKind,
-} from '../src/monaco/kojo2-completion';
-import { kojo2CompletionSnippets, kojo2SnippetCandidatesAt } from '../src/monaco/kojo2-completion-snippets';
+} from '../src/completion';
+import { kojo2CompletionSnippets, kojo2SnippetCandidatesAt } from '../src/completion-snippets';
 import {
   KOJO2_DECL_WORD_BY_KIND,
   KOJO2_MACHINE_WORD,
   type Kojo2Query,
 } from '@kojo/kojo-lang';
-import { KOJO2_DISPATCH_WORDS } from '../src/monaco/kojo2-lexicon';
+import { KOJO2_DISPATCH_WORDS } from '../src/lexicon';
 
 const FIXTURE = readFileSync(
   path.join(import.meta.dirname, 'fixtures', 'kojo2', 'completion.kojo2'),

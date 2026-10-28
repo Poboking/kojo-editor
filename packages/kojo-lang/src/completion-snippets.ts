@@ -2,11 +2,11 @@
  * Kojo 2.0 补全 · **块级 snippets 数据源**（K2-COMPLETE-SNIPPETS）。
  *
  * ## 分工（既有纪律不变）
- * `kojo2-completion.ts` 的 `kojo2CompletionAt` 是**纯函数候选模型**：源码进、词形候选出，
- * `insertText` 一律是原文名字，**不塞括号 / snippet**（调用形态不归它猜）。本文件是**宿主
- * 翻译层**的追加口：宿主在行首位置把这里的条目按 `kind: 'snippet'` 追加到同一轮候选里，
- * 翻成 `CompletionItemKind.Snippet` + `InsertTextRules.InsertAsSnippet`。
- * 纯函数那一侧逐字不变——"snippet 只在宿主翻译层按 kind 追加"就是这一条。
+ * `completion.ts` 的 `kojo2CompletionAt` 是**纯函数候选模型**：源码进、词形候选出，
+ * `insertText` 一律是原文名字，**不塞括号 / snippet**（调用形态不归它猜）。本文件是**翻译层**
+ * 的追加口：消费方在行首位置把这里的条目按 `kind: 'snippet'` 追加到同一轮候选里，宿主再翻成
+ * `CompletionItemKind.Snippet` + `InsertTextRules.InsertAsSnippet`。
+ * 纯函数那一侧逐字不变——"snippet 只在翻译层按 kind 追加"就是这一条。
  *
  * ## 为什么是数据
  * 五副骨架（`?` 链 / `# 表` 两列 / `# 池` 分支 / `@巡` / `# 机` 事件头）都是**语言形状**：
@@ -24,16 +24,22 @@
  * ## 位置门
  * 五副骨架都只在**行首**（光标之前只有空白）出货：行中写块骨架没有语法意义
  * （`?` / `#` / `@` 都只在行首开块），也与"锚点候选在行首"的既有产品口径一致。
+ *
+ * ## 为什么住在包不住宿主（B3c 车道 2 搬入）
+ * 这五副骨架是补全候选的一部分，而 B3c 起补全的**供方是插件**——插件读不到
+ * `packages/app/src/**`。数据留在宿主 = 插件必须抄一份 = 骨架词形漂移（头注那句"不手抄
+ * 任何新词形"从此无人守）。搬入是**纯搬家**：五副骨架的字节、顺序、`sortText`、位置门
+ * 逐字不动，只有 import 从宿主相对路径改成同包相对路径。
  */
 
 import { KOJO_TABLE_DEFAULT, KOJO_TABLE_SUBJECT } from '@kojo/kojo-core';
-import { isAllBlank } from './kojo-completion-position';
+import { isAllBlank } from './completion';
 import {
   KOJO2_DECL_WORD_BY_KIND,
   KOJO2_MACHINE_WORD,
   type Kojo2Query,
-} from '@kojo/kojo-lang';
-import { KOJO2_DISPATCH_WORDS } from './kojo2-lexicon';
+} from './declarations';
+import { KOJO2_DISPATCH_WORDS } from './lexicon';
 
 /** 表 / 池 / 机 / 巡 的词形（core 词表 / 声明索引派生，不写字形）。 */
 const TABLE_WORD = KOJO2_DECL_WORD_BY_KIND.table;
