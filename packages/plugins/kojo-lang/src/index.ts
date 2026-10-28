@@ -12,6 +12,8 @@ export { createKojoLangPlugin } from './plugin';
 export { provideCompletion } from './completion';
 export { provideDefinition } from './definition';
 export { provideHover } from './hover';
+export { provideSignatureHelp } from './signature';
+export { provideFormatting } from './format';
 export { provideDocumentSymbols, symbolFactsToTree } from './symbols';
 export { provideInlayHints, toEditorInlayHints } from './inlay';
 export { isKojo2Request } from './request';

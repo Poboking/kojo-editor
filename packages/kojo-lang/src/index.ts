@@ -48,6 +48,12 @@ export * from './hover';
 export * from './event-sites';
 export * from './adapter-source';
 export * from './expand-compile';
+// B3d（2026-10-28）：2.0 **签名帮助与文档格式化的判据**整块从宿主 `monaco/kojo2-*.ts` 搬进来
+// 两枚——`signature`（调用位 / 声明头 / `@巡` 集合签名）与 `format`（整篇 + 区间格式化规则）。
+// 理由与 B3c 的补全 / 悬停逐字相同：供方是插件，插件读不到宿主，判据留在宿主就会长出第二份。
+// 开机侧一律引叶子（`@kojo/kojo-lang/signature` / `/format`），桶只给"要整块"的消费方。
+export * from './signature';
+export * from './format';
 // B4：角色表与角色调色板（架构 §7.2「角色表住 SDK 不住 app」）——**开机侧引叶子**，
 // 这两枚进桶只是为了让"要整块"的消费方一次拿全。
 export * from '@kojo/kojo-sdk/semantic-roles';

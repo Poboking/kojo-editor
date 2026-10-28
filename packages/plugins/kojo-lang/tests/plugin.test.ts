@@ -248,7 +248,7 @@ describe('inlayHint 供方', () => {
 });
 
 describe('插件装配', () => {
-  it('注册五枚语言服务 + 一枚语言面，id 稳定、order 相同', () => {
+  it('注册七枚语言服务 + 一枚语言面，id 稳定、order 相同', () => {
     const registered: { slot: string; item: { id: string; order?: number } }[] = [];
     const ctx = {
       pluginId: 'kojo-lang',
@@ -270,10 +270,15 @@ describe('插件装配', () => {
       // B3c：补全 / 悬停**分枚注册**（completion 并集型、hover 单答型，三态口径不同，不许塞进同一枚 provide）
       'kojo2-completion',
       'kojo2-hover',
+      // B3d：签名帮助 / 格式化同样分枚注册（单答型；格式化不吃任何注入面）
+      'kojo2-signatureHelp',
+      'kojo2-formatting',
       // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
       'kojo2-monaco-language',
     ]);
     expect(registered.map((r) => r.slot)).toEqual([
+      'ui.editor.languageService',
+      'ui.editor.languageService',
       'ui.editor.languageService',
       'ui.editor.languageService',
       'ui.editor.languageService',

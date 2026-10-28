@@ -62,7 +62,11 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     //   是插件** `@kojo/plugin-kojo-lang`，插件看不见 `packages/app/src/**`，判据留在宿主就等于
     //   逼插件（以及引用面 / 方言 lint 这两枚非 Monaco 消费者）各抄一份。搬进来没带来任何新的
     //   外部依赖：四枚只值引 `@kojo/kojo-core`（下面白名单那格当场验），其余全走同包相对路径。
-    expect(files).toHaveLength(21);
+    // + B3d（2026-10-28）：同样理由再进两枚——`signature`（调用位 / 声明头 / `@巡` 集合签名）与
+    //   `format`（整篇 + 区间格式化规则）。这两条腿的原生 provider 在 B3d 批删干净，供方同样是
+    //   插件；包内只引 `@kojo/kojo-core` + 同包相对路径（`format` 的全角冒号正则从同包
+    //   `language-config` 取，**不再**经宿主那枚 `kojo2-enter` 指针壳转一手——那枚壳同批删了）。
+    expect(files).toHaveLength(23);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

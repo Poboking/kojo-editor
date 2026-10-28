@@ -30,6 +30,9 @@ export const config = defineConfig({
       '@kojo/kojo-lang/event-sites': r('./packages/kojo-lang/src/event-sites.ts'),
       '@kojo/kojo-lang/adapter-source': r('./packages/kojo-lang/src/adapter-source.ts'),
       '@kojo/kojo-lang/expand-compile': r('./packages/kojo-lang/src/expand-compile.ts'),
+      // B3d：签名帮助 / 格式化的判据叶子（同样必须排在桶之前）。
+      '@kojo/kojo-lang/signature': r('./packages/kojo-lang/src/signature.ts'),
+      '@kojo/kojo-lang/format': r('./packages/kojo-lang/src/format.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('./packages/kojo-sdk/src/semantic-roles.ts'),
       '@kojo/kojo-sdk/structure-protocol': r('./packages/kojo-sdk/src/structure-protocol.ts'),
       '@kojo/kojo-sdk/contracts': r('./packages/kojo-sdk/src/contracts.ts'),

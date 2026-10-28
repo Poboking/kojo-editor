@@ -12,6 +12,8 @@
  * | `inlayHint` | `inlay.ts` 的 `kojo2InlayHints` | `src/inlay.ts` |
  * | `completion` | `completion.ts` 的 `kojo2CompletionAt` + `completion-snippets.ts` 的 `kojo2SnippetCandidatesAt` | `src/completion.ts` |
  * | `hover` | `hover.ts` 的 `kojo2HoverAt`（+ 展开段 `expand-view.ts`） | `src/hover.ts` |
+ * | `signatureHelp`（B3d） | `signature.ts` 的 `kojo2SignatureAt` | `src/signature.ts` |
+ * | `formatting`（B3d） | `format.ts` 的 `formatKojo2Source` / `formatKojo2Range` | `src/format.ts` |
  *
  * B4 起还有一枚**不同形状**的贡献——槽 `ui.monaco.language` 交的是注册期的一次性数据
  * （Monarch / 语言配置 / 三套主题声明），不是 `provide(request)`：见 `src/monaco-language.ts`。
@@ -32,8 +34,9 @@
  * ## 为什么"插件没加载"要表现为**无人应答**
  *
  * 宿主那侧的 kojo2 原生 provider 在 B2 批**已删除**（definition / documentSymbol / inlayHint），
- * 补全 / 悬停的原生安装在 B3c 批**也已清零**（`installKojo2LanguageProviders` 只从槽取数），
- * 这五项的唯一供方就是本插件。
+ * 补全 / 悬停的原生安装在 B3c 批、签名帮助 / 格式化的原生安装在 B3d 批**也已清零**（宿主那几枚
+ * 安装器只把 model / 选区翻成请求、把槽里的作答翻成 Monaco 形状，判据一份不留），
+ * 这七项的唯一供方就是本插件。
  * 插件缺席 ⇒ 槽里没有 `languageId: 'kojo2'` 的供方 ⇒ 宿主 provider 交回空结果 ⇒
  * 作者看到"这里没有定义 / 大纲是空的 / 补全不弹 / 悬停没正文"。这是**可见退化**，不是静默：
  * 状态面板会显示本插件 `inactive`，而"功能突然没了"与"插件没装上"两件事能对上号。
@@ -51,9 +54,11 @@ import { kojo2AdapterNow } from '@kojo/kojo-lang/adapter-source';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { provideCompletion } from './completion';
 import { provideDefinition } from './definition';
+import { provideFormatting } from './format';
 import { provideHover } from './hover';
 import { provideDocumentSymbols } from './symbols';
 import { provideInlayHints } from './inlay';
+import { provideSignatureHelp } from './signature';
 import { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
 
 /**
@@ -122,13 +127,27 @@ export function createKojoLangPlugin(): Plugin {
         provide: (request) =>
           provideHover(request, { adapter: adapterFor(request.project?.adapterId) }),
       });
+      // B3d：签名帮助同样是**单答型**，与悬停分枚注册（一条腿的"作答与否"不许带走另一条）。
+      // `@巡` 的集合绑定名要 adapter 事实 ⇒ 与 inlay / completion / hover 同一条现取纪律；
+      // 格式化不依赖任何游戏事实，注入面留空（少给的是 adapter 那一路，不是整条能力）。
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo2-signatureHelp',
+        order: CONTRIBUTION_ORDER,
+        provide: (request) =>
+          provideSignatureHelp(request, { adapter: adapterFor(request.project?.adapterId) }),
+      });
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo2-formatting',
+        order: CONTRIBUTION_ORDER,
+        provide: (request) => provideFormatting(request),
+      });
       ctx.slots.register('ui.monaco.language', {
         id: 'kojo2-monaco-language',
         order: CONTRIBUTION_ORDER,
         surface: KOJO2_MONACO_LANGUAGE_SURFACE,
       });
       ctx.log.info(
-        `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover（languageId=${KOJO2_LANGUAGE_ID}）；` +
+        `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting（languageId=${KOJO2_LANGUAGE_ID}）；` +
           `语言面已交出：Monarch / 语言配置 / 三套主题（ui.monaco.language）`,
       );
     },
