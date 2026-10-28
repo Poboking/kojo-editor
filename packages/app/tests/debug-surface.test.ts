@@ -33,6 +33,7 @@ import {
   consumeChooseDir,
   installShellDialogIntercept,
   parseIpcCmd,
+  POLICY_DIALOG_COMMANDS,
 } from '../src/debug/dialog-policy';
 import { slimPayload } from '../src/debug/install-debug';
 import { snapshotDocument } from '../src/debug/dom-snapshot';
@@ -108,7 +109,7 @@ describe('web 调试宿 · 二进制信封还原', () => {
 
 /* ----------------------------- 对话框自动应答 policy ----------------------------- */
 
-describe('调试面 · dialogPolicy（choose_directory 一次性自动应答，2026-10-26 era-pair 批）', () => {
+describe('调试面 · dialogPolicy（只选取器一次性自动应答：choose_directory + pick_save_path，1028 批扩面）', () => {
   afterEach(() => clearChooseDir());
 
   it('未 armed ⇒ 恒 miss（透传零触扰）；arm(null)=模拟取消也是有效应答且同样一次性', () => {
@@ -138,6 +139,22 @@ describe('调试面 · dialogPolicy（choose_directory 一次性自动应答，2
     expect(parseIpcCmd('http://localhost:1420/')).toBeNull();
     expect(parseIpcCmd('not a url')).toBeNull();
     expect(parseIpcCmd('http://ipc.localhost/%E0%A4%A')).toBeNull(); // 畸形百分号编码 ⇒ 透传
+  });
+
+  it('POLICY_DIALOG_COMMANDS：只吃两条**只选取器**（choose_directory / pick_save_path）；写通道与准入门一律不在册（应答对话框 ≠ 放行写盘）', () => {
+    expect([...POLICY_DIALOG_COMMANDS].sort()).toEqual(['choose_directory', 'pick_save_path']);
+    for (const writeCmd of ['export_file', 'choose_file', 'choose_workspace_root', 'write_file_bytes', 'pick_directory']) {
+      expect(POLICY_DIALOG_COMMANDS.has(writeCmd), `${writeCmd} 不许吃脚本应答`).toBe(false);
+    }
+    // pick_save_path 的 URL 腿形态与 choose_directory 同形（同一枚 parseIpcCmd 判据）
+    expect(parseIpcCmd('http://ipc.localhost/pick_save_path')).toBe('pick_save_path');
+  });
+
+  it('同一格一次性应答逐条兑现：pick_save_path 消费后 choose_directory 拿不到第二次（绝不一arm多吃）', () => {
+    armChooseDir('C:\\sandbox\\新文件.ERB');
+    expect(POLICY_DIALOG_COMMANDS.has('pick_save_path')).toBe(true);
+    expect(consumeChooseDir()).toEqual({ hit: true, value: 'C:\\sandbox\\新文件.ERB' });
+    expect(consumeChooseDir()).toEqual({ hit: false }); // 第二枚对话框（同批任何命令）⇒ 未 armed 透传
   });
 
   it('buildChooseDirResponse：与 ipc-protocol.js 消费链对齐（Tauri-Response ok + application/json 体）', async () => {
@@ -211,9 +228,17 @@ describe('调试面 · 源形状守门（懒装载与既有行为不被顺手改
     }
   });
 
-  it('web-host-transport 页面腿是「命中才短路」：choose_directory 且 hit 才 return，未命中照走宿 /invoke', () => {
+  it('web-host-transport 页面腿是「命中才短路」：只选取器（POLICY_DIALOG_COMMANDS）且 hit 才 return，未命中照走宿 /invoke', () => {
     const src = read('packages/app/src/debug/web-host-transport.ts');
-    expect(src).toMatch(/if \(cmd === 'choose_directory'\)/);
+    expect(src).toMatch(/if \(POLICY_DIALOG_COMMANDS\.has\(cmd\)\)/);
     expect(src).toMatch(/if \(hit\.hit\)/);
+    // 旧口径不许回潮：页面腿不再只对 choose_directory 单独判等（1028 批同吃 pick_save_path）
+    expect(src).not.toMatch(/if \(cmd === 'choose_directory'\)/);
+  });
+
+  it('真壳 fetch 拦截腿同一条命令集：dialog-policy 用 POLICY_DIALOG_COMMANDS 判等（两条腿口径不分叉）', () => {
+    const src = read('packages/app/src/debug/dialog-policy.ts');
+    expect(src).toMatch(/POLICY_DIALOG_COMMANDS\.has\(parseIpcCmd\(url\)/);
+    expect(src).not.toMatch(/parseIpcCmd\(url\) === 'choose_directory'/);
   });
 });

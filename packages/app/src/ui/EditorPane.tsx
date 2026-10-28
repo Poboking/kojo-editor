@@ -278,6 +278,15 @@ export interface EditorPaneActions {
    * 返回是否受理（已是目标档 / 面不可写 ⇒ false，不制造无意义脏）。
    */
   switchEol: (eol: 'LF' | 'CRLF') => boolean;
+  /** 真另存为的源读数（原文 model 的当下真相；这一格不在本 pane ⇒ undefined，1028 批） */
+  readBuffer: (path: string) => { text: string; encoding: string; version: number } | undefined;
+  /**
+   * 真另存为的**编辑器侧转档**（1028 批）：条目 / 脏监听 / 自写回声时刻 / 外部冲突与
+   * 自动保存失败账 / 视图状态全部从旧路径换键到新路径（同一份 model，撤销栈原地续命）。
+   * `clean` = 落盘窗口内版本未变（false ⇒ 转档照做但**不立基线**，标签保持脏——
+   * 与保存链 `kept-dirty` 同一口径）。池记录换键由调用方**先**做（判据同源，次序固定）。
+   */
+  transferBuffer: (from: string, to: string, clean: boolean) => boolean;
 }
 
 /**
@@ -1447,6 +1456,11 @@ export function EditorPane({
 
   /** 「自己刚写过」的时刻表（P2-5）：只记已打开文件 ⇒ 条目数与标签数同阶 */
   const selfWriteAtRef = useRef(new Map<string, number>());
+  /**
+   * 脏监听用的自动保存调度 ref（saveRef / runAutosaveRef 同款腰带）：`makeDirtyListener`
+   * 定义在 `scheduleAutosave` 之前，用恒稳 ref 读最新调度，避开"工厂依赖后定义函数"的 TDZ。
+   */
+  const scheduleAutosaveRef = useRef<() => void>(() => undefined);
   /** 保存成功：把该文件 model 的当前版本号立为新基线 */
   const markSaved = useCallback(
     (path: string, entry: ModelEntry) => {
@@ -1461,6 +1475,107 @@ export function EditorPane({
       autosaveFailedRef.current.delete(path);
     },
     [],
+  );
+
+  /**
+   * 逐 model 脏监听工厂（BUG-4：版本号 O(1) 比较；后台标签的编辑同样上报）。
+   *
+   * 抽出成**唯一一份**是纪律，不是整理：切换 effect 建条目时用它，真另存为转档
+   * （{@link transferBuffer}）换键后**重挂监听**也必须用它——监听闭包把上报路径钉死，
+   * 旧监听留着会把「新格子的编辑」报成「旧路径的脏」，正是转档最容易踩的坑。
+   * 每组各挂各的监听（共享 model 的另一组由它自己的监听上报）。
+   */
+  const makeDirtyListener = useCallback(
+    (model: Monaco.editor.ITextModel, watchedPath: string): Monaco.IDisposable =>
+      model.onDidChangeContent(() => {
+        // 探针（内核优化 L0）：击键路径应**恒 <1ms**（dirty 是 O(1)、装饰已去抖）；
+        // 若 p95 超 1ms，说明 React 层或别处有未知同步开销。
+        const t0 = performance.now();
+        try {
+          if (reloadingRef.current) return; // 磁盘重载非用户编辑：不报脏、不排装饰
+          const d = computeDirty(watchedPath);
+          onDirtyChangeRef.current?.(watchedPath, d);
+          if (filePathRef.current === watchedPath) {
+            setDirty(d);
+            scheduleMarkers();
+            // C2：活动文件缓冲变化 → 防抖广播"当前真相"（糖视图激活时广播器自行抑制；
+            // 程序性整篇改写——fix-all / 重命名批量 / 保存前整理——同样走这条通道）
+            documentBroadcaster.schedule(watchedPath, () => readDocumentTruth(watchedPath));
+            if (d) scheduleAutosaveRef.current(); // A6：脏了才起闲置计时（撤销回干净由 tick 的护栏判掉）
+          }
+        } finally {
+          perf.record('input.handler', performance.now() - t0);
+        }
+      }),
+    // 监听工厂**恒稳引用**——转档重挂与切换 effect 共用同一份，靠 ref 读最新调度（saveRef 同款纪律）
+    [computeDirty, documentBroadcaster, readDocumentTruth, scheduleMarkers],
+  );
+
+  /** 真另存为的源读数（原文 model 当下真相；不在本 pane ⇒ undefined）——句柄见 EditorPaneActions */
+  const readBuffer = useCallback(
+    (path: string): { text: string; encoding: string; version: number } | undefined => {
+      const key = matchOpenedPath(entriesRef.current.keys(), path);
+      const entry = key === null ? undefined : entriesRef.current.get(key);
+      if (!entry || entry.model.isDisposed()) return undefined;
+      return { text: entry.model.getValue(), encoding: entry.encoding, version: entry.model.getAlternativeVersionId() };
+    },
+    [],
+  );
+
+  /**
+   * 真另存为的**编辑器侧转档**（1028 批；池记录换键由调用方**先**做——判据同源，次序固定）。
+   *
+   * 只做一件事：把以路径为键的本 pane 账目从 `from` 逐条换键到 `to`，**model 引用不换**
+   * （撤销栈 / 视图 / 分屏因此原地续命）。换键后：
+   * - 脏监听用 `makeDirtyListener(…, to)` 重挂（见上：钉死旧路径的监听会把新编辑报错）；
+   * - `clean=true` ⇒ `markSaved(to, entry)` 立基线（标签干净）；`clean=false`（落盘窗口内
+   *   又来新输入）⇒ 不立基线、如实报脏（与保存链 `kept-dirty` 同一口径）。
+   * `selfWriteAt` 无论干净与否都盖到 `to`：这一格刚被自己写过盘，watcher 回声必须按时刻放行。
+   * App 随即把标签 `from`→`to` 换名并触发切换 effect：effect 见 `to` 已在 entriesRef ⇒ 走
+   * 「同格重挂」分支（不 acquire、不建监听），本函数的账目因此就是切换那一拍的唯一真相源。
+   */
+  const transferBuffer = useCallback(
+    (from: string, to: string, clean: boolean): boolean => {
+      const key = matchOpenedPath(entriesRef.current.keys(), from);
+      const entry = key === null ? undefined : entriesRef.current.get(key);
+      if (key === null || !entry || entry.model.isDisposed()) return false;
+      const resolvedFrom = key;
+      entriesRef.current.delete(resolvedFrom);
+      entry.listener.dispose();
+      entry.listener = makeDirtyListener(entry.model, to);
+      entriesRef.current.set(to, entry);
+      // 自写回声时刻表随迁（pathKey 尺子与 markSaved 同一条）
+      const fromKey = pathKey(resolvedFrom);
+      const wroteAt = selfWriteAtRef.current.get(fromKey);
+      selfWriteAtRef.current.delete(fromKey);
+      selfWriteAtRef.current.set(pathKey(to), wroteAt ?? Date.now());
+      // 外部冲突 / 自动保存连败两枚 Set 逐条换键（旧路径不许留着冒充"有冲突待处置"）
+      if (externalConflictRef.current.delete(resolvedFrom)) externalConflictRef.current.add(to);
+      if (autosaveFailedRef.current.delete(resolvedFrom)) autosaveFailedRef.current.add(to);
+      // 视图状态（光标 / 滚动）随迁：活动格现取，非活动格搬内存快照
+      const ed = editorRef.current;
+      if (resolvedFrom === filePathRef.current && ed && !sugarModelRef.current) {
+        viewStatesRef.current.set(to, ed.saveViewState());
+      } else if (viewStatesRef.current.has(resolvedFrom)) {
+        viewStatesRef.current.set(to, viewStatesRef.current.get(resolvedFrom) ?? null);
+      }
+      viewStatesRef.current.delete(resolvedFrom);
+      // 派生缓存按旧路径作废（重挂到新格由切换 effect 与 applySugarView 各自重算）
+      if (sugarCacheRef.current?.path === resolvedFrom) sugarCacheRef.current = null;
+      if (breadcrumb.crumbTreeCacheRef.current?.path === resolvedFrom) {
+        breadcrumb.crumbTreeCacheRef.current = null;
+      }
+      // 落账：干净立基线（含 selfWriteAt 与报不脏），不干净则只报脏、不立基线
+      if (clean) {
+        markSaved(to, entry);
+      } else {
+        const d = computeDirty(to);
+        onDirtyChangeRef.current?.(to, d);
+        if (filePathRef.current === to) setDirty(d);
+      }
+      return true;
+    },
+    [breadcrumb, computeDirty, makeDirtyListener, markSaved],
   );
 
   /**
@@ -1931,11 +2046,19 @@ export function EditorPane({
     [save],
   );
 
-  // 动作句柄注册（宿主标签流程：保存并关闭 / 全部保存）
+  // 动作句柄注册（宿主标签流程：保存并关闭 / 全部保存 / 真另存为的源读数与转档）
   useEffect(() => {
-    registerActions?.({ save: () => save(), savePath: (p) => savePath(p), saveAll, snapshots, switchEol });
+    registerActions?.({
+      save: () => save(),
+      savePath: (p) => savePath(p),
+      saveAll,
+      snapshots,
+      switchEol,
+      readBuffer,
+      transferBuffer,
+    });
     return () => registerActions?.(null);
-  }, [save, savePath, saveAll, snapshots, switchEol, registerActions]);
+  }, [save, savePath, saveAll, snapshots, switchEol, readBuffer, transferBuffer, registerActions]);
 
   // 卸载时清空状态栏编辑器信息
   useEffect(() => () => onStatusInfo?.(null), [onStatusInfo]);
@@ -2013,6 +2136,8 @@ export function EditorPane({
       void runAutosaveRef.current(path);
     }, AUTOSAVE_IDLE_MS);
   }, []);
+  // 脏监听工厂（定义在上方）经 ref 读这份调度 ⇒ 每渲染把最新 scheduleAutosave 交给腰带
+  scheduleAutosaveRef.current = scheduleAutosave;
 
   /* ---------------- 视图状态跨会话持久化（view-state-store，落盘防抖在 store 内） ---------------- */
 
@@ -2226,27 +2351,9 @@ export function EditorPane({
           }
           const model = pooled.model;
           // 逐 model 脏监听（BUG-4：版本号 O(1) 比较；后台标签的编辑同样上报）；
-          // 每组各挂各的监听（共享 model 的另一组由它自己的监听上报）
-          const listener = model.onDidChangeContent(() => {
-            // 探针（内核优化 L0）：击键路径应**恒 <1ms**（dirty 是 O(1)、装饰已去抖）；
-            // 若 p95 超 1ms，说明 React 层或别处有未知同步开销。
-            const t0 = performance.now();
-            try {
-              if (reloadingRef.current) return; // 磁盘重载非用户编辑：不报脏、不排装饰
-              const d = computeDirty(filePath);
-              onDirtyChangeRef.current?.(filePath, d);
-              if (filePathRef.current === filePath) {
-                setDirty(d);
-                scheduleMarkers();
-                // C2：活动文件缓冲变化 → 防抖广播"当前真相"（糖视图激活时广播器自行抑制；
-                // 程序性整篇改写——fix-all / 重命名批量 / 保存前整理——同样走这条通道）
-                documentBroadcaster.schedule(filePath, () => readDocumentTruth(filePath));
-                if (d) scheduleAutosave(); // A6：脏了才起闲置计时（撤销回干净由 tick 的护栏判掉）
-              }
-            } finally {
-              perf.record('input.handler', performance.now() - t0);
-            }
-          });
+          // 每组各挂各的监听（共享 model 的另一组由它自己的监听上报）。
+          // 监听工厂与真另存为转档（`makeDirtyListener`）共用**唯一一份**，不分叉两处实现。
+          const listener = makeDirtyListener(model, filePath);
           entry = { model, listener, encoding: pooled.encoding, eol: pooled.eol };
           entriesRef.current.set(filePath, entry);
           // 已保存基线只在**本条目首次落进池记录**时按当前版本号落定；池里已有基线就不碰——
@@ -2357,7 +2464,7 @@ export function EditorPane({
       markerFrameRef.current?.();
       markerFrameRef.current = null;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, computeDirty, scheduleMarkers, scheduleAutosave, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor, maybeExplainLegacySealed]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, computeDirty, scheduleMarkers, makeDirtyListener, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor, maybeExplainLegacySealed]);
 
   /* ------------------- 只读锁：编辑意图 → 询问 → 解锁 ------------------- */
 

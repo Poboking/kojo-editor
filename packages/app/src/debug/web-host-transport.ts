@@ -13,7 +13,7 @@
  * 安全面：调试宿只绑 127.0.0.1、写路径有沙盒闸（见 tools/debug-server.mjs 头注）；
  * 页面侧不增任何权限——它只是把「原本要经 Tauri IPC 的调用」换个信封送到本机调试宿。
  */
-import { consumeChooseDir } from './dialog-policy';
+import { consumeChooseDir, POLICY_DIALOG_COMMANDS } from './dialog-policy';
 
 /** 二进制命令的应答信封：宿主命令里唯二回二进制的（`read_file_bytes_raw` / `read_files_raw`） */
 const BINARY_COMMANDS = new Set(['read_file_bytes_raw', 'read_files_raw']);
@@ -111,11 +111,12 @@ export async function webHostInvoke(cmd: string, args?: Record<string, unknown>)
   const cfg = config();
   if (!cfg) throw new Error('web 调试宿未选入（缺 ?kojo-debug=1）');
   // 页面级对话框应答 policy（2026-10-26 era-pair 批，与真壳 fetch 腿同一条口径）：
-  // armed 时**一次性**短路 choose_directory，未 armed 恒透传——宿的 POST /policy 腿照旧。
-  if (cmd === 'choose_directory') {
+  // armed 时**一次性**短路只选取器（choose_directory / pick_save_path，1028 批同吃同一格），
+  // 未 armed 恒透传——宿的 POST /policy 腿照旧。
+  if (POLICY_DIALOG_COMMANDS.has(cmd)) {
     const hit = consumeChooseDir();
     if (hit.hit) {
-      console.info(`[kojo-debug] choose_directory 由调试面页面级 policy 应答（一次性）：${JSON.stringify(hit.value ?? null)}`);
+      console.info(`[kojo-debug] ${cmd} 由调试面页面级 policy 应答（一次性）：${JSON.stringify(hit.value ?? null)}`);
       return hit.value ?? null;
     }
   }

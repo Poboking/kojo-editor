@@ -1624,6 +1624,37 @@ async fn pick_directory(title: Option<String>) -> Result<Option<String>, String>
         .map(|h| h.path().to_string_lossy().to_string()))
 }
 
+/// 另存为的**落点选择**对话框（2026-10-28 真另存为批）：弹系统保存对话框（可预填文件名），
+/// **只交回用户选定的路径——一个字节都不写、不登记任何授权**（形态 = `pick_directory` 的
+/// "只选不写"）。与 `export_file` 分家：那条是对话框与写盘绑在同一命令内的法定域外写通道；
+/// 本命令交回的只是候选落点，落盘照旧走内核 io 的写允许域双闸（铁律 5/6：另存为**没有**
+/// 第二条域外通道，在对话框里选进游戏根也写不进去）。`default_name` 只是预填建议
+/// （剥掉分隔符，形态照 `export_file`）。
+#[tauri::command]
+async fn pick_save_path(
+    default_name: Option<String>,
+    title: Option<String>,
+    filters: Option<Vec<FilePickFilterDto>>,
+) -> Result<Option<String>, String> {
+    let mut dialog = rfd::AsyncFileDialog::new();
+    if let Some(t) = title.as_deref() {
+        dialog = dialog.set_title(t);
+    }
+    if let Some(name) = default_name.as_deref() {
+        dialog = dialog.set_file_name(&name.replace(['/', '\\'], "_"));
+    }
+    if let Some(list) = filters.as_deref() {
+        for f in list {
+            let exts: Vec<&str> = f.extensions.iter().map(String::as_str).collect();
+            dialog = dialog.add_filter(&f.name, &exts);
+        }
+    }
+    Ok(dialog
+        .save_file()
+        .await
+        .map(|h| h.path().to_string_lossy().to_string()))
+}
+
 /// 内存 ∪ 磁盘清单的去重与失效剔除（**纯函数**，可单测）：保授权顺序、
 /// 剔掉盘上已不存在的目录（剔的时候出声）。
 fn merge_workspace_roots(app_data_dir: &Path, memory: Vec<PathBuf>) -> Vec<String> {
@@ -3615,6 +3646,7 @@ pub fn run() {
             choose_workspace_root,
             revoke_workspace_root,
             pick_directory,
+            pick_save_path,
             workspace_roots,
             export_file,
             app_data_dir,

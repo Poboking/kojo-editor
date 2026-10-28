@@ -7,7 +7,7 @@
  * `./keybinding-specs` 是**开机图内的零 import 叶子**：`context-menu-model.ts`（同样在开机图）
  * 值引它，为右键菜单的每一项取中文标题与缺省键——那面必须同步可得。
  *
- * 本模块这 48 条**都不吃右键菜单那面**：内核动作（`editor.builtin.*`）由 Monaco 自己的
+ * 本模块这些条目**都不吃右键菜单那面**：内核动作（`editor.builtin.*`）由 Monaco 自己的
  * 右键菜单列，书签 / 状态栏开关 / 编辑器组与项目动作也没有宿主菜单入口（三处的右键面清单里
  * 一枚都没有——见 `editor-context-actions.ts` / `context-menu-pages.ts` 的 commandId 列表）。
  * 它们的全部
@@ -113,6 +113,12 @@ const GROUP_AND_PROJECT_SPECS: readonly KeybindingSpec[] = [
   { id: 'workbench.openProjectFolder', title: '打开项目文件夹…', category: '项目', rebindable: true },
   { id: 'workbench.openRecentProjects', title: '打开最近项目…', category: '项目', rebindable: true, note: '与项目名旁「更多」菜单同一张表' },
   { id: 'workbench.showFileInOsExplorer', title: '在资源管理器中显示当前文件', category: '项目', rebindable: true, note: '仅桌面壳；系统文件管理器里选中它' },
+  // 真另存为（1028 批）：转档式另存为——buffer 转到新路径继续编辑，原盘文件一字节不动。
+  // **刻意不带缺省键**：`ctrl+shift+s` 已归「全部保存」（扫全表确认，另存为不抢这把键，
+  // 免得把既有 saveAll 用户肌肉记忆改道）。**住懒半的理由**：开机图文件闸顶格（ps10），
+  // 本条只吃命令面板与键位页（都在懒 chunk）；不吃右键菜单那面（那面只查开机静态基础表，
+  // 本批没给另存为挂菜单项——入口是命令面板，键位页可自绑）。
+  { id: 'workbench.saveAs', title: '另存为…', category: '工作台', rebindable: true },
 ];
 
 /**

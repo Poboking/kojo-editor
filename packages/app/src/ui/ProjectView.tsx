@@ -142,6 +142,8 @@ interface Props {
   onRequestCloseTab: (path: string) => void;
   /** 全部保存（Ctrl+Shift+S 壳层命令落地处） */
   onSaveAll: () => Promise<boolean>;
+  /** 真另存为（1028 批；命令面板 `workbench.saveAs` 的同一条落地处，宿主 App.saveAs） */
+  onSaveAs: () => Promise<void>;
   /** 编辑器脏状态上抛（按路径；宿主维护 dirtyPaths） */
   onDirtyChange?: (path: string, dirty: boolean) => void;
   /** 编辑器动作句柄注册（按组；宿主"保存并关闭 / 全部保存"流程跨组归集） */
@@ -308,6 +310,7 @@ export function ProjectView({
   recentFiles,
   onRequestCloseTab,
   onSaveAll,
+  onSaveAs,
   onDirtyChange,
   registerActions,
   onClose,
@@ -602,6 +605,18 @@ export function ProjectView({
           void onSaveAll();
         },
       },
+      // 真另存为（1028 批）：转档式另存为——落点由对话框选、写盘走带闸的内核 io，
+      // 成功回调里七处路径键登记逐处随迁（判据与编排全在懒面 `file-save-as.ts`）。
+      // 与「全部保存」同形：壳层只发意图，落地与逐条回执全在宿主（App.saveAs→通知）。
+      // 刻意不灰：没活动文件/域外落点按下去各回一句人话（铁律 4：按得下去才说得出为什么）。
+      {
+        id: 'workbench.saveAs',
+        title: '另存为…',
+        keybinding: effectiveKeybindingOf('workbench.saveAs'),
+        run: () => {
+          void onSaveAs();
+        },
+      },
       // 一键修复（E3 · 批量快速修复批）：把**当前这一份文件**里每一条"只有唯一改法"
       // 的问题一次补好。与「全部保存」同形（壳层只发意图，落地与结果播报全在宿主
       // EditorPane —— 壳层不认识波浪线、更不认识补词是什么）。
@@ -851,7 +866,7 @@ export function ProjectView({
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建。
     // groups 也是：三条 MM-9 命令（splitEditorDown / setGroupsColumn / setGroupsRow）
     // 的 run 闭包读它判组数，依赖漏了就是过期读数。
-    [onRequestCloseTab, onSaveAll, onSplitEditor, onSplitEditorDown, onSetGroupsOrientation, onFocusGroupOrdinal, onCycleActiveGroup, onResizeActiveGroup, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, groups, kernel, notify, kbVersion, extraShellCommands],
+    [onRequestCloseTab, onSaveAll, onSaveAs, onSplitEditor, onSplitEditorDown, onSetGroupsOrientation, onFocusGroupOrdinal, onCycleActiveGroup, onResizeActiveGroup, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, groups, kernel, notify, kbVersion, extraShellCommands],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →

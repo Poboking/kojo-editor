@@ -1,5 +1,6 @@
 /**
- * 调试面「目录对话框自动应答」policy（2026-10-26 era-pair 批，PITFALLS 230 的修法）。
+ * 调试面「对话框自动应答」policy（2026-10-26 era-pair 批，PITFALLS 230 的修法；
+ * 1028 真另存为批扩到第二条只选取器 `pick_save_path`——同吃一次性脚本应答）。
  *
  * 事实：真桌面壳里目录选择是**原生对话框**，CDP 应答不了；web 模式早有 policy 应答腿
  * （`tools/debug-server.mjs` 的 `choose_directory` + `POST /policy`），缺的是真壳那条腿。
@@ -13,9 +14,12 @@
  *   custom-protocol 腿；`window.ipc.postMessage` 兜底腿是 defineProperty+freeze，同样不可包）。
  *   `window.fetch` 可写 ⇒ 只在调试面装载时包一层**定向**拦截：armed 且请求正是
  *   `choose_directory` 时不送达原生，以合成 Response 兑现既有回调链；其余请求逐字节透传；
- * - 只应答**目录选择（打开＝读）**。`export_file` / `choose_file` / `choose_workspace_root` 与
- *   Rust 写域准入门一个字节不碰：准入门（铁律 6/7）只认真实对话框交付，经本通道打开的项目
- *   天然只能只读浏览——写审批走不通是**如实行为**，CLI 在 shell 模式直接拒 `--writable`；
+ * - 只应答**只选取器**两条：`choose_directory`（打开＝读目录）与 `pick_save_path`
+ *   （另存为落点，1028 批——与 `pick_directory` 同族：只交回路径、一字节不写、不授予任何许可）。
+ *   `export_file` / `choose_file` / `choose_workspace_root` 与 Rust 写域准入门一个字节不碰：
+ *   准入门（铁律 6/7）只认真实对话框交付，经本通道打开的项目天然只能只读浏览——写审批走不通
+ *   是**如实行为**，CLI 在 shell 模式直接拒 `--writable`；另存为经本通道选到域外落点也一样
+ *   被内核 io 双闸如实拒绝（应答对话框 ≠ 放行写盘）。
  * - 一次性（命中即清）、未 armed 零触扰；装载前提是 `?kojo-debug` 选入（main.tsx 动态 import），
  *   产品路径零语义变化（§五.1）。web 模式的宿腿（POST /policy）照旧；页面级 policy 在场时
  *   由 `webHostInvoke` 先一次性短路（§五.11 的冒烟断言即用这条腿）。
@@ -32,6 +36,13 @@ export interface DialogPolicyHit {
 }
 
 let armed: { value: string | null } | null = null;
+
+/**
+ * 吃一次性脚本应答的**只选取器**命令集（1028 批 additive）：
+ * `choose_directory`（打开＝读目录）与 `pick_save_path`（另存为落点——只交回路径，
+ * 写盘照旧回内核 io 双闸）。二者同族：都不写盘、都不授权，应答它们不构成第四条域外通道。
+ */
+export const POLICY_DIALOG_COMMANDS: ReadonlySet<string> = new Set(['choose_directory', 'pick_save_path']);
 
 /** 置一次性应答（`null`＝模拟取消）；重复 arm 覆盖旧值——后 arm 者生效 */
 export function armChooseDir(value: string | null): void {
@@ -95,8 +106,9 @@ export function shellDialogInterceptStatus(): { readonly wrapped: boolean } {
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /**
- * 真壳拦截腿（幂等）：包 `window.fetch` 一次，只定向 `ipc.localhost/choose_directory` 的 POST
- * 请求（且 policy 已 armed）。拦截腿自身出任何异常 ⇒ **原样放行**（绝不吃请求）并留痕；
+ * 真壳拦截腿（幂等）：包 `window.fetch` 一次，只定向 `ipc.localhost/<只选取器>`
+ * （`POLICY_DIALOG_COMMANDS`：choose_directory / pick_save_path）的 POST 请求（且 policy 已 armed）。
+ * 拦截腿自身出任何异常 ⇒ **原样放行**（绝不吃请求）并留痕；
  * 若 custom-protocol 被平台拦、Tauri 回退 `window.ipc.postMessage` 腿，本拦截不生效——
  * 对话框会真的弹出来，CLI 侧等待超时如实红（不静默假绿）。
  */
@@ -126,16 +138,17 @@ export function installShellDialogIntercept(
           headers && typeof (headers as Headers).get === 'function'
             ? (headers as Headers).get('Tauri-Callback')
             : null;
-        if (method.toUpperCase() === 'POST' && cb && parseIpcCmd(url) === 'choose_directory') {
-          const hit = consumeChooseDir(); // 一次性：兑现即清
+        if (method.toUpperCase() === 'POST' && cb && POLICY_DIALOG_COMMANDS.has(parseIpcCmd(url) ?? '')) {
+          const cmd = parseIpcCmd(url);
+          const hit = consumeChooseDir(); // 一次性：兑现即清（两条只选取器共用同一格应答）
           if (hit.hit) {
-            notice(`choose_directory 由调试面 policy 应答（一次性）：${JSON.stringify(hit.value ?? null)}`);
+            notice(`${cmd} 由调试面 policy 应答（一次性）：${JSON.stringify(hit.value ?? null)}`);
             return Promise.resolve(buildChooseDirResponse(hit.value ?? null));
           }
         }
       }
     } catch (err) {
-      notice(`choose_directory 拦截异常（原样放行，不静默）：${String((err as Error)?.message ?? err)}`);
+      notice(`对话框 policy 拦截异常（原样放行，不静默）：${String((err as Error)?.message ?? err)}`);
     }
     return origFetch.call(w as unknown as typeof globalThis, input, init);
   };

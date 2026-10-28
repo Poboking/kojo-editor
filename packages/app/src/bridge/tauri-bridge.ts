@@ -237,6 +237,15 @@ export const tauriBridge: PlatformBridge = {
     return invoke<string | null>('pick_directory', { title: opts?.title ?? null });
   },
 
+  /** 另存为落点对话框（真另存为批）：只交回选定路径，**不写盘、不授权**——写盘回内核 io 双闸 */
+  async pickSavePath(opts): Promise<string | null> {
+    return invoke<string | null>('pick_save_path', {
+      title: opts?.title ?? null,
+      defaultName: opts?.defaultFileName ?? null,
+      filters: opts?.filters ?? null,
+    });
+  },
+
   async listWorkspaceRoots(): Promise<string[]> {
     return invoke<string[]>('workspace_roots');
   },

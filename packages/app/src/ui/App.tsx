@@ -103,6 +103,7 @@ import {
   focusGroupAtOrdinal,
   groupsLayoutSignature,
   initialEditorGroups,
+  migrateGroupPathsAfterSaveAs,
   activateTab as activateTabInGroupState,
   openInActiveGroup,
   openPreviewInActiveGroup,
@@ -2161,6 +2162,114 @@ export function App(): ReactElement {
     return true;
   }, []);
 
+  /**
+   * 真另存为（1028 批）：把**活动标签**的 buffer 转档到对话框选定的新路径。
+   *
+   * 判据与落盘全在懒面 `file-save-as.ts`（`await import` 拉入，不进开机图；裁决 5 的
+   * 可测性要求）；本回调只递宿主事实——各登记处（model 池 / 脏态 / 固定态 / 组态标签 /
+   * journal / EditorPane 内三张 ref 账 / 内核编码缓存）的迁移都发生在流的成功回调里，
+   * **一枚都不许漏**：漏一条就是"旧路径还挂在某本账上冒充在册"。
+   *
+   * 通道不换（裁决 2）：落点由对话框选、但**对话框只交回路径不写盘**，落盘走带闸的
+   * `kernel.io`（`isWritable` 预检 + 写域双闸），域外目标诚实拒绝并指向『导出』——本批
+   * 没有新增第四条域外写通道，游戏根照样整体只读。
+   */
+  const saveAs = useCallback(async (): Promise<void> => {
+    const path = activeFileRef.current;
+    if (!path) {
+      notify({ kind: 'info', message: '没有活动文件，另存为无处落脚。' });
+      return;
+    }
+    if (!kernel) return;
+    const io = kernel.io;
+    const { runSaveAsFlow } = await import('./file-save-as');
+    const { saveBlockedByHostWriteDomain } = await import('./write-domain');
+    // 全组标签里已开着的活 buffer（pathKey 归一），供"目标已有活 buffer ⇒ 拒绝"判据
+    const openBufferKeys = new Set<string>();
+    for (const g of editorGroupsRef.current.groups) for (const t of g.tabs) openBufferKeys.add(pathKey(t));
+    const paneFor = (p: string): EditorPaneActions | undefined => {
+      for (const a of actionsByGroupRef.current.values()) if (a.readBuffer(p) !== undefined) return a;
+      return undefined;
+    };
+    const result = await runSaveAsFlow({
+      currentPath: path,
+      io,
+      pick: (opts) => {
+        const pickSavePath = io.pickSavePath;
+        if (pickSavePath === undefined) {
+          return Promise.reject(new Error('当前平台没有原生落点选择对话框（需要桌面壳）——另存为不会假装成功。'));
+        }
+        return pickSavePath.call(io, opts);
+      },
+      isWritable: (p) => io.isWritable(p),
+      hostBlocked: (p) => saveBlockedByHostWriteDomain(p),
+      hasLiveBuffer: (p) => pathKey(p) !== pathKey(path) && openBufferKeys.has(pathKey(p)),
+      readSource: (p) => paneFor(p)?.readBuffer(p),
+      saveCurrent: async () => {
+        const a = paneFor(path);
+        return a ? a.savePath(path) : false;
+      },
+      dialogConfirmsOverwrite: isTauri(),
+      confirmOverwrite: (target) =>
+        typeof window !== 'undefined' && window.confirm(`「${target}」已存在，确定覆盖吗？覆盖前的现状会先进本地历史。`),
+      onTransferred: async (from, to, clean) => {
+        // ① 池记录换键（monaco 图里，动态 import）⇒ 同 model 换身份，撤销栈随迁
+        const poolModule = await import('./editor-model-pool-instance');
+        poolModule.retargetSavedAsPath(from, to);
+        // ② EditorPane 侧三张 ref 账 + entriesRef + 监听重挂（每组的这一格都过一遍）
+        for (const a of actionsByGroupRef.current.values()) a.transferBuffer(from, to, clean);
+        // ③ 组态标签：指向 from 的 tabs/active/preview 换成 to
+        setEditorGroups((prev) => migrateGroupPathsAfterSaveAs(prev, from, to));
+        // ④ 脏态与固定态：同一份口径精确随迁（旧路径不留悬空 pin / 幽灵脏点）
+        setDirtyPaths((prev) => reconcilePathsAfterDiskChange(prev, [], [{ from, to }]));
+        setPinnedPaths((prev) => reconcilePathsAfterDiskChange(prev, [], [{ from, to }]));
+        // ⑤ journal 与视图状态随迁（动态 import：低频动作不该把这俩拖进开机图）
+        const engine = autosaveRef.current;
+        if (engine) {
+          const records = [...actionsByGroupRef.current.values()].flatMap((a) => a.snapshots());
+          void engine.snapshot(rootDirRef.current, records).catch(() => undefined);
+        }
+        const rootDir = rootDirRef.current;
+        if (rootDir !== null) {
+          void import('./view-state-store').then(
+            (m) => m.renameViewStates(rootDir, [{ from, to }]),
+            () => undefined, // 迁不上 = 视图状态退回按新路径现采，不绑死另存为
+          );
+        }
+        // ⑥ 最近文件：新路径记一笔（转档的落点就是作者刚碰的文件）；索引按**新增**通知
+        if (rootDir !== null) {
+          const nextRecent = upsertRecentFile(recentFilesRef.current, { path: to, rootDir, now: Date.now() });
+          if (!sameRecentFiles(recentFilesRef.current, nextRecent)) {
+            recentFilesRef.current = nextRecent;
+            setRecentFiles(nextRecent);
+            void saveRecentFiles(kernel.storage.global(), nextRecent).catch(() => undefined);
+          }
+        }
+        // ⑦ 文件历史 / 索引增量：另存为记成「盘上新增一个文件」（原路径还在，绝不复用 rename
+        // 的成对迁移语义）；走新建文件同一条 changed 通知路径。
+        void syncErbIndexAfterDiskChange({
+          kernel,
+          index: indexRef.current,
+          notify,
+          delta: { changed: [to] },
+        }).catch((err: unknown) => {
+          notify({ kind: 'error', message: `另存为后更新代码索引失败：${errorText(err)}——函数树可能少这一个新文件。` });
+        });
+      },
+      notify: (kind, message) => notify({ kind, message }),
+    }).catch((err: unknown) => {
+      // 兜底闸：流里任何一枚没被就地处理的抛错都不许被调用方那发 `void onSaveAs()` 吞成
+      // 静默（`ProjectView` 的命令 run 就是 `void`，未处理 rejection 屏上什么都不会出现）。
+      // 走到这里一律按"没落成"出声，落点与文件一律以当下屏上读数为准，不许猜成功。
+      notify({
+        kind: 'error',
+        message: `另存为没有走完：${errorText(err)}——按没落成处理，原文件与标签都保持原样。`,
+      });
+      return { kind: 'failed' as const, message: errorText(err) };
+    });
+    void result; // 结果的人话已在流里上屏（成功 / 取消 / 拒绝 / 失败各说各话）
+  }, [kernel, notify]);
+
   /* -------------- 文件树编辑的标签收尾（B1；状态单源在此——树侧只发意图） -------------- */
 
   /** 标签/激活文件的最新值快照（回调经 ref 闭包下发，不能吃陈旧闭包） */
@@ -2541,6 +2650,7 @@ export function App(): ReactElement {
             onNavForward={navForward}
             onReopenClosedTab={reopenClosedTab}
             onSaveAll={saveAll}
+            onSaveAs={saveAs}
             onDirtyChange={onDirtyChange}
             registerActions={registerActions}
             onClose={requestCloseProject}

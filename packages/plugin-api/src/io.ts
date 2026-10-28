@@ -233,6 +233,19 @@ export interface FileIO {
    * 游戏目录）登记成可写根。无此能力的平台（Node 桥）不实现，内核透传层给一句人话。
    */
   pickDirectory?(opts?: { title?: string }): Promise<string | null>;
+  /**
+   * 另存为落点选择对话框（1028 批，additive 可选）：**只交回选定路径、不写盘不授权**；取消 → null。
+   * 落盘照旧过 `isWritable`/`assertWritable` 双闸——本方法不是第二条域外写通道（铁律 6 不受影响）。
+   */
+  pickSavePath?(opts?: {
+    title?: string;
+    defaultFileName?: string;
+    filters?: readonly FilePickFilter[];
+  }): Promise<string | null>;
+  /** 某路径当前的显式编码判据读数（undefined = 未在册；真另存为转档的自证面） */
+  encodingOf?(path: string): FileEncoding | undefined;
+  /** 摘除某路径的全部判据缓存（编码/换行/指纹/字节/文本）；转档换键后清旧键，不留第二份答案 */
+  forgetPathCaches?(path: string): void;
   isWritable(path: string): boolean;
   /** 手动备份文件；返回备份路径（文件不存在时返回 null） */
   backup(path: string): Promise<string | null>;

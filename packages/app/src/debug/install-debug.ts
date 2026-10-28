@@ -15,8 +15,9 @@
  * - `editor.*`：焦点编辑器的读数与受控写（经 editor-pane-registry 的登记簿，
  *   不碰 EditorPane 源码）：info / setValue / type / setCursor / markers；
  * - `invoke(cmd, args)`：直达宿主命令（桌面壳 = 真 Tauri IPC；浏览器 = 调试宿）；
- * - `dialogPolicy.{arm,armed,clear,status}`：目录对话框一次性自动应答（真壳 fetch 腿 /
- *   web 页面腿；只答"打开＝读"，写域准入门与另存为不碰——见 `dialog-policy.ts` 头注裁决）；
+ * - `dialogPolicy.{arm,armed,clear,status}`：对话框一次性自动应答（真壳 fetch 腿 /
+ *   web 页面腿；只答**只选取器** choose_directory 与 pick_save_path——都是"只选不写"，
+ *   写域准入门与 export_file 不碰——见 `dialog-policy.ts` 头注裁决）；
  * - `perf.*`：UI 卡顿体检探针（可开关；帧分档 / 长任务×事件相关性 / 交互延迟 /
  *   逐源码文件的帧耗时归因——口径与阈值见 `perf-probe-core.ts`）；
  * - `dom.snapshot()`：结构快照（`dom-snapshot.ts` 的口径）。
@@ -70,8 +71,9 @@ export interface KojoDebugApi {
   };
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   /**
-   * 目录对话框自动应答 policy（2026-10-26 era-pair 批，additive）：只一次性短路
-   * `choose_directory`（打开＝读）；`export_file` / `choose_file` / 写域准入门不应答。
+   * 对话框自动应答 policy（2026-10-26 era-pair 批，additive；1028 批扩到第二条只选取器）：
+   * 一次性短路**只选取器**——`choose_directory`（打开＝读）与 `pick_save_path`（另存为落点，
+   * 只交回路径不写盘）。`export_file` / `choose_file` / 写域准入门不应答。
    * 真壳＝fetch 拦截腿（arm 时拦截腿未就位 ⇒ 抛错如实失败）；web 模式＝`webHostInvoke`
    * 页面级优先，未 armed 时宿的 POST /policy 腿照旧。
    */

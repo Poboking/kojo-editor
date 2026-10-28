@@ -71,6 +71,31 @@ function neighborOf(tabs: readonly string[], removed: ReadonlySet<string>, cur: 
   return remaining[j] ?? null;
 }
 
+/**
+ * 真另存为的**组态随迁**（1028 批；纯函数）：每组里指向 `from` 的标签/激活/预览逐条换成 `to`
+ * （**精确换**，不走前缀）。与改名的 `mapRenamedPath` 刻意不同：另存为是"buffer 转档、
+ * 原盘文件不动"，账目 = 当前标签跟到新路径继续编辑，**不是**两格合一。未命中返回同一引用。
+ */
+export function migrateGroupPathsAfterSaveAs(
+  state: EditorGroupsState,
+  from: string,
+  to: string,
+): EditorGroupsState {
+  if (from === to) return state;
+  let touched = false;
+  const groups = state.groups.map((g) => {
+    if (!g.tabs.includes(from) && g.active !== from && g.preview !== from) return g;
+    touched = true;
+    return {
+      ...g,
+      tabs: g.tabs.map((t) => (t === from ? to : t)),
+      active: g.active === from ? to : g.active,
+      preview: g.preview === from ? to : g.preview ?? null,
+    };
+  });
+  return touched ? { ...state, groups } : state;
+}
+
 /** 焦点组的邻居组 id：右侧优先、末尾回落左侧 */
 function neighborGroupId(state: EditorGroupsState, groupId: string): string {
   const i = state.groups.findIndex((g) => g.id === groupId);

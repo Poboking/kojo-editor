@@ -302,6 +302,32 @@ describe('调试宿 · 对话框自动应答与导出', () => {
     expect((await invoke('choose_directory')).value).toBe(sandbox);
   });
 
+  it('pick_save_path 按 policy 应答且**只答路径**：应答本身不落一个字节、不登记任何根（1028 批，与 Rust 同口径）', async () => {
+    // 未 policy ⇒ null（如实取消，不弹任何东西）
+    await fetch(`${base}/policy`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chooseDir: null }),
+    });
+    expect((await invoke('pick_save_path', { defaultName: 'x.ERB' })).value).toBeNull();
+    const target = path.join(sandbox, '另存落点.ERB');
+    await fetch(`${base}/policy`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chooseDir: target }),
+    });
+    expect((await invoke('pick_save_path', { defaultName: 'x.ERB' })).value).toBe(target);
+    // 应答 ≠ 写盘：落点文件不存在（写盘的职责在内核 io 链路，宿只管交回路径）
+    expect((await invoke('path_exists', { path: target })).value).toBe(false);
+    // 应答 ≠ 授权：workspace_roots 不因此多出一根
+    expect((await invoke('workspace_roots')).value).not.toContain(target);
+    await fetch(`${base}/policy`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chooseDir: sandbox }),
+    });
+  });
+
   it('choose_workspace_root 登记常驻工作区根，workspace_roots 可读回', async () => {
     const root = (await invoke('choose_workspace_root')).value as string;
     expect(root).toBe(sandbox);

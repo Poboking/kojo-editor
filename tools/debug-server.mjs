@@ -723,7 +723,7 @@ export const SUPPORTED_COMMANDS = Object.freeze([
   'create_file_exclusive', 'encode_string', 'ensure_dir',
   'export_file', 'list_dir', 'market_device_token', 'market_download', 'market_extract',
   'market_fetch_text', 'market_publish', 'open_url_external', 'path_exists', 'read_file_bytes_raw',
-  'pick_directory', 'read_files_raw', 'register_write_domain', 'remove_dir', 'remove_file', 'rename_path',
+  'pick_directory', 'pick_save_path', 'read_files_raw', 'register_write_domain', 'remove_dir', 'remove_file', 'rename_path',
   'revoke_workspace_root', 'search_text', 'show_in_folder', 'start_watch', 'stat_file', 'stat_files', 'stop_watch',
   'updater_env_proxy', 'walk_dir', 'workspace_roots', 'write_file_bytes',
 ]);
@@ -874,6 +874,9 @@ export async function createDebugServer(options) {
     },
     // 目录选择：只选不授权（与 Rust `pick_directory` 同口径）
     pick_directory: async () => (state.policy.chooseDir ? norm(state.policy.chooseDir) : null),
+    // 另存为落点选择：只交回路径，**一字节不写、不授予任何许可**（与 Rust `pick_save_path` 同口径；
+    // 1028 批——落盘照旧回内核 io 写允许域双闸，页面上的写链路不因本应答放宽）
+    pick_save_path: async () => (state.policy.chooseDir ? norm(state.policy.chooseDir) : null),
     revoke_workspace_root: async (args) => {
       const target = normLower(args?.path);
       if (target === '') throw new HostError('要撤销的项目位置不能是空路径。');

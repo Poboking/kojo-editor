@@ -466,6 +466,17 @@ export interface PlatformBridge {
    */
   pickDirectory?(opts?: { title?: string }): Promise<string | null>;
   /**
+   * 另存为的**落点选择**对话框（1028 批，additive 可选）：弹系统保存对话框（预填 `defaultFileName`），
+   * **只交回选定路径，不写盘、不读取、不授予任何许可**；取消 → null。
+   * 与 `exportFile` 刻意分家（那条才是对话框绑写盘的法定域外通道，铁律 6）：本命令交回的只是
+   * 候选落点，落盘照旧走内核 io 写允许域双闸——域外落点由调用层诚实拒绝（另存为没有域外通道）。
+   */
+  pickSavePath?(opts?: {
+    title?: string;
+    defaultFileName?: string;
+    filters?: readonly FilePickFilter[];
+  }): Promise<string | null>;
+  /**
    * 已获常驻授权的**自选**项目位置根（绝对路径列表；不含默认工作区根，
    * 那由内核自己按 appDataDir 拼）。不存在的目录平台侧会剔除并出声。
    * 无此能力的平台（Node 桥）返回空列表。

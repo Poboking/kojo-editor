@@ -135,3 +135,21 @@ export function retargetKojo2RenamedModel(fromPath: string, nextPath: string): b
     },
   );
 }
+
+/**
+ * 真另存为（2026-10-28 批）的池侧转档：把整条池记录**换键**到落点（同一份 model 原地
+ * 续命 ⇒ 撤销栈/引用计数全部跟着走），随后按**新路径**立即重判 2.0 语言面——
+ * `.kojo` ↔ `.kojo2` 换扩展名必须重判，不等防抖（那一刻作者是停手的）。
+ *
+ * 与改名链路的 `retargetKojo2RenamedModel` 共用重挂手柄，但语义不同：改名只换语言面
+ * （model 由链路重建），这里连**记录身份**一起搬。换键没命中（池里没有这一格）⇒ false，
+ * 调用方据此知道转档没发生。
+ */
+export function retargetSavedAsPath(fromPath: string, nextPath: string): boolean {
+  if (!editorModelPool.retargetPath(fromPath, nextPath)) return false;
+  const model = editorModelPool.liveModel(nextPath);
+  if (model !== undefined) {
+    kojo2ModelLanguage.retarget(model as unknown as Kojo2LanguageModelLike, nextPath);
+  }
+  return true;
+}

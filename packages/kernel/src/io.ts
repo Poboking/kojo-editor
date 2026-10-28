@@ -875,6 +875,34 @@ export class FileIOServiceImpl implements FileIO {
     return pick.call(this.bridge, opts);
   }
 
+  /**
+   * 另存为落点对话框（1028 批，additive 可选）：**只选不写、不授权**——落盘照旧回
+   * `writeBytes` 过双闸（铁律 5/6）。平台桥缺席（Node 桥）⇒ 一句人话，不假成功。
+   */
+  async pickSavePath(opts?: {
+    title?: string;
+    defaultFileName?: string;
+    filters?: readonly FilePickFilter[];
+  }): Promise<string | null> {
+    const pick = this.bridge.pickSavePath;
+    if (pick === undefined) throw new Error('当前平台没有另存为落点选择能力（需要桌面壳）');
+    return pick.call(this.bridge, opts);
+  }
+
+  encodingOf(path: string): FileEncoding | undefined {
+    return this.encodingCache.get(pathKey(path));
+  }
+
+  /** 摘除某路径的全部判据缓存（编码 / EOL / 指纹 / 字节 / 文本）；转档换键后清旧键 */
+  forgetPathCaches(path: string): void {
+    const key = pathKey(path);
+    this.encodingCache.delete(key);
+    this.eolCache.delete(key);
+    this.eolMapCache.delete(key);
+    this.rawBytesCache.delete(key);
+    this.invalidateTextCache(path);
+  }
+
   isWritable(path: string): boolean {
     return [...this.writableRoots, ...this.appWritableRoots].some((root) => isPathUnder(root, path));
   }

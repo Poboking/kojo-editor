@@ -230,6 +230,14 @@ export interface EditorModelPool {
    * 装饰 / 折叠状态）。返回真正重挂的份数（观测面 / 测试读数）。
    */
   retargetLanguage: (path: string, resolve: (model: Monaco.editor.ITextModel) => string) => number;
+  /**
+   * 真另存为的 buffer 转档（2026-10-28 批）：把整条池记录（model / refs / baseline /
+   * savedBase / 冷档账）**换键**到新路径并返回是否命中——同一份 model 原地续命，
+   * 撤销栈与视图引用全部跟着走（这正是与"关标签重开"链路不同的地方）。
+   * 判据：旧键不存在 ⇒ false；新键已站着**活着的**记录 ⇒ false（绝不吞掉别人的账）。
+   * 新键上只剩冷档（refs=0）⇒ 那份是"已关标签的旧盘真相"，转档内容才是真相，弃档后换键。
+   */
+  retargetPath: (from: string, to: string) => boolean;
 }
 
 export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
@@ -589,6 +597,34 @@ export function createEditorModelPool(deps: PoolDeps): EditorModelPool {
         changed += 1;
       }
       return changed;
+    },
+
+    retargetPath(from, to) {
+      if (from === to) return false;
+      const rec = pool.get(from);
+      if (rec === undefined) return false; // 池里没有这一格 ⇒ 没东西可搬
+      // 落点已站着**活着的**记录（有引用）⇒ 拒绝换键：绝不把别人正编辑的账吞掉
+      const occupant = pool.get(to);
+      if (occupant !== undefined && occupant.refs > 0) return false;
+      // 落点只剩冷档（refs===0 的已关标签旧盘真相）⇒ 先弃档（转档内容才是当下真相）
+      if (occupant !== undefined) destroyRecord(to, occupant);
+      // 三本账逐条换键：pool 记录本体 + baseLru（基线文本）+ coldLru（冷档驻留）。
+      // rec 本体整份搬走（model / refs / baseline / savedBase / units 全跟着走），
+      // 撤销栈因此原地续命——这正是"转档"区别于"关标签重开"的地方。
+      pool.delete(from);
+      pool.set(to, rec);
+      if (baseLru.delete(from)) baseLru.set(to, true);
+      if (coldLru.delete(from)) {
+        coldLru.set(to, true);
+        // 冷档补写盘 listener 闭包里钉着旧路径（attachColdListener(path)），换键必须重挂，
+        // 否则程序性改写会往**旧路径**补写盘（数据事故）。refs>0 时 cold 恒 false，走不到这里。
+        if (rec.cold) {
+          rec.coldListener?.dispose();
+          rec.coldListener = undefined;
+          attachColdListener(to, rec);
+        }
+      }
+      return true;
     },
   };
 }
