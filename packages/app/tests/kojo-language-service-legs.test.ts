@@ -11,6 +11,10 @@
  * 3. **集合型取并集 + 去重**（`completion`）：`label`+`insertText`+`kind` 三者全同才算重复。
  *
  * 另加抛错隔离（一家炸了只让这家缺席）与 `formattingRequestOf` 的行数口径。
+ *
+ * B3c 追加两组：`collectHoverResult`（整块响应腿——单答口径必须与 `collectHoverContents`
+ * 逐字一致，`''` 与 `undefined` 的分家是它的存在理由）与 `completionRequestOf` /
+ * `hoverRequestOf` 两枚请求构造器（同源形状：缺省键不出现 + `lineCount` 同一把尺）。
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -24,8 +28,11 @@ import {
   collectCompletionItems,
   collectFormattingEdits,
   collectHoverContents,
+  collectHoverResult,
   collectSignatureHelp,
+  completionRequestOf,
   formattingRequestOf,
+  hoverRequestOf,
 } from '../src/monaco/kojo-language-service-legs';
 
 /** 一条只答一件事的贡献（`provide` 的返回由用例决定） */
@@ -286,5 +293,123 @@ describe('formattingRequestOf · 请求构造', () => {
     expect(full.languageId).toBe('erb');
     expect(full.version).toBe(7);
     expect(full.kind).toBe('formatting');
+  });
+});
+
+/* ======================= B3c：悬停整块响应腿 + 两枚请求构造器 ======================= */
+
+describe('collectHoverResult · 整块响应（单答口径与 collectHoverContents 逐字一致）', () => {
+  const hoverRequest: EditorLanguageServiceRequest = { ...REQUEST, kind: 'hover', column: 1 };
+
+  it('第一家作答后不再问下一家，且交回的是**整个响应**（format/range 不丢）', () => {
+    const second = vi.fn(() => ({ kind: 'hover' as const, contents: '第二家' }));
+    const result = collectHoverResult(
+      [
+        answer('a', () => ({
+          kind: 'hover',
+          contents: '**第一家**',
+          format: 'markdown' as const,
+          range: { line: 3, startColumn: 1, endColumn: 6 },
+        })),
+        answer('b', second),
+      ],
+      hoverRequest,
+    );
+    expect(result).toEqual({
+      kind: 'hover',
+      contents: '**第一家**',
+      format: 'markdown',
+      range: { line: 3, startColumn: 1, endColumn: 6 },
+    });
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it('弃权（undefined）继续问下一家；`contents === \'\'` 是作答、整块交回', () => {
+    const skipped = collectHoverResult(
+      [answer('skip', () => undefined), answer('real', () => ({ kind: 'hover', contents: '轮到我' }))],
+      hoverRequest,
+    );
+    expect(skipped?.contents).toBe('轮到我');
+
+    const second = vi.fn(() => ({ kind: 'hover' as const, contents: '不该出现' }));
+    const answered = collectHoverResult(
+      [answer('empty', () => ({ kind: 'hover', contents: '' })), answer('b', second)],
+      hoverRequest,
+    );
+    expect(answered).toEqual({ kind: 'hover', contents: '' });
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it('无人应答 = undefined（不是 `{contents:\'\'}`——顶掉宿主兜底就是从这里区分出来的）', () => {
+    expect(collectHoverResult([answer('a', () => undefined)], hoverRequest)).toBeUndefined();
+  });
+
+  it('一家抛错只让这家缺席（warn 带贡献 id），下一家照常作答', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const result = collectHoverResult(
+      [
+        answer('boom', () => {
+          throw new Error('炸了');
+        }),
+        answer('real', () => ({ kind: 'hover', contents: '还在' })),
+      ],
+      hoverRequest,
+    );
+    expect(result?.contents).toBe('还在');
+    expect(String(warn.mock.calls[0]?.[0])).toContain('boom');
+    warn.mockRestore();
+  });
+
+  it('与 collectHoverContents 对拍：同一家作答时两腿的 contents 逐字相同', () => {
+    const contributions = [
+      answer('skip', () => undefined),
+      answer('real', () => ({ kind: 'hover', contents: '同一条正文', format: 'markdown' as const })),
+    ];
+    expect(collectHoverContents(contributions, hoverRequest)).toBe(
+      collectHoverResult(contributions, hoverRequest)?.contents,
+    );
+    const emptyFirst = [answer('a', () => ({ kind: 'hover', contents: '' }))];
+    expect(collectHoverContents(emptyFirst, hoverRequest)).toBe('');
+    expect(collectHoverResult(emptyFirst, hoverRequest)?.contents).toBe('');
+  });
+});
+
+describe('completionRequestOf / hoverRequestOf · 请求构造（与 formattingRequestOf 同源形状）', () => {
+  it('completion：kind/坐标/project 就位，lineCount 与 formatting 同一把尺', () => {
+    const req = completionRequestOf({ path: 'a.ERB' }, 'a\nb\nc\n', 1, 6, null);
+    expect(req.kind).toBe('completion');
+    expect(req.path).toBe('a.ERB');
+    expect(req.line).toBe(1);
+    expect(req.column).toBe(6);
+    expect(req.project).toBeNull();
+    expect(req.lineCount).toBe(4);
+    expect(completionRequestOf({ path: 'a.ERB' }, '', 1, 1, null).lineCount).toBe(1);
+  });
+
+  it('completion：`triggerCharacter` 不给 = 键不出现在对象里（缺省 = 手动触发）', () => {
+    const manual = completionRequestOf({ path: 'a.ERB' }, 'x', 1, 2, null);
+    expect('triggerCharacter' in manual).toBe(false);
+    const typed = completionRequestOf({ path: 'a.ERB' }, 'x', 1, 2, null, ':');
+    expect(typed.triggerCharacter).toBe(':');
+  });
+
+  it('hover：同源形状、无触发字符位', () => {
+    const req = hoverRequestOf({ path: 'a.ERB', languageId: 'erb', version: 7 }, 'x', 2, 3, null);
+    expect(req.kind).toBe('hover');
+    expect(req.languageId).toBe('erb');
+    expect(req.version).toBe(7);
+    expect(req.line).toBe(2);
+    expect(req.column).toBe(3);
+    expect(req.lineCount).toBe(1);
+    expect('triggerCharacter' in req).toBe(false);
+  });
+
+  it('两枚构造器都保持"identity 缺省键不出现"的旧口径（与 formattingRequestOf 逐字同规）', () => {
+    const c = completionRequestOf({ path: 'a.ERB' }, 'x', 1, 1, null);
+    expect('languageId' in c).toBe(false);
+    expect('version' in c).toBe(false);
+    const h = hoverRequestOf({ path: 'a.ERB' }, 'x', 1, 1, null);
+    expect('languageId' in h).toBe(false);
+    expect('version' in h).toBe(false);
   });
 });

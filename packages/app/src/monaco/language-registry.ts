@@ -33,17 +33,25 @@ export const FALLBACK_LANGUAGE_ID = 'plaintext';
 /**
  * 可以「只挂槽腿」的**能力名**（B2 起，additive）。
  *
- * 取值 = `ui.editor.languageService` 槽里**集合型**的判别成员名（`documentSymbol` /
- * `definition` / `references` / `foldingRange` / `inlayHint`）。单答型（`hover` /
- * `formatting` / `signatureHelp` / `rename`）不在其中：它们"第一家说了算"，多语言共用
- * 一枚 provider 时谁先答取决于注册表顺序——那不是能力声明能决定的事。
+ * 取值 = `ui.editor.languageService` 槽的判别成员名。B2 只收**集合型**
+ * （`documentSymbol` / `definition` / `references` / `foldingRange` / `inlayHint`）；
+ * **B3c 起 `completion`（集合型）与 `hover`（单答型）也在列**——这两条腿的供方已是
+ * **插件**，注册一律经 `registerForLanguageServices(monaco, register, kind)` 的 `kind`
+ * 参数，只有 descriptor 在 `slotServices` 里点名了这门能力才会被挂上。
+ *
+ * 单答型"第一家说了算、谁先答取决于注册表顺序"的分歧仍然存在（B2 头注的理由没作废）；
+ * 变化在于它现在由"**逐门语言显式声明**"兜住——被谁挂上是写下来的事实，而不是
+ * 铺满之后靠顺序碰运气。其余单答型（`formatting` / `signatureHelp` / `rename`）
+ * 仍不在列，等各自的"供方交插件"那一步再 additive 进表。
  */
 export type SlotServiceKind =
   | 'definition'
   | 'documentSymbol'
   | 'references'
   | 'foldingRange'
-  | 'inlayHint';
+  | 'inlayHint'
+  | 'completion'
+  | 'hover';
 
 /**
  * 一门语言的**可用性档**（LAU-3 / 设计稿 §4.3、§6）。

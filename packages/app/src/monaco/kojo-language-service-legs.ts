@@ -1,7 +1,10 @@
 import { errorText } from '@kojo/plugin-api';
 import type {
   EditorCompletionItem,
+  EditorCompletionRequest,
   EditorFormattingRequest,
+  EditorHoverRequest,
+  EditorHoverResult,
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
   EditorRangeEdit,
@@ -90,6 +93,28 @@ export function collectCompletionItems(
 }
 
 /**
+ * 问出这一格的悬停响应（**单答型**，整块交回）。B3c 新增：`EditorHoverResult` 带上了
+ * `format` / `range` 两格之后，只取 `contents` 的腿装不下供方的完整作答——这条腿把
+ * **整个响应**交回宿主，宿主翻译层才有余地把 Markdown 与落点区间落地。
+ *
+ * 单答口径与 {@link collectHoverContents} **逐字一致**（后者现在就是坐在本函数上取
+ * `contents`，签名与行为一字未动）：`undefined` = 弃权、继续问下一家；
+ * `contents === ''` = 作答、不再问——两者混成同一个返回值，兜底就会在"这家明确说了
+ * 没话说"的位置又冒出来（判据原文见本文件头注）。
+ */
+export function collectHoverResult(
+  contributions: readonly EditorLanguageServiceContribution[],
+  request: EditorLanguageServiceRequest,
+): EditorHoverResult | undefined {
+  for (const contribution of contributions) {
+    const result = provideOf(contribution, request);
+    if (!result || result.kind !== 'hover') continue;
+    return result;
+  }
+  return undefined;
+}
+
+/**
  * 问出这一格的悬停正文（**单答型**）。`undefined` = 无人应答；`''` = 有人认但无话可说。
  *
  * 这两种结果对调用方是**两种处置**：`undefined` 时宿主该保留自己的兜底（如原生
@@ -100,12 +125,7 @@ export function collectHoverContents(
   contributions: readonly EditorLanguageServiceContribution[],
   request: EditorLanguageServiceRequest,
 ): string | undefined {
-  for (const contribution of contributions) {
-    const result = provideOf(contribution, request);
-    if (!result || result.kind !== 'hover') continue;
-    return result.contents;
-  }
-  return undefined;
+  return collectHoverResult(contributions, request)?.contents;
 }
 
 /**
@@ -204,6 +224,62 @@ export function formattingRequestOf(
     text,
     project,
     lineCount,
+  };
+}
+
+/**
+ * 构造一个 `completion` 请求（B3c，宿主接线用；与 {@link formattingRequestOf} 同源形状）。
+ *
+ * 为什么各腿共用这里的构造器而不是 provider 里手搓对象字面量：`languageId` / `version`
+ * 的"缺省就不出现"口径、`lineCount` 的行数口径（见 `countLines` 注）都是收口腿的既有
+ * 事实——手抄一份，抄漏 `version` 的那条腿就废掉了供方的过期复核，而这类失准只在
+ * "改完文件后的第一次应答"里出现，事后极难归因。
+ *
+ * `triggerCharacter` 是 completion 独有的可选位：**不给 = 手动触发**（契约口径——
+ * "这个字符算不算触发符"是语言知识，宿主只把键入的那一个字符原样递来）。
+ */
+export function completionRequestOf(
+  identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
+  text: string,
+  line: number,
+  column: number,
+  project: EditorCompletionRequest['project'],
+  triggerCharacter?: string,
+): EditorCompletionRequest {
+  return {
+    kind: 'completion',
+    path: identity.path,
+    ...(identity.languageId !== undefined ? { languageId: identity.languageId } : {}),
+    ...(identity.version !== undefined ? { version: identity.version } : {}),
+    text,
+    line,
+    column,
+    project,
+    lineCount: text.length === 0 ? 1 : countLines(text),
+    ...(triggerCharacter !== undefined ? { triggerCharacter } : {}),
+  };
+}
+
+/**
+ * 构造一个 `hover` 请求（B3c，宿主接线用；同源形状，位置必填、无触发字符）。
+ */
+export function hoverRequestOf(
+  identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
+  text: string,
+  line: number,
+  column: number,
+  project: EditorHoverRequest['project'],
+): EditorHoverRequest {
+  return {
+    kind: 'hover',
+    path: identity.path,
+    ...(identity.languageId !== undefined ? { languageId: identity.languageId } : {}),
+    ...(identity.version !== undefined ? { version: identity.version } : {}),
+    text,
+    line,
+    column,
+    project,
+    lineCount: text.length === 0 ? 1 : countLines(text),
   };
 }
 

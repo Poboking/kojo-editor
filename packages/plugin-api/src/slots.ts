@@ -1035,16 +1035,69 @@ export interface EditorCompletionRequest extends EditorDocumentIdentity {
 }
 
 /**
- * 候选的中性类别（宿主按它挑图标与排序档，**零语言知识**）。
+ * 补全与悬停**共用**的落点区间（B3c additive 新格；口径与 {@link LineDecoration} 的
+ * 列级区间一致：行号 1 基、列按 UTF-16 码元、区间 **[startColumn, endColumn)** 尾列不含）。
+ *
+ * 为什么这格必须进契约：这一行里的"词"归谁吞并由**语言知识**决定（词首的记号算不算词
+ * 的一部分、分隔符在哪切），宿主替供方切词的那一天，就是新增写形要么被切碎、要么被
+ * 并错的那一天。供方要表达"插入时替换哪一段 / 浮层落在哪一段"，唯一诚实的位置就是这里。
+ *
+ * **缺格 = 旧行为逐字不变**：宿主按自己的现行口径取区间（补全＝光标所在词的区间、
+ * 悬停＝不指定区间），本格出现之前没有任何供方给过它。
+ */
+export interface EditorLanguageRange {
+  /** 1 基行号 */
+  readonly line: number;
+  /** 1 基起始列（UTF-16 码元） */
+  readonly startColumn: number;
+  /** 1 基结束列（**不含**，即半开区间端点），须 ≥ `startColumn` */
+  readonly endColumn: number;
+}
+
+/**
+ * 候选的中性类别（宿主按它挑**图标与排序档**，**零语言知识**）。
  * 具体是什么（ERB 函数 / `.kojo` 时机词 / 变量名）由供方决定，写进 `label`。
+ *
+ * 每一档在这里只说一件事：宿主拿它挑哪一枚图标。供方不许借它声明"我属于哪门语言"
+ * （那是 `detail` 的事），宿主也不许给某一档另发明第二重语义。
+ *
+ * B3c 把缺省联合从六档 additive 扩到十二档（末尾六枚）。这不是补装饰：补全收口进
+ * 槽之后，宿主能挑的图标若比语言包能区分的类别少，供方就被迫**降级图标**（运算符挤成
+ * 文本、事件挤成变量）——图标一旦降级，作者对候选集的视觉记忆就断了。扩档保持逐枚
+ * 互斥的"挑图标"语义，旧六档逐字不动。
  */
 export type EditorCompletionItemKind =
   | 'keyword'
   | 'function'
   | 'variable'
   | 'value'
+  /**
+   * 带占位符的模板候选。宿主侧规则（B3c 写进契约——此前只在宿主翻译层隐式发生）：
+   * `insertTextFormat === 'snippet'` 时打开 Monaco `InsertAsSnippet` 通道，`insertText`
+   * 里的占位语法按模板落地。桩环境缺该枚举时宿主**丢弃 snippet 档**，绝不把占位符当
+   * 字面文本插入。
+   *
+   * **这一档本身只管挑图标与排位，不管插入文本怎么解释**——占位符是否生效归
+   * {@link EditorCompletionItem.insertTextFormat}。为什么必须拆（B3c 实测到的真冲突）：
+   * 2.0 的 `# 模 <名字>` 声明名今天**吃 snippet 图标、但不吃 snippet 插入**（名字里没有
+   * 占位符，按模板插入会把 `$` / `}` 这类字面字符解释成槽位）。合成一格的后果＝供方只是
+   * 想挑一枚图标，却顺手改了插入语义。
+   */
   | 'snippet'
-  | 'text';
+  | 'text'
+  /* ---- B3c additive：以下六档与上面六档同规（宿主据此挑图标，零语言知识） ---- */
+  /** 运算符 / 连接符一类的符号候选（宿主挑运算符图标；`keyword` 是给语句词的，不混用） */
+  | 'operator'
+  /** 事件 / 时机一类的候选（宿主挑事件图标——`function` 的落点是一次调用，这里的落点是一处时机） */
+  | 'event'
+  /** 只读的固定值槽（宿主挑常量图标；可赋值的归 `variable`） */
+  | 'constant'
+  /** 表 / 聚合结构一类的符号（宿主挑结构体图标；成员级归 `variable`） */
+  | 'struct'
+  /** 固定值域里列举出来的成员（宿主挑枚举图标；不属于任何值域的归 `value`） */
+  | 'enum'
+  /** 容器级候选——跳过去的是"一块区域"而不是"一条定义"（宿主挑模块图标） */
+  | 'module';
 
 /** 一条补全候选 */
 export interface EditorCompletionItem {
@@ -1053,12 +1106,50 @@ export interface EditorCompletionItem {
   readonly kind?: EditorCompletionItemKind;
   /** 行尾浅色补充（类型 / 形参摘要） */
   readonly detail?: string;
-  /** 展开的说明文档（纯文本，多行用 `\n`） */
+  /**
+   * 展开的说明文档（缺省按**纯文本**处理，多行用 `\n`；要宿主按 Markdown 渲染的
+   * 用 {@link documentationFormat} 声明）。
+   */
   readonly documentation?: string;
-  /** 插入文本（缺省 = `label`）；含占位符的走 `snippet` 类别 */
+  /**
+   * `documentation` 的渲染形态（B3c additive，**缺省 = `'text'` = 旧行为逐字不变**：
+   * 原样纯文本）。
+   *
+   * 为什么补这一格而不是把 Markdown 强加给所有人：形参表、定义正文这类说明，纯文本
+   * 的行结构表达不出来（表头与正文糊成一团）；但契约不许逼每个供方都关心宿主怎么
+   * 渲染——不给这格的供方，今天看到什么以后就看到什么。
+   */
+  readonly documentationFormat?: 'text' | 'markdown';
+  /** 插入文本（缺省 = `label`）；含占位符的模板见 {@link insertTextFormat} */
   readonly insertText?: string;
+  /**
+   * `insertText` 怎么解释（B3c additive，**缺省 = `'plainText'` = 旧行为逐字不变**：
+   * 原文插入，不把任何字符当模板语法）。
+   *
+   * 为什么不复用 `kind: 'snippet'` 来表达：`kind` 是"宿主挑哪枚图标"，而"插入文本里
+   * 的 `$` / `}` 算不算槽位"是另一件事。2.0 有一类候选**要 snippet 图标但不要 snippet
+   * 插入**（`# 模` 的声明名），合成一格就会让"挑图标"顺手改掉插入语义——那是作者在
+   * 别家供方身上绝对看不到的变化。拆开之后：图标照挑，插入照旧。
+   */
+  readonly insertTextFormat?: 'plainText' | 'snippet';
+  /**
+   * 过滤文本（B3c additive，**缺省 = `label`**，不给与 Monaco 缺省逐字相同）。
+   *
+   * 为什么这格必须存在：`label` 是人读显示名——供方在 `label` 里带显示性修饰时，
+   * 作者键入的字面不再是 `label` 的前缀，编辑器缺省过滤会把这一家的候选**整段滤掉**，
+   * 症状是"插件给了、屏上没有"。这一格只管"拿什么匹配键入"，不影响显示、不影响插入。
+   */
+  readonly filterText?: string;
   /** 排序权重（字典序，小在前）；缺省 = 宿主按 `label` 排 */
   readonly sortText?: string;
+  /**
+   * 插入时替换的区间（B3c additive，**缺省 = 宿主自己的现行口径**＝光标所在词到
+   * 光标处的区间，与本格存在之前逐字相同）。
+   *
+   * 为什么这格必须存在：见 {@link EditorLanguageRange}——"词"的边界是语言知识，
+   * 宿主按通用词法替所有语言切词，新增写形的那天必然切错。
+   */
+  readonly range?: EditorLanguageRange;
 }
 
 /** 补全响应；空数组 = 认这个位置但一个候选都没有（**不猜**，宿主不弹窗） */
@@ -1084,13 +1175,29 @@ export interface EditorHoverRequest extends EditorDocumentIdentity {
 }
 
 /**
- * 悬停响应。`contents` 是**纯文本**（多行用 `\n`）：契约不引入 Markdown，
- * 免得每个供方都要关心宿主怎么渲染；需要强调的地方由供方用行结构表达。
+ * 悬停响应。`contents` 的**缺省形态仍是纯文本**（多行用 `\n`）：契约不逼每个供方
+ * 关心宿主怎么渲染，需要强调的地方供方用行结构表达——不给 {@link format} 的供方，
+ * 行为与本格存在之前**逐字相同**。
+ *
+ * B3c **additive 打开 Markdown**（`format: 'markdown'` ⇒ 宿主把 `contents` 按 Markdown
+ * 渲染）：声明正文与参数表这类结构，纯文本行结构表达不动；打开的是选择权，不是
+ * 默认值。
+ *
  * 空串 = 认这个位置但无话可说（宿主不弹浮层，也不去问下一家——见"单答"）。
  */
 export interface EditorHoverResult {
   readonly kind: 'hover';
   readonly contents: string;
+  /**
+   * `contents` 的渲染形态（B3c additive，**缺省 = `'text'` = 旧行为**：原样纯文本）。
+   */
+  readonly format?: 'text' | 'markdown';
+  /**
+   * 浮层落点区间（B3c additive，**缺省 = 不给**，宿主按自己的现行词区间处理）。
+   * 与补全的 `range` 同一口径（见 {@link EditorLanguageRange}）："哪一段是这个词"
+   * 归供方，不归宿主。
+   */
+  readonly range?: EditorLanguageRange;
 }
 
 /**

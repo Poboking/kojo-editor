@@ -686,6 +686,7 @@ export type {
   EditorFormattingResult,
   EditorHoverRequest,
   EditorHoverResult,
+  EditorLanguageRange,
   EditorRangeEdit,
   EditorSignature,
   EditorSignatureHelpRequest,
