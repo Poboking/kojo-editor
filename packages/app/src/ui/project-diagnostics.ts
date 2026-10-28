@@ -128,7 +128,10 @@ export function decorateScanFile(
   const failed: string[] = [];
   for (const c of contributors) {
     try {
-      for (const d of c.decorate({ ...file }) ?? []) problems.push(toEditorProblem(file.path, d));
+      // `bulk: true` = 这一轮是**整项目扫描**，产物只进问题列表（R4a，契约见
+      // `EditorDecoratorContribution.decorate`）。判据面（条数/位置/severity/code）不变，
+      // 只让"给人看"的那截缺席——今天唯一的受益方是 erb-parser 的 did-you-mean。
+      for (const d of c.decorate({ ...file, bulk: true }) ?? []) problems.push(toEditorProblem(file.path, d));
     } catch {
       failed.push(c.id);
     }

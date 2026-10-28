@@ -1452,7 +1452,23 @@ export interface EditorDecoratorContribution extends ContributionBase {
    * 声明了 `offloadKind` 的贡献：本方法是**就地回退路径**（无并行通道 / 该 kind
    * 只能在宿主执行时走它），语义必须与任务实现**逐字段相同**——两者应共用同一个纯函数。
    */
-  decorate(file: { path: string; text: string; project: GameProject | null }): LineDecoration[];
+  decorate(file: {
+    path: string;
+    text: string;
+    project: GameProject | null;
+    /**
+     * 可选（additive，2026-10-29 性能路线图 R4a）：本次调用来自**整项目扫描**，不是编辑器。
+     *
+     * 唯一的语义是"**给机器看的，不是给人看的**"：扫描产物是问题列表 + 计数 + 覆盖面，
+     * 面板那一行不渲染候选 ⇒ 供方可以省掉只服务人眼的派生（今天只有一处：
+     * `erb-parser` 的 did-you-mean 候选，400 文件一轮占 17%）。
+     *
+     * 约束：**判据面逐条不变**——条数 / 位置 / severity / code 与编辑器那一轮必须相等，
+     * 只允许 `message` 里那截"你是不是想写「X」"缺席（`message` 不在判据里，这是刻意的：
+     * 点开文件后编辑器那一轮会把带候选的原文补上）。缺省不传 = 与今天逐字相同。
+     */
+    bulk?: boolean;
+  }): LineDecoration[];
   /**
    * 可选（additive，2026-10-16 装饰热路径批）：**把本贡献的重计算请出同步装饰轮**。
    *
