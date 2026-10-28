@@ -36,6 +36,7 @@ import {
   clampRowheadWidth,
   computeViewportWindow,
   createMatrixMemo,
+  depsFingerprint,
   faceLabel,
   functionRangeAt,
   instructionNoOfSlot,
@@ -826,5 +827,177 @@ describe('buildCharaOptions（游戏角色表 ∪ 函数索引）', () => {
       [{ no: 5, count: 1 }],
     );
     expect(choices.map((c) => c.no)).toEqual([2, 5, 9]);
+  });
+});
+
+/* ------------------------- 2026-10-29 性能批：增量 / 指纹 / 光标 ------------------------- */
+
+describe('buildCharacterIndex · 文件级增量', () => {
+  /** 计数版家族规则（断言「谁被重判了」，不靠推断） */
+  function counting(inner: FamilyIndexRule, onCall: () => void): FamilyIndexRule {
+    return {
+      name: `${inner.name}+count`,
+      faceLabels: inner.faceLabels,
+      instructionFaces: inner.instructionFaces,
+      match(fnName: string, filePath?: string): FamilyMatch | null {
+        onCall();
+        return inner.match(fnName, filePath);
+      },
+    };
+  }
+
+  it('同一索引二次构建零重判；只换一份 ErbFile 时只重判那一份', () => {
+    let calls = 0;
+    const rule = counting(fakeFamilyIndex, () => calls++);
+    // 注意：`FAM_<FACE>_K<n>` 的 n 是**角色编号**，所以同一角色的两个函数靠「不同面」凑
+    const index = makeIndex({
+      '/p/a.ERB': ['FAM_EVENT_K1', 'FAM_MESSAGE_COM_K1'],
+      '/p/b.ERB': ['FAM_EVENT_K3'],
+    });
+    const first = buildCharacterIndex(index, rule);
+    expect(calls).toBe(3);
+    expect(first.totalFunctions).toBe(3);
+    expect(first.entries.get(1)!.functions.length).toBe(2);
+
+    // 身份未变 ⇒ 整份命中文件级缓存（这是「每次保存都全量重判」被消掉的那一笔）
+    const second = buildCharacterIndex(index, rule);
+    expect(calls).toBe(3);
+    expect(second.totalFunctions).toBe(3);
+    expect(second.entries.get(1)!.functions.length).toBe(2);
+
+    // 保存一份文件 = 增量索引换掉那一个 ErbFile 对象（`applyIndexDelta` 的别名口径）
+    const files = new Map(index.files);
+    const b = files.get('/p/b.ERB')!;
+    files.set('/p/b.ERB', { ...b });
+    const third = buildCharacterIndex({ files, byName: new Map() }, rule);
+    expect(calls).toBe(4); // 只重判 b 里的 1 个函数
+    expect(third.totalFunctions).toBe(3);
+    expect(third.entries.get(3)!.functions.length).toBe(1);
+    expect(third.entries.get(1)!.functions.length).toBe(2);
+  });
+
+  it('换家族规则实例 ⇒ 整份重判（缓存绝不跨规则串味）', () => {
+    let callsA = 0;
+    let callsB = 0;
+    const index = makeIndex({ '/p/a.ERB': ['FAM_EVENT_K1', 'FAM_MESSAGE_COM_K1'] });
+    buildCharacterIndex(index, counting(fakeFamilyIndex, () => callsA++));
+    expect(callsA).toBe(2);
+    const other = counting(fakeFamilyIndex, () => callsB++);
+    const second = buildCharacterIndex(index, other);
+    expect(callsB).toBe(2);
+    expect(callsA).toBe(2);
+    expect(second.entries.get(1)!.functions.length).toBe(2);
+  });
+
+  it('增量与全量结果逐项相等（角色 / 函数 / 面 / 未归属）', () => {
+    const index = makeIndex({
+      '/p/a.ERB': ['FAM_EVENT_K1', 'ORPHAN_X'],
+      '/p/b.ERB': ['FAM_MESSAGE_COM_K1', 'FAM_K2'],
+    });
+    buildCharacterIndex(index, fakeFamilyIndex); // 先填缓存
+
+    // 保存一份文件 ⇒ 增量索引只换掉那一个 ErbFile 对象
+    const files = new Map(index.files);
+    files.set('/p/b.ERB', { ...files.get('/p/b.ERB')! });
+    const incremental = buildCharacterIndex({ files, byName: new Map() }, fakeFamilyIndex);
+
+    // 全新对象身份 ⇒ 走全量路径，作为对拍基准
+    const fresh = new Map<string, ErbFile>();
+    for (const [p, f] of files) fresh.set(p, { ...f });
+    const full = buildCharacterIndex({ files: fresh, byName: new Map() }, fakeFamilyIndex);
+    expect([...incremental.entries.keys()]).toEqual([...full.entries.keys()]);
+    for (const [no, e] of full.entries) {
+      expect(incremental.entries.get(no)!.functions.map((f) => f.name)).toEqual(e.functions.map((f) => f.name));
+      expect(incremental.entries.get(no)!.faces).toEqual(e.faces);
+    }
+    expect(incremental.orphanCount).toBe(full.orphanCount);
+    expect(incremental.orphanCount).toBe(1);
+    expect(incremental.totalFunctions).toBe(full.totalFunctions);
+  });
+});
+
+describe('depsFingerprint', () => {
+  const deps: StateDependency[] = [dep('CFLAG:1', 'CFLAG', ['1'], [cmp('>=', 5)])];
+  const entryOf = (): CharacterEntry => ({ no: 1, faces: ['EVENT'], functions: [] });
+
+  it('同一份聚合 + 同一份依赖 ⇒ 稳定（矩阵记忆化据此跳过重建）', () => {
+    const index = makeIndex({ '/p/a.ERB': ['FAM_EVENT_K1'] });
+    const entry = buildCharacterIndex(index, fakeFamilyIndex).entries.get(1)!;
+    const of = (): StateDependency[] => deps;
+    expect(depsFingerprint(entry, of)).toBe(depsFingerprint(entry, of));
+  });
+
+  it('文件身份变了（保存过）⇒ 变；依赖数组换了 / 长度变了 ⇒ 变', () => {
+    const index = makeIndex({ '/p/a.ERB': ['FAM_EVENT_K1'] });
+    const entry = buildCharacterIndex(index, fakeFamilyIndex).entries.get(1)!;
+    const base = depsFingerprint(entry, () => []);
+
+    const files = new Map(index.files);
+    files.set('/p/a.ERB', { ...files.get('/p/a.ERB')! });
+    const saved = buildCharacterIndex({ files, byName: new Map() }, fakeFamilyIndex).entries.get(1)!;
+    expect(depsFingerprint(saved, () => [])).not.toBe(base);
+
+    // 同一份聚合：依赖数组从无到有 / 换成另一只数组 ⇒ 都要变
+    expect(depsFingerprint(entry, () => deps)).not.toBe(base);
+    expect(depsFingerprint(entry, () => [])).toBe(base);
+    expect(depsFingerprint(entry, () => [...deps])).not.toBe(depsFingerprint(entry, () => deps));
+  });
+
+  it('无来源登记的聚合（手工构造）走确定性回退：同内容同值、改名字就变', () => {
+    const a: CharacterEntry = {
+      no: 1,
+      faces: ['EVENT'],
+      functions: [
+        { name: 'A', normalizedName: 'A', filePath: '/p/a.ERB', startLine: 2, face: 'EVENT', match: mk('ok', 'EVENT', 1) },
+      ],
+    };
+    const b: CharacterEntry = {
+      ...a,
+      functions: [{ ...a.functions[0]!, name: 'B', normalizedName: 'B' }],
+    };
+    expect(depsFingerprint(a, () => [])).toBe(depsFingerprint(entryOf(), () => []) === 0 ? 0 : depsFingerprint(a, () => []));
+    expect(depsFingerprint(a, () => [])).not.toBe(depsFingerprint(b, () => []));
+  });
+});
+
+describe('cellKeysOfFunction', () => {
+  const depOf = (key: string): StateDependency[] => [dep(key, key.split(':')[0]!, [key.split(':')[1] ?? ''], [])];
+  const byName = new Map<string, StateDependency[]>([
+    ['FAM_EVENT_K1', [...depOf('CFLAG:1'), ...depOf('CFLAG:2')]],
+    ['FAM_MESSAGE_COM_K1', depOf('CFLAG:1')],
+  ]);
+  // 真语料是 Windows 路径（`C:\game\...`）——判等口径必须在同一形态上验
+  const index = makeIndex({
+    'C:\\p\\a.ERB': ['FAM_EVENT_K1'],
+    'C:\\p\\b.ERB': ['FAM_MESSAGE_COM_K1'],
+  });
+  const entry = buildCharacterIndex(index, fakeFamilyIndex).entries.get(1)!;
+  const matrix = buildMatrix(entry, (n) => byName.get(n) ?? [], () => null);
+
+  it('命中格：行 → 列；一函数可贡献多行，每行取首个命中列', () => {
+    const cells = cellKeysOfFunction(matrix, { filePath: 'C:\\p\\a.ERB', startLine: 2 });
+    expect([...cells.entries()]).toEqual([
+      ['CFLAG:1', 'EVENT'],
+      ['CFLAG:2', 'EVENT'],
+    ]);
+  });
+
+  it('路径写法不同（大小写 / 分隔符）仍命中：win32 形态走 pathKey 折叠', () => {
+    const cells = cellKeysOfFunction(matrix, { filePath: 'c:/P/A.erb', startLine: 2 });
+    expect([...cells.entries()]).toEqual([
+      ['CFLAG:1', 'EVENT'],
+      ['CFLAG:2', 'EVENT'],
+    ]);
+  });
+
+  it('POSIX 形态不折叠大小写（区分大小写的文件系统上两个文件就是两个文件）', () => {
+    const posix = makeIndex({ '/p/a.ERB': ['FAM_EVENT_K1'] });
+    const m = buildMatrix(buildCharacterIndex(posix, fakeFamilyIndex).entries.get(1)!, (n) => byName.get(n) ?? [], () => null);
+    expect(cellKeysOfFunction(m, { filePath: '/p/A.ERB', startLine: 2 }).size).toBe(0);
+    expect(cellKeysOfFunction(m, { filePath: '/p/a.ERB', startLine: 2 }).size).toBe(2);
+  });
+
+  it('不在矩阵里（行号对不上）⇒ 空集合，不猜', () => {
+    expect(cellKeysOfFunction(matrix, { filePath: 'C:\\p\\a.ERB', startLine: 999 }).size).toBe(0);
   });
 });

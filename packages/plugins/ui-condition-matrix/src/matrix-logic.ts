@@ -12,6 +12,8 @@
  */
 
 import type {
+  ConditionComparison,
+  ErbFile,
   ErbIndex,
   FamilyIndexRule,
   FamilyMatch,
@@ -111,23 +113,39 @@ function emptyIndex(hasFamilyIndex: boolean): CharacterIndex {
 }
 
 /**
- * 单次全量遍历：把 `ErbIndex` 按「角色 → 面 → 函数」聚合。
+ * 单文件的归属事实（按 `ErbFile` **对象身份**缓存）。
  *
- * 无法归属（无家族规则 / `characterNo === null`）的函数进 `orphanCount`，不展开。
- * 对缺字段的畸形输入宽容降级（返回空索引），绝不抛错中断。
+ * 为什么按身份就够：`erb.parser` 的增量索引（`applyIndexDelta`）只替换**变过**的文件的
+ * `ErbFile`，其余条目原样留用（对象别名、零拷贝）。所以「保存一份文件」之后，只有那一份的
+ * 身份变了——按文件缓存就能把「12 万函数 × 适配器 match」从**每次保存都付**降到
+ * 「只有变过的文件付」。
+ *
+ * 为什么这笔钱值得省：实测 124,724 函数 / 4,385 文件的全量聚合 **362ms**（冷）/
+ * **89ms**（memo 命中后的纯遍历），而**关掉家族规则**（全部记成孤儿）同一份输入只要
+ * **2ms** —— 97% 的时间花在适配器的 `match()` 上（名字解析 + 每个调用一次
+ * `name\0path` 拼接的 memo 键）。聚合本身是零成本的，重的是逐函数的判定。
  */
-export function buildCharacterIndex(index: ErbIndex, familyIndex: FamilyIndexRule | null): CharacterIndex {
-  const hasFamilyIndex = familyIndex !== null;
-  const files = index?.files;
-  if (!files) return emptyIndex(hasFamilyIndex);
+interface FileFacts {
+  /** 判定时用的家族规则实例：换了规则（切适配器）⇒ 整份重算，绝不串味 */
+  readonly family: FamilyIndexRule | null;
+  readonly totalFunctions: number;
+  readonly orphanCount: number;
+  readonly byChara: readonly {
+    readonly no: number;
+    readonly faces: readonly string[];
+    readonly fns: readonly FaceFunction[];
+  }[];
+}
 
-  const acc = new Map<number, { faces: Set<string>; functions: FaceFunction[] }>();
-  let orphanCount = 0;
+const FILE_FACTS = new WeakMap<ErbFile, FileFacts>();
+
+/** 单个文件的「角色 → 面 + 函数」事实（纯函数；对缺字段的畸形输入宽容降级） */
+function factsOfFile(file: ErbFile, familyIndex: FamilyIndexRule | null): FileFacts {
+  const byNo = new Map<number, { faces: string[]; fns: FaceFunction[] }>();
   let totalFunctions = 0;
-
-  for (const file of files.values()) {
-    const fns = file?.functions;
-    if (!fns) continue;
+  let orphanCount = 0;
+  const fns = file?.functions;
+  if (fns) {
     for (const fn of fns) {
       if (!fn) continue;
       totalFunctions++;
@@ -143,13 +161,13 @@ export function buildCharacterIndex(index: ErbIndex, familyIndex: FamilyIndexRul
         continue;
       }
       const face = match.kind === 'declare' ? 'declare' : match.face;
-      let entry = acc.get(match.characterNo);
-      if (!entry) {
-        entry = { faces: new Set<string>(), functions: [] };
-        acc.set(match.characterNo, entry);
+      let rec = byNo.get(match.characterNo);
+      if (!rec) {
+        rec = { faces: [], fns: [] };
+        byNo.set(match.characterNo, rec);
       }
-      entry.faces.add(face);
-      entry.functions.push({
+      if (!rec.faces.includes(face)) rec.faces.push(face);
+      rec.fns.push({
         name: fn.name,
         normalizedName: fn.normalizedName,
         filePath: fn.filePath,
@@ -159,11 +177,66 @@ export function buildCharacterIndex(index: ErbIndex, familyIndex: FamilyIndexRul
       });
     }
   }
+  const byChara: { no: number; faces: readonly string[]; fns: readonly FaceFunction[] }[] = [];
+  for (const [no, rec] of byNo) byChara.push({ no, faces: rec.faces, fns: rec.fns });
+  return { family: familyIndex, totalFunctions, orphanCount, byChara };
+}
+
+/**
+ * 角色 → 函数聚合的**来源文件**（按 `CharacterEntry` 身份，供 `depsFingerprint` 判「这一份
+ * 聚合有没有变」）。聚合对象每轮重建即换身份，WeakMap 条目随之退休——不累积。
+ */
+const ENTRY_SOURCES = new WeakMap<CharacterEntry, readonly ErbFile[]>();
+
+/**
+ * 单次全量遍历：把 `ErbIndex` 按「角色 → 面 → 函数」聚合。
+ *
+ * 无法归属（无家族规则 / `characterNo === null`）的函数进 `orphanCount`，不展开。
+ * 对缺字段的畸形输入宽容降级（返回空索引），绝不抛错中断。
+ *
+ * **增量口径**：逐文件判定走 `FILE_FACTS` 缓存（键 = `ErbFile` 身份），聚合本身只是把
+ * 缓存好的函数数组按角色拼接——保存一份文件之后，这一趟只对那一份文件付 `match()`。
+ * 语义与「每次都全量重判」逐字相同（缓存键含家族规则实例）。
+ */
+export function buildCharacterIndex(index: ErbIndex, familyIndex: FamilyIndexRule | null): CharacterIndex {
+  const hasFamilyIndex = familyIndex !== null;
+  const files = index?.files;
+  if (!files) return emptyIndex(hasFamilyIndex);
+
+  const buckets = new Map<number, { faces: Set<string>; parts: FaceFunction[][]; files: ErbFile[] }>();
+  let orphanCount = 0;
+  let totalFunctions = 0;
+
+  for (const file of files.values()) {
+    if (!file) continue;
+    let facts = FILE_FACTS.get(file);
+    if (!facts || facts.family !== familyIndex) {
+      facts = factsOfFile(file, familyIndex);
+      FILE_FACTS.set(file, facts);
+    }
+    totalFunctions += facts.totalFunctions;
+    orphanCount += facts.orphanCount;
+    for (const part of facts.byChara) {
+      let bucket = buckets.get(part.no);
+      if (!bucket) {
+        bucket = { faces: new Set<string>(), parts: [], files: [] };
+        buckets.set(part.no, bucket);
+      }
+      for (const face of part.faces) bucket.faces.add(face);
+      bucket.parts.push(part.fns as FaceFunction[]);
+      bucket.files.push(file);
+    }
+  }
 
   const entries = new Map<number, CharacterEntry>();
-  for (const [no, e] of acc) {
-    const faces = [...e.faces].sort((a, b) => faceRank(a) - faceRank(b) || a.localeCompare(b));
-    entries.set(no, { no, faces, functions: e.functions });
+  for (const [no, bucket] of buckets) {
+    // 拼一份**新数组**：缓存里的那份是共享只读事实，绝不能把它的身份交给消费方去改
+    const functions: FaceFunction[] =
+      bucket.parts.length === 1 ? bucket.parts[0]!.slice() : ([] as FaceFunction[]).concat(...bucket.parts);
+    const faces = [...bucket.faces].sort((a, b) => faceRank(a) - faceRank(b) || a.localeCompare(b));
+    const entry: CharacterEntry = { no, faces, functions };
+    ENTRY_SOURCES.set(entry, bucket.files);
+    entries.set(no, entry);
   }
 
   return { entries, hasFamilyIndex, orphanCount, totalFunctions };
@@ -361,6 +434,70 @@ function compareColumn(
   return 0;
 }
 
+/* --------------------- 比较串缓存（建表热路径的唯一派生件） --------------------- */
+
+/**
+ * 依赖 → `'op text'` 比较串的缓存（键 = `StateDependency` **对象身份**）。
+ *
+ * 抽取索引里的依赖对象在一次抽取内是稳定的（重抽换新对象），比较串又是它的纯函数，
+ * 所以同一份依赖只该格式化一次。真实语料上「函数 × 依赖」有 **70,699 对**，而独立依赖
+ * 只有几千条——原实现每对都 `map()` 出一只新数组、逐条拼字符串，是建表最大的分配来源。
+ *
+ * `src` 记下当时的 `comparisons` 数组身份：万一有实现原地换掉它（约定上不该有），
+ * 身份不等就重算，缓存绝不把旧判定漏进新数据。
+ */
+const COMPS_CACHE = new WeakMap<
+  StateDependency,
+  { readonly src: readonly ConditionComparison[] | undefined; readonly out: string[] }
+>();
+
+function compsOf(dep: StateDependency): string[] {
+  const cached = COMPS_CACHE.get(dep);
+  if (cached !== undefined && cached.src === dep.comparisons) return cached.out;
+  const src = dep.comparisons ?? [];
+  const out = new Array<string>(src.length);
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i]!;
+    out[i] = `${c.op} ${c.text}`;
+  }
+  COMPS_CACHE.set(dep, { src: dep.comparisons, out });
+  return out;
+}
+
+/**
+ * 一个函数的依赖数组 → 逐条比较串（外层按**数组身份**缓存）。
+ *
+ * 为什么再套一层：单次建表有 7 万次「函数 × 依赖」取值，而 `WeakMap.get` 实测约 0.2µs
+ * ——7 万次就是 14ms，比它省下的分配还贵。按数组缓存后只剩「函数数」次（3 千），
+ * 内层退化成一次数组下标。
+ */
+const COMPS_BY_DEPS = new WeakMap<readonly StateDependency[], string[][]>();
+
+function compsFor(deps: readonly StateDependency[]): string[][] {
+  const hit = COMPS_BY_DEPS.get(deps);
+  if (hit !== undefined) return hit;
+  const out: string[][] = new Array(deps.length);
+  for (let i = 0; i < deps.length; i++) out[i] = compsOf(deps[i]!);
+  COMPS_BY_DEPS.set(deps, out);
+  return out;
+}
+
+/** 一条格子贡献（`MatrixCellFunction` 的唯一构造点） */
+function cellFunctionOf(fn: FaceFunction, comparisons: string[]): MatrixCellFunction {
+  return {
+    name: fn.name,
+    filePath: fn.filePath,
+    startLine: fn.startLine,
+    comparisons,
+    family: fn.match.family,
+    prefix: fn.match.prefix,
+    kind: fn.match.kind,
+    face: fn.match.face,
+    slot: fn.match.slot,
+    isMessageCheck: fn.match.isMessageCheck,
+  };
+}
+
 /**
  * 从单个角色的聚合构建矩阵。
  *
@@ -394,6 +531,8 @@ export function buildMatrix(
   // 同时缓存每个函数的列键——第二轮聚合单元格时直接取用，`columnOf` 只解析一次。
   const byFace = new Map<string, Map<string, ColumnAcc>>();
   const colDescOf = new Map<FaceFunction, ColumnDesc>();
+  /** 函数 → 它所属的列累加器（一次查找代替「先查描述、再查面、再查列」三跳） */
+  const colAccOf = new Map<FaceFunction, ColumnAcc>();
   /** 列函数对象缓存：作用域模式下同一函数会出现在 universe 与包两批里，对象只造一次 */
   const colFnOf = new Map<FaceFunction, MatrixColumnFunction>();
   const columnFn = (fn: FaceFunction): MatrixColumnFunction => {
@@ -406,6 +545,8 @@ export function buildMatrix(
   };
   const scopedColumns = columnEntry !== entry;
   const accOf = (fn: FaceFunction): ColumnAcc => {
+    let col = colAccOf.get(fn);
+    if (col) return col;
     let desc = colDescOf.get(fn);
     if (!desc) {
       desc = resolveColumn(fn);
@@ -416,7 +557,7 @@ export function buildMatrix(
       cols = new Map<string, ColumnAcc>();
       byFace.set(fn.face, cols);
     }
-    let col = cols.get(desc.key);
+    col = cols.get(desc.key);
     if (!col) {
       col = {
         key: desc.key,
@@ -428,6 +569,7 @@ export function buildMatrix(
       };
       cols.set(desc.key, col);
     }
+    colAccOf.set(fn, col);
     return col;
   };
 
@@ -481,10 +623,13 @@ export function buildMatrix(
   // 否则下面的填色循环本来就会建出同一批行。
   if (rowEntry !== entry) {
     for (const fn of rowEntry.functions) {
-      for (const dep of depsFor(fn)) {
+      const deps = depsFor(fn);
+      const compsList = compsFor(deps);
+      for (let k = 0; k < deps.length; k++) {
+        const dep = deps[k];
         if (!dep) continue;
         const row = ensureRow(dep);
-        for (const s of (dep.comparisons ?? []).map((c) => `${c.op} ${c.text}`)) {
+        for (const s of compsList[k]!) {
           if (!row.universeSeen.has(s)) {
             row.universeSeen.add(s);
             row.universeComparisons.push(s);
@@ -505,10 +650,12 @@ export function buildMatrix(
     // 无作用域时 `functions` 与 `universeFunctions` 收口为同一数组，这里不必重复收
     if (scopedColumns) col.functions.push(columnFn(fn));
 
-    for (const dep of deps) {
+    const compsList = deps.length > 0 ? compsFor(deps) : EMPTY_COMPS;
+    for (let k = 0; k < deps.length; k++) {
+      const dep = deps[k];
       if (!dep) continue;
+      const comps = compsList[k]!;
       const row = ensureRow(dep);
-      const comps = (dep.comparisons ?? []).map((c) => `${c.op} ${c.text}`);
 
       let cell = row.cells[col.key];
       if (!cell) {
@@ -518,18 +665,7 @@ export function buildMatrix(
         columnFills.set(col.key, (columnFills.get(col.key) ?? 0) + 1);
       }
       cell.count += 1;
-      cell.functions.push({
-        name: fn.name,
-        filePath: fn.filePath,
-        startLine: fn.startLine,
-        comparisons: comps,
-        family: fn.match.family,
-        prefix: fn.match.prefix,
-        kind: fn.match.kind,
-        face: fn.match.face,
-        slot: fn.match.slot,
-        isMessageCheck: fn.match.isMessageCheck,
-      });
+      cell.functions.push(cellFunctionOf(fn, comps));
       row.totalCount += 1;
 
       for (const s of comps) {
@@ -614,6 +750,8 @@ export function buildMatrix(
   };
 }
 
+/** 空依赖清单的常量（零分配：多数函数没有状态依赖） */
+const EMPTY_COMPS: string[][] = [];
 /* ------------------------------ 渲染记忆化 ------------------------------ */
 
 /**
@@ -959,9 +1097,21 @@ export function cellKeysOfFunction(
 ): Map<string, string> {
   const out = new Map<string, string>();
   const key = pathKey(fn.filePath);
+  /**
+   * 判据顺序：**先比行号**（整数，绝大多数函数在这里就被排除），再比路径。
+   *
+   * 这条路径 2026-10-29 性能批**试过三种写法，全部更快失败**，故保持原样：
+   * ① 直接比原串（`f.filePath === fn.filePath`）比 `pathKey` 慢 40%——`pathKey` 对已归一
+   *    的写法会原样返回同一个字符串对象，`===` 退化成指针比较；直接比原串要逐字符走完整条路径。
+   * ② 惰性算 `pathKey`（先比原串、不等再归一）同样更慢（同①）。
+   * ③ 按函数建 CSR 索引（函数 → 行/列）：建表要多登记 7 万对下标（+7.5ms/次），
+   *    而省下的只是「每次光标跨函数 3ms」——面板已按函数身份记忆化，单次命中一次，
+   *    这笔账只有在「一帧内反复换函数」时才划得来，实测不成立。
+   */
   for (const row of matrix.rows) {
-    for (const colKey of Object.keys(row.cells)) {
-      const cell = row.cells[colKey];
+    const cells = row.cells;
+    for (const colKey of Object.keys(cells)) {
+      const cell = cells[colKey];
       if (!cell) continue;
       if (cell.functions.some((f) => f.startLine === fn.startLine && pathKey(f.filePath) === key)) {
         out.set(row.key, colKey);
@@ -970,6 +1120,87 @@ export function cellKeysOfFunction(
     }
   }
   return out;
+}
+
+/* ------------------------------ 依赖指纹 ------------------------------ */
+
+/** `ErbFile` 的身份编号（WeakMap 计数器；身份变了 = 文件内容变过） */
+const FILE_ID = new WeakMap<ErbFile, number>();
+let fileIdSeq = 0;
+function fileIdOf(file: ErbFile): number {
+  let id = FILE_ID.get(file);
+  if (id === undefined) {
+    id = ++fileIdSeq;
+    FILE_ID.set(file, id);
+  }
+  return id;
+}
+
+/** 依赖数组的身份编号（同上；只对非空数组取，空数组每次都是新 `[]`） */
+const DEPS_ID = new WeakMap<object, number>();
+let depsIdSeq = 0;
+function depsIdOf(deps: object): number {
+  let id = DEPS_ID.get(deps);
+  if (id === undefined) {
+    id = ++depsIdSeq;
+    DEPS_ID.set(deps, id);
+  }
+  return id;
+}
+
+function fnv(h: number, value: number): number {
+  h ^= value;
+  return Math.imul(h, 16777619) >>> 0;
+}
+
+/**
+ * 这一份聚合的**依赖指纹**（矩阵记忆化的失效判据；纯函数，单测钉住）。
+ *
+ * 存在的理由：面板的矩阵缓存原先按「抽取代次」失效，而抽取在**每次保存**都会跑一遍
+ * ——于是「改一句台词」也会让当前角色的矩阵整表重建（建表 + 整窗行重渲）。
+ * 实际上绝大多数保存与这个角色无关。指纹把「代次变了」换成「这一份真的变了吗」：
+ *
+ * - **文件身份**：`CharacterEntry` 由 `buildCharacterIndex` 从逐文件的 `ErbFile` 拼出，
+ *   而增量索引只替换变过的文件对象 ⇒ 文件身份 + 函数数就是「这一份聚合的内容有没有变」
+ *   的完整判据（改名 / 加函数 / 改函数体都会换对象）；
+ * - **依赖身份**：抽取索引里的 `dependencies` 数组在一次抽取内稳定，重抽会换新数组 ⇒
+ *   数组身份 + 长度足以判「这个函数的依赖变了没有」。空数组不取身份（服务每次都新建 `[]`），
+ *   只哈希长度。
+ *
+ * 读不到来源文件（手工构造的聚合 / 单测）时退化成「函数名 + 行号 + 面」的哈希——仍然确定，
+ * 只是每次多算一点，绝不因此少算一次重建。
+ */
+export function depsFingerprint(
+  entry: CharacterEntry,
+  depsOf: (normalizedName: string) => StateDependency[],
+): number {
+  let h = 2166136261;
+  const sources = ENTRY_SOURCES.get(entry);
+  if (sources) {
+    for (const file of sources) {
+      h = fnv(h, fileIdOf(file));
+      h = fnv(h, file.functions?.length ?? 0);
+    }
+  } else {
+    for (const fn of entry.functions) {
+      const name = fn.name;
+      for (let i = 0; i < name.length; i++) h = fnv(h, name.charCodeAt(i));
+      h = fnv(h, fn.startLine);
+      const face = fn.face;
+      for (let i = 0; i < face.length; i++) h = fnv(h, face.charCodeAt(i));
+    }
+  }
+  for (const fn of entry.functions) {
+    let deps: StateDependency[];
+    try {
+      deps = depsOf(fn.normalizedName) ?? [];
+    } catch {
+      deps = [];
+    }
+    h = fnv(h, deps.length === 0 ? 0 : depsIdOf(deps));
+    h = fnv(h, deps.length);
+  }
+  return h >>> 0;
 }
 
 /* ------------------------------ 标签 ------------------------------ */

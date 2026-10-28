@@ -38,6 +38,8 @@ const KNOWN_PERF = [
   'packages/plugins/erb-parser/tests/semantic-tokens.perf.test.ts',
   'packages/plugins/erb-parser/tests/snapshot-hot-load.perf.test.ts',
   'packages/plugins/condition-extractor/tests/snapshot-hot-load.perf.test.ts',
+  // 2026-10-29 条件矩阵性能批：文件级增量索引的闸门（判据是比值，必须在静默池里量）
+  'packages/plugins/ui-condition-matrix/tests/matrix-scale.perf.test.ts',
 ];
 
 describe('PERF-POOL · 分池判据', () => {

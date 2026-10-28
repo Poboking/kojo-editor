@@ -59,6 +59,7 @@ import {
   clampDetailHeight,
   clampRowheadWidth,
   createMatrixMemo,
+  depsFingerprint,
   DETAIL_MIN_H,
   faceLabel,
   functionRangeAt,
@@ -733,6 +734,43 @@ export function createUiConditionMatrixPlugin(): Plugin {
           projects: readonly WorkspaceProject[];
           map: ReadonlyMap<string, WorkspacePackRef>;
         } | null>(null);
+        /**
+         * 「我的口上项目（工作区视图）」包清单的手工记忆化仓（键 = 角色号 + 角色目录 + 游戏包
+         * + 工作区清单）。原先是**每次重渲都重算**：遍历全部项目 × 制品、逐条正则判 meta、
+         * 逐条拆路径——滚动帧（每跨一行一次重渲）也在付这笔钱。清单与这些键一一对应，可安全复用。
+         */
+        const wsPacksRef = useRef<{
+          charaNo: number | null;
+          charaDir: string | undefined;
+          gamePacks: readonly AuthorPack[];
+          projects: readonly WorkspaceProject[];
+          packs: WorkspaceMatrixPack[];
+          byKey: Map<string, WorkspaceMatrixPack>;
+        } | null>(null);
+        /**
+         * 依赖指纹的手工记忆化仓（键 = 聚合 + 依赖源 + 抽取代次）。
+         * 抽取代次进键：抽取完成时聚合与依赖源都没换身份，但依赖内容变了——不认代次就会读到旧指纹。
+         */
+        const depsFpRef = useRef<{
+          entry: CharacterEntry | null;
+          depsOf: ((normalizedName: string) => StateDependency[]) | null;
+          epoch: number;
+          fp: number;
+        } | null>(null);
+        /** 取（必要时算）依赖指纹：每次抽取代次只算一遍，滚动帧与过滤键入零成本 */
+        const fingerprintOf = (
+          e: CharacterEntry | null,
+          d: (normalizedName: string) => StateDependency[],
+        ): number => {
+          if (!e) return 0;
+          const cached = depsFpRef.current;
+          if (cached && cached.entry === e && cached.depsOf === d && cached.epoch === store.depsEpoch) {
+            return cached.fp;
+          }
+          const fp = depsFingerprint(e, d);
+          depsFpRef.current = { entry: e, depsOf: d, epoch: store.depsEpoch, fp };
+          return fp;
+        };
 
         /** 过滤后行清单的手工记忆化仓（键 = 矩阵 + 过滤词 + 缺口模式 + 可见列） */
         const rowsFilterRef = useRef<{
@@ -920,18 +958,41 @@ export function createUiConditionMatrixPlugin(): Plugin {
         /**
          * 「我的口上项目」里归属当前角色的 artifact（`ws:` 包键）：与游戏包并列进下拉，
          * 选中后矩阵数据源换成工作区索引（见 ./workspace-index.ts）。
+         * 记忆化仓见 `wsPacksRef`——键不变就复用同一份清单与同一只查找表（滚动帧零成本）。
          */
-        const workspacePacks: WorkspaceMatrixPack[] =
-          selectedNo === null
-            ? []
-            : collectWorkspaceMatrixPacks({
-                charaNo: selectedNo,
-                charaDir,
-                gamePacks: packs,
-                projects: store.workspaceProjects,
-                projectDir: (id) => store.projectDir(id),
-              });
-        const wsPackByKey = new Map(workspacePacks.map((p) => [p.key, p]));
+        const wsCache = wsPacksRef.current;
+        let workspacePacks: WorkspaceMatrixPack[];
+        let wsPackByKey: Map<string, WorkspaceMatrixPack>;
+        if (
+          wsCache &&
+          wsCache.charaNo === selectedNo &&
+          wsCache.charaDir === charaDir &&
+          wsCache.gamePacks === packs &&
+          wsCache.projects === store.workspaceProjects
+        ) {
+          workspacePacks = wsCache.packs;
+          wsPackByKey = wsCache.byKey;
+        } else {
+          workspacePacks =
+            selectedNo === null
+              ? []
+              : collectWorkspaceMatrixPacks({
+                  charaNo: selectedNo,
+                  charaDir,
+                  gamePacks: packs,
+                  projects: store.workspaceProjects,
+                  projectDir: (id) => store.projectDir(id),
+                });
+          wsPackByKey = new Map(workspacePacks.map((p) => [p.key, p]));
+          wsPacksRef.current = {
+            charaNo: selectedNo,
+            charaDir,
+            gamePacks: packs,
+            projects: store.workspaceProjects,
+            packs: workspacePacks,
+            byKey: wsPackByKey,
+          };
+        }
         /** 状态里的包键可能来自上一个角色：不在当前清单就当「全部」（不静默筛出空表） */
         const effectivePackKey =
           packKey !== null && (packs.some((p) => p.key === packKey) || wsPackByKey.has(packKey))
@@ -1120,12 +1181,6 @@ export function createUiConditionMatrixPlugin(): Plugin {
           // 裸 `#310` 是查表记号，作者读到的是又一个要背的格式。
           return { key: `${fn.face}#${no}`, instructionNo: no, label: name ?? `指令 ${no}` };
         };
-        // 记忆化：选择 / 过滤 / 折叠 / 无关刷新都不重算矩阵；角色 × 依赖版本 × 适配器 × 口上包变化才重建。
-        // 按包查看时列/行仍取全角色（整列缺席、别人写过而我方没写都能看见），只有填色来自该包。
-        const matrixKey = wsActive
-          ? `ws:${selectedWsPack.key}|${selectedNo}|${store.depsEpoch}|${current.adapterId}`
-          : `${entry?.no}|${store.depsEpoch}|${current.adapterId}|` +
-            (effectivePackKey === null ? 'p:<all>' : `p:${effectivePackKey}`);
         const wsEntry = wsReady ? wsState.entry : null;
         /**
          * 工作区包的作用域入口：**空包也要出表**——新建的空项目还没有函数，
@@ -1135,6 +1190,21 @@ export function createUiConditionMatrixPlugin(): Plugin {
         const wsScopedEntry: CharacterEntry | null = wsReady
           ? wsEntry ?? (entry ? { no: entry.no, faces: [], functions: [] } : null)
           : null;
+        // 记忆化：选择 / 过滤 / 折叠 / 无关刷新都不重算矩阵；角色 × 依赖指纹 × 适配器 × 口上包变化才重建。
+        // 按包查看时列/行仍取全角色（整列缺席、别人写过而我方没写都能看见），只有填色来自该包。
+        //
+        // 失效判据是**依赖指纹**而不是抽取代次（2026-10-29 性能批）：抽取在每次保存都会跑，
+        // 代次一变就整表重建 —— 连「改一句与这个角色无关的台词」都要付一次建表 + 整窗重渲。
+        // 指纹只哈希「这一份聚合的文件身份 + 每个函数的依赖数组身份」（0.3ms 量级），
+        // 真正变了才重建；没变就直接复用同一份矩阵对象，行 memo 随之整表跳过重渲。
+        const depsFp = fingerprintOf(
+          wsActive ? wsScopedEntry : entry,
+          wsActive ? (wsState.depsOf ?? services.depsOf) : services.depsOf,
+        );
+        const matrixKey = wsActive
+          ? `ws:${selectedWsPack.key}|${selectedNo}|${depsFp}|${current.adapterId}`
+          : `${entry?.no}|${depsFp}|${current.adapterId}|` +
+            (effectivePackKey === null ? 'p:<all>' : `p:${effectivePackKey}`);
         /** 工作区包没有游戏函数时（游戏里还没写过口上）不依赖游戏抽取结果，直接建 */
         const gameDepsReady = conditionsReady || !entry;
         const matrix: ConditionMatrix | null = wsActive
