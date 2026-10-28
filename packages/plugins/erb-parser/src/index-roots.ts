@@ -1,10 +1,13 @@
 /**
- * 索引扫描根的合成（IDX-ROOT，2026-10-19）：`project.kojoPaths ∪ 作者工作区全部根`。
+ * 索引扫描根的合成（IDX-ROOT，2026-10-19）：`项目根（口上根 ∪ 只读基座库根）∪ 作者工作区全部根`。
  *
  * 为什么作者作品必须进索引：`我的口上项目` 里写的 `.ERB/.ERM/.ERH` 才是作者**正在编辑**
  * 的那一份，而五条语言服务腿（转到定义 / 查找引用 / 工作区符号 / 用量注解 / 实参提示）
  * 的判据只有一个——`ErbIndex`。根里只有游戏目录时，作者自己那份定义永远进不了名录，
  * 腿就一律"没有定义/没有引用"（不是报错，是**根本看不见**）。
+ *
+ * 为什么基座库也要进：口上域里的 `CALL` 大多指向口上域之外的基础库函数；只收
+ * 口上根时，诊断会把整片基础库调用误报成「未定义的调用目标」。
  *
  * 三条口径都在这里，`plugin.ts` 只做接线：
  * 1. **判等一律走 `pathKey`**（折叠大小写与分隔符）：同一目录的两种写法是一个根，
@@ -13,7 +16,7 @@
  *    这条边界语义归契约的 `isPathUnder`（分隔符边界），本模块**不许另抄一份**；
  * 3. **祖先折叠**：某根整体落在另一根之内时只留祖先那份（父遍历已覆盖子根的全部
  *    方言文件）。折叠判据只看集合本身、不看输入顺序 ⇒ 同一份盘不会因根序不同得到
- *    不同扫描面；而**顺序本身要保留**（kojo 根在前、工作区新增根在后）：文件按根序
+ *    不同扫描面；而**顺序本身要保留**（项目根在前、工作区新增根在后）：文件按根序
  *    进入 `allFiles`，重排会让既有索引的定义次序跟着变，故签名是**有序**的。
  *
  * 零游戏名词（铁律 1）：这里只有泛型路径，没有任何游戏专有词。
@@ -31,13 +34,13 @@ export interface ScanRootPlan {
 }
 
 /**
- * 合成扫描根：`kojoRoots ∪ workspaceRoots`，先去重再折祖先。
+ * 合成扫描根：`projectRoots ∪ workspaceRoots`，先去重再折祖先。
  *
  * 空串 / 非字符串一律丢弃（平台侧给空根 = 没有这个根，不该让它把整盘遍历带成"根为空"
  * 的怪形态）。根的条数量级 < 20，O(n²) 的折叠不必上索引结构。
  */
-export function planScanRoots(kojoRoots: readonly string[], workspaceRoots: readonly string[]): ScanRootPlan {
-  const candidates = [...kojoRoots, ...workspaceRoots].filter((r) => typeof r === 'string' && r.length > 0);
+export function planScanRoots(projectRoots: readonly string[], workspaceRoots: readonly string[]): ScanRootPlan {
+  const candidates = [...projectRoots, ...workspaceRoots].filter((r) => typeof r === 'string' && r.length > 0);
 
   // 第一趟：pathKey 精确去重（保留**首次出现的写法**，顺序不变）
   const byKey = new Map<string, string>();

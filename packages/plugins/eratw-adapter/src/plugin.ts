@@ -708,6 +708,9 @@ export function createEratwAdapterPlugin(): Plugin {
             rootDir,
             adapterId: ERATW.gameId,
             kojoPaths: [personalKojo],
+            // 只读基座库：整棵 ERB 树（引擎 Program.ErbDir）。语言服务据此解析
+            // 個人口上之外的 @函数 / #DIM 声明；写授权仍只有下面的 personalKojo。
+            libraryPaths: [join(rootDir, ...ERATW.erbDir)],
             savDir: join(rootDir, ...ERATW.savDir),
             // 提议可写路径（用户批准后由内核 io 放行；见 ProjectService.approveWritablePaths）
             // sav 目录随 v0.2 第十五批加入提议：注入器写档需要（kernel 第一道闸

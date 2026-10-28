@@ -41,7 +41,7 @@ import type {
   GameProject,
   Logger,
 } from '@kojo/plugin-api';
-import { CONVENTION_SEVERITY_ORDER } from '@kojo/plugin-api';
+import { CONVENTION_SEVERITY_ORDER, isLibraryOnlyPath } from '@kojo/plugin-api';
 import { duplicateFunctionRule } from './rules/duplicate-function';
 import { sugarStaticConventionsRule } from './rules/sugar-conventions';
 import type { LintCache, LintFileBucket, LintUnitEntry } from './snapshot';
@@ -384,7 +384,9 @@ export class ConventionEngine implements ConventionLinterService {
           policy: this.deps.getAdapterPolicy(),
         })
       : null;
-    const files = [...index.files.values()];
+    // 约定校验面向**作者范围**：基座库（整棵 ERB）虽进了语言服务索引，
+    // 但它只读、且常带游戏自带的重复定义/风格差异，逐文件规则不该替它出报告。
+    const files = [...index.files.values()].filter((f) => !isLibraryOnlyPath(project, f.path));
 
     /**
      * 投机预取（PERF-12b → PERF-12c 收窄）：与快照装载**并行**发出批量读盘。

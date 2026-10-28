@@ -21,7 +21,7 @@ import type {
   PluginContext,
   ProjectService,
 } from '@kojo/plugin-api';
-import { NAV_SCOPE_EVENT } from '@kojo/plugin-api';
+import { NAV_SCOPE_EVENT, isLibraryOnlyPath } from '@kojo/plugin-api';
 import { type NavigatorTree, buildNavigatorTree, shouldRebuildIndex } from './tree';
 
 /**
@@ -43,6 +43,11 @@ export interface NavigatorStore {
   readonly tree: NavigatorTree | null;
   /** 索引是否就绪 */
   readonly indexReady: boolean;
+  /**
+   * 面向作者的函数索引（additive）：已剔除只读基座库文件。
+   * 建树与面板搜索共用这一份，避免基础库函数混进「口上导航」的孤儿计数/搜索结果。
+   */
+  readonly index: ErbIndex | null;
   /** 当前"只看"范围（宿主广播的那一份；面板搜索与建树共用同一个戳） */
   readonly scope: ErbScopeStamp | null;
   /** 索引/建树失败原因（必须可见 + 可重试，不静默停在占位） */
@@ -71,6 +76,32 @@ export function createNavigatorStore(ctx: PluginContext, deps: {
   /** 上一次建树所用的索引实例（去重判据：同一实例不重复建树，见 `shouldRebuildIndex`） */
   let lastBuiltIndex: ErbIndex | null = null;
   /**
+   * 只读基座库过滤后的作者索引（additive）。
+   * 按**源索引实例**记忆：同一份索引重复 refresh（project.opened 与
+   * kojo.functionChanged 成对触发）必须拿到同一实例，否则 `shouldRebuildIndex`
+   * 的去重失效，95k 函数会被白建两遍树。
+   */
+  let authorIndexFrom: ErbIndex | null = null;
+  let authorIndex: ErbIndex | null = null;
+  /** 当前对面板暴露的作者视图（与建树所用同一实例） */
+  let authorView: ErbIndex | null = null;
+  const authorIndexOf = (index: ErbIndex | null): ErbIndex | null => {
+    if (index === null) return null;
+    if (authorIndexFrom === index) return authorIndex;
+    const p = project.current();
+    if (!p || (p.libraryPaths?.length ?? 0) === 0) {
+      authorIndexFrom = index;
+      authorIndex = index;
+      return index;
+    }
+    authorIndexFrom = index;
+    authorIndex = {
+      ...index,
+      files: new Map([...index.files].filter(([, f]) => !isLibraryOnlyPath(p, f.path))),
+    };
+    return authorIndex;
+  };
+  /**
    * 当前"只看"范围（宿主经 `NAV_SCOPE_EVENT` 广播的那一份，插件不持有判据）。
    * 上一次建树所用的范围 key——与索引实例**并列**的去重位：范围变了必须重扫，
    * 索引没变也不算"已经建过"（这正是 C3 批留下的那条断线：选择器只喂了全文检索）。
@@ -97,15 +128,17 @@ export function createNavigatorStore(ctx: PluginContext, deps: {
     // 双双触发 refresh，两者拿到的是同一个索引实例——同一实例不重复建树
     // （`buildNavigatorTree` 在 95k 函数上是近秒级开销，白跑第二遍纯属浪费）。
     // 但**范围变化抵消这条去重**：同一份索引换个范围就是另一棵树。
+    const scoped = authorIndexOf(index);
+    authorView = scoped;
     const scopeKey = scope?.key ?? '';
-    if (!shouldRebuildIndex(lastBuiltIndex, index) && lastBuiltScopeKey === scopeKey) return;
-    lastBuiltIndex = index;
+    if (!shouldRebuildIndex(lastBuiltIndex, scoped) && lastBuiltScopeKey === scopeKey) return;
+    lastBuiltIndex = scoped;
     lastBuiltScopeKey = scopeKey;
-    if (!index || !project.current()) {
+    if (!scoped || !project.current()) {
       tree = null;
       indexReady = index !== null;
     } else {
-      tree = buildNavigatorTree(index, currentFamilyIndex(), project.current()!.charaIndex, {
+      tree = buildNavigatorTree(scoped, currentFamilyIndex(), project.current()!.charaIndex, {
         scope,
       });
       indexReady = true;
@@ -170,6 +203,9 @@ export function createNavigatorStore(ctx: PluginContext, deps: {
     },
     get indexReady() {
       return indexReady;
+    },
+    get index() {
+      return authorView;
     },
     get scope() {
       return scope;

@@ -16,7 +16,7 @@ import type {
   SugarLiftService,
   SugarTranspileService,
 } from '@kojo/plugin-api';
-import { WellKnownServices, readReplayDeterminability, WriteNotAllowedError } from '@kojo/plugin-api';
+import { isLibraryOnlyPath, WellKnownServices, readReplayDeterminability, WriteNotAllowedError } from '@kojo/plugin-api';
 import { createKernel, type Kernel } from '../src/kernel';
 import { NodeBridge } from './helpers/node-bridge';
 import { MemoryStorageBackend } from './helpers/memory-storage';
@@ -141,6 +141,8 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       expect(k1.length).toBeGreaterThan(50);
 
       // 4. 家族识别覆盖率（FamilyIndexRule 对全量函数名）
+      // 口径：只数**作者口上域**的函数——索引面已扩到整棵 ERB（只读基座库），
+      // 基础库函数本就不归家族规则管，混进来会把覆盖率稀释成一条假红线。
       const adapterRule = kernel.slots.query('game.adapter')[0]?.adapter.functionFamilyIndex;
       expect(adapterRule).toBeTruthy();
       let matched = 0;
@@ -151,6 +153,7 @@ describe.skipIf(!SMOKE_DIR)('真实 eraTW 工程集成冒烟', () => {
       const byChara = new Map<number, { families: Set<string>; faces: Set<string>; count: number }>();
       for (const refs of index.byName.values()) {
         for (const ref of refs) {
+          if (isLibraryOnlyPath(project, ref.filePath)) continue;
           const m = adapterRule!.match(ref.name);
           if (m) {
             matched++;

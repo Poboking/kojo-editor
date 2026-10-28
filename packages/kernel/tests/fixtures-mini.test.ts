@@ -49,10 +49,11 @@ describe.skipIf(!existsSync(MINI_DIR))('迷你模式集成冒烟（合成 fixtur
     expect(project.charaIndex.get(1)?.kojoDir).toBeTruthy();
     expect(project.charaIndex.get(1)?.name).toBe('测试角色');
 
-    // 索引：kojoPaths 下 2 个 ERB（001/002）
+    // 索引：项目级名录 = 整棵 ERB（口上 2 个 + 口上域外的 KOJO_MESSAGE.ERB）
+    // ——库根（libraryPaths）是口上根的祖先，索引根经祖先折叠后只走 ERB 一次。
     const parser = kernel.services.get<ErbParserService>('erb.parser');
     const index = await parser.ensureIndex();
-    expect(index.files.size).toBe(2);
+    expect(index.files.size).toBe(3);
     let totalFunctions = 0;
     for (const f of index.files.values()) totalFunctions += f.functions.length;
     expect(totalFunctions).toBeGreaterThan(0);

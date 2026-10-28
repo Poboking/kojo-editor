@@ -605,6 +605,7 @@ export {
   basename,
   extname,
   isPathUnder,
+  isLibraryOnlyPath,
   pathKey,
   shortPath,
   type PathStyle,

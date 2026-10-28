@@ -221,8 +221,15 @@ async function waitUntil(cond: () => boolean, what: string): Promise<void> {
   if (!cond()) throw new Error(`等待超时：${what}`);
 }
 
-function openProject(h: Harness, rootDir: string, kojoPaths: string[]): void {
-  const project: GameProject = { rootDir, adapterId: 'test', kojoPaths, writablePaths: [], charaIndex: new Map() };
+function openProject(h: Harness, rootDir: string, kojoPaths: string[], libraryPaths?: string[]): void {
+  const project: GameProject = {
+    rootDir,
+    adapterId: 'test',
+    kojoPaths,
+    ...(libraryPaths === undefined ? {} : { libraryPaths }),
+    writablePaths: [],
+    charaIndex: new Map(),
+  };
   h.emit('project.opened', { project });
 }
 
@@ -321,6 +328,73 @@ describe('erb-parser · 索引根 = kojoPaths ∪ 工作区全部根', () => {
 
     expect(h.walks).toEqual(['/game/kojo', '/game/kojo-备份']);
     expect([...idx.files.keys()].sort()).toEqual([GAME_FILE, '/game/kojo-备份/z.ERB'].sort());
+    h.dispose();
+  });
+});
+
+/* ============================ 只读基座库（项目级名录） ============================ */
+
+type DecoratorContribution = {
+  decorate(request: { path: string; text: string }): Array<{ message: string }>;
+};
+function decoratorOf(h: Harness, id: string): DecoratorContribution {
+  const hit = h.slots.find((s) => s.kind === 'ui.editor.decorator' && s.contribution.id === id);
+  if (!hit) throw new Error(`ui.editor.decorator '${id}' 未注册`);
+  return hit.contribution as unknown as DecoratorContribution;
+}
+
+describe('erb-parser · 索引根含只读基座库', () => {
+  it('libraryPaths 并入项目根：口上域外的基础库 CALL 不再报「未定义」（祖先折叠 ⇒ 只走一次整棵 ERB）', async () => {
+    const kojo = '/game/ERB/口上/a.ERB';
+    const files = {
+      [kojo]: '@KOJO_A\n\tCALL BASE_FOO()\n',
+      '/game/ERB/base.ERB': '@BASE_FOO\n\tRETURN 1\n',
+    };
+    const h = activateWith(files, []);
+    openProject(h, '/game', ['/game/ERB/口上'], ['/game/ERB']);
+    const idx = await h.parser().ensureIndex();
+
+    expect(h.walks).toEqual(['/game/ERB']);
+    expect([...idx.byName.keys()].sort()).toEqual(['BASE_FOO', 'KOJO_A']);
+    expect([...idx.files.keys()].sort()).toEqual(['/game/ERB/base.ERB', kojo].sort());
+    expect(decoratorOf(h, 'erb-reference').decorate({ path: kojo, text: files[kojo]! })).toEqual([]);
+    h.dispose();
+  });
+
+  it('缺 libraryPaths ⇒ 与旧版逐字一致：只扫口上根，域外目标仍按「未定义」报（零回归）', async () => {
+    const kojo = '/game/ERB/口上/a.ERB';
+    const files = {
+      [kojo]: '@KOJO_A\n\tCALL BASE_FOO()\n',
+      '/game/ERB/base.ERB': '@BASE_FOO\n\tRETURN 1\n',
+    };
+    const h = activateWith(files, []);
+    openProject(h, '/game', ['/game/ERB/口上']);
+    const idx = await h.parser().ensureIndex();
+
+    expect(h.walks).toEqual(['/game/ERB/口上']);
+    expect(idx.byName.has('BASE_FOO')).toBe(false);
+    const marks = decoratorOf(h, 'erb-reference').decorate({ path: kojo, text: files[kojo]! });
+    expect(marks).toHaveLength(1);
+    expect(marks[0]!.message).toContain('BASE_FOO');
+    h.dispose();
+  });
+
+  it('基座库只扩索引面，不改变写授权（writablePaths 不在索引根的判据里）', async () => {
+    const h = activateWith(baseFiles(), []);
+    const project: GameProject = {
+      rootDir: '/game',
+      adapterId: 'test',
+      kojoPaths: ['/game/kojo'],
+      libraryPaths: ['/game'],
+      writablePaths: ['/game/kojo'],
+      charaIndex: new Map(),
+    };
+    h.emit('project.opened', { project });
+    const idx = await h.parser().ensureIndex();
+
+    expect(h.walks).toEqual(['/game']);
+    expect(idx.byName.has('GAME_FOO')).toBe(true);
+    expect(project.writablePaths).toEqual(['/game/kojo']);
     h.dispose();
   });
 });

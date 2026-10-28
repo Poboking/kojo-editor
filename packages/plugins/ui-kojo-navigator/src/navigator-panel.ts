@@ -75,13 +75,13 @@ const MIN_QUERY = 2;
 const COND_BADGE_CAP = 2;
 
 export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelProps) => unknown {
-  const { ctx, parser, conditionExtractor, store, currentFamilyIndex, currentFaceLabels } = deps;
+  const { ctx, conditionExtractor, store, currentFamilyIndex, currentFaceLabels } = deps;
 
   /* ------------------------------ 面板组件 ------------------------------ */
 
   function NavigatorPanel(props: UIPanelProps): unknown {
     /** 每帧开头取一次外部源（与原先直接读闭包变量同值：状态只在 `notify()` 前后变化） */
-    const { tree, indexReady, loadError, scope, treeListeners, refresh, indexState } = store;
+    const { tree, indexReady, loadError, scope, treeListeners, refresh, indexState, index } = store;
     const [, force] = useState(0);
     const [selectedNo, setSelectedNo] = useState<number | null>(null);
     const [query, setQuery] = useState('');
@@ -157,10 +157,10 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
 
     const hits: SearchHit[] = useMemo(() => {
       if (!indexReady || deferredQuery.trim().length < MIN_QUERY) return [];
-      // 索引不变时 deferredQuery 驱动；parser.currentIndex() 在面板生命周期内稳定。
+      // 索引不变时 deferredQuery 驱动；store.index 在面板生命周期内稳定（同一源索引实例）。
       // 结果按（索引实例 × 查询串 × 范围 × 归属表）记忆（searchFunctionsCached）——无关重渲染
       // （徽章刷新 / 面板宿主重渲）不再重跑 99k 扫描。
-      const idx = parser.currentIndex();
+      const idx = index;
       return idx
         ? searchFunctionsCached(idx, deferredQuery, currentFamilyIndex(), SEARCH_LIMIT, { scope })
         : [];

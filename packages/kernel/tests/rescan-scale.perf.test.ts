@@ -89,6 +89,14 @@ const ACTIVE_TIERS = FILES_ENV ? FILES_ENV.split(',').map((s) => Number(s.trim()
 const ACTIVE_REPS = REPS_ENV ? Math.max(1, Number(REPS_ENV)) : REPS;
 const RUN_TAG = `${process.pid}-${Date.now().toString(36)}`;
 
+/**
+ * 合成盘里**口上域之外**的方言文件数（`ERB/口上・メッセージ関連/KOJO_MESSAGE.ERB` +
+ * `ERB/共通/合成自定名.ERH`）。项目级索引批起索引面 = 口上根 ∪ 只读基座库根（整棵 ERB），
+ * 所以「扫到多少棵 / 复用多少棵 / 抽取多少棵」的口径是 `files + LIBRARY_DIALECT_FILES`；
+ * 面向作者的校验分区仍只数口上域（`files`）。
+ */
+const LIBRARY_DIALECT_FILES = 2;
+
 /** 单轮四段的一把读数（全部 `performance.now()` 墙钟；ms） */
 interface RoundReading {
   readonly kind: 'COLD' | 'HOT0' | 'ONE' | 'DIGEST';
@@ -559,14 +567,19 @@ describe('PERF-9 改一棵的重抽/重校成本随规模的形状（合成可�
       async () => {
         const readings = await measureTier(files);
         expect(readings.length).toBe(ACTIVE_REPS * 4);
+        // 索引面 = 口上根 ∪ 只读基座库根（整棵 ERB）：合成盘里口上域之外还有
+        // `ERB/口上・メッセージ関連/KOJO_MESSAGE.ERB`（路由总表）与
+        // `ERB/共通/合成自定名.ERH`（作者自定名表），这两份也计入 `Indexed N ERB files`
+        // 与 `reused r/t`、并参与抽取 ⇒ 口径是 `files + LIBRARY_DIALECT_FILES`。
+        const indexed = files + LIBRARY_DIALECT_FILES;
 
         for (const r of readings) {
           // —— 判据①「比值可读出」：三段都拿到正数，产品自己的分段读数也拿到了
           for (const v of [r.openMs, r.indexMs, r.extractMs, r.lintMs]) {
             expect(Number.isFinite(v) && v > 0).toBe(true);
           }
-          // —— 规模自证：这一档真的扫到了这么多棵，而且真的不是玩具盘
-          expect(r.indexedFiles).toBe(files);
+          // —— 规模自证：这一档真的扫到了这么多棵（含基座库那两份），而且真的不是玩具盘
+          expect(r.indexedFiles).toBe(indexed);
           expect(r.condFunctions).toBeGreaterThan(files * 20);
           // —— 内核不静默（AGENTS §二 铁律 4）：任何一轮都不许有规则静默失败
           expect(r.failedRules).toBe(0);
@@ -585,27 +598,27 @@ describe('PERF-9 改一棵的重抽/重校成本随规模的形状（合成可�
         const one = readings.find((r) => r.kind === 'ONE')!;
         const digest = readings.find((r) => r.kind === 'DIGEST')!;
 
-        // —— 判据②：逐轮的「复用/重算」必须等于该轮该看到的数
+        // —— 判据②：逐轮的「复用/重算」必须等于该轮该看到的数（索引/抽取面含基座库）
         expect(cold.indexReused).toBe(0);
-        expect(cold.indexTotal).toBe(files);
+        expect(cold.indexTotal).toBe(indexed);
         expect(cold.extractReused).toBe(0);
-        expect(cold.extractRecomputed).toBe(files);
+        expect(cold.extractRecomputed).toBe(indexed);
 
         // 零改动：三段全命中，重算 0 棵（这就是「复用不为假」最强的一条反证）
-        expect(hot0.indexReused).toBe(files);
-        expect(hot0.extractReused).toBe(files);
+        expect(hot0.indexReused).toBe(indexed);
+        expect(hot0.extractReused).toBe(indexed);
         expect(hot0.extractRecomputed).toBe(0);
 
         // 改一棵：索引与抽取都只该重算那一棵
-        expect(one.indexReused).toBe(files - 1);
-        expect(one.indexTotal).toBe(files);
-        expect(one.extractReused).toBe(files - 1);
+        expect(one.indexReused).toBe(indexed - 1);
+        expect(one.indexTotal).toBe(indexed);
+        expect(one.extractReused).toBe(indexed - 1);
         expect(one.extractRecomputed).toBe(1);
 
         // 改摘要：ERB 一个没动 ⇒ 索引仍按文件复用；抽取/校验的全局判据失效 ⇒ 一次性全量
-        expect(digest.indexReused).toBe(files);
+        expect(digest.indexReused).toBe(indexed);
         expect(digest.extractReused).toBe(0);
-        expect(digest.extractRecomputed).toBe(files);
+        expect(digest.extractRecomputed).toBe(indexed);
 
         // —— 判据②（PERF-12b 追加）：跨文件分区复用读数
         // COLD：分区路径全量建贡献（复用 0，但规则确实走了分区）；本轮装配了 4 条分区规则

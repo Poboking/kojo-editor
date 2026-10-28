@@ -41,6 +41,15 @@ export interface GameProject {
   adapterId: string;
   /** 口上 ERB 目录（绝对路径） */
   kojoPaths: string[];
+  /**
+   * 只读基座库根（绝对路径；可选）。语言服务建索引时与 `kojoPaths` 一并纳入：
+   * 定义 / 引用 / 补全 / 诊断都以这份全项目名录为判据，避免"口上域外的基础库函数
+   * 全被报未定义"。它**不进作者口上树**、**不参与 `writablePaths` 的写授权**，
+   * 面向作者的聚合视图（约定校验 / 函数导航）须按路径把它排除。
+   *
+   * 缺省 ⇒ 行为与旧版逐字一致（旧适配器零改动）。
+   */
+  readonly libraryPaths?: readonly string[];
   /** 存档目录（无此概念的游戏可缺省） */
   savDir?: string;
   /** 适配器提议、用户批准后的可写路径（绝对路径） */

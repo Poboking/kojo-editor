@@ -142,6 +142,25 @@ export function pathKey(p: string): string {
 }
 
 /**
+ * 该文件是否**只属于只读基座库**（语言服务索引面，不属于作者可见/可写范围）。
+ *
+ * 基座根与口上根可能嵌套（基座 = 整棵 ERB，口上 = 其中某个子树）：落在基座内、
+ * 同时又落在任一 `kojoPaths` 内的文件**仍算作者范围**；两者都不落 ⇒ false。
+ * 作者工作区根不在游戏目录内（属常见形态），故不在此判据里叠加。
+ *
+ * 结构参数（不 import `GameProject`）只为让契约层与纯路径工具保持零运行期耦合。
+ */
+export function isLibraryOnlyPath(
+  project: { readonly kojoPaths: readonly string[]; readonly libraryPaths?: readonly string[] } | null | undefined,
+  path: string,
+): boolean {
+  const libs = project?.libraryPaths ?? [];
+  if (libs.length === 0) return false;
+  if (!libs.some((root) => isPathUnder(root, path))) return false;
+  return !project!.kojoPaths.some((root) => isPathUnder(root, path));
+}
+
+/**
  * 路径短显示（面板行内的定位文本用）：取**末两段**并以 `/` 连接。
  *
  * 判据口径：分隔符按 `[\\/]` 两者都切（输入可能是 Windows 原样路径，也可能是

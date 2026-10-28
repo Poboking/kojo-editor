@@ -337,6 +337,50 @@ describe('ConventionEngine', () => {
   });
 });
 
+/* ========================= 作者范围 vs 只读基座库 ========================= */
+
+describe('约定校验只覆盖作者范围（只读基座库不进报告）', () => {
+  const project: GameProject = {
+    rootDir: '/p',
+    adapterId: 'test',
+    kojoPaths: ['/p/kojo'],
+    libraryPaths: ['/p'],
+    writablePaths: ['/p/kojo'],
+    charaIndex: new Map(),
+  };
+
+  it('基座库文件被逐文件规则跳过，口上文件照常出报告', async () => {
+    const files = { '/p/base.ERB': '@BASE\n', '/p/kojo/a.ERB': '@A\n' };
+    const index = makeIndex(files);
+    const fileRule: ConventionRule = {
+      id: 'g.file',
+      description: 'demo',
+      severity: 'info',
+      scope: 'file',
+      checkFile: (_ctx, file) => [{ ruleId: 'g.file', severity: 'info', message: 'hit', filePath: file.path }],
+    };
+    const { engine } = harness({ index, project, adapterRules: [fileRule], files });
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId === 'g.file').map((i) => i.filePath)).toEqual(['/p/kojo/a.ERB']);
+  });
+
+  it('基座库内部的重复定义不算作者问题（只在作者范围内判重）', async () => {
+    const files = { '/p/base.ERB': '@DUP\n@DUP2\n@DUP2\n', '/p/kojo/a.ERB': '@A\n' };
+    const index = makeIndex(files);
+    const { engine } = harness({ index, project, files });
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId === 'erb.duplicate-function')).toEqual([]);
+  });
+
+  it('作者口上域内的重复定义照旧报（过滤没有吞掉作者自己的问题）', async () => {
+    const files = { '/p/kojo/a.ERB': '@A\n', '/p/kojo/b.ERB': '@A\n' };
+    const index = makeIndex(files);
+    const { engine } = harness({ index, project, files });
+    const rep = await engine.run();
+    expect(rep.issues.filter((i) => i.ruleId === 'erb.duplicate-function')).toHaveLength(1);
+  });
+});
+
 /* ========================= 语法糖侧约定（判据 = 转译器，W2 去重批） ========================= */
 
 /** 造一个只含一个 `.kojo1` 文件的索引 + 文本表 */

@@ -1155,7 +1155,7 @@ export function createErbParserPlugin(): Plugin {
         const wsSide = wsRoots === null ? 'workspace unavailable' : `${wsRoots.length} workspace`;
         ctx.log.info(
           `Scan roots resolved: ${plan.roots.length} to walk (` +
-            `${projectRoots.length} kojo + ${wsSide}, ` +
+            `${projectRoots.length} project + ${wsSide}, ` +
             `${plan.duplicated} duplicate / ${plan.nested} nested folded)`,
         );
         const p = build(plan.roots, gen, true, sources).finally(() => {
@@ -1473,16 +1473,18 @@ export function createErbParserPlugin(): Plugin {
         },
       };
 
-      // 响应式：项目打开 → 自动构建（根 = 口上根 ∪ 工作区根，见 startBuild）；项目关闭 → 清空
+      // 响应式：项目打开 → 自动构建（根 = 口上根 ∪ 只读基座库根 ∪ 工作区根，见 startBuild）；项目关闭 → 清空
       ctx.onDispose(
         ctx.bus.on('project.opened', (ev) => {
           const project: GameProject = ev.project;
           currentRoot = project.rootDir;
-          projectRoots = [...project.kojoPaths];
+          // 基座库（整棵 ERB）必须进索引：否则 CALL 判据只认口上域，
+          // 基础库函数会被整片误报「未定义的调用目标」。
+          projectRoots = [...project.kojoPaths, ...(project.libraryPaths ?? [])];
           index = null;
           generation++;
           activeSignature = '';
-          ctx.log.info(`Project opened; indexing (kojo roots: ${projectRoots.length})…`);
+          ctx.log.info(`Project opened; indexing (project roots: ${projectRoots.length})…`);
           // 不阻塞事件（构建可能数秒）；结果通过 kojo.functionChanged 广播
           void startBuild(generation).catch((err: unknown) => {
             ctx.log.error(`Index build failed: ${String(err)}`);

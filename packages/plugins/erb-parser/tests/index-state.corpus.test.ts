@@ -65,7 +65,8 @@ describe.skipIf(!SMOKE)('索引状态事实 · 真实语料自证', () => {
     const idx = parser.currentIndex()!;
     const s = readState(parser);
     console.log(
-      `[idx-state] 项目根=${project.rootDir} 口上根 ${project.kojoPaths.length} 条；` +
+      `[idx-state] 项目根=${project.rootDir} 口上根 ${project.kojoPaths.length} 条 / ` +
+        `只读基座库根 ${project.libraryPaths?.length ?? 0} 条；` +
         `本轮实走 ${s.rootsWalked} 个根 / 扫到 ${s.filesScanned} 个方言文件 / 名录 ${s.functions} 名` +
         `（索引侧 byName ${idx.byName.size}、files ${idx.files.size}、未读入 ${s.filesFailed ?? '-'} 个）；` +
         `phase=${s.phase} coverage=${s.coverage}；来源：` +
@@ -77,10 +78,11 @@ describe.skipIf(!SMOKE)('索引状态事实 · 真实语料自证', () => {
     // 失败面（IDX-SILENT）：真盘这一轮确实零失败——新字段在健康盘上不许自说自话地报警
     expect(s.filesFailed, '真实语料本轮零失败').toBe(0);
     expect(s.functions).toBe(idx.byName.size);
-    expect(s.functions, '名录条数（历史读数 99,028，本批一个字节没动解析面）').toBeGreaterThanOrEqual(90_000);
+    expect(s.functions, '名录条数（口上域历史读数 99,028；项目级索引批起并入基座库 ⇒ ~110k）').toBeGreaterThanOrEqual(90_000);
     // 逐来源事实是**两条**（提供方陈述 project + workspace 两类位置），顺序固定
     expect(s.sources.map((f) => f.source)).toEqual(['project', 'workspace']);
-    expect(s.sources[0]!.offered).toBe(project.kojoPaths.length);
+    // project 来源的条数 = 口上根 ∪ 只读基座库根（项目级索引批起两者一并纳入索引面）
+    expect(s.sources[0]!.offered).toBe(project.kojoPaths.length + (project.libraryPaths?.length ?? 0));
 
     // ---- 2. empty 点位：真盘上"扫到了文件、一个函数都没有"（26 份 .ERH ⇒ 0 个 @ 定义） ----
     const quiet = await parser.buildIndex([quietRoot]);

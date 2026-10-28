@@ -10,6 +10,7 @@
  */
 
 import type { ConventionIssue, ConventionRule, ConventionSuppression } from '@kojo/plugin-api';
+import { isLibraryOnlyPath } from '@kojo/plugin-api';
 
 export const DUPLICATE_FUNCTION_RULE_ID = 'erb.duplicate-function';
 
@@ -50,7 +51,9 @@ export const duplicateFunctionRule: ConventionRule = {
     const suppressions = compileSuppressions(ctx.policy);
     const suppressedTotals = new Map<string, { count: number; reason: string }>();
 
-    for (const refs of ctx.index.byName.values()) {
+    for (const allRefs of ctx.index.byName.values()) {
+      // 只读基座库里的重复是游戏自带形态，不是作者要修的东西：只在作者范围内判重
+      const refs = allRefs.filter((r) => !isLibraryOnlyPath(ctx.project, r.filePath));
       if (refs.length < 2) continue;
       const hit = matchSuppression(suppressions, refs[0]!.normalizedName);
       if (hit !== undefined) {

@@ -126,6 +126,8 @@ describe('eraTW adapter · loadProject', () => {
 
     expect(project.adapterId).toBe('eratw');
     expect(project.kojoPaths).toEqual(['/game/ERB/口上・メッセージ関連/個人口上']);
+    // 只读基座库 = 整棵 ERB（语言服务索引面；**不进**下面的写授权）
+    expect(project.libraryPaths).toEqual(['/game/ERB']);
     expect(project.savDir).toBe('/game/sav');
     expect(project.writablePaths).toEqual([
       '/game/ERB/口上・メッセージ関連/個人口上',

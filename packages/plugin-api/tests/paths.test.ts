@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { basename, dirname, extname, isAbsolute, isPathUnder, join, normalize, pathKey, pathStyle, shortPath } from '../src/paths';
+import { basename, dirname, extname, isAbsolute, isLibraryOnlyPath, isPathUnder, join, normalize, pathKey, pathStyle, shortPath } from '../src/paths';
 
 describe('路径工具 · win32', () => {
   it('风格判定', () => {
@@ -72,6 +72,32 @@ describe('isAbsolute / pathKey', () => {
   it('pathKey 用于缓存键：win32 折叠大小写', () => {
     expect(pathKey('C:\\Game\\A.erb')).toBe(pathKey('c:\\game\\a.ERB'));
     expect(pathKey('/A/File')).toBe('/A/File');
+  });
+});
+
+describe('isLibraryOnlyPath（只读基座库范围判据：作者视图按它排除）', () => {
+  const project = { kojoPaths: ['C:\\Game\\eratw\\ERB\\口上\\個人口上'], libraryPaths: ['C:\\Game\\eratw\\ERB'] };
+
+  it('基座内、口上外 ⇒ true（基础库文件不该进作者视图）', () => {
+    expect(isLibraryOnlyPath(project, 'C:\\Game\\eratw\\ERB\\SYSTEM\\base.ERB')).toBe(true);
+  });
+
+  it('嵌套在口上根内 ⇒ false（作者范围优先，基座是它的祖先）', () => {
+    expect(isLibraryOnlyPath(project, 'C:\\Game\\eratw\\ERB\\口上\\個人口上\\001\\a.ERB')).toBe(false);
+  });
+
+  it('基座之外 ⇒ false', () => {
+    expect(isLibraryOnlyPath(project, 'C:\\Game\\eratw\\CSV\\x.csv')).toBe(false);
+  });
+
+  it('缺 libraryPaths（旧适配器）⇒ 恒 false：零回归', () => {
+    expect(isLibraryOnlyPath({ kojoPaths: ['C:\\Game\\kojo'] }, 'C:\\Game\\kojo\\a.ERB')).toBe(false);
+    expect(isLibraryOnlyPath(null, 'C:\\Game\\kojo\\a.ERB')).toBe(false);
+    expect(isLibraryOnlyPath(undefined, 'C:\\Game\\kojo\\a.ERB')).toBe(false);
+  });
+
+  it('win32 大小写不敏感（与 isPathUnder 同一判据，不另抄一份）', () => {
+    expect(isLibraryOnlyPath(project, 'c:/game/ERATW/erb/base.erb')).toBe(true);
   });
 });
 
