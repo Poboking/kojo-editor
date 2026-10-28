@@ -345,7 +345,10 @@ const TIER_HUGE: EditorOptionPatch = {
     indentation: false,
     highlightActiveIndentation: false,
   },
-  // PS-4 实测：折叠一开就多一次整篇 copy（9 → 10），与「判档在取文之前」冲突
+  // 折叠（R9 2026-10-28 复核后**保留**，理由换成读数）：那一刀 = `parseErbText` +
+  // `scanControlFlow` 两遍整篇扫描，实测 **24,197 行 26.4 ms / 52,601 行 51.0 ms**，
+  // 按版本记忆化 ⇒ 每次停笔一拍。50k 行这一档付 51 ms 换折痕，不划算；
+  // 5k–50k 那档只要 26 ms 以下，上一批已经放开（`foldingEnabledForLineCount` 是唯一判据）。
   folding: false,
 };
 

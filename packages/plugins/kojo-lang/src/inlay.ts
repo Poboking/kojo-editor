@@ -76,7 +76,10 @@ export function provideInlayHints(
   if (request.kind !== 'inlayHint') return undefined;
   if (!isKojo2Request(request)) return undefined;
   try {
-    const hints = kojo2InlayHints(request.text, undefined, {
+    // R1（2026-10-28）：宿主给的行窗口原样下传。判据不变——`kojo2InlayHints` 只少判
+    // 窗口外的行；整篇 lex+parse 仍照旧（这也是宿主今天**不给** `kojo2` 传窗口的原因：
+    // 那份解析 24,197 行实测 57.7 ms，窗口只省下 12 ms，换屏重跑反而更贵）。
+    const hints = kojo2InlayHints(request.text, request.range, {
       adapter: injection.adapter ?? null,
     });
     return { kind: 'inlayHint', hints: toEditorInlayHints(hints) };

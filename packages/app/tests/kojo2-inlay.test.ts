@@ -583,12 +583,18 @@ describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空',
     expect(provide(fake, fakeModel('# 变量 甲 整数', { disposed: true })).hints).toEqual([]);
   });
 
-  it('超出体量档（≥ LARGE_FILE_LINES）⇒ 整体让路（与 stickyScroll / 面包屑同一条线）', () => {
+  it('安装器**不自带**体量闸：判据单源在宿主档位（R1 2026-10-28 撤掉自带那枚）', () => {
     stubFlag(true);
     const fake = fakeMonaco();
     installKojo2InlayHintsProvider(fake.monaco);
     const model = fakeModel('# 变量 甲 整数', { lineCount: LARGE_FILE_LINES });
-    expect(provide(fake, model).hints).toEqual([]);
+    // 这枚安装器已不在装配路径上（`language-capabilities` 把 inlay 记成 `shared`，走
+    // `editor-global-providers.ts` 那张总表）。早先它自己还有一枚 `overBudget()`，删掉它的
+    // 理由不是"放宽判据"，而是"判据只在宿主档位留一处"：档外的 kojo2 文件在
+    // `inlayHintsFor` 里就被 `inlayHintsAffordable(languageId, lineCount)` 挡在门外，
+    // **根本不会被问到**（`ps4-provider-seams.test.ts` 的「kojo2 档外照旧不问供方」钉着）。
+    // 留一枚在供方自己身上的话，两处判据迟早会漂（改一处、另一处继续按老行数放行）。
+    expect(provide(fake, model).hints.map((hint) => hint.label)).toEqual(['整数']);
   });
 
   it('桩 model 缺 `getLineCount` ⇒ 不因体量判据缺席而回空', () => {

@@ -31,7 +31,6 @@ import { kojo2DocumentSymbols, type Kojo2SymbolFact } from '@kojo/kojo-lang';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { erbParserIndex } from '../editor-global-providers';
 import { documentRequestFields } from '../language-service-request';
-import { LARGE_FILE_LINES } from '../editor-options';
 import { isErbLike } from '../lift-preview';
 import { erbFileInIndex, MARKER_DEBOUNCE_MS } from './pane-helpers';
 import type { CrumbTreeCache, MutableRef } from './pane-context';
@@ -204,9 +203,8 @@ export function useBreadcrumb(params: BreadcrumbParams): BreadcrumbControls {
       //
       // 1020 编辑器体感批改了**大文件那一闸的位置**：此前它在最前面按行数一刀切清空，
       // 于是 ② 这条零解析的索引快路对 ≥5,000 行的文件**根本走不到**——5,000 行正是语料里
-      // "长但天天读"的那一档，VS Code 在大文件仍保留面包屑。现在体量闸落在④：只有"缓存没有、
-      // 索引不认、只能现解析"时才按体量清链（清链必须清的理由逐字不变：旧链会把别的文件的行号
-      // reveal 进当前文件）。
+      // "长但天天读"的那一档，VS Code 在大文件仍保留面包屑。R9（2026-10-28）把剩下那半道也
+      // 撤了：④ 不再按体量清链，改为照解析（读数：24,197 行整篇 4.31 ms）。
       crumbRefreshRef.current = (forceParse = false) => {
         const ed = editorRef.current;
         const path = filePathRef.current;
@@ -270,12 +268,13 @@ export function useBreadcrumb(params: BreadcrumbParams): BreadcrumbControls {
             chainOf(cache.symbols);
             return;
           }
-          // ④ 只剩"现解析"这一条路：大文件不值这一刀，清链（**不是**维持现状，理由见上）
-          if (cursor.lineCount >= LARGE_FILE_LINES) {
-            crumbLastRef.current = null;
-            apply([]);
-            return;
-          }
+          // ④ 只剩"现解析"这一条路：**照解析**（R9，2026-10-28 撤掉体量闸）
+          //
+          // 原来这里按 `LARGE_FILE_LINES` 清链，理由是"大文件不值这一刀"。R9 量了那一刀：
+          // 整篇 `parseErbText` + 符号表在 **24,197 行 4.31 ms / 5,000 行 1.91 ms**
+          // （`parseErbText` 是 0.1μs/行量级），而且它只在"缓存没有 + 索引不认 + 停笔那一拍"
+          // 才跑一次——比作者为它放弃整条面包屑便宜得多。清链本身仍然是对的方向（旧链会把
+          // 别的文件的行号 reveal 进当前文件），但"因为文件大所以连解析都不做"这一条不成立。
           const symbols = collectDocumentSymbols(kernel.slots.query('ui.editor.languageService'), {
             kind: 'documentSymbol',
             ...documentRequestFields(model, path, kernel.project.current()),

@@ -26,7 +26,6 @@
  */
 import type * as Monaco from './entry';
 import type { GameAdapter } from '@kojo/kojo-core';
-import { LARGE_FILE_LINES } from '../ui/editor-options';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { kojo2InlayHints } from '@kojo/kojo-lang/inlay';
 import type { Kojo2InlayHint } from '@kojo/kojo-lang/inlay';
@@ -102,27 +101,20 @@ function adapterAt(source: Kojo2InlayAdapterSource): GameAdapter | undefined {
   return source;
 }
 
-/** 这份 model 是否超过行内提示的体量档（与 v1 `inlayHintsAffordable` 同一条线） */
-function overBudget(model: Monaco.editor.ITextModel): boolean {
-  try {
-    if (typeof model.getLineCount !== 'function') return false;
-    const lineCount = model.getLineCount();
-    return Number.isFinite(lineCount) && lineCount >= LARGE_FILE_LINES;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * 为 `kojo2` 语言注册 inlay hints provider，返回**幂等**的 disposable。
  *
  * - **无条件注册**（K2-SURFACE-DEFAULT：行内提示是只读呈现面，不读切流开关）；
  * - 只挂 {@link KOJO2_LANGUAGE_ID}：v1 的 ERB / `.kojo` 面由 `kojo-inlay-hints.ts` 的
  *   `registerForLanguageServices` 各挂各的，两边不重叠；
- * - 体量档判在请求之前（`LARGE_FILE_LINES` 同一条线）：超长文件里行内提示整体让路，
- *   与 stickyScroll / 面包屑 / codeLens 的规则一致；
  * - provider 内任何异常 ⇒ `{ hints: [] }`（不把编辑器的输入链带崩）；
  * - 注册失败原样外抛（只有一枚注册，没有半成品要回滚，宿主那侧的全有或全无才有机会收口）。
+ *
+ * **体量档（R1，2026-10-28）**：本安装器里原来有一条 `overBudget`（`LARGE_FILE_LINES`
+ * 以上整档返回空）——它随 B2c 一起**已经不是装配路径**了（kojo2 的 inlay 由共享收口挂上，
+ * 供方是插件），所以那一道闸在活链路上从来不存在；块掉它是删死代码，不是放宽判据。
+ * 活链路上的闸住在宿主 `editor-global-providers.ts::inlayHintsFor`，判据按**供方代价形状**
+ * 分流：`kojo2`（整篇 lex+parse，24,197 行 57.7 ms）继续吃体量档，ERB 那条腿已经没了。
  */
 export function installKojo2InlayHintsProvider(
   monaco: typeof Monaco,
@@ -135,7 +127,6 @@ export function installKojo2InlayHintsProvider(
     provideInlayHints(model, range) {
       try {
         if (typeof model.isDisposed === 'function' && model.isDisposed()) return emptyInlayResult();
-        if (overBudget(model)) return emptyInlayResult();
         const source = model.getValue();
         if (typeof source !== 'string') return emptyInlayResult();
         const adapter = adapterAt(adapterSource);

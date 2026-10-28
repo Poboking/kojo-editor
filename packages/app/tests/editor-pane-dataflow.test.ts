@@ -88,19 +88,34 @@ describe('异步 acquire 期间的视图/光标串档闸（#3）', () => {
   });
 });
 
-describe('大文件面包屑清空（#4 · 1020 编辑器体感批改了闸的位置）', () => {
-  it('crumbRefresh 对超阈值文件清空链而非维持旧链（旧链点击 = 把别的文件的行 reveal 进当前文件）', () => {
-    // 入口按**签名无关**的定位（PS-5 起它是 `(forceParse = false) =>`：参数会变，这条闸不该跟着漂）
+describe('面包屑的链归属（#4 · 1020 挪闸 / R9 撤闸）', () => {
+  /**
+   * 行为红线从头到尾没变：**链必须属于当前文件**——留着上一份文件的链，点击会把别一份
+   * 文件的行号 reveal 进来。1020 批把体量闸从最前面挪到"缓存与索引都给不出"之后；
+   * R9（2026-10-28）又把最后那半道撤了：整篇 `parseErbText` + 符号表 24,197 行实测
+   * **4.31 ms**，而且只在"缓存没有 + 索引不认 + 停笔那一拍"跑一次——为它清掉整条面包屑
+   * 不成立。于是守点变成两条源码形状：清链只在真的没有 ed/path/model 时发生；④ 那条腿
+   * 每次**先算出当前文件的符号**再上链。
+   */
+  it('没有 model / 文件 / 走糖视图 ⇒ 立刻清链（旧链不许留着）', () => {
     const start = BREADCRUMB.search(/crumbRefreshRef\.current = \(/);
     expect(start, '找不到 crumbRefresh 入口').toBeGreaterThanOrEqual(0);
-    const block = BREADCRUMB.slice(start, start + 3000);
-    expect(block).toMatch(/cursor\.lineCount >= LARGE_FILE_LINES[\s\S]{0,160}crumbLastRef\.current = null[\s\S]{0,60}apply\(\[\]\)/);
+    const block = BREADCRUMB.slice(start, start + 900);
+    expect(block).toMatch(
+      /if \(!ed \|\| !path \|\| sugarModelRef\.current \|\| !model\) \{[\s\S]{0,80}crumbLastRef\.current = null[\s\S]{0,40}apply\(\[\]\)/,
+    );
   });
-  it('但清空只在"缓存与索引都给不出"之后发生（大文件零解析出链是这一批要保住的收益）', () => {
+  it('④ 那条腿不再按体量清链：照解析，且排在索引快路之后、落缓存之后才上链', () => {
     const start = BREADCRUMB.search(/crumbRefreshRef\.current = \(/);
     const block = BREADCRUMB.slice(start, start + 3000);
-    const gate = block.indexOf('cursor.lineCount >= LARGE_FILE_LINES');
-    expect(gate, '体量闸不见了').toBeGreaterThan(-1);
-    expect(block.indexOf('symbolsFromIndex(path)')).toBeLessThan(gate);
+    expect(block, '体量闸该撤了（R9 读数 4.31 ms / 24,197 行）').not.toMatch(/cursor\.lineCount >= LARGE_FILE_LINES/);
+    const parseAt = block.indexOf('collectDocumentSymbols(');
+    expect(parseAt, '④ 的现解析不见了').toBeGreaterThan(-1);
+    const indexAt = block.indexOf('symbolsFromIndex(path,');
+    expect(indexAt, '索引快路不见了').toBeGreaterThan(-1);
+    expect(indexAt, '索引快路必须排在现解析之前（否则大文件白解析）').toBeLessThan(parseAt);
+    // 解析出来的树先落缓存再上链：否则下一次光标移动又白解析一遍
+    const tail = BREADCRUMB.slice(start + parseAt, start + parseAt + 500);
+    expect(tail).toMatch(/crumbTreeCacheRef\.current = \{[\s\S]{0,140}chainOf\(symbols\)/);
   });
 });

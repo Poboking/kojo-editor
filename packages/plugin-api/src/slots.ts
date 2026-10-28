@@ -874,6 +874,34 @@ export interface EditorInlayHintRequest extends EditorDocumentIdentity {
   readonly project: GameProject | null;
   /** 文件行数（体量事实；宿主据此降级。供方按既有纪律**不据此少报**） */
   readonly lineCount?: number;
+  /**
+   * 宿主这次想看的行窗口（additive，R1 2026-10-28）——Monaco `provideInlayHints` 第二参
+   * 原样下传（可视区 ±30 行，每段各问一次）；缺省 = 整篇。
+   *
+   * 供方**可以**只算这一段（成本从"正比于行数"变成"正比于视口"，这是大文件能不给提示
+   * 整档让路的唯一办法），但**不许改变它对这一段里每一行的说法**：窗口外的行本来也不该
+   * 出现，窗口内的行必须逐条等价。跨行状态（如 ERB 的 `[SKIPSTART]` 块）自己从头算——
+   * 窗口是"少答"，不是"换个判据"。
+   */
+  readonly range?: EditorInlayHintRange;
+}
+
+/** 行窗口（1 基闭区间；结构子集，与 Monaco `IRange` 的行字段同形，不需要整枚 Range） */
+export interface EditorInlayHintRange {
+  readonly startLineNumber: number;
+  readonly endLineNumber: number;
+  /**
+   * `startLineNumber` 那一行**行首**在 `text` 里的字符偏移（additive，R1 2026-10-28）。
+   *
+   * 存在的唯一理由：供方要跳过窗口之前那几万行，只能靠"数换行"逐行走位，
+   * 而这条路实测 **42 ns/行**——52,601 行的文末窗口光走位就 2.2 ms，把窗口化省下的钱
+   * 又还回去了。宿主（Monaco model）本来就有行首表，`getOffsetAt` 是一次二分。
+   *
+   * 提供方契约（供方据此校验，不满足就当没给）：`0 <= 值 <= text.length`，且
+   * `值 === 0 || text.charCodeAt(值 - 1) === 10`（`\n`）——即**行首**，不是行内某列。
+   * 缺省 = 供方自己按行号走位（纯函数调用方与老宿主走这条，结果逐条等价）。
+   */
+  readonly startOffset?: number;
 }
 
 /**
