@@ -50,7 +50,7 @@ export const ERB_SEMANTIC_CAPTURE_TIERS: Readonly<Record<string, SemanticRole>> 
   raw: ROLE.raw,
   // 2026-10-27 第三色批：`#DIM` 行的型 / 存储限定词（`CONST` / `DYNAMIC` / `CHARA` …）。
   // 消费链 = 默认开的结构层（`ui/tree-sitter-pref.ts` 的 `TREE_SITTER_DEFAULT = true`），
-  // 命中面见 queries/highlights.scm 的 @type 那段注释与 `tests/erb-ts-facets.test.ts` 的取证用例。
+  // 命中面见 queries/highlights.scm 的 @type 那段注释与 `tests/erb-ts-facets-engine.test.ts` 的取证用例。
   type: ROLE.type,
 };
 
