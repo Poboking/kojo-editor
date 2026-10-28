@@ -918,6 +918,12 @@ export interface EditorInlayHintResult {
 }
 
 
+/** 项目内一份文档的快照（B3e，additive）；缺席 = 只答请求文件这一篇。 */
+export interface EditorProjectFile {
+  readonly path: string;
+  readonly text: string;
+}
+
 /**
  * 查找引用请求（R2，2026-10-16 语言服务批）——同一单槽的**第七个**判别成员
  * （additive：往联合末尾追加，宿主与既有贡献方零改动）。
@@ -938,12 +944,18 @@ export interface EditorReferencesRequest extends EditorDocumentIdentity {
   readonly project: GameProject | null;
   /** 文件行数（体量事实，供贡献方按文件大小自行降级；缺省 = 未知，按不降级处理） */
   readonly lineCount?: number;
+  /** 项目内其他文档的快照（additive，B3e）；缺席 = 只答本篇 */
+  readonly projectFiles?: readonly EditorProjectFile[];
+  /** 快照是否完整（additive，B3e）；`false` = 宿主少给了，须如实降级 */
+  readonly projectFilesComplete?: boolean;
 }
 
 /** 查找引用响应；空数组 = 认这个文件但这个名字没有可证明的引用（**不猜**） */
 export interface EditorReferencesResult {
   readonly kind: 'references';
   readonly locations: readonly EditorSymbolLocation[];
+  /** 结果被截断（additive，B3e）：上限命中或快照不完整；缺省 = 未截断 */
+  readonly truncated?: boolean;
 }
 
 /**
@@ -982,6 +994,10 @@ export interface EditorRenameRequest extends EditorDocumentIdentity {
   readonly project: GameProject | null;
   /** 文件行数（体量事实，供贡献方按文件大小自行降级；缺省 = 未知，按不降级处理） */
   readonly lineCount?: number;
+  /** 项目内其他文档的快照（additive，B3e；口径同 {@link EditorReferencesRequest.projectFiles}） */
+  readonly projectFiles?: readonly EditorProjectFile[];
+  /** 快照是否完整（additive，B3e）；`false` ⇒ 改名全或无，整次拒绝并给理由 */
+  readonly projectFilesComplete?: boolean;
 }
 
 /** 重命名响应：可证明的编辑集，或一条给作者看的拒绝理由（二选一，铁律 4 不静默） */

@@ -294,6 +294,7 @@ export type {
   EditorLanguageServiceResult,
   EditorLiftPreviewContribution,
   EditorLiftPreviewItem,
+  EditorProjectFile,
   EditorReferencesRequest,
   EditorReferencesResult,
   EditorRenameEdit,
