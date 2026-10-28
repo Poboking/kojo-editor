@@ -48,6 +48,37 @@
 - **B3 语言面收口**：B3c–B3f 已落 dev；余 **CodeLens / 折叠 / 语义 / 缩进·回车 / 诊断 / codeAction**，其后才是 B5b（删宿主残留）与 LAU-4（ERB 进同一槽）。
 - ERB 波浪线：结构类与表达式级均已落地（结构 error / 表达式 warning，code `erb.expr-*`）；**CASE/PRINTDATA 条件保守排除**，仍是已知盲区。
 - `.kojo 预览`：已交付为常态功能（只读内存 model 原生渲染，默认不开启）；作者-facing 术语统一 `.kojo 语言 / .kojo 预览 / .kojo 校验 / .kojo 转译检查`，口径靠 review 维持。
+- **整条性能线并入主干（2026-10-29，`b/workbuddy/1029-perf-trunk`）**：本地 `dev` 落后 `origin/dev`
+  **65 条**，而 17 条性能批（P0-2 冷开 / P0-3 检索与大文件 / 折叠拆闸 / A 批 / B 批）**只在本地**——
+  不并轨的话下一批会站在两个月前的主干上（R4a/R4b 要碰的 `convention-linter` / `project-diagnostics`
+  正是别的线刚改过的文件）。本批一次性变基到 `c8521419`，21 个重叠文件里两处**真语义冲突**：
+  `src-tauri/src/lib.rs`（上游的排除规则 WS-10 × 本线的并行遍历 `threads` ⇒ 两者并存，
+  `walk_consider` 补排除腿与独立计数）与 `tree-sitter/client.ts`（上游的 `docIdOf` 号段 ×
+  本线的分拍 `postParse` ⇒ 都留）。变基带出**一处真回归**：`tree-sitter-client-real-model` 7 条全红，
+  根因是用例还发 v3 形状的 `ready` 回话——v4 收件闸要 `docBase`，缺了就整条降级；补上即绿。
+  开机图 **199 文件 / 3,132 KB**，闸 **3,090 → 3,140**（读数进十）：**零新进图模块**，
+  净 **+42,167 B ≈ 41 KB** 全落在图内既有文件（逐枚台账在 `ps10-eager-graph.test.ts`）——
+  这是 17 条**首次到账**，不是单批膨胀。
+- **B 批：语义着色走 `edits` 增量 + 首帧三拍（R3 / R8）**：R3 是**两刀**——24,197 行整腿 73.5 ms 里
+  `scanFileRefs` 占 **64.7 ms（88%）**、`edits` 通道本身只值 **0.58 ms** ⇒ 先让供方按窗口取数
+  （`EditorSemanticTokenRequest.range`）再做通道增量。实测 24,197 行 1 行窗口 p95 **1.25 ms**、
+  169,379 行 **3.93 ms**（判据 <3 / <5，整篇对照 84.3 / 355.0 ms）；等价性由 `semantic-token-delta`
+  三个 seed × 100 步随机编辑钉成"`edits` 累积 ≡ 逐字节全量"，窗口路径在**切片上重跑判据**不与整篇分叉。
+  R8 拆三拍（folds → semantic → indent+syntax）：折叠 **186.4 ms**（判据 <220）、着色 **245.1 ms**
+  （改前 392.0）。三拍不劣化的前提是引擎"同一份文本再问一次不重解"那道闸（`parseMs=0`、树身份不换）。
+  **欠账**：真壳端到端只到"机制 + 钉子"级——Monaco 0.57 的 `ModelSemanticColoring` 初次取数
+  `schedule(0)`（不防抖）、打字走 `RunOnceScheduler` + `REQUEST_MIN_DELAY`（一次停顿一次取数），
+  这条"并批"语义已由 `kojo-semantic-tokens.test.ts` 的新钉子覆盖；真壳上的 `edits` 落地读数仍缺。
+- **C 批 1/2：项目扫描不算 did-you-mean（R4a，2026-10-29）**：路线图原写"`toEditorProblem` 不带
+  `suggestions`"——**不成立**：`EditorProblem` 从来没有这一格，候选在生成那一刻就拼进 `message` 了
+  （`buildMessage`）。真实改法是让扫描把 `maxSuggestions: 0` 传下去（旋钮一直在，只是没有调用方）：
+  契约 `EditorDecoratorContribution.decorate(file)` additive 加 `bulk?: boolean`，
+  `decorateScanFile` 统一传 `true`，`erb-parser` 按它掐掉候选。真语料 400 个 ERB（4.7 MB、6,315 条问题）：
+  **1,065.6 ms → 570.3 ms（省 495.2 ms / 46.5%）**，**判据面（条数/位置/severity/code）逐条相等**，
+  只少文案尾巴。边界：`index=null` 的**保守**取法（真索引下候选更少、省下的绝对毫秒更少）；
+  只测语义诊断这一腿，**不宣称**"整轮 <7.3 s"。**R4b 未开工**：设计已定——批量任务
+  `erb.semanticDiagnosticsBulk`（跨文件上下文一次序列化随批带走），扫描循环从"文件 × 贡献"
+  翻成"贡献 × 批"，判据 400 文件主线程 <0.5 s + 诊断逐条等价。
 - **行内提示视口化 + 两处撤闸（A 批，2026-10-28，`5e53a7f8`）**：`EditorInlayHintRequest.range`
   进**输入**（外加 `startOffset` 那一格行首偏移，宿主 `getOffsetAt` 一次二分填），供方只判这一段。
   52,601 行实测整篇 **28–34 ms** → 400 行窗口 **0.44 ms**（文末同价 0.42；不给偏移的老路 2.64），

@@ -569,6 +569,30 @@ describe('installSemanticTokensProvider · 增量会话（R3）', () => {
     expect(h.ranges.at(-1)!.endLineNumber).toBeLessThan(5);
   });
 
+  it('Monaco 的防抖把 N 次击键并成**一次**取数：窗口盖住全部改动，edits 仍逐字节等于整篇', () => {
+    // 真壳里 `ModelSemanticColoring` 是 `RunOnceScheduler` + 防抖窗口（`REQUEST_MIN_DELAY`）：
+    // 连打三下只会来一次 `provideDocumentSemanticTokens`，三次内容事件在到达供方之前就并好了。
+    // 这条钉住"并"这一步不会把窗口并错——并错了就是整片错色，且只会在真壳上出现。
+    const h = harness(['@A', 'B', 'C', 'D', 'E'], { honorWindow: true });
+    const first = h.ask(null);
+    const data = first.data!;
+
+    // 三下击键：改第 2 行、在第 4 行前插一行、头部换两行（中间**不问**）
+    h.doc.replace(2, 1, ['@B']);
+    h.doc.replace(4, 0, ['X']);
+    h.doc.replace(1, 1, ['Y', 'Z']);
+    expect(h.doc.lines).toEqual(['Y', 'Z', '@B', 'C', 'X', 'D', 'E']);
+
+    const reply = h.ask(first.resultId!);
+    expect(isEdits(reply), '并批之后仍该走增量').toBe(true);
+    expect(Array.from(applyEdits(data, reply.edits!))).toEqual(Array.from(h.full()));
+
+    // 窗口从最早那段（第 1 行）一直到最晚那段之后，中间不许断
+    const window = h.ranges.at(-1)!;
+    expect(window.startLineNumber).toBeLessThanOrEqual(1);
+    expect(window.endLineNumber).toBeGreaterThanOrEqual(6);
+  });
+
   it('多段变更（多光标）⇒ 退回整篇：不猜窗口', () => {
     const h = harness(['@A', 'B', 'C'], { honorWindow: true });
     const first = h.ask(null);

@@ -722,11 +722,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     **恢复该头注的紧凑版（+1,179 B）**，读数 **3,089 → 3,090 KB**，**余量 0**。
     //     两枚闸维持 **≤199 / ≤3,090**：零新进图模块，本批**不抬闸**；但下一枚进图模块
     //     **必须先挪一枚出去**（欠账从"余 2 KB"变成"零余量"）。
+    //   - **性能线整条并入（2026-10-29，17 条提交）**：读数 **199 文件 / 3,132 KB**——
+    //     **零新进图模块**（199 就是直接证据）；净 **+42,167 B ≈ 41 KB** 全落在图内既有文件里，
+    //     逐枚按「本树 vs `origin/dev` 同路径原始字节」实测：`erb-parser/src/references.ts` +11,661
+    //     （语义着色按窗口取数——R3 的供方腿）、`eratw-adapter/src/family-index.ts` +4,077（家族名
+    //     预解析）、`erb-parser/src/plugin.ts` +3,891、`plugin-api/src/slots.ts` +3,120（行窗口
+    //     契约 + 语义请求 `range`）、`plugin-api/src/paths.ts` +2,873（归一化记忆 + 路径预折叠
+    //     探针）、`erb-parser/src/semantic-tokens.ts` +2,276、`app/src/bridge/invoke.ts` +2,231、
+    //     `kernel/src/io.ts` +2,141、`condition-extractor/src/offload.ts` +1,843、
+    //     `app/src/ui/project-diagnostics.ts` +1,395、`kernel/src/storage.ts` +1,297、
+    //     `plugin-api/src/platform.ts` +941、`erb-parser/src/offload.ts` +683、
+    //     `erb-parser/src/undefined-name.ts` +587，其余 185 枚合计 ≈ +3.6 KB。
+    //     闸 **3,090 → 3,140**：这 17 条（P0-2 冷开 / P0-3 检索与大文件 / 折叠拆闸 / A 批 / B 批）
+    //     此前只在本地分支上跑，**首次并进主干**，字节差是一次到账，不是单批膨胀。
+    //     ⇒ 欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸仍是顶格 199，零文件余量）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,090 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_090);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,140 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_140);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
