@@ -700,16 +700,16 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       字段与逐档语义注（slots 是常驻契约面，开机页就值引它）；
     //     · `plugin-api/src/index.ts` **+23 B**——导出面随动一行。
     //     余量 3 KB。⇒ 欠账照旧：下一枚进图模块须先挪一枚出去。
-    //   - **B3d 签名/格式化搬家（2026-10-28，本批）**：读数 **199 文件 / 3,088 KB**，
+    //   - **B3d 签名/格式化搬家（2026-10-28，本批）**：读数 **199 文件 / 3,089 KB**，
     //     **两枚闸都不动**（≤199 / ≤3,090）。**零新进图模块、零出图**：宿主删的
     //     `kojo2-enter.ts` 与改瘦的 `kojo2-signature.ts` / `kojo2-format.ts`、`register-dialects.ts`
     //     全在 `editor-global-providers → monaco 装配` 这条**懒边**之下——本树实测四处一枚
     //     都不在图上（逐文件扫描：图内 kojo2 语言面文件只有 `kojo-lang/src/constants.ts`）。
     //     ⚠ 任务书原以为"删 `kojo2-enter.ts` ⇒ 199 → 198、把文件闸从顶格变成留一档"：
     //     **实测该文件从未在图里**（只有测试 import 它），所以读数与闸都没动，本批**不抬不降**。
-    //     +1 KB 全在图内既有文件：`plugin-api/src/slots.ts` 的 `lineRange` 契约面与桶里那行
-    //     `EditorFormattingLineRange`（`slots` 是常驻契约面，开机页就值引它）。
-    //     ⇒ 欠账照旧：下一枚进图模块须先挪一枚出去（余量 2 KB / 零文件余量）。
+    //     KB 那一档的增量（3,087 → 3,089）全是图内既有文件：契约面 `plugin-api/src/slots.ts`
+    //     的 `lineRange` 与桶里那行 `EditorFormattingLineRange`，加上变基并入的上游写域出路批。
+    //     ⇒ 欠账照旧：下一枚进图模块须先挪一枚出去（余量 1 KB / 零文件余量）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
