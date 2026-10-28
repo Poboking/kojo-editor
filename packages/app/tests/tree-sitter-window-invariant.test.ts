@@ -242,4 +242,48 @@ describe('结构叠层 · 窗口/缓存三条不变量（每一步增量都必�
     ).toBeLessThan(step.editStart);
     expect(step.reparseFrom, '往前推不能推出文档外').toBeGreaterThanOrEqual(0);
   }, 120_000);
+
+  /**
+   * ④**同一份文本再问一次不重解**（R8 首帧分层的第二、三拍靠它）。
+   *
+   * 首帧分层把一次开文件拆成三条 `parse`（`client.ts::FRAME_BEATS`：折叠 → 语义 → 缩进+残缺），
+   * 后两条的文本与版本一字未变。这条闸钉三件事：
+   * - 后一拍**不重解**（`parseMs` 归零、树身份不换）——不然"折叠先上"省下的时间会被第二次整篇
+   *   解析吃回去，着色反而更晚；
+   * - 它补查出来的面与**同一份文本从零整篇解**逐字相等（缓存是这棵树的，不是碰巧没坏）；
+   * - 文本一变就必须真解（不许把"变了"也吞成"没变"）。
+   */
+  it('④同一份文本再问一次：不重解、树身份不换，补查的面与整篇逐字相等；文本变了必须真解', async () => {
+    const doc = `${filler(4)}\n时机 指令 2 类型: SCOM：\n\t「第一句」\n等待\n`;
+    const { engine, replies } = await mkEngine();
+    // 装配期那条 `indent` 回落（`indents.scm` 在 kojo 语法上没有捕获）不算这一趟的回话
+    replies.length = 0;
+    // 第一拍：只要折叠
+    engine.parse(1, 1, doc, ['folds']);
+    const foldFaces = replies.filter((reply) => reply.type !== 'error').map((reply) => reply.type);
+    expect(foldFaces, '第一拍只该说折叠').toEqual(['folds']);
+    const foldTree = engine.treeId;
+    expect(engine.lastTimings.parseMs, '第一拍是真解，读数不该是 0').toBeGreaterThan(0);
+    // 第二拍：同一份文本、同一版本，补语义 + 残缺
+    replies.length = 0;
+    engine.parse(1, 1, doc, ['semantic', 'syntax']);
+    expect(engine.lastTimings.parseMs, '第二拍重解了 ⇒ R8 省下的时间会被它吃回去').toBe(0);
+    expect(engine.treeId, '树没换过 ⇒ 树身份也不许换').toBe(foldTree);
+    // 只看面（`error` 是"捕获没档位"那种一次性说明，这一拍第一次跑语义查询才说）
+    const faces = replies.filter((reply) => reply.type !== 'error').map((reply) => reply.type).sort();
+    expect(faces, '第二拍只该补点名的面').toEqual(['semantic', 'syntax']);
+    // 真值：同一份文本从零整篇解一遍
+    const truth = await mkEngine();
+    truth.engine.parse(1, 1, doc);
+    const got = facesOf(replies);
+    const want = facesOf(truth.replies);
+    expect(got.tokens, '补查出来的着色必须与整篇解逐字相等').toEqual(want.tokens);
+    expect(got.tokens!.length, '夹具该有可比的着色段（否则这条比的是两份空表）').toBeGreaterThan(0);
+    expect(got.faults, '补查出来的诊断也必须与整篇解逐字相等').toEqual(want.faults);
+    // 文本变了 ⇒ 必须真解（这条闸不许把"变了"也当成"没变"）
+    replies.length = 0;
+    engine.parse(1, 2, `${doc};多出来的一行`);
+    expect(engine.lastTimings.parseMs, '文本变了就必须重解').toBeGreaterThan(0);
+    expect(engine.treeId, '重解了 ⇒ 树身份必须换').not.toBe(foldTree);
+  }, 120_000);
 });

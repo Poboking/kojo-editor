@@ -26,6 +26,7 @@ import type {
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { descriptorForLanguageId } from '../src/monaco/language-registry';
 import {
   collectInlayHints,
   inlayHintsAffordable,
@@ -35,6 +36,8 @@ import {
   type InlayHintHandlers,
 } from '../src/monaco/kojo-inlay-hints';
 import { LARGE_FILE_LINES } from '../src/ui/editor-options';
+// 判据真源是 descriptor 表（`lineWindow`），不是本文件里的语言名字面量：装表之后再断言。
+import '../src/monaco/languages';
 
 const REQUEST: EditorLanguageServiceRequest = {
   kind: 'inlayHint',
@@ -93,7 +96,10 @@ describe('inlayHintsAffordable · 体量档（判在问供方之前）', () => {
     }
   });
 
-  it('`inlayHintsWindowed` 只认 ERB：判据是供方的代价形状，不是语言偏好', () => {
+  it('`inlayHintsWindowed` 只认声明了 `lineWindow` 的语言（ERB）：判据是供方的代价形状，不是语言偏好', () => {
+    // 声明面与查表结果必须一致：谓词不自己认语言名，只读 descriptor
+    expect(descriptorForLanguageId(ERB_LANGUAGE_ID)?.lineWindow).toBe(true);
+    expect(descriptorForLanguageId(KOJO_LANGUAGE_ID)?.lineWindow).toBeUndefined();
     expect(inlayHintsWindowed(ERB_LANGUAGE_ID)).toBe(true);
     expect(inlayHintsWindowed(KOJO_LANGUAGE_ID)).toBe(false);
     expect(inlayHintsWindowed(KOJO2_LANGUAGE_ID)).toBe(false);

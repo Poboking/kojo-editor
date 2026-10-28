@@ -493,8 +493,17 @@ describe('失败账本与面缺失（连续 3 次判死 / 缺面即停）', () =
     const model = fakeModel('A 文本');
     const pending = client.tokens(model);
     await flush();
-    const request = lastSent(worker) as { id: number };
-    worker.reply(parseReply(request.id, 1, 1, { semantic: undefined, folds: { spans: [0, 3] } })); // 没有 semantic
+    // 每一拍只回它要的那几面（真 worker 就是这样：`want` 之外的面不进 `facets`）
+    const replyFacets = (facets: Record<string, unknown>): void => {
+      const request = lastSent(worker) as { id: number };
+      worker.reply({ ...parseReply(request.id, 1, 1), facets });
+    };
+    // 首帧分层（R8）：折叠那一拍没问语义 ⇒ 它缺语义**不算**"没来"（那一面排在后面那一拍）
+    replyFacets({ folds: { spans: [0, 3] } });
+    await flush();
+    expect(notices.filter((n) => n.startsWith('semantic/query')), '没问过的面不判死').toHaveLength(0);
+    // 轮到问语义的那一拍，它仍然没来 ⇒ 这才是"查询不可用"
+    replyFacets({});
     expect(await pending).toBeNull();
     expect(notices.filter((n) => n.startsWith('semantic/query'))).toHaveLength(1);
     expect(await client.foldingRanges(model)).toEqual([{ startRow: 0, endRow: 3 }]);

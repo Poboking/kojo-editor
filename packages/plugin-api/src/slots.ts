@@ -841,6 +841,22 @@ export interface EditorSemanticTokenRequest extends EditorDocumentIdentity {
   readonly project: GameProject | null;
   /** 文件行数（体量事实，供贡献方按大小自行降级；缺省 = 未知，按不降级处理） */
   readonly lineCount?: number;
+  /**
+   * 宿主这次**真的**要哪一段（additive，R3 2026-10-28）。缺省 = 整篇。
+   *
+   * 与行内提示那一格同形同义（{@link EditorLineWindow}），所以两处不用各学一套：
+   * 供方**可以**只算这一段，但**不许改变它对这一段里每一行的说法**——窗口内的行必须
+   * 逐条等价于整篇路径按行过滤的结果，跨行状态（ERB 的 `[SKIPSTART]` 块）自己从头算。
+   *
+   * 谁在填：宿主只在**这份文档被编辑过**时才填（变更行窗口），并且只对它验证过
+   * "逐行自洽"的供方下传（`semanticTokensWindowed`，今天只认 ERB 方言）；
+   * 其余情况一律不填 ⇒ 供方走整篇，与旧行为逐字相同。
+   *
+   * 为什么值得多这一格：本槽的整篇成本 88% 在引用扫描（`scanFileRefs`）——
+   * 24,197 行实测整腿 **73.5 ms**（其中引用腿 64.7 ms、解析 2.95 ms、宿主编码 0.58 ms）。
+   * 只有按窗口取数才能把它压到 1 ms 量级；`edits` 通道省的是那 0.58 ms，不是这 64 ms。
+   */
+  readonly range?: EditorLineWindow;
 }
 
 /** 语义着色响应；空数组 = 认这个文件但整篇没有"结构才知道的名字" */
@@ -889,11 +905,17 @@ export interface EditorInlayHintRequest extends EditorDocumentIdentity {
    * 出现，窗口内的行必须逐条等价。跨行状态（如 ERB 的 `[SKIPSTART]` 块）自己从头算——
    * 窗口是"少答"，不是"换个判据"。
    */
-  readonly range?: EditorInlayHintRange;
+  readonly range?: EditorLineWindow;
 }
 
-/** 行窗口（1 基闭区间；结构子集，与 Monaco `IRange` 的行字段同形，不需要整枚 Range） */
-export interface EditorInlayHintRange {
+/**
+ * 行窗口（1 基闭区间；结构子集，与 Monaco `IRange` 的行字段同形，不需要整枚 Range）。
+ *
+ * 两条腿共用一个类型（R3 2026-10-28 从 `EditorInlayHintRange` 改名）：行内提示按**视口**
+ * 取数、语义着色按**变更行**取数，窗口的语义与校验规则一字不差——分两个类型只会让
+ * `startOffset` 的契约说明写两遍，然后漂移。
+ */
+export interface EditorLineWindow {
   readonly startLineNumber: number;
   readonly endLineNumber: number;
   /**

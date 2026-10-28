@@ -19,6 +19,7 @@ import type {
 } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { descriptorForLanguageId } from '../src/monaco/language-registry';
 import { HUGE_FILE_LINES, LARGE_FILE_LINES } from '../src/ui/editor-options';
 import {
   KOJO_SEMANTIC_TOKEN_LEGEND,
@@ -29,9 +30,13 @@ import {
   normalizeSemanticSpans,
   semanticTokenModifierBits,
   semanticTokenTypeIndex,
+  semanticTokensWindowed,
   shouldComputeSemanticTokens,
 } from '../src/monaco/kojo-semantic-tokens';
 import { decodeWithMonaco } from './helpers/monaco-semantic-decode';
+// 判据真源是 descriptor 表（`lineWindow`），不是本文件里的语言名字面量：装表之后再断言。
+// 生产路径上这张表由 `register-dialects.ts` 的 `import './languages'` 保证先于任何 provider 就位。
+import '../src/monaco/languages';
 
 const REQUEST: EditorLanguageServiceRequest = {
   kind: 'semanticToken',
@@ -318,6 +323,10 @@ function stubModel(): Monaco.editor.ITextModel {
     uri: { toString: () => 'inmemory://stub.ERB' },
     getLineCount: () => widths.length,
     getLineMaxColumn: (lineNumber: number) => (widths[lineNumber - 1] ?? 0) + 1,
+    // R3 起 provider 会读这三格（会话层按版本/语言分流）；真 model 恒有，桩补齐即可
+    getVersionId: () => 1,
+    getLanguageId: () => ERB_LANGUAGE_ID,
+    getValue: () => 'AAAAA\n\nBB',
   } as unknown as Monaco.editor.ITextModel;
 }
 
@@ -368,5 +377,284 @@ describe('installSemanticTokensProvider · 装配', () => {
     registered[0]!.provider.provideDocumentSemanticTokens(stubModel(), null, {} as Monaco.CancellationToken);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+/* ======================= R3：增量会话（变更窗口 → edits） ======================= */
+
+/**
+ * 可变桩 model：行数组 + 版本号 + 内容变更事件。
+ *
+ * 只实现 provider 真会碰的那几格，并且**行文本与 span 由同一份数组派生**——
+ * 这样"整篇重算"与"窗口拼装"读的是同一个事实源，对拍才有意义。
+ */
+interface FakeDoc {
+  readonly model: Monaco.editor.ITextModel;
+  readonly lines: string[];
+  spansOf(lines: readonly string[]): EditorSemanticTokenSpan[];
+  /** 把整行 `[at, at+removed-1]` 换成 `added`，推版本并**发一次内容变更事件** */
+  replace(at: number, removed: number, added: readonly string[], shape?: 'one' | 'many' | 'flush'): void;
+}
+
+function fakeDoc(initial: readonly string[], languageId = ERB_LANGUAGE_ID): FakeDoc {
+  const lines = [...initial];
+  let versionId = 1;
+  const listeners: ((event: unknown) => void)[] = [];
+  const spansOf = (rows: readonly string[]): EditorSemanticTokenSpan[] => {
+    const out: EditorSemanticTokenSpan[] = [];
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i]!.includes('@')) {
+        out.push({ line: i + 1, startColumn: 1, endColumn: 3, tokenType: 'function', modifiers: ['declaration'] });
+      } else if (rows[i]!.trim().length > 0) {
+        out.push({ line: i + 1, startColumn: 1, endColumn: 2, tokenType: 'variable' });
+      }
+    }
+    return out;
+  };
+  const model = {
+    uri: { toString: () => 'inmemory://fake.ERB' },
+    getLineCount: () => lines.length,
+    getLineMaxColumn: (n: number) => (lines[n - 1]?.length ?? 0) + 1,
+    getVersionId: () => versionId,
+    getLanguageId: () => languageId,
+    getValue: () => lines.join('\n'),
+    getOffsetAt: (position: { lineNumber: number; column: number }) => {
+      let at = 0;
+      for (let i = 1; i < position.lineNumber; i++) at += (lines[i - 1]?.length ?? 0) + 1;
+      return at + position.column - 1;
+    },
+    getValueInRange: (range: {
+      startLineNumber: number;
+      endLineNumber: number;
+      startColumn: number;
+      endColumn: number;
+    }) => {
+      const rows = lines.slice(range.startLineNumber - 1, range.endLineNumber);
+      const text = rows.join('\n');
+      const head = range.startColumn - 1;
+      const tail = rows.length === 1 ? range.endColumn - 1 : undefined;
+      return text.slice(head, tail);
+    },
+    onDidChangeContent: (listener: (event: unknown) => void) => {
+      listeners.push(listener);
+      return { dispose: () => undefined };
+    },
+  } as unknown as Monaco.editor.ITextModel;
+  return {
+    model,
+    lines,
+    spansOf,
+    replace(at, removed, added, shape = 'one') {
+      lines.splice(at - 1, removed, ...added);
+      versionId += 1;
+      const change = {
+        range: { startLineNumber: at, startColumn: 1, endLineNumber: at + removed, endColumn: 1 },
+        rangeOffset: 0,
+        rangeLength: 0,
+        text: added.length === 0 ? '' : `${added.join('\n')}\n`,
+      };
+      const event = {
+        isFlush: shape === 'flush',
+        versionId,
+        changes: shape === 'many' ? [change, change] : [change],
+      };
+      for (const listener of [...listeners]) listener(event);
+    },
+  };
+}
+
+/** 按 Monaco 的算法把 `edits` 套到上一版（与 `semantic-token-delta.test.ts` 同一份口径） */
+function applyEdits(src: Uint32Array, edits: readonly Monaco.languages.SemanticTokensEdit[]): Uint32Array {
+  let delta = 0;
+  for (const edit of edits) delta += (edit.data ? edit.data.length : 0) - edit.deleteCount;
+  const dest = new Uint32Array(src.length + delta);
+  let srcLast = src.length;
+  let destLast = dest.length;
+  for (let i = edits.length - 1; i >= 0; i--) {
+    const edit = edits[i]!;
+    const copyCount = srcLast - (edit.start + edit.deleteCount);
+    if (copyCount > 0) {
+      dest.set(src.subarray(srcLast - copyCount, srcLast), destLast - copyCount);
+      destLast -= copyCount;
+    }
+    if (edit.data) {
+      dest.set(edit.data, destLast - edit.data.length);
+      destLast -= edit.data.length;
+    }
+    srcLast = edit.start;
+  }
+  if (srcLast > 0) dest.set(src.subarray(0, srcLast), 0);
+  return dest;
+}
+
+interface Reply {
+  readonly data?: Uint32Array;
+  readonly edits?: readonly Monaco.languages.SemanticTokensEdit[];
+  readonly resultId?: string;
+}
+
+/** 一套装配好的 provider + 可变文档（`spansOf` 由文档行派生，窗口是否被供方尊重可切换） */
+function harness(
+  initial: readonly string[],
+  options: { languageId?: string; honorWindow?: boolean } = {},
+): {
+  doc: FakeDoc;
+  ranges: (Monaco.IRange | undefined)[];
+  ask(lastResultId: string | null): Reply;
+  full(): Uint32Array;
+} {
+  const doc = fakeDoc(initial, options.languageId ?? ERB_LANGUAGE_ID);
+  const ranges: (Monaco.IRange | undefined)[] = [];
+  const { monaco, registered } = stubMonaco();
+  installSemanticTokensProvider(monaco, {
+    resolve: (_model, window) => {
+      ranges.push(window);
+      const all = doc.spansOf(doc.lines);
+      // 两种供方都要能工作：尊重窗口的（真 ERB 腿）与忽略窗口的（其余腿）
+      return options.honorWindow === true && window !== undefined
+        ? all.filter((s) => s.line >= window.startLineNumber && s.line <= window.endLineNumber)
+        : all;
+    },
+  });
+  const provider = registered[0]!.provider;
+  return {
+    doc,
+    ranges,
+    ask: (lastResultId) =>
+      provider.provideDocumentSemanticTokens(doc.model, lastResultId, {} as Monaco.CancellationToken) as Reply,
+    full: () => encodeSemanticTokens(doc.spansOf(doc.lines)),
+  };
+}
+
+const isEdits = (reply: Reply): boolean => Array.isArray(reply.edits);
+
+describe('installSemanticTokensProvider · 增量会话（R3）', () => {
+  for (const honorWindow of [true, false]) {
+    it(`一路编辑下去：累积结果逐字节等于整篇重算（供方${honorWindow ? '尊重' : '忽略'}窗口）`, () => {
+      const h = harness(['@A', 'B', 'C', 'D'], { honorWindow });
+      const first = h.ask(null);
+      expect(isEdits(first)).toBe(false);
+      expect(Array.from(first.data!)).toEqual(Array.from(h.full()));
+      expect(h.ranges).toEqual([undefined]);
+
+      let data = first.data!;
+      let resultId = first.resultId!;
+      const steps: [number, number, string[]][] = [
+        [2, 1, ['@B']], // 改一行
+        [2, 0, ['X', 'Y']], // 插两行
+        [1, 2, []], // 删两行
+        [h.doc.lines.length, 1, []], // 删文末一行
+        [1, 1, ['', '']], // 头部换两行空行
+      ];
+      for (const [at, removed, added] of steps) {
+        h.doc.replace(at, removed, added);
+        const reply = h.ask(resultId);
+        expect(isEdits(reply), `编辑 ${at}/${removed} 之后该走增量`).toBe(true);
+        data = applyEdits(data, reply.edits!);
+        expect(Array.from(data), `编辑 ${at}/${removed}`).toEqual(Array.from(h.full()));
+        // 供方只该被问到一个**窄窗口**：整篇那种「不给 range」绝不许出现
+        expect(h.ranges.at(-1), `编辑 ${at}/${removed} 的窗口`).toBeDefined();
+        resultId = reply.resultId!;
+      }
+    });
+  }
+
+  it('窗口就是变更行（不是整篇）：改第 3 行，窗口从第 3 行起、不蔓延到别处', () => {
+    const h = harness(['@A', 'B', 'C', 'D', 'E'], { honorWindow: true });
+    const first = h.ask(null);
+    h.doc.replace(3, 1, ['CC']);
+    h.ask(first.resultId!);
+    // 整行替换的 `range` 末行是**下一行第 1 列**（Monaco 的口径）⇒ 窗口 [3, 4] 正好把那一行含进来
+    expect(h.ranges.at(-1)).toMatchObject({ startLineNumber: 3, endLineNumber: 4 });
+    expect(h.ranges.at(-1)!.endLineNumber).toBeLessThan(5);
+  });
+
+  it('多段变更（多光标）⇒ 退回整篇：不猜窗口', () => {
+    const h = harness(['@A', 'B', 'C'], { honorWindow: true });
+    const first = h.ask(null);
+    h.doc.replace(2, 1, ['BB'], 'many');
+    const reply = h.ask(first.resultId!);
+    expect(isEdits(reply)).toBe(false);
+    expect(Array.from(reply.data!)).toEqual(Array.from(h.full()));
+  });
+
+  it('`isFlush`（`setValue` / 撤销越界）⇒ 退回整篇', () => {
+    const h = harness(['@A', 'B', 'C'], { honorWindow: true });
+    const first = h.ask(null);
+    h.doc.replace(1, 3, ['Z'], 'flush');
+    const reply = h.ask(first.resultId!);
+    expect(isEdits(reply)).toBe(false);
+    expect(Array.from(reply.data!)).toEqual(Array.from(h.full()));
+  });
+
+  it('`resultId` 对不上 ⇒ 退回整篇（Monaco 手里那份不是我们拼的基线）', () => {
+    const h = harness(['@A', 'B', 'C'], { honorWindow: true });
+    const first = h.ask(null);
+    h.doc.replace(2, 1, ['BB']);
+    const reply = h.ask('别人的 resultId');
+    expect(isEdits(reply)).toBe(false);
+    expect(Array.from(reply.data!)).toEqual(Array.from(h.full()));
+  });
+
+  it('版本没变（重问，不是编辑）⇒ 退回整篇：索引可能已经变了', () => {
+    const h = harness(['@A', 'B', 'C'], { honorWindow: true });
+    const first = h.ask(null);
+    const again = h.ask(first.resultId!);
+    expect(isEdits(again)).toBe(false);
+    expect(h.ranges.at(-1)).toBeUndefined();
+  });
+
+  it('model 缺 `getVersionId` ⇒ 退回整篇、不抛（着色面不许因为几何缺一格就掀桌子）', () => {
+    const doc = fakeDoc(['@A', 'B', 'C']);
+    // 抹掉版本号那一格：模拟只实现了行数的桩 / 跟 Monaco 对过口径的替身
+    delete (doc.model as unknown as { getVersionId?: unknown }).getVersionId;
+    const ranges: (Monaco.IRange | undefined)[] = [];
+    const { monaco, registered } = stubMonaco();
+    installSemanticTokensProvider(monaco, {
+      resolve: (_model, window) => {
+        ranges.push(window);
+        return doc.spansOf(doc.lines);
+      },
+    });
+    const provider = registered[0]!.provider;
+    const ask = (id: string | null): Reply =>
+      provider.provideDocumentSemanticTokens(doc.model, id, {} as Monaco.CancellationToken) as Reply;
+    const first = ask(null);
+    expect(Array.from(first.data!)).toEqual(Array.from(encodeSemanticTokens(doc.spansOf(doc.lines))));
+    doc.replace(2, 1, ['BB']);
+    const reply = ask(first.resultId!);
+    expect(isEdits(reply)).toBe(false);
+    expect(Array.from(reply.data!)).toEqual(Array.from(encodeSemanticTokens(doc.spansOf(doc.lines))));
+    expect(ranges.every((range) => range === undefined)).toBe(true);
+  });
+
+  it('窗口里出现 `[SKIP` 标记 ⇒ 退回整篇（它改的是跨行可见性）', () => {
+    const h = harness(['@A', 'B', 'C'], { honorWindow: true });
+    const first = h.ask(null);
+    h.doc.replace(2, 1, ['[SKIPSTART]']);
+    const reply = h.ask(first.resultId!);
+    expect(isEdits(reply)).toBe(false);
+    // 之后这份文档常驻"有标记"状态：再来一次普通编辑也只能整篇
+    h.doc.replace(2, 1, ['BB']);
+    const after = h.ask(reply.resultId!);
+    expect(isEdits(after)).toBe(false);
+  });
+
+  it('非 ERB 语言（`.kojo`）⇒ 从不发窗口、永远整篇', () => {
+    const h = harness(['@A', 'B', 'C'], { languageId: KOJO_LANGUAGE_ID, honorWindow: true });
+    const first = h.ask(null);
+    h.doc.replace(2, 1, ['BB']);
+    const reply = h.ask(first.resultId!);
+    expect(isEdits(reply)).toBe(false);
+    expect(h.ranges.every((range) => range === undefined)).toBe(true);
+  });
+
+  it('`semanticTokensWindowed` 只认声明了 `lineWindow` 的语言（ERB）', () => {
+    // 声明面与查表结果必须一致：谓词不自己认语言名，只读 descriptor
+    expect(descriptorForLanguageId(ERB_LANGUAGE_ID)?.lineWindow).toBe(true);
+    expect(descriptorForLanguageId(KOJO_LANGUAGE_ID)?.lineWindow).toBeUndefined();
+    expect(semanticTokensWindowed(ERB_LANGUAGE_ID)).toBe(true);
+    expect(semanticTokensWindowed(KOJO_LANGUAGE_ID)).toBe(false);
+    expect(semanticTokensWindowed('plaintext')).toBe(false);
   });
 });

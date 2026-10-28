@@ -8,6 +8,7 @@ import type {
 } from '@kojo/plugin-api';
 import {errorText,  EDITOR_SEMANTIC_TOKEN_MODIFIERS, EDITOR_SEMANTIC_TOKEN_TYPES } from '@kojo/plugin-api';
 import { registerForLanguageServices } from './register-dialects';
+import { lineWindowFor } from './language-registry';
 import { HUGE_FILE_LINES } from '../ui/editor-options';
 
 /**
@@ -192,6 +193,80 @@ export function normalizeSemanticSpans(spans: readonly EditorSemanticTokenSpan[]
   return { spans: out, droppedLines, droppedEmpty };
 }
 
+/* ------------------------------ 增量编码（R3，2026-10-28） ------------------------------ */
+
+/** 一条已编码的序列 + 它的 `data`：两者**逐 token 对应**（`spans.length * 5 === data.length`） */
+export interface EncodedTokens {
+  readonly data: Uint32Array;
+  readonly spans: readonly EditorSemanticTokenSpan[];
+}
+
+/** 编码进位：`data` 里已经写了 `written` 条，最后一条落在 `line:start`、到 `endOnLine` 为止 */
+interface EncodeCarry {
+  readonly written: number;
+  readonly line: number;
+  readonly start: number;
+  readonly endOnLine: number;
+}
+
+const FRESH_CARRY: EncodeCarry = { written: 0, line: 0, start: 0, endOnLine: 0 };
+
+/** 编码序（{@link encodeRun} 的唯一排序判据；同行时长的在前——与旧实现的 sort 逐字相同） */
+const byPosition = (a: EditorSemanticTokenSpan, b: EditorSemanticTokenSpan): number =>
+  a.line - b.line || a.startColumn - b.startColumn || b.endColumn - a.endColumn;
+
+/**
+ * 编码一段**已按 {@link byPosition} 排好序**的 span。`carry` 让它能接着别人往后写：
+ * 增量那一路只重编码「变更窗口」那几条，前面那几万条的 `deltaLine` / `deltaStart` 直接搬字节。
+ *
+ * 三条编码纪律照旧（见本文件 `encodeSemanticTokens` 的旧头注）：升序、同行不重叠（保留先到的）、
+ * 零宽不进数据。`carry.written === 0` 表示**这条是整份数据的头**（绝对分量按 0 基写）。
+ */
+function encodeRun(sorted: readonly EditorSemanticTokenSpan[], carry: EncodeCarry): EncodedTokens {
+  const buffer = new Uint32Array(sorted.length * 5);
+  const kept: EditorSemanticTokenSpan[] = [];
+  let written = carry.written;
+  let previousLine = carry.line;
+  let previousStart = carry.start;
+  let lastEndOnLine = carry.endOnLine;
+  let skippedOverlaps = 0;
+  for (const span of sorted) {
+    const length = span.endColumn - span.startColumn;
+    if (length <= 0) continue;
+    const typeIndex = semanticTokenTypeIndex(span.tokenType);
+    if (typeIndex < 0) continue; // legend 之外 ⇒ 不着色（已经告过一次）
+    const isHead = written === 0;
+    if (!isHead && span.line === previousLine && span.startColumn < lastEndOnLine) {
+      skippedOverlaps++;
+      continue; // 与已写入的同行区间重叠：保留先到的，丢后者
+    }
+    const at = kept.length * 5;
+    // 绝对分量必须 0 基（见旧头注）；同行增量与基无关，用 1 基相减即可。
+    buffer[at] = isHead ? span.line - 1 : span.line - previousLine;
+    buffer[at + 1] = isHead || span.line !== previousLine ? span.startColumn - 1 : span.startColumn - previousStart;
+    buffer[at + 2] = length;
+    buffer[at + 3] = typeIndex;
+    buffer[at + 4] = semanticTokenModifierBits(span.modifiers);
+    kept.push(span);
+    written++;
+    previousLine = span.line;
+    previousStart = span.startColumn;
+    lastEndOnLine = span.endColumn;
+  }
+  if (skippedOverlaps > 0) {
+    warnOnce(
+      `overlap:${skippedOverlaps}`,
+      `${skippedOverlaps} 条着色区间与先到的重叠 ⇒ 保留先到的（词法与结构的分工被越界了，检查贡献方是否在重画同一 span）`,
+    );
+  }
+  return { data: kept.length === sorted.length ? buffer : buffer.slice(0, kept.length * 5), spans: kept };
+}
+
+/** 整篇编码（顺序无关：内部排序），并交回**真正写进 data 的那些 span**（增量拼接的基线） */
+export function encodeTokenSpans(spans: readonly EditorSemanticTokenSpan[]): EncodedTokens {
+  return encodeRun([...spans].sort(byPosition), FRESH_CARRY);
+}
+
 /**
  * 区间 → Monaco `SemanticTokens.data`（每 token 五个 `uint32`：
  * `deltaLine`、`deltaStart`、`length`、`tokenType`、`tokenModifiers`）。
@@ -224,45 +299,152 @@ export function normalizeSemanticSpans(spans: readonly EditorSemanticTokenSpan[]
  * 空输入返回**长度 0 的数组**（= "认这个文件，但整篇没有要着色的名字"）。
  */
 export function encodeSemanticTokens(spans: readonly EditorSemanticTokenSpan[]): Uint32Array {
-  const sorted = [...spans].sort(
-    (a, b) => a.line - b.line || a.startColumn - b.startColumn || b.endColumn - a.endColumn,
-  );
-  const data = new Uint32Array(sorted.length * 5);
-  let written = 0;
-  let previousLine = 0;
-  let previousStart = 0;
-  let lastEndOnLine = 0;
-  let skippedOverlaps = 0;
-  for (const span of sorted) {
-    const length = span.endColumn - span.startColumn;
-    if (length <= 0) continue;
-    const typeIndex = semanticTokenTypeIndex(span.tokenType);
-    if (typeIndex < 0) continue; // legend 之外 ⇒ 不着色（已经告过一次）
-    if (span.line === previousLine && span.startColumn < lastEndOnLine) {
-      skippedOverlaps++;
-      continue; // 与已写入的同行区间重叠：保留先到的，丢后者
-    }
-    const sameLine = span.line === previousLine && written > 0;
-    // 绝对分量必须 0 基（见头注）；同行增量与基无关，用 1 基相减即可。
-    const deltaLine = written === 0 ? span.line - 1 : span.line - previousLine;
-    const deltaStart = sameLine ? span.startColumn - previousStart : span.startColumn - 1;
-    data[written * 5] = deltaLine;
-    data[written * 5 + 1] = deltaStart;
-    data[written * 5 + 2] = length;
-    data[written * 5 + 3] = typeIndex;
-    data[written * 5 + 4] = semanticTokenModifierBits(span.modifiers);
-    written++;
-    previousLine = span.line;
-    previousStart = span.startColumn;
-    lastEndOnLine = span.endColumn;
+  return encodeTokenSpans(spans).data;
+}
+
+/** Monaco `SemanticTokensEdit`：`start` / `deleteCount` 是 **`data` 的元素下标**（每 token 5 个） */
+export interface SemanticTokensEdit {
+  readonly start: number;
+  readonly deleteCount: number;
+  readonly data?: Uint32Array;
+}
+
+/** 第一个 `line >= 目标` 的下标（span 已按行升序） */
+function lowerBound(spans: readonly EditorSemanticTokenSpan[], line: number): number {
+  let lo = 0;
+  let hi = spans.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid]!.line < line) lo = mid + 1;
+    else hi = mid;
   }
-  if (skippedOverlaps > 0) {
-    warnOnce(
-      `overlap:${skippedOverlaps}`,
-      `${skippedOverlaps} 条着色区间与先到的重叠 ⇒ 保留先到的（词法与结构的分工被越界了，检查贡献方是否在重画同一 span）`,
-    );
+  return lo;
+}
+
+/** 第一个 `line > 目标` 的下标 */
+function upperBound(spans: readonly EditorSemanticTokenSpan[], line: number): number {
+  let lo = 0;
+  let hi = spans.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (spans[mid]!.line <= line) lo = mid + 1;
+    else hi = mid;
   }
-  return written === sorted.length ? data : data.slice(0, written * 5);
+  return lo;
+}
+
+/**
+ * 懒物化的基线：**拼过补丁之后不再维护整份 `data` 副本**。
+ *
+ * 为什么：`data` 是每 token 5 个 `uint32`，169,379 行那份实测 **182,819 段 = 3.66 MB**。
+ * 第一版每敲一键把它整份拷进新数组（`O(整篇)`），实测拼补丁那一腿 **5.03 ms** —— 占整轮的
+ * 96%，比它省下来的编码还贵。现在基线只留 `spans`（窗口拼装本来就只动它），整份 `data`
+ * 变成 getter：**真有人要时才现编一次**——只有"退回整篇"那一档会要。
+ */
+class LazyEncodedTokens implements EncodedTokens {
+  readonly spans: readonly EditorSemanticTokenSpan[];
+  private encoded: Uint32Array | null;
+
+  constructor(spans: readonly EditorSemanticTokenSpan[]) {
+    this.spans = spans;
+    this.encoded = null;
+  }
+
+  get data(): Uint32Array {
+    if (this.encoded === null) this.encoded = encodeRun(this.spans, FRESH_CARRY).data;
+    return this.encoded;
+  }
+}
+
+/**
+ * 把「变更窗口内重算的那一小段」拼回上一版，产出 Monaco 的 `edits`。
+ *
+ * ## 为什么只改一条 `deltaLine`
+ *
+ * `deltaLine` 是**相对上一条**的增量 ⇒ 在窗口里插入 N 行，只有「窗口之后的第一条」的
+ * `deltaLine` 要改（`+行位移`），它后面每一条的相对关系全部自洽。所以 `edits` 最多两条：
+ * 一条换掉窗口那一段，一条修交界处那 5 个 uint32。这正是 Monaco 增量通道的收益来源
+ * （169,247 行的 16.8 万 span：整篇编码 435 ms → 只编码窗口那几条）。
+ *
+ * ## 一趟只动窗口（2026-10-28 的第二刀）
+ *
+ * 第一版每次都把整份 `data` 拷进新数组（`O(整篇)`），169k 行实测那一腿 **5.03 ms**——比它
+ * 省下来的编码还贵。三刀之后基线里只剩指针拷贝：
+ *
+ * 1. 整份 `data` 懒物化（{@link LazyEncodedTokens}）——只有"退回整篇"那一档会要；
+ * 2. 交界处那 5 个 `uint32` **从 span 现算**，不再读旧 `data`（读它会把懒物化提前引爆）；
+ * 3. 新 `spans` **预分配 + 下标写**，不用 `[...before, ...run, ...tail]`（展开在 18 万枚上是
+ *    push 语义逐枚追加，实测那一条就值 3.5 ms）。
+ *
+ * 实测（真语料，宿主一轮 = 窗口取数 + 编码 + 拼补丁，中位/p95；量具是一次性脚本、收尾已删，
+ * 复跑办法：造同尺寸假 model，按 1/40/400 行窗口连问 `provideDocumentSemanticTokens`）：
+ *
+ * | 规模 | 1 行窗口 | 40 行 | 400 行 | 整篇（对照） |
+ * |---|---|---|---|---|
+ * | 24,197 行 / 85 万字符 / 26,117 段 | **0.46 / 1.25 ms** | 0.48 / 0.78 | 1.13 / 1.51 | 84.3 ms |
+ * | 169,379 行 / 597 万字符 / 18.2 万段 | **1.98 / 3.93 ms** | 1.89 / 3.41 | 2.60 / 4.15 | 355.0 ms |
+ *
+ * 判据是"24k 单次 p95 < 3 ms、169k < 5 ms"，两档都在线上（169k 那档还留着 `O(整篇)` 的
+ * 指针拷贝与 `[SKIP` 前缀搜索，见 `references.ts::skipStateBefore` 的头注）。
+ *
+ * ## 边界（每一条都由 `semantic-token-delta.test.ts` 的随机对拍顶着）
+ *
+ * - `window` 是**新坐标**的闭区间，`lineDelta` 是窗口之后的行位移 ⇒ 旧坐标的窗口末行
+ *   是 `window.to - lineDelta`；
+ * - 窗口把前面和后面的 span **都删空**时，后面那条会变成整份数据的**头**——它的
+ *   `deltaLine` / `deltaStart` 都要改回绝对 0 基（这是唯一会动 `deltaStart` 的一档）；
+ * - `edits` 必须按 `start` 升序（Monaco 从后往前套用，且不校验顺序）。
+ */
+export function spliceTokenSpans(
+  previous: EncodedTokens,
+  window: { readonly from: number; readonly to: number },
+  windowSpans: readonly EditorSemanticTokenSpan[],
+  lineDelta: number,
+): { readonly edits: SemanticTokensEdit[]; readonly tokens: EncodedTokens } {
+  const beforeEnd = lowerBound(previous.spans, window.from);
+  const afterStart = upperBound(previous.spans, window.to - lineDelta);
+  const cut = beforeEnd * 5;
+  const tailAt = afterStart * 5;
+  const last = beforeEnd > 0 ? previous.spans[beforeEnd - 1]! : null;
+  const run = encodeRun([...windowSpans].sort(byPosition), {
+    written: beforeEnd,
+    line: last?.line ?? 0,
+    start: last?.startColumn ?? 0,
+    endOnLine: last?.endColumn ?? 0,
+  });
+  const edits: SemanticTokensEdit[] = [
+    { start: cut, deleteCount: tailAt - cut, ...(run.data.length > 0 ? { data: run.data } : {}) },
+  ];
+  // 基线的新 span 序列：**预分配 + 三次下标写**，不用 slice/展开拼接。
+  // 展开 `[...before, ...run, ...tail]` 在 18 万枚上是 push 语义逐枚追加，实测整条腿 4.7 ms
+  // （预分配后 0.6 ms 量级）——这是本函数唯一还带 `O(整篇)` 的地方，常数已经压到指针拷贝。
+  const tailCount = previous.spans.length - afterStart;
+  const spans = new Array<EditorSemanticTokenSpan>(beforeEnd + run.spans.length + tailCount);
+  for (let i = 0; i < beforeEnd; i++) spans[i] = previous.spans[i]!;
+  for (let i = 0; i < run.spans.length; i++) spans[beforeEnd + i] = run.spans[i]!;
+  const shifted = beforeEnd + run.spans.length;
+  const head = tailCount > 0 ? previous.spans[afterStart]! : null;
+  const headSpan = head === null || lineDelta === 0 ? head : { ...head, line: head.line + lineDelta };
+  for (let i = 0; i < tailCount; i++) {
+    const span = previous.spans[afterStart + i]!;
+    spans[shifted + i] = lineDelta === 0 ? span : { ...span, line: span.line + lineDelta };
+  }
+  if (headSpan !== null) {
+    // 交界处第一条的 5 个 uint32：从 span 现算（与 `encodeRun` 的写法逐字同一条规则）
+    const previousSpan = run.spans.length > 0 ? run.spans[run.spans.length - 1]! : last;
+    const headless = previousSpan === null; // 前面全删空了 ⇒ 它是整份数据的头，写绝对 0 基
+    const patch = new Uint32Array(5);
+    patch[0] = headless ? headSpan.line - 1 : headSpan.line - previousSpan.line;
+    patch[1] =
+      headless || headSpan.line !== previousSpan.line
+        ? headSpan.startColumn - 1
+        : headSpan.startColumn - previousSpan.startColumn;
+    patch[2] = headSpan.endColumn - headSpan.startColumn;
+    patch[3] = semanticTokenTypeIndex(headSpan.tokenType);
+    patch[4] = semanticTokenModifierBits(headSpan.modifiers);
+    edits.push({ start: tailAt, deleteCount: 5, data: patch });
+  }
+  return { edits, tokens: new LazyEncodedTokens(spans) };
 }
 
 /** 一次整篇着色 = 三条贡献方各一遍单遍扫描 + 排序 + 编码，全压在**主线程**上。
@@ -277,7 +459,147 @@ export function shouldComputeSemanticTokens(lineCount: number): boolean {
 
 /** 宿主注入：怎么问（含糖视图 / 活动标签判据 + 三态合并）——与 `FoldingRangeHandlers` 同款 */
 export interface SemanticTokenHandlers {
-  resolve(model: Monaco.editor.ITextModel): EditorSemanticTokenSpan[];
+  /**
+   * `window`（R3）给了就**只有这一段**会被当作新鲜数据用（宿主按窗口过滤后拼进上一版）——
+   * 供方按窗口取数就省下窗口外那两遍扫描，忽略它也只会白算，不会错。
+   */
+  resolve(model: Monaco.editor.ITextModel, window?: Monaco.IRange): EditorSemanticTokenSpan[];
+}
+
+/**
+ * 这一门语言能不能按**变更行窗口**问供方（R3，2026-10-28）。
+ *
+ * 判据不是"谁快谁慢"，而是**逐行自洽**：窗口给出去之后，宿主会把窗口外的行原样留在
+ * 上一版里，所以供方必须保证"一行产出什么 span 只由这一行的可见性与名录决定"。
+ * ERB 满足（唯一的跨行状态 `[SKIPSTART]` 由 `skipBlockAt` 带进窗口，且窗口里一出现标记
+ * 宿主就退回整篇）；`.kojo` 糖面与 `kojo2` 结构着色都是整棵语法树派生的，改一行可能
+ * 影响别的行 ⇒ 不传窗口。
+ *
+ * **这条事实住在 descriptor 表**（`languages.ts` 的 ERB 行 `lineWindow: true`），这里只查表：
+ * 宿主不认识任何具体语言名（`audit-language` M2）。表没装 / id 认不出 ⇒ 整篇（安全方向）。
+ */
+export function semanticTokensWindowed(languageId: string): boolean {
+  return lineWindowFor(languageId);
+}
+
+/**
+ * 一次变更在**新旧两套坐标**里的窗口。
+ *
+ * `from/to` 是新坐标（只用于"这次变更落在已累积窗口的哪一边"这种位置判断）；
+ * **真正喂给拼接的是 `oldTo`**：`spliceTokenSpans` 拿它与「净行位移」一起推出窗口边界。
+ * 为什么不直接存新坐标的末行：**整行删除**时新旧末行的差**不等于**行位移——删两整行
+ * 是把中间那枚换行一起吃掉，行数少 2，而 `range.endLineNumber - startLineNumber` 只差 1。
+ * 净行位移因此只从 `model.getLineCount()` 的前后差里取（O(1)，且天然含"空文本删整行"这一档）。
+ */
+interface PendingChange {
+  from: number;
+  to: number;
+  oldTo: number;
+}
+
+/** 一份文档的着色基线：上一版数据 + 自那以后的变更窗口 */
+interface TokenSession {
+  resultId: string;
+  /** `tokens` 对应的 `model.getVersionId()` */
+  version: number;
+  /** `tokens` 对应的行数（净行位移 = 现在的行数 − 它） */
+  lineCount: number;
+  tokens: EncodedTokens;
+  /** 全文里有 `[SKIP` 标记 ⇒ 它改的是**跨行**可见性，一律整篇 */
+  hasSkipMarker: boolean;
+  pending: PendingChange | null;
+  /** 多段变更 / flush / 事件形状不认 ⇒ 下一次只能整篇 */
+  whole: boolean;
+}
+
+/** 窗口大到这个份上就不如整篇（拼接与过滤的常数开销开始显形） */
+const DELTA_MAX_LINES = 5_000;
+/** 跨行可见性标记的快筛子串（与 `erb-parser` 的 `SKIP_MARKER_PROBE` 同一枚） */
+const SKIP_PROBE = '[SKIP';
+
+const sessions = new WeakMap<Monaco.editor.ITextModel, TokenSession>();
+let resultSeq = 0;
+
+/** 新文本里有几行（`\n` 计一次；Monaco 已把它归一成模型 EOL） */
+function newlineCount(text: string): number {
+  let count = 0;
+  for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) count++;
+  return count;
+}
+
+/**
+ * 把一次内容变更并进会话的待办窗口。
+ *
+ * 只有**单段**变更能并（多光标 / 一次粘贴的多段：`changes` 各段的行号都相对同一份旧文本，
+ * 合成一条窗口要把它们按位移串起来，错一位就是错色 ⇒ 直接整篇，代价是一次 70 ms 而不是
+ * 一次错色）。`isFlush`（`setValue` / 撤销越界）同样整篇——那时 `changes` 的语义不保证。
+ *
+ * 合并的三种位置关系（`p` = 已累积窗口，`from/oldTo` = 这次变更在**事件前**坐标里的起止）：
+ * - **落在窗口之后**：上一版坐标要减掉已累积的行位移 `p.to - p.oldTo`；
+ * - **落在窗口之前**：已累积窗口整体后移这次的行增量，两侧取并；
+ * - **相交**：这一段里位移恒为 0（相交意味着起点不在窗口之后），直接取并。
+ */
+function noteChange(session: TokenSession, event: Monaco.editor.IModelContentChangedEvent): void {
+  if (session.whole) return;
+  if (event.isFlush || event.changes.length !== 1) {
+    session.whole = true;
+    session.pending = null;
+    return;
+  }
+  const change = event.changes[0]!;
+  const from = change.range.startLineNumber;
+  const oldTo = change.range.endLineNumber;
+  const to = from + newlineCount(change.text);
+  const p = session.pending;
+  if (p === null) {
+    session.pending = { from, to, oldTo };
+    return;
+  }
+  const shift = from >= p.to ? p.to - p.oldTo : 0;
+  if (from >= p.to) {
+    p.to = Math.max(p.to, to);
+  } else if (oldTo <= p.from) {
+    const delta = to - oldTo;
+    p.from += delta;
+    p.to += delta;
+    p.from = Math.min(p.from, from);
+    p.to = Math.max(p.to, to);
+  } else {
+    p.from = Math.min(p.from, from);
+    p.to = Math.max(p.to, to);
+  }
+  p.oldTo = Math.max(p.oldTo, oldTo - shift);
+}
+
+function sessionFor(model: Monaco.editor.ITextModel): TokenSession {
+  const existing = sessions.get(model);
+  if (existing !== undefined) return existing;
+  const session: TokenSession = {
+    resultId: '',
+    version: -1,
+    lineCount: 0,
+    tokens: { data: new Uint32Array(0), spans: [] },
+    hasSkipMarker: false,
+    pending: null,
+    // 第一份必然是整篇：还没有基线可拼
+    whole: true,
+  };
+  sessions.set(model, session);
+  if (typeof model.onDidChangeContent === 'function') {
+    model.onDidChangeContent((event) => noteChange(session, event));
+  }
+  return session;
+}
+
+/**
+ * 版本号；拿不到就 `-1`（等于「没版本概念」）。
+ *
+ * Monaco 的 model 一定有这个方法，但**着色面不许因为几何缺一格就掀桌子**——测试桩、
+ * 跟 Monaco 对过口径的替身、将来换宿主都可能只实现了行数。拿不到版本 ⇒ 证明不了
+ * 「这一版确实比上一版新」⇒ 下面的增量闸自然关上，退回整篇（结果仍然对，只是慢）。
+ */
+function versionOf(model: Monaco.editor.ITextModel): number {
+  return typeof model.getVersionId === 'function' ? model.getVersionId() : -1;
 }
 
 /**
@@ -288,6 +610,15 @@ export interface SemanticTokenHandlers {
  * 监听那条配置项并在开/关时逐 model 挂卸着色器，所以设置页一翻就立即生效，
  * 不需要重开文件（见 `semantic-color-pref.ts` 的 `applySemanticColorPref`）。
  *
+ * **增量（R3，2026-10-28）**：Monaco 0.57 把上一次的 `resultId` 传回来，并且**真的消费**
+ * `{ edits }`（`documentSemanticTokens.js` 的 `isSemanticTokensEdits` 分支）。于是每次只问
+ * 供方「变更窗口内那几行」，把结果拼进上一版、发一条 `edits`。判据（`semantic-token-delta.test.ts`
+ * 的随机对拍）：拼出来的 `data` 必须与「每步整篇重算」逐字节相等。
+ *
+ * 什么情况退回整篇（一条都不猜）：没有基线 / `resultId` 对不上 / 版本没变（说明是重问，
+ * 而不是编辑，索引可能已经变了）或拿不到版本号 / 多段或 flush / 窗口超过 5,000 行 /
+ * 全文或窗口里出现 `[SKIP` 标记（它改的是跨行可见性）。
+ *
  * 抛错不许冒到 Monaco：着色是只读呈现面，出错就"没颜色"（并 warn 出去）。
  */
 export function installSemanticTokensProvider(
@@ -296,30 +627,124 @@ export function installSemanticTokensProvider(
 ): Monaco.IDisposable {
   const provider: Monaco.languages.DocumentSemanticTokensProvider = {
     getLegend: () => KOJO_SEMANTIC_TOKEN_LEGEND,
-    provideDocumentSemanticTokens(model) {
-      let spans: EditorSemanticTokenSpan[];
-      try {
-        spans = handlers.resolve(model);
-      } catch (e: unknown) {
-        console.warn(`[kojo-semantic-tokens] resolve 抛错：${errorText(e)}`);
-        return { data: new Uint32Array(0) };
+    provideDocumentSemanticTokens(model, lastResultId) {
+      const session = sessionFor(model);
+      const version = versionOf(model);
+      const lineCount = model.getLineCount();
+      const geometry = { lineCount, maxColumn: (n: number) => model.getLineMaxColumn(n) };
+      const pending = session.pending;
+      // 能不能只问那一小段
+      let from = 0;
+      let to = 0;
+      /** 净行位移（窗口之后每一行平移多少）——只从行数差里取，见 `PendingChange` 头注 */
+      const shift = lineCount - session.lineCount;
+      if (
+        pending !== null &&
+        !session.whole &&
+        !session.hasSkipMarker &&
+        semanticTokensWindowed(model.getLanguageId()) &&
+        lastResultId !== null &&
+        lastResultId === session.resultId &&
+        version >= 0 &&
+        version > session.version &&
+        typeof model.getValueInRange === 'function'
+      ) {
+        // 窗口末行 = 上一版坐标的末行 + 净位移；整行删除时它会落在起点之前 ⇒ 夹到起点
+        to = Math.min(Math.max(1, pending.oldTo + shift), lineCount);
+        from = Math.max(1, Math.min(pending.from, to));
+        // 窗口里出现 `[SKIPSTART]`/`[SKIPEND]` ⇒ 后面所有行的可见性都可能变 ⇒ 整篇
+        const windowText = model.getValueInRange({
+          startLineNumber: from,
+          startColumn: 1,
+          endLineNumber: to,
+          endColumn: model.getLineMaxColumn(to),
+        });
+        if (to - from > DELTA_MAX_LINES || windowText.includes(SKIP_PROBE)) from = 0;
       }
-      const normalized = normalizeSemanticSpans(spans, {
-        lineCount: model.getLineCount(),
-        maxColumn: (lineNumber) => model.getLineMaxColumn(lineNumber),
-      });
-      if (normalized.droppedLines + normalized.droppedEmpty > 0) {
-        console.warn(
-          `[kojo-semantic-tokens] ${model.uri.toString()} 丢掉 ${normalized.droppedLines} 条越界行 / ` +
-            `${normalized.droppedEmpty} 条空区间（陈旧或列口径不符）`,
-          spans,
-        );
+      if (from > 0) {
+        return deltaReply(model, session, handlers, version, { from, to }, shift, geometry);
       }
-      return { data: encodeSemanticTokens(normalized.spans) };
+      return fullReply(model, session, handlers, version, geometry);
     },
     releaseDocumentSemanticTokens: () => undefined,
   };
   return registerForLanguageServices(monaco, (m, id) =>
     m.languages.registerDocumentSemanticTokensProvider(id, provider),
+  );
+}
+
+/** 整篇：问全量 → 归一 → 编码 → 换基线 */
+function fullReply(
+  model: Monaco.editor.ITextModel,
+  session: TokenSession,
+  handlers: SemanticTokenHandlers,
+  version: number,
+  geometry: SemanticGeometry,
+): Monaco.languages.SemanticTokens {
+  let spans: EditorSemanticTokenSpan[];
+  try {
+    spans = handlers.resolve(model);
+  } catch (e: unknown) {
+    console.warn(`[kojo-semantic-tokens] resolve 抛错：${errorText(e)}`);
+    return { data: new Uint32Array(0) };
+  }
+  const normalized = normalizeSemanticSpans(spans, geometry);
+  if (normalized.droppedLines + normalized.droppedEmpty > 0) {
+    console.warn(
+      `[kojo-semantic-tokens] ${model.uri.toString()} 丢掉 ${normalized.droppedLines} 条越界行 / ` +
+        `${normalized.droppedEmpty} 条空区间（陈旧或列口径不符）`,
+      spans,
+    );
+  }
+  const tokens = encodeTokenSpans(normalized.spans);
+  session.tokens = tokens;
+  session.version = version;
+  session.lineCount = geometry.lineCount;
+  session.resultId = `st${++resultSeq}`;
+  session.hasSkipMarker = model.getValue().includes(SKIP_PROBE);
+  session.pending = null;
+  session.whole = false;
+  return { data: tokens.data, resultId: session.resultId };
+}
+
+/** 增量：只问窗口那几行 → 拼进上一版 → 发一条（最多两条）`edits` */
+function deltaReply(
+  model: Monaco.editor.ITextModel,
+  session: TokenSession,
+  handlers: SemanticTokenHandlers,
+  version: number,
+  window: { from: number; to: number },
+  shift: number,
+  geometry: SemanticGeometry,
+): Monaco.languages.SemanticTokensEdits {
+  const range = {
+    startLineNumber: window.from,
+    startColumn: 1,
+    endLineNumber: window.to,
+    endColumn: model.getLineMaxColumn(window.to),
+  };
+  let spans: EditorSemanticTokenSpan[];
+  try {
+    // 供方忽略窗口也不会错：下面这一刀把窗外的一律丢掉，窗外本来就没变
+    spans = handlers.resolve(model, range).filter((s) => s.line >= window.from && s.line <= window.to);
+  } catch (e: unknown) {
+    console.warn(`[kojo-semantic-tokens] resolve 抛错（窗口）：${errorText(e)}`);
+    return { edits: [], resultId: session.resultId };
+  }
+  const normalized = normalizeSemanticSpans(spans, geometry);
+  const spliced = spliceTokenSpans(session.tokens, window, normalized.spans, shift);
+  session.tokens = spliced.tokens;
+  session.version = version;
+  session.lineCount = geometry.lineCount;
+  session.resultId = `st${++resultSeq}`;
+  session.pending = null;
+  session.whole = false;
+  return { resultId: session.resultId, edits: spliceEdits(spliced.edits) };
+}
+
+/** 宿主形状 → Monaco 的 `SemanticTokensEdit[]`（同形；这一层只做类型搬运，不加工） */
+function spliceEdits(edits: readonly SemanticTokensEdit[]): Monaco.languages.SemanticTokensEdit[] {
+  return edits.map((edit) =>
+    edit.data === undefined ? { start: edit.start, deleteCount: edit.deleteCount } : { start: edit.start, deleteCount: edit.deleteCount, data: edit.data },
   );
 }

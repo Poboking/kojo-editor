@@ -147,6 +147,22 @@ export interface LanguageDescriptor {
    * `language-parity.test.ts` 逐项断言「声明的面 = 矩阵里非豁免的面 = 注册点取证得到的面」。
    */
   readonly capabilities?: readonly LanguageCapability[];
+  /**
+   * 这门的语言服务供方**按行窗口取数**（additive，R3 2026-10-28）。
+   *
+   * 声明的不是偏好，是**代价形状 + 等价性承诺**：说 true 等于承诺「给一段行窗口，
+   * 这一段里每一行的说法与整篇算出来的一字不差」（等价性由各自的窗口对拍用例钉着：
+   * `erb-parser/tests/semantic-tokens-window.test.ts`、`inlay-window.perf` 那条腿的
+   * 用例）。宿主据此才敢在编辑时只下传变更行，而不是整篇。
+   *
+   * 为什么这条事实住在 descriptor（而不是宿主按语言 id 分支）：宿主**不许认识具体语言名**
+   * （`audit-language` 的 M2 项就是拦这个）。供方代价形状是这门语言的属性，与 id、
+   * 认路判据、注册面同级，所以它和别的语言事实一样进表，宿主只查表。
+   *
+   * 缺省 = false ⇒ 整篇取数。**这是有意的默认**：判错成 true 会少答窗口外的行（颜色错），
+   * 判错成 false 只是白算一遍（颜色对、慢一点）——两个方向的代价不对称。
+   */
+  readonly lineWindow?: boolean;
 }
 
 const descriptors: LanguageDescriptor[] = [];
@@ -310,6 +326,21 @@ export function isLanguageIdAvailable(languageId: string): boolean {
 
 export function descriptorForLanguageId(languageId: string): LanguageDescriptor | null {
   return descriptors.find((descriptor) => descriptor.id === languageId) ?? null;
+}
+
+/**
+ * 这门语言的供方**按行窗口取数**吗（{@link LanguageDescriptor.lineWindow}）。
+ *
+ * 认不出的 id / 没声明 ⇒ `false`（整篇）——见那一格的理由：两个方向代价不对称。
+ *
+ * 与 {@link isLanguageIdAvailable} 一样**不抛**：这是每次编辑都要问一次的判据，
+ * 抛出去等于"着色没了"。
+ *
+ * 表由 `monaco/languages.ts` 装（`register-dialects.ts` 的 `import './languages'` 保证
+ * 在挂任何 provider 之前已在），所以请求期调用时表必已就位；单测要自己装表。
+ */
+export function lineWindowFor(languageId: string): boolean {
+  return descriptorForLanguageId(languageId)?.lineWindow === true;
 }
 
 /**

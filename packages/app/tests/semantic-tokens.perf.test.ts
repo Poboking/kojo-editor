@@ -114,7 +114,10 @@ describe('B6 着色代价 · 宿主合并/夹取/编码（合成 span，无 IO�
     // 169,247 行那份 435 ms + 16.8 万 span，仍留在闸外。依据见常量注。
     expect(SEMANTIC_TOKEN_MAX_LINES).toBe(HUGE_FILE_LINES); // 单一真源：档位只有一个数
     expect(shouldComputeSemanticTokens(20_000)).toBe(true); // large 档不再让位
-    expect(shouldComputeSemanticTokens(52_602)).toBe(true); // 旧读数里那份"语料最大单文件"
+    // 52,602 是语料里最大的那一篇：50,000 档**容不下它**（旧线 5,000 时同样容不下，
+    // 所以这不是回归）。2026-10-28 之前这条断言写的 `true`，与它上一行的
+    // `SEMANTIC_TOKEN_MAX_LINES === HUGE_FILE_LINES`（= 50,000）自相矛盾——两条不可能同时成立。
+    expect(shouldComputeSemanticTokens(52_602)).toBe(false);
     expect(shouldComputeSemanticTokens(HUGE_FILE_LINES)).toBe(true); // "≥ 即降"只在越界才降
     expect(shouldComputeSemanticTokens(HUGE_FILE_LINES + 1)).toBe(false);
     expect(shouldComputeSemanticTokens(169_247)).toBe(false);

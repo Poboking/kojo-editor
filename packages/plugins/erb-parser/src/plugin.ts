@@ -1869,6 +1869,10 @@ export function createErbParserPlugin(): Plugin {
 
        索引缺席时**仍应答**（只交声明那部分）：`@` 定义与 `#DIM` 声明本就是缓冲区事实，
        与项目开闭无关；返回 `undefined` 等于谎称"这文件不归我管"。
+
+       R3（2026-10-28）：宿主给的**变更行窗口**原样下传——本包的窗口路径与整篇路径
+       逐条等价（`semantic-tokens-window.test.ts` 对拍全部窗口），少掉的是窗口外那
+       两遍扫描。不传 = 整篇，与旧行为逐字节相同。
        */
       ctx.slots.register('ui.editor.languageService', {
         id: 'erb-semantic-tokens',
@@ -1876,7 +1880,15 @@ export function createErbParserPlugin(): Plugin {
         provide: (request) => {
           if (request.kind !== 'semanticToken') return undefined;
           if (!isDialect(request.path)) return undefined;
-          return { kind: 'semanticToken', spans: erbSemanticTokens(request.text, index) };
+          const window =
+            request.range === undefined
+              ? undefined
+              : {
+                  from: request.range.startLineNumber,
+                  to: request.range.endLineNumber,
+                  ...(request.range.startOffset === undefined ? {} : { fromOffset: request.range.startOffset }),
+                };
+          return { kind: 'semanticToken', spans: erbSemanticTokens(request.text, index, window) };
         },
       });
 
