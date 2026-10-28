@@ -64,20 +64,27 @@ describe('buildCapabilityMatrixRows', () => {
   });
 
   it('换一份矩阵立刻反映（没有第二份硬编码清单）', () => {
+    // 判据是"构建行不改入参"，所以取**改前值**比对，不抄死当前档位：
+    // 这一格会随接线推进从 `self` 变 `shared`（B3c 就把 Completion/Hover 改成了 shared），
+    // 抄死字面量等于把"矩阵长什么样"也钉进这条测试——它证的不是同一件事，而且每次接线都要改一次。
+    const completionBefore =
+      LANGUAGE_CAPABILITY_MATRIX[KOJO2_LANGUAGE_ID][LanguageCapability.Completion];
     const custom: LanguageCapabilityMatrix = {
       ...LANGUAGE_CAPABILITY_MATRIX,
       [KOJO2_LANGUAGE_ID]: {
         ...LANGUAGE_CAPABILITY_MATRIX[KOJO2_LANGUAGE_ID],
-        [LanguageCapability.Completion]: { exempt: '自定义理由：等接线后改 self' },
+        [LanguageCapability.Completion]: { exempt: '自定义理由：临时豁免' },
       },
     };
     const row = buildCapabilityMatrixRows(custom).find(
       (r) => r.capability === LanguageCapability.Completion,
     );
-    expect(row?.statuses[KOJO2_LANGUAGE_ID].exemption).toBe('自定义理由：等接线后改 self');
+    expect(row?.statuses[KOJO2_LANGUAGE_ID].exemption).toBe('自定义理由：临时豁免');
     expect(row?.hasExemption).toBe(true);
     // 入参矩阵本身没被改
-    expect(LANGUAGE_CAPABILITY_MATRIX[KOJO2_LANGUAGE_ID][LanguageCapability.Completion]).toBe('self');
+    expect(LANGUAGE_CAPABILITY_MATRIX[KOJO2_LANGUAGE_ID][LanguageCapability.Completion]).toBe(
+      completionBefore,
+    );
   });
 });
 

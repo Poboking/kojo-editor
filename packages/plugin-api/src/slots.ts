@@ -1073,9 +1073,10 @@ export type EditorCompletionItemKind =
   | 'value'
   /**
    * 带占位符的模板候选。宿主侧规则（B3c 写进契约——此前只在宿主翻译层隐式发生）：
-   * `insertTextFormat === 'snippet'` 时打开 Monaco `InsertAsSnippet` 通道，`insertText`
-   * 里的占位语法按模板落地。桩环境缺该枚举时宿主**丢弃 snippet 档**，绝不把占位符当
-   * 字面文本插入。
+   * `insertTextFormat` 取 {@link EditorCompletionItem.insertTextFormat} 的 snippet 值时打开
+   * Monaco `InsertAsSnippet` 通道（注意：这里**不写字面量引号**——`kindLiterals` 直接扫这段
+   * 联合的原文，引号里的同名字面会被算成第二档），`insertText` 里的占位语法按模板落地。
+   * 桩环境缺该枚举时宿主**丢弃 snippet 档**，绝不把占位符当字面文本插入。
    *
    * **这一档本身只管挑图标与排位，不管插入文本怎么解释**——占位符是否生效归
    * {@link EditorCompletionItem.insertTextFormat}。为什么必须拆（B3c 实测到的真冲突）：
