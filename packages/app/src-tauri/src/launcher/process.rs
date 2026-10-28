@@ -306,7 +306,6 @@ mod sys {
     }
 }
 
-pub(crate) use sys::process_start_ticks;
 /// 测试专用的"残留进程"探针（只认 signaled 态，见 `sys::pid_alive` 的注释）。
 ///
 /// 为什么门控在 `all(windows, test)`：非 test 构建里没人用它（生产判据是
@@ -315,6 +314,7 @@ pub(crate) use sys::process_start_ticks;
 /// `#![cfg(windows)]` 的，也不该看到这个再导出。
 #[cfg(all(windows, test))]
 pub(crate) use sys::pid_alive;
+pub(crate) use sys::process_start_ticks;
 
 fn platform_gate() -> LauncherResult<()> {
     if cfg!(windows) {
