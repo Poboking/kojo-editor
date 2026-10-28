@@ -64,7 +64,7 @@ export const WELCOME_TUTORIALS: readonly WelcomeTutorialEntry[] = [
   {
     id: 'kojo2',
     title: 'Kojo 2.0 语言教程',
-    blurb: '默认档还是老写法；这一本教 2.0 的新写法。',
+    blurb: '默认档就是 2.0；这一本教新写法。',
     icon: 'code',
   },
   {

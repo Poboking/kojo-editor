@@ -6,7 +6,7 @@ import type {
   EditorSaveChoices,
   EditorSaveWarning,
 } from '@kojo/plugin-api';
-import {errorText,  FULLWIDTH_SPACE, pathKey, WriteNotAllowedError } from '@kojo/plugin-api';
+import {errorText,  FULLWIDTH_SPACE, KOJO_SOURCE_EXTENSION, pathKey, WriteNotAllowedError } from '@kojo/plugin-api';
 // monaco-editor 0.57 的 exports 映射：'monaco-editor/*' → './esm/vs/*.js'
 import editorWorker from 'monaco-editor/editor/editor.worker.js?worker';
 import * as monaco from '../monaco/entry';
@@ -178,12 +178,19 @@ import {
 } from './editor-pane/preview-menu';
 import { canRunContextMenuCommand, runContextMenuCommand } from './context-menu-model';
 import {
+  LEGACY_KOJO_V1_CONTENT_NOTICE_MESSAGE,
+  LEGACY_KOJO_V1_CONTENT_NOTICE_TITLE,
   LEGACY_SEALED_NOTICE_MESSAGE,
   LEGACY_SEALED_NOTICE_TITLE,
+  loadLegacyKojoV1ContentNoticePrompted,
   loadLegacySealedNoticePrompted,
+  markLegacyKojoV1ContentNoticePrompted,
   markLegacySealedNoticePrompted,
+  shouldExplainLegacyKojoV1Content,
   shouldExplainLegacySealedOpen,
 } from './legacy-sealed-notice';
+import { fingerprintKojo2Source } from './kojo2-cutover';
+import { KOJO2_MIGRATE_COMMAND_ID } from './kojo2-migrate-entry';
 
 // Monaco worker 装配（vite ?worker 后缀）；ERB 无需语言服务 worker，base 编辑器 worker 即可
 self.MonacoEnvironment = {
@@ -1015,11 +1022,11 @@ export function EditorPane({
   }, [legacySyntaxOn]);
 
   /**
-   * 封存层首开说明（LAU-3b）：kojo1 关着时新开 `.kojo` / `.kojo1` 会落 `plaintext`，
+   * 封存层首开说明（LAU-3b）：kojo1 关着时新开 `.kojo1` 会落 `plaintext`，
    * 作者看到的是一整块白字。第一次遇到时给一条**可执行**说明（直达设置页），之后不再打扰。
    *
-   * 判据只认"这份 model 实际是 plaintext"——`.kojo` 里若写的是 2.0 语法，模型会挂
-   * `kojo2`，不弹；已认领的老 model 在门关上时也保持原语言（§4.4），同样不弹。
+   * 判据只认"这份 model 实际是 plaintext"——`.kojo1` 只有在 kojo1 门关着时才落纯文本；
+   * 已认领的老 model 在门关上时也保持原语言（§4.4），同样不弹。
    *
    * **调用点在换文件 effect 里、`setModel` 之后**（不是本组件自己的 effect）：文件那一拍
    * 是异步装 model 的，挂在 `[filePath]` 上会在 model 还没换装时读上一份文件（判成别人的
@@ -1041,6 +1048,58 @@ export function EditorPane({
       message: LEGACY_SEALED_NOTICE_MESSAGE,
       detail: path,
       actions: [
+        {
+          label: '打开设置',
+          run: () => {
+            runContextMenuCommand('layout.openSettings');
+          },
+        },
+      ],
+    });
+  }, [currentFileModel, notify]);
+
+  /**
+   * `.kojo` 仍是旧写法（LAU-3b-FLIP 补）：`.kojo` 归 2.0 之后，盘上的老文件按 2.0 读会
+   * 满屏报错。首次遇到时说清"文件没坏、是写法没迁"，并给迁移 / 改名两条出路。
+   *
+   * 判据与改名工具**同一枚**（`fingerprintKojo2Source` 判 `v1` 才算）；只看 `.kojo`，
+   * `.kojo1` 走上面那条封存说明。扫正文只在台账未记时发生一次，之后不再扫。
+   */
+  const maybeExplainLegacyKojoV1Content = useCallback((): void => {
+    const path = filePathRef.current;
+    if (path === null || !path.toLowerCase().endsWith(KOJO_SOURCE_EXTENSION)) return;
+    if (loadLegacyKojoV1ContentNoticePrompted()) return;
+    const model = currentFileModel();
+    if (!model || model.isDisposed()) return;
+    const flavor = fingerprintKojo2Source(model.getValue()).flavor;
+    if (!shouldExplainLegacyKojoV1Content({ path, flavor, prompted: false })) return;
+    markLegacyKojoV1ContentNoticePrompted();
+    notify({
+      kind: 'info',
+      title: LEGACY_KOJO_V1_CONTENT_NOTICE_TITLE,
+      message: LEGACY_KOJO_V1_CONTENT_NOTICE_MESSAGE,
+      detail: path,
+      actions: [
+        ...(canRunContextMenuCommand(KOJO2_MIGRATE_COMMAND_ID)
+          ? [
+              {
+                label: '打开迁移向导',
+                run: () => {
+                  runContextMenuCommand(KOJO2_MIGRATE_COMMAND_ID);
+                },
+              },
+            ]
+          : []),
+        ...(canRunContextMenuCommand('workbench.legacyRename')
+          ? [
+              {
+                label: '改名为 .kojo1',
+                run: () => {
+                  runContextMenuCommand('workbench.legacyRename');
+                },
+              },
+            ]
+          : []),
         {
           label: '打开设置',
           run: () => {
@@ -1432,7 +1491,7 @@ export function EditorPane({
         notify({
           kind: 'info',
           message:
-            '.kojo 预览随 kojo1 语法一起封存了：在「设置 › Kojo 2.0 切换阶段」退到 v1 档或双轨档即可重新开启（你的开关偏好没有被清掉）。',
+            '.kojo 预览随 kojo1 语法一起封存了：在「设置 › Kojo 2.0 档位」切到「双轨」或「只认 v1」即可重新开启（你的开关偏好没有被清掉）。',
         });
         return;
       }
@@ -2456,6 +2515,8 @@ export function EditorPane({
       publishCursor();
       // LAU-3b：封存档首开说明——model 已换装、语言 id 已定，此刻判"是不是一块白字"才是真的。
       maybeExplainLegacySealed();
+      // LAU-3b-FLIP 另一面：`.kojo` 按 2.0 打开、但正文仍是 v1 写法时，首次给迁移 / 改名出路。
+      maybeExplainLegacyKojoV1Content();
       stopApply();
     })();
     return () => {
@@ -2464,7 +2525,7 @@ export function EditorPane({
       markerFrameRef.current?.();
       markerFrameRef.current = null;
     };
-  }, [kernel, filePath, applyReveal, refreshMarkers, computeDirty, scheduleMarkers, makeDirtyListener, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor, maybeExplainLegacySealed]);
+  }, [kernel, filePath, applyReveal, refreshMarkers, computeDirty, scheduleMarkers, makeDirtyListener, clearSugarView, applySugarView, documentBroadcaster, readDocumentTruth, publishCursor, maybeExplainLegacySealed, maybeExplainLegacyKojoV1Content]);
 
   /* ------------------- 只读锁：编辑意图 → 询问 → 解锁 ------------------- */
 
@@ -2919,7 +2980,7 @@ export function EditorPane({
     legacySyntaxOn || !sugarView ? null : (
       <span
         className="erb-mode-hint"
-        title="kojo1 语法在当前档位（2.0 默认）下已封存，.kojo 预览投影的正是 kojo1 写法，因此一起停用。你的开关偏好没有被清掉：到「设置 › Kojo 2.0 切换阶段」退到 v1 档或双轨档，预览照旧生效。"
+        title="kojo1 语法在当前档位（2.0 默认）下已封存，.kojo 预览投影的正是 kojo1 写法，因此一起停用。你的开关偏好没有被清掉：到「设置 › Kojo 2.0 档位」切到「双轨」或「只认 v1」，预览照旧生效。"
       >
         <Icon name="preview" size="sm" /> .kojo 预览已随 kojo1 封存
       </span>

@@ -7,7 +7,7 @@
  * 换成 2.0）是 `K2-CUTOVER`。这里只交付"切得动、切得回、切了能看"的三件前置件：
  *
  * 1. **特性开关**：三态状态机 `v1-only → dual → 2.0-default`，每步都能回退（`advance` /
- *    `rollback` / 逃生门 `setStage`）。缺省 `2.0-default`（LAU-3 翻面）。
+ *    `rollback` / 逃生门 `setStage`）。默认（保底档）`2.0-default`（LAU-3 翻面）。
  * 2. **文件路由**：一份文件交给 v1 还是 2.0 解析器。LAU-3b-FLIP 之后口诀只剩两句：
  *    > override 当家，扩展名定归属。
  *    `.kojo` / `.kojo2` → 2.0，`.kojo1` → kojo1；阶段不再参与路由（只管封存层可见性与
@@ -76,7 +76,7 @@ import {
  *
  * - `v1-only`：只保留 kojo1 那条工具链（2.0 写回 / 迁移不接管）。`.kojo` 仍按 kojo（2.0）打开；
  * - `dual`：两边都能用（封存层开、2.0 工具链开）；
- * - `2.0-default`：kojo（2.0）默认，kojo1 封存（要显式「显示已封存功能」才上色）。
+ * - `2.0-default`：kojo（2.0）默认，kojo1 封存（切到「双轨」/「只认 v1」才上色）。
  */
 export type Kojo2CutoverStage = 'v1-only' | 'dual' | '2.0-default';
 
@@ -88,9 +88,9 @@ export const KOJO2_CUTOVER_STAGES: readonly Kojo2CutoverStage[] = [
 ];
 
 /**
- * 缺省阶段：**`2.0-default`**（用户 2026-10-27 口径「默认 kojo2」）。
+ * 默认阶段（保底档）：**`2.0-default`**（用户 2026-10-27 口径「默认 kojo2」）。
  *
- * 旧缺省是 `v1-only`（"切不动比切错了便宜"）。翻面之后失败方向也跟着翻：坏值 / 读不到
+ * 旧默认是 `v1-only`（"切不动比切错了便宜"）。翻面之后失败方向也跟着翻：坏值 / 读不到
  * 一律回 `2.0-default`，即"当前语言是 kojo（2.0）"；kojo1 成了要显式开启的封存层
  * （见 {@link kojo2StageAllowsLegacy} 与 `monaco/languages.ts` 的 `availability:'legacy'`）。
  * 存量 v1 计划的迁移规则见 {@link LegacyPersistedCutoverPlan}。
@@ -101,7 +101,7 @@ export const KOJO2_CUTOVER_DEFAULT_STAGE: Kojo2CutoverStage = '2.0-default';
 export const KOJO2_STAGE_LABELS: Readonly<Record<Kojo2CutoverStage, string>> = {
   'v1-only': '只留 kojo1 工具链：2.0 的写回 / 迁移不接管；`.kojo` 仍按 kojo（2.0）打开',
   dual: '双轨：kojo1 可用，`.kojo` / `.kojo2` 按 kojo（2.0）',
-  '2.0-default': 'kojo（2.0）默认：`.kojo` / `.kojo2` 按 2.0；kojo1 封存（要显式开启才上色）',
+  '2.0-default': 'kojo（2.0）默认：`.kojo` / `.kojo2` 按 2.0；kojo1 封存（切到前两档才上色）',
 };
 
 /** 运行期阶段守卫（持久化里读到脏值 / devtools 传错，一律回缺省，不抛） */
@@ -618,9 +618,9 @@ function readStorageString(storage: Kojo2CutoverStorage | null, key: string): st
 /**
  * 一份计划文档解析出的阶段 + **它是怎么来的**。
  *
- * `liftedFromV1Baseline` = 这份是 v1 计划且停在 `v1-only`，被读侧抬到了新缺省档。为什么要
+ * `liftedFromV1Baseline` = 这份是 v1 计划且停在 `v1-only`，被读侧抬到了新默认档。为什么要
  * 带出来：v1 的 `v1-only` 与"没人选过"不可区分，抬走它就必须允许**旧布尔键**把它拉回来——
- * 翻过旧开关的人不该因为"我们改了缺省"被顶到 `2.0-default`（那一档连 kojo1 一起封）。
+ * 翻过旧开关的人不该因为"我们改了默认"被顶到 `2.0-default`（那一档连 kojo1 一起封）。
  * 显式选过的档（v1 的另两档、任何 v2 计划）不带这一格 ⇒ 旧键无从插手。
  */
 export interface ParsedCutoverStage {
@@ -684,8 +684,8 @@ interface PersistedCutoverPlan {
 /**
  * v1 计划（**只读**，用于一次性迁移）。
  *
- * 为什么必须迁：`v1-only` 既是旧缺省、又是开机自动写下的基线（`attachStorage` 在没有计划
- * 时 `persist()` 一次）⇒ 盘上"几乎人人有一份 v1-only"，只改缺省常量对存量用户零效果。
+ * 为什么必须迁：`v1-only` 既是旧默认、又是开机自动写下的基线（`attachStorage` 在没有计划
+ * 时 `persist()` 一次）⇒ 盘上"几乎人人有一份 v1-only"，只改默认常量对存量用户零效果。
  * 规则写死：`v1-only` → `2.0-default`（并留 `migratedFromV1Plan` 让设置页如实说一句，
  * 不静默改档位）；`dual` / `2.0-default` 原样保留（那是显式选择）。
  */
@@ -832,7 +832,7 @@ export interface Kojo2CutoverController {
   /** 摘掉持久化端口（之后的改动只留在内存） */
   detachStorage(): void;
   /**
-   * 恢复出厂：缺省阶段 + 清空 override + 删存储键。
+   * 恢复出厂：默认阶段 + 清空 override + 删存储键。
    *
    * 只动**计划**这一格。旧布尔键不在这里删（本模块只碰自己那一个键的历史记账）：宿主做
    * "恢复出厂"要两件一起做——用 `ui/kojo2-cutover-settings.tsx` 的 `resetKojo2CutoverAll`

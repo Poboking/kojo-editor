@@ -87,17 +87,16 @@ describe('欢迎页 · 内容面不缩水', () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
   });
 
-  it('第四卡只发语义 id `kojo2`，且如实交代"默认档不认这一本"', () => {
+  it('第四卡只发语义 id `kojo2`，且如实交代"默认档就是 2.0"', () => {
     const kojo2 = WELCOME_TUTORIALS.find((t) => t.id === 'kojo2');
     expect(kojo2).toBeDefined();
     expect(kojo2!.title).toBe('Kojo 2.0 语言教程');
-    // 卡片只许说"默认档≠这一本教的东西"，不许把读者留在"以为切了才有"的错觉里。
+    // 卡片只许说清"默认档与这一本"的关系，不许把读者留在"以为切了才有"的错觉里。
     // 档位标签的实名（「只认 v1」）住在 `kojo2-cutover.ts` 的 `KOJO2_STAGE_LABELS`，
     // **本层不引述**：一是这里"一句教程内容都不写"的既有纪律，二是 `app-version.test.ts`
     // 的禁死值闸扫整个 WelcomeView.tsx 文本，带 `v`＋数字的字面量一律红（两条闸撞过一次，
     // 撞回来的那次是标签引到宿主里，不是版本闸误报——所以宿主别抄标签）。
     expect(kojo2!.blurb).toContain('默认档');
-    expect(kojo2!.blurb).toContain('老写法');
     expect(kojo2!.blurb).toContain('2.0');
     expect(kojo2!.blurb).not.toMatch(/v\d/);
     // 四张卡都是语义 id，宿主不许在这里认识任何 overlay 贡献名

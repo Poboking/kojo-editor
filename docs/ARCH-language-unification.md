@@ -70,12 +70,10 @@ LAU 就是把它们逐条剥出去。
    v1 是一条 `parse`（`client.ts:248`）推四条回复（`engine.ts:724,731,736,745`）。
    ⇒ 统一方向应是**kojo2 学 v1**（一条请求、四面回复），而不是反过来把 v1 的差集通道拆掉（§4.1）。
 
-`kojo2-*.ts` 在 `packages/app/src` 下共 **54 个文件 / 28,755 行**（`monaco/` 33 个 17,250 行、
-`monaco/tree-sitter/` 8 个、`ui/` 21 个），另有 4 个 `.tsx` 共 1,770 行；实现码**全部住在宿主**
-（唯一例外是 `plugins/erafl-adapter/tests/` 的两枚测试）。
-⚠ v1.0 的「25 个文件 / 31,599 行」两个数都对不上：25 只覆盖 `monaco/kojo2-*.ts`（那是 `HANDOFF-kojo2-sdk-packages.md`
-B5 里的旧读数 15,305 行，也已过时），31,599 无任何组合可得。B0–B5 已计划把它们搬进插件包，
-LAU 沿着这条既有路线走，不另起炉灶——**但 B4/B5 尚未开工**，LAU-3/4 必须排在它们之后或与它们合流（§8）。
+`kojo2-*.ts` 在 `packages/app/src` 下共 **50 个文件 / 27,090 行**（`monaco/` 29 个 15,286 行、
+`ui/` 21 个 11,804 行），另有 4 个 `.tsx` 共 1,853 行。B3c/B3d 已把补全 / 悬停 / 签名 / 格式化
+搬进 `@kojo/kojo-lang` 包与插件，B4（语言面进槽）与 B5a（`@kojo/kojo-sdk` 立包）已交付；
+剩下的宿主直装语言面归 B5b，仍等 B3 余项收口。LAU 沿着这条既有路线走，不另起炉灶（§8）。
 
 ---
 
@@ -1162,7 +1160,7 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 | **LAU-1** 协议 v3<br>（**等 D0 落点裁决**） | `structure-protocol.ts`（落点随 D0）；`StructureClient` 按 v3 重写成薄壳；`erb-ts.worker` / `kojo-ts.worker` / `worker-bootstrap` / `engine` 跟着改；**保留差集**（`parse` 走 `text` \| `edit` 二选一）；两档预算 + **连续 3 次失败判死**的账本（D8）；kojo2 侧补 `open` 握手与协议常量 | 协议表测试（形状 / `reason` 闭集 / 版本不符即拒 / `text` 与 `edit` 同给即 `invalid-input`）全绿；**新旧 worker 双跑一批**（`protocol-mismatch` 能降级到旧路，不整档哑火）；ERB 首帧 `open→ready` 与 `ready→首屏着色` 两个数写进 `BASELINES.md`；`tree-sitter-*` 五个测试文件全过；**差集路不退化**：6,003 行档每键的 worker 侧文本量与改前同量级（一条读数） | 单批一个 commit；`types.ts` 旧类型保留为别名 + 双跑窗口内可随时切回 |
 | **LAU-2** 角色表 | `semantic-roles.ts` + 别名表（**覆盖三侧全部 45 个现役 token 名**）；三份捕获表翻到角色；三套主题规则改 `token: role.*`；Monarch 的 token 名换一遍 | `pnpm audit:language` 的角色项 ✅（旧 token 名只出现在别名表一处，判定排除注释与 `audit-allow`）；主题对账测试全绿（每档有且只有一条规则 / ΔE / 对比度，指标沿用 `kojo2-theme.test.ts`）；**档数按 LAU-2a 的读数定**。**交付实测（2026-10-27）＝34 档 / 别名表 47 条**（18 档要合并今天不同色的档 ⇒ 违反"零改色"硬约束；34 是每套主题每角色一枚色的最小划分，理由与逐档比对见 §4.2 交付注） | 别名表在，旧名仍能取色 |
 | **LAU-3** 描述符 v2 + 封存层<br>（**与 ERB-PARITY 串行**；**✅ 2026-10-27 框架批，分支 `b/qoder/1027-lau-framework`**；本批仍认 `.kojo`，`.kojo1` 交接在 LAU-3b） | `availability` / `settingKey` / `presentSyntax`+`clearSyntax`；`services` 那格按 §4.3 的 ① 走 additive（`slotServices` 原位保留）；新增 `kojo-legacy` descriptor 与设置项；删 `tree-sitter/providers.ts:378,385` 两处 `if (ERB)`；**门开关不重认领已打开的 model** | 封存层默认关：`.kojo1` → `plaintext`；开启后四面齐全；关设置项时在编文件语言 id 不变、新开的落 `plaintext`（一条测试）；`providers.ts` 里零 `ERB_LANGUAGE_ID`；`language-parity` 取证表同批更新且全绿 | 设置项默认 false，等价于没有这一层 |
-| **LAU-3b** 扩展名交接工具<br>（**✅ 2026-10-27 同分支交付；翻转未做**） | 一键 `.kojo` → `.kojo1` 改名工具：扫描口上域 `.kojo` → 内容指纹只挑 v1 写法 → 清单先过目 → 逐文件写权限闸 + 写前备份 + 只改名不改内容；`.kojo1` 全链路认领（descriptor / 路由 `extension-kojo1` / 快速打开 / 拖放 / 引用台账 / 产物 / 迁移）；封存档首开说明。`kojo-extension-single-source` 闸扩到 `.kojo1` 字面量 | 只读域拒绝（`not-writable` 逐条回执）；备份失败不改名；清单之后正文变成 2.0 写法 ⇒ 写前再判一次并跳过；新增钉子 24 例（模型 9 / 扩展名跨面 11 / 首开 4）；`audit:language` 与开机图不回退 | 不改名即无影响（封存层默认关）；扩展名翻转仍是后续批 |
+| **LAU-3b** 扩展名交接工具<br>（**✅ 2026-10-27 同分支交付；翻转随后落地**） | 一键 `.kojo` → `.kojo1` 改名工具：扫描口上域 `.kojo` → 内容指纹只挑 v1 写法 → 清单先过目 → 逐文件写权限闸 + 写前备份 + 只改名不改内容；`.kojo1` 全链路认领（descriptor / 路由 `extension-kojo1` / 快速打开 / 拖放 / 引用台账 / 产物 / 迁移）；封存档首开说明。`kojo-extension-single-source` 闸扩到 `.kojo1` 字面量 | 只读域拒绝（`not-writable` 逐条回执）；备份失败不改名；清单之后正文变成 2.0 写法 ⇒ 写前再判一次并跳过；新增钉子 24 例（模型 9 / 扩展名跨面 11 / 首开 4）；`audit:language` 与开机图不回退 | 不改名即无影响（封存层默认关）；扩展名翻转已由 LAU-3b-FLIP 落地 |
 | **LAU-4** ERB 进槽<br>（**依赖 SDK B4/B5，与 ERB-PARITY 合流**） | ERB 的 11 枚 provider 搬成插件供方（依赖 B0–B5 的槽位契约） | ERB 与 kojo2 走同一条 `ui.editor.languageService`；宿主 `monaco/` 下不再有 ERB 判据（§9-1 的终态判据在此批才成立） | 插件可卸载，回落到 `legacyBridge` |
 | **LAU-5** 单 worker 池（可选）**✅ 2026-10-27（`b/qoder/1027-lau-roles`）** | 一个 structure worker 池共用 `Parser.init`，语言懒 `Language.load`。落法：协议抬到 **v4**（只加 `ready.docBase`；`parse` 仍只带 `doc`，worker 按 `docBase ≤ doc` 的最大那台路由）；`structure.worker.ts` 一条入口登记两门语言的资源包；`structure-pool.ts` 按 `runtimeWasmUrl` 借还线程；`client.ts` / `injection.ts` 把 `doc` 写成 `docBase + 序号`；kojo2 自有 worker 不进池（回 `docBase: 0`） | 冷启动省一次 runtime 初始化 + 少两条线程；内存峰值不升。⚠ v1.0 写的"实测 15.7ms"**在本仓无出处**（`STATE.md` / `BASELINES.md` 零命中）⇒ 这批自己出读数：`tools/structure-pool-readings.mjs`（一条线程，ERB + `.kojo`）：冷 ERB `open→ready` **96.8 ms**（`loadMs` 95.3）/ 热复用中位 **11.1 ms**（`loadMs` 0，3/3）；换语言冷启动 `loadMs` **12.8 ms**（比第一门少 **82.5 ms** 的运行时 init）；热轮次 JS 堆 17.9 → 18.3 MB（RSS 涨的是第二门文法的 native 段，不是泄漏） | 池关掉即回到"每语言一条线程"（`runtime.createWorker` 注入点仍在；`structure-pool.ts` 换回 `createWorker()` 一行） |
 | **LAU-6a** 注入探针<br>（**已交付，dev `45d18791`**） | 一份 `@原生` 语境 ×8（含 `[SKIPSTART]` 嵌套与深缩进两用例）× 五种区间取法，用 `includedRanges` 向 ERB runtime 发子 parse，读四面 | ✅ 判决 **可排**，但区间必须「整行对齐 ＋ 末行换行收口 ＋ EOF 无换行补虚拟换行」（④ 唯一全绿，③差那一口气）；坐标 40 组 0 错位 ⇒ Range 用 UTF-16 码元；顺带证清 erb wasm 与 grammar.js 同步、无重生成欠账 | 纯探针，不进产品码（`tools/inject-probe.mjs`） |

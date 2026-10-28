@@ -1242,7 +1242,7 @@ function SugarViewRow(args: {
             <>
               <br />
               <span className="settings-hint">
-                当前不可用：这一面投影的是 kojo1 写法，而 kojo1 已随「Kojo 2.0 切换阶段」的
+                当前不可用：这一面投影的是 kojo1 写法，而 kojo1 已随「Kojo 2.0 档位」的
                 2.0 默认档封存。退到 v1 档或双轨档即可再用——你的开关偏好没有被清掉
                 {sugarViewOn ? '（现在是开着的，退档后立即生效）' : ''}。
               </span>

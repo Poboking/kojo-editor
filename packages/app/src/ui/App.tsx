@@ -164,7 +164,7 @@ import { createLazyKojo2ProjectOptions } from './kojo2-project-scan-adapter';
 //
 // S7-首屏字节（2026-10-25）：服务本体 + 持久化 + 声明刷新 + 回收重试命令（约 93 KB 源码）
 // 原先随 App 静态进开机图，但这条链**只在 `isKojo2CutoverEnabled()` 为真且项目已开**时才
-// 用得上（默认 `v1-only` ⇒ 那片 effect 直接返回）。改为在 effect 里 `await import()` 三件
+// 用得上（「只认 v1」档 ⇒ 那片 effect 直接返回）。改为在 effect 里 `await import()` 三件
 // 套，默认路径上零解析；这里只剩类型（`import type` 会被擦除）。
 import type { Kojo2StorageService, Kojo2StorageServiceAdapter } from './kojo2-storage-service';
 // K2-STORAGE-RECYCLED-UI（缺口②）：会话内 `.kojo2` 变更 → 防抖 → refreshDeclarations。
@@ -928,7 +928,7 @@ export function App(): ReactElement {
    *
    * ⑤（S7-首屏字节）整族改走 `await import()`：服务本体 + 持久化 + 声明刷新 + 回收重试
    *    命令约 93 KB 源码原先随 App 静态进开机图，而这条链**只在 flag 打开且项目已开**时
-   *    才用得上；默认 `v1-only` 路径上一个字节都不解析。装配次序一字未改，只多一次本地
+   *    才用得上；「只认 v1」档上一个字节都不解析。装配次序一字未改，只多一次本地
    *    chunk 读取；`cancelled` 同时挡住"装载途中项目就关了"的迟到建服。
    */
   const [storageCommands, setStorageCommands] = useState<readonly ShellCommandSpec[]>([]);

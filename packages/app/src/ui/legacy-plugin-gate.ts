@@ -32,7 +32,7 @@ export const LEGACY_PLUGIN_IDS = [
   'ui-sugar-editor',
 ] as const;
 
-/** 这一刻该不该装 kojo1 插件族（缺省档 `2.0-default` ⇒ false） */
+/** 这一刻该不该装 kojo1 插件族（默认档 `2.0-default` ⇒ false） */
 export function legacyPluginFamilyEnabled(): boolean {
   return isKojoLegacySyntaxEnabled();
 }

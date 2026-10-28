@@ -113,7 +113,7 @@ export function isKojo2Path(filePath: string): boolean {
  *
  * 为什么不再看开关：**看得见文件是语言面**。切流开关管的是写回 / 迁移 / 老扩展名的解析器，
  * 而 2.0 文件是磁盘上已经存在的文件——把它从文件树与 Ctrl+P 里藏起来，等于"没切流就当作
- * 没有这份文件"（实测：缺省档位下 2.0 文件在快速打开里根本不出现）。
+ * 没有这份文件"（实测：旧版默认只认 v1 时 2.0 文件在快速打开里根本不出现）。
  */
 export function kojo2SourceExtensions(): readonly string[] {
   return KOJO2_FILE_EXTENSIONS;

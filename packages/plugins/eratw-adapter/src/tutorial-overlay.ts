@@ -432,9 +432,9 @@ export function createTutorialOverlay(deps: TutorialOverlayDeps): () => unknown 
       h(
         'div',
         { className: 'wizard-actions' },
-        // 「查语法全表」只服务 v1 侧那两本：全表是「现行全部 `.kojo` 写法」的附录（见
-        // `tutorial-reference.ts` 头注与 lead），把 2.0 的读者送过去就是拿 v1 表充 2.0 的账。
-        // 2.0 那本自带旧写法对照表（⑬ 的 tables），所以接线处**不传** `openReference`（缺省
+        // 「查语法全表」只服务 v1 侧那两本：全表前十三节查 `.kojo1`（见
+        // `tutorial-reference.ts` 头注与 lead）；2.0 那本自带旧写法对照表（⑬ 的 tables），
+        // 自己的六节也够查，所以接线处**不传** `openReference`（缺省
         // 即不渲染按钮，见 `TutorialOverlayDeps`）；下面这道 `!== 'reference'` 是第二道锁，
         // 对新 id 天然放行 ⇒ 按钮的有无始终由"调用方给不给去处"这一处决定。
         deps.openReference && tutorial.id !== 'reference'

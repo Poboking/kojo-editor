@@ -1,41 +1,30 @@
 /**
  * Kojo 2.0 · **model 语言重挂**（K2-CUTOVER-THEME）。
  *
- * ## 为什么需要"重挂"，而不是只在建 model 时判一次
+ * ## 为什么需要"重挂"
  *
- * `monaco/languages.ts` 的 descriptor 是**按扩展名**选语言的；2.0 切流还多了一条
- * **内容指纹**判据（`ui/kojo2-cutover.ts` 的 `2.0-default` 阶段：`.kojo` 由正文决定
- * 走 v1 还是 2.0）。建 model 只发生一次，而正文会变——作者把一份老文件改成 2.0 写法
- * 存盘之后，model 仍挂在 `kojo`（v1）语言面上：词法错、着色错、诊断全落在错的那条链上。
- * 扩展名也可能变（另存为 `.kojo2` / 树里改名）。所以需要一条**重判 → `setModelLanguage`**
- * 的通道。
+ * 认路判据只在**建 model 那一刻**答一次，而下面两件事会迟到：
  *
- * ## 设计约束（每条都有对应的测试）
+ * 1. **路径变了**（另存为 / 树里改名）：`.kojo1` ↔ `.kojo` 换了扩展名，语言就该跟着换；
+ * 2. **阶段 / per-file override 变了**：封存层开合、override 把某份文件钉到另一侧——
+ *    已打开的 model 要重判；`2.0-default → dual` 时纯文本的 `.kojo1` 也在这里被重新认领。
  *
- * 1. **只在 flag 开时动作**：`isEnabled()` 为 false ⇒ `attach` 连监听都不挂、内容变化
- *    连定时器都不排（v1 行为逐字不变，零副作用）；运行中 flag 被关掉，已排队的回调也
- *    只做一次 no-op 判定，不碰 model。
- * 2. **防抖**：击键触发的 `onDidChangeContent` 只排一个尾沿定时器（窗口内多次变化合并成
- *    一次重判）。`.kojo` 的指纹要扫全文，逐键重判是拿主线程换延迟。
- * 3. **幂等**：目标语言与 `model.getLanguageId()` 相同 ⇒ 不调 `setModelLanguage`
- *    （重挂会重置 tokenization / 装饰 / 折叠状态，白挂一次就是可见的闪动）。
- * 4. **不与 model 池的引用计数打架**：本模块只读 model（`getValue` / `getLanguageId`）
- *    与调 `setModelLanguage`——从不建 / 不 dispose / 不 acquire / 不 release。model 被
- *    池回收时（`onWillDispose`）自动解绑，不留悬空监听。
- * 5. **纯逻辑可单测**：路由函数、调度器、`setModelLanguage` 全部注入；本模块不 import
- *    `monaco/entry`（node 环境可直接跑）。
- * 6. **门不回头改语言**（LAU-3 / §4.4）：重挂时把 model 当前语言交回判据
- *    （{@link languageIdForKojo2Model} 的第三格），语言可用性门封掉一门语言之后，
- *    **已认领**的 model 保持原语言，只有新开的落 `plaintext`。判据住在
- *    `monaco/language-registry.ts::keepClaimedLanguageWhenGated`（只此一处）。
+ * 正文**不参与**认路（LAU-3b-FLIP：只看扩展名）；内容变化只触发一次防抖重判，结论仍是
+ * 同一枚扩展名判据——重判幂等，通常直接 skip。
  *
- * ## 调用面
+ * ## 约束（每条都有测试）
  *
- * 真身装配在 `ui/editor-model-pool-instance.ts`：`createModel` 建完 model 立刻 `attach`，
- * 语言判据与建 model 时用的是**同一个** {@link languageIdForKojo2Model}（两处各写一套是
- * 漂移的源头）。宿主将来接"另存为 / 改名"时调 `controller.retarget(model, newPath)`（或
- * 手里的 `handle.retarget`）即可立即重判；切流阶段变化时 `refreshAll()` 让所有挂着的
- * model 重新路由（真身已订 `getKojo2CutoverController().subscribe`）。
+ * 1. **只在开关开时动作**：`isEnabled()` 为 false ⇒ 不订阅、不排定时器（v1 行为逐字不变）；
+ * 2. **防抖**：击键只排一个尾沿定时器，窗口内多次变化合并成一次；
+ * 3. **幂等**：目标语言与 `model.getLanguageId()` 相同 ⇒ 不调 `setModelLanguage`；
+ * 4. **不碰 model 池**：只读 / 只 `setModelLanguage`，从不建 / dispose / acquire / release；
+ * 5. **纯逻辑可单测**：路由、调度、`setModelLanguage` 全部注入，不 import `monaco/entry`；
+ * 6. **门不回头改语言**（LAU-3 / §4.4）：重挂时把当前语言交给
+ *    {@link languageIdForKojo2Model} 的第三格；门封掉一门语言后**已认领**的 model 保持原语言，
+ *    只有新开的落 `plaintext`。判据住在 `monaco/language-registry.ts::keepClaimedLanguageWhenGated`。
+ *
+ * 真身装配在 `ui/editor-model-pool-instance.ts`：建完 model 立刻 `attach`，与建 model 用
+ * 同一枚 {@link languageIdForKojo2Model}。阶段变化时 `refreshAll()` 重判所有挂着的 model。
  */
 
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
@@ -49,20 +38,20 @@ import { isKojo2CutoverEnabled } from './kojo2-flag';
 /**
  * 一份文件该挂哪个 Monaco 语言 id（建 model 与重挂**共用****这一枚**）。
  *
- * 判据顺序与 `editor-model-pool-instance` 收口前逐字一致：
- * 1. 切流阶段停在 `v1-only`（开关关）⇒ 恒等于 `languageFor(path)`：`.kojo2` 照样是
- *    `kojo2`（descriptor 无条件登记），只是不走**内容指纹**那条 `.kojo` 切换；
+ * 判据顺序：
+ * 1. 切流阶段停在 `v1-only`（开关关）⇒ 恒等于 `languageFor(path)`；语言面与工具链无关；
  * 2. 开关开 ⇒ 交给切换控制器路由：
- *    - `resolved` 且 parser 是 `kojo2` ⇒ `kojo2`（`.kojo2` 在所有阶段都走这一条）；
- *    - `resolved` 且 parser 是 v1 / `ambiguous` / `needs-content` / `not-kojo` ⇒ `languageFor(path)`；
- *    - `blocked`（`v1-only` 下把 `.kojo` 显式钉成 2.0）⇒ `plaintext`：不拿 v1 词法去啃
- *      2.0 文本（那会把整篇标成错误），也不假装那条解析器切换已经可用。
+ *    - `resolved` 且 parser 是 `kojo2` ⇒ `kojo2`（`.kojo` / `.kojo2` 恒走这一条）；
+ *    - `resolved` 且 parser 是 v1 ⇒ `languageFor(path)`（`.kojo1`）；
+ *    - `blocked`（`v1-only` 下把非 kojo 文件显式钉成 2.0）⇒ `plaintext`：不拿 v1 词法
+ *      去啃 2.0 文本，也不假装那条 override 已经可用；
+ *    - `not-kojo`（以及历史成员 `ambiguous` / `needs-content`）⇒ `languageFor(path)`。
  *
  * ## 第三格 `currentLanguageId`（LAU-3 / §4.4：门不回头改语言）
  *
  * **只有重挂路径传它**（建 model 那一刻没有"当前语言"）。传了 ⇒ 结论再过一道
- * {@link keepClaimedLanguageWhenGated}：语言可用性门把 kojo1（封存层）关掉之后，`languageFor`
- * 对一份 v1 内容的 `.kojo` 会答 `plaintext`，若照单重挂，作者眼前这份在编文件当场丢高亮与
+ * {@link keepClaimedLanguageWhenGated}：语言可用性门把 kojo1（封存层）关掉之后，
+ * 一份封存的 `.kojo1` 会答 `plaintext`；若照单重挂，作者眼前这份在编文件当场丢高亮与
  * 四面——比"这一层暂时不可用"严重得多。守门后的口径：**已认领的保持原语言，新开的落兜底**。
  */
 export function languageIdForKojo2Model(
@@ -99,7 +88,7 @@ function resolveKojo2ModelLanguage(filePath: string, text: string): string {
  * 真身类型天然满足它，node 测试给个假体即可。
  */
 export interface Kojo2LanguageModelLike {
-  /** 正文（指纹路由要读；只在防抖到点后读一次） */
+  /** 正文（认路已不读它；重判时只作为路由入参的兼容字段） */
   getValue(): string;
   /** 当前语言 id（幂等判据） */
   getLanguageId(): string;
@@ -161,8 +150,8 @@ export interface Kojo2ModelLanguageHandle {
 export interface Kojo2ModelLanguageAttachOptions {
   /**
    * 建 model 时**已经用同一枚判据**选定的语言 id。与 `model.getLanguageId()` 一致时，
-   * `attach` 不再重扫一次正文（`.kojo` 在 `2.0-default` 阶段的指纹要扫全文，开一份
-   * 大文件不该扫两遍）；不一致或没给 ⇒ 立刻对齐一次（兜住别的调用方建错的 model）。
+   * `attach` 不再多判一次（判据已由调用方按同一枚扩展名判过）；不一致或没给 ⇒
+   * 立刻对齐一次（兜住别的调用方建错的 model）。
    */
   readonly languageId?: string;
 }
@@ -206,7 +195,7 @@ export interface Kojo2ModelLanguageController {
   dispose(): void;
 }
 
-/** 防抖窗口：一次停手（~300ms）之后就重判，人眼几乎察觉不到，又不会逐键扫全文 */
+/** 防抖窗口：一次停手（~300ms）之后就重判，人眼几乎察觉不到，又不会逐键重判 */
 export const KOJO2_LANGUAGE_REMOUNT_DEBOUNCE_MS = 300;
 
 /* ============================== 控制器 ============================== */
@@ -400,8 +389,7 @@ export function createKojo2ModelLanguageController(
     }
     attachments.set(model, attachment);
     // 建 model 时若已用同一枚判据选定语言（`options.languageId` 且与当前一致），就不再
-    // 重扫正文——`.kojo` 在 2.0-default 阶段的指纹要扫全文，开一份大文件不该扫两遍；
-    // 否则立刻对齐一次，兜住"别的调用方建 model 时判错 / 没判"。
+    // 多判一次；否则立刻对齐一次，兜住"别的调用方建 model 时判错 / 没判"。
     if (options?.languageId !== undefined && options.languageId === model.getLanguageId()) {
       skipped += 1;
     } else {

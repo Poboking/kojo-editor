@@ -346,7 +346,7 @@ export function unavailableReason(descriptor: LanguageDescriptor): LanguageUnava
   return descriptor.availability === 'legacy'
     ? {
         short: '已封存',
-        full: `已封存的语言：需在「设置 › Kojo 2.0 切换阶段」里退到 v1 档或双轨档才会启用（settingKey=${key}）`,
+        full: `已封存的语言：需在「设置 › Kojo 2.0 档位」里切到「双轨」或「只认 v1」才会启用（settingKey=${key}）`,
       }
     : {
         short: '未启用',
