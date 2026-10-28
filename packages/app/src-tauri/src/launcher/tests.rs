@@ -1187,13 +1187,16 @@ fn stop_is_idempotent_and_announces_stopping_once() {
 /// 而 `last` 还是 stop 自己写的 `stopping`（`exit_reason: None`）⇒ stop 的返回值变成
 /// `state:"stopping", exit_reason:None`。
 ///
-/// 为什么用**多轮**而不是单轮：窗口只有"摘表放锁 → 写快照拿锁"这几微秒，单轮几乎撞不上；
-/// 30 轮在满载并行下足以把概率放大到能看见（每轮约 2.6 s，几乎全花在 debug 构建里对
-/// 19 MB 测试二进制做 sha256 校验——轮数再翻倍只是线性加测试时长，别为此加）。
+/// 为什么用**多轮**而不是单轮：窗口只有"摘表放锁 → 写快照拿锁"这几微秒，单轮几乎撞不上。
+/// **轮数为什么是 8 而不是 30**：每轮约 2.6 s（几乎全花在 debug 构建里对 19 MB 测试二进制
+/// 做 sha256 校验，`start_blocking` 的信任复核，绕不过去），30 轮会把全队的
+/// `cargo test --lib` 从 ~12 s 拉到 ~75 s。这条是**概率网**，而防回改的确定性防线是紧跟着的
+/// 顺序钉 `terminal_snapshot_is_written_before_running_record_is_dropped`（它在旧代码上
+/// 8/8 轮重载跑全红）；本机要加压就临时把 `ROUNDS` 改大再跑，**别把大数提交**。
 /// 每一轮都等旧见证文件删掉再 `start_ready`，保证等的是**这一轮**的夹具报到。
 #[test]
 fn every_stop_result_that_is_terminal_carries_exit_reason() {
-    const ROUNDS: usize = 30;
+    const ROUNDS: usize = 8;
     let app = TestDir::new("stop-terminal");
     let witness = TestDir::new("stop-terminal-witness");
     let (host, _events) = test_host(app.path());
