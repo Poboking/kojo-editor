@@ -425,7 +425,7 @@ export function createErbParserPlugin(): Plugin {
       let index: ErbIndex | null = null;
       /** 在途构建（并发调用 ensureIndex 时共享同一 Promise） */
       let inFlight: Promise<ErbIndex> | null = null;
-      /** 当前项目的口上根（由 project.opened 提供；**不含**工作区根——那些每次现读） */
+      /** 当前项目的扫描根（口上根 ∪ 只读基座库根，由 project.opened 提供；**不含**工作区根——那些每次现读） */
       let projectRoots: string[] = [];
       /**
        * 最近一次**起跑构建**所用的扫描根签名（`rootsSignature(planScanRoots().roots)`）。
@@ -1899,7 +1899,23 @@ export function createErbParserPlugin(): Plugin {
           if (!isDialect(request.path)) return undefined;
           const idx = index;
           if (!idx) return undefined;
-          return { kind: 'inlayHint', hints: callArgumentHints(request.text, (name) => inlaySlotsOf(idx, name)) };
+          // R1（2026-10-28）：宿主给的行窗口原样下传——供方只判这一段，判据一字不动
+          // （跨行的 `[SKIPSTART]` 屏蔽状态由 `visibleCodeLines` 从第 1 行算进来）。
+          // 宿主有心跳开销更低的一条路：连带行首偏移一起给（`startOffset`），供方就不用
+          // 逐行数换行走过去——52,601 行文件上那是 2.2 ms 的差别。给了但校验不过
+          // （不是行首）时 `visibleCodeLines` 自己退回走位，这里不做判断。
+          const window =
+            request.range === undefined
+              ? undefined
+              : {
+                  from: request.range.startLineNumber,
+                  to: request.range.endLineNumber,
+                  ...(request.range.startOffset === undefined ? {} : { fromOffset: request.range.startOffset }),
+                };
+          return {
+            kind: 'inlayHint',
+            hints: callArgumentHints(request.text, (name) => inlaySlotsOf(idx, name), window),
+          };
         },
       });
     },

@@ -185,3 +185,143 @@ describe('inlaySlotsOf · 多处定义的对账', () => {
     expect(inlaySlotsOf(indexWith([]), 'NOPE')).toBeNull();
   });
 });
+
+/* ============================== 行窗口（R1，2026-10-28） ============================== */
+
+/**
+ * 窗口化是**少答**，不是"换个判据"——所以这里不写"窗口应该给什么"的新期望值，
+ * 只钉一条恒等式：
+ *
+ *   `callArgumentHints(text, slots, {from, to})`  ≡  `callArgumentHints(text, slots)`
+ *                                              按行过滤到 [from, to]
+ *
+ * 全篇那一侧是**旧路径**（`splitErbLines` + 整篇判读），窗口那一侧是新路径
+ * （原文上逐行走到窗口）。两边逐条相等 ⇒ 判据没漂、`[SKIPSTART]` 跨行状态没丢、
+ * CRLF 的行边界没错位。
+ */
+describe('callArgumentHints · 行窗口（窗口 = 全篇按行过滤）', () => {
+  const slots = slotsOf({ F: ['甲', '乙', '丙'] });
+
+  /** 语料形态：定义行 / 调用行 / 注释 / 屏蔽区 / 代码前缀 / CRLF 变体 */
+  const LINES = [
+    '@F(甲, 乙, 丙)',
+    'CALL F, 1, 2, 3',
+    '; 注释行',
+    '[SKIPSTART]',
+    'CALL F, 甲, 乙', // 屏蔽区内：全篇视角下一条都不给
+    'CALL F, 9, 9',
+    '[SKIPEND]',
+    'CALL F, 1, 2',
+    '  ;!; CALL F, 4, 5', // 代码前缀之后是真代码
+    'CALL  , 1, 2', // 名字槽空
+    'CALL F(1, 2)',
+    'IF C[1] > 0',
+    '[DIM 10]',
+    '$LABEL',
+    'CALL TRYCCALLLIST, 1',
+    'CALL F, "a,b", ; 尾注释',
+    '@G(甲)',
+    '[SKIPSTART]',
+    'CALL F, 7, 8',
+  ];
+  const LF = LINES.join('\n');
+  const CRLF = LINES.join('\r\n');
+  /** 末行没有换行符的形态（split 的最后一格是非空行） */
+  const NO_TRAILING_NL = LINES.join('\n');
+
+  const fullOf = (text: string) => callArgumentHints(text, slots);
+  const windowOf = (text: string, from: number, to: number) => callArgumentHints(text, slots, { from, to });
+  const expectSame = (text: string, label: string) => {
+    const full = fullOf(text);
+    expect(full.length, `${label}：全篇至少要有几条，否则这条恒等式是空转`).toBeGreaterThan(4);
+    for (let from = 1; from <= LINES.length + 1; from++) {
+      for (let to = from; to <= LINES.length + 2; to++) {
+        expect(windowOf(text, from, to), `${label} 窗口 ${from}..${to}`).toEqual(
+          full.filter((h) => h.line >= from && h.line <= to),
+        );
+      }
+    }
+  };
+
+  it('LF：所有窗口都等于全篇按行过滤（含屏蔽区与代码前缀）', () => {
+    expectSame(LF, 'LF');
+  });
+
+  it('CRLF：行边界按 `\\r\\n` 算，结果与 LF 逐条相同', () => {
+    expectSame(CRLF, 'CRLF');
+    expect(fullOf(CRLF)).toEqual(fullOf(LF));
+  });
+
+  it('末行无换行符 / 空文本 / 越界窗口', () => {
+    expectSame(NO_TRAILING_NL, '末行无换行');
+    expect(callArgumentHints('', slots, { from: 1, to: 10 })).toEqual([]);
+    // 窗口整个落在文末之外 ⇒ 没有行可判，不是"整篇"
+    expect(windowOf(LF, 100, 200)).toEqual([]);
+    // 空区间 / NaN 窗口 ⇒ 空（不猜全篇）
+    expect(windowOf(LF, 5, 4)).toEqual([]);
+    expect(callArgumentHints(LF, slots, { from: Number.NaN, to: 5 })).toEqual([]);
+    // `to = Infinity` 合法：走到文末
+    expect(callArgumentHints(LF, slots, { from: 15, to: Number.POSITIVE_INFINITY })).toEqual(
+      fullOf(LF).filter((h) => h.line >= 15),
+    );
+  });
+
+  it('屏蔽区里一行都不给：整篇与任何覆盖它的窗口都一致（跨行状态没丢）', () => {
+    const full = fullOf(LF);
+    expect(full.some((h) => h.line >= 4 && h.line <= 7), '屏蔽区内不该有条目').toBe(false);
+    for (let to = 4; to <= 7; to++) expect(windowOf(LF, 4, to)).toEqual([]);
+  });
+
+  /* ---------------- 起点偏移（R1 第二刀，2026-10-28） ----------------
+   *
+   * `fromOffset` 让供方跳过"数换行走位"（52,601 行文件上那是 2.2 ms），但它是**调用方
+   * 递进来的坐标**——错了必须退回走位，绝不能静默按错的起点给答案。
+   */
+
+  const lineStartsOf = (text: string): number[] => {
+    const out = [0];
+    for (let at = text.indexOf('\n'); at !== -1; at = text.indexOf('\n', at + 1)) out.push(at + 1);
+    return out;
+  };
+
+  it('带上正确的起点偏移 ⇒ 与不带偏移逐条相同（LF / CRLF）', () => {
+    for (const [text, label] of [
+      [LF, 'LF'],
+      [CRLF, 'CRLF'],
+    ] as const) {
+      const full = fullOf(text);
+      const starts = lineStartsOf(text);
+      for (let from = 1; from <= LINES.length + 1; from++) {
+        for (let to = from; to <= LINES.length + 2; to++) {
+          const window = { from, to, fromOffset: starts[from - 1] };
+          expect(callArgumentHints(text, slots, window), `${label} 窗口 ${from}..${to}（带偏移）`).toEqual(
+            full.filter((h) => h.line >= from && h.line <= to),
+          );
+        }
+      }
+    }
+  });
+
+  it('偏移给错就退回走位：行中间 / 不自洽 / 越界 / 指向 `\\n` 本身', () => {
+    const full = fullOf(LF);
+    const expected = (from: number, to: number) => full.filter((h) => h.line >= from && h.line <= to);
+    const starts = lineStartsOf(LF);
+    const at = (from: number, to: number, fromOffset: number) => callArgumentHints(LF, slots, { from, to, fromOffset });
+
+    // 行中间（第 5 行行首再往后 3 个字符）：采信了就会把半行当整行
+    expect(at(5, 12, starts[4]! + 3), '行中间').toEqual(expected(5, 12));
+    // 与 from 不自洽：指向文首却声称第 9 行
+    expect(at(9, 12, 0), '与 from 不自洽').toEqual(expected(9, 12));
+    expect(at(5, 12, LF.length + 1), '越界').toEqual(expected(5, 12));
+    expect(at(5, 12, -1), '负数').toEqual(expected(5, 12));
+    expect(at(5, 12, Number.NaN), 'NaN').toEqual(expected(5, 12));
+    expect(at(5, 12, Number.POSITIVE_INFINITY), 'Infinity').toEqual(expected(5, 12));
+    // CRLF：指向 `\n` 本身（它前一个字符是 `\r`，不是行首）
+    const crlfFull = fullOf(CRLF);
+    expect(callArgumentHints(CRLF, slots, { from: 5, to: 12, fromOffset: lineStartsOf(CRLF)[4]! - 1 })).toEqual(
+      crlfFull.filter((h) => h.line >= 5 && h.line <= 12),
+    );
+    // 第一行 + 偏移 0 是合法组合
+    expect(at(1, 3, 0), '首行').toEqual(expected(1, 3));
+  });
+});

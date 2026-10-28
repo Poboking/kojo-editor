@@ -28,6 +28,7 @@ import type {
   EditorDocumentSymbol,
   EditorFoldingRange,
   EditorInlayHint,
+  EditorInlayHintRange,
   EditorCodeLens,
   EditorSymbolLocation,
   EditorTextEdit,
@@ -55,7 +56,6 @@ import {
   markersToDecorations,
 } from '../monaco/kojo-code-action';
 import {
-  codeLensAffordable,
   collectCodeLenses,
   installCodeLensProvider,
   withinCodeLensBudget,
@@ -66,6 +66,7 @@ import { editorModelPool } from './editor-model-pool-instance';
 import {
   collectInlayHints,
   inlayHintsAffordable,
+  inlayHintsWindowed,
   installInlayHintsProvider,
 } from '../monaco/kojo-inlay-hints';
 import { revealLocationOf } from '../monaco/reveal-position';
@@ -895,10 +896,17 @@ export function readCodeLenses(model: Monaco.editor.ITextModel, kernel: Kernel):
  * 行内提示腿：提示钉在预览面上 ⇒ 折行、列落行首（纪律②），落在同一格同一句话的并成一条
  * （源侧那几枚各自钉在某个实参之前，预览行没有那些实参的位置可言）。
  */
-export function readInlayHints(model: Monaco.editor.ITextModel, kernel: Kernel): EditorInlayHint[] {
+export function readInlayHints(
+  model: Monaco.editor.ITextModel,
+  kernel: Kernel,
+  range?: Monaco.IRange,
+): EditorInlayHint[] {
   const target = readTargetOf(model);
   if (!target) return [];
-  const hints = inlayHintsFor(target.model, target.path, kernel);
+  // 窗口只在"问的就是屏幕上这份 model"时才可用（R1）：糖面下 `target.model` 是背后的
+  // **原文**，Monaco 给的行号是预览坐标，两个坐标系不能混（混了就是把提示贴到别的行上）。
+  const window = target.sugar === null && target.model === model ? range : undefined;
+  const hints = inlayHintsFor(target.model, target.path, kernel, window);
   if (!target.sugar) return hints;
   const out: EditorInlayHint[] = [];
   const seen = new Set<string>();
@@ -985,6 +993,15 @@ interface DocumentMemoKey {
   readonly versionId: number;
   readonly project: GameProject | null;
   readonly contributions: number;
+  /**
+   * 行窗口（R1，2026-10-28）：`0` = 整篇。
+   *
+   * 只有行内提示那条腿会填——它按 Monaco 的可视区取数，**不同窗口是不同的答案**，
+   * 所以窗口必须进键（否则滚到下一屏会拿到上一屏那一份）。其余十条腿一律 `0`，
+   * 键与加这一格之前逐字相同。
+   */
+  readonly windowFrom: number;
+  readonly windowTo: number;
 }
 
 interface DocumentMemoEntry<V> extends DocumentMemoKey {
@@ -1106,12 +1123,15 @@ function documentMemoKey(
   path: string,
   kernel: Kernel,
   contributions: number,
+  window?: Monaco.IRange | null,
 ): DocumentMemoKey {
   return {
     path,
     versionId: model.getAlternativeVersionId(),
     project: kernel.project.current(),
     contributions,
+    windowFrom: window ? window.startLineNumber : 0,
+    windowTo: window ? window.endLineNumber : 0,
   };
 }
 
@@ -1119,7 +1139,9 @@ function sameDocumentKey(a: DocumentMemoKey, b: DocumentMemoKey): boolean {
   return a.path === b.path &&
     a.versionId === b.versionId &&
     a.project === b.project &&
-    a.contributions === b.contributions;
+    a.contributions === b.contributions &&
+    a.windowFrom === b.windowFrom &&
+    a.windowTo === b.windowTo;
 }
 
 /** 记忆化本体：键合就交回缓存，否则算一次并记下（`compute` 里只许做纯取数） */
@@ -1170,32 +1192,75 @@ export function foldingRangesFor(
 }
 
 /**
- * 行内提示（PS-4 的②+③）：档内问一次记一次。
+ * 行内提示（PS-4 的②+③；R1 2026-10-28 改成**按窗口取数**）。
  *
- * 为什么不按 Monaco 给的区间**取文**：供方 `visibleCodeLines` 带 `[SKIPSTART]…[SKIPEND]`
- * 的跨行状态，从窗口中间起算会把屏蔽区里的行当代码行 ⇒ 凭空多出提示（错标比不标危险）。
- * 区间这一侧本批改的是**交回**：`toMonacoInlayHints` 只交回这一段（见该模块头注），
- * 每次滚动不再为全篇每条提示重建装饰器。
+ * `window` 是 Monaco 这次问的那一段（可视区 ±30 行）。宿主把它下传给能按窗口取数的供方
+ * （`inlayHintsWindowed`；ERB 方言那条腿），于是单价从"正比于行数"变成"正比于视口"，
+ * 52,601 行 32.9 ms → 400 行窗口 **0.44–0.54 ms**——**体量闸因此对 ERB 消失**。
+ *
+ * 仍然下传的是**整篇文本**（不是窗口那一段）：供方带 `[SKIPSTART]…[SKIPEND]` 的跨行状态，
+ * 从窗口中间起算会把屏蔽区里的行当代码行 ⇒ 凭空多出提示（错标比不标危险）。整篇文本是
+ * "让供方能自证状态"的唯一办法；省掉的是逐行判读，不是这份文本。
+ *
+ * 但**光有文本还不够**：供方要跳到第 26,300 行，只能自己数换行（42 ns/行，实测 1.13 ms），
+ * 这笔钱会把窗口化的收益吃掉一半。因此 `windowRangeOf` 连带把窗口首行的**行首偏移**
+ * （model 的行首表，一次二分）一起下传——那是 R1 的第二刀，读数见 `references.ts` 的
+ * `VisibleLineWindow.fromOffset`。
+ *
+ * 不能按窗口取数的腿（`.kojo1` 糖线整篇转译、`kojo2` 整篇 lex+parse）照旧吃体量档，
+ * 而且**不传窗口**——传了只会让它们每换一屏重跑一遍整篇解析。
  */
 export function inlayHintsFor(
   model: Monaco.editor.ITextModel,
   path: string,
   kernel: Kernel,
+  window?: Monaco.IRange | null,
 ): EditorInlayHint[] {
   const lineCount = model.getLineCount();
-  if (!inlayHintsAffordable(lineCount)) return [];
+  const languageId = model.getLanguageId();
+  if (!inlayHintsAffordable(languageId, lineCount)) return [];
+  const range = window !== undefined && window !== null && inlayHintsWindowed(languageId) ? window : null;
   const contributions = kernel.slots.query('ui.editor.languageService');
-  return memoizedDocument(inlayHintsMemo, model, documentMemoKey(model, path, kernel, contributions.length), () =>
-    collectInlayHints(contributions, {
-      kind: 'inlayHint',
-      ...documentRequestFields(model, path, kernel.project.current()),
-    }),
+  return memoizedDocument(
+    inlayHintsMemo,
+    model,
+    documentMemoKey(model, path, kernel, contributions.length, range),
+    () =>
+      collectInlayHints(contributions, {
+        kind: 'inlayHint',
+        ...documentRequestFields(model, path, kernel.project.current()),
+        ...(range === null ? {} : { range: windowRangeOf(model, range) }),
+      }),
   );
 }
 
 /**
- * 行上注解（PS-4 的②）：判据与档位照旧全在接线处，只把"同一篇没改过第二次"的那几次
- * 整篇拷贝挡掉（Monaco 在 model 切换 / 配置变化 / 注册表变化后也会重新问一遍）。
+ * 把 Monaco 的行窗口换成请求里的 `range`，并**顺带给出窗口首行的行首偏移**。
+ *
+ * 那一格偏移是 R1 的第二刀（2026-10-28）：供方要跳过窗口之前那几万行只能数换行，
+ * 实测 42 ns/行 ⇒ 52,601 行文件的文末窗口光走位 2.2 ms。行首表本来就在 model 里
+ * （`getOffsetAt` 一次二分，本机 52,601 行的量具上 ~1 µs），把它递给供方比让供方
+ * 自己量便宜三个数量级。
+ *
+ * 行号先夹进 `[1, lineCount]`：Monaco 理论上不会给出界区间，但 `getOffsetAt` 越界会抛，
+ * 而这里抛出去的代价是"整屏提示消失"——夹一下比信它便宜。
+ */
+function windowRangeOf(model: Monaco.editor.ITextModel, window: Monaco.IRange): EditorInlayHintRange {
+  const startLineNumber = Math.min(Math.max(1, window.startLineNumber), model.getLineCount());
+  return {
+    startLineNumber,
+    endLineNumber: window.endLineNumber,
+    startOffset: model.getOffsetAt({ lineNumber: startLineNumber, column: 1 }),
+  };
+}
+
+/**
+ * 行上注解（PS-4 的②；R2 2026-10-28 撤掉体量档）：判据与两道**产出**护栏全在接线处，
+ * 只把"同一篇没改过第二次"的那几次整篇拷贝挡掉（Monaco 在 model 切换 / 配置变化 /
+ * 注册表变化后也会重新问一遍）。
+ *
+ * 体量档为什么能撤：语料最大那篇 **52,602 行整篇 5.8ms**，而门槛内最贵那篇 4,353 行要
+ * 7.1–9.4ms——单价由定义数与索引查询决定，不是行数（见 `kojo-code-lens.ts` 头注读数表）。
  */
 export function codeLensesFor(
   model: Monaco.editor.ITextModel,
@@ -1203,7 +1268,6 @@ export function codeLensesFor(
   kernel: Kernel,
 ): EditorCodeLens[] {
   const lineCount = model.getLineCount();
-  if (!codeLensAffordable(lineCount)) return [];
   const contributions = kernel.slots.query('ui.editor.languageService');
   return memoizedDocument(codeLensesMemo, model, documentMemoKey(model, path, kernel, contributions.length), () => {
     const lenses = collectCodeLenses(contributions, {
@@ -2282,14 +2346,16 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     }));
     // 行内提示（LS-R6，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第七个判别成员。
     // 应答判据与 codeLens 逐字同款：取数落在原文 model 上，糖面把提示行折回预览行、列落到行首
-    //（见 `readInlayHints`），体量档 `inlayHintsAffordable` 判在请求之前（52,602 行实测
-    // 50ms/次，档线与 stickyScroll / 面包屑 / codeLens 同一条）。提示说什么（实参落
+    //（见 `readInlayHints`）。R1（2026-10-28）起这条腿**按 Monaco 的可视区取数**：窗口经
+    // `resolve(model, range)` → 请求的 `range` 下传，供方只判这一段（52,601 行整篇 32.9 ms
+    // → 400 行 0.44 ms），ERB 方言因此**没有行数闸**；不能按窗口取数的腿（`.kojo1` 糖线、
+    // `kojo2` 整篇 lex+parse）照旧吃 `LARGE_FILE_LINES` 且不传窗口。提示说什么（实参落
     // 哪个形参槽）全在 erb-parser（`erb-inlay-hints`），宿主零判据——取舍见
     // `monaco/kojo-inlay-hints.ts` 与 `plugins/erb-parser/src/inlay-hints.ts` 头注。
     // PS-4：这条腿按版本记忆化（Monaco **每次滚动**都重新问，缺省防抖低到 25ms），
     // 交回时只给 Monaco 点名的那一段区间（见 `toMonacoInlayHints` 的 `range`）。
     globalDisposers.push(installInlayHintsProvider(monaco, {
-      resolve: (model) => readInlayHints(model, requireKernel()),
+      resolve: (model, range) => readInlayHints(model, requireKernel(), range),
     }));
   } catch (e: unknown) {
     // 全有或全无：拆掉**已登记的**每一枚（未登记 = 根本没建起来）、清空登记表、复位 flag，

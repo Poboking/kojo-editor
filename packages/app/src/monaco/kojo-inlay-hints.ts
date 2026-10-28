@@ -14,34 +14,52 @@ import { registerForLanguageServices } from './register-dialects';
  * **纯逻辑**（合并 / 抛错隔离 / 去重 / 越界丢弃 / 夹取）与 **Monaco 协议翻译**
  * （`installInlayHintsProvider`）分开，前者可脱离 React 与编辑器单测。
  *
- * ## 代价模型（为什么有体量档；取证 monaco-editor 0.57）
+ * ## 代价模型（R1，2026-10-28 重写；取证 monaco-editor 0.57 + 真语料）
  *
  * `inlayHintsController.js` ⇒ `provideInlayHints(model, range, token)` 收到的是
- * **可视区 ±30 行**，但触发点比 codeLens 更密：内容变化（≥800ms 尾缘合并）+
+ * **可视区 ±30 行**，触发点比 codeLens 更密：内容变化（≥800ms 尾缘合并）+
  * **每次滚动**都会 `scheduler.schedule()`，防抖间隔按上次实测耗时自适应
- * （`_featureDebounce.for(…, { min: 25 })`）。所以单价必须按"全篇扫描"算——
- * 供方（`erb-inlay-hints`）对给进来的缓冲区做单遍线性扫描 + 每调用点一次 Map 命中。
+ * （`_featureDebounce.for(…, { min: 25 })`）。
  *
- * 真实语料实测（一次性探针，`KojoCallProtocol` 全命中偏重口径）：
- * 52,602 行那篇语料之最，一次整篇扫描 **50ms**（惰性代码视野改造前 114ms）；
- * 扫描单价 ~1μs/行，与行内容长度弱相关。⇒ 体量档**判在请求之前**，与本仓既有降级
- * （`stickyScroll` / 面包屑 / codeLens 的 `LARGE_FILE_LINES`）**同一条线**：档内
- * （≤5,000 行）单次 ≤5ms，档外整篇不办——"超长文件里省着来的功能"是作者看到的一条
- * 一致的规则，不是每面各划一档。与 codeLens 不同的是**没有密度/条数档**：行内提示
- * 不插行（行高不变，只把本行余部往右推），"插满行 = 花屏"的前提在这里不成立；
- * Monaco 自己有 `inlayHints.maximumLength`（缺省 43 字符/行）兜单行截断。
+ * **旧口径**：供方整篇扫一遍，`range` 只用来筛**输出**，于是单价正比于行数
+ * （52,601 行实测 **32.9 ms**），只能在 5,000 行处整档让位。实测这一刀的三段构成：
+ * `splitErbLines` 3.4 ms、`visibleCodeLines` 判读 25.0 ms、提示配对 ~4 ms。
  *
- * PS-4（2026-10-18 性能批）补两条：① 交回的结果**按 Monaco 给的区间筛**（见
- * `toMonacoInlayHints` 的 `range`）——每次滚动只重建视口内那几枚装饰器；② 取文与问槽
- * 由宿主接线按 `versionId` 记忆化（见 `InlayHintHandlers` 头注），内容没变一律不重扫。
+ * **新口径**：`range` 进**输入**——宿主把窗口下传（`readonly range` 在
+ * `EditorInlayHintRequest` 上），供方只判这一段。400 行窗口实测 **0.44–0.54 ms**
+ * （前缀只走一趟 `[SKIP` 搜索把 `[SKIPSTART]` 屏蔽状态带进来；前提是宿主连行首偏移
+ * 一起给，否则供方要自己数换行，见 `VisibleLineWindow.fromOffset` 的读数）。
+ *
+ * 于是「体量档」只剩一件事要判：**这条腿的供方能按窗口取数吗**。能（ERB 方言）⇒
+ * 成本正比于视口，行数不再是理由，闸**删除**；不能（`.kojo1` 走糖线整篇转译、
+ * `kojo2` 整篇 lex+parse——实测 24,197 行 **57.7 ms** 只是解析，`range` 只省下
+ * 12 ms）⇒ 闸照旧，但理由写成那条读数，不再是"5,000 行"这个数字。
+ *
+ * `kojo2` 的 200ms 那一档见 `kojo2-inlay.ts`；本模块管的是共享收口这一枚。
  */
+import { ERB_LANGUAGE_ID } from './erb-language';
+
+/**
+ * 这条腿的供方**按行窗口取数**吗（成本正比于视口，而不是行数）。
+ *
+ * 判据是**供方的代价形状**，不是语言偏好：只有 ERB 方言那条腿
+ * （`erb-parser/inlay-hints.ts` 的 `callArgumentHints`）把窗口吃进了输入。
+ * `.kojo1` 走糖线（`kojo-sugar/langsvc.ts` 整篇转译后再问 ERB）与 `kojo2`
+ * （`kojo-lang/inlay.ts` 整篇 lex+parse）都还是整篇——它们照旧吃体量档。
+ */
+export function inlayHintsWindowed(languageId: string): boolean {
+  return languageId === ERB_LANGUAGE_ID;
+}
 
 /**
  * 这次值不值得去问供方（**宿主档降级**，判据与真由见本模块头注的代价模型）。
  * 判在请求之前：省掉一次整篇扫描与全文字符串遍历。
+ *
+ * 按窗口取数的语言**没有行数闸**——那正是"改形状之后闸失去理由"的落地：
+ * 52,601 行整篇 32.9 ms → 400 行窗口 0.44–0.54 ms，行数不再决定单价。
  */
-export function inlayHintsAffordable(lineCount: number): boolean {
-  return lineCount < LARGE_FILE_LINES;
+export function inlayHintsAffordable(languageId: string, lineCount: number): boolean {
+  return inlayHintsWindowed(languageId) || lineCount < LARGE_FILE_LINES;
 }
 
 /**
@@ -145,16 +163,16 @@ export function toMonacoInlayHints(
 /**
  * 宿主注入：这篇文档该答什么提示（全部判据——开关 / 糖视图 / 活动标签 / 体量——都在宿主接线）。
  *
- * `resolve` 拿到的是**整篇**文本，不是可视区间那一段——这不是漏改：供方
- * （`erb-parser/src/references.ts` 的 `visibleCodeLines`）带着 `[SKIPSTART]…[SKIPEND]`
- * 的**跨行状态**，从窗口中间起算会把屏蔽区里的行当代码行 ⇒ 凭空多出提示（错标比不标危险，
- * 铁律 4）。真要按区间取文，得让区间进入契约请求（`plugin-api` 的
- * `EditorLanguageServiceRequest` 加一员、由供方自己按自己的状态判起点）——本批记为后续。
- * 本批把这条腿的**重复**代价消掉：宿主接线按 `versionId` 记忆化，内容没变时一次都不重扫
- * （Monaco 每次滚动都问，缺省防抖低至 25ms）。
+ * `resolve` 的 `range`（R1，2026-10-28）是 Monaco 这次问的那一段（可视区 ±30 行）。
+ * 宿主把它下传给**按窗口取数**的供方（见 {@link inlayHintsWindowed}），于是单价从
+ * "正比于行数"变成"正比于视口"；供方忽略它也不会错（少了窗口只是回到整篇）。
+ *
+ * 注意 `resolve` 拿到的仍然是**整篇**文本——这不是漏改：ERB 供方带着
+ * `[SKIPSTART]…[SKIPEND]` 的**跨行状态**，从窗口中间起算会把屏蔽区里的行当代码行
+ * ⇒ 凭空多出提示（错标比不标危险，铁律 4）。窗口只省"逐行判读"，不省"读到这一行为止"。
  */
 export interface InlayHintHandlers {
-  resolve(model: Monaco.editor.ITextModel): EditorInlayHint[];
+  resolve(model: Monaco.editor.ITextModel, range?: Monaco.IRange): EditorInlayHint[];
 }
 
 /**
@@ -170,7 +188,7 @@ export function installInlayHintsProvider(monaco: typeof Monaco, handlers: Inlay
     provideInlayHints(model, range) {
       let hints: EditorInlayHint[];
       try {
-        hints = handlers.resolve(model);
+        hints = handlers.resolve(model, range);
       } catch (e: unknown) {
         // 提示是只读呈现面：出错就"没有提示"，绝不把编辑器的输入链带崩
         console.warn(`[kojo-inlay-hints] resolve 抛错：${errorText(e)}`);

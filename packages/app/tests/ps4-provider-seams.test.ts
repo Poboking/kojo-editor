@@ -42,6 +42,7 @@ import type { Kernel } from '@kojo/kernel';
 import { computeFormatEdits, type FormatEdit } from '@kojo/plugin-kojo-sugar';
 import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { LARGE_FILE_LINES, HUGE_FILE_LINES, editorOptionsForLineCount } from '../src/ui/editor-options';
 import { installRangeFormatter } from '../src/monaco/kojo-format-range';
@@ -127,6 +128,15 @@ function fakeModel(
     getValueInRange: (range: Monaco.IRange) => {
       state.windows += 1;
       return lines.slice(range.startLineNumber - 1, range.endLineNumber).join('\n');
+    },
+    /**
+     * 行首表（R1 第二刀）：真 Monaco 的 `getOffsetAt` 是一次二分，这里按行累加
+     * ——夹具只关心"给出去的偏移是不是那一行的行首"，不关心它怎么算的。
+     */
+    getOffsetAt: (position: { lineNumber: number; column: number }) => {
+      let at = 0;
+      for (let i = 1; i < position.lineNumber; i++) at += (lines[i - 1] ?? '').length + 1;
+      return at + (position.column - 1);
     },
     getAlternativeVersionId: () => state.versionId,
     getVersionId: () => state.versionId,
@@ -891,11 +901,69 @@ describe('inlayHintsFor · 重问不重扫', () => {
     expect(asks).toHaveLength(2);
   });
 
-  it('档外（≥ `LARGE_FILE_LINES`）：一次都不问供方、一次都不 copy', () => {
+  it('ERB 档外（≥ `LARGE_FILE_LINES`）**照问**：按窗口取数的腿没有行数闸', () => {
+    const asks: { text: string; lineCount?: number; range?: unknown }[] = [];
+    const { kernel } = fakeKernel({
+      languageService: [
+        {
+          id: 'ps4-inlayHint-range',
+          order: 10,
+          provide: (request: LanguageServiceRequest) => {
+            if (request.kind !== 'inlayHint') return undefined;
+            asks.push({ text: request.text, lineCount: request.lineCount, range: request.range });
+            return { kind: 'inlayHint', hints: [] } as never;
+          },
+        } as unknown as EditorLanguageServiceContribution,
+      ],
+    });
+    const doc = fakeModel(['@FOO', 'CALL F, 1'], { lineCount: 52_601 });
+    expect(inlayHintsFor(doc.model, 'C:/erb/ps4-行内提示档外.ERB', kernel)).toEqual([]);
+    expect(asks).toHaveLength(1);
+    // 不给窗口 ⇒ 请求里没有 `range`（老调用方零改动）
+    expect(asks[0]!.range).toBeUndefined();
+  });
+
+  it('给了窗口：`range` 原样进请求；**窗口进记忆化键**（换屏必须重算）', () => {
+    const asks: { range?: unknown }[] = [];
+    const { kernel } = fakeKernel({
+      languageService: [
+        {
+          id: 'ps4-inlayHint-range2',
+          order: 10,
+          provide: (request: LanguageServiceRequest) => {
+            if (request.kind !== 'inlayHint') return undefined;
+            asks.push({ range: request.range });
+            return { kind: 'inlayHint', hints: [] } as never;
+          },
+        } as unknown as EditorLanguageServiceContribution,
+      ],
+    });
+    const doc = fakeModel(['@FOO', 'CALL F, 1'], { lineCount: 52_601 });
+    const path = 'C:/erb/ps4-行内提示窗口.ERB';
+    // 起点列刻意给 9：真实 Monaco 的可视区起点常在行中间，而契约要的是**行首**
+    const win = (from: number) =>
+      ({ startLineNumber: from, startColumn: 9, endLineNumber: from + 40, endColumn: 1 }) as Monaco.IRange;
+    inlayHintsFor(doc.model, path, kernel, win(100));
+    inlayHintsFor(doc.model, path, kernel, win(100)); // 同一屏 ⇒ 命中记忆化
+    inlayHintsFor(doc.model, path, kernel, win(200)); // 换一屏 ⇒ 必须重算
+    type Range = { startLineNumber: number; endLineNumber: number; startOffset?: number };
+    const ranges = asks.map((a) => a.range as Range);
+    expect(ranges.map((r) => [r.startLineNumber, r.endLineNumber])).toEqual([
+      [100, 140],
+      [200, 240],
+    ]);
+    // 行首偏移（R1 第二刀）：夹具两行 `'@FOO'`（4 宽）/ `'CALL F, 1'`（9 宽）⇒
+    // 第 2 行行首 5、第 3 行行首 15、此后每行 +1 ⇒ 第 100 行 112、第 200 行 212。
+    expect(ranges.map((r) => r.startOffset)).toEqual([112, 212]);
+    // 起点列 9 **没有**被算进去（否则 120 / 220）——那不是行首，供方会整段错位
+    expect(ranges.some((r) => r.startOffset === 120 || r.startOffset === 220)).toBe(false);
+  });
+
+  it('整篇取数的腿（kojo2）档外照旧不问供方', () => {
     const asks: { text: string; lineCount: number }[] = [];
     const { kernel } = fakeKernel({ languageService: [languageServiceStub('inlayHint', { kind: 'inlayHint', hints: [] }, asks)] });
-    const doc = fakeModel(['@FOO', 'CALL F, 1'], { lineCount: LARGE_FILE_LINES });
-    expect(inlayHintsFor(doc.model, 'C:/erb/ps4-行内提示档外.ERB', kernel)).toEqual([]);
+    const doc = fakeModel(['@FOO', 'CALL F, 1'], { lineCount: LARGE_FILE_LINES, languageId: KOJO2_LANGUAGE_ID });
+    expect(inlayHintsFor(doc.model, 'C:/erb/ps4-行内提示档外-kojo2.ERB', kernel)).toEqual([]);
     expect(asks).toHaveLength(0);
     expect(doc.getValueCalls()).toBe(0);
   });
@@ -936,8 +1004,8 @@ describe('toMonacoInlayHints · 只交回 Monaco 点名的那一段', () => {
 
 /* ============================== ④ 行上注解：版本记忆化 ============================== */
 
-describe('codeLensesFor · 重问不重扫（档位与预算照旧）', () => {
-  it('内容没变被反复问：供方只问一次；档位判在取文之前', () => {
+describe('codeLensesFor · 重问不重扫（R2 2026-10-28：体量档已撤，只剩产出护栏）', () => {
+  it('内容没变被反复问：供方只问一次（同版本只付一次取文）', () => {
     const asks: { text: string; lineCount: number }[] = [];
     const lenses = [{ line: 1, label: '被 3 处用到' }];
     const { kernel } = fakeKernel({ languageService: [languageServiceStub('codeLens', { kind: 'codeLens', lenses }, asks)] });
@@ -948,10 +1016,20 @@ describe('codeLensesFor · 重问不重扫（档位与预算照旧）', () => {
     expect(codeLensesFor(doc.model, path, kernel)).toEqual(lenses);
     expect(asks).toHaveLength(1);
     expect(doc.getValueCalls()).toBe(1);
-    // 档外：判在取文之前（`withinCodeLensBudget` 那条"整篇不给"的口径由既有测试钉着）
-    const big = fakeModel(['@FOO'], { lineCount: LARGE_FILE_LINES });
-    expect(codeLensesFor(big.model, path, kernel)).toEqual([]);
-    expect(big.getValueCalls()).toBe(0);
+  });
+
+  it('档外（≥ `LARGE_FILE_LINES`）**照问**：体量不再是判据（R2 读数见 `kojo-code-lens.ts` 头注）', () => {
+    const asks: { text: string; lineCount: number }[] = [];
+    const lenses = [{ line: 1, label: '被 3 处用到' }];
+    const { kernel } = fakeKernel({ languageService: [languageServiceStub('codeLens', { kind: 'codeLens', lenses }, asks)] });
+    const path = 'C:/erb/ps4-注解档外.ERB';
+    // 52,601 行：旧行为是一条都不给（`codeLensAffordable` 让路）；R2 之后照给，
+    // 因为"整篇 provide"的实测单价由**定义数**决定（52,602 行 5.8ms），不是行数。
+    const big = fakeModel(['@FOO', 'IF X', 'PRINT 1', 'PRINT 2', 'PRINT 3', 'ENDIF'], { lineCount: 52_601 });
+    expect(codeLensesFor(big.model, path, kernel)).toEqual(lenses);
+    expect(asks).toHaveLength(1);
+    // 同版本再问：仍然只问一次
+    expect(codeLensesFor(big.model, path, kernel)).toEqual(lenses);
     expect(asks).toHaveLength(1);
   });
 });

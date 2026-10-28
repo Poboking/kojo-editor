@@ -1,6 +1,6 @@
 import type { EditorInlayHint, ErbIndex } from '@kojo/plugin-api';
 import { MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
-import { normalizedUpper, visibleCodeLines } from './references';
+import { normalizedUpper, visibleCodeLines, type VisibleLineWindow } from './references';
 
 /**
  * 实参位行内提示（LS-R6，2026-10-16 语言服务批）——**纯函数**：缓冲区文本进、提示出，
@@ -119,15 +119,24 @@ function splitCallArguments(raw: string, from: number, paren: boolean): ArgSpan[
 }
 
 /**
- * 扫描整篇缓冲区的调用点实参位提示（**纯函数**：文本 + 槽名查询进、提示出）。
+ * 扫描缓冲区的调用点实参位提示（**纯函数**：文本 + 槽名查询进、提示出）。
  *
  * 行可见性与名字槽判据逐字共用 `visibleCodeLines`（与反向索引 / T3 波浪线同一把尺子）；
  * 名字槽之后只认两种实参形态（括号形 / 逗号形），之间夹了别的东西（FORM 动态拼接、
  * 成员访问占槽）一律整行不答——与 `scanUndefinedCallTargets` 同款 fail-open。
+ *
+ * `window`（R1）给了就只答这一段的行（宿主给的是 Monaco 的可视区 ±30 行）。判据不变，
+ * 少掉的是窗口外那些行的判读：52,601 行实测整篇 **32.9 ms** → 400 行窗口 **0.44–0.54 ms**
+ * （前提是窗口带 `fromOffset`；不带偏移时供方要自己数换行，见 `VisibleLineWindow.fromOffset`
+ * 的读数）。跨行状态（`[SKIPSTART]` 屏蔽区）由 `visibleCodeLines` 自己算到窗口起点。`
  */
-export function callArgumentHints(text: string, slotsOf: SlotNamesOf): EditorInlayHint[] {
+export function callArgumentHints(
+  text: string,
+  slotsOf: SlotNamesOf,
+  window?: VisibleLineWindow,
+): EditorInlayHint[] {
   const out: EditorInlayHint[] = [];
-  for (const { line, raw, isCallLine, keywordEnd, codeView } of visibleCodeLines(text)) {
+  for (const { line, raw, isCallLine, keywordEnd, codeView } of visibleCodeLines(text, window)) {
     if (!isCallLine) continue;
     const m = SLOT_TOKEN_RE.exec(codeView().slice(keywordEnd));
     if (!m) continue; // 名字槽空着（`CALL` 单独一行）＝无括号全默认，无实参可标

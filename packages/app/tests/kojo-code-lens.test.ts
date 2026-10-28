@@ -1,9 +1,10 @@
 /**
- * 行上内联注解 · 宿主接线（B8：`codeLensAffordable` / `withinCodeLensBudget` /
- * `collectCodeLenses` / `toMonacoCodeLenses` / `installCodeLensProvider`）单测。
+ * 行上内联注解 · 宿主接线（B8：`withinCodeLensBudget` / `collectCodeLenses` /
+ * `toMonacoCodeLenses` / `installCodeLensProvider`）单测。
  *
  * 桩 monaco（只给注册面）+ 桩 model（只给行数），同 `kojo-folding.test.ts` 的口径。
- * 覆盖四件事：(a) 两道降级的界线（体量档 / 预算档）；(b) 合并的三态、抛错隔离与去重；
+ * 覆盖三件事：(a) **产出**两道护栏的界线（条数 / 密度——体量档 R2 已撤，见
+ * `kojo-code-lens.ts` 头注读数）；(b) 合并的三态、抛错隔离与去重；
  * (c) 越界行**丢弃**（不夹取）与 Monaco 形状；(d) 点击只走 `editor.revealLocation` 那条
  * 既有通道、注册与回收成对。**宿主零判据**：这里没有一条断言认识「被引用」是什么意思。
  */
@@ -20,14 +21,12 @@ import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
   CODE_LENS_MAX_DENSITY,
   CODE_LENS_MAX_PER_DOCUMENT,
-  codeLensAffordable,
   collectCodeLenses,
   installCodeLensProvider,
   isCodeLensTarget,
   toMonacoCodeLenses,
   withinCodeLensBudget,
 } from '../src/monaco/kojo-code-lens';
-import { LARGE_FILE_LINES } from '../src/ui/editor-options';
 
 const REQUEST: EditorLanguageServiceRequest = {
   kind: 'codeLens',
@@ -46,14 +45,6 @@ const contribution = (
 
 const modelWithLines = (lineCount: number): Monaco.editor.ITextModel =>
   ({ getLineCount: () => lineCount }) as unknown as Monaco.editor.ITextModel;
-
-describe('codeLensAffordable · 体量档（判在问供方之前）', () => {
-  it('界线就是 LARGE_FILE_LINES：到线即不办（与 stickyScroll / 面包屑同一档）', () => {
-    expect(codeLensAffordable(LARGE_FILE_LINES - 1)).toBe(true);
-    expect(codeLensAffordable(LARGE_FILE_LINES)).toBe(false);
-    expect(codeLensAffordable(1)).toBe(true);
-  });
-});
 
 describe('withinCodeLensBudget · 全有或全无', () => {
   it('条数上限：顶到 `CODE_LENS_MAX_PER_DOCUMENT` 仍给，多一条整篇不给', () => {

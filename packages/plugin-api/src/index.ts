@@ -676,6 +676,7 @@ export type {
 export type {
   EditorInlayHint,
   EditorInlayHintKind,
+  EditorInlayHintRange,
   EditorInlayHintRequest,
   EditorInlayHintResult,
 } from './slots';

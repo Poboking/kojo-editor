@@ -3,10 +3,12 @@
  * `toMonacoInlayHints` / `installInlayHintsProvider`）单测。
  *
  * 桩 monaco（只给注册面 + 枚举）+ 桩 model（行数与行宽），同 `kojo-code-lens.test.ts` 口径。
- * 覆盖四件事：(a) 体量档的界线；(b) 合并三态、抛错隔离、去重（行+列+文本键，同格
- * 不同文本保留）；(c) 越界行**丢弃**（不夹取）与列夹到行尾、Monaco 形状（Parameter 种类、
- * tooltip / paddingLeft 缺省不出现）；(d) 注册 ERB + `.kojo` 两门语言、注册与回收成对、
- * resolve 抛错退空不崩。**宿主零判据**：这里没有一条断言认识「形参槽」是什么意思。
+ * 覆盖五件事：(a) 体量档的界线——R1（2026-10-28）起**按语言分流**：按窗口取数的 ERB
+ * 没有行数闸，整篇取数的 `.kojo1` / kojo2 照旧；(b) 合并三态、抛错隔离、去重（行+列+文本键，
+ * 同格不同文本保留）；(c) 越界行**丢弃**（不夹取）与列夹到行尾、Monaco 形状（Parameter 种类、
+ * tooltip / paddingLeft 缺省不出现）；(d) 注册 ERB + `.kojo` + kojo2 三门语言、注册与回收成对、
+ * resolve 抛错退空不崩、**Monaco 给的行窗口原样下传**。**宿主零判据**：这里没有一条断言
+ * 认识「形参槽」是什么意思。
  *
  * B2c（2026-10-24）起注册面是**三门**语言：kojo2 的 descriptor 点名了
  * `slotServices: ['inlayHint']`，共享收口于是也给它挂上同一枚 provider（供方是插件
@@ -27,6 +29,7 @@ import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
   collectInlayHints,
   inlayHintsAffordable,
+  inlayHintsWindowed,
   installInlayHintsProvider,
   toMonacoInlayHints,
   type InlayHintHandlers,
@@ -75,9 +78,26 @@ function stubMonaco() {
 }
 
 describe('inlayHintsAffordable · 体量档（判在问供方之前）', () => {
-  it('界线就是 LARGE_FILE_LINES：到线即不办（与 stickyScroll / 面包屑 / codeLens 同一条线）', () => {
-    expect(inlayHintsAffordable(LARGE_FILE_LINES - 1)).toBe(true);
-    expect(inlayHintsAffordable(LARGE_FILE_LINES)).toBe(false);
+  it('按窗口取数的语言（ERB）**没有行数闸**：52,601 行照办', () => {
+    // R1（2026-10-28）：ERB 供方把 Monaco 的 range 吃进了输入，单价正比于视口
+    // （52,601 行整篇 32.9 ms → 中段 400 行 0.6 ms），行数不再是判据。
+    for (const lineCount of [1, LARGE_FILE_LINES - 1, LARGE_FILE_LINES, 24_197, 52_601]) {
+      expect(inlayHintsAffordable(ERB_LANGUAGE_ID, lineCount), `${lineCount} 行`).toBe(true);
+    }
+  });
+
+  it('整篇取数的腿（`.kojo1` 糖线 / kojo2）照旧吃 LARGE_FILE_LINES', () => {
+    for (const languageId of [KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID]) {
+      expect(inlayHintsAffordable(languageId, LARGE_FILE_LINES - 1), languageId).toBe(true);
+      expect(inlayHintsAffordable(languageId, LARGE_FILE_LINES), languageId).toBe(false);
+    }
+  });
+
+  it('`inlayHintsWindowed` 只认 ERB：判据是供方的代价形状，不是语言偏好', () => {
+    expect(inlayHintsWindowed(ERB_LANGUAGE_ID)).toBe(true);
+    expect(inlayHintsWindowed(KOJO_LANGUAGE_ID)).toBe(false);
+    expect(inlayHintsWindowed(KOJO2_LANGUAGE_ID)).toBe(false);
+    expect(inlayHintsWindowed('json')).toBe(false);
   });
 });
 
@@ -194,5 +214,25 @@ describe('installInlayHintsProvider · 注册与回收', () => {
     expect(result.hints).toEqual([]);
     expect(warn).toHaveBeenCalledOnce();
     warn.mockRestore();
+  });
+
+  it('Monaco 给的行窗口**原样**交给 resolve（R1：窗口就是这条腿的输入）', () => {
+    const { monaco, providers } = stubMonaco();
+    const seen: Array<Monaco.IRange | undefined> = [];
+    installInlayHintsProvider(monaco, {
+      resolve: (_model, range) => {
+        seen.push(range);
+        return [];
+      },
+    });
+    const range = { startLineNumber: 20_000, startColumn: 1, endLineNumber: 20_400, endColumn: 1 } as Monaco.Range;
+    providers[0]!.provideInlayHints(modelWith(52_601), range, {
+      isCancellationRequested: false,
+    } as Monaco.CancellationToken);
+    providers[0]!.provideInlayHints(modelWith(52_601), undefined as unknown as Monaco.Range, {
+      isCancellationRequested: false,
+    } as Monaco.CancellationToken);
+    expect(seen[0]).toBe(range);
+    expect(seen[1]).toBeUndefined();
   });
 });

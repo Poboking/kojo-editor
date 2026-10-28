@@ -6,7 +6,6 @@ import type {
   EditorLanguageServiceRequest,
   EditorSymbolLocation,
 } from '@kojo/plugin-api';
-import { LARGE_FILE_LINES } from '../ui/editor-options';
 import { registerForLanguageServices } from './register-dialects';
 
 /**
@@ -50,12 +49,17 @@ import { registerForLanguageServices } from './register-dialects';
  * 远低于预期）。所以体量档**不是**"这一篇跑不动"的决定，跑不动的档位 Monaco 自己划在
  * 30 万行 / 20MB（`textModel.js` 的 `LARGE_FILE_LINE_COUNT_THRESHOLD`，越过它 Monaco 连
  * tokenization 都不做，code lens 一条不画）——那条线比我们宽 60 倍，指望不上。
- * 这一档立着的两条真理由：
- * ① **与本仓既有降级同一条线**（`stickyScroll` / 面包屑都用 `LARGE_FILE_LINES`）：作者看到的
- * 是"超长文件里省着来的功能"这一条规则，而不是每面各划一档；
- * ② **上限是 O(行数) 而无别的护栏**：parse 单价随行数线性走，语料最大 5.2 万行≠以后最大，
- * 一次押注"当前这份刚好不贵"的降级，下次换个巨型合并文件就变成每次停笔付 50ms。
- * 判在**问供方之前**（省掉那一次全文 parse 与全文字符串拷贝）。
+ *
+ * ## 体量档已撤（R2，2026-10-28）
+ *
+ * 原来这里立着 `codeLensAffordable`（`LARGE_FILE_LINES` 以上整篇不办），两条理由是
+ * "与本仓既有降级同一条线"和"上限是 O(行数)"。R2 把第一条拿读数对了一遍：
+ * 语料最大那篇 **52,602 行整篇 provide 5.8ms**（124 处定义），而**门槛内最贵那篇
+ * 4,353 行要 7.1–9.4ms** —— 两条读数同量级甚至倒挂，说明单价由**定义数 + 索引查询**决定，
+ * 不是行数。"行数线性"这一条今天不成立（`parseErbText` 是 0.1μs/行量级，
+ * 24,197 行实测 4.3ms），所以闸失去理由：删掉。
+ *
+ * 留下的两道闸与体量无关，是**产出形状**的护栏（见下）：条数上限与密度上限。
  */
 
 /**
@@ -82,18 +86,6 @@ export const CODE_LENS_MAX_PER_DOCUMENT = 200;
  * 刻意不写成"裁剪"：过了这道线整篇不给，而不是把超出的几条抹掉（理由见下一段）。
  */
 export const CODE_LENS_MAX_DENSITY = 5;
-
-/**
- * 这次值不值得去问供方（**宿主档降级**，与 `editor-options` 里 `stickyScroll` /
- * 面包屑的 `crumbsNeedRefresh` 同一条理由、同一个阈值）。
- *
- * 判在**请求之前**：`provideCodeLenses` 没有可视区间，一开口就是整篇文档的解析与全文字符串。
- * 这一档不是"少报"，是"这一篇不办"（两条真理由与实测代价曲线见本模块头注：
- * 当前语料上跑一次只要 5.8ms，立这条档买的是**一致性**与**行数线性下的上限**，不是今天的速度）。
- */
-export function codeLensAffordable(lineCount: number): boolean {
-  return lineCount < LARGE_FILE_LINES;
-}
 
 /**
  * 产出预算（**全有或全无**，纯函数）。

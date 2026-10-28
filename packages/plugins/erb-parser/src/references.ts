@@ -288,63 +288,215 @@ export interface VisibleCodeLine {
  * `callArgumentHints`（LS-R6 实参位提示）共用——屏蔽规则（`[SKIPSTART]` 区、空行、
  * 整行 `;`、`#` 指令、`$` 标签、`@` 定义行）与"哪行有名字槽"只写在这里。
  * 三处各写一遍就是第二判据，漂移的表现是"引用面板说没有、波浪线却红"（反之亦然）。
+ *
+ * `window`（R1，2026-10-28）给了就只产出该区间内的行——**判据一字不动**，少的是窗口外的
+ * 判读：52,601 行实测整篇 **33.6 ms** → 带 `fromOffset` 的 400 行窗口 **0.44–0.54 ms**
+ * （其中 0.26 ms 是一趟 `[SKIP` 搜索；不带偏移的老路 1.53–2.54 ms）。不给 = 整篇，逐字不变。
  */
-export function* visibleCodeLines(text: string): Generator<VisibleCodeLine> {
-  yield* visibleCodeLinesOf(splitErbLines(text));
+export function* visibleCodeLines(text: string, window?: VisibleLineWindow): Generator<VisibleCodeLine> {
+  if (window === undefined) {
+    yield* visibleCodeLinesOf(splitErbLines(text));
+    return;
+  }
+  yield* visibleCodeLinesWindowed(text, window);
+}
+
+/** 行窗口（1 基闭区间）。`from > to` / 非有限值 = 没窗口（调用方按"整篇"处理） */
+export interface VisibleLineWindow {
+  readonly from: number;
+  readonly to: number;
+  /**
+   * `from` 行**行首**在 `text` 里的字符偏移（可选；同契约 `EditorInlayHintRange.startOffset`）。
+   *
+   * 没有它就只数换行走过去：**42 ns/行**，52,601 行的文末窗口光走位 2.2 ms。校验不过
+   * （不是行首 / 越界 / 与 `from` 不自洽）⇒ 静默退回走位，**结果逐条不变**。
+   */
+  readonly fromOffset?: number;
 }
 
 /** 同一判据在**已切好的行数组**上跑（{@link splitErbLines} 的产物；判据一字未动） */
 function* visibleCodeLinesOf(lines: readonly string[]): Generator<VisibleCodeLine> {
   let inSkipBlock = false;
   for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]!;
-    const outer = raw.trim();
-    // 代码前缀（`;!;` / `;#;`）剥掉后再判可见性：这两种前缀之后是真代码（判据单源
-    // `code-prefix.ts`）。`prefixLen` 只用来修列坐标，正文比原串短这么多。
-    const prefixLen = erbCodePrefixLength(outer);
-    const trimmed = prefixLen === 0 ? outer : outer.slice(prefixLen);
-    if (inSkipBlock) {
-      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+    const verdict = judgeRawLine(lines[i]!, i, inSkipBlock);
+    if (typeof verdict === 'string') {
+      if (verdict === 'enter-skip') inSkipBlock = true;
+      else if (verdict === 'leave-skip') inSkipBlock = false;
       continue;
     }
-    // 区间标记的严格等值判据与 `parseErbText` 逐字同源（取证读数与"为什么不放开大小写"见该处注释）
-    if (trimmed === '[SKIPSTART]') {
-      inSkipBlock = true;
-      continue;
-    }
-    if (trimmed.length === 0 || trimmed.startsWith(';') || trimmed.startsWith('#') || trimmed.startsWith('$')) {
-      continue;
-    }
-
-    if (trimmed.startsWith('@')) {
-      // 定义行：名字提取按解析器口径（调用方自理）；调用判据一概不适用
-      yield { line: i + 1, raw, codeView: () => '', isDefinition: true, isCallLine: false, keywordEnd: -1 };
-      continue;
-    }
-
-    // 行首是 CALL 直系族 ⇒ 关键字之后的**第一个记号**是引擎"按名调用"的名字槽位。
-    // PS-3：行首 `[A-Za-z_]+` 走位改 charCodeAt（旧版每行一次 `/^[A-Za-z_]+/.exec`，
-    // 412 万行累计是最大单项正则开销；匹配范围与判据逐字符不变）。
-    let leadLen = 0;
-    while (leadLen < trimmed.length) {
-      const c = trimmed.charCodeAt(leadLen);
-      if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95) leadLen++;
-      else break;
-    }
-    const isCallLine = leadLen > 0 && CALL_FAMILY.has(trimmed.slice(0, leadLen).toUpperCase());
-    // 名字槽起点（行内 0 基偏移）= 缩进 + 代码前缀宽 + 关键字长度；缩进只算行首空白
-    // （trailing 会干扰差值）
-    const keywordEnd = isCallLine ? raw.length - raw.trimStart().length + prefixLen + leadLen : -1;
-    let codeCache: string | undefined;
-    yield {
-      line: i + 1,
-      raw,
-      codeView: () => (codeCache ??= codeViewOf(raw)),
-      isDefinition: false,
-      isCallLine,
-      keywordEnd,
-    };
+    yield verdict;
   }
+}
+
+/**
+ * 窗口版：**从第 1 行起算**（屏蔽状态跨行，不能从窗口中间起），但"起算"不等于"逐行判读"
+ * ——两条路都只把**状态**带到窗口起点：有 `fromOffset` ⇒ {@link skipStateBefore}（跳着找
+ * `[SKIP`，成本与前面有多少行无关）；没有 ⇒ {@link walkToLine}（逐行数换行，每行只过快筛）。
+ *
+ * `\n` 行边界 + 去掉行尾一个 `\r`，与 `normalizeEol(text).split('\n')` 逐字等价；孤立的
+ * `\r` 不当换行（Monaco model 已按 EOL 归一，宿主路径不存在这一档）。
+ */
+function* visibleCodeLinesWindowed(text: string, window: VisibleLineWindow): Generator<VisibleCodeLine> {
+  const from = Math.max(1, Math.trunc(window.from));
+  const to = Math.trunc(window.to);
+  // `to = Infinity` 合法（走到文末为止）：只挡 NaN 与空区间
+  if (!Number.isFinite(from) || Number.isNaN(to) || to < from) return;
+
+  const anchored = anchorOffsetOf(text, window.fromOffset, from);
+  let inSkipBlock: boolean;
+  let start: number;
+  if (anchored !== undefined) {
+    inSkipBlock = skipStateBefore(text, anchored);
+    start = anchored;
+  } else {
+    const reached = walkToLine(text, from);
+    if (reached === undefined) return; // 文本比窗口短：这一行不存在
+    inSkipBlock = reached.inSkipBlock;
+    start = reached.offset;
+  }
+
+  let line = from;
+  while (line <= to) {
+    const nl = text.indexOf('\n', start);
+    const stop = nl === -1 ? text.length : nl;
+    const end = stop > start && text.charCodeAt(stop - 1) === 13 ? stop - 1 : stop;
+    const verdict = judgeRawLine(text.slice(start, end), line - 1, inSkipBlock);
+    if (typeof verdict === 'string') {
+      if (verdict === 'enter-skip') inSkipBlock = true;
+      else if (verdict === 'leave-skip') inSkipBlock = false;
+    } else {
+      yield verdict;
+    }
+    if (nl === -1) return;
+    start = nl + 1;
+    line += 1;
+  }
+}
+
+/**
+ * 校验调用方给的 `fromOffset` 能不能当"第 `from` 行行首"用（不能就给 `undefined`，退回走位
+ * ——**判据不因宿主给错而变**）：只收 `from === 1 && offset === 0`，或紧跟在 `\n` 之后。
+ */
+function anchorOffsetOf(text: string, fromOffset: number | undefined, from: number): number | undefined {
+  if (fromOffset === undefined || !Number.isFinite(fromOffset)) return undefined;
+  const at = Math.trunc(fromOffset);
+  if (at < 0 || at > text.length) return undefined;
+  if (at === 0) return from === 1 ? 0 : undefined;
+  return text.charCodeAt(at - 1) === 10 ? at : undefined;
+}
+
+/**
+ * 窗口之前那一小段的屏蔽状态（`offset` = 窗口第一行行首）。
+ *
+ * 只在 `[0, offset)` 里**跳着**找 `[SKIP`：能改状态的只有 `[SKIPSTART]` / `[SKIPEND]` 两枚
+ * 严格等值的标记行，其余行内容再花也不影响状态。命中一枚就把整行交给 {@link judgeRawLine}
+ * （唯一判据）；非标记命中（`CALL [SKIPX],1` 之类）的可见行结论这里不要。
+ * 成本 = 一趟子串搜索（52,601 行实测 **0.26 ms**）+ 每枚标记一次判读。
+ */
+function skipStateBefore(text: string, offset: number): boolean {
+  // 窗口就在文首（打开文件的第一屏，最常见的一档）：前面没有行，一趟搜索都不该跑
+  if (offset <= 0) return false;
+  let inSkipBlock = false;
+  let at = text.indexOf(SKIP_MARKER_PROBE);
+  while (at !== -1 && at < offset) {
+    const lineStart = text.lastIndexOf('\n', at) + 1;
+    const nl = text.indexOf('\n', at);
+    const stop = nl === -1 ? text.length : nl;
+    const end = stop > lineStart && text.charCodeAt(stop - 1) === 13 ? stop - 1 : stop;
+    // `index` 只给可见行编号，这里只取状态结论 ⇒ 恒传 0
+    const verdict = judgeRawLine(text.slice(lineStart, end), 0, inSkipBlock);
+    if (verdict === 'enter-skip') inSkipBlock = true;
+    else if (verdict === 'leave-skip') inSkipBlock = false;
+    at = text.indexOf(SKIP_MARKER_PROBE, at + 1);
+  }
+  return inSkipBlock;
+}
+
+/**
+ * 没有 `fromOffset` 时：逐行数换行走到第 `from` 行，顺手把屏蔽状态带上（文本比 `from` 短
+ * ⇒ `undefined`）。前缀每行**只过快筛**，命中的才真判读；游标由本循环持有——每行一次
+ * `indexOf('[SKIP')` 在"文里没有标记"的语料上每次都要扫到文末，52,601 行实测 **6,056 ms**。
+ */
+function walkToLine(text: string, from: number): { offset: number; inSkipBlock: boolean } | undefined {
+  let inSkipBlock = false;
+  let line = 1;
+  let start = 0;
+  let nextMarkerAt = text.indexOf(SKIP_MARKER_PROBE);
+  while (line < from) {
+    const nl = text.indexOf('\n', start);
+    if (nl === -1) return undefined;
+    if (nextMarkerAt !== -1 && nextMarkerAt < nl) {
+      // 不变量 `nextMarkerAt === -1 || nextMarkerAt >= start` 保证命中在本行内；行尾 `\r`
+      // 不剥——`judgeRawLine` 第一步就是 `trim()`，结论逐字相同。
+      const verdict = judgeRawLine(text.slice(start, nl), line - 1, inSkipBlock);
+      if (verdict === 'enter-skip') inSkipBlock = true;
+      else if (verdict === 'leave-skip') inSkipBlock = false;
+    }
+    start = nl + 1;
+    line += 1;
+    if (nextMarkerAt !== -1 && nextMarkerAt < start) nextMarkerAt = text.indexOf(SKIP_MARKER_PROBE, start);
+  }
+  return { offset: start, inSkipBlock };
+}
+
+/** 快筛子串（两枚标记的文字形都以它开头）。只决定"要不要跑判读"，判据仍在 `judgeRawLine` */
+const SKIP_MARKER_PROBE = '[SKIP';
+
+/** 判读结论：一条可见行，或"这一行只是状态变化 / 不可见" */
+type LineVerdict = VisibleCodeLine | 'enter-skip' | 'leave-skip' | 'hidden';
+
+/**
+ * **单行的全部判据**（唯一一份；整篇遍历与窗口遍历都叫它）。
+ *
+ * `inSkipBlock` 进、状态结论出：调用方只管把 `enter-skip` / `leave-skip` 记进自己的状态，
+ * 判据本身不外流。`index` 是 0 基行号（产出的 `line` 是 1 基）。
+ *
+ * 屏蔽区里**只认** `[SKIPEND]`（嵌套的 `[SKIPSTART]` 不算新的一层，与 `parseErbText` 同判）；
+ * 不在屏蔽区时**只有**整行严格等于 `[SKIPSTART]` 才进；一个没有配对 START 的裸 `[SKIPEND]`
+ * 不是标记（它落进下面的普通代码行判据）——这几条都是旧实现的逐字口径，别在这里"顺手改好"。
+ */
+function judgeRawLine(raw: string, index: number, inSkipBlock: boolean): LineVerdict {
+  const outer = raw.trim();
+  // 代码前缀（`;!;` / `;#;`）剥掉后再判可见性：这两种前缀之后是真代码（判据单源
+  // `code-prefix.ts`）。`prefixLen` 只用来修列坐标，正文比原串短这么多。
+  const prefixLen = erbCodePrefixLength(outer);
+  const trimmed = prefixLen === 0 ? outer : outer.slice(prefixLen);
+  if (inSkipBlock) {
+    return trimmed === '[SKIPEND]' ? 'leave-skip' : 'hidden';
+  }
+  // 区间标记的严格等值判据与 `parseErbText` 逐字同源（取证读数与"为什么不放开大小写"见该处注释）
+  if (trimmed === '[SKIPSTART]') return 'enter-skip';
+  if (trimmed.length === 0 || trimmed.startsWith(';') || trimmed.startsWith('#') || trimmed.startsWith('$')) {
+    return 'hidden';
+  }
+
+  if (trimmed.startsWith('@')) {
+    // 定义行：名字提取按解析器口径（调用方自理）；调用判据一概不适用
+    return { line: index + 1, raw, codeView: () => '', isDefinition: true, isCallLine: false, keywordEnd: -1 };
+  }
+
+  // 行首是 CALL 直系族 ⇒ 关键字之后的**第一个记号**是引擎"按名调用"的名字槽位。
+  // PS-3：行首 `[A-Za-z_]+` 走位改 charCodeAt（旧版每行一次 `/^[A-Za-z_]+/.exec`，
+  // 412 万行累计是最大单项正则开销；匹配范围与判据逐字符不变）。
+  let leadLen = 0;
+  while (leadLen < trimmed.length) {
+    const c = trimmed.charCodeAt(leadLen);
+    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95) leadLen++;
+    else break;
+  }
+  const isCallLine = leadLen > 0 && CALL_FAMILY.has(trimmed.slice(0, leadLen).toUpperCase());
+  // 名字槽起点（行内 0 基偏移）= 缩进 + 代码前缀宽 + 关键字长度；缩进只算行首空白
+  // （trailing 会干扰差值）
+  const keywordEnd = isCallLine ? raw.length - raw.trimStart().length + prefixLen + leadLen : -1;
+  let codeCache: string | undefined;
+  return {
+    line: index + 1,
+    raw,
+    codeView: () => (codeCache ??= codeViewOf(raw)),
+    isDefinition: false,
+    isCallLine,
+    keywordEnd,
+  };
 }
 
 /** 摊平一份可见行给**多消费者共用**（同一份数组可反复迭代；只在该轮里活着，不跨轮缓存） */
