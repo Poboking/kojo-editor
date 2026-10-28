@@ -228,9 +228,9 @@ const PINNED_COPY: readonly {
   },
   {
     file: 'packages/app/src/ui/write-domain.ts',
-    phrase: '重新选择这个文件夹',
+    phrase: '允许编辑器写入这个文件夹',
     count: 1,
-    why: '出路那颗按钮的中文名，与原生选目录框标题同源（同一个 const ⇒ 屏幕上不会出现两种叫法；作者面不写「重新交付」「准入门」这类机制词；SAVE-BUTTON-IO-SEAM 出路② 的保存停用句用插值引用它，字面量不增处）',
+    why: '出路那颗按钮的中文名（2026-10-28 出路批：原生选目录框换成是/否确认框，按钮不再叫「重新选择这个文件夹」——作者从「最近项目」点开自己上周就批过的目录，被要求把同一个深目录再导航一遍是罚站不是出路）。作者面不写「重新交付」「准入门」这类机制词；保存停用句用插值引用它，字面量不增处',
   },
   {
     file: 'packages/app/src/ui/write-domain.ts',
@@ -240,9 +240,9 @@ const PINNED_COPY: readonly {
   },
   {
     file: 'packages/app/src/ui/write-domain.ts',
-    phrase: '在弹出的系统选目录框里选回这个项目文件夹，编辑器才会允许写入',
+    phrase: '系统里弹出的确认框会逐字写出这个文件夹的位置；按下「是」编辑器才可以往里写',
     count: 1,
-    why: '按钮 title：那几个字说不清的"点下去会发生什么"放悬停里（说的是系统框与写入许可，不出现对话框命令名）',
+    why: '按钮 title：那颗按钮点下去弹的是**系统**确认框（不是页面里的模态），这件事必须在悬停里说清；说的是系统框与写入许可，不出现对话框命令名',
   },
   {
     file: 'packages/app/src/ui/write-domain.ts',

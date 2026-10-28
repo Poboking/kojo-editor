@@ -16,9 +16,10 @@ import type { ProjectErrorAction, ProjectErrorBar } from './project-error-notice
  * 本模块因此把两件事收在一处：
  * 1. `isProjectWritableOf` —— 可写态的**唯一判定**：TS 批准记录 ∧ 宿主交付事实，宿主没给就
  *    是 false（状态收敛，UI 不再表演"能编辑"）；
- * 2. `redeliverProjectWriteDomain` —— 被拒后的**唯一出路**：再走一次原生选目录框，作者选回
- *    这个项目文件夹（对话框即授权，铁律 6 的既有形态），随后重新登记一次。前端**不**自己
- *    比对目录（不复制那份判定，免得再长出第三份答案），选了别的目录就照旧被拒、错误条仍在。
+ * 2. `redeliverProjectWriteDomain` —— 被拒后的**唯一出路**：弹一次原生是/否确认框，框里逐字写着
+ *    这个项目文件夹的落点，作者按下「是」由宿主登记为准入根（确认即授权，形态照铁律 6 的
+ *    `exportFile`：对话框与授权绑在宿主同一条命令内，JS 没有"跳过确认直接登记"的通道）。
+ *    前端**不**自己比对目录（不复制那份判定，免得再长出第三份答案），宿主不认就照旧被拒、错误条仍在。
  *
  * 零 React、零桥 import：IPC 与对话框全部由调用方注入 ⇒ 单测拿假 invoke 就能钉住全部分支。
  */
@@ -77,11 +78,11 @@ export function saveBlockedByHostWriteDomain(path: string): boolean {
 }
 
 /**
- * 出路动作与原生选目录框的标题共用同一个名字：作者按下按钮后，对话框顶上写的就是按钮说的那件事。
+ * 出路动作与原生确认框的标题共用同一个名字：作者按下按钮后，系统框里问的就是按钮说的那件事。
  * （守卫用例按"文件 + 逐字片段 + 处数"钉这句话，本文件里字面量只许出现一次——
  * 下面的保存停用句用插值引用它，不重抄。）
  */
-export const writeDomainRedeliverLabel = '重新选择这个文件夹';
+export const writeDomainRedeliverLabel = '允许编辑器写入这个文件夹';
 
 /**
  * 宿主拒过的目录里"按下去必然失败"的保存动作（Ctrl+S / 保存并关闭 / 全部保存）被前置拦截时
@@ -99,7 +100,7 @@ export function writeDomainRefusedMessage(fact: WriteDomainFact): string {
 export function writeDomainFixAction(run: () => void): ProjectErrorAction {
   return {
     label: writeDomainRedeliverLabel,
-    title: '在弹出的系统选目录框里选回这个项目文件夹，编辑器才会允许写入',
+    title: '系统里弹出的确认框会逐字写出这个文件夹的位置；按下「是」编辑器才可以往里写',
     run,
   };
 }
@@ -195,8 +196,12 @@ export async function admitProjectWriteDomain(deps: AdmitProjectWriteDomainDeps)
 
 export interface RedeliverProjectWriteDomainDeps {
   readonly dir: string;
-  /** 原生目录对话框（**对话框即授权**）：返回 null = 作者取消；选定项由宿主登记为准入根 */
-  readonly chooseDirectory: (title: string) => Promise<string | null>;
+  /**
+   * 原生是/否确认框（**确认即授权**，2026-10-28 出路批）：框里逐字显示这个文件夹的落点，
+   * 登记动作与对话框绑在宿主同一条命令内（`confirm_write_domain`）。
+   * `true` = 作者按下「是」；`false` = 按下「否」或关掉窗口——宿主侧一个字节都不登记。
+   */
+  readonly confirm: (dir: string) => Promise<boolean>;
   readonly register: (root: string) => Promise<void>;
   readonly hasApprovalRecord: () => Promise<boolean>;
   /**
@@ -208,21 +213,21 @@ export interface RedeliverProjectWriteDomainDeps {
 }
 
 /**
- * 出路：弹一次系统选目录框 → 作者把这个项目文件夹重新交付给宿主 → 再登记一次。
- * - 取消 ⇒ 返回 null：调用方什么都不改，错误条仍在原地；
- * - 选了别的目录 ⇒ 前端不二次判定，照项目根再登记一次，宿主的准入门自己拒 ⇒ 错误条仍在、
- *   按钮仍在（不复制那份判定，免得又长出第三份答案）。
+ * 出路：弹一次系统确认框 → 作者把这个项目文件夹授权给宿主 → 再登记一次。
+ * - 按下「否」/关掉 ⇒ 返回 null：调用方什么都不改，错误条仍在原地；
+ * - 授权了但宿主仍不认（登记还是失败）⇒ 走下面的 refused 分支，错误条与按钮都还在。
+ *   前端**不**自己比对目录（不复制那份判定，免得又长出第三份答案）。
  */
 export async function redeliverProjectWriteDomain(
   deps: RedeliverProjectWriteDomainDeps,
 ): Promise<WriteDomainAdmission | null> {
   let outcome: WriteDomainOutcome;
   try {
-    const picked = await deps.chooseDirectory(writeDomainRedeliverLabel);
-    if (picked === null) return null; // 取消：什么都不改，错误条仍在原地
+    const allowed = await deps.confirm(deps.dir);
+    if (!allowed) return null; // 作者没授权：现场一切不变，错误条仍在原地
     outcome = await registerProjectWriteDomain({ dir: deps.dir, register: deps.register });
   } catch (e: unknown) {
-    // 对话框 / IPC 自己抛错（不是"作者选了别的目录"那种被拒）：按"这一趟仍没交付成功"处理
+    // 确认框 / IPC 自己抛错（宿主的落点闸拒了、对话框起不来）：按"这一趟仍没交付成功"处理
     outcome = { kind: 'refused', reason: errorText(e) };
   }
   const grant: HostWriteDomainGrant = outcome.kind === 'refused' ? 'refused' : 'granted';

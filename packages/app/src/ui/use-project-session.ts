@@ -83,16 +83,20 @@ export interface RefLike<T> {
 }
 
 /**
- * 把项目根交给宿主登记（准入门在 Rust 侧：只有对话框 / 拖放亲自交付过的目录才放行）。
+ * 把项目根交给宿主登记（准入门在 Rust 侧：只有对话框 / 拖放 / 原生确认框亲自交付过的目录才放行）。
  * 拒 = reject ⇒ 由 `write-domain.ts` 折成「这一趟没交付成功」的事实，绝不当成"能写"。
  */
 function registerWriteDomainRoot(root: string): Promise<void> {
   return invoke('register_write_domain', { root }).then(() => undefined);
 }
 
-/** 原生选目录框（对话框即授权，铁律 6 的既有通道；这里不新增任何接受路径参数的命令） */
-function chooseDirectoryFor(title: string): Promise<string | null> {
-  return invoke<string | null>('choose_directory', { title });
+/**
+ * 原生是/否确认框（**确认即授权**，2026-10-28 出路批）：宿主把落点逐字摆进系统框里，
+ * 作者按下「是」才登记为准入根——授权凭的是那一次点击，不是这里递过去的路径字符串。
+ * `true` 之后仍要再走一次 `register_write_domain` 才落定为项目根（判定单点不变）。
+ */
+function confirmWriteDomainGrant(root: string): Promise<boolean> {
+  return invoke<boolean>('confirm_write_domain', { root });
 }
 
 export interface OpenProjectOptions {
@@ -282,16 +286,16 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
   );
 
   /**
-   * 错误条上那颗「重新选择这个文件夹」的执行体：走一次原生选目录框把这个项目文件夹
-   * **重新交付**给宿主（对话框即授权，铁律 6 的既有形态——不新造授权路、不放宽写域），
-   * 成功后错误条消失、可写态按两份事实重新对齐；取消则什么都不变。
+   * 错误条上那颗「允许编辑器写入这个文件夹」的执行体：弹一次原生确认框，作者按下「是」把这个
+   * 项目文件夹**交付**给宿主（确认即授权，形态照铁律 6——不新造授权路、不放宽写域），
+   * 成功后错误条消失、可写态按两份事实重新对齐；按下「否」或关掉则什么都不变。
    */
   const redeliverWriteDomain = useCallback(async () => {
     const dir = getSessionWriteDomainFact().dir;
     if (!kernel || dir === null || !isTauri()) return;
     const admission = await redeliverProjectWriteDomain({
       dir,
-      chooseDirectory: chooseDirectoryFor,
+      confirm: confirmWriteDomainGrant,
       register: registerWriteDomainRoot,
       hasApprovalRecord: async () => (await kernel.project.approvedWritableFor(dir)) !== null,
       // 不一致事件只在 open() 期间同步发出，这一趟没有新事件可吃 ⇒ 按无冲突算
@@ -377,7 +381,7 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
         // 允许域 = 项目根目录 + appDataDir；失败 fail-closed（仅 appDataDir 可写）并显式报错。
         // WRITE-ADMIT-SPLIT 出路①：这一趟的结果是一份**独立事实**（宿主到底把写域交出来了
         // 没有），下面那行可写态必须吃它——只看着 TS 批准记录解锁 = UI 表演"能编辑"。
-        // 被拒时错误条自带那颗「重新选择这个文件夹」，点了才重新交付一次。
+        // 被拒时错误条自带那颗「允许编辑器写入这个文件夹」，点了才交付一次。
         const admission = await admitProjectWriteDomain({
           dir,
           hosted: isTauri(),

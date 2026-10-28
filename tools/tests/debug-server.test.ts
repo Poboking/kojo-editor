@@ -279,6 +279,24 @@ describe('调试宿 · 文件面与准入', () => {
     expect(again.ok).toBe(false);
   });
 
+  /**
+   * `confirm_write_domain`（2026-10-28 出路批）在调试宿这一侧**没有原生确认框可仿**，
+   * 于是恒回 `false`＝作者按了「否」。这一条钉的是安全面不变式（docs/DEBUG-MODE.md §五.9）：
+   * 调试宿的对话框只做自动应答，**不发放可写许可** ⇒ 调完这一条之后写域必须一格都没变宽
+   * （用「从未被任何用例登记过」的目录，避开上面那条把 `outside` 注册进写域的副作用）。
+   */
+  it('confirm_write_domain 恒拒，且不给调试宿长出第二条授权腿', async () => {
+    const dir = path.join(tmpRoot, 'confirm-never-admitted');
+    await fs.mkdir(dir, { recursive: true });
+    const target = path.join(dir, 'a.erb');
+    const data = Buffer.from('a').toString('base64');
+    expect((await invoke('write_file_bytes', { path: target, data })).ok).toBe(false);
+    const r = await invoke('confirm_write_domain', { root: dir });
+    expect(r.ok).toBe(true);
+    expect(r.value).toBe(false);
+    expect((await invoke('write_file_bytes', { path: target, data })).ok).toBe(false);
+  });
+
   it('rename / copy / remove 走写域判定', async () => {
     const a = path.join(sandbox, 'a.txt');
     const b = path.join(sandbox, 'b.txt');

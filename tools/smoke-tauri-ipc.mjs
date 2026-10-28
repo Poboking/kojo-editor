@@ -542,7 +542,7 @@ async function main() {
         })()`);
         const msg = String(bar?.文案 ?? '');
         const btns = bar?.按钮 ?? [];
-        if (msg.includes('这个项目文件夹眼下不能写入') && btns.includes('重新选择这个文件夹')) {
+        if (msg.includes('这个项目文件夹眼下不能写入') && btns.includes('允许编辑器写入这个文件夹')) {
           P('a3', '未交付目录的出路',
             `错误条常驻且带按钮：「${msg.slice(0, 40)}…」／按钮=${JSON.stringify(btns)}（可写态已由项目徽章收口，见 b0）`);
         } else {

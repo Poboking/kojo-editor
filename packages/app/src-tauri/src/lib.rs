@@ -52,7 +52,7 @@ mod launcher;
 // 允许域 = 项目根目录（project.opened 时经 `register_write_domain` 注册；project.closed 后清除）
 //        + appDataDir（备份 / 配置 / 存储，常驻允许）。
 // 注册本身带**准入门**：`register_write_domain` 只接受宿主亲自交付过的目录（系统目录对话框
-// 选定项 / OS 拖放），JS 凭空递一个路径不会成为项目根。
+// 选定项 / OS 拖放 / 原生确认框里按下「是」的那个目录），JS 凭空递一个路径不会成为项目根。
 // 其余路径一律拒绝并返回明确错误（不静默、fail-closed）。
 //
 // 判定域语义与 kernel writablePaths 一致：项目根目录整体（含游戏目录）。
@@ -67,10 +67,13 @@ mod launcher;
 /// 的目录（对话框即授权）与磁盘清单 `<appDataDir>/workspace_roots.txt` 的读回。
 ///
 /// `approved_roots` 是 `register_write_domain` 的**准入门**：只有**由宿主亲自交付给 WebView
-/// 的路径**才进得来——即系统目录对话框返回的选定项（`choose_directory` / `choose_workspace_root`）
-/// 与 OS 文件拖放（`WindowEvent::DragDrop` 的 drop 相位）交来的目录。清单同样落盘
+/// 的路径**才进得来——即系统目录对话框返回的选定项（`choose_directory` / `choose_workspace_root`）、
+/// OS 文件拖放（`WindowEvent::DragDrop` 的 drop 相位）交来的目录，以及原生是/否确认框里作者按下
+/// 「是」的那个目录（`confirm_write_domain`，2026-10-28 出路批：框里逐字显示落点，登记与对话框
+/// 绑在同一条命令内）。清单同样落盘
 /// `<appDataDir>/approved_roots.txt`，故"最近项目 / 常驻根"重开时其根早已在册、照常放行。
-/// **没有任何命令接受路径参数来授予写权限**——JS 侧递来一个字符串就放行的入口不存在；
+/// **没有任何命令仅凭路径参数授予写权限**——接受路径的那一条必须先把这个路径摆进原生对话框，
+/// 作者亲手点一下才算交付；JS 侧递来一个字符串就放行的入口不存在；
 /// `register_write_domain` 只把"确实被宿主交出去过"的目录（或其子目录）认作项目根。
 /// 这两份清单本身就是凭据 ⇒ 命令侧对它们一律拒写（`is_reserved_state_file`，
 /// 拦写入 / 改名 / 拷贝 / 删除），只有宿主的 `read_*` / `write_*` 私有函数能改。
@@ -679,11 +682,16 @@ fn invalidate_canon_roots(state: &WriteDomainState) {
 ///
 /// **准入门**（审阅批：修复"接受任意 JS 路径"的漏洞）：只有 `root`（规范化后）等于或落在
 /// **宿主亲自交付过的某个目录**之内才放行——即系统目录对话框（`choose_directory` /
-/// `choose_workspace_root`）返回项或 OS 拖放（`WindowEvent::DragDrop`）交来的目录，或其子目录
+/// `choose_workspace_root`）返回项、OS 拖放（`WindowEvent::DragDrop`）交来的目录、原生是/否
+/// 确认框里按下「是」的目录（[`confirm_write_domain`]），或其子目录
 /// （新建项目落自选位置下的一层），或 appDataDir 本身。
 /// 恶意 WebView JS 直接 `invoke('register_write_domain',{root:"<任意路径>"})` 会因不在准入清单而拒；
 /// 合法开项目路径（对话框/拖放选定 → 已登记 → 注册）照常放行。注册失败即 fail-closed，
 /// 前端据此退回"仅 appDataDir 可写"并显式报错。
+///
+/// 被拒那句话是**作者面**文案（逐字接在项目态错误条尾巴上）：只说"还没有确认交给编辑器写入"
+/// 这一件事实，不写「准入门 / 准入清单 / 宿主交付」这类机制名——2026-10-28 作者实测原话
+/// 「我选了一个普通文件夹，给我报这个」，黑话把那一条出路挡死了。出路见 [`confirm_write_domain`]。
 ///
 /// UNC（`\\...`）在规范化之前先拒：既绕开网络命名空间触发的凭据外泄与主线程阻塞，
 /// 拖放/对话框也从不交付 UNC 作为可写根。
@@ -695,7 +703,7 @@ async fn register_write_domain(
 ) -> Result<(), String> {
     use tauri::Manager;
     if root.starts_with(r"\\") {
-        return Err("可写范围注册拒绝：不接受网络路径（UNC）作为项目根".to_string());
+        return Err(format!("这个项目文件夹不能是网络路径（{root}）"));
     }
     let app_dir = app
         .path()
@@ -719,16 +727,132 @@ async fn register_write_domain(
     let root_for_check = root.clone();
     run_blocking("register_write_domain", move || {
         let canon_root = canonicalize_deep(Path::new(&root_for_check))
-            .map_err(|e| format!("可写范围注册失败：路径解析失败 {root_for_check}: {e}"))?;
+            .map_err(|e| format!("找不到这个项目文件夹：{root_for_check}（{e}）"))?;
         if !is_root_approved(&app_dir, &approved, &extras, &canon_root) {
-            return Err(format!(
-                "可写范围注册拒绝：{root_for_check} 未经系统目录对话框或拖放由宿主交付，不在准入清单内"
-            ));
+            // 屏上那句必须是作者话：外层文案已经说了"眼下不能写入"，这里再写一遍「可写范围…」
+            // 就是同一词在一句里出现两遍（`machine-identifier-copy` 钉过的叠话病根），而
+            // 「准入清单 / 宿主交付」这类机制名当年正是把作者挡在出路外的原因。
+            // 机制口径留在日志里，取证照旧 grep 得到（`approved_roots` 那两份清单本身没动）。
+            eprintln!(
+                "[register_write_domain] 准入拒绝（不在 approved_roots / workspace_roots / appDataDir 之内）：{root_for_check}"
+            );
+            return Err(format!("{root_for_check} 还没确认过「允许编辑器写入」"));
         }
         Ok(())
     })
     .await?;
     commit_project_root(&state, PathBuf::from(root), observed)
+}
+
+/// 「允许编辑器写入这个文件夹」——**原生是/否确认框**与登记绑在同一条命令内
+/// （2026-10-28 出路改造批；作者实测反馈原话「我选了一个普通文件夹，为什么还报不能写入」）。
+///
+/// 为什么要有这一条：开项目那一刻的登记只认宿主亲自交付过的目录，而「最近项目 / 恢复会话」
+/// 这两条路是从存储里读回路径、**从不经过对话框**（那份目录可能只在测试沙盒里被工具打开过）。
+/// 于是作者点的是自己上周就批过的文件夹，屏上却回一句机制黑话，唯一出路还是让他把那个深目录
+/// 在选目录框里重新导航一遍。确认框把这一眼就能看完的事缩成一次点击：框里逐字写着落点路径。
+///
+/// 形态仍照铁律 6：**授权凭的是原生框里那一次点击，不是 JS 递来的字符串**。按下「是」才
+/// [`record_approved_root`]（与 `choose_directory` 同一张准入表、同一个落盘文件），随后前端
+/// 照常走 `register_write_domain` 才真正落定为项目根；按下「否」/关掉 ⇒ 返回 `false`，
+/// 内存与磁盘清单一个字节都不动。**不存在**"跳过对话框直接登记"的任何通道——登记动作就住在
+/// 本命令内、与对话框同生同灭；JS 侧也没有任何命令能凭空把路径写进准入清单
+/// （那份文件本身被 [`is_reserved_state_file`] 拦在写命令之外）。
+///
+/// 弹框前先过落点闸（[`confirm_target_guard`]）：不存在的目录与整卷根**不弹框**——前者多半是
+/// 被删/移走的旧记录，后者一次点击就把整卷变成可写域，不该用一句「是」糊过去。UNC 同
+/// `register_write_domain`：在解析之前先拒。
+#[tauri::command]
+async fn confirm_write_domain(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WriteDomainState>,
+    root: String,
+) -> Result<bool, String> {
+    use tauri::Manager;
+    if root.starts_with(r"\\") {
+        return Err(format!("这个项目文件夹不能是网络路径（{root}）"));
+    }
+    let app_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?;
+    let target = PathBuf::from(&root);
+    // 解析 + 落点闸在阻塞线程池（`canonicalize` 要开句柄，慢盘上能阻塞——口径同 register）
+    let (canon, description) = run_blocking("confirm_write_domain", move || {
+        let canon = canonicalize_deep(&target)
+            .map_err(|e| format!("找不到这个项目文件夹：{}（{e}）", target.display()))?;
+        confirm_target_guard(&canon)?;
+        Ok::<(PathBuf, String), String>((canon.clone(), confirm_dialog_description(&target, &canon)))
+    })
+    .await?;
+    // 父窗不接：`rfd::AsyncMessageDialog::set_parent` 要 `raw_window_handle` 的 trait 在 scope
+    // 里，而本 crate 没有直接依赖那一层（tauri 没 re-export）——为一枚确认框加依赖不值得。
+    // Windows 上无父窗的 TaskDialog 仍由本进程模态持有，语义不变。
+    let answer = rfd::AsyncMessageDialog::new()
+        .set_level(rfd::MessageLevel::Info)
+        .set_title("允许编辑器写入这个文件夹？")
+        .set_description(description)
+        .set_buttons(rfd::MessageButtons::YesNo)
+        .show()
+        .await;
+    let allowed = matches!(answer, rfd::MessageDialogResult::Yes);
+    let shown = human_root_path(&canon);
+    if allowed {
+        // 对话框与登记绑在这一个命令内：按下「是」才进准入清单（并落盘，重启后照旧认）
+        record_approved_root(&state, &app_dir, &canon)?;
+        eprintln!("[confirm_write_domain] 经系统确认框授权该目录：{shown}");
+    } else {
+        eprintln!("[confirm_write_domain] 未授权（{answer:?}）：{shown}");
+    }
+    Ok(allowed)
+}
+
+/// `confirm_write_domain` 的**落点闸**（纯函数，可单测）：只有"此刻在盘上确实是一个文件夹、
+/// 且不是一整卷的根"才配弹那个框。判定失败=不弹框、不登记（fail-closed）。
+fn confirm_target_guard(canon: &Path) -> Result<(), String> {
+    if !canon.is_dir() {
+        return Err(format!(
+            "写入确认取消：{} 此刻不是一个文件夹（可能已被删除或移动）",
+            human_root_path(canon)
+        ));
+    }
+    // 盘根 = `\\?\C:\` → 组件只有 `Prefix("C:")` + `RootDir` 两枚；POSIX 的 `/` 只有一枚
+    if canon.components().count() <= 2 {
+        return Err(format!(
+            "写入确认取消：不能把整个磁盘根 {} 交给编辑器写入",
+            human_root_path(canon)
+        ));
+    }
+    Ok(())
+}
+
+/// 去掉 Windows 规范化路径的 `\\?\` 前缀（`\\?\UNC\server\share` → `\\server\share`）。
+/// **只为给人看**（确认框、报错文案）；登记与判定仍用规范化形态。
+fn human_root_path(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    s.into_owned()
+}
+
+/// 确认框正文：作者认得的写法在前，登记实际用的规范化形态只在**确实不同**时补一行
+/// （同一个目录的大小写/前缀差异不重复刷屏）。
+fn confirm_dialog_description(raw: &Path, canon: &Path) -> String {
+    let canon_shown = human_root_path(canon);
+    let raw_shown = human_root_path(raw);
+    let head = if is_same_path(Path::new(raw_shown.as_str()), Path::new(canon_shown.as_str())) {
+        canon_shown
+    } else {
+        format!("{raw_shown}\n（登记为：{canon_shown}）")
+    };
+    format!(
+        "{head}\n\n按下「是」之后，编辑器可以修改这个文件夹里的文件（含它的子目录）。\n\
+         备份、作者工作区与未保存快照仍写在编辑器自己的文件夹里。"
+    )
 }
 
 /// project.closed：清除项目根（回到仅 appDataDir 可写）。
@@ -3651,6 +3775,7 @@ pub fn run() {
             export_file,
             app_data_dir,
             register_write_domain,
+            confirm_write_domain,
             clear_write_domain,
             encode_string,
             start_watch,
@@ -3735,8 +3860,9 @@ mod launcher_probe;
 mod write_domain_tests {
     use super::{
         canonical_root_cached, canonical_root_cached_short, canonicalize_deep,
-        clear_domain_core, commit_project_root, domain_change_snapshot, ensure_in_domain_with,
-        ensure_in_write_domain, ensure_write_allowed_from_parts,
+        clear_domain_core, commit_project_root, confirm_dialog_description, confirm_target_guard,
+        domain_change_snapshot, ensure_in_domain_with,
+        ensure_in_write_domain, ensure_write_allowed_from_parts, human_root_path,
         invalidate_canon_roots, is_reserved_state_file, is_root_approved, is_same_path, is_within,
         memo_insert_canon_if_current,
         merge_workspace_roots, paths_overlap, push_approved_root, push_extra_root,
@@ -4097,6 +4223,71 @@ mod write_domain_tests {
         let other = mkdir(&temp_root("other"));
         assert!(push_approved_root(&mut list, &other));
         assert_eq!(list.len(), 2);
+    }
+
+    /* -------- 原生确认框那一跳（confirm_write_domain 的纯判定半边，2026-10-28 出路批） -------- */
+
+    /// 落点闸正向：一个此刻在盘上的文件夹才配弹框
+    #[test]
+    fn confirm_guard_admits_an_existing_directory() {
+        let dir = temp_root("confirm-dir");
+        assert!(confirm_target_guard(&canon(&dir)).is_ok());
+    }
+
+    /// 落点闸负向：已被删除/移走的旧记录**不弹框**——那条路会把作者引到"确认一个不存在的位置"
+    #[test]
+    fn confirm_guard_refuses_missing_target_without_dialog() {
+        let gone = temp_root("confirm-gone").join("上周还在的项目");
+        let e = confirm_target_guard(&gone).expect_err("缺失目录必须拒");
+        assert!(e.contains("不是一个文件夹"), "文案要说明为什么拒：{e}");
+    }
+
+    /// 落点闸负向：文件不是目录（同一个闸，两种失败都得出声）
+    #[test]
+    fn confirm_guard_refuses_a_plain_file() {
+        let dir = temp_root("confirm-file");
+        let f = dir.join("a.erb");
+        std::fs::write(&f, b"[LINE]\r\n").unwrap();
+        let e = confirm_target_guard(&f).expect_err("文件不能当目录授权");
+        assert!(e.contains("不是一个文件夹"), "文案要说明为什么拒：{e}");
+    }
+
+    /// 落点闸负向：整卷根不许用一句「是」授权出去（一次点击＝整卷可写，代价不成比例）。
+    /// `/` 在两平台都是目录且组件数 ≤2 ⇒ 恒走"磁盘根"那一条；Windows 的 `\\?\C:\` 同样拒
+    /// （非 Windows 上它不是目录，落在另一条拒绝里——两侧都只要求"拒"）。
+    #[test]
+    fn confirm_guard_refuses_whole_disk_root() {
+        let e = confirm_target_guard(Path::new("/")).expect_err("卷根必须拒");
+        assert!(e.contains("磁盘根"), "卷根的文案要说清代价：{e}");
+        assert!(confirm_target_guard(Path::new(r"\\?\C:\")).is_err());
+    }
+
+    /// 给人看的路径：规范化前缀剥掉（`\\?\` 是判定用的形态，不该出现在确认框里）
+    #[test]
+    fn human_root_path_strips_verbatim_prefix() {
+        assert_eq!(human_root_path(Path::new(r"\\?\D:\作品\我的项目")), r"D:\作品\我的项目");
+        assert_eq!(human_root_path(Path::new(r"\\?\UNC\nas\作品")), r"\\nas\作品");
+        assert_eq!(human_root_path(Path::new("/home/me/作品")), "/home/me/作品");
+    }
+
+    /// 确认框正文：同一个目录的两种写法不重复刷屏；规范化后确实不同（软链/短名）才补一行
+    #[test]
+    fn confirm_dialog_description_shows_the_real_grant() {
+        let dir = mkdir(&temp_root("confirm-desc"));
+        let canon = canon(&dir);
+        // raw 用同一个目录的另一写法（大小写 / 尾分隔符）⇒ 只该出现一行
+        let upper = human_root_path(&canon).to_uppercase();
+        let raw_same = Path::new(&upper);
+        let body = confirm_dialog_description(raw_same, &canon);
+        assert!(
+            !body.contains("登记为"),
+            "同一个目录的两种写法不该补第二行：{body}"
+        );
+        assert!(body.contains("按下「是」"), "正文要说清点下去会发生什么：{body}");
+        // raw 指向另一个目录 ⇒ 必须把实际登记的那一枚逐字写出来（授权对象看得见）
+        let other = mkdir(&temp_root("confirm-desc-other"));
+        let body2 = confirm_dialog_description(&other, &canon);
+        assert!(body2.contains("登记为"), "落点与所选项不同时要写出实际授权对象：{body2}");
     }
 
     /// 准入根持久化：写下去读得回；文件不存在 = 空列表不报错

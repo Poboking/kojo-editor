@@ -143,7 +143,17 @@ describe('调试面 · dialogPolicy（只选取器一次性自动应答：choose
 
   it('POLICY_DIALOG_COMMANDS：只吃两条**只选取器**（choose_directory / pick_save_path）；写通道与准入门一律不在册（应答对话框 ≠ 放行写盘）', () => {
     expect([...POLICY_DIALOG_COMMANDS].sort()).toEqual(['choose_directory', 'pick_save_path']);
-    for (const writeCmd of ['export_file', 'choose_file', 'choose_workspace_root', 'write_file_bytes', 'pick_directory']) {
+    for (const writeCmd of [
+      'export_file',
+      'choose_file',
+      'choose_workspace_root',
+      'write_file_bytes',
+      'pick_directory',
+      // 2026-10-28 出路批：那条**原生是/否确认框**就是授权本身——脚本能应答它＝脚本能签发写权限。
+      // 调试面因此永远不碰它；真壳里自动化要写链路就走已交付过的目录（PITFALLS §160/§161）。
+      'confirm_write_domain',
+      'register_write_domain',
+    ]) {
       expect(POLICY_DIALOG_COMMANDS.has(writeCmd), `${writeCmd} 不许吃脚本应答`).toBe(false);
     }
     // pick_save_path 的 URL 腿形态与 choose_directory 同形（同一枚 parseIpcCmd 判据）

@@ -719,7 +719,7 @@ async function searchText(state, request, admitRead) {
 
 export const SUPPORTED_COMMANDS = Object.freeze([
   'app_data_dir', 'append_frontend_log', 'cancel_search', 'choose_directory', 'choose_file',
-  'choose_workspace_root', 'clear_write_domain', 'copy_file', 'create_dir_exclusive',
+  'choose_workspace_root', 'clear_write_domain', 'confirm_write_domain', 'copy_file', 'create_dir_exclusive',
   'create_file_exclusive', 'encode_string', 'ensure_dir',
   'export_file', 'list_dir', 'market_device_token', 'market_download', 'market_extract',
   'market_fetch_text', 'market_publish', 'open_url_external', 'path_exists', 'read_file_bytes_raw',
@@ -1029,6 +1029,18 @@ export async function createDebugServer(options) {
         state.writeDomain.push(root);
         invalidateRoots();
       }
+    },
+    /**
+     * 「允许编辑器写入这个文件夹」那枚**原生是/否确认框**的调试宿对应物（2026-10-28 出路批）。
+     * 调试宿没有原生确认框，也不该在这里长出第二条授权腿 ⇒ **恒回 `false`**（等于作者按了「否」）：
+     * 不登记、写域一格都不扩大（安全面不变式见 docs/DEBUG-MODE.md §五.9——对话框只做自动应答
+     * policy，不发放可写许可）。页面拿到 false 后保持只读 + 错误条仍在，与真壳上拒授权同形。
+     */
+    confirm_write_domain: async (args) => {
+      log(
+        `[debug-host] confirm_write_domain：无原生确认框可弹 ⇒ 如实拒（写域未扩大）：${norm(args?.root ?? '')}`,
+      );
+      return false;
     },
     remove_dir: async (args) => {
       const p = norm(args?.path);

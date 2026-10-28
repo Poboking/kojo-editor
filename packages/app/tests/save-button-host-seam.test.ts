@@ -9,7 +9,7 @@
  * 判据红线（本文件逐条钉住）：
  * ① 宿主拒绝态 ⇒ 保存按钮 disabled（DOM 断言）；
  * ② 已在册可写目录（宿主交付成功 / 浏览器壳 not-hosted）⇒ 按钮照旧 enabled（防误伤）；
- * ③ 置灰的按钮以 `aria-describedby` 指向常驻错误条，那条错误条上就挂着「重新选择这个文件夹」
+ * ③ 置灰的按钮以 `aria-describedby` 指向常驻错误条，那条错误条上就挂着「允许编辑器写入这个文件夹」
  *   ——焦点/出路的交接是可达的（不强行 focus()，切标签抢编辑器焦点比按不动更打扰作者）；
  * ④ 判定只覆盖**被拒项目目录之下**的路径：作者工作区、常驻可写根、别的项目一概不受影响；
  * ⑤ 写域没放宽：内核 `kernel.io.isWritable` 与 Rust 准入门一字未动，这里只加"读同一份事实"的闸。
@@ -146,7 +146,7 @@ describe('3 · 可达性：置灰按钮指回常驻错误条，出路就在指�
     container.remove();
   });
 
-  it('aria-describedby 指向错误条；错误条上挂着「重新选择这个文件夹」那颗出路按钮', () => {
+  it('aria-describedby 指向错误条；错误条上挂着「允许编辑器写入这个文件夹」那颗出路按钮', () => {
     setSessionWriteDomainFact(REFUSED);
     const bar: ProjectErrorBar = {
       message: writeDomainRefusedMessage(REFUSED),

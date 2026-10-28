@@ -44,10 +44,10 @@ describe('raiseProjectErrorBar：出路动作与文案同生同灭（WRITE-ADMIT
   });
 
   it('文案相同但带出路 → 一律换新：执行体抓着这一次的项目目录，屏上不许留旧那份', () => {
-    const stale = { message: '同一个原因', action: action('重新选择这个文件夹') };
-    const next = raiseProjectErrorBar(stale, { message: '同一个原因', action: action('重新选择这个文件夹') });
+    const stale = { message: '同一个原因', action: action('允许编辑器写入这个文件夹') };
+    const next = raiseProjectErrorBar(stale, { message: '同一个原因', action: action('允许编辑器写入这个文件夹') });
     expect(next).not.toBe(stale);
-    expect(next?.action?.label).toBe('重新选择这个文件夹');
+    expect(next?.action?.label).toBe('允许编辑器写入这个文件夹');
   });
 
   it('不同错误 → 覆盖（旧的出路不许留在新的文案上）', () => {
@@ -117,7 +117,11 @@ describe('ProjectErrorNotice：文案原样 + 可关闭', () => {
         h(ProjectErrorNotice, {
           message,
           onDismiss: () => undefined,
-          action: { label: '重新选择这个文件夹', title: '在弹出的系统选目录框里选回这个项目文件夹，编辑器才会允许写入', run },
+          action: {
+            label: '允许编辑器写入这个文件夹',
+            title: '系统里弹出的确认框会逐字写出这个文件夹的位置；按下「是」编辑器才可以往里写',
+            run,
+          },
         }),
       );
     });
@@ -126,8 +130,8 @@ describe('ProjectErrorNotice：文案原样 + 可关闭', () => {
     expect(box?.querySelector('.project-session-error-message')?.textContent).toBe(message);
     const fix = box?.querySelector('.toast-action') as HTMLButtonElement | null;
     expect(fix).not.toBeNull();
-    expect(fix?.textContent).toBe('重新选择这个文件夹');
-    expect(fix?.title).toBe('在弹出的系统选目录框里选回这个项目文件夹，编辑器才会允许写入');
+    expect(fix?.textContent).toBe('允许编辑器写入这个文件夹');
+    expect(fix?.title).toBe('系统里弹出的确认框会逐字写出这个文件夹的位置；按下「是」编辑器才可以往里写');
     await act(async () => {
       fix!.click();
     });
