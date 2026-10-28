@@ -225,6 +225,82 @@ describe('buildKojoFlatTree · 像素顶部与总高', () => {
   });
 });
 
+/* ------------------------------ 三层裁点的像素上下沿（WS-12 欠账批） ------------------------------ */
+
+describe('GroupRange.span / SubRange.span · 组与包也是裁点', () => {
+  const tree = buildKojoFlatTree({
+    groups: [{ group: base, open: true, pkgFolderOpen: () => false }],
+    subOpen: new Set(),
+    dirCache: NO_DIR,
+    pkgDirOf: (prefix, label) => `${prefix}/${label}`,
+  });
+
+  it('整组的 span = 组头那一行起、组列表下边距止（行与缝一次算清）', () => {
+    const g = tree.groups[0]!;
+    // 5 行 × 22 + 包 ERB 列表 2px + 角色组列表 4px
+    expect(g.span).toEqual({ start: 0, end: 5, topPx: 0, bottomPx: 5 * TREE_ROW_H + GAP_NESTED_UL + GAP_GROUP_UL });
+    expect(g.span.bottomPx).toBe(tree.height);
+  });
+
+  it('子段两档形状各有其份：根散文件没头没缝，作者包带头也带 ERB 列表那档缝', () => {
+    const g = tree.groups[0]!;
+    expect(g.subs).toHaveLength(2);
+    // [组头, 散落.ERB, 包头, A1, A2]：散落那段 = 第 1 行，包那段 = 第 2..4 行 + 2px 缝
+    expect(g.subs[0]).toEqual({ span: { start: 1, end: 2, topPx: 22, bottomPx: 44 }, headerIdx: -1 });
+    expect(g.subs[1]).toEqual({ span: { start: 2, end: 5, topPx: 44, bottomPx: 44 + 3 * TREE_ROW_H + GAP_NESTED_UL }, headerIdx: 2 });
+    // 子段首尾相接（缝长在段自己身上，段间不另插一档）
+    expect(g.subs[1]!.span.topPx).toBe(g.subs[0]!.span.bottomPx);
+  });
+
+  it('折叠组的 span 就是组头那一行、子段清单为空（没有下边距可垫）', () => {
+    const closed = buildKojoFlatTree({
+      groups: [{ group: base, open: false, pkgFolderOpen: () => false }],
+      subOpen: new Set(),
+      dirCache: NO_DIR,
+      pkgDirOf: (prefix, label) => `${prefix}/${label}`,
+    });
+    expect(closed.groups[0]!.span).toEqual({ start: 0, end: 1, topPx: 0, bottomPx: TREE_ROW_H });
+    expect(closed.groups[0]!.subs).toEqual([]);
+  });
+
+  it('说明行也算在组的"段外行"里（有它就没有整组少一档 22px）', () => {
+    const noted = buildKojoFlatTree({
+      groups: [{ group: base, open: true, pkgFolderOpen: () => false, note: '读取文件夹…', key: 'root:C:/work' }],
+      subOpen: new Set(),
+      dirCache: NO_DIR,
+      pkgDirOf: (prefix, label) => `${prefix}/${label}`,
+    });
+    const g = noted.groups[0]!;
+    expect(g.subs[0]!.span.topPx).toBe(2 * TREE_ROW_H); // 组头 + 说明行 之后才是第一段
+    expect(g.subs[0]!.headerIdx).toBe(-1);
+    expect(g.span.bottomPx).toBe(noted.height);
+  });
+
+  it('点开真实文件夹：目录行归进同一段，段底只多那档 ERB 缝（缝不被算两次）', () => {
+    const dir = 'C:/koa/001/包A';
+    const cache: ReadonlyMap<string, DirState> = new Map<string, DirState>([
+      [dir, [entry('sub', true, dir), entry('readme.txt', false, dir)]],
+      [`${dir}/sub`, [entry('深.ERB', false, `${dir}/sub`)]],
+    ]);
+    const withDirs = buildKojoFlatTree({
+      groups: [{ group: base, open: true, pkgFolderOpen: () => true }],
+      subOpen: new Set([dir, `${dir}/sub`]),
+      dirCache: cache,
+      pkgDirOf: (prefix, label) => `${prefix}/${label}`,
+    });
+    const g = withDirs.groups[0]!;
+    const pkg = g.subs[1]!;
+    expect(pkg.headerIdx).toBe(pkg.span.start); // 段就是从包头开始
+    // 行：组头 / 散落 / 包头 / sub / 深.ERB / readme.txt / A1 / A2 = 8 行 + 两档递归缝 + 一档 ERB 缝 + 组缝
+    expect(withDirs.rows).toHaveLength(8);
+    expect(withDirs.height).toBe(8 * TREE_ROW_H + 2 * GAP_NESTED_UL + GAP_GROUP_UL);
+    // 段内账：包头 + 目录三层（6 行）+ 两档递归/ERB 缝（sub 的 nested ul、包的 ERB ul）= 段高
+    expect(pkg.span.bottomPx - pkg.span.topPx).toBe(6 * TREE_ROW_H + 2 * GAP_NESTED_UL);
+    // 上一段（根散文件）不带缝、下一段紧接其后
+    expect(g.subs[0]!.span.bottomPx).toBe(pkg.span.topPx);
+  });
+});
+
 describe('rangePaths / indexOfId · 连选与焦点定位取的是同一批行', () => {
   const tree = buildKojoFlatTree({
     groups: [{ group: base, open: true, pkgFolderOpen: () => false }],

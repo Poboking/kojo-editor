@@ -11,6 +11,15 @@
  * 行模型（`file-tree-flat`）给每一行算了 `top`，其中已经含了各级 `<ul>` 的下边距。
  * 只按"第 n 行 = n × 22px"推的位置，在真实语料上会累积几百像素的偏差——
  * 表现为滚到底时下面露出一段空白、或视口里的行根本没挂上。
+ *
+ * ## 裁点的三层（WS-12 欠账批）
+ *
+ * `sliceSpan` 是唯一的裁剪判据，`sliceBlock` 只是它在叶子层（`LeafBlock`）上的取样：
+ * 组（`GroupRange.span`）、包（`SubRange.span`）、平铺 ERB（`LeafBlock`）三层都过同一套三条不变量。
+ * 分层的代价只有一处要当心：**同一档 `<ul>` 下边距只许一层计费**——
+ * 包的 ERB 列表那 2px 归 `SubRange.span.bottomPx`，`LeafBlock` 的块底只到末行结束；
+ * 角色组内容列表那 4px 归 `GroupRange.span.bottomPx`。于是从组顶到组底恒等式一遍到底，
+ * 整组被裁时一条占位就够，不必再挂一堆零散占位去凑那两档缝。
  */
 import { TREE_ROW_H, type FlatRow, type LeafBlock } from './file-tree-flat';
 
@@ -81,7 +90,7 @@ export function fullRange(total: number): VisibleRange {
   return { start: 0, end: total };
 }
 
-/** 一个叶子块的挂载结果：渲染 `[from,to)` 行，前后各垫 `leadPx` / `trailPx` 像素 */
+/** 一个可裁块的挂载结果：渲染 `[from,to)` 行，前后各垫 `leadPx` / `trailPx` 像素 */
 export interface BlockSlice {
   readonly from: number;
   readonly to: number;
@@ -92,35 +101,76 @@ export interface BlockSlice {
 const NO_ROWS: BlockSlice = { from: 0, to: 0, leadPx: 0, trailPx: 0 };
 
 /**
- * 把一个叶子块（一个包的 ERB 列表 / 一段根散文件）裁进视口。
+ * 裁点的形状：行区间 + **该段在滚动坐标里的真实上下沿**（`file-tree-flat.RowSpan` 同形）。
+ *
+ * 这里刻意只声明结构、不 import 那个模块的类型：虚拟化这张纸不许反过来依赖"块从哪来"，
+ * 两边靠结构化类型对上即可（`RowSpan` 天然满足本接口）。
+ */
+export interface CutSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly topPx: number;
+  readonly bottomPx: number;
+}
+
+/**
+ * 把一个可裁块裁进视口——**三层裁点（组 / 包 / 平铺 ERB）共用这一条判据**。
  *
  * 三条不变量（都由 `file-tree-virtual.test.ts` 钉住）：
- * 1. `leadPx + (to-from)*档 + trailPx` 恒等于整块的真实高度 ⇒ 裁行不让滚动高度变化；
+ * 1. `leadPx + 挂载行区间的真实高度 + trailPx` 恒等于整块的 `bottomPx − topPx`
+ *    ⇒ **裁行不让滚动高度变化**（垫的是被裁行自己占的像素，含块尾那档 `<ul>` 下边距）；
  * 2. 整块在视口之上 ⇒ 只垫高不挂行；整块在视口之下同理；
  * 3. 块空 / 行缺失 ⇒ 全零（不渲染占位，也不撒谎说垫了高）。
  */
-export function sliceBlock(block: LeafBlock, rows: readonly FlatRow[], range: VisibleRange): BlockSlice {
-  const total = block.end - block.start;
+export function sliceSpan(span: CutSpan, rows: readonly FlatRow[], range: VisibleRange): BlockSlice {
+  const total = span.end - span.start;
   if (total <= 0 || rows.length === 0) return NO_ROWS;
-  const first = rows[block.start] as FlatRow;
-  const last = rows[block.end - 1] as FlatRow;
-  const blockTop = first.top;
-  const blockBottom = last.top + TREE_ROW_H;
+  const blockTop = span.topPx;
+  const blockBottom = span.bottomPx;
   const keptPx = Math.max(0, blockBottom - blockTop);
   // 整块在视口之外：一律不挂行，只在**块的那一侧**垫高（判据比的是区间端点，不看裁剪结果）
-  if (range.start >= block.end) return { from: block.end, to: block.end, leadPx: keptPx, trailPx: 0 };
-  if (range.end <= block.start) return { from: block.start, to: block.start, leadPx: 0, trailPx: keptPx };
-  const from = Math.max(block.start, range.start);
-  const to = Math.min(block.end, range.end);
-  if (from >= to) return { from: block.start, to: block.start, leadPx: keptPx, trailPx: 0 };
-  const leadRow = rows[from] as FlatRow;
+  if (range.start >= span.end) return { from: span.end, to: span.end, leadPx: keptPx, trailPx: 0 };
+  if (range.end <= span.start) return { from: span.start, to: span.start, leadPx: 0, trailPx: keptPx };
+  const from = Math.max(span.start, range.start);
+  const to = Math.min(span.end, range.end);
+  if (from >= to) return { from: span.start, to: span.start, leadPx: keptPx, trailPx: 0 };
+  const leadRow = rows[from] as FlatRow | undefined;
   const trailRow = rows[to] as FlatRow | undefined;
   return {
     from,
     to,
-    leadPx: Math.max(0, leadRow.top - blockTop),
+    leadPx: leadRow === undefined ? keptPx : Math.max(0, leadRow.top - blockTop),
     trailPx: trailRow === undefined ? 0 : Math.max(0, blockBottom - trailRow.top),
   };
+}
+
+/**
+ * 把一个叶子块（一个包的 ERB 列表 / 一段根散文件）裁进视口。
+ *
+ * 叶子块的上下沿不由行模型另记（`LeafBlock` 只有行号），故按"首行顶 → 末行底"现推：
+ * 它自己不带块尾的 `<ul>` 下边距——那档缝归上一层的 `SubRange.span` 垫，两层不许重复计费。
+ */
+export function sliceBlock(block: LeafBlock, rows: readonly FlatRow[], range: VisibleRange): BlockSlice {
+  if (block.end - block.start <= 0 || rows.length === 0) return NO_ROWS;
+  const first = rows[block.start] as FlatRow | undefined;
+  const last = rows[block.end - 1] as FlatRow | undefined;
+  if (first === undefined || last === undefined) return NO_ROWS;
+  return sliceSpan({ start: block.start, end: block.end, topPx: first.top, bottomPx: last.top + TREE_ROW_H }, rows, range);
+}
+
+/**
+ * 这一格是不是"整块一行都不挂"（渲染侧据此把整块换成**一条**等高占位，而不是挂一堆零散占位）。
+ *
+ * `from === to` 还不够——空块（0 行、0 高）也是 `from === to`，那是"本来就什么都没得画"，
+ * 不是"裁掉了"：给它挂一条 0 高的占位会让 DOM 多一格、又不垫任何高度，纯属撒谎。
+ */
+export function isCulledSlice(slice: BlockSlice): boolean {
+  return slice.from === slice.to && slice.leadPx + slice.trailPx > 0;
+}
+
+/** 整块被裁时该垫的高度（`isCulledSlice` 为真时才有意义） */
+export function cullSpacerPx(slice: BlockSlice): number {
+  return slice.leadPx + slice.trailPx;
 }
 
 /** 垫高样式（0 高不落 DOM）；行数由调用侧给，这里只做 px 串 */

@@ -14,15 +14,23 @@
  * - `level`：直接就是 `aria-level`（层级只有一份判据，读屏与键盘用的是同一个数）；
  * - `id`：稳定行号 = DOM 上的 `data-tid` ⇒ 键盘移动"焦点在第 n 行"不需要 DOM 顺序参与；
  * - `parentIdx` / `childIdx`：← / → 与父子跳转用，不靠 DOM 上溯；
- * - `blocks`：**叶子块**（一个包 / 一段根散文件的可裁行区间）——虚拟化只对叶子行下手。
+ * - `blocks`：**叶子块**（一个包 / 一段根散文件的可裁行区间）——平铺 ERB 层的裁点；
+ *   组与包两层的裁点是同文件里的 `groups[].span` / `groups[].subs[].span`（见下面那段三层口径）。
  *
- * ## 为什么只虚拟化叶子行（取舍写在这里，别当偷懒）
+ * ## 裁切的口径分三层（WS-12 欠账批收口）
  *
- * 结构行（角色组头 / 作者包头 / 包内真实文件夹的递归层）是**作者手动展开出来的**，
- * 规模由展开动作本身约束；叶子文件行是**索引一次灌进来的**（真语料 2,325 行、
- * 过滤态强制全展开时上千行同帧挂载），那才是挂载成本的真身。把裁剪收在叶子块上还有一条实打实的收益：
- * **每一层的 `<ul>` 与它的下边距始终在场** ⇒ 折叠/展开不让滚动高度跳变，
- * 导轨（`.tree-group > .tree-files::before` 那族选择器）与 `TreeFoldBody` 的 DOM 契约一个字都不用改。
+ * 最初只裁**叶子行**，理由是"结构行由作者手动展开、规模自带约束"。真语料（2,689 行）实测把这理由推翻了：
+ * 索引一次灌进来的包与角色组本身就是 136 + 194 枚，滚到深处时挂载的 360 枚 treeitem 里
+ * 只有 31 枚是文件行——**其余全是恒挂载的组头与包头**。所以裁剪上提到三层：
+ * 组（`GroupRange.span`）→ 包 / 根散文件（`SubRange.span`）→ 平铺 ERB（`LeafBlock`）。
+ * 每层都过 `file-tree-virtual.sliceSpan` 那三条不变量，视口在外的一律只垫高度。
+ *
+ * 仍然保留的一条纪律：**行语义一个字没动**——`rows` 的顺序、`top`、`level`、父子指针、
+ * `leaf/selectable` 的判据都还是老那份；本批只往上加"块"的口径（`span`/`subs`），
+ * 也就是"每块在滚动坐标里从哪到哪"，让裁与不裁都从同一份模型读数。
+ *
+ * 目录递归层（`DirRows`，包内真实文件夹）不进这套裁剪：它规模由展开动作本身约束、
+ * 而且递归 `<ul>` 没有可用的裁点；整包被裁时它随包的 `span` 一起垫高，所以不会出现双份高度。
  *
  * ## `top` 的缝必须与 CSS 同源
  *
@@ -84,6 +92,29 @@ export interface LeafBlock {
   readonly pkgKey: string;
 }
 
+/**
+ * 一段"能整块裁掉"的行区间，外加它在滚动内容坐标里的**真实上下沿**（WS-12 欠账批）。
+ *
+ * 为什么行数不够、必须有像素沿：`[start,end)` 只说"这几行"，而一组的最后一行下面还压着
+ * `ul.tree-files` 的下边距、一包下面还压着 `ul.tree-files.nested` 的下边距——那些缝是真高度，
+ * 但**不属于任何一行**。整块裁掉时这些缝也得由同一条占位垫出来，否则一裁 `scrollHeight` 就缩，
+ * 与 `file-tree-virtual.test.ts` 钉死的"裁行不许改变滚动高度"直接冲突。
+ * `bottomPx` 取的是构建时那一刻的累计高度（`b.top`）⇒ 行 + 缝一次算清，渲染侧不再自己补。
+ */
+export interface RowSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly topPx: number;
+  readonly bottomPx: number;
+}
+
+/** 组内的一段子区间：一个作者包（含包头行 + 真实文件夹层 + 平铺 ERB 层）或一段根散文件 */
+export interface SubRange {
+  readonly span: RowSpan;
+  /** 包头的行下标；根散文件没有包头 ⇒ -1（渲染侧据此决定那一格挂按钮还是挂占位） */
+  readonly headerIdx: number;
+}
+
 /** 一组的行范围（含组头）与它的叶子块清单 */
 export interface GroupRange {
   readonly headerIdx: number;
@@ -92,6 +123,10 @@ export interface GroupRange {
   readonly end: number;
   readonly open: boolean;
   readonly blocks: readonly LeafBlock[];
+  /** 整组（组头 + 各级子层 + 组列表下边距）的像素上下沿 ⇒ 视口在外时整组一行不挂 */
+  readonly span: RowSpan;
+  /** 与 `subs` 数组同下标的子区间清单（折叠组为空） */
+  readonly subs: readonly SubRange[];
 }
 
 export interface FlatTree {
@@ -262,6 +297,7 @@ export function buildKojoFlatTree(input: KojoModelInput): FlatTree {
   const perGroupBlocks: LeafBlock[][] = [];
   input.groups.forEach((gi, groupIdx) => {
     const key = gi.key ?? gi.group.label;
+    const groupTopPx = b.top;
     const headerIdx = pushRow(
       b,
       { id: groupRowId(key), kind: 'group', level: 1, path: gi.group.prefix, label: gi.group.label, leaf: false, selectable: false, expandable: true, open: gi.open },
@@ -269,6 +305,7 @@ export function buildKojoFlatTree(input: KojoModelInput): FlatTree {
     );
     const blocks: LeafBlock[] = [];
     const blockBase = b.blocks.length;
+    const subs: SubRange[] = [];
     perGroupBlocks.push(blocks);
     if (gi.open) {
       if (gi.note !== undefined && gi.note !== '') {
@@ -279,11 +316,14 @@ export function buildKojoFlatTree(input: KojoModelInput): FlatTree {
         );
       }
       gi.group.subs.forEach((s, subIdx) => {
+        const subTopPx = b.top;
+        const subRowBase = b.rows.length;
         const limit = gi.limitOf === undefined ? s.files.length : Math.max(0, Math.min(s.files.length, gi.limitOf(subIdx)));
         const shown = limit >= s.files.length ? s.files : s.files.slice(0, limit);
         if (s.label === null) {
           // 根散文件：没有包层，直接挂在角色组的 `ul.tree-files` 里
           pushLeafBlock(b, shown, 2, headerIdx, { groupIdx, subIdx, scatter: true, pkgKey: '' });
+          subs.push({ span: { start: subRowBase, end: b.rows.length, topPx: subTopPx, bottomPx: b.top }, headerIdx: -1 });
           return;
         }
         const pkgKey = packageKey(gi.group.label, s.label);
@@ -301,11 +341,13 @@ export function buildKojoFlatTree(input: KojoModelInput): FlatTree {
         }
         pushLeafBlock(b, shown, 3, pkgIdx, { groupIdx, subIdx, scatter: false, pkgKey });
         b.top += GAP_NESTED_UL; // 包的 ERB 列表 `ul.tree-files.nested` 一档下边距
+        subs.push({ span: { start: pkgIdx, end: b.rows.length, topPx: subTopPx, bottomPx: b.top }, headerIdx: pkgIdx });
       });
       b.blocks.slice(blockBase).forEach((blk) => blocks.push(blk));
       b.top += GAP_GROUP_UL; // 角色组内容列表 `ul.tree-files` 一档下边距
     }
-    b.groups.push({ headerIdx, key, start: headerIdx, end: b.rows.length, open: gi.open, blocks });
+    const span: RowSpan = { start: headerIdx, end: b.rows.length, topPx: groupTopPx, bottomPx: b.top };
+    b.groups.push({ headerIdx, key, start: headerIdx, end: b.rows.length, open: gi.open, blocks, span, subs });
   });
   return finish(b);
 }
@@ -345,20 +387,26 @@ export function buildFsFlatTree(input: FsModelInput): FlatTree {
      * 它的展开状态住在 `subOpen`（按绝对路径），与角色组的 `opened`（按标签）是两套现场。
      * 行种类决定 ← / → 落到哪个集合上，写错就会"按了展开、收的不是这一层"。
      */
+    const rootTopPx = b.top;
     const headerIdx = pushRow(
       b,
       { id: root.dir, kind: 'dir', level: 1, path: root.dir, label: root.label, leaf: false, selectable: false, expandable: true, open: root.open },
       -1,
     );
+    /**
+     * `subs` 恒空：多根的组头**是一条目录行**，它的整棵子树都由 `DirRows` 递归画，
+     * 而本视图不参与行虚拟化（渲染侧走 `fullRange`）⇒ 这里只把整根的上下沿记全，
+     * 让两个视图的模型形状一致（`span` 有、`subs` 空），不给 fs 视图留一条"半个裁点"。
+     */
     if (root.open) {
       const blockBase = b.blocks.length;
       pushDirRows(b, input, root.dir, 0, 2, skip, headerIdx);
       b.top += GAP_GROUP_UL;
       const blocks = b.blocks.slice(blockBase);
-      b.groups.push({ headerIdx, key: root.key, start: headerIdx, end: b.rows.length, open: true, blocks });
+      b.groups.push({ headerIdx, key: root.key, start: headerIdx, end: b.rows.length, open: true, blocks, span: { start: headerIdx, end: b.rows.length, topPx: rootTopPx, bottomPx: b.top }, subs: [] });
       continue;
     }
-    b.groups.push({ headerIdx, key: root.key, start: headerIdx, end: b.rows.length, open: false, blocks: [] });
+    b.groups.push({ headerIdx, key: root.key, start: headerIdx, end: b.rows.length, open: false, blocks: [], span: { start: headerIdx, end: b.rows.length, topPx: rootTopPx, bottomPx: b.top }, subs: [] });
   }
   return finish(b);
 }
