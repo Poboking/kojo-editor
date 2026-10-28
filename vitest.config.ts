@@ -33,6 +33,9 @@ export const config = defineConfig({
       // B3d：签名帮助 / 格式化的判据叶子（同样必须排在桶之前）。
       '@kojo/kojo-lang/signature': r('./packages/kojo-lang/src/signature.ts'),
       '@kojo/kojo-lang/format': r('./packages/kojo-lang/src/format.ts'),
+      // B3e：查找引用 / 改名的判据叶子（同样必须排在桶之前）。
+      '@kojo/kojo-lang/references': r('./packages/kojo-lang/src/references.ts'),
+      '@kojo/kojo-lang/rename': r('./packages/kojo-lang/src/rename.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('./packages/kojo-sdk/src/semantic-roles.ts'),
       '@kojo/kojo-sdk/structure-protocol': r('./packages/kojo-sdk/src/structure-protocol.ts'),
       '@kojo/kojo-sdk/contracts': r('./packages/kojo-sdk/src/contracts.ts'),

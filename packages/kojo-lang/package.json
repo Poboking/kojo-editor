@@ -25,6 +25,8 @@
     "./expand-compile": "./src/expand-compile.ts",
     "./signature": "./src/signature.ts",
     "./format": "./src/format.ts",
+    "./references": "./src/references.ts",
+    "./rename": "./src/rename.ts",
     "./theme-rules": "./src/theme-rules.ts",
     "./lexicon": "./src/lexicon.ts",
     "./monarch": "./src/monarch.ts",

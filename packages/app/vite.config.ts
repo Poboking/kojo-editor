@@ -275,6 +275,8 @@ export default defineConfig({
       // B3d：签名帮助 / 格式化的判据叶子（同样必须排在桶之前）。
       '@kojo/kojo-lang/signature': r('../kojo-lang/src/signature.ts'),
       '@kojo/kojo-lang/format': r('../kojo-lang/src/format.ts'),
+      '@kojo/kojo-lang/references': r('../kojo-lang/src/references.ts'),
+      '@kojo/kojo-lang/rename': r('../kojo-lang/src/rename.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('../kojo-sdk/src/semantic-roles.ts'),
       '@kojo/kojo-sdk/structure-protocol': r('../kojo-sdk/src/structure-protocol.ts'),
       '@kojo/kojo-sdk/contracts': r('../kojo-sdk/src/contracts.ts'),

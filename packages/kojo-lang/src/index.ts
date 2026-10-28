@@ -54,6 +54,12 @@ export * from './expand-compile';
 // 开机侧一律引叶子（`@kojo/kojo-lang/signature` / `/format`），桶只给"要整块"的消费方。
 export * from './signature';
 export * from './format';
+// B3e（2026-10-29）：2.0 **查找引用与符号改名**的判据整块从宿主 `monaco/kojo2-*.ts` 搬进来
+// 两枚——`references`（同文件 + 跨文件合并 / 500 引用上限 / 项目文件快照口）与 `rename`
+// （prepare / 三道闸 / 64 文件·2000 编辑上限 / 快照 resolver）。理由与 B3c / B3d 逐字相同：
+// 供方是插件，插件读不到宿主；开机侧一律引叶子（`@kojo/kojo-lang/references` / `/rename`）。
+export * from './references';
+export * from './rename';
 // B4：角色表与角色调色板（架构 §7.2「角色表住 SDK 不住 app」）——**开机侧引叶子**，
 // 这两枚进桶只是为了让"要整块"的消费方一次拿全。
 export * from '@kojo/kojo-sdk/semantic-roles';

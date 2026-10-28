@@ -66,7 +66,11 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     //   `format`（整篇 + 区间格式化规则）。这两条腿的原生 provider 在 B3d 批删干净，供方同样是
     //   插件；包内只引 `@kojo/kojo-core` + 同包相对路径（`format` 的全角冒号正则从同包
     //   `language-config` 取，**不再**经宿主那枚 `kojo2-enter` 指针壳转一手——那枚壳同批删了）。
-    expect(files).toHaveLength(23);
+    // + B3e（2026-10-29）：引用 / 改名的判据再进两枚——`references`（同文件 + 跨文件合并 /
+    //   500 引用上限 / 项目文件快照口）与 `rename`（prepare / 三道闸 / 64 文件·2000 编辑上限 /
+    //   快照 resolver）。同样只引 `@kojo/kojo-core` + 同包相对路径（`isNameChar` 走同包
+    //   `name-chars`，错误文案自持一行，不引 `@kojo/plugin-api`）。
+    expect(files).toHaveLength(25);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
