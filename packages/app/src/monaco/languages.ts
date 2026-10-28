@@ -145,6 +145,9 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
     'hover',
     'signatureHelp',
     'formatting',
+    // B3e：引用 / 改名也交给插件供方。
+    'references',
+    'rename',
   ],
   capabilities: KOJO2_CAPABILITIES,
 };

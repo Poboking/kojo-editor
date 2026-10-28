@@ -175,6 +175,8 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   // B3d（2026-10-28）：签名 / 格式化同批 —— 供方是插件，kojo2 由 `slotServices` 点名挂上。
   [LanguageCapability.Signature]: 'signatureHelp',
   [LanguageCapability.Format]: 'formatting',
+  // B3e（2026-10-29）：改名同批（引用那格上方早已登记）。
+  [LanguageCapability.Rename]: 'rename',
 };
 
 /** 这门语言对**这一项能力**是否走得到共享收口 */
@@ -255,7 +257,10 @@ const BUILTIN_PROBES: Readonly<
       // 取证点改成"共享收口带能力名 + descriptor 点名"这两处声明。
       { rel: 'monaco/kojo-definition.ts', re: /'definition',\s*\)/ },
       { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'definition'/ },
-      { rel: 'monaco/kojo2-references.ts', re: /registerReferenceProvider\(\s*KOJO2_LANGUAGE_ID/ },
+      // B3e：引用同样归插件（原探针指那枚原生 2.0 provider，现已不存在）。
+      { rel: 'monaco/kojo2-references.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerReferenceProvider/ },
+      { rel: 'monaco/kojo2-references.ts', re: /'references',\s*\)/ },
+      { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'references'/ },
     ],
   },
 };
@@ -625,11 +630,18 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   refs: [
     { rel: 'monaco/find-references.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerReferenceProvider/ },
-    { rel: 'monaco/kojo2-references.ts', re: /registerReferenceProvider\(\s*KOJO2_LANGUAGE_ID/ },
+    // B3e（2026-10-29）：2.0 的引用不再自建 provider——共享收口带能力名 `references`，
+    // descriptor 用 `slotServices` 点名挂上，应答来自插件（形状同 B3b/B3c/B3d）。
+    { rel: 'monaco/kojo2-references.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerReferenceProvider/ },
+    { rel: 'monaco/kojo2-references.ts', re: /'references',\s*\)/ },
+    { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'references'/ },
   ],
   rename: [
     { rel: 'monaco/erb-rename.ts', re: /registerRenameProvider\(\s*ERB_LANGUAGE_ID/ },
-    { rel: 'monaco/kojo2-rename.ts', re: /registerRenameProvider\(\s*KOJO2_LANGUAGE_ID/ },
+    // B3e（2026-10-29）：2.0 改名同批走共享收口（能力名 `rename`）。
+    { rel: 'monaco/kojo2-rename.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerRenameProvider/ },
+    { rel: 'monaco/kojo2-rename.ts', re: /'rename',\s*\)/ },
+    { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'rename'/ },
   ],
   completion: [
     { rel: 'monaco/erb-completion.ts', re: /installCompletion\(monaco,\s*ERB_COMPLETION_ASSEMBLY/ },

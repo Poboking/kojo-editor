@@ -11,33 +11,23 @@
  * 5. **坏文件不污染**：解析抛错保留旧条目、其它文件的查询结果逐条不变、垃圾文本不造符号；
  * 6. **CRLF / 确定性**：CRLF 与 LF 同结果、喂入顺序不影响输出；
  * 7. **性能护栏**：5k 行单文件更新 < 8ms（三次取样中位数）；
- * 8. **provider**：只挂 `kojo2`、flag 关零注册、跨文件 `path → Uri`、`includeDeclaration`、
- *    索引缺席 / getIndex 抛错 / 无 uri / 取文失败 / 注册失败 / dispose 幂等。
+ * 8. **B3e**：索引实例仍满足跨文件合并的结构面（provider 的请求 / Location 翻译在
+ *    `kojo2-references.test.ts`，判据本体在包）。
  *
  * 期望值全部从夹具原文位置与 `kojo2DocumentOf` 推，不在测试里复写行号。
  */
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type * as Monaco from '../src/monaco/entry';
+import { describe, expect, it, vi } from 'vitest';
 import { kojo2DocumentOf } from '@kojo/kojo-lang';
-import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   KOJO2_PROJECT_REF_LIMIT,
   createKojo2ProjectIndex,
   type Kojo2ProjectIndex,
 } from '../src/monaco/kojo2-project-index';
 import {
-  installKojo2ProjectReferenceProvider,
   kojo2ProjectReferencesAt,
-  type Kojo2ProjectReferenceProviderOptions,
   type Kojo2ReferencePosition,
   type Kojo2ReferenceSpan,
 } from '../src/monaco/kojo2-references';
-
-const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
-const HERE = dirname(fileURLToPath(import.meta.url));
 
 const PATH_A = 'D:/proj/a.kojo2';
 const PATH_B = 'D:/proj/b.kojo2';
@@ -656,292 +646,26 @@ describe('kojo2ProjectReferencesAt：本文件 + 跨文件合并', () => {
   });
 });
 
-/* ============================== ⑧ provider ============================== */
+/* ============================== ⑧ B3e：索引形状仍供跨文件合并 ============================== */
 
-const TOKEN = {
-  isCancellationRequested: false,
-  onCancellationRequested: () => ({ dispose: () => undefined }),
-} as unknown as Monaco.CancellationToken;
-
-interface Registration {
-  readonly selector: unknown;
-  readonly provider: unknown;
-}
-
-interface FakeMonaco {
-  readonly monaco: typeof Monaco;
-  readonly registrations: Registration[];
-  readonly disposeCount: () => number;
-}
-
-interface FakeMonacoOptions {
-  readonly failRegister?: boolean;
-  readonly failDispose?: boolean;
-}
-
-/** 假 Uri（`Uri.file` 的返回形状里 provider 用得到 fsPath / path / toString）。 */
-function fakeUri(path: string): Monaco.Uri {
-  return {
-    scheme: 'file',
-    path,
-    fsPath: path,
-    toString: () => `file:///${path}`,
-  } as unknown as Monaco.Uri;
-}
-
-function fakeMonaco(options: FakeMonacoOptions = {}): FakeMonaco {
-  const registrations: Registration[] = [];
-  let disposeCount = 0;
-  const monaco = {
-    languages: {
-      registerReferenceProvider: (selector: unknown, provider: unknown) => {
-        if (options.failRegister === true) throw new Error('桩：注册跨文件 provider 抛错');
-        registrations.push({ selector, provider });
-        return {
-          dispose: () => {
-            if (options.failDispose === true) throw new Error('桩：撤跨文件 provider 抛错');
-            disposeCount++;
-          },
-        };
-      },
-    },
-    Uri: { file: (path: string) => fakeUri(path) },
-  };
-  return {
-    monaco: monaco as unknown as typeof Monaco,
-    registrations,
-    disposeCount: () => disposeCount,
-  };
-}
-
-function fakeModel(text: string, path = PATH_A, options: { readonly withoutUri?: boolean } = {}) {
-  let broken = false;
-  const uri = fakeUri(path);
-  const model = {
-    getValue: () => {
-      if (broken) throw new Error('桩：模型已释放');
-      return text;
-    },
-    getLineCount: () => text.split(/\r\n|\r|\n/).length,
-    getLanguageId: () => KOJO2_LANGUAGE_ID,
-    isDisposed: () => broken,
-    ...(options.withoutUri === true ? {} : { uri }),
-  } as unknown as Monaco.editor.ITextModel;
-  return {
-    model,
-    breakModel: () => {
-      broken = true;
-    },
-  };
-}
-
-function stubFlag(on: boolean): void {
-  const store = new Map<string, string>();
-  if (on) store.set(KOJO2_KEY, 'on');
-  vi.stubGlobal('window', {
-    localStorage: {
-      getItem: (key: string): string | null => store.get(key) ?? null,
-      setItem: (key: string, value: string): void => {
-        store.set(key, value);
-      },
-      removeItem: (key: string): void => {
-        store.delete(key);
-      },
-    },
-  });
-}
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
-function providerOf(fake: FakeMonaco): Monaco.languages.ReferenceProvider {
-  const registration = fake.registrations[0];
-  if (registration === undefined) throw new Error('没有注册跨文件 ReferenceProvider');
-  return registration.provider as Monaco.languages.ReferenceProvider;
-}
-
-function provideReferences(
-  fake: FakeMonaco,
-  model: Monaco.editor.ITextModel,
-  position: Kojo2ReferencePosition,
-  includeDeclaration = true,
-): Monaco.languages.Location[] {
-  return providerOf(fake).provideReferences(
-    model,
-    { lineNumber: position.line, column: position.column } as Monaco.Position,
-    { includeDeclaration } as Monaco.languages.ReferenceContext,
-    TOKEN,
-  ) as Monaco.languages.Location[];
-}
-
-function installForTest(options: Kojo2ProjectReferenceProviderOptions = {}) {
-  stubFlag(true);
-  const fake = fakeMonaco();
-  const disposable = installKojo2ProjectReferenceProvider(fake.monaco, options);
-  return { fake, disposable };
-}
-
-function uriPathOf(uri: Monaco.Uri): string {
-  return (uri as unknown as { fsPath: string }).fsPath;
-}
-
-describe('provider：只挂 kojo2 / 跨文件 Uri / 失败面', () => {
-  it('flag 开 → 恰好一枚注册，selector 是 `kojo2`，provider 形状正确', () => {
-    const { fake } = installForTest({ getIndex: baseIndex });
-    expect(fake.registrations).toHaveLength(1);
-    expect(fake.registrations[0]?.selector).toBe(KOJO2_LANGUAGE_ID);
-    expect(typeof providerOf(fake).provideReferences).toBe('function');
-  });
-
-  it('跨文件 Location：本文件用 model.uri，别的文件用 `Uri.file(path)`', () => {
+describe('B3e：索引实例仍满足结构与跨文件合并（唯一供方是插件，provider 翻译在 kojo2-references）', () => {
+  it('常驻索引直接喂 `kojo2ProjectReferencesAt`：本文件 + 跨文件结果逐条对得上', () => {
     const index = baseIndex();
-    const { fake } = installForTest({ getIndex: () => index });
-    const { model } = fakeModel(MAIN, PATH_A);
-    const locations = provideReferences(fake, model, declarationPosition(MAIN, '心情'));
-    expect(locations).toHaveLength(3);
-    expect(uriPathOf(locations[0]!.uri)).toBe(PATH_A);
-    expect(uriPathOf(locations[1]!.uri)).toBe(PATH_A);
-    expect(uriPathOf(locations[2]!.uri)).toBe(PATH_B);
-    expect(locations[2]?.range.startLineNumber).toBe(2);
-  });
-
-  it('B 文件里 Shift+F12：A 的声明用 `Uri.file`，本文件落点用 `model.uri`', () => {
-    const index = baseIndex();
-    const { fake } = installForTest({ getIndex: () => index });
-    const { model } = fakeModel(LIB, PATH_B);
-    const locations = provideReferences(fake, model, positionIn(LIB, '{心情}', 0, 1));
-    expect(locations).toHaveLength(3);
-    expect(uriPathOf(locations[0]!.uri)).toBe(PATH_A); // 声明位在前
-    expect(uriPathOf(locations[1]!.uri)).toBe(PATH_B);
-    expect(locations[1]!.uri).toBe((model as unknown as { uri: Monaco.Uri }).uri);
-    expect(uriPathOf(locations[2]!.uri)).toBe(PATH_A);
-  });
-
-  it('`includeDeclaration === false` → 去掉声明位（跨文件那份也不留）', () => {
-    const index = baseIndex();
-    const { fake } = installForTest({ getIndex: () => index });
-    const { model } = fakeModel(MAIN, PATH_A);
-    const all = provideReferences(fake, model, declarationPosition(MAIN, '心情'));
-    const withoutDecl = provideReferences(fake, model, declarationPosition(MAIN, '心情'), false);
-    expect(all).toHaveLength(3);
-    expect(withoutDecl).toHaveLength(2);
-    expect(withoutDecl.every((location) => location.range.startLineNumber !== 4)).toBe(true);
-    const withEvent = provideReferences(fake, model, positionIn(MAIN, '@织 指令', 0, 3));
-    const eventWithoutDecl = provideReferences(fake, model, positionIn(MAIN, '@织 指令', 0, 3), false);
-    expect(withEvent.some((location) => location.range.startLineNumber === 10)).toBe(true);
-    expect(eventWithoutDecl.every((location) => location.range.startLineNumber !== 10)).toBe(true);
-  });
-
-  it('`uriForPath` 注入优先；转换不出 / 抛错 → 落 model.uri 兜底', () => {
-    const index = baseIndex();
-    const seen: string[] = [];
-    const { fake } = installForTest({
-      getIndex: () => index,
-      uriForPath: (path) => {
-        seen.push(path);
-        return undefined;
-      },
+    const result = kojo2ProjectReferencesAt(MAIN, declarationPosition(MAIN, '心情'), index, {
+      path: PATH_A,
     });
-    const { model } = fakeModel(MAIN, PATH_A);
-    const locations = provideReferences(fake, model, declarationPosition(MAIN, '心情'));
-    expect(seen).toContain(PATH_B);
-    expect(uriPathOf(locations[2]!.uri)).toBe(PATH_A); // 兜底
+    expect(result?.refs.map((site) => `${site.path ?? 'local'}:${site.kind}`)).toEqual([
+      'local:decl',
+      'local:ref',
+      `${PATH_B}:ref`,
+    ]);
   });
 
-  it('`pathOf` 注入：索引按宿主的本文件路径排除（不被 model.uri 覆盖）', () => {
+  it('索引的 `files()` + `getFile()` 是宿主快照的唯一来源（快照口径见 legs 的闸）', () => {
     const index = baseIndex();
-    const { fake } = installForTest({
-      getIndex: () => index,
-      pathOf: () => PATH_A,
-    });
-    const { model } = fakeModel(LIB, PATH_B);
-    // pathOf 说本文件是 A ⇒ 索引排除 A、保留 B；若 pathOf 没被用上（按 uri 排除 B），
-    // external 里就会出现 A 的 `# 机` 声明落点。
-    const result = provideReferences(fake, model, positionIn(LIB, '@织 指令', 0, 3));
-    expect(result.every((location) => uriPathOf(location.uri) === PATH_B)).toBe(true);
-    expect(result.some((location) => uriPathOf(location.uri) === PATH_A)).toBe(false);
-  });
-
-  it('索引 getter 抛错 / 回 null → 只有本文件结果（退化为同文件）', () => {
-    const throwing = installForTest({
-      getIndex: () => {
-        throw new Error('桩：getIndex 炸了');
-      },
-    });
-    const { model } = fakeModel(MAIN, PATH_A);
-    expect(
-      provideReferences(throwing.fake, model, declarationPosition(MAIN, '心情')),
-    ).toHaveLength(2);
-    const missing = installForTest({ getIndex: () => null });
-    expect(
-      provideReferences(missing.fake, model, declarationPosition(MAIN, '心情')),
-    ).toHaveLength(2);
-  });
-
-  it('没有 uri 的 model → `[]`', () => {
-    const { fake } = installForTest({ getIndex: baseIndex });
-    const { model } = fakeModel(MAIN, PATH_A, { withoutUri: true });
-    expect(provideReferences(fake, model, declarationPosition(MAIN, '心情'))).toEqual([]);
-  });
-
-  it('取文抛错（模型已释放）→ `[]`', () => {
-    const { fake } = installForTest({ getIndex: baseIndex });
-    const { model, breakModel } = fakeModel(MAIN, PATH_A);
-    breakModel();
-    expect(provideReferences(fake, model, declarationPosition(MAIN, '心情'))).toEqual([]);
-  });
-
-  it('不可归属位 → `[]`（不是 null / 不是抛）', () => {
-    const { fake } = installForTest({ getIndex: baseIndex });
-    const { model } = fakeModel(MAIN, PATH_A);
-    expect(provideReferences(fake, model, positionIn(MAIN, '晨光透过鸟居'))).toEqual([]);
-  });
-
-  it('默认档也注册（语言面不读开关）；dispose 幂等且不抛', () => {
-    stubFlag(false);
-    const fake = fakeMonaco();
-    const disposable = installKojo2ProjectReferenceProvider(fake.monaco, { getIndex: baseIndex });
-    expect(fake.registrations.length).toBeGreaterThan(0);
-    expect(() => {
-      disposable.dispose();
-      disposable.dispose();
-    }).not.toThrow();
-  });
-
-  it('flag 开：dispose 幂等（只撤一次）；注册句柄 dispose 抛错 → 不炸', () => {
-    const { fake, disposable } = installForTest();
-    disposable.dispose();
-    disposable.dispose();
-    expect(fake.disposeCount()).toBe(1);
-
-    stubFlag(true);
-    const failing = fakeMonaco({ failDispose: true });
-    const failingDisposable = installKojo2ProjectReferenceProvider(failing.monaco);
-    expect(() => failingDisposable.dispose()).not.toThrow();
-  });
-
-  it('注册抛错 → 原样外抛（宿主统一回滚）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco({ failRegister: true });
-    expect(() => installKojo2ProjectReferenceProvider(fake.monaco)).toThrow();
-  });
-
-  it('源码纪律：索引零 IO / 零插件 / 零 Monaco；注册点仍只有一处', () => {
-    const indexSource = readFileSync(
-      join(HERE, '..', 'src', 'monaco', 'kojo2-project-index.ts'),
-      'utf8',
-    );
-    expect(indexSource).not.toMatch(/from\s+['"]node:/);
-    expect(indexSource).not.toMatch(/from\s+['"]monaco-editor/);
-    expect(indexSource).not.toMatch(/from\s+['"]@kojo\/plugin-/);
-    expect(indexSource).not.toMatch(/from\s+['"]@kojo\/kernel/);
-    expect(indexSource).not.toMatch(/registerReferenceProvider/);
-    const referencesSource = readFileSync(
-      join(HERE, '..', 'src', 'monaco', 'kojo2-references.ts'),
-      'utf8',
-    );
-    expect(referencesSource.match(/registerReferenceProvider/g) ?? []).toHaveLength(1);
+    expect(index.files()).toEqual([PATH_A, PATH_B]);
+    expect(index.getFile(PATH_A)?.text).toBe(MAIN);
+    expect(index.getFile(PATH_B)?.text).toBe(LIB);
   });
 });
 

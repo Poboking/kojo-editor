@@ -1859,11 +1859,11 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         uriForPath: (path) => monaco.Uri.file(path),
       }),
     );
-    // 跨文件改名（S18）：把**同一份**项目索引的 resolver 喂给 installer——候选文件与
-    // 请求文件路径都由索引/宿主给，provider 只搬编辑（全或无：任一格被闸 ⇒ 整次取消）。
+    // 跨文件改名（S18 → B3e）：把**同一份**项目索引当快照来源喂给 installer——请求文件路径
+    // 与快照都由宿主给，判据（引用集合 / 全或无 / 上限）住 `@kojo/kojo-lang/rename`。
     globalDisposers.push(
       installKojo2RenameProvider(monaco, {
-        resolvers: kojo2RenameResolvers(),
+        getIndex: () => kojo2ProjectIndex,
         pathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
         uriForPath: (path) => monaco.Uri.file(path),
       }),

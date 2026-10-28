@@ -710,11 +710,15 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     KB 那一档的增量（3,087 → 3,089）全是图内既有文件：契约面 `plugin-api/src/slots.ts`
     //     的 `lineRange` 与桶里那行 `EditorFormattingLineRange`，加上变基并入的上游写域出路批。
     //     ⇒ 欠账照旧：下一枚进图模块须先挪一枚出去（余量 1 KB / 零文件余量）。
+    //   - **B3e 引用/改名搬家（2026-10-29，本批）**：读数 **199 文件 / 3,091 KB**——**零新进图
+    //     模块**，增量 **+940 B** 全在契约面（`slots.ts` +919：`EditorProjectFile` 与四处请求/
+    //     结果字段及注；`index.ts` +21：导出面一行）。⚠ 变基后 dev 本体已是 **3,090**（台账
+    //     3,089 是变基前的数），余量 ≈0 ⇒ KB 闸 **3,090 → 3,091**（+0.03%）；文件闸不动（199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,090 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_090);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,091 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_091);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

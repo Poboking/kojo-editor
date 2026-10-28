@@ -9,10 +9,17 @@ import type {
   EditorHoverResult,
   EditorLanguageServiceContribution,
   EditorLanguageServiceRequest,
+  EditorProjectFile,
   EditorRangeEdit,
+  EditorReferencesRequest,
+  EditorReferencesResult,
+  EditorRenameRequest,
+  EditorRenameResult,
   EditorSignature,
   EditorSignatureHelpRequest,
 } from '@kojo/plugin-api';
+import type { Kojo2ProjectIndex } from './kojo2-project-index';
+import { pkey } from '../ui/file-tree-ops';
 
 /**
  * LS-B0 的四条**取数腿**：`ui.editor.languageService` 在 LS-B0 批新扩的四个判别成员
@@ -380,4 +387,181 @@ function countLines(text: string): number {
     if (text.charCodeAt(i) === 10) lines += 1;
   }
   return lines;
+}
+
+/* ============================== 引用 / 改名（B3e） ============================== */
+
+/**
+ * 项目文件快照的**文件数上限**（引用 / 改名两条腿共用）。
+ *
+ * 为什么有上限：快照是**显式动作**（Shift+F12 / F2）才付的，但代价是随项目规模线性涨的
+ * （每份文本都要随请求过槽）。超限不静默：`projectFilesComplete` 置 `false`，供方据此
+ * 降级（references 截断并置 `truncated`，rename 全或无拒绝）。
+ */
+export const KOJO2_PROJECT_FILES_MAX_FILES = 400;
+
+/** 项目文件快照的**字节上限**（按 UTF-8 计；与文件数上限同时生效）。 */
+export const KOJO2_PROJECT_FILES_MAX_BYTES = 8 * 1024 * 1024;
+
+/** 一次快照的读数：文件列表（已排除请求文件）+ 是否完整 */
+export interface Kojo2ProjectFilesSnapshot {
+  readonly files: readonly EditorProjectFile[];
+  readonly complete: boolean;
+}
+
+/**
+ * 从项目索引现取一份**请求级快照**（宿主事实；两条显式动作各自的 provider 调它）。
+ *
+ * - 路径按归一键（`pkey`）排除**请求文件自己**——同文件结果由供方的同文件判据给，
+ *   快照里再带一遍就是重复落点；
+ * - 文件按索引的规范序（`index.files()` 已排序）原样保留；
+ * - 落进上限的语义是**如实降级**：先到先得，截到上限即停并置 `complete = false`；
+ *   取不到文本（`getFile` 失踪）同样置 `false`——"索引说有却读不到"不是"没有这份文件"。
+ *
+ * 索引缺席（`null` / `undefined`）= 没有快照可言（返回 `undefined`，请求里不出现
+ * `projectFiles`，行为与加这一格之前逐字相同）。
+ */
+export function projectFilesSnapshotOf(
+  index: Kojo2ProjectIndex | null | undefined,
+  requestPath: string,
+  limits: { readonly maxFiles?: number; readonly maxBytes?: number } = {},
+): Kojo2ProjectFilesSnapshot | undefined {
+  if (index === null || index === undefined) return undefined;
+  const maxFiles = Math.max(0, Math.trunc(limits.maxFiles ?? KOJO2_PROJECT_FILES_MAX_FILES));
+  const maxBytes = Math.max(0, Math.trunc(limits.maxBytes ?? KOJO2_PROJECT_FILES_MAX_BYTES));
+  const excluded = requestPath.length > 0 ? pkey(requestPath) : null;
+  const encoder = new TextEncoder();
+  const files: EditorProjectFile[] = [];
+  let bytes = 0;
+  let complete = true;
+  let paths: readonly string[];
+  try {
+    paths = index.files();
+  } catch {
+    return { files: [], complete: false };
+  }
+  for (const path of paths) {
+    if (excluded !== null && pkey(path) === excluded) continue;
+    if (files.length >= maxFiles) {
+      complete = false;
+      break;
+    }
+    let text: string | undefined;
+    try {
+      text = index.getFile(path)?.text;
+    } catch {
+      text = undefined;
+    }
+    if (typeof text !== 'string') {
+      complete = false;
+      continue;
+    }
+    const size = encoder.encode(text).length;
+    if (bytes + size > maxBytes) {
+      complete = false;
+      break;
+    }
+    bytes += size;
+    files.push({ path, text });
+  }
+  return { files, complete };
+}
+
+/**
+ * 构造一个 `references` 请求（B3e，宿主接线用；同源形状）。
+ *
+ * `snapshot` 缺席 ⇒ 请求里**不出现** `projectFiles`（旧供方零改动）；给出就同时带
+ * `projectFilesComplete`——供方据此知道"这是不是完整项目"。
+ */
+export function referencesRequestOf(
+  identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
+  text: string,
+  line: number,
+  column: number,
+  project: EditorReferencesRequest['project'],
+  snapshot?: Kojo2ProjectFilesSnapshot,
+): EditorReferencesRequest {
+  return {
+    kind: 'references',
+    path: identity.path,
+    ...(identity.languageId !== undefined ? { languageId: identity.languageId } : {}),
+    ...(identity.version !== undefined ? { version: identity.version } : {}),
+    text,
+    line,
+    column,
+    project,
+    lineCount: text.length === 0 ? 1 : countLines(text),
+    ...(snapshot === undefined
+      ? {}
+      : { projectFiles: snapshot.files, projectFilesComplete: snapshot.complete }),
+  };
+}
+
+/**
+ * 构造一个 `rename` 请求（B3e，宿主接线用；同源形状，多带 `newName`）。
+ *
+ * 快照口径与 {@link referencesRequestOf} 逐字相同；区别只在供方那一侧的处理：
+ * 改名是全或无，快照不完整时整次拒绝。
+ */
+export function renameRequestOf(
+  identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
+  text: string,
+  line: number,
+  column: number,
+  newName: string,
+  project: EditorRenameRequest['project'],
+  snapshot?: Kojo2ProjectFilesSnapshot,
+): EditorRenameRequest {
+  return {
+    kind: 'rename',
+    path: identity.path,
+    ...(identity.languageId !== undefined ? { languageId: identity.languageId } : {}),
+    ...(identity.version !== undefined ? { version: identity.version } : {}),
+    text,
+    line,
+    column,
+    newName,
+    project,
+    lineCount: text.length === 0 ? 1 : countLines(text),
+    ...(snapshot === undefined
+      ? {}
+      : { projectFiles: snapshot.files, projectFilesComplete: snapshot.complete }),
+  };
+}
+
+/**
+ * 问出这一格的引用（**单答型**）。`undefined` = 无人应答；空 `locations` = 认这门语言
+ * 但这处没有可证明的引用（**作答**）。
+ *
+ * 与 hover / signatureHelp 同一处分歧理由：`undefined` 时宿主交回空列表（不弹 Peek），
+ * 但**不再问下一家**——再把空结果当弃权，兜底就会在"这家明确说了没有"的位置冒出来。
+ */
+export function collectReferences(
+  contributions: readonly EditorLanguageServiceContribution[],
+  request: EditorLanguageServiceRequest,
+): EditorReferencesResult | undefined {
+  for (const contribution of contributions) {
+    const result = provideOf(contribution, request);
+    if (!result || result.kind !== 'references') continue;
+    return result;
+  }
+  return undefined;
+}
+
+/**
+ * 问出这一次改名（**单答型**）。`undefined` = 无人应答；`edits: []` = 认这门语言但
+ * 拒绝 / 没有可改的（`rejectReason` 说原因，全或无）。
+ *
+ * 宿主落地前仍按 `resourcePath` 分派 URI——本函数只裁决"哪一家说了算"。
+ */
+export function collectRename(
+  contributions: readonly EditorLanguageServiceContribution[],
+  request: EditorLanguageServiceRequest,
+): EditorRenameResult | undefined {
+  for (const contribution of contributions) {
+    const result = provideOf(contribution, request);
+    if (!result || result.kind !== 'rename') continue;
+    return result;
+  }
+  return undefined;
 }

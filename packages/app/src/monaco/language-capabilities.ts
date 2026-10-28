@@ -229,11 +229,11 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
 /**
  * Kojo 2.0 的状态表。
  *
- * 9 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
+ * 7 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
  * `ui/editor-global-providers.ts` 的 2.0 段），且**装配点无条件调用**（K2-SURFACE-DEFAULT：
  * 语言面不读切流开关，`language-parity.test.ts` 逐格对拍"装配点真调了 + 安装器自己不读开关"）；
- * 7 枚 `shared` 是**已交给插件**的七条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
- * `completion` 与 `hover` 自 B3c，`signature` 与 `format` 自 B3d），宿主只经
+ * 9 枚 `shared` 是**已交给插件**的九条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
+ * `completion` / `hover` 自 B3c，`signature` / `format` 自 B3d，`refs` / `rename` 自 B3e），宿主只经
  * `registerForLanguageServices` 带能力名挂上、判据全在 `@kojo/kojo-lang` + 供方
  * `@kojo/plugin-kojo-lang`；
  * `brackets` / `preview` 与 ERB 同档（语言配置 / Monaco 内建）；`diagnostics` 是 `self`：
@@ -269,8 +269,10 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     [LanguageCapability.Semantic]: 'self',
     [LanguageCapability.Indent]: 'self',
     [LanguageCapability.Brackets]: 'builtin',
-    [LanguageCapability.References]: 'self',
-    [LanguageCapability.Rename]: 'self',
+    // B3e（2026-10-29）：引用 / 改名同批走共享收口（能力名 `references` / `rename`），判据住
+    // `@kojo/kojo-lang` 的两枚叶子，供方是插件，宿主只剩请求与翻译。
+    [LanguageCapability.References]: 'shared',
+    [LanguageCapability.Rename]: 'shared',
     // B3d（2026-10-28）：签名帮助同批走**共享收口**（能力名 `signatureHelp`）——判据住
     // `@kojo/kojo-lang/signature`，供方是插件；`@巡` 的集合事实由插件经 `adapter-source` 现取。
     [LanguageCapability.Signature]: 'shared',

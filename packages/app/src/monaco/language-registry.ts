@@ -53,7 +53,9 @@ export type SlotServiceKind =
   | 'completion'
   | 'hover'
   | 'signatureHelp'
-  | 'formatting';
+  | 'formatting'
+  // B3e：改名同批进共享收口。
+  | 'rename';
 
 /**
  * 一门语言的**可用性档**（LAU-3 / 设计稿 §4.3、§6）。
