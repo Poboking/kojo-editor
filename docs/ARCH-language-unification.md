@@ -425,6 +425,14 @@ export const LEGACY_ROLE_ALIASES: Readonly<Record<string, SemanticRole>> = {
 };
 ```
 
+> **交付实测（LAU-2 `b/qoder/1027-lau-roles`，2026-10-27；v1.2 改口）**：实表是 **34 档**、
+> 别名表 **47 条**，不是上面草图的 18 档 / 45 名。差在硬约束：**六套主题一个色值都不许改**——
+> 18 档必须合并"今天不同色的档"（那就是改色）；34 档才是"每套主题每个角色只占一枚色"的最小划分
+> （上界由 adapter 的 dark 25 枚独立色决定）。本章列表按方案草图标示，**以
+> `packages/kojo-sdk/src/semantic-roles.ts` 为准**（SDK B5a 起角色表住 SDK，宿主与 `kojo-lang`
+> 只留指针）。零改色由 `packages/app/tests/fixtures/legacy-token-colors.json`（九套主题 × 48/16 档
+> 逐档 fg + fontStyle）钉住。
+
 三条硬约束（由测试钉住）：
 
 1. **每个 `SEMANTIC_ROLES` 成员在每套主题里必须有且只有一条规则**，缺一条在模块加载期抛（沿用
@@ -588,12 +596,15 @@ interface InjectionSpec {
   readonly hostNode: string;
   /** 子语言 id，如 'erb' */
   readonly languageId: string;
-  /** 取哪个子节点作为注入体；缺省取整个 hostNode */
-  readonly bodyPath?: string;
 }
 // LanguageDescriptor 新增：
 readonly injections?: readonly InjectionSpec[];
 ```
+
+> **v1.2 收口（2026-10-28）**：v1.1 草图里的 `bodyPath?: string`（"取哪个子节点作为注入体"）
+> **已删**——实现从未接过它，也没有任何语言需要它（宿主节点本身就是纯净的体容器）。
+> 按"零消费方不留形状"的口径（同 `KojoSlotSemantics.chara`），等真有"宿主节点里夹着别的东西"
+> 的语言再加，不加一条没人走的可选路径。
 
 2. 主树返回后，宿主按 `injections` 找到 `native_body`，取其 body 的**绝对区间**，
    向 `erb` 的 runtime 发一次 parse（带 `includedRanges`）。
@@ -880,6 +891,11 @@ export interface EditorDocumentIdentity {
    `core/dialect/mismatch`（error），并且**以覆盖为准但同时报冲突**——冲突可见，才符合铁律 4「内核不静默」。
 3. **文件里的 `# 方言 erafl`** —— **只是一条断言**：与解析结果不一致 ⇒ `core/dialect/mismatch`（error）。
    它不产生第三真源，作用是"这份文件自证我属于哪个方言"，孤立打开一个文件时也能一眼看出错配；
+   **读数口径（v1.2 收口，2026-10-28）**：宿主**逐行扫描**取断言（`app/src/ui/dialect-binding.ts`），
+   不走 tree-sitter CST——本层要被**同步**语言服务请求与诊断节拍调用，而 CST 在 worker 里异步往返，
+   等一次 parse 等于把每次悬停排进解析队列；扫描只认文法 `decl('方言')` 的同一形状（行首 + 水平空白）。
+   一份文件写出**多条互不相容**的断言时，宿主把全部断言交给 core，由 core 发
+   `core/dialect/mismatch` 且**谁也不算自证**（不设"取首条"的静默裁决；同值重复＝与一条等价）；
 4. **都拿不到 ⇒ 未绑定**：事实类服务全部降级（空结果 + 一条 `core/dialect/unbound`），**绝不猜**。
    对 2.0 面这就是今天的现状（`kojo2AdapterForProject` 返回 `null`，`bootstrap.ts:45-58`）；
 5. **状态栏常显当前方言**（`eratw` / `erafl` / `未绑定`）——作者不必猜，评审也不必问。
@@ -1143,7 +1159,7 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 | **LAU-1a** 宿主去 eraTW 化<br>（**✅ `4c1487c4`**） | ① `App.tsx:406,421`（迁移向导事件目录 / 参数形状）、`App.tsx:237-249`（存储注入的 `storageClasses` + 指纹）、`kojo2-project-scan-adapter.ts:48-51`（默认装载器）三处改成**按当前项目取**，取不到给 `null`／`undefined`（沿用 `kojo2AdapterForProject` 的"宁缺勿错"语义）；② `bootstrap.ts:250-263` 的 `'erafl'` 字面量分支泛化成对 `adapter-manifest.ts` 的循环（用条目自带的 `load()` + 导出存在性卫语句）；③ 新增 `tools/audit-language.mjs`（继承 `audit-decoupling` 的三条豁免口径） | `pnpm audit:language` ✅：`packages/app/src` 里游戏名只出现在 `adapter-manifest.ts` 与带 `audit-allow` 的组合根装载点；eraFL 工程下迁移向导 / 存储注入 / 项目扫描拿到的是 eraFL 事实或 `null`，**绝不出现 eraTW 事实**（各一条测试）；六适配器注册行为不变（`plugin.statusChanged` 与既有注册测试全绿）；全量测试数不回退 + 双 typecheck | 每处一个 commit，逐个可回；三处都是"动态 import 换目标"，不动契约 |
 | **LAU-2a** 色彩可行性探针<br>（**✅ `f006547c`，读数见下**） | 一枚离线脚本：给定 `SEMANTIC_ROLES` 的档数与 6 套主题的底色，求"两两 ΔE ≥ 12 且对底色 ≥ 4.5"是否可解，并给出可行档数上限与一组候选色 | 出一份读数：18 档可解 / 不可解（不可解则给最大可解档数）；**LAU-2 的档数按这份读数控**，不靠会上拍。**实测（N=18／ΔE≥12／对比≥4.5／RGB 步长 8 网格 35,937 候选，度量逐字复用 `kojo2-theme.test.ts:71-113`，全程无随机）＝6 套主题（实为 3 个不同底色）全部 18 档可解**；每底色最大可解档数 `#1e2227` 316 / `#f6f8fa` 233 / `#0f1713` 354（下界，DFS 预算内未穷尽），全局上限取最严格底色 ≥233 档 ⇒ **18 档远未触顶，不构成开工障碍**。参照系＝现役 12 唯一色：min 两两 ΔE 13.8/14.7（闸 12 ⇒ 余量 1.8/2.7），min 对比度 4.58/4.62/5.21（闸 4.5 ⇒ **暗底余量只剩 0.08**）。⚠ 「数学可解」≠「可用」：探针输的三组 18 档见证色组未经可读性/语义评审，**LAU-2 定稿色卡仍需人工评审**，本读数只否掉"档数不够"这一条 | 纯脚本，不进产品码 |
 | **LAU-1** 协议 v3<br>（**等 D0 落点裁决**） | `structure-protocol.ts`（落点随 D0）；`StructureClient` 按 v3 重写成薄壳；`erb-ts.worker` / `kojo-ts.worker` / `worker-bootstrap` / `engine` 跟着改；**保留差集**（`parse` 走 `text` \| `edit` 二选一）；两档预算 + **连续 3 次失败判死**的账本（D8）；kojo2 侧补 `open` 握手与协议常量 | 协议表测试（形状 / `reason` 闭集 / 版本不符即拒 / `text` 与 `edit` 同给即 `invalid-input`）全绿；**新旧 worker 双跑一批**（`protocol-mismatch` 能降级到旧路，不整档哑火）；ERB 首帧 `open→ready` 与 `ready→首屏着色` 两个数写进 `BASELINES.md`；`tree-sitter-*` 五个测试文件全过；**差集路不退化**：6,003 行档每键的 worker 侧文本量与改前同量级（一条读数） | 单批一个 commit；`types.ts` 旧类型保留为别名 + 双跑窗口内可随时切回 |
-| **LAU-2** 角色表 | `semantic-roles.ts` + 别名表（**覆盖三侧全部 45 个现役 token 名**）；三份捕获表翻到角色；三套主题规则改 `token: role.*`；Monarch 的 token 名换一遍 | `pnpm audit:language` 的角色项 ✅（旧 token 名只出现在别名表一处，判定排除注释与 `audit-allow`）；主题对账测试全绿（每档有且只有一条规则 / ΔE / 对比度，指标沿用 `kojo2-theme.test.ts`）；**档数按 LAU-2a 的读数定** | 别名表在，旧名仍能取色 |
+| **LAU-2** 角色表 | `semantic-roles.ts` + 别名表（**覆盖三侧全部 45 个现役 token 名**）；三份捕获表翻到角色；三套主题规则改 `token: role.*`；Monarch 的 token 名换一遍 | `pnpm audit:language` 的角色项 ✅（旧 token 名只出现在别名表一处，判定排除注释与 `audit-allow`）；主题对账测试全绿（每档有且只有一条规则 / ΔE / 对比度，指标沿用 `kojo2-theme.test.ts`）；**档数按 LAU-2a 的读数定**。**交付实测（2026-10-27）＝34 档 / 别名表 47 条**（18 档要合并今天不同色的档 ⇒ 违反"零改色"硬约束；34 是每套主题每角色一枚色的最小划分，理由与逐档比对见 §4.2 交付注） | 别名表在，旧名仍能取色 |
 | **LAU-3** 描述符 v2 + 封存层<br>（**与 ERB-PARITY 串行**；**✅ 2026-10-27 框架批，分支 `b/qoder/1027-lau-framework`**；本批仍认 `.kojo`，`.kojo1` 交接在 LAU-3b） | `availability` / `settingKey` / `presentSyntax`+`clearSyntax`；`services` 那格按 §4.3 的 ① 走 additive（`slotServices` 原位保留）；新增 `kojo-legacy` descriptor 与设置项；删 `tree-sitter/providers.ts:378,385` 两处 `if (ERB)`；**门开关不重认领已打开的 model** | 封存层默认关：`.kojo1` → `plaintext`；开启后四面齐全；关设置项时在编文件语言 id 不变、新开的落 `plaintext`（一条测试）；`providers.ts` 里零 `ERB_LANGUAGE_ID`；`language-parity` 取证表同批更新且全绿 | 设置项默认 false，等价于没有这一层 |
 | **LAU-3b** 扩展名交接工具<br>（**✅ 2026-10-27 同分支交付；翻转未做**） | 一键 `.kojo` → `.kojo1` 改名工具：扫描口上域 `.kojo` → 内容指纹只挑 v1 写法 → 清单先过目 → 逐文件写权限闸 + 写前备份 + 只改名不改内容；`.kojo1` 全链路认领（descriptor / 路由 `extension-kojo1` / 快速打开 / 拖放 / 引用台账 / 产物 / 迁移）；封存档首开说明。`kojo-extension-single-source` 闸扩到 `.kojo1` 字面量 | 只读域拒绝（`not-writable` 逐条回执）；备份失败不改名；清单之后正文变成 2.0 写法 ⇒ 写前再判一次并跳过；新增钉子 24 例（模型 9 / 扩展名跨面 11 / 首开 4）；`audit:language` 与开机图不回退 | 不改名即无影响（封存层默认关）；扩展名翻转仍是后续批 |
 | **LAU-4** ERB 进槽<br>（**依赖 SDK B4/B5，与 ERB-PARITY 合流**） | ERB 的 11 枚 provider 搬成插件供方（依赖 B0–B5 的槽位契约） | ERB 与 kojo2 走同一条 `ui.editor.languageService`；宿主 `monaco/` 下不再有 ERB 判据（§9-1 的终态判据在此批才成立） | 插件可卸载，回落到 `legacyBridge` |
@@ -1186,6 +1202,9 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
    没有 core 码的家可搬；而 core 码是**闭集、只增不改**的公共名词表，加一半再搬比不加更难收拾。
    代价是**改名窗口从此关闭**——若 D0 最终判
    "语言级事实不落 `kojo-core`"，这六枚要跟着契约一起搬。D1b（解析链上屏 + 状态栏）仍等 D0。
+   **✅ 已关闭（2026-10-28 核）**：D0 于 2026-10-27 裁定「维持 `kojo-core`、不 additive 镜像到
+   `plugin-api`」（BOARD `K2-CONTRACT`），且 `@kojo/kojo-sdk`（B5a）从 `kojo-core` 再导出同一份码表
+   ⇒ **六枚码不搬、本偏差不成立**；D1b 亦已于 2026-10-27 交付（状态栏「方言 eratw」真机取证）。
 2. **LAU-1a 的三处错事实点收成了"按当前项目取"的端口**，另外多修一处：
    `ps10-boot-order.test.ts` 里那枚逐字钉 App 侧 bootstrap 进口的测试会随任何合法新增进口变红，
    改成对**进口形状**取证（只留一枚 `../bootstrap` 进口、名单含 `bootstrapKernel`/`prefetchProjectPlugins`、

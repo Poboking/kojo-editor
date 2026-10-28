@@ -305,6 +305,49 @@ describe('resolveDialectBinding · 未绑定 / 覆盖 / 断言', () => {
     expect(codes(result.diagnostics)).toEqual(['core/dialect/mismatch', 'core/dialect/unbound']);
   });
 
+  it('`fileAssertions` 全指向同一方言 ⇒ 与单值等价（去重、零诊断）', () => {
+    const result = resolveDialectBinding({
+      detectedDialect: 'a',
+      fileAssertions: ['a', ' a ', 'a'],
+      factsFor,
+    });
+    expect(result.kind).toBe('bound');
+    expect(result.diagnostics).toEqual([]);
+  });
+
+  it('`fileAssertions` 互不相容 ⇒ mismatch（谁也不算自证），绑定仍按识别链', () => {
+    const result = resolveDialectBinding({
+      detectedDialect: 'a',
+      fileAssertions: ['b', 'a'],
+      factsFor,
+    });
+    expect(result.kind).toBe('mismatch');
+    if (result.kind !== 'mismatch') throw new Error('unreachable');
+    expect(result.resolvedDialect).toBe('a');
+    expect(result.binding?.dialect).toBe('a');
+    expect(codes(result.diagnostics)).toEqual(['core/dialect/mismatch']);
+    expect(result.diagnostics[0]!.severity).toBe('error');
+    expect(result.diagnostics[0]!.message).toContain('互不相容');
+    expect(result.diagnostics[0]!.message).toContain('b / a');
+  });
+
+  it('`fileAssertions` 互不相容且没有解析结果 ⇒ mismatch + unbound（不"取首条绑上"）', () => {
+    const result = resolveDialectBinding({
+      detectedDialect: null,
+      fileAssertions: ['a', 'b'],
+      factsFor,
+    });
+    expect(result.kind).toBe('unbound');
+    expect(result.binding).toBeNull();
+    expect(codes(result.diagnostics)).toEqual(['core/dialect/mismatch', 'core/dialect/unbound']);
+  });
+
+  it('`fileAssertions: []` = 没有断言（不误报冲突）', () => {
+    const result = resolveDialectBinding({ detectedDialect: 'a', fileAssertions: [], factsFor });
+    expect(result.kind).toBe('bound');
+    expect(result.diagnostics).toEqual([]);
+  });
+
   it('方言认下了但没有 2.0 事实面 ⇒ unbound（不借别方言的表，v1 面不受影响）', () => {
     const result = resolveDialectBinding({ detectedDialect: 'c', factsFor });
     expect(result.kind).toBe('unbound');

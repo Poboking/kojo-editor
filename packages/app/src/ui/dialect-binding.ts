@@ -6,7 +6,7 @@
  *
  * 1. **输入从哪来**——识别链结论（`project.adapterId`）、工作区覆盖
  *    （`workspace.json` 的 `meta.dialect`，经 {@link loadWorkspaceDialectOverride} 现读）、
- *    文件内断言（`# 方言 <id>`，{@link readDialectAssertion}）与事实查询函数
+ *    文件内断言（`# 方言 <id>`，{@link readDialectAssertions}）与事实查询函数
  *    （组合根按 v1 `gameId` 取 2.0 `GameAdapter`，{@link installDialectFactsFor}）；
  * 2. **结果怎么投影**——状态栏一格（{@link dialectStatusForProject}）与
  *    `EditorDocumentIdentity.dialect` 那一格（{@link dialectContextOf}）；
@@ -19,7 +19,12 @@
  * 请求（`documentRequestFields`）与 200ms 诊断节拍调用。为了一枚单行断言去等一次异步
  * parse，等于把每次悬停都排到解析队列后面。所以这里**只认文法烧进 token 的同一形状**
  * （`grammar.v2.js` 的 `decl()`：`#` + 水平空白 + `方言` + 空白或行尾 + 任意尾巴），
- * 不改文法 / wasm / 词表（LAU-D1b 的明令），拿到的第一个名字词就是断言值。
+ * 不改文法 / wasm / 词表（LAU-D1b 的明令），每行拿到的第一个名字词就是那一行的断言值。
+ *
+ * **读出的是全部断言，不在这一层挑胜负**：文件里写两条互不相容的 `# 方言` 时，本层照读
+ * 两条并原样下传，由 core 发 `core/dialect/mismatch`（"多个说法等于没有自证"）。
+ * 早先"重复断言取首条"是**静默裁决**——同一份文件自证两次而两次不一样，屏上却像没这回事，
+ * 那是铁律 4 明令要禁的形状；要"取首条"这种宽松口径，也必须先报冲突，不能说都不说。
  *
  * ## 没有默认方言（D12）
  *
@@ -55,15 +60,20 @@ export interface DialectAssertion {
 const ASSERTION_PATTERN = /^[ \t\u3000]*#[ \t\u3000]+方言(?:[ \t\u3000]+([^\r\n]*))?[ \t\u3000]*$/;
 
 /**
- * 从文件文本读出**第一条**方言断言；没有 / 形状不完整 ⇒ `null`。
+ * 从文件文本读出**全部**方言断言（按行序）；没有 / 形状不完整 ⇒ 空数组。
  *
  * 文法允许词后带任意尾巴（与 `# 视` 同构），断言值取**第一个名字词**：
  * `# 方言 erafl` 与 `# 方言 erafl 说明` 都读 `erafl`，尾巴不参与归属。
- * 重复断言取首条——一条文件自证一次就够了，多写的部分文法照收，本层不另立规则。
+ *
+ * **重复断言不再"取首条了事"**（铁律 4「内核不静默」）：全部交给 core
+ * （`resolveDialectBinding({ fileAssertions })`）对账——都指向同一方言 ⇒ 与一条等价；
+ * 指向不同方言 ⇒ `core/dialect/mismatch`（error）且**谁也不算自证**。本层只负责读全，
+ * 不做"谁赢"的裁决（裁决在 core，判定面只有一处）。
  */
-export function readDialectAssertion(source: string): DialectAssertion | null {
-  if (typeof source !== 'string' || source.length === 0) return null;
+export function readDialectAssertions(source: string): readonly DialectAssertion[] {
+  if (typeof source !== 'string' || source.length === 0) return [];
   const lines = source.split(/\r?\n/);
+  const found: DialectAssertion[] = [];
   for (let index = 0; index < lines.length; index += 1) {
     const match = ASSERTION_PATTERN.exec(lines[index]!);
     if (match === null) continue;
@@ -71,9 +81,19 @@ export function readDialectAssertion(source: string): DialectAssertion | null {
     if (raw === undefined) continue; // `# 方言` 裸写：断言没有值，等于没有自证（继续看下一行）
     const value = raw.trim().split(/[ \t\u3000]+/)[0] ?? '';
     if (value.length === 0) continue;
-    return { dialect: value, line: index + 1 };
+    found.push({ dialect: value, line: index + 1 });
   }
-  return null;
+  return found;
+}
+
+/**
+ * 从文件文本读出**第一条**方言断言；没有 / 形状不完整 ⇒ `null`。
+ *
+ * 只给"这一份文件自证了什么"的只读展示面用（状态栏 / 悬停里引用一行）；解析链一律走
+ * {@link readDialectAssertions} 全量下传——多条冲突由 core 报错，别在这一层又判一次。
+ */
+export function readDialectAssertion(source: string): DialectAssertion | null {
+  return readDialectAssertions(source)[0] ?? null;
 }
 
 /* ============================== 2. 宿主输入源 ============================== */
@@ -212,19 +232,20 @@ export interface ResolveDocumentDialectInput {
  * 有界（只留最近 {@link ASSERTION_CACHE_LIMIT} 份），换文件不会无限长。
  */
 const ASSERTION_CACHE_LIMIT = 32;
-const assertionCache = new Map<string, DialectAssertion | null>();
+const assertionCache = new Map<string, readonly DialectAssertion[]>();
 
-function cachedAssertion(
+function cachedAssertions(
   path: string | null | undefined,
   version: number | null | undefined,
   source: string,
-): DialectAssertion | null {
+): readonly DialectAssertion[] {
   if (typeof path !== 'string' || path.length === 0 || typeof version !== 'number') {
-    return readDialectAssertion(source);
+    return readDialectAssertions(source);
   }
   const key = `${pathKey(path)}\u0000${version}`;
-  if (assertionCache.has(key)) return assertionCache.get(key) ?? null;
-  const value = readDialectAssertion(source);
+  const hit = assertionCache.get(key);
+  if (hit !== undefined) return hit;
+  const value = readDialectAssertions(source);
   if (assertionCache.size >= ASSERTION_CACHE_LIMIT) {
     const oldest = assertionCache.keys().next();
     if (!oldest.done) assertionCache.delete(oldest.value);
@@ -271,7 +292,7 @@ export function resolveDocumentDialect(
 ): DialectBindingResolution {
   const project = input.project;
   const source = typeof input.source === 'string' ? input.source : '';
-  const assertion = cachedAssertion(input.filePath, input.version, source);
+  const assertions = cachedAssertions(input.filePath, input.version, source);
   const rootDir = project?.rootDir ?? null;
   const override =
     input.workspaceOverride !== undefined
@@ -280,7 +301,8 @@ export function resolveDocumentDialect(
   return resolveDialectBinding({
     detectedDialect: project?.adapterId ?? null,
     workspaceOverride: override,
-    fileAssertion: assertion?.dialect ?? null,
+    fileAssertion: assertions[0]?.dialect ?? null,
+    fileAssertions: assertions.map((entry) => entry.dialect),
     factsFor: input.factsFor ?? dialectFactsFor,
     filePath: relativeToProjectRoot(rootDir, input.filePath),
   });

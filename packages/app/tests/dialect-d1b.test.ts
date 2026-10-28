@@ -21,6 +21,7 @@ import {
   installDialectFactsFor,
   loadWorkspaceDialectOverride,
   readDialectAssertion,
+  readDialectAssertions,
   resolveDocumentDialect,
   setWorkspaceDialectOverride,
   workspaceDialectOverride,
@@ -70,6 +71,14 @@ describe('`# 方言 <id>` 的逐行断言读数（不改文法 / wasm）', () =>
     expect(readDialectAssertion('# 方言\n')).toBeNull();
     // 裸写在前、带值在后：裸写不是断言，继续看下一行
     expect(readDialectAssertion('# 方言\n# 方言 erafl\n')?.dialect).toBe('erafl');
+  });
+
+  it('多条断言逐条读出（本层只读全、不裁决胜负；冲突由 core 报）', () => {
+    expect(readDialectAssertions('# 方言 eratw\n> 正文\n# 方言 erafl\n')).toEqual([
+      { dialect: 'eratw', line: 1 },
+      { dialect: 'erafl', line: 3 },
+    ]);
+    expect(readDialectAssertions('#方言 eratw\n# 方言\n')).toEqual([]);
   });
 });
 
@@ -158,6 +167,29 @@ describe('覆盖 > 识别链；断言只自证', () => {
     expect(resolution.binding?.dialect).toBe('erafl');
     expect(codes(resolution)).toContain('core/dialect/mismatch');
     expect(dialectContextOf(resolution)?.dialect).toBe('erafl');
+  });
+
+  it('文件写出两条互不相容的断言 ⇒ 冲突可见（不取首条），归属仍按识别链', () => {
+    const resolution = resolveDocumentDialect({
+      project: PROJECT,
+      source: '# 方言 eratw\n> 正文\n# 方言 erafl\n',
+      factsFor: factsOf({ erafl: adapter('erafl'), eratw: adapter('eratw') }),
+    });
+    expect(resolution.kind).toBe('mismatch');
+    expect(resolution.binding?.dialect).toBe('erafl');
+    expect(codes(resolution)).toEqual(['core/dialect/mismatch']);
+    expect(resolution.diagnostics[0]!.message).toContain('互不相容');
+    expect(dialectContextOf(resolution)?.dialect).toBe('erafl');
+  });
+
+  it('两条断言指向同一方言 ⇒ 零诊断（与一条等价）', () => {
+    const resolution = resolveDocumentDialect({
+      project: PROJECT,
+      source: '# 方言 erafl\n> 正文\n# 方言 erafl 再写一遍\n',
+      factsFor: factsOf({ erafl: adapter('erafl') }),
+    });
+    expect(resolution.kind).toBe('bound');
+    expect(resolution.diagnostics).toEqual([]);
   });
 
   it('`factsFor` 交回别的方言 ⇒ response-mismatch，按未绑定返回（不给半个事实）', () => {

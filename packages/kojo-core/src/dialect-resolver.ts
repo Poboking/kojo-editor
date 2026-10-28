@@ -9,9 +9,10 @@
  * 1. **识别链结论**（`detectedDialect`）——默认口径；
  * 2. **工作区 `meta` 覆盖**（`workspaceOverride`）——作者显式说"这个工程按某方言对待"；
  *    与识别链不一致 ⇒ `core/dialect/mismatch`（error）**并以覆盖为准**（冲突可见，铁律 4）；
- * 3. **文件内的方言断言**（`fileAssertion`，由语言层解析 `# 方言 <id>` 后**注入**）——
- *    只自证、不赋值：与解析结果不一致同样报 `core/dialect/mismatch`，
- *    解析结果**不因断言而改变**（否则就是第三真源）；
+ * 3. **文件内的方言断言**（`fileAssertion` / `fileAssertions`，由语言层解析 `# 方言 <id>`
+ *    后**注入**）——只自证、不赋值：与解析结果不一致同样报 `core/dialect/mismatch`，
+ *    解析结果**不因断言而改变**（否则就是第三真源）；一份文件写出**多条互不相容**的断言时
+ *    同样报本码，且**谁也不算自证**（不设"取首条"的静默裁决）；
  * 4. 三者都拿不到 ⇒ **未绑定**：`binding = null` + 一条 `core/dialect/unbound`。
  * 5. **事实对账**：`factsFor(effective)` 交回的事实 `GameAdapter.id` 必须等于 `effective`；
  *    不等 ⇒ `core/dialect/response-mismatch`（error）并**按未绑定返回**（不给半个事实）。
@@ -38,8 +39,22 @@ export interface ResolveDialectBindingInput {
    * 文件内的方言**断言**（`# 方言 <id>` 的取值）。
    * 由语言层（文法 + 词位）解析后注入——本批不碰文法，只把它当字符串吃；
    * 缺省 / `null` = 这份文件没有自证。
+   *
+   * 单值形态**只给"文件里只有一条断言"的调用方**；一份文件可能写出多条，见
+   * {@link ResolveDialectBindingInput.fileAssertions}。
    */
   readonly fileAssertion?: DialectId | null;
+  /**
+   * 文件内的**全部**断言（按出现顺序；宿主逐行扫出来原样交来，**不去重裁决**）。
+   *
+   * 给了这一格就以它为准（`fileAssertion` 只作单值兼容）。去空白、去重后：
+   * - 剩 **0 条** ⇒ 与"没有断言"等价；
+   * - 剩 **1 条** ⇒ 与 {@link ResolveDialectBindingInput.fileAssertion} 同义；
+   * - 剩 **≥2 条** ⇒ `core/dialect/mismatch`（error）且**谁也不算自证**——一份文件自证两次
+   *   而两次不一样，挑"第一条"就是替作者做了一次静默裁决（铁律 4）；绑定仍按覆盖 /
+   *   识别链，冲突本身可见。
+   */
+  readonly fileAssertions?: readonly DialectId[] | null;
   /**
    * 方言 id → 事实（`GameAdapter`）的**查询函数**，由宿主注册表提供。
    * 返回 `null` / `undefined` = 该方言没有 2.0 事实面（今天有四枚只有 v1 面的适配器）⇒
@@ -222,6 +237,21 @@ function usableDialect(value: DialectId | null | undefined): DialectId | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/**
+ * 断言表的归一：去空白、**按出现序去重**（同一方言写两遍不是冲突）。
+ * 不在这里挑"哪条算数"——≥2 条互不相同的裁决在调用方，且只能是"都不算"。
+ */
+function usableAssertions(value: readonly DialectId[] | null | undefined): DialectId[] {
+  if (value === null || value === undefined) return [];
+  const out: DialectId[] = [];
+  for (const entry of value) {
+    const id = usableDialect(entry);
+    if (id === null || out.includes(id)) continue;
+    out.push(id);
+  }
+  return out;
+}
+
 /* ============================== 4. 解析主函数 ============================== */
 
 /**
@@ -242,7 +272,8 @@ function usableDialect(value: DialectId | null | undefined): DialectId | null {
 export function resolveDialectBinding(input: ResolveDialectBindingInput): DialectBindingResolution {
   const detected = usableDialect(input.detectedDialect);
   const override = usableDialect(input.workspaceOverride);
-  const assertion = usableDialect(input.fileAssertion);
+  const assertions = usableAssertions(input.fileAssertions);
+  const assertion = assertions.length > 1 ? null : (assertions[0] ?? usableDialect(input.fileAssertion));
   const diagnostics: KojoDiagnostic[] = [];
 
   /* ① 覆盖 vs 识别链 */
@@ -252,6 +283,26 @@ export function resolveDialectBinding(input: ResolveDialectBindingInput): Dialec
       make(
         'core/dialect/mismatch',
         `方言冲突：工作区覆盖为 ${override}，识别链结论为 ${detected}——按覆盖（${override}）处理，冲突已记录。`,
+      ),
+    );
+  }
+
+  /*
+   * ①.5 文件内**多条互不相容**的断言：谁都不算自证。
+   *
+   * 旧口径"重复断言取首条"会把 `# 方言 eratw` 写在 `# 方言 erafl` 前面时静默按前者对账，
+   * 作者拿到的是一份"没有冲突"的绑定——这正是铁律 4 要禁的那种静默裁决。断言本身只自证、
+   * 不赋值，所以这里不改绑定，只把"这份文件自证了两次、而且不一样"报出来（error）。
+   */
+  if (assertions.length > 1) {
+    diagnostics.push(
+      make(
+        'core/dialect/mismatch',
+        `方言冲突：文件内有 ${assertions.length} 条互不相容的断言（${assertions.join(' / ')}）` +
+          '——断言只自证，多个说法等于没有自证，本层不设"取首条"的裁决' +
+          (effective === null
+            ? '；没有可对照的解析结果（识别链没认下工程、也没有工作区覆盖）⇒ 按未绑定处理，冲突已记录。'
+            : `；绑定仍按${override !== null ? '工作区覆盖' : '识别链'}（${effective}），冲突已记录。`),
       ),
     );
   }

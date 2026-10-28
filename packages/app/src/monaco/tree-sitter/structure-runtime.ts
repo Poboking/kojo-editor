@@ -54,14 +54,6 @@ export interface InjectionSpec {
   readonly hostNode: string;
   /** 子语言 id（Monaco 语言 id；宿主据此从 descriptor 注册表取它的结构运行时） */
   readonly languageId: string;
-  /**
-   * 取哪个子节点作为注入体；缺省取整个 hostNode。
-   *
-   * ⚠ 本批**未实现**（保留形状）：今天的真实用例里，宿主节点本身就是
-   * 纯净的体容器，取整个节点即可。真有"宿主节点里还夹着别的东西"的语言再加实现，别先
-   * 写一条没人走的路径。
-   */
-  readonly bodyPath?: string;
 }
 
 /**
