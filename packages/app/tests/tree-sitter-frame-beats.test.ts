@@ -221,7 +221,8 @@ describe('结构 client · 首帧分层（R8：折叠先上，着色后补）', 
     });
     client.start();
     const worker = harness.FakeWorker.instances.at(-1)!;
-    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1 });
+    // v4（LAU-5）：`ready` 必须带 `docBase`（缺了这一格收件闸判"形状不符"并整条降级）
+    worker.reply({ ok: true, id: 1, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1, docBase: 0 });
     return { client, worker };
   }
 
@@ -274,7 +275,9 @@ describe('结构 client · 首帧分层（R8：折叠先上，着色后补）', 
     expect(settled, '折叠到货不该把等着色的那一趟放走').toBe('pending');
     worker.reply(replyOf(lastParse(worker)!.id, 1, 1, { semantic: captureTable() }));
     await tokens;
-    expect(settled).toEqual([{ startRow: 0, startCol: 0, endRow: 0, endCol: 1, tier: 'comment', capture: 'comment', node: 'x' }]);
+    // `tier` 由角色表翻译（捕获名 `comment` → 角色 `role.comment`）；这一格跟着角色表走，
+    // 本用例只钉"这一拍把语义交出来了"，不钉角色表怎么取名
+    expect(settled).toEqual([{ startRow: 0, startCol: 0, endRow: 0, endCol: 1, tier: 'role.comment', capture: 'comment', node: 'x' }]);
     client.dispose();
   });
 

@@ -149,7 +149,15 @@ function makeReadyClient(): { client: StructureClient; worker: Fake } {
   });
   expect(client.start()).toBe(true);
   const worker = harness.FakeWorker.instances.at(-1)!;
-  worker.reply({ ok: true, id: (worker.sent[0] as { id: number }).id, kind: 'ready', protocol: STRUCTURE_PROTOCOL_VERSION, loadMs: 1 });
+  // v4（LAU-5）：`ready` 必须带 `docBase`——单引擎桩回 0，号段起点就落在 0 上
+  worker.reply({
+    ok: true,
+    id: (worker.sent[0] as { id: number }).id,
+    kind: 'ready',
+    protocol: STRUCTURE_PROTOCOL_VERSION,
+    loadMs: 1,
+    docBase: 0,
+  });
   return { client, worker };
 }
 
