@@ -53,7 +53,13 @@ import type {
 import type { InjectionSpec } from './tree-sitter/structure-runtime';
 import type { InjectionHost, InjectionOutcome, InjectionRunRequest } from './tree-sitter/injection';
 
-/** 折叠区间上限不变式：Monaco 的 `foldingMaximumRegions` 缺省 5,000，worker 侧已按 4,000 截过 */
+/**
+ * 折叠区间上限不变式：唯一的上限是 Monaco 的 `foldingMaximumRegions`，宿主把它设成
+ * `FOLDING_MAX_RANGES`（20,000；2026-10-28 之前吃的是 Monaco 自己的缺省 5,000）。
+ * **本路自己不截**——原注释还写着"worker 侧已按 4,000 截过"，2026-10-28 全仓查无那处代码，
+ * 不再复述（真要截，宁可截在宿主那条可见提示上，别静默）。超过上限由 Monaco 静默丢，
+ * 所以上限必须与宿主同源，见 `editor-options.ts` 的 `foldingMaximumRegions`。
+ */
 type FoldRange = Kojo2FoldRange;
 
 /** 空结果（"这一轮没有折叠"；不 new 数组，Monaco 只读） */

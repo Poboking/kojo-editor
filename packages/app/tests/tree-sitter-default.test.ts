@@ -8,12 +8,13 @@ import {
   disposeStructureOverlay,
   installStructureOverlay,
   resolveStructureEnabled,
+  resolveStructureFoldsEnabled,
   structureOverlayState,
 } from '../src/monaco/tree-sitter/providers';
 import { onStructureDegradation, resetStructureDegradationLedger } from '../src/monaco/tree-sitter/fallback';
 import type { StructureLanguageRuntime } from '../src/monaco/tree-sitter/structure-runtime';
 import type { LanguageDescriptor } from '../src/monaco/language-registry';
-import { LARGE_FILE_LINES } from '../src/ui/editor-options';
+import { HUGE_FILE_LINES, LARGE_FILE_LINES } from '../src/ui/editor-options';
 import {
   TREE_SITTER_DEFAULT,
   loadTreeSitterPref,
@@ -28,7 +29,9 @@ import {
  * 2. 显式关闭：`off` 跨重启保持关，订阅者当场拆 provider，翻回开又能重挂；
  * 3. worker 失败回落：真 `StructureClient` + 起不来的线程 ⇒ provider 回 `null` / `[]`，
  *    台账只说一次（不静默、不刷屏），叠层整档停用；
- * 4. 超大文件跳过：超过 `LARGE_FILE_LINES` ⇒ 判据为假、provider 让路、线程一次都不起。
+ * 4. 超大文件跳过：**着色 / 缩进**超过 `LARGE_FILE_LINES` ⇒ 判据为假、provider 让路、
+ *    线程一次都不起；**折叠不在此列**（2026-10-28 拆开，它整趟在 worker 里，见
+ *    `resolveStructureFoldsEnabled`）。
  *
  * 不 mock `client.ts`：worker 起不来这条走**真 client** 的 `start()` 失败路径（runtime 的
  * `createWorker` 直接抛），比"桩 client 自己回 null"更接近生产形状。真线程 + 真 wasm
@@ -210,7 +213,7 @@ describe('结构层默认开：偏好与判据', () => {
     expect(seen).toEqual([false, true]);
   });
 
-  it('(3) resolveStructureEnabled：ERB/.kojo 默认开；kojo2 / JSON / plaintext 不动；超大跳过', () => {
+  it('(3) resolveStructureEnabled：ERB/.kojo 默认开；kojo2 / JSON / plaintext 不动；着色超大跳过', () => {
     fakeStorage();
     // 结构层两门语言（判据只认 descriptor 的 structure 声明，不认语言名分支）
     expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', 20)).toBe(true);
@@ -223,9 +226,24 @@ describe('结构层默认开：偏好与判据', () => {
     expect(resolveStructureEnabled('plaintext', '/w/口上.kojo', 20)).toBe(false);
     // 显式关（第四个参数即偏好真源，生产由 localStorage 给）
     expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', 20, false)).toBe(false);
-    // 体量闸：等于阈值仍算开，超一行就跳过（与 providers 既有 `>` 口径逐字一致）
+    // 着色/缩进的体量闸：等于阈值仍算开，超一行就跳过（与 providers 既有 `>` 口径逐字一致）
     expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', LARGE_FILE_LINES)).toBe(true);
     expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', LARGE_FILE_LINES + 1)).toBe(false);
+  });
+
+  it('(3b) 折叠**没有**行数闸：5,000 行以上照供，只认偏好与语言声明', () => {
+    fakeStorage();
+    for (const lineCount of [20, LARGE_FILE_LINES, LARGE_FILE_LINES + 1, 24_197, HUGE_FILE_LINES - 1]) {
+      expect(
+        resolveStructureFoldsEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo'),
+        `${lineCount} 行的折叠不该让路（判据里没有 lineCount 这一格）`,
+      ).toBe(true);
+    }
+    // 偏好显式关 ⇒ 折叠也不供（这一条与着色同一条腿）
+    expect(resolveStructureFoldsEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', false)).toBe(false);
+    // 没声明结构面的语言，折叠也不碰（kojo2 有自己的 worker）
+    expect(resolveStructureFoldsEnabled(KOJO2_LANGUAGE_ID, '/w/口上.kojo2')).toBe(false);
+    expect(resolveStructureFoldsEnabled(JSON_LANGUAGE_ID, '/w/配置.json')).toBe(false);
   });
 });
 
@@ -287,7 +305,7 @@ describe('结构层默认开：装配与回落', () => {
     expect(warnedLines().filter((line) => line.includes('all/worker'))).toHaveLength(1);
   });
 
-  it('(5) 超大文件跳过结构层：判据为假、线程一次都不起、provider 让路且只说一次', async () => {
+  it('(5) 超大文件：**着色**让路（判据为假、线程一次都不起、只说一次）；折叠照供', async () => {
     fakeStorage(); // 默认开
     const { runtime, workerCalls } = failingRuntime();
     const { monaco, captured } = fakeMonaco();
@@ -301,15 +319,17 @@ describe('结构层默认开：装配与回落', () => {
     if (!semantic || !folding) throw new Error('默认开却没注册 provider（装配面漂）');
 
     const big = model(LARGE_FILE_LINES + 1);
+    // 着色这一面仍按体量让路：一次都不问 client，且只说一次
     for (let i = 0; i < 3; i++) {
       expect(await semantic.provideDocumentSemanticTokens(big, null, NO_CANCEL)).toBeNull();
-      expect(await folding.provideFoldingRanges(big)).toEqual([]);
     }
     expect(workerCalls()).toBe(0); // 问都没问 client
-    const sizeLines = warnedLines().filter((line) => line.includes('行的文件这次不由结构层顶上'));
-    // 着色与折叠各说一条（台账键含 capability），但同面重复问不再刷
-    expect(sizeLines).toHaveLength(2);
-    expect(structureOverlayState().active).toBe(true); // 只让这一面，不整档停用
+    const sizeLines = warnedLines().filter((line) => line.includes('行的文件这次不由结构层着色'));
+    expect(sizeLines).toHaveLength(1);
+    // 折叠**没有**行数闸（2026-10-28 拆开）：它真的会去问 client——这台 runtime 起不来 ⇒
+    // 回落的空数组，但判据已不在行数上（`resolveStructureFoldsEnabled` 里没有 lineCount）
+    expect(await folding.provideFoldingRanges(big)).toEqual([]);
+    expect(workerCalls()).toBe(1);
   });
 
   it('(6) 作者显式关掉：订阅者当场拆 provider；翻回开又能重挂（不重开编辑器）', async () => {
