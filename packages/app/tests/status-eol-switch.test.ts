@@ -233,8 +233,11 @@ describe('接线：动作句柄、焦点组转发、状态上报同一链路', (
   });
 
   it('动作句柄注册了 switchEol（状态栏菜单经宿主转发到编辑器）', () => {
-    expect(SOURCE).toContain(
-      'registerActions?.({ save: () => save(), savePath: (p) => savePath(p), saveAll, snapshots, switchEol });',
+    // 钉的是"这一发注册把 switchEol 交了出去"，**不钉排版**：真另存为批给同一枚句柄加了
+    // `readBuffer` / `transferBuffer` 两枚，prettier 把整段折成多行 ⇒ 逐字单行字面量必然红。
+    // 归一空白后再比，判据强度一分不降：少任何一枚名字、或整发注册被删，照样红。
+    expect(SOURCE.replace(/\s+/g, ' ')).toContain(
+      'registerActions?.({ save: () => save(), savePath: (p) => savePath(p), saveAll, snapshots, switchEol, readBuffer, transferBuffer, });',
     );
     expect(PROJECT_VIEW).toContain('paneActionsRef.current.set(gid, actions)');
     expect(PROJECT_VIEW).toContain('?.switchEol(eol)');
