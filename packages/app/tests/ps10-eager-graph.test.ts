@@ -665,11 +665,28 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     与 `ProjectView`，全在 `import('./ProjectView')` 的懒边之下，一枚不进图。
     //     闸 **3,070 → 3,080**：读数正好压在 3,070 上等于零余量，按 `c000a24b` 那次的口径
     //     留一档给下一枚 KB 级改动（仍是读数进十）。⇒ 欠账照旧：下一枚进图模块须先挪一枚出去。
+    //   - **真另存为批（2026-10-28，WS 欠账 E）**：读数 **199 文件 / 3,080 KB**——**零新进图模块**
+    //     （文件数不动就是直接证据）。进图六枚、净 **+9,597 B ≈ 10 KB**（`totalKb` 是全图字节
+    //     一次 round，故 9.4 KB 的增量落在 +10 这一档），逐枚按 git 现算：`ui/App.tsx` +5,742 B
+    //     （`saveAs()` 编排与成功回调里的逐处迁移）、`kernel/src/io.ts` +1,070 B（`pickSavePath`
+    //     透传层）、`ui/editor-groups.ts` +966 B（`migrateGroupPathsAfterSaveAs` 纯函数）、
+    //     `plugin-api/src/io.ts` +774 B 与 `platform.ts` +665 B（additive 契约面：`pickSavePath?`
+    //     可选方法 + "为什么这不是第四条域外通道"那段裁决注）、`bridge/tauri-bridge.ts` +380 B。
+    //     六枚都**没新增 import**（新增 import 才会拽新文件进图）。刻意全在懒边之下、一枚不进图：
+    //     新模块 `ui/file-save-as.ts`（13,509 B，App 里动态 `import()`）、`EditorPane.tsx` +6,402 B
+    //     （`readBuffer`/`transferBuffer`/`snapshots`——实测本就不在图内）、`editor-model-pool.ts`
+    //     +2,128 B 与 `editor-model-pool-instance.ts` +963 B、`ProjectView.tsx` +853 B、
+    //     `keybinding-specs-commands.ts` +687 B（命令登记特意落**懒半**，不落 eager 那半）、
+    //     以及调试面三枚（`dialog-policy` / `install-debug` / `web-host-transport`）。
+    //     闸 **3,080 → 3,090**：读数又压在顶格上等于零余量，同上口径再留一档。
+    //     ⇒ 欠账照旧：下一枚进图模块仍须先挪一枚出去；另存为这条链若还想把这 10 KB 还回去，
+    //     办法是把 `App.tsx` 里的 `saveAs()` 编排整体挪进 `file-save-as.ts` 的懒面（未做，
+    //     因为迁移回调要持 `App` 的七张账，挪走就等于把状态所有权外移）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,080 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_080);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,090 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_090);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
