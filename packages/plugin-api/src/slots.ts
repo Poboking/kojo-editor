@@ -543,7 +543,10 @@ export type EditorLanguageServiceRequest =
   | EditorCompletionRequest
   | EditorHoverRequest
   | EditorFormattingRequest
-  | EditorSignatureHelpRequest;
+  | EditorSignatureHelpRequest
+  // B3f（2026-10-29）：同符号高亮与结构化扩选（additive，加在联合末尾）。
+  | EditorDocumentHighlightRequest
+  | EditorSelectionRangeRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -674,7 +677,10 @@ export type EditorLanguageServiceResult =
   | EditorCompletionResult
   | EditorHoverResult
   | EditorFormattingResult
-  | EditorSignatureHelpResult;
+  | EditorSignatureHelpResult
+  // B3f（2026-10-29）：与请求侧同批追加，成员顺序逐项对齐。
+  | EditorDocumentHighlightResult
+  | EditorSelectionRangeResult;
 
 /**
  * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
@@ -1318,47 +1324,69 @@ export interface EditorSignatureHelpResult {
   readonly activeSignature?: number;
 }
 
+/* --------------- 编辑器面第三批（B3f，2026-10-29）：2 个新 kind --------------- */
+
 /**
- * 编辑器语言服务贡献（槽 `ui.editor.languageService`）。
- *
- * **纯函数纪律**：`provide` 不读盘、不写盘、不发事件——数据**全部**来自贡献方，
- * 宿主只做 Monaco 协议翻译（位置进、位置出），绝不认识 ERB / 家族 / 角色。
- *
- * 返回值三态，宿主据此合并，无歧义（以 `definition` 为例；`documentSymbol` /
- * `foldingRange` 同构，把"目标"换成"顶层符号树 / 折叠区间"）：
- * - `undefined` = **我不认这个请求 / 这个文件 / 这门语言**（不该由我应答）——宿主跳过；
- * - `{ locations: [] }` = 认这个文件、但此处没有定义（**不猜**）；
- * - `{ locations: [...] }` = 目标（可多个）。
- *
- * ## 多源与顺序（同 kind 有多家供方时）
- *
- * 槽按**注册顺序**交回贡献方，宿主按这个顺序逐家问，**不排序、不投票**：
- *
- * - 集合型（definition / references / documentSymbol / foldingRange / codeLens /
- *   semanticToken / inlayHint / workspaceSymbol / completion）：
- *   各家结果**取并集**并按契约字段去重；
- *   一家抛错只让这一家缺席（可见 `console.warn`），不让整篇结果消失。
- * - 单答型（rename / hover / formatting / signatureHelp）：**第一家**给出对应结果的说了算，
- *   后面的不再问——"改哪些位置、浮层说哪句话、怎么排版、签名长什么样"都不能被两家并集拼出来。
- *   给出**空结果**也算作答（`hover.contents === ''` / `formatting.edits === []` /
- *   `signatureHelp.signatures === []`），同样不再问下一家。
- * - 认不出 / 不服务：返回 `undefined`；宿主把它当"这家弃权"，继续问下一家。
- *   返回空结果则有语义（见三态），**不等于弃权**。
- *
- * 数字优先级（`priority` 字段）**刻意不引入**：今天同 kind 的多家按路径 / 语言天然互斥
- * （ERB 供方 vs `.kojo` 供方），并集安全；需要"主 / 备"裁决的只在 Monaco provider 层
- * 已有落点（结构着色层命中时优先、未命中原样回退），不在槽内另立一套表决机制。
- *
- * ## 语言分派、版本与取消
- *
- * 文档型请求带 `languageId`（见 {@link EditorDocumentIdentity}）：当它出现时，
- * **它就是语言事实**，供方按它决定"这门语言归不归我"，不拿扩展名二次猜测；
- * 缺席时才退回按 `path` 自认（旧行为）。
- *
- * 请求里的 `version` 是 model 当前版本；`provide` 同步返回，没有在途响应可取消，
- * 所以契约不引入 LSP 式取消令牌、不做 didOpen / didChange 文档同步——文本与光标
- * 都由宿主**随请求递入**。过期判据只服务异步产出落地前的复核：版本不等即丢弃重问。
+ * 同符号高亮的出现档位：`write` 声明位 / `read` 代码面与插值里的引用 / `text` 叙事正文
+ * 里的同名词（不参与解析，编辑器可弱化）。供方**必给**，宿主只翻 Monaco 的三种画法。
  */
+export type EditorDocumentHighlightKind = 'text' | 'read' | 'write';
+
+/** 一处同符号出现（1 基行、1 基 UTF-16 码元列、`endColumn` 不含；模型坐标）。 */
+export interface EditorDocumentHighlight {
+  readonly line: number;
+  readonly startColumn: number;
+  readonly endColumn: number;
+  /** 必填、没有缺省：这一处算声明还是引用是语言知识，猜错的表现是「声明被画成引用色」。 */
+  readonly kind: EditorDocumentHighlightKind;
+}
+
+/** 同符号高亮请求（与 `definition` 同族；**单答型**：同符号高亮只有一套颜色）。 */
+export interface EditorDocumentHighlightRequest extends EditorDocumentIdentity {
+  readonly kind: 'documentHighlight';
+  readonly path: string;
+  readonly text: string;
+  readonly line: number;
+  readonly column: number;
+  readonly project: GameProject | null;
+  readonly lineCount?: number;
+}
+
+/** 同符号高亮响应；空数组 = 认这个位置但光标下没有可高亮的符号（**不猜**）。 */
+export interface EditorDocumentHighlightResult {
+  readonly kind: 'documentHighlight';
+  readonly highlights: readonly EditorDocumentHighlight[];
+}
+
+/**
+ * 一条扩选链：**经典 LSP 形状** `{ range, parent? }`——返回值就是最内层，`parent` 逐级向外。
+ * Monaco 0.57 的「每位点扁平数组」摊平只在宿主安装层做（契约不钉某个编辑器版本）。
+ */
+export interface EditorSelectionChain {
+  readonly range: RevealRange;
+  readonly parent?: EditorSelectionChain;
+}
+
+/** 结构化扩选请求（**单答型**；一次问多个位点，与 Monaco 的多光标一一对应）。 */
+export interface EditorSelectionRangeRequest extends EditorDocumentIdentity {
+  readonly kind: 'selectionRange';
+  readonly path: string;
+  readonly text: string;
+  readonly project: GameProject | null;
+  readonly lineCount?: number;
+  /** 要扩选的位点（1 基行列；顺序即输出顺序） */
+  readonly positions: readonly { readonly line: number; readonly column: number }[];
+}
+
+/**
+ * 结构化扩选响应：与 `positions` **同序同长**；`null` = 该位点显式空链（空文件 / 越界 /
+ * 非法坐标，**不夹取、不猜**）。整条能力无人应答是另一件事（宿主交回空数组）。
+ */
+export interface EditorSelectionRangeResult {
+  readonly kind: 'selectionRange';
+  readonly selections: readonly (EditorSelectionChain | null)[];
+}
+
 export interface EditorLanguageServiceContribution extends ContributionBase {
   provide(request: EditorLanguageServiceRequest): EditorLanguageServiceResult | undefined;
 }

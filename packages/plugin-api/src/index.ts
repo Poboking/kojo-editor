@@ -1020,3 +1020,15 @@ export type {
   MonacoThemeContributionData,
   MonacoTokenThemeRuleData,
 } from './monaco-language';
+
+/* ---- B3f 独占追加区块（勿在他处重排）：同符号高亮 / 结构化扩选两个 kind ---- */
+export type {
+  EditorDocumentHighlight,
+  EditorDocumentHighlightKind,
+  EditorDocumentHighlightRequest,
+  EditorDocumentHighlightResult,
+  EditorSelectionChain,
+  EditorSelectionPosition,
+  EditorSelectionRangeRequest,
+  EditorSelectionRangeResult,
+} from './slots';
