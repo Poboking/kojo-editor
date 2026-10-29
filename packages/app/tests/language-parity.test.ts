@@ -225,6 +225,10 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   // 点名）。能力名与 `SlotServiceKind` 逐字相同。
   [LanguageCapability.References]: 'references',
   [LanguageCapability.Rename]: 'rename',
+  // B3f：同符号高亮 / 结构化扩选也交插件，注册走带能力名的共享收口（kojo2 descriptor 由
+  // `slotServices` 点名）。能力名与 `SlotServiceKind` 逐字相同。
+  [LanguageCapability.Highlight]: 'documentHighlight',
+  [LanguageCapability.Selection]: 'selectionRange',
 };
 
 /* ============================== 矩阵形状 ============================== */
@@ -671,7 +675,7 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     ]);
   });
 
-  it('kojo2：7 枚 self、9 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停 / 签名 / 格式化 / 引用 / 改名走槽腿）、2 枚 builtin、2 项豁免', () => {
+  it('kojo2：5 枚 self、11 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停 / 签名 / 格式化 / 引用 / 改名 / 高亮 / 扩选走槽腿）、2 枚 builtin、2 项豁免', () => {
     // B2（2026-10-24）：`outline` 从 self 挪到 shared —— 2.0 的大纲不再由
     // `kojo2-symbols.ts` 自建 provider，改由共享收口按 `slotServices: ['documentSymbol']`
     // 挂上，供方是插件 `@kojo/plugin-kojo-lang`。
@@ -687,25 +691,29 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     // B3e（2026-10-29）：`refs` / `rename` 同批挪到 shared —— 判据搬进
     // `@kojo/kojo-lang/references` / `/rename`，供方是插件的 `kojo2-references` /
     // `kojo2-rename`，注册经 `registerForLanguageServices(..., 'references'|'rename')`。
-    // **档位变了，能力没少**：两侧的合计仍是 7 + 9 = 16。
+    // B3f（2026-10-29）：`highlight` / `selection` 同批挪到 shared —— 判据搬进
+    // `@kojo/kojo-lang/highlight` / `/selection-range`，供方是插件的
+    // `kojo2-documentHighlight` / `kojo2-selectionRange`，注册经
+    // `registerForLanguageServices(..., 'documentHighlight'|'selectionRange')`。
+    // **档位变了，能力没少**：两侧的合计仍是 5 + 11 = 16。
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'self')).toEqual([
       'codelens',
       'diagnostics',
       'folding',
-      'highlight',
       'indent',
-      'selection',
       'semantic',
     ]);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')).toEqual([
       'completion',
       'definition',
       'format',
+      'highlight',
       'hover',
       'inlay',
       'outline',
       'refs',
       'rename',
+      'selection',
       'signature',
     ]);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'builtin')).toEqual(['brackets', 'preview']);

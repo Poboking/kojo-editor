@@ -229,11 +229,12 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
 /**
  * Kojo 2.0 的状态表。
  *
- * 7 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
+ * 5 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
  * `ui/editor-global-providers.ts` 的 2.0 段），且**装配点无条件调用**（K2-SURFACE-DEFAULT：
  * 语言面不读切流开关，`language-parity.test.ts` 逐格对拍"装配点真调了 + 安装器自己不读开关"）；
- * 9 枚 `shared` 是**已交给插件**的九条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
- * `completion` / `hover` 自 B3c，`signature` / `format` 自 B3d，`refs` / `rename` 自 B3e），宿主只经
+ * 11 枚 `shared` 是**已交给插件**的十一条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
+ * `completion` / `hover` 自 B3c，`signature` / `format` 自 B3d，`refs` / `rename` 自 B3e，
+ * `highlight` / `selection` 自 B3f），宿主只经
  * `registerForLanguageServices` 带能力名挂上、判据全在 `@kojo/kojo-lang` + 供方
  * `@kojo/plugin-kojo-lang`；
  * `brackets` / `preview` 与 ERB 同档（语言配置 / Monaco 内建）；`diagnostics` 是 `self`：
@@ -286,8 +287,11 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
       exempt:
         '明确不做、无对应模块：2.0 里"跳实现"与"转定义"是同一件事（F12 已覆盖 `@函`/模板落点），v1 的共享跳实现面见 monaco/erb-implementation.ts',
     },
-    [LanguageCapability.Highlight]: 'self',
-    [LanguageCapability.Selection]: 'self',
+    // B3f（2026-10-29）：同符号高亮 / 结构化扩选同批走共享收口（能力名 `documentHighlight` /
+    // `selectionRange`）——判据住 `@kojo/kojo-lang/highlight` / `/selection-range`，供方是插件，
+    // 宿主 `monaco/kojo2-highlight.ts` / `kojo2-selection-range.ts` 只剩请求与 Monaco 翻译。
+    [LanguageCapability.Highlight]: 'shared',
+    [LanguageCapability.Selection]: 'shared',
     [LanguageCapability.CallHierarchy]: {
       exempt:
         '纯模型 monaco/kojo2-callhierarchy.ts 已交付，宿主面板 ui/CallHierarchyOverlay.tsx 已按 model 语言分派消费（批次十）；Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83），待装配点 ui/editor-global-providers.ts 接 installKojo2CallHierarchyProvider 后改 self',

@@ -136,7 +136,9 @@ import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
 // 供方 = 插件 `@kojo/plugin-kojo-lang`），故这里不再 import `kojo2-symbols`。
 import { installKojo2DocumentFormatter, installKojo2RangeFormatter } from '../monaco/kojo2-format';
 // K2 batch-8：语言服务补齐（ERB/kojo2 同权）——引用 / 重命名 / 签名 / inlay / code lens /
-// 同符号高亮 / 结构化扩选。全部只挂 `kojo2`、不读切流开关，且安装器内零 IO。
+// 同符号高亮 / 结构化扩选。全部不读切流开关，且安装器内零 IO。B3b–B3f 之后其中
+// 引用 / 改名 / 签名 / 高亮 / 扩选五枚已改为共享收口的**翻译层**（判据在包里、供方是插件），
+// 安装器名字与装配行不变。
 import { installKojo2ProjectReferenceProvider } from '../monaco/kojo2-references';
 import {
   createKojo2ProjectCallHierarchyResolvers,
@@ -1880,6 +1882,11 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         },
       }),
     );
+    // B3f（2026-10-29）：同符号高亮 / 结构化扩选的原生判据**已清零**——判据整块搬进
+    // `@kojo/kojo-lang/highlight` / `/selection-range`，作答来自插件
+    // `kojo2-documentHighlight` / `kojo2-selectionRange`；这两枚安装器只做"model → 请求"与
+    // "契约 → Monaco"，注册走 `registerForLanguageServices(..., 'documentHighlight' |
+    // 'selectionRange')`（kojo2 由 descriptor 点名）。
     globalDisposers.push(installKojo2HighlightProvider(monaco));
     globalDisposers.push(installKojo2SelectionRangeProvider(monaco));
     // B3d：区间格式化（Ctrl+K Ctrl+F）与整篇同一条能力（`formatting`）——规则同一台，

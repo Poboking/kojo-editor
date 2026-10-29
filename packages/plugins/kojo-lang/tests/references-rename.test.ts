@@ -217,11 +217,13 @@ describe('注册纪律：两条腿分枚注册、order 10、零游戏事实', ()
     expect(ids).toEqual([
       'kojo2-completion',
       'kojo2-definition',
+      'kojo2-documentHighlight',
       'kojo2-formatting',
       'kojo2-hover',
       'kojo2-inlay',
       'kojo2-references',
       'kojo2-rename',
+      'kojo2-selectionRange',
       'kojo2-signatureHelp',
       'kojo2-symbols',
     ]);

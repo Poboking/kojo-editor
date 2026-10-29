@@ -55,7 +55,10 @@ export type SlotServiceKind =
   | 'signatureHelp'
   | 'formatting'
   // B3e：改名同批进共享收口。
-  | 'rename';
+  | 'rename'
+  // B3f：同符号高亮 / 结构化扩选同批进共享收口。
+  | 'documentHighlight'
+  | 'selectionRange';
 
 /**
  * 一门语言的**可用性档**（LAU-3 / 设计稿 §4.3、§6）。

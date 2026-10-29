@@ -177,6 +177,9 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   [LanguageCapability.Format]: 'formatting',
   // B3e（2026-10-29）：改名同批（引用那格上方早已登记）。
   [LanguageCapability.Rename]: 'rename',
+  // B3f（2026-10-29）：同符号高亮 / 结构化扩选同批 —— 供方是插件，kojo2 由 `slotServices` 点名。
+  [LanguageCapability.Highlight]: 'documentHighlight',
+  [LanguageCapability.Selection]: 'selectionRange',
 };
 
 /** 这门语言对**这一项能力**是否走得到共享收口 */
@@ -701,7 +704,11 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   expand: [
     { rel: 'monaco/erb-selection-range.ts', re: /registerSelectionRangeProvider\(\s*ERB_LANGUAGE_ID/ },
-    { rel: 'monaco/kojo2-selection-range.ts', re: /registerSelectionRangeProvider\(\s*KOJO2_LANGUAGE_ID/ },
+    // B3f（2026-10-29）：2.0 的扩选不再自建 provider——共享收口带能力名 `selectionRange`，
+    // descriptor 用 `slotServices` 点名挂上，应答来自插件（形状同 B3b/B3c/B3d/B3e）。
+    { rel: 'monaco/kojo2-selection-range.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerSelectionRangeProvider/ },
+    { rel: 'monaco/kojo2-selection-range.ts', re: /'selectionRange',\s*\)/ },
+    { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'selectionRange'/ },
   ],
   peek: [
     { rel: 'ui/editor-global-providers.ts', re: /openModelFor:\s*modelForPeekPath/ },

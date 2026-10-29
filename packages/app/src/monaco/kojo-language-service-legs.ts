@@ -3,6 +3,8 @@ import { errorText } from '@kojo/plugin-api';
 import type {
   EditorCompletionItem,
   EditorCompletionRequest,
+  EditorDocumentHighlightRequest,
+  EditorDocumentHighlightResult,
   EditorFormattingLineRange,
   EditorFormattingRequest,
   EditorHoverRequest,
@@ -15,6 +17,8 @@ import type {
   EditorReferencesResult,
   EditorRenameRequest,
   EditorRenameResult,
+  EditorSelectionRangeRequest,
+  EditorSelectionRangeResult,
   EditorSignature,
   EditorSignatureHelpRequest,
 } from '@kojo/plugin-api';
@@ -44,6 +48,11 @@ import { pkey } from '../ui/file-tree-ops';
  * 的那条腿就废掉了供方的过期复核（这类失准只在"改完文件后的第一次应答"里出现）。
  *
  * ## 两种多源口径（与 `EditorLanguageServiceContribution` 头注逐字一致）
+ *
+ * B3f 又加两条单答腿：`documentHighlight` / `selectionRange`（判据住
+ * `@kojo/kojo-lang/highlight` / `/selection-range`，供方是插件）。扩选那条一次多位置、
+ * 整包作答——"某位点空链"（`null`）与"整条能力无人应答"（`undefined`）在
+ * {@link collectSelectionRanges} 的注里分开写死。
  *
  * - **集合型**（`completion`）：各家取并集、按契约字段去重。一家抛错只让这家缺席。
  * - **单答型**（`hover` / `formatting` / `signatureHelp`）：**第一家作答的说了算**，
@@ -561,6 +570,97 @@ export function collectRename(
   for (const contribution of contributions) {
     const result = provideOf(contribution, request);
     if (!result || result.kind !== 'rename') continue;
+    return result;
+  }
+  return undefined;
+}
+
+/* ============================== 同符号高亮 / 扩选（B3f） ============================== */
+
+/**
+ * 构造一个 `documentHighlight` 请求（B3f，宿主接线用；同源形状）。
+ */
+export function documentHighlightRequestOf(
+  identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
+  text: string,
+  line: number,
+  column: number,
+  project: EditorDocumentHighlightRequest['project'],
+): EditorDocumentHighlightRequest {
+  return {
+    kind: 'documentHighlight',
+    path: identity.path,
+    ...(identity.languageId !== undefined ? { languageId: identity.languageId } : {}),
+    ...(identity.version !== undefined ? { version: identity.version } : {}),
+    text,
+    line,
+    column,
+    project,
+    lineCount: text.length === 0 ? 1 : countLines(text),
+  };
+}
+
+/**
+ * 构造一个 `selectionRange` 请求（B3f，宿主接线用；同源形状，多带位置数组）。
+ *
+ * `positions` **原样递**（1 基，与 Monaco `Position` 同口径）：宿主不排序、不去重、
+ * 不夹取——"哪几个位点要扩选"是编辑器给的事实，"越界位点怎么办"由供方按契约给空链。
+ */
+export function selectionRangeRequestOf(
+  identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
+  text: string,
+  positions: EditorSelectionRangeRequest['positions'],
+  project: EditorSelectionRangeRequest['project'],
+): EditorSelectionRangeRequest {
+  return {
+    kind: 'selectionRange',
+    path: identity.path,
+    ...(identity.languageId !== undefined ? { languageId: identity.languageId } : {}),
+    ...(identity.version !== undefined ? { version: identity.version } : {}),
+    text,
+    project,
+    lineCount: text.length === 0 ? 1 : countLines(text),
+    positions,
+  };
+}
+
+/**
+ * 问出这一格的高亮（**单答型**）。`undefined` = 无人应答；空 `highlights` = 认这门语言
+ * 但光标下没有可高亮的符号（**作答**）。
+ *
+ * 与 hover / references 同一处分歧理由：`undefined` 时宿主交回空列表（不亮），
+ * 但**不再问下一家**——同符号高亮只有一套颜色，两家并集会让同一处记号一会儿写色一会儿读色。
+ */
+export function collectDocumentHighlights(
+  contributions: readonly EditorLanguageServiceContribution[],
+  request: EditorLanguageServiceRequest,
+): EditorDocumentHighlightResult | undefined {
+  for (const contribution of contributions) {
+    const result = provideOf(contribution, request);
+    if (!result || result.kind !== 'documentHighlight') continue;
+    return result;
+  }
+  return undefined;
+}
+
+/**
+ * 问出这一次扩选（**单答型**，一次多位置、**整包作答**）。
+ *
+ * - `undefined` = **整条能力无人应答**（插件没装 / 弃权）：宿主交回空数组，Monaco 退回
+ *   它自己的词语扩选；
+ * - 作答时 `selections` 与请求的 `positions` **同序同长**，某一位点 `null` = **该位点
+ *   空链**（空文件 / 越界 / 非法坐标）。这两件事不能混：把"某位点空链"当弃权去问下一家，
+ *   扩选结果就会按供方数量漂移；把弃权写成"整排空链"，那门语言自己的 provider 永远轮不到。
+ *
+ * 对齐由供方保证（契约写死）；宿主安装层只按位点摊平成 Monaco 0.57 的形状。
+ */
+export function collectSelectionRanges(
+  contributions: readonly EditorLanguageServiceContribution[],
+  request: EditorLanguageServiceRequest,
+): EditorSelectionRangeResult | undefined {
+  for (const contribution of contributions) {
+    const result = provideOf(contribution, request);
+    if (!result || result.kind !== 'selectionRange') continue;
     return result;
   }
   return undefined;
