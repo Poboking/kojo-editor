@@ -141,7 +141,6 @@ import { installKojo2ProjectReferenceProvider } from '../monaco/kojo2-references
 import {
   createKojo2ProjectCallHierarchyResolvers,
   createKojo2ProjectIndex,
-  createKojo2ProjectRenameResolvers,
 } from '../monaco/kojo2-project-index';
 // 调用层级解析器（`monaco/kojo2-callhierarchy.ts`）**不在这里 import**（连 `import type` 都不）：
 // 那一面走懒装载边（PS-10 ①，`ui/call-hierarchy.ts` 的动态 import），装配点一碰它就会把它
@@ -154,7 +153,6 @@ import { createUserSnippetProvider } from '../monaco/user-snippet-completion';
 import { USER_SNIPPET_LANGUAGES, loadUserSnippets } from './user-snippets';
 import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-language';
 import { installKojo2RenameProvider } from '../monaco/kojo2-rename';
-import type { Kojo2RenameResolvers } from '../monaco/kojo2-rename';
 import { installKojo2SignatureHelpProvider } from '../monaco/kojo2-signature';
 import { installKojo2CodeLensProvider } from '../monaco/kojo2-codelens';
 import { installKojo2HighlightProvider } from '../monaco/kojo2-highlight';
@@ -215,15 +213,6 @@ export const kojo2ProjectIndex = createKojo2ProjectIndex();
 export function kojo2ProjectIndexUpdate(path: string, text: string | null): void {
   if (text === null) kojo2ProjectIndex.removeFile(path);
   else kojo2ProjectIndex.updateFile({ path, text });
-}
-
-/**
- * 同一份项目索引 → 跨文件重命名的 resolver（S18 接线；纯映射、零 IO，每次现造即可）。
- *
- * 只交索引里已有的文件；索引空 = 只有同文件候选（行为与接线前一致）。
- */
-export function kojo2RenameResolvers(): Kojo2RenameResolvers {
-  return createKojo2ProjectRenameResolvers(kojo2ProjectIndex);
 }
 
 /**
