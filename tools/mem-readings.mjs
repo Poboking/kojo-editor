@@ -207,14 +207,47 @@ const storageBackend = WARM
   : process.argv.includes('--memory-storage')
     ? new MemoryStorageBackend()
     : new DiskLikeStorage();
+/**
+ * `--plugins=erb,adapter,linter,condition`（默认全开）：逐个少装一个，量"这个插件自己常驻多少"。
+ *
+ * 为什么要这个开关：热载稳态里 erb 索引只占 67 MB（`byName` 消融值），剩下 200+ MB 挂在
+ * 别的插件身上——单看索引的读数会让人以为"索引已经很小了，没得可压"。
+ */
+const PLUGIN_NAMES = ['erb', 'adapter', 'linter', 'condition'];
+const enabled = (() => {
+  // 两种写法都要认：`--plugins=erb` 与 `--plugins erb`。
+  // 只写 `argv.indexOf('--plugins')` 的话，等号写法会**静默回落到默认全开**——
+  // 实测踩过：五次"逐级少装一个插件"的读数一模一样（200.9 / 263.9），差点当成"插件不占内存"。
+  const eq = process.argv.find((a) => a.startsWith('--plugins='));
+  if (eq !== undefined) {
+    return new Set(
+      eq
+        .slice('--plugins='.length)
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    );
+  }
+  const i = process.argv.indexOf('--plugins');
+  if (i < 0) return new Set(PLUGIN_NAMES);
+  return new Set(
+    String(process.argv[i + 1] ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+})();
+const pluginFactories = {
+  erb: () => createErbParserPlugin(),
+  adapter: () => createEratwAdapterPlugin(),
+  linter: () => createConventionLinterPlugin(),
+  condition: () => createConditionExtractorPlugin(),
+};
+console.log(`[mem] 插件：${[...enabled].join(',') || '（无）'}`);
+
 const kernel = await createKernel({
   platform: new NodeBridge(appData),
-  plugins: [
-    createErbParserPlugin(),
-    createEratwAdapterPlugin(),
-    createConventionLinterPlugin(),
-    createConditionExtractorPlugin(),
-  ],
+  plugins: PLUGIN_NAMES.filter((n) => enabled.has(n)).map((n) => pluginFactories[n]()),
   storageBackend,
 });
 for (const [kind, impl] of Object.entries({ ...erbParserTasks, ...conditionExtractorTasks(scanControlFlow) })) {
@@ -225,7 +258,15 @@ gc();
 const boot = snap();
 line('0 boot', boot);
 
-const parser = kernel.services.get('erb.parser');
+// `services.get` 对未注册的服务**抛错**（不是返回 undefined）：少装一个插件做预算对比时
+// 必须先兜住，否则 `--plugins=adapter` 这类基线跑法直接崩在取服务这一步
+const parser = (() => {
+  try {
+    return kernel.services.get('erb.parser');
+  } catch {
+    return null;
+  }
+})();
 let index = null;
 let afterIndex = null;
 
@@ -244,15 +285,16 @@ async function buildOnce(tag) {
   const openMs = Date.now() - openStart;
   const indexStart = Date.now();
   let idx = null;
-  for (let i = 0; i < 1200; i++) {
-    idx = parser.currentIndex?.() ?? null;
+  // 没装 erb 插件就没有索引可等（否则会白等 120s，把"少装一个插件"的量法拖成十几分钟）
+  for (let i = 0; enabled.has('erb') && i < 1200; i++) {
+    idx = parser?.currentIndex?.() ?? null;
     if (idx) break;
     await new Promise((done) => setTimeout(done, 100));
   }
   gc();
   const afterIdx = snap();
   line(`${tag} index`, afterIdx);
-  const state = parser.indexState?.() ?? null;
+  const state = parser?.indexState?.() ?? null;
   console.log(
     `[mem] ${tag} open() ${openMs}ms  index ready ${Date.now() - indexStart}ms  state=${JSON.stringify(state)}`,
   );
@@ -300,9 +342,34 @@ if (process.argv.includes('--stats') && index) {
   );
 }
 
+/**
+ * `--snapshot-stats`：跨轮保留的**解码后快照条目**的结构普查。
+ *
+ * 这是热载稳态最大的一块常驻，但它藏在插件闭包里，外面只能倒推。`snapshotStatsForDebug()`
+ * 是纯读口子（不物化懒外壳）：元组 / refs / 候选集分别占多少，一次问清。
+ */
+if (process.argv.includes('--snapshot-stats')) {
+  const st = parser.snapshotStatsForDebug?.() ?? null;
+  if (st === null) {
+    console.log('[mem] snapshot-stats 无（未保留快照）');
+  } else {
+    console.log(
+      `[mem] snapshot-stats 条目=${st.entries}（惰性壳 ${st.lazyShells} / 已物化 ${st.materialized}）` +
+        ` 正文=${st.textLength} 码元`,
+    );
+    console.log(
+      `[mem] snapshot-stats 函数=${st.functions} 名=${st.nameChars} 字符 注释=${st.docChars} 字符` +
+        ` 声明=${st.dims} 引用=${st.refs} 标签=${st.labels}`,
+    );
+    console.log(
+      `[mem] snapshot-stats 候选集：${st.candidatesKnown}/${st.entries} 条，合计 ${st.candidateChars} 字符` +
+        ` | 带 refs 的条目 ${st.withRefs}`,
+    );
+  }
+}
+
 // 读数走内核既有的观测面（`debugCaches().text`），不另开 API
-console.log(`[mem] io textCache ${JSON.stringify(kernel.io.debugCaches?.().text ?? null)}`);
-if (SNAPSHOT_OUT) {
+console.log(`[mem] io textCache ${JSON.stringify(kernel.io.debugCaches?.().text ?? null)}`);if (SNAPSHOT_OUT) {
   // 快照必须**在释放之前**落：文本缓存那 200 MB 是这一步要归因的对象
   const t0 = Date.now();
   v8.writeHeapSnapshot(SNAPSHOT_OUT);
@@ -316,7 +383,11 @@ if (SNAPSHOT_OUT) {
  * 高出 63 MB，正是它）。等落盘 + 随后的 `gc()` 才是"写完就撒手"的真应用形态。
  */
 const settleStart = Date.now();
-while (storageBackend.bytes < 1024 && Date.now() - settleStart < 20_000) {
+const settleCap = (() => {
+  const i = process.argv.indexOf('--settle');
+  return i >= 0 ? Number(process.argv[i + 1]) : 20_000;
+})();
+while (storageBackend.bytes < 1024 && Date.now() - settleStart < settleCap) {
   await new Promise((done) => setTimeout(done, 50));
 }
 console.log(`[mem] snapshot 落盘 ${storageBackend.bytes} 字符（等 ${Date.now() - settleStart}ms）`);
@@ -325,6 +396,35 @@ kernel.io.releaseTextCache?.('manual');
 gc();
 const afterRelease = snap();
 line('3 release', afterRelease);
+
+/**
+ * `--samples N`：**多次采样取稳态下界**（默认 1 = 只取上面那一点）。
+ *
+ * 为什么需要：热载稳态**不是个稳定数**。索引就绪之后，校验器与条件抽取器还在跑各自的
+ * 异步流水，GC 撞上谁全看时机——同一份语料、同一份代码，1.5s 处读到 260.1 MB、
+ * 3s 处 398.4 MB、12s 处 313.8 MB。单点读数因此既不能当"优化前后的对照"，
+ * 也不能当"回归判据"。这里每秒 `gc()` 后采一次，**取下界**（= 常驻地板，
+ * 不被在途垃圾污染）并给出中位/上界，读数才有可比性。
+ */
+const SAMPLE_COUNT = (() => {
+  const i = process.argv.indexOf('--samples');
+  return i >= 0 ? Math.max(1, Number(process.argv[i + 1]) || 1) : 1;
+})();
+let steadyFloor = afterRelease.heap;
+if (SAMPLE_COUNT > 1) {
+  const samples = [];
+  for (let i = 0; i < SAMPLE_COUNT; i++) {
+    await new Promise((done) => setTimeout(done, 1000));
+    gc();
+    samples.push(snap().heap);
+  }
+  const sorted = [...samples].sort((a, b) => a - b);
+  steadyFloor = sorted[0];
+  console.log(
+    `[mem] steady 采样 ${SAMPLE_COUNT} 次：下界 ${sorted[0]}MB · 中位 ${sorted[sorted.length >> 1]}MB · 上界 ${sorted[sorted.length - 1]}MB`,
+  );
+  console.log(`[mem] steady 全部样本 ${samples.join(' / ')}`);
+}
 if (SNAPSHOT_AFTER) {
   const t0 = Date.now();
   v8.writeHeapSnapshot(SNAPSHOT_AFTER);
@@ -332,13 +432,25 @@ if (SNAPSHOT_AFTER) {
 }
 
 /** 带符号的差值（`a` 相对 `b` 的变化）：释放量写 `-X`，反而涨了写 `+X`——别让 `--157.6` 这种双负号进日志 */
-const signed = (delta) => `${delta >= 0 ? '-' : '+'}${Math.abs(delta).toFixed(1)}MB`;
+const signed = (deltaMb) => `${deltaMb >= 0 ? '-' : '+'}${Math.abs(deltaMb).toFixed(1)}MB`;
 const drop = (a, b) => signed(a.heap - b.heap);
 
 if (process.argv.includes('--ablate') && index) {
-  // 消融：依次摘掉索引的一块，看堆掉多少——比追持有链快，也比猜快照准
+  // 消融：摘掉索引的一块，看堆掉多少——比追持有链快，也比猜快照准。
+  //
+  // ⚠ **一次只许跑一步**（`--ablate-only=<key>`）。串着跑会把读数毁掉：每一步的 `gc()`
+  // 顺手把上一步制造/遗留的垃圾也收了，后一步的差值就不是它自己的量。
+  // 实测（同一份语料、同一平台）：串着跑时 `byName.clear` 报 −67.1 MB，
+  // 而三块一起清只报 −30.4 MB——后者比前者还小，逻辑上不可能，就是串跑污染的。
+  // 另：删单个字段会触发 V8 把对象转字典模式，**堆反而涨**（`byName.docComment` 报 +18.6 MB），
+  // 所以"删字段"这类步骤只能看方向，不能当数值。
   console.log(`[mem] ablate index frozen=${Object.isFrozen(index)} keys=${Object.keys(index).join(',')}`);
-  const step = (label, fn) => {
+  const onlyArg = process.argv.find((a) => a.startsWith('--ablate-only='));
+  const only = onlyArg === undefined ? null : onlyArg.slice('--ablate-only='.length);
+  const step = (key, label, fn) => {
+    if (only !== null && only !== key) return;
+    // 基线用"刚 gc 过"的值：不然 before 里含着上一步的垃圾
+    gc();
     const before = process.memoryUsage().heapUsed;
     let err = '';
     try {
@@ -349,32 +461,34 @@ if (process.argv.includes('--ablate') && index) {
     gc();
     const after = process.memoryUsage().heapUsed;
     console.log(
-      `[mem] ablate ${label.padEnd(16)} ${signed(before - after).padStart(9)}（剩 ${mb(after)}MB）${err ? ` ⚠ ${err}` : ''}`,
+      `[mem] ablate ${label.padEnd(16)} ${signed((before - after) / 1048576).padStart(9)}（剩 ${mb(after)}MB）${err ? ` ⚠ ${err}` : ''}`,
     );
   };
-  step('references.bySymbol', () => index.references?.bySymbol?.clear?.());
-  step('references=undefined', () => {
-    index.references = undefined;
+  const dropEntries = () => {
+    const svc = kernel.services.get?.('erb.parser');
+    const snap = svc?.snapshotForDebug?.() ?? null;
+    // `entries` 是 Record 不是数组：`entries.length = 0` 什么也删不掉（上一轮就是这么报出
+    // "−0 MB" 的假读数，还被我当成"快照不占内存"的证据）
+    if (snap?.entries) for (const k in snap.entries) delete snap.entries[k];
+  };
+  // 单清一方量不出来：`files` 的惰性壳持有 RAW 元组、`entries` 也持有同一批壳，
+  // 互相兜底 ⇒ 只清 `files`、只清 `entries` 都掉不动。这一发把三块一起摘掉，
+  // 量的才是**整棵 ERB 索引**的常驻。
+  step('index', '索引全清', () => {
+    index.files.clear();
+    index.byName.clear();
+    dropEntries();
   });
-  step('byName.docComment', () => {
-    for (const list of index.byName.values()) for (const r of list) delete r.docComment;
-  });
-  step('byName.name', () => {
-    for (const list of index.byName.values()) for (const r of list) delete r.name;
-  });
-  step('byName.clear', () => index.byName.clear());
-  step('files.clear', () => index.files.clear());
-  step('fileMtimes.clear', () => index.fileMtimes?.clear?.());
-  step('snapshot storage', () => {
-    const s = kernel.services.get?.('erb.parser');
-    const snap = s?.snapshotForDebug?.() ?? null;
-    if (snap?.entries) snap.entries.length = 0;
-  });
+  step('bySymbol', 'references.bySymbol', () => index.references?.bySymbol?.clear?.());
+  step('byName', 'byName.clear', () => index.byName.clear());
+  step('files', 'files.clear', () => index.files.clear());
+  step('mtimes', 'fileMtimes.clear', () => index.fileMtimes?.clear?.());
+  step('snapshot', 'snapshot entries', dropEntries);
 }
 console.log(
   `[mem-verdict] index=+${(afterIndex.heap - boot.heap).toFixed(1)}MB  ` +
     `textCache=${drop(afterIndex, afterRelease)}  ` +
-    `steady=${afterRelease.heap}MB  ` +
+    `steady=${steadyFloor}MB  ` +
     `(boot ${boot.heap}MB / 索引就绪 ${afterIndex.heap}MB)`,
 );
 

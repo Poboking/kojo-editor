@@ -75,6 +75,7 @@ import {
   salvageSnapshot,
   snapshotKeyCandidatesFor,
   snapshotKeyFor,
+  snapshotStats,
   verifiedNamesDigest,
   type IndexSnapshot,
   type SalvagedSnapshot,
@@ -423,6 +424,15 @@ export function createErbParserPlugin(): Plugin {
 
       /** 当前索引（未打开项目 / 未构建时为 null） */
       let index: ErbIndex | null = null;
+      /**
+       * 最近一轮构建**跨轮保留**的解码后快照（`startBuild` 里的局部 `snapshot` 的对外镜像）。
+       *
+       * 只为一个用途：量测面（`snapshotForDebug` / `snapshotStatsForDebug`）要能读到它。
+       * 它是热载稳态最大的一块常驻（插件靠它做增量合并：文件没变就不重读重扫），
+       * 但它原本只活在构建函数的闭包里，外面只能靠"索引总量 − byName"倒推。
+       * 语义上与 `index` 同寿命：项目关掉就置空。
+       */
+      let retainedSnapshot: IndexSnapshot | null = null;
       /** 在途构建（并发调用 ensureIndex 时共享同一 Promise） */
       let inFlight: Promise<ErbIndex> | null = null;
       /** 当前项目的扫描根（口上根 ∪ 只读基座库根，由 project.opened 提供；**不含**工作区根——那些每次现读） */
@@ -1163,6 +1173,8 @@ export function createErbParserPlugin(): Plugin {
         // 仅在仍是当前代际时提交（避免项目快速切换导致旧结果覆盖新结果）
         if (gen !== generation) return makeIndex();
 
+        // 量测面镜像（见 `retainedSnapshot` 的注释）：本轮真正留下的那份条目，供内存归因读
+        retainedSnapshot = snapshot;
         const built = makeIndex();
         index = built;
         // 整扫交出的索引带全量反向引用（惰性聚合）：增量那轮置的"待修"标记到此了结
@@ -1465,6 +1477,22 @@ export function createErbParserPlugin(): Plugin {
         // 索引这一轮的可查事实（IDX-STATE，additive）：纯读、不读盘、不现算形状判据
         indexState: () => lastIndexState,
 
+        /**
+         * 跨轮保留的**解码后快照**（MEM 批的量测面，与 `kernel.io.debugCaches()` 同一性质）。
+         *
+         * 为什么要有：这份对象是热载路径上最大的一块常驻（插件靠它做增量合并），
+         * 但它藏在闭包里，外面只能靠"索引总量 − byName"倒推。加一个纯读的口子之后，
+         * `tools/mem-readings.mjs --snapshot-stats` 才能直接量出"元组 / 候选集 / refs
+         * 各占多少"，不用猜（上一轮就是因为没有这个口子，消融里的
+         * `snapshotForDebug?.()` 一直是 `undefined`，读数报成 −0 MB 的假结论）。
+         * 只读：不触发懒还原、不读盘、不改任何状态。
+         */
+        snapshotForDebug: () => retainedSnapshot,
+
+        /** 上面那份快照的**结构普查**（纯读；字段含义见 `snapshot.ts` 的 `SnapshotStats`） */
+        snapshotStatsForDebug: () =>
+          retainedSnapshot === null ? null : snapshotStats(retainedSnapshot.entries),
+
         async ensureIndex(): Promise<ErbIndex> {
           // 既有时刻活读一次：会话中途经对话框授权的落点根要在这里进索引，
           // 而不是等一条并不存在的"工作区根变更"事件（判据见 `./index-roots`）。
@@ -1529,6 +1557,7 @@ export function createErbParserPlugin(): Plugin {
       ctx.onDispose(
         ctx.bus.on('project.closed', () => {
           index = null;
+          retainedSnapshot = null;
           projectRoots = [];
           currentRoot = '';
           activeSignature = '';

@@ -31,6 +31,7 @@
  */
 import type { ErbDim, ErbFile, ErbFunction, ErbFunctionRef, ErbLabel, ErbParam, FileStat } from '@kojo/plugin-api';
 import type { FileRefs, RefRun } from './references';
+import { detachString } from './scanner';
 
 /**
  * 快照格式版本（结构不兼容时整体弃用重建）。
@@ -499,7 +500,30 @@ function lazyFile(path: string, tuple: EntryTuple): ErbFile {
 }
 
 /** 校验过的元组 → 内存条目（键即路径 ⇒ 回填 `file.path` / `function.filePath`） */
-function entryFromTuple(path: string, tuple: EntryTuple): SnapshotEntry {
+/**
+ * 把一枚条目元组里的**所有字符串**过一遍去重表（就地改，不重建元组）。
+ *
+ * 为什么就地改而不是重建：`refs` 是**零拷贝**别名（`e.refs === tuple[7]`，
+ * `encodeEntries` 的快路径靠这个身份判据免重建）。重建 61 万个元组会瞬时造出
+ * 20 MB 垃圾、还得让身份判据失效——得不偿失。元组内容不改语义，只换实例。
+ *
+ * 覆盖的位置就是"逐条重复率最高"的那几格：函数名、注释块、形参名、声明名、
+ * 引用名（重复量最大，61 万条引用只有 10 万个不同名字）、标签名。
+ */
+function internEntryStrings(tuple: EntryTuple, interner: NameInterner): void {
+  for (const fn of tuple[5]) {
+    fn[0] = interner.intern(fn[0]);
+    const doc = fn[5];
+    if (typeof doc === 'string') fn[5] = interner.intern(doc);
+    for (const p of fn[3]) p[0] = interner.intern(p[0]);
+  }
+  for (const d of tuple[6]) d[0] = interner.intern(d[0]);
+  for (const r of tuple[7]) r[0] = interner.intern(r[0]);
+  for (const l of tuple[8]) l[0] = interner.intern(l[0]);
+}
+
+function entryFromTuple(path: string, tuple: EntryTuple, interner?: NameInterner): SnapshotEntry {
+  if (interner !== undefined) internEntryStrings(tuple, interner);
   const refsNamesFp = tuple[9];
   const candidates = tuple[10];
   return {
@@ -525,13 +549,44 @@ function entryFromTuple(path: string, tuple: EntryTuple): SnapshotEntry {
  * **校验急、还原懒**：每个函数元组 / 声明元组 / 引用元组在 decode 时逐条查完
  * （fail-closed 不打折），查过之后对象构造才推迟。
  */
+/**
+ * 解码期的**同内容字符串去重表**（MEM-4，2026-10-29）。
+ *
+ * 为什么需要：快照把函数名 / 归一化名 / 注释块**逐条**落在元组里，同一个名字在 61 万条
+ * 引用里各存一份实例——真语料实测 `ADD_FAMILY_NAME_K` 有 154,975 个实例（5.9 MB），
+ * 全库重复串合计 **772,329 个多余实例 / 31.3 MB**。V8 只 intern 字面量，不 intern
+ * `JSON.parse` 出来的运行时串，所以解码时过一遍表，让同内容的串共享一枚实例。
+ *
+ * 为什么同时 `detachString`：解码出来的串是**那份 44.7M 字符 payload 的切片**（V8 的
+ * `JSON.parse` 对长串造 `SlicedString`），不摊平就等于把整份 payload 钉在堆里——与
+ * PITFALLS 255 同一个坑，只是这条在"从盘上读回来"的路上。
+ *
+ * 表的寿命：只活到解码结束（随后即可回收），**不进稳态**——它只是这一趟的脚手架。
+ */
+interface NameInterner {
+  intern(value: string): string;
+}
+function createNameInterner(): NameInterner {
+  const table = new Map<string, string>();
+  return {
+    intern(value: string): string {
+      const hit = table.get(value);
+      if (hit !== undefined) return hit;
+      const fresh = detachString(value);
+      table.set(fresh, fresh);
+      return fresh;
+    },
+  };
+}
+
 export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const out: Record<string, SnapshotEntry> = {};
+  const interner = createNameInterner();
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
     const tuple = validateEntryTuple(value, CURRENT_ARITY);
     if (tuple === null) return null;
-    out[path] = entryFromTuple(path, tuple);
+    out[path] = entryFromTuple(path, tuple, interner);
   }
   return out;
 }
@@ -769,6 +824,86 @@ export function countEntries(entries: Readonly<Record<string, SnapshotEntry>>): 
   let n = 0;
   for (const _k in entries) n++;
   return n;
+}
+
+/**
+ * 跨轮保留的快照条目的**结构普查**（MEM 批的量测面，纯读：不物化懒外壳、不读盘）。
+ *
+ * 为什么需要它：热载稳态里这份条目是最大的一块常驻，但它藏在插件的闭包里，
+ * 外面只能拿"索引总量 − `byName`"倒推（上一轮就是这么推的，结论是"约 112 MB"，
+ * 但说不清是元组、refs 还是候选集占的）。有了这组数，压哪一格就不用猜。
+ *
+ * `lazyShells` / `materialized` 分开报：只有还带 RAW 元组的条目才走快路径，
+ * 被消费方动过（`functions` 已被读）的条目会退回对象形态、成本另算——
+ * 把两者混成一个数会把"懒还原被破坏"这件事藏起来。
+ */
+export interface SnapshotStats {
+  entries: number;
+  /** 还带盘上元组（未被物化）的条目数 */
+  lazyShells: number;
+  /** 已被物化的条目数（`functions` 已建对象，成本不在本表里） */
+  materialized: number;
+  /** 正文总码元数（条目的 `textLength` 合计，与 `size` 单位不同） */
+  textLength: number;
+  functions: number;
+  dims: number;
+  /** 反向引用流水条目合计（RefTuple 数） */
+  refs: number;
+  labels: number;
+  /** 函数名字符数合计 */
+  nameChars: number;
+  /** 注释块字符数合计 */
+  docChars: number;
+  /** 候选记号集字符数合计（`'\n'` 连接的串） */
+  candidateChars: number;
+  /** 带候选集的条目数（`null` = 未知，v10 迁移条目） */
+  candidatesKnown: number;
+  /** 带 refs 的条目数 */
+  withRefs: number;
+}
+
+export function snapshotStats(entries: Readonly<Record<string, SnapshotEntry>>): SnapshotStats {
+  const s: SnapshotStats = {
+    entries: 0,
+    lazyShells: 0,
+    materialized: 0,
+    textLength: 0,
+    functions: 0,
+    dims: 0,
+    refs: 0,
+    labels: 0,
+    nameChars: 0,
+    docChars: 0,
+    candidateChars: 0,
+    candidatesKnown: 0,
+    withRefs: 0,
+  };
+  for (const path in entries) {
+    const e = entries[path]!;
+    s.entries++;
+    s.textLength += e.textLength;
+    if (e.refs !== undefined) s.withRefs++;
+    const cand = e.candidates;
+    if (cand !== null && cand !== undefined) {
+      s.candidatesKnown++;
+      s.candidateChars += cand.length;
+    }
+    const raw = (e.file as RawCarrier)[RAW];
+    if (raw === undefined) {
+      s.materialized++;
+      continue;
+    }
+    s.lazyShells++;
+    for (const fn of raw[5]) {
+      s.functions++;
+      s.nameChars += fn[0].length;
+      if (typeof fn[5] === 'string') s.docChars += fn[5].length;
+    }
+    s.dims += raw[6].length;
+    s.refs += raw[7].length;
+    s.labels += raw[8].length;
+  }
+  return s;
 }
 
 /** 校验未知数据是否为**本项目**的当前版本快照；任一不符返回 null（整体弃用） */

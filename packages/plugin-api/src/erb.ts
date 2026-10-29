@@ -371,6 +371,34 @@ export interface ErbParserService {
    */
   indexState?(): ErbIndexState;
   /**
+   * 跨轮保留的**解码后快照**（MEM 批的量测面，**additive 可选**，2026-10-29）。
+   *
+   * 只服务内存归因：这份对象是热载路径上最大的一块常驻（插件靠它做增量合并），
+   * 但它在实现里是构建函数的局部量，外面只能靠"索引总量 − byName"倒推。
+   * 纯读、不触发懒还原、不读盘；`null` = 当前没有保留（未开项目 / 已关）。
+   * 消费方**不应**拿它做业务判断——它不是索引，形状随实现版本变。
+   */
+  snapshotForDebug?(): { readonly entries: Readonly<Record<string, unknown>> } | null;
+  /**
+   * 上面那份快照的**结构普查**（同批，additive 可选）：条目数、函数数、名字/注释字符数、
+   * 引用条数、候选集字符数。纯读，用来回答"这 100+ MB 到底挂在元组还是候选集上"。
+   */
+  snapshotStatsForDebug?(): {
+    entries: number;
+    lazyShells: number;
+    materialized: number;
+    textLength: number;
+    functions: number;
+    dims: number;
+    refs: number;
+    labels: number;
+    nameChars: number;
+    docChars: number;
+    candidateChars: number;
+    candidatesKnown: number;
+    withRefs: number;
+  } | null;
+  /**
    * 结构体检（2026-10-13 UI 反馈 7，**additive 可选**）：配对失败的三类可证明错误。
    *
    * 与 `scanControlFlow` 的分工：那张表是骨架（算深度、抽条件），这一份是"配不上对"的证据。

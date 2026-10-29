@@ -746,11 +746,21 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     它把整库正文的隐式留存（约 −145 MB）与文本缓存的常驻（约 −218 MB）从堆上摘掉，
     //     代码本身必须留在图里；文件数一分未涨，说明没有偷偷多拽模块进来。
     //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
+    //   - **内存批 MEM-4（2026-10-29，本批）**：读数 **199 文件 / 3,149 KB**——同样**零新进图
+    //     模块**（199 未动）；净 **+8,355 B** 全落在图内既有三个文件，逐枚实测：
+    //     `erb-parser/src/snapshot.ts` +5,267（解码期的同内容字符串去重表 + 结构普查
+    //     `snapshotStats`）、`erb-parser/src/plugin.ts` +1,866（`retainedSnapshot` 镜像与
+    //     两个量测出口）、`plugin-api/src/erb.ts` +1,222（两条 additive 可选调试方法）。
+    //     ⇒ 闸 **3,145 → 3,150**（余量 1 KB）。抬这一档的理由与上一批同构：加的是**能力**，
+    //     而且直接换到堆上——去重表把 772,329 个重复字符串实例（31.3 MB）压到 16.3 MB，
+    //     热载稳态 **297.3 → 271.8 MB**。量测出口本身也是能力：没有它，这一批的靶子是
+    //     "索引总量 − byName" 推出来的（推错了 145 MB），详见 PITFALLS 259。
+    //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,145 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_145);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,150 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_150);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
