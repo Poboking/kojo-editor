@@ -16,7 +16,7 @@ const BACKEND: KojoEmitBackend = {
 };
 
 function buildSource(count: number): string {
-  const out: string[] = ['# 机 开场', '# 视 灵梦', ''];
+  const out: string[] = ['# 机 开场', '# 视角 灵梦', ''];
   for (let i = 0; i < count; i++) {
     if (i % 7 === 0) out.push('空行');
     else if (i % 5 === 0) out.push(`灵梦：「第${i}行。」`);

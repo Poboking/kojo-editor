@@ -29,7 +29,7 @@ export interface LowerState {
   readonly reportedFeatures: Set<string>;
   readonly buffer: EmitBuffer;
   readonly sink: DiagnosticSink;
-  /** 当前 `# 视` 目标（池内裸引号的默认说话人）；缺省 null */
+  /** 当前 `# 视角` 目标（池内裸引号的默认说话人）；缺省 null */
   readonly view: string | null;
   region: LowerRegion;
   /** 当前生效的 `@着色` 颜色（null = 不在颜色块内；`@着色` 不许嵌套所以只有一层） */

@@ -27,7 +27,7 @@ import type {
  * | `%CALLNAME:ASSI%` | 2,005 | 助手角色——独立的第四角色轴，**不映射** `{她}` |
  *
  * `{她}` 取 `TARGET`（同一角色轴的第三人称），与 `{我}` 同落点、不同
- * `viewBound`：口上文件属于该角色时 `{我}` 与 `# 视` 目标重合；`{她}` 是
+ * `viewBound`：口上文件属于该角色时 `{我}` 与 `# 视角` 目标重合；`{她}` 是
  * 从玩家视角指称同一角色，换视点仍成立。
  */
 const PRONOUNS: readonly PronounSymbol[] = Object.freeze([

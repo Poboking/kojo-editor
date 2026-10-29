@@ -75,7 +75,7 @@ describe('`# 方言` 走 Monarch 既有声明档（不新造 token 名）', () =
     expectBackToRoot('# 方言 erafl');
   });
 
-  it('被断言的名字不抢声明色（它与 `# 视` 一样只是个裸名字）', () => {
+  it('被断言的名字不抢声明色（它与 `# 视角` 一样只是个裸名字）', () => {
     expect(ofToken('# 方言 erafl', KOJO2_TOKEN.declaration)).not.toContain('erafl');
     expectBackToRoot('# 方言 erafl');
   });
@@ -101,13 +101,13 @@ describe('声明词位序契约：`方言` 只能钉在尾部', () => {
   });
 
   it('九枚逐字对位，`方言` 在最后一格', () => {
-    expect(KOJO_DECL_WORDS).toEqual(['幕', '视', '机', '变量', '常量', '对照表', '池', '模', '方言']);
+    expect(KOJO_DECL_WORDS).toEqual(['幕', '视角', '机', '设', '设', '对照表', '池', '模', '方言']);
     expect(KOJO_DECL_WORDS.indexOf('方言')).toBe(KOJO_DECL_WORDS.length - 1);
   });
 
   it('`kojo2-format.ts` 依赖的下标一个字都没动（slice(0,5) 与 5/6/7 三枚）', () => {
     // 单行声明组：slice(0, 5)
-    expect(KOJO2_DECL_WORDS.slice(0, 5)).toEqual(['幕', '视', '机', '变量', '常量']);
+    expect(KOJO2_DECL_WORDS.slice(0, 5)).toEqual(['幕', '视角', '机', '设', '设']);
     // 位置解构 `[, , , , , TABLE_WORD, POOL_WORD, TEMPLATE_WORD]`
     expect([KOJO2_DECL_WORDS[5], KOJO2_DECL_WORDS[6], KOJO2_DECL_WORDS[7]]).toEqual([
       '对照表',
@@ -116,8 +116,8 @@ describe('声明词位序契约：`方言` 只能钉在尾部', () => {
     ]);
     // 其它按下标取词的模块（codelens / references / inlay / expand-view / symbols）
     expect(KOJO2_DECL_WORDS[2]).toBe('机');
-    expect(KOJO2_DECL_WORDS[3]).toBe('变量');
-    expect(KOJO2_DECL_WORDS[4]).toBe('常量');
+    expect(KOJO2_DECL_WORDS[3]).toBe('设');
+    expect(KOJO2_DECL_WORDS[4]).toBe('设');
   });
 });
 
@@ -126,9 +126,9 @@ describe('声明词位序契约：`方言` 只能钉在尾部', () => {
 describe('带 `# 方言` 的文件过格式化：并进单行声明组、诊断不涨', () => {
   /** 三条夹具都已是规范形状（§3.2：单行声明连写、整组与正文之间空一行）⇒ 必须逐字节不动。 */
   const SAMPLES: readonly string[] = [
-    '# 幕 神社清晨\n# 方言 erafl\n# 视 灵梦\n# 机 指令 310\n\n> 正文\n',
+    '# 幕 神社清晨\n# 方言 erafl\n# 视角 灵梦\n# 机 指令 310\n\n> 正文\n',
     '# 方言 erafl\n# 机 指令 310\n\n> 正文\n',
-    '# 机 指令 310\n# 方言 erafl\n# 变量 心情 整数\n\n> 正文\n',
+    '# 机 指令 310\n# 方言 erafl\n# 设 心情 整数\n\n> 正文\n',
   ];
 
   for (const source of SAMPLES) {
@@ -148,8 +148,8 @@ describe('带 `# 方言` 的文件过格式化：并进单行声明组、诊断�
   });
 
   it('对照同构夹具：加一行 `# 方言` 不改变其它声明组的呼吸', () => {
-    const without = '# 幕 神社清晨\n# 视 灵梦\n# 机 指令 310\n\n> 正文\n';
-    const withDialect = '# 幕 神社清晨\n# 视 灵梦\n# 方言 erafl\n# 机 指令 310\n\n> 正文\n';
+    const without = '# 幕 神社清晨\n# 视角 灵梦\n# 机 指令 310\n\n> 正文\n';
+    const withDialect = '# 幕 神社清晨\n# 视角 灵梦\n# 方言 erafl\n# 机 指令 310\n\n> 正文\n';
     expect(formatKojo2Source(without).code).toBe(without);
     expect(formatKojo2Source(withDialect).code).toBe(withDialect);
   });

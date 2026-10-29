@@ -137,6 +137,10 @@ module.exports = grammar({
           seq(field('open', $.table_head), field('body', $.table_body)),
           seq(field('open', $.pool_head), field('body', $.block_body)),
           seq(field('open', $.template_head), field('body', $.block_body)),
+          // `@原生{ … }`（§8.5 新典）：块头以 `{` 收尾，块体后同缩进单独一行 `}` 收口；
+          // 缺收口 ⇒ MISSING:native_close 可定位（错误不静默）。
+          seq(field('open', $.native_head_braced), field('body', $.native_body), $.native_close),
+          // 裸 `@原生` 缩进围栏（旧写法，容忍）：去缩进收口，与 core 的围栏口径一致。
           seq(field('open', $.native_head), field('body', $.native_body)),
           // 可选体：可执行块 / 条件分支 / 触发（空体落回单行节点，不产 ERROR）
           seq(field('open', $._optional_block_head), field('body', $.block_body)),
@@ -187,8 +191,7 @@ module.exports = grammar({
         $.scene_decl,
         $.view_decl,
         $.event_decl,
-        $.variable_decl,
-        $.constant_decl,
+        $.set_decl,
         $.dialect_decl,
         // ---- `@` 调度（单行指令）----
         $.face_command,
@@ -224,12 +227,12 @@ module.exports = grammar({
     // ============================================================
 
     scene_decl: () => decl('幕'),
-    view_decl: () => decl('视'),
+    view_decl: () => decl('视角'),
     event_decl: () => decl('机'),
-    variable_decl: () => decl('变量'),
-    constant_decl: () => decl('常量'),
+    /** `# 设 <名> <类型> [= 初值] [存储期]`：统一声明（§3.4；合并原 变量/常量 两词位）。 */
+    set_decl: () => decl('设'),
     /**
-     * `# 方言 <名字>`（LAU §5.3 / spec §3.3）：本方案**唯一新增的词位**，形态与 `# 视`
+     * `# 方言 <名字>`（LAU §5.3 / spec §3.3）：本方案**唯一新增的词位**，形态与 `# 视角`
      * 同构（一个裸名字）。它只是"这份文件自证属于哪个方言"的**断言**，不赋值、不产生
      * 第二真源；名字对文法与 core 都是不透明字符串 ⇒ 词表里**不许**出现任何方言取值，
      * 也不许为某个方言单开规则（D10：方言差异一律不进语法）。
@@ -265,8 +268,12 @@ module.exports = grammar({
     function_head: () => at('函', 'required'),
     /** `@织 <事件> [之前|之后|接管]`：监听声明（§8.6）。 */
     weave_head: () => at('织', 'required'),
-    /** `@原生`：缩进围栏逃生舱，体见 native_body（§8.5）。 */
+    /** `@原生{`：花括号收口逃生舱的块头（§8.5 新典）；收口见 native_close。 */
+    native_head_braced: () => tk(String.raw`@原生\{[${W}]*`),
+    /** 裸 `@原生`：缩进围栏旧写法（容忍），体见 native_body（§8.5）。 */
     native_head: () => at('原生', 'none'),
+    /** `@原生{ … }` 的收口行：与块头同缩进的单独一行 `}`（§8.5）。 */
+    native_close: () => tk(String.raw`\}[${W}]*`),
 
     /** `@颜绘 参数…`：单行演出指令，不是块头（§8.3）。 */
     face_command: () => at('颜绘', 'optional'),

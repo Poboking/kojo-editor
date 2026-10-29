@@ -75,7 +75,7 @@ describe('2.0 服务 · canonical golden（fixture backend）', () => {
 
   it('只有声明、没有正文 ⇒ 合法空产物（ok=true、erb=""、sourceMap 空）', () => {
     const result = service().transpile({
-      source: '# 常量 上限 整数 = 10\n# 变量 心情 字符串 场景\n',
+      source: '# 设 上限 整数 = 10\n# 设 心情 字符串 场景\n',
       filePath: 'decls-only.kojo2',
     });
     expect(result.ok).toBe(true);

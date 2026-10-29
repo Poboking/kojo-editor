@@ -138,11 +138,11 @@ describe('值类型格 · assignable', () => {
 
 describe('声明层 · 初值 / 常量 / 表值列 / 池分支', () => {
   it('初值类型与声明一致时不报 bad-initializer', () => {
-    expectNoCode('# 变量 温度 整数 = 0\n', 'core/decl/bad-initializer');
+    expectNoCode('# 设 温度 整数 = 0\n', 'core/decl/bad-initializer');
   });
 
   it('初值类型与声明不符（防御性复核：parser 已挡在 AST 外，这里补一条坏声明）', () => {
-    const base = parseSource('# 变量 温度 整数 = 0\n');
+    const base = parseSource('# 设 温度 整数 = 0\n');
     const span = base.decls[0]!.span;
     const broken: KojoVarDecl = {
       kind: 'var',
@@ -158,7 +158,7 @@ describe('声明层 · 初值 / 常量 / 表值列 / 池分支', () => {
   });
 
   it('常量初值非字面量（防御性复核：parser 已挡在 AST 外）', () => {
-    const base = parseSource('# 常量 上限 整数 = 10\n');
+    const base = parseSource('# 设 上限 整数 = 10\n');
     const span = base.decls[0]!.span;
     // 模拟"绕过 parser 的 AST 生产方"把表达式节点塞进字面量槽（正常输入里不可能出现）
     const broken = {
@@ -174,7 +174,7 @@ describe('声明层 · 初值 / 常量 / 表值列 / 池分支', () => {
   });
 
   it('常量字面量合法：无声明层诊断', () => {
-    expect(codes('# 常量 上限 整数 = 10\n')).toEqual([]);
+    expect(codes('# 设 上限 整数 = 10\n')).toEqual([]);
   });
 
   it('表值列混类型 → core/table/type-mismatch（只上浮这一条）', () => {
@@ -245,7 +245,7 @@ describe('赋值 · 已声明性 / 类型 / 只读目标', () => {
 
   it('给常量赋值 → core/expr/assign-to-constant', () => {
     const text = `
-# 常量 上限 整数 = 10
+# 设 上限 整数 = 10
 @算
     上限 = 3
 `;
@@ -265,7 +265,7 @@ describe('赋值 · 已声明性 / 类型 / 只读目标', () => {
 
   it('整数变量赋字符串字面量 → core/expr/type-mismatch', () => {
     const text = `
-# 变量 人数 整数
+# 设 人数 整数
 @算
     人数 = "三"
 `;
@@ -274,8 +274,8 @@ describe('赋值 · 已声明性 / 类型 / 只读目标', () => {
 
   it('整数变量赋整数常量：无类型诊断', () => {
     const text = `
-# 变量 人数 整数
-# 常量 上限 整数 = 10
+# 设 人数 整数
+# 设 上限 整数 = 10
 @算
     人数 = 上限
 `;
@@ -286,7 +286,7 @@ describe('赋值 · 已声明性 / 类型 / 只读目标', () => {
 
   it('字符串变量用 += → core/expr/type-mismatch（增量只用于整数）', () => {
     const text = `
-# 变量 称呼 字符串
+# 设 称呼 字符串
 @算
     称呼 += "先生"
 `;
@@ -338,7 +338,7 @@ describe('数组 · 下标与能力', () => {
 
   it('字面量下标在范围内：不报越界', () => {
     const text = `
-# 变量 队列 整数[3]
+# 设 队列 整数[3]
 @算
     队列[2] = 7
 `;
@@ -347,7 +347,7 @@ describe('数组 · 下标与能力', () => {
 
   it('字面量下标越界 → core/expr/index-out-of-range', () => {
     const text = `
-# 变量 队列 整数[3]
+# 设 队列 整数[3]
 @算
     队列[3] = 7
 `;
@@ -356,7 +356,7 @@ describe('数组 · 下标与能力', () => {
 
   it('负下标 → core/expr/index-out-of-range（0 基）', () => {
     const text = `
-# 变量 队列 整数[3]
+# 设 队列 整数[3]
 @算
     队列[-1] = 7
 `;
@@ -365,8 +365,8 @@ describe('数组 · 下标与能力', () => {
 
   it('整数常量下标越界 → core/expr/index-out-of-range', () => {
     const text = `
-# 常量 末位 整数 = 3
-# 变量 队列 整数[3]
+# 设 末位 整数 = 3
+# 设 队列 整数[3]
 @算
     队列[末位] = 1
 `;
@@ -375,7 +375,7 @@ describe('数组 · 下标与能力', () => {
 
   it('字符串下标 → core/expr/bad-index', () => {
     const text = `
-# 变量 队列 整数[3]
+# 设 队列 整数[3]
 @算
     队列["首"] = 1
 `;
@@ -384,7 +384,7 @@ describe('数组 · 下标与能力', () => {
 
   it('给标量加下标 → core/expr/bad-index', () => {
     const text = `
-# 变量 人数 整数
+# 设 人数 整数
 @算
     人数[0] = 1
 `;
@@ -393,7 +393,7 @@ describe('数组 · 下标与能力', () => {
 
   it('给 .长度 赋值 → core/expr/readonly-target', () => {
     const text = `
-# 变量 队列 整数[3]
+# 设 队列 整数[3]
 @算
     队列.长度 = 9
 `;
@@ -402,8 +402,8 @@ describe('数组 · 下标与能力', () => {
 
   it('读取位置的字面量下标越界同样报（表达式扫描）', () => {
     const text = `
-# 变量 队列 整数[3]
-# 变量 人数 整数
+# 设 队列 整数[3]
+# 设 人数 整数
 @算
     人数 = 队列[5]
 `;
@@ -412,7 +412,7 @@ describe('数组 · 下标与能力', () => {
 
   it('插值里的字面量下标越界同样报', () => {
     const text = `
-# 变量 队列 整数[3]
+# 设 队列 整数[3]
 > 第{队列[9]}位
 `;
     expectCode(text, 'core/expr/index-out-of-range', ARRAYS);
@@ -420,8 +420,8 @@ describe('数组 · 下标与能力', () => {
 
   it('字符串字面量里的“队列[5]”不当下标（扫描跳过引号内部）', () => {
     const text = `
-# 变量 队列 整数[3]
-# 变量 文本 字符串
+# 设 队列 整数[3]
+# 设 文本 字符串
 @算
     文本 = "队列[5]"
 `;
@@ -429,14 +429,14 @@ describe('数组 · 下标与能力', () => {
   });
 
   it('数组声明在 adapter 未开启 arrays 时 → core/array/unsupported', () => {
-    const text = '# 变量 队列 整数[3]\n';
+    const text = '# 设 队列 整数[3]\n';
     expectCode(text, 'core/array/unsupported');
   });
 
   it('@巡 绑定名进入作用域（{下标} / {值} 可赋值且类型已知）', () => {
     const text = `
-# 变量 队伍 整数[3]
-# 变量 人数 整数
+# 设 队伍 整数[3]
+# 设 人数 整数
 @巡 队伍
     @算
         下标 = 0
@@ -449,8 +449,8 @@ describe('数组 · 下标与能力', () => {
 
   it('整数常量长度为 0 → core/decl/bad-array-size', () => {
     const text = `
-# 常量 零 整数 = 0
-# 变量 队列 整数[零]
+# 设 零 整数 = 0
+# 设 队列 整数[零]
 `;
     expectCode(text, 'core/decl/bad-array-size', CAPABLE_ADAPTER);
   });
@@ -585,11 +585,11 @@ describe('能力闸 · presentation / programFeatures / storageClasses（只读�
   });
 
   it('存档变量在 storageClasses 未声明时 → core/decl/unknown-storage', () => {
-    expectCode('# 变量 标记 整数 存档\n', 'core/decl/unknown-storage');
+    expectCode('# 设 标记 整数 存档\n', 'core/decl/unknown-storage');
   });
 
   it('会话变量在 storageClasses 未声明时 → core/decl/unknown-storage', () => {
-    expectCode('# 变量 标记 整数 会话\n', 'core/decl/unknown-storage');
+    expectCode('# 设 标记 整数 会话\n', 'core/decl/unknown-storage');
   });
 
   it('@着色 在 presentation.color 为 null 时 → core/color/unsupported', () => {
@@ -615,7 +615,7 @@ describe('能力闸 · presentation / programFeatures / storageClasses（只读�
 
   it('能力全开的 adapter：同一批构造不再报能力码', () => {
     const text = `
-# 变量 队列 整数[2] 存档
+# 设 队列 整数[2] 存档
 @算
     队列[0] = 1
 @循 队列[0] < 2
@@ -650,8 +650,8 @@ describe('能力闸 · presentation / programFeatures / storageClasses（只读�
 
 describe('确定性 · 诊断排序 · 符号事实', () => {
   const MESSY = `
-# 变量 人数 整数 存档
-# 变量 队列 整数[2]
+# 设 人数 整数 存档
+# 设 队列 整数[2]
 @算
     人数 = "三"
     队列[5] = 1
@@ -679,8 +679,8 @@ describe('确定性 · 诊断排序 · 符号事实', () => {
 
   it('符号事实：声明类型 / 数组长度 / 表值类型', () => {
     const text = `
-# 变量 队列 整数[3]
-# 常量 上限 整数 = 10
+# 设 队列 整数[3]
+# 设 上限 整数 = 10
 # 对照表 心情 依据 恋慕
     0..9 -> 疏远
     否 -> 未知
@@ -711,7 +711,7 @@ describe('确定性 · 诊断排序 · 符号事实', () => {
   });
 
   it('本层不并表 parser 诊断（初值类型错由 parser 报，不双报）', () => {
-    const text = '# 变量 温度 整数 = "热"\n';
+    const text = '# 设 温度 整数 = "热"\n';
     // parser 已报 bad-initializer 且不把坏初值放进 AST；本层不应再报一条
     expectNoCode(text, 'core/decl/bad-initializer');
   });

@@ -48,8 +48,8 @@ const V1 = `${ROOT}/M_KOJO_K1.ERB`;
 
 /** A（未打开 = 只经扫描喂）：声明 `心情`，也声明 `好感度` */
 const MAIN = [
-  '# 变量 心情 整数 = 0',
-  '# 变量 好感度 整数 = 0',
+  '# 设 心情 整数 = 0 场景',
+  '# 设 好感度 整数 = 0',
   '# 幕 神社 清晨',
   '# 机 指令 310',
   '@织 指令 之后',
@@ -58,7 +58,7 @@ const MAIN = [
 
 /** B（请求文件）：不声明 `心情`，只引用；也声明 `好感度`（跨文件改名的候选面） */
 const LIB = [
-  '# 变量 好感度 整数 = 0',
+  '# 设 好感度 整数 = 0',
   '# 幕 书院 午后',
   '# 机 指令 310',
   '@织 指令 之后',
@@ -365,7 +365,7 @@ describe('⑥ 大项目分拍喂养不丢', () => {
   it(`${KOJO2_INDEX_FEED_CHUNK}+ 份文件最终全部进索引`, async () => {
     const many = new Map<string, string>();
     for (let i = 0; i < KOJO2_INDEX_FEED_CHUNK * 3; i++) {
-      many.set(`${ROOT}/f${String(i).padStart(2, '0')}.kojo2`, `# 变量 数值${i} 整数 = 0\n> {数值${i}}`);
+      many.set(`${ROOT}/f${String(i).padStart(2, '0')}.kojo2`, `# 设 数值${i} 整数 = 0\n> {数值${i}}`);
     }
     const h = await scanProject(many);
     expect(h.index.files()).toHaveLength(many.size);

@@ -96,11 +96,11 @@ const URI = 'D:/proj/chara/me.kojo2';
 const FINGERPRINT = KOJO2_STORAGE_DEFAULT_FINGERPRINT;
 const AT = '2026-10-22T00:00:00.000Z';
 
-const VAR_FAVOR = '# 变量 好感 整数 = 0 存档';
-const VAR_MOOD = '# 变量 心情 整数 = 0 存档';
-const VAR_TRUST = '# 变量 信赖 整数 = 0 存档';
-const VAR_NAME = '# 变量 称呼 字符串 存档';
-const VAR_ITEMS = '# 变量 物品 整数[3] 存档';
+const VAR_FAVOR = '# 设 好感 整数 = 0 存档';
+const VAR_MOOD = '# 设 心情 整数 = 0 存档';
+const VAR_TRUST = '# 设 信赖 整数 = 0 存档';
+const VAR_NAME = '# 设 称呼 字符串 存档';
+const VAR_ITEMS = '# 设 物品 整数[3] 存档';
 
 type SlotSnapshot = NonNullable<Kojo2StorageRegistry['storagePlan']['nextSnapshot']>;
 
@@ -330,7 +330,7 @@ describe('kojo2 槽位账本 · 幂等与键策略', () => {
     committedOf(commitOf(persister, before));
     const favorKeyBefore = storageKeyOf(before, '好感');
 
-    const renamed = registryOf(sourceOf('# 变量 爱情 整数 = 0 存档', VAR_MOOD), {
+    const renamed = registryOf(sourceOf('# 设 爱情 整数 = 0 存档', VAR_MOOD), {
       previous: snapshotOf(before),
     });
     const after = committedOf(commitOf(persister, renamed));
@@ -439,7 +439,7 @@ describe('kojo2 槽位账本 · 幂等与键策略', () => {
     port.resetOps();
 
     // 不传 previousSnapshot：新声明「一」排在最前，原「好感」被挤到槽 1
-    const shuffled = registryOf(sourceOf('# 变量 一 整数 = 0 存档', VAR_FAVOR, VAR_MOOD), {
+    const shuffled = registryOf(sourceOf('# 设 一 整数 = 0 存档', VAR_FAVOR, VAR_MOOD), {
       declarationKey: policy,
     });
     expect(slotOf(shuffled, '好感')).toBe(1);

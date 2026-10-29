@@ -60,7 +60,7 @@ export interface GameAdapter {
    * `@巡` 的集合声明（additive；K2-FOREACH）：命名集合 + 作者数组规则。
    *
    * `null` = 本 adapter 不支持 `@巡`（老 adapter 传 null 即可，零改动）；
-   * 声明事实全在 adapter，**数组事实**（作者 `# 变量 名 类型[N]`）由 core 从源码收集后
+   * 声明事实全在 adapter，**数组事实**（作者 `# 设 名 类型[N]`）由 core 从源码收集后
    * 经 `ForeachPlanOptions.arrays` 注入——adapter 不预列作者变量。
    */
   readonly foreachCollections: ForeachDeclarations | null;
@@ -165,7 +165,7 @@ export interface EventCatalog {
 
 /* ============================== 4. 域符号 ============================== */
 
-/** 代词角色（`# 视` 表写死的三列；符号落点由 adapter 决定） */
+/** 代词角色（`# 视角` 表写死的三列；符号落点由 adapter 决定） */
 export type PersonRole = 'me' | 'you' | 'her';
 
 export interface PronounSymbol {
@@ -174,9 +174,9 @@ export interface PronounSymbol {
   readonly pronoun: string;
   /** 引擎落点原文（如 `%CALLNAME:…%` 一类引用模板；含游戏事实） */
   readonly engineRef: string;
-  /** 是否要求当前文件有 `# 视`（没有则报未知/未声明） */
+  /** 是否要求当前文件有 `# 视角`（没有则报未知/未声明） */
   readonly requiresView: boolean;
-  /** 是否绑定 `# 视` 的目标（`# 视 目标` 时与本角色重合） */
+  /** 是否绑定 `# 视角` 的目标（`# 视角 目标` 时与本角色重合） */
   readonly viewBound: boolean;
   /** 引擎变量族（用于字符串族/数值族的打印与求值口径） */
   readonly family: string;
@@ -197,7 +197,7 @@ export interface AttributeSymbol {
  * 的全局标量（引擎 / 游戏自己的变量），作者可以直接读它、也可能可以写它。
  *
  * 为什么需要这一面：2.0 禁止对未声明名字赋值（§3.4.5），而这类变量**永远不会**出现在作者的
- * `# 变量` 里 ⇒ 没有这一面时 `名字 = 值` 只能被判成 `core/expr/unknown-symbol`（假阳）。
+ * `# 设` 里 ⇒ 没有这一面时 `名字 = 值` 只能被判成 `core/expr/unknown-symbol`（假阳）。
  *
  * 口径（写死，别扩）：
  * - `name` 是**作者在源端写的名字**（不是引擎落点；落点由各 adapter 的表达式管线负责）；
@@ -208,7 +208,7 @@ export interface AttributeSymbol {
  *
  * ## 数组面（additive；K2-SEMA-WIRING）
  *
- * 外部变量也可以是**一维数组**（引擎全局槽，作者不写 `# 变量`）。判据写死：
+ * 外部变量也可以是**一维数组**（引擎全局槽，作者不写 `# 设`）。判据写死：
  * - `arraySize` **省略** = 标量：`名[下标]` / `名.长度` 不认它（与引入数组面之前逐字节一致，
  *   仍按"不是数组"报 `core/expr/bad-index`）——旧 adapter 零改动；
  * - `arraySize: null` = 是数组，但长度不可静态求值：认 `名[下标]` / `名.长度`，**不做**越界判定；
@@ -403,7 +403,7 @@ export interface AdapterPresentation {
 
 /* ============================== 7. 存储期 ============================== */
 
-/** 存储期（与 AST 的 `# 变量` 存储期同源，不另抄一份） */
+/** 存储期（与 AST 的 `# 设` 存储期同源，不另抄一份） */
 export type StoragePeriod = KojoVarStorage;
 
 /** 初始化时机：进入事件/监听、开新游戏、进程启动 */

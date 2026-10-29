@@ -30,15 +30,17 @@ export const KOJO_BLANK_WAIT = '等待';
 /**
  * `#` 声明词（§3.3）。
  *
- * ⚠ **位序是公开契约，只能追加在尾部**：下游按位置取词（`kojo2-format.ts` 的
- * `slice(0, 5)` 与 `[, , , , , TABLE, POOL, TEMPLATE]`、`kojo-lang` 的 declarations /
- * symbols / inlay、`kojo2-highlight` / `codelens` / `references` / `indent`），插队会**静默**
- * 改判这些模块的行为。
+ * ⚠ **位序是公开契约**：下游按位置取词（`kojo2-format.ts` 的 `slice(0, 5)` 与
+ * `[, , , , , TABLE, POOL, TEMPLATE]`、`kojo-lang` 的 declarations / symbols / inlay、
+ * `kojo2-highlight` / `codelens` / `references` / `indent`）。
+ *
+ * 3 号位＝原 `变量` 位、4 号位＝原 `常量` 位：两写法合并为 `# 设`（§3.4）后，两位**同字
+ * `设`**（4 号位保留为占位，下游"常量位"取词继续成立；补全侧按 Set 去重）。
  *
  * 末位 `方言`（LAU §5.3）＝ 方言**断言**词位：它不指向任何游戏事实，参数对 core 是不透明
  * 字符串（core 不解释、不校验它属于哪个方言）；词表里**不许**出现任何方言名取值。
  */
-export const KOJO_DECL_WORDS = ['幕', '视', '机', '变量', '常量', '对照表', '池', '模', '方言'] as const;
+export const KOJO_DECL_WORDS = ['幕', '视角', '机', '设', '设', '对照表', '池', '模', '方言'] as const;
 export type KojoDeclWord = (typeof KOJO_DECL_WORDS)[number];
 /** 声明词集合（词表单源；parser 只查这一份） */
 export const KOJO_DECL_WORD_SET: ReadonlySet<string> = new Set<string>(KOJO_DECL_WORDS);
@@ -69,7 +71,7 @@ export const KOJO_DISPATCH_WORD_SET: ReadonlySet<string> = new Set<string>(KOJO_
 export const KOJO_WEAVE_MODIFIERS = ['之前', '之后', '接管'] as const;
 export type KojoWeaveModifierWord = (typeof KOJO_WEAVE_MODIFIERS)[number];
 
-/** `# 变量` / `# 常量` 类型词（§3.4.2） */
+/** `# 设` 类型词（§3.4.2） */
 export const KOJO_INT_TYPE = '整数';
 export const KOJO_STRING_TYPE = '字符串';
 export const KOJO_TYPE_WORDS = [KOJO_INT_TYPE, KOJO_STRING_TYPE] as const;
@@ -233,6 +235,8 @@ export interface KojoNativeRecord extends KojoLineBase {
   readonly raw: string;
   /** 是否为空白行（不参与基准缩进计算） */
   readonly blank: boolean;
+  /** `@原生{ … }` 的收口行：与块头同缩进的单独一行 `}`（词法围栏在此结束） */
+  readonly close?: boolean;
 }
 
 /** `#` 声明行的词法切分；是不是合法声明词由 parser 判 */

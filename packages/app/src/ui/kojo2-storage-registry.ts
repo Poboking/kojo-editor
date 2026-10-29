@@ -1,5 +1,5 @@
 /**
- * Kojo 2.0 宿主侧**存储注册表**（K2-STORAGE-HOST）：`# 对照表 / # 池 / # 变量 / # 常量` 的项目级索引。
+ * Kojo 2.0 宿主侧**存储注册表**（K2-STORAGE-HOST）：`# 对照表 / # 池 / # 设 / # 设` 的项目级索引。
  *
  * ## 这一层为什么必须存在
  *
@@ -30,7 +30,7 @@
  *
  * ## 与换盘 / 槽位账本的关系
  *
- * `# 变量` 的槽位由 core 的 `planStorageSlots` 分配；本模块把 `存储期 + 声明键 → 槽` 挂回 symbol。
+ * `# 设` 的槽位由 core 的 `planStorageSlots` 分配；本模块把 `存储期 + 声明键 → 槽` 挂回 symbol。
  * 声明键缺省是 `uri#行:列`（**无账本的近似**：改名不搬槽，搬行会搬槽）。真项目必须由宿主注入
  * `declarationKey`（编辑器账本的跨构建稳定键），并把 adapter 的槽位区段经 `storageClasses` 注入；
  * 缺省的宽松区段只配「没有 adapter 事实」的预览/测试。
@@ -67,10 +67,10 @@ import type {
 export type Kojo2StorageKind = 'var' | 'const' | 'table' | 'pool';
 
 /**
- * 可写性（`# 常量` 的只读语义在**索引层**就钉住，不等 S5 校验）：
+ * 可写性（`# 设` 的只读语义在**索引层**就钉住，不等 S5 校验）：
  *
- * - `mutable`：`# 变量`，可赋值；
- * - `immutable`：`# 常量`，编译期常量、任何赋值都是 `core/expr/assign-to-constant`；
+ * - `mutable`：`# 设`，可赋值；
+ * - `immutable`：`# 设`，编译期常量、任何赋值都是 `core/expr/assign-to-constant`；
  * - `read-only`：`# 对照表` / `# 池`，压根不是存储单元（引用点展开成隐藏槽），不可赋值。
  */
 export type Kojo2StorageMutability = 'mutable' | 'immutable' | 'read-only';
@@ -83,7 +83,7 @@ export interface Kojo2StorageRange {
   readonly endColumn: number;
 }
 
-/** `# 变量` 额外的存储事实（槽位来自 core 的 `planStorageSlots`） */
+/** `# 设` 额外的存储事实（槽位来自 core 的 `planStorageSlots`） */
 export interface Kojo2StorageVarFacts {
   readonly storage: KojoVarStorage;
   /** 数组长度**源文本**（`整数[上限]` → `上限`）；标量为 null */
@@ -366,7 +366,7 @@ interface ParsedDocument {
   readonly physical: readonly KojoPhysicalLine[];
   /** 每行内容长度（已去 `\r`；1 基索引用 `line - 1`） */
   readonly lineLengths: readonly number[];
-  /** 声明头行 → 名字段 token（`# 变量 好感 …` → `好感` 及其绝对偏移） */
+  /** 声明头行 → 名字段 token（`# 设 好感 …` → `好感` 及其绝对偏移） */
   readonly nameTokens: ReadonlyMap<number, NameToken>;
 }
 
@@ -409,7 +409,7 @@ function parseDocument(document: Kojo2StorageDocument): ParsedDocument {
 /**
  * 名字段的精确 span。**优先 lexer**（它才知道声明词之后那个词的绝对偏移）；
  * 退化路径只在「AST 有声明但词法行对不上」时走（错误恢复态），按物理行找名字，
- * 且从声明词之后开始找（`# 变量 量` 里的 `量` 不能被 `变量` 里的同名汉字骗到）。
+ * 且从声明词之后开始找（`# 设 量` 里的 `量` 不能被 `变量` 里的同名汉字骗到）。
  */
 function nameSpanOf(doc: ParsedDocument, line: number, name: string): KojoSpan {
   const token = doc.nameTokens.get(line);
@@ -436,7 +436,7 @@ function constantDeclsOf(file: KojoFile): readonly KojoConstDecl[] {
   return constants;
 }
 
-/** 数组长度端点：十进制整数直取，`# 常量` 端点按同文件常量表静态求值；其余 → null（不猜） */
+/** 数组长度端点：十进制整数直取，`# 设` 端点按同文件常量表静态求值；其余 → null（不猜） */
 function resolveArraySize(
   text: string | null,
   constants: ReadonlyMap<string, number>,

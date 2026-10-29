@@ -159,9 +159,9 @@ const PROJECT = 'D:/proj';
 const FINGERPRINT = 'kojo2-test-disc@1';
 const AT = '2026-10-22T00:00:00.000Z';
 
-const VAR_FAVOR = '# 变量 好感 整数 = 0 存档';
-const VAR_MOOD = '# 变量 心情 整数 = 0 存档';
-const VAR_TRUST = '# 变量 信赖 整数 = 0 存档';
+const VAR_FAVOR = '# 设 好感 整数 = 0 存档';
+const VAR_MOOD = '# 设 心情 整数 = 0 存档';
+const VAR_TRUST = '# 设 信赖 整数 = 0 存档';
 
 const NAME_KEY = (input: Kojo2StorageKeyInput): string => `${input.uri}#${input.name}`;
 

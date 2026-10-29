@@ -277,7 +277,7 @@ describe('colorMode：D 系可用性', () => {
 });
 
 describe('waitDefault：无「续」时的等待轴（core 读 backend.profile）', () => {
-  const SOURCE = ['# 视 灵梦', '# 机 指令 310', '> 她点了点头。', '灵梦：「今天也来训练了？」', ''].join('\n');
+  const SOURCE = ['# 视角 灵梦', '# 机 指令 310', '> 她点了点头。', '灵梦：「今天也来训练了？」', ''].join('\n');
   const compile = (backend: KojoEmitBackend): string =>
     createKojo2TranspileService({ adapter: ERATW_GAME_ADAPTER, backend }).transpile({
       source: SOURCE,
@@ -338,7 +338,7 @@ describe('poolStyle：落点事实面读数（声明口径，不改等值分派�
     // `# 池` 的等值分派是"等值可证时的语义等价优化"（core pool-plan 判据），
     // poolStyle 声明的是"不可证时的兜底形状"（core 自己的 IF 链）——两者不是互斥开关。
     const SOURCE = [
-      '# 视 灵梦',
+      '# 视角 灵梦',
       '# 机 初见',
       '# 池 等级问候',
       '    ? 好感 == 0',
@@ -500,7 +500,7 @@ describe('fail-closed：非法覆盖抛错，且不静默回缺省', () => {
 /* ============================== 6. 端到端 golden（`# 机` + 旁白） ============================== */
 
 const E2E_SOURCE = [
-  '# 视 灵梦',
+  '# 视角 灵梦',
   '# 机 指令 310',
   '> 她点了点头。',
   '> 她叹了口气。 续',

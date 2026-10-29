@@ -24,7 +24,7 @@ export interface CompileKojoFileOptions {
   readonly adapter: GameAdapter;
   /** 产物形状（PRINT 变体 / HPH / 着色 / 随机落点 / 织入 / `# 机` 包装）；由宿主或 adapter 注入 */
   readonly backend: KojoEmitBackend;
-  /** 当前 `# 视` 目标（池内裸引号默认说话人）；缺省从文件的 `# 视` 声明取 */
+  /** 当前 `# 视角` 目标（池内裸引号默认说话人）；缺省从文件的 `# 视角` 声明取 */
   readonly view?: string | null;
   /** 源文本（预分配行数估算） */
   readonly sourceText: string;

@@ -81,7 +81,7 @@ export interface ProjectFunctionFact {
 /** 文件命名空间里的声明种类（§3.4.5：变量/常量/表/池/模板/函数共用一套名字） */
 export type ProjectDeclarationKind = 'var' | 'const' | 'table' | 'pool' | 'template';
 
-/** 一条声明事实（`# 变量` / `# 常量` / `# 对照表` / `# 池` / `# 模`） */
+/** 一条声明事实（`# 设` / `# 设` / `# 对照表` / `# 池` / `# 模`） */
 export interface ProjectDeclarationFact {
   readonly name: string;
   readonly kind: ProjectDeclarationKind;

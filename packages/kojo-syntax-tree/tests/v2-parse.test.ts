@@ -126,8 +126,7 @@ describe('full.kojo2：2.0 语法面全部落成 CST 节点', () => {
       'scene_decl',
       'view_decl',
       'event_decl',
-      'variable_decl',
-      'constant_decl',
+      'set_decl',
       // `@` 调度
       'calc_head',
       'color_head',

@@ -62,8 +62,8 @@ const doc = (path: string, lines: readonly string[], layerId?: string): Kojo2Pro
 /** 跨文件同名 `@函` + 同名存档变量（两份文件逐行对齐，便于断言"第二条"的落点） */
 const DUP_A = doc(A, [
   '# 机 开场',
-  '# 视 我',
-  '# 变量 好感 整数 = 0 存档',
+  '# 视角 我',
+  '# 设 好感 整数 = 0 存档',
   '',
   '@函 共同()',
   '    @返 1',
@@ -73,8 +73,8 @@ const DUP_A = doc(A, [
 ]);
 const DUP_B = doc(B, [
   '# 机 开场',
-  '# 视 我',
-  '# 变量 好感 整数 = 0 存档',
+  '# 视角 我',
+  '# 设 好感 整数 = 0 存档',
   '',
   '@函 共同()',
   '    @返 2',
@@ -209,7 +209,7 @@ describe('跨文件重名 · LayerPolicy 分桶', () => {
 
   it('文件命名空间：同文件里变量与常量共用一套名字 ⇒ error', () => {
     const result = analyzeKojo2Project({
-      documents: [doc(A, ['# 变量 甲 整数 = 0', '# 常量 甲 整数 = 1'])],
+      documents: [doc(A, ['# 设 甲 整数 = 0', '# 设 甲 整数 = 1'])],
     });
     expect(codesOf(result)).toContain('core/decl/duplicate-name');
     expect(problemsAt(result, A)).toHaveLength(1);
@@ -331,8 +331,8 @@ describe('存储期 · 项目级同名与单元级隔离', () => {
   it('两文件同名「场景」变量不冲突（按单元分账，跨文件互不影响）', () => {
     const result = analyzeKojo2Project({
       documents: [
-        doc(A, ['# 变量 心情快照 字符串 场景']),
-        doc(B, ['# 变量 心情快照 字符串 场景']),
+        doc(A, ['# 设 心情快照 字符串 场景']),
+        doc(B, ['# 设 心情快照 字符串 场景']),
       ],
     });
     expect(codesOf(result).filter((code) => code.startsWith('core/storage/'))).toEqual([]);
@@ -340,7 +340,7 @@ describe('存储期 · 项目级同名与单元级隔离', () => {
 
   it('同文件两个同名存档变量 ⇒ 存储期同名 1 条（声明名字空间的那条另算）', () => {
     const result = analyzeKojo2Project({
-      documents: [doc(A, ['# 变量 好感 整数 = 0 存档', '# 变量 好感 整数 = 1 存档'])],
+      documents: [doc(A, ['# 设 好感 整数 = 0 存档', '# 设 好感 整数 = 1 存档'])],
     });
     expect(result.problems.filter((problem) => problem.code === 'core/storage/duplicate-name')).toHaveLength(1);
     expect(result.problems.filter((problem) => problem.code === 'core/decl/duplicate-name')).toHaveLength(1);
@@ -349,7 +349,7 @@ describe('存储期 · 项目级同名与单元级隔离', () => {
   it('注入旧账本后换盘 ⇒ fingerprint-mismatch 落在项目级虚拟落点（不冒充某个文件）', () => {
     const previous: SlotRegistrySnapshot = { version: 1, gameFingerprint: '旧盘指纹', classes: {} };
     const result = analyzeKojo2Project({
-      documents: [doc(A, ['# 变量 好感 整数 = 0 存档'])],
+      documents: [doc(A, ['# 设 好感 整数 = 0 存档'])],
       storage: { previousSnapshot: previous },
     });
     const failure = result.problems.find((problem) => problem.code === 'core/storage/fingerprint-mismatch');
@@ -627,8 +627,8 @@ describe('扫描器 · .kojo2 项目级结论并进既有上账通道', () => {
 
   it('分析炸了整轮不崩：v1 结果照旧上账，但"少了一路"要点名', async () => {
     const files: Record<string, string> = {
-      [A]: ['# 机 开场', '# 变量 好感 整数 = 0 存档', '> BAD'].join('\n'),
-      [B]: ['# 机 开场', '# 变量 好感 整数 = 0 存档', '> BAD'].join('\n'),
+      [A]: ['# 机 开场', '# 设 好感 整数 = 0 存档', '> BAD'].join('\n'),
+      [B]: ['# 机 开场', '# 设 好感 整数 = 0 存档', '> BAD'].join('\n'),
     };
     const h = harness({
       files,

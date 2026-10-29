@@ -49,7 +49,7 @@ class MemoryIo implements ConformanceIoPort {
 /* ============================== 固定夹具 ============================== */
 
 const BASIC_SOURCE =
-  '# 机 开场\n# 视 灵梦\n\n> 晨光透过鸟居。\n我：「今天来得挺早嘛。」\n空行\n我：「……好。」 续\n空行 续\n';
+  '# 机 开场\n# 视角 灵梦\n\n> 晨光透过鸟居。\n我：「今天来得挺早嘛。」\n空行\n我：「……好。」 续\n空行 续\n';
 const BASIC_GOLDEN =
   'MACHINE 开场\nTELL: 晨光透过鸟居。 /WAIT\nSAY 我: 今天来得挺早嘛。 /WAIT\nBLANK /WAIT\nSAY 我: ……好。 /CONT\nBLANK /CONT\nMACHINE.END\n';
 

@@ -83,7 +83,7 @@ const KIND_LABELS: Readonly<Record<ForeachCollectionKind, string>> = Object.free
 
 /**
  * 长度机制（纯数据）：
- * - `declared`：长度在编译期已知（数组 `# 变量 名 类型[N]` 的 N、固定长度的 adapter 集合）；
+ * - `declared`：长度在编译期已知（数组 `# 设 名 类型[N]` 的 N、固定长度的 adapter 集合）；
  * - `engine`：长度由 adapter 的引擎计数器给出（`counter - minus`，如"角色数 - 1"跳过玩家）。
  */
 export type ForeachLengthDecl =
@@ -111,13 +111,13 @@ export interface ForeachCollectionDecl {
   readonly nameAccessor: string | null;
 }
 
-/** 数组规则：作者 `# 变量 名 类型[N]` 的可遍历形态（绑定名/下标基由 adapter 定） */
+/** 数组规则：作者 `# 设 名 类型[N]` 的可遍历形态（绑定名/下标基由 adapter 定） */
 export interface ForeachArrayRule {
   readonly base: number;
   readonly bindings: readonly ForeachBindingName[];
 }
 
-/** 一份已声明数组的事实（core 从 `# 变量` 收集；plan 只消费，不读盘） */
+/** 一份已声明数组的事实（core 从 `# 设` 收集；plan 只消费，不读盘） */
 export interface ForeachArrayFact {
   readonly name: string;
   readonly elementType: KojoValueType;
@@ -197,7 +197,7 @@ export type ForeachPlanResult =
 export interface ForeachPlanOptions {
   /** `programFeatures.foreach`；显式 false ⇒ `core/feature/unsupported`（缺省 true，由调用方给闸） */
   readonly enabled?: boolean;
-  /** 本文件的可遍历数组事实（core 从 `# 变量` 收集）；缺省空 */
+  /** 本文件的可遍历数组事实（core 从 `# 设` 收集）；缺省空 */
   readonly arrays?: readonly ForeachArrayFact[];
   /** 槽名前缀覆盖（默认 `__kojo_foreach_<块头源行>`；模板展开复制同一块时用它消歧） */
   readonly slotPrefix?: string;
@@ -301,7 +301,7 @@ function resolveCollection(
   if (fact === undefined) {
     return {
       declaration: null,
-      message: `数组「${name}」未声明：本文件没有它的数组事实（\`# 变量 ${name} <类型>[N]\`，§9.2）${availableSuffix(available)}。`,
+      message: `数组「${name}」未声明：本文件没有它的数组事实（\`# 设 ${name} <类型>[N]\`，§9.2）${availableSuffix(available)}。`,
     };
   }
   return {

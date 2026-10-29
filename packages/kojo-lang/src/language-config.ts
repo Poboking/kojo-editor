@@ -39,9 +39,9 @@ export const KOJO2_INDENT_UNIT = ' '.repeat(KOJO2_INDENT_WIDTH);
 /** 块头判据：行尾全角冒号（含尾部空白）。 */
 export const KOJO2_BLOCK_HEADER_COLON_RE = /^\s*\S.*：\s*$/;
 
-/** `@原生` 围栏头判据（整行只有它；缩进不限——块内也允许出现围栏）。 */
+/** `@原生{` 围栏头（新典；裸 `@原生` 旧写法容忍；缩进不限——块内也允许出现围栏）。 */
 export const KOJO2_NATIVE_HEADER_RE = new RegExp(
-  `^\\s*@${escapeRegExp(KOJO2_NATIVE_FENCE_WORD)}\\s*$`,
+  `^\\s*@${escapeRegExp(KOJO2_NATIVE_FENCE_WORD)}(?:\\{)?\\s*$`,
 );
 
 /** 回车时该行是否 `@原生` 围栏头（上下文判据的一枚原子，测试与 enter handler 共用）。 */

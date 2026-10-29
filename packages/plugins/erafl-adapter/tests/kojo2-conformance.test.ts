@@ -40,7 +40,7 @@
  *
  * `createEraflEmitBackend` 的 `compileExpression` 由宿主注入；2.0 侧那条管线**还没接**
  * （v1 的 `lowerExpression` 未进 2.0 面）。本夹具因此用**恒等端口** `(expr) => expr.text`，
- * 产物里的 `{我}` 落成 `%我%`、`# 常量 亲近线` 不内联。这不是夹具偷懒，而是把缺口如实钉成
+ * 产物里的 `{我}` 落成 `%我%`、`# 设 亲近线` 不内联。这不是夹具偷懒，而是把缺口如实钉成
  * 断言（§F 的两枚直读 + `mismatch/代词落点 [$KNAME]…`、`mismatch/常量内联…` 两枚必红用例）：
  * 端口接上那天，这两枚会自动变成"期望不符"，逼着人回来把红名单那一行销掉。
  *
@@ -394,7 +394,7 @@ const FAIL_VISIBLE_CASES: readonly AdapterConformanceCase[] = [
   {
     kind: 'readings',
     name: 'refuses/@巡（programFeatures.foreach = false 且无集合声明）',
-    source: '# 机 初见\n# 变量 队伍状态 字符串[3]\n\n@巡 队伍状态\n    > {值}。\n',
+    source: '# 机 初见\n# 设 队伍状态 字符串[3]\n\n@巡 队伍状态\n    > {值}。\n',
     expectedDiagnostics: [Object.freeze({ code: 'core/control/unsupported', severity: 'error', line: 4 })],
     readings: { artifactLines: 0 },
   },
@@ -402,7 +402,7 @@ const FAIL_VISIBLE_CASES: readonly AdapterConformanceCase[] = [
     kind: 'readings',
     name: 'refuses/递归（无自调用实证）',
     source:
-      '# 机 初见\n# 变量 结果 整数\n\n@函 斐波那契(n)\n    ? n <= 1\n        @返 n\n    ? 否\n        @返 斐波那契(n - 1) + 斐波那契(n - 2)\n',
+      '# 机 初见\n# 设 结果 整数\n\n@函 斐波那契(n)\n    ? n <= 1\n        @返 n\n    ? 否\n        @返 斐波那契(n - 1) + 斐波那契(n - 2)\n',
     expectedDiagnostics: [
       Object.freeze({ code: 'core/func/recursion-unsupported', severity: 'error', line: 8 }),
     ],
@@ -694,7 +694,7 @@ const MISMATCH_CASES: readonly AdapterConformanceCase[] = [
   {
     kind: 'golden',
     name: 'mismatch/代词落点 [$KNAME]（表达式端口未接）',
-    source: '# 机 初见\n# 视 ティア\n\n> 我是{我}。\n',
+    source: '# 机 初见\n# 视角 ティア\n\n> 我是{我}。\n',
     expectedErb: ';kojo2: # 机 初见\n@EVENTFIRST\n#LATER\n    PRINTFORMW 我是[$KNAME]。\n',
   },
   {
@@ -1107,7 +1107,7 @@ const GAP_ROWS: readonly GapRow[] = [
     face: '表达式端口',
     cell:
       '域符号 → 引擎引用未接（{我} 不落 [$KNAME]；可写属性写不进去）；内联口径还不一致——' +
-      '`# 常量` 在表分档边界上被 core 折成字面量（table-buckets 里 `>= 100`），在表达式切片里原样透传（condition-chain 里 `>= 亲近线`）',
+      '`# 设` 在表分档边界上被 core 折成字面量（table-buckets 里 `>= 100`），在表达式切片里原样透传（condition-chain 里 `>= 亲近线`）',
     code: 'conformance/golden / conformance/differential / core/expr/unknown-symbol',
     witness: {
       report: 'mismatch',
@@ -1215,7 +1215,7 @@ describe('eraFL 2.0 conformance · §F 红名单机器可查', () => {
       adapter: ERAFL_GAME_ADAPTER,
       backend,
     });
-    // 现状：单元级不报（`# 视` 缺失要留给项目级分析）⇒ 这一格在红名单里，不许当它已验收
+    // 现状：单元级不报（`# 视角` 缺失要留给项目级分析）⇒ 这一格在红名单里，不许当它已验收
     expect(noView.diagnostics).toEqual([]);
     expect(noView.erb).toContain('%我%');
     expect(noView.erb).not.toContain('[$KNAME]');

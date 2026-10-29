@@ -288,7 +288,7 @@ export function isDecimalIntegerLiteral(text: string): boolean {
 /**
  * 整数字面量解码：十进制 / `0x` 十六进制 / 可选符号；不是字面量**或超出安全整数范围**返回 null。
  *
- * 为什么卡安全整数：2.0 的 `# 常量` / 表端点 / 数组长度都以 JS `number` 承载，
+ * 为什么卡安全整数：2.0 的 `# 设` / 表端点 / 数组长度都以 JS `number` 承载，
  * 超过 `Number.MAX_SAFE_INTEGER` 后 `parseInt` 会**静默舍入**（`12345678901234567890`
  * ⇒ `12345678901234567000`）——作者写进去的数字与产物不是同一个值。下游（`table.ts`
  * 端点与整数常量表、等值分派）本来就一律按安全整数校验，闸提前到解码口，超界才会成为
@@ -484,6 +484,14 @@ function classifyAll(
     if (fenceIndent !== null) {
       if (p.indentWidth > fenceIndent) {
         lines.push(nativeRecord(p));
+        continue;
+      }
+      // `@原生{ … }` 的收口行：与块头同缩进的单独一行 `}`——围栏在此结束，
+      // 收口行以 native(close) 记录交给 parser 消费（§8.5：收口只认同缩进单独一行 `}`）。
+      const trimmed = p.text.slice(p.indentChars).trim();
+      if (trimmed === '}') {
+        lines.push({ ...nativeRecord(p), close: true });
+        fenceIndent = null;
         continue;
       }
       fenceIndent = null;

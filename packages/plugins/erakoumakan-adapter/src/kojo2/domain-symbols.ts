@@ -34,7 +34,7 @@ import type {
  *
  * 2.0 代词的 `engineRef` 要的是**名字打印模板** ⇒ 三条都取 `%CALLNAME:…%` 形
  * （引擎同一名字族，不是自造词）。`{我}` 取 `奴隷` 且 `viewBound: true`：口上文件
- * 属于该角色时 `{我}` 与 `# 视` 目标重合；`{她}` 取 `TARGET`、`viewBound: false`
+ * 属于该角色时 `{我}` 与 `# 视角` 目标重合；`{她}` 取 `TARGET`、`viewBound: false`
  * ——从玩家视角指称同一角色，换视点仍成立；`{你}` 取 `MASTER`，不依赖视点。
  */
 const PRONOUNS: readonly PronounSymbol[] = Object.freeze([

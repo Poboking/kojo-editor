@@ -523,15 +523,15 @@ export const LANGUAGE_SUITE: readonly LanguageCase[] = Object.freeze([
     file: g('pool-default-bare-quote'),
     expectation: 'golden',
     constructs: ['# 池', '? 否', '裸引号人设'],
-    note: '池内裸引号默认说话人 = `# 视` 目标；`? 否` 兜底',
+    note: '池内裸引号默认说话人 = `# 视角` 目标；`? 否` 兜底',
   }),
   languageCase({
     id: 'pool/no-view',
     group: 'pool',
     file: g('pool-no-view'),
     expectation: 'diagnostics',
-    constructs: ['# 池', '裸引号人设', '缺 # 视'],
-    note: '没有 `# 视` 时池内裸引号 → error',
+    constructs: ['# 池', '裸引号人设', '缺 # 视角'],
+    note: '没有 `# 视角` 时池内裸引号 → error',
   }),
   languageCase({
     id: 'pool/missing-default',
@@ -1614,7 +1614,7 @@ export const LANGUAGE_SHARED_SUITE: readonly LanguageSharedCase[] = Object.freez
     id: 'shared/condition',
     file: 'condition',
     constructs: ['?', '条件链', '常量外置', '兜底分支'],
-    note: '三分支链 + `# 常量` 引用（IF / ELSEIF / ELSE 的形状）',
+    note: '三分支链 + `# 设` 引用（IF / ELSEIF / ELSE 的形状）',
   },
   {
     id: 'shared/condition-sif',
@@ -1655,7 +1655,7 @@ export const LANGUAGE_SHARED_SUITE: readonly LanguageSharedCase[] = Object.freez
   {
     id: 'shared/program',
     file: 'program',
-    constructs: ['# 变量', '@函', '@算', '赋值', '@返', '调用位', '插值'],
+    constructs: ['# 设', '@函', '@算', '赋值', '@返', '调用位', '插值'],
     note: '程序层：赋值 / 复合赋值 / 条件 / 函数调用 / 结果插值（不碰递归与 `@巡`）',
   },
   {

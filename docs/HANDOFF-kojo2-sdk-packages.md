@@ -242,7 +242,7 @@ ensureGlobalProviders({ kojo2Adapter: () => ERATW_GAME_ADAPTER });
    跨行段落点若把整段当选区，编辑器一进去就选中几百行。
 6. **去重键要带上 range 的终点行**。`collectDefinitionLocations` 只按
    `文件+行+列` 去重，会把"整段落点"与"起点那一行"合并成一条。
-7. **`endColumnOf` 是 1 基**，`'# 变量 队伍 整数[3]'` 是 13 个字符 ⇒ 提示压在第 14 列。
+7. **`endColumnOf` 是 1 基**，`'# 设 队伍 整数[3]'` 是 13 个字符 ⇒ 提示压在第 14 列。
    手数会错，直接跑测试看实际值。
 8. **门禁正则别钉死整条数组**。`language-ux-matrix` 的 `slotServices: ['documentSymbol']`
    在加了 `'inlayHint'` 之后就红了——而"多接管一条腿"正是方案方向。

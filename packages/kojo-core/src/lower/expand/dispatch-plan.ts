@@ -190,7 +190,7 @@ export function sameDispatchSubject(a: KojoExprText, b: KojoExprText): boolean {
  *
  * 只接受**唯一一个**顶层 `==` / `=`（`!=` / 区间 / 逻辑组合全部拒绝）；右侧必须是
  * 十进制安全整数字面量；左侧必须是 {@link isPureDispatchSubject} 的纯表达式。
- * 不做常量求值（`亲和线` 一类 `# 常量` 不可证，按非整数拒绝——池计划不带声明上下文）。
+ * 不做常量求值（`亲和线` 一类 `# 设` 不可证，按非整数拒绝——池计划不带声明上下文）。
  */
 export function scanIntegerEquality(test: KojoExprText): DispatchEqualityScan {
   const text = test.text.trim();

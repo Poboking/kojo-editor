@@ -28,11 +28,11 @@ import type {
  * - `我` ← `@CNAME_K{n}, ARGS` 每角色呼び名函数（`face-templates.ts:270-271`，
  *   域内 74 处）经引擎 `%CNAME("一人称")%` FORM 调用（`EVENT_K1.ERB:7`）⇒
  *   `engineRef = '%CNAME("一人称")%'`、`family = 'CNAME'`、`viewBound: true`
- *   （口上文件属于该角色时 `{我}` 与 `# 视` 目标重合）。
+ *   （口上文件属于该角色时 `{我}` 与 `# 视角` 目标重合）。
  * - `你` ← FORM 三连符号 `+` → `CALLNAME:MASTER`（`conventions.ts:176-184`；
  *   `+++` 是作者有意占位、不在替换面）⇒ `%CALLNAME:MASTER%`，不依赖视点。
  * - `她` ← 同处 `$` → `CALLNAME:TARGET`、`*` → `NAME:TARGET`（`conventions.ts:176-184`）
- *   ⇒ `%CALLNAME:TARGET%`，`requiresView: true`（需要 `# 视` 才有目标），
+ *   ⇒ `%CALLNAME:TARGET%`，`requiresView: true`（需要 `# 视角` 才有目标），
  *   `viewBound: false`（从玩家视角指称同一角色，换视点仍成立）。
  */
 const PRONOUNS: readonly PronounSymbol[] = Object.freeze([

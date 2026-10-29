@@ -14,7 +14,7 @@ import type { KojoSpan } from './ast.js';
  * **闭集只增不改**（§11.3 / §16.6 S5.6）：既有码的字符串、与文案/级别语义一律不动。
  * S5.6 批（码表补齐）additive 扩入：`core/pool/duplicate-case`、`core/func/arg-count`、
  * `core/array/whole-assign`、`core/weave/not-weavable`——每条都在声明处写清生产者、
- * 分工与消息模板；`core/decl/bad-array-size` 早已在表内（`# 变量 x 整数[0]` 仍按设计稿
+ * 分工与消息模板；`core/decl/bad-array-size` 早已在表内（`# 设 x 整数[0]` 仍按设计稿
  * §3.4.2「N 必须是正整数」拒收，不新增码、不放开 0 长）。
  *
  * LAU-D1 批（方言载体契约）additive 扩入**六枚**方言/载体码（`core/dialect/*` 三枚 +
@@ -174,6 +174,7 @@ const CORE_DIAGNOSTIC_CODE_LIST = [
   /* 原生与织入 */
   'core/native/empty',
   'core/native/indent',
+  'core/native/unclosed',
   'core/native/disallowed-location',
   'core/weave/multiple-only',
   'core/weave/modifier-conflict',

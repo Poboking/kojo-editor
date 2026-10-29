@@ -22,7 +22,7 @@
  *   `unitBoundariesHold`（局部重切分见证）——相邻单元的 `?` 链合并会移动网格，见证不过就交结构路径；
  * - **声明单元内可以改**（`# 对照表` / `# 池` / `# 模` / `# 函` / `# 机` / `# 幕`）：只重建该单元，
  *   再按"名字引用闭包"重算依赖它的展开点（池/模体里引用的表、数组长度引用的常量都在闭包里）；
- *   视点（`# 视` target）变了会改所有 `{我}`/池内裸引号 ⇒ 回退全量；
+ *   视点（`# 视角` target）变了会改所有 `{我}`/池内裸引号 ⇒ 回退全量；
  * - **任意连续替换只做行号平移 + halo 重建**（K2-INCR-HOLES ②）：窗口之前的字逐字不变，
  *   窗口之后的行整体平移 `deltaLines`（span / 槽名 `__kojo_rand_<行>` / `__kojo_foreach_<行>` 按
  *   "该行落在窗口哪一侧"逐行重算），与窗口相交的单元（halo）整段重算。纯换行插入/删除只是
@@ -137,7 +137,7 @@ export interface IncrementalUpdate {
 export interface IncrementalCompilerOptions {
   readonly adapter: GameAdapter;
   readonly backend: KojoEmitBackend;
-  /** 与 `CompileKojoSourceInput.view` 同义；缺省从声明里的 `# 视` 取 */
+  /** 与 `CompileKojoSourceInput.view` 同义；缺省从声明里的 `# 视角` 取 */
   readonly view?: string | null;
 }
 
@@ -1062,7 +1062,7 @@ function unsafeStructural(reason: string): FastOutcome {
  *   **起点/终点/文本逐字相同**，右侧的每个新范围必须等于旧单元平移 `deltaLines`，halo 两端必须
  *   落在旧单元边界上；对不上就加一圈见证重试（最多 3 轮），仍对不上 → 回退全量；
  * - **声明语义**：`decls` 去掉 span 后逐项对拍，变了就按名字算依赖闭包（池/模体里引用的名字、
- *   `# 变量` 数组长度引用的 `# 常量`），只重算提到这些名字的单元；
+ *   `# 设` 数组长度引用的 `# 设`），只重算提到这些名字的单元；
  * - **跨单元 parse 上下文**：重解析声明单元时，同一单元内重复声明名 / 视点变化 → 回退全量；
  *   整份替换没有可复用单元 → 交回带构建期自检的全量重建。
  */
@@ -2058,9 +2058,9 @@ function collectDeclKindLabels(decls: readonly KojoDecl[]): ReadonlyMap<string, 
     if (decl.kind === 'view' || decl.kind === 'machine' || decl.kind === 'weave') continue;
     const label =
       decl.kind === 'var'
-        ? '变量'
+        ? '设'
         : decl.kind === 'const'
-          ? '常量'
+          ? '设'
           : decl.kind === 'table'
             ? '对照表'
             : decl.kind === 'pool'

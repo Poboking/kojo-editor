@@ -5,7 +5,7 @@
  *
  * `parseSource` 只保证"形状对"；本模块在同一棵**只读** AST 上补齐三类判定：
  *
- * 1. **类型**（S5.2）：`# 变量` 初值 / `# 常量` 值 / `# 对照表` 值列 / `# 池` 分支可归约性 /
+ * 1. **类型**（S5.2）：`# 设` 初值 / `# 设` 值 / `# 对照表` 值列 / `# 池` 分支可归约性 /
  *    赋值与 `@算` / 数组元素 / `@函` 参数默认值与 `@返` 返回种类；
  * 2. **结构**（S5.3 的 core 侧切片）：非 void 函数的"可证落空"路径；
  * 3. **能力**（S5.4）：只读 `GameAdapter` 的 `presentation` / `programFeatures` /
@@ -29,7 +29,7 @@
  * ## 名字解析链（写死；赋值目标与读表达式同一顺序）
  *
  * 1. **参数 / `@巡` 绑定**（函数作用域，最近）；
- * 2. **本文件声明**（`# 变量` / `# 常量` / `# 对照表` / `# 池` / `# 模板` / `@函`）；
+ * 2. **本文件声明**（`# 设` / `# 设` / `# 对照表` / `# 池` / `# 模板` / `@函`）；
  * 3. **adapter 外部变量**（`domainSymbols.variables`，additive 面；旧 adapter 省略 = 空）；
  * 4. 都没有 ⇒ `core/expr/unknown-symbol`（adapter 的 `unknown = 'raw'` 时放行）。
  *
@@ -454,7 +454,7 @@ class FileChecker {
     if (!this.decls.has(name)) this.decls.set(name, info);
   }
 
-  /** `# 变量 名 类型[N]` 的 N：整数字面量或已声明整数 `# 常量`；证不出 = null */
+  /** `# 设 名 类型[N]` 的 N：整数字面量或已声明整数 `# 设`；证不出 = null */
   private resolveArraySize(decl: KojoVarDecl): number | null {
     const size = decl.arraySize;
     if (size === undefined) return null;
@@ -500,7 +500,7 @@ class FileChecker {
       if (size !== null && size <= 0 && isIdentifier(sizeText)) {
         this.report(
           'core/decl/bad-array-size',
-          `数组“${decl.name}”的长度解析成 ${size}：必须是正整数（或值为正整数的整数 # 常量，§3.4.2）。`,
+          `数组“${decl.name}”的长度解析成 ${size}：必须是正整数（或值为正整数的整数 # 设，§3.4.2）。`,
           decl.arraySize.span,
         );
       }
@@ -820,7 +820,7 @@ class FileChecker {
       if (variable !== null) {
         /*
          * 数组面（additive；K2-SEMA-WIRING）：整名赋值一律不收——换什么值都不行，
-         * 这是"目标形状"问题（与文件内 `# 变量 名 类型[N]` 同一条判据、同一个码）。
+         * 这是"目标形状"问题（与文件内 `# 设 名 类型[N]` 同一条判据、同一个码）。
          */
         if (variable.isArray) {
           this.report(
@@ -921,7 +921,7 @@ class FileChecker {
     if (info.kind !== 'var' || !info.isArray) {
       this.report(
         'core/expr/bad-index',
-        `“${name}”不是数组：下标语法只用于 \`# 变量 名 类型[N]\` 声明的一维数组（§9.2）。`,
+        `“${name}”不是数组：下标语法只用于 \`# 设 名 类型[N]\` 声明的一维数组（§9.2）。`,
         span,
       );
       return;
@@ -963,7 +963,7 @@ class FileChecker {
     if (info.kind !== 'var' || !info.isArray) {
       this.report(
         'core/expr/bad-index',
-        `“${name}”没有 \`.长度\`：该属性只属于 \`# 变量 名 类型[N]\` 声明的一维数组（§9.2）。`,
+        `“${name}”没有 \`.长度\`：该属性只属于 \`# 设 名 类型[N]\` 声明的一维数组（§9.2）。`,
         span,
       );
       return;
@@ -1241,7 +1241,7 @@ class FileChecker {
    * adapter 外部变量（`domainSymbols.variables`）的静态事实；`null` = 本 adapter 没声明它。
    *
    * 旧 adapter 省略这一面 ⇒ 恒 `null` ⇒ 名字解析链与今天**逐字节一致**（仍报未声明）。
-   * `valueKind` 直接进值类型格：`character` 只可能从这里来（AST 的 `# 变量` 没有这个词）。
+   * `valueKind` 直接进值类型格：`character` 只可能从这里来（AST 的 `# 设` 没有这个词）。
    *
    * 数组面（additive；K2-SEMA-WIRING）：`arraySize` 键**存在**（含 `null`）= 数组；
    * 元素类型 = `elementKind ?? valueKind`（adapter 不另给元素类型时，条目的 valueKind 就是

@@ -73,7 +73,7 @@ function median(values: readonly number[]): number {
 /* ============================== 样本文本 ============================== */
 
 const SAMPLE_BASIC = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 
 # 幕 神社清晨
 > 神社的清晨，带一个插值{恋慕}。
@@ -87,8 +87,8 @@ const SAMPLE_BASIC = `# 机 开场
 `;
 
 const SAMPLE_TABLE = `# 机 开场
-# 视 灵梦
-# 常量 上限 整数 = 5
+# 视角 灵梦
+# 设 上限 整数 = 5
 # 对照表 亲密度 依据 好感
     0..2 -> = "疏远"
     3..4 -> = "点头"
@@ -99,7 +99,7 @@ const SAMPLE_TABLE = `# 机 开场
 `;
 
 const SAMPLE_POOL_TEMPLATE = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 # 池 招呼
     ? 恋慕 > 5
         > 亲近的招呼。
@@ -116,7 +116,7 @@ const SAMPLE_POOL_TEMPLATE = `# 机 开场
 `;
 
 const SAMPLE_RANDOM_COLOR = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 @随机
     > 风很轻。
     @组
@@ -130,7 +130,7 @@ const SAMPLE_RANDOM_COLOR = `# 机 开场
 `;
 
 const SAMPLE_SCENES = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 > 序章的一行。
 # 幕 第一幕
 > 第一幕的一行。
@@ -140,7 +140,7 @@ const SAMPLE_SCENES = `# 机 开场
 `;
 
 const SAMPLE_NATIVE = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 @原生
     #DIM X, 0
     PRINTFORM 原生行
@@ -148,27 +148,27 @@ const SAMPLE_NATIVE = `# 机 开场
 `;
 
 const SAMPLE_ERRORS = `# 机 不存在的机
-# 视 灵梦
+# 视角 灵梦
 「裸引号」
 未知的写法行
 > 正文{未闭合的插值
 `;
 
 const SAMPLE_LEGACY = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 ; 旧注释
 如果 恋慕 > 1
     > 旧写法
 > 正文一行。
 `;
 
-const SAMPLE_MISSING_MACHINE = `# 视 灵梦
+const SAMPLE_MISSING_MACHINE = `# 视角 灵梦
 > 第一行（挂点缺失的诊断落在这行）。
 > 第二行可以安全地增量编辑。
 `;
 
 const SAMPLE_OPTIONS = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 选项：
     「甲」：
         > 甲的正文。
@@ -349,7 +349,7 @@ describe('incremental：退化路径仍必须正确', () => {
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
     compiler.update(SAMPLE_BASIC);
     const replacement = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 > 完全换过的正文。
 `;
     const edit: IncrementalEdit = { offset: 0, removedLength: SAMPLE_BASIC.length, insertedText: replacement };
@@ -448,7 +448,7 @@ describe('incremental：退化路径仍必须正确', () => {
 const PERF_LINES = 5_200;
 
 function buildPerfSource(count: number): { source: string; editOffsets: readonly number[] } {
-  const lines: string[] = ['# 机 开场', '# 视 灵梦', '# 常量 上限 整数 = 5'];
+  const lines: string[] = ['# 机 开场', '# 视角 灵梦', '# 设 上限 整数 = 5'];
   lines.push('# 对照表 亲密度 依据 好感');
   lines.push('    0..2 -> = "疏远"');
   lines.push('    3.. -> = "亲近"');
@@ -597,7 +597,7 @@ function insertBlankLineAt(text: string, lineIndex: number): { edit: Incremental
 }
 
 const SAMPLE_SHIFT_RANDOM = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 > 第一段正文。
 @随机
     > 风很轻。
@@ -634,7 +634,7 @@ describe('incremental：纯换行 = 行号平移（复用全部单元缓存）',
   it('删除空行：槽名按平移后的行号回填（与全量逐字节等价）', () => {
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: SLOT_BACKEND });
     const withBlank: string = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 
 > 第一段正文。
 @随机
@@ -658,7 +658,7 @@ describe('incremental：纯换行 = 行号平移（复用全部单元缓存）',
 
   it('调用点在平移点之前、`# 模` 体里的 `@随机` 在之后：复用单元里的槽名引用被改写', () => {
     const source = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 ! 招呼()
 > 正文甲。
 > 正文乙。
@@ -686,7 +686,7 @@ describe('incremental：纯换行 = 行号平移（复用全部单元缓存）',
 
   it('平移点之后的诊断 span 跟着平移（与全量一致，不是"旧行号留在诊断里"）', () => {
     const source = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 「裸引号在第三行」
 > 正文一行。
 > 正文二行。
@@ -707,7 +707,7 @@ describe('incremental：纯换行 = 行号平移（复用全部单元缓存）',
   it('`@巡` 槽名（`__kojo_foreach_<行>_i/_e/_n`）同口径平移', () => {
     const rig = foreachRig();
     const source = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 @巡 队伍
     > 轮到{名}。
     ? {角} >= 2
@@ -848,7 +848,7 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
 
   it('声明链条：`# 池` 体引用 `# 对照表`，改表时池的调用点也要重算（跨声明依赖闭包）', () => {
     const source = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 # 对照表 语气 依据 好感
     0..2 -> = "淡"
     否 -> = "近"
@@ -875,7 +875,7 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
 
   it('`# 模` 体编辑：调用点（含插槽体）重建，插槽内容原样保留', () => {
     const source = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 # 模 包装(值)
     > {值}
     [插槽]
@@ -895,10 +895,10 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
     expectSameResult(update.result, fullCompile(text));
   });
 
-  it('`# 常量` 参与 `# 对照表` 端点：改常量时表引用点跟着重建', () => {
+  it('`# 设` 参与 `# 对照表` 端点：改常量时表引用点跟着重建', () => {
     const source = `# 机 开场
-# 视 灵梦
-# 常量 门槛 整数 = 3
+# 视角 灵梦
+# 设 门槛 整数 = 3
 # 对照表 语气 依据 好感
     0..{门槛} -> = "淡"
     否 -> = "近"
@@ -916,7 +916,7 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
 
   it('`# 池` 改名：旧调用点按未知符号重算（依赖闭包按名字取，旧名也在集合里）', () => {
     const source = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 # 池 招呼
     > 招呼一声。
 ! 招呼
@@ -959,7 +959,7 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
     expectSameResult(update.result, fullCompile(text));
   });
 
-  it('改 `# 视`（视点变化会改所有 `{我}`/池内裸引号）→ 回退全量', () => {
+  it('改 `# 视角`（视点变化会改所有 `{我}`/池内裸引号）→ 回退全量', () => {
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
     compiler.update(SAMPLE_POOL_TEMPLATE);
     const offset = SAMPLE_POOL_TEMPLATE.indexOf('灵梦') + 1;
@@ -973,7 +973,7 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
 
   it('`# 对照表` 里 Enter 加一行（换行 + 声明变更）：只重建该表 + 引用它的单元', () => {
     const source = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 # 对照表 亲密度 依据 好感
     0..2 -> = "疏远"
     5.. -> = "亲近"
@@ -987,7 +987,7 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
     expect(built.result.erb).toContain('亲近');
     // 在第 4 行（0 基 3，表体第一行之前）插入一行新档位
     const offset = source.indexOf('    0..2');
-    const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: '    3..4 = "点头"\n' };
+    const edit: IncrementalEdit = { offset, removedLength: 0, insertedText: '    3..4 -> = "点头"\n' };
     const text = applyEdit(source, edit);
     const update = compiler.update(text, edit);
     expect(update.stats.fallbackFull, update.stats.fallbackReason ?? '').toBe(false);
@@ -997,7 +997,7 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
 
   it('`@织` 监听 + 纯换行：`@织` 产物按平移（含槽名引用）且与全量一致', () => {
     const source = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 @织 开场
     > 监听里的一行。
 @随机
@@ -1021,7 +1021,7 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
   });
 
   it('CRLF 文件（Windows 作者）：行尾插入换行走增量且与全量逐字节等价', () => {
-    const source = ['# 机 开场', '# 视 灵梦', '@随机', '    > 风很轻。', '    > 云在走。', '> 收尾。', ''].join(
+    const source = ['# 机 开场', '# 视角 灵梦', '@随机', '    > 风很轻。', '    > 云在走。', '> 收尾。', ''].join(
       '\r\n',
     );
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: SLOT_BACKEND });
@@ -1067,7 +1067,7 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
 
   it('`@原生` 体内插空行：整块重算，与全量一致', () => {
     const source = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 @原生
     #DIM X, 0
     PRINTFORM 原生行
@@ -1126,8 +1126,8 @@ function lineEndOffsets(source: string): number[] {
 function buildDeclPerfSource(count: number): { source: string; poolBodyOffset: number } {
   const lines: string[] = [
     '# 机 开场',
-    '# 视 灵梦',
-    '# 常量 上限 整数 = 5',
+    '# 视角 灵梦',
+    '# 设 上限 整数 = 5',
     '# 池 招呼',
     '    ? 恋慕 > 1',
     '        > 亲近的招呼。',
@@ -1165,8 +1165,8 @@ describe('incremental：结构编辑随机 golden（Enter / 删整行 / 声明�
     for (const [, source] of SAMPLES) bases.push(source);
     bases.push(
       `# 机 开场
-# 视 灵梦
-# 常量 上限 整数 = 5
+# 视角 灵梦
+# 设 上限 整数 = 5
 # 对照表 亲密度 依据 好感
     0..2 -> = "疏远"
     3.. -> = "亲近"
@@ -1375,7 +1375,7 @@ describe('incremental：回退路径的增量版性能护栏（5.2k 行）', () 
  * ════════════════════════════════════════════════════════════════════════════ */
 
 const SAMPLE_BLOCK_BODY = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 > 开场白。
 ? 恋慕 > 5
     > 有点吵。
@@ -1538,7 +1538,7 @@ describe('incremental：结构行插入不再永久降级（K2-INCR-HOLES ①）
 
   it('200 步真实编辑序列：每一步与全量等价、degraded 计数为 0', () => {
     const BASE = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 # 幕 第一场
 > 神社的清晨，带一个插值{恋慕}。
 灵梦：「早上好。」
@@ -1629,7 +1629,7 @@ describe('incremental：结构行插入不再永久降级（K2-INCR-HOLES ①）
 
   it('把 `> x` 改成 legacy 行（快速路径会误判的边界形态）：结果不多一条链、不降级', () => {
     const BASE = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 ? 恋慕 > 5
     > 有点吵。
 > 中间行。
@@ -1650,7 +1650,7 @@ describe('incremental：结构行插入不再永久降级（K2-INCR-HOLES ①）
 
   it('空行→注释（跨单元链合并）：快速路径不接管，拼接结果与全量逐字一致', () => {
     const BASE = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 ? 恋慕 > 5
     > 有点吵。
 
@@ -1713,7 +1713,7 @@ describe('incremental：degradedReason 细分与恢复', () => {
   });
 
   it('BOM → 粘性 degraded，degradedReason 细分为 bom-source，之后每轮仍是正确的全量', () => {
-    const BOM_SOURCE = `\uFEFF# 机 开场\n# 视 灵梦\n> 正文一行。\n`;
+    const BOM_SOURCE = `\uFEFF# 机 开场\n# 视角 灵梦\n> 正文一行。\n`;
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
     const built = compiler.update(BOM_SOURCE);
     expect(compiler.degraded).toBe(true);
@@ -1735,7 +1735,7 @@ describe('incremental：degradedReason 细分与恢复', () => {
   it('整份替换（证不出，但不降级）：lastUnmodelledReason = whole-file-replacement，下一轮恢复增量', () => {
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
     compiler.update(SAMPLE_BASIC);
-    const replacement = `# 机 开场\n# 视 灵梦\n> 完全换过的正文。\n`;
+    const replacement = `# 机 开场\n# 视角 灵梦\n> 完全换过的正文。\n`;
     const edit: IncrementalEdit = { offset: 0, removedLength: SAMPLE_BASIC.length, insertedText: replacement };
     const update = compiler.update(replacement, edit);
     expect(update.stats.fallbackFull).toBe(true);
@@ -1752,7 +1752,7 @@ describe('incremental：degradedReason 细分与恢复', () => {
     expectSameResult(recovered.result, fullCompile(text));
   });
 
-  it('改 `# 视`（视点变化波及所有 `{我}`）：lastUnmodelledReason = view-changed、不降级、下一轮恢复', () => {
+  it('改 `# 视角`（视点变化波及所有 `{我}`）：lastUnmodelledReason = view-changed、不降级、下一轮恢复', () => {
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
     compiler.update(SAMPLE_BASIC);
     const edit: IncrementalEdit = { offset: SAMPLE_BASIC.indexOf('灵梦'), removedLength: '灵梦'.length, insertedText: '魔理沙' };
@@ -1790,7 +1790,7 @@ describe('incremental：degradedReason 细分与恢复', () => {
 
 describe('incremental：多行替换 / 跨行删走结构化增量（K2-INCR-HOLES ②）', () => {
   const POOL_SOURCE = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 # 池 招呼
     ? 恋慕 > 5
         > 亲近的招呼。
@@ -1934,7 +1934,7 @@ describe('incremental：多行替换 / 跨行删走结构化增量（K2-INCR-HOL
 
   it('等价性 golden：结构行插入 + 多行替换后，erb / 场景标题 / 诊断序逐字等于字面量', () => {
     const GOLDEN_BASE = `# 机 开场
-# 视 灵梦
+# 视角 灵梦
 # 幕 第一场
 > 甲。
 # 幕 第二场

@@ -3,10 +3,10 @@
  * K2-SEMA-QUICKFIX · 语义诊断的快速修复闸（batch-7；设计稿 §16.6 S5.2 / S5.4、§16.7 U6.4）。
  *
  * 覆盖七件事：
- * 1. `core/expr/unknown-symbol`：声明区补 `# 变量`（插入点：最后一条单行声明之后、
- *    首个正文块 / 块声明之前；含 `# 幕` / `# 视` / `# 常量` 混排与 `@织` 声明）；
+ * 1. `core/expr/unknown-symbol`：声明区补 `# 设`（插入点：最后一条单行声明之后、
+ *    首个正文块 / 块声明之前；含 `# 幕` / `# 视角` / `# 设` 混排与 `@织` 声明）；
  *    类型按赋值右侧字面量推断，推不出按整数并在标题写明；已声明 / 非单名目标不产；
- * 2. `core/expr/type-mismatch`：`# 变量` 声明 + 右侧整数字面量 ⇒ 只留"改成整数"
+ * 2. `core/expr/type-mismatch`：`# 设` 声明 + 右侧整数字面量 ⇒ 只留"改成整数"
  *    （"改成字符串"那条 / 破坏初值的那条都被收口否决）；其它形状不产；
  * 3. `core/func/arg-count`：缺必填 ⇒ 补占位实参（`0` / `""`，按形参默认值类型唯一）；
  *    无默认值 / 混类型 / 多给 ⇒ 不产；
@@ -104,7 +104,7 @@ function expectCleanApply(fact: Kojo2CodeActionFact, source: string): string {
 
 /* ============================== 1. unknown-symbol ============================== */
 
-describe('①unknown-symbol：声明区补 `# 变量`', () => {
+describe('①unknown-symbol：声明区补 `# 设`', () => {
   const SOURCE = '# 机 开场\n\n@算\n    临时 = 1\n';
 
   it('整数字面量右侧 ⇒ 声明 `整数`，插在 `# 机` 之后的声明区，应用后 parse 零 error 且码消失', () => {
@@ -116,10 +116,10 @@ describe('①unknown-symbol：声明区补 `# 变量`', () => {
     expect(fact.code).toBe(UNKNOWN);
     expect(fact.edits).toHaveLength(1);
     expect(fact.edit.range).toEqual({ startLine: 2, startColumn: 1, endLine: 2, endColumn: 1 });
-    expect(fact.edit.newText).toBe('# 变量 临时 整数\n');
-    expect(fact.title).toContain('# 变量 临时 整数');
+    expect(fact.edit.newText).toBe('# 设 临时 整数\n');
+    expect(fact.title).toContain('# 设 临时 整数');
     expect(expectCleanApply(fact, SOURCE)).toBe(
-      '# 机 开场\n# 变量 临时 整数\n\n@算\n    临时 = 1\n',
+      '# 机 开场\n# 设 临时 整数\n\n@算\n    临时 = 1\n',
     );
   });
 
@@ -127,7 +127,7 @@ describe('①unknown-symbol：声明区补 `# 变量`', () => {
     const source = '# 机 开场\n\n@算\n    名字 = "甲"\n';
     const facts = factsForCode(source, UNKNOWN);
     expect(facts).toHaveLength(1);
-    expect(facts[0]!.edit.newText).toBe('# 变量 名字 字符串\n');
+    expect(facts[0]!.edit.newText).toBe('# 设 名字 字符串\n');
     expectCleanApply(facts[0]!, source);
   });
 
@@ -135,37 +135,37 @@ describe('①unknown-symbol：声明区补 `# 变量`', () => {
     const source = '# 机 开场\n\n@算\n    临时 = 数量\n';
     const facts = factsForCode(source, UNKNOWN);
     expect(facts).toHaveLength(1);
-    expect(facts[0]!.edit.newText).toBe('# 变量 临时 整数\n');
+    expect(facts[0]!.edit.newText).toBe('# 设 临时 整数\n');
     expect(facts[0]!.title).toContain('按整数声明，请按需改类型');
     expectCleanApply(facts[0]!, source);
   });
 
-  it('`# 幕` / `# 视` / `# 常量` 混排 ⇒ 插到最后一条单行声明之后、`# 幕`（正文块）之前', () => {
+  it('`# 幕` / `# 视角` / `# 设` 混排 ⇒ 插到最后一条单行声明之后、`# 幕`（正文块）之前', () => {
     const source =
-      '# 机 开场\n# 视 我\n# 常量 甲 整数 = 1\n# 幕 一\n\n@算\n    临时 = 1\n';
+      '# 机 开场\n# 视角 我\n# 设 甲 整数 = 1\n# 幕 一\n\n@算\n    临时 = 1\n';
     const facts = factsForCode(source, UNKNOWN);
     expect(facts).toHaveLength(1);
     const fact = facts[0]!;
     expect(fact.edit.range).toEqual({ startLine: 4, startColumn: 1, endLine: 4, endColumn: 6 });
-    expect(fact.edit.newText).toBe('# 变量 临时 整数\n\n# 幕 一');
+    expect(fact.edit.newText).toBe('# 设 临时 整数\n\n# 幕 一');
     const after = expectCleanApply(fact, source);
-    expect(after).toContain('# 常量 甲 整数 = 1\n# 变量 临时 整数\n\n# 幕 一\n');
-    expect(after.indexOf('# 变量 临时 整数')).toBeLessThan(after.indexOf('# 幕 一'));
+    expect(after).toContain('# 设 甲 整数 = 1\n# 设 临时 整数\n\n# 幕 一\n');
+    expect(after.indexOf('# 设 临时 整数')).toBeLessThan(after.indexOf('# 幕 一'));
   });
 
   it('`@织` 块声明在声明区之后 ⇒ 插在 `@织` 之前并保留块声明前的空行', () => {
-    const source = '# 机 开场\n# 视 我\n\n@织 收场\n    @算\n        临时 = 1\n';
+    const source = '# 机 开场\n# 视角 我\n\n@织 收场\n    @算\n        临时 = 1\n';
     const facts = factsForCode(source, UNKNOWN);
     expect(facts).toHaveLength(1);
     const fact = facts[0]!;
     expect(fact.edit.range).toEqual({ startLine: 3, startColumn: 1, endLine: 3, endColumn: 1 });
-    expect(fact.edit.newText).toBe('# 变量 临时 整数\n');
+    expect(fact.edit.newText).toBe('# 设 临时 整数\n');
     const after = expectCleanApply(fact, source);
-    expect(after).toContain('# 视 我\n# 变量 临时 整数\n\n@织 收场\n');
+    expect(after).toContain('# 视角 我\n# 设 临时 整数\n\n@织 收场\n');
   });
 
   it('同一名字已在文件里声明 ⇒ 不产（改名 / 拼写机器不猜）', () => {
-    const source = '# 变量 临时 整数\n# 机 开场\n\n@算\n    临时 = 1\n';
+    const source = '# 设 临时 整数\n# 机 开场\n\n@算\n    临时 = 1\n';
     const diagnostics: KojoDiagnostic[] = [
       {
         code: UNKNOWN,
@@ -179,7 +179,7 @@ describe('①unknown-symbol：声明区补 `# 变量`', () => {
     ).toEqual([]);
   });
 
-  it('目标不是单个名字（`{角色}的<属性>`）⇒ 不产（补 `# 变量` 修不了）', () => {
+  it('目标不是单个名字（`{角色}的<属性>`）⇒ 不产（补 `# 设` 修不了）', () => {
     const source = '# 机 开场\n\n@算\n    {我}的幻想 = 1\n';
     expect(factsForCode(source, UNKNOWN)).toEqual([]);
   });
@@ -217,58 +217,58 @@ describe('①unknown-symbol：声明区补 `# 变量`', () => {
 
 /* ============================== 2. type-mismatch ============================== */
 
-describe('②type-mismatch：`# 变量` 声明类型二选一', () => {
+describe('②type-mismatch：`# 设` 声明类型二选一', () => {
   it('字符串声明 + 整数字面量右侧 ⇒ 只留"改成整数"，应用后码消失', () => {
-    const source = '# 变量 名 字符串\n# 机 开场\n\n@算\n    名 = 1\n';
+    const source = '# 设 名 字符串\n# 机 开场\n\n@算\n    名 = 1\n';
     const facts = factsForCode(source, TYPE_MISMATCH);
     expect(facts).toHaveLength(1);
     const fact = facts[0]!;
     expect(fact.kind).toBe('fix');
     expect(KOJO2_CODE_ACTION_KIND_LABELS.fix).toBe('修复');
     expect(fact.title).toContain('把 `名` 的声明类型改成整数');
-    expect(fact.edit.newText).toBe('# 变量 名 整数');
+    expect(fact.edit.newText).toBe('# 设 名 整数');
     expect(expectCleanApply(fact, source)).toBe(
-      '# 变量 名 整数\n# 机 开场\n\n@算\n    名 = 1\n',
+      '# 设 名 整数\n# 机 开场\n\n@算\n    名 = 1\n',
     );
   });
 
   it('声明行尾还有存储期 ⇒ 只换类型 token，尾部原样保留', () => {
-    const source = '# 变量 名 字符串 场景\n# 机 开场\n\n@算\n    名 = 1\n';
+    const source = '# 设 名 字符串 场景\n# 机 开场\n\n@算\n    名 = 1\n';
     const facts = factsForCode(source, TYPE_MISMATCH);
     expect(facts).toHaveLength(1);
-    expect(facts[0]!.edit.newText).toBe('# 变量 名 整数 场景');
+    expect(facts[0]!.edit.newText).toBe('# 设 名 整数 场景');
     expectCleanApply(facts[0]!, source);
   });
 
   it('增量运算 `+=` 打在字符串变量上 + 整数字面量 ⇒ 同样把声明改成整数', () => {
-    const source = '# 变量 数 字符串\n# 机 开场\n\n@算\n    数 += 1\n';
+    const source = '# 设 数 字符串\n# 机 开场\n\n@算\n    数 += 1\n';
     const facts = factsForCode(source, TYPE_MISMATCH);
     expect(facts).toHaveLength(1);
-    expect(facts[0]!.edit.newText).toBe('# 变量 数 整数');
+    expect(facts[0]!.edit.newText).toBe('# 设 数 整数');
     expectCleanApply(facts[0]!, source);
   });
 
   it('改类型会破坏声明初值（`= "甲"`）⇒ 两条候选都被收口否决，零动作', () => {
-    const source = '# 变量 名 字符串 = "甲"\n# 机 开场\n\n@算\n    名 = 1\n';
+    const source = '# 设 名 字符串 = "甲" 场景\n# 机 开场\n\n@算\n    名 = 1\n';
     expect(factsForCode(source, TYPE_MISMATCH)).toEqual([]);
   });
 
   it('右侧不是整数字面量（字符串字面量）⇒ 按任务口径不产', () => {
-    const source = '# 变量 数 整数\n# 机 开场\n\n@算\n    数 = "甲"\n';
+    const source = '# 设 数 整数\n# 机 开场\n\n@算\n    数 = "甲"\n';
     expect(factsForCode(source, TYPE_MISMATCH)).toEqual([]);
   });
 
   it('右侧不是字面量（变量）⇒ 不产', () => {
-    const source = '# 变量 数 整数\n# 变量 名 字符串\n# 机 开场\n\n@算\n    名 = 数\n';
+    const source = '# 设 数 整数\n# 设 名 字符串\n# 机 开场\n\n@算\n    名 = 数\n';
     expect(factsForCode(source, TYPE_MISMATCH)).toEqual([]);
   });
 
   it('改类型会把另一处旧赋值写成新的同类错误（`名 = "x"`）⇒ 计数闸否决，零动作', () => {
-    const source = '# 变量 名 字符串\n# 机 开场\n\n@算\n    名 = 1\n    名 = "甲"\n';
+    const source = '# 设 名 字符串\n# 机 开场\n\n@算\n    名 = 1\n    名 = "甲"\n';
     expect(factsForCode(source, TYPE_MISMATCH)).toEqual([]);
   });
 
-  it('诊断落在函数实参上（不是 `# 变量` 赋值左侧）⇒ 不产', () => {
+  it('诊断落在函数实参上（不是 `# 设` 赋值左侧）⇒ 不产', () => {
     const source = '@函 称呼(名字 = "甲")\n    @返 名字\n\n# 机 开场\n\n! 称呼(1)\n';
     expect(factsForCode(source, TYPE_MISMATCH)).toEqual([]);
   });
@@ -339,13 +339,13 @@ describe('④显式不产：readonly-target / index-out-of-range / bad-index', (
   });
 
   it('`index-out-of-range` 零动作且不在认领清单（可能想改下标本身）', () => {
-    const source = '# 变量 队列 整数[3]\n# 机 开场\n\n@算\n    队列[5] = 1\n';
+    const source = '# 设 队列 整数[3]\n# 机 开场\n\n@算\n    队列[5] = 1\n';
     expect(factsForCode(source, 'core/expr/index-out-of-range')).toEqual([]);
     expect(KOJO2_CODE_ACTION_CODES.has('core/expr/index-out-of-range')).toBe(false);
   });
 
   it('`bad-index` 零动作且不在认领清单（可能想改下标 / 补数组声明）', () => {
-    const source = '# 变量 数 整数\n# 机 开场\n\n@算\n    数[0] = 1\n';
+    const source = '# 设 数 整数\n# 机 开场\n\n@算\n    数[0] = 1\n';
     expect(factsForCode(source, 'core/expr/bad-index')).toEqual([]);
     expect(KOJO2_CODE_ACTION_CODES.has('core/expr/bad-index')).toBe(false);
   });
@@ -528,7 +528,7 @@ describe('⑤注册纪律：flag 关零注册 / v1 零动作 / command 而非 ed
     expect(action.diagnostics?.map((marker) => marker.code)).toEqual([UNKNOWN]);
     fake.runCommand(action.command!.id, action.command!.arguments![0]);
     expect(applied).toHaveLength(1);
-    expect(applied[0]).toEqual([{ fromLine: 2, toLine: 2, newText: '# 变量 临时 整数\n' }]);
+    expect(applied[0]).toEqual([{ fromLine: 2, toLine: 2, newText: '# 设 临时 整数\n' }]);
   });
 
   it('marker 往返仍保留 sema 码与 span（宿主按它画关联高亮）', () => {
@@ -567,15 +567,15 @@ describe('⑥落地走同一条 `applyTextEdits`（前后各一颗停点）', ()
     } as unknown as Parameters<typeof applyTextEdits>[0];
     expect(applyTextEdits(editor, kojo2EditorEditsOf(facts[0]!))).toBe(true);
     expect(calls).toEqual(['stop', 'edit', 'stop']);
-    expect(model.getValue()).toBe('# 机 开场\n# 变量 临时 整数\n\n@算\n    临时 = 1\n');
+    expect(model.getValue()).toBe('# 机 开场\n# 设 临时 整数\n\n@算\n    临时 = 1\n');
     model.dispose();
   });
 
   it('类型修复也走同一条整行编辑（声明行），edits 逐字可映射到 EditorTextEdit', () => {
-    const source = '# 变量 名 字符串\n# 机 开场\n\n@算\n    名 = 1\n';
+    const source = '# 设 名 字符串\n# 机 开场\n\n@算\n    名 = 1\n';
     const facts = factsForCode(source, TYPE_MISMATCH);
     expect(kojo2EditorEditsOf(facts[0]!)).toEqual([
-      { fromLine: 1, toLine: 1, newText: '# 变量 名 整数' },
+      { fromLine: 1, toLine: 1, newText: '# 设 名 整数' },
     ]);
     expect(kojo2CodeActionKindOf('fix')).toBe('quickfix');
   });

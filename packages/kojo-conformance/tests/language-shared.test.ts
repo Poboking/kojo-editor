@@ -281,7 +281,7 @@ describe('方言差异 · 各自事实 + 同一期望（不许拿 eraTW 的事�
   it('代词落点：同一组角色、同一套 view 语义，落点各是各家事实（断声明面，不断产物）', () => {
     const shape = (list: GameAdapter['domainSymbols']['pronouns']) =>
       list.map((item) => `${item.role}/${String(item.requiresView)}/${String(item.viewBound)}`);
-    // 同一期望：三个角色、谁需要 `# 视`、是否与视点绑定——两侧逐字相同
+    // 同一期望：三个角色、谁需要 `# 视角`、是否与视点绑定——两侧逐字相同
     expect(shape(ERAFL_GAME_ADAPTER.domainSymbols.pronouns)).toEqual(
       shape(ERATW_GAME_ADAPTER.domainSymbols.pronouns),
     );
@@ -302,7 +302,7 @@ describe('方言差异 · 各自事实 + 同一期望（不许拿 eraTW 的事�
 
   it('恒等表达式端口下代词差异**不出现在产物里**（落点要等宿主注入真管线才可见）', () => {
     const regs = registrations();
-    const source = '# 机 初见\n# 视 灵梦\n\n> 我是{我}。\n';
+    const source = '# 机 初见\n# 视角 灵梦\n\n> 我是{我}。\n';
     for (const key of ['eratw', 'erafl'] as const) {
       const result = compile(regs[key]!.adapter, regs[key]!.backend, source);
       expect(result.ok, key).toBe(true);

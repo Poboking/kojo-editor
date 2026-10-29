@@ -31,7 +31,7 @@ import type {
  * ⇒ 取 `%CALLNAME:…%` 形（引擎同一名字族，不是自造词）。
  *
  * `{我}` 取 `TARGET`（口上文件所属角色），`viewBound: true`：口上文件属于该角色时
- * `{我}` 与 `# 视` 目标重合。`{她}` 同落点但 `viewBound: false`——从玩家视角指称
+ * `{我}` 与 `# 视角` 目标重合。`{她}` 同落点但 `viewBound: false`——从玩家视角指称
  * 同一角色，换视点仍成立。`{你}` 取 `MASTER`，不依赖视点。
  */
 const PRONOUNS: readonly PronounSymbol[] = Object.freeze([

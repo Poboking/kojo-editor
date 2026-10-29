@@ -21,8 +21,8 @@
  * | `core/pool/no-default` | 补 `? 否` + 末条分支正文 | 本层（core 无"补兜底"改写） |
  * | `core/template/unexpected-slot` | 模板体补 `[插槽]` | 本层（core 无"补插槽"改写） |
  * | `core/lex/indent` | 缩进按层级改成 4 空格倍数 | 本层（core 无"修缩进"改写） |
- * | `core/expr/unknown-symbol` | 声明区补 `# 变量 <名> <类型>` | 本层（按赋值字面量推类型；推不出按整数） |
- * | `core/expr/type-mismatch` | `# 变量` 的声明类型改成整数 / 字符串（二选一） | 本层（只换声明类型 token） |
+ * | `core/expr/unknown-symbol` | 声明区补 `# 设 <名> <类型>` | 本层（按赋值字面量推类型；推不出按整数） |
+ * | `core/expr/type-mismatch` | `# 设` 的声明类型改成整数 / 字符串（二选一） | 本层（只换声明类型 token） |
  * | `core/func/arg-count` | 调用括号里补占位实参 `0` / `""` | 本层（缺必填；形参默认值类型唯一才补） |
  *
  * 显式**不产**（作者决策 / 删改危险，宁缺勿猜）：
@@ -175,7 +175,7 @@ export interface Kojo2CodeActionInput {
   readonly range: Kojo2CodeActionRange;
   /** 文件身份（只喂校验用的编译入口；core 不读盘） */
   readonly filePath?: string;
-  /** 裸引号的说话人兜底（缺省 = 文件有 `# 视` 时用 `我`，见 {@link resolveSpeaker}） */
+  /** 裸引号的说话人兜底（缺省 = 文件有 `# 视角` 时用 `我`，见 {@link resolveSpeaker}） */
   readonly speaker?: string;
   /** 替换校验入口（测试注入假 parse / 假 compile；缺省走 core） */
   readonly verifier?: Kojo2CodeActionVerifier;
@@ -469,16 +469,16 @@ function isNarrativeTextLine(text: string): boolean {
 /* ============================== 说话人 ============================== */
 
 /**
- * 裸引号的说话人：`input.speaker` 优先，否则**文件有 `# 视` 时用 `我`**。
+ * 裸引号的说话人：`input.speaker` 优先，否则**文件有 `# 视角` 时用 `我`**。
  *
- * 依据 §7.1：池内裸引号的默认说话人就是 `{我}`（`# 视` 的角色），2.0 写法直接写 `我：`；
- * 没有 `# 视` 时 `我` 解析不到（§3.6）⇒ 不给说话人 ⇒ core 迁移器如实拒绝 ⇒ **不产动作**
+ * 依据 §7.1：池内裸引号的默认说话人就是 `{我}`（`# 视角` 的角色），2.0 写法直接写 `我：`；
+ * 没有 `# 视角` 时 `我` 解析不到（§3.6）⇒ 不给说话人 ⇒ core 迁移器如实拒绝 ⇒ **不产动作**
  * （不许编一个作者没说过的名字）。`你：` 前缀的裸行同样不产（见模块尾「已知缺口」）。
  */
 function resolveSpeaker(input: Kojo2CodeActionInput, doc: SourceDoc): string | null {
   const explicit = input.speaker === undefined ? '' : input.speaker.trim();
   if (explicit.length > 0) return explicit;
-  return findLine(doc, /^#\s+视(?:\s|$)/u) === null ? null : '我';
+  return findLine(doc, /^#\s+视角(?:\s|$)/u) === null ? null : '我';
 }
 
 function speakerOptions(speaker: string | null): { readonly speaker?: string } {
@@ -999,7 +999,7 @@ function indentCandidatesOf(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActio
 /* ---------------------------- 语义诊断快速修复（S5.2 / S5.6） ---------------------------- */
 
 /** 单行声明头（声明区扫描：`# 幕` 不算——它是正文块起点，§3.2） */
-const SINGLE_LINE_DECL_HEAD_RE = /^#\s+(?:视|机|变量|常量)(?:\s|$)/u;
+const SINGLE_LINE_DECL_HEAD_RE = /^#\s+(?:视角|机|设)(?:\s|$)/u;
 
 function isCommentLine(text: string): boolean {
   return bodyOf(text).startsWith('//');
@@ -1017,9 +1017,9 @@ function textAtSpan(doc: SourceDoc, span: KojoSpan | null): string | null {
 }
 
 /**
- * 文件里已经声明过的名字（`# 变量` / `# 常量` / `# 对照表` / `# 池` / `# 模` / `@函`）。
+ * 文件里已经声明过的名字（`# 设` / `# 设` / `# 对照表` / `# 池` / `# 模` / `@函`）。
  *
- * `# 视` 的目标与 `# 机` 的事件不是**可赋值名字**（sema 的名字链不索引它们），所以不进来；
+ * `# 视角` 的目标与 `# 机` 的事件不是**可赋值名字**（sema 的名字链不索引它们），所以不进来；
  * `@织` 没有名字。解析器抛错 ⇒ null（不猜"没声明"）。
  */
 function declaredNamesOf(source: string): ReadonlySet<string> | null {
@@ -1047,7 +1047,7 @@ function declaredNamesOf(source: string): ReadonlySet<string> | null {
 
 /**
  * 新单行声明的插入行（1 基）：**首个正文块 / 块声明之前**，紧贴最后一条单行声明
- * （`# 机` / `# 视` / `# 变量` / `# 常量`）。§3.2 要求单行声明连续、整组与正文空一行，
+ * （`# 机` / `# 视角` / `# 设` / `# 设`）。§3.2 要求单行声明连续、整组与正文空一行，
  * 所以插在"最后一条单行声明之后、中间空行 / 注释之前"，而不是块声明那种上下各空一行。
  * `# 幕` 是正文块起点：插到它之前（声明区结束）。
  */
@@ -1079,7 +1079,7 @@ function singleDeclInsertEdit(doc: SourceDoc, at: number, decl: string): Kojo2Co
 }
 
 /**
- * `core/expr/unknown-symbol`：在声明区补一条 `# 变量 <名> <类型>`。
+ * `core/expr/unknown-symbol`：在声明区补一条 `# 设 <名> <类型>`。
  *
  * 类型口径：赋值右侧是字面量就**按字面量类型**声明（整数 → `整数`，双引号字符串 → `字符串`）；
  * 推不出（表达式 / 只有未声明名字 / 不是赋值）⇒ **按整数**，标题写明"按整数声明，请按需改类型"。
@@ -1095,7 +1095,7 @@ function unknownSymbolCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2Code
 
   const literalType = assignmentLiteralType(ctx.doc, span, name);
   const token = literalType === 'string' ? '字符串' : '整数';
-  const decl = `# 变量 ${name} ${token}`;
+  const decl = `# 设 ${name} ${token}`;
   const reason =
     literalType === null
       ? '按整数声明，请按需改类型'
@@ -1117,7 +1117,7 @@ function unknownSymbolCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2Code
  * 取名字赋值右侧的字面量类型（`null` = 不是单行赋值 / 右侧不是字面量）。
  *
  * 只认"左端就是 `name` 的赋值"：`{角色}的x = 1`、`! f(name)` 的参数类型诊断都借用了
- * `type-mismatch` 的码，但它们不是"给这个 `# 变量` 的声明改类型"能修的。
+ * `type-mismatch` 的码，但它们不是"给这个 `# 设` 的声明改类型"能修的。
  */
 function assignmentLiteralType(
   doc: SourceDoc,
@@ -1138,11 +1138,11 @@ function assignmentLiteralType(
 }
 
 /**
- * `core/expr/type-mismatch`：把 `# 变量` 的声明类型改成整数 / 字符串（两条候选，二选一）。
+ * `core/expr/type-mismatch`：把 `# 设` 的声明类型改成整数 / 字符串（两条候选，二选一）。
  *
- * 触发条件严格按任务口径：**左侧是 `# 变量` 声明、右侧是整数字面量**；否则不产。
+ * 触发条件严格按任务口径：**左侧是 `# 设` 声明、右侧是整数字面量**；否则不产。
  * 两条候选都先给，交给 {@link verifyFact} 的"应用后目标码必须消失"筛：只有把类型改成与
- * 右侧字面量一致的那条能过；若声明自带与目标类型冲突的初值（`# 变量 名 字符串 = "甲"`
+ * 右侧字面量一致的那条能过；若声明自带与目标类型冲突的初值（`# 设 名 字符串 = "甲"`
  * 改成整数会先撞 parser 的 `core/decl/bad-initializer`），两条都过不了 ⇒ 零动作。
  */
 function typeMismatchCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActionFact[] {
@@ -1159,7 +1159,7 @@ function typeMismatchCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeA
   const body = text.slice(indent.length);
   const tokens = splitSpaces(body, 0);
   if (tokens.length < 4) return [];
-  if (tokens[0]?.text !== '#' || tokens[1]?.text !== '变量' || tokens[2]?.text !== name) return [];
+  if (tokens[0]?.text !== '#' || tokens[1]?.text !== '设' || tokens[2]?.text !== name) return [];
   const typeToken = tokens[3]!;
   if (typeToken.text !== '整数' && typeToken.text !== '字符串') return []; // 数组 / 未知类型不碰
 
@@ -1182,7 +1182,7 @@ function typeMismatchCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeA
   return facts;
 }
 
-/** 文件里 `# 变量 <name>` 声明所在行（1 基；标量；找不到 / 是数组 ⇒ null） */
+/** 文件里 `# 设 <name>` 声明所在行（1 基；标量；找不到 / 是数组 ⇒ null） */
 function declaredVarLine(source: string, name: string): number | null {
   try {
     for (const decl of parseSource(source).decls) {
@@ -1385,7 +1385,7 @@ function relocatedSpan(span: KojoSpan | null, edits: readonly Kojo2CodeActionEdi
  * 也不能只看改动区间：补声明改的是声明区，目标诊断在正文。
  *
  * 另加一条计数闸：修完目标后，全文件的同码诊断数必须**比改前少至少这一条**——否则
- * "修好这处、又在别处修出新的一处"（例如把 `# 变量` 改成整数后，另一处 `名 = "x"` 崩掉）
+ * "修好这处、又在别处修出新的一处"（例如把 `# 设` 改成整数后，另一处 `名 = "x"` 崩掉）
  * 会被记在这条动作账上。改前计数为 0（陈旧 marker）同样零动作（宁缺勿猜）。
  */
 function semaTargetRemains(
@@ -1589,7 +1589,7 @@ export interface Kojo2CodeActionHost {
    * 返回是否真落了（糖视图 / 无归属实例 ⇒ false，本层不解释原因，由宿主自己说）。
    */
   readonly applyEdits: (model: Monaco.editor.ITextModel, edits: readonly EditorTextEdit[]) => boolean;
-  /** 裸引号说话人兜底（缺省 = 有 `# 视` 时用 `我`） */
+  /** 裸引号说话人兜底（缺省 = 有 `# 视角` 时用 `我`） */
   readonly speaker?: () => string | null | undefined;
   /** 文件身份（喂校验编译入口；缺省 = `model.uri` 的 fsPath） */
   readonly filePath?: (model: Monaco.editor.ITextModel) => string | null;

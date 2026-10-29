@@ -551,10 +551,10 @@ describe('补全逐字段：range / filterText / documentation / sortText / deta
   it('显式 insertText 优先于 label（同名不同插法是两条）', () => {
     const entry = toMonacoCompletionItem(
       fakeMonaco().monaco,
-      item({ label: '变量', insertText: '# 变量 ' }),
+      item({ label: '变量', insertText: '# 设 ' }),
       FALLBACK_RANGE,
     );
-    expect(entry!.insertText).toBe('# 变量 ');
+    expect(entry!.insertText).toBe('# 设 ');
   });
 
   it('kind 缺省 ⇒ Text；label 原样上屏', () => {
@@ -703,7 +703,7 @@ describe('悬停翻译：markdown / undefined / range 三条处置', () => {
 /* ============================== ⑦ provider：请求形状与三态 ============================== */
 
 describe('provider：宿主事实进请求、契约响应出 Monaco、三态各归各', () => {
-  const SOURCE = ['# 变量 好感 整数 = 0', '', '> 正文。', ''].join('\n');
+  const SOURCE = ['# 设 好感 整数 = 0', '', '> 正文。', ''].join('\n');
 
   it('补全请求带 model 身份 / 全文 / 光标 / 项目 / 触发字符（path 取自 uri.fsPath）', () => {
     let seen: EditorCompletionRequest | EditorHoverRequest | undefined;
@@ -936,7 +936,7 @@ describe('provider：宿主事实进请求、契约响应出 Monaco、三态各�
 /* ============================== ⑧ 真插件端到端（接线形状） ============================== */
 
 describe('真插件端到端：槽里放 `@kojo/plugin-kojo-lang` 的两枚贡献，宿主原样翻译', () => {
-  const SOURCE = ['# 变量 好感 整数 = 0', '# 模 问候(原因)', '    [插槽]', '! 问', '> 正文。', ''].join('\n');
+  const SOURCE = ['# 设 好感 整数 = 0', '# 模 问候(原因)', '    [插槽]', '! 问', '> 正文。', ''].join('\n');
 
   /** 起真插件、抓它注册的 languageService 贡献（与内核装配同一形状） */
   function activateKojoLang(): EditorLanguageServiceContribution[] {
@@ -983,9 +983,9 @@ describe('真插件端到端：槽里放 `@kojo/plugin-kojo-lang` 的两枚贡�
     expect(text).toContain('来源行：第 1 行');
     expect(hover!.range).toEqual({
       startLineNumber: 1,
-      startColumn: 6,
+      startColumn: 5,
       endLineNumber: 1,
-      endColumn: 8,
+      endColumn: 7,
     });
   });
 

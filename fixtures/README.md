@@ -11,7 +11,7 @@ fixtures/
 ├── mini-game/                        # 合成 eraTW 目录骨架
 │   ├── CSV/
 │   │   ├── Chara/                    # 角色映射（Chara{n} {名前}.csv）
-│   │   ├── CFLAG.csv                 # 变量名称表（条件抽取的语义标注来源）
+│   │   ├── CFLAG.csv                 # 设名称表（条件抽取的语义标注来源）
 │   │   └── Talent.csv
 │   └── ERB/口上・メッセージ関連/
 │       ├── KOJO_MESSAGE.ERB          # 口上路由表（最小）

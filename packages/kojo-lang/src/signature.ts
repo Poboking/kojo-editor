@@ -392,7 +392,7 @@ function signatureOfDeclaration(
 
 /* ============================== `@巡` 集合签名 ============================== */
 
-/** 数组长度事实：十进制整数，或同文件 `# 常量` 的整数值（与 core `resolveArraySize` 同口径）。 */
+/** 数组长度事实：十进制整数，或同文件 `# 设` 的整数值（与 core `resolveArraySize` 同口径）。 */
 const DECIMAL_SIZE_RE = /^\d+$/u;
 
 function resolveArraySize(
@@ -408,7 +408,7 @@ function resolveArraySize(
 }
 
 /**
- * 本文件的可遍历数组事实（`# 变量 名 <类型>[N]`；N 可以是同文件整数常量）。
+ * 本文件的可遍历数组事实（`# 设 名 <类型>[N]`；N 可以是同文件整数常量）。
  * 读不到长度 / 没写元素类型的声明不进表——core 的 `@巡` 会按"数组未声明"报错，
  * 本层也就不给签名（不猜）。
  */

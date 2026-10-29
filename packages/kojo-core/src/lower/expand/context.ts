@@ -53,7 +53,7 @@ export interface ExpandContext {
   /** 已声明整数常量（表端点静态求值用） */
   readonly constants: Map<string, number>;
   /**
-   * 可遍历数组事实（`# 变量 名 类型[N]`，K2-FOREACH）：`N` 经 `# 常量` 解析成整数。
+   * 可遍历数组事实（`# 设 名 类型[N]`，K2-FOREACH）：`N` 经 `# 设` 解析成整数。
    * 非定长 / 解析不出的**不进这张表**——`@巡` 会按"未声明数组"报错（不静默放行）。
    */
   readonly arrays: Map<string, ForeachArrayFact>;
@@ -192,7 +192,7 @@ export function hiddenSlots(ctx: ExpandContext): readonly KojoHiddenSlot[] {
 
 /** 把 `file.decls` 索引进上下文（声明提升：引用点可以出现在声明之前） */
 export function indexDeclarations(ctx: ExpandContext, decls: readonly KojoDecl[]): void {
-  // 常量先索引：`# 变量 名 整数[长度]` 的长度可能引用声明在后面的 `# 常量`
+  // 常量先索引：`# 设 名 整数[长度]` 的长度可能引用声明在后面的 `# 设`
   const consts = decls.filter((decl): decl is KojoConstDecl => decl.kind === 'const');
   for (const [name, value] of collectIntegerConstants(consts)) ctx.constants.set(name, value);
 
@@ -223,8 +223,8 @@ const DECIMAL_INT_RE = /^-?\d+$/;
 const IDENTIFIER_RE = /^[\p{L}_][\p{L}\p{N}_]*$/u;
 
 /**
- * 定长数组的长度解析（`# 变量 名 类型[N]` 的 `N`）：
- * 十进制非负整数，或**已声明的整数 `# 常量`**。其它形态（表达式 / 未知常量 / 负数 /
+ * 定长数组的长度解析（`# 设 名 类型[N]` 的 `N`）：
+ * 十进制非负整数，或**已声明的整数 `# 设`**。其它形态（表达式 / 未知常量 / 负数 /
  * 非安全整数）一律返回 null ⇒ 不进 `arrays`，`@巡` 会按"本文件没有该数组事实"报错
  * （fail-closed；0 保留为"空集合"的事实，见 `skeleton.empty = 'skip'`）。
  */
@@ -241,7 +241,7 @@ function resolveArraySize(size: KojoExprText, constants: ReadonlyMap<string, num
   return value;
 }
 
-/** 一条 `# 变量` 如果是定长数组 → 记一条 `ForeachArrayFact`（元素类型来自作者声明） */
+/** 一条 `# 设` 如果是定长数组 → 记一条 `ForeachArrayFact`（元素类型来自作者声明） */
 function indexArrayFact(ctx: ExpandContext, decl: KojoVarDecl): void {
   if (decl.arraySize === undefined) return;
   const size = resolveArraySize(decl.arraySize, ctx.constants);

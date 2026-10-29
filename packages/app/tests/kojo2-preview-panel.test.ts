@@ -391,7 +391,7 @@ describe('预览面板 · 源码光标 → 预览滚动', () => {
   });
 
   it('不产字节的源行：沿用模型的"最近前置"落点', () => {
-    const sourceLine = sourceLineOf('# 常量 无关');
+    const sourceLine = sourceLineOf('# 设 无关');
     const plan = previewScrollPlanFor(PREVIEW, sourceLine, NARROW);
     expect(plan!.previewLine).toBe(PREVIEW.previewLineForSourceLine(sourceLine));
     expect(plan!.previewLine).toBe(generatedLineOf('CALL HPH_PRINT'));
@@ -526,7 +526,7 @@ describe('预览面板 · 诊断气泡与未定位诊断', () => {
     const diagnostics = [
       diagnosticOf('core/wait/no-profile', 'error', null),
       diagnosticOf('core/expr/unknown-symbol', 'error', pointSpan(1, 2)),
-      diagnosticOf('core/expr/bad-index', 'warning', pointSpan(sourceLineOf('# 常量 无关'), 3)),
+      diagnosticOf('core/expr/bad-index', 'warning', pointSpan(sourceLineOf('# 设 无关'), 3)),
     ];
     const html = renderPanel({
       compiled: { erb: COMPILED.erb, diagnostics },
@@ -537,7 +537,7 @@ describe('预览面板 · 诊断气泡与未定位诊断', () => {
     expect(html).toContain('data-code="core/wait/no-profile"');
     expect(html).toContain('data-code="core/expr/unknown-symbol"');
     expect(html).toContain('data-code="core/expr/bad-index"');
-    expect(html).toContain(`第 ${sourceLineOf('# 常量 无关')} 行`);
+    expect(html).toContain(`第 ${sourceLineOf('# 设 无关')} 行`);
     expect(html).not.toContain('class="kojo2-preview__bubble"'); // 落不到产物行 ≠ 气泡
   });
 

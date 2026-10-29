@@ -10,7 +10,7 @@
  *    `project/weave-layers.ts` 各自的正反例——正例必须命中新码，反例必须不命中，
  *    且**不再借用**此前那张借来的码（`core/expr/not-expression` /
  *    `core/expr/type-mismatch` / `core/weave/unsupported`）。
- * 3. **`# 变量 x 整数[0]` 不放开**：设计稿 §3.4.2 写死「N 必须是正整数」，既有码
+ * 3. **`# 设 x 整数[0]` 不放开**：设计稿 §3.4.2 写死「N 必须是正整数」，既有码
  *    `core/decl/bad-array-size` 已在表内 ⇒ parser 保持拒收（语义修正不在本批）。
  */
 import { readFileSync } from 'node:fs';
@@ -74,6 +74,12 @@ const LAUD1_WARNING_CODES: readonly CoreDiagnosticCode[] = ['core/dialect/unboun
  * 这里只钉"码在闭集里、级别是 warning"。
  */
 const LAU6_CODES: readonly CoreDiagnosticCode[] = ['core/injection/child-failed'];
+
+/**
+ * 2026-10-29 语法口径批：`@原生{ … }` 花括号收口新写法 additive 的一枚——
+ * braced 块体结束后没等到同缩进的单独一行 `}`（裸 `@原生` 旧写法不受影响）。
+ */
+const NATIVE_BRACE_CODES: readonly CoreDiagnosticCode[] = ['core/native/unclosed'];
 
 /**
  * batch-4 收工时的全表（`git show <batch-4>/diagnostics.ts`）。
@@ -163,10 +169,21 @@ describe('码表 · 闭集只增（S5.6）', () => {
     expect(missing, `既有码被删/改名：${missing.join(' / ')}`).toEqual([]);
   });
 
-  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚 + 2026-10-26 批一条 + LAU-6 一枚（多一条/少一条都要过审）', () => {
+  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚 + 2026-10-26 批一条 + LAU-6 一枚 + 原生花括号一枚（多一条/少一条都要过审）', () => {
     const baseline = new Set(BATCH4_BASELINE);
     const added = declared.filter((code) => !baseline.has(code));
-    expect(added.sort()).toEqual([...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES, ...LAU6_CODES].sort());
+    expect(added.sort()).toEqual(
+      [...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES, ...LAU6_CODES, ...NATIVE_BRACE_CODES].sort(),
+    );
+  });
+
+  it('原生花括号批的 `core/native/unclosed` 在闭集里、是 error（缺收口不静默）', () => {
+    for (const code of NATIVE_BRACE_CODES) {
+      expect(declared).toContain(code);
+      expect(CORE_WARNING_CODES.has(code)).toBe(false);
+      expect(severityOf(code)).toBe('error');
+      expect(CORE_DIAGNOSTIC_CODES.has(code)).toBe(true);
+    }
   });
 
   it('LAU-6 的 `core/injection/child-failed` 在闭集里、是 warning（降级面不阻断）', () => {
@@ -255,7 +272,7 @@ describe('码表 · 闭集只增（S5.6）', () => {
 
 /* ============================== 1. core/pool/duplicate-case ============================== */
 
-const MACHINE = ['# 机 开场', '# 视 灵梦'];
+const MACHINE = ['# 机 开场', '# 视角 灵梦'];
 
 function poolOf(lines: readonly string[]) {
   const file = parseSource(lines.join('\n'));
@@ -387,8 +404,8 @@ describe('生产者 · core/func/arg-count（@函 实参个数）', () => {
 /* ============================== 3. core/array/whole-assign ============================== */
 
 describe('生产者 · core/array/whole-assign（数组整体赋值）', () => {
-  const HEADER = `# 变量 队列 整数[3]
-# 变量 数 整数
+  const HEADER = `# 设 队列 整数[3]
+# 设 数 整数
 `;
 
   it('`队列 = 1` → error + 新码（不再借用 type-mismatch）', () => {
@@ -489,7 +506,7 @@ describe('生产者 · core/weave/not-weavable（weavable: false）', () => {
   });
 });
 
-/* ============================== 5. `# 变量 x 整数[0]`：设计稿拒收，不放开 ============================== */
+/* ============================== 5. `# 设 x 整数[0]`：设计稿拒收，不放开 ============================== */
 
 describe('`整数[0]` · 设计稿 §3.4.2「N 必须是正整数」⇒ 保持拒收（语义修正不在本批）', () => {
   /** parser 诊断住在 `file.diagnostics`（`checkKojoFile` 只看 sema 层） */
@@ -497,11 +514,11 @@ describe('`整数[0]` · 设计稿 §3.4.2「N 必须是正整数」⇒ 保持�
     parseSource(text).diagnostics.map((item) => String(item.code));
 
   it('字面量 `[0]` 被 parser 拒：既有码 `core/decl/bad-array-size`', () => {
-    expect(parserCodes('# 变量 队列 整数[0]\n')).toContain('core/decl/bad-array-size');
+    expect(parserCodes('# 设 队列 整数[0]\n')).toContain('core/decl/bad-array-size');
   });
 
   it('常量 0 长度同样拒（sema 侧既有判定），`[1]` 是合法对照', () => {
-    expect(codes('# 常量 零 整数 = 0\n# 变量 队列 整数[零]\n')).toContain('core/decl/bad-array-size');
-    expect(parserCodes('# 变量 队列 整数[1]\n')).not.toContain('core/decl/bad-array-size');
+    expect(codes('# 设 零 整数 = 0\n# 设 队列 整数[零]\n')).toContain('core/decl/bad-array-size');
+    expect(parserCodes('# 设 队列 整数[1]\n')).not.toContain('core/decl/bad-array-size');
   });
 });

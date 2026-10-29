@@ -87,7 +87,7 @@ describe('`# 机` 包装钩子与事件参数', () => {
         return [...request.body];
       },
     };
-    const result = compileKojoSource({ source: ['# 机 开场', '# 视 灵梦', '> 甲', ''].join('\n'), adapter: FIXTURE_ADAPTER, backend });
+    const result = compileKojoSource({ source: ['# 机 开场', '# 视角 灵梦', '> 甲', ''].join('\n'), adapter: FIXTURE_ADAPTER, backend });
     expect(seen).toHaveLength(1);
     expect(seen[0]?.event).toBe('开场');
     expect(seen[0]?.view).toBe('灵梦');
@@ -246,7 +246,7 @@ describe('compileKojoFile 直接入口（预解析树）', () => {
 
   it('没有正文/`# 机` 的纯声明文件：成功、空产物、0 行映射', () => {
     const result = compileKojoSource({
-      source: ['# 常量 亲近线 整数 = 500', '# 变量 心情快照 字符串 场景', ''].join('\n'),
+      source: ['# 设 亲近线 整数 = 500', '# 设 心情快照 字符串 场景', ''].join('\n'),
       adapter: FIXTURE_ADAPTER,
       backend: E2E_BACKEND,
     });
@@ -299,7 +299,7 @@ describe('error 时 0 字节（fail-closed）', () => {
 
   it('解析期 error 直接并入（旧写法不产字节）', () => {
     const result = compileKojoSource({
-      source: read('machine.kojo2').replace('# 视 灵梦', '# 视 灵梦\n如果 恋慕 >= 1\n    > 甲'),
+      source: read('machine.kojo2').replace('# 视角 灵梦', '# 视角 灵梦\n如果 恋慕 >= 1\n    > 甲'),
       adapter: FIXTURE_ADAPTER,
       backend: E2E_BACKEND,
     });

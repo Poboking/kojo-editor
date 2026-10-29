@@ -236,8 +236,8 @@ describe('prepare：`@函` / `# 模` 声明位交回同一枚 item', () => {
     expect(endsAfter).toBe(true);
   });
 
-  it('非可调用声明 → null（变量 / 幕 / 注释）', () => {
-    expect(kojo2PrepareCallHierarchy(FIXTURE, declarationPosition('variable', '计数'))).toBeNull();
+  it('非可调用声明 → null（常量 / 幕 / 注释）', () => {
+    expect(kojo2PrepareCallHierarchy(FIXTURE, declarationPosition('constant', '计数'))).toBeNull();
     expect(kojo2PrepareCallHierarchy(FIXTURE, declarationPosition('scene', '问候场景'))).toBeNull();
     expect(kojo2PrepareCallHierarchy(FIXTURE, { line: 1, column: 5 })).toBeNull();
   });

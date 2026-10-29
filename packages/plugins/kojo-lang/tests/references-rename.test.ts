@@ -180,7 +180,7 @@ describe('改名全或无：四类失败都零编辑 + 理由', () => {
   });
 
   it('与既有声明重名', () => {
-    const text = '# 变量 心情 整数 = 0\n# 变量 情绪 整数 = 0';
+    const text = '# 设 心情 整数 = 0\n# 设 情绪 整数 = 0';
     const result = provideRename(renameRequest({ text, line: 1, column: 6, newName: '情绪' }))!;
     expect(result.edits).toEqual([]);
     expect(result.rejectReason).toContain('已在本文件声明过');
@@ -188,7 +188,7 @@ describe('改名全或无：四类失败都零编辑 + 理由', () => {
 
   it('表达式 token 失败 ⇒ 整次取消（宁可少改，不猜）', () => {
     // 一个无法词法化的表达式位（未闭合字符串会让 tokenizeExpr 报错）
-    const text = '# 机 指令 310\n# 变量 心情 整数 = 0\n@算\n    心情 = "未闭合';
+    const text = '# 机 指令 310\n# 设 心情 整数 = 0\n@算\n    心情 = "未闭合';
     const result = provideRename(renameRequest({ text, column: 6 }))!;
     expect(result.edits).toEqual([]);
     expect(result.rejectReason).toContain('词法化');

@@ -111,7 +111,7 @@ export const KOJO2_TOKEN_TIERS: readonly Kojo2TokenTier[] = [
   // 2026-10-27 第三色批：本仓此前只有紫（保留/关键字）与蓝（声明调度词）两层，"这一列存什么"
   // 一直没有自己的色。两个发射点：类型词（`整数` / `字符串`，Monarch）与结构定义头
   // （`# 对照表` / `# 池` / `# 模`，worker 的 highlights 查询）。与 v1 侧的 `support.type` 逐字同色。
-  // ⚠ 叠层默认开时，`# 变量 … 整数 …` 整行由 `(variable_decl)` 一档盖住（叶子节点，语法层
+  // ⚠ 叠层默认开时，`# 设 … 整数 …` 整行由 `(variable_decl)` 一档盖住（叶子节点，语法层
   // 没给类型词单独的子记号节点 ⇒ 判不出来就不硬拆），那一行的类型色只在叠层关时露出；
   // 结构定义头那一档两条链都发同一个色，默认态可见。
   { tier: '类型与结构名', tokens: [KOJO2_TOKEN.type], why: '`整数`/`字符串` 说这一列存什么，`# 对照表`/`池`/`模` 定义一个结构——都不改判定，改的是形状' },
@@ -152,9 +152,9 @@ const TABLE_RANGE_ROW = new RegExp(
   `^(\\s*)((?:[^\\s]*\\.[^\\s]*|[-+]?\\d+))(\\s+)(${TABLE_ARROW})(\\s+)(\\S.*)$`,
 );
 
-/** `@原生` 栏头：任意缩进；缩进阶梯由 `cases` 逐级分派到 `nativeN` 状态。 */
+/** `@原生{` 栏头（新典）/ 裸 `@原生`（旧写法容忍）：任意缩进；缩进阶梯由 `cases` 逐级分派到 `nativeN` 状态。 */
 const NATIVE_HEADER = new RegExp(
-  `^(\\s*)@${escapeRegExp(KOJO2_NATIVE_FENCE_WORD)}[ \\t\\u3000]*$`,
+  `^(\\s*)@${escapeRegExp(KOJO2_NATIVE_FENCE_WORD)}(?:\\{)?[ \\t\\u3000]*$`,
 );
 
 /** 行尾 `续`（必须前接空白；字形从词表单源派生，本文件不写这个字）。 */

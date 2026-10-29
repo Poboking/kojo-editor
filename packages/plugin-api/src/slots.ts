@@ -905,7 +905,7 @@ export interface EditorInlayHint {
    * 语义类别（**additive 可选**，B2c）：宿主据此选 `InlayHintKind`（决定颜色 / 图标）。
    *
    * 为什么需要它：宿主那条槽腿此前**对全部提示硬写 `Parameter`**——那对 ERB 的形参名
-   * 是对的，对 kojo2 的"类型提示"就是假话（`# 变量 好感度 整数` 行尾那个 `整数` 不是形参）。
+   * 是对的，对 kojo2 的"类型提示"就是假话（`# 设 好感度 整数` 行尾那个 `整数` 不是形参）。
    * 缺省 = `parameter`，与补这一格之前**逐字相同**（旧供方零改动，旧宿主零改动）。
    */
   readonly kind?: EditorInlayHintKind;

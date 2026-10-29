@@ -215,7 +215,7 @@ describe('prepare：只调包里的 kojo2PrepareRename，不在宿主复制判�
   it('光标在声明名上 ⇒ 名字段区间 + 原名（F2 输入框初值）', () => {
     const { provider } = installAndProvider();
     const prepared = provider.resolveRenameLocation!(
-      fakeModel('# 变量 心情 整数 = 0'),
+      fakeModel('# 设 心情 整数 = 0'),
       AT(1, 6),
       TOKEN,
     ) as Monaco.languages.RenameLocation & Monaco.languages.Rejection;
@@ -223,9 +223,9 @@ describe('prepare：只调包里的 kojo2PrepareRename，不在宿主复制判�
     expect(prepared.text).toBe('心情');
     expect(prepared.range).toEqual({
       startLineNumber: 1,
-      startColumn: 6,
+      startColumn: 5,
       endLineNumber: 1,
-      endColumn: 8,
+      endColumn: 7,
     });
   });
 
@@ -242,7 +242,7 @@ describe('prepare：只调包里的 kojo2PrepareRename，不在宿主复制判�
     expect(blank.rejectReason).toBeTruthy();
 
     const readOnly = provider.resolveRenameLocation!(
-      fakeModel('# 变量 心情 整数 = 0', { readOnly: true }),
+      fakeModel('# 设 心情 整数 = 0', { readOnly: true }),
       AT(1, 6),
       TOKEN,
     ) as Monaco.languages.RenameLocation & Monaco.languages.Rejection;
@@ -268,7 +268,7 @@ describe('model → 请求：身份三格 / 新名 / 快照', () => {
       }),
     ]);
     const { provider } = installAndProvider();
-    editAt(provider, fakeModel('# 变量 心情 整数 = 0'), 1, 5, '情绪');
+    editAt(provider, fakeModel('# 设 心情 整数 = 0'), 1, 5, '情绪');
     expect(captured.kind).toBe('rename');
     expect(captured.path).toBe('D:/proj/a.kojo2');
     expect(captured.languageId).toBe(KOJO2_LANGUAGE_ID);
@@ -287,7 +287,7 @@ describe('model → 请求：身份三格 / 新名 / 快照', () => {
       }),
     ]);
     const { provider } = installAndProvider();
-    editAt(provider, fakeModel('# 变量 心情 整数 = 0'), 1, 5, '情绪');
+    editAt(provider, fakeModel('# 设 心情 整数 = 0'), 1, 5, '情绪');
     expect(Object.hasOwn(captured, 'projectFiles')).toBe(false);
   });
 
@@ -299,7 +299,7 @@ describe('model → 请求：身份三格 / 新名 / 快照', () => {
       }),
     ]);
     const index = fakeIndex([
-      { path: 'D:/proj/a.kojo2', text: '# 变量 心情 整数 = 0' },
+      { path: 'D:/proj/a.kojo2', text: '# 设 心情 整数 = 0' },
       { path: 'D:/proj/b.kojo2', text: '> {心情}' },
       { path: 'D:/proj/c.kojo2', text: '> {心情}' },
     ]);
@@ -307,7 +307,7 @@ describe('model → 请求：身份三格 / 新名 / 快照', () => {
       getIndex: () => index,
       snapshotLimits: { maxFiles: 1 },
     });
-    editAt(provider, fakeModel('# 变量 心情 整数 = 0'), 1, 5, '情绪');
+    editAt(provider, fakeModel('# 设 心情 整数 = 0'), 1, 5, '情绪');
     expect(captured.projectFiles).toEqual([{ path: 'D:/proj/b.kojo2', text: '> {心情}' }]);
     expect(captured.projectFilesComplete).toBe(false);
   });
@@ -329,7 +329,7 @@ describe('契约编辑 → WorkspaceEdit：resourcePath → URI / versionId / �
     ]);
     const uriForPath = vi.fn((target: string) => ({ path: target }) as Monaco.Uri);
     const { provider } = installAndProvider({ uriForPath });
-    const model = fakeModel('# 变量 心情 整数 = 0');
+    const model = fakeModel('# 设 心情 整数 = 0');
     const workspace = editAt(provider, model, 1, 5, '情绪');
     const edits = workspace.edits as Monaco.languages.IWorkspaceTextEdit[];
     expect(edits).toHaveLength(2);
@@ -354,7 +354,7 @@ describe('契约编辑 → WorkspaceEdit：resourcePath → URI / versionId / �
     ]);
     const uriForPath = vi.fn(() => ({ path: '不该被调用' }) as Monaco.Uri);
     const { provider } = installAndProvider({ uriForPath });
-    const model = fakeModel('# 变量 心情 整数 = 0');
+    const model = fakeModel('# 设 心情 整数 = 0');
     const workspace = editAt(provider, model, 1, 5, '情绪');
     const edits = workspace.edits as Monaco.languages.IWorkspaceTextEdit[];
     expect(edits[0]?.resource).toBe((model as unknown as { uri: Monaco.Uri }).uri);
@@ -374,7 +374,7 @@ describe('rejectReason 透传与全或无形状', () => {
       })),
     ]);
     const { provider } = installAndProvider();
-    const workspace = editAt(provider, fakeModel('# 变量 心情 整数 = 0'), 1, 5, '1坏名');
+    const workspace = editAt(provider, fakeModel('# 设 心情 整数 = 0'), 1, 5, '1坏名');
     expect(workspace.edits).toEqual([]);
     expect(workspace.rejectReason).toBe('新名「1坏名」不是合法的 2.0 名字');
   });

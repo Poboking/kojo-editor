@@ -88,6 +88,10 @@
             "named": true
           },
           {
+            "type": "native_head_braced",
+            "named": true
+          },
+          {
             "type": "pool_head",
             "named": true
           },
@@ -121,6 +125,16 @@
           }
         ]
       }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "native_close",
+          "named": true
+        }
+      ]
     }
   },
   {
@@ -169,10 +183,6 @@
         },
         {
           "type": "condition_head",
-          "named": true
-        },
-        {
-          "type": "constant_decl",
           "named": true
         },
         {
@@ -244,6 +254,10 @@
           "named": true
         },
         {
+          "type": "set_decl",
+          "named": true
+        },
+        {
           "type": "slot_marker",
           "named": true
         },
@@ -253,10 +267,6 @@
         },
         {
           "type": "trigger",
-          "named": true
-        },
-        {
-          "type": "variable_decl",
           "named": true
         },
         {
@@ -408,10 +418,6 @@
           "named": true
         },
         {
-          "type": "constant_decl",
-          "named": true
-        },
-        {
           "type": "continue_stmt",
           "named": true
         },
@@ -472,6 +478,10 @@
           "named": true
         },
         {
+          "type": "set_decl",
+          "named": true
+        },
+        {
           "type": "slot_marker",
           "named": true
         },
@@ -481,10 +491,6 @@
         },
         {
           "type": "trigger",
-          "named": true
-        },
-        {
-          "type": "variable_decl",
           "named": true
         },
         {
@@ -669,10 +675,6 @@
     "named": true
   },
   {
-    "type": "constant_decl",
-    "named": true
-  },
-  {
     "type": "continue_mark",
     "named": true
   },
@@ -741,7 +743,15 @@
     "named": true
   },
   {
+    "type": "native_close",
+    "named": true
+  },
+  {
     "type": "native_head",
+    "named": true
+  },
+  {
+    "type": "native_head_braced",
     "named": true
   },
   {
@@ -770,6 +780,10 @@
   },
   {
     "type": "scene_decl",
+    "named": true
+  },
+  {
+    "type": "set_decl",
     "named": true
   },
   {
@@ -814,10 +828,6 @@
   },
   {
     "type": "trigger",
-    "named": true
-  },
-  {
-    "type": "variable_decl",
     "named": true
   },
   {

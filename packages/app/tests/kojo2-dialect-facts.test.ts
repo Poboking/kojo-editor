@@ -63,7 +63,7 @@ describe('悬停 · 事件名讲的是方言事实', () => {
   });
 
   it('事件之外的事实不因 adapter 变：同一份声明悬停逐字相同', () => {
-    const source = '# 机 初见\n# 变量 好感 整数[3]\n\n> 正文。\n';
+    const source = '# 机 初见\n# 设 好感 整数[3]\n\n> 正文。\n';
     const at = { line: 2, column: 6 };
     const eratw = kojo2HoverAt({ source, ...at }, { adapter: ERATW_GAME_ADAPTER });
     const erafl = kojo2HoverAt({ source, ...at }, { adapter: ERAFL_GAME_ADAPTER });

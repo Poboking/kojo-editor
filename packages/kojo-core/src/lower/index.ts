@@ -29,7 +29,7 @@ import { lowerWeave } from './weave.js';
 
 export interface LowerOptions {
   readonly backend: KojoEmitBackend;
-  /** 当前 `# 视` 目标（池内裸引号默认说话人）；缺省 null */
+  /** 当前 `# 视角` 目标（池内裸引号默认说话人）；缺省 null */
   readonly view?: string | null;
   /** 预分配行数（大文件传入估算值，省一次数组扩容） */
   readonly estimatedLines?: number;
@@ -88,7 +88,7 @@ function adoptFileDiagnostic(diagnostic: KojoFile['diagnostics'][number]): KojoD
   };
 }
 
-/** 文件里的 `# 视 <目标>`（池内裸引号默认说话人）；没有则 null */
+/** 文件里的 `# 视角 <目标>`（池内裸引号默认说话人）；没有则 null */
 function viewOf(file: KojoFile): string | null {
   for (const decl of file.decls) if (decl.kind === 'view') return decl.target;
   return null;

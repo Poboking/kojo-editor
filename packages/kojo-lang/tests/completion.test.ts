@@ -110,10 +110,10 @@ describe('候选源：锚点 / 声明词 / 事件 / 域符号 / 成员名单', (
     }
   });
 
-  it('`#` 之后给完整声明词表（与 core `KOJO_DECL_WORDS` 逐项相等）', () => {
+  it('`#` 之后给完整声明词表（core `KOJO_DECL_WORDS` 去重；`设` 占变量/常量两位）', () => {
     const candidates = kojo2CompletionAt(queryAt(`${BASE}# |`));
     expect(kindsOf(candidates)).toEqual(candidates.map(() => 'declarationWord'));
-    expect(labelsOf(candidates)).toEqual([...KOJO_DECL_WORDS]);
+    expect(labelsOf(candidates)).toEqual([...new Set(KOJO_DECL_WORDS)]);
   });
 
   it('声明词按已输入前缀裁剪（`# 变|` → 只留“变量”）', () => {
@@ -316,21 +316,21 @@ describe('`@织 <事件>` 事件位：与 `# 机` 同一枚名单', () => {
   });
 });
 
-describe('`# 变量 / # 常量` 尾槽：类型词与存储期（core 词表派生）', () => {
+describe('`# 设 / # 设` 尾槽：类型词与存储期（core 词表派生）', () => {
   it('名字之后的类型位给 `整数 / 字符串`（与 core 词表逐项相等）', () => {
-    const candidates = kojo2CompletionAt(queryAt(`${BASE}# 变量 状态 |`));
+    const candidates = kojo2CompletionAt(queryAt(`${BASE}# 设 状态 |`));
     expect(labelsOf(candidates)).toEqual(SORTED_TYPES);
     expect(candidates.map((candidate) => candidate.kind)).toEqual(candidates.map(() => 'valueType'));
   });
 
   it('类型按前缀裁剪（`字|` ⇒ `字符串`）', () => {
-    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 变量 状态 字|`)))).toEqual([
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 设 状态 字|`)))).toEqual([
       KOJO_TYPE_WORDS[1],
     ]);
   });
 
   it('类型之后的存储期位给 `场景 / 存档 / 会话`（顺序 = core 默认值优先级）', () => {
-    const candidates = kojo2CompletionAt(queryAt(`${BASE}# 变量 状态 整数 |`));
+    const candidates = kojo2CompletionAt(queryAt(`${BASE}# 设 状态 整数 |`));
     expect(labelsOf(candidates)).toEqual(SORTED_STORAGE);
     expect(candidates.map((candidate) => candidate.kind)).toEqual(
       candidates.map(() => 'storagePeriod'),
@@ -338,31 +338,31 @@ describe('`# 变量 / # 常量` 尾槽：类型词与存储期（core 词表派�
   });
 
   it('存储期按前缀裁剪（`存|` ⇒ `存档`）', () => {
-    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 变量 状态 整数 存|`)))).toEqual(['存档']);
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 设 状态 整数 存|`)))).toEqual(['存档']);
   });
 
   it('初值之后的存储期位照给（`= 0 |`）', () => {
-    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 变量 状态 整数 = 0 |`)))).toEqual(
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 设 状态 整数 = 0 |`)))).toEqual(
       SORTED_STORAGE,
     );
   });
 
   it('初值位（`= |`）不给存储期（初值只允许字面量）', () => {
-    expect(kojo2CompletionAt(queryAt(`${BASE}# 变量 状态 整数 = |`))).toEqual([]);
+    expect(kojo2CompletionAt(queryAt(`${BASE}# 设 状态 整数 = |`))).toEqual([]);
   });
 
   it('名字位（还在写名字）不给候选', () => {
-    expect(kojo2CompletionAt(queryAt(`${BASE}# 变量 状|`))).toEqual([]);
+    expect(kojo2CompletionAt(queryAt(`${BASE}# 设 状|`))).toEqual([]);
   });
 
   it('初值字符串里不给候选（字符串位置门先手）', () => {
-    expect(kojo2CompletionAt(queryAt(`${BASE}# 变量 状态 字符串 = "存|`))).toEqual([]);
+    expect(kojo2CompletionAt(queryAt(`${BASE}# 设 状态 字符串 = "存|`))).toEqual([]);
   });
 
-  it('`# 常量` 只有类型位（常量没有存储期）', () => {
-    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 常量 阈值 |`)))).toEqual(SORTED_TYPES);
-    expect(kojo2CompletionAt(queryAt(`${BASE}# 常量 阈值 整数 |`))).toEqual([]);
-    expect(kojo2CompletionAt(queryAt(`${BASE}# 常量 阈值 整数 = 5 |`))).toEqual([]);
+  it('`# 设` 合并词：类型位之后存储期照给（无初值 = 变量；带初值也可补存储期成变量）', () => {
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 设 阈值 |`)))).toEqual(SORTED_TYPES);
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 设 阈值 整数 |`)))).toEqual(SORTED_STORAGE);
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}# 设 阈值 整数 = 5 |`)))).toEqual(SORTED_STORAGE);
   });
 });
 
@@ -627,13 +627,13 @@ describe('新候选位的位置门：台词 / `@原生` / 注释 / 旧写法不�
     expect(kojo2CompletionAt(queryAt(source), { eventArgs: EVENT_ARGS })).toEqual([]);
   });
 
-  it('台词正文里的 `# 变量 名 ` 零候选', () => {
-    const source = FIXTURE.replace('今天来得', '今天来得 # 变量 名 |');
+  it('台词正文里的 `# 设 名 ` 零候选', () => {
+    const source = FIXTURE.replace('今天来得', '今天来得 # 设 名 |');
     expect(kojo2CompletionAt(queryAt(source))).toEqual([]);
   });
 
   it('整行注释里的存储期位零候选', () => {
-    expect(kojo2CompletionAt(queryAt(`${BASE}// # 变量 名 整数 |`))).toEqual([]);
+    expect(kojo2CompletionAt(queryAt(`${BASE}// # 设 名 整数 |`))).toEqual([]);
   });
 
   it('旧写法行零候选（`# 时机` / `调用`）', () => {

@@ -38,12 +38,12 @@ function dialectDeclsOf(source: string): KojoDialectDecl[] {
 
 describe('`方言` 在声明词表里的位置契约', () => {
   it('已登记，且**恰在尾部**（前面八枚的位序一个字都不许动）', () => {
-    expect(KOJO_DECL_WORDS).toEqual(['幕', '视', '机', '变量', '常量', '对照表', '池', '模', '方言']);
+    expect(KOJO_DECL_WORDS).toEqual(['幕', '视角', '机', '设', '设', '对照表', '池', '模', '方言']);
     expect(KOJO_DECL_WORD_SET.has('方言')).toBe(true);
   });
 
   it('下游按位置取的词仍然对位（`kojo2-format.ts` 的 slice(0,5) 与 5/6/7 三枚）', () => {
-    expect(KOJO_DECL_WORDS.slice(0, 5)).toEqual(['幕', '视', '机', '变量', '常量']);
+    expect(KOJO_DECL_WORDS.slice(0, 5)).toEqual(['幕', '视角', '机', '设', '设']);
     expect(KOJO_DECL_WORDS[5]).toBe('对照表');
     expect(KOJO_DECL_WORDS[6]).toBe('池');
     expect(KOJO_DECL_WORDS[7]).toBe('模');
@@ -105,8 +105,8 @@ describe('文法：`# 方言` 产出 dialect 声明节点', () => {
     expect(dialectDeclsOf(`${MACHINE}# 方言 a b\n`)[0]!.name).toBe('a');
   });
 
-  it('与 `# 幕` / `# 视` / `# 机` 同区连写不影响各自的节点', () => {
-    const file = parseSource('# 幕 神社清晨\n# 方言 erafl\n# 视 灵梦\n# 机 指令 310\n> 正文\n');
+  it('与 `# 幕` / `# 视角` / `# 机` 同区连写不影响各自的节点', () => {
+    const file = parseSource('# 幕 神社清晨\n# 方言 erafl\n# 视角 灵梦\n# 机 指令 310\n> 正文\n');
     expect(file.decls.map((decl) => decl.kind)).toEqual(['dialect', 'view', 'machine']);
     // 断言行像其它声明一样被提升，不切场景、不吞正文
     expect(file.scenes.map((scene) => scene.title)).toEqual(['神社清晨']);
@@ -131,11 +131,11 @@ describe('`# 方言` 的参数对 core 是不透明字符串', () => {
     expect(KOJO_DECL_WORDS.filter((word) => word.includes('方言'))).toEqual(['方言']);
   });
 
-  it('只断言不赋值：名字**不进文件命名空间**（不与 `# 变量` 抢重名，§3.4.5）', () => {
-    expect(codesOf(`${MACHINE}# 方言 心情\n# 变量 心情 整数\n> 正文\n`)).not.toContain(
+  it('只断言不赋值：名字**不进文件命名空间**（不与 `# 设` 抢重名，§3.4.5）', () => {
+    expect(codesOf(`${MACHINE}# 方言 心情\n# 设 心情 整数\n> 正文\n`)).not.toContain(
       'core/decl/duplicate-name',
     );
-    expect(codesOf(`${MACHINE}# 方言 心情\n# 变量 心情 整数\n> 正文\n`)).toEqual([]);
+    expect(codesOf(`${MACHINE}# 方言 心情\n# 设 心情 整数\n> 正文\n`)).toEqual([]);
   });
 
   it('不提升语义、不参与降糖：断言行本身没有体，缩进正文照旧归上一条结构', () => {
@@ -168,8 +168,8 @@ describe('`# 方言` 查重：一个文件只断言一个方言', () => {
     expect(codesOf(`${MACHINE}> 正文\n`)).toEqual([]);
   });
 
-  it('不与 `# 视` / `# 机` 的查重码混用（各管各的槽）', () => {
-    const codes = codesOf(`${MACHINE}# 视 a\n# 视 b\n# 方言 x\n# 方言 y\n`);
+  it('不与 `# 视角` / `# 机` 的查重码混用（各管各的槽）', () => {
+    const codes = codesOf(`${MACHINE}# 视角 a\n# 视角 b\n# 方言 x\n# 方言 y\n`);
     expect(codes).toContain('core/decl/multiple-view');
     expect(codes).toContain('core/decl/multiple-dialect');
     expect(codes.filter((code) => code === 'core/decl/multiple-dialect')).toHaveLength(1);

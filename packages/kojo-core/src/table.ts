@@ -8,7 +8,7 @@
  * - 范围**两两不重叠**：闭区间、开放区间、精确值统一按 `[lo, hi]` 判交（端点相等即重叠）；
  * - `否` **必须最后、必须有值、不能重复**；
  * - 普通行必须有值；值列**全部同类型**；
- * - 端点只允许十进制整数字面量或已声明整数 `# 常量`（变量/函数/算术 → dynamic-endpoint）；
+ * - 端点只允许十进制整数字面量或已声明整数 `# 设`（变量/函数/算术 → dynamic-endpoint）；
  * - 静态可证 `from > to` → bad-range（不是 overlap：空区间不与任何行重叠）。
  *
  * 行编码（与 parser 拍的契约，见 `ast.ts::KojoTableRow`）：
@@ -82,7 +82,7 @@ export interface TableValidationResult {
 }
 
 export interface TableLoweringContext {
-  /** 已声明整数 `# 常量`（端点静态求值用）；缺省 → 非字面量端点一律 dynamic-endpoint */
+  /** 已声明整数 `# 设`（端点静态求值用）；缺省 → 非字面量端点一律 dynamic-endpoint */
   readonly integerConstants?: ReadonlyMap<string, number>;
   /** 隐藏槽前缀（默认 `__kojo_table_`；§2.4/§13 保留前缀 `__kojo_`） */
   readonly slotPrefix?: string;
@@ -99,7 +99,7 @@ export function tableSlotName(name: string, prefix: string = TABLE_SLOT_PREFIX):
   return `${prefix}${name}`;
 }
 
-/** 从 `# 常量` 声明里抽整数常量表（降糖入口的便捷注入；非整数常量不收） */
+/** 从 `# 设` 声明里抽整数常量表（降糖入口的便捷注入；非整数常量不收） */
 export function collectIntegerConstants(
   decls: Iterable<Pick<KojoConstDecl, 'name' | 'valueType' | 'value'>>,
 ): ReadonlyMap<string, number> {
@@ -128,11 +128,11 @@ function resolveEndpoint(expr: KojoExprText, constants: ReadonlyMap<string, numb
   if (IDENTIFIER_RE.test(text)) {
     const value = constants?.get(text);
     if (value === undefined) {
-      return { kind: 'dynamic', reason: `端点 ${text} 不是已声明的整数 # 常量` };
+      return { kind: 'dynamic', reason: `端点 ${text} 不是已声明的整数 # 设` };
     }
     return { kind: 'value', value };
   }
-  return { kind: 'dynamic', reason: `端点 ${text} 不是十进制整数字面量或整数 # 常量` };
+  return { kind: 'dynamic', reason: `端点 ${text} 不是十进制整数字面量或整数 # 设` };
 }
 
 /** 源写法标签（诊断文案用；保留作者原文，不换成求值后的数字） */

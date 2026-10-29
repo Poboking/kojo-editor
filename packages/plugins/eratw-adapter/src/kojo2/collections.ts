@@ -2,8 +2,8 @@
  * eraTW 2.0 `@巡` 集合声明（游戏事实 —— 只住本包；K2-FOREACH）。
  *
  * 口径（设计稿 §9.2 / §9.3）：
- * - **作者数组**走 `arrayRule`：`# 变量 名 类型[N]` 声明后 `@巡 名` 绑定 `{值}` / `{下标}`。
- *   数组事实（名 / 元素类型 / 长度）由 core 从 `# 变量` 收集后经 plan 的 `arrays` 注入；
+ * - **作者数组**走 `arrayRule`：`# 设 名 类型[N]` 声明后 `@巡 名` 绑定 `{值}` / `{下标}`。
+ *   数组事实（名 / 元素类型 / 长度）由 core 从 `# 设` 收集后经 plan 的 `arrays` 注入；
  *   本表**不预列作者数组**（否则等于把每个作者工程抄进 adapter）。
  * - **角色集合 `队伍`**：eraTW 角色号 0 = 玩家（MASTER），1..`CHARANUM - 1` 是登场角色。
  *   遍历从 1 起、长度 `CHARANUM - 1`（空集合 = `CHARANUM <= 1`，循环条件零轮）；
@@ -34,7 +34,7 @@ const TEAM: ForeachCollectionDecl = {
   nameAccessor: 'CALLNAME',
 };
 
-/** 作者数组：0 基，绑定 `{值}` / `{下标}`；元素类型与长度由每份 `# 变量` 事实给 */
+/** 作者数组：0 基，绑定 `{值}` / `{下标}`；元素类型与长度由每份 `# 设` 事实给 */
 const AUTHOR_ARRAY: ForeachArrayRule = {
   base: 0,
   bindings: Object.freeze(['值', '下标'] as const),

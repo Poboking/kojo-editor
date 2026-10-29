@@ -33,7 +33,7 @@ const TEAM_SOURCE = ['# 机 初见', '', '@巡 队伍', '    ? {角}的体力 <=
 
 const ARRAY_SOURCE = [
   '# 机 初见',
-  '# 变量 队伍状态 字符串[4]',
+  '# 设 队伍状态 字符串[4]',
   '',
   '@巡 队伍状态',
   '    > 第{下标 + 1}位。',
@@ -100,7 +100,7 @@ describe('eraTW @巡 集合声明（冻结数据）', () => {
     expect(team.length).toEqual({ kind: 'engine', counter: 'CHARANUM', minus: 1 });
   });
 
-  it('数组规则：0 基、{值}/{下标}（元素类型/长度由 # 变量 事实给）', () => {
+  it('数组规则：0 基、{值}/{下标}（元素类型/长度由 # 设 事实给）', () => {
     expect(ERATW_FOREACH_ARRAY_RULE).toEqual({ base: 0, bindings: ['值', '下标'] });
   });
 });

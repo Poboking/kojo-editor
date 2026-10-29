@@ -231,7 +231,7 @@ describe('model → 请求：身份三格 / 全文 / 光标 / 快照', () => {
         captured = request as Record<string, unknown>;
       }),
     ]);
-    const { model } = fakeModel('# 变量 心情 整数 = 0\n> {心情}');
+    const { model } = fakeModel('# 设 心情 整数 = 0\n> {心情}');
     provide(provider, model, 2, 4);
     expect(captured.kind).toBe('references');
     expect(captured.path).toBe('D:/proj/a.kojo2');
@@ -240,7 +240,7 @@ describe('model → 请求：身份三格 / 全文 / 光标 / 快照', () => {
     expect(captured.line).toBe(2);
     expect(captured.column).toBe(4);
     expect(captured.lineCount).toBe(2);
-    expect(captured.text).toBe('# 变量 心情 整数 = 0\n> {心情}');
+    expect(captured.text).toBe('# 设 心情 整数 = 0\n> {心情}');
     expect(captured.project).toEqual({ adapterId: 'proj-a' });
   });
 

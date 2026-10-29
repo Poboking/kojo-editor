@@ -361,7 +361,7 @@ export const KOJO2_TOKEN = Object.freeze({
   hex: ROLE.numberAlt,
   /** 运算符（ASCII 符号与中文运算符词） */
   operator: ROLE.operatorAlt,
-  /** 类型 / 结构名（`# 对照表` / `# 池` / `# 模` 头与 `# 变量` 行的类型词）——与 v1 的类型档同角色 */
+  /** 类型 / 结构名（`# 对照表` / `# 池` / `# 模` 头与 `# 设` 行的类型词）——与 v1 的类型档同角色 */
   type: ROLE.type,
 });
 

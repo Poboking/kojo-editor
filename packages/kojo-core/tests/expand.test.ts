@@ -22,7 +22,7 @@ function compile(sourceLines: readonly string[]) {
 const bodyLines = (erb: string): string[] => (erb.length === 0 ? [] : erb.slice(0, -1).split('\n'));
 const codes = (result: ReturnType<typeof compile>): string[] => result.diagnostics.map((d) => d.code);
 
-const HEAD = ['# 机 开场', '# 视 灵梦'];
+const HEAD = ['# 机 开场', '# 视角 灵梦'];
 
 describe('表展开：隐藏槽 + 一次求值 + 依赖顺序', () => {
   it('源表达式只求值一次；值槽由分支链赋值；引用处只读值槽', () => {
@@ -213,7 +213,7 @@ describe('展开与其它体的组合（不崩、顺序可证）', () => {
       '# 对照表 心情 依据 恋慕',
       '    0..9 -> 疏远',
       '    否 -> 亲近',
-      '# 变量 临时 字符串',
+      '# 设 临时 字符串',
       '@算',
       '    临时 = 心情',
     ]);

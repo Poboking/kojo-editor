@@ -423,7 +423,7 @@ function headerLineMatches(kind: Kojo2SymbolKind, line: KojoLexLine): boolean {
  *
  * **纯函数**：一次 `lex` + 一次 `parse`，不缓存、不写盘、不抛。
  * 空文件 / 坏文件（词法或解析抛错、或根本没有任何声明）⇒ `[]`。
- * 声明缺名字（`# 变量` 没写名、`# 幕` 没写标题）⇒ 那一条不产符号（没有可导航的名字）。
+ * 声明缺名字（`# 设` 没写名、`# 幕` 没写标题）⇒ 那一条不产符号（没有可导航的名字）。
  */
 export function kojo2DocumentSymbols(source: string): Kojo2SymbolFact[] {
   if (typeof source !== 'string' || source.length === 0) return [];

@@ -12,12 +12,12 @@
  * 本模块只做三件事，而且每件都做成可单测的纯逻辑（端口注入）：
  *
  * 1. **账本**：`{ version, fingerprint, slots, records, updatedAt }`。
- *    只收 `# 变量`（表/池/常量没有槽位语义）；`declarationKey` 默认取注册表已经算好的
+ *    只收 `# 设`（表/池/常量没有槽位语义）；`declarationKey` 默认取注册表已经算好的
  *    `storageKey`（注册表缺省口径 = `uri#行:列`，实现在分隔处用 NUL；这里不另造一套），也可注入。
  *    `slots` 是「声明键 → 槽名」，`records` 是「声明键 → `{ slot, valueType, arraySize }`」
  *    ——**槽位的形状事实**（K2-STORAGE-HOST-FULL）。为什么非要有它：core 的
  *    `SlotRegistrySnapshot.classes` 记录着每格的值类型与数组长度，而只有 `slots` 的旧账本
- *    反哺不回 `previousSnapshot`，于是「跨构建改型」这条 fail-closed 判据（`# 变量 好感 整数`
+ *    反哺不回 `previousSnapshot`，于是「跨构建改型」这条 fail-closed 判据（`# 设 好感 整数`
  *    改成 `字符串` 必须报错而不是静默读坏存档）在宿主侧永远不触发。`records` 与 `slots`
  *    在**同一次两阶段提交**里落盘（键集必须一致），版本仍是 1：旧账本没有 `records` ⇒
  *    解析为 `{}`（不视为损坏），下一次内容有变化时自动回填。
@@ -109,7 +109,7 @@ export type Kojo2StorageRecords = Readonly<Record<string, Kojo2StorageRecord>>;
 /**
  * 可持久化的槽位账本（**跨构建事实**）。
  *
- * `slots` / `records` 只含 `# 变量`；键是稳定声明键，`slots` 值是宿主可读的槽名
+ * `slots` / `records` 只含 `# 设`；键是稳定声明键，`slots` 值是宿主可读的槽名
  * （缺省 `存储期#槽号`，例如 `save#3`）。场景槽按单元分账，槽名本身不带单元前缀——
  * 槽名是**声明键的注脚**，不是全局唯一 id（声明键才是）。
  */

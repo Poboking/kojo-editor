@@ -62,8 +62,8 @@ describe('行为：kojo2 取词尺不再在全角数字处截断', () => {
     expect(kojo2TokenSpanAt(line, 4)?.text).toBe('好感度１');
   });
 
-  it('声明索引的名字段同样覆盖全角数字（`# 变量 好感度１ 整数`）', () => {
-    const document = kojo2DocumentOf('# 变量 好感度１ 整数 = 0\n');
+  it('声明索引的名字段同样覆盖全角数字（`# 设 好感度１ 整数`）', () => {
+    const document = kojo2DocumentOf('# 设 好感度１ 整数 = 0\n');
     expect(document.declarations[0]?.name).toBe('好感度１');
   });
 });

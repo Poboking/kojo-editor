@@ -112,15 +112,15 @@ describe('识别范围：注释起头逐语言（ERB `;` / kojo2 `//`）', () =>
   it('kojo2：整行 `//` 行注释覆盖；`#` 声明行与 `;` 行都不是注释', () => {
     const text = [
       '// see ../COMMON.ERB',
-      '# 常量 图 字符串 = "data/立绘.csv"',
+      '# 设 图 字符串 = "data/立绘.csv"',
       '; ./legacy.erb',
       '> 正文里的 ../不认.erb',
     ].join('\n');
     expect(extractLinkCandidates(text, 'kojo2').map((c) => c.text)).toEqual(['../COMMON.ERB']);
   });
 
-  it('`# 常量 图 字符串 = "data/立绘.csv"` 在 kojo2 下零候选（改前是三语并集 ⇒ 长出假链接）', async () => {
-    const text = '# 常量 图 字符串 = "data/立绘.csv"';
+  it('`# 设 图 字符串 = "data/立绘.csv"` 在 kojo2 下零候选（改前是三语并集 ⇒ 长出假链接）', async () => {
+    const text = '# 设 图 字符串 = "data/立绘.csv"';
     expect(extractLinkCandidates(text, 'kojo2')).toEqual([]);
     // 探针全真也不成链（说明是"没被当注释"，不是"存在性没命中"）
     const links = await linksFor(text, { existsPath: () => true }, KOJO2_MODEL_PATH, KOJO2_LANG);

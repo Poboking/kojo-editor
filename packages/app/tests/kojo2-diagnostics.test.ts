@@ -53,7 +53,7 @@ function markerOf(result: Kojo2DiagnosticsResult, diagnosticIndex: number): Mona
 describe('kojo2 诊断 · 真 core（诊断模式）', () => {
   it('错误诊断：code / source / severity / 区间全部落到 marker', () => {
     const service = createKojo2Diagnostics({ monaco: MONACO });
-    const source = ['# 机 开场', '# 视 我', '@算', '    1 + 2', ''].join('\n');
+    const source = ['# 机 开场', '# 视角 我', '@算', '    1 + 2', ''].join('\n');
     const result = service.diagnose({ source, filePath: 'ERB/错误.kojo2' });
 
     expect(result.filePath).toBe('ERB/错误.kojo2');
@@ -116,7 +116,7 @@ describe('kojo2 诊断 · 真 core（诊断模式）', () => {
     });
     const source = [
       '# 机 开场',
-      '# 视 我',
+      '# 视角 我',
       '选项：',
       '    「标签」：',
       '        > 选项正文。',

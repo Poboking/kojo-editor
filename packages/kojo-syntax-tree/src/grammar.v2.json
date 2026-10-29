@@ -103,6 +103,31 @@
                 "name": "open",
                 "content": {
                   "type": "SYMBOL",
+                  "name": "native_head_braced"
+                }
+              },
+              {
+                "type": "FIELD",
+                "name": "body",
+                "content": {
+                  "type": "SYMBOL",
+                  "name": "native_body"
+                }
+              },
+              {
+                "type": "SYMBOL",
+                "name": "native_close"
+              }
+            ]
+          },
+          {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "FIELD",
+                "name": "open",
+                "content": {
+                  "type": "SYMBOL",
                   "name": "native_head"
                 }
               },
@@ -304,11 +329,7 @@
         },
         {
           "type": "SYMBOL",
-          "name": "variable_decl"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "constant_decl"
+          "name": "set_decl"
         },
         {
           "type": "SYMBOL",
@@ -419,7 +440,7 @@
       "type": "TOKEN",
       "content": {
         "type": "PATTERN",
-        "value": "#[ \\t\\u3000]+视(?:[ \\t\\u3000][^\\n]*)?"
+        "value": "#[ \\t\\u3000]+视角(?:[ \\t\\u3000][^\\n]*)?"
       }
     },
     "event_decl": {
@@ -429,18 +450,11 @@
         "value": "#[ \\t\\u3000]+机(?:[ \\t\\u3000][^\\n]*)?"
       }
     },
-    "variable_decl": {
+    "set_decl": {
       "type": "TOKEN",
       "content": {
         "type": "PATTERN",
-        "value": "#[ \\t\\u3000]+变量(?:[ \\t\\u3000][^\\n]*)?"
-      }
-    },
-    "constant_decl": {
-      "type": "TOKEN",
-      "content": {
-        "type": "PATTERN",
-        "value": "#[ \\t\\u3000]+常量(?:[ \\t\\u3000][^\\n]*)?"
+        "value": "#[ \\t\\u3000]+设(?:[ \\t\\u3000][^\\n]*)?"
       }
     },
     "dialect_decl": {
@@ -534,11 +548,25 @@
         "value": "@织[ \\t\\u3000]+[^\\n]*"
       }
     },
+    "native_head_braced": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "@原生\\{[ \\t\\u3000]*"
+      }
+    },
     "native_head": {
       "type": "TOKEN",
       "content": {
         "type": "PATTERN",
         "value": "@原生[ \\t\\u3000]*"
+      }
+    },
+    "native_close": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PATTERN",
+        "value": "\\}[ \\t\\u3000]*"
       }
     },
     "face_command": {

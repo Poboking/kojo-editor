@@ -679,7 +679,7 @@ describe('语言套件 · CLI 退出码', () => {
 describe('语言套件 · 纯逻辑细节', () => {
   it('machineEventOf 只认 `# 机 <事件>`，没有则 null', () => {
     expect(machineEventOf('# 机 开场\n> 甲\n')).toBe('开场');
-    expect(machineEventOf('# 视 灵梦\n# 机   指令 310\n> 甲\n')).toBe('指令');
+    expect(machineEventOf('# 视角 灵梦\n# 机   指令 310\n> 甲\n')).toBe('指令');
     expect(machineEventOf('# 对照表 档 依据 外部计数\n    0..9 -> 甲\n')).toBeNull();
     expect(machineEventOf('> 甲\n')).toBeNull();
   });

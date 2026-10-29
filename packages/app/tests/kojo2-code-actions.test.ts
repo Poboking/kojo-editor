@@ -138,16 +138,16 @@ describe('①裸旁白：补 `>`', () => {
 });
 
 describe('②裸引号：补说话人', () => {
-  it('文件有 `# 视` ⇒ 说话人用 `我`（§7.1 的默认说话人）', () => {
-    const source = '# 机 开场\n# 视 我\n\n「……早。」\n';
+  it('文件有 `# 视角` ⇒ 说话人用 `我`（§7.1 的默认说话人）', () => {
+    const source = '# 机 开场\n# 视角 我\n\n「……早。」\n';
     const facts = factsOf(source, 4, 4);
     expect(facts).toHaveLength(1);
     expect(facts[0]!.code).toBe('core/narrative/bare-quote');
     expect(facts[0]!.edit.newText).toBe('我：「「……早。」」');
-    expect(expectParseCleanAfter(facts[0]!, source)).toBe('# 机 开场\n# 视 我\n\n我：「「……早。」」\n');
+    expect(expectParseCleanAfter(facts[0]!, source)).toBe('# 机 开场\n# 视角 我\n\n我：「「……早。」」\n');
   });
 
-  it('没有 `# 视` 也没有兜底说话人 ⇒ 不产（不编一个作者没说过的名字）', () => {
+  it('没有 `# 视角` 也没有兜底说话人 ⇒ 不产（不编一个作者没说过的名字）', () => {
     expect(factsOf('# 机 开场\n\n「……早。」\n', 3, 3)).toEqual([]);
   });
 
@@ -221,7 +221,7 @@ describe('④着色 / 随机 / 初回：整块搬 core 产物', () => {
 
 describe('⑤分支 → `# 池`（提升声明 + 原处引用）', () => {
   const SOURCE =
-    '# 机 开场\n# 视 我\n\n分支：\n    [数值 < 100]\n        「早。」\n    [其他]\n        「嗨。」\n';
+    '# 机 开场\n# 视角 我\n\n分支：\n    [数值 < 100]\n        「早。」\n    [其他]\n        「嗨。」\n';
 
   it('一段合成编辑：`# 池` 声明 + `? 否` 兜底 + `! 迁移池1` 引用', () => {
     const facts = factsOf(SOURCE, 4, 8);
@@ -239,7 +239,7 @@ describe('⑤分支 → `# 池`（提升声明 + 原处引用）', () => {
 
   it('声明区在别处（正文在块前）⇒ 两段编辑：声明插进声明区、原块换成引用行', () => {
     const source =
-      '# 机 开场\n# 视 我\n\n> 前言\n\n当 数值：\n    是 1：\n        早。\n    否则：\n        嗨。\n';
+      '# 机 开场\n# 视角 我\n\n> 前言\n\n当 数值：\n    是 1：\n        早。\n    否则：\n        嗨。\n';
     const facts = factsOf(source, 6, 10);
     expect(facts).toHaveLength(1);
     const fact = facts[0]!;
@@ -252,30 +252,30 @@ describe('⑤分支 → `# 池`（提升声明 + 原处引用）', () => {
     expect(fact.edits[1]!.newText).toBe('> {迁移表1}');
     const after = expectParseCleanAfter(fact, source);
     expect(after).toBe(
-      '# 机 开场\n# 视 我\n\n# 对照表 迁移表1 依据 数值\n    1 -> 早。\n    否 -> 嗨。\n\n> 前言\n\n> {迁移表1}\n',
+      '# 机 开场\n# 视角 我\n\n# 对照表 迁移表1 依据 数值\n    1 -> 早。\n    否 -> 嗨。\n\n> 前言\n\n> {迁移表1}\n',
     );
   });
 
   it('声明区含 `# 方言`（单行声明）⇒ 提升的 `# 对照表` 插在它**之后**，不拆散单行声明组', () => {
     // 改前读数：INSERT 点在 `# 方言` 那一行（= 3），落在块头之前 ⇒ 两段编辑，
     // 结果 `# 方言` 被挤到「空行 + # 对照表 块 + 空行」之后，单行声明组被拆散。
-    // 改后：插入点跳过 `# 方言`（与 `# 机` / `# 视` 同为单行声明）⇒ 与块头同行 ⇒ 一段合成编辑。
+    // 改后：插入点跳过 `# 方言`（与 `# 机` / `# 视角` 同为单行声明）⇒ 与块头同行 ⇒ 一段合成编辑。
     const source =
-      '# 机 开场\n# 视 我\n# 方言 erafl\n\n当 数值：\n    是 1：\n        早。\n    否则：\n        嗨。\n';
+      '# 机 开场\n# 视角 我\n# 方言 erafl\n\n当 数值：\n    是 1：\n        早。\n    否则：\n        嗨。\n';
     const facts = factsOf(source, 5, 9);
     expect(facts).toHaveLength(1);
     const fact = facts[0]!;
     expect(fact.edits).toHaveLength(1);
     const after = expectParseCleanAfter(fact, source);
     expect(after).toBe(
-      '# 机 开场\n# 视 我\n# 方言 erafl\n\n# 对照表 迁移表1 依据 数值\n    1 -> 早。\n    否 -> 嗨。\n\n> {迁移表1}\n',
+      '# 机 开场\n# 视角 我\n# 方言 erafl\n\n# 对照表 迁移表1 依据 数值\n    1 -> 早。\n    否 -> 嗨。\n\n> {迁移表1}\n',
     );
     // `# 方言` 仍在单行声明组里（不被新声明隔到后面）
     expect(after.indexOf('# 方言 erafl')).toBeLessThan(after.indexOf('# 对照表 迁移表1'));
   });
 
   it('`分支：` 缺兜底标签 ⇒ core 语义升级层 decline ⇒ 零动作', () => {
-    const source = '# 机 开场\n# 视 我\n\n分支：\n    [数值 < 100]\n        「早。」\n';
+    const source = '# 机 开场\n# 视角 我\n\n分支：\n    [数值 < 100]\n        「早。」\n';
     expect(factsOf(source, 4, 6)).toEqual([]);
   });
 });
@@ -301,7 +301,7 @@ describe('⑥当 → `# 对照表`', () => {
 
   it('块嵌在 `?` 分支里 ⇒ 声明仍提升到顶层声明区、引用行留在原缩进', () => {
     const source =
-      '# 机 开场\n# 视 我\n\n? 数值 == 1\n    当 数值：\n        是 1：\n            早。\n        否则：\n            嗨。\n? 否\n    > 别的\n';
+      '# 机 开场\n# 视角 我\n\n? 数值 == 1\n    当 数值：\n        是 1：\n            早。\n        否则：\n            嗨。\n? 否\n    > 别的\n';
     const facts = factsOf(source, 5, 9);
     expect(facts).toHaveLength(1);
     const fact = facts[0]!;
@@ -330,7 +330,7 @@ describe('⑦补 `否`：表与池', () => {
   });
 
   it('`# 池` 缺 `? 否` ⇒ 追加兜底分支（正文沿用末条分支）', () => {
-    const source = '# 机 开场\n# 视 我\n\n# 池 问候\n    ? 数值 < 100\n        「早。」\n';
+    const source = '# 机 开场\n# 视角 我\n\n# 池 问候\n    ? 数值 < 100\n        「早。」\n';
     const facts = factsOf(source, 4, 6);
     expect(facts).toHaveLength(1);
     const fact = facts[0]!;
@@ -836,16 +836,16 @@ describe('⑭落地走同一条 `applyTextEdits`（前后各一颗停点）', ()
 describe('⑮逐类动作：应用后 core parse 零 error', () => {
   const CASES: readonly { readonly name: string; readonly source: string; readonly from: number; readonly to: number }[] = [
     { name: '裸旁白', source: '# 机 开场\n\n她点了点头。\n', from: 3, to: 3 },
-    { name: '裸引号', source: '# 机 开场\n# 视 我\n\n「……早。」\n', from: 4, to: 4 },
+    { name: '裸引号', source: '# 机 开场\n# 视角 我\n\n「……早。」\n', from: 4, to: 4 },
     { name: '心形行', source: '# 机 开场\n\n心形 微笑\n', from: 3, to: 3 },
     { name: '心形块', source: '# 机 开场\n\n心形：\n    我：「早。」\n', from: 3, to: 4 },
     { name: '着色块', source: '# 机 开场\n\n着色 0xFF8080：\n    我：「早。」\n', from: 3, to: 4 },
     { name: '随机块', source: '# 机 开场\n\n随机：\n    我：「早。」\n    我：「嗨。」\n', from: 3, to: 5 },
-    { name: '分支池', source: '# 机 开场\n# 视 我\n\n分支：\n    [数值 < 100]\n        「早。」\n    [其他]\n        「嗨。」\n', from: 4, to: 8 },
+    { name: '分支池', source: '# 机 开场\n# 视角 我\n\n分支：\n    [数值 < 100]\n        「早。」\n    [其他]\n        「嗨。」\n', from: 4, to: 8 },
     { name: '当表', source: '# 机 开场\n\n当 数值：\n    是 1：\n        早。\n    否则：\n        嗨。\n', from: 3, to: 7 },
     { name: '初回原生', source: '# 机 开场\n\n初回：\n    我：「早。」\n', from: 3, to: 4 },
     { name: '补否（表）', source: '# 机 开场\n\n# 对照表 心情 依据 数值\n    0..99 -> 疏远\n', from: 3, to: 4 },
-    { name: '补否（池）', source: '# 机 开场\n# 视 我\n\n# 池 问候\n    ? 数值 < 100\n        「早。」\n', from: 4, to: 6 },
+    { name: '补否（池）', source: '# 机 开场\n# 视角 我\n\n# 池 问候\n    ? 数值 < 100\n        「早。」\n', from: 4, to: 6 },
     { name: '补插槽', source: '# 机 开场\n\n# 模 娇羞()\n    > （她红着脸）\n\n! 娇羞()\n    我：「才没有！」\n', from: 6, to: 6 },
     { name: '修缩进（链头）', source: '# 机 开场\n\n? 数值 == 1\n    > a\n  ? 否\n    > b\n', from: 5, to: 5 },
     { name: '修缩进（体）', source: '# 机 开场\n\n? 数值 == 1\n  > a\n? 否\n    > b\n', from: 4, to: 4 },

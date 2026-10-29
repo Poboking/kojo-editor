@@ -32,7 +32,7 @@
  *    同一条结论无论从哪条腿出，都只上账一次。
  * 3. **每份文件自己的词法/语法诊断一起带上**：整项目扫描是**未打开文件**唯一的诊断来源，
  *    只报跨文件结论会让一份语法写坏的文件在面板里显示成「干净」（假真相）。
- * 4. **存储期**：`# 变量` 采成 `StorageDeclarationFact` 后走 core `planStorageSlots`
+ * 4. **存储期**：`# 设` 采成 `StorageDeclarationFact` 后走 core `planStorageSlots`
  *    （槽位区段缺省用 `kojo2-storage-registry` 的预览口径，真项目由调用方注入 adapter 事实；
  *    声明键缺省 `path#行:列`，与那份注册表同一缺省）。**默认不传旧账本** ⇒ 只做「同名/同键」
  *    这类当前事实能判的检查；换盘 / 改型 / 搬槽这些跨构建判据必须有旧快照才成立，调用方
@@ -639,7 +639,7 @@ function functionLayerPolicy(adapter: Kojo2ProjectAdapterFacts): LayerPolicyFact
   return { mode: rule?.mode ?? adapter.layerPolicy.defaultMode };
 }
 
-/** 数组长度端点：十进制整数直取，`# 常量` 端点按同文件常量表静态求值；其余 → null（不猜） */
+/** 数组长度端点：十进制整数直取，`# 设` 端点按同文件常量表静态求值；其余 → null（不猜） */
 function resolveArraySize(text: string | null, constants: ReadonlyMap<string, number>): number | null {
   if (text === null) return null;
   const trimmed = text.trim();

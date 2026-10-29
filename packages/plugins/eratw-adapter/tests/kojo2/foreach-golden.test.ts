@@ -30,9 +30,9 @@ function service() {
 }
 
 const SOURCE = [
-  '# 视 灵梦',
+  '# 视角 灵梦',
   '# 机 初见',
-  '# 变量 队伍状态 字符串[4]',
+  '# 设 队伍状态 字符串[4]',
   '@巡 队伍',
   '    ? {角} >= 2',
   '        灵梦：「{名}，轮到你了。」',
@@ -57,13 +57,13 @@ describe('eraTW @巡：全链 golden（.kojo2 → ERB 逐字节）', () => {
      * 语义层接线后，`整数[零]`（零 = 0）与 parser 对字面量 `[0]` 的判据统一：声明长度必须是
      * 正整数 ⇒ 编译期 error、零字节，降糖拿不到这份声明。`skeleton.empty === 'skip'` 的零轮
      * 骨架仍由 `kojo-core/tests/foreach.test.ts` 在**计划层**直接钉住（不依赖这条非法输入）。
-     * 0 长语义若日后放开（K2-CODES 的 `# 变量 [0]` 语义），这条断言与 sema 判据要一起回退。
+     * 0 长语义若日后放开（K2-CODES 的 `# 设 [0]` 语义），这条断言与 sema 判据要一起回退。
      */
     const source = [
-      '# 视 灵梦',
+      '# 视角 灵梦',
       '# 机 初见',
-      '# 常量 零 整数 = 0',
-      '# 变量 空表 整数[零]',
+      '# 设 零 整数 = 0',
+      '# 设 空表 整数[零]',
       '@巡 空表',
       '    > 不该出现。',
     ].join('\n');
@@ -76,9 +76,9 @@ describe('eraTW @巡：全链 golden（.kojo2 → ERB 逐字节）', () => {
 
   it('嵌套 `@巡`：槽名按各自块头行号、缩进逐层累加（外层绑定在内层仍可见）', () => {
     const source = [
-      '# 视 灵梦',
+      '# 视角 灵梦',
       '# 机 初见',
-      '# 变量 状态 字符串[2]',
+      '# 设 状态 字符串[2]',
       '@巡 队伍',
       '    @巡 状态',
       '        > {名}/{值}',
@@ -103,7 +103,7 @@ describe('eraTW @巡：全链 golden（.kojo2 → ERB 逐字节）', () => {
   });
 
   it('未声明集合 fail-closed：error、零字节、零 ERB 关键字', () => {
-    const source = ['# 视 灵梦', '# 机 初见', '@巡 不存在', '    > 一'].join('\n');
+    const source = ['# 视角 灵梦', '# 机 初见', '@巡 不存在', '    > 一'].join('\n');
     const result = service().transpile({ source, filePath: 'kojo2-foreach-bad.kojo2' });
 
     expect(result.ok).toBe(false);

@@ -224,14 +224,14 @@ describe('文本三正交：speech × color × wait', () => {
     expect(run([node]).lines).toEqual(['T|narration|||wait|profile|||你好，{名字}！']);
   });
 
-  it('池内裸引号：默认说话人取当前 # 视', () => {
+  it('池内裸引号：默认说话人取当前 # 视角', () => {
     const result = lowerFile(file([scene([bareQuote('早')])], [{ kind: 'view', target: '灵梦', span: span(1) }]), {
       backend: createFakeBackend(),
     });
     expect(result.lines).toEqual(['T|bareQuote||灵梦|wait|profile|||早']);
   });
 
-  it('池内裸引号无 # 视 → core/pool/no-view', () => {
+  it('池内裸引号无 # 视角 → core/pool/no-view', () => {
     const result = run([bareQuote('早')]);
     expect(codes(result)).toEqual(['core/pool/no-view']);
     expect(result.lines).toEqual([]);

@@ -10,9 +10,9 @@
  *    （`# 机` 声明 / `@织` 监听）；声明位 → 同一符号 + 精确 `declSpan`；
  * 2. **可证引用位**：`{…}` 插值（台词 / 旁白 / 模体）、`! 名` / `! 名(实参)` 调用、
  *    `@巡` 集合、`# 对照表 依据 <表达式>`、`? 条件`、`@算` 赋值两侧 / 裸调用、`@返` 返回值、
- *    `@着色` 颜色表达式、`# 变量` 类型里的 `[<数组长度>]`；
+ *    `@着色` 颜色表达式、`# 设` 类型里的 `[<数组长度>]`；
  * 3. **不误报**：正文纯文本、注释行、`@原生` 体、双引号字符串、`对象.成员` 的成员名、
- *    表体字面量、`# 视` 名字、`? 否`、空白位 → 一律 `null` 或不进 `refs`；
+ *    表体字面量、`# 视角` 名字、`? 否`、空白位 → 一律 `null` 或不进 `refs`；
  * 4. **结果形状**：源码序、去重、`decl` / `ref` / `call` 三档角色、`declSpan` 覆盖整段
  *    `# 幕` 标题（标题里可以有空格）；
  * 5. **上限**：`KOJO2_REFERENCE_LIMIT` 截断 + `truncated` 显式标记；恰好到上限不标截断；
@@ -45,12 +45,12 @@ import {
 const SOURCE = [
   '// 引用查找夹具：声明位 / 引用位 / 不误报位',
   '# 幕 神社 清晨',
-  '# 视 旅人',
+  '# 视角 旅人',
   '# 机 指令 310',
   '',
-  '# 常量 亲近线 整数 = 500',
-  '# 变量 今天已触发 整数 = 0 存档',
-  '# 变量 队伍 整数[4]',
+  '# 设 亲近线 整数 = 500',
+  '# 设 今天已触发 整数 = 0 存档',
+  '# 设 队伍 整数[4]',
   '',
   '# 对照表 心情 依据 亲近线',
   '    0..99 -> 疏远',
@@ -240,15 +240,15 @@ describe('符号面：声明位 → 同一符号 + 精确名字段', () => {
     expect(result?.refs.map((site) => site.kind)).toEqual(['ref', 'ref']);
   });
 
-  it('同名事件与变量是两枚符号（`# 机 指令` 与 `# 变量 指令` 不互相串）', () => {
+  it('同名事件与变量是两枚符号（`# 机 指令` 与 `# 设 指令` 不互相串）', () => {
     const source = [
       '# 机 指令 310',
-      '# 变量 指令 整数 = 0',
+      '# 设 指令 整数 = 0 场景',
       '@算',
       '    指令 = 1',
     ].join('\n');
     const atEvent = positionIn(source, '# 机 指令', 0, 4);
-    const atVariable = positionIn(source, '指令', source.indexOf('# 变量'));
+    const atVariable = positionIn(source, '指令', source.indexOf('# 设'));
     const event = kojo2ReferencesAt(source, atEvent);
     const variable = kojo2ReferencesAt(source, atVariable);
     expect(event?.symbol.kind).toBe('event');
@@ -261,12 +261,12 @@ describe('符号面：声明位 → 同一符号 + 精确名字段', () => {
   it('幕标题与变量同名是合法文件：幕与变量不互相串（幕标题不进表达式名单）', () => {
     const source = [
       '# 幕 日常',
-      '# 变量 日常 整数 = 0',
+      '# 设 日常 整数 = 0 场景',
       '@算',
       '    日常 = 1',
     ].join('\n');
     const scene = kojo2ReferencesAt(source, positionIn(source, '# 幕 日常', 0, 4));
-    const variable = kojo2ReferencesAt(source, positionIn(source, '日常', source.indexOf('# 变量')));
+    const variable = kojo2ReferencesAt(source, positionIn(source, '日常', source.indexOf('# 设')));
     expect(scene?.symbol.kind).toBe('scene');
     expect(scene?.refs).toHaveLength(1);
     expect(variable?.symbol.kind).toBe('variable');
@@ -356,7 +356,7 @@ describe('可证引用位：插值 / 调用 / 表达式', () => {
 
   it('`@着色 <颜色表达式>` → `ref`（颜色不是字面量时也认）', () => {
     const source = [
-      '# 变量 主色 整数 = 0',
+      '# 设 主色 整数 = 0',
       '@着色 主色',
       '    > （红光照在脸上）',
     ].join('\n');
@@ -366,10 +366,10 @@ describe('可证引用位：插值 / 调用 / 表达式', () => {
     expect(result?.refs[1]?.span.startLine).toBe(2);
   });
 
-  it('`# 变量` 类型里的 `[<数组长度>]` 可引用整数常量', () => {
+  it('`# 设` 类型里的 `[<数组长度>]` 可引用整数常量', () => {
     const source = [
-      '# 常量 上限 整数 = 4',
-      '# 变量 队伍 整数[上限]',
+      '# 设 上限 整数 = 4',
+      '# 设 队伍 整数[上限]',
     ].join('\n');
     const result = kojo2ReferencesAt(source, positionIn(source, '上限'));
     expect(result?.symbol.name).toBe('上限');
@@ -380,7 +380,7 @@ describe('可证引用位：插值 / 调用 / 表达式', () => {
 
   it('`@函` 体内嵌套 `@算`：语句仍按表达式位收集（缩进栈逐层归位）', () => {
     const source = [
-      '# 变量 计数 整数 = 0',
+      '# 设 计数 整数 = 0',
       '@函 加一()',
       '    @算',
       '        计数 = 计数 + 1',
@@ -451,7 +451,7 @@ describe('不误报：正文 / 字符串 / 成员 / 字面量 / 非本批符号'
     expect(refsAt(positionAt('疏远'))).toBeNull();
     expect(refsAt(positionAt('100..499'))).toBeNull();
     const source = [
-      '# 常量 上限 整数 = 499',
+      '# 设 上限 整数 = 499',
       '# 对照表 心情 依据 上限',
       '    0..上限 疏远',
       '    否 未知',
@@ -464,7 +464,7 @@ describe('不误报：正文 / 字符串 / 成员 / 字面量 / 非本批符号'
     expect(result?.refs.map((site) => site.kind)).toEqual(['decl', 'ref', 'ref']);
   });
 
-  it('`# 视` 的名字不属本批符号面', () => {
+  it('`# 视角` 的名字不属本批符号面', () => {
     expect(refsAt(positionAt('旅人'))).toBeNull();
   });
 
@@ -475,7 +475,7 @@ describe('不误报：正文 / 字符串 / 成员 / 字面量 / 非本批符号'
   it('空白 / 声明名之后的空格 / 越界行 → null', () => {
     expect(refsAt(positionAt('今天已触发', 0, 0))).not.toBeNull();
     // 名字段之后（`整数` 开头）不再是这个名字位。
-    const afterName = SOURCE.indexOf('整数', SOURCE.indexOf('# 变量 今天已触发'));
+    const afterName = SOURCE.indexOf('整数', SOURCE.indexOf('# 设 今天已触发'));
     expect(refsAt(positionAtOffset(SOURCE, afterName))).toBeNull();
     expect(refsAt({ line: 999, column: 1 })).toBeNull();
   });
@@ -600,7 +600,7 @@ describe('边界：CRLF / getIndex / 确定性 / 坏输入', () => {
 
 /* ============================== ⑦ B3e 项目文件快照口 ============================== */
 
-const DECL_FILE = ['# 对照表 心情 依据 亲近线', '# 常量 亲近线 整数 = 500'].join('\n');
+const DECL_FILE = ['# 对照表 心情 依据 亲近线', '# 设 亲近线 整数 = 500'].join('\n');
 
 describe('项目文件快照：缺席 = 同文件；给出 = 跨文件合并', () => {
   it('projectFiles 缺席 ⇒ 与同文件查询逐字相同（旧行为零改动）', () => {
@@ -690,7 +690,7 @@ describe('项目文件快照：缺席 = 同文件；给出 = 跨文件合并', (
   });
 
   it('同名多家族（项目里同名变量 + 表）⇒ 不猜，跨文件侧不给（null）', () => {
-    const other = ['# 变量 心情 整数 = 0'].join('\n');
+    const other = ['# 设 心情 整数 = 0'].join('\n');
     const bFile = '> {心情}';
     const result = kojo2ReferencesInProjectFiles(
       bFile,

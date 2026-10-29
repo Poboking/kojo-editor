@@ -279,18 +279,18 @@ describe('parse：文件结构与声明（§3）', () => {
     expect(errorCodesOf('# 幕 标题\n> 正文\n')).toContain('core/decl/missing-machine');
   });
 
-  it('多 # 机 / 多 # 视 报错', () => {
+  it('多 # 机 / 多 # 视角 报错', () => {
     expect(codesOf('# 机 a\n# 机 b\n')).toContain('core/decl/multiple-machine');
-    expect(codesOf('# 视 a\n# 视 b\n')).toContain('core/decl/multiple-view');
+    expect(codesOf('# 视角 a\n# 视角 b\n')).toContain('core/decl/multiple-view');
   });
 
   it('未知声明词 → core/decl/unknown', () => {
     expect(codesOf('# 未知词 x\n')).toContain('core/decl/unknown');
   });
 
-  it('# 变量：类型 / 数组 / 初值 / 存储期', () => {
+  it('# 设：类型 / 数组 / 初值 / 存储期', () => {
     const file = parseOk(
-      `${MACHINE}# 变量 临时 整数\n# 变量 今天已触发 整数 = 0 存档\n# 变量 队列 整数[10]\n# 变量 队员 字符串[4] 存档\n# 变量 名字 字符串 = "灵梦"\n`,
+      `${MACHINE}# 设 临时 整数\n# 设 今天已触发 整数 = 0 存档\n# 设 队列 整数[10]\n# 设 队员 字符串[4] 存档\n# 设 名字 字符串 = "灵梦" 场景\n`,
     );
     expect(
       file.decls
@@ -305,35 +305,36 @@ describe('parse：文件结构与声明（§3）', () => {
     ]);
   });
 
-  it('# 常量：必须字面量；类型不符 / 非字面量报错', () => {
+  it('# 设：必须字面量；类型不符 / 非字面量报错', () => {
     expect(
-      parseOk(`${MACHINE}# 常量 最大好感 整数 = 1000\n# 常量 标题 字符串 = "神社的清晨"\n`).decls.filter(
+      parseOk(`${MACHINE}# 设 最大好感 整数 = 1000\n# 设 标题 字符串 = "神社的清晨"\n`).decls.filter(
         (decl) => decl.kind === 'const',
       ),
     ).toHaveLength(2);
-    expect(codesOf(`${MACHINE}# 常量 X 整数 = "文本"\n`)).toContain('core/decl/bad-initializer');
-    expect(codesOf(`${MACHINE}# 常量 X 整数 = 某函数(1)\n`)).toContain('core/decl/const-not-constant');
-    expect(codesOf(`${MACHINE}# 常量 X 整数\n`)).toContain('core/decl/bad-initializer');
-    expect(codesOf(`${MACHINE}# 常量 X\n`)).toContain('core/lex/anchor');
+    expect(codesOf(`${MACHINE}# 设 X 整数 = "文本"\n`)).toContain('core/decl/bad-initializer');
+    expect(codesOf(`${MACHINE}# 设 X 整数 = 某函数(1)\n`)).toContain('core/decl/const-not-constant');
+    // 合并后无初值 = 合法的运行期变量（原 `# 常量` 必须有初值的规则随合并退场）
+    expect(codesOf(`${MACHINE}# 设 X 整数\n`)).toEqual([]);
+    expect(codesOf(`${MACHINE}# 设 X\n`)).toContain('core/lex/anchor');
   });
 
-  it('# 变量：坏类型 / 坏数组长度 / 坏初值 / 坏存储期', () => {
-    expect(codesOf(`${MACHINE}# 变量 x 逻辑\n`)).toContain('core/decl/unknown-type');
-    expect(codesOf(`${MACHINE}# 变量 x 整数[0]\n`)).toContain('core/decl/bad-array-size');
-    expect(codesOf(`${MACHINE}# 变量 x 整数[abc+1]\n`)).toContain('core/decl/bad-array-size');
-    expect(codesOf(`${MACHINE}# 变量 x 整数 = 1 + 2\n`)).toContain('core/decl/bad-initializer');
-    expect(codesOf(`${MACHINE}# 变量 x 整数 永久\n`)).toContain('core/decl/unknown-storage');
-    expect(codesOf(`${MACHINE}# 变量 x 整数[2] = 0\n`)).toContain('core/decl/bad-initializer');
+  it('# 设：坏类型 / 坏数组长度 / 坏初值 / 坏存储期', () => {
+    expect(codesOf(`${MACHINE}# 设 x 逻辑\n`)).toContain('core/decl/unknown-type');
+    expect(codesOf(`${MACHINE}# 设 x 整数[0]\n`)).toContain('core/decl/bad-array-size');
+    expect(codesOf(`${MACHINE}# 设 x 整数[abc+1]\n`)).toContain('core/decl/bad-array-size');
+    expect(codesOf(`${MACHINE}# 设 x 整数 = 1 + 2\n`)).toContain('core/decl/bad-initializer');
+    expect(codesOf(`${MACHINE}# 设 x 整数 永久\n`)).toContain('core/decl/unknown-storage');
+    expect(codesOf(`${MACHINE}# 设 x 整数[2] = 0\n`)).toContain('core/decl/bad-initializer');
   });
 
   it('命名空间：重名 / 保留前缀 / 域符号', () => {
-    expect(codesOf(`${MACHINE}# 变量 x 整数\n# 变量 x 整数\n`)).toContain('core/decl/duplicate-name');
-    expect(codesOf(`${MACHINE}# 变量 __kojo_x 整数\n`)).toContain('core/decl/reserved-name');
-    expect(codesOf(`${MACHINE}# 变量 我 整数\n`)).toContain('core/decl/reserved-name');
+    expect(codesOf(`${MACHINE}# 设 x 整数\n# 设 x 整数\n`)).toContain('core/decl/duplicate-name');
+    expect(codesOf(`${MACHINE}# 设 __kojo_x 整数\n`)).toContain('core/decl/reserved-name');
+    expect(codesOf(`${MACHINE}# 设 我 整数\n`)).toContain('core/decl/reserved-name');
   });
 
   it('声明写进块 → core/decl/not-top-level', () => {
-    expect(codesOf(`${MACHINE}@算\n    # 变量 x 整数\n`)).toContain('core/decl/not-top-level');
+    expect(codesOf(`${MACHINE}@算\n    # 设 x 整数\n`)).toContain('core/decl/not-top-level');
     expect(codesOf(`${MACHINE}# 池 p\n    ? 1\n        # 对照表 t 依据 x\n`)).toContain('core/decl/not-top-level');
   });
 
@@ -358,7 +359,7 @@ describe('parse：文件结构与声明（§3）', () => {
     expect(table.rows[1]!.value).toBe('裸文本 内部');
   });
 
-  it('# 池：没有 # 视 时裸引号报 core/pool/no-view', () => {
+  it('# 池：没有 # 视角 时裸引号报 core/pool/no-view', () => {
     expect(codesOf('# 机 x\n# 池 p\n    ? 1\n        灵梦：「a」\n    ? 否\n        「b」\n')).toContain('core/pool/no-view');
   });
 
@@ -367,7 +368,7 @@ describe('parse：文件结构与声明（§3）', () => {
   });
 
   it('# 池 内禁止副作用', () => {
-    const codes = new Set(codesOf(`${MACHINE}# 视 灵梦\n# 池 p\n    ? 1\n        @算\n            x = 1\n    ? 否\n        「a」\n`));
+    const codes = new Set(codesOf(`${MACHINE}# 视角 灵梦\n# 池 p\n    ? 1\n        @算\n            x = 1\n    ? 否\n        「a」\n`));
     expect(codes).toContain('core/pool/side-effect');
   });
 });
@@ -429,7 +430,7 @@ describe('parse：调度区与演出块（§8）', () => {
   });
 
   it('@颜绘：对象只认 我/你；超过 4 个参数报错', () => {
-    const file = parseOk(`${MACHINE}# 视 灵梦\n@颜绘 笑顔 服1\n@颜绘 你 自慰 裸\n`);
+    const file = parseOk(`${MACHINE}# 视角 灵梦\n@颜绘 笑顔 服1\n@颜绘 你 自慰 裸\n`);
     const faces = file.scenes[0]!.items;
     expect(faces[0]!.kind).toBe('faceLine');
     if (faces[0]!.kind === 'faceLine') expect(faces[0]!.object).toBeNull();
@@ -635,8 +636,8 @@ describe('parse：整数超安全范围不静默舍入（2026-10-26 批）', () 
   const BIG = '12345678901234567890';
   const MAX = '9007199254740991';
 
-  it('`# 常量 x 整数 = 超界` → core/expr/bad-literal，且不建出变形常量', () => {
-    const file = parseSource(`${MACHINE}# 常量 x 整数 = ${BIG}\n> 正文\n`);
+  it('`# 设 x 整数 = 超界` → core/expr/bad-literal，且不建出变形常量', () => {
+    const file = parseSource(`${MACHINE}# 设 x 整数 = ${BIG}\n> 正文\n`);
     const codes = file.diagnostics.map((diagnostic) => diagnostic.code);
     expect(codes).toContain('core/expr/bad-literal');
     expect(codes).not.toContain('core/decl/const-not-constant'); // 它确实是字面量，不能借用"不是字面量"的码
@@ -650,14 +651,14 @@ describe('parse：整数超安全范围不静默舍入（2026-10-26 批）', () 
   });
 
   it('边界值 MAX_SAFE_INTEGER 照常通过', () => {
-    const file = parseSource(`${MACHINE}# 常量 x 整数 = ${MAX}\n> 正文\n`);
+    const file = parseSource(`${MACHINE}# 设 x 整数 = ${MAX}\n> 正文\n`);
     expect(file.diagnostics).toEqual([]);
     const decl = file.decls.find((item) => item.kind === 'const');
     expect(decl?.kind === 'const' ? decl.value : null).toBe(Number.MAX_SAFE_INTEGER);
   });
 
   it('变量初值超界同样报 bad-literal（不是"初值只允许字面量"）', () => {
-    const file = parseSource(`${MACHINE}# 变量 x 整数 = ${BIG}\n> 正文\n`);
+    const file = parseSource(`${MACHINE}# 设 x 整数 = ${BIG}\n> 正文\n`);
     const diagnostic = file.diagnostics.find((item) => item.code === 'core/expr/bad-literal');
     expect(diagnostic?.message).toContain('安全整数');
     expect(file.diagnostics.map((item) => item.message).join('\n')).not.toContain('初值只允许字面量');
@@ -673,8 +674,8 @@ describe('parse：整数超安全范围不静默舍入（2026-10-26 批）', () 
     expect(typeof value).toBe('string'); // 退化前的防线：诊断已报，值不冒充整数
   });
 
-  it('`# 变量 x 整数[超界]` → bad-array-size（既有码，文案点明超界）', () => {
-    const diagnostic = parseSource(`${MACHINE}# 变量 x 整数[9007199254740993]\n> 正文\n`).diagnostics.find(
+  it('`# 设 x 整数[超界]` → bad-array-size（既有码，文案点明超界）', () => {
+    const diagnostic = parseSource(`${MACHINE}# 设 x 整数[9007199254740993]\n> 正文\n`).diagnostics.find(
       (item) => item.code === 'core/decl/bad-array-size',
     );
     expect(diagnostic?.message).toContain('安全整数');

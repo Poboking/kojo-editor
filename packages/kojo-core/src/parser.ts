@@ -3,7 +3,7 @@
  *
  * 口径（设计稿 §3–§9 / §11 / §12）：
  * - **单一模式**：只认 2.0；旧写法（§12.1）只出迁移诊断，绝不进 AST；
- * - **声明提升**：`# 变量/# 常量/# 对照表/# 池/# 模/@函/@织` 进 `decls`；`# 幕` 按书写序切 `scenes`
+ * - **声明提升**：`# 设/# 对照表/# 池/# 模/@函/@织` 进 `decls`；`# 幕` 按书写序切 `scenes`
  *   （首个幕之前的正文落 `title: null` 的隐式前奏场景；没有幕则整文件一个隐式场景）；
  * - **错误恢复**：错误行与它的缩进体整块跳过（不产半成品节点），但继续扫描后面的行，
  *   一次报多条；`KojoFile.diagnostics` 带 1 基 UTF-16 span；
@@ -503,7 +503,7 @@ function legacyDiagnostic(legacy: KojoLegacyKind, rest: string): LegacyDiagnosti
       }
       return {
         code: 'core/migration/raw',
-        message: '行首 `=` 不回归：声明写 `# 变量`，状态更新写 `@算`（§2.3）。',
+        message: '行首 `=` 不回归：声明写 `# 设`，状态更新写 `@算`（§2.3）。',
       };
     case 'wait-mark':
       return {
@@ -605,7 +605,7 @@ function parseDeclaration(st: ParserState, header: KojoLexLine): void {
       st.i++;
       parseMachineDecl(st, header);
       return;
-    case '视':
+    case '视角':
       st.i++;
       parseViewDecl(st, header);
       return;
@@ -613,13 +613,9 @@ function parseDeclaration(st: ParserState, header: KojoLexLine): void {
       st.i++;
       parseDialectDecl(st, header);
       return;
-    case '变量':
+    case '设':
       st.i++;
-      parseVarDecl(st, header);
-      return;
-    case '常量':
-      st.i++;
-      parseConstDecl(st, header);
+      parseSetDecl(st, header);
       return;
     case '对照表':
       st.i++;
@@ -706,17 +702,17 @@ function parseMachineDecl(st: ParserState, header: KojoDeclRecord): void {
 function parseViewDecl(st: ParserState, header: KojoDeclRecord): void {
   const tokens = splitSpaces(header.rest, header.restOffset);
   if (tokens.length === 0) {
-    reportSpan(st, 'core/lex/anchor', '`# 视` 缺目标（形如 `# 视 灵梦`）。', spanOfLine(st, header));
+    reportSpan(st, 'core/lex/anchor', '`# 视角` 缺目标（形如 `# 视角 灵梦`）。', spanOfLine(st, header));
     return;
   }
   if (tokens.length > 1) {
-    reportSpan(st, 'core/lex/anchor', '`# 视` 只接一个目标，多余内容请删掉（§3.6）。', spanOfLine(st, header));
+    reportSpan(st, 'core/lex/anchor', '`# 视角` 只接一个目标，多余内容请删掉（§3.6）。', spanOfLine(st, header));
   }
   if (st.hasView) {
     reportSpan(
       st,
       'core/decl/multiple-view',
-      '一个文件只能写一个 `# 视`：2.0 不支持幕内切换视角（§3.2）。',
+      '一个文件只能写一个 `# 视角`：2.0 不支持幕内切换视角（§3.2）。',
       spanOfLine(st, header),
     );
   }
@@ -731,9 +727,9 @@ function parseViewDecl(st: ParserState, header: KojoDeclRecord): void {
  * - 参数是一个裸名字，core 按不透明字符串收下来交给上层对账；这里**不校验**它是不是
  *   某个已知方言（那会把手伸进方言事实，铁律 3）；
  * - 不进文件命名空间（不叫"声明一个名字"），但**查重**：解析层只消费单值 `fileAssertion`，
- *   第二条起必有一条被静默丢弃 ⇒ 报 `core/decl/multiple-dialect`（与 `# 视` 同一族纪律）；
+ *   第二条起必有一条被静默丢弃 ⇒ 报 `core/decl/multiple-dialect`（与 `# 视角` 同一族纪律）；
  *   两条断言是不是"同一个方言"不是本层要回答的——冲突判据（`core/dialect/mismatch`）仍在方言层；
- * - 一行只收一个名字，与 `# 视` 同形。
+ * - 一行只收一个名字，与 `# 视角` 同形。
  */
 function parseDialectDecl(st: ParserState, header: KojoDeclRecord): void {
   const tokens = splitSpaces(header.rest, header.restOffset);
@@ -788,7 +784,7 @@ function parseTypeToken(st: ParserState, token: KojoCallArg): ParsedType | null 
         reportSpan(
           st,
           'core/decl/bad-array-size',
-          '数组长度不能为空：写正整数或已声明的整数 `# 常量`（§3.4.2）。',
+          '数组长度不能为空：写正整数或已声明的整数 `# 设`（§3.4.2）。',
           spanOfToken(st, token),
         );
         return { valueType };
@@ -806,7 +802,7 @@ function parseTypeToken(st: ParserState, token: KojoCallArg): ParsedType | null 
         reportSpan(
           st,
           'core/decl/bad-array-size',
-          '数组长度只能是正整数或已声明的整数 `# 常量`（§3.4.2）。',
+          '数组长度只能是正整数或已声明的整数 `# 设`（§3.4.2）。',
           size.span,
         );
       }
@@ -879,13 +875,20 @@ function storageOfWord(word: string): KojoVarStorage | null {
   return null;
 }
 
-function parseVarDecl(st: ParserState, header: KojoDeclRecord): void {
+/**
+ * `# 设`：统一声明（§3.4；合并原 `# 设` / `# 设`）。
+ *
+ * - 初值是字面量、且未标存储期、且不是数组 ⇒ **编译期常量**（kind 'const'，
+ *   可用于表端点 / 数组长度 / `@着色` 颜色）；
+ * - 其余（无初值 / 标了存储期 / 数组）⇒ **运行期变量**（kind 'var'）。
+ */
+function parseSetDecl(st: ParserState, header: KojoDeclRecord): void {
   const tokens = splitSpaces(header.rest, header.restOffset);
   if (tokens.length < 2) {
     reportSpan(
       st,
       'core/lex/anchor',
-      '`# 变量` 写成 `# 变量 <名> <类型> [= 初值] [场景|存档|会话]`（§3.4.1）。',
+      '`# 设` 写成 `# 设 <名> <类型> [= 初值] [场景|存档|会话]`（§3.4.1）。',
       spanOfLine(st, header),
     );
     return;
@@ -898,10 +901,12 @@ function parseVarDecl(st: ParserState, header: KojoDeclRecord): void {
   let storage: KojoVarStorage = KOJO_DEFAULT_STORAGE === '场景' ? 'scene' : 'scene';
   let init: KojoLiteral | undefined;
   let sawInit = false;
+  let sawStorage = false;
   for (let i = 2; i < tokens.length; i++) {
     const token = tokens[i]!;
     const storageWord = storageOfWord(token.text);
     if (storageWord !== null) {
+      sawStorage = true;
       storage = storageWord;
       continue;
     }
@@ -911,12 +916,16 @@ function parseVarDecl(st: ParserState, header: KojoDeclRecord): void {
         continue;
       }
       sawInit = true;
+      // 编译期常量形态：初值只允许字面量，非字面量按 const-not-constant 报
+      const initCode = sawInit && !sawStorage && parsedType.arraySize === undefined
+        ? 'core/decl/const-not-constant'
+        : 'core/decl/bad-initializer';
       if (token.text.length > 1) {
         init =
           parseLiteralToken(
             st,
             { text: token.text.slice(1), offset: token.offset + 1 },
-            'core/decl/bad-initializer',
+            initCode,
             parsedType.valueType,
           ) ?? undefined;
       } else {
@@ -924,7 +933,7 @@ function parseVarDecl(st: ParserState, header: KojoDeclRecord): void {
         if (next === undefined) {
           reportSpan(st, 'core/decl/bad-initializer', '`=` 后面缺初值（§3.4.3）。', spanOfToken(st, token));
         } else {
-          init = parseLiteralToken(st, next, 'core/decl/bad-initializer', parsedType.valueType) ?? undefined;
+          init = parseLiteralToken(st, next, initCode, parsedType.valueType) ?? undefined;
           i++;
         }
       }
@@ -956,7 +965,22 @@ function parseVarDecl(st: ParserState, header: KojoDeclRecord): void {
     );
     init = undefined;
   }
-  registerDeclarationName(st, name, spanOfToken(st, tokens[0]!), '变量');
+  registerDeclarationName(st, name, spanOfToken(st, tokens[0]!), '设');
+  const span = spanOfLine(st, header);
+  if (!sawStorage && sawInit && parsedType.arraySize === undefined) {
+    // 编译期常量形态：初值解析失败（init === undefined）时诊断已报，不得建出变形 const。
+    if (init !== undefined) {
+      const decl: KojoConstDecl = {
+        kind: 'const',
+        name,
+        valueType: parsedType.valueType,
+        value: init,
+        span,
+      };
+      st.decls.push(decl);
+    }
+    return;
+  }
   const decl: KojoVarDecl = {
     kind: 'var',
     name,
@@ -964,63 +988,7 @@ function parseVarDecl(st: ParserState, header: KojoDeclRecord): void {
     arraySize: parsedType.arraySize,
     init,
     storage,
-    span: spanOfLine(st, header),
-  };
-  st.decls.push(decl);
-}
-
-function parseConstDecl(st: ParserState, header: KojoDeclRecord): void {
-  const tokens = splitSpaces(header.rest, header.restOffset);
-  if (tokens.length < 2) {
-    reportSpan(
-      st,
-      'core/lex/anchor',
-      '`# 常量` 写成 `# 常量 <名> <类型> = <值>`（§3.4.1）。',
-      spanOfLine(st, header),
-    );
-    return;
-  }
-  if (!declNameValid(st, tokens[0])) return;
-  const name = tokens[0]!.text;
-  const parsedType = parseTypeToken(st, tokens[1]!);
-  if (parsedType === null) return;
-
-  let eqIndex = -1;
-  for (let i = 2; i < tokens.length; i++) {
-    if (tokens[i]!.text.charCodeAt(0) === 61) {
-      eqIndex = i;
-      break;
-    }
-  }
-  if (eqIndex < 0) {
-    reportSpan(st, 'core/decl/bad-initializer', '`# 常量` 必须有初值：缺 `= <值>`（§3.4.3）。', spanOfLine(st, header));
-    return;
-  }
-  const eqToken = tokens[eqIndex]!;
-  let value: KojoLiteral | null;
-  if (eqToken.text.length > 1) {
-    value = parseLiteralToken(
-      st,
-      { text: eqToken.text.slice(1), offset: eqToken.offset + 1 },
-      'core/decl/const-not-constant',
-      parsedType.valueType,
-    );
-  } else {
-    const next = tokens[eqIndex + 1];
-    if (next === undefined) {
-      reportSpan(st, 'core/decl/bad-initializer', '`=` 后面缺常量值（§3.4.3）。', spanOfToken(st, eqToken));
-      return;
-    }
-    value = parseLiteralToken(st, next, 'core/decl/const-not-constant', parsedType.valueType);
-  }
-  if (value === null) return;
-  registerDeclarationName(st, name, spanOfToken(st, tokens[0]!), '常量');
-  const decl: KojoConstDecl = {
-    kind: 'const',
-    name,
-    valueType: parsedType.valueType,
-    value,
-    span: spanOfLine(st, header),
+    span,
   };
   st.decls.push(decl);
 }
@@ -1593,7 +1561,7 @@ function parseNarrativeStatement(st: ParserState, line: KojoLexLine, ctx: CtxBas
         return null;
       }
       if (!st.hasView) {
-        reportSpan(st, 'core/pool/no-view', '池内裸引号默认说话人是 `{我}`，但文件没有 `# 视`（§7.1）。', spanOfLine(st, line));
+        reportSpan(st, 'core/pool/no-view', '池内裸引号默认说话人是 `{我}`，但文件没有 `# 视角`（§7.1）。', spanOfLine(st, line));
       }
       st.i++;
       if (!validateTextRecord(st, line)) return null;
@@ -2397,18 +2365,48 @@ function parseNativeBlock(st: ParserState, line: KojoLexLine, ctx: CtxBase): Koj
       spanOfLine(st, line),
     );
   }
-  if (!ensureBlockHeaderEmpty(st, line, '原生')) {
+  // `@原生{ … }`：块头以 `{` 收尾，块体以同缩进的单独一行 `}` 收口（§8.5 新典）。
+  // 裸 `@原生` 缩进围栏为旧写法，继续容忍（去缩进收口），只在新写法上要求收口 `}`。
+  const headerRest = line.kind === 'dispatch' ? line.rest : '';
+  const braced = headerRest.trim() === '{';
+  if (headerRest.length > 0 && !braced) {
+    reportSpan(
+      st,
+      'core/lex/anchor',
+      '`@原生` 块头不接内容：写成 `@原生{`，块体后写一行同缩进的 `}` 收口（§8.5）。',
+      spanOfLine(st, line),
+    );
     skipLineAndSubtree(st);
     return null;
   }
   const headerIndent = line.indent;
   st.i++;
   const records: KojoNativeRecord[] = [];
+  let closed = false;
   while (st.i < st.lines.length) {
     const child = st.lines[st.i]!;
     if (child.kind !== 'native') break;
+    if (child.close) {
+      // 收口行：消费掉但不进块体（braced 与否都吃——裸围栏后跟着 `}` 属旧式误用，
+      // 吃掉它比让它落进叙事区报两处错更干净）。
+      closed = true;
+      st.i++;
+      break;
+    }
+    if (braced && child.indent <= headerIndent) {
+      // braced 模式下围栏已被 lexer 在收口行关闭；走到这里的浅行说明缺收口。
+      break;
+    }
     records.push(child);
     st.i++;
+  }
+  if (braced && !closed) {
+    reportSpan(
+      st,
+      'core/native/unclosed',
+      '`@原生{` 缺收口：块体之后写一行与 `@原生` 同缩进的 `}`（§8.5）。',
+      spanOfLine(st, line),
+    );
   }
   let baseIndent = Number.POSITIVE_INFINITY;
   const included: KojoNativeRecord[] = [];

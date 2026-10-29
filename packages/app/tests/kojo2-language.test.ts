@@ -114,7 +114,7 @@ function expectRootAfter(line: string): Emit[] {
 
 describe('五锚点：每行的第一眼是锚点', () => {
   it.each([
-    ['# 变量 临时 整数', '#'],
+    ['# 设 临时 整数', '#'],
     ['@算', '@'],
     ['> 晨光透过鸟居。', '>'],
     ['? 恋慕 >= 500', '?'],
@@ -126,7 +126,7 @@ describe('五锚点：每行的第一眼是锚点', () => {
   });
 
   it('声明词 / 调度词各自一档，未知词不上声明色', () => {
-    expect(ofToken(tokensOf('# 变量 临时 整数'), KOJO2_TOKEN.declaration)).toEqual(['变量']);
+    expect(ofToken(tokensOf('# 设 临时 整数'), KOJO2_TOKEN.declaration)).toEqual(['设']);
     expect(ofToken(tokensOf('# 对照表 心情 依据 恋慕'), KOJO2_TOKEN.declaration)).toEqual(['对照表']);
     expect(ofToken(tokensOf('@算'), KOJO2_TOKEN.declaration)).toEqual(['算']);
     expect(ofToken(tokensOf('@着色 0xFF8080'), KOJO2_TOKEN.declaration)).toEqual(['着色']);
@@ -149,13 +149,13 @@ describe('保留词、数字与中文运算符', () => {
   it('`? 否` / `依据` / 类型词 / 存储期词 / 织入修饰词各归各档（类型词自 2026-10-27 第三色批起独立一档）', () => {
     expect(ofToken(tokensOf('? 否'), KOJO2_TOKEN.keyword)).toEqual(['否']);
     expect(ofToken(tokensOf('# 对照表 心情 依据 恋慕'), KOJO2_TOKEN.keyword)).toEqual(['依据']);
-    const decl = tokensOf('# 变量 今天已触发 整数 = 0 存档');
+    const decl = tokensOf('# 设 今天已触发 整数 = 0 存档');
     // 类型词从"保留词"里拆出来：`整数` 说的是**这一列存什么**，`存档` 说的是**它活多久**，
     // 两件事挤一枚色就是把第三色档白白省掉了。判据两侧都留：type 里恰是类型词，
     // keyword 里仍是存储期词（少一格 = 拆档拆丢了，多一格 = 卫兵序错了）。
     expect(ofToken(decl, KOJO2_TOKEN.type)).toEqual(['整数']);
     expect(ofToken(decl, KOJO2_TOKEN.keyword)).toEqual(['存档']);
-    expect(ofToken(tokensOf('# 变量 心情快照 字符串'), KOJO2_TOKEN.type)).toEqual(['字符串']);
+    expect(ofToken(tokensOf('# 设 心情快照 字符串'), KOJO2_TOKEN.type)).toEqual(['字符串']);
     expect(ofToken(tokensOf('@织 回合末 之后'), KOJO2_TOKEN.keyword)).toEqual(['之后']);
     expect(ofToken(tokensOf('空行 等待'), KOJO2_TOKEN.keyword)).toEqual(['空行', '等待']);
   });
@@ -454,7 +454,7 @@ describe('档位与配色：一档一色、与 v1 不撞名', () => {
       '@算', // anchor + declaration
       '# 对照表 心情 依据 恋慕', // declaration + keyword
       // 类型档的发射点（2026-10-27 第三色批）：类型词 + 存储期词同屏，两档必须各发各的
-      '# 变量 人数 整数 存档',
+      '# 设 人数 整数 存档',
       '? 否', // anchor + keyword
       '灵梦：「早」', // speaker + delimiter + speech
       '灵梦：「{你}」', // interp

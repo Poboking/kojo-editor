@@ -46,10 +46,10 @@ const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
 const HILITE = [
   '// 心情', // 1 注释
   '# 幕 神社清晨', // 2
-  '# 视 灵梦', // 3
+  '# 视角 灵梦', // 3
   '# 机 指令 310', // 4
-  '# 变量 心情 整数 = 0 存档', // 5
-  '# 常量 引号 字符串 = "心情"', // 6 字符串字面量
+  '# 设 心情 整数 = 0 存档', // 5
+  '# 设 引号 字符串 = "心情"', // 6 字符串字面量
   '# 对照表 心情表 依据 心情', // 7
   '    0..99 -> 疏远', // 8
   '    100..499 -> 心情', // 9 表体数据行
@@ -82,9 +82,9 @@ const HILITE = [
  */
 const SELECT = [
   '# 幕 神社清晨', // 1
-  '# 视 灵梦', // 2
+  '# 视角 灵梦', // 2
   '# 机 指令 310', // 3
-  '# 变量 心情 整数 = 0 存档', // 4
+  '# 设 心情 整数 = 0 存档', // 4
   '# 对照表 心情表 依据 心情', // 5
   '    0..99 -> 疏远', // 6
   '    100..499 -> 平常', // 7
@@ -274,7 +274,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
 
   it('光标在声明名上：声明处是唯一 write', () => {
     expect(hits.filter((hit) => hit.kind === 'write').map((hit) => flat(hit.range))).toEqual([
-      [5, 6, 5, 8],
+      [5, 5, 5, 7],
     ]);
   });
 
@@ -297,7 +297,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
   });
 
   it('光标停在声明头（名字之前）也解析到同一条声明', () => {
-    expect(kojo2DocumentHighlights(HILITE, at(HILITE, 5, '变量'))).toEqual(hits);
+    expect(kojo2DocumentHighlights(HILITE, at(HILITE, 5, '设'))).toEqual(hits);
   });
 
   it('字符串字面量里的同名文字不误报（不是引用）', () => {
@@ -359,7 +359,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
     ]);
   });
 
-  it('`# 视` 目标只在自己那一行：说话人 / 台词正文不算引用', () => {
+  it('`# 视角` 目标只在自己那一行：说话人 / 台词正文不算引用', () => {
     const viewHits = kojo2DocumentHighlights(HILITE, at(HILITE, 3, '灵梦'));
     expect(viewHits.map((hit) => [hit.range.startLine, hit.kind])).toEqual([[3, 'write']]);
   });
@@ -462,7 +462,7 @@ describe('高亮 provider：只挂 kojo2、不读开关、dispose 幂等、异�
       TOKEN,
     ) as Monaco.languages.DocumentHighlight[];
     expect(result.map((hit) => [flatIRange(hit.range), hit.kind])).toEqual([
-      [[5, 6, 5, 8], HIGHLIGHT_KINDS.Write],
+      [[5, 5, 5, 7], HIGHLIGHT_KINDS.Write],
       [[7, 14, 7, 16], HIGHLIGHT_KINDS.Read],
       [[13, 7, 13, 9], HIGHLIGHT_KINDS.Read],
       [[19, 5, 19, 7], HIGHLIGHT_KINDS.Read],
@@ -584,7 +584,7 @@ describe('扩选：词 → 行 → 块 → 幕 → 全文', () => {
 /* ============================== ⑥ 扩选：`# 机` 体 / 无幕 ============================== */
 
 describe('扩选：没有 `# 幕` 时 `# 机` 体是一级', () => {
-  const machineOnly = ['# 机 指令 310', '# 变量 甲 整数', '> 正文', '', ''].join('\n');
+  const machineOnly = ['# 机 指令 310', '# 设 甲 整数', '> 正文', '', ''].join('\n');
 
   it('机体 = 机声明行到最后一个非空行（规范 §3.7）', () => {
     const chain = chainOf(machineOnly, at(machineOnly, 3, '正文'));
@@ -601,7 +601,7 @@ describe('扩选：没有 `# 幕` 时 `# 机` 体是一级', () => {
   });
 
   it('声明区写在首个幕之前：没有幕父（词 / 行 / 全文）', () => {
-    const source = ['# 变量 甲 整数', '# 幕 开场', '> 正文'].join('\n');
+    const source = ['# 设 甲 整数', '# 幕 开场', '> 正文'].join('\n');
     const chain = chainOf(source, at(source, 1, '甲'));
     expect(chain.map((range) => range.startLine)).toEqual([1, 1, 1]);
     expect(chain[2]!.endLine).toBe(3);

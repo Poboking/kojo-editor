@@ -44,7 +44,7 @@ export interface KojoSceneNode {
   readonly span: KojoSpan;
 }
 
-/** `# 视 <目标>`：视角；`{我}` 指向它 */
+/** `# 视角 <目标>`：视角；`{我}` 指向它 */
 export interface KojoViewDecl {
   readonly kind: 'view';
   readonly target: string;
@@ -77,7 +77,7 @@ export interface KojoDialectDecl {
   readonly span: KojoSpan;
 }
 
-/** `# 变量 <名> <类型> [= <初值>] [场景|存档|会话]` */
+/** `# 设 <名> <类型> [= <初值>] [场景|存档|会话]` */
 export interface KojoVarDecl {
   readonly kind: 'var';
   readonly name: string;
@@ -89,7 +89,7 @@ export interface KojoVarDecl {
   readonly span: KojoSpan;
 }
 
-/** `# 常量 <名> <类型> = <值>` */
+/** `# 设 <名> <类型> = <值>` */
 export interface KojoConstDecl {
   readonly kind: 'const';
   readonly name: string;

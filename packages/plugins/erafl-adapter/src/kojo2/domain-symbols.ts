@@ -45,7 +45,7 @@ const PRONOUNS: readonly PronounSymbol[] = Object.freeze([
     pronoun: '我',
     engineRef: '[$KNAME]',
     // eraFL 的口上文件本身就是角色文件（目录 `{编号}_{名称}` = 角色身份），
-    // `# 视` 声明与该角色重合——与 eraTW 的 viewBound 语义同构。
+    // `# 视角` 声明与该角色重合——与 eraTW 的 viewBound 语义同构。
     requiresView: true,
     viewBound: true,
     // 主力形在 XML 插值记号族（不是 Emuera 的 `%CALLNAME:%` 指令族）。
@@ -64,7 +64,7 @@ const PRONOUNS: readonly PronounSymbol[] = Object.freeze([
     pronoun: '她',
     engineRef: '[$TNAME]',
     // 对象角色轴：口上 XML 的 `<command>` 由 kojoPlace/forMaster 等属性给上下文，
-    // `# 视` 目标不同也成立（与 eraTW 的 viewBound=false 同构）。
+    // `# 视角` 目标不同也成立（与 eraTW 的 viewBound=false 同构）。
     requiresView: true,
     viewBound: false,
     family: 'XML-NAME',

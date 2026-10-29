@@ -2,7 +2,7 @@
  * K2-LSP-INLAY · Kojo 2.0 行内提示（`kojo2-inlay.ts`）的闸。
  *
  * 覆盖七件事：
- * 1. **类型提示**：`# 变量 / # 常量` 的显式类型、数组长度、未写类型时按初值推断，
+ * 1. **类型提示**：`# 设 / # 设` 的显式类型、数组长度、未写类型时按初值推断，
  *    以及"推断不出不产"的四种反例（缺初值 / 初值表达式 / 坏尾巴 / 第二个记号不是类型）；
  * 2. **`@巡` 绑定**：本文件作者数组（无需 adapter）、adapter 命名集合（角色 / 键值）、
  *    adapter 重复声明 / 不支持 `@巡` / 集合未知时**都不猜**；
@@ -158,8 +158,8 @@ function provide(
 /* ============================== ① 类型提示 ============================== */
 
 describe('类型提示：显式类型 / 数组长度 / 未写类型按初值推断', () => {
-  it('`# 变量` 显式整数类型：行尾一枚 `整数`，paddingLeft 隔开原文', () => {
-    const source = '# 变量 计数 整数 = 3';
+  it('`# 设` 显式整数类型：行尾一枚 `整数`，paddingLeft 隔开原文', () => {
+    const source = '# 设 计数 整数 = 3';
     expect(kojo2InlayHints(source)).toEqual([
       {
         position: { lineNumber: 1, column: source.length + 1 },
@@ -170,63 +170,63 @@ describe('类型提示：显式类型 / 数组长度 / 未写类型按初值推�
     ]);
   });
 
-  it('`# 变量` 显式字符串类型', () => {
-    expect(labelsOf('# 变量 名字 字符串 = "灵梦"')).toEqual(['字符串']);
+  it('`# 设` 显式字符串类型', () => {
+    expect(labelsOf('# 设 名字 字符串 = "灵梦"')).toEqual(['字符串']);
   });
 
-  it('`# 常量` 显式类型（core 词表转发）', () => {
-    expect(labelsOf('# 常量 上限 整数 = 10')).toEqual(['整数']);
+  it('`# 设` 显式类型（core 词表转发）', () => {
+    expect(labelsOf('# 设 上限 整数 = 10')).toEqual(['整数']);
   });
 
   it('数组声明的类型带长度原文（`整数[3]`）', () => {
-    expect(labelsOf('# 变量 队列 整数[3]')).toEqual(['整数[3]']);
+    expect(labelsOf('# 设 队列 整数[3]')).toEqual(['整数[3]']);
   });
 
   it('未写类型：整数字面量初值 ⇒ `整数`', () => {
-    expect(labelsOf('# 变量 甲 = 1')).toEqual(['整数']);
+    expect(labelsOf('# 设 甲 = 1')).toEqual(['整数']);
   });
 
   it('未写类型：双引号初值 ⇒ `字符串`', () => {
-    expect(labelsOf('# 变量 乙 = "早"')).toEqual(['字符串']);
+    expect(labelsOf('# 设 乙 = "早"')).toEqual(['字符串']);
   });
 
   it('未写类型：十六进制颜色按整数字面量 ⇒ `整数`', () => {
-    expect(labelsOf('# 变量 戊 = 0xFF8080')).toEqual(['整数']);
+    expect(labelsOf('# 设 戊 = 0xFF8080')).toEqual(['整数']);
   });
 
-  it('未写类型：`# 常量` 同样按初值推断（整数 / 字符串两例）', () => {
-    expect(labelsOf('# 常量 己 = 2')).toEqual(['整数']);
-    expect(labelsOf('# 常量 庚 = "x"')).toEqual(['字符串']);
+  it('未写类型：`# 设` 同样按初值推断（整数 / 字符串两例）', () => {
+    expect(labelsOf('# 设 己 = 2')).toEqual(['整数']);
+    expect(labelsOf('# 设 庚 = "x"')).toEqual(['字符串']);
   });
 
   it('存储期词跟在初值后不打断推断（`= "x" 存档`）', () => {
-    expect(labelsOf('# 变量 壬 = "x" 存档')).toEqual(['字符串']);
+    expect(labelsOf('# 设 壬 = "x" 存档')).toEqual(['字符串']);
   });
 
   it('显式类型 + 存储期：类型照给', () => {
-    expect(labelsOf('# 变量 辛 整数 存档')).toEqual(['整数']);
+    expect(labelsOf('# 设 辛 整数 存档')).toEqual(['整数']);
   });
 
   it('推断不出：缺初值 / 只有名字 / 初值是表达式 / 尾巴不是存储期 ⇒ 一枚都不产', () => {
-    expect(kojo2InlayHints('# 变量 丙 =')).toEqual([]);
-    expect(kojo2InlayHints('# 变量 丙')).toEqual([]);
-    expect(kojo2InlayHints('# 变量 丁 = 1 + 1')).toEqual([]);
-    expect(kojo2InlayHints('# 变量 癸 = "x" 坏词')).toEqual([]);
+    expect(kojo2InlayHints('# 设 丙 =')).toEqual([]);
+    expect(kojo2InlayHints('# 设 丙')).toEqual([]);
+    expect(kojo2InlayHints('# 设 丁 = 1 + 1')).toEqual([]);
+    expect(kojo2InlayHints('# 设 癸 = "x" 坏词')).toEqual([]);
   });
 
   it('第二个记号既不是类型也不是 `=` ⇒ 不猜（不当成类型别名）', () => {
-    expect(kojo2InlayHints('# 变量 甲 数组 = 1')).toEqual([]);
+    expect(kojo2InlayHints('# 设 甲 数组 = 1')).toEqual([]);
   });
 
   it('显式类型但初值类型不符：类型事实仍来自 AST（只报类型，不做纠正）', () => {
-    expect(labelsOf('# 变量 甲 整数 = "x"')).toEqual(['整数']);
+    expect(labelsOf('# 设 甲 整数 = "x"')).toEqual(['整数']);
   });
 
-  it('`# 常量` 写了类型却没有初值（AST 不建节点）⇒ 用行内显式类型兜底', () => {
-    expect(labelsOf('# 常量 无值 整数')).toEqual(['整数']);
+  it('`# 设` 写了类型却没有初值（AST 不建节点）⇒ 用行内显式类型兜底', () => {
+    expect(labelsOf('# 设 无值 整数')).toEqual(['整数']);
   });
 
-  it('只对 `# 变量 / # 常量` 产类型提示：表 / 池 / 模 / 函 / 机 行不产 type', () => {
+  it('只对 `# 设 / # 设` 产类型提示：表 / 池 / 模 / 函 / 机 行不产 type', () => {
     const source = [
       '# 对照表 心情 依据 恋慕',
       '    否 -> 未知',
@@ -248,7 +248,7 @@ describe('类型提示：显式类型 / 数组长度 / 未写类型按初值推�
 
 describe('`@巡 <集合>` 绑定名：数组 / 角色集合 / 键值集合，解析不出不猜', () => {
   it('本文件声明的数组 + 没有 adapter ⇒ core 数组绑定表 `{值} {下标}`', () => {
-    const source = ['# 变量 状态 整数[3]', '@巡 状态'].join('\n');
+    const source = ['# 设 状态 整数[3]', '@巡 状态'].join('\n');
     expect(labelsOf(source)).toEqual(['整数[3]', '{值} {下标}']);
   });
 
@@ -290,7 +290,7 @@ describe('`@巡 <集合>` 绑定名：数组 / 角色集合 / 键值集合，解
 
   it('缩进的 `@巡`：提示压在块头行尾（列按含缩进的原文算）', () => {
     const line = '    @巡 状态';
-    const source = ['# 变量 状态 整数[3]', line].join('\n');
+    const source = ['# 设 状态 整数[3]', line].join('\n');
     const hint = hintOnLine(source, 2);
     expect(hint).toEqual({
       position: { lineNumber: 2, column: line.length + 1 },
@@ -301,10 +301,10 @@ describe('`@巡 <集合>` 绑定名：数组 / 角色集合 / 键值集合，解
   });
 
   it('`@巡` 在 `@原生` 围栏里是原文 ⇒ 不产', () => {
-    const source = ['# 变量 状态 整数[3]', '@原生', '    @巡 状态'].join('\n');
+    const source = ['# 设 状态 整数[3]', '@原生', '    @巡 状态'].join('\n');
     expect(kojo2InlayHints(source)).toEqual([
       {
-        position: { lineNumber: 1, column: '# 变量 状态 整数[3]'.length + 1 },
+        position: { lineNumber: 1, column: '# 设 状态 整数[3]'.length + 1 },
         label: '整数[3]',
         kind: 'type',
         paddingLeft: true,
@@ -365,8 +365,8 @@ describe('`# 对照表` 档数 / 兜底：只做声明行尾一枚，不逐行�
     expect(kojo2InlayHints('# 对照表')).toEqual([]);
   });
 
-  it('块体 / 表体里缩进的 `# 变量` 是原文，不是声明 ⇒ 不产类型提示', () => {
-    const source = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '    # 变量 甲 整数', '    否 -> 未知'].join('\n');
+  it('块体 / 表体里缩进的 `# 设` 是原文，不是声明 ⇒ 不产类型提示', () => {
+    const source = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '    # 设 甲 整数', '    否 -> 未知'].join('\n');
     expect(labelsOf(source)).toEqual(['1 档 · 有否']);
   });
 });
@@ -375,9 +375,9 @@ describe('`# 对照表` 档数 / 兜底：只做声明行尾一枚，不逐行�
 
 describe('范围限定：只算传入 range 内的行', () => {
   const THREE = [
-    '# 变量 甲 整数',
-    '# 变量 乙 字符串',
-    '# 常量 丙 整数 = 1',
+    '# 设 甲 整数',
+    '# 设 乙 字符串',
+    '# 设 丙 整数 = 1',
   ].join('\n');
 
   it('只给第 2 行 ⇒ 只有第 2 行的提示', () => {
@@ -413,23 +413,23 @@ describe('范围限定：只算传入 range 内的行', () => {
 /* ============================== ⑤ 位置门 / 编码 ============================== */
 
 describe('位置门与编码：注释 / 台词 / 旁白不产，CRLF 与中文不漂', () => {
-  it('整行注释里的 `# 变量` 是注释文本 ⇒ 不产', () => {
-    expect(kojo2InlayHints('// # 变量 甲 整数')).toEqual([]);
+  it('整行注释里的 `# 设` 是注释文本 ⇒ 不产', () => {
+    expect(kojo2InlayHints('// # 设 甲 整数')).toEqual([]);
   });
 
-  it('旁白 / 台词正文里的 `# 变量` 不是声明 ⇒ 不产', () => {
-    expect(kojo2InlayHints('> # 变量 甲 整数')).toEqual([]);
-    expect(kojo2InlayHints('灵梦：「# 变量 甲 整数」')).toEqual([]);
+  it('旁白 / 台词正文里的 `# 设` 不是声明 ⇒ 不产', () => {
+    expect(kojo2InlayHints('> # 设 甲 整数')).toEqual([]);
+    expect(kojo2InlayHints('灵梦：「# 设 甲 整数」')).toEqual([]);
   });
 
   it('CRLF 与 LF 的提示逐字相等（行号 / 列 / 标签都不漂）', () => {
-    const lf = ['# 变量 甲 整数 = 1', '# 常量 乙 字符串 = "x"'].join('\n');
+    const lf = ['# 设 甲 整数 = 1', '# 设 乙 字符串 = "x"'].join('\n');
     const crlf = lf.replace(/\n/g, '\r\n');
     expect(kojo2InlayHints(crlf)).toEqual(kojo2InlayHints(lf));
   });
 
   it('中文名 / 中文初值：列是 UTF-16 码元，行尾列 = 原文长度 + 1', () => {
-    const line = '# 变量 心情 字符串 = "很好"';
+    const line = '# 设 心情 字符串 = "很好"';
     const hint = hintOnLine(line, 1);
     expect(hint?.position).toEqual({ lineNumber: 1, column: line.length + 1 });
     expect(hint?.label).toBe('字符串');
@@ -443,7 +443,7 @@ describe('位置门与编码：注释 / 台词 / 旁白不产，CRLF 与中文�
   });
 
   it('坏行不带走其余合法声明（错误恢复：能给多少给多少）', () => {
-    const source = ['# 变量 甲 整数', '??? 坏行', '# 常量 乙 整数 = 2'].join('\n');
+    const source = ['# 设 甲 整数', '??? 坏行', '# 设 乙 整数 = 2'].join('\n');
     expect(labelsOf(source)).toEqual(['整数', '整数']);
   });
 
@@ -460,7 +460,7 @@ describe('位置门与编码：注释 / 台词 / 旁白不产，CRLF 与中文�
 describe('上限与确定性', () => {
   it('超过 200 条按源码序截断，最后一条停在第 200 行', () => {
     const lines: string[] = [];
-    for (let i = 0; i < 250; i++) lines.push(`# 变量 甲${i} 整数`);
+    for (let i = 0; i < 250; i++) lines.push(`# 设 甲${i} 整数`);
     const hints = kojo2InlayHints(lines.join('\n'));
     expect(hints).toHaveLength(KOJO2_INLAY_HINT_LIMIT);
     expect(KOJO2_INLAY_HINT_LIMIT).toBe(200);
@@ -469,12 +469,12 @@ describe('上限与确定性', () => {
   });
 
   it('两次调用逐字相等（纯函数）', () => {
-    const source = ['# 变量 甲 整数', '# 对照表 心情 依据 恋慕', '    否 -> 未知', '@巡 甲'].join('\n');
+    const source = ['# 设 甲 整数', '# 对照表 心情 依据 恋慕', '    否 -> 未知', '@巡 甲'].join('\n');
     expect(kojo2InlayHints(source)).toEqual(kojo2InlayHints(source));
   });
 
   it('输出按（行，列）升序', () => {
-    const source = ['# 常量 丙 整数 = 1', '# 变量 甲 整数', '# 对照表 心情 依据 恋慕', '    否 -> 未知'].join('\n');
+    const source = ['# 设 丙 整数 = 1', '# 设 甲 整数', '# 对照表 心情 依据 恋慕', '    否 -> 未知'].join('\n');
     const lines = kojo2InlayHints(source).map((hint) => hint.position.lineNumber);
     expect(lines).toEqual([...lines].sort((a, b) => a - b));
   });
@@ -530,11 +530,11 @@ describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空',
     expect(providerOf(fake).provideInlayHints).toBeTypeOf('function');
   });
 
-  it('provider 对 `# 变量` 交回 Monaco 形状的提示（position / label / kind / padding）', () => {
+  it('provider 对 `# 设` 交回 Monaco 形状的提示（position / label / kind / padding）', () => {
     stubFlag(true);
     const fake = fakeMonaco();
     installKojo2InlayHintsProvider(fake.monaco);
-    const source = '# 变量 甲 整数';
+    const source = '# 设 甲 整数';
     const result = provide(fake, fakeModel(source));
     expect(result.hints).toEqual([
       {
@@ -552,7 +552,7 @@ describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空',
     const fake = fakeMonaco();
     installKojo2InlayHintsProvider(fake.monaco);
     const source = [
-      '# 变量 状态 整数[3]',
+      '# 设 状态 整数[3]',
       '@巡 状态',
       '# 对照表 心情 依据 恋慕',
       '    否 -> 未知',
@@ -565,7 +565,7 @@ describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空',
     stubFlag(true);
     const fake = fakeMonaco();
     installKojo2InlayHintsProvider(fake.monaco);
-    const source = ['# 变量 甲 整数', '# 变量 乙 字符串', '# 常量 丙 整数 = 1'].join('\n');
+    const source = ['# 设 甲 整数', '# 设 乙 字符串', '# 设 丙 整数 = 1'].join('\n');
     const result = provide(fake, fakeModel(source), {
       startLineNumber: 2,
       endLineNumber: 2,
@@ -579,15 +579,15 @@ describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空',
     stubFlag(true);
     const fake = fakeMonaco();
     installKojo2InlayHintsProvider(fake.monaco);
-    expect(provide(fake, fakeModel('# 变量 甲 整数', { broken: true })).hints).toEqual([]);
-    expect(provide(fake, fakeModel('# 变量 甲 整数', { disposed: true })).hints).toEqual([]);
+    expect(provide(fake, fakeModel('# 设 甲 整数', { broken: true })).hints).toEqual([]);
+    expect(provide(fake, fakeModel('# 设 甲 整数', { disposed: true })).hints).toEqual([]);
   });
 
   it('超出体量档（≥ LARGE_FILE_LINES）⇒ 整体让路（与 stickyScroll / 面包屑同一条线）', () => {
     stubFlag(true);
     const fake = fakeMonaco();
     installKojo2InlayHintsProvider(fake.monaco);
-    const model = fakeModel('# 变量 甲 整数', { lineCount: LARGE_FILE_LINES });
+    const model = fakeModel('# 设 甲 整数', { lineCount: LARGE_FILE_LINES });
     expect(provide(fake, model).hints).toEqual([]);
   });
 
@@ -595,7 +595,7 @@ describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空',
     stubFlag(true);
     const fake = fakeMonaco();
     installKojo2InlayHintsProvider(fake.monaco);
-    const model = fakeModel('# 变量 甲 整数', { noLineCount: true });
+    const model = fakeModel('# 设 甲 整数', { noLineCount: true });
     expect(provide(fake, model).hints.map((hint) => hint.label)).toEqual(['整数']);
   });
 
@@ -607,7 +607,7 @@ describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空',
         throw new Error('boom');
       },
     });
-    const source = ['# 变量 状态 整数[3]', '@巡 状态'].join('\n');
+    const source = ['# 设 状态 整数[3]', '@巡 状态'].join('\n');
     expect(provide(fake, fakeModel(source)).hints.map((hint) => hint.label)).toEqual([
       '整数[3]',
       '{值} {下标}',

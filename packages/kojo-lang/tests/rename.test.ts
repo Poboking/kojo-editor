@@ -6,7 +6,7 @@
  * `packages/app/tests/kojo2-rename.test.ts`（请求构造 / WorkspaceEdit 落点 / rejectReason）。
  *
  * 覆盖面（任务口径）：
- * 1. **各符号重命名**：`# 变量 / 常量 / 表 / 池 / 模` 与 `@函` 的声明 + 全部可证引用位同步；
+ * 1. **各符号重命名**：`# 设 / 常量 / 表 / 池 / 模` 与 `@函` 的声明 + 全部可证引用位同步；
  * 2. **引用面**：插值（台词 / 旁白 / 表达式）、`!` 调用、`@巡` 集合、表 `依据` 主语与端点
  *    （常量）、数组长度、赋值目标与右值、条件链 test；
  * 3. **不误改**：注释 / 字符串字面量 / `@原生` 原生行 / 表值列 / `@函` 形参 / `@巡` 绑定名；
@@ -37,15 +37,15 @@ import {
 const LINES: readonly string[] = [
   '// 注释里的名字不参与改名：心情 / 好感度 / 心情快照', // 1
   '# 幕 神社清晨', // 2
-  '# 视 灵梦', // 3
+  '# 视角 灵梦', // 3
   '# 机 指令 310', // 4
-  '# 常量 亲近线 整数 = 500', // 5
-  '# 变量 好感度 整数 = 0 存档', // 6
-  '# 变量 心情快照 字符串', // 7
-  '# 变量 值 整数 = 0', // 8
-  '# 变量 数值 整数 = 0', // 9
-  '# 变量 队伍状态 字符串[亲近线]', // 10
-  '# 变量 疏远 字符串', // 11
+  '# 设 亲近线 整数 = 500', // 5
+  '# 设 好感度 整数 = 0 存档', // 6
+  '# 设 心情快照 字符串', // 7
+  '# 设 值 整数 = 0', // 8
+  '# 设 数值 整数 = 0', // 9
+  '# 设 队伍状态 字符串[亲近线]', // 10
+  '# 设 疏远 字符串', // 11
   '', // 12
   '# 对照表 心情 依据 好感度', // 13
   '    0..99 -> 疏远', // 14
@@ -167,7 +167,7 @@ describe('夹具：2.0 源解析零 error（改名落地的收口前提）', () 
 /* ============================== ① 各符号重命名 ============================== */
 
 describe('各符号重命名：声明 + 全部可证引用位同步', () => {
-  it('# 变量 好感度：表主语 / 池条件 / 模板插值 / 台词插值 / 赋值目标与右值全同步（7 段）', () => {
+  it('# 设 好感度：表主语 / 池条件 / 模板插值 / 台词插值 / 赋值目标与右值全同步（7 段）', () => {
     const { result, renamed } = expectRename('好感度', '羁绊值', positionOnLine(6, '好感度'), [
       6, 13, 19, 26, 36, 39, 39,
     ]);
@@ -179,15 +179,15 @@ describe('各符号重命名：声明 + 全部可证引用位同步', () => {
     // 注释 / @原生 里的同名文字原样留着
     expect(renamed.split(/\r\n|\r|\n/)[0]).toContain('好感度');
     expect(renamed.split(/\r\n|\r|\n/)[47]).toContain('好感度');
-    expect(renamed).toContain('# 变量 羁绊值 整数 = 0 存档');
+    expect(renamed).toContain('# 设 羁绊值 整数 = 0 存档');
   });
 
-  it('# 常量 亲近线：数组长度 + 表行端点同步（3 段）', () => {
+  it('# 设 亲近线：数组长度 + 表行端点同步（3 段）', () => {
     const { result, renamed } = expectRename('亲近线', '亲密阈值', positionOnLine(5, '亲近线'), [
       5, 10, 15,
     ]);
     expect(result.symbol?.kind).toBe('constant');
-    expect(renamed).toContain('# 变量 队伍状态 字符串[亲密阈值]');
+    expect(renamed).toContain('# 设 队伍状态 字符串[亲密阈值]');
     expect(renamed).toContain('亲密阈值.. -> 亲近');
   });
 
@@ -226,14 +226,14 @@ describe('各符号重命名：声明 + 全部可证引用位同步', () => {
     expect(renamed).toContain('! 提升好感(目标, 12)');
   });
 
-  it('# 变量 队伍状态：`@巡` 集合位同步（2 段）', () => {
+  it('# 设 队伍状态：`@巡` 集合位同步（2 段）', () => {
     const { renamed } = expectRename('队伍状态', '队列', positionOnLine(10, '队伍状态'), [
       10, 41,
     ]);
     expect(renamed).toContain('@巡 队列');
   });
 
-  it('# 变量 心情快照：插值 + 赋值目标同步；字符串里的同名文字不动（3 段）', () => {
+  it('# 设 心情快照：插值 + 赋值目标同步；字符串里的同名文字不动（3 段）', () => {
     const { result, renamed } = expectRename('心情快照', '心情存档', positionOnLine(7, '心情快照'), [
       7, 36, 38,
     ]);
@@ -241,13 +241,13 @@ describe('各符号重命名：声明 + 全部可证引用位同步', () => {
     expect(renamed).toContain('! 娇羞退场("心情快照")');
   });
 
-  it('# 变量 值：循环外的插值同步，`@巡` 体内的 `{值}` 是绑定名不动（2 段）', () => {
+  it('# 设 值：循环外的插值同步，`@巡` 体内的 `{值}` 是绑定名不动（2 段）', () => {
     const { result, renamed } = expectRename('值', '备用值', positionOnLine(8, '值'), [8, 34]);
     expect(result.edits.some((edit) => edit.range.startLine === 42)).toBe(false);
     expect(renamed).toContain('> 这一格是{值}。');
   });
 
-  it('# 变量 数值：`@函` 形参遮蔽同名文件变量 ⇒ 只改声明（1 段）', () => {
+  it('# 设 数值：`@函` 形参遮蔽同名文件变量 ⇒ 只改声明（1 段）', () => {
     const { result, renamed } = expectRename('数值', '步长', positionOnLine(9, '数值'), [9]);
     expect(result.edits.some((edit) => edit.range.startLine === 30)).toBe(false);
     expect(result.edits.some((edit) => edit.range.startLine === 31)).toBe(false);
@@ -255,7 +255,7 @@ describe('各符号重命名：声明 + 全部可证引用位同步', () => {
     expect(renamed).toContain('? 数值 > 0');
   });
 
-  it('# 变量 疏远：表值列的同名词不是引用（只改声明，1 段）', () => {
+  it('# 设 疏远：表值列的同名词不是引用（只改声明，1 段）', () => {
     const { result, renamed } = expectRename('疏远', '疏远的人', positionOnLine(11, '疏远'), [11]);
     expect(result.edits.some((edit) => edit.range.startLine === 14)).toBe(false);
     expect(renamed).toContain('    0..99 -> 疏远');
@@ -282,15 +282,15 @@ describe('区间精确：编辑只覆盖名字字段（1 基、尾列半开）',
     expect(prepared.blockers).toEqual([]);
     expect(prepared.range).toEqual({
       startLine: 5,
-      startColumn: 6,
+      startColumn: 5,
       endLine: 5,
-      endColumn: 9,
+      endColumn: 8,
     });
     expect(prepared.symbol?.range).toEqual({
       startLine: 5,
-      startColumn: 6,
+      startColumn: 5,
       endLine: 5,
-      endColumn: 9,
+      endColumn: 8,
     });
     expect(prepared.symbol?.line).toBe(5);
   });
@@ -402,9 +402,9 @@ describe('prepare：不在符号上就拒绝并给理由；在符号上给名字
     expect(declaration.symbol?.name).toBe('好感度');
     expect(declaration.range).toEqual({
       startLine: 6,
-      startColumn: 6,
+      startColumn: 5,
       endLine: 6,
-      endColumn: 9,
+      endColumn: 8,
     });
 
     const interpolation = kojo2PrepareRename(FIXTURE, positionOnLine(36, '好感度'));
@@ -443,7 +443,7 @@ describe('prepare：不在符号上就拒绝并给理由；在符号上给名字
     }
   });
 
-  it('声明头（`# 变量` 词上）指路到名字；`# 幕` 标题明确说不可改名', () => {
+  it('声明头（`# 设` 词上）指路到名字；`# 幕` 标题明确说不可改名', () => {
     const header = kojo2PrepareRename(FIXTURE, { line: 6, column: 3 });
     expect(header.blockers[0]).toContain('声明头');
     expect(header.blockers[0]).toContain('好感度');
@@ -468,13 +468,13 @@ describe('prepare：不在符号上就拒绝并给理由；在符号上给名字
   });
 
   it('光标落在名字右边界（同一枚 token 的尾列）仍认这枚 token', () => {
-    const prepared = kojo2PrepareRename(FIXTURE, { line: 6, column: 9 });
+    const prepared = kojo2PrepareRename(FIXTURE, { line: 6, column: 8 });
     expect(prepared.blockers).toEqual([]);
     expect(prepared.symbol?.name).toBe('好感度');
   });
 
   it('同名声明 ⇒ prepare 就拒绝（不弹输入框让作者白打一遍）', () => {
-    const duplicated = `${FIXTURE}# 变量 好感度 字符串\n`;
+    const duplicated = `${FIXTURE}# 设 好感度 字符串\n`;
     const prepared = kojo2PrepareRename(duplicated, positionOnLine(6, '好感度'));
     expect(prepared.symbol?.name).toBe('好感度');
     expect(prepared.blockers[0]).toContain('同名声明');
@@ -488,11 +488,11 @@ describe('CRLF / 中文：列坐标按行内码元、换行逐字保留', () => 
 
   it('CRLF 源上的中文名改名：行号 / 列号与 LF 源一致，应用后不出现裸 LF', () => {
     const positions = wholeWordPositions(CRLF, '好感度');
-    // 第 1 枚在注释行，第 2 枚在 `# 变量` 声明行（第 6 行）
+    // 第 1 枚在注释行，第 2 枚在 `# 设` 声明行（第 6 行）
     expect(positions[0]?.line).toBe(1);
     const declaration = positions[1]!;
     expect(declaration.line).toBe(6);
-    expect(declaration.column).toBe(6);
+    expect(declaration.column).toBe(5);
 
     const result = kojo2RenameAt(CRLF, declaration, '羁绊值');
     expect(result.blockers).toEqual([]);
@@ -500,7 +500,7 @@ describe('CRLF / 中文：列坐标按行内码元、换行逐字保留', () => 
     const renamed = kojo2RenamedSource(CRLF, result.edits);
     expect(renamed.split('\r\n')).toHaveLength(LINES.length + 1);
     expect(/[^\r]\n/.test(renamed)).toBe(false);
-    expect(renamed).toContain('# 变量 羁绊值 整数 = 0 存档');
+    expect(renamed).toContain('# 设 羁绊值 整数 = 0 存档');
     expect(
       parseSource(renamed).diagnostics.filter((diagnostic) => diagnostic.severity === 'error'),
     ).toEqual([]);

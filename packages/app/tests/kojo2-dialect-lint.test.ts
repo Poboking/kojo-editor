@@ -155,21 +155,21 @@ describe('第 3–5 项 · 符号 / 只读别名 / 演出（吃同一次编译�
   });
 
   it('反例：本文件声明的变量 ⇒ 不进清单；`{她}` 这类代词由编译照常解析', () => {
-    const source = '# 机 指令 310\n# 变量 结果 整数\n\n@算\n    结果 = 1\n\n> {她}。\n';
+    const source = '# 机 指令 310\n# 设 结果 整数\n\n@算\n    结果 = 1\n\n> {她}。\n';
     expect(codesOf(lintOf(source, ERATW_GAME_ADAPTER)!.diagnostics)).not.toContain(
       'core/expr/unknown-symbol',
     );
   });
 
   it('正例：常量出现在赋值左值 ⇒ `core/expr/assign-to-constant` 进清单', () => {
-    const source = '# 机 指令 310\n# 常量 亲近线 整数 = 1\n\n@算\n    亲近线 = 2\n';
+    const source = '# 机 指令 310\n# 设 亲近线 整数 = 1\n\n@算\n    亲近线 = 2\n';
     const codes = codesOf(lintOf(source, ERATW_GAME_ADAPTER)!.diagnostics);
     expect(codes.includes('core/expr/assign-to-constant') || codes.includes('core/expr/readonly-target')).toBe(true);
   });
 
   it('反例：常量只被读（没被写）⇒ 两条只读码都不进清单', () => {
     const source =
-      '# 机 指令 310\n# 常量 亲近线 整数 = 1\n# 变量 结果 整数\n\n@算\n    结果 = 亲近线\n';
+      '# 机 指令 310\n# 设 亲近线 整数 = 1\n# 设 结果 整数\n\n@算\n    结果 = 亲近线\n';
     const codes = codesOf(lintOf(source, ERATW_GAME_ADAPTER)!.diagnostics);
     expect(codes).not.toContain('core/expr/assign-to-constant');
     expect(codes).not.toContain('core/expr/readonly-target');

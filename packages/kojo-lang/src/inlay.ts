@@ -5,7 +5,7 @@
  *
  * | 提示 | 位置 | 来源 |
  * |---|---|---|
- * | `# 变量` / `# 常量` 的类型 | 声明行尾 | core AST 的 `valueType` / `arraySize`；未写类型时按初值字面量推断 |
+ * | `# 设` / `# 设` 的类型 | 声明行尾 | core AST 的 `valueType` / `arraySize`；未写类型时按初值字面量推断 |
  * | `@巡 <集合>` 的绑定名 | 块头行尾 | core 的 `FOREACH_COLLECTION_BINDINGS`（数组）或 adapter 的 `foreachCollections`（命名集合 / 作者数组规则） |
  * | `# 对照表` 的档数与兜底 | 声明行尾 | core AST 的表体行：非 `否` 行数 + 有没有 `否` |
  *
@@ -151,7 +151,7 @@ interface DocumentFacts {
   readonly varByLine: ReadonlyMap<number, KojoVarDecl>;
   readonly constByLine: ReadonlyMap<number, KojoConstDecl>;
   readonly tableByLine: ReadonlyMap<number, KojoTableDecl>;
-  /** 本文件声明为数组的变量名（`# 变量 名 类型[N]`；`@巡` 的作者数组事实） */
+  /** 本文件声明为数组的变量名（`# 设 名 类型[N]`；`@巡` 的作者数组事实） */
   readonly arrayNames: ReadonlySet<string>;
 }
 
@@ -199,7 +199,7 @@ function typeLabelOfVar(decl: KojoVarDecl): string {
 }
 
 /**
- * 一条 `# 变量` / `# 常量` 的类型标签（`null` = 推断不出，不产）。
+ * 一条 `# 设` / `# 设` 的类型标签（`null` = 推断不出，不产）。
  *
  * 顺序：AST 事实优先（parser 已经把显式类型与数组长度都解释过）→ 行内兜底
  * （显式类型记号 / `= 单个字面量` 推断）。兜底只认"`=` 之后恰一个字面量，其余尾巴只能是
@@ -213,7 +213,7 @@ function typeLabelOfDeclaration(
   if (varDecl !== undefined) return typeLabelOfVar(varDecl);
   const constDecl = facts.constByLine.get(line.number);
   if (constDecl !== undefined) return kojo2TypeWordOf(constDecl.valueType);
-  // 行内兜底只服务**顶层**声明：声明只能写在文件顶层（§3.1），块体里形如 `# 变量` 的行
+  // 行内兜底只服务**顶层**声明：声明只能写在文件顶层（§3.1），块体里形如 `# 设` 的行
   // 是块体原文 / 表体值，不该被当成声明来标。
   if (line.kind !== 'decl' || line.indent !== 0) return null;
 
@@ -253,7 +253,7 @@ function typeLabelOfDeclaration(
  * `@巡 <集合>` → 绑定名标签（`{值} {下标}`；`null` = 解析不出类别，不猜）。
  *
  * 解析顺序与 core 的 `planForEachLoop` 同一条：**命名集合**优先（adapter 冻结声明），
- * 其次**作者数组**（本文件 `# 变量 名 类型[N]` + adapter 的 `arrayRule`）。没有 adapter 时
+ * 其次**作者数组**（本文件 `# 设 名 类型[N]` + adapter 的 `arrayRule`）。没有 adapter 时
  * 仍可证明"本文件声明的数组"是数组（语法本身就是数组声明），于是数组绑定名照给；
  * 命名集合的类别住在 adapter，缺席就不猜。
  */

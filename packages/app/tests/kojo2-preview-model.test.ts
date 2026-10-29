@@ -144,8 +144,8 @@ describe('kojo2 预览模型 · 源码 ↔ 预览滚动', () => {
   });
 
   it('没有独立产物的源行滚到前面最近的映射行；早于/晚于全部映射按 clamp 口径', () => {
-    // `# 常量 无关` 不产字节，前面最近的是 @原生 第二行
-    expect(PREVIEW.previewLineForSourceLine(sourceLineOf('# 常量 无关'))).toBe(
+    // `# 设 无关` 不产字节，前面最近的是 @原生 第二行
+    expect(PREVIEW.previewLineForSourceLine(sourceLineOf('# 设 无关'))).toBe(
       generatedLineOf('CALL HPH_PRINT "w"'),
     );
     expect(PREVIEW.previewLineForSourceLine(1)).toBe(1); // 文件头注释在首个映射行之前
@@ -262,7 +262,7 @@ describe('kojo2 预览模型 · 诊断气泡叠加', () => {
         presentations: { ...FIXTURE_BACKEND.profile.presentations, options: true },
       },
     };
-    const source = ['# 机 开场', '# 视 灵梦', '选项：', '    「标签」：', '        > 选项正文。', ''].join('\n');
+    const source = ['# 机 开场', '# 视角 灵梦', '选项：', '    「标签」：', '        > 选项正文。', ''].join('\n');
     const compiled = compileKojoSource({
       source,
       filePath: 'options.kojo2',
@@ -312,7 +312,7 @@ describe('kojo2 预览模型 · 诊断气泡叠加', () => {
     const diagnostics = [
       diagnosticOf('core/wait/no-profile', 'error', null),
       diagnosticOf('core/expr/unknown-symbol', 'error', pointSpan(1, 2)),
-      diagnosticOf('core/expr/bad-index', 'error', pointSpan(sourceLineOf('# 常量 无关'), 3)),
+      diagnosticOf('core/expr/bad-index', 'error', pointSpan(sourceLineOf('# 设 无关'), 3)),
     ];
     const preview = buildKojo2PreviewModel({ erb: COMPILED.erb, diagnostics }, SOURCE_MAP);
     expect(preview.unlocatedDiagnostics).toEqual(diagnostics);

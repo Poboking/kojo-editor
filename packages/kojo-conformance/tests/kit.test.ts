@@ -181,7 +181,7 @@ describe('golden · DSL→ERB 逐字节', () => {
       {
         kind: 'golden',
         name: 'declarations only',
-        source: '# 常量 上限 整数 = 10\n',
+        source: '# 设 上限 整数 = 10\n',
         expectedErb: '',
       },
     ]);

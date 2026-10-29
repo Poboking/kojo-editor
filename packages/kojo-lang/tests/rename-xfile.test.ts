@@ -35,12 +35,12 @@ const REQUEST_PATH = 'D:/proj/chara/灵梦/开场.kojo2';
 const DAILY_PATH = 'D:/proj/chara/灵梦/日常.kojo2';
 const OTHER_PATH = 'D:/proj/chara/魔理沙/支线.kojo2';
 
-/** 请求文件：一个 `# 变量 好感度` + 池条件 / 叙事插值两处引用（3 段编辑）。 */
+/** 请求文件：一个 `# 设 好感度` + 池条件 / 叙事插值两处引用（3 段编辑）。 */
 const REQUEST_LINES: readonly string[] = [
   '// 注释里的好感度不参与改名', // 1
-  '# 视 灵梦', // 2
+  '# 视角 灵梦', // 2
   '# 机 指令 310', // 3
-  '# 变量 好感度 整数 = 0 存档', // 4
+  '# 设 好感度 整数 = 0 存档', // 4
   '# 池 问候', // 5
   '    ? 好感度 < 100', // 6
   '        「……早。」', // 7
@@ -53,7 +53,7 @@ const REQUEST_LINES: readonly string[] = [
 /** 候选：自己声明同名变量 + 注释 / 普通文字里的同名不算引用。 */
 const DAILY_LINES: readonly string[] = [
   '# 机 指令 310', // 1
-  '# 变量 好感度 整数 = 0 存档', // 2
+  '# 设 好感度 整数 = 0 存档', // 2
   '// 注释里的好感度也不动', // 3
   '> 别处：{好感度} 点。', // 4
   '灵梦：「{好感度 + 1}」', // 5
@@ -63,7 +63,7 @@ const DAILY_LINES: readonly string[] = [
 /** 候选：**没有**同名声明（同名文字在普通文字里，不是这个符号）⇒ 整个文件跳过。 */
 const OTHER_LINES: readonly string[] = [
   '# 机 指令 310', // 1
-  '# 变量 别的东西 整数 = 0', // 2
+  '# 设 别的东西 整数 = 0', // 2
   '> 这里没有那个名字。', // 3
 ];
 
@@ -214,7 +214,7 @@ describe('跨文件编辑合并：请求文件在前 + 候选按 resolver 序', 
       const renamed = kojo2RenamedSource(files.get(entry.path) ?? '', entry.edits);
       expect(errorsOf(renamed)).toEqual([]);
       expect(renamed).toContain('羁绊值');
-      expect(renamed).not.toContain('# 变量 好感度');
+      expect(renamed).not.toContain('# 设 好感度');
     }
   });
 
@@ -236,7 +236,7 @@ describe('跨文件编辑合并：请求文件在前 + 候选按 resolver 序', 
 
   it('候选顺序照 resolver 给的序（反向给序 ⇒ 反向输出；请求文件恒在前）', () => {
     const thirdPath = 'D:/proj/chara/灵梦/番外.kojo2';
-    const third = '# 机 指令 310\n# 变量 好感度 整数 = 0 存档\n> {好感度}\n';
+    const third = '# 机 指令 310\n# 设 好感度 整数 = 0 存档\n> {好感度}\n';
     const files = filesOf([
       [REQUEST_PATH, REQUEST],
       [DAILY_PATH, DAILY],
@@ -464,7 +464,7 @@ describe('全或无：候选侧任一路由阻断 ⇒ 整体 editsByPath 为空'
   });
 
   it('候选自己声明重名 ⇒ 阻断，理由含候选路径与「同名声明」', () => {
-    const duplicated = '# 变量 好感度 整数 = 0\n# 变量 好感度 整数 = 0\n';
+    const duplicated = '# 设 好感度 整数 = 0\n# 设 好感度 整数 = 0\n';
     const plan = kojo2RenamePlanXFile(REQUEST, REQUEST_PATH, REQUEST_POS, '羁绊值', {
       listFilesWithSymbol: () => [DAILY_PATH],
       readSource: () => duplicated,
@@ -474,7 +474,7 @@ describe('全或无：候选侧任一路由阻断 ⇒ 整体 editsByPath 为空'
   });
 
   it('候选 parse 闸（候选源文本来就有语法错）⇒ 阻断，理由含候选路径与「解析错误」', () => {
-    const broken = '# 变量 好感度 整数 = 0 存档\n@断\n';
+    const broken = '# 设 好感度 整数 = 0 存档\n@断\n';
     expect(errorsOf(broken)).not.toEqual([]);
     const plan = kojo2RenamePlanXFile(REQUEST, REQUEST_PATH, REQUEST_POS, '羁绊值', {
       listFilesWithSymbol: () => [DAILY_PATH],
@@ -485,7 +485,7 @@ describe('全或无：候选侧任一路由阻断 ⇒ 整体 editsByPath 为空'
   });
 
   it('候选与请求文件撞新名（候选已声明「羁绊值」）⇒ 阻断（重名闸在同一条尺子上）', () => {
-    const conflict = '# 变量 好感度 整数 = 0 存档\n# 变量 羁绊值 整数 = 0 存档\n';
+    const conflict = '# 设 好感度 整数 = 0 存档\n# 设 羁绊值 整数 = 0 存档\n';
     const plan = kojo2RenamePlanXFile(REQUEST, REQUEST_PATH, REQUEST_POS, '羁绊值', {
       listFilesWithSymbol: () => [DAILY_PATH],
       readSource: () => conflict,
@@ -508,7 +508,7 @@ describe('全或无：候选侧任一路由阻断 ⇒ 整体 editsByPath 为空'
 
 describe(`上限：文件 ${KOJO2_RENAME_PLAN_MAX_FILES} 份 / 编辑 ${KOJO2_RENAME_PLAN_MAX_EDITS} 段`, () => {
   /** 每份候选一个声明 ⇒ 1 段编辑。 */
-  const ONE_EDIT_FILE = '# 变量 好感度 整数 = 0 存档\n';
+  const ONE_EDIT_FILE = '# 设 好感度 整数 = 0 存档\n';
 
   function candidatePaths(count: number): string[] {
     return Array.from({ length: count }, (_, index) => `D:/proj/候选/文件${index + 1}.kojo2`);
@@ -543,7 +543,7 @@ describe(`上限：文件 ${KOJO2_RENAME_PLAN_MAX_FILES} 份 / 编辑 ${KOJO2_RE
 
   it('编辑合计超 2000 段 ⇒ 阻断（逐文件累加，不落半截）', () => {
     const perFile = 60; // 1 声明 + 60 插值 = 61 段/份（外加 `# 机` 声明）
-    const source = `# 机 指令 310\n# 变量 好感度 整数 = 0 存档\n${Array.from(
+    const source = `# 机 指令 310\n# 设 好感度 整数 = 0 存档\n${Array.from(
       { length: perFile },
       (_, index) => `> 第${index}句：{好感度}。`,
     ).join('\n')}\n`;

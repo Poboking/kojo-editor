@@ -82,7 +82,7 @@ export function semaTypeOfValueType(valueType: KojoValueType): KojoSemaType {
   return valueType;
 }
 
-/** 字面量 → 语义类型（`# 变量` 初值 / `# 常量` 值 / 参数默认值 / 表值列） */
+/** 字面量 → 语义类型（`# 设` 初值 / `# 设` 值 / 参数默认值 / 表值列） */
 export function semaTypeOfLiteral(value: KojoLiteral): KojoSemaType {
   return typeof value === 'number' ? 'int' : 'string';
 }

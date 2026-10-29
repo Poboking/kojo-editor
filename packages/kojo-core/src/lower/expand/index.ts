@@ -86,7 +86,7 @@ function failed(sink: DiagnosticSink, from: number): RunCompileResult {
   return { ok: false, erb: '', sourceMap: emptyMap(), diagnostics: sink.all.slice(from), slots: [] };
 }
 
-/** 文件里的 `# 视 <目标>`（池内裸引号默认说话人） */
+/** 文件里的 `# 视角 <目标>`（池内裸引号默认说话人） */
 function viewOf(file: KojoFile): string | null {
   for (const decl of file.decls) if (decl.kind === 'view') return decl.target;
   return null;

@@ -3,7 +3,7 @@
  *
  * 覆盖：
  * - 角色集合（`{角}` / `{名}`）与数组（`{值}` / `{下标}`）的槽/绑定事实；
- * - 数组规则 + 作者 `# 变量` 事实（`@巡 队伍状态`）；
+ * - 数组规则 + 作者 `# 设` 事实（`@巡 队伍状态`）；
  * - 空集合 → `skeleton.empty = 'skip'`；未声明集合 / feature 关闭 / 声明不自洽 → 不产 plan；
  * - 槽名按块头行号（嵌套循环不互撞）、`slotPrefix` 覆盖、纯函数稳定性。
  */
@@ -28,10 +28,10 @@ function loopSource(collection: string): string {
 /** 角色集合用例（含两端绑定与条件体） */
 const TEAM_SOURCE = ['# 机 初见', '', '@巡 队伍', '    ? {角}的体力 <= 0', '        > {名}看起来累坏了。'].join('\n');
 
-/** 数组用例（含 `# 变量 … [N]` 声明） */
+/** 数组用例（含 `# 设 … [N]` 声明） */
 const ARRAY_SOURCE = [
   '# 机 初见',
-  '# 变量 队伍状态 字符串[4]',
+  '# 设 队伍状态 字符串[4]',
   '',
   '@巡 队伍状态',
   '    > 第{下标 + 1}位。',
@@ -145,7 +145,7 @@ describe('@巡 · 数组（{值} / {下标}）', () => {
     expect(plan.slots.map((slot) => slot.role)).toEqual(['index', 'element']);
   });
 
-  it('数组规则 + 作者数组事实：`# 变量 队伍状态 整数[3]` 可巡', () => {
+  it('数组规则 + 作者数组事实：`# 设 队伍状态 整数[3]` 可巡', () => {
     const result = planForEachLoop(forEachLoopOf(loopSource('队伍状态')), {
       collections: [],
       arrayRule: { base: 0, bindings: ['值', '下标'] },

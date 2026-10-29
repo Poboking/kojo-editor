@@ -163,13 +163,13 @@ const PROJECT_KEY = 'D:/proj';
 const FINGERPRINT = KOJO2_STORAGE_DEFAULT_FINGERPRINT;
 const AT = '2026-10-22T00:00:00.000Z';
 
-const VAR_FAVOR = '# 变量 好感 整数 = 0 存档';
-const VAR_MOOD = '# 变量 心情 整数 = 0 存档';
-const VAR_TRUST = '# 变量 信赖 整数 = 0 存档';
-const VAR_NAME = '# 变量 称呼 字符串 存档';
-const VAR_ITEMS = '# 变量 物品 整数[3] 存档';
-const VAR_SCENE = '# 变量 气氛 整数 = 0 场景';
-const VAR_SESSION = '# 变量 临时 整数 = 0 会话';
+const VAR_FAVOR = '# 设 好感 整数 = 0 存档';
+const VAR_MOOD = '# 设 心情 整数 = 0 存档';
+const VAR_TRUST = '# 设 信赖 整数 = 0 存档';
+const VAR_NAME = '# 设 称呼 字符串 存档';
+const VAR_ITEMS = '# 设 物品 整数[3] 存档';
+const VAR_SCENE = '# 设 气氛 整数 = 0 场景';
+const VAR_SESSION = '# 设 临时 整数 = 0 会话';
 
 type SlotSnapshot = NonNullable<Kojo2StorageRegistry['storagePlan']['nextSnapshot']>;
 
@@ -665,7 +665,7 @@ describe('kojo2 槽位宿主 · 两阶段提交与 records', () => {
     const previous = reopened.loadPreviousSnapshot();
     if (previous.kind !== 'ok') throw new Error(`fixture 还原失败：${previous.kind}`);
     // 整数 → 字符串：没有 records 就检测不到，有了就必须 fail-closed
-    const changed = registryOf(sourceOf('# 变量 好感 字符串 存档'), {
+    const changed = registryOf(sourceOf('# 设 好感 字符串 存档'), {
       previous: previous.snapshot,
     });
     expect(changed.storagePlan.ok).toBe(false);

@@ -85,7 +85,7 @@ export interface Kojo2DiagnosticsOptions {
   readonly backend?: KojoEmitBackend;
   /** 替换编译入口（测试 / 未来 worker）；给出时忽略 adapter/backend */
   readonly compile?: Kojo2DiagnosticCompile;
-  /** 当前 `# 视` 目标（缺省 = 文件里的 `# 视` 声明） */
+  /** 当前 `# 视角` 目标（缺省 = 文件里的 `# 视角` 声明） */
   readonly view?: string | null;
   /** 大文件预分配产物行数 */
   readonly estimatedLines?: number;

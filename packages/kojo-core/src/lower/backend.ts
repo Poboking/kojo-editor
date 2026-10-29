@@ -133,7 +133,7 @@ export interface TextEmitRequest {
   readonly speech: KojoSpeech;
   /** dialogue 的说话人原文；narration 为 null */
   readonly speaker: string | null;
-  /** 池内裸引号的默认说话人（`# 视` 目标）；无则 null */
+  /** 池内裸引号的默认说话人（`# 视角` 目标）；无则 null */
   readonly defaultSpeaker: string | null;
   readonly parts: readonly KojoTextPart[];
   readonly wait: ResolvedWait;
@@ -179,7 +179,7 @@ export interface KojoControlEmitter {
 /* ============================== 演出（颜色 / 颜绘 / 随机 / 织） ============================== */
 
 export interface FaceEmitRequest {
-  /** 省略对象 = `我`（`# 视` 角色），由 adapter 解析成具体角色槽 */
+  /** 省略对象 = `我`（`# 视角` 角色），由 adapter 解析成具体角色槽 */
   readonly object: 'me' | 'you' | null;
   /** 依次为 表情 / 服装 / 差分 / 特效（可省略；`""` 是占位） */
   readonly args: readonly KojoExprText[];

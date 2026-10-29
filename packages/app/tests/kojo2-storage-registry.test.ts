@@ -1,10 +1,10 @@
 /**
- * K2-STORAGE-HOST 的判据闸：`# 对照表 / # 池 / # 变量 / # 常量` 注册表 + 诊断桥。
+ * K2-STORAGE-HOST 的判据闸：`# 对照表 / # 池 / # 设 / # 设` 注册表 + 诊断桥。
  *
  * 全部走**真 core**（`lex` / `parse` / `planStorageSlots` / `validateTable`），不 mock：
  * - 多文件 `.kojo2` fixture（≥2 文件；表/池/变量/常量跨文件同名、跨文件引用）；
  * - symbol 数与类型、冲突判别、按位置命中、补全前缀过滤、诊断 code/消息/区间保真；
- * - 边界：空工程、同名不同类型、`# 常量` 不可变 flag、换盘指纹失败（项目级落点）、
+ * - 边界：空工程、同名不同类型、`# 设` 不可变 flag、换盘指纹失败（项目级落点）、
  *   改型 fail-closed（旧槽不搬）、运行时冻结。
  */
 import { describe, expect, it } from 'vitest';
@@ -34,10 +34,10 @@ const B_URI = 'D:/proj/chara/you.kojo2';
 /** A：常量 + 存档变量 + 场景变量 + 表 + 池；正文里引用 B 的池（跨文件调用） */
 const FILE_A = [
   '# 机 开场',
-  '# 视 我',
-  '# 常量 上限 整数 = 100',
-  '# 变量 好感 整数 = 0 存档',
-  '# 变量 心情强度 整数 = 40 场景',
+  '# 视角 我',
+  '# 设 上限 整数 = 100',
+  '# 设 好感 整数 = 0 存档',
+  '# 设 心情强度 整数 = 40 场景',
   '# 对照表 心情 依据 心情强度',
   '    0..29 -> 低落',
   '    30..69 -> 平静',
@@ -57,8 +57,8 @@ const FILE_A = [
 /** B：常量 + 池；池条件引用 A 的变量，正文插值引用 A 的表（跨文件引用） */
 const FILE_B = [
   '# 机 收场',
-  '# 视 我',
-  '# 常量 问候语 字符串 = "早安"',
+  '# 视角 我',
+  '# 设 问候语 字符串 = "早安"',
   '# 池 晚安',
   '    ? 好感 > 60',
   '        我：「今天很开心。」',
@@ -177,7 +177,7 @@ describe('kojo2 存储注册表 · 多文件索引', () => {
   });
 
   it('数组长度端点走常量静态求值（`整数[上限]` → 100）', () => {
-    const arraySource = ['# 常量 长度 整数 = 3', '# 变量 背包 整数[长度] 存档', ''].join('\n');
+    const arraySource = ['# 设 长度 整数 = 3', '# 设 背包 整数[长度] 存档', ''].join('\n');
     const registry = createKojo2StorageRegistry({
       documents: [{ uri: 'D:/proj/array.kojo2', source: arraySource }],
     });
@@ -204,10 +204,10 @@ describe('kojo2 存储注册表 · 同名冲突', () => {
   it('跨文件同名存档变量：core/storage/duplicate-name + 冲突组 + 歧义可见', () => {
     const registry = createKojo2StorageRegistry({
       documents: [
-        { uri: 'D:/proj/dup-a.kojo2', source: ['# 变量 好感 整数 = 0 存档', ''].join('\n') },
+        { uri: 'D:/proj/dup-a.kojo2', source: ['# 设 好感 整数 = 0 存档', ''].join('\n') },
         {
           uri: 'D:/proj/dup-b.kojo2',
-          source: ['# 常量 占位 整数 = 1', '# 变量 好感 整数 = 5 存档', ''].join('\n'),
+          source: ['# 设 占位 整数 = 1', '# 设 好感 整数 = 5 存档', ''].join('\n'),
         },
       ],
     });
@@ -234,9 +234,9 @@ describe('kojo2 存储注册表 · 同名冲突', () => {
     expect(keys.size).toBe(2);
   });
 
-  it('同文件 `# 变量` 与 `# 对照表` 同名：core/decl/duplicate-name + 种类/类型冲突', () => {
+  it('同文件 `# 设` 与 `# 对照表` 同名：core/decl/duplicate-name + 种类/类型冲突', () => {
     const source = [
-      '# 变量 心情 整数 = 0 场景',
+      '# 设 心情 整数 = 0 场景',
       '# 对照表 心情 依据 心情',
       '    0..1 -> 低',
       '    否 -> 高',
@@ -258,8 +258,8 @@ describe('kojo2 存储注册表 · 同名冲突', () => {
   it('跨文件同名不同类型（core 不管的命名空间面）：冲突在，但不伪造诊断码', () => {
     const registry = createKojo2StorageRegistry({
       documents: [
-        { uri: 'D:/proj/t-a.kojo2', source: ['# 常量 阈值 整数 = 10', ''].join('\n') },
-        { uri: 'D:/proj/t-b.kojo2', source: ['# 常量 阈值 字符串 = "十"', ''].join('\n') },
+        { uri: 'D:/proj/t-a.kojo2', source: ['# 设 阈值 整数 = 10', ''].join('\n') },
+        { uri: 'D:/proj/t-b.kojo2', source: ['# 设 阈值 字符串 = "十"', ''].join('\n') },
       ],
     });
 
@@ -325,8 +325,8 @@ describe('kojo2 存储注册表 · 编辑器联动', () => {
   it('冲突名字在补全里只出一枚，并带 `conflicted` 与声明数', () => {
     const registry = createKojo2StorageRegistry({
       documents: [
-        { uri: 'D:/proj/c-a.kojo2', source: ['# 常量 阈值 整数 = 10', ''].join('\n') },
-        { uri: 'D:/proj/c-b.kojo2', source: ['# 常量 阈值 字符串 = "十"', ''].join('\n') },
+        { uri: 'D:/proj/c-a.kojo2', source: ['# 设 阈值 整数 = 10', ''].join('\n') },
+        { uri: 'D:/proj/c-b.kojo2', source: ['# 设 阈值 字符串 = "十"', ''].join('\n') },
       ],
     });
     const items = registry.getCompletionItems('阈');
@@ -385,7 +385,7 @@ describe('kojo2 存储注册表 · 诊断桥', () => {
   });
 
   it('池误用（池体不是 `?` 链）→ core/pool/no-default 原样桥接', () => {
-    const source = ['# 视 我', '# 池 坏池', '    我：「嗯。」', ''].join('\n');
+    const source = ['# 视角 我', '# 池 坏池', '    我：「嗯。」', ''].join('\n');
     const registry = createKojo2StorageRegistry({
       documents: [{ uri: 'D:/proj/pool.kojo2', source }],
     });
@@ -402,7 +402,7 @@ describe('kojo2 存储注册表 · 诊断桥', () => {
   it('诊断桥是纯函数：零宽扩一格、越界夹回、缺 span 退到文件头', () => {
     const zero = toKojo2HostDiagnostic({
       uri: 'D:/proj/x.kojo2',
-      source: '# 变量 好感 整数 存档',
+      source: '# 设 好感 整数 存档',
       diagnostic: {
         code: 'core/decl/duplicate-name',
         severity: 'error',
@@ -493,7 +493,7 @@ describe('kojo2 存储注册表 · 边界', () => {
     expect(registry.findSymbolAt('D:/proj/x.kojo2', 1, 1)).toBeNull();
   });
 
-  it('`# 常量` 只读 flag：immutable；表/池 read-only；变量 mutable', () => {
+  it('`# 设` 只读 flag：immutable；表/池 read-only；变量 mutable', () => {
     const registry = multiFileRegistry();
     expect(symbolNamed(registry, '上限').mutability).toBe('immutable');
     expect(symbolNamed(registry, '问候语').mutability).toBe('immutable');

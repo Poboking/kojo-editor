@@ -28,7 +28,7 @@ import { isPureDispatchSubject, scanIntegerEquality } from '../src/lower/expand/
 
 /* ============================== 夹具 ============================== */
 
-const MACHINE = ['# 机 开场', '# 视 灵梦'];
+const MACHINE = ['# 机 开场', '# 视角 灵梦'];
 
 /** 真实 parser 产出的池声明（不手搓 AST：判定输入必须与编译主链同形） */
 function poolOf(lines: readonly string[]): KojoPoolDecl {

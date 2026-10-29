@@ -41,7 +41,7 @@ const SUBJECT_SLOT = '__kojo_pool_等级问候';
 
 const SOURCE = [
   '# 机 初见',
-  '# 视 灵梦',
+  '# 视角 灵梦',
   '# 池 等级问候',
   '    ? 好感 == 0',
   '        > 嗯。',

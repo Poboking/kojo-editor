@@ -26,10 +26,10 @@ import type { Kojo2SymbolFact, Kojo2SymbolKind, Kojo2SymbolRange } from '@kojo/k
  *
  * 分档理由：
  * - `# 幕` = `Module`：一篇文件里的大段（大纲折叠它就能收起整段）；
- * - `# 视` = `Variable`：视角目标是一个"绑到谁"的值；
+ * - `# 视角` = `Variable`：视角目标是一个"绑到谁"的值；
  * - `# 机` / `@织` = `Event`：两者都是事件钩子（`# 机` 挂本文件、`@织` 挂监听；
  *   detail 里的声明词区分它们）；
- * - `# 变量` = `Variable`、`# 常量` = `Constant`：与声明语义一一对应；
+ * - `# 设` = `Variable`、`# 设` = `Constant`：与声明语义一一对应；
  * - `# 对照表` = `Struct`、`# 池` = `Enum`：与补全层的 `CompletionItemKind` 映射同口径
  *   （表是多行记录、池是分支枚举）；
  * - `# 模` = `Method`、`@函` = `Function`：两者都可带参调用，用不同图标区分

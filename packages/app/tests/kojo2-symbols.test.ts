@@ -265,8 +265,8 @@ describe('声明面：十类声明各出一枚，源码序、无重复', () => {
     expect(factOf('pool').detail).toContain('2 分支');
   });
 
-  it('`@原生` 围栏里的 `# 变量` 是原文，不产符号', () => {
-    const source = '# 幕 测试\n@原生\n    # 变量 原生里的 整数\n';
+  it('`@原生` 围栏里的 `# 设` 是原文，不产符号', () => {
+    const source = '# 幕 测试\n@原生\n    # 设 原生里的 整数\n';
     const facts = kojo2DocumentSymbols(source);
     expect(facts.map((f) => f.name)).toEqual(['测试']);
   });
@@ -324,7 +324,7 @@ describe('detail：声明词（core 单源）+ 一句话事实', () => {
 
   it('数组长度 / 无参模 / 织的实参与修饰词都按源码序进 detail', () => {
     const source = [
-      '# 变量 队列 整数[10] 存档',
+      '# 设 队列 整数[10] 存档',
       '# 模 无参()',
       '@织 指令 参数 之后',
       '# 幕 测试',
@@ -383,8 +383,8 @@ describe('真 span：块区间取 core AST，名字区间取词法偏移', () =>
 
   it('单行声明的 range 就是该行内容；selectionRange 只盖名字段', () => {
     const variable = factOf('variable', '今天已触发');
-    expect(variable.range).toEqual({ startLine: 6, startColumn: 1, endLine: 6, endColumn: 21 });
-    expect(variable.selectionRange).toEqual({ startLine: 6, startColumn: 6, endLine: 6, endColumn: 11 });
+    expect(variable.range).toEqual({ startLine: 6, startColumn: 1, endLine: 6, endColumn: 20 });
+    expect(variable.selectionRange).toEqual({ startLine: 6, startColumn: 5, endLine: 6, endColumn: 10 });
     const weave = factOf('weave');
     expect(weave.selectionRange).toEqual({ startLine: 28, startColumn: 4, endLine: 28, endColumn: 6 });
   });
@@ -454,7 +454,7 @@ describe('层级：container = 真 span 包含的最内层符号', () => {
   });
 
   it('声明区写在首个幕之前 ⇒ 顶层符号（没有容器）', () => {
-    const source = '# 变量 甲 整数\n# 常量 乙 整数 = 1\n# 幕 开场\n> 正文\n';
+    const source = '# 设 甲 整数\n# 设 乙 整数 = 1\n# 幕 开场\n> 正文\n';
     const facts = kojo2DocumentSymbols(source);
     const variable = facts.find((fact) => fact.kind === 'variable');
     const constant = facts.find((fact) => fact.kind === 'constant');
@@ -531,12 +531,12 @@ describe('空 / 坏输入：[] 且不抛', () => {
   });
 
   it('声明缺名字 / 幕缺标题 ⇒ 那一条不产符号', () => {
-    expect(kojo2DocumentSymbols('# 变量\n')).toEqual([]);
+    expect(kojo2DocumentSymbols('# 设\n')).toEqual([]);
     expect(kojo2DocumentSymbols('# 幕\n> 正文\n')).toEqual([]);
   });
 
   it('局部坏行不带走其余合法声明（错误恢复：能给多少给多少）', () => {
-    const source = '# 变量 甲 整数\n  这一行缩进错了\n# 对照表 乙 依据 甲\n    否 -> 零\n';
+    const source = '# 设 甲 整数\n  这一行缩进错了\n# 对照表 乙 依据 甲\n    否 -> 零\n';
     const facts = kojo2DocumentSymbols(source);
     expect(facts.map((fact) => fact.name)).toContain('甲');
     expect(facts.map((fact) => fact.name)).toContain('乙');
@@ -545,7 +545,7 @@ describe('空 / 坏输入：[] 且不抛', () => {
   it('坏输入永不抛（随机字符 / 未闭合围栏 / 混合换行）', () => {
     const sources = [
       '@原生\n    CALL X\n',
-      '# 幕 甲\r\n# 变量 乙 整数\r\n',
+      '# 幕 甲\r\n# 设 乙 整数\r\n',
       '[[[###@@@\n\n\t\t',
       `# 对照表 超长 依据 ${'甲'.repeat(500)}\n    否 零\n`,
     ];
@@ -591,7 +591,7 @@ describe('面包屑路径：光标 → 根（最内层在前）', () => {
   });
 
   it('声明区（首个幕之前）只给那一条声明', () => {
-    const source = '# 变量 独立 整数\n> 正文\n';
+    const source = '# 设 独立 整数\n> 正文\n';
     expect(kojo2SymbolPathAt(source, { line: 1, column: 1 })).toEqual(['独立']);
   });
 

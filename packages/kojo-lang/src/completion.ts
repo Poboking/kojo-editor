@@ -15,7 +15,7 @@
  * - **域符号**：`@kojo/kojo-core` 的 `KOJO_DOMAIN_SYMBOL_NAMES`（`我 / 你 / 她`）；
  * - **表 / 池 / 模 / 函名单**：本文件声明的名字（`kojo2-declarations.ts` 的同一份索引）；
  * - **`# 机 <事件>` 参数**：宿主注入的 `eventArgs` 投影（core `projectEventArgs(eventCatalog)`）；
- * - **存储期 / 类型词**：core `KOJO_STORAGE_WORDS` / `KOJO_TYPE_WORDS`（`# 变量` / `# 常量` 槽位）；
+ * - **存储期 / 类型词**：core `KOJO_STORAGE_WORDS` / `KOJO_TYPE_WORDS`（`# 设` / `# 设` 槽位）；
  * - **`# 模` 形参**：同文件模板声明头（`kojo2-declarations.ts` 的 `params`）在模板体内的引用；
  * - **`@颜绘` 对象**：core `KOJO_FACE_OBJECT_WORDS`（`我 / 你`）；
  * - **`@颜绘` 表情 / 服装 / 差分 / 特效**：宿主注入的 `faceTemplates` 投影；
@@ -149,7 +149,7 @@ export function kojo2EventNamesOf(adapter: GameAdapter): readonly string[] {
 const FACE_WORD = KOJO2_DISPATCH_WORDS[2] ?? '';
 const WEAVE_WORD = KOJO2_DISPATCH_WORDS[9] ?? '';
 
-/** `# 变量` / `# 常量` 的词形（声明词表同一枚真源）。 */
+/** `# 设` / `# 设` 的词形（声明词表同一枚真源）。 */
 const VARIABLE_WORD = KOJO2_DECL_WORD_BY_KIND.variable;
 const CONSTANT_WORD = KOJO2_DECL_WORD_BY_KIND.constant;
 
@@ -262,9 +262,9 @@ function anchorCandidates(): Kojo2CompletionCandidate[] {
   }));
 }
 
-/** 声明词候选（`#` 之后的第一枚词）。 */
+/** 声明词候选（`#` 之后的第一枚词；`设` 在词表里占两位（变量/常量位），补全去重）。 */
 function declarationWordCandidates(prefix: string): Kojo2CompletionCandidate[] {
-  return withPrefix(KOJO_DECL_WORDS, prefix).map((word) => ({
+  return Array.from(new Set(withPrefix(KOJO_DECL_WORDS, prefix))).map((word) => ({
     label: word,
     insertText: word,
     kind: 'declarationWord' as const,
@@ -499,24 +499,24 @@ function weaveEventSlotPrefix(before: string): string | null {
   return rest;
 }
 
-/** `# 变量` / `# 常量` 的尾槽：类型词位 / 存储期位。 */
+/** `# 设` / `# 设` 的尾槽：类型词位 / 存储期位。 */
 interface DeclTailSlot {
-  /** 变量 = 存储期位；常量没有存储期（`「# 常量 … = 值」` 是全部形状） */
+  /** 变量 = 存储期位；常量没有存储期（`「# 设 … = 值」` 是全部形状） */
   readonly slot: 'type' | 'storage';
   readonly prefix: string;
 }
 
 /**
- * `# 变量 <名> <类型> [= 初值] [场景|存档|会话]` / `# 常量 <名> <类型> = <值>` 的尾槽判定。
+ * `# 设 <名> <类型> [= 初值] [场景|存档|会话]` 的尾槽判定（合并声明词：变量/常量同字 `设`）。
  *
  * 名字位（作者自己的名字）不补；`=` 之后的初值位不补（初值只允许字面量，§3.4.3）。
- * 常量的存储期不存在 ⇒ 类型之后一律零候选（**不把变量的词表借给常量**）。
+ * 合并后类型位之后一律给存储期位：无初值 = 运行期变量；带初值补了存储期也成立
+ * （编译期常量形态仅在"有初值且无存储期"时成立，见 parser `parseSetDecl`）。
  */
 function declTailSlotAt(before: string): DeclTailSlot | null {
   const head = headPartsOf(before);
   if (head === null || head.anchor !== '#') return null;
   if (head.word !== VARIABLE_WORD && head.word !== CONSTANT_WORD) return null;
-  const kind = head.word === VARIABLE_WORD ? 'variable' : 'constant';
   if (head.tail.length === 0 || !isBlank(head.tail[0]!)) return null;
   const rest = stripLeadingBlanks(head.tail);
   if (rest.length === 0) return null; // 名字位
@@ -529,7 +529,7 @@ function declTailSlotAt(before: string): DeclTailSlot | null {
     const inlineValue = (scan.tokens[eqIndex]?.length ?? 0) > 1;
     if (scan.index === eqIndex + 1 && !inlineValue) return null; // 初值位
   }
-  return kind === 'variable' ? { slot: 'storage', prefix: scan.prefix } : null;
+  return { slot: 'storage', prefix: scan.prefix };
 }
 
 /** 类型词候选（`整数` / `字符串`；core 词表转发）。 */
@@ -818,7 +818,7 @@ function isNativeHeader(record: Kojo2Document['lines'][number] | undefined): boo
  *
  * 位置门顺序：原生围栏 → 注释 / 旧写法 → 字符串 / 行内注释 → 插值 → 行尾提示组 → 台词正文 →
  * 行首锚点（`# 模` 体里追加 `[插槽]`）→ 专有位（`# 机` 事件 / `# 机` 参数 / `@织` 事件 /
- * `#` 声明词 / `# 变量·常量` 尾槽 / `!` 调用 / `@颜绘` 参数）→ 兜底表达式位。
+ * `#` 声明词 / `# 设·常量` 尾槽 / `!` 调用 / `@颜绘` 参数）→ 兜底表达式位。
  * 任何一步判定"不是补全位"都返回空数组（静默，不弹噪声）。
  */
 export function kojo2CompletionAt(
@@ -875,7 +875,7 @@ export function kojo2CompletionAt(
   const declarationPrefix = declarationWordSlotPrefix(before);
   if (declarationPrefix !== null) return declarationWordCandidates(declarationPrefix);
 
-  // `# 变量 / # 常量 … `：类型词 / 存储期
+  // `# 设 … `：类型词 / 存储期
   const declTail = declTailSlotAt(before);
   if (declTail !== null) {
     return declTail.slot === 'type'

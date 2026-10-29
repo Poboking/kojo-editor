@@ -285,7 +285,7 @@ describe('② worker indents：从 query-unavailable 转真实规则', () => {
       expect(hits(line), `没有规则命中：${line}`).toBe(true);
     }
     // 非开体形状不被误伤（`!` 的裸调用行与触发块头同形，§7.2 判不准 ⇒ 不进规则）
-    for (const line of ['> 旁白', '灵梦：「台词」', '! 早安问候', '! 记录("{目标}")', '# 幕 开场', '# 变量 数 整数', '@颜绘 笑顔', '// 注释']) {
+    for (const line of ['> 旁白', '灵梦：「台词」', '! 早安问候', '! 记录("{目标}")', '# 幕 开场', '# 设 数 整数', '@颜绘 笑顔', '// 注释']) {
       expect(hits(line), `不该命中：${line}`).toBe(false);
     }
     for (const pattern of patterns) expect(pattern.test('    CALL HPH_PRINT "w"')).toBe(false);

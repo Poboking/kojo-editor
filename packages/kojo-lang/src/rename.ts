@@ -12,7 +12,7 @@
  * ## 这一层回答什么
  *
  * 源码 + 1 基行列（+ 新名）进：
- * - {@link kojo2PrepareRename}：光标处是不是一个**可改名符号**（`# 变量 / 常量 / 表 / 池 / 模`
+ * - {@link kojo2PrepareRename}：光标处是不是一个**可改名符号**（`# 设 / 常量 / 表 / 池 / 模`
  *   与 `@函` 的名字），不是就给一条作者能读懂的拒绝理由；
  * - {@link kojo2RenameAt}：那个符号在**同一份文件**里的全部可证引用位 → `{range, newText}` 编辑集；
  * - {@link validateKojo2RenameName}（任务口径里的 `validateName`）：新名合法性与重名闸。
@@ -30,7 +30,7 @@
  * - **`@巡`**：`KojoForEachLoop.collection`（以及 `@复` 次数 / `@循` 条件 / `@返` 值）；
  * - **表判别式引用**：`# 对照表 … 依据 <表达式>` 的 subject、表行的 `from` / `to` 端点（常量）、
  *   赋值 / 裸调用 / 条件链 test 等一切表达式位；
- * - **数组长度**：`# 变量 名 整数[<常量>]` 的 size 表达式（规范 §9.2 允许常量）。
+ * - **数组长度**：`# 设 名 整数[<常量>]` 的 size 表达式（规范 §9.2 允许常量）。
  *
  * 排除面同样是"core 说的"，不是本层猜的：
  * - `@原生` 体内是原始行（AST 里只有 `nativeBlock.lines` 原文），**不产任何引用**；
@@ -45,7 +45,7 @@
  *   `FOREACH_BINDING_NAMES`）在循环体内遮蔽同名文件变量，同样跳过；
  * - 属性位：`x.长度` 的 `长度`、`{角色}的恋慕` 的 `恋慕` 不是文件符号（token 前一枚是 `.`
  *   或 `的` 即跳过）；
- * - `# 幕` 标题、`# 视` / `# 机` / `@标` / `@跳` 不是本批的可改名符号。
+ * - `# 幕` 标题、`# 视角` / `# 机` / `@标` / `@跳` 不是本批的可改名符号。
  *
  * ## 全或无（与 v1 rename / code action 同一条纪律）
  *
@@ -621,7 +621,7 @@ function symbolOf(entry: SymbolEntry): Kojo2RenameSymbol {
  *
  * 位置门（与悬停 / 转定义同向，但更严——改名会写盘）：
  * `注释` / `@原生` / 旧写法行 / `# 幕` 标题一律不认；台词旁白只认 `{…}` 插值内的名字
- * （由出现位表判，普通文字自然落不进去）；声明头（`# 变量` 词上）指路到名字。
+ * （由出现位表判，普通文字自然落不进去）；声明头（`# 设` 词上）指路到名字。
  */
 function locate(index: RenameIndex, position: Kojo2RenamePosition): Located {
   const { document } = index;
@@ -669,7 +669,7 @@ function locate(index: RenameIndex, position: Kojo2RenamePosition): Located {
   if (atDeclaration !== undefined && atDeclaration.kind === 'scene') {
     return {
       kind: 'reject',
-      reason: '`# 幕` 的标题不是可改名符号（本批只支持变量 / 常量 / 表 / 池 / 模 / 函）',
+      reason: '`# 幕` 的标题不是可改名符号（本批只支持 设 / 表 / 池 / 模 / 函）',
     };
   }
   const header = kojo2DeclarationHeaderAt(document, line, col0);
@@ -677,7 +677,7 @@ function locate(index: RenameIndex, position: Kojo2RenamePosition): Located {
     if (header.kind === 'scene') {
       return {
         kind: 'reject',
-        reason: '`# 幕` 的标题不是可改名符号（本批只支持变量 / 常量 / 表 / 池 / 模 / 函）',
+        reason: '`# 幕` 的标题不是可改名符号（本批只支持 设 / 表 / 池 / 模 / 函）',
       };
     }
     return {

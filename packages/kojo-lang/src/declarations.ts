@@ -2,14 +2,14 @@
  * Kojo 2.0 同文件**声明索引**（K2-EDITOR-SEMANTIC 的共享底座）。
  *
  * 这一层只回答三个问题，且都是纯函数（零 IO、零 Monaco）：
- * 1. 这个文件里声明了哪些名字（`# 变量 / 常量 / 表 / 池 / 模`、`@函`、`# 幕`）；
+ * 1. 这个文件里声明了哪些名字（`# 设 / 常量 / 表 / 池 / 模`、`@函`、`# 幕`）；
  * 2. 每个名字的**名字段**在源文里的精确区间（声明词之后的那个词，不是整行）；
  * 3. 某个位置是不是这些名字之一（声明处 / 引用处）。
  *
  * ## 词形零抄本
  * 声明词一律取自 `@kojo/kojo-core` 的 `KOJO_DECL_WORDS` / `KOJO_DISPATCH_WORDS`（同一份
  * 词表真源）；本文件**不写任何中文字形**。`KOJO_DECL_WORDS` 的位序是 core 的声明顺序
- * （幕 / 视 / 机 / 变量 / 常量 / 表 / 池 / 模），这里只按下标取词，
+ * （幕 / 视角 / 机 / 设 / 表 / 池 / 模），这里只按下标取词，
  * `kojo2-hover-definition.test.ts` 用 core 解析器对每一格做语义反证（词序一变就红）。
  *
  * ## 为什么同时用 lexer 与 parser
@@ -35,7 +35,7 @@ import {
 } from '@kojo/kojo-core';
 import { isNameChar } from './name-chars';
 
-/** 可被悬停 / 转定义 / 补全消费的声明种类（`# 视` / `# 机` 不在本批语义面内）。 */
+/** 可被悬停 / 转定义 / 补全消费的声明种类（`# 视角` / `# 机` 不在本批语义面内）。 */
 export type Kojo2DeclarationKind =
   | 'scene'
   | 'variable'
@@ -51,7 +51,7 @@ export type Kojo2DeclarationKind =
  */
 const [
   SCENE_WORD,
-  , // `# 视` 本批不索引，占位保持 core 位序
+  , // `# 视角` 本批不索引，占位保持 core 位序
   MACHINE_WORD,
   VARIABLE_WORD,
   CONSTANT_WORD,
@@ -70,7 +70,7 @@ export const KOJO2_MACHINE_WORD = MACHINE_WORD;
 export const KOJO2_FUNCTION_WORD = FUNCTION_WORD;
 
 /**
- * 声明种类 → 该种类的**词形**（`# 变量` 取 `变量`、`@函` 取 `函`、`# 幕` 取 `幕`）。
+ * 声明种类 → 该种类的**词形**（`# 设` 取 `变量`、`@函` 取 `函`、`# 幕` 取 `幕`）。
  * 悬停 / 转定义的 kind 文案直接用它拼，消费方不需要再认识任何字形。
  */
 export const KOJO2_DECL_WORD_BY_KIND: Readonly<Record<Kojo2DeclarationKind, string>> = Object.freeze({
@@ -229,9 +229,11 @@ export function kojo2DocumentOf(source: string): Kojo2Document {
   const file = parse(lexed);
 
   const factsByLine = new Map<number, Partial<Kojo2Declaration>>();
+  const astKindByLine = new Map<number, 'var' | 'const'>();
   for (const decl of file.decls) {
     const line = decl.span.start.line;
     if (!factsByLine.has(line)) factsByLine.set(line, declarationFactsOf(decl));
+    if (decl.kind === 'var' || decl.kind === 'const') astKindByLine.set(line, decl.kind);
   }
   for (const scene of file.scenes) {
     if (scene.title !== null) factsByLine.set(scene.span.start.line, { sceneTitle: scene.title });
@@ -242,6 +244,9 @@ export function kojo2DocumentOf(source: string): Kojo2Document {
     let kind: Kojo2DeclarationKind | undefined;
     if (line.kind === 'decl' && line.known) {
       kind = declarationKindOfWord(line.word);
+      // 合并声明词（§3.4）：`设` 一词占变量/常量两位，词面分不出——常量形态
+      // （无存储期 + 字面量初值）以 core AST 的 kind 为准。
+      if (kind === 'variable' && astKindByLine.get(line.number) === 'const') kind = 'constant';
     } else if (line.kind === 'dispatch' && line.known && line.word === FUNCTION_WORD) {
       kind = 'function';
     }
@@ -283,7 +288,7 @@ export function kojo2DeclarationAt(
 
 /**
  * 光标是否落在声明**头**上（名字之前：`#` / 声明词 / 空白 / `@函`）。
- * 悬停与转定义用它补"作者把鼠标停在 `# 变量` 上"的那一半；名字段本身走
+ * 悬停与转定义用它补"作者把鼠标停在 `# 设` 上"的那一半；名字段本身走
  * {@link kojo2DeclarationAt}。
  */
 export function kojo2DeclarationHeaderAt(

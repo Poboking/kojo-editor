@@ -75,12 +75,12 @@ export function lowerTextLine(node: KojoTextLine, state: LowerState): void {
     case 'narration':
       break;
     case 'bareQuote':
-      // 池内裸引号：省略的说话人 = 当前 `# 视` 目标（§7.1）
+      // 池内裸引号：省略的说话人 = 当前 `# 视角` 目标（§7.1）
       if (state.view === null) {
         report(
           state,
           'core/pool/no-view',
-          '池内裸引号省略了说话人，但本文件没有 `# 视`：默认说话人（池内 `{我}`）无处解析。请补 `# 视 <目标>` 或写完整 `角色：「…」`。',
+          '池内裸引号省略了说话人，但本文件没有 `# 视角`：默认说话人（池内 `{我}`）无处解析。请补 `# 视角 <目标>` 或写完整 `角色：「…」`。',
           node.span,
         );
         return;

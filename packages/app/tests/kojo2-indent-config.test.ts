@@ -366,7 +366,7 @@ describe('① 注入形状：只交 onEnterRules + indentationRules（property �
     for (const line of ['# 对照表 别的名字 依据 其他表达式', '# 对照表 心情 依据 恋慕', '@算', '? 恋慕 >= 500', '? 否', '?否']) {
       expect(rules.increaseIndentPattern.test(line), `没有命中：${line}`).toBe(true);
     }
-    for (const line of ['# 幕 开场', '# 变量 数 整数', '@颜绘 笑顔', '! 早安问候', '> 旁白', '// 注释']) {
+    for (const line of ['# 幕 开场', '# 设 数 整数', '@颜绘 笑顔', '! 早安问候', '> 旁白', '// 注释']) {
       expect(rules.increaseIndentPattern.test(line), `不该命中：${line}`).toBe(false);
     }
   });

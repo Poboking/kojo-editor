@@ -78,7 +78,7 @@ describe('`# 方言` 在出货 wasm 里的形状', () => {
     expect(decls[0]!.startPosition.row).toBe(0);
   });
 
-  it('整行收在一个记号里（参数对文法不透明，语义层再拆）——与 `# 视` 同构', () => {
+  it('整行收在一个记号里（参数对文法不透明，语义层再拆）——与 `# 视角` 同构', () => {
     const withValue = parse('# 方言 erafl\n').children.filter((c) => c.type === 'dialect_decl')[0]!;
     const bareOnly = parse('# 方言\n').children.filter((c) => c.type === 'dialect_decl')[0]!;
     expect(withValue.childCount, 'decl 是原子 token，不该有子节点').toBe(0);
@@ -87,7 +87,7 @@ describe('`# 方言` 在出货 wasm 里的形状', () => {
   });
 
   it('与其它声明行同区共存，各自成节点', () => {
-    const root = parse('# 幕 神社清晨\n# 方言 erafl\n# 视 灵梦\n# 机 指令 310\n\n> 正文\n');
+    const root = parse('# 幕 神社清晨\n# 方言 erafl\n# 视角 灵梦\n# 机 指令 310\n\n> 正文\n');
     expect(faultsOf(root)).toEqual([]);
     for (const type of ['scene_decl', 'dialect_decl', 'view_decl', 'event_decl', 'narration']) {
       expect(typesOf(root), `缺 ${type}`).toContain(type);
@@ -133,10 +133,15 @@ function declRulesFromGrammar(): Map<string, string> {
 describe('文法源 ↔ 出货 wasm 同步（改了 grammar.v2.js 忘重跑 build-v2.mjs 就红）', () => {
   const rules = declRulesFromGrammar();
 
-  it(`从 grammar.v2.js 现场读出声明词规则（实收 ${rules.size} 枚，含方言；少于九枚=读法失效）`, () => {
-    expect(rules.size).toBeGreaterThanOrEqual(9);
+  it(`从 grammar.v2.js 现场读出声明词规则（实收 ${rules.size} 枚，含方言；少于八枚=读法失效）`, () => {
+    expect(rules.size).toBeGreaterThanOrEqual(8);
     expect([...rules.values()]).toContain('方言');
     expect([...rules.keys()]).toContain('dialect_decl');
+    // 2026-10-29 语法口径批：`视角` 整词、变量/常量合并为 `设`
+    expect([...rules.values()]).toContain('视角');
+    expect([...rules.values()]).toContain('设');
+    expect([...rules.values()]).not.toContain('变量');
+    expect([...rules.values()]).not.toContain('常量');
   });
 
   it('每一枚词位逐词实测：出货 wasm 认得它（落成该规则名的节点）', () => {
@@ -160,13 +165,17 @@ describe('文法源 ↔ 出货 wasm 同步（改了 grammar.v2.js 忘重跑 buil
     expect(offenders).toEqual([]);
   });
 
-  it('既有词位逐词回归：追加 `方言` 没改变任何一枚前面词形的判据', () => {
-    for (const word of ['幕', '视', '机', '变量', '常量']) {
+  it('既有词位逐词回归：合并 `设` / 改名 `视角` 没改变任何一枚前面词形的判据', () => {
+    for (const word of ['幕', '视角', '机', '设']) {
       expect(faultsOf(parse(`# ${word} 样例\n`)), `# ${word}`).toEqual([]);
     }
     // 词形前缀不许互相抢：`# 机关 x` 里 `机` 只吃到整词，粘着的尾巴必须报故障
     const prefixRoot = parse('# 机关 x\n');
     expect(typesOf(prefixRoot)).toContain('event_decl');
     expect(faultsOf(prefixRoot).length).toBeGreaterThan(0);
+    // `# 视角` 是整词：`# 视角x` 的粘着尾巴必须报故障，不能被 `视角` 静默吞掉
+    const viewRoot = parse('# 视角x\n');
+    expect(typesOf(viewRoot)).toContain('view_decl');
+    expect(faultsOf(viewRoot).length).toBeGreaterThan(0);
   });
 });

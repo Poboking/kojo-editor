@@ -57,7 +57,7 @@ function count(root: Node, type: string): number {
 }
 
 describe('`? 否` 必须行尾收口：`? 否定…` 是一个条件块，不是「否则 + 赋值」', () => {
-  const text = ['# 变量 否定的变量 整数', '', '? 否定的变量 == 1', '    > 一', ''].join('\n');
+  const text = ['# 设 否定的变量 整数', '', '? 否定的变量 == 1', '    > 一', ''].join('\n');
 
   it('零故障，且不产 else_head / assignment', () => {
     const root = parseText(text);
@@ -82,7 +82,7 @@ describe('`? 否` 必须行尾收口：`? 否定…` 是一个条件块，不是
     expect(body.startPosition.row).toBeLessThanOrEqual(narrations[0]!.startPosition.row);
     expect(body.endPosition.row).toBeGreaterThanOrEqual(narrations[0]!.endPosition.row);
     // 上一行的变量声明不被卷进条件里
-    expect(root.descendantsOfType('variable_decl')[0]!.text).toBe('# 变量 否定的变量 整数');
+    expect(root.descendantsOfType('set_decl')[0]!.text).toBe('# 设 否定的变量 整数');
   });
 
   it('`?` 后不空格（`?否定变量 …`）也不许被劈成「否则 + 赋值」', () => {

@@ -322,13 +322,13 @@ describe('lex：插值扫描（只扫不解析）', () => {
 
 describe('lex：声明行与 # 对照表 两列行', () => {
   it('声明词切分：word / rest / restOffset', () => {
-    const line = firstLine('# 变量 今天已触发 整数 = 0 存档');
+    const line = firstLine('# 设 今天已触发 整数 = 0 存档');
     expect(line.kind).toBe('decl');
     if (line.kind === 'decl') {
-      expect(line.word).toBe('变量');
+      expect(line.word).toBe('设');
       expect(line.known).toBe(true);
       expect(line.rest).toBe('今天已触发 整数 = 0 存档');
-      expect(line.restOffset).toBe(5);
+      expect(line.restOffset).toBe(4);
     }
   });
 

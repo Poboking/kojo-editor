@@ -42,10 +42,10 @@ import {
 const BASE = [
   '// K2-LSP-SIGNATURE 夹具',
   '# 幕 神社清晨',
-  '# 常量 容量 整数 = 5',
-  '# 变量 队伍 整数[3]',
-  '# 变量 记录 整数[容量]',
-  '# 变量 已收 整数 = 0',
+  '# 设 容量 整数 = 5',
+  '# 设 队伍 整数[3]',
+  '# 设 记录 整数[容量]',
+  '# 设 已收 整数 = 0',
   '',
   '# 模 娇羞退场(原因)',
   '    > （她红着脸，因为{原因}而不知所措）',
@@ -376,7 +376,7 @@ describe('`@巡` 集合名：绑定名与来源槽（集合声明全部经 core 
     expect(signature.activeParameter).toBe(0);
   });
 
-  it('作者数组 `记录`（长度经 `# 常量 容量`）⇒ `{值}` / `{下标}`', () => {
+  it('作者数组 `记录`（长度经 `# 设 容量`）⇒ `{值}` / `{下标}`', () => {
     const at = atMarker(BASE_TEXT.replace('@巡 记录', '@巡 记|录'), { adapter: ADAPTER });
     const signature = at.help!.signatures[0]!;
     expect(signature.label).toBe('@巡 记录(值, 下标)');

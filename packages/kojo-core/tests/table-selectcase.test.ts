@@ -110,7 +110,7 @@ describe('planTableDispatch · 可证等值 → selectcase', () => {
     expect(dispatch.cases.map((item) => item.value)).toEqual([1, 2, 3]);
   });
 
-  it('`# 常量` 端点静态求值成整数键（可证等值，不是表达式端点）', () => {
+  it('`# 设` 端点静态求值成整数键（可证等值，不是表达式端点）', () => {
     const constants = new Map([
       ['甲', 5],
       ['乙', 6],
@@ -261,7 +261,7 @@ describe('planTableDispatch · 计划是纯数据', () => {
 
 /* ============================== 5. core 侧结构请求（可选能力） ============================== */
 
-const MACHINE = ['# 机 开场', '# 视 灵梦'];
+const MACHINE = ['# 机 开场', '# 视角 灵梦'];
 const EXACT_SOURCE = [
   ...MACHINE,
   '# 对照表 心情 依据 恋慕',

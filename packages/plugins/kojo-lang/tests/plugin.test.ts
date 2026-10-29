@@ -36,7 +36,7 @@ import {
 const SOURCE = [
   '// 夹具：两幕 + 表 + 池 + 模 + 函 + 织，覆盖全部有结构的种类',
   '# 幕 神社清晨',
-  '# 变量 今天已触发 整数 = 0 存档',
+  '# 设 今天已触发 整数 = 0 存档',
   '',
   '# 对照表 心情 依据 恋慕',
   '    0..99 -> 疏远',
@@ -84,17 +84,17 @@ describe('definition 供方', () => {
     expect(result?.kind).toBe('definition');
     const first = result!.locations[0]!;
     expect(first.line).toBe(3);
-    // `# 变量 今天已触发` —— `#` 是第 1 列，空格第 2 列，`变量` 2..4，空格，名字从第 6 列起
-    expect(first.column).toBe(6);
-    expect(first.span?.columnStart).toBe(6);
-    expect(first.span!.columnEnd!).toBeGreaterThan(6);
+    // `# 设 今天已触发` —— `#` 是第 1 列，空格第 2 列，`设` 第 3 列，空格，名字从第 5 列起
+    expect(first.column).toBe(5);
+    expect(first.span?.columnStart).toBe(5);
+    expect(first.span!.columnEnd!).toBeGreaterThan(5);
   });
 
   it('台词插值里的名字 ⇒ 跳到声明行的名字段（插值内是代码面）', () => {
     // 第 12 行 `> 晨光透过鸟居{今天已触发}。`，`{` 在第 9 列 ⇒ 第 11 列落在名字里
     const result = provideDefinition(defRequest(12, 11));
     expect(result!.locations[0]!.line).toBe(3);
-    expect(result!.locations[0]!.column).toBe(6);
+    expect(result!.locations[0]!.column).toBe(5);
   });
 
   it('台词正文（不在插值里）不跳 —— 那是文本，不是引用', () => {
@@ -169,7 +169,7 @@ describe('组树（symbolFactsToTree）', () => {
 describe('inlayHint 供方', () => {
   /** 夹具：三种提示各一行（类型 / 表档 / 绑定） */
   const INLAY_SOURCE = [
-    '# 变量 队伍 整数[3]',
+    '# 设 队伍 整数[3]',
     '# 对照表 心情 依据 恋慕',
     '    0..99 -> 疏远',
     '    否 -> 未知',
@@ -213,8 +213,8 @@ describe('inlayHint 供方', () => {
     const hints = provideInlayHints(inlayRequest())!.hints;
     const type = hints.find((h) => h.kind === 'type')!;
     expect(type.line).toBe(1);
-    // `# 变量 队伍 整数[3]` 共 13 个字符 ⇒ 提示压在末字之后第 14 列（1 基）
-    expect(type.column).toBe(14);
+    // `# 设 队伍 整数[3]` 共 12 个字符 ⇒ 提示压在末字之后第 13 列（1 基）
+    expect(type.column).toBe(13);
     expect(type.label).toBe('整数[3]');
   });
 

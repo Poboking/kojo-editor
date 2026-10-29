@@ -25,9 +25,9 @@ import { ERATW_LIBRARY_FUNCTIONS } from '../library-table.js';
 
 /**
  * 三个代词的落点：
- * - `{我}` = `# 视` 声明的角色；eraTW 口上按角色分发，运行期就是 `TARGET`；
+ * - `{我}` = `# 视角` 声明的角色；eraTW 口上按角色分发，运行期就是 `TARGET`；
  * - `{你}` = 玩家 `MASTER`；
- * - `{她}` = 当前目标；`# 视 目标` 时与 `{我}` 重合，core 会按 §3.6 报错。
+ * - `{她}` = 当前目标；`# 视角 目标` 时与 `{我}` 重合，core 会按 §3.6 报错。
  */
 const PRONOUNS: readonly PronounSymbol[] = Object.freeze([
   Object.freeze({

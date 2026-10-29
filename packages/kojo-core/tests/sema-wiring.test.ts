@@ -250,7 +250,7 @@ describe('外部变量数组面（additive）', () => {
   });
 
   it('动态下标不判越界（§9.2：不做自动边界检查）', () => {
-    const result = compile([HEAD, '# 变量 计数 整数', '@算', '    外部表[计数] = 1'], ARRAY_ADAPTER);
+    const result = compile([HEAD, '# 设 计数 整数', '@算', '    外部表[计数] = 1'], ARRAY_ADAPTER);
 
     expect(codesOf(result)).not.toContain('core/expr/index-out-of-range');
     expect(result.ok).toBe(true);

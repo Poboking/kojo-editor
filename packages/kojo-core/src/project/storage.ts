@@ -54,7 +54,7 @@ export interface SlotClassSpec {
   readonly scope: 'project' | 'unit';
 }
 
-/** 一条需要稳定槽位的声明事实（`# 变量`；调用方从 AST + 账本拼出） */
+/** 一条需要稳定槽位的声明事实（`# 设`；调用方从 AST + 账本拼出） */
 export interface StorageDeclarationFact extends Located {
   /**
    * **稳定声明键**：跨构建不变的标识（编辑器账本给）。
