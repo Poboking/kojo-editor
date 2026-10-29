@@ -402,3 +402,14 @@
    ② 刷新了也还不够——`JSHeapUsedSize` **只算 V8 自己的堆**，WebView2 把 Rust 侧传过来的正文串做成**外部串**，那部分记在快照的 `native` 桶里。实测同一状态：`JSHeapUsedSize` 278 MB、快照总量 **578 MB**（native 302.5 / string 110.4 / object 72.5 / array 71.8），差的 300 MB 全在 `native`。⇒ 拿 `JSHeapUsedSize` 判"文本缓存释放没释放"会得出"释放了 0 MB"的假结论（实测清掉 4,342 份 / 1.14 亿码元后该数只掉 0.5 MB）。
    ③ 单点读数**跟着 GC 走**：同一份冷开索引，40 秒内读到 `599.8 → 730.4 → 281.2 → 281.2`，中间那 730 MB 是诊断扫描的瞬时分配。⇒ 结论要么取"多次读数稳定后的平台值"，要么直接上快照。
    ⇒ 做法（`tools/mem-shell.mjs` 已按此实现）：量壳内一律 `HeapProfiler.takeHeapSnapshot` + 流式落盘 + 按 `self_size` 聚合类型；**别用 `chunks.join('')`**——569 MB 的快照超过 V8 单串上限（0x1fffffe8），会抛 `ERR_STRING_TOO_LONG`，必须 `createWriteStream` 逐块写；`takeHeapSnapshot` 会超过 `Cdp.send` 的 30 s 固定超时，**故意吞掉超时**、改等 `HeapProfiler.reportHeapSnapshotProgress` 的 `finished`。工作集（WorkingSetSize）只当"OS 侧还不还"的粗证：同一份语料冷开那一轮 2.6 GB、静置 45 s 后 1.33 GB，两版代码同档——**释放了 JS 侧也未必马上还给 OS**。
+
+257. **内存量具会自造假读数，三处都得堵：不等 fire-and-forget 落盘就量、量具自己攥着旧索引、同进程跑「冷建 + 热载」**（2026-10-29 MEM 批收尾实拍，`tools/mem-readings.mjs`）：
+   ① 索引快照的写盘是 `void storage.set(...)`，序列化出的快照串（真语料 44.8M 字符 ⇒ 盘上 57 MB）在那一刻是**瞬时垃圾**，同一条链上还挂着 `mergeEntries`/`attachRefs` 造的大 Map。不等它落地就量稳态，会把这两份 in-flight 算成常驻：同一份语料、同一份代码，**等落盘 276.1 MB vs 不等 240.8 MB**（虚高 35 MB）。⇒ 量之前先等 `storage.bytes` 涨起来（实测 494–517 ms）再 `gc()`。
+   ② 量具自身是强引用源：`index` / `cold` 两个变量攥着旧索引，`project.close()` 之后堆**仍停在 276.1 MB**（`close()` 只发事件、插件也确实把 `index = null` 了，但量具不撒手就等于没关），于是第二趟「热载」量的是「旧索引 + 新索引」——实测 **768.2 MB，虚高 290 MB 量级**，还一度被误读成"热载比冷建更吃内存"。
+   ③ 一个进程里跑「冷建 → close → 热载」本身就不成立：真用户是**重启进程**。⇒ 改成两趟两个进程，存储目录固定（`KOJO_MEM_STORAGE_DIR`），第一趟冷建写盘、第二趟新进程命中（`reused 4145/4145`）。
+   ④ 附带：`--stats` 会摸 `f.functions`，热载下等于把 10 万枚惰性壳对象全部实体化（实测把索引就绪从 200.9 抬到 357.8 MB）。**普查和稳态读数别同跑**。
+
+258. **「复用已有对象省内存」只对冷建成立、热载一分不省，而且会让同一字段的形状随代码路径分裂——等价对拍会当场红**（2026-10-29 MEM-3 实拍，已回退）：
+   做法：`aggregateIndex` 里 `byName` 不再造同形 ref 对象，直接放 `ErbFunction` 本身（`ErbFunction` 是 `ErbFunctionRef` 的结构超集，消费方一行不改）。冷建稳态确实从 **276.5 → 268.8 MB**，看起来是白捡的 7.6 MB。两个问题：
+   ① **热载路径不经过这段**：热载时 `files` 是 RAW 元组惰性壳、`byName` 是从元组建的轻量 ref，10 万枚 `ErbFunction` 根本不建——省无可省。而用户每次启动走的正是这条路（`reused 4145/4145`、`read+parse 0ms`、索引就绪 **200.9 MB / 2.26 s**，改前 200.1 MB / 2.21 s，**本批改动对热载路径的索引常驻与耗时都不动**）。⇒ 在冷建上量到的收益要先问一句"这条路热载走不走"。
+   ② **形状分裂**：冷建的 `byName` 项带 `params` 等字段、热载的不带 ⇒ `snapshot-salvage.test.ts` 的等价对拍（判据③，冷建 vs 续用逐字对拍）红 6 例、`f12-cjk-token.test.ts` 的 deepEqual 红 1 例。**那是闸在正常工作，不是断言过时**——跨路径共享的契约形状（`ErbFunctionRef`）必须两边逐字同形：要省就两边一起省，或都不省。
