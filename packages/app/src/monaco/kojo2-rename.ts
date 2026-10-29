@@ -23,13 +23,12 @@
  *    （kojo2 由 descriptor 的 `slotServices` 点名）。当年那枚"注册调用第一个参数直接写死
  *    `KOJO2_LANGUAGE_ID`"的自建安装器已随批删除。
  *
- * ## 为什么不再有 `resolveRenameLocation`
+ * ## 为什么还留着 `resolveRenameLocation`
  *
- * 契约的 `rename` 成员只有"光标 + 新名"这一种请求形状（prepare 语义没有判别成员），而
- * "能不能改"的判据已整块搬进包里。宿主若在这里调一次 `kojo2PrepareRename`，就是又持有一枚
- * 判定权；若不调、只把光标位置原样递给 Monaco，Monaco 会用编辑器通用词段作输入框初值，
- * 真按 F2 输入新名后由供方的 `rejectReason` 说明"为什么不能改"（与旧行为相比只少了
- * **输入框之前**那一步拒绝提示，原因文案逐字相同）。本批选择后者：**不留第二枚判据**。
+ * 它**不持有第二套判据**：本文件只调包里的 `kojo2PrepareRename`（唯一那把尺子），把它的
+ * 「符号名 + 名字段区间 / 第一条拒绝理由」翻成 Monaco 的 prepare 形状。放在这里是因为
+ * 宿主才有 model 与光标（插件拿不到）；F2 的第一道体验——不在符号上 / 只读 / 本文件重名时
+ * **不弹输入框**、直接就近说明理由——由它保住。真正作答改名编辑的仍是插件供方。
  *
  * ## 失败面
  *
@@ -39,10 +38,10 @@
  */
 import type * as Monaco from './entry';
 import { requireKernel } from '../ui/editor-pane-registry';
+import { kojo2PrepareRename, type Kojo2RenameRange } from '@kojo/kojo-lang/rename';
 import {
   collectRename,
   editorRequestIdentityOf,
-  modelTextOf,
   projectFilesSnapshotOf,
   renameRequestOf,
 } from './kojo-language-service-legs';
@@ -169,6 +168,33 @@ function toMonacoRange(edit: {
   };
 }
 
+/** 名字段区间（prepare 的 1 基四格）→ Monaco `IRange` */
+function toMonacoNameRange(range: Kojo2RenameRange): Monaco.IRange {
+  return {
+    startLineNumber: range.startLine,
+    startColumn: range.startColumn,
+    endLineNumber: range.endLine,
+    endColumn: range.endColumn,
+  };
+}
+
+/** prepare 的拒绝形状：零宽区间 + 理由（Monaco 见 `rejectReason` 就不弹输入框） */
+function prepareRejection(
+  position: Monaco.Position,
+  reason: string,
+): Monaco.languages.RenameLocation & Monaco.languages.Rejection {
+  return {
+    range: {
+      startLineNumber: position.lineNumber,
+      startColumn: position.column,
+      endLineNumber: position.lineNumber,
+      endColumn: position.column,
+    },
+    text: '',
+    rejectReason: reason,
+  };
+}
+
 /* ============================== 安装 ============================== */
 
 /** 安装器的注入面（全部可选：不传 = 没有跨文件快照，行为与旧同文件改名一致） */
@@ -201,6 +227,28 @@ export function installKojo2RenameProvider(
   options: Kojo2RenameInstallOptions = {},
 ): Monaco.IDisposable {
   const provider: Monaco.languages.RenameProvider = {
+    resolveRenameLocation(model, position) {
+      const refusal = modelRefusal(model);
+      if (refusal !== null) return prepareRejection(position, refusal);
+      const source = sourceOf(model);
+      if (source === null) return prepareRejection(position, '取不到这份文件的内容，改名取消');
+      try {
+        // 判据只有包里那一把尺子：这里只翻形状（不复制 locate / duplicates / 位置门）。
+        const prepared = kojo2PrepareRename(source, {
+          line: position.lineNumber,
+          column: position.column,
+        });
+        if (prepared.blockers.length > 0) {
+          return prepareRejection(position, prepared.blockers[0] ?? '这里不能改名');
+        }
+        if (prepared.symbol === null || prepared.range === null) {
+          return prepareRejection(position, '这里没有可改名的符号');
+        }
+        return { range: toMonacoNameRange(prepared.range), text: prepared.symbol.name };
+      } catch {
+        return prepareRejection(position, '解析改名位置失败，改名取消');
+      }
+    },
     provideRenameEdits(model, position, newName) {
       const refusal = modelRefusal(model);
       if (refusal !== null) return reject(refusal);

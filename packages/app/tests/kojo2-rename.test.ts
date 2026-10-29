@@ -8,10 +8,12 @@
  *    （排除自身、上限 ⇒ `projectFilesComplete: false`、没索引 ⇒ 不出现）；
  * 2. **契约 → `WorkspaceEdit`**：`resourcePath` 缺省 / 等于请求文件 ⇒ `model.uri`；其余走
  *    `uriForPath`；`versionId === undefined`；`textEdit` 的 range / text 逐项对上；
- * 3. **`rejectReason` 透传**：契约给的拒绝理由原样成 Monaco 的 `rejectReason`（编辑集为空）；
+ * 3. **prepare**：`resolveRenameLocation` 只调包里 `kojo2PrepareRename`——名字段区间 / 原名
+ *    作输入框初值，不在符号上 / 只读 / 重名时给理由、不弹输入框、不递请求；
+ * 4. **`rejectReason` 透传**：契约给的拒绝理由原样成 Monaco 的 `rejectReason`（编辑集为空）；
  *    契约空编辑无理由 ⇒ 一条"没有可落地的编辑"；陈旧 / 越界坐标由供方拒绝后同样透传；
- * 4. **失败面**：只读 / 已释放 / 取文抛错 / 无 uri / 内核未就绪 ⇒ 拒绝，不抛；
- * 5. **注册**：经 `registerForLanguageServices(..., 'rename')` 挂上；dispose 幂等；半途抛错回滚。
+ * 5. **失败面**：只读 / 已释放 / 取文抛错 / 无 uri / 内核未就绪 ⇒ 拒绝，不抛；
+ * 6. **注册**：经 `registerForLanguageServices(..., 'rename')` 挂上；dispose 幂等；半途抛错回滚。
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -203,6 +205,48 @@ describe('注册：共享收口 + 能力名 rename（kojo2 由 descriptor 点名
     expect(LAYER_SOURCE).not.toMatch(/registerRenameProvider\(\s*KOJO2_LANGUAGE_ID/);
     expect(LAYER_SOURCE).not.toContain('executeEdits');
     expect(LAYER_SOURCE).not.toContain('applyTextEdits');
+  });
+});
+
+/* ============================== ①' prepare（输入框之前的位置门） ============================== */
+
+describe('prepare：只调包里的 kojo2PrepareRename，不在宿主复制判据', () => {
+  it('光标在声明名上 ⇒ 名字段区间 + 原名（F2 输入框初值）', () => {
+    const { provider } = installAndProvider();
+    const prepared = provider.resolveRenameLocation!(
+      fakeModel('# 变量 心情 整数 = 0'),
+      AT(1, 6),
+      TOKEN,
+    ) as Monaco.languages.RenameLocation & Monaco.languages.Rejection;
+    expect(prepared.rejectReason).toBeUndefined();
+    expect(prepared.text).toBe('心情');
+    expect(prepared.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 6,
+      endLineNumber: 1,
+      endColumn: 8,
+    });
+  });
+
+  it('不在符号上 / 只读 model ⇒ 拒绝理由（不弹输入框，且不递请求）', () => {
+    const capture = vi.fn();
+    installKernel([renameContribution(() => ({ kind: 'rename', edits: [] }), capture)]);
+    const { provider } = installAndProvider();
+    const blank = provider.resolveRenameLocation!(
+      fakeModel('> 只是旁白'),
+      AT(1, 1),
+      TOKEN,
+    ) as Monaco.languages.RenameLocation & Monaco.languages.Rejection;
+    expect(blank.text).toBe('');
+    expect(blank.rejectReason).toBeTruthy();
+
+    const readOnly = provider.resolveRenameLocation!(
+      fakeModel('# 变量 心情 整数 = 0', { readOnly: true }),
+      AT(1, 6),
+      TOKEN,
+    ) as Monaco.languages.RenameLocation & Monaco.languages.Rejection;
+    expect(readOnly.rejectReason).toContain('只读');
+    expect(capture).not.toHaveBeenCalled();
   });
 });
 

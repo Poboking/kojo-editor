@@ -43,7 +43,6 @@ import { requireKernel } from '../ui/editor-pane-registry';
 import {
   collectReferences,
   editorRequestIdentityOf,
-  modelTextOf,
   projectFilesSnapshotOf,
   referencesRequestOf,
 } from './kojo-language-service-legs';
