@@ -161,7 +161,7 @@ describe('引号口径：v1 台词「…」是内容，迁移后仍打印引号'
     expect(erbOf(result.code)).toContain('CALL HPH_PRINT(@"我也很高兴。","w")');
   });
 
-  it('`# 表` 台词臂：值列收**打印文本**（含引号），引用点仍 `角色：「{表}」`', () => {
+  it('`# 对照表` 台词臂：值列收**打印文本**（含引号），引用点仍 `角色：「{表}」`', () => {
     const source =
       `${HEADER}${MACHINE}` +
       '    当 恋慕：\n' +
@@ -170,7 +170,7 @@ describe('引号口径：v1 台词「…」是内容，迁移后仍打印引号'
     const result = migrateKojoSourceSemantic(source);
     expect(result.ok, JSON.stringify(result.unsupported)).toBe(true);
     expect(result.code).toBe(
-      '# 表 迁移表1 由 恋慕\n    0 「甲。」\n    否 「乙。」\n\n# 机 指令 310\n灵梦：「{迁移表1}」\n',
+      '# 对照表 迁移表1 依据 恋慕\n    0 -> 「甲。」\n    否 -> 「乙。」\n\n# 机 指令 310\n灵梦：「{迁移表1}」\n',
     );
     const erb = erbOf(result.code);
     expect(erb).toContain('__kojo_table_迁移表1__value = "「甲。」"');

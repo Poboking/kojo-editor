@@ -136,7 +136,7 @@ describe('Kojo 2.0 语言教程（内容底线）', () => {
       '# 机',
       '# 常量',
       '# 变量',
-      '# 表',
+      '# 对照表',
       '# 池',
       '# 模',
       '@算',
@@ -193,7 +193,7 @@ describe('Kojo 2.0 教程样例溯源守卫', () => {
   it('夹具清单真的读进了集合（十一份文件、非空、含 2.0 锚点行）', () => {
     expect(KOJO2_FIXTURE_PATHS.length).toBe(11);
     expect(kojoLines.size).toBeGreaterThan(100);
-    expect(kojoLines.has('# 表 心情 由 恋慕')).toBe(true);
+    expect(kojoLines.has('# 对照表 心情 依据 恋慕')).toBe(true);
     expect(kojoLines.has('灵梦：「{你}今天来得挺早嘛。」(微笑)')).toBe(true);
   });
 
@@ -212,7 +212,7 @@ describe('Kojo 2.0 教程样例溯源守卫', () => {
     expect(driftedLines('灵梦：「……好。」 续', kojoLines)).toEqual([]);
     // 负样本：动一个字 / 造一个夹具里没有的名字，都必须飘红
     expect(driftedLines('灵梦：「……好。 续', kojoLines)).not.toEqual([]);
-    expect(driftedLines('# 表 心情 由 爱欲', kojoLines)).not.toEqual([]);
+    expect(driftedLines('# 对照表 心情 依据 爱欲', kojoLines)).not.toEqual([]);
     expect(driftedLines('    队列[0] = 4', kojoLines)).not.toEqual([]);
   });
 });

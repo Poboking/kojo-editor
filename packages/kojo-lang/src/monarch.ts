@@ -13,6 +13,7 @@ import {
   escapeRegExp,
 } from './lexicon';
 import { KOJO2_TOKEN } from '@kojo/kojo-sdk/semantic-roles';
+import { KOJO_TABLE_ARROWS } from '@kojo/kojo-core';
 
 /**
  * Kojo 2.0 的 **Monarch 词法面**（U6；**SDK B4 起住在 `@kojo/kojo-lang`**：本文件交出契约
@@ -92,7 +93,7 @@ export const KOJO2_TOKEN_TIERS: readonly Kojo2TokenTier[] = [
   // `sugar.speech.delimiter` 同色（`theme.ts` 头注写死的跨语言不变量），而 v1 的保留词与
   // 分隔符本来就是两档（`c678dd` vs `7f9cc0`）。档位表 = "一档一色"的验收清单，拆档才是
   // 事实：拆前这格是"一档两色"，测试会当场红。
-  { tier: '保留词', tokens: [KOJO2_TOKEN.keyword], why: '`由`/`否`/`续`/存储期词/织入修饰词改的是语义' },
+  { tier: '保留词', tokens: [KOJO2_TOKEN.keyword], why: '`依据`/`否`/`续`/存储期词/织入修饰词改的是语义' },
   {
     tier: '结构性标点',
     tokens: [KOJO2_TOKEN.delimiter],
@@ -109,11 +110,11 @@ export const KOJO2_TOKEN_TIERS: readonly Kojo2TokenTier[] = [
   { tier: '运算符', tokens: [KOJO2_TOKEN.operator], why: '中文运算符词与符号同档，判定位一眼可辨' },
   // 2026-10-27 第三色批：本仓此前只有紫（保留/关键字）与蓝（声明调度词）两层，"这一列存什么"
   // 一直没有自己的色。两个发射点：类型词（`整数` / `字符串`，Monarch）与结构定义头
-  // （`# 表` / `# 池` / `# 模`，worker 的 highlights 查询）。与 v1 侧的 `support.type` 逐字同色。
+  // （`# 对照表` / `# 池` / `# 模`，worker 的 highlights 查询）。与 v1 侧的 `support.type` 逐字同色。
   // ⚠ 叠层默认开时，`# 变量 … 整数 …` 整行由 `(variable_decl)` 一档盖住（叶子节点，语法层
   // 没给类型词单独的子记号节点 ⇒ 判不出来就不硬拆），那一行的类型色只在叠层关时露出；
   // 结构定义头那一档两条链都发同一个色，默认态可见。
-  { tier: '类型与结构名', tokens: [KOJO2_TOKEN.type], why: '`整数`/`字符串` 说这一列存什么，`# 表`/`池`/`模` 定义一个结构——都不改判定，改的是形状' },
+  { tier: '类型与结构名', tokens: [KOJO2_TOKEN.type], why: '`整数`/`字符串` 说这一列存什么，`# 对照表`/`池`/`模` 定义一个结构——都不改判定，改的是形状' },
 ];
 
 /* ============================== 词法状态机 ============================== */
@@ -138,13 +139,18 @@ const DISPATCH_LINE = /^(\s*@)([^\s(（,，:：]*)/;
 /** `!` 行：`!` + 空白 + 被调名（池 / 模板 / 函数；名后允许实参括号）。 */
 const TRIGGER_LINE = /^(\s*!\s+)([^\s(（,，:：]+)/;
 
-/** `# 表` 两列行：默认分支 `否 <值>`。 */
+/** 表行分档箭头：`->` / `→`（core 词表单源；本文件不写字形）。 */
+const TABLE_ARROW = `(?:${KOJO_TABLE_ARROWS.map(escapeRegExp).join('|')})`;
+
+/** `# 对照表` 分档行：默认分支 `否 -> <值>`。 */
 const TABLE_DEFAULT_ROW = new RegExp(
-  `^(\\s*)(${escapeRegExp(KOJO2_TABLE_DEFAULT_WORD)})(\\s+)(\\S.*)$`,
+  `^(\\s*)(${escapeRegExp(KOJO2_TABLE_DEFAULT_WORD)})(\\s+)(${TABLE_ARROW})(\\s+)(\\S.*)$`,
 );
 
-/** `# 表` 两列行：`<范围> <值>`（`0..99` / `500..` / `..100` / `5` / 常量名..）。 */
-const TABLE_RANGE_ROW = /^(\s*)((?:[^\s]*\.[^\s]*|[-+]?\d+))(\s+)(\S.*)$/;
+/** `# 对照表` 分档行：`<范围> -> <值>`（`0..99` / `500..` / `..100` / `5` / 常量名..）。 */
+const TABLE_RANGE_ROW = new RegExp(
+  `^(\\s*)((?:[^\\s]*\\.[^\\s]*|[-+]?\\d+))(\\s+)(${TABLE_ARROW})(\\s+)(\\S.*)$`,
+);
 
 /** `@原生` 栏头：任意缩进；缩进阶梯由 `cases` 逐级分派到 `nativeN` 状态。 */
 const NATIVE_HEADER = new RegExp(
@@ -268,9 +274,9 @@ function buildRoot(): Rule[] {
     [/^(\s*\\)(.*)$/, [KOJO2_TOKEN.anchor, KOJO2_TOKEN.narration]],
     // ---- 台词：`角色：` 前导（说话人），`「` 由下面行内规则接进 speech 态 ----
     [/^\s*[^\s：:]+：(?=「)/, KOJO2_TOKEN.speaker],
-    // ---- `# 表` 两列行（默认分支 / 范围）----
-    [TABLE_DEFAULT_ROW, ['', KOJO2_TOKEN.keyword, '', KOJO2_TOKEN.speech]],
-    [TABLE_RANGE_ROW, ['', KOJO2_TOKEN.number, '', KOJO2_TOKEN.speech]],
+    // ---- `# 对照表` 分档行（默认分支 / 范围）----
+    [TABLE_DEFAULT_ROW, ['', KOJO2_TOKEN.keyword, '', KOJO2_TOKEN.keyword, '', KOJO2_TOKEN.speech]],
+    [TABLE_RANGE_ROW, ['', KOJO2_TOKEN.number, '', KOJO2_TOKEN.keyword, '', KOJO2_TOKEN.speech]],
     // ---- 台词开引号（行首裸引号与 `角色：「` 共用）；`(?=.)` 防"孤引号"把下一行拖进台词态 ----
     [/「(?=.)/, action(KOJO2_TOKEN.delimiter, '@speech')],
     // ---- 字符串字面量（闭合 / 未闭合到行尾）----

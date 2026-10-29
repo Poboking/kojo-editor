@@ -102,7 +102,7 @@ export function kojo2HoverLines(declaration: Kojo2Declaration): string[] {
     }
     case 'table': {
       if (declaration.subject !== undefined) {
-        lines.push(`由：\`${declaration.subject.length === 0 ? '（空表达式）' : declaration.subject}\``);
+        lines.push(`依据：\`${declaration.subject.length === 0 ? '（空表达式）' : declaration.subject}\``);
       }
       if (declaration.rowCount !== undefined) {
         lines.push(`表体：${declaration.rowCount} 行`);

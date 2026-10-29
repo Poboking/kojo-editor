@@ -19,7 +19,7 @@
  * - **名字**：`selectionRange` = 声明词之后的名字段（`# 幕` 取整段标题、`# 模` / `@函` 取
  *   `(` 之前），偏移直接取 core 词法层的 `restOffset` / `splitSpaces`（词法行已经裁过缩进与
  *   行尾空白）——与 `kojo2-declarations.ts` 的名字区间同一口径（测试逐条对拍，防两份尺子漂移）；
- * - **块**：`range` = core AST 的 `span`（`# 表` 到末行表体、`# 池` 到末条分支正文、
+ * - **块**：`range` = core AST 的 `span`（`# 对照表` 到末行表体、`# 池` 到末条分支正文、
  *   `# 模` / `@函` / `@织` 到块体末行、`# 幕` 到本幕最后一个叙事节点）。**不按缩进自己收块**：
  *   `# 模` 体里的 `[插槽]`、`@函` 体里的空行、`@原生` 围栏都会让"看缩进猜尾巴"算错。
  *
@@ -290,7 +290,7 @@ function modifierWordOf(modifier: KojoWeaveModifier): string {
 /**
  * 一行副标题：**种类词 + 该种类能一句话说清的事实**（类型 / 初值 / 存储期 / 由谁驱动 /
  * 分支数 / 参数 / 修饰词）。读不到的事实不写（与悬停同一条"不编默认值"纪律：
- * `# 表` 的 `由` 表达式若因语法错误为空，就不写"由"，只写行数）。
+ * `# 对照表` 的 `依据` 表达式若因语法错误为空，就不写"依据"，只写行数）。
  */
 function detailOfDecl(decl: Exclude<KojoDecl, KojoDialectDecl>): string {
   switch (decl.kind) {

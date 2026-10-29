@@ -7,7 +7,7 @@
  *
  * | v1 构造 | 机械层现状 | 本层能证到的 2.0 落点（§12.1） |
  * |---|---|---|
- * | `当 / 是 / 到 / 否则` | `core/migration/switch` | `# 表` + 引用点（仅数值分档、可证非重叠） |
+ * | `当 / 是 / 到 / 否则` | `core/migration/switch` | `# 对照表` + 引用点（仅数值分档、可证非重叠） |
  * | `分支：` + `[条件]` | `core/migration/branch` | `# 池` + `! 池名`（条件可解析、有兜底、无副作用） |
  * | `初回 / 询问 / 确认` | `core/migration/ask` | `@原生` 缩进围栏（整块逐行搬，不解释） |
  *
@@ -17,19 +17,19 @@
  *
  * ## 三条改写口径（可证才动，不可证维持 unsupported）
  *
- * ### 1. `当 / 是 / 到 / 否则` → `# 表`
+ * ### 1. `当 / 是 / 到 / 否则` → `# 对照表`
  *
  * 只认**值查找**形态：`当 <判别式>：` 下全是 `是 <精确值 | a 到 b>` 臂（英文 `is` / `to` 同形，
  * 逗号列表 `是 1, 2` 也认），可选且必须最后的 `否则：` 兜底。细则：
  *
- * - **同一判别式**：整块只有一个 `当` 头，判别式原文照搬到 `由 <表达式>`（不改写、不降糖）；
+ * - **同一判别式**：整块只有一个 `当` 头，判别式原文照搬到 `依据 <表达式>`（不改写、不降糖）；
  * - **数值比较（精确 / 区间）**：臂值只允许十进制整数（`是 3` / `是 0 到 99` / `是 1, 2`）；
- *   字符串、别名、变量、表达式一律不认（`# 表` 端点只允许整数或整数 `# 常量`，§6.1）；
+ *   字符串、别名、变量、表达式一律不认（`# 对照表` 端点只允许整数或整数 `# 常量`，§6.1）；
  * - **静态非重叠**：所有臂按 `[from, to]` 求交，两两不重叠（端点相等即重叠）；重叠/空区间/重复
- *   一律不认——`# 表` 不排序、不取"第一条命中"（§6.2），重叠就**不可能**等价；
- * - **`否则` → `否`**：`# 表` 的 `否` 必填且必须最后，所以缺兜底、兜底不在最后都不认；
+ *   一律不认——`# 对照表` 不排序、不取"第一条命中"（§6.2），重叠就**不可能**等价；
+ * - **`否则` → `否`**：`# 对照表` 的 `否` 必填且必须最后，所以缺兜底、兜底不在最后都不认；
  * - **值列 = 臂正文（= v1 打印文本）**：臂正文必须**恰好一行、形态一致**的打印行（全是旁白、或全是
- *   同一说话人的台词），因为 `# 表` 的值列只能装一个字面量（§6.1「不能写 `{表达式}`」）。引用点因此写成
+ *   同一说话人的台词），因为 `# 对照表` 的值列只能装一个字面量（§6.1「不能写 `{表达式}`」）。引用点因此写成
  *   `> {表名}`（旁白）或 `角色：「{表名}」`（台词）：表按当前值分档，打印结果与 v1 分支一致。
  *   **台词臂的 `「…」` 是 v1 的内容、要打印**（K2-MIGRATE-QUOTE）：值列收 `「甲。」` 整段，
  *   运行期由 `{表}` 插值原样打印；值列是字面量、不参与 2.0 语法配对，所以引号安全。
@@ -39,9 +39,9 @@
  * 表达式位置（赋值右侧）的 `当 … -> 值` **不在本层**：它要落到"已声明变量 + `@算`"，而变量声明
  * 在 v1 里无法证明，硬写 `# 变量` 就是编造。这条维持 unsupported（见交付说明的接线点）。
  *
- * > 为什么语句形态走 `# 表` 而不是 `?` 链：§6.5 说"`# 表` 是值查找，不替代 `当` 语句块的全部场景"，
+ * > 为什么语句形态走 `# 对照表` 而不是 `?` 链：§6.5 说"`# 对照表` 是值查找，不替代 `当` 语句块的全部场景"，
  * > 纯语句分叉确实该落 `?` 链。本层只做**可证的值查找**那一半（分支正文就是一个字面量值 ⇒ 值列 +
- * > 引用点），其余语句形态仍交给机械层记 unsupported；`?` 链落点是另一条路（§12.1 的 `# 表` / `?`
+ * > 引用点），其余语句形态仍交给机械层记 unsupported；`?` 链落点是另一条路（§12.1 的 `# 对照表` / `?`
  * > 双落点里本批次只取前者），不在本文件里偷偷实现。
  *
  * ### 2. `分支：` + `[条件]` → `# 池`
@@ -85,6 +85,7 @@
 import type { CoreDiagnosticCode, KojoDiagnostic } from '../diagnostics.js';
 import { decodeIntegerLiteral } from '../lexer.js';
 import { FULLWIDTH_EXPR_PUNCT } from '../literal.js';
+import { KOJO_TABLE_ARROW_CANONICAL } from '../tokens.js';
 import { migrateKojoSource, type MigrateOptions, type MigrateResult, type MigrateUnsupported } from './index.js';
 import { classifyV1, hasWaitMark, parseDialogueShape, type Classified } from './classify.js';
 import { indentOfLevel, isBlankBody, lineSpan, readSource, type V1Line, type V1Source } from './source.js';
@@ -143,12 +144,12 @@ const POOL_PREFIX = '迁移池';
 /**
  * 未采纳的语义升级在台账里追加的**可行动落点**（K2-MIGRATE-SHAPE）。
  *
- * 机械层的通用提示不能说错（教程表逐字引用它）：`当` 的值全是字面量时 `# 表` 仍是正解；
+ * 机械层的通用提示不能说错（教程表逐字引用它）：`当` 的值全是字面量时 `# 对照表` 仍是正解；
  * 但值列装不下正文时（`{}` / 多行 / 行尾等待），唯一可走的是 `?` 链或 `@原生`。
  */
 const DECLINED_ACTIONS: Partial<Record<CoreDiagnosticCode, string>> = {
   'core/migration/switch':
-    '`# 表` 值列只收一行字面量、不做插值：正文带 `{}` / 多行 / 行尾等待时，改写成 `?` 链或整块放进 `@原生`（§6.5 / §12.1）',
+    '`# 对照表` 值列只收一行字面量、不做插值：正文带 `{}` / 多行 / 行尾等待时，改写成 `?` 链或整块放进 `@原生`（§6.5 / §12.1）',
   'core/migration/branch': '改写成 `?` 链或整块放进 `@原生`（§7.1 / §12.1）',
   'core/migration/ask': '整块放进 `@原生` 后按 ERB 手工改写（§12.1）',
 };
@@ -247,8 +248,8 @@ class SemanticUpgrader {
    * 未采纳的语义升级：把**具体原因 + 可行动落点**补进机械层台账的 `targetHint`。
    *
    * 机械层的 `targetHint` 是"这类构造该去哪"的通用话（`TARGET_HINTS`，教程表逐字引用它，
-   * 不能改）；但对 `当` 块来说，"值查找写 `# 表`"在值列装不下正文时是**错误指引**——
-   * `# 表` 值列是字面量、不做插值，正文带 `{}` / 多行 / 行尾等待时只能改 `?` 链或 `@原生`。
+   * 不能改）；但对 `当` 块来说，"值查找写 `# 对照表`"在值列装不下正文时是**错误指引**——
+   * `# 对照表` 值列是字面量、不做插值，正文带 `{}` / 多行 / 行尾等待时只能改 `?` 链或 `@原生`。
    * 这里按行追加本次的具体原因，让台账直接可行动（K2-MIGRATE-SHAPE）。
    */
   private enrichDeclined(entry: MigrateUnsupported): MigrateUnsupported {
@@ -392,7 +393,7 @@ class SemanticUpgrader {
     return null;
   }
 
-  /* ---------------------------- 当 → # 表 ---------------------------- */
+  /* ---------------------------- 当 → # 对照表 ---------------------------- */
 
   private handleSwitch(index: number, cls: Classified): number {
     const line = this.lines[index]!;
@@ -410,7 +411,7 @@ class SemanticUpgrader {
     this.note(
       'core/migration/switch',
       line,
-      `已把 \`当\` 的数值分档改写成 \`# 表 ${name}\`（值列 = 原分支正文），原处写成 \`${reference}\`；表名自动生成，可在编辑器里改名（§6.5）。`,
+      `已把 \`当\` 的数值分档改写成 \`# 对照表 ${name}\`（值列 = 原分支正文），原处写成 \`${reference}\`；表名自动生成，可在编辑器里改名（§6.5）。`,
     );
     return end;
   }
@@ -450,7 +451,7 @@ class SemanticUpgrader {
         if (ranges === null) {
           return {
             ok: false,
-            reason: `\`是 ${armCls.kind.rest.trim()}\` 不是十进制整数（精确值 / 区间）——非数值判别式不进 \`# 表\``,
+            reason: `\`是 ${armCls.kind.rest.trim()}\` 不是十进制整数（精确值 / 区间）——非数值判别式不进 \`# 对照表\``,
           };
         }
         arms.push({ ranges, isDefault: false, value: body.value });
@@ -462,8 +463,8 @@ class SemanticUpgrader {
 
     if (arms.length === 0) return { ok: false, reason: '`当` 块没有任何 `是` 臂' };
     const defaultIndex = arms.findIndex((arm) => arm.isDefault);
-    if (defaultIndex < 0) return { ok: false, reason: '缺 `否则` 兜底（`# 表` 的 `否` 行必填）' };
-    if (defaultIndex !== arms.length - 1) return { ok: false, reason: '`否则` 不在最后（`# 表` 的 `否` 必须最后）' };
+    if (defaultIndex < 0) return { ok: false, reason: '缺 `否则` 兜底（`# 对照表` 的 `否` 行必填）' };
+    if (defaultIndex !== arms.length - 1) return { ok: false, reason: '`否则` 不在最后（`# 对照表` 的 `否` 必须最后）' };
 
     const ranges: ArmRange[] = [];
     for (const arm of arms) for (const range of arm.ranges) ranges.push(range);
@@ -471,7 +472,7 @@ class SemanticUpgrader {
     if (rangesOverlap(ranges)) {
       return {
         ok: false,
-        reason: '`是` 臂的整数区间静态重叠——`# 表` 要求两两不重叠，不排序、不取“第一条命中”',
+        reason: '`是` 臂的整数区间静态重叠——`# 对照表` 要求两两不重叠，不排序、不取“第一条命中”',
       };
     }
 
@@ -488,14 +489,14 @@ class SemanticUpgrader {
     }
 
     const name = this.allocName(TABLE_PREFIX);
-    const decl: string[] = [`# 表 ${name} 由 ${subject}`];
+    const decl: string[] = [`# 对照表 ${name} 依据 ${subject}`];
     arms.forEach((arm, armIndex) => {
       const value = values[armIndex]!;
       if (arm.isDefault) {
-        decl.push(`    否 ${value}`);
+        decl.push(`    否 ${KOJO_TABLE_ARROW_CANONICAL} ${value}`);
         return;
       }
-      for (const range of arm.ranges) decl.push(`    ${rangeText(range)} ${value}`);
+      for (const range of arm.ranges) decl.push(`    ${rangeText(range)} ${KOJO_TABLE_ARROW_CANONICAL} ${value}`);
     });
 
     let reference: string;
@@ -519,10 +520,10 @@ class SemanticUpgrader {
       const cur = this.lines[i]!;
       if (isBlankBody(cur.body)) continue;
       if (cur.indent !== contentIndent) {
-        return { ok: false, reason: '臂正文里有更深的块（`# 表` 值列只能装一行正文）' };
+        return { ok: false, reason: '臂正文里有更深的块（`# 对照表` 值列只能装一行正文）' };
       }
       const cls = classifyV1(cur.body);
-      if (cls.kind.kind === 'comment') return { ok: false, reason: '臂正文里带 `;` 注释，迁进 `# 表` 会丢注释' };
+      if (cls.kind.kind === 'comment') return { ok: false, reason: '臂正文里带 `;` 注释，迁进 `# 对照表` 会丢注释' };
       if (sameShapeDialogueLine(cls, cur.body)) {
         return {
           ok: false,
@@ -530,7 +531,7 @@ class SemanticUpgrader {
             '臂正文是 `X：「…」`：v1 里它是旁白打印（连前缀与引号一起打印），2.0 却当台词——同形歧义不猜，整块保持 v1 原样',
         };
       }
-      if (found !== null) return { ok: false, reason: '臂正文多于一行（`# 表` 值列只能装一行正文）' };
+      if (found !== null) return { ok: false, reason: '臂正文多于一行（`# 对照表` 值列只能装一行正文）' };
       const shape = printShapeOf(cls, cur.body);
       if (shape === null) {
         return { ok: false, reason: `臂正文「${cur.body.trim()}」不是可整行打印的台词 / 旁白` };
@@ -866,11 +867,11 @@ function dialogueShape(text: string): PrintShape | null {
 function tableValueProblem(text: string): string | null {
   const value = text.trim();
   if (value.length === 0) return '臂正文（表值）为空';
-  if (/[{}]/.test(value)) return '臂正文里有 `{` / `}`（`# 表` 值列不做插值，打印结果会变）';
+  if (/[{}]/.test(value)) return '臂正文里有 `{` / `}`（`# 对照表` 值列不做插值，打印结果会变）';
   if (/^"/.test(value)) return '臂正文以双引号开头（表值列会按引号字符串解码，改变正文）';
   // 与 2.0 表值列的解码同一入口（`decodeIntegerLiteral`：十进制 / 0x / 带符号都算数值）
   if (decodeIntegerLiteral(value) !== null) {
-    return '臂正文是整数字面量（`# 表` 值列会把它解码成数值；文字表不能混整数）';
+    return '臂正文是整数字面量（`# 对照表` 值列会把它解码成数值；文字表不能混整数）';
   }
   // 台词臂的 `「…」` 是**打印文本**（v1 引号是内容）：值列原样收，运行期由 `{表}` 插值打印，
   // 不参与 2.0 语法配对，所以这里不拦引号（K2-MIGRATE-QUOTE）。
@@ -986,7 +987,7 @@ function isDialogueLine(text: string): boolean {
  * v1 文件里与 2.0 台词同形的行（`X：「…」`，K2-MIGRATE-SHAPE）。
  *
  * 判据与机械层 `migrate/index.ts::parseDialogueShape` 同一入口。语义层遇到这种行**不解释**
- * （不把它当台词值塞进 `# 表` / `# 池`）：v1 里它是连前缀与引号一起打印的旁白文本，
+ * （不把它当台词值塞进 `# 对照表` / `# 池`）：v1 里它是连前缀与引号一起打印的旁白文本，
  * 两种读法都说得通，猜错会静默改掉打印内容 ⇒ 整块交给机械层记 unsupported。
  */
 function sameShapeDialogueLine(cls: Classified, body: string): boolean {

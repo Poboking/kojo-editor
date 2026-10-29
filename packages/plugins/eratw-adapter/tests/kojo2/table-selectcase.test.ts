@@ -1,5 +1,5 @@
 /**
- * eraTW `# 表` 等值分派落点测试（K2-TABLE-SELECTCASE / §6.3 / §16.2 C2.5）。
+ * eraTW `# 对照表` 等值分派落点测试（K2-TABLE-SELECTCASE / §6.3 / §16.2 C2.5）。
  *
  * 纯函数口径：core 的结构计划（含真实 `validateTable` + `planTableDispatch` 产出）→
  * `emitTableDispatch` → 产物行 / `EmitFailure`。
@@ -290,11 +290,11 @@ describe('eraTW 表等值分派：计划不自洽一律 fail-closed', () => {
 describe('eraTW 表等值分派：core 主链 → adapter 落点（全链 golden）', () => {
   const SOURCE = [
     '# 机 初见',
-    '# 表 心情 由 恋慕',
-    '    0 疏远',
-    '    5 平常',
-    '    10 亲近',
-    '    否 未知',
+    '# 对照表 心情 依据 恋慕',
+    '    0 -> 疏远',
+    '    5 -> 平常',
+    '    10 -> 亲近',
+    '    否 -> 未知',
     '> 她今天看起来{心情}。',
     '',
   ].join('\n');

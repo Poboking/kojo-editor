@@ -28,9 +28,9 @@ describe('表展开：隐藏槽 + 一次求值 + 依赖顺序', () => {
   it('源表达式只求值一次；值槽由分支链赋值；引用处只读值槽', () => {
     const result = compile([
       ...HEAD,
-      '# 表 心情 由 恋慕',
-      '    0..99 疏远',
-      '    否 未知',
+      '# 对照表 心情 依据 恋慕',
+      '    0..99 -> 疏远',
+      '    否 -> 未知',
       '> 她看着{心情}。',
     ]);
     expect(result.ok).toBe(true);
@@ -51,12 +51,12 @@ describe('表展开：隐藏槽 + 一次求值 + 依赖顺序', () => {
   it('表依赖表：先算被依赖的表，再把它的值槽当自己的判别式', () => {
     const result = compile([
       ...HEAD,
-      '# 表 B 由 恋慕',
-      '    0..9 b',
-      '    否 z',
-      '# 表 A 由 B',
-      '    0..9 a',
-      '    否 z2',
+      '# 对照表 B 依据 恋慕',
+      '    0..9 -> b',
+      '    否 -> z',
+      '# 对照表 A 依据 B',
+      '    0..9 -> a',
+      '    否 -> z2',
       '> {A}',
     ]);
     expect(result.ok).toBe(true);
@@ -69,7 +69,7 @@ describe('表展开：隐藏槽 + 一次求值 + 依赖顺序', () => {
   });
 
   it('只有 `否` 的表：不产空 IF，只赋值一次', () => {
-    const result = compile([...HEAD, '# 表 常数 由 恋慕', '    否 甲乙', '> {常数}']);
+    const result = compile([...HEAD, '# 对照表 常数 依据 恋慕', '    否 -> 甲乙', '> {常数}']);
     expect(result.ok).toBe(true);
     const out = bodyLines(result.erb);
     expect(out).toContain('SET __kojo_table_常数 = {恋慕}');
@@ -78,20 +78,20 @@ describe('表展开：隐藏槽 + 一次求值 + 依赖顺序', () => {
   });
 
   it('字符串值按 Kojo 双引号规则再转义（含引号/反斜杠/花括号）', () => {
-    const result = compile([...HEAD, '# 表 心情 由 恋慕', '    0..9 "他说\\"好\\" {笑}"', '    否 未知', '> {心情}']);
+    const result = compile([...HEAD, '# 对照表 心情 依据 恋慕', '    0..9 -> "他说\\"好\\" {笑}"', '    否 -> 未知', '> {心情}']);
     expect(result.ok).toBe(true);
     expect(bodyLines(result.erb)).toContain('SET __kojo_table_心情__value = {"他说\\"好\\" \\{笑\\}"}');
   });
 
   it('槽的值类型随表值列类型：整数表 int / 字符串表 string（adapter 据此选 #DIM/#DIMS）', () => {
-    const intTable = compile([...HEAD, '# 表 档位 由 恋慕', '    0..9 1', '    否 0', '> {档位}']);
+    const intTable = compile([...HEAD, '# 对照表 档位 依据 恋慕', '    0..9 -> 1', '    否 -> 0', '> {档位}']);
     expect(intTable.ok).toBe(true);
     expect(intTable.slots).toEqual([
       { name: '__kojo_table_档位', kind: 'table', valueType: 'int', role: 'table-subject' },
       { name: '__kojo_table_档位__value', kind: 'table', valueType: 'int', role: 'table-value' },
     ]);
 
-    const stringTable = compile([...HEAD, '# 表 档位 由 恋慕', '    0..9 甲', '    否 乙', '> {档位}']);
+    const stringTable = compile([...HEAD, '# 对照表 档位 依据 恋慕', '    0..9 -> 甲', '    否 -> 乙', '> {档位}']);
     expect(stringTable.ok).toBe(true);
     expect(stringTable.slots).toEqual([
       { name: '__kojo_table_档位', kind: 'table', valueType: 'int', role: 'table-subject' },
@@ -100,7 +100,7 @@ describe('表展开：隐藏槽 + 一次求值 + 依赖顺序', () => {
   });
 
   it('未引用的表也做静态校验（prepass）：重叠直接 error', () => {
-    const result = compile([...HEAD, '# 表 心情 由 恋慕', '    0..100 甲', '    50..150 乙', '    否 丙', '> 正文。']);
+    const result = compile([...HEAD, '# 对照表 心情 依据 恋慕', '    0..100 -> 甲', '    50..150 -> 乙', '    否 -> 丙', '> 正文。']);
     expect(result.ok).toBe(false);
     expect(codes(result)).toContain('core/table/overlap');
     expect(result.erb).toBe('');
@@ -109,9 +109,9 @@ describe('表展开：隐藏槽 + 一次求值 + 依赖顺序', () => {
   it('条件里的表引用同样换成值槽（展开发生在节点之前）', () => {
     const result = compile([
       ...HEAD,
-      '# 表 心情 由 恋慕',
-      '    0..9 疏远',
-      '    否 亲近',
+      '# 对照表 心情 依据 恋慕',
+      '    0..9 -> 疏远',
+      '    否 -> 亲近',
       '? 心情 == "亲近"',
       '    > 近。',
     ]);
@@ -185,9 +185,9 @@ describe('SIF 收紧：展开会插多行时回落完整 IF', () => {
   it('单分支 + 单行体，但体里有表引用 → 不发 SIF', () => {
     const result = compile([
       ...HEAD,
-      '# 表 心情 由 恋慕',
-      '    0..9 疏远',
-      '    否 亲近',
+      '# 对照表 心情 依据 恋慕',
+      '    0..9 -> 疏远',
+      '    否 -> 亲近',
       '? 恋慕 >= 1',
       '    > {心情}',
     ]);
@@ -210,9 +210,9 @@ describe('展开与其它体的组合（不崩、顺序可证）', () => {
     // 赋值目标必须已声明（spec §3.4.6 / §8.1：`@算` 不偷偷造变量；K2-SEMA-WIRING 起语义层按此拒收）
     const result = compile([
       ...HEAD,
-      '# 表 心情 由 恋慕',
-      '    0..9 疏远',
-      '    否 亲近',
+      '# 对照表 心情 依据 恋慕',
+      '    0..9 -> 疏远',
+      '    否 -> 亲近',
       '# 变量 临时 字符串',
       '@算',
       '    临时 = 心情',
@@ -229,9 +229,9 @@ describe('展开与其它体的组合（不崩、顺序可证）', () => {
   it('`@随机` 候选里的表引用：落 control-or-side-effect，候选行在随机块内', () => {
     const result = compile([
       ...HEAD,
-      '# 表 心情 由 恋慕',
-      '    0..9 疏远',
-      '    否 亲近',
+      '# 对照表 心情 依据 恋慕',
+      '    0..9 -> 疏远',
+      '    否 -> 亲近',
       '@随机',
       '    灵梦：「{心情}」',
       '    > 乙',
@@ -247,9 +247,9 @@ describe('展开与其它体的组合（不崩、顺序可证）', () => {
   it('模板实参是表引用：先在调用点求值，模板体拿到值槽', () => {
     const result = compile([
       ...HEAD,
-      '# 表 心情 由 恋慕',
-      '    0..9 疏远',
-      '    否 亲近',
+      '# 对照表 心情 依据 恋慕',
+      '    0..9 -> 疏远',
+      '    否 -> 亲近',
       '# 模 甲(值)',
       '    > 结果{值}',
       '! 甲(心情)',
@@ -320,12 +320,12 @@ describe('隐藏槽作用域：主场景 vs `@织` 监听（ERB 局部槽跨函�
     };
     const source = [
       '# 机 开场',
-      '# 表 甲 由 恋慕',
-      '    0..9 a',
-      '    否 z',
-      '# 表 乙 由 恋慕',
-      '    0..9 b',
-      '    否 z',
+      '# 对照表 甲 依据 恋慕',
+      '    0..9 -> a',
+      '    否 -> z',
+      '# 对照表 乙 依据 恋慕',
+      '    0..9 -> b',
+      '    否 -> z',
       '> {甲}',
       '@随机',
       '    > 主甲',
@@ -372,7 +372,7 @@ describe('隐藏槽作用域：主场景 vs `@织` 监听（ERB 局部槽跨函�
 
 describe('不变量', () => {
   it('成功：sourceMap.lineCount === 产物行数；每行都有登记', () => {
-    const result = compile([...HEAD, '# 表 心情 由 恋慕', '    0..9 疏远', '    否 未知', '> {心情}']);
+    const result = compile([...HEAD, '# 对照表 心情 依据 恋慕', '    0..9 -> 疏远', '    否 -> 未知', '> {心情}']);
     expect(result.ok).toBe(true);
     const rows = bodyLines(result.erb);
     expect(result.sourceMap.lineCount).toBe(rows.length);

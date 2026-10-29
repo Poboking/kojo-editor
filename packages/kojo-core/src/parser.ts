@@ -3,7 +3,7 @@
  *
  * 口径（设计稿 §3–§9 / §11 / §12）：
  * - **单一模式**：只认 2.0；旧写法（§12.1）只出迁移诊断，绝不进 AST；
- * - **声明提升**：`# 变量/# 常量/# 表/# 池/# 模/@函/@织` 进 `decls`；`# 幕` 按书写序切 `scenes`
+ * - **声明提升**：`# 变量/# 常量/# 对照表/# 池/# 模/@函/@织` 进 `decls`；`# 幕` 按书写序切 `scenes`
  *   （首个幕之前的正文落 `title: null` 的隐式前奏场景；没有幕则整文件一个隐式场景）；
  * - **错误恢复**：错误行与它的缩进体整块跳过（不产半成品节点），但继续扫描后面的行，
  *   一次报多条；`KojoFile.diagnostics` 带 1 基 UTF-16 span；
@@ -97,6 +97,7 @@ import {
   KOJO_RESERVED_PREFIX,
   KOJO_STORAGE_WORDS,
   KOJO_STRING_TYPE,
+  KOJO_TABLE_ARROWS,
   KOJO_TABLE_DEFAULT,
   KOJO_TABLE_SUBJECT,
   KOJO_TEMPLATE_SLOT,
@@ -166,7 +167,7 @@ interface ParserState {
   readonly decls: KojoDecl[];
   readonly scenes: KojoSceneNode[];
   readonly declaredNames: Set<string>;
-  /** 名字 → 声明种类标签（`变量`/`常量`/`表`/`池`/`模板`/`函数`）；调用体校验用 */
+  /** 名字 → 声明种类标签（`变量`/`常量`/`对照表`/`池`/`模板`/`函数`）；调用体校验用 */
   readonly declKinds: Map<string, string>;
   hasMachine: boolean;
   hasView: boolean;
@@ -414,7 +415,7 @@ function legacyDiagnostic(legacy: KojoLegacyKind, rest: string): LegacyDiagnosti
     case 'is':
       return {
         code: 'core/migration/switch',
-        message: '`当 / 是` 已退场：值查找写 `# 表`，语句块写 `?` 链（§6.5）。',
+        message: '`当 / 是` 已退场：值查找写 `# 对照表`，语句块写 `?` 链（§6.5）。',
       };
     case 'branch':
       return {
@@ -620,7 +621,7 @@ function parseDeclaration(st: ParserState, header: KojoLexLine): void {
       st.i++;
       parseConstDecl(st, header);
       return;
-    case '表':
+    case '对照表':
       st.i++;
       parseTableDecl(st, header);
       return;
@@ -1024,12 +1025,12 @@ function parseConstDecl(st: ParserState, header: KojoDeclRecord): void {
   st.decls.push(decl);
 }
 
-/* ============================== # 表 ============================== */
+/* ============================== # 对照表 ============================== */
 
 function parseTableDecl(st: ParserState, header: KojoDeclRecord): void {
   const tokens = splitSpaces(header.rest, header.restOffset);
   if (tokens.length === 0) {
-    reportSpan(st, 'core/lex/anchor', '`# 表` 缺表名：写 `# 表 心情 由 恋慕`（§6.1）。', spanOfLine(st, header));
+    reportSpan(st, 'core/lex/anchor', '`# 对照表` 缺表名：写 `# 对照表 心情 依据 恋慕`（§6.1）。', spanOfLine(st, header));
     return;
   }
   const nameToken = tokens[0]!;
@@ -1047,7 +1048,7 @@ function parseTableDecl(st: ParserState, header: KojoDeclRecord): void {
     }
   }
   if (!subjectFound) {
-    reportSpan(st, 'core/lex/anchor', '`# 表` 写成 `# 表 <名> 由 <表达式>`：缺 `由`（§6.1）。', spanOfLine(st, header));
+    reportSpan(st, 'core/lex/anchor', '`# 对照表` 写成 `# 对照表 <名> 依据 <表达式>`：缺 `依据`（§6.1）。', spanOfLine(st, header));
   }
 
   const rows: KojoTableRow[] = [];
@@ -1061,7 +1062,7 @@ function parseTableDecl(st: ParserState, header: KojoDeclRecord): void {
     }
     if (line.indent < bodyIndent) break;
     if (line.indent > bodyIndent) {
-      report(st, 'core/lex/indent', `表行缩进必须恰好比 \`# 表\` 深一级（${bodyIndent} 空格）。`, line.lineOffset, line.contentOffset);
+      report(st, 'core/lex/indent', `表行缩进必须恰好比 \`# 对照表\` 深一级（${bodyIndent} 空格）。`, line.lineOffset, line.contentOffset);
       skipLineAndSubtree(st);
       continue;
     }
@@ -1077,7 +1078,7 @@ function parseTableDecl(st: ParserState, header: KojoDeclRecord): void {
     if (row !== null) rows.push(row);
     st.i++;
   }
-  registerDeclarationName(st, nameToken.text, spanOfToken(st, nameToken), '表');
+  registerDeclarationName(st, nameToken.text, spanOfToken(st, nameToken), '对照表');
   const decl: KojoTableDecl = {
     kind: 'table',
     name: nameToken.text,
@@ -1088,39 +1089,80 @@ function parseTableDecl(st: ParserState, header: KojoDeclRecord): void {
   st.decls.push(decl);
 }
 
+/** 表行的分档箭头：取第一个 `->` / `→`；两者等价（§6.1）。 */
+function findTableArrow(text: string): { index: number; length: number } | null {
+  let index = -1;
+  let length = 0;
+  for (const arrow of KOJO_TABLE_ARROWS) {
+    const at = text.indexOf(arrow);
+    if (at >= 0 && (index < 0 || at < index)) {
+      index = at;
+      length = arrow.length;
+    }
+  }
+  return index < 0 ? null : { index, length };
+}
+
 function parseTableRow(st: ParserState, line: KojoLexLine): KojoTableRow | null {
   const text = line.text;
   const base = line.contentOffset;
+  const rowSpan = spanOfLine(st, line);
   if (text.trim() === KOJO_TABLE_DEFAULT) {
-    reportSpan(st, 'core/table/empty-default', '`否` 行必须有值：`否 未知`（§6.1）。', spanOfLine(st, line));
-    return { from: null, to: null, value: '', span: spanOfLine(st, line) };
+    reportSpan(st, 'core/table/empty-default', '`否` 行必须有值：`否 -> 未知`（§6.1）。', rowSpan);
+    return { from: null, to: null, value: '', span: rowSpan };
   }
-  let sep = -1;
-  for (let i = 0; i < text.length; i++) {
-    if (isSpaceCode(text.charCodeAt(i))) {
-      sep = i;
-      break;
-    }
-  }
-  if (sep < 0) {
-    reportSpan(st, 'core/table/value-empty', '表行必须是两列：`<范围> <值>`（§6.1）。', spanOfLine(st, line));
+  const arrow = findTableArrow(text);
+  if (arrow === null) {
+    reportSpan(
+      st,
+      'core/table/value-empty',
+      '表行必须是 `<范围> -> <值>`：缺分档箭头（`->` 与 `→` 等价，§6.1）。',
+      rowSpan,
+    );
     return null;
   }
-  let valueStart = sep;
+  const arrowEnd = arrow.index + arrow.length;
+  if (arrow.index === 0) {
+    reportSpan(st, 'core/table/value-empty', '表行缺范围列：`0..99 -> 疏远`（§6.1）。', rowSpan);
+    return null;
+  }
+  if (!isSpaceCode(text.charCodeAt(arrow.index - 1))) {
+    reportSpan(st, 'core/table/value-empty', '分档箭头左侧要留空格：`0..99 -> 疏远`（§6.1）。', rowSpan);
+    return null;
+  }
+  if (arrowEnd >= text.length) {
+    reportSpan(
+      st,
+      'core/table/value-empty',
+      text.slice(0, arrow.index).trimEnd() === KOJO_TABLE_DEFAULT
+        ? '`否` 行必须有值：`否 -> 未知`（§6.1）。'
+        : '表行缺值列：`0..99 -> 疏远`（§6.1）。',
+      rowSpan,
+    );
+    return null;
+  }
+  if (!isSpaceCode(text.charCodeAt(arrowEnd))) {
+    reportSpan(st, 'core/table/value-empty', '分档箭头右侧要留空格：`0..99 -> 疏远`（§6.1）。', rowSpan);
+    return null;
+  }
+  let valueStart = arrowEnd;
   while (valueStart < text.length && isSpaceCode(text.charCodeAt(valueStart))) valueStart++;
-  const rangeRaw = text.slice(0, sep);
+  const rangeRaw = text.slice(0, arrow.index).trimEnd();
   const valueRaw = text.slice(valueStart);
-  const rowSpan = spanOfLine(st, line);
   const valueOffset = base + valueStart;
 
   if (rangeRaw === KOJO_TABLE_DEFAULT) {
     if (valueRaw.length === 0) {
-      reportSpan(st, 'core/table/empty-default', '`否` 行必须有值：`否 未知`（§6.1）。', rowSpan);
+      reportSpan(st, 'core/table/empty-default', '`否` 行必须有值：`否 -> 未知`（§6.1）。', rowSpan);
     }
     return { from: null, to: null, value: decodeTableValue(st, valueRaw, valueOffset), span: rowSpan };
   }
+  if (rangeRaw.length === 0) {
+    reportSpan(st, 'core/table/value-empty', '表行缺范围列：`0..99 -> 疏远`（§6.1）。', rowSpan);
+    return null;
+  }
   if (valueRaw.length === 0) {
-    reportSpan(st, 'core/table/value-empty', '表行缺值列：`<范围> <值>`（§6.1）。', rowSpan);
+    reportSpan(st, 'core/table/value-empty', '表行缺值列：`0..99 -> 疏远`（§6.1）。', rowSpan);
   }
 
   const dots = rangeRaw.indexOf('..');
@@ -1142,7 +1184,7 @@ function parseTableRow(st: ParserState, line: KojoLexLine): KojoTableRow | null 
 
 /**
  * 表值列解码（**会报诊断**：值列里恰好是整数写法、但超出安全整数时，不能静默退化成字符串
- * ——那会把 `# 表` 的整数列整片改成字符串列，作者读到的只是"类型不一致"）。
+ * ——那会把 `# 对照表` 的整数列整片改成字符串列，作者读到的只是"类型不一致"）。
  */
 function decodeTableValue(st: ParserState, raw: string, startOffset: number): KojoLiteral {
   const trimmed = raw.trim();

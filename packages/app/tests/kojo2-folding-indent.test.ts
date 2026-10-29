@@ -17,7 +17,7 @@
  *
  * ## 缩进这一半钉什么
  *
- * - **判据表逐格正例**：五锚点块头 / `# 表` 两列 / `# 池` 分支 / `@随机` 候选（含 `@组`）/
+ * - **判据表逐格正例**：五锚点块头 / `# 对照表` 两列 / `# 池` 分支 / `@随机` 候选（含 `@组`）/
  *   `@原生` 围栏 / `?` 链 / `选项：`；
  * - **不动手的那几格**：旁白 / 台词 / `!` 触发（插槽要模板定义才知道）/ 单行声明 /
  *   单行调度（`@颜绘` `@标` `@跳` `@返` `@断` `@续`）/ 空行 / 注释 / 非 4 空格栅格 / Tab；
@@ -298,18 +298,18 @@ describe('provider · 版本缓存与树所有权（treeId 口径）', () => {
   it('首问不带 treeId、同版本命中缓存不重发、版本变了才把上一版 treeId 交回', async () => {
     const { client, calls } = fakeFoldingClient();
     const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
-    const fake = fakeModel('# 表 心情 由 恋慕\n    0..99 疏远\n');
+    const fake = fakeModel('# 对照表 心情 依据 恋慕\n    0..99 -> 疏远\n');
 
     expect(await provideFolds(handle, fake.model)).toEqual([{ start: 1, end: 2 }]);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.oldTreeId).toBeUndefined();
-    expect(calls[0]!.text).toBe('# 表 心情 由 恋慕\n    0..99 疏远\n');
+    expect(calls[0]!.text).toBe('# 对照表 心情 依据 恋慕\n    0..99 -> 疏远\n');
 
     // 同一版本重复问（Monaco 停笔 / 折叠态变化都会重问）：一次请求都不多
     expect(await provideFolds(handle, fake.model)).toEqual([{ start: 1, end: 2 }]);
     expect(calls).toHaveLength(1);
 
-    fake.setText('# 表 心情 由 恋慕\n    0..99 疏远\n    否 未知\n', 2);
+    fake.setText('# 对照表 心情 依据 恋慕\n    0..99 -> 疏远\n    否 -> 未知\n', 2);
     await provideFolds(handle, fake.model);
     expect(calls).toHaveLength(2);
     expect(calls[1]!.oldTreeId).toBe('tree-1');
@@ -496,14 +496,14 @@ describe('真 wasm + 真 folds.scm：整条链路仍产出可用的 1 基区间'
     handle.dispose();
   });
 
-  it('读数逐条钉住：`# 表` 块 = 11..15，`# 池` = 17..24，`@随机` = 61..66（含 `@组` 63..65），`@原生` 整块 = 122..129', async () => {
+  it('读数逐条钉住：`# 对照表` 块 = 11..15，`# 池` = 17..24，`@随机` = 61..66（含 `@组` 63..65），`@原生` 整块 = 122..129', async () => {
     const { client } = realFoldsClient();
     const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
     const fake = fakeModel(FIXTURE_TEXT);
     const ranges = await provideFolds(handle, fake.model);
     const keys = ranges.map((range) => `${range.start}:${range.end}`);
 
-    expect(keys).toContain('11:15'); // # 表 心情 由 恋慕（行 11 → 体末行 15）
+    expect(keys).toContain('11:15'); // # 对照表 心情 依据 恋慕（行 11 → 体末行 15）
     expect(keys).toContain('17:24'); // # 池 早安问候（% 链三分支）
     expect(keys).toContain('18:19'); //   └ 第一个分支体
     expect(keys).toContain('61:66'); // @随机
@@ -549,7 +549,7 @@ const FOUR = '    ';
 
 describe('kojo2IndentAfterLine · 开体块头一律 +1 级（4 空格）', () => {
   it.each([
-    ['# 表 心情 由 恋慕', '表体（两列行）'],
+    ['# 对照表 心情 依据 恋慕', '表体（两列行）'],
     ['# 池 早安问候', '池体（`?` 链）'],
     ['# 模 娇羞退场(原因)', '模板体（可含 `[插槽]`）'],
     ['@算', '状态更新块'],
@@ -577,8 +577,8 @@ describe('kojo2IndentAfterLine · 开体块头一律 +1 级（4 空格）', () =
 });
 
 describe('kojo2IndentAfterLine · 同级容器（下一行仍是兄弟，不再加深）', () => {
-  it('`# 表` 的两列行：行与行同层（表头 → 4；行 → 4）', () => {
-    const text = ['# 表 心情 由 恋慕', '    0..99     疏远', '    100..499  平常', ''].join('\n');
+  it('`# 对照表` 的两列行：行与行同层（表头 → 4；行 → 4）', () => {
+    const text = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '    100..499 -> 平常', ''].join('\n');
     expect(kojo2IndentAfterLine(text, 1)).toBe(FOUR);
     expect(kojo2IndentAfterLine(text, 2)).toBe(FOUR);
     expect(kojo2IndentAfterLine(text, 3)).toBe(FOUR);
@@ -605,7 +605,7 @@ describe('kojo2IndentAfterLine · 同级容器（下一行仍是兄弟，不再�
   });
 
   it('表的行 / 候选行之后**没有**同级容器（空行结束）⇒ 不动手', () => {
-    const text = ['# 表 心情 由 恋慕', '    0..99 疏远', '', '    100..499 平常', ''].join('\n');
+    const text = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '', '    100..499 平常', ''].join('\n');
     // 第 4 行虽然在栅格上，但它头上隔着一枚物理空行：表已结束（§6.1），本层不替它猜
     expect(kojo2IndentAfterLine(text, 4)).toBeNull();
   });
@@ -693,7 +693,7 @@ describe('kojo2IndentAfterLine · 不动手的那几格', () => {
 
 describe('kojo2IndentAfterLine · 判不准就 null（绝不给一个猜的缩进）', () => {
   it('不在 4 空格栅格上的行（2 / 6 空格）⇒ null', () => {
-    expect(kojo2IndentAfterLine('  # 表 心情 由 恋慕\n', 1)).toBeNull();
+    expect(kojo2IndentAfterLine('  # 对照表 心情 依据 恋慕\n', 1)).toBeNull();
     expect(kojo2IndentAfterLine('      @算\n', 1)).toBeNull();
   });
 
@@ -703,7 +703,7 @@ describe('kojo2IndentAfterLine · 判不准就 null（绝不给一个猜的缩�
   });
 
   it('行号越界 / 非整数 / 非正数 ⇒ null', () => {
-    const text = '# 表 心情 由 恋慕\n';
+    const text = '# 对照表 心情 依据 恋慕\n';
     expect(kojo2IndentAfterLine(text, 0)).toBeNull();
     expect(kojo2IndentAfterLine(text, -3)).toBeNull();
     expect(kojo2IndentAfterLine(text, 1.5)).toBeNull();
@@ -751,9 +751,9 @@ describe('缩进的单源与幂等', () => {
 
 describe('真 2.0 夹具（full.kojo2）逐结构读数', () => {
   const cases: ReadonlyArray<readonly [number, string | null, string]> = [
-    [11, FOUR, '# 表 心情 由 恋慕'],
-    [12, FOUR, '    0..99     疏远（表行与行同层）'],
-    [15, FOUR, '    否        未知（默认分支也是行）'],
+    [11, FOUR, '# 对照表 心情 依据 恋慕'],
+    [12, FOUR, '    0..99 -> 疏远（表行与行同层）'],
+    [15, FOUR, '    否 -> 未知（默认分支也是行）'],
     [17, FOUR, '# 池 早安问候'],
     [18, `${FOUR}${FOUR}`, '    ? 恋慕 < 100（池里的分支体）'],
     [19, null, '        「……早。」（分支体里再回车不加深）'],
@@ -787,8 +787,8 @@ describe('真 2.0 夹具（full.kojo2）逐结构读数', () => {
 /* ============================== 缩进 · on-type 编辑 ============================== */
 
 describe('kojo2IndentEditsAt · 只改新行的行首空白', () => {
-  it('`# 表` 表头后回车：新行是空行 ⇒ 一条 edit 把 0 个字符换成 4 空格', () => {
-    const fake = fakeModel('# 表 心情 由 恋慕\n');
+  it('`# 对照表` 表头后回车：新行是空行 ⇒ 一条 edit 把 0 个字符换成 4 空格', () => {
+    const fake = fakeModel('# 对照表 心情 依据 恋慕\n');
     expect(kojo2IndentEditsAt(fake.model, positionAt(2))).toEqual([
       {
         range: { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 1 },
@@ -818,7 +818,7 @@ describe('kojo2IndentEditsAt · 只改新行的行首空白', () => {
   });
 
   it('第一行 / 非 kojo2 语言 / 判据为 null ⇒ 空结果', () => {
-    const fake = fakeModel('# 表 心情 由 恋慕\n');
+    const fake = fakeModel('# 对照表 心情 依据 恋慕\n');
     expect(kojo2IndentEditsAt(fake.model, positionAt(1))).toEqual([]);
     const other = fakeModel('@算\n', 1, 'erb');
     expect(kojo2IndentEditsAt(other.model, positionAt(2))).toEqual([]);
@@ -827,10 +827,10 @@ describe('kojo2IndentEditsAt · 只改新行的行首空白', () => {
   });
 
   it('把 edit 落进去再问一次 ⇒ 空结果（同一位置两次请求答案一致）', () => {
-    const fake = fakeModel('# 表 心情 由 恋慕\n');
+    const fake = fakeModel('# 对照表 心情 依据 恋慕\n');
     const first = kojo2IndentEditsAt(fake.model, positionAt(2));
     expect(first).toHaveLength(1);
-    fake.setText(`# 表 心情 由 恋慕\n${first[0]!.text}\n`);
+    fake.setText(`# 对照表 心情 依据 恋慕\n${first[0]!.text}\n`);
     expect(kojo2IndentEditsAt(fake.model, positionAt(2))).toEqual([]);
   });
 });

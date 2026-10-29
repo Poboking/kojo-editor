@@ -16,9 +16,9 @@
  * - 已知 v1 说话人 S 且前缀 ≠ S ⇒ 可证不是说话人前缀 ⇒ 按旁白打印迁移（整行逐字）；
  * - 前缀 = S 或 S 未知 ⇒ 证不出 ⇒ 保留台词 + warning（不进 `ok`，不静默）。
  *
- * ### ③ `# 表` 值列是字面量（不插值）
- * v1 `当` 的臂正文带 `{}` 时语义层拒绝改写成 `# 表`；机械层台账必须给出可行动落点
- * （`?` 链 / `@原生`），而不是继续建议"值查找写 `# 表`"。
+ * ### ③ `# 对照表` 值列是字面量（不插值）
+ * v1 `当` 的臂正文带 `{}` 时语义层拒绝改写成 `# 对照表`；机械层台账必须给出可行动落点
+ * （`?` 链 / `@原生`），而不是继续建议"值查找写 `# 对照表`"。
  */
 import { describe, expect, it } from 'vitest';
 
@@ -292,12 +292,12 @@ describe('v1 `角色：「…」` 同形歧义：可证判据 + 显式 warning �
     expect(result.diagnostics).toEqual([]);
   });
 
-  it('语义层也不猜同形：`当` 的臂正文是 `灵梦：「甲」` ⇒ 不改写 `# 表`，整块 unsupported', () => {
+  it('语义层也不猜同形：`当` 的臂正文是 `灵梦：「甲」` ⇒ 不改写 `# 对照表`，整块 unsupported', () => {
     const source =
       '角色: 12\n时机 指令 310：\n    当 心情：\n        是 0：\n            灵梦：「甲」\n        否则：\n            灵梦：「乙」\n';
     const result = migrateKojoSourceSemantic(source, CATALOG);
     expect(result.ok).toBe(false);
-    expect(result.code).not.toContain('# 表');
+    expect(result.code).not.toContain('# 对照表');
     expect(result.unsupported[0]!.code).toBe('core/migration/switch');
     expect(result.unsupported[0]!.targetHint).toContain('同形歧义');
     expect(result.code).toContain('            灵梦：「甲」\n');
@@ -337,17 +337,17 @@ describe('v1 `角色：「…」` 同形歧义：可证判据 + 显式 warning �
   });
 });
 
-/* ============================== ③ `# 表` 值列 ============================== */
+/* ============================== ③ `# 对照表` 值列 ============================== */
 
-describe('`# 表` 值列是字面量：fail-closed 的 targetHint 必须可行动', () => {
-  it('v1 `当` 的臂正文带 `{}`：不改写 `# 表`，台账给出 `?` 链 / `@原生` 落点', () => {
+describe('`# 对照表` 值列是字面量：fail-closed 的 targetHint 必须可行动', () => {
+  it('v1 `当` 的臂正文带 `{}`：不改写 `# 对照表`，台账给出 `?` 链 / `@原生` 落点', () => {
     const source =
       '角色: 12\n时机 指令 310：\n    当 心情：\n        是 0：\n            「她{恋慕}。」\n        否则：\n            「乙。」\n';
     const result = migrateKojoSourceSemantic(source);
     expect(result.ok).toBe(false);
     const entry = result.unsupported[0]!;
     expect(entry.code).toBe('core/migration/switch');
-    // 具体原因（值列不插值）与可行动落点都进 targetHint，而不是只建议继续写 `# 表`
+    // 具体原因（值列不插值）与可行动落点都进 targetHint，而不是只建议继续写 `# 对照表`
     expect(entry.targetHint).toContain('值列');
     expect(entry.targetHint).toContain('不做插值');
     expect(entry.targetHint).toContain('?` 链');
@@ -363,8 +363,8 @@ describe('`# 表` 值列是字面量：fail-closed 的 targetHint 必须可行�
     expect(result.code).toContain('    当 心情：\n        是 0：\n            「她{恋慕}。」\n');
   });
 
-  it('2.0 `# 表` 值列含 `{}` 仍 fail-closed（编译期拒绝，不静默打印）', () => {
-    const result = compile2('# 机 指令 310\n# 表 心情 由 恋慕\n    0 她{}。\n    否 未知\n\n> {心情}\n');
+  it('2.0 `# 对照表` 值列含 `{}` 仍 fail-closed（编译期拒绝，不静默打印）', () => {
+    const result = compile2('# 机 指令 310\n# 对照表 心情 依据 恋慕\n    0 -> 她{}。\n    否 -> 未知\n\n> {心情}\n');
     expect(result.ok).toBe(false);
     expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain('core/lex/interpolation');
   });

@@ -5,7 +5,7 @@
  *
  * `parseSource` 只保证"形状对"；本模块在同一棵**只读** AST 上补齐三类判定：
  *
- * 1. **类型**（S5.2）：`# 变量` 初值 / `# 常量` 值 / `# 表` 值列 / `# 池` 分支可归约性 /
+ * 1. **类型**（S5.2）：`# 变量` 初值 / `# 常量` 值 / `# 对照表` 值列 / `# 池` 分支可归约性 /
  *    赋值与 `@算` / 数组元素 / `@函` 参数默认值与 `@返` 返回种类；
  * 2. **结构**（S5.3 的 core 侧切片）：非 void 函数的"可证落空"路径；
  * 3. **能力**（S5.4）：只读 `GameAdapter` 的 `presentation` / `programFeatures` /
@@ -21,7 +21,7 @@
  *   可能绕过 parser，这类复核只在真的看到坏形状时才出声；
  * - **lowering 的产出口径**（backend 能力、SIF、隐藏槽、展开顺序）不在这里复制；本层读的是
  *   adapter **声明**，与 lowering 读 backend **落点**是两面（K2-FEATURE-GATE-UNIFY 收口）；
- * - `# 表` 值列同类型复用 `table.ts::validateTable` 的判定（唯一实现），只上浮
+ * - `# 对照表` 值列同类型复用 `table.ts::validateTable` 的判定（唯一实现），只上浮
  *   `core/table/type-mismatch` 一条，不重复报重叠/缺 `否` 等结构错误；
  * - `# 池` 分支"可归约"= 分支体能归约出至少一行可打印内容，判据复用
  *   `lower/presentation.ts::narrativeHasOutput`（与 lowering 最后一道闸同源）。
@@ -29,7 +29,7 @@
  * ## 名字解析链（写死；赋值目标与读表达式同一顺序）
  *
  * 1. **参数 / `@巡` 绑定**（函数作用域，最近）；
- * 2. **本文件声明**（`# 变量` / `# 常量` / `# 表` / `# 池` / `# 模板` / `@函`）；
+ * 2. **本文件声明**（`# 变量` / `# 常量` / `# 对照表` / `# 池` / `# 模板` / `@函`）；
  * 3. **adapter 外部变量**（`domainSymbols.variables`，additive 面；旧 adapter 省略 = 空）；
  * 4. 都没有 ⇒ `core/expr/unknown-symbol`（adapter 的 `unknown = 'raw'` 时放行）。
  *
@@ -271,7 +271,7 @@ function bracketEnd(text: string, open: number): number {
 /** 声明种类标签（`assign-to-constant` 文案用；语言词，不是游戏名词） */
 const DECL_KIND_LABELS: Readonly<Record<Exclude<DeclKind, 'var'>, string>> = Object.freeze({
   const: '常量',
-  table: '表',
+  table: '对照表',
   pool: '池',
   template: '模板',
   function: '函数',
@@ -1473,7 +1473,7 @@ class FileChecker {
   }
 }
 
-/** `# 表` 的值类型（全部行同类型才算数；混类型已由 validateTable 报错，这里给 unknown） */
+/** `# 对照表` 的值类型（全部行同类型才算数；混类型已由 validateTable 报错，这里给 unknown） */
 function tableValueType(decl: KojoTableDecl): KojoSemaType {
   let type: KojoSemaType | null = null;
   for (const row of decl.rows) {

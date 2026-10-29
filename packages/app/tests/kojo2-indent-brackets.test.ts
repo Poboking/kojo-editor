@@ -259,13 +259,13 @@ describe('② worker indents：从 query-unavailable 转真实规则', () => {
     }
   });
 
-  it('规则是"行首锚 + 词形"：覆盖 # 表 / # 池 / # 模 / @ 块头 / ? 链 / @原生，且换实参仍命中', async () => {
+  it('规则是"行首锚 + 词形"：覆盖 # 对照表 / # 池 / # 模 / @ 块头 / ? 链 / @原生，且换实参仍命中', async () => {
     const reply = await realIndentsReply(FIXTURE_TEXT);
     const patterns = reply.rules.increasePatterns.map((source) => new RegExp(source));
     const hits = (line: string): boolean => patterns.some((pattern) => pattern.test(line));
     for (const line of [
-      '# 表 心情 由 恋慕',
-      '# 表 别的名字 由 其他表达式',
+      '# 对照表 心情 依据 恋慕',
+      '# 对照表 别的名字 依据 其他表达式',
       '# 池 任意名字',
       '# 模 别的模板(参数)',
       '@算',
@@ -313,7 +313,7 @@ describe('② worker indents：从 query-unavailable 转真实规则', () => {
       reply.rules.enterPatterns.length + reply.rules.increasePatterns.length + reply.rules.decreasePatterns.length,
     );
     expect(merged.onEnterRules.length).toBe(reply.rules.enterPatterns.length);
-    expect(merged.increaseIndentPattern.test('# 表 甲 由 乙')).toBe(true);
+    expect(merged.increaseIndentPattern.test('# 对照表 甲 依据 乙')).toBe(true);
     expect(merged.increaseIndentPattern.test('> 旁白')).toBe(false);
     // 同一份规则问两次：去重键稳定（宿主不会每次回复都重写语言配置）
     const again = mergeIndentConfig(EMPTY_BASE, reply.rules);
@@ -329,8 +329,8 @@ describe('② worker indents：从 query-unavailable 转真实规则', () => {
     // 基底两格一条不撤：`@原生` 栏头 + 行尾全角冒号
     expect(merged.onEnterRules.some((rule) => rule.beforeText.test('@原生'))).toBe(true);
     expect(merged.onEnterRules.some((rule) => rule.beforeText.test('选项：'))).toBe(true);
-    // 结构层增量也在：换表名的 `# 表` 与 `?` 链
-    expect(merged.increaseIndentPattern.test('# 表 别的 由 心情')).toBe(true);
+    // 结构层增量也在：换表名的 `# 对照表` 与 `?` 链
+    expect(merged.increaseIndentPattern.test('# 对照表 别的 依据 心情')).toBe(true);
     expect(merged.increaseIndentPattern.test('? 任意条件')).toBe(true);
     // 空规则 = 一个字都不发
     expect(kojo2IndentConfigWith(null)).toBeNull();
@@ -349,7 +349,7 @@ describe('② worker indents：从 query-unavailable 转真实规则', () => {
       loadRuntime: () => getKojo2TreeSitterRuntime(realRuntimeDeps({ withIndents: false })),
     });
     engines.push(engine);
-    const reply = await engine.handle({ id: 1, type: 'indents', version: 1, text: '# 表 甲 由 乙\n    0..1 丙\n' });
+    const reply = await engine.handle({ id: 1, type: 'indents', version: 1, text: '# 对照表 甲 依据 乙\n    0..1 丙\n' });
     expect(reply.ok).toBe(false);
     if (reply.ok) return;
     expect(reply.reason).toBe('query-unavailable');
@@ -362,7 +362,7 @@ describe('② worker indents：从 query-unavailable 转真实规则', () => {
       startPosition: { row, column },
       endPosition: { row, column },
     });
-    const text = '# 表 甲 由 乙\n    ? 条件\n? 否\n@算\n';
+    const text = '# 对照表 甲 依据 乙\n    ? 条件\n? 否\n@算\n';
     const rules = indentRulesFromCaptures(
       [
         capture('indent.increase', 0),
@@ -374,7 +374,7 @@ describe('② worker indents：从 query-unavailable 转真实规则', () => {
     );
     // increase 与 enter 都落进 increase 腿（回车 / 粘贴同口径）⇒ 两条开体行各一条规则
     expect(rules.increasePatterns).toHaveLength(2);
-    expect(rules.increasePatterns.some((source) => new RegExp(source).test('# 表 别的 由 心情'))).toBe(true);
+    expect(rules.increasePatterns.some((source) => new RegExp(source).test('# 对照表 别的 依据 心情'))).toBe(true);
     expect(rules.enterPatterns).toEqual(rules.increasePatterns);
     expect(rules.decreasePatterns).toHaveLength(1);
     expect(new RegExp(rules.decreasePatterns[0]!).test('? 别的条件')).toBe(true);

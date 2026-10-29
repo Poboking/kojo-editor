@@ -61,13 +61,13 @@ export const KOJO2_DISPATCH_WORDS: readonly string[] = KOJO_DISPATCH_WORDS;
  * 类型词（`整数` / `字符串`）——core `KOJO_TYPE_WORDS` 的**原样转发**，本文件不写字形。
  *
  * 2026-10-27 第三色批：这批词此前只在 {@link KOJO2_RESERVED_WORDS} 里以"保留词"的身份出现，
- * 于是 `# 变量 人数 整数` 的 `整数` 与 `由` / `否` 同色——而它改的是**这一列存什么**，
+ * 于是 `# 变量 人数 整数` 的 `整数` 与 `依据` / `否` 同色——而它改的是**这一列存什么**，
  * 与"这一行是不是声明"是两个问题。着色与补全都从这一枚导出取，不留第二份名单。
  */
 export const KOJO2_TYPE_WORDS: readonly string[] = KOJO_TYPE_WORDS;
 
 /**
- * 保留词（不是"声明词/调度词"的那些语言固定词）：表分隔词 `由`、默认分支 `否`、
+ * 保留词（不是"声明词/调度词"的那些语言固定词）：表来源词 `依据`、默认分支 `否`、
  * 行尾不等待 `续`、空行语句三态词 `空行` / `等待`、类型词（整数 / 字符串）、
  * 存储期词（场景 / 存档 / 会话）、`@织` 修饰词（之前 / 之后 / 接管）。
  *
@@ -91,7 +91,7 @@ export const KOJO2_RESERVED_WORDS: readonly string[] = [
  */
 export const KOJO2_DOMAIN_SYMBOLS: readonly string[] = KOJO_DOMAIN_SYMBOL_NAMES;
 
-/** 表默认分支词（`否`）——`# 表` 两列行里第一列的这个词自己一档（关键字，不是范围）。 */
+/** 表默认分支词（`否`）——`# 对照表` 分档行里第一列的这个词自己一档（关键字，不是范围）。 */
 export const KOJO2_TABLE_DEFAULT_WORD = KOJO_TABLE_DEFAULT;
 
 /** 行尾不等待标记（`续`）——行尾判据的正则从它派生（本文件之外不写这个字形）。 */

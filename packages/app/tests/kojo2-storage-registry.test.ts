@@ -1,5 +1,5 @@
 /**
- * K2-STORAGE-HOST 的判据闸：`# 表 / # 池 / # 变量 / # 常量` 注册表 + 诊断桥。
+ * K2-STORAGE-HOST 的判据闸：`# 对照表 / # 池 / # 变量 / # 常量` 注册表 + 诊断桥。
  *
  * 全部走**真 core**（`lex` / `parse` / `planStorageSlots` / `validateTable`），不 mock：
  * - 多文件 `.kojo2` fixture（≥2 文件；表/池/变量/常量跨文件同名、跨文件引用）；
@@ -38,10 +38,10 @@ const FILE_A = [
   '# 常量 上限 整数 = 100',
   '# 变量 好感 整数 = 0 存档',
   '# 变量 心情强度 整数 = 40 场景',
-  '# 表 心情 由 心情强度',
-  '    0..29 低落',
-  '    30..69 平静',
-  '    否 高涨',
+  '# 对照表 心情 依据 心情强度',
+  '    0..29 -> 低落',
+  '    30..69 -> 平静',
+  '    否 -> 高涨',
   '# 池 早安',
   '    ? 心情强度 > 60',
   '        我：「今天也要加油。」',
@@ -234,12 +234,12 @@ describe('kojo2 存储注册表 · 同名冲突', () => {
     expect(keys.size).toBe(2);
   });
 
-  it('同文件 `# 变量` 与 `# 表` 同名：core/decl/duplicate-name + 种类/类型冲突', () => {
+  it('同文件 `# 变量` 与 `# 对照表` 同名：core/decl/duplicate-name + 种类/类型冲突', () => {
     const source = [
       '# 变量 心情 整数 = 0 场景',
-      '# 表 心情 由 心情',
-      '    0..1 低',
-      '    否 高',
+      '# 对照表 心情 依据 心情',
+      '    0..1 -> 低',
+      '    否 -> 高',
       '',
     ].join('\n');
     const registry = createKojo2StorageRegistry({
@@ -353,7 +353,7 @@ describe('kojo2 存储注册表 · 编辑器联动', () => {
 
 describe('kojo2 存储注册表 · 诊断桥', () => {
   it('表类型不符：code / message / 区间与 core `validateTable` 逐字一致', () => {
-    const source = ['# 表 档位 由 好感', '    0..10 低', '    11..20 2', '    否 高', ''].join('\n');
+    const source = ['# 对照表 档位 依据 好感', '    0..10 -> 低', '    11..20 -> 2', '    否 -> 高', ''].join('\n');
     const registry = createKojo2StorageRegistry({
       documents: [{ uri: 'D:/proj/table.kojo2', source }],
     });

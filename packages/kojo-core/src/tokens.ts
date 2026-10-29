@@ -38,7 +38,7 @@ export const KOJO_BLANK_WAIT = '等待';
  * 末位 `方言`（LAU §5.3）＝ 方言**断言**词位：它不指向任何游戏事实，参数对 core 是不透明
  * 字符串（core 不解释、不校验它属于哪个方言）；词表里**不许**出现任何方言名取值。
  */
-export const KOJO_DECL_WORDS = ['幕', '视', '机', '变量', '常量', '表', '池', '模', '方言'] as const;
+export const KOJO_DECL_WORDS = ['幕', '视', '机', '变量', '常量', '对照表', '池', '模', '方言'] as const;
 export type KojoDeclWord = (typeof KOJO_DECL_WORDS)[number];
 /** 声明词集合（词表单源；parser 只查这一份） */
 export const KOJO_DECL_WORD_SET: ReadonlySet<string> = new Set<string>(KOJO_DECL_WORDS);
@@ -79,9 +79,16 @@ export const KOJO_STORAGE_WORDS = ['场景', '存档', '会话'] as const;
 export type KojoStorageWord = (typeof KOJO_STORAGE_WORDS)[number];
 export const KOJO_DEFAULT_STORAGE: KojoStorageWord = '场景';
 
-/** `# 表 ... 由 <表达式>` 的分隔词；表默认分支词 `否`（§6.1） */
-export const KOJO_TABLE_SUBJECT = '由';
+/** `# 对照表 ... 依据 <表达式>` 的来源词；表默认分支词 `否`（§6.1） */
+export const KOJO_TABLE_SUBJECT = '依据';
 export const KOJO_TABLE_DEFAULT = '否';
+/**
+ * 表行的分档箭头（§6.1）：规范形是键盘直出的 `->`，`→` 是等价别名；
+ * 两者同一颗记号，AST 不区分。表上下文以外不具语法意义。
+ */
+export const KOJO_TABLE_ARROWS = ['->', '→'] as const;
+/** 规范形（诊断 / 补全 / 格式化统一用它） */
+export const KOJO_TABLE_ARROW_CANONICAL = '->';
 
 /** `# 模` 的插槽字面量（§7.2：最多一个，只在行首独立成行时有语法意义） */
 export const KOJO_TEMPLATE_SLOT = '[插槽]';

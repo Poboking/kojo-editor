@@ -1,5 +1,5 @@
 /**
- * `# 表` 落点判定（C2.5 / §6.3 / §16.2）：**纯结构判定，只产计划，不产字节**。
+ * `# 对照表` 落点判定（C2.5 / §6.3 / §16.2）：**纯结构判定，只产计划，不产字节**。
  *
  * 分工（与 `选项` 的 ETB 计划、`@巡` 的循环计划同一口径）：
  * - 本模块说"这张表能不能**可证地**落等值分派"（`selectcase`），或者只能落 `IF` 链；
@@ -194,7 +194,7 @@ function shapeLabel(shape: TableRowShape): string {
  * 判别式的**静态语法纯度**（不是类型检查）：一票否决字符串字面量、函数调用、赋值、
  * 逗号、换行、花括号。标识符 / 整数 / 中文运算符 / 括号 / 下标 / 域名冒号 / 三元都放行。
  *
- * 为什么语法级足够：`# 表` 的判别式按 `int` 隐藏槽登记（见 `tables.ts` 的
+ * 为什么语法级足够：`# 对照表` 的判别式按 `int` 隐藏槽登记（见 `tables.ts` 的
  * `recordSlot(..., 'table-subject')`），表达式端口的类型错误在别处报；这里只排除
  * **明显可能有副作用/明显非整数**的形态，宁可退回 `IF` 链（保守），不放行再报错。
  */
@@ -235,11 +235,11 @@ function computePlan(table: TableDispatchFact): TableDispatchPlan {
   const subjectText = table.subject.text.trim();
   if (subjectText.length === 0) {
     return planOf('error', {
-      reason: '表没有判别式（`由` 后面的表达式为空）：无法生成等值分派。',
+      reason: '表没有判别式（`依据` 后面的表达式为空）：无法生成等值分派。',
       diagnostics: [
         diagnosticOf(
           'core/expr/not-expression',
-          '表的判别式为空：`# 表 <名> 由 <表达式>` 的 `由` 后面必须写一个整数表达式（§6.1）。',
+          '表的判别式为空：`# 对照表 <名> 依据 <表达式>` 的 `依据` 后面必须写一个整数表达式（§6.1）。',
           table.subject.span,
         ),
       ],

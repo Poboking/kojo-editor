@@ -108,7 +108,7 @@ export {
 export * from './collections.js';
 export { emitEratwForEachLoop, type EratwForeachEmitOptions } from './foreach-emit.js';
 
-/* ---------- `# 表` 等值分派落点（K2-TABLE-SELECTCASE） ---------- */
+/* ---------- `# 对照表` 等值分派落点（K2-TABLE-SELECTCASE） ---------- */
 export { emitTableDispatch, type EratwTableEmitInput, type TableDispatchCaseFact, type TableDispatchPlanFact } from './table-emit.js';
 export { ERATW_TABLE_DISPATCH, type TableDispatchPresentation } from './table-data.js';
 

@@ -84,7 +84,7 @@ const PREPROCESSOR_RE = /^#[A-Za-z_]/;
 
 /** 迁移目标提示（unsupported 台账的人话；由 `index.ts` 取用） */
 export const TARGET_HINTS: Readonly<Record<string, string>> = {
-  switch: '值查找写 `# 表`，语句分叉写 `?` 链（§6.5 / §12.1）',
+  switch: '值查找写 `# 对照表`，语句分叉写 `?` 链（§6.5 / §12.1）',
   branch: '`分支：` + `[条件]` 改成 `?` 链或 `# 池`（§12.1）',
   ask: '`初回 / 询问 / 确认` 2.0 暂无对应：整块放进 `@原生`（§12.1）',
   alias: '`别名` 改成 adapter 变量映射（正文直接写字典名），或放进 `@原生`（§3.4.4）',

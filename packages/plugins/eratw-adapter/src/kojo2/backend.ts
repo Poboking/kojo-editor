@@ -6,7 +6,7 @@
  *   不知道 ERB 长什么样；
  * - 本文件把请求落成 eraTW/Emuera 产物行：`PRINTFORM` 变体、`HPH_PRINT`、`SETCOLOR`/
  *   `RESETCOLOR`、`PRINT_FACE`/`PRINT_FACE_PLAYER`、`PRINTDATA`/`RAND+SELECTCASE`、
- *   `# 表`/`# 池` 的等值分派（`SELECTCASE`，形状在 `table-emit.ts` / `pool-emit.ts`）、
+ *   `# 对照表`/`# 池` 的等值分派（`SELECTCASE`，形状在 `table-emit.ts` / `pool-emit.ts`）、
  *   `#PRI/#LATER/#ONLY`、`@函数` + 伴生 `_1`、`#DIM/#DIMS`；
  * - 所有引擎记号/模板/库函数名都从 **kojo2 数据**（`ERATW_PRESENTATION` / `ERATW_PROFILE` /
  *   `ERATW_EVENT_CATALOG`）与既有 `face-templates.ts`（口上函数名模板）派生，不抄第二份；
@@ -39,7 +39,7 @@
  *
  * ## 隐藏槽
  *
- * core 的 `@随机`/`# 表` 用 `__kojo_` 前缀的隐藏槽。Emuera 允许在 **ERB 函数内**用
+ * core 的 `@随机`/`# 对照表` 用 `__kojo_` 前缀的隐藏槽。Emuera 允许在 **ERB 函数内**用
  * `#DIM` / `#DIMS` 声明函数私有变量（`exfunc` 手册「定義」节），所以 eraTW 侧直接按
  * core 给的 `slots` 清单在**各自函数头**（主场景 `_1` / 每个 `@织` 监听）发声明：
  * 局部变量跨函数不可见，主场景的槽不会泄漏进监听函数。
@@ -714,7 +714,7 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
         return emitEratwForEachLoop(request.plan, request.body, { compileExpression: compile });
       },
       /**
-       * `# 表` 可证等值落点（K2-TABLE-SELECTCASE）：档位/兜底/缩进形状全部交给
+       * `# 对照表` 可证等值落点（K2-TABLE-SELECTCASE）：档位/兜底/缩进形状全部交给
        * `table-emit.ts`（读 `ERATW_TABLE_DISPATCH`）；判别式求值与各臂赋值行由 core 交来，
        * 本文件只做转调（不改写、不排序）。
        */

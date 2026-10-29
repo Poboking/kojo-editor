@@ -38,13 +38,13 @@ function dialectDeclsOf(source: string): KojoDialectDecl[] {
 
 describe('`方言` 在声明词表里的位置契约', () => {
   it('已登记，且**恰在尾部**（前面八枚的位序一个字都不许动）', () => {
-    expect(KOJO_DECL_WORDS).toEqual(['幕', '视', '机', '变量', '常量', '表', '池', '模', '方言']);
+    expect(KOJO_DECL_WORDS).toEqual(['幕', '视', '机', '变量', '常量', '对照表', '池', '模', '方言']);
     expect(KOJO_DECL_WORD_SET.has('方言')).toBe(true);
   });
 
   it('下游按位置取的词仍然对位（`kojo2-format.ts` 的 slice(0,5) 与 5/6/7 三枚）', () => {
     expect(KOJO_DECL_WORDS.slice(0, 5)).toEqual(['幕', '视', '机', '变量', '常量']);
-    expect(KOJO_DECL_WORDS[5]).toBe('表');
+    expect(KOJO_DECL_WORDS[5]).toBe('对照表');
     expect(KOJO_DECL_WORDS[6]).toBe('池');
     expect(KOJO_DECL_WORDS[7]).toBe('模');
     expect(KOJO_DECL_WORDS[2]).toBe('机');

@@ -4,7 +4,7 @@
  *
  * 覆盖六件事：
  * 1. **每类动作正例**：裸旁白 / 裸引号 / 心形（行 + 块）/ 着色 / 随机 / 分支→`# 池` /
- *    当→`# 表` / 初回→`@原生` / 补 `否`（表）/ 补 `? 否`（池）/ 补 `[插槽]` / 修缩进；
+ *    当→`# 对照表` / 初回→`@原生` / 补 `否`（表）/ 补 `? 否`（池）/ 补 `[插槽]` / 修缩进；
  * 2. **应用后 parse 零 error**：逐条把编辑应用到源码上，core `parseSource` 必须干净
  *    （这是"动作真的把这条诊断修好了"的机器判据）；
  * 3. **不可解析就不产**：真案例（`分支：` 缺兜底 / `当` 臂是旁白 / 心形块混入控制流）+
@@ -246,19 +246,19 @@ describe('⑤分支 → `# 池`（提升声明 + 原处引用）', () => {
     expect(fact.edits).toHaveLength(2);
     expect(fact.edits[0]!.range.startLine).toBe(4);
     expect(fact.edits[0]!.newText).toBe(
-      '# 表 迁移表1 由 数值\n    1 早。\n    否 嗨。\n\n> 前言',
+      '# 对照表 迁移表1 依据 数值\n    1 -> 早。\n    否 -> 嗨。\n\n> 前言',
     );
     expect(fact.edits[1]!.range).toEqual({ startLine: 6, startColumn: 1, endLine: 10, endColumn: 11 });
     expect(fact.edits[1]!.newText).toBe('> {迁移表1}');
     const after = expectParseCleanAfter(fact, source);
     expect(after).toBe(
-      '# 机 开场\n# 视 我\n\n# 表 迁移表1 由 数值\n    1 早。\n    否 嗨。\n\n> 前言\n\n> {迁移表1}\n',
+      '# 机 开场\n# 视 我\n\n# 对照表 迁移表1 依据 数值\n    1 -> 早。\n    否 -> 嗨。\n\n> 前言\n\n> {迁移表1}\n',
     );
   });
 
-  it('声明区含 `# 方言`（单行声明）⇒ 提升的 `# 表` 插在它**之后**，不拆散单行声明组', () => {
+  it('声明区含 `# 方言`（单行声明）⇒ 提升的 `# 对照表` 插在它**之后**，不拆散单行声明组', () => {
     // 改前读数：INSERT 点在 `# 方言` 那一行（= 3），落在块头之前 ⇒ 两段编辑，
-    // 结果 `# 方言` 被挤到「空行 + # 表 块 + 空行」之后，单行声明组被拆散。
+    // 结果 `# 方言` 被挤到「空行 + # 对照表 块 + 空行」之后，单行声明组被拆散。
     // 改后：插入点跳过 `# 方言`（与 `# 机` / `# 视` 同为单行声明）⇒ 与块头同行 ⇒ 一段合成编辑。
     const source =
       '# 机 开场\n# 视 我\n# 方言 erafl\n\n当 数值：\n    是 1：\n        早。\n    否则：\n        嗨。\n';
@@ -268,10 +268,10 @@ describe('⑤分支 → `# 池`（提升声明 + 原处引用）', () => {
     expect(fact.edits).toHaveLength(1);
     const after = expectParseCleanAfter(fact, source);
     expect(after).toBe(
-      '# 机 开场\n# 视 我\n# 方言 erafl\n\n# 表 迁移表1 由 数值\n    1 早。\n    否 嗨。\n\n> {迁移表1}\n',
+      '# 机 开场\n# 视 我\n# 方言 erafl\n\n# 对照表 迁移表1 依据 数值\n    1 -> 早。\n    否 -> 嗨。\n\n> {迁移表1}\n',
     );
     // `# 方言` 仍在单行声明组里（不被新声明隔到后面）
-    expect(after.indexOf('# 方言 erafl')).toBeLessThan(after.indexOf('# 表 迁移表1'));
+    expect(after.indexOf('# 方言 erafl')).toBeLessThan(after.indexOf('# 对照表 迁移表1'));
   });
 
   it('`分支：` 缺兜底标签 ⇒ core 语义升级层 decline ⇒ 零动作', () => {
@@ -280,7 +280,7 @@ describe('⑤分支 → `# 池`（提升声明 + 原处引用）', () => {
   });
 });
 
-describe('⑥当 → `# 表`', () => {
+describe('⑥当 → `# 对照表`', () => {
   it('数值分档改写：值列 = 原分支正文，引用点写 `{表名}`', () => {
     const source =
       '# 机 开场\n\n当 数值：\n    是 1：\n        早。\n    否则：\n        嗨。\n';
@@ -289,7 +289,7 @@ describe('⑥当 → `# 表`', () => {
     const fact = facts[0]!;
     expect(fact.code).toBe('core/migration/switch');
     expect(fact.edit.newText).toBe(
-      '# 表 迁移表1 由 数值\n    1 早。\n    否 嗨。\n\n> {迁移表1}',
+      '# 对照表 迁移表1 依据 数值\n    1 -> 早。\n    否 -> 嗨。\n\n> {迁移表1}',
     );
     expect(expectParseCleanAfter(fact, source)).toContain('> {迁移表1}\n');
   });
@@ -309,21 +309,21 @@ describe('⑥当 → `# 表`', () => {
     expect(fact.edits[0]!.range.startLine).toBe(4); // 第一条正文行 = `? 数值 == 1`
     expect(fact.edits[1]!.newText).toBe('    > {迁移表1}');
     const after = expectParseCleanAfter(fact, source);
-    expect(after).toContain('\n# 表 迁移表1 由 数值\n');
+    expect(after).toContain('\n# 对照表 迁移表1 依据 数值\n');
     expect(after).toContain('\n    > {迁移表1}\n');
   });
 });
 
 describe('⑦补 `否`：表与池', () => {
-  it('`# 表` 缺兜底 ⇒ 追加 `否 <末行值>`（类型与原值一致）', () => {
-    const source = '# 机 开场\n\n# 表 心情 由 数值\n    0..99 疏远\n';
+  it('`# 对照表` 缺兜底 ⇒ 追加 `否 <末行值>`（类型与原值一致）', () => {
+    const source = '# 机 开场\n\n# 对照表 心情 依据 数值\n    0..99 -> 疏远\n';
     const facts = factsOf(source, 3, 4);
     expect(facts).toHaveLength(1);
     const fact = facts[0]!;
     expect(fact.kind).toBe('complete');
     expect(fact.code).toBe('core/table/missing-default');
-    expect(fact.edit.newText).toBe('    0..99 疏远\n    否 疏远');
-    expect(expectParseCleanAfter(fact, source)).toContain('    否 疏远\n');
+    expect(fact.edit.newText).toBe('    0..99 -> 疏远\n    否 -> 疏远');
+    expect(expectParseCleanAfter(fact, source)).toContain('    否 -> 疏远\n');
     expect(diagnosticsOf(kojo2EditedSource(source, fact.edits)).map((d) => d.code)).not.toContain(
       'core/table/missing-default',
     );
@@ -433,7 +433,7 @@ describe('⑩不可解析就不产', () => {
   });
 
   it('目标码在改动区间里没消失（假 compile 仍报 missing-default）⇒ 否决', () => {
-    const source = '# 机 开场\n\n# 表 心情 由 数值\n    0..99 疏远\n';
+    const source = '# 机 开场\n\n# 对照表 心情 依据 数值\n    0..99 -> 疏远\n';
     const verifier: Kojo2CodeActionVerifier = {
       parse: () => [],
       compile: () => [
@@ -844,7 +844,7 @@ describe('⑮逐类动作：应用后 core parse 零 error', () => {
     { name: '分支池', source: '# 机 开场\n# 视 我\n\n分支：\n    [数值 < 100]\n        「早。」\n    [其他]\n        「嗨。」\n', from: 4, to: 8 },
     { name: '当表', source: '# 机 开场\n\n当 数值：\n    是 1：\n        早。\n    否则：\n        嗨。\n', from: 3, to: 7 },
     { name: '初回原生', source: '# 机 开场\n\n初回：\n    我：「早。」\n', from: 3, to: 4 },
-    { name: '补否（表）', source: '# 机 开场\n\n# 表 心情 由 数值\n    0..99 疏远\n', from: 3, to: 4 },
+    { name: '补否（表）', source: '# 机 开场\n\n# 对照表 心情 依据 数值\n    0..99 -> 疏远\n', from: 3, to: 4 },
     { name: '补否（池）', source: '# 机 开场\n# 视 我\n\n# 池 问候\n    ? 数值 < 100\n        「早。」\n', from: 4, to: 6 },
     { name: '补插槽', source: '# 机 开场\n\n# 模 娇羞()\n    > （她红着脸）\n\n! 娇羞()\n    我：「才没有！」\n', from: 6, to: 6 },
     { name: '修缩进（链头）', source: '# 机 开场\n\n? 数值 == 1\n    > a\n  ? 否\n    > b\n', from: 5, to: 5 },

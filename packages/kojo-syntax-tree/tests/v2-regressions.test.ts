@@ -130,11 +130,11 @@ describe('`@原生` 块内 Tab 缩进与 4 空格同一棵结构', () => {
 });
 
 describe('表端点 `否定` 不被兜底 `否` 吞掉', () => {
-  const text = ['# 表 心情 由 恋慕', '    0..99 疏远', '    否定 0', '    否定线.. 亲近', '    否 未知', ''].join(
+  const text = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '    否定 -> 0', '    否定线.. -> 亲近', '    否 -> 未知', ''].join(
     '\n',
   );
 
-  it('`否定 0` = range `否定` / value `0`；`否 未知` 仍是兜底行', () => {
+  it('`否定 -> 0` = range `否定` / value `0`；`否 -> 未知` 仍是兜底行', () => {
     const root = parseText(text);
     expect(faultsOf(root)).toEqual([]);
     const rows = root.descendantsOfType('table_row');

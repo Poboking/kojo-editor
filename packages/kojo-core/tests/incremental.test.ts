@@ -89,11 +89,11 @@ const SAMPLE_BASIC = `# 机 开场
 const SAMPLE_TABLE = `# 机 开场
 # 视 灵梦
 # 常量 上限 整数 = 5
-# 表 亲密度 由 好感
-    0..2 = "疏远"
-    3..4 = "点头"
-    5.. = "亲近"
-    否 = "陌生"
+# 对照表 亲密度 依据 好感
+    0..2 -> = "疏远"
+    3..4 -> = "点头"
+    5.. -> = "亲近"
+    否 -> = "陌生"
 > 现在的关系：{亲密度}
 灵梦：「表值也能进台词：{亲密度}。」
 `;
@@ -449,10 +449,10 @@ const PERF_LINES = 5_200;
 
 function buildPerfSource(count: number): { source: string; editOffsets: readonly number[] } {
   const lines: string[] = ['# 机 开场', '# 视 灵梦', '# 常量 上限 整数 = 5'];
-  lines.push('# 表 亲密度 由 好感');
-  lines.push('    0..2 = "疏远"');
-  lines.push('    3.. = "亲近"');
-  lines.push('    否 = "陌生"');
+  lines.push('# 对照表 亲密度 依据 好感');
+  lines.push('    0..2 -> = "疏远"');
+  lines.push('    3.. -> = "亲近"');
+  lines.push('    否 -> = "陌生"');
   lines.push('');
   for (let i = 0; i < count; i++) {
     if (i % 13 === 0) lines.push('空行');
@@ -814,7 +814,7 @@ function foreachRig(): { adapter: GameAdapter; backend: KojoEmitBackend; fullCom
 }
 
 describe('incremental：声明单元内编辑（只重建该单元 + 依赖它的展开点）', () => {
-  it('`# 表` 行内编辑：只重建引用它的单元，结果与全量逐字等价', () => {
+  it('`# 对照表` 行内编辑：只重建引用它的单元，结果与全量逐字等价', () => {
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
     const built = compiler.update(SAMPLE_TABLE);
     expect(built.result.ok).toBe(true);
@@ -846,12 +846,12 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
     expectSameResult(update.result, fullCompile(text));
   });
 
-  it('声明链条：`# 池` 体引用 `# 表`，改表时池的调用点也要重算（跨声明依赖闭包）', () => {
+  it('声明链条：`# 池` 体引用 `# 对照表`，改表时池的调用点也要重算（跨声明依赖闭包）', () => {
     const source = `# 机 开场
 # 视 灵梦
-# 表 语气 由 好感
-    0..2 = "淡"
-    否 = "近"
+# 对照表 语气 依据 好感
+    0..2 -> = "淡"
+    否 -> = "近"
 # 池 寒暄
     ? 好感 > 1
         > 你好（{语气}）。
@@ -895,13 +895,13 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
     expectSameResult(update.result, fullCompile(text));
   });
 
-  it('`# 常量` 参与 `# 表` 端点：改常量时表引用点跟着重建', () => {
+  it('`# 常量` 参与 `# 对照表` 端点：改常量时表引用点跟着重建', () => {
     const source = `# 机 开场
 # 视 灵梦
 # 常量 门槛 整数 = 3
-# 表 语气 由 好感
-    0..{门槛} = "淡"
-    否 = "近"
+# 对照表 语气 依据 好感
+    0..{门槛} -> = "淡"
+    否 -> = "近"
 > 现在：{语气}
 `;
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
@@ -971,13 +971,13 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
     expectSameResult(update.result, fullCompile(text));
   });
 
-  it('`# 表` 里 Enter 加一行（换行 + 声明变更）：只重建该表 + 引用它的单元', () => {
+  it('`# 对照表` 里 Enter 加一行（换行 + 声明变更）：只重建该表 + 引用它的单元', () => {
     const source = `# 机 开场
 # 视 灵梦
-# 表 亲密度 由 好感
-    0..2 = "疏远"
-    5.. = "亲近"
-    否 = "陌生"
+# 对照表 亲密度 依据 好感
+    0..2 -> = "疏远"
+    5.. -> = "亲近"
+    否 -> = "陌生"
 > 现在：{亲密度}
 > 收尾。
 `;
@@ -1087,10 +1087,10 @@ describe('incremental：声明单元内编辑（只重建该单元 + 依赖它�
 
   it('声明编辑后接随机编辑：每一步都与全量等价（确定性种子）', () => {
     const mixed = `${SAMPLE_POOL_TEMPLATE}
-# 表 亲密度 由 好感
-    0..2 = "疏远"
-    3.. = "亲近"
-    否 = "陌生"
+# 对照表 亲密度 依据 好感
+    0..2 -> = "疏远"
+    3.. -> = "亲近"
+    否 -> = "陌生"
 @随机
     > 候选甲。
     > 候选乙。
@@ -1133,10 +1133,10 @@ function buildDeclPerfSource(count: number): { source: string; poolBodyOffset: n
     '        > 亲近的招呼。',
     '    ? 否',
     '        > 普通的招呼。',
-    '# 表 亲密度 由 好感',
-    '    0..2 = "疏远"',
-    '    3.. = "亲近"',
-    '    否 = "陌生"',
+    '# 对照表 亲密度 依据 好感',
+    '    0..2 -> = "疏远"',
+    '    3.. -> = "亲近"',
+    '    否 -> = "陌生"',
     '',
   ];
   for (let i = 0; i < count; i++) {
@@ -1167,10 +1167,10 @@ describe('incremental：结构编辑随机 golden（Enter / 删整行 / 声明�
       `# 机 开场
 # 视 灵梦
 # 常量 上限 整数 = 5
-# 表 亲密度 由 好感
-    0..2 = "疏远"
-    3.. = "亲近"
-    否 = "陌生"
+# 对照表 亲密度 依据 好感
+    0..2 -> = "疏远"
+    3.. -> = "亲近"
+    否 -> = "陌生"
 # 池 招呼
     ? 恋慕 > 1
         > 亲近的招呼（{亲密度}）。

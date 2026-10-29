@@ -9,7 +9,7 @@
  * - 五锚点 / 声明词 / 保留词 / 台词（说话人 + 全角冒号 + 「」）/ 旁白 / 插值 / 提示 / 注释；
  * - `@原生` 缩进围栏：体内 `#`/`?`/`>` 一律 `kojo2.raw`，去缩进回根；
  * - 未闭合台词只到行尾（下一行不再进台词态）；
- * - CRLF 与代理对列的坐标；`# 表` 两列行；
+ * - CRLF 与代理对列的坐标；`# 对照表` 两列行；
  * - 语言配置（comments / wordPattern / 成对记号 / 回车层级）、档位与配色。
  */
 
@@ -127,7 +127,7 @@ describe('五锚点：每行的第一眼是锚点', () => {
 
   it('声明词 / 调度词各自一档，未知词不上声明色', () => {
     expect(ofToken(tokensOf('# 变量 临时 整数'), KOJO2_TOKEN.declaration)).toEqual(['变量']);
-    expect(ofToken(tokensOf('# 表 心情 由 恋慕'), KOJO2_TOKEN.declaration)).toEqual(['表']);
+    expect(ofToken(tokensOf('# 对照表 心情 依据 恋慕'), KOJO2_TOKEN.declaration)).toEqual(['对照表']);
     expect(ofToken(tokensOf('@算'), KOJO2_TOKEN.declaration)).toEqual(['算']);
     expect(ofToken(tokensOf('@着色 0xFF8080'), KOJO2_TOKEN.declaration)).toEqual(['着色']);
     expect(ofToken(tokensOf('! 早安问候'), KOJO2_TOKEN.declaration)).toEqual(['早安问候']);
@@ -146,9 +146,9 @@ describe('五锚点：每行的第一眼是锚点', () => {
 /* ============================== 保留词 / 数字 / 运算符 ============================== */
 
 describe('保留词、数字与中文运算符', () => {
-  it('`? 否` / `由` / 类型词 / 存储期词 / 织入修饰词各归各档（类型词自 2026-10-27 第三色批起独立一档）', () => {
+  it('`? 否` / `依据` / 类型词 / 存储期词 / 织入修饰词各归各档（类型词自 2026-10-27 第三色批起独立一档）', () => {
     expect(ofToken(tokensOf('? 否'), KOJO2_TOKEN.keyword)).toEqual(['否']);
-    expect(ofToken(tokensOf('# 表 心情 由 恋慕'), KOJO2_TOKEN.keyword)).toEqual(['由']);
+    expect(ofToken(tokensOf('# 对照表 心情 依据 恋慕'), KOJO2_TOKEN.keyword)).toEqual(['依据']);
     const decl = tokensOf('# 变量 今天已触发 整数 = 0 存档');
     // 类型词从"保留词"里拆出来：`整数` 说的是**这一列存什么**，`存档` 说的是**它活多久**，
     // 两件事挤一枚色就是把第三色档白白省掉了。判据两侧都留：type 里恰是类型词，
@@ -264,15 +264,15 @@ describe('`@原生` 缩进围栏：整块 raw，体内锚点不解析', () => {
   });
 });
 
-/* ============================== # 表 两列行 ============================== */
+/* ============================== # 对照表 两列行 ============================== */
 
-describe('`# 表` 两列行：范围列 / 值列分档', () => {
+describe('`# 对照表` 两列行：范围列 / 值列分档', () => {
   it('数值范围与默认分支各发范围档，值列发文本档', () => {
-    const rows = tokensOfLines(['# 表 心情 由 恋慕', '    0..99     疏远', '    100..499  平常', '    否        未知']);
+    const rows = tokensOfLines(['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '    100..499 -> 平常', '    否 -> 未知']);
     expect(ofToken(rows[1]!, KOJO2_TOKEN.number)).toEqual(['0..99']);
     expect(ofToken(rows[1]!, KOJO2_TOKEN.speech)).toEqual(['疏远']);
     expect(ofToken(rows[2]!, KOJO2_TOKEN.number)).toEqual(['100..499']);
-    expect(ofToken(rows[3]!, KOJO2_TOKEN.keyword)).toEqual(['否']);
+    expect(ofToken(rows[3]!, KOJO2_TOKEN.keyword)).toEqual(['否', '->']);
     expect(ofToken(rows[3]!, KOJO2_TOKEN.speech)).toEqual(['未知']);
   });
 });
@@ -452,7 +452,7 @@ describe('档位与配色：一档一色、与 v1 不撞名', () => {
     // 每档至少一行样本（同一行可覆盖多档）；`raw` 必须在围栏态里发，单独走多行驱动
     const sampleLines = [
       '@算', // anchor + declaration
-      '# 表 心情 由 恋慕', // declaration + keyword
+      '# 对照表 心情 依据 恋慕', // declaration + keyword
       // 类型档的发射点（2026-10-27 第三色批）：类型词 + 存储期词同屏，两档必须各发各的
       '# 变量 人数 整数 存档',
       '? 否', // anchor + keyword

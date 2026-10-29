@@ -15,7 +15,7 @@
  * | `core/migration/color` | `着色` 块 → `@着色` | core 迁移器（整块单独迁） |
  * | `core/migration/random` | `随机：` / `组：` → `@随机` / `@组` | core 迁移器（整块单独迁） |
  * | `core/migration/branch` | `分支：` + `[条件]` → `# 池` + `! 池名` | core 语义升级层（`migrateKojoSourceSemantic`） |
- * | `core/migration/switch` | `当 / 是` → `# 表` + 引用点 | core 语义升级层 |
+ * | `core/migration/switch` | `当 / 是` → `# 对照表` + 引用点 | core 语义升级层 |
  * | `core/migration/ask` | `初回 / 询问 / 确认` → `@原生` | core 语义升级层 |
  * | `core/table/missing-default` | 补 `否 <末行值>` | 本层（core 无"补兜底"改写） |
  * | `core/pool/no-default` | 补 `? 否` + 末条分支正文 | 本层（core 无"补兜底"改写） |
@@ -89,6 +89,7 @@ import {
   FIXTURE_ADAPTER,
   FIXTURE_BACKEND,
   KOJO_DOMAIN_SYMBOL_NAMES,
+  KOJO_TABLE_ARROW_CANONICAL,
   classifyV1,
   compileKojoSource,
   decodeIntegerLiteral,
@@ -436,7 +437,7 @@ const BLOCK_HEAD_RE =
   /^(?:\?(?:\s|$)|#\s+(?:表|池|模)(?:\s|$)|@(?:算|随机|着色|组|循|巡|复|函|织|原生)(?:\s|$)|选项\s*：?\s*$)/u;
 
 /**
- * 2.0 的**块声明**词（有缩进体的 `# 表` / `# 池` / `# 模`；§3.2）。
+ * 2.0 的**块声明**词（有缩进体的 `# 对照表` / `# 池` / `# 模`；§3.2）。
  *
  * 位序来自 core `KOJO_DECL_WORDS` 的公开契约（`[幕, 视, 机, 变量, 常量, 表, 池, 模, 方言]`，
  * 与 `kojo2-format.ts` 的下标解构同一份），**词形一个字都不抄**。
@@ -450,7 +451,7 @@ const BLOCK_DECL_WORDS: ReadonlySet<string> = new Set(
 /**
  * 2.0 的**单行声明**（声明区扫描用）：词表里除块声明外的全部词，从 `KOJO2_DECL_WORDS`
  * **派生**（单一真源）——`方言` 等新词自动纳入，不必再手抄「幕/视/机/变量/常量」五枚。
- * 改前手抄五枚 ⇒ 新声明（`# 方言`）被当成正文，提升的 `# 表` 会被插到它前面。
+ * 改前手抄五枚 ⇒ 新声明（`# 方言`）被当成正文，提升的 `# 对照表` 会被插到它前面。
  */
 const SINGLE_DECL_RE = new RegExp(
   `^#\\s+(?:${KOJO2_DECL_WORDS.filter((word) => !BLOCK_DECL_WORDS.has(word))
@@ -701,7 +702,7 @@ function blockMigrateCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeA
   ];
 }
 
-/* ---------------------------- 当 → # 表 / 分支 → # 池（提升声明 + 原处引用） ---------------------------- */
+/* ---------------------------- 当 → # 对照表 / 分支 → # 池（提升声明 + 原处引用） ---------------------------- */
 
 /**
  * 声明区插入点：文件顶部连续的 **空行 / `//` 注释 / 单行声明**之后的第一行。
@@ -746,7 +747,7 @@ function declBlockLines(doc: SourceDoc, at: number, decl: readonly string[]): st
 }
 
 /**
- * `当 / 是` → `# 表`、`分支：` + `[条件]` → `# 池`：core 语义升级层把声明**提升到片段顶层**、
+ * `当 / 是` → `# 对照表`、`分支：` + `[条件]` → `# 池`：core 语义升级层把声明**提升到片段顶层**、
  * 原块位置换成引用行（`> {表}` / `! 池`）。本层照搬这个形状到真实文件里：
  * ① 声明插进声明区；② 原块换成引用行（保持原缩进）。
  */
@@ -779,7 +780,7 @@ function hoistCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActionFa
   const insertAt = declarationInsertLine(ctx.doc);
   const title =
     diag.code === 'core/migration/switch'
-      ? `\`当\` → \`# 表 ${rewrite.declName ?? ''}\`（第 ${line}–${end} 行）`
+      ? `\`当\` → \`# 对照表 ${rewrite.declName ?? ''}\`（第 ${line}–${end} 行）`
       : `\`分支：\` → \`# 池 ${rewrite.declName ?? ''}\`（第 ${line}–${end} 行）`;
   // 声明区就在块头之前（文件顶部没有可跳过的声明 / 注释）⇒ 两段编辑会落在同一行上。
   // 整行替换是"一次 executeEdits 里多段不重叠"的模型，重叠段会被丢弃；这里合成**一段**：
@@ -803,7 +804,7 @@ function hoistCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActionFa
 
 function tableDefaultCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActionFact[] {
   const at = diag.span!.start.line;
-  const headLine = findDeclLineUpward(ctx.doc, at, /^#\s+表(?:\s|$)/u);
+  const headLine = findDeclLineUpward(ctx.doc, at, /^#\s+对照表(?:\s|$)/u);
   if (headLine === null) return [];
   const head = ctx.doc.lines[headLine - 1] ?? '';
   if (indentWidth(head) !== 0) return [];
@@ -822,12 +823,12 @@ function tableDefaultCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeA
   }
   if (lastRow < 0 || hasDefault) return [];
   const rowText = (ctx.doc.lines[lastRow - 1] ?? '').slice(rowIndent.length);
-  const columns = /^(\S+)\s+(\S.*)$/u.exec(rowText);
+  const columns = /^(\S+)\s+(?:->|→)\s+(\S.*)$/u.exec(rowText);
   if (columns === null) return [];
   const value = columns[2]!.trim();
   if (value.length === 0) return [];
-  const newLine = `${rowIndent}否 ${value}`;
-  const name = /^#\s+表\s+(\S+)/u.exec(head)?.[1] ?? '';
+  const newLine = `${rowIndent}否 ${KOJO_TABLE_ARROW_CANONICAL} ${value}`;
+  const name = /^#\s+对照表\s+(\S+)/u.exec(head)?.[1] ?? '';
   return [
     makeFact(
       'complete',
@@ -1016,7 +1017,7 @@ function textAtSpan(doc: SourceDoc, span: KojoSpan | null): string | null {
 }
 
 /**
- * 文件里已经声明过的名字（`# 变量` / `# 常量` / `# 表` / `# 池` / `# 模` / `@函`）。
+ * 文件里已经声明过的名字（`# 变量` / `# 常量` / `# 对照表` / `# 池` / `# 模` / `@函`）。
  *
  * `# 视` 的目标与 `# 机` 的事件不是**可赋值名字**（sema 的名字链不索引它们），所以不进来；
  * `@织` 没有名字。解析器抛错 ⇒ null（不猜"没声明"）。

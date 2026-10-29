@@ -7,7 +7,7 @@
  *
  * 覆盖面（任务口径）：
  * 1. **各符号重命名**：`# 变量 / 常量 / 表 / 池 / 模` 与 `@函` 的声明 + 全部可证引用位同步；
- * 2. **引用面**：插值（台词 / 旁白 / 表达式）、`!` 调用、`@巡` 集合、表 `由` 主语与端点
+ * 2. **引用面**：插值（台词 / 旁白 / 表达式）、`!` 调用、`@巡` 集合、表 `依据` 主语与端点
  *    （常量）、数组长度、赋值目标与右值、条件链 test；
  * 3. **不误改**：注释 / 字符串字面量 / `@原生` 原生行 / 表值列 / `@函` 形参 / `@巡` 绑定名；
  * 4. **闸**：非法名 / 重名 / 同名 / 引用扫描不可证 ⇒ 零编辑 + blockers；
@@ -47,10 +47,10 @@ const LINES: readonly string[] = [
   '# 变量 队伍状态 字符串[亲近线]', // 10
   '# 变量 疏远 字符串', // 11
   '', // 12
-  '# 表 心情 由 好感度', // 13
-  '    0..99 疏远', // 14
-  '    亲近线.. 亲近', // 15
-  '    否 未知', // 16
+  '# 对照表 心情 依据 好感度', // 13
+  '    0..99 -> 疏远', // 14
+  '    亲近线.. -> 亲近', // 15
+  '    否 -> 未知', // 16
   '', // 17
   '# 池 早安问候', // 18
   '    ? 好感度 < 100', // 19
@@ -188,13 +188,13 @@ describe('各符号重命名：声明 + 全部可证引用位同步', () => {
     ]);
     expect(result.symbol?.kind).toBe('constant');
     expect(renamed).toContain('# 变量 队伍状态 字符串[亲密阈值]');
-    expect(renamed).toContain('亲密阈值.. 亲近');
+    expect(renamed).toContain('亲密阈值.. -> 亲近');
   });
 
-  it('# 表 心情：声明 + 台词插值（2 段）', () => {
+  it('# 对照表 心情：声明 + 台词插值（2 段）', () => {
     const { result, renamed } = expectRename('心情', '情绪', positionOnLine(13, '心情'), [13, 35]);
     expect(result.symbol?.kind).toBe('table');
-    expect(renamed).toContain('# 表 情绪 由 好感度');
+    expect(renamed).toContain('# 对照表 情绪 依据 好感度');
     expect(renamed).toContain('她今天看起来{情绪}。');
   });
 
@@ -258,7 +258,7 @@ describe('各符号重命名：声明 + 全部可证引用位同步', () => {
   it('# 变量 疏远：表值列的同名词不是引用（只改声明，1 段）', () => {
     const { result, renamed } = expectRename('疏远', '疏远的人', positionOnLine(11, '疏远'), [11]);
     expect(result.edits.some((edit) => edit.range.startLine === 14)).toBe(false);
-    expect(renamed).toContain('    0..99 疏远');
+    expect(renamed).toContain('    0..99 -> 疏远');
   });
 });
 

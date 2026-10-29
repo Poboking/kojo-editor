@@ -120,7 +120,7 @@ describe('接线 · sema 与主链在同一次编译里（不双报、不静默�
   });
 
   it('lowering 独有的诊断仍在（表区间重叠：sema 不接这一格）', () => {
-    const result = compile([HEAD, '# 表 甲 由 数值', '    0..5 "一"', '    3..8 "二"', '    否 "三"']);
+    const result = compile([HEAD, '# 对照表 甲 依据 数值', '    0..5 -> "一"', '    3..8 -> "二"', '    否 -> "三"']);
 
     expect(result.ok).toBe(false);
     expect(codesOf(result)).toEqual(['core/table/overlap']);

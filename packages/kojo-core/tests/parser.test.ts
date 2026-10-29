@@ -115,7 +115,7 @@ describe('parse：2.0 正典 fixture 全绿', () => {
     expect(forEachLoop?.collection.text).toBe('队伍');
   });
 
-  it('# 表：静态分档 + 否 兜底 + 开放区间', () => {
+  it('# 对照表：静态分档 + 否 兜底 + 开放区间', () => {
     const file = parseSource(fixture('kojo2-canonical.kojo2'));
     const table = file.decls.find((decl) => decl.kind === 'table') as KojoTableDecl;
     expect(table.name).toBe('心情');
@@ -334,25 +334,25 @@ describe('parse：文件结构与声明（§3）', () => {
 
   it('声明写进块 → core/decl/not-top-level', () => {
     expect(codesOf(`${MACHINE}@算\n    # 变量 x 整数\n`)).toContain('core/decl/not-top-level');
-    expect(codesOf(`${MACHINE}# 池 p\n    ? 1\n        # 表 t 由 x\n`)).toContain('core/decl/not-top-level');
+    expect(codesOf(`${MACHINE}# 池 p\n    ? 1\n        # 对照表 t 依据 x\n`)).toContain('core/decl/not-top-level');
   });
 
-  it('# 表：缺列 / 否 空值 / 空表由 parser 只出 shape 错', () => {
-    expect(codesOf(`${MACHINE}# 表 T 由 x\n    0..99\n`)).toContain('core/table/value-empty');
-    expect(codesOf(`${MACHINE}# 表 T 由 x\n    否\n`)).toContain('core/table/empty-default');
-    expect(codesOf(`${MACHINE}# 表 T 由 x\n    .. 值\n`)).toContain('core/table/dynamic-endpoint');
-    expect(codesOf(`${MACHINE}# 表 T x\n`)).toContain('core/lex/anchor');
+  it('# 对照表：缺列 / 否 空值 / 空表由 parser 只出 shape 错', () => {
+    expect(codesOf(`${MACHINE}# 对照表 T 依据 x\n    0..99\n`)).toContain('core/table/value-empty');
+    expect(codesOf(`${MACHINE}# 对照表 T 依据 x\n    否\n`)).toContain('core/table/empty-default');
+    expect(codesOf(`${MACHINE}# 对照表 T 依据 x\n    .. -> 值\n`)).toContain('core/table/dynamic-endpoint');
+    expect(codesOf(`${MACHINE}# 对照表 T x\n`)).toContain('core/lex/anchor');
   });
 
-  it('# 表：精确值编码为两端同值；空行结束表', () => {
-    const file = parseOk(`${MACHINE}# 表 T 由 x\n    5 五\n    否 无\n\n> 表外\n`);
+  it('# 对照表：精确值编码为两端同值；空行结束表', () => {
+    const file = parseOk(`${MACHINE}# 对照表 T 依据 x\n    5 -> 五\n    否 -> 无\n\n> 表外\n`);
     const table = file.decls.find((decl) => decl.kind === 'table') as KojoTableDecl;
     expect([table.rows[0]!.from?.text, table.rows[0]!.to?.text]).toEqual(['5', '5']);
     expect(file.scenes[0]!.items).toHaveLength(1);
   });
 
-  it('# 表 值列：首尾 trim、内部保留、引号解码', () => {
-    const file = parseOk(`${MACHINE}# 表 T 由 x\n    0   "  中间 保留  "\n    1   裸文本 内部\n    否  未知\n`);
+  it('# 对照表 值列：首尾 trim、内部保留、引号解码', () => {
+    const file = parseOk(`${MACHINE}# 对照表 T 依据 x\n    0 -> "  中间 保留  "\n    1 -> 裸文本 内部\n    否 -> 未知\n`);
     const table = file.decls.find((decl) => decl.kind === 'table') as KojoTableDecl;
     expect(table.rows[0]!.value).toBe('  中间 保留  ');
     expect(table.rows[1]!.value).toBe('裸文本 内部');
@@ -572,8 +572,8 @@ describe('parse：调用体（§7.2）与全角标点', () => {
     expect(codesOf(`${MACHINE}@算\n    x ＝ 1\n`)).toContain('core/migration/fullwidth-punct');
     // 台词正文里的全角标点是正文，不报
     expect(codesOf(`${MACHINE}灵梦：「今天，天气不错。」\n`)).toEqual([]);
-    // # 表 值列允许全角标点
-    expect(codesOf(`${MACHINE}# 表 T 由 x\n    0 这里，有逗号\n    否 未知\n`)).toEqual([]);
+    // # 对照表 值列允许全角标点
+    expect(codesOf(`${MACHINE}# 对照表 T 依据 x\n    0 -> 这里，有逗号\n    否 -> 未知\n`)).toEqual([]);
   });
 });
 
@@ -665,7 +665,7 @@ describe('parse：整数超安全范围不静默舍入（2026-10-26 批）', () 
 
   it('表值列超界 → bad-literal（不静默退化成字符串列）', () => {
     const file = parseSource(
-      `${MACHINE}# 表 心情 由 好感\n    0..9 ${BIG}\n    否 未知\n> 正文\n`,
+      `${MACHINE}# 对照表 心情 依据 好感\n    0..9 -> ${BIG}\n    否 -> 未知\n> 正文\n`,
     );
     expect(file.diagnostics.map((item) => item.code)).toContain('core/expr/bad-literal');
     const table = file.decls.find((decl) => decl.kind === 'table');

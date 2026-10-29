@@ -1,5 +1,5 @@
 /**
- * Kojo 2.0 宿主侧**存储注册表**（K2-STORAGE-HOST）：`# 表 / # 池 / # 变量 / # 常量` 的项目级索引。
+ * Kojo 2.0 宿主侧**存储注册表**（K2-STORAGE-HOST）：`# 对照表 / # 池 / # 变量 / # 常量` 的项目级索引。
  *
  * ## 这一层为什么必须存在
  *
@@ -71,7 +71,7 @@ export type Kojo2StorageKind = 'var' | 'const' | 'table' | 'pool';
  *
  * - `mutable`：`# 变量`，可赋值；
  * - `immutable`：`# 常量`，编译期常量、任何赋值都是 `core/expr/assign-to-constant`；
- * - `read-only`：`# 表` / `# 池`，压根不是存储单元（引用点展开成隐藏槽），不可赋值。
+ * - `read-only`：`# 对照表` / `# 池`，压根不是存储单元（引用点展开成隐藏槽），不可赋值。
  */
 export type Kojo2StorageMutability = 'mutable' | 'immutable' | 'read-only';
 
@@ -94,7 +94,7 @@ export interface Kojo2StorageVarFacts {
   readonly slot: number | null;
 }
 
-/** `# 表` 的静态事实（表行/兜底由 core 校验，这里只留计数） */
+/** `# 对照表` 的静态事实（表行/兜底由 core 校验，这里只留计数） */
 export interface Kojo2StorageTableFacts {
   readonly subject: string;
   readonly rows: number;
@@ -117,12 +117,12 @@ export interface Kojo2StorageSymbol {
   readonly name: string;
   readonly kind: Kojo2StorageKind;
   readonly uri: string;
-  /** `int` / `string`；`# 池` 没有值类型（null），`# 表` 取首行值列的类型 */
+  /** `int` / `string`；`# 池` 没有值类型（null），`# 对照表` 取首行值列的类型 */
   readonly valueType: KojoValueType | null;
   /** 声明初值（变量初值 / 常量值）；表/池与无初值变量为 null */
   readonly initialValue: KojoLiteral | null;
   readonly mutability: Kojo2StorageMutability;
-  /** 整条声明（`# 表` / `# 池` 含块体）——「按位置跳声明」的兜底落点 */
+  /** 整条声明（`# 对照表` / `# 池` 含块体）——「按位置跳声明」的兜底落点 */
   readonly span: Kojo2StorageRange;
   /** 名字段的精确区间（声明词之后的那个词）——转定义 / 引用高亮用 */
   readonly nameSpan: Kojo2StorageRange;
@@ -265,7 +265,7 @@ export interface Kojo2StorageRegistry {
   findDeclaration(name: string): Kojo2StorageDeclaration;
   /**
    * 位置 → 声明。先命中**名字段**（含尾列），再退化到整条声明区间
-   * （点在 `# 表` 的某一行数据上也能跳回声明）。未命中 → null。
+   * （点在 `# 对照表` 的某一行数据上也能跳回声明）。未命中 → null。
    */
   findSymbolAt(uri: string, line: number, column: number): Kojo2StorageSymbol | null;
   /** 补全候选（前缀过滤按名字 `startsWith`；空前缀 = 全量） */
@@ -321,7 +321,7 @@ const KIND_RANK: Readonly<Record<Kojo2StorageKind, number>> = Object.freeze({
 const KIND_TEXT: Readonly<Record<Kojo2StorageKind, string>> = Object.freeze({
   var: '变量',
   const: '常量',
-  table: '表',
+  table: '对照表',
   pool: '池',
 });
 

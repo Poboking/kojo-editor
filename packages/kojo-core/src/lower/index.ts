@@ -138,7 +138,7 @@ export * from './native.js';
 export * from './presentation.js';
 /* 展开降糖（`选项` 的 ETB 计划是 adapter 契约的 additive 字段，归公共面） */
 export * from './expand/options.js';
-/* 等值分派计划（K2-DISPATCH-WIRING）：`# 表` / `# 池` 的可证等值判定与结构请求。
+/* 等值分派计划（K2-DISPATCH-WIRING）：`# 对照表` / `# 池` 的可证等值判定与结构请求。
    契约字段 `program.tableDispatch` / `presentation.poolDispatch` 的请求/计划形状只在这里定。 */
 export * from './expand/table-plan.js';
 export * from './expand/pool-plan.js';

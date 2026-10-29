@@ -197,8 +197,8 @@ describe('kojo2 source map 模型 · 越界与缺失映射', () => {
   it('不产字节且没有 origins 的源行（注释 / 常量声明）显式 undefined，不借邻居行', () => {
     expect(MODEL.kojoToGenerated({ line: 1, column: 1 })).toBeUndefined(); // 文件头注释
     expect(MODEL.kojoToGenerated({ line: sourceLineOf('# 常量 无关'), column: 1 })).toBeUndefined();
-    // `# 表`/`# 池`/`# 模` 的声明行不是“无映射”：表展开的 ENDIF 与展开 origins 会覆盖它们
-    expect(MODEL.kojoToGenerated({ line: sourceLineOf('# 表 心情 由 恋慕'), column: 1 })).toBeDefined();
+    // `# 对照表`/`# 池`/`# 模` 的声明行不是“无映射”：表展开的 ENDIF 与展开 origins 会覆盖它们
+    expect(MODEL.kojoToGenerated({ line: sourceLineOf('# 对照表 心情 依据 恋慕'), column: 1 })).toBeDefined();
   });
 
   it('源侧非法/越界位置 → undefined；生成侧越界 → clamp', () => {

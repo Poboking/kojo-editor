@@ -454,7 +454,7 @@
       "type": "TOKEN",
       "content": {
         "type": "PATTERN",
-        "value": "#[ \\t\\u3000]+表(?:[ \\t\\u3000][^\\n]*)?"
+        "value": "#[ \\t\\u3000]+对照表(?:[ \\t\\u3000][^\\n]*)?"
       }
     },
     "pool_head": {
@@ -890,6 +890,14 @@
         },
         {
           "type": "FIELD",
+          "name": "arrow",
+          "content": {
+            "type": "SYMBOL",
+            "name": "table_arrow"
+          }
+        },
+        {
+          "type": "FIELD",
           "name": "value",
           "content": {
             "type": "SYMBOL",
@@ -897,6 +905,17 @@
           }
         }
       ]
+    },
+    "table_arrow": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 1,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:->|→)"
+        }
+      }
     },
     "table_range": {
       "type": "TOKEN",

@@ -11,7 +11,7 @@ import { Language, Parser, type Node } from 'web-tree-sitter';
  *  1. 未闭合台词 ⇒ 行末可定位的 `MISSING:speech_close`，下一行照常解析；
  *  2. 未闭合插值 ⇒ 定位在作者那一行，不跨行、不整篇 ERROR；
  *  3. 声明块/`@原生` 缺体 ⇒ 故障落在块头那一行（ERROR 包住块头，块头节点仍在 CST 里）；
- *  4. `# 表` 缺值 ⇒ `MISSING:table_value`；
+ *  4. `# 对照表` 缺值 ⇒ `MISSING:table_value`；
  *  5. 结构区 Tab 缩进 ⇒ 只打 Tab 那一行，后面的 `>` 行照常解析。
  *
  * 通用硬口径：每一枚故障节点的 startRow === endRow（不跨行），且故障行之后

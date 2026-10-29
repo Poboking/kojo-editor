@@ -31,6 +31,11 @@ import { describe, expect, it } from 'vitest';
  *   STATE 83 / SYMBOL 71 / TOKEN 51 **三项都没变**（`tree-sitter generate` 实测）：涨在
  *   词法字符集多出一条 `否`+标识符续字符的路径（小表与 lex modes 跟着重排），不是加了规则。
  *   gzip(9) 13,290 → 13,432。不抬就得留着"合法行被静默劈开"的缺陷，故按本协议记账。
+ *
+ * **2026-10-29 抬到 50,654 B**（对照表落地批：`# 表` → `# 对照表`，表行改为 `<范围> -> <值>`）：
+ *   涨因两处——声明词 `表` → `对照表`（词长多两字，词法器字符集与 token 表重排），以及
+ *   表行新增一枚 `table_arrow` 记号（`->` / `→` 两形，`tkPrec(1)` 压过贪婪 `table_value`）。
+ *   gzip(9) 13,432 → 13,839。
  */
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -38,7 +43,7 @@ const pkgRoot = resolve(here, '..');
 const wasmPath = join(pkgRoot, 'tree-sitter-kojo2.wasm');
 
 /** 棘轮阈值：出货 wasm 允许的最大原始字节数（只降不升）。 */
-const MAX_WASM_BYTES = 48_835;
+const MAX_WASM_BYTES = 50_654;
 
 describe('出货 wasm 体积棘轮（tree-sitter-kojo2.wasm）', () => {
   const bytes = readFileSync(wasmPath);

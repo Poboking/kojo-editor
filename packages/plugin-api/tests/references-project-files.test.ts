@@ -16,7 +16,7 @@ import type {
   EditorRenameResult,
 } from '@kojo/plugin-api';
 
-const FILE: EditorProjectFile = { path: 'D:/p/a.kojo2', text: '# 表 心情 由 1' };
+const FILE: EditorProjectFile = { path: 'D:/p/a.kojo2', text: '# 对照表 心情 依据 1' };
 
 describe('EditorProjectFile：快照的两格（路径 + 文本）', () => {
   it('形状就是 path + text（不含语言 / 版本——那是请求身份的事）', () => {

@@ -1,5 +1,5 @@
 /**
- * `# 表` 的静态校验 + 降糖计划（设计稿 §6 / §16.2 C2.5）。
+ * `# 对照表` 的静态校验 + 降糖计划（设计稿 §6 / §16.2 C2.5）。
  *
  * 本模块**只产纯数据**：`TableLoweringPlan` + 诊断，不拼任何 ERB 字符串。
  * 落点（`SELECTCASE` / `IF` 链 / 隐藏槽 `__kojo_table_*`）由 adapter 的 emitter 消费 plan 完成。
@@ -57,7 +57,7 @@ export interface TablePlanRow {
 }
 
 /**
- * 一张 `# 表` 的降糖计划。
+ * 一张 `# 对照表` 的降糖计划。
  *
  * - `slot`：隐藏槽名（`__kojo_table_<名>`），"源表达式只求值一次"先算进它再分档；
  * - `landing`：`selectcase`（全是闭区间/精确值且无重叠，§6.3 优先）或 `if`（有开放区间）；
@@ -153,7 +153,7 @@ function makeDiagnostic(code: KojoDiagnostic['code'], message: string, span: Koj
   return { code, severity: severityOf(code), message, span };
 }
 
-/** `# 表` 校验 + 降糖计划（纯函数） */
+/** `# 对照表` 校验 + 降糖计划（纯函数） */
 export function validateTable(decl: KojoTableDecl, context?: TableLoweringContext): TableValidationResult {
   const diagnostics: KojoDiagnostic[] = [];
   const rows = decl.rows;

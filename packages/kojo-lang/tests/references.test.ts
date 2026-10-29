@@ -9,7 +9,7 @@
  * 1. **符号面**：七类声明（`# 幕 / 变量 / 常量 / 表 / 池 / 模`、`@函`）+ 事件名
  *    （`# 机` 声明 / `@织` 监听）；声明位 → 同一符号 + 精确 `declSpan`；
  * 2. **可证引用位**：`{…}` 插值（台词 / 旁白 / 模体）、`! 名` / `! 名(实参)` 调用、
- *    `@巡` 集合、`# 表 由 <表达式>`、`? 条件`、`@算` 赋值两侧 / 裸调用、`@返` 返回值、
+ *    `@巡` 集合、`# 对照表 依据 <表达式>`、`? 条件`、`@算` 赋值两侧 / 裸调用、`@返` 返回值、
  *    `@着色` 颜色表达式、`# 变量` 类型里的 `[<数组长度>]`；
  * 3. **不误报**：正文纯文本、注释行、`@原生` 体、双引号字符串、`对象.成员` 的成员名、
  *    表体字面量、`# 视` 名字、`? 否`、空白位 → 一律 `null` 或不进 `refs`；
@@ -40,7 +40,7 @@ import {
  * - `心情` 在表声明、插值、条件里各命中一次，在台词正文与注释里不命中；
  * - `指令` 在 `# 机` / `@织` 各命中一次，在台词正文与注释里不命中；
  * - `今天已触发` 在插值、赋值两侧、成员名（`我.今天已触发`）上区分 `ref` 与不命中；
- * - `亲近线` 在 `# 表 由` 与 `@返` 里各命中一次。
+ * - `亲近线` 在 `# 对照表 依据` 与 `@返` 里各命中一次。
  */
 const SOURCE = [
   '// 引用查找夹具：声明位 / 引用位 / 不误报位',
@@ -52,10 +52,10 @@ const SOURCE = [
   '# 变量 今天已触发 整数 = 0 存档',
   '# 变量 队伍 整数[4]',
   '',
-  '# 表 心情 由 亲近线',
-  '    0..99 疏远',
-  '    100..499 平常',
-  '    否 未知',
+  '# 对照表 心情 依据 亲近线',
+  '    0..99 -> 疏远',
+  '    100..499 -> 平常',
+  '    否 -> 未知',
   '',
   '# 池 早安问候',
   '    ? 好感 < 100',
@@ -321,11 +321,11 @@ describe('可证引用位：插值 / 调用 / 表达式', () => {
     expect(result.refs[1]?.span.startLine).toBe(40);
   });
 
-  it('`# 表 由 <表达式>` 的由后表达式 → `ref`', () => {
-    const result = found(positionAt('# 表 心情 由 亲近线', 0, 10));
+  it('`# 对照表 依据 <表达式>` 的表达式 → `ref`', () => {
+    const result = found(positionAt('# 对照表 心情 依据 亲近线', 0, 13));
     expect(result.symbol.name).toBe('亲近线');
     expect(result.symbol.kind).toBe('constant');
-    expect(rolesOf(positionAt('# 表 心情 由 亲近线', 0, 10))).toEqual(['decl', 'ref', 'ref']);
+    expect(rolesOf(positionAt('# 对照表 心情 依据 亲近线', 0, 13))).toEqual(['decl', 'ref', 'ref']);
     expect(result.refs.map((site) => site.span.startLine)).toEqual([6, 10, 27]);
   });
 
@@ -452,14 +452,14 @@ describe('不误报：正文 / 字符串 / 成员 / 字面量 / 非本批符号'
     expect(refsAt(positionAt('100..499'))).toBeNull();
     const source = [
       '# 常量 上限 整数 = 499',
-      '# 表 心情 由 上限',
+      '# 对照表 心情 依据 上限',
       '    0..上限 疏远',
       '    否 未知',
     ].join('\n');
     const result = kojo2ReferencesAt(source, positionIn(source, '上限'));
     expect(result?.symbol.name).toBe('上限');
     expect(result?.symbol.kind).toBe('constant');
-    // 声明位 + `由` 表达式 + 表体端点
+    // 声明位 + `依据` 表达式 + 表体端点
     expect(result?.refs.map((site) => site.span.startLine)).toEqual([1, 2, 3]);
     expect(result?.refs.map((site) => site.kind)).toEqual(['decl', 'ref', 'ref']);
   });
@@ -600,11 +600,11 @@ describe('边界：CRLF / getIndex / 确定性 / 坏输入', () => {
 
 /* ============================== ⑦ B3e 项目文件快照口 ============================== */
 
-const DECL_FILE = ['# 表 心情 由 亲近线', '# 常量 亲近线 整数 = 500'].join('\n');
+const DECL_FILE = ['# 对照表 心情 依据 亲近线', '# 常量 亲近线 整数 = 500'].join('\n');
 
 describe('项目文件快照：缺席 = 同文件；给出 = 跨文件合并', () => {
   it('projectFiles 缺席 ⇒ 与同文件查询逐字相同（旧行为零改动）', () => {
-    const position = { line: 1, column: 5 };
+    const position = { line: 1, column: 7 };
     const sameFile = kojo2ReferencesAt(DECL_FILE, position);
     for (const result of [
       kojo2ReferencesInProjectFiles(DECL_FILE, position, undefined),
@@ -644,10 +644,10 @@ describe('项目文件快照：缺席 = 同文件；给出 = 跨文件合并', (
   });
 
   it('本文件有同名声明 ⇒ 同文件判据 + 跨文件 refs 合流；排除请求文件自己', () => {
-    const cFile = ['# 表 心情 由 1', '> {心情}'].join('\n');
+    const cFile = ['# 对照表 心情 依据 1', '> {心情}'].join('\n');
     const result = kojo2ReferencesInProjectFiles(
       DECL_FILE,
-      { line: 1, column: 5 },
+      { line: 1, column: 7 },
       [
         { path: 'D:/p/c.kojo2', text: cFile },
         { path: 'D:/p/a.kojo2', text: DECL_FILE },
@@ -665,11 +665,11 @@ describe('项目文件快照：缺席 = 同文件；给出 = 跨文件合并', (
   });
 
   it('跨文件结果按路径 → 源码序排、同位置去重', () => {
-    const x = ['# 表 心情 由 1', '> {心情}', '> {心情}', '> {心情}'].join('\n');
+    const x = ['# 对照表 心情 依据 1', '> {心情}', '> {心情}', '> {心情}'].join('\n');
     const y = ['# 幕 甲', '> {心情}'].join('\n');
     const result = kojo2ReferencesInProjectFiles(
       DECL_FILE,
-      { line: 1, column: 5 },
+      { line: 1, column: 7 },
       [
         { path: 'D:/p/z.kojo2', text: y },
         { path: 'D:/p/a.kojo2', text: x },
@@ -705,7 +705,7 @@ describe('项目文件快照：缺席 = 同文件；给出 = 跨文件合并', (
   });
 
   it('跨文件侧触到 2000 条上限 ⇒ truncated = true（不静默少给）', () => {
-    const refs = ['# 表 心情 由 1'];
+    const refs = ['# 对照表 心情 依据 1'];
     for (let i = 0; i < KOJO2_PROJECT_REF_LIMIT + 5; i++) refs.push('> {心情}');
     const result = kojo2ReferencesInProjectFiles(
       '# 幕 本地\n> {心情}',
@@ -733,7 +733,7 @@ describe('项目文件快照：缺席 = 同文件；给出 = 跨文件合并', (
       declsOf: () => [],
       symbolAt: () => null,
     };
-    const result = kojo2ProjectReferencesAt(DECL_FILE, { line: 1, column: 5 }, index, {
+    const result = kojo2ProjectReferencesAt(DECL_FILE, { line: 1, column: 7 }, index, {
       path: 'D:/p/a.kojo2',
     });
     expect(result?.symbol.name).toBe('心情');

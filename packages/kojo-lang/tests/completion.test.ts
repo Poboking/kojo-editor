@@ -682,7 +682,7 @@ describe('块级 snippets 数据完整性（纯数据，宿主按 kind:snippet �
     }
   });
 
-  it('触发形态逐条对得上（`?` 链 / `# 表` / `# 池` / `@巡` / `# 机`）', () => {
+  it('触发形态逐条对得上（`?` 链 / `# 对照表` / `# 池` / `@巡` / `# 机`）', () => {
     const byId = (id: string) => {
       const found = kojo2CompletionSnippets.find((snippet) => snippet.id === id);
       if (found === undefined) throw new Error(`缺少 snippet ${id}`);
@@ -702,7 +702,7 @@ describe('块级 snippets 数据完整性（纯数据，宿主按 kind:snippet �
     expect(byId('machine-header').label).toContain('# 机');
   });
 
-  it('结构词全部派生自 core（`由` / `否` 不是手抄的第二份）', () => {
+  it('结构词全部派生自 core（`依据` / `否` 不是手抄的第二份）', () => {
     const table = kojo2CompletionSnippets.find((snippet) => snippet.id === 'table-two-columns');
     expect(table?.insertText).toContain(KOJO_TABLE_SUBJECT);
     expect(table?.insertText).toContain(KOJO_TABLE_DEFAULT);

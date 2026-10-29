@@ -106,7 +106,7 @@ export interface MigrateOptions {
   readonly eventArgs?: MigrateEventArgs;
   /**
    * **语义升级层内部接线**（`semantic.ts` 用；普通调用方不需要）：这些行（1 基，指传给
-   * `migrateKojoSource` 的文本行号）已知是 2.0——例如语义层生成的 `# 表` / `# 池` 引用行。
+   * `migrateKojoSource` 的文本行号）已知是 2.0——例如语义层生成的 `# 对照表` / `# 池` 引用行。
    * 它们不参与 v1 同形裁决（否则会被当成 v1 的 `角色：「…」` 打印文本，误报歧义或误改成旁白）。
    */
   readonly trustedLines?: readonly number[];
@@ -1266,7 +1266,7 @@ function isHeartTextCandidate(body: string, cls: Classified): boolean {
 
 /**
  * 2.0 的**缩进块**头（块体整块透传，不再按 v1 解释）：
- * `@算/@着色/@随机/@组/@循/@巡/@复/@函/@织/@原生` 与 `# 表/# 池/# 模`。
+ * `@算/@着色/@随机/@组/@循/@巡/@复/@函/@织/@原生` 与 `# 对照表/# 池/# 模`。
  *
  * 这些词在 v1 里没有同名写法（v1 是 `着色：`/`随机：`/`函数 …：`/`当 …：`），
  * 所以只可能来自"已经 2.0 的文本"，整块透传不会误吞 v1 内容。
@@ -1279,7 +1279,7 @@ function isKojo2BlockHead(body: string): boolean {
   }
   if (body.startsWith('# ')) {
     const word = body.slice(1).trimStart().split(/[ \t\u3000]/)[0] ?? '';
-    return word === '表' || word === '池' || word === '模';
+    return word === '对照表' || word === '池' || word === '模';
   }
   return false;
 }

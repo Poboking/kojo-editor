@@ -1,7 +1,7 @@
 /**
  * `@巡` 的 2.0 主链降糖（展开感知；K2-FOREACH 接线）。
  *
- * 分工（与 `# 表` / `@随机` / `选项` 同一口径）：
+ * 分工（与 `# 对照表` / `@随机` / `选项` 同一口径）：
  * 1. **计划**：`planForEachLoop` 校验 adapter 集合声明 + 本文件数组事实，失败 ⇒ 原样收诊断、
  *    **零字节**（不退回 `forEachHeader/Footer` 猜绑定）；
  * 2. **能力闸**：backend 没实现 `program.forEachLoop` ⇒ `core/feature/unsupported` + 零字节

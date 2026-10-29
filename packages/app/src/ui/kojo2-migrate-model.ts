@@ -193,7 +193,7 @@ function diffPrefix(kind: MigrateDiffKind): string {
  * `kind` 翻成人能读的一行标题——判据仍住在 core。
  */
 const REWRITE_TITLES: Readonly<Record<SemanticRewriteKind, string>> = {
-  'switch-table': '`当 / 是 / 否则` → `# 表` + 引用点',
+  'switch-table': '`当 / 是 / 否则` → `# 对照表` + 引用点',
   'branch-pool': '`分支：` → `# 池` + `! 池名`',
   'ask-native': '`初回 / 询问 / 确认` → `@原生` 围栏',
 };
@@ -201,7 +201,7 @@ const REWRITE_TITLES: Readonly<Record<SemanticRewriteKind, string>> = {
 /**
  * 一条语义升级的上屏形态：**自带一段逐条 diff**（不是整份文件 diff 的碎片）。
  *
- * 为什么单独一段：整份 diff 里，`当` 块被换成 `# 表` 声明**提升到文件顶层** + 原位置换
+ * 为什么单独一段：整份 diff 里，`当` 块被换成 `# 对照表` 声明**提升到文件顶层** + 原位置换
  * 引用行，两处改动在整份 diff 里隔得很远；作者要点对"这条改写到底把哪几句搬走了"，
  * 只有把 `原块行 → 引用行` 并排放在一起才看得懂。
  */

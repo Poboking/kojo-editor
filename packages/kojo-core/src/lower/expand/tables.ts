@@ -1,5 +1,5 @@
 /**
- * `# 表` 引用点展开（§6.3）：隐藏槽 + 分支链，**源表达式只求值一次**。
+ * `# 对照表` 引用点展开（§6.3）：隐藏槽 + 分支链，**源表达式只求值一次**。
  *
  * 保守口径（本批可证解）：
  * - 用已有 backend 的 `program.assign` + `control.if/elseIf/else/endif` 发**完整 IF 链**；
@@ -12,7 +12,7 @@
  *   （分档结果）；都属 `__kojo_` 保留前缀，作者不可声明；
  * - 值的 `KojoExprText` 由 core 从静态字面量构造（字符串按 Kojo 双引号规则转义），
  *   交给 adapter 的表达式管线落地；
- * - 表可以引用别的表：`由` 表达式里的表名先按依赖顺序求值（栈检测环 → `core/table/cycle`）；
+ * - 表可以引用别的表：`依据` 表达式里的表名先按依赖顺序求值（栈检测环 → `core/table/cycle`）；
  * - 校验诊断（重叠/缺否/类型…）每张表只报一次（plan 缓存），引用两次不会刷屏。
  */
 import type { KojoExprText, KojoSpan, KojoTableDecl } from '../../ast.js';
@@ -181,7 +181,7 @@ function emitTable(name: string, plan: TableLoweringPlan, ctx: ExpandContext, st
   recordSlot(ctx, subjectSlot, 'table', 'int', 'table-subject');
   recordSlot(ctx, valueSlot, 'table', plan.valueType, 'table-value');
 
-  // 依赖：`由` 表达式里可能引用别的表（先求依赖，再求自己；环由栈检测）
+  // 依赖：`依据` 表达式里可能引用别的表（先求依赖，再求自己；环由栈检测）
   const deps = collectTableRefs(plan.subject, ctx);
   ensureTables(deps, ctx, state);
   const subject = rewriteExpr(plan.subject, tableLookup(ctx)).expr;
@@ -232,7 +232,7 @@ export function ensureTables(names: readonly string[], ctx: ExpandContext, state
 
 function ensureTable(name: string, ctx: ExpandContext, state: LowerState): void {
   if (ctx.tableStack.includes(name)) {
-    reportAt(ctx, 'core/table/cycle', `表「${name}」通过「由」表达式互相引用成环：无法确定求值顺序（§6.2 要求循环检测）。`, ctx.tables.get(name)?.span ?? null);
+    reportAt(ctx, 'core/table/cycle', `表「${name}」通过「依据」表达式互相引用成环：无法确定求值顺序（§6.2 要求循环检测）。`, ctx.tables.get(name)?.span ?? null);
     return;
   }
   if (ctx.tableStack.length >= ctx.maxDepth) {

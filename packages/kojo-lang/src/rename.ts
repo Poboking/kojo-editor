@@ -28,7 +28,7 @@
  *   `{条件 ? A : B}` 三段）；
  * - **`!` 调用**：`trigger` 词法行给了 `name` + `nameOffset`（池 / 模 / 函三种调用同一形状）；
  * - **`@巡`**：`KojoForEachLoop.collection`（以及 `@复` 次数 / `@循` 条件 / `@返` 值）；
- * - **表判别式引用**：`# 表 … 由 <表达式>` 的 subject、表行的 `from` / `to` 端点（常量）、
+ * - **表判别式引用**：`# 对照表 … 依据 <表达式>` 的 subject、表行的 `from` / `to` 端点（常量）、
  *   赋值 / 裸调用 / 条件链 test 等一切表达式位；
  * - **数组长度**：`# 变量 名 整数[<常量>]` 的 size 表达式（规范 §9.2 允许常量）。
  *
@@ -141,7 +141,7 @@ export interface Kojo2RenameEdit {
 export interface Kojo2RenameSymbol {
   readonly name: string;
   readonly kind: Kojo2RenameableKind;
-  /** 种类词（`变量` / `表` / `函` …；与悬停 / 转定义同一张表） */
+  /** 种类词（`变量` / `对照表` / `函` …；与悬停 / 转定义同一张表） */
   readonly kindLabel: string;
   /** 声明行号（1 基） */
   readonly line: number;

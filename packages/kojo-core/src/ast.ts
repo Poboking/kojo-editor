@@ -98,7 +98,7 @@ export interface KojoConstDecl {
   readonly span: KojoSpan;
 }
 
-/** `# 表 <名> 由 <表达式>` 的一行；range 为闭/开/精确值 */
+/** `# 对照表 <名> 依据 <表达式>` 的一行；range 为闭/开/精确值 */
 export interface KojoTableRow {
   readonly from: KojoExprText | null;
   readonly to: KojoExprText | null;
@@ -106,7 +106,7 @@ export interface KojoTableRow {
   readonly span: KojoSpan;
 }
 
-/** `# 表`: 静态、非重叠、`否` 必填；`否` 行以 `from === null && to === null` 表示 */
+/** `# 对照表`: 静态、非重叠、`否` 必填；`否` 行以 `from === null && to === null` 表示 */
 export interface KojoTableDecl {
   readonly kind: 'table';
   readonly name: string;

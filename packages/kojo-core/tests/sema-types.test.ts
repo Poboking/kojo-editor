@@ -179,10 +179,10 @@ describe('声明层 · 初值 / 常量 / 表值列 / 池分支', () => {
 
   it('表值列混类型 → core/table/type-mismatch（只上浮这一条）', () => {
     const text = `
-# 表 心情 由 恋慕
-    0..9 疏远
-    10..19 5
-    否 未知
+# 对照表 心情 依据 恋慕
+    0..9 -> 疏远
+    10..19 -> 5
+    否 -> 未知
 `;
     const result = check(text);
     const tableCodes = result.diagnostics.map((diagnostic) => String(diagnostic.code));
@@ -192,10 +192,10 @@ describe('声明层 · 初值 / 常量 / 表值列 / 池分支', () => {
 
   it('表值列同类型：不报 type-mismatch', () => {
     const text = `
-# 表 心情 由 恋慕
-    0..9 疏远
-    10..19 亲近
-    否 未知
+# 对照表 心情 依据 恋慕
+    0..9 -> 疏远
+    10..19 -> 亲近
+    否 -> 未知
 `;
     expectNoCode(text, 'core/table/type-mismatch');
   });
@@ -254,9 +254,9 @@ describe('赋值 · 已声明性 / 类型 / 只读目标', () => {
 
   it('给表名赋值 → core/expr/assign-to-constant', () => {
     const text = `
-# 表 心情 由 恋慕
-    0..9 疏远
-    否 未知
+# 对照表 心情 依据 恋慕
+    0..9 -> 疏远
+    否 -> 未知
 @算
     心情 = 1
 `;
@@ -681,9 +681,9 @@ describe('确定性 · 诊断排序 · 符号事实', () => {
     const text = `
 # 变量 队列 整数[3]
 # 常量 上限 整数 = 10
-# 表 心情 由 恋慕
-    0..9 疏远
-    否 未知
+# 对照表 心情 依据 恋慕
+    0..9 -> 疏远
+    否 -> 未知
 `;
     const symbols = check(text).symbols;
     const byName = new Map(symbols.declarations.map((entry) => [entry.name, entry]));

@@ -134,12 +134,12 @@ describe('声明处悬停：七类声明都给名字 / 种类 / 来源行', () =
     expect(text).toContain(declaration.constantValue!);
   });
 
-  it('表悬停带 `由` 表达式与表体行数', () => {
+  it('表悬停带 `依据` 表达式与表体行数', () => {
     const declaration = declarationOf('table');
     const hit = kojo2HoverAt(queryAtDeclaration(declaration));
     const text = (hit?.lines ?? []).join('\n');
     expect(declaration.subject).toBeDefined();
-    expect(text).toContain(`由：\`${declaration.subject!}\``);
+    expect(text).toContain(`依据：\`${declaration.subject!}\``);
     expect(text).toContain(`表体：${declaration.rowCount!} 行`);
   });
 

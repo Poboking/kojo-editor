@@ -213,7 +213,7 @@ function fakeIndentClient(
 }
 
 /** 结构腿（与 worker 的 `indentRulesFromCaptures` 同形："行首锚 + 词形"） */
-const TABLE_INCREASE = '^[ \\t\\u3000]*#[ \\t\\u3000]+表(?:[ \\t\\u3000]|$)';
+const TABLE_INCREASE = '^[ \\t\\u3000]*#[ \\t\\u3000]+对照表(?:[ \\t\\u3000]|$)';
 const POOL_INCREASE = '^[ \\t\\u3000]*#[ \\t\\u3000]+池(?:[ \\t\\u3000]|$)';
 const CALC_INCREASE = '^[ \\t\\u3000]*@算(?:[ \\t\\u3000]|$)';
 const CONDITION_INCREASE = '^[ \\t\\u3000]*\\?';
@@ -285,7 +285,7 @@ describe('① 注入形状：只交 onEnterRules + indentationRules（property �
     const fake = fakeMonaco();
     const { client } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    const model = fakeModel('# 表 心情 由 恋慕\n    0..1 疏远\n');
+    const model = fakeModel('# 对照表 心情 依据 恋慕\n    0..1 -> 疏远\n');
 
     expect(await handle.request(model.model)).toBe(true);
     expect(fake.setLanguageConfiguration).toHaveBeenCalledTimes(1);
@@ -300,7 +300,7 @@ describe('① 注入形状：只交 onEnterRules + indentationRules（property �
     const fake = fakeMonaco();
     const { client } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    await handle.request(fakeModel('# 表 甲 由 乙\n').model);
+    await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model);
 
     const rules = lastOnEnterRules(fake.writes);
     for (const rule of rules) expect(rule.beforeText).toBeInstanceOf(RegExp);
@@ -308,7 +308,7 @@ describe('① 注入形状：只交 onEnterRules + indentationRules（property �
     expect(rules.some((rule) => rule.beforeText.test('@原生'))).toBe(true);
     expect(rules.some((rule) => rule.beforeText.test('选项：'))).toBe(true);
     // 结构腿（三条 increase = 三条 enter）都进了 onEnterRules
-    expect(rules.some((rule) => rule.beforeText.test('# 表 别的 由 心情'))).toBe(true);
+    expect(rules.some((rule) => rule.beforeText.test('# 对照表 别的 依据 心情'))).toBe(true);
     expect(rules.some((rule) => rule.beforeText.test('@算'))).toBe(true);
     expect(rules.some((rule) => rule.beforeText.test('? 任意条件'))).toBe(true);
     expect(rules).toHaveLength(2 + STRUCT_RULES.enterPatterns.length);
@@ -318,14 +318,14 @@ describe('① 注入形状：只交 onEnterRules + indentationRules（property �
     const fake = fakeMonaco();
     const { client } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    await handle.request(fakeModel('# 表 甲 由 乙\n').model);
+    await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model);
 
     const rules = lastIndentationRules(fake.writes);
     // 基底两格一条不撤
     expect(rules.increaseIndentPattern.test('@原生')).toBe(true);
     expect(rules.increaseIndentPattern.test('选项：')).toBe(true);
     // 结构腿只加在后面
-    expect(rules.increaseIndentPattern.test('# 表 别的 由 心情')).toBe(true);
+    expect(rules.increaseIndentPattern.test('# 对照表 别的 依据 心情')).toBe(true);
     expect(rules.increaseIndentPattern.test('@算')).toBe(true);
     expect(rules.increaseIndentPattern.test('? 任意条件')).toBe(true);
     // 不动手的行不被结构腿误伤（旁白 / 台词 / 裸调用）
@@ -343,7 +343,7 @@ describe('① 注入形状：只交 onEnterRules + indentationRules（property �
     const fake = fakeMonaco();
     const { client } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    await handle.request(fakeModel('# 表 甲 由 乙\n').model);
+    await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model);
 
     const merged = kojo2IndentConfigWith(STRUCT_RULES);
     expect(merged).not.toBeNull();
@@ -357,13 +357,13 @@ describe('① 注入形状：只交 onEnterRules + indentationRules（property �
     );
   });
 
-  it('换实参仍命中（规则只锚"首个词形"）：`# 表` / `# 池` / `@算` / `?` 四族', async () => {
+  it('换实参仍命中（规则只锚"首个词形"）：`# 对照表` / `# 池` / `@算` / `?` 四族', async () => {
     const fake = fakeMonaco();
     const { client } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
     await handle.request(fakeModel('# 池 甲\n').model);
     const rules = lastIndentationRules(fake.writes);
-    for (const line of ['# 表 别的名字 由 其他表达式', '# 表 心情 由 恋慕', '@算', '? 恋慕 >= 500', '? 否', '?否']) {
+    for (const line of ['# 对照表 别的名字 依据 其他表达式', '# 对照表 心情 依据 恋慕', '@算', '? 恋慕 >= 500', '? 否', '?否']) {
       expect(rules.increaseIndentPattern.test(line), `没有命中：${line}`).toBe(true);
     }
     for (const line of ['# 幕 开场', '# 变量 数 整数', '@颜绘 笑顔', '! 早安问候', '> 旁白', '// 注释']) {
@@ -382,10 +382,10 @@ describe('① 注入形状：只交 onEnterRules + indentationRules（property �
       }),
     );
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client, warn });
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(true);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(true);
     const rules = lastIndentationRules(fake.writes);
     // 坏正则被丢，好的那条照常进 increase
-    expect(rules.increaseIndentPattern.test('# 表 甲 由 乙')).toBe(true);
+    expect(rules.increaseIndentPattern.test('# 对照表 甲 依据 乙')).toBe(true);
     expect(rules.increaseIndentPattern.test('@原生')).toBe(true); // 基底仍在
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]![0])).toContain('非法正则');
@@ -396,7 +396,7 @@ describe('① 注入形状：只交 onEnterRules + indentationRules（property �
     const { client, calls } = fakeIndentClient(() => rulesReply({}));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
 
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(false);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(false);
     expect(calls).toHaveLength(1); // 请求发了，但"三条腿全空"= 一个字都不写
     expect(fake.writes).toHaveLength(0);
 
@@ -414,7 +414,7 @@ describe('② 同 key 只发一次：规则指纹不变不重写语言配置', (
     let rules = STRUCT_RULES;
     const { client, calls } = fakeIndentClient(() => rulesReply(rules));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model, 'tree-7')).toBe(true);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model, 'tree-7')).toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.oldTreeId).toBe('tree-7');
     // 不交树号也照常跑（worker 自己解一棵）——这是省一次 parse 的增量，不是正确性前提
@@ -431,7 +431,7 @@ describe('② 同 key 只发一次：规则指纹不变不重写语言配置', (
     const fake = fakeMonaco();
     const { client, calls } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    const model = fakeModel('# 表 甲 由 乙\n');
+    const model = fakeModel('# 对照表 甲 依据 乙\n');
 
     expect(await handle.request(model.model)).toBe(true);
     expect(await handle.request(model.model)).toBe(false);
@@ -455,11 +455,11 @@ describe('② 同 key 只发一次：规则指纹不变不重写语言配置', (
       ),
     );
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    const model = fakeModel('# 表 甲 由 乙\n');
+    const model = fakeModel('# 对照表 甲 依据 乙\n');
 
     expect(await handle.request(model.model)).toBe(true);
     order = 'backward';
-    model.setText('# 表 甲 由 乙（改）\n', 2);
+    model.setText('# 对照表 甲 依据 乙（改）\n', 2);
     expect(await handle.request(model.model)).toBe(false);
     expect(calls).toHaveLength(2);
     expect(fake.writes).toHaveLength(1);
@@ -474,7 +474,7 @@ describe('② 同 key 只发一次：规则指纹不变不重写语言配置', (
     };
     const { client } = fakeIndentClient(() => rulesReply(rules));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    const model = fakeModel('# 表 甲 由 乙\n');
+    const model = fakeModel('# 对照表 甲 依据 乙\n');
 
     expect(await handle.request(model.model)).toBe(true);
     rules = {
@@ -487,10 +487,10 @@ describe('② 同 key 只发一次：规则指纹不变不重写语言配置', (
 
     expect(fake.writes).toHaveLength(2);
     const merged = lastIndentationRules(fake.writes);
-    expect(merged.increaseIndentPattern.test('# 表 旧的 由 词形')).toBe(true);
+    expect(merged.increaseIndentPattern.test('# 对照表 旧的 依据 词形')).toBe(true);
     expect(merged.increaseIndentPattern.test('# 池 新的词形')).toBe(true);
     const onEnter = lastOnEnterRules(fake.writes);
-    expect(onEnter.some((rule) => rule.beforeText.test('# 表 旧'))).toBe(true);
+    expect(onEnter.some((rule) => rule.beforeText.test('# 对照表 旧'))).toBe(true);
     expect(onEnter.some((rule) => rule.beforeText.test('# 池 新'))).toBe(true);
   });
 
@@ -499,11 +499,11 @@ describe('② 同 key 只发一次：规则指纹不变不重写语言配置', (
     let rules: Kojo2IndentRules = STRUCT_RULES;
     const { client } = fakeIndentClient(() => rulesReply(rules));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    const model = fakeModel('# 表 甲 由 乙\n');
+    const model = fakeModel('# 对照表 甲 依据 乙\n');
 
     expect(await handle.request(model.model)).toBe(true);
     rules = { increasePatterns: [TABLE_INCREASE], enterPatterns: [TABLE_INCREASE], decreasePatterns: [] };
-    model.setText('# 表 甲 由 乙（改）\n', 2);
+    model.setText('# 对照表 甲 依据 乙（改）\n', 2);
     expect(await handle.request(model.model)).toBe(false);
     expect(fake.writes).toHaveLength(1);
     expect(fake.disposedCount()).toBe(0);
@@ -518,7 +518,7 @@ describe('② 同 key 只发一次：规则指纹不变不重写语言配置', (
     };
     const { client } = fakeIndentClient(() => rulesReply(rules));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    const model = fakeModel('# 表 甲 由 乙\n');
+    const model = fakeModel('# 对照表 甲 依据 乙\n');
 
     await handle.request(model.model);
     expect(fake.disposedCount()).toBe(0);
@@ -545,12 +545,12 @@ describe('② 同 key 只发一次：规则指纹不变不重写语言配置', (
         : rulesReply({ increasePatterns: [POOL_INCREASE], enterPatterns: [POOL_INCREASE], decreasePatterns: [] }),
     );
     const config = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => shared.client });
-    await config.request(fakeModel('# 表 甲 由 乙\n').model);
+    await config.request(fakeModel('# 对照表 甲 依据 乙\n').model);
     doc = 2;
     await config.request(fakeModel('# 池 早安问候\n').model);
     expect(fake.writes).toHaveLength(2);
     const merged = lastIndentationRules(fake.writes);
-    expect(merged.increaseIndentPattern.test('# 表 甲 由 乙')).toBe(true);
+    expect(merged.increaseIndentPattern.test('# 对照表 甲 依据 乙')).toBe(true);
     expect(merged.increaseIndentPattern.test('# 池 早安问候')).toBe(true);
   });
 });
@@ -570,10 +570,10 @@ describe('③ 失败零改动：不写配置、不撤已有配置、不抛', () 
       const fake = fakeMonaco();
       const { client } = fakeIndentClient(() => failure(reason, `假失败：${reason}`));
       const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client, warn });
-      const model = fakeModel('# 表 甲 由 乙\n');
+      const model = fakeModel('# 对照表 甲 依据 乙\n');
 
       expect(await handle.request(model.model), reason).toBe(false);
-      model.setText('# 表 甲 由 乙（改）\n', 2);
+      model.setText('# 对照表 甲 依据 乙（改）\n', 2);
       expect(await handle.request(model.model), reason).toBe(false);
       expect(fake.writes, reason).toHaveLength(0);
       expect(warn, reason).toHaveBeenCalledTimes(1);
@@ -591,7 +591,7 @@ describe('③ 失败零改动：不写配置、不撤已有配置、不抛', () 
       },
       warn,
     });
-    await expect(handle.request(fakeModel('# 表 甲 由 乙\n').model)).resolves.toBe(false);
+    await expect(handle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).resolves.toBe(false);
     expect(fake.writes).toHaveLength(0);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]![0])).toContain('装载炸了');
@@ -600,12 +600,12 @@ describe('③ 失败零改动：不写配置、不撤已有配置、不抛', () 
   it('客户端为 null / 没有 indents 方法 ⇒ 零请求零配置（不是发一条空规则）', async () => {
     const fake = fakeMonaco();
     const nullHandle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => null });
-    expect(await nullHandle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(false);
+    expect(await nullHandle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(false);
 
     const capturesOnly = createKojo2IndentConfigSync(fake.monaco, {
       getClient: async () => ({}),
     });
-    expect(await capturesOnly.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(false);
+    expect(await capturesOnly.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(false);
     expect(fake.writes).toHaveLength(0);
   });
 
@@ -621,12 +621,12 @@ describe('③ 失败零改动：不写配置、不撤已有配置、不抛', () 
       getClient: async () => client,
       warn: () => undefined,
     });
-    const model = fakeModel('# 表 甲 由 乙\n');
+    const model = fakeModel('# 对照表 甲 依据 乙\n');
     await handle.request(model.model);
     expect(fake.writes).toHaveLength(1);
 
     ok = false;
-    model.setText('# 表 甲 由 乙（改）\n', 2);
+    model.setText('# 对照表 甲 依据 乙（改）\n', 2);
     expect(await handle.request(model.model)).toBe(false);
     expect(fake.writes).toHaveLength(1);
     expect(fake.writes[0]!.disposed).toBe(false);
@@ -639,13 +639,13 @@ describe('③ 失败零改动：不写配置、不撤已有配置、不抛', () 
     const { client } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client, warn });
 
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(false);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(false);
     expect(fake.writes).toHaveLength(0);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]![0])).toContain('语言配置');
 
     // appliedKey 没更新 ⇒ 同样的规则换一篇文档还会再试一次（这次成功）
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(true);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(true);
     expect(fake.writes).toHaveLength(1);
   });
 
@@ -662,7 +662,7 @@ describe('③ 失败零改动：不写配置、不撤已有配置、不抛', () 
       getClient: async () => wrongType.client,
       warn: () => undefined,
     });
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(false);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(false);
 
     const junk = fakeIndentClient(
       () => ({}) as unknown as Kojo2WorkerResult<Kojo2IndentsReply>,
@@ -671,7 +671,7 @@ describe('③ 失败零改动：不写配置、不撤已有配置、不抛', () 
       getClient: async () => junk.client,
       warn: () => undefined,
     });
-    expect(await handle2.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(false);
+    expect(await handle2.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(false);
     expect(fake.writes).toHaveLength(0);
   });
 
@@ -798,7 +798,7 @@ describe('⑤ flag / dispose / 健壮性', () => {
     const handle = installKojo2IndentConfigFromWorker(fake.monaco, { getClient: async () => client });
     expect(calls).toHaveLength(0);
     expect(fake.writes).toHaveLength(0);
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(true);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(true);
     handle.dispose();
   });
 
@@ -809,7 +809,7 @@ describe('⑤ flag / dispose / 健壮性', () => {
     const handle = installKojo2IndentConfigFromWorker(fake.monaco, { getClient: async () => client });
     expect(calls).toHaveLength(0);
     expect(fake.writes).toHaveLength(0);
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(true);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(true);
     expect(calls).toHaveLength(1);
     expect(fake.writes).toHaveLength(1);
   });
@@ -818,7 +818,7 @@ describe('⑤ flag / dispose / 健壮性', () => {
     const fake = fakeMonaco();
     const { client, calls } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    const model = fakeModel('# 表 甲 由 乙\n');
+    const model = fakeModel('# 对照表 甲 依据 乙\n');
     await handle.request(model.model);
     expect(fake.writes).toHaveLength(1);
     expect(fake.disposedCount()).toBe(0);
@@ -839,7 +839,7 @@ describe('⑤ flag / dispose / 健壮性', () => {
     const fake = fakeMonaco();
     const { client, calls } = fakeIndentClient(() => rulesReply(STRUCT_RULES));
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n', 1, 'erb').model)).toBe(false);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n', 1, 'erb').model)).toBe(false);
     expect(calls).toHaveLength(0);
     expect(fake.writes).toHaveLength(0);
   });
@@ -853,7 +853,7 @@ describe('⑤ flag / dispose / 健壮性', () => {
       rulesReply({ increasePatterns: many, enterPatterns: many, decreasePatterns: [] }),
     );
     const handle = createKojo2IndentConfigSync(fake.monaco, { getClient: async () => client });
-    expect(await handle.request(fakeModel('# 表 甲 由 乙\n').model)).toBe(true);
+    expect(await handle.request(fakeModel('# 对照表 甲 依据 乙\n').model)).toBe(true);
     // onEnterRules = 基底 2 + enter 腿封顶条数
     expect(lastOnEnterRules(fake.writes)).toHaveLength(2 + KOJO2_INDENT_CONFIG_MAX_PATTERNS);
   });
@@ -996,7 +996,7 @@ describe('⑦ 宿主挂点：语义着色成功之后才触发 indents', () => {
     expect(fake.registrations).toHaveLength(1);
     const provider = fake.registrations[0]!.provider;
 
-    const model = fakeModel('# 表 心情 由 恋慕\n');
+    const model = fakeModel('# 对照表 心情 依据 恋慕\n');
     await provider.provideDocumentSemanticTokens(model.model, null, {} as never);
     await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
     expect(capturesCalls).toHaveLength(1);
@@ -1004,7 +1004,7 @@ describe('⑦ 宿主挂点：语义着色成功之后才触发 indents', () => {
     expect(indentCalls[0]!.version).toBe(1);
     // 交回语义那一轮的 treeId：indents 查询直接查那棵树，不重解
     expect(indentCalls[0]!.oldTreeId).toBe('tree-1');
-    expect(lastIndentationRules(fake.writes).increaseIndentPattern.test('# 表 别的 由 心情')).toBe(
+    expect(lastIndentationRules(fake.writes).increaseIndentPattern.test('# 对照表 别的 依据 心情')).toBe(
       true,
     );
 
@@ -1031,7 +1031,7 @@ describe('⑦ 宿主挂点：语义着色成功之后才触发 indents', () => {
       warn: () => undefined,
     });
     const provider = fake.registrations[0]!.provider;
-    const model = fakeModel('# 表 心情 由 恋慕\n');
+    const model = fakeModel('# 对照表 心情 依据 恋慕\n');
     await provider.provideDocumentSemanticTokens(model.model, null, {} as never);
     // 给挂点留足微任务时间：确认它真的没被调
     await new Promise((resolve) => setTimeout(resolve, 0));

@@ -163,7 +163,7 @@ const SUPPORTED_READINGS: readonly AdapterConformanceCase[] = [
     },
   },
   {
-    // `# 表` 的两个隐藏槽：int 档 + string 值档（backend 按 core 给的 valueType 落 `#DIM`/`#DIMS`）
+    // `# 对照表` 的两个隐藏槽：int 档 + string 值档（backend 按 core 给的 valueType 落 `#DIM`/`#DIMS`）
     kind: 'readings',
     name: 'readings/表槽（#DIM + #DIMS）',
     source: readFixture('table-buckets.kojo2'),
@@ -422,7 +422,7 @@ const FAIL_VISIBLE_CASES: readonly AdapterConformanceCase[] = [
   {
     kind: 'readings',
     name: 'refuses/表缺 否（不引用也报）',
-    source: '# 机 初见\n\n# 表 心情 由 依存度\n    0..99 疏远\n\n> {心情}。\n',
+    source: '# 机 初见\n\n# 对照表 心情 依据 依存度\n    0..99 -> 疏远\n\n> {心情}。\n',
     expectedDiagnostics: [Object.freeze({ code: 'core/table/missing-default', severity: 'error', line: 3 })],
     readings: { artifactLines: 0 },
   },

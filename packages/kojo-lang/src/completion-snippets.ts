@@ -9,8 +9,8 @@
  * 纯函数那一侧逐字不变——"snippet 只在翻译层按 kind 追加"就是这一条。
  *
  * ## 为什么是数据
- * 五副骨架（`?` 链 / `# 表` 两列 / `# 池` 分支 / `@巡` / `# 机` 事件头）都是**语言形状**：
- * 词形从 core 词表 / 声明索引派生（`# 表` / `# 池` 取 `KOJO2_DECL_WORD_BY_KIND`，`# 机` 取
+ * 五副骨架（`?` 链 / `# 对照表` 两列 / `# 池` 分支 / `@巡` / `# 机` 事件头）都是**语言形状**：
+ * 词形从 core 词表 / 声明索引派生（`# 对照表` / `# 池` 取 `KOJO2_DECL_WORD_BY_KIND`，`# 机` 取
  * `KOJO2_MACHINE_WORD`，`@巡` 取 `KOJO2_DISPATCH_WORDS` 的位序），本文件**不手抄任何新词形**；
  * 缩进写死 4 空格（与 `KOJO_INDENT_WIDTH` 同值，`@巡` 体一级、分支体两级）。
  *
@@ -32,7 +32,7 @@
  * 逐字不动，只有 import 从宿主相对路径改成同包相对路径。
  */
 
-import { KOJO_TABLE_DEFAULT, KOJO_TABLE_SUBJECT } from '@kojo/kojo-core';
+import { KOJO_TABLE_ARROW_CANONICAL, KOJO_TABLE_DEFAULT, KOJO_TABLE_SUBJECT } from '@kojo/kojo-core';
 import { isAllBlank } from './completion';
 import {
   KOJO2_DECL_WORD_BY_KIND,
@@ -44,7 +44,7 @@ import { KOJO2_DISPATCH_WORDS } from './lexicon';
 /** 表 / 池 / 机 / 巡 的词形（core 词表 / 声明索引派生，不写字形）。 */
 const TABLE_WORD = KOJO2_DECL_WORD_BY_KIND.table;
 const POOL_WORD = KOJO2_DECL_WORD_BY_KIND.pool;
-/** `# 表` 的两枚结构词（`由` / `否`；core 词表派生）。 */
+/** `# 对照表` 的两枚结构词（`依据` / `否`；core 词表派生）。 */
 const TABLE_SUBJECT_WORD = KOJO_TABLE_SUBJECT;
 const DEFAULT_BRANCH_WORD = KOJO_TABLE_DEFAULT;
 /** `@巡` 在 core 调度词表里的位序（`tokens.ts` §2.1；取不到 = 空串 ⇒ 该条不派生） */
@@ -90,15 +90,15 @@ export const kojo2CompletionSnippets: readonly Kojo2CompletionSnippet[] = Object
   },
   {
     id: 'table-two-columns',
-    // `# 表` 两列：`表名 由 主语` + 两列行（范围 + 文本）+ `否` 兜底。
+    // `# 对照表`：`表名 依据 主语` + 分档行（范围 -> 文本）+ `否` 兜底。
     label: `# ${TABLE_WORD}（两列）`,
     insertText: [
       `# ${TABLE_WORD} \${1:表名} ${TABLE_SUBJECT_WORD} \${2:主语}`,
-      `${INDENT}\${3:0..99} \${4:疏远}`,
-      `${INDENT}\${5:100..499} \${6:平常}`,
-      `${INDENT}\${7:${DEFAULT_BRANCH_WORD}} \${8:未知}$0`,
+      `${INDENT}\${3:0..99} ${KOJO_TABLE_ARROW_CANONICAL} \${4:疏远}`,
+      `${INDENT}\${5:100..499} ${KOJO_TABLE_ARROW_CANONICAL} \${6:平常}`,
+      `${INDENT}\${7:${DEFAULT_BRANCH_WORD}} ${KOJO_TABLE_ARROW_CANONICAL} \${8:未知}$0`,
     ].join('\n'),
-    detail: '两列表骨架：范围列 + 文本列，末行 `否` 兜底',
+    detail: '对照表骨架：范围 -> 值，末行 `否` 兜底',
     sortText: '9_snippet_02_table',
     kind: 'snippet',
   },

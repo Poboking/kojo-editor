@@ -333,7 +333,7 @@ export interface KojoProgramEmitter {
    */
   forEachLoop?(request: ForEachEmitRequest): EmitResult;
   /**
-   * `# 表` 的**可证等值**落点（K2-TABLE-SELECTCASE；additive）。
+   * `# 对照表` 的**可证等值**落点（K2-TABLE-SELECTCASE；additive）。
    *
    * 缺省 = 老 adapter 不支持：core 保持既有等值 `IF / ELSEIF / ELSE` 链（产物逐字节
    * 不变，不是错误）。提供时，core 只在 `table-plan.ts` 判定全部臂是精确整数等值、
@@ -359,9 +359,9 @@ export type KojoHiddenSlotKind = 'table' | 'random' | 'template' | 'foreach' | '
 
 /** 槽的用途细分（additive；adapter 可选读，声明形态/命名可据此分档） */
 export type KojoHiddenSlotRole =
-  /** `# 表` 的判别值槽（整数，只求值一次） */
+  /** `# 对照表` 的判别值槽（整数，只求值一次） */
   | 'table-subject'
-  /** `# 表` 的分档结果值槽（类型 = 表值列类型） */
+  /** `# 对照表` 的分档结果值槽（类型 = 表值列类型） */
   | 'table-value'
   /** `@随机` 的候选下标槽（整数） */
   | 'random-slot'

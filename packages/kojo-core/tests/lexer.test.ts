@@ -320,7 +320,7 @@ describe('lex：插值扫描（只扫不解析）', () => {
   });
 });
 
-describe('lex：声明行与 # 表 两列行', () => {
+describe('lex：声明行与 # 对照表 两列行', () => {
   it('声明词切分：word / rest / restOffset', () => {
     const line = firstLine('# 变量 今天已触发 整数 = 0 存档');
     expect(line.kind).toBe('decl');
@@ -337,10 +337,10 @@ describe('lex：声明行与 # 表 两列行', () => {
     if (line.kind === 'decl') expect(line.known).toBe(false);
   });
 
-  it('# 表 的两列行是普通 text 行，原样留给 parser', () => {
-    const result = lex('# 表 心情 由 恋慕\n    0..99 疏远\n');
+  it('# 对照表 的两列行是普通 text 行，原样留给 parser', () => {
+    const result = lex('# 对照表 心情 依据 恋慕\n    0..99 -> 疏远\n');
     expect(result.lines[1]!.kind).toBe('text');
-    expect(result.lines[1]!.text).toBe('0..99 疏远');
+    expect(result.lines[1]!.text).toBe('0..99 -> 疏远');
   });
 });
 

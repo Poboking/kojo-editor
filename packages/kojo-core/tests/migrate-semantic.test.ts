@@ -1,5 +1,5 @@
 /**
- * K2-MIGRATE-SEMANTIC 回归：迁移**语义升级层**（`当` → `# 表` / `分支：` → `# 池` / `初回` → `@原生`）。
+ * K2-MIGRATE-SEMANTIC 回归：迁移**语义升级层**（`当` → `# 对照表` / `分支：` → `# 池` / `初回` → `@原生`）。
  *
  * 四层判据（与机械层同一套纪律，不放松）：
  * 1. **可证正例逐字节**：每个改写都断言产物逐字相等（不是"大致像"）；
@@ -80,7 +80,7 @@ describe('语义升级：可证正例逐字节', () => {
     ]);
   });
 
-  it('`当` → `# 表`：旁白臂（值列 = 正文），引用点 `> {表}`', () => {
+  it('`当` → `# 对照表`：旁白臂（值列 = 正文），引用点 `> {表}`', () => {
     const source =
       HEADER +
       MACHINE +
@@ -93,10 +93,10 @@ describe('语义升级：可证正例逐字节', () => {
       '            她什么也没说。\n';
     const result = migrateOk(source);
     expect(result.code).toBe(
-      '# 表 迁移表1 由 TFLAG:193\n' +
-        '    1 她一言不发。\n' +
-        '    5..8 她微微眯起眼睛。\n' +
-        '    否 她什么也没说。\n' +
+      '# 对照表 迁移表1 依据 TFLAG:193\n' +
+        '    1 -> 她一言不发。\n' +
+        '    5..8 -> 她微微眯起眼睛。\n' +
+        '    否 -> 她什么也没说。\n' +
         '\n' +
         '# 机 指令 310\n' +
         '> {迁移表1}\n',
@@ -105,7 +105,7 @@ describe('语义升级：可证正例逐字节', () => {
     expectParsesClean(result.code);
   });
 
-  it('`当` → `# 表`：台词臂（同一说话人）+ 逗号列表 + 区间；说话人取 v1 文件头', () => {
+  it('`当` → `# 对照表`：台词臂（同一说话人）+ 逗号列表 + 区间；说话人取 v1 文件头', () => {
     const source =
       HEADER +
       MACHINE +
@@ -120,12 +120,12 @@ describe('语义升级：可证正例逐字节', () => {
       '            「丁。」\n';
     const result = migrateOk(source);
     expect(result.code).toBe(
-      '# 表 迁移表1 由 恋慕\n' +
-        '    0 「甲。」\n' +
-        '    1 「乙。」\n' +
-        '    2 「乙。」\n' +
-        '    10..20 「丙。」\n' +
-        '    否 「丁。」\n' +
+      '# 对照表 迁移表1 依据 恋慕\n' +
+        '    0 -> 「甲。」\n' +
+        '    1 -> 「乙。」\n' +
+        '    2 -> 「乙。」\n' +
+        '    10..20 -> 「丙。」\n' +
+        '    否 -> 「丁。」\n' +
         '\n' +
         '# 机 指令 310\n' +
         '灵梦：「{迁移表1}」\n',
@@ -133,7 +133,7 @@ describe('语义升级：可证正例逐字节', () => {
     expectParsesClean(result.code);
   });
 
-  it('`当` → `# 表`：负数 / 单点区间也算可证数值', () => {
+  it('`当` → `# 对照表`：负数 / 单点区间也算可证数值', () => {
     const source =
       HEADER +
       MACHINE +
@@ -145,7 +145,7 @@ describe('语义升级：可证正例逐字节', () => {
       '        否则：\n' +
       '            其他。\n';
     const result = migrateOk(source);
-    expect(result.code).toContain('# 表 迁移表1 由 TFLAG:7\n    -2 负二。\n    0 零。\n    否 其他。\n');
+    expect(result.code).toContain('# 对照表 迁移表1 依据 TFLAG:7\n    -2 -> 负二。\n    0 -> 零。\n    否 -> 其他。\n');
     expectParsesClean(result.code);
   });
 
@@ -285,9 +285,9 @@ describe('语义升级：可证正例逐字节', () => {
       '            「乙」\n';
     const result = migrateOk(source);
     expect(result.code).toBe(
-      '# 表 迁移表1 由 TFLAG:1\n' +
-        '    0 她笑了。\n' +
-        '    否 她没说话。\n' +
+      '# 对照表 迁移表1 依据 TFLAG:1\n' +
+        '    0 -> 她笑了。\n' +
+        '    否 -> 她没说话。\n' +
         '\n' +
         '# 池 迁移池1\n' +
         '    ? TFLAG:1\n' +
@@ -325,9 +325,9 @@ describe('语义升级：可证正例逐字节', () => {
       '        普通旁白。\n';
     const result = migrateOk(source);
     expect(result.code).toBe(
-      '# 表 迁移表1 由 TFLAG:2\n' +
-        '    0 她笑了。\n' +
-        '    否 她没说话。\n' +
+      '# 对照表 迁移表1 依据 TFLAG:2\n' +
+        '    0 -> 她笑了。\n' +
+        '    否 -> 她没说话。\n' +
         '\n' +
         '# 机 指令 310\n' +
         '? TFLAG:1\n' +
@@ -351,7 +351,7 @@ describe('语义升级：可证正例逐字节', () => {
     const lines = result.code.split('\n');
     const at = (needle: string): number => lines.indexOf(needle);
     expect(result.sourceMap.length).toBe(lines.length - 1);
-    expect(result.sourceMap[at('# 表 迁移表1 由 TFLAG:193')]).toBe(4);
+    expect(result.sourceMap[at('# 对照表 迁移表1 依据 TFLAG:193')]).toBe(4);
     expect(result.sourceMap[at('# 池 迁移池1')]).toBe(11);
     expect(result.sourceMap[at('灵梦：「{迁移表1}」')]).toBe(4);
     expect(result.sourceMap[at('! 迁移池1')]).toBe(11);
@@ -362,8 +362,8 @@ describe('语义升级：可证正例逐字节', () => {
 
   it('生成的声明名避开源里已有的标识符（同一文件命名空间不撞名）', () => {
     const source =
-      '# 表 迁移表1 由 TFLAG:2\n' +
-      '    否 未知\n' +
+      '# 对照表 迁移表1 依据 TFLAG:2\n' +
+      '    否 -> 未知\n' +
       '\n' +
       HEADER +
       MACHINE +
@@ -373,7 +373,7 @@ describe('语义升级：可证正例逐字节', () => {
       '        否则：\n' +
       '            「乙」\n';
     const result = migrateOk(source);
-    expect(result.code).toContain('# 表 迁移表2 由 TFLAG:1\n');
+    expect(result.code).toContain('# 对照表 迁移表2 依据 TFLAG:1\n');
     expect(result.code).toContain('灵梦：「{迁移表2}」\n');
     expectParsesClean(result.code);
   });
@@ -382,7 +382,7 @@ describe('语义升级：可证正例逐字节', () => {
 /* ============================== 不可证：维持 unsupported ============================== */
 
 describe('语义升级：不可证一律维持 unsupported（不猜）', () => {
-  it('`当` 臂区间静态重叠 → 不改写（`# 表` 要求非重叠）', () => {
+  it('`当` 臂区间静态重叠 → 不改写（`# 对照表` 要求非重叠）', () => {
     const source =
       HEADER +
       MACHINE +
@@ -398,7 +398,7 @@ describe('语义升级：不可证一律维持 unsupported（不猜）', () => {
     expect(result.diagnostics.some((d) => d.message.includes('语义升级未采纳'))).toBe(true);
   });
 
-  it('`当` 缺 `否则` 兜底 → 不改写（`# 表` 的 `否` 必填）', () => {
+  it('`当` 缺 `否则` 兜底 → 不改写（`# 对照表` 的 `否` 必填）', () => {
     const source =
       HEADER + MACHINE + '    当 TFLAG:1：\n        是 0：\n            「甲」\n        是 1：\n            「乙」\n';
     expectBlocked(source, 'core/migration/switch', '`当` 缺兜底');
@@ -560,7 +560,7 @@ describe('语义升级：不可证一律维持 unsupported（不猜）', () => {
     expectBlocked(HEADER + MACHINE + '    初回 "once"：\n    普通旁白。\n', 'core/migration/ask', '空 `初回` 块');
   });
 
-  it('`当` 只有 `否则` 一条臂 → 不改写（`# 表` 没有可分档的行）', () => {
+  it('`当` 只有 `否则` 一条臂 → 不改写（`# 对照表` 没有可分档的行）', () => {
     const source = HEADER + MACHINE + '    当 TFLAG:1：\n        否则：\n            「甲」\n';
     expectBlocked(source, 'core/migration/switch', '只有兜底的 `当`');
   });
@@ -629,7 +629,7 @@ describe('语义升级：闭环（parse 零 error / 幂等）', () => {
     expect(result.unsupported).toEqual([]);
   });
 
-  it('产物跑完整 2.0 编译：`# 表` 判别式只求值一次、`# 池` 落 IF/ELSE、`@原生` 块内逐行透传', () => {
+  it('产物跑完整 2.0 编译：`# 对照表` 判别式只求值一次、`# 池` 落 IF/ELSE、`@原生` 块内逐行透传', () => {
     const source =
       HEADER +
       '时机 开场：\n' +

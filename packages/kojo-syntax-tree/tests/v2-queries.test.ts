@@ -104,7 +104,7 @@ describe('highlights：捕获名有档位，且每档在 full.kojo2 上都有命
       'operator',
       'number',
       'embedded',
-      // 类型 / 结构名（2026-10-27 第三色批）：`# 表` / `# 池` / `# 模` 三枚结构定义头
+      // 类型 / 结构名（2026-10-27 第三色批）：`# 对照表` / `# 池` / `# 模` 三枚结构定义头
       'type',
       'none',
     ];
@@ -140,7 +140,7 @@ describe('highlights：捕获名有档位，且每档在 full.kojo2 上都有命
     // 关键档位的命中数下界（防止只命中最稀疏的一枚就过闸）
     const all = q.matches(root).flatMap((m) => m.captures.map((c) => c.name));
     const countOf = (n: string): number => all.filter((x) => x === n).length;
-    // 类型档的地板：full.kojo2 里 `# 表` / `# 池` / `# 模` 各一枚 = 3。这一枚之所以单独立一条，
+    // 类型档的地板：full.kojo2 里 `# 对照表` / `# 池` / `# 模` 各一枚 = 3。这一枚之所以单独立一条，
     // 是因为"theme 里有 support.type 这个键"零成本、屏上有没有它是另一件事（2026-10-27 第三色批）。
     expect(countOf('type'), 'full.kojo2 上 @type 命中数').toBeGreaterThanOrEqual(3);
     expect(countOf('string')).toBeGreaterThanOrEqual(15); // 旁白段 + 台词串
@@ -165,8 +165,9 @@ const NO_HIGHLIGHT_WHITELIST: Readonly<Record<string, string>> = {
   source_file: '根容器：整文件不对应任何可视行，子节点各自上色',
   block: '块容器：块头（*_head）与体内各行各自上色，容器本身没有独立文本',
   block_body: '块体容器：体内每一行都有自己的捕获',
-  table_body: '`# 表` 体容器：表行由 table_row 及其子节点上色',
+  table_body: '`# 对照表` 体容器：表行由 table_row 及其子节点上色',
   table_row: '表行容器：范围 table_range / 默认分支 table_else / 值列 table_value 已各自捕获',
+  table_arrow: '分档箭头记号（`->` / `→`）：与值列同档，随 table_row 整行上色，不单独拆色',
   narration: '旁白容器：narration_marker（`>`）与 narration_text 已各自捕获',
   speech: '台词容器：speaker 与 speech_string 已各自捕获',
   bare_speech: '池内无符号台词容器：其 text 字段是 speech_string（已捕获）',

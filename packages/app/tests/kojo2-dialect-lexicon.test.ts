@@ -101,7 +101,7 @@ describe('声明词位序契约：`方言` 只能钉在尾部', () => {
   });
 
   it('九枚逐字对位，`方言` 在最后一格', () => {
-    expect(KOJO_DECL_WORDS).toEqual(['幕', '视', '机', '变量', '常量', '表', '池', '模', '方言']);
+    expect(KOJO_DECL_WORDS).toEqual(['幕', '视', '机', '变量', '常量', '对照表', '池', '模', '方言']);
     expect(KOJO_DECL_WORDS.indexOf('方言')).toBe(KOJO_DECL_WORDS.length - 1);
   });
 
@@ -110,7 +110,7 @@ describe('声明词位序契约：`方言` 只能钉在尾部', () => {
     expect(KOJO2_DECL_WORDS.slice(0, 5)).toEqual(['幕', '视', '机', '变量', '常量']);
     // 位置解构 `[, , , , , TABLE_WORD, POOL_WORD, TEMPLATE_WORD]`
     expect([KOJO2_DECL_WORDS[5], KOJO2_DECL_WORDS[6], KOJO2_DECL_WORDS[7]]).toEqual([
-      '表',
+      '对照表',
       '池',
       '模',
     ]);

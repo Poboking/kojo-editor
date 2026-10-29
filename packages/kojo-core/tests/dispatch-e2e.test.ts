@@ -1,5 +1,5 @@
 /**
- * `# 表` / `# 池` 等值分派 **端到端**（K2-DISPATCH-WIRING / §6.3 / §7.1 / §16.2 C2.5–C2.6）。
+ * `# 对照表` / `# 池` 等值分派 **端到端**（K2-DISPATCH-WIRING / §6.3 / §7.1 / §16.2 C2.5–C2.6）。
  *
  * 与两个"计划单测"（`table-selectcase.test.ts` / `pool-selectcase.test.ts`）的分工：
  * - 那两个钉**判定**（纯数据、能力探测、fixture backend）；
@@ -56,44 +56,44 @@ const errorCodes = (result: { diagnostics: readonly { code: string; severity: st
 const withMachine = (event: string, body: readonly string[]): string =>
   [`# 机 ${event}`, ...body, ''].join('\n');
 
-/* ---------- 源：`# 表` ---------- */
+/* ---------- 源：`# 对照表` ---------- */
 
 /** 3 档精确整数 + `否`：`table-plan.ts` 判据下的正例（可证等值） */
 const TABLE_BODY = [
-  '# 表 心情 由 恋慕',
-  '    0 疏远',
-  '    5 平常',
-  '    10 亲近',
-  '    否 未知',
+  '# 对照表 心情 依据 恋慕',
+  '    0 -> 疏远',
+  '    5 -> 平常',
+  '    10 -> 亲近',
+  '    否 -> 未知',
   '> 她今天看起来{心情}。',
 ];
 const TABLE_SOURCE = withMachine('初见', TABLE_BODY);
 
 /** 2 档：`TABLE_DISPATCH_MIN_ARMS = 3` 的边界外 → IF 链 */
 const TABLE_TWO_ARMS = withMachine('初见', [
-  '# 表 心情 由 恋慕',
-  '    0 疏远',
-  '    5 平常',
-  '    否 未知',
+  '# 对照表 心情 依据 恋慕',
+  '    0 -> 疏远',
+  '    5 -> 平常',
+  '    否 -> 未知',
   '> 她看起来{心情}。',
 ]);
 
 /** 闭区间：单条等值档表达不了 → IF 链 */
 const TABLE_RANGE = withMachine('初见', [
-  '# 表 档位 由 好感度',
-  '    0..99 低',
-  '    100.. 高',
-  '    否 未知',
+  '# 对照表 档位 依据 好感度',
+  '    0..99 -> 低',
+  '    100.. -> 高',
+  '    否 -> 未知',
   '> 目前{档位}。',
 ]);
 
 /** 等值键重复：`validateTable` 的重叠闸先报 → 零字节 */
 const TABLE_DUPLICATE = withMachine('初见', [
-  '# 表 心情 由 恋慕',
-  '    5 甲',
-  '    5 乙',
-  '    7 丙',
-  '    否 丁',
+  '# 对照表 心情 依据 恋慕',
+  '    5 -> 甲',
+  '    5 -> 乙',
+  '    7 -> 丙',
+  '    否 -> 丁',
   '> 她看起来{心情}。',
 ]);
 
@@ -217,7 +217,7 @@ describe('eraTW backend 的等值分派能力（契约 optional 方法）', () =
 
 /* ============================== 2. 表：真 backend 落 SELECTCASE ============================== */
 
-describe('`# 表` 端到端（真 eraTW backend）', () => {
+describe('`# 对照表` 端到端（真 eraTW backend）', () => {
   it('3 档精确整数 + `# 机` → 逐字节 SELECTCASE 产物（wrapper / 槽声明 / 兜底档全对）', () => {
     const result = compileKojoSource({ source: TABLE_SOURCE, adapter: ERATW_GAME_ADAPTER, backend: eratwBackend() });
     expect(errorCodes(result)).toEqual([]);

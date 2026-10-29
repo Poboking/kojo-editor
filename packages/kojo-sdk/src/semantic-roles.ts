@@ -335,7 +335,7 @@ export const KOJO2_TOKEN = Object.freeze({
   anchor: ROLE.anchor,
   /** 声明词 / 调度词（`#` 后的词、`@` 后的词、`!` 的被调名） */
   declaration: ROLE.declaration,
-  /** 保留词（`由` / `否` / `续` / `空行` / 类型词 / 存储期词 / 织入修饰词 / `[插槽]`） */
+  /** 保留词（`依据` / `否` / `续` / `空行` / 类型词 / 存储期词 / 织入修饰词 / `[插槽]`） */
   keyword: ROLE.keywordAlt,
   /** 结构性标点（`：` / `「」` / 括号 / 逗号）——与 v1 的台词标点**同角色**：同一枚 `「` 必须同色 */
   delimiter: ROLE.punctuation,
@@ -361,7 +361,7 @@ export const KOJO2_TOKEN = Object.freeze({
   hex: ROLE.numberAlt,
   /** 运算符（ASCII 符号与中文运算符词） */
   operator: ROLE.operatorAlt,
-  /** 类型 / 结构名（`# 表` / `# 池` / `# 模` 头与 `# 变量` 行的类型词）——与 v1 的类型档同角色 */
+  /** 类型 / 结构名（`# 对照表` / `# 池` / `# 模` 头与 `# 变量` 行的类型词）——与 v1 的类型档同角色 */
   type: ROLE.type,
 });
 

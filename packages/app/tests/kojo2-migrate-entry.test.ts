@@ -537,7 +537,7 @@ describe('语义层：入口注入的 io 跑出的计划带 rewrites（逐条 di
     expect(rewrite.diffText).toContain('+> {迁移表1}');
     expect(rewrite.diffText).toContain(`--- a/${FILE}`);
     // 整份 diff 里也能看见语义层的产物
-    expect(file.diffText).toContain('+# 表 迁移表1 由 TFLAG:193');
+    expect(file.diffText).toContain('+# 对照表 迁移表1 依据 TFLAG:193');
   });
 
   it('`初回` 块：落点是 @原生 围栏，原块按 context 展示（没被"删掉"）', async () => {

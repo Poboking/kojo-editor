@@ -419,16 +419,16 @@ describe('语义层：rewrites 进计划，可证的构造不再阻断', () => {
   const SWITCH =
     '角色: 灵梦\n时机 指令 310：\n    当 TFLAG:193：\n        是 1：\n            她一言不发。\n        是 5 到 8：\n            她微微眯起眼睛。\n        否则：\n            她什么也没说。\n';
 
-  it('`当` → `# 表`：ok=true、unsupported 清零、rewrites 一条带逐条 diff', () => {
+  it('`当` → `# 对照表`：ok=true、unsupported 清零、rewrites 一条带逐条 diff', () => {
     const plan = planMigrateFile({ filePath: FILE, source: SWITCH });
 
     expect(plan.ok).toBe(true);
     expect(plan.unsupported).toEqual([]);
     expect(plan.code).toBe(
-      '# 表 迁移表1 由 TFLAG:193\n' +
-        '    1 她一言不发。\n' +
-        '    5..8 她微微眯起眼睛。\n' +
-        '    否 她什么也没说。\n' +
+      '# 对照表 迁移表1 依据 TFLAG:193\n' +
+        '    1 -> 她一言不发。\n' +
+        '    5..8 -> 她微微眯起眼睛。\n' +
+        '    否 -> 她什么也没说。\n' +
         '\n' +
         '# 机 指令 310\n' +
         '> {迁移表1}\n',
@@ -457,7 +457,7 @@ describe('语义层：rewrites 进计划，可证的构造不再阻断', () => {
     expect(rewrite.diffText).toContain('-    当 TFLAG:193：');
     expect(rewrite.diffText).toContain('+> {迁移表1}');
     // 整份 diff 仍然照旧（声明提升到顶层 + 原位置换引用行）
-    expect(plan.diffText).toContain('+# 表 迁移表1 由 TFLAG:193');
+    expect(plan.diffText).toContain('+# 对照表 迁移表1 依据 TFLAG:193');
     expect(plan.summary).toMatchObject({ ok: true, unsupportedCount: 0, rewriteCount: 1 });
   });
 

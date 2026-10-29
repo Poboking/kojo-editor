@@ -1,5 +1,5 @@
 /**
- * `# 表` 等值分派落点判定（K2-TABLE-SELECTCASE / §6.3 / §16.2 C2.5）单测。
+ * `# 对照表` 等值分派落点判定（K2-TABLE-SELECTCASE / §6.3 / §16.2 C2.5）单测。
  *
  * 钉的判据（写死在 `lower/expand/table-plan.ts` 头注）：
  * - 正例：全精确整数键 + 臂数 ≥ 3 + 判别式纯整数 → `selectcase`；`否` 可选；
@@ -264,11 +264,11 @@ describe('planTableDispatch · 计划是纯数据', () => {
 const MACHINE = ['# 机 开场', '# 视 灵梦'];
 const EXACT_SOURCE = [
   ...MACHINE,
-  '# 表 心情 由 恋慕',
-  '    0 疏远',
-  '    5 平常',
-  '    10 亲近',
-  '    否 未知',
+  '# 对照表 心情 依据 恋慕',
+  '    0 -> 疏远',
+  '    5 -> 平常',
+  '    10 -> 亲近',
+  '    否 -> 未知',
   '> 她看着{心情}。',
 ];
 
@@ -344,8 +344,8 @@ describe('core 侧只发结构请求（零引擎关键字）', () => {
 
   it('2 臂 / 含区间 → 不请求（直接走 IF 链）', () => {
     for (const source of [
-      [...MACHINE, '# 表 心情 由 恋慕', '    0 疏远', '    5 平常', '    否 未知', '> {心情}'],
-      [...MACHINE, '# 表 心情 由 恋慕', '    0..9 疏远', '    10 平常', '    20 亲近', '    否 未知', '> {心情}'],
+      [...MACHINE, '# 对照表 心情 依据 恋慕', '    0 -> 疏远', '    5 -> 平常', '    否 -> 未知', '> {心情}'],
+      [...MACHINE, '# 对照表 心情 依据 恋慕', '    0..9 -> 疏远', '    10 -> 平常', '    20 -> 亲近', '    否 -> 未知', '> {心情}'],
     ]) {
       const probe: DispatchProbe = { requests: [] };
       const result = compile(source, backendWithDispatch(probe));

@@ -6,7 +6,7 @@
  *    以及"推断不出不产"的四种反例（缺初值 / 初值表达式 / 坏尾巴 / 第二个记号不是类型）；
  * 2. **`@巡` 绑定**：本文件作者数组（无需 adapter）、adapter 命名集合（角色 / 键值）、
  *    adapter 重复声明 / 不支持 `@巡` / 集合未知时**都不猜**；
- * 3. **`# 表` 档数**：有兜底 / 缺兜底 / 只有兜底，且只在声明行尾产一枚（表体逐行不刷）；
+ * 3. **`# 对照表` 档数**：有兜底 / 缺兜底 / 只有兜底，且只在声明行尾产一枚（表体逐行不刷）；
  * 4. **范围**：只算 `range` 内的行、越界端点夹取、非法区间回空；
  * 5. **位置门**：`@原生` 体 / 注释 / 台词 / 旁白 / 转义字面文本不产；
  * 6. **上限与确定性**：200 条截断、源码序、两次调用逐字相等、CRLF 与 LF 同结果；
@@ -228,8 +228,8 @@ describe('类型提示：显式类型 / 数组长度 / 未写类型按初值推�
 
   it('只对 `# 变量 / # 常量` 产类型提示：表 / 池 / 模 / 函 / 机 行不产 type', () => {
     const source = [
-      '# 表 心情 由 恋慕',
-      '    否 未知',
+      '# 对照表 心情 依据 恋慕',
+      '    否 -> 未知',
       '# 池 问候',
       '    早安',
       '        > 早。',
@@ -319,21 +319,21 @@ describe('`@巡 <集合>` 绑定名：数组 / 角色集合 / 键值集合，解
   });
 });
 
-/* ============================== ③ `# 表` 档数提示 ============================== */
+/* ============================== ③ `# 对照表` 档数提示 ============================== */
 
-describe('`# 表` 档数 / 兜底：只做声明行尾一枚，不逐行刷', () => {
+describe('`# 对照表` 档数 / 兜底：只做声明行尾一枚，不逐行刷', () => {
   const TABLE = [
-    '# 表 心情 由 恋慕',
-    '    0..99 疏远',
-    '    100..499 平常',
-    '    500.. 亲近',
-    '    否 未知',
+    '# 对照表 心情 依据 恋慕',
+    '    0..99 -> 疏远',
+    '    100..499 -> 平常',
+    '    500.. -> 亲近',
+    '    否 -> 未知',
   ].join('\n');
 
   it('三档 + 否 ⇒ `3 档 · 有否`', () => {
     expect(kojo2InlayHints(TABLE)).toEqual([
       {
-        position: { lineNumber: 1, column: '# 表 心情 由 恋慕'.length + 1 },
+        position: { lineNumber: 1, column: '# 对照表 心情 依据 恋慕'.length + 1 },
         label: '3 档 · 有否',
         kind: 'value',
         paddingLeft: true,
@@ -342,16 +342,16 @@ describe('`# 表` 档数 / 兜底：只做声明行尾一枚，不逐行刷', ()
   });
 
   it('缺兜底 ⇒ `2 档 · 缺否`', () => {
-    const source = ['# 表 心情 由 恋慕', '    0..99 疏远', '    100.. 平常'].join('\n');
+    const source = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '    100.. -> 平常'].join('\n');
     expect(labelsOf(source)).toEqual(['2 档 · 缺否']);
   });
 
   it('只有兜底 ⇒ `0 档 · 有否`', () => {
-    expect(labelsOf(['# 表 心情 由 恋慕', '    否 未知'].join('\n'))).toEqual(['0 档 · 有否']);
+    expect(labelsOf(['# 对照表 心情 依据 恋慕', '    否 -> 未知'].join('\n'))).toEqual(['0 档 · 有否']);
   });
 
   it('表体里的 `//` 注释不进档数', () => {
-    const source = ['# 表 心情 由 恋慕', '    // 说明', '    0..99 疏远', '    否 未知'].join('\n');
+    const source = ['# 对照表 心情 依据 恋慕', '    // 说明', '    0..99 -> 疏远', '    否 -> 未知'].join('\n');
     expect(labelsOf(source)).toEqual(['1 档 · 有否']);
   });
 
@@ -361,12 +361,12 @@ describe('`# 表` 档数 / 兜底：只做声明行尾一枚，不逐行刷', ()
     expect(hints[0]!.position.lineNumber).toBe(1);
   });
 
-  it('表头残缺到 parser 建不出节点（`# 表` 没名字）⇒ 不产', () => {
-    expect(kojo2InlayHints('# 表')).toEqual([]);
+  it('表头残缺到 parser 建不出节点（`# 对照表` 没名字）⇒ 不产', () => {
+    expect(kojo2InlayHints('# 对照表')).toEqual([]);
   });
 
   it('块体 / 表体里缩进的 `# 变量` 是原文，不是声明 ⇒ 不产类型提示', () => {
-    const source = ['# 表 心情 由 恋慕', '    # 变量 甲 整数', '    否 未知'].join('\n');
+    const source = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '    # 变量 甲 整数', '    否 -> 未知'].join('\n');
     expect(labelsOf(source)).toEqual(['1 档 · 有否']);
   });
 });
@@ -448,7 +448,7 @@ describe('位置门与编码：注释 / 台词 / 旁白不产，CRLF 与中文�
   });
 
   it('未闭合的 `@原生` 围栏 / 随机字符不抛', () => {
-    const sources = ['@原生\n    CALL X\n', '[[[###@@@\n\n\t\t', '# 表 超长 由 甲\n    否 零\n'];
+    const sources = ['@原生\n    CALL X\n', '[[[###@@@\n\n\t\t', '# 对照表 超长 依据 甲\n    否 零\n'];
     for (const source of sources) {
       expect(() => kojo2InlayHints(source)).not.toThrow();
     }
@@ -469,12 +469,12 @@ describe('上限与确定性', () => {
   });
 
   it('两次调用逐字相等（纯函数）', () => {
-    const source = ['# 变量 甲 整数', '# 表 心情 由 恋慕', '    否 未知', '@巡 甲'].join('\n');
+    const source = ['# 变量 甲 整数', '# 对照表 心情 依据 恋慕', '    否 -> 未知', '@巡 甲'].join('\n');
     expect(kojo2InlayHints(source)).toEqual(kojo2InlayHints(source));
   });
 
   it('输出按（行，列）升序', () => {
-    const source = ['# 常量 丙 整数 = 1', '# 变量 甲 整数', '# 表 心情 由 恋慕', '    否 未知'].join('\n');
+    const source = ['# 常量 丙 整数 = 1', '# 变量 甲 整数', '# 对照表 心情 依据 恋慕', '    否 -> 未知'].join('\n');
     const lines = kojo2InlayHints(source).map((hint) => hint.position.lineNumber);
     expect(lines).toEqual([...lines].sort((a, b) => a - b));
   });
@@ -554,8 +554,8 @@ describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空',
     const source = [
       '# 变量 状态 整数[3]',
       '@巡 状态',
-      '# 表 心情 由 恋慕',
-      '    否 未知',
+      '# 对照表 心情 依据 恋慕',
+      '    否 -> 未知',
     ].join('\n');
     const result = provide(fake, fakeModel(source));
     expect(result.hints.map((hint) => hint.kind)).toEqual([1, 2, undefined]);

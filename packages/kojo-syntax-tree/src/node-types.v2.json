@@ -600,6 +600,16 @@
     "type": "table_row",
     "named": true,
     "fields": {
+      "arrow": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "table_arrow",
+            "named": true
+          }
+        ]
+      },
       "range": {
         "multiple": false,
         "required": true,
@@ -776,6 +786,10 @@
   },
   {
     "type": "speech_text",
+    "named": true
+  },
+  {
+    "type": "table_arrow",
     "named": true
   },
   {

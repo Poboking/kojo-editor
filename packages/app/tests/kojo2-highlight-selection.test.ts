@@ -39,7 +39,7 @@ const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
 /**
  * 高亮夹具（每行都可以按内容定位）：
  * - 声明：幕 / 视 / 机 / 变量 / 常量 / 表 / 池 / 函 / 织；
- * - 引用：表 `由` 表达式、`?` 条件、函数体赋值、`!` 触发行、台词插值；
+ * - 引用：表 `依据` 表达式、`?` 条件、函数体赋值、`!` 触发行、台词插值；
  * - 误报陷阱：注释、字符串字面量、表体数据行的 `心情`、`@原生` 体内的 `心情`；
  * - `text` 档：`> 心情`（旁白正文）与 `\心情`（转义字面文本）。
  */
@@ -50,10 +50,10 @@ const HILITE = [
   '# 机 指令 310', // 4
   '# 变量 心情 整数 = 0 存档', // 5
   '# 常量 引号 字符串 = "心情"', // 6 字符串字面量
-  '# 表 心情表 由 心情', // 7
-  '    0..99 疏远', // 8
-  '    100..499 心情', // 9 表体数据行
-  '    否 未知', // 10
+  '# 对照表 心情表 依据 心情', // 7
+  '    0..99 -> 疏远', // 8
+  '    100..499 -> 心情', // 9 表体数据行
+  '    否 -> 未知', // 10
   '', // 11
   '# 池 早安问候', // 12
   '    ? 心情 >= 100', // 13
@@ -85,10 +85,10 @@ const SELECT = [
   '# 视 灵梦', // 2
   '# 机 指令 310', // 3
   '# 变量 心情 整数 = 0 存档', // 4
-  '# 表 心情表 由 心情', // 5
-  '    0..99 疏远', // 6
-  '    100..499 平常', // 7
-  '    否 未知', // 8
+  '# 对照表 心情表 依据 心情', // 5
+  '    0..99 -> 疏远', // 6
+  '    100..499 -> 平常', // 7
+  '    否 -> 未知', // 8
   '', // 9
   '# 池 早安问候', // 10
   '    ? 心情 >= 100', // 11
@@ -278,7 +278,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
     ]);
   });
 
-  it('read：表 `由` 表达式 / 条件 / 函数体 / 触发行实参 / 台词插值', () => {
+  it('read：表 `依据` 表达式 / 条件 / 函数体 / 触发行实参 / 台词插值', () => {
     const reads = hits.filter((hit) => hit.kind === 'read');
     expect(reads.map((hit) => hit.range.startLine)).toEqual([7, 13, 19, 19, 21, 27]);
     expect(reads.every((hit) => hit.range.startColumn === hit.range.endColumn - 2)).toBe(true);
@@ -316,7 +316,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
     expect(hits.some((hit) => hit.range.startLine === 9)).toBe(false);
   });
 
-  it('词边界：`心情` 不会误命中声明名 `心情表`，但会命中表头的 `由 心情`', () => {
+  it('词边界：`心情` 不会误命中声明名 `心情表`，但会命中表头的 `依据 心情`', () => {
     const tableLine = lineText(HILITE, 7);
     const nameColumn = tableLine.indexOf('心情表') + 1;
     expect(hits.some((hit) => hit.range.startLine === 7 && hit.range.startColumn === nameColumn)).toBe(
@@ -332,7 +332,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
     const tableHits = kojo2DocumentHighlights(HILITE, at(HILITE, 7, '心情表'));
     expect(tableHits).toHaveLength(1);
     expect(tableHits[0]!.kind).toBe('write');
-    expect(flat(tableHits[0]!.range)).toEqual([7, 5, 7, 8]);
+    expect(flat(tableHits[0]!.range)).toEqual([7, 7, 7, 10]);
   });
 
   it('`@函`：声明 write + `!` 调用位 read', () => {
@@ -463,7 +463,7 @@ describe('高亮 provider：只挂 kojo2、不读开关、dispose 幂等、异�
     ) as Monaco.languages.DocumentHighlight[];
     expect(result.map((hit) => [flatIRange(hit.range), hit.kind])).toEqual([
       [[5, 6, 5, 8], HIGHLIGHT_KINDS.Write],
-      [[7, 11, 7, 13], HIGHLIGHT_KINDS.Read],
+      [[7, 14, 7, 16], HIGHLIGHT_KINDS.Read],
       [[13, 7, 13, 9], HIGHLIGHT_KINDS.Read],
       [[19, 5, 19, 7], HIGHLIGHT_KINDS.Read],
       [[19, 10, 19, 12], HIGHLIGHT_KINDS.Read],
@@ -594,7 +594,7 @@ describe('扩选：没有 `# 幕` 时 `# 机` 体是一级', () => {
   });
 
   it('有机体时表体嵌在机体内（机体 → 表 → 行 → 词）', () => {
-    const source = ['# 机 指令 310', '# 表 甲 由 乙', '    0..9 丙', '', ''].join('\n');
+    const source = ['# 机 指令 310', '# 对照表 甲 依据 乙', '    0..9 -> 丙', '', ''].join('\n');
     const chain = chainOf(source, at(source, 3, '丙'));
     expect(chain.map((range) => range.startLine)).toEqual([3, 3, 2, 1, 1]);
     expect(flat(chain[2]!)).toEqual([2, 1, 3, lineText(source, 3).length + 1]);

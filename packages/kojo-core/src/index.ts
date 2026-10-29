@@ -27,7 +27,7 @@ export * from './lower/index.js';
 export * from './lower/expand/options.js';
 /* `@巡` 的集合计划（K2-FOREACH；adapter 契约 `foreachCollections` 的唯一真源） */
 export * from './lower/expand/foreach.js';
-/* `# 表` / `# 池` 的等值分派计划（K2-DISPATCH-WIRING）：契约字段
+/* `# 对照表` / `# 池` 的等值分派计划（K2-DISPATCH-WIRING）：契约字段
    `program.tableDispatch` / `presentation.poolDispatch` 的请求形状与判定函数的唯一真源 */
 export * from './lower/expand/table-plan.js';
 export * from './lower/expand/pool-plan.js';

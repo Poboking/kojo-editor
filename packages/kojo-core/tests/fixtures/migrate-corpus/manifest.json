@@ -541,7 +541,7 @@
         "stripBanner": false,
         "prependChara": null
       },
-      "notes": "语义层夹具：`当/是` → `# 表`、`分支：` → `# 池`、`初回` → `@原生`",
+      "notes": "语义层夹具：`当/是` → `# 对照表`、`分支：` → `# 池`、`初回` → `@原生`",
       "expected": {
         "status": "blocked",
         "blockedReason": "v1-compile-failed"

@@ -301,7 +301,7 @@ describe('detail：声明词（core 单源）+ 一句话事实', () => {
 
   it('表写由谁驱动与行数，池写分支数', () => {
     expect(factOf('table', '心情').detail).toBe(
-      `${KOJO2_SYMBOL_WORD_BY_KIND.table} 由 恋慕 · 3 行`,
+      `${KOJO2_SYMBOL_WORD_BY_KIND.table} 依据 恋慕 · 3 行`,
     );
     expect(factOf('table', '天气').detail).toContain('2 行');
     expect(factOf('pool').detail).toBe(`${KOJO2_SYMBOL_WORD_BY_KIND.pool} · 2 分支`);
@@ -349,13 +349,13 @@ describe('真 span：块区间取 core AST，名字区间取词法偏移', () =>
       startLine: 9,
       startColumn: 1,
       endLine: 12,
-      endColumn: 9,
+      endColumn: 12,
     });
     expect(factOf('table', '天气').range).toEqual({
       startLine: 35,
       startColumn: 1,
       endLine: 37,
-      endColumn: 8,
+      endColumn: 11,
     });
   });
 
@@ -536,7 +536,7 @@ describe('空 / 坏输入：[] 且不抛', () => {
   });
 
   it('局部坏行不带走其余合法声明（错误恢复：能给多少给多少）', () => {
-    const source = '# 变量 甲 整数\n  这一行缩进错了\n# 表 乙 由 甲\n    否 零\n';
+    const source = '# 变量 甲 整数\n  这一行缩进错了\n# 对照表 乙 依据 甲\n    否 -> 零\n';
     const facts = kojo2DocumentSymbols(source);
     expect(facts.map((fact) => fact.name)).toContain('甲');
     expect(facts.map((fact) => fact.name)).toContain('乙');
@@ -547,7 +547,7 @@ describe('空 / 坏输入：[] 且不抛', () => {
       '@原生\n    CALL X\n',
       '# 幕 甲\r\n# 变量 乙 整数\r\n',
       '[[[###@@@\n\n\t\t',
-      `# 表 超长 由 ${'甲'.repeat(500)}\n    否 零\n`,
+      `# 对照表 超长 依据 ${'甲'.repeat(500)}\n    否 零\n`,
     ];
     for (const source of sources) {
       expect(() => kojo2DocumentSymbols(source)).not.toThrow();
@@ -557,7 +557,7 @@ describe('空 / 坏输入：[] 且不抛', () => {
 
   it('超长 detail 截断到一行（不折行、不丢代理对）', () => {
     const longSubject = '恋'.repeat(200);
-    const facts = kojo2DocumentSymbols(`# 表 长 由 ${longSubject}\n    否 零\n`);
+    const facts = kojo2DocumentSymbols(`# 对照表 长 依据 ${longSubject}\n    否 -> 零\n`);
     expect(facts).toHaveLength(1);
     expect(facts[0]!.detail.endsWith('…')).toBe(true);
     expect([...facts[0]!.detail].length).toBeLessThanOrEqual(60);
@@ -672,13 +672,13 @@ describe('Monaco 翻译：SymbolKind 映射与 DocumentSymbol 树', () => {
       startLineNumber: 9,
       startColumn: 1,
       endLineNumber: 12,
-      endColumn: 9,
+      endColumn: 12,
     });
     expect(table!.selectionRange).toEqual({
       startLineNumber: 9,
-      startColumn: 5,
+      startColumn: 7,
       endLineNumber: 9,
-      endColumn: 7,
+      endColumn: 9,
     });
   });
 

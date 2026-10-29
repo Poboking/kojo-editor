@@ -466,13 +466,13 @@ export const LANGUAGE_SUITE: readonly LanguageCase[] = Object.freeze([
     note: '同一条链里混用旧 `如果` → error + 迁移批注，不产字节',
   }),
 
-  /* --- table：`# 表` --- */
+  /* --- table：`# 对照表` --- */
   languageCase({
     id: 'table/interval',
     group: 'table',
     file: g('table-interval'),
     expectation: 'golden',
-    constructs: ['# 表', '闭区间', '开放区间'],
+    constructs: ['# 对照表', '闭区间', '开放区间'],
     note: '闭区间 + 开放区间（常量端点）+ `否` 的 IF 链落点',
   }),
   languageCase({
@@ -480,7 +480,7 @@ export const LANGUAGE_SUITE: readonly LanguageCase[] = Object.freeze([
     group: 'table',
     file: g('table-exact'),
     expectation: 'golden',
-    constructs: ['# 表', '精确值'],
+    constructs: ['# 对照表', '精确值'],
     note: '纯精确值表的等值分档',
   }),
   languageCase({
@@ -488,7 +488,7 @@ export const LANGUAGE_SUITE: readonly LanguageCase[] = Object.freeze([
     group: 'table',
     file: g('table-mixed'),
     expectation: 'golden',
-    constructs: ['# 表', '混合区间'],
+    constructs: ['# 对照表', '混合区间'],
     note: '开放区间 + 闭区间 + 精确值混排',
   }),
   languageCase({
@@ -496,7 +496,7 @@ export const LANGUAGE_SUITE: readonly LanguageCase[] = Object.freeze([
     group: 'table',
     file: g('table-missing-default'),
     expectation: 'diagnostics',
-    constructs: ['# 表', '缺 否'],
+    constructs: ['# 对照表', '缺 否'],
     note: '表缺 `否` → error（不引用也报）',
   }),
   languageCase({
@@ -504,7 +504,7 @@ export const LANGUAGE_SUITE: readonly LanguageCase[] = Object.freeze([
     group: 'table',
     file: g('table-overlap'),
     expectation: 'diagnostics',
-    constructs: ['# 表', '静态重叠'],
+    constructs: ['# 对照表', '静态重叠'],
     note: '静态区间重叠 → error（不进入运行期）',
   }),
 
@@ -1625,8 +1625,8 @@ export const LANGUAGE_SHARED_SUITE: readonly LanguageSharedCase[] = Object.freez
   {
     id: 'shared/table',
     file: 'table',
-    constructs: ['# 表', '区间档', '开放档', '隐藏槽'],
-    note: '`# 表` 四档分派（含 `亲近线..` 开放档）与 `__kojo_table_*` 隐藏槽',
+    constructs: ['# 对照表', '区间档', '开放档', '隐藏槽'],
+    note: '`# 对照表` 四档分派（含 `亲近线..` 开放档）与 `__kojo_table_*` 隐藏槽',
   },
   {
     id: 'shared/pool',
@@ -1679,7 +1679,7 @@ function sharedMachineLine(source: string): number | null {
  * 从产物里取 **body**：产物行的 source map 指向 `# 机` **之后**源行的那一段。
  *
  * 机壳行（`@…` / `CALL` / `RETURN` / `LOCAL` / `IF LOCAL` / `#DIM` 槽声明）指向 `# 机`
- * 那一行或纯生成行，故不在 body 里；`# 表` / `# 模` 的展开行指向定义处（`# 机` 之后）
+ * 那一行或纯生成行，故不在 body 里；`# 对照表` / `# 模` 的展开行指向定义处（`# 机` 之后）
  * 或调用处，仍在 body 里——这正是"语义面与方言无关"的那一半。
  */
 function sharedBodyOf(artifact: string, lineAt: (generatedLine: number) => { readonly source: { readonly start: { readonly line: number } } | null } | null, lineCount: number, machineLine: number): string {

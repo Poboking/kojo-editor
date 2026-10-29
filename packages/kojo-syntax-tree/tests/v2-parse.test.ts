@@ -223,7 +223,7 @@ describe('full.kojo2：2.0 语法面全部落成 CST 节点', () => {
     expect(block.descendantsOfType('slot_marker').length).toBe(0);
   });
 
-  it('# 表：块 + 两列表行 + 否 兜底', () => {
+  it('# 对照表：块 + 两列表行 + 否 兜底', () => {
     const tableBlock = root
       .descendantsOfType('block')
       .find((b) => b.childForFieldName('open')?.type === 'table_head');

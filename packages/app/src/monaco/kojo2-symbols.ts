@@ -30,7 +30,7 @@ import type { Kojo2SymbolFact, Kojo2SymbolKind, Kojo2SymbolRange } from '@kojo/k
  * - `# 机` / `@织` = `Event`：两者都是事件钩子（`# 机` 挂本文件、`@织` 挂监听；
  *   detail 里的声明词区分它们）；
  * - `# 变量` = `Variable`、`# 常量` = `Constant`：与声明语义一一对应；
- * - `# 表` = `Struct`、`# 池` = `Enum`：与补全层的 `CompletionItemKind` 映射同口径
+ * - `# 对照表` = `Struct`、`# 池` = `Enum`：与补全层的 `CompletionItemKind` 映射同口径
  *   （表是多行记录、池是分支枚举）；
  * - `# 模` = `Method`、`@函` = `Function`：两者都可带参调用，用不同图标区分
  *   "编译期展开的模"与"运行期函数"。

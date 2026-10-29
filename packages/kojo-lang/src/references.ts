@@ -13,7 +13,7 @@
  *
  * {@link kojo2ReferencesAt} 是**纯函数**：源码 + 1 基行列进，符号事实 + 出现点列表出。
  * 符号面覆盖本批语义层的全部声明形态：
- * - `@函` / `# 表` / `# 池` / `# 模` / `# 变量` / `# 常量`（声明索引与 `declarations.ts` 同一份）；
+ * - `@函` / `# 对照表` / `# 池` / `# 模` / `# 变量` / `# 常量`（声明索引与 `declarations.ts` 同一份）；
  * - `# 幕` **整段标题**（标题里可以有空格，区间覆盖整段）；
  * - `# 机` / `@织` 的**事件名**——两者是同一条事件符号的两种挂点：`# 机` 是声明
  *   （`decl`），`@织` 是监听引用（`ref`）。本文件没有 `# 机` 时以**最早一条 `@织`** 作
@@ -27,7 +27,7 @@
  * - `! 名` / `! 名(实参)` 的调用名与实参表达式；
  * - `? <条件>` 的条件表达式、`@巡` / `@循` / `@复` 的头表达式、`@返` 的返回值表达式、
  *   `@着色` 的颜色表达式、`# 变量` 类型里的 `[<数组长度>]`；
- * - `# 表 … 由 <表达式>` 的 `由` 之后（表体行是字面量，不扫）；
+ * - `# 对照表 … 依据 <表达式>` 的 `依据` 之后（表体行是字面量，不扫）；
  *   **例外（2026-10-26 批）**：表体行的**范围端点**是表达式位（core AST 的
  *   `from` / `to`，只允许十进制字面量或整数 `# 常量`）——改名会改写它们，引用就必须能看见；
  *   值列仍是字面量，不扫。
@@ -58,7 +58,7 @@
  * - 跨文件查找有两档归属：本文件有同名声明（或事件挂点）时走同文件判据；本文件没有时走
  *   项目索引的候选位 + `symbolAt`（要求 `options.path`，且项目里这个名字**只有一种**
  *   声明种类）——同名多家族是 core 错误，此时回 `null`，不猜；
- * - 表体行端点（`# 表` 的 `0..99`）此前不收集，而 `rename.ts` 按 core AST 会改写
+ * - 表体行端点（`# 对照表` 的 `0..99`）此前不收集，而 `rename.ts` 按 core AST 会改写
  *   `from` / `to` 里的常量（§6.1 的端点就是表达式位）⇒ 两把尺子不一致。本批让 references
  *   覆盖同一集合：端点里**名字形态**的标识符（整数常量）进 refs，数字端点与值列不进。
  * - `# 视` 的视角目标、`@跳` / `@标` 的标签名不属本批符号面（没有声明索引可归属）。
@@ -85,7 +85,7 @@ import { isNameChar } from './name-chars';
 
 /* ============================== 词形（core 单源） ============================== */
 
-/** `# 表` / `# 变量` 的声明词（core 位序 §3.3） */
+/** `# 对照表` / `# 变量` 的声明词（core 位序 §3.3） */
 const TABLE_WORD = KOJO_DECL_WORDS[5];
 const VARIABLE_WORD = KOJO_DECL_WORDS[3];
 
@@ -483,7 +483,7 @@ function collectLine(
     case 'decl': {
       if (!line.known) return;
       if (line.word === TABLE_WORD) {
-        // `# 表 <名> 由 <表达式>`：只扫 `由` 之后；表体行是字面量，不碰。
+        // `# 对照表 <名> 依据 <表达式>`：只扫 `依据` 之后；表体行是字面量，不碰。
         const tokens = splitSpaces(line.rest, line.restOffset);
         for (let index = 1; index < tokens.length; index++) {
           const token = tokens[index]!;
@@ -580,9 +580,9 @@ function expressionContextOf(enclosing: KojoLexLine | undefined): boolean {
 }
 
 /**
- * 这一行是不是 `# 表` 体的**数据行**（缩进恰好比表头深一级；§6.1）。
+ * 这一行是不是 `# 对照表` 体的**数据行**（缩进恰好比表头深一级；§6.1）。
  *
- * 判据只看"直接外层块头是 `# 表` + 缩进一级"——与 parser 的 `parseTableRow` 取同一类行
+ * 判据只看"直接外层块头是 `# 对照表` + 缩进一级"——与 parser 的 `parseTableRow` 取同一类行
  * （空行结束表、表内注释被跳过，这两条由 `sitesOf` 的跳过逻辑与缩进栈天然满足）。
  */
 function isTableBodyRow(enclosing: KojoLexLine | undefined, line: KojoLexLine): boolean {
@@ -982,7 +982,7 @@ export function kojo2ReferenceSymbolsOf(
  *
  * 与 {@link kojo2ReferencesAt} 走同一条 `collectLine` / `scanIdentifiers` 扫描，唯一放宽：
  * 不再要求名字在本文件里有声明。去掉了这一步，才能看见"只在别的文件里声明"的真实引用
- * （例如 B 文件里 `{心情}`，而 `# 表 心情` 写在 A 文件）。
+ * （例如 B 文件里 `{心情}`，而 `# 对照表 心情` 写在 A 文件）。
  *
  * 返回里**不含声明位**（`kind === 'decl'` 由符号事实单独给）与 `# 机` / `@织` 的事件名
  * （事件挂点不是表达式引用，事件查询走符号事实）。空源 / 解析抛错 ⇒ `[]`。
@@ -1138,7 +1138,7 @@ function candidateNameAt(
  *   {@link kojo2ReferenceSymbolsOf} / {@link kojo2ReferenceCandidatesOf} 建的，所以两边
  *   不可能各说一套。
  *
- * **本文件没有改名声明时**（典型形态：B 文件里 `{心情}`，而 `# 表 心情` 在 A 文件）：
+ * **本文件没有改名声明时**（典型形态：B 文件里 `{心情}`，而 `# 对照表 心情` 在 A 文件）：
  * {@link kojo2ReferencesAt} 回 `null`，这里改问索引 `symbolAt(options.path, position)`
  * 拿到位置上的符号名字与声明种类，再把整项目的出现点按"本文件 / 别的文件"拆开返回。
  * 项目里同名多家族（core 错误）或这个名字没有声明 ⇒ 仍回 `null`（不猜）。

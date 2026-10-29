@@ -22,14 +22,14 @@ const OTHER = 'D:/proj/口上/2_共用.kojo2';
 /** 请求文件：事件声明 + 表声明 + 插值引用（`# 机` 让正文有挂点，parse 零 error） */
 const SOURCE = [
   '# 机 指令 310', // 1
-  '# 表 心情 由 1', // 2
+  '# 对照表 心情 依据 1', // 2
   '> 她今天看起来{心情}。', // 3
 ].join('\n');
 
 /** 别的文件：同一张表的声明 + 引用（跨文件形态） */
 const OTHER_SOURCE = [
   '# 机 指令 310', // 1
-  '# 表 心情 由 1', // 2
+  '# 对照表 心情 依据 1', // 2
   '> {心情}', // 3
 ].join('\n');
 
@@ -52,7 +52,7 @@ function renameRequest(over: Record<string, unknown> = {}) {
     path: PATH,
     text: SOURCE,
     line: 2,
-    column: 5,
+    column: 7,
     newName: '情绪',
     project: null,
     languageId: 'kojo2',

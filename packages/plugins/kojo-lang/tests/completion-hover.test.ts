@@ -32,9 +32,9 @@ const SOURCE = [
   '# 幕 序幕', // 1
   '# 变量 今日计数 整数 = 0 存档', // 2
   '# 常量 上限 整数 = 99', // 3
-  '# 表 心情 由 好感', // 4
-  '    0..99 疏远', // 5
-  '    否 未知', // 6
+  '# 对照表 心情 依据 好感', // 4
+  '    0..99 -> 疏远', // 5
+  '    否 -> 未知', // 6
   '# 池 招呼', // 7
   '    ? 今日计数 > 3', // 8
   '        > 你好', // 9
@@ -158,7 +158,7 @@ describe('completion 供方：逐格翻译（与今天宿主对齐）', () => {
     expect('documentationFormat' in byLabel.get('我')!).toBe(false);
     // 声明类逐档：表→struct、池→enum、模→snippet、函→function，各带 Markdown documentation
     expect(byLabel.get('心情')!.kind).toBe('struct');
-    expect(byLabel.get('心情')!.documentation).toContain('**心情**（表声明）');
+    expect(byLabel.get('心情')!.documentation).toContain('**心情**（对照表声明）');
     expect(byLabel.get('心情')!.documentationFormat).toBe('markdown');
     expect(byLabel.get('招呼')!.kind).toBe('enum');
     expect(byLabel.get('招呼')!.documentation).toContain('**招呼**（池声明）');
@@ -179,7 +179,7 @@ describe('completion 供方：逐格翻译（与今天宿主对齐）', () => {
   it('声明索引**只在声明轮建**：事件候选与声明同名也不给 documentation（与今天逐字一致）', () => {
     const adapter = stubAdapter('proj-a', ['心情']);
     const items = provideCompletion(
-      completionRequest(4, 6, { text: '# 表 心情 由 好感\n    0..99 疏远\n    否 未知\n# 机 心情' }),
+      completionRequest(4, 6, { text: '# 对照表 心情 依据 好感\n    0..99 -> 疏远\n    否 -> 未知\n# 机 心情' }),
       { adapter },
     )!.items;
     const event = items.find((item) => item.label === '心情')!;
@@ -189,7 +189,7 @@ describe('completion 供方：逐格翻译（与今天宿主对齐）', () => {
     const inExpression = provideCompletion(completionRequest(15, 7), { adapter })!.items;
     expect(inExpression.map((item) => item.label)).toEqual(['心情']);
     const table = inExpression[0]!;
-    expect(table.documentation).toContain('**心情**（表声明）');
+    expect(table.documentation).toContain('**心情**（对照表声明）');
   });
 });
 
@@ -295,11 +295,11 @@ describe('completion 供方：adapter 纪律（经 plugin.ts 接线，请求时�
 /* ============================== 悬停腿 ============================== */
 
 const HOVER_SOURCE = [
-  '! 心情', // 1（引用处：表 心情 在第 3 行声明）
+  '! 心情', // 1（引用处：`# 对照表 心情` 在第 3 行声明）
   '', // 2
-  '# 表 心情 由 好感', // 3（声明处）
-  '    0..99 疏远', // 4
-  '    否 未知', // 5
+  '# 对照表 心情 依据 好感', // 3（声明处）
+  '    0..99 -> 疏远', // 4
+  '    否 -> 未知', // 5
   '# 机 开场白', // 6（事件挂点）
 ].join('\n');
 
@@ -329,15 +329,15 @@ describe('hover 供方：语言过滤与三态分家', () => {
   });
 
   it('声明处 / 引用处 ⇒ Markdown 正文 + format + 名字段 range', () => {
-    const result = provideHover(hoverRequest(3, 5, HOVER_SOURCE))!;
+    const result = provideHover(hoverRequest(3, 7, HOVER_SOURCE))!;
     expect(result.kind).toBe('hover');
     expect(result.format).toBe('markdown');
-    expect(result.contents.startsWith('**心情**（表声明）')).toBe(true);
+    expect(result.contents.startsWith('**心情**（对照表声明）')).toBe(true);
     expect(result.contents).toContain('来源行：第 3 行');
-    expect(result.range).toEqual({ line: 3, startColumn: 5, endColumn: 7 });
+    expect(result.range).toEqual({ line: 3, startColumn: 7, endColumn: 9 });
 
     const reference = provideHover(hoverRequest(1, 3, HOVER_SOURCE))!;
-    expect(reference.contents).toContain('**心情**（表声明）');
+    expect(reference.contents).toContain('**心情**（对照表声明）');
     expect(reference.range).toEqual({ line: 1, startColumn: 3, endColumn: 5 });
   });
 
@@ -370,8 +370,8 @@ describe('hover 供方：语言过滤与三态分家', () => {
       expect((matched as { contents: string }).contents).toContain('可用事件');
       expect(hover.provide(hoverRequest(6, 5, HOVER_SOURCE, { project: { adapterId: 'proj-b' } as never }))).toBeUndefined();
       // 声明事实不受牵连
-      const declaration = hover.provide(hoverRequest(3, 5, HOVER_SOURCE, { project: { adapterId: 'proj-b' } as never }));
-      expect((declaration as { contents: string }).contents).toContain('**心情**（表声明）');
+      const declaration = hover.provide(hoverRequest(3, 7, HOVER_SOURCE, { project: { adapterId: 'proj-b' } as never }));
+      expect((declaration as { contents: string }).contents).toContain('**心情**（对照表声明）');
     } finally {
       unregister();
     }
@@ -385,11 +385,11 @@ describe('hover 供方：展开段（两段合成一条 contents，本批唯一�
     try {
       const result = provideHover(hoverRequest(1, 3, HOVER_SOURCE))!;
       expect(typeof result.contents).toBe('string');
-      expect(result.contents).toContain('**心情**（表声明）');
+      expect(result.contents).toContain('**心情**（对照表声明）');
       expect(result.contents).toContain('展开产物：第 2 行（1 行）');
-      expect(result.contents.indexOf('表声明')).toBeLessThan(result.contents.indexOf('展开产物'));
+      expect(result.contents.indexOf('对照表声明')).toBeLessThan(result.contents.indexOf('展开产物'));
       // 两段之间的接缝恰是 `'\n\n'`（声明段末段与展开段标题之间）
-      expect(result.contents).toContain('（表声明）');
+      expect(result.contents).toContain('（对照表声明）');
       expect(result.contents).toContain('\n\n**模板 心情**');
       // range 归声明段（与今天宿主优先级一致）
       expect(result.range).toEqual({ line: 1, startColumn: 3, endColumn: 5 });
@@ -402,8 +402,8 @@ describe('hover 供方：展开段（两段合成一条 contents，本批唯一�
     const compilation = fakeCompilation();
     const unregister = registerKojo2ExpandCompileSource((path) => (path === PATH ? compilation : null));
     try {
-      const result = provideHover(hoverRequest(3, 5, HOVER_SOURCE))!;
-      expect(result.contents).toContain('**心情**（表声明）');
+      const result = provideHover(hoverRequest(3, 7, HOVER_SOURCE))!;
+      expect(result.contents).toContain('**心情**（对照表声明）');
       expect(result.contents).not.toContain('展开产物');
     } finally {
       unregister();
@@ -412,12 +412,12 @@ describe('hover 供方：展开段（两段合成一条 contents，本批唯一�
 
   it('只有展开段（随机块头这类无声明事实处）⇒ range 取调用处 span', () => {
     const compilation = fakeCompilation();
-    const text = ['! 未在', '', '# 表 心情 由 好感', '    0..99 疏远', '    否 未知'].join('\n');
+    const text = ['! 未在', '', '# 对照表 心情 依据 好感', '    0..99 -> 疏远', '    否 -> 未知'].join('\n');
     const unregister = registerKojo2ExpandCompileSource((path) => (path === PATH ? compilation : null));
     try {
       const result = provideHover(hoverRequest(1, 3, text))!;
       expect(result.contents.startsWith('**模板 未在**')).toBe(true);
-      expect(result.contents).not.toContain('（表声明）');
+      expect(result.contents).not.toContain('（对照表声明）');
       expect(result.range).toEqual({ line: 1, startColumn: 3, endColumn: 5 });
     } finally {
       unregister();
@@ -426,7 +426,7 @@ describe('hover 供方：展开段（两段合成一条 contents，本批唯一�
 
   it('取不到编译成品 ⇒ 只有声明段（不二次编译、不猜）', () => {
     const result = provideHover(hoverRequest(1, 3, HOVER_SOURCE))!;
-    expect(result.contents).toContain('**心情**（表声明）');
+    expect(result.contents).toContain('**心情**（对照表声明）');
     expect(result.contents).not.toContain('展开产物');
     expect(result.format).toBe('markdown');
   });
@@ -443,7 +443,7 @@ describe('hover 供方：展开段（两段合成一条 contents，本批唯一�
     }) as unknown as Kojo2ExpandCompilation);
     try {
       const result = provideHover(hoverRequest(1, 3, HOVER_SOURCE))!;
-      expect(result.contents).toContain('**心情**（表声明）');
+      expect(result.contents).toContain('**心情**（对照表声明）');
       expect(result.contents).not.toContain('展开产物');
     } finally {
       unregister();

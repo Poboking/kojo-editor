@@ -1,5 +1,5 @@
 /**
- * eraTW 的 `# 表` 等值分派落点（K2-TABLE-SELECTCASE / §6.3 / §16.2 C2.5）：
+ * eraTW 的 `# 对照表` 等值分派落点（K2-TABLE-SELECTCASE / §6.3 / §16.2 C2.5）：
  * **纯函数**，结构计划 → 产物行 / `EmitFailure`。
  *
  * 产物形状（正文来自 core 已降糖的臂行，**原样嵌入、只加缩进**）：
@@ -115,7 +115,7 @@ export function emitTableDispatch(input: EratwTableEmitInput): EmitResult {
   const plan = input.plan;
   if (presentation === null) {
     return incomplete(
-      '当前 eraTW adapter 没有声明 `# 表` 等值分派落点（table dispatch data）：不能生成分派块（fail-closed，不产半成品字节）。',
+      '当前 eraTW adapter 没有声明 `# 对照表` 等值分派落点（table dispatch data）：不能生成分派块（fail-closed，不产半成品字节）。',
       plan.span,
     );
   }

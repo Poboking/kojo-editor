@@ -584,7 +584,7 @@ describe('2.0 表的逐字溯源（乙：例子不许凭印象编）', () => {
       ),
     );
     expect(KOJO2_FIXTURE_LINES.size).toBeGreaterThan(150);
-    expect(KOJO2_FIXTURE_LINES.has('# 表 心情 由 恋慕')).toBe(true);
+    expect(KOJO2_FIXTURE_LINES.has('# 对照表 心情 依据 恋慕')).toBe(true);
     expect(KOJO2_FIXTURE_LINES.has('灵梦：「{你}今天来得挺早嘛。」(微笑)')).toBe(true);
   });
 
@@ -598,7 +598,7 @@ describe('2.0 表的逐字溯源（乙：例子不许凭印象编）', () => {
     expect(KOJO2_FIXTURE_LINES.has('灵梦：「……好。」 续')).toBe(true);
     // 近miss：少了 `续` 前那个空格 / 把表的主语换成没声明过的名字
     expect(KOJO2_FIXTURE_LINES.has('灵梦：「……好。」续')).toBe(false);
-    expect(KOJO2_FIXTURE_LINES.has('# 表 心情 由 爱欲')).toBe(false);
+    expect(KOJO2_FIXTURE_LINES.has('# 对照表 心情 依据 爱欲')).toBe(false);
     expect(unwrap('`# 机 指令 310`')).toBe('# 机 指令 310');
   });
 });
@@ -668,7 +668,7 @@ describe('2.0 六张表的覆盖面与作者面底线（丁）', () => {
       '# 机',
       '# 常量',
       '# 变量',
-      '# 表',
+      '# 对照表',
       '# 池',
       '# 模',
       '@算',
@@ -706,7 +706,7 @@ describe('2.0 六张表的覆盖面与作者面底线（丁）', () => {
     for (const event of ['初见', '训练', '读档', '商店', '购买', '指令', '训练结束', '回合末', '指令结束']) {
       expect(kojo2Text, `缺事件名：${event}`).toContain(event);
     }
-    for (const word of ['幕', '视', '机', '变量', '常量', '表', '池', '模']) {
+    for (const word of ['幕', '视', '机', '变量', '常量', '对照表', '池', '模']) {
       expect(kojo2Text, `缺声明词：# ${word}`).toContain(`# ${word}`);
     }
     for (const period of ['场景', '存档', '会话']) {

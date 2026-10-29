@@ -714,7 +714,7 @@ MISSING·类型计数·缩进面偏差**全为 0**：
    `ERATW_GAME_ADAPTER.storageClasses` 与 `gameFingerprint.digest`；
    `ui/kojo2-project-scan-adapter.ts:48-51` 默认装载器 `loadEratwGameAdapter` 无条件 eraTW。）
 2. **eraFL 的口上主战场是 XML**（`<command com="300" name="会話" kojoPlace="TOP">`，出处
-   `HANDOFF-erafl-adapter.md:51`），ERB 侧只剩一个注册壳。于是 2.0 的 `# 机` / `@织` / `# 表` / `# 池` / `选项`
+   `HANDOFF-erafl-adapter.md:51`），ERB 侧只剩一个注册壳。于是 2.0 的 `# 机` / `@织` / `# 对照表` / `# 池` / `选项`
    在作者真正写东西的地方**没有落点**；照抄 eraTW 那 16 件，作者打开口上 XML 会发现"什么也没变"。
    （同一份 handoff `:97` 还有一条更硬的事实：eraFL 的九事件里**只有 4 个是引擎事件**，其余五个是
    eraFL 自己包的一层——这正是"事件目录必须是数据"的直接证据。）
@@ -1039,7 +1039,7 @@ export interface EditorDocumentIdentity {
 | 方案 | 做法 | 代价 |
 |---|---|---|
 | **A（推荐）** | `.kojo` 归 2.0；v1 搬 `.kojo1`；提供一键改扩展名工具 | 老工程要跑一次改名；但"扩展名 = 语言"这条判据保持干净 |
-| B | `.kojo` 按内容嗅探（有无 `?` / `# 表` 等 2.0 锚点） | 判据可重叠，违反 `languageIdForPath` 的"判据不重叠"纪律；半成品文件永远猜错 |
+| B | `.kojo` 按内容嗅探（有无 `?` / `# 对照表` 等 2.0 锚点） | 判据可重叠，违反 `languageIdForPath` 的"判据不重叠"纪律；半成品文件永远猜错 |
 | C | `.kojo` 归 v1 不变，2.0 只用 `.kojo2` | 封存层变成"主扩展名的主人"，与"kojo2 取代 kojo1"直接矛盾 |
 
 > **已定：A。** 于是 K2-CUTOVER 的动作是"让出扩展名"，不是"删掉 v1"：
@@ -1248,7 +1248,7 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 
 ## 10. 明确不做
 
-- 不改 2.0 语法（`?` 链、`# 表`、程序层一个字不动）；表达式条件只做诊断（选项 ①）。
+- 不改 2.0 语法（`?` 链、`# 对照表`、程序层一个字不动）；表达式条件只做诊断（选项 ①）。
   **唯一例外**是 `# 方言` 一枚词位（§5.3）——它是一次性、跨方言共用的**断言记号**，
   代价是必须重生成 `tree-sitter-kojo2.wasm` 且只能追加在 `KOJO_DECL_WORDS` 尾部（`kojo2-format.ts` 按位置解构）。
 - **`@原生` 体内要做注入**（§4.6 / LAU-6）：从"整块不透明"改为按 descriptor 声明注入 ERB
