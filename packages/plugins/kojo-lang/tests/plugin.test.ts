@@ -276,6 +276,9 @@ describe('插件装配', () => {
       // B3e：引用 / 改名同样分枚注册（单答型；两条腿都只读请求里的文本与项目快照）
       'kojo2-references',
       'kojo2-rename',
+      // B3f：同符号高亮 / 结构化扩选同样分枚注册（单答型；一条腿的作答与否不带走另一条）
+      'kojo2-documentHighlight',
+      'kojo2-selectionRange',
       // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
       'kojo2-monaco-language',
     ]);
@@ -287,6 +290,9 @@ describe('插件装配', () => {
       'ui.editor.languageService',
       'ui.editor.languageService',
       'ui.editor.languageService',
+      'ui.editor.languageService',
+      'ui.editor.languageService',
+      // B3f 两枚（high / selection）仍是同一槽
       'ui.editor.languageService',
       'ui.editor.languageService',
       'ui.monaco.language',

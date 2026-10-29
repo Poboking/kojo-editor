@@ -14,6 +14,8 @@ export { provideDefinition } from './definition';
 export { provideHover } from './hover';
 export { provideReferences } from './references';
 export { provideRename } from './rename';
+export { provideDocumentHighlights } from './highlight';
+export { provideSelectionRanges } from './selection-range';
 export { provideSignatureHelp } from './signature';
 export { provideFormatting } from './format';
 export { provideDocumentSymbols, symbolFactsToTree } from './symbols';
