@@ -38,6 +38,7 @@
  */
 import type * as Monaco from './entry';
 import { requireKernel } from '../ui/editor-pane-registry';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { kojo2PrepareRename, type Kojo2RenameRange } from '@kojo/kojo-lang/rename';
 import {
   collectRename,
@@ -108,6 +109,22 @@ function renamePathOf(
   const uri = uriOf(model);
   const fsPath = uri?.fsPath;
   return typeof fsPath === 'string' && fsPath.length > 0 ? fsPath : null;
+}
+
+/**
+ * 共享收口也会把这枚 provider 挂到 ERB / kojo1：那两门各有自己的改名通道，这里必须**弃权**。
+ *
+ * 弃权（`undefined`）而不是拒绝：prepare 的拒绝理由会被 Monaco 收进"没有 provider
+ * 能准备"的兜底文本，反而把 ERB / kojo1 的 F2 挡住。老桩 model 没有 `getLanguageId`
+ * ⇒ 保持旧行为（当作本 provider 的目标语言，直接调用方与宿主测试都按 kojo2 用）。
+ */
+function servesKojo2(model: Monaco.editor.ITextModel): boolean {
+  try {
+    const id = model.getLanguageId();
+    return typeof id !== 'string' || id.length === 0 || id === KOJO2_LANGUAGE_ID;
+  } catch {
+    return true;
+  }
 }
 
 /** 模型上的静态闸：只读 / 已释放的 model 不是作者源文（预览 / 生成面）——一律不改。 */
@@ -228,6 +245,7 @@ export function installKojo2RenameProvider(
 ): Monaco.IDisposable {
   const provider: Monaco.languages.RenameProvider = {
     resolveRenameLocation(model, position) {
+      if (!servesKojo2(model)) return undefined;
       const refusal = modelRefusal(model);
       if (refusal !== null) return prepareRejection(position, refusal);
       const source = sourceOf(model);
@@ -250,6 +268,7 @@ export function installKojo2RenameProvider(
       }
     },
     provideRenameEdits(model, position, newName) {
+      if (!servesKojo2(model)) return undefined;
       const refusal = modelRefusal(model);
       if (refusal !== null) return reject(refusal);
       const source = sourceOf(model);

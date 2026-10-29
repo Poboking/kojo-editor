@@ -81,6 +81,7 @@ function fakeModel(
     readonly readOnly?: boolean;
     readonly disposed?: boolean;
     readonly failGetValue?: boolean;
+    readonly languageId?: string;
   } = {},
 ) {
   const uri = {
@@ -94,7 +95,7 @@ function fakeModel(
       if (options.failGetValue === true) throw new Error('桩：取文抛错');
       return text;
     },
-    getLanguageId: () => KOJO2_LANGUAGE_ID,
+    getLanguageId: () => options.languageId ?? KOJO2_LANGUAGE_ID,
     getVersionId: () => 7,
     getOptions: () => ({ readOnly: options.readOnly === true }),
     isDisposed: () => options.disposed === true,
@@ -247,6 +248,12 @@ describe('prepare：只调包里的 kojo2PrepareRename，不在宿主复制判�
     ) as Monaco.languages.RenameLocation & Monaco.languages.Rejection;
     expect(readOnly.rejectReason).toContain('只读');
     expect(capture).not.toHaveBeenCalled();
+  });
+  it('共享收口挂到 ERB / kojo1 时弃权（不把 kojo2 的拒绝理由塞进它们的 F2）', () => {
+    const { provider } = installAndProvider();
+    const erbModel = fakeModel('#DIM X, 0', { languageId: 'erb' });
+    expect(provider.resolveRenameLocation!(erbModel, AT(1, 1), TOKEN)).toBeUndefined();
+    expect(provider.provideRenameEdits!(erbModel, AT(1, 1), 'Y', TOKEN)).toBeUndefined();
   });
 });
 
