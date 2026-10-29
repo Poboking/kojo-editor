@@ -277,6 +277,9 @@ export default defineConfig({
       '@kojo/kojo-lang/format': r('../kojo-lang/src/format.ts'),
       '@kojo/kojo-lang/references': r('../kojo-lang/src/references.ts'),
       '@kojo/kojo-lang/rename': r('../kojo-lang/src/rename.ts'),
+      // B3f：同符号高亮 / 结构化扩选的判据叶子（同样必须排在桶之前）。
+      '@kojo/kojo-lang/highlight': r('../kojo-lang/src/highlight.ts'),
+      '@kojo/kojo-lang/selection-range': r('../kojo-lang/src/selection-range.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('../kojo-sdk/src/semantic-roles.ts'),
       '@kojo/kojo-sdk/structure-protocol': r('../kojo-sdk/src/structure-protocol.ts'),
       '@kojo/kojo-sdk/contracts': r('../kojo-sdk/src/contracts.ts'),

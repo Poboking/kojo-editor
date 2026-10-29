@@ -1028,7 +1028,6 @@ export type {
   EditorDocumentHighlightRequest,
   EditorDocumentHighlightResult,
   EditorSelectionChain,
-  EditorSelectionPosition,
   EditorSelectionRangeRequest,
   EditorSelectionRangeResult,
 } from './slots';

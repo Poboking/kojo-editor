@@ -70,7 +70,11 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     //   500 引用上限 / 项目文件快照口）与 `rename`（prepare / 三道闸 / 64 文件·2000 编辑上限 /
     //   快照 resolver）。同样只引 `@kojo/kojo-core` + 同包相对路径（`isNameChar` 走同包
     //   `name-chars`，错误文案自持一行，不引 `@kojo/plugin-api`）。
-    expect(files).toHaveLength(25);
+    // + B3f（2026-10-29）：同符号高亮 / 结构化扩选再进两枚——`highlight`（write / read / text
+    //   三档与位置门）与 `selection-range`（词 → 行 → 块 → 幕 → 全文）。同样只引
+    //   `@kojo/kojo-core` + 同包相对路径（`isNameChar` 走 `name-chars`、`insideInterpolation`
+    //   走 `interpolation`），Monaco 的形状翻译留在宿主。
+    expect(files).toHaveLength(27);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

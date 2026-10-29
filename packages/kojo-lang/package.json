@@ -27,6 +27,8 @@
     "./format": "./src/format.ts",
     "./references": "./src/references.ts",
     "./rename": "./src/rename.ts",
+    "./highlight": "./src/highlight.ts",
+    "./selection-range": "./src/selection-range.ts",
     "./theme-rules": "./src/theme-rules.ts",
     "./lexicon": "./src/lexicon.ts",
     "./monarch": "./src/monarch.ts",

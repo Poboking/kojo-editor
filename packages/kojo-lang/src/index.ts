@@ -60,6 +60,12 @@ export * from './format';
 // 供方是插件，插件读不到宿主；开机侧一律引叶子（`@kojo/kojo-lang/references` / `/rename`）。
 export * from './references';
 export * from './rename';
+// B3f（2026-10-29）：2.0 **同符号高亮与结构化扩选**的判据整块从宿主 `monaco/kojo2-*.ts` 搬进来
+// 两枚——`highlight`（write / read / text 三档）与 `selection-range`（词 → 行 → 块 → 幕 → 全文）。
+// 理由与 B3c / B3d / B3e 逐字相同：供方是插件，插件读不到宿主；开机侧一律引叶子
+// （`@kojo/kojo-lang/highlight` / `/selection-range`）。
+export * from './highlight';
+export * from './selection-range';
 // B4：角色表与角色调色板（架构 §7.2「角色表住 SDK 不住 app」）——**开机侧引叶子**，
 // 这两枚进桶只是为了让"要整块"的消费方一次拿全。
 export * from '@kojo/kojo-sdk/semantic-roles';
