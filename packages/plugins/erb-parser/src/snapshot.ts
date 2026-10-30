@@ -998,6 +998,43 @@ export function salvageSnapshot(
 }
 
 /**
+ * 建一枚 `ErbFunctionRef`（两条聚合路径共用，键序与旧的内联写法逐字一致：
+ * name → normalizedName → filePath → startLine → endLine → [nameColumn] → [docComment]）。
+ *
+ * ## 为什么**不**换成"固定形状字面量"（MEM-9，2026-10-30 量过三条路线）
+ *
+ * 真实语料、隔离于其它插件、同一条 `decodeBuckets`，`byName + files Map` 三次实测：
+ * - 条件展开（本函数，基线）：**33.2 MB**；
+ * - "字面量建 5 键 + `if` 补位"：**35.7 MB**——补位让 in-object 槽用尽后另挂一条
+ *   `PropertyArray`，**反向优化**；
+ * - 四种形状各写一条完整字面量：**32.8 MB**，与基线在噪声内。
+ * ⇒ `byName` 的 **311 B/条**（32.7 MB / 110,073 条）**不是条件展开的锅**，是"11 万枚
+ * 1 元素数组 + 11 万枚对象 + 11 万条 Map 项 + 11 万条大写名串"的结构成本；真要压下去
+ * 只能改结构（列式 + 视图），属单独立项（见 STATE 的 MEM-9 行）。
+ * 真正把这一块压下来的是**数组的建法**（见 `aggregateIndex` 里的 `[ref]`）：−13.5 MB。
+ */
+function makeRef(
+  name: string,
+  normalizedName: string,
+  filePath: string,
+  startLine: number,
+  endLine: number,
+  nameColumn: number | null | undefined,
+  docComment: string | null | undefined,
+): ErbFunctionRef {
+  return {
+    name,
+    normalizedName,
+    filePath,
+    startLine,
+    endLine,
+    // 第 6 位 = 注释块、第 7 位 = 名字起点列（v9 起；旧条目没有 ⇒ 留空，不补 1）
+    ...(nameColumn === undefined || nameColumn === null ? {} : { nameColumn }),
+    ...(typeof docComment === 'string' ? { docComment } : {}),
+  };
+}
+
+/**
  * 聚合为索引（`files` + `byName`）。
  *
  * 从 `plugin.ts` 的内联循环抽出：**全量重建**与**快照复用**必须走同一份聚合代码，
@@ -1022,33 +1059,22 @@ export function aggregateIndex(sources: Iterable<ErbFile>): {
       for (const t of raw[5]) {
         const name = t[0];
         const normalizedName = name.toUpperCase();
-        const refs = byName.get(normalizedName) ?? [];
-        refs.push({
-          name,
-          normalizedName,
-          filePath: path,
-          startLine: t[1],
-          endLine: t[2],
-          // 第 6 位 = 注释块、第 7 位 = 名字起点列（v9 起；旧条目没有 ⇒ 留空，不补 1）
-          ...(t[6] === undefined || t[6] === null ? {} : { nameColumn: t[6] }),
-          ...(typeof t[5] === 'string' ? { docComment: t[5] } : {}),
-        });
-        byName.set(normalizedName, refs);
+        const ref = makeRef(name, normalizedName, path, t[1], t[2], t[6], t[5]);
+        // **首条定义用 `[ref]` 字面量**，不要 `get() ?? []` 再 `push`：空字面量 push 一枚时
+        // V8 按 `容量 = 需求 + 16` 重新分配（1 槽 → **17 槽**，底层 FixedArray 152 B vs 24 B），
+        // 而真实语料 110,049 个名字里有 **110,043 个只有一条定义** ⇒ 白占 ~13.5 MB
+        // （PITFALLS 271 的同款：容量看不见，`length` 也不反映它）。
+        const refs = byName.get(normalizedName);
+        if (refs === undefined) byName.set(normalizedName, [ref]);
+        else refs.push(ref);
       }
       continue;
     }
     for (const fn of file.functions) {
-      const refs = byName.get(fn.normalizedName) ?? [];
-      refs.push({
-        name: fn.name,
-        normalizedName: fn.normalizedName,
-        filePath: fn.filePath,
-        startLine: fn.startLine,
-        endLine: fn.endLine,
-        ...(fn.nameColumn !== undefined ? { nameColumn: fn.nameColumn } : {}),
-        ...(fn.docComment !== undefined ? { docComment: fn.docComment } : {}),
-      });
-      byName.set(fn.normalizedName, refs);
+      const ref = makeRef(fn.name, fn.normalizedName, fn.filePath, fn.startLine, fn.endLine, fn.nameColumn, fn.docComment);
+      const refs = byName.get(fn.normalizedName);
+      if (refs === undefined) byName.set(fn.normalizedName, [ref]);
+      else refs.push(ref);
     }
   }
   return { files: fileMap, byName };

@@ -485,3 +485,9 @@
 273. **自举解析钩子只认裸包名 ⇒ 新包一落地就 `ERR_MODULE_NOT_FOUND`，而错误信息里不带子路径，看着像"包没装"**（2026-10-30 MEM-8 实拍，`tools/mem-readings.mjs`）：
    `registerHooks` 里把 `@kojo/<name>` 映射到 `packages/<name>/src/index.ts`，只处理裸名。ERB-VOCAB 批把控制流配对表上提成 `@kojo/erb-vocab/control-flow`（**带子路径**）之后，量具当场崩在 `Cannot find package '@kojo/erb-vocab' imported from …scanner.ts`——包明明在 `packages/erb-vocab/`、`src/index.ts` 也在，看着像 workspace 没链上，实际是钩子把子路径原样交给了 Node。
    ⇒ 修法：按 `packages/app/vite.config.ts` 的 alias 口径一起认子路径（`@kojo/x/y` → `packages/x/src/y.ts`，再退 `…/y/index.ts`）。纪律：**自举钩子是"仓库里所有 `@kojo/*` 导入的隐含契约"**，新增子路径导出时要么改钩子、要么别在插件里用子路径；错误信息里的包名不带子路径这一点会稳定地误导排查方向。
+
+274. **"11 万个单元素数组"的 13.5 MB 不在对象字段上，在 `get() ?? []` 然后 `push` 这一句上：空字面量 push 一枚会让 V8 把容量按"需求 + 16"重分配**（2026-10-30 MEM-9 实拍，`byName`）：
+   先按直觉怀疑"条件展开建对象"（`{...base, ...(cond ? {x} : {})}` 走 `CopyDataProperties`）。量了三条路线，**全都不赢**：条件展开基线 **33.2 MB** / "5 键字面量 + `if` 补位" **35.7 MB**（补位让 in-object 槽用尽后另挂 `PropertyArray`，反向优化）/ 四种形状各写一条完整字面量 **32.8 MB**（噪声内）。⇒ 每条 311 B 不是对象形状造成的。
+   真正的成本在容器的建法：`const refs = byName.get(name) ?? []; refs.push(ref); byName.set(name, refs)` —— 空数组字面量是**零容量**，`push` 第一枚时 V8 按 `容量 = 需求 + 16` 重新分配 ⇒ **17 槽**（底层 FixedArray 152 B，而"恰好 1 槽"只需 24 B）。真实语料 110,049 个名字里 **110,043 个只有一条定义**，于是白占 **≈13.5 MB**。
+   ⇒ 修法：**首条定义用 `[ref]` 字面量**（容量恰好 1），已有条目才 `push`；顺带省掉每次 `set`。隔离探针 `byName + files Map` **33.2 → 19.7 MB**，真机热载稳态 **153.4 → 140.0 MB**、索引就绪 **140.5 → 127.1 MB**（两个口径逐字对上）。
+   ⇒ 三条纪律：① 省内存别只盯"对象有几个字段"，**容器的初始容量**经常是大头（同 271，一个在"收缩"，一个在"起步"）；② `?? []` 这种写法在热循环里等于"先建一个零容量数组再立刻扔给它扩容"，**单元素场景一律用字面量**；③ 报数必须两个口径（隔离探针 + 真机），差一个量级就说明探针漏了别的东西。

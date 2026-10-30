@@ -810,13 +810,22 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     不追**——上一档那 3,175 KB 是另一分支的落账值，不是本树在 `origin/dev` 上的重测值；
     //     本批只对"本树 vs `origin/dev`"这一对做逐字节归因，闸看的是绝对值。
     //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
+    //   - **内存批 MEM-9（2026-10-30，本批）**：读数 **199 文件 / 3,185 KB**（3,261,066 B）——
+    //     同样**零新进图模块**（199 未动）；净 **+2,503 B** 只落在图内一枚文件：
+    //     `erb-parser/src/snapshot.ts`（`aggregateIndex` 里 `byName` 首条定义改 `[ref]` 字面量
+    //     ＋ `makeRef` 的实测注：三条形状路线 33.2 / 35.7 / 32.8 MB）。
+    //     ⇒ 闸 **3,184 → 3,188**（余量 3 KB）。这一档与以往不同：**代码多花 2.5 KB，换 13.4 MB 堆**——
+    //     空字面量 `[]` push 一枚会让 V8 把容量按 `需求 + 16` 重分配（1 槽 → 17 槽，底层 152 B vs 24 B），
+    //     而 110,049 个名字里 110,043 个只有一条定义。热载稳态 **153.4 → 140.0 MB**、索引就绪
+    //     **140.5 → 127.1 MB**（与隔离探针的 −13.5 MB 逐字对上）。
+    //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,184 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,188 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_184);
+    expect(totalKb).toBeLessThanOrEqual(3_188);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
