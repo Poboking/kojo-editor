@@ -314,9 +314,10 @@ describe('allSelectablePaths · Ctrl+A 的全集口径', () => {
       dirCache: cache,
       pkgDirOf: (prefix, label) => `${prefix}/${label}`,
     });
-    // 行序：组头 / 散落.ERB / 包头 / sub（目录行）/ 附.ERB / readme.zip（附加条目，不可选）/ A1 / A2
-    // （同层按名排序，两视图共用一份顺序 ⇒ 顺序以模型为准，这里只是把钉住的形状读出来）
-    expect(tree.rows.map((r) => r.kind)).toEqual(['group', 'file', 'package', 'dir', 'file', 'extra', 'file', 'file']);
+    // 行序：组头 / 散落.ERB / 包头 / sub（目录行）/ readme.zip（附加条目，不可选）/ 附.ERB / A1 / A2
+    // （同层按**码元序**排，两视图共用一份顺序 ⇒ 顺序以模型为准，这里只是把钉住的形状读出来。
+    //  `readme.zip` 的 `r`(0x72) 排在 `附`(0x9644) 前——这是钉死的结果，换台机器也不许变）
+    expect(tree.rows.map((r) => r.kind)).toEqual(['group', 'file', 'package', 'dir', 'extra', 'file', 'file', 'file']);
     expect(allSelectablePaths(tree)).toEqual([LOOSE, `${dir}/附.ERB`, A1, A2]);
     // 与"窗口"完全无关：这条判据不接 range，也不可能只收到某一段（改前的口径就是这么漏的）
     expect(allSelectablePaths(tree)).toHaveLength(4);
