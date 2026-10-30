@@ -1581,6 +1581,15 @@ export interface SlotServiceLeg {
    * 语言对 provider 的其余部分无感，逐门建一枚只多几次纯对象构造。
    */
   readonly create: (monaco: typeof Monaco, host: SlotServiceHost, languageId?: string) => unknown;
+  /**
+   * **逐门语言建一枚**（缺省 = 建一枚挂多门，与搬家前逐字相同）。
+   *
+   * 只有补全腿需要它（触发字符是 Monaco 的注册参数、且各门语言不同，见
+   * {@link SlotServiceLeg.create}）；其余腿保持"同一枚 provider 挂多门"的老形状——
+   * `kojo2-format` / `kojo2-signature` 各自有一条"每门拿到的是同一枚"的断言，那是
+   * 既有的稳定性契约，不该被补全腿的需要顺带改掉。
+   */
+  readonly perLanguage?: boolean;
   /** 挂到收口给的 `id` 上（provider 由 {@link SlotServiceLeg.create} 给，无共享可变状态） */
   readonly register: (
     monaco: typeof Monaco,
@@ -1593,10 +1602,12 @@ function legOf<P>(
   kind: SlotServiceKind,
   create: (monaco: typeof Monaco, host: SlotServiceHost, languageId?: string) => P,
   register: (monaco: typeof Monaco, languageId: string, provider: P) => Monaco.IDisposable,
+  perLanguage?: boolean,
 ): SlotServiceLeg {
   return {
     kind,
     create,
+    ...(perLanguage === true ? { perLanguage: true } : {}),
     // 唯一一处 `unknown → P` 的收窄：`legOf` 的实参已在编译期配好对，表本身是异构数组
     register: (monaco, languageId, provider) => register(monaco, languageId, provider as P),
   };
@@ -1607,9 +1618,9 @@ function legOf<P>(
  * 的七格一律**追加**，别插队。
  */
 export const SLOT_SERVICE_LEGS: readonly SlotServiceLeg[] = [
-  legOf('completion', completionProvider, (m, id, provider) =>
-    m.languages.registerCompletionItemProvider(id, provider),
-  ),
+  // 触发字符是 Monaco 的注册参数、且各门语言不同 ⇒ 补全腿必须逐门建
+  // （见 `SlotServiceLeg.perLanguage`）。
+  legOf('completion', completionProvider, (m, id, provider) => m.languages.registerCompletionItemProvider(id, provider), true),
   legOf('hover', hoverProvider, (m, id, provider) => m.languages.registerHoverProvider(id, provider)),
   // 车 2：格式化（整篇 + 区间，一条能力两枚 provider）与签名帮助
   legOf('formatting', formattingProviders, (m, id, providers) => {
@@ -1717,15 +1728,16 @@ export function installSlotServiceLegs(
       const leg = slotServiceLegOf(kind);
       // 表里没写这枚 kind ⇒ 不挂：宿主不许"顺手"给一门语言挂上一条没有供方的腿。
       if (leg === undefined) continue;
-      // provider **逐门语言建一枚**：Monaco 的触发字符是注册参数、而各门语言不同
-      // （见 `SlotServiceLeg.create` 头注）。建它本身不接触 Monaco，抛错只可能来自各腿
-      // 自己的工厂，那时还没有任何注册需要回滚。
+      // provider：默认**建一枚挂多门**（搬家前逐字相同）；`perLanguage` 的腿（只有补全）
+      // 逐门现造一枚——Monaco 的触发字符是注册参数、而各门语言不同（见 `SlotServiceLeg.create`）。
+      // 建它本身不接触 Monaco，抛错只可能来自各腿自己的工厂，那时还没有任何注册需要回滚。
+      const shared = leg.perLanguage === true ? undefined : leg.create(monaco, host);
       // **逐条 push，不写成 `push(a, b)`**：求值都在参数位上，第二条抛错时第一条的句柄还没进
       // 数组，catch 里就是"无东西可撤"——那正是"全有或全无"承诺的反面。
       registrations.push(
         registerForLanguageServices(
           monaco,
-          (m, id) => leg.register(m, id, leg.create(m, host, id)),
+          (m, id) => leg.register(m, id, leg.perLanguage === true ? leg.create(m, host, id) : shared),
           leg.kind,
           // 写面腿只挂**点名**它的语言（见 `register-dialects.ts` 的 `namedOnly`）：
           // v1 的语言自带写面 provider，不该被铺一枚永远弃权的空腿。
