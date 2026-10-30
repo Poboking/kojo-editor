@@ -169,12 +169,14 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
     }
   });
 
-  it('版本判据：当前键 v11；v9 不在准入表 ⇒ 旧盘一条都不复用（不静默留缺列）', () => {
+  it('版本判据：当前键带当前版本号；表外旧版（v9）一条都不复用（不静默留缺列）', () => {
     expect(snapshotKeyFor('D:/p')).toContain(`v${SNAPSHOT_VERSION}`);
-    // `snapshotKeyCandidatesFor` 只探表内版本：v10 已作为"同形迁移"入表（缺候选位 = 补一轮扫），
-    // v9 不在表 ⇒ 旧盘一条都不复用、一次冷重建
-    const candidates = [snapshotKeyFor('D:/p'), snapshotKeyFor('D:/p', SNAPSHOT_VERSION - 2)];
-    expect(candidates[1]).toContain(`v${SNAPSHOT_VERSION - 2}`);
+    // `snapshotKeyCandidatesFor` 只探表内版本：v10/v11/v12 都在表里（同形迁移），
+    // v9 不在表 ⇒ 旧盘一条都不复用、一次冷重建。
+    // **别用 `SNAPSHOT_VERSION - n` 表示"隔代"**：表里一旦多进一代，那个算式就指向了表内版本，
+    // 用例会绿得没道理（见 `snapshot-salvage.test.ts` 顶部同名注）。
+    const candidates = [snapshotKeyFor('D:/p'), snapshotKeyFor('D:/p', 9)];
+    expect(candidates[1]).toContain('v9');
   });
 });
 
@@ -350,8 +352,9 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
 
   it('隔代快照（v9 键 + v9 版本号）不进候选 ⇒ 整份弃用、冷重建出**真**列，不写假列', async () => {
     const staleEntry: unknown[] = [1000, TEXT_A.length, TEXT_A.length, 2, 0, [['FOO', 1, 2, [], 0]], [], [], [], null];
-    const payload = JSON.stringify({ version: SNAPSHOT_VERSION - 2, rootDir: ROOT, savedAt: 1, entries: { [A]: staleEntry } });
-    const h = activate({ [A]: TEXT_A, [B]: TEXT_B }, (key) => (key === snapshotKeyFor(ROOT, SNAPSHOT_VERSION - 2) ? payload : undefined));
+    // 版本号写死 9（表外最年轻的一代）；用 `SNAPSHOT_VERSION - 2` 会在每次 bump 后指向表内版本
+    const payload = JSON.stringify({ version: 9, rootDir: ROOT, savedAt: 1, entries: { [A]: staleEntry } });
+    const h = activate({ [A]: TEXT_A, [B]: TEXT_B }, (key) => (key === snapshotKeyFor(ROOT, 9) ? payload : undefined));
     await h.waitIndexed();
     // 重建出来的索引带真列（而不是沿用缺位条目 = 静默保留本批要修的症状）
     expect(h.index()!.byName.get('FOO')![0]!.nameColumn).toBe(3);
@@ -360,6 +363,6 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
       span: { columnStart: 3, columnEnd: 6 },
     });
     // 旧键不在候选列里 ⇒ 从没被读起来当回事（logs 里不该有"复用了 v9"的 salvage 读数）
-    expect(h.logs.filter((l) => /salvage/.test(l)).join('\n')).not.toContain(`v${SNAPSHOT_VERSION - 2}`);
+    expect(h.logs.filter((l) => /salvage/.test(l)).join('\n')).not.toContain('v9');
   });
 });

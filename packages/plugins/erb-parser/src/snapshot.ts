@@ -121,8 +121,18 @@ import { detachString } from './scanner';
  * 即升级后第一轮付一次全树 refs 重扫，与 v9→v10 的冷重建同款代价、只付一次。
  * 盘上 `null` = 候选未知（仅 v10 迁移条目会短暂处于此态，下轮落盘前必然补正）；
  * 内存里键**恒在**（含空串 = "已知没有候选"——空文件/无记号文件据此免于永远重扫）。
+ *
+ * **v11 → v12**（MEM-6 批，2026-10-30）：**第 11 位的值形态换了，语义不变**——
+ * v11 存"`'\n'` 连接的记号串"，v12 存"记号**哈希集**的 base64"（内存里是 `Uint32Array`）。
+ * 为什么动它：真语料 3,971 份候选集合计 16,968,188 字符，含日文标识符 ⇒ 两字节串 ⇒
+ * 稳态堆 **32.0 MB**（消融实测），而它只在"名录变了"那一刻被读一次。换哈希集后 **6.5 MB**
+ * （1,703,214 枚 × 4 B），省 **≈25 MB**——202.9 → 177.8 MB。判据为什么不退化见
+ * `hashToken` 的注（碰撞只会多扫、不会漏扫）。
+ * **迁移是免费的**：v11 的串就在盘上，就地哈希即可，**不重读一个文件、不重扫一次 refs**
+ * ——所以 v11 进 `SALVAGEABLE_VERSIONS`（`candidatesAreTokens: true`），与 v10 那种
+ * "缺位 ⇒ 保守侧重扫"不是一回事。
  */
-export const SNAPSHOT_VERSION = 11;
+export const SNAPSHOT_VERSION = 12;
 
 /**
  * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
@@ -132,7 +142,10 @@ export const SNAPSHOT_VERSION = 11;
  * 2. 新旧差异只能是**新条目多了位**（旧 payload 缺位 ⇒ 该位按"未知"处理，绝不猜值）；
  * 3. 缺位的"未知"必须落在**保守侧**：要么触发一次重扫，要么判该文件过期，不许静默当真。
  *
- * - `11`：同形（11 位；第 11 位 = 候选记号集）。
+ * - `12`：同形（11 位；第 11 位 = 候选记号**哈希集**的 base64）。
+ * - `11`：同形（11 位）+ **第 11 位是候选记号串**（`'\n'` 连接）。v12 没动解析口径，
+ *   差异只是这一位的**编码**；旧串能就地哈希成新形态（`candidateHashesFromTokens`）
+ *   ⇒ 按纪律 1/2/3 准入，且**不落在保守侧**：迁移后语义逐条相同，一个文件都不用重扫。
  * - `10`：同形（10 位）+ **缺第 11 位**。v11 没动解析口径（前 10 位逐字同义），差异只是
  *   "新条目多了候选位" ⇒ 按纪律 2/3 准入：缺位 = 候选未知 = 保守侧（refs 重扫一遍补候选，
  *   结构照常复用，见 `SNAPSHOT_VERSION` 头注 v10→v11 的迁移路径）。`hasCandidates: false`
@@ -144,10 +157,17 @@ export const SNAPSHOT_VERSION = 11;
  */
 const SALVAGEABLE_VERSIONS: ReadonlyMap<
   number,
-  { readonly arity: number; readonly hasRefsFp: boolean; readonly hasCandidates: boolean }
+  {
+    readonly arity: number;
+    readonly hasRefsFp: boolean;
+    readonly hasCandidates: boolean;
+    /** 第 11 位是 v11 的记号串（需就地哈希），还是 v12 的哈希集 base64（直接解） */
+    readonly candidatesAreTokens: boolean;
+  }
 > = new Map([
-  [11, { arity: 11, hasRefsFp: true, hasCandidates: true }],
-  [10, { arity: 10, hasRefsFp: true, hasCandidates: false }],
+  [12, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false }],
+  [11, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: true }],
+  [10, { arity: 10, hasRefsFp: true, hasCandidates: false, candidatesAreTokens: false }],
 ]);
 
 /** 单个文件的快照条目 */
@@ -179,14 +199,16 @@ export interface SnapshotEntry {
    */
   readonly refsNamesFp?: number;
   /**
-   * 该文件的**候选记号集**（REFS-PROVENANCE，2026-10-22）：构建 `refs` 时被拿去问
-   * `hasName` 的一切归一化记号（命中与否都算，含 `@` 定义名），`'\n'` 连接；
-   * **空串 = 已知没有候选**（与"未知"是两回事）。
+   * 该文件的**候选记号哈希集**（REFS-PROVENANCE，2026-10-22；v12 起换哈希，MEM-6）：
+   * 构建 `refs` 时被拿去问 `hasName` 的一切归一化记号（命中与否都算，含 `@` 定义名），
+   * 每枚取 32 位哈希（`hashToken`）。**空数组 = 已知没有候选**（与"未知"是两回事）。
    * 溯源巡检的逐文件判据：名录新旧对称差（`changedNamesBetween`）里若有名字落在本集
    * ⇒ 这份 refs 可能缺边/多边 ⇒ 重扫；反之可**证明** refs 逐字节不变 ⇒ 只补记新摘要、免扫
    * （`refsProvableUnchanged`）。**键缺席 = 未知**（v10 迁移条目）⇒ 一律重扫补候选。
+   *
+   * 为什么不是字符串：见 `hashToken` 上面的长注（32.0 MB → 6.5 MB，判据不退化）。
    */
-  readonly candidates?: string;
+  readonly candidateHashes?: Uint32Array;
 }
 
 /** 索引快照（按项目根一份） */
@@ -294,7 +316,11 @@ type RefTuple = [string, number, number, 0 | 1 | 2];
 /** `[标签名, 行, 所属函数定义行]`（v6 起；无标签 = 空数组） */
 type LabelTuple = [string, number, number];
 /** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水, 标签, refs 名录摘要, 候选记号集]`
- * 第 10 位 v7 起才有；第 11 位（候选集，`'\n'` 连接；`null` = 未知）v11 起才有；
+ * 第 10 位 v7 起才有；第 11 位（候选集）v11 起才有：
+ * - **v12 起内存里是 `Uint32Array`**（候选记号的哈希集，见上面的基元注）；
+ * - **v11 的盘上是 `'\n'` 连接的记号串**，v12 的盘上是哈希集的 base64 —— 两者都是 `string`，
+ *   靠信封版本区分（`SALVAGEABLE_VERSIONS` 的 `candidatesAreTokens`）；
+ * - `null` = 候选未知。
  * v6 的盘上元组是前 9 位（`salvageSnapshot` 按版本表处理） */
 type EntryTuple = [
   number | null,
@@ -307,10 +333,164 @@ type EntryTuple = [
   RefTuple[],
   LabelTuple[],
   number | null,
-  string | null,
+  string | Uint32Array | null,
 ];
 
 const FLAG_EXPRESSION = 1;
+
+/* ================= 候选记号集：从 17M 字符的串换成哈希集（MEM-6） =================
+ *
+ * 为什么换：v11 把每文件的候选记号集存成 `'\n'` 连接的**一个字符串**。真语料实测
+ * 3,971 份合计 **16,968,188 字符**；候选记号含日文标识符 ⇒ V8 走两字节串 ⇒ 稳态堆
+ * **32.0 MB**（消融实测 `candidates 候选集 -32.0MB`），而它只在"名录变了"那一刻被读。
+ * 换成每文件一枚 32 位哈希数组：1,703,214 枚 × 4 B = **6.5 MB**，省 **≈25 MB**。
+ *
+ * 为什么"哈希"而不是"压缩串"：`refsProvableUnchanged` 要回答的只是**成员判定**
+ * （"差集里有没有记号落在这份候选集里"），不需要还原原串。32 位哈希的唯一风险是**碰撞**，
+ * 而碰撞的方向只有一种：**把不在集合里的记号判成在** ⇒ 多扫一次文件。判据因此仍然
+ * fail-closed——**不可能漏扫**（真在集合里 ⇒ 哈希必在集合里）。
+ * 真语料实测：1,189,209 个全局唯一记号 → 1,189,047 个唯一哈希（162 处碰撞，占 0.014%）。
+ *
+ * 为什么 32 位够：碰撞的代价是"白扫一次"，不是"错数据"。换成 64 位要多花 6.5 MB 换
+ * 0.014% 的免扫率，不值。
+ *
+ * 为什么盘上是 base64 而不是 JSON 数字数组：1.7M 个十进制数字 ≈ 17 MB 文本，
+ * base64 是 9.1 MB，且解码是"一次扫过"，不用 `split`/`map` 造 170 万个中间值。
+ */
+
+/**
+ * 候选记号的 32 位哈希（FNV-1a）。
+ *
+ * **必须跨进程稳定**：结果会落盘，下次开项目直接拿来比对。所以不能用 `Math.random`
+ * 系（`Map` 的字符串哈希那种带种子的），也不能用 `JSON.stringify` 顺序敏感的复合键。
+ * FNV-1a 逐码元异或乘质数，同串同值、与平台字节序无关。
+ */
+export function hashToken(value: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    h ^= value.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+/** 解码用的反查表（`-1` = 非法字符） */
+const B64_INVERSE = (() => {
+  const t = new Int16Array(128).fill(-1);
+  for (let i = 0; i < B64_ALPHABET.length; i++) t[B64_ALPHABET.charCodeAt(i)] = i;
+  return t;
+})();
+
+/**
+ * `Uint32Array` → base64。每枚哈希固定写 4 字节、**高位在前**。
+ *
+ * 不用 `new Uint8Array(arr.buffer)` 直接取视图：那是**平台字节序**，小端机器上写出来的盘
+ * 换到大端机器就读反了（虽然今天遇不到，但快照是跨轮、跨机器的数据，不该藏这种依赖）。
+ */
+export function encodeCandidateHashes(hashes: Uint32Array): string {
+  const n = hashes.length;
+  if (n === 0) return '';
+  const codes = new Uint8Array(Math.ceil((n * 4) / 3) * 4);
+  let o = 0;
+  let buf = 0;
+  let bits = 0;
+  for (let k = 0; k < n; k++) {
+    const v = hashes[k]!;
+    for (let shift = 24; shift >= 0; shift -= 8) {
+      buf = (buf << 8) | ((v >>> shift) & 0xff);
+      bits += 8;
+      if (bits === 24) {
+        codes[o++] = B64_ALPHABET.charCodeAt((buf >>> 18) & 63);
+        codes[o++] = B64_ALPHABET.charCodeAt((buf >>> 12) & 63);
+        codes[o++] = B64_ALPHABET.charCodeAt((buf >>> 6) & 63);
+        codes[o++] = B64_ALPHABET.charCodeAt(buf & 63);
+        buf = 0;
+        bits = 0;
+      }
+    }
+  }
+  if (bits > 0) {
+    buf <<= 24 - bits;
+    codes[o++] = B64_ALPHABET.charCodeAt((buf >>> 18) & 63);
+    codes[o++] = B64_ALPHABET.charCodeAt((buf >>> 12) & 63);
+    codes[o++] = bits === 8 ? 61 : B64_ALPHABET.charCodeAt((buf >>> 6) & 63);
+    codes[o++] = 61;
+  }
+  // 分块 `fromCharCode`：逐字符 `+=` 在 9 MB 上是几万次 rope 拼接，慢一个量级
+  const CHUNK = 8192;
+  let out = '';
+  for (let i = 0; i < o; i += CHUNK) {
+    out += String.fromCharCode.apply(null, codes.subarray(i, Math.min(i + CHUNK, o)) as unknown as number[]);
+  }
+  return out;
+}
+
+/**
+ * base64 → `Uint32Array`（`encodeCandidateHashes` 的逆）。非法字符 / 长度不是 4 的倍数 ⇒ `null`
+ * （调用方据此判该条目结构不符，走 salvage 的"只丢这一条"）。
+ *
+ * **按 4 字符一组解**（24 位一组），不用"逐字符累积 `buf`"那种写法：后者在 `bits` 到 30 时
+ * 再 `<< 6` 会变成 36 位，而 JS 的 `<<` 是 **int32** 运算 ⇒ 高位静默丢失。
+ * 这个洞在单测里一测就现形（哈希全变、免扫判据全部误判为"可证不变"），
+ * 但它只表现为"少扫了几个文件"，**不会报错**——所以这里宁可多写几行。
+ */
+export function decodeCandidateHashes(text: string): Uint32Array | null {
+  const len = text.length;
+  if (len % 4 !== 0) return null;
+  let pad = 0;
+  if (len > 0 && text.charCodeAt(len - 1) === 61) pad++;
+  if (len > 1 && text.charCodeAt(len - 2) === 61) pad++;
+  const bytes = (len / 4) * 3 - pad;
+  if (bytes % 4 !== 0) return null;
+  const out = new Uint32Array(bytes / 4);
+  let o = 0;
+  let acc = 0; // 当前哈希已拼好的字节数（0..3）
+  let word = 0;
+  for (let i = 0; i < len; i += 4) {
+    let trip = 0;
+    for (let k = 0; k < 4; k++) {
+      const c = text.charCodeAt(i + k);
+      if (c === 61) {
+        trip = (trip << 6) | 0; // '=' 只补零位，真实字节由下面的 `bytes` 数兜住
+        continue;
+      }
+      const v = c < 128 ? B64_INVERSE[c]! : -1;
+      if (v < 0) return null;
+      trip = (trip << 6) | v;
+    }
+    for (let shift = 16; shift >= 0; shift -= 8) {
+      const b = (trip >>> shift) & 0xff;
+      word = (word << 8) | b;
+      acc++;
+      if (acc === 4) {
+        if (o >= out.length) return null;
+        out[o++] = word >>> 0;
+        word = 0;
+        acc = 0;
+      }
+    }
+  }
+  return o === out.length ? out : null;
+}
+
+/**
+ * v11 的候选记号串（`'\n'` 连接）→ 哈希集。**v11 → v12 的迁移路径**：
+ * 只把已有的串就地哈希，不重读一个文件、不重扫一次 refs。
+ */
+export function candidateHashesFromTokens(joined: string): Uint32Array {
+  if (joined.length === 0) return new Uint32Array(0);
+  const out: number[] = [];
+  let i = 0;
+  for (;;) {
+    const nl = joined.indexOf('\n', i);
+    const seg = nl === -1 ? joined.slice(i) : joined.slice(i, nl);
+    out.push(hashToken(seg));
+    if (nl === -1) break;
+    i = nl + 1;
+  }
+  return Uint32Array.from(out);
+}
 
 /**
  * 懒还原的原始元组句柄（Symbol ⇒ 不进 `Object.keys`/JSON/spread）。
@@ -353,12 +533,20 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       raw[7] === (e.refs as unknown) &&
       raw.length === 11 &&
       raw[9] === (e.refsNamesFp ?? null) &&
-      raw[10] === (e.candidates ?? null) &&
+      // 候选位：内存形态是 `Uint32Array`，与元组第 11 位**是同一枚**（decode 时零拷贝别名）
+      // ⇒ 身份比较即可，不必重新编码一遍再比字符串
+      raw[10] === (e.candidateHashes ?? null) &&
       // functions/dims 仍是 accessor = 惰性外壳未被消费方动过 ⇒ 元组即真相
       Object.getOwnPropertyDescriptor(e.file, 'functions')?.get !== undefined &&
       Object.getOwnPropertyDescriptor(e.file, 'dims')?.get !== undefined
     ) {
-      out[path] = raw;
+      // **浅拷一层**：内存元组的第 11 位是 `Uint32Array`（不能直接 JSON），盘上要 base64。
+      // 浅拷保住了 `[5]`（函数元组数组）等各位的**身份**——快路径要省的正是"重建 10 万级
+      // 函数元组"，而拷 11 个槽只付一次 3971 条的小钱。
+      const disk = raw.slice() as unknown[];
+      const hashes = raw[10];
+      disk[10] = hashes instanceof Uint32Array ? encodeCandidateHashes(hashes) : null;
+      out[path] = disk as unknown as EntryTuple;
       continue;
     }
     const fns: FunctionTuple[] = e.file.functions.map((f): FunctionTuple => {
@@ -388,8 +576,9 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       refs,
       labels,
       e.refsNamesFp ?? null,
-      // 候选集：键缺席（v10 迁移条目没补扫过）= 未知 = 盘上 null，**不猜空串**
-      e.candidates ?? null,
+      // 候选集：键缺席（v10 迁移条目没补扫过）= 未知 = 盘上 null，**不猜空串**。
+      // v12 起盘上是哈希集的 base64（空集 = `''`，仍是"已知没有"）
+      e.candidateHashes === undefined ? null : encodeCandidateHashes(e.candidateHashes),
     ];
   }
   return out;
@@ -437,8 +626,17 @@ function validateEntryTuple(t: unknown, arity: number): EntryTuple | null {
   if (!Array.isArray(t[5]) || !Array.isArray(t[6]) || !Array.isArray(t[7]) || !Array.isArray(t[8])) return null;
   // 第 10 位（refs 名录摘要）：v7 起才有（表内版本都 ≥10；arity 9 的调用只剩测试面上的旧形态语义）
   if (arity >= 10 && t[9] !== null && typeof t[9] !== 'number') return null;
-  // 第 11 位（候选集）：v11 起才有；v10 迁移条目归一时补 null = 候选未知（保守侧，不猜空串）
-  if (arity === CURRENT_ARITY && t[10] !== null && typeof t[10] !== 'string') return null;
+  // 第 11 位（候选集）：v11 起才有；v10 迁移条目归一时补 null = 候选未知（保守侧，不猜空串）。
+  // v12 起内存形态是 `Uint32Array`（盘上仍是 string）⇒ 两种都认：校验发生在"盘上 JSON"这一侧，
+  // 但同一函数也被用来复核内存元组（`encodeEntries` 快路径判据），别把内存形态判成损坏。
+  if (
+    arity === CURRENT_ARITY &&
+    t[10] !== null &&
+    typeof t[10] !== 'string' &&
+    !(t[10] instanceof Uint32Array)
+  ) {
+    return null;
+  }
   const fns = t[5] as unknown[];
   const dims = t[6] as unknown[];
   const refs = t[7] as unknown[];
@@ -522,10 +720,28 @@ function internEntryStrings(tuple: EntryTuple, interner: NameInterner): void {
   for (const l of tuple[8]) l[0] = interner.intern(l[0]);
 }
 
+/**
+ * 把第 11 位（候选集）从**盘上形态**翻成**内存形态**（`Uint32Array`），就地写回元组。
+ *
+ * 就地而不重建：与 `internEntryStrings` 同一条理由——`encodeEntries` 的落盘快路径靠
+ * "元组还是盘上那个对象"来免重建 10 万级函数元组，重建元组会把这个身份判据废掉。
+ *
+ * `tokens`（v11 的记号串）走 `candidateHashesFromTokens`（免费的版本迁移）；
+ * 否则按 base64 解；解不出来 ⇒ 返回 `false`（调用方判该条目结构不符，只丢这一条）。
+ */
+function candidatesToMemory(tuple: EntryTuple, tokens: boolean): boolean {
+  const slot = tuple[10];
+  if (slot === null || slot instanceof Uint32Array) return true;
+  const hashes = tokens ? candidateHashesFromTokens(slot) : decodeCandidateHashes(slot);
+  if (hashes === null) return false;
+  tuple[10] = hashes;
+  return true;
+}
+
 function entryFromTuple(path: string, tuple: EntryTuple, interner?: NameInterner): SnapshotEntry {
   if (interner !== undefined) internEntryStrings(tuple, interner);
   const refsNamesFp = tuple[9];
-  const candidates = tuple[10];
+  const candidateHashes = tuple[10];
   return {
     mtimeMs: tuple[0],
     size: tuple[1],
@@ -535,8 +751,9 @@ function entryFromTuple(path: string, tuple: EntryTuple, interner?: NameInterner
     // 溯源未知（v6 补的 null）⇒ **不留这个键**：与"条目本来没这个字段"同形，
     // 也让 round-trip 判据（decodeEntries(encodeEntries(x))toEqual x）不被 null 撑歪
     ...(typeof refsNamesFp === 'number' ? { refsNamesFp } : {}),
-    // 候选集：'' 也是已知事实（已知没有候选），**键照留**——只有 null（v10 迁移未知）才缺键
-    ...(typeof candidates === 'string' ? { candidates } : {}),
+    // 候选集：空数组也是已知事实（已知没有候选），**键照留**——只有 null（v10 迁移未知）才缺键。
+    // 零拷贝：与元组第 11 位是**同一枚** `Uint32Array`（`encodeEntries` 的快路径靠这个身份判据）
+    ...(candidateHashes instanceof Uint32Array ? { candidateHashes } : {}),
   };
 }
 
@@ -593,6 +810,9 @@ export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | nul
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
     const tuple = validateEntryTuple(value, CURRENT_ARITY);
     if (tuple === null) return null;
+    // 盘上第 11 位是哈希集的 base64 ⇒ 解成 `Uint32Array`（就地写回，见 `candidatesToMemory`）。
+    // 解不出来（非法字符/长度不符）⇒ 与"结构不符"同判：这份数据整体不认。
+    if (!candidatesToMemory(tuple, false)) return null;
     out[path] = entryFromTuple(path, tuple, interner);
   }
   return out;
@@ -621,18 +841,31 @@ export function salvageEntries(
   raw: unknown,
   arity: number,
   keyToPath?: ReadonlyMap<string, string>,
+  /** 第 11 位是 v11 的记号串（`true`）还是 v12 的哈希集 base64（`false`）；见版本表 */
+  candidatesAreTokens = false,
 ): { entries: Record<string, SnapshotEntry>; skipped: number } | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const out: Record<string, SnapshotEntry> = {};
   let skipped = 0;
+  // **salvage 也要过 MEM-4 的去重表**（MEM-6 批补）。此前只有 `decodeEntries` 挂表，
+  // 而"版本换代后的第一轮"走的恰恰是这里 ⇒ 那一轮白丢 26 MB（真语料实测：
+  // 同一条代码，salvage 轮索引就绪 184.7 MB / 纯热轮 158.8 MB）。
+  // 去重是语义中性的（同内容的串共享一枚实例），顺带把 `JSON.parse` 造出来的切片摊平，
+  // 不让 67 MB 的 payload 被这些切片钉在堆里（PITFALLS 255 的同一个坑）。
+  const interner = createNameInterner();
   for (const [stored, value] of Object.entries(raw as Record<string, unknown>)) {
     const tuple = validateEntryTuple(value, arity);
     if (tuple === null) {
       skipped++;
       continue;
     }
+    // 候选位翻成内存形态；解不出来 ⇒ 只丢这一条（与结构不符同判，不连坐）
+    if (!candidatesToMemory(tuple, candidatesAreTokens)) {
+      skipped++;
+      continue;
+    }
     const path = keyToPath?.get(pathKey(stored)) ?? stored;
-    out[path] = entryFromTuple(path, tuple);
+    out[path] = entryFromTuple(path, tuple, interner);
   }
   return { entries: out, skipped };
 }
@@ -673,7 +906,7 @@ export function salvageSnapshot(
     keyToPath = new Map();
     for (const p of opts.knownPaths) keyToPath.set(pathKey(p), p);
   }
-  const salvaged = salvageEntries(r.entries, shape.arity, keyToPath);
+  const salvaged = salvageEntries(r.entries, shape.arity, keyToPath, shape.candidatesAreTokens);
   if (salvaged === null) return null;
   return {
     version: SNAPSHOT_VERSION,
@@ -861,8 +1094,8 @@ export interface SnapshotStats {
   nameChars: number;
   /** 注释块字符数合计 */
   docChars: number;
-  /** 候选记号集字符数合计（`'\n'` 连接的串） */
-  candidateChars: number;
+  /** 候选记号**哈希**枚数合计（v12；每枚 4 B ⇒ 稳态占用 ≈ 本数 × 4） */
+  candidateHashes: number;
   /** 带候选集的条目数（`null` = 未知，v10 迁移条目） */
   candidatesKnown: number;
   /** 带 refs 的条目数 */
@@ -881,7 +1114,7 @@ export function snapshotStats(entries: Readonly<Record<string, SnapshotEntry>>):
     labels: 0,
     nameChars: 0,
     docChars: 0,
-    candidateChars: 0,
+    candidateHashes: 0,
     candidatesKnown: 0,
     withRefs: 0,
   };
@@ -890,10 +1123,10 @@ export function snapshotStats(entries: Readonly<Record<string, SnapshotEntry>>):
     s.entries++;
     s.textLength += e.textLength;
     if (e.refs !== undefined) s.withRefs++;
-    const cand = e.candidates;
-    if (cand !== null && cand !== undefined) {
+    const cand = e.candidateHashes;
+    if (cand !== undefined) {
       s.candidatesKnown++;
-      s.candidateChars += cand.length;
+      s.candidateHashes += cand.length;
     }
     const raw = (e.file as RawCarrier)[RAW];
     if (raw === undefined) {
@@ -1023,23 +1256,23 @@ export function changedNamesBetween(oldNames: ReadonlySet<string>, newNames: Rea
  *
  * 证明链：`scanFileRefs` 的产出只取决于"每个候选记号过不过 `hasName`"——记号没变、
  * 名录里 `candidates ∩ changed = ∅` ⇒ 每个记号的判定结果不变 ⇒ refs 逐字节不变。
- * 于是只需把盘上候选串逐段（`'\n'` 分段，不 split——大文件 37,938 段也不多分配一个数组）
- * 对着 `changed` 查一遍，查到即**嫌疑坐实**必须重扫；查完没有 ⇒ 免扫，只补记新摘要。
- * 保守侧：refs 缺失 / 候选未知（键缺席 = v10 迁移未知态）⇒ `false`（重扫），绝不猜。
+ *
+ * **v12 起用哈希集做这件事**（MEM-6）：`changed` 是"变掉的名字"的**哈希集**（调用方算一次），
+ * 本函数逐枚比对该文件候选集的哈希。方向是**遍历文件侧、查名录侧**——反过来（遍历 11 万
+ * 个 changed、逐文件二分）在"大范围改名"时会退化到十亿级比较。
+ *
+ * 保守侧**一点没松**：碰撞只会把"不在集合里"的记号判成在 ⇒ 多扫一次文件；
+ * 真在集合里 ⇒ 哈希必在集合里 ⇒ **不可能漏扫**。refs 缺失 / 候选未知（键缺席 = v10 迁移
+ * 未知态）⇒ `false`（重扫），绝不猜。
  */
-export function refsProvableUnchanged(entry: SnapshotEntry, changed: ReadonlySet<string>): boolean {
+export function refsProvableUnchanged(entry: SnapshotEntry, changedHashes: ReadonlySet<number>): boolean {
   if (entry.refs === undefined) return false;
-  const candidates = entry.candidates;
-  if (candidates === undefined) return false;
-  if (candidates.length === 0) return true; // 已知空集：任何名录变化都碰不到它
-  let i = 0;
-  for (;;) {
-    const nl = candidates.indexOf('\n', i);
-    const seg = nl === -1 ? candidates.slice(i) : candidates.slice(i, nl);
-    if (changed.has(seg)) return false;
-    if (nl === -1) return true;
-    i = nl + 1;
+  const hashes = entry.candidateHashes;
+  if (hashes === undefined) return false;
+  for (let i = 0; i < hashes.length; i++) {
+    if (changedHashes.has(hashes[i]!)) return false;
   }
+  return true;
 }
 
 /**
@@ -1098,7 +1331,9 @@ export function attachRefs(
       ...e,
       refs,
       ...(refsNamesFp === undefined ? {} : { refsNamesFp }),
-      ...(candidates === undefined ? {} : { candidates }),
+      // 候选集在这里**就地哈希**（v12）：上游（`scanFileRefs` / `erb.scanRefs`）产出的仍是
+      // `'\n'` 连接串——worker 边界那一段一个字都不用改，转换只发生在挂接这一处。
+      ...(candidates === undefined ? {} : { candidateHashes: candidateHashesFromTokens(candidates) }),
     };
   }
   return out;

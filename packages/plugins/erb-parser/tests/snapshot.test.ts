@@ -4,12 +4,17 @@ import { parseErbText } from '../src/scanner';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
+  candidateHashesFromTokens,
   coerceSnapshot,
+  decodeCandidateHashes,
   decodeEntries,
   diffSnapshot,
+  encodeCandidateHashes,
   encodeEntries,
+  hashToken,
   mergeEntries,
   pruneSnapshotKeys,
+  refsProvableUnchanged,
   snapshotKeyFor,
   type IndexSnapshot,
   type SnapshotEntry,
@@ -37,9 +42,9 @@ function file(path: string, names: readonly string[]): ErbFile {
 }
 
 function entry(path: string, mtimeMs: number | null, names: readonly string[], size: number | null = 4096): SnapshotEntry {
-  // v4 起 decode 恒回填 refs（缺 = 结构不符）；v11 起候选集键恒在（'' = 已知没有候选）；
-  // 夹具同形，round-trip 判据才不空转
-  return { mtimeMs, size, textLength: 1000, file: file(path, names), refs: [], candidates: '' };
+  // v4 起 decode 恒回填 refs（缺 = 结构不符）；v11 起候选集键恒在（空数组 = 已知没有候选）；
+  // 夹具同形，round-trip 判据才不空转。v12 起内存形态是 `Uint32Array`（哈希集）
+  return { mtimeMs, size, textLength: 1000, file: file(path, names), refs: [], candidateHashes: new Uint32Array(0) };
 }
 
 /** 盘上形态：v5 起 entries 是位置元组（第 2 位 size、第 8 位引用流水），内存形状只在加载后存在 */
@@ -247,15 +252,25 @@ describe('v3 元组编解码（瘦身不改语义；v5：+size、懒还原）', 
     expect(e.file.dims).toEqual(parsed.dims);
   });
 
-  it('未经消费的懒条目落盘原样复用盘上元组（存盘不做无谓重建）', () => {
+  it('未经消费的懒条目落盘复用盘上元组（存盘不做无谓重建）', () => {
     const entries = { '/a.ERB': entry('/a.ERB', 7, ['FOO', 'BAR']) };
     const payload = JSON.parse(JSON.stringify(encodeEntries(entries))) as Record<string, unknown>;
+    // 解码会**就地**把元组第 11 位翻成 `Uint32Array`（零拷贝别名）⇒ 先留一份原样做对照
+    const original = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
     const decoded = decodeEntries(payload)!;
     const re = encodeEntries(decoded);
-    expect(re['/a.ERB']).toBe(payload['/a.ERB']); // 同一对象：快路径零重建
+    const before = original['/a.ERB'] as unknown[];
+    const after = re['/a.ERB'] as unknown[];
+    expect(after).toEqual(before); // 内容逐位相同（含候选位的 base64 往返）
+    // v12 起候选位在内存里是 `Uint32Array`、盘上要 base64 ⇒ 快路径得**浅拷一层**元组换形态，
+    // 整枚数组的身份因此保不住。要省的从来是"重建 10 万级函数元组"，判据落在那几位上：
+    const live = payload['/a.ERB'] as unknown[];
+    expect(after[5]).toBe(live[5]); // 函数元组数组：零重建（同一枚对象）
+    expect(after[7]).toBe(live[7]); // 引用流水：零拷贝别名
+    expect(after[6]).toBe(live[6]); // 声明变量
     // 消费过的条目走重建路径，内容仍逐字段等值
     void decoded['/a.ERB']!.file.functions;
-    expect(encodeEntries(decoded)['/a.ERB']).toEqual(payload['/a.ERB']);
+    expect(encodeEntries(decoded)['/a.ERB']).toEqual(before);
   });
 
   /**
@@ -363,5 +378,106 @@ describe('mergeEntries（收尸 + 沿用）', () => {
     expect(merged['/b.ERB']!.file.functions[0]!.name).toBe('NEW');
     expect(merged['/a.ERB']).toEqual(prev.entries['/a.ERB']);
     expect(merged['/gone.ERB']).toBeUndefined();
+  });
+});
+
+/**
+ * 候选记号哈希集（v12 / MEM-6）：编解码往返 + 免扫判据的保守性。
+ *
+ * 这一组是**为两个真实抓到的洞**写的：
+ * 1. base64 解码用"逐字符累积 `buf`"时，`bits` 到 30 再 `<< 6` 变成 36 位，而 JS 的 `<<`
+ *    是 int32 运算 ⇒ 高位静默丢失。表现是**哈希全变、免扫判据把一切判成"可证不变"**
+ *    （少扫文件、不报错）。所以这里逐个长度钉往返，且把 `0xFFFFFFFF` 这种全 1 值单列。
+ * 2. 免扫判据必须**只可能多扫、不可能漏扫**：碰撞方向上不能反过来。
+ */
+describe('候选记号哈希集（v12：从 17M 字符的串换成哈希）', () => {
+  it('hashToken：跨调用稳定、同串同值、不同串基本不同', () => {
+    expect(hashToken('FOO_C')).toBe(hashToken('FOO_C'));
+    expect(hashToken('')).toBe(hashToken(''));
+    expect(hashToken('FOO_C')).not.toBe(hashToken('FOO_D'));
+    // 32 位无符号（落盘要 base64，负数会被 `>>> 0` 与位运算的差异坑到）
+    for (const s of ['', 'A', 'M_KOJO_K1_300', 'あいう', 'x'.repeat(200)]) {
+      const h = hashToken(s);
+      expect(Number.isInteger(h)).toBe(true);
+      expect(h).toBeGreaterThanOrEqual(0);
+      expect(h).toBeLessThanOrEqual(0xffffffff);
+    }
+  });
+
+  it('encodeCandidateHashes / decodeCandidateHashes：0..9 枚逐个往返（含全 1 值）', () => {
+    const cases = [
+      0x00000000, 0xffffffff, 0x00000001, 0x80000000, 0x7fffffff, 0x01020304, 0xdeadbeef, 0x0000ffff, 0xff000000,
+    ];
+    for (let n = 0; n <= cases.length; n++) {
+      const src = Uint32Array.from(cases.slice(0, n));
+      const text = encodeCandidateHashes(src);
+      if (n === 0) expect(text).toBe('');
+      else expect(text.length % 4).toBe(0); // base64 长度恒为 4 的倍数
+      const back = decodeCandidateHashes(text);
+      expect(back).not.toBeNull();
+      expect(Array.from(back!)).toEqual(Array.from(src));
+    }
+  });
+
+  it('decodeCandidateHashes：长度/字符非法 ⇒ null（fail-closed，不许猜）', () => {
+    expect(decodeCandidateHashes('AAA')).toBeNull(); // 不是 4 的倍数
+    expect(decodeCandidateHashes('AA*A')).toBeNull(); // 字母表外
+    expect(decodeCandidateHashes('AAAA')).toBeNull(); // 3 字节 < 一枚哈希的 4 B ⇒ 元数不符
+    expect(decodeCandidateHashes('AAAAA')).toBeNull();
+    expect(decodeCandidateHashes('')).toEqual(new Uint32Array(0)); // 空集是合法事实（已知没有候选）
+  });
+
+  it('candidateHashesFromTokens：v11 的记号串就地哈希（v11 → v12 的免费迁移）', () => {
+    const tokens = ['FOO_A', 'M_KOJO_K1_300', 'BAR_B'];
+    const hashes = candidateHashesFromTokens(tokens.join('\n'));
+    expect(Array.from(hashes)).toEqual(tokens.map(hashToken));
+    expect(candidateHashesFromTokens('').length).toBe(0); // 空串 = 已知没有候选
+  });
+
+  it('refsProvableUnchanged：命中即重扫、未命中即可证；候选未知一律重扫', () => {
+    const e = {
+      mtimeMs: 1,
+      size: 2,
+      textLength: 3,
+      file: file('/a.ERB', ['FOO_A']),
+      refs: [],
+      candidateHashes: candidateHashesFromTokens('FOO_A\nBAR_B'),
+    } as unknown as SnapshotEntry;
+    // 差集里没有本文件的候选 ⇒ 可证 refs 不变（免扫）
+    expect(refsProvableUnchanged(e, new Set([hashToken('OTHER')]))).toBe(true);
+    // 差集里有 ⇒ 嫌疑坐实（重扫）
+    expect(refsProvableUnchanged(e, new Set([hashToken('BAR_B')]))).toBe(false);
+    // 空差集（名录没变）⇒ 当然可证
+    expect(refsProvableUnchanged(e, new Set())).toBe(true);
+    // 候选未知（v10 迁移条目）⇒ 保守侧重扫，绝不猜
+    expect(refsProvableUnchanged({ ...e, candidateHashes: undefined } as unknown as SnapshotEntry, new Set())).toBe(false);
+    // refs 缺失 ⇒ 谈不上"refs 不变"
+    expect(refsProvableUnchanged({ ...e, refs: undefined } as unknown as SnapshotEntry, new Set())).toBe(false);
+    // 已知空集 ⇒ 任何名录变化都碰不到它
+    expect(
+      refsProvableUnchanged({ ...e, candidateHashes: new Uint32Array(0) } as unknown as SnapshotEntry, new Set([hashToken('X')])),
+    ).toBe(true);
+  });
+
+  it('落盘往返：候选位 base64 → Uint32Array → base64 逐字节相同', () => {
+    const hashes = candidateHashesFromTokens('A\nB\nC\nD\nE');
+    const entries = {
+      '/a.ERB': {
+        mtimeMs: 7,
+        size: 4096,
+        textLength: 1000,
+        file: file('/a.ERB', ['A']),
+        refs: [],
+        candidateHashes: hashes,
+      } as unknown as SnapshotEntry,
+    };
+    const payload = JSON.parse(JSON.stringify(encodeEntries(entries))) as Record<string, unknown[]>;
+    expect(typeof payload['/a.ERB']![10]).toBe('string'); // 盘上是 base64
+    // 解码会**就地**把元组第 11 位翻成 `Uint32Array` ⇒ 先把盘上串留一份再解
+    const disk = payload['/a.ERB']![10] as string;
+    const decoded = decodeEntries(payload)!;
+    expect(Array.from(decoded['/a.ERB']!.candidateHashes!)).toEqual(Array.from(hashes));
+    // 再编一次：与第一次的盘上串逐字节相同（幂等）
+    expect(encodeEntries(decoded)['/a.ERB']![10]).toBe(disk);
   });
 });

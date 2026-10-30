@@ -24,8 +24,20 @@
 import { describe, expect, it } from 'vitest';
 import type { DirEntry, ErbIndex, ErbParserService, FileIO, FileStat, GameProject, ScopedStorage } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { nameSetDigest, SNAPSHOT_VERSION, coerceSnapshot, countEntries, projectRootKey, refsAreReusable, sameProjectRoot, salvageEntries, salvageSnapshot, snapshotKeyCandidatesFor, snapshotKeyFor, encodeEntries, verifiedNamesDigest, type SnapshotEntry } from '../src/snapshot';
+import { nameSetDigest, SNAPSHOT_VERSION, coerceSnapshot, countEntries, hashToken, projectRootKey, refsAreReusable, sameProjectRoot, salvageEntries, salvageSnapshot, snapshotKeyCandidatesFor, snapshotKeyFor, encodeEntries, verifiedNamesDigest, type SnapshotEntry } from '../src/snapshot';
 import { makeComputeStub } from './support';
+
+/**
+ * 版本号**显式写死**，不用 `SNAPSHOT_VERSION - n`。
+ *
+ * 这个文件里 `-1`/`-2` 曾被当成"上一版 / 上上版"用了 8 处，v11→v12 一 bump 全部错位：
+ * 想测"表外旧版不复用"的用例落到了表内的 v10 上——条目元数不符仍然 `skipped`，
+ * **测试照绿但测的是另一件事**。这类"绿得没道理"的用例比红的危险得多。
+ */
+/** 表外最年轻的一代（v9 及更早一律不复用：#DIM 族修复改了 `dims.name` 的口径） */
+const V_LEGACY = 9;
+/** 表内最老的一代（v10：同形 + 缺第 11 位 ⇒ 候选未知、refs 补扫一遍） */
+const V10 = 10;
 
 const ROOT = 'D:/proj/eratw';
 const KOJO = `${ROOT}/ERB`;
@@ -274,9 +286,9 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     const vPrev = diskOf(seeded.map, v7key);
     const v9entries: Record<string, unknown[]> = {};
     for (const [p, t] of Object.entries(vPrev.entries)) v9entries[p] = t.slice(0, 9);
-    const legacyKey = snapshotKeyFor(ROOT, SNAPSHOT_VERSION - 2);
+    const legacyKey = snapshotKeyFor(ROOT, V_LEGACY);
     seeded.map.delete(v7key);
-    seeded.map.set(legacyKey, JSON.stringify({ version: SNAPSHOT_VERSION - 2, rootDir: ROOT, savedAt: 1, entries: v9entries }));
+    seeded.map.set(legacyKey, JSON.stringify({ version: V_LEGACY, rootDir: ROOT, savedAt: 1, entries: v9entries }));
 
     const logs: string[] = [];
     const second = activate(seeded.fs.io, seeded.storage, logs);
@@ -312,7 +324,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     const v9entries: Record<string, unknown[]> = {};
     for (const [p, t] of Object.entries(vPrev.entries)) v9entries[p] = t.slice(0, 9);
     seeded.map.delete(v7key);
-    seeded.map.set(snapshotKeyFor(ROOT, SNAPSHOT_VERSION - 2), JSON.stringify({ version: SNAPSHOT_VERSION - 2, rootDir: ROOT, savedAt: 1, entries: v9entries }));
+    seeded.map.set(snapshotKeyFor(ROOT, V_LEGACY), JSON.stringify({ version: V_LEGACY, rootDir: ROOT, savedAt: 1, entries: v9entries }));
 
     const firstLogs: string[] = [];
     const first = activate(seeded.fs.io, seeded.storage, firstLogs);
@@ -348,8 +360,8 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     for (const [p, t] of Object.entries(v10.entries)) v10entries[p] = t.slice(0, 10);
     seeded.map.delete(v7key);
     seeded.map.set(
-      snapshotKeyFor(ROOT, SNAPSHOT_VERSION - 1),
-      JSON.stringify({ version: SNAPSHOT_VERSION - 1, rootDir: ROOT, savedAt: 1, namesFp: v10.namesFp, entries: v10entries }),
+      snapshotKeyFor(ROOT, V10),
+      JSON.stringify({ version: V10, rootDir: ROOT, savedAt: 1, namesFp: v10.namesFp, entries: v10entries }),
     );
 
     const logs: string[] = [];
@@ -385,6 +397,64 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(r2.provenance).toBe(0);
     expect(r2.refsRescan).toBe(0);
     expect(segOf(seeded.fs.log, mark2)).toEqual({ passes: 0, files: 0 });
+  });
+
+  it('v11 → v12 迁移（MEM-6）：候选位只换编码 ⇒ **一个文件都不重扫**（与 v10 的保守侧重扫正相反）', async () => {
+    const files = new Map<string, FakeFile>([
+      [P1, { text: SRC1, mtimeMs: 100 }],
+      [P2, { text: SRC2, mtimeMs: 200 }],
+    ]);
+    const seeded = await seed(files);
+    const mark = seeded.fs.log.length;
+
+    // 把盘上这份 v12 改写成 v11 形态：第 11 位写回 `'\n'` 连接的**记号串**。
+    // v11 的候选集就是"构建 refs 时问过 hasName 的一切记号"，这里用两份源码里真实出现的名字。
+    const cur = diskOf(seeded.map, v7key) as Payload & { namesFp?: number | null };
+    const tokensOf: Record<string, readonly string[]> = {
+      [P1]: ['FOO_A', 'FOO_B', 'PRINTFORMW', 'RETURN'],
+      [P2]: ['BAR_A', 'PRINTFORMW', 'RETURN'],
+    };
+    const v11entries: Record<string, unknown[]> = {};
+    for (const [p, t] of Object.entries(cur.entries)) {
+      const copy = t.slice();
+      copy[10] = (tokensOf[p] ?? []).join('\n');
+      v11entries[p] = copy;
+    }
+    seeded.map.delete(v7key);
+    seeded.map.set(
+      snapshotKeyFor(ROOT, 11),
+      JSON.stringify({ version: 11, rootDir: ROOT, savedAt: 1, namesFp: cur.namesFp, entries: v11entries }),
+    );
+
+    const logs: string[] = [];
+    const second = activate(seeded.fs.io, seeded.storage, logs);
+    openProject(second.bus);
+    await second.waitIndexed();
+    const r = readBreakdown(logs);
+    expect(r.salvaged).toBe(2); // 结构逐字认识 ⇒ 全部续用
+    expect(r.skipped).toBe(0);
+    expect(r.reused).toBe(2);
+    // ★ 与上面 v10 用例的**唯一差别**：v10 缺位 ⇒ 候选未知 ⇒ 保守侧重扫（provenance=2）；
+    // v11 只换了编码 ⇒ 就地哈希即可 ⇒ 零重扫。这条差异是"免费迁移"这个说法的判据。
+    expect(r.provenance).toBe(0);
+    expect(r.refsRescan).toBe(0);
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 0, files: 0 }); // 一次读盘都不付
+
+    // 迁移把记号串**就地哈希**，成员语义逐条不变（不是"随便造了个非空数组"）
+    const snap = second.service.snapshotForDebug?.() as { entries: Record<string, { candidateHashes?: Uint32Array }> } | null;
+    expect(snap).not.toBeNull();
+    expect(Array.from(snap!.entries[P1]!.candidateHashes!)).toEqual(tokensOf[P1]!.map(hashToken));
+    expect(Array.from(snap!.entries[P2]!.candidateHashes!)).toEqual(tokensOf[P2]!.map(hashToken));
+
+    // 正确性等价：迁移轮的索引与全量重建逐字相同
+    const cold = await rebuildFromScratch(files);
+    expect(dumpIndex(second.service.currentIndex()!)).toBe(dumpIndex(cold.idx));
+
+    // 落盘已是 v12（新键），第 11 位是 base64（**不是**记号串）
+    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === 11);
+    const savedP1 = diskOf(seeded.map, v7key).entries[P1]!;
+    expect(typeof savedP1[10]).toBe('string');
+    expect(savedP1[10]).not.toContain('\n'); // 记号串是 `\n` 连接的，base64 不可能含它
   });
 
   it('触发面「单条目损坏」：坏 1 条只丢 1 条，其余照旧复用（改前是整份弃用、全树重读）', async () => {
@@ -483,7 +553,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     const p2 = diskOf(seeded2.map, v7key);
     seeded2.map.set(
       v7key,
-      JSON.stringify({ ...p2, version: SNAPSHOT_VERSION - 2, rootDir: 'F:/proj/eratw', entries: Object.fromEntries(Object.entries(p2.entries).map(([k, t]) => [k, t.slice(0, 9)])) }),
+      JSON.stringify({ ...p2, version: V_LEGACY, rootDir: 'F:/proj/eratw', entries: Object.fromEntries(Object.entries(p2.entries).map(([k, t]) => [k, t.slice(0, 9)])) }),
     );
     const logs2: string[] = [];
     const third = activate(seeded2.fs.io, seeded2.storage, logs2);
@@ -673,9 +743,11 @@ describe('PERF-12a salvage 判据（纯函数）', () => {
   it('snapshotKeyCandidatesFor：当前键在第一位，含版本 × 写法变体，且不含非快照形态', () => {
     const cands = snapshotKeyCandidatesFor('D:/proj/eratw');
     expect(cands[0]).toBe(snapshotKeyFor('D:/proj/eratw'));
-    // 候选只认表内版本：v10 已入表（同形迁移），v9 不在表 ⇒ 上一代键不进候选
-    expect(cands).toContain(snapshotKeyFor('D:\\proj\\eratw', SNAPSHOT_VERSION - 1));
-    expect(cands).not.toContain(snapshotKeyFor('D:\\proj\\eratw', SNAPSHOT_VERSION - 2));
+    // 候选只认表内版本（表里现在有 10/11/12 ⇒ "上一代"不再是单个数字，写死）：
+    // v11/v10 已入表（同形迁移），v9 不在表 ⇒ 表外那一代不进候选
+    expect(cands).toContain(snapshotKeyFor('D:\\proj\\eratw', 11));
+    expect(cands).toContain(snapshotKeyFor('D:\\proj\\eratw', V10));
+    expect(cands).not.toContain(snapshotKeyFor('D:\\proj\\eratw', V_LEGACY));
     expect(cands).toContain(snapshotKeyFor('d:/proj/eratw', SNAPSHOT_VERSION));
     expect(new Set(cands).size).toBe(cands.length);
     for (const k of cands) expect(k).toMatch(/^index-v\d+-[0-9a-f]{8}$/);
@@ -694,7 +766,7 @@ describe('PERF-12a salvage 判据（纯函数）', () => {
     expect(onlyGood.entries['/a.ERB']).toBeDefined();
 
     const legacy = salvageEntries({ '/a.ERB': (JSON.parse(JSON.stringify(good))['/a.ERB'] as unknown[]).slice(0, 10) }, 10)!;
-    expect(legacy.entries['/a.ERB']!.candidates).toBeUndefined(); // 第 11 位缺 = 候选未知，不编造
+    expect(legacy.entries['/a.ERB']!.candidateHashes).toBeUndefined(); // 第 11 位缺 = 候选未知，不编造
     expect(legacy.entries['/a.ERB']!.refsNamesFp).toBeUndefined(); // 第 10 位本来就 null = 溯源未知
     expect(refsAreReusable(legacy.entries['/a.ERB']!, nameSetDigest([]))).toBe(false);
     // 元组对象仍是盘上那一个（落盘快路径不被 salvage 打断）
@@ -717,7 +789,7 @@ describe('PERF-12a salvage 判据（纯函数）', () => {
     expect(Object.keys(s.entries)).toEqual(['D:/proj/eratw/ERB/a.ERB']); // 归位到本轮 walkDir 的写法
     expect(s.entries['D:/proj/eratw/ERB/a.ERB']!.file.path).toBe('D:/proj/eratw/ERB/a.ERB');
     // 表外版本 / 不同根 / savedAt 非数 ⇒ 一律 null（v9 在表外：#DIM 族修复改了口径，本批的负向判据）
-    expect(salvageSnapshot({ ...payload, version: SNAPSHOT_VERSION - 2 }, opts)).toBeNull();
+    expect(salvageSnapshot({ ...payload, version: V_LEGACY }, opts)).toBeNull();
     expect(salvageSnapshot({ ...payload, version: 5 }, opts)).toBeNull();
     expect(salvageSnapshot({ ...payload, rootDir: 'Z:/elsewhere' }, opts)).toBeNull();
     expect(salvageSnapshot({ ...payload, savedAt: 'x' }, opts)).toBeNull();

@@ -67,6 +67,7 @@ import {
   diffSnapshot,
   encodeEntries,
   entryNamesOf,
+  hashToken,
   mergeEntries,
   nameSetDigest,
   pruneSnapshotKeys,
@@ -923,12 +924,22 @@ export function createErbParserPlugin(): Plugin {
         const provenanceToScan: string[] = [];
         const provenanceClean: string[] = [];
         let changed: ReadonlySet<string> | null = null;
+        /**
+         * `changed` 的**哈希集**（v12/MEM-6）：`refsProvableUnchanged` 逐枚比对候选哈希，
+         * 只需要这一份。算一次、全文件共用——别在每条条目里重算 11 万次哈希。
+         */
+        let changedHashes: ReadonlySet<number> | null = null;
         if (snapshot !== null) {
           if (snapshot.namesFp !== namesFp) {
             changed =
               salvaged !== null && salvagedSkipped > 0
                 ? null
                 : changedNamesBetween(entryNamesOf(snapshot.entries), new Set(byName.keys()));
+            if (changed !== null) {
+              const hs = new Set<number>();
+              for (const n of changed) hs.add(hashToken(n));
+              changedHashes = hs;
+            }
           }
           for (const path of diff.reusable) {
             const e = snapshot.entries[path];
@@ -936,10 +947,10 @@ export function createErbParserPlugin(): Plugin {
             if (refsAreReusable(e, namesFp)) {
               // refs 溯源相符：refs 必然正确。候选未知（v10 迁移）仍要扫一遍收候选——
               // 否则它永远答不了下一轮的免扫判据（每轮都白付重扫）
-              if (e.candidates === undefined) provenanceToScan.push(path);
+              if (e.candidateHashes === undefined) provenanceToScan.push(path);
               continue;
             }
-            if (changed !== null && refsProvableUnchanged(e, changed)) provenanceClean.push(path);
+            if (changedHashes !== null && refsProvableUnchanged(e, changedHashes)) provenanceClean.push(path);
             else provenanceToScan.push(path);
           }
         }

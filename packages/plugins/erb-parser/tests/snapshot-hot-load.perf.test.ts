@@ -400,7 +400,13 @@ describe('PERF-7 快照热载合成基准（2,000 文件 / 100,000 函数）', (
     const fastTarget = decodeEntries(parsedV5)!;
     const rebuiltTarget = decodeEntries(parsedV5)!;
     // 先钉"零重建"这件事（消费之后就再也拿不到同一对象了）
-    expect(encodeEntries(fastTarget)[pathOf(0)]).toBe(parsedV5[pathOf(0)]);
+    // v12 起候选位在内存里是 `Uint32Array`、盘上要 base64 ⇒ 快路径**浅拷一层**元组换形态，
+    // 整枚数组的身份保不住；要省的从来是"重建 10 万级函数元组" ⇒ 判据落在函数/声明/引用三格上。
+    const fastTuple = encodeEntries(fastTarget)[pathOf(0)] as unknown[];
+    const diskTuple = parsedV5[pathOf(0)] as unknown[];
+    expect(fastTuple[5]).toBe(diskTuple[5]);
+    expect(fastTuple[6]).toBe(diskTuple[6]);
+    expect(fastTuple[7]).toBe(diskTuple[7]);
     const together = measureTogether(7, [
       () => void JSON.stringify(encodeEntries(fastTarget)),
       () => {

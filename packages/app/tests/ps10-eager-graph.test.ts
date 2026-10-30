@@ -771,13 +771,24 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     不动**——**零新进图模块**（判据叶子 `@kojo/kojo-lang/code-actions` 只在插件供方侧，
     //     宿主那枚安装器仍在 `editor-global-providers → monaco 装配` 的懒边之下）。宿主删掉的
     //     判据与新增的槽查询都在懒边内 ⇒ 两枚闸维持 **≤199 / ≤3,162**，**不抬不降**。
+    //   - **内存批 MEM-6（2026-10-30，本批）**：读数 **199 文件 / 3,175 KB**——同样**零新进图
+    //     模块**（199 未动）；净 **+12,885 B** 全落在图内既有三枚文件，逐枚实测：
+    //     `erb-parser/src/snapshot.ts` +12,288（候选记号集的哈希化：`hashToken` + 一套
+    //     base64 编解码 + v11→v12 的免费迁移 + 版本表准入位）、
+    //     `erb-parser/src/plugin.ts` +524（名录对称差的哈希集算一次、逐文件复用）、
+    //     `plugin-api/src/erb.ts` +73（`candidateChars` → `candidateHashes` 的统计位）。
+    //     ⇒ 闸 **3,162 → 3,178**（余量 3 KB）。抬这一档的理由与前几批同构：加的是**能力**，
+    //     而且直接换到堆上——每文件 16,968,188 字符的候选串（两字节 ⇒ **32.0 MB**，消融实测）
+    //     压成 1,703,214 枚 32 位哈希（**6.5 MB**），热载稳态 **202.9 → 171.7 MB（−31.2 / −15.4%）**。
+    //     文件数一分未涨。
+    //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,162 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,178 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_162);
+    expect(totalKb).toBeLessThanOrEqual(3_178);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

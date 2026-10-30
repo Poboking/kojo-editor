@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DirEntry, ErbIndex, ErbParserService, FileIO, FileStat, GameProject, ScopedStorage } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { snapshotKeyFor } from '../src/snapshot';
+import { decodeCandidateHashes, hashToken, snapshotKeyFor } from '../src/snapshot';
 import { makeComputeStub } from './support';
 
 const ROOT = 'D:/proj/refs-prov';
@@ -271,11 +271,14 @@ describe('REFS-PROVENANCE：名录变更只重扫受影响文件', () => {
     const saved = JSON.parse(map.get(key)!) as { namesFp: unknown; entries: Record<string, unknown[]> };
     expect(typeof saved.namesFp).toBe('number'); // 免扫条目补了账 ⇒ 信封命中
     for (const t of Object.values(saved.entries)) {
-      expect(t.length).toBe(11); // 第 11 位 = 候选记号位（'\n' 连接；'' = 已知空）
+      expect(t.length).toBe(11); // 第 11 位 = 候选记号位（v12 起是哈希集的 base64；'' = 已知空）
       expect(typeof t[10]).toBe('string');
+      expect(t[10] as string).not.toContain('\n'); // base64 不可能含连接符（v11 的记号串才会）
     }
-    // f029 的候选集里必须有 F0（它 CALL F0）——候选位真的是"问过 hasName 的一切记号"
-    expect((saved.entries[pathOf(N_FILES - 1)]![10] as string).split('\n')).toContain('F0');
+    // f029 的候选集里必须有 F0（它 CALL F0）——候选位真的是"问过 hasName 的一切记号"。
+    // v12 起盘上是哈希集的 base64，成员判定要解出来查哈希（语义与 v11 逐条相同）
+    const cand = decodeCandidateHashes(saved.entries[pathOf(N_FILES - 1)]![10] as string)!;
+    expect(Array.from(cand)).toContain(hashToken('F0'));
 
     // 再开（无任何变更）：信封命中 ⇒ 溯源巡检整段跳过，重扫 0
     logs.length = 0;

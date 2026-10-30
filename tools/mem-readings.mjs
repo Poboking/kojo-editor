@@ -362,8 +362,8 @@ if (process.argv.includes('--snapshot-stats')) {
         ` 声明=${st.dims} 引用=${st.refs} 标签=${st.labels}`,
     );
     console.log(
-      `[mem] snapshot-stats 候选集：${st.candidatesKnown}/${st.entries} 条，合计 ${st.candidateChars} 字符` +
-        ` | 带 refs 的条目 ${st.withRefs}`,
+      `[mem] snapshot-stats 候选集：${st.candidatesKnown}/${st.entries} 条，合计 ${st.candidateHashes} 枚哈希` +
+        `（≈${((st.candidateHashes * 4) / 1048576).toFixed(1)} MB） | 带 refs 的条目 ${st.withRefs}`,
     );
   }
 }
@@ -391,6 +391,102 @@ while (storageBackend.bytes < 1024 && Date.now() - settleStart < settleCap) {
   await new Promise((done) => setTimeout(done, 50));
 }
 console.log(`[mem] snapshot 落盘 ${storageBackend.bytes} 字符（等 ${Date.now() - settleStart}ms）`);
+
+/**
+ * **等流水静默**（MEM-6 批，2026-10-30 补）。
+ *
+ * 上面那个 `--settle` 循环只等"第一笔存储落盘"——而热载下**第一笔**往往是校验器的小写入，
+ * 条件抽取器随后才跑：它要建 21.2 万条依赖的列式表、再序列化 11 MB 落盘。早退就读，
+ * 读到的是"它还没开始"，读数自然小；晚读，读到"它已经就位"。同一份代码、同一份语料：
+ *
+ * ```
+ * 早退（settle 6.6s）  steady 202.9 MB
+ * 跑完（settle 12.4s） steady 298.2 MB   ← 差 95 MB，8 次采样一模一样
+ * ```
+ *
+ * 两个数都"稳定"，但只有后者是用户真的会停在的那个状态。拿前者当基线，等于**系统性低估
+ * 90 MB**，后面任何优化都测不出来（甚至会把"流水终于跑完了"当成"优化退步了"）。
+ *
+ * 判据改成**堆不再变**：连续 `QUIESCE_HITS` 次（每次间隔 250 ms、先 gc）采样落在
+ * `QUIESCE_EPS` 内即视为静默；取静默段的首个采样值（= 上界），因为静默之后只会更低。
+ */
+const QUIESCE_CAP = (() => {
+  const i = process.argv.indexOf('--quiesce');
+  return i >= 0 ? Number(process.argv[i + 1]) : 60_000;
+})();
+const QUIESCE_HITS = 4;
+const QUIESCE_EPS = 0.4;
+const qStart = Date.now();
+const qSeen = [];
+let qStable = 0;
+let qValue = null;
+for (;;) {
+  await new Promise((done) => setTimeout(done, 250));
+  gc();
+  const h = snap().heap;
+  qSeen.push(h);
+  if (qValue === null) qValue = h;
+  if (qSeen.length > 1 && Math.abs(h - qSeen[qSeen.length - 2]) <= QUIESCE_EPS) qStable++;
+  else {
+    qStable = 0;
+    qValue = h;
+  }
+  if (qStable >= QUIESCE_HITS) break;
+  if (Date.now() - qStart >= QUIESCE_CAP) {
+    console.log(`[mem] ⚠ 静默等待超时 ${QUIESCE_CAP}ms，堆仍在变（末次 ${h}MB）——读数不可比，别拿去 A/B`);
+    qValue = h;
+    break;
+  }
+}
+console.log(
+  `[mem] 静默 ${Date.now() - qStart}ms（${qSeen.length} 次采样，末段 ${qValue}MB）` +
+    ` · 区间 ${Math.min(...qSeen)}–${Math.max(...qSeen)}MB`,
+);
+const afterIdle = snap();
+line('2 idle', afterIdle);
+
+/**
+ * **显式驱动条件抽取器**（MEM-6 批，2026-10-30 补）。
+ *
+ * 它的自动运行挂在 `kojo.functionChanged` 上（`condition-extractor/src/index.ts:160`）——
+ * 热载时 3971 份文件全部复用、一个 `functionChanged` 都不发 ⇒ **它压根不跑**。
+ * 于是同一份代码、同一份语料能读出两个都"稳定"的数：
+ *
+ * ```
+ * 抽取器没跑  202.9 MB（settle 等满 20 s 也只写进 128 字符）
+ * 抽取器跑完  298.2 MB（写进 11.4 MB 依赖快照，8 次采样一模一样）
+ * ```
+ *
+ * 差 95 MB。哪个都"可复现"，但**不是同一件事**：前者是"打开就放着"，后者是"改过一个字之后"。
+ * 把它们混成一个 `steady` 数，A/B 就变成掷骰子（同一份代码两次跑差 95 MB，比任何优化都大）。
+ * 所以这里两个都量、两个都报，名字分开。
+ */
+let afterCond = null;
+if (!process.argv.includes('--no-cond')) {
+  const condSvc = kernel.services.get?.('condition.extractor');
+  if (condSvc?.ensureIndex) {
+    const t0 = Date.now();
+    try {
+      await condSvc.ensureIndex();
+    } catch (e) {
+      console.log(`[mem] 条件抽取失败：${String(e?.message ?? e)}`);
+    }
+    const cStart = Date.now();
+    let prev = snap().heap;
+    let stable = 0;
+    for (;;) {
+      await new Promise((done) => setTimeout(done, 250));
+      gc();
+      const h = snap().heap;
+      if (Math.abs(h - prev) <= QUIESCE_EPS) stable++;
+      else stable = 0;
+      prev = h;
+      if (stable >= QUIESCE_HITS || Date.now() - cStart >= QUIESCE_CAP) break;
+    }
+    afterCond = snap();
+    line(`2b cond ${Date.now() - t0}ms`, afterCond);
+  }
+}
 
 kernel.io.releaseTextCache?.('manual');
 gc();
@@ -484,11 +580,42 @@ if (process.argv.includes('--ablate') && index) {
   step('files', 'files.clear', () => index.files.clear());
   step('mtimes', 'fileMtimes.clear', () => index.fileMtimes?.clear?.());
   step('snapshot', 'snapshot entries', dropEntries);
+  // `candidates`（REFS-PROVENANCE，2026-10-22）是**每文件一份的候选记号集**，`'\n'` 连接。
+  // 稳态没人读它（只有"名录变了"时 `refsProvableUnchanged` 才逐段查），但它跨轮落盘、
+  // 每份都是两字节串（含日文标识符）⇒ 常驻很贵。
+  //
+  // ⚠ **两处持有，只清一处等于没清**：热载下 `entries[path]` 是 `SnapshotEntry` 对象
+  // （键 `candidates`），而 `entry.file` 这枚惰性壳还挂着 `RAW` 元组（第 10 格），两处指向
+  // **同一个串**。第一版只清元组那一侧，读数报 `+1.5MB`（`delete` 还顺手把对象转成字典模式），
+  // 差点被当成"候选集不占内存"。这里两处都摘，且用赋值 `''` 而非 `delete`（保形状）。
+  // RAW 是 `snapshot.ts` 的私有 symbol，量测侧不 import 它——直接从壳上取自己的 symbol。
+  step('candidates', 'candidates 候选集', () => {
+    const svc = kernel.services.get?.('erb.parser');
+    const snap = svc?.snapshotForDebug?.() ?? null;
+    const entries = snap?.entries ?? null;
+    if (!entries) return;
+    for (const k in entries) {
+      const e = entries[k];
+      if (Array.isArray(e)) {
+        e[10] = null;
+        continue;
+      }
+      if (e === null || typeof e !== 'object') continue;
+      if ('candidates' in e) e.candidates = '';
+      const shell = e.file;
+      if (shell === null || typeof shell !== 'object') continue;
+      for (const sym of Object.getOwnPropertySymbols(shell)) {
+        const tuple = shell[sym];
+        if (Array.isArray(tuple) && tuple.length === 11) tuple[10] = null;
+      }
+    }
+  });
 }
 console.log(
   `[mem-verdict] index=+${(afterIndex.heap - boot.heap).toFixed(1)}MB  ` +
     `textCache=${drop(afterIndex, afterRelease)}  ` +
     `steady=${steadyFloor}MB  ` +
+    `idle=${afterIdle.heap}MB cond=${afterCond === null ? '-' : afterCond.heap}MB  ` +
     `(boot ${boot.heap}MB / 索引就绪 ${afterIndex.heap}MB)`,
 );
 

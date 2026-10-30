@@ -394,7 +394,8 @@ export interface ErbParserService {
     labels: number;
     nameChars: number;
     docChars: number;
-    candidateChars: number;
+    /** 候选记号**哈希**枚数合计（v12 起；每枚 4 B） */
+    candidateHashes: number;
     candidatesKnown: number;
     withRefs: number;
   } | null;
