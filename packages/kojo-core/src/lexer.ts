@@ -702,12 +702,19 @@ function classifyDispatch(ctx: LineCtx): KojoLexLine {
   }
   const wordStart = k;
   const wordEnd = scanWordEnd(content, wordStart);
-  const word = content.slice(wordStart, wordEnd);
+  let word = content.slice(wordStart, wordEnd);
+  // `@原生{`（§8.5 新典）：花括号紧贴调度词——`{` 是块头载荷的起点，不是词的一部分；
+  // 不特判会被切进词里（`原生{` 不在词集），整行误落 legacy 报「已退场」。
+  let restShift = 0;
+  if (word.length > 1 && word.charCodeAt(word.length - 1) === C_OPEN_BRACE) {
+    word = word.slice(0, -1);
+    restShift = 1;
+  }
   if (word.length === 0) {
     report('core/lex/anchor', '`@` 后面缺少调度词。', cs, ce);
     return { kind: 'unknown', ...baseOf(ctx), invalid: true, reason: 'bare-at' };
   }
-  let r = wordEnd;
+  let r = wordEnd - restShift;
   while (r < content.length && isSpaceCode(content.charCodeAt(r))) r++;
   const rest = content.slice(r);
   const restOffset = cs + r;

@@ -268,12 +268,18 @@ module.exports = grammar({
     function_head: () => at('函', 'required'),
     /** `@织 <事件> [之前|之后|接管]`：监听声明（§8.6）。 */
     weave_head: () => at('织', 'required'),
-    /** `@原生{`：花括号收口逃生舱的块头（§8.5 新典）；收口见 native_close。 */
-    native_head_braced: () => tk(String.raw`@原生\{[${W}]*`),
+    /** `@原生{`：花括号收口逃生舱的块头（§8.5 新典）；`@原生` 与 `{` 之间允许空格（与 core 词法对齐）；收口见 native_close。 */
+    native_head_braced: () => tk(String.raw`@原生[${W}]*\{[${W}]*`),
     /** 裸 `@原生`：缩进围栏旧写法（容忍），体见 native_body（§8.5）。 */
     native_head: () => at('原生', 'none'),
-    /** `@原生{ … }` 的收口行：与块头同缩进的单独一行 `}`（§8.5）。 */
-    native_close: () => tk(String.raw`\}[${W}]*`),
+    /**
+     * `@原生{ … }` 的收口行：与块头同缩进的单独一行 `}`（§8.5）。
+     * 头部 `[\n W]*` 认领 native_line 留下的行尾换行（v1 的 loop_end/catch_end 同模式：
+     * 换行不在 extras、dedent 不吃换行——不带它收口前的换行无处落脚，必然 ERROR）；
+     * 顺带吃掉 `}` 前的真空行。`}` 之前出现任何非空白正文 ⇒ 匹配失败 ⇒ MISSING:native_close
+     * 落在收口缺失处（错误不静默）。
+     */
+    native_close: () => tk(String.raw`[\n${W}]*\}[${W}]*`),
 
     /** `@颜绘 参数…`：单行演出指令，不是块头（§8.3）。 */
     face_command: () => at('颜绘', 'optional'),

@@ -129,6 +129,31 @@ describe('`@原生` 块内 Tab 缩进与 4 空格同一棵结构', () => {
   });
 });
 
+describe('`@原生{ … }` 花括号收口（§8.5 新典）', () => {
+  it('紧跟 `@原生{`：head / body / close 三件齐全，收口行不进 body', () => {
+    const root = parseText('@原生{\n    MOV 1 2\n}\n');
+    expect(faultsOf(root)).toEqual([]);
+    expect(count(root, 'native_head_braced')).toBe(1);
+    expect(count(root, 'native_line')).toBe(1);
+    expect(count(root, 'native_close')).toBe(1);
+  });
+
+  it('空格写法 `@原生 {` 与紧跟写法同构（与 core 词法同判，同一棵树）', () => {
+    const attached = parseText('@原生{\n    MOV 1 2\n}\n');
+    const spaced = parseText('@原生 {\n    MOV 1 2\n}\n');
+    expect(faultsOf(spaced), '空格写法零故障').toEqual([]);
+    expect(spaced.toString()).toBe(attached.toString());
+  });
+
+  it('缺收口 → 故障不可静默（MISSING native_close 占位）', () => {
+    const root = parseText('@原生{\n    MOV 1 2\n');
+    expect(faultsOf(root).length).toBeGreaterThanOrEqual(1);
+    const closes = root.descendantsOfType('native_close');
+    expect(closes.length).toBe(1);
+    expect(closes[0]!.isMissing, '收口是 MISSING 占位而非实体匹配').toBe(true);
+  });
+});
+
 describe('表端点 `否定` 不被兜底 `否` 吞掉', () => {
   const text = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '    否定 -> 0', '    否定线.. -> 亲近', '    否 -> 未知', ''].join(
     '\n',

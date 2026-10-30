@@ -460,6 +460,21 @@ describe('parse：调度区与演出块（§8）', () => {
     expect(codesOf(`${MACHINE}@随机\n    > a\n    @原生\n        CALL X\n    > b\n`)).toContain('core/native/disallowed-location');
   });
 
+  it('@原生{ … }：花括号收口新典——紧跟与空格两种写法同判，收口行不入块体', () => {
+    for (const head of ['@原生{', '@原生 {'] as const) {
+      const source = `${MACHINE}${head}\n    MOV 1 2\n}\n`;
+      const file = parseOk(source);
+      const native = file.scenes[0]!.items.find((node) => node.kind === 'nativeBlock') as KojoNativeBlock;
+      expect(native.lines, `块头写法「${head}」`).toEqual(['MOV 1 2']);
+      expect(codesOf(source), `块头写法「${head}」不报 unclosed`).not.toContain('core/native/unclosed');
+    }
+  });
+
+  it('@原生{ 缺收口 → core/native/unclosed；裸围栏旧写法不要求收口', () => {
+    expect(codesOf(`${MACHINE}@原生{\n    MOV 1 2\n`)).toContain('core/native/unclosed');
+    expect(codesOf(`${MACHINE}@原生 { 缩进围栏\n    MOV 1 2\n\n> 回到正文\n`)).not.toContain('core/native/unclosed');
+  });
+
   it('@织：修饰词冲突；块内 # 幕 报 core/weave/scene-inside', () => {
     expect(codesOf(`${MACHINE}@织 回合末 之前 之后\n    > a\n`)).toContain('core/weave/modifier-conflict');
     expect(codesOf(`${MACHINE}@织 回合末 接管 之后\n    > a\n`)).toContain('core/weave/modifier-conflict');

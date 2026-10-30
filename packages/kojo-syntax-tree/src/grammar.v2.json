@@ -552,7 +552,7 @@
       "type": "TOKEN",
       "content": {
         "type": "PATTERN",
-        "value": "@原生\\{[ \\t\\u3000]*"
+        "value": "@原生[ \\t\\u3000]*\\{[ \\t\\u3000]*"
       }
     },
     "native_head": {
@@ -566,7 +566,7 @@
       "type": "TOKEN",
       "content": {
         "type": "PATTERN",
-        "value": "\\}[ \\t\\u3000]*"
+        "value": "[\\n \\t\\u3000]*\\}[ \\t\\u3000]*"
       }
     },
     "face_command": {

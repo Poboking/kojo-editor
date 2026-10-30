@@ -43,7 +43,9 @@ const pkgRoot = resolve(here, '..');
 const wasmPath = join(pkgRoot, 'tree-sitter-kojo2.wasm');
 
 /** 棘轮阈值：出货 wasm 允许的最大原始字节数（只降不升）。 */
-const MAX_WASM_BYTES = 50_748;
+// 50_782（2026-10-30 复查批）：native_head_braced 放宽到允许 `@原生` 与 `{` 间空格
+// （与 core 词法对齐）、native_close 认领收口前的换行（v1 loop_end 同模式）后的实测值。
+const MAX_WASM_BYTES = 50_782;
 
 describe('出货 wasm 体积棘轮（tree-sitter-kojo2.wasm）', () => {
   const bytes = readFileSync(wasmPath);
