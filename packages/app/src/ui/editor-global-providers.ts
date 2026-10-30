@@ -39,7 +39,6 @@ import type {
   ErbFile,
   ErbIndex,
   ErbParserService,
-  ErbReference,
   GameAdapter,
   GameProject,
   LineDecoration,
@@ -98,6 +97,8 @@ import { documentRequestFields } from './language-service-request';
 // 跨文件定义的第二段要项目文件快照：取法与引用 / 改名**同一条腿**（`projectFilesSnapshotOf`
 // 的 400 份 / 8 MiB 上限不另抄一份）。
 import {
+  collectRename,
+  collectRenameTarget,
   projectFilesSnapshotOf,
   type Kojo2ProjectFilesSnapshot,
 } from '../monaco/kojo-language-service-legs';
@@ -2326,23 +2327,14 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         projectRoot: () => requireKernel().project.current()?.rootDir ?? null,
       }),
     );
-    // ERB 函数重命名（F2，2026-10-16）：判定与编辑收集全在解析器索引（`erb.parser`），
-    // 宿主只注入 monaco 拿不到的东西——活动标签判据（同 codeAction 逐字同款）、写权限
-    // （`requireKernel().io.isWritable`，与保存同源口径）、已开标签表、未打开文件的 io 落盘通道。
-    // 「查找引用」的 ERB 数据源由下方那条 reference 注册（languageService 槽）承担；
-    // 这组 helpers 只喂重命名（ErbReferenceHandlers = 重命名 handlers）。
+    // ERB 函数重命名（F2，2026-10-16；LAU-4 改名腿 2026-10-30）：**判据已进插件**
+    // （`@kojo/plugin-erb-parser` 的 `rename.ts`，经 `ui.editor.languageService` 的
+    // `renameTarget` / `rename` 两枚成员应答）。宿主注入的只剩 monaco 拿不到的东西——
+    // 活动标签判据（同 codeAction 逐字同款）、写权限（`requireKernel().io.isWritable`，
+    // 与保存同源口径）、已开标签表、未打开文件的 io 落盘通道，以及跨语言腿的枚举取数。
     const canAnswerErb = (model: Monaco.editor.ITextModel): boolean => {
       const ctx = owningPaneOf(model);
       return !!ctx && !!ctx.filePathRef.current;
-    };
-    const currentIndexErb = (): ErbIndex | null => erbParserIndex(requireKernel());
-    const referencesToErb = (name: string): readonly ErbReference[] | null => {
-      try {
-        const parser = requireKernel().services.tryGet<ErbParserService>('erb.parser');
-        return parser?.referencesTo ? parser.referencesTo(name) : null;
-      } catch {
-        return null;
-      }
     };
     /* ---- W8 XLANG-RENAME 的宿主三条腿（接线债在此收口） ----
      *
@@ -2363,8 +2355,12 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     };
     globalDisposers.push(installErbRename(monaco, {
       canAnswer: canAnswerErb,
-      currentIndex: currentIndexErb,
-      referencesTo: referencesToErb,
+      // 求值 / 改名两枚都问同一枚槽（判据在插件；宿主只交回它的答案）
+      resolveTarget: (request) =>
+        collectRenameTarget(requireKernel().slots.query('ui.editor.languageService'), request),
+      resolveRename: (request) =>
+        collectRename(requireKernel().slots.query('ui.editor.languageService'), request),
+      currentProject: () => requireKernel().project.current(),
       isWritable: (path) => requireKernel().io.isWritable(path),
       openModelFor: openModelAcrossGroups,
       applyToClosedFile: createApplyToClosedFile(renameClosedFileIo),

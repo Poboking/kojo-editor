@@ -124,3 +124,17 @@ export {
   resolveErbDimDefinition,
   type ErbDimDeclaration,
 } from './symbols';
+
+// 改名判据（LAU-4 改名腿，2026-10-30；纯函数 + 槽供方形状，宿主只翻 Monaco 形状）
+export {
+  kojoLabelMentions,
+  labelRenameRejection,
+  planErbRename,
+  provideRename,
+  provideRenameTarget,
+  resolveErbRenameAt,
+  resolveRenameName,
+  wordAtColumn,
+  type ErbRenameResolution,
+  type RenameNameTarget,
+} from './rename';

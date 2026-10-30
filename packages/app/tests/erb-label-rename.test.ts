@@ -12,7 +12,9 @@ import type * as Monaco from 'monaco-editor';
 import type { ErbIndex } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
-import { installErbRename, kojoLabelMentions, labelRenameRejection, type ErbRenameHandlers } from '../src/monaco/erb-rename';
+import { installErbRename, type ErbRenameHandlers } from '../src/monaco/erb-rename';
+// 判据本体（LAU-4 改名腿）：标签守卫与改名编排在解析器插件，宿主只翻 Monaco 形状
+import { kojoLabelMentions, labelRenameRejection, provideRename, provideRenameTarget } from '@kojo/plugin-erb-parser';
 
 const PATH = 'C:/p/ERB/label.ERB';
 const KOJO = 'C:/p/kojo/a.kojo';
@@ -21,6 +23,8 @@ function modelOf(path: string, text: string): Monaco.editor.ITextModel {
   const lines = text.split('\n');
   return {
     uri: { scheme: 'file', fsPath: path, path, toString: () => `file:///${path.replace(/\\/g, '/')}` },
+    getLanguageId: () => ERB_LANGUAGE_ID,
+    getVersionId: () => 1,
     getValue: () => text,
     getLineCount: () => lines.length,
     getLineContent: (n: number) => lines[n - 1] ?? '',
@@ -63,13 +67,16 @@ function handlersOf(opts: {
   byName?: Map<string, never[]>;
   refs?: null;
 } = {}): ErbRenameHandlers {
+  // 判据桩：索引只给 `byName`（标签腿不依赖索引；函数腿回归用例要它）
+  const index =
+    opts.byName === undefined
+      ? null
+      : ({ byName: opts.byName, references: { bySymbol: new Map() } } as unknown as ErbIndex);
+  const isDialect = (path: string): boolean => /\.(?:erb|erh|erd)$/i.test(path);
   return {
     canAnswer: () => true,
-    currentIndex: () =>
-      (opts.byName === undefined
-        ? null
-        : { byName: opts.byName, references: { bySymbol: new Map() } }) as unknown as ErbIndex,
-    referencesTo: () => opts.refs ?? null,
+    resolveTarget: (request) => provideRenameTarget(index, request, isDialect),
+    resolveRename: (request) => provideRename(index, request, isDialect),
     isWritable: () => opts.writable ?? true,
     openModelFor: () => undefined,
     applyToClosedFile: async () => ({ applied: 0, stale: 0 }),
@@ -77,9 +84,20 @@ function handlersOf(opts: {
   };
 }
 
+/**
+ * 装配：`openModelFor` 从传入的 model 表里按路径找回（生产等价——改名只发生在**已打开的
+ * 标签**上；标签腿的编辑必须走 WorkspaceEdit 通道，不能掉进闭文件 io）。
+ */
 function install(handlers: ErbRenameHandlers, models: Monaco.editor.ITextModel[] = []) {
   const stub = stubMonaco(models);
-  installErbRename(stub.monaco, handlers);
+  installErbRename(stub.monaco, {
+    ...handlers,
+    openModelFor: (path: string) =>
+      models.find((model) => {
+        const uri = (model as unknown as { uri?: { fsPath?: string } }).uri;
+        return uri?.fsPath === path;
+      }),
+  });
   return stub.provider();
 }
 
@@ -106,7 +124,7 @@ describe('kojoLabelMentions · `.kojo` 同名标签写法', () => {
 describe('$ 标签重命名 · provider', () => {
   it('resolveRenameLocation：索引未建也能命中标签（返回原词与区间）', async () => {
     const model = modelOf(PATH, TEXT);
-    const provider = install(handlersOf());
+    const provider = install(handlersOf(), [model]);
     const hit = await provider.resolveRenameLocation!(model, AT(3, 7), null as never);
     expect(hit).toMatchObject({
       text: 'next',
@@ -116,7 +134,7 @@ describe('$ 标签重命名 · provider', () => {
 
   it('改名只改本函数：定义 + 跳转两处，跨函数同名不动', async () => {
     const model = modelOf(PATH, TEXT);
-    const provider = install(handlersOf());
+    const provider = install(handlersOf(), [model]);
     const result = (await provider.provideRenameEdits(model, AT(2, 2), 'LOOP', null as never)) as {
       edits: Monaco.languages.IWorkspaceTextEdit[];
     };
@@ -137,14 +155,14 @@ describe('$ 标签重命名 · provider', () => {
 
   it('撞同函数已有标签 ⇒ 整次拒绝（大小写不敏感）', async () => {
     const model = modelOf(PATH, '@F\n$NEXT\n$OTHER\n\tGOTO NEXT\n');
-    const provider = install(handlersOf());
+    const provider = install(handlersOf(), [model]);
     const out = (await provider.provideRenameEdits(model, AT(4, 7), 'other', null as never)) as { rejectReason?: string };
     expect(out.rejectReason).toContain('OTHER');
   });
 
   it('非法名字 / 纯数字 ⇒ 拒绝；只改大小写 ⇒ 放行', async () => {
     const model = modelOf(PATH, TEXT);
-    const provider = install(handlersOf());
+    const provider = install(handlersOf(), [model]);
     const bad = (await provider.provideRenameEdits(model, AT(3, 7), 'A-B', null as never)) as { rejectReason?: string };
     expect(bad.rejectReason).toContain('只能用字母');
     const digits = (await provider.provideRenameEdits(model, AT(3, 7), '123', null as never)) as { rejectReason?: string };
@@ -157,7 +175,7 @@ describe('$ 标签重命名 · provider', () => {
 
   it('只读文件 ⇒ 整次拒绝', async () => {
     const model = modelOf(PATH, TEXT);
-    const provider = install(handlersOf({ writable: false }));
+    const provider = install(handlersOf({ writable: false }), [model]);
     const out = (await provider.provideRenameEdits(model, AT(3, 7), 'LOOP', null as never)) as { rejectReason?: string };
     expect(out.rejectReason).toContain('只读');
   });
@@ -172,7 +190,7 @@ describe('$ 标签重命名 · provider', () => {
           { filePath: 'C:/p/kojo/b.kojo', text: '跳到 $NEXT\n' },
         ],
       }),
-      [kojo],
+      [model, kojo],
     );
     const out = (await provider.provideRenameEdits(model, AT(3, 7), 'LOOP', null as never)) as { rejectReason?: string };
     expect(out.rejectReason).toContain('2 份 .kojo 源');
@@ -187,6 +205,7 @@ describe('$ 标签重命名 · provider', () => {
           throw new Error('walkDir failed');
         },
       }),
+      [model],
     );
     const out = (await provider.provideRenameEdits(model, AT(3, 7), 'LOOP', null as never)) as { rejectReason?: string };
     expect(out.rejectReason).toContain('无法检查 .kojo 源');
@@ -196,6 +215,7 @@ describe('$ 标签重命名 · provider', () => {
     const model = modelOf(PATH, '@F\n\tGOTO ALPHA\n\tGOTO (ALPHA)\n');
     const provider = install(
       handlersOf({ byName: new Map([['ALPHA', []]]), refs: null }),
+      [model],
     );
     const miss = (await provider.resolveRenameLocation!(model, AT(2, 7), null as never)) as { rejectReason?: string };
     expect(miss.rejectReason).toContain('跳转目标');
@@ -207,7 +227,7 @@ describe('$ 标签重命名 · provider', () => {
 
   it('非标签入口照旧走函数索引腿（回归：CALL FOO 能拿到函数改名位置）', async () => {
     const model = modelOf(PATH, '@F\n\tCALL FOO\n');
-    const provider = install(handlersOf({ byName: new Map([['FOO', []]]) }));
+    const provider = install(handlersOf({ byName: new Map([['FOO', []]]) }), [model]);
     const hit = (await provider.resolveRenameLocation!(model, AT(2, 7), null as never)) as {
       text?: string;
       range?: { startColumn: number; endColumn: number };

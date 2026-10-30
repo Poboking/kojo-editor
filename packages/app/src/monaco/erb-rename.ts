@@ -1,21 +1,27 @@
 import type * as Monaco from './entry';
-import type { EditorSymbolLocation, ErbIndex, ErbReference, ErbReferenceKind } from '@kojo/plugin-api';
-import { MODEL_TOKEN_CLASS, errorText } from '@kojo/plugin-api';
-import { labelEntryAt, type ErbLabelOccurrence, type ErbLabelScope } from '@kojo/plugin-erb-parser';
+import type {
+  EditorProjectFile,
+  EditorRenameEdit,
+  EditorRenameRelated,
+  EditorRenameRequest,
+  EditorRenameResult,
+  EditorRenameTargetRequest,
+  EditorRenameTargetResult,
+  EditorSymbolLocation,
+  ErbReferenceKind,
+  GameProject,
+} from '@kojo/plugin-api';
+import { errorText } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
 import { reject } from './rename-rejection';
 import { erbFactsPathOf } from './erb-completion-declared';
-import { resolveErbLabelScopeAt } from './erb-label-navigation';
-import { normalizePathKey } from './kojo-hover';
 import {
-  erbOccurrences,
   findNameTokenPositions,
   isCallShapedMention,
   isKojoSourcePath,
   languageOfPath,
   mergeOccurrences,
-  occurrencesFromLocations,
   planReferenceWrites,
   readOnlyFilesReason,
   rewriteClosedFile,
@@ -25,187 +31,62 @@ import {
 } from '../ui/reference-utils';
 
 /**
- * ERB 函数重命名（F2 / `editor.action.rename`）——**全项目、跨语言一次改齐**，宿主层接线。
+ * ERB 函数重命名（F2 / `editor.action.rename`）——**宿主翻译层**
+ * （LAU-4 导航腿，2026-10-30：判据已搬进插件 `@kojo/plugin-erb-parser`）。
  *
- * ## 数据源（零猜测）
+ * ## 这一格里只剩"宿主才知道的事"
  *
- * - 可重命名判定：光标词 → 归一化大写 → `ErbIndex.byName.has` 命中才算数。
- *   索引里没有的名字（`$` 标签、`#DIM` 局部名、拼错词）一律 reject，**不猜**；
- *   索引未建 ⇒ `resolveRenameLocation` 返回 `undefined`（Monaco 走缺省词回退，
- *   不会报错）。
- * - 编辑收集：`referencesTo(归一化名)`——定义点与引用点全集（契约含 `definition`，
- *   rename 必须连定义一起改），按文件分组。
- * - **跨语言腿（W8 XLANG-RENAME）**：同名记号在 `.kojo` 源里的出现点经
- *   `ui.editor.languageService` 槽的 `references` 成员判读（糖线探针法，转译器当判官）
- *   后并入**同一份出现点台账**（`ui/reference-utils.ts`），走**同一条**分组、
- *   只读闸门与送达通道。
+ * 判据（什么词可改名 / `$` 标签作用域 / 引用全集 / 跨语言全或无）整块搬进了解析器插件的
+ * `src/rename.ts`，由槽 `ui.editor.languageService` 的 `renameTarget` / `rename` 两个成员
+ * 应答。本文件留下三件宿主事实：
  *
- * ## 为什么必须并进来（数据损坏级缺口）
+ * 1. **model / 位置 → 请求**：活动标签的真 model 判据（`canAnswer`，派生预览面不参与）、
+ *    身份三格与全文；
+ * 2. **契约 → Monaco 形状**：`EditorRenameTarget` → `RenameLocation`；`EditorRenameEdit`
+ *    → `WorkspaceEdit`；`rejectReason` → Monaco 拒绝；
+ * 3. **落盘通道**：已打开文件进 `WorkspaceEdit`（Monaco 原生落地——脏标记、撤销步、
+ *    marker 全套现成）；未打开文件经内核 io 读改写（保编码保换行 + 原子写 + 备份，
+ *    写允许域由内核 io 强制）。**只读闸门是写域策略，不是语言判据**：它问的是内核
+ *    `io.isWritable`，与保存按钮同源。
  *
- * `.kojo` 是源、`.erb` 是产物：只改 `.erb` 时，下一次保存 `.kojo` 会把按旧名重新生成的
- * 产物**盖回**改名结果——改名被静默冲掉，作者拿到的是"看着改过其实没改"的文件。
- * 所以本模块对 `.kojo` 侧只有三种态度，没有第四种：
- * ① 糖线证明这些记号是这个函数的引用 ⇒ **同一批**一起改；
- * ② 判据缺席、无法证明 ⇒ **整批拒绝**并说清楚为什么（绝不"先改 `.erb` 那半边"）。
- *    "缺席"含三种现场：判读成员没接上、判读**抛错**（抛错 ≠ 判官答"不是引用"，
- *    那必须是正常返回空集）、宿主 `.kojo` 源**枚举抛错**（没看见的源无从证明）；
- * ③ 该 `.kojo` 文件里根本没有同名记号 ⇒ 与本动作无关，零影响。
+ * ## 跨语言腿（W8 XLANG-RENAME）：宿主编排，判据不搬
  *
- * ## 交付通道（monaco 0.57 standalone 源码取证，两种通道各管一半）
+ * `.kojo` 是源、`.erb` 是产物：只改 `.erb` 时下一次保存会把按旧名重新生成的产物盖回。
+ * "哪些 `.kojo` 记号属于这个函数"的判据在糖线供方（转译器当判官），而**供方之间不能
+ * 互问**——所以宿主做两件事：枚举候选源（已开标签 + `kojoSources`）并逐个问 references 槽，
+ * 把结果当**数据**塞进 `EditorRenameRequest.related`；"判据缺席 ⇒ 整次拒绝"的裁决在插件里
+ * （`related.unprovable`）。宿主只搬运，不解释。
  *
- * monaco standalone 的 `StandaloneBulkEditService.apply` 对**没有 live model 的 resource
- * 直接抛** `bad edit - model not found`（`standaloneServices.js:527`），而重命名的落点
- * 遍布全项目（真语料 2,325 份文件，绝大多数没开标签）⇒ WorkspaceEdit 通道只可能送达
- * **已打开的标签**。所以按文件分两组送达：
- * - **已打开**：进返回的 `WorkspaceEdit`（Monaco 原生落地——脏标记、撤销步、marker 全套现成）；
- * - **未打开**：经宿主注入的 `applyToClosedFile`（内核 io 读改写，保编码保换行 + 原子写 +
- *   备份，写允许域由内核 io 强制——绕开写允许域没有第二条路）。
- *   该通道的**唯一现成实现**是 `createApplyToClosedFile(io)`（与搜索面板「全部替换」
- *   共用 `rewriteClosedFile`，两边不可能再分叉）。
+ * ## 双通道送达的取证（monaco 0.57 standalone 源码，两种通道各管一半）
  *
- * ## 写权限收口（铁律 6：不静默）
+ * `StandaloneBulkEditService.apply` 对**没有 live model 的 resource 直接抛**
+ * `bad edit - model not found`（`standaloneServices.js:527`），而改名落点遍布全项目
+ * （真语料 2,325 份文件，绝大多数没开标签）⇒ WorkspaceEdit 通道只可能送达**已打开的标签**。
+ * 未打开文件走 `createApplyToClosedFile`（与搜索面板「全部替换」共用 `rewriteClosedFile`，
+ * 两边不可能再分叉）。
  *
- * 可写判定 = `kernel.io.isWritable`（与保存按钮/直连编辑同源口径）。只读文件剔除，
- * 且**只要有一份只读 ⇒ 整次重命名取消**、`rejectReason` 明示「n 个文件只读未纳入」
- * （两种语言的文件数合在同一计数里，文案真源 `readOnlyFilesReason`）。
- * 为什么不做"可写的先改一半"：monaco 0.57 的 rename 控制器见到返回值带 `rejectReason`
- * 会**丢弃全部编辑只弹 info**（`rename.js:241`），没有"部分应用 + 提示"的通道——
- * 硬走部分应用就只能静默少改，让作者拿到一套名字分叉的半成品还不自知。宁可全或无。
- * **同一条取证推出的第二条纪律**：`rejectReason` 与"已经落到盘上的改动"永不同时返回——
- * 闭文件写入一处都没成功 ⇒ 拒绝（真全或无）；已有落点后再失败 ⇒ 不再拒绝，
- * 把算好的 WorkspaceEdit 交付并 warn 失败文件（此时拒绝 = 标签回退而盘上半套，更糟）。
+ * ## 全或无的最后一道（写盘纪律，住宿主）
  *
- * ## 陈旧索引防误写
+ * monaco 0.57 的 rename 控制器见到返回值带 `rejectReason` 会**丢弃全部编辑只弹 info**
+ * （`rename.js:241`），没有"部分应用 + 提示"的通道——所以 rejectReason 与"已经落到盘上的
+ * 改动"**永不同时返回**：一处盘上改动都没发生 ⇒ 拒绝（真全或无）；已有落点后再失败 ⇒
+ * 不再拒绝，把算好的 WorkspaceEdit 交付并 warn 失败文件（此时拒绝 = 标签回退而盘上半套，
+ * 更糟）。
  *
- * 索引与现场文本之间没有锁。每一处引用落地前都做**文本验证**：该列区间上现在是不是
- * 这个名字（大小写不敏感）；不匹配（作者已改写 / 行号漂移 / 行越界）⇒ 跳过该处并计数
- * 上报——**绝不按陈旧坐标硬写**。
+ * ## 陈旧索引防误写（同一条纪律，住宿主）
  *
- * 分层照 `kojo-signature` / `kojo-format`：`wordAtColumn` / `resolveRenameTarget` /
- * `planRenameEdits` / `applyReferenceEdits` 是纯函数（node 单测），`installErbRename`
- * 只做 Monaco 协议翻译。
+ * 索引与现场文本之间没有锁。每一处编辑落地前都做**文本验证**（该列区间上现在是不是原名，
+ * 大小写不敏感）；不匹配（作者已改写 / 行号漂移 / 行越界）⇒ 跳过该处并计数上报——
+ * **绝不按陈旧坐标硬写**。闭文件侧由 `rewriteClosedFile` 在读出文本上做同一件事。
+ *
+ * ## 散文跳过（"改名不重写散文"）
+ *
+ * 供方交回的编辑带 `occurrenceKind`；`mention` 且名字后不是 `(` 的 ERB 词法出现点是台词
+ * 散文 ⇒ 跳过（判据 `isCallShapedMention` 单源，与搜索替换共用）。`.kojo` 腿的 mention 是
+ * 探针证明的真引用，不受此闸影响。
  */
 
-/* ============================== 纯逻辑：词定位 ============================== */
-
-/**
- * 标识字符集：Unicode 字母 / 数字 / 下划线。与 erb-parser 反向索引的记号字符集同口径
- * （真语料 21% 的函数名含 CJK，ASCII 集会静默漏两成）。
- */
-const IDENT_RE = /[\p{L}\p{N}_]/u;
-
-function isIdentPart(ch: string | undefined): boolean {
-  return ch !== undefined && IDENT_RE.test(ch);
-}
-
-/**
- * 光标列 → 所在词的 0 基半开区间 `[start, end)`（**纯函数**）。
- *
- * `col0` = Monaco 的 1 基列 - 1。词判定向两侧看一格：光标贴着词（词尾后一格、
- * 或词首上一格贴着词）都算在词上，与 Monaco `getWordAtPosition` 的行为一致；
- * 两侧都不是标识字符（空白 / 运算符 / 空行）⇒ `null`。越界列夹取到行尾。
- */
-export function wordAtColumn(lineText: string, col0: number): { start: number; end: number } | null {
-  if (!Number.isFinite(col0) || col0 < 0) return null;
-  const at = Math.min(Math.trunc(col0), lineText.length);
-  // 先看光标左侧字符（词尾后一格的情形），再看光标处字符（词首上的情形）
-  const anchor = isIdentPart(lineText[at - 1]) ? at - 1 : isIdentPart(lineText[at]) ? at : -1;
-  if (anchor < 0) return null;
-  let start = anchor;
-  while (start > 0 && isIdentPart(lineText[start - 1])) start--;
-  let end = anchor + 1;
-  while (end < lineText.length && isIdentPart(lineText[end])) end++;
-  return { start, end };
-}
-
-/* ============================== 纯逻辑：名字判定 ============================== */
-
-/** 名字判定的产物：命中（含原词区间与归一化名）或拒绝（给作者看的理由） */
-export type RenameTarget =
-  | { readonly kind: 'hit'; readonly startColumn: number; readonly endColumn: number; readonly normalizedName: string }
-  | { readonly kind: 'reject'; readonly reason: string };
-
-/**
- * 光标处词 → 是否可重命名（**纯函数**；`column` = Monaco 1 基列）。
- *
- * 命中 = 词归一化大写后 `byName.has` 为真；未命中（`$` 标签、`#DIM` 局部名、裸词）与
- * 无词都 reject，理由区分两种，作者一眼知道为什么 F2 不动。
- */
-export function resolveRenameTarget(
-  lineText: string,
-  column: number,
-  byName: ReadonlyMap<string, unknown>,
-): RenameTarget {
-  const col0 = Math.min(Math.max(0, column - 1), lineText.length);
-  const word = wordAtColumn(lineText, col0);
-  if (!word) return { kind: 'reject', reason: '光标处没有可重命名的名字' };
-  const raw = lineText.slice(word.start, word.end);
-  const normalizedName = raw.toUpperCase();
-  if (!byName.has(normalizedName)) {
-    return {
-      kind: 'reject',
-      reason: `「${raw}」不在 ERB 函数索引内，不能重命名（$ 标签与 #DIM 局部名不在射程）`,
-    };
-  }
-  return {
-    kind: 'hit',
-    startColumn: word.start + 1,
-    endColumn: word.end + 1,
-    normalizedName,
-  };
-}
-
-/* ============================== 纯逻辑：`$` 标签改名 ============================== */
-
-/** 标签名允许的字符（与解析器同一枚 Unicode 集：字母 / 数字 / 下划线） */
-const LABEL_NAME_RE = new RegExp(`^${MODEL_TOKEN_CLASS}+$`, 'u');
-/** 纯数字不认（`GOTO 123` 与行号目标有歧义） */
-const LABEL_NAME_DIGITS = /^\p{N}+$/u;
-
-/**
- * 标签改名的新名字判定（**纯函数**；`null` = 可用，字符串 = 给作者看的拒绝理由）。
- * 同函数标签重名按大小写不敏感比较（Emuera 标签名不区分大小写）。
- */
-export function labelRenameRejection(scope: ErbLabelScope, newName: string): string | null {
-  if (!LABEL_NAME_RE.test(newName)) return `标签名只能用字母、数字、下划线（「${newName}」含其它字符）`;
-  if (LABEL_NAME_DIGITS.test(newName)) return `标签名不能是纯数字（「${newName}」会与行号跳转混淆）`;
-  const upper = newName.toUpperCase();
-  if (upper === scope.normalizedName) return null; // 只改大小写是合法改名
-  const clash = scope.siblingNames.find((name) => name.toUpperCase() === upper);
-  return clash === undefined ? null : `本函数里已有标签「${clash}」，不能改成「${newName}」（标签名不区分大小写）`;
-}
-
-/** 光标是否落在作用域中的某一处（含词尾后一格） */
-function occurrenceAt(scope: ErbLabelScope, line: number, column: number): ErbLabelOccurrence | undefined {
-  return scope.occurrences.find((occurrence) => occurrence.line === line && column >= occurrence.column && column <= occurrence.endColumn);
-}
-
-/**
- * `.kojo` 源里是否有同名标签的**可证明引用面**（**纯函数**）。
- *
- * 只认行首写法（与糖线词法同形）：
- * - `标签 <名>`（⇄ `$名`）；
- * - `跳到 <名>`（可带 `$` / `*` 前缀，⇄ `GOTO`）；
- * - 原生直通行 `$名` 与 `JUMP/GOTO/TRYJUMP/TRYGOTO <名>`（`.kojo` 允许整行透传引擎原文）。
- *
- * 命中 ⇔ 只改 `.erb` 会被下一次保存 `.kojo` 重新生成的产物盖回去 ⇒ 调用方整批拒绝。
- * 名字按大小写不敏感比较；行尾 `;` 注释先剥掉。
- */
-export function kojoLabelMentions(text: string, normalizedName: string): boolean {
-  const want = normalizedName.toUpperCase();
-  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
-    const code = raw.replace(/;.*$/, '').trim();
-    if (code.length === 0) continue;
-    const sugar = /^(?:标签|跳到)\s+(\S+)/.exec(code);
-    const rawLabel = sugar === null ? /^\$(\S+)/.exec(code) : null;
-    const rawJump = sugar === null && rawLabel === null ? /^(?:JUMP|GOTO|TRYJUMP|TRYGOTO)\s+(\S+)/i.exec(code) : null;
-    const name = (sugar ?? rawLabel ?? rawJump)?.[1]?.replace(/^[$*]/, '');
-    if (name !== undefined && name.toUpperCase() === want) return true;
-  }
-  return false;
-}
-
-/* ============================== 纯逻辑：编辑收集与只读剔除 ============================== */
+/* ============================== 纯逻辑：编辑分组与只读剔除 ============================== */
 
 /** 一处落点的最小区间（`ErbReference` 与 `.kojo` 台账项的共同形状——两种语言共用同一个改写器） */
 export interface RenameSpan {
@@ -217,49 +98,6 @@ export interface RenameSpan {
   /** 语言轴（可选；散文跳过判据只拦 erb 侧——kojo 侧的 mention 全数可写） */
   readonly language?: ReferenceLanguage;
 }
-
-/** 一个文件的引用点组（顺序保持 `referencesTo` 的构建序 → 行 → 列） */
-export interface RenameFileGroup {
-  readonly path: string;
-  readonly refs: readonly ErbReference[];
-}
-
-/** 编辑收集产物：可写文件的分组（待送达）+ 只读剔除计数（铁律 4：不静默） */
-export interface RenamePlan {
-  readonly writable: readonly RenameFileGroup[];
-  /** 只读文件数（不是引用点数）——`> 0` ⇒ 整次重命名取消并明示 */
-  readonly readOnlyCount: number;
-}
-
-/**
- * 引用点全集 → 按文件分组 + 写权限筛选（**纯函数**；`isWritable` = 内核 io 口径）。
- *
- * 只读文件整文件剔除并计数；只要有一份只读，调用方必须整次取消（见模块头注的
- * monaco 语义取证）。本函数是台账分组 `planReferenceWrites` 的薄壳——
- * 保留既有形状给上游单测，闸门逻辑只有一份。
- */
-export function planRenameEdits(
-  refs: readonly ErbReference[],
-  isWritable: (path: string) => boolean,
-): RenamePlan {
-  // 台账项 ↔ 原引用点对象一一对应：闸门只有一份实现，出口形状保持原样（旧消费方零改动）
-  const originals = new WeakMap<ReferenceOccurrence, ErbReference>();
-  const ledger: ReferenceOccurrence[] = refs.map((ref) => {
-    const occ: ReferenceOccurrence = { ...ref, language: languageOfPath(ref.filePath) };
-    originals.set(occ, ref);
-    return occ;
-  });
-  const plan = planReferenceWrites(ledger, isWritable);
-  return {
-    writable: plan.writable.map((group) => ({
-      path: group.path,
-      refs: group.occurrences.map((occ) => originals.get(occ) ?? (occ as unknown as ErbReference)),
-    })),
-    readOnlyCount: plan.readOnlyFiles.length,
-  };
-}
-
-/* ============================== 纯逻辑：按引用点改写全文 ============================== */
 
 /** 每行的 0 基起始偏移（`text` 按 `\r\n` / `\n` 分行，行偏移含换行长度） */
 function lineStartOffsets(text: string): number[] {
@@ -332,52 +170,32 @@ export function applyReferenceEdits(
   return { text: next, applied: ops.length, stale, skippedProse };
 }
 
-/* ============================== Monaco 协议翻译 ============================== */
-
-/** 宿主注入：monaco 之外的一切知识都从这里进（与 `kojo-definition` 的 handlers 同款） */
-export interface ErbRenameHandlers {
-  /**
-   * 该不该应答这次请求：只认**当前活动标签的真 model**。派生预览 model 的行列属于
-   * 派生物，重命名它改的不是真文件（与 codeAction / 转到定义同一判据）。
-   */
-  canAnswer(model: Monaco.editor.ITextModel): boolean;
-  /** 当前 ERB 索引（`null` = 未建 / 服务缺席；软取不抛） */
-  currentIndex(): ErbIndex | null;
-  /** 归一化名 → 定义点与引用点全集（`null` = 反向索引缺席；软取不抛） */
-  referencesTo(name: string): readonly ErbReference[] | null;
-  /** 写权限判定（内核 io `isWritable`，与保存同源口径） */
-  isWritable(path: string): boolean;
-  /** 文件路径 → 已打开标签的 live model（查不到 = 未打开，走 io 通道） */
-  openModelFor(path: string): Monaco.editor.ITextModel | undefined;
-  /**
-   * 未打开文件的落盘通道（内核 io 读改写：保编码保换行 + 原子写 + 备份）。
-   * 返回实改 / 跳过计数；抛错 = 这次写被内核拒绝（写允许域 / io 故障）。
-   * 入参是**区间**而非 `ErbReference`：`.erb` 与 `.kojo` 的落点共用这一个改写器，
-   * 现成实现见 `createApplyToClosedFile`（与搜索面板「全部替换」同一条通道）。
-   */
-  applyToClosedFile(
-    path: string,
-    spans: readonly RenameSpan[],
-    newName: string,
-    normalizedName: string,
-  ): Promise<{ applied: number; stale: number; skippedProse?: number }>;
-  /**
-   * **跨语言腿 ①**：归一化名可能出现在哪些 `.kojo` 源里（宿主枚举 + 读文，
-   * 内核 io 的读权限由宿主兜）。缺席 = 只能看到**已打开标签**里的 `.kojo` 源
-   * （本模块经 monaco model 注册表枚举，这条腿不需要新接线就能生效）。
-   */
-  kojoSources?(normalizedName: string): Promise<readonly KojoSourceFile[]> | readonly KojoSourceFile[];
-  /**
-   * **跨语言腿 ②**：`.kojo` 源里这一处记号**是不是**这个函数的引用
-   * （宿主查 `ui.editor.languageService` 槽的 `references` 成员——糖线探针法，转译器当判官，
-   * 本模块零糖语法知识）。返回该文件内可证明的引用点全集；空数组 = 认这个文件但这些
-   * 记号不是函数引用（台词散文 / 注释一类），不动它们。
-   * **缺席 ⇒ 该文件的同名记号判为"不可证明" ⇒ 整次重命名拒绝**（绝不静默改一半）。
-   */
-  kojoReferences?(
-    probe: KojoReferenceProbe,
-  ): Promise<readonly EditorSymbolLocation[]> | readonly EditorSymbolLocation[];
+/**
+ * 供方的编辑集 → 出现点台账（**纯函数**；`resourcePath` 缺省 = 请求文件本身）。
+ *
+ * 为什么绕这一圈而不是直接按 `EditorRenameEdit` 分组：分组 / 去重 / 只读闸门必须与搜索面板
+ * 「全部替换」**同一份实现**（`ui/reference-utils` 的 `planReferenceWrites`）——两边各写一套
+ * 就只会在"哪些点算同一个位置""只读怎么算"上漂。`occurrenceKind` 原样带成台账的 `kind`
+ * （散文跳过判据只认它；跨语言腿的编辑不标 kind，见插件的 `relatedEdits`）。
+ */
+function occurrencesOf(
+  edits: readonly EditorRenameEdit[],
+  requestPath: string,
+): ReferenceOccurrence[] {
+  return edits.map((edit) => {
+    const filePath = edit.resourcePath ?? requestPath;
+    return {
+      filePath,
+      line: edit.line,
+      column: edit.startColumn,
+      endColumn: edit.endColumn,
+      ...(edit.occurrenceKind === undefined ? {} : { kind: edit.occurrenceKind }),
+      language: languageOfPath(filePath),
+    };
+  });
 }
+
+/* ============================== 跨语言腿：宿主编排（零语言判据） ============================== */
 
 /** `kojoSources` 的产出：一份 `.kojo` 源文件的路径与全文 */
 export interface KojoSourceFile {
@@ -395,8 +213,10 @@ export interface KojoReferenceProbe {
 
 /** 跨语言腿的读数：可证明的 `.kojo` 出现点 + 判据缺席、无法证明的项（每项一句给作者看的label） */
 interface KojoLeg {
-  readonly occurrences: readonly ReferenceOccurrence[];
-  readonly unprovable: readonly { readonly label: string }[];
+  readonly occurrences: EditorSymbolLocation[];
+  readonly unprovable: string[];
+  /** 候选源文（标签改名的逐行守卫要用；函数腿忽略） */
+  readonly sources: EditorProjectFile[];
 }
 
 /** 一份候选源判据缺席时的label（文件 + 该文件内同名记号处数） */
@@ -404,17 +224,16 @@ const unprovableFileLabel = (filePath: string, positions: number, note?: string)
   `'${filePath}'（${positions} 处${note === undefined ? '' : `，${note}`}）`;
 
 /**
- * `.erb` 改名时把生成它的 `.kojo` 源一起收进台账（**同一条全或无判定**）。
+ * 枚举 `.kojo` 候选源（**已开标签 + 宿主枚举**，路径归一后去重）。
  *
- * 判读全在糖线：本函数只负责"找到候选文件"（已开标签 + 宿主枚举）与"问一次槽"，
- * 把回来的位置换算成落点区间（`endColumn` = 列 + 名字长度，与反向索引同一条派生纪律）。
+ * 只做"找到候选文件"，不判"哪些记号算引用"——后者在糖线供方（转译器当判官），
+ * 本函数零糖语法知识。
  */
-async function collectKojoLeg(
+async function collectKojoCandidates(
   monaco: typeof Monaco,
   handlers: ErbRenameHandlers,
   normalizedName: string,
-): Promise<KojoLeg> {
-  /** 候选文件（路径 → 全文）：已开的 `.kojo` 标签先收，宿主枚举的补在后面 */
+): Promise<{ readonly candidates: Map<string, string>; readonly error?: string }> {
   const candidates = new Map<string, string>();
   const getModels = monaco.editor?.getModels;
   if (typeof getModels === 'function') {
@@ -431,8 +250,6 @@ async function collectKojoLeg(
       }
     }
   }
-  const occurrences: ReferenceOccurrence[] = [];
-  const unprovable: { label: string }[] = [];
   if (handlers.kojoSources) {
     try {
       for (const file of await handlers.kojoSources(normalizedName)) {
@@ -440,25 +257,36 @@ async function collectKojoLeg(
       }
     } catch (e: unknown) {
       // 枚举抛错 = **看不见**未打开的 .kojo 源（判据不是"这份源没有这个记号"，是"我没看见它"）。
-      // 此时只改 .erb 半边 = 下次保存被 .kojo 冲掉（数据损坏），所以同样整批拒绝。
-      return {
-        occurrences: [],
-        unprovable: [
-          {
-            label: `宿主 .kojo 源枚举抛错（${errorText(e)}）——未打开的 .kojo 源无从查证`,
-          },
-        ],
-      };
+      return { candidates, error: `宿主 .kojo 源枚举抛错（${errorText(e)}）——未打开的 .kojo 源无从查证` };
     }
   }
+  return { candidates };
+}
 
+/**
+ * `.erb` 函数改名时把生成它的 `.kojo` 源一起收进台账（**同一条全或无判定**）。
+ *
+ * 判读全在糖线：本函数只负责"找到候选文件"与"问一次槽"，把回来的位置原样交回——
+ * "这些记号是不是这个函数的引用"由供方答，"判据缺席怎么办"由 ERB 改名供方裁决。
+ */
+async function collectKojoLeg(
+  monaco: typeof Monaco,
+  handlers: ErbRenameHandlers,
+  normalizedName: string,
+): Promise<KojoLeg> {
+  const { candidates, error } = await collectKojoCandidates(monaco, handlers, normalizedName);
+  if (error !== undefined) return { occurrences: [], unprovable: [error], sources: [] };
+  const occurrences: EditorSymbolLocation[] = [];
+  const unprovable: string[] = [];
+  const sources: EditorProjectFile[] = [];
   for (const [filePath, text] of candidates) {
     const positions = findNameTokenPositions(text, normalizedName);
     if (positions.length === 0) continue; // 这份源里没有同名记号 ⇒ 与本动作无关
+    sources.push({ path: filePath, text });
     if (!handlers.kojoReferences) {
       // 判据缺席 ⇒ 无从知道这些记号是不是函数引用。改了 .erb 却漏了生成它的 .kojo 源
-      // = 下次保存把改名冲掉（数据损坏），不改只是这一批不走 —— 只能拒绝。
-      unprovable.push({ label: unprovableFileLabel(filePath, positions.length, '引用判读未接入') });
+      // = 下次保存把改名冲掉（数据损坏），不改只是这一批不走 —— 只能拒绝（插件裁决）。
+      unprovable.push(unprovableFileLabel(filePath, positions.length, '引用判读未接入'));
       continue;
     }
     const first = positions[0]!;
@@ -467,34 +295,76 @@ async function collectKojoLeg(
       locations = await handlers.kojoReferences({ filePath, text, line: first.line, column: first.column });
     } catch (e: unknown) {
       // 判读抛错 ≠ 判官答"这些记号不是函数引用"（那必须是**正常返回空集**）。
-      // 抛错就是没判 ⇒ 静默不收这批 = 只改 .erb、下次保存被冲掉 ⇒ 同样整批拒绝。
-      unprovable.push({
-        label: unprovableFileLabel(filePath, positions.length, `判读抛错：${errorText(e)}`),
-      });
+      unprovable.push(unprovableFileLabel(filePath, positions.length, `判读抛错：${errorText(e)}`));
       continue;
     }
     // 只收本文件的判读结果（糖线引用面是文件局部的，规范 §7.2；越界一律不收，不猜）
     for (const location of locations) {
       if (location.filePath !== filePath) continue;
-      const span = occurrencesFromLocations([location], normalizedName.length);
-      if (span.length > 0) occurrences.push(...span);
+      occurrences.push(location);
     }
   }
-  return { occurrences, unprovable };
+  return { occurrences, unprovable, sources };
+}
+
+/* ============================== Monaco 协议翻译 ============================== */
+
+/** 宿主注入：怎么应答（活动标签判据）、问哪枚槽、写权限与落盘通道 */
+export interface ErbRenameHandlers {
+  /**
+   * 该不该应答这次请求：只认**当前活动标签的真 model**。派生预览 model 的行列属于
+   * 派生物，重命名它改的不是真文件（与 codeAction / 转到定义同一判据）。
+   */
+  canAnswer(model: Monaco.editor.ITextModel): boolean;
+  /** 问槽：改名求值（`renameTarget`；`undefined` = 无人应答 / 弃权） */
+  resolveTarget(request: EditorRenameTargetRequest): EditorRenameTargetResult | undefined;
+  /** 问槽：改名（`rename`；单答型） */
+  resolveRename(request: EditorRenameRequest): EditorRenameResult | undefined;
+  /** 写权限判定（内核 io `isWritable`，与保存同源口径） */
+  isWritable(path: string): boolean;
+  /** 当前项目（契约请求的 `project` 位；软取，缺席 = `null`——判据不读它） */
+  currentProject?(): GameProject | null;
+  /** 文件路径 → 已打开标签的 live model（查不到 = 未打开，走 io 通道） */
+  openModelFor(path: string): Monaco.editor.ITextModel | undefined;
+  /**
+   * 未打开文件的落盘通道（内核 io 读改写：保编码保换行 + 原子写 + 备份）。
+   * 返回实改 / 跳过计数；抛错 = 这次写被内核拒绝（写允许域 / io 故障）。
+   * 现成实现见 `createApplyToClosedFile`（与搜索面板「全部替换」同一条通道）。
+   */
+  applyToClosedFile(
+    path: string,
+    spans: readonly RenameSpan[],
+    newName: string,
+    normalizedName: string,
+  ): Promise<{ applied: number; stale: number; skippedProse?: number }>;
+  /**
+   * **跨语言腿 ①**：归一化名可能出现在哪些 `.kojo` 源里（宿主枚举 + 读文，
+   * 内核 io 的读权限由宿主兜）。缺席 = 只能看到**已打开标签**里的 `.kojo` 源。
+   */
+  kojoSources?(normalizedName: string): Promise<readonly KojoSourceFile[]> | readonly KojoSourceFile[];
+  /**
+   * **跨语言腿 ②**：`.kojo` 源里这一处记号**是不是**这个函数的引用
+   * （宿主查 `ui.editor.languageService` 槽的 `references` 成员）。缺席 ⇒ 该文件的同名记号
+   * 判为"不可证明" ⇒ 插件整次拒绝（绝不静默改一半）。
+   */
+  kojoReferences?(
+    probe: KojoReferenceProbe,
+  ): Promise<readonly EditorSymbolLocation[]> | readonly EditorSymbolLocation[];
 }
 
 /** live model 上的现文本验证：该列区间现在是不是这个名字（大小写不敏感；越界 = 不匹配） */
-function liveRefMatches(
+function liveEditMatches(
   model: Monaco.editor.ITextModel,
-  ref: RenameSpan,
-  normalizedName: string,
+  occurrence: { readonly line: number; readonly column: number; readonly endColumn: number },
+  oldName: string,
 ): boolean {
-  if (ref.line < 1 || ref.line > model.getLineCount()) return false;
-  const line = model.getLineContent(ref.line);
-  const at = ref.column - 1;
-  const end = ref.endColumn - 1;
+  if (occurrence.line < 1 || occurrence.line > model.getLineCount()) return false;
+  const line = model.getLineContent(occurrence.line);
+  const at = occurrence.column - 1;
+  const end = occurrence.endColumn - 1;
   if (at < 0 || end > line.length || at > end) return false;
-  return line.slice(at, end).toUpperCase() === normalizedName;
+  // 索引归一口径：名字大小写不敏感（`call m_kojo_a()` 与 `M_KOJO_A` 是同一个函数）
+  return line.slice(at, end).toUpperCase() === oldName.toUpperCase();
 }
 
 /**
@@ -509,32 +379,69 @@ export function createApplyToClosedFile(io: ClosedFileIo): ErbRenameHandlers['ap
     rewriteClosedFile(io, path, (text) => applyReferenceEdits(text, spans, newName, normalizedName));
 }
 
+/** 模型全文（取不到 ⇒ 空串；重命名拿不到全文就没什么可判的） */
+function modelText(model: Monaco.editor.ITextModel): string {
+  try {
+    const text = model.getValue();
+    return typeof text === 'string' ? text : '';
+  } catch {
+    return '';
+  }
+}
+
 /**
- * 对 `ERB_LANGUAGE_ID` 注册 RenameProvider。全部决策在纯函数与 handlers，
- * 本函数只做 Monaco 类型翻译与隔离（任何抛错都退成 reject 理由，不让 F2 崩编辑器）。
+ * 对 `ERB_LANGUAGE_ID` 注册 RenameProvider。判定全在槽供方与 handlers，
+ * 本函数只做 Monaco 类型翻译、跨语言取数编排与落盘（任何抛错都退成 reject 理由，
+ * 不让 F2 崩编辑器）。
  */
 export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandlers): Monaco.IDisposable {
+  /** 当前请求文件路径（真 model 才有；取不到 = 空串，宿主拒答） */
+  const pathOf = (model: Monaco.editor.ITextModel): string => erbFactsPathOf(model);
+
+  /**
+   * 这门 model 是不是 ERB 方言族（`languageId` 由 Monaco 按 descriptor 给出）。
+   *
+   * 本 provider 直挂 `ERB_LANGUAGE_ID`（能力矩阵里仍是 `self`：注册面 = `.erb` 专属的一枚
+   * provider），`.kojo1` 的改名由它自己的 `installKojoRename` 应答。这枚判据留着是为了
+   * 装配形态若改成共享收口（`registerForLanguageServices`，能力名 `rename`）时，
+   * 本包不会替 `.kojo1` 抢答同一格。
+   */
+  const speaksErb = (model: Monaco.editor.ITextModel): boolean => {
+    try {
+      return model.getLanguageId() === ERB_LANGUAGE_ID;
+    } catch {
+      return false;
+    }
+  };
+
+  /** 组一个改名求值请求（宿主只搬身份三格与位置） */
+  const targetRequestOf = (
+    model: Monaco.editor.ITextModel,
+    position: Monaco.Position,
+  ): EditorRenameTargetRequest => ({
+    kind: 'renameTarget',
+    path: pathOf(model),
+    text: modelText(model),
+    line: position.lineNumber,
+    column: position.column,
+    project: projectOf(handlers),
+    ...(safeLanguageId(model) === undefined ? {} : { languageId: safeLanguageId(model)! }),
+    ...(safeVersionId(model) === undefined ? {} : { version: safeVersionId(model)! }),
+  });
+
   const provider: Monaco.languages.RenameProvider = {
-    // 索引未建 ⇒ `undefined`（Monaco 走缺省词回退，不弹错）；名字不认 ⇒ 带理由拒绝
+    // 词区间给 Monaco 做输入框初值；"可不可以改"在求值那一步由槽给（不猜、不拦）
     resolveRenameLocation(model, position) {
-      if (!handlers.canAnswer(model)) return undefined;
-      // `$` 标签腿先走（W-2）：标签是文件局部事实，不依赖项目索引
-      const labelScope = resolveErbLabelScopeAt(model, position);
-      const labelHit = labelScope === null ? undefined : occurrenceAt(labelScope, position.lineNumber, position.column);
-      if (labelHit !== undefined) {
-        return {
-          range: {
-            startLineNumber: labelHit.line,
-            startColumn: labelHit.column,
-            endLineNumber: labelHit.line,
-            endColumn: labelHit.endColumn,
-          },
-          text: model.getLineContent(labelHit.line).slice(labelHit.column - 1, labelHit.endColumn - 1),
-        };
+      if (!speaksErb(model) || !handlers.canAnswer(model)) return undefined;
+      let result: EditorRenameTargetResult | undefined;
+      try {
+        result = handlers.resolveTarget(targetRequestOf(model, position));
+      } catch (e: unknown) {
+        console.warn(`[erb-rename] 改名求值抛错：${errorText(e)}`);
+        return undefined;
       }
-      // 标签入口但作用域不成立（`$` 定义名 / 跳转目标一侧）⇒ 拒绝，绝不落函数名腿
-      const labelEntry = labelEntryAt(model.getLineContent(position.lineNumber), position.column);
-      if (labelEntry !== null) {
+      if (!result) return undefined; // 无人应答 ⇒ Monaco 走缺省词回退，不弹错
+      if (result.target === undefined) {
         return {
           range: {
             startLineNumber: position.lineNumber,
@@ -543,36 +450,18 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
             endColumn: position.column,
           },
           text: '',
-          rejectReason:
-            labelEntry === 'jump'
-              ? '跳转目标在当前函数里找不到同名 `$` 标签，不按函数名重命名（不猜）'
-              : '这不是可重命名的 `$` 标签名（标签名只能是字母、数字、下划线）',
+          rejectReason: result.rejectReason ?? '这里没有可重命名的名字',
         };
       }
-      const index = handlers.currentIndex();
-      if (!index) return undefined;
-      const lineText = model.getLineContent(position.lineNumber);
-      const target = resolveRenameTarget(lineText, position.column, index.byName);
-      if (target.kind === 'reject') {
-        return {
-          range: {
-            startLineNumber: position.lineNumber,
-            startColumn: position.column,
-            endLineNumber: position.lineNumber,
-            endColumn: position.column,
-          },
-          text: '',
-          rejectReason: target.reason,
-        };
-      }
+      const target = result.target;
       return {
         range: {
-          startLineNumber: position.lineNumber,
+          startLineNumber: target.line,
           startColumn: target.startColumn,
-          endLineNumber: position.lineNumber,
+          endLineNumber: target.line,
           endColumn: target.endColumn,
         },
-        text: lineText.slice(target.startColumn - 1, target.endColumn - 1),
+        text: target.text,
       };
     },
 
@@ -594,53 +483,72 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
     if (!handlers.canAnswer(model)) {
       return reject('当前视图不参与重命名（请在原文视图内按 F2）');
     }
-    // `$` 标签腿先走（W-2）：文件局部、无项目索引依赖，也不走 `.kojo` 函数判读通道
-    const labelScope = resolveErbLabelScopeAt(model, position);
-    const labelHit = labelScope === null ? undefined : occurrenceAt(labelScope, position.lineNumber, position.column);
-    if (labelScope !== null && labelHit !== undefined) {
-      return provideLabelEdits(model, newName, labelScope);
+    const requestPath = pathOf(model);
+    if (requestPath.length === 0) return reject('当前视图没有文件路径，无法判断这份文件是否可写');
+
+    // ---- 求值：拿原词与 scope（宿主据此决定跨语言腿要不要取源文） ----
+    const targetResult = handlers.resolveTarget(targetRequestOf(model, position));
+    if (!targetResult) return reject('重命名判据缺席（语言服务未应答这处请求）');
+    if (targetResult.target === undefined) {
+      return reject(targetResult.rejectReason ?? '这里没有可重命名的名字');
     }
-    const labelEntry = labelEntryAt(model.getLineContent(position.lineNumber), position.column);
-    if (labelEntry !== null) {
-      return reject(
-        labelEntry === 'jump'
-          ? '跳转目标在当前函数里找不到同名 `$` 标签，不按函数名重命名（不猜）'
-          : '这不是可重命名的 `$` 标签名（标签名只能是字母、数字、下划线）',
-      );
+    const target = targetResult.target;
+    const normalizedName = target.text.toUpperCase();
+
+    // ---- 跨语言腿：宿主取数（判据在糖线供方），全或无的裁决在插件 ----
+    let related: EditorRenameRelated | undefined;
+    if (target.scope === 'label') {
+      const { candidates, error } = await collectKojoCandidates(monaco, handlers, normalizedName);
+      const sources: EditorProjectFile[] = [];
+      for (const [path, text] of candidates) sources.push({ path, text });
+      related = {
+        sources,
+        ...(error === undefined ? {} : { unprovable: [error] }),
+      };
+    } else {
+      const leg = await collectKojoLeg(monaco, handlers, normalizedName);
+      related = {
+        occurrences: leg.occurrences,
+        unprovable: leg.unprovable,
+      };
     }
-    const index = handlers.currentIndex();
-    if (!index) return reject('ERB 函数索引未建，暂不可重命名');
-    const lineText = model.getLineContent(position.lineNumber);
-    const target = resolveRenameTarget(lineText, position.column, index.byName);
-    if (target.kind === 'reject') return reject(target.reason);
-    const refs = handlers.referencesTo(target.normalizedName);
-    if (!refs || refs.length === 0) {
-      return reject('反向引用索引缺席，无法全项目收集引用（不猜，不部分改）');
-    }
-    // ---- 跨语言腿：`.kojo` 源里的同名记号（判读在糖线，送达在这一批） ----
-    const kojo = await collectKojoLeg(monaco, handlers, target.normalizedName);
-    if (kojo.unprovable.length > 0) {
-      return reject(
-        `${target.normalizedName} 的改名需要连带 .kojo 源，但 ${kojo.unprovable.length} 项 .kojo 侧判据缺席：` +
-          kojo.unprovable.map((u) => u.label).join('、') +
-          '。无法证明这些记号是否指向本函数——' +
-          '只改 .erb 会被下一次保存 .kojo 冲掉，故整次重命名取消（不静默改一半）。' +
-          '请先在对应 .kojo 源内改名，或由宿主接入 ui.editor.languageService 的引用判读',
-      );
-    }
-    // ---- 两种语言的出现点并成一份台账 → 一份写计划（分组 + 只读闸门只有一份实现） ----
-    const ledger = mergeOccurrences([erbOccurrences(refs), kojo.occurrences]);
-    const plan = planReferenceWrites(ledger, handlers.isWritable);
+
+    const request: EditorRenameRequest = {
+      kind: 'rename',
+      path: requestPath,
+      text: modelText(model),
+      line: position.lineNumber,
+      column: position.column,
+      newName,
+      project: projectOf(handlers),
+      ...(safeLanguageId(model) === undefined ? {} : { languageId: safeLanguageId(model)! }),
+      ...(safeVersionId(model) === undefined ? {} : { version: safeVersionId(model)! }),
+      related,
+    };
+    const result = handlers.resolveRename(request);
+    if (!result) return reject('重命名判据缺席（语言服务未应答这处请求）');
+    if (result.rejectReason !== undefined) return reject(result.rejectReason);
+
+    // ---- 写权限闸（写域策略；分组 / 去重 / 只读计数与「全部替换」同一份实现） ----
+    const plan = planReferenceWrites(
+      mergeOccurrences([occurrencesOf(result.edits, requestPath)]),
+      handlers.isWritable,
+    );
     if (plan.readOnlyFiles.length > 0) {
       return reject(readOnlyFilesReason(plan.readOnlyFiles.length, '重命名'));
     }
+
     const edits: Monaco.languages.IWorkspaceTextEdit[] = [];
     /** io 写入失败的落点（逐文件可见，同「全部替换」执行器的口径） */
     const writeFailures: string[] = [];
-    /** 已经落到盘上的闭文件数（>0 ⇒ 绝不能再返回 rejectReason，见下方取证） */
+    /** 已经落到盘上的闭文件数（>0 ⇒ 绝不能再返回 rejectReason，见模块头注） */
     let landedFiles = 0;
     /** 非调用形 mention（散文）跳过计数——两通道各自计数，汇总出声一次 */
     let proseSkipped = 0;
+    /** 标签腿的陈旧处数：标签作用域是"整段一起改"的事实，一处对不上就整次取消（旧行为） */
+    let labelStale = 0;
+    /** 是不是 `$` 标签改名（单文件、函数局部；落地纪律与函数腿不同，见下） */
+    const isLabel = target.scope === 'label';
     for (const group of plan.writable) {
       const open = handlers.openModelFor(group.path);
       if (!open) {
@@ -649,7 +557,7 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
             group.path,
             group.occurrences,
             newName,
-            target.normalizedName,
+            normalizedName,
           );
           if (applied > 0) landedFiles++;
           proseSkipped += skippedProse ?? 0;
@@ -663,14 +571,18 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
         continue;
       }
       // 已打开：按 live model 的现文本逐处验证（索引与现场无锁，陈旧坐标绝不硬写）
-      for (const ref of group.occurrences) {
-        if (!liveRefMatches(open, ref, target.normalizedName)) continue;
+      for (const occurrence of group.occurrences) {
+        if (result.oldName !== undefined && !liveEditMatches(open, occurrence, result.oldName)) {
+          // 标签腿：整段一起改的事实缺了一处 ⇒ 计数后整次取消（不静默少改一个跳转点）
+          if (isLabel) labelStale++;
+          continue;
+        }
         // ERB 词法 mention 的落盘判据（isCallShapedMention 单源，**只拦 erb 侧**）：调用形照改，
         // 散文形跳过——与闭文件通道同一条判据；kojo 腿的 mention 是探针证明的真引用，不拦
         if (
-          ref.kind === 'mention' &&
-          ref.language === 'erb' &&
-          !isCallShapedMention(open.getLineContent(ref.line) ?? '', ref.endColumn)
+          occurrence.kind === 'mention' &&
+          occurrence.language === 'erb' &&
+          !isCallShapedMention(open.getLineContent(occurrence.line) ?? '', occurrence.endColumn)
         ) {
           proseSkipped++;
           continue;
@@ -685,23 +597,23 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
           versionId: undefined,
           textEdit: {
             range: {
-              startLineNumber: ref.line,
-              startColumn: ref.column,
-              endLineNumber: ref.line,
-              endColumn: ref.endColumn,
+              startLineNumber: occurrence.line,
+              startColumn: occurrence.column,
+              endLineNumber: occurrence.line,
+              endColumn: occurrence.endColumn,
             },
             text: newName,
           },
         });
       }
     }
+    // 标签腿的陈旧闸：盘上还没写过任何东西才拒绝（写过就不再拒绝，见下一条纪律）
+    if (labelStale > 0 && landedFiles === 0) {
+      return reject(
+        `标签「${result.oldName ?? normalizedName}」有 ${labelStale} 处位置与当前文本不符（编辑期间文本已变），整次重命名取消`,
+      );
+    }
     // ---- 全或无的**最后一道**：rejectReason 与已落盘的编辑永不同时出现 ----
-    // monaco 0.57 standalone 的 rename 控制器见 rejectReason 会**丢弃全部 WorkspaceEdit**
-    // （`rename.js:241`）。若此时已有闭文件写过盘，丢弃 = 盘上半套 + 标签没改，
-    // 作者拿到的是名字分叉的半成品还不自知。所以：
-    //  - 一处盘上改动都没发生 ⇒ 拒绝（真全或无，编辑集本来也没落地）；
-    //  - 已有改动落盘 ⇒ 不再拒绝，把已算好的 WorkspaceEdit 交付（补齐这一批能补的全部落点），
-    //    失败文件逐个 warn——少改这一处的责任在 io/写允许域，不靠谎报"整次取消"来掩盖。
     if (writeFailures.length > 0 && landedFiles === 0) {
       return reject(
         `未打开文件写入失败（${writeFailures.length} 个）：${writeFailures.join('；')}。` +
@@ -716,92 +628,41 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
     }
     if (proseSkipped > 0) {
       console.warn(
-        `[erb-rename] '${target.normalizedName}'：${proseSkipped} 处 ERB 词法 mention 非调用形（名字后无 "("），按「改名不重写散文」跳过`,
+        `[erb-rename] '${normalizedName}'：${proseSkipped} 处 ERB 词法 mention 非调用形（名字后无 "("），按「改名不重写散文」跳过`,
       );
-    }
-    return { edits };
-  }
-
-  /**
-   * `$` 标签改名的落地（W-2）：**单文件、函数局部、全或无**。
-   *
-   * 不碰项目索引、不走闭文件 io（标签定义与跳转都在当前 model 里）；但 `.kojo` 源必须先查：
-   * 糖线用 `标签 <名>` / `跳到 <名>` 生成同名 `$` 标签，只改 `.erb` 会被下一次保存盖回去。
-   * 判据只用"行首同名标签写法"这一条可证明事实，命中即整批拒绝（请作者先改 `.kojo`）。
-   */
-  async function provideLabelEdits(
-    model: Monaco.editor.ITextModel,
-    newName: string,
-    scope: ErbLabelScope,
-  ): Promise<Monaco.languages.WorkspaceEdit & Monaco.languages.Rejection> {
-    const rejection = labelRenameRejection(scope, newName);
-    if (rejection !== null) return reject(rejection);
-    const currentPath = erbFactsPathOf(model);
-    if (currentPath.length === 0) return reject('当前视图没有文件路径，无法判断这份文件是否可写');
-    if (!handlers.isWritable(currentPath)) return reject(readOnlyFilesReason(1, '重命名'));
-
-    // ---- `.kojo` 侧：同名标签写法（已开标签 + 宿主枚举，路径归一后去重） ----
-    const kojoTexts = new Map<string, string>();
-    try {
-      const getModels = monaco.editor?.getModels;
-      if (typeof getModels === 'function') {
-        for (const candidate of getModels.call(monaco.editor)) {
-          try {
-            if (candidate.getLanguageId() !== KOJO_LANGUAGE_ID || candidate.uri.scheme !== 'file') continue;
-            const path = candidate.uri.fsPath || candidate.uri.path;
-            if (path) kojoTexts.set(normalizePathKey(path), candidate.getValue());
-          } catch {
-            // 单枚 model 读不到不拖垮整次判断（与函数腿的逐项隔离同一纪律）
-          }
-        }
-      }
-      if (handlers.kojoSources) {
-        for (const file of await handlers.kojoSources(scope.normalizedName)) {
-          if (isKojoSourcePath(file.filePath)) kojoTexts.set(normalizePathKey(file.filePath), file.text);
-        }
-      }
-    } catch (e: unknown) {
-      return reject(`无法检查 .kojo 源里的同名标签（${errorText(e)}）——为免只改一半，整次重命名取消`);
-    }
-    const kojoHits = [...kojoTexts.values()].filter((text) => kojoLabelMentions(text, scope.normalizedName)).length;
-    if (kojoHits > 0) {
-      return reject(
-        `${kojoHits} 份 .kojo 源里也写着标签「${scope.name}」。保存 .kojo 时会按同名重新生成 .erb，` +
-          '只改这一处会留下两份不一致的标签，故整次重命名取消。请先在 .kojo 源里改名。',
-      );
-    }
-
-    // ---- 逐处现文本验证（await 期间作者可能已编辑）→ 一份 WorkspaceEdit ----
-    const edits: Monaco.languages.IWorkspaceTextEdit[] = [];
-    let stale = 0;
-    for (const occurrence of scope.occurrences) {
-      const lineText = model.getLineContent(occurrence.line);
-      const at = occurrence.column - 1;
-      const end = occurrence.endColumn - 1;
-      if (at < 0 || end > lineText.length || lineText.slice(at, end).toUpperCase() !== scope.normalizedName) {
-        stale++;
-        continue;
-      }
-      edits.push({
-        resource: model.uri,
-        versionId: undefined,
-        textEdit: {
-          range: {
-            startLineNumber: occurrence.line,
-            startColumn: occurrence.column,
-            endLineNumber: occurrence.line,
-            endColumn: occurrence.endColumn,
-          },
-          text: newName,
-        },
-      });
-    }
-    if (stale > 0) {
-      return reject(`标签「${scope.name}」有 ${stale} 处位置与当前文本不符（编辑期间文本已变），整次重命名取消`);
     }
     return { edits };
   }
 
   const sub = monaco.languages.registerRenameProvider(ERB_LANGUAGE_ID, provider);
   return { dispose: () => sub.dispose() };
+}
+
+/** 当前项目（软取；缺席 = null。改名判据不读它，只是契约必填位的如实搬运） */
+function projectOf(handlers: ErbRenameHandlers): GameProject | null {
+  try {
+    return handlers.currentProject?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** model 的语言 id（取不到 = undefined；不补假值） */
+function safeLanguageId(model: Monaco.editor.ITextModel): string | undefined {
+  try {
+    const id = model.getLanguageId();
+    return typeof id === 'string' && id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** model 的版本号（取不到 = undefined；供方的过期复核靠它，绝不补假数字） */
+function safeVersionId(model: Monaco.editor.ITextModel): number | undefined {
+  try {
+    const id = model.getVersionId();
+    return Number.isFinite(id) ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }

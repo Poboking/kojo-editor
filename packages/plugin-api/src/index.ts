@@ -1036,3 +1036,11 @@ export type {
   EditorSelectionRangeRequest,
   EditorSelectionRangeResult,
 } from './slots';
+
+/* ---- LAU-4 改名腿独占追加区块（勿在他处重排）：改名求值 kind ---- */
+export type {
+  EditorRenameRelated,
+  EditorRenameTarget,
+  EditorRenameTargetRequest,
+  EditorRenameTargetResult,
+} from './slots';

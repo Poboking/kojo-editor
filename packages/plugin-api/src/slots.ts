@@ -525,7 +525,8 @@ export interface EditorDocumentSymbolRequest extends EditorDocumentIdentity {
 /**
  * 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` /
  * `codeLens` / `semanticToken` / `references` / `rename` / `inlayHint`，LS-B0 起另有
- * `completion` / `hover` / `formatting` / `signatureHelp`；
+ * `completion` / `hover` / `formatting` / `signatureHelp`，LAU-4 改名腿起另有
+ * `renameTarget`；
  * 新增能力 additive 追加联合成员，不改旧成员）。**文档型成员一律 `extends
  * EditorDocumentIdentity`**（带 `languageId` / `version`），`workspaceSymbol` 除外——
  * 它不钉在任何一份缓冲区上。
@@ -550,7 +551,9 @@ export type EditorLanguageServiceRequest =
   | EditorSignatureHelpRequest
   // B3f（2026-10-29）：同符号高亮与结构化扩选（additive，加在联合末尾）。
   | EditorDocumentHighlightRequest
-  | EditorSelectionRangeRequest;
+  | EditorSelectionRangeRequest
+  // LAU-4 改名腿（2026-10-30）：改名求值（additive，加在联合末尾）。
+  | EditorRenameTargetRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -693,7 +696,9 @@ export type EditorLanguageServiceResult =
   | EditorSignatureHelpResult
   // B3f（2026-10-29）：与请求侧同批追加，成员顺序逐项对齐。
   | EditorDocumentHighlightResult
-  | EditorSelectionRangeResult;
+  | EditorSelectionRangeResult
+  // LAU-4 改名腿（2026-10-30）：与请求侧同批追加，成员顺序逐项对齐。
+  | EditorRenameTargetResult;
 
 /**
  * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
@@ -1092,6 +1097,16 @@ export interface EditorRenameEdit {
    * 双通道送达，不经本成员。宿主侧的判据见 `app/monaco/kojo-rename.ts`。
    */
   readonly resourcePath?: string;
+  /**
+   * 这一处出现点的分类（**additive 可选**，LAU-4 导航腿）：与
+   * {@link EditorSymbolLocation.kind} 同一值域。缺省 = 供方未分类。
+   *
+   * 为什么放这里：改名供方交回的编辑集里混着"真引用"与"词法提及"（散文里恰好同名的
+   * 记号）。宿主落地前对 `mention` 还要做一次**形状判据**（名字后是不是 `(`）才能
+   * 决定改不改——那一步需要目标文件的现文本，闭文件通道读文之后才有。分类随编辑
+   * 穿过槽，宿主才不必自己重新认一遍语言（"哪一处算提及"是供方的话）。
+   */
+  readonly occurrenceKind?: 'definition' | 'call' | 'mention';
 }
 
 /**
@@ -1115,6 +1130,14 @@ export interface EditorRenameRequest extends EditorDocumentIdentity {
   readonly projectFiles?: readonly EditorProjectFile[];
   /** 快照是否完整（additive，B3e）；`false` ⇒ 改名全或无，整次拒绝并给理由 */
   readonly projectFilesComplete?: boolean;
+  /**
+   * 其它语言侧的连带证据（**additive 可选**，LAU-4 导航腿）。
+   *
+   * 缺席 = 只改请求这一门语言（旧行为，逐字不变）。在场时供方须把它并进同一份编辑集，
+   * 并对 `unprovable` 非空执行**整次拒绝**（全或无；理由见 {@link EditorRenameRelated}）。
+   * 这一格是**数据**不是判据：宿主只负责枚举与调别的供方，谁算同一符号由判读者说了算。
+   */
+  readonly related?: EditorRenameRelated;
 }
 
 /** 重命名响应：可证明的编辑集，或一条给作者看的拒绝理由（二选一，铁律 4 不静默） */
@@ -1494,6 +1517,79 @@ export interface EditorSelectionRangeResult {
   readonly selections: readonly (EditorSelectionChain | null)[];
 }
 
+/* --------------- 编辑器面第四批（LAU-4 改名腿，2026-10-30）：改名求值 kind --------------- */
+
+/**
+ * 改名**求值**请求（LAU-4 改名腿）——Monaco `resolveRenameLocation` 那一步的判据。
+ *
+ * ## 为什么单开一枚 kind 而不是塞进 `rename`
+ *
+ * Monaco 的改名协议是**两步**：先问"光标下是什么、能不能改"（拿区间与拒绝理由去开输入框），
+ * 再问"改成新名后编辑落在哪"。两步的判据必须同源——第一步若留在宿主（按通用标识符规则
+ * 取词），就会出现"输入框框住了 A、真正改的是 B"的分裂。所以第一步也进槽：供方答
+ * {@link EditorRenameTarget}，宿主只翻 Monaco 的 range / rejectReason。
+ *
+ * 三态：`undefined` = 这家不认这个文件 / 语言（弃权，宿主交回 `undefined` 让 Monaco 走缺省
+ * 词回退）；`target` 在场 = 可改名并给出**原词区间**；`rejectReason` 在场 = 认这个位置但
+ * 不改（给作者一句可见理由，`target` 必缺省）。两者同时出现是坏供方，宿主按拒绝处理。
+ */
+export interface EditorRenameTargetRequest extends EditorDocumentIdentity {
+  readonly kind: 'renameTarget';
+  readonly path: string;
+  readonly text: string;
+  readonly line: number;
+  readonly column: number;
+  readonly project: GameProject | null;
+  readonly lineCount?: number;
+}
+
+/** 一处可改名的原词（1 基行列、`endColumn` 不含；模型坐标） */
+export interface EditorRenameTarget {
+  readonly line: number;
+  readonly startColumn: number;
+  readonly endColumn: number;
+  /** 原词（宿主拿它填 Monaco 输入框初值；不改写、不做大小写归一） */
+  readonly text: string;
+  /**
+   * 这一格属于哪类可改名实体（additive 可选）：`symbol` = 常规符号（函数 / 变量 / 类型），
+   * `label` = 作用域标签（函数局部跳转目标）。
+   *
+   * 宿主只把它当**取数提示**：`label` 类改名通常是单文件、且要查生成侧的源文（跨语言腿），
+   * 供方据此在下一步要 `related.sources`；宿主不解释这个值、也不据此改判据。
+   */
+  readonly scope?: 'symbol' | 'label';
+}
+
+/** 改名求值响应（见 {@link EditorRenameTargetRequest} 的三态） */
+export interface EditorRenameTargetResult {
+  readonly kind: 'renameTarget';
+  readonly target?: EditorRenameTarget;
+  /** 给出时宿主原样弹给作者（Monaco `rejectReason`），`target` 必缺省 */
+  readonly rejectReason?: string;
+}
+
+/**
+ * 改名要连带改的**其它语言证据**（LAU-4 导航腿，additive 可选）。
+ *
+ * ## 为什么这格存在
+ *
+ * `.kojo` 是源、`.erb` 是产物：只改 `.erb` 时下一次保存会把按旧名重新生成的产物**盖回**，
+ * 改名被静默冲掉。哪些 `.kojo` 记号属于这个函数，判据在糖线（转译器当判官），而供方之间
+ * 不能互问——所以**宿主**负责枚举 / 调 `references` 槽判读，把结果当**数据**随本格递进来；
+ * 供方据此把跨语言出现点并进同一份编辑集，并对"判据缺席"执行全或无。
+ *
+ * - `occurrences`：已由别家供方证明属于同一符号的出现点（宿主已按契约 `references` 判读）；
+ * - `unprovable`：判据缺席的项（每项一句给作者看的话：哪个文件、几处、为什么无法证明）。
+ *   非空 ⇒ 改名供方**整次拒绝**并把这些话并进 `rejectReason`（只改半边 = 数据损坏）；
+ * - `sources`：含同名记号的其它语言源文快照（**仅** `scope: 'label'` 时宿主才需要给——
+ *   标签守卫是逐行文本判据，见 `@kojo/plugin-erb-parser` 的 `kojoLabelMentions`）。
+ */
+export interface EditorRenameRelated {
+  readonly occurrences?: readonly EditorSymbolLocation[];
+  readonly unprovable?: readonly string[];
+  readonly sources?: readonly EditorProjectFile[];
+}
+
 /**
  * 编辑器语言服务贡献（槽 `ui.editor.languageService`）。
  *
@@ -1506,7 +1602,8 @@ export interface EditorSelectionRangeResult {
  * 同 kind 多家供方时按注册顺序逐家问、不排序不投票：集合型（definition / references /
  * documentSymbol / foldingRange / codeLens / semanticToken / inlayHint / workspaceSymbol /
  * completion）取并集去重，一家抛错只让这家缺席；单答型（rename / hover / formatting /
- * signatureHelp / documentHighlight / selectionRange）第一家作答的说了算。
+ * signatureHelp / documentHighlight / selectionRange，LAU-4 改名腿起另有 renameTarget）
+ * 第一家作答的说了算。
  * 不引入 priority：需要主 / 备的只在 Monaco provider 层裁决。
  *
  * 文档型请求带 `languageId` 时以它为准，缺席才按 `path` 自认；`provide` 同步返回，

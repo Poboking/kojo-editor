@@ -15,16 +15,17 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import { pathKey, type ErbReference } from '@kojo/plugin-api';
+import { pathKey, type ErbIndex, type ErbReference } from '@kojo/plugin-api';
 import {
   applyReferenceEdits,
   createApplyToClosedFile,
   installErbRename,
-  planRenameEdits,
-  resolveRenameTarget,
-  wordAtColumn,
   type ErbRenameHandlers,
 } from '../src/monaco/erb-rename';
+// 判据本体（LAU-4 改名腿）：取词 / 名字判定 / 改名编排全在解析器插件，宿主只翻 Monaco 形状。
+// 本文件的桩 handlers 直接把请求转给这几枚纯函数 ⇒ 断言测的仍是**真判据**（不是第二套假实现）。
+import { provideRename, provideRenameTarget, resolveRenameName, wordAtColumn } from '@kojo/plugin-erb-parser';
+import { planReferenceWrites, type ReferenceOccurrence } from '../src/ui/reference-utils';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 
@@ -73,31 +74,32 @@ describe('wordAtColumn', () => {
 
 /* ============================== 纯函数：名字判定 ============================== */
 
-describe('resolveRenameTarget', () => {
+describe('resolveRenameName', () => {
   const byName = new Map([
     ['M_KOJO_A', []],
     ['PRINT_FLAG', []],
   ]);
+  const hasName = (name: string): boolean => byName.has(name);
 
   it('索引命中（大小写不敏感）⇒ 归一化名 + 原词区间', () => {
-    const hit = resolveRenameTarget('@M_KOJO_A(ARG)', 4, byName);
+    const hit = resolveRenameName('@M_KOJO_A(ARG)', 4, hasName);
     expect(hit).toEqual({ kind: 'hit', startColumn: 2, endColumn: 10, normalizedName: 'M_KOJO_A' });
-    const lower = resolveRenameTarget('CALL m_kojo_a()', 7, byName);
+    const lower = resolveRenameName('CALL m_kojo_a()', 7, hasName);
     expect(lower).toEqual({ kind: 'hit', startColumn: 6, endColumn: 14, normalizedName: 'M_KOJO_A' });
   });
 
   it('`$` 标签 / `#DIM` 局部名 / 裸词不在索引 ⇒ 拒绝（不猜）', () => {
-    const label = resolveRenameTarget('*PRINT_FLAG_2', 4, byName); // 索引里只有 PRINT_FLAG
+    const label = resolveRenameName('*PRINT_FLAG_2', 4, hasName); // 索引里只有 PRINT_FLAG
     expect(label.kind).toBe('reject');
     expect((label as { reason: string }).reason).toContain('PRINT_FLAG_2');
-    const dim = resolveRenameTarget('#DIM LOCAL_NAME', 6, byName);
+    const dim = resolveRenameName('#DIM LOCAL_NAME', 6, hasName);
     expect(dim.kind).toBe('reject');
-    const bare = resolveRenameTarget('FOO = 1', 2, byName);
+    const bare = resolveRenameName('FOO = 1', 2, hasName);
     expect(bare.kind).toBe('reject');
   });
 
   it('光标处无词 ⇒ 拒绝（理由区分于"不在索引"）', () => {
-    const none = resolveRenameTarget('A + B', 3, byName);
+    const none = resolveRenameName('A + B', 3, hasName);
     expect(none.kind).toBe('reject');
     expect((none as { reason: string }).reason).toContain('没有可重命名的名字');
   });
@@ -109,32 +111,39 @@ function ref(path: string, line: number, column: number, endColumn: number): Erb
   return { filePath: path, line, column, endColumn, kind: 'call' };
 }
 
-describe('planRenameEdits', () => {
+/**
+ * 编辑分组 / 只读剔除：宿主这一批**不再自建**分组器，直接用「全部替换」那份
+ * `planReferenceWrites`（去重 + 按文件分组 + 只读按文件计）。本块钉住它在这条腿上的口径。
+ */
+describe('planReferenceWrites（改名写计划）', () => {
+  function occ(path: string, line: number, column: number, endColumn: number): ReferenceOccurrence {
+    return { filePath: path, line, column, endColumn, kind: 'call', language: 'erb' };
+  }
   const refs = [
-    ref('C:/p/ERB/a.ERB', 1, 2, 10), // definition
-    ref('C:/p/ERB/b.ERB', 30, 6, 14),
-    ref('C:/p/ERB/a.ERB', 88, 1, 9),
-    ref('C:/p/ERH/x.ERH', 3, 2, 10),
+    occ('C:/p/ERB/a.ERB', 1, 2, 10), // definition
+    occ('C:/p/ERB/b.ERB', 30, 6, 14),
+    occ('C:/p/ERB/a.ERB', 88, 1, 9),
+    occ('C:/p/ERH/x.ERH', 3, 2, 10),
   ];
 
   it('按文件分组、保持出现序；只读文件整文件剔除并计数（计文件数不是引用点数）', () => {
-    const plan = planRenameEdits(refs, (p) => p !== 'C:/p/ERH/x.ERH');
-    expect(plan.readOnlyCount).toBe(1);
+    const plan = planReferenceWrites(refs, (p) => p !== 'C:/p/ERH/x.ERH');
+    expect(plan.readOnlyFiles).toEqual(['C:/p/ERH/x.ERH']);
     expect(plan.writable).toEqual([
-      { path: 'C:/p/ERB/a.ERB', refs: [refs[0], refs[2]] },
-      { path: 'C:/p/ERB/b.ERB', refs: [refs[1]] },
+      { path: 'C:/p/ERB/a.ERB', language: 'erb', occurrences: [refs[0], refs[2]] },
+      { path: 'C:/p/ERB/b.ERB', language: 'erb', occurrences: [refs[1]] },
     ]);
   });
 
   it('全部可写 ⇒ 零剔除', () => {
-    const plan = planRenameEdits(refs, () => true);
-    expect(plan.readOnlyCount).toBe(0);
+    const plan = planReferenceWrites(refs, () => true);
+    expect(plan.readOnlyFiles).toEqual([]);
     expect(plan.writable).toHaveLength(3);
   });
 
   it('全部只读 ⇒ 空组 + 全数', () => {
-    const plan = planRenameEdits(refs, () => false);
-    expect(plan.readOnlyCount).toBe(3);
+    const plan = planReferenceWrites(refs, () => false);
+    expect(plan.readOnlyFiles).toHaveLength(3);
     expect(plan.writable).toEqual([]);
   });
 });
@@ -203,6 +212,11 @@ function stubMonaco(): Stub {
 
 function modelOf(...lines: string[]): Monaco.editor.ITextModel {
   return {
+    // 请求模型必须带路径：宿主第一道闸是"这份视图有没有真文件"（标签腿要靠它查可写）
+    uri: { fsPath: 'C:/p/ERB/a.ERB', toString: () => 'file:///C:/p/ERB/a.ERB' },
+    getLanguageId: () => ERB_LANGUAGE_ID,
+    getVersionId: () => 1,
+    getValue: () => lines.join('\n'),
     getLineCount: () => lines.length,
     getLineContent: (lineNumber: number) => lines[lineNumber - 1] ?? '',
   } as unknown as Monaco.editor.ITextModel;
@@ -216,6 +230,9 @@ function modelOf(...lines: string[]): Monaco.editor.ITextModel {
 function openModelOf(modelPath: string, ...lines: string[]): Monaco.editor.ITextModel {
   return {
     uri: { fsPath: modelPath, toString: () => `file:///${modelPath.replace(/\\/g, '/')}` },
+    getLanguageId: () => ERB_LANGUAGE_ID,
+    getVersionId: () => 1,
+    getValue: () => lines.join('\n'),
     getLineCount: () => lines.length,
     getLineContent: (lineNumber: number) => lines[lineNumber - 1] ?? '',
   } as unknown as Monaco.editor.ITextModel;
@@ -224,28 +241,40 @@ function openModelOf(modelPath: string, ...lines: string[]): Monaco.editor.IText
 const AT = (lineNumber: number, column: number): Monaco.Position =>
   ({ lineNumber, column }) as Monaco.Position;
 
-/** 桩 handlers：固定索引 / 引用 / 可写表；记录 io 通道调用 */
+/** 方言闸（与插件供方同一枚判据；ERB 三种后缀） */
+const isDialect = (path: string): boolean => /\.(?:erb|erh|erd)$/i.test(path);
+
+/**
+ * 桩 handlers：**判据直接转给解析器插件**（`provideRenameTarget` / `provideRename`），
+ * 只把索引 / 引用集 / 写权限 / 已开标签表换成测试数据——断言因此测的是真判据。
+ * `refs: null` ⇒ 反向引用索引缺席（`bySymbol` 不存在）。
+ */
 function handlersOfReal(opts: {
   byName?: ReadonlyMap<string, unknown>;
   refs?: readonly ErbReference[] | null;
   writable?: ReadonlySet<string>;
   openModels?: ReadonlyMap<string, Monaco.editor.ITextModel>;
+  /** 显式索引（`null` = 索引未建） */
+  index?: ErbIndex | null;
 }): { handlers: ErbRenameHandlers; ioCalls: string[] } {
   const ioCalls: string[] = [];
   const byName = opts.byName ?? new Map([['M_KOJO_A', []]]);
   const refs = opts.refs ?? null;
   const writable = opts.writable ?? new Set<string>();
-  const openModels = opts.openModels ?? new Map();
+  const openModels = opts.openModels ?? new Map<string, Monaco.editor.ITextModel>();
+  const index =
+    opts.index !== undefined
+      ? opts.index
+      : ({
+          byName,
+          references: refs === null ? undefined : { bySymbol: new Map([['M_KOJO_A', refs]]) },
+        } as unknown as ErbIndex);
   return {
     ioCalls,
     handlers: {
       canAnswer: () => true,
-      currentIndex: () =>
-        ({
-          byName,
-          references: { bySymbol: new Map() },
-        }) as unknown as import('@kojo/plugin-api').ErbIndex,
-      referencesTo: () => refs,
+      resolveTarget: (request) => provideRenameTarget(index, request, isDialect),
+      resolveRename: (request) => provideRename(index, request, isDialect),
       isWritable: (p) => writable.has(p),
       openModelFor: (p) => openModels.get(p),
       applyToClosedFile: async (p) => {
@@ -275,8 +304,8 @@ describe('installErbRename', () => {
     const stub2 = stubMonaco();
     installErbRename(stub2.monaco, {
       canAnswer: () => true,
-      currentIndex: () => null,
-      referencesTo: () => null,
+      resolveTarget: () => undefined, // 无人应答（索引未建时插件的真实行为）
+      resolveRename: () => undefined,
       isWritable: () => true,
       openModelFor: () => undefined,
       applyToClosedFile: async () => ({ applied: 0, stale: 0 }),
@@ -462,11 +491,15 @@ function kojoHandlers(opts: {
   applyToClosedFile?: ErbRenameHandlers['applyToClosedFile'];
 }) {
   const ioCalls: string[] = [];
-  const byName = new Map([['M_KOJO_A', []]]);
+  // 判据桩：byName 命中 = 可改名；反向索引把测试引用集挂在 `M_KOJO_A` 名下
+  const index = {
+    byName: new Map([['M_KOJO_A', []]]),
+    references: { bySymbol: new Map([['M_KOJO_A', opts.refs]]) },
+  } as unknown as ErbIndex;
   const handlers: ErbRenameHandlers = {
     canAnswer: () => true,
-    currentIndex: () => ({ byName, references: { bySymbol: new Map() } }) as unknown as import('@kojo/plugin-api').ErbIndex,
-    referencesTo: () => opts.refs,
+    resolveTarget: (request) => provideRenameTarget(index, request, isDialect),
+    resolveRename: (request) => provideRename(index, request, isDialect),
     isWritable: (p) => opts.writable.has(p),
     openModelFor: (p) => opts.openModels?.get(p),
     applyToClosedFile:

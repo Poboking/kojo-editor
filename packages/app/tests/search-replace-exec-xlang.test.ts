@@ -14,6 +14,7 @@ import type * as Monaco from 'monaco-editor';
 import type { ErbIndex } from '@kojo/plugin-api';
 import { createFileReplaceRunner, type FileReplaceDeps } from '../src/ui/search-replace-exec';
 import { applyReferenceEdits, createApplyToClosedFile, installErbRename, type ErbRenameHandlers } from '../src/monaco/erb-rename';
+import { provideRename, provideRenameTarget } from '@kojo/plugin-erb-parser';
 import { findNameTokenPositions, type ReferenceOccurrence } from '../src/ui/reference-utils';
 
 const A = 'C:/p/ERB/a.ERB';
@@ -193,16 +194,26 @@ describe('F2 提供器与「全部替换」执行器端到端对拍', () => {
       },
       Uri: { file: (p: string) => ({ fsPath: p, scheme: 'file', toString: () => `file:///${p}` }) },
     } as unknown as typeof Monaco;
+    // 判据桩（LAU-4 改名腿）：索引只给 `FOO` 这个名字与它的引用集，判据本身在解析器插件
+    const index = {
+      byName: new Map([['FOO', []]]),
+      references: { bySymbol: new Map([['FOO', paths.flatMap(spansOf)]]) },
+    } as unknown as ErbIndex;
+    const isDialect = (path: string): boolean => /\.(?:erb|erh|erd)$/i.test(path);
     const handlers: ErbRenameHandlers = {
       canAnswer: () => true,
-      currentIndex: () => ({ byName: new Map([['FOO', []]]) }) as unknown as ErbIndex,
-      referencesTo: () => paths.flatMap(spansOf),
+      resolveTarget: (r) => provideRenameTarget(index, r, isDialect),
+      resolveRename: (r) => provideRename(index, r, isDialect),
       isWritable: (p) => io.isWritable(p),
       openModelFor: () => undefined, // 全部按"未打开"处理 ⇒ 两边都走 io 通道
       applyToClosedFile: createApplyToClosedFile(io),
     };
     installErbRename(monaco, handlers);
     const model = {
+      uri: { scheme: 'file', fsPath: A, path: A, toString: () => `file:///${A}` },
+      getLanguageId: () => 'kojo-erb',
+      getVersionId: () => 1,
+      getValue: () => text,
       getLineCount: () => 3,
       getLineContent: (n: number) => text.split('\n')[n - 1] ?? '',
     } as unknown as Monaco.editor.ITextModel;

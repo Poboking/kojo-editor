@@ -54,6 +54,7 @@ import { erbDocumentSymbols } from './document-symbols';
 import { erbFoldingRanges } from './folding';
 import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, resolveErbDimDefinition } from './symbols';
+import { planErbRename, provideRenameTarget } from './rename';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
 import { erbSemanticTokens } from './semantic-tokens';
@@ -2003,6 +2004,41 @@ export function createErbParserPlugin(): Plugin {
             kind: 'inlayHint',
             hints: callArgumentHints(request.text, (name) => inlaySlotsOf(idx, name), window),
           };
+        },
+      });
+
+      /* ---------------- LAU-4 改名腿（2026-10-30）：改名求值 / 改名 ----------------
+
+       这一批把宿主 `monaco/erb-rename.ts` 里的**判据**整块搬进来，宿主只剩「model / 位置 →
+       请求」「契约 → Monaco 形状」与落盘通道（写允许域 / 写前备份 / 双通道送达）。
+
+       - `renameTarget` / `rename`：词法取词 + 标签作用域 + 反向索引 + 全或无（判据在
+         \`./rename.ts\`；跨语言证据由宿主当数据递进来，本包不 IO、不跨插件问）。
+
+       `order` 都是 20（与其余 `erb-*` 一致）：槽按注册序问，同 kind 只有本包一家认 ERB。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-renameTarget',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'renameTarget') return undefined;
+          return provideRenameTarget(index, request, isDialect);
+        },
+      });
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-rename',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'rename') return undefined;
+          return planErbRename(
+            index,
+            request.path,
+            request.text,
+            request.line,
+            request.column,
+            request.newName,
+            request.related,
+          );
         },
       });
     },

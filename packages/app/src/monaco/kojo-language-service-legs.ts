@@ -19,6 +19,7 @@ import type {
   EditorReferencesResult,
   EditorRenameRequest,
   EditorRenameResult,
+  EditorRenameTargetResult,
   EditorSelectionRangeRequest,
   EditorSelectionRangeResult,
   EditorSignature,
@@ -572,6 +573,23 @@ export function collectRename(
   for (const contribution of contributions) {
     const result = provideOf(contribution, request);
     if (!result || result.kind !== 'rename') continue;
+    return result;
+  }
+  return undefined;
+}
+
+/**
+ * 问出这一次**改名求值**（`renameTarget`，LAU-4 导航腿；单答型）。
+ * `undefined` = 无人应答（宿主交回 `undefined`，Monaco 走缺省词回退）；
+ * `rejectReason` = 认这个位置但不改（**作答**，不再问下一家）。
+ */
+export function collectRenameTarget(
+  contributions: readonly EditorLanguageServiceContribution[],
+  request: EditorLanguageServiceRequest,
+): EditorRenameTargetResult | undefined {
+  for (const contribution of contributions) {
+    const result = provideOf(contribution, request);
+    if (!result || result.kind !== 'renameTarget') continue;
     return result;
   }
   return undefined;
