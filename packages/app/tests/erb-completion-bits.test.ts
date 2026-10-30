@@ -393,7 +393,7 @@ describe('D7 · 位名悬停（只读、查不到不显示）', () => {
     expect(hoverAt('GETBIT(CFLAG:1, |2)')).toBeUndefined(); // schema 缺省
   });
 
-  it('经 installHover 装配：变量 schema 走通 hover（ERB 语言注册）', () => {
+  it('ERB 悬停已进槽：`installHover` 只为 kojo1 注册（旧桥不再挂 ERB）', () => {
     const hoverRegs: Monaco.languages.HoverProvider[] = [];
     const hoverMonaco = {
       languages: {
@@ -404,14 +404,8 @@ describe('D7 · 位名悬停（只读、查不到不显示）', () => {
       },
     } as unknown as typeof Monaco;
     installHover(hoverMonaco, () => ({ variableSchema: schemaA() }) as HoverTables);
-    expect(hoverRegs).toHaveLength(2); // ERB + KOJO 同一个 provider
-    const line = 'GETBIT(CFLAG:1, 2)';
-    const model = { getLineContent: () => line } as unknown as Monaco.editor.ITextModel;
-    const hover = hoverRegs[0]!.provideHover(
-      model,
-      { lineNumber: 1, column: line.indexOf('2') + 1 } as Monaco.Position,
-      {} as Monaco.CancellationToken,
-    ) as Monaco.languages.Hover | undefined;
-    expect(JSON.stringify(hover?.contents)).toContain('恋人');
+    // ERB-PARITY G1（2026-10-31）：ERB 的悬停判据搬进插件、由槽供方作答，
+    // 旧桥这台安装器只剩 kojo1 那门；位名内容的判据由本文件其余用例直接驱动。
+    expect(hoverRegs).toHaveLength(1);
   });
 });

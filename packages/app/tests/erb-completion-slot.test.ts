@@ -164,9 +164,10 @@ describe('LAU-4 补全腿第三批 · descriptor 声明', () => {
     expect(erb.completionTriggerCharacters).toEqual(['[', '$', '.']);
   });
 
-  it('补全腿不靠点名：ERB 走旧桥全腿（点名表里只有引用腿）', () => {
+  it('补全腿不靠点名：ERB 走旧桥全腿（点名表里没有 completion）', () => {
     expect(usesLegacyBridge(erb)).toBe(true);
-    expect(declaredSlotKinds(erb)).toEqual(['references']);
+    expect(declaredSlotKinds(erb)).toContain('references');
+    expect(declaredSlotKinds(erb)).not.toContain('completion');
   });
 });
 

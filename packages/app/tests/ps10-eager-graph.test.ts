@@ -1002,13 +1002,29 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ERB 悬停从此由 `ui.editor.languageService` 的 `erb-hover` 供方作答，宿主
     //     `installHover` 只剩 kojo1 那枚旧桥；欠账照旧：下一枚进图模块仍须先挪一枚出去
     //     （文件闸顶格 199）。
+    //
+    //   - **LAU-4 ERB 补全余项进槽（2026-10-31，补全腿批）**：读数 **199 文件 / 3,455 KB**
+    //     （3,537,725 B = 上一条 3,493,949 + 43,776）——**零新进图文件**（199 未动）。
+    //     逐枚按「本树 vs `origin/dev` 同路径 `git cat-file -s`」实测，图内六枚（其余全在懒边）：
+    //     `plugins/erb-parser/src/completion.ts` **+34,624**（十一源候选判据收成插件侧一份）、
+    //     `plugin-api/src/slots.ts` **+5,009**（补全事实输入位 additive：变量 schema / 字典 /
+    //     调用协议 / 指令表 / 系统函数别名 / `#DIM` 与标签名 / 项目函数名，全部可选）、
+    //     `plugin-api/src/erb.ts` **+3,533**（事实类型与空白字符类收口）、
+    //     `plugin-api/src/index.ts` **+265**（导出）、`plugins/erb-parser/src/plugin.ts` **+348**
+    //     （供方与语言门）、`plugins/erb-parser/src/index.ts` **−3**（导出改指）。
+    //     宿主九枚（`erb-completion-facts.ts` +9,959 新文件、`slot-service-providers.ts` +4,613、
+    //     `language-registry.ts` +2,233、`languages.ts` +1,409、`erb-completion.ts` −478 等）
+    //     **都不在开机图里**（monaco 装配与组合根在懒边）。
+    //     ⇒ 闸 **3,412 → 3,455**（余量约 0.1 KB；文件闸仍 199）。这一档是能力：ERB 补全的
+    //     候选从"宿主 11 源自装配 + 插件答 4 facet"变成"插件一份判据 + 宿主现取事实"，
+    //     拼音可检索键与触发字符改为 descriptor 点名（收口不再按语言 id 分支）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,412 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,455 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_412);
+    expect(totalKb).toBeLessThanOrEqual(3_455);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
