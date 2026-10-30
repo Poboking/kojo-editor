@@ -90,6 +90,12 @@ import { setReferenceTally } from './reference-tally-store';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
 import { setJumpProbe } from './jump-to-state';
 import { documentRequestFields } from './language-service-request';
+// 跨文件定义的第二段要项目文件快照：取法与引用 / 改名**同一条腿**（`projectFilesSnapshotOf`
+// 的 400 份 / 8 MiB 上限不另抄一份）。
+import {
+  projectFilesSnapshotOf,
+  type Kojo2ProjectFilesSnapshot,
+} from '../monaco/kojo-language-service-legs';
 import { collectFoldingRanges, installFoldingRangeProvider } from '../monaco/kojo-folding';
 // P2-14：quick fix 预览层（纯逻辑）——落地前先出 diff 预览，确认才应用
 import {
@@ -787,7 +793,19 @@ export function previewSourcePathOf(model: Monaco.editor.ITextModel): string | n
   return ctx ? ctx.filePathRef.current || null : null;
 }
 
-/** 转到定义 / 跳到实现共用的读类腿（换算 → 问槽 → 折回） */
+/**
+ * 转到定义 / 跳到实现共用的读类腿（换算 → 问槽 → 折回）。
+ *
+ * **跨文件声明**（K2 跨文件批）分两段问，顺序就是语义：
+ * 1. 先按同文件判据问一遍——本地有落点就结束，快照一分钱不花；
+ * 2. 本地没有**才**取项目快照（`projectFilesSnapshotOf`，与引用 / 改名同一条取数腿、
+ *    同一组上限）并重问一次，供方据此到别的文件找同名声明。
+ *
+ * 快照只给"definition 由槽供方应答"的语言（descriptor 的 `slotServices` 点名）：`projectFiles`
+ * 这一格今天只有 kojo2 供方读，v1 方言由解析器原生应答、且 F12 远比 2.0 频繁——"每次按 F12
+ * 都把整项目文本过一遍槽"是这里唯一要防的退化。
+ * 索引缺席 / 取数失败 ⇒ 请求里不出现 `projectFiles`，行为与加这一格之前逐字相同。
+ */
 export function readDefinitionTargets(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
@@ -797,13 +815,42 @@ export function readDefinitionTargets(
   if (!target) return [];
   const at = sourcePointOf(target, position);
   if (at === null) return [];
-  const locations = collectDefinitionLocations(kernel.slots.query('ui.editor.languageService'), {
-    kind: 'definition',
+  const contributions = kernel.slots.query('ui.editor.languageService');
+  const request = {
+    kind: 'definition' as const,
     ...documentRequestFields(target.model, target.path, kernel.project.current()),
     line: at.line,
     column: at.column,
-  });
+  };
+  let locations = collectDefinitionLocations(contributions, request);
+  if (locations.length === 0) {
+    const snapshot = definitionProjectSnapshotOf(target.model, target.path);
+    if (snapshot !== undefined) {
+      locations = collectDefinitionLocations(contributions, {
+        ...request,
+        projectFiles: snapshot.files,
+        projectFilesComplete: snapshot.complete,
+      });
+    }
+  }
   return target.sugar ? foldLocationsToPreview(model, target, locations) : locations;
+}
+
+/** 2.0 的项目文件快照（`undefined` = 这门语言不用槽供方答 definition / 索引缺席 / 取数抛错） */
+function definitionProjectSnapshotOf(
+  model: Monaco.editor.ITextModel,
+  path: string,
+): Kojo2ProjectFilesSnapshot | undefined {
+  try {
+    // 判据是"这门语言的 definition 由**槽供方**应答"（descriptor 的 `slotServices` 点名），
+    // 不是某个具体语言 id：v1 方言由解析器原生应答、一个字段都不读 `projectFiles`，
+    // 替它们取快照就是白付"整项目文本过一遍槽"的钱。
+    const slotServices = descriptorForLanguageId(model.getLanguageId())?.slotServices;
+    if (slotServices === undefined || !slotServices.includes('definition')) return undefined;
+    return projectFilesSnapshotOf(kojo2ProjectIndex, path);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
