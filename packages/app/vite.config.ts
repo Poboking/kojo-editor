@@ -284,6 +284,8 @@ export default defineConfig({
       '@kojo/kojo-lang/codelens': r('../kojo-lang/src/codelens.ts'),
       // B3h：折叠区间判据的叶子（同样必须排在桶之前）。
       '@kojo/kojo-lang/folding': r('../kojo-lang/src/folding.ts'),
+      // B3 语义收口：结构化着色判据的叶子（同样必须排在桶之前）。
+      '@kojo/kojo-lang/semantic': r('../kojo-lang/src/semantic.ts'),
       // B3j：一键迁移 code action 的判据叶子（同样必须排在桶之前）。
       '@kojo/kojo-lang/code-actions': r('../kojo-lang/src/code-actions.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('../kojo-sdk/src/semantic-roles.ts'),
