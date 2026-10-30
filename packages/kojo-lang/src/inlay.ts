@@ -34,8 +34,9 @@
  *
  * 供方是插件 `@kojo/plugin-kojo-lang`（槽 `ui.editor.languageService` 的 `inlayHint` 成员）。
  * 插件看不见宿主 `packages/app/src/**`，判据留在宿主 = 只能靠复制一份来应答 = 两份判据迟早漂移。
- * 搬过来时**一个字都没改**：宿主侧 `kojo2-inlay.ts` 只剩 Monaco 翻译与安装器，并把这里的
- * 名字原样 re-export（既有 import 点一行不动）。
+ * 搬过来时**一个字都没改**：宿主侧当时只剩 Monaco 翻译与安装器（`kojo2-inlay.ts`），并把这里的
+ * 名字原样 re-export（既有 import 点一行不动）。B5b（2026-10-30）把那枚宿主模块整块删除了——
+ * 它自 B2c 起零生产调用，Monaco 翻译只剩共享收口 `app/src/monaco/kojo-inlay-hints.ts` 这一份。
  *
  * 包的三条硬约束照旧：零 Monaco / 零 IO / 零游戏名词（`GameAdapter` 是**调用方注入**的
  * 事实来源，包不认识任何一部具体游戏）。

@@ -11,14 +11,14 @@
  * ## 硬约束（B1 立的边界，后续批不许破）
  *
  * - **零 `monaco-editor`**：包一旦 import 它，就只能被宿主用，插件化立刻倒退。
- *   翻译成 `monaco.languages.*` 的那一半留在宿主（如 `app/src/monaco/kojo2-symbols.ts`）；
+ *   翻译成 `monaco.languages.*` 的那一半留在宿主（如 `app/src/monaco/kojo2-codelens.ts`）；
  * - **零 React / 零 DOM / 零 IO**：不读盘、不碰 `window`、不发事件；
  * - **零 adapter**：游戏事实一律由调用方递进来，本包不认识任何游戏名词。
  *
  * ## 桶 + 叶子（子路径导出为什么必须有）
  *
  * 两类消费方，量级差三个数量级：
- * - **要整块**：`kojo2-providers` / `kojo2-symbols` 这些编辑器面文件，本来就在懒 chunk 里，
+ * - **要整块**：`kojo2-providers` / `kojo2-codelens` 这些编辑器面文件，本来就在懒 chunk 里，
  *   走桶（`@kojo/kojo-lang`）最省事；
  * - **只要一枚**：路由层要扩展名（`kojo2-cutover` / `kojo2-open` / `kojo2-open-paths`）、
  *   重挂层要语言 id、补全位置判据要字符集——**它们都在开机图里**。

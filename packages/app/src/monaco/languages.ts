@@ -128,7 +128,9 @@ const JSON_DESCRIPTOR: LanguageDescriptor = {
  *   `documentHighlight` 与 `selectionRange`，B3g（2026-10-30）补上的 `codeLens`，以及
  *   B3h（2026-10-30）补上的 `foldingRange`——这十三条的原生 provider 已在对应批次删除，
  *   唯一供方都是 `@kojo/plugin-kojo-lang`，注册走共享收口（`registerForLanguageServices`
- *   带能力名那一枚）。折叠之所以能被点名，是因为 B3h 把"worker 事实塞不进同步槽"解决了：
+ *   带能力名那一枚）。B5b（2026-10-30）把两条最老的腿残留的宿主模块
+ *   （`kojo2-symbols.ts` / `kojo2-inlay.ts`，各自零生产调用）也删了 ⇒ 这两条腿的 Monaco 翻译
+ *   只剩共享收口那一份，槽登记表本身一字未动。折叠之所以能被点名，是因为 B3h 把"worker 事实塞不进同步槽"解决了：
  *   宿主预取 + 请求里带快照（`EditorFoldingRangeRequest.folds`），供方同步裁与答；
  * - **不声明 `structure`**：`monaco/tree-sitter/kojo2-runtime.ts` 只导出主线程单例
  *   （`getKojo2TreeSitterRuntime`：parse / captures）与内核类型，**没有**

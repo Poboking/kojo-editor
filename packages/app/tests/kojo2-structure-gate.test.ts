@@ -14,7 +14,7 @@
  * 桩掉：万能 Proxy 记录每一次调用的「路径 + 实参」，够本文件判定"哪一门语言挂上了什么"。
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -213,10 +213,7 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
     resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'kojo2-folding.ts'),
     'utf8',
   );
-  const symbolsSource = readFileSync(
-    resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'kojo2-symbols.ts'),
-    'utf8',
-  );
+  const symbolsPath = resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'kojo2-symbols.ts');
 
   /** `if (isKojo2CutoverEnabled()) { … }` 的整段（按块尾那行 4 空格 `}` 收口） */
   function cutoverBlock(source: string): string {
@@ -248,7 +245,9 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
 
   it('安装器：语言面都不再读 cutover 开关（不再自挡第二道）', () => {
     expect(foldingSource).not.toMatch(/isKojo2CutoverEnabled/);
-    expect(symbolsSource).not.toMatch(/isKojo2CutoverEnabled/);
+    // B5b（2026-10-30）：`kojo2-symbols.ts` 整块删除（B2 起零生产调用）⇒ 这里不再读它的源码，
+    // 改成钉住"文件真的不在了"——比"它没读开关"更硬，谁把它加回来这条当场红。
+    expect(existsSync(symbolsPath), 'kojo2-symbols.ts 已被 B5b 删除，别再把它加回来').toBe(false);
     for (const rel of [
       'kojo2-semantic.ts',
       'kojo2-highlight.ts',
