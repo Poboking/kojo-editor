@@ -336,7 +336,9 @@ describe('① 项目加载 + 索引就绪（第一轮）', () => {
     await h.runFrames();
     expect(h.latest().runs).toHaveLength(1);
     expect(h.latest().runs[0]!.rescanOnly).toBe(false);
-    expect(h.walkCalls).toEqual([]); // 索引就绪 ⇒ 用索引的键，不另走一趟递归列举
+    // 索引就绪 ⇒ ERB 文件取自索引的键；但 2.0 源文不在 ERB 索引里，仍要为后缀单独列举一次
+    //（2026-10-30 实机缺陷：不列举 ⇒ 未打开的 .kojo2 永远进不了 2.0 项目索引）
+    expect(h.walkCalls).toEqual([ROOT]);
     expect(scanErrors()).toBe(1);
     expect(scanFiles()).toBe(1);
     expect(projectScanCoverage().status).toBe('complete');

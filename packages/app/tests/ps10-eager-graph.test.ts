@@ -825,6 +825,11 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     静态 import 同文件的 `createLazyKojo2ProjectOptions`），**−553 B** 就是这一笔；
     //     `monaco/kojo2-callhierarchy.ts` 的 `installKojo2CallHierarchyProvider` 只在
     //     `ui/call-hierarchy.ts` 的动态边上、不在图里。文件数零变化（199 未动，无整文件删除）。
+    //   - **2.0 源文进扫描清单（2026-10-30，本批）**：读数 **199 文件 / 3,185 KB**
+    //     （3,261,951 B，较上批 +1,438 B = `project-scan-schedule.ts` 新判据与注释）——
+    //     两枚闸维持 **≤199 / ≤3,188**，不抬。零新进图模块（`isKojo2Path` / `pkey` 本就在
+    //     该文件的 import 里）；修的是"ERB 索引就绪 ⇒ 2.0 文件从不被列举"⇒ 未打开的
+    //     `.kojo2` 进不了 `kojo2ProjectIndex`、跨文件转定义只在打开过的文件里生效。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 

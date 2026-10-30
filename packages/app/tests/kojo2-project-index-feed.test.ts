@@ -162,8 +162,12 @@ function harness(files: ReadonlyMap<string, string>): Harness {
     },
   };
 
+  // 真 ERB 索引**只收 ERB 方言**（`.kojo` / `.kojo2` 一份都不在）——旧夹具把 2.0 文件也塞进
+  // 索引里，于是「索引就绪 ⇒ 跳过 walkDir」那条路假绿：实机上未打开的 2.0 文件永远进不了
+  // 2.0 项目索引（2026-10-30 实机：A 调 B 的 `@函`，F12 零落点）。
+  const isKojo = (p: string): boolean => /\.kojo2?$/i.test(p);
   const indexObject = {
-    files: new Map([...texts.keys()].map((p) => [p, { path: p }])),
+    files: new Map([...texts.keys()].filter((p) => !isKojo(p)).map((p) => [p, { path: p }])),
   } as unknown as ErbIndex;
   const parser = { currentIndex: () => indexObject };
 
@@ -175,8 +179,13 @@ function harness(files: ReadonlyMap<string, string>): Harness {
         if (text === undefined) throw new Error(`读不到：${path}`);
         return { path, text, encoding: 'utf-8' as const, eol: 'lf' as const, mtimeMs: 0 };
       },
-      async walkDir(_path: string, _opts?: WalkOptions): Promise<DirEntry[]> {
-        return [];
+      async walkDir(root: string, opts?: WalkOptions): Promise<DirEntry[]> {
+        // 目录列举：只交 2.0 后缀（生产侧 filter 在调用点，这里模拟同一个根下的真实结果）
+        const base = root.replace(/[\\/]+$/, '').toLowerCase();
+        return [...texts.keys()]
+          .filter((p) => p.toLowerCase().startsWith(base) && isKojo(p))
+          .filter((p) => opts?.filter?.({ name: p.split(/[\\/]/).pop()!, path: p, isDirectory: false }) ?? true)
+          .map((p) => ({ name: p.split(/[\\/]/).pop()!, path: p, isDirectory: false }));
       },
     },
     slots: { query: () => [] },

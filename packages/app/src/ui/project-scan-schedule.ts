@@ -343,19 +343,51 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
   };
 
   /**
-   * 待扫文件集：索引就绪取索引，否则退化到 `walkDir`。
+   * 待扫文件集：ERB 索引就绪取索引，否则退化到 `walkDir`。
    *
    * 退化那一路**不复用** `commands.ts` 的 `listSourceFiles`：那条通道刻意把"某个根读不到"
    * 吞成少一批候选（快速打开退化成不全的清单是可接受的），而这里少一批文件会变成
    * "覆盖 1,200/1,200 已完成"的假真相。所以后缀判据仍取单源（`isQuickOpenSourcePath`），
    * 逐根失败自己数：部分失败出一句人话，全部失败**抛**（⇒ 本轮 `status:'failed'` 上屏）。
+   *
+   * **2.0 源文必须单独 walk 一遍**（2026-10-30 实机抓到的缺陷）：`ErbIndex` 只收 ERB 方言，
+   * 索引就绪就只看索引 ⇒ 未打开的 `.kojo` / `.kojo2` 永远进不了 `kojo2ProjectIndex`
+   *（它只由"打开中的 model"与这条扫描喂养）⇒ 跨文件转定义 / 引用 / 改名只在**打开过**
+   * 的文件里生效（实机：A 调用 B 的 `@函`，F12 零落点）。后缀判据取单源 `isKojo2Path`，
+   * 路径归一键 `pkey` 去重；每轮多一次逐根列举（只列后缀，不读正文）。
    */
   async function listScanFiles(): Promise<readonly string[]> {
     const idx = indexOf();
-    if (idx !== null) return [...idx.files.keys()];
     const roots = rootsOf();
     const out: string[] = [];
+    const seen = new Set<string>();
+    const push = (path: string): void => {
+      const key = pkey(path);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(path);
+    };
     const failed: string[] = [];
+    if (idx !== null) {
+      for (const path of idx.files.keys()) push(path);
+      // 索引只覆盖 ERB：2.0 文件另走一遍后缀列举（见头注）
+      for (const root of roots) {
+        try {
+          const entries = await kernel.io.walkDir(root, {
+            includeFiles: true,
+            includeDirs: false,
+            filter: (e) => e.isDirectory || isKojo2Path(e.name),
+          });
+          for (const e of entries) if (!e.isDirectory && isKojo2Path(e.name)) push(e.path);
+        } catch {
+          failed.push(root);
+        }
+      }
+      if (failed.length > 0) {
+        opts.onNotice?.(`2.0 文件列举少读了 ${failed.length} 个目录：${failed.join('、')}`);
+      }
+      return out;
+    }
     for (const root of roots) {
       try {
         const entries = await kernel.io.walkDir(root, {
@@ -363,7 +395,7 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
           includeDirs: false,
           filter: (e) => e.isDirectory || isQuickOpenSourcePath(e.name),
         });
-        for (const e of entries) if (!e.isDirectory && isQuickOpenSourcePath(e.name)) out.push(e.path);
+        for (const e of entries) if (!e.isDirectory && isQuickOpenSourcePath(e.name)) push(e.path);
       } catch {
         failed.push(root);
       }
