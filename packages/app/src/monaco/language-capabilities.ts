@@ -294,8 +294,9 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     [LanguageCapability.Signature]: 'shared',
     // B2c（2026-10-24）起 `inlay` 走**共享收口**：`kojo-inlay-hints.ts` 的
     // `installInlayHintsProvider` 带能力名 `inlayHint` 挂上（kojo2 descriptor 点名
-    // `slotServices: ['inlayHint']`），供方是插件；`monaco/kojo2-inlay.ts` 的原生安装器
-    // 已不再是装配路径（只留纯翻译层 `toMonacoInlayHints` 与它的单测）。
+    // `slotServices: ['inlayHint']`），供方是插件。B5b（2026-10-30）把宿主那枚零生产调用的
+    // `monaco/kojo2-inlay.ts`（原生安装器 + 判据 re-export + 第二份 `toMonacoInlayHints`）
+    // **整块删除**——翻译只剩 `kojo-inlay-hints.ts` 这一份，判据只剩 `@kojo/kojo-lang/inlay`。
     [LanguageCapability.Inlay]: 'shared',
     // B3g（2026-10-30）：行上注解同批走共享收口（能力名 `codeLens`）——判据住
     // `@kojo/kojo-lang/codelens`（计数复用包内 references），供方是插件的 `kojo2-codeLens`，

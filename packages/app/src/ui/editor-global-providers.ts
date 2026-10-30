@@ -139,10 +139,11 @@ import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
 // 注：2.0 的**大纲**注册在 B2 批已删除（改由 `installDocumentSymbolProvider` 的槽腿承担，
 // 供方 = 插件 `@kojo/plugin-kojo-lang`），故这里不再 import `kojo2-symbols`。
 import { installKojo2DocumentFormatter, installKojo2RangeFormatter } from '../monaco/kojo2-format';
-// K2 batch-8：语言服务补齐（ERB/kojo2 同权）——引用 / 重命名 / 签名 / inlay / code lens /
-// 同符号高亮 / 结构化扩选。全部不读切流开关，且安装器内零 IO。B3b–B3f 之后其中
-// 引用 / 改名 / 签名 / 高亮 / 扩选五枚已改为共享收口的**翻译层**（判据在包里、供方是插件），
-// 安装器名字与装配行不变。
+// K2 batch-8：语言服务补齐（ERB/kojo2 同权）——引用 / 重命名 / 签名 / code lens /
+// 同符号高亮 / 结构化扩选。全部不读切流开关，且安装器内零 IO。B3b–B3g 之后其中
+// 引用 / 改名 / 签名 / 高亮 / 扩选 / 行上注解已改为共享收口的**翻译层**（判据在包里、
+// 供方是插件），安装器名字与装配行不变；行内提示（B2c）与大纲（B2）连翻译层都归共享收口
+// ⇒ 宿主不再 import `kojo2-inlay` / `kojo2-symbols`（两枚在 B5b 整块删除）。
 import { installKojo2ProjectReferenceProvider } from '../monaco/kojo2-references';
 import {
   createKojo2ProjectCallHierarchyResolvers,

@@ -35,7 +35,8 @@ import { registerForLanguageServices } from './register-dialects';
  * `kojo2` 整篇 lex+parse——实测 24,197 行 **57.7 ms** 只是解析，`range` 只省下
  * 12 ms）⇒ 闸照旧，但理由写成那条读数，不再是"5,000 行"这个数字。
  *
- * `kojo2` 的 200ms 那一档见 `kojo2-inlay.ts`；本模块管的是共享收口这一枚。
+ * `kojo2` 的 200ms 那一档见 `ui/editor-global-providers.ts` 的 `inlayHintsFor`（B5b 之后
+ * 宿主不再有 `kojo2-inlay.ts` 这枚自建安装器）；本模块管的是共享收口这一枚。
  */
 import { lineWindowFor } from './language-registry';
 

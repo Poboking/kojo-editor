@@ -987,9 +987,16 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
   it('扫描器确实命中了真实的单语言注册行（防空转）', () => {
     const apis = [...singleLanguageRegistrations().keys()];
     // 这几枚都有一侧是"单语言注册"的真实写法；一条都没扫到说明正则坏了，后面的断言就是空转
-    for (const api of ['registerRenameProvider', 'registerInlayHintsProvider']) {
+    for (const api of ['registerRenameProvider']) {
       expect(apis, `扫描器漏了 ${api} 的单语言注册行`).toContain(api);
     }
+    // B5b（2026-10-30）：行内提示的单语言注册行**归零**——宿主那枚自建安装器
+    // （`monaco/kojo2-inlay.ts`，B2c 之后已零生产调用）整块删除，两侧都只经共享收口挂上。
+    // 反向钉住收口仍在，否则上面"另一门也有注册面"那一格会空转。
+    expect(apis).not.toContain('registerInlayHintsProvider');
+    expect(sharedRegistrationFiles('registerInlayHintsProvider')).toContain(
+      'monaco/kojo-inlay-hints.ts',
+    );
     // B3c（2026-10-28）：两门一等语言的补全都**不再**有单语言注册行——2.0 那条改走共享收口
     // （能力名 `completion` + descriptor 点名），ERB 那条经装配核注入语言 id。这里反向钉住
     // "扫描器确实看不见它"，同时正向钉住收口仍在（缺一条就会让下面"另一门也有注册面"空转）。

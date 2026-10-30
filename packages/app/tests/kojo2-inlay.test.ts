@@ -1,7 +1,15 @@
 /**
- * K2-LSP-INLAY · Kojo 2.0 行内提示（`kojo2-inlay.ts`）的闸。
+ * K2-LSP-INLAY · Kojo 2.0 行内提示的**判据**闸（`@kojo/kojo-lang/inlay`）。
  *
- * 覆盖七件事：
+ * B2c（2026-10-24）起这条腿改由共享收口挂上（`monaco/kojo-inlay-hints.ts` 的
+ * `installInlayHintsProvider` 带能力名 `inlayHint`，kojo2 由 descriptor 的
+ * `slotServices` 点名），供方是插件 `@kojo/plugin-kojo-lang`。B5b（2026-10-30）把宿主那枚
+ * **零生产调用**的 `monaco/kojo2-inlay.ts`（原生安装器 + 判据 re-export + 第二份
+ * `toMonacoInlayHints`）整块删除 ⇒ 判据只剩包里这一份，Monaco 翻译只剩共享收口那一份
+ * （`kojo-inlay-hints.ts`，单测在 `kojo-inlay-hints.test.ts` 与 `ps4-provider-seams.test.ts`）。
+ * 本文件因此只管**纯判据**（源码文本 + 可选 adapter → 提示事实），不碰 Monaco 形状。
+ *
+ * 覆盖六件事：
  * 1. **类型提示**：`# 设 / # 设` 的显式类型、数组长度、未写类型时按初值推断，
  *    以及"推断不出不产"的四种反例（缺初值 / 初值表达式 / 坏尾巴 / 第二个记号不是类型）；
  * 2. **`@巡` 绑定**：本文件作者数组（无需 adapter）、adapter 命名集合（角色 / 键值）、
@@ -9,89 +17,17 @@
  * 3. **`# 对照表` 档数**：有兜底 / 缺兜底 / 只有兜底，且只在声明行尾产一枚（表体逐行不刷）；
  * 4. **范围**：只算 `range` 内的行、越界端点夹取、非法区间回空；
  * 5. **位置门**：`@原生` 体 / 注释 / 台词 / 旁白 / 转义字面文本不产；
- * 6. **上限与确定性**：200 条截断、源码序、两次调用逐字相等、CRLF 与 LF 同结果；
- * 7. **provider 面**：只挂 `kojo2`、flag 关零注册、dispose 幂等、异常回空、Monaco 种类映射、
- *    体量档让路、adapter getter 抛错退到"本文件数组"这一层，外加源码卫生断言。
+ * 6. **上限与确定性**：200 条截断、源码序、两次调用逐字相等、CRLF 与 LF 同结果。
  */
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type * as Monaco from '../src/monaco/entry';
+import { describe, expect, it } from 'vitest';
 import type { GameAdapter } from '@kojo/kojo-core';
-import { LARGE_FILE_LINES } from '../src/ui/editor-options';
-import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   KOJO2_INLAY_HINT_LIMIT,
-  installKojo2InlayHintsProvider,
   kojo2InlayHints,
-  toMonacoInlayHints,
   type Kojo2InlayHint,
-} from '../src/monaco/kojo2-inlay';
+} from '@kojo/kojo-lang/inlay';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
-
-const TOKEN = {
-  isCancellationRequested: false,
-  onCancellationRequested: () => ({ dispose: () => undefined }),
-} as unknown as Monaco.CancellationToken;
-
-/* ============================== 假 Monaco / 假 model / 假 adapter ============================== */
-
-interface Registration {
-  readonly selector: string;
-  readonly provider: Monaco.languages.InlayHintsProvider;
-}
-
-interface FakeMonaco {
-  readonly monaco: typeof Monaco;
-  readonly registrations: Registration[];
-  readonly disposeCalls: number[];
-}
-
-function fakeMonaco(options: { readonly failRegister?: boolean; readonly failDispose?: boolean } = {}): FakeMonaco {
-  const registrations: Registration[] = [];
-  const disposeCalls: number[] = [];
-  const fake = {
-    languages: {
-      InlayHintKind: { Type: 1, Parameter: 2 },
-      registerInlayHintsProvider: (selector: string, provider: Monaco.languages.InlayHintsProvider) => {
-        if (options.failRegister === true) throw new Error('桩：注册 inlay provider 抛错');
-        registrations.push({ selector, provider });
-        return {
-          dispose: () => {
-            if (options.failDispose === true) throw new Error('桩：撤 inlay provider 抛错');
-            disposeCalls.push(registrations.length);
-          },
-        };
-      },
-    },
-  };
-  return { monaco: fake as unknown as typeof Monaco, registrations, disposeCalls };
-}
-
-interface FakeModelOptions {
-  readonly lineCount?: number;
-  readonly broken?: boolean;
-  readonly disposed?: boolean;
-  /** 桩 model 缺 `getLineCount`（验体量档判据缺失时不让路） */
-  readonly noLineCount?: boolean;
-}
-
-function fakeModel(text: string, options: FakeModelOptions = {}): Monaco.editor.ITextModel {
-  const model: Record<string, unknown> = {
-    getValue: () => {
-      if (options.broken === true) throw new Error('桩：模型已释放');
-      return text;
-    },
-    isDisposed: () => options.disposed === true,
-  };
-  if (options.noLineCount !== true) {
-    model.getLineCount = () => options.lineCount ?? text.split(/\r\n|\r|\n/).length;
-  }
-  return model as unknown as Monaco.editor.ITextModel;
-}
+/* ============================== 假 adapter ============================== */
 
 interface FakeCollection {
   readonly name: string;
@@ -106,26 +42,6 @@ function fakeAdapter(
   return { foreachCollections: { collections, arrayRule } } as unknown as GameAdapter;
 }
 
-function stubFlag(on: boolean): void {
-  const store = new Map<string, string>();
-  if (on) store.set(KOJO2_KEY, 'on');
-  vi.stubGlobal('window', {
-    localStorage: {
-      getItem: (key: string): string | null => store.get(key) ?? null,
-      setItem: (key: string, value: string): void => {
-        store.set(key, value);
-      },
-      removeItem: (key: string): void => {
-        store.delete(key);
-      },
-    },
-  });
-}
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
-
 /* ============================== 小工具 ============================== */
 
 function labelsOf(source: string, adapter?: GameAdapter): string[] {
@@ -134,25 +50,6 @@ function labelsOf(source: string, adapter?: GameAdapter): string[] {
 
 function hintOnLine(source: string, line: number): Kojo2InlayHint | undefined {
   return kojo2InlayHints(source).find((hint) => hint.position.lineNumber === line);
-}
-
-function providerOf(fake: FakeMonaco): Monaco.languages.InlayHintsProvider {
-  const registration = fake.registrations[0];
-  if (registration === undefined) throw new Error('没有注册 InlayHintsProvider');
-  return registration.provider;
-}
-
-interface InlayResult {
-  readonly hints: Monaco.languages.InlayHint[];
-  readonly dispose?: () => void;
-}
-
-function provide(
-  fake: FakeMonaco,
-  model: Monaco.editor.ITextModel,
-  range: Monaco.IRange = { startLineNumber: 1, endLineNumber: 100_000, startColumn: 1, endColumn: 1 },
-): InlayResult {
-  return providerOf(fake).provideInlayHints(model, range as Monaco.Range, TOKEN) as InlayResult;
 }
 
 /* ============================== ① 类型提示 ============================== */
@@ -477,197 +374,5 @@ describe('上限与确定性', () => {
     const source = ['# 设 丙 整数 = 1', '# 设 甲 整数', '# 对照表 心情 依据 恋慕', '    否 -> 未知'].join('\n');
     const lines = kojo2InlayHints(source).map((hint) => hint.position.lineNumber);
     expect(lines).toEqual([...lines].sort((a, b) => a - b));
-  });
-});
-
-/* ============================== ⑦ Monaco 翻译 / provider ============================== */
-
-describe('Monaco 翻译：种类映射与 padding 透传', () => {
-  it('type → Type(1)、binding → Parameter(2)、value 不借邻居颜色（kind 留空）', () => {
-    const { monaco } = fakeMonaco();
-    const out = toMonacoInlayHints(monaco, [
-      { position: { lineNumber: 1, column: 2 }, label: '整数', kind: 'type', paddingLeft: true },
-      { position: { lineNumber: 2, column: 2 }, label: '{值} {下标}', kind: 'binding', paddingLeft: true },
-      { position: { lineNumber: 3, column: 2 }, label: '3 档 · 有否', kind: 'value', paddingLeft: true },
-    ]);
-    expect(out[0]).toMatchObject({ kind: 1, paddingLeft: true, label: '整数' });
-    expect(out[1]).toMatchObject({ kind: 2, paddingLeft: true, label: '{值} {下标}' });
-    expect(out[2]!.kind).toBeUndefined();
-    expect(out[2]!.paddingLeft).toBe(true);
-  });
-
-  it('paddingRight 缺省不出现；给了原样透传', () => {
-    const { monaco } = fakeMonaco();
-    const out = toMonacoInlayHints(monaco, [
-      { position: { lineNumber: 1, column: 1 }, label: '甲', kind: 'type' },
-      { position: { lineNumber: 1, column: 1 }, label: '乙', kind: 'type', paddingRight: true },
-    ]);
-    expect(out[0]!.paddingRight).toBeUndefined();
-    expect(out[1]!.paddingRight).toBe(true);
-  });
-});
-
-describe('安装：只挂 kojo2、不读开关、dispose 幂等、异常回空', () => {
-  it('缺省档（v1-only）⇒ 照样注册一枚，句柄可重复 dispose', () => {
-    stubFlag(false);
-    const fake = fakeMonaco();
-    const handle = installKojo2InlayHintsProvider(fake.monaco);
-    expect(fake.registrations).toHaveLength(1);
-    expect(() => {
-      handle.dispose();
-      handle.dispose();
-    }).not.toThrow();
-    expect(fake.disposeCalls).toHaveLength(1);
-  });
-
-  it('flag 开 ⇒ 恰好一枚注册，selector 只有 kojo2', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2InlayHintsProvider(fake.monaco);
-    expect(fake.registrations).toHaveLength(1);
-    expect(fake.registrations[0]!.selector).toBe(KOJO2_LANGUAGE_ID);
-    expect(typeof providerOf(fake).provideInlayHints).toBe('function');
-    expect(providerOf(fake).provideInlayHints).toBeTypeOf('function');
-  });
-
-  it('provider 对 `# 设` 交回 Monaco 形状的提示（position / label / kind / padding）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2InlayHintsProvider(fake.monaco);
-    const source = '# 设 甲 整数';
-    const result = provide(fake, fakeModel(source));
-    expect(result.hints).toEqual([
-      {
-        position: { lineNumber: 1, column: source.length + 1 },
-        label: '整数',
-        kind: 1,
-        paddingLeft: true,
-      },
-    ]);
-    expect(typeof result.dispose).toBe('function');
-  });
-
-  it('三类提示的种类映射：type=1 / binding=2 / value 缺省', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2InlayHintsProvider(fake.monaco);
-    const source = [
-      '# 设 状态 整数[3]',
-      '@巡 状态',
-      '# 对照表 心情 依据 恋慕',
-      '    否 -> 未知',
-    ].join('\n');
-    const result = provide(fake, fakeModel(source));
-    expect(result.hints.map((hint) => hint.kind)).toEqual([1, 2, undefined]);
-  });
-
-  it('provider 把 range 透传给纯函数：只交回这一段的提示', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2InlayHintsProvider(fake.monaco);
-    const source = ['# 设 甲 整数', '# 设 乙 字符串', '# 设 丙 整数 = 1'].join('\n');
-    const result = provide(fake, fakeModel(source), {
-      startLineNumber: 2,
-      endLineNumber: 2,
-      startColumn: 1,
-      endColumn: 1,
-    });
-    expect(result.hints.map((hint) => hint.position.lineNumber)).toEqual([2]);
-  });
-
-  it('取文抛错 / 模型已释放 ⇒ `{ hints: [] }`（不抛进 Monaco）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2InlayHintsProvider(fake.monaco);
-    expect(provide(fake, fakeModel('# 设 甲 整数', { broken: true })).hints).toEqual([]);
-    expect(provide(fake, fakeModel('# 设 甲 整数', { disposed: true })).hints).toEqual([]);
-  });
-
-  it('安装器**不自带**体量闸：判据单源在宿主档位（R1 2026-10-28 撤掉自带那枚）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2InlayHintsProvider(fake.monaco);
-    const model = fakeModel('# 设 甲 整数', { lineCount: LARGE_FILE_LINES });
-    // 这枚安装器已不在装配路径上（`language-capabilities` 把 inlay 记成 `shared`，走
-    // `editor-global-providers.ts` 那张总表）。早先它自己还有一枚 `overBudget()`，删掉它的
-    // 理由不是"放宽判据"，而是"判据只在宿主档位留一处"：档外的 kojo2 文件在
-    // `inlayHintsFor` 里就被 `inlayHintsAffordable(languageId, lineCount)` 挡在门外，
-    // **根本不会被问到**（`ps4-provider-seams.test.ts` 的「kojo2 档外照旧不问供方」钉着）。
-    // 留一枚在供方自己身上的话，两处判据迟早会漂（改一处、另一处继续按老行数放行）。
-    expect(provide(fake, model).hints.map((hint) => hint.label)).toEqual(['整数']);
-  });
-
-  it('桩 model 缺 `getLineCount` ⇒ 不因体量判据缺席而回空', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2InlayHintsProvider(fake.monaco);
-    const model = fakeModel('# 设 甲 整数', { noLineCount: true });
-    expect(provide(fake, model).hints.map((hint) => hint.label)).toEqual(['整数']);
-  });
-
-  it('adapter getter 抛错 ⇒ 退到"本文件数组"这一层，不把 provider 带崩', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2InlayHintsProvider(fake.monaco, {
-      adapter: () => {
-        throw new Error('boom');
-      },
-    });
-    const source = ['# 设 状态 整数[3]', '@巡 状态'].join('\n');
-    expect(provide(fake, fakeModel(source)).hints.map((hint) => hint.label)).toEqual([
-      '整数[3]',
-      '{值} {下标}',
-    ]);
-  });
-
-  it('adapter 注入：命名集合的绑定名进 provider', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2InlayHintsProvider(fake.monaco, {
-      adapter: fakeAdapter([{ name: '队伍', bindings: ['角', '名'] }]),
-    });
-    expect(provide(fake, fakeModel('@巡 队伍')).hints.map((hint) => hint.label)).toEqual(['{角} {名}']);
-  });
-
-  it('dispose 幂等：两次只撤一轮；注册的 dispose 抛错不带走卸载链', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    const handle = installKojo2InlayHintsProvider(fake.monaco);
-    handle.dispose();
-    handle.dispose();
-    expect(fake.disposeCalls).toHaveLength(1);
-
-    const failing = fakeMonaco({ failDispose: true });
-    const failingHandle = installKojo2InlayHintsProvider(failing.monaco);
-    expect(() => failingHandle.dispose()).not.toThrow();
-  });
-
-  it('注册失败 ⇒ 错误外抛（只有一枚注册，没有半成品要回滚）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco({ failRegister: true });
-    expect(() => installKojo2InlayHintsProvider(fake.monaco)).toThrow(/注册 inlay provider/);
-    expect(fake.disposeCalls).toEqual([]);
-  });
-});
-
-/* ============================== ⑧ 源码卫生 ============================== */
-
-describe('源码卫生：Monaco 只 type-only、不碰插件包、安装器自带 flag 闸', () => {
-  const source = readFileSync(resolve(HERE, '..', 'src', 'monaco', 'kojo2-inlay.ts'), 'utf8');
-
-  it('Monaco 运行时只许 type-only 引入（node 池不把 monaco 拉进模块图）', () => {
-    expect(source).toMatch(/import type \* as Monaco from '\.\/entry'/);
-    expect(source).not.toMatch(/import \* as Monaco from/);
-    expect(source).not.toMatch(/from 'monaco-editor'/);
-  });
-
-  it('不 import 任何插件包、不出现游戏名词', () => {
-    expect(source).not.toMatch(/from\s+['"]@kojo\/plugin-/);
-    expect(source).not.toMatch(/\b(eratw|eraK|eraSQN|eraNAS)\b/i);
-  });
-
-  it('安装器自带 flag 闸，且注册 selector 只有 KOJO2_LANGUAGE_ID', () => {
-    expect(source).not.toMatch(/isKojo2CutoverEnabled/);
-    expect(source).toMatch(/registerInlayHintsProvider\(\s*KOJO2_LANGUAGE_ID/);
   });
 });
