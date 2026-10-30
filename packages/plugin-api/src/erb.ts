@@ -839,6 +839,38 @@ export function erbContinuationJoin(lines: readonly string[]): string {
  * **只收实测出现过 / 引擎语法点名的名字**（不抄整张 Emuera 变量表）：多收一个就可能掩盖
  * 作者对同名用户变量的真实拼写错误。
  */
+/**
+ * ERB 行首 / 槽位判据的**空白字符类**（源码串，不含外层方括号）——`\t` / 半角空格 /
+ * U+3000 全角空格三种，**不是** JS 的 `\s`（NBSP 不算空白）。
+ *
+ * ## 为什么在契约层再落一枚
+ *
+ * 同一份口径此前只有一处落点：`@kojo/kojo-lang/completion` 的 `BLANK_CLASS_STR`（未盘
+ * 层 lexer、`.kojo` / `.erb` 两条宿主补全位置判据共用）。LAU-4 补全腿把 ERB 的位置门
+ * 搬进常驻解析器插件之后，**插件读不到 `@kojo/kojo-lang/completion`**（静态引它会把整个
+ * 2.0 补全词表链拉上首屏，实测 +6 文件 / +113 KB），而插件读得到契约层。
+ *
+ * 处置按"同一事实、两个分层落点、由测试钉死相等"办：ERB 侧一律用本枚，`.kojo` 侧继续用
+ * `BLANK_CLASS_STR`，`packages/plugins/erb-parser/tests/completion-lexical.test.ts` 逐字符
+ * 断言两枚接受同一字符集——谁改了其中一处都会当场红。**不许在任何 ERB 判据里再手写
+ * `[ \t]`**（PITFALLS 里那四套手抄写法就是这么长出来的）。
+ */
+export const ERB_BLANK_CLASS_STR = '\\t \\u3000';
+
+/** 由 {@link ERB_BLANK_CLASS_STR} 派生的**空格判定**（无 `g` 标志 ⇒ `.test` 无状态） */
+export const ERB_BLANK_RE: RegExp = new RegExp(`[${ERB_BLANK_CLASS_STR}]`);
+
+/** 单字符是否 ERB 空白（口径见 {@link ERB_BLANK_CLASS_STR}） */
+export function isErbBlank(ch: string): boolean {
+  return ch.length === 1 && ERB_BLANK_RE.test(ch);
+}
+
+/** 整段是否**全空白**（空串为真；行首判据用） */
+export function isAllErbBlank(text: string): boolean {
+  for (const ch of text) if (!isErbBlank(ch)) return false;
+  return true;
+}
+
 export const ERB_ENGINE_RESERVED_IDENTIFIERS: readonly string[] = [
   // —— 调用协议槽 / 作用域标量 / 引擎时间与循环量 ——
   'ARG',

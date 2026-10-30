@@ -456,6 +456,9 @@ export {
   erbContinuationRoleOf,
 } from './erb';
 export type { ErbContinuationRole } from './erb';
+// ERB 行首 / 槽位判据的空白类（LAU-4 补全腿第二批，2026-10-31）：常驻解析器插件读它，
+// `.kojo` 侧继续用 `@kojo/kojo-lang/completion` 的同值常量，两枚由插件测试逐字符钉相等。
+export { ERB_BLANK_CLASS_STR, ERB_BLANK_RE, isErbBlank, isAllErbBlank } from './erb';
 // 索引状态事实（2026-10-19 additive，IDX-STATE 批独占追加）
 export type {
   ErbIndexCoverage,

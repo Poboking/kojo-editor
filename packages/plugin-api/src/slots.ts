@@ -1250,7 +1250,16 @@ export type EditorCompletionItemKind =
   /** 固定值域里列举出来的成员（宿主挑枚举图标；不属于任何值域的归 `value`） */
   | 'enum'
   /** 容器级候选——跳过去的是"一块区域"而不是"一条定义"（宿主挑模块图标） */
-  | 'module';
+  | 'module'
+  /* ---- LAU-4 补全腿（2026-10-31）additive：第十三档 ---- */
+  /**
+   * 本文件内的**具名引用**条目（语言里"引用另一个位置"的名字：ERB 的 `$标签`）。
+   *
+   * 为什么不并进 `variable` / `function`：它们说的是"这个名字是什么"，本档说的是"这个名字
+   * 是一处引用"——Monaco 的 `Reference` 图标正是作者对"本文件内可达"的记忆锚点，降级成
+   * 变量图标就断了（与 B3c 扩档同一条理由）。宿主只拿它挑图标，其余语义零改变。
+   */
+  | 'reference';
 
 /** 一条补全候选 */
 export interface EditorCompletionItem {

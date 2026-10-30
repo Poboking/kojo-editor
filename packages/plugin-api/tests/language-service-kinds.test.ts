@@ -121,6 +121,12 @@ describe('ui.editor.languageService 的判别成员表', () => {
 
 const OLD_KINDS = ['keyword', 'function', 'variable', 'value', 'snippet', 'text'] as const;
 const NEW_KINDS = ['operator', 'event', 'constant', 'struct', 'enum', 'module'] as const;
+/**
+ * LAU-4 补全腿（2026-10-31）additive 的第十三档：`$标签` 一类"本文件内可达的具名引用"。
+ * 单列一张表而不是并进 `NEW_KINDS`：那张表说的是"B3c 那一批"，本档是后来的一批，
+ * 分组本身就是记账（谁加的、为什么加，看分组注释）。
+ */
+const LAU_KINDS = ['reference'] as const;
 
 describe('B3c · 缺省 = 旧行为（新格全部可选，最小形状照过）', () => {
   it('`EditorCompletionItem` 的三个新格都是可选字段（必填写法一出现即红）', () => {
@@ -215,10 +221,10 @@ describe('B3d · 格式化区间 additive（缺省 = 整篇，给区间 = 只落
 });
 
 describe('B3c · 新增值可用（六档新 kind 与新格能被类型接住）', () => {
-  it('kind 联合恰好十二档：旧六档 + 新六档，一张表封死（多一档少一档都要先读到注释）', () => {
-    expect(kindLiterals()).toEqual([...OLD_KINDS, ...NEW_KINDS]);
+  it('kind 联合恰好十三档：旧六档 + B3c 六档 + LAU-4 一档，一张表封死（多一档少一档都要先读到注释）', () => {
+    expect(kindLiterals()).toEqual([...OLD_KINDS, ...NEW_KINDS, ...LAU_KINDS]);
     expectTypeOf<EditorCompletionItemKind>().toEqualTypeOf<
-      (typeof OLD_KINDS)[number] | (typeof NEW_KINDS)[number]
+      (typeof OLD_KINDS)[number] | (typeof NEW_KINDS)[number] | (typeof LAU_KINDS)[number]
     >();
   });
 
