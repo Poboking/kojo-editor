@@ -756,11 +756,21 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     热载稳态 **297.3 → 271.8 MB**。量测出口本身也是能力：没有它，这一批的靶子是
     //     "索引总量 − byName" 推出来的（推错了 145 MB），详见 PITFALLS 259。
     //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
+    //   - **内存批 MEM-5（2026-10-29，本批）**：读数 **199 文件 / 3,160 KB**——同样**零新进图
+    //     模块**（199 未动）；净 **+11,362 B** 只落在图内一枚文件：
+    //     `condition-extractor/src/snapshot.ts` +11,362（列式依赖表：15 个 TypedArray + 4 个
+    //     字符串池的建表/物化两段，加上 v6 读数注）。同批 `tests/snapshot.test.ts` +1,803 是
+    //     测试文件，不进开机图。
+    //     ⇒ 闸 **3,150 → 3,162**（余量 2 KB）。抬这一档的理由与前两批同构：加的是**能力**，
+    //     而且直接换到堆上——把 21.2 万条依赖的元组（79 万个 JSArray + 57 万份可去重字符串）
+    //     压成一张 11.4 MB 的列式表，热载稳态 **272.4 → 203.1 MB（−69.3 / −25.4%）**，
+    //     其中本插件 105.8 → 36.5 MB。文件数一分未涨。
+    //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,150 KB）`);
-    expect(totalKb).toBeLessThanOrEqual(3_150);
+    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,162 KB）`);
+    expect(totalKb).toBeLessThanOrEqual(3_162);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

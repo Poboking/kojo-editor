@@ -54,6 +54,27 @@
  * 16 万级 `StateDependency` 对象；谁问谁付（条件矩阵按函数拉取、落盘路径一次性编码）。
  * 合成 2,000 文件口径（28k 函数桶 / 168k 依赖）实测见提交信息。
  *
+ * ## v6 列式依赖表（MEM-5，2026-10-29）：懒还原救不了"壳还在"
+ * v5 把**对象**的构造推后了，但把**元组**留在了内存里——`dependencies` 的 getter 闭包
+ * 捕获着 `deps: DependencyTuple[]`，而稳态下没人读它 ⇒ 整份解码结果原地常驻。
+ * 热载稳态实测（eraTW 4.980 / 3,971 文件 / 110,073 函数 / 603,340 谓词 / 211,985 依赖）：
+ * 全插件 **272.4 MB**，去掉本插件 **166.6 MB** ⇒ **本插件独占 105.8 MB**，是当时最大的单块。
+ * 堆快照（`tools/heap-aggregate.mjs`）把构成摊开：`Array` 头 50.0 MB / 163.8 万个、
+ * 元素区 76.2 MB / 134.8 万个；属于本快照的是 21.2 万个 `DependencyTuple` + 21.2 万个
+ * `indices` 数组 + 18.4 万个比较式数组 + 18.4 万个 `ComparisonTuple`（≈ **79 万个 JSArray**）。
+ * 元组里的字符串**几乎全可去重**（`JSON.parse` 的运行时串 V8 不 intern，同 PITFALLS 258）：
+ * `op` 只有 **6** 种却存 18.4 万份（`==` 一种就 154,949 份 / 3.5 MB）、`text` 只有 **5,707**
+ * 种（3.1%）却存 18.4 万份、`indices` 只有 **3,446** 种却存 21.3 万份（`恋慕` 20,194 份）。
+ *
+ * 于是把解码结果换成**一张列式表**：依赖级 8 列 + 比较式级 5 列 + 索引池，全是 TypedArray
+ * （15 个数组实测合计 **11.4 MB**）；字符串进 4 个池（`ops` / `texts` / `indices` / 比较式
+ * 字符串值；`names` 字典原本就是去重的）。本插件常驻 **105.8 → 36.5 MB**。
+ * **盘上格式一个字节没动**（`EXTRACT_SNAPSHOT_FORMAT` 不 bump）：改的只是"读回来之后留在
+ * 内存里的形态"，`dependencies` 物化出来的对象与改前**逐字段相同**——用真实语料整份快照
+ * 新旧对拍验过（3,971 桶 / 52,435 条件 / 211,985 依赖 / 183,807 比较式 / 140,487 带 schema，
+ * 含键序与值类型；物化耗时旧 249 ms / 新 256 ms）。代价是装载 **591 → 748 ms**（一次开项目
+ * 付一次，拆解见 PITFALLS 262）。
+ *
  * ## 纪律
  * **fail-closed**：全局判据或结构任一不符 ⇒ 整包 null；元组是**位置契约**，
  * `FunctionConditions`/`StateDependency` 增删字段必须同步改编解码并 bump
@@ -288,13 +309,26 @@ function isComparisonTuple(t: unknown): t is ComparisonTuple {
   );
 }
 
+/**
+ * 依赖元组校验（fail-closed 的判据本体）。
+ *
+ * 下标直读 + `for` 而不是 `.every` + 数组解构：后者每次调用现造一枚闭包，`const [a,b,…] = t`
+ * 还要按迭代器协议多分配一枚 ArrayIterator。**如实记账：换掉这两笔之后解码耗时没有变化**
+ * （190 → 191 ms，见 PITFALLS 262——真正的成本是那趟遍历本身，21.2 万个异构数组的取值）。
+ * 保留这个写法的理由只剩一条：不再逐条元组产生两枚短命对象，解码期的 GC 压力更小。
+ */
 function isDependencyTuple(t: unknown, schemaCount: number, nameCount: number): t is DependencyTuple {
   if (!Array.isArray(t) || t.length !== 6) return false;
-  const [nameIx, indices, count, firstLine, comparisons, sIdx] = t as unknown[];
+  const nameIx = t[0] as unknown;
   if (typeof nameIx !== 'number' || !Number.isInteger(nameIx) || nameIx < 0 || nameIx >= nameCount) return false;
-  if (!Array.isArray(indices) || !indices.every((i) => typeof i === 'string')) return false;
-  if (typeof count !== 'number' || typeof firstLine !== 'number' || typeof sIdx !== 'number') return false;
-  if (!Array.isArray(comparisons) || !comparisons.every(isComparisonTuple)) return false;
+  const indices = t[1] as unknown;
+  if (!Array.isArray(indices)) return false;
+  for (let i = 0; i < indices.length; i++) if (typeof indices[i] !== 'string') return false;
+  if (typeof t[2] !== 'number' || typeof t[3] !== 'number' || typeof t[5] !== 'number') return false;
+  const comparisons = t[4] as unknown;
+  if (!Array.isArray(comparisons)) return false;
+  for (let i = 0; i < comparisons.length; i++) if (!isComparisonTuple(comparisons[i])) return false;
+  const sIdx = t[5] as number;
   return sIdx === -1 || (Number.isInteger(sIdx) && sIdx >= 0 && sIdx < schemaCount);
 }
 
@@ -319,22 +353,281 @@ function isBucketTuple(t: unknown): t is BucketTuple {
   return Array.isArray(conds) && conds.every(isCondTuple);
 }
 
+/* ------------------------------------------------------------------------- *
+ * 解码后的列式依赖表（MEM-5，读数见文件头 v6）
+ * ------------------------------------------------------------------------- */
+
 /**
- * 建**惰性**函数条件壳：`dependencies` 首次被读时才把盘上元组还原成 `StateDependency[]`
- * （`key` 按**同一个** `dependencyKey` 现算——它必须与 `extract.ts` 产出的键逐字节相同，
- * 否则徽章/依赖分组会在"冷算 vs 还原"两条路上分叉）。
+ * 整份快照共用的一张**列式表**（不按文件分：3,971 个桶各建一套 TypedArray 反而多出
+ * 6 万个数组头）。下标语义：
+ * - 依赖级列（长度 = 依赖总数 D）：`nameIx` 指向 `names` 字典，`schemaIx = -1` 表示无；
+ *   `idxStart/idxLen` 指向 `idxPool`，`cmpStart/cmpLen` 指向比较式级列；
+ * - 比较式级列（长度 = 比较式总数 C）：`cmpOp` 指向 `ops`，`cmpText` 指向 `texts`，
+ *   `cmpValKind = 0` ⇒ 值在 `cmpValNum`，`= 1` ⇒ 值在 `cmpValStr`（指向 `valStrings`）。
+ */
+interface DependencyTable {
+  readonly names: readonly string[];
+  readonly schemas: readonly (VariableInfo | null)[];
+  readonly nameIx: Int32Array;
+  readonly count: Int32Array;
+  readonly firstLine: Int32Array;
+  readonly schemaIx: Int32Array;
+  readonly idxStart: Int32Array;
+  readonly idxLen: Int32Array;
+  readonly cmpStart: Int32Array;
+  readonly cmpLen: Int32Array;
+  /** `indices` 逐元素压平后的池下标（真实语料 213,059 个元素 / 3,446 种） */
+  readonly idxPool: Int32Array;
+  readonly idxStrings: readonly string[];
+  readonly cmpOp: Int32Array;
+  readonly cmpText: Int32Array;
+  readonly cmpValKind: Uint8Array;
+  readonly cmpValNum: Float64Array;
+  readonly cmpValStr: Int32Array;
+  readonly ops: readonly string[];
+  readonly texts: readonly string[];
+  readonly valStrings: readonly string[];
+}
+
+/**
+ * 字符串池。`slot` 只在建表期用，建成后即丢弃（表里只留 `items`）。
+ *
+ * 为什么带一格"上一次命中"备忘：解码实测 180 ms 里有 ~100 ms 花在 60 万次 `Map.get` 上
+ * （`indices` 21.3 万 + `op` 18.4 万 + `text` 18.4 万 + 字符串值 2.6 万）。而语料里重复是
+ * **成簇**的（同一个函数的谓词反复落在同一个变量上：`恋慕` 20,194 份、`text = "1"` 30,186 份）
+ * ⇒ 一格备忘就能吃掉大部分查找，且不改变任何产出。
+ */
+interface StringPool {
+  readonly items: string[];
+  readonly slot: Map<string, number>;
+  last: string;
+  lastIx: number;
+}
+
+function newPool(): StringPool {
+  return { items: [], slot: new Map(), last: '', lastIx: -1 };
+}
+
+function intern(pool: StringPool, value: string): number {
+  // `lastIx >= 0` 这一半不能省：备忘初始值是 `last = ''` / `lastIx = -1`，而**空串是合法取值**
+  // （真实语料里 `comparisons[].value` 有 `''`）——少了这一半，第一个空串会"命中"到 -1。
+  if (value === pool.last && pool.lastIx >= 0) return pool.lastIx;
+  const hit = pool.slot.get(value);
+  if (hit !== undefined) {
+    pool.last = value;
+    pool.lastIx = hit;
+    return hit;
+  }
+  const i = pool.items.length;
+  pool.items.push(value);
+  pool.slot.set(value, i);
+  pool.last = value;
+  pool.lastIx = i;
+  return i;
+}
+
+/**
+ * 比较运算符池：真实语料只有 **6** 种（`==` 一种占 84%），为 18.4 万次查找建一张哈希表
+ * 不如直接线性扫 6 个短串（V8 先比长度，2 码元的串几乎零成本）。
+ */
+interface OpPool {
+  readonly items: string[];
+}
+
+function internOp(pool: OpPool, value: string): number {
+  const items = pool.items;
+  for (let i = 0; i < items.length; i++) if (items[i] === value) return i;
+  items.push(value);
+  return items.length - 1;
+}
+
+/**
+ * 两遍建表。**为什么必须两遍**：列式表要先知道总长度才能分配 TypedArray。
+ *
+ * 第一遍**只量长度**（形状只做"能不能安全读 `.length`"的最低限度判断），全量校验放在第二遍
+ * 边填边判——两遍都做完整校验等于把 21.2 万条依赖走三遍（实测多花 ~40 ms），而 fail-closed
+ * 的口径不变：任一元组不合规 ⇒ 整个 `null`，已写进去的数组随返回值一起丢弃。
+ *
+ * 返回表 + 逐条件函数的依赖区间（两个 Int32Array，顺序 = `entries` × 桶内 `conds` 顺序）。
+ * 不用 `{start, len}` 小对象：5.2 万枚对象在稳态里是纯开销（8 字节信息，40 字节壳）。
+ */
+function packTable(
+  entries: readonly (readonly [string, unknown])[],
+  names: readonly string[],
+  schemas: readonly (VariableInfo | null)[],
+): { table: DependencyTable; condDepStart: Int32Array; condDepLen: Int32Array } | null {
+  // ── 第一遍：量长度 ──
+  let depTotal = 0;
+  let cmpTotal = 0;
+  let idxTotal = 0;
+  let condTotal = 0;
+  for (const [, tuple] of entries) {
+    if (!isBucketTuple(tuple)) return null;
+    for (const c of tuple[3]) {
+      condTotal += 1;
+      for (const d of c[4]) {
+        // 只判"能不能读长度"；完整校验在第二遍
+        if (!Array.isArray(d) || !Array.isArray(d[1]) || !Array.isArray(d[4])) return null;
+        depTotal += 1;
+        idxTotal += d[1].length;
+        cmpTotal += d[4].length;
+      }
+    }
+  }
+
+  const nameIx = new Int32Array(depTotal);
+  const count = new Int32Array(depTotal);
+  const firstLine = new Int32Array(depTotal);
+  const schemaIx = new Int32Array(depTotal);
+  const idxStart = new Int32Array(depTotal);
+  const idxLen = new Int32Array(depTotal);
+  const cmpStart = new Int32Array(depTotal);
+  const cmpLen = new Int32Array(depTotal);
+  const idxPool = new Int32Array(idxTotal);
+  const cmpOp = new Int32Array(cmpTotal);
+  const cmpText = new Int32Array(cmpTotal);
+  const cmpValKind = new Uint8Array(cmpTotal);
+  const cmpValNum = new Float64Array(cmpTotal);
+  const cmpValStr = new Int32Array(cmpTotal);
+  const condDepStart = new Int32Array(condTotal);
+  const condDepLen = new Int32Array(condTotal);
+
+  const idxStrings = newPool();
+  const ops: OpPool = { items: [] };
+  const texts = newPool();
+  const valStrings = newPool();
+
+  let d = 0;
+  let k = 0;
+  let p = 0;
+  let ci = 0;
+  // ── 第二遍：校验 + 填充 ──
+  for (const [, tuple] of entries) {
+    // 第一遍已判过形状（`isBucketTuple` 收窄不到这里，故显式断言）
+    const conds = (tuple as BucketTuple)[3];
+    for (const c of conds) {
+      const start = d;
+      for (const dep of c[4]) {
+        if (!isDependencyTuple(dep, schemas.length, names.length)) return null;
+        // 下标直读（不走数组解构的迭代器协议；见 `isDependencyTuple` 头注）
+        const nIx = dep[0];
+        const indices = dep[1];
+        const comparisons = dep[4];
+        nameIx[d] = nIx;
+        count[d] = dep[2];
+        firstLine[d] = dep[3];
+        schemaIx[d] = dep[5];
+        idxStart[d] = k;
+        idxLen[d] = indices.length;
+        for (let i = 0; i < indices.length; i++) idxPool[k + i] = intern(idxStrings, indices[i]!);
+        k += indices.length;
+        cmpStart[d] = p;
+        cmpLen[d] = comparisons.length;
+        for (const cmp of comparisons) {
+          // `isDependencyTuple` 已逐个判过 `isComparisonTuple`
+          cmpOp[p] = internOp(ops, cmp[0]);
+          cmpText[p] = intern(texts, cmp[2]);
+          if (typeof cmp[1] === 'number') {
+            cmpValKind[p] = 0;
+            cmpValNum[p] = cmp[1];
+          } else {
+            cmpValKind[p] = 1;
+            cmpValStr[p] = intern(valStrings, cmp[1]);
+          }
+          p += 1;
+        }
+        d += 1;
+      }
+      condDepStart[ci] = start;
+      condDepLen[ci] = d - start;
+      ci += 1;
+    }
+  }
+
+  return {
+    table: {
+      names,
+      schemas,
+      nameIx,
+      count,
+      firstLine,
+      schemaIx,
+      idxStart,
+      idxLen,
+      cmpStart,
+      cmpLen,
+      idxPool,
+      idxStrings: idxStrings.items,
+      cmpOp,
+      cmpText,
+      cmpValKind,
+      cmpValNum,
+      cmpValStr,
+      ops: ops.items,
+      texts: texts.items,
+      valStrings: valStrings.items,
+    },
+    condDepStart,
+    condDepLen,
+  };
+}
+
+/**
+ * 从列式表物化一个函数的状态依赖（`key` 按**同一个** `dependencyKey` 现算——它必须与
+ * `extract.ts` 产出的键逐字节相同，否则徽章/依赖分组会在"冷算 vs 还原"两条路上分叉）。
+ *
+ * 字段顺序与改前逐字相同（`key, name, indices, count, comparisons, firstLine`）：
+ * 有消费方对 `JSON.stringify` 的结果做比对，顺序也算契约。
+ */
+function materializeDependencies(table: DependencyTable, start: number, len: number): StateDependency[] {
+  const out: StateDependency[] = new Array(len);
+  for (let j = 0; j < len; j++) {
+    const i = start + j;
+    const name = table.names[table.nameIx[i]!]!;
+    const il = table.idxLen[i]!;
+    const indices: string[] = new Array(il);
+    const is = table.idxStart[i]!;
+    for (let n = 0; n < il; n++) indices[n] = table.idxStrings[table.idxPool[is + n]!]!;
+    const cl = table.cmpLen[i]!;
+    const comparisons: ConditionComparison[] = new Array(cl);
+    const cs = table.cmpStart[i]!;
+    for (let n = 0; n < cl; n++) {
+      const q = cs + n;
+      const value = table.cmpValKind[q] === 0 ? table.cmpValNum[q]! : table.valStrings[table.cmpValStr[q]!]!;
+      comparisons[n] = { op: table.ops[table.cmpOp[q]!]!, value, text: table.texts[table.cmpText[q]!]! };
+    }
+    const dep: StateDependency = {
+      key: dependencyKey({ name, indices }),
+      name,
+      indices,
+      count: table.count[i]!,
+      comparisons,
+      firstLine: table.firstLine[i]!,
+    };
+    const sIdx = table.schemaIx[i]!;
+    if (sIdx >= 0) dep.schema = table.schemas[sIdx] as VariableInfo;
+    // key 就是上一行现算的 ⇒ 登记给 `encodeBuckets` 的守门看（见 `keyDerivedOnDecode`）
+    keyDerivedOnDecode.add(dep);
+    out[j] = dep;
+  }
+  return out;
+}
+
+/**
+ * 建**惰性**函数条件壳：`dependencies` 首次被读时才从列式表物化成 `StateDependency[]`。
  *
  * 校验（`isDependencyTuple` / `isComparisonTuple` / 下标越界）在 decode 时**已逐条做完**
- * （fail-closed 不打折），这里只是把"造 16 万级对象"这一步推迟到首个真正的消费方：
+ * （fail-closed 不打折），这里只是把"造 21 万级对象"这一步推迟到首个真正的消费方：
  * 开项目级联只吃桶级 stats 与 `normalizedName`，不该替一次查看面板的点击买单。
  */
 function lazyConditions(
   path: string,
   c: CondTuple,
-  names: readonly string[],
-  schemas: readonly (VariableInfo | null)[],
+  table: DependencyTable,
+  depStart: number,
+  depLen: number,
 ): FunctionConditions {
-  const [normalizedName, startLine, predicateCount, unparsedCount, deps] = c;
+  const [normalizedName, startLine, predicateCount, unparsedCount] = c;
   const cond: FunctionConditions = {
     normalizedName,
     filePath: path,
@@ -342,22 +635,7 @@ function lazyConditions(
     predicateCount,
     unparsedCount,
     get dependencies(): StateDependency[] {
-      const built = deps.map((d): StateDependency => {
-        const [nameIx, indices, count, firstLine, comparisons, sIdx] = d;
-        const name = names[nameIx]!;
-        const dep: StateDependency = {
-          key: dependencyKey({ name, indices }),
-          name,
-          indices,
-          count,
-          comparisons: comparisons.map((cmp): ConditionComparison => ({ op: cmp[0], value: cmp[1], text: cmp[2] })),
-          firstLine,
-        };
-        if (sIdx >= 0) dep.schema = schemas[sIdx] as VariableInfo;
-        // key 就是上一行现算的 ⇒ 登记给 `encodeBuckets` 的守门看（见 `keyDerivedOnDecode`）
-        keyDerivedOnDecode.add(dep);
-        return dep;
-      });
+      const built = materializeDependencies(table, depStart, depLen);
       // 读一次建对象，随后换成普通值属性（再次读写零开销；`toEqual` 深比照常走通）
       Object.defineProperty(cond, 'dependencies', { value: built, enumerable: true, writable: true, configurable: true });
       return built;
@@ -386,15 +664,17 @@ export function decodeBuckets(
   if (!Array.isArray(s.names) || !s.names.every((v) => typeof v === 'string')) return null;
   const names = s.names as readonly string[];
   const schemas = s.schemas as readonly (VariableInfo | null)[];
+  const entries = Object.entries(s.buckets as Record<string, unknown>);
+
+  const packed = packTable(entries, names, schemas);
+  if (packed === null) return null;
+  const { table, condDepStart, condDepLen } = packed;
 
   const out: Record<string, FileBucket> = {};
-  for (const [path, tuple] of Object.entries(s.buckets as Record<string, unknown>)) {
-    if (!isBucketTuple(tuple)) return null;
-    const [mtimeMs, size, st, conds] = tuple;
-    const depsOk = conds.every((c) =>
-      c[4].every((d) => isDependencyTuple(d, schemas.length, names.length)),
-    );
-    if (!depsOk) return null;
+  let spanAt = 0;
+  for (const [path, tuple] of entries) {
+    // 第一遍已判过：这里形状一定成立（`packTable` 对同一个 `entries` 走过两遍）
+    const [mtimeMs, size, st, conds] = tuple as BucketTuple;
     out[path] = {
       mtimeMs,
       size,
@@ -405,7 +685,7 @@ export function decodeBuckets(
         unparsed: st[3],
         dependencies: st[4],
       },
-      conds: conds.map((c) => lazyConditions(path, c, names, schemas)),
+      conds: conds.map((c) => lazyConditions(path, c, table, condDepStart[spanAt]!, condDepLen[spanAt++]!)),
     };
   }
   return { buckets: out, schemas };

@@ -129,6 +129,49 @@ describe('v3 按文件桶编解码', () => {
     expect(back!.buckets['/a.ERB']!.conds).toEqual(src.get('/a.ERB')!.conds);
   });
 
+  /**
+   * MEM-5（列式表 + 字符串池）的边界：池的"上一次命中"备忘初值是空串，若不加
+   * `lastIx >= 0` 这一半，**第一个空串会命中到 -1**（实测在真实语料上把一条
+   * `value: ''` 变成 `undefined`）。空串在这里是合法取值，不是"缺字段"。
+   */
+  it('字符串池边界：空串 value / 空串索引必须原样往返（备忘初值不许吞掉空串）', () => {
+    const deps: StateDependency[] = [
+      {
+        key: dependencyKey({ name: 'CFLAG', indices: [''] }),
+        name: 'CFLAG',
+        indices: [''],
+        count: 1,
+        comparisons: [
+          { op: '==', value: '', text: '' },
+          { op: '==', value: '', text: '' },
+        ],
+        firstLine: 3,
+      },
+      {
+        key: dependencyKey({ name: 'TALENT', indices: ['恋慕'] }),
+        name: 'TALENT',
+        indices: ['恋慕'],
+        count: 2,
+        // 数字 0 与字符串 '0' 必须分开（同 0 / '0' / 缺字段三分）
+        comparisons: [
+          { op: '>=', value: 0, text: '0' },
+          { op: '==', value: '0', text: '0' },
+        ],
+        firstLine: 4,
+      },
+    ];
+    const src = new Map<string, FileBucket>([
+      ['/a.ERB', bucket(1, [{ normalizedName: 'A', filePath: '/a.ERB', startLine: 1, predicateCount: 2, unparsedCount: 0, dependencies: deps }])],
+    ]);
+    const { back } = roundTrip(src);
+    const got = back!.buckets['/a.ERB']!.conds[0]!.dependencies;
+    expect(got).toEqual(deps);
+    // 类型也不能被抹平：0 与 '0' 在 === 下不等，但列式表用 kind 位分开存，必须原样出来
+    expect(typeof got[1]!.comparisons[0]!.value).toBe('number');
+    expect(typeof got[1]!.comparisons[1]!.value).toBe('string');
+    expect(got[0]!.comparisons[0]!.value).toBe('');
+  });
+
   it('mtime 为 null 必须原样往返（判据不可得的保守信号不能被编造成数字）', () => {
     const src = new Map<string, FileBucket>([['/a.ERB', bucket(null, [cond('A', '/a.ERB', [])])]]);
     const { back } = roundTrip(src);
