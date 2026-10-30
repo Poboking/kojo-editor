@@ -14,6 +14,10 @@
  * - `bus.recent(n) / on(name, cb)`：内核事件总线的旁听（环形缓冲 + 订阅）；
  * - `editor.*`：焦点编辑器的读数与受控写（经 editor-pane-registry 的登记簿，
  *   不碰 EditorPane 源码）：info / setValue / type / setCursor / markers；
+ * - `editor` 的**语言面读数**（1029 批，只读、绝不抛）：`actions()`（编辑器动作表）、
+ *   `hoverAt()`（走真 hover provider 链读屏上文本）、`suggestAt()`（真补全弹窗候选）、
+ *   `tokens()`（词法 token）、`foldingRanges()`（折叠区间）、`format()`（格式化前后长度）、
+ *   `setSelection()` / `revealLine()`（受控定位）——PITFALLS 247 的手工绕法在此收编成 API；
  * - `invoke(cmd, args)`：直达宿主命令（桌面壳 = 真 Tauri IPC；浏览器 = 调试宿）；
  * - `dialogPolicy.{arm,armed,clear,status}`：对话框一次性自动应答（真壳 fetch 腿 /
  *   web 页面腿；只答**只选取器** choose_directory 与 pick_save_path——都是"只选不写"，
@@ -26,6 +30,8 @@ import { invoke, isTauri } from '../bridge/invoke';
 import { KERNEL_EVENT_NAMES, type GameProject, type KernelEventName } from '@kojo/plugin-api';
 import { version as APP_VERSION } from '../../package.json';
 import type { Kernel } from '@kojo/kernel';
+// 只取类型面：语言面读数需要 IStandaloneCodeEditor 的签名，但不能把 Monaco 运行时拖进本模块
+import type * as Monaco from '../monaco/entry';
 import { getDebugCommandRunner, whenDebugKernel } from './debug-registry';
 import { webHostActive, webHostOrigin } from './web-host-transport';
 import {
@@ -68,6 +74,24 @@ export interface KojoDebugApi {
     type(text: string): boolean;
     setCursor(line: number, column: number): boolean;
     markers(): Promise<{ resource: string; severity: number; message: string; line: number }[]>;
+    /** 编辑器动作表（`getSupportedActions()`）：`enabled` 是 `isSupported()` 的实测值 */
+    actions(): DebugEditorAction[];
+    /** 在指定位置走真 hover provider 链读屏上文本；超时 / 无内容 ⇒ null（不抛） */
+    hoverAt(line: number, column: number, opts?: { timeoutMs?: number }): Promise<DebugHoverReading | null>;
+    /** 在指定位置触发真补全弹窗并读候选；读不到 ⇒ `{items:[],count:0}` */
+    suggestAt(
+      line: number,
+      column: number,
+      opts?: { timeoutMs?: number; limit?: number },
+    ): Promise<DebugSuggestReading>;
+    /** 整篇格式化：`before`/`after` 是 `model.getValueLength()` */
+    format(): Promise<DebugFormatReading>;
+    setSelection(startLine: number, startColumn: number, endLine: number, endColumn: number): boolean;
+    revealLine(line: number, reveal?: 'center' | 'top' | 'bottom'): boolean;
+    /** 折叠区间（尽力而为：Monaco 没有公开 API，内部形状随版本变 ⇒ 拿不到回 null） */
+    foldingRanges(): DebugFoldingRange[] | null;
+    /** 词法 token（`monaco.editor.tokenize`，逐行；行号 1 基） */
+    tokens(lineFrom: number, lineTo: number): Promise<DebugTokenLine[]>;
   };
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   /**
@@ -109,6 +133,164 @@ export interface EditorInfo {
   readonly value: string;
   readonly cursor: { readonly line: number; readonly column: number };
   readonly selection: string | null;
+}
+
+/* ------------------------- 语言面读数（1029 批，只读） ------------------------- */
+
+export interface DebugEditorAction {
+  readonly id: string;
+  readonly label: string;
+  /** Monaco 的 `alias` 在运行时可能缺席（类型声明是必选）：缺席时不挂这个键 */
+  readonly alias?: string;
+  readonly enabled: boolean;
+}
+
+export interface DebugHoverReading {
+  /** 悬停面板 innerText 的裁剪版（行内空白归一、超长截断） */
+  readonly text: string;
+  /** 逐条 `.hover-row` 文本（没有行容器时退化为正文按行切） */
+  readonly rows: string[];
+  readonly line: number;
+  readonly column: number;
+}
+
+export interface DebugSuggestItem {
+  readonly label: string;
+  readonly detail: string;
+  readonly kind: string;
+}
+
+export interface DebugSuggestReading {
+  /** 受 `limit` 截断的候选（读不到 ⇒ 空数组） */
+  readonly items: DebugSuggestItem[];
+  /** 弹窗里实际读到的候选行数（未截断；空弹窗 ⇒ 0） */
+  readonly count: number;
+}
+
+export interface DebugFormatReading {
+  readonly ok: boolean;
+  readonly changed: boolean;
+  readonly before: number;
+  readonly after: number;
+  readonly elapsedMs: number;
+}
+
+export interface DebugFoldingRange {
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly kind: string;
+}
+
+export interface DebugTokenLine {
+  readonly line: number;
+  readonly tokens: readonly { readonly type: string; readonly startIndex: number }[];
+}
+
+/** 悬浮文本/行的上限：悬停面板里整篇文档也可能被塞进来，读数不该原样搬 */
+const HOVER_TEXT_LIMIT = 2000;
+const HOVER_ROW_LIMIT = 40;
+const HOVER_ROW_CHAR_LIMIT = 300;
+const HOVER_TIMEOUT_DEFAULT_MS = 2000;
+const SUGGEST_TIMEOUT_DEFAULT_MS = 2000;
+const SUGGEST_LIMIT_DEFAULT = 50;
+const LANGUAGE_POLL_INTERVAL_MS = 50;
+const LANGUAGE_TIMEOUT_MIN_MS = 50;
+const LANGUAGE_TIMEOUT_MAX_MS = 15000;
+
+/** 纯函数的入参形态：真实 `IEditorAction` 结构兼容，单测喂普通对象即可 */
+export interface SupportedActionLike {
+  readonly id?: unknown;
+  readonly label?: unknown;
+  readonly alias?: unknown;
+  isSupported?: () => boolean;
+}
+
+/**
+ * 动作表映射（纯函数）：
+ * - `id` 空 ⇒ 丢弃（没有 id 动作也调不到，留着只会污染读数）；
+ * - `label` 缺 ⇒ 退 alias ⇒ 退 id（三处都空就当没标签，用 id 顶上）；
+ * - `alias` 缺 ⇒ **不挂键**（与 `WebHostConfig.token` 同一条"空值不挂键"纪律）；
+ * - `enabled` 取自 `isSupported()`，拿不到 / 抛错 ⇒ 当 true（表里存在即视为可用，
+ *   宁可给"可能可用"也不谎报不可用）。
+ */
+export function mapSupportedActions(actions: readonly SupportedActionLike[]): DebugEditorAction[] {
+  const out: DebugEditorAction[] = [];
+  if (!Array.isArray(actions)) return out;
+  for (const action of actions) {
+    if (!action || typeof action !== 'object') continue;
+    const id = normalizeOneLine(action.id);
+    if (!id) continue;
+    const alias = normalizeOneLine(action.alias);
+    const label = normalizeOneLine(action.label) || alias || id;
+    let enabled = true;
+    if (typeof action.isSupported === 'function') {
+      try {
+        enabled = action.isSupported() !== false;
+      } catch {
+        enabled = true;
+      }
+    }
+    out.push({ id, label, ...(alias ? { alias } : {}), enabled });
+  }
+  return out;
+}
+
+/**
+ * 悬停文本裁剪（纯函数）：按行归一空白、丢空行、单行超 300 字符截断、最多 40 行、
+ * 总长 2000 字符截断。读数要的是"人能看的那几行"，不是 DOM 的原始拼串。
+ */
+export function slimHoverText(raw: string): { text: string; rows: string[] } {
+  const source = typeof raw === 'string' ? raw : '';
+  const rows = source
+    .split(/\r?\n/)
+    .map((line) => line.replace(/[ \t\u00a0]+/g, ' ').trim())
+    .filter((line) => line.length > 0)
+    .slice(0, HOVER_ROW_LIMIT)
+    .map((line) => (line.length > HOVER_ROW_CHAR_LIMIT ? `${line.slice(0, HOVER_ROW_CHAR_LIMIT)}…` : line));
+  const joined = rows.join('\n');
+  const text = joined.length > HOVER_TEXT_LIMIT ? `${joined.slice(0, HOVER_TEXT_LIMIT)}…` : joined;
+  return { text, rows };
+}
+
+/** 补全行的入参形态（DOM 侧按这些键读；纯函数不碰 DOM） */
+export interface SuggestRowLike {
+  /** `.label-name` 的文本 */
+  readonly labelName?: unknown;
+  /** 行的 aria-label（`.label-name` 缺席时的回退） */
+  readonly ariaLabel?: unknown;
+  /** `.details-label` 的文本（缺失 ⇒ 空串） */
+  readonly detailsLabel?: unknown;
+  /** 行的 class（`kind-*` 用于取候选种类） */
+  readonly className?: unknown;
+}
+
+/**
+ * 补全候选行映射（纯函数）：
+ * - `label` = `.label-name` ⇒ 回退 aria-label；两者都空 ⇒ 丢弃该行（没有可读名字的候选
+ *   对调试没有价值，留着只会让 count 虚高）；
+ * - `detail` 缺失 ⇒ 空串（不是 null：调用方不必再判两种空值）；
+ * - `kind` = 行 class 里的 `kind-<x>` ⇒ 回退整条 aria-label（Monaco 的候选种类没有稳定
+ *   的公开 DOM 契约，读不到就交回原文，不编造）。
+ */
+export function mapSuggestRows(rows: readonly SuggestRowLike[]): DebugSuggestItem[] {
+  const out: DebugSuggestItem[] = [];
+  if (!Array.isArray(rows)) return out;
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const labelName = normalizeOneLine(row.labelName);
+    const ariaLabel = normalizeOneLine(row.ariaLabel);
+    const label = labelName || ariaLabel;
+    if (!label) continue;
+    const kindClass = /(?:^|\s)kind-([a-z-]+)/i.exec(normalizeOneLine(row.className));
+    const kind = kindClass?.[1] ?? ariaLabel;
+    out.push({ label, detail: normalizeOneLine(row.detailsLabel), kind });
+  }
+  return out;
+}
+
+/** 单行归一：非字符串 ⇒ 空串；折叠空白与换行（读数一律单行） */
+function normalizeOneLine(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
 }
 
 const BUS_RING_LIMIT = 500;
@@ -164,6 +346,160 @@ export function slimPayload(payload: unknown, depth = 0): unknown {
     return out;
   }
   return String(payload);
+}
+
+/* --------------------- 语言面读数的浏览器侧取数腿（不导出） --------------------- */
+
+type LiveEditor = Monaco.editor.IStandaloneCodeEditor;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/** 外部（eval 里手敲）可传任意值：非有限数走缺省，且夹到 [50, 15000] 免得挂死 */
+function clampTimeoutMs(value: unknown, fallback: number): number {
+  const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.min(Math.max(LANGUAGE_TIMEOUT_MIN_MS, n), LANGUAGE_TIMEOUT_MAX_MS);
+}
+
+function clampInt(value: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+  return Math.min(Math.max(min, n), max);
+}
+
+/**
+ * 屏上"有内容且没被隐藏"的悬停面板。Monaco 的 hover 容器类名 `monaco-hover` 是
+ * `base/browser/ui/hover/hoverWidget.js` 里硬编码的（0.57 核对过），收起时挂 `hidden`。
+ * 从后往前找：后挂的面板才是当前那条 provider 链的结算。
+ */
+function visibleHoverNode(): HTMLElement | null {
+  if (typeof document === 'undefined') return null;
+  const nodes = document.querySelectorAll<HTMLElement>('.monaco-hover');
+  for (let i = nodes.length - 1; i >= 0; i -= 1) {
+    const node = nodes[i];
+    if (!node || node.classList.contains('hidden')) continue;
+    if ((node.textContent ?? '').trim() === '') continue;
+    return node;
+  }
+  return null;
+}
+
+async function waitForHoverNode(timeoutMs: number): Promise<HTMLElement | null> {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    const node = visibleHoverNode();
+    if (node) return node;
+    if (performance.now() >= deadline) return null;
+    await sleep(LANGUAGE_POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * 收起悬停：先用正牌 `editor.action.hideHover`，没有这枚动作的版本退化为再 run 一次
+ * `showHover`（它是切换语义）。两步都是尽力而为——收不起来不该把读数变成失败。
+ */
+function hideHoverNow(ed: LiveEditor): void {
+  try {
+    const hide = ed.getAction('editor.action.hideHover');
+    if (hide) {
+      void hide.run().catch(() => undefined);
+      return;
+    }
+    const show = ed.getAction('editor.action.showHover');
+    if (show) void show.run().catch(() => undefined);
+  } catch {
+    /* 收起失败不影响已读到的文本 */
+  }
+}
+
+/** 补全弹窗里当前"真实存在于 DOM"的候选行（monaco-list 是虚拟列表，只读得到屏上那几行） */
+function visibleSuggestRows(): HTMLElement[] {
+  if (typeof document === 'undefined') return [];
+  const widget = document.querySelector<HTMLElement>('.suggest-widget.visible');
+  if (!widget) return [];
+  return Array.from(widget.querySelectorAll<HTMLElement>('.monaco-list-row'));
+}
+
+async function waitForSuggestRows(timeoutMs: number): Promise<HTMLElement[]> {
+  const deadline = performance.now() + timeoutMs;
+  for (;;) {
+    const rows = visibleSuggestRows();
+    if (rows.length > 0) return rows;
+    if (performance.now() >= deadline) return [];
+    await sleep(LANGUAGE_POLL_INTERVAL_MS);
+  }
+}
+
+function readSuggestRow(row: HTMLElement): SuggestRowLike {
+  return {
+    labelName: row.querySelector('.label-name')?.textContent ?? '',
+    ariaLabel: row.getAttribute('aria-label') ?? '',
+    detailsLabel: row.querySelector('.details-label')?.textContent ?? '',
+    className: row.className,
+  };
+}
+
+/**
+ * 折叠区间：Monaco 至今**没有公开 API**（`editor.api.d.ts` 只有 `editor.action.*`），
+ * 只能摸贡献点内部。0.57 的形状是 `getFoldingModel()` 返回 **Promise**、模型上叫
+ * `regions`（`FoldingRegions` 实例，带 `length` + `getStartLineNumber(i)`）；早期版本是
+ * 同步返回 + `ranges` 数组。两种都探，探不到（含 Promise 形态——同步 API 不能等）⇒ null：
+ * **不许假装有**，调用方看到 null 才知道这条路在当前版本上不通。
+ */
+function foldingRangesOf(ed: LiveEditor): DebugFoldingRange[] | null {
+  try {
+    const contribution = (
+      ed as unknown as { getContribution(id: string): unknown }
+    ).getContribution('editor.contrib.folding');
+    if (!contribution || typeof contribution !== 'object') return null;
+    const holder = contribution as { foldingModel?: unknown; getFoldingModel?: () => unknown };
+    // 0.57 的私有字段 `foldingModel` 是同步可用的那一枚；没有才问方法
+    const model = holder.foldingModel ?? holder.getFoldingModel?.();
+    if (!model || typeof model !== 'object') return null;
+    if (typeof (model as { then?: unknown }).then === 'function') return null;
+    return mapFoldingModel(model);
+  } catch {
+    return null;
+  }
+}
+
+function mapFoldingModel(model: object): DebugFoldingRange[] | null {
+  const arrayRanges = (model as { ranges?: unknown }).ranges;
+  if (Array.isArray(arrayRanges)) {
+    const out: DebugFoldingRange[] = [];
+    for (const item of arrayRanges) {
+      if (!item || typeof item !== 'object') continue;
+      const r = item as { startLineNumber?: unknown; endLineNumber?: unknown; kind?: unknown };
+      if (typeof r.startLineNumber !== 'number' || typeof r.endLineNumber !== 'number') continue;
+      out.push({
+        startLine: r.startLineNumber,
+        endLine: r.endLineNumber,
+        kind: typeof r.kind === 'string' ? r.kind : '',
+      });
+    }
+    return out;
+  }
+  // 0.57：FoldingRegions（不是数组，用 length + 访问器逐条取）
+  const regions = (model as { regions?: unknown }).regions;
+  if (!regions || typeof regions !== 'object') return null;
+  const length = (regions as { length?: unknown }).length;
+  if (typeof length !== 'number' || !Number.isFinite(length)) return null;
+  const reader = regions as {
+    getStartLineNumber(index: number): unknown;
+    getEndLineNumber(index: number): unknown;
+    getType?: (index: number) => unknown;
+  };
+  const out: DebugFoldingRange[] = [];
+  for (let i = 0; i < length; i += 1) {
+    const startLine = reader.getStartLineNumber(i);
+    const endLine = reader.getEndLineNumber(i);
+    if (typeof startLine !== 'number' || typeof endLine !== 'number') continue;
+    const kind = reader.getType?.(i);
+    out.push({ startLine, endLine, kind: typeof kind === 'string' ? kind : '' });
+  }
+  return out;
 }
 
 export function installDebug(): KojoDebugApi {
@@ -291,6 +627,152 @@ export function installDebug(): KojoDebugApi {
         return monaco.editor
           .getModelMarkers({})
           .map((m) => ({ resource: m.resource.toString(), severity: m.severity, message: m.message, line: m.startLineNumber }));
+      },
+      actions() {
+        const ed = focusedCtx()?.editorRef.current;
+        if (!ed) return [];
+        try {
+          return mapSupportedActions(ed.getSupportedActions());
+        } catch {
+          return [];
+        }
+      },
+      async hoverAt(line, column, opts) {
+        const ed = focusedCtx()?.editorRef.current;
+        if (!ed || !Number.isFinite(line) || !Number.isFinite(column)) return null;
+        const target = { lineNumber: Math.max(1, Math.floor(line)), column: Math.max(1, Math.floor(column)) };
+        const timeoutMs = clampTimeoutMs(opts?.timeoutMs, HOVER_TIMEOUT_DEFAULT_MS);
+        try {
+          ed.setPosition(target);
+          ed.focus();
+          const show = ed.getAction('editor.action.showHover');
+          if (!show) return null; // 没装 hover 贡献 ⇒ 这条路本来就不通，别等满超时
+          // 不等 run()：真 provider 链慢时它会把读数拖住，且它自己可能永远不 resolve；
+          // 轮询 DOM 才是唯一可靠的"等它画出来"。rejection 就地吞掉，别变成未处理拒绝。
+          void show.run().catch(() => undefined);
+          const node = await waitForHoverNode(timeoutMs);
+          if (!node) return null;
+          const body = slimHoverText(node.innerText || node.textContent || '');
+          const rowTexts = Array.from(node.querySelectorAll<HTMLElement>('.hover-row'))
+            .map((row) => row.innerText || row.textContent || '')
+            .filter((text) => text.trim() !== '');
+          // 行容器是结构化读数的主口径；它缺席（或无文本）时退化为正文按行切
+          const rows = rowTexts.length > 0 ? slimHoverText(rowTexts.join('\n')).rows : body.rows;
+          if (body.text === '' && rows.length === 0) return null;
+          return { text: body.text, rows, line: target.lineNumber, column: target.column };
+        } catch {
+          return null;
+        } finally {
+          // 读数完必须收起：留着悬停会盖住下一次点击 / 滚动
+          hideHoverNow(ed);
+        }
+      },
+      async suggestAt(line, column, opts) {
+        const ed = focusedCtx()?.editorRef.current;
+        if (!ed || !Number.isFinite(line) || !Number.isFinite(column)) return { items: [], count: 0 };
+        const target = { lineNumber: Math.max(1, Math.floor(line)), column: Math.max(1, Math.floor(column)) };
+        const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SUGGEST_TIMEOUT_DEFAULT_MS);
+        const limit = clampInt(opts?.limit, SUGGEST_LIMIT_DEFAULT, 1, 500);
+        try {
+          ed.setPosition(target);
+          ed.focus();
+          ed.trigger('kojo-debug', 'editor.action.triggerSuggest', {});
+          const rows = await waitForSuggestRows(timeoutMs);
+          const mapped = mapSuggestRows(rows.map(readSuggestRow));
+          return { items: mapped.slice(0, limit), count: mapped.length };
+        } catch {
+          return { items: [], count: 0 };
+        } finally {
+          try {
+            // 与契约同形：source='keyboard'，handlerId='hideSuggestWidget'
+            ed.trigger('keyboard', 'hideSuggestWidget', null);
+          } catch {
+            /* 收起失败不影响已读到的候选 */
+          }
+        }
+      },
+      async format() {
+        const ed = focusedCtx()?.editorRef.current;
+        const model = ed?.getModel();
+        if (!ed || !model) return { ok: false, changed: false, before: 0, after: 0, elapsedMs: 0 };
+        const before = model.getValueLength();
+        const startedAt = performance.now();
+        const finish = (ok: boolean): DebugFormatReading => {
+          const after = model.getValueLength();
+          return { ok, changed: after !== before, before, after, elapsedMs: Math.round(performance.now() - startedAt) };
+        };
+        try {
+          const action = ed.getAction('editor.action.formatDocument');
+          if (!action) return finish(false);
+          await action.run();
+          return finish(true);
+        } catch {
+          // provider 抛错时内容可能已改了一半：仍然给出真实的前后长度，ok=false 如实
+          return finish(false);
+        }
+      },
+      setSelection(startLine, startColumn, endLine, endColumn) {
+        const ed = focusedCtx()?.editorRef.current;
+        const model = ed?.getModel();
+        if (!ed || !model) return false;
+        if (![startLine, startColumn, endLine, endColumn].every((n) => Number.isFinite(n))) return false;
+        try {
+          const lineCount = model.getLineCount();
+          const sl = Math.min(Math.max(1, Math.floor(startLine)), lineCount);
+          const el = Math.min(Math.max(1, Math.floor(endLine)), lineCount);
+          const sc = Math.min(Math.max(1, Math.floor(startColumn)), model.getLineMaxColumn(sl));
+          const ec = Math.min(Math.max(1, Math.floor(endColumn)), model.getLineMaxColumn(el));
+          ed.setSelection({ startLineNumber: sl, startColumn: sc, endLineNumber: el, endColumn: ec });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      revealLine(line, reveal) {
+        const ed = focusedCtx()?.editorRef.current;
+        const model = ed?.getModel();
+        if (!ed || !model || !Number.isFinite(line)) return false;
+        const target = Math.min(Math.max(1, Math.floor(line)), model.getLineCount());
+        try {
+          // 公开面只有 center / nearTop 两个定位变体；'bottom' 没有对应 API，
+          // 用 revealLine（最小滚动，已是能保证可见的最接近语义）兜住，不编造对齐。
+          if (reveal === 'center') ed.revealLineInCenter(target);
+          else if (reveal === 'top') ed.revealLineNearTop(target);
+          else ed.revealLine(target);
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      foldingRanges() {
+        const ed = focusedCtx()?.editorRef.current;
+        if (!ed) return null;
+        return foldingRangesOf(ed);
+      },
+      async tokens(lineFrom, lineTo) {
+        const ed = focusedCtx()?.editorRef.current;
+        const model = ed?.getModel();
+        if (!ed || !model) return [];
+        if (!Number.isFinite(lineFrom) || !Number.isFinite(lineTo)) return [];
+        try {
+          // dev 下与应用同一模块实例（PITFALLS 247 的那条 `import('/src/monaco/entry.ts')` 同源）
+          const monaco = await import('../monaco/entry');
+          const lineCount = model.getLineCount();
+          const from = Math.min(Math.max(1, Math.floor(lineFrom)), lineCount);
+          const to = Math.min(Math.max(1, Math.floor(lineTo)), lineCount);
+          if (to < from) return [];
+          const languageId = model.getLanguageId();
+          const out: DebugTokenLine[] = [];
+          for (let line = from; line <= to; line += 1) {
+            // tokenize 吃的是"一行文本"：多行一起喂会被当成一行，行号就对不上了
+            const raw = monaco.editor.tokenize(model.getLineContent(line), languageId);
+            const tokens = (raw[0] ?? []).map((token) => ({ type: token.type, startIndex: token.offset }));
+            out.push({ line, tokens });
+          }
+          return out;
+        } catch {
+          return [];
+        }
       },
     },
     invoke(cmd, args) {

@@ -805,3 +805,271 @@ describe('调试宿 · 网络命令 fail-closed', () => {
     expect(content).toContain('冒烟：前端错误');
   });
 });
+
+/* =====================================================================================
+ * 2026-10-30 升级批（契约 §1.1）：token 鉴权 + Origin 白名单。
+ *
+ * 这一层是"本机任意读写后门"的唯一门闩——宿侧漏一条路由，页面就说不出"没权限"，
+ * 而是直接给出去。所以每条路由都单独钉：/invoke、/events、/config 要页面 token；
+ * /policy 只认 CLI 头（页面 token 改不动读域）；/health 免鉴权；/config 只回 authRequired。
+ * ===================================================================================*/
+describe('调试宿 · token 鉴权（2026-10-30 升级批）', () => {
+  const authRoot = path.join(os.tmpdir(), `kojo-debug-auth-test-${process.pid}`);
+  const token = 'page-token-0f1e2d3c4b5a69788796a5b4';
+  const policyToken = 'policy-token-9a8b7c6d5e4f30211203f4e5';
+  const AUTH_ERROR =
+    '调试宿鉴权失败：缺 token 或 token 不匹配（以会话文件里的 token 为准）';
+  let authServer: Awaited<ReturnType<typeof createDebugServer>>;
+  let authBase = '';
+  let authSandbox = '';
+
+  const invokeRaw = (init: RequestInit & { path?: string } = {}) =>
+    fetch(`${authBase}${init.path ?? '/invoke'}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cmd: 'app_data_dir', args: {} }),
+      ...init,
+    });
+
+  beforeAll(async () => {
+    authSandbox = path.join(authRoot, 'sandbox');
+    await fs.mkdir(authSandbox, { recursive: true });
+    await fs.mkdir(path.join(authRoot, 'appdata'), { recursive: true });
+    authServer = await createDebugServer({
+      port: 0,
+      sandbox: authSandbox,
+      appdata: path.join(authRoot, 'appdata'),
+      token,
+      policyToken,
+    });
+    authBase = `http://127.0.0.1:${authServer.port}`;
+  }, 30000);
+
+  afterAll(async () => {
+    await authServer.close();
+    await fs.rm(authRoot, { recursive: true, force: true });
+  });
+
+  it('无 token ⇒ /invoke、/events、/config 全 401（文案与契约逐字一致）', async () => {
+    for (const req of [
+      invokeRaw(),
+      fetch(`${authBase}/config`),
+      fetch(`${authBase}/events`),
+    ]) {
+      const res = await req;
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ ok: false, error: AUTH_ERROR });
+    }
+  });
+
+  it('错 token 仍 401（等长不等值 / 不等长都不许过）', async () => {
+    const wrongSameLen = 'x'.repeat(token.length);
+    const a = await invokeRaw({ headers: { 'content-type': 'application/json', authorization: `Bearer ${wrongSameLen}` } });
+    expect(a.status).toBe(401);
+    const b = await fetch(`${authBase}/config?token=short`);
+    expect(b.status).toBe(401);
+  });
+
+  it('Bearer 与 ?token= 两条通道都放行（页面 fetch 走头，EventSource 只能走 query）', async () => {
+    const viaHeader = await invokeRaw({ headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` } });
+    expect(viaHeader.status).toBe(200);
+    expect(((await viaHeader.json()) as { ok: boolean }).ok).toBe(true);
+
+    const viaQuery = await fetch(`${authBase}/config?token=${encodeURIComponent(token)}`);
+    expect(viaQuery.status).toBe(200);
+
+    // SSE 不能改请求头 ⇒ query 是它唯一的通道，必须真能建立
+    const controller = new AbortController();
+    const sse = await fetch(`${authBase}/events?token=${encodeURIComponent(token)}`, { signal: controller.signal });
+    expect(sse.status).toBe(200);
+    expect(sse.headers.get('content-type')).toContain('text/event-stream');
+    controller.abort();
+  });
+
+  it('/policy 只认 x-kojo-policy-token：缺头 401，query 里的页面 token 不算数，页面 token 也不算数', async () => {
+    const postPolicy = (headers: Record<string, string> = {}, query = '') =>
+      fetch(`${authBase}/policy${query}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...headers },
+        body: JSON.stringify({ chooseDir: null }),
+      });
+
+    const noHeader = await postPolicy();
+    expect(noHeader.status).toBe(401);
+    expect(await noHeader.json()).toEqual({ ok: false, error: AUTH_ERROR });
+
+    // query 带页面 token 也不行：改 policy 等于改读域，不能与页面同权
+    const viaQuery = await postPolicy({}, `?token=${encodeURIComponent(token)}`);
+    expect(viaQuery.status).toBe(401);
+
+    // 页面 token 冒充 CLI 头也不行（两枚 token 互相独立）
+    const pageAsPolicy = await postPolicy({ 'x-kojo-policy-token': token });
+    expect(pageAsPolicy.status).toBe(401);
+
+    const ok = await postPolicy({ 'x-kojo-policy-token': policyToken });
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('/health 永远免鉴权（不带任何秘密）', async () => {
+    const res = await fetch(`${authBase}/health`);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; service: string };
+    expect(body).toMatchObject({ ok: true, service: 'kojo-debug-host' });
+  });
+
+  it('/config.authRequired=true，且应答里绝不出现 token 明文', async () => {
+    const res = await fetch(`${authBase}/config`, { headers: { authorization: `Bearer ${token}` } });
+    const text = await res.text();
+    expect(JSON.parse(text).authRequired).toBe(true);
+    expect(text).not.toContain(token);
+    expect(text).not.toContain(policyToken);
+  });
+});
+
+describe('调试宿 · Origin 白名单（无论有没有 token 都生效）', () => {
+  const run = async (origin?: string) =>
+    fetch(`${base}/health`, origin === undefined ? {} : { headers: { origin } });
+
+  it('非回环 Origin ⇒ 403，错误里带上是哪一个来源', async () => {
+    const res = await run('http://evil.example');
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { ok: boolean; error: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('拒绝跨站来源');
+    expect(body.error).toContain('evil.example');
+    // 端口不同也是另一个来源；"看起来像回环"的域名不算回环
+    expect((await run('http://127.0.0.1.evil.example:5173')).status).toBe(403);
+    expect((await run('null')).status).toBe(403);
+  });
+
+  it('回环 Origin 回显 ACAO + Vary: Origin，允许头带上 authorization / x-kojo-policy-token', async () => {
+    const res = await run(`http://127.0.0.1:${server.port}`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get('access-control-allow-origin')).toBe(`http://127.0.0.1:${server.port}`);
+    expect(res.headers.get('vary')).toContain('Origin');
+    const allowHeaders = res.headers.get('access-control-allow-headers') ?? '';
+    expect(allowHeaders).toContain('authorization');
+    expect(allowHeaders).toContain('x-kojo-policy-token');
+    // localhost / [::1] 同样在名单里（作者从哪本书签打开都算本机）
+    expect((await run('http://localhost:1420')).headers.get('access-control-allow-origin')).toBe('http://localhost:1420');
+    expect((await run('http://[::1]:1420')).headers.get('access-control-allow-origin')).toBe('http://[::1]:1420');
+  });
+
+  it('无 Origin（CLI / curl）仍是 *，预检对合法/无 Origin 回 204、对非法来源 403', async () => {
+    const plain = await fetch(`${base}/health`);
+    expect(plain.headers.get('access-control-allow-origin')).toBe('*');
+    expect(plain.headers.get('vary')).toContain('Origin');
+
+    const preflight = await fetch(`${base}/invoke`, {
+      method: 'OPTIONS',
+      headers: { origin: `http://127.0.0.1:${server.port}` },
+    });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-origin')).toBe(`http://127.0.0.1:${server.port}`);
+
+    const evilPreflight = await fetch(`${base}/invoke`, { method: 'OPTIONS', headers: { origin: 'http://evil.example' } });
+    expect(evilPreflight.status).toBe(403);
+  });
+});
+
+/* =====================================================================================
+ * 契约 §1.4：include globs 的 Node 镜像（对齐 Rust `compile_globs` + `walk_consider`）。
+ * 三条硬口径：只匹配**相对检索根**的 `/` 形态路径、大小写敏感、与 extensions/exclude 是"且"。
+ * 计数上不匹配进 skipped.filtered（与扩展名同账），绝不进 excluded。
+ * ===================================================================================*/
+describe('调试宿 · search_text include globs（2026-10-30 升级批）', () => {
+  // sandbox 在顶层 beforeAll 才赋值——describe 定义期不能算路径（同 495 行那条坑）
+  let globRoot = '';
+  // 刻意把大小写混排：`*.erb` / `**/*.ERB` 的差别只有这一层才能钉出来
+  const files = ['A.ERB', 'b.erb', 'c.CSV', path.join('sub', 'nested.ERB')];
+
+  beforeAll(async () => {
+    // fixture 用 mkdtemp 建在 sandbox 里：① 检索根必须在读域内，否则整批被拒；
+    // ② 名字带随机后缀，任何一次失败都不会把固定目录名留在工作树（这个坑真踩过：
+    //    早前在 describe 定义期算路径，cwd 下长出一个未跟踪的 glob-host/）
+    globRoot = await fs.mkdtemp(path.join(sandbox, 'glob-host-'));
+    for (const f of files) {
+      const full = path.join(globRoot, f);
+      await fs.mkdir(path.dirname(full), { recursive: true });
+      await fs.writeFile(full, 'hello\nPRINTL hello\n', 'utf-8');
+    }
+  });
+
+  afterAll(async () => {
+    await fs.rm(globRoot, { recursive: true, force: true });
+  });
+
+  const run = (options: Record<string, unknown>) =>
+    invoke('search_text', {
+      request: {
+        searchId: 31,
+        roots: [globRoot],
+        query: 'hello',
+        options: { isRegex: false, caseSensitive: true, wholeWord: false, extensions: [], ...options },
+      },
+    });
+
+  type Result = {
+    files: { path: string }[];
+    totalMatches: number;
+    skipped: { filtered: number; excluded: number };
+  };
+  const namesOf = (r: { value: unknown }) =>
+    (r.value as Result).files.map((f) => path.basename(f.path)).sort();
+
+  it('`**/*.ERB` 只回 ERB（含根下与子目录），其余进 skipped.filtered', async () => {
+    const r = await run({ globs: ['**/*.ERB'] });
+    expect(namesOf(r)).toEqual(['A.ERB', 'nested.ERB']);
+    const v = r.value as Result;
+    expect(v.skipped.filtered).toBe(2); // b.erb + c.CSV
+    expect(v.skipped.excluded).toBe(0); // include 挡下的不算排除
+    expect(v.totalMatches).toBe(4); // 两个文件各两处
+  });
+
+  it('多个 glob 是 any-of：`**/*.ERB` 或 `*.CSV` 合并放行', async () => {
+    const r = await run({ globs: ['**/*.ERB', '*.CSV'] });
+    expect(namesOf(r)).toEqual(['A.ERB', 'c.CSV', 'nested.ERB']);
+    expect((r.value as Result).skipped.filtered).toBe(1);
+  });
+
+  it('大小写敏感（与 Rust 刻意一致）：`*.erb` 挡不住 `A.ERB`，`**/*.erb` 也挡不住 `nested.ERB`', async () => {
+    const lower = await run({ globs: ['*.erb'] });
+    expect(namesOf(lower)).toEqual(['b.erb']);
+    expect((lower.value as Result).skipped.filtered).toBe(3);
+
+    const lowerDeep = await run({ globs: ['**/*.erb'] });
+    expect(namesOf(lowerDeep)).toEqual(['b.erb']);
+  });
+
+  it('globs 与 extensions 是"且"：交集为空就是零结果，且两笔过滤账同记 filtered', async () => {
+    const both = await run({ globs: ['**/*.ERB'], extensions: ['erb'] });
+    expect(namesOf(both)).toEqual(['A.ERB', 'nested.ERB']);
+    expect((both.value as Result).skipped.filtered).toBe(2);
+
+    const disjoint = await run({ globs: ['**/*.ERB'], extensions: ['csv'] });
+    expect(namesOf(disjoint)).toEqual([]);
+    expect((disjoint.value as Result).skipped.filtered).toBe(4); // 四条各自被其中一道挡下
+    expect((disjoint.value as Result).totalMatches).toBe(0);
+  });
+
+  it('globs 与 excludeGlobs 分账：include 挡的记 filtered，exclude 挡的记 excluded', async () => {
+    const r = await run({ globs: ['**/*.ERB'], excludeGlobs: ['**/*.ERB'] });
+    expect(namesOf(r)).toEqual([]);
+    const v = r.value as Result;
+    expect(v.skipped.excluded).toBe(2); // 过了 include 再被 exclude 挡下
+    expect(v.skipped.filtered).toBe(2); // 非 ERB 在 include 这一关就出局
+  });
+
+  it('空数组 / 全空串 ⇒ 与不传该键逐字一致（既有缺省路径不许被本批碰歪）', async () => {
+    const empty = await run({ globs: [] });
+    const junk = await run({ globs: ['', '   '] });
+    const baseline = await run({});
+    const strip = (r: { value: unknown }) => {
+      const v = r.value as Result & { files: { path: string; matches: unknown[] }[] };
+      return { files: v.files, totalMatches: v.totalMatches, skipped: v.skipped };
+    };
+    expect(strip(empty)).toEqual(strip(baseline));
+    expect(strip(junk)).toEqual(strip(baseline));
+  });
+});

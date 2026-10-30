@@ -14,16 +14,22 @@
  *    - `main.tsx` 对 `debug/install-debug` 只许动态 import（开机图闸零影响的机制保证）；
  *    - `invoke.ts` 未选入时的原报错文案逐字保留（浏览器开发壳既有行为不许被顺手改掉）；
  *    - `tauri-bridge.ts` 的浏览器降级路径保留（调试宿不在场时仍显式「无监视能力」）。
+ * 7. **鉴权 token**（2026-10-30 鉴权批，契约 §1.3）：`kojo-debug-token` / localStorage
+ *    `kojoDebugHostToken` 的解析、**空值不挂键**（既有 `toEqual({origin})` 判据不许被
+ *    `token: undefined` 污染）、invoke 的 `Authorization` 头、SSE 的 `?token=`。
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   base64ToArrayBuffer,
+  buildEventsUrl,
   decodeValue,
+  hostAuthHeaders,
   normalizeOrigin,
   resolveWebHostConfig,
+  webHostInvoke,
 } from '../src/debug/web-host-transport';
 import {
   armChooseDir,
@@ -250,5 +256,158 @@ describe('调试面 · 源形状守门（懒装载与既有行为不被顺手改
     const src = read('packages/app/src/debug/dialog-policy.ts');
     expect(src).toMatch(/POLICY_DIALOG_COMMANDS\.has\(parseIpcCmd\(url\)/);
     expect(src).not.toMatch(/parseIpcCmd\(url\) === 'choose_directory'/);
+  });
+});
+
+/* ----------------------------- 鉴权 token（2026-10-30 鉴权批） ----------------------------- */
+
+type TransportModule = typeof import('../src/debug/web-host-transport');
+
+/**
+ * 拿一份**全新**的传输层模块，并伪造对应的页面环境。
+ *
+ * 必须 `resetModules`：`config()` 是懒缓存（一次解析管到页面卸载），同一个模块实例
+ * 第二次再也解析不出别的 token；新实例才等价于「另一个页面」。window 在 node 环境
+ * 本就没有，所以这里只是把它 stub 出来，不引入 jsdom。
+ */
+async function freshTransport(search: string, kv: Record<string, string> = {}): Promise<TransportModule> {
+  vi.resetModules();
+  vi.stubGlobal('window', {
+    location: { search },
+    localStorage: { getItem: (key: string) => kv[key] ?? null },
+  });
+  return await import('../src/debug/web-host-transport');
+}
+
+/** 假的 EventSource：只记下被建的 URL（够证明 SSE 地址真的接上了 token） */
+class FakeEventSource {
+  static urls: string[] = [];
+  onmessage: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  constructor(readonly url: string) {
+    FakeEventSource.urls.push(url);
+  }
+  addEventListener(): void {}
+}
+
+function stubFetch(): { url: string; init: RequestInit | undefined }[] {
+  const calls: { url: string; init: RequestInit | undefined }[] = [];
+  vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({ ok: true, value: { pong: true } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  });
+  return calls;
+}
+
+describe('web 调试宿 · 鉴权 token（空值不挂键；无 token 路径逐字不变）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeEventSource.urls = [];
+  });
+
+  it('无 token ⇒ 配置对象里没有 token 键（既有 toEqual({origin}) 判据逐字通过）', () => {
+    const cfg = resolveWebHostConfig('?kojo-debug=18999', null);
+    expect(cfg).toEqual({ origin: 'http://127.0.0.1:18999' });
+    expect(cfg !== null && 'token' in cfg).toBe(false);
+    // localStorage 只有 origin 时同理
+    const fromStorage = resolveWebHostConfig('', 'http://127.0.0.1:19005');
+    expect(fromStorage).toEqual({ origin: 'http://127.0.0.1:19005' });
+    expect(fromStorage !== null && 'token' in fromStorage).toBe(false);
+  });
+
+  it('?kojo-debug-token=<token> ⇒ 解析出 token（URL 参数优先于 localStorage）', () => {
+    expect(resolveWebHostConfig('?kojo-debug=18999&kojo-debug-token=abc', null)).toEqual({
+      origin: 'http://127.0.0.1:18999',
+      token: 'abc',
+    });
+    expect(resolveWebHostConfig('?kojo-debug=18999&kojo-debug-token=abc', null, 'fromStorage')).toEqual({
+      origin: 'http://127.0.0.1:18999',
+      token: 'abc',
+    });
+    // 第三个入参 = localStorage `kojoDebugHostToken`（config() 就是这么喂的）
+    expect(resolveWebHostConfig('?kojo-debug=18999', null, 'store-token')).toEqual({
+      origin: 'http://127.0.0.1:18999',
+      token: 'store-token',
+    });
+    // 纯 localStorage 选入（无 kojo-debug）也认 token
+    expect(resolveWebHostConfig('', 'http://127.0.0.1:19006', 'store-token')).toEqual({
+      origin: 'http://127.0.0.1:19006',
+      token: 'store-token',
+    });
+  });
+
+  it('空 token（空串 / 纯空白）⇒ 不挂键，不产出 token: undefined', () => {
+    for (const search of ['?kojo-debug=1&kojo-debug-token=', '?kojo-debug=1&kojo-debug-token=%20%20']) {
+      const cfg = resolveWebHostConfig(search, null);
+      expect(cfg, search).toEqual({ origin: 'http://127.0.0.1:17777' });
+      expect(cfg !== null && 'token' in cfg, search).toBe(false);
+    }
+    expect(resolveWebHostConfig('?kojo-debug=1', null, '   ')).toEqual({ origin: 'http://127.0.0.1:17777' });
+    expect(resolveWebHostConfig('?kojo-debug=1&kojo-debug-token=', null, 'store-token')).toEqual({
+      origin: 'http://127.0.0.1:17777',
+      token: 'store-token',
+    });
+  });
+
+  it('hostAuthHeaders / buildEventsUrl：无 token 逐字等于改动前的头与 URL', () => {
+    expect(hostAuthHeaders({ origin: 'http://127.0.0.1:17777' })).toEqual({});
+    expect(hostAuthHeaders({ origin: 'http://127.0.0.1:17777', token: 'abc' })).toEqual({
+      authorization: 'Bearer abc',
+    });
+    expect(buildEventsUrl({ origin: 'http://127.0.0.1:17777' })).toBe('http://127.0.0.1:17777/events');
+    // token 走 query 时必须百分号编码（`EventSource` 不能自定义头，见传输层注释）
+    expect(buildEventsUrl({ origin: 'http://127.0.0.1:17777', token: 'a b/c&d' })).toBe(
+      'http://127.0.0.1:17777/events?token=a%20b%2Fc%26d',
+    );
+  });
+
+  it('webHostInvoke：有 token 带 Authorization 头、URL 与 body 形状不变', async () => {
+    const calls = stubFetch();
+    const mod = await freshTransport('?kojo-debug=18999&kojo-debug-token=abc');
+    await expect(mod.webHostInvoke('stat_file', { path: 'x.ERB' })).resolves.toEqual({ pong: true });
+    expect(calls).toHaveLength(1);
+    const call = calls[0]!;
+    expect(call.url).toBe('http://127.0.0.1:18999/invoke');
+    expect(call.init?.method).toBe('POST');
+    expect(call.init?.headers).toEqual({
+      'content-type': 'application/json',
+      authorization: 'Bearer abc',
+    });
+    expect(JSON.parse(String(call.init?.body))).toEqual({ cmd: 'stat_file', args: { path: 'x.ERB' } });
+  });
+
+  it('webHostInvoke：无 token 时请求头与改动前逐字一致（不多出 authorization 键）', async () => {
+    const calls = stubFetch();
+    const mod = await freshTransport('?kojo-debug=18999');
+    await mod.webHostInvoke('stat_file');
+    const call = calls[0]!;
+    expect(call.url).toBe('http://127.0.0.1:18999/invoke');
+    expect(call.init?.headers).toEqual({ 'content-type': 'application/json' });
+  });
+
+  it('localStorage token 也进请求头（URL 没带 kojo-debug-token 时的第二入口）', async () => {
+    const calls = stubFetch();
+    const mod = await freshTransport('?kojo-debug=18999', { kojoDebugHostToken: 'store-token' });
+    await mod.webHostInvoke('stat_file');
+    expect(calls[0]!.init?.headers).toEqual({
+      'content-type': 'application/json',
+      authorization: 'Bearer store-token',
+    });
+  });
+
+  it('ensureEventSource：SSE URL 真的接上 token（有 / 无两态）', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+
+    const withToken = await freshTransport('?kojo-debug=18999&kojo-debug-token=abc');
+    withToken.onWebHostEvent('kojo:fs-changed', () => {});
+    expect(FakeEventSource.urls).toEqual(['http://127.0.0.1:18999/events?token=abc']);
+
+    FakeEventSource.urls = [];
+    const noToken = await freshTransport('?kojo-debug=18999');
+    noToken.onWebHostEvent('kojo:fs-changed', () => {});
+    expect(FakeEventSource.urls).toEqual(['http://127.0.0.1:18999/events']);
   });
 });

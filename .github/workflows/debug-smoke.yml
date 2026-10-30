@@ -1,0 +1,59 @@
+name: Debug smoke (web)
+
+# 调试模式（Web 调试宿 + vite + 浏览器）的**夜间慢闸**：2026-10-30 调试升级批立。
+# 为什么不在 PR 上跑：这条要真起一个浏览器（CDP）、跑完整开项目/开文件/语言面链路，
+# 单轮分钟级且强依赖本机图形栈；PR 必过门只放纯逻辑单测（见 ci.yml），
+# 冒烟留在夜里跑，红了先按 §六「故障定位速查」排除环境差异（没浏览器 / 端口占用 / 陈旧 overlay）。
+# 手动触发：Actions → Debug smoke (web) → Run workflow。
+on:
+  schedule:
+    # 每天 18:00 UTC = 次日 02:00（北京），避开欧美工作时段与 release 窗口。
+    - cron: '0 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: 调试面单测 + node tools/debug-web-smoke.mjs
+    # windows-latest 自带 Edge（调试宿的默认浏览器腿），与本仓目标平台一致。
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # 与 ci.yml 同口径：仓库根 .npmrc 固定 npmmirror（仅本机直连可达），不能带进 CI。
+      NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Remove local .npmrc (npmmirror registry is local-only)
+        shell: pwsh
+        run: Remove-Item -Force .npmrc
+
+      # 不传 version：action 读 package.json 的 packageManager 字段（pnpm@11.22.0）。
+      # 显式传 version 会与 packageManager 冲突报错（Multiple versions of pnpm specified）。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 调试面纯逻辑护栏：宿侧命令对账 / 页面调试面契约 / DOM 快照选择器 / 语言面只读 API。
+      # ⚠ vitest 的位置参数是**子串过滤**（不是 glob，见 vitest cli-api 的 filterFiles）：
+      #   写 `packages/app/tests/debug-*.test.ts` 会一条都匹配不上而静默跳过。
+      #   这里故意用前缀 `debug-`，新加的 debug-*.test.ts 自动纳入，不必改 workflow。
+      # 只跑与本通道相关的守门用例：全量 tools/tests 里 release-gate.test.ts 有分支存量漂移
+      # （产物上限 11.1 vs 11.2 MiB），与本通道无关，混进来会让夜间闸上线即红、失去信号。
+      - name: 调试面单测（宿侧 + 页面 + 语言面）
+        run: pnpm exec vitest run tools/tests/debug-server.test.ts packages/app/tests/debug-
+
+      # 端到端：起调试宿 + vite + 无头 Edge，真点开项目/开文件/跑命令/截图/语言面 provider。
+      # 断言条数以脚本本次输出为准（每批都在加），这里不写死数字。
+      - name: Web 调试模式冒烟
+        run: node tools/debug-web-smoke.mjs

@@ -12,6 +12,8 @@
  *
  * 安全面：调试宿只绑 127.0.0.1、写路径有沙盒闸（见 tools/debug-server.mjs 头注）；
  * 页面侧不增任何权限——它只是把「原本要经 Tauri IPC 的调用」换个信封送到本机调试宿。
+ * 2026-10-30 鉴权批：宿启用 token 时，invoke 走 `Authorization: Bearer`、SSE 走
+ * `?token=`（`EventSource` 不能自定义头）；没 token 时两条腿与从前逐字一致。
  */
 import { consumeChooseDir, POLICY_DIALOG_COMMANDS } from './dialog-policy';
 
@@ -21,10 +23,17 @@ const BINARY_COMMANDS = new Set(['read_file_bytes_raw', 'read_files_raw']);
 export interface WebHostConfig {
   /** 调试宿 origin（如 `http://127.0.0.1:17777`），尾不带斜杠 */
   readonly origin: string;
+  /**
+   * 调试宿鉴权 token（2026-10-30 鉴权批）。只有真给了非空值才**挂键**——无 token 时
+   * 配置对象必须与从前逐字同形（`{ origin }`），否则既有解析判据会被这枚 undefined 污染。
+   */
+  readonly token?: string;
 }
 
 const DEFAULT_ORIGIN = 'http://127.0.0.1:17777';
 const STORAGE_KEY = 'kojoDebugHost';
+const TOKEN_QUERY = 'kojo-debug-token';
+const TOKEN_STORAGE_KEY = 'kojoDebugHostToken';
 
 /**
  * 解析调试宿配置（纯函数，可单测）。
@@ -32,19 +41,37 @@ const STORAGE_KEY = 'kojoDebugHost';
  * 优先级：URL `kojo-debug` 参数（`1` / `true` = 默认 origin；`api` = **只装调试面、
  * 不切 web 宿路由**——真桌面壳里用，invoke 仍走真 Tauri IPC；否则按 origin 解析，
  * 支持 `17777` 端口号形态）> localStorage `kojoDebugHost`。都没有 ⇒ null（不选入）。
+ *
+ * token 与 origin 各走各的入口：URL `kojo-debug-token` > 第三个入参（调用方从
+ * localStorage `kojoDebugHostToken` 取）。空白一律当没给——绝不产出 `token: undefined`。
  */
-export function resolveWebHostConfig(search: string, storage: string | null): WebHostConfig | null {
+export function resolveWebHostConfig(
+  search: string,
+  storage: string | null,
+  tokenStorage: string | null = null,
+): WebHostConfig | null {
   const params = new URLSearchParams(search);
+  const token = nonEmpty(params.get(TOKEN_QUERY)) ?? nonEmpty(tokenStorage);
   if (!params.has('kojo-debug')) {
     if (storage && storage.trim() !== '') {
-      return { origin: normalizeOrigin(storage) ?? DEFAULT_ORIGIN };
+      return withToken({ origin: normalizeOrigin(storage) ?? DEFAULT_ORIGIN }, token);
     }
     return null;
   }
   const raw = (params.get('kojo-debug') ?? '').trim();
-  if (raw === '' || raw === '1' || raw === 'true') return { origin: DEFAULT_ORIGIN };
+  if (raw === '' || raw === '1' || raw === 'true') return withToken({ origin: DEFAULT_ORIGIN }, token);
   if (raw === 'api') return null; // 调试面 only：`main.tsx` 见 kojo-debug 键即装载，宿路由不接
-  return { origin: normalizeOrigin(raw) ?? DEFAULT_ORIGIN };
+  return withToken({ origin: normalizeOrigin(raw) ?? DEFAULT_ORIGIN }, token);
+}
+
+function nonEmpty(raw: string | null | undefined): string | null {
+  const s = (raw ?? '').trim();
+  return s === '' ? null : s;
+}
+
+/** 有 token 才挂键（`{...cfg, token}` 会多出键位，无 token 时必须原对象返回） */
+function withToken(cfg: WebHostConfig, token: string | null): WebHostConfig {
+  return token === null ? cfg : { ...cfg, token };
 }
 
 /** `17777` / `127.0.0.1:17777` / `http://127.0.0.1:17777` → 规范 origin；非法 ⇒ null */
@@ -64,9 +91,29 @@ function config(): WebHostConfig | null {
     activeConfig =
       typeof window === 'undefined'
         ? null
-        : resolveWebHostConfig(window.location.search, window.localStorage.getItem(STORAGE_KEY));
+        : resolveWebHostConfig(
+            window.location.search,
+            window.localStorage.getItem(STORAGE_KEY),
+            window.localStorage.getItem(TOKEN_STORAGE_KEY),
+          );
   }
   return activeConfig;
+}
+
+/**
+ * 鉴权头（纯函数，可单测）：无 token ⇒ `{}`（调用方展开后与改动前的头对象逐字同形）。
+ * 走请求头而不是 query 是为了不把 token 写进宿的访问日志与 UA 记录。
+ */
+export function hostAuthHeaders(cfg: WebHostConfig): Record<string, string> {
+  return cfg.token ? { authorization: `Bearer ${cfg.token}` } : {};
+}
+
+/**
+ * SSE 地址（纯函数，可单测）。`EventSource` 无法自定义请求头，token 只能走 query；
+ * 无 token 时与改动前逐字一致（`${origin}/events`）。
+ */
+export function buildEventsUrl(cfg: WebHostConfig): string {
+  return cfg.token ? `${cfg.origin}/events?token=${encodeURIComponent(cfg.token)}` : `${cfg.origin}/events`;
 }
 
 /** 是否选入了 web 调试宿（供调试面自报 mode；invoke 路由不经过它，直接问 config()） */
@@ -125,7 +172,7 @@ export async function webHostInvoke(cmd: string, args?: Record<string, unknown>)
   try {
     res = await fetch(`${cfg.origin}/invoke${binary ? '?binary=1' : ''}`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...hostAuthHeaders(cfg) },
       body: JSON.stringify({ cmd, args: args ?? {} }),
     });
   } catch (err) {
@@ -200,7 +247,7 @@ function ensureEventSource(): void {
   if (eventSource || typeof EventSource === 'undefined') return;
   const cfg = config();
   if (!cfg) return;
-  const src = new EventSource(`${cfg.origin}/events`);
+  const src = new EventSource(buildEventsUrl(cfg));
   const myRef = ++eventSourceRef;
   eventSource = src;
   src.onmessage = () => {};
