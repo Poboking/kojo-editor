@@ -192,9 +192,9 @@ importers:
 
   packages/erb-lang:
     dependencies:
-      '@kojo/plugin-erb-parser':
+      '@kojo/erb-vocab':
         specifier: workspace:*
-        version: link:../plugins/erb-parser
+        version: link:../erb-vocab
 
   packages/erb-syntax-tree:
     dependencies:
@@ -205,6 +205,8 @@ importers:
       tree-sitter-cli:
         specifier: ^0.27.1
         version: 0.27.1
+
+  packages/erb-vocab: {}
 
   packages/kernel:
     dependencies:
@@ -420,6 +422,9 @@ importers:
 
   packages/plugins/erb-parser:
     dependencies:
+      '@kojo/erb-vocab':
+        specifier: workspace:*
+        version: link:../../erb-vocab
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api

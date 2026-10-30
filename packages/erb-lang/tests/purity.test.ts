@@ -7,8 +7,9 @@
  * 会红**。故判据写在这里，不看运行时，只看源码。
  *
  * 四条：
- * 1. **外部依赖只在白名单里**：只有 `@kojo/plugin-erb-parser`（ERB 控制流配对表的单一真源）。
+ * 1. **外部依赖只在白名单里**：只有 `@kojo/erb-vocab/control-flow`（ERB 控制流配对表的单一真源）。
  *    方向是"语言面库读引擎配对表"，与宿主 `monaco/erb-enter.ts` 读同一张表是同一条路；
+ *    **不许**再指向插件 `@kojo/plugin-erb-parser`（库包引插件包＝分层倒置，2026-10-30 已清）。
  * 2. **零 Monaco / React / DOM / IO**（含 `type` 导入——理由同 kojo-lang 那条）；
  * 3. **零游戏名词**：包是语言面，不认识任何一部具体游戏；
  * 4. **文件数白名单**：加一枚源码文件必须显式改这里（防止"顺手多一个判据副本"）。
@@ -54,21 +55,27 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
     /**
-     * 白名单只有一枚：`@kojo/plugin-erb-parser`。
+     * 白名单只有一枚：`@kojo/erb-vocab/control-flow`。
      *
      * 它提供 `ERB_CONTROL_STATEMENTS` / `classifyControlFlow`——ERB 控制流配对表的
      * **单一真源**（逐条对齐引擎 `FunctionIdentifier.cs` 的 `funcMatch`）。高亮与扩选都要
      * 问"这词是哪一档"，而在本包抄一份表就必然与它漂移（漂移的表现是"高亮指错的块"）。
-     * 宿主读的是同一张表（`monaco/erb-enter.ts`），所以这是**并列读者**不是反向分层：
-     * 包只读那两个导出，不碰插件生命周期、不读槽、不读项目。
+     * 宿主读的是同一张表（`monaco/erb-enter.ts`，经插件 re-export），所以这是**并列读者**
+     * 不是反向分层。
+     *
+     * 反向断言（2026-10-30 ERB-VOCAB 批）：`@kojo/plugin-erb-parser` 曾经是这张白名单的
+     * 唯一成员——库包引插件包就是分层倒置。表上提到非插件库包后，插件那条 specifier 必须
+     * **重新变成违规**，否则倒置会以"没人拦"的形态回来。
      */
-    const allowed = new Set(['@kojo/plugin-erb-parser']);
+    const allowed = new Set(['@kojo/erb-vocab/control-flow']);
+    const forbidden = new Set(['@kojo/plugin-erb-parser']);
     const offenders: string[] = [];
     for (const file of files) {
       for (const spec of specifiersOf(readFileSync(file, 'utf8'))) {
         if (spec.startsWith('.')) continue;
         if (allowed.has(spec)) continue;
         offenders.push(`${path.basename(file)} → ${spec}`);
+        if (forbidden.has(spec)) offenders.push(`${path.basename(file)} → 插件包倒置`);
       }
     }
     expect(offenders).toEqual([]);

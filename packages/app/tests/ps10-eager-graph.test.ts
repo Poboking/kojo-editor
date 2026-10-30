@@ -771,6 +771,14 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     不动**——**零新进图模块**（判据叶子 `@kojo/kojo-lang/code-actions` 只在插件供方侧，
     //     宿主那枚安装器仍在 `editor-global-providers → monaco 装配` 的懒边之下）。宿主删掉的
     //     判据与新增的槽查询都在懒边内 ⇒ 两枚闸维持 **≤199 / ≤3,162**，**不抬不降**。
+    //   - **ERB-VOCAB 架构债批（2026-10-30，本批）**：读数 **199 文件 / 3,162 KB 不动**，两枚闸
+    //     **不抬**。控制流配对表从插件 `erb-parser/src/scanner.ts` 上提到非插件库包
+    //     `@kojo/erb-vocab`（库 `@kojo/erb-lang` 不再 import 插件包），新叶子
+    //     `erb-vocab/src/control-flow.ts` **进图**（+5.2 KB）而 `scanner.ts` −3.8 KB（表与注释搬走）。
+    //     文件数一分未涨的原因：按台账"下一枚进图模块须先挪一枚出去"的口径腾了一枚——
+    //     `erb-parser/src/did-you-mean.ts`（102 行纯函数、当时唯一调用方是 `undefined-name.ts`）
+    //     并入 `undefined-name.ts`，图里少一个节点、断言与用例一字未改。
+    //     ⇒ 余量只剩 460 B：下一枚进图的东西仍须先挪一枚出去。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
