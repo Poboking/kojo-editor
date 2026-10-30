@@ -1,6 +1,11 @@
 import type * as Monaco from './entry';
 import './languages';
-import { languageDescriptors, type SlotServiceKind } from './language-registry';
+import {
+  declaredSlotKinds,
+  languageDescriptors,
+  usesLegacyBridge,
+  type SlotServiceKind,
+} from './language-registry';
 
 /**
  * 一等语言通用语言服务的**唯一收口**：把一枚 provider 依次挂到每一门声明
@@ -16,6 +21,11 @@ import { languageDescriptors, type SlotServiceKind } from './language-registry';
  * 注册顺序 = descriptor 顺序（ERB 先、Kojo 后，与收口前逐字一致；Monaco 按注册表
  * 顺序问 provider，别调）。保留面（JSON）不声明该能力，因此不会被挂上空 provider
  * 顶掉 Monaco 的缩进折叠。
+ *
+ * 两种写法同效（SDK-DIALECT，2026-10-31）：挂载判据读 `language-registry` 的两枚
+ * helper——`languageServices` ↔ `services.legacyBridge`（旧桥全腿），`slotServices` ↔
+ * `services.slot`（点名）。此前只读旧写法，照 `docs/DIALECT-AUTHORING.md` / descriptor 头注
+ * 用新写法登记的方言会被静默漏挂（扩展路径上最贵的一种静默）。
  *
  * 不该套本函数的三类注册（各自有理由，别"顺手统一"）：
  * - **只给一门语言**的注册：`.kojo` 的区间格式化 / 回车缩进、ERB 的带闸区间格式化、
@@ -58,8 +68,11 @@ export function registerForLanguageServices(
   const subs: Monaco.IDisposable[] = [];
   try {
     for (const descriptor of languageDescriptors()) {
-      const servesAll = options.namedOnly !== true && descriptor.languageServices === true;
-      const namedBySlot = kind !== undefined && descriptor.slotServices?.includes(kind) === true;
+      // 两种写法同效（SDK-DIALECT，2026-10-31）：`languageServices: true` / `services.legacyBridge`
+      // 都是旧桥；`slotServices` / `services.slot` 都是点名。判据读语言注册表那两枚 helper——
+      // 本文件不再自抄一份（此前只读旧写法，照指南用新写法登记的方言会被静默漏挂）。
+      const servesAll = options.namedOnly !== true && usesLegacyBridge(descriptor);
+      const namedBySlot = kind !== undefined && declaredSlotKinds(descriptor).includes(kind);
       if (!servesAll && !namedBySlot) continue;
       subs.push(register(monaco, descriptor.id));
     }

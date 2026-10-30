@@ -256,6 +256,26 @@ export function registerLanguage(descriptor: LanguageDescriptor): void {
   descriptors.push(descriptor);
 }
 
+/**
+ * 这门语言**声明了**的槽腿（`services.slot` 优先，其次 `slotServices`；都没有 ⇒ 空表）。
+ *
+ * 为什么收成一枚（SDK-DIALECT，2026-10-31）：descriptor 头注给 `services.slot` 写了
+ * "与 `slotServices` 同义、两者都给了以它为准"，而**挂载收口**此前只读 `slotServices`——
+ * 照指南用新写法登记的方言一枚 provider 都挂不上（文档与实现之间的一条断口）。
+ * 三处消费方（挂载收口 / 按语言弃权 / conformance 台账）从此读同一枚，不许再抄第二份。
+ */
+export function declaredSlotKinds(descriptor: LanguageDescriptor): readonly SlotServiceKind[] {
+  return descriptor.services?.slot ?? descriptor.slotServices ?? [];
+}
+
+/**
+ * 这门语言走不走 v1 语义的**旧桥**（`languageServices: true`，或它的显式新名
+ * `services.legacyBridge`）。缺省 `false` = 只挂 {@link declaredSlotKinds} 点名的腿。
+ */
+export function usesLegacyBridge(descriptor: LanguageDescriptor): boolean {
+  return descriptor.languageServices === true || descriptor.services?.legacyBridge === true;
+}
+
 /* ============================== 可用性门（LAU-3 / §4.4） ============================== */
 
 /**

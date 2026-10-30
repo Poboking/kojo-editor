@@ -137,7 +137,7 @@ import { KOJO2_COMPLETION_TRIGGER_CHARS } from '@kojo/kojo-lang/completion';
 import { kojo2PrepareRename, type Kojo2RenameRange } from '@kojo/kojo-lang/rename';
 import { requireKernel } from '../ui/editor-pane-registry';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
-import { descriptorForLanguageId, type SlotServiceKind } from './language-registry';
+import { declaredSlotKinds, descriptorForLanguageId, type SlotServiceKind } from './language-registry';
 import {
   codeLensRequestOf,
   collectCodeLensResult,
@@ -504,8 +504,9 @@ function servesSlotOf(model: Monaco.editor.ITextModel, kind: SlotServiceKind): b
   // "这门语言把这条腿交给插件"的声明，替它答就是在替一门不存在的语言说话（搬家前那条
   // "比 kojo2 常量"的判据对这类 id 同样弃权，可观测结果逐字相同）。
   if (descriptor === null) return false;
-  const declared = descriptor.services?.slot ?? descriptor.slotServices;
-  return declared?.includes(kind) === true;
+  // 声明面读语言注册表那一枚（`services.slot` 优先、其次 `slotServices`）：与挂载收口同一份，
+  // 别在这里再拼一次三元——拼漏一边就是"挂上了但永远弃权"或"没挂却说在服务"。
+  return declaredSlotKinds(descriptor).includes(kind);
 }
 
 /* ============================== 契约 → Monaco（格式化） ============================== */

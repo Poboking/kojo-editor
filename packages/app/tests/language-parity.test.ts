@@ -549,7 +549,9 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
 
   it('注册单源：register-dialects.ts 只按 descriptor.languageServices 挑语言，不写死语言 id', () => {
     const dialects = sourceOf('monaco/register-dialects.ts').text;
-    expect(dialects).toContain('descriptor.languageServices === true');
+    // SDK-DIALECT（2026-10-31）：旧桥判据收进语言表的 `usesLegacyBridge`（`languageServices`
+    // ↔ `services.legacyBridge` 的两个名字），口径不变——挑语言仍只按 descriptor 字段。
+    expect(dialects).toMatch(/usesLegacyBridge\(descriptor\)|descriptor\.languageServices === true/);
     for (const constant of ['ERB_LANGUAGE_ID', 'KOJO_LANGUAGE_ID', 'KOJO2_LANGUAGE_ID']) {
       expect(dialects, `register-dialects.ts 不该出现 ${constant}（那就是第二份语言名单）`).not.toContain(
         constant,
