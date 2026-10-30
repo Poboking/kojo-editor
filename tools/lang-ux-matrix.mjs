@@ -157,7 +157,12 @@ export const CAPABILITIES = Object.freeze([
     providerApi: 'registerOnTypeFormattingEditProvider',
     unitTests: {
       erb: ['packages/app/tests/kojo2-indent-brackets.test.ts'],
-      kojo2: ['packages/app/tests/kojo2-folding-indent.test.ts'],
+      // B3i：回车层级判据（块头 / 同级容器 / `@原生` 围栏 / 栅格 / 夹具 / CRLF）整块搬进包，
+      // 宿主那份只剩 on-type 翻译与注册；两处都登记，能力面判据与装配面各有一份证据。
+      kojo2: [
+        'packages/app/tests/kojo2-folding-indent.test.ts',
+        'packages/kojo-lang/tests/indent.test.ts',
+      ],
     },
     manual: {
       steps: [

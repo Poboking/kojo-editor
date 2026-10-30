@@ -21,8 +21,9 @@
  * - **`@原生` 围栏头 → 下一行 +1 级**：仓体内必须比栏头深（规范 §8.5），否则块体为空。
  * - **`@原生` 体内不动**：围栏内是 ERB 原文，任何"按形状猜层级"的动作都会改坏原文。
  *   Monaco 的 `onEnterRules` 只能看**当前行**（拿不到"我在围栏内"这个上下文）⇒ 静态配置
- *   只能做形状近似；真正的上下文判据是 {@link kojo2EnterIndent}（纯函数，`inNativeFence`
- *   为真时一律 0）。CUTOVER 若接编辑器级 enter handler，必须调这一个函数，不要另写一份。
+ *   只能做形状近似；**真正的上下文判据在 `@kojo/kojo-lang/indent` 的 `kojo2IndentAfterLine`**
+ *   （吃整篇文本、按 core 词法判围栏，围栏内一律 `null`；本文件只保留同一条形状近似的
+ *   {@link kojo2EnterIndent} 供"拿不到整篇文本"的调用方用）。宿主 on-type 层调的永远是前者。
  * - **Enter 上不许有 Outdent**：收束永远由作者回缩决定（2.0 没有全局收束词），自动回缩会把
  *   作者刚写的体弹出去；这条与 `.kojo` v1 的回车纪律一致。
  */
@@ -52,7 +53,11 @@ export function kojo2IsNativeFenceHeader(lineText: string): boolean {
 export interface Kojo2EnterContext {
   /**
    * 光标所在行是否处于 `@原生` 围栏体内。**围栏内一律不自动缩进**（原文保真优先）；
-   * Monaco 语言配置拿不到这个上下文，故由 CUTOVER 的 enter handler 传进来。
+   * Monaco 语言配置拿不到这个上下文，故由调用方传进来。
+   *
+   * ⚠ 本函数只吃"当前行文本"（形状近似）。**有整篇文本时用
+   * `@kojo/kojo-lang/indent` 的 `kojo2IndentAfterLine`**：围栏状态是跨行事实，只有它判得准；
+   * 宿主 on-type 层走的就是那一条。
    */
   readonly inNativeFence?: boolean;
 }
@@ -111,8 +116,8 @@ export const KOJO2_INDENTATION_RULES = {
  *
  * **不许进这张表的**：全角 `：` / `，`（块头终止符与分隔符，不是括号对）、`『』`（语法不认这一对，
  * 正文里出现也只是字面文本）。`autoClosingPairs` 的 `notIn` 只有 `string` / `comment` / `regex`
- * 三档，表达不了"我在 `@原生` 围栏里"——那条上下文判定住宿主的 `kojo2-indent.ts` 的 on-type 层
- * （同一台词法器判 `kind === 'native'`），不在语言配置里造假。
+ * 三档，表达不了"我在 `@原生` 围栏里"——那条上下文判定住 `@kojo/kojo-lang/indent` 的
+ * `kojo2AutoCloseTargetAt`（判据单独一枚叶子，宿主 on-type 层只做翻译），不在语言配置里造假。
  */
 export const KOJO2_PAIRS: readonly (readonly [open: string, close: string])[] = Object.freeze([
   ['{', '}'],

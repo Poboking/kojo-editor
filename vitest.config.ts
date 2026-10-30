@@ -47,6 +47,8 @@ export const config = defineConfig({
       '@kojo/kojo-lang/lexicon': r('./packages/kojo-lang/src/lexicon.ts'),
       '@kojo/kojo-lang/monarch': r('./packages/kojo-lang/src/monarch.ts'),
       '@kojo/kojo-lang/language-config': r('./packages/kojo-lang/src/language-config.ts'),
+      // B3i：缩进 / 回车判据叶子（排在桶之前；宿主 `monaco/kojo2-indent.ts` 只引这一枚）。
+      '@kojo/kojo-lang/indent': r('./packages/kojo-lang/src/indent.ts'),
       '@kojo/kojo-lang/monaco-theme': r('./packages/kojo-lang/src/monaco-theme.ts'),
       '@kojo/kojo-lang': r('./packages/kojo-lang/src/index.ts'),
       // LAU-4 ERB 语言面库（2026-10-30）：叶子**排在桶之前**（理由同 kojo-lang：alias 的

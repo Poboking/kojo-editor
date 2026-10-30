@@ -33,6 +33,7 @@
     "./lexicon": "./src/lexicon.ts",
     "./monarch": "./src/monarch.ts",
     "./language-config": "./src/language-config.ts",
+    "./indent": "./src/indent.ts",
     "./monaco-theme": "./src/monaco-theme.ts"
   },
   "dependencies": {

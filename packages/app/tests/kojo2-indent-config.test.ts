@@ -30,10 +30,12 @@ import {
   KOJO2_INDENT_CONFIG_MAX_PATTERNS,
   createKojo2IndentConfigSync,
   installKojo2IndentConfigFromWorker,
-  kojo2IndentAfterLine,
   kojo2IndentConfigWith,
   type Kojo2IndentRulesSource,
 } from '../src/monaco/kojo2-indent';
+// B3i：回车判据已随判据整块进包叶子；本文件只在"结构规则与 on-enter 判据同源"那几组里
+// 拿它当对照面（宿主不再有这一枚）。
+import { kojo2IndentAfterLine } from '@kojo/kojo-lang/indent';
 import {
   installKojo2SemanticTokensProvider,
   type Kojo2SemanticWorkerClient,

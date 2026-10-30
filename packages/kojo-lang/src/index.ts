@@ -76,3 +76,8 @@ export * from './lexicon';
 export * from './monarch';
 export * from './language-config';
 export * from './monaco-theme';
+// B3i（2026-10-30）：2.0 **缩进 / 回车判据**整块从宿主 `monaco/kojo2-indent.ts` 搬进来——
+// `indent`（回车层级 / on-type 行首空白替换 / `@原生` 围栏自动闭合守卫 / 基底规则数据）。
+// 理由与 B3c–B3f 逐字相同：判据是语言事实，留在宿主就只有一份宿主版；宿主只剩 Monaco 装配
+// 与翻译。开机侧一律引叶子（`@kojo/kojo-lang/indent`），本行只为"要整块"的消费方。
+export * from './indent';

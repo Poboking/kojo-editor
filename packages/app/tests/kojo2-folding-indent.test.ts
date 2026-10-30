@@ -1,6 +1,6 @@
 /**
  * K2-FOLD-INDENT 的闸：Kojo 2.0 的**折叠区间**（worker `folds` → Monaco `FoldingRange`）与
- * **回车缩进**（`kojo2IndentAfterLine` 纯判据 + on-type formatter）。
+ * **回车缩进的宿主口径**（判据 → on-type `TextEdit` 的翻译 + provider 注册）。
  *
  * ## 折叠这一半钉什么
  *
@@ -15,16 +15,15 @@
  * - **真 wasm + 真查询**：用进程内 worker 引擎（`kojo2-worker.ts` 本体 + 真 wasm +
  *   `queries/v2/folds.scm`）走完整链路，读数逐条钉住（区间数、表块、`@原生` 围栏整块）。
  *
- * ## 缩进这一半钉什么
+ * ## 缩进这一半钉什么（B3i 之后：判据在包，本文件钉装配与翻译）
  *
- * - **判据表逐格正例**：五锚点块头 / `# 对照表` 两列 / `# 池` 分支 / `@随机` 候选（含 `@组`）/
- *   `@原生` 围栏 / `?` 链 / `选项：`；
- * - **不动手的那几格**：旁白 / 台词 / `!` 触发（插槽要模板定义才知道）/ 单行声明 /
- *   单行调度（`@颜绘` `@标` `@跳` `@返` `@断` `@续`）/ 空行 / 注释 / 非 4 空格栅格 / Tab；
- * - **单源**：结果恒为 `KOJO2_INDENT_WIDTH`（= core `KOJO_INDENT_WIDTH`）的整数倍，
- *   一级缩进串就是 `KOJO2_INDENT_UNIT`；
- * - **幂等**：同一位置问两次答案逐字相同；落过一次之后已有缩进等于目标值 ⇒ 空结果（不来回抖）；
- * - **真 2.0 夹具**：`tests/v2-fixtures/full.kojo2` 逐行取判据，覆盖每一种结构（词序一变就红）。
+ * - **on-type 编辑**：`kojo2IndentEditsAt` 把包内 1 基列区间翻成 Monaco `TextEdit`——只改
+ *   新行的行首空白、已有缩进不对就校正、已对齐 / 有内容 / 第一行 / 非 kojo2 / 判据 null ⇒
+ *   空结果、落过一次再问不来回抖；
+ * - **注册纪律**：一枚 provider 两族触发字符（`\n` + 开括号），flag 关也照挂，dispose 幂等，
+ *   注册抛错直接外抛，provider 体内异常不外溢；
+ * - 回车层级表（块头 / 同级容器 / `@原生` 围栏 / 行尾冒号 / 不动手 / 栅格 / 夹具逐行 / CRLF /
+ *   幂等）**整块搬进 `packages/kojo-lang/tests/indent.test.ts`**——判据住包，不再住宿主。
  */
 
 import { readFileSync } from 'node:fs';
@@ -32,14 +31,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { KOJO_INDENT_WIDTH } from '@kojo/kojo-core';
-import { KOJO2_INDENT_UNIT } from '@kojo/kojo-lang/language-config';
-import { KOJO2_INDENT_WIDTH } from '../src/monaco/kojo2-lexicon';
 import {
   installKojo2IndentProvider,
   KOJO2_AUTO_CLOSE_GUARD_TRIGGER_CHARS,
   KOJO2_INDENT_TRIGGER_CHARS,
-  kojo2IndentAfterLine,
   kojo2IndentEditsAt,
 } from '../src/monaco/kojo2-indent';
 import {
@@ -542,247 +537,16 @@ describe('真 wasm + 真 folds.scm：整条链路仍产出可用的 1 基区间'
   });
 });
 
-/* ============================== 缩进 · 判据表（正例） ============================== */
+/* ============================== 缩进 · 判据已随 B3i 搬进包 ============================== */
+
+// 回车层级表（开体块头 / 同级容器 / `@原生` 围栏 / 行尾冒号 / 不动手的那几格 / 栅格与 Tab /
+// 行号越界 / 整篇夹具逐行读数 / CRLF / 幂等）**整块搬进 `packages/kojo-lang/tests/indent.test.ts`**：
+// 判据住包（`@kojo/kojo-lang/indent`），宿主只剩装配与翻译。本文件保留下面两组宿主口径的闸：
+// on-type 编辑（判据 → Monaco `TextEdit` 的区间翻译）与 provider 注册纪律。
 
 /** 独立口径的一级缩进（**手写 4 空格**，不是从被测常量取的：2.0 的"一级 = 4 空格"这条事实要自己钉） */
 const FOUR = '    ';
 
-describe('kojo2IndentAfterLine · 开体块头一律 +1 级（4 空格）', () => {
-  it.each([
-    ['# 对照表 心情 依据 恋慕', '表体（两列行）'],
-    ['# 池 早安问候', '池体（`?` 链）'],
-    ['# 模 娇羞退场(原因)', '模板体（可含 `[插槽]`）'],
-    ['@算', '状态更新块'],
-    ['@着色 0xFF8080', '颜色块（体内是叙事）'],
-    ['@随机', '随机候选层'],
-    ['@组', '多行候选组'],
-    ['@循 体力恢复 < 100', '循环体'],
-    ['@复 3', '定次循环体'],
-    ['@巡 队伍状态', '集合遍历体'],
-    ['@函 增加羁绊(目标, 数值=10, 理由="日常")', '函数体'],
-    ['@织 回合末 之后', '监听体'],
-    ['@原生', '围栏体（比栏头深一级）'],
-    ['? 恋慕 >= 500', '条件分支体'],
-    ['? 否', '默认分支体'],
-    ['选项：', 'UI 块头（2.0 待定，仍是块头）'],
-  ])('%s → %s', (line) => {
-    expect(kojo2IndentAfterLine(`${line}\n`, 1)).toBe(FOUR);
-  });
-
-  it('嵌套层级按行的实际档位算：`# 池` 里的 `?` 在 4 空格上 ⇒ 分支体给 8 空格', () => {
-    const text = ['# 池 早安问候', '    ? 恋慕 < 100', '        「……早。」', ''].join('\n');
-    expect(kojo2IndentAfterLine(text, 1)).toBe(FOUR);
-    expect(kojo2IndentAfterLine(text, 2)).toBe(`${FOUR}${FOUR}`);
-  });
-});
-
-describe('kojo2IndentAfterLine · 同级容器（下一行仍是兄弟，不再加深）', () => {
-  it('`# 对照表` 的两列行：行与行同层（表头 → 4；行 → 4）', () => {
-    const text = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '    100..499 -> 平常', ''].join('\n');
-    expect(kojo2IndentAfterLine(text, 1)).toBe(FOUR);
-    expect(kojo2IndentAfterLine(text, 2)).toBe(FOUR);
-    expect(kojo2IndentAfterLine(text, 3)).toBe(FOUR);
-  });
-
-  it('`@随机` 的候选行：下一条候选留在候选层（4 空格）', () => {
-    const text = ['@随机', '    灵梦：「……呼。」', '    灵梦：「……」', ''].join('\n');
-    expect(kojo2IndentAfterLine(text, 1)).toBe(FOUR);
-    expect(kojo2IndentAfterLine(text, 2)).toBe(FOUR);
-  });
-
-  it('`@组` 开体（+1）而组体行留在组层（8 空格）', () => {
-    const text = [
-      '@随机',
-      '    灵梦：「……呼。」',
-      '    @组',
-      '        灵梦：「再、再摸摸嘛。」',
-      '        > 她把脸别了过去。',
-      '',
-    ].join('\n');
-    expect(kojo2IndentAfterLine(text, 3)).toBe(`${FOUR}${FOUR}`);
-    expect(kojo2IndentAfterLine(text, 4)).toBe(`${FOUR}${FOUR}`);
-    expect(kojo2IndentAfterLine(text, 5)).toBe(`${FOUR}${FOUR}`);
-  });
-
-  it('表的行 / 候选行之后**没有**同级容器（空行结束）⇒ 不动手', () => {
-    const text = ['# 对照表 心情 依据 恋慕', '    0..99 -> 疏远', '', '    100..499 平常', ''].join('\n');
-    // 第 4 行虽然在栅格上，但它头上隔着一枚物理空行：表已结束（§6.1），本层不替它猜
-    expect(kojo2IndentAfterLine(text, 4)).toBeNull();
-  });
-});
-
-describe('kojo2IndentAfterLine · `@原生` 围栏：栏头 +1，体内一个字都不动', () => {
-  it('栏头 +1；体内（含行尾冒号、更深的行、围栏内注释）一律 null', () => {
-    const text = [
-      '@原生',
-      '    ; 逃生舱：底层 ERB 代码',
-      '    CALL HPH_PRINT "w"',
-      '    IF TFLAG:10',
-      '        PRINTFORML {　}',
-      '    // 这里不是 2.0 注释',
-      '> 围栏结束后的旁白',
-      '',
-    ].join('\n');
-    expect(kojo2IndentAfterLine(text, 1)).toBe(FOUR);
-    for (const line of [2, 3, 4, 5, 6]) {
-      expect(kojo2IndentAfterLine(text, line), `围栏内第 ${line} 行`).toBeNull();
-    }
-    // 去缩进到 0 的那一行结束围栏 ⇒ 它自己按普通行判（旁白 = 不动手）
-    expect(kojo2IndentAfterLine(text, 7)).toBeNull();
-  });
-
-  it('围栏内空行不参与基准、也不开体（§8.5）', () => {
-    const text = ['@原生', '    CALL X', '', '    CALL Y', ''].join('\n');
-    expect(kojo2IndentAfterLine(text, 3)).toBeNull();
-    expect(kojo2IndentAfterLine(text, 4)).toBeNull();
-  });
-
-  it('围栏内即使长得像块头（行尾冒号）也不 +1：原文保真优先', () => {
-    const text = ['@原生', '    LABEL:', '    CALL X', ''].join('\n');
-    expect(kojo2IndentAfterLine(text, 2)).toBeNull();
-  });
-});
-
-describe('kojo2IndentAfterLine · 行尾全角冒号（迁移期块头 / 按钮标签）', () => {
-  it('`选项：` 的按钮标签 `「标签」：` → +1（与按钮体同一条判据）', () => {
-    const text = ['选项：', '    「用亲吻代替回答」：', '        灵梦：「……唔。」', '    「摸摸头」：', ''].join('\n');
-    expect(kojo2IndentAfterLine(text, 1)).toBe(FOUR);
-    expect(kojo2IndentAfterLine(text, 2)).toBe(`${FOUR}${FOUR}`);
-    expect(kojo2IndentAfterLine(text, 4)).toBe(`${FOUR}${FOUR}`);
-  });
-
-  it('旁白的行尾冒号是正文（`> 请选择你的行动：`）⇒ 不动手', () => {
-    expect(kojo2IndentAfterLine('> 请选择你的行动：\n', 1)).toBeNull();
-  });
-
-  it('行首转义行的行尾冒号是字面文本 ⇒ 不动手', () => {
-    expect(kojo2IndentAfterLine('\\选项：\n', 1)).toBeNull();
-  });
-});
-
-describe('kojo2IndentAfterLine · 不动手的那几格', () => {
-  it.each([
-    ['# 幕 神社清晨', '单行声明（体是顶层叙事）'],
-    ['# 视角 灵梦', '单行声明'],
-    ['# 机 指令 310', '单行声明'],
-    ['# 设 今天已触发 整数 = 0 存档', '单行声明'],
-    ['# 设 亲近线 整数 = 500', '单行声明'],
-    ['> 晨光透过鸟居。', '旁白没有体'],
-    ['灵梦：「早上好。」', '台词没有体'],
-    ['! 早安问候', '池调用没有体'],
-    ['! 娇羞退场("被夸奖")', '模板插槽块要定义处才知道 ⇒ 不猜'],
-    ['@颜绘 笑顔', '单行演出'],
-    ['@标 主菜单', '单行语句'],
-    ['@跳 主菜单', '单行语句'],
-    ['@返', '单行语句'],
-    ['@断', '单行语句'],
-    ['@续', '单行语句'],
-    ['// 整行注释', '注释不打断块、自己也不开体'],
-    ['', '空行'],
-    ['    ', '纯空白行'],
-  ])('%s → null（%s）', (line) => {
-    expect(kojo2IndentAfterLine(`${line}\n`, 1)).toBeNull();
-  });
-
-  it('`空行` 语句（`空行` / `空行 等待` / `空行 续`）不开体', () => {
-    for (const line of ['空行', '空行 等待', '空行 续']) {
-      expect(kojo2IndentAfterLine(`${line}\n`, 1), line).toBeNull();
-    }
-  });
-});
-
-describe('kojo2IndentAfterLine · 判不准就 null（绝不给一个猜的缩进）', () => {
-  it('不在 4 空格栅格上的行（2 / 6 空格）⇒ null', () => {
-    expect(kojo2IndentAfterLine('  # 对照表 心情 依据 恋慕\n', 1)).toBeNull();
-    expect(kojo2IndentAfterLine('      @算\n', 1)).toBeNull();
-  });
-
-  it('含 Tab 的结构行 ⇒ null（2.0 结构缩进只用空格，§8.5）', () => {
-    expect(kojo2IndentAfterLine('\t@算\n', 1)).toBeNull();
-    expect(kojo2IndentAfterLine('\t# 池 早安问候\n', 1)).toBeNull();
-  });
-
-  it('行号越界 / 非整数 / 非正数 ⇒ null', () => {
-    const text = '# 对照表 心情 依据 恋慕\n';
-    expect(kojo2IndentAfterLine(text, 0)).toBeNull();
-    expect(kojo2IndentAfterLine(text, -3)).toBeNull();
-    expect(kojo2IndentAfterLine(text, 1.5)).toBeNull();
-    expect(kojo2IndentAfterLine(text, 99)).toBeNull();
-  });
-
-  it('空文本 / 非字符串 ⇒ null（不抛）', () => {
-    expect(kojo2IndentAfterLine('', 1)).toBeNull();
-    expect(kojo2IndentAfterLine(undefined as unknown as string, 1)).toBeNull();
-    expect(kojo2IndentAfterLine(42 as unknown as string, 1)).toBeNull();
-  });
-});
-
-/* ============================== 缩进 · 单源 / 幂等 / 真夹具 ============================== */
-
-describe('缩进的单源与幂等', () => {
-  it('一级缩进串 = core 的 4 空格；判据里的宽度与它同源', () => {
-    expect(KOJO2_INDENT_WIDTH).toBe(KOJO_INDENT_WIDTH);
-    expect(KOJO2_INDENT_UNIT).toBe(' '.repeat(KOJO_INDENT_WIDTH));
-    expect(KOJO2_INDENT_UNIT).toHaveLength(4);
-    expect(FOUR).toBe(KOJO2_INDENT_UNIT);
-  });
-
-  it('结果恒为 4 空格整数倍个空格：整篇夹具逐行扫一遍（含 null 行）', () => {
-    const lineCount = FIXTURE_TEXT.split('\n').length;
-    let positive = 0;
-    for (let line = 1; line <= lineCount; line += 1) {
-      const indent = kojo2IndentAfterLine(FIXTURE_TEXT, line);
-      if (indent === null) continue;
-      positive += 1;
-      expect(indent, `第 ${line} 行`).toMatch(/^(?: {4})+$/);
-      expect(indent.length % KOJO_INDENT_WIDTH).toBe(0);
-    }
-    // 反空匹配自证：夹具里确实有成片的开体行（不是整篇 null 蒙混过关）
-    expect(positive).toBeGreaterThan(15);
-  });
-
-  it('幂等：同一输入问两次答案逐字相同（纯函数、无内部状态）', () => {
-    const lineCount = FIXTURE_TEXT.split('\n').length;
-    for (let line = 1; line <= lineCount; line += 1) {
-      expect(kojo2IndentAfterLine(FIXTURE_TEXT, line)).toBe(kojo2IndentAfterLine(FIXTURE_TEXT, line));
-    }
-  });
-});
-
-describe('真 2.0 夹具（full.kojo2）逐结构读数', () => {
-  const cases: ReadonlyArray<readonly [number, string | null, string]> = [
-    [11, FOUR, '# 对照表 心情 依据 恋慕'],
-    [12, FOUR, '    0..99 -> 疏远（表行与行同层）'],
-    [15, FOUR, '    否 -> 未知（默认分支也是行）'],
-    [17, FOUR, '# 池 早安问候'],
-    [18, `${FOUR}${FOUR}`, '    ? 恋慕 < 100（池里的分支体）'],
-    [19, null, '        「……早。」（分支体里再回车不加深）'],
-    [26, FOUR, '# 模 娇羞退场(原因)'],
-    [39, FOUR, '@算'],
-    [48, FOUR, '? 恋慕 >= 500'],
-    [56, FOUR, '@着色 0xFF8080'],
-    [61, FOUR, '@随机'],
-    [62, FOUR, '    灵梦：「……呼。」（候选层）'],
-    [63, `${FOUR}${FOUR}`, '    @组'],
-    [64, `${FOUR}${FOUR}`, '        灵梦：「再、再摸摸嘛。」（组体层）'],
-    [66, FOUR, '    灵梦：「……」（组之后的候选）'],
-    [72, FOUR, '@循 体力恢复 < 100'],
-    [74, `${FOUR}${FOUR}`, '    ? 体力恢复 == 50'],
-    [82, FOUR, '@巡 队伍状态'],
-    [86, FOUR, '@复 3'],
-    [90, null, '> 请选择你的行动：（旁白行尾冒号是正文）'],
-    [100, FOUR, '@函 斐波那契(n)'],
-    [111, FOUR, '@织 回合末 之后'],
-    [117, null, '! 早安问候'],
-    [119, null, '    灵梦：「才、才没有很开心呢！」（插槽块不猜）'],
-    [122, FOUR, '@原生'],
-    [123, null, '    ; 逃生舱：底层 ERB 代码（围栏内）'],
-    [129, null, '    // 这里不是 2.0 注释（围栏内）'],
-  ];
-  it.each(cases)('第 %i 行 %s → %s', (line: number, expected: string | null) => {
-    expect(kojo2IndentAfterLine(FIXTURE_TEXT, line)).toBe(expected);
-  });
-});
 
 /* ============================== 缩进 · on-type 编辑 ============================== */
 
@@ -885,5 +649,41 @@ describe('install · 回车缩进 provider 的注册纪律', () => {
       getLanguageId: () => 'kojo2',
     } as unknown as Monaco.editor.ITextModel;
     expect(provider.provideOnTypeFormattingEdits(broken, positionAt(2), '\n', {} as never, {} as never)).toEqual([]);
+  });
+});
+
+/* ============================== 判据住包（B3i 的反向闸） ============================== */
+
+/**
+ * 判据既然整块进了 `@kojo/kojo-lang/indent`，宿主就不许再长出第二份：词表位序 / `lex()` /
+ * 形状正则只要在这里出现一次，两边就会开始各判各的（B3c–B3f 反复踩过的那条路）。
+ * 本闸读源码，不跑判据——它守的是"下一批人顺手把一段判据抄回宿主"。
+ */
+describe('判据住包：宿主 kojo2-indent.ts 只剩装配与翻译', () => {
+  const source = readFileSync(resolve(HERE, '../src/monaco/kojo2-indent.ts'), 'utf8');
+
+  it('只引包叶子（`@kojo/kojo-lang/indent`），不引 core 词法 / 词表', () => {
+    expect(source).toContain("from '@kojo/kojo-lang/indent'");
+    expect(source).not.toContain("from '@kojo/kojo-core'");
+    expect(source).not.toMatch(/\blex\s*\(/);
+    expect(source).not.toMatch(/KOJO_DECL_WORDS|KOJO_DISPATCH_WORDS/);
+  });
+
+  it('形状正则不再写第二份（块头 / 栏头 / 缩进单位 / indentationRules）', () => {
+    for (const name of [
+      'KOJO2_BLOCK_HEADER_COLON_RE',
+      'KOJO2_NATIVE_HEADER_RE',
+      'KOJO2_INDENT_UNIT',
+      'KOJO2_INDENTATION_RULES',
+    ]) {
+      expect(source, name).not.toContain(name);
+    }
+  });
+
+  it('装配面仍在：on-type 注册 + 两枚翻译口 + 包内基底规则', () => {
+    expect(source).toContain('registerOnTypeFormattingEditProvider');
+    expect(source).toContain('kojo2IndentReplacementAt');
+    expect(source).toContain('kojo2AutoCloseTargetAt');
+    expect(source).toContain('KOJO2_BASE_INDENT_RULES');
   });
 });

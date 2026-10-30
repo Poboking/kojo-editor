@@ -288,6 +288,8 @@ export default defineConfig({
       '@kojo/kojo-lang/lexicon': r('../kojo-lang/src/lexicon.ts'),
       '@kojo/kojo-lang/monarch': r('../kojo-lang/src/monarch.ts'),
       '@kojo/kojo-lang/language-config': r('../kojo-lang/src/language-config.ts'),
+      // B3i：缩进 / 回车判据叶子（排在桶之前；宿主 `monaco/kojo2-indent.ts` 只引这一枚）。
+      '@kojo/kojo-lang/indent': r('../kojo-lang/src/indent.ts'),
       '@kojo/kojo-lang/monaco-theme': r('../kojo-lang/src/monaco-theme.ts'),
       '@kojo/kojo-lang': r('../kojo-lang/src/index.ts'),
       // 语言层共用词表（LAU-3b 解耦批）：叶子同样必须排在桶之前。

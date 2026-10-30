@@ -272,6 +272,13 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     // provider 后注册、按 Monaco 的"同分后注册在前"排第一位。
     [LanguageCapability.Format]: 'shared',
     [LanguageCapability.Semantic]: 'self',
+    // B3i（2026-10-30）：缩进 / 回车判据已整块住 `@kojo/kojo-lang/indent`，宿主
+    // `monaco/kojo2-indent.ts` 只剩 on-type provider 的装配与 1 基区间 → Monaco `TextEdit`
+    // 的翻译。仍记 `self` 而不是 `shared`：on-type formatter 是 **Monaco 引擎面**，不是
+    // `ui.editor.languageService` 的语言服务槽（`SlotServiceKind` 里没有它，也不为它新开
+    // 一枚）；`builtin` 也不成立——静态语言配置（`ui.monaco.language` 供方已交的
+    // `onEnterRules` / `indentationRules`）拿不到 `@原生` 围栏上下文，回车校正必须有一枚
+    // 宿主注册的 provider。判据住包只是"`self` 的那一面不再住宿主"。
     [LanguageCapability.Indent]: 'self',
     [LanguageCapability.Brackets]: 'builtin',
     // B3e（2026-10-29）：引用 / 改名同批走共享收口（能力名 `references` / `rename`），判据住
