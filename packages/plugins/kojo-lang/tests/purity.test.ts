@@ -54,6 +54,9 @@ const ALLOWED_PACKAGES = new Set([
   // B3a：展开体落点要"那一次编译的成品"，登记表已搬进语言面库。
   '@kojo/kojo-lang/expand-compile',
   '@kojo/kojo-lang/expand-view',
+  // B3 收口最后一格：文档级诊断的判据叶子与"一次编译两处消费"的成品交接。
+  '@kojo/kojo-lang/diagnostics',
+  '@kojo/kojo-lang/diagnostic-result',
   // B3c：补全 / 悬停供方——候选组装 / 块级 snippets / 悬停正文与 Markdown 措辞都在包里
   // （`event-sites` 那枚判据由 `hover.ts` 包内自用，插件这一侧不直接 import）。
   '@kojo/kojo-lang/completion',
@@ -101,7 +104,8 @@ describe('@kojo/plugin-kojo-lang 是纯插件（零 Monaco / 零 React / 零 IO 
     // + B3j：code-actions（一键迁移供方，槽 `ui.editor.codeAction`）
     // + B3 语义收口：semantic（语义着色供方，槽 `ui.editor.languageService` 的
     //   `semanticToken`——捕获快照随请求递进来，这里只做裁与答）
-    expect(files).toHaveLength(19);
+    // + B3 收口最后一格：diagnostics（文档级诊断供方，槽 `ui.editor.decorator`）
+    expect(files).toHaveLength(20);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

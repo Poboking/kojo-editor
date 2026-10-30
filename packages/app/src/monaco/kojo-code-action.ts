@@ -180,7 +180,9 @@ export function markersToDecorations(
       severity,
       message: m.message,
       startColumn: m.startColumn,
-      endColumn: m.endColumn,
+      // 跨行 marker（B3 收口后 2.0 诊断可带 `endLine`）的 `endColumn` 属于**终点行**，
+      // 直接放进单行装饰会把区间拧成长度负数那类怪值 ⇒ 退回"整行"（缺省 = 行尾）。
+      ...(m.endLineNumber === m.startLineNumber ? { endColumn: m.endColumn } : {}),
       ...(code !== undefined ? { code } : {}),
     };
   });

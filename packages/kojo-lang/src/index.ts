@@ -100,3 +100,10 @@ export * from './indent';
 // `references` 那一条判据）。理由与 B3c / B3d / B3e / B3f 逐字相同：供方是插件，插件读不到宿主；
 // 开机侧一律引叶子（`@kojo/kojo-lang/codelens`）。
 export * from './codelens';
+// B3 收口最后一格（2026-10-30）：2.0 **文档级诊断**的判据整块从宿主
+// `monaco/kojo2-diagnostics.ts` 搬进来——`diagnostics`（编译 → 行 / 落点归一 / 失败口径 +
+// 两面的取数缝）与 `diagnostic-result`（一次编译两处消费的成品交接）。供方是插件的
+// `kojo2-diagnostics` 贡献（槽 `ui.editor.decorator`），宿主只剩调度、markers / 问题面板
+// 翻译与降级；项目级扫描（`project-diagnostics`）不吃这份贡献（见插件侧 `diagnostics.ts`）。
+export * from './diagnostics';
+export * from './diagnostic-result';

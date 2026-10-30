@@ -421,14 +421,21 @@ export function decorationsToMarkers(
     const line = Math.min(Math.max(1, Math.trunc(d.line)), lineCount);
     const maxColumn = model.getLineMaxColumn(line);
     const startColumn = Math.min(Math.max(1, Math.trunc(d.startColumn ?? 1)), maxColumn);
-    const endColumn = Math.min(Math.max(startColumn, Math.trunc(d.endColumn ?? maxColumn)), maxColumn);
+    // 跨行装饰（additive，B3 收口最后一格）：`endLine` 缺省 = 同行，行为与加之前逐字相同。
+    // 终点行自带行宽，终点列必须按**那一行**夹（拿起始行的行宽夹跨行终点会把区间截短）。
+    const endLine = Math.min(Math.max(line, Math.trunc(d.endLine ?? line)), lineCount);
+    const endMaxColumn = model.getLineMaxColumn(endLine);
+    const endColumn = Math.min(
+      Math.max(endLine === line ? startColumn : 1, Math.trunc(d.endColumn ?? endMaxColumn)),
+      endMaxColumn,
+    );
     markers.push({
       severity: markerSeverity(monaco, d.severity),
       message: d.message,
       code: d.code,
       startLineNumber: line,
       startColumn,
-      endLineNumber: line,
+      endLineNumber: endLine,
       endColumn,
     });
   }

@@ -89,7 +89,10 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     // + B3 语义收口（2026-10-30）：结构捕获 → 语义 token 区间的判据再进一枚——`semantic`
     //   （捕获快照 → 5 元组区间；宿主只预取快照，供方是插件）。零外部依赖，Monaco 的
     //   `SemanticTokens` 形状翻译留在宿主。
-    expect(files).toHaveLength(32);
+    // + B3 收口最后一格（2026-10-30）：文档级诊断再进两枚——`diagnostics`（编译 → 行 / 落点归一 /
+    //   失败口径 + 两面取数缝）与 `diagnostic-result`（一次编译两处消费的成品交接）。同样只引
+    //   `@kojo/kojo-core` 的类型与函数，槽形状翻译 / 调度 / 降级留在宿主与插件。
+    expect(files).toHaveLength(34);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

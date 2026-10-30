@@ -864,6 +864,15 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `erb-parser` 在 `bootstrap.ts` 常驻，判据只有住这里才能让宿主"不认识 ERB"；
     //     住 `@kojo/erb-lang/definition` 会把整包（含 32 KB `highlight.ts`）拖上首屏
     //     （前两版实测 201 文件 / 3,230 KB）。⇒ 闸 **3,225 → 3,234**（余量约 2 KB；文件闸仍 199）。
+    //   - **B3 收口最后一格·文档级诊断进槽（2026-10-30，本批）**：读数 **199 文件 / 3,232 KB**
+    //     （3,309,497 B = 上一档 + 145）——同样**零新进图文件**（199 未动）；净 **+145 B**
+    //     逐枚对账只有两处：`plugin-api/src/slots.ts` +142（`LineDecoration.endLine` 一格：
+    //     2.0 编译诊断的 span 可跨行，Monaco marker 原生支持多行区间；缺这一格只能塌到起始行）
+    //     与 `ui/kojo2-project-analysis.ts` +3（注释里判据的落点改名）。
+    //     **判据搬家对图面零增减**是另一半证据：搬进包的两枚（`kojo-lang/src/diagnostics.ts` /
+    //     `diagnostic-result.ts`）与删掉的两枚宿主文件（`monaco/kojo2-diagnostics.ts` /
+    //     `ui/kojo2-expand-compile.ts`）**都不在开机图上**（monaco 装配是懒边），图里既没多也没少一个文件。
+    //     两枚闸维持 **≤199 / ≤3,234**，**不抬**（余量约 2.6 KB）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 

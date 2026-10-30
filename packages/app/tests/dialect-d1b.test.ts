@@ -30,7 +30,7 @@ import { documentRequestFields } from '../src/ui/language-service-request';
 import type {
   Kojo2DiagnosticsResult,
   Kojo2MarkerSeveritySource,
-} from '../src/monaco/kojo2-diagnostics';
+} from '../src/ui/kojo2-problem-sync';
 import { withDialectDiagnostics } from '../src/ui/kojo2-problem-wiring';
 
 const ROOT = 'D:/game';

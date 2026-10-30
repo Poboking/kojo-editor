@@ -338,6 +338,8 @@ describe('插件装配', () => {
       'kojo2-semanticTokens',
       // B3j：一键迁移动作进**既有槽** `ui.editor.codeAction`（不是语言服务的第十三个 kind）
       'kojo2-codeActions',
+      // B3 收口最后一格：文档级诊断进**既有专用槽** `ui.editor.decorator`（不是新判别成员）
+      'kojo2-diagnostics',
       // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
       'kojo2-monaco-language',
     ]);
@@ -360,6 +362,8 @@ describe('插件装配', () => {
       'ui.editor.languageService',
       // B3j：一键迁移走专用槽（诊断 / 快速修复各有专用槽，不开语言服务的新判别成员）
       'ui.editor.codeAction',
+      // B3 收口最后一格：文档级诊断走专用槽 `ui.editor.decorator`（LineDecoration 即诊断形状）
+      'ui.editor.decorator',
       'ui.monaco.language',
     ]);
     expect(new Set(registered.map((r) => r.item.order)).size).toBe(1);

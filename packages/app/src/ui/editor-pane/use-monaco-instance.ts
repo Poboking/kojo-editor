@@ -90,8 +90,10 @@ import { isTauri } from '../../bridge/invoke';
 // 住在本实例 effect 里而不是 EditorPane：事件源（ed / filePathRef / sugarModelRef）都在
 // 这一拍之后才齐，且退场次序本来就由本 hook 的清账段钉死。
 import {
+  charNoForProjectPath,
   createKojo2CompileCache,
   installKojo2ProblemWiring,
+  kojo2IdentityCompileExpression,
   pathOfKojo2Model,
 } from '../kojo2-problem-wiring';
 // K2 batch-5（K2-EDITOR-MOUNT ①）：预览面板的入口与宿主桥。编译成品由上面那条诊断接线
@@ -101,8 +103,9 @@ import { publishKojo2PreviewEntry } from '../kojo2-preview-host';
 // LAU-D1b：方言解析的宿主入口（识别链 + 工作区覆盖 + 文件断言 → 绑定）。
 import { resolveDocumentDialect } from '../dialect-binding';
 // K2 batch-7：展开视图（模板/池/随机）的编译成品来源——只登记这一实例的缓存读取器，
-// hover/definition 按路径问，不二次编译（flag 关 ⇒ 零注册）。
-import { registerKojo2ExpandCompileSource } from '../kojo2-expand-compile';
+// hover/definition 按路径问，不二次编译（flag 关 ⇒ 零注册）。B3 收口后登记表住语言面库，
+// 这里直接引叶子（宿主那枚指针壳 `ui/kojo2-expand-compile.ts` 同批删除）。
+import { registerKojo2ExpandCompileSource } from '@kojo/kojo-lang/expand-compile';
 import { isKojo2DiagnosticsPath } from '../kojo2-diagnostics-gate';
 import { revealLocationOf } from '../../monaco/reveal-position';
 // K2 batch-4 + 入口 A（2026-10-24）：2.0 语言服务的 adapter 来源。**不再**静态引用
@@ -307,7 +310,21 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     // 入口 A（2026-10-24）：按**当前项目**的 v1 `adapterId` 从组合根登记簿现取。此前写死
     // `ERATW_GAME_ADAPTER`——打开 eraFL 工程时 2.0 面拿到的是 eraTW 的事实（不报错、只是错，
     // 比没做更危险）。取不到 ⇒ `null`（零候选、不抛）：错误事实与"没有事实"从此分开。
-    ensureGlobalProviders({ kojo2Adapter: () => kojo2AdapterForProject(kernel.project.current()) });
+    ensureGlobalProviders({
+      kojo2Adapter: () => kojo2AdapterForProject(kernel.project.current()),
+      // B3 收口最后一格：文档级诊断的两面（adapter + backend）也走同一套登记簿。
+      // 插件（`@kojo/plugin-kojo-lang` 的诊断供方）在**请求时**按文件路径问一次；这里只做
+      // 组合根的组合：按当前项目取两面、按 `charaIndex[].kojoDir` 最长前缀推文件级角色号。
+      // 取不到任一 ⇒ `null`（插件抛"没有 2.0 诊断面"→ 问题面板 + toast，绝不借别家事实）。
+      kojo2Surface: (filePath) => {
+        const project = kernel.project.current();
+        const charNo = charNoForProjectPath(project, filePath);
+        return kojo2SurfaceForProject(project, {
+          compileExpression: kojo2IdentityCompileExpression,
+          ...(charNo !== undefined && charNo.length > 0 ? { charNo } : {}),
+        });
+      },
+    });
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void saveRef.current();
     });
@@ -623,11 +640,10 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       markerHost: monaco,
       severitySource: monaco,
       notify,
-      // 入口 D（2026-10-25）：诊断要的 adapter + backend 也从组合根按项目现取——与上面
-      // 语言服务同一个登记簿、同一把键（v1 `gameId`）。此前诊断链写死 eraTW，
-      // eraFL 工程拿到的是 eraTW 的落点规则（不报错、只是错）。取不到两面 ⇒ 诊断入口抛错，
-      // 问题面板与 toast 亮灯，而不是"这份文件干净"。
-      surfaceFor: kojo2SurfaceForProject,
+      // B3 收口最后一格：诊断入口的缺省实现改成**问槽**（判据 / 供方都在插件里）。
+      // 两面（adapter + backend）由上面 `ensureGlobalProviders` 登记的那枚 getter 交给插件；
+      // 宿主这里不再传 `surfaceFor`——那是"宿主自己编译"那条路的残留，同批删除。
+      // 取不到两面 ⇒ 插件抛错，问题面板与 toast 亮灯，而不是"这份文件干净"。
       // LAU-D1b：同一轮诊断里并 `core/dialect/*`（未绑定 / 冲突 / 响应错配）。
       // 解析语义全在 core；这里只把"当前项目 + 这份正文 + 这份路径"递进去。
       dialect: { resolve: resolveDocumentDialect },

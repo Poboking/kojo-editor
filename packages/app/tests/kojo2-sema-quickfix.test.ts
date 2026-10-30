@@ -19,7 +19,7 @@ import type { EditorTextEdit } from '@kojo/plugin-api';
 import type * as Monaco from '../src/monaco/entry';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import { provideCodeActions } from '@kojo/plugin-kojo-lang';
-import { kojo2DiagnosticsToMarkers } from '../src/monaco/kojo2-diagnostics';
+import { kojo2DiagnosticsToMarkers } from '../src/ui/kojo2-problem-wiring';
 import {
   KOJO2_CODE_ACTION_COMMAND,
   installKojo2CodeActionProvider,

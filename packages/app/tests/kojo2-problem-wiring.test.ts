@@ -19,11 +19,12 @@ import { KOJO2_PROBLEM_MARKER_OWNER, type Kojo2DiagnoseFn } from '../src/ui/kojo
 import {
   KOJO2_DIAGNOSTICS_FAILURE_CODE,
   charNoForProjectPath,
-  createProjectKojo2Diagnose,
+  createSlotKojo2Diagnose,
   installKojo2ProblemWiring,
   kojo2ProblemsOf,
-  type Kojo2SurfaceResolver,
 } from '../src/ui/kojo2-problem-wiring';
+import { createKojo2DiagnosticsContribution } from '@kojo/plugin-kojo-lang';
+import { registerKojo2SurfaceSource } from '@kojo/kojo-lang/diagnostics';
 import { kojo2OwnsDiagnostics } from '../src/ui/kojo2-diagnostics-gate';
 import type { EditorProblem } from '../src/ui/problem-store';
 
@@ -36,7 +37,7 @@ afterEach(() => {
 
 const SEVERITY = { Hint: 1, Info: 2, Warning: 4, Error: 8 } as const;
 const SEVERITY_SOURCE = { MarkerSeverity: SEVERITY } as unknown as Parameters<
-  typeof createProjectKojo2Diagnose
+  typeof createSlotKojo2Diagnose
 >[0]['severitySource'];
 
 function stubFlag(on: boolean): void {
@@ -401,7 +402,21 @@ function projectWithCharas(): GameProject {
   } as unknown as GameProject;
 }
 
-describe('adapter / backend 装配（按项目取两面 · 入口 D 改）', () => {
+/**
+ * 假 kernel：槽里挂一枚**真的** 2.0 诊断供方（判据在插件与包内，测试不重建第二份）。
+ * 第二参数 = 换一张贡献表（钉"插件未装载"那条可见降级）。
+ */
+function kernelOf(
+  project: GameProject | null,
+  contributions: readonly unknown[] = [createKojo2DiagnosticsContribution(10)],
+): Kernel {
+  return {
+    project: { current: () => project },
+    slots: { query: (slot: string) => (slot === 'ui.editor.decorator' ? contributions : []) },
+  } as unknown as Kernel;
+}
+
+describe('文档级诊断的供方接线（B3 收口：问槽，不叫编译）', () => {
   it('角色号按 `kojoDir` 最长前缀推；不在任何口上目录下 = undefined', () => {
     const project = projectWithCharas();
     expect(charNoForProjectPath(project, 'D:/game/口上/12/场景.kojo2')).toBe('12');
@@ -416,46 +431,62 @@ describe('adapter / backend 装配（按项目取两面 · 入口 D 改）', () 
     // 换成桩就测不到"charNo 有没有被送进去"这件事。
     const { createEratwEmitBackend, ERATW_GAME_ADAPTER } = await import('@kojo/plugin-eratw-adapter');
     const project = projectWithCharas();
-    const surfaceFor: Kojo2SurfaceResolver = (_project, deps) => ({
-      adapter: ERATW_GAME_ADAPTER,
-      backend: createEratwEmitBackend({
-        compileExpression: (expr) => expr.text,
-        ...(deps.charNo !== undefined ? { charNo: deps.charNo } : {}),
-      }),
+    (project as unknown as { adapterId: string }).adapterId = ERATW_GAME_ADAPTER.id;
+    // B3 收口：两面由包内登记表现取（宿主在 `ensureGlobalProviders` 登记的那一枚）。
+    const unregister = registerKojo2SurfaceSource((filePath) => {
+      const charNo = charNoForProjectPath(project, filePath);
+      return {
+        adapter: ERATW_GAME_ADAPTER,
+        backend: createEratwEmitBackend({
+          compileExpression: (expr) => expr.text,
+          ...(charNo !== undefined && charNo.length > 0 ? { charNo } : {}),
+        }),
+      };
     });
+    try {
+      const diagnose = createSlotKojo2Diagnose({
+        kernel: kernelOf(project),
+        severitySource: SEVERITY_SOURCE,
+      });
+      const ok = diagnose({ source: '# 机 指令 310\n', filePath: 'D:/game/口上/12/x.kojo2' });
+      expect(ok.error).toBeNull();
+      expect(ok.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
 
-    const diagnose = createProjectKojo2Diagnose({
-      severitySource: SEVERITY_SOURCE,
-      project: () => project,
-      surfaceFor,
-    });
-    const ok = diagnose({ source: '# 机 指令 310\n', filePath: 'D:/game/口上/12/x.kojo2' });
-    expect(ok.error).toBeNull();
-    expect(ok.diagnostics.filter((item) => item.severity === 'error')).toEqual([]);
-
-    const failed = diagnose({ source: '# 机 指令 310\n', filePath: 'D:/p/x.kojo2' });
-    expect(failed.error).toBeNull();
-    expect(failed.errorCount).toBeGreaterThan(0);
-    expect(failed.diagnostics.some((item) => String(item.code).startsWith('unit/'))).toBe(true);
+      const failed = diagnose({ source: '# 机 指令 310\n', filePath: 'D:/p/x.kojo2' });
+      expect(failed.error).toBeNull();
+      expect(failed.errorCount).toBeGreaterThan(0);
+      expect(failed.diagnostics.some((item) => String(item.code).startsWith('unit/'))).toBe(true);
+    } finally {
+      unregister();
+    }
   });
 
   it('取不到两面 ⇒ **抛错**（不回退到任何游戏的事实、不给空诊断）', () => {
-    const diagnose = createProjectKojo2Diagnose({
-      severitySource: SEVERITY_SOURCE,
-      project: () => ({ adapterId: 'eraakumamaid' } as unknown as GameProject),
-      surfaceFor: () => null,
-    });
-    expect(() => diagnose({ source: '# 幕\n', filePath: 'D:/p/a.kojo2' })).toThrow(/没有 2\.0 诊断面/);
+    const unregister = registerKojo2SurfaceSource(() => null);
+    try {
+      const diagnose = createSlotKojo2Diagnose({
+        kernel: kernelOf({ adapterId: 'eraakumamaid' } as unknown as GameProject),
+        severitySource: SEVERITY_SOURCE,
+      });
+      expect(() => diagnose({ source: '# 幕\n', filePath: 'D:/p/a.kojo2' })).toThrow(/没有 2\.0 诊断面/);
+    } finally {
+      unregister();
+    }
   });
 
-  it('取项目时 kernel 抛错 ⇒ 按"没有项目"处理（同样抛错，不静默）', () => {
-    const diagnose = createProjectKojo2Diagnose({
+  it('没有当前项目 ⇒ 同样抛错（不静默当"零诊断"）', () => {
+    const diagnose = createSlotKojo2Diagnose({
+      kernel: kernelOf(null),
       severitySource: SEVERITY_SOURCE,
-      project: () => {
-        throw new Error('kernel disposed');
-      },
-      surfaceFor: () => null,
     });
-    expect(() => diagnose({ source: '# 幕\n', filePath: 'D:/p/a.kojo2' })).toThrow(/无项目/);
+    expect(() => diagnose({ source: '# 幕\n', filePath: 'D:/p/a.kojo2' })).toThrow(/没有当前项目/);
+  });
+
+  it('槽里没有 2.0 诊断供方（插件未装载）⇒ 抛错（可见降级，不是"这份文件干净"）', () => {
+    const diagnose = createSlotKojo2Diagnose({
+      kernel: kernelOf(projectWithCharas(), []),
+      severitySource: SEVERITY_SOURCE,
+    });
+    expect(() => diagnose({ source: '# 幕\n', filePath: 'D:/p/a.kojo2' })).toThrow(/供方没有注册/);
   });
 });

@@ -30,3 +30,12 @@ export { provideDocumentSymbols, symbolFactsToTree } from './symbols';
 export { provideInlayHints, toEditorInlayHints } from './inlay';
 export { isKojo2Request } from './request';
 export { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
+// B3 收口最后一格（2026-10-30）：文档级诊断的供方（槽 `ui.editor.decorator`；判据在
+// `@kojo/kojo-lang/diagnostics`）。导出给测试直调，也导出贡献工厂让宿主按 id 认这一家。
+export {
+  createKojo2DiagnosticsContribution,
+  isKojo2DiagnosticsPath,
+  provideKojo2Diagnostics,
+  toLineDecoration,
+  type Kojo2DiagnosticsFile,
+} from './diagnostics';

@@ -1051,10 +1051,13 @@ describe('装配纪律：共享收口 + 插件供方是唯一落点（读源码�
     expect(source).not.toMatch(/import \* as Monaco from/);
   });
 
-  it('adapter 仍由组合根按项目解析（签名帮助那条腿还吃 getter，宿主不写死某游戏）', () => {
+  it('adapter 与两面都由组合根按项目解析（宿主不写死某游戏）', () => {
     const source = read('packages', 'app', 'src', 'ui', 'editor-pane', 'use-monaco-instance.ts');
-    expect(source).toMatch(/ensureGlobalProviders\(\{ kojo2Adapter: \(\) =>/);
+    // B3 收口最后一格：`ensureGlobalProviders` 的调用改成多行（`kojo2Adapter` + `kojo2Surface`），
+    // 判据不变——两格仍然是"按当前项目从组合根登记簿现取"，且不出现某部游戏的具体 adapter。
+    expect(source).toMatch(/ensureGlobalProviders\(\{\s*kojo2Adapter: \(\) =>/);
     expect(source).toContain('kojo2AdapterForProject(kernel.project.current())');
+    expect(source).toContain('kojo2SurfaceForProject(project, {');
     expect(source).not.toMatch(/import\s*\{[^}]*ERATW_GAME_ADAPTER/);
     expect(source).not.toMatch(/kojo2Adapter:\s*\(\)\s*=>\s*ERATW_GAME_ADAPTER/);
   });

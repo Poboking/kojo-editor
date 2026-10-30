@@ -38,7 +38,9 @@
     "./language-config": "./src/language-config.ts",
     "./indent": "./src/indent.ts",
     "./monaco-theme": "./src/monaco-theme.ts",
-    "./codelens": "./src/codelens.ts"
+    "./codelens": "./src/codelens.ts",
+    "./diagnostics": "./src/diagnostics.ts",
+    "./diagnostic-result": "./src/diagnostic-result.ts"
   },
   "dependencies": {
     "@kojo/kojo-core": "workspace:*",

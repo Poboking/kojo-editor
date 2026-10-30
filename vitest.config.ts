@@ -47,6 +47,9 @@ export const config = defineConfig({
       '@kojo/kojo-lang/semantic': r('./packages/kojo-lang/src/semantic.ts'),
       // B3j：一键迁移 code action 的判据叶子（同样必须排在桶之前）。
       '@kojo/kojo-lang/code-actions': r('./packages/kojo-lang/src/code-actions.ts'),
+      // B3 收口最后一格：文档级诊断判据 + 一次编译两处消费的成品交接（同样排在桶之前）。
+      '@kojo/kojo-lang/diagnostics': r('./packages/kojo-lang/src/diagnostics.ts'),
+      '@kojo/kojo-lang/diagnostic-result': r('./packages/kojo-lang/src/diagnostic-result.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('./packages/kojo-sdk/src/semantic-roles.ts'),
       '@kojo/kojo-sdk/structure-protocol': r('./packages/kojo-sdk/src/structure-protocol.ts'),
       '@kojo/kojo-sdk/contracts': r('./packages/kojo-sdk/src/contracts.ts'),

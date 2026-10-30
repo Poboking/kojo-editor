@@ -75,6 +75,7 @@ import { provideSemanticTokens } from './semantic';
 import { provideSignatureHelp } from './signature';
 import { provideCodeLenses } from './codelens';
 import { provideCodeActions } from './code-actions';
+import { createKojo2DiagnosticsContribution } from './diagnostics';
 import { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
 
 /**
@@ -214,6 +215,11 @@ export function createKojoLangPlugin(): Plugin {
         order: CONTRIBUTION_ORDER,
         provideActions: (file) => provideCodeActions(file),
       });
+      // B3 收口最后一格（2026-10-30）：文档级诊断进**既有专用槽** `ui.editor.decorator`
+      // （诊断没有独立的能力判别成员——`LineDecoration` 就是 LSP 诊断形状，见契约注释）。
+      // 判据在 `@kojo/kojo-lang/diagnostics`；宿主诊断接线只做调度、markers / 问题面板翻译
+      // 与降级。项目级扫描轮（`bulk`）本贡献弃权，见 `src/diagnostics.ts` 头注。
+      ctx.slots.register('ui.editor.decorator', createKojo2DiagnosticsContribution(CONTRIBUTION_ORDER));
       ctx.slots.register('ui.monaco.language', {
         id: 'kojo2-monaco-language',
         order: CONTRIBUTION_ORDER,
@@ -222,7 +228,8 @@ export function createKojoLangPlugin(): Plugin {
       ctx.log.info(
         `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting / references / rename / documentHighlight / selectionRange / codeLens / foldingRange / semanticToken（languageId=${KOJO2_LANGUAGE_ID}）；` +
           `语言面已交出：Monarch / 语言配置 / 三套主题（ui.monaco.language）；` +
-          `一键迁移动作已交出：codeAction`,
+          `一键迁移动作已交出：codeAction；` +
+          `文档级诊断已交出：ui.editor.decorator`,
       );
     },
   };

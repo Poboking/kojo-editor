@@ -68,7 +68,7 @@
 ## 四、剩余欠账（数字/方向性的；认领的活在 BOARD.md）
 
 - **v0.4.0-beta.1 发版余项**：真实终端手工勾验（保存闭环 §2.J / 文件监视）+ NSIS **干净目录人工安装勾验**（产物已构建并审计，2026-10-22 `33c02392`；逐步清单在 `MANUAL-CHECKLIST-v0.4.0-beta.1`）；自动更新链路代码侧已闭环，端到端待首次真实 release。
-- **B3 语言面收口**：B3c–B3j 已落 dev（2026-10-30 收口：行上注解 / 折叠区间 / 缩进·回车 / 一键迁移 codeAction）；余 **语义着色 / 诊断** 两条仍住宿主（语义面要先把 worker 事实穿槽的口径定死），其后是 B5b（删宿主残留）与 LAU-4 余项（ERB 的补全 / 改名 / 调用层级等仍住 `monaco/erb-*.ts`；高亮 / 扩选已进同一槽）。
+- **B3 语言面收口**：B3c–B3j 已落 dev（2026-10-30 收口：行上注解 / 折叠区间 / 缩进·回车 / 一键迁移 codeAction）；**语义着色（B3 语义收口）与文档级诊断（B3 收口最后一格）同日进槽**——判据在 `@kojo/kojo-lang`（`semantic` / `diagnostics` + `diagnostic-result`）、供方在 `@kojo/plugin-kojo-lang`（诊断走专用槽 `ui.editor.decorator`，宿主只剩调度 / markers 翻译 / 降级；项目级扫描轮 `bulk` 弃权，项目级结论仍只归 `kojo2-project-analysis`），其后是 B5b（删宿主残留）与 LAU-4 余项（ERB 的补全 / 改名 / 调用层级等仍住 `monaco/erb-*.ts`；高亮 / 扩选已进同一槽）。
 - ERB 波浪线：结构类与表达式级均已落地（结构 error / 表达式 warning，code `erb.expr-*`）；**CASE/PRINTDATA 条件保守排除**，仍是已知盲区。
 - `.kojo 预览`：已交付为常态功能（只读内存 model 原生渲染，默认不开启）；作者-facing 术语统一 `.kojo 语言 / .kojo 预览 / .kojo 校验 / .kojo 转译检查`，口径靠 review 维持。
 - **整条性能线并入主干（2026-10-29，`b/workbuddy/1029-perf-trunk`）**：本地 `dev` 落后 `origin/dev`

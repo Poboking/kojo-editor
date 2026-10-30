@@ -1136,15 +1136,11 @@ export interface EditorRenameResult {
 /**
  * **本批不加的两个能力**（`diagnostics` / `codeAction`）——不是遗漏，是已经各有专用槽：
  *
- * - 诊断 = 槽 `ui.editor.decorator`（{@link LineDecoration} 就是 LSP 诊断的形状：
- *   行 / 列区间 / severity / message / code / source），供方 `decorate()` 直接产出；
- * - 快速修复 = 槽 `ui.editor.codeAction`（{@link EditorCodeActionContribution}，
- *   `provideActions` 已经收 `line` / `scope` / `diagnostics` 三个位置判据）。
+ * - 诊断 = 槽 `ui.editor.decorator`（{@link LineDecoration} 就是 LSP 诊断的形状）；
+ * - 快速修复 = 槽 `ui.editor.codeAction`（{@link EditorCodeActionContribution}）。
  *
- * 再给这两件事开一个 `languageService` 判别成员，等于**同一能力两条路径**：
- * 两处各算一份判据，必然漂移（本仓最贵的一类债）。kojo2 现在绕过这两个槽
- * （`kojo2-diagnostics.ts` 直接 `setModelMarkers`、`kojo2-code-actions.ts` 自带
- * 一条 command 通道），要改的是**让它们改注册这两个槽**，不是给它们开新路。
+ * 再给这两件事开一个 `languageService` 判别成员，等于**同一能力两条路径**：两处各算
+ * 一份判据，必然漂移（本仓最贵的一类债）。kojo2 的这两条也都注册在这两个槽上。
  */
 
 /**
@@ -1539,6 +1535,14 @@ export interface LineDecoration {
   readonly startColumn?: number;
   /** 1 基结束列（**不含**，即半开区间端点）；缺省 = 行尾 */
   readonly endColumn?: number;
+  /**
+   * 1 基结束行（additive，B3 收口最后一格 2026-10-30）。缺省 = 同行。
+   *
+   * 为什么要它：2.0 编译诊断的 span **可以是跨行的**（块残缺 / 未闭合结构），而 Monaco
+   * marker 原生支持多行区间；没有这一格，跨行诊断只能塌到起始行——区间口径就与 v1 及
+   * 问题面板收回的真相不一致了。只有 `endLine > line` 时才写，缺省行为与加之前逐字相同。
+   */
+  readonly endLine?: number;
   /** 可选诊断码（工具提示/分组用；游戏无关的稳定标识，如 `sugar.expr-missing-else`） */
   readonly code?: string;
   /**

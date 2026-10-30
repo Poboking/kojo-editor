@@ -1,15 +1,16 @@
 /**
  * Kojo 2.0 诊断 → 编辑器事件 → 既有问题面板的**接线层**（K2 batch-3）。
  *
- * ## 三层分工（本文件只做第三层）
+ * ## 三层分工（B3 收口后：判据不在本文件）
  *
- * 1. `monaco/kojo2-diagnostics.ts`：core 编译 → markers（纯逻辑，不碰 Monaco 实例）；
+ * 1. `@kojo/plugin-kojo-lang` 经槽 `ui.editor.decorator` 作答（判据在
+ *    `@kojo/kojo-lang/diagnostics`：core 编译 → 行 / 落点归一 / 失败口径）；
  * 2. `ui/kojo2-problem-sync.ts`：debounce / 只认活动 model / 版本过期丢弃 / 清理（纯状态机）；
  * 3. 本文件：把**编辑器事件**（内容变化 / 活动 model 切换）折成第 2 层的
  *    `setActive` + `schedule`，并把结果接到两处**既有**消费点——
  *    - `monaco.editor.setModelMarkers(model, 'kojo2-diagnostics', markers)`（波浪线）；
  *    - `problem-store.setProblems(path, items)`（问题面板的数据源，Ctrl+Shift+M）。
- *    没有新造第二套 UI / 第二个面板。
+ *    没有新造第二套 UI / 第二个面板。**判据一个字都不留在这里**：本层只做请求与翻译。
  *
  * ## 为什么在 bridge 里再加一层 debounce
  *
@@ -38,45 +39,43 @@
  * ② 经注入的 `notify` 发一条 `error` toast（宿主 UI 的通知中心，非新造 UI）。
  * 两条都有，缺一条都会让"屏上什么都没有"被读成"这份文件是干净的"。
  *
- * ## 装配口径（入口 D 改）
+ * ## 装配口径（B3 收口最后一格，2026-10-30）
  *
- * adapter / backend **不在本文件里挑**：两者都由组合根的两张登记簿按
- * `project.adapterId` 现取（`bootstrap.ts::kojo2SurfaceForProject`），本文件只接一个
- * `surfaceFor` 端口。此前写死 `ERATW_GAME_ADAPTER` + `createEratwEmitBackend`——
- * 打开 eraFL 工程时波浪线是拿 eraTW 的落点规则算出来的，不报错、只是错。
- * 取不到两面 ⇒ **抛错**（走 {@link KOJO2_DIAGNOSTICS_FAILURE_CODE} 那条可见面），
- * 不给空诊断（空诊断会被读成"这份文件干净"）。
+ * 判据与供方都在 `@kojo/plugin-kojo-lang`（槽 `ui.editor.decorator`，id `kojo2-diagnostics`）；
+ * 本文件只剩**调度 + 翻译 + 降级**：把正文 / 路径 / 当前项目递进槽（请求），把行装饰翻成
+ * markers 与问题面板行（翻译），把"没有供方 / 没面"折成可见的失败面（降级）。
  *
- * 剩余两处**已知缺口**写在 {@link createProjectKojo2Diagnose} 上：表达式端口暂用恒等
- * 透传（v1 `lowerExpression` 尚未接进 2.0 面）、角色号只能从
- * `GameProject.charaIndex[].kojoDir` 的前缀推（推不到时 backend 会如实报
- * `unit/backend-incomplete`，不静默造一个假函数名）。
+ * 两面（adapter + backend）由**插件**经 `@kojo/kojo-lang/diagnostics` 的登记表现取；宿主在
+ * 装配时登记的那一枚 getter 用的是组合根 `bootstrap.ts::kojo2SurfaceForProject` 的同一套
+ * 登记簿（见 `use-monaco-instance.ts` 的 `ensureGlobalProviders` 调用）——此前写死
+ * `ERATW_GAME_ADAPTER` + `createEratwEmitBackend` 的 bug（打开 eraFL 工程拿到 eraTW 落点
+ * 规则，不报错、只是错）不会回来：取不到两面 ⇒ 插件抛错 ⇒
+ * {@link KOJO2_DIAGNOSTICS_FAILURE_CODE} 那条可见面，不给空诊断。
+ *
+ * 一处**已知缺口**仍在宿主装配侧：表达式端口暂用恒等透传（v1 `lowerExpression` 尚未接进
+ * 2.0 面）、角色号只能从 `GameProject.charaIndex[].kojoDir` 的前缀推（推不到时 backend 会
+ * 如实报 `unit/backend-incomplete`，不静默造一个假函数名）。
  */
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
-import type { GameProject } from '@kojo/plugin-api';
+import type { GameProject, LineDecoration } from '@kojo/plugin-api';
 import { isPathUnder, pathKey } from '@kojo/plugin-api';
-// 只吃**契约类型**（`GameAdapter` / `KojoEmitBackend`），不吃任何具体 adapter：
-// 入口 D（2026-10-25）之前这里静态 import 了 eraTW 的 `ERATW_GAME_ADAPTER` +
-// `createEratwEmitBackend`，于是打开 eraFL 工程时波浪线是拿 eraTW 的落点规则算的
-// ——不报错、只是错。现在两面都从组合根（`bootstrap.ts` 的两张登记簿）按项目现取。
-import type {
-  DialectBindingResolution,
-  EmitFailure,
-  GameAdapter,
-  KojoDiagnostic,
-  KojoEmitBackend,
-  KojoExprText,
-} from '@kojo/kojo-core';
+// 不吃任何具体 adapter：入口 D（2026-10-25）之前这里静态 import 了 eraTW 的
+// `ERATW_GAME_ADAPTER` + `createEratwEmitBackend`，于是打开 eraFL 工程时波浪线是拿 eraTW
+// 的落点规则算的——不报错、只是错。B3 收口之后两面（adapter + backend）由**插件**经
+// `@kojo/kojo-lang/diagnostics` 的登记表现取，宿主这一侧只剩"表达式端口"一个注入面
+// （见 `kojo2IdentityCompileExpression`）与槽位调度。
+import type { DialectBindingResolution, KojoDiagnostic } from '@kojo/kojo-core';
 import {
-  KOJO2_DIAGNOSTICS_SOURCE,
-  createKojo2Diagnostics,
-  kojo2DiagnosticsToMarkers,
-  type Kojo2DiagnosticsArtifacts,
-  type Kojo2DiagnosticsInput,
-  type Kojo2DiagnosticsResult,
-  type Kojo2MarkerSeveritySource,
-} from '../monaco/kojo2-diagnostics';
+  KOJO2_DIAGNOSTIC_SOURCE,
+  KOJO2_DIAGNOSTICS_CONTRIBUTION_ID,
+  kojo2RowsOfDiagnostics,
+  type Kojo2DiagnosticRow,
+} from '@kojo/kojo-lang/diagnostics';
+import {
+  forgetKojo2DiagnosticResult,
+  kojo2DiagnosticResultFor,
+} from '@kojo/kojo-lang/diagnostic-result';
 import { buildKojo2SourceMapModel } from '@kojo/kojo-lang';
 import {
   aggregateKojo2DialectLint,
@@ -90,7 +89,11 @@ import {
   createKojo2ProblemSync,
   type Kojo2DebounceScheduler,
   type Kojo2DiagnoseFn,
+  type Kojo2DiagnosticsArtifacts,
+  type Kojo2DiagnosticsInput,
+  type Kojo2DiagnosticsResult,
   type Kojo2MarkerHost,
+  type Kojo2MarkerSeveritySource,
 } from './kojo2-problem-sync';
 import { clearProblems, setProblems, type EditorProblem } from './problem-store';
 import type { NoticeInput } from './NotificationCenter';
@@ -103,38 +106,8 @@ import {
 /** 诊断失败在问题面板里的稳定诊断码（不是 core 诊断码；一眼看出这是工具链自己的事） */
 export const KOJO2_DIAGNOSTICS_FAILURE_CODE = 'kojo2/diagnostics-unavailable';
 
-/* ============================== adapter / backend 装配 ============================== */
-
-/**
- * 一份 2.0 诊断需要的**两面**（与 `bootstrap.ts` 的 `Kojo2GameSurface` 同形）。
- *
- * 为什么不在这里直接 import 某个 adapter：那是入口 A 修掉的 bug 形态——诊断链写死
- * eraTW 时，打开 eraFL 工程算出来的波浪线拿的是 eraTW 的落点规则，**不报错、只是错**。
- * 具体游戏由组合根（`kojo2SurfaceForProject`）按 `project.adapterId` 现取，本文件只
- * 负责"拿到两面之后怎么跑一轮诊断"。
- */
-export interface Kojo2DiagnoseSurface {
-  readonly adapter: GameAdapter;
-  readonly backend: KojoEmitBackend;
-}
-
-/** 宿主注入的表达式端口签名（`compileTarget` 等可选项由 backend 自己收口） */
-export interface Kojo2SurfaceDeps {
-  readonly compileExpression: (expr: KojoExprText) => string | EmitFailure;
-  /** 文件级角色号（推不到 ⇒ 不传；不用它的 backend 忽略） */
-  readonly charNo?: string;
-}
-
-/**
- * 按项目取两面的端口 = `bootstrap.ts::kojo2SurfaceForProject` 的形状。
- *
- * 参数收结构最小投影（`{ adapterId?: string } | null`）：`GameProject | null` 天然可传，
- * 测试不必造整枚项目，也不必为了"换一枚 adapter"去改宿主。
- */
-export type Kojo2SurfaceResolver = (
-  project: { readonly adapterId?: string } | null,
-  deps: Kojo2SurfaceDeps,
-) => Kojo2DiagnoseSurface | null;
+/** 问题面板 / marker 的来源标签（真源在包内；这里留一枚同值别名给既有消费方） */
+export const KOJO2_DIAGNOSTICS_SOURCE = KOJO2_DIAGNOSTIC_SOURCE;
 
 /**
  * **表达式端口**：恒等透传（导出给宿主装配用：组合根那张表只差这一个端口）。
@@ -169,6 +142,104 @@ export interface Kojo2DialectDeps {
     readonly filePath: string;
     readonly source: string;
   }) => DialectBindingResolution;
+}
+
+/* ---------------------- 诊断形状 → markers（宿主只做这一段翻译） ---------------------- */
+
+/** 一条判据行 → 契约行装饰（与插件侧 `toLineDecoration` 同一把尺子；方言诊断合并时用） */
+function rowToDecoration(row: Kojo2DiagnosticRow): LineDecoration {
+  return {
+    line: row.line,
+    startColumn: row.startColumn,
+    endColumn: row.endColumn,
+    ...(row.endLine === row.line ? {} : { endLine: row.endLine }),
+    severity: row.severity,
+    message: row.message,
+    code: row.code,
+    source: KOJO2_DIAGNOSTICS_SOURCE,
+  };
+}
+
+/** 源文本行宽表（marker 落点夹取；与旧 `createSourceLineIndex` 同一口径，只留夹取要用的两格） */
+function lineWidthsOf(sourceText: string): { readonly lineCount: number; widthOf(line: number): number } {
+  const starts: number[] = [0];
+  for (let offset = 0; offset < sourceText.length; offset += 1) {
+    if (sourceText.charCodeAt(offset) === 10) starts.push(offset + 1);
+  }
+  const endOf = (line: number): number => {
+    const next = starts[line];
+    const rawEnd = next === undefined ? sourceText.length : next - 1;
+    const start = starts[line - 1] ?? 0;
+    if (rawEnd > start && sourceText.charCodeAt(rawEnd - 1) === 13) return rawEnd - 1;
+    return rawEnd;
+  };
+  return {
+    lineCount: starts.length,
+    widthOf(line) {
+      const start = starts[line - 1] ?? 0;
+      return Math.max(1, endOf(line) - start + 1);
+    },
+  };
+}
+
+/**
+ * 行装饰 → Monaco markers（**翻译**，判据已在包内做过落点归一）。
+ *
+ * 这里只夹到源文本现实（行号 / 列宽），不重算区间语义：判据搬走后 `normalizeSpan` 那套
+ * 越界 / 零宽 / 代理对规则只住在 `@kojo/kojo-lang/diagnostics` 一处，宿主再抄一遍就是第二份。
+ * 跨行装饰（`endLine`）原样保留——Monaco marker 原生支持多行区间。
+ */
+export function kojo2DecorationsToMarkers(
+  monaco: Kojo2MarkerSeveritySource,
+  decorations: readonly LineDecoration[],
+  sourceText: string,
+): Monaco.editor.IMarkerData[] {
+  const widths = lineWidthsOf(sourceText);
+  return decorations.map((decoration) => {
+    const line = Math.min(Math.max(1, Math.trunc(decoration.line)), widths.lineCount);
+    const startColumn = Math.min(
+      Math.max(1, Math.trunc(decoration.startColumn ?? 1)),
+      widths.widthOf(line),
+    );
+    const endLine = Math.min(Math.max(line, Math.trunc(decoration.endLine ?? line)), widths.lineCount);
+    const endMaxColumn = widths.widthOf(endLine);
+    const endColumn = Math.min(
+      Math.max(endLine === line ? startColumn : 1, Math.trunc(decoration.endColumn ?? endMaxColumn)),
+      endMaxColumn,
+    );
+    return {
+      severity: decoration.severity === 'warning' ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Error,
+      message: decoration.message,
+      code: decoration.code,
+      source: KOJO2_DIAGNOSTICS_SOURCE,
+      startLineNumber: line,
+      startColumn,
+      endLineNumber: endLine,
+      endColumn,
+    };
+  });
+}
+
+/** core 诊断 → 行装饰（方言诊断并入同一轮波浪线时走这里；落点归一与插件同一把尺子） */
+export function kojo2DiagnosticsToDecorations(
+  diagnostics: readonly KojoDiagnostic[],
+  sourceText: string,
+): LineDecoration[] {
+  return kojo2RowsOfDiagnostics(diagnostics, sourceText).map(rowToDecoration);
+}
+
+/**
+ * `KojoDiagnostic[]` → Monaco markers（**只做翻译**；判据在 `@kojo/kojo-lang/diagnostics`）。
+ *
+ * 保留这一枚给既有调用方（快速修复 / 方言测试按 core 诊断直接取 markers）：
+ * 行 / 列归一在包内完成，这里只夹到源文本现实。
+ */
+export function kojo2DiagnosticsToMarkers(
+  monaco: Kojo2MarkerSeveritySource,
+  diagnostics: readonly KojoDiagnostic[],
+  sourceText: string,
+): Monaco.editor.IMarkerData[] {
+  return kojo2DecorationsToMarkers(monaco, kojo2DiagnosticsToDecorations(diagnostics, sourceText), sourceText);
 }
 
 /**
@@ -214,69 +285,89 @@ export function withDialectLint(
   return { ...result, lint: { dialect: lint.dialect, diagnostics: lint.diagnostics } };
 }
 
-/** `createProjectKojo2Diagnose` 的依赖（组合根给的两面解析 + Monaco severity 表） */
-export interface Kojo2ProjectDiagnoseOptions {
+/** `createSlotKojo2Diagnose` 的依赖（内核槽位 + Monaco severity 表 + 可选方言端口） */
+export interface Kojo2SlotDiagnoseOptions {
+  /** 内核（槽查询 + 当前项目现取；项目可开可关，不缓存上一个项目的事实） */
+  readonly kernel: Kernel;
   /** Monaco 的 severity 表（宿主传真实例；测试传同形状替身） */
   readonly severitySource: Kojo2MarkerSeveritySource;
-  /** **当前项目**（每次诊断现取：项目可开可关，不缓存上一个项目的事实） */
-  readonly project: () => GameProject | null;
-  /** 组合根的两面解析（生产传 `kojo2SurfaceForProject` 函数本身） */
-  readonly surfaceFor: Kojo2SurfaceResolver;
   /** 方言诊断端口（LAU-D1b，可选；省略 ⇒ 不并方言诊断） */
   readonly dialect?: Kojo2DialectDeps;
 }
 
 /**
- * 造**按项目选 adapter + backend** 的诊断入口（入口 D 的接线面）。
+ * 造**问槽**的诊断入口（B3 收口最后一格的接线面）。
  *
- * ## 为什么取不到两面就抛错，而不是给一份空诊断
+ * ## 为什么是"问槽"而不是"叫编译"
  *
- * `kojo2-problem-sync` 的 `onFailure` 专治这种情况：清旧波浪线 → 问题面板写
- * `kojo2/diagnostics-unavailable` → 通知中心发 toast。返回"空诊断"会被读成
- * **这份文件是干净的**——那正是本仓红线 4 禁止的静默降级。抛错则三种可见面齐亮，
- * 作者看到的是"这个工程还没有 2.0 诊断面"，而不是一片虚假的绿。
+ * 文档级诊断的判据与供方都在 `@kojo/plugin-kojo-lang`（经专用槽 `ui.editor.decorator`）。
+ * 宿主这层只该做三件事：把正文 / 路径 / 当前项目递进去（请求）、把回来的行装饰翻成
+ * markers + 问题面板行（翻译）、把"没有供方 / 没面"说出口（降级）。判据一个字都不留——
+ * 留了就是第二份，两份必然漂（B3c–B3j 一路搬空的同一条理由）。
  *
- * ## 为什么不做 backend 缓存
+ * ## 失败口径（与旧实现逐字一致）
  *
- * backend 构造是纯数据整形（`eraflLoweringProfile()` / `resolveEratwProfile()` 都是几枚
- * 冻结对象），与同一轮里每拍新建 `createKojo2Diagnostics(...).diagnose` 同阶；而缓存要
- * 按 `(gameId, charNo)` 建键，**项目中途换游戏时旧 backend 就是错误事实**。这段路
- * 每 200ms 才走一次，省不下什么，却要背一条失效判据——不设缓存。
+ * - **没有供方**（插件未装载 / 未激活）⇒ 抛错，走 `onFailure` 的三种可见面（清旧波浪线 /
+ *   面板写 `kojo2/diagnostics-unavailable` / toast），绝不交"空诊断"假装这份文件干净；
+ * - **供方抛错**（例如这个工程没有 2.0 诊断面）⇒ 原样上抛，同上；
+ * - **编译入口自报失败**（`error` 非空）⇒ 结果带 `error`，由同步器折成失败可见面；
+ * - **方言诊断照旧并入同一轮**（LAU-D1b）：错配必须可见、必须有位置；计数三格按并集重算。
+ *
+ * ## 一次编译两处消费（K2-EDITOR-MOUNT ①）
+ *
+ * 编译成品（原始诊断 / 产物 / source map）由插件记进 `@kojo/kojo-lang/diagnostic-result`，
+ * 这里按路径取回并核对正文一致——预览与展开视图读的是同一次编译，不是第二份。
  */
-export function createProjectKojo2Diagnose(options: Kojo2ProjectDiagnoseOptions): Kojo2SyncDiagnoseFn {
+export function createSlotKojo2Diagnose(options: Kojo2SlotDiagnoseOptions): Kojo2SyncDiagnoseFn {
   return (input) => {
-    let project: GameProject | null = null;
+    const project = projectOfKernel(options.kernel);
+    let contribution;
     try {
-      project = options.project();
+      contribution = options.kernel.slots
+        .query('ui.editor.decorator')
+        .find((item) => item.id === KOJO2_DIAGNOSTICS_CONTRIBUTION_ID);
     } catch {
-      // 取不到项目 = 没有两面（下面统一抛）；不在诊断链里猜。
-      project = null;
+      contribution = undefined;
     }
-    const charNo = charNoForProjectPath(project, input.filePath);
-    const surface = options.surfaceFor(project, {
-      compileExpression: kojo2IdentityCompileExpression,
-      ...(charNo !== undefined && charNo.length > 0 ? { charNo } : {}),
-    });
-    if (surface === null) {
+    if (contribution === undefined) {
       throw new Error(
-        `当前项目没有 2.0 诊断面（adapterId = ${project?.adapterId ?? '（无项目）'}）：` +
-          '该游戏未登记 2.0 adapter 或 backend，本文件不做 2.0 诊断（不回退到其它游戏的事实）。',
+        '2.0 文档级诊断的供方没有注册（@kojo/plugin-kojo-lang 未装载 / 未激活）：' +
+          '本文件不做 2.0 诊断（不回退到任何宿主内实现）。',
       );
     }
-    const result = createKojo2Diagnostics({
-      monaco: options.severitySource,
-      adapter: surface.adapter,
-      backend: surface.backend,
-    }).diagnose(input);
+    // 插件抛错（没有 2.0 诊断面 / 事实对不上）原样上抛 —— 走 onFailure 的可见面。
+    const decorations = contribution.decorate({ path: input.filePath, text: input.source, project });
+    const snapshot = kojo2DiagnosticResultFor(input.filePath);
+    // 正文核对：两个分屏同名文件 / 迟到的一轮都可能留下别的快照，正文不符就当没有。
+    const fresh = snapshot !== null && snapshot.source === input.source ? snapshot : null;
+    const compileDiagnostics: readonly KojoDiagnostic[] = fresh?.diagnostics ?? [];
+    const artifacts: Kojo2DiagnosticsArtifacts | null = fresh?.artifacts ?? null;
+    const error: string | null = fresh?.error ?? null;
+
+    // 这一轮文档级诊断的成品：形状全按槽契约（插件的行装饰）搬，判据一个字不重算。
+    const base: Kojo2DiagnosticsResult = {
+      filePath: input.filePath,
+      diagnostics: compileDiagnostics,
+      markers: kojo2DecorationsToMarkers(options.severitySource, decorations, input.source),
+      artifacts,
+      error,
+      errorCount: compileDiagnostics.filter((item) => item.severity === 'error').length,
+      warningCount: compileDiagnostics.filter((item) => item.severity === 'warning').length,
+      ok: error === null && !compileDiagnostics.some((item) => item.severity === 'error'),
+    };
     // LAU-D1b：方言诊断与编译诊断走**同一轮**、同一份 markers / 问题面板条目。
     // 方言侧不另开通道（铁律 4 的"冲突必须 error"就落在既有问题面板上）。
-    if (options.dialect === undefined) return result;
-    const resolution = options.dialect.resolve({
-      project,
-      filePath: input.filePath,
-      source: input.source,
-    });
-    const merged = withDialectDiagnostics(result, resolution.diagnostics, options.severitySource, input.source);
+    const resolution: DialectBindingResolution | null =
+      options.dialect === undefined
+        ? null
+        : options.dialect.resolve({ project, filePath: input.filePath, source: input.source });
+    const merged = withDialectDiagnostics(
+      base,
+      resolution?.diagnostics ?? [],
+      options.severitySource,
+      input.source,
+    );
+    if (resolution === null) return merged;
     // LAU-D2：方言体检（`dialect lint`）——绑定成功才跑；未绑定 / 响应错配 ⇒ `binding === null`
     // ⇒ `lintKojo2Dialect` 直接交 `null`（零诊断：没有事实绝不报"未知事件"）。
     return withDialectLint(
@@ -333,16 +424,11 @@ function projectOfKernel(kernel: Kernel): GameProject | null {
 }
 
 /**
- * 宿主没注入两面解析时的诊断入口：**必抛**。
+ * 宿主**没有**替换诊断入口时的缺省：问槽（`createSlotKojo2Diagnose`）。
  *
- * 不返回空诊断——那会让问题面板显示"这份文件干净"。抛错走 `onFailure`，三种可见面
- * （清旧波浪线 / 面板条目 / toast）齐亮，缺了哪一环都是静默降级。
+ * 这里不再保留任何"兜底编译"：判据与供方都在插件那一侧，宿主自留一份就是第二份判据。
+ * 插件缺席 ⇒ 缺省入口抛错 ⇒ `onFailure` 的三种可见面齐亮（见 `Kojo2SlotDiagnoseOptions`）。
  */
-function unregisteredSurfaceDiagnose(): never {
-  throw new Error(
-    '宿主没有注入 2.0 两面解析（`surfaceFor`）：本文件不做 2.0 诊断，也不回退到任何游戏的默认事实。',
-  );
-}
 
 /* ============================== 一次编译两处消费（K2-EDITOR-MOUNT ①） ============================== */
 
@@ -502,16 +588,10 @@ export interface Kojo2ProblemWiringOptions {
   readonly severitySource: Kojo2MarkerSeveritySource;
   /** 宿主通知中心（失败可见）；缺省 = 只写问题面板 + console.error */
   readonly notify?: (notice: NoticeInput) => void;
-  /** 替换诊断入口（测试 / 将来 worker）；缺省 = 由 {@link surfaceFor} 现造 */
+  /** 替换诊断入口（测试 / 将来 worker）；缺省 = {@link createSlotKojo2Diagnose}（问槽） */
   readonly diagnose?: Kojo2DiagnoseFn;
   /**
-   * 按当前项目取 2.0 两面（adapter + backend）。生产传组合根的
-   * `kojo2SurfaceForProject` 函数本身；**不给** ⇒ 诊断入口一律抛错（fail-visible：
-   * 面板写 `kojo2/diagnostics-unavailable` + toast），绝不回退到某个游戏的默认事实。
-   */
-  readonly surfaceFor?: Kojo2SurfaceResolver;
-  /**
-   * 方言诊断端口（LAU-D1b，可选）：给 `createProjectKojo2Diagnose` 用；与 `diagnose`
+   * 方言诊断端口（LAU-D1b，可选）：给缺省入口（`createSlotKojo2Diagnose`）用；与 `diagnose`
    * 互斥（自定义入口自带方言逻辑时不再叠）。省略 ⇒ 不并方言诊断（旧调用方零改动）。
    */
   readonly dialect?: Kojo2DialectDeps;
@@ -574,14 +654,11 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
   const debounceMs = Math.max(0, Math.trunc(options.debounceMs ?? KOJO2_PROBLEM_DEBOUNCE_MS));
   const diagnose =
     options.diagnose ??
-    (options.surfaceFor === undefined
-      ? unregisteredSurfaceDiagnose
-      : createProjectKojo2Diagnose({
-          severitySource: options.severitySource,
-          project: () => projectOfKernel(kernel),
-          surfaceFor: options.surfaceFor,
-          ...(options.dialect !== undefined ? { dialect: options.dialect } : {}),
-        }));
+    createSlotKojo2Diagnose({
+      kernel,
+      severitySource: options.severitySource,
+      ...(options.dialect !== undefined ? { dialect: options.dialect } : {}),
+    });
 
   const notify = (notice: NoticeInput): void => {
     if (options.notify) {
@@ -613,6 +690,8 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
   const forgetCompilation = (filePath: string): void => {
     if (filePath.length === 0) return;
     options.compileCache?.forget(filePath);
+    // 包内交接面同一条真相：波浪线撤了，那一份编译成品也不许留给别的面板读到。
+    forgetKojo2DiagnosticResult(filePath);
     options.onCompile?.(null);
   };
 

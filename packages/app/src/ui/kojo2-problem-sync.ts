@@ -26,10 +26,52 @@
  */
 
 import type * as Monaco from '../monaco/entry';
-import type {
-  Kojo2DiagnosticsInput,
-  Kojo2DiagnosticsResult,
-} from '../monaco/kojo2-diagnostics';
+import type { KojoDiagnostic } from '@kojo/kojo-core';
+
+/* ---------------------- 诊断结果形状（B3 收口最后一格的落点） ---------------------- */
+
+/**
+ * 一次文档级诊断的身份输入（源文本 + 文件路径）。
+ *
+ * 判据搬进 `@kojo/kojo-lang/diagnostics` 之后，这组形状的"家"从
+ * 宿主旧 `monaco/kojo2-diagnostics.ts`（B3 收口已删）落到本层：本层是**时间轴 + 结果形状**的消费者与再分发者，
+ * 翻译（markers / 问题面板行）在 `kojo2-problem-wiring.ts`。这样同步器不必反向 import 上层。
+ */
+export interface Kojo2DiagnosticsInput {
+  readonly source: string;
+  readonly filePath: string;
+}
+
+/** 同一次编译的产物 + source map（预览 / 展开视图读的那一份） */
+export interface Kojo2DiagnosticsArtifacts {
+  /** 产物文本（core 成功口径：`lines.join('\n') + '\n'`；编译失败 = `''`） */
+  readonly erb: string;
+  /** 与 `erb` 同一次编译的 source map（`lineCount === splitKojo2GeneratedLines(erb).length`） */
+  readonly sourceMap: import('@kojo/kojo-core').SourceMap;
+}
+
+/** marker 换算只需要 `MarkerSeverity` 这一格（避免把整个 Monaco 运行时拖进纯逻辑） */
+export type Kojo2MarkerSeveritySource = Pick<typeof Monaco, 'MarkerSeverity'>;
+
+/** 一次诊断的完整结果：原始诊断 + 已翻译的 markers + 失败读数 */
+export interface Kojo2DiagnosticsResult {
+  readonly filePath: string;
+  readonly diagnostics: readonly KojoDiagnostic[];
+  readonly markers: readonly Monaco.editor.IMarkerData[];
+  /** 同一次编译的产物 + source map（`null` = 这一轮没有可预览的产物） */
+  readonly artifacts?: Kojo2DiagnosticsArtifacts | null;
+  /** **方言体检**的结论（LAU-D2；`undefined` = 这一轮没跑体检 / 方言未绑定） */
+  readonly lint?: {
+    readonly dialect: string;
+    readonly diagnostics: readonly KojoDiagnostic[];
+  };
+  /** 编译入口抛错时的消息（`null` = 正常返回；不是诊断） */
+  readonly error: string | null;
+  readonly errorCount: number;
+  readonly warningCount: number;
+  /** 无 error 诊断且编译入口未抛错 */
+  readonly ok: boolean;
+}
 
 /** 本层独占的 marker owner（与 `kojo-decorators` / `kojo-structure-syntax` 并存不覆盖） */
 export const KOJO2_PROBLEM_MARKER_OWNER = 'kojo2-diagnostics';

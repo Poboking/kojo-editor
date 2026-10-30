@@ -46,7 +46,7 @@ import {
   kojo2ExpandCompilationFor,
   kojo2ExpandCompileSourceCount,
   registerKojo2ExpandCompileSource,
-} from '../src/ui/kojo2-expand-compile';
+} from '@kojo/kojo-lang/expand-compile';
 
 /* ============================== 夹具 ============================== */
 

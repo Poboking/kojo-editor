@@ -12,13 +12,16 @@ import { describe, expect, it } from 'vitest';
 import type { GameAdapter, KojoDiagnostic, KojoEmitBackend } from '@kojo/kojo-core';
 import { FIXTURE_ADAPTER, FIXTURE_BACKEND } from '@kojo/kojo-core';
 import type * as Monaco from '../src/monaco/entry';
+import { kojo2DocumentDiagnostics } from '@kojo/kojo-lang/diagnostics';
 import {
   KOJO2_DIAGNOSTICS_SOURCE,
-  createKojo2Diagnostics,
   kojo2DiagnosticsToMarkers,
-  type Kojo2DiagnosticsResult,
-  type Kojo2MarkerSeveritySource,
-} from '../src/monaco/kojo2-diagnostics';
+} from '../src/ui/kojo2-problem-wiring';
+import type {
+  Kojo2DiagnosticsInput,
+  Kojo2DiagnosticsResult,
+  Kojo2MarkerSeveritySource,
+} from '../src/ui/kojo2-problem-sync';
 import {
   KOJO2_PROBLEM_MARKER_OWNER,
   createKojo2ProblemSync,
@@ -40,6 +43,71 @@ function diagnostic(
   span: KojoDiagnostic['span'],
 ): KojoDiagnostic {
   return { code, severity, message, span } as KojoDiagnostic;
+}
+
+/**
+ * 判据搬家后的**测试脚手架**：B3 收口把 `createKojo2Diagnostics` 整块搬进
+ * `@kojo/kojo-lang/diagnostics`。这里只保留"两面必须成对"这一道宿主旧契约的守门，
+ * 判据本体（编译 / 落点 / 失败口径）一律走包内的 `kojo2DocumentDiagnostics`，
+ * markers 一律走宿主那枚纯翻译 `kojo2DiagnosticsToMarkers`——测试里不重建第二份判据。
+ */
+interface FakeDiagnoseOptions {
+  readonly monaco: Kojo2MarkerSeveritySource;
+  readonly adapter?: GameAdapter;
+  readonly backend?: KojoEmitBackend;
+  readonly compile?: (input: Kojo2DiagnosticsInput) => {
+    readonly diagnostics: readonly KojoDiagnostic[];
+    readonly erb?: string;
+    readonly sourceMap?: import('@kojo/kojo-core').SourceMap;
+  };
+}
+
+function createKojo2Diagnostics(options: FakeDiagnoseOptions) {
+  if ((options.adapter === undefined) !== (options.backend === undefined)) {
+    throw new TypeError('adapter 与 backend 必须成对注入');
+  }
+  return {
+    diagnose(input: Kojo2DiagnosticsInput): Kojo2DiagnosticsResult {
+      let diagnostics: readonly KojoDiagnostic[] = [];
+      let error: string | null = null;
+      let artifacts: Kojo2DiagnosticsResult['artifacts'] = null;
+      if (options.compile !== undefined) {
+        try {
+          const compiled = options.compile(input);
+          diagnostics = compiled.diagnostics;
+          if (typeof compiled.erb === 'string' && compiled.sourceMap !== undefined) {
+            artifacts = { erb: compiled.erb, sourceMap: compiled.sourceMap };
+          }
+        } catch (thrown) {
+          error = thrown instanceof Error ? thrown.message : String(thrown);
+          diagnostics = [];
+          artifacts = null;
+        }
+      } else {
+        const compiled = kojo2DocumentDiagnostics({
+          source: input.source,
+          filePath: input.filePath,
+          adapter: options.adapter ?? FIXTURE_ADAPTER,
+          backend: options.backend ?? FIXTURE_BACKEND,
+        });
+        diagnostics = compiled.diagnostics;
+        error = compiled.error;
+        artifacts = compiled.artifacts;
+      }
+      const errorCount = diagnostics.filter((item) => item.severity === 'error').length;
+      const warningCount = diagnostics.filter((item) => item.severity === 'warning').length;
+      return {
+        filePath: input.filePath,
+        diagnostics,
+        markers: kojo2DiagnosticsToMarkers(options.monaco, diagnostics, input.source),
+        artifacts,
+        error,
+        errorCount,
+        warningCount,
+        ok: error === null && errorCount === 0,
+      };
+    },
+  };
 }
 
 function markerOf(result: Kojo2DiagnosticsResult, diagnosticIndex: number): Monaco.editor.IMarkerData {

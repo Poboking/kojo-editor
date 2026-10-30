@@ -76,7 +76,7 @@ LAU 就是把它们逐条剥出去。
 `@kojo/kojo-lang` 包与插件，B3i 把缩进 / 回车判据搬进
 `@kojo/kojo-lang/indent`（宿主 `monaco/kojo2-indent.ts` 只剩 on-type 装配与 Monaco 翻译），
 B4（语言面进槽）与 B5a（`@kojo/kojo-sdk` 立包）已交付；
-剩下的宿主直装语言面（诊断 / 语义着色 / 缩进装配）归 B5b，仍等 B3 余项收口。LAU 沿着这条既有路线走，不另起炉灶（§8）。
+剩下的宿主直装语言面（诊断 / 语义着色 / 缩进装配）已随 B3 余项收口——语义着色与文档级诊断的判据都进了 `@kojo/kojo-lang`、供方在插件（诊断走专用槽 `ui.editor.decorator`），宿主只剩装配与翻译；B5b（删宿主残留）随后。LAU 沿着这条既有路线走，不另起炉灶（§8）。
 
 ---
 

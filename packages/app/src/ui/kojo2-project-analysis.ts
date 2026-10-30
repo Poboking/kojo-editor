@@ -23,7 +23,7 @@
  * 1. **`问题` 形状与既有面板逐字段同款**：{@link toEditorProblem} 把 core 的
  *    `{ code, severity, message, span }` 映射成 `problem-store.EditorProblem`——**码原样**
  *    （不加工、不加前缀）、severity 只做 error/warning 两档映射（意外值按 error，
- *    fail-visible，与 `monaco/kojo2-diagnostics` 同一条纪律）、落点只取同行列区间
+ *    fail-visible，与 `@kojo/kojo-lang/diagnostics` 同一条纪律）、落点只取同行列区间
  *    （跨行/无落点退化成行级信息，退化判据仍归 `monaco/reveal-position`）。
  * 2. **织面口径单一**（不双报）：注入 adapter 事实时，`@织` 的判定**只归**
  *    `analyzeWeaveLayers`（它按事件读优先级模型、`weavable`、overlay 政策，比

@@ -30,7 +30,13 @@ import {
   compileKojoSource,
   createSourceMapBuilder,
 } from '@kojo/kojo-core';
-import { createKojo2Diagnostics, type Kojo2DiagnosticsInput } from '../src/monaco/kojo2-diagnostics';
+import { kojo2DocumentDiagnostics } from '@kojo/kojo-lang/diagnostics';
+import type {
+  Kojo2DiagnosticsInput,
+  Kojo2DiagnosticsResult,
+  Kojo2MarkerSeveritySource,
+} from '../src/ui/kojo2-problem-sync';
+import { kojo2DiagnosticsToMarkers } from '../src/ui/kojo2-problem-wiring';
 import { buildKojo2SourceMapModel, splitKojo2GeneratedLines } from '@kojo/kojo-lang';
 import { revealLocationOf } from '../src/monaco/reveal-position';
 import {
@@ -77,16 +83,34 @@ const KOJO2_PATH = 'D:/p/口上/神社.kojo2';
 const ERB_PATH = 'D:/p/口上/场景.erb';
 
 const SEVERITY = { Hint: 1, Info: 2, Warning: 4, Error: 8 } as const;
-const SEVERITY_SOURCE = { MarkerSeverity: SEVERITY } as unknown as Parameters<
-  typeof createKojo2Diagnostics
->[0]['monaco'];
+const SEVERITY_SOURCE = { MarkerSeverity: SEVERITY } as unknown as Kojo2MarkerSeveritySource;
 
-/** 真 core 编译（fixture adapter/backend：任何宿主测试都能跑出真产物 + 真 source map） */
-const CORE_DIAGNOSTICS = createKojo2Diagnostics({
-  monaco: SEVERITY_SOURCE,
-  adapter: FIXTURE_ADAPTER,
-  backend: FIXTURE_BACKEND,
-});
+/**
+ * 真 core 编译（fixture adapter/backend：任何宿主测试都能跑出真产物 + 真 source map）。
+ *
+ * B3 收口后判据在 `@kojo/kojo-lang/diagnostics`；这里只做两件事：调包、把诊断翻成 markers
+ * （宿主那枚纯翻译）。测试不重建判据，也就不会和产品漂。
+ */
+function coreDiagnose(input: Kojo2DiagnosticsInput): Kojo2DiagnosticsResult {
+  const compiled = kojo2DocumentDiagnostics({
+    source: input.source,
+    filePath: input.filePath,
+    adapter: FIXTURE_ADAPTER,
+    backend: FIXTURE_BACKEND,
+  });
+  return {
+    filePath: input.filePath,
+    diagnostics: compiled.diagnostics,
+    markers: kojo2DiagnosticsToMarkers(SEVERITY_SOURCE, compiled.diagnostics, input.source),
+    artifacts: compiled.artifacts,
+    error: compiled.error,
+    errorCount: compiled.errorCount,
+    warningCount: compiled.warningCount,
+    ok: compiled.ok,
+  };
+}
+
+const CORE_DIAGNOSTICS = { diagnose: coreDiagnose };
 
 /**
  * 假 localStorage。**LAU-3 起缺省档 = `2.0-default`（flag 开）**，所以：

@@ -23,6 +23,10 @@ import type { Kernel } from '@kojo/kernel';
 import type { GameAdapter as Kojo2GameAdapter } from '@kojo/kojo-core';
 import { activeGameAdapter, errorText, KOJO_LEGACY_SOURCE_EXTENSION, KOJO_SOURCE_EXTENSION, pathKey } from '@kojo/plugin-api';
 import { registerKojo2AdapterSource, kojo2AdapterNow } from '@kojo/kojo-lang/adapter-source';
+import {
+  registerKojo2SurfaceSource,
+  type Kojo2DiagnosticSurface,
+} from '@kojo/kojo-lang/diagnostics';
 import type {
   EditorCodeAction,
   EditorDocumentSymbol,
@@ -384,6 +388,15 @@ function staticTablesFor(
 export interface GlobalProviderOptions {
   /** 2.0 adapter 的**现取**入口（项目可开可关；每次请求重问，不缓存上一轮的事实） */
   readonly kojo2Adapter?: () => Kojo2GameAdapter | null | undefined;
+  /**
+   * 文档级诊断要的**两面**（adapter + backend）的现取入口（B3 收口最后一格，additive）。
+   *
+   * 与 `kojo2Adapter` 同一条登记纪律：宿主只交出 getter，插件在请求时按文件路径问一次；
+   * 两面**必须同源**（组合根用同一把 `adapterId` 键查两张登记簿，见
+   * `bootstrap.ts::kojo2SurfaceForProject`）。不给 ⇒ 插件按"没有 2.0 诊断面"抛错，
+   * 诊断接线折成可见的失败面——不回落任何游戏事实。
+   */
+  readonly kojo2Surface?: (filePath: string) => Kojo2DiagnosticSurface | null;
 }
 
 /**
@@ -1694,6 +1707,26 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     const unregister = registerKojo2AdapterSource(() => {
       try {
         return kojo2Adapter() ?? null;
+      } catch {
+        return null;
+      }
+    });
+    globalDisposers.push({ dispose: unregister });
+  }
+  /**
+   * B3 收口最后一格：把**两面**（adapter + backend）的现取入口也登记进语言面库
+   * （`@kojo/kojo-lang/diagnostics`，插件侧的文档级诊断按文件路径问一次）。
+   *
+   * 为什么两面要一起登记而不是各登一枚：core 会拿 A 游戏的事件目录去问 B 游戏的落点，
+   * 产出一个"语法全对、语义属于另一个游戏"的 ERB——这种半对半错比两半都缺更危险。
+   * 组合根的组合（`kojo2SurfaceForProject`）只在两张登记簿同一把键都命中时才给结果，
+   * 这里不再做任何跨表拼装，只把那份**同源**的结论原样转交。
+   */
+  const kojo2Surface = options.kojo2Surface;
+  if (kojo2Surface !== undefined) {
+    const unregister = registerKojo2SurfaceSource((filePath) => {
+      try {
+        return kojo2Surface(filePath) ?? null;
       } catch {
         return null;
       }
