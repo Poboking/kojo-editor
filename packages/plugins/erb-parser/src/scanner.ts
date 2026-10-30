@@ -1,4 +1,5 @@
 import type { ControlFlowStatement, ErbDim, ErbFile, ErbFunction, ErbLabel, ErbParam } from '@kojo/plugin-api';
+import type { ControlFlowRole } from '@kojo/erb-vocab/control-flow';
 
 /**
  * 行首「代码前缀」`;!;` / `;#;`（2026-10-25 ERB 语法缺口批 P2-1）。
@@ -16,7 +17,8 @@ import type { ControlFlowStatement, ErbDim, ErbFile, ErbFunction, ErbLabel, ErbP
  * 加载 `plugin-api/src/index.ts`，而它内部用的是无扩展名相对导入（`from './events'`）⇒
  * 直接失败。`import type` 会被类型擦除整条删掉，所以本文件此前一直只有类型导入。
  * 本批先按"单源"写成从 plugin-api 值导入，`projection-single-source` 的字节闸立刻红；
- * 改成相对导入 `./code-prefix` 也红（缺扩展名）⇒ 结论：**本文件不许有任何值导入**。
+ * 改成相对导入 `./code-prefix` 也红（缺扩展名）⇒ 结论：**本文件不许有裸 node 解析不了的值导入**
+ * （控制流表那条边例外：包 specifier 指向零运行时 import 的自包含叶子，实测可解析）。
  *
  * ## 一致性
  *
@@ -512,123 +514,15 @@ export function parseErbText(text: string, path = '<memory>', preSplit?: readonl
 
 // ---------------------------------------------------------------------------
 // 控制流骨架扫描（v0.2 第四批）——纯结构，零语义。
-// 配对表以引擎源码为准（FunctionIdentifier.cs funcMatch，见逆向文档
-// 《eratw4.980-Lang与Statements边角.md》§funcMatch 结构配对表）：
-//   IF→ENDIF / SELECTCASE→ENDSELECT / REPEAT→REND / FOR→NEXT / WHILE→WEND /
-//   DO→LOOP / TRYC 六个→CATCH→ENDCATCH / PRINTDATA 系 9 个→ENDDATA /
-//   DATALIST→ENDLIST / STRDATA→ENDDATA / NOSKIP→ENDNOSKIP /
-//   TRYCALLLIST/TRYGOTOLIST/TRYJUMPLIST→ENDFUNC（配对类 funclist）
-// 注意：TRYCALL/TRYCALLFORM/TRYGOTO/TRYJUMP 等是单行语句，不开块（BUG-2 修复）。
+// 配对表（引擎 `FunctionIdentifier.cs` 的 funcMatch）住在非插件库包
+// `@kojo/erb-vocab/control-flow`：本文件与库 `@kojo/erb-lang` 都只是读者，谁也不引谁。
+// 头注那条"零值导入"的理由是**裸 node 解析不了**；这条边指向零运行时 import 的自包含叶子，
+// `gen-erb-structure.mjs --check` 与直接 `import(scanner.ts)` 两条实测均 rc=0。
 // ---------------------------------------------------------------------------
 
-/** 开块语句：kind → 配对类别 */
-const OPEN_KINDS: Readonly<Record<string, string>> = {
-  IF: 'if',
-  SELECTCASE: 'select',
-  FOR: 'for',
-  WHILE: 'while',
-  REPEAT: 'repeat',
-  DO: 'do',
-  DATALIST: 'list',
-  STRDATA: 'data',
-  NOSKIP: 'noskip',
-};
-
-/** 分支语句：与所配对的开块语句同深度 */
-const BRANCH_KINDS: Readonly<Record<string, string>> = {
-  ELSEIF: 'if',
-  ELSE: 'if',
-  CASE: 'select',
-  CASEELSE: 'select',
-  CATCH: 'try',
-};
-
-/** 闭合语句 */
-const CLOSE_KINDS: Readonly<Record<string, string>> = {
-  ENDIF: 'if',
-  ENDSELECT: 'select',
-  NEXT: 'for',
-  WEND: 'while',
-  REND: 'repeat',
-  LOOP: 'do',
-  ENDDATA: 'data',
-  ENDLIST: 'list',
-  ENDNOSKIP: 'noskip',
-  ENDCATCH: 'try',
-  ENDFUNC: 'funclist',
-};
-
-/** 单行语句（不配对、不开块；如 SIF = Single IF） */
-const LEAF_KINDS = new Set(['SIF']);
-
-/**
- * TRY 系精确三档（引擎 FunctionIdentifier.cs funcMatch :460-487 逐条对齐，BUG-2 修复）：
- * - 配 CATCH 的恰为 6 个：TRYCGOTO / TRYCJUMP / TRYCCALL（±FORM）；
- * - 配 ENDFUNC 的恰为 3 个：TRYCALLLIST / TRYGOTOLIST / TRYJUMPLIST（独立配对类 funclist）；
- * - 其余 TRY*（TRYCALL / TRYCALLFORM / TRYGOTO / TRYGOTOFORM / TRYJUMP / TRYJUMPFORM）
- *   是**单行语句**，不开块——旧版 startsWith('TRY') 把它们误当开块，产生幻影深度。
- */
-const TRY_CATCH_OPEN: ReadonlySet<string> = new Set([
-  'TRYCGOTO',
-  'TRYCJUMP',
-  'TRYCCALL',
-  'TRYCGOTOFORM',
-  'TRYCJUMPFORM',
-  'TRYCCALLFORM',
-]);
-const TRY_LIST_OPEN: ReadonlySet<string> = new Set(['TRYCALLLIST', 'TRYGOTOLIST', 'TRYJUMPLIST']);
-
-/** PRINTDATA 系精确 9 个（funcMatch :477-485；DATALIST/STRDATA 在 OPEN_KINDS 单列） */
-const PRINTDATA_OPEN: ReadonlySet<string> = new Set([
-  'PRINTDATA',
-  'PRINTDATAL',
-  'PRINTDATAW',
-  'PRINTDATAK',
-  'PRINTDATAKL',
-  'PRINTDATAKW',
-  'PRINTDATAD',
-  'PRINTDATADL',
-  'PRINTDATADW',
-]);
-
-/**
- * 引擎语句词表（**additive**，2026-10-17 高亮补集批）。
- *
- * 由上面四张开/分支/闭合表 + TRY 三档 + PRINTDATA 系**派生**——不是另抄一份清单：
- * 配对表增删一词，本表自动跟随。宿主的 ERB 高亮拿它补 `ERB_DIRECTIVES`（口上高频
- * 子集）之外的引擎语句（`CATCH` / `ENDCATCH` / `NOSKIP` / `ENDNOSKIP` / `TRYC*` 族 …），
- * 补全候选**不**消费本表（低频语句不进补全，见 `erb-directives.ts` 的口径）。
- *
- * 排序确定（UTF-16 码元序）+ 大小写归一去重，同一引擎表恒得同一顺序。
- */
-export const ERB_CONTROL_STATEMENTS: readonly string[] = (() => {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const word of [
-    ...Object.keys(OPEN_KINDS),
-    ...Object.keys(BRANCH_KINDS),
-    ...Object.keys(CLOSE_KINDS),
-    ...LEAF_KINDS,
-    ...TRY_CATCH_OPEN,
-    ...TRY_LIST_OPEN,
-    ...PRINTDATA_OPEN,
-  ]) {
-    const key = word.toUpperCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(key);
-  }
-  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-})();
-
-/**
- * 控制流角色（配对表的唯一出口）。
- *
- * 为什么要把这张表封成函数而不是直接 export 那几个 Record：结构体检（`structure.ts`）与骨架扫描
- * （本文件 `scanControlFlow`）**必须用同一份配对表**——两处各自持有一份表就必然漂移，
- * 而漂移的表现为"波浪线指错了行"，比没有波浪线更糟（本项目口径：错标比不标危险）。
- */
-export type ControlFlowRole = 'open' | 'branch' | 'close' | 'leaf';
+import { classifyControlFlow, closerNameForPair, ERB_CONTROL_STATEMENTS } from '@kojo/erb-vocab/control-flow';
+export { classifyControlFlow, closerNameForPair, ERB_CONTROL_STATEMENTS };
+export type { ControlFlowRole } from '@kojo/erb-vocab/control-flow';
 
 /** 一行原文 → 控制流语句的形状（不是控制流语句则 null） */
 export interface ControlFlowToken {
@@ -643,21 +537,6 @@ export interface ControlFlowToken {
 
 /** 提取表达式原文的语句（其余受支持语句的 expression 为空串） */
 const EXPRESSION_KINDS = new Set(['IF', 'ELSEIF', 'SIF', 'SELECTCASE', 'CASE', 'REPEAT', 'FOR', 'WHILE']);
-
-/**
- * 配对分类（表在文件头，逐条对齐引擎 `FunctionIdentifier.cs` 的 funcMatch）。
- * 骨架扫描与结构体检都走这道门——**这是配对表的单一真源**。
- */
-export function classifyControlFlow(kind: string): { role: ControlFlowRole; pair: string } | null {
-  if (LEAF_KINDS.has(kind)) return { role: 'leaf', pair: '' };
-  if (OPEN_KINDS[kind] !== undefined) return { role: 'open', pair: OPEN_KINDS[kind]! };
-  if (BRANCH_KINDS[kind] !== undefined) return { role: 'branch', pair: BRANCH_KINDS[kind]! };
-  if (CLOSE_KINDS[kind] !== undefined) return { role: 'close', pair: CLOSE_KINDS[kind]! };
-  if (PRINTDATA_OPEN.has(kind)) return { role: 'open', pair: 'data' };
-  if (TRY_CATCH_OPEN.has(kind)) return { role: 'open', pair: 'try' };
-  if (TRY_LIST_OPEN.has(kind)) return { role: 'open', pair: 'funclist' };
-  return null;
-}
 
 /** 行首 `;` 注释、`@` / `#` / `$` 指令行不参与控制流（`#` 同时是结构体检的区域边界，见 structure.ts） */
 export function isIgnorableFlowLine(trimmed: string): boolean {
@@ -754,18 +633,6 @@ export function forEachControlFlowLine(text: string, visit: (l: ControlFlowLine)
     }
     visit({ line: i + 1, text: trimmed, boundary: false, statement: controlFlowToken(trimmed) });
   }
-}
-
-/**
- * 配对类别 → 该类别的闭合语句原词（结构体检的话术要用）。
- * 从 `CLOSE_KINDS` **反查**得到——不再抄第二份表；每个类别在这里都只有一个闭合词，
- * 所以返回值是单值而不是数组。查不到返回空串（调用方要能容忍"说不出闭合词"）。
- */
-export function closerNameForPair(pair: string): string {
-  for (const [closer, p] of Object.entries(CLOSE_KINDS)) {
-    if (p === pair) return closer;
-  }
-  return '';
 }
 
 /**
