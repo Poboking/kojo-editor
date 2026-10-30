@@ -195,6 +195,12 @@ importers:
       '@kojo/erb-vocab':
         specifier: workspace:*
         version: link:../erb-vocab
+      '@kojo/kojo-lang':
+        specifier: workspace:*
+        version: link:../kojo-lang
+      '@kojo/kojo-vocab':
+        specifier: workspace:*
+        version: link:../kojo-vocab
 
   packages/erb-syntax-tree:
     dependencies:
