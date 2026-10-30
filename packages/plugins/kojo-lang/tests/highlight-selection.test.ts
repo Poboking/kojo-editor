@@ -26,11 +26,11 @@ const PATH = 'D:/proj/口上/1_测试.kojo';
 const HILITE = [
   '// 心情', // 1 注释
   '# 幕 神社清晨', // 2
-  '# 变量 心情 整数 = 0 存档', // 3
-  '# 常量 引号 字符串 = "心情"', // 4 字符串字面量
-  '# 表 心情表 由 心情', // 5
-  '    0..99 疏远', // 6
-  '    100..499 心情', // 7 表体数据行
+  '# 设 心情 整数 = 0 存档', // 3
+  '# 设 引号 字符串 = "心情"', // 4 字符串字面量
+  '# 对照表 心情表 依据 心情', // 5
+  '    0..99 -> 疏远', // 6
+  '    100..499 -> 心情', // 7 表体数据行
   '', // 8
   '> 心情', // 9 text 档
   '灵梦：「{心情}今天。」', // 10 插值 = read
@@ -122,8 +122,8 @@ describe('高亮：write / read / text 三档原样穿过契约', () => {
     expect(result).toEqual({
       kind: 'documentHighlight',
       highlights: [
-        { line: 3, startColumn: 6, endColumn: 8, kind: 'write' },
-        { line: 5, startColumn: 11, endColumn: 13, kind: 'read' },
+        { line: 3, startColumn: 5, endColumn: 7, kind: 'write' },
+        { line: 5, startColumn: 14, endColumn: 16, kind: 'read' },
         { line: 9, startColumn: 3, endColumn: 5, kind: 'text' },
         { line: 10, startColumn: 6, endColumn: 8, kind: 'read' },
       ],

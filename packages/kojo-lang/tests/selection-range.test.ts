@@ -25,13 +25,13 @@ import {
  */
 const SELECT = [
   '# 幕 神社清晨', // 1
-  '# 视 灵梦', // 2
+  '# 视角 灵梦', // 2
   '# 机 指令 310', // 3
-  '# 变量 心情 整数 = 0 存档', // 4
-  '# 表 心情表 由 心情', // 5
-  '    0..99 疏远', // 6
-  '    100..499 平常', // 7
-  '    否 未知', // 8
+  '# 设 心情 整数 = 0 存档', // 4
+  '# 对照表 心情表 依据 心情', // 5
+  '    0..99 -> 疏远', // 6
+  '    100..499 -> 平常', // 7
+  '    否 -> 未知', // 8
   '', // 9
   '# 池 早安问候', // 10
   '    ? 心情 >= 100', // 11
@@ -182,7 +182,7 @@ describe('扩选：词 → 行 → 块 → 幕 → 全文', () => {
 /* ============================== ② `# 机` 体 / 无幕 ============================== */
 
 describe('扩选：没有 `# 幕` 时 `# 机` 体是一级', () => {
-  const machineOnly = ['# 机 指令 310', '# 变量 甲 整数', '> 正文', '', ''].join('\n');
+  const machineOnly = ['# 机 指令 310', '# 设 甲 整数', '> 正文', '', ''].join('\n');
 
   it('机体 = 机声明行到最后一个非空行（规范 §3.7）', () => {
     const chain = chainOf(machineOnly, at(machineOnly, 3, '正文'));
@@ -192,14 +192,14 @@ describe('扩选：没有 `# 幕` 时 `# 机` 体是一级', () => {
   });
 
   it('有机体时表体嵌在机体内（机体 → 表 → 行 → 词）', () => {
-    const source = ['# 机 指令 310', '# 表 甲 由 乙', '    0..9 丙', '', ''].join('\n');
+    const source = ['# 机 指令 310', '# 对照表 甲 依据 乙', '    0..9 -> 丙', '', ''].join('\n');
     const chain = chainOf(source, at(source, 3, '丙'));
     expect(chain.map((range) => range.startLine)).toEqual([3, 3, 2, 1, 1]);
     expect(flat(chain[2]!)).toEqual([2, 1, 3, lineText(source, 3).length + 1]);
   });
 
   it('声明区写在首个幕之前：没有幕父（词 / 行 / 全文）', () => {
-    const source = ['# 变量 甲 整数', '# 幕 开场', '> 正文'].join('\n');
+    const source = ['# 设 甲 整数', '# 幕 开场', '> 正文'].join('\n');
     const chain = chainOf(source, at(source, 1, '甲'));
     expect(chain.map((range) => range.startLine)).toEqual([1, 1, 1]);
     expect(chain[2]!.endLine).toBe(3);

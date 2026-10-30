@@ -23,22 +23,22 @@ import {
 
 /**
  * 高亮夹具（每行都可以按内容定位）：
- * - 声明：幕 / 视 / 机 / 变量 / 常量 / 表 / 池 / 函 / 织；
- * - 引用：表 `由` 表达式、`?` 条件、函数体赋值、`!` 触发行、台词插值；
+ * - 声明：幕 / 视角 / 机 / 设 / 对照表 / 池 / 函 / 织；
+ * - 引用：表 `依据` 表达式、`?` 条件、函数体赋值、`!` 触发行、台词插值；
  * - 误报陷阱：注释、字符串字面量、表体数据行的 `心情`、`@原生` 体内的 `心情`；
  * - `text` 档：`> 心情`（旁白正文）与 `\心情`（转义字面文本）。
  */
 const HILITE = [
   '// 心情', // 1 注释
   '# 幕 神社清晨', // 2
-  '# 视 灵梦', // 3
+  '# 视角 灵梦', // 3
   '# 机 指令 310', // 4
-  '# 变量 心情 整数 = 0 存档', // 5
-  '# 常量 引号 字符串 = "心情"', // 6 字符串字面量
-  '# 表 心情表 由 心情', // 7
-  '    0..99 疏远', // 8
-  '    100..499 心情', // 9 表体数据行
-  '    否 未知', // 10
+  '# 设 心情 整数 = 0 存档', // 5
+  '# 设 引号 字符串 = "心情"', // 6 字符串字面量
+  '# 对照表 心情表 依据 心情', // 7
+  '    0..99 -> 疏远', // 8
+  '    100..499 -> 心情', // 9 表体数据行
+  '    否 -> 未知', // 10
   '', // 11
   '# 池 早安问候', // 12
   '    ? 心情 >= 100', // 13
@@ -109,11 +109,11 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
 
   it('光标在声明名上：声明处是唯一 write', () => {
     expect(hits.filter((hit) => hit.kind === 'write').map((hit) => flat(hit.range))).toEqual([
-      [5, 6, 5, 8],
+      [5, 5, 5, 7],
     ]);
   });
 
-  it('read：表 `由` 表达式 / 条件 / 函数体 / 触发行实参 / 台词插值', () => {
+  it('read：表 `依据` 表达式 / 条件 / 函数体 / 触发行实参 / 台词插值', () => {
     const reads = hits.filter((hit) => hit.kind === 'read');
     expect(reads.map((hit) => hit.range.startLine)).toEqual([7, 13, 19, 19, 21, 27]);
     expect(reads.every((hit) => hit.range.startColumn === hit.range.endColumn - 2)).toBe(true);
@@ -133,7 +133,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
   });
 
   it('光标停在声明头（名字之前）也解析到同一条声明', () => {
-    expect(kojo2DocumentHighlights(HILITE, at(HILITE, 5, '变量'))).toEqual(hits);
+    expect(kojo2DocumentHighlights(HILITE, at(HILITE, 5, '设'))).toEqual(hits);
   });
 
   it('字符串字面量里的同名文字不误报（不是引用）', () => {
@@ -152,7 +152,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
     expect(hits.some((hit) => hit.range.startLine === 9)).toBe(false);
   });
 
-  it('词边界：`心情` 不会误命中声明名 `心情表`，但会命中表头的 `由 心情`', () => {
+  it('词边界：`心情` 不会误命中声明名 `心情表`，但会命中表头的 `依据 心情`', () => {
     const tableLine = lineText(HILITE, 7);
     const nameColumn = tableLine.indexOf('心情表') + 1;
     expect(hits.some((hit) => hit.range.startLine === 7 && hit.range.startColumn === nameColumn)).toBe(
@@ -168,7 +168,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
     const tableHits = kojo2DocumentHighlights(HILITE, at(HILITE, 7, '心情表'));
     expect(tableHits).toHaveLength(1);
     expect(tableHits[0]!.kind).toBe('write');
-    expect(flat(tableHits[0]!.range)).toEqual([7, 5, 7, 8]);
+    expect(flat(tableHits[0]!.range)).toEqual([7, 7, 7, 10]);
   });
 
   it('`@函`：声明 write + `!` 调用位 read', () => {
@@ -195,7 +195,7 @@ describe('高亮：声明 write、代码面 / 插值 read、叙事正文 text', 
     ]);
   });
 
-  it('`# 视` 目标只在自己那一行：说话人 / 台词正文不算引用', () => {
+  it('`# 视角` 目标只在自己那一行：说话人 / 台词正文不算引用', () => {
     const viewHits = kojo2DocumentHighlights(HILITE, at(HILITE, 3, '灵梦'));
     expect(viewHits.map((hit) => [hit.range.startLine, hit.kind])).toEqual([[3, 'write']]);
   });
