@@ -2393,8 +2393,12 @@ function parseNativeBlock(st: ParserState, line: KojoLexLine, ctx: CtxBase): Koj
       st.i++;
       break;
     }
-    if (braced && child.indent <= headerIndent) {
+    if (braced && child.indent <= headerIndent && !child.blank) {
       // braced 模式下围栏已被 lexer 在收口行关闭；走到这里的浅行说明缺收口。
+      // 空行不在此列：§8.5「空行原样保留」——块体内的空行（含收口前的真空行）是块体
+      // 内容，不是"块已结束"的信号；不加 `!child.blank` 会让 `}` 前的空行提前截断块体，
+      // 把合法的收口误报成 `core/native/unclosed`（与 tree-sitter 侧 `native_close`
+      // 跨空行收口的分歧即此）。
       break;
     }
     records.push(child);

@@ -152,6 +152,14 @@ describe('`@原生{ … }` 花括号收口（§8.5 新典）', () => {
     expect(closes.length).toBe(1);
     expect(closes[0]!.isMissing, '收口是 MISSING 占位而非实体匹配').toBe(true);
   });
+
+  it('收口前的真空行不算缺收口（与 core 同判：空行原样保留，不截断块体）', () => {
+    for (const blanks of ['\n', '\n\n', '\n\n\n'] as const) {
+      const root = parseText(`@原生{\n    MOV 1 2${blanks}}\n`);
+      expect(faultsOf(root), `收口前 ${blanks.length - 1} 个空行`).toEqual([]);
+      expect(count(root, 'native_close'), `收口前 ${blanks.length - 1} 个空行`).toBe(1);
+    }
+  });
 });
 
 describe('表端点 `否定` 不被兜底 `否` 吞掉', () => {

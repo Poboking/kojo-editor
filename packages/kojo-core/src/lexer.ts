@@ -85,6 +85,12 @@ const C_QUOTE_CLOSE = 0x300d;
 const C_QUOTE_HW_OPEN = 0xff62;
 const C_QUOTE_HW_CLOSE = 0xff63;
 const C_COLON_FW = 0xff1a;
+
+/**
+ * 花括号收口块头的调度词（§8.5）：`@原生{` 是**唯一**允许「调度词后紧贴 `{`」的写法。
+ * 词法特判与围栏开启（{@link classifyAll}）共用这一枚，避免两处字面量各写各的。
+ */
+const NATIVE_DISPATCH_WORD = '原生';
 const C_OPEN_PAREN_FW = 0xff08;
 const C_CLOSE_PAREN_FW = 0xff09;
 const C_CONTINUE = 0x7eed;
@@ -498,7 +504,7 @@ function classifyAll(
     }
     const record = classifyLine(source, p, report);
     lines.push(record);
-    if (record.kind === 'dispatch' && record.known && record.word === '原生') {
+    if (record.kind === 'dispatch' && record.known && record.word === NATIVE_DISPATCH_WORD) {
       fenceIndent = p.indentWidth;
     }
   }
@@ -705,10 +711,15 @@ function classifyDispatch(ctx: LineCtx): KojoLexLine {
   let word = content.slice(wordStart, wordEnd);
   // `@原生{`（§8.5 新典）：花括号紧贴调度词——`{` 是块头载荷的起点，不是词的一部分；
   // 不特判会被切进词里（`原生{` 不在词集），整行误落 legacy 报「已退场」。
+  // **只对 `原生` 生效**：`{` 剥出来会变成 `rest`，而 `@返` 等词的 `rest` 是可选表达式、
+  // 不校验形态——对它们剥 `{` 会把 `@返{` 从「未知写法」静默放宽成合法返回（实测零诊断）。
   let restShift = 0;
   if (word.length > 1 && word.charCodeAt(word.length - 1) === C_OPEN_BRACE) {
-    word = word.slice(0, -1);
-    restShift = 1;
+    const head = word.slice(0, -1);
+    if (head === NATIVE_DISPATCH_WORD) {
+      word = head;
+      restShift = 1;
+    }
   }
   if (word.length === 0) {
     report('core/lex/anchor', '`@` 后面缺少调度词。', cs, ce);

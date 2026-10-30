@@ -470,6 +470,30 @@ describe('parse：调度区与演出块（§8）', () => {
     }
   });
 
+  it('@原生{ 块体内的空行（含收口前的真空行）不算「缺收口」——§8.5 空行原样保留', () => {
+    for (const blanks of ['\n', '\n\n', '\n\n\n'] as const) {
+      const source = `${MACHINE}@原生{\n    MOV 1 2${blanks}}\n`;
+      const file = parseOk(source);
+      const native = file.scenes[0]!.items.find((node) => node.kind === 'nativeBlock') as KojoNativeBlock;
+      expect(native.lines, `收口前 ${blanks.length - 1} 个空行`).toEqual(['MOV 1 2']);
+    }
+    // 块体中间的空行不提前截断块体，且照原文保留（尾部空行仍按「分隔」剥掉）
+    const mid = parseOk(`${MACHINE}@原生{\n    MOV 1 2\n\n    MOV 3 4\n}\n`);
+    const block = mid.scenes[0]!.items.find((node) => node.kind === 'nativeBlock') as KojoNativeBlock;
+    expect(block.lines.length, '中间空行留在块体里').toBe(3);
+    expect(block.lines[0]).toBe('MOV 1 2');
+    expect(block.lines[1]!.trim()).toBe('');
+    expect(block.lines[2]).toBe('MOV 3 4');
+  });
+
+  it('只有 `原生` 允许调度词后紧贴 `{`——`@返{` / `@续{` 仍按未知写法拒绝（防静默放宽）', () => {
+    // `{` 一旦被剥成 `rest`，`@返` 的可选返回值会把它吞掉（曾实测零诊断）；
+    // 特判限定到 `原生` 后，这些写法必须回到 `core/migration/raw` 的拒绝面上。
+    expect(codesOf(`${MACHINE}@函 名\n    @返{\n`)).toContain('core/migration/raw');
+    expect(codesOf(`${MACHINE}@循 3\n    @续{\n    > a\n`)).toContain('core/migration/raw');
+    expect(codesOf(`${MACHINE}@算{x} = 1\n`)).toContain('core/migration/raw');
+  });
+
   it('@原生{ 缺收口 → core/native/unclosed；裸围栏旧写法不要求收口', () => {
     expect(codesOf(`${MACHINE}@原生{\n    MOV 1 2\n`)).toContain('core/native/unclosed');
     expect(codesOf(`${MACHINE}@原生 { 缩进围栏\n    MOV 1 2\n\n> 回到正文\n`)).not.toContain('core/native/unclosed');
