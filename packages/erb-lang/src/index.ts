@@ -42,5 +42,37 @@
  * 同一张表：**三方并列读者**，谁也不引谁，单一真源一格未动。
  */
 export * from './constants';
+export * from './completion-bits';
+/**
+ * `completion-context` **逐名导出**（不用 `export *`）：它与 `./highlight` 各有一枚
+ * `erbCodeViewOf` ——高亮那枚是"整行视野"（`(line) => string`），补全门这枚是"到光标为止的
+ * 视野"（`(line, col0) => 'code' | 'string' | 'comment'`）。两者不是同一个判据，名字相撞
+ * 只是历史；桶里先留补全门这枚（宿主与测试的既有 import 面），高亮那枚仍从
+ * `@kojo/erb-lang/highlight` 叶子取。**不许**为了消除歧义把其中一枚改成语义不同的别名。
+ */
+export {
+  DEF_RE,
+  ERB_CALL_SLOT_BY_KEYWORD,
+  ERB_CALL_STATEMENTS,
+  ERB_GATE_SOURCE_WHITELIST,
+  ERB_JUMP_KEYWORDS,
+  NAME_CHAR_RE,
+  erbCallKeywords,
+  erbCallStatementRe,
+  erbCodeViewOf,
+  erbCompletionGate,
+  erbInterpRegionAt,
+  erbLabelSlot,
+  parseErbNameSlot,
+} from './completion-context';
+export type {
+  ErbCallSlotKind,
+  ErbCallStatement,
+  ErbCodeView,
+  ErbCompletionGate,
+  ErbLabelSlot,
+  ErbNameSlot,
+} from './completion-context';
+export * from './completion-variables';
 export * from './highlight';
 export * from './selection-range';

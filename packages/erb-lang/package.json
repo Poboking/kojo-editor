@@ -9,10 +9,15 @@
   "exports": {
     ".": "./src/index.ts",
     "./constants": "./src/constants.ts",
+    "./completion-bits": "./src/completion-bits.ts",
+    "./completion-context": "./src/completion-context.ts",
+    "./completion-variables": "./src/completion-variables.ts",
     "./highlight": "./src/highlight.ts",
     "./selection-range": "./src/selection-range.ts"
   },
   "dependencies": {
-    "@kojo/erb-vocab": "workspace:*"
+    "@kojo/erb-vocab": "workspace:*",
+    "@kojo/kojo-lang": "workspace:*",
+    "@kojo/kojo-vocab": "workspace:*"
   }
 }

@@ -19,6 +19,9 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import * as barrel from '../src/index.js';
+import * as completionBits from '../src/completion-bits.js';
+import * as completionContext from '../src/completion-context.js';
+import * as completionVariables from '../src/completion-variables.js';
 import * as constants from '../src/constants.js';
 import * as highlight from '../src/highlight.js';
 import * as selectionRange from '../src/selection-range.js';
@@ -47,8 +50,49 @@ describe('@kojo/erb-lang 导出面', () => {
     ]);
   });
 
-  it('桶的运行时键 = 三枚值叶子之并集', () => {
+  it('completion-bits 的运行时导出 = 清单（5 枚：位槽扫描 + 空槽判据）', () => {
+    expect(leafKeys(completionBits)).toEqual([
+      'erbBitSlotOpen',
+      'erbBitSlotRegionBlank',
+      'findBitSlot',
+      'matchingParen',
+      'topLevelComma',
+    ]);
+  });
+
+  it('completion-variables 的运行时导出 = 清单（3 枚：段解析 + 两侧的面）', () => {
+    expect(leafKeys(completionVariables)).toEqual([
+      'erbVariableContextAt',
+      'erbVariableReferenceSlotAt',
+      'erbVariableSlotAt',
+    ]);
+  });
+
+  it('completion-context 的运行时导出 = 清单（13 枚：九态门 + 语句表 + 名字槽 + 标签位 + 白名单）', () => {
+    expect(leafKeys(completionContext)).toEqual([
+      'DEF_RE',
+      'ERB_CALL_SLOT_BY_KEYWORD',
+      'ERB_CALL_STATEMENTS',
+      'ERB_GATE_SOURCE_WHITELIST',
+      'ERB_JUMP_KEYWORDS',
+      'NAME_CHAR_RE',
+      'erbCallKeywords',
+      'erbCallStatementRe',
+      'erbCodeViewOf',
+      'erbCompletionGate',
+      'erbInterpRegionAt',
+      'erbLabelSlot',
+      'parseErbNameSlot',
+    ]);
+  });
+
+  it('桶的运行时键 = 五枚值叶子之并集', () => {
+    // `erbCodeViewOf` 在 `completion-context` 与 `highlight` 各有一枚（同名不同判据：
+    // 前者"到光标为止的视野"、后者"整行视野"）——桶按名去重后恰好一份，集合语义不受影响。
     const expected = new Set<string>([
+      ...leafKeys(completionBits),
+      ...leafKeys(completionContext),
+      ...leafKeys(completionVariables),
       ...leafKeys(constants),
       ...leafKeys(highlight),
       ...leafKeys(selectionRange),
@@ -56,12 +100,15 @@ describe('@kojo/erb-lang 导出面', () => {
     expect(leafKeys(barrel)).toEqual([...expected].sort());
   });
 
-  it('package.json 的 exports 恰是桶 + 三枚叶子（宿主与插件按子路径引，漏一枚即解析不到）', () => {
+  it('package.json 的 exports 恰是桶 + 五枚叶子（宿主与插件按子路径引，漏一枚即解析不到）', () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
     ) as { exports?: Record<string, string> };
     expect(Object.keys(manifest.exports ?? {}).sort()).toEqual([
       '.',
+      './completion-bits',
+      './completion-context',
+      './completion-variables',
       './constants',
       './highlight',
       './selection-range',

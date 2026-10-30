@@ -1,5 +1,14 @@
 import type * as Monaco from './entry';
 import type { VariableSchema } from '@kojo/plugin-api';
+import {
+  erbBitSlotOpen,
+  erbBitSlotRegionBlank,
+  findBitSlot,
+  matchingParen,
+  topLevelComma,
+} from '@kojo/erb-lang/completion-bits';
+
+export { erbBitSlotOpen, findBitSlot, matchingParen, topLevelComma };
 
 /**
  * D7 · `.erb` 正文里的**位补全 + 位名悬停**。
@@ -32,20 +41,17 @@ import type { VariableSchema } from '@kojo/plugin-api';
  * 与既有各 source 同纪律：纯函数 + 薄 Monaco 翻译、只读模型、不产生编辑、不发事件；
  * provider 注册不在本模块——编排层把它接进补全基座（`erb-completion.ts`）与悬停基座
  * （`kojo-hover.ts`）。
+ *
+ * ## 2026-10-30（LAU-4 续）：位槽**判据**已搬进包，本文件只剩候选与悬停的形状翻译
+ *
+ * `findBitSlot` / `erbBitSlotOpen` / `matchingParen` / `topLevelComma` / `ErbBitSlot` 整块
+ * 搬到 `@kojo/erb-lang/completion-bits`——"光标是不是停在空的位坑里"是**语言事实**，位置门
+ * 与插件供方都要吃同一份，而插件读不到宿主。本文件的 import 与 re-export 摆在同一处
+ * （四枚旧导出的名字与签名一字未改，既有 import 点与测试零改动）。
  */
 
 /** 位原语单字 → 语句形（无括号）还是表达式形（带括号） */
 const BIT_PRIMITIVES = /\b(GETBIT|SETBIT|CLEARBIT|INVERTBIT)\b/gi;
-
-/** 位槽（第二实参坑）的位置描述（0 基列区间，`slice` 起止） */
-export interface ErbBitSlot {
-  /** 第一实参（变量引用）原文（已 `trim`） */
-  readonly variableRef: string;
-  /** 第二实参区间起点（0 基，含） */
-  readonly regionStart: number;
-  /** 第二实参区间终点（0 基，不含） */
-  readonly regionEnd: number;
-}
 
 /** 位名悬停命中（1 基列区间，供 hover 高亮） */
 export interface ErbBitHoverHit {
@@ -59,131 +65,7 @@ export interface ErbBitHoverHit {
 
 const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
 
-/**
- * 从 `open` 处的 `(` 找出配对的 `)`（跳过字符串字面量；未闭合 → -1）。
- *
- * 导出（T6 补全上下文门复用）：括号 / 字符串扫描的**单一真源**——补全位置语义各处
- * 共用这一份，禁止抄第二份（抄两份必然漂移）。
- */
-export function matchingParen(text: string, open: number): number {
-  let depth = 0;
-  let i = open;
-  while (i < text.length) {
-    const ch = text[i]!;
-    if (ch === '"') {
-      i++;
-      while (i < text.length && text[i] !== '"') i++;
-      i++;
-      continue;
-    }
-    if (ch === '(') depth++;
-    else if (ch === ')') {
-      depth--;
-      if (depth === 0) return i;
-    }
-    i++;
-  }
-  return -1;
-}
-
-/**
- * `[from, to)` 内**顶层**（括号 / 方括号深度 0）的第一个逗号；无 → -1。
- * 导出（T6 补全上下文门复用，理由同 `matchingParen`）。
- */
-export function topLevelComma(text: string, from: number, to: number): number {
-  let depth = 0;
-  let i = from;
-  while (i < to) {
-    const ch = text[i]!;
-    if (ch === '"') {
-      i++;
-      while (i < to && text[i] !== '"') i++;
-      i++;
-      continue;
-    }
-    if (ch === '(' || ch === '[') depth++;
-    else if (ch === ')' || ch === ']') {
-      if (depth === 0) return -1;
-      depth--;
-    } else if (ch === ',' && depth === 0) return i;
-    i++;
-  }
-  return -1;
-}
-
-/**
- * 解析光标所在的**位槽**（**纯函数**；`column` = Monaco 的 1 基列）。
- *
- * 返回 `null` = 该处不是任何位原语的第二实参坑（**不猜**：注释行 / 字符串内 / 无逗号 /
- * 括号未闭合 / 光标不在第二实参区间内，一律不认）。区间是"空是"由调用方各自判定
- * （补全要求空槽；悬停要求位号）。
- */
-export function findBitSlot(lineText: string, column: number): ErbBitSlot | null {
-  if (!Number.isFinite(column) || column < 1) return null;
-  const col0 = Math.min(column - 1, lineText.length);
-
-  // 注释行 / 光标落在字符串字面量里 → 不是可判定的实参位
-  if (/^\s*;/.test(lineText)) return null;
-  let quotes = 0;
-  for (let i = 0; i < col0; i++) {
-    if (lineText[i] === '"') quotes++;
-  }
-  if (quotes % 2 === 1) return null;
-
-  const re = new RegExp(BIT_PRIMITIVES.source, 'gi');
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(lineText)) !== null) {
-    const kw = m[1]!.toUpperCase();
-    let p = m.index + m[0].length;
-    while (p < lineText.length && (lineText[p] === ' ' || lineText[p] === '\t')) p++;
-    let regionStart: number;
-    let regionEnd: number;
-    let refStart: number;
-    let refEnd: number;
-    if (lineText[p] === '(') {
-      // 表达式形 `GETBIT(变量, 位)`
-      const close = matchingParen(lineText, p);
-      if (close < 0) continue;
-      const comma = topLevelComma(lineText, p + 1, close);
-      if (comma < 0) continue;
-      regionStart = comma + 1;
-      regionEnd = close;
-      refStart = p + 1;
-      refEnd = comma;
-    } else if (kw !== 'GETBIT') {
-      // 语句形 `SETBIT/CLEARBIT/INVERTBIT 变量, 位`
-      const comma = topLevelComma(lineText, p, lineText.length);
-      if (comma < 0) continue;
-      regionStart = comma + 1;
-      regionEnd = lineText.length;
-      refStart = p;
-      refEnd = comma;
-    } else {
-      continue;
-    }
-    if (col0 < regionStart || col0 > regionEnd) continue;
-    return { variableRef: lineText.slice(refStart, refEnd).trim(), regionStart, regionEnd };
-  }
-  return null;
-}
-
-/**
- * 位槽第二实参区间是否**为空**（纯空白）——位置门（`erbBitSlotOpen`）与候选门
- * （`erbBitCompletionItems`）共用的**唯一**判据真源（**禁止两处各写**）。
- */
-function slotRegionBlank(lineText: string, slot: ErbBitSlot): boolean {
-  return lineText.slice(slot.regionStart, slot.regionEnd).trim().length === 0;
-}
-
-/**
- * `lineText` 上 `column`（1 基列）处是否是一个**待命中的位槽**：落在四种位原语的
- * 第二实参坑内 **且** 该坑此刻为空（纯空白）。位置门 / 触发探针消费（签名定死）；
- * 判据与补全候选同源——非空槽 / 内容槽一律 false（作者写了位号或变量就不打扰）。
- */
-export function erbBitSlotOpen(lineText: string, column: number): boolean {
-  const slot = findBitSlot(lineText, column);
-  return slot !== null && slotRegionBlank(lineText, slot);
-}
+export type { ErbBitSlot } from '@kojo/erb-lang/completion-bits';
 
 /**
  * 把第一实参变量引用解析成 `VariableInfo.bits`（**纯函数**；段切法见文件头注）。
@@ -232,7 +114,7 @@ export function erbBitCompletionItems(
   const slot = findBitSlot(line, position.column);
   if (slot === null) return [];
   // 位坑已有内容（作者写了位号 / 写成变量 `LOCAL`）⇒ 不抢候选（不打扰作者写变量）
-  if (!slotRegionBlank(line, slot)) return [];
+  if (!erbBitSlotRegionBlank(line, slot)) return [];
 
   const bits = resolveBits(schema, slot.variableRef);
   if (bits === undefined) return [];
