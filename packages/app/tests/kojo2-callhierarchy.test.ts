@@ -32,7 +32,7 @@ import {
   kojo2PrepareCallHierarchy,
   type Kojo2CallHierarchyItem,
   type Kojo2CallHierarchyPosition,
-} from '../src/monaco/kojo2-callhierarchy';
+} from '@kojo/kojo-lang/call-hierarchy';
 import { kojo2DocumentOf, type Kojo2DeclarationKind } from '@kojo/kojo-lang';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 
@@ -497,16 +497,18 @@ describe('确定性：同输入必同输出、CRLF 同结果、坏输入不抛',
 
 /* ============================== ⑨ 源码卫生 ============================== */
 
-describe('源码卫生：Monaco 只 type-only、不碰插件包、不自建注册器', () => {
+describe('源码卫生：Monaco 零引用（含 type）、不碰插件包、不自建注册器', () => {
+  // SDK-B5b 车 C（2026-10-31）：判据整块搬进语言面库 ⇒ 源码锚点跟着搬。包的三条硬约束
+  // （零 Monaco / 零 React / 零 IO）由 `packages/kojo-lang/tests/purity.test.ts` 钉，这里
+  // 钉本模块自己那几条（也就更硬：连 `import type` 都不许有）。
   const source = readFileSync(
-    path.join(import.meta.dirname, '..', 'src', 'monaco', 'kojo2-callhierarchy.ts'),
+    path.join(import.meta.dirname, '..', '..', 'kojo-lang', 'src', 'call-hierarchy.ts'),
     'utf8',
   );
 
-  it('Monaco 运行时只许 type-only 引入（node 池不把 monaco 拉进模块图）', () => {
-    expect(source).toMatch(/import type \* as Monaco from '\.\/entry'/);
-    expect(source).not.toMatch(/import \* as Monaco from/);
-    expect(source).not.toMatch(/from 'monaco-editor'/);
+  it('Monaco 零引用（连 type-only 都不许：包不可能被宿主之外的消费方拉起）', () => {
+    expect(source).not.toMatch(/from\s+['"][^'"]*monaco[^'"]*['"]/i);
+    expect(source).not.toMatch(/\bMonaco\./);
   });
 
   it('不 import 任何插件包、不出现游戏名词', () => {

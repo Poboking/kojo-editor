@@ -172,7 +172,7 @@ import {
   createKojo2ProjectCallHierarchyResolvers,
   createKojo2ProjectIndex,
 } from '../monaco/kojo2-project-index';
-// 调用层级解析器（`monaco/kojo2-callhierarchy.ts`）**不在这里 import**（连 `import type` 都不）：
+// 调用层级解析器（判据住 `@kojo/kojo-lang/call-hierarchy`，SDK-B5b 车 C 起）**不在这里 import**（连 `import type` 都不）：
 // 那一面走懒装载边（PS-10 ①，`ui/call-hierarchy.ts` 的动态 import），装配点一碰它就会把它
 // 连解析器一起拖进开机图，`language-parity` 的「豁免不过期」也会按"已接线"判红。
 // 本文件只交 resolver 工厂（返回类型由 `createKojo2ProjectCallHierarchyResolvers` 推断），

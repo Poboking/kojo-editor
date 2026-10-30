@@ -257,8 +257,8 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
  * "对账"用例把每一格落到这两条形状上，声明有、注册无（例如只剩一个没人调的 import）当场红。
  *
  * 剩余两项豁免：`implementation`（明确不做：2.0 里"跳实现"与"转定义"同义，F12 已覆盖）与
- * `callhierarchy`（Monaco 0.57 无该 API；纯模型 `monaco/kojo2-callhierarchy.ts` 已由宿主面板
- * 按语言分派消费，没有可注册的宿主位，故矩阵留豁免）。
+ * `callhierarchy`（Monaco 0.57 无该 API；纯模型 `@kojo/kojo-lang/call-hierarchy`——SDK-B5b 车 C
+ * 起住语言面库——已由宿主面板按语言分派消费，没有可注册的宿主位，故矩阵留豁免）。
  */
 const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabilityStatus>> =
   Object.freeze({
@@ -327,7 +327,7 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     [LanguageCapability.Selection]: 'shared',
     [LanguageCapability.CallHierarchy]: {
       exempt:
-        '纯模型 monaco/kojo2-callhierarchy.ts 已交付，宿主面板 ui/CallHierarchyOverlay.tsx 已按 model 语言分派消费（批次十）；Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83），没有可注册的宿主位，矩阵留豁免',
+        '纯模型 @kojo/kojo-lang/call-hierarchy 已交付（SDK-B5b 车 C 起判据住语言面库，宿主 monaco/kojo2-callhierarchy.ts 已删），宿主面板 ui/CallHierarchyOverlay.tsx 已按 model 语言分派消费（批次十）；Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83），没有可注册的宿主位，矩阵留豁免',
     },
     // B3c（2026-10-28）：2.0 的补全与悬停走**共享收口**——**SDK-B5b 车 1（2026-10-31）**起
     // 注册与翻译都收进通用槽腿工厂 `monaco/slot-service-providers.ts`

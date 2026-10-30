@@ -40,7 +40,8 @@
     "./monaco-theme": "./src/monaco-theme.ts",
     "./codelens": "./src/codelens.ts",
     "./diagnostics": "./src/diagnostics.ts",
-    "./diagnostic-result": "./src/diagnostic-result.ts"
+    "./diagnostic-result": "./src/diagnostic-result.ts",
+    "./call-hierarchy": "./src/call-hierarchy.ts"
   },
   "dependencies": {
     "@kojo/kojo-core": "workspace:*",

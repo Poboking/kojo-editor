@@ -17,8 +17,8 @@ import path from 'node:path';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type * as Monaco from '../src/monaco/entry';
-import * as kojo2Module from '../src/monaco/kojo2-callhierarchy';
-import type { Kojo2CallHierarchyResolvers } from '../src/monaco/kojo2-callhierarchy';
+import * as kojo2Module from '@kojo/kojo-lang/call-hierarchy';
+import type { Kojo2CallHierarchyResolvers } from '@kojo/kojo-lang/call-hierarchy';
 import {
   createKojo2ProjectCallHierarchyResolvers,
   createKojo2ProjectIndex,

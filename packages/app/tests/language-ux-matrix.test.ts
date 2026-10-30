@@ -567,7 +567,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '调用层级',
         erb: 'exempt',
         kojo2: 'exempt',
-        evidence: 'ui/CallHierarchyOverlay.tsx（按 model 语言分派）+ @kojo/plugin-erb-parser（槽 callHierarchy 供方）+ monaco/kojo2-callhierarchy.ts',
+        evidence: 'ui/CallHierarchyOverlay.tsx（按 model 语言分派）+ @kojo/plugin-erb-parser（槽 callHierarchy 供方）+ @kojo/kojo-lang/call-hierarchy（kojo2 判据，SDK-B5b 车 C 起住语言面库）',
         assembled: true,
         note:
           'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；两门语言都由宿主面板按 model 语言分派消费（批次十）；ERB 的判据自 LAU-4 调用层级腿起住插件供方',
@@ -742,7 +742,10 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   callhierarchy: [
     // LAU-4 调用层级腿：判据住插件供方（宿主只剩面板渲染与形状翻译）
     { rel: 'plugins/erb-parser/src/symbols.ts', re: /export function incomingCalls\(/ },
-    { rel: 'monaco/kojo2-callhierarchy.ts', re: /export function createKojo2CallHierarchyProvider\(/ },
+    // SDK-B5b 车 C（2026-10-31）：kojo2 调用层级的判据整块搬进语言面库，宿主
+    // `monaco/kojo2-callhierarchy.ts` 已删 ⇒ 取证点改指包内落点（同一枚 `create…Provider`；
+    // 路径相对 `packages/`，与上面 erb-parser 那条同口径）。
+    { rel: 'kojo-lang/src/call-hierarchy.ts', re: /export function createKojo2CallHierarchyProvider\(/ },
     { rel: 'ui/CallHierarchyOverlay.tsx', re: /KOJO2_LANGUAGE_ID/ },
     { rel: 'ui/CallHierarchyOverlay.tsx', re: /loadKojo2CallHierarchyPanel/ },
     { rel: 'ui/shell-overlays.ts', re: /createCallHierarchyOverlay/ },

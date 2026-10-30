@@ -92,7 +92,11 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     // + B3 收口最后一格（2026-10-30）：文档级诊断再进两枚——`diagnostics`（编译 → 行 / 落点归一 /
     //   失败口径 + 两面取数缝）与 `diagnostic-result`（一次编译两处消费的成品交接）。同样只引
     //   `@kojo/kojo-core` 的类型与函数，槽形状翻译 / 调度 / 降级留在宿主与插件。
-    expect(files).toHaveLength(34);
+    // + SDK-B5b 车 C（2026-10-31）：调用层级的判据整块从宿主 `monaco/kojo2-callhierarchy.ts`
+    //   搬进来——`call-hierarchy`（prepare / 入边 / 出边 + 跨文件口 + provider 工厂）。同样只引
+    //   `@kojo/kojo-core` 与同包相对路径（`kojo2DocumentOf` / `kojo2DefinitionAt` / 文本面判读
+    //   各走本包叶子）；provider 的 `ITextModel` / `Position` 类型换成结构面，Monaco 的值原样满足。
+    expect(files).toHaveLength(35);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

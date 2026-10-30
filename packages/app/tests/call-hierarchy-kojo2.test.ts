@@ -26,13 +26,13 @@ import type {
   ErbReference,
 } from '@kojo/plugin-api';
 import { provideErbCallHierarchy } from '@kojo/plugin-erb-parser';
-import * as kojo2Module from '../src/monaco/kojo2-callhierarchy';
+import * as kojo2Module from '@kojo/kojo-lang/call-hierarchy';
 import {
   createKojo2CallHierarchyProvider,
   resolveKojo2CallHierarchy,
   type Kojo2CallHierarchyItem,
   type Kojo2CallHierarchyProvider,
-} from '../src/monaco/kojo2-callhierarchy';
+} from '@kojo/kojo-lang/call-hierarchy';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   loadKojo2CallHierarchyPanel,

@@ -68,7 +68,7 @@ import type {
   Kojo2CallHierarchyDeclarationTarget,
   Kojo2CallHierarchyResolvers,
   Kojo2CallableDeclarationKind,
-} from './kojo2-callhierarchy';
+} from '@kojo/kojo-lang/call-hierarchy';
 import {
   kojo2DocumentOf,
   type Kojo2DeclarationKind,

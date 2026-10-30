@@ -98,12 +98,21 @@
  * provider 内任何异常回空（prepare ⇒ `null`，入边 / 出边 ⇒ `[]`）：Monaco 会把 throw 吞成
  * "这个功能突然没了"，空结果才是它能读出的唯一形状。
  *
+ * ## 住在包里（B5b 车 C，2026-10-31）
+ *
+ * 判据整块从宿主 `monaco/kojo2-callhierarchy.ts` 搬进来（判断本身**逐字未改**）：调用层级
+ * 与转定义 / 补全 / 引用同一把尺子（`kojo2DocumentOf` + `kojo2DefinitionAt`），供方迟早要
+ * 交给插件，而插件看不见宿主。搬家的唯一形状代价是 provider 的那两条参数：`ITextModel` /
+ * `Position` 是 Monaco 的类型，包里换成**结构面** {@link Kojo2CallHierarchyTextModel} /
+ * {@link Kojo2CallHierarchyCursor}（两者都是"有 `getValue()` / 有 `lineNumber` + `column`"），
+ * Monaco 的值原样满足它们 ⇒ 宿主调用点一个强转都不用加。本文件**零 Monaco 引用**（连
+ * `import type` 都没有，由 `tests/purity.test.ts` 合钉）。
+ *
  * ## 可复现
  *
  * 同输入必同输出：声明按**源码序**（`kojo2DocumentOf` 已排序），组内调用点按（行、列）排序，
  * 同名字符串比较用码元序（不用 `localeCompare`：顺序不该随运行环境漂）。
  */
-import type * as Monaco from './entry';
 import {
   parseSource,
   type KojoConditionBranch,
@@ -115,6 +124,8 @@ import {
   type KojoSpan,
   type KojoTextPart,
 } from '@kojo/kojo-core';
+// B5b 车 C：原来这三条 import 分别指宿主薄壳（桶 / `kojo2-definition` / `kojo-completion-position`），
+// 进包后一律改指同包叶子——同一份实现、同一处模块图位置，不再经宿主转一手。
 import {
   KOJO2_DECL_WORD_BY_KIND,
   kojo2DocumentOf,
@@ -122,9 +133,9 @@ import {
   kojo2IsTextSurface,
   kojo2TokenSpanAt,
   type Kojo2Document,
-} from '@kojo/kojo-lang';
-import { kojo2DefinitionAt, type Kojo2DefinitionTarget } from './kojo2-definition';
-import { insideInterpolation, insideStringOrComment } from './kojo-completion-position';
+} from './declarations';
+import { kojo2DefinitionAt, type Kojo2DefinitionTarget } from './definition';
+import { insideInterpolation, insideStringOrComment } from './interpolation';
 
 /* ============================== 公共形状 ============================== */
 
@@ -291,19 +302,39 @@ export const KOJO2_CALL_HIERARCHY_DEPTH = 64;
  */
 export const KOJO2_CALL_HIERARCHY_FILE_LIMIT = 64;
 
+/**
+ * provider 读源文的**结构面**（B5b 车 C）。
+ *
+ * 包里不许出现 Monaco 的类型；provider 真正要的东西只有两件——"整篇源文"与"模型是否
+ * 已释放"。Monaco 的 `ITextModel` 两者都有（`getValue()` / `isDisposed()`），结构上满足
+ * 本接口 ⇒ 宿主侧调用点照旧直接递 model，不需要强转、也不需要在宿主再包一层。
+ */
+export interface Kojo2CallHierarchyTextModel {
+  /** 整篇源文（Monaco `ITextModel.getValue()`） */
+  getValue(): string;
+  /** 可选：模型已释放 ⇒ provider 回空（Monaco `ITextModel.isDisposed()`） */
+  isDisposed?(): boolean;
+}
+
+/** provider 的**光标位点**结构面（1 基；Monaco `Position` 结构上满足它）。 */
+export interface Kojo2CallHierarchyCursor {
+  readonly lineNumber: number;
+  readonly column: number;
+}
+
 /** 调用层级 provider 的形状（Monaco 0.57 没有对应接口；见模块头「Monaco 面」）。 */
 export interface Kojo2CallHierarchyProvider {
   readonly displayName: string;
   prepareCallHierarchy(
-    model: Monaco.editor.ITextModel,
-    position: Monaco.Position,
+    model: Kojo2CallHierarchyTextModel,
+    position: Kojo2CallHierarchyCursor,
   ): Kojo2CallHierarchyItem[] | null;
   provideCallHierarchyIncomingCalls(
-    model: Monaco.editor.ITextModel,
+    model: Kojo2CallHierarchyTextModel,
     item: Kojo2CallHierarchyItem,
   ): Kojo2IncomingCall[] | null;
   provideCallHierarchyOutgoingCalls(
-    model: Monaco.editor.ITextModel,
+    model: Kojo2CallHierarchyTextModel,
     item: Kojo2CallHierarchyItem,
   ): Kojo2OutgoingCall[] | null;
 }
@@ -1406,7 +1437,7 @@ function panelGroupOf(
  * `stale-item`（刚交回的 item 认不出 = 模型中途换了），不拿名字瞎猜。
  */
 export function resolveKojo2CallHierarchy(
-  model: Monaco.editor.ITextModel,
+  model: Kojo2CallHierarchyTextModel,
   request: {
     readonly line: number;
     readonly column?: number;
@@ -1427,14 +1458,14 @@ export function resolveKojo2CallHierarchy(
     const prepared = provider.prepareCallHierarchy(model, {
       lineNumber: enclosing.line,
       column: enclosing.column,
-    } as Monaco.Position);
+    });
     if (prepared !== null && prepared.length > 0) item = prepared[0] ?? null;
   }
   if (item === null) {
     const prepared = provider.prepareCallHierarchy(model, {
       lineNumber: request.line,
       column: request.column !== undefined && request.column >= 1 ? request.column : 1,
-    } as Monaco.Position);
+    });
     if (prepared !== null && prepared.length > 0) item = prepared[0] ?? null;
     else if (prepared !== null) sawCallSyntax = true;
   }
@@ -1465,7 +1496,7 @@ export function resolveKojo2CallHierarchy(
 /* ============================== Monaco 面 ============================== */
 
 /** 取整篇源文；取不到（模型已释放 / 桩 model）⇒ `null`（provider 给空结果） */
-function sourceOf(model: Monaco.editor.ITextModel): string | null {
+function sourceOf(model: Kojo2CallHierarchyTextModel): string | null {
   try {
     if (typeof model.isDisposed === 'function' && model.isDisposed()) return null;
     const text = model.getValue();

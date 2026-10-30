@@ -9,7 +9,7 @@ import { ERB_LANGUAGE_ID } from './erb-language';
 /**
  * ERB **调用层级 provider**（ERB-CALLHIER，批次九；LAU-4 调用层级腿 2026-10-31 改薄）——
  * 把 `ui.editor.languageService` 槽的 `callHierarchy` 应答包成 Monaco provider 形状，
- * **两语言同权**：`.kojo2` 有 `monaco/kojo2-callhierarchy.ts` 的同款形状，ERB 从此也有。
+ * **两语言同权**：`.kojo2` 有 `@kojo/kojo-lang/call-hierarchy` 的同款形状，ERB 从此也有。
  *
  * ## 分层（**判据一枚都不在这里**）
  *
@@ -33,7 +33,7 @@ import { ERB_LANGUAGE_ID } from './erb-language';
  * `docs/PITFALLS.md` §83）。{@link installErbCallHierarchyProvider} **结构性探测**该注册位：
  * 在位就按正规 provider 注册；不在位就**零注册**并交回幂等句柄。{@link createErbCallHierarchyProvider}
  * 单独导出，宿主自建面板（overlay / devtools）可直接复用同一份实现——与
- * `kojo2-callhierarchy.ts` 的 `createKojo2CallHierarchyProvider` 同一形状。
+ * `@kojo/kojo-lang/call-hierarchy` 的 `createKojo2CallHierarchyProvider` 同一形状。
  *
  * 安装器的第二参数是本 provider 的**取数口**（`ask`：生产装配点把它接到槽上，见
  * `ui/shell-overlays.ts` 的注入形态）：没有取数口就不注册——一枚永远答空的 provider

@@ -1,6 +1,6 @@
 import type { ContextMenuItem } from './context-menu-model';
 /** 跨文件 resolver 的形状（`import type` 只活到编译期：本模块不进开机图） */
-import type { Kojo2CallHierarchyResolvers } from '../monaco/kojo2-callhierarchy';
+import type { Kojo2CallHierarchyResolvers } from '@kojo/kojo-lang/call-hierarchy';
 
 /**
  * 调用层级 overlay 的宿主状态（2026-10-16 批 E；批次十 2026-10-23 补 kojo2 分派）。
@@ -11,9 +11,10 @@ import type { Kojo2CallHierarchyResolvers } from '../monaco/kojo2-callhierarchy'
  * 探针，EditorPane 挂载时注册）——不新建第二套"光标在哪"的通道。
  *
  * kojo2 的取数（"位点 → 可调用声明 → 出入边"）不在本模块：它随
- * `monaco/kojo2-callhierarchy.ts` 一起**懒装载**——那边的解析器会让开机图多出一大坨
- * （PS-10 ① 的体积闸），面板首次遇到 kojo2 文件时才走 {@link loadKojo2CallHierarchyPanelBundle}
- * 的动态边；跨文件 resolver 同理（项目索引住在 `ui/editor-global-providers.ts`）。
+ * `@kojo/kojo-lang/call-hierarchy`（SDK-B5b 车 C 起判据住语言面库）一起**懒装载**——
+ * 那边的解析器会让开机图多出一大坨（PS-10 ① 的体积闸），面板首次遇到 kojo2 文件时才走
+ * {@link loadKojo2CallHierarchyPanelBundle} 的动态边；跨文件 resolver 同理（项目索引住在
+ * `ui/editor-global-providers.ts`）。
  * 两条腿装好后写回模块级快照 {@link kojo2PanelBundle}：**再打开面板同步取用**，
  * 不再每次 await（批次十一 CALLHIER-INJECT 的收口点）。本模块保持零值依赖
  * （`import type` 会被擦除，真正的模块只在动态边里出现，不进开机图）。
@@ -302,10 +303,11 @@ export function readCallHierarchyMenuInput(
 /**
  * kojo2 取数模块的形状（`import type` 只活到编译期：本模块不进开机图）。
  *
- * 取数与 provider 都在 `monaco/kojo2-callhierarchy.ts`（纯模型 + 宿主自建面板的取数层），
+ * 取数与 provider 都在 `@kojo/kojo-lang/call-hierarchy`（纯模型 + 宿主自建面板的取数层；
+ * SDK-B5b 车 C 起判据住语言面库，宿主不再持有这一份），
  * 那里会拉起 `@kojo/kojo-core` 的解析器——所以只能走动态边，见模块头。
  */
-export type Kojo2PanelApi = typeof import('../monaco/kojo2-callhierarchy');
+export type Kojo2PanelApi = typeof import('@kojo/kojo-lang/call-hierarchy');
 
 let kojo2PanelModule: Promise<Kojo2PanelApi> | null = null;
 
@@ -315,7 +317,7 @@ let kojo2PanelModule: Promise<Kojo2PanelApi> | null = null;
  * 动态 `import()` 是 PS-10 ① 的既有形态：静态图不许有解析器，首次打开 kojo2 文件时才拉。
  */
 export function loadKojo2CallHierarchyPanel(): Promise<Kojo2PanelApi> {
-  kojo2PanelModule ??= import('../monaco/kojo2-callhierarchy');
+  kojo2PanelModule ??= import('@kojo/kojo-lang/call-hierarchy');
   return kojo2PanelModule;
 }
 

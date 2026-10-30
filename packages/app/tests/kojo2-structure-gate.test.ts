@@ -262,7 +262,6 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
       // （车 2–4 删掉的七枚 `kojo2-*.ts` 不再逐个读源码：文件不存在，读它反而会把
       // "删除"这件事变成异常而不是断言。）
       'slot-service-providers.ts',
-      'kojo2-callhierarchy.ts',
     ]) {
       const source = readFileSync(
         resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', rel),
@@ -270,6 +269,16 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
       );
       expect(source, `${rel} 仍读切流开关`).not.toMatch(/isKojo2CutoverEnabled/);
     }
+    // SDK-B5b 车 C（2026-10-31）：调用层级判据整块搬进 `@kojo/kojo-lang/call-hierarchy`
+    // （宿主那枚 `monaco/kojo2-callhierarchy.ts` 已删）⇒ 同一条断言改读包里的新落点，
+    // 判据一个字不放宽。
+    const callHierarchySource = readFileSync(
+      resolve(REPO_ROOT, 'packages', 'kojo-lang', 'src', 'call-hierarchy.ts'),
+      'utf8',
+    );
+    expect(callHierarchySource, 'call-hierarchy.ts 仍读切流开关').not.toMatch(
+      /isKojo2CutoverEnabled/,
+    );
   });
 
   it('解析链保持懒载：折叠的缺省客户端仍是动态 import', () => {

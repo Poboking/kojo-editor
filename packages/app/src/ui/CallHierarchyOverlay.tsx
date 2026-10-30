@@ -23,7 +23,7 @@ import type {
   Kojo2PanelGroup,
   Kojo2PanelResolution,
   Kojo2PanelSite,
-} from '../monaco/kojo2-callhierarchy';
+} from '@kojo/kojo-lang/call-hierarchy';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import {
   CALL_HIERARCHY_SURFACE_ID,
@@ -55,9 +55,9 @@ import { pkey } from './file-tree-ops';
  * **按当前 model 的语言分派取数依赖**：
  * - `.erb`（及 v1 `.kojo`）⇒ `ui.editor.languageService` 槽的 `callHierarchy` 成员
  *   （LAU-4 调用层级腿起判据住 `@kojo/plugin-erb-parser`，本层只组装请求、翻面板形状）；
- * - `kojo2` ⇒ `createKojo2CallHierarchyProvider()`（纯模型 `monaco/kojo2-callhierarchy.ts`
- *   的 provider 面，宿主自建面板消费；两个分支的"位点 → 声明 → 出入边"搬运都在
- *   `ui/call-hierarchy.ts` 的 `resolveKojo2CallHierarchy`）。
+ * - `kojo2` ⇒ `createKojo2CallHierarchyProvider()`（判据住语言面库
+ *   `@kojo/kojo-lang/call-hierarchy` 的 provider 面，宿主自建面板消费；两个分支的
+ *   "位点 → 声明 → 出入边"搬运都在 `ui/call-hierarchy.ts` 的 `resolveKojo2CallHierarchy`）。
  * 本组件只做展示与跳转：行点击 → 注入的 `reveal`（宿主落成既有的
  * `editor.revealLocation`，与转到定义同一条导航通道），**零写操作**。
  *
