@@ -12,6 +12,7 @@ import type * as Monaco from 'monaco-editor';
 import type { EditorFoldingRange, EditorLanguageServiceContribution, EditorLanguageServiceRequest } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { collectFoldingRanges, installFoldingRangeProvider, toMonacoFoldingRanges } from '../src/monaco/kojo-folding';
 
 const REQUEST: EditorLanguageServiceRequest = {
@@ -135,12 +136,15 @@ describe('toMonacoFoldingRanges · 协议翻译', () => {
 });
 
 describe('installFoldingRangeProvider · 装配', () => {
-  it('ERB 与 `.kojo` 各注册一枚 provider；dispose 全部回收', () => {
+  it('ERB / `.kojo1` 与点名了 `foldingRange` 的 kojo2 各注册一枚；dispose 全部回收', () => {
     const { monaco, registered, disposed } = stubMonaco();
     const handle = installFoldingRangeProvider(monaco, { resolve: () => [] });
-    expect(registered.map((r) => r.languageId).sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    // B3h：折叠改走共享收口带能力名 `foldingRange` ⇒ 除两门 v1 语义语言外，
+    // descriptor 里 `slotServices` 点名这一格的 kojo2 也挂上（它的快照由宿主预取）。
+    const expected = [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID].sort();
+    expect(registered.map((r) => r.languageId).sort()).toEqual(expected);
     handle.dispose();
-    expect(disposed.sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(disposed.sort()).toEqual(expected);
   });
 
   it('provider 把契约区间翻成 Monaco FoldingRange（模型决定行号上限）', () => {

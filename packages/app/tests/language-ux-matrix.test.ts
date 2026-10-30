@@ -459,7 +459,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '折叠',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/kojo-folding.ts（共享收口）+ monaco/kojo2-folding.ts',
+        evidence: 'monaco/kojo-folding.ts（共享收口，含 kojo2）+ monaco/kojo2-folding.ts（预取缓存）',
         assembled: true,
       },
       {
@@ -621,7 +621,12 @@ export const LANGUAGE_UX_SUMMARY: LanguageUxMatrixSummary = Object.freeze({
 const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   folding: [
     { rel: 'monaco/kojo-folding.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerFoldingRangeProvider/ },
-    { rel: 'monaco/kojo2-folding.ts', re: /registerFoldingRangeProvider\(\s*KOJO2_LANGUAGE_ID/ },
+    { rel: 'monaco/kojo-folding.ts', re: /'foldingRange'\s*\)/ },
+    // B3h（2026-10-30）：2.0 的折叠不再自建 provider —— 共享收口带能力名 `foldingRange`，
+    // descriptor 用 `slotServices` 点名挂上，应答来自插件（worker 事实由宿主预取进缓存，
+    // 随请求的 `folds` 递下去）。取证点随之变成三处：能力名、descriptor 点名、预取器装配。
+    { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'foldingRange'/ },
+    { rel: 'monaco/kojo2-folding.ts', re: /export function installKojo2FoldsCache\(/ },
   ],
   jump: [
     { rel: 'monaco/kojo-definition.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerDefinitionProvider/ },

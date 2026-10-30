@@ -236,9 +236,9 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
  * 4 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
  * `ui/editor-global-providers.ts` 的 2.0 段），且**装配点无条件调用**（K2-SURFACE-DEFAULT：
  * 语言面不读切流开关，`language-parity.test.ts` 逐格对拍"装配点真调了 + 安装器自己不读开关"）；
- * 12 枚 `shared` 是**已交给插件**的十二条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
+ * 13 枚 `shared` 是**已交给插件**的十三条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
  * `completion` / `hover` 自 B3c，`signature` / `format` 自 B3d，`refs` / `rename` 自 B3e，
- * `highlight` / `selection` 自 B3f，`codelens` 自 B3g），宿主只经
+ * `highlight` / `selection` 自 B3f，`codelens` 自 B3g，`folding` 自 B3h），宿主只经
  * `registerForLanguageServices` 带能力名挂上、判据全在 `@kojo/kojo-lang` + 供方
  * `@kojo/plugin-kojo-lang`；
  * `brackets` / `preview` 与 ERB 同档（语言配置 / Monaco 内建）；`diagnostics` 是 `self`：
@@ -261,7 +261,11 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
  */
 const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabilityStatus>> =
   Object.freeze({
-    [LanguageCapability.Folding]: 'self',
+    [LanguageCapability.Folding]: 'shared',
+    // B3h（2026-10-30）：折叠改走**共享收口**（能力名 `foldingRange`）——可折区间来自结构
+    // worker（异步），宿主打开 / 改动时预取进缓存、随请求的 `folds` 递下去，供方（插件
+    // `kojo2-foldingRange`）同步裁与答；判据住 `@kojo/kojo-lang/folding`，宿主
+    // `monaco/kojo2-folding.ts` 只剩预取与缓存，原生注册形状清零。
     // B2（2026-10-24）：2.0 的大纲改走**共享收口**（`registerForLanguageServices` 带能力名），
     // 宿主侧零原生 provider；供方 = 插件 `@kojo/plugin-kojo-lang`。
     [LanguageCapability.Outline]: 'shared',

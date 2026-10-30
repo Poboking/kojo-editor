@@ -281,6 +281,8 @@ describe('插件装配', () => {
       'kojo2-selectionRange',
       // B3g：行上注解同样分枚注册（单答型；整篇一次，不取 adapter）
       'kojo2-codeLens',
+      // B3h：折叠区间（结构快照 → 契约区间；槽内同步作答，不 await worker）
+      'kojo2-foldingRange',
       // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
       'kojo2-monaco-language',
     ]);
@@ -297,6 +299,8 @@ describe('插件装配', () => {
       // B3f 两枚（high / selection）+ B3g 一枚（codeLens）仍是同一槽
       'ui.editor.languageService',
       'ui.editor.languageService',
+      'ui.editor.languageService',
+      // B3h 折叠一枚
       'ui.editor.languageService',
       'ui.monaco.language',
     ]);

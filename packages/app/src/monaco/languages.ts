@@ -118,17 +118,18 @@ const JSON_DESCRIPTOR: LanguageDescriptor = {
  * - 认 **`.kojo`（主场，2026-10-27 起从 v1 手里接过）与 `.kojo2`（旧名，兼容）**；
  *   v1 的 descriptor 只剩 `.kojo1`，两边不重叠；
  * - **不声明 `languageServices`**：通用双注册那 11 枚 provider 是 v1 语义的供方，挂到
- *   `kojo2` 上只会拿空结果顶掉 Monaco 内建行为（2.0 自建的那几枚——折叠 / 缩进 / 语义着色 /
- *   行上注解 / 诊断——各自只认 `kojo2` 语言 id）；声明面由 `capabilities` 与闸门负责；
+ *   `kojo2` 上只会拿空结果顶掉 Monaco 内建行为（2.0 仍自建的那几枚——缩进 / 语义着色 /
+ *   诊断——各自只认 `kojo2` 语言 id；行上注解与折叠自 B3g / B3h 起改走共享收口 + 插件供方）；
+ *   声明面由 `capabilities` 与闸门负责；
  * - **`slotServices`（B2 起）**：只点名**确实已由插件接管**的那几条腿。今天是
  *   `documentSymbol`（B2）、`inlayHint`（B2c）、`definition`（B3b），B3c（2026-10-28）补上的
  *   `completion` 与 `hover`，B3d（2026-10-28）补上的 `signatureHelp` 与 `formatting`，
- *   B3e（2026-10-29）补上的 `references` 与 `rename`，以及 B3f（2026-10-29）补上的
- *   `documentHighlight` 与 `selectionRange`，B3g（2026-10-30）补上的 `codeLens`——这十二条的原生
- *   provider 已在对应批次删除，唯一供方都是 `@kojo/plugin-kojo-lang`，注册走共享收口
- *   （`registerForLanguageServices` 带能力名那一枚）。
- *   仍**不声明**的是折叠：它仍由 `installKojo2FoldingProvider` 自建，提前声明就是给
- *   `kojo2` 挂上一枚没人应答的空 provider，而折叠那枚的空结果会顶掉 Monaco 的缩进折叠；
+ *   B3e（2026-10-29）补上的 `references` 与 `rename`，B3f（2026-10-29）补上的
+ *   `documentHighlight` 与 `selectionRange`，B3g（2026-10-30）补上的 `codeLens`，以及
+ *   B3h（2026-10-30）补上的 `foldingRange`——这十三条的原生 provider 已在对应批次删除，
+ *   唯一供方都是 `@kojo/plugin-kojo-lang`，注册走共享收口（`registerForLanguageServices`
+ *   带能力名那一枚）。折叠之所以能被点名，是因为 B3h 把"worker 事实塞不进同步槽"解决了：
+ *   宿主预取 + 请求里带快照（`EditorFoldingRangeRequest.folds`），供方同步裁与答；
  * - **不声明 `structure`**：`monaco/tree-sitter/kojo2-runtime.ts` 只导出主线程单例
  *   （`getKojo2TreeSitterRuntime`：parse / captures）与内核类型，**没有**
  *   `StructureLanguageRuntime`（`runtimeWasmUrl` / `grammarWasmUrl` / `createWorker`）这一层
@@ -163,6 +164,9 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
     'selectionRange',
     // B3g：行上注解（`# 机` / `@织` / `@函` 计数）也交给插件供方。
     'codeLens',
+    // B3h（2026-10-30）：折叠交给共享收口 + 插件供方——可折区间来自结构 worker（异步），
+    // 宿主打开 / 改动时预取进缓存、随请求的 `folds` 递过去；槽内同步作答。
+    'foldingRange',
   ],
   capabilities: KOJO2_CAPABILITIES,
 };

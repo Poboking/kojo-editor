@@ -1,48 +1,47 @@
 /**
- * Kojo 2.0 的 **Monaco 折叠 provider**（K2-FOLD-INDENT 批）：worker 的 `folds` 查询 →
- * `FoldingRange`。
+ * Kojo 2.0 的**折叠事实预取**（B3h，2026-10-30）：把结构 worker 的 `folds` 提前算好，缓存成
+ * 供给方**同步**取用的快照。
  *
- * ## 数据链（每一层只回答一件事）
+ * ## 为什么不在 provider 里等
  *
- * `getKojo2WorkerClient()`（主线程薄客户端）→ `folds(text, version, oldTreeId?)`
- * （worker 内 `queries/v2/folds.scm` 的 `(block) @fold` 已经跑完）→
- * `foldsFromCaptures`（worker 侧：只留跨行、去重、排序，**0 基行**）→ 本文件的
- * {@link toMonacoFoldingRanges}（**0 基 → 1 基**，过滤越界 / 倒置 / 重复）→ Monaco。
+ * 折叠区间只有结构 worker 算得出（`queries/v2/folds.scm` 的 `(block) @fold`），而
+ * `ui.editor.languageService` 槽的 `provide(request)` **是同步的**——worker 的事实塞不进去。
+ * B3h 起折叠改走共享收口（`kojo-folding.ts` 那一枚 provider，kojo2 由 descriptor 的
+ * `slotServices: ['foldingRange']` 点名），供方是插件 `kojo2-foldingRange`；本文件只做三件事：
  *
- * 本文件**不碰 wasm、不读查询、不懂 tree-sitter 节点**：它只认 worker 回复里的 `treeId`
- * （与 `kojo2-semantic.ts` 同一条所有权口径）——上一版交回去，worker 就能增量重解；本文件
- * 从不 `delete()` 树（树活在那条线程里，由 worker 的 LRU 收账）。
+ * 1. **预取**：model 打开 / 内容变更（防抖）时问一次 worker，整篇只问一次；
+ * 2. **缓存**：键 = model 身份 + **版本号**（同版本重复问直接命中；版本变了才把上一版
+ *    `treeId` 交回 worker 增量重解）。`WeakMap` 键，模型释放后自然可回收；
+ * 3. **交快照**：请求构造时（{@link kojo2FoldsSnapshotFor}）把**这一版**的契约区间递进
+ *    `EditorFoldingRangeRequest.folds`，供方负责裁与答。
  *
- * ## 版本缓存（与语义着色同一条纪律，理由不同一条）
+ * ## 缓存未命中 ⇒ 空结果，绝不异步等待
  *
- * 缓存键是 **model 版本号 + worker 交回的 `treeId`**。折叠 provider 被 Monaco 在**每次停笔 /
- * 每次折叠态变化**后重问；同一版本重复问直接命中（不重发请求），版本变了才把上一版 `treeId`
- * 交给 worker（否则 worker 每次都要整篇重解一棵树，纯属白烧）。失败那一版同样进缓存
- * （同版本不反复重试），但 `treeId` 只在 worker 明确交回时才留。
+ * 槽内不许 await（供方是纯同步插件），所以 provider 被问而快照还没到 ⇒ 这一轮交空、
+ * 并把预取踢进后台；**下一版内容变化 / 下一次预取后可见**（Monaco 在停笔与折叠态变化时
+ * 都会重问）。头注这一句是口径，不是借口：作者打字一次就够了，而"在槽里 await"会让整条
+ * 语言服务从同步变异步，那是另一场改造。
  *
- * 与 `kojo2-semantic.ts` 的一处刻意不同：**不做 `serialize` 队列**。语义着色的并发会让
- * "哪一版上屏"不可预测（同一批 token 被两份回复抢），而折叠每条回复都自带版本号、
- * 每个 model 只认自己那一格缓存，先后到达不改变任何已定的答案；worker 侧本来也按到达序
- * 串行处理。多一条队列只会让折叠比作者的编辑慢一拍。
+ * ## 失败面：一律空快照，绝不抛
  *
- * ## 失败面：一律 `[]`，绝不抛、绝不写 markers
+ * worker 不可用 / 超时 / 崩溃 / `folds.scm` 缺席（`query-unavailable`）⇒ 存**空快照**并
+ * `warn` 一次（同一 reason 只刷一条）。折叠是只读呈现面：失败不该变成问题面板里的噪音，
+ * 也不该让编辑器抛异常。失败若带 `treeId`（查询失败但树已解出）仍留着，下一版继续增量。
  *
- * worker 不可用 / 超时 / 崩溃 / `folds.scm` 缺席（`query-unavailable`）⇒ 返回 `[]`（"这一轮
- * 没有折叠"），并 `warn` 一次（同一 reason 只刷一条）。折叠是只读呈现面：失败不该变成问题
- * 面板里的噪音，也不该让编辑器抛异常——Monaco 把 provider 的 throw 吞成"折叠突然没了"，
- * 作者看不到任何原因。
+ * ## `@原生` 注入（LAU-6）
+ *
+ * 子树折叠（体内 IF/ENDIF 一类）与主树折叠**并集**；宿主节点账由语义面那一趟写下，这里按
+ * **model + 版本号**取回（`injection.ts::recallInjectionHosts`），取不回就只给主树折叠。
  *
  * ## 注册
  *
- * {@link installKojo2FoldingProvider} 只给 `kojo2` 语言 id 注册（v1 的 `.kojo` / `.erb` 面由
- * `kojo-folding.ts` 各挂各的，两边不重叠）；**不看 cutover 开关**（K2-STRUCTURE-GATE，批次十一）：
- * 折叠是只读呈现面，`.kojo2` 一打开就该有 gutter 折叠，与"写回 / 迁移 / 切解析器"的切流开关
- * 解耦。真正贵的那一层本来就是懒的——worker 客户端在**第一次被问**时才动态 import
- *（见 {@link defaultWorkerClient}），注册本身零装载。
- * disposal 幂等：先撤 provider 注册，再丢本 provider 的版本缓存（worker 客户端是共享单例，
- * **不**在这里 dispose）。
+ * 本文件**不注册任何 Monaco provider**（原生注册形状已清零）：折叠的注册在
+ * `kojo-folding.ts` 的共享收口，预取的驱动在 `ui/editor-global-providers.ts` 那一段
+ * 2.0 模型事件里（与项目索引同一处，见 `installKojo2FoldsCache` 的调用点）。
  */
 import type * as Monaco from './entry';
+import type { EditorFoldingRange } from '@kojo/plugin-api';
+import { kojo2FoldingRangesFromWorkerFolds } from '@kojo/kojo-lang/folding';
 import { KOJO2_INJECTIONS, KOJO2_LANGUAGE_ID } from './kojo2-language';
 import { reportStructureDegradation } from './tree-sitter/fallback';
 import type {
@@ -62,56 +61,11 @@ import type { InjectionHost, InjectionOutcome, InjectionRunRequest } from './tre
  */
 type FoldRange = Kojo2FoldRange;
 
-/** 空结果（"这一轮没有折叠"；不 new 数组，Monaco 只读） */
-const EMPTY_RANGES: Monaco.languages.FoldingRange[] = [];
-
-/* ============================== 0 基 → 1 基 ============================== */
+/** 空快照（"这一版没有折叠"；不 new 数组，消费方只读） */
+const EMPTY_SNAPSHOT: readonly EditorFoldingRange[] = Object.freeze([]);
 
 /**
- * worker 的折叠区间（**0 基行**，`endRow > startRow` 才存在）→ Monaco `FoldingRange`
- * （**1 基行**，`end > start` 才可折）。
- *
- * 四道过滤，每道都是"陈旧的回复不许画到当下的文本上"：
- * - 非有限数 / 非整数 ⇒ 丢（worker 不该发，但 provider 是最后一道闸）；
- * - `start < 0` 或 `end >= lineCount` ⇒ 丢（**越界不夹取**：回复可能对应上一版文本，
- *   夹到边界会折错行；不折比折错好）；
- * - `end <= start` ⇒ 丢（没有可隐藏的行，留着只会让 gutter 出一个折不动的假箭头）；
- * - 重复区间 ⇒ 只留第一枚（worker 已去重；这里是防直接调用方）。
- *
- * 排序与 worker / v1 `toMonacoFoldingRanges` 同口径：起点升序、同起点终点降序（外层块在前）。
- */
-export function toMonacoFoldingRanges(
-  folds: readonly FoldRange[] | null | undefined,
-  lineCount: number,
-): Monaco.languages.FoldingRange[] {
-  if (!Array.isArray(folds)) return [];
-  const limit = Number.isFinite(lineCount) ? Math.trunc(lineCount) : 0;
-  if (limit < 1) return [];
-  const out: Monaco.languages.FoldingRange[] = [];
-  const seen = new Set<string>();
-  for (const fold of folds) {
-    if (fold === null || typeof fold !== 'object') continue;
-    const startRow = fold.startRow;
-    const endRow = fold.endRow;
-    if (!Number.isFinite(startRow) || !Number.isFinite(endRow)) continue;
-    if (!Number.isInteger(startRow) || !Number.isInteger(endRow)) continue;
-    if (startRow < 0 || endRow >= limit) continue;
-    const start = startRow + 1;
-    const end = endRow + 1;
-    if (end <= start) continue;
-    const key = `${start}:${end}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ start, end });
-  }
-  out.sort((a, b) => a.start - b.start || b.end - a.end);
-  return out;
-}
-
-/* ============================== provider ============================== */
-
-/**
- * 本 provider 对 worker 客户端的最小依赖面（结构类型：真 `Kojo2WorkerClient` 与测试替身都满足）。
+ * 本文件对 worker 客户端的最小依赖面（结构类型：真 `Kojo2WorkerClient` 与测试替身都满足）。
  * 只要一个 `folds`：树怎么解、查询怎么跑，全在 worker 里。
  */
 export interface Kojo2FoldingWorkerClient {
@@ -128,7 +82,7 @@ function warnOnce(warn: (message: string) => void, key: string, message: string)
 }
 
 /** 依赖注入缝（测试用；生产全部走缺省） */
-export interface Kojo2FoldingProviderDeps {
+export interface Kojo2FoldsCacheDeps {
   /**
    * 取 worker 客户端（缺省 = 动态 import `kojo2-worker-runtime` 的单例）。
    * 动态 import 让**主线程静态图里连薄客户端都不出现**：没人要结构层时，
@@ -137,13 +91,7 @@ export interface Kojo2FoldingProviderDeps {
   readonly getClient?: () => Kojo2FoldingWorkerClient | Promise<Kojo2FoldingWorkerClient>;
   /** 告警出口（缺省 `console.warn`；测试可收账） */
   readonly warn?: (message: string) => void;
-  /**
-   * `@原生` 注入声明（LAU-6；缺省 = `KOJO2_INJECTIONS`）。空数组 = 不合并子树折叠。
-   *
-   * 折叠的子树**不自己找宿主节点**：宿主节点账由语义 provider 那一趟写下（它本来每篇都跑），
-   * 这里只按 **model + 版本号** 取回同一份（见 `injection.ts::recallInjectionHosts`）。
-   * 取不回（这一版语义面还没跑过）= 只给主树折叠，不猜。
-   */
+  /** `@原生` 注入声明（LAU-6；缺省 = `KOJO2_INJECTIONS`）。空数组 = 不合并子树折叠。 */
   readonly injections?: readonly InjectionSpec[];
   /** 取回宿主节点账（测试注入缝；缺省 = 动态 import `injection.ts`） */
   readonly recallInjectionHosts?: (
@@ -178,56 +126,97 @@ async function defaultRunInjection(
   return module.runInjectionForModel(model, request);
 }
 
-/** provider + 它自己的资源账（Monaco 的 provider 接口没有 dispose 位） */
-export interface Kojo2FoldingProviderHandle {
-  readonly provider: Monaco.languages.FoldingRangeProvider;
-  /** 幂等：丢掉本 provider 的版本缓存（worker 客户端是共享单例，不归这里管） */
-  dispose(): void;
-}
-
-interface ModelCacheEntry {
+/** 一版快照（缓存条目；`versionId` 对不上 = 陈旧，不许交给请求） */
+interface SnapshotEntry {
   readonly versionId: number;
   /** worker 交回的树号（下一版的增量基准；`null` = 上次失败且 worker 没交出可用的树） */
   readonly treeId: string | null;
-  readonly ranges: Monaco.languages.FoldingRange[];
+  readonly ranges: readonly EditorFoldingRange[];
+}
+
+/** 预取器：**只做预取与缓存**，不注册、不翻译 Monaco 形状 */
+export interface Kojo2FoldsCache {
+  /**
+   * 同步取**这一版**的快照；陈旧 / 未命中 ⇒ `undefined`，顺带把预取踢进后台（不等待）。
+   *
+   * 非 kojo2 模型在这里早退（`prefetch` 的语言门）——共享折叠 provider 对 ERB / kojo1 也会问，
+   * 不能因为"被问了一次"就让 kojo2 的 worker 去解一份 ERB。
+   */
+  snapshotFor(model: Monaco.editor.ITextModel): readonly EditorFoldingRange[] | undefined;
+  /** 显式预取（模型事件 / 测试用）。同版本同一份在飞时复用同一个 promise，不重发请求。 */
+  prefetch(model: Monaco.editor.ITextModel): Promise<void>;
+  /** 丢掉一份 model 的缓存（model 释放时调；幂等） */
+  forget(model: Monaco.editor.ITextModel): void;
+  /** 幂等：丢弃全部缓存，之后的 `prefetch` 变空操作（在飞的那次结果也不再落账） */
+  dispose(): void;
 }
 
 /**
- * 造一个 2.0 折叠 provider（不注册；注册见 {@link installKojo2FoldingProvider}）。
+ * 造一个预取器（不注册、不挂监听；驱动见 {@link installKojo2FoldsCache}）。
  *
- * 失败面全部收在内部：任何异常都回空数组，调用方（Monaco）永远看不到 throw。
+ * 失败面全部收在内部：任何异常都落空快照，调用方永远看不到 throw。
  */
-export function createKojo2FoldingProvider(
-  deps: Kojo2FoldingProviderDeps = {},
-): Kojo2FoldingProviderHandle {
+export function createKojo2FoldsCache(deps: Kojo2FoldsCacheDeps = {}): Kojo2FoldsCache {
   const getClient = deps.getClient ?? defaultWorkerClient;
   const warn = deps.warn ?? ((message: string) => console.warn(message));
   const injectionSpecs = deps.injections ?? KOJO2_INJECTIONS;
   const recallInjectionHosts = deps.recallInjectionHosts ?? defaultRecallInjectionHosts;
   const runInjection = deps.runInjection ?? defaultRunInjection;
-  /** model → 上一版的树号与区间（`WeakMap`：标签关掉、model 释放后自然可回收） */
-  let cache = new WeakMap<Monaco.editor.ITextModel, ModelCacheEntry>();
+  /** model → 上一版的树号与快照（`WeakMap`：标签关掉、model 释放后自然可回收） */
+  let cache = new WeakMap<Monaco.editor.ITextModel, SnapshotEntry>();
+  /** model → 在飞的那一次（同版本复用；版本变了就换人） */
+  let inflight = new WeakMap<Monaco.editor.ITextModel, { versionId: number; promise: Promise<void> }>();
   let disposed = false;
 
-  const compute = async (model: Monaco.editor.ITextModel): Promise<Monaco.languages.FoldingRange[]> => {
-    if (disposed) return EMPTY_RANGES;
-    const versionId = model.getVersionId();
+  const compute = async (model: Monaco.editor.ITextModel, versionId: number): Promise<void> => {
     const cached = cache.get(model);
-    if (cached?.versionId === versionId) return cached.ranges;
     if (model.isDisposed()) {
       cache.delete(model);
-      return EMPTY_RANGES;
+      return;
     }
-
     const text = model.getValue();
-    const client = await getClient();
-    if (disposed) return EMPTY_RANGES;
-    const result = await client.folds(text, versionId, cached?.treeId ?? undefined);
-    if (disposed) return EMPTY_RANGES;
-    if (model.isDisposed()) {
-      cache.delete(model);
-      return EMPTY_RANGES;
+    const lineCount = model.getLineCount();
+    const store = (treeId: string | null, folds: readonly FoldRange[] | null): void => {
+      if (disposed || model.isDisposed()) {
+        if (model.isDisposed()) cache.delete(model);
+        return;
+      }
+      const ranges =
+        folds === null ? EMPTY_SNAPSHOT : kojo2FoldingRangesFromWorkerFolds(folds, lineCount);
+      cache.set(model, { versionId, treeId, ranges });
+    };
+
+    let client: Kojo2FoldingWorkerClient;
+    try {
+      client = await getClient();
+    } catch (error: unknown) {
+      warnOnce(
+        warn,
+        'client:load',
+        `[kojo2-folding] 结构客户端装载失败（本轮不提供折叠区间）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      store(null, null);
+      return;
     }
+    if (disposed) return;
+    let result: Kojo2WorkerResult<Kojo2FoldsReply>;
+    try {
+      result = await client.folds(text, versionId, cached?.treeId ?? undefined);
+    } catch (error: unknown) {
+      // 最后一道兜底：client 自己抛（而不是回 `ok:false`）时也不许穿到模型事件循环里。
+      warnOnce(
+        warn,
+        'client:throw',
+        `[kojo2-folding] 结构客户端抛错（本轮不提供折叠区间）：${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      store(null, null);
+      return;
+    }
+    if (disposed) return;
     if (!result.ok) {
       warnOnce(
         warn,
@@ -235,8 +224,8 @@ export function createKojo2FoldingProvider(
         `[kojo2-folding] 结构解析不可用（${result.reason}）：${result.message} ⇒ 本轮不提供折叠区间`,
       );
       // worker 明确交回了树号（查询失败但树已解出）⇒ 下一版继续增量；否则归零。
-      cache.set(model, { versionId, treeId: result.treeId ?? null, ranges: EMPTY_RANGES });
-      return EMPTY_RANGES;
+      store(result.treeId ?? null, null);
+      return;
     }
     let folds: readonly FoldRange[] = result.value.folds;
     // LAU-6：子树折叠（体内 IF/ENDIF 一类）与主树折叠**并集**。宿主节点账来自语义面那一趟
@@ -245,12 +234,7 @@ export function createKojo2FoldingProvider(
       try {
         const hosts = await recallInjectionHosts(model, versionId);
         if (hosts !== null && hosts.length > 0) {
-          const outcome = await runInjection(model, {
-            text,
-            version: versionId,
-            specs: injectionSpecs,
-            hosts,
-          });
+          const outcome = await runInjection(model, { text, version: versionId, specs: injectionSpecs, hosts });
           if (outcome.ok) {
             folds = [...folds, ...outcome.folds];
           } else {
@@ -276,77 +260,115 @@ export function createKojo2FoldingProvider(
           }`,
         );
       }
-      if (disposed) return EMPTY_RANGES;
-      if (model.isDisposed()) {
-        cache.delete(model);
-        return EMPTY_RANGES;
-      }
     }
-    const ranges = toMonacoFoldingRanges(folds, model.getLineCount());
-    cache.set(model, { versionId, treeId: result.value.treeId, ranges });
-    return ranges;
+    store(result.value.treeId, folds);
   };
 
-  const provider: Monaco.languages.FoldingRangeProvider = {
-    provideFoldingRanges(model) {
-      if (disposed || model.isDisposed()) return EMPTY_RANGES;
-      return compute(model).then(
-        (ranges) => ranges,
-        (error: unknown) => {
-          // 最后一道兜底：compute 内部已逐段降级，走到这里说明是缓存/映射层的意外。
-          warnOnce(
-            warn,
-            `internal:${error instanceof Error ? error.message : String(error)}`,
-            `[kojo2-folding] 折叠内部异常（本轮没有折叠，编辑器不受影响）：${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-          return EMPTY_RANGES;
-        },
-      );
-    },
+  const prefetch = (model: Monaco.editor.ITextModel): Promise<void> => {
+    if (disposed || model.isDisposed()) return Promise.resolve();
+    // 只认 2.0：共享折叠 provider 对 ERB / kojo1 也会问，别让 kojo2 的 worker 去解别人的文本。
+    if (model.getLanguageId() !== KOJO2_LANGUAGE_ID) return Promise.resolve();
+    const versionId = model.getVersionId();
+    const hit = cache.get(model);
+    if (hit !== undefined && hit.versionId === versionId) return Promise.resolve();
+    const running = inflight.get(model);
+    if (running !== undefined && running.versionId === versionId) return running.promise;
+    const promise = compute(model, versionId)
+      .catch((error: unknown) => {
+        // `compute` 内部已逐段降级；走到这里说明是缓存层的意外（取文 / 取行数）。
+        warnOnce(
+          warn,
+          `internal:${error instanceof Error ? error.message : String(error)}`,
+          `[kojo2-folding] 预取内部异常（本轮没有折叠，编辑器不受影响）：${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      })
+      .finally(() => {
+        const current = inflight.get(model);
+        if (current !== undefined && current.promise === promise) inflight.delete(model);
+      });
+    inflight.set(model, { versionId, promise });
+    return promise;
   };
 
   return {
-    provider,
+    snapshotFor(model) {
+      if (disposed || model.isDisposed()) return undefined;
+      const hit = cache.get(model);
+      if (hit !== undefined && hit.versionId === model.getVersionId()) return hit.ranges;
+      // 未命中 / 陈旧：这一轮答空，预取踢进后台（下一次被问、下一版内容变化后可见）。
+      void prefetch(model);
+      return undefined;
+    },
+    prefetch,
+    forget(model) {
+      cache.delete(model);
+      inflight.delete(model);
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
       cache = new WeakMap();
+      inflight = new WeakMap();
     },
   };
 }
 
+/* ============================== 装配：全局那一枚 ============================== */
+
 /**
- * 为 `kojo2` 语言注册折叠 provider（**不看 cutover 开关**：只读呈现面，见模块头「注册」）。
+ * 当前生效的预取器（组合根挂一枚；`null` = 没装，折叠腿照旧走"没有快照 ⇒ 空"）。
  *
- * 返回的 disposable 幂等：撤掉 Monaco 注册，再丢 provider 的版本缓存（worker 客户端是
- * 共享单例，留给其它结构层消费方，不在这里 dispose）。
+ * 为什么是模块单例而不是参数一路传：折叠的请求构造点在 `ui/editor-global-providers.ts`
+ * 的 `readFoldingRanges`（共享收口那一枚 provider 的回调），它拿不到组合根的局部变量；
+ * 而要传进来就得把 `installFoldingRangeProvider` 的签名长出第二套，ERB 那一路跟着改。
  */
-export function installKojo2FoldingProvider(
-  monaco: typeof Monaco,
-  deps: Kojo2FoldingProviderDeps = {},
-): Monaco.IDisposable {
-  const handle = createKojo2FoldingProvider(deps);
-  let registration: Monaco.IDisposable;
-  try {
-    registration = monaco.languages.registerFoldingRangeProvider(KOJO2_LANGUAGE_ID, handle.provider);
-  } catch (error) {
-    // 注册失败 = 这一枚根本没挂上；把 provider 自己的账先收了再外抛，
-    // 由 `ensureGlobalProviders` 的"全有或全无"统一回滚（错误不许在这里吞掉）。
-    handle.dispose();
-    throw error;
-  }
+let activeCache: Kojo2FoldsCache | null = null;
+
+/**
+ * 装一枚全局预取器（装配点调一次；返回的句柄把账收干净）。
+ *
+ * **本函数不注册任何 provider**：注册在 `kojo-folding.ts` 的共享收口（按 descriptor 铺
+ * 语言，kojo2 由 `slotServices: ['foldingRange']` 点名）。模型事件的驱动在装配点那一段
+ * 2.0 模型监听里（与项目索引同一处）——那边已经有"只认 kojo2 model"的判据，不在这里
+ * 另造第二份名单。
+ */
+export function installKojo2FoldsCache(deps: Kojo2FoldsCacheDeps = {}): Monaco.IDisposable {
+  const cache = createKojo2FoldsCache(deps);
+  const previous = activeCache;
+  activeCache = cache;
   let disposed = false;
   return {
     dispose() {
       if (disposed) return;
       disposed = true;
-      try {
-        registration.dispose();
-      } finally {
-        handle.dispose();
-      }
+      if (activeCache === cache) activeCache = previous;
+      cache.dispose();
     },
   };
+}
+
+/**
+ * **预取口**（模型事件驱动用）：打开 / 改动后踢一次，不等待、不抛。
+ *
+ * 只认 2.0 model（判定在 `prefetch` 里，装配点不需要第二份名单）。
+ */
+export function prefetchKojo2Folds(model: Monaco.editor.ITextModel): void {
+  const cache = activeCache;
+  if (cache === null) return;
+  void cache.prefetch(model);
+}
+
+/**
+ * **请求构造点**用的取快照口：这一版有快照就给，否则 `undefined`（并踢一次预取）。
+ *
+ * 没装预取器（测试 / 旧装配）⇒ `undefined`：折叠腿答空，一切照旧。
+ */
+export function kojo2FoldsSnapshotFor(
+  model: Monaco.editor.ITextModel,
+): readonly EditorFoldingRange[] | undefined {
+  const cache = activeCache;
+  if (cache === null) return undefined;
+  return cache.snapshotFor(model);
 }

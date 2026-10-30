@@ -282,6 +282,8 @@ export default defineConfig({
       '@kojo/kojo-lang/selection-range': r('../kojo-lang/src/selection-range.ts'),
       // B3g：行上注解的判据叶子（同样必须排在桶之前）。
       '@kojo/kojo-lang/codelens': r('../kojo-lang/src/codelens.ts'),
+      // B3h：折叠区间判据的叶子（同样必须排在桶之前）。
+      '@kojo/kojo-lang/folding': r('../kojo-lang/src/folding.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('../kojo-sdk/src/semantic-roles.ts'),
       '@kojo/kojo-sdk/structure-protocol': r('../kojo-sdk/src/structure-protocol.ts'),
       '@kojo/kojo-sdk/contracts': r('../kojo-sdk/src/contracts.ts'),

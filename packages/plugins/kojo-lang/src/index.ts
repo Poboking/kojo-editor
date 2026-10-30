@@ -17,6 +17,8 @@ export { provideRename } from './rename';
 export { provideDocumentHighlights } from './highlight';
 export { provideSelectionRanges } from './selection-range';
 export { provideCodeLenses } from './codelens';
+// B3h（2026-10-30）：折叠区间的供方（结构快照 → 契约区间；判据在 `@kojo/kojo-lang/folding`）。
+export { provideFoldingRanges } from './folding';
 export { provideSignatureHelp } from './signature';
 export { provideFormatting } from './format';
 export { provideDocumentSymbols, symbolFactsToTree } from './symbols';

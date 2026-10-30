@@ -236,7 +236,10 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
     expect(block).not.toContain('installKojo2DocumentFormatter');
     expect(block).not.toContain('installKojo2SemanticTokensProvider');
 
-    expect(hostSource).toContain('globalDisposers.push(installKojo2FoldingProvider(monaco));');
+    expect(hostSource).toContain('globalDisposers.push(installKojo2FoldsCache());');
+    // B3h（2026-10-30）：折叠的**原生注册**也清零了 —— 注册改走 `kojo-folding.ts` 的共享收口
+    // （kojo2 由 descriptor 的 `slotServices: ['foldingRange']` 点名），宿主这一段只装预取器。
+    expect(hostSource).not.toContain('installKojo2FoldingProvider');
     // B2（2026-10-24）：大纲的原生装配行**已删除** —— 它改由 `installDocumentSymbolProvider`
     // 那一枚槽腿挂上（kojo2 descriptor 的 `slotServices: ['documentSymbol']`），供方是插件
     // `@kojo/plugin-kojo-lang`。这里反过来钉住"宿主不再自建 2.0 大纲 provider"。
@@ -269,5 +272,7 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
 
   it('解析链保持懒载：折叠的缺省客户端仍是动态 import', () => {
     expect(foldingSource).toMatch(/await import\('\.\/tree-sitter\/kojo2-worker-runtime'\)/);
+    // B3h：本文件**不注册任何 Monaco provider**（原生注册形状清零，注册在共享收口那一枚）
+    expect(foldingSource).not.toMatch(/registerFoldingRangeProvider/);
   });
 });

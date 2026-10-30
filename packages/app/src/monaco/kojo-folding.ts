@@ -85,10 +85,15 @@ export interface FoldingRangeHandlers {
 }
 
 /**
- * 为 ERB 方言与 `.kojo` 两种语言 id 注册 foldingRange provider。
+ * 为声明了折叠能力的语言注册 foldingRange provider。
  *
  * 注册 provider 后 Monaco 的折叠策略（缺省 `auto`）自动改用供给器而非缩进猜测——
  * 这正是 D3 的目的：ERB 原文不缩进，缩进折叠在其上几乎无效。
+ *
+ * B3h（2026-10-30）：带能力名 `foldingRange` 挂——除 `languageServices: true` 的两门 v1
+ * 语义语言外，还覆盖 descriptor 里 `slotServices` **点名**这一格的语言（今天是 kojo2：
+ * 它的可折区间来自结构 worker，宿主预取进缓存后随请求的 `folds` 递给插件供方，本层只
+ * 翻译与夹取）。不带能力名时 kojo2 挂不上，折叠会退回"gutter 一处也折不动"的缩进猜测。
  */
 export function installFoldingRangeProvider(
   monaco: typeof Monaco,
@@ -107,5 +112,5 @@ export function installFoldingRangeProvider(
       return toMonacoFoldingRanges(model, ranges);
     },
   };
-  return registerForLanguageServices(monaco, (m, id) => m.languages.registerFoldingRangeProvider(id, provider));
+  return registerForLanguageServices(monaco, (m, id) => m.languages.registerFoldingRangeProvider(id, provider), 'foldingRange');
 }

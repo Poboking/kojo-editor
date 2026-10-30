@@ -645,6 +645,15 @@ export interface EditorFoldingRangeRequest extends EditorDocumentIdentity {
   readonly project: GameProject | null;
   /** 文件行数（体量事实，供贡献方按大小自行降级；缺省 = 未知，按不降级处理） */
   readonly lineCount?: number;
+  /**
+   * **结构层快照**（additive，B3h 2026-10-30）：宿主预取好的可折区间，与 `text` 同一版
+   * （`version` 一致才给），模型坐标 1 基闭区间。
+   *
+   * 为什么有这一格：这类语言的区间只有异步结构引擎算得出，而槽是**同步**的 ⇒ 快照随请求
+   * 递进来，供方只裁与答，**不得在槽内 await**；缺席 = 这一版还没预取到（供方答空，
+   * 下一次可见），**不是**"整篇没有可折块"。
+   */
+  readonly folds?: readonly EditorFoldingRange[];
 }
 
 /**

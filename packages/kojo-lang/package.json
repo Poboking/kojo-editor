@@ -29,6 +29,7 @@
     "./rename": "./src/rename.ts",
     "./highlight": "./src/highlight.ts",
     "./selection-range": "./src/selection-range.ts",
+    "./folding": "./src/folding.ts",
     "./theme-rules": "./src/theme-rules.ts",
     "./lexicon": "./src/lexicon.ts",
     "./monarch": "./src/monarch.ts",

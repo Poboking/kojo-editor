@@ -2,18 +2,23 @@
  * K2-FOLD-INDENT 的闸：Kojo 2.0 的**折叠区间**（worker `folds` → Monaco `FoldingRange`）与
  * **回车缩进的宿主口径**（判据 → on-type `TextEdit` 的翻译 + provider 注册）。
  *
- * ## 折叠这一半钉什么
+ * ## 折叠这一半钉什么（B3h 起改口）
  *
- * - **0 基 → 1 基**映射、排序（起点升序 / 同起点终点降序），以及四道过滤（越界 / 倒置 /
- *   非整数 / 重复）——这些都是"陈旧的回复不许画到当下文本上"的可执行形态；
- * - **版本缓存与树所有权**：同版本重复问不重发；版本变了才把上一版 `treeId` 交回 worker；
+ * 折叠已改走**共享收口 + 插件供方**（宿主的原生 provider 清零）：宿主只在模型打开 / 改动
+ * （防抖）时**预取** worker 的 `folds`，按 model 版本缓存；provider 被问时同步取快照、塞进
+ * 请求的 `folds` 字段。因此这一半钉的是**预取缓存**：
+ *
+ * - **版本缓存与树所有权**：同版本不重发；版本变了才把上一版 `treeId` 交回 worker；
  *   失败回复若带 `treeId` 则下一版继续增量（与 `kojo2-semantic.ts` 同口径）；
- * - **失败面一律 `[]`**：`unavailable` / `timeout` / `query-unavailable` / 取客户端抛错 /
- *   模型已释放 ⇒ 空结果、不抛、同一 reason 只 warn 一次；
- * - **注册纪律**（K2-STRUCTURE-GATE 起改口）：折叠是只读呈现面，**开关关也照常注册**（只为
- *   `kojo2` 一枚）；开关开时行为不变；dispose 幂等；
+ * - **缓存未命中 ⇒ 同步取空**（槽内不 await），预取落账后同版本可见；`forget` 清一份缓存；
+ * - **失败面一律空快照、不抛**：`unavailable` / `timeout` / `query-unavailable` / 取客户端抛错 /
+ *   模型已释放 ⇒ 空、同一 reason 只 warn 一次；
+ * - **语言门**：非 kojo2 model 一条请求都不发（共享折叠 provider 也会问 ERB / kojo1）；
  * - **真 wasm + 真查询**：用进程内 worker 引擎（`kojo2-worker.ts` 本体 + 真 wasm +
  *   `queries/v2/folds.scm`）走完整链路，读数逐条钉住（区间数、表块、`@原生` 围栏整块）。
+ *
+ * 0 基 → 1 基的换算与四道过滤（越界 / 倒置 / 非整数 / 重复）**整块搬进
+ * `@kojo/kojo-lang/folding`**，逐条边界见 `packages/kojo-lang/tests/folding.test.ts`。
  *
  * ## 缩进这一半钉什么（B3i 之后：判据在包，本文件钉装配与翻译）
  *
@@ -31,6 +36,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
+import { kojo2FoldingRangesFromWorkerFolds } from '@kojo/kojo-lang/folding';
 import {
   installKojo2IndentProvider,
   KOJO2_AUTO_CLOSE_GUARD_TRIGGER_CHARS,
@@ -38,9 +44,10 @@ import {
   kojo2IndentEditsAt,
 } from '../src/monaco/kojo2-indent';
 import {
-  createKojo2FoldingProvider,
-  installKojo2FoldingProvider,
-  toMonacoFoldingRanges,
+  createKojo2FoldsCache,
+  installKojo2FoldsCache,
+  kojo2FoldsSnapshotFor,
+  prefetchKojo2Folds,
   type Kojo2FoldingWorkerClient,
 } from '../src/monaco/kojo2-folding';
 import type {
@@ -230,207 +237,250 @@ function fakeFoldingClient(options: {
   };
 }
 
-async function provideFolds(
-  handle: { readonly provider: Monaco.languages.FoldingRangeProvider },
+/** 预取一次再取快照（B3h 的宿主侧两步：`prefetch` 等 worker，`snapshotFor` 是同步的那一格） */
+async function snapshotAfterPrefetch(
+  cache: ReturnType<typeof createKojo2FoldsCache>,
   model: Monaco.editor.ITextModel,
-): Promise<Monaco.languages.FoldingRange[]> {
-  // Monaco 的 provider 契约允许 null（"本模型没有折叠"）；测试里两个实现都必然给数组，
-  // 这里只做一次收窄，让调用点按数组断言。
-  return (await handle.provider.provideFoldingRanges(model, {}, {} as Monaco.CancellationToken)) ?? [];
+): Promise<readonly { startLine: number; endLine: number }[]> {
+  await cache.prefetch(model);
+  return cache.snapshotFor(model) ?? [];
 }
 
-/* ============================== 折叠 · 0 基 → 1 基 ============================== */
+/* ============================== 折叠 · 0 基 → 1 基（判据已进包） ============================== */
 
-describe('toMonacoFoldingRanges · 0 基行 → 1 基（端到端的唯一坐标换算）', () => {
-  it('区间 +1 且按起点升序、同起点终点降序（外层块在前）', () => {
-    expect(
-      toMonacoFoldingRanges([foldRange(3, 5), foldRange(1, 2), foldRange(3, 9)], 20),
-    ).toEqual([
-      { start: 2, end: 3 },
-      { start: 4, end: 10 },
-      { start: 4, end: 6 },
-    ]);
-  });
-
-  it('倒置 / 零高区间丢掉（没有可隐藏的行，留着只会出一个折不动的假箭头）', () => {
-    expect(toMonacoFoldingRanges([foldRange(4, 4), foldRange(6, 3)], 20)).toEqual([]);
-  });
-
-  it('越界不夹取：startRow < 0 或 endRow >= 行数 ⇒ 丢（陈旧回复不许折错行）', () => {
-    expect(toMonacoFoldingRanges([foldRange(-1, 3)], 20)).toEqual([]);
-    expect(toMonacoFoldingRanges([foldRange(0, 20)], 20)).toEqual([]);
-    // 边界内侧照常给：endRow = 行数 - 1 是最后一行
-    expect(toMonacoFoldingRanges([foldRange(0, 19)], 20)).toEqual([{ start: 1, end: 20 }]);
-  });
-
-  it('非整数 / 非有限 / 非对象条目丢掉；空输入与非法行数给空结果', () => {
-    expect(
-      toMonacoFoldingRanges(
-        [
-          { startRow: 1.5, endRow: 4 },
-          { startRow: Number.NaN, endRow: 3 },
-          { startRow: 2, endRow: Number.POSITIVE_INFINITY },
-          null as unknown as Kojo2FoldRange,
-        ],
-        20,
-      ),
-    ).toEqual([]);
-    expect(toMonacoFoldingRanges([], 20)).toEqual([]);
-    expect(toMonacoFoldingRanges(null, 20)).toEqual([]);
-    expect(toMonacoFoldingRanges([foldRange(0, 2)], 0)).toEqual([]);
-  });
-
-  it('重复区间只留第一枚（worker 已去重；这里是防直接调用方）', () => {
-    expect(toMonacoFoldingRanges([foldRange(2, 6), foldRange(2, 6)], 20)).toEqual([
-      { start: 3, end: 7 },
+/**
+ * 坐标换算与四道过滤（越界 / 倒置 / 非整数 / 重复）**整块搬进 `@kojo/kojo-lang/folding`**
+ * （B3h），逐条边界由 `packages/kojo-lang/tests/folding.test.ts` 自己钉——那边一份判据一条断言，
+ * 这里只钉"宿主真的用了包里那一条"（下一条用例）与端到端的真 wasm 读数。
+ */
+describe('折叠判据住在包里（宿主这一侧只做预取与缓存）', () => {
+  it('宿主与供方用的是同一份换算：包内函数把 0 基行对翻成 1 基契约区间', () => {
+    expect(kojo2FoldingRangesFromWorkerFolds([foldRange(3, 5), foldRange(1, 2)], 20)).toEqual([
+      { startLine: 2, endLine: 3 },
+      { startLine: 4, endLine: 6 },
     ]);
   });
 });
 
-/* ============================== 折叠 · provider 行为 ============================== */
+/* ============================== 折叠 · 预取缓存行为 ============================== */
 
-describe('provider · 版本缓存与树所有权（treeId 口径）', () => {
-  it('首问不带 treeId、同版本命中缓存不重发、版本变了才把上一版 treeId 交回', async () => {
+describe('预取缓存 · 版本缓存与树所有权（treeId 口径）', () => {
+  it('首问不带 treeId、同版本不重发、版本变了才把上一版 treeId 交回', async () => {
     const { client, calls } = fakeFoldingClient();
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
     const fake = fakeModel('# 对照表 心情 依据 恋慕\n    0..99 -> 疏远\n');
 
-    expect(await provideFolds(handle, fake.model)).toEqual([{ start: 1, end: 2 }]);
+    expect(await snapshotAfterPrefetch(cache, fake.model)).toEqual([{ startLine: 1, endLine: 2 }]);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.oldTreeId).toBeUndefined();
     expect(calls[0]!.text).toBe('# 对照表 心情 依据 恋慕\n    0..99 -> 疏远\n');
 
-    // 同一版本重复问（Monaco 停笔 / 折叠态变化都会重问）：一次请求都不多
-    expect(await provideFolds(handle, fake.model)).toEqual([{ start: 1, end: 2 }]);
+    // 同一版本重复问（Monaco 停笔 / 折叠态变化都会重问）：一次请求都不多，快照逐字相同
+    expect(cache.snapshotFor(fake.model)).toEqual([{ startLine: 1, endLine: 2 }]);
+    await cache.prefetch(fake.model);
     expect(calls).toHaveLength(1);
 
     fake.setText('# 对照表 心情 依据 恋慕\n    0..99 -> 疏远\n    否 -> 未知\n', 2);
-    await provideFolds(handle, fake.model);
+    // 版本一变，旧快照当场失效（同步那一格不返回上一版的区间）
+    expect(cache.snapshotFor(fake.model)).toBeUndefined();
+    expect(await snapshotAfterPrefetch(cache, fake.model)).toEqual([{ startLine: 1, endLine: 2 }]);
     expect(calls).toHaveLength(2);
     expect(calls[1]!.oldTreeId).toBe('tree-1');
-    handle.dispose();
+    cache.dispose();
   });
 
+  it('同版本同一份预取在飞时复用同一个 promise（模型事件与请求构造点各踢一次也只发一条请求）', async () => {
+    const { client, calls } = fakeFoldingClient();
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
+    const fake = fakeModel('> 一行。\n');
+    const first = cache.prefetch(fake.model);
+    const second = cache.prefetch(fake.model);
+    expect(second).toBe(first);
+    await first;
+    expect(calls).toHaveLength(1);
+    cache.dispose();
+  });
+
+  it('缓存未命中 ⇒ 同步取空（不异步等待），预取完成后同版本可见', async () => {
+    const { client, calls } = fakeFoldingClient();
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
+    const fake = fakeModel('> 一行。\n');
+    // 第一次：还没预取过 ⇒ 这一轮交空（provider 那一侧据此答"这一版没有折叠"）
+    expect(cache.snapshotFor(fake.model)).toBeUndefined();
+    // 但预取已经被踢进后台 ⇒ 等它落账之后同版本可见
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await cache.prefetch(fake.model);
+    expect(cache.snapshotFor(fake.model)).toEqual([{ startLine: 1, endLine: 2 }]);
+    cache.dispose();
+  });
+
+  it('forget 清掉一份 model 的缓存 ⇒ 下次重新整篇取（不带上一版的 treeId）', async () => {
+    const { client, calls } = fakeFoldingClient();
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
+    const fake = fakeModel('> 一行。\n');
+    await cache.prefetch(fake.model);
+    expect(cache.snapshotFor(fake.model)).toEqual([{ startLine: 1, endLine: 2 }]);
+    cache.forget(fake.model);
+    expect(cache.snapshotFor(fake.model)).toBeUndefined();
+    await cache.prefetch(fake.model);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.oldTreeId).toBeUndefined();
+    cache.dispose();
+  });
+
+  it('非 kojo2 model ⇒ 一条请求都不发（共享折叠 provider 也会问 ERB / kojo1）', async () => {
+    const { client, calls } = fakeFoldingClient();
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
+    const erb = fakeModel('@A\nIF x\nENDIF', 1, 'kojo-erb');
+    expect(cache.snapshotFor(erb.model)).toBeUndefined();
+    await cache.prefetch(erb.model);
+    expect(calls).toHaveLength(0);
+    cache.dispose();
+  });
+});
+
+describe('预取缓存 · 失败一律空快照、不抛、同一 reason 只 warn 一次', () => {
   it('失败带 treeId（查询失败但树已解出）⇒ 下一版继续拿这棵树增量', async () => {
     const warn = vi.fn();
     const { client, calls } = fakeFoldingClient({
       folds: () => failedFolds('query-unavailable', 'folds.scm 缺席', 'tree-9'),
     });
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn });
     const fake = fakeModel('> 一行。\n');
-    expect(await provideFolds(handle, fake.model)).toEqual([]);
+    expect(await snapshotAfterPrefetch(cache, fake.model)).toEqual([]);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]![0])).toContain('query-unavailable');
 
     fake.setText('> 一行改。\n', 2);
-    await provideFolds(handle, fake.model);
+    await cache.prefetch(fake.model);
     expect(calls[1]!.oldTreeId).toBe('tree-9');
-    handle.dispose();
+    cache.dispose();
   });
-});
 
-describe('provider · 失败一律空区间、不抛、同一 reason 只 warn 一次', () => {
-  it('worker unavailable ⇒ [] + warn 一次；同版本不再重试（不刷屏）', async () => {
+  it('worker unavailable ⇒ 空快照 + warn 一次；同版本不再重试（不刷屏）', async () => {
     const warn = vi.fn();
     const { client, calls } = fakeFoldingClient({
       folds: () => failedFolds('unavailable', 'wasm 缺失'),
     });
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn });
     const fake = fakeModel('# 幕\n');
-    expect(await provideFolds(handle, fake.model)).toEqual([]);
-    expect(await provideFolds(handle, fake.model)).toEqual([]);
+    expect(await snapshotAfterPrefetch(cache, fake.model)).toEqual([]);
+    expect(cache.snapshotFor(fake.model)).toEqual([]);
+    await cache.prefetch(fake.model);
     expect(calls).toHaveLength(1);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]![0])).toContain('unavailable');
-    handle.dispose();
+    cache.dispose();
   });
 
-  it('worker timeout ⇒ []（这一条丢弃，编辑器不等）', async () => {
+  it('worker timeout ⇒ 空快照（这一条丢弃，编辑器不等）', async () => {
     const { client } = fakeFoldingClient({
       folds: () => failedFolds('timeout', '2000ms 内没有回话'),
     });
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
     const fake = fakeModel('# 幕\n');
-    expect(await provideFolds(handle, fake.model)).toEqual([]);
-    handle.dispose();
+    expect(await snapshotAfterPrefetch(cache, fake.model)).toEqual([]);
+    cache.dispose();
   });
 
-  it('取客户端抛错 ⇒ provider 兜住（[] + warn），Monaco 看不到异常', async () => {
+  it('取客户端抛错 / 客户端本身抛错 ⇒ 预取兜住（空快照 + warn），模型事件循环看不到异常', async () => {
     const warn = vi.fn();
-    const handle = createKojo2FoldingProvider({
+    const loading = createKojo2FoldsCache({
       getClient: async () => {
         throw new Error('装载炸了');
       },
       warn,
     });
     const fake = fakeModel('# 幕\n');
-    await expect(provideFolds(handle, fake.model)).resolves.toEqual([]);
+    await expect(loading.prefetch(fake.model)).resolves.toBeUndefined();
+    expect(loading.snapshotFor(fake.model)).toEqual([]);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]![0])).toContain('装载炸了');
-    handle.dispose();
+    loading.dispose();
+
+    const throwing = createKojo2FoldsCache({
+      getClient: async () => ({
+        folds: async () => {
+          throw new Error('查询炸了');
+        },
+      }),
+      warn,
+    });
+    await expect(throwing.prefetch(fake.model)).resolves.toBeUndefined();
+    expect(throwing.snapshotFor(fake.model)).toEqual([]);
+    expect(String(warn.mock.calls.at(-1)![0])).toContain('查询炸了');
+    throwing.dispose();
   });
 
-  it('模型已释放 ⇒ []，不再发请求', async () => {
+  it('模型已释放 ⇒ 不再交出旧快照、也不再发请求（缓存随模型生命期）', async () => {
     const { client, calls } = fakeFoldingClient();
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
+    const fake = fakeModel('# 幕\n');
+    // 先让这一版落账 ⇒ 释放后的"清缓存"不是靠"从没存过"蒙混过关
+    await cache.prefetch(fake.model);
+    expect(cache.snapshotFor(fake.model)).toEqual([{ startLine: 1, endLine: 2 }]);
+    fake.disposeModel();
+    expect(cache.snapshotFor(fake.model)).toBeUndefined();
+    await cache.prefetch(fake.model);
+    expect(calls).toHaveLength(1);
+    cache.dispose();
+  });
+
+  it('从没预取过的已释放模型 ⇒ 一条请求都不发', async () => {
+    const { client, calls } = fakeFoldingClient();
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
     const fake = fakeModel('# 幕\n');
     fake.disposeModel();
-    expect(await provideFolds(handle, fake.model)).toEqual([]);
+    expect(cache.snapshotFor(fake.model)).toBeUndefined();
+    await cache.prefetch(fake.model);
     expect(calls).toHaveLength(0);
-    handle.dispose();
+    cache.dispose();
   });
 
-  it('dispose 幂等：之后的请求回空且不再发请求（缓存已丢）', async () => {
+  it('dispose 幂等：之后的取快照回 undefined 且不再发请求（缓存已丢）', async () => {
     const { client, calls } = fakeFoldingClient();
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
     const fake = fakeModel('> 一行。\n');
-    await provideFolds(handle, fake.model);
-    handle.dispose();
-    handle.dispose();
-    expect(await provideFolds(handle, fake.model)).toEqual([]);
+    await cache.prefetch(fake.model);
+    cache.dispose();
+    cache.dispose();
+    expect(cache.snapshotFor(fake.model)).toBeUndefined();
+    await cache.prefetch(fake.model);
     expect(calls).toHaveLength(1);
   });
 });
 
-/* ============================== 折叠 · 注册纪律 ============================== */
+/* ============================== 折叠 · 装配（全局那枚预取器） ============================== */
 
-describe('install · 折叠 provider 的注册纪律', () => {
-  it('flag 关 ⇒ 仍注册一枚（只读呈现面不受写面开关门控；K2-STRUCTURE-GATE）', () => {
-    // 旧口径「flag 关零注册」已作废：cutover 只管写回 / 迁移 / 切解析器，折叠是大纲式只读面。
-    // 这里**保留 stubFlag(false)**：断言的重点正是"开关确实关着，注册仍发生"。
-    stubFlag(false);
-    const fake = fakeMonaco();
-    const disposable = installKojo2FoldingProvider(fake.monaco, {
-      getClient: async () => fakeFoldingClient().client,
-    });
-    expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['folding', 'kojo2']]);
+describe('install · 全局预取器的装配纪律', () => {
+  it('装完 ⇒ 请求构造点取得到快照；dispose 幂等且之后回 undefined', async () => {
+    const { client, calls } = fakeFoldingClient();
+    const disposable = installKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
+    const fake = fakeModel('> 一行。\n');
+    // 未命中：同步取空，并把预取踢进后台
+    expect(kojo2FoldsSnapshotFor(fake.model)).toBeUndefined();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    await vi.waitFor(() =>
+      expect(kojo2FoldsSnapshotFor(fake.model)).toEqual([{ startLine: 1, endLine: 2 }]),
+    );
     disposable.dispose();
     disposable.dispose();
-    // dispose 幂等：两次调用只撤一轮
-    expect(fake.dispose).toHaveBeenCalledTimes(1);
-    expect(fake.registrations).toHaveLength(1);
+    expect(kojo2FoldsSnapshotFor(fake.model)).toBeUndefined();
+    expect(calls).toHaveLength(1);
   });
 
-  it('flag 开 ⇒ 只为 kojo2 注册一枚 foldingRange；dispose 幂等（只撤一次）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    const disposable = installKojo2FoldingProvider(fake.monaco, {
-      getClient: async () => fakeFoldingClient().client,
-    });
-    expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['folding', 'kojo2']]);
-    expect(fake.registrations[0]!.provider).toBeTruthy();
-    disposable.dispose();
-    disposable.dispose();
-    expect(fake.dispose).toHaveBeenCalledTimes(1);
+  it('不装预取器 ⇒ 取快照回 undefined（折叠腿答空，一切照旧）', () => {
+    expect(kojo2FoldsSnapshotFor(fakeModel('> 一行。\n').model)).toBeUndefined();
   });
 
-  it('注册抛错 ⇒ 直接外抛（宿主的"全有或全无"才有东西可回滚）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco({ failOn: 'folding' });
-    expect(() =>
-      installKojo2FoldingProvider(fake.monaco, { getClient: async () => fakeFoldingClient().client }),
-    ).toThrow(/桩：注册 folding/);
-    expect(fake.registrations).toEqual([]);
+  it('模型事件口 `prefetchKojo2Folds` 不等待、不抛（没装预取器时是空操作）', async () => {
+    const fake = fakeModel('> 一行。\n');
+    expect(() => prefetchKojo2Folds(fake.model)).not.toThrow();
+    const { client, calls } = fakeFoldingClient();
+    const disposable = installKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
+    prefetchKojo2Folds(fake.model);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    disposable.dispose();
   });
 });
 
@@ -472,31 +522,31 @@ function realFoldsClient(options: { withFolds?: boolean } = {}): {
 describe('真 wasm + 真 folds.scm：整条链路仍产出可用的 1 基区间', () => {
   it('full.kojo2：30 枚区间、全部 1 基且在行内、end > start、升序', async () => {
     const { client } = realFoldsClient();
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
     const fake = fakeModel(FIXTURE_TEXT);
-    const ranges = await provideFolds(handle, fake.model);
+    const ranges = await snapshotAfterPrefetch(cache, fake.model);
     const lineCount = fake.model.getLineCount();
 
     expect(ranges).toHaveLength(30);
     for (const range of ranges) {
-      expect(range.start).toBeGreaterThanOrEqual(1);
-      expect(range.end).toBeLessThanOrEqual(lineCount);
-      expect(range.end).toBeGreaterThan(range.start);
+      expect(range.startLine).toBeGreaterThanOrEqual(1);
+      expect(range.endLine).toBeLessThanOrEqual(lineCount);
+      expect(range.endLine).toBeGreaterThan(range.startLine);
     }
     for (let i = 1; i < ranges.length; i += 1) {
       const previous = ranges[i - 1]!;
       const current = ranges[i]!;
-      expect(current.start > previous.start || current.start === previous.start).toBe(true);
+      expect(current.startLine > previous.startLine || current.startLine === previous.startLine).toBe(true);
     }
-    handle.dispose();
+    cache.dispose();
   });
 
   it('读数逐条钉住：`# 对照表` 块 = 11..15，`# 池` = 17..24，`@随机` = 61..66（含 `@组` 63..65），`@原生` 整块 = 122..129', async () => {
     const { client } = realFoldsClient();
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
     const fake = fakeModel(FIXTURE_TEXT);
-    const ranges = await provideFolds(handle, fake.model);
-    const keys = ranges.map((range) => `${range.start}:${range.end}`);
+    const ranges = await snapshotAfterPrefetch(cache, fake.model);
+    const keys = ranges.map((range) => `${range.startLine}:${range.endLine}`);
 
     expect(keys).toContain('11:15'); // # 对照表 心情 依据 恋慕（行 11 → 体末行 15）
     expect(keys).toContain('17:24'); // # 池 早安问候（% 链三分支）
@@ -504,36 +554,36 @@ describe('真 wasm + 真 folds.scm：整条链路仍产出可用的 1 基区间'
     expect(keys).toContain('61:66'); // @随机
     expect(keys).toContain('63:65'); //   └ @组（多行候选）
     expect(keys).toContain('122:129'); // @原生：整块 raw（围栏内不解释 2.0）
-    handle.dispose();
+    cache.dispose();
   });
 
   it('真回环下同版本命中缓存：引擎只跑一次 folds，版本变了带 treeId 再问', async () => {
     const { client, calls } = realFoldsClient();
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
     const fake = fakeModel(FIXTURE_TEXT);
-    await provideFolds(handle, fake.model);
-    await provideFolds(handle, fake.model);
+    await snapshotAfterPrefetch(cache, fake.model);
+    await cache.prefetch(fake.model);
     expect(calls).toHaveLength(1);
 
     fake.setText(`${FIXTURE_TEXT}\n> 追加一行。\n`, 2);
-    const next = await provideFolds(handle, fake.model);
+    const next = await snapshotAfterPrefetch(cache, fake.model);
     expect(calls).toHaveLength(2);
     expect(calls[1]!.oldTreeId).toBeTypeOf('string');
     expect(next.length).toBeGreaterThan(0);
-    handle.dispose();
+    cache.dispose();
   });
 
-  it('folds 查询缺席（worker 回 query-unavailable）⇒ []（不冒充"没有折叠"），不抛', async () => {
+  it('folds 查询缺席（worker 回 query-unavailable）⇒ 空快照（不冒充"没有折叠"），不抛', async () => {
     const { client } = realFoldsClient({ withFolds: false });
     // 这一面的可判别性由 worker 的 reason 本身证明（`query-unavailable`，不是空数组冒充"没有折叠"）
     const direct = await client.folds(FIXTURE_TEXT, 1);
     expect(direct.ok).toBe(false);
     if (!direct.ok) expect(direct.reason).toBe('query-unavailable');
 
-    const handle = createKojo2FoldingProvider({ getClient: async () => client, warn: () => undefined });
+    const cache = createKojo2FoldsCache({ getClient: async () => client, warn: () => undefined });
     const fake = fakeModel(FIXTURE_TEXT);
-    await expect(provideFolds(handle, fake.model)).resolves.toEqual([]);
-    handle.dispose();
+    await expect(snapshotAfterPrefetch(cache, fake.model)).resolves.toEqual([]);
+    cache.dispose();
   });
 });
 

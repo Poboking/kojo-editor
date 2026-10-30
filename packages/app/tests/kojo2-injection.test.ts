@@ -26,7 +26,7 @@ import {
   injectionTokenSpans,
   mergeInjectionSpans,
 } from '../src/monaco/kojo2-semantic';
-import { createKojo2FoldingProvider } from '../src/monaco/kojo2-folding';
+import { createKojo2FoldsCache } from '../src/monaco/kojo2-folding';
 import { KOJO2_INJECTIONS, KOJO2_TOKEN } from '../src/monaco/kojo2-language';
 import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 import {
@@ -274,6 +274,7 @@ function fakeModel(text: string, version = 1): FakeModel {
       getValue: () => text,
       getVersionId: () => version,
       isDisposed: () => false,
+      getLanguageId: () => 'kojo2',
       getLineCount: () => lines.length,
       getLineMaxColumn: (line: number) => (lines[line - 1] ?? '').length + 1,
       uri: { fsPath: 'D:/proj/chara/灵梦/开场.kojo' },
@@ -553,27 +554,26 @@ describe('折叠 · 子树折叠（体内 IF…ENDIF）与主树折叠并集', (
         folds: [{ startRow: 4, endRow: 6 }],
       }),
     );
-    const withHost = createKojo2FoldingProvider({
+    const withHost = createKojo2FoldsCache({
       getClient: async () => client,
       recallInjectionHosts: async () => [host],
       runInjection: runInjection as never,
     });
-    const ranges = await withHost.provider.provideFoldingRanges(fakeModel(SEMANTIC_TEXT).model, null as never, {} as never);
-    expect(ranges).toContainEqual({ start: 3, end: 7 }); // 主树：@原生 整块
-    expect(ranges).toContainEqual({ start: 5, end: 7 }); // 子树：体内 IF…ENDIF
+    const foldModel = fakeModel(SEMANTIC_TEXT);
+    await withHost.prefetch(foldModel.model);
+    const ranges = withHost.snapshotFor(foldModel.model);
+    expect(ranges).toContainEqual({ startLine: 3, endLine: 7 }); // 主树：@原生 整块
+    expect(ranges).toContainEqual({ startLine: 5, endLine: 7 }); // 子树：体内 IF…ENDIF
     withHost.dispose();
 
-    const withoutPlan = createKojo2FoldingProvider({
+    const withoutPlan = createKojo2FoldsCache({
       getClient: async () => client,
       recallInjectionHosts: async () => null,
       runInjection: runInjection as never,
     });
-    const onlyMain = await withoutPlan.provider.provideFoldingRanges(
-      fakeModel(SEMANTIC_TEXT).model,
-      null as never,
-      {} as never,
-    );
-    expect(onlyMain).toEqual([{ start: 3, end: 7 }]);
+    await withoutPlan.prefetch(foldModel.model);
+    const onlyMain = withoutPlan.snapshotFor(foldModel.model);
+    expect(onlyMain).toEqual([{ startLine: 3, endLine: 7 }]);
     expect(runInjection).toHaveBeenCalledTimes(1); // 第二次没有宿主节点账 ⇒ 不再问子树
     withoutPlan.dispose();
   });

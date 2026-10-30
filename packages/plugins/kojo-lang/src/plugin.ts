@@ -19,6 +19,7 @@
  * | `documentHighlight`（B3f） | `highlight.ts` 的 `kojo2DocumentHighlights` | `src/highlight.ts` |
  * | `selectionRange`（B3f） | `selection-range.ts` 的 `kojo2SelectionRangeChainsAt` | `src/selection-range.ts` |
  * | `codeLens`（B3g） | `codelens.ts` 的 `kojo2CodeLenses`（计数复用 `references.ts`） | `src/codelens.ts` |
+ * | `foldingRange`（B3h） | `folding.ts` 的 `kojo2FoldingSnapshotRanges`（**宿主预取的快照**） | `src/folding.ts` |
  *
  * B4 起还有一枚**不同形状**的贡献——槽 `ui.monaco.language` 交的是注册期的一次性数据
  * （Monarch / 语言配置 / 三套主题声明），不是 `provide(request)`：见 `src/monaco-language.ts`。
@@ -67,6 +68,7 @@ import { provideReferences } from './references';
 import { provideRename } from './rename';
 import { provideDocumentHighlights } from './highlight';
 import { provideSelectionRanges } from './selection-range';
+import { provideFoldingRanges } from './folding';
 import { provideSignatureHelp } from './signature';
 import { provideCodeLenses } from './codelens';
 import { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
@@ -182,13 +184,21 @@ export function createKojoLangPlugin(): Plugin {
         order: CONTRIBUTION_ORDER,
         provide: (request) => provideCodeLenses(request),
       });
+      // B3h：折叠区间同样**单答型**、分枚注册。与其它腿的差别只有一处：可折区间来自结构
+      // worker（异步），宿主在打开 / 改动时预取进缓存、随请求的 `folds` 字段递过来；
+      // 供方**同步**作答，不在槽内 await（缺席 = 这一版还没预取到，答空，下一次可见）。
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo2-foldingRange',
+        order: CONTRIBUTION_ORDER,
+        provide: (request) => provideFoldingRanges(request),
+      });
       ctx.slots.register('ui.monaco.language', {
         id: 'kojo2-monaco-language',
         order: CONTRIBUTION_ORDER,
         surface: KOJO2_MONACO_LANGUAGE_SURFACE,
       });
       ctx.log.info(
-        `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting / references / rename / documentHighlight / selectionRange / codeLens（languageId=${KOJO2_LANGUAGE_ID}）；` +
+        `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting / references / rename / documentHighlight / selectionRange / codeLens / foldingRange（languageId=${KOJO2_LANGUAGE_ID}）；` +
           `语言面已交出：Monarch / 语言配置 / 三套主题（ui.monaco.language）`,
       );
     },

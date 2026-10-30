@@ -81,7 +81,9 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     // + B3g（2026-10-30）：行上注解的判据再进一枚——`codelens`（`# 机` / `@织` / `@函` 三档，
     //   计数腿复用同包 `references`，不写第二把尺子）。同样只引 `@kojo/kojo-core` +
     //   同包相对路径，Monaco 的形状翻译留在宿主。
-    expect(files).toHaveLength(29);
+    // + B3h（2026-10-30）：折叠区间再进一枚——`folding`（worker 行对 0 基 → 契约区间 1 基，
+    //   越界 / 倒置 / 非整数 / 重复四道闸）。零外部依赖，形状翻译（Monaco `FoldingRange`）留在宿主。
+    expect(files).toHaveLength(30);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

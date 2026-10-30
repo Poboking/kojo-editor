@@ -66,6 +66,10 @@ export * from './rename';
 // （`@kojo/kojo-lang/highlight` / `/selection-range`）。
 export * from './highlight';
 export * from './selection-range';
+// B3h（2026-10-30）：2.0 **折叠区间**的判据进包——结构引擎的行对（0 基）→ 契约区间（1 基），
+// 含越界 / 倒置 / 重复四道闸。理由同上：供方是插件、插件看不见宿主。开机侧引叶子
+// （`@kojo/kojo-lang/folding`）。
+export * from './folding';
 // B4：角色表与角色调色板（架构 §7.2「角色表住 SDK 不住 app」）——**开机侧引叶子**，
 // 这两枚进桶只是为了让"要整块"的消费方一次拿全。
 export * from '@kojo/kojo-sdk/semantic-roles';

@@ -129,7 +129,10 @@ import { installKojo2SlotProviders } from '../monaco/kojo2-providers';
 import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
 // K2 batch-6：折叠区间（worker `folds`）与回车缩进（on-type，`\n` 触发）。
 // 折叠只多一条**动态** import（worker 客户端仍在第一次真折叠时才装载），缩进是纯判据 + 一枚 provider。
-import { installKojo2FoldingProvider } from '../monaco/kojo2-folding';
+// B3h（2026-10-30）：折叠的原生 provider 已清零——注册走 `kojo-folding.ts` 的共享收口
+// （kojo2 由 descriptor 的 `slotServices: ['foldingRange']` 点名），worker 事实由本模块的
+// **预取器**在打开 / 改动时算进缓存，请求构造时取快照（槽内不 await）。
+import { installKojo2FoldsCache, kojo2FoldsSnapshotFor, prefetchKojo2Folds } from '../monaco/kojo2-folding';
 import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
 // K2 batch-7：2.0 格式化器（走 Monaco 内建 `editor.action.formatDocument`
 //（Shift+Alt+F），本文件不新增命令）。
@@ -855,7 +858,10 @@ export function readFoldingRanges(
 ): EditorFoldingRange[] {
   const target = readTargetOf(model);
   if (!target) return [];
-  const ranges = foldingRangesFor(target.model, target.path, kernel);
+  // B3h：2.0 的可折区间只有结构 worker 算得出（异步）。这一版快照在 ⇒ 随请求递下去由供方裁与答；
+  // 不在 ⇒ 交空（`folds` 键不出现），供方按"这一版还没预取到"作答，**不在这里等**。
+  const folds = kojo2FoldsSnapshotFor(target.model);
+  const ranges = foldingRangesFor(target.model, target.path, kernel, folds);
   if (!target.sugar) return ranges;
   const fold = target.sugar.fold;
   const out: EditorFoldingRange[] = [];
@@ -995,11 +1001,16 @@ interface DocumentMemoKey {
    * 行窗口（R1，2026-10-28）：`0` = 整篇。
    *
    * 只有行内提示那条腿会填——它按 Monaco 的可视区取数，**不同窗口是不同的答案**，
-   * 所以窗口必须进键（否则滚到下一屏会拿到上一屏那一份）。其余十条腿一律 `0`，
+   * 所以窗口必须进键（否则滚到下一屏会拿到上一屏那一份）。其余几条腿一律 `0`，
    * 键与加这一格之前逐字相同。
    */
   readonly windowFrom: number;
   readonly windowTo: number;
+  /**
+   * 折叠腿专用（B3h，additive）：请求随附的**结构快照**（数组身份即它的身份）。
+   * 快照晚到（空 → 有）必须让记忆化重算一次，否则"这一版先答空、快照到了还继续答空"。
+   */
+  readonly folds?: readonly EditorFoldingRange[];
 }
 
 interface DocumentMemoEntry<V> extends DocumentMemoKey {
@@ -1122,6 +1133,7 @@ function documentMemoKey(
   kernel: Kernel,
   contributions: number,
   window?: Monaco.IRange | null,
+  folds?: readonly EditorFoldingRange[],
 ): DocumentMemoKey {
   return {
     path,
@@ -1130,6 +1142,7 @@ function documentMemoKey(
     contributions,
     windowFrom: window ? window.startLineNumber : 0,
     windowTo: window ? window.endLineNumber : 0,
+    folds,
   };
 }
 
@@ -1139,7 +1152,8 @@ function sameDocumentKey(a: DocumentMemoKey, b: DocumentMemoKey): boolean {
     a.project === b.project &&
     a.contributions === b.contributions &&
     a.windowFrom === b.windowFrom &&
-    a.windowTo === b.windowTo;
+    a.windowTo === b.windowTo &&
+    a.folds === b.folds;
 }
 
 /** 记忆化本体：键合就交回缓存，否则算一次并记下（`compute` 里只许做纯取数） */
@@ -1161,6 +1175,11 @@ function memoizedDocument<V>(
  * 档位判在取文之前（**与编辑器选项同一份表**），档内按版本记忆化，交回前**按数量**封顶
  * 并把超额的那部分说出来。
  *
+ * `folds`（B3h，可选）是 **2.0 的结构快照**：由预取器提前算好、按 model 版本缓存，
+ * 随请求下传给供方（`ui.editor.languageService` 的 `foldingRange` 那一腿）。它进记忆化键
+ * （数组身份）：快照晚到一次，这一腿就必须重算一次，否则"先答空、快照到了还答空"。
+ * ERB / kojo1 恒不传（`undefined`），行为与加这一格之前逐字相同。
+ *
  * 记忆化不改变任何判据：同一份 (文档, 项目, 贡献方) 的同一次问，答案本来就应当逐字相同
  * （供方是纯函数）。省掉的是 Monaco 在停笔 / 换 model / 改配置后重复问的那几次整篇拷贝。
  * 封顶放在记忆化**之外**：缓存命中也算一次"这一份文件此刻被截了没有"，可见态才不会
@@ -1170,6 +1189,7 @@ export function foldingRangesFor(
   model: Monaco.editor.ITextModel,
   path: string,
   kernel: Kernel,
+  folds?: readonly EditorFoldingRange[],
 ): EditorFoldingRange[] {
   const lineCount = model.getLineCount();
   if (!foldingAffordable(lineCount)) {
@@ -1180,11 +1200,16 @@ export function foldingRangesFor(
     return [];
   }
   const contributions = kernel.slots.query('ui.editor.languageService');
-  const ranges = memoizedDocument(foldingMemo, model, documentMemoKey(model, path, kernel, contributions.length), () =>
-    collectFoldingRanges(contributions, {
-      kind: 'foldingRange',
-      ...documentRequestFields(model, path, kernel.project.current()),
-    }),
+  const ranges = memoizedDocument(
+    foldingMemo,
+    model,
+    documentMemoKey(model, path, kernel, contributions.length, null, folds),
+    () =>
+      collectFoldingRanges(contributions, {
+        kind: 'foldingRange',
+        ...documentRequestFields(model, path, kernel.project.current()),
+        ...(folds === undefined ? {} : { folds }),
+      }),
   );
   return capFoldingRanges(path, ranges);
 }
@@ -1952,6 +1977,11 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // B3d：区间格式化（Ctrl+K Ctrl+F）与整篇同一条能力（`formatting`）——规则同一台，
     // 只把 Monaco range 折成 `lineRange` 两枚行号塞进请求；选区之外由供方保证逐字节不动。
     globalDisposers.push(installKojo2RangeFormatter(monaco));
+    // B3h（2026-10-30）：折叠的**预取器**先于下面那段 2.0 模型事件装上——装配时已经开着的
+    // model 也要在第一次被问之前就把快照算好（那一段的 `feedIndexModel` 逐枚调
+    // `prefetchKojo2Folds`，装晚了首开就只剩"provider 被问时踢一次"这一条路）。
+    // 本行**不注册任何 provider**：折叠的注册在 `kojo-folding.ts` 的共享收口。
+    globalDisposers.push(installKojo2FoldsCache());
     // K2 batch-9：把打开中的 `.kojo2` model 喂给项目索引（跨文件引用面要它）。
     // 创建时立即入索引、内容变更 400ms 防抖后更新；本段 dispose 时全部摘监听并清空索引
     //（索引是 module 单例，换工作区不许串数据）。取不到路径 / 取文抛错 ⇒ 这一篇不进索引。
@@ -1962,6 +1992,9 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         const path = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
         if (typeof path !== 'string' || path.length === 0) return;
         kojo2ProjectIndexUpdate(path, model.getValue());
+        // B3h：同一段模型事件顺手把**折叠快照**预热一次（同一 400ms 防抖）——折叠的槽是同步的，
+        // 事实得在 provider 被问之前算好；放这里是因为"只认 2.0 model"的判据本来就在这一段。
+        prefetchKojo2Folds(model);
         indexListeners.push(
           model.onDidChangeContent(() => {
             const previous = indexTimers.get(path);
@@ -1978,6 +2011,7 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
                 } catch {
                   /* 索引只是增强面：取文失败就保持旧条目 */
                 }
+                if (!model.isDisposed()) prefetchKojo2Folds(model);
               }, 400),
             );
           }),
@@ -2054,9 +2088,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 纯函数随请求现算。失败面照旧：折叠 worker 不可用 / 超时 / `folds.scm` 缺席 ⇒ `[]`，
     // 大纲异常 ⇒ `[]`（不抛、不写 markers）。
     //
-    // 位置放在 2.0 语言服务之后：注册抛错仍由下面 catch 的"全有或全无"统一回滚；同时不改变
-    // 既有"靠前注册抛错时已建立集合"的读数（`editor-global-providers-tables.test.ts`）。
-    globalDisposers.push(installKojo2FoldingProvider(monaco));
+    // B3h（2026-10-30）：这里**不再注册 provider**——折叠改走 `kojo-folding.ts` 的共享收口
+    // （kojo2 由 descriptor 的 `slotServices: ['foldingRange']` 点名，供方是插件）。预取器
+    // 已在上方模型事件段之前装好（`installKojo2FoldsCache` 只许装一枚：两枚会让后装的那枚
+    // 顶掉前者，前者仍在拆毁账上却再没人喂快照），此处不再重复装配。
     // B2（2026-10-24）：2.0 的**大纲**原生注册已删除 —— 它现在由 `installDocumentSymbolProvider`
     // 那一枚槽腿挂上（kojo2 的 descriptor 声明了 `slotServices: ['documentSymbol']`），
     // 应答来自插件 `@kojo/plugin-kojo-lang`。宿主不再认识"2.0 的大纲长什么样"。
