@@ -1005,6 +1005,20 @@ async function cmdKey(args, key, mod = '') {
       arrowdown: { key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 },
       arrowleft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
       arrowright: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+      // 功能键：缺表时落到 `key.toUpperCase().charCodeAt(0)`（F12 → 70）——Monaco 的 F12
+      // 绑定认 123，旧口径下「按 F12」是假按键（2026-10-30 实机验转定义时踩到）。
+      f1: { key: 'F1', code: 'F1', keyCode: 112 },
+      f2: { key: 'F2', code: 'F2', keyCode: 113 },
+      f3: { key: 'F3', code: 'F3', keyCode: 114 },
+      f4: { key: 'F4', code: 'F4', keyCode: 115 },
+      f5: { key: 'F5', code: 'F5', keyCode: 116 },
+      f6: { key: 'F6', code: 'F6', keyCode: 117 },
+      f7: { key: 'F7', code: 'F7', keyCode: 118 },
+      f8: { key: 'F8', code: 'F8', keyCode: 119 },
+      f9: { key: 'F9', code: 'F9', keyCode: 120 },
+      f10: { key: 'F10', code: 'F10', keyCode: 121 },
+      f11: { key: 'F11', code: 'F11', keyCode: 122 },
+      f12: { key: 'F12', code: 'F12', keyCode: 123 },
     }[key.toLowerCase()] ?? { key: key.length === 1 ? key : key, code: `Key${key.toUpperCase()}`, keyCode: key.toUpperCase().charCodeAt(0), ...(key.length === 1 ? { text: key } : {}) };
     const modifiers = (mods.includes('ctrl') ? 2 : 0) | (mods.includes('shift') ? 8 : 0) | (mods.includes('alt') ? 1 : 0);
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', modifiers, ...keyDef });
