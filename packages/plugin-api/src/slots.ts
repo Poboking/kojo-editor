@@ -500,6 +500,10 @@ export interface EditorDefinitionRequest extends EditorDocumentIdentity {
   readonly project: GameProject | null;
   /** 文件行数（体量事实，供贡献方按文件大小自行降级；缺省 = 未知，按不降级处理） */
   readonly lineCount?: number;
+  /** 项目内其他文档的快照（additive，跨文件声明）；缺席 / 空 = 只看请求文件 */
+  readonly projectFiles?: readonly EditorProjectFile[];
+  /** 快照是否完整（additive）；`false` = 宿主少给了，跨文件落点须如实降级 */
+  readonly projectFilesComplete?: boolean;
 }
 
 /**
