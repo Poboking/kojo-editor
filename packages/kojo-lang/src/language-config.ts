@@ -33,6 +33,8 @@ import {
   KOJO2_NATIVE_FENCE_WORD,
   escapeRegExp,
 } from './lexicon';
+// 注释符的唯一字面源（ERB-PARITY G9）：本文件与宿主的文档链接读同一枚，不各写一个 `'//'`。
+import { KOJO2_LINE_COMMENT } from './constants';
 
 /** 一级缩进 = 4 空格（core `KOJO_INDENT_WIDTH`，本文件不写魔数）。 */
 export const KOJO2_INDENT_UNIT = ' '.repeat(KOJO2_INDENT_WIDTH);
@@ -136,7 +138,7 @@ export const KOJO2_PAIRS: readonly (readonly [open: string, close: string])[] = 
  * `wordPattern` 刻意缺席——见文件头那条口径（词边界归宿主的 CJK 单源）。
  */
 export const KOJO2_LANGUAGE_CONFIGURATION = {
-  comments: { lineComment: '//' },
+  comments: { lineComment: KOJO2_LINE_COMMENT },
   brackets: KOJO2_PAIRS.filter(([open, close]) => open !== close).map(
     ([open, close]) => [open, close] as [string, string],
   ),

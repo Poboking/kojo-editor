@@ -65,6 +65,27 @@ export type SlotServiceKind =
   | 'semanticToken';
 
 /**
+ * 「语言族」编辑器右键项的身份（additive，ERB-PARITY G8）。
+ *
+ * 取值 = `ui/editor-pane/editor-context-actions.ts` 里那几条动作的 `id`（同一件事只留一个
+ * 命名法，测试对拍）。**不进 `capabilities`**：矩阵记的是 provider / 槽腿的注册面，而
+ * 「快速修复」吃 CodeActionProvider（矩阵与 `SlotServiceKind` 刻意没有 codeAction 这一格）、
+ * 「一键修复」查 `decorator` + `codeAction` 两条槽、「看这一行的状态」查 `documentSymbol`
+ * 槽腿、「切换 .kojo 预览」是宿主糖视图开关——都只是 descriptor 上的一格声明。
+ *
+ * 新增一门语言时点名：右键项**自动出现**，宿主目录零改动（出口 = `languageIdsForContextFace`）。
+ */
+export type EditorContextFaceId = 'quick-fix' | 'fix-all' | 'jump-to-state' | 'toggle-sugar';
+
+/** 全部族级右键项（when 拼装与测试共用一张表；顺序 = 菜单里的摆放序） */
+export const EDITOR_CONTEXT_FACE_IDS: readonly EditorContextFaceId[] = Object.freeze([
+  'quick-fix',
+  'fix-all',
+  'jump-to-state',
+  'toggle-sugar',
+] as const);
+
+/**
  * 一门语言的**可用性档**（LAU-3 / 设计稿 §4.3、§6）。
  *
  * - `default`：缺省档，恒可被认领、恒进选择器；
@@ -181,6 +202,19 @@ export interface LanguageDescriptor {
    * 判错成 false 只是白算一遍（颜色对、慢一点）——两个方向的代价不对称。
    */
   readonly lineWindow?: boolean;
+  /**
+   * 编辑器右键里的「语言族」动作（additive，ERB-PARITY G8）。与 `capabilities` 同口径：
+   * 只写已落地的面（快速修复 = CodeActionProvider、一键修复 = decorator + codeAction 槽、
+   * 看这一行的状态 = `documentSymbol` 槽腿、切换预览 = v1 糖视图投影面），不写"想要"。
+   * 缺省 = 一项都没有（JSON / 口上 XML 这类数据格式面不在菜单里）。
+   */
+  readonly contextFaces?: readonly EditorContextFaceId[];
+  /**
+   * 行注释记号（additive，ERB-PARITY G9）。消费方 = `monaco/document-links.ts`：注释里的
+   * 可点链接按记号判、不按语言 id 分支。记号不在宿主造第二份，各取自己的单源（ERB /
+   * kojo1 的宿主常量、2.0 的 `@kojo/kojo-lang/constants`）。缺省 = 这门语言没有注释链接面。
+   */
+  readonly lineComment?: string;
 }
 
 const descriptors: LanguageDescriptor[] = [];
@@ -296,6 +330,33 @@ export function descriptorForPath(filePath: string): LanguageDescriptor | null {
 /** 全部已登记 descriptor（顺序 = 注册顺序；供宿主按能力批量挂面。**不过滤可用性**：注册与认领是两件事） */
 export function languageDescriptors(): readonly LanguageDescriptor[] {
   return descriptors;
+}
+
+/**
+ * 声明了某一项「语言族右键项」的语言 id（注册序）——宿主认识"哪些语言进右键菜单"的**唯一出口**
+ * （ERB-PARITY G8；旧写法是一枚手写名单，把 2.0 漏在外面且不随 descriptor 扩展）。
+ * **不过滤可用性**：注册与认领是两件事（见模块头）。
+ */
+export function languageIdsForContextFace(face: EditorContextFaceId): readonly string[] {
+  return descriptors
+    .filter((descriptor) => descriptor.contextFaces?.includes(face) === true)
+    .map((descriptor) => descriptor.id);
+}
+
+/**
+ * 声明了行注释记号的语言 id（注册序）——文档链接 provider 的注册面（ERB-PARITY G9）。
+ * 注册面与扫注释的判据同源：同一格声明既决定挂哪些语言、也决定按什么记号扫。
+ */
+export function lineCommentLanguageIds(): readonly string[] {
+  return descriptors
+    .filter((descriptor) => (descriptor.lineComment ?? '') !== '')
+    .map((descriptor) => descriptor.id);
+}
+
+/** 这门语言的行注释起头（未登记 / 未声明 ⇒ `null`，调用方自己决定退化到哪） */
+export function lineCommentForLanguageId(languageId: string): string | null {
+  const declared = descriptorForLanguageId(languageId)?.lineComment;
+  return declared === undefined || declared === '' ? null : declared;
 }
 
 /**

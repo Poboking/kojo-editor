@@ -57,6 +57,22 @@ export const EDITOR_CONTEXT_GROUP_MENU_ID: Readonly<Record<EditorContextActionGr
 /** 动作 id 前缀（**不占** Monaco 的 `editor.action.*` 命名空间） */
 export const EDITOR_CONTEXT_ACTION_PREFIX = 'kojo.ctx.';
 
+/**
+ * 语言族 → Monaco `precondition` 表达式（ERB-PARITY G8）。
+ *
+ * 入参是**语言 id 列表**（由 `monaco/language-registry.ts::languageIdsForContextFace` 从
+ * descriptor 的 `contextFaces` 格派生），本函数只拼字符串、不认识任何具体语言名：
+ * 新增一门声明了该能力的语言，右键项自己出现，宿主目录零改动。
+ *
+ * 空表 ⇒ `'false'`（Monaco 上下文键表达式认这个字面量）：一门语言都没声明 = 这一项对
+ * 任何语言都不适用。**不能返回空串**——空 `precondition` 在 Monaco 里等于"恒成立"，
+ * 那会把项放给所有文件（含 JSON / 纯文本），正是"少露"的反方向。
+ */
+export function languageFamilyWhen(languageIds: readonly string[]): string {
+  if (languageIds.length === 0) return 'false';
+  return languageIds.map((id) => `editorLangId == '${id}'`).join(' || ');
+}
+
 /** 动作 id → Monaco 动作 id（`kojo.ctx.save` 之类） */
 export function monacoActionIdOf(id: string): string {
   return `${EDITOR_CONTEXT_ACTION_PREFIX}${id}`;

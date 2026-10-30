@@ -54,6 +54,17 @@ import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 export const KOJO_LANGUAGE_ID = 'kojo-legacy';
 
 /**
+ * kojo1 的**行注释起头**（ERB-PARITY G9，addition）。
+ *
+ * 唯一一份：本文件 `setLanguageConfiguration` 的 `comments.lineComment` 格与
+ * `languages.ts` 里 descriptor 的 `lineComment` 格都取它——宿主的文档链接按 descriptor 判
+ * 注释口径，两处各写一个 `';'` 就是"两把尺子"（链接会在 `;` 与别的记号之间摇摆）。
+ * 与 ERB 同为 `;` 是语法事实（v1 的 `;` 是行注释，`#` 是声明锚），不是巧合，也不许合并常量：
+ * 两门语言各有一份自己的注释记号，改一门不该顺带改另一门。
+ */
+export const KOJO1_LINE_COMMENT = ';';
+
+/**
  * 宿主唯一词表入口（`sugarEditorLexicon()` 的聚合原样转发，**不做任何加工**：
  * 加工即抄本，抄本必发散）。
  */
@@ -377,7 +388,7 @@ export function registerKojoLanguage(monaco: typeof Monaco): void {
   // `.kojo` 从同一道门出去；本文件的产物逐字不变（可选格不写 = 既有手感零改动）。
   const enterConfig = toMonacoEnterConfig(monaco, sugarEnterRulePatterns());
   monaco.languages.setLanguageConfiguration(KOJO_LANGUAGE_ID, {
-    comments: { lineComment: ';' },
+    comments: { lineComment: KOJO1_LINE_COMMENT },
     // 全角标点按词分隔（A3）；`：` 触发字在 quickSuggestions 关后靠它走显式触发通道（见 word-separators.ts 头注）
     wordPattern: CJK_WORD_PATTERN,
     // 块头行回车 ⇒ 新行 +1 级（`beforeText` 匹配"光标以左整行"⇒ 天然只在冒号后回车触发）；

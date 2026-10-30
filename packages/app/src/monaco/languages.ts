@@ -27,12 +27,15 @@
 import type * as Monaco from './entry';
 import { extname, isErbDialectPath, KOJO_SOURCE_EXTENSION, KOJO_V1_SOURCE_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from './erb-language';
+import { ERB_LINE_COMMENT } from './erb-enter';
 import { JSON_LANGUAGE_ID, JSON_SOURCE_EXTENSION, registerJsonLanguage } from './json-language';
-import { KOJO_LANGUAGE_ID, registerKojoLanguage } from './kojo-language';
+import { KOJO1_LINE_COMMENT, KOJO_LANGUAGE_ID, registerKojoLanguage } from './kojo-language';
 import { ERB_CAPABILITIES, KOJO2_CAPABILITIES } from './language-capabilities';
 // B3 语义收口：kojo2 的着色图例是**语法角色层**（`role.*`，与契约名字层正交）。名字集在
 // 语言面库的语义叶子里；这里只把它声明给 descriptor（宿主不另抄一份角色名单）。
 import { KOJO2_SEMANTIC_TOKEN_TYPES } from '@kojo/kojo-lang/semantic';
+// ERB-PARITY G9：2.0 的行注释记号取零依赖身份叶子（`language-config` 的 `comments` 读同一枚）。
+import { KOJO2_LINE_COMMENT } from '@kojo/kojo-lang/constants';
 import {
   KOJO2_LANGUAGE_ID,
   KOJO2_SOURCE_EXTENSION,
@@ -69,6 +72,10 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
   languageServices: true,
   // LANG-PARITY-GATE：已交付的能力面（真源 = language-capabilities.ts 的矩阵；声明只列已交付的）
   capabilities: ERB_CAPABILITIES,
+  // ERB-PARITY G8 / G9：四项族级右键项全在（codeAction / decorator + codeAction 槽、
+  // `documentSymbol` 槽腿、糖视图原文侧）；行注释 `;` 取 `erb-enter.ts` 的唯一常量。
+  contextFaces: ['quick-fix', 'fix-all', 'jump-to-state', 'toggle-sugar'],
+  lineComment: ERB_LINE_COMMENT,
   /**
    * R3（2026-10-28）：ERB 的两条语言服务腿（行内提示 `callArgumentHints` / 结构化着色
    * `erbSemanticTokens`）都把行窗口吃进了输入，且窗口内逐行说法与整篇一字不差
@@ -103,6 +110,9 @@ const KOJO_DESCRIPTOR: LanguageDescriptor = {
   matchesPath: (filePath) => KOJO_V1_SOURCE_EXTENSIONS.includes(extname(filePath).toLowerCase()),
   register: registerKojoLanguage,
   languageServices: true,
+  // 与 ERB 同面（行为零变化：它此前就在那枚手写名单里）；糖视图的**投影侧**就是它。
+  contextFaces: ['quick-fix', 'fix-all', 'jump-to-state', 'toggle-sugar'],
+  lineComment: KOJO1_LINE_COMMENT,
   structure: {
     load: () => import('./tree-sitter/kojo-runtime').then((m) => m.KOJO_STRUCTURE_RUNTIME),
   },
@@ -183,6 +193,14 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
     tokenModifiers: [],
   },
   capabilities: KOJO2_CAPABILITIES,
+  // ERB-PARITY G8：三项与 ERB / kojo1 同口径（旧手写名单把它漏在外面 = G8 的缺陷）——
+  // 快速修复有 2.0 自己的 CodeActionProvider（判据在 `@kojo/kojo-lang/code-actions`）、
+  // 一键修复查 decorator（供方 `kojo2-diagnostics`）+ codeAction 槽、看状态只要
+  // `documentSymbol` 槽腿。**不声明 `toggle-sugar`**：`.kojo` 预览是 v1 糖视图，
+  // 2.0 源没有可投影面，声明它只会长出一项按下去只能回"当前不可用"的菜单项。
+  // ERB-PARITY G9：行注释 `//` 取 `@kojo/kojo-lang/constants`（语言配置读同一枚）。
+  contextFaces: ['quick-fix', 'fix-all', 'jump-to-state'],
+  lineComment: KOJO2_LINE_COMMENT,
 };
 
 registerLanguage(ERB_DESCRIPTOR);

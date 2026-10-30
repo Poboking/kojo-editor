@@ -570,7 +570,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '文档链接',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/document-links.ts（registerLinkProvider 同时挂两门语言）',
+        evidence: 'monaco/document-links.ts（registerLinkProvider 按 descriptor 的 lineComment 派生注册面）',
         assembled: true,
         note:
           '装配点在 ui/editor-global-providers.ts：宿主只给只读存在性探测（kernel.io.exists）+ 项目根，点击复用 kojo.codeLens.execute（批次十 S18）',
@@ -740,10 +740,13 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   documentLinks: [
     { rel: 'monaco/document-links.ts', re: /export function installDocumentLinks\(/ },
+    // ERB-PARITY G9：注册面从 descriptor 派生（每一门声明了 `lineComment` 的语言都在册），
+    // 不再是一枚手写语言 id 数组。
     {
       rel: 'monaco/document-links.ts',
-      re: /registerLinkProvider\(\[ERB_LANGUAGE_ID,\s*KOJO2_LANGUAGE_ID\]/,
+      re: /registerLinkProvider\(lineCommentLanguageIds\(\), provider\)/,
     },
+    { rel: 'monaco/language-registry.ts', re: /export function lineCommentLanguageIds\(/ },
   ],
   userSnippets: [
     { rel: 'ui/user-snippets.ts', re: /USER_SNIPPET_LANGUAGES\s*=\s*\['erb',\s*'kojo2'\]/ },
@@ -925,9 +928,12 @@ describe('断言 2：15 个体感面逐项存在，两门语言同权', () => {
     expect(SURFACE_SOURCES.peek.length).toBeGreaterThan(0);
   });
 
-  it('文档链接 / 用户片段：注册面同时覆盖两门语言', () => {
+  it('文档链接 / 用户片段：注册面覆盖**每一门**声明了该面的语言（不是只挂一门）', () => {
     const links = sourceOf('monaco/document-links.ts').text;
-    expect(links).toMatch(/registerLinkProvider\(\[ERB_LANGUAGE_ID,\s*KOJO2_LANGUAGE_ID\]/);
+    // ERB-PARITY G9：注册面 = descriptor 的 `lineComment` 格派生（`.erb` / `.kojo1` / `.kojo`），
+    // 判据不再按扩展名/语言 id 各写一份。
+    expect(links).toMatch(/registerLinkProvider\(lineCommentLanguageIds\(\), provider\)/);
+    expect(links).not.toMatch(/KOJO2_SOURCE_EXTENSION/);
 
     const snippets = sourceOf('ui/user-snippets.ts').text;
     expect(snippets).toMatch(/USER_SNIPPET_LANGUAGES\s*=\s*\['erb',\s*'kojo2'\]/);

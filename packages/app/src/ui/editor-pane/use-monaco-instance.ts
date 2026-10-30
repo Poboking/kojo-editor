@@ -20,9 +20,8 @@ import type * as Monaco from '../../monaco/entry';
 import * as monaco from '../../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import { ERB_LANGUAGE_ID } from '../../monaco/erb-language';
-// 1023：语言专属右键项（快速修复 / 一键修复 / 跳转状态 / 切换预览）的 when 判据从这两个
-// 常量拼出来——**不硬编码** `'kojo-erb'` / `'kojo-sugar'`，语言 id 改名时这条自己跟着变。
-import { KOJO_LANGUAGE_ID } from '../../monaco/kojo-language';
+// 1023 那一版在这里 import 过 kojo1 的语言常量拼语言族 when；ERB-PARITY G8 起判据全部
+// 走 descriptor（`languageIdsForContextFace`），本文件不再认识 kojo1 这个名字。
 import { monacoThemeIdFor } from '../../monaco/theme';
 import { subscribeFindState } from '../../monaco/find-state-sync'; // FIND-STATE-PERSIST
 import { loadThemePref } from '../theme-pref';
@@ -67,11 +66,18 @@ import type { PreferencesInstaller } from './use-editor-preferences';
 import {
   buildEditorContextActions,
   findEditorContextAction,
+  languageFamilyWhen,
   listAllEditorContextActions,
   monacoActionIdOf,
   EDITOR_CONTEXT_GROUP_MENU_ID,
   type EditorContextActionContext,
 } from './editor-context-actions';
+// ERB-PARITY G8：右键「语言族」项的判据从 descriptor 派生（此前是一枚手写语言 id 名单，
+// 把 2.0 漏在外面且不随 descriptor 扩展）。宿主这里**不认识任何具体语言名**。
+import {
+  languageIdsForContextFace,
+  type EditorContextFaceId,
+} from '../../monaco/language-registry';
 import { canRunContextMenuCommand, runContextMenuCommand } from '../context-menu-model';
 import { SHOW_FILE_HISTORY_COMMAND_ID } from '../file-history';
 // C 批：文档内书签的装饰层（安装器形态照 use-breadcrumb；判据全在 ../bookmarks 纯逻辑）
@@ -391,9 +397,24 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
      * 注册时只写**静态**的 when（语言族 / 只读面）——那是"这一项跟这份文件无关"，
      * 与"此刻暂时不可用"是两件事（公共规程：没话说 ≠ 按不下）。
      */
-    const KOJO_FAMILY_LANGUAGE_IDS: readonly string[] = [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID];
-    /** 语言族 when（拼自语言常量，不写死 id 字面量：改语言注册时这条自己跟着变） */
-    const KOJO_FAMILY_WHEN = KOJO_FAMILY_LANGUAGE_IDS.map((id) => `editorLangId == '${id}'`).join(' || ');
+    /**
+     * 语言族（ERB-PARITY G8）：**从 descriptor 派生，不再手写名单**。
+     *
+     * 旧写法是 `[ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID]` 一枚常量，两处毛病：① 2.0 漏在外面
+     * （`.kojo` 里"快速修复 / 一键修复 / 看这一行的状态"三项根本不出现）；② 宿主加一门
+     * 语言要改这里，与"新增语言 = 加一枚 descriptor"的纪律相反。
+     *
+     * 现在每一项各问各的能力声明（`LanguageDescriptor.contextFaces`），拼成 Monaco 的
+     * `editorLangId == …`；`kojoFamily`（派发时那一位）取三项的并集——三项都由同一批
+     * "口上方言"语言声明，所以并集与逐项各判在今天是同一批语言；未来若某门语言只声明
+     * 其中一项，菜单里也只出现那一项（注册面按项判），派发面那一位仅作粗门。
+     */
+    const whenOfFace = (face: EditorContextFaceId): string =>
+      languageFamilyWhen(languageIdsForContextFace(face));
+    const DIALECT_FACE_IDS: readonly EditorContextFaceId[] = ['quick-fix', 'fix-all', 'jump-to-state'];
+    const KOJO_FAMILY_LANGUAGE_IDS: ReadonlySet<string> = new Set(
+      DIALECT_FACE_IDS.flatMap((face) => [...languageIdsForContextFace(face)]),
+    );
     /** 剪贴板**读**能力是会话级事实：没有就没有，右键那一刻再问也变不出来 */
     const clipboardReadable = (): boolean =>
       typeof navigator !== 'undefined' && typeof navigator.clipboard?.readText === 'function';
@@ -442,7 +463,7 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
         sugarPreview,
         dirty: path !== '' && computeDirty(path),
         hasSelection: ed.getSelection()?.isEmpty() === false,
-        kojoFamily: model !== null && KOJO_FAMILY_LANGUAGE_IDS.includes(model.getLanguageId()),
+        kojoFamily: model !== null && KOJO_FAMILY_LANGUAGE_IDS.has(model.getLanguageId()),
         canToggleSugar,
         canReveal: isTauri(),
         canFileHistory: canRunContextMenuCommand(SHOW_FILE_HISTORY_COMMAND_ID),
@@ -515,13 +536,15 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
      * `editorReadOnly` / `editorLangId` 都是 Monaco 自己维护的键（预览面也是只读 ⇒ 同样在场）。
      */
     const CONTEXT_ACTION_WHEN: Readonly<Record<string, string>> = {
-      'quick-fix': KOJO_FAMILY_WHEN,
-      'jump-to-state': KOJO_FAMILY_WHEN,
-      'fix-all': KOJO_FAMILY_WHEN,
+      'quick-fix': whenOfFace('quick-fix'),
+      'jump-to-state': whenOfFace('jump-to-state'),
+      'fix-all': whenOfFace('fix-all'),
       // 切预览只对"游戏目录、未解锁的方言文件"有意义（那份门里的"只读面"这一位）。
-      // 语言族要连 `.kojo` 一起认：预览面挂着的是**投影 model**（语言 = kojo-sugar），
-      // 只认原语言的话，恰恰在最需要"切回源码"的时候这一项会消失。
-      'toggle-sugar': `${KOJO_FAMILY_WHEN} && editorReadOnly`,
+      // 语言族按 `toggle-sugar` 那一格声明判：预览面挂着的是**投影 model**（语言 = kojo1），
+      // 只认原文语言的话，恰恰在最需要"切回源码"的时候这一项会消失。
+      // 2.0（`.kojo`）**不声明**这一格：它没有 v1 糖视图投影面，声明了只会长出一项按下去
+      // 只能回"当前不可用"的菜单项。
+      'toggle-sugar': `${whenOfFace('toggle-sugar')} && editorReadOnly`,
       'request-write': 'editorReadOnly',
     };
     /**

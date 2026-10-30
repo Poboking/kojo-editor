@@ -5,6 +5,11 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
+// 语言表要**先装**：供给器的注册面与注释记号都从 descriptor 派生（ERB-PARITY G9），
+// 不 import 这张表就等于断言「一门语言都没声明注释记号」。
+import '../src/monaco/languages';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
+import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
   DOCUMENT_LINK_OPEN_COMMAND,
   documentLinkCommandUrl,
@@ -22,12 +27,19 @@ const WINDOWS_CONTEXT = {
 };
 
 const ERB_LANG = 'kojo-erb';
-const KOJO2_LANG = 'kojo2';
+const KOJO2_LANG = KOJO2_LANGUAGE_ID;
+const KOJO1_LANG = KOJO_LANGUAGE_ID;
 /**
- * 2.0 文件的路径。供给器的语言口径按**扩展名**判（不看 model 语言 id），所以"走 kojo2
- * 注释口径"的用例必须给 `.kojo2` 路径——语言 id 与路径不一致时以路径为准。
+ * 2.0 的源路径（2026-10-27 起 `.kojo` 是主场、`.kojo2` 是旧名；两条都要认）。
+ * 判据自 ERB-PARITY G9 起按 **model 的语言**走向 descriptor 取注释记号，路径只作退路。
  */
-const KOJO2_MODEL_PATH = 'C:\\proj\\pkg\\a\\foo.kojo2';
+const KOJO2_MODEL_PATH = 'C:\\proj\\pkg\\a\\foo.kojo';
+/** kojo1（封存层）的源路径 */
+const KOJO1_MODEL_PATH = 'C:\\proj\\pkg\\a\\foo.kojo1';
+
+/** 行注释记号（= 各语言 descriptor 的 `lineComment` 格；测试直写值，防两边一起抄错） */
+const ERB_COMMENT = ';';
+const KOJO2_COMMENT = '//';
 
 function fakeModel(
   text: string,
@@ -102,7 +114,7 @@ describe('识别范围：注释起头逐语言（ERB `;` / kojo2 `//`）', () =>
       '#DIM NAME, 1 ; ./directive.erb', // `#` 是预处理指令，不是注释
       '@口上「https://evil.example/x 与 ./台词.ERB」',
     ].join('\n');
-    expect(extractLinkCandidates(text, 'erb').map((c) => [c.kind, c.text])).toEqual([
+    expect(extractLinkCandidates(text, ERB_COMMENT).map((c) => [c.kind, c.text])).toEqual([
       ['url', 'https://example.com/a?b=1'],
       ['path', './data/场景.ERB'],
       ['path', 'foo\\bar.erb'],
@@ -116,12 +128,12 @@ describe('识别范围：注释起头逐语言（ERB `;` / kojo2 `//`）', () =>
       '; ./legacy.erb',
       '> 正文里的 ../不认.erb',
     ].join('\n');
-    expect(extractLinkCandidates(text, 'kojo2').map((c) => c.text)).toEqual(['../COMMON.ERB']);
+    expect(extractLinkCandidates(text, KOJO2_COMMENT).map((c) => c.text)).toEqual(['../COMMON.ERB']);
   });
 
   it('`# 设 图 字符串 = "data/立绘.csv"` 在 kojo2 下零候选（改前是三语并集 ⇒ 长出假链接）', async () => {
     const text = '# 设 图 字符串 = "data/立绘.csv"';
-    expect(extractLinkCandidates(text, 'kojo2')).toEqual([]);
+    expect(extractLinkCandidates(text, KOJO2_COMMENT)).toEqual([]);
     // 探针全真也不成链（说明是"没被当注释"，不是"存在性没命中"）
     const links = await linksFor(text, { existsPath: () => true }, KOJO2_MODEL_PATH, KOJO2_LANG);
     expect(links).toEqual([]);
@@ -129,7 +141,7 @@ describe('识别范围：注释起头逐语言（ERB `;` / kojo2 `//`）', () =>
 
   it('块注释跨行仍识别路径（两种语言同一块注释口径）', () => {
     const text = ['/* 第一行', ' * ./notes.md', ' */', '; 参考 ./common/COMMON.ERB'].join('\n');
-    expect(extractLinkCandidates(text, 'erb').map((c) => c.text)).toEqual([
+    expect(extractLinkCandidates(text, ERB_COMMENT).map((c) => c.text)).toEqual([
       './notes.md',
       './common/COMMON.ERB',
     ]);
@@ -137,7 +149,7 @@ describe('识别范围：注释起头逐语言（ERB `;` / kojo2 `//`）', () =>
 
   it('引号 / 反引号 / 「」「」里的带空格文件名可识别（kojo2 注释）', () => {
     const text = '// 见 "./data/我的 文件.ERB" 与 `common\\有 空格.erb` 与 「说明 文档.md」';
-    expect(extractLinkCandidates(text, 'kojo2').map((c) => c.text)).toEqual([
+    expect(extractLinkCandidates(text, KOJO2_COMMENT).map((c) => c.text)).toEqual([
       './data/我的 文件.ERB',
       'common\\有 空格.erb',
       '说明 文档.md',
@@ -145,15 +157,15 @@ describe('识别范围：注释起头逐语言（ERB `;` / kojo2 `//`）', () =>
   });
 
   it('行尾 `//` 不是注释（kojo2 只认行首整行注释）', () => {
-    expect(extractLinkCandidates('let x = ./a.erb // ./b.erb', 'kojo2')).toEqual([]);
-    expect(extractLinkCandidates('let x = ./a.erb // ./b.erb', 'erb')).toEqual([]);
+    expect(extractLinkCandidates('let x = ./a.erb // ./b.erb', KOJO2_COMMENT)).toEqual([]);
+    expect(extractLinkCandidates('let x = ./a.erb // ./b.erb', ERB_COMMENT)).toEqual([]);
   });
 
   it('scanCommentSpans 逐语言各一套起头', () => {
-    expect(scanCommentSpans('; a\n// b\n# c', 'erb')).toHaveLength(1);
-    expect(scanCommentSpans('; a\n// b\n# c', 'kojo2')).toHaveLength(1);
-    expect(scanCommentSpans('// a\n# b', 'kojo2')).toHaveLength(1);
-    expect(scanCommentSpans('# a\n; b', 'erb')).toHaveLength(1);
+    expect(scanCommentSpans('; a\n// b\n# c', ERB_COMMENT)).toHaveLength(1);
+    expect(scanCommentSpans('; a\n// b\n# c', KOJO2_COMMENT)).toHaveLength(1);
+    expect(scanCommentSpans('// a\n# b', KOJO2_COMMENT)).toHaveLength(1);
+    expect(scanCommentSpans('# a\n; b', ERB_COMMENT)).toHaveLength(1);
   });
 });
 
@@ -230,13 +242,15 @@ describe('供给器接线：链接形态与命令落点', () => {
     expect(pathLink.range.endColumn).toBe(5 + '../COMMON.ERB'.length);
   });
 
-  it('只注册 ERB 与 kojo2；不存在的路径不产出链接（两门语言的注释都在供给器里生效）', async () => {
+  it('注册面 = 每一门声明了行注释记号的语言（今天三门）；记号按 model 语言取', async () => {
     const { monaco, registrations } = fakeMonaco();
     installDocumentLinks(monaco, { existsPath: () => false, projectRoot: () => 'C:\\proj' });
     expect(registrations).toHaveLength(1);
-    expect(registrations[0]!.languages).toEqual(['kojo-erb', 'kojo2']);
+    // 注册面从 descriptor 派生（ERB-PARITY G9）：`.erb` / `.kojo1` / `.kojo` 三门都在册。
+    // 2.0 的源是 `.kojo`（2026-10-27 起），它是 G9 修复的直接受益者。
+    expect(registrations[0]!.languages).toEqual([ERB_LANG, KOJO1_LANG, KOJO2_LANG]);
     expect(await linksFor('; ./missing.erb', { existsPath: () => false })).toEqual([]);
-    // kojo2 的 `//` 行注释经同一个 provider 生效（扩展名判语言 ⇒ `.kojo2` 路径才走 2.0 口径）
+    // 2.0 的 `//` 行注释经同一个 provider 生效（`.kojo` 路径 + kojo2 语言）
     const hit = await linksFor(
       '// ./data/one.erb',
       { existsPath: async (path) => path === 'C:\\proj\\pkg\\a\\data\\one.erb' },
@@ -244,9 +258,35 @@ describe('供给器接线：链接形态与命令落点', () => {
       KOJO2_LANG,
     );
     expect(hit).toHaveLength(1);
-    // 反例：语言 id 是 kojo2、但路径是 `.erb` ⇒ 按 ERB 口径（`//` 不是注释，零链接）
+    // 判据次序：**语言先说话**（同一份 `.erb` 路径、语言 id 是 kojo2 ⇒ 按 `//` 认），
+    // 路径只在语言认不出时兜底。
     expect(
       await linksFor('// ./data/one.erb', { existsPath: async () => true }, WINDOWS_CONTEXT.modelPath, KOJO2_LANG),
+    ).toHaveLength(1);
+  });
+
+  it('G9 三口径：`.erb` 走 `;`、`.kojo` 走 `//`、`.kojo1` 走 `;`（各一门语言的注释记号）', async () => {
+    const exists = async (path: string) => /data[\\/]one\.erb$/.test(path);
+    // `.erb`（ERB）：`;` 是注释、`//` 不是
+    expect(
+      await linksFor('; ./data/one.erb', { existsPath: exists }, WINDOWS_CONTEXT.modelPath, ERB_LANG),
+    ).toHaveLength(1);
+    expect(
+      await linksFor('// ./data/one.erb', { existsPath: exists }, WINDOWS_CONTEXT.modelPath, ERB_LANG),
+    ).toEqual([]);
+    // `.kojo`（2.0）：`//` 是注释、`;` 不是——G9 之前这里按 ERB 口径判，两条都反着来
+    expect(
+      await linksFor('// ./data/one.erb', { existsPath: exists }, KOJO2_MODEL_PATH, KOJO2_LANG),
+    ).toHaveLength(1);
+    expect(
+      await linksFor('; ./data/one.erb', { existsPath: exists }, KOJO2_MODEL_PATH, KOJO2_LANG),
+    ).toEqual([]);
+    // `.kojo1`（封存层）：`;` 是注释（G9 之前它压根没有链接面）
+    expect(
+      await linksFor('; ./data/one.erb', { existsPath: exists }, KOJO1_MODEL_PATH, KOJO1_LANG),
+    ).toHaveLength(1);
+    expect(
+      await linksFor('// ./data/one.erb', { existsPath: exists }, KOJO1_MODEL_PATH, KOJO1_LANG),
     ).toEqual([]);
   });
 
@@ -286,7 +326,7 @@ describe('8 类非链接噪音', () => {
   ].join('\n');
 
   it('即使存在性探针全部为真，也不把噪音当链接', async () => {
-    expect(extractLinkCandidates(noise, 'erb')).toEqual([]);
+    expect(extractLinkCandidates(noise, ERB_COMMENT)).toEqual([]);
     const links = await linksFor(noise, {
       projectRoot: () => WINDOWS_CONTEXT.projectRoot,
       existsPath: () => true,

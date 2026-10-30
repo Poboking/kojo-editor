@@ -3,12 +3,14 @@
  *
  * ## 边界（为什么这样切）
  *
- * - **只认注释**：行注释只认**行首**（首个非空白字符）的注释起头，且**逐语言各一套**
- *   （{@link LinkLanguage}）：
+ * - **只认注释**：行注释只认**行首**（首个非空白字符）的注释起头，记号**逐语言各一套**，
+ *   由该语言的 descriptor（`lineComment` 格）给（ERB-PARITY G9）：
  *   - ERB：`;`（Emuera 唯一的行注释；`#` 是预处理指令 `#DIM` / `#FUNCTION`，**不是注释**）；
- *   - kojo2：整行 `//`（§4.13；`#` 是声明锚，`;` 只允许出现在 `@原生` 里）。
+ *   - kojo1（封存）：`;`；
+ *   - 2.0：整行 `//`（§4.13；`#` 是声明锚，`;` 只允许出现在 `@原生` 里）。
  *   旧口径把 `#` / `;` / `//` 一律当注释起头（三语并集）⇒ `.kojo2` 的声明行
- *   `# 设 图 字符串 = "data/立绘.csv"` 会在字符串上长出可点链接。
+ *   `# 设 图 字符串 = "data/立绘.csv"` 会在字符串上长出可点链接；后来改成扩展名判据，
+ *   又让 2026-10-27 接过 `.kojo` 的 2.0 被当成 ERB ⇒ 2.0 的注释链接全灭。
  *   块注释 `/* … *\/` 两门语言都照旧识别（既有行为，本批不动），扫描会跳过引号内文本。
  * - **URL 只认 http(s)**：`DocumentLink.url` 直接交给 Monaco 的 opener（新窗口打开），
  *   不走宿主外链白名单之外的自造通道；其余 `foo://` 一律不当 URL。
@@ -26,10 +28,13 @@
  */
 
 import type * as Monaco from './entry';
-import { ERB_LANGUAGE_ID } from './erb-language';
+import { ERB_LINE_COMMENT } from './erb-enter';
 import { CODE_LENS_COMMAND } from './kojo-code-lens';
-import { extname } from '@kojo/plugin-api';
-import { KOJO2_LANGUAGE_ID, KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
+import {
+  descriptorForPath,
+  lineCommentForLanguageId,
+  lineCommentLanguageIds,
+} from './language-registry';
 
 /** 注释文本中的一段链接候选（offsets 为整篇文本下标，end 不含） */
 export interface LinkCandidate {
@@ -143,27 +148,26 @@ const EXPLICIT_PATH_RE = /(?:[A-Za-z]:[\\/]|\.{1,2}[\\/])[^\s'"`「」『』，�
 const PLAIN_FILE_RE = /[^\s\\/'"`「」『』，。；：！？、,;!?]+\.[A-Za-z0-9]{1,8}/g;
 
 /**
- * 文档语言：链接识别按语言各给一套**行注释起头**（两门语言的注释语法不同，不能取并集）。
+ * 行首注释起头判据（**逐语言由 descriptor 给记号**，本函数只认字符串）。
  *
- * - `'erb'`：`;` 行注释；`#` 是预处理指令（`#DIM` / `#FUNCTION` …），`//` 不是注释；
- * - `'kojo2'`：整行 `//` 注释；`#` 是声明锚（`# 设 …`），`;` 只在 `@原生` 里。
+ * `lineComment` 为空 = 这门语言没有声明行注释 ⇒ 一律不是注释起点（宁可少标，不许多说）。
  */
-export type LinkLanguage = 'erb' | 'kojo2';
-
-/** 行首注释起头判据（**逐语言**；位置 = 首个非空白字符的下标） */
-function isLineCommentStart(text: string, index: number, language: LinkLanguage): boolean {
-  const ch = text[index];
-  if (language === 'kojo2') return ch === '/' && text[index + 1] === '/';
-  return ch === ';';
+function isLineCommentStart(text: string, index: number, lineComment: string): boolean {
+  return lineComment !== '' && text.startsWith(lineComment, index);
 }
 
 /**
- * 扫出整篇文本里的注释区间（块注释可跨行；行注释只认行首、且按 {@link LinkLanguage} 分口径）。
+ * 扫出整篇文本里的注释区间（块注释可跨行；行注释只认行首、记号由调用方按语言给）。
  *
  * 状态机只有三件事：行首判注释、跳过引号、块注释吃到 `*\/`。引号串里的 `/*` 不算注释起点；
  * 未闭合的块注释一路吃到文末（与 Monarch 的"坏输入照常上色"同取向）。
+ *
+ * ⚠ `lineComment` 是**参数**而不是一张"语言 → 记号"的映射表：判据在 descriptor 的
+ * `lineComment` 格（值取自各语言自己的唯一常量），本模块不复制第二份语言知识
+ * （ERB-PARITY G9 之前这里是一枚 `LinkLanguage = 'erb' | 'kojo2'` 的联合 + 扩展名判据，
+ * 2026-10-27 起 `.kojo` 是 2.0 的源，于是 2.0 的注释被按 ERB 的 `;` 认）。
  */
-export function scanCommentSpans(text: string, language: LinkLanguage): TextSpan[] {
+export function scanCommentSpans(text: string, lineComment: string): TextSpan[] {
   const spans: TextSpan[] = [];
   const len = text.length;
   let i = 0;
@@ -180,7 +184,7 @@ export function scanCommentSpans(text: string, language: LinkLanguage): TextSpan
       while (j < len && (text[j] === ' ' || text[j] === '\t')) j++;
       if (j < len) {
         const end = lineEndOffset(text, j);
-        if (isLineCommentStart(text, j, language)) {
+        if (isLineCommentStart(text, j, lineComment)) {
           spans.push({ start: j, end });
           i = end;
           atLineStart = false;
@@ -233,14 +237,14 @@ function skipQuoted(text: string, start: number): number {
 }
 
 /**
- * 提取整篇文本里的 URL / 相对路径候选（只看注释区间；注释起头按 `language` 分口径）。
+ * 提取整篇文本里的 URL / 相对路径候选（只看注释区间；注释起头按 `lineComment` 分口径）。
  *
  * 返回的 offsets 可直接喂给 `model.getPositionAt` 换 Monaco range；URL 候选永远优先于
  * 与它重叠的路径候选（`https://…/x.erb` 只出一个 URL 链接，不会被拆成路径）。
  */
-export function extractLinkCandidates(text: string, language: LinkLanguage): LinkCandidate[] {
+export function extractLinkCandidates(text: string, lineComment: string): LinkCandidate[] {
   const collected: LinkCandidate[] = [];
-  for (const span of scanCommentSpans(text, language)) {
+  for (const span of scanCommentSpans(text, lineComment)) {
     let lineStart = span.start;
     while (lineStart < span.end) {
       const nl = text.indexOf('\n', lineStart);
@@ -470,7 +474,14 @@ export function documentLinkCommandUrl(
 }
 
 /**
- * 接线：为 ERB 与 kojo2 注册 DocumentLink 供给器。
+ * 接线：为**每一门声明了行注释记号**的语言注册 DocumentLink 供给器。
+ *
+ * 注册面与判据同源（ERB-PARITY G9）：`lineCommentLanguageIds()` 是 descriptor 那一格的派生
+ * （今天是 ERB / kojo1 / 2.0 三门），提供链接时按 **model 的语言**取它自己的记号。于是
+ * - `.erb` 走 `;`（ERB 口径，**逐字不变**）；
+ * - `.kojo` 走 `//`（2026-10-27 起 `.kojo` 是 2.0 的源；改前按扩展名 `.kojo2` 判，于是
+ *   `.kojo` 被当成 ERB ⇒ 2.0 的注释链接全灭、而 `;` 开头的行反被当成注释）；
+ * - `.kojo1` 走 `;`（封存层第一次有链接面；它的行注释本来就是 `;`）。
  *
  * 宿主只提供「这篇 model 在哪、项目根在哪、这个路径存不存在、点击用哪条命令」；
  * 识别 / 解析 / 去噪全在本模块完成。
@@ -486,13 +497,13 @@ export function installDocumentLinks(
     async provideLinks(model, token) {
       const text = model.getValue();
       const modelPath = modelPathOf(model, host);
-      const language = linkLanguageOf(modelPath);
+      const lineComment = lineCommentOf(model, modelPath);
       const context: DocumentLinkContext = {
         modelPath,
         projectRoot: safeProjectRoot(host),
       };
       const links: Monaco.languages.ILink[] = [];
-      for (const candidate of extractLinkCandidates(text, language)) {
+      for (const candidate of extractLinkCandidates(text, lineComment)) {
         if (token.isCancellationRequested) break;
         if (candidate.kind === 'url') {
           links.push({
@@ -514,26 +525,35 @@ export function installDocumentLinks(
       return { links };
     },
   };
-  return monaco.languages.registerLinkProvider([ERB_LANGUAGE_ID, KOJO2_LANGUAGE_ID], provider);
+  return monaco.languages.registerLinkProvider(lineCommentLanguageIds(), provider);
 }
 
 /**
- * 路径 → 链接语言口径（行注释起头各一套）。
+ * 这份 model 的**行注释起头**（判据三级：语言 → 路径 → ERB 兜底）。
  *
- * 判据走**扩展名**（`KOJO2_SOURCE_EXTENSION`），不走 model 的语言 id：语言 id 分支是
- * LAU-2 起要收敛的形态（宿主里每多一处 `*_LANGUAGE_ID` 比较就多一条要维护的分叉），
- * 而 `.kojo2` 这个扩展名本身就是"这份文件用哪门语言"的声明。
- *
- * 没有路径 / 坏输入 ⇒ 按 ERB（`;`）处理：ERB 是这两门里**更严格**的一套
- * （`#` 与 `//` 都不是注释），坏输入只会少标、不会多说。
+ * 1. **model 的语言**先说话：`descriptorForLanguageId` 的有效格（`lineComment`）。它才是
+ *    "这份文件此刻按什么语法上色"的真值——`.kojo` 的 model 语言是 `kojo2`，与扩展名一致；
+ *    糖视图那种"路径还是 `.erb`、语言已换成投影"的面也按**语言**判（屏上看到的注释记号
+ *    是语言的，不是路径的）。
+ * 2. 语言没声明（认不出 / 外部塞的 id 如 `plaintext`）⇒ 退回**按路径**认领的 descriptor：
+ *    路径是宿主唯一还掌握的事实，能认出来就用它。
+ * 3. 两级都答不出 ⇒ 按 **ERB**（`;`）兜底：ERB 是这几门里**更严格**的一套
+ *    （`#` 与 `//` 都不是行注释），坏输入只会少标、不会多说——与 G9 之前的坏输入口径逐字一致。
  */
-function linkLanguageOf(modelPath: string | null): LinkLanguage {
-  if (modelPath === null) return 'erb';
+function lineCommentOf(model: Monaco.editor.ITextModel, modelPath: string | null): string {
+  let languageId = '';
   try {
-    return extname(modelPath).toLowerCase() === KOJO2_SOURCE_EXTENSION ? 'kojo2' : 'erb';
+    languageId = model.getLanguageId();
   } catch {
-    return 'erb';
+    languageId = '';
   }
+  const byLanguage = lineCommentForLanguageId(languageId);
+  if (byLanguage !== null) return byLanguage;
+  if (modelPath !== null) {
+    const byPath = descriptorForPath(modelPath)?.lineComment;
+    if (byPath !== undefined && byPath !== '') return byPath;
+  }
+  return ERB_LINE_COMMENT;
 }
 
 function modelPathOf(model: Monaco.editor.ITextModel, host: DocumentLinksHost): string | null {

@@ -22,3 +22,6 @@ export const KOJO2_LANGUAGE_ID = 'kojo2';
 
 /** 2.0 源扩展名（含点、小写；匹配一律对最后一段扩展名做小写归一） */
 export const KOJO2_SOURCE_EXTENSION = '.kojo2';
+
+/** 2.0 行注释起头（ERB-PARITY G9）：`language-config` 与宿主 descriptor 同读这一枚 */
+export const KOJO2_LINE_COMMENT = '//';
