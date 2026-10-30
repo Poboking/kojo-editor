@@ -63,6 +63,7 @@ import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import {
   collectCodeLensResult,
+  collectCallHierarchy,
   collectCompletionItems,
   collectDocumentHighlights,
   collectFormattingEdits,
@@ -470,6 +471,28 @@ const LEGS: readonly LegSpec[] = [
     emptyMark: 'answered-empty',
   },
   {
+    // LAU-4 调用层级腿（2026-10-31）：与 `renameTarget` 同一种"契约成员但**没有** Monaco 腿"。
+    // Monaco 0.57 没有 `registerCallHierarchyProvider`（PITFALLS §83），它不是
+    // `SlotServiceKind`（那不驱动任何注册，只驱动 descriptor 的挂载名单），消费方是宿主
+    // 面板 `ui/CallHierarchyOverlay.tsx`——但它仍必须与本模块同口径地走三态。
+    kind: 'callHierarchy',
+    shape: 'first-answer',
+    collect: collectCallHierarchy,
+    // "认这一格、但这一行不在任何可调用体内"是**作答**（`subject: null`），不是弃权；
+    // 反向索引不可用时也是作答（`referencesAvailable: false`，两个方向都空）。
+    answeredEmpty: { kind: 'callHierarchy', subject: null, incoming: [], outgoing: [], referencesAvailable: true },
+    answeredValue: {
+      kind: 'callHierarchy',
+      subject: { name: 'VALUE', normalizedName: 'VALUE', filePath: 'D:/p/VALUE.erb', startLine: 1, endLine: 2 },
+      incoming: [],
+      outgoing: [],
+      referencesAvailable: true,
+    },
+    mark: (result) => (result as { subject?: { name: string } | null } | undefined)?.subject?.name ?? 'answered-empty',
+    valueMark: 'VALUE',
+    emptyMark: 'answered-empty',
+  },
+  {
     kind: 'documentHighlight',
     shape: 'first-answer',
     collect: collectDocumentHighlights,
@@ -526,10 +549,16 @@ describe('三态契约：undefined（弃权）/ 空结果（作答）/ 有结果
   it('取数腿台账：kind 不认得即红；共享取数模块没覆盖的那五条腿点名在案', () => {
     const legKinds = LEGS.map((leg) => leg.kind);
     expect(new Set(legKinds).size, 'LEGS 里有重复 kind').toBe(legKinds.length);
-    // 拼写漂移（kind 改名而腿没跟）当场红
-    const knownKinds = new Set<string>([...Object.keys(SLOT_KIND_SUPPLY), 'renameTarget']);
+    // 拼写漂移（kind 改名而腿没跟）当场红。白名单里的两枚是"契约成员但**没有** Monaco
+    // 注册面"的腿：`renameTarget`（只经改名两步协议消费）与 `callHierarchy`（Monaco 0.57
+    // 无 `registerCallHierarchyProvider`，消费方是宿主面板）。它们不进 `SlotServiceKind`，
+    // 因为那枚联合只决定 descriptor 挂哪些 Monaco provider——列进去会逼着造一枚挂不上的注册。
+    const knownKinds = new Set<string>([...Object.keys(SLOT_KIND_SUPPLY), 'renameTarget', 'callHierarchy']);
     for (const kind of legKinds) {
-      expect(knownKinds, `LEGS 里的 "${kind}" 既不在 SlotServiceKind 里，也不是 renameTarget`).toContain(
+      expect(
+        knownKinds,
+        `LEGS 里的 "${kind}" 既不在 SlotServiceKind 里，也不是 renameTarget / callHierarchy`,
+      ).toContain(
         kind,
       );
     }
@@ -537,7 +566,8 @@ describe('三态契约：undefined（弃权）/ 空结果（作答）/ 有结果
     expect(LEGS.filter((leg) => leg.shape === 'union').map((leg) => leg.kind)).toEqual(['completion']);
     expect(LEGS.filter((leg) => leg.shape === 'first-answer').length).toBeGreaterThan(1);
 
-    // 共享取数模块（`kojo-language-service-legs.ts`）只收口这十条；其余五条槽腿由各自模块作答
+    // 共享取数模块（`kojo-language-service-legs.ts`）只收口这十一条（十条槽腿 +
+    // `callHierarchy`）；其余五条槽腿由各自模块作答
     // （`kojo2-definition.ts` / `kojo2-symbols…` / `kojo2-folding.ts` / `kojo2-indent.ts` 等），
     // 它们的三态与注册由各自的单测钉住。这条台账防"某条腿悄悄搬走却没人接"。
     const withoutSharedCollector = Object.keys(SLOT_KIND_SUPPLY)
@@ -553,6 +583,15 @@ describe('三态契约：undefined（弃权）/ 空结果（作答）/ 有结果
     // `renameTarget` 是 LAU-4 的契约成员，**没有** Monaco 腿（`SlotServiceKind` 里不列它）：
     // 它只经改名两步协议被消费，三态（弃权 / 拒绝理由 / 目标）仍须与本模块同口径。
     expect(legKinds).toContain('renameTarget');
+    // `callHierarchy` 同理（LAU-4 调用层级腿）：Monaco 0.57 无注册 API，消费方是宿主面板
+    // `ui/CallHierarchyOverlay.tsx`，供方在 `@kojo/plugin-erb-parser`。**不进** `SlotServiceKind`
+    // 是判据而不是遗漏：那枚联合只驱动 `registerForLanguageServices` 的挂载，列进去只能
+    // 登记一枚挂不上的 provider。它的三态（弃权 / `subject: null` 作答 / 有边）由本台账钉住。
+    expect(legKinds).toContain('callHierarchy');
+    expect(
+      slotServiceKindsFromSource(),
+      'callHierarchy 没有 Monaco 注册面，不该进 SlotServiceKind',
+    ).not.toContain('callHierarchy');
   });
 
   it('单家作答：空结果 ⇒ 交回空作答（不是 undefined）；有结果 ⇒ 原样交回', () => {
