@@ -833,7 +833,19 @@ export const EDITOR_SEMANTIC_TOKEN_TYPES = ['function', 'variable', 'parameter']
 /** 语义着色的中性修饰（同上口径；`declaration` = 声明位，`readonly` = 写了会编译不过的只读名字） */
 export const EDITOR_SEMANTIC_TOKEN_MODIFIERS = ['declaration', 'readonly'] as const;
 
-export type EditorSemanticTokenType = (typeof EDITOR_SEMANTIC_TOKEN_TYPES)[number];
+/**
+ * 语义着色的类别名（additive，B3 语义收口 2026-10-30）。
+ *
+ * 上面那张三值表是**缺省词表**（"名字层"：这枚标识符是函数 / 变量 / 参数）——它仍是
+ * 没声明自己 legend 的语言唯一认的名字。一门语言若在 descriptor 里声明了**自己的 legend**
+ * （例如 kojo2 的 `role.*` 语法角色层，与名字层是两个正交维度：`semantic-roles.ts` 的
+ * 模块头 D6），贡献方就发那一套名字。**两边不许混**：一枚 span 的名字必须在**该请求所属
+ * 语言**的 legend 里，否则宿主丢掉并告警（铁律 4：退化可见，不猜相近类别）。
+ */
+export type EditorSemanticTokenType =
+  | (typeof EDITOR_SEMANTIC_TOKEN_TYPES)[number]
+  // `string & {}` 保住上面三个字面量的补全，同时允许语言自己的 legend 名字。
+  | (string & {});
 export type EditorSemanticTokenModifier = (typeof EDITOR_SEMANTIC_TOKEN_MODIFIERS)[number];
 
 /**
@@ -851,6 +863,42 @@ export interface EditorSemanticTokenSpan {
 }
 
 /**
+ * 一条**结构捕获**（additive，B3 语义收口 2026-10-30）：宿主从结构引擎（tree-sitter）预取
+ * 的 capture 快照，按**契约坐标**（1 基行 / 1 基 UTF-16 码元列 / `endColumn` 半开）交出。
+ *
+ * ## 为什么在请求里递结构事实
+ *
+ * 槽 `provide(request)` 是**同步**的，结构引擎是异步的；而"这段语法是什么角色"只有结构
+ * 查询（`highlights.scm`）答得出。B3h 折叠先立了这条口径（宿主预取 → 请求带 `folds` →
+ * 供方同步裁答），本字段是同一形态：宿主打开 / 改动时预取，按 model 版本缓存，快照缺席时
+ * **不 await**（供方这一轮答空，下一次可见）。
+ *
+ * ## 名字用**捕获名录**，不是 token 名
+ *
+ * `name` 是查询里那枚捕获的名字（`comment` / `keyword.control` / `string.special` …，容错
+ * 去 `@` 前缀）；"捕获 → token 名"的翻译归供方（判据住语言包），这样宿主只搬运结构事实。
+ *
+ * `origin` 区分两棵树：`main` = 宿主语言主树（缺省）；`injection` = `@原生` 一类注入体的
+ * **子树**捕获（子语言自己的捕获名录）。子树在自己的覆盖列上**优先**于主树——同一行里
+ * 主树那一条整段 `raw` 让位给子树真涂到的列，没涂到的列仍由主树兜底。谁覆盖谁由供方按
+ * 这条标记裁，宿主不猜。
+ */
+export interface EditorSemanticCapture {
+  /** 捕获名（不带 `@`；`none` / 空名 = 这一条不上色） */
+  readonly name: string;
+  /** 1 基行号 */
+  readonly line: number;
+  /** 1 基起始列（UTF-16 码元） */
+  readonly startColumn: number;
+  /** 1 基结束列（**半开**：`endColumn` 那一格不涂） */
+  readonly endColumn: number;
+  /** 跨行捕获的末行（1 基，闭区间；缺省 = `line`，即单行捕获） */
+  readonly endLine?: number;
+  /** 来自哪棵树（缺省 `main`）；`injection` = 注入体子树的捕获 */
+  readonly origin?: 'main' | 'injection';
+}
+
+/**
  * 语义着色请求：形状与 `documentSymbol` / `foldingRange` 逐字同族（整篇结构、不是光标处记号），
  * 因此 `text` 同样是**模型全文**、`provide` 同样是**纯函数**（不读盘、不写盘、不发事件）。
  */
@@ -861,6 +909,18 @@ export interface EditorSemanticTokenRequest extends EditorDocumentIdentity {
   readonly project: GameProject | null;
   /** 文件行数（体量事实，供贡献方按大小自行降级；缺省 = 未知，按不降级处理） */
   readonly lineCount?: number;
+  /**
+   * 宿主预取的**结构捕获快照**（additive，B3 2026-10-30）。缺席 = 宿主这一版还没预取到
+   * （或这门语言没有结构层）⇒ 供方**同步答空**，不等待、不自己起解析。
+   *
+   * 同一门语言的旧贡献方不认识这个字段 ⇒ 行为逐字不变（additive）。
+   */
+  readonly captures?: readonly EditorSemanticCapture[];
+  /**
+   * 快照是否**整篇完整**（additive）：`true` = 这份 `captures` 覆盖了请求的那一版全文；
+   * `false` / 缺省 = 只覆盖了一部分或来源失败。供方只按"缺席 = 空"作答，不据此猜。
+   */
+  readonly capturesComplete?: boolean;
   /**
    * 宿主这次**真的**要哪一段（additive，R3 2026-10-28）。缺省 = 整篇。
    *
