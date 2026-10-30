@@ -1145,7 +1145,7 @@ describe('release-gate · version-sync（三处 version 逐字相等）', () => 
 });
 
 /* 合成 dist fixture：在 `os.tmpdir()` 里造 `<root>/packages/app/dist` + N 个指定大小的真实文件，
- * 让 `defaultReadDist` 走真读盘路径去量。不读仓库本地 dist（本机 14 件 / CI 发布产物 96 件，
+ * 让 `defaultReadDist` 走真读盘路径去量。不读仓库本地 dist（本机 14 件 / CI 发布产物 98 件，
  * 两棵树读数不同步），也不在仓库根造目录（PITFALLS 265：describe 期求值会落到 cwd）。
  * 全部在 `it` 里创建，`afterAll` 统一删。 */
 const distFixtures: string[] = [];
@@ -1177,8 +1177,9 @@ describe('release-gate · artifact-audit（dist 上界）', () => {
   });
 
   it('上界只有一处真源：`ARTIFACT_LIMITS` 冻结，渲染面（入口 kB / dist MiB / 件数）由它换算', () => {
-    // 每次抬闸的逐块归因（启动器批 → LAU-3b → … → LAU-4 第一步 94 → 96 件 / 11.1 → 11.2 MiB）
-    // 都记在 `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 注释里——那里是唯一真源。
+    // 每次抬闸的逐块归因（启动器批 → LAU-3b → … → LAU-4 第一步 94 → 96 件 / 11.1 → 11.2 MiB
+    // → SDK-B5b 六车批 96 → 98 件）都记在 `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 注释里
+    // ——那里是唯一真源。
     // 这条闸只钉两件事：① 常量仍在（冻结、三项都是正整数）；② 脚本文案与测试断言共用的
     // 渲染面确实由常量换算。**不再在这里抄一份 11.1 / 94**：抄两份的下场就是 LAU-4 抬闸后
     // 测试仍断旧数，`:1201` 与这条一起红（2026-10-30 修）。抬闸时只改常量 + 它的注释。

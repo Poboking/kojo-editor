@@ -394,8 +394,22 @@ export const ARTIFACT_LIMITS = Object.freeze({
    * 总量 11,654,551 B（11.11 MiB）顶穿旧上限 11.1 MiB 约 0.01 MiB，故抬到 11.2 MiB；入口
    * 272,419 → **273,274 B**（上限 1,100 kB）。ps10 开机图 199 / 3,162 KB 不动（两枚都
    * 在动态边之下）。**下次改动先看能不能并块，别在这里顺手加。**
+   *
+   * 2026-10-31 SDK-B5b 六车批：件数 96 → **98**，总量与入口上限不动。
+   *
+   * 增量逐枚点名（同一仓库改前/改后各真实构建一次：改前 = dev `74843330` 游离树 =
+   * 95 枚 assets + index.html = 96 件 / 11,654,551 B；改后 = 本批树 97 枚 + index.html =
+   * 98 件 / 11,689,318 B / 入口 `index-Dg1_TQc1.js` 273,840 B）：
+   * · `kojo-language-service-legs-*.js` **5,822 B**——槽腿工厂 `slot-service-providers.ts`
+   *   （SDK-B5b 车 1 新文件），被 `monaco/languages.ts` 与 `ui/editor-global-providers.ts`
+   *   两条**动态边**共同引用 ⇒ 只能是共享块；
+   * · `highlight-*.js` **7,637 B**——`@kojo/erb-lang/highlight` **共享边界搬了位置**：
+   *   此前只被 `monaco/erb-dim-navigation.ts` 一处消费、内联在它的块里；车 2–4 把宿主
+   *   翻译层收进工厂后，插件 `plugin-erb-lang` 的高亮供方成为第二个消费者 ⇒ rollup
+   *   抽成共享块，字节量近中性（+34,767 B 里大半是工厂本体，两枚都是"搬位置"）。
+   * 两枚都在动态边之下：ps10 开机图 199 文件不动，本批 ps10 增量全在判据文件（见那边台账）。
    */
-  files: 96,
+  files: 98,
 });
 
 const MIB = 1024 * 1024;
