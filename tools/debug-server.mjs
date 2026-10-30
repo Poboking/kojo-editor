@@ -15,6 +15,12 @@
  *
  * 安全面（与产品铁律同向，**不是**产品执法的替代——那层在 Rust 宿与内核 io）：
  * - 只绑 127.0.0.1；
+ * - **鉴权**（2026-10-30 升级批）：给了 `--token` 时 `/invoke`、`/events`、`/config` 要
+ *   `Authorization: Bearer <token>` 或 `?token=<token>`；`/policy` 只认 CLI 专属的
+ *   `x-kojo-policy-token` 头（页面拿不到它，也就改不动读写域）；`/health` 永远免鉴权。
+ *   不给 `--token` 时全部闸不生效（单测 / 冒烟直连的既有路径零改动）。
+ * - **Origin 白名单**（有没有 token 都生效）：只放行回环来源（127.0.0.1 / localhost / [::1]
+ *   任意端口），别的网页借用浏览器打进来一律 403——这条挡的是「任意站点 fetch 本机调试面」；
  * - **读域**＝sandbox ∪ appData ∪ 各 `--readonly` 根 ∪ 运行时登记的常驻工作区根；
  * - **写域**＝sandbox ∪ appData ∪ 常驻工作区根 ∪ `register_write_domain` 登记过的根；
  *   域外读 / 写一律显式报错（fail loud），绝不静默;
@@ -27,7 +33,8 @@
  *
  * 用法：
  *   node tools/debug-server.mjs [--port 17777] [--sandbox <dir>] [--appdata <dir>]
- *       [--readonly <dir>]... [--choose-dir <path>] [--choose-file <path>] [--quiet]
+ *       [--readonly <dir>]... [--choose-dir <path>] [--choose-file <path>]
+ *       [--token <hex>] [--policy-token <hex>] [--quiet]
  * 默认 sandbox / appdata 落在仓库 `.kojo-debug/` 下（已 gitignore）。
  * 退出码：0 正常收尾；1 参数错；2 端口被占。
  */
@@ -35,6 +42,7 @@ import * as http from 'node:http';
 import * as fs from 'node:fs/promises';
 import * as fss from 'node:fs';
 import * as path from 'node:path';
+import * as crypto from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { debugHome } from './debug-lib.mjs';
 
@@ -511,8 +519,9 @@ const READ_BATCH_MAX_BYTES = 32 * 1024 * 1024;
  * `excludeGlobs` 的话，「排除」框在浏览器里永远是"打了没反应"——那是一条假读数，
  * 比没有这个功能更坏（作者会据此判定功能没做）。
  *
- * 已知不对称（**先记下来，不在本批顺手改**）：include 侧的 `globs`（P2-15）镜像至今
- * 未实现，Rust 侧才有。排除与 include 是两条独立维度，缺 include 不影响排除的自证。
+ * include 侧 `globs`（P2-15）已于 2026-10-30 升级批镜像补齐：与 Rust `compile_globs` 同向，
+ * 复用同一个 `globToRegExpSource`，只对**相对检索根**的 `/` 形态路径做 any-of 判定
+ * （见 `searchText` 里的过滤顺序：扩展名 → include globs → exclude，三者是"且"）。
  */
 
 /** glob → 正则源码（镜像 Rust `glob_to_regex`：星号对加斜杠 = 任意层含 0 层，单星与问号不跨目录） */
@@ -577,6 +586,26 @@ function relSlashPath(root, file) {
 }
 
 /**
+ * include globs → 正则序列（镜像 Rust `compile_globs`）：空条目丢掉、编译不了的出声忽略。
+ * 与排除模式不同，这里**不做**「不含 `/` 就任意深度」的补丁——Rust 端也没有，多一层
+ * 归一就会让宿与真壳给出两套结果。
+ */
+function compileIncludeGlobs(globs) {
+  const matchers = [];
+  for (const raw of Array.isArray(globs) ? globs : []) {
+    const g = String(raw ?? '').trim();
+    if (g === '') continue;
+    try {
+      matchers.push(new RegExp(globToRegExpSource(g)));
+    } catch {
+      // 与 Rust 同口径：编译不了的那条忽略并出声（静默等于"作者写的模式悄悄失效"）
+      console.warn(`[debug-host] include glob 编译失败（该条已忽略）：${raw}`);
+    }
+  }
+  return matchers;
+}
+
+/**
  * `search_text` 的 Node 镜像（口径对齐 `bridge/search.ts` 的 SearchResult）：
  * 列 UTF-16 code unit 与 Monaco 同轴；命中行超长以命中为中心开窗（省略号含在串里）。
  * `admitRead` 由宿实例注入（读域闸在 createDebugServer 的闭包里，这里不复制第二份真相）。
@@ -589,6 +618,8 @@ async function searchText(state, request, admitRead) {
   if (query === '') throw new HostError('检索词为空');
   for (const root of roots) admitRead(root); // 读域闸补位：旧实现的 walkFiles 绕过了它
   const extensions = (opts.extensions ?? []).map((e) => String(e).toLowerCase().replace(/^\./, ''));
+  // include globs（P2-15）：只认相对检索根的路径，any-of；空/缺省时整段不生效（旧路径零改动）
+  const includeGlobs = compileIncludeGlobs(opts.globs);
   // 排除模式（WS-10）：DTO → 规则序列（判据与 Rust 同向，见上面「排除模式的 Node 镜像腿」）
   const excludeRules = compileExcludeRules(opts.excludeGlobs ?? []);
   let matcher;
@@ -641,6 +672,15 @@ async function searchText(state, request, admitRead) {
         if (extensions.length > 0) {
           const ext = path.extname(file).slice(1).toLowerCase();
           if (!extensions.includes(ext)) {
+            skipped.filtered += 1;
+            continue;
+          }
+        }
+        // include globs 只吃**相对检索根**的 `/` 形态（与 Rust `walk_consider` 同一条尺子）；
+        // 不匹配计入 filtered（与扩展名同一笔账），不进 excluded——两笔账混了就看不出是谁挡的
+        if (includeGlobs.length > 0) {
+          const rel = relSlashPath(root, file);
+          if (!includeGlobs.some((re) => re.test(rel))) {
             skipped.filtered += 1;
             continue;
           }
@@ -715,6 +755,37 @@ async function searchText(state, request, admitRead) {
   }
 }
 
+/* ------------------------------- 鉴权与来源闸 ------------------------------- */
+
+/** 401 的固定应答文案（契约 §1.1 逐字对齐；不解释是哪一种失败——别给猜 token 的人加信息） */
+const AUTH_ERROR = '调试宿鉴权失败：缺 token 或 token 不匹配（以会话文件里的 token 为准）';
+
+/**
+ * 常数时间比较：长度不等直接失败（`timingSafeEqual` 对不等长会抛），等长才逐字节比。
+ * 走 `===` 的话「前缀对了几位」会泄漏在提前返回的时间差里——本机调试面也不留这个口子。
+ */
+function tokenEquals(expected, provided) {
+  const a = Buffer.from(String(expected), 'utf-8');
+  const b = Buffer.from(String(provided ?? ''), 'utf-8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Origin 白名单：只认回环来源（任意端口）。带 `Origin` 就说明请求是从某个网页发起的，
+ * 而调试宿手里是宿主的读写面——任何第三方页面都不许借用户的浏览器打进来。
+ */
+function isLoopbackOrigin(origin) {
+  let u;
+  try {
+    u = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:') return false;
+  return u.hostname === '127.0.0.1' || u.hostname === 'localhost' || u.hostname === '[::1]';
+}
+
 /* ------------------------------- 服务本体 ------------------------------- */
 
 export const SUPPORTED_COMMANDS = Object.freeze([
@@ -731,12 +802,20 @@ export const SUPPORTED_COMMANDS = Object.freeze([
 /**
  * 建一个调试宿实例（导出供 vitest 直接拉起；CLI 形态只是包了 argv 解析的这一层）。
  *
- * @param options {port?, sandbox, appdata, readonly?: string[], policy?: {chooseDir?, chooseFile?}, log?}
+ * @param options {port?, sandbox, appdata, readonly?: string[], policy?: {chooseDir?, chooseFile?},
+ *   token?: string, policyToken?: string, log?}
  */
 export async function createDebugServer(options) {
   const log = options.log ?? (() => {});
   const sandbox = norm(options.sandbox);
   const appdata = norm(options.appdata);
+  // 空串等同没给（CLI 偶尔会传 `--token ""`）——否则「有 token」的判定会被空串骗过，
+  // 变成一道所有人都能过的闸
+  const token = typeof options.token === 'string' && options.token !== '' ? options.token : null;
+  const policyToken = typeof options.policyToken === 'string' && options.policyToken !== ''
+    ? options.policyToken
+    : token;
+  const authRequired = token !== null;
   await fs.mkdir(path.join(appdata, 'kojo-logs'), { recursive: true });
   await fs.mkdir(path.join(sandbox, 'exports'), { recursive: true });
 
@@ -1124,15 +1203,37 @@ export async function createDebugServer(options) {
     );
   }
 
+  /** 页面侧 token 的两条合法通道：`Authorization: Bearer`（页面 fetch）或 `?token=`（EventSource 不能改头） */
+  function pageTokenOk(req, url) {
+    const bearer = (() => {
+      const h = req.headers.authorization;
+      if (typeof h !== 'string') return null;
+      const m = /^Bearer[ \t]+(.+)$/i.exec(h.trim());
+      return m ? m[1].trim() : null;
+    })();
+    if (bearer !== null && tokenEquals(token, bearer)) return true;
+    const q = url.searchParams.get('token');
+    return q !== null && tokenEquals(token, q);
+  }
+
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     // 二进制直传选入（页面 web-host-transport 对两个二进制命令自动带 ?binary=1）：
     // 应答体原样回帧/字节，不走 base64 + JSON（大文件读的 1.33× 膨胀与页面 atob 全省）。
     // 命令返回非 Buffer / 命令失败 ⇒ 仍按 JSON 应答，旧页面与 CLI 无感。
     const wantBinary = url.searchParams.get('binary') === '1';
-    // CORS：页面在 vite 端口（如 1420），跨 origin fetch / EventSource 都要这条
-    res.setHeader('access-control-allow-origin', '*');
-    res.setHeader('access-control-allow-headers', 'content-type');
+    // 跨站来源闸（无论有没有 token 都生效；挡的是"任意网页借用户浏览器打本机调试面"）。
+    // 放在 OPTIONS 之前：预检也不给非法来源放行。
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
+    if (origin !== null && !isLoopbackOrigin(origin)) {
+      json(res, 403, { ok: false, error: `调试宿拒绝跨站来源：${origin}` });
+      return;
+    }
+    // CORS：页面在 vite 端口（如 1420），跨 origin fetch / EventSource 都要这条。
+    // 合法 Origin 回显它本身（`*` 与凭证/精确来源不能并存），无 Origin（CLI/curl）保持 `*`。
+    res.setHeader('access-control-allow-origin', origin ?? '*');
+    res.setHeader('vary', 'Origin');
+    res.setHeader('access-control-allow-headers', 'content-type, authorization, x-kojo-policy-token');
     res.setHeader('access-control-allow-methods', 'GET,POST,OPTIONS');
     if (req.method === 'OPTIONS') {
       res.writeHead(204);
@@ -1140,24 +1241,20 @@ export async function createDebugServer(options) {
       return;
     }
     if (req.method === 'GET' && url.pathname === '/health') {
+      // 免鉴权：CLI 的 `status` 靠它判断宿是否活着，带上秘密反而让探活变成泄密通道
       json(res, 200, { ok: true, service: 'kojo-debug-host', pid: process.pid });
       return;
     }
-    if (req.method === 'GET' && url.pathname === '/config') {
-      json(res, 200, {
-        ok: true,
-        sandbox,
-        appdata,
-        readonlyRoots: state.readonlyRoots,
-        workspaceRoots: state.workspaceRoots,
-        writeDomain: state.writeDomain,
-        policy: state.policy,
-        recordedShellCalls: state.recordedShellCalls.slice(-50),
-        supportedCommands: SUPPORTED_COMMANDS,
-      });
-      return;
-    }
     if (req.method === 'POST' && url.pathname === '/policy') {
+      // `/policy` 只认 CLI 头：query 里的页面 token 会在地址栏/历史里留下，
+      // 而改 policy 等于改读域（`readonly` 能把任意目录读进来）——不能与页面同权。
+      if (authRequired) {
+        const got = req.headers['x-kojo-policy-token'];
+        if (typeof got !== 'string' || !tokenEquals(policyToken, got)) {
+          json(res, 401, { ok: false, error: AUTH_ERROR });
+          return;
+        }
+      }
       readBody(req)
         .then((body) => {
           const b = JSON.parse(body || '{}');
@@ -1175,6 +1272,32 @@ export async function createDebugServer(options) {
           json(res, 200, { ok: true, policy: state.policy });
         })
         .catch((err) => json(res, 400, { ok: false, error: String(err?.message ?? err) }));
+      return;
+    }
+    // 页面侧鉴权（契约 §1.1）：`/invoke`、`/events`、`/config` 要 token；`/health` 与 `/policy`
+    // 各自在上面单独处置。无 token 时整段跳过 ⇒ 既有直连路径逐字不变。
+    if (
+      authRequired &&
+      (url.pathname === '/config' || url.pathname === '/invoke' || url.pathname === '/events') &&
+      !pageTokenOk(req, url)
+    ) {
+      json(res, 401, { ok: false, error: AUTH_ERROR });
+      return;
+    }
+    if (req.method === 'GET' && url.pathname === '/config') {
+      json(res, 200, {
+        ok: true,
+        sandbox,
+        appdata,
+        readonlyRoots: state.readonlyRoots,
+        workspaceRoots: state.workspaceRoots,
+        writeDomain: state.writeDomain,
+        policy: state.policy,
+        recordedShellCalls: state.recordedShellCalls.slice(-50),
+        supportedCommands: SUPPORTED_COMMANDS,
+        // 页面要知道"要不要带 token"，但 token 值一个字节都不许出现在应答里
+        authRequired,
+      });
       return;
     }
     if (req.method === 'POST' && url.pathname === '/invoke') {
@@ -1296,6 +1419,8 @@ function parseArgv(argv) {
     else if (a === '--readonly') out.readonly.push(argv[++i]);
     else if (a === '--choose-dir') out.chooseDir = argv[++i];
     else if (a === '--choose-file') out.chooseFile = argv[++i];
+    else if (a === '--token') out.token = argv[++i];
+    else if (a === '--policy-token') out.policyToken = argv[++i];
     else if (a === '--quiet') out.quiet = true;
     else out._.push(a);
   }
@@ -1325,10 +1450,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
     appdata,
     readonly: args.readonly,
     policy: { chooseDir: args.chooseDir ?? null, chooseFile: args.chooseFile ?? null },
+    token: args.token,
+    policyToken: args.policyToken,
     log,
   })
     .then((server) => {
       log(`[debug-host] 就绪：http://127.0.0.1:${server.port}（sandbox=${sandbox}，appdata=${appdata}）`);
+      if (args.token) log('[debug-host] 已开启 token 鉴权（/config 的 authRequired=true）');
       log(`[debug-host] 页面侧用法：在编辑器地址后加 ?kojo-debug=1（或 ?kojo-debug=${server.port}）`);
       const shutdown = () => {
         server.close().then(() => process.exit(0));

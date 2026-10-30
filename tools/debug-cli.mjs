@@ -22,13 +22,18 @@
  *   stop                       # 收掉整套（按 pid 收，端口兜底）
  *   url                        # 编辑器 URL（浏览器 / agent 直接开这个）
  *   eval "<js 表达式>"         # 页内求值（可 await；自动 JSON 序列化）
+ *   wait <js 表达式> [--timeout ms]  # 每 200ms 求值，truthy 即成功（缺省 30s 超时）——等相位/等树/等加载
+ *   assert <js 表达式>         # 求值一次，falsy 就 exit 1（冒烟/回归脚本的可读断言）
  *   state                      # __kojoDebug.state() 一屏读数
  *   commands [过滤串]          # 命令面板注册表（所有功能的可编程入口）
- *   run <命令id>               # 跑一条命令面板命令
+ *   run <命令id> [--settle ms] # 跑一条命令面板命令（缺省 settle 300ms，再读相位）
+ *   close-project              # 关项目回欢迎相位（相当于工具栏「项目操作」→「关闭项目」）
  *   open-project <目录> [--writable] [--no-open-first]
- *         # web 模式＝调试宿 POST /policy；真壳（shell）＝调试面 dialogPolicy 应答 fetch 腿（只读，
- *         # 不进 Rust 写域准入门 ⇒ --writable 如实拒）。两模式都在最后硬对拍 rootDir===请求目录（假绿拦截）
- *   open-file <路径片段>       # 点文件树真实打开一个文件（等 Monaco 挂载）
+ *         # web 模式＝调试宿 POST /policy（body `{readonly:[abs], chooseDir:abs}`：既答对话框也登记读根，
+ *         # 少了 readonly 会因读域不含该目录卡到 60s 超时）；真壳（shell）＝调试面 dialogPolicy 应答
+ *         # fetch 腿（只读，不进 Rust 写域准入门 ⇒ --writable 如实拒）。两模式都在最后硬对拍
+ *         # rootDir===请求目录（假绿拦截）。相位不对时先跑 close-project
+ *   open-file <路径片段>       # 点文件树真实打开一个文件（10s 内对拍 editor.info().path 含该片段，否则如实红）
  *   click <选择器>             # CDP 真实点击（元素中心 + elementFromPoint 自证）
  *   type [<选择器>] <文本>     # 选择器可省＝打到当前焦点元素（命令面板/搜索框先点开再 type）
  *   key <键> [ctrl|alt|shift]  # 真实键事件（enter/escape/tab/arrowdown/…，可带修饰键）
@@ -42,6 +47,7 @@
  * 退出码：0 成功；1 失败；2 前置不满足（无会话 / 浏览器找不到 / 端口被占）。
  */
 import { spawn, spawnSync } from 'node:child_process';
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import * as path from 'node:path';
@@ -93,10 +99,50 @@ async function readSession() {
   } catch (err) {
     die(
       `会话文件损坏（JSON 解析失败：${err?.message ?? err}）：${SESSION_FILE}\n` +
-        `多半是 serve 与 stop 写入相撞——先 node tools/debug-cli.mjs stop 清掉再重开 serve`,
+        `成因：serve 在多个时刻覆写 session.json（host/vite/browser 就绪各一次），写到一半进程被杀就是残文件。\n` +
+        `处置：node tools/debug-cli.mjs stop（会话文件坏了也能收：它按会话目录 ${SESS_DIR} 认领残留进程并删文件），再重开 serve`,
       2,
     );
   }
+}
+
+/* ---- 鉴权（契约 §1.2）：token 只在会话文件里，日志/status 一律脱敏 ---- */
+
+/** status 打印用：把 URL 里的页面 token 抹成 ***（url 子命令仍给完整 URL——它就是给浏览器用的） */
+function maskUrl(u) {
+  return String(u ?? '').replace(/(kojo-debug-token=)[^&\s]+/g, '$1***');
+}
+
+/**
+ * POST /policy 的唯一出口（契约 §1.2：不许散落裸 fetch）。
+ * /policy 只认 `x-kojo-policy-token` 请求头，不认 query token；旧会话文件没有该字段时退回无鉴权形态。
+ */
+async function postPolicy(session, body) {
+  const res = await fetch(`http://127.0.0.1:${session.serverPort}/policy`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(session.policyToken ? { 'x-kojo-policy-token': session.policyToken } : {}),
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`调试宿 POST /policy 被拒（HTTP ${res.status}）${text ? `：${text.slice(0, 200)}` : ''}`);
+  }
+  return res;
+}
+
+/** 顶层 await / async 表达式包 IIFE（页内直接写 `await __kojoDebug.invoke(...)` 也能跑） */
+function wrapExpr(expr) {
+  return /^\s*(?:await\s|async\s)/.test(expr) ? `;(async () => (${expr}))()` : expr;
+}
+
+/** 路径对拍口径：分隔符统一成 /，Windows 再折小写（页内报的是工程相对路径，CLI 参数可能带 \） */
+function normPath(p) {
+  const s = String(p ?? '').replace(/\\/g, '/');
+  return process.platform === 'win32' ? s.toLowerCase() : s;
 }
 
 async function cdpForSession(session, { mustHavePage = true } = {}) {
@@ -132,7 +178,15 @@ async function cmdServe(args) {
       2,
     );
   } catch (err) {
-    if (err?.code !== 'ENOENT') die(`读旧会话失败：${err?.message ?? err}`, 2);
+    if (err?.code !== 'ENOENT') {
+      die(
+        err instanceof SyntaxError
+          ? `旧会话文件损坏（JSON 解析失败：${err.message}）：${SESSION_FILE}\n` +
+              `先 node tools/debug-cli.mjs stop（会话文件坏了也能收：按会话目录认领残留进程并删文件），再重开 serve`
+          : `读旧会话失败：${err?.message ?? err}`,
+        2,
+      );
+    }
   }
   const session = {
     createdAt: new Date().toISOString(),
@@ -141,6 +195,10 @@ async function cmdServe(args) {
     sandbox: path.resolve(args.sandbox ?? path.join(SESS_DIR, 'sandbox')),
     appdata: path.join(SESS_DIR, 'appdata'),
     readonly: args.readonly.map((p) => path.resolve(p)),
+    // 鉴权（契约 §1.2）：每会话两枚独立随机 token——页面侧与 CLI 侧各一把，
+    // 泄了页面地址也拿不到 /policy 的写入口令。旧会话文件没有它们时 CLI 退回无鉴权形态。
+    token: crypto.randomBytes(24).toString('hex'),
+    policyToken: crypto.randomBytes(24).toString('hex'),
   };
   if (args.fresh) {
     await fsp.rm(session.sandbox, { recursive: true, force: true });
@@ -195,6 +253,8 @@ async function cmdServe(args) {
   //    是「挂」的主嫌疑，直接给大堆；再挂也会经 watchChild 落进 status 读数）
   const serverArgs = ['--max-old-space-size=4096', 'tools/debug-server.mjs', '--port', String(session.serverPort), '--sandbox', session.sandbox, '--appdata', session.appdata];
   for (const r of session.readonly) serverArgs.push('--readonly', r);
+  // 调试宿是**有鉴权的**（契约 §1.1）：缺这两枚 token 就是给本机任意页面开读写后门
+  serverArgs.push('--token', session.token, '--policy-token', session.policyToken);
   children.push({ name: 'host', proc: watchChild('host', spawn(process.execPath, serverArgs, { cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'] })) });
   session.serverPid = children[0].proc.pid;
   children[0].proc.stdout.on('data', (d) => process.stdout.write(`[host] ${d}`));
@@ -248,7 +308,8 @@ async function cmdServe(args) {
   if (!(await portOpen(session.serverPort))) die('调试宿 60s 内没就绪', 1);
   if (!(await portOpen(session.vitePort))) die(`vite 60s 内没就绪；日志尾：\n${viteLog.slice(-800)}`, 1);
 
-  session.url = `http://127.0.0.1:${session.vitePort}/?kojo-debug=${session.serverPort}`;
+  // 页面侧 token 走 query（页面传输按它挂 Authorization/SSE query，契约 §1.3）
+  session.url = `http://127.0.0.1:${session.vitePort}/?kojo-debug=${session.serverPort}&kojo-debug-token=${session.token}`;
   await fsp.writeFile(SESSION_FILE, JSON.stringify(session, null, 2), 'utf-8');
 
   // 3) 浏览器（可选）
@@ -342,7 +403,7 @@ async function recordConsole(session) {
   cdp.on('Log.entryAdded', (p) => {
     if (['error', 'warning'].includes(p.entry?.level)) line(`log.${p.entry.level} [${p.entry.source}] ${p.entry.text}`);
   });
-  line(`=== console 记录开始（页面 ${session.url}）===`);
+  line(`=== console 记录开始（页面 ${maskUrl(session.url)}）===`);
 }
 
 /* ------------------------------ 真桌面壳通道（shell） ------------------------------ */
@@ -367,7 +428,15 @@ async function cmdShell(args, flags) {
       2,
     );
   } catch (err) {
-    if (err?.code !== 'ENOENT') die(`读旧会话失败：${err?.message ?? err}`, 2);
+    if (err?.code !== 'ENOENT') {
+      die(
+        err instanceof SyntaxError
+          ? `旧会话文件损坏（JSON 解析失败：${err.message}）：${SESSION_FILE}\n` +
+              `先 node tools/debug-cli.mjs stop（会话文件坏了也能收），再重起 shell`
+          : `读旧会话失败：${err?.message ?? err}`,
+        2,
+      );
+    }
   }
 
   let dev;
@@ -524,7 +593,8 @@ async function cmdStatus() {
           : `— ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`,
         页面相位: pagePhase,
         退出记录: (s.exits ?? []).slice(-5),
-        URL: s.url,
+        // token 只留在会话文件里：status 常被粘进工单/日志，页面 token 一律脱敏（要完整 URL 用 url 子命令）
+        URL: maskUrl(s.url),
         sandbox: s.sandbox ?? null,
         readonly: s.readonly ?? [],
       },
@@ -532,14 +602,43 @@ async function cmdStatus() {
       2,
     ),
   );
-  process.exit(serverOk === null ? (viteOk ? 0 : 1) : serverOk && viteOk ? 0 : 1);
+  // shell 模式没有调试宿：判据换成「vite 在 + CDP 能连 + 真壳进程活着」——
+  // 只看 vite 会把「壳崩了但 vite 还挂着」判成健康（假绿）。
+  if (isShell) process.exit(viteOk && cdpOk && alive(s.shellPid) === true ? 0 : 1);
+  process.exit(serverOk && viteOk ? 0 : 1);
 }
 
 async function cmdStop() {
-  const s = await readSession();
+  // 收摊不许被坏会话文件卡死（契约 §2）：残文件很可能就是 serve 写到一半被杀留下的，
+  // 而这时恰恰最需要 stop 把它的 host/vite/browser 收掉。容错读 → 告警 → 按会话目录兜底。
+  let s = {};
+  let raw = null;
+  try {
+    raw = await fsp.readFile(SESSION_FILE, 'utf-8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') {
+      die(
+        `本工作树没有在跑的调试会话（${SESSION_FILE} 不存在；多 agent 并发下会话按工作树隔离，` +
+          `看到的只有自己这棵树）。先起一套：\n  node tools/debug-cli.mjs serve`,
+        2,
+      );
+    }
+    console.warn(`[cli] [warn] 读会话文件失败（${err?.message ?? err}）——按会话目录 ${SESS_DIR} 兜底收进程`);
+  }
+  if (raw !== null) {
+    try {
+      s = JSON.parse(raw) ?? {};
+    } catch (err) {
+      console.warn(
+        `[cli] [warn] 会话文件损坏（JSON 解析失败：${err?.message ?? err}）：${SESSION_FILE}\n` +
+          `        按会话目录 ${SESS_DIR} 认领残留进程并删文件（端口兜底不可用——文件里读不出端口）`,
+      );
+      s = {};
+    }
+  }
   const pids = [s.browserPid, s.vitePid, s.serverPid, s.shellPid].filter((p) => typeof p === 'number' && p > 0);
   // serve 形态里三个孩子都是 serve 的子进程：按端口认属主收（Windows taskkill 树杀）
-  if (process.platform === 'win32') {
+  if (process.platform === 'win32' && [s.serverPort, s.vitePort, s.cdpPort].some((p) => typeof p === 'number')) {
     const ns = spawnSync('netstat -ano', { shell: true, encoding: 'utf8' }).stdout ?? '';
     const ports = [s.serverPort, s.vitePort, s.cdpPort];
     for (const lineText of ns.split('\n')) {
@@ -567,7 +666,14 @@ async function cmdStop() {
 
 async function withCdp(fn) {
   const s = await readSession();
-  if (!(await portOpen(s.cdpPort))) die('浏览器 CDP 不在（serve 没带浏览器，或浏览器已关）——重跑 serve，或用 agent 内置浏览器开 URL 后把调试端口交给 KOJO_DEBUG_CDP_PORT', 2);
+  if (!(await portOpen(s.cdpPort))) die(
+    `浏览器 CDP 不在（serve 没带浏览器、浏览器已关，或 CDP 端口被旧会话僵尸占着）。\n` +
+      `处置（二选一）：\n` +
+      `  · 重开：node tools/debug-cli.mjs stop && node tools/debug-cli.mjs serve\n` +
+      `  · 无头机：node tools/debug-cli.mjs serve --no-browser，然后用你自己的浏览器/agent 内置浏览器\n` +
+      `    打开 node tools/debug-cli.mjs url 给的地址（页面托管在 vite 端口上，CDP 只用于驱动）`,
+    2,
+  );
   const cdp = await cdpForSession(s);
   try {
     return await fn(s, cdp);
@@ -579,9 +685,7 @@ async function withCdp(fn) {
 async function cmdEval(_, expr) {
   if (!expr) die('eval 需要一个表达式：debug-cli.mjs eval "__kojoDebug.state()"', 2);
   await withCdp(async (s, cdp) => {
-    // 自动包 async IIFE：顶层 await（如 `await __kojoDebug.invoke(...)`）也能直接写
-    const wrapped = /^\s*(?:await\s|async\s)/.test(expr) ? `;(async () => (${expr}))()` : expr;
-    const v = await cdp.evalJs(wrapped, 60000);
+    const v = await cdp.evalJs(wrapExpr(expr), 60000);
     console.log(typeof v === 'string' ? v : JSON.stringify(v, null, 2));
   });
 }
@@ -606,14 +710,75 @@ async function cmdCommands(_, filter) {
   });
 }
 
-async function cmdRun(_, id) {
+async function cmdRun(_, id, settleArg) {
   if (!id) die('run 需要命令 id（先 commands 看清单）', 2);
+  // 缺省 300ms 与改动前一致；慢命令（重检索 / 格式化全项目）用 --settle 放宽再读相位
+  const settle = Math.max(0, Number(settleArg ?? 300) || 0);
   await withCdp(async (s, cdp) => {
     await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
     await cdp.evalJs(`__kojoDebug.commands.run(${JSON.stringify(id)})`, 30000);
-    await sleep(300);
+    await sleep(settle);
     const phase = await cdp.evalJs('__kojoDebug.state().phase');
-    console.log(`[ok] 已执行命令 ${id}（当前相位：${phase}）`);
+    console.log(`[ok] 已执行命令 ${id}（settle ${settle}ms，相位：${phase}）`);
+  });
+}
+
+/** wait <js 表达式> [--timeout ms]：轮询到 truthy（等相位/等树/等异步装载的正规姿势，别 sleep 撞运气） */
+async function cmdWait(opts, expr) {
+  if (!expr) die('wait 需要 <js 表达式>（每 200ms 求值一次，truthy 即成功）', 2);
+  const timeoutMs = Math.max(200, Number(opts.timeout ?? 30000) || 30000);
+  await withCdp(async (s, cdp) => {
+    await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
+    const t0 = Date.now();
+    let last = '';
+    while (Date.now() - t0 < timeoutMs) {
+      try {
+        const v = await cdp.evalJs(wrapExpr(expr), 5000);
+        if (v) {
+          console.log(`[ok] wait 满足（${Date.now() - t0}ms）：${expr}`);
+          return;
+        }
+        last = JSON.stringify(v) ?? String(v);
+      } catch (err) {
+        last = `求值抛错：${String(err?.message ?? err).slice(0, 200)}`;
+      }
+      await sleep(200);
+    }
+    die(`[FAIL] wait 超时（${timeoutMs}ms）：${expr}${last ? `\n       最后一次读到：${last}` : ''}`, 1);
+  });
+}
+
+/** assert <js 表达式>：求值一次，falsy 即 exit 1（回归脚本里当可读断言用） */
+async function cmdAssert(_, expr) {
+  if (!expr) die('assert 需要 <js 表达式>（求值一次，falsy 即 exit 1）', 2);
+  await withCdp(async (s, cdp) => {
+    await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
+    const v = await cdp.evalJs(wrapExpr(expr), 30000);
+    if (v) {
+      console.log(`[ok] 断言成立：${expr}`);
+      return;
+    }
+    die(`[FAIL] 断言不成立：${expr} => ${JSON.stringify(v)}`, 1);
+  });
+}
+
+/** close-project：真壳/Web 同路——命令面板的 workbench.closeProject（工具栏「关闭项目」是它的按钮壳） */
+async function cmdCloseProject() {
+  await withCdp(async (s, cdp) => {
+    await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
+    const phase = await cdp.evalJs('__kojoDebug.state().phase');
+    if (phase === 'welcome') {
+      console.log('[ok] 当前已在欢迎相位');
+      return;
+    }
+    await cdp.evalJs(`__kojoDebug.commands.run('workbench.closeProject')`, 30000);
+    try {
+      await waitFor(cdp, `__kojoDebug.state().phase === 'welcome'`, { timeoutMs: 20000, label: '欢迎相位' });
+    } catch {
+      const now = await cdp.evalJs('__kojoDebug.state().phase').catch(() => '?');
+      die(`[FAIL] 关闭项目后 20s 内没回到欢迎相位（当前相位：${now}；有未保存改动时编辑器会拦——先自己存/关掉弹窗）`, 1);
+    }
+    console.log('[ok] 项目已关');
   });
 }
 
@@ -655,12 +820,14 @@ async function cmdOpenProject(args, dir, flags) {
         die(`调试面装载对话框应答失败：${String(err?.message ?? err)}`, 1);
       }
     } else {
-      await fetch(`http://127.0.0.1:${s.serverPort}/policy`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ chooseDir: abs }),
-        signal: AbortSignal.timeout(3000),
-      });
+      // body 必须同时登记读根（readonly）与对话框应答（chooseDir）：只给 chooseDir 时
+      // 宿的读域里没有这个目录，打开任意外部目录会卡在读文件阶段直到 60s 超时。
+      // 注意不吞错——/policy 被鉴权拒（旧会话 token / 别的会话）要当场红，不能吞掉后干等
+      try {
+        await postPolicy(s, { readonly: [abs], chooseDir: abs });
+      } catch (err) {
+        die(`登记目录应答失败：${String(err?.message ?? err)}`, 1);
+      }
     }
     // 应答装了却没被消费（中途失败/相位不对）不许留过期 policy——收尾一律 clear
     let failure = null;
@@ -694,7 +861,11 @@ async function cmdOpenProject(args, dir, flags) {
         }
         await cdpClick(cdp, '.welcome-open');
       } else {
-        throw new Error(`当前相位是 ${phase}（已开着别的项目）——先关项目（工具栏「项目操作」→「关闭项目」，它不是命令面板命令）或 stop 后重启会话`);
+        throw new Error(
+          `当前相位是 ${phase}（已开着别的项目）——先关项目再开：\n` +
+            `  node tools/debug-cli.mjs close-project\n` +
+            `（close-project 跑的就是命令面板里的 workbench.closeProject，回到欢迎相位后再跑本命令）`,
+        );
       }
       // 4) 写权限审批弹窗（出现就按 flags 决定；不出现（只读根）就等树）
       const modal = await waitFor(
@@ -754,10 +925,27 @@ async function cmdOpenFile(args, frag) {
       );
     }
     await waitFor(cdp, `!!document.querySelector('.monaco-editor')`, { timeoutMs: 30000, label: 'Monaco 挂载' });
-    await sleep(400);
-    const info = await cdp.evalJs('__kojoDebug.editor.info()');
-    console.log(`[ok] 已打开：${info?.path ?? found}`);
-    console.log(`   语言=${info?.languageId} 行数=${info?.lineCount} EOL=${info?.eol}`);
+    // 点完 ≠ 打开成功：Monaco 复用同一实例，旧文件会残留几百毫秒（甚至因加载失败一直不换），
+    // 旧实现 sleep(400) 后读一次 info 就报成功——「点了 A 却还是 B」的假绿之源。
+    // 判据改成 10s 内反复读 editor.info().path，归一化后必须含目标片段。
+    const want = normPath(frag);
+    const t0 = Date.now();
+    let actual = null;
+    while (Date.now() - t0 < 10000) {
+      const info = await cdp.evalJs('__kojoDebug.editor.info()').catch(() => null);
+      actual = info?.path ?? null;
+      if (actual && normPath(actual).includes(want)) {
+        console.log(`[ok] 已打开：${actual}`);
+        console.log(`   语言=${info?.languageId} 行数=${info?.lineCount} EOL=${info?.eol}`);
+        return;
+      }
+      await sleep(200);
+    }
+    die(
+      `[FAIL] 点了文件树里含「${frag}」的行，但 10s 内编辑器没切过去——实际 path：${actual ?? 'null（没有焦点编辑器）'}；` +
+        `点到的树行：${found}`,
+      1,
+    );
   });
 }
 
@@ -1017,6 +1205,8 @@ function parseArgs(argv) {
     else if (a === '--vite-port') opts.vitePort = Number(argv[++i]);
     else if (a === '--port') opts.port = Number(argv[++i]);
     else if (a === '--cdp-port') opts.cdpPort = Number(argv[++i]);
+    else if (a === '--settle') opts.settle = argv[++i];
+    else if (a === '--timeout') opts.timeout = argv[++i];
     else if (a === '--browser') opts.browser = argv[++i];
     else if (a === '--headless' || a === '--no-browser' || a === '--record' || a === '--fresh' || a === '--writable' || a === '--full' || a === '--isolate' || a === '--no-debug-api') flags.push(a);
     else positional.push(a);
@@ -1044,9 +1234,12 @@ const commands = {
   stop: cmdStop,
   url: async () => { const s = await readSession(); console.log(s.url); },
   eval: () => cmdEval(positional, positional[0]),
+  wait: () => cmdWait(opts, positional[0]),
+  assert: () => cmdAssert(opts, positional[0]),
   state: cmdState,
   commands: () => cmdCommands(positional, positional[0]),
-  run: () => cmdRun(positional, positional[0]),
+  run: () => cmdRun(positional, positional[0], opts.settle),
+  'close-project': cmdCloseProject,
   'open-project': () => cmdOpenProject(opts, positional[0], flags),
   'open-file': () => cmdOpenFile(positional, positional[0]),
   click: () => cmdClick(positional, positional[0]),
@@ -1057,7 +1250,7 @@ const commands = {
   events: () => cmdEvents(positional, positional[0]),
   invoke: () => cmdInvoke(positional, positional[0], positional[1]),
   perf: () => cmdPerf(positional, positional[0], positional[1]),
-  profile: () => cmdProfile(positional, positional[0]),
+  profile: () => cmdProfile(positional, positional[0], positional[1]),
 };
 if (!rawCmd || !commands[rawCmd]) {
   console.log('用法：node tools/debug-cli.mjs <子命令> […]\n  ' + [...Object.keys(commands)].join(' · '));

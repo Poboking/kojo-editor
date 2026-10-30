@@ -7,6 +7,11 @@
  *   文件树在场 → open-file（真实点击）→ Monaco 挂载 → 命令注册表 → 事件旁听 →
  *   调试宿 invoke 直达 → DOM 结构快照 → 截图落盘。
  *
+ * 语言面与检索镜像（2026-10-30 调试批）：Monaco 打开文件后按**当前文件**硬断言
+ * `editor.actions()` / `tokens()` / `setSelection`+`info().selection` / `format()` /
+ * `foldingRanges()`，并用 `search_text` 的 include globs 跑一遍 fixture —— 大小写按
+ * Rust 口径**敏感**（fixture 只有 `.ERB`，写成全小写扩展名的 glob 必须一个都不回）。
+ *
  * 与 `smoke-tauri-dom.mjs` 的分工：那把刀验**桌面壳**（真 IPC / 真机右键），
  * 这把刀验**浏览器调试模式**（多 agent 无桌面壳时的体感 / UI / 功能验证通道）。
  * 样例工程 = `fixtures/mini-game` 复制进沙盒（可写域内，保存链路也能测）。
@@ -289,6 +294,125 @@ try {
     30000,
   );
   check('二进制命令直传原始字节（ArrayBuffer）', typeof binBytes === 'number' && binBytes > 0, `${binBytes} B`);
+
+  // ⑤c 语言面只读 API（2026-10-30 调试批 §3）：全部读**当前打开的这份文件**。
+  //     先确认焦点编辑器还在（`info()` 可能为 null —— 面板切换 / 重挂载都会让它空一拍），
+  //     拿到再断言；所有读数都随失败信息一起打印，红了能直接看出是"没实现"还是"读歪了"。
+  const edLive = await waitFor(cdp, 'window.__kojoDebug.editor.info()', { timeoutMs: 15000, label: '焦点编辑器 info()' });
+  const curFile = String(edLive?.path ?? '');
+  const evalInPage = async (expr, timeoutMs = 60000) =>
+    await cdp.evalJs(`(() => { try { return ${expr}; } catch (e) { return { __err: String((e && e.message) || e) }; } })()`, timeoutMs);
+
+  const actRes = await evalInPage(`(() => {
+    const a = __kojoDebug.editor.actions();
+    if (!Array.isArray(a)) return { __err: 'actions() 不是数组：' + JSON.stringify(a) };
+    const bad = a.filter((x) => !x || typeof x.id !== 'string' || x.id === '' || typeof x.label !== 'string' || x.label === '');
+    return { count: a.length, bad: bad.length, badSample: bad.slice(0, 3), sample: a.slice(0, 4).map((x) => x.id) };
+  })()`);
+  check(
+    'editor.actions() ≥20 条且每项有 id/label',
+    !actRes?.__err && Number(actRes?.count) >= 20 && actRes?.bad === 0,
+    actRes?.__err ?? `文件=${path.basename(curFile)} · ${actRes?.count} 条 · 缺 id/label ${actRes?.bad} 条 · 例：${(actRes?.sample ?? []).join(' / ')}`,
+  );
+
+  const tokRes = await evalInPage(`__kojoDebug.editor.tokens(1, 5)`);
+  const tokRows = Array.isArray(tokRes) ? tokRes : null;
+  const tokBad =
+    !tokRows ||
+    tokRows.length === 0 ||
+    tokRows.some((r, i) => !r || r.line !== i + 1 || !Array.isArray(r.tokens)) ||
+    !tokRows[0] ||
+    tokRows[0].line !== 1;
+  check(
+    'editor.tokens(1,5) 回数组且行号从 1 连续',
+    !tokBad && Array.isArray(tokRes),
+    tokBad
+      ? `实际=${JSON.stringify(tokRes).slice(0, 200)}`
+      : `${tokRows.length} 行 · 行号 ${tokRows.map((r) => r.line).join(',')} · token 数 ${tokRows.reduce((n, r) => n + r.tokens.length, 0)}`,
+  );
+
+  const setSel = await evalInPage(`__kojoDebug.editor.setSelection(1, 1, 1, 3)`);
+  const selInfo = await evalInPage(`(() => { const i = __kojoDebug.editor.info(); return i ? { path: i.path, selection: i.selection } : null; })()`);
+  const selText = typeof selInfo?.selection === 'string' ? selInfo.selection : null;
+  check(
+    'editor.setSelection(1,1,1,3) 生效且 info().selection 长 2',
+    setSel === true && selText !== null && selText.length === 2,
+    `setSelection=${JSON.stringify(setSel)} · selection=${JSON.stringify(selInfo?.selection)}${selInfo?.__err ? ` · ${selInfo.__err}` : ''} · 文件=${path.basename(curFile)}`,
+  );
+
+  const fmtRes = await evalInPage(`__kojoDebug.editor.format()`, 90000);
+  const fmtOk =
+    !!fmtRes &&
+    !fmtRes.__err &&
+    fmtRes.ok === true &&
+    typeof fmtRes.changed === 'boolean' &&
+    typeof fmtRes.before === 'number' &&
+    typeof fmtRes.after === 'number' &&
+    typeof fmtRes.elapsedMs === 'number';
+  check(
+    'editor.format() 回结构化结果且 ok=true',
+    fmtOk,
+    fmtOk
+      ? `文件=${path.basename(curFile)} · changed=${fmtRes.changed} · ${fmtRes.before}→${fmtRes.after} 字符 · ${fmtRes.elapsedMs}ms`
+      : JSON.stringify(fmtRes).slice(0, 240),
+  );
+
+  const foldRes = await evalInPage(`__kojoDebug.editor.foldingRanges()`);
+  const foldShapeOk =
+    !foldRes?.__err &&
+    (foldRes === null || Array.isArray(foldRes)) &&
+    (!Array.isArray(foldRes) ||
+      foldRes.every((r) => r && typeof r.startLine === 'number' && typeof r.endLine === 'number' && typeof r.kind === 'string'));
+  check(
+    'editor.foldingRanges() 回数组或 null（形态合规、不抛）',
+    foldShapeOk,
+    foldShapeOk
+      ? `文件=${path.basename(curFile)} · ${foldRes === null ? 'null（本版本拿不到折叠模型，如实回）' : `${foldRes.length} 段${foldRes.length ? ` · 首段 ${JSON.stringify(foldRes[0])}` : ''}`}`
+      : JSON.stringify(foldRes).slice(0, 240),
+  );
+
+  // ⑤d search_text 的 include globs 镜像（2026-10-30 调试批 §1.4）：Rust 口径
+  //     **大小写敏感**，且只匹配相对检索根的 `/` 形态路径。fixture 里真实扩展名是
+  //     大写 `.ERB`（3 个）+ `.csv`（4 个）——大写 glob 必须正好收回 ERB，
+  //     小写 glob 必须一个都不回（挡不住 `.ERB`）。只回传瘦身后的读数，免得几千条
+  //     命中把 CDP 消息撑大。
+  const runGlobSearch = async (searchId, globs) =>
+    await evalInPage(
+      `(async () => {
+        const r = await __kojoDebug.invoke('search_text', { request: {
+          searchId: ${searchId},
+          roots: [${JSON.stringify(project)}],
+          query: '.',
+          options: { isRegex: true, caseSensitive: false, wholeWord: false, extensions: [], globs: ${JSON.stringify(globs)}, maxResults: 5000 },
+        } });
+        return {
+          paths: (r && r.files ? r.files : []).map((f) => String(f.path).replace(/\\\\/g, '/')),
+          totalMatches: r && r.totalMatches,
+          scanned: r && r.filesScanned,
+          filtered: r && r.skipped ? r.skipped.filtered : null,
+          excluded: r && r.skipped ? r.skipped.excluded : null,
+          truncated: !!(r && r.truncated),
+        };
+      })()`,
+      120000,
+    );
+  const globUpper = await runGlobSearch(9001, ['**/*.ERB']);
+  const upperPaths = Array.isArray(globUpper?.paths) ? globUpper.paths : [];
+  const upperLeak = upperPaths.filter((p) => !p.endsWith('.ERB'));
+  check(
+    'search_text include globs（**/*.ERB）非空且只回 .ERB',
+    !globUpper?.__err && upperPaths.length >= 1 && upperLeak.length === 0,
+    globUpper?.__err ??
+      `${upperPaths.length} 文件 · 命中 ${globUpper.totalMatches} 处 · 扫描 ${globUpper.scanned} · filtered=${globUpper.filtered} · excluded=${globUpper.excluded} · ${upperPaths.map((p) => p.split('/').pop()).join(', ')}${upperLeak.length ? ` · 越界：${upperLeak.join(', ')}` : ''}`,
+  );
+  const globLower = await runGlobSearch(9002, ['**/*.erb']);
+  const lowerPaths = Array.isArray(globLower?.paths) ? globLower.paths : [];
+  check(
+    'search_text include globs 大小写敏感（**/*.erb 挡不住 .ERB）',
+    !globLower?.__err && lowerPaths.length === 0 && Number(globLower?.filtered) >= 1,
+    globLower?.__err ??
+      `${lowerPaths.length} 文件（应为 0）· filtered=${globLower.filtered}（≥1 才证明 glob 真编译并使上了，不是被忽略）· 扫描 ${globLower.scanned} · 越界示例：${lowerPaths.slice(0, 3).join(', ') || '无'}`,
+  );
 
   // ⑥ 命令注册表：所有功能的可编程入口在场
   const cmdCount = await cdp.evalJs('__kojoDebug.commands.list().length');
