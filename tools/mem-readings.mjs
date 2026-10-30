@@ -84,8 +84,14 @@ registerHooks({
       const slash = rest.indexOf('/');
       const name = slash < 0 ? rest : rest.slice(0, slash);
       const sub = slash < 0 ? '' : rest.slice(slash + 1);
-      const dir = name.startsWith('plugin-') ? join(REPO, 'packages/plugins', name.slice('plugin-'.length)) : join(REPO, 'packages', name);
-      const candidates = sub === '' ? [join(dir, 'src/index.ts')] : [join(dir, 'src', `${sub}.ts`), join(dir, 'src', sub, 'index.ts')];
+      // 目录判据先 `packages/<name>` 再退 `packages/plugins/<name 去掉 plugin- 前缀>`：
+      // `@kojo/plugin-api` **是契约包**（`packages/plugin-api`），按前缀一刀切会把它指到
+      // `packages/plugins/api`（不存在）⇒ 在本树靠 node_modules 兜底看不出来，换到游离树
+      // 就 `ERR_MODULE_NOT_FOUND`（量"改前"的那棵树本来就没有 node_modules，见 PITFALLS 282）。
+      const dirs = [join(REPO, 'packages', name)];
+      if (name.startsWith('plugin-')) dirs.push(join(REPO, 'packages/plugins', name.slice('plugin-'.length)));
+      const base = dirs.find((d) => existsSync(d)) ?? dirs[0];
+      const candidates = sub === '' ? [join(base, 'src/index.ts')] : [join(base, 'src', `${sub}.ts`), join(base, 'src', sub, 'index.ts')];
       for (const entry of candidates) {
         if (existsSync(entry)) return { url: pathToFileURL(entry).href, shortCircuit: true };
       }

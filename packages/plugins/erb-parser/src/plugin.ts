@@ -61,13 +61,13 @@ import {
   SNAPSHOT_VERSION,
   aggregateIndex,
   attachRefs,
+  candidateHash,
   changedNamesBetween,
   coerceSnapshot,
   countEntries,
   diffSnapshot,
   encodeEntries,
   entryNamesOf,
-  hashToken,
   mergeEntries,
   nameSetDigest,
   pruneSnapshotKeys,
@@ -925,8 +925,9 @@ export function createErbParserPlugin(): Plugin {
         const provenanceClean: string[] = [];
         let changed: ReadonlySet<string> | null = null;
         /**
-         * `changed` 的**哈希集**（v12/MEM-6）：`refsProvableUnchanged` 逐枚比对候选哈希，
-         * 只需要这一份。算一次、全文件共用——别在每条条目里重算 11 万次哈希。
+         * `changed` 的**哈希集**（v12/MEM-6；v15 起 16 位，MEM-15）：`refsProvableUnchanged`
+         * 逐枚比对候选哈希，只需要这一份。算一次、全文件共用——别在每条条目里重算 11 万次哈希。
+         * 哈希口径**必须**走 `candidateHash`（与候选集同一枚尺子），各写一遍 `>>> 16` 就是第二判据。
          */
         let changedHashes: ReadonlySet<number> | null = null;
         if (snapshot !== null) {
@@ -937,7 +938,7 @@ export function createErbParserPlugin(): Plugin {
                 : changedNamesBetween(entryNamesOf(snapshot.entries), new Set(byName.keys()));
             if (changed !== null) {
               const hs = new Set<number>();
-              for (const n of changed) hs.add(hashToken(n));
+              for (const n of changed) hs.add(candidateHash(n));
               changedHashes = hs;
             }
           }

@@ -176,9 +176,31 @@ export function detectEol(text: string): EolStyle {
   return crlf > lf ? 'crlf' : 'lf';
 }
 
-/** 归一化为内部表示（\n）——编辑器模型/逐行比较的规范形态 */
+/**
+ * 归一化为内部表示（`\n`）——编辑器模型/逐行比较的规范形态。
+ *
+ * MEM-16：**不得**用 `text.replace(/\r\n?/g, '\n')`。V8 的 `String.prototype.replace`
+ * 在"真发生替换且结果够长"时产出 **ConsString（绳索）**：`%DebugPrint` 报
+ * `CONS_TWO_BYTE_STRING_TYPE`，实测驻留 **5.68 B/字符**（2,000 份真语料 CRLF 形态
+ * 193.9 MB），而这串会被 `readText`/`readTexts` 长期持在会话文本缓存里。
+ *
+ * 现写法：先 `indexOf('\r')` 探"有没有要改的"——绝大多数文件（eraTW 真语料 3,818 份里
+ * 只有 3 份含 `\r`）走这条**零拷贝**路（返回入参本身，与旧写法 no-match 时的行为一致，
+ * 且比 `replace` 的全文扫描更快：13.2ms vs 18.2ms/2,000 份）；有 `\r` 才按同一个
+ * 分隔符集合 `split` 后 `join('\n')`。
+ *
+ * 为什么 `join` 保证平铺：V8 的 `Array.prototype.join` 走 `StringBuilderConcat`，
+ * 它先算总长、再 `NewRawOneByteString`/`NewRawTwoByteString` 分配一条平铺串并逐段
+ * `WriteToFlat` 拷贝（不建绳索）。实测 30,001 段 / 165,000 字符仍报
+ * `SEQ_TWO_BYTE_STRING_TYPE`，驻留 2.01 B/字符。
+ *
+ * 等价性：`/\r\n?/` 只把 `\r\n` 与孤立 `\r` 各算一个分隔符，`split(/\r\n|\r|\n/)`
+ * 的切分点与之逐位相同，`join('\n')` 的产物与旧实现逐字相等（含尾部/连续分隔符
+ * 产生的空段；2,000 份语料逐串比对 0 处不等）。
+ */
 export function normalizeEol(text: string): string {
-  return text.replace(/\r\n?/g, '\n');
+  if (text.indexOf('\r') < 0) return text;
+  return text.split(/\r\n|\r|\n/).join('\n');
 }
 
 /**
@@ -186,7 +208,10 @@ export function normalizeEol(text: string): string {
  * 保真写回请走 {@link reconstructEol}（逐行保留原换行）。
  */
 export function applyEol(text: string, eol: EolStyle): string {
-  return eol === 'crlf' ? text.replace(/\n/g, '\r\n') : text;
+  // MEM-16：`replace(/\n/g, '\r\n')` 长文本上产出 ConsString（绳索），而本函数的产物会被
+  // `writeText` 存进换行指纹缓存长期持有 ⇒ 改走 split/join（StringBuilderConcat 产平铺串）。
+  // 切分点与 replace 逐字等价：每个 `\n` 都换成分隔符，空段/首尾/连续分隔符原样保留。
+  return eol === 'crlf' ? text.split('\n').join('\r\n') : text;
 }
 
 /** 原文换行指纹：按原样切出的"行内容 + 分隔符"。`parts.length === terms.length + 1` */
@@ -262,15 +287,18 @@ export function reconstructEol(orig: EolMap, newText: string, defaultEol: EolSty
   const origIndex = (i: number): number =>
     i < p ? i : i >= n - s ? i + off : -1;
 
-  let out = '';
+  // MEM-16：与 `joinPreserveEol` 同理，逐段 `+=` 的产物是 ConsString（绳索）——本函数的
+  // 返回值会被 `writeText` 存进换行指纹缓存长期持有，故交错压入一次 join 换平铺串。
+  const segs: string[] = new Array((n - 1) * 2 + 1);
+  let w = 0;
   for (let i = 0; i < n - 1; i++) {
     const a = origIndex(i);
     const b = origIndex(i + 1);
-    out += nLines[i];
-    out += a >= 0 && b === a + 1 ? orig.terms[a] : defTerm;
+    segs[w++] = nLines[i] as string;
+    segs[w++] = a >= 0 && b === a + 1 ? (orig.terms[a] as string) : defTerm;
   }
-  out += nLines[n - 1];
-  return out;
+  segs[w] = nLines[n - 1] as string;
+  return segs.join('');
 }
 
 /**

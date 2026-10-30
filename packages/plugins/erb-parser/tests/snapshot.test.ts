@@ -4,6 +4,7 @@ import { parseErbText } from '../src/scanner';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
+  candidateHash,
   candidateHashesFromTokens,
   coerceSnapshot,
   decodeCandidateHashes,
@@ -44,8 +45,8 @@ function file(path: string, names: readonly string[]): ErbFile {
 
 function entry(path: string, mtimeMs: number | null, names: readonly string[], size: number | null = 4096): SnapshotEntry {
   // v4 起 decode 恒回填 refs（缺 = 结构不符）；v11 起候选集键恒在（空数组 = 已知没有候选）；
-  // 夹具同形，round-trip 判据才不空转。v12 起内存形态是 `Uint32Array`（哈希集）
-  return { mtimeMs, size, textLength: 1000, file: file(path, names), refs: [], candidateHashes: new Uint32Array(0) };
+  // 夹具同形，round-trip 判据才不空转。v12 起内存形态是哈希集（v15 起 `Uint16Array`）
+  return { mtimeMs, size, textLength: 1000, file: file(path, names), refs: [], candidateHashes: new Uint16Array(0) };
 }
 
 /** 盘上形态：v5 起 entries 是位置元组（第 2 位 size、第 8 位引用流水），内存形状只在加载后存在 */
@@ -198,12 +199,14 @@ describe('v3 元组编解码（瘦身不改语义；v5：+size、懒还原）', 
     expect(bad((e) => (e['/a.ERB'] as unknown[])[4] = 2)).toBeNull(); // hasDirective 非 0|1
     expect(bad((e) => (e['/a.ERB'] as unknown[])[1] = 'x')).toBeNull(); // size 非数非 null
     expect(bad((e) => (e['/a.ERB'] as unknown[])[2] = 'x')).toBeNull(); // textLength 非数
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = [[['FOO', 1]]]))).toBeNull(); // 函数元组元数
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = [['FOO', 1, 2, [[['A', 3]]], 0]]))).toBeNull(); // 形参标记非 0|1
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = [['FOO', 1, 2, [], 0, 5]]))).toBeNull(); // 注释非字符串
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[6] = [['X']]))).toBeNull(); // dims 元数
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[7] = [['FOO', 1, 2]]))).toBeNull(); // refs 元数（v4 新增位）
-    expect(bad((e) => ((e['/a.ERB'] as unknown[])[7] = [['FOO', 1, 2, 3]]))).toBeNull(); // refs 种类旗标非 0|1|2
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = ['FOO', 1]))).toBeNull(); // 函数流水元数非 7 倍数
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = ['FOO', 1, 2, ['A', 2], 0, null, 0]))).toBeNull(); // 形参标记非 0|1
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = ['FOO', 1, 2, [], 0, 5, 0]))).toBeNull(); // 注释非字符串|null
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = ['FOO', 1, 2, [], 0, null, -1]))).toBeNull(); // 列 < 0
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[5] = ['FOO', 1, 2, [], 0, null, 1.5]))).toBeNull(); // 列非整数
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[6] = ['X']))).toBeNull(); // dims 流水元数非 3 倍数
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[7] = ['FOO', 1, 2]))).toBeNull(); // refs 流水元数非 4 倍数（v4 新增位）
+    expect(bad((e) => ((e['/a.ERB'] as unknown[])[7] = ['FOO', 1, 2, 3]))).toBeNull(); // refs 种类旗标非 0|1|2
     expect(bad((e) => ((e['/a.ERB'] as unknown[]).length = 7))).toBeNull(); // refs 位缺失（v4 形态整弃）
     // 深层损坏也要在 decode 时被查掉（懒还原不许把 fail-closed 推迟到消费方）
     const twoEntries = encodeEntries({
@@ -392,12 +395,12 @@ describe('mergeEntries（收尸 + 沿用）', () => {
  *    （少扫文件、不报错）。所以这里逐个长度钉往返，且把 `0xFFFFFFFF` 这种全 1 值单列。
  * 2. 免扫判据必须**只可能多扫、不可能漏扫**：碰撞方向上不能反过来。
  */
-describe('候选记号哈希集（v12：从 17M 字符的串换成哈希）', () => {
+describe('候选记号哈希集（v12 换哈希 / v15 收窄到 16 位）', () => {
   it('hashToken：跨调用稳定、同串同值、不同串基本不同', () => {
     expect(hashToken('FOO_C')).toBe(hashToken('FOO_C'));
     expect(hashToken('')).toBe(hashToken(''));
     expect(hashToken('FOO_C')).not.toBe(hashToken('FOO_D'));
-    // 32 位无符号（落盘要 base64，负数会被 `>>> 0` 与位运算的差异坑到）
+    // 32 位无符号（负数会被 `>>> 0` 与位运算的差异坑到）
     for (const s of ['', 'A', 'M_KOJO_K1_300', 'あいう', 'x'.repeat(200)]) {
       const h = hashToken(s);
       expect(Number.isInteger(h)).toBe(true);
@@ -406,33 +409,44 @@ describe('候选记号哈希集（v12：从 17M 字符的串换成哈希）', ()
     }
   });
 
-  it('encodeCandidateHashes / decodeCandidateHashes：0..9 枚逐个往返（含全 1 值）', () => {
-    const cases = [
-      0x00000000, 0xffffffff, 0x00000001, 0x80000000, 0x7fffffff, 0x01020304, 0xdeadbeef, 0x0000ffff, 0xff000000,
-    ];
+  it('candidateHash：就是 hashToken 的高 16 位（窄编码的唯一出处）', () => {
+    for (const s of ['', 'A', 'FOO_C', 'M_KOJO_K1_300', 'あいう']) {
+      const h = candidateHash(s);
+      expect(h).toBe(hashToken(s) >>> 16);
+      expect(Number.isInteger(h)).toBe(true);
+      expect(h).toBeGreaterThanOrEqual(0);
+      expect(h).toBeLessThanOrEqual(0xffff);
+    }
+    expect(candidateHash('FOO_C')).toBe(candidateHash('FOO_C'));
+  });
+
+  it('encodeCandidateHashes / decodeCandidateHashes：0..8 枚逐个往返（含全 1 / 最高位）', () => {
+    const cases = [0x0000, 0xffff, 0x0001, 0x8000, 0x7fff, 0x0102, 0xdead, 0x00ff];
     for (let n = 0; n <= cases.length; n++) {
-      const src = Uint32Array.from(cases.slice(0, n));
+      const src = Uint16Array.from(cases.slice(0, n));
       const text = encodeCandidateHashes(src);
       if (n === 0) expect(text).toBe('');
       else expect(text.length % 4).toBe(0); // base64 长度恒为 4 的倍数
       const back = decodeCandidateHashes(text);
       expect(back).not.toBeNull();
       expect(Array.from(back!)).toEqual(Array.from(src));
+      expect(back!.constructor).toBe(Uint16Array); // 内存形态是 16 位（3.25 MB 的那一档）
     }
   });
 
   it('decodeCandidateHashes：长度/字符非法 ⇒ null（fail-closed，不许猜）', () => {
     expect(decodeCandidateHashes('AAA')).toBeNull(); // 不是 4 的倍数
     expect(decodeCandidateHashes('AA*A')).toBeNull(); // 字母表外
-    expect(decodeCandidateHashes('AAAA')).toBeNull(); // 3 字节 < 一枚哈希的 4 B ⇒ 元数不符
+    expect(decodeCandidateHashes('AAAA')).toBeNull(); // 3 字节：不是 2 的倍数 ⇒ 元数不符
     expect(decodeCandidateHashes('AAAAA')).toBeNull();
-    expect(decodeCandidateHashes('')).toEqual(new Uint32Array(0)); // 空集是合法事实（已知没有候选）
+    expect(decodeCandidateHashes('')).toEqual(new Uint16Array(0)); // 空集是合法事实（已知没有候选）
+    expect(Array.from(decodeCandidateHashes('AAAAAA==')!)).toEqual([0, 0]); // 4 字节 = 2 枚
   });
 
-  it('candidateHashesFromTokens：v11 的记号串就地哈希（v11 → v12 的免费迁移）', () => {
+  it('candidateHashesFromTokens：v11 的记号串就地哈希（v11 → v12 → v15 的免费迁移）', () => {
     const tokens = ['FOO_A', 'M_KOJO_K1_300', 'BAR_B'];
     const hashes = candidateHashesFromTokens(tokens.join('\n'));
-    expect(Array.from(hashes)).toEqual(tokens.map(hashToken));
+    expect(Array.from(hashes)).toEqual(tokens.map(candidateHash));
     expect(candidateHashesFromTokens('').length).toBe(0); // 空串 = 已知没有候选
   });
 
@@ -446,9 +460,9 @@ describe('候选记号哈希集（v12：从 17M 字符的串换成哈希）', ()
       candidateHashes: candidateHashesFromTokens('FOO_A\nBAR_B'),
     } as unknown as SnapshotEntry;
     // 差集里没有本文件的候选 ⇒ 可证 refs 不变（免扫）
-    expect(refsProvableUnchanged(e, new Set([hashToken('OTHER')]))).toBe(true);
+    expect(refsProvableUnchanged(e, new Set([candidateHash('OTHER')]))).toBe(true);
     // 差集里有 ⇒ 嫌疑坐实（重扫）
-    expect(refsProvableUnchanged(e, new Set([hashToken('BAR_B')]))).toBe(false);
+    expect(refsProvableUnchanged(e, new Set([candidateHash('BAR_B')]))).toBe(false);
     // 空差集（名录没变）⇒ 当然可证
     expect(refsProvableUnchanged(e, new Set())).toBe(true);
     // 候选未知（v10 迁移条目）⇒ 保守侧重扫，绝不猜
@@ -457,11 +471,11 @@ describe('候选记号哈希集（v12：从 17M 字符的串换成哈希）', ()
     expect(refsProvableUnchanged({ ...e, refs: undefined } as unknown as SnapshotEntry, new Set())).toBe(false);
     // 已知空集 ⇒ 任何名录变化都碰不到它
     expect(
-      refsProvableUnchanged({ ...e, candidateHashes: new Uint32Array(0) } as unknown as SnapshotEntry, new Set([hashToken('X')])),
+      refsProvableUnchanged({ ...e, candidateHashes: new Uint16Array(0) } as unknown as SnapshotEntry, new Set([candidateHash('X')])),
     ).toBe(true);
   });
 
-  it('落盘往返：候选位 base64 → Uint32Array → base64 逐字节相同', () => {
+  it('落盘往返：候选位 base64 → Uint16Array → base64 逐字节相同', () => {
     const hashes = candidateHashesFromTokens('A\nB\nC\nD\nE');
     const entries = {
       '/a.ERB': {

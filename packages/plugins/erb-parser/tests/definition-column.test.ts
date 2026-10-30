@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import type { ErbFile, ErbIndex, ErbParserService, FileIO, GameProject, ScopedStorage } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
 import { parseErbText, parseFunctionDefinition } from '../src/scanner';
-import { encodeEntries, decodeEntries, aggregateIndex, snapshotKeyFor, SNAPSHOT_VERSION, type SnapshotEntry } from '../src/snapshot';
+import { encodeEntries, decodeEntries, salvageEntries, aggregateIndex, snapshotKeyFor, SNAPSHOT_VERSION, FN_STRIDE, type SnapshotEntry } from '../src/snapshot';
 import { KIND_DEFINITION, forEachRef, scanFileRefs } from '../src/references';
 import { makeComputeStub } from './support';
 
@@ -130,11 +130,11 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
   it('encode → decode 列逐位相同（"无注释块"要占住第 6 位才排得上第 7 位）', () => {
     const file = parseErbText('\t@FOO(ARG)\n;doc\n@BAR\n', '/a.ERB');
     const payload = JSON.parse(JSON.stringify(encodeEntries({ '/a.ERB': entryOf(file) }))) as Record<string, unknown[]>;
-    const fns = payload['/a.ERB']![5] as unknown[][];
-    // FOO 无注释块 ⇒ 第 6 位写 null 占位，列才落在第 7 位（可选位不许跳着排）。
-    // 第 4 位是 v14 的**扁平**形参流水（`[名, 0|1]` 逐对排，步长 `PARAM_STRIDE`）。
-    expect(fns[0]).toEqual(['FOO', 1, 2, ['ARG', 0], 0, null, 3]);
-    expect(fns[1]).toEqual(['BAR', 3, 4, [], 0, 'doc', 2]); // 有注释块 + 有列
+    const fns = payload['/a.ERB']![5] as unknown[];
+    // v15 起每文件一枚**扁平流水**（步长 `FN_STRIDE`）：FOO 无注释块 ⇒ 第 6 格写 null 占位，列才落在第 7 格
+    // （可选位不许跳着排）。第 4 格是**扁平**形参流水（`[名, 0|1]` 逐对排，步长 `PARAM_STRIDE`）。
+    expect(fns.slice(0, FN_STRIDE)).toEqual(['FOO', 1, 2, ['ARG', 0], 0, null, 3]);
+    expect(fns.slice(FN_STRIDE)).toEqual(['BAR', 3, 4, [], 0, 'doc', 2]); // 有注释块 + 有列
     const back = decodeEntries(payload)!['/a.ERB']!;
     expect(back.file.functions).toEqual(file.functions);
     expect(back.file.functions.map((f) => f.nameColumn)).toEqual([3, 2]);
@@ -143,35 +143,44 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
     expect(encodeEntries({ '/a.ERB': back })['/a.ERB']![5]).toEqual(fns);
   });
 
-  it('旧形态条目（函数元组只有 5/6 位）读回来 ⇒ 没有列这个事实，不抛、不补 1', () => {
+  it('旧形态条目（函数元组只有 5/6 位）走 v14 salvage ⇒ 缺位哨兵 0，不抛、不补 1', () => {
     const v8Shape: Record<string, unknown[]> = {
       '/a.ERB': [1000, 20, 20, 2, 0, [['FOO', 1, 2, [], 0], ['BAR', 2, 2, [], 0, ';注']], [], [], [], null, null],
     };
-    const decoded = decodeEntries(v8Shape);
-    expect(decoded).not.toBeNull();
-    const fns = decoded!['/a.ERB']!.file.functions;
+    // 当前形态只认扁平流水（v15）："一函数一枚元组"是 v14 旧盘，**只能**走 salvage 摊平
+    expect(decodeEntries(v8Shape)).toBeNull();
+    const salvaged = salvageEntries(v8Shape, 11, undefined, false, false, false, true, 32)!;
+    const fns = salvaged.entries['/a.ERB']!.file.functions;
     expect(fns.map((f) => f.name)).toEqual(['FOO', 'BAR']);
     for (const fn of fns) {
       expect('nameColumn' in fn).toBe(false); // **缺键**，不是 `undefined` 更不是 1
       expect(fn.nameColumn).toBeUndefined();
     }
     // 聚合出来的定义 ref 同样不带列（定义腿据此只交行）
-    const { byName } = aggregateIndex([decoded!['/a.ERB']!.file]);
+    const { byName } = aggregateIndex([salvaged.entries['/a.ERB']!.file]);
     const ref = byName.get('FOO')![0]!;
     expect('nameColumn' in ref).toBe(false);
     expect(ref.startLine).toBe(1);
-    // 再编码一次仍是旧形态（不许把"不知道"写成"在第 1 列"）
-    const reFns = encodeEntries(decoded!)['/a.ERB']![5] as unknown[][];
-    expect(reFns[0]!.length).toBe(5);
+    // 摊平后落盘的缺位哨兵仍是 0（不许把"不知道"写成"在第 1 列"）
+    const reFns = encodeEntries(salvaged.entries)['/a.ERB']![5] as unknown[];
+    expect(reFns.length).toBe(2 * FN_STRIDE);
+    expect([reFns[6], reFns[FN_STRIDE + 6]]).toEqual([0, 0]);
   });
 
-  it('坏列值（0 / 小数 / 字符串）⇒ 整条判过期（fail-closed，不"修"快照）', () => {
-    for (const bad of [0, 1.5, '2', null]) {
+  it('坏列值（负数 / 小数 / 非数）⇒ 整条判过期；0 是"没有这个事实"的哨兵，不判坏', () => {
+    for (const bad of [-1, 1.5, '2', null]) {
       const payload: Record<string, unknown[]> = {
-        '/a.ERB': [1000, 20, 20, 1, 0, [['FOO', 1, 1, [], 0, null, bad]], [], [], [], null, ''],
+        '/a.ERB': [1000, 20, 20, 1, 0, ['FOO', 1, 1, [], 0, null, bad], [], [], [], null, ''],
       };
       expect(decodeEntries(payload), `坏值 ${String(bad)}`).toBeNull();
     }
+    // 0 = v15 的缺位哨兵（v14 的 5/6 位元组摊平后也是它）：读回来是"没有列这个事实"，不是坏值
+    const sentinel: Record<string, unknown[]> = {
+      '/a.ERB': [1000, 20, 20, 1, 0, ['FOO', 1, 1, [], 0, null, 0], [], [], [], null, ''],
+    };
+    const decoded = decodeEntries(sentinel);
+    expect(decoded).not.toBeNull();
+    expect('nameColumn' in decoded!['/a.ERB']!.file.functions[0]!).toBe(false);
   });
 
   it('版本判据：当前键带当前版本号；表外旧版（v9）一条都不复用（不静默留缺列）', () => {
@@ -336,7 +345,7 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
     // 当前键、当前版本号，但条目是"没有列这个事实"的形态（等价于旧一代盘上数据被认可续用的情形）
     const legacyEntry: unknown[] = [
       1000, TEXT_A.length, TEXT_A.length, 2, 0,
-      [['FOO', 1, 2, ['ARG', 0], 0]], // 5 位 = v8 形态：无注释块、无列（形参按 v14 扁平形态写）
+      ['FOO', 1, 2, ['ARG', 0], 0, null, 0], // v15 扁平流水：0 = 没有列这个事实（形参按扁平形态写）
       [],
       ['FOO', 1, 3, 0], // v13 的扁平流水（步长 REF_STRIDE）
       [],

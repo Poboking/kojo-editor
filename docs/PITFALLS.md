@@ -526,3 +526,20 @@
    根因：`profile: () => cmdProfile(positional, positional[0], positional[1])` 把「第一个位置参数」同时当子命令；`profile 2000` 于是 `mode='2000'`，`if (mode==='run')` 与 `if (mode==='start')` 都不成立，`Profiler.start` 一次没跑。而外层没有兜底 catch，未捕获的 rejection 让 Node 打整段栈，最后一行是 `Node.js v22.22.2`——人读到的是运行时版本号，不是"哪一步错了"。
    ⇒ 修法两条，缺一条都还会复发：① **形态归一**（`/^\d+$/` 的 `sub` 视为 `run` + 毫秒数），未知子命令一次说清并 `exit 2`，不靠 CDP 报错兜底；② **顶层兜底 catch**：子命令 throw 一律收敛成一行 `[FAIL] <message>` + `exit 1`，栈只在 `KOJO_DEBUG_TRACE=1` 时打。
    纪律：凡"子命令 + 数值参数"的分发表，**先判定参数形态再分派**；并且 CLI 顶层必须有 catch——让人看见"哪一步错了"，比让 Node 打印版本号有用得多。
+
+281. **"抬闸"只改了常量与注释、漏改钉死它的用例 ⇒ 那道闸自那天起恒红，而全量读数把它当成"已知常红"吞掉**（2026-10-30 本批复核实拍，`74843330`）：
+   那次把 `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 从 94 件 / 11.1 MiB 抬到 96 件 / 11.2 MiB，并在常量上方逐块写清了增量来源，**却没改 `tools/tests/release-gate.test.ts`** 的三处：期望对象仍是 `Math.round(11.1 * 1024 * 1024), files: 94`、用例名还写"11.1 MiB / 94 件"、tail 正则还是 `/上限 11\.1 MiB/` ⇒ 该文件两条用例**每天红**。而收尾回执里只写"余 2 条已知常红"，真正的新红与这条陈旧红混在同一句话里，没人查出。
+   ⇒ 三条纪律：① 抬/降闸必须**同一个提交**里改"闸的用例"（常量、用例名、正则三处都要过一遍）；② 已知常红名单要写明**文件名 + 用例名 + 为什么**（并行批次若也改同一用例：上游 89c57df7 已改单一真源常量 + 渲染面换算，取上游版本，别保留自己抄死的数字）；③ 全量跑出红时要先按文件名分组，看红是否"每组都能解释"，解释不了的那条就是新红。
+
+282. **`replace` 与逐段 `+=` 在长文本上产 ConsString（绳索），而这条串会被会话缓存长期持有 ⇒ 按字节算的 3 倍，且它在 decode 之后、没人再碰时就已经定型**（2026-10-30 MEM-16 实拍，`packages/kernel/src/encoding.ts`）：
+   `text.replace(/\r\n?/g, '\n')` 只要真发生替换且结果够长，V8 返回 `CONS_TWO_BYTE_STRING_TYPE`（`%DebugPrint` 实测驻留 **3.68 B/字符**、2,000 份 CRLF 正文 193.9 MB）；`out += line; out += term;` 同理。它不报错、`typeof` 照旧是 `string`，只是悄悄多占 1–2 倍。
+   修法：`indexOf('\r')` 探"有没有要改的"——真语料 3,818 份里只有 3 份含 `\r`，其余走**零拷贝**快路（返回入参本身）；有 `\r` 才 `split(/\r\n|\r|\n/).join('\n')`（`Array.prototype.join` 走 `StringBuilderConcat`，先算总长再分配一条平铺串，实测 2.00 B/字符）。真机冷建口径文本缓存 **230.6 → 202.9 MB（−27.7 / −12%）**。
+   ⇒ 别把这条记到热载头上：热载口径只有 420 文件 / 1.09 MB 正文，两棵树驻留都是 **1.3 MB**。**两种口径必须分开报**（同 PITFALLS 264）。
+
+283. **16 位字的 base64 解码按"4 字符一组固定吐 3 字节"⇒ 末尾的 `=` 与补零会多吐一枚，被"越界即损坏"判成整份快照拒收**（2026-10-30 MEM-15 实拍，`erb-parser/src/snapshot.ts`）：
+   候选哈希从 32 位压到 16 位后，字符串→`Uint16Array` 的末组不足 4 字符要靠 `=` 与补零凑；按组解会吐 3 字节（奇数），16 位字（偶数字节）于是攒满一枚**多出来的字**，接收端按"多吐即坏"判（fail-closed 本身是对的）⇒ 整份 v15 快照被拒、回退全量重扫，而症状只是"热载没命中"。
+   32 位字（4 字节）恰好总余 < 4、不会撞上——**别把这个巧合当判据**。修法：只消费 `bytes` 个真实字节（`remaining` 计数，解到 0 就停，见 `decodeCandidateWords`）。
+
+284. **量具的自举钩子把契约包 `@kojo/plugin-api` 按 `plugin-` 前缀指到 `packages/plugins/api`（不存在）——本树靠 node_modules 兜底照跑，换到"量改前"的游离树就 `ERR_MODULE_NOT_FOUND`**（2026-10-30 MEM-18 实拍，`tools/mem-readings.mjs`）：
+   AGENTS §六 规定的量"改前"方式是 `git worktree add <临时目录> HEAD --detach`，而那棵树**没有 node_modules**；钩子写成 `name.startsWith('plugin-') ? packages/plugins/<rest> : packages/<name>`，一刀切把 `@kojo/plugin-api`（真身在 `packages/plugin-api`，**是契约包不是插件**）指空 ⇒ 解析落回 Node 包解析 ⇒ 报"包没装"，看着像环境坏。
+   修法：先试 `packages/<name>`、存在就用它，不存在再退 `packages/plugins/<rest>`。另有一层：那棵树仍缺第三方依赖（`iconv-lite` / `react`，从各自的包目录解析）⇒ 用目录联接把本树各级 `node_modules` **只读镜像**过去即可，量完连树一起删（本批就是这么做的，见回执）。

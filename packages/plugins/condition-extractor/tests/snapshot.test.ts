@@ -116,6 +116,45 @@ describe('v3 按文件桶编解码', () => {
   });
 
   /**
+   * MEM-17（2026-10-30）：零依赖壳没有可物化的东西，装载时直接给数据属性 `[]`（不装访问器、
+   * 不写 WeakMap 区间）。口径必须与访问器分支逐条对齐，这条把它钉住。
+   */
+  it('零依赖壳：自有可枚举可配置的数据属性 `[]`，二次读同一枚数组，整体与直出等值', () => {
+    const src = new Map<string, FileBucket>([
+      [
+        '/z.ERB',
+        bucket(1, [
+          {
+            normalizedName: 'Z',
+            filePath: '/z.ERB',
+            startLine: 1,
+            predicateCount: 1,
+            unparsedCount: 0,
+            dependencies: [],
+          },
+        ]),
+      ],
+    ]);
+    const { back } = roundTrip(src);
+    const z = back!.buckets['/z.ERB']!.conds[0]!;
+    const desc = Object.getOwnPropertyDescriptor(z, 'dependencies')!;
+    expect(desc.get).toBeUndefined(); // 没有可装的东西 ⇒ 不装访问器
+    expect(desc.enumerable).toBe(true);
+    expect(desc.configurable).toBe(true);
+    expect(Object.keys(z).sort()).toEqual([
+      'dependencies',
+      'filePath',
+      'normalizedName',
+      'predicateCount',
+      'startLine',
+      'unparsedCount',
+    ]);
+    const first = z.dependencies;
+    expect(z.dependencies).toBe(first);
+    expect(z).toEqual(src.get('/z.ERB')!.conds[0]);
+  });
+
+  /**
    * 形状守卫（MEM-11，2026-10-30）：上一条钉的是**语义**（自有+可枚举访问器、读一次只建一次），
    * 这一条钉的是**别退回那个形状**。V8 的快路径只给"**共享**的常量访问器"留位置：
    * 访问器写在对象字面量里、或每枚现造一枚闭包，52,435 枚壳会全部转字典态、各挂一枚

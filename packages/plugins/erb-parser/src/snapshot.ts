@@ -158,8 +158,25 @@ import { detachString } from './scanner';
  * **迁移是免费的**：v13 的元组就在盘上，就地摊平即可，**不重读一个文件、不重扫一次 refs**
  * ——所以 v13 进 `SALVAGEABLE_VERSIONS`（`runsAreTuples: true`）。真语料实测迁移这一趟
  * **340~351 ms**（3,971 文件、0 条被丢），此后照常热。
+ *
+ * **v14 → v15**（MEM-15 批，2026-10-30）：两处**只换形态、不动语义**的改动，同一批落地：
+ * - **第 6 位（函数元组）从"一函数一枚 7 元组"摊成每文件一枚扁平流水**（步长 `FN_STRIDE`）。
+ *   真语料 110,073 个函数**全部**是 7 槽元组（v9 起 `nameColumn` 恒在），一枚数组要付
+ *   一枚 JSArray 头 + 一枚 FixedArray 底层；摊平后只剩 3,971 枚数组。隔离探针实测条目常驻
+ *   **51.22 → 47.85 MB，−3.37 MB**（含 `arrayBuffers`，见交付读数）。读取侧一律走 `forEachFn`。
+ * - **第 11 位（候选哈希集）从 32 位截成 16 位**（`Uint32Array` → `Uint16Array`）。
+ *   先回答"能不能从 refs 推导"：**不能**——真语料逐份对拍，3,971 份里 **3,704 份**的候选集
+ *   都含"正文里出现过、但当时不在名录里"的记号（合计 1,573,132 / 1,703,214 枚 = 92.4%），
+ *   refs 只记命中（341,779 条 / 每文件去重后 32.8 个名字），这些非命中记号**无法还原**；
+ *   而它们恰恰是"新加一个函数名"时唯一能证明"这份 refs 会不会变"的判据。
+ *   所以只能压窄编码：候选哈希取 `hashToken(name) >>> 16`（高 16 位），1,703,214 枚 × 2 B
+ *   = 3.25 MB（原 6.8 MB）。判据不退化：碰撞只会把"不在集合里"的记号判成在 ⇒ 多扫一次文件
+ *   （期望 ≈ 全库候选枚数 / 65536 ≈ 26 份），**不可能漏扫**（真在集合里 ⇒ 哈希必在集合里）。
+ * **迁移是免费的**：v14 的函数元组就地摊平、32 位候选哈希就地截高 16 位即可，
+ * **不重读一个文件、不重扫一次 refs** ——所以 v14 进 `SALVAGEABLE_VERSIONS`
+ * （`fnsAreTuples: true` / `candidateBits: 32`）。真语料实测迁移这一趟 **≈ 300 ms**（3,971 文件、0 条被丢）。
  */
-export const SNAPSHOT_VERSION = 14;
+export const SNAPSHOT_VERSION = 15;
 
 /**
  * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
@@ -174,6 +191,11 @@ export const SNAPSHOT_VERSION = 14;
  *   （v14 起改扁平，见 `runsAreTuples`）。v14 没动解析口径也没动语义，差异只是这三位的
  *   **存放形态**；旧形态能就地摊平成新形态（`paramTuplesToFlat` / `dimTuplesToFlat` /
  *   `labelTuplesToFlat`）⇒ 按纪律 1/2/3 准入，且**不落在保守侧**：迁移后语义逐条相同，一个文件都不用重扫。
+ * - `14`：同形（11 位）+ **第 6 位是"一函数一枚 7 元组"**（v15 起摊成扁平流水，见 `fnsAreTuples`）
+ *   + **第 11 位是 32 位哈希的 base64**（v15 起截成 16 位，见 `candidateBits`）。
+ *   两处都只换存放形态：元组就地摊平（`fnTuplesToFlat`）、32 位哈希就地取高 16 位
+ *   （`truncateCandidates`）⇒ 按纪律 1/2/3 准入，且**不落在保守侧**：一个文件都不用重扫。
+ *   唯一的口径变化是碰撞概率（16 位比 32 位多 0.014% → 0.7% 的"白扫一次"），方向仍是保守侧。
  * - `12`：同形（11 位）+ **第 8 位是四元组数组**（一条引用一枚 `[name, line, column, kind]`）。
  *   v13 没动解析口径也没动语义，差异只是这一位的**存放形态**；旧形态能就地摊平成新形态
  *   （`refsToFlat`）⇒ 按纪律 1/2/3 准入，且**不落在保守侧**：迁移后语义逐条相同，一个文件都不用重扫。
@@ -204,13 +226,21 @@ const SALVAGEABLE_VERSIONS: ReadonlyMap<
      * 三位在 v14 同一批换的形态 ⇒ 一个标志足够；`refsAreTuples` 单独一个（它是 v13 换的）。
      */
     readonly runsAreTuples: boolean;
+    /**
+     * 条目第 6 位（函数元组）是 v14 及更早的**"一函数一枚 7 元组"**（需就地摊平），
+     * 还是 v15 的每文件一枚扁平流水（直接用）。与 `runsAreTuples` 分开：函数元组是 v15 换的。
+     */
+    readonly fnsAreTuples: boolean;
+    /** 第 11 位（候选哈希集）的**字宽**：v14 及更早 32 位，v15 起 16 位（`candidateHash`） */
+    readonly candidateBits: 16 | 32;
   }
 > = new Map([
-  [14, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false }],
-  [13, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: true }],
-  [12, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: true, runsAreTuples: true }],
-  [11, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: true, refsAreTuples: true, runsAreTuples: true }],
-  [10, { arity: 10, hasRefsFp: true, hasCandidates: false, candidatesAreTokens: false, refsAreTuples: true, runsAreTuples: true }],
+  [15, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: false, candidateBits: 16 }],
+  [14, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: true, candidateBits: 32 }],
+  [13, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: true, fnsAreTuples: true, candidateBits: 32 }],
+  [12, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: true, runsAreTuples: true, fnsAreTuples: true, candidateBits: 32 }],
+  [11, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: true, refsAreTuples: true, runsAreTuples: true, fnsAreTuples: true, candidateBits: 32 }],
+  [10, { arity: 10, hasRefsFp: true, hasCandidates: false, candidatesAreTokens: false, refsAreTuples: true, runsAreTuples: true, fnsAreTuples: true, candidateBits: 32 }],
 ]);
 
 /** 单个文件的快照条目 */
@@ -242,16 +272,18 @@ export interface SnapshotEntry {
    */
   readonly refsNamesFp?: number;
   /**
-   * 该文件的**候选记号哈希集**（REFS-PROVENANCE，2026-10-22；v12 起换哈希，MEM-6）：
-   * 构建 `refs` 时被拿去问 `hasName` 的一切归一化记号（命中与否都算，含 `@` 定义名），
-   * 每枚取 32 位哈希（`hashToken`）。**空数组 = 已知没有候选**（与"未知"是两回事）。
+   * 该文件的**候选记号哈希集**（REFS-PROVENANCE，2026-10-22；v12 起换哈希，MEM-6；
+   * v15 起 16 位，MEM-15）：构建 `refs` 时被拿去问 `hasName` 的一切归一化记号
+   * （命中与否都算，含 `@` 定义名），每枚取 `candidateHash`（32 位 FNV 的**高 16 位**）。
+   * **空数组 = 已知没有候选**（与"未知"是两回事）。
    * 溯源巡检的逐文件判据：名录新旧对称差（`changedNamesBetween`）里若有名字落在本集
    * ⇒ 这份 refs 可能缺边/多边 ⇒ 重扫；反之可**证明** refs 逐字节不变 ⇒ 只补记新摘要、免扫
    * （`refsProvableUnchanged`）。**键缺席 = 未知**（v10 迁移条目）⇒ 一律重扫补候选。
    *
-   * 为什么不是字符串：见 `hashToken` 上面的长注（32.0 MB → 6.5 MB，判据不退化）。
+   * 为什么不是字符串、为什么不是 32 位：见 `hashToken` / `candidateHash` 上面的长注
+   * （32.0 MB → 6.5 MB → 3.25 MB，判据不退化）。
    */
-  readonly candidateHashes?: Uint32Array;
+  readonly candidateHashes?: Uint16Array;
 }
 
 /** 索引快照（按项目根一份） */
@@ -361,7 +393,7 @@ export const EMPTY_PARAMS: readonly (string | 0 | 1)[] = Object.freeze([]) as un
 /**
  * 按形参逐条遍历扁平流水（**步长布局的唯一出处**）。
  *
- * 用回调而不是生成器：`toFunction` 在 10 万级函数上各走一遍，生成器每条要付一次
+ * 用回调而不是生成器：`lazyFile` 的还原在 10 万级函数上各走一遍，生成器每条要付一次
  * `{value,done}` 分配（与 `forEachRef` 同一条理由）。
  */
 export function forEachParam(
@@ -400,6 +432,64 @@ export function forEachLabel(
   }
 }
 
+/**
+ * 函数流水的**步长**（v15 起）：每 7 格一个函数，依次是
+ * `名字, 起始行, 结束行, 形参流水, 位标, 注释块|null, 名字起点列(0 = 缺席)`。
+ *
+ * v14 及更早是"一函数一枚 7 元组"：真语料 110,073 个函数**全是 7 槽**（v9 起 `nameColumn`
+ * 恒在），一枚数组要付一枚 JSArray 头 + 一枚 FixedArray 底层（≈ 88 B），合计 ≈ 9.7 MB；
+ * 摊平后每文件一枚（3,971 枚）⇒ 7 格 × 8 B × 110,073 ≈ 6.2 MB，实测条目常驻 −3.37 MB。
+ *
+ * **末两格的哨兵**：`doc` 用 `null`（与"没有注释块"同义，第 6 位的老契约），
+ * `nameColumn` 用 **0**（合法列 1 基 ⇒ 0 不可能是真值）——扁平流水没有"长度到 5/6"这种
+ * 缺位表达，只能用哨兵；还原侧见 `lazyFile` 的 `functions` getter（0 ⇒ 不留键，绝不补 1）。
+ */
+export const FN_STRIDE = 7;
+
+/**
+ * 函数流水的一格：名字/行号/位标/列是标量，形参格是一枚**扁平形参流水**（`ParamRun`），
+ * 注释块格是 `string | null`。
+ */
+type FunctionSlot = string | number | null | ParamRun;
+
+/**
+ * 每文件一枚的函数流水（v15 起，步长 {@link FN_STRIDE}）。
+ * 布局只许经 {@link forEachFn} 读——两处各写一遍 `i += 7` 就是第二判据。
+ */
+export type FunctionRun = FunctionSlot[];
+
+/**
+ * 按函数逐条遍历扁平流水（**步长布局的唯一出处**）。
+ *
+ * `doc` 交 `string | null`、`nameColumn` 交 `number`（0 = 这个索引没有这个事实）。
+ * 用回调而不是生成器：`aggregateIndex` / `snapshotStats` / `entryNamesOf` 在 11 万级函数上
+ * 各走一遍，生成器每条要付一次 `{value,done}` 分配（与 `forEachRef` 同一条理由）。
+ */
+export function forEachFn(
+  run: readonly FunctionSlot[],
+  visit: (
+    name: string,
+    startLine: number,
+    endLine: number,
+    params: readonly (string | number)[],
+    flags: number,
+    doc: string | null,
+    nameColumn: number,
+  ) => void,
+): void {
+  for (let i = 0; i < run.length; i += FN_STRIDE) {
+    visit(
+      run[i] as string,
+      run[i + 1] as number,
+      run[i + 2] as number,
+      run[i + 3] as readonly (string | number)[],
+      run[i + 4] as number,
+      run[i + 5] as string | null,
+      run[i + 6] as number,
+    );
+  }
+}
+
 /** `[形参名, 是否有默认值(0|1)]`——v13 及更早的盘上形态，只剩"迁移时认得出旧形态"一个用途 */
 type ParamTuple = [string, 0 | 1];
 /** 扁平形参流水（v14 起，步长 {@link PARAM_STRIDE}）：`[名, 0|1, 名, 0|1, …]` */
@@ -421,6 +511,10 @@ type LabelRun = (string | number)[];
 /**
  * `[原名, 起始行, 结束行, 形参, 位标, 注释块?, 名字起点列?]`；位标 bit0 = 表达式函数
  *
+ * **v14 及更早的盘上形态**（一函数一枚 7 元组）：v15 起每文件一枚扁平流水
+ * （{@link FunctionRun}，步长 {@link FN_STRIDE}），这一条只剩"迁移 v14 及更早的条目时
+ * 认得出旧形态"一个用途（见 `fnTuplesToFlat`）。
+ *
  * 第 4 位（下标 3）v14 起是**扁平形参流水**（{@link PARAM_STRIDE}），v13 及更早是
  * "一参一枚二元组"（见 `runsAreTuples`）。空表 = {@link EMPTY_PARAMS}（共用冻结实例）。
  *
@@ -438,13 +532,15 @@ type FunctionTuple = [string, number, number, ParamRun, number, (string | null)?
  * 这一条只剩"迁移 v12 条目时认得出旧形态"这一个用途。
  */
 type RefTuple = [string, number, number, 0 | 1 | 2];
-/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明流水, 引用流水, 标签流水, refs 名录摘要, 候选记号集]`
+/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数流水, 声明流水, 引用流水, 标签流水, refs 名录摘要, 候选哈希集]`
  * 第 10 位 v7 起才有；第 11 位（候选集）v11 起才有：
- * - **v12 起内存里是 `Uint32Array`**（候选记号的哈希集，见上面的基元注）；
- * - **v11 的盘上是 `'\n'` 连接的记号串**，v12 的盘上是哈希集的 base64 —— 两者都是 `string`，
- *   靠信封版本区分（`SALVAGEABLE_VERSIONS` 的 `candidatesAreTokens`）；
+ * - **v15 起内存里是 `Uint16Array`**（候选记号的 16 位哈希集，见 `candidateHash`）；
+ *   v12~v14 内存里是 `Uint32Array`（迁移时截高 16 位，见 `truncateCandidates`）；
+ * - **v11 的盘上是 `'\n'` 连接的记号串**，v12 起的盘上是哈希集的 base64 —— 两者都是 `string`，
+ *   靠信封版本区分（`SALVAGEABLE_VERSIONS` 的 `candidatesAreTokens` / `candidateBits`）；
  * - `null` = 候选未知。
  * v6 的盘上元组是前 9 位（`salvageSnapshot` 按版本表处理）；
+ * v15 起第 6 位（函数）是**扁平流水**、v14 及更早是"一函数一枚 7 元组"（`fnsAreTuples`）；
  * v14 起第 7/9 位（声明 / 标签）是**扁平流水**，v13 及更早是"一条一枚三元组"（`runsAreTuples`） */
 type EntryTuple = [
   number | null,
@@ -452,34 +548,40 @@ type EntryTuple = [
   number,
   number,
   0 | 1,
-  FunctionTuple[],
+  FunctionRun,
   DimRun,
   FileRefs | RefTuple[],
   LabelRun,
   number | null,
-  string | Uint32Array | null,
+  string | Uint16Array | Uint32Array | null,
 ];
 
 const FLAG_EXPRESSION = 1;
 
-/* ================= 候选记号集：从 17M 字符的串换成哈希集（MEM-6） =================
+/* ============ 候选记号集：从 17M 字符的串换成 16 位哈希集（MEM-6 → MEM-15） ============
  *
- * 为什么换：v11 把每文件的候选记号集存成 `'\n'` 连接的**一个字符串**。真语料实测
+ * 为什么换（MEM-6）：v11 把每文件的候选记号集存成 `'\n'` 连接的**一个字符串**。真语料实测
  * 3,971 份合计 **16,968,188 字符**；候选记号含日文标识符 ⇒ V8 走两字节串 ⇒ 稳态堆
  * **32.0 MB**（消融实测 `candidates 候选集 -32.0MB`），而它只在"名录变了"那一刻被读。
  * 换成每文件一枚 32 位哈希数组：1,703,214 枚 × 4 B = **6.5 MB**，省 **≈25 MB**。
  *
  * 为什么"哈希"而不是"压缩串"：`refsProvableUnchanged` 要回答的只是**成员判定**
- * （"差集里有没有记号落在这份候选集里"），不需要还原原串。32 位哈希的唯一风险是**碰撞**，
+ * （"差集里有没有记号落在这份候选集里"），不需要还原原串。哈希的唯一风险是**碰撞**，
  * 而碰撞的方向只有一种：**把不在集合里的记号判成在** ⇒ 多扫一次文件。判据因此仍然
  * fail-closed——**不可能漏扫**（真在集合里 ⇒ 哈希必在集合里）。
  * 真语料实测：1,189,209 个全局唯一记号 → 1,189,047 个唯一哈希（162 处碰撞，占 0.014%）。
  *
- * 为什么 32 位够：碰撞的代价是"白扫一次"，不是"错数据"。换成 64 位要多花 6.5 MB 换
- * 0.014% 的免扫率，不值。
+ * 为什么收窄到 16 位（MEM-15）：先回答"这份集合能不能从该文件的 `refs` 推导出来"——
+ * **不能**。真语料逐份对拍（3,971 份）：候选集里 **1,573,132 / 1,703,214 枚（92.4%）**
+ * 是"正文里出现过、但当时不在名录里"的记号，refs 只记命中（341,779 条 / 每文件去重后
+ * 32.8 个名字），非命中记号**无法从 refs 还原**；而它们恰恰是"新加一个函数名"时唯一
+ * 能证明"这份 refs 会不会变"的判据（3,704 份文件的候选集真包含 refs 之外的东西）。
+ * ⇒ 只能压窄编码：取 `hashToken` 的**高 16 位**（`candidateHash`），1.7M × 2 B = 3.25 MB。
+ * 代价算清楚：单文件候选集 ~429 枚 ⇒ 16 位空间（65,536）里一次名录变更的期望误判
+ * ≈ 1.7M / 65,536 ≈ **26 份文件白扫一次**（32 位时 162 处碰撞、几乎为 0）；方向仍是保守侧。
  *
  * 为什么盘上是 base64 而不是 JSON 数字数组：1.7M 个十进制数字 ≈ 17 MB 文本，
- * base64 是 9.1 MB，且解码是"一次扫过"，不用 `split`/`map` 造 170 万个中间值。
+ * base64 是 4.5 MB（16 位），且解码是"一次扫过"，不用 `split`/`map` 造 170 万个中间值。
  */
 
 /**
@@ -498,6 +600,19 @@ export function hashToken(value: string): number {
   return h >>> 0;
 }
 
+/**
+ * 候选集的**窄编码**：`hashToken` 的**高 16 位**（MEM-15）。
+ *
+ * 为什么取高位：FNV-1a 的低位只与输入的低位强相关（末字节的雪崩最弱），高位混得更开；
+ * 取高位不会把同一批名字挤到少数几个桶里。
+ *
+ * **判据面唯一入口**：候选集与"变掉的名字集"必须由**同一个函数**算哈希，
+ * 各写一遍 `>>> 16` 就是第二判据（漂移表现：免扫判据把一切判成"可证不变" ⇒ 少扫、不报错）。
+ */
+export function candidateHash(value: string): number {
+  return hashToken(value) >>> 16;
+}
+
 const B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 /** 解码用的反查表（`-1` = 非法字符） */
 const B64_INVERSE = (() => {
@@ -507,21 +622,21 @@ const B64_INVERSE = (() => {
 })();
 
 /**
- * `Uint32Array` → base64。每枚哈希固定写 4 字节、**高位在前**。
+ * 哈希数组 → base64。每枚哈希固定写 `wordBytes` 字节、**高位在前**。
  *
  * 不用 `new Uint8Array(arr.buffer)` 直接取视图：那是**平台字节序**，小端机器上写出来的盘
  * 换到大端机器就读反了（虽然今天遇不到，但快照是跨轮、跨机器的数据，不该藏这种依赖）。
  */
-export function encodeCandidateHashes(hashes: Uint32Array): string {
+function encodeCandidateWords(hashes: Uint16Array | Uint32Array, wordBytes: 2 | 4): string {
   const n = hashes.length;
   if (n === 0) return '';
-  const codes = new Uint8Array(Math.ceil((n * 4) / 3) * 4);
+  const codes = new Uint8Array(Math.ceil((n * wordBytes) / 3) * 4);
   let o = 0;
   let buf = 0;
   let bits = 0;
   for (let k = 0; k < n; k++) {
     const v = hashes[k]!;
-    for (let shift = 24; shift >= 0; shift -= 8) {
+    for (let shift = wordBytes * 8 - 8; shift >= 0; shift -= 8) {
       buf = (buf << 8) | ((v >>> shift) & 0xff);
       bits += 8;
       if (bits === 24) {
@@ -541,7 +656,7 @@ export function encodeCandidateHashes(hashes: Uint32Array): string {
     codes[o++] = bits === 8 ? 61 : B64_ALPHABET.charCodeAt((buf >>> 6) & 63);
     codes[o++] = 61;
   }
-  // 分块 `fromCharCode`：逐字符 `+=` 在 9 MB 上是几万次 rope 拼接，慢一个量级
+  // 分块 `fromCharCode`：逐字符 `+=` 在几 MB 上是几万次 rope 拼接，慢一个量级
   const CHUNK = 8192;
   let out = '';
   for (let i = 0; i < o; i += CHUNK) {
@@ -550,27 +665,36 @@ export function encodeCandidateHashes(hashes: Uint32Array): string {
   return out;
 }
 
+/** `Uint16Array` → base64（v15 起的盘上形态） */
+export function encodeCandidateHashes(hashes: Uint16Array): string {
+  return encodeCandidateWords(hashes, 2);
+}
+
 /**
- * base64 → `Uint32Array`（`encodeCandidateHashes` 的逆）。非法字符 / 长度不是 4 的倍数 ⇒ `null`
- * （调用方据此判该条目结构不符，走 salvage 的"只丢这一条"）。
+ * base64 → 哈希数组（`encodeCandidateWords` 的逆）。非法字符 / 字节数不是 `wordBytes`
+ * 的整数倍 ⇒ `null`（调用方据此判该条目结构不符，走 salvage 的"只丢这一条"）。
  *
  * **按 4 字符一组解**（24 位一组），不用"逐字符累积 `buf`"那种写法：后者在 `bits` 到 30 时
  * 再 `<< 6` 会变成 36 位，而 JS 的 `<<` 是 **int32** 运算 ⇒ 高位静默丢失。
  * 这个洞在单测里一测就现形（哈希全变、免扫判据全部误判为"可证不变"），
  * 但它只表现为"少扫了几个文件"，**不会报错**——所以这里宁可多写几行。
  */
-export function decodeCandidateHashes(text: string): Uint32Array | null {
+function decodeCandidateWords(text: string, wordBytes: 2 | 4): Uint16Array | Uint32Array | null {
   const len = text.length;
   if (len % 4 !== 0) return null;
   let pad = 0;
   if (len > 0 && text.charCodeAt(len - 1) === 61) pad++;
   if (len > 1 && text.charCodeAt(len - 2) === 61) pad++;
   const bytes = (len / 4) * 3 - pad;
-  if (bytes % 4 !== 0) return null;
-  const out = new Uint32Array(bytes / 4);
+  if (bytes % wordBytes !== 0) return null;
+  const out = wordBytes === 2 ? new Uint16Array(bytes / 2) : new Uint32Array(bytes / 4);
   let o = 0;
-  let acc = 0; // 当前哈希已拼好的字节数（0..3）
+  let acc = 0; // 当前哈希已拼好的字节数（0..wordBytes-1）
   let word = 0;
+  // **只消费 `bytes` 个真实字节**：末尾那组的 `=` / 补零位不是数据。按 4 字符一组解
+  // 时一组固定吐 3 个字节，16 位字（偶数 B）会让尾部补零攒满一个字 ⇒ 多吐一枚、
+  // 被 `o >= out.length` 判成 null（32 位字恰好总余 < 4 才不会撞上，别把这个巧合当判据）。
+  let remaining = bytes;
   for (let i = 0; i < len; i += 4) {
     let trip = 0;
     for (let k = 0; k < 4; k++) {
@@ -584,10 +708,12 @@ export function decodeCandidateHashes(text: string): Uint32Array | null {
       trip = (trip << 6) | v;
     }
     for (let shift = 16; shift >= 0; shift -= 8) {
+      if (remaining === 0) break;
+      remaining--;
       const b = (trip >>> shift) & 0xff;
       word = (word << 8) | b;
       acc++;
-      if (acc === 4) {
+      if (acc === wordBytes) {
         if (o >= out.length) return null;
         out[o++] = word >>> 0;
         word = 0;
@@ -598,22 +724,45 @@ export function decodeCandidateHashes(text: string): Uint32Array | null {
   return o === out.length ? out : null;
 }
 
+/** base64 → `Uint16Array`（v15 起的盘上形态；空串 = 已知没有候选） */
+export function decodeCandidateHashes(text: string): Uint16Array | null {
+  return decodeCandidateWords(text, 2) as Uint16Array | null;
+}
+
 /**
- * v11 的候选记号串（`'\n'` 连接）→ 哈希集。**v11 → v12 的迁移路径**：
+ * base64 → `Uint32Array`（v12~v14 的盘上形态）。**只剩"迁移时认得出旧形态"一个用途**：
+ * 解出来立刻 `truncateCandidates` 成 16 位，不重读一个文件、不重扫一次 refs。
+ */
+function decodeCandidateHashes32(text: string): Uint32Array | null {
+  return decodeCandidateWords(text, 4) as Uint32Array | null;
+}
+
+/**
+ * 32 位候选集 → 16 位（**v14 → v15 的免费迁移**）：逐枚取高 16 位，与 `candidateHash`
+ * 逐位同值（`candidateHash(n) === hashToken(n) >>> 16`）。
+ */
+function truncateCandidates(hashes: Uint32Array): Uint16Array {
+  const out = new Uint16Array(hashes.length);
+  for (let i = 0; i < hashes.length; i++) out[i] = hashes[i]! >>> 16;
+  return out;
+}
+
+/**
+ * v11 的候选记号串（`'\n'` 连接）→ 哈希集。**v11 → v12（→ v15）的迁移路径**：
  * 只把已有的串就地哈希，不重读一个文件、不重扫一次 refs。
  */
-export function candidateHashesFromTokens(joined: string): Uint32Array {
-  if (joined.length === 0) return new Uint32Array(0);
+export function candidateHashesFromTokens(joined: string): Uint16Array {
+  if (joined.length === 0) return new Uint16Array(0);
   const out: number[] = [];
   let i = 0;
   for (;;) {
     const nl = joined.indexOf('\n', i);
     const seg = nl === -1 ? joined.slice(i) : joined.slice(i, nl);
-    out.push(hashToken(seg));
+    out.push(candidateHash(seg));
     if (nl === -1) break;
     i = nl + 1;
   }
-  return Uint32Array.from(out);
+  return Uint16Array.from(out);
 }
 
 /**
@@ -657,38 +806,27 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       raw[7] === (e.refs as unknown) &&
       raw.length === 11 &&
       raw[9] === (e.refsNamesFp ?? null) &&
-      // 候选位：内存形态是 `Uint32Array`，与元组第 11 位**是同一枚**（decode 时零拷贝别名）
+      // 候选位：内存形态是 `Uint16Array`，与元组第 11 位**是同一枚**（decode 时零拷贝别名）
       // ⇒ 身份比较即可，不必重新编码一遍再比字符串
       raw[10] === (e.candidateHashes ?? null) &&
       // functions/dims 仍是 accessor = 惰性外壳未被消费方动过 ⇒ 元组即真相
       Object.getOwnPropertyDescriptor(e.file, 'functions')?.get !== undefined &&
       Object.getOwnPropertyDescriptor(e.file, 'dims')?.get !== undefined
     ) {
-      // **浅拷一层**：内存元组的第 11 位是 `Uint32Array`（不能直接 JSON），盘上要 base64。
-      // 浅拷保住了 `[5]`（函数元组数组）等各位的**身份**——快路径要省的正是"重建 10 万级
-      // 函数元组"，而拷 11 个槽只付一次 3971 条的小钱。
+      // **浅拷一层**：内存元组的第 11 位是 `Uint16Array`（不能直接 JSON），盘上要 base64。
+      // 浅拷保住了 `[5]`（函数流水）等各位的**身份**——快路径要省的正是"重建 10 万级
+      // 函数流水"，而拷 11 个槽只付一次 3971 条的小钱。
       const disk = raw.slice() as unknown[];
       const hashes = raw[10];
-      disk[10] = hashes instanceof Uint32Array ? encodeCandidateHashes(hashes) : null;
+      disk[10] = hashes instanceof Uint16Array ? encodeCandidateHashes(hashes) : null;
       out[path] = disk as unknown as EntryTuple;
       continue;
     }
-    const fns: FunctionTuple[] = e.file.functions.map((f): FunctionTuple => {
-      const flags = f.isExpressionFunction ? FLAG_EXPRESSION : 0;
-      // 空表共用一枚冻结实例（90,719/110,073 个函数没有形参，见 `EMPTY_PARAMS`）
-      const params: ParamRun = f.params.length === 0 ? (EMPTY_PARAMS as ParamRun) : paramsFromObjects(f.params);
-      const fn: FunctionTuple = [f.name, f.startLine, f.endLine, params, flags];
-      // 可选位从前往后排：要写第 7 位（列）就必须先把第 6 位（注释块）占住（无注释 = null）
-      if (f.nameColumn !== undefined) {
-        fn.push(f.docComment ?? null, f.nameColumn);
-      } else if (f.docComment !== undefined) {
-        fn.push(f.docComment);
-      }
-      return fn;
-    });
+    const fns = fnsFromObjects(e.file.functions);
     const dims = dimsFromObjects(e.file.dims);
     // refs 与标签同理（懒外壳是别名，重扫结果本来就是同形元组）——不再逐条复制。
-    // v13 起 refs 是扁平流水、v14 起标签也是扁平流水，**盘上与内存同形**（不再有元组壳），所以这里零转换。
+    // v13 起 refs 是扁平流水、v14 起标签也是扁平流水、v15 起函数也是扁平流水，
+    // **盘上与内存同形**（不再有元组壳），所以这里零转换。
     const refs = e.refs ?? [];
     const labels = labelsFromObjects(e.file.labels ?? []);
     out[path] = [
@@ -703,14 +841,14 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       labels,
       e.refsNamesFp ?? null,
       // 候选集：键缺席（v10 迁移条目没补扫过）= 未知 = 盘上 null，**不猜空串**。
-      // v12 起盘上是哈希集的 base64（空集 = `''`，仍是"已知没有"）
+      // v12 起盘上是哈希集的 base64（空集 = `''`，仍是"已知没有"；v15 起是 16 位哈希的 base64）
       e.candidateHashes === undefined ? null : encodeCandidateHashes(e.candidateHashes),
     ];
   }
   return out;
 }
 
-/** 当前版本条目元组的元数（v11 = 11；第 10 位 = refs 名录摘要、第 11 位 = 候选记号集） */
+/** 当前版本条目元组的元数（v11 起 = 11；第 10 位 = refs 名录摘要、第 11 位 = 候选哈希集） */
 const CURRENT_ARITY = 11;
 
 function isRefTuple(t: unknown): t is RefTuple {
@@ -884,14 +1022,84 @@ function isFunctionTuple(t: unknown, runsAreTuples: boolean): t is FunctionTuple
 }
 
 /**
- * **逐条目**结构校验（`arity` / `refsAreTuples` / `runsAreTuples` 由版本表给：
- * v14 = 11 位扁平流水 + 扁平形参、v13 = 11 位扁平流水 + 二元组形参、v10 = 10 位）。
- * 通过 ⇒ 归一成 11 位、第 8 位归成**扁平**流水、函数第 4 位归成**扁平**形参的元组
- * （v10 缺的第 11 位补 `null` = 候选未知，**不猜值**；v12 及更早的四元组、v13 的形参二元组
- * 都就地摊平，**不重扫**）；不通过 ⇒ null。
+ * 函数流水的逐格校验（v15 起）：每 7 格 = `名字(串), 起行, 止行, 形参流水, 位标, 注释块|null, 名字列`。
+ *
+ * 末两格的哨兵口径见 {@link FN_STRIDE}：`doc` 只能是 `string | null`（老形态的长度 5/6 在
+ * 扁平流水里没有对应表达），`nameColumn` 必须是 `0`（= 没有这个事实）或 ≥1 的整数。
+ * 校验与其它各位同一条纪律：**一格不符 ⇒ 整条判过期**，不跳过坏的继续用好的。
+ */
+function isFunctionRun(run: unknown): run is FunctionRun {
+  if (!Array.isArray(run) || run.length % FN_STRIDE !== 0) return false;
+  for (let i = 0; i < run.length; i += FN_STRIDE) {
+    if (typeof run[i] !== 'string') return false;
+    if (typeof run[i + 1] !== 'number' || typeof run[i + 2] !== 'number') return false;
+    if (!isParamRun(run[i + 3])) return false;
+    if (typeof run[i + 4] !== 'number') return false;
+    const doc = run[i + 5];
+    if (doc !== null && typeof doc !== 'string') return false;
+    const col = run[i + 6];
+    if (typeof col !== 'number' || !Number.isInteger(col) || col < 0) return false;
+  }
+  return true;
+}
+
+/** `ErbFunction[]` → 每文件一枚扁平流水（编码侧） */
+function fnsFromObjects(fns: readonly ErbFunction[]): FunctionRun {
+  const out: FunctionRun = new Array(fns.length * FN_STRIDE);
+  let o = 0;
+  for (const f of fns) {
+    out[o++] = f.name;
+    out[o++] = f.startLine;
+    out[o++] = f.endLine;
+    // 空表共用一枚冻结实例（90,719/110,073 个函数没有形参，见 `EMPTY_PARAMS`）
+    out[o++] = f.params.length === 0 ? (EMPTY_PARAMS as ParamRun) : paramsFromObjects(f.params);
+    out[o++] = f.isExpressionFunction ? FLAG_EXPRESSION : 0;
+    out[o++] = f.docComment ?? null;
+    // 0 = 这个索引没有"名字起点列"这个事实（与还原侧同一条口径，绝不补 1）
+    out[o++] = f.nameColumn ?? 0;
+  }
+  return out;
+}
+
+/**
+ * v14 及更早的"一函数一枚 7 元组" → v15 的扁平流水（**就地摊平，不重扫**）。
+ *
+ * 迁移是免费的：字段顺序、名字、行号、形参、位标一字未改，只是把 110,073 枚 7 元组摊成
+ * 3,971 枚长数组——这正是 MEM-15 要省的那笔数组头（≈3.4 MB）。
+ * 调用前 `validateEntryTuple` 已把形参位摊成扁平流水（`runsAreTuples` 分支），
+ * 所以这里的第 4 格直接搬引用（空表也已是共用冻结实例）。
+ */
+function fnTuplesToFlat(tuples: readonly FunctionTuple[]): FunctionRun {
+  const out: FunctionRun = new Array(tuples.length * FN_STRIDE);
+  let o = 0;
+  for (const t of tuples) {
+    out[o++] = t[0];
+    out[o++] = t[1];
+    out[o++] = t[2];
+    out[o++] = t[3];
+    out[o++] = t[4];
+    out[o++] = t[5] ?? null;
+    // 长度 5/6 的老元组没有这一位 ⇒ 0（"没有这个事实"），不猜 1
+    out[o++] = t[6] ?? 0;
+  }
+  return out;
+}
+
+/**
+ * **逐条目**结构校验（`arity` / `refsAreTuples` / `runsAreTuples` / `fnsAreTuples` 由版本表给：
+ * v15 = 11 位 + 函数扁平流水、v14 = 11 位 + 函数 7 元组、v13 = 11 位 + 二元组形参、v10 = 10 位）。
+ * 通过 ⇒ 归一成 11 位、第 8 位归成**扁平**流水、函数位归成**扁平流水**（内含扁平形参）的元组
+ * （v10 缺的第 11 位补 `null` = 候选未知，**不猜值**；v12 及更早的四元组、v13 的形参二元组、
+ * v14 的函数元组都就地摊平，**不重扫**）；不通过 ⇒ null。
  * 校验是急的：函数/声明/引用/标签每一位都查完才返回（懒还原不打折 fail-closed）。
  */
-function validateEntryTuple(t: unknown, arity: number, refsAreTuples: boolean, runsAreTuples: boolean): EntryTuple | null {
+function validateEntryTuple(
+  t: unknown,
+  arity: number,
+  refsAreTuples: boolean,
+  runsAreTuples: boolean,
+  fnsAreTuples: boolean,
+): EntryTuple | null {
   if (!Array.isArray(t) || t.length !== arity) return null;
   if (t[0] !== null && typeof t[0] !== 'number') return null;
   if (t[1] !== null && typeof t[1] !== 'number') return null;
@@ -901,12 +1109,14 @@ function validateEntryTuple(t: unknown, arity: number, refsAreTuples: boolean, r
   // 第 10 位（refs 名录摘要）：v7 起才有（表内版本都 ≥10；arity 9 的调用只剩测试面上的旧形态语义）
   if (arity >= 10 && t[9] !== null && typeof t[9] !== 'number') return null;
   // 第 11 位（候选集）：v11 起才有；v10 迁移条目归一时补 null = 候选未知（保守侧，不猜空串）。
-  // v12 起内存形态是 `Uint32Array`（盘上仍是 string）⇒ 两种都认：校验发生在"盘上 JSON"这一侧，
-  // 但同一函数也被用来复核内存元组（`encodeEntries` 快路径判据），别把内存形态判成损坏。
+  // 内存形态是 `Uint16Array`（v15 起；`Uint32Array` 是 v12~v14 的内存形态、迁移中途）⇒ 三种都认：
+  // 校验发生在"盘上 JSON"这一侧，但同一函数也被用来复核内存元组（`encodeEntries` 快路径判据），
+  // 别把内存形态判成损坏。
   if (
     arity === CURRENT_ARITY &&
     t[10] !== null &&
     typeof t[10] !== 'string' &&
+    !(t[10] instanceof Uint16Array) &&
     !(t[10] instanceof Uint32Array)
   ) {
     return null;
@@ -915,7 +1125,12 @@ function validateEntryTuple(t: unknown, arity: number, refsAreTuples: boolean, r
   const dims = t[6] as unknown[];
   const refs = t[7] as unknown[];
   const labels = t[8] as unknown[];
-  if (!fns.every((f) => isFunctionTuple(f, runsAreTuples))) return null;
+  // 函数位：v15 是扁平流水，v14 及更早是"一函数一枚 7 元组"。两种都逐格查完。
+  if (fnsAreTuples) {
+    if (!fns.every((f) => isFunctionTuple(f, runsAreTuples))) return null;
+  } else if (!isFunctionRun(fns)) {
+    return null;
+  }
   // 声明流水：v14 是扁平（步长 3），v13 及更早是三元组数组。两种都逐格查完。
   if (runsAreTuples) {
     if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
@@ -942,13 +1157,20 @@ function validateEntryTuple(t: unknown, arity: number, refsAreTuples: boolean, r
   // 形参空表一律归成共用冻结实例（v13 的 `[]` 每份都是新的，共用能省 9 万枚数组头）。
   // 注意这里改的是**盘上元组本身**（与 `normalized[7] = refsToFlat(...)` 同一条就地纪律），
   // 为的是保住 `encodeEntries` 落盘快路径的"元组还是盘上那个对象"身份判据。
-  if (runsAreTuples) {
-    for (const fn of fns as unknown as FunctionTuple[]) {
-      fn[3] = paramTuplesToFlat(fn[3] as unknown as ParamTuple[]);
+  if (fnsAreTuples) {
+    if (runsAreTuples) {
+      for (const fn of fns as unknown as FunctionTuple[]) {
+        fn[3] = paramTuplesToFlat(fn[3] as unknown as ParamTuple[]);
+      }
+    } else {
+      for (const fn of fns as unknown as FunctionTuple[]) {
+        if (fn[3].length === 0 && fn[3] !== (EMPTY_PARAMS as ParamRun)) fn[3] = EMPTY_PARAMS as ParamRun;
+      }
     }
   } else {
-    for (const fn of fns as unknown as FunctionTuple[]) {
-      if (fn[3].length === 0 && fn[3] !== (EMPTY_PARAMS as ParamRun)) fn[3] = EMPTY_PARAMS as ParamRun;
+    for (let i = 0; i < fns.length; i += FN_STRIDE) {
+      const p = fns[i + 3] as ParamRun;
+      if (p.length === 0 && p !== (EMPTY_PARAMS as ParamRun)) fns[i + 3] = EMPTY_PARAMS as ParamRun;
     }
   }
   // 当前形态**原样返回**（不复制）：`encodeEntries` 的落盘快路径靠"元组还是盘上那个对象"来免重建，
@@ -960,26 +1182,8 @@ function validateEntryTuple(t: unknown, arity: number, refsAreTuples: boolean, r
     normalized[6] = dimTuplesToFlat(dims as unknown as DimTuple[]);
     normalized[8] = labelTuplesToFlat(labels as unknown as LabelTuple[]);
   }
+  if (fnsAreTuples) normalized[5] = fnTuplesToFlat(fns as unknown as FunctionTuple[]);
   return normalized as unknown as EntryTuple;
-}
-
-function toFunction(path: string, [name, startLine, endLine, params, flags, doc, nameColumn]: FunctionTuple): ErbFunction {
-  const list: ErbParam[] = [];
-  forEachParam(params, (pname, hasDefault) => list.push({ name: pname, hasDefault }));
-  return {
-    name,
-    normalizedName: name.toUpperCase(),
-    params: list,
-    startLine,
-    endLine,
-    filePath: path,
-    // 列缺席（v8 及更早的盘上条目 / 编码时算不出）⇒ **不留这个键**：定义腿据此退化成只给行。
-    // 这里最不该做的事是 `nameColumn ?? 1`——那会把"不知道"写成"就在行首"，假事实一旦落盘就再也查不出来。
-    ...(nameColumn === undefined || nameColumn === null ? {} : { nameColumn }),
-    // scanner 对每个函数都显式写这个布尔（false 也在），还原必须同样显式，不能缺键
-    isExpressionFunction: (flags & FLAG_EXPRESSION) !== 0,
-    ...(typeof doc === 'string' ? { docComment: doc } : {}),
-  };
 }
 
 /**
@@ -1004,7 +1208,27 @@ function lazyFile(path: string, tuple: EntryTuple): ErbFile {
         }
       : {}),
     get functions(): ErbFunction[] {
-      return materialize(file, 'functions', () => fns.map((t) => toFunction(path, t)));
+      return materialize(file, 'functions', () => {
+        // 扁平流水 → `ErbFunction`（**唯一还原处**）：步长只经 `forEachFn` 走
+        // （`FN_STRIDE` 的唯一出处），与 `parseErbText` 的产物逐字段同形同值。
+        const out: ErbFunction[] = [];
+        forEachFn(fns, (name, startLine, endLine, params, flags, doc, nameColumn) => {
+          const list: ErbParam[] = [];
+          forEachParam(params, (pname, hasDefault) => list.push({ name: pname, hasDefault }));
+          out.push({
+            name,
+            normalizedName: name.toUpperCase(),
+            params: list,
+            startLine,
+            endLine,
+            filePath: path,
+            ...(nameColumn === 0 ? {} : { nameColumn }),
+            isExpressionFunction: (flags & FLAG_EXPRESSION) !== 0,
+            ...(doc === null ? {} : { docComment: doc }),
+          });
+        });
+        return out;
+      });
     },
     get dims(): ErbDim[] {
       return materialize(file, 'dims', () => {
@@ -1030,14 +1254,16 @@ function lazyFile(path: string, tuple: EntryTuple): ErbFile {
  * 引用名（重复量最大，61 万条引用只有 10 万个不同名字）、标签名。
  */
 function internEntryStrings(tuple: EntryTuple, interner: NameInterner): void {
-  for (const fn of tuple[5]) {
-    fn[0] = interner.intern(fn[0]);
-    const doc = fn[5];
-    if (typeof doc === 'string') fn[5] = interner.intern(doc);
+  // 函数流水是扁平数组（v15）：名字在第 0 格、注释块在第 5 格，步长 `FN_STRIDE`
+  const fns = tuple[5];
+  for (let i = 0; i < fns.length; i += FN_STRIDE) {
+    fns[i] = interner.intern(fns[i] as string);
+    const doc = fns[i + 5];
+    if (typeof doc === 'string') fns[i + 5] = interner.intern(doc);
     // 形参是扁平流水（v14）：名字在偶数格，步长 `PARAM_STRIDE`。空表是共用冻结实例
     // （长度 0 ⇒ 循环体一次都不进，不会往冻结数组上写）。
-    const params = fn[3];
-    for (let i = 0; i < params.length; i += PARAM_STRIDE) params[i] = interner.intern(params[i] as string);
+    const params = fns[i + 3] as ParamRun;
+    for (let k = 0; k < params.length; k += PARAM_STRIDE) params[k] = interner.intern(params[k] as string);
   }
   // 声明 / 标签也是扁平流水（v14）：名字在第 0 格，步长 `DIM_STRIDE` / `LABEL_STRIDE`
   const dims = tuple[6];
@@ -1050,18 +1276,38 @@ function internEntryStrings(tuple: EntryTuple, interner: NameInterner): void {
 }
 
 /**
- * 把第 11 位（候选集）从**盘上形态**翻成**内存形态**（`Uint32Array`），就地写回元组。
+ * 把第 11 位（候选集）从**盘上形态**翻成**内存形态**（`Uint16Array`），就地写回元组。
  *
  * 就地而不重建：与 `internEntryStrings` 同一条理由——`encodeEntries` 的落盘快路径靠
- * "元组还是盘上那个对象"来免重建 10 万级函数元组，重建元组会把这个身份判据废掉。
+ * "元组还是盘上那个对象"来免重建 10 万级函数流水，重建元组会把这个身份判据废掉。
  *
- * `tokens`（v11 的记号串）走 `candidateHashesFromTokens`（免费的版本迁移）；
- * 否则按 base64 解；解不出来 ⇒ 返回 `false`（调用方判该条目结构不符，只丢这一条）。
+ * 三条迁移/解码路径，**一个文件都不重扫**：
+ * - `tokens`（v11 的记号串）⇒ `candidateHashesFromTokens`（就地哈希 + 取高 16 位）；
+ * - `bits === 32`（v12~v14 的盘上形态）⇒ 按 32 位解再 `truncateCandidates` 截高 16 位；
+ * - 否则（v15 的盘上形态）⇒ 直接按 16 位解。
+ * 解不出来 ⇒ 返回 `false`（调用方判该条目结构不符，只丢这一条）。
  */
-function candidatesToMemory(tuple: EntryTuple, tokens: boolean): boolean {
+function candidatesToMemory(tuple: EntryTuple, tokens: boolean, bits: 16 | 32): boolean {
   const slot = tuple[10];
-  if (slot === null || slot instanceof Uint32Array) return true;
-  const hashes = tokens ? candidateHashesFromTokens(slot) : decodeCandidateHashes(slot);
+  if (slot === null) return true;
+  // 已是内存形态（`decodeEntries`/`salvageEntries` 被重复调用，或迁移中途）：
+  // 32 位那一档顺手截断，语义不变（只多出碰撞，方向仍是保守侧）
+  if (slot instanceof Uint16Array) return true;
+  if (slot instanceof Uint32Array) {
+    tuple[10] = truncateCandidates(slot);
+    return true;
+  }
+  if (tokens) {
+    tuple[10] = candidateHashesFromTokens(slot);
+    return true;
+  }
+  if (bits === 32) {
+    const wide = decodeCandidateHashes32(slot);
+    if (wide === null) return false;
+    tuple[10] = truncateCandidates(wide);
+    return true;
+  }
+  const hashes = decodeCandidateHashes(slot);
   if (hashes === null) return false;
   tuple[10] = hashes;
   return true;
@@ -1081,8 +1327,8 @@ function entryFromTuple(path: string, tuple: EntryTuple, interner?: NameInterner
     // 也让 round-trip 判据（decodeEntries(encodeEntries(x))toEqual x）不被 null 撑歪
     ...(typeof refsNamesFp === 'number' ? { refsNamesFp } : {}),
     // 候选集：空数组也是已知事实（已知没有候选），**键照留**——只有 null（v10 迁移未知）才缺键。
-    // 零拷贝：与元组第 11 位是**同一枚** `Uint32Array`（`encodeEntries` 的快路径靠这个身份判据）
-    ...(candidateHashes instanceof Uint32Array ? { candidateHashes } : {}),
+    // 零拷贝：与元组第 11 位是**同一枚** `Uint16Array`（`encodeEntries` 的快路径靠这个身份判据）
+    ...(candidateHashes instanceof Uint16Array ? { candidateHashes } : {}),
   };
 }
 
@@ -1137,11 +1383,11 @@ export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | nul
   const out: Record<string, SnapshotEntry> = {};
   const interner = createNameInterner();
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
-    const tuple = validateEntryTuple(value, CURRENT_ARITY, false, false);
+    const tuple = validateEntryTuple(value, CURRENT_ARITY, false, false, false);
     if (tuple === null) return null;
-    // 盘上第 11 位是哈希集的 base64 ⇒ 解成 `Uint32Array`（就地写回，见 `candidatesToMemory`）。
+    // 盘上第 11 位是哈希集的 base64 ⇒ 解成 `Uint16Array`（就地写回，见 `candidatesToMemory`）。
     // 解不出来（非法字符/长度不符）⇒ 与"结构不符"同判：这份数据整体不认。
-    if (!candidatesToMemory(tuple, false)) return null;
+    if (!candidatesToMemory(tuple, false, 16)) return null;
     out[path] = entryFromTuple(path, tuple, interner);
   }
   return out;
@@ -1184,6 +1430,13 @@ export function salvageEntries(
    * 按当前形态认才不会把好条目判成损坏；生产路径由 `salvageSnapshot` 按版本表显式传。
    */
   runsAreTuples = false,
+  /**
+   * 条目第 6 位（函数）是 v14 及更早的**"一函数一枚 7 元组"**（`true`，就地摊平）
+   * 还是 v15 的扁平流水（`false`）。缺省口径同 `runsAreTuples`：`false` = 当前形态。
+   */
+  fnsAreTuples = false,
+  /** 第 11 位（候选哈希集）的字宽：v15 起 16 位；v14 及更早 32 位（迁移时截断） */
+  candidateBits: 16 | 32 = 16,
 ): { entries: Record<string, SnapshotEntry>; skipped: number } | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const out: Record<string, SnapshotEntry> = {};
@@ -1195,13 +1448,13 @@ export function salvageEntries(
   // 不让 67 MB 的 payload 被这些切片钉在堆里（PITFALLS 255 的同一个坑）。
   const interner = createNameInterner();
   for (const [stored, value] of Object.entries(raw as Record<string, unknown>)) {
-    const tuple = validateEntryTuple(value, arity, refsAreTuples, runsAreTuples);
+    const tuple = validateEntryTuple(value, arity, refsAreTuples, runsAreTuples, fnsAreTuples);
     if (tuple === null) {
       skipped++;
       continue;
     }
     // 候选位翻成内存形态；解不出来 ⇒ 只丢这一条（与结构不符同判，不连坐）
-    if (!candidatesToMemory(tuple, candidatesAreTokens)) {
+    if (!candidatesToMemory(tuple, candidatesAreTokens, candidateBits)) {
       skipped++;
       continue;
     }
@@ -1247,7 +1500,16 @@ export function salvageSnapshot(
     keyToPath = new Map();
     for (const p of opts.knownPaths) keyToPath.set(pathKey(p), p);
   }
-  const salvaged = salvageEntries(r.entries, shape.arity, keyToPath, shape.candidatesAreTokens, shape.refsAreTuples, shape.runsAreTuples);
+  const salvaged = salvageEntries(
+    r.entries,
+    shape.arity,
+    keyToPath,
+    shape.candidatesAreTokens,
+    shape.refsAreTuples,
+    shape.runsAreTuples,
+    shape.fnsAreTuples,
+    shape.candidateBits,
+  );
   if (salvaged === null) return null;
   return {
     version: SNAPSHOT_VERSION,
@@ -1307,7 +1569,7 @@ function makeRef(
  * 否则两条路径会悄悄分叉。顺序 = 传入顺序 = 本次 walkDir 顺序。
  *
  * `sources` 可混装：本次重扫的 `ErbFile` 与快照懒外壳（带 RAW 标记）。后者直接
- * 从元组建 `byName`（`name.toUpperCase()` 与 `toFunction` 同一条口径）⇒ 聚合阶段
+ * 从元组建 `byName`（`name.toUpperCase()` 与还原侧同一条口径）⇒ 聚合阶段
  * 不触发任何 ErbFunction 对象的构造；`files` 里存的就是那个懒视图，消费方读
  * `functions` 时才按文件补齐。
  */
@@ -1322,10 +1584,12 @@ export function aggregateIndex(sources: Iterable<ErbFile>): {
     fileMap.set(path, file);
     const raw = (file as RawCarrier)[RAW];
     if (raw !== undefined) {
-      for (const t of raw[5]) {
-        const name = t[0];
+      // 函数流水（v15 扁平，步长 `FN_STRIDE`）：只经 `forEachFn` 取数，**不建 ErbFunction 对象**。
+      // `nameColumn` 的 0 哨兵在这里必须还原成 `undefined`（`makeRef` 的"没有这个事实"口径）——
+      // 传 0 会让定义腿把"不知道"当成"第 0 列"。
+      forEachFn(raw[5], (name, startLine, endLine, _params, _flags, doc, nameColumn) => {
         const normalizedName = name.toUpperCase();
-        const ref = makeRef(name, normalizedName, path, t[1], t[2], t[6], t[5]);
+        const ref = makeRef(name, normalizedName, path, startLine, endLine, nameColumn === 0 ? undefined : nameColumn, doc);
         // **首条定义用 `[ref]` 字面量**，不要 `get() ?? []` 再 `push`：空字面量 push 一枚时
         // V8 按 `容量 = 需求 + 16` 重新分配（1 槽 → **17 槽**，底层 FixedArray 152 B vs 24 B），
         // 而真实语料 110,049 个名字里有 **110,043 个只有一条定义** ⇒ 白占 ~13.5 MB
@@ -1333,7 +1597,7 @@ export function aggregateIndex(sources: Iterable<ErbFile>): {
         const refs = byName.get(normalizedName);
         if (refs === undefined) byName.set(normalizedName, [ref]);
         else refs.push(ref);
-      }
+      });
       continue;
     }
     for (const fn of file.functions) {
@@ -1461,7 +1725,7 @@ export interface SnapshotStats {
   nameChars: number;
   /** 注释块字符数合计 */
   docChars: number;
-  /** 候选记号**哈希**枚数合计（v12；每枚 4 B ⇒ 稳态占用 ≈ 本数 × 4） */
+  /** 候选记号**哈希**枚数合计（v12；v15 起每枚 2 B ⇒ 稳态占用 ≈ 本数 × 2） */
   candidateHashes: number;
   /** 带候选集的条目数（`null` = 未知，v10 迁移条目） */
   candidatesKnown: number;
@@ -1501,11 +1765,11 @@ export function snapshotStats(entries: Readonly<Record<string, SnapshotEntry>>):
       continue;
     }
     s.lazyShells++;
-    for (const fn of raw[5]) {
+    forEachFn(raw[5], (name, _start, _end, _params, _flags, doc) => {
       s.functions++;
-      s.nameChars += fn[0].length;
-      if (typeof fn[5] === 'string') s.docChars += fn[5].length;
-    }
+      s.nameChars += name.length;
+      if (typeof doc === 'string') s.docChars += doc.length;
+    });
     s.dims += raw[6].length / DIM_STRIDE;
     // 引用流水是扁平数组（v13，步长 `REF_STRIDE`）⇒ 条数 = 格数 / 4，不是格数
     s.refs += raw[7].length / REF_STRIDE;
@@ -1597,7 +1861,9 @@ export function entryNamesOf(entries: Readonly<Record<string, SnapshotEntry>>): 
     const e = entries[path]!;
     const raw = (e.file as RawCarrier)[RAW];
     if (raw !== undefined) {
-      for (const t of raw[5]) out.add(t[0].toUpperCase());
+      forEachFn(raw[5], (name) => {
+        out.add(name.toUpperCase());
+      });
       continue;
     }
     for (const fn of e.file.functions) out.add(fn.normalizedName);

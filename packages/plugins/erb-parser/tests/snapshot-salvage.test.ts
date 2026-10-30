@@ -24,7 +24,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DirEntry, ErbIndex, ErbParserService, FileIO, FileStat, GameProject, ScopedStorage } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { nameSetDigest, SNAPSHOT_VERSION, coerceSnapshot, countEntries, hashToken, projectRootKey, refsAreReusable, sameProjectRoot, salvageEntries, salvageSnapshot, snapshotKeyCandidatesFor, snapshotKeyFor, encodeEntries, verifiedNamesDigest, type SnapshotEntry } from '../src/snapshot';
+import { candidateHash, decodeCandidateHashes, nameSetDigest, SNAPSHOT_VERSION, coerceSnapshot, countEntries, projectRootKey, refsAreReusable, sameProjectRoot, salvageEntries, salvageSnapshot, snapshotKeyCandidatesFor, snapshotKeyFor, encodeEntries, verifiedNamesDigest, type SnapshotEntry } from '../src/snapshot';
 import { makeComputeStub } from './support';
 
 /**
@@ -40,6 +40,8 @@ const V_LEGACY = 9;
 const V10 = 10;
 /** 表内次新的一代（v12：同形 + 候选位哈希 base64，但**引用流水仍是四元组数组**） */
 const V12 = 12;
+/** 上一代（v14：函数元组是"一函数一枚 7 元组"、候选哈希 32 位） */
+const V14 = 14;
 
 const ROOT = 'D:/proj/eratw';
 const KOJO = `${ROOT}/ERB`;
@@ -63,6 +65,51 @@ function refsAsTuples(flat: unknown): [string, number, number, number][] {
     out.push([src[i] as string, src[i + 1] as number, src[i + 2] as number, src[i + 3] as number]);
   }
   return out;
+}
+
+/**
+ * 把 v15 的**函数扁平流水**改写成 v14 及更早的「一函数一枚 7 元组」（与 `refsAsTuples` 同一条理由：
+ * 拿当前产出 slice 成旧位数造出来的是"旧版本号 + 新形态"，只会验到"校验器把它丢了"）。
+ *
+ * `paramsAsTuples` 跟版本表走：v13 及更早的形参也是"一参一枚二元组"。
+ */
+function fnsAsTuples(flat: unknown, paramsAsTuples: boolean): unknown[][] {
+  const src = flat as readonly unknown[];
+  const out: unknown[][] = [];
+  for (let i = 0; i < src.length; i += 7) {
+    const run = src[i + 3] as readonly (string | number)[];
+    const params = paramsAsTuples ? paramTuplesOf(run) : run;
+    const doc = src[i + 5];
+    const col = src[i + 6] as number;
+    const base = [src[i], src[i + 1], src[i + 2], params, src[i + 4]];
+    if (col !== 0) out.push([...base, doc ?? null, col]);
+    else if (typeof doc === 'string') out.push([...base, doc]);
+    else out.push(base);
+  }
+  return out;
+}
+
+/** 扁平形参流水 → 「一参一枚二元组」（v13 及更早的盘上形态） */
+function paramTuplesOf(run: readonly (string | number)[]): [string, 0 | 1][] {
+  const out: [string, 0 | 1][] = [];
+  for (let i = 0; i < run.length; i += 2) out.push([run[i] as string, run[i + 1] as 0 | 1]);
+  return out;
+}
+
+/**
+ * 32 位哈希集的 base64（v12~v14 的盘上形态）。生产侧已经不再产出它（v15 起 16 位），
+ * 所以"写回旧形态"这件事只住在测试里——用 `Buffer` 免得再抄一份手写 base64。
+ */
+function encodeHashes32(words: readonly number[]): string {
+  const bytes = new Uint8Array(words.length * 4);
+  for (let i = 0; i < words.length; i++) {
+    const v = words[i]! >>> 0;
+    bytes[i * 4] = (v >>> 24) & 0xff;
+    bytes[i * 4 + 1] = (v >>> 16) & 0xff;
+    bytes[i * 4 + 2] = (v >>> 8) & 0xff;
+    bytes[i * 4 + 3] = v & 0xff;
+  }
+  return Buffer.from(bytes).toString('base64');
 }
 
 const SRC1 = '@FOO_A\n\tPRINTFORMW 甲。\nRETURN 1\n\n@FOO_B\n\tPRINTFORML 乙。\nRETURN 1\n';
@@ -380,6 +427,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     for (const [p, t] of Object.entries(v10.entries)) {
       const copy = t.slice(0, 10);
       copy[7] = refsAsTuples(t[7]); // v10 的盘上形态：引用流水是四元组数组
+      copy[5] = fnsAsTuples(t[5], true); // 且函数是 7 元组、形参是二元组
       v10entries[p] = copy;
     }
     seeded.map.delete(v7key);
@@ -442,6 +490,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     for (const [p, t] of Object.entries(cur.entries)) {
       const copy = t.slice();
       copy[7] = refsAsTuples(t[7]); // v11 的盘上形态：引用流水是四元组数组
+      copy[5] = fnsAsTuples(t[5], true); // 函数是 7 元组、形参是二元组
       copy[10] = (tokensOf[p] ?? []).join('\n');
       v11entries[p] = copy;
     }
@@ -466,10 +515,10 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 0, files: 0 }); // 一次读盘都不付
 
     // 迁移把记号串**就地哈希**，成员语义逐条不变（不是"随便造了个非空数组"）
-    const snap = second.service.snapshotForDebug?.() as { entries: Record<string, { candidateHashes?: Uint32Array }> } | null;
+    const snap = second.service.snapshotForDebug?.() as { entries: Record<string, { candidateHashes?: Uint16Array }> } | null;
     expect(snap).not.toBeNull();
-    expect(Array.from(snap!.entries[P1]!.candidateHashes!)).toEqual(tokensOf[P1]!.map(hashToken));
-    expect(Array.from(snap!.entries[P2]!.candidateHashes!)).toEqual(tokensOf[P2]!.map(hashToken));
+    expect(Array.from(snap!.entries[P1]!.candidateHashes!)).toEqual(tokensOf[P1]!.map(candidateHash));
+    expect(Array.from(snap!.entries[P2]!.candidateHashes!)).toEqual(tokensOf[P2]!.map(candidateHash));
 
     // 正确性等价：迁移轮的索引与全量重建逐字相同
     const cold = await rebuildFromScratch(files);
@@ -497,6 +546,10 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     for (const [p, t] of Object.entries(cur.entries)) {
       const copy = t.slice();
       copy[7] = refsAsTuples(t[7]);
+      copy[5] = fnsAsTuples(t[5], true); // v12 的函数是 7 元组、形参是二元组
+      // v12 的候选位是 32 位哈希的 base64（v15 起是 16 位）——旧字宽是**版本的一部分**，
+      // 不写回的话版本表会按 32 位去解 16 位的串 ⇒ 字节数不是 4 的倍数 ⇒ 整条判损坏。
+      copy[10] = encodeHashes32(Array.from(decodeCandidateHashes(t[10] as string)!).map((v) => v << 16));
       v12entries[p] = copy;
     }
     seeded.map.delete(v7key);
@@ -537,6 +590,59 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     const savedP1 = diskOf(seeded.map, v7key).entries[P1]!;
     expect(Array.isArray(savedP1[7])).toBe(true);
     expect((savedP1[7] as unknown[]).every((x) => Array.isArray(x))).toBe(false);
+  });
+
+  it('v14 → v15 迁移（MEM-15）：函数元组摊平 + 候选哈希截 16 位 ⇒ **一个文件都不重扫**，且逐条同值', async () => {
+    const files = new Map<string, FakeFile>([
+      [P1, { text: SRC1, mtimeMs: 100 }],
+      [P2, { text: SRC2, mtimeMs: 200 }],
+    ]);
+    const seeded = await seed(files);
+    const mark = seeded.fs.log.length;
+
+    // 把盘上这份 v15 改写成 v14 形态：函数位写回「一函数一枚 7 元组」（形参已是扁平流水），
+    // 候选位写回 32 位哈希的 base64（= 16 位值左移 16 位，截断后逐枚相同）。
+    const cur = diskOf(seeded.map, v7key) as Payload & { namesFp?: number | null };
+    const v14entries: Record<string, unknown[]> = {};
+    for (const [p, t] of Object.entries(cur.entries)) {
+      const copy = t.slice();
+      copy[5] = fnsAsTuples(t[5], false);
+      const words16 = Array.from(decodeCandidateHashes(t[10] as string)!);
+      copy[10] = encodeHashes32(words16.map((v) => v << 16));
+      v14entries[p] = copy;
+    }
+    seeded.map.delete(v7key);
+    seeded.map.set(
+      snapshotKeyFor(ROOT, V14),
+      JSON.stringify({ version: V14, rootDir: ROOT, savedAt: 1, namesFp: cur.namesFp, entries: v14entries }),
+    );
+
+    const logs: string[] = [];
+    const second = activate(seeded.fs.io, seeded.storage, logs);
+    openProject(second.bus);
+    await second.waitIndexed();
+    const r = readBreakdown(logs);
+    expect(r.salvaged).toBe(2); // 结构逐字认识 ⇒ 全部续用
+    expect(r.skipped).toBe(0);
+    expect(r.reused).toBe(2);
+    // 两处都只换存放形态 ⇒ 零重扫、零读盘（与 v10 的保守侧重扫正相反）
+    expect(r.provenance).toBe(0);
+    expect(r.refsRescan).toBe(0);
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 0, files: 0 });
+
+    // 迁移逐条同值：函数流水的 7 格还原成 `ErbFunction` 后与全量重建逐字段相同
+    // （docComment / nameColumn / params 都在这条里；`dumpIndex` 只比名字与行）
+    const hot = second.service.currentIndex()!;
+    const cold = await rebuildFromScratch(files);
+    expect(hot.files.get(P1)!.functions).toEqual(cold.idx.files.get(P1)!.functions);
+    expect(dumpIndex(hot)).toBe(dumpIndex(cold.idx));
+
+    // 落盘已是 v15（新键）：函数位是扁平流水（**不再**是元组数组）、候选位是 16 位哈希的 base64
+    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === 11);
+    const savedP1 = diskOf(seeded.map, v7key).entries[P1]!;
+    expect(Array.isArray(savedP1[5])).toBe(true);
+    expect((savedP1[5] as unknown[]).every((x) => Array.isArray(x))).toBe(false);
+    expect(decodeCandidateHashes(savedP1[10] as string)!.constructor).toBe(Uint16Array);
   });
 
   it('触发面「单条目损坏」：坏 1 条只丢 1 条，其余照旧复用（改前是整份弃用、全树重读）', async () => {

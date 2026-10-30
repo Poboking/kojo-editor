@@ -638,6 +638,17 @@ const lazyState = new WeakMap<FunctionConditions, number | StateDependency[]>();
 const RANGE_SCALE = 2 ** 26;
 
 /**
+ * `Object.prototype.__defineGetter__` 的类型面（Annex B 的老 API，取用是**量出来的**）。
+ *
+ * MEM-17（2026-10-30，node 22，真实快照 52,435 枚壳，同窗口交替 n=11 取中位）：装**同一枚**
+ * 共享访问器，`defineProperty` **13.59 ms**（0.259 µs/枚）vs `__defineGetter__` **10.29 ms**
+ * （0.196 µs/枚）。差在 V8 里前者每次都要把描述符对象逐项解析校验，后者走内置
+ * `ObjectDefineGetter` 快路径；产出描述符逐项相同（`enumerable=true` / `configurable=true` /
+ * `get` 是函数，壳仍 100% 快属性、0 枚字典态）。
+ */
+type GetterHost = { __defineGetter__(key: string, get: () => unknown): void };
+
+/**
  * 建**惰性**函数条件壳：`dependencies` 首次被读时才从列式表物化成 `StateDependency[]`。
  *
  * 校验（`isDependencyTuple` / `isComparisonTuple` / 下标越界）在 decode 时**已逐条做完**
@@ -662,6 +673,16 @@ const RANGE_SCALE = 2 ** 26;
  *
  * 物化出来的数组与区间都放 `lazyState`：没人读 `dependencies` 时**只有区间那一格**
  * （谁问谁付，与 v5 的懒还原同一条纪律）。
+ *
+ * ## 安装成本（MEM-17，2026-10-30）：`__defineGetter__` + 零依赖壳走数据属性
+ *
+ * 真实快照 52,435 枚壳，只计"装访问器 + 写状态"，同窗口交替 n=11 取中位：
+ * `defineProperty`+WeakMap **19.55 ms**（0.373 µs/枚）/ `__defineGetter__`+WeakMap **15.69 ms** /
+ * `__defineGetter__` 单独 **10.29 ms** / 零依赖数据属性 + 其余 `__defineGetter__` **14.14 ms**。
+ * ⇒ 非零壳改走 `__defineGetter__`（理由见 `GetterHost`）；零依赖壳（25.3%）直接给 `[]`，
+ * 它们本来就没有可物化的东西，"首次读才物化"在这里兑现不了收益，省下的是整套访问器安装。
+ * 语义逐条不变：`Object.keys` 键集与键序（`dependencies` 仍末位）、可枚举、可配置、
+ * `toEqual`（只看自有可枚举键）、二次读同一引用。
  */
 function lazyConditions(
   path: string,
@@ -671,7 +692,7 @@ function lazyConditions(
   depLen: number,
 ): FunctionConditions {
   const [normalizedName, startLine, predicateCount, unparsedCount] = c;
-  // 先建**全数据属性**的字面量（V8 快路径），`dependencies` 用 `defineProperty` 补在后面
+  // 先建**全数据属性**的字面量（V8 快路径），`dependencies` 再用 `__defineGetter__` 补在后面
   const cond: FunctionConditions = {
     normalizedName,
     filePath: path,
@@ -679,7 +700,16 @@ function lazyConditions(
     predicateCount,
     unparsedCount,
   } as FunctionConditions;
-  Object.defineProperty(cond, 'dependencies', { get: getDependencies, enumerable: true, configurable: true });
+  if (depLen === 0) {
+    // 零依赖壳（真实语料 25.3%，13,249/52,435）没有可物化的东西 ⇒ 直接给数据属性 `[]`。
+    // 口径与访问器分支逐条对齐：仍是**自有 + 可枚举 + 可配置**（`Object.keys` /
+    // `JSON.stringify` / `toEqual` 不变）、二次读取是**同一枚**数组（就是这枚自有数组）。
+    // 省的是"装访问器 + 写 WeakMap 区间"整套（MEM-17 实测 0.299 → 0.117 µs/枚）。
+    cond.dependencies = [];
+    return cond;
+  }
+  // 非零依赖：**整次 decode 共用**一枚访问器 + WeakMap 只放区间/物化数组（MEM-11 的核心判据）
+  (cond as unknown as GetterHost).__defineGetter__('dependencies', getDependencies);
   lazyState.set(cond, depStart * RANGE_SCALE + depLen);
   return cond;
 }

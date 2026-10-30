@@ -847,13 +847,23 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `ui/editor-global-providers.ts`（宿主预取）。**更正上一版落账**：着色判据本体
     //     `kojo-lang/src/semantic.ts` 不在开机图（monaco 层是懒边，图里只有 `constants.ts`）。
     //     两枚闸维持 **≤199 / ≤3,204**，**不抬**（余量约 1.6 KB）。
+    //   - **内存批 MEM-15~17（2026-10-30，本批，三路并行 + 量具一路）**：读数 **199 文件 /
+    //     3,223 KB**（3,299,843 B = 3,281,250 + 18,593）——零新进图模块（199 未动）；
+    //     逐文件对账**精确相等**，且全部落在图内四枚：
+    //     `erb-parser/src/snapshot.ts` +14,143（v15：函数摊成扁平流水 `FN_STRIDE` + 候选哈希
+    //     32→16 位 + v14 免费迁移）、`erb-parser/src/plugin.ts` +165（`candidateHash` 单一哈希口）、
+    //     `condition-extractor/src/snapshot.ts` +2,162（`__defineGetter__` + 零依赖壳数据属性）、
+    //     `kernel/src/encoding.ts` +2,123（`normalizeEol/applyEol/reconstructEol` 去 ConsString）。
+    //     ⇒ 闸 **3,204 → 3,225**（余量 2 KB）。这一档是"代码多花 18 KB、换同一语料 A/B 热载
+    //     −6.1 / −6.4 / −12.9 MB（索引 / idle / 稳态；4,258 文件口径，见 STATE 该行）"：函数流水 −3.37 MB、
+    //     候选哈希 6.5→3.6 MB、文本缓存 3× 绳索消除、条件壳装载回收费 −5.4 ms。文件闸维持 199（顶格）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,204 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,225 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_204);
+    expect(totalKb).toBeLessThanOrEqual(3_225);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

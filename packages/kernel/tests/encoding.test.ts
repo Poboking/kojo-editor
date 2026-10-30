@@ -133,6 +133,20 @@ describe('换行处理', () => {
     const mixed = 'x\r\ny\nz\r\n';
     expect(applyEol(normalizeEol(mixed), 'crlf')).toBe('x\r\ny\r\nz\r\n');
   });
+
+  it('normalizeEol 的边界形态与旧正则逐字等价（尾/连续/孤立分隔符）', () => {
+    const legacy = (s: string) => s.replace(/\r\n?/g, '\n');
+    for (const raw of ['', '\r', '\r\n', '\n', 'a\r', 'a\r\n', 'a\r\r\nb', 'a\r\n\r\nb', '\r\na', 'a\r\rb', '末\r']) {
+      expect(normalizeEol(raw)).toBe(legacy(raw));
+    }
+  });
+
+  it('无 \\r 的文本走零拷贝快路（返回同一串，不复制）', () => {
+    const text = 'a\nb\nc';
+    // MEM-16：`indexOf('\r') < 0` 直接返回入参——既是"无改动不复制"的语义，
+    // 也保证不产出 ConsString（绳索）被会话文本缓存长期持有。
+    expect(normalizeEol(text)).toBe(text);
+  });
 });
 
 describe('逐行换行保真原语（splitPreserveEol / joinPreserveEol / reconstructEol）', () => {

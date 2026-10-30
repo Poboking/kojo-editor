@@ -17,7 +17,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DirEntry, ErbIndex, ErbParserService, FileIO, FileStat, GameProject, ScopedStorage } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { decodeCandidateHashes, hashToken, snapshotKeyFor } from '../src/snapshot';
+import { candidateHash, decodeCandidateHashes, snapshotKeyFor } from '../src/snapshot';
 import { makeComputeStub } from './support';
 
 const ROOT = 'D:/proj/refs-prov';
@@ -278,7 +278,7 @@ describe('REFS-PROVENANCE：名录变更只重扫受影响文件', () => {
     // f029 的候选集里必须有 F0（它 CALL F0）——候选位真的是"问过 hasName 的一切记号"。
     // v12 起盘上是哈希集的 base64，成员判定要解出来查哈希（语义与 v11 逐条相同）
     const cand = decodeCandidateHashes(saved.entries[pathOf(N_FILES - 1)]![10] as string)!;
-    expect(Array.from(cand)).toContain(hashToken('F0'));
+    expect(Array.from(cand)).toContain(candidateHash('F0'));
 
     // 再开（无任何变更）：信封命中 ⇒ 溯源巡检整段跳过，重扫 0
     logs.length = 0;

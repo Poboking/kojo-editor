@@ -29,6 +29,7 @@ import {
   createNameInterner,
   decodeEntries,
   encodeEntries,
+  FN_STRIDE,
   PARAM_STRIDE,
   SNAPSHOT_VERSION,
   type IndexSnapshot,
@@ -168,23 +169,31 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
       return null;
     }
     const [mtimeMs, size, textLength, lineCount, hasDirective, fns, dims, refs, labels] = value as Tuple;
-    const okFn = (x: unknown): boolean =>
-      Array.isArray(x) &&
-      // 第 7 位（名字起点列，v9 起）与第 6 位可以是 null：A/B 的 before 臂照样忽略尾部多出来的位
-      (x.length === 5 || x.length === 6 || x.length === 7) &&
-      typeof x[0] === 'string' &&
-      typeof x[1] === 'number' &&
-      typeof x[2] === 'number' &&
-      Array.isArray(x[3]) &&
-      // **MEM-10 之后形参是扁平流水**（v14：步长 `PARAM_STRIDE`，`[名, 0|1]` 逐对排）。
-      // 与 MEM-7 对 refs 的处理同一条理由：参照臂读的是**当下这份 payload**，盘上形状换了，
-      // 校验器就得跟着认新形状，否则整条 A/B 死在 `return null`。判据仍是"懒还原 ≤ 急还原"。
-      x[3].every((p: unknown, i: number) => (i % 2 === 0 ? typeof p === 'string' : p === 0 || p === 1)) &&
-      typeof x[4] === 'number' &&
-      // v9 的位置契约：**要落第 7 位就必须先把第 6 位写出来**，无注释块时第 6 位是 `null`
-      // （不是"没有这一位"）；第 7 位存在则必须是数字列
-      (x.length === 5 || x[5] === null || typeof x[5] === 'string') &&
-      (x.length !== 7 || typeof x[6] === 'number');
+    /**
+     * **MEM-15 之后函数是每文件一枚扁平流水**（v15：步长 `FN_STRIDE`，末尾两格是
+     * `注释块|null` 与名字列 `0|正整数`）。与 MEM-7 / MEM-10 对 refs、声明的处理同一条理由：
+     * 参照臂读的是**当下这份 payload**，盘上形状换了，校验器就得跟着认新形状，
+     * 否则整条 A/B 死在 `return null`。判据仍是"懒还原 ≤ 急还原"，不是放宽断言。
+     */
+    const okFnRun = (x: unknown): boolean => {
+      if (!Array.isArray(x) || x.length % FN_STRIDE !== 0) return false;
+      for (let i = 0; i < x.length; i += FN_STRIDE) {
+        if (typeof x[i] !== 'string') return false;
+        if (typeof x[i + 1] !== 'number' || typeof x[i + 2] !== 'number') return false;
+        // 形参流水（v14 起扁平，步长 `PARAM_STRIDE`，`[名, 0|1]` 逐对排）
+        const p = x[i + 3];
+        if (!Array.isArray(p) || p.length % PARAM_STRIDE !== 0) return false;
+        for (let j = 0; j < p.length; j += PARAM_STRIDE) {
+          if (typeof p[j] !== 'string' || (p[j + 1] !== 0 && p[j + 1] !== 1)) return false;
+        }
+        if (typeof x[i + 4] !== 'number') return false;
+        const doc = x[i + 5];
+        if (doc !== null && typeof doc !== 'string') return false;
+        const col = x[i + 6];
+        if (typeof col !== 'number' || !Number.isInteger(col) || col < 0) return false;
+      }
+      return true;
+    };
     /**
      * **MEM-7 之后引用流水是扁平的**（v13：步长 `REF_STRIDE`，第 0 格名字 / 1 行 / 2 列 / 3 旗标）。
      *
@@ -217,29 +226,30 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
       return true;
     };
     const okLabel = (x: unknown): boolean => okStride3(x, (v) => typeof v === 'number');
-    if (!fns.every(okFn)) return null;
+    if (!okFnRun(fns)) return null;
     if (!okStride3(dims, (v) => typeof v === 'string')) return null;
     if (!okRefRun(refs)) return null;
     if (!labels.every(okLabel)) return null;
-    const functions: ErbFunction[] = fns.map((x) => {
-      const [rawName, startLine, endLine, params, flags, rawDoc, nameColumn] = x as unknown as [
-        string,
-        number,
-        number,
-        (string | number)[],
-        number,
-        string | null | undefined,
-        number | null | undefined,
-      ];
+    // 函数扁平流水（v15，步长 `FN_STRIDE`）⇒ 当场逐条建对象，与生产 `toFunction` 同口径
+    const functions: ErbFunction[] = [];
+    const fnRun = fns as unknown[];
+    for (let i = 0; i < fnRun.length; i += FN_STRIDE) {
+      const rawName = fnRun[i] as string;
+      const startLine = fnRun[i + 1] as number;
+      const endLine = fnRun[i + 2] as number;
+      const params = fnRun[i + 3] as (string | number)[];
+      const flags = fnRun[i + 4] as number;
+      const rawDoc = fnRun[i + 5] as string | null;
+      const nameColumn = fnRun[i + 6] as number;
       // 去重表：与 `internEntryStrings` 同口径（内容不变、只换实例；见函数头注）
       const name = interner.intern(rawName);
-      const doc = typeof rawDoc === 'string' ? interner.intern(rawDoc) : rawDoc;
-      // 形参流水（v14 扁平，步长 `PARAM_STRIDE`）⇒ 当场建对象，与生产 `toFunction` 同口径
+      const doc = typeof rawDoc === 'string' ? interner.intern(rawDoc) : undefined;
+      // 形参流水（v14 起扁平，步长 `PARAM_STRIDE`）⇒ 当场建对象
       const paramObjects = [];
-      for (let i = 0; i < params.length; i += PARAM_STRIDE) {
-        paramObjects.push({ name: interner.intern(params[i] as string), hasDefault: params[i + 1] === 1 });
+      for (let j = 0; j < params.length; j += PARAM_STRIDE) {
+        paramObjects.push({ name: interner.intern(params[j] as string), hasDefault: params[j + 1] === 1 });
       }
-      const fn: ErbFunction = {
+      functions.push({
         name,
         normalizedName: name.toUpperCase(),
         params: paramObjects,
@@ -247,14 +257,12 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
         endLine,
         filePath: path,
         isExpressionFunction: (flags & FLAG_EXPRESSION) !== 0,
-        // v9 的位置契约：第 6 位写成 `null` 是"这条函数没有注释块"（不是缺位，缺位是长度到 5）；
-        // 第 7 位 `nameColumn` 同理。A/B 要深比 `byName` 的值 ⇒ 参照臂必须把它解出来，
-        // "忽略尾位"只适用于条目级那位溯源摘要，不适用于函数元组内的字段。
-        ...(doc === undefined || doc === null ? {} : { docComment: doc }),
-        ...(nameColumn === undefined || nameColumn === null ? {} : { nameColumn }),
-      };
-      return fn;
-    });
+        // v15 的哨兵口径：`null` = 这条函数没有注释块，`0` = 没有"名字起点列"这个事实
+        // （不是缺位）。A/B 要深比 `file` ⇒ 参照臂必须与懒还原同一条口径（缺键，不补 1）。
+        ...(doc === undefined ? {} : { docComment: doc }),
+        ...(nameColumn === 0 ? {} : { nameColumn }),
+      });
+    }
     out[path] = {
       mtimeMs,
       size,
@@ -441,8 +449,9 @@ describe('PERF-7 快照热载合成基准（2,000 文件 / 100,000 函数）', (
     const fastTarget = decodeEntries(parsedV5)!;
     const rebuiltTarget = decodeEntries(parsedV5)!;
     // 先钉"零重建"这件事（消费之后就再也拿不到同一对象了）
-    // v12 起候选位在内存里是 `Uint32Array`、盘上要 base64 ⇒ 快路径**浅拷一层**元组换形态，
-    // 整枚数组的身份保不住；要省的从来是"重建 10 万级函数元组" ⇒ 判据落在函数/声明/引用三格上。
+    // v12 起候选位在内存里是 `Uint16Array`（v15 收窄；v12~v14 是 `Uint32Array`）、盘上要 base64
+    // ⇒ 快路径**浅拷一层**元组换形态，整枚数组的身份保不住；要省的从来是"重建 10 万级函数流水"
+    // ⇒ 判据落在函数/声明/引用三格上。
     const fastTuple = encodeEntries(fastTarget)[pathOf(0)] as unknown[];
     const diskTuple = parsedV5[pathOf(0)] as unknown[];
     expect(fastTuple[5]).toBe(diskTuple[5]);
