@@ -125,7 +125,8 @@ export {
   type ErbDimDeclaration,
 } from './symbols';
 
-// 改名判据（LAU-4 改名腿，2026-10-30；纯函数 + 槽供方形状，宿主只翻 Monaco 形状）
+// 改名判据（LAU-4 改名腿，2026-10-30；纯函数 + 槽供方形状，宿主只翻 Monaco 形状）。
+// 与本地名字落点判据同住 `symbols.ts`：整包进首屏，另开文件只多一份模块壳（ps10 记账）。
 export {
   kojoLabelMentions,
   labelRenameRejection,
@@ -137,4 +138,5 @@ export {
   wordAtColumn,
   type ErbRenameResolution,
   type RenameNameTarget,
-} from './rename';
+} from './symbols';
+

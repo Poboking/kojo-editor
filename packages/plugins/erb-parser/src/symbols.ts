@@ -1,7 +1,20 @@
-import type { EditorSymbolLocation, EnclosingMode, ErbFile, ErbFunction, ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
+import type {
+  EditorRenameEdit,
+  EditorRenameRelated,
+  EditorRenameResult,
+  EditorRenameTarget,
+  EditorRenameTargetResult,
+  EditorSymbolLocation,
+  EnclosingMode,
+  ErbFile,
+  ErbFunction,
+  ErbFunctionRef,
+  ErbIndex,
+  ErbReference,
+} from '@kojo/plugin-api';
 import { MODEL_TOKEN_CLASS, enclosingAt, enclosingChainAt, erbCodeBodyOf, symbolTokenAt } from '@kojo/plugin-api';
 import { parseDimDeclaration, parseErbText, parseLabelDefinition } from './scanner';
-import { codeViewOf, functionNameTokenAt } from './references';
+import { codeViewOf, functionNameTokenAt, referencesOf } from './references';
 
 /**
  * 位置 → 符号（B0，2026-10-15 语言服务批）。
@@ -534,4 +547,324 @@ export function mergeNavigationLegs(
   slot: readonly EditorSymbolLocation[],
 ): EditorSymbolLocation[] {
   return mergeSymbolLocations(labels, mergeSymbolLocations(dims, slot));
+}
+
+/* ============================== 改名判据（LAU-4 改名腿） ============================== */
+
+/**
+ * ERB 改名判据（函数名 / `$` 标签两条腿）——LAU-4 从宿主 `monaco/erb-rename.ts` 整块搬来；
+ * 宿主从此只剩「model/位置 → 请求」「契约 → Monaco 形状」与**落盘通道**（写允许域 / 写前备份 /
+ * 双通道送达：宿主事实，不是语言判据）。
+ *
+ * 三态：`undefined` = 本包不认这个文件 / 语言（弃权）；索引未建、反向索引缺席、别家证据
+ * `unprovable` 非空 ⇒ **拒绝**（可见理由，漏一处就是同名分叉）；拒绝时 `edits` 必为空。
+ * 其它语言证据由宿主当**数据**递进来（供方之间不能互问），"判据缺席 ⇒ 整次拒绝"在这里裁决。
+ */
+
+/** 标识字符集（Unicode 字母 / 数字 / 下划线，与反向索引同口径；真语料 21% 函数名含 CJK） */
+const IDENT_RE = /[\p{L}\p{N}_]/u;
+
+function isIdentPart(ch: string | undefined): boolean {
+  return ch !== undefined && IDENT_RE.test(ch);
+}
+
+/** 光标列（0 基）→ 所在词 `[start, end)`；贴着词尾后一格也算在词上（同 Monaco 行为） */
+export function wordAtColumn(lineText: string, col0: number): { start: number; end: number } | null {
+  if (!Number.isFinite(col0) || col0 < 0) return null;
+  const at = Math.min(Math.trunc(col0), lineText.length);
+  const anchor = isIdentPart(lineText[at - 1]) ? at - 1 : isIdentPart(lineText[at]) ? at : -1;
+  if (anchor < 0) return null;
+  let start = anchor;
+  while (start > 0 && isIdentPart(lineText[start - 1])) start--;
+  let end = anchor + 1;
+  while (end < lineText.length && isIdentPart(lineText[end])) end++;
+  return { start, end };
+}
+
+/** 名字判定的产物：命中（1 基区间 + 归一化名）或拒绝（给作者看的理由） */
+export type RenameNameTarget =
+  | { readonly kind: 'hit'; readonly startColumn: number; readonly endColumn: number; readonly normalizedName: string }
+  | { readonly kind: 'reject'; readonly reason: string };
+
+/** 光标处词 → 是否可重命名（`column` 1 基；`hasName` = 索引里有没有这个名字） */
+export function resolveRenameName(
+  lineText: string,
+  column: number,
+  hasName: (normalizedName: string) => boolean,
+): RenameNameTarget {
+  const col0 = Math.min(Math.max(0, column - 1), lineText.length);
+  const word = wordAtColumn(lineText, col0);
+  if (!word) return { kind: 'reject', reason: '光标处没有可重命名的名字' };
+  const raw = lineText.slice(word.start, word.end);
+  const normalizedName = raw.toUpperCase();
+  if (!hasName(normalizedName)) {
+    return {
+      kind: 'reject',
+      reason: `「${raw}」不在 ERB 函数索引内，不能重命名（$ 标签与 #DIM 局部名不在射程）`,
+    };
+  }
+  return { kind: 'hit', startColumn: word.start + 1, endColumn: word.end + 1, normalizedName };
+}
+
+/* -------- `$` 标签改名判据（单文件、函数局部） -------- */
+
+/** 标签名字符集 / 纯数字判据复用上面的 `LABEL_NAME_FULL`、`LABEL_NAME_DIGITS`（同源一处） */
+
+/** 标签新名判定（`null` = 可用；字符串 = 给作者看的拒绝理由；只改大小写合法） */
+export function labelRenameRejection(
+  scope: Pick<ErbLabelScope, 'name' | 'normalizedName' | 'siblingNames'>,
+  newName: string,
+): string | null {
+  if (!LABEL_NAME_FULL.test(newName)) return `标签名只能用字母、数字、下划线（「${newName}」含其它字符）`;
+  if (LABEL_NAME_DIGITS.test(newName)) return `标签名不能是纯数字（「${newName}」会与行号跳转混淆）`;
+  const upper = newName.toUpperCase();
+  if (upper === scope.normalizedName) return null;
+  const clash = scope.siblingNames.find((name) => name.toUpperCase() === upper);
+  return clash === undefined ? null : `本函数里已有标签「${clash}」，不能改成「${newName}」（标签名不区分大小写）`;
+}
+
+/** 光标是否落在作用域中的某一处（含词尾后一格） */
+function occurrenceAt(scope: ErbLabelScope, line: number, column: number): ErbLabelOccurrence | undefined {
+  return scope.occurrences.find(
+    (occurrence) => occurrence.line === line && column >= occurrence.column && column <= occurrence.endColumn,
+  );
+}
+
+/**
+ * `.kojo` 源里是否有同名标签的**可证明引用面**（只认行首写法：`标签 <名>` / `跳到 <名>` /
+ * 原生直通 `$名` / `JUMP|GOTO|TRYJUMP|TRYGOTO <名>`）。命中 ⇔ 只改 `.erb` 会被下一次保存盖回去。
+ */
+export function kojoLabelMentions(text: string, normalizedName: string): boolean {
+  const want = normalizedName.toUpperCase();
+  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+    const code = raw.replace(/;.*$/, '').trim();
+    if (code.length === 0) continue;
+    const sugar = /^(?:标签|跳到)\s+(\S+)/.exec(code);
+    const rawLabel = sugar === null ? /^\$(\S+)/.exec(code) : null;
+    const rawJump = sugar === null && rawLabel === null ? /^(?:JUMP|GOTO|TRYJUMP|TRYGOTO)\s+(\S+)/i.exec(code) : null;
+    const name = (sugar ?? rawLabel ?? rawJump)?.[1]?.replace(/^[$*]/, '');
+    if (name !== undefined && name.toUpperCase() === want) return true;
+  }
+  return false;
+}
+
+/* -------- 求值（`resolveRenameLocation` 那一步） -------- */
+
+/** 求值三态：`hit` = 可改名；`reject` = 认这个位置但不改；`none` = 本包不答 */
+export type ErbRenameResolution =
+  | { readonly kind: 'hit'; readonly target: EditorRenameTarget }
+  | { readonly kind: 'reject'; readonly reason: string }
+  | { readonly kind: 'none' };
+
+/**
+ * 光标处 → 可改名的原词：`$` 标签腿优先（文件局部事实，索引未建也能改），其次函数名腿。
+ * 标签入口但作用域不成立 ⇒ 拒绝，**绝不落函数名腿**（`GOTO ALPHA` 不是调用 ALPHA）。
+ */
+export function resolveErbRenameAt(
+  index: ErbIndex | null,
+  path: string,
+  text: string,
+  line: number,
+  column: number,
+): ErbRenameResolution {
+  if (!Number.isFinite(line) || !Number.isFinite(column) || line < 1) return { kind: 'none' };
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lineText = lines[Math.trunc(line) - 1] ?? '';
+  const scope = labelScopeAt(text, path, Math.trunc(line), Math.trunc(column));
+  const labelHit = scope === null ? undefined : occurrenceAt(scope, Math.trunc(line), Math.trunc(column));
+  if (scope !== null && labelHit !== undefined) {
+    return {
+      kind: 'hit',
+      target: {
+        line: labelHit.line,
+        startColumn: labelHit.column,
+        endColumn: labelHit.endColumn,
+        text: lineText.slice(labelHit.column - 1, labelHit.endColumn - 1),
+        scope: 'label',
+      },
+    };
+  }
+  const entry: ErbLabelEntry | null = labelEntryAt(lineText, Math.trunc(column));
+  if (entry !== null) {
+    return {
+      kind: 'reject',
+      reason:
+        entry === 'jump'
+          ? '跳转目标在当前函数里找不到同名 `$` 标签，不按函数名重命名（不猜）'
+          : '这不是可重命名的 `$` 标签名（标签名只能是字母、数字、下划线）',
+    };
+  }
+  if (index === null) return { kind: 'none' };
+  const target = resolveRenameName(lineText, Math.trunc(column), (name) => index.byName.has(name));
+  if (target.kind === 'reject') return { kind: 'reject', reason: target.reason };
+  return {
+    kind: 'hit',
+    target: {
+      line: Math.trunc(line),
+      startColumn: target.startColumn,
+      endColumn: target.endColumn,
+      text: lineText.slice(target.startColumn - 1, target.endColumn - 1),
+      scope: 'symbol',
+    },
+  };
+}
+
+/* -------- 编辑集（`provideRenameEdits` 那一步） -------- */
+
+/** 一份文件的编辑组（宿主按 `resourcePath` 分组送达；组序 = 索引出现序） */
+function editOf(
+  reference: {
+    readonly filePath: string;
+    readonly line: number;
+    readonly column: number;
+    readonly endColumn: number;
+    readonly kind?: ErbReference['kind'];
+  },
+  requestPath: string,
+  newName: string,
+): EditorRenameEdit {
+  return {
+    line: reference.line,
+    startColumn: reference.column,
+    endColumn: reference.endColumn,
+    newText: newName,
+    ...(reference.filePath === requestPath ? {} : { resourcePath: reference.filePath }),
+    ...(reference.kind === undefined ? {} : { occurrenceKind: reference.kind }),
+  };
+}
+
+/**
+ * 别家供方证明过的位置 → 编辑（`endColumn` = `column + 名字长度`，与反向索引同一条派生纪律）。
+ * **不标** `occurrenceKind`：那是"散文跳过"的入口，只对 ERB 词法面有意义——跨语言腿的点是真引用。
+ */
+function relatedEdits(
+  locations: readonly EditorSymbolLocation[] | undefined,
+  requestPath: string,
+  normalizedName: string,
+  newName: string,
+): EditorRenameEdit[] {
+  const out: EditorRenameEdit[] = [];
+  for (const location of locations ?? []) {
+    if (!Number.isFinite(location.line) || location.line < 1) continue;
+    const column = location.column ?? location.span?.columnStart ?? 1;
+    if (!Number.isFinite(column) || column < 1) continue;
+    const endColumn = location.span?.columnEnd ?? column + normalizedName.length;
+    out.push({
+      line: location.line,
+      startColumn: column,
+      endColumn,
+      newText: newName,
+      ...(location.filePath === requestPath ? {} : { resourcePath: location.filePath }),
+    });
+  }
+  return out;
+}
+
+/**
+ * 一次改名的完整判据：成功 = 编辑集 + 原名；失败 = 空编辑 + 可读理由。顺序即语义：
+ * 标签腿先走 → 别家证据 `unprovable` 非空整次拒绝 → 函数腿（索引 / 反向索引缺席、引用集空
+ * 都拒绝）→ 编辑集 = 本语言引用全集 + 别家证据（同一份全或无）。
+ */
+export function planErbRename(
+  index: ErbIndex | null,
+  requestPath: string,
+  text: string,
+  line: number,
+  column: number,
+  newName: string,
+  related?: EditorRenameRelated,
+): EditorRenameResult {
+  const reject = (rejectReason: string): EditorRenameResult => ({ kind: 'rename', edits: [], rejectReason });
+  const resolution = resolveErbRenameAt(index, requestPath, text, line, column);
+  if (resolution.kind === 'none') return reject('ERB 函数索引未建，暂不可重命名');
+  if (resolution.kind === 'reject') return reject(resolution.reason);
+
+  const target = resolution.target;
+  const normalizedName = target.text.toUpperCase();
+
+  if (target.scope === 'label') {
+    // 看不见 `.kojo` 源（宿主枚举抛错）⇒ 无从证明有没有同名标签写法 ⇒ 整次拒绝
+    const unprovable = related?.unprovable ?? [];
+    if (unprovable.length > 0) {
+      return reject(`无法检查 .kojo 源里的同名标签（${unprovable.join('、')}）——为免只改一半，整次重命名取消`);
+    }
+    const scope = labelScopeAt(text, requestPath, line, column);
+    if (scope === null) return reject('当前位点的 `$` 标签作用域已变化，请重按 F2 重试');
+    const rejection = labelRenameRejection(scope, newName);
+    if (rejection !== null) return reject(rejection);
+    let kojoHits = 0;
+    for (const source of related?.sources ?? []) {
+      if (kojoLabelMentions(source.text, scope.normalizedName)) kojoHits++;
+    }
+    if (kojoHits > 0) {
+      return reject(
+        `${kojoHits} 份 .kojo 源里也写着标签「${scope.name}」。保存 .kojo 时会按同名重新生成 .erb，` +
+          '只改这一处会留下两份不一致的标签，故整次重命名取消。请先在 .kojo 源里改名。',
+      );
+    }
+    return {
+      kind: 'rename',
+      edits: scope.occurrences.map((occurrence) => ({
+        line: occurrence.line,
+        startColumn: occurrence.column,
+        endColumn: occurrence.endColumn,
+        newText: newName,
+      })),
+      oldName: scope.name,
+    };
+  }
+
+  const unprovable = related?.unprovable ?? [];
+  if (unprovable.length > 0) {
+    return reject(
+      `${normalizedName} 的改名需要连带 .kojo 源，但 ${unprovable.length} 项 .kojo 侧判据缺席：` +
+        unprovable.join('、') +
+        '。无法证明这些记号是否指向本函数——' +
+        '只改 .erb 会被下一次保存 .kojo 冲掉，故整次重命名取消（不静默改一半）。' +
+        '请先在对应 .kojo 源内改名，或由宿主接入 ui.editor.languageService 的引用判读',
+    );
+  }
+  if (index === null) return reject('ERB 函数索引未建，暂不可重命名');
+  if (index.references === undefined) {
+    return reject('反向引用索引缺席，无法全项目收集引用（不猜，不部分改）');
+  }
+  const refs = referencesOf(index, normalizedName);
+  if (refs.length === 0) {
+    return reject('反向引用索引缺席，无法全项目收集引用（不猜，不部分改）');
+  }
+  const edits: EditorRenameEdit[] = refs.map((ref) => editOf(ref, requestPath, newName));
+  edits.push(...relatedEdits(related?.occurrences, requestPath, normalizedName, newName));
+  return { kind: 'rename', edits, oldName: target.text };
+}
+
+/* -------- 槽供方（两枚成员） -------- */
+
+/** `renameTarget` 供方：非方言 / 索引未建 ⇒ `undefined`（弃权）；拒绝理由原样交回 */
+export function provideRenameTarget(
+  index: ErbIndex | null,
+  request: { readonly path: string; readonly text: string; readonly line: number; readonly column: number },
+  isDialect: (path: string) => boolean,
+): EditorRenameTargetResult | undefined {
+  if (!isDialect(request.path)) return undefined;
+  const resolution = resolveErbRenameAt(index, request.path, request.text, request.line, request.column);
+  if (resolution.kind === 'none') return undefined;
+  if (resolution.kind === 'reject') return { kind: 'renameTarget', rejectReason: resolution.reason };
+  return { kind: 'renameTarget', target: resolution.target };
+}
+
+/** `rename` 供方：非方言 ⇒ `undefined`；编辑集或拒绝理由二选一（契约全或无） */
+export function provideRename(
+  index: ErbIndex | null,
+  request: {
+    readonly path: string;
+    readonly text: string;
+    readonly line: number;
+    readonly column: number;
+    readonly newName: string;
+    readonly related?: EditorRenameRelated;
+  },
+  isDialect: (path: string) => boolean,
+): EditorRenameResult | undefined {
+  if (!isDialect(request.path)) return undefined;
+  return planErbRename(index, request.path, request.text, request.line, request.column, request.newName, request.related);
 }

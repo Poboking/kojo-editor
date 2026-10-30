@@ -37,7 +37,7 @@ import {
  * ## 这一格里只剩"宿主才知道的事"
  *
  * 判据（什么词可改名 / `$` 标签作用域 / 引用全集 / 跨语言全或无）整块搬进了解析器插件的
- * `src/rename.ts`，由槽 `ui.editor.languageService` 的 `renameTarget` / `rename` 两个成员
+ * `src/symbols.ts`，由槽 `ui.editor.languageService` 的 `renameTarget` / `rename` 两个成员
  * 应答。本文件留下三件宿主事实：
  *
  * 1. **model / 位置 → 请求**：活动标签的真 model 判据（`canAnswer`，派生预览面不参与）、

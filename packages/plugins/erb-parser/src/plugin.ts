@@ -53,8 +53,7 @@ import { buildStructureFixes } from './structure-fix';
 import { erbDocumentSymbols } from './document-symbols';
 import { erbFoldingRanges } from './folding';
 import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
-import { definitionTargetsAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, resolveErbDimDefinition } from './symbols';
-import { planErbRename, provideRenameTarget } from './rename';
+import { definitionTargetsAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition } from './symbols';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
 import { erbSemanticTokens } from './semantic-tokens';
@@ -2013,7 +2012,7 @@ export function createErbParserPlugin(): Plugin {
        请求」「契约 → Monaco 形状」与落盘通道（写允许域 / 写前备份 / 双通道送达）。
 
        - `renameTarget` / `rename`：词法取词 + 标签作用域 + 反向索引 + 全或无（判据在
-         \`./rename.ts\`；跨语言证据由宿主当数据递进来，本包不 IO、不跨插件问）。
+         \`./symbols.ts\`；跨语言证据由宿主当数据递进来，本包不 IO、不跨插件问）。
 
        `order` 都是 20（与其余 `erb-*` 一致）：槽按注册序问，同 kind 只有本包一家认 ERB。
        */
