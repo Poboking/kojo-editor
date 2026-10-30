@@ -1595,7 +1595,8 @@ export function slotServiceLegOf(kind: SlotServiceKind): SlotServiceLeg | undefi
  * 装**指定的**那几条腿（按 `kinds` 给定顺序；不存在的 kind 跳过），返回**幂等** disposable。
  *
  * 单测按 kind 只装一条腿时走这里（桩 Monaco 只桩那一两条注册函数）；生产装配走
- * {@link installSlotServiceProviders}（= 表里全部）。
+ * {@link installSlotServiceProviders}（表里**除写面腿之外**的全部），写面腿（
+ * {@link SLOT_SERVICE_WRITE_LEGS}）由宿主在自己的策略块里用本函数单独装。
  */
 export function installSlotServiceLegs(
   monaco: typeof Monaco,
