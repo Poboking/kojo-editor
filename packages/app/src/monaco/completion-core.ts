@@ -497,8 +497,12 @@ export function mergeSuggestions(
  * 纯 ASCII 标签（{@link pinyinKeysOf} 返 `undefined`）⇒ 不补：无可拼音键，不造噪声
  * （此时 source 自带键原样保留）。拼音键锚在 label 上——label 纯 ASCII 而自带键是中文时，
  * 那枚中文键不自得拼音（今日全仓零路如此；`rankKey` 同样锚 label，两处口径一致）。
+ *
+ * 2026-10-31（LAU-4 补全腿第三批）：导出给**槽腿翻译层**（`slot-service-providers` 的
+ * `toMonacoCompletionItem`）复用——补全生产路径改走槽之后，拼音键仍只有这一份实现，
+ * 不在翻译层再抄一套"原键 ∪ 原文 ∪ 全拼 ∪ 首字母"的拼接口径。
  */
-function withPinyinFilterText(item: Monaco.languages.CompletionItem): Monaco.languages.CompletionItem {
+export function withPinyinFilterText(item: Monaco.languages.CompletionItem): Monaco.languages.CompletionItem {
   const label = labelText(item.label);
   const keys = pinyinKeysOf(label);
   if (keys === undefined) return item;

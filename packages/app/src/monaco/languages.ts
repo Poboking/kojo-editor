@@ -86,11 +86,18 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
    * 的旧桥（补全 / 悬停 / 签名 / 格式化四条腿的 v1 面还在宿主），补全腿因此已经被挂在
    * ERB 上；点名一格只对"只声明点名腿"的语言才有意义，重复点名等于第二份台账。
    */
-  slotServices: ['references', 'hover'],
+slotServices: ['references', 'hover'],
   // LAU-4 补全腿第三批（2026-10-31）：ERB 补全的判据全在插件 `@kojo/plugin-erb-parser`，
   // 事实（adapter 表 / 项目名录 / 宿主词表 / 偏好）由组合根经槽腿的 `completionFacts`
   // 现取并随请求递下去。声明在这里 = 收口侧不必按语言 id 分支。
   completionFacts: true,
+  /**
+   * 中文候选补**拼音可检索键**（`filterText` = `原文 全拼 首字母`）：搬家前 `.erb` 那本册由
+   * 装配核无条件补这一格（P2-12 / SUGGEST-PINYIN-GAP），走槽之后落点只剩翻译层 ⇒ 由
+   * descriptor 点名（收口不按语言 id 分支）。ERB 的变量名 / `#DIM` 名以中文为主，
+   * 罗马字搜索是既有能力，不许在搬家中丢掉。
+   */
+  completionPinyinFilter: true,
   // 触发字符的**追加**清单：`#` / `@` 已在共享那份里，这里只补 ERB 独有三枚——
   // `[` 区间标记行、`$` 跳转标签目标、`.` 点号成员位（ERB 没有点号语法，它是族查询键）。
   completionTriggerCharacters: ['[', '$', '.'],

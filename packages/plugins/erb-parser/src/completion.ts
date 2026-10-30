@@ -1330,12 +1330,14 @@ function systemFunctionCandidates(ctx: ErbCompletionContext): EditorCompletionIt
   }
   if (quotes % 2 === 1) return [];
 
-  // 光标处的名字段（左含右不含；与 `erbTokenRange` 的记号口径同一个字符类）
+  // 光标处的名字段（左含右不含；与 `erbTokenRange` 的记号口径同一个字符类）。
+  // **空名字段不早退**（LAU-4 补全腿第三批对拍）：光标停在 `GETBIT(|` 的括号后这类位置时，
+  // 搬家前宿主那一册给的是**整表 + 零宽区间**（前缀空 ⇒ 全量，Monaco 客户端过滤收窄），
+  // 早退会让"在实参位起一个新调用"补不到系统函数——那是搬家带来的回退，不是收紧。
   let start = col0;
   while (start > 0 && isNameChar(line[start - 1])) start--;
   let end = col0;
   while (end < line.length && isNameChar(line[end])) end++;
-  if (start === end) return [];
   if (isAllErbBlank(line.slice(0, start))) return [];
   if (start > 0 && line[start - 1] === '$') return [];
 

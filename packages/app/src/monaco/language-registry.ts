@@ -180,6 +180,19 @@ export interface LanguageDescriptor {
    */
   readonly completionTriggerCharacters?: readonly string[];
   /**
+   * 这门语言的补全要不要**拼音可检索键**（LAU-4 补全腿第三批，additive，2026-10-31）。
+   *
+   * 中文候选（`好感度`）在 standalone Monaco 里搜不到罗马字——`fuzzyScore` 不挂拼音词典，
+   * 只有把 `原文 全拼 首字母` 并进 `filterText` 才搜得到（P2-12 / SUGGEST-PINYIN-GAP）。
+   * 搬家前 `.erb` 那本册在装配核里无条件补这一格；走槽之后补键的落点只剩翻译层
+   * （`slot-service-providers.toMonacoCompletionItem`），**要不要补**是这门语言的属性
+   * （中文标识符为主的语言要，纯 ASCII 语言不必），所以进 descriptor 而不是收口按 id 分支。
+   *
+   * 缺省 `false` = `filterText` 原样透传（加这一格之前逐字相同——kojo2 的 pinned 断言
+   * "filterText 透传"因此零改动）。
+   */
+  readonly completionPinyinFilter?: boolean;
+  /**
    * 这门语言的**语义着色 legend**（additive，B3 语义收口 2026-10-30）。
    *
    * 缺省 = 契约名字层（`EDITOR_SEMANTIC_TOKEN_TYPES` 三值 + 两枚修饰）。一门语言如果

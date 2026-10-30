@@ -113,7 +113,7 @@ export function memoizedErbFunctionNames(getIndex: () => ErbIndex | null | undef
     const names: string[] = new Array(keys.length);
     for (let i = 0; i < keys.length; i++) {
       const key = keys[i]!;
-      names[i] = index.byName.get(key)?.[0]?.name ?? key;
+      names[i] = index.byName.firstOf(key)?.name ?? key;
     }
     memo = names;
     memoFingerprint = fp;

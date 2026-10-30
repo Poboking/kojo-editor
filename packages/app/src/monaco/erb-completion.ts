@@ -49,6 +49,23 @@ import {
 /**
  * `.erb` 方言补全的**候选册**（宿主层：只声明"有哪些源 + 位置怎么判 + 详情回哪张表"）。
  *
+ * ## 生产路径已不在这里（LAU-4 补全腿第三批，2026-10-31 收口）
+ *
+ * `.erb` 文件里的补全**不再由本文件装配**：判据整块住进常驻插件 `@kojo/plugin-erb-parser`
+ * 的 `src/completion.ts`（`provideErbCompletion` 经槽 `ui.editor.languageService` 的
+ * `completion` 成员作答），宿主那侧由共享槽腿（`slot-service-providers.ts` 的
+ * `legOf('completion', …)`）把契约项翻成 Monaco 条目，事实袋由 `erb-completion-facts.ts`
+ * 现取。`installErbCompletion` 的调用点已删（两枚 provider 并存 ⇒ Monaco 并集 ⇒ 候选两遍）。
+ *
+ * ## 本文件还活着的那一半：`.kojo1` 原生区的跨装配复用
+ *
+ * v1 糖源（`kojo-legacy` / `.kojo1`）同一份文档里既有糖行也有原生 ERB 直通（规范 §3.10），
+ * 原生区那几位要的正是**整本 ERB 册**——`kojo-completion.ts` 的
+ * {@link ERB_COMPLETION_ASSEMBLY} 就是被它的 `route` 借用的那一册（provenance 记下归属
+ * 装配，resolve 回这里的表）。这一册的位置门 / 名字槽 / 词表判据仍然**全部来自插件**（各
+ * `erb-completion-*.ts` 只是"中性候选 → Monaco 条目"的形状翻译），没有第二份判据。
+ * 等 `.kojo1` 原生区改走槽（需要一条"宿主断言这是原生 ERB 区"的事实位），本册可以整体退场。
+ *
  * COMPL-SHARED 之后：装配实现（合并 / 去重 / 排序 / 上限 / 降级 / provenance / snippet /
  * provider 注册）与 `.kojo` **共用** `completion-core.ts` 的那一份，本文件不再复制任何一条分支。
  * 语言侧只剩三件事：
@@ -541,48 +558,11 @@ export const ERB_COMPLETION_SOURCES: ErbCompletionSource[] = [
 /* ============================== 记忆化：函数名 provider（EC-3 预置） ============================== */
 
 /**
- * 把「取当前 `ErbIndex`」的记忆化为「函数名（已排序）提供者」。
- *
- * 展示名取**首个定义的原拼写**（`ErbFunctionRef.name`）。`byName` 的键是归一化大写名
- * （引擎大小写不敏感），直接拿键当候选会把作者写的 `M_Kojo_Message` 显示成
- * `M_KOJO_MESSAGE`——读起来像"工具不认识我的写法"。排序仍按归一化键（越接近前缀越靠前
- * 的既有语义不变），前缀匹配在装配核里本就大小写不敏感，故换显示不影响命中。
- *
- * 失效判据 = `ErbIndex.fingerprint`（整项目指纹）：指纹不变 ⇒ 纯派生必不变 ⇒ 复用上次排好序
- * 的名字数组（不重排、不重建）；指纹 `null`（有文件取不到 stat）⇒ **一律重算**（保守失效，
- * 与 `plugin-api/erb.ts` 的指纹口径一致）。索引缺席 ⇒ 空数组（**无候选**，不猜）。
- *
- * `getIndex` 抛错（解析器缺席 / 索引在途）⇒ 返回空数组，**绝不让整个补全 seam 崩**。
+ * 函数名（已排序）提供者的**唯一实现**已挪到事实侧 `erb-completion-facts.ts`
+ * （LAU-4 补全腿第三批：补全生产路径不再走本册，事实袋与 `.kojo` 册都要同一枚记忆化件）。
+ * 这里只 re-export，既有 import 点（`editor-global-providers` 的 `editorTables`）零改动。
  */
-export function memoizedErbFunctionNames(getIndex: () => ErbIndex | null | undefined): () => readonly string[] {
-  let memo: readonly string[] = [];
-  let memoFingerprint: string | null = null;
-  let hasMemo = false;
-  return (): readonly string[] => {
-    let index: ErbIndex | null | undefined;
-    try {
-      index = getIndex();
-    } catch {
-      return [];
-    }
-    if (!index) return [];
-    const fp = index.fingerprint ?? null;
-    if (fp !== null && hasMemo && fp === memoFingerprint) return memo;
-    // MEM-12：旧写法 `[...byName.entries()]` 会为 11 万条各造一枚 `[键, 值]` 数组（≈6 MB 垃圾/次），
-    // 而这里只用得上"排好序的**键**"与"值里第一枚 ref 的原文名"。改成先排键（纯字符串比较，
-    // 不造数组）、再按序取原文名：同口径、同顺序，垃圾从 11 万枚数组降到一条键数组。
-    const keys = [...index.byName.keys()].sort();
-    const names: string[] = new Array(keys.length);
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i]!;
-      names[i] = index.byName.firstOf(key)?.name ?? key;
-    }
-    memo = names;
-    memoFingerprint = fp;
-    hasMemo = true;
-    return memo;
-  };
-}
+export { memoizedErbFunctionNames } from './erb-completion-facts';
 
 /* ============================== 位置判定 + 装配声明 ============================== */
 

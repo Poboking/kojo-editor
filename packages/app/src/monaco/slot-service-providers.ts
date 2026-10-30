@@ -138,7 +138,12 @@ import { KOJO2_COMPLETION_TRIGGER_CHARS } from '@kojo/kojo-lang/completion';
 import { kojo2PrepareRename, type Kojo2RenameRange } from '@kojo/kojo-lang/rename';
 import { requireKernel } from '../ui/editor-pane-registry';
 import { LARGE_FILE_LINES } from '../ui/editor-options';
-import { declaredSlotKinds, descriptorForLanguageId, type SlotServiceKind } from './language-registry';
+import {
+  declaredSlotKinds,
+  descriptorForLanguageId,
+  languageDescriptors,
+  type SlotServiceKind,
+} from './language-registry';
 import {
   codeLensRequestOf,
   collectCodeLensResult,
@@ -174,6 +179,7 @@ import {
   markersToDecorations,
   monacoActionKind,
 } from './kojo-code-action';
+import { withPinyinFilterText } from './completion-core';
 import { registerForLanguageServices } from './register-dialects';
 import { reject } from './rename-rejection';
 
@@ -303,6 +309,11 @@ export function toMonacoCompletionItem(
   monaco: typeof Monaco,
   item: EditorCompletionItem,
   fallbackRange: Monaco.IRange,
+  /**
+   * 翻译选项（additive，LAU-4 补全腿第三批）：`pinyinFilter` = 是否补拼音可检索键
+   * （`descriptor.completionPinyinFilter`；缺省 `false` = `filterText` 原样透传）。
+   */
+  options: { readonly pinyinFilter?: boolean } = {},
 ): Monaco.languages.CompletionItem | undefined {
   const K = monaco.languages.CompletionItemKind;
   const rules = monaco.languages.CompletionItemInsertTextRule;
@@ -311,7 +322,7 @@ export function toMonacoCompletionItem(
   const documentation = documentationOf(item);
   // 供方给的区间优先；非法 / 缺席才落回宿主缺省（见 `wordRangeAt` 的注）
   const range = monacoRangeOf(item.range, item.label) ?? fallbackRange;
-  return {
+  const translated: Monaco.languages.CompletionItem = {
     label: item.label,
     kind: completionKindOf(monaco, item.kind),
     insertText: item.insertText ?? item.label,
@@ -324,6 +335,12 @@ export function toMonacoCompletionItem(
     // `insertTextFormat`）绝不开——否则 `# 模` 的声明名会按模板解释自己的名字。
     ...(asSnippet ? { insertTextRules: rules!.InsertAsSnippet } : {}),
   };
+  // 拼音可检索键（P2-12 / SUGGEST-PINYIN-GAP 的**同一份实现**）：中文候选用罗马字也要能搜到，
+  // 而 Monaco 的客户端 `fuzzyScore` 不挂拼音词典 ⇒ 键必须进 `filterText`。补全生产路径改走槽
+  // 之后（LAU-4 补全腿第三批）这一格若不在翻译层补，`.erb` 的中文变量 / 函数名就只剩原文可搜
+  // ——搬家前由装配核 `mergeSuggestions` 补的正是这一格。要不要补是**语言属性**
+  // （`descriptor.completionPinyinFilter`），收口不按 id 分支；缺省 `false` = 原样透传。
+  return options.pinyinFilter === true ? withPinyinFilterText(translated) : translated;
 }
 
 /** 全部候选 → Monaco 数组（被丢弃的那几枚如实少掉，不占位、不改写成别的档） */
@@ -331,10 +348,11 @@ export function toMonacoCompletionItems(
   monaco: typeof Monaco,
   items: readonly EditorCompletionItem[],
   fallbackRange: Monaco.IRange,
+  options: { readonly pinyinFilter?: boolean } = {},
 ): Monaco.languages.CompletionItem[] {
   const out: Monaco.languages.CompletionItem[] = [];
   for (const item of items) {
-    const translated = toMonacoCompletionItem(monaco, item, fallbackRange);
+    const translated = toMonacoCompletionItem(monaco, item, fallbackRange, options);
     if (translated !== undefined) out.push(translated);
   }
   return out;
@@ -830,6 +848,12 @@ function wantsFacts(languageId: string | undefined): boolean {
   return descriptorForLanguageId(languageId)?.completionFacts === true;
 }
 
+/** 这门语言要不要拼音可检索键（descriptor 的属性，不是收口层的判断） */
+function wantsPinyinFilter(languageId: string | undefined): boolean {
+  if (languageId === undefined) return false;
+  return descriptorForLanguageId(languageId)?.completionPinyinFilter === true;
+}
+
 /** 取事实袋（抛错 / 宿主没给 ⇒ `undefined` = 这一轮不带 `facts`，调用方照旧出货） */
 function safeFacts(
   host: SlotServiceHost,
@@ -876,7 +900,12 @@ function completionProvider(monaco: typeof Monaco, host: SlotServiceHost): Monac
             wantsFacts(identity.languageId) ? safeFacts(host, model, position.lineNumber) : undefined,
           ),
         );
-        return { suggestions: toMonacoCompletionItems(monaco, items, wordRangeAt(model, position)) };
+        return {
+          suggestions: toMonacoCompletionItems(monaco, items, wordRangeAt(model, position), {
+            // 拼音可检索键按 descriptor 现取（见 `LanguageDescriptor.completionPinyinFilter`）
+            pinyinFilter: wantsPinyinFilter(identity.languageId),
+          }),
+        };
       } catch {
         return { suggestions: [] };
       }
