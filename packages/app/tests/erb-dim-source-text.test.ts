@@ -251,7 +251,10 @@ describe('装配点 · 投影面上的 F12 / Shift+F12', () => {
     mountProjection();
     const { monaco, definitions } = stubMonaco();
     installDefinitionProvider(monaco, {
-      resolve: () => [],
+      // LAU-4 第二步（d0c9c388）之后，`#DIM` / `$` 两条本地腿的判据住在常驻解析器插件，
+      // 宿主 provider 只查 `resolve`（生产装配＝`readDefinitionTargets` → 槽）。本用例用
+      // 本地腿的投影包装当槽的替身：它交回的正是插件会给出的**源坐标**。
+      resolve: (model, position) => resolveErbDimDefinitionAt(model, position),
       navigate: () => undefined,
       openModelFor: (filePath) => (filePath === ARCHIVE ? ARCHIVE_MODEL : undefined),
     });
