@@ -689,7 +689,7 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
   it('kojo2：4 枚 self、13 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停 / 签名 / 格式化 / 引用 / 改名 / 高亮 / 扩选 / 行上注解 / 折叠走槽腿）、2 枚 builtin、2 项豁免', () => {
     // B2（2026-10-24）：`outline` 从 self 挪到 shared —— 2.0 的大纲不再由
     // `kojo2-symbols.ts` 自建 provider，改由共享收口按 `slotServices: ['documentSymbol']`
-    // 挂上，供方是插件 `@kojo/plugin-kojo-lang`。
+    // 挂上，供方是插件 `@kojo/plugin-kojo-lang`（那枚自建模块在 B5b 已整块删除）。
     // B3b（2026-10-24）：`definition` 同理挪到 shared —— 判据与展开体那两条落点都归插件，
     // 宿主 `installKojo2SlotProviders` 不再注册任何 `DefinitionProvider`。
     // B2c（2026-10-24）：`inlay` 同批挪到 shared —— 原生安装器已不在装配路径上。

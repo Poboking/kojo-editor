@@ -524,7 +524,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '大纲',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/kojo-symbols.ts（共享收口）+ monaco/kojo2-symbols.ts',
+        evidence: 'monaco/kojo-symbols.ts（共享收口 + 插件供方；B5b 起宿主不再有 kojo2-symbols.ts）',
         assembled: true,
       },
       {

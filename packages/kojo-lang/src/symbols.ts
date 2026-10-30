@@ -36,9 +36,12 @@
  *
  * - {@link kojo2DocumentSymbols} / {@link kojo2SymbolPathAt} 是**纯函数**：源码文本进，
  *   事实 / 名字数组出；零 IO、零 Monaco、零缓存（同输入必同输出）；
- * - **把事实翻成 `monaco.languages.DocumentSymbol` 的那一半留在宿主**
+ * - **把事实翻成 `monaco.languages.DocumentSymbol` 的那一半留在宿主**：B2（2026-10-24）之后
+ *   这条腿走共享收口 `app/src/monaco/kojo-symbols.ts`（`registerForLanguageServices` 带能力名
+ *   `documentSymbol`），供方是插件；B5b（2026-10-30）把原先那份宿主自建翻译
  *   （`app/src/monaco/kojo2-symbols.ts`：`kojo2SymbolKindToMonaco` /
- *   `kojo2DocumentSymbolTree` / `installKojo2DocumentSymbolProvider`）。
+ *   `kojo2DocumentSymbolTree` / `installKojo2DocumentSymbolProvider`）整块删除了 ——
+ *   它自 B2 起已零生产调用。
  *   语言面库不认识 Monaco，这条边界正是 B1 要立的：能被插件复用的那一半只吃文本。
  *   那边**不看 cutover 开关**（K2-STRUCTURE-GATE，批次十一：大纲是只读呈现面，与写回 /
  *   迁移 / 切解析器解耦）；provider 内任何异常一律回 `[]`——Monaco 把 provider 的 throw

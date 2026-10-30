@@ -1,176 +1,45 @@
 /**
- * K2-EDITOR-SYMBOLS · Kojo 2.0 文档符号（大纲 / Ctrl+Shift+O）与面包屑路径的闸。
+ * K2-EDITOR-SYMBOLS · Kojo 2.0 文档符号（大纲 / Ctrl+Shift+O）与面包屑路径的**判据**闸。
  *
- * 覆盖八件事：
+ * B2（2026-10-24）起这条腿改由共享收口挂上（`monaco/kojo-symbols.ts` 的
+ * `installDocumentSymbolProvider` 带能力名 `documentSymbol`，kojo2 由 descriptor 的
+ * `slotServices` 点名），供方是插件 `@kojo/plugin-kojo-lang`。B5b（2026-10-30）把宿主那枚
+ * **零生产调用**的 `monaco/kojo2-symbols.ts`（原生安装器 + 第二份 Monaco 翻译）整块删除
+ * ⇒ 事实只剩 `@kojo/kojo-lang` 这一份、Monaco 翻译只剩 `kojo-symbols.ts` 那一份。
+ * 本文件因此只管**纯判据**（源码文本 → 符号事实 / 光标 → 根路径），不碰 Monaco 形状。
+ *
+ * 覆盖七件事：
  * 1. **声明面**：十类声明（幕 / 视 / 机 / 变量 / 常量 / 表 / 池 / 模 / 函 / 织）各出一枚符号，
  *    `?` 链 / 叙事 / 注释 / `@原生` 体一票不产；
  * 2. **detail**：声明词（core 单源）与类型 / 初值 / 存储期 / 行数 / 分支数 / 参数 / 修饰词；
  * 3. **真 span**：块区间取 core AST（表到末行表体、池到末条分支正文、模 / 函 / 织到块体、
- *    幕到本幕末个叙事节点），名字段与 `kojo2-declarations.ts` 的声明索引**逐字对拍**；
+ *    幕到本幕末个叙事节点），名字域与 `kojo2-declarations.ts` 的声明索引**逐字对拍**；
  * 4. **层级**：`container` = 真 span 包含的最内层符号（多幕各收自己那一段）；
  * 5. **确定性**：源码序、两次调用逐字相等、LF / CRLF 同结果；
  * 6. **空 / 坏输入**：`[]`、不抛；
- * 7. **面包屑路径**：`kojo2SymbolPathAt` 的"光标 → 根"、深层块 / 声明区 / 正文 / 越界；
- * 8. **Monaco 面**：`SymbolKind` 映射、`DocumentSymbol` 树形状、开关关也注册（只读呈现面，
- *    K2-STRUCTURE-GATE）、dispose 幂等、provider 失败回 `[]`，外加源码断言（Monaco 类型
- *    只 type-only、不碰插件包、不由 cutover 开关门控）。
+ * 7. **面包屑路径**：`kojo2SymbolPathAt` 的"光标 → 根"、深层块 / 声明区 / 正文 / 越界。
  *
  * 夹具 `fixtures/kojo2/symbols.kojo2` 刻意把 `# 幕` 写在最前：这样它后面的声明都落在该幕的
  * 真 span 里，层级与块区间都能在同一份输入上验；另有用例用声明区在幕前的写法验"顶层符号"。
  */
 import { readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type * as Monaco from '../src/monaco/entry';
-import { kojo2DocumentOf } from '@kojo/kojo-lang';
-import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
+import { describe, expect, it } from 'vitest';
 import {
   KOJO2_SYMBOL_WORD_BY_KIND,
+  kojo2DocumentOf,
   kojo2DocumentSymbols,
   kojo2SymbolPathAt,
   type Kojo2SymbolFact,
   type Kojo2SymbolKind,
   type Kojo2SymbolPosition,
 } from '@kojo/kojo-lang';
-import {
-  installKojo2DocumentSymbolProvider,
-  kojo2DocumentSymbolTree,
-  kojo2SymbolKindToMonaco,
-} from '../src/monaco/kojo2-symbols';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, '../../..');
-const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
 
 const FIXTURE = readFileSync(join(HERE, 'fixtures', 'kojo2', 'symbols.kojo2'), 'utf8');
 const FACTS = kojo2DocumentSymbols(FIXTURE);
-
-/* ============================== 假 Monaco / 假 model ============================== */
-
-/**
- * Monaco `SymbolKind` 的真实数值（0.57 枚举顺序；node 池里 Monaco 运行时不进模块图，
- * 所以按同一张表桩出来比，与 `kojo2-providers.test.ts` 的 `KINDS` 同手法）。
- */
-const SYMBOL_KINDS = {
-  File: 0,
-  Module: 1,
-  Namespace: 2,
-  Package: 3,
-  Class: 4,
-  Method: 5,
-  Property: 6,
-  Field: 7,
-  Constructor: 8,
-  Enum: 9,
-  Interface: 10,
-  Function: 11,
-  Variable: 12,
-  Constant: 13,
-  String: 14,
-  Number: 15,
-  Boolean: 16,
-  Array: 17,
-  Object: 18,
-  Key: 19,
-  Null: 20,
-  EnumMember: 21,
-  Struct: 22,
-  Event: 23,
-  Operator: 24,
-  TypeParameter: 25,
-} as const;
-
-const TOKEN = {
-  isCancellationRequested: false,
-  onCancellationRequested: () => ({ dispose: () => undefined }),
-} as unknown as Monaco.CancellationToken;
-
-interface Registration {
-  readonly selector: unknown;
-  readonly provider: unknown;
-}
-
-interface FakeMonaco {
-  readonly monaco: typeof Monaco;
-  readonly registrations: Registration[];
-  /** 每一次 `registration.dispose()` 记一次（幂等判据） */
-  readonly disposeCalls: number[];
-}
-
-interface FakeMonacoOptions {
-  /** 让注册抛错（验错误外抛；只有一枚注册，没有半成品） */
-  readonly failRegister?: boolean;
-  /** 让注册的 dispose 抛错（验卸载不抛） */
-  readonly failDispose?: boolean;
-}
-
-function fakeMonaco(options: FakeMonacoOptions = {}): FakeMonaco {
-  const registrations: Registration[] = [];
-  const disposeCalls: number[] = [];
-  const fake = {
-    languages: {
-      SymbolKind: SYMBOL_KINDS,
-      registerDocumentSymbolProvider: (selector: unknown, provider: unknown) => {
-        if (options.failRegister === true) throw new Error('桩：注册符号 provider 抛错');
-        const record: Registration = { selector, provider };
-        registrations.push(record);
-        return {
-          dispose: () => {
-            if (options.failDispose === true) throw new Error('桩：撤符号 provider 抛错');
-            disposeCalls.push(registrations.length);
-          },
-        };
-      },
-    },
-  };
-  return { monaco: fake as unknown as typeof Monaco, registrations, disposeCalls };
-}
-
-interface FakeModel {
-  readonly model: Monaco.editor.ITextModel;
-  /** 让 `getValue()` 抛（模拟已释放 / 取文失败） */
-  readonly breakModel: () => void;
-}
-
-function fakeModel(text: string): FakeModel {
-  let broken = false;
-  const model = {
-    getValue: () => {
-      if (broken) throw new Error('桩：模型已释放');
-      return text;
-    },
-    getLineCount: () => text.split(/\r\n|\r|\n/).length,
-    isDisposed: () => broken,
-    getLanguageId: () => KOJO2_LANGUAGE_ID,
-  } as unknown as Monaco.editor.ITextModel;
-  return {
-    model,
-    breakModel: () => {
-      broken = true;
-    },
-  };
-}
-
-function stubFlag(on: boolean): void {
-  const store = new Map<string, string>();
-  if (on) store.set(KOJO2_KEY, 'on');
-  vi.stubGlobal('window', {
-    localStorage: {
-      getItem: (key: string): string | null => store.get(key) ?? null,
-      setItem: (key: string, value: string): void => {
-        store.set(key, value);
-      },
-      removeItem: (key: string): void => {
-        store.delete(key);
-      },
-    },
-  });
-}
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 /* ============================== 小工具 ============================== */
 
@@ -186,32 +55,9 @@ function indexOfFact(fact: Kojo2SymbolFact): number {
   return FACTS.indexOf(fact);
 }
 
-function providerOf(fake: FakeMonaco): Monaco.languages.DocumentSymbolProvider {
-  const registration = fake.registrations[0];
-  if (registration === undefined) throw new Error('没有注册 DocumentSymbolProvider');
-  return registration.provider as Monaco.languages.DocumentSymbolProvider;
-}
-
-function symbolsOf(fake: FakeMonaco, model: Monaco.editor.ITextModel): Monaco.languages.DocumentSymbol[] {
-  return providerOf(fake).provideDocumentSymbols(model, TOKEN) as Monaco.languages.DocumentSymbol[];
-}
-
 function at(line: number, column: number): Kojo2SymbolPosition {
   return { line, column };
 }
-
-/** 手工造一枚事实（只为覆盖翻译层的坏 `container` 输入，与语法无关） */
-function fact(overrides: Partial<Kojo2SymbolFact> & { readonly name: string }): Kojo2SymbolFact {
-  return {
-    detail: '示例',
-    kind: 'variable',
-    range: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 2 },
-    selectionRange: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 2 },
-    ...overrides,
-  };
-}
-
-/* ============================== ① 声明面：十类与"不产符号" ============================== */
 
 describe('声明面：十类声明各出一枚，源码序、无重复', () => {
   it('十类声明全部覆盖（含声明索引不识的视 / 机 / 织）', () => {
@@ -610,186 +456,5 @@ describe('面包屑路径：光标 → 根（最内层在前）', () => {
     expect(kojo2SymbolPathAt(FIXTURE, { line: 1, column: 0 })).toEqual([]);
     expect(kojo2SymbolPathAt(FIXTURE, { line: Number.NaN, column: 1 })).toEqual([]);
     expect(kojo2SymbolPathAt('', { line: 1, column: 1 })).toEqual([]);
-  });
-});
-
-/* ============================== ⑧ Monaco 翻译 ============================== */
-
-describe('Monaco 翻译：SymbolKind 映射与 DocumentSymbol 树', () => {
-  it('十类符号 → SymbolKind（单一映射表）', () => {
-    const fake = fakeMonaco();
-    const expected: Record<Kojo2SymbolKind, number> = {
-      scene: SYMBOL_KINDS.Module,
-      view: SYMBOL_KINDS.Variable,
-      machine: SYMBOL_KINDS.Event,
-      variable: SYMBOL_KINDS.Variable,
-      constant: SYMBOL_KINDS.Constant,
-      table: SYMBOL_KINDS.Struct,
-      pool: SYMBOL_KINDS.Enum,
-      template: SYMBOL_KINDS.Method,
-      function: SYMBOL_KINDS.Function,
-      weave: SYMBOL_KINDS.Event,
-    };
-    for (const kind of Object.keys(expected) as Kojo2SymbolKind[]) {
-      expect(kojo2SymbolKindToMonaco(fake.monaco, kind), kind).toBe(expected[kind]);
-    }
-  });
-
-  it('树形状：两个幕是根，声明是各自幕的子项（源码序）', () => {
-    const fake = fakeMonaco();
-    const tree = kojo2DocumentSymbolTree(fake.monaco, FACTS);
-    expect(tree.map((node) => node.name)).toEqual(['神社清晨', '神社黄昏']);
-    expect(tree[0]!.children?.map((node) => node.name)).toEqual([
-      '灵梦',
-      '指令',
-      '亲近线',
-      '今天已触发',
-      '心情快照',
-      '心情',
-      '早安问候',
-      '娇羞退场',
-      '增加羁绊',
-      '指令',
-    ]);
-    expect(tree[1]!.children?.map((node) => node.name)).toEqual(['天气']);
-    // 空 children 不挂（避免点不开的假箭头）
-    for (const node of tree) {
-      for (const child of node.children ?? []) {
-        expect(child.children).toBeUndefined();
-      }
-    }
-  });
-
-  it('name / detail / kind / tags / range / selectionRange 逐项搬运', () => {
-    const fake = fakeMonaco();
-    const tree = kojo2DocumentSymbolTree(fake.monaco, FACTS);
-    const table = tree[0]!.children?.find((node) => node.name === '心情');
-    expect(table).toBeDefined();
-    expect(table!.detail).toBe(factOf('table', '心情').detail);
-    expect(table!.kind).toBe(SYMBOL_KINDS.Struct);
-    expect(table!.tags).toEqual([]);
-    expect(table!.range).toEqual({
-      startLineNumber: 9,
-      startColumn: 1,
-      endLineNumber: 12,
-      endColumn: 12,
-    });
-    expect(table!.selectionRange).toEqual({
-      startLineNumber: 9,
-      startColumn: 7,
-      endLineNumber: 9,
-      endColumn: 9,
-    });
-  });
-
-  it('坏 container（越界 / 指向自己或后面的兄弟）⇒ 当顶层，不接环', () => {
-    const fake = fakeMonaco();
-    const dangling = fact({ name: '孤儿', container: 5 });
-    const root = fact({ name: '根' });
-    const self = fact({ name: '错位', container: 2 });
-    const tree = kojo2DocumentSymbolTree(fake.monaco, [dangling, root, self]);
-    expect(tree.map((node) => node.name)).toEqual(['孤儿', '根', '错位']);
-  });
-
-  it('空事实 ⇒ 空树', () => {
-    expect(kojo2DocumentSymbolTree(fakeMonaco().monaco, [])).toEqual([]);
-  });
-});
-
-/* ============================== ⑨ 安装 / flag / 失败面 ============================== */
-
-describe('安装：开关关也注册（只读面）、只挂 kojo2、dispose 幂等、失败回 []', () => {
-  it('flag 关 ⇒ 仍恰好一枚注册（K2-STRUCTURE-GATE 改口：旧口径「零注册」作废）', () => {
-    // 大纲是只读呈现面：cutover 只管写回 / 迁移 / 切解析器，关着也必须有 Ctrl+Shift+O。
-    // 保留 stubFlag(false) 正是为了断言"开关确实关着，注册照样发生"。
-    stubFlag(false);
-    const fake = fakeMonaco();
-    const handle = installKojo2DocumentSymbolProvider(fake.monaco);
-    expect(fake.registrations).toHaveLength(1);
-    expect(fake.registrations[0]!.selector).toBe(KOJO2_LANGUAGE_ID);
-    expect(() => {
-      handle.dispose();
-      handle.dispose();
-    }).not.toThrow();
-    expect(fake.disposeCalls).toHaveLength(1);
-  });
-
-  it('flag 开 ⇒ 恰好一枚注册，selector 只有 kojo2', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2DocumentSymbolProvider(fake.monaco);
-    expect(fake.registrations).toHaveLength(1);
-    expect(fake.registrations[0]!.selector).toBe(KOJO2_LANGUAGE_ID);
-    expect(providerOf(fake).displayName).toBe('kojo2');
-  });
-
-  it('provider 对夹具返回同一棵树（两幕 + 子项）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2DocumentSymbolProvider(fake.monaco);
-    const symbols = symbolsOf(fake, fakeModel(FIXTURE).model);
-    expect(symbols.map((node) => node.name)).toEqual(['神社清晨', '神社黄昏']);
-    expect(symbols[0]!.children).toHaveLength(10);
-  });
-
-  it('取文抛错 / 模型已释放 / 坏文件 ⇒ []（不抛进 Monaco）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2DocumentSymbolProvider(fake.monaco);
-    const broken = fakeModel(FIXTURE);
-    broken.breakModel();
-    expect(symbolsOf(fake, broken.model)).toEqual([]);
-    expect(symbolsOf(fake, fakeModel('').model)).toEqual([]);
-    expect(symbolsOf(fake, fakeModel('???\n###\n').model)).toEqual([]);
-  });
-
-  it('dispose 幂等：两次只撤一轮', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    const handle = installKojo2DocumentSymbolProvider(fake.monaco);
-    handle.dispose();
-    handle.dispose();
-    expect(fake.disposeCalls).toHaveLength(1);
-  });
-
-  it('注册的 dispose 抛错不带走卸载链', () => {
-    stubFlag(true);
-    const fake = fakeMonaco({ failDispose: true });
-    const handle = installKojo2DocumentSymbolProvider(fake.monaco);
-    expect(() => handle.dispose()).not.toThrow();
-  });
-
-  it('注册失败 ⇒ 错误外抛（宿主那侧的全有或全无才有东西可回滚）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco({ failRegister: true });
-    expect(() => installKojo2DocumentSymbolProvider(fake.monaco)).toThrow(/注册符号 provider/);
-    expect(fake.disposeCalls).toEqual([]);
-  });
-});
-
-/* ============================== ⑩ 源码卫生（读源码断言） ============================== */
-
-describe('源码卫生：Monaco 只 type-only、不碰插件包、flag 自身再挡一次', () => {
-  const source = readFileSync(
-    resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'kojo2-symbols.ts'),
-    'utf8',
-  );
-
-  it('Monaco 运行时只许 type-only 引入（node 池不把 monaco 拉进模块图）', () => {
-    expect(source).toMatch(/import type \* as Monaco from '\.\/entry'/);
-    expect(source).not.toMatch(/import \* as Monaco from/);
-    expect(source).not.toMatch(/from 'monaco-editor'/);
-  });
-
-  it('不 import 任何插件包、不出现游戏名词', () => {
-    expect(source).not.toMatch(/from\s+['"]@kojo\/plugin-/);
-    expect(source).not.toMatch(/\b(eratw|eraK|eraSQN|eraNAS)\b/i);
-  });
-
-  it('安装器**不再**由 cutover 开关门控（K2-STRUCTURE-GATE：只读面）', () => {
-    // 旧口径断言的是"安装器自带 flag 闸"，批次十一起折叠 / 大纲移出切流开关：
-    // 断言反过来钉住"门控已拆"，注册行照旧只认 `kojo2`。
-    expect(source).not.toMatch(/isKojo2CutoverEnabled/);
-    expect(source).toMatch(/registerDocumentSymbolProvider\(\s*KOJO2_LANGUAGE_ID/);
   });
 });
