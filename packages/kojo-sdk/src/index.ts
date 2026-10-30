@@ -17,8 +17,7 @@
  * ## 四条硬口径（`tests/purity.test.ts` 钉死）
  *
  * 1. **零 Monaco / 零 React / 零 DOM / 零 IO**（连 `import type` 也不算例外）——
- *    这条与 `@kojo/kojo-lang` 同源：插件一旦 import monaco，SDK 这条路就断
- *    （`HANDOFF-kojo2-sdk-packages.md` §5 红线 3）；
+ *    这条与 `@kojo/kojo-lang` 同源：插件一旦 import monaco，SDK 这条路就断；
  * 2. **零游戏名词**：本包不认识任何一部具体游戏（`tests/purity.test.ts` 扫全树，注释也算）；
  * 3. **只依赖两枚**：`@kojo/kojo-core`（语言事实的契约真源）与 `@kojo/plugin-api`
  *    （插件与槽位的契约真源）。多一枚都要在测试里显式改名单并写清理由；

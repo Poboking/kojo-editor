@@ -7,7 +7,7 @@
  *   conventions / kojoCallProtocol / kojoInstructionTable / kojoFaceTemplates /
  *   nameGlossary）；
  * - 「我的口上项目」面板与向导族**不在本版**（P4：先抽取共享骨架、两适配器共用，
- *   见 docs/PLAN-eraAkumaMaid-adapter.md 决策②——不复制一份 eratw 向导代码）。
+ *   不复制一份 eratw 向导代码）。
  *
  * 与 eraTW 的核心差异（命名体系）：eraTW 是中缀 `M_KOJO_K{n}_{家族}`，本游戏是
  * **后缀式 `{家族}_K{n}`**；主路由 = `ERB/EVENT_K/EVENT_K.ERB`（= eraTW 的

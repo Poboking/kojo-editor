@@ -1,6 +1,6 @@
 # PITFALLS.md — 环境坑与探针纪律（写盘 / 探针 / 多 agent 前后扫一眼）
 
-> 来源：原 HANDOFF §七/§八/§九（已冻结进 `docs/archive/HANDOFF.md`，细节可去那查原文）。
+> 来源：早期会话的 §七/§八/§九（细节见 git 历史）。
 > **新坑追加 = 一行**，写进对应小节；**不再往 archive 写任何东西**。
 
 ## 一、安全模型（写文件功能必读）
@@ -57,7 +57,7 @@
 | **WorkBuddy 沙箱工作树里 pnpm 默认 isolated 布局的 junction 创建静默失败**（2026-10-16 实测）：install rc=0"Done"，但根链接（`node_modules/vitest` 等）与 `.pnpm` 内 scoped 链接全缺、只剩空实体目录 ⇒ `node node_modules/vitest/vitest.mjs` MODULE_NOT_FOUND、`tsc` 报 TS2688 找不到 node 类型；`--force` 与整删重装都复现，%TEMP% 下 junction 却正常 | 改用 hoisted 布局（纯拷贝无链接）：`pnpm install --config.node-linker=hoisted`；**每条会触发依赖校验的 pnpm 命令都会用默认配置把布局打回 isolated**（`pnpm typecheck` 实测先重装再跑脚本）⇒ 跑门槛用直连形态绕开脚本壳（`node node_modules/vitest/vitest.mjs run`、`node node_modules/typescript/lib/tsc.js --noEmit -p …`）或命令行都带 `--config.node-linker=hoisted`；**别改全局/仓库配置**（会溅射别的 agent 的树） |
 | **hoisted 布局下 workspace 链接也会静默全缺（47 的变体，2026-10-16 wt-erb-fmt 实测）**：`packages/*/node_modules/@kojo/*` 的依赖方链接一个都没建、只剩空 scope 目录 ⇒ vitest 走自己的 aliases 照样绿、**tsc 才报 TS2307**（连没改过的文件一起红＝一眼识环境坑，别当自己的 diff 查）；`--force` 与整删 `packages/*/node_modules` 重装都不重建（pnpm 认定 Already up to date） | 手工补 junction（临时 `.mjs` 里 `fs.symlinkSync(target, link, 'junction')`，无需管理员），按健康工作树的 `@kojo` 名单逐个补，补完对拍两树链接集合自检；app typecheck 随即 exit 0 |
 
-## 三、会话坑（一行制；1–50 = 原 §九去重名单，51 起为重构后新增，细节在 `docs/archive/HANDOFF.md` §九）
+## 三、会话坑（一行制；1–50 = 早期去重名单，51 起为重构后新增）
 
 1. 规则先核验引擎源码再定语义——FORM 三连符号初版 239 条误报，收窄为排除 `+++` + 每文件每符号聚合后 8 条真实事故。
 2. 插件订阅/清理必经 `ctx.onDispose`，否则停用后残留 handler。
@@ -111,7 +111,7 @@
 50. **判据"比同一个元素"就是空判据**（`scrollHeight - clientHeight` 对内容撑开的元素恒 0 = 一路绿灯）⇒ 真对象是**内容高 vs 盒子高（两个不同元素）**；同类：量"盒子高是行高整数倍"也证明不了内容不溢出。
 51. 临时探针是**一次性工具放 `%TEMP%` / `.local/`、不入库**；但探针的**断言清单与读数必须随批写进 `docs/log/`**（同族：探针跨进程留的锁/端口/残留偏好——9222 旧进程、1420 占用、localStorage 标记——是下一轮"产品缺陷"假红的来源，开跑前统一清场）。
 52. 测试替身与实现必须**形状同构**：`stats()` 替身第一版回同一个对象 ⇒ "前后之差"恒 0 = 空断言还全绿；真池返回的是拷贝（`{ ...offloadStat }`），替身必须同款（§5.130；同族第 50 条）。
-53. 共享树的残留 stash 实体（`feedback3-wip-2026-10-13`）：代码主体**已被 §5.88 以另一形态取代，别按旧方案原样复用**；独有可用件＝图标 PNG 生成器 + `app-icon.png`（取法见 `docs/archive/HANDOFF.md` §十二-7 ④）。
+53. 共享树的残留 stash 实体（`feedback3-wip-2026-10-13`）：代码主体**已被 §5.88 以另一形态取代，别按旧方案原样复用**；独有可用件＝图标 PNG 生成器 + `app-icon.png`（去 git 历史取）。
 54. **pnpm 脚本里的内联 POSIX env 写法（`FOO=1 vitest …`）在 win32 必挂**（cmd 把 `FOO=1` 当命令：`'FOO=1' 不是内部或外部命令`，实测 `test:erbcheck` 原写法 exit 1）⇒ 脚本要么写成 `node 文件`（env 由 JS spawn 注入，见 `tools/verify.mjs` erbcheck 条目），要么调用方 shell 预设；`pnpm verify` 系列已统一走后者。
 55. **糖「某个写法今天能不能写」不许靠读码推断，必须跑真转译**：`resolve`（`kojo-sugar/src/index.ts:313-318`）只看**族头** ⇒ `NOWEX:噴乳`、`NOWEX:噴乳乳瞎写`（拼错名）**一律零 error 放行**；反而 `SELECTCOM`（无族头的引擎全局）与 `NOWEX:Ｃ絶頂`（全角拉丁字母被 `isIdentPart` 切断，`expression.ts:43`/`system-functions.ts:90` 两处副本）报 `unknown-identifier` 而**产物仍正确**——只报不纠最坑。E15 方案原稿四条"现状糖"判断全因此写反（校准见 `docs/SUGAR-INTIMATE-EXPANSION-PROPOSAL.md` §3.0 探针矩阵）。判法＝`createSugarTranspileService({ dictionary: loadEratwVariableSchema(真语料 CSV 目录), faceTable: createEratwFaceTable() })`，装配照 `eratw-adapter/tests/scaffold-cases.test.ts` 的可写性守卫（其 `DictionaryLookup` 是产品 `makeLookup` 的逐字镜像，可直接拿来用）。
 56. **win32 上 `path.dirname('profile')` 返回 `'.'` 而不是 `''`** ⇒ 用 `!path.dirname(rel)` 判"根级文件"**恒假**：`tools/engine-loadtest.mjs` 的"根级强制真副本"名单因此形同虚设，镜像里**所有**根级文件都是硬链接，引擎退出时的就地重写直接溅射到真实语料盘（实测已把 `C:\game\<基线语料>\profile` 改写一次、无备份可还原——**语料只读是硬约束，这条是已发生的事故不是理论风险**）。判"根级"只能用 `rel` 里不含 `/`；凡"引擎会就地改写的文件"一律真副本，且**建完镜像必须比 inode 自检**（`mustRealCopy` / `assertRealCopies` 已钉进 `engine-loadtest.mjs`，跑前跑后还要对拍语料根级文件 `ino/nlink/size/mtime`）。同族坑：`profile` 在语料里是**文件**不是目录，任何按目录前缀（`'profile/'`）或具体文件名的猜法都会漏。
@@ -143,7 +143,7 @@
 82. **插件包里的 UI 组件挂不得 hook，也碰不得 `document`：包 `lib` 只有 ES2022（无 DOM），且既有测试把组件当纯函数直接调**（`createTutorialOverlay({...})()` 取元素树）：2026-10-16 给教程浮层加目录跳转，先按常规写了 `useRef`/`useState` + `document.documentElement.getAttribute('data-motion')` —— typecheck 当场报 `Property 'querySelector' does not exist on type 'HTMLDivElement'` 与 `Cannot find name 'document'`；类型改成结构面之后，`tutorial-inline.test.ts` 的渲染树用例又在运行时炸（React dispatcher 为 null，hook 在渲染器外不可用）。⇒ 三条口径：①要 DOM 成员就照「我的口上项目」面板分割线的既有写法**只声明用到的结构面**，跳转从事件的 `currentTarget` 走 `closest`/`querySelector`，**不要存 ref**（ref 就是 hook）；②**别在插件里读用户偏好**——平滑滚动写进样式 `.tutorial-body { scroll-behavior: smooth }`，由既有的 `:root[data-motion='reduced']` 全局块压成瞬移，行为等价且不越层；③组件保持"纯函数产元素树"这个可测形态，真需要状态的能力挪到宿主层。
 83. **Monaco standalone（含 0.57.0）根本没有 CallHierarchy API**：call hierarchy 在 VS Code 属 workbench 层，Monaco 从未把它暴露进 `editor.api`——`editor.api.d.ts` 全文 0 处 `CallHierarchy`（对照：registerRenameProvider 等都在），全 esm 只有 ts.worker 内部实现有。立项「宿主层 CallHierarchyProvider」前先 grep 这份 d.ts；想要该 UX 只能自建 UI 或升级带上游 API 的形态，没有现成注册函数可调。
 88. **CI-1 分池后单跑计时类用例会报「No test files found, exiting with code 1」**：默认 `vitest.config.ts`（功能池）把 20 个墙钟文件列进 exclude，`rescan-scale.perf` / `*-perf.test.ts` 一类只在 `vitest.perf.config.ts`（串行池）里。正解＝`node node_modules/vitest/vitest.mjs run --config vitest.perf.config.ts <file>`；这条不是「用例没了」，也别拿 rc=1 当产品回退（全量口径＝两池相加，见 STATE §一）。
-89. **给函数名表补"盘上本就是中文/日文名"的恒等条目会自造「一字之差的双生真函数」，把合法的自定义/基础库名判成拼错**：2026-10-16 ZH-D1 实测——`個人口上` 2,285 份 `.ERB` 里表外中文调用点 1,396 处，按收录判据补 13 条恒等条目（`充填率`→`充填率`）后，`SHOW_上半身内衣`↔`SHOW_下半身内衣`、`仕事日チェック`↔`仕事中チェック`、`金额表示`↔`金額表示` 立刻被"唯一近名 ⇒ error"的判据抓成 13 处假拼错（盘上它们**各有** `@` 定义，都是能跑通的代码；同款成对还有 `脱衣处理`↔`脱衣処理`、`挿入不可`↔`插入不可`、`SOURCE_快Ｍ`↔`SOURCE_快Ｖ`）。⇒ 拼错升档判据（`kojo-sugar/src/system-functions.ts::suggestFunctionName`）**候选池只取别名条目**（`中文名 ≠ 原生名`），恒等条目永不作"你该改成它"的建议；再加两字短名不升档（`随意`↔`随机` 那类另冒 10 处）。这条由 `kojo-sugar/tests/unknown-name-tier.corpus.test.ts` 的升档上限闸（≤5 点 / ≤0.5%）钉住：**上限刻意低于那 13 处**，以后谁再补名表造出新的近名对，这道闸会先红，按它打印的明细处置（要么该真名同批评录，要么判据本身被放宽过）。
+89. **给函数名表补"盘上本就是中文/日文名"的恒等条目会自造「一字之差的双生真函数」，把合法的自定义/基础库名判成拼错**：2026-10-16 ZH-D1 实测——`個人口上` 2,285 份 `.ERB` 里表外中文调用点 1,396 处，按收录判据补 13 条恒等条目（`充填率`→`充填率`）后，`SHOW_上半身内衣`↔`SHOW_下半身内衣`、`仕事日チェック`↔`仕事中チェック`、`金额表示`↔`金額表示` 立刻被"唯一近名 ⇒ error"的判据抓成 13 处假拼错（盘上它们**各有** `@` 定义，都是能跑通的代码；同款成对还有 `脱衣处理`↔`脱衣処理`、`挿入不可`↔`插入不可`、`SOURCE_快Ｍ`↔`SOURCE_快Ｖ`）。⇒ 拼错升档判据（`kojo-sugar/src/system-functions.ts::suggestFunctionName`）**候选池只取别名条目**（`中文名 ≠ 原生名`），恒等条目永不作"你该改成它"的建议；再加两字短名不升档（`随意`↔`随机` 那类另冒 10 处）。这条由 `kojo-sugar/tests/unknown-name-tier.test.ts` 的升档上限闸钉住（语料闸已随 kojo1 封存面退役）：**上限刻意低于那 13 处**，以后谁再补名表造出新的近名对，这道闸会先红，按它打印的明细处置（要么该真名同批评录，要么判据本身被放宽过）。
 90. **`lint reuse` 的「装载 Xms」是 await 墙钟，不是计算量**：一次快照装载＝`exists` + `readFileBytes` 两趟 IPC，排在抽取段忙的事件循环后面 ⇒ 1.43MB 的盘（node 侧 read+parse 实测 19.6ms）能在壳侧量到 1,406ms。归因回退时别拿它当成本，体感判据用 `cascade.projectOpened→校验有结果` 的**段间 delta**（PERF-13 就靠这个把 4.5s 钉到预取头上，而不是误判「装载变慢」）。
 91. **引擎实例内的记忆态（`lastRun`、热缓存）在真壳每轮都为零**：水位工具的第二轮是 reload，新页面＝新引擎实例；合成盘同一内核连跑四轮量不到这类回退 ⇒ **凡动「上一轮记忆」的批必须带真壳一轮**（PERF-12b 的 4s 稳态回退就是这么漏掉合成盘闸门的）。
 92. **拆出去的存储键不会自动跟着主快照死**：主快照被判死（格式换代 / 全局判据不符）时贡献键必须同批删，否则换项目留永久孤儿；且 `prune` 的保留集要防在途写被误删（保留集＝本轮真声明了 partition 的规则，写盘串链）。

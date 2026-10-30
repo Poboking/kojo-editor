@@ -190,7 +190,7 @@ export interface FunctionNameCandidate {
 
 /**
  * **为什么这么分**（数据口径，不是口味）：只读普查真语料 `個人口上` 2,285 份 `.ERB`
- * （复跑口径 = `tests/unknown-name-tier.corpus.test.ts`，与 `lowerSystemFunctions` 同一个扫描
+ * （复跑口径 = `tests/unknown-name-tier.test.ts`，与 `lowerSystemFunctions` 同一个扫描
  * 语义；eraTW 4.980 画蛇添足版 2026-10-16 实测）——中文函数名**调用形态**共 1,396 处，
  * 补名表前**全部**落在两张表外（324 个不同名 / 263 个文件），按基础库收录判据补 13 条恒等条目后
  * 仍有 **526 处 / 311 个名 / 158 个文件**在表外：表外名里绝大多数是基础库与项目自定义 `@函数`

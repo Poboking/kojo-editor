@@ -10,7 +10,7 @@
 2. `docs/STATE.md` —— 基线数字 / 环境路径 / 剩余欠账（**读数字从这拿，别信记忆**）
 3. `docs/BOARD.md` —— 在办看板：认领前先读，开工先改状态
 4. 按需：`docs/PITFALLS.md`（写盘 / 探针 / 多 agent 前扫一眼）
-5. 历史冻结在 `docs/archive/`（**只读**，不再追加）；本批新记录写 `docs/log/`，一行为一条
+5. 历史记录在 git 提交信息；`docs/archive/` 与 `docs/log/` 是旧制存档（**只读，不再追加**）
 
 ## 二、架构铁律（改动前默念，`pnpm audit:decoupling` 会查）
 
@@ -72,7 +72,7 @@ node tools/debug-web-smoke.mjs   # 无头浏览器端到端冒烟（欢迎页→
 - **此外不写任何文档**：不写批次 log、不写总结 / 分析 / 报告、不举行取号仪式。历史由 git 保留，`docs/archive/` 冻结不再追加。
 - 仅两个豁免：硬坑（会造成返工的实际陷阱）一行一条进 `docs/PITFALLS.md`；基线数字（测试数等）真变时顺手改 `docs/STATE.md` 对应行。
 - 规格类文档（`ARCHITECTURE` / `BASELINES` / `SYNTAX-SUGAR-SURFACE-SPEC` / `USER-GUIDE` / `adr/`）只在实现与文档冲突且实现是对的时改一行算一行，不做重写。
-- 旧制残留：`docs/log/` 各文件为历史存档，不再新增；`docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` 供发版判据引用，不再是看板索引。
+- 旧制残留：`docs/log/` 与 `docs/archive/` 只读；`docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` 供发版判据引用，不再是看板索引。
 
 ## 六、分工边界与冲突纪律
 
