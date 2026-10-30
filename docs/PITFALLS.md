@@ -481,6 +481,9 @@
    52,424 恰好是"条件抽取器的函数条件壳"数 ⇒ 对应 `condition-extractor/src/snapshot.ts` 里那句 `Object.defineProperty(cond, 'dependencies', {value: built, …})`（读一次就把访问器换成值属性）。V8 对"访问器 → 数据属性"的重新定义走 `NormalizeProperties`，**把整枚对象转进字典模式**：453 B/枚 vs 快路径 ~56 B。
    **但最小复现没能复现出字典态**：合成 52,435 个条件壳 / 211,985 条依赖、走同一条 `decodeBuckets` + 读全部 `dependencies`，堆快照里只有 274 枚字典态对象、**一枚 `context:cond` 都没有**（新旧两种写法都是）。⇒ 真实壳里还有第三个因素（另有代码在这批对象上加/删属性、或读的顺序不同）没归因。纪律：**合成复现"没复现出来"不能用来否掉真实壳的读数**——两者都能测，就都要记；把"未归因"写清楚，比编一个解释安全。
    本批的处置：删掉那句 `defineProperty`，改闭包缓存（访问器一直留着，`Object.keys` / `JSON.stringify` / `toEqual` 口径不变，用例 203 绿）。**热载稳态读数不变（153.4 MB）**——热载路径一次都不读 `dependencies`（复用 3,971 份、0 文件重算），这笔账只在"用户真去翻条件面板"时才存在。
+   **结案（2026-10-30 MEM-11，子 agent 归因）**：真凶既不是那句 `defineProperty`、也不是任何消费步，而是**建壳这一步本身**——字面量里写 `get dependencies() {…}`，**每枚对象一枚闭包**。V8 的快路径只给"**共享**的常量访问器"留位置（访问器存在描述符里）；"每枚一枚闭包"的访问器只能按对象存 `AccessorPair` ⇒ 必然 `NormalizeProperties` 转字典态。**真实快照 decode 完、一条依赖都没读，52,435/52,435 就已全是字典态**；MEM-8 的合成复现"没复现出来"，是因为它只量了 `memoryUsage`、没量 **decode 之后的对象形状**（`%HasFastProperties` 或堆快照）。
+   修法（实测 6 万枚壳）：字面量只写**数据属性** → `Object.defineProperty` 补访问器 → **一次 decode 共用一枚**访问器（闭包只捕获列式表），每枚的"区间 / 已物化数组"放 `WeakMap`（约 +42 B/枚，换掉 453 B/枚）。结果：**0 枚字典态**，`(object properties)` 那 22.75 MB → **0.35 MB**；真实快照隔离探针 decode 后 heapUsed **46.6 → 21.8 MB**、读完全部 21.2 万依赖 **115.9 → 90.3 MB**。
+   ⇒ 纪律：**"每枚一枚闭包"的 getter 是内存陷阱**，尤其在有 5 万+ 实例的壳对象上；要惰性就把状态放 `WeakMap`、把访问器做成"每次构建一枚、全体共享"。另外：**"合成复现没复现"不能当成"真实壳没问题"**——先问"我量的那个指标能不能看见形状"。
 
 273. **自举解析钩子只认裸包名 ⇒ 新包一落地就 `ERR_MODULE_NOT_FOUND`，而错误信息里不带子路径，看着像"包没装"**（2026-10-30 MEM-8 实拍，`tools/mem-readings.mjs`）：
    `registerHooks` 里把 `@kojo/<name>` 映射到 `packages/<name>/src/index.ts`，只处理裸名。ERB-VOCAB 批把控制流配对表上提成 `@kojo/erb-vocab/control-flow`（**带子路径**）之后，量具当场崩在 `Cannot find package '@kojo/erb-vocab' imported from …scanner.ts`——包明明在 `packages/erb-vocab/`、`src/index.ts` 也在，看着像 workspace 没链上，实际是钩子把子路径原样交给了 Node。
@@ -502,3 +505,13 @@
    现象：同一棵树里 A 正在跑 `tools/tests`，B 同时 `rm -rf node_modules/.vite` 后重跑；随后几分钟内任何 vitest 调用都在第一个 `describe()` 报 `TypeError: Cannot read properties of undefined (reading 'config')`、0 test。窗口过后同一命令自然恢复：B 的两个源文本钉 **9/9**、`debug-session-key` **3/3**。
    证据边界：已排除 `@vitest/runner` 双实例（`--preserve-symlinks` 不复现）、宿主 `NODE_OPTIONS` shim（`env -u` / `env -i` 仍复现）、测试内容（未改动的文件同样挂）；**但没有做"删缓存前 vs 后"的对照实验，所以只记为"并发 + 清共享缓存"的过程风险，不宣称因果已被证明**。
    ⇒ 三条纪律：① 共用树里不要清 `node_modules/.vite`、`.turbo`、`dist` 这类别人正在用的共享缓存——要清先确认没有同树任务在跑；② 看到"收集期 0 test / `runner.config` undefined"，先隔离而不是改代码：`cd` 到树根重跑 + 拿一个**本轮未改动**的测试文件对拍，仍然红再怀疑依赖；③ 不要用 `pnpm install --force` 去"修"它——共用树重装会打断别人，而且这类瞬态本来就会自愈。
+277. **"为一次点击建全表索引"是最常见的过度预建：11 万条名字的前缀索引 9.39 MB、族索引 35.9 MB，而作者一次只问一个键**（2026-10-30 MEM-12 实拍，`packages/app/src/monaco/`）：
+   两处都是"名录一变就预建全表"的写法：
+   ① **前缀索引**：给每条名字造一份大写串 + 一个 `{name, file}` 对象 ⇒ 常驻 **9.39 MB**、建索引 157–183 ms。改成"只存一份原文名数组，大小写折叠在查询时当场算"（ASCII 零分配）⇒ **0.16 MB**、建索引 21–23 ms。
+   ② **族索引**（点号成员补全）：为每个名字的**每个下划段**建桶 + 一枚守卫 `Set`（`M_KOJO_K1_HATSUMI` 进 `M_` / `M_KOJO_` / `M_KOJO_K1_` 三桶）⇒ 常驻 **35.9 MB**、首问 **541–1008 ms**。改成"按族键按需扫一遍 + 上限 32 条的 LRU 记忆化"⇒ 常驻 **0.7 MB**、首问 **24 ms**。
+   ⇒ 纪律：预建索引的判据不是"这样查询 O(1) 好看"，而是**"一次会话里这个键会被问几次 × 键有多少种"**。这里 11 万个名字 → 几万个族键，而一次点号只问一个；按需扫一遍 110k 条只要 24 ms，比"省下来的 35 MB 常驻"便宜得多。反过来，**按需扫必须有上限**（LRU 32），否则等于把预建改成"慢慢泄漏"。
+
+278. **并行拆批做内存优化时，开机图闸的"逐文件点名对账"是唯一能防止漏账的手段；而"文件被写成 CRLF"这类老坑会在多人并行时复发**（2026-10-30 MEM-10~14 实拍，五个子任务同时改七个文件）：
+   本批七个源文件合计 +24,114 B，但闸只涨了 **+16,979 B**。差额 7,135 B 不是量错——`app/src/monaco/*` 三枚与 `convention-linter/*` 两枚**都在懒边之下、根本不在开机图里**。对账方式：先量总量（3,261,066 → 3,278,045），再逐文件量"本树 vs `HEAD`"，最后只把**图内那两枚**写进台账（13,450 + 3,529 = 16,979，逐字节对上）。若不做这一步，要么漏抬闸（闸红），要么把懒边文件也算进去（抬多、白让 7 KB 预算）。
+   另一个复发：子 agent 在 Windows 上写文件把两枚文件变成了 **CRLF**（1,188 + 470 行），`git status` 只给一句 `warning: CRLF will be replaced by LF`——正是 PITFALLS 268 那个坑。**合并前必须用二进制口径查一遍**（`readFileSync(f).toString('latin1').match(/\r\n/g)`），别信 `git diff --stat`。
+   ⇒ 纪律：并行拆批要**按包/按目录切**（本次五路互不重叠：erb-parser / condition-extractor / app / tools / 校验器+适配器），并在合并时统一做三件事：类型检查、逐文件字节对账、二进制查行尾。

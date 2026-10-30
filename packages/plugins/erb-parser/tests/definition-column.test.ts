@@ -131,8 +131,9 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
     const file = parseErbText('\t@FOO(ARG)\n;doc\n@BAR\n', '/a.ERB');
     const payload = JSON.parse(JSON.stringify(encodeEntries({ '/a.ERB': entryOf(file) }))) as Record<string, unknown[]>;
     const fns = payload['/a.ERB']![5] as unknown[][];
-    // FOO 无注释块 ⇒ 第 6 位写 null 占位，列才落在第 7 位（可选位不许跳着排）
-    expect(fns[0]).toEqual(['FOO', 1, 2, [['ARG', 0]], 0, null, 3]);
+    // FOO 无注释块 ⇒ 第 6 位写 null 占位，列才落在第 7 位（可选位不许跳着排）。
+    // 第 4 位是 v14 的**扁平**形参流水（`[名, 0|1]` 逐对排，步长 `PARAM_STRIDE`）。
+    expect(fns[0]).toEqual(['FOO', 1, 2, ['ARG', 0], 0, null, 3]);
     expect(fns[1]).toEqual(['BAR', 3, 4, [], 0, 'doc', 2]); // 有注释块 + 有列
     const back = decodeEntries(payload)!['/a.ERB']!;
     expect(back.file.functions).toEqual(file.functions);
@@ -175,7 +176,7 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
 
   it('版本判据：当前键带当前版本号；表外旧版（v9）一条都不复用（不静默留缺列）', () => {
     expect(snapshotKeyFor('D:/p')).toContain(`v${SNAPSHOT_VERSION}`);
-    // `snapshotKeyCandidatesFor` 只探表内版本：v10/v11/v12 都在表里（同形迁移），
+    // `snapshotKeyCandidatesFor` 只探表内版本：v10~v13 都在表里（同形迁移），
     // v9 不在表 ⇒ 旧盘一条都不复用、一次冷重建。
     // **别用 `SNAPSHOT_VERSION - n` 表示"隔代"**：表里一旦多进一代，那个算式就指向了表内版本，
     // 用例会绿得没道理（见 `snapshot-salvage.test.ts` 顶部同名注）。
@@ -335,7 +336,7 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
     // 当前键、当前版本号，但条目是"没有列这个事实"的形态（等价于旧一代盘上数据被认可续用的情形）
     const legacyEntry: unknown[] = [
       1000, TEXT_A.length, TEXT_A.length, 2, 0,
-      [['FOO', 1, 2, [['ARG', 0]], 0]], // 5 位 = v8 形态：无注释块、无列
+      [['FOO', 1, 2, ['ARG', 0], 0]], // 5 位 = v8 形态：无注释块、无列（形参按 v14 扁平形态写）
       [],
       ['FOO', 1, 3, 0], // v13 的扁平流水（步长 REF_STRIDE）
       [],

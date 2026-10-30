@@ -115,6 +115,34 @@ describe('v3 按文件桶编解码', () => {
     expect(Object.getOwnPropertyDescriptor(back!.buckets['D:/game/k3.ERB']!.conds[0]!, 'dependencies')!.get).toBeTypeOf('function');
   });
 
+  /**
+   * 形状守卫（MEM-11，2026-10-30）：上一条钉的是**语义**（自有+可枚举访问器、读一次只建一次），
+   * 这一条钉的是**别退回那个形状**。V8 的快路径只给"**共享**的常量访问器"留位置：
+   * 访问器写在对象字面量里、或每枚现造一枚闭包，52,435 枚壳会全部转字典态、各挂一枚
+   * 453 B 的 `(object properties)` 块（真实堆实测 22.4 MB）。语义测试全绿也照样能踩这个坑
+   * ——MEM-8 就是这么过去的。
+   */
+  it('形状守卫：同一份解码出来的壳共用同一枚访问器，且壳上不挂自有符号键', () => {
+    const { back } = roundTrip(buckets());
+    const a = back!.buckets['D:/game/k1.ERB']!.conds[0]!;
+    const b = back!.buckets['D:/game/k3.ERB']!.conds[0]!;
+    const getA = Object.getOwnPropertyDescriptor(a, 'dependencies')!.get;
+    const getB = Object.getOwnPropertyDescriptor(b, 'dependencies')!.get;
+    expect(getA).toBeTypeOf('function');
+    // 共享 ⇒ V8 把访问器放进描述符（快路径）；每枚一枚闭包 ⇒ AccessorPair 只能进字典
+    expect(getB).toBe(getA);
+    // 壳上不许有隐藏的自有槽：Symbol 键会被 `toEqual` 计入（口径变了），数据键会改 `Object.keys`
+    expect(Object.getOwnPropertySymbols(a)).toHaveLength(0);
+    expect(Object.keys(a).sort()).toEqual([
+      'dependencies',
+      'filePath',
+      'normalizedName',
+      'predicateCount',
+      'startLine',
+      'unparsedCount',
+    ]);
+  });
+
   it('schema 去重表：重复标签只存一份（还原后仍等值）', () => {
     const { payload, back } = roundTrip(buckets());
     // 四条带 schema 的依赖里 `CFLAG:2`「好感度」跨两个文件各出现一次 ⇒ 字典只剩 3 种

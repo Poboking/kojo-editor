@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { BUILTIN_FUNCTION_NAMES } from '@kojo/plugin-erb-parser';
-import { MAX_NAME_CANDIDATES, rankKey, type CompletionTables } from './completion-core';
+import { MAX_NAME_CANDIDATES, rankKey, startsWithFold, type CompletionTables } from './completion-core';
 import { erbCompletionGate, NAME_CHAR_RE } from './erb-completion-context';
 import { erbDeclaredNameSlot, ERB_SIGIL_BEFORE } from './erb-completion-families';
 import { erbVariableReferenceSlotAt } from './erb-completion-variables';
@@ -258,38 +258,47 @@ function familyCandidates(
 /* ============================== 候选：点号成员族（heuristic） ============================== */
 
 /**
- * 名录的**族索引**（按数组身份记忆化）：`前缀_`（含每个下划线处）→ 该族成员名。
+ * 名录的**族成员查询**（按「数组身份 + 族键」记忆化）：`M_KOJO_K1.` ⇒ `M_KOJO_K1_` 开头的名字。
  *
- * 多段族一并建键：`M_KOJO_K1_HATSUMI` 同时进 `M_` / `M_KOJO_` / `M_KOJO_K1_` 三个桶 ——
- * 于是 `M_KOJO_K1.` 也能直接点出 `M_KOJO_K1_HATSUMI`（接收者是几段就用几段的键，查找恒 O(1)）。
- * 键与去重都按**归一化大写**（引擎函数名大小写不敏感），展示保留定义处原拼写。
+ * 旧形态是**全量桶索引**：为名录里每个名字的每个下划段建一个桶 + 一枚守卫 `Set`（`M_KOJO_K1_HATSUMI`
+ * 进 `M_` / `M_KOJO_` / `M_KOJO_K1_` 三桶）。MEM-12 实测（110,049 条名字 / 真语料量级，整轮
+ * `erbMemberCompletion`）：**首问 541–1008 ms、常驻增量 35.9 MB**——而作者一次点号只会问**一个**族键。
+ * 改成按需扫一遍（`startsWithFold`，ASCII 零分配）+ 按族键记忆化后：首问 24 ms、常驻增量 0.7 MB。
+ *
+ * 记忆化上限 {@link FAMILY_CACHE_LIMIT}：点号位关心的就是"当前打开的几个族"这一量级，
+ * 超出按最久未问丢（丢了只是重扫一遍，答案不变）。键与去重仍按**归一化大写**
+ * （引擎函数名大小写不敏感），展示保留定义处原拼写。
  */
-const FAMILY_INDEX_CACHE = new WeakMap<object, ReadonlyMap<string, readonly string[]>>();
+const FAMILY_INDEX_CACHE = new WeakMap<object, Map<string, readonly string[]>>();
+const FAMILY_CACHE_LIMIT = 32;
 
-function familyIndexOf(names: readonly string[]): ReadonlyMap<string, readonly string[]> {
-  const cached = FAMILY_INDEX_CACHE.get(names);
-  if (cached !== undefined) return cached;
-  const buckets = new Map<string, string[]>();
-  const guards = new Map<string, Set<string>>();
-  for (const name of names) {
-    if (typeof name !== 'string' || name.length === 0) continue;
-    const upper = name.toUpperCase();
-    for (let i = upper.indexOf('_'); i >= 0; i = upper.indexOf('_', i + 1)) {
-      const key = upper.slice(0, i + 1);
-      let bucket = buckets.get(key);
-      if (bucket === undefined) {
-        bucket = [];
-        buckets.set(key, bucket);
-        guards.set(key, new Set<string>());
-      }
-      const guard = guards.get(key)!;
-      if (guard.has(upper)) continue; // 名录里大小写重名 ⇒ 一条
-      guard.add(upper);
-      bucket.push(name);
-    }
+function familyMembersOf(names: readonly string[], key: string): readonly string[] {
+  let cache = FAMILY_INDEX_CACHE.get(names);
+  if (cache === undefined) {
+    cache = new Map<string, readonly string[]>();
+    FAMILY_INDEX_CACHE.set(names, cache);
   }
-  FAMILY_INDEX_CACHE.set(names, buckets);
-  return buckets;
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
+
+  const members: string[] = [];
+  const guard = new Set<string>();
+  for (const name of names) {
+    if (typeof name !== 'string' || name.length <= key.length) continue;
+    if (!startsWithFold(name, key)) continue;
+    const upper = name.toUpperCase(); // 只折叠**命中者**（几百条），不再为 11 万条全表造大写串
+    if (guard.has(upper)) continue; // 名录里大小写重名 ⇒ 一条（首次者胜）
+    guard.add(upper);
+    members.push(name);
+  }
+
+  while (cache.size >= FAMILY_CACHE_LIMIT) {
+    const oldest = cache.keys().next();
+    if (oldest.done) break;
+    cache.delete(oldest.value);
+  }
+  cache.set(key, members);
+  return members;
 }
 
 /** 一条族成员命中：完整名 + 族后缀（作者在点号之后继续打的那一段）+ 排名键（只算一次） */
@@ -312,7 +321,7 @@ function functionNamesOf(tables: CompletionTables): readonly string[] | undefine
 /** 项目函数族成员（`receiver_*`） */
 function projectFamilyMembers(names: readonly string[] | undefined, receiver: string): readonly string[] {
   if (names === undefined || names.length === 0) return [];
-  return familyIndexOf(names).get(`${receiver.toUpperCase()}_`) ?? [];
+  return familyMembersOf(names, `${receiver.toUpperCase()}_`);
 }
 
 /**

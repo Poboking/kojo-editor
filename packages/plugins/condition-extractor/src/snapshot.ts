@@ -75,6 +75,17 @@
  * 含键序与值类型；物化耗时旧 249 ms / 新 256 ms）。代价是装载 **591 → 748 ms**（一次开项目
  * 付一次，拆解见 PITFALLS 262）。
  *
+ * ## v6.1 壳的形状（MEM-11，2026-10-30）：22.4 MB 是"建壳这一步"付的，不是"读一次"付的
+ * 真实堆里 52,424 枚条件壳是字典态、各挂一枚 453 B 的 `(object properties)` 块（22.4 MB）。
+ * MEM-8 把 `defineProperty(cond,'dependencies',{value})` 删掉之后**读数一点没动**——因为真凶
+ * 是**字面量里那个 `get dependencies()`**：V8 快路径只给"共享的常量访问器"留位置，每枚一枚
+ * 闭包的访问器只能进字典。真实快照上 decode 完（一条依赖都没读）就是 **52,435/52,435 字典态**。
+ * 修法：数据属性字面量 + `defineProperty` 补访问器 + **一次 decode 共用一枚**访问器，
+ * 每枚的区间放 WeakMap（见 `lazyConditions` 头注）。真实快照隔离探针：decode 后 heapUsed
+ * **46.6 → 21.8 MB**、读完全部 21.2 万条依赖 **115.9 → 90.3 MB**，壳 0 枚字典态；
+ * 堆快照里 `object:Object` 的字典块 **52,721 枚 / 22.75 MB → 291 枚 / 0.35 MB**（剩下的是引擎自身的）。
+ * 盘上格式、`FunctionConditions` 字段清单、`Object.keys` / `JSON.stringify` / `toEqual` 口径全不动。
+ *
  * ## 纪律
  * **fail-closed**：全局判据或结构任一不符 ⇒ 整包 null；元组是**位置契约**，
  * `FunctionConditions`/`StateDependency` 增删字段必须同步改编解码并 bump
@@ -614,44 +625,77 @@ function materializeDependencies(table: DependencyTable, start: number, len: num
 }
 
 /**
+ * 每枚壳的惰性状态：**区间**（`start * RANGE_SCALE + len` 打包成一个数）或**已物化的数组**。
+ *
+ * 为什么状态不能放在壳上、也不能放在闭包里（两条都实测过，都会退回字典态）：
+ * 自有属性会改变 `Object.keys` / `toEqual` 的口径（Symbol 槽也一样——vitest 的 `toEqual`
+ * 比的是"自有**可枚举**符号键"）；闭包则要求"每枚一枚函数"，访问器不共享。
+ * WeakMap 是唯一既不碰对象形状、又能让访问器共享的放法；代价约 **42 B/枚**（20 万枚实测
+ * 242 vs 200 B/枚），换回的是每枚 453 B 的属性块。
+ */
+const lazyState = new WeakMap<FunctionConditions, number | StateDependency[]>();
+/** 区间打包的进制：`len < 2^26` 且 `start * 2^26 < 2^53`（真实语料 211,985 条依赖，远在界内） */
+const RANGE_SCALE = 2 ** 26;
+
+/**
  * 建**惰性**函数条件壳：`dependencies` 首次被读时才从列式表物化成 `StateDependency[]`。
  *
  * 校验（`isDependencyTuple` / `isComparisonTuple` / 下标越界）在 decode 时**已逐条做完**
  * （fail-closed 不打折），这里只是把"造 21 万级对象"这一步推迟到首个真正的消费方：
  * 开项目级联只吃桶级 stats 与 `normalizedName`，不该替一次查看面板的点击买单。
  *
- * **缓存用闭包变量，不用 `Object.defineProperty` 把访问器换成值属性**（MEM-8，2026-10-30）。
- * 旧写法读一次就 `defineProperty(cond, 'dependencies', {value: built, …})`——语义看着更"快"
- * （后续读写不经过 getter），代价是 V8 对"访问器 → 数据属性"的重新定义会**把整枚对象转进
- * 字典模式**（`NormalizeProperties`）：堆快照实测 **52,424 枚条件壳各带一枚 453 B 的属性块，
- * 合计 24.8 MB**（快路径只需 ~56 B）。而收益接近于零：闭包缓存之后每次读只是一次
- * `cached === undefined` 比较。
- * ⇒ 换成闭包缓存，**自有可枚举访问器一个都不动**：`Object.keys` / `JSON.stringify` /
- * `toEqual` 的口径与旧写法逐字相同（三者都会**调用** getter 取到同一份数组），
- * 但对象形状从字典态回到快路径。
+ * ## 为什么访问器不能写在字面量里（MEM-11，2026-10-30 归因）
+ *
+ * 真实堆里 **52,424 枚条件壳是字典态、各挂一枚 453 B 的 `(object properties)` 块（22.4 MB）**，
+ * 而 MEM-8 删掉 `defineProperty(cond,'dependencies',{value})` 之后**读数一点没动**。
+ * 真凶不是那句 `defineProperty`，而是**壳的构造形态**：V8 的快路径只能给"**共享**的常量访问器"
+ * 留位置（访问器对存在描述符里），而"每枚一枚闭包"的访问器必须按对象存 `AccessorPair`
+ * ⇒ 只能 `NormalizeProperties` 转字典态。
+ *
+ * 实测（node 22，`%HasFastProperties` + 堆快照，6 万枚壳）：
+ * - 字面量里写 `get dependencies()`：**59,999/60,000 字典态**，+39.5 MB；
+ * - 先建"纯数据属性字面量"、再 `defineProperty` 补访问器，但**每枚现造闭包**：
+ *   只有第一枚是快路径，其余照样转字典（访问器不共享）；
+ * - 访问器**按"一次 decode 一枚"共享**（闭包只捕获本次的列式表）：**0 枚字典态**，+9.3 MB。
+ * ⇒ 这就是"合成复现没复现出来"的第三因素：不是某一步 mutate，而是**建壳这一步本身**。
+ * 消费侧（`applySchemaLookup` 读 `dependencies`）一枚都没碰，decode 完就已经是 100% 字典态。
+ *
+ * 物化出来的数组与区间都放 `lazyState`：没人读 `dependencies` 时**只有区间那一格**
+ * （谁问谁付，与 v5 的懒还原同一条纪律）。
  */
 function lazyConditions(
   path: string,
   c: CondTuple,
-  table: DependencyTable,
+  getDependencies: (this: FunctionConditions) => StateDependency[],
   depStart: number,
   depLen: number,
 ): FunctionConditions {
   const [normalizedName, startLine, predicateCount, unparsedCount] = c;
-  /** 首次读时填一次；之后只做一次 `undefined` 比较（与旧写法的"值属性"同一笔读开销） */
-  let cached: StateDependency[] | undefined;
+  // 先建**全数据属性**的字面量（V8 快路径），`dependencies` 用 `defineProperty` 补在后面
   const cond: FunctionConditions = {
     normalizedName,
     filePath: path,
     startLine,
     predicateCount,
     unparsedCount,
-    get dependencies(): StateDependency[] {
-      if (cached === undefined) cached = materializeDependencies(table, depStart, depLen);
-      return cached;
-    },
-  };
+  } as FunctionConditions;
+  Object.defineProperty(cond, 'dependencies', { get: getDependencies, enumerable: true, configurable: true });
+  lazyState.set(cond, depStart * RANGE_SCALE + depLen);
   return cond;
+}
+
+/**
+ * 一次 decode 一枚**共享**访问器：闭包只捕获列式表（每枚各造一枚闭包就会退回字典态）。
+ * `lazyState` 里这一枚的格子给出"从哪读、读几条"，读一次就换成物化好的数组。
+ */
+function dependenciesGetter(table: DependencyTable): (this: FunctionConditions) => StateDependency[] {
+  return function (this: FunctionConditions): StateDependency[] {
+    const state = lazyState.get(this);
+    if (typeof state !== 'number') return state as StateDependency[];
+    const built = materializeDependencies(table, Math.floor(state / RANGE_SCALE), state % RANGE_SCALE);
+    lazyState.set(this, built);
+    return built;
+  };
 }
 
 /**
@@ -681,6 +725,8 @@ export function decodeBuckets(
   const { table, condDepStart, condDepLen } = packed;
 
   const out: Record<string, FileBucket> = {};
+  /** 整次 decode 共用一枚访问器（每枚各造一枚闭包 ⇒ 字典态，见 `lazyConditions` 头注） */
+  const depGetter = dependenciesGetter(table);
   let spanAt = 0;
   for (const [path, tuple] of entries) {
     // 第一遍已判过：这里形状一定成立（`packTable` 对同一个 `entries` 走过两遍）
@@ -695,7 +741,9 @@ export function decodeBuckets(
         unparsed: st[3],
         dependencies: st[4],
       },
-      conds: conds.map((c) => lazyConditions(path, c, table, condDepStart[spanAt]!, condDepLen[spanAt++]!)),
+      conds: conds.map((c) =>
+        lazyConditions(path, c, depGetter, condDepStart[spanAt]!, condDepLen[spanAt++]!),
+      ),
     };
   }
   return { buckets: out, schemas };

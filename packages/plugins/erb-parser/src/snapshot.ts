@@ -144,8 +144,22 @@ import { detachString } from './scanner';
  * `forEachRef`（步长布局的唯一出处）。
  * **迁移是免费的**：v12 的四元组就在盘上，就地摊平即可，**不重读一个文件、不重扫一次 refs**
  * ——所以 v12 进 `SALVAGEABLE_VERSIONS`（`refsAreTuples: true`）。
+ *
+ * **v13 → v14**（MEM-10 批，2026-10-30）：**"一条一枚元组"的三位换成扁平流水，语义不变**——
+ * 函数元组第 4 位（形参）、条目第 7 位（声明）、第 9 位（标签）此前都是"一条一枚小数组"
+ * （`[名, 0|1][]` / `[名, 指令, 行][]` / `[名, 行, 函数行][]`），v14 起各自摊成**每文件/每函数
+ * 一枚**扁平数组（步长 `PARAM_STRIDE` / `DIM_STRIDE` / `LABEL_STRIDE`），空形参表共用一枚冻结实例。
+ * 为什么动它：真语料 3,971 文件 / 110,073 个函数里 **90,719 个没有形参**、有形的合计 38,807 枚
+ * 二元组；再加 26,977 条声明 + 1,621 条标签 ⇒ 合计 **18.3 万枚短数组**，一条一个 JSArray 头
+ * + 一枚 FixedArray 底层。实测（隔离探针，真语料 v13 盘，同机多次取一致值）：条目常驻
+ * **60.64 → 54.43 MB，−6.21 MB**；盘上 31.34 → 31.21 MB（少 132 KB 的括号），decode 时长不变。
+ * 判据为什么不退化：顺序、名字、各位的值一位不差，只是**存放形态**变了；读取侧一律走
+ * `forEachParam` / `forEachDim` / `forEachLabel`（步长布局的唯一出处）。
+ * **迁移是免费的**：v13 的元组就在盘上，就地摊平即可，**不重读一个文件、不重扫一次 refs**
+ * ——所以 v13 进 `SALVAGEABLE_VERSIONS`（`runsAreTuples: true`）。真语料实测迁移这一趟
+ * **340~351 ms**（3,971 文件、0 条被丢），此后照常热。
  */
-export const SNAPSHOT_VERSION = 13;
+export const SNAPSHOT_VERSION = 14;
 
 /**
  * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
@@ -155,7 +169,11 @@ export const SNAPSHOT_VERSION = 13;
  * 2. 新旧差异只能是**新条目多了位**（旧 payload 缺位 ⇒ 该位按"未知"处理，绝不猜值）；
  * 3. 缺位的"未知"必须落在**保守侧**：要么触发一次重扫，要么判该文件过期，不许静默当真。
  *
- * - `13`：同形（11 位；第 8 位 = **扁平**引用流水、第 11 位 = 候选哈希集 base64）。
+ * - `13`：同形（11 位；第 8 位 = **扁平**引用流水、第 11 位 = 候选哈希集 base64），
+ *   但**第 4 位（形参）/ 第 7 位（声明）/ 第 9 位（标签）都是"一条一枚小数组"**
+ *   （v14 起改扁平，见 `runsAreTuples`）。v14 没动解析口径也没动语义，差异只是这三位的
+ *   **存放形态**；旧形态能就地摊平成新形态（`paramTuplesToFlat` / `dimTuplesToFlat` /
+ *   `labelTuplesToFlat`）⇒ 按纪律 1/2/3 准入，且**不落在保守侧**：迁移后语义逐条相同，一个文件都不用重扫。
  * - `12`：同形（11 位）+ **第 8 位是四元组数组**（一条引用一枚 `[name, line, column, kind]`）。
  *   v13 没动解析口径也没动语义，差异只是这一位的**存放形态**；旧形态能就地摊平成新形态
  *   （`refsToFlat`）⇒ 按纪律 1/2/3 准入，且**不落在保守侧**：迁移后语义逐条相同，一个文件都不用重扫。
@@ -180,12 +198,19 @@ const SALVAGEABLE_VERSIONS: ReadonlyMap<
     readonly candidatesAreTokens: boolean;
     /** 第 8 位是 v12 及更早的**四元组数组**（需就地摊平），还是 v13 的扁平流水（直接用） */
     readonly refsAreTuples: boolean;
+    /**
+     * 函数元组第 4 位（形参）/ 条目第 7 位（声明）/ 第 9 位（标签）是 v13 及更早的
+     * **"一条一枚元组"数组**（需就地摊平），还是 v14 的扁平流水（直接用）。
+     * 三位在 v14 同一批换的形态 ⇒ 一个标志足够；`refsAreTuples` 单独一个（它是 v13 换的）。
+     */
+    readonly runsAreTuples: boolean;
   }
 > = new Map([
-  [13, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false }],
-  [12, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: true }],
-  [11, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: true, refsAreTuples: true }],
-  [10, { arity: 10, hasRefsFp: true, hasCandidates: false, candidatesAreTokens: false, refsAreTuples: true }],
+  [14, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false }],
+  [13, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: true }],
+  [12, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: true, runsAreTuples: true }],
+  [11, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: true, refsAreTuples: true, runsAreTuples: true }],
+  [10, { arity: 10, hasRefsFp: true, hasCandidates: false, candidatesAreTokens: false, refsAreTuples: true, runsAreTuples: true }],
 ]);
 
 /** 单个文件的快照条目 */
@@ -314,10 +339,90 @@ export function snapshotKeyCandidatesFor(rootDir: string): string[] {
  * v3 起盘上形态：位置元组（只在存储边界使用）
  * ------------------------------------------------------------------------- */
 
-/** `[形参名, 是否有默认值(0|1)]` */
+/**
+ * 形参流水的**步长**：`[形参名, 是否有默认值(0|1)]` 逐对排（v14 起）。
+ *
+ * v13 及更早是"一参一枚二元组"（`[string, 0|1][]`）：真语料 38,807 枚二元组，
+ * 每枚都要付一个 JSArray 头 + 一枚 FixedArray 底层。摊平后每文件每个函数只剩一枚数组，
+ * 读取侧一律走 {@link forEachParam}（步长布局的唯一出处）。
+ */
+export const PARAM_STRIDE = 2;
+
+/**
+ * 空形参表的**共用冻结实例**。
+ *
+ * 真语料 110,073 个函数里 **90,719 个没有形参**（82%）——每个函数各建一枚 `[]` 纯属白占
+ * （一枚 JSArray 头，且 `JSON.parse` 每次都造新的）。空表是**不可变的事实**，共用一枚即可。
+ *
+ * 冻结是为了让"共享"这件事不藏暗雷：任何误改都会当场抛错，而不是悄悄污染 9 万个函数。
+ */
+export const EMPTY_PARAMS: readonly (string | 0 | 1)[] = Object.freeze([]) as unknown as readonly (string | 0 | 1)[];
+
+/**
+ * 按形参逐条遍历扁平流水（**步长布局的唯一出处**）。
+ *
+ * 用回调而不是生成器：`toFunction` 在 10 万级函数上各走一遍，生成器每条要付一次
+ * `{value,done}` 分配（与 `forEachRef` 同一条理由）。
+ */
+export function forEachParam(
+  run: readonly (string | number)[],
+  visit: (name: string, hasDefault: boolean) => void,
+): void {
+  for (let i = 0; i < run.length; i += PARAM_STRIDE) {
+    visit(run[i] as string, run[i + 1] === 1);
+  }
+}
+
+/**
+ * 声明流水 / 标签流水的步长（v14 起）：两者都是 `[名, X, 行]` 的三元布局，
+ * 只是 X 的语义不同（声明是**指令**、标签是**所属函数定义行**）。
+ *
+ * v13 及更早是"一条一枚三元组"：真语料 26,977 条声明 + 1,621 条标签 = 28,598 枚短数组。
+ * 摊平后每文件最多两枚（3,971 枚文件），实测稳态再省 1.48 MB。
+ */
+export const DIM_STRIDE = 3;
+export const LABEL_STRIDE = 3;
+
+/** 按声明逐条遍历扁平流水（步长布局的唯一出处） */
+export function forEachDim(run: readonly (string | number)[], visit: (name: string, directive: string, line: number) => void): void {
+  for (let i = 0; i < run.length; i += DIM_STRIDE) {
+    visit(run[i] as string, run[i + 1] as string, run[i + 2] as number);
+  }
+}
+
+/** 按标签逐条遍历扁平流水（步长布局的唯一出处） */
+export function forEachLabel(
+  run: readonly (string | number)[],
+  visit: (name: string, line: number, functionStartLine: number) => void,
+): void {
+  for (let i = 0; i < run.length; i += LABEL_STRIDE) {
+    visit(run[i] as string, run[i + 1] as number, run[i + 2] as number);
+  }
+}
+
+/** `[形参名, 是否有默认值(0|1)]`——v13 及更早的盘上形态，只剩"迁移时认得出旧形态"一个用途 */
 type ParamTuple = [string, 0 | 1];
+/** 扁平形参流水（v14 起，步长 {@link PARAM_STRIDE}）：`[名, 0|1, 名, 0|1, …]` */
+type ParamRun = (string | 0 | 1)[];
+/**
+ * `[变量名, 声明指令, 行号]`——v13 及更早的盘上形态（一条声明一枚三元组）。
+ * v14 起每文件一枚扁平流水（{@link DIM_STRIDE}），只剩"迁移时认得出旧形态"一个用途。
+ */
+type DimTuple = [string, string, number];
+/** 扁平声明流水（v14 起，步长 {@link DIM_STRIDE}）：`[名, 指令, 行, 名, …]` */
+type DimRun = (string | number)[];
+/**
+ * `[标签名, 行, 所属函数定义行]`（v6 起；无标签 = 空数组）——v13 及更早的盘上形态。
+ * v14 起每文件一枚扁平流水（{@link LABEL_STRIDE}），只剩"迁移时认得出旧形态"一个用途。
+ */
+type LabelTuple = [string, number, number];
+/** 扁平标签流水（v14 起，步长 {@link LABEL_STRIDE}）：`[名, 行, 所属函数定义行, 名, …]` */
+type LabelRun = (string | number)[];
 /**
  * `[原名, 起始行, 结束行, 形参, 位标, 注释块?, 名字起点列?]`；位标 bit0 = 表达式函数
+ *
+ * 第 4 位（下标 3）v14 起是**扁平形参流水**（{@link PARAM_STRIDE}），v13 及更早是
+ * "一参一枚二元组"（见 `runsAreTuples`）。空表 = {@link EMPTY_PARAMS}（共用冻结实例）。
  *
  * 第 7 位（下标 6，v9 起）= `nameColumn`（1 基、UTF-16 码元，见 `ErbFunction.nameColumn`）。
  * 位置契约：**要落第 7 位就必须先把第 6 位写出来**（无注释块时写 `null`）——可选位只能
@@ -326,24 +431,21 @@ type ParamTuple = [string, 0 | 1];
  * 结束列不落盘（= `nameColumn + name.length`，与 `references.ts` 的 `endColumn` 同一条
  * 可派生纪律，快照瘦身 v3 的原话）。
  */
-type FunctionTuple = [string, number, number, ParamTuple[], number, (string | null)?, number?];
-/** `[变量名, 声明指令, 行号]` */
-type DimTuple = [string, string, number];
+type FunctionTuple = [string, number, number, ParamRun, number, (string | null)?, number?];
 /**
  * 盘上第 8 位（下标 7）的**旧形态**：一条引用一枚四元组（v12 及更早）。
  * v13 起内存与盘上都是扁平数组（`FileRefs`，步长见 `references.ts` 的 `REF_STRIDE`）——
  * 这一条只剩"迁移 v12 条目时认得出旧形态"这一个用途。
  */
 type RefTuple = [string, number, number, 0 | 1 | 2];
-/** `[标签名, 行, 所属函数定义行]`（v6 起；无标签 = 空数组） */
-type LabelTuple = [string, number, number];
-/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明变量, 引用流水, 标签, refs 名录摘要, 候选记号集]`
+/** `[mtimeMs, size, textLength, 行数, 有#FUNCTION(0|1), 函数, 声明流水, 引用流水, 标签流水, refs 名录摘要, 候选记号集]`
  * 第 10 位 v7 起才有；第 11 位（候选集）v11 起才有：
  * - **v12 起内存里是 `Uint32Array`**（候选记号的哈希集，见上面的基元注）；
  * - **v11 的盘上是 `'\n'` 连接的记号串**，v12 的盘上是哈希集的 base64 —— 两者都是 `string`，
  *   靠信封版本区分（`SALVAGEABLE_VERSIONS` 的 `candidatesAreTokens`）；
  * - `null` = 候选未知。
- * v6 的盘上元组是前 9 位（`salvageSnapshot` 按版本表处理） */
+ * v6 的盘上元组是前 9 位（`salvageSnapshot` 按版本表处理）；
+ * v14 起第 7/9 位（声明 / 标签）是**扁平流水**，v13 及更早是"一条一枚三元组"（`runsAreTuples`） */
 type EntryTuple = [
   number | null,
   number | null,
@@ -351,9 +453,9 @@ type EntryTuple = [
   number,
   0 | 1,
   FunctionTuple[],
-  DimTuple[],
+  DimRun,
   FileRefs | RefTuple[],
-  LabelTuple[],
+  LabelRun,
   number | null,
   string | Uint32Array | null,
 ];
@@ -573,7 +675,8 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
     }
     const fns: FunctionTuple[] = e.file.functions.map((f): FunctionTuple => {
       const flags = f.isExpressionFunction ? FLAG_EXPRESSION : 0;
-      const params: ParamTuple[] = f.params.map((p): ParamTuple => [p.name, p.hasDefault ? 1 : 0]);
+      // 空表共用一枚冻结实例（90,719/110,073 个函数没有形参，见 `EMPTY_PARAMS`）
+      const params: ParamRun = f.params.length === 0 ? (EMPTY_PARAMS as ParamRun) : paramsFromObjects(f.params);
       const fn: FunctionTuple = [f.name, f.startLine, f.endLine, params, flags];
       // 可选位从前往后排：要写第 7 位（列）就必须先把第 6 位（注释块）占住（无注释 = null）
       if (f.nameColumn !== undefined) {
@@ -583,11 +686,11 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       }
       return fn;
     });
-    const dims: DimTuple[] = e.file.dims.map((d): DimTuple => [d.name, d.directive, d.line]);
-    // refs 与 LabelTuple 同理（懒外壳是别名，重扫结果本来就是同形元组）——不再逐条复制。
-    // v13 起 refs 是扁平流水，**盘上与内存同形**（不再有四元组这层壳），所以这里零转换。
+    const dims = dimsFromObjects(e.file.dims);
+    // refs 与标签同理（懒外壳是别名，重扫结果本来就是同形元组）——不再逐条复制。
+    // v13 起 refs 是扁平流水、v14 起标签也是扁平流水，**盘上与内存同形**（不再有元组壳），所以这里零转换。
     const refs = e.refs ?? [];
-    const labels = (e.file.labels ?? []).map((l): LabelTuple => [l.name, l.line, l.functionStartLine]);
+    const labels = labelsFromObjects(e.file.labels ?? []);
     out[path] = [
       e.mtimeMs,
       e.size,
@@ -656,7 +759,113 @@ function isLabelTuple(t: unknown): t is LabelTuple {
   return Array.isArray(t) && t.length === 3 && typeof t[0] === 'string' && typeof t[1] === 'number' && typeof t[2] === 'number';
 }
 
-function isFunctionTuple(t: unknown): t is FunctionTuple {
+/** 扁平声明流水的逐格校验：`[名(串), 指令(串), 行(数)]`，长度必须是步长的整数倍 */
+function isDimRun(run: unknown): run is DimRun {
+  if (!Array.isArray(run) || run.length % DIM_STRIDE !== 0) return false;
+  for (let i = 0; i < run.length; i += DIM_STRIDE) {
+    if (typeof run[i] !== 'string' || typeof run[i + 1] !== 'string' || typeof run[i + 2] !== 'number') return false;
+  }
+  return true;
+}
+
+/** 扁平标签流水的逐格校验：`[名(串), 行(数), 所属函数定义行(数)]` */
+function isLabelRun(run: unknown): run is LabelRun {
+  if (!Array.isArray(run) || run.length % LABEL_STRIDE !== 0) return false;
+  for (let i = 0; i < run.length; i += LABEL_STRIDE) {
+    if (typeof run[i] !== 'string' || typeof run[i + 1] !== 'number' || typeof run[i + 2] !== 'number') return false;
+  }
+  return true;
+}
+
+/** v13 及更早的声明三元组 → v14 的扁平流水（免费迁移，同 `paramTuplesToFlat`） */
+function dimTuplesToFlat(tuples: readonly DimTuple[]): DimRun {
+  const out: DimRun = new Array(tuples.length * DIM_STRIDE);
+  let o = 0;
+  for (const [name, directive, line] of tuples) {
+    out[o++] = name;
+    out[o++] = directive;
+    out[o++] = line;
+  }
+  return out;
+}
+
+/** v13 及更早的标签三元组 → v14 的扁平流水（免费迁移） */
+function labelTuplesToFlat(tuples: readonly LabelTuple[]): LabelRun {
+  const out: LabelRun = new Array(tuples.length * LABEL_STRIDE);
+  let o = 0;
+  for (const [name, line, fnLine] of tuples) {
+    out[o++] = name;
+    out[o++] = line;
+    out[o++] = fnLine;
+  }
+  return out;
+}
+
+/** `ErbDim[]` → 扁平流水（编码侧） */
+function dimsFromObjects(dims: readonly { name: string; directive: string; line: number }[]): DimRun {
+  const out: DimRun = new Array(dims.length * DIM_STRIDE);
+  let o = 0;
+  for (const d of dims) {
+    out[o++] = d.name;
+    out[o++] = d.directive;
+    out[o++] = d.line;
+  }
+  return out;
+}
+
+/** `ErbLabel[]` → 扁平流水（编码侧） */
+function labelsFromObjects(labels: readonly { name: string; line: number; functionStartLine: number }[]): LabelRun {
+  const out: LabelRun = new Array(labels.length * LABEL_STRIDE);
+  let o = 0;
+  for (const l of labels) {
+    out[o++] = l.name;
+    out[o++] = l.line;
+    out[o++] = l.functionStartLine;
+  }
+  return out;
+}
+
+/** 扁平形参流水的逐格校验：偶数格是名字（串）、奇数格是 `0|1`；长度必须是步长的整数倍 */
+function isParamRun(run: unknown): run is ParamRun {
+  if (!Array.isArray(run) || run.length % PARAM_STRIDE !== 0) return false;
+  for (let i = 0; i < run.length; i += PARAM_STRIDE) {
+    if (typeof run[i] !== 'string') return false;
+    const d = run[i + 1];
+    if (d !== 0 && d !== 1) return false;
+  }
+  return true;
+}
+
+/**
+ * v13 及更早的"一参一枚二元组" → v14 的扁平流水（**就地摊平，不重扫**）。
+ *
+ * 迁移是免费的：顺序、名字、`hasDefault` 一字未改，只是把 38,807 枚短数组摊进每函数一枚
+ * 长数组——这正是 MEM-10 要省的那笔数组头。`runsAreTuples` 为假的版本不调它。
+ * 空表直接交共用冻结实例（迁移侧也吃这一笔：v13 的 `[]` 每份都是新的）。
+ */
+function paramTuplesToFlat(tuples: readonly ParamTuple[]): ParamRun {
+  if (tuples.length === 0) return EMPTY_PARAMS as ParamRun;
+  const out: ParamRun = new Array(tuples.length * PARAM_STRIDE);
+  let o = 0;
+  for (const [name, hasDefault] of tuples) {
+    out[o++] = name;
+    out[o++] = hasDefault;
+  }
+  return out;
+}
+
+/** `ErbParam[]` → 扁平流水（编码侧；空表由调用方走 `EMPTY_PARAMS`） */
+function paramsFromObjects(params: readonly { name: string; hasDefault: boolean }[]): ParamRun {
+  const out: ParamRun = new Array(params.length * PARAM_STRIDE);
+  let o = 0;
+  for (const p of params) {
+    out[o++] = p.name;
+    out[o++] = p.hasDefault ? 1 : 0;
+  }
+  return out;
+}
+
+function isFunctionTuple(t: unknown, runsAreTuples: boolean): t is FunctionTuple {
   if (!Array.isArray(t) || (t.length !== 5 && t.length !== 6 && t.length !== 7)) return false;
   if (typeof t[0] !== 'string' || typeof t[1] !== 'number' || typeof t[2] !== 'number') return false;
   if (typeof t[4] !== 'number' || !Array.isArray(t[3])) return false;
@@ -665,19 +874,24 @@ function isFunctionTuple(t: unknown): t is FunctionTuple {
   if (t.length === 7 && !(typeof t[5] === 'string' || t[5] === null)) return false;
   // 第 7 位（名字起点列）：1 基整数码元列；缺失 = 没有这个事实，坏值 = 整条判过期（不猜、不改正）
   if (t.length === 7 && (!Number.isInteger(t[6]) || (t[6] as number) < 1)) return false;
-  return (t[3] as unknown[]).every(
-    (p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && (p[1] === 0 || p[1] === 1),
-  );
+  // 第 4 位（形参）：v14 是扁平流水，v13 及更早是"一参一枚二元组"。两种都逐格查完。
+  if (runsAreTuples) {
+    return (t[3] as unknown[]).every(
+      (p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && (p[1] === 0 || p[1] === 1),
+    );
+  }
+  return isParamRun(t[3]);
 }
 
 /**
- * **逐条目**结构校验（`arity` / `refsAreTuples` 由版本表给：v13 = 11 位扁平、v12 = 11 位四元组、
- * v10 = 10 位）。
- * 通过 ⇒ 归一成 11 位、第 8 位归成**扁平**流水的元组（v10 缺的第 11 位补 `null` = 候选未知，
- * **不猜值**；v12 及更早的四元组就地摊平，**不重扫**）；不通过 ⇒ null。
+ * **逐条目**结构校验（`arity` / `refsAreTuples` / `runsAreTuples` 由版本表给：
+ * v14 = 11 位扁平流水 + 扁平形参、v13 = 11 位扁平流水 + 二元组形参、v10 = 10 位）。
+ * 通过 ⇒ 归一成 11 位、第 8 位归成**扁平**流水、函数第 4 位归成**扁平**形参的元组
+ * （v10 缺的第 11 位补 `null` = 候选未知，**不猜值**；v12 及更早的四元组、v13 的形参二元组
+ * 都就地摊平，**不重扫**）；不通过 ⇒ null。
  * 校验是急的：函数/声明/引用/标签每一位都查完才返回（懒还原不打折 fail-closed）。
  */
-function validateEntryTuple(t: unknown, arity: number, refsAreTuples: boolean): EntryTuple | null {
+function validateEntryTuple(t: unknown, arity: number, refsAreTuples: boolean, runsAreTuples: boolean): EntryTuple | null {
   if (!Array.isArray(t) || t.length !== arity) return null;
   if (t[0] !== null && typeof t[0] !== 'number') return null;
   if (t[1] !== null && typeof t[1] !== 'number') return null;
@@ -701,8 +915,13 @@ function validateEntryTuple(t: unknown, arity: number, refsAreTuples: boolean): 
   const dims = t[6] as unknown[];
   const refs = t[7] as unknown[];
   const labels = t[8] as unknown[];
-  if (!fns.every(isFunctionTuple)) return null;
-  if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
+  if (!fns.every((f) => isFunctionTuple(f, runsAreTuples))) return null;
+  // 声明流水：v14 是扁平（步长 3），v13 及更早是三元组数组。两种都逐格查完。
+  if (runsAreTuples) {
+    if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
+      return null;
+    }
+  } else if (!isDimRun(dims)) {
     return null;
   }
   // 引用流水：v13 是扁平（步长 4），v12 及更早是四元组数组。两种都**逐格**查完，
@@ -712,20 +931,45 @@ function validateEntryTuple(t: unknown, arity: number, refsAreTuples: boolean): 
   } else if (!isRefsFlat(refs)) {
     return null;
   }
-  if (!labels.every(isLabelTuple)) return null;
+  // 标签流水：v14 是扁平（步长 3），v13 及更早是三元组数组。两种都逐格查完。
+  if (runsAreTuples) {
+    if (!labels.every(isLabelTuple)) return null;
+  } else if (!isLabelRun(labels)) {
+    return null;
+  }
+  // 形参 / 声明 / 标签：v14 是扁平流水，v13 及更早是"一条一枚元组"。旧形态就地摊平
+  // （免费迁移，见 `paramTuplesToFlat` / `dimTuplesToFlat` / `labelTuplesToFlat`）；
+  // 形参空表一律归成共用冻结实例（v13 的 `[]` 每份都是新的，共用能省 9 万枚数组头）。
+  // 注意这里改的是**盘上元组本身**（与 `normalized[7] = refsToFlat(...)` 同一条就地纪律），
+  // 为的是保住 `encodeEntries` 落盘快路径的"元组还是盘上那个对象"身份判据。
+  if (runsAreTuples) {
+    for (const fn of fns as unknown as FunctionTuple[]) {
+      fn[3] = paramTuplesToFlat(fn[3] as unknown as ParamTuple[]);
+    }
+  } else {
+    for (const fn of fns as unknown as FunctionTuple[]) {
+      if (fn[3].length === 0 && fn[3] !== (EMPTY_PARAMS as ParamRun)) fn[3] = EMPTY_PARAMS as ParamRun;
+    }
+  }
   // 当前形态**原样返回**（不复制）：`encodeEntries` 的落盘快路径靠"元组还是盘上那个对象"来免重建，
   // 复制一下就让 100k 级条目全走重建路径了；旧形态才补缺位（null = 该位未知，不猜值）
   const arr = t as unknown[];
   const normalized: unknown[] = arity === CURRENT_ARITY ? arr : [...arr, null];
   if (refsAreTuples) normalized[7] = refsToFlat(refs as unknown as RefTuple[]);
+  if (runsAreTuples) {
+    normalized[6] = dimTuplesToFlat(dims as unknown as DimTuple[]);
+    normalized[8] = labelTuplesToFlat(labels as unknown as LabelTuple[]);
+  }
   return normalized as unknown as EntryTuple;
 }
 
 function toFunction(path: string, [name, startLine, endLine, params, flags, doc, nameColumn]: FunctionTuple): ErbFunction {
+  const list: ErbParam[] = [];
+  forEachParam(params, (pname, hasDefault) => list.push({ name: pname, hasDefault }));
   return {
     name,
     normalizedName: name.toUpperCase(),
-    params: params.map(([pname, hasDefault]): ErbParam => ({ name: pname, hasDefault: hasDefault === 1 })),
+    params: list,
     startLine,
     endLine,
     filePath: path,
@@ -751,13 +995,23 @@ function lazyFile(path: string, tuple: EntryTuple): ErbFile {
     lineCount,
     // 无标签 = 缺省不挂（与 parseErbText 同形同值：不给空数组）
     ...(labels.length > 0
-      ? { labels: labels.map(([name, line, fnLine]): ErbLabel => ({ name, line, functionStartLine: fnLine })) }
+      ? {
+          labels: (() => {
+            const out: ErbLabel[] = [];
+            forEachLabel(labels, (name, line, fnLine) => out.push({ name, line, functionStartLine: fnLine }));
+            return out;
+          })(),
+        }
       : {}),
     get functions(): ErbFunction[] {
       return materialize(file, 'functions', () => fns.map((t) => toFunction(path, t)));
     },
     get dims(): ErbDim[] {
-      return materialize(file, 'dims', () => dims.map(([name, directive, line]): ErbDim => ({ name, directive, line })));
+      return materialize(file, 'dims', () => {
+        const out: ErbDim[] = [];
+        forEachDim(dims, (name, directive, line) => out.push({ name, directive, line }));
+        return out;
+      });
     },
   };
   Object.defineProperty(file, RAW, { value: tuple, enumerable: false });
@@ -780,13 +1034,19 @@ function internEntryStrings(tuple: EntryTuple, interner: NameInterner): void {
     fn[0] = interner.intern(fn[0]);
     const doc = fn[5];
     if (typeof doc === 'string') fn[5] = interner.intern(doc);
-    for (const p of fn[3]) p[0] = interner.intern(p[0]);
+    // 形参是扁平流水（v14）：名字在偶数格，步长 `PARAM_STRIDE`。空表是共用冻结实例
+    // （长度 0 ⇒ 循环体一次都不进，不会往冻结数组上写）。
+    const params = fn[3];
+    for (let i = 0; i < params.length; i += PARAM_STRIDE) params[i] = interner.intern(params[i] as string);
   }
-  for (const d of tuple[6]) d[0] = interner.intern(d[0]);
+  // 声明 / 标签也是扁平流水（v14）：名字在第 0 格，步长 `DIM_STRIDE` / `LABEL_STRIDE`
+  const dims = tuple[6];
+  for (let i = 0; i < dims.length; i += DIM_STRIDE) dims[i] = interner.intern(dims[i] as string);
   // 引用流水是扁平数组（v13）：名字在第 0 格，步长 `REF_STRIDE`——这里只换实例、不动布局
   const refs = tuple[7] as (string | number)[];
   for (let i = 0; i < refs.length; i += REF_STRIDE) refs[i] = interner.intern(refs[i] as string);
-  for (const l of tuple[8]) l[0] = interner.intern(l[0]);
+  const labels = tuple[8];
+  for (let i = 0; i < labels.length; i += LABEL_STRIDE) labels[i] = interner.intern(labels[i] as string);
 }
 
 /**
@@ -877,7 +1137,7 @@ export function decodeEntries(raw: unknown): Record<string, SnapshotEntry> | nul
   const out: Record<string, SnapshotEntry> = {};
   const interner = createNameInterner();
   for (const [path, value] of Object.entries(raw as Record<string, unknown>)) {
-    const tuple = validateEntryTuple(value, CURRENT_ARITY, false);
+    const tuple = validateEntryTuple(value, CURRENT_ARITY, false, false);
     if (tuple === null) return null;
     // 盘上第 11 位是哈希集的 base64 ⇒ 解成 `Uint32Array`（就地写回，见 `candidatesToMemory`）。
     // 解不出来（非法字符/长度不符）⇒ 与"结构不符"同判：这份数据整体不认。
@@ -918,6 +1178,12 @@ export function salvageEntries(
    * 生产路径由 `salvageSnapshot` 按版本表显式传。
    */
   refsAreTuples = true,
+  /**
+   * 函数元组第 4 位是 v13 及更早的**二元组数组**（`true`，就地摊平）还是 v14 的扁平流水（`false`）。
+   * 缺省 `false` = **当前**形态：单测夹具与"只传 arity 的调用"拿的都是 `encodeEntries` 的产出，
+   * 按当前形态认才不会把好条目判成损坏；生产路径由 `salvageSnapshot` 按版本表显式传。
+   */
+  runsAreTuples = false,
 ): { entries: Record<string, SnapshotEntry>; skipped: number } | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
   const out: Record<string, SnapshotEntry> = {};
@@ -929,7 +1195,7 @@ export function salvageEntries(
   // 不让 67 MB 的 payload 被这些切片钉在堆里（PITFALLS 255 的同一个坑）。
   const interner = createNameInterner();
   for (const [stored, value] of Object.entries(raw as Record<string, unknown>)) {
-    const tuple = validateEntryTuple(value, arity, refsAreTuples);
+    const tuple = validateEntryTuple(value, arity, refsAreTuples, runsAreTuples);
     if (tuple === null) {
       skipped++;
       continue;
@@ -981,7 +1247,7 @@ export function salvageSnapshot(
     keyToPath = new Map();
     for (const p of opts.knownPaths) keyToPath.set(pathKey(p), p);
   }
-  const salvaged = salvageEntries(r.entries, shape.arity, keyToPath, shape.candidatesAreTokens, shape.refsAreTuples);
+  const salvaged = salvageEntries(r.entries, shape.arity, keyToPath, shape.candidatesAreTokens, shape.refsAreTuples, shape.runsAreTuples);
   if (salvaged === null) return null;
   return {
     version: SNAPSHOT_VERSION,
@@ -1240,10 +1506,10 @@ export function snapshotStats(entries: Readonly<Record<string, SnapshotEntry>>):
       s.nameChars += fn[0].length;
       if (typeof fn[5] === 'string') s.docChars += fn[5].length;
     }
-    s.dims += raw[6].length;
+    s.dims += raw[6].length / DIM_STRIDE;
     // 引用流水是扁平数组（v13，步长 `REF_STRIDE`）⇒ 条数 = 格数 / 4，不是格数
     s.refs += raw[7].length / REF_STRIDE;
-    s.labels += raw[8].length;
+    s.labels += raw[8].length / LABEL_STRIDE;
   }
   return s;
 }

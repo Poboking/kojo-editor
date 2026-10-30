@@ -29,6 +29,7 @@ import {
   createNameInterner,
   decodeEntries,
   encodeEntries,
+  PARAM_STRIDE,
   SNAPSHOT_VERSION,
   type IndexSnapshot,
   type SnapshotEntry,
@@ -175,7 +176,10 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
       typeof x[1] === 'number' &&
       typeof x[2] === 'number' &&
       Array.isArray(x[3]) &&
-      x[3].every((p) => Array.isArray(p) && p.length === 2 && typeof p[0] === 'string' && (p[1] === 0 || p[1] === 1)) &&
+      // **MEM-10 之后形参是扁平流水**（v14：步长 `PARAM_STRIDE`，`[名, 0|1]` 逐对排）。
+      // 与 MEM-7 对 refs 的处理同一条理由：参照臂读的是**当下这份 payload**，盘上形状换了，
+      // 校验器就得跟着认新形状，否则整条 A/B 死在 `return null`。判据仍是"懒还原 ≤ 急还原"。
+      x[3].every((p: unknown, i: number) => (i % 2 === 0 ? typeof p === 'string' : p === 0 || p === 1)) &&
       typeof x[4] === 'number' &&
       // v9 的位置契约：**要落第 7 位就必须先把第 6 位写出来**，无注释块时第 6 位是 `null`
       // （不是"没有这一位"）；第 7 位存在则必须是数字列
@@ -203,12 +207,18 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
       }
       return true;
     };
-    const okLabel = (x: unknown): boolean =>
-      Array.isArray(x) && x.length === 3 && typeof x[0] === 'string' && typeof x[1] === 'number' && typeof x[2] === 'number';
+    // **MEM-10 之后声明/标签也是扁平流水**（v14：步长 3，`[名, X, 行]` 逐条排）——理由同上，
+    // 参照臂必须认当下这份 payload 的形状，否则整条 A/B 死在 `return null`。
+    const okStride3 = (x: unknown, mid: (v: unknown) => boolean): boolean => {
+      if (!Array.isArray(x) || x.length % 3 !== 0) return false;
+      for (let i = 0; i < x.length; i += 3) {
+        if (typeof x[i] !== 'string' || !mid(x[i + 1]) || typeof x[i + 2] !== 'number') return false;
+      }
+      return true;
+    };
+    const okLabel = (x: unknown): boolean => okStride3(x, (v) => typeof v === 'number');
     if (!fns.every(okFn)) return null;
-    if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
-      return null;
-    }
+    if (!okStride3(dims, (v) => typeof v === 'string')) return null;
     if (!okRefRun(refs)) return null;
     if (!labels.every(okLabel)) return null;
     const functions: ErbFunction[] = fns.map((x) => {
@@ -216,7 +226,7 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
         string,
         number,
         number,
-        Array<[string, number]>,
+        (string | number)[],
         number,
         string | null | undefined,
         number | null | undefined,
@@ -224,10 +234,15 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
       // 去重表：与 `internEntryStrings` 同口径（内容不变、只换实例；见函数头注）
       const name = interner.intern(rawName);
       const doc = typeof rawDoc === 'string' ? interner.intern(rawDoc) : rawDoc;
+      // 形参流水（v14 扁平，步长 `PARAM_STRIDE`）⇒ 当场建对象，与生产 `toFunction` 同口径
+      const paramObjects = [];
+      for (let i = 0; i < params.length; i += PARAM_STRIDE) {
+        paramObjects.push({ name: interner.intern(params[i] as string), hasDefault: params[i + 1] === 1 });
+      }
       const fn: ErbFunction = {
         name,
         normalizedName: name.toUpperCase(),
-        params: params.map(([pname, hasDefault]) => ({ name: interner.intern(pname), hasDefault: hasDefault === 1 })),
+        params: paramObjects,
         startLine,
         endLine,
         filePath: path,
@@ -247,11 +262,14 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
       file: {
         path,
         functions,
-        dims: (dims as unknown as Array<[string, string, number]>).map(([name, directive, line]) => ({
-          name: interner.intern(name),
-          directive,
-          line,
-        })),
+        dims: (() => {
+          const d = dims as unknown as (string | number)[];
+          const out: ErbFile['dims'] = [];
+          for (let i = 0; i < d.length; i += 3) {
+            out.push({ name: interner.intern(d[i] as string), directive: d[i + 1] as string, line: d[i + 2] as number });
+          }
+          return out;
+        })(),
         hasFunctionDirective: hasDirective === 1,
         lineCount,
       },

@@ -568,9 +568,16 @@ export function memoizedErbFunctionNames(getIndex: () => ErbIndex | null | undef
     if (!index) return [];
     const fp = index.fingerprint ?? null;
     if (fp !== null && hasMemo && fp === memoFingerprint) return memo;
-    memo = [...index.byName.entries()]
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([normalizedName, refs]) => refs[0]?.name ?? normalizedName);
+    // MEM-12：旧写法 `[...byName.entries()]` 会为 11 万条各造一枚 `[键, 值]` 数组（≈6 MB 垃圾/次），
+    // 而这里只用得上"排好序的**键**"与"值里第一枚 ref 的原文名"。改成先排键（纯字符串比较，
+    // 不造数组）、再按序取原文名：同口径、同顺序，垃圾从 11 万枚数组降到一条键数组。
+    const keys = [...index.byName.keys()].sort();
+    const names: string[] = new Array(keys.length);
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i]!;
+      names[i] = index.byName.get(key)?.[0]?.name ?? key;
+    }
+    memo = names;
     memoFingerprint = fp;
     hasMemo = true;
     return memo;

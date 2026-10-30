@@ -830,13 +830,24 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     两枚闸维持 **≤199 / ≤3,188**，不抬。零新进图模块（`isKojo2Path` / `pkey` 本就在
     //     该文件的 import 里）；修的是"ERB 索引就绪 ⇒ 2.0 文件从不被列举"⇒ 未打开的
     //     `.kojo2` 进不了 `kojo2ProjectIndex`、跨文件转定义只在打开过的文件里生效。
+    //   - **内存批 MEM-10~14（2026-10-30，本批，五个子任务并行）**：读数 **199 文件 / 3,202 KB**
+    //     （3,278,930 B）——同样**零新进图模块**（199 未动）；净 **+16,979 B**，逐枚实测后
+    //     **只落在图内两枚文件**：`erb-parser/src/snapshot.ts` +13,450（v14：形参/声明/标签
+    //     摊成扁平流水 + `forEachParam/Dim/Label` + v13 免费迁移）、
+    //     `condition-extractor/src/snapshot.ts` +3,529（条件壳改成"数据属性字面量 + 共享访问器"，
+    //     根因注 + WeakMap 惰性状态）。另五枚改动（`app/src/monaco/*` 三枚、`convention-linter`
+    //     两枚，合计 +7,135 B）**都不在开机图上**——这正是"逐文件点名"的用处：先算总量再对账，
+    //     对不上就说明有文件在懒边里。
+    //     ⇒ 闸 **3,188 → 3,204**（余量 3 KB）。这一档同样是"代码多花 17 KB、换 7.7 MB 堆"：
+    //     热载稳态 **140.0 → 132.3 MB**、索引就绪 **127.1 → 120.6 MB**。
+    //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,188 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,204 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_188);
+    expect(totalKb).toBeLessThanOrEqual(3_204);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
