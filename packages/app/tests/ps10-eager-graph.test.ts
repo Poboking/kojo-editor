@@ -819,6 +819,12 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     而 110,049 个名字里 110,043 个只有一条定义。热载稳态 **153.4 → 140.0 MB**、索引就绪
     //     **140.5 → 127.1 MB**（与隔离探针的 −13.5 MB 逐字对上）。
     //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
+    //   - **B5b 余项·第二步（2026-10-30，本批）**：读数 **199 文件 / 3,184 KB**
+    //     （3,260,513 B）——两枚闸维持 **≤199 / ≤3,188**，不抬。删掉的两枚零调用安装器里，
+    //     `ui/kojo2-project-scan-adapter.ts` 的 `installKojo2ProjectScan` 在图内（`App.tsx`
+    //     静态 import 同文件的 `createLazyKojo2ProjectOptions`），**−553 B** 就是这一笔；
+    //     `monaco/kojo2-callhierarchy.ts` 的 `installKojo2CallHierarchyProvider` 只在
+    //     `ui/call-hierarchy.ts` 的动态边上、不在图里。文件数零变化（199 未动，无整文件删除）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
