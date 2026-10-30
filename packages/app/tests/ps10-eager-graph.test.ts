@@ -789,6 +789,10 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     文件数一分未涨的原因：按台账"下一枚进图模块须先挪一枚出去"的口径腾了一枚——
     //     `erb-parser/src/did-you-mean.ts`（102 行纯函数、唯一调用方是 `undefined-name.ts`）
     //     并入 `undefined-name.ts`，判据与用例一字未改。
+    //   - **B5b 第一步（2026-10-30，本批）**：读数 **199 文件 / 3,175 KB 不动**——删的两枚
+    //     （`monaco/kojo2-symbols.ts` 164 行、`monaco/kojo2-inlay.ts` 155 行）都只在**懒边**
+    //     （`editor-global-providers → monaco 装配`）之下，从不在开机图里；全图字节数与上一档
+    //     逐字相同就是直接证据。两枚闸维持 **≤199 / ≤3,178**，**不抬不降**。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
