@@ -475,3 +475,13 @@
 271. **`push` 出来的数组带着 V8 的增长余量：1,367,116 格被撑到约 1.45 倍，白占约 2.4 MB；而 `out.length = out.length` 一分钱都省不下**（2026-10-30 MEM-7 实拍）：
    引用流水改成扁平后是"四次 `push` 一条记录"，收尾想裁掉多余容量。第一版写 `out.length = out.length`——**这行是空操作**：JSArray 的 `length` 只描述"有效元素个数"，容量（底层 FixedArray 的槽数）在 `length` 之下**不可见**，写回同一个值什么也不触发。堆快照实测：有效 1,367,116 格、底层 **1,983,232 槽**（1.45×，V8 按 `1.5×+16` 增长），差 61.6 万格 × 4 B ≈ 2.4 MB。
    ⇒ 修法：`return out.slice()`（造一份恰好长度的副本，旧的那枚由 GC 收掉）。纪律：**"数组看起来长度刚好"不代表没浪费**——`push` 建出来的数组一律按"容量 ≥ 长度 × 1.45"记账；要真裁就得换一枚新数组，`length` 赋值只对"缩短"有效、对"收缩容量"无效。
+
+272. **"字典态属性块"的持有者不是你以为的那个对象：堆快照里那 24.8 MB 挂在 `system / Context → context:cond` 上——即闭包变量，而不是 `byName` / 条目元组**（2026-10-30 MEM-8 实拍，`C:/tmp/propowners2.mjs`）：
+   先按"谁持有 `(object properties)` 大块"反查：57,421 枚字典态 `Object` 共 24.8 MB（均 453 B），持有者分三档——**22.4 MB / 52,424 枚挂在 `context:cond`**（闭包上下文里那个叫 `cond` 的变量）、1.70 MB / 3,969 枚挂 `context:file`、1.70 MB 挂 `object:Object.property:file`。也就是说：**`(object properties)` 这一项既不是 `byName` 的值对象、也不是快照条目**，按"名字里有 byName"去找会一无所获。
+   52,424 恰好是"条件抽取器的函数条件壳"数 ⇒ 对应 `condition-extractor/src/snapshot.ts` 里那句 `Object.defineProperty(cond, 'dependencies', {value: built, …})`（读一次就把访问器换成值属性）。V8 对"访问器 → 数据属性"的重新定义走 `NormalizeProperties`，**把整枚对象转进字典模式**：453 B/枚 vs 快路径 ~56 B。
+   **但最小复现没能复现出字典态**：合成 52,435 个条件壳 / 211,985 条依赖、走同一条 `decodeBuckets` + 读全部 `dependencies`，堆快照里只有 274 枚字典态对象、**一枚 `context:cond` 都没有**（新旧两种写法都是）。⇒ 真实壳里还有第三个因素（另有代码在这批对象上加/删属性、或读的顺序不同）没归因。纪律：**合成复现"没复现出来"不能用来否掉真实壳的读数**——两者都能测，就都要记；把"未归因"写清楚，比编一个解释安全。
+   本批的处置：删掉那句 `defineProperty`，改闭包缓存（访问器一直留着，`Object.keys` / `JSON.stringify` / `toEqual` 口径不变，用例 203 绿）。**热载稳态读数不变（153.4 MB）**——热载路径一次都不读 `dependencies`（复用 3,971 份、0 文件重算），这笔账只在"用户真去翻条件面板"时才存在。
+
+273. **自举解析钩子只认裸包名 ⇒ 新包一落地就 `ERR_MODULE_NOT_FOUND`，而错误信息里不带子路径，看着像"包没装"**（2026-10-30 MEM-8 实拍，`tools/mem-readings.mjs`）：
+   `registerHooks` 里把 `@kojo/<name>` 映射到 `packages/<name>/src/index.ts`，只处理裸名。ERB-VOCAB 批把控制流配对表上提成 `@kojo/erb-vocab/control-flow`（**带子路径**）之后，量具当场崩在 `Cannot find package '@kojo/erb-vocab' imported from …scanner.ts`——包明明在 `packages/erb-vocab/`、`src/index.ts` 也在，看着像 workspace 没链上，实际是钩子把子路径原样交给了 Node。
+   ⇒ 修法：按 `packages/app/vite.config.ts` 的 alias 口径一起认子路径（`@kojo/x/y` → `packages/x/src/y.ts`，再退 `…/y/index.ts`）。纪律：**自举钩子是"仓库里所有 `@kojo/*` 导入的隐含契约"**，新增子路径导出时要么改钩子、要么别在插件里用子路径；错误信息里的包名不带子路径这一点会稳定地误导排查方向。

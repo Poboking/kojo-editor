@@ -92,9 +92,25 @@ describe('v3 按文件桶编解码', () => {
     expect(Object.keys(cond)).toContain('dependencies');
     // 首次消费才还原，值仍与直出逐字段等值；再次读取零开销
     expect(cond.dependencies).toEqual(src.get('D:/game/k1.ERB')!.conds[0]!.dependencies);
-    expect(Object.getOwnPropertyDescriptor(cond, 'dependencies')!.get).toBeUndefined();
+    /**
+     * **判据钉的是"读一次就只建一次"，不是"读后换成数据属性"**（MEM-8，2026-10-30 改）。
+     *
+     * 旧断言是 `descriptor.get` 变成 `undefined`——那是把**实现手法**（`Object.defineProperty`
+     * 把访问器换成值属性）当成了契约。而那个手法在 V8 里会**把整枚对象转进字典模式**
+     * （堆快照实测 52,424 枚条件壳各带一枚 453 B 属性块，合计 24.8 MB），换来的是"再次读不经过
+     * getter"这点可忽略的收益 ⇒ 改成闭包缓存，访问器一直留着。
+     * 真正要保的契约有三条，这里逐条钉：① 访问器仍是**自有 + 可枚举**（`Object.keys` /
+     * `JSON.stringify` / `toEqual` 的口径不变）；② 再次读是**同一份**数组（不重建）；
+     * ③ 序列化出来的内容与直出等值（getter 会被 `JSON.stringify` 调用）。
+     */
+    const after = Object.getOwnPropertyDescriptor(cond, 'dependencies')!;
+    expect(after.get).toBeTypeOf('function');
+    expect(after.enumerable).toBe(true);
     const first = cond.dependencies;
     expect(cond.dependencies).toBe(first);
+    expect(JSON.parse(JSON.stringify(cond)).dependencies).toEqual(
+      JSON.parse(JSON.stringify(src.get('D:/game/k1.ERB')!.conds[0])).dependencies,
+    );
     // 同批没被问过的函数桶仍是 accessor（谁问谁付）
     expect(Object.getOwnPropertyDescriptor(back!.buckets['D:/game/k3.ERB']!.conds[0]!, 'dependencies')!.get).toBeTypeOf('function');
   });

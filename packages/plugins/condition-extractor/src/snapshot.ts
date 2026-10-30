@@ -619,6 +619,16 @@ function materializeDependencies(table: DependencyTable, start: number, len: num
  * 校验（`isDependencyTuple` / `isComparisonTuple` / 下标越界）在 decode 时**已逐条做完**
  * （fail-closed 不打折），这里只是把"造 21 万级对象"这一步推迟到首个真正的消费方：
  * 开项目级联只吃桶级 stats 与 `normalizedName`，不该替一次查看面板的点击买单。
+ *
+ * **缓存用闭包变量，不用 `Object.defineProperty` 把访问器换成值属性**（MEM-8，2026-10-30）。
+ * 旧写法读一次就 `defineProperty(cond, 'dependencies', {value: built, …})`——语义看着更"快"
+ * （后续读写不经过 getter），代价是 V8 对"访问器 → 数据属性"的重新定义会**把整枚对象转进
+ * 字典模式**（`NormalizeProperties`）：堆快照实测 **52,424 枚条件壳各带一枚 453 B 的属性块，
+ * 合计 24.8 MB**（快路径只需 ~56 B）。而收益接近于零：闭包缓存之后每次读只是一次
+ * `cached === undefined` 比较。
+ * ⇒ 换成闭包缓存，**自有可枚举访问器一个都不动**：`Object.keys` / `JSON.stringify` /
+ * `toEqual` 的口径与旧写法逐字相同（三者都会**调用** getter 取到同一份数组），
+ * 但对象形状从字典态回到快路径。
  */
 function lazyConditions(
   path: string,
@@ -628,6 +638,8 @@ function lazyConditions(
   depLen: number,
 ): FunctionConditions {
   const [normalizedName, startLine, predicateCount, unparsedCount] = c;
+  /** 首次读时填一次；之后只做一次 `undefined` 比较（与旧写法的"值属性"同一笔读开销） */
+  let cached: StateDependency[] | undefined;
   const cond: FunctionConditions = {
     normalizedName,
     filePath: path,
@@ -635,10 +647,8 @@ function lazyConditions(
     predicateCount,
     unparsedCount,
     get dependencies(): StateDependency[] {
-      const built = materializeDependencies(table, depStart, depLen);
-      // 读一次建对象，随后换成普通值属性（再次读写零开销；`toEqual` 深比照常走通）
-      Object.defineProperty(cond, 'dependencies', { value: built, enumerable: true, writable: true, configurable: true });
-      return built;
+      if (cached === undefined) cached = materializeDependencies(table, depStart, depLen);
+      return cached;
     },
   };
   return cond;

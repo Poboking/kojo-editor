@@ -75,10 +75,20 @@ if (!process.execArgv.includes('--experimental-transform-types')) {
 registerHooks({
   resolve(specifier, context, next) {
     if (specifier.startsWith('@kojo/')) {
-      const name = specifier.slice('@kojo/'.length);
+      // 子路径也要认（ERB-VOCAB 批之后 `@kojo/erb-vocab/control-flow` 是常态）：
+      // 只认裸包名时，这类 import 会落到 Node 的包解析上 ⇒ `ERR_MODULE_NOT_FOUND: Cannot find
+      // package '@kojo/erb-vocab'`，而错误信息里**不带子路径**，看起来像"包没装"。
+      // 口径与 `packages/app/vite.config.ts` 的 alias 一致：`@kojo/x` → `packages/x/src/index.ts`、
+      // `@kojo/x/y` → `packages/x/src/y.ts`（再退回 `packages/x/src/y/index.ts`）。
+      const rest = specifier.slice('@kojo/'.length);
+      const slash = rest.indexOf('/');
+      const name = slash < 0 ? rest : rest.slice(0, slash);
+      const sub = slash < 0 ? '' : rest.slice(slash + 1);
       const dir = name.startsWith('plugin-') ? join(REPO, 'packages/plugins', name.slice('plugin-'.length)) : join(REPO, 'packages', name);
-      const entry = join(dir, 'src/index.ts');
-      if (existsSync(entry)) return { url: pathToFileURL(entry).href, shortCircuit: true };
+      const candidates = sub === '' ? [join(dir, 'src/index.ts')] : [join(dir, 'src', `${sub}.ts`), join(dir, 'src', sub, 'index.ts')];
+      for (const entry of candidates) {
+        if (existsSync(entry)) return { url: pathToFileURL(entry).href, shortCircuit: true };
+      }
     }
     if (specifier.startsWith('.') && context.parentURL) {
       const base = fileURLToPath(new URL(specifier, context.parentURL));
