@@ -12,6 +12,7 @@
  *
  * 若此基线变动：要么语料更换，要么协议解析 / 覆盖语义发生回归——两者都需人工确认。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -57,7 +58,7 @@ describe.skipIf(!SMOKE)('协议覆盖校验规则 —— 真实语料基线', ()
         byName.set(fn.normalizedName, refs);
       }
     }
-    const index: ErbIndex = { files, byName };
+    const index: ErbIndex = { files, byName: functionLookupOf(byName) };
     const ctx: ConventionCheckContext = {
       project: { rootDir: root, adapterId: 'eratw', kojoPaths: [kojoRoot], writablePaths: [], charaIndex: new Map<number, CharaInfo>() },
       index,

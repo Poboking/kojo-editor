@@ -11,6 +11,7 @@
  *
  * 真盘用例以 `D:/Game/erafl` 存在为守卫，断言的是本机实测读数（2 / 0 / 30 / 0 / 9）。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join as nodeJoin } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -99,7 +100,7 @@ function makeIndex(files: Record<string, FileSpec>): ErbIndex {
       byName.set(fn.normalizedName, refs);
     }
   }
-  return { files: map, byName };
+  return { files: map, byName: functionLookupOf(byName) };
 }
 
 function ctxFor(
@@ -421,7 +422,7 @@ describe.skipIf(!hasCorpus)('真实语料读数（D:/Game/erafl）', () => {
         writablePaths: [nodeJoin(GAME_ROOT, 'ERB', '口上')],
         charaIndex: new Map(),
       },
-      index: { files: map, byName },
+      index: { files: map, byName: functionLookupOf(byName) },
       readFile: async (path: string) => readFileSync(path, 'utf8').replace(/^\uFEFF/, ''),
       log: silentLog,
     };

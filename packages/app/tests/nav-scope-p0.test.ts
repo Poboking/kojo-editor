@@ -1,3 +1,4 @@
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type { EditorDocumentSymbol, ErbFile, ErbFunction, ErbIndex } from '@kojo/plugin-api';
 import { functionAt } from '@kojo/plugin-erb-parser';
@@ -67,7 +68,7 @@ const fakeIndex: ErbIndex = {
       },
     ],
   ]),
-  byName: new Map(),
+  byName: functionLookupOf(new Map()),
 };
 
 const outlineSymbols: EditorDocumentSymbol[] = [
@@ -136,7 +137,7 @@ describe('P0 对拍 — 同一行输入，四个消费方同一结论', () => {
   it('同宽双胞胎（索引缝里的畸形重名区间）两侧取同一枚：文档序第一枚', () => {
     const twinA: ErbFunction = { name: 'TWIN_A', normalizedName: 'TWIN_A', filePath: PATH, startLine: 5, endLine: 8, params: [] };
     const twinB: ErbFunction = { name: 'TWIN_B', normalizedName: 'TWIN_B', filePath: PATH, startLine: 5, endLine: 8, params: [] };
-    const idx: ErbIndex = { files: new Map([[PATH, { ...fakeIndex.files.get(PATH)!, functions: [twinA, twinB] }]]), byName: new Map() };
+    const idx: ErbIndex = { files: new Map([[PATH, { ...fakeIndex.files.get(PATH)!, functions: [twinA, twinB] }]]), byName: functionLookupOf(new Map()) };
     expect(functionAt(idx, PATH, 6)?.name).toBe('TWIN_A');
     expect(resolveEnclosingFunction(idx, null, PATH, 6)?.name).toBe('TWIN_A');
     const syms: EditorDocumentSymbol[] = [

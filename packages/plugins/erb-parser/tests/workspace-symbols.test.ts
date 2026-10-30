@@ -9,6 +9,7 @@
  * 名字命中优先于路径命中 / 上限 + 溢出计数 / 同名多定义并列 / 空查询不给全表。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   ErbFile,
@@ -187,7 +188,7 @@ describe('workspaceSymbolsInIndex · 十万条规模实测（语料口径 99,104
         else byName.set(fn.normalizedName, [fn]);
       }
     }
-    return { files, byName };
+    return { files, byName: functionLookupOf(byName) };
   }
 
   const BIG = bigIndex(99_104, 2_316);

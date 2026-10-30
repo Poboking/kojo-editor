@@ -7,6 +7,7 @@
  * 注意解耦铁律：这里用**测试专用**的合成索引与 mini 家族规则，不 import 任何真适配器。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   ConditionComparison,
@@ -95,7 +96,7 @@ function makeIndex(files: Record<string, string[]>): ErbIndex {
     }));
     map.set(path, { path, functions, dims: [], hasFunctionDirective: false, lineCount: names.length * 10 + 5 });
   }
-  return { files: map, byName: new Map() };
+  return { files: map, byName: functionLookupOf([]) };
 }
 
 function dep(key: string, name: string, indices: string[], comparisons: ConditionComparison[]): StateDependency {
@@ -869,7 +870,7 @@ describe('buildCharacterIndex · 文件级增量', () => {
     const files = new Map(index.files);
     const b = files.get('/p/b.ERB')!;
     files.set('/p/b.ERB', { ...b });
-    const third = buildCharacterIndex({ files, byName: new Map() }, rule);
+    const third = buildCharacterIndex({ files, byName: functionLookupOf([]) }, rule);
     expect(calls).toBe(4); // 只重判 b 里的 1 个函数
     expect(third.totalFunctions).toBe(3);
     expect(third.entries.get(3)!.functions.length).toBe(1);
@@ -899,12 +900,12 @@ describe('buildCharacterIndex · 文件级增量', () => {
     // 保存一份文件 ⇒ 增量索引只换掉那一个 ErbFile 对象
     const files = new Map(index.files);
     files.set('/p/b.ERB', { ...files.get('/p/b.ERB')! });
-    const incremental = buildCharacterIndex({ files, byName: new Map() }, fakeFamilyIndex);
+    const incremental = buildCharacterIndex({ files, byName: functionLookupOf([]) }, fakeFamilyIndex);
 
     // 全新对象身份 ⇒ 走全量路径，作为对拍基准
     const fresh = new Map<string, ErbFile>();
     for (const [p, f] of files) fresh.set(p, { ...f });
-    const full = buildCharacterIndex({ files: fresh, byName: new Map() }, fakeFamilyIndex);
+    const full = buildCharacterIndex({ files: fresh, byName: functionLookupOf([]) }, fakeFamilyIndex);
     expect([...incremental.entries.keys()]).toEqual([...full.entries.keys()]);
     for (const [no, e] of full.entries) {
       expect(incremental.entries.get(no)!.functions.map((f) => f.name)).toEqual(e.functions.map((f) => f.name));
@@ -934,7 +935,7 @@ describe('depsFingerprint', () => {
 
     const files = new Map(index.files);
     files.set('/p/a.ERB', { ...files.get('/p/a.ERB')! });
-    const saved = buildCharacterIndex({ files, byName: new Map() }, fakeFamilyIndex).entries.get(1)!;
+    const saved = buildCharacterIndex({ files, byName: functionLookupOf([]) }, fakeFamilyIndex).entries.get(1)!;
     expect(depsFingerprint(saved, () => [])).not.toBe(base);
 
     // 同一份聚合：依赖数组从无到有 / 换成另一只数组 ⇒ 都要变

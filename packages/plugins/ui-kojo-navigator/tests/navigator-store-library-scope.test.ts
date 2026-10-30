@@ -8,6 +8,7 @@
  *   2. 建树用的是同一份作者视图（`tree.totalFunctions` 只数作者函数）。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   ErbFile,
@@ -40,7 +41,7 @@ function makeIndex(files: Record<string, string>): ErbIndex {
       byName.set(fn.normalizedName, refs);
     }
   }
-  return { files: map, byName };
+  return { files: map, byName: functionLookupOf(byName) };
 }
 
 function makeCtx(): PluginContext {

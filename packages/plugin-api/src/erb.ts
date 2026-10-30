@@ -6,6 +6,7 @@
  * v0.2 追加：PRINT 变体、IF/SELECTCASE 嵌套、TRYCALLFORM 引用、条件谓词抽取。
  */
 
+
 /** ERB 函数形参 */
 export interface ErbParam {
   /** 形参名（如 `ARGS`、`ARG:1`、`OVERRIDE_TARGET`） */
@@ -215,8 +216,16 @@ export interface ErbStructureIssue {
 export interface ErbIndex {
   /** 绝对路径 → 文件解析结果 */
   files: Map<string, ErbFile>;
-  /** 归一化函数名 → 定义列表 */
-  byName: Map<string, ErbFunctionRef[]>;
+  /**
+   * 归一化函数名 → 定义列表。
+   *
+   * MEM-19 起是**列式查找表**（{@link ErbFunctionLookup}）：名字 → 定义句柄，
+   * `ErbFunctionRef` 对象只在 `firstOf` / `defsOf` / `values` 被调用时构造。
+   * 旧写法对照：`byName.get(n)?.[0]` → `firstOf(n)`、`byName.get(n) ?? []` → `defsOf(n)`、
+   * `byName.has(n)` / `.size` 原样、`[...byName.keys()]` → `keys()`、
+   * `byName.values()` / `entries()` 原样（仍会按组构造数组）。
+   */
+  byName: ErbFunctionLookup;
   /**
    * 项目体量指纹（`plugin-api/fingerprint` —— 全部 ERB 的 路径+mtime+size 哈希）。
    *
@@ -950,3 +959,314 @@ export const ERB_ENGINE_STRING_IDENTIFIERS: readonly string[] = [
   'TRAINNAME',
   'TSTR',
 ];
+
+/**
+ * `ErbIndex.byName` 的**列式查找表**（MEM-19，2026-10-30）。
+ *
+ * ## 为什么不是 `Map<string, ErbFunctionRef[]>`
+ *
+ * MEM-9 在真实语料上量过三条路线（`erb-parser/src/snapshot.ts` 的注释留了读数）：
+ * 条件展开 33.2 MB / 固定形状字面量 35.7 MB / 四种形状各写一条 32.8 MB —— 改**对象形状**
+ * 没有任何收益。311 B/条的成本来自结构本身：11 万枚对象 + 11 万枚 1 元素数组 +
+ * 11 万条 Map 项 + 11 万条大写名串。
+ *
+ * 而真实语料 **110,049 个名字里 110,043 个只有一条定义**：数组与对象几乎全是"一条一建"。
+ * 所以这里改成列式：名字 → `[起点, 条数]`（两枚 `Uint32Array`），每条定义只占
+ * 六个机器字（文件序号 / 名字池序号 / 起止行 / 名字列 / 注释序号），**`ErbFunctionRef`
+ * 对象与数组一律按需构造**。稳态省掉的是"常驻对象"，不是"字段"。
+ *
+ * ## 语义必须与旧形态逐位一致
+ *
+ * - `keys()` 的迭代顺序 = 聚合顺序里**归一化名首次出现**的顺序（旧 `Map` 的插入序）；
+ * - 同名多定义的组内顺序 = 聚合顺序（旧数组的 push 序）；
+ * - `firstOf` = 旧写法 `byName.get(name)?.[0]`；`defsOf` = 旧写法 `byName.get(name) ?? []`；
+ * - `has` / `countOf` / `size` 一律不构造对象。
+ *
+ * ## 构造入口只有两条
+ *
+ * - {@link buildFunctionLookup}：生产侧（`aggregateIndex` / 派生视图）走**回调式喂数**，
+ *   不要求入参已经物化成 `ErbFunction[]`（快照懒外壳正是靠这一点才不用为了建索引
+ *   把每文件的函数对象全部还原，见 `erb-parser/snapshot.ts` 的 `forEachFn` 纪律）；
+ * - {@link functionLookupOf}：测试与"手里已经有一张 Map"的调用方（mock / 小表）用。
+ */
+
+/** 构造 `ErbFunctionLookup` 时逐条喂进来的定义事实（字段口径同 {@link ErbFunctionRef}）。 */
+/** 构造 `ErbFunctionLookup` 时逐条喂进来的定义事实（字段口径同 `ErbFunctionRef`）。 */
+export interface ErbFunctionDef {
+  /** 原样拼写（大小写按源文件） */
+  readonly name: string;
+  /** 归一化名（大写）；**它就是查找键**，调用方负责算好（`name.toUpperCase()`） */
+  readonly normalizedName: string;
+  /** 定义所在文件（绝对路径） */
+  readonly filePath: string;
+  /** 定义行（1 基） */
+  readonly startLine: number;
+  /** 函数体结束行（1 基，含） */
+  readonly endLine: number;
+  /** 名字起点列；`undefined` / `null` = 没有这个事实（构造 ref 时不挂该属性） */
+  readonly nameColumn?: number | null;
+  /** 注释块；非字符串 = 没有这个事实（构造 ref 时不挂该属性） */
+  readonly docComment?: string | null;
+}
+
+/**
+ * 归一化名 → 定义列表的只读查找表（`ErbIndex.byName` 的形态）。
+ *
+ * 与 `ReadonlyMap<string, ErbFunctionRef[]>` 的对应关系见文件头：读法一一对应，
+ * 只是 `get` 拆成 `firstOf`（只看首条）/ `defsOf`（要全部，会构造数组）/
+ * `forEachDef`（只要遍历，不建数组）。
+ */
+export interface ErbFunctionLookup {
+  /** 名字条数（= 旧 `Map.size`；不是定义条数） */
+  readonly size: number;
+  /** 该归一化名是否有定义（不构造对象） */
+  has(normalizedName: string): boolean;
+  /** 该归一化名的定义条数（不构造对象）；无定义 = 0 */
+  countOf(normalizedName: string): number;
+  /** 第一条定义（聚合顺序第一枚）；无定义 = `undefined` */
+  firstOf(normalizedName: string): ErbFunctionRef | undefined;
+  /** 全部定义（聚合顺序）；无定义 = 空数组。**每次调用新建**，别在热路径里反复调 */
+  defsOf(normalizedName: string): ErbFunctionRef[];
+  /** 归一化名，按首次出现顺序 */
+  keys(): IterableIterator<string>;
+  /** 逐名字吐出定义数组（顺序同 {@link keys}）——给"必须按组处理"的旧消费方 */
+  values(): IterableIterator<ErbFunctionRef[]>;
+  /** 逐名字吐出 `[归一化名, 定义数组]`——给旧 `Map` 的 `entries()` 用法 */
+  entries(): IterableIterator<[string, ErbFunctionRef[]]>;
+  /** 按名字顺序逐**定义**回调（不建数组、不建组），遍历全量时的首选 */
+  forEachDef(cb: (ref: ErbFunctionRef, normalizedName: string) => void): void;
+}
+
+/** 构造期的一次喂数回调：调用方每有一条定义就调一次（顺序 = 聚合顺序）。 */
+export type EmitFunctionDef = (def: ErbFunctionDef) => void;
+
+/** 列式表里"没有这个事实"的哨兵（名字列 / 注释都靠它区分）。 */
+const ABSENT = -1;
+
+/**
+ * 列式表的**最终**存储（{@link collectFunctionFacts} 的产物）：一排 TypedArray + 三枚
+ * 保引用用的普通数组。构建期那些可 push 的 `number[]` 缓冲**不在这里**——
+ * 见 {@link collectFunctionFacts} 上方的"为什么必须是独立作用域"。
+ */
+interface FunctionFacts {
+  /** 归一化名，按首次出现顺序（= 旧 `Map` 的插入序） */
+  keyOrder: string[];
+  bucketOf: Map<string, number>;
+  /** 每名字一段连续区间的起点（下标进 `bucketOrdinals`） */
+  starts: Uint32Array;
+  counts: Uint32Array;
+  /** 定义序号流：同一名字的定义在下标上连续 */
+  bucketOrdinals: Uint32Array;
+  /** 每条定义的原形名 / 注释块（保引用用；这两样本来就是字符串，压不成数字） */
+  names: string[];
+  docs: (string | null)[];
+  filePaths: string[];
+  startLineArr: Uint32Array;
+  endLineArr: Uint32Array;
+  columnArr: Int32Array;
+  fileArr: Uint32Array;
+}
+
+/**
+ * 喂数 + 压平（**独立作用域，返回的只有最终存储**）。
+ *
+ * ## 为什么必须是独立函数，而不是 `buildFunctionLookup` 里的一段
+ *
+ * 本函数返回的 `ErbFunctionLookup` 是把 `refAt` / `refsOfBucket` / 各个方法收进一个对象，
+ * 它们都是**闭包**，会捕获 `buildFunctionLookup` 的作用域。而 V8 把一个作用域里被内部函数
+ * 捕获的变量**整体**放进同一个 `Context` 对象，且不做按需裁剪——构建期的 `startLines`
+ * `endLines` `columns` `defFile` `buckets`（各 11 万格 `number[]`，合计约 7 MB）以及
+ * `ordinalsOfName` 里 11 万枚单元素数组，会**跟着闭包一起活到进程结束**。
+ *
+ * 实测（真实语料 4,258 文件热载，堆快照对拍）：写成一个函数时 `array (object elements)`
+ * 反而 **+9.2 MB**、稳态 **+4.0 MB**——比不改还差；拆开之后缓冲在返回时整层不可达。
+ * 结论记在 PITFALLS：**"局部临时变量"在闭包工厂里不等于"可回收"**。
+ */
+function collectFunctionFacts(visit: (emit: EmitFunctionDef) => void): FunctionFacts {
+  const ordinalsOfName = new Map<string, number[]>();
+  const keyOrder: string[] = [];
+  const filePaths: string[] = [];
+  const fileIndexOf = new Map<string, number>();
+  const names: string[] = [];
+  const docs: (string | null)[] = [];
+  const startLines: number[] = [];
+  const endLines: number[] = [];
+  const columns: number[] = [];
+  const defFile: number[] = [];
+
+  visit((def) => {
+    let fileOrdinal = fileIndexOf.get(def.filePath);
+    if (fileOrdinal === undefined) {
+      fileOrdinal = filePaths.length;
+      filePaths.push(def.filePath);
+      fileIndexOf.set(def.filePath, fileOrdinal);
+    }
+    const ordinal = names.length;
+    names.push(def.name);
+    docs.push(typeof def.docComment === 'string' ? def.docComment : null);
+    startLines.push(def.startLine);
+    endLines.push(def.endLine);
+    columns.push(typeof def.nameColumn === 'number' ? def.nameColumn : ABSENT);
+    defFile.push(fileOrdinal);
+
+    const list = ordinalsOfName.get(def.normalizedName);
+    if (list === undefined) {
+      ordinalsOfName.set(def.normalizedName, [ordinal]);
+      keyOrder.push(def.normalizedName);
+    } else {
+      list.push(ordinal);
+    }
+  });
+
+  // 压平：每个名字一段连续区间（`starts[i] .. starts[i] + counts[i]`）
+  const size = keyOrder.length;
+  const starts = new Uint32Array(size);
+  const counts = new Uint32Array(size);
+  const buckets: number[] = [];
+  for (let i = 0; i < size; i += 1) {
+    const list = ordinalsOfName.get(keyOrder[i]!) as number[];
+    starts[i] = buckets.length;
+    counts[i] = list.length;
+    for (let j = 0; j < list.length; j += 1) buckets.push(list[j]!);
+  }
+  const bucketOf = new Map<string, number>();
+  for (let i = 0; i < size; i += 1) bucketOf.set(keyOrder[i]!, i);
+
+  return {
+    keyOrder,
+    bucketOf,
+    starts,
+    counts,
+    bucketOrdinals: Uint32Array.from(buckets),
+    names,
+    docs,
+    filePaths,
+    startLineArr: Uint32Array.from(startLines),
+    endLineArr: Uint32Array.from(endLines),
+    columnArr: Int32Array.from(columns),
+    fileArr: Uint32Array.from(defFile),
+  };
+}
+
+/**
+ * 生产侧构造：`visit` 拿到 `emit`，按聚合顺序把每条定义喂进来。
+ *
+ * 回调式而不是 `Iterable<ErbFunction>`：快照懒外壳的函数事实在扁平流水里
+ * （`FN_STRIDE`），物化成 `ErbFunction[]` 只为建索引是本批之前的浪费。
+ */
+export function buildFunctionLookup(visit: (emit: EmitFunctionDef) => void): ErbFunctionLookup {
+  const {
+    keyOrder,
+    bucketOf,
+    starts,
+    counts,
+    bucketOrdinals,
+    names,
+    docs,
+    filePaths,
+    startLineArr,
+    endLineArr,
+    columnArr,
+    fileArr,
+  } = collectFunctionFacts(visit);
+  const size = keyOrder.length;
+
+  const refAt = (ordinal: number, normalizedName: string): ErbFunctionRef => {
+    const ref: ErbFunctionRef = {
+      name: names[ordinal]!,
+      normalizedName,
+      filePath: filePaths[fileArr[ordinal]!]!,
+      startLine: startLineArr[ordinal]!,
+      endLine: endLineArr[ordinal]!,
+    };
+    const column = columnArr[ordinal]!;
+    if (column !== ABSENT) ref.nameColumn = column;
+    const doc = docs[ordinal];
+    if (doc !== null && doc !== undefined) ref.docComment = doc;
+    return ref;
+  };
+
+  const refsOfBucket = (bucket: number): ErbFunctionRef[] => {
+    const key = keyOrder[bucket]!;
+    const out: ErbFunctionRef[] = [];
+    const from = starts[bucket]!;
+    const end = from + counts[bucket]!;
+    for (let i = from; i < end; i += 1) out.push(refAt(bucketOrdinals[i]!, key));
+    return out;
+  };
+
+  return {
+    size,
+    has: (normalizedName) => bucketOf.has(normalizedName),
+    countOf: (normalizedName) => {
+      const bucket = bucketOf.get(normalizedName);
+      return bucket === undefined ? 0 : counts[bucket]!;
+    },
+    firstOf: (normalizedName) => {
+      const bucket = bucketOf.get(normalizedName);
+      if (bucket === undefined) return undefined;
+      return refAt(bucketOrdinals[starts[bucket]!]!, keyOrder[bucket]!);
+    },
+    defsOf: (normalizedName) => {
+      const bucket = bucketOf.get(normalizedName);
+      return bucket === undefined ? [] : refsOfBucket(bucket);
+    },
+    *keys() {
+      for (let i = 0; i < size; i += 1) yield keyOrder[i]!;
+    },
+    *values() {
+      for (let i = 0; i < size; i += 1) yield refsOfBucket(i);
+    },
+    *entries() {
+      for (let i = 0; i < size; i += 1) yield [keyOrder[i]!, refsOfBucket(i)] as [string, ErbFunctionRef[]];
+    },
+    forEachDef: (cb) => {
+      for (let i = 0; i < size; i += 1) {
+        const key = keyOrder[i]!;
+        const from = starts[i]!;
+        const end = from + counts[i]!;
+        for (let j = from; j < end; j += 1) cb(refAt(bucketOrdinals[j]!, key), key);
+      }
+    },
+  };
+}
+
+/**
+ * 测试 / 小表用：把一张已经建好的 `[归一化名, 定义[]]` 序列直接装成查找表。
+ *
+ * 只用于 mock 与个位数条目的小表——生产侧不要用它绕开 {@link buildFunctionLookup}
+ * （那会把对象常驻回去，正是本批要消掉的东西）。
+ */
+export function functionLookupOf(
+  entries: Iterable<readonly [string, readonly ErbFunctionRef[]]>,
+): ErbFunctionLookup {
+  const groups = new Map<string, ErbFunctionRef[]>();
+  for (const [name, refs] of entries) {
+    const list = groups.get(name);
+    if (list === undefined) groups.set(name, [...refs]);
+    else list.push(...refs);
+  }
+  const keyOrder = [...groups.keys()];
+  const refsOf = (name: string): ErbFunctionRef[] => [...(groups.get(name) as ErbFunctionRef[])];
+  return {
+    size: keyOrder.length,
+    has: (name) => groups.has(name),
+    countOf: (name) => groups.get(name)?.length ?? 0,
+    firstOf: (name) => groups.get(name)?.[0],
+    defsOf: (name) => (groups.has(name) ? refsOf(name) : []),
+    *keys() {
+      for (const name of keyOrder) yield name;
+    },
+    *values() {
+      for (const name of keyOrder) yield refsOf(name);
+    },
+    *entries() {
+      for (const name of keyOrder) yield [name, refsOf(name)] as [string, ErbFunctionRef[]];
+    },
+    forEachDef: (cb) => {
+      for (const name of keyOrder) {
+        for (const ref of refsOf(name)) cb(ref, name);
+      }
+    },
+  };
+}

@@ -10,6 +10,7 @@
  * （对拍闸在 `sugar-transpiler-dedup.test.ts` / `partition.test.ts`）。
  * 墙钟断言 ⇒ 文件名 `.perf.test.ts`，按 `tools/perf-suite.mjs` 的谓词进串行静默池。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   ComputePool,
@@ -66,7 +67,7 @@ function harness(compute?: ComputePool): ConventionEngine {
     files.set(path, parseErbText('', path));
     mtimes.set(path, 1_700_000_000_000 + i);
   }
-  const index: ErbIndex = { files, byName: new Map(), fileMtimes: mtimes };
+  const index: ErbIndex = { files, byName: functionLookupOf([]), fileMtimes: mtimes };
   const service: SugarTranspileService = createSugarTranspileService({ faceTable: createEratwFaceTable() });
   setSugarTranspileProvider(() => service);
   return new ConventionEngine({

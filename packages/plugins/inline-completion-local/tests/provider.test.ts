@@ -114,11 +114,18 @@ describe('精度闸：多匹配就不给（宁可漏报不可错报）', () => {
   });
 
   it('名录里同名多定义不影响判据（按名字数，不按定义数）', () => {
-    const multi = fakeIndex({ functions: [] });
-    multi.byName.set('同名函数', [
-      { name: '同名函数', normalizedName: '同名函数', filePath: 'D:/a.erb', startLine: 1, endLine: 2 },
-      { name: '同名函数', normalizedName: '同名函数', filePath: 'D:/b.erb', startLine: 1, endLine: 2 },
-    ]);
+    const multi = fakeIndex({
+      functions: [],
+      byNameExtras: new Map([
+        [
+          '同名函数',
+          [
+            { name: '同名函数', normalizedName: '同名函数', filePath: 'D:/a.erb', startLine: 1, endLine: 2 },
+            { name: '同名函数', normalizedName: '同名函数', filePath: 'D:/b.erb', startLine: 1, endLine: 2 },
+          ],
+        ],
+      ]),
+    });
     const outcome = candidatesOf(run(requestAt('@同名', '', { version: 2 }), multi).outcome);
     expect(outcome.candidates[0]!.insertText).toBe('同名函数');
   });

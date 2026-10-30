@@ -459,6 +459,11 @@ export type { ErbContinuationRole } from './erb';
 // ERB 行首 / 槽位判据的空白类（LAU-4 补全腿第二批，2026-10-31）：常驻解析器插件读它，
 // `.kojo` 侧继续用 `@kojo/kojo-lang/completion` 的同值常量，两枚由插件测试逐字符钉相等。
 export { ERB_BLANK_CLASS_STR, ERB_BLANK_RE, isErbBlank, isAllErbBlank } from './erb';
+// 函数名录列式查找表（MEM-19）：`ErbIndex.byName` 的形态 + 两条构造入口
+// 与 `ErbFunctionRef` 同源，落在 `erb.ts` 而不是独立模块——开机图文件闸 199 顶格，
+// 新进一枚就得挪一枚出去（见 `docs/STATE.md` PS-10 行）。
+export { buildFunctionLookup, functionLookupOf } from './erb';
+export type { EmitFunctionDef, ErbFunctionDef, ErbFunctionLookup } from './erb';
 // 索引状态事实（2026-10-19 additive，IDX-STATE 批独占追加）
 export type {
   ErbIndexCoverage,

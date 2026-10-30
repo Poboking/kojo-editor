@@ -10,8 +10,9 @@
  * (f) range：有实参落实参区，无实参落函数名；CALL 括号形不会被表达式腿重复报。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
-import type { ErbIndex, ErbParam } from '@kojo/plugin-api';
+import type { ErbFunctionRef, ErbIndex, ErbParam } from '@kojo/plugin-api';
 import { ARITY_MISMATCH_CODE, arityParamsOf, collectArityDiagnostics } from '../src/arity';
 
 const p = (name: string, hasDefault = false): ErbParam => ({ name, hasDefault });
@@ -149,16 +150,16 @@ describe('collectArityDiagnostics · 表达式调用', () => {
 describe('arityParamsOf · 多处定义一致性', () => {
   const makeIndex = (defs: { file: string; line: number; params: ErbParam[] }[]): ErbIndex => {
     const files = new Map<string, { functions: { startLine: number; params: ErbParam[] }[] }>();
-    const byName = new Map<string, { filePath: string; startLine: number }[]>();
+    const byName = new Map<string, ErbFunctionRef[]>();
     for (const def of defs) {
       const entry = files.get(def.file) ?? { functions: [] };
       entry.functions.push({ startLine: def.line, params: def.params });
       files.set(def.file, entry);
       const list = byName.get('FOO') ?? [];
-      list.push({ filePath: def.file, startLine: def.line });
+      list.push({ name: 'FOO', normalizedName: 'FOO', filePath: def.file, startLine: def.line, endLine: def.line });
       byName.set('FOO', list);
     }
-    return { files, byName } as unknown as ErbIndex;
+    return { files, byName: functionLookupOf(byName) } as unknown as ErbIndex;
   };
 
   it('同名多处定义一致 ⇒ 给形参表', () => {

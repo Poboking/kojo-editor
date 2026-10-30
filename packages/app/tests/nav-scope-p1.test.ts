@@ -1,3 +1,4 @@
+import { functionLookupOf } from '@kojo/plugin-api';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   EditorLanguageServiceContribution,
@@ -77,7 +78,7 @@ const index: ErbIndex = {
       },
     ]),
   ),
-  byName: new Map(),
+  byName: functionLookupOf(new Map()),
 };
 
 const ALL_PATHS = [IN_A, IN_B, OUT];

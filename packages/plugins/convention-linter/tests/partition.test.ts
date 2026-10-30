@@ -3,6 +3,7 @@
  * 判据门（全局 expect / partition.key / mtime）、失败口径（整规则无结论、坏单元不留存）、
  * `undefined` 跳过口径、落盘/热缓存还原、force 绕开——全部用假规则钉死。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   CacheExpect,
@@ -37,7 +38,7 @@ function makeIndex(overrides: Partial<ErbIndex> = {}): ErbIndex {
       byName.set(fn.normalizedName, refs);
     }
   }
-  return { files: map, byName, fingerprint: 'erbfp-1', fileMtimes: new Map([[A, 100], [B, 200]]), ...overrides };
+  return { files: map, byName: functionLookupOf(byName), fingerprint: 'erbfp-1', fileMtimes: new Map([[A, 100], [B, 200]]), ...overrides };
 }
 
 function fakeProject(): GameProject {

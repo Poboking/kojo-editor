@@ -4,6 +4,7 @@
  * 夹具刻意造出"分组首现序 ≠ 朴素 walk 序"的形态（KX 大小写变体、跨文件 anchor、
  * 多文件多越界函数），把顺序等价也钉死。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   CharaInfo,
@@ -44,7 +45,7 @@ function makeIndex(files: Record<string, string>): ErbIndex {
       byName.set(fn.normalizedName, refs);
     }
   }
-  return { files: map, byName };
+  return { files: map, byName: functionLookupOf(byName) };
 }
 
 function ctxFor(

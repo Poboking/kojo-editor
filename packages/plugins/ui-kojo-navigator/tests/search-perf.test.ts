@@ -12,6 +12,7 @@
  * 计时一律 median（n ≥ 30），断言**只钉方向与有界**（不钉绝对值），读数经 console.log 输出。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   CharaInfo,
@@ -87,7 +88,7 @@ function makeIndex(files: Record<string, string[]>): ErbIndex {
     }));
     map.set(path, { path, functions, dims: [], hasFunctionDirective: false, lineCount: fns.length * 10 + 5 });
   }
-  return { files: map, byName };
+  return { files: map, byName: functionLookupOf(byName) };
 }
 
 /* ------- 改动前实现（逐字复制；用作等价性规格 + 微基准的 before 侧） ------- */

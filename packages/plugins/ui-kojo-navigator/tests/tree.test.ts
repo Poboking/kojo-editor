@@ -5,6 +5,7 @@
  * 不 import eratw-adapter——真实规则的覆盖验证在 kernel 集成冒烟里。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type { CharaInfo, ErbIndex, ErbFile, ErbFunction, FamilyIndexRule, FamilyMatch, FamilyParseKind } from '@kojo/plugin-api';
 import { buildNavigatorTree, functionTooltip, searchFunctions, shouldRebuildIndex } from '../src/tree';
@@ -69,7 +70,7 @@ function makeIndex(files: Record<string, string[]>): ErbIndex {
     }));
     map.set(path, { path, functions, dims: [], hasFunctionDirective: false, lineCount: fns.length * 10 + 5 });
   }
-  return { files: map, byName };
+  return { files: map, byName: functionLookupOf(byName) };
 }
 
 const NO_CHARA = new Map<number, CharaInfo>();

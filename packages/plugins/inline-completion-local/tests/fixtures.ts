@@ -1,3 +1,4 @@
+import { functionLookupOf } from '@kojo/plugin-api';
 import type { ErbDim, ErbFile, ErbFunctionRef, ErbIndex, GameProject, InlineCompletionRequest } from '@kojo/plugin-api';
 
 /**
@@ -50,12 +51,12 @@ export function fakeIndex(opts: {
     lineCount: 10,
   };
   const files = new Map<string, ErbFile>([['D:/game/ERB/A.erb', file]]);
-  return { files, byName, fingerprint: 'fixture-fp' };
+  return { files, byName: functionLookupOf(byName), fingerprint: 'fixture-fp' };
 }
 
 /** 空索引（一个名字都没有：用来验"名录在场但没命中"） */
 export function emptyIndex(): ErbIndex {
-  return { files: new Map<string, ErbFile>(), byName: new Map<string, ErbFunctionRef[]>(), fingerprint: 'empty' };
+  return { files: new Map<string, ErbFile>(), byName: functionLookupOf([]), fingerprint: 'empty' };
 }
 
 /**

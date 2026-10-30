@@ -10,6 +10,7 @@
  * ⑤ 池子那条路与本地兜底那条路**收摊形状逐字相同**（两条路都过同一颗哨兵）；
  * ⑥ 旧调用（不传取消位）零改动：`incomplete` 缺席、照旧落盘、照旧广播。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   CacheExpect,
@@ -63,7 +64,7 @@ function makeIndex(): ErbIndex {
       byName.set(fn.normalizedName, refs);
     }
   }
-  return { files, byName, fingerprint: 'erbfp-1', fileMtimes: new Map(ALL_PATHS.map((p, i) => [p, 1_000 + i])) };
+  return { files, byName: functionLookupOf(byName), fingerprint: 'erbfp-1', fileMtimes: new Map(ALL_PATHS.map((p, i) => [p, 1_000 + i])) };
 }
 
 interface Deferred {

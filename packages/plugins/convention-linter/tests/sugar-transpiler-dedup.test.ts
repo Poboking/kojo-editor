@@ -14,6 +14,7 @@
  *   **既不再读盘也不再转译**（调用计数为硬闸）；改一棵只重算那一棵。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
@@ -91,7 +92,7 @@ function project(): GameProject {
 function indexFor(paths: readonly string[], mtimes?: ReadonlyMap<string, number | null>): ErbIndex {
   const files = new Map<string, ErbFile>();
   for (const p of paths) files.set(p, parseErbText('', p));
-  return { files, byName: new Map(), ...(mtimes ? { fileMtimes: mtimes } : {}) };
+  return { files, byName: functionLookupOf([]), ...(mtimes ? { fileMtimes: mtimes } : {}) };
 }
 
 function ctxFor(paths: readonly string[], texts: Record<string, string> = SOURCES): ConventionCheckContext {

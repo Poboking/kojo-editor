@@ -17,6 +17,7 @@
  * 一条档案放进 `livePanes`，不 mock 宿主内部实现。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { afterEach, describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { ErbDim, ErbFile, ErbFunction, ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
@@ -51,7 +52,7 @@ function indexOf(
   for (const [p, f] of moreFiles) {
     files.set(p, { ...f, lineCount: 99, hasFunctionDirective: false } as ErbFile);
   }
-  const byName = new Map<string, ErbFunctionRef[]>(functions.map((f) => [f.normalizedName, [ref(f)]]));
+  const byName = functionLookupOf(new Map(functions.map((f) => [f.normalizedName, [ref(f)]])));
   return { files, byName } as unknown as ErbIndex;
 }
 
@@ -471,12 +472,12 @@ describe('#DIM 悬停 · 派生预览面坐标不跨面', () => {
       erbIndex: () =>
         ({
           files: new Map([[fnPath, { path: fnPath, functions: [def], dims: [], lineCount: 9, hasFunctionDirective: false }]]),
-          byName: new Map([
+          byName: functionLookupOf(new Map([
             [
               '好感度检查',
               [{ name: def.name, normalizedName: def.normalizedName, filePath: fnPath, startLine: 7, endLine: 9 }],
             ],
-          ]),
+          ])),
         }) as unknown as ErbIndex,
     };
     const sugar = fakeModel(['; 预览', '好感度检查(1)'], {

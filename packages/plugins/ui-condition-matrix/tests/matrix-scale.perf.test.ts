@@ -17,6 +17,7 @@
  * 语料不在位（`KOJO_SMOKE_PROJECT` 未设 / `tools/corpus.mjs` rc≠0）⇒ 整文件 skip，
  * 与仓里其它语料闸同口径。跑法见 AGENTS §三（计时池：`--config vitest.perf.config.ts`）。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -110,7 +111,7 @@ describe.skipIf(!process.env.KOJO_SMOKE_PROJECT)('条件矩阵 · 真实语料�
       texts.set(p, text);
       files.set(p, parseErbText(text, p));
     }
-    const index: ErbIndex = { files, byName: new Map() };
+    const index: ErbIndex = { files, byName: functionLookupOf([]) };
     const family = createEratwFamilyIndex();
 
     // ---- ① 全量 vs 增量 ----
@@ -122,14 +123,14 @@ describe.skipIf(!process.env.KOJO_SMOKE_PROJECT)('条件矩阵 · 真实语料�
       const clone = new Map<string, ErbFile>();
       for (const [p, f] of files) clone.set(p, { ...f });
       const t = performance.now();
-      buildCharacterIndex({ files: clone, byName: new Map() }, family);
+      buildCharacterIndex({ files: clone, byName: functionLookupOf([]) }, family);
       coldSamples.push(performance.now() - t);
     }
     const cold = median(coldSamples);
     const onePath = paths[Math.floor(paths.length / 2)]!;
     const afterSave = new Map(files);
     afterSave.set(onePath, parseErbText(texts.get(onePath)!, onePath));
-    const index2: ErbIndex = { files: afterSave, byName: new Map() };
+    const index2: ErbIndex = { files: afterSave, byName: functionLookupOf([]) };
     const incremental = timeOf(5, () => buildCharacterIndex(index2, family));
     const unchanged = timeOf(5, () => buildCharacterIndex(index, family));
 

@@ -7,6 +7,7 @@
  * 判据本体已交给转译器（`sugar.transpile`）——这里的对拍对象是**投影 + 分区**这条管线，
  * 服务用真转译器（`@kojo/plugin-kojo-sugar`，测试文件豁免插件交叉 import 纪律）。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type { ConventionCheckContext, ConventionProjectUnitEntry, ErbFile, Logger, SugarTranspileService } from '@kojo/plugin-api';
 import { parseErbText } from '@kojo/plugin-erb-parser';
@@ -59,7 +60,7 @@ function ctxFor(files: Record<string, string>, order: string[]): ConventionCheck
   for (const p of order) map.set(p, parseErbText('', p));
   return {
     project: { rootDir: '/p', adapterId: 'test', kojoPaths: ['/p/kojo'], writablePaths: [], charaIndex: new Map() },
-    index: { files: map, byName: new Map() },
+    index: { files: map, byName: functionLookupOf([]) },
     readFile: async (path: string) => {
       const t = files[path];
       if (t === undefined) throw new Error(`not found: ${path}`);

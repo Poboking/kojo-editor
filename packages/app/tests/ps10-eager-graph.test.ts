@@ -952,13 +952,29 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `erb-parser/src/scanner.ts` +189（改成 import + 落点注）。宿主
     //     `monaco/erb-dim-navigation.ts` 的字面 NUL 改 `\u0000` 转义（+5 B，懒边不进图）。
     //     ⇒ 闸 **3,337 → 3,338**（余量约 0.2 KB；文件闸仍 199）。
+
+    //   - **内存批 MEM-19 / MEM-20（2026-10-30，本批，`byName` 列式化）**：读数 **199 文件 /
+    //     3,350 KB**（3,430,610 B = 上一条 3,417,916 + 12,694，**rebase 前在旧基底上是 +12,695**
+    //     ——两次独立测量差 1 B，说明这笔账只落在本批改的那几枚文件上）——**零新进图模块**（199 未动）。
+    //     台账先记一次踩空：查找表原先按独立模块 `plugin-api/src/erb-function-lookup.ts`
+    //     （10,386 B）写，`index.ts` 一导出就进图 ⇒ 文件闸顶到 **200**。并回 `erb.ts`
+    //     （与 `ErbFunctionRef` 同源）后回到 199，代价是 `erb.ts` 一笔 **+13,327 B**。
+    //     逐文件对账（图内五枚）：`plugin-api/src/erb.ts` +13,327（查找表本体 + `byName`
+    //     契约注释 + "闭包作用域不等于可回收"那条坑注）、`plugin-api/src/index.ts` +422
+    //     （两条导出与理由）、`erb-parser/src/snapshot.ts` **−1,232**（`makeRef` 与 `byName`
+    //     组装循环换成 `buildFunctionLookup` 回调喂数，净删）、`workspace-symbols.ts` +221
+    //     （`keys()` + `defsOf()` 两段式与理由）、其余三枚合计 −28（`.get()` 换口子）。
+    //     另 `ui-condition-matrix/src/workspace-index.ts` +395、`erafl-adapter/src/conventions.ts`
+    //     +232 与 app 侧五枚**都不在开机图**（懒边）——逐文件点名后总和与总量差 24 B（KB 取整）。
+    //     ⇒ 闸 **3,338 → 3,352**（余量 2 KB）。这一档是"代码多花 12 KB、换同一语料 A/B 热载
+    //     **稳态 126.5 → 115.4 MB**（−11.1 / −8.8%，见 STATE 该行）"。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,338 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,352 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_338);
+    expect(totalKb).toBeLessThanOrEqual(3_352);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

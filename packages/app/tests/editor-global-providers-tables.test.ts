@@ -21,6 +21,7 @@
  * 那一层的账不归本接线层，也不在本批文件权限内。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbFile, ErbIndex, GameAdapter, GameProject } from '@kojo/plugin-api';
@@ -310,7 +311,7 @@ function stubErbIndex(): ErbIndex {
     hasFunctionDirective: false,
     lineCount: 100,
   };
-  return { files: new Map([[filePath, file]]), byName: new Map() };
+  return { files: new Map([[filePath, file]]), byName: functionLookupOf(new Map()) };
 }
 
 /** 查询路径：与索引键的大小写 / 分隔符都不同，只有 `pathKey` 归一才能命中 */

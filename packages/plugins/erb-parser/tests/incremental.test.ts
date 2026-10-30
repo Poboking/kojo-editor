@@ -62,7 +62,7 @@ describe('applyIndexDelta（WS-05）', () => {
 
     expect(result.added).toBe(1);
     expect([...result.index.files.keys()].sort()).toEqual([A, C]);
-    expect(result.index.byName.get('C')).toHaveLength(1);
+    expect(result.index.byName.defsOf('C')).toHaveLength(1);
     expect(result.index.fileMtimes!.has(C)).toBe(true);
   });
 
@@ -88,7 +88,7 @@ describe('applyIndexDelta（WS-05）', () => {
     });
 
     expect([...result.index.files.keys()]).toEqual([moved]);
-    expect(result.index.byName.get('B')![0]!.filePath).toBe(moved);
+    expect(result.index.byName.defsOf('B')![0]!.filePath).toBe(moved);
   });
 
   it('输入那份索引一个字段都不动（返回新对象、Map 不共享）', () => {

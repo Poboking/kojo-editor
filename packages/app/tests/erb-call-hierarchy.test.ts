@@ -13,6 +13,7 @@
  * 于是"面板画出来的"就是"插件答出来的"。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -80,7 +81,7 @@ function makeIndex(opts: {
 }): ErbIndex {
   return {
     files: new Map((opts.files ?? []).map((f) => [f.path, f])),
-    byName: new Map(opts.byName ?? []),
+    byName: functionLookupOf(new Map(opts.byName ?? [])),
     // references 是契约里的只读可选成员，构造期一次性给齐
     ...(opts.withReferences === false ? {} : { references: { bySymbol: new Map(opts.bySymbol ?? []) } }),
   } as ErbIndex;

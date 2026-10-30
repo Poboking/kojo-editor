@@ -8,6 +8,7 @@
  * - 跳转目标只认"关键字后只隔空白 + 整段标识符"的裸形态，动态表达式不猜；
  * - 标签名允许 CJK（与反向索引同一枚 Unicode 记号集），大小写不敏感。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type { ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
 import { definitionTargetsAt, labelScopeAt } from '../src/symbols';
@@ -15,7 +16,7 @@ import { definitionTargetsAt, labelScopeAt } from '../src/symbols';
 const PATH = '/a.ERB';
 
 const idx = (byName: Record<string, ErbFunctionRef[]> = {}): ErbIndex =>
-  ({ files: new Map(), byName: new Map(Object.entries(byName)) }) as unknown as ErbIndex;
+  ({ files: new Map(), byName: functionLookupOf(new Map(Object.entries(byName))) }) as unknown as ErbIndex;
 
 const fnRef = (name: string, startLine = 9): ErbFunctionRef => ({
   name,

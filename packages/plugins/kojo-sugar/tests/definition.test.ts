@@ -12,6 +12,7 @@
  * 数字负断言。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type { ErbIndex, SugarTranspileResult } from '@kojo/plugin-api';
 import { createSugarTranspileService } from '../src/service';
@@ -29,7 +30,7 @@ function indexOf(entries: Record<string, { filePath: string; startLine: number }
       refs.map((r) => ({ name, normalizedName: name.toUpperCase(), ...r, endLine: r.startLine })),
     ]),
   );
-  return { files: new Map(), byName };
+  return { files: new Map(), byName: functionLookupOf(byName) };
 }
 
 /** 桩转译结果：`erb` 行 + `[产物行, 源行|null]` 源映射（与真实 `sourceOf` 同口径） */

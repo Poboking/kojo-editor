@@ -1965,7 +1965,7 @@ export function createErbParserPlugin(): Plugin {
           const idx = index;
           if (!idx) return undefined;
           const lenses = usageLenses(parseErbText(request.text, request.path).functions, {
-            definitionsOf: (normalizedName) => idx.byName.get(normalizedName)?.length ?? 0,
+            definitionsOf: (normalizedName) => idx.byName.countOf(normalizedName),
             referencesOf: (name) => referencesOf(idx, name),
           });
           return { kind: 'codeLens', lenses };

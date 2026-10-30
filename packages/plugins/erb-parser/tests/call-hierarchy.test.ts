@@ -10,6 +10,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { functionLookupOf } from '@kojo/plugin-api';
 import type { ErbFile, ErbFunction, ErbFunctionRef, ErbIndex, ErbReference } from '@kojo/plugin-api';
 import {
   incomingCalls,
@@ -53,7 +54,7 @@ function makeIndex(opts: {
 }): ErbIndex {
   return {
     files: new Map((opts.files ?? []).map((f) => [f.path, f])),
-    byName: new Map(opts.byName ?? []),
+    byName: functionLookupOf(opts.byName ?? []),
     // references 是契约里的只读可选成员，构造期一次性给齐
     ...(opts.withReferences === false ? {} : { references: { bySymbol: new Map(opts.bySymbol ?? []) } }),
   } as ErbIndex;

@@ -14,6 +14,7 @@
  * 同位多方上报取最具体分类，且旧消费方看到的位置形状零改动。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { EditorLanguageServiceContribution, EditorSymbolLocation, ErbFunction, ErbIndex, ErbReference } from '@kojo/plugin-api';
@@ -356,7 +357,7 @@ describe('F12 台账读数与调用层级读数同源对拍', () => {
   ];
   const CALLER = { normalizedName: 'CALLER_X', name: 'CALLER_X', filePath: A, startLine: 20, endLine: 60 } as unknown as ErbFunction;
   const index = {
-    byName: new Map([['FOO', [CALLER]]]),
+    byName: functionLookupOf(new Map([['FOO', [CALLER]]])),
     files: new Map<string, unknown>(),
     references: { bySymbol: new Map([['FOO', REFS]]) },
   } as unknown as ErbIndex;

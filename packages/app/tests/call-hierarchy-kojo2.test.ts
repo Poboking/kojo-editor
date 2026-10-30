@@ -10,6 +10,7 @@
  *    外加跨文件 `data.path` 键要落到组行与点位行的跳转目标上。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -102,11 +103,11 @@ function erbIndex(): ErbIndex {
         },
       ],
     ]),
-    byName: new Map([
+    byName: functionLookupOf(new Map([
       ['TARGET', [fnRef('TARGET', 10, 20)]],
       ['CALLER1', [fnRef('CALLER1', 30, 40)]],
       ['CALLEE', [{ ...fnRef('CALLEE', 1, 9), filePath: fileB }]],
-    ]),
+    ])),
     references: {
       bySymbol: new Map([
         ['TARGET', [ref('definition', 10, 2), ref('call', 31, 3)]],

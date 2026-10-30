@@ -48,7 +48,7 @@ describe('workspace-index', () => {
     expect(fn.startLine).toBe(1);
     expect(fn.startLine).toBe(bundle.extractIndex.files.get('D:/ws/pack/A.ERB')!.functions[0]!.startLine);
     expect(bundle.texts.get('D:/ws/pack/A.ERB')).toBe(ERB_TEXT);
-    expect(bundle.displayIndex.byName.get(fn.normalizedName)).toHaveLength(1);
+    expect(bundle.displayIndex.byName.defsOf(fn.normalizedName)).toHaveLength(1);
   });
 
   it('.kojo1：抽取坐标为生成行、显示坐标折回源行，生成文本进覆盖表', () => {

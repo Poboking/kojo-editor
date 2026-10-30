@@ -1,3 +1,4 @@
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   ComputePool,
@@ -89,7 +90,7 @@ function erbFile(path: string): ErbFile {
 function erbIndex(mtimes: Map<string, number | null> | null, sizes?: Map<string, number | null>): ErbIndex {
   const paths = mtimes === null ? [A, B] : [...mtimes.keys()];
   const files = new Map<string, ErbFile>(paths.map((p) => [p, erbFile(p)]));
-  return { files, byName: new Map(), fileMtimes: mtimes ?? undefined, fileSizes: sizes } as ErbIndex;
+  return { files, byName: functionLookupOf([]), fileMtimes: mtimes ?? undefined, fileSizes: sizes } as ErbIndex;
 }
 
 /** 一个文件算完的桶（与引擎内部同构，用于造"上次留下的快照"） */

@@ -326,7 +326,7 @@ describe('③ 原生档进得了索引、也出得了制品（取证实测固化
     const idx2 = await erbParserService(withLive).buildIndex!([root]);
     expect(idx2.files.size).toBe(CORE_FACES.length + 1);
     expect(idx2.byName.size).toBe(1);
-    expect(idx2.byName.get('M_KOJO_TEST_NATIVE')?.length).toBe(1);
+    expect(idx2.byName.countOf('M_KOJO_TEST_NATIVE')).toBe(1);
   });
 
   it('制品计划：非 .kojo 一律字节级原样携带，编译器一次都不叫（不是报错、也不是静默跳过）', () => {

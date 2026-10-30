@@ -22,6 +22,7 @@
  * 不依赖内核 / Monaco 运行时）：用例里的取数口把**真判据**（插件供方）接到假索引上，
  * 于是 provider 交出的读数与判据逐条可对拍——翻译层不许漂。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -115,7 +116,7 @@ function makeIndex(opts: {
 }): ErbIndex {
   return {
     files: new Map((opts.files ?? []).map((f) => [f.path, f])),
-    byName: new Map(opts.byName ?? []),
+    byName: functionLookupOf(new Map(opts.byName ?? [])),
     ...(opts.withReferences === false
       ? {}
       : { references: { bySymbol: new Map(opts.bySymbol ?? []) } }),

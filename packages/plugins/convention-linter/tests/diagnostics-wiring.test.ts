@@ -23,7 +23,7 @@ import type {
   SugarDiagnostic,
   SugarTranspileService,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, functionLookupOf } from '@kojo/plugin-api';
 import { parseErbText } from '@kojo/plugin-erb-parser';
 import { createSugarTranspileService } from '@kojo/plugin-kojo-sugar';
 import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
@@ -61,7 +61,7 @@ function indexWith(files: Record<string, string>): ErbIndex {
       byName.set(fn.normalizedName, refs);
     }
   }
-  return { files: map, byName };
+  return { files: map, byName: functionLookupOf(byName) };
 }
 
 /** 两槽贡献在测试里的最小形状（真类型由 `src/index.ts` 那边把关，这里只取读得动的两刀） */

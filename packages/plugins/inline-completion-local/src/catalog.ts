@@ -69,10 +69,10 @@ function makeCatalog(keys: string[], names: string[]): NameCatalog {
 function buildBundle(index: ErbIndex): CatalogBundle {
   const fnKeys: string[] = [];
   const fnNames: string[] = [];
-  for (const [normalized, refs] of index.byName) {
+  for (const normalized of index.byName.keys()) {
     // 原形名取该名下**第一枚定义**的名字（同一名字的多处定义在引擎里本就是同一个调用目标，
     // 展示用哪一份都不算错；取文档序第一枚是为了确定性，不是取"最好的那一个"）
-    const display = refs[0]?.name;
+    const display = index.byName.firstOf(normalized)?.name;
     fnKeys.push(normalized);
     fnNames.push(display !== undefined && display.length > 0 ? display : normalized);
   }

@@ -10,6 +10,7 @@
  * **fail-visible 负例**（表缺席 / 查不到 / 上下文不可证明一律不显示——**绝不猜**）。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { ErbIndex, KojoInstructionTable, KojoLibraryTable } from '@kojo/plugin-api';
@@ -209,7 +210,7 @@ describe('悬停 · 文件身份注入位（派生面上的 `#DIM` 声明路）'
 
   const index: ErbIndex = {
     files: new Map([[DIM_PATH, { path: DIM_PATH, dims: [{ name: '好感度', directive: 'DIM', line: 12 }] } as never]]),
-    byName: new Map(),
+    byName: functionLookupOf(new Map()),
   };
   const dimTables: HoverTables = { erbIndex: () => index };
 

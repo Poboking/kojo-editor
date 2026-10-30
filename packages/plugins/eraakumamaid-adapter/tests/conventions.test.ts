@@ -8,6 +8,7 @@
  * 协议对象为**手搓夹具**（不依赖 call-protocol 的路由表解析——那层的加载
  * 语义由 call-protocol 自己的测试管）；本文件只钉"规则消费协议"的行为。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   CharaInfo,
@@ -44,7 +45,7 @@ function makeIndex(files: Record<string, string>): ErbIndex {
       byName.set(fn.normalizedName, refs);
     }
   }
-  return { files: map, byName };
+  return { files: map, byName: functionLookupOf(byName) };
 }
 
 function ctxFor(index: ErbIndex, files: Record<string, string>, chara: CharaInfo[] = []): ConventionCheckContext {

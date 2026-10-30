@@ -221,7 +221,9 @@ async function scan(ctx: ConventionCheckContext, deps: EraflConventionDeps): Pro
   const nameNumbers = new Set<number>();
   const splitDirs = new Set<string>();
 
-  for (const [key, refs] of ctx.index.byName) {
+  // 走 `keys()` + 命中后再 `defsOf()`：`entries()` 会为全部键各造一组 ref 数组，
+  // 而这里 `DEFINE_` 前缀命中是极少数（`NAME_` 那条只为收集编号，不需要定义）。
+  for (const key of ctx.index.byName.keys()) {
     const nameMatch = NAME_KEY.exec(key);
     if (nameMatch) nameNumbers.add(Number(nameMatch[1]));
 
@@ -229,7 +231,7 @@ async function scan(ctx: ConventionCheckContext, deps: EraflConventionDeps): Pro
     if (!defineMatch) continue;
     const no = Number(defineMatch[1]);
 
-    for (const ref of refs) {
+    for (const ref of ctx.index.byName.defsOf(key)) {
       const text = texts.get(ref.filePath);
       // 索引里有这个函数、正文却不在表里 ⇒ 索引与文件清单自相矛盾。抛错，不猜。
       if (text === undefined) throw new Error(`索引里的定义点不在 ERB 文件清单中：${ref.filePath}`);

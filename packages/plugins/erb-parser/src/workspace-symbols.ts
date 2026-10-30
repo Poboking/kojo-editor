@@ -89,10 +89,12 @@ export function workspaceSymbolsInIndex(
   let matched = 0;
 
   /* ---- 第一段：名字命中（`byName` 键，一趟线性扫） ---- */
-  for (const [key, refs] of index.byName) {
+  // 走 `keys()` + 命中后再 `defsOf()`，**不要** `entries()`：后者会为全部 11 万个名字
+  // 各造一组 `ErbFunctionRef` 数组（本查询是热路径，命中通常个位数）。
+  for (const key of index.byName.keys()) {
     // 一次 `includes` 挡掉绝大多数键（实测比"先比相等再比前缀"省一半——热路径是**不命中**的那条）
     if (!key.includes(norm)) continue;
-    for (const ref of refs) {
+    for (const ref of index.byName.defsOf(key)) {
       // 命中总数与产出**同一条范围判据**（`pathInScope` 单源），不在范围内的一条都不算
       if (!pathInScope(ref.filePath, roots)) continue;
       matched++;

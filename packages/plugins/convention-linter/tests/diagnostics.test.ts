@@ -20,7 +20,7 @@ import type {
   SugarDiagnostic,
   SugarTranspileService,
 } from '@kojo/plugin-api';
-import { pathKey } from '@kojo/plugin-api';
+import { pathKey, functionLookupOf } from '@kojo/plugin-api';
 import { parseErbText } from '@kojo/plugin-erb-parser';
 import { createSugarTranspileService } from '@kojo/plugin-kojo-sugar';
 import { createEratwFaceTable } from '@kojo/plugin-eratw-adapter';
@@ -266,7 +266,7 @@ describe('真规则 × 诊断面（端到端）', () => {
   function ctxFor(files: Record<string, string>): ConventionCheckContext {
     const map = new Map<string, ErbFile>();
     for (const [path, text] of Object.entries(files)) map.set(path, parseErbText(text, path));
-    const index = { files: map, byName: new Map() } as unknown as ErbIndex;
+    const index = { files: map, byName: functionLookupOf([]) } as unknown as ErbIndex;
     const project = {
       rootDir: 'C:/game',
       adapterId: 'test',
@@ -605,7 +605,7 @@ function parseDuplicateIndex(text: string): ErbIndex {
     });
     byName.set(fn.normalizedName, refs);
   }
-  return { files: new Map([[file.path, file]]), byName };
+  return { files: new Map([[file.path, file]]), byName: functionLookupOf(byName) };
 }
 
 it('`.ERB` 不吃糖侧兜底修法（那条判据只归 `.kojo1`）', () => {

@@ -214,7 +214,7 @@ describe('erb-parser 插件', () => {
     const index = await parser.buildIndex(['/root']);
     expect(index.files.size).toBe(2);
     expect([...index.byName.keys()].sort()).toEqual(['ALPHA', 'BETA', 'COMMON']);
-    expect(index.byName.get('COMMON')).toHaveLength(2); // 大小写不同视为同名（Emuera 语义）
+    expect(index.byName.defsOf('COMMON')).toHaveLength(2); // 大小写不同视为同名（Emuera 语义）
   });
 
   it('buildIndex 对单文件解析失败不中断（记警告）', async () => {

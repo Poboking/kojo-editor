@@ -264,8 +264,8 @@ export class ConditionEngine implements ConditionExtractorService {
 
     const index = this.deps.getIndex();
     if (!index) return null;
-    const refs = index.byName.get(key);
-    if (!refs || refs.length === 0) return null;
+    const refs = index.byName.defsOf(key);
+    if (refs.length === 0) return null;
     const ref = refs[0]!;
 
     let text = this.fileTextCache.get(ref.filePath);

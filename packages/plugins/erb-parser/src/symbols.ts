@@ -371,7 +371,7 @@ export function definitionTargetsAt(
   if (labelEntryAt(lineText, column) !== null) return [];
   const token = functionNameTokenAt(lineText, column);
   if (!token) return [];
-  return index.byName.get(token.text.toUpperCase()) ?? [];
+  return index.byName.defsOf(token.text.toUpperCase());
 }
 
 /** 取 1 基行号的原文（越界 → undefined；不做补空格之类的"宽容"假数据） */
@@ -999,7 +999,7 @@ export function outgoingCalls(
         r.line <= def.endLine,
     );
     if (sites.length === 0) continue;
-    const callee = index.byName.get(calleeName)?.[0];
+    const callee = index.byName.firstOf(calleeName);
     if (!callee) continue;
     groups.push({ symbol: callHierarchySymbolOf(callee), sites });
   }

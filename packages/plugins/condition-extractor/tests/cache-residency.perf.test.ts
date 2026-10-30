@@ -15,8 +15,9 @@
  *   与生产新口径（内容拼接键 + 身份快道 + 还原件免复验）同窗交替比；
  * - 常驻腿：`detailCacheCaps` 传 `Infinity` 就是改前的无上限形态，与默认上限比常驻字符数。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
-import type { ComputePool, ControlFlowStatement, ErbFile, ErbIndex, GameProject, Logger, StateDependency } from '@kojo/plugin-api';
+import type { ComputePool, ControlFlowStatement, ErbFile, ErbFunctionRef, ErbIndex, GameProject, Logger, StateDependency } from '@kojo/plugin-api';
 import { dependencyKey } from '@kojo/plugin-api';
 import { ConditionEngine } from '../src/engine';
 import { EXTRACT_SNAPSHOT_FORMAT, decodeBuckets, encodeBuckets, extractExpect, type ExtractExpect, type FileBucket } from '../src/snapshot';
@@ -239,7 +240,7 @@ function makeComputeStub(): ComputePool {
 /** 一引擎 + FILE_COUNT 棵正文（每棵一个函数；文本 FILE_CHARS 字符） */
 function makeWalkEngine(caps?: { maxDetails?: number; maxFiles?: number; maxChars?: number }) {
   const files = new Map<string, ErbFile>();
-  const byName = new Map<string, unknown[]>();
+  const byName = new Map<string, ErbFunctionRef[]>();
   const texts = new Map<string, string>();
   const body = `${';'.padEnd(FILE_CHARS - 30, 'x')}\nIF CFLAG:2 >= 500\nENDIF\n`;
   for (let i = 0; i < FILE_COUNT; i++) {
@@ -252,7 +253,7 @@ function makeWalkEngine(caps?: { maxDetails?: number; maxFiles?: number; maxChar
     // heapUsed 就量不出常驻差异（字符数账仍然真）
     texts.set(path, `${body}${i}\n`);
   }
-  const index = { files, byName } as unknown as ErbIndex;
+  const index = { files, byName: functionLookupOf(byName) } as unknown as ErbIndex;
   let reads = 0;
   const engine = new ConditionEngine({
     log: silentLog,

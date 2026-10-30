@@ -1491,8 +1491,7 @@ export function signatureHelpAt(
     try {
       const index = erbParserIndex(kernel);
       if (!index) return null;
-      const defs = index.byName.get(callee.toUpperCase());
-      const ref = defs?.[0];
+      const ref = index.byName.firstOf(callee.toUpperCase());
       if (!ref) return null;
       const file = index.files.get(ref.filePath);
       const fn = file?.functions.find((f) => f.startLine === ref.startLine);

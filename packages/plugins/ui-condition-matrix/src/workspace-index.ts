@@ -23,7 +23,7 @@ import type {
   SugarTranspileService,
   TextFile,
 } from '@kojo/plugin-api';
-import { isErbDialectPath, KOJO_LEGACY_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { buildFunctionLookup, isErbDialectPath, KOJO_LEGACY_SOURCE_EXTENSION } from '@kojo/plugin-api';
 
 /** 工作区矩阵可读的源文件：kojo1 源 `.kojo1` + ERB 方言（.erb/.erm/.erh） */
 export function isWorkspaceMatrixSourceName(name: string): boolean {
@@ -98,24 +98,29 @@ export function sourceLineOfGenerated(
 }
 
 function byNameOf(files: Map<string, ErbFile>): ErbIndex['byName'] {
-  const byName = new Map<string, ErbFunction[]>();
-  for (const file of files.values()) {
-    for (const fn of file.functions) {
-      let list = byName.get(fn.normalizedName);
-      if (!list) {
-        list = [];
-        byName.set(fn.normalizedName, list);
+  // 与 `erb-parser` 的 `aggregateIndex` 同一形态（MEM-19 列式查找表）：这里只喂事实，
+  // 定义句柄按需构造。工作区索引的规模是个位数文件，用列式只为与契约同形，不为省内存。
+  return buildFunctionLookup((emit) => {
+    for (const file of files.values()) {
+      for (const fn of file.functions) {
+        emit({
+          name: fn.name,
+          normalizedName: fn.normalizedName,
+          filePath: fn.filePath,
+          startLine: fn.startLine,
+          endLine: fn.endLine,
+          nameColumn: fn.nameColumn,
+          docComment: fn.docComment,
+        });
       }
-      list.push(fn);
     }
-  }
-  return byName;
+  });
 }
 
 function emptyBundle(): WorkspaceIndexBundle {
   return {
-    displayIndex: { files: new Map(), byName: new Map() },
-    extractIndex: { files: new Map(), byName: new Map() },
+    displayIndex: { files: new Map(), byName: buildFunctionLookup(() => {}) },
+    extractIndex: { files: new Map(), byName: buildFunctionLookup(() => {}) },
     texts: new Map(),
     kojoFiles: 0,
     erbFiles: 0,

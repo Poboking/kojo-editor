@@ -1,3 +1,4 @@
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type {
   CacheExpect,
@@ -51,7 +52,7 @@ function makeIndex(files: Record<string, string>): ErbIndex {
       byName.set(fn.normalizedName, refs);
     }
   }
-  return { files: map, byName };
+  return { files: map, byName: functionLookupOf(byName) };
 }
 
 function fakeProject(): GameProject {
@@ -388,7 +389,7 @@ function kojoHarness(text: string): Harness {
   const path = '/p/kojo/test.kojo1';
   return harness({
     // 索引只需登记该文件（糖规则按 `index.files` 遍历，再 `readFile` 取文本）
-    index: { files: new Map([[path, parseErbText('', path)]]), byName: new Map() },
+    index: { files: new Map([[path, parseErbText('', path)]]), byName: functionLookupOf([]) },
     files: { [path]: text },
   });
 }
@@ -1012,7 +1013,7 @@ describe('投机预取只在同引擎连续轮生效（PERF-12c）', () => {
     }
     return {
       files: map,
-      byName,
+      byName: functionLookupOf(byName),
       fingerprint: over.fingerprint ?? 'erbfp-1',
       fileMtimes: new Map<string, number | null>([[A, 100], [B, over.bMtime ?? 200]]),
     };

@@ -375,8 +375,8 @@ function issueOf(site: ErbCallSite, params: readonly ErbParam[]): LineDecoration
  * 口径与 `inlay-hints.ts` 的 `inlaySlotsOf` 同源（那边只比槽名，这边还要比默认值）。
  */
 export function arityParamsOf(index: ErbIndex, normalizedName: string): readonly ErbParam[] | null {
-  const defs = index.byName.get(normalizedName);
-  if (defs === undefined || defs.length === 0) return null;
+  const defs = index.byName.defsOf(normalizedName);
+  if (defs.length === 0) return null;
   let agreed: readonly ErbParam[] | null = null;
   for (const def of defs) {
     const fn = index.files.get(def.filePath)?.functions.find((f) => f.startLine === def.startLine);

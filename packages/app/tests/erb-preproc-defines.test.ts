@@ -5,6 +5,7 @@
  * 单测 + 语料闸钉住；这里只钉"宿主喂给它的宏集对不对"——喂错比判错更隐蔽：
  * 少一个名字就是一支真代码被压灰。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type { ErbFile, ErbIndex } from '@kojo/plugin-api';
 import { definedMacrosOf } from '../src/monaco/erb-preproc-defines';
@@ -23,7 +24,7 @@ function file(path: string, dims: Array<[string, string]>): [string, ErbFile] {
 }
 
 function indexOf(files: Array<[string, ErbFile]>): ErbIndex {
-  return { files: new Map(files), byName: new Map() };
+  return { files: new Map(files), byName: functionLookupOf(new Map()) };
 }
 
 describe('definedMacrosOf · 索引 → 宏名集', () => {

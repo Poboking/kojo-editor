@@ -109,7 +109,7 @@ export function resolveKojoDefinition(
 
   const index = deps.index();
   if (!index) return [];
-  const refs = index.byName.get(name) ?? [];
+  const refs = index.byName.defsOf(name);
   return refs.map((ref) => ({ filePath: ref.filePath, line: ref.startLine }));
 }
 

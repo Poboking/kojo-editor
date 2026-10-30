@@ -79,7 +79,7 @@ describe.skipIf(!SMOKE)('行上内联注解 · 真实语料自证', () => {
       let defs = 0;
       let dupDefs = 0;
       for (const [name, list] of index.references!.bySymbol) {
-        const d = index.byName.get(name)?.length ?? 0;
+        const d = index.byName.countOf(name);
         if (d === 0) continue;
         defs += d;
         if (d > 1) {

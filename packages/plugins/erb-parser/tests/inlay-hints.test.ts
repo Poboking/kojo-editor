@@ -9,6 +9,7 @@
  * (d) 标签口径——具名槽 `名:`、ARG 式槽原样（槽位坐标本身就是信息）。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type { ErbIndex } from '@kojo/plugin-api';
 import { callArgumentHints, inlaySlotsOf } from '../src/inlay-hints';
@@ -143,7 +144,7 @@ describe('inlaySlotsOf · 多处定义的对账', () => {
     );
     return {
       files,
-      byName: new Map([
+      byName: functionLookupOf(new Map([
         [
           'FOO',
           defs.map((d) => ({
@@ -154,7 +155,7 @@ describe('inlaySlotsOf · 多处定义的对账', () => {
             endLine: d.startLine + 1,
           })),
         ],
-      ]),
+      ])),
     } as unknown as ErbIndex;
   };
 

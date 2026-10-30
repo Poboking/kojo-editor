@@ -7,6 +7,7 @@
  * 装配面用本文件自带的极小上下文体（不动 `plugin.test.ts` / `language-service.test.ts`
  * 的共享夹具，避免与并行批次撞同一文件）。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type { ErbFunctionRef, ErbIndex, ErbParserService, FileIO, PluginContext, Unsubscribe } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
@@ -24,7 +25,7 @@ const fnRef = (name: string, startLine = 9): ErbFunctionRef => ({
 });
 
 const idx = (byName: Record<string, ErbFunctionRef[]>): ErbIndex =>
-  ({ files: new Map(), byName: new Map(Object.entries(byName)) }) as unknown as ErbIndex;
+  ({ files: new Map(), byName: functionLookupOf(new Map(Object.entries(byName))) }) as unknown as ErbIndex;
 
 describe('parseErbText · $ 标签收集（函数局部作用域）', () => {
   it('函数内标签：名、行、归属函数；跨函数各归各（同名不合并）', () => {

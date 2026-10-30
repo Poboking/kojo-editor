@@ -158,7 +158,7 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
     }
     // 聚合出来的定义 ref 同样不带列（定义腿据此只交行）
     const { byName } = aggregateIndex([salvaged.entries['/a.ERB']!.file]);
-    const ref = byName.get('FOO')![0]!;
+    const ref = byName.defsOf('FOO')[0]!;
     expect('nameColumn' in ref).toBe(false);
     expect(ref.startLine).toBe(1);
     // 摊平后落盘的缺位哨兵仍是 0（不许把"不知道"写成"在第 1 列"）
@@ -332,7 +332,7 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
     await h.waitIndexed();
     const idx = h.index()!;
     const fn = idx.files.get(A)!.functions[0]!;
-    const ref = idx.byName.get('FOO')![0]!;
+    const ref = idx.byName.defsOf('FOO')![0]!;
     expect(fn.nameColumn).toBe(ref.nameColumn);
     // 前置：冷重建出来的条目必须带列（缺位只可能来自旧盘，那两条见下面的用例）
     if (typeof ref.nameColumn !== 'number') throw new Error('新盘条目缺列：本用例的前置不成立');
@@ -371,7 +371,7 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
     const h = activate({ [A]: TEXT_A, [B]: TEXT_B }, (key) => (key === snapshotKeyFor(ROOT, 9) ? payload : undefined));
     await h.waitIndexed();
     // 重建出来的索引带真列（而不是沿用缺位条目 = 静默保留本批要修的症状）
-    expect(h.index()!.byName.get('FOO')![0]!.nameColumn).toBe(3);
+    expect(h.index()!.byName.defsOf('FOO')![0]!.nameColumn).toBe(3);
     expect(h.provide('erb-definition')(CALL_REQUEST)!.locations[0]).toMatchObject({
       column: 3,
       span: { columnStart: 3, columnEnd: 6 },

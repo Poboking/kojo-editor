@@ -7,6 +7,7 @@
  * （通道缺席 / 索引未建 / 求值抛错 / 词不在索引 ⇒ 一律不显示，**绝不猜**）。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { ErbFunction, ErbFunctionRef, ErbIndex, KojoLibraryTable } from '@kojo/plugin-api';
@@ -51,11 +52,11 @@ function fakeIndex(): ErbIndex {
     ['C:/proj/ERB/BOOK.ERB', { functions: [book] }],
     ['C:/proj/ERB/OTHER.ERB', { functions: [twin1, twin2] }],
   ]);
-  const byName = new Map<string, ErbFunctionRef[]>([
+  const byName = functionLookupOf(new Map([
     ['M_KOJO_EVENT', [ref(book)]],
     ['NO_DOC_FUNC', [ref(noDoc)]],
     ['TWINS', [ref(twin1), ref(twin2)]],
-  ]);
+  ]));
   return { files, byName } as unknown as ErbIndex;
 }
 
@@ -127,7 +128,7 @@ describe('ERB 函数悬停 · 含 CJK 的函数名（与 F2 / 引用面板同一
     const files = new Map<string, { functions: ErbFunction[] }>([
       ['C:/proj/ERB/BOOK.ERB', { functions: [a, b] }],
     ]);
-    const byName = new Map<string, ErbFunctionRef[]>([[CJK_NAME.toUpperCase(), [ref(a)]], [MIXED_NAME.toUpperCase(), [ref(b)]]]);
+    const byName = functionLookupOf(new Map([[CJK_NAME.toUpperCase(), [ref(a)]], [MIXED_NAME.toUpperCase(), [ref(b)]]]));
     return { files, byName } as unknown as ErbIndex;
   }
 
@@ -206,7 +207,7 @@ describe('库表反查 × 函数索引 · 同点位优先序（一条判据一�
     const a = fn(ECHO, 11, '回显函数的注释');
     const b = fn(TRANSLATED, 22);
     const files = new Map<string, { functions: ErbFunction[] }>([['C:/proj/ERB/BOOK.ERB', { functions: [a, b] }]]);
-    const byName = new Map<string, ErbFunctionRef[]>([[ECHO, [ref(a)]], [TRANSLATED, [ref(b)]]]);
+    const byName = functionLookupOf(new Map([[ECHO, [ref(a)]], [TRANSLATED, [ref(b)]]]));
     return { files, byName } as unknown as ErbIndex;
   };
   const lib = {
@@ -329,7 +330,7 @@ describe('ERB `#DIM` 声明悬停', () => {
   };
   const dimIndex = {
     files: new Map([['C:/proj/ERB/DIM.ERB', dimFile]]),
-    byName: new Map(),
+    byName: functionLookupOf([]),
   } as unknown as ErbIndex;
   const dimTables: HoverTables = { erbIndex: () => dimIndex };
   const atDim = (marked: string, path: string | null) =>

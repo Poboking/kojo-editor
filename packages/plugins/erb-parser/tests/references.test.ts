@@ -5,6 +5,7 @@
  * 装配面用本文件自带夹具（不动 plugin.test.ts / language-service.test.ts 的共享上下文体，
  * 避免并行批次撞同一文件）：冷建二次读、热复用零读、快照 refs 往返后查询逐位一致。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type { ErbIndex, ErbParserService, FileIO, Plugin, PluginContext, Unsubscribe } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
@@ -181,17 +182,17 @@ describe('buildReferenceIndex / referencesOf · 聚合与查询', () => {
 
   it('endColumn = column + 归一化名长度；查询返回引用表本体', () => {
     const idx = buildReferenceIndex([f('/a.ERB')], new Map([['/a.ERB', flatRefs([['LONG_NAME', 4, 7, 2]])]]));
-    const refs = referencesOf({ files: new Map(), byName: new Map(), references: idx } as ErbIndex, 'long_name');
+    const refs = referencesOf({ files: new Map(), byName: functionLookupOf([]), references: idx } as ErbIndex, 'long_name');
     expect(refs).toHaveLength(1);
     expect(refs[0]).toMatchObject({ line: 4, column: 7, endColumn: 16, kind: 'mention' });
   });
 
   it('空索引 / 无引用名 ⇒ 空数组（不是 undefined，消费方零分支）', () => {
     const empty = buildReferenceIndex([], new Map());
-    const index = { files: new Map(), byName: new Map(), references: empty } as ErbIndex;
+    const index = { files: new Map(), byName: functionLookupOf([]), references: empty } as ErbIndex;
     expect(empty.bySymbol.size).toBe(0);
     expect(referencesOf(index, 'ANY')).toEqual([]);
-    expect(referencesOf({ files: new Map(), byName: new Map() } as ErbIndex, 'ANY')).toEqual([]);
+    expect(referencesOf({ files: new Map(), byName: functionLookupOf([]) } as ErbIndex, 'ANY')).toEqual([]);
   });
 });
 
@@ -342,7 +343,7 @@ describe('erb-parser · 反向索引装配（冷建/热复用/快照往返）', 
 describe('erbReferenceLocationsAt · find-references 数据面', () => {
   const index = {
     files: new Map(),
-    byName: new Map(),
+    byName: functionLookupOf([]),
     references: {
       bySymbol: new Map([
         [

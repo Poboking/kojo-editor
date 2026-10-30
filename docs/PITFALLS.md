@@ -547,3 +547,14 @@
 285. **给插件加一枚槽贡献，新用例与 purity 全绿，但"贡献 id 全集"快照仍钉着旧名单 ⇒ 三条插件自测红，只有跑全量才抓到**（2026-10-31 G4 实拍，`packages/plugins/kojo-lang/tests/{plugin,signature-format,references-rename}.test.ts`）：
    新增 `kojo2-workspaceSymbols` 后，定向只跑了新供方的测试与 purity；三条断言 `[...contributions.keys()].sort()` 逐字相等的用例仍是 14 个 id ⇒ 全量 7 红里 3 条是这一族。它们刻意钉"全集"（新增贡献必须同批改名单），所以**这不是误报、正是锚点在工作**。
    ⇒ 纪律：① 插件新增/删除一枚 `ctx.slots.register` 后，**同批跑该插件 tests 整个目录**，不能只跑新文件；② 名单型断言（id 全集 / slot 序列 / order 唯一值）遇到红先改名单并在提交信息点名"第 N 枚贡献"，不许改成 `toContain` 放宽；③ 全量红的正确归因是"新红 / 已知常红"两类分开写（同 §281），本批新红全是名单陈旧，没有产品缺陷。
+
+286. **换契约的类型形态时，`as unknown as <契约>` 会让 typecheck 全绿、测试却整片运行时崩——改动面不能只信编译器**（2026-10-30 MEM-19 实拍，`ErbIndex.byName` 从 `Map` 换成 `ErbFunctionLookup`）：
+   测试里大量 fixture 是 `({ files: new Map(), byName: new Map() }) as unknown as ErbIndex`（因为测试只关心索引的一两个字段）。换形态后这些断言**把新类型整个绕过去**：编译期 `byName: new Map()` 不报错，运行到 `.defsOf()` / `.firstOf()` 才炸。本批顺序是"先改生产侧 → 57 处类型错误按机械规则改 → 双 typecheck 归零"，看起来收工了，一跑全量**10 个文件 / 58 条红**。
+   ⇒ 纪律：**动跨包契约（尤其成员的类型/方法集）时，双 typecheck 归零不等于改造完成，必须再跑一次全量**；并按"红能否按文件分组全部解释"过一遍（同 281 ③）。机械改法只能处理编译看得见的形态差异，`as unknown` 后面那层语义差异只有跑才看得见。
+   同一批变基到上游最新（`f7222bd1`）时又踩了一次**别人新加的用例**：上游 LAU-4 第二批的 `erb-parser/tests/definition-locals.test.ts` 与 `app/tests/erb-definition-slot.test.ts` 用同一姿势造夹具，函数腿在运行期答空（`expected [] to deeply equal [2, 9]`）。⇒ 新增/改动夹具时 `functionLookupOf` 是**默认姿势**，别从旧文件抄 `new Map`；而 rebase 之后"要不要重跑全量"的答案恒为要——新来的文件不在你上一趟的绿里。
+
+287. **闭包工厂里的"局部临时变量"不等于"可回收"——V8 把同一作用域里被内部函数捕获的变量整体放进一个 `Context`，且不按需裁剪**（2026-10-30 MEM-19 实拍，`plugin-api/src/erb.ts` 的 `buildFunctionLookup`）：
+   列式查找表要建 11 万条定义的五列数据：构建期用可 `push` 的普通 `number[]`（`startLines`/`endLines`/`columns`/`defFile`/`buckets`，合计约 7 MB）再用 `Uint32Array.from` 摊平，`ordinalsOfName` 里还有 11 万枚单元素 `number[]`。这些缓冲"函数返回后不可达"，看着必然被回收——但它们和 `refAt`/`refsOfBucket`/各方法写在**同一个函数**里，那些方法都是闭包，于是整层作用域被一个 `Context` 持有 ⇒ 缓冲跟着活到进程结束。
+   实测：稳态 **+4.0 MB**（比不改还差），堆快照里 `array (object elements)` 反涨 **9.2 MB**，而 `object Object` 同时少了 8.9 MB——一涨一跌正好抵掉，只看总量会以为"列式没收益"。
+   修法：把"喂数 + 压平"拆成**独立函数**（`collectFunctionFacts`），只返回最终存储（TypedArray + 三个必须保引用的普通数组）；返回后那层作用域整层不可达。同一份代码：+4.0 → **−11.1 MB**。
+   ⇒ 判据不是"变量在不在返回的对象里"，而是"**它和闭包是不是同一个作用域**"。写完一段闭包工厂后拿 `--snapshot-after` + `heap-aggregate --top` 对一眼 `array (object elements)` 的个数：个数只多出你新增的那几枚数组、字节数却涨一大截，就是这条。

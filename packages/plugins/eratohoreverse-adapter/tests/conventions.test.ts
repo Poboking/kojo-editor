@@ -554,10 +554,10 @@ describe('conventionPolicy 在真盘上的收敛效果（真实一轮校验）',
       //（`POSE.ERB:1` 开段整棵存档 ⇒ 索引里这一族只剩 `MASTER_POSE.ERB` 那一份）。
       // 上一批把这条断言写成"重复照旧可见"，前提就不成立（不是收敛掉了，是压根没进过面）。
       // 这里把两侧事实同时钉住：索引只 1 处 + 差集补集里第 2 处逐行可见。
-      expect(index.byName.get('MASTER_POSE')?.map((r) => `${relOfReal(r.filePath)}:${r.startLine}`)).toEqual([
+      expect(index.byName.defsOf('MASTER_POSE')?.map((r) => `${relOfReal(r.filePath)}:${r.startLine}`)).toEqual([
         'ERB/TRAIN/TRAINSYS/MASTER_POSE.ERB:2',
       ]);
-      expect(index.byName.get('MASTER_POSE_ACT10')?.map((r) => `${relOfReal(r.filePath)}:${r.startLine}`)).toEqual([
+      expect(index.byName.defsOf('MASTER_POSE_ACT10')?.map((r) => `${relOfReal(r.filePath)}:${r.startLine}`)).toEqual([
         'ERB/TRAIN/TRAINSYS/MASTER_POSE.ERB:873',
       ]);
       expect(visibleNames(after)).not.toContain('MASTER_POSE');

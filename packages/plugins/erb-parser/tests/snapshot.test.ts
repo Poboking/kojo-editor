@@ -74,9 +74,9 @@ describe('aggregateIndex（聚合必须与全量重建同源同序）', () => {
   it('按传入顺序聚合 byName；同名函数跨文件累积', () => {
     const { files, byName } = aggregateIndex([file('/a.ERB', ['FOO', 'BAR']), file('/b.ERB', ['FOO'])]);
     expect([...files.keys()]).toEqual(['/a.ERB', '/b.ERB']);
-    expect(byName.get('FOO')!.map((r) => r.filePath)).toEqual(['/a.ERB', '/b.ERB']);
-    expect(byName.get('BAR')).toHaveLength(1);
-    expect(byName.get('BAR')![0]).toMatchObject({ name: 'BAR', filePath: '/a.ERB', startLine: 11, endLine: 20 });
+    expect(byName.defsOf('FOO').map((r) => r.filePath)).toEqual(['/a.ERB', '/b.ERB']);
+    expect(byName.defsOf('BAR')).toHaveLength(1);
+    expect(byName.defsOf('BAR')[0]).toMatchObject({ name: 'BAR', filePath: '/a.ERB', startLine: 11, endLine: 20 });
   });
 
   it('快照懒外壳（未经还原）与直出 ErbFile 混装聚合，byName 逐项相同', () => {
@@ -86,7 +86,7 @@ describe('aggregateIndex（聚合必须与全量重建同源同序）', () => {
     const viaSnapshot = aggregateIndex([decoded['/p/a.ERB']!.file]);
     const direct = aggregateIndex([parsed]);
     expect([...viaSnapshot.byName.keys()]).toEqual([...direct.byName.keys()]);
-    expect(viaSnapshot.byName.get('FOO')).toEqual(direct.byName.get('FOO'));
+    expect(viaSnapshot.byName.defsOf('FOO')).toEqual(direct.byName.defsOf('FOO'));
     // 聚合不消费 functions ⇒ 懒字段仍是 accessor（100k 函数对象的构造留给真正要读的人）
     const view = decoded['/p/a.ERB']!.file;
     expect(Object.getOwnPropertyDescriptor(view, 'functions')?.get).toBeTypeOf('function');
@@ -173,7 +173,7 @@ describe('v3 元组编解码（瘦身不改语义；v5：+size、懒还原）', 
     const direct = aggregateIndex([parsed]);
     const viaSnapshot = aggregateIndex([restored['/p/a.ERB']!.file]);
     expect([...viaSnapshot.byName.keys()]).toEqual([...direct.byName.keys()]);
-    expect(viaSnapshot.byName.get('M_KOJO_MESSAGE_COM_K1_30')).toEqual(direct.byName.get('M_KOJO_MESSAGE_COM_K1_30'));
+    expect(viaSnapshot.byName.defsOf('M_KOJO_MESSAGE_COM_K1_30')).toEqual(direct.byName.defsOf('M_KOJO_MESSAGE_COM_K1_30'));
   });
 
   it('体积确实降下来（可派生字段与键名不再上盘）', () => {

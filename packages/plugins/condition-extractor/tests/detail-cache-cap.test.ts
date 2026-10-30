@@ -9,8 +9,9 @@
  * ②**逐出零改变产出**——明细是按 (索引位, 盘上正文) 的纯函数，重问只是重算，
  * 逐字相同（回放未知率基线不受影响）。
  */
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it, vi } from 'vitest';
-import type { ComputePool, ControlFlowStatement, ErbFile, ErbIndex, GameProject, Logger } from '@kojo/plugin-api';
+import type { ComputePool, ControlFlowStatement, ErbFile, ErbFunctionRef, ErbIndex, GameProject, Logger } from '@kojo/plugin-api';
 import { ConditionEngine } from '../src/engine';
 import { conditionExtractorTasks } from '../src/offload';
 
@@ -55,9 +56,9 @@ function erbFileOf(path: string, name: string): ErbFile {
   } as ErbFile;
 }
 
-/** `byName` 的值是**引用数组**（契约 `ErbIndex.byName: Map<string, ErbFunctionRef[]>`，引擎取首个） */
-function byNameOf(files: Map<string, ErbFile>): Map<string, unknown[]> {
-  const byName = new Map<string, unknown[]>();
+/** `byName` 的值是**引用数组**（契约 `ErbIndex.byName` 是 `ErbFunctionLookup`，引擎取首个） */
+function byNameOf(files: Map<string, ErbFile>): Map<string, ErbFunctionRef[]> {
+  const byName = new Map<string, ErbFunctionRef[]>();
   for (const f of files.values()) {
     for (const fn of f.functions) {
       const list = byName.get(fn.normalizedName) ?? [];
@@ -77,7 +78,7 @@ interface Harness {
 function makeHarness(count: number, caps?: { maxDetails?: number; maxFiles?: number; maxChars?: number }): Harness {
   const files = new Map<string, ErbFile>();
   for (let i = 0; i < count; i++) files.set(`/f/k${i}.ERB`, erbFileOf(`/f/k${i}.ERB`, `FN_${i}`));
-  const index = { files, byName: byNameOf(files) } as unknown as ErbIndex;
+  const index = { files, byName: functionLookupOf(byNameOf(files)) } as unknown as ErbIndex;
 
   let readCount = 0;
   let scanCount = 0;
@@ -182,7 +183,7 @@ describe('明细 / 正文缓存上限', () => {
       hasFunctionDirective: false,
       lineCount: 8,
     } as ErbFile);
-    const index = { files, byName: byNameOf(files) } as unknown as ErbIndex;
+    const index = { files, byName: functionLookupOf(byNameOf(files)) } as unknown as ErbIndex;
     const readMock = vi.fn(async () => ['@FN_A()', 'IF CFLAG:2 >= 500', 'ENDIF', '', '@FN_B()', 'IF CFLAG:2 >= 900', 'ENDIF', ''].join('\n'));
     const scanNone = (): ControlFlowStatement[] => [];
     const engine = new ConditionEngine({

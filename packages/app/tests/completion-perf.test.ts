@@ -19,6 +19,7 @@
  * 桩 monaco / 桩 model 照抄 `erb-completion.test.ts` 口径；桩 model 额外提供 `getVersionId`。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
@@ -118,7 +119,7 @@ function fnRef(name: string): ErbFunctionRef {
 function indexOf(names: readonly string[], fingerprint: string | null): ErbIndex {
   const byName = new Map<string, ErbFunctionRef[]>();
   for (const n of names) byName.set(n, [fnRef(n)]);
-  return { files: new Map(), byName, fingerprint } as unknown as ErbIndex;
+  return { files: new Map(), byName: functionLookupOf(byName), fingerprint } as unknown as ErbIndex;
 }
 
 const BIG_N = 99_000;

@@ -46,8 +46,8 @@ export type SlotNamesOf = (normalizedName: string) => readonly string[] | null;
  * ⇒ `null`，那一行一个提示都不放（错标比不标危险）。
  */
 export function inlaySlotsOf(index: ErbIndex, normalizedName: string): readonly string[] | null {
-  const defs = index.byName.get(normalizedName);
-  if (!defs || defs.length === 0) return null;
+  const defs = index.byName.defsOf(normalizedName);
+  if (defs.length === 0) return null;
   let names: readonly string[] | null = null;
   for (const def of defs) {
     const fn = index.files.get(def.filePath)?.functions.find((f) => f.startLine === def.startLine);

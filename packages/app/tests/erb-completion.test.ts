@@ -11,6 +11,7 @@
  * **两态**（索引有意见 ⇒ 以索引为准、不与缓冲区合并；未索引 / 通道缺席 ⇒ 回退缓冲区扫描）。
  */
 
+import { functionLookupOf } from '@kojo/plugin-api';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { ErbFunctionRef, ErbIndex, KojoInstructionTable, VariableSchema } from '@kojo/plugin-api';
@@ -122,7 +123,7 @@ function fakeIndex(fingerprint: string | null, names: string[]): ErbIndex {
   const byName = new Map<string, ErbFunctionRef[]>();
   // 与解析器同口径：byName 的键是归一化大写名，ref 里保留定义处原拼写
   for (const n of names) byName.set(n.toUpperCase(), [fnRef(n)]);
-  return { files: new Map(), byName, fingerprint } as unknown as ErbIndex;
+  return { files: new Map(), byName: functionLookupOf(byName), fingerprint } as unknown as ErbIndex;
 }
 
 const HEAD = '#D'; // 行首：光标在 `#D` 之后（列 3）
@@ -365,7 +366,7 @@ describe('EC-1 · memoizedErbFunctionNames（按指纹失效）', () => {
 
   it('定义列表为空 ⇒ 回退归一化键（不产出空串，不崩）', () => {
     const byName = new Map<string, ErbFunctionRef[]>([['EMPTY', []]]);
-    const index = { files: new Map(), byName, fingerprint: 'fp1' } as unknown as ErbIndex;
+    const index = { files: new Map(), byName: functionLookupOf(byName), fingerprint: 'fp1' } as unknown as ErbIndex;
     expect(memoizedErbFunctionNames(() => index)()).toEqual(['EMPTY']);
   });
 });

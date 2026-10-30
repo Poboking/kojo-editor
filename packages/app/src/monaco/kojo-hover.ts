@@ -378,8 +378,8 @@ function erbIndexOf(
  * 两条腿各写一遍 `byName.get` 就是第二判据）。名录里没有 ⇒ `undefined` = **不认领**。
  */
 function erbDefsOf(index: ErbIndex, upper: string): ErbFunctionRef[] | undefined {
-  const defs = index.byName.get(upper);
-  return defs === undefined || defs.length === 0 ? undefined : defs;
+  const defs = index.byName.defsOf(upper);
+  return defs.length === 0 ? undefined : defs;
 }
 
 /**

@@ -23,6 +23,7 @@ import type * as Monaco from 'monaco-editor';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { functionLookupOf } from '@kojo/plugin-api';
 import type { EditorLanguageServiceContribution, EditorLanguageServiceRequest, ErbIndex } from '@kojo/plugin-api';
 import { provideErbDefinition } from '@kojo/plugin-erb-parser';
 import { composeSugarDoc, type SugarSegmentInput } from '../src/ui/sugar-view';
@@ -162,7 +163,7 @@ function contributions(
 /** 只带 `byName` 的函数索引（`definitionTargetsAt` 的函数腿只读这一格） */
 function indexWith(name: string, filePath: string, startLine: number, column?: number): ErbIndex {
   return {
-    byName: new Map([
+    byName: functionLookupOf([
       [
         name.toUpperCase(),
         [{ name, normalizedName: name.toUpperCase(), filePath, startLine, endLine: startLine, ...(column === undefined ? {} : { nameColumn: column }) }],

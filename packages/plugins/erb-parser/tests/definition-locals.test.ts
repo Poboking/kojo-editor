@@ -15,6 +15,7 @@
  * 5. **索引缺席**：本地两腿照答（缓冲区事实），函数腿零贡献。
  */
 import { describe, expect, it } from 'vitest';
+import { functionLookupOf } from '@kojo/plugin-api';
 import type { EditorLanguageServiceRequest, ErbIndex } from '@kojo/plugin-api';
 import { provideErbDefinition } from '../src/plugin';
 
@@ -91,7 +92,7 @@ describe('erb-definition · `$` 标签腿', () => {
 /** 只带 `byName` 的函数索引（`definitionTargetsAt` 的函数腿只读这一格） */
 function indexWith(name: string, startLine: number, column?: number): ErbIndex {
   return {
-    byName: new Map([
+    byName: functionLookupOf([
       [
         name.toUpperCase(),
         [

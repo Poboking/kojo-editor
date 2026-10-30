@@ -407,7 +407,7 @@ describe('PERF-7 快照热载合成基准（2,000 文件 / 100,000 函数）', (
     const a = aggregateIndex(afterFiles);
     const b = aggregateIndex(beforeFiles);
     expect([...a.byName.keys()]).toEqual([...b.byName.keys()]);
-    for (const k of a.byName.keys()) expect(a.byName.get(k)).toEqual(b.byName.get(k));
+    for (const k of a.byName.keys()) expect(a.byName.defsOf(k)).toEqual(b.byName.defsOf(k));
     // 聚合不许把 functions 的 accessor 消费掉（谁问谁付）——挑一条上面没做深比的路径看
     expect(Object.getOwnPropertyDescriptor(a.files.get(pathOf(1))!, 'functions')?.get).toBeTypeOf('function');
 
