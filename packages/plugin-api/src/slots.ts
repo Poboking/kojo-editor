@@ -1387,6 +1387,24 @@ export interface EditorSelectionRangeResult {
   readonly selections: readonly (EditorSelectionChain | null)[];
 }
 
+/**
+ * 编辑器语言服务贡献（槽 `ui.editor.languageService`）。
+ *
+ * **纯函数纪律**：`provide` 不读盘、不写盘、不发事件——数据全部来自贡献方与请求。
+ *
+ * 返回值三态（所有 kind 同一套）：`undefined` = 这家不认这个请求 / 文件 / 语言（弃权，
+ * 宿主问下一家）；空结果（`[]` / `''`）= 认，但这里没有（**作答**，不再问下一家）；
+ * 非空 = 结果。返回空结果不等于弃权。
+ *
+ * 同 kind 多家供方时按注册顺序逐家问、不排序不投票：集合型（definition / references /
+ * documentSymbol / foldingRange / codeLens / semanticToken / inlayHint / workspaceSymbol /
+ * completion）取并集去重，一家抛错只让这家缺席；单答型（rename / hover / formatting /
+ * signatureHelp / documentHighlight / selectionRange）第一家作答的说了算。
+ * 不引入 priority：需要主 / 备的只在 Monaco provider 层裁决。
+ *
+ * 文档型请求带 `languageId` 时以它为准，缺席才按 `path` 自认；`provide` 同步返回，
+ * 无在途响应、不设取消令牌，`version` 只用于异步产出落地前的复核。
+ */
 export interface EditorLanguageServiceContribution extends ContributionBase {
   provide(request: EditorLanguageServiceRequest): EditorLanguageServiceResult | undefined;
 }

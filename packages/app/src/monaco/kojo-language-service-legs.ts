@@ -47,7 +47,7 @@ import { pkey } from '../ui/file-tree-ops';
  * "缺省就不出现"口径与行数口径是**同一份事实**，手抄一份到 provider 里，抄漏 `version`
  * 的那条腿就废掉了供方的过期复核（这类失准只在"改完文件后的第一次应答"里出现）。
  *
- * ## 两种多源口径（与 `EditorLanguageServiceContribution` 头注逐字一致）
+ * ## 两种多源口径（与 `EditorLanguageServiceContribution` 头注同一份口径）
  *
  * B3f 又加两条单答腿：`documentHighlight` / `selectionRange`（判据住
  * `@kojo/kojo-lang/highlight` / `/selection-range`，供方是插件）。扩选那条一次多位置、
