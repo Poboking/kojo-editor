@@ -13,7 +13,9 @@
     "./completion-context": "./src/completion-context.ts",
     "./completion-variables": "./src/completion-variables.ts",
     "./highlight": "./src/highlight.ts",
-    "./selection-range": "./src/selection-range.ts"
+    "./selection-range": "./src/selection-range.ts",
+    "./completion-families": "./src/completion-families.ts",
+    "./completion-item": "./src/completion-item.ts"
   },
   "dependencies": {
     "@kojo/erb-vocab": "workspace:*",

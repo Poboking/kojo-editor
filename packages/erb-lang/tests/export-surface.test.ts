@@ -20,6 +20,8 @@ import { describe, expect, it } from 'vitest';
 
 import * as barrel from '../src/index.js';
 import * as completionBits from '../src/completion-bits.js';
+import * as completionFamilies from '../src/completion-families.js';
+import * as completionItem from '../src/completion-item.js';
 import * as completionContext from '../src/completion-context.js';
 import * as completionVariables from '../src/completion-variables.js';
 import * as constants from '../src/constants.js';
@@ -60,6 +62,18 @@ describe('@kojo/erb-lang 导出面', () => {
     ]);
   });
 
+  it('completion-families 的运行时导出 = 清单（3 枚：族头候选 + 裸标识符名位 + sigil 排除集）', () => {
+    expect(leafKeys(completionFamilies)).toEqual([
+      'ERB_SIGIL_BEFORE',
+      'erbDeclaredNameSlot',
+      'erbFamilyCandidates',
+    ]);
+  });
+
+  it('completion-item 只有类型（零运行时导出，桶里不多出任何键）', () => {
+    expect(leafKeys(completionItem)).toEqual([]);
+  });
+
   it('completion-variables 的运行时导出 = 清单（3 枚：段解析 + 两侧的面）', () => {
     expect(leafKeys(completionVariables)).toEqual([
       'erbVariableContextAt',
@@ -86,11 +100,13 @@ describe('@kojo/erb-lang 导出面', () => {
     ]);
   });
 
-  it('桶的运行时键 = 五枚值叶子之并集', () => {
+  it('桶的运行时键 = 值叶子之并集', () => {
     // `erbCodeViewOf` 在 `completion-context` 与 `highlight` 各有一枚（同名不同判据：
     // 前者"到光标为止的视野"、后者"整行视野"）——桶按名去重后恰好一份，集合语义不受影响。
     const expected = new Set<string>([
       ...leafKeys(completionBits),
+      ...leafKeys(completionFamilies),
+      ...leafKeys(completionItem),
       ...leafKeys(completionContext),
       ...leafKeys(completionVariables),
       ...leafKeys(constants),
@@ -108,6 +124,8 @@ describe('@kojo/erb-lang 导出面', () => {
       '.',
       './completion-bits',
       './completion-context',
+      './completion-families',
+      './completion-item',
       './completion-variables',
       './constants',
       './highlight',

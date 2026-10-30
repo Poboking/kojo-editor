@@ -67,6 +67,8 @@ export const config = defineConfig({
       '@kojo/erb-lang/constants': r('./packages/erb-lang/src/constants.ts'),
       '@kojo/erb-lang/completion-bits': r('./packages/erb-lang/src/completion-bits.ts'),
       '@kojo/erb-lang/completion-context': r('./packages/erb-lang/src/completion-context.ts'),
+      '@kojo/erb-lang/completion-families': r('./packages/erb-lang/src/completion-families.ts'),
+      '@kojo/erb-lang/completion-item': r('./packages/erb-lang/src/completion-item.ts'),
       '@kojo/erb-lang/completion-variables': r('./packages/erb-lang/src/completion-variables.ts'),
       '@kojo/erb-lang/highlight': r('./packages/erb-lang/src/highlight.ts'),
       '@kojo/erb-lang/selection-range': r('./packages/erb-lang/src/selection-range.ts'),

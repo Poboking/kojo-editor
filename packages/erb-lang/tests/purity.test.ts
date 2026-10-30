@@ -50,8 +50,8 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
     // constants（语言 id 叶子）/ completion-bits（位槽扫描件）/ completion-context（补全位置门九态）/
-    // completion-variables（变量引用名字位）/ highlight（同符号高亮判据）/ selection-range（扩选判据）/ index
-    expect(files).toHaveLength(7);
+    // completion-families（族头 + 裸标识符名位）/ completion-item（中性候选形状）/ highlight（同符号高亮判据）/ selection-range（扩选判据）/ index
+    expect(files).toHaveLength(9);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
