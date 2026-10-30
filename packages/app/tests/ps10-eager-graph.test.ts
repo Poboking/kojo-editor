@@ -873,13 +873,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `diagnostic-result.ts`）与删掉的两枚宿主文件（`monaco/kojo2-diagnostics.ts` /
     //     `ui/kojo2-expand-compile.ts`）**都不在开机图上**（monaco 装配是懒边），图里既没多也没少一个文件。
     //     两枚闸维持 **≤199 / ≤3,234**，**不抬**（余量约 2.6 KB）。
+    //   - **ERB 改名判据进常驻插件（2026-10-30，LAU-4 改名腿）**：读数 **199 文件 / 3,254 KB**
+    //     （3,331,662 B = 3,309,497 + 22,165）——文件数零变化（199 未动）；净增**逐枚对账精确相等**，
+    //     全落在图内五枚：`erb-parser/src/symbols.ts` +14,556（改名判据：取词 / 索引命中 /
+    //     `$` 标签作用域 / 反向索引全集 / 跨语言全或无；并回 symbols 是为了守住 199 文件闸——
+    //     单开 `rename.ts` 会多一枚进图模块）、`plugin-api/src/slots.ts` +5,453（`renameTarget` /
+    //     `rename` 两枚成员与 `EditorRenameEdit.occurrenceKind` 契约）、`erb-parser/src/plugin.ts`
+    //     +1,446（两条腿注册与段头）、`erb-parser/src/index.ts` +481（宿主 / 测试经包读同一批函数）、
+    //     `plugin-api/src/index.ts` +229（契约再导出）。**宿主 `monaco/erb-rename.ts` −9,340 B 不进图**
+    //     （monaco 装配是懒边）——这正是"判据全在图内、宿主只剩翻译"的账面形态。
+    //     ⇒ 闸 **3,234 → 3,254**（余量约 0.4 KB；文件闸仍 199）。这一档加的是**能力**：
+    //     改名（函数名 + `$` 标签）从此走 `ui.editor.languageService` 槽，宿主不认识 ERB；
+    //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,234 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,254 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_234);
+    expect(totalKb).toBeLessThanOrEqual(3_254);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
