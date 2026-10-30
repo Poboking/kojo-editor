@@ -39,20 +39,53 @@ import { detachString, erbCodePrefixLength } from './scanner';
 /** 行首直系调用关键字（参数位就是**函数名**的那些；FORM / GOTO / JUMP 系不在内，理由见头注） */
 const CALL_FAMILY: ReadonlySet<string> = new Set(['CALL', 'TRYCALL', 'TRYCCALL', 'TRYCALLLIST', 'TRYCCALLLIST']);
 
-const KIND_DEFINITION = 0;
-const KIND_CALL = 1;
-const KIND_MENTION = 2;
+/** 引用种类旗标（盘上/内存共用的三值；`KIND_BY_FLAG` 是它到契约字符串的映射） */
+export const KIND_DEFINITION = 0;
+export const KIND_CALL = 1;
+export const KIND_MENTION = 2;
 const KIND_BY_FLAG: readonly ErbReferenceKind[] = ['definition', 'call', 'mention'];
 
 /**
- * 盘上/内存共用的紧凑格式：`[归一化名, 行, 列, 种类旗标]`。
+ * 单文件引用流水的**步长**：每 4 格一条引用，依次是 `归一化名, 行, 列, 种类旗标`。
  * `endColumn` 不落盘（= column + 名字长度，可派生——快照瘦身 v3 的同一条纪律）。
  * 名字统一存**归一化大写**：引用原文可以小写，但索引键只有大写形态。
+ *
+ * **为什么是扁平数组而不是每条一个四元组**（MEM-7 批，2026-10-30）：
+ * 真语料 3,971 文件 / 341,779 条引用，一条一个 `[name, line, column, kind]` 要付
+ * **一枚 JSArray 头（32 B）+ 一枚 FixedArray 底层（≈69 B）**，合计 29.1 MB（消融实测
+ * `refs 引用流水 -29.1MB`，稳态 171.7 MB 里最大的一块单一数组）。扁平化之后只剩
+ * **每文件一枚数组**（3,971 枚），341,779 × 4 格里 3 格是 Smi（V8 内联在 FixedArray 里、
+ * 不装箱），名字格是已去重的指针 ⇒ 稳态约 6 MB。
+ *
+ * 形态代价说明白：`for (const [name, line, column, kind] of refs)` 这种写法没有了，
+ * 步长这件事只许住在 {@link forEachRef} 里（两处各写一遍 `i += 4` 就是第二判据）。
  */
-export type RefRun = readonly [name: string, line: number, column: number, kind: 0 | 1 | 2];
+export const REF_STRIDE = 4;
 
-/** 单文件的引用流水（按行、列升序；构建序确定 ⇒ 聚合序确定） */
-export type FileRefs = readonly RefRun[];
+/**
+ * 单文件的引用流水（按行、列升序；构建序确定 ⇒ 聚合序确定）。
+ * 扁平存放，布局见 {@link REF_STRIDE}——**别直接按下标遍历**，用 {@link forEachRef}。
+ */
+export type FileRefs = readonly (string | number)[];
+
+/**
+ * 按引用逐条遍历扁平流水（**步长布局的唯一出处**）。
+ *
+ * `kind` 交的是**盘上那个旗标**（{@link KIND_DEFINITION} / {@link KIND_CALL} /
+ * {@link KIND_MENTION}），不是字符串——热路径上不额外查表，需要 `ErbReferenceKind` 的
+ * 调用方自己 `KIND_BY_FLAG`（同在本模块）。
+ *
+ * 用回调而不是生成器：341,779 条引用在聚合与着色两条热路径上都要过，生成器每条要付
+ * 一次 `{value,done}` 分配，白白造出 34 万个短命对象。
+ */
+export function forEachRef(
+  refs: FileRefs,
+  visit: (name: string, line: number, column: number, kind: number) => void,
+): void {
+  for (let i = 0; i < refs.length; i += REF_STRIDE) {
+    visit(refs[i] as string, refs[i + 1] as number, refs[i + 2] as number, refs[i + 3] as number);
+  }
+}
 
 /** 行内换行归一（与 scanner 同规则；插件内自带，不依赖 kernel） */
 function normalizeEol(text: string): string {
@@ -602,7 +635,7 @@ export function scanFileRefs(
   collect?: (normalizedName: string) => void,
   window?: VisibleLineWindow,
 ): FileRefs {
-  const out: RefRun[] = [];
+  const out: (string | number)[] = [];
   for (const { line, raw, isDefinition, isCallLine, keywordEnd, codeView } of visibleCodeLines(text, window)) {
     if (isDefinition) {
       // 定义行：名字按**解析器的口径**截（终止符 `(`/空白/`;` + 截后 trim，与
@@ -617,7 +650,9 @@ export function scanFileRefs(
       if (name.length > 0) {
         const upper = name.toUpperCase();
         if (collect !== undefined) collect(upper);
-        if (hasName(upper)) out.push([detachString(upper), line, at + 2 + (slice.length - slice.trimStart().length), KIND_DEFINITION]);
+        if (hasName(upper)) {
+          out.push(detachString(upper), line, at + 2 + (slice.length - slice.trimStart().length), KIND_DEFINITION);
+        }
       }
       continue;
     }
@@ -637,10 +672,14 @@ export function scanFileRefs(
       const upper = hasLower ? normalizedUpper(run) : run;
       if (collect !== undefined) collect(upper);
       if (!hasName(upper)) return;
-      out.push([detachString(upper), line, start + 1, (inSlot ? KIND_CALL : KIND_MENTION) as 0 | 1 | 2]);
+      out.push(detachString(upper), line, start + 1, inSlot ? KIND_CALL : KIND_MENTION);
     });
   }
-  return out;
+  // **收尾裁掉增长余量**（MEM-7 实测）：`push` 出来的数组按 V8 的 1.5×+16 增长，真语料
+  // 1,367,116 格实测被撑到约 1.45 倍 ⇒ 白占约 2.4 MB。`slice()` 造一份**恰好长度**的副本，
+  // 旧数组随即可回收；每文件一次、合计一次元素搬运，构建期代价在毫秒以下。
+  // 注意别改成 `out.length = out.length`：那不会缩容量，一分钱都省不下。
+  return out.length === 0 ? out : out.slice();
 }
 
 /* ---------------- 未定义 CALL 目标（T3，2026-10-16 语言服务批） ---------------- */
@@ -728,14 +767,16 @@ export function buildReferenceIndex(
   for (const file of files) {
     const runs = refsByPath.get(file.path);
     if (runs === undefined) continue;
-    for (const [name, line, column, kind] of runs) {
+    const filePath = file.path;
+    // 步长布局只经 `forEachRef` 读（见 `REF_STRIDE` 的注）；`filePath` 复用同一枚实例
+    forEachRef(runs, (name, line, column, kind) => {
       let list = bySymbol.get(name);
       if (list === undefined) {
         list = [];
         bySymbol.set(name, list);
       }
-      list.push({ filePath: file.path, line, column, endColumn: column + name.length, kind: KIND_BY_FLAG[kind]! });
-    }
+      list.push({ filePath, line, column, endColumn: column + name.length, kind: KIND_BY_FLAG[kind]! });
+    });
   }
   return { bySymbol };
 }

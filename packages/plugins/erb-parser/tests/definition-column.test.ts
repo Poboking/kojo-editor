@@ -22,7 +22,7 @@ import type { ErbFile, ErbIndex, ErbParserService, FileIO, GameProject, ScopedSt
 import { createErbParserPlugin } from '../src/plugin';
 import { parseErbText, parseFunctionDefinition } from '../src/scanner';
 import { encodeEntries, decodeEntries, aggregateIndex, snapshotKeyFor, SNAPSHOT_VERSION, type SnapshotEntry } from '../src/snapshot';
-import { scanFileRefs } from '../src/references';
+import { KIND_DEFINITION, forEachRef, scanFileRefs } from '../src/references';
 import { makeComputeStub } from './support';
 
 /** 名字区间（半开、1 基）——与 `erb-definition` 交给宿主的 `span` 同一条算式，本文件只读它一次 */
@@ -103,11 +103,15 @@ describe('erb-parser · 名字起点列（扫描器）', () => {
     const text = '@A\n\tCALL B\n\t\t@B(ARG)\n';
     const parsed = parseErbText(text, '/a.ERB');
     const refs = scanFileRefs(text, (upper) => parsed.functions.some((f) => f.normalizedName === upper));
-    for (const [name, , column, kind] of refs) {
-      if (kind !== 0) continue;
+    let checked = 0;
+    forEachRef(refs, (name, _line, column, kind) => {
+      if (kind !== KIND_DEFINITION) return;
       const fn = parsed.functions.find((f) => f.normalizedName === name)!;
       expect(fn.nameColumn).toBe(column);
-    }
+      checked++;
+    });
+    // 判据不许在"一条都没遍历到"时也绿：两份定义（@A / @B）都必须在 refs 里出现
+    expect(checked).toBe(2);
   });
 });
 
@@ -333,7 +337,7 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
       1000, TEXT_A.length, TEXT_A.length, 2, 0,
       [['FOO', 1, 2, [['ARG', 0]], 0]], // 5 位 = v8 形态：无注释块、无列
       [],
-      [['FOO', 1, 3, 0]],
+      ['FOO', 1, 3, 0], // v13 的扁平流水（步长 REF_STRIDE）
       [],
       null,
       null, // 候选未知（v10 迁移态）：refs 溯源与候选都判可疑 ⇒ refs 重扫，结构照常复用

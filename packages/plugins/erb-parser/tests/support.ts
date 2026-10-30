@@ -10,6 +10,7 @@
  * 真池自身的时间片 / 优先级 / 单飞尾缘语义由 `kernel/tests/compute.test.ts` 覆盖。
  */
 import type { ComputePool, ComputePoolStats } from '@kojo/plugin-api';
+import { forEachRef, type FileRefs } from '../src/references';
 
 export function makeComputeStub(): ComputePool {
   /** 可搬运任务的本地实现表（等价于"无并行通道"的真池行为） */
@@ -52,4 +53,33 @@ export function makeComputeStub(): ComputePool {
     stats: () => ({ tasks: [], yields: 0, interactiveActive: false, offload: noChannel() }),
     resetStats: () => undefined,
   };
+}
+
+/**
+ * 把「一条引用一枚四元组」的**测试夹具写法**摊成生产侧的扁平流水（步长 `REF_STRIDE`）。
+ *
+ * 生产侧自 MEM-7 起只有扁平形态（一条一枚四元组要付 29.1 MB 的数组头 + 底层，见
+ * `references.ts` 的 `REF_STRIDE` 注）。测试里保留四元组写法是为了**可读**，
+ * 但摊平这一步不该由每个用例各写一遍 `i += 4`——那会把步长变成第二判据。
+ */
+export function flatRefs(
+  tuples: readonly (readonly [string, number, number, number])[],
+): FileRefs {
+  const out: (string | number)[] = [];
+  for (const [name, line, column, kind] of tuples) out.push(name, line, column, kind);
+  return out;
+}
+
+/**
+ * 扁平流水 → 「一条一枚四元组」的**可读形态**（与 {@link flatRefs} 互逆）。
+ *
+ * 用于"改前实现原样封存"的等价对拍（`refs-fastpath-equiv` / `refs-charclass-cache-equiv`）：
+ * 那些文件里的旧实现产出的是四元组，断言必须比到同一形态上，否则"逐条相同"变成
+ * "在格上比"——一个不报错、也不像错的假对拍。
+ * 走 `forEachRef`：步长只许有一个出处。
+ */
+export function unflattenRefs(refs: FileRefs): [string, number, number, number][] {
+  const out: [string, number, number, number][] = [];
+  forEachRef(refs, (name, line, column, kind) => out.push([name, line, column, kind]));
+  return out;
 }

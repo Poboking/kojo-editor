@@ -793,13 +793,30 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     （`monaco/kojo2-symbols.ts` 164 行、`monaco/kojo2-inlay.ts` 155 行）都只在**懒边**
     //     （`editor-global-providers → monaco 装配`）之下，从不在开机图里；全图字节数与上一档
     //     逐字相同就是直接证据。两枚闸维持 **≤199 / ≤3,178**，**不抬不降**。
+    //   - **内存批 MEM-7（2026-10-30，本批）**：读数 **199 文件 / 3,182 KB**（3,258,563 B）——同样
+    //     **零新进图模块**（199 未动）；净 **+7,428 B** 全落在图内既有三枚文件，逐枚实测（本树 vs
+    //     `origin/dev` 同路径原始字节）：`erb-parser/src/snapshot.ts` +4,817（v13 的扁平引用流水：
+    //     形态注、`isRefsFlat` / `refsToFlat` 与 v12 的免费迁移、版本表准入位）、
+    //     `erb-parser/src/references.ts` +2,479（`REF_STRIDE` 布局注 + `forEachRef` 唯一出口，
+    //     `scanFileRefs` 由"一条一枚四元组"改成扁平 push）、
+    //     `erb-parser/src/semantic-tokens.ts` +132（引用腿改走 `forEachRef`）。
+    //     ⇒ 闸 **3,178 → 3,184**（余量 2 KB）。抬这一档的理由与前几批同构：加的是**能力**，
+    //     而且直接换到堆上——341,779 条引用原先一条一枚 `[name, line, column, kind]`
+    //     （JSArray 头 + FixedArray 底层，≈69 B/枚），消融实测 **29.1 MB**；摊成每文件一枚
+    //     扁平数组后只剩 3,971 枚数组、4 格里 3 格是内联 Smi ⇒ 热载稳态
+    //     **171.7 → 153.4 MB（−18.3 / −10.7%）**、索引就绪 **158.8 → 140.5 MB**。
+    //     文件数一分未涨。
+    //     读数口径留一句：闸读数相对上一档 **+7,738 B**、逐文件合计 +7,428 B，**残差 310 B
+    //     不追**——上一档那 3,175 KB 是另一分支的落账值，不是本树在 `origin/dev` 上的重测值；
+    //     本批只对"本树 vs `origin/dev`"这一对做逐字节归因，闸看的是绝对值。
+    //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,178 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,184 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_178);
+    expect(totalKb).toBeLessThanOrEqual(3_184);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

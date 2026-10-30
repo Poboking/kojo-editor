@@ -124,17 +124,38 @@ for (const r of rows) {
  *
  * 快照的 `edges` 是**按 from 节点顺序排列、不带 from 字段**的，必须靠每个节点的
  * `edge_count` 顺序消费才能还原"这条边从谁来"（见 PITFALLS 256 同类坑：别指望数组自带下标）。
+ *
+ * ## 槽数怎么数（PITFALLS 269，2026-10-30 实拍纠正）
+ *
+ * 这里原先只数 `element` 边，结果 **66 万个数组全报"长度 0"**——因为这一代 V8 把
+ * **FixedArray 的槽位发成 `internal` 边、名字是十进制下标字符串**（`"0"`、`"1"`、`"12"`…），
+ * 而不是 `element` 边。`element` 边只从 **JSArray** 出发（1,465,420 条，指向值），
+ * `(object elements)` / `(object properties)` 这些 FixedArray 节点一条都没有。
+ *
+ * 两条都要数，而且 `internal` 那条只认**纯数字名**（`map` / `elements` / `properties`
+ * 这些是结构边，不是槽）。只数 `element` 的后果是"每个数组都是空的"——一个**不报错、
+ * 也不像错**的假读数，按它下结论会把 5 万个"槽 9"的对象属性块当成"零长数组"。
  */
 if (argv.includes('--arrays')) {
   const ef = meta.edge_fields;
   const estride = ef.length;
   const iEtype = ef.indexOf('type');
   const iEto = ef.indexOf('to_node');
+  const iEname = ef.indexOf('name_or_index');
   const edgeTypes = meta.edge_types[iEtype];
   const iEdgeCount = nf.indexOf('edge_count');
   const nodeCount = nodes.length / stride;
+  const isDigits = (s) => {
+    if (typeof s !== 'string' || s.length === 0 || s.length > 9) return false;
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c < 48 || c > 57) return false;
+    }
+    return true;
+  };
 
-  // 数组长度 = 从它**出发**的 element 边数（不是指向它的——指向它的那条边只是"被谁装着"）
+  // 槽数 = 从它**出发**的 element 边数 + 纯数字名的 internal 边数
+  // （不是指向它的——指向它的那条边只是"被谁装着"）
   const arrLen = new Map(); // nodeIdx → 长度
   const arrOwner = new Map(); // nodeIdx → `${ownerType}\u0000${ownerCtor}`
   const isArray = new Uint8Array(nodeCount);
@@ -148,11 +169,12 @@ if (argv.includes('--arrays')) {
     for (let k = 0; k < ec; k++, ei += estride) {
       const et = edgeTypes[edges[ei + iEtype]];
       const to = edges[ei + iEto] / stride;
-      if (et === 'element') {
+      const isSlot = et === 'element' || (et === 'internal' && isDigits(strings[edges[ei + iEname]]));
+      if (isSlot) {
         if (isArray[n] === 1) arrLen.set(n, (arrLen.get(n) ?? 0) + 1);
         continue;
       }
-      // 非 element 的指向 = "被谁装着"。只认第一条，多个持有者时取先到的那条
+      // 非槽位的指向 = "被谁装着"。只认第一条，多个持有者时取先到的那条
       if (isArray[to] === 1 && !arrOwner.has(to)) arrOwner.set(to, fromKey);
     }
   }

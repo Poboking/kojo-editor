@@ -12,7 +12,16 @@
  * 边界用例是本文件之外的另外两把尺子。
  */
 import { describe, expect, it } from 'vitest';
-import { scanFileRefs, scanUndefinedCallTargets, normalizedUpper } from '../src/references';
+import { scanFileRefs as scanFileRefsRaw, scanUndefinedCallTargets, normalizedUpper } from '../src/references';
+import { unflattenRefs } from './support';
+
+/**
+ * 本文件里的 `scanFileRefs` 一律是**四元组视图**：封存的旧实现（`scanFileRefsNoCache` /
+ * `scanFileRefsOld`）产出的是「一条一枚四元组」，而生产侧自 MEM-7 起是扁平流水
+ * （步长 `REF_STRIDE`）。不摊平就直接 `toEqual`，比的是"格 vs 四元组"——
+ * 一个不报错、也不像错的假对拍。摊平只在本文件做，生产侧不长第二套形态。
+ */
+const scanFileRefs = (...args: Parameters<typeof scanFileRefsRaw>) => unflattenRefs(scanFileRefsRaw(...args));
 
 /* ---------------- 旧实现（改前 references.ts 的正则版，逐行封存作对照） ---------------- */
 

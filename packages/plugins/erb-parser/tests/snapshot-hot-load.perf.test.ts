@@ -22,7 +22,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ErbFile, ErbFunction } from '@kojo/plugin-api';
 import { parseErbText } from '../src/scanner';
-import { buildReferenceIndex, scanFileRefs, type FileRefs } from '../src/references';
+import { buildReferenceIndex, REF_STRIDE, scanFileRefs, type FileRefs } from '../src/references';
 import {
   aggregateIndex,
   coerceSnapshot,
@@ -181,20 +181,35 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
       // （不是"没有这一位"）；第 7 位存在则必须是数字列
       (x.length === 5 || x[5] === null || typeof x[5] === 'string') &&
       (x.length !== 7 || typeof x[6] === 'number');
-    const okRef = (x: unknown): boolean =>
-      Array.isArray(x) &&
-      x.length === 4 &&
-      typeof x[0] === 'string' &&
-      typeof x[1] === 'number' &&
-      typeof x[2] === 'number' &&
-      (x[3] === 0 || x[3] === 1 || x[3] === 2);
+    /**
+     * **MEM-7 之后引用流水是扁平的**（v13：步长 `REF_STRIDE`，第 0 格名字 / 1 行 / 2 列 / 3 旗标）。
+     *
+     * 参照臂是"改动前的 decode"的冻结副本，但**它读的是当下这份 payload**——盘上形状换了，
+     * 校验器就必须跟着认新形状，否则整条 A/B 死在 `return null`（旧的四元组校验撞上
+     * "第 0 格是字符串"，直接判整份快照损坏）。这不叫"改判据"，判据仍是"懒还原 ≤ 急还原"；
+     * 只是把"同一份校验"对准同一份数据。
+     *
+     * 成本口径照旧对齐：仍**逐格校验 + 逐条过去重表**（生产 `internEntryStrings` 也是这么做的），
+     * 只是省掉"为每条引用造一枚四元组"——那笔开销 MEM-7 已从生产两条腿一起拿掉，
+     * 留着它反而会造出"旧形态更贵"的假 gain。
+     */
+    const okRefRun = (x: unknown): boolean => {
+      if (!Array.isArray(x) || x.length % REF_STRIDE !== 0) return false;
+      for (let i = 0; i < x.length; i += REF_STRIDE) {
+        if (typeof x[i] !== 'string') return false;
+        if (typeof x[i + 1] !== 'number' || typeof x[i + 2] !== 'number') return false;
+        const k = x[i + 3];
+        if (k !== 0 && k !== 1 && k !== 2) return false;
+      }
+      return true;
+    };
     const okLabel = (x: unknown): boolean =>
       Array.isArray(x) && x.length === 3 && typeof x[0] === 'string' && typeof x[1] === 'number' && typeof x[2] === 'number';
     if (!fns.every(okFn)) return null;
     if (!dims.every((d) => Array.isArray(d) && d.length === 3 && typeof d[0] === 'string' && typeof d[1] === 'string' && typeof d[2] === 'number')) {
       return null;
     }
-    if (!refs.every(okRef)) return null;
+    if (!okRefRun(refs)) return null;
     if (!labels.every(okLabel)) return null;
     const functions: ErbFunction[] = fns.map((x) => {
       const [rawName, startLine, endLine, params, flags, rawDoc, nameColumn] = x as unknown as [
@@ -240,11 +255,19 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
         hasFunctionDirective: hasDirective === 1,
         lineCount,
       },
-      refs: (refs as unknown as Array<[string, number, number, 0 | 1 | 2]>).map(
-        ([rname, line, column, kind]) => [interner.intern(rname), line, column, kind] as never,
-      ),
+      // 引用流水：扁平形状下"逐条复制"就是整条复制（`.slice()`），再把名字过一遍去重表。
+      // 不复用盘上那枚数组：参照臂的语义是"当场复制一遍"（旧代码 `refs.map(...)` 的等价成本），
+      // 而且就地改会让两条腿共用同一枚数组，交替采样互相污染。
+      refs: copyFlatRefs(refs as (string | number)[], interner),
     };
   }
+  return out;
+}
+
+/** 扁平流水的"逐条复制 + 过去重表"（参照臂专用；生产 `internEntryStrings` 是就地换实例）。 */
+function copyFlatRefs(refs: readonly (string | number)[], interner: { intern(s: string): string }): FileRefs {
+  const out = refs.slice();
+  for (let i = 0; i < out.length; i += REF_STRIDE) out[i] = interner.intern(out[i] as string);
   return out;
 }
 

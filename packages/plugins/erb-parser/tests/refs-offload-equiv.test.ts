@@ -37,7 +37,7 @@ import { SCAN_REFS_TASK, scanRefsBatch, scanRefsNamesOf, refsNameCacheState, typ
 import { buildReferenceIndex, erbReferenceLocationsAt, scanFileRefs, type FileRefs } from '../src/references';
 import { nameSetDigest } from '../src/snapshot';
 import { parseErbText } from '../src/scanner';
-import { makeComputeStub } from './support';
+import { flatRefs, makeComputeStub } from './support';
 
 /* ============================== 对抗性随机文本（固定种子；本文件自带一份生成器） ============================== */
 
@@ -150,7 +150,7 @@ describe('scanRefsBatch · 与主线程内联路径逐条目全等', () => {
     expect(() => scanRefsBatch(poisoned)).toThrow(/name set unusable/);
     // 反恒真：同一份 texts 在合规名录下是能扫出东西的（抛的是自证失败，不是"空结果"）
     expect(encode(scanRefsBatch(payloadOf(['ALPHA'], ['CALL ALPHA\n'])))).toBe(
-      encode([{ refs: [['ALPHA', 1, 6, 1]] as unknown as FileRefs, candidates: 'CALL\nALPHA' }]),
+      encode([{ refs: flatRefs([['ALPHA', 1, 6, 1]]), candidates: 'CALL\nALPHA' }]),
     );
   });
 });

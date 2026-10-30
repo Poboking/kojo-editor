@@ -610,6 +610,36 @@ if (process.argv.includes('--ablate') && index) {
       }
     }
   });
+  // `refs`（H2 反向引用流水）是**每文件一份的 RefRun 元组数组**，热载下常驻在
+  // `entries[path].refs` 与惰性壳的 RAW 元组第 7 格两处（同一个数组）。稳态没人读它，
+  // 只有 `references.bySymbol` 按需物化时才消费——但 34 万条 4 元组是**每一条都要付
+  // JSArray 头 + FixedArray 底层**的，是稳态里最大的一块单一数组。
+  //
+  // 量它之前先记住两件事（都是踩过的）：
+  // 1. **两处持有**：只清元组那一侧等于没清（PITFALLS 267 的同款坑）；
+  // 2. **别用 `delete`**：那会把对象转字典模式、堆反而涨；这里赋一枚共享空数组保形状。
+  step('refs', 'refs 引用流水', () => {
+    const svc = kernel.services.get?.('erb.parser');
+    const snap = svc?.snapshotForDebug?.() ?? null;
+    const entries = snap?.entries ?? null;
+    if (!entries) return;
+    const EMPTY = [];
+    for (const k in entries) {
+      const e = entries[k];
+      if (Array.isArray(e)) {
+        e[7] = EMPTY;
+        continue;
+      }
+      if (e === null || typeof e !== 'object') continue;
+      if ('refs' in e) e.refs = EMPTY;
+      const shell = e.file;
+      if (shell === null || typeof shell !== 'object') continue;
+      for (const sym of Object.getOwnPropertySymbols(shell)) {
+        const tuple = shell[sym];
+        if (Array.isArray(tuple) && tuple.length === 11) tuple[7] = EMPTY;
+      }
+    }
+  });
 }
 console.log(
   `[mem-verdict] index=+${(afterIndex.heap - boot.heap).toFixed(1)}MB  ` +

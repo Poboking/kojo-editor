@@ -24,7 +24,16 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
-import { normalizedUpper, scanFileRefs, scanUndefinedCallTargets } from '../src/references';
+import { normalizedUpper, scanFileRefs as scanFileRefsRaw, scanUndefinedCallTargets } from '../src/references';
+import { unflattenRefs } from './support';
+
+/**
+ * 本文件里的 `scanFileRefs` 一律是**四元组视图**：封存的旧实现（`scanFileRefsNoCache` /
+ * `scanFileRefsOld`）产出的是「一条一枚四元组」，而生产侧自 MEM-7 起是扁平流水
+ * （步长 `REF_STRIDE`）。不摊平就直接 `toEqual`，比的是"格 vs 四元组"——
+ * 一个不报错、也不像错的假对拍。摊平只在本文件做，生产侧不长第二套形态。
+ */
+const scanFileRefs = (...args: Parameters<typeof scanFileRefsRaw>) => unflattenRefs(scanFileRefsRaw(...args));
 
 /* ============================== 改前实现（逐行封存，只作对照） ============================== */
 
@@ -340,14 +349,14 @@ describe('W7-G 字符分类缓存 · 新旧路径逐条等价', () => {
     // 顺序 A：先落单高代理项（写进 BMP 缓存），再代理对
     vi.resetModules();
     const a = await import('../src/references');
-    expect(a.scanFileRefs(loneHigh, has)).toEqual([]);
-    expect(a.scanFileRefs(pair, has)).toEqual([['𝐀', 1, 6, 1]]);
+    expect(unflattenRefs(a.scanFileRefs(loneHigh, has))).toEqual([]);
+    expect(unflattenRefs(a.scanFileRefs(pair, has))).toEqual([['𝐀', 1, 6, 1]]);
 
     // 顺序 B：先代理对（写进增平面缓存），再落单高代理项
     vi.resetModules();
     const b = await import('../src/references');
-    expect(b.scanFileRefs(pair, has)).toEqual([['𝐀', 1, 6, 1]]);
-    expect(b.scanFileRefs(loneHigh, has)).toEqual([]);
+    expect(unflattenRefs(b.scanFileRefs(pair, has))).toEqual([['𝐀', 1, 6, 1]]);
+    expect(unflattenRefs(b.scanFileRefs(loneHigh, has))).toEqual([]);
   });
 
   it('全角/半角小写归一仍走同一个 normalizedUpper（含 CJK 名与成员访问退让）', () => {

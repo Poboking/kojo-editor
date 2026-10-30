@@ -21,7 +21,7 @@ import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { MemoryStorageBackend } from '../../../kernel/tests/helpers/memory-storage';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
-import { buildReferenceIndex, referencesOf, scanFileRefs, type FileRefs } from '../src/references';
+import { buildReferenceIndex, forEachRef, referencesOf, scanFileRefs, type FileRefs } from '../src/references';
 
 const SMOKE = process.env.KOJO_SMOKE_PROJECT ?? process.env.KOJO_CORPUS_DIR;
 const KOJO_ROOT_REL = ['ERB', '口上・メッセージ関連', '個人口上'];
@@ -33,7 +33,7 @@ const isColon = (c: string | undefined): boolean => c === ':' || c === '：';
  * 朴素对拍实现（**故意与 src/references.ts 走不同的代码路径**：手写走位、
  * split 求首词、逐字符构串；同一口径下的第二个独立判定器）。
  */
-function naiveScan(text: string, hasName: (upper: string) => boolean): FileRefs {
+function naiveScan(text: string, hasName: (upper: string) => boolean): [string, number, number, number][] {
   const lines = text.split(/\r\n|\r|\n/);
   const CALLS = new Set(['CALL', 'TRYCALL', 'TRYCCALL', 'TRYCALLLIST', 'TRYCCALLLIST']);
   const out: [string, number, number, 0 | 1 | 2][] = [];
@@ -222,7 +222,11 @@ describe.skipIf(!SMOKE)('反向引用索引 · 真实语料自证', () => {
         readMs += performance.now() - r0;
         textMaxLen = Math.max(textMaxLen, tf.text.length);
         const s0 = performance.now();
-        const got = scanFileRefs(tf.text, hasNameUpper).map((r) => r.join(':')).sort();
+        // 生产侧是扁平流水（步长 `REF_STRIDE`）⇒ 走 `forEachRef` 摊成四元组再与朴素实现对拍；
+        // 直接 `.map` 会在"格"上迭代（4 倍条数、且每格不是数组），那是**假对拍**。
+        const flat: [string, number, number, number][] = [];
+        forEachRef(scanFileRefs(tf.text, hasNameUpper), (name, line, column, kind) => flat.push([name, line, column, kind]));
+        const got = flat.map((r) => r.join(':')).sort();
         const want = naiveScan(tf.text, hasNameUpper).map((r) => r.join(':')).sort();
         scanOnlyMs += performance.now() - s0;
         expect(got, `朴素对拍不符：${path}`).toEqual(want);

@@ -1,7 +1,7 @@
 import type { EditorSemanticTokenSpan, ErbFile, ErbFunction, ErbIndex } from '@kojo/plugin-api';
 import { locateIdentifier, modelLineAt, splitModelLines } from '@kojo/plugin-api';
 import { parseErbText } from './scanner';
-import { scanFileRefs, skipBlockAt, splitErbLines, windowSliceOf, type VisibleLineWindow } from './references';
+import { KIND_DEFINITION, forEachRef, scanFileRefs, skipBlockAt, splitErbLines, windowSliceOf, type VisibleLineWindow } from './references';
 
 /**
  * ERB 结构化着色（B6，2026-10-16 结构化着色批）。
@@ -115,11 +115,12 @@ function dimSpans(file: ErbFile, lines: readonly string[]): EditorSemanticTokenS
 function referenceSpans(text: string, index: ErbIndex, window?: VisibleLineWindow): EditorSemanticTokenSpan[] {
   const hasName = (upper: string): boolean => index.byName.has(upper);
   const out: EditorSemanticTokenSpan[] = [];
-  // 换行归一由 `scanFileRefs` 自己做（与 `parseErbText` 同一条规则），行号两侧天然对齐
-  for (const [name, line, column, kind] of scanFileRefs(text, hasName, undefined, window)) {
-    if (kind === 0) continue; // definition：已由声明那条腿负责
+  // 换行归一由 `scanFileRefs` 自己做（与 `parseErbText` 同一条规则），行号两侧天然对齐。
+  // 步长布局只经 `forEachRef` 读（见 `references.ts` 的 `REF_STRIDE`）。
+  forEachRef(scanFileRefs(text, hasName, undefined, window), (name, line, column, kind) => {
+    if (kind === KIND_DEFINITION) return; // definition：已由声明那条腿负责
     out.push(span(line, column, name.length, 'function'));
-  }
+  });
   return out;
 }
 

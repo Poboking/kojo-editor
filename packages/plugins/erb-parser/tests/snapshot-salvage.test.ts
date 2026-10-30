@@ -38,12 +38,32 @@ import { makeComputeStub } from './support';
 const V_LEGACY = 9;
 /** 表内最老的一代（v10：同形 + 缺第 11 位 ⇒ 候选未知、refs 补扫一遍） */
 const V10 = 10;
+/** 表内次新的一代（v12：同形 + 候选位哈希 base64，但**引用流水仍是四元组数组**） */
+const V12 = 12;
 
 const ROOT = 'D:/proj/eratw';
 const KOJO = `${ROOT}/ERB`;
 const P1 = `${KOJO}/M_KOJO_K1.ERB`;
 const P2 = `${KOJO}/M_KOJO_K2.ERB`;
 const P3 = `${KOJO}/M_KOJO_K3.ERB`;
+
+/**
+ * 把 v13 的**扁平**引用流水改写成 v12 及更早的「一条一枚四元组」。
+ *
+ * 为什么必须有这一步：v12 及更早的盘上，第 8 位真的是 `[[name,line,col,kind], …]`。
+ * 拿当前版本的 `encodeEntries` 产出一份 payload、再 `slice()` 成旧位数的做法（本文件此前的
+ * 造法）在**换了存放形态之后就不成立**了——那样造出来的是"旧版本号 + 新形态"，
+ * 只会验到"校验器把它丢了"，验不到迁移（PITFALLS 266 的同款假绿：测的是另一件事）。
+ * 生产侧没有这个形态，所以摊回去只住在这里。
+ */
+function refsAsTuples(flat: unknown): [string, number, number, number][] {
+  const src = flat as readonly (string | number)[];
+  const out: [string, number, number, number][] = [];
+  for (let i = 0; i < src.length; i += 4) {
+    out.push([src[i] as string, src[i + 1] as number, src[i + 2] as number, src[i + 3] as number]);
+  }
+  return out;
+}
 
 const SRC1 = '@FOO_A\n\tPRINTFORMW 甲。\nRETURN 1\n\n@FOO_B\n\tPRINTFORML 乙。\nRETURN 1\n';
 const SRC2 = '@BAR_A\n\tPRINTFORMW 丙。\nRETURN 1\n';
@@ -357,7 +377,11 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     // v10 盘：条目只有前 10 位（候选集还没这回事），版本号 -1（v10 在准入表：同形 + 缺第 11 位）
     const v10 = diskOf(seeded.map, v7key) as Payload & { namesFp?: number | null };
     const v10entries: Record<string, unknown[]> = {};
-    for (const [p, t] of Object.entries(v10.entries)) v10entries[p] = t.slice(0, 10);
+    for (const [p, t] of Object.entries(v10.entries)) {
+      const copy = t.slice(0, 10);
+      copy[7] = refsAsTuples(t[7]); // v10 的盘上形态：引用流水是四元组数组
+      v10entries[p] = copy;
+    }
     seeded.map.delete(v7key);
     seeded.map.set(
       snapshotKeyFor(ROOT, V10),
@@ -417,6 +441,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     const v11entries: Record<string, unknown[]> = {};
     for (const [p, t] of Object.entries(cur.entries)) {
       const copy = t.slice();
+      copy[7] = refsAsTuples(t[7]); // v11 的盘上形态：引用流水是四元组数组
       copy[10] = (tokensOf[p] ?? []).join('\n');
       v11entries[p] = copy;
     }
@@ -455,6 +480,63 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     const savedP1 = diskOf(seeded.map, v7key).entries[P1]!;
     expect(typeof savedP1[10]).toBe('string');
     expect(savedP1[10]).not.toContain('\n'); // 记号串是 `\n` 连接的，base64 不可能含它
+  });
+
+  it('v12 → v13 迁移（MEM-7）：引用流水只换存放形态 ⇒ **一个文件都不重扫**，且逐条同值', async () => {
+    const files = new Map<string, FakeFile>([
+      [P1, { text: SRC1, mtimeMs: 100 }],
+      [P2, { text: SRC2, mtimeMs: 200 }],
+    ]);
+    const seeded = await seed(files);
+    const mark = seeded.fs.log.length;
+
+    // 把盘上这份 v13 改写成 v12 形态：第 8 位写回「一条一枚四元组」。
+    // v12 与 v13 的**唯一**差异就是这一位的存放形态（字段顺序、语义、排序一字未改）。
+    const cur = diskOf(seeded.map, v7key) as Payload & { namesFp?: number | null };
+    const v12entries: Record<string, unknown[]> = {};
+    for (const [p, t] of Object.entries(cur.entries)) {
+      const copy = t.slice();
+      copy[7] = refsAsTuples(t[7]);
+      v12entries[p] = copy;
+    }
+    seeded.map.delete(v7key);
+    seeded.map.set(
+      snapshotKeyFor(ROOT, V12),
+      JSON.stringify({ version: V12, rootDir: ROOT, savedAt: 1, namesFp: cur.namesFp, entries: v12entries }),
+    );
+
+    const logs: string[] = [];
+    const second = activate(seeded.fs.io, seeded.storage, logs);
+    openProject(second.bus);
+    await second.waitIndexed();
+    const r = readBreakdown(logs);
+    expect(r.salvaged).toBe(2); // 结构逐字认识 ⇒ 全部续用
+    expect(r.skipped).toBe(0);
+    expect(r.reused).toBe(2);
+    // ★ 与 v10 用例正相反：v12 只是换了存放形态 ⇒ 就地摊平即可 ⇒ 零重扫、零读盘
+    expect(r.provenance).toBe(0);
+    expect(r.refsRescan).toBe(0);
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 0, files: 0 });
+
+    // 迁移把四元组**就地摊平**，逐条逐字段不变（不是"随便造了个非空数组"）
+    const snap = second.service.snapshotForDebug?.() as
+      | { entries: Record<string, { refs?: readonly (string | number)[] }> }
+      | null;
+    expect(snap).not.toBeNull();
+    const flat1 = snap!.entries[P1]!.refs!;
+    expect(flat1.length % 4).toBe(0);
+    expect(flat1.length).toBeGreaterThan(0); // 反恒真：真的搬过来了一串引用
+    expect(refsAsTuples(flat1)).toEqual(v12entries[P1]![7]); // v12 的盘上形态就是四元组数组
+
+    // 正确性等价：迁移轮的索引与全量重建逐字相同（含 bySymbol 的每条边）
+    const cold = await rebuildFromScratch(files);
+    expect(dumpIndex(second.service.currentIndex()!)).toBe(dumpIndex(cold.idx));
+
+    // 落盘已是 v13（新键），第 8 位是扁平流水（**不再**是四元组数组）
+    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === 11);
+    const savedP1 = diskOf(seeded.map, v7key).entries[P1]!;
+    expect(Array.isArray(savedP1[7])).toBe(true);
+    expect((savedP1[7] as unknown[]).every((x) => Array.isArray(x))).toBe(false);
   });
 
   it('触发面「单条目损坏」：坏 1 条只丢 1 条，其余照旧复用（改前是整份弃用、全树重读）', async () => {

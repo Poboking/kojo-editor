@@ -19,6 +19,7 @@ import {
   type IndexSnapshot,
   type SnapshotEntry,
 } from '../src/snapshot';
+import { flatRefs } from './support';
 
 const ROOT = 'D:/proj/eratw';
 
@@ -219,7 +220,7 @@ describe('v3 元组编解码（瘦身不改语义；v5：+size、懒还原）', 
       size: 128,
       textLength: 42,
       file: file('/a.ERB', ['FOO']),
-      refs: [['FOO', 1, 1, 0], ['FOO', 3, 6, 1], ['BAR', 9, 2, 2]],
+      refs: flatRefs([['FOO', 1, 1, 0], ['FOO', 3, 6, 1], ['BAR', 9, 2, 2]]),
     };
     const back = decodeEntries(JSON.parse(JSON.stringify(encodeEntries({ '/a.ERB': src }))))!;
     expect(back['/a.ERB']!.refs).toEqual(src.refs);
@@ -232,7 +233,7 @@ describe('v3 元组编解码（瘦身不改语义；v5：+size、懒还原）', 
 
   it('懒还原两段：decode 后 functions/dims 是 getter，读一次换值属性；refs 零拷贝别名元组', () => {
     const parsed = parseErbText(SRC, '/p/a.ERB');
-    const entries = { '/p/a.ERB': { mtimeMs: 1, size: 10, textLength: 10, file: parsed, refs: [['FOO', 1, 1, 0]] as never } };
+    const entries = { '/p/a.ERB': { mtimeMs: 1, size: 10, textLength: 10, file: parsed, refs: flatRefs([['FOO', 1, 1, 0]]) } };
     const payload = JSON.parse(JSON.stringify(encodeEntries(entries))) as Record<string, unknown>;
     const decoded = decodeEntries(payload)!;
     const e = decoded['/p/a.ERB']!;
@@ -242,7 +243,8 @@ describe('v3 元组编解码（瘦身不改语义；v5：+size、懒还原）', 
     expect(fDesc.get).toBeTypeOf('function');
     expect(fDesc.enumerable).toBe(true);
     expect(Object.keys(e.file)).toContain('functions');
-    // refs 直接别名盘上元组（零拷贝）
+    // refs 直接别名盘上元组（零拷贝）：v13 起流水盘上与内存同形（扁平，步长 `REF_STRIDE`），
+    // 所以"别名"这件事仍然是一次对象身份比较
     expect(e.refs).toBe((payload['/p/a.ERB'] as unknown[])[7]);
     // 首次消费才还原，且与直出等值；再次读取零开销
     expect(e.file.functions).toEqual(parsed.functions);

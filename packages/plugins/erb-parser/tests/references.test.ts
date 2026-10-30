@@ -16,17 +16,27 @@ import {
   scanFileRefs,
   type FileRefs,
 } from '../src/references';
-import { makeComputeStub } from './support';
+import { flatRefs, makeComputeStub, unflattenRefs } from './support';
 
 const dict = (names: readonly string[]) => {
   const set = new Set(names.map((n) => n.toUpperCase()));
   return (upper: string) => set.has(upper);
 };
 
+/**
+ * `scanFileRefs` 的**四元组视图**（本文件全部断言都用它）。
+ *
+ * 生产侧自 MEM-7 起只有扁平流水（步长 `REF_STRIDE`，省 23 MB），摊平只在测试侧做，
+ * 好让 `toEqual([['ALPHA', 1, 6, 1]])` 这种断言还读得懂。
+ */
+function scanTuples(...args: Parameters<typeof scanFileRefs>): [string, number, number, number][] {
+  return unflattenRefs(scanFileRefs(...args));
+}
+
 describe('scanFileRefs · 引用面口径', () => {
   it('定义 / 同文件调用 / 跨行提及：种类与 1 基行列', () => {
     const text = '@ALPHA(ARG)\nPRINT ALPHA(1)\n  CALL ALPHA(2)\n';
-    const refs = scanFileRefs(text, dict(['ALPHA']));
+    const refs = scanTuples(text, dict(['ALPHA']));
     expect(refs).toEqual([
       ['ALPHA', 1, 2, 0], // definition：`@` 后名字首字符的列
       ['ALPHA', 2, 7, 2], // mention（表达式调用位）
@@ -35,7 +45,7 @@ describe('scanFileRefs · 引用面口径', () => {
   });
 
   it('重名两处定义都进表（byName 判据不裁决哪一个是"对的"）', () => {
-    const refs = scanFileRefs('@FOO\n@FOO\nCALL FOO\n', dict(['FOO']));
+    const refs = scanTuples('@FOO\n@FOO\nCALL FOO\n', dict(['FOO']));
     expect(refs).toEqual([
       ['FOO', 1, 2, 0],
       ['FOO', 2, 2, 0],
@@ -44,12 +54,12 @@ describe('scanFileRefs · 引用面口径', () => {
   });
 
   it('大小写不敏感：`call alpha` 命中 ALPHA，键归一为大写', () => {
-    expect(scanFileRefs('call alpha\n', dict(['ALPHA']))).toEqual([['ALPHA', 1, 6, 1]]);
+    expect(scanTuples('call alpha\n', dict(['ALPHA']))).toEqual([['ALPHA', 1, 6, 1]]);
   });
 
   it('注释不算引用：整行 `;` 与行内 `;` 尾巴都不扫（改名不重写散文，口径自证）', () => {
     const text = '; 这是 ALPHA 的说明\nPRINT 1 ; ALPHA 在注释里\nALPHA := ALPHA(1) ; ALPHA 尾巴\n';
-    const refs = scanFileRefs(text, dict(['ALPHA']));
+    const refs = scanTuples(text, dict(['ALPHA']));
     expect(refs).toEqual([
       ['ALPHA', 3, 1, 2],
       ['ALPHA', 3, 10, 2],
@@ -58,11 +68,11 @@ describe('scanFileRefs · 引用面口径', () => {
 
   it('字符串内容不算引用；引号外的 `;` 才切注释（PRINT "a;b" 不误伤）', () => {
     const text = 'PRINT "ALPHA"\nPRINT "say; ALPHA" FOO\n';
-    expect(scanFileRefs(text, dict(['ALPHA', 'FOO']))).toEqual([['FOO', 2, 20, 2]]);
+    expect(scanTuples(text, dict(['ALPHA', 'FOO']))).toEqual([['FOO', 2, 20, 2]]);
   });
 
   it('未加引号的 PRINT 输出行文本仍进 mention（词法盲区如实上报；改名侧由 isRenamableOccurrence 拦截不落盘）', () => {
-    const refs = scanFileRefs('PRINTFORML ALPHA。说明文字\nCALL ALPHA\n', dict(['ALPHA']));
+    const refs = scanTuples('PRINTFORML ALPHA。说明文字\nCALL ALPHA\n', dict(['ALPHA']));
     expect(refs).toEqual([
       ['ALPHA', 1, 12, 2], // 台词里的同名词：无引号可刷白，词法级 mention
       ['ALPHA', 2, 6, 1], // 真调用
@@ -70,30 +80,30 @@ describe('scanFileRefs · 引用面口径', () => {
   });
 
   it('未闭合引号：到行尾一律刷白（引擎本就编译不过，安全方向）', () => {
-    expect(scanFileRefs('PRINT "ALPHA rest\n', dict(['ALPHA']))).toEqual([]);
+    expect(scanTuples('PRINT "ALPHA rest\n', dict(['ALPHA']))).toEqual([]);
   });
 
   it('[SKIPSTART]…[SKIPEND] 死代码段不扫（与 scanControlFlow 同一屏蔽面）', () => {
     const text = 'CALL ALPHA\n[SKIPSTART]\nCALL ALPHA\n[SKIPEND]\nCALL ALPHA\n';
-    expect(scanFileRefs(text, dict(['ALPHA'])).map((r) => r[1])).toEqual([1, 5]);
+    expect(scanTuples(text, dict(['ALPHA'])).map((r) => r[1])).toEqual([1, 5]);
   });
 
   it('#DIM 声明行与 $ 标签行不算函数引用（那是变量与标签的 namespace）', () => {
-    expect(scanFileRefs('#DIM ALPHA[10]\n$ALPHA\nALPHA = 1\n', dict(['ALPHA']))).toEqual([['ALPHA', 3, 1, 2]]);
+    expect(scanTuples('#DIM ALPHA[10]\n$ALPHA\nALPHA = 1\n', dict(['ALPHA']))).toEqual([['ALPHA', 3, 1, 2]]);
   });
 
   it('定义行只认名字记号：形参表与行内注释都不扫', () => {
     const text = '@ALPHA(ALPHA) ; ALPHA 是注释\n';
-    expect(scanFileRefs(text, dict(['ALPHA']))).toEqual([['ALPHA', 1, 2, 0]]);
+    expect(scanTuples(text, dict(['ALPHA']))).toEqual([['ALPHA', 1, 2, 0]]);
   });
 
   it('整串匹配：前缀/后缀/下划线粘连都不算（XALPHA≠ALPHA）', () => {
     const text = 'XALPHA ALPHAX ALPHA2 _ALPHA\nMY_ALPHA\n';
-    expect(scanFileRefs(text, dict(['ALPHA', 'MY_ALPHA']))).toEqual([['MY_ALPHA', 2, 1, 2]]);
+    expect(scanTuples(text, dict(['ALPHA', 'MY_ALPHA']))).toEqual([['MY_ALPHA', 2, 1, 2]]);
   });
 
   it('CALL 槽位只消耗一次：`CALL A B` 里 A 是 call、B 是 mention', () => {
-    const refs = scanFileRefs('CALL ALPHA BETA\n', dict(['ALPHA', 'BETA']));
+    const refs = scanTuples('CALL ALPHA BETA\n', dict(['ALPHA', 'BETA']));
     expect(refs).toEqual([
       ['ALPHA', 1, 6, 1],
       ['BETA', 1, 12, 2],
@@ -103,25 +113,25 @@ describe('scanFileRefs · 引用面口径', () => {
   it('调用族全表 + SIF 前缀让槽位退化为 mention', () => {
     const cases = ['CALL F', 'TRYCALL F', 'TRYCCALL F', 'TRYCALLLIST F', 'TRYCCALLLIST F'];
     for (const line of cases) {
-      expect(scanFileRefs(`${line} F\n`, dict(['F']))[0]?.[3], line).toBe(1);
+      expect(scanTuples(`${line} F\n`, dict(['F']))[0]?.[3], line).toBe(1);
     }
     // SIF 不是调用族：F 落 mention；`JUMP 123` 的目标是行号，不产出引用
-    expect(scanFileRefs('SIF F > 1\n', dict(['F']))[0]?.[3]).toBe(2);
-    expect(scanFileRefs('JUMP 123\n', dict(['F']))).toEqual([]);
+    expect(scanTuples('SIF F > 1\n', dict(['F']))[0]?.[3]).toBe(2);
+    expect(scanTuples('JUMP 123\n', dict(['F']))).toEqual([]);
   });
 
   it('行尾空白不破坏 CALL 槽位（keywordEnd 用行首缩进算，与 trailing trim 无关）', () => {
-    expect(scanFileRefs('\t\tCALL ALPHA   \n', dict(['ALPHA']))).toEqual([['ALPHA', 1, 8, 1]]);
+    expect(scanTuples('\t\tCALL ALPHA   \n', dict(['ALPHA']))).toEqual([['ALPHA', 1, 8, 1]]);
   });
 
   it('空文本 / 空词典 ⇒ 空流水', () => {
-    expect(scanFileRefs('', dict(['A']))).toEqual([]);
-    expect(scanFileRefs('@A\nCALL A\n', dict([]))).toEqual([]);
+    expect(scanTuples('', dict(['A']))).toEqual([]);
+    expect(scanTuples('@A\nCALL A\n', dict([]))).toEqual([]);
   });
 
   it('CJK 函数名：定义与调用都算（真语料 99,118 条定义里 20,805 条含 CJK，字符集必须 Unicode）', () => {
     const text = '@M_KOJO_無個性_TEST\nCALL M_KOJO_無個性_TEST\n';
-    expect(scanFileRefs(text, dict(['M_KOJO_無個性_TEST']))).toEqual([
+    expect(scanTuples(text, dict(['M_KOJO_無個性_TEST']))).toEqual([
       ['M_KOJO_無個性_TEST', 1, 2, 0],
       ['M_KOJO_無個性_TEST', 2, 6, 1],
     ]);
@@ -129,19 +139,19 @@ describe('scanFileRefs · 引用面口径', () => {
 
   it('变量成员访问整体不算：`:` / `：` 任一侧紧邻都不算提及', () => {
     const text = 'IF CFLAG:ALPHA == 1\nALPHA:CFLAG\nPRINT ：ALPHA\n';
-    expect(scanFileRefs(text, dict(['ALPHA']))).toEqual([]);
+    expect(scanTuples(text, dict(['ALPHA']))).toEqual([]);
   });
 
   it('定义名按解析器终止符口径截（`(` / 空白 / `;`）：含 `.` 的名字整体是定义', () => {
-    expect(scanFileRefs('@A.B(X) ; 尾注\n', dict(['A.B']))).toEqual([['A.B', 1, 2, 0]]);
+    expect(scanTuples('@A.B(X) ; 尾注\n', dict(['A.B']))).toEqual([['A.B', 1, 2, 0]]);
   });
 
   it('定义名截后 trim 与列修正（真语料 4 条 `@` 名带全角空白的对齐口径）', () => {
-    expect(scanFileRefs('@　FOO\n', dict(['FOO']))).toEqual([['FOO', 1, 3, 0]]);
+    expect(scanTuples('@　FOO\n', dict(['FOO']))).toEqual([['FOO', 1, 3, 0]]);
   });
 
   it('CALL 名字槽被成员访问占据时不向后顺延（`CALL FLAG:ALPHA` 零产出）', () => {
-    expect(scanFileRefs('CALL FLAG:ALPHA\n', dict(['ALPHA', 'FLAG']))).toEqual([]);
+    expect(scanTuples('CALL FLAG:ALPHA\n', dict(['ALPHA', 'FLAG']))).toEqual([]);
   });
 });
 
@@ -156,8 +166,8 @@ describe('buildReferenceIndex / referencesOf · 聚合与查询', () => {
 
   it('按文件迭代序（= walk 序）→ 行 → 列确定排序；跨文件合并同名', () => {
     const refsByPath = new Map<string, FileRefs>([
-      ['/b.ERB', [['FOO', 2, 3, 1]]],
-      ['/a.ERB', [['FOO', 9, 1, 2], ['BAR', 1, 2, 0]]],
+      ['/b.ERB', flatRefs([['FOO', 2, 3, 1]])],
+      ['/a.ERB', flatRefs([['FOO', 9, 1, 2], ['BAR', 1, 2, 0]])],
     ]);
     const idx = buildReferenceIndex([f('/a.ERB'), f('/b.ERB')], refsByPath);
     expect(idx.bySymbol.get('FOO')).toEqual([
@@ -170,7 +180,7 @@ describe('buildReferenceIndex / referencesOf · 聚合与查询', () => {
   });
 
   it('endColumn = column + 归一化名长度；查询返回引用表本体', () => {
-    const idx = buildReferenceIndex([f('/a.ERB')], new Map([['/a.ERB', [['LONG_NAME', 4, 7, 2]] as FileRefs]]));
+    const idx = buildReferenceIndex([f('/a.ERB')], new Map([['/a.ERB', flatRefs([['LONG_NAME', 4, 7, 2]])]]));
     const refs = referencesOf({ files: new Map(), byName: new Map(), references: idx } as ErbIndex, 'long_name');
     expect(refs).toHaveLength(1);
     expect(refs[0]).toMatchObject({ line: 4, column: 7, endColumn: 16, kind: 'mention' });
