@@ -9,9 +9,13 @@
  *   ⑤ `--json` 结构稳定（顶层与每项键序固定），人类输出必带 `RESULT: PASS|FAIL`；
  *   ⑥ 每项读数来自真实输出解析（tsc / audit / conformance / vitest / build）。
  */
-import { describe, expect, it } from 'vitest';
+import { promises as fs } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
   ARTIFACT_LIMITS,
+  artifactLimitFace,
   buildCargoTestScript,
   CARGO_TEST_DIR,
   CORPUS_INTEGRATION,
@@ -1140,24 +1144,58 @@ describe('release-gate · version-sync（三处 version 逐字相等）', () => 
   });
 });
 
+/* 合成 dist fixture：在 `os.tmpdir()` 里造 `<root>/packages/app/dist` + N 个指定大小的真实文件，
+ * 让 `defaultReadDist` 走真读盘路径去量。不读仓库本地 dist（本机 14 件 / CI 发布产物 96 件，
+ * 两棵树读数不同步），也不在仓库根造目录（PITFALLS 265：describe 期求值会落到 cwd）。
+ * 全部在 `it` 里创建，`afterAll` 统一删。 */
+const distFixtures: string[] = [];
+
+async function makeTempRoot(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kojo-release-gate-dist-'));
+  distFixtures.push(root);
+  return root;
+}
+
+async function makeDistFixture(files: Array<{ rel: string; bytes: number }>, indexHtml = ENTRY_HTML): Promise<string> {
+  const root = await makeTempRoot();
+  const distDir = path.join(root, 'packages', 'app', 'dist');
+  await fs.mkdir(distDir, { recursive: true });
+  for (const file of files) {
+    const abs = path.join(distDir, ...file.rel.split('/'));
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, Buffer.alloc(file.bytes, 7));
+  }
+  if (indexHtml.length > 0 && !files.some((file) => file.rel === 'index.html')) {
+    await fs.writeFile(path.join(distDir, 'index.html'), indexHtml, 'utf8');
+  }
+  return root;
+}
+
 describe('release-gate · artifact-audit（dist 上界）', () => {
-  it('阈值常量随 LAU-2 角色表批重钉：入口 1,100 kB / dist 11.1 MiB / 94 件', () => {
-    // 2026-10-26 启动器落地批：85 件 / 10.5 MiB → 90 件 / 11.0 MiB（逐块归因见
-    // `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 注释）。这条断言是"改阈值必须留痕"的闸：
-    // 抬数时先改注释说清增量来自哪里，再改这里。
-    // 2026-10-27 LAU-3b 收尾批：90 → 92 件（改名对话框懒块 + `kit-check` 共享块抽取；
-    // 改前/改后各真实构建一次，`dist/assets` 89 → 91），总量与入口不动。
-    // 2026-10-27 LAU-3b-FLIP 批：92 → 93 件——增量属变基拉上的上游五笔（本支自身那次
-    // 构建仍是 92 件 / assets 91 枚，入口 249,187 → 253,055 B），未拆到单一 chunk。
-    // 2026-10-27 LAU-1 / D2 合流批：93 → 95 件、11.0 → 11.1 MiB——`protocol-*.js` 1.9 KB
-    // 与 `edit-*.js` 0.6 KB 两枚共享块（v3 主路 + v2 回滚路共同引用），入口不动。
-    // 2026-10-27 LAU-6 注入批：95 → 96 件——`injection-*.js` 7.6 KB 共享块（`@原生`
-    // 子树执行器，被 semantic 与 worker 侧两块共同引用），总量 11.06 MiB / 入口不动。
-    // 2026-10-27 LAU-6/D3 收尾批：96 → 93 件——`disposeInjectionClients()` 把它接成
-    // `editor-global-providers` 的静态边，`injection-*.js` 与 `protocol-*.js` 并回该块。
-    // 2026-10-27 LAU-2 角色表批：93 → 94 件——`theme-*.js` 共享块（角色表让主题装配同时被
-    // 入口与懒块消费，原内联在入口里），字节量近中性、入口 262,461 → 264,922 B。
-    expect(ARTIFACT_LIMITS).toEqual({ entryBytes: 1_100_000, distBytes: Math.round(11.1 * 1024 * 1024), files: 94 });
+  afterAll(async () => {
+    await Promise.all(distFixtures.map((root) => fs.rm(root, { recursive: true, force: true })));
+  });
+
+  it('上界只有一处真源：`ARTIFACT_LIMITS` 冻结，渲染面（入口 kB / dist MiB / 件数）由它换算', () => {
+    // 每次抬闸的逐块归因（启动器批 → LAU-3b → … → LAU-4 第一步 94 → 96 件 / 11.1 → 11.2 MiB）
+    // 都记在 `tools/release-gate.mjs` 的 `ARTIFACT_LIMITS` 注释里——那里是唯一真源。
+    // 这条闸只钉两件事：① 常量仍在（冻结、三项都是正整数）；② 脚本文案与测试断言共用的
+    // 渲染面确实由常量换算。**不再在这里抄一份 11.1 / 94**：抄两份的下场就是 LAU-4 抬闸后
+    // 测试仍断旧数，`:1201` 与这条一起红（2026-10-30 修）。抬闸时只改常量 + 它的注释。
+    expect(Object.isFrozen(ARTIFACT_LIMITS)).toBe(true);
+    expect(ARTIFACT_LIMITS.entryBytes).toBe(1_100_000);
+    for (const value of [ARTIFACT_LIMITS.entryBytes, ARTIFACT_LIMITS.distBytes, ARTIFACT_LIMITS.files]) {
+      expect(Number.isInteger(value)).toBe(true);
+      expect(value).toBeGreaterThan(0);
+    }
+    const face = artifactLimitFace();
+    expect(face).toEqual({
+      entryKB: 1_100,
+      distMiB: Math.round((ARTIFACT_LIMITS.distBytes / (1024 * 1024)) * 100) / 100,
+      files: ARTIFACT_LIMITS.files,
+    });
+    // 默认入参就是导出常量本身（别给渲染面再造一个影子默认值）
+    expect(artifactLimitFace()).toEqual(artifactLimitFace(ARTIFACT_LIMITS));
   });
 
   it('达标 ⇒ PASS，readings 记件数 / 总量 / 入口，tail 打印实测值', async () => {
@@ -1198,7 +1236,10 @@ describe('release-gate · artifact-audit（dist 上界）', () => {
     const item = report.items[0];
     expect(item.readings.exceeded).toEqual(['dist']);
     expect(item.readings.files).toBe(14);
-    expect(item.tail).toMatch(/dist 总量 = [\d.]+ MiB ＞ 上限 11\.1 MiB/);
+    // 上限文案必须等于常量换算出来的那个数（不在这里再抄一份 11.2）
+    const face = artifactLimitFace();
+    expect(item.tail).toContain(`dist 总量 = ${item.readings.distMiB} MiB ＞ 上限 ${face.distMiB} MiB`);
+    expect(item.readings.limits).toEqual(face);
   });
 
   it('产物件数超上限 ⇒ FAIL，tail 打印实测件数与当前上界', async () => {
@@ -1263,11 +1304,38 @@ describe('release-gate · artifact-audit（dist 上界）', () => {
     expect(measureArtifacts({ files: [], indexHtml: '' }).exceeded).toEqual(['entry-missing']);
   });
 
-  it('真目录读数不抛错：dist 在不在都给出可读账（CI 无构建产物时也不红）', async () => {
-    const result = await inspectArtifacts();
-    expect(typeof result.readings.present).toBe('boolean');
-    expect([0, 1]).toContain(result.rc);
-    if (result.readings.present === false) expect(result.tail).toContain('产物目录不存在或为空');
+  it('真读盘路径量合成 dist：件数 / 总量 / 入口按实测记账，缺目录才说缺（不依赖仓库本地 dist）', async () => {
+    // 达标档：13 件（`baselineDistFiles` 含 index.html）+ 入口仍取 index.html 里那条 module script
+    const files = baselineDistFiles();
+    const root = await makeDistFixture(files);
+    const green = await inspectArtifacts({ root });
+    expect(green.rc).toBe(0);
+    expect(green.readings).toMatchObject({
+      present: true,
+      files: files.length,
+      entry: 'assets/index-entry.js',
+      entryBytes: 865_900,
+      exceeded: [],
+    });
+    expect(green.readings.distMiB).toBeCloseTo(2.3, 2);
+    expect(green.readings.limits).toEqual(artifactLimitFace());
+
+    // 件数档：盘上真放 N = 上限 + 1 个文件（总量远低于上界）⇒ 只报 files 一项
+    const overCount = ARTIFACT_LIMITS.files + 1;
+    const crowd = [{ rel: 'index.html', bytes: 1_000 }, { rel: 'assets/index-entry.js', bytes: 800_000 }];
+    const extra = overCount - crowd.length;
+    for (let index = 0; index < extra; index += 1) crowd.push({ rel: `assets/c-${index}.js`, bytes: 1_000 });
+    const over = await inspectArtifacts({ root: await makeDistFixture(crowd) });
+    expect(over.rc).toBe(1);
+    expect(over.readings.files).toBe(overCount);
+    expect(over.readings.exceeded).toEqual(['files']);
+    expect(over.tail).toContain(`产物件数 = ${overCount} ＞ 上限 ${artifactLimitFace().files}`);
+
+    // 缺档：临时根里没有 packages/app/dist ⇒ present:false + 点名目录与下一步（CI 无构建产物时也不炸）
+    const missing = await inspectArtifacts({ root: await makeTempRoot() });
+    expect(missing.rc).toBe(1);
+    expect(missing.readings.present).toBe(false);
+    expect(missing.tail).toContain('产物目录不存在或为空');
   });
 });
 

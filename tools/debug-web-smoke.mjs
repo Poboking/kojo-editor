@@ -12,6 +12,10 @@
  * `foldingRanges()`，并用 `search_text` 的 include globs 跑一遍 fixture —— 大小写按
  * Rust 口径**敏感**（fixture 只有 `.ERB`，写成全小写扩展名的 glob 必须一个都不回）。
  *
+ * 语言面自检（2026-10-30 第二批）：`editor.selfCheck()` 硬断言 `ok === true`（hover/suggest
+ * 靠 Monaco 私有 DOM 形态，升级即静默失效，红线由它兜），`hoverAt` / `suggestAt` 只钉
+ * **不抛 + 返回形态**（该位置没内容属正常，不拿内容当契约）。
+ *
  * 与 `smoke-tauri-dom.mjs` 的分工：那把刀验**桌面壳**（真 IPC / 真机右键），
  * 这把刀验**浏览器调试模式**（多 agent 无桌面壳时的体感 / UI / 功能验证通道）。
  * 样例工程 = `fixtures/mini-game` 复制进沙盒（可写域内，保存链路也能测）。
@@ -412,6 +416,116 @@ try {
     !globLower?.__err && lowerPaths.length === 0 && Number(globLower?.filtered) >= 1,
     globLower?.__err ??
       `${lowerPaths.length} 文件（应为 0）· filtered=${globLower.filtered}（≥1 才证明 glob 真编译并使上了，不是被忽略）· 扫描 ${globLower.scanned} · 越界示例：${lowerPaths.slice(0, 3).join(', ') || '无'}`,
+  );
+
+  // ⑤e 语言面自检（2026-10-30 第二批 §3.1）：hover/suggest 依赖 Monaco 私有 DOM 形态，
+  //     Monaco 一升级就是**静默失效**（不报错、只是永远读不到）。selfCheck() 是"这套选择器
+  //     在当前构建还成不成立"的唯一读数，所以这里**硬断言 ok===true**——不许"API 不在就跳过"，
+  //     缺 API 本身就是契约没落地，红得对。失败信息把每一项摊开，红了一眼看出是哪条腿断。
+  const selfRes = await evalInPage(
+    `(async () => {
+      const ed = __kojoDebug.editor;
+      if (typeof ed.selfCheck !== 'function') return { __missing: 'editor.selfCheck 不是函数：' + typeof ed.selfCheck };
+      const r = await ed.selfCheck();
+      const s = r && r.selectors;
+      return {
+        monacoVersion: r ? r.monacoVersion : '__noReturn',
+        languageId: r ? r.languageId : undefined,
+        selectors: s ? {
+          hover: s.hover, suggest: s.suggest, suggestRow: s.suggestRow,
+          labelName: s.labelName, detailsLabel: s.detailsLabel,
+          foldingContribution: s.foldingContribution,
+        } : null,
+        foldingShape: r ? r.foldingShape : undefined,
+        ok: r ? r.ok : undefined,
+      };
+    })()`,
+    30000,
+  );
+  const selfSel = selfRes?.selectors;
+  const selKeys = ['hover', 'suggest', 'suggestRow', 'labelName', 'detailsLabel', 'foldingContribution'];
+  const selShapeOk =
+    !!selfSel && typeof selfSel === 'object' && selKeys.every((k) => typeof selfSel[k] === 'boolean');
+  const foldingShapeOk =
+    selfRes?.foldingShape === 'regions' ||
+    selfRes?.foldingShape === 'ranges' ||
+    selfRes?.foldingShape === 'promise' ||
+    selfRes?.foldingShape === 'none';
+  const selfOk =
+    !selfRes?.__err &&
+    !selfRes?.__missing &&
+    (selfRes?.monacoVersion === null || typeof selfRes?.monacoVersion === 'string') &&
+    (selfRes?.languageId === null || typeof selfRes?.languageId === 'string') &&
+    selShapeOk &&
+    foldingShapeOk &&
+    selfRes?.ok === true;
+  check(
+    'editor.selfCheck() 形状合规且 ok===true',
+    selfOk === true,
+    selfRes?.__err ||
+      selfRes?.__missing ||
+      `monacoVersion=${JSON.stringify(selfRes?.monacoVersion)} · languageId=${JSON.stringify(selfRes?.languageId)} · ok=${JSON.stringify(selfRes?.ok)} · foldingShape=${JSON.stringify(selfRes?.foldingShape)} · selectors=${
+        selShapeOk ? selKeys.map((k) => `${k}=${selfSel[k]}`).join(',') : JSON.stringify(selfSel)
+      }`,
+  );
+
+  // ⑤f hoverAt / suggestAt 不抛（同批 §3.2/§3.3）：这两条只钉**形态与不抛**，不钉"必须有内容"——
+  //     fixture 的 (1,1) 未必有 hover / 补全候选，硬要求非空就是拿内容当契约。
+  //     注意：两者都会移动光标并抢焦点，所以放在语言面读数之后、截图判据之前，
+  //     后面「截图不吃缓存帧」比的是两拍相对差，光标位置对两拍一视同仁。
+  const hovRes = await evalInPage(
+    `(async () => {
+      const r = await __kojoDebug.editor.hoverAt(1, 1, { timeoutMs: 1500 });
+      if (r === null) return { kind: 'null' };
+      return { kind: 'object', textType: typeof r.text, text: r.text, rowsIsArray: Array.isArray(r.rows), rows: r.rows, keys: Object.keys(r) };
+    })()`,
+    30000,
+  );
+  const hovOk =
+    !hovRes?.__err &&
+    (hovRes?.kind === 'null' ||
+      (hovRes?.kind === 'object' &&
+        hovRes?.textType === 'string' &&
+        hovRes?.rowsIsArray === true &&
+        Array.isArray(hovRes?.rows) &&
+        hovRes.rows.every((x) => typeof x === 'string')));
+  check(
+    'editor.hoverAt(1,1,{timeoutMs:1500}) 不抛，回 null 或 {text:string, rows:array}',
+    hovOk === true,
+    hovRes?.__err ||
+      (hovRes?.kind === 'null'
+        ? 'null（该位置无 hover，如实回）'
+        : `text=${JSON.stringify(String(hovRes?.text ?? '').slice(0, 60))} · rows=${Array.isArray(hovRes?.rows) ? hovRes.rows.length : JSON.stringify(hovRes?.rows)} 行 · keys=${(hovRes?.keys ?? []).join(',')}`),
+  );
+
+  const sugRes = await evalInPage(
+    `(async () => {
+      const r = await __kojoDebug.editor.suggestAt(1, 1, { timeoutMs: 1500 });
+      return {
+        keys: r && typeof r === 'object' ? Object.keys(r) : null,
+        itemsIsArray: Array.isArray(r && r.items),
+        itemsLen: Array.isArray(r && r.items) ? r.items.length : -1,
+        countType: typeof (r && r.count),
+        count: r && r.count,
+        sample: Array.isArray(r && r.items) ? r.items.slice(0, 3) : null,
+      };
+    })()`,
+    30000,
+  );
+  const sugOk =
+    !sugRes?.__err &&
+    sugRes?.itemsIsArray === true &&
+    sugRes?.countType === 'number' &&
+    Number.isFinite(sugRes?.count) &&
+    sugRes.count >= 0 &&
+    // 如实口径：limit 会切 items，所以 count 是命中总数，允许 >= items.length
+    (sugRes.count === sugRes.itemsLen || sugRes.count >= sugRes.itemsLen) &&
+    sugRes.itemsLen >= 0;
+  check(
+    'editor.suggestAt(1,1,{timeoutMs:1500}) 不抛，{items:Array, count:number} 且计数自洽',
+    sugOk === true,
+    sugRes?.__err ||
+      `count=${JSON.stringify(sugRes?.count)} · items.length=${sugRes?.itemsLen} · 自洽=${sugRes?.count >= sugRes?.itemsLen} · keys=${(sugRes?.keys ?? []).join(',')} · 例：${JSON.stringify((sugRes?.sample ?? []).map((x) => (x && (x.label ?? x.insertText)) || x)).slice(0, 120)}`,
   );
 
   // ⑥ 命令注册表：所有功能的可编程入口在场
