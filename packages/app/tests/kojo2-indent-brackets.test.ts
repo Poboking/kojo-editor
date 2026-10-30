@@ -31,7 +31,7 @@ import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { KOJO2_LANGUAGE_CONFIGURATION, KOJO2_PAIRS } from '@kojo/kojo-lang/language-config';
 import { toMonacoLanguageConfiguration } from '../src/monaco/monaco-language-surface';
 import {
-  installKojo2IndentProvider,
+  installKojo2IndentOnTypeProvider,
   KOJO2_AUTO_CLOSE_GUARD_TRIGGER_CHARS,
   KOJO2_INDENT_TRIGGER_CHARS,
   kojo2AutoCloseGuardEditsAt,
@@ -509,7 +509,7 @@ describe('④ 围栏内自动闭合守卫：只删 Monaco 自动补出来的闭�
   it('provider 一条龙：flag 开注册一枚 on-type，触发字符两族；围栏内请求回删除编辑', () => {
     stubFlag(true);
     const fake = fakeMonaco();
-    const handle = installKojo2IndentProvider(fake.monaco);
+    const handle = installKojo2IndentOnTypeProvider(fake.monaco);
     expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['onType', KOJO2_LANGUAGE_ID]]);
     const provider = fake.registrations[0]!.provider as Monaco.languages.OnTypeFormattingEditProvider;
     expect(provider.autoFormatTriggerCharacters).toEqual([
@@ -527,7 +527,7 @@ describe('④ 围栏内自动闭合守卫：只删 Monaco 自动补出来的闭�
   it('flag 关 ⇒ 照挂（缩进是语言面，不看切流阶段）', () => {
     stubFlag(false);
     const fake = fakeMonaco();
-    const handle = installKojo2IndentProvider(fake.monaco);
+    const handle = installKojo2IndentOnTypeProvider(fake.monaco);
     expect(fake.registrations.map((entry) => [entry.kind, entry.id])).toEqual([['onType', KOJO2_LANGUAGE_ID]]);
     handle.dispose();
     handle.dispose();

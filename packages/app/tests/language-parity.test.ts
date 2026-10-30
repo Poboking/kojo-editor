@@ -543,7 +543,8 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
       /registerDocumentRangeFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/,
     );
     const host = sourceOf(GLOBAL_PROVIDERS).text;
-    expect(host).toContain('installSlotServiceProviders(monaco, {');
+    // 车 1–5：装配点只调这一枚工厂（宿主事实收在一个 `slotServiceHost` 常量里，两处共用）
+    expect(host).toContain('installSlotServiceProviders(monaco, slotServiceHost)');
   });
 
   it('注册单源：register-dialects.ts 只按 descriptor.languageServices 挑语言，不写死语言 id', () => {
@@ -838,14 +839,16 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
     }
   });
 
-  it('切流开关块里只剩**有副作用**的安装器（一键迁移 code action），语言面全在块外', () => {
+  it('切流开关块里只剩**写面**那一腿（一键迁移 code action），语言面全在块外', () => {
     const block = cutoverBlock(host);
-    expect(block).toContain('installKojo2CodeActionProvider');
-    // 迁移 code action 属迁移入口：它是唯一允许留在块里的 2.0 安装器
-    const installersInBlock = [...block.matchAll(/installKojo2[A-Za-z0-9_]+/g)].map(
+    // SDK-B5b 车 5（2026-10-31）：注册/翻译并进槽腿工厂 ⇒ 块里只剩"按写面名单装这一腿"
+    // 那一行宿主策略（`SLOT_SERVICE_WRITE_LEGS` 是数据，工厂与宿主读同一份）。
+    expect(block).toContain('installSlotServiceLegs(monaco, SLOT_SERVICE_WRITE_LEGS, slotServiceHost)');
+    // 迁移 code action 属迁移入口：块里只允许这一条写面装配行
+    const installersInBlock = [...block.matchAll(/install(?:Kojo2|SlotService)[A-Za-z0-9_]*/g)].map(
       (match) => match[0],
     );
-    expect(new Set(installersInBlock)).toEqual(new Set(['installKojo2CodeActionProvider']));
+    expect(new Set(installersInBlock)).toEqual(new Set(['installSlotServiceLegs']));
     // 语言面逐项在块外（块外的装配行由上面两条用例按能力逐项取证，这里反向点名）
     for (const installer of [
       // B3 语义收口：原生 provider 安装器已清零，装配点只装**捕获预取器**（注册在共享收口）
@@ -853,7 +856,7 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
       // SDK-B5b 车 1（2026-10-31）：补全 / 悬停的安装器已改名并语言无关化
       // （`installSlotServiceProviders`，两条腿在表里）；名字不再带 kojo2，判据不变
       'installSlotServiceProviders',
-      'installKojo2IndentProvider',
+      'installKojo2IndentOnTypeProvider',
       // SDK-B5b 车 2–4（2026-10-31）：格式化 / 签名 / 引用 / 改名 / 高亮 / 扩选 / 行上注解的
       // 安装器也已并进上面那枚语言无关的槽腿工厂（七枚 `kojo2-*` 文件随批删除）——
       // 名字逐个点在这儿，是为了让"谁把某一腿塞回切流块"当场红（名字已不存在 ⇒ 第二行断言
@@ -888,7 +891,10 @@ describe('副作用面：默认档仍关闭（源码守卫 + 行为断言）', (
       'ui/kojo2-open.ts',
       'ui/kojo2-open-paths.ts',
       'ui/kojo2-model-language.ts',
-      'monaco/kojo2-code-actions.ts',
+      // SDK-B5b 车 5（2026-10-31）：迁移 code action 的安装器并进槽腿工厂后，**开关仍在宿主**
+      // （装配点的切流块）——工厂与 `monaco/slot-service-providers.ts` 都不许读它，所以这一条
+      // 改钉宿主装配点本文件（`GLOBAL_PROVIDERS`）。
+      GLOBAL_PROVIDERS,
     ];
     for (const rel of guarded) {
       expect(sourceOf(rel).text, `${rel} 不再读 isKojo2CutoverEnabled（写面被放出来了）`).toContain(

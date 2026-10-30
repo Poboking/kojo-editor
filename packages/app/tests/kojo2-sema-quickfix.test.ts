@@ -20,10 +20,13 @@ import type * as Monaco from '../src/monaco/entry';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import { provideCodeActions } from '@kojo/plugin-kojo-lang';
 import { kojo2DiagnosticsToMarkers } from '../src/ui/kojo2-problem-wiring';
+// SDK-B5b 车 5（2026-10-31）：那枚安装器并进通用槽腿工厂（`legOf('codeAction', …)`），
+// 本文件改经 `installSlotServiceLegs(monaco, ['codeAction'], host)` 装配——与生产装配点
+// 同一条壳（门控在宿主，本文件不测门控）。
 import {
-  KOJO2_CODE_ACTION_COMMAND,
-  installKojo2CodeActionProvider,
-} from '../src/monaco/kojo2-code-actions';
+  SLOT_CODE_ACTION_COMMAND,
+  installSlotServiceLegs,
+} from '../src/monaco/slot-service-providers';
 import { applyTextEdits } from '../src/ui/editor-global-providers';
 
 const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
@@ -125,11 +128,11 @@ function install(
     applyEdits?: (model: Monaco.editor.ITextModel, edits: readonly EditorTextEdit[]) => boolean;
   } = {},
 ): void {
-  installKojo2CodeActionProvider(fake.monaco, {
-    contributions: () => [
+  installSlotServiceLegs(fake.monaco, ['codeAction'], {
+    codeActionSlot: () => [
       { id: 'kojo2-codeActions', order: 10, provideActions: (file) => provideCodeActions(file) },
     ],
-    applyEdits: extra.applyEdits ?? (() => false),
+    applyCodeActionEdits: extra.applyEdits ?? (() => false),
   });
 }
 
@@ -178,7 +181,7 @@ describe('①三条语义动作经槽上屏（码 / 行列 / 编辑逐字）', (
     expect(action.title).toContain('# 设 临时 整数');
     // 关联诊断仍带着 sema 码（宿主按它画关联高亮 / 排序）
     expect(action.diagnostics![0]!.code).toBe('core/expr/unknown-symbol');
-    expect(action.command?.id).toBe(KOJO2_CODE_ACTION_COMMAND);
+    expect(action.command?.id).toBe(SLOT_CODE_ACTION_COMMAND);
   });
 
   it('type-mismatch ⇒ 只换 `# 设` 的声明类型 token（声明行整行替换）', () => {

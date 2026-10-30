@@ -2,10 +2,9 @@
   "_readme": "tools/audit-language.mjs 的棘轮基线：每文件只数代码行命中数（files）与被合法豁免的行数（exempt），两者都只拦增长。收敛后跑 `node tools/audit-language.mjs --update-baseline` 重钉。",
   "checks": {
     "M1(游戏名·引擎词汇)": {
-      "total": 5,
+      "total": 4,
       "files": {
         "packages/app/src/bootstrap.ts": 2,
-        "packages/app/src/monaco/erb-completion-variables.ts": 1,
         "packages/app/src/monaco/erb-directives.ts": 1,
         "packages/app/src/ui/WelcomeView.tsx": 1
       },
@@ -17,9 +16,8 @@
       }
     },
     "M2(语言id分支)": {
-      "total": 142,
+      "total": 128,
       "files": {
-        "packages/app/src/monaco/document-links.ts": 3,
         "packages/app/src/monaco/erb-callhierarchy-provider.ts": 2,
         "packages/app/src/monaco/erb-completion-members.ts": 2,
         "packages/app/src/monaco/erb-completion-words.ts": 2,
@@ -34,13 +32,9 @@
         "packages/app/src/monaco/kojo-format.ts": 7,
         "packages/app/src/monaco/kojo-language.ts": 5,
         "packages/app/src/monaco/kojo-rename.ts": 2,
-        "packages/app/src/monaco/kojo2-code-actions.ts": 3,
         "packages/app/src/monaco/kojo2-folding.ts": 2,
-        "packages/app/src/monaco/kojo2-highlight.ts": 2,
         "packages/app/src/monaco/kojo2-indent.ts": 7,
         "packages/app/src/monaco/kojo2-language.ts": 5,
-        "packages/app/src/monaco/kojo2-rename.ts": 2,
-        "packages/app/src/monaco/kojo2-selection-range.ts": 2,
         "packages/app/src/monaco/kojo2-semantic.ts": 2,
         "packages/app/src/monaco/language-capabilities.ts": 7,
         "packages/app/src/monaco/language-registry.ts": 3,
@@ -54,7 +48,7 @@
         "packages/app/src/ui/editor-global-providers.ts": 6,
         "packages/app/src/ui/editor-pane/pane-helpers.ts": 3,
         "packages/app/src/ui/editor-pane/use-breadcrumb.ts": 2,
-        "packages/app/src/ui/editor-pane/use-monaco-instance.ts": 4,
+        "packages/app/src/ui/editor-pane/use-monaco-instance.ts": 2,
         "packages/app/src/ui/EditorPane.tsx": 3,
         "packages/app/src/ui/kojo2-model-language.ts": 2,
         "packages/app/src/ui/ShellLayout.tsx": 2
@@ -71,7 +65,7 @@
       "files": {
         "packages/app/src/bootstrap.ts": 1,
         "packages/app/src/monaco/kojo-hover.ts": 2,
-        "packages/app/src/monaco/kojo2-code-actions.ts": 1,
+        "packages/app/src/monaco/slot-service-providers.ts": 1,
         "packages/app/src/monaco/tree-sitter/kojo2-assets.ts": 1,
         "packages/app/src/ui/CallHierarchyOverlay.tsx": 8,
         "packages/app/src/ui/editor-global-providers.ts": 6,

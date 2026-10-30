@@ -74,8 +74,9 @@
  *
  * ## 分层（B3j，2026-10-30）
  *
- * 判据（本文件）与翻译层（宿主 `app/monaco/kojo2-code-actions.ts`：model / 光标 / marker
- * → 契约请求、契约动作 → Monaco `CodeAction`、命令落地、切流开关）**分开住**。
+ * 判据（本文件）与翻译层（**SDK-B5b 车 5 起住宿主槽腿工厂**
+ * `app/monaco/slot-service-providers.ts` 的 `legOf('codeAction', …)`：model / 光标 / marker
+ * → 契约请求、契约动作 → Monaco `CodeAction`、命令落地；切流开关留在宿主装配点）**分开住**。
  * 供方是插件 `@kojo/plugin-kojo-lang` 的 `kojo2-codeActions` 贡献——它读不到宿主模块，
  * 判据留在宿主就必然长出第二份。
  */

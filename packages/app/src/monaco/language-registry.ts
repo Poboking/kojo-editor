@@ -76,14 +76,21 @@ export type SlotServiceKind =
    * ⚠ 本文件里的 `SlotServiceKind` 联合由 `language-slot-conformance.test.ts` **按源码字面量**
    * 解析（只剥行注释、不剥块注释）⇒ 块注释里别再写带引号的同样的字面量，否则会被数成第二个成员。
    */
-  | 'implementation';
+  | 'implementation'
+  // SDK-B5b 车 5（2026-10-31）：快速修复的 Monaco 适配腿也进这张表。
+  // 它与上面十四条**不是同一个槽**：供方在专用槽 `ui.editor.codeAction`（契约头注写死"再开一个
+  // 判别成员就是同一能力两条路径"），这一格只驱动"谁挂这枚 provider / 谁翻形状"，**不**驱动
+  // `ui.editor.languageService` 的判别。它是**写面 / 迁移入口**：宿主按切流策略单独装
+  // （见 `slot-service-providers.ts` 的 `SLOT_SERVICE_WRITE_LEGS`），不随只读语言面无条件装配。
+  | 'codeAction';
 
 /**
  * 「语言族」编辑器右键项的身份（additive，ERB-PARITY G8）。
  *
  * 取值 = `ui/editor-pane/editor-context-actions.ts` 里那几条动作的 `id`（同一件事只留一个
  * 命名法，测试对拍）。**不进 `capabilities`**：矩阵记的是 provider / 槽腿的注册面，而
- * 「快速修复」吃 CodeActionProvider（矩阵与 `SlotServiceKind` 刻意没有 codeAction 这一格）、
+ * 「快速修复」吃 CodeActionProvider（表里那一格 `codeAction` 只驱动注册与翻译，供方仍在专用
+ * 槽 `ui.editor.codeAction`——不是 `ui.editor.languageService` 的判别成员）、
  * 「一键修复」查 `decorator` + `codeAction` 两条槽、「看这一行的状态」查 `documentSymbol`
  * 槽腿、「切换 .kojo 预览」是宿主糖视图开关——都只是 descriptor 上的一格声明。
  *

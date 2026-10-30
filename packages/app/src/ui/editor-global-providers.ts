@@ -141,17 +141,23 @@ import {
 // K2 batch-4 → SDK-B5b 车 1（2026-10-31）：2.0 的补全 / 悬停**只经通用槽腿工厂**装配
 // （`monaco/slot-service-providers.ts`：`kind` → 注册 API / 请求构造 / 契约 → Monaco 形状的
 // 一张表，按 descriptor 的 `slotServices` 铺开）。本文件不再认识具体腿名，也不再传注入面。
-import { installSlotServiceProviders } from '../monaco/slot-service-providers';
-// K2 batch-5：2.0 一键迁移 code action（纯逻辑 + Monaco 翻译层同在那一枚里）。
-// 宿主只注入"怎么落地"（同一条 `applyTextEdits`），本文件仍零游戏名词。
-import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
+import {
+  SLOT_SERVICE_WRITE_LEGS,
+  installSlotServiceLegs,
+  installSlotServiceProviders,
+  type SlotServiceHost,
+} from '../monaco/slot-service-providers';
+// SDK-B5b 车 5（2026-10-31）：一键迁移 code action 的注册与翻译也并进上面那张槽腿表
+// （`legOf('codeAction', …)`）——旧安装器 `monaco/kojo2-code-actions.ts` 随批删除。
+// **门控仍留在宿主**：它是写面，装配点在切流开关块里按 `SLOT_SERVICE_WRITE_LEGS` 单独装；
+// 工厂自己不读开关（K2-SURFACE-DEFAULT 的只读语言面照旧无条件装配）。
 // K2 batch-6：折叠区间（worker `folds`）与回车缩进（on-type，`\n` 触发）。
 // 折叠只多一条**动态** import（worker 客户端仍在第一次真折叠时才装载），缩进是纯判据 + 一枚 provider。
 // B3h（2026-10-30）：折叠的原生 provider 已清零——注册走 `kojo-folding.ts` 的共享收口
 // （kojo2 由 descriptor 的 `slotServices: ['foldingRange']` 点名），worker 事实由本模块的
 // **预取器**在打开 / 改动时算进缓存，请求构造时取快照（槽内不 await）。
 import { installKojo2FoldsCache, kojo2FoldsSnapshotFor, prefetchKojo2Folds } from '../monaco/kojo2-folding';
-import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
+import { installKojo2IndentOnTypeProvider } from '../monaco/kojo2-indent';
 // 注：2.0 的**大纲**注册在 B2 批已删除（改由 `installDocumentSymbolProvider` 的槽腿承担，
 // 供方 = 插件 `@kojo/plugin-kojo-lang`），故这里不再 import `kojo2-symbols`。
 // SDK-B5b 车 2–4（2026-10-31）：格式化 / 签名 / 引用 / 改名 / 同符号高亮 / 结构化扩选 /
@@ -2090,57 +2096,42 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     //   作者看到的路径）；
     // - `projectIndex`：项目文件快照的现取口（引用 / 改名两条显式动作各取一次；行上注解**不取**，
     //   理由见 `slot-service-providers.ts` 的「为什么行上注解不取项目快照」）；
-    // - `uriForPath`：跨文件落点怎么造 URI（缺省 `monaco.Uri.file`）。
-    // 三格都不是语言判据：`@巡` 的 adapter 事实、判据、措辞全在包与插件。
-    globalDisposers.push(
-      installSlotServiceProviders(monaco, {
-        // 文件身份以**归属实例**为准（与 code action 那一枚同一条口径）。
-        filePathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
-        projectIndex: () => kojo2ProjectIndex,
-        uriForPath: (path) => monaco.Uri.file(path),
-      }),
-    );
+    // - `uriForPath`：跨文件落点怎么造 URI（缺省 `monaco.Uri.file`）；
+    // - `applyCodeActionEdits`（车 5）：写面动作的落地口（同一条 `applyTextEdits`，前后各一颗
+    //   undo 停点，CODEACTION-UNDO-STACK 口径）——只有宿主知道哪枚 EditorPane 持有这份 model、
+    //   以及糖视图那种"编辑无处可落"的实例档案。
+    // 四格都不是语言判据：`@巡` 的 adapter 事实、判据、措辞全在包与插件。
+    const slotServiceHost: SlotServiceHost = {
+      // 文件身份以**归属实例**为准（与 code action 那一腿同一条口径）。
+      filePathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
+      projectIndex: () => kojo2ProjectIndex,
+      uriForPath: (path) => monaco.Uri.file(path),
+      applyCodeActionEdits: (model, edits) => {
+        const ctx = owningPaneOf(model);
+        const ed = ctx?.editorRef.current ?? null;
+        if (!ctx || !ed) return false;
+        return applyTextEdits(ed, edits);
+      },
+    };
+    // 只读语言面：无条件装配（K2-SURFACE-DEFAULT）。写面 / 迁移入口的腿由下面那个块单独装。
+    globalDisposers.push(installSlotServiceProviders(monaco, slotServiceHost));
     if (isKojo2CutoverEnabled()) {
       // K2 batch-5 → **B3j（2026-10-30）**：Kojo 2.0 一键迁移 code action（裸旁白 / 裸引号 /
-      // 心形 / 着色 / 随机 / 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进 / 语义三条），
-      // 语言 id 只认 `kojo2`。**判据已整块搬进 `@kojo/kojo-lang/code-actions`、供方是插件
-      // `@kojo/plugin-kojo-lang` 的 `kojo2-codeActions` 贡献（槽 `ui.editor.codeAction`）**；
-      // 这一枚安装器只做"定位（model / 光标 / marker）→ 问槽 → 翻 Monaco 形状 → 落地"，
-      // 以及切流开关（迁移是写面）。落地走**同一条** `applyTextEdits`（前后各一颗 undo 停点，
-      // CODEACTION-UNDO-STACK 口径）——不新造第二条编辑应用机制，也不让 Monaco 自己 apply。
+      // 心形 / 着色 / 随机 / 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进 / 语义三条）。
+      // **判据已整块搬进 `@kojo/kojo-lang/code-actions`、供方是插件
+      // `@kojo/plugin-kojo-lang` 的 `kojo2-codeActions` 贡献（槽 `ui.editor.codeAction`）**。
+      // **SDK-B5b 车 5（2026-10-31）**：那一枚注册/翻译也并进槽腿表（`legOf('codeAction', …)`），
+      // 这里只做**宿主策略**——迁移是写面，切流关着就一条都不装（`SLOT_SERVICE_WRITE_LEGS`
+      // 是数据：工厂据此把它从"无条件装配"里排除，本块据同一份名单把它装回来）。
       globalDisposers.push(
-        installKojo2CodeActionProvider(monaco, {
-          // 插件是 bootstrap 的动态 import ⇒ 可能比本安装器晚激活；槽**每次请求现取**。
-          contributions: () => {
-            try {
-              return requireKernel().slots.query('ui.editor.codeAction');
-            } catch {
-              return [];
-            }
-          },
-          project: () => {
-            try {
-              return requireKernel().project.current();
-            } catch {
-              return null;
-            }
-          },
-          // 文件身份以**归属实例**为准（未命名 / 内存 model 的 uri 未必是作者看到的路径）。
-          filePath: (model) => owningPaneOf(model)?.filePathRef.current ?? null,
-          applyEdits: (model, edits) => {
-            const ctx = owningPaneOf(model);
-            const ed = ctx?.editorRef.current ?? null;
-            if (!ctx || !ed) return false;
-            return applyTextEdits(ed, edits);
-          },
-        }),
+        installSlotServiceLegs(monaco, SLOT_SERVICE_WRITE_LEGS, slotServiceHost),
       );
     }
     // K2 batch-6：回车缩进（on-type formatter，回车触发；判据 = core 词法的结构判据，
     // 见 `monaco/kojo2-indent.ts`）。它**改缓冲内容**，但改的是回车那一刻的缩进、整个动作
     // 可撤销——K2-SURFACE-DEFAULT 把它算**语言面**（作者不该因为没切流就缩不进去），因此
     // 无条件装配。缩进判不准就一个字符都不改（`onEnterRules` 仍是按键瞬间的那一层）。
-    globalDisposers.push(installKojo2IndentProvider(monaco));
+    globalDisposers.push(installKojo2IndentOnTypeProvider(monaco));
     // 注：2.0 的 inlay hints（B2c）与大纲（B2）更早归各自的共享收口（kojo2 descriptor 用
     // `slotServices` 点名），本段从来没有它们；行上注解的「不取项目快照」那一条缺口与理由
     // 随本批搬进 `slot-service-providers.ts` 的 `codeLensProvider` 头注（口径一字未改）。

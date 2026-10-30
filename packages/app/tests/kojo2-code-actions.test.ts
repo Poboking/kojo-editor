@@ -2,9 +2,14 @@
 /**
  * Kojo 2.0 一键迁移 code action 的**宿主适配腿**闸（K2 batch-5 → B3j，2026-10-30）。
  *
- * B3j 之后这枚 provider 只做四件事：**定位**（model / 光标 / marker）、**问槽**
+ * **SDK-B5b 车 5（2026-10-31）**起这枚 provider 住通用槽腿工厂
+ * （`monaco/slot-service-providers.ts` 的 `legOf('codeAction', …)`，旧安装器
+ * `monaco/kojo2-code-actions.ts` 随批删除）；本文件改经
+ * `installSlotServiceLegs(monaco, ['codeAction'], host)` 装配——与生产装配点同一条壳。
+ * 它只做四件事：**定位**（model / 光标 / marker）、**问槽**
  * （`ui.editor.codeAction`）、**翻译**（契约动作 → Monaco `CodeAction`）、**落地**
- * （宿主注入的 `applyEdits` → `applyTextEdits`），外加切流开关。判据在
+ * （宿主注入的 `applyCodeActionEdits` → `applyTextEdits`）。切流门控**不在这层**（宿主策略，
+ * 由 `kojo2-structure-gate.test.ts` ③ 行为取证），本层与"写面腿数据"两格见 ①。判据在
  * `@kojo/kojo-lang/code-actions`，供方是插件——所以本文件**用真插件贡献**跑通整条链，
  * 同时钉住"宿主侧零迁移规则"（源码针）。
  *
@@ -16,10 +21,10 @@
  *    真 model + 假 editor 的调用序 `停点 → executeEdits → 停点`；
  * 5. 分层针：本层不出现 `executeEdits` / `pushUndoStop`，也不 import 包里的判据。
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import * as monaco from '../src/monaco/entry';
 import {
   FIXTURE_ADAPTER,
@@ -32,21 +37,19 @@ import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 import { provideCodeActions } from '@kojo/plugin-kojo-lang';
 import { kojo2DiagnosticsToMarkers } from '../src/ui/kojo2-problem-wiring';
 import {
-  KOJO2_CODE_ACTION_COMMAND,
-  KOJO2_PROVIDED_CODE_ACTION_KINDS,
-  installKojo2CodeActionProvider,
-  type Kojo2CodeActionHost,
-} from '../src/monaco/kojo2-code-actions';
+  SLOT_CODE_ACTION_COMMAND,
+  SLOT_CODE_ACTION_KINDS,
+  SLOT_SERVICE_LEGS,
+  SLOT_SERVICE_WRITE_LEGS,
+  installSlotServiceLegs,
+  type SlotServiceHost,
+} from '../src/monaco/slot-service-providers';
 import { applyTextEdits } from '../src/ui/editor-global-providers';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
-/**
- * LAU-3 起缺省档是 `2.0-default`（切流语义**开着**）⇒ "flag 关"不再等于"没存过"。
- * 关 = 盘上显式一份 `v1-only` 计划（真源是阶段，不是旧布尔键）。
- */
-const KOJO2_PLAN_KEY = 'kojo.ui.kojo2Cutover.plan.v1';
-const KOJO2_OFF_PLAN = JSON.stringify({ version: 2, stage: 'v1-only', overrides: {} });
+
+/** 行分隔（与 Monaco 同口径；夹具里统一用这一枚，免得把转义写散） */
+const LINE_BREAK = /\r\n|\r|\n/;
 
 /* ============================== 夹具 ============================== */
 
@@ -146,33 +149,17 @@ function fakeModel(
     getLanguageId: () => languageId,
     getLineCount: () => text.split(/\r\n|\r|\n/).length,
     // `actionDiagnostics` → `decorationsToMarkers` 用这两格夹取行列（与真 model 同口径）
-    getLineMaxColumn: (line: number) =>
-      (text.split(/\r\n|\r|\n/)[line - 1] ?? '').length + 1,
+    getLineMaxColumn: (line: number) => (text.split(/\r\n|\r|\n/)[line - 1] ?? '').length + 1,
     isDisposed: () => false,
     uri,
   } as unknown as Monaco.editor.ITextModel;
 }
 
-function stubFlag(on: boolean): void {
-  const store = new Map<string, string>();
-  if (on) store.set(KOJO2_KEY, 'on');
-  else store.set(KOJO2_PLAN_KEY, KOJO2_OFF_PLAN);
-  vi.stubGlobal('window', {
-    localStorage: {
-      getItem: (key: string): string | null => store.get(key) ?? null,
-      setItem: (key: string, value: string): void => {
-        store.set(key, value);
-      },
-      removeItem: (key: string): void => {
-        store.delete(key);
-      },
-    },
-  });
-}
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+/**
+ * 本层不再读切流开关（车 5：门控是**宿主策略**，装配点在 `if (isKojo2CutoverEnabled())` 块里
+ * 用 `SLOT_SERVICE_WRITE_LEGS` 把这腿装回来）⇒ 夹具里没有 localStorage、也不需要 `afterEach`
+ * 清全局。门控行为由 `kojo2-structure-gate.test.ts` ③ 逐枚量注册次数。
+ */
 
 /** 真插件贡献（与装配时 `plugin.ts` 注册的是同一个函数） */
 function kojo2Contribution(): EditorCodeActionContribution {
@@ -185,11 +172,11 @@ function kojo2Contribution(): EditorCodeActionContribution {
 
 function install(
   fake: FakeMonaco,
-  over: Partial<Kojo2CodeActionHost> = {},
+  over: Partial<SlotServiceHost> = {},
 ): Monaco.IDisposable {
-  return installKojo2CodeActionProvider(fake.monaco, {
-    contributions: () => [kojo2Contribution()],
-    applyEdits: () => false,
+  return installSlotServiceLegs(fake.monaco, ['codeAction'], {
+    codeActionSlot: () => [kojo2Contribution()],
+    applyCodeActionEdits: () => false,
     ...over,
   });
 }
@@ -225,37 +212,29 @@ const NARRATION = '# 机 开场\n\n她点了点头。\n';
 
 /* ============================== 1. 注册纪律 ============================== */
 
-describe('①注册纪律：flag 关零注册 / flag 开只挂 kojo2 一枚', () => {
-  it('flag 关 ⇒ 注册函数一次都没被调用（零注册），句柄是空操作且可重复 dispose', () => {
-    stubFlag(false);
-    const fake = fakeMonaco();
-    const handle = install(fake);
-    expect(fake.providers).toHaveLength(0);
-    expect(fake.commands.size).toBe(0);
-    expect(() => {
-      handle.dispose();
-      handle.dispose();
-    }).not.toThrow();
-    expect(fake.disposed).toEqual([]);
+describe('①注册纪律：写面腿数据（门控在宿主）/ 只挂点名它的语言 / 回滚与幂等', () => {
+  it('写面腿数据：`codeAction` 在 `SLOT_SERVICE_WRITE_LEGS` 里，表里确有这一腿（无条件装配不含它）', () => {
+    // 门控**不在这层**（宿主策略）：这里只钉"工厂据哪份名单把写面腿排除在无条件装配之外"。
+    // 行为取证由 `kojo2-structure-gate.test.ts` ③ 按注册次数逐枚量（flag 关 ⇒ 零注册）。
+    expect(SLOT_SERVICE_WRITE_LEGS).toEqual(['codeAction']);
+    expect(SLOT_SERVICE_LEGS.map((leg) => leg.kind)).toContain('codeAction');
   });
 
-  it('flag 开 ⇒ 恰好一枚 provider + 一条命令，selector 只有 `kojo2`，类别声明齐两档', () => {
-    stubFlag(true);
+  it('装配 ⇒ 恰好一枚 provider + 一条命令，selector 只有 `kojo2`（写面腿只挂点名它的语言），类别声明齐两档', () => {
     const fake = fakeMonaco();
     const handle = install(fake);
     expect(fake.providers).toHaveLength(1);
     expect(fake.providers[0]!.selector).toBe(KOJO2_LANGUAGE_ID);
-    expect(fake.commands.has(KOJO2_CODE_ACTION_COMMAND)).toBe(true);
+    expect(fake.commands.has(SLOT_CODE_ACTION_COMMAND)).toBe(true);
     expect(fake.providers[0]!.metadata).toEqual({
-      providedCodeActionKinds: KOJO2_PROVIDED_CODE_ACTION_KINDS,
+      providedCodeActionKinds: SLOT_CODE_ACTION_KINDS,
     });
-    expect(KOJO2_PROVIDED_CODE_ACTION_KINDS).toEqual(['quickfix', 'refactor']);
+    expect(SLOT_CODE_ACTION_KINDS).toEqual(['quickfix', 'refactor']);
     handle.dispose();
     expect(fake.disposed).toEqual(['command', 'provider']);
   });
 
   it('provider 注册抛错 ⇒ 已挂上的命令撤回 + 错误外抛（全有或全无）', () => {
-    stubFlag(true);
     const fake = fakeMonaco({ failOn: 'provider' });
     expect(() => install(fake)).toThrow('桩：注册 provider 抛错');
     expect(fake.disposed).toEqual(['command']);
@@ -263,7 +242,6 @@ describe('①注册纪律：flag 关零注册 / flag 开只挂 kojo2 一枚', ()
   });
 
   it('撤一枚抛错不许带走其余（dispose 逐枚隔离）', () => {
-    stubFlag(true);
     const fake = fakeMonaco({ failDisposeOn: 'command' });
     const handle = install(fake);
     expect(() => handle.dispose()).not.toThrow();
@@ -275,7 +253,6 @@ describe('①注册纪律：flag 关零注册 / flag 开只挂 kojo2 一枚', ()
 
 describe('②取数面：语言门 / 零波浪线 / 抛错隔离', () => {
   it('v1 语言面（`kojo`）零动作：provider 只答 `kojo2`', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     install(fake);
     const model = fakeModel(NARRATION, { languageId: 'kojo' });
@@ -283,11 +260,10 @@ describe('②取数面：语言门 / 零波浪线 / 抛错隔离', () => {
   });
 
   it('零波浪线 ⇒ 一次都不问槽（判据之前那次整篇 parse 不白付）', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     let asked = 0;
     install(fake, {
-      contributions: () => [
+      codeActionSlot: () => [
         {
           id: 'probe',
           provideActions: () => {
@@ -310,7 +286,6 @@ describe('②取数面：语言门 / 零波浪线 / 抛错隔离', () => {
   });
 
   it('取文抛错 / provider 体内抛错 ⇒ 空动作、不外抛', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     install(fake);
     const model = fakeModel(NARRATION, { failGetValue: true });
@@ -318,7 +293,6 @@ describe('②取数面：语言门 / 零波浪线 / 抛错隔离', () => {
   });
 
   it('一家贡献抛错不带走另一家（逐家隔离）', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     const throwing: EditorCodeActionContribution = {
       id: 'boom',
@@ -326,18 +300,17 @@ describe('②取数面：语言门 / 零波浪线 / 抛错隔离', () => {
         throw new Error('桩：贡献方炸了');
       },
     };
-    install(fake, { contributions: () => [throwing, kojo2Contribution()] });
+    install(fake, { codeActionSlot: () => [throwing, kojo2Contribution()] });
     const actions = requestActions(fake, fakeModel(NARRATION), NARRATION, 3);
     expect(actions).toHaveLength(1);
     expect(actions[0]!.title).toContain('补旁白锚点');
   });
 
   it('路径取不到（无归属实例且 uri 无路径）⇒ 不问槽、空动作', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     let asked = 0;
     install(fake, {
-      contributions: () => [
+      codeActionSlot: () => [
         {
           id: 'probe',
           provideActions: () => {
@@ -346,7 +319,7 @@ describe('②取数面：语言门 / 零波浪线 / 抛错隔离', () => {
           },
         },
       ],
-      filePath: () => null,
+      filePathOf: () => null,
     });
     const model = fakeModel(NARRATION, { uriPath: '' });
     expect(requestActions(fake, model, NARRATION, 3)).toEqual([]);
@@ -358,7 +331,6 @@ describe('②取数面：语言门 / 零波浪线 / 抛错隔离', () => {
 
 describe('③翻译面：command 而非 edit、关联诊断、唯一解 preferred', () => {
   it('真插件供方 → 一条动作：标题 / quickfix / command / 关联诊断 / isPreferred', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     install(fake);
     const actions = requestActions(fake, fakeModel(NARRATION), NARRATION, 3);
@@ -366,7 +338,7 @@ describe('③翻译面：command 而非 edit、关联诊断、唯一解 preferre
     const action = actions[0]!;
     expect(action.title).toBe('补旁白锚点 `>`：> 她点了点头。');
     expect(action.kind).toBe('quickfix');
-    expect(action.command?.id).toBe(KOJO2_CODE_ACTION_COMMAND);
+    expect(action.command?.id).toBe(SLOT_CODE_ACTION_COMMAND);
     expect(action.edit).toBeUndefined(); // 落地必须走宿主那条带停点的通道
     expect(action.isPreferred).toBe(true);
     expect(action.diagnostics).toHaveLength(1);
@@ -375,7 +347,6 @@ describe('③翻译面：command 而非 edit、关联诊断、唯一解 preferre
   });
 
   it('多解不置 preferred；改缩进走 refactor 档', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     install(fake);
     const source = '# 机 开场\n\n? 数值 == 1\n      > a\n? 否\n    > b\n';
@@ -386,7 +357,6 @@ describe('③翻译面：command 而非 edit、关联诊断、唯一解 preferre
   });
 
   it('两条 quickfix 同时出现 ⇒ 都不置 preferred（多解不替作者选）', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     const first: EditorCodeAction = {
       title: '甲',
@@ -401,7 +371,7 @@ describe('③翻译面：command 而非 edit、关联诊断、唯一解 preferre
       run: () => undefined,
     };
     install(fake, {
-      contributions: () => [
+      codeActionSlot: () => [
         { id: 'two', provideActions: () => [first, second] },
       ],
     });
@@ -411,7 +381,6 @@ describe('③翻译面：command 而非 edit、关联诊断、唯一解 preferre
   });
 
   it('关联诊断按 model 夹取（marker 的行列落在 model 里）', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     install(fake);
     const actions = requestActions(fake, fakeModel(NARRATION), NARRATION, 3);
@@ -425,11 +394,10 @@ describe('③翻译面：command 而非 edit、关联诊断、唯一解 preferre
 
 describe('④落地面：同一批 EditorTextEdit / run 型动作 / 停点复用', () => {
   it('命令回调把**同一批** EditorTextEdit 交给注入的 applyEdits 端口', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     const applied: { readonly edits: readonly EditorTextEdit[] }[] = [];
     install(fake, {
-      applyEdits: (_model, edits) => {
+      applyCodeActionEdits: (_model, edits) => {
         applied.push({ edits });
         return true;
       },
@@ -441,11 +409,10 @@ describe('④落地面：同一批 EditorTextEdit / run 型动作 / 停点复用
   });
 
   it('没有 `edits` 的动作退回契约旧语义（`run` 发意图）', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     const ran: string[] = [];
     install(fake, {
-      contributions: () => [
+      codeActionSlot: () => [
         {
           id: 'intent',
           provideActions: () => [
@@ -458,7 +425,6 @@ describe('④落地面：同一批 EditorTextEdit / run 型动作 / 停点复用
           ],
         },
       ],
-      project: () => null,
     });
     const actions = requestActions(fake, fakeModel(NARRATION), NARRATION, 3);
     expect(actions).toHaveLength(1);
@@ -467,16 +433,15 @@ describe('④落地面：同一批 EditorTextEdit / run 型动作 / 停点复用
   });
 
   it('命令 key 不认识 / 模型已不在 ⇒ 静默不落（不崩）', () => {
-    stubFlag(true);
     const fake = fakeMonaco();
     let calls = 0;
     install(fake, {
-      applyEdits: () => {
+      applyCodeActionEdits: () => {
         calls += 1;
         return true;
       },
     });
-    expect(() => fake.runCommand(KOJO2_CODE_ACTION_COMMAND, 'no-such-key')).not.toThrow();
+    expect(() => fake.runCommand(SLOT_CODE_ACTION_COMMAND, 'no-such-key')).not.toThrow();
     expect(calls).toBe(0);
   });
 
@@ -508,21 +473,25 @@ describe('④落地面：同一批 EditorTextEdit / run 型动作 / 停点复用
 
 /* ============================== 5. 分层针 ============================== */
 
-describe('⑤分层：判据不在宿主 / 落地只有一个开口', () => {
-  it('源码钉子：宿主接线在 flag 块里、落地接到 `applyTextEdits`', () => {
+describe('⑤分层：判据不在宿主 / 落地只有一个开口 / 门控只在宿主', () => {
+  it('源码钉子：写面腿在切流块里装、落地接到 `applyTextEdits`', () => {
     const providers = codeOf(
       readFileSync(path.resolve(HERE, '..', 'src', 'ui', 'editor-global-providers.ts'), 'utf8'),
     );
+    // 车 5：注册/翻译在工厂，**宿主策略**留在切流块里（同一份 `SLOT_SERVICE_WRITE_LEGS` 数据）
     expect(providers).toMatch(
-      /if \(isKojo2CutoverEnabled\(\)\) \{[\s\S]{0,4000}?installKojo2CodeActionProvider\(monaco, \{[\s\S]{0,4000}?return applyTextEdits\(ed, edits\);/,
+      /if \(isKojo2CutoverEnabled\(\)\) \{[\s\S]{0,1200}?installSlotServiceLegs\(monaco, SLOT_SERVICE_WRITE_LEGS, slotServiceHost\)/,
+    );
+    expect(providers).toMatch(
+      /applyCodeActionEdits: \(model, edits\) => \{[\s\S]{0,400}?return applyTextEdits\(ed, edits\);/,
     );
     // 开口只有一个：宿主里 `ed.executeEdits(` 仍然只有 applyTextEdits 那一处
     expect(providers.match(/ed\.executeEdits\(/g)?.length).toBe(1);
   });
 
-  it('本层不出现 `executeEdits` / `pushUndoStop`，也不 import 包里的判据', () => {
+  it('工厂层不出现 `executeEdits` / `pushUndoStop`，也不 import 包里的判据', () => {
     const layer = codeOf(
-      readFileSync(path.resolve(HERE, '..', 'src', 'monaco', 'kojo2-code-actions.ts'), 'utf8'),
+      readFileSync(path.resolve(HERE, '..', 'src', 'monaco', 'slot-service-providers.ts'), 'utf8'),
     );
     expect(layer).not.toContain('executeEdits');
     expect(layer).not.toContain('pushUndoStop');
@@ -532,11 +501,15 @@ describe('⑤分层：判据不在宿主 / 落地只有一个开口', () => {
     expect(layer).not.toContain('core/migration/');
   });
 
-  it('本层仍读切流开关（迁移入口是写面）', () => {
+  it('门控只在宿主：工厂（含这一腿）不读切流开关，旧安装器文件已删除', () => {
     const layer = codeOf(
-      readFileSync(path.resolve(HERE, '..', 'src', 'monaco', 'kojo2-code-actions.ts'), 'utf8'),
+      readFileSync(path.resolve(HERE, '..', 'src', 'monaco', 'slot-service-providers.ts'), 'utf8'),
     );
-    expect(layer).toContain('isKojo2CutoverEnabled');
+    expect(layer).not.toContain('isKojo2CutoverEnabled');
+    expect(
+      existsSync(path.resolve(HERE, '..', 'src', 'monaco', 'kojo2-code-actions.ts')),
+      '旧安装器已并入槽腿工厂（车 5），别再把它加回来',
+    ).toBe(false);
   });
 });
 

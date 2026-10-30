@@ -226,10 +226,12 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
 
   it('宿主：切流块里只剩 code action；折叠 / 大纲 / 缩进 / 格式化全在块外', () => {
     const block = cutoverBlock(hostSource);
-    expect(block).toContain('installKojo2CodeActionProvider(monaco');
+    // SDK-B5b 车 5（2026-10-31）：注册/翻译并进槽腿表（`legOf('codeAction', …)`），切流块里
+    // 只剩**宿主策略**这一行——按同一份 `SLOT_SERVICE_WRITE_LEGS` 名单把写面腿装回来。
+    expect(block).toContain('installSlotServiceLegs(monaco, SLOT_SERVICE_WRITE_LEGS, slotServiceHost)');
     expect(block).not.toContain('installKojo2FoldingProvider');
     expect(block).not.toContain('installKojo2DocumentSymbolProvider');
-    expect(block).not.toContain('installKojo2IndentProvider');
+    expect(block).not.toContain('installKojo2IndentOnTypeProvider');
     expect(block).not.toContain('installKojo2DocumentFormatter');
     // B3 语义收口（2026-10-30）：着色的**原生注册**也清零了 —— 注册改走 `kojo-semantic-tokens.ts`
     // 的共享收口（kojo2 由 descriptor 的 `slotServices: ['semanticToken']` 点名），宿主只装预取器。

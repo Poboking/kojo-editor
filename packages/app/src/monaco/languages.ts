@@ -186,6 +186,10 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
     // B3 语义收口（2026-10-30）：结构化着色同样交给共享收口 + 插件供方——捕获快照由宿主
     // 预取（`monaco/kojo2-semantic.ts`），随请求的 `captures` 递过去；槽内同步作答。
     'semanticToken',
+    // SDK-B5b 车 5（2026-10-31）：快速修复 / 一键迁移也点名——"点名的语言才挂这枚
+    // CodeActionProvider"（供方仍在专用槽 `ui.editor.codeAction`）。它是写面，宿主按切流
+    // 策略单独装（`SLOT_SERVICE_WRITE_LEGS`），**不**随只读语言面无条件装配。
+    'codeAction',
   ],
   // 着色图例是**语法角色层**（`role.*`）：与契约名字层正交（D6），故按语声明、不与 ERB 合并。
   semanticTokenLegend: {

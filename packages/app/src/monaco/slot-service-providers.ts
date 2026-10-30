@@ -1,7 +1,10 @@
 /**
  * 槽腿 provider 的**唯一工厂**：`kind` →（Monaco 注册 API、请求构造、契约 → Monaco 形状）
  * （SDK-B5b 车 1，2026-10-31；补全 / 悬停由 `kojo2-providers.ts` 整块搬入并改成语言无关。
- * 车 2–4（同日）再收七格：格式化 / 签名、引用 / 改名、同符号高亮 / 结构化扩选 / 行上注解）。
+ * 车 2–4（同日）再收七格：格式化 / 签名、引用 / 改名、同符号高亮 / 结构化扩选 / 行上注解。
+ * 车 5（同日）：快速修复 / 一键迁移（`codeAction`，判据源是**专用槽** `ui.editor.codeAction`）
+ * ——它是**写面**，`installSlotServiceProviders` 不装它，由宿主按切流策略单独装
+ * （{@link SLOT_SERVICE_WRITE_LEGS}）；工厂不读开关，只当注册与翻译的外壳）。
  *
  * ## 为什么是一张表，而不是每个 kind 一枚安装器
  *
@@ -113,6 +116,8 @@
  */
 import type * as Monaco from './entry';
 import type {
+  EditorCodeAction,
+  EditorCodeActionContribution,
   EditorCompletionItem,
   EditorCompletionItemKind,
   EditorDocumentHighlightKind,
@@ -122,7 +127,11 @@ import type {
   EditorSelectionChain,
   EditorSignature,
   EditorSymbolLocation,
+  EditorTextEdit,
+  GameProject,
 } from '@kojo/plugin-api';
+// 值导入（`errorText` 只是错误文案的中性拼法，无语言知识）：与 `kojo2-code-actions.ts` 搬家前同源。
+import { errorText } from '@kojo/plugin-api';
 // 叶子，不是桶：引 `@kojo/kojo-lang` 会把整包挂上首屏（`ps10-eager-graph` 的叶子纪律）。
 import { KOJO2_COMPLETION_TRIGGER_CHARS } from '@kojo/kojo-lang/completion';
 import { kojo2PrepareRename, type Kojo2RenameRange } from '@kojo/kojo-lang/rename';
@@ -154,6 +163,16 @@ import {
 } from './kojo-language-service-legs';
 import type { Kojo2ProjectIndex } from './kojo2-project-index';
 import { toMonacoCodeLenses } from './kojo-code-lens';
+// 快速修复的类别映射 / 诊断 ↔ marker 翻译复用 **v1 那枚既有模块**（`kojo-code-action.ts`）：
+// "动作类别只有 quickfix / refactor 两档"与"关联诊断按 model 夹取"是同一份判据，
+// 抄一份新的会立刻漂成两套（与车 4 复用 `toMonacoCodeLenses` 同一条纪律）。
+import {
+  QUICK_FIX_KIND,
+  REFACTOR_KIND,
+  actionDiagnostics,
+  markersToDecorations,
+  monacoActionKind,
+} from './kojo-code-action';
 import { registerForLanguageServices } from './register-dialects';
 import { reject } from './rename-rejection';
 
@@ -365,6 +384,24 @@ export interface SlotServiceHost {
     readonly maxFiles?: number;
     readonly maxBytes?: number;
   };
+  /**
+   * 快速修复**落地口**（车 5，additive）：宿主接到既有 `applyTextEdits`（前后各一颗
+   * `pushUndoStop`），返回是否真落了。只有宿主知道哪枚 EditorPane 持有这份 model、以及
+   * 糖视图那种"编辑无处可落"的实例档案——**不是语言判据**。
+   *
+   * 缺席 = 本腿不落地（动作照常产出；点了不写）。生产装配点一律给。
+   */
+  readonly applyCodeActionEdits?: (
+    model: Monaco.editor.ITextModel,
+    edits: readonly EditorTextEdit[],
+  ) => boolean;
+  /**
+   * 槽 `ui.editor.codeAction` 的当前贡献（车 5，**只为可单测**）：缺省现问内核
+   * （`kernel.slots.query('ui.editor.codeAction')`，与其他腿读 `ui.editor.languageService`
+   * 同一口径）。插件是 bootstrap 的动态 import ⇒ 可能比本工厂晚激活，所以每轮**现取**、
+   * 绝不缓存一次（缓存会在"插件晚到"的首个会话里静默少一条腿）。
+   */
+  readonly codeActionSlot?: () => readonly EditorCodeActionContribution[];
 }
 
 /* ============================== 共享小工具（宿主事实，不是判据） ============================== */
@@ -1177,6 +1214,249 @@ function codeLensProvider(host: SlotServiceHost): Monaco.languages.CodeLensProvi
   };
 }
 
+/* ============================== 契约 → Monaco（快速修复 / 迁移动作） ============================== */
+
+/**
+ * 动作执行命令 id（宿主统一注册一次；参数 = 待落地动作的反查 key）。
+ *
+ * id 字面量**逐字保留**自 B3j（命令 id 是对外可见的身份：键位 / 手记 / 调试脚本可能按它查），
+ * 改名只在导出符号上做——它现在住通用工厂，名字不再带某一门语言。
+ */
+export const SLOT_CODE_ACTION_COMMAND = 'kojo2.codeAction.run';
+
+/**
+ * 本腿会产出的 Monaco 类别（`providedCodeActionKinds` 的交集判据）。
+ *
+ * 为什么不是"只声明 quickfix"：槽里的贡献方两类都给（结构修复是 quickfix、写法重写类动作
+ * 是 refactor）。`mayIncludeActionsOfKind` 是**交集**判定——只声明 quickfix 会让 provider 在
+ * "重构"这条显式请求下不被调用（那是回退，不是收益）。判据与 v1 那枚同源
+ * （`kojo-code-action.ts` 的 `PROVIDED_CODE_ACTION_KINDS`）。
+ */
+export const SLOT_CODE_ACTION_KINDS: readonly string[] = [QUICK_FIX_KIND, REFACTOR_KIND];
+
+/** 待落地动作表的上限（每次请求登记若干条；超了丢最老的，绝不无界增长） */
+const PENDING_ACTION_LIMIT = 256;
+
+/** 空动作表（Monaco 读得懂的"这一轮没有动作"） */
+function emptyCodeActionList(): Monaco.languages.CodeActionList {
+  return { actions: [], dispose: () => undefined };
+}
+
+/** 槽贡献的现取口：注入优先（可单测），缺省现问内核——插件晚到也不会被缓存吃掉 */
+function codeActionContributionsOf(
+  host: SlotServiceHost,
+): readonly EditorCodeActionContribution[] {
+  if (host.codeActionSlot !== undefined) {
+    try {
+      return host.codeActionSlot();
+    } catch {
+      return [];
+    }
+  }
+  try {
+    return requireKernel().slots.query('ui.editor.codeAction');
+  } catch {
+    return [];
+  }
+}
+
+/** 当前项目（喂 `run` 型动作；没有内核 / 未开项目 ⇒ `null`，与注入面的旧缺省逐字相同） */
+function currentProjectOf(): GameProject | null {
+  try {
+    return requireKernel().project.current();
+  } catch {
+    return null;
+  }
+}
+
+/** 槽里的一家贡献抛错 ⇒ 只丢这一家（与共享收口同一条隔离纪律） */
+function provideActionsSafely(
+  contribution: EditorCodeActionContribution,
+  request: Parameters<EditorCodeActionContribution['provideActions']>[0],
+): EditorCodeAction[] {
+  try {
+    return contribution.provideActions(request);
+  } catch (error: unknown) {
+    console.warn(
+      `[slot-service-providers] '${contribution.id}' provideActions 抛错：${errorText(error)}`,
+    );
+    return [];
+  }
+}
+
+/**
+ * 槽动作 → Monaco `CodeAction[]`（**只做翻译**，判据与文案全在插件与包）。
+ *
+ * - `command` 而不是 `edit`：落地必须走宿主那条带 undo 停点的通道（见 {@link codeActionProviders}）；
+ * - `diagnostics`：把动作认领的诊断翻成 marker（Monaco 据此排序 / 画"已修复区间"）；
+ *   省略而不是空数组——`undefined` 才是"这条动作不是冲着某条诊断来的"的原意；
+ * - `isPreferred`：**本次请求里恰好只有一条 quickfix** 时置（多解不替作者选，与 v1 那枚
+ *   `pickPreferred` 同一产品意图）；
+ * - 顺序：贡献方顺序 × 各自产出顺序，一条都不重排（Monaco 的 CodeAction 列表按它展示）。
+ */
+function codeActionsOf(
+  monaco: typeof Monaco,
+  model: Monaco.editor.ITextModel,
+  contributions: readonly EditorCodeActionContribution[],
+  request: Parameters<EditorCodeActionContribution['provideActions']>[0],
+  register: (action: EditorCodeAction) => string,
+): Monaco.languages.CodeAction[] {
+  const actions: Monaco.languages.CodeAction[] = [];
+  const quickfixes: Monaco.languages.CodeAction[] = [];
+  for (const contribution of contributions) {
+    for (const action of provideActionsSafely(contribution, request)) {
+      const actionId = register(action);
+      const kind = monacoActionKind(action.kind);
+      const markers = actionDiagnostics(monaco, model, action);
+      const translated: Monaco.languages.CodeAction = {
+        title: action.title,
+        kind,
+        command: { id: SLOT_CODE_ACTION_COMMAND, title: action.title, arguments: [actionId] },
+        ...(markers !== undefined ? { diagnostics: markers } : {}),
+      };
+      actions.push(translated);
+      if (kind === QUICK_FIX_KIND) quickfixes.push(translated);
+    }
+  }
+  if (quickfixes.length === 1) quickfixes[0]!.isPreferred = true;
+  return actions;
+}
+
+/** 一次安装里的快速修复腿：provider（逐门语言共用）+ 全局命令（首次挂上时注册） */
+interface CodeActionProviders {
+  readonly provider: Monaco.languages.CodeActionProvider;
+  /**
+   * 命令句柄（**幂等、按使用者计数**）：命令是全局的、不是语言级的，同一条腿铺到几门语言
+   * 也只有一个处理器；撤到最后一门才真撤（半途回滚不会把还在服务的语言留成"点了没反应"）。
+   */
+  readonly command: (monaco: typeof Monaco) => Monaco.IDisposable;
+}
+
+/**
+ * 快速修复 / 迁移动作 provider（车 5，判据与供方都在插件与包）。
+ *
+ * 本层只做四件事：**定位**（model / 光标 / marker）、**问槽**（`ui.editor.codeAction`）、
+ * **翻译**（契约动作 → Monaco `CodeAction`）、**落地**（宿主注入的 `applyCodeActionEdits`
+ * → 既有 `applyTextEdits`，前后各一颗 undo 停点 ⇒ `Ctrl+Z` 只退机器那一步）。
+ *
+ * 只答**点名了 `codeAction`** 的语言（{@link servesSlotOf}，与同符号高亮 / 改名同一道门）：
+ * 这一腿也会被 `registerForLanguageServices` 铺到 `languageServices: true` 的语言上，而
+ * 那些语言的 💡 有自己的接线（v1 的 `kojo-code-action` 合并 provider）——不先弃权就会把
+ * 别人的动作当自己的再交一遍。
+ *
+ * 三态：没点名 / 零波浪线 / 取不到文 / 取不到路径 ⇒ **空表**（不伪造动作）；贡献方抛错只丢
+ * 那一家；本轮任何异常都收成空表（Monaco 会把 throw 吞成"💡 突然空了"，作者看不到原因）。
+ */
+function codeActionProviders(
+  monaco: typeof Monaco,
+  host: SlotServiceHost,
+): CodeActionProviders {
+  const pending = new Map<
+    string,
+    { readonly uri: string; readonly path: string; readonly action: EditorCodeAction }
+  >();
+  const order: string[] = [];
+  let seq = 0;
+  let commandRegistration: Monaco.IDisposable | null = null;
+  let commandUsers = 0;
+
+  const remember = (uri: string, path: string, action: EditorCodeAction): string => {
+    const key = `${++seq}`;
+    pending.set(key, { uri, path, action });
+    order.push(key);
+    while (order.length > PENDING_ACTION_LIMIT) {
+      const oldest = order.shift();
+      if (oldest !== undefined) pending.delete(oldest);
+    }
+    return key;
+  };
+
+  const land = (monaco: typeof Monaco, key: string): void => {
+    const entry = pending.get(key);
+    if (entry === undefined) return;
+    const model = monaco.editor.getModel(monaco.Uri.parse(entry.uri));
+    if (model === null || model.isDisposed()) return;
+    try {
+      if (entry.action.edits !== undefined && entry.action.edits.length > 0) {
+        host.applyCodeActionEdits?.(model, entry.action.edits);
+        return;
+      }
+      // 没有 edits 的动作退回契约旧语义（`run` 发意图）：本供方今天不产这种，但槽是开放的
+      // ——第三方贡献方给"导航型"动作时不该被这层吞掉。
+      void entry.action.run({ project: currentProjectOf(), activeFile: entry.path });
+    } catch (error: unknown) {
+      console.warn(`[slot-service-providers] 落地动作时抛错：${errorText(error)}`);
+    }
+  };
+
+  const command = (monaco: typeof Monaco): Monaco.IDisposable => {
+    commandUsers += 1;
+    if (commandRegistration === null) {
+      commandRegistration = monaco.editor.registerCommand(
+        SLOT_CODE_ACTION_COMMAND,
+        (_accessor, key: unknown) => {
+          if (typeof key !== 'string') return;
+          land(monaco, key);
+        },
+      );
+    }
+    let released = false;
+    return {
+      dispose() {
+        if (released) return;
+        released = true;
+        commandUsers -= 1;
+        if (commandUsers > 0) return;
+        const handle = commandRegistration;
+        commandRegistration = null;
+        try {
+          handle?.dispose();
+        } catch {
+          /* 撤命令失败不改结论：撤到最后一门时编辑器正在关，命令随窗口走 */
+        }
+      },
+    };
+  };
+
+  const provider: Monaco.languages.CodeActionProvider = {
+    provideCodeActions(model, range, context) {
+      try {
+        if (!servesSlotOf(model, 'codeAction')) return emptyCodeActionList();
+        const source = sourceOf(model);
+        if (source === null) return emptyCodeActionList();
+        // 零波浪线 ⇒ 一条都不问槽：本族动作全部按"面上画着的那条红线"应答（判据之前那次
+        // 整篇 parse 也白付）。这一档**不减能力**：没有可修的红线时本来也是零条动作。
+        const diagnostics = markersToDecorations(monaco, context.markers ?? []);
+        if (diagnostics.length === 0) return emptyCodeActionList();
+        const path = pathOfModel(model, host.filePathOf);
+        if (path === undefined || path.length === 0) return emptyCodeActionList();
+        const line = Number.isFinite(range.startLineNumber) ? range.startLineNumber : undefined;
+        const actions = codeActionsOf(
+          monaco,
+          model,
+          codeActionContributionsOf(host),
+          {
+            path,
+            text: source,
+            project: currentProjectOf(),
+            ...(line !== undefined ? { line } : {}),
+            lineCount: model.getLineCount(),
+            diagnostics,
+          },
+          (action) => remember(uriOf(model)?.toString() ?? '', path, action),
+        );
+        if (actions.length === 0) return emptyCodeActionList();
+        return { actions, dispose: () => undefined };
+      } catch (error: unknown) {
+        console.warn(`[slot-service-providers] 产出动作时抛错：${errorText(error)}`);
+        return emptyCodeActionList();
+      }
+    },
+  };
+
+  return { provider, command };
+}
+
 /* ============================== 表 + 安装 ============================== */
 
 /**
@@ -1264,7 +1544,47 @@ export const SLOT_SERVICE_LEGS: readonly SlotServiceLeg[] = [
   legOf('codeLens', (_monaco, host) => codeLensProvider(host), (m, id, provider) =>
     m.languages.registerCodeLensProvider(id, provider),
   ),
+  // 车 5：快速修复 / 一键迁移（供方在专用槽 `ui.editor.codeAction`；它是**写面**，
+  // 宿主按切流策略单独装——见 {@link SLOT_SERVICE_WRITE_LEGS}）
+  legOf('codeAction', codeActionProviders, (m, id, providers) => {
+    // 命令是**全局**的（不是语言级）：第一次挂上时注册，撤到最后一门才撤。
+    const command = providers.command(m);
+    try {
+      const provider = m.languages.registerCodeActionProvider(id, providers.provider, {
+        providedCodeActionKinds: [...SLOT_CODE_ACTION_KINDS],
+      });
+      return {
+        dispose: () => {
+          try {
+            command.dispose();
+          } finally {
+            provider.dispose();
+          }
+        },
+      };
+    } catch (error) {
+      // 半途抛错：这一门已注册的那枚命令先撤回（其余语言由收口回滚），再原样外抛
+      try {
+        command.dispose();
+      } catch {
+        /* 撤不掉也不外抛：错误已在上抛路上 */
+      }
+      throw error;
+    }
+  }),
 ];
+
+/**
+ * 表里属于**写面 / 迁移入口**的腿（车 5）：它们的动作会改写缓冲（或引导一次改写），
+ * 不属 K2-SURFACE-DEFAULT 的只读语言面 ⇒ {@link installSlotServiceProviders} **不装**它们，
+ * 由宿主按自己的策略单独装（今天 = `editor-global-providers.ts` 的切流开关块里
+ * `installSlotServiceLegs(monaco, SLOT_SERVICE_WRITE_LEGS, host)`）。
+ *
+ * 这是**数据**不是注释：把它从这张表里摘掉，切流关着时那条写面 provider 就会被无条件挂上
+ * （`kojo2-structure-gate.test.ts` ③ 逐枚量注册次数）；把别的腿塞进来，那条腿就会从
+ * "无条件装配"悄悄变成"受门控"。
+ */
+export const SLOT_SERVICE_WRITE_LEGS: readonly SlotServiceKind[] = Object.freeze(['codeAction']);
 
 /** 按 kind 取一条腿（没实现 ⇒ `undefined`：调用方自己决定怎么报，别在这里造空 provider） */
 export function slotServiceLegOf(kind: SlotServiceKind): SlotServiceLeg | undefined {
@@ -1298,6 +1618,9 @@ export function installSlotServiceLegs(
           monaco,
           (m, id) => leg.register(m, id, provider),
           leg.kind,
+          // 写面腿只挂**点名**它的语言（见 `register-dialects.ts` 的 `namedOnly`）：
+          // v1 的语言自带写面 provider，不该被铺一枚永远弃权的空腿。
+          { namedOnly: SLOT_SERVICE_WRITE_LEGS.includes(leg.kind) },
         ),
       );
     }
@@ -1344,7 +1667,10 @@ export function installSlotServiceProviders(
 ): Monaco.IDisposable {
   return installSlotServiceLegs(
     monaco,
-    SLOT_SERVICE_LEGS.map((leg) => leg.kind),
+    // 写面 / 迁移入口的腿不在这条"无条件装配"里（见 {@link SLOT_SERVICE_WRITE_LEGS}）。
+    SLOT_SERVICE_LEGS.map((leg) => leg.kind).filter(
+      (kind) => !SLOT_SERVICE_WRITE_LEGS.includes(kind),
+    ),
     host,
   );
 }

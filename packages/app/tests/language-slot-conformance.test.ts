@@ -200,6 +200,15 @@ interface SlotKindSupply {
    * (b) 其能力矩阵那一格必须真是 `{ exempt }`，(c) 它的 `slotServices` 必须不含这条腿。
    */
   readonly unattendedFor?: readonly string[];
+  /**
+   * 供方判别字面量（additive，SDK-B5b 车 5）：缺省就是 `kind` 本身。
+   *
+   * 只有**专用槽**的腿需要它：`codeAction` 的供方不住 `ui.editor.languageService`（插件在
+   * `ui.editor.codeAction` 上注册），包内自然没有 `'codeAction'` 这一枚判别字面量。给它一个
+   * 显式的判别串，`pluginSupplies` 仍是同一把尺子（包内既有槽注册、又认得这条腿），
+   * 不为这一格开"跳过检查"的口子。
+   */
+  readonly slotLiteral?: string;
 }
 
 const SLOT_KIND_SUPPLY: Readonly<Record<string, SlotKindSupply>> = {
@@ -229,6 +238,21 @@ const SLOT_KIND_SUPPLY: Readonly<Record<string, SlotKindSupply>> = {
     capability: LanguageCapability.Implementation,
     providerPlugin: 'erb-parser',
     unattendedFor: [KOJO2_LANGUAGE_ID],
+  },
+  /**
+   * SDK-B5b 车 5（2026-10-31）：快速修复 / 一键迁移（`Ctrl+.` 那枚 CodeActionProvider）。
+   *
+   * 供方仍在**专用槽** `ui.editor.codeAction`（`@kojo/plugin-kojo-lang` 的
+   * `kojo2-codeActions` 贡献，判据在 `@kojo/kojo-lang/code-actions`）；`SlotServiceKind` 里这一格
+   * 只驱动"谁挂这枚 provider / 谁翻形状"（宿主槽腿工厂的 `legOf('codeAction', …)`）。
+   * 能力面对到 `diagnostics`：它是"诊断面的可行动部分"（快速修复的就是面上那几条波浪线），
+   * 两门语言都已交付（ERB `shared` / kojo2 `self`），不是豁免项。
+   * 口径差别只有一格：判别字面量是 `ui.editor.codeAction`（见 `slotLiteral`）。
+   */
+  codeAction: {
+    capability: LanguageCapability.Diagnostics,
+    providerPlugin: 'kojo-lang',
+    slotLiteral: 'ui.editor.codeAction',
   },
 };
 
@@ -325,8 +349,10 @@ describe('供方覆盖：descriptor 声明的每条槽腿都有供方', () => {
         entry.providerPlugin,
       );
       expect(
-        pluginSupplies(entry.providerPlugin, kind),
-        `${entry.providerPlugin} 包内找不到 ${kind} 的供方（要有 'ui.editor.languageService' 注册与该 kind 判别）`,
+        pluginSupplies(entry.providerPlugin, entry.slotLiteral ?? kind),
+        `${entry.providerPlugin} 包内找不到 ${kind} 的供方（要有槽注册与判别字面量 ${
+          entry.slotLiteral ?? kind
+        }）`,
       ).toBe(true);
     }
   });
@@ -637,6 +663,10 @@ describe('三态契约：undefined（弃权）/ 空结果（作答）/ 有结果
       .filter((kind) => !legKinds.includes(kind))
       .sort();
     expect(withoutSharedCollector).toEqual([
+      // 车 5（2026-10-31）：`codeAction` 的三态不在这张表上——它不走
+      // `ui.editor.languageService` 的判别（专用槽 + 同步返回数组，没有"弃权 = undefined"这一态），
+      // 三态与落地由 `kojo2-code-actions.test.ts` 逐格钉住。
+      'codeAction',
       'definition',
       'documentSymbol',
       'foldingRange',

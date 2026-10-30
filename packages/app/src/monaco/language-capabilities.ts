@@ -291,6 +291,9 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     // `onEnterRules` / `indentationRules`）拿不到 `@原生` 围栏上下文，回车校正必须有一枚
     // 宿主注册的 provider。判据住包只是"`self` 的那一面不再住宿主"。
     [LanguageCapability.Indent]: 'self',
+    // ｜SDK-B5b 车 6（2026-10-31）定案（a）路线：`on-type` 是 **Monaco 引擎面**，不是语言判断
+    // ——不进 `SlotServiceKind`、不造空供方；判据已住 `@kojo/kojo-lang/indent`，安装器名字钉成
+    // `installKojo2IndentOnTypeProvider`（"engine surface, not language judgement"）。
     [LanguageCapability.Brackets]: 'builtin',
     // B3e（2026-10-29）：引用 / 改名同批走共享收口（能力名 `references` / `rename`），判据住
     // `@kojo/kojo-lang` 的两枚叶子，供方是插件，宿主只剩请求与翻译；**SDK-B5b 车 3

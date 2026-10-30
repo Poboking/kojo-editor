@@ -41,6 +41,16 @@ export function registerForLanguageServices(
    * 有几枚（折叠最典型）的空结果会顶掉 Monaco 内建行为，谁被挂上必须是写下来的。
    */
   kind?: SlotServiceKind,
+  /**
+   * 挂载口径（additive，SDK-B5b 车 5）：`namedOnly` = **只挂点名了这条腿的语言**，
+   * 不铺 `languageServices: true` 的旧桥语言。
+   *
+   * 为什么要这一格：写面 / 迁移入口的腿（今天的 `codeAction`）只服务"把那门语言的改写
+   * 交给插件"的那些语言；v1 的 ERB / kojo1 自带一枚合并 provider（`kojo-code-action.ts`），
+   * 再给它们铺一枚**永远弃权**的 provider 既是白问一次、也会让"这门语言有几枚 💡 provider"
+   * 从数据变成噪声。缺省 `false` = 旧行为逐字不变。
+   */
+  options: { readonly namedOnly?: boolean } = {},
 ): Monaco.IDisposable {
   // B3d：逐门挂上时**半途抛错就回滚**。此前 `.map` 写在表达式里，第二门注册抛错会让
   // 第一门那枚 disposable 当场丢失（它只活在 map 的中间值里）——调用方再"撤回已挂上的"
@@ -48,7 +58,7 @@ export function registerForLanguageServices(
   const subs: Monaco.IDisposable[] = [];
   try {
     for (const descriptor of languageDescriptors()) {
-      const servesAll = descriptor.languageServices === true;
+      const servesAll = options.namedOnly !== true && descriptor.languageServices === true;
       const namedBySlot = kind !== undefined && descriptor.slotServices?.includes(kind) === true;
       if (!servesAll && !namedBySlot) continue;
       subs.push(register(monaco, descriptor.id));

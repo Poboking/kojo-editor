@@ -391,7 +391,7 @@ describe('注册：selector 来自共享收口（descriptor 的 languageServices
  * ③ 装配点那道调用的相对位置（语义捕获之后、切流块之前）也照旧。
  */
 describe('注册顺序：补全先于悬停（单答型第一家说了算）', () => {
-  it('表格数组序 = 车 1 的两格在前、车 2–4 的七格按批准顺序追加', () => {
+  it('表格数组序 = 车 1 的两格在前、车 2–5 的八格按批准顺序追加', () => {
     // 车 1：completion → hover（搬家前的两行 push 序）
     // 车 2：formatting → signatureHelp；车 3：references → rename；车 4：documentHighlight →
     // selectionRange → codeLens。**新腿一律追加**，插进中间等于改掉"谁排在前"的既有事实。
@@ -405,6 +405,8 @@ describe('注册顺序：补全先于悬停（单答型第一家说了算）', (
       'documentHighlight',
       'selectionRange',
       'codeLens',
+      // 车 5（2026-10-31）：快速修复 / 一键迁移（写面，宿主按切流策略单独装）
+      'codeAction',
     ]);
   });
 
@@ -416,7 +418,7 @@ describe('注册顺序：补全先于悬停（单答型第一家说了算）', (
       resolve(REPO_ROOT, 'packages', 'app', 'src', 'ui', 'editor-global-providers.ts'),
       'utf8',
     );
-    const slotLegs = source.indexOf('installSlotServiceProviders(monaco, {');
+    const slotLegs = source.indexOf('installSlotServiceProviders(monaco, slotServiceHost');
     expect(slotLegs).toBeGreaterThan(-1);
     for (const later of [
       'installDocumentFormatter(',
@@ -447,7 +449,7 @@ describe('注册顺序：补全先于悬停（单答型第一家说了算）', (
       'utf8',
     );
     const captures = source.indexOf('globalDisposers.push(installKojo2SemanticCaptures(monaco))');
-    const legs = source.indexOf('installSlotServiceProviders(monaco, {');
+    const legs = source.indexOf('installSlotServiceProviders(monaco, slotServiceHost');
     const cutover = source.indexOf('if (isKojo2CutoverEnabled()) {');
     expect(captures).toBeGreaterThan(-1);
     expect(legs).toBeGreaterThan(captures);
@@ -1105,7 +1107,7 @@ describe('装配纪律：共享收口 + 插件供方是唯一落点（读源码�
     // provider 报名，收口的"恰好一份"立刻破功。
     expect(source).toContain('installKojo2SemanticCaptures(monaco)');
     expect(source).not.toMatch(/installKojo2SemanticTokensProvider\s*\(/);
-    expect(source).toContain('installSlotServiceProviders(monaco, {');
+    expect(source).toContain('installSlotServiceProviders(monaco, slotServiceHost');
     // 旧安装器名**归零**：搬家后谁再写回 kojo2 专属的那一枚，就等于同一格两份答案
     expect(source).not.toContain('installKojo2SlotProviders');
     const start = source.indexOf('if (isKojo2CutoverEnabled()) {');
@@ -1117,9 +1119,10 @@ describe('装配纪律：共享收口 + 插件供方是唯一落点（读源码�
 
   it('安装调用只交**三格宿主事实**（adapter / 编译成品 / 候选投影都已归插件与包）', () => {
     const source = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
-    const start = source.indexOf('installSlotServiceProviders(monaco, {');
+    // 车 5 起宿主事实收在一个 `slotServiceHost` 常量里（槽腿工厂与切流块两处共用同一份）
+    const start = source.indexOf('const slotServiceHost: SlotServiceHost = {');
     expect(start).toBeGreaterThan(-1);
-    const call = source.slice(start, source.indexOf('}),', start));
+    const call = source.slice(start, source.indexOf('};', start));
     // 三格：这份 model 是哪个文件 / 当前项目有哪些文件 / 跨文件 URI 怎么造
     expect(call).toContain('filePathOf:');
     expect(call).toContain('projectIndex:');

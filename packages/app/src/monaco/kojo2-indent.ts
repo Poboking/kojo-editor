@@ -6,6 +6,11 @@
  * - `installKojo2IndentConfigFromWorker(monaco, { getClient })`：把 worker 的 `indents` 回复
  *   经 `kojo2IndentConfigWith` 送进 `setLanguageConfiguration`（K2-INDENT-WIRE 批）。
  *
+ * **SDK-B5b 车 6（2026-10-31）定案**：这条 on-type 腿是**引擎面**，不是语言判断，
+ * **不进** `SlotServiceKind` / 槽腿工厂（理由与被否掉的 (b) 路线写在
+ * {@link installKojo2IndentOnTypeProvider} 的头注）；能力矩阵把 `Indent` 记作 `self`。
+ * 两枚安装器分工不变：本文件 `IndentOnType`（引擎面）+ `IndentConfigFromWorker`（宿主事实）。
+ *
  * 判据（回车层级表 / 同级容器 / `@原生` 围栏 / `?` 分支 / 表体 / 块体 / 围栏内自动闭合守卫）
  * 一条都不在本文件：逐字住在 `@kojo/kojo-lang/indent`，那是**纯函数叶子**（零 Monaco、
  * 零 React、零 DOM、零 IO），与 B3c–B3f 搬走的六批判据同形。本条车道（B3i）的全部内容就是
@@ -30,7 +35,7 @@
  *
  * ## 注册
  *
- * {@link installKojo2IndentProvider} 只给 `kojo2` 语言 id 注册 on-type formatter，
+ * {@link installKojo2IndentOnTypeProvider} 只给 `kojo2` 语言 id 注册 on-type formatter，
  * **无条件装配**（K2-SURFACE-DEFAULT：改缓冲的回车缩进也算语言面）。触发字符两族：`\n`（回车缩进，跟随 v1 `installEnterIndenter`）与
  * `KOJO2_PAIRS` 里的开括号（围栏内自动闭合守卫）。**必须同一枚 provider**：Monaco 只派发
  * 注册表里第一枚 provider 的触发字符（`format.js::getOnTypeFormattingEdits`），拆成两枚会让
@@ -524,9 +529,24 @@ export function installKojo2IndentConfigFromWorker(
 /**
  * 为 `kojo2` 语言注册回车缩进 formatter（**无条件**：缩进是语言面，阶段 `v1-only` 也照常生效）。
  *
+ * ## 它为什么**不**是一条槽腿（SDK-B5b 车 6，2026-10-31 定为 (a) 路线）
+ *
+ * `SlotServiceKind` 里没有 `onType`，也不为它新开一格：on-type formatter 是 **Monaco 引擎面**
+ * （`registerOnTypeFormattingEditProvider`），不是 `ui.editor.languageService` 的语言服务面。
+ * 更关键的是它**没有可搬的判据与供方形状**：插件侧已把那三枚纯函数（`kojo2IndentReplacementAt`
+ * / `kojo2AutoCloseTargetAt` / `KOJO2_BASE_INDENT_RULES`）交出来了，但槽协议里没有"回车请求"
+ * 这一格——要"由插件供"就得先给契约加一条 on-type 请求，再让 ERB / kojo1 各自造一枚永远弃权的
+ * 空供方（它们本就没有这条腿）。那不是"少写一点代码"，是把引擎面伪装成语言判断（还会让
+ * `language-slot-conformance` 的供方台账凭空多两条无人认领的腿）。
+ *
+ * 所以定 (a)：**判据在包、注册与翻译在宿主**，并以名字把这条腿钉成"引擎面"——
+ * `IndentOnType`（而不是笼统的 `IndentProvider`），与旁边的
+ * {@link installKojo2IndentConfigFromWorker}（宿主事实：worker 的缩进规则 → 语言配置）分开记账。
+ * 能力矩阵 `KOJO2_CAPABILITY_STATUS[Indent] = 'self'` 那一格与理由是同一份账。
+ *
  * 返回的 disposable 幂等（注册只撤一次）；provider 体内任何异常都只让**这一轮**不改缩进。
  */
-export function installKojo2IndentProvider(monaco: typeof Monaco): Monaco.IDisposable {
+export function installKojo2IndentOnTypeProvider(monaco: typeof Monaco): Monaco.IDisposable {
   const provider: Monaco.languages.OnTypeFormattingEditProvider = {
     // 一枚 provider 两条腿：`\n` 走回车缩进，开括号走围栏内自动闭合守卫（见两个触发字符常量的注释）
     autoFormatTriggerCharacters: [
