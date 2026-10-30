@@ -92,9 +92,9 @@
  * ## Monaco 面（0.57 没有 CallHierarchy API）
  *
  * Monaco standalone（含 0.57.0）从未暴露 `registerCallHierarchyProvider`（取证见
- * `docs/PITFALLS.md` §83）⇒ {@link installKojo2CallHierarchyProvider} **结构性探测**该注册位：
- * 在位就按正规 provider 注册；不在位就**零注册**并交回幂等句柄。{@link createKojo2CallHierarchyProvider}
- * 单独导出，宿主自建面板（overlay / devtools）可直接复用同一份实现，不必等上游 API。
+ * `docs/PITFALLS.md` §83）⇒ **本文件不注册任何东西**：{@link createKojo2CallHierarchyProvider}
+ * 是唯一的 provider 面，宿主自建面板（`ui/CallHierarchyOverlay.tsx`）直接复用同一份实现；
+ * 上游将来补上注册 API 时，注册点也只在宿主装配层，不在这里另造一枚安装器。
  * provider 内任何异常回空（prepare ⇒ `null`，入边 / 出边 ⇒ `[]`）：Monaco 会把 throw 吞成
  * "这个功能突然没了"，空结果才是它能读出的唯一形状。
  *
@@ -125,7 +125,6 @@ import {
 } from '@kojo/kojo-lang';
 import { kojo2DefinitionAt, type Kojo2DefinitionTarget } from './kojo2-definition';
 import { insideInterpolation, insideStringOrComment } from './kojo-completion-position';
-import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 
 /* ============================== 公共形状 ============================== */
 
@@ -338,9 +337,6 @@ interface WalkState {
 /** 表达式里"名字紧接 `(`"的保守调用判据（跳过 `"…"` 本体；字符串插值继续扫）。 */
 const IDENT_START = /[\p{L}_]/u;
 const IDENT_PART = /[\p{L}\p{N}_]/u;
-
-/** 无注册位时交回的句柄（Monaco 0.57 没有该 API；调用方照常 `dispose()`，什么也不会发生） */
-const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /* ============================== 小工具 ============================== */
 
@@ -1529,68 +1525,6 @@ export function createKojo2CallHierarchyProvider(
         return kojo2OutgoingCalls(source, item);
       } catch {
         return [];
-      }
-    },
-  };
-}
-
-/**
- * `monaco.languages` 上的 CallHierarchy 注册位（**结构性探测**）：
- * 0.57 没有它（PITFALLS §83），上游将来加上就自动接上，本文件不写死版本判断。
- */
-interface CallHierarchyRegistrar {
-  readonly registerCallHierarchyProvider: (
-    selector: string,
-    provider: Kojo2CallHierarchyProvider,
-  ) => Monaco.IDisposable;
-}
-
-function callHierarchyRegistrarOf(monaco: typeof Monaco): CallHierarchyRegistrar | null {
-  const languages: unknown = (monaco as unknown as { languages?: unknown }).languages;
-  if (languages === null || languages === undefined || typeof languages !== 'object') return null;
-  const register = (languages as { registerCallHierarchyProvider?: unknown })
-    .registerCallHierarchyProvider;
-  if (typeof register !== 'function') return null;
-  const callable = register as (
-    this: unknown,
-    selector: string,
-    provider: Kojo2CallHierarchyProvider,
-  ) => Monaco.IDisposable;
-  return {
-    registerCallHierarchyProvider: (selector, provider) =>
-      callable.call(languages, selector, provider),
-  };
-}
-
-/**
- * 为 `kojo2` 语言注册调用层级 provider，返回**幂等** disposable。
- *
- * - **不读切流开关**（K2-SURFACE-DEFAULT）：调用层级是只读呈现面；
- * - Monaco 0.57 没有 `registerCallHierarchyProvider`（PITFALLS §83）⇒ **零注册**并交回
- *   幂等句柄：宿主用 {@link createKojo2CallHierarchyProvider} 走自建面板，两者同一份实现；
- * - 只挂 `KOJO2_LANGUAGE_ID`（v1 `.kojo` / `.erb` 各挂各的，不重不漏）；
- * - 注册抛错原样外抛（只有一枚注册，没有半成品要回滚；宿主那侧的"全有或全无"才有东西可撤）。
- */
-export function installKojo2CallHierarchyProvider(
-  monaco: typeof Monaco,
-  resolvers?: Kojo2CallHierarchyResolvers | null,
-): Monaco.IDisposable {
-  const registrar = callHierarchyRegistrarOf(monaco);
-  if (registrar === null) return NOOP_DISPOSABLE;
-
-  const registration = registrar.registerCallHierarchyProvider(
-    KOJO2_LANGUAGE_ID,
-    createKojo2CallHierarchyProvider(resolvers),
-  );
-  let disposed = false;
-  return {
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      try {
-        registration.dispose();
-      } catch {
-        /* 幂等 + 不抛：一枚撤不掉不许把卸载链带崩（错误也没有第二个消费者） */
       }
     },
   };

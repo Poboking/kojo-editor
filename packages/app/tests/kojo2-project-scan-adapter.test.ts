@@ -7,7 +7,7 @@
  *    `unavailable` 而**不 reject**、失败读数只报一次。
  * 2. 失败降级：分析照常跑（跨文件结论仍在）、`stats.adapterUnavailable = true`、织面退回
  *    `analyzeProject`（`weaveLayers:false`、`weaveUnits:[]`），未配置 adapter 不算失败。
- * 3. `createLazyKojo2ProjectOptions` / `installKojo2ProjectScan`：工厂零副作用、flag 关零动作、
+ * 3. `createLazyKojo2ProjectOptions`：工厂零副作用、flag 关零动作、
  *    装载器成功/失败两态、缺省装载器 = "本轮拿不到"（LAU-1a：本文件零适配器 import，
  *    装载目标由宿主按当前项目注入）。
  * 4. 扫描器透传：`MountProjectScanOptions.kojo2Project` 原样进 `scannerDeps`；
@@ -29,10 +29,7 @@ import {
   type Kojo2ProjectDocument,
   type Kojo2ProjectPassOptions,
 } from '../src/ui/kojo2-project-analysis';
-import {
-  createLazyKojo2ProjectOptions,
-  installKojo2ProjectScan,
-} from '../src/ui/kojo2-project-scan-adapter';
+import { createLazyKojo2ProjectOptions } from '../src/ui/kojo2-project-scan-adapter';
 import { createProjectScanner, type ProjectScannerDeps } from '../src/ui/project-diagnostics';
 import { mountProjectScan, type ScanKernel } from '../src/ui/project-scan-schedule';
 import { clearAllProblems, clearProjectScan, type EditorProblem } from '../src/ui/problem-store';
@@ -266,7 +263,7 @@ describe('analyzeKojo2ProjectAsync · 惰性 adapter 成功与降级', () => {
 
 /* ============================== 3. 薄接线工厂 ============================== */
 
-describe('createLazyKojo2ProjectOptions / installKojo2ProjectScan', () => {
+describe('createLazyKojo2ProjectOptions', () => {
   it('缺省启用判据 = 无条件开（语言面不读切流开关；没有 2.0 源的文件本就不会产生一轮分析）', () => {
     const options = createLazyKojo2ProjectOptions();
     expect(options.enabled?.()).toBe(true);
@@ -336,15 +333,6 @@ describe('createLazyKojo2ProjectOptions / installKojo2ProjectScan', () => {
     );
     const degraded = createLazyKojo2ProjectOptions({ isEnabled: () => true, loadAdapter: loadNoSurface });
     await expect(lazyOf(degraded)()).resolves.toBeUndefined();
-  });
-
-  it('installKojo2ProjectScan：返回可直接摊进 mountProjectScan 的一格，可注入 flag / loader', async () => {
-    const load = vi.fn(async () => ADAPTER);
-    const wiring = installKojo2ProjectScan({ isEnabled: () => true, loadAdapter: load });
-    expect(Object.keys(wiring)).toEqual(['kojo2Project']);
-    expect(kojo2ProjectPassEnabled(wiring.kojo2Project)).toBe(true);
-    await expect(lazyOf(wiring.kojo2Project)()).resolves.toBe(ADAPTER);
-    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it('源码：本接线文件零适配器 import（连动态边与豁免标记都不该有）', () => {
