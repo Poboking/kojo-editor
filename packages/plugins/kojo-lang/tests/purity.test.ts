@@ -69,6 +69,8 @@ const ALLOWED_PACKAGES = new Set([
   // `src/selection-range.ts`）。
   '@kojo/kojo-lang/highlight',
   '@kojo/kojo-lang/selection-range',
+  // B3g：行上注解的判据叶子（供方在 `src/codelens.ts`；计数复用包内 references）。
+  '@kojo/kojo-lang/codelens',
   // B4：语言面供方交数据（词法 / 语言配置 / 主题声明）。三枚都是**纯数据叶子**，
   // 引它们不会把 Monaco 带进插件——契约类型才是这一层的形状来源。
   '@kojo/kojo-lang/monarch',
@@ -87,7 +89,8 @@ describe('@kojo/plugin-kojo-lang 是纯插件（零 Monaco / 零 React / 零 IO 
     // + B3d：signature（签名帮助供方）/ format（整篇 + 区间格式化供方）
     // + B3e：references（引用供方）/ rename（改名供方）
     // + B3f：highlight（同符号高亮供方）/ selection-range（结构化扩选供方）
-    expect(files).toHaveLength(15);
+    // + B3g：codelens（行上注解供方）
+    expect(files).toHaveLength(16);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

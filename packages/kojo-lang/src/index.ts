@@ -81,3 +81,8 @@ export * from './monaco-theme';
 // 理由与 B3c–B3f 逐字相同：判据是语言事实，留在宿主就只有一份宿主版；宿主只剩 Monaco 装配
 // 与翻译。开机侧一律引叶子（`@kojo/kojo-lang/indent`），本行只为"要整块"的消费方。
 export * from './indent';
+// B3g（2026-10-30）：2.0 **行上注解**（`# 机` / `@织` / `@函` 计数）的判据整块从宿主
+// `monaco/kojo2-codelens.ts` 搬进来——`codelens`（三档注解 + 引用计数，计数复用
+// `references` 那一条判据）。理由与 B3c / B3d / B3e / B3f 逐字相同：供方是插件，插件读不到宿主；
+// 开机侧一律引叶子（`@kojo/kojo-lang/codelens`）。
+export * from './codelens';

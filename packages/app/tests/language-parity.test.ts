@@ -229,6 +229,9 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   // `slotServices` 点名）。能力名与 `SlotServiceKind` 逐字相同。
   [LanguageCapability.Highlight]: 'documentHighlight',
   [LanguageCapability.Selection]: 'selectionRange',
+  // B3g：行上注解也交插件（`kojo2-codeLens`），注册走带能力名的共享收口（kojo2 descriptor 由
+  // `slotServices` 点名）。能力名与 `SlotServiceKind` 逐字相同。
+  [LanguageCapability.CodeLens]: 'codeLens',
 };
 
 /* ============================== 矩阵形状 ============================== */
@@ -680,7 +683,7 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     ]);
   });
 
-  it('kojo2：5 枚 self、11 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停 / 签名 / 格式化 / 引用 / 改名 / 高亮 / 扩选走槽腿）、2 枚 builtin、2 项豁免', () => {
+  it('kojo2：4 枚 self、12 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停 / 签名 / 格式化 / 引用 / 改名 / 高亮 / 扩选 / 行上注解走槽腿）、2 枚 builtin、2 项豁免', () => {
     // B2（2026-10-24）：`outline` 从 self 挪到 shared —— 2.0 的大纲不再由
     // `kojo2-symbols.ts` 自建 provider，改由共享收口按 `slotServices: ['documentSymbol']`
     // 挂上，供方是插件 `@kojo/plugin-kojo-lang`。
@@ -700,15 +703,18 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     // `@kojo/kojo-lang/highlight` / `/selection-range`，供方是插件的
     // `kojo2-documentHighlight` / `kojo2-selectionRange`，注册经
     // `registerForLanguageServices(..., 'documentHighlight'|'selectionRange')`。
-    // **档位变了，能力没少**：两侧的合计仍是 5 + 11 = 16。
+    // B3g（2026-10-30）：`codelens` 同批挪到 shared —— 判据搬进 `@kojo/kojo-lang/codelens`
+    // （计数复用包内 references），供方是插件的 `kojo2-codeLens`，注册经
+    // `registerForLanguageServices(..., 'codeLens')`。
+    // **档位变了，能力没少**：两侧的合计仍是 4 + 12 = 16。
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'self')).toEqual([
-      'codelens',
       'diagnostics',
       'folding',
       'indent',
       'semantic',
     ]);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')).toEqual([
+      'codelens',
       'completion',
       'definition',
       'format',

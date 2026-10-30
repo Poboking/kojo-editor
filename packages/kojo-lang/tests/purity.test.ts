@@ -78,7 +78,10 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     //   替换 / `@原生` 围栏自动闭合守卫 / 基底规则数据）。只引 `@kojo/kojo-core`（`lex` 与
     //   词表位序）+ 同包相对路径（形状正则与成对记号走 `language-config`、缩进宽度与围栏词
     //   走 `lexicon`），宿主 `monaco/kojo2-indent.ts` 只剩装配与翻译。
-    expect(files).toHaveLength(28);
+    // + B3g（2026-10-30）：行上注解的判据再进一枚——`codelens`（`# 机` / `@织` / `@函` 三档，
+    //   计数腿复用同包 `references`，不写第二把尺子）。同样只引 `@kojo/kojo-core` +
+    //   同包相对路径，Monaco 的形状翻译留在宿主。
+    expect(files).toHaveLength(29);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

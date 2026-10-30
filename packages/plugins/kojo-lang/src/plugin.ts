@@ -18,6 +18,7 @@
  * | `rename`（B3e） | `rename.ts` 的 `kojo2RenameAt` / `kojo2RenamePlanXFile` | `src/rename.ts` |
  * | `documentHighlight`（B3f） | `highlight.ts` 的 `kojo2DocumentHighlights` | `src/highlight.ts` |
  * | `selectionRange`（B3f） | `selection-range.ts` 的 `kojo2SelectionRangeChainsAt` | `src/selection-range.ts` |
+ * | `codeLens`（B3g） | `codelens.ts` 的 `kojo2CodeLenses`（计数复用 `references.ts`） | `src/codelens.ts` |
  *
  * B4 起还有一枚**不同形状**的贡献——槽 `ui.monaco.language` 交的是注册期的一次性数据
  * （Monarch / 语言配置 / 三套主题声明），不是 `provide(request)`：见 `src/monaco-language.ts`。
@@ -67,6 +68,7 @@ import { provideRename } from './rename';
 import { provideDocumentHighlights } from './highlight';
 import { provideSelectionRanges } from './selection-range';
 import { provideSignatureHelp } from './signature';
+import { provideCodeLenses } from './codelens';
 import { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
 
 /**
@@ -173,13 +175,20 @@ export function createKojoLangPlugin(): Plugin {
         order: CONTRIBUTION_ORDER,
         provide: (request) => provideSelectionRanges(request),
       });
+      // B3g：行上注解是**单答型**（整篇一次、供方唯一），同样分枚注册——它只读请求里的文本与
+      // 项目快照，不取 adapter（没有游戏命名集合参与判据）。
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo2-codeLens',
+        order: CONTRIBUTION_ORDER,
+        provide: (request) => provideCodeLenses(request),
+      });
       ctx.slots.register('ui.monaco.language', {
         id: 'kojo2-monaco-language',
         order: CONTRIBUTION_ORDER,
         surface: KOJO2_MONACO_LANGUAGE_SURFACE,
       });
       ctx.log.info(
-        `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting / references / rename / documentHighlight / selectionRange（languageId=${KOJO2_LANGUAGE_ID}）；` +
+        `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting / references / rename / documentHighlight / selectionRange / codeLens（languageId=${KOJO2_LANGUAGE_ID}）；` +
           `语言面已交出：Monarch / 语言配置 / 三套主题（ui.monaco.language）`,
       );
     },

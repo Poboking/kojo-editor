@@ -180,6 +180,8 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   // B3f（2026-10-29）：同符号高亮 / 结构化扩选同批 —— 供方是插件，kojo2 由 `slotServices` 点名。
   [LanguageCapability.Highlight]: 'documentHighlight',
   [LanguageCapability.Selection]: 'selectionRange',
+  // B3g（2026-10-30）：行上注解同批 —— 供方是插件（`kojo2-codeLens`），kojo2 由 `slotServices` 点名。
+  [LanguageCapability.CodeLens]: 'codeLens',
 };
 
 /** 这门语言对**这一项能力**是否走得到共享收口 */
@@ -980,7 +982,7 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
   it('扫描器确实命中了真实的单语言注册行（防空转）', () => {
     const apis = [...singleLanguageRegistrations().keys()];
     // 这几枚都有一侧是"单语言注册"的真实写法；一条都没扫到说明正则坏了，后面的断言就是空转
-    for (const api of ['registerRenameProvider', 'registerCodeLensProvider']) {
+    for (const api of ['registerRenameProvider', 'registerInlayHintsProvider']) {
       expect(apis, `扫描器漏了 ${api} 的单语言注册行`).toContain(api);
     }
     // B3c（2026-10-28）：两门一等语言的补全都**不再**有单语言注册行——2.0 那条改走共享收口
@@ -1001,6 +1003,13 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
     expect(sharedRegistrationFiles('registerSelectionRangeProvider')).toEqual(
       expect.arrayContaining(['monaco/erb-selection-range.ts', 'monaco/kojo2-selection-range.ts']),
     );
+    // B3g（2026-10-30）：行上注解同理——2.0 那条改走共享收口（能力名 `codeLens` + descriptor
+    // 点名），v1 方言那条本来就在收口里（`kojo-code-lens.ts`）。两门都不再有单语言注册行，
+    // 反向钉住"看不见它"，正向钉住两处收口都还在（kojo2 这枚是本批新写的）。
+    expect(apis).not.toContain('registerCodeLensProvider');
+    const codeLensShared = sharedRegistrationFiles('registerCodeLensProvider');
+    expect(codeLensShared).toContain('monaco/kojo2-codelens.ts');
+    expect(codeLensShared).toContain('monaco/kojo-code-lens.ts');
   });
 
   it('单语言注册行的另一门：非豁免就必须也有注册面', () => {

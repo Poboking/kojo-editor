@@ -1,6 +1,8 @@
 import type * as Monaco from './entry';
 import { errorText } from '@kojo/plugin-api';
 import type {
+  EditorCodeLensRequest,
+  EditorCodeLensResult,
   EditorCompletionItem,
   EditorCompletionRequest,
   EditorDocumentHighlightRequest,
@@ -661,6 +663,62 @@ export function collectSelectionRanges(
   for (const contribution of contributions) {
     const result = provideOf(contribution, request);
     if (!result || result.kind !== 'selectionRange') continue;
+    return result;
+  }
+  return undefined;
+}
+
+/* ============================== 行上注解（B3g） ============================== */
+
+/**
+ * 构造一个 `codeLens` 请求（B3g，宿主接线用；同源形状）。
+ *
+ * `snapshot` 缺席 ⇒ 请求里**不出现** `projectFiles`（与加这一格之前逐字相同，供方只答本篇）；
+ * 给出就同时带 `projectFilesComplete`——与 {@link referencesRequestOf} 逐字同一条口径。
+ *
+ * **今天装配点不传快照**，理由写在宿主 `monaco/kojo2-codelens.ts` 的头注里：Monaco 在**每次
+ * 内容变化后**都会重问整篇注解（契约 `EditorCodeLensRequest` 的头注已取证），而一份项目快照
+ * 的代价是"全项目文本 + 一张临时索引"，那是显式动作（Shift+F12 / F2）才付得起的钱 ——
+ * 放在停笔重算的路径上就是每敲一会儿付一次项目级扫描。要开这一档先量再开。
+ */
+export function codeLensRequestOf(
+  identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
+  text: string,
+  project: EditorCodeLensRequest['project'],
+  snapshot?: Kojo2ProjectFilesSnapshot,
+): EditorCodeLensRequest {
+  return {
+    kind: 'codeLens',
+    path: identity.path,
+    ...(identity.languageId !== undefined ? { languageId: identity.languageId } : {}),
+    ...(identity.version !== undefined ? { version: identity.version } : {}),
+    text,
+    project,
+    lineCount: text.length === 0 ? 1 : countLines(text),
+    ...(snapshot === undefined
+      ? {}
+      : { projectFiles: snapshot.files, projectFilesComplete: snapshot.complete }),
+  };
+}
+
+/**
+ * 问出这一篇的行上注解（**单答型**，整篇一次）。`undefined` = **无人应答**（插件没装 / 弃权）；
+ * `lenses: []` = 认这门语言但整篇没有可证明的注解（**作答**）。
+ *
+ * 与 `kojo-code-lens.ts` 的 `collectCodeLenses` 分工不同，别混用：那一枚是 **v1 的并集型**
+ * 合并器（ERB 方言的若干供方把注解叠在一起，按 行 + 文本去重）。2.0 这一格只有一枚供方、
+ * 且**整篇**是一次答案（"某一行没有注解"是它说的话，不是它没说话）——所以这里按单答收口，
+ * 与 hover / references / documentHighlight 同一条裁决。无人应答时宿主交回 `undefined`
+ * （而不是 `[]`）：Monaco 的 code lens 供给面按第一应答裁决，一个空列表会把别的 provider
+ * 顶掉。
+ */
+export function collectCodeLensResult(
+  contributions: readonly EditorLanguageServiceContribution[],
+  request: EditorLanguageServiceRequest,
+): EditorCodeLensResult | undefined {
+  for (const contribution of contributions) {
+    const result = provideOf(contribution, request);
+    if (!result || result.kind !== 'codeLens') continue;
     return result;
   }
   return undefined;

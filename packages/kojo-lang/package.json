@@ -34,7 +34,8 @@
     "./monarch": "./src/monarch.ts",
     "./language-config": "./src/language-config.ts",
     "./indent": "./src/indent.ts",
-    "./monaco-theme": "./src/monaco-theme.ts"
+    "./monaco-theme": "./src/monaco-theme.ts",
+    "./codelens": "./src/codelens.ts"
   },
   "dependencies": {
     "@kojo/kojo-core": "workspace:*",

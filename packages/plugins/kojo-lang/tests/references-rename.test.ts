@@ -215,6 +215,7 @@ describe('注册纪律：两条腿分枚注册、order 10、零游戏事实', ()
     const contributions = activate();
     const ids = [...contributions.keys()].sort();
     expect(ids).toEqual([
+      'kojo2-codeLens',
       'kojo2-completion',
       'kojo2-definition',
       'kojo2-documentHighlight',

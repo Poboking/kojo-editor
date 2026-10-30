@@ -233,12 +233,12 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
 /**
  * Kojo 2.0 的状态表。
  *
- * 5 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
+ * 4 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
  * `ui/editor-global-providers.ts` 的 2.0 段），且**装配点无条件调用**（K2-SURFACE-DEFAULT：
  * 语言面不读切流开关，`language-parity.test.ts` 逐格对拍"装配点真调了 + 安装器自己不读开关"）；
- * 11 枚 `shared` 是**已交给插件**的十一条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
+ * 12 枚 `shared` 是**已交给插件**的十二条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
  * `completion` / `hover` 自 B3c，`signature` / `format` 自 B3d，`refs` / `rename` 自 B3e，
- * `highlight` / `selection` 自 B3f），宿主只经
+ * `highlight` / `selection` 自 B3f，`codelens` 自 B3g），宿主只经
  * `registerForLanguageServices` 带能力名挂上、判据全在 `@kojo/kojo-lang` + 供方
  * `@kojo/plugin-kojo-lang`；
  * `brackets` / `preview` 与 ERB 同档（语言配置 / Monaco 内建）；`diagnostics` 是 `self`：
@@ -293,7 +293,10 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     // `slotServices: ['inlayHint']`），供方是插件；`monaco/kojo2-inlay.ts` 的原生安装器
     // 已不再是装配路径（只留纯翻译层 `toMonacoInlayHints` 与它的单测）。
     [LanguageCapability.Inlay]: 'shared',
-    [LanguageCapability.CodeLens]: 'self',
+    // B3g（2026-10-30）：行上注解同批走共享收口（能力名 `codeLens`）——判据住
+    // `@kojo/kojo-lang/codelens`（计数复用包内 references），供方是插件的 `kojo2-codeLens`，
+    // 宿主 `monaco/kojo2-codelens.ts` 只剩请求与 Monaco 翻译（翻译复用 v1 那枚既有函数）。
+    [LanguageCapability.CodeLens]: 'shared',
     [LanguageCapability.Implementation]: {
       exempt:
         '明确不做、无对应模块：2.0 里"跳实现"与"转定义"是同一件事（F12 已覆盖 `@函`/模板落点），v1 的共享跳实现面见 monaco/erb-implementation.ts',

@@ -160,8 +160,6 @@ import { installKojo2SignatureHelpProvider } from '../monaco/kojo2-signature';
 import { installKojo2CodeLensProvider } from '../monaco/kojo2-codelens';
 import { installKojo2HighlightProvider } from '../monaco/kojo2-highlight';
 import { installKojo2SelectionRangeProvider } from '../monaco/kojo2-selection-range';
-// 引用计数与引用面同源（code lens 的"本文件 N 处用到"不许自扫一套）。
-import { kojo2ReferencesAt } from '../monaco/kojo2-references';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 // 项目扫描（未打开文件）→ 项目索引的喂养通道（扫描侧投放，这里订阅后写索引）
 import {
@@ -1932,17 +1930,16 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // `installInlayHintsProvider` 那一枚槽腿挂上（kojo2 descriptor 声明了
     // `slotServices: ['inlayHint']`），应答来自插件 `@kojo/plugin-kojo-lang`。
     // adapter 事实经 `@kojo/kojo-lang/adapter-source` 的登记表交给插件（见本函数开头）。
+    // B3g（2026-10-30）：行上注解的原生判据**已清零**——三档标注（`# 机` / `@织` / `@函`）
+    // 与「被用到几处」的计数整块搬进 `@kojo/kojo-lang/codelens`（计数复用包内 references
+    // 判据，不自扫第二份），作答来自插件 `kojo2-codeLens` 贡献；这一枚安装器只做
+    // "model → 请求"与"契约 → Monaco"（翻译复用 v1 那枚 `toMonacoCodeLenses`），注册走
+    // `registerForLanguageServices(..., 'codeLens')`（kojo2 由 descriptor 点名）。
+    // **不传 `getIndex`**：项目快照只在显式动作（Shift+F12 / F2）才付得起，行上注解是每次
+    // 停笔重算整篇的那一格——理由与实测口径见 `monaco/kojo2-codelens.ts` 头注。
     globalDisposers.push(
       installKojo2CodeLensProvider(monaco, {
         getFilePath: (model) => owningPaneOf(model)?.filePathRef.current ?? null,
-        countReferences: (query) => {
-          const result = kojo2ReferencesAt(query.source, {
-            line: query.line,
-            column: query.column,
-          });
-          if (result === null) return 0;
-          return result.refs.filter((site) => site.kind !== 'decl').length;
-        },
       }),
     );
     // B3f（2026-10-29）：同符号高亮 / 结构化扩选的原生判据**已清零**——判据整块搬进

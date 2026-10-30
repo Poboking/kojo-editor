@@ -751,6 +751,13 @@ export interface EditorCodeLensRequest extends EditorDocumentIdentity {
   readonly project: GameProject | null;
   /** 文件行数（体量事实；宿主据此整篇降级。供方按 `documentSymbol` 同款纪律**不据此少报**） */
   readonly lineCount?: number;
+  /**
+   * 其他文档快照（additive，B3g）：与 {@link EditorReferencesRequest.projectFiles} 同形状、同口径
+   * （都是 {@link EditorProjectFile}）。缺席 = 只答本篇；在场 = 可做项目级计数，标题须如实标范围。
+   */
+  readonly projectFiles?: readonly EditorProjectFile[];
+  /** 是否完整（additive，B3g）：`false` = 供方须标「未看全」 */
+  readonly projectFilesComplete?: boolean;
 }
 
 /**
