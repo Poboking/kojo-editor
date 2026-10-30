@@ -75,6 +75,7 @@ export type {
 } from './completion-context';
 export * from './completion-families';
 export * from './completion-item';
+export * from './completion-members';
 export * from './completion-variables';
 export * from './highlight';
 export * from './selection-range';

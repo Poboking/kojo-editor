@@ -2,9 +2,6 @@ import type * as Monaco from './entry';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { BUILTIN_FUNCTION_NAMES } from '@kojo/plugin-erb-parser';
 import { MAX_NAME_CANDIDATES, rankKey, startsWithFold, type CompletionTables } from './completion-core';
-import { erbCompletionGate, NAME_CHAR_RE } from './erb-completion-context';
-import { erbDeclaredNameSlot, ERB_SIGIL_BEFORE } from './erb-completion-families';
-import { erbVariableReferenceSlotAt } from './erb-completion-variables';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { col0Of, lineAt } from './kojo-completion-position';
 
@@ -97,25 +94,7 @@ export interface ErbMemberCompletionItem extends Monaco.languages.CompletionItem
   readonly confidence?: ErbMemberConfidence;
 }
 
-/** 成员位种类：点号成员 / 变量族头 / `族:` 名字段 */
-export type ErbMemberSlotKind = 'member' | 'variable-family' | 'field';
-
-/** 一处成员位（0 基、左含右不含的名字段区间） */
-export interface ErbMemberSlot {
-  readonly kind: ErbMemberSlotKind;
-  /** 名字段起点（0 基，含）——替换范围左界 */
-  readonly start: number;
-  /** 名字段终点（0 基，不含）——替换范围右界 */
-  readonly end: number;
-  /** 光标前已输入的名字片段（过滤 / 排序用） */
-  readonly prefix: string;
-  /** 点号成员位的接收者原文（`M_KOJO` in `M_KOJO.K12`）；其余位种缺省 */
-  readonly receiver?: string;
-  /** 点号成员位的接收者起点（0 基）；成员候选的替换范围从这里开始（连点号一起替换） */
-  readonly receiverStart?: number;
-  /** `族:` 名字段 / 族头位的族头原文 */
-  readonly family?: string;
-}
+/** 成员位种类 / 成员位 → 已搬进 `@kojo/erb-lang/completion-members`（见下方 re-export） */
 
 /**
  * `uncertain` 的**说明文案**（宿主 UI 显示用；本层不做 UI）。
@@ -138,84 +117,21 @@ export interface ErbMemberCompletionResult {
   readonly uncertainHint?: string;
 }
 
-/* ============================== 位置判据 ============================== */
-
-/** 接收者是否"说不出是哪个族"：空 / 数值字面量开头（`1.5` 的小数点）/ 全数字 */
-function usableReceiver(receiver: string): boolean {
-  return receiver.length > 0 && !/^[0-9]/.test(receiver);
-}
+/* ============================== 位置判据（已搬进包） ============================== */
 
 /**
- * `族:` 引用的**族头形**：ASCII 标识符起头（引擎族全是 ASCII；`1:` 这类编号不是族引用）。
- * 只是形状判据，不认任何具体族名（族名真源仍是 `ENGINE_VARIABLE_FAMILIES`）。
- */
-const FAMILY_HEAD_RE = /^[A-Za-z_]/;
-
-/** 点号成员位：`receiver.|` / `receiver.前缀|`（光标在点号后或成员段内） */
-function memberSlotWithin(lineText: string, col0: number): ErbMemberSlot | null {
-  // 1) 光标所在的名字段（点号之后那一段）
-  let segStart = col0;
-  while (segStart > 0 && NAME_CHAR_RE.test(lineText[segStart - 1]!)) segStart--;
-  if (segStart === 0 || lineText[segStart - 1] !== '.') return null;
-  const dot = segStart - 1;
-  // `..` 不是成员位（说不出是哪两个东西的点号）
-  if (dot > 0 && lineText[dot - 1] === '.') return null;
-  // 2) 接收者 = 点号之前的连续名字字符段；空 / 数值 / `(x).` / 被 sigil 领起（`$标签.` / `@函数.`）一律不认（不猜）
-  let receiverStart = dot;
-  while (receiverStart > 0 && NAME_CHAR_RE.test(lineText[receiverStart - 1]!)) receiverStart--;
-  const receiver = lineText.slice(receiverStart, dot);
-  if (!usableReceiver(receiver)) return null;
-  if (receiverStart > 0 && ERB_SIGIL_BEFORE.has(lineText[receiverStart - 1]!)) return null;
-  // 3) 成员段右界（替换范围只覆盖已输入片段）
-  let end = col0;
-  while (end < lineText.length && NAME_CHAR_RE.test(lineText[end]!)) end++;
-  return {
-    kind: 'member',
-    start: segStart,
-    end,
-    prefix: lineText.slice(segStart, col0),
-    receiver,
-    receiverStart,
-  };
-}
-
-/**
- * 光标处的**成员位**（纯函数；`column` = Monaco 的 1 基列）。返回 `null` = 这里不是成员位
- * （**不猜**：串内 / 注释内 / `1.` 数值 / `..` / 接收者为空 / 裸名位前缀不命中任何引擎族）。
+ * 成员位的三条判据（点号成员 / `族:` 名字段 / 裸族头）已整块搬进
+ * `@kojo/erb-lang/completion-members`：它们各自都是**语法**（点号在 ERB 里不是运算符、
+ * `族:段:` 是引用语法、裸标识符名位是词法），与候选装配要读的 adapter 表无关；
+ * 插件供方要用同一份判据，而它读不到宿主。
  *
- * 判定顺序（三条判据各自的单源见模块头注）：代码视野 → 点号成员 → `族:` 名字段 → 裸族头。
+ * 本文件因此只剩候选与形状：族头表 / 点号成员族 / 字段位的 adapter 表投影。
+ * 旧导出的名字（`erbMemberSlotAt` / `ErbMemberSlot` / `ErbMemberSlotKind`）一字未改。
  */
-export function erbMemberSlotAt(lineText: string, column: number): ErbMemberSlot | null {
-  const col0 = col0Of(lineText, column);
-  if (col0 === null) return null;
-  // 串内 / 行注释内不是代码视野（判据 = 位置门那一份，不另写引号计数）
-  if (erbCompletionGate(lineText, column) === 'in-string') return null;
+import { erbMemberSlotAt, type ErbMemberSlot, type ErbMemberSlotKind } from '@kojo/erb-lang/completion-members';
 
-  const member = memberSlotWithin(lineText, col0);
-  if (member !== null) return member;
-
-  // `族:…` 的名字段（结构层判据；不核对族头白名单 ⇒ `CSTR:` 这类引擎族同样认得）。
-  // 族头必须是**标识符形**：`1:` / `0:` 是表达式里的编号 / 三元式尾部，不是族引用（不猜）。
-  const reference = erbVariableReferenceSlotAt(lineText, column);
-  if (reference !== null && FAMILY_HEAD_RE.test(reference.family)) {
-    return {
-      kind: 'field',
-      start: reference.start,
-      end: reference.end,
-      prefix: reference.prefix,
-      family: reference.family,
-    };
-  }
-
-  // 裸族头位（`CF|` / `TFLAG|`）：名位判据与 `erb-families` 同一份
-  const nameSlot = erbDeclaredNameSlot(lineText, column);
-  if (nameSlot === null) return null;
-  const needle = nameSlot.prefix.toUpperCase();
-  const hit =
-    needle.length === 0 || ENGINE_VARIABLE_FAMILIES.some((family) => family.toUpperCase().startsWith(needle));
-  if (!hit) return null;
-  return { kind: 'variable-family', start: nameSlot.start, end: nameSlot.end, prefix: nameSlot.prefix };
-}
+export { erbMemberSlotAt };
+export type { ErbMemberSlot, ErbMemberSlotKind };
 
 /* ============================== 候选：引擎变量族（certain） ============================== */
 

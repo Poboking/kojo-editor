@@ -22,6 +22,7 @@ import * as barrel from '../src/index.js';
 import * as completionBits from '../src/completion-bits.js';
 import * as completionFamilies from '../src/completion-families.js';
 import * as completionItem from '../src/completion-item.js';
+import * as completionMembers from '../src/completion-members.js';
 import * as completionContext from '../src/completion-context.js';
 import * as completionVariables from '../src/completion-variables.js';
 import * as constants from '../src/constants.js';
@@ -74,6 +75,10 @@ describe('@kojo/erb-lang 导出面', () => {
     expect(leafKeys(completionItem)).toEqual([]);
   });
 
+  it('completion-members 的运行时导出 = 清单（1 枚：成员位判据；位种类/位形状是类型）', () => {
+    expect(leafKeys(completionMembers)).toEqual(['erbMemberSlotAt']);
+  });
+
   it('completion-variables 的运行时导出 = 清单（3 枚：段解析 + 两侧的面）', () => {
     expect(leafKeys(completionVariables)).toEqual([
       'erbVariableContextAt',
@@ -107,6 +112,7 @@ describe('@kojo/erb-lang 导出面', () => {
       ...leafKeys(completionBits),
       ...leafKeys(completionFamilies),
       ...leafKeys(completionItem),
+      ...leafKeys(completionMembers),
       ...leafKeys(completionContext),
       ...leafKeys(completionVariables),
       ...leafKeys(constants),
@@ -126,6 +132,7 @@ describe('@kojo/erb-lang 导出面', () => {
       './completion-context',
       './completion-families',
       './completion-item',
+      './completion-members',
       './completion-variables',
       './constants',
       './highlight',

@@ -324,6 +324,7 @@ export default defineConfig({
       '@kojo/erb-lang/completion-context': r('../erb-lang/src/completion-context.ts'),
       '@kojo/erb-lang/completion-families': r('../erb-lang/src/completion-families.ts'),
       '@kojo/erb-lang/completion-item': r('../erb-lang/src/completion-item.ts'),
+      '@kojo/erb-lang/completion-members': r('../erb-lang/src/completion-members.ts'),
       '@kojo/erb-lang/completion-variables': r('../erb-lang/src/completion-variables.ts'),
       '@kojo/erb-lang/highlight': r('../erb-lang/src/highlight.ts'),
       '@kojo/erb-lang/selection-range': r('../erb-lang/src/selection-range.ts'),
