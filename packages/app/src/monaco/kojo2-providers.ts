@@ -148,6 +148,9 @@ export function kojo2CompletionKindOf(
       return K.Module;
     case 'snippet':
       return K.Snippet !== undefined ? K.Snippet : K.Text;
+    // LAU-4 补全腿 additive 的第十三档（`$标签` 一类"本文件内可达的具名引用"）
+    case 'reference':
+      return K.Reference !== undefined ? K.Reference : K.Text;
     case 'text':
       return K.Text;
     default:

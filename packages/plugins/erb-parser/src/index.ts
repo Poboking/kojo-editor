@@ -106,8 +106,8 @@ export {
 
 // 结构化着色（B6，2026-10-16；纯函数，缓冲区文本 + 可空索引进、着色 span 出）
 export { erbSemanticTokens } from './semantic-tokens';
-// 索引扫描根的合成与签名（IDX-ROOT，2026-10-19；纯函数，零 IO）
-export { planScanRoots, rootsSignature, type ScanRootPlan } from './index-roots';
+// 索引扫描根的合成与签名（IDX-ROOT，2026-10-19；纯函数，零 IO；2026-10-31 并入 index-state.ts）
+export { planScanRoots, rootsSignature, type ScanRootPlan } from './index-state';
 
 // 本地名字（`#DIM` / `$` 标签）的落点判据（LAU-4 第二步定稿批）：供方在本插件，宿主悬停 /
 // 补全 / 查引用读同一批函数（不留在语言面库是因为整包会进首屏，见 `symbols.ts` 段头）。
@@ -139,4 +139,52 @@ export {
   type ErbRenameResolution,
   type RenameNameTarget,
 } from './symbols';
+
+// 补全判据（LAU-4 补全腿第二批，2026-10-31）：九态位置门 / 名字槽 / 标签位 / 变量段 /
+// 位坑 / 成员位 / 门→source 白名单 + 经槽 `ui.editor.languageService` 的 `completion` 供方。
+// 判据从 `@kojo/erb-lang/completion-*` 整块搬入（插件静态引库会把 2.0 补全词表链拽上首屏，
+// 实测 199 ⇒ 208 文件），宿主 `monaco/erb-completion-*` 只剩 re-export 与形状翻译。
+export {
+  DEF_RE,
+  ERB_CALL_SLOT_BY_KEYWORD,
+  ERB_CALL_STATEMENTS,
+  ERB_COMPLETION_SNIPPETS,
+  ERB_GATE_SOURCE_WHITELIST,
+  ERB_JUMP_KEYWORDS,
+  ERB_SIGIL_BEFORE,
+  NAME_CHAR_RE,
+  erbBitSlotOpen,
+  erbBitSlotRegionBlank,
+  erbCallKeywords,
+  erbCallStatementRe,
+  erbCodeViewOf,
+  erbCompletionGate,
+  erbDeclaredNameSlot,
+  erbFamilyCandidates,
+  erbInterpRegionAt,
+  erbLabelSlot,
+  erbMemberSlotAt,
+  erbTokenRange,
+  erbVariableContextAt,
+  erbVariableReferenceSlotAt,
+  erbVariableSlotAt,
+  findBitSlot,
+  isLineHeadContext,
+  matchingParen,
+  parseErbNameSlot,
+  provideErbCompletion,
+  topLevelComma,
+  type ErbBitSlot,
+  type ErbCallSlotKind,
+  type ErbCallStatement,
+  type ErbCodeView,
+  type ErbCompletionDeps,
+  type ErbCompletionGate,
+  type ErbCompletionSnippet,
+  type ErbLabelSlot,
+  type ErbMemberSlot,
+  type ErbMemberSlotKind,
+  type ErbNameSlot,
+  type ErbVariableSlot,
+} from './completion';
 

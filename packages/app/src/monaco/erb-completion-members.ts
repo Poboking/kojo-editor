@@ -94,7 +94,7 @@ export interface ErbMemberCompletionItem extends Monaco.languages.CompletionItem
   readonly confidence?: ErbMemberConfidence;
 }
 
-/** 成员位种类 / 成员位 → 已搬进 `@kojo/erb-lang/completion-members`（见下方 re-export） */
+/** 成员位种类 / 成员位 → 已搬进常驻插件 `@kojo/plugin-erb-parser` 的 `src/completion.ts`（见下方 re-export） */
 
 /**
  * `uncertain` 的**说明文案**（宿主 UI 显示用；本层不做 UI）。
@@ -120,15 +120,16 @@ export interface ErbMemberCompletionResult {
 /* ============================== 位置判据（已搬进包） ============================== */
 
 /**
- * 成员位的三条判据（点号成员 / `族:` 名字段 / 裸族头）已整块搬进
- * `@kojo/erb-lang/completion-members`：它们各自都是**语法**（点号在 ERB 里不是运算符、
+ * 成员位的三条判据（点号成员 / `族:` 名字段 / 裸族头）已整块搬进常驻插件
+ * `@kojo/plugin-erb-parser` 的 `src/completion.ts`（LAU-4 补全腿第二批，2026-10-31；此前在
+ * `@kojo/erb-lang/completion-members`）：它们各自都是**语法**（点号在 ERB 里不是运算符、
  * `族:段:` 是引用语法、裸标识符名位是词法），与候选装配要读的 adapter 表无关；
  * 插件供方要用同一份判据，而它读不到宿主。
  *
  * 本文件因此只剩候选与形状：族头表 / 点号成员族 / 字段位的 adapter 表投影。
  * 旧导出的名字（`erbMemberSlotAt` / `ErbMemberSlot` / `ErbMemberSlotKind`）一字未改。
  */
-import { erbMemberSlotAt, type ErbMemberSlot, type ErbMemberSlotKind } from '@kojo/erb-lang/completion-members';
+import { erbMemberSlotAt, type ErbMemberSlot, type ErbMemberSlotKind } from '@kojo/plugin-erb-parser';
 
 export { erbMemberSlotAt };
 export type { ErbMemberSlot, ErbMemberSlotKind };

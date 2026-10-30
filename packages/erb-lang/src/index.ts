@@ -42,40 +42,23 @@
  * 同一张表：**三方并列读者**，谁也不引谁，单一真源一格未动。
  */
 export * from './constants';
-export * from './completion-bits';
-/**
- * `completion-context` **逐名导出**（不用 `export *`）：它与 `./highlight` 各有一枚
- * `erbCodeViewOf` ——高亮那枚是"整行视野"（`(line) => string`），补全门这枚是"到光标为止的
- * 视野"（`(line, col0) => 'code' | 'string' | 'comment'`）。两者不是同一个判据，名字相撞
- * 只是历史；桶里先留补全门这枚（宿主与测试的既有 import 面），高亮那枚仍从
- * `@kojo/erb-lang/highlight` 叶子取。**不许**为了消除歧义把其中一枚改成语义不同的别名。
- */
-export {
-  DEF_RE,
-  ERB_CALL_SLOT_BY_KEYWORD,
-  ERB_CALL_STATEMENTS,
-  ERB_GATE_SOURCE_WHITELIST,
-  ERB_JUMP_KEYWORDS,
-  NAME_CHAR_RE,
-  erbCallKeywords,
-  erbCallStatementRe,
-  erbCodeViewOf,
-  erbCompletionGate,
-  erbInterpRegionAt,
-  erbLabelSlot,
-  parseErbNameSlot,
-} from './completion-context';
-export type {
-  ErbCallSlotKind,
-  ErbCallStatement,
-  ErbCodeView,
-  ErbCompletionGate,
-  ErbLabelSlot,
-  ErbNameSlot,
-} from './completion-context';
-export * from './completion-families';
-export * from './completion-item';
-export * from './completion-members';
-export * from './completion-variables';
 export * from './highlight';
 export * from './selection-range';
+
+/**
+ * ## 补全判据已出本包（LAU-4 补全腿第二批，2026-10-31）
+ *
+ * 本包曾经持有五枚补全叶子（`completion-bits` / `completion-context` / `completion-families` /
+ * `completion-item` / `completion-members` / `completion-variables`）。它们被整块搬进**常驻
+ * 解析器插件** `@kojo/plugin-erb-parser` 的 `src/completion.ts`，理由只有一条：判据要由槽
+ * （`ui.editor.languageService` 的 `completion`）的**供方**回答，而供方是本包**不许依赖**的
+ * 插件；反过来插件静态引本包的补全叶子会把 2.0 补全词表链（9 枚模块 / 约 113 KB）拽进开机
+ * 静态图，撞碎 ps10 的 199 文件闸（实测 199 ⇒ 208）。
+ *
+ * 搬走的口径一字未改（九态位置门 / 名字槽 / 标签位 / 变量段 / 位坑 / 成员位 / 白名单），
+ * 唯一变化是地基三枚：空白类改引契约层 `ERB_BLANK_CLASS_STR`（`@kojo/plugin-api`）、名字字符集
+ * 改引同层的 `MODEL_TOKEN_CLASS`、引擎族表照旧引 `@kojo/kojo-vocab/engine`。
+ *
+ * 本包此后只剩**两条腿**（高亮 / 扩选）——它们不由槽的供方驱动（供方在 `@kojo/plugin-erb-lang`，
+ * 那座插件是**懒装载**的，不占开机图），所以留在这里是对的。
+ */

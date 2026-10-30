@@ -1,10 +1,11 @@
 /**
- * ERB **变量族头补全**：宿主侧只剩**形状翻译**（判据已搬进 `@kojo/erb-lang/completion-families`）。
+ * ERB **变量族头补全**：宿主侧只剩**形状翻译**（判据在常驻插件 `@kojo/plugin-erb-parser` 的
+ * `src/completion.ts`；LAU-4 补全腿第二批 2026-10-31 从 `@kojo/erb-lang/completion-families` 搬入）。
  *
  * ## 搬走了什么
  *
  * 「这个位置算不算裸标识符名位」「前缀怎么比（大小写不敏感）」「哪些族以它起头」「排序档」
- * 都在包里——它们是语言事实，`#DIM` 声明名源要用同一份扫描，插件的供方也要用同一份；
+ * 都在插件里——它们是语言事实，`#DIM` 声明名源要用同一份扫描，插件的供方也要用同一份；
  * 而插件读不到 `packages/app/src/**`。本文件只把中性候选翻成 Monaco 条目。
  *
  * ## 旧导出面一字未改
@@ -19,11 +20,11 @@
  * 否则同一档在不同家族里会挑出不同图标。
  */
 import type * as Monaco from './entry';
-import { erbFamilyCandidates } from '@kojo/erb-lang/completion-families';
+import { erbFamilyCandidates } from '@kojo/plugin-erb-parser';
 import { toMonacoCompletionItems } from './kojo2-providers';
 
-export { ERB_SIGIL_BEFORE, erbDeclaredNameSlot } from '@kojo/erb-lang/completion-families';
-export type { ErbNameSlot } from '@kojo/erb-lang/completion-families';
+export { ERB_SIGIL_BEFORE, erbDeclaredNameSlot } from '@kojo/plugin-erb-parser';
+export type { ErbNameSlot } from '@kojo/plugin-erb-parser';
 
 /** 空区间：本族每一条候选都带自己的区间，缺省值只在"供方没给"时才被用到 */
 const NO_RANGE: Monaco.IRange = {

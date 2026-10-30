@@ -195,9 +195,6 @@ importers:
       '@kojo/erb-vocab':
         specifier: workspace:*
         version: link:../erb-vocab
-      '@kojo/kojo-lang':
-        specifier: workspace:*
-        version: link:../kojo-lang
       '@kojo/kojo-vocab':
         specifier: workspace:*
         version: link:../kojo-vocab
@@ -431,6 +428,9 @@ importers:
       '@kojo/erb-vocab':
         specifier: workspace:*
         version: link:../../erb-vocab
+      '@kojo/kojo-vocab':
+        specifier: workspace:*
+        version: link:../../kojo-vocab
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api

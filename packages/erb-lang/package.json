@@ -2,25 +2,18 @@
   "name": "@kojo/erb-lang",
   "version": "0.0.0",
   "private": true,
-  "description": "ERB（EraBasic 脚本）语言面库：编辑器要知道的判据——同符号高亮（write / read / text 三档）、结构化扩选（词 → 行 → 分支段 → 标签块 → 函数块 → 全文）。纯函数纯数据，零 Monaco、零 React、零 DOM、零 IO。语言层，零游戏名词。",
+  "description": "ERB（EraBasic 脚本）语言面库：编辑器要知道的判据——同符号高亮（write / read / text 三档）、结构化扩选（词 → 行 → 分支段 → 标签块 → 函数块 → 全文）。纯函数纯数据，零 Monaco、零 React、零 DOM、零 IO。语言层，零游戏名词。补全判据（LAU-4 补全腿第二批）已整块搬进常驻解析器插件 @kojo/plugin-erb-parser。",
   "license": "GPL-3.0-or-later",
   "main": "./src/index.ts",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./constants": "./src/constants.ts",
-    "./completion-bits": "./src/completion-bits.ts",
-    "./completion-context": "./src/completion-context.ts",
-    "./completion-variables": "./src/completion-variables.ts",
     "./highlight": "./src/highlight.ts",
-    "./selection-range": "./src/selection-range.ts",
-    "./completion-families": "./src/completion-families.ts",
-    "./completion-item": "./src/completion-item.ts",
-    "./completion-members": "./src/completion-members.ts"
+    "./selection-range": "./src/selection-range.ts"
   },
   "dependencies": {
     "@kojo/erb-vocab": "workspace:*",
-    "@kojo/kojo-lang": "workspace:*",
     "@kojo/kojo-vocab": "workspace:*"
   }
 }

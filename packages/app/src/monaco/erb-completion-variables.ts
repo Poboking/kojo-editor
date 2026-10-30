@@ -1,25 +1,26 @@
 import type * as Monaco from './entry';
 import type { VariableSchema } from '@kojo/plugin-api';
-import { erbVariableSlotAt } from '@kojo/erb-lang/completion-variables';
+import { erbVariableSlotAt } from '@kojo/plugin-erb-parser';
 
 /**
- * ERB 变量引用**名字位判据**已搬进 `@kojo/erb-lang/completion-variables`（LAU-4 续，2026-10-30）：
+ * ERB 变量引用**名字位判据**已搬进常驻插件 `@kojo/plugin-erb-parser` 的 `src/completion.ts`
+ * （LAU-4 补全腿第二批，2026-10-31；此前在 `@kojo/erb-lang/completion-variables`）：
  * 段式解析 / 名字段边界 / 族头白名单都是**语言事实**，位置门与候选源必须吃同一份判据，
  * 而插件的供方读不到宿主。本文件因此只剩"候选长什么样"（形状翻译）：
  * 名字来自 adapter 的表、`kind` / `sortText` / 替换区间由这一层落成 Monaco 条目。
  *
- * 两枚旧导出的名字与签名一字未改（既有 import 点与测试零改动），实现整块来自包里：
+ * 两枚旧导出的名字与签名一字未改（既有 import 点与测试零改动），实现整块来自插件：
  * - `erbVariableSlotAt` —— 候选侧的面（族头 ∈ `ENGINE_VARIABLE_FAMILIES`）；
  * - `erbVariableReferenceSlotAt` —— 结构侧的面（不核白名单，成员源消费）。
  */
-export { erbVariableReferenceSlotAt, erbVariableSlotAt } from '@kojo/erb-lang/completion-variables';
-export type { ErbVariableSlot } from '@kojo/erb-lang/completion-variables';
+export { erbVariableReferenceSlotAt, erbVariableSlotAt } from '@kojo/plugin-erb-parser';
+export type { ErbVariableSlot } from '@kojo/plugin-erb-parser';
 
 /**
  * EC-2 · `.erb` 正文里的**变量族 + 具名索引补全**（只剩形状翻译）。
  *
- * 名字来源 = `VariableSchema.names(family)`；段式与名字位的判据在
- * `@kojo/erb-lang/completion-variables`（见上方搬走说明）。位置不符 / 族头不在白名单 /
+ * 名字来源 = `VariableSchema.names(family)`；段式与名字位的判据在常驻插件
+ * `@kojo/plugin-erb-parser`（见上方搬走说明）。位置不符 / 族头不在白名单 /
  * 字典缺省 / 无 `names` ⇒ `[]`，**绝不猜、绝不抛**。
  */
 

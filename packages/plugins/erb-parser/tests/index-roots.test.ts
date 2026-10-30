@@ -1,12 +1,12 @@
 /**
  * 索引扫描根的**纯判据**单测（IDX-ROOT，2026-10-19）。
  *
- * 分工：这里钉的是"哪些根该走、怎么走一遍"（`./index-roots` 的三条口径），
+ * 分工：这里钉的是"哪些根该走、怎么走一遍"（`./index-state` 的三条口径），
  * 接线（活读时机、降级出声、换根重扫）在 `workspace-index-roots.test.ts`。
  */
 
 import { describe, expect, it } from 'vitest';
-import { planScanRoots, rootsSignature } from '../src/index-roots';
+import { planScanRoots, rootsSignature } from '../src/index-state';
 
 describe('planScanRoots · 并集与顺序', () => {
   it('索引根 = kojoPaths ∪ 工作区根：口上根在前、工作区新增根在后（既有索引的文件序逐字不变）', () => {

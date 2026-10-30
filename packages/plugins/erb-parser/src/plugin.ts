@@ -29,9 +29,17 @@ import {
   pathKey,
   projectFingerprintOf,
 } from '@kojo/plugin-api';
-import { planScanRoots, rootsSignature, type ScanRootPlan } from './index-roots';
 import { applyIndexDelta, type IncrementalFileUpdate } from './incremental';
-import { idleIndexState, indexStateOf, sourceFactsOf, type IndexOutcome, type SourceReading } from './index-state';
+import {
+  idleIndexState,
+  indexStateOf,
+  planScanRoots,
+  rootsSignature,
+  sourceFactsOf,
+  type IndexOutcome,
+  type ScanRootPlan,
+  type SourceReading,
+} from './index-state';
 import {
   PARSE_FILE_TASK,
   SCAN_FLOW_TASK,
@@ -48,9 +56,9 @@ import {
   type ScanRefsPayload,
 } from './offload';
 import { parseErbText, scanControlFlow } from './scanner';
-import { checkStructure } from './structure';
+import { checkStructure, erbDocumentSymbols } from './structure';
 import { buildStructureFixes } from './structure-fix';
-import { erbDocumentSymbols } from './document-symbols';
+import { provideErbCompletion } from './completion';
 import { erbFoldingRanges } from './folding';
 import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition } from './symbols';
@@ -112,7 +120,7 @@ import {
  * 2026-10-19 IDX-ROOT「索引根扩到作者工作区」批：
  * 扫描根从 `project.kojoPaths` 扩成 **`kojoPaths ∪ 工作区全部根`**（`kernel.workspaces`
  * 的 `roots()`，每次现读不缓存），作者在自己「我的口上项目」里写的定义第一次进五条
- * 语言服务腿。根的合成/判等/签名判据全在 `./index-roots.ts`（纯函数），这里只有接线；
+ * 语言服务腿。根的合成/判等/签名判据全在 `./index-state.ts`（纯函数），这里只有接线；
  * 没有"工作区根变更"事件 ⇒ 在**既有时刻**（`ensureIndex()` / `file.changed` /
  * `editor.activeFileChanged`）活读比对签名，变了就 `generation++` 重扫并走既有广播。
  * 只读行为：本批不碰任何写通道，也不因扩根放宽写允许域（铁律 5/6）。
@@ -490,7 +498,7 @@ export function createErbParserPlugin(): Plugin {
       let projectRoots: string[] = [];
       /**
        * 最近一次**起跑构建**所用的扫描根签名（`rootsSignature(planScanRoots().roots)`）。
-       * 与"当前活读出来的签名"不一致 ⇒ 根集合变了，必须重扫（判据见 `./index-roots`）。
+       * 与"当前活读出来的签名"不一致 ⇒ 根集合变了，必须重扫（判据见 `./index-state`）。
        */
       let activeSignature = '';
       /** 工作区不可用的降级只在**状态翻转**时出声一次（`file.changed` 是高频时刻，逐次刷屏即噪声） */
@@ -598,7 +606,7 @@ export function createErbParserPlugin(): Plugin {
         });
       }
 
-      /** 当前该扫的根（活读合成；折叠/去重判据见 `./index-roots`） */
+      /** 当前该扫的根（活读合成；折叠/去重判据见 `./index-state`） */
       function scanRootPlan(): ScanRootPlan {
         return planScanRoots(projectRoots, workspaceRootsOrNothing() ?? []);
       }
@@ -1557,7 +1565,7 @@ export function createErbParserPlugin(): Plugin {
 
         async ensureIndex(): Promise<ErbIndex> {
           // 既有时刻活读一次：会话中途经对话框授权的落点根要在这里进索引，
-          // 而不是等一条并不存在的"工作区根变更"事件（判据见 `./index-roots`）。
+          // 而不是等一条并不存在的"工作区根变更"事件（判据见 `./index-state`）。
           refreshScanRoots();
           if (index) return index;
           // 项目切换会立刻作废旧在途构建并替换 inFlight，因此共享 inFlight 是安全的
@@ -2039,6 +2047,29 @@ export function createErbParserPlugin(): Plugin {
             request.related,
           );
         },
+      });
+
+      /* ---------------- LAU-4 补全腿第二批（2026-10-31）：补全 ----------------
+
+       这一批把宿主 `monaco/erb-completion*.ts` 里的**语言判据**（九态位置门 v2、名字槽 /
+       标签位 / 变量段 / 位坑 / 成员位、门→source 白名单）整块搬进 `./completion.ts`，
+       宿主只剩「model / 位置 → 请求」与「契约 → Monaco 形状」翻译。
+
+       为什么判据必须住本插件（而不是语言面库 `@kojo/erb-lang`）：槽的供方是本插件，而插件
+       静态引库会把 2.0 补全词表链拽上开机图（实测 199 ⇒ 208 文件、+113 KB），直接撞碎
+       ps10 的文件闸；住宿主则是"宿主认识 ERB"，与本批的反面。
+
+       本批只应答四个 facet（snippet / labels / families / declared，次序与宿主源表一致）；
+       变量名 / 位号 / 项目函数 / 系统函数 / 指令词表 / 文档词仍由宿主装配，理由逐条写在
+       `completion.ts` 段头与提交回执里（契约暂缺两段式详情回表是主要一条）。
+
+       索引**现取**（与 definition / rename 同一条纪律）：未开项目 / 索引在途 ⇒ `null`，
+       各 facet 按"未索引"降级（标签与 `#DIM` 声明名回退当前缓冲区，不猜）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-completion',
+        order: 20,
+        provide: (request) => provideErbCompletion(request, { index }),
       });
     },
   };

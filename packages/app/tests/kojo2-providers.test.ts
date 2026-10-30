@@ -100,6 +100,8 @@ const KINDS = {
   Keyword: 17,
   Text: 18,
   Snippet: 27,
+  // LAU-4 补全腿（2026-10-31）：`reference` 档挑 `CompletionItemKind.Reference` 图标
+  Reference: 21,
 } as const;
 
 type ProviderKind = 'completion' | 'hover';
@@ -428,7 +430,7 @@ describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
 
 /* ============================== ③ 图标：契约十二档 ============================== */
 
-describe('图标：契约十二档 → Monaco 枚举逐格对表', () => {
+describe('图标：契约十三档 → Monaco 枚举逐格对表', () => {
   const TABLE: readonly (readonly [EditorCompletionItemKind, number])[] = [
     ['operator', KINDS.Operator],
     ['keyword', KINDS.Keyword],
@@ -442,6 +444,8 @@ describe('图标：契约十二档 → Monaco 枚举逐格对表', () => {
     ['struct', KINDS.Struct],
     ['enum', KINDS.Enum],
     ['module', KINDS.Module],
+    // LAU-4 补全腿 additive 的第十三档
+    ['reference', KINDS.Reference],
   ];
 
   for (const [kind, expected] of TABLE) {

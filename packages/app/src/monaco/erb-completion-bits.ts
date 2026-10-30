@@ -6,7 +6,7 @@ import {
   findBitSlot,
   matchingParen,
   topLevelComma,
-} from '@kojo/erb-lang/completion-bits';
+} from '@kojo/plugin-erb-parser';
 
 export { erbBitSlotOpen, findBitSlot, matchingParen, topLevelComma };
 
@@ -45,7 +45,8 @@ export { erbBitSlotOpen, findBitSlot, matchingParen, topLevelComma };
  * ## 2026-10-30（LAU-4 续）：位槽**判据**已搬进包，本文件只剩候选与悬停的形状翻译
  *
  * `findBitSlot` / `erbBitSlotOpen` / `matchingParen` / `topLevelComma` / `ErbBitSlot` 整块
- * 搬到 `@kojo/erb-lang/completion-bits`——"光标是不是停在空的位坑里"是**语言事实**，位置门
+ * 搬到判据家（2026-10-31 起是常驻插件 `@kojo/plugin-erb-parser` 的 `src/completion.ts`，此前
+ * 在 `@kojo/erb-lang/completion-bits`）——"光标是不是停在空的位坑里"是**语言事实**，位置门
  * 与插件供方都要吃同一份，而插件读不到宿主。本文件的 import 与 re-export 摆在同一处
  * （四枚旧导出的名字与签名一字未改，既有 import 点与测试零改动）。
  */
@@ -65,7 +66,7 @@ export interface ErbBitHoverHit {
 
 const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
 
-export type { ErbBitSlot } from '@kojo/erb-lang/completion-bits';
+export type { ErbBitSlot } from '@kojo/plugin-erb-parser';
 
 /**
  * 把第一实参变量引用解析成 `VariableInfo.bits`（**纯函数**；段切法见文件头注）。

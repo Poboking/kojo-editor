@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@kojo/erb-vocab": "workspace:*",
+    "@kojo/kojo-vocab": "workspace:*",
     "@kojo/plugin-api": "workspace:*"
   }
 }

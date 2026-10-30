@@ -7,24 +7,24 @@
  *
  * 两条腿（缺一条就是假绿）：
  * 1. **值面**：真 `import` 后取 `Object.keys`（型面清单可能漂、值面不会）；
- * 2. **桶自证**：桶的运行时键必须**恰好**等于两个值叶子之并集，防"桶里多 re-export
+ * 2. **桶自证**：桶的运行时键必须**恰好**等于各值叶子之并集，防"桶里多 re-export
  *    了一枚没人知道的模块"。
  *
- * 子路径导出（`package.json` 的 `exports`）也在这里对拍：三枚叶子缺任一，宿主与插件的
+ * 子路径导出（`package.json` 的 `exports`）也在这里对拍：叶子缺任一，宿主与插件的
  * `@kojo/erb-lang/<leaf>` 立刻解析不到，而 tsc / vitest 的别名表**各配一份**、漏一处
  * 也只在特定通道红——清单是把那件事说死的地方。
+ *
+ * LAU-4 补全腿第二批（2026-10-31）：补全判据的六枚叶子（`completion-bits` /
+ * `completion-context` / `completion-families` / `completion-item` / `completion-members` /
+ * `completion-variables`）整块搬进常驻解析器插件 `@kojo/plugin-erb-parser`，本包只剩
+ * 高亮 / 扩选两条腿——那两条的供方是**懒装载**的 `@kojo/plugin-erb-lang`，不占开机图，
+ * 与"槽供方必须常驻"的补全腿不是同一种约束。
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import * as barrel from '../src/index.js';
-import * as completionBits from '../src/completion-bits.js';
-import * as completionFamilies from '../src/completion-families.js';
-import * as completionItem from '../src/completion-item.js';
-import * as completionMembers from '../src/completion-members.js';
-import * as completionContext from '../src/completion-context.js';
-import * as completionVariables from '../src/completion-variables.js';
 import * as constants from '../src/constants.js';
 import * as highlight from '../src/highlight.js';
 import * as selectionRange from '../src/selection-range.js';
@@ -53,68 +53,8 @@ describe('@kojo/erb-lang 导出面', () => {
     ]);
   });
 
-  it('completion-bits 的运行时导出 = 清单（5 枚：位槽扫描 + 空槽判据）', () => {
-    expect(leafKeys(completionBits)).toEqual([
-      'erbBitSlotOpen',
-      'erbBitSlotRegionBlank',
-      'findBitSlot',
-      'matchingParen',
-      'topLevelComma',
-    ]);
-  });
-
-  it('completion-families 的运行时导出 = 清单（3 枚：族头候选 + 裸标识符名位 + sigil 排除集）', () => {
-    expect(leafKeys(completionFamilies)).toEqual([
-      'ERB_SIGIL_BEFORE',
-      'erbDeclaredNameSlot',
-      'erbFamilyCandidates',
-    ]);
-  });
-
-  it('completion-item 只有类型（零运行时导出，桶里不多出任何键）', () => {
-    expect(leafKeys(completionItem)).toEqual([]);
-  });
-
-  it('completion-members 的运行时导出 = 清单（1 枚：成员位判据；位种类/位形状是类型）', () => {
-    expect(leafKeys(completionMembers)).toEqual(['erbMemberSlotAt']);
-  });
-
-  it('completion-variables 的运行时导出 = 清单（3 枚：段解析 + 两侧的面）', () => {
-    expect(leafKeys(completionVariables)).toEqual([
-      'erbVariableContextAt',
-      'erbVariableReferenceSlotAt',
-      'erbVariableSlotAt',
-    ]);
-  });
-
-  it('completion-context 的运行时导出 = 清单（13 枚：九态门 + 语句表 + 名字槽 + 标签位 + 白名单）', () => {
-    expect(leafKeys(completionContext)).toEqual([
-      'DEF_RE',
-      'ERB_CALL_SLOT_BY_KEYWORD',
-      'ERB_CALL_STATEMENTS',
-      'ERB_GATE_SOURCE_WHITELIST',
-      'ERB_JUMP_KEYWORDS',
-      'NAME_CHAR_RE',
-      'erbCallKeywords',
-      'erbCallStatementRe',
-      'erbCodeViewOf',
-      'erbCompletionGate',
-      'erbInterpRegionAt',
-      'erbLabelSlot',
-      'parseErbNameSlot',
-    ]);
-  });
-
   it('桶的运行时键 = 值叶子之并集', () => {
-    // `erbCodeViewOf` 在 `completion-context` 与 `highlight` 各有一枚（同名不同判据：
-    // 前者"到光标为止的视野"、后者"整行视野"）——桶按名去重后恰好一份，集合语义不受影响。
     const expected = new Set<string>([
-      ...leafKeys(completionBits),
-      ...leafKeys(completionFamilies),
-      ...leafKeys(completionItem),
-      ...leafKeys(completionMembers),
-      ...leafKeys(completionContext),
-      ...leafKeys(completionVariables),
       ...leafKeys(constants),
       ...leafKeys(highlight),
       ...leafKeys(selectionRange),
@@ -122,18 +62,19 @@ describe('@kojo/erb-lang 导出面', () => {
     expect(leafKeys(barrel)).toEqual([...expected].sort());
   });
 
-  it('package.json 的 exports 恰是桶 + 五枚叶子（宿主与插件按子路径引，漏一枚即解析不到）', () => {
+  it('补全判据**已不在本包**（LAU-4 补全腿第二批：整块搬进 @kojo/plugin-erb-parser）', () => {
+    // 反向钉：谁把补全判据塞回本包，桶里立刻多出 `erbCompletionGate` 一类键 ⇒ 这条红。
+    expect(leafKeys(barrel)).not.toContain('erbCompletionGate');
+    expect(leafKeys(barrel)).not.toContain('erbFamilyCandidates');
+    expect(leafKeys(barrel)).not.toContain('erbMemberSlotAt');
+  });
+
+  it('package.json 的 exports 恰是桶 + 三枚叶子（宿主与插件按子路径引，漏一枚即解析不到）', () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
     ) as { exports?: Record<string, string> };
     expect(Object.keys(manifest.exports ?? {}).sort()).toEqual([
       '.',
-      './completion-bits',
-      './completion-context',
-      './completion-families',
-      './completion-item',
-      './completion-members',
-      './completion-variables',
       './constants',
       './highlight',
       './selection-range',
