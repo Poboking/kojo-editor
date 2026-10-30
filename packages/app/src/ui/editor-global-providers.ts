@@ -116,7 +116,13 @@ import {
 // K2 batch-3：Kojo 2.0 的语义着色 provider（tree-sitter 增量解 → capture → 5 元组）。
 // 本模块静态引它只拉起 `kojo2-runtime` 的**类型与单例壳**，两枚 wasm 与 highlights 查询
 // 仍只在运行时的默认装载器里动态 import（`kojo2-assets.ts` 不进主线程静态图）。
-import { installKojo2SemanticTokensProvider } from '../monaco/kojo2-semantic';
+// B3 语义收口（2026-10-30）：着色改走共享收口 + 插件供方，本模块只装**预取器**（不注册 provider）；
+// 捕获快照在请求构造时随 `captures` 递下去（见下面的 `readSemanticTokenSpans` 段）。
+import {
+  installKojo2SemanticCaptures,
+  kojo2SemanticCapturesFor,
+  prefetchKojo2SemanticCaptures,
+} from '../monaco/kojo2-semantic';
 // SDK B4：Monaco 语言面的**取数缝**。宿主组合根把"从槽里读语言面"登记进
 // `monaco/monaco-language-surface.ts`（范式同 `@kojo/kojo-lang/adapter-source`：包与插件都
 // 看不见 kernel，只能由持有者交一枚 getter），再把晚激活的供方补落到 Monaco——
@@ -1905,9 +1911,15 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         const lineCount = model.getLineCount();
         if (!shouldComputeSemanticTokens(lineCount)) return [];
         const kernel = requireKernel();
+        // B3 语义收口：2.0 的结构捕获由宿主预取（`monaco/kojo2-semantic.ts`），这一版快照在
+        // ⇒ 随请求递下去由供方裁与答；不在 ⇒ 交空（`captures` 键不出现），**不在这里等**。
+        const captures = kojo2SemanticCapturesFor(model);
         return collectSemanticTokenSpans(kernel.slots.query('ui.editor.languageService'), {
           kind: 'semanticToken',
           ...documentRequestFields(model, path, kernel.project.current()),
+          ...(captures === undefined
+            ? {}
+            : { captures: captures.captures, capturesComplete: captures.complete }),
           // R3：宿主只在**变更行窗口**下传（`kojo-semantic-tokens` 的会话层决定给不给）。
           // 行首偏移的理由与行内提示同一条：供方要跳过窗口前那几万行只能数换行，42 ns/行。
           ...(window === undefined ? {} : { range: windowRangeOf(model, window) }),
@@ -1923,7 +1935,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 切流开关（`ui/kojo2-flag.ts`）只管**有副作用**的语义：写回 / 保存链路、迁移入口、
     // `.kojo` 的解析器切换、存储服务。本装配点今天只剩一枚安装器留在开关里：K2 batch-5 的
     // **一键迁移 code action**（见下）——它的每个动作都把 v1 写法改写进缓冲，属迁移入口。
-    globalDisposers.push(installKojo2SemanticTokensProvider(monaco));
+    // B3 语义收口：着色 provider 的注册在 `kojo-semantic-tokens.ts` 的共享收口（kojo2 由
+    // descriptor 的 `slotServices: ['semanticToken']` 点名）；这里只装**捕获预取器**。
+    // 它同时持有缩进规则同步的句柄（K2-INDENT-WIRE 的挂点随捕获成功触发）。
+    globalDisposers.push(installKojo2SemanticCaptures(monaco));
     // K2 batch-4 → **B3c（2026-10-28）**：这一枚安装器只剩补全 / 悬停两腿，且**不传注入面**。
     // 转定义早在 B3b 归插件；本批把判据（触发字符 / 名字段区间 / 声明索引 / Markdown 措辞 /
     // adapter 三路投影）整块搬进 `@kojo/kojo-lang`，作答的是插件 `@kojo/plugin-kojo-lang` 在
@@ -2059,9 +2074,11 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         const path = (model as unknown as { uri?: { fsPath?: unknown } }).uri?.fsPath;
         if (typeof path !== 'string' || path.length === 0) return;
         kojo2ProjectIndexUpdate(path, model.getValue());
-        // B3h：同一段模型事件顺手把**折叠快照**预热一次（同一 400ms 防抖）——折叠的槽是同步的，
-        // 事实得在 provider 被问之前算好；放这里是因为"只认 2.0 model"的判据本来就在这一段。
+        // B3h / B3 语义收口：同一段模型事件顺手把**折叠快照**与**结构捕获快照**各预热一次
+        // （同一 400ms 防抖）——两条槽都是同步的，事实得在 provider 被问之前算好；放这里是因为
+        // "只认 2.0 model"的判据本来就在这一段。
         prefetchKojo2Folds(model);
+        prefetchKojo2SemanticCaptures(model);
         indexListeners.push(
           model.onDidChangeContent(() => {
             const previous = indexTimers.get(path);
@@ -2078,7 +2095,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
                 } catch {
                   /* 索引只是增强面：取文失败就保持旧条目 */
                 }
-                if (!model.isDisposed()) prefetchKojo2Folds(model);
+                if (!model.isDisposed()) {
+                  prefetchKojo2Folds(model);
+                  prefetchKojo2SemanticCaptures(model);
+                }
               }, 400),
             );
           }),

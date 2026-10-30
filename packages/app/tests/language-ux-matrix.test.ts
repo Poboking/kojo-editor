@@ -182,6 +182,9 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   [LanguageCapability.Selection]: 'selectionRange',
   // B3g（2026-10-30）：行上注解同批 —— 供方是插件（`kojo2-codeLens`），kojo2 由 `slotServices` 点名。
   [LanguageCapability.CodeLens]: 'codeLens',
+  // B3 语义收口（2026-10-30）：结构化着色同批 —— 供方是插件（`kojo2-semanticTokens`），
+  // 捕获快照由宿主预取，kojo2 由 `slotServices` 点名 `semanticToken` 挂上。
+  [LanguageCapability.Semantic]: 'semanticToken',
 };
 
 /** 这门语言对**这一项能力**是否走得到共享收口 */

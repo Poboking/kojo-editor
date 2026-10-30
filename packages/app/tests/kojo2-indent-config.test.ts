@@ -16,8 +16,9 @@
  * 5. **flag / dispose**：flag 关零请求零配置；dispose 幂等且只撤自己写过的那一枚；
  * 6. **与 on-enter 判据同源**：整篇 2.0 夹具逐行对拍——"回车判据要更深" ⟺ "结构
  *    increase 规则命中" ⟺ "该行被 `indent.increase` 捕获"（同一锚点集，不另写词表）；
- * 7. **宿主挂点真接线**：`installKojo2SemanticTokensProvider` 在着色成功之后真的触发
- *    `indents` 请求并写配置；捕获失败时一个 `indents` 请求都不发。
+ * 7. **宿主挂点真接线**（B3 语义收口后挂点换成预取器）：`installKojo2SemanticCaptures` 在
+ *    捕获成功之后真的触发 `indents` 请求并写配置；捕获失败时一个 `indents` 请求都不发。
+ *    安装器本身**不注册 provider**（着色注册在共享收口）。
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -37,7 +38,8 @@ import {
 // 拿它当对照面（宿主不再有这一枚）。
 import { kojo2IndentAfterLine } from '@kojo/kojo-lang/indent';
 import {
-  installKojo2SemanticTokensProvider,
+  installKojo2SemanticCaptures,
+  prefetchKojo2SemanticCaptures,
   type Kojo2SemanticWorkerClient,
 } from '../src/monaco/kojo2-semantic';
 import { indentRulesFromCaptures } from '../src/monaco/tree-sitter/kojo2-worker';
@@ -991,15 +993,15 @@ describe('⑦ 宿主挂点：语义着色成功之后才触发 indents', () => {
         return rulesReply(STRUCT_RULES);
       },
     };
-    const handle = installKojo2SemanticTokensProvider(fake.monaco, {
+    const handle = installKojo2SemanticCaptures(fake.monaco, {
       getClient: async () => client,
       warn: () => undefined,
     });
-    expect(fake.registrations).toHaveLength(1);
-    const provider = fake.registrations[0]!.provider;
+    // 安装器只装预取器：零 provider 注册（着色注册在共享收口）
+    expect(fake.registrations).toHaveLength(0);
 
     const model = fakeModel('# 对照表 心情 依据 恋慕\n');
-    await provider.provideDocumentSemanticTokens(model.model, null, {} as never);
+    prefetchKojo2SemanticCaptures(model.model);
     await vi.waitFor(() => expect(fake.writes).toHaveLength(1));
     expect(capturesCalls).toHaveLength(1);
     expect(indentCalls).toHaveLength(1);
@@ -1028,13 +1030,12 @@ describe('⑦ 宿主挂点：语义着色成功之后才触发 indents', () => {
         return rulesReply(STRUCT_RULES);
       },
     };
-    const handle = installKojo2SemanticTokensProvider(fake.monaco, {
+    const handle = installKojo2SemanticCaptures(fake.monaco, {
       getClient: async () => client,
       warn: () => undefined,
     });
-    const provider = fake.registrations[0]!.provider;
     const model = fakeModel('# 对照表 心情 依据 恋慕\n');
-    await provider.provideDocumentSemanticTokens(model.model, null, {} as never);
+    prefetchKojo2SemanticCaptures(model.model);
     // 给挂点留足微任务时间：确认它真的没被调
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(indentCalls).toHaveLength(0);
@@ -1042,14 +1043,14 @@ describe('⑦ 宿主挂点：语义着色成功之后才触发 indents', () => {
     handle.dispose();
   });
 
-  it('flag 关 ⇒ 语义照挂（语言面）：注册一枚 provider、零配置写入', () => {
+  it('flag 关 ⇒ 预取器照挂（语言面）：零 provider 注册、未预取时零配置写入', () => {
     stubFlag(false);
     const fake = fakeSemanticMonaco();
-    const handle = installKojo2SemanticTokensProvider(fake.monaco, {
+    const handle = installKojo2SemanticCaptures(fake.monaco, {
       getClient: async () => ({ captures: async () => capturesReply() }),
       warn: () => undefined,
     });
-    expect(fake.registrations.length).toBeGreaterThan(0);
+    expect(fake.registrations).toHaveLength(0);
     expect(fake.writes).toHaveLength(0);
     handle.dispose();
   });

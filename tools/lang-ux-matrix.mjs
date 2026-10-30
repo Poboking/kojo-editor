@@ -140,7 +140,12 @@ export const CAPABILITIES = Object.freeze([
     providerApi: 'registerDocumentSemanticTokensProvider',
     unitTests: {
       erb: ['packages/app/tests/kojo-semantic-tokens.test.ts'],
-      kojo2: ['packages/app/tests/kojo2-semantic.test.ts'],
+      // B3 语义收口：判据搬进包、供方进插件；三处各登记一份证据（宿主预取 / 包判据 / 供方三态）。
+      kojo2: [
+        'packages/app/tests/kojo2-semantic.test.ts',
+        'packages/kojo-lang/tests/semantic.test.ts',
+        'packages/plugins/kojo-lang/tests/semantic.test.ts',
+      ],
     },
     manual: {
       steps: [
