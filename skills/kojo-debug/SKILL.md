@@ -45,7 +45,10 @@ node tools/debug-cli.mjs serve --headless          # 真人看屏去掉 --headle
 #    ↑ URL 自带 &kojo-debug-token=<会话 token>（宿要鉴权）；status 里脱敏成 ***，取完整值用 `url` 子命令
 # 2) （可选）用自己的浏览器打开它打印的 URL——人与 agent 看同一屏
 # 3) 驱动
-node tools/debug-cli.mjs open-project <目录> [--writable]   # 真实点击链路开项目（对话框自动应答+写权限审批）
+node tools/debug-cli.mjs open-project <目录> [--writable] [--timeout <ms>]
+#    ↑ 真实点击链路开项目（对话框自动应答+写权限审批）
+#    ↑ **不是工程根＝快速失败**（当场 exit 1 并给应用原文），不再等满 60s 才报超时——
+#      看到 [FAIL] 打开被应用拒绝 就读原文换目录，别去加超时；--timeout 只改第 4 步预算（默认 60000，夹 [3000,300000]）
 node tools/debug-cli.mjs open-file <路径片段>               # 点文件树开文件（自动逐层展开），等 Monaco 挂载
 #    ↑ 结束条件是**路径对拍**：editor.info().path 归一化后必须含你给的片段（最多 10s）；不匹配直接红并回显实际 path
 #    ↑ 片段别给成会命中多份的短串（比如只写 "KOJO"），失败信息里的"实际 path"就是用来改片段的
@@ -58,6 +61,11 @@ node tools/debug-cli.mjs events 30        # 内核事件旁听（最近 30 条�
 node tools/debug-cli.mjs wait "__kojoDebug.state().phase === 'project'"      # 每 200ms 求值，truthy 即成功（缺省 30s）
 node tools/debug-cli.mjs assert "__kojoDebug.state().tabs.length > 0"        # 一次求值，falsy 就 exit 1 并打 JSON
 node tools/debug-cli.mjs screenshot out.png [--full]
+node tools/debug-cli.mjs type "<选择器>" "文本" --mode text|keys|ime
+#    ↑ text（默认）＝insertText 直插（与旧行为逐字一致：搜索框/命令面板过滤/改名都够用）
+#    ↑ keys＝逐字符 keyDown+char+keyUp 走真实键盘路径——**自动配对 / 回车缩进 / 触发字符只有这条路认**；
+#      非 BMP（emoji）退化为 insertText 并在输出给 fallback=N
+#    ↑ ime＝先 imeSetComposition 起组合再 insertText 上屏（验中文输入法）；CDP 不支持时如实红，不静默退化
 node tools/debug-cli.mjs perf quick 5000  # UI 卡顿体检：采样 5s 出报告（帧分档/长任务/交互延迟/逐源码帧耗时）
 #    ↑ 想边驱动边量：perf start →（type/run/切主题…）→ perf stop；bySource 按源码文件归因（render 型长帧归 (render) 桶）
 node tools/debug-cli.mjs profile run 3000 --eval "<js>"   # 函数级热点：CPU 采样 selfTime Top25（同连接跑负载；KOJO_PROFILE_OUT 落 .cpuprofile 火焰图）
@@ -81,6 +89,13 @@ node tools/debug-cli.mjs stop
   `setSelection(a,b,c,d)` · `revealLine(n)` · `foldingRanges()` · `tokens(from,to)`。
   读不到时回 `null`/`false`/`[]`——**判"坏没坏"要看返回值形状，不要靠 try/catch**。
   悬停/补全别用 CDP 模拟鼠标（对 Monaco 不生效）；完整语义见手册 §三「页内 `editor.*` 速查」。
+- **升级 Monaco / 动编辑器依赖后，第一件事跑 `editor.selfCheck()`**（只读、永不抛）：
+  `eval "__kojoDebug.editor.selfCheck()"` → `{monacoVersion, languageId, selectors, foldingShape, ok}`。
+  `ok===false` ⇒ 私有 DOM 形态（`.monaco-hover` / `.suggest-widget`）或折叠贡献点
+  （`editor.contrib.folding`）在当前构建上已变，**此时 hoverAt/suggestAt/foldingRanges 的 `null` 不可信**
+  （会静默退化成"永远 null"，看着像功能没做）；`ok===true` 才可以照旧解读那些 `null`。
+  0.57 实测：`ok=true` / `foldingShape='promise'`（折叠区间拿不到是 API 形态，属已知边界）/
+  `suggestRow`·`labelName`·`detailsLabel` 为 `false`（候选行改用 `.left`+`IconLabel`，**不参与 ok**，别慌）。
 - 输出全 ASCII（`[ok]/[FAIL]/[warn]/[shot]/[clean]`），任何终端码页下可读。
 
 ## 一键回归
@@ -104,7 +119,15 @@ CI 上这条跑在 `.github/workflows/debug-smoke.yml`（nightly + 手动触发�
 - 没有本机 Chrome/Edge ⇒ rc=2（设 `KOJO_DEBUG_BROWSER` 指路径）。
 - 仓库内目录 open-project 默认只读；要可写先复制进沙盒（serve 打印的 sandbox 路径）。
   真壳模式 `open-project` 现在也点真「打开项目」卡（调试面 `dialogPolicy` 应答 IPC 请求腿）并硬对拍
-  `rootDir===请求目录`，**不再有"打开最近项目第一行"那条猜路**；`--writable` 在真壳如实拒（只读开）。
+  `rootDir===请求目录`，**不再有"打开最近项目第一行"那条猜路**。
+- **真壳 `--writable` 硬拒（exit 2）是安全裁决，不是缺陷**：调试面刻意不代答 `confirm_write_domain`
+  （那条命令里"框"与"登记写域"绑在一起，脚本应答它＝脚本自己签发权限，铁律 6/7）。验写链路两条路：
+  ① web 模式 `serve` 后 `open-project <目录> --writable`（宿有自己的写域登记，真写盘链路）；
+  ② 真壳里对**真人已授权目录**（PITFALLS §160/§161）**不加** `--writable` 直接开（授权记录本身生效）。
+- **不是工程根的目录＝快速失败**：`open-project` 当场 exit 1 并回显应用原文
+  （`[FAIL] 打开被应用拒绝：<原文>`——原文可能来自通知，也可能是点完后**新弹出的 toast**，
+  打开前就有的旧 toast 会被底片去重，不参与判定），不再等满 60s 才报「写权限审批 / 文件树」。
+  看到它就读原文换目录，不要靠 `--timeout` 硬顶（那个只改第 4 步预算，默认 60000，夹 [3000,300000]）。
 - **宿有鉴权**（2026-10-30 升级批）：`serve` 每次生成会话 token，页面 URL 带 `kojo-debug-token=…`，
   `/invoke` `/events` `/config` 都要它；`/policy` 只认 CLI 的 `x-kojo-policy-token` 头；Origin 只放行回环来源
   （非回环 `Origin` 一律 403）。所以**别手搓 URL/裸 fetch 打宿**——用 CLI 子命令，或从会话文件里取 token。

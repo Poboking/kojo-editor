@@ -20,6 +20,7 @@ import {
   mapSuggestRows,
   mapSupportedActions,
   slimHoverText,
+  summarizeSelfCheck,
   type SuggestRowLike,
   type SupportedActionLike,
 } from '../src/debug/install-debug';
@@ -230,5 +231,149 @@ describe('语言面 · 源形状守门（绕法真的被收编进 API，且不�
     ]) {
       expect(apiSlice, `KojoDebugApi.editor 缺 ${member}`).toContain(member);
     }
+  });
+});
+
+/* ----------------------- 自检读数（1030 批，遗留 3） ----------------------- */
+
+/**
+ * `hoverAt` / `suggestAt` 靠 Monaco 私有 DOM 形态（`.monaco-hover` / `.suggest-widget
+ * .monaco-list-row` / `.label-name` / `.details-label`）与私有贡献点（`editor.contrib.folding`），
+ * 升级即**静默失效**：读数变成"永远 null"，看起来像功能没做。`selfCheck()` 就是那枚
+ * "这套选择器在当前构建还成不成立"的读数——所以它的**形状**（脚本要断言）与**不抛**（自检
+ * 自己炸掉就没人能定位了）都是硬约束。
+ */
+describe('语言面 · summarizeSelfCheck（自检读数的归一）', () => {
+  it('全缺（null）⇒ 形状齐全、全 false / 全 null、ok=false', () => {
+    const reading = summarizeSelfCheck(null);
+    expect(reading).toEqual({
+      monacoVersion: null,
+      languageId: null,
+      selectors: {
+        hover: false,
+        suggest: false,
+        suggestRow: false,
+        labelName: false,
+        detailsLabel: false,
+        foldingContribution: false,
+      },
+      foldingShape: 'none',
+      ok: false,
+    });
+    // 六项一个不少（契约面的键集固定，脚本不必判存在性）
+    expect(Object.keys(reading.selectors).sort()).toEqual([
+      'detailsLabel',
+      'foldingContribution',
+      'hover',
+      'labelName',
+      'suggest',
+      'suggestRow',
+    ]);
+  });
+
+  it('version + hover/suggest/folding 齐 ⇒ ok=true；缺的 DOM 级项归 false 但不影响 ok', () => {
+    const reading = summarizeSelfCheck({
+      monacoVersion: '0.57.0',
+      languageId: 'kojo',
+      selectors: { hover: true, suggest: true, foldingContribution: true },
+      foldingShape: 'promise',
+    });
+    expect(reading.ok).toBe(true);
+    expect(reading.monacoVersion).toBe('0.57.0');
+    expect(reading.languageId).toBe('kojo');
+    expect(reading.foldingShape).toBe('promise');
+    // 没给的行级探测归 false——它们不参与 ok（尽力而为的 DOM 探测，0 命中不代表失效）
+    expect(reading.selectors.suggestRow).toBe(false);
+    expect(reading.selectors.labelName).toBe(false);
+    expect(reading.selectors.detailsLabel).toBe(false);
+  });
+
+  it('version 缺（null / 空串）⇒ ok=false，其余项照实给', () => {
+    const sel = { hover: true, suggest: true, foldingContribution: true };
+    expect(summarizeSelfCheck({ monacoVersion: null, selectors: sel }).ok).toBe(false);
+    expect(summarizeSelfCheck({ monacoVersion: '   ', selectors: sel }).ok).toBe(false);
+    expect(summarizeSelfCheck({ selectors: sel }).ok).toBe(false);
+    // 三项缺一 = 不 ok（ok 只由这三项 + version 决定）
+    expect(summarizeSelfCheck({ monacoVersion: '0.57.0', selectors: { ...sel, suggest: false } }).ok).toBe(false);
+  });
+
+  it('脏值 / 半截对象 / 非对象入参都不抛（只认字面量 true 与四档 shape）', () => {
+    expect(summarizeSelfCheck(undefined).ok).toBe(false);
+    expect(summarizeSelfCheck(42).selectors.hover).toBe(false);
+    expect(
+      summarizeSelfCheck({
+        monacoVersion: '0.57.0',
+        selectors: { hover: 'true', suggest: 1, foldingContribution: true },
+        foldingShape: 'weird',
+      }),
+    ).toEqual({
+      monacoVersion: '0.57.0',
+      languageId: null,
+      selectors: {
+        hover: false,
+        suggest: false,
+        suggestRow: false,
+        labelName: false,
+        detailsLabel: false,
+        foldingContribution: true,
+      },
+      foldingShape: 'none',
+      ok: false,
+    });
+  });
+});
+
+describe('语言面 · selfCheck 源形状（私有形态真的被探测，且绝不抛）', () => {
+  const source = read('packages/app/src/debug/install-debug.ts');
+
+  const sliceFrom = (anchor: string, length = 2200): string => {
+    const at = source.indexOf(anchor);
+    expect(at, `install-debug.ts 里找不到锚点：${anchor}`).toBeGreaterThanOrEqual(0);
+    return source.slice(at, at + length);
+  };
+
+  it('selfCheck 挂上编辑器面，且接口里声明了 DebugSelfCheck', () => {
+    expect(source).toContain('selfCheck(): DebugSelfCheck');
+    const body = sliceFrom('selfCheck() {', 600);
+    expect(body).toContain('readSelfCheckRaw()');
+    // 兜底：外层 catch 也必须交回合法形状（不是抛、不是 undefined）
+    expect(body).toContain('catch');
+    expect(body).toContain('summarizeSelfCheck(null)');
+  });
+
+  it('foldingShape 四档齐全，且按真实形态判（Promise ⇒ promise）', () => {
+    expect(source).toContain("type DebugFoldingShape = 'regions' | 'ranges' | 'promise' | 'none'");
+    const body = sliceFrom('function foldingShapeOf(');
+    expect(body).toContain('getContribution(');
+    expect(body).toContain("return 'promise'");
+    expect(body).toContain("return 'ranges'");
+    expect(body).toContain("return 'regions'");
+    expect(body).toContain("return 'none'");
+    expect(body).toContain('catch');
+  });
+
+  it('六条选择器都做能力探测，0 命中不因 querySelector 缺席而抛', () => {
+    const body = sliceFrom('function probeSelectors(', 1600);
+    for (const sel of [
+      "'.monaco-hover'",
+      "'.suggest-widget'",
+      "'.suggest-widget .monaco-list-row'",
+      "'.label-name'",
+      "'.details-label'",
+    ]) {
+      expect(body, `probeSelectors 缺 ${sel}`).toContain(sel);
+    }
+    expect(body).toContain("'editor.contrib.folding'");
+    const domBody = sliceFrom('function domSeen(', 400);
+    expect(domBody).toContain('document.querySelector');
+    expect(domBody).toContain('return false');
+    expect(domBody).toContain('catch');
+  });
+
+  it('monacoVersion 取不到时如实 null（不编造版本号）', () => {
+    expect(source).toContain('function resolveMonacoVersion(');
+    const body = sliceFrom('function resolveMonacoVersion(', 900);
+    expect(body).toContain('return null');
+    expect(body).toContain('catch');
   });
 });

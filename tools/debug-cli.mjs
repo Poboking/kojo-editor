@@ -28,14 +28,21 @@
  *   commands [过滤串]          # 命令面板注册表（所有功能的可编程入口）
  *   run <命令id> [--settle ms] # 跑一条命令面板命令（缺省 settle 300ms，再读相位）
  *   close-project              # 关项目回欢迎相位（相当于工具栏「项目操作」→「关闭项目」）
- *   open-project <目录> [--writable] [--no-open-first]
+ *   open-project <目录> [--writable] [--no-open-first] [--timeout <ms>]
  *         # web 模式＝调试宿 POST /policy（body `{readonly:[abs], chooseDir:abs}`：既答对话框也登记读根，
  *         # 少了 readonly 会因读域不含该目录卡到 60s 超时）；真壳（shell）＝调试面 dialogPolicy 应答
  *         # fetch 腿（只读，不进 Rust 写域准入门 ⇒ --writable 如实拒）。两模式都在最后硬对拍
  *         # rootDir===请求目录（假绿拦截）。相位不对时先跑 close-project
+ *         # **快速失败**：第 4 步轮询「弹窗/树」的同时同拍轮询失败信号（.notice.error 原文 /
+ *         # state().notices 关键词 / 超过 1.5s 仍回流欢迎页）——不是工程根当场 exit 1 并给原文，
+ *         # 不再等满 60s。--timeout 只改第 4 步预算（默认 60000，夹 [3000,300000]）
  *   open-file <路径片段>       # 点文件树真实打开一个文件（10s 内对拍 editor.info().path 含该片段，否则如实红）
  *   click <选择器>             # CDP 真实点击（元素中心 + elementFromPoint 自证）
- *   type [<选择器>] <文本>     # 选择器可省＝打到当前焦点元素（命令面板/搜索框先点开再 type）
+ *   type [<选择器>] <文本> [--mode text|keys|ime]
+ *         # 选择器可省＝打到当前焦点元素（命令面板/搜索框先点开再 type）
+ *         # text（默认）＝Input.insertText 直插（行为与旧版逐字一致）；keys＝逐字符 keyDown/char/keyUp
+ *         # 走真实键盘路径（自动配对/回车缩进/触发字符只有这条路认；非 BMP 退化为 insertText 并给 fallback=N）；
+ *         # ime＝Input.imeSetComposition 起组合再 insertText 上屏（CDP 不支持时如实红，不静默退化）
  *   key <键> [ctrl|alt|shift]  # 真实键事件（enter/escape/tab/arrowdown/…，可带修饰键）
  *   screenshot <out.png> [--full]   # 整页截图（agent 可直接看 PNG）
  *   perf <start|stop|quick [ms]>    # UI 卡顿体检（探针四路；跨命令存活）
@@ -145,7 +152,77 @@ function normPath(p) {
   return process.platform === 'win32' ? s.toLowerCase() : s;
 }
 
-async function cdpForSession(session, { mustHavePage = true } = {}) {
+/* --------------------- open-project 的失败判据（纯函数） --------------------- */
+
+/** `--timeout` 的夹取区间（第 4 步预算） */
+const OPEN_TIMEOUT_MIN_MS = 3000;
+const OPEN_TIMEOUT_MAX_MS = 300000;
+const OPEN_TIMEOUT_DEFAULT_MS = 60000;
+
+/** `--timeout <ms>` → 夹取后的毫秒数（非法/缺省落默认） */
+export function clampOpenTimeout(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return OPEN_TIMEOUT_DEFAULT_MS;
+  return Math.min(OPEN_TIMEOUT_MAX_MS, Math.max(OPEN_TIMEOUT_MIN_MS, Math.round(n)));
+}
+
+/**
+ * 打开失败判据（2026-10-30 遗留 1，**纯函数，不碰 CDP**）。
+ *
+ * 病根：对"不是工程根"的目录（如 `fixtures/sugar`：只有 .kojo、没有 CSV/ERB）应用会当场拒绝，
+ * 旧实现却只轮询「写权限弹窗 / 文件树」⇒ 一直等到 60s 超时才报「写权限审批 / 文件树」，
+ * 用户看到的是"超时"而不是"不接受这个目录"。
+ *
+ * 口径：**只在明确有错时**返回 `{reason}`，正常中间态（opening / 弹窗在场 / 树已出）一律 null。
+ * 入参（全部可选，缺字段按"没有信号"处理）：
+ * - `errorNotices`：`.notice.error`（或 `[data-kind="error"]`）的可见原文 —— 无条件算失败；
+ * - `notices`：`state().notices.items` —— 命中失败关键词才算（打开/失败/不支持/不是）；
+ * - `phase` / `hasTree` / `modal`：页面相位 / 文件树是否在场 / 写权限弹窗是否在场；
+ * - `revertedMs`：点完「打开项目」至今的毫秒数 —— 超宽限仍停在 welcome 且无树＝回流。
+ */
+export function classifyOpenFailure(snapshot) {
+  // 欢迎页回流判定的宽限：点完「打开项目」超过这个时长还停在 welcome 且没有树＝应用把这次打开退回来了。
+  // 常量住在函数里：这是纯函数，单测按源码求值时不许依赖模块级可变状态。
+  const REVERT_GRACE_MS = 1500;
+  const s = snapshot ?? {};
+  if (s.hasTree === true) return null; // 树已出＝这一趟开了，正常
+  if (s.modal === true) return null; // 写权限弹窗＝应用接受了目录，正常中间态
+  const norm = (t) => String(t ?? '').replace(/\s+/g, ' ').trim();
+  const errorNotices = Array.isArray(s.errorNotices) ? s.errorNotices : [];
+  const explicit = errorNotices.map(norm).find((t) => t !== '');
+  if (explicit !== undefined) return { reason: explicit };
+  const notices = Array.isArray(s.notices) ? s.notices : [];
+  const KEYWORDS = ['打开', '失败', '不支持', '不是'];
+  for (const raw of notices) {
+    const t = norm(raw);
+    if (t === '') continue;
+    if (KEYWORDS.some((k) => t.includes(k))) return { reason: t };
+  }
+  const revertedMs = Number(s.revertedMs ?? 0);
+  if (String(s.phase ?? '') === 'welcome' && Number.isFinite(revertedMs) && revertedMs >= REVERT_GRACE_MS) {
+    return { reason: '点开之后又回到了欢迎页：应用没有接受这个目录' };
+  }
+  return null;
+}
+
+/** 快速失败的 Error 载体（标记后由 cmdOpenProject 出口换成固定文案 + exit 1） */
+function openRejectedError(abs, reason) {
+  const err = new Error(
+    `[FAIL] 打开被应用拒绝：${reason}（目录：${abs}）——不是工程根或缺权限，换目录或先看 dom 通知`,
+  );
+  err.kojoOpenRejected = true;
+  return err;
+}
+
+/**
+ * 连本会话的页面 CDP。
+ *
+ * `dieOnError:false` 是给 `status` 用的：`die()` 走 `process.exit`，**不可捕获**——
+ * status 复用它时会把"CDP 已经没了"变成一次 exit 2，返回码含义就被污染了（本树实测：
+ * 浏览器退出后 status 反被判绿/忽然 rc=2，两种读数都不可信）。这条路返回 null，
+ * 由调用方自己判红、自己决定退出码。
+ */
+async function cdpForSession(session, { mustHavePage = true, dieOnError = true } = {}) {
   let page = null;
   try {
     page = await cdpPage(session.cdpPort, session.vitePort);
@@ -153,7 +230,7 @@ async function cdpForSession(session, { mustHavePage = true } = {}) {
     page = null;
   }
   if (!page) {
-    if (!mustHavePage) return null;
+    if (!mustHavePage || !dieOnError) return null;
     die(
       `CDP :${session.cdpPort} 上没有本会话的页面（vite :${session.vitePort}）——` +
         `可能是旧会话的僵尸浏览器占着 CDP 端口（serve 只验了端口没验页面归属，2026-10-25 已收紧）。` +
@@ -162,7 +239,12 @@ async function cdpForSession(session, { mustHavePage = true } = {}) {
     );
   }
   const cdp = new Cdp(page.webSocketDebuggerUrl);
-  await cdp.connect();
+  try {
+    await cdp.connect();
+  } catch (err) {
+    if (dieOnError) throw err;
+    return null;
+  }
   return cdp;
 }
 
@@ -556,13 +638,26 @@ async function cmdStatus() {
   const viteOk = await portOpen(s.vitePort);
   let pagePhase = null;
   let cdpOk = false;
-  if (await portOpen(s.cdpPort)) {
-    try {
-      const cdp = await cdpForSession(s);
+  // dieOnError:false —— status 是"读数"，不许因为 CDP 没了就 process.exit（会污染返回码含义）
+  let cdpWhy = '';
+  const cdpPortNum = Number(s.cdpPort ?? 0);
+  if (cdpPortNum > 0 && (await portOpen(cdpPortNum))) {
+    const cdp = await cdpForSession(s, { dieOnError: false }).catch(() => null);
+    if (cdp) {
       cdpOk = true;
-      pagePhase = await cdp.evalJs('(window.__kojoDebug ? __kojoDebug.state().phase : document.querySelector(".welcome") ? "welcome(no-debug-api)" : "unknown")');
-      cdp.close();
-    } catch {}
+      try {
+        pagePhase = await cdp.evalJs('(window.__kojoDebug ? __kojoDebug.state().phase : document.querySelector(".welcome") ? "welcome(no-debug-api)" : "unknown")');
+      } catch (err) {
+        cdpOk = false;
+        cdpWhy = `页面求值失败：${String(err?.message ?? err)}`;
+      } finally {
+        cdp.close();
+      }
+    } else {
+      cdpWhy = `端口 :${cdpPortNum} 开着但没有本会话页面（僵尸浏览器 / 别的会话占着 CDP）`;
+    }
+  } else {
+    cdpWhy = cdpPortNum > 0 ? `CDP :${cdpPortNum} 不在（浏览器已退出）` : '会话没记 cdpPort（serve 没带浏览器？）';
   }
   // 反哺修（2026-10-25）：崩溃要**有读数**，不是一句「CDP 不在」。逐孩子问存活（kill(pid,0)），
   // 退出记录（serve 的 watchChild 写进 session.exits）原样带退出码与时间。
@@ -590,8 +685,11 @@ async function cmdStatus() {
         vite: `${viteOk ? '[ok]' : '[FAIL]'} :${s.vitePort}${isShell ? '' : ` ${childLine('vite', s.vitePid, alive(s.vitePid))}`}`,
         浏览器CDP: cdpOk
           ? `[ok] :${s.cdpPort} ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`
-          : `— ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`,
+          : `[FAIL] ${cdpWhy} ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`,
         页面相位: pagePhase,
+        // 真壳的写权限只由真人对话框交付（铁律 6/7）：调试通道不代答确认框 ⇒ 恒为只读浏览。
+        // 这条只是读数，不参与下面的退出码判定。
+        ...(isShell ? { 写权限: '只读浏览（debug 通道不代答确认框）' } : {}),
         退出记录: (s.exits ?? []).slice(-5),
         // token 只留在会话文件里：status 常被粘进工单/日志，页面 token 一律脱敏（要完整 URL 用 url 子命令）
         URL: maskUrl(s.url),
@@ -803,10 +901,15 @@ async function cmdOpenProject(args, dir, flags) {
     //    路径落不了地就在后面的 rootDir 硬对拍上如实红，绝不猜。
     if (s.mode === 'shell') {
       if (flags.includes('--writable')) {
+        // 安全裁决（不是缺陷，是铁律 6/7 的必然结果）：调试面应答的对话框**不进 Rust 写域准入门**，
+        // 准入门只认真实对话框交付的那一次。所以这条腿不该假装能写——只把**可走的两条路**说清。
         die(
-          '真壳 open-project 只支持只读打开：调试面应答的对话框**不进 Rust 写域准入门**' +
-            '（铁律 6/7：准入门只认真实对话框交付）。要验写链路走 web 模式（serve，调试宿有自己的写域登记）' +
-            '或真人开一次对话框。',
+          '真壳 open-project 不支持 --writable（调试面不代答「写权限确认」＝不给脚本签发权限，铁律 6/7）。\n' +
+            '  可走的两条路：\n' +
+            '  ① 验写链路：web 模式 `node tools/debug-cli.mjs serve` 后 open-project <目录> --writable' +
+            '（调试宿有自己的写域登记，走的是真写链路）；\n' +
+            '  ② 验真壳：对**已授权目录**（PITFALLS §160/§161：先由真人开一次对话框授权该目录）' +
+            '再 shell 下 open-project <该目录>（此时不需要 --writable，授权记录本身生效）',
           2,
         );
       }
@@ -831,6 +934,10 @@ async function cmdOpenProject(args, dir, flags) {
     }
     // 应答装了却没被消费（中途失败/相位不对）不许留过期 policy——收尾一律 clear
     let failure = null;
+    // 点之前的 toast 底片：应用拒绝目录时**原文落在 `.toast-error`**（如「「sugar」不是可识别的
+    // 游戏目录。」），这一条不在 `.notice` 家族里（state().notices 只收 `.notice`）。
+    // 只有"点完之后新出现的"那条算信号，旧 toast 一律当背景（否则上一次失败会把下一次正常打开判死）。
+    let preToastJson = '[]';
     try {
       // 2) 首启「开发者的碎碎念」纸条会盖住整屏（一次性提示）：在场就按真实路径关掉
       //    （ghost=关闭并记「看过」，同一浏览器档案不会再弹）。它是懒挂载的（Suspense fallback
@@ -859,20 +966,94 @@ async function cmdOpenProject(args, dir, flags) {
           if (gate?.clickable) break;
           await sleep(200);
         }
+        // 点之前先记 toast 底片（失败原文常在点完之后才出现的那条 `.toast-error` 里）
+        preToastJson = JSON.stringify(
+          (await cdp
+            .evalJs(`[...document.querySelectorAll('.toast')].map((el) => (el.textContent || '').trim())`)
+            .catch(() => [])) ?? [],
+        );
         await cdpClick(cdp, '.welcome-open');
       } else {
+        // 前置不满足（相位不对）＝ exit 2，而且要是**一行干净文案**：旧实现 throw 到顶层，
+        // Node 会打整段堆栈（`Node.js v22.x` + 内部帧），用户读不出"下一步该干什么"。
+        // 走标记 + 出口 die：finally 里的 dialogPolicy.clear() 先跑完，再干净退出。
+        const err = new Error(
+          `[FAIL] 当前相位是 ${phase}（已开着别的项目）——先 node tools/debug-cli.mjs close-project 回到欢迎相位，再跑本命令`,
+        );
+        err.kojoPhaseMismatch = true;
+        throw err;
+      }
+      // 4) 等「写权限审批弹窗 / 文件树」**或**失败信号（2026-10-30 遗留 1）：
+      //    对不是工程根的目录（fixtures/sugar 这类只有 .kojo、没有 CSV/ERB）应用会当场拒绝并
+      //    退回欢迎页，旧实现只等「弹窗/树」⇒ 一律拖到 60s 超时才报「写权限审批 / 文件树」，
+      //    用户读到的是"超时"而不是"不接受这个目录"。现在每 250ms 同拍轮询三条失败信号，
+      //    命中立刻按固定文案 exit 1（真正慢的成功路径不受影响：树/弹窗一出现就照旧往下走）。
+      const budgetMs = clampOpenTimeout(args?.timeout);
+      const clickedAt = Date.now();
+      let modal = '';
+      while (Date.now() - clickedAt < budgetMs) {
+        const probe = await cdp
+          .evalJs(`(() => {
+            const d = document;
+            const seen = new Set(${preToastJson});
+            const errNotices = [...d.querySelectorAll('.notice.error, .notice[data-kind="error"]')]
+              .map((el) => (el.textContent || '').trim())
+              .filter((t) => t !== '');
+            // 点完之后**新出现**的 toast（应用对这次打开的拒绝原文常在这里）
+            const allToasts = [...d.querySelectorAll('.toast')]
+              .map((el) => (el.textContent || '').trim())
+              .filter((t) => t !== '');
+            const freshToasts = allToasts.filter((t) => !seen.has(t));
+            const errorToasts = [...d.querySelectorAll('.toast-error, .toast.toast-error')]
+              .map((el) => (el.textContent || '').trim())
+              .filter((t) => t !== '');
+            const st = typeof __kojoDebug !== 'undefined' && __kojoDebug.state ? __kojoDebug.state() : null;
+            const modalEl = d.querySelector('.modal[aria-label="写权限确认"]');
+            return {
+              hasTree: !!d.querySelector('.file-tree'),
+              hasModal: !!modalEl,
+              phase: st ? String(st.phase ?? '') : 'unknown',
+              notices: (st && st.notices && Array.isArray(st.notices.items)) ? st.notices.items : [],
+              errorNotices: errNotices,
+              freshToasts,
+              errorToasts,
+            };
+          })()`)
+          .catch(() => null);
+        if (probe?.hasTree) {
+          modal = 'tree';
+          break;
+        }
+        if (probe?.hasModal) {
+          modal = 'yes';
+          break;
+        }
+        if (probe) {
+          const elapsed = Date.now() - clickedAt;
+          const verdict = classifyOpenFailure({
+            ...probe,
+            // 新 toast 走"关键词"那条口径（不无条件算失败：与本命令无关的后台报错不该判死一次正常打开）
+            notices: [...(probe.notices ?? []), ...(probe.freshToasts ?? [])],
+            modal: false,
+            revertedMs: elapsed,
+          });
+          if (verdict) {
+            // 文案要带**应用的原文**：新 toast 优先；退回欢迎页时即便 toast 文案与上一次逐字相同
+            // （底片去重把它当成旧的那条）也把屏上最后一条 toast 原文带出来——那是应用真说的那句话
+            const reverted = String(probe.phase ?? '') === 'welcome' && elapsed >= 1500;
+            const said =
+              (probe.freshToasts ?? [])[0] ?? (reverted ? (probe.errorToasts ?? []).slice(-1)[0] : undefined);
+            throw openRejectedError(abs, said || verdict.reason);
+          }
+        }
+        await sleep(250);
+      }
+      if (modal === '') {
         throw new Error(
-          `当前相位是 ${phase}（已开着别的项目）——先关项目再开：\n` +
-            `  node tools/debug-cli.mjs close-project\n` +
-            `（close-project 跑的就是命令面板里的 workbench.closeProject，回到欢迎相位后再跑本命令）`,
+          `open-project 第 4 步 ${budgetMs}ms 内既没等到写权限审批弹窗、也没等到文件树，且没有可读的失败信号` +
+            `（目录：${abs}）——放预算：--timeout <ms>（夹 [3000, 300000]）；先 node tools/debug-cli.mjs dom 看屏上停在哪`,
         );
       }
-      // 4) 写权限审批弹窗（出现就按 flags 决定；不出现（只读根）就等树）
-      const modal = await waitFor(
-        cdp,
-        `(() => { const m = document.querySelector('.modal[aria-label="写权限确认"]'); return m ? 'yes' : (document.querySelector('.file-tree') ? 'tree' : ''); })()`,
-        { timeoutMs: 60000, intervalMs: 250, label: '写权限审批 / 文件树' },
-      );
       if (modal === 'yes') {
         // 弹窗里 primary = 批准可写；ghost = 只读浏览
         await cdpClick(cdp, flags.includes('--writable') ? '.modal .primary' : '.modal .ghost');
@@ -896,7 +1077,14 @@ async function cmdOpenProject(args, dir, flags) {
         await cdp.evalJs('__kojoDebug.dialogPolicy && __kojoDebug.dialogPolicy.clear()').catch(() => {});
       }
     }
-    if (failure) throw failure;
+    // 快速失败：固定文案 + exit 1（不是 2——2 是"前置不满足"，这里应用明确拒绝了这次打开）。
+    // 相位不对＝前置不满足，走 exit 2 的干净文案（不出堆栈）。
+    // 放在 finally 之后打：真壳的 dialogPolicy.clear() 必须先跑完，过期应答不许留在调试面。
+    if (failure) {
+      if (failure?.kojoOpenRejected) die(failure.message, 1);
+      if (failure?.kojoPhaseMismatch) die(failure.message, 2);
+      throw failure;
+    }
   });
 }
 
@@ -957,7 +1145,20 @@ async function cmdClick(args, selector) {
   });
 }
 
-async function cmdType(args, selector, text) {
+/** `keys` 模式：单个 BMP 字符 → CDP 键事件的三段载荷（keydown / char / keyup 共用） */
+function charKeyEvent(ch) {
+  if (ch === '\n' || ch === '\r') return { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' };
+  if (ch === '\t') return { key: 'Tab', code: 'Tab', keyCode: 9, text: '\t' };
+  if (ch === ' ') return { key: ' ', code: 'Space', keyCode: 32, text: ' ' };
+  if (/^[a-zA-Z]$/.test(ch)) {
+    return { key: ch, code: `Key${ch.toUpperCase()}`, keyCode: ch.toUpperCase().charCodeAt(0), text: ch };
+  }
+  if (/^[0-9]$/.test(ch)) return { key: ch, code: `Digit${ch}`, keyCode: ch.charCodeAt(0), text: ch };
+  // 标点 / 符号：真实浏览器对它们不产固定 `code`（布局相关），key+text 就够走键盘路径
+  return { key: ch, keyCode: ch.charCodeAt(0), text: ch };
+}
+
+async function cmdType(args, selector, text, mode = 'text') {
   // 反哺修（2026-10-25）：选择器可省——省略时打到**当前焦点元素**。命令面板 / 搜索框
   // 这类输入没有稳定选择器，先 click 点开、再 `type <文本>` 是顺手的驱动形态。
   if (text === undefined) {
@@ -965,6 +1166,10 @@ async function cmdType(args, selector, text) {
     selector = null;
   }
   if (text === undefined) die('type 需要 [<选择器>] <文本>；省略选择器＝打到当前焦点元素', 2);
+  const modeNorm = String(mode ?? 'text').toLowerCase();
+  if (!['text', 'keys', 'ime'].includes(modeNorm)) {
+    die(`type 的 --mode 只认 text|keys|ime（收到：${mode}）——text=直插（默认）；keys=逐字符真实键盘事件；ime=输入法组合→上屏`, 2);
+  }
   await withCdp(async (s, cdp) => {
     let focusInfo = null;
     if (selector) {
@@ -984,9 +1189,58 @@ async function cmdType(args, selector, text) {
         die(`焦点元素不可输入（${focusInfo.tag}.${focusInfo.cls}）——命令面板/搜索框要先点开（或 key ctrl+p）再 type`, 1);
       }
     }
+    // 默认 text：`Input.insertText` 直插（行为逐字沿用旧实现——冒烟与脚本都按这个口径写的）
+    if (modeNorm === 'text') {
+      await cdp.send('Input.insertText', { text });
+      console.log(
+        `[ok] 已输入 ${text.length} 字符（mode=text）${selector ? ` 到 ${selector}` : `（焦点元素 ${focusInfo?.tag ?? ''}.${focusInfo?.cls ?? ''}）`}`,
+      );
+      return;
+    }
+    // keys：逐字符走真实键盘路径（keyDown → char → keyUp）——自动配对、回车缩进、触发字符
+    // 这些**只认 keydown** 的行为只有这条路能测到。按码位迭代：非 BMP（emoji 之类）CDP 的
+    // char 事件表达不了，如实退化为 insertText 单发并计数（fallback=N），不假装是键盘输入。
+    if (modeNorm === 'keys') {
+      let fallback = 0;
+      for (const ch of text) {
+        if (ch.codePointAt(0) > 0xffff) {
+          await cdp.send('Input.insertText', { text: ch });
+          fallback += 1;
+          continue;
+        }
+        const keyDef = charKeyEvent(ch);
+        // `text` 只挂在 `char` 帧上：CDP 的 keyDown **带 text 时会自己插一次字**，再发 char
+        // 就是双写（实测 .tree-filter 里 "c1" 变 "cc11"）。keydown 的派发不依赖 text。
+        const { text: charText, ...keyOnly } = keyDef;
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', modifiers: 0, ...keyOnly });
+        await cdp.send('Input.dispatchKeyEvent', { type: 'char', modifiers: 0, text: charText, ...keyOnly });
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', modifiers: 0, ...keyOnly });
+      }
+      console.log(
+        `[ok] 已输入 ${[...text].length} 字符（mode=keys${fallback > 0 ? `，fallback=${fallback}` : ''}）` +
+          `${selector ? ` 到 ${selector}` : `（焦点元素 ${focusInfo?.tag ?? ''}.${focusInfo?.cls ?? ''}）`}`,
+      );
+      return;
+    }
+    // ime：先起输入法组合（imeSetComposition，选区落在当前长度）再 insertText 提交上屏。
+    // CDP 不支持这个方法时**如实红**，不静默退化成 insertText——退化后的读数会让人以为
+    // "输入法路径已经验过"，那是假绿。
+    try {
+      await cdp.send('Input.imeSetComposition', {
+        text,
+        selectionStart: text.length,
+        selectionEnd: text.length,
+      });
+    } catch (err) {
+      die(
+        `[FAIL] 本 CDP 端点不支持 Input.imeSetComposition（${String(err?.message ?? err)}）——` +
+          `输入法组合→上屏这条路在这台浏览器上验不了（换 Chrome/Edge 或降级用 --mode keys），如实红不退化`,
+        1,
+      );
+    }
     await cdp.send('Input.insertText', { text });
     console.log(
-      `[ok] 已输入 ${text.length} 字符${selector ? ` 到 ${selector}` : `（焦点元素 ${focusInfo?.tag ?? ''}.${focusInfo?.cls ?? ''}）`}`,
+      `[ok] 已输入 ${text.length} 字符（mode=ime）${selector ? ` 到 ${selector}` : `（焦点元素 ${focusInfo?.tag ?? ''}.${focusInfo?.cls ?? ''}）`}`,
     );
   });
 }
@@ -1133,7 +1387,19 @@ async function printProbeReport(cdp) {
  */
 async function cmdProfile(args, sub, msArg) {
   await withCdp(async (s, cdp) => {
-    const mode = sub ?? 'run';
+    // 形态归一（2026-10-30 第二批真壳实测）：`profile 2000` 是最顺手的写法，但旧分发把
+    // positional[0] 原样当子命令 ⇒ mode='2000' 两个分支都不进、`Profiler.start` 压根没跑，
+    // 直接 `Profiler.stop` 抛 `CDP No recording profiles found`（还带整段栈）。
+    // 这里把它归一成 run + ms；未知子命令则一次说清，不再靠 CDP 报错兜底。
+    let mode = sub ?? 'run';
+    let budget = msArg;
+    if (/^\d+$/.test(String(mode))) {
+      budget = mode;
+      mode = 'run';
+    }
+    if (mode !== 'run' && mode !== 'start') {
+      die(`profile 只认 run / start，或直接给毫秒数（profile 3000）；收到「${sub}」`, 2);
+    }
     if (mode === 'start') {
       die(
         'profile start/stop 跨 CLI 调用拿不到数据（Profiler 绑定 CDP 连接，连接断采样即丢——实测）。\n' +
@@ -1143,7 +1409,7 @@ async function cmdProfile(args, sub, msArg) {
     }
     await cdp.send('Profiler.enable');
     await cdp.send('Profiler.setSamplingInterval', { interval: 100 }).catch(() => {});
-    const runMs = mode === 'run' ? Math.max(300, Number(msArg ?? 3000) || 3000) : 0;
+    const runMs = mode === 'run' ? Math.max(300, Number(budget ?? 3000) || 3000) : 0;
     if (mode === 'run') {
       await cdp.send('Profiler.start');
       // 同连接内可选负载：--eval "<js>"（Profiler 会话绑连接，CLI 跨调用 start→stop 拿不到
@@ -1221,6 +1487,9 @@ function parseArgs(argv) {
     else if (a === '--cdp-port') opts.cdpPort = Number(argv[++i]);
     else if (a === '--settle') opts.settle = argv[++i];
     else if (a === '--timeout') opts.timeout = argv[++i];
+    // `type --mode text|keys|ime`：带值参数必须在这里吃掉，否则 mode 会被当成位置参数
+    // （第二个位置参数是**待输入文本**，被占走就等于把字打错地方）
+    else if (a === '--mode') opts.mode = argv[++i];
     else if (a === '--browser') opts.browser = argv[++i];
     else if (a === '--headless' || a === '--no-browser' || a === '--record' || a === '--fresh' || a === '--writable' || a === '--full' || a === '--isolate' || a === '--no-debug-api') flags.push(a);
     else positional.push(a);
@@ -1257,7 +1526,7 @@ const commands = {
   'open-project': () => cmdOpenProject(opts, positional[0], flags),
   'open-file': () => cmdOpenFile(positional, positional[0]),
   click: () => cmdClick(positional, positional[0]),
-  type: () => cmdType(positional, positional[0], positional[1]),
+  type: () => cmdType(positional, positional[0], positional[1], opts.mode),
   key: () => cmdKey(positional, positional[0], positional[1]),
   screenshot: () => cmdScreenshot(flags, positional[0]),
   dom: cmdDom,
@@ -1268,6 +1537,20 @@ const commands = {
 };
 if (!rawCmd || !commands[rawCmd]) {
   console.log('用法：node tools/debug-cli.mjs <子命令> […]\n  ' + [...Object.keys(commands)].join(' · '));
+  // 两个带值参数的速查（文件头的完整清单很长，这里只点最常被问的两条参数形态）
+  console.log('  type [<选择器>] <文本> [--mode text|keys|ime]   # 默认 text；keys=真实键盘路径；ime=输入法组合→上屏');
+  console.log('  open-project <目录> [--writable] [--timeout <ms>]   # 第 4 步预算，默认 60000，夹 [3000,300000]');
   process.exit(rawCmd ? 1 : 0);
 }
-await commands[rawCmd]();
+await (async () => {
+  try {
+    await commands[rawCmd]();
+  } catch (err) {
+    // 顶层兜底（2026-10-30 第二批真壳实测）：子命令内部 throw 出来的错误（CDP 报错、路径对拍
+    // 失败、profile 采样异常……）原先让 Node 打整段栈，agent 读到的是「Node.js v22.22.2」而不是
+    // 「哪一步错了」。这里统一成一行 [FAIL]，栈留在 KOJO_DEBUG_TRACE=1 时才打（排障仍可拿）。
+    console.error(`[FAIL] ${String(err?.message ?? err)}`);
+    if (process.env.KOJO_DEBUG_TRACE) console.error(String(err?.stack ?? ''));
+    process.exit(1);
+  }
+})();

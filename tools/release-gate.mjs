@@ -400,6 +400,19 @@ export const ARTIFACT_LIMITS = Object.freeze({
 
 const MIB = 1024 * 1024;
 
+/**
+ * 上界三个数的**唯一渲染面**：`{ entryKB, distMiB, files }`，一律从 `ARTIFACT_LIMITS` 换算。
+ * 脚本文案（summary / FAIL 行）与 `tools/tests/release-gate.test.ts` 的断言都走这里——抬闸
+ * （如 LAU-4 第一步的 11.1 → 11.2 MiB / 94 → 96 件）只改常量一处，测试不会再抄一份旧数。
+ */
+export function artifactLimitFace(limits = ARTIFACT_LIMITS) {
+  return {
+    entryKB: Math.round(limits.entryBytes / 1000),
+    distMiB: Math.round((limits.distBytes / MIB) * 100) / 100,
+    files: limits.files,
+  };
+}
+
 /** 入口块 = index.html 的 `<script type="module" src=…>`；认不出退到最大的 `.js`（tail 里会注明） */
 export function findEntryRel(indexHtml = '', files = []) {
   const match = /<script\b[^>]*\bsrc=["']([^"']+\.js)["']/i.exec(String(indexHtml));
@@ -493,12 +506,13 @@ export async function inspectArtifacts({ root = ROOT, readDist = defaultReadDist
   const measured = measureArtifacts({ files: dist.files ?? [], indexHtml: dist.indexHtml ?? '', limits: ARTIFACT_LIMITS });
   const distMiB = Math.round((measured.distBytes / MIB) * 100) / 100;
   const entryKB = measured.entryBytes === null ? null : Math.round(measured.entryBytes / 1000);
-  // 上界三个数**只从 `ARTIFACT_LIMITS` 渲染**：此前这里手抄过一份「40 件 / 8 MiB」，
-  // 而闸早已改成 85 件 / 10.5 MiB ⇒ summary 长期在报一个不存在的上界（2026-10-25 件数批修正）。
-  // 判据一个字没动，改的只是这句话的取值来源。
-  const limitFiles = ARTIFACT_LIMITS.files;
-  const limitMiB = Math.round((ARTIFACT_LIMITS.distBytes / MIB) * 100) / 100;
-  const limitEntryKB = Math.round(ARTIFACT_LIMITS.entryBytes / 1000);
+  // 上界三个数**只从 `ARTIFACT_LIMITS` 渲染**（唯一渲染面 = `artifactLimitFace`）：此前这里手抄过
+  // 一份「40 件 / 8 MiB」，而闸早已改成 85 件 / 10.5 MiB ⇒ summary 长期在报一个不存在的上界
+  // （2026-10-25 件数批修正）。判据一个字没动，改的只是这句话的取值来源；测试断言走同一个函数。
+  const limitFace = artifactLimitFace();
+  const limitFiles = limitFace.files;
+  const limitMiB = limitFace.distMiB;
+  const limitEntryKB = limitFace.entryKB;
   const readings = {
     present: true,
     files: measured.files,
@@ -516,7 +530,7 @@ export async function inspectArtifacts({ root = ROOT, readDist = defaultReadDist
   const lines = ['[artifact-audit] FAIL：产物超出上界'];
   if (measured.exceeded.includes('entry-missing')) lines.push('  dist 里认不出入口块：index.html 无 script src，且无 .js 产物');
   if (measured.exceeded.includes('entry')) {
-    lines.push(`  入口块 ${measured.entry} = ${entryKB} kB ＞ 上限 1,100 kB`);
+    lines.push(`  入口块 ${measured.entry} = ${entryKB} kB ＞ 上限 ${limitEntryKB.toLocaleString('en-US')} kB`);
   }
   if (measured.exceeded.includes('dist')) lines.push(`  dist 总量 = ${distMiB} MiB ＞ 上限 ${limitMiB} MiB`);
   if (measured.exceeded.includes('files')) lines.push(`  产物件数 = ${measured.files} ＞ 上限 ${limitFiles}`);

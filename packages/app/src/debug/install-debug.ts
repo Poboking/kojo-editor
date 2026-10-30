@@ -18,6 +18,11 @@
  *   `hoverAt()`（走真 hover provider 链读屏上文本）、`suggestAt()`（真补全弹窗候选）、
  *   `tokens()`（词法 token）、`foldingRanges()`（折叠区间）、`format()`（格式化前后长度）、
  *   `setSelection()` / `revealLine()`（受控定位）——PITFALLS 247 的手工绕法在此收编成 API；
+ * - `editor.selfCheck()`（1030 批，只读、绝不抛）：上一条里那些**私有 DOM 形态**
+ *   （`.monaco-hover` / `.suggest-widget` / `.label-name` / `.details-label`）与**私有贡献点**
+ *   （`editor.contrib.folding`）在**当前构建**上还成不成立的自检读数。Monaco 一升级，这些
+ *   会静默失效、读数恒为 null，看起来像"功能没做"——所以升级后先跑它，`ok===false` 就是
+ *   "该重新对照 DOM 了"，不是"调试面坏了"；
  * - `invoke(cmd, args)`：直达宿主命令（桌面壳 = 真 Tauri IPC；浏览器 = 调试宿）；
  * - `dialogPolicy.{arm,armed,clear,status}`：对话框一次性自动应答（真壳 fetch 腿 /
  *   web 页面腿；只答**只选取器** choose_directory 与 pick_save_path——都是"只选不写"，
@@ -28,7 +33,7 @@
  */
 import { invoke, isTauri } from '../bridge/invoke';
 import { KERNEL_EVENT_NAMES, type GameProject, type KernelEventName } from '@kojo/plugin-api';
-import { version as APP_VERSION } from '../../package.json';
+import { version as APP_VERSION, dependencies as APP_DEPS } from '../../package.json';
 import type { Kernel } from '@kojo/kernel';
 // 只取类型面：语言面读数需要 IStandaloneCodeEditor 的签名，但不能把 Monaco 运行时拖进本模块
 import type * as Monaco from '../monaco/entry';
@@ -92,6 +97,8 @@ export interface KojoDebugApi {
     foldingRanges(): DebugFoldingRange[] | null;
     /** 词法 token（`monaco.editor.tokenize`，逐行；行号 1 基） */
     tokens(lineFrom: number, lineTo: number): Promise<DebugTokenLine[]>;
+    /** 私有 DOM 形态 / 私有贡献点的自检读数（只读、绝不抛；升级 Monaco 后先跑它） */
+    selfCheck(): DebugSelfCheck;
   };
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   /**
@@ -184,6 +191,42 @@ export interface DebugFoldingRange {
 export interface DebugTokenLine {
   readonly line: number;
   readonly tokens: readonly { readonly type: string; readonly startIndex: number }[];
+}
+
+/**
+ * 自检的六条选择器口径。**这是"能力探测"，不是"此刻屏上有元素"**：
+ * 面板没弹出来时 `document.querySelector` 当然是 0 命中，那不代表选择器失效——
+ * 所以每项都是"DOM 里见到过 **或** 产出它的那个贡献点还在"，见 `probeSelectors`。
+ */
+export interface DebugSelfCheckSelectors {
+  /** `.monaco-hover`（悬停面板容器） */
+  readonly hover: boolean;
+  /** `.suggest-widget`（补全弹窗外壳） */
+  readonly suggest: boolean;
+  /** `.suggest-widget .monaco-list-row`（候选行） */
+  readonly suggestRow: boolean;
+  /** `.label-name`（候选名字） */
+  readonly labelName: boolean;
+  /** `.details-label`（候选细节） */
+  readonly detailsLabel: boolean;
+  /** `getContribution('editor.contrib.folding')` 非空 */
+  readonly foldingContribution: boolean;
+}
+
+/** 折叠模型的真实形态：0.57 = `promise`（`getFoldingModel()` 返 Promise）/ 早期 = `ranges` */
+export type DebugFoldingShape = 'regions' | 'ranges' | 'promise' | 'none';
+
+/**
+ * `editor.selfCheck()` 的返回形状（契约面）。`monacoVersion` / `languageId` 取不到就是 null
+ * （不编造），`ok` 只由 `monacoVersion !== null && hover && suggest && foldingContribution`
+ * 三项决定——`suggestRow` / `labelName` / `detailsLabel` 是纯 DOM 探测，**不参与** `ok`。
+ */
+export interface DebugSelfCheck {
+  readonly monacoVersion: string | null;
+  readonly languageId: string | null;
+  readonly selectors: DebugSelfCheckSelectors;
+  readonly foldingShape: DebugFoldingShape;
+  readonly ok: boolean;
 }
 
 /** 悬浮文本/行的上限：悬停面板里整篇文档也可能被塞进来，读数不该原样搬 */
@@ -291,6 +334,44 @@ export function mapSuggestRows(rows: readonly SuggestRowLike[]): DebugSuggestIte
 /** 单行归一：非字符串 ⇒ 空串；折叠空白与换行（读数一律单行） */
 function normalizeOneLine(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
+/**
+ * `selfCheck` 读数归一（纯函数，供单测）。
+ *
+ * 入参是 `unknown`：null / 缺字段 / 半截对象 / 脏值（`'true'` 这种字符串）都**不许抛**，
+ * 一律归成契约形状——否则"自检自己炸了"就退化成第二个无法定位的静默失败。
+ * 归一规则刻意取严：
+ * - `selectors.*` 只认**字面量 true**（`'true'` / 1 都不算：读数是给脚本断言的，不猜）；
+ * - `monacoVersion` / `languageId` 取单行化后的非空串，否则 null；
+ * - `foldingShape` 只认四个枚举值，其余归 `'none'`；
+ * - `ok` 只看三项（version + hover + suggest + foldingContribution），**不看** DOM 行级探测。
+ */
+export function summarizeSelfCheck(raw: unknown): DebugSelfCheck {
+  const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const rawSelectors = (
+    source.selectors && typeof source.selectors === 'object' ? source.selectors : {}
+  ) as Record<string, unknown>;
+  const selectors: DebugSelfCheckSelectors = {
+    hover: rawSelectors.hover === true,
+    suggest: rawSelectors.suggest === true,
+    suggestRow: rawSelectors.suggestRow === true,
+    labelName: rawSelectors.labelName === true,
+    detailsLabel: rawSelectors.detailsLabel === true,
+    foldingContribution: rawSelectors.foldingContribution === true,
+  };
+  const monacoVersion = normalizeOneLine(source.monacoVersion) || null;
+  const languageId = normalizeOneLine(source.languageId) || null;
+  const shape = source.foldingShape;
+  const foldingShape: DebugFoldingShape =
+    shape === 'regions' || shape === 'ranges' || shape === 'promise' ? shape : 'none';
+  return {
+    monacoVersion,
+    languageId,
+    selectors,
+    foldingShape,
+    ok: monacoVersion !== null && selectors.hover && selectors.suggest && selectors.foldingContribution,
+  };
 }
 
 const BUS_RING_LIMIT = 500;
@@ -500,6 +581,136 @@ function mapFoldingModel(model: object): DebugFoldingRange[] | null {
     out.push({ startLine, endLine, kind: typeof kind === 'string' ? kind : '' });
   }
   return out;
+}
+
+/* --------------------------- 自检读数（1030 批，只读） --------------------------- */
+
+/**
+ * 本仓的 monaco 是**精确钉版**（`packages/app/package.json` 里 `"monaco-editor": "0.57.0"`，
+ * `monaco/entry.ts` 头注也钉了这条纪律）。为什么要拿钉版号兜底：0.57 的
+ * `editor/editor.api.js` **不导出 `version`**（导出面只有 CancellationTokenSource / KeyCode /
+ * editor / languages 等），所以"从 monaco entry 的 version 取"在 0.57 上恒为 undefined。
+ * 取数优先级见 `resolveMonacoVersion`：运行时 `globalThis.monaco.version`（AMD/globalAPI 形态）
+ * → 钉版号 → null。**不猜**：钉版号不合 semver 形态就交回 null（ok=false 如实）。
+ */
+const PINNED_MONACO_VERSION = APP_DEPS['monaco-editor'];
+
+/** DOM 里见不见得到这条选择器（0 命中也只是 false，不代表选择器坏了） */
+function domSeen(selector: string): boolean {
+  try {
+    if (typeof document === 'undefined' || typeof document.querySelector !== 'function') return false;
+    return document.querySelector(selector) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Monaco 版本：先问运行时入口（`globalThis.monaco.version`，AMD / globalAPI 装配才有），
+ * 再退到本仓钉版号（0.57 的实际取数路径）。都拿不到 ⇒ null。
+ */
+function resolveMonacoVersion(): string | null {
+  try {
+    const globalApi = (globalThis as { monaco?: { version?: unknown } }).monaco;
+    const runtime = normalizeOneLine(globalApi?.version);
+    if (runtime) return runtime;
+  } catch {
+    /* 全局被冻结 / 代理拦住都不该让自检失败 */
+  }
+  const pinned = normalizeOneLine(PINNED_MONACO_VERSION);
+  // 钉版号不合 semver 形态（被改成 workspace: / ^0.57 / git 引用）⇒ 如实 null，不猜
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(pinned)) return null;
+  return pinned;
+}
+
+/** 私有贡献点是否还在（`getContribution` 抛错 / 返回空 ⇒ false） */
+function hasContribution(ed: LiveEditor | null, id: string): boolean {
+  if (!ed) return false;
+  try {
+    return !!(ed as unknown as { getContribution(id: string): unknown }).getContribution(id);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 六条选择器的**能力探测**（尽力而为，契约 §2.1 的简化裁决）。
+ *
+ * 口径声明：`hoverAt` / `suggestAt` 靠的是 Monaco 私有 DOM 形态，升级就可能静默变空。
+ * 但"此刻 0 命中"不等于"选择器失效"——面板没弹的时候本来就 0 命中。所以每条取
+ * `document.querySelector(sel) !== null || <产出它的那枚贡献点还在>`：
+ * - `hover`：贡献点 id 在 0.57 改过名（`editor.contrib.hover` → `editor.contrib.contentHover`，
+ *   见 `contrib/hover/browser/contentHoverController.js`），**两个都探**——这正是"升级即改名"
+ *   的活例子；
+ * - `suggest`：`editor.contrib.suggestController` 仍在 ⇒ 补全弹窗仍会被生产；
+ * - `suggestRow` / `labelName` / `detailsLabel`：没有独立的贡献点可问，只能看 DOM 里有没有
+ *   这个类的元素（**纯尽力而为**，0 命中就 false，且**不参与 `ok`**）。0.57 实测：候选行
+ *   `.details-label` 还在，`.label-name` 已漂（0.57 的行用 `.left` + IconLabel 渲染，
+ *   `suggestAt` 因此退到 aria-label 取名字）——`labelName:false` 是这条读数**该报**的真相；
+ * - `foldingContribution`：`getContribution('editor.contrib.folding')` 非空（真实探测）。
+ *
+ * 结论：`selectors` 是"这套私有形态在当前构建上还成立吗"的最佳猜测，不是布尔事实；
+ * 脚本只该断言 `ok` 与 `foldingShape`，逐项值用于人工定位。
+ */
+function probeSelectors(ed: LiveEditor | null): DebugSelfCheckSelectors {
+  return {
+    hover:
+      domSeen('.monaco-hover') ||
+      hasContribution(ed, 'editor.contrib.contentHover') ||
+      hasContribution(ed, 'editor.contrib.hover'),
+    suggest: domSeen('.suggest-widget') || hasContribution(ed, 'editor.contrib.suggestController'),
+    suggestRow: domSeen('.suggest-widget .monaco-list-row') || domSeen('.monaco-list-row'),
+    labelName: domSeen('.label-name'),
+    detailsLabel: domSeen('.details-label'),
+    foldingContribution: hasContribution(ed, 'editor.contrib.folding'),
+  };
+}
+
+/**
+ * 折叠模型形态（只判形状，不取数）：0.57 的 `getFoldingModel()` 返 **Promise**（⇒ `'promise'`，
+ * 同步读数取不到值）；早期版本同步返回、模型上是 `ranges` 数组；更有版本用 `regions`
+ * （`FoldingRegions` 实例，带 `length` + 访问器）。都探不到 ⇒ `'none'`。
+ */
+function foldingShapeOf(ed: LiveEditor | null): DebugFoldingShape {
+  try {
+    if (!ed) return 'none';
+    const contribution = (
+      ed as unknown as { getContribution(id: string): unknown }
+    ).getContribution('editor.contrib.folding');
+    if (!contribution || typeof contribution !== 'object') return 'none';
+    const holder = contribution as { foldingModel?: unknown; getFoldingModel?: () => unknown };
+    const model = holder.foldingModel ?? holder.getFoldingModel?.();
+    if (!model || typeof model !== 'object') return 'none';
+    if (typeof (model as { then?: unknown }).then === 'function') return 'promise';
+    if (Array.isArray((model as { ranges?: unknown }).ranges)) return 'ranges';
+    const regions = (model as { regions?: unknown }).regions;
+    if (regions && typeof regions === 'object') return 'regions';
+    return 'none';
+  } catch {
+    return 'none';
+  }
+}
+
+/** 自检的原始读数：每一步各自吞错，最后统一过 `summarizeSelfCheck` 归一 */
+function readSelfCheckRaw(): DebugSelfCheck {
+  let ed: LiveEditor | null = null;
+  try {
+    ed = focusedCtx()?.editorRef.current ?? null;
+  } catch {
+    ed = null; // 登记簿被拆 / 编辑器已销毁 ⇒ 无焦点编辑器，照样给形状
+  }
+  let languageId: string | null = null;
+  try {
+    languageId = ed?.getModel()?.getLanguageId() || null;
+  } catch {
+    languageId = null;
+  }
+  return summarizeSelfCheck({
+    monacoVersion: resolveMonacoVersion(),
+    languageId,
+    selectors: probeSelectors(ed),
+    foldingShape: foldingShapeOf(ed),
+  });
 }
 
 export function installDebug(): KojoDebugApi {
@@ -748,6 +959,15 @@ export function installDebug(): KojoDebugApi {
         const ed = focusedCtx()?.editorRef.current;
         if (!ed) return null;
         return foldingRangesOf(ed);
+      },
+      selfCheck() {
+        // 每一步都自己吞错 + 末尾 `summarizeSelfCheck` 归一：`ok===false` 也不许抛，
+        // 已有的 hoverAt / suggestAt / foldingRanges 行为一个字节都不变。
+        try {
+          return readSelfCheckRaw();
+        } catch {
+          return summarizeSelfCheck(null);
+        }
       },
       async tokens(lineFrom, lineTo) {
         const ed = focusedCtx()?.editorRef.current;
