@@ -968,13 +968,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     +232 与 app 侧五枚**都不在开机图**（懒边）——逐文件点名后总和与总量差 24 B（KB 取整）。
     //     ⇒ 闸 **3,338 → 3,352**（余量 2 KB）。这一档是"代码多花 12 KB、换同一语料 A/B 热载
     //     **稳态 126.5 → 115.4 MB**（−11.1 / −8.8%，见 STATE 该行）"。
+    //
+    //   - **LAU-4 ERB 查引用进槽（2026-10-31，引用腿批）**：读数 **199 文件 / 3,356 KB**
+    //     （3,436,998 B = 上一条 3,430,610 + 6,388）——**零新进图文件**（199 未动）。
+    //     逐枚（图内只有插件三枚，其余删改全在懒边）：`erb-parser/src/symbols.ts` **+5,392**
+    //     （`erbReferencesAt` 三腿合一 + `$` 标签作用域判据从宿主折进来）、
+    //     `erb-parser/src/plugin.ts` **+955**（`references` 槽供方与语言门）、
+    //     `erb-parser/src/index.ts` **+41**（导出）。宿主五枚的净减
+    //     （`erb-label-navigation.ts` −6,263 / `erb-dim-navigation.ts` −3,942 /
+    //     `find-references.ts` −413 / `languages.ts` +673 / `editor-global-providers.ts` +1,856）
+    //     **都不在开机图里**（monaco 装配在懒边）。
+    //     ⇒ 闸 **3,352 → 3,356**（余量约 0.2 KB；文件闸仍 199）。这一档是能力：
+    //     ERB 的"查找引用"从此与 kojo2 走同一槽，跨文件那条腿由宿主随请求递索引快照。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,352 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,356 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_352);
+    expect(totalKb).toBeLessThanOrEqual(3_356);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
