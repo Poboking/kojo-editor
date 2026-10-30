@@ -300,6 +300,7 @@ export type {
   EditorRenameEdit,
   EditorRenameRequest,
   EditorRenameResult,
+  EditorCompletionFacts,
   EditorSaveChoices,
   EditorSaveHandlerContribution,
   EditorSaveOutcome,
@@ -720,6 +721,14 @@ export {
 } from './semantic-locate';
 export type { EnclosingMode, LineSpan } from './semantic-locate';
 export { CANDIDATE_BUDGETS, NAV_SCOPE_EVENT, SCOPED_QUERY_FACTOR, candidateBudget } from './erb';
+// LAU-4 补全腿第三批：调用槽格式化（签名浮层与括号调用骨架共用的唯一一份）。
+export {
+  buildCallSnippetText,
+  callSignatureLine,
+  callSlotsOf,
+  escapeSnippetText,
+  slotParameterLabel,
+} from './erb';
 export type { CandidateBudgetTier, ErbScopeStamp } from './erb';
 
 /* ---- 诊断码中文显示名（ZH-D2 独占追加区块；勿在他处重排） ---- */

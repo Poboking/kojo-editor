@@ -118,6 +118,7 @@ import type * as Monaco from './entry';
 import type {
   EditorCodeAction,
   EditorCodeActionContribution,
+  EditorCompletionFacts,
   EditorCompletionItem,
   EditorCompletionItemKind,
   EditorDocumentHighlightKind,
@@ -200,6 +201,10 @@ export function completionKindOf(
       return K.Function;
     case 'variable':
       return K.Variable;
+    // LAU-4 补全腿第三批 additive 的第十五档（作用域记录里的一格：ERB 三段式变量末段）。
+    // 缺枚举（桩宿主）⇒ 退 `Variable`，与 `snippet` 档缺枚举退 `Text` 同向。
+    case 'field':
+      return K.Field !== undefined ? K.Field : K.Variable;
     case 'value':
       return K.Value;
     case 'event':
@@ -210,6 +215,10 @@ export function completionKindOf(
       return K.Struct;
     case 'enum':
       return K.Enum;
+    // LAU-4 补全腿第三批 additive 的第十四档（值域里的**某一项**：ERB 的位号候选）。
+    // 缺枚举（桩宿主）⇒ 退 `Enum`，与 `snippet` 档缺枚举退 `Text` 同向：少一层区分，不撤候选。
+    case 'enumMember':
+      return K.EnumMember !== undefined ? K.EnumMember : K.Enum;
     case 'module':
       return K.Module;
     case 'snippet':
@@ -370,6 +379,17 @@ export interface SlotServiceHost {
   readonly projectIndex?: () => Kojo2ProjectIndex | null | undefined;
   /** 跨文件 `path` → `Monaco.Uri`（缺省 `monaco.Uri.file`；转换抛错 / 转不出 ⇒ 退回 model.uri） */
   readonly uriForPath?: (path: string) => Monaco.Uri | undefined;
+  /**
+   * 补全的**宿主事实袋**（LAU-4 补全腿第三批，additive；缺省不给 = 请求里不带 `facts`）。
+   *
+   * 只对 descriptor 声明了 `completionFacts === true` 的语言现取（哪门语言需要是表里的事实，
+   * 收口不按 id 分支）。内容全是宿主事实（adapter 表 / 项目名录 / 宿主词表 / 偏好），
+   * **一条语言判据都不许住进来**——判据在插件。
+   */
+  readonly completionFacts?: (
+    model: Monaco.editor.ITextModel,
+    line: number,
+  ) => EditorCompletionFacts | undefined;
   /**
    * **行上注解专用**的项目索引 getter（additive，缺省不给）。
    *
@@ -794,30 +814,66 @@ function emptyLensList(): { lenses: Monaco.languages.CodeLens[]; dispose: () => 
 
 /* ============================== 各腿 provider ============================== */
 
+/** 各 descriptor 追加声明的补全触发字符（并集；顺序 = descriptor 顺序，去重由调用方做） */
+function declaredTriggerCharacters(): readonly string[] {
+  const out: string[] = [];
+  for (const descriptor of languageDescriptors()) {
+    for (const ch of descriptor.completionTriggerCharacters ?? []) out.push(ch);
+  }
+  return out;
+}
+
+/**
+ * 这门语言要不要宿主事实袋（descriptor 的事实，不是收口层的判断） */
+function wantsFacts(languageId: string | undefined): boolean {
+  if (languageId === undefined) return false;
+  return descriptorForLanguageId(languageId)?.completionFacts === true;
+}
+
+/** 取事实袋（抛错 / 宿主没给 ⇒ `undefined` = 这一轮不带 `facts`，调用方照旧出货） */
+function safeFacts(
+  host: SlotServiceHost,
+  model: Monaco.editor.ITextModel,
+  line: number,
+): EditorCompletionFacts | undefined {
+  try {
+    return host.completionFacts?.(model, line);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * 补全 provider（集合型）：取文 / 身份 / 项目 / 触发字符 → 槽 → 并集去重 → Monaco 条目。
  * 任何一抛都只让**这一轮**空结果（Monaco 读得懂的唯一空形状）。
  */
-function completionProvider(monaco: typeof Monaco): Monaco.languages.CompletionItemProvider {
+function completionProvider(monaco: typeof Monaco, host: SlotServiceHost): Monaco.languages.CompletionItemProvider {
   return {
-    triggerCharacters: [...KOJO2_COMPLETION_TRIGGER_CHARS],
+    // 触发字符 = 共享那份 ∪ 各 descriptor 追加的（见 `completionTriggerCharacters`）：
+    // 一枚 provider 只有一个字符表，只能取并集；去重保序（先见者胜）。
+    triggerCharacters: [...new Set([...KOJO2_COMPLETION_TRIGGER_CHARS, ...declaredTriggerCharacters()])],
     provideCompletionItems(model, position, context) {
       try {
         const text = modelTextOf(model);
         if (text === null) return { suggestions: [] };
         const kernel = requireKernel();
+        const identity = editorRequestIdentityOf(model);
         // 合并 / 去重在 legs（`collectCompletionItems`），这里只做协议翻译——provider 里
         // 再写一份合并，就是第二套"谁的答案算数"的判据。
         const items = collectCompletionItems(
           kernel.slots.query('ui.editor.languageService'),
           completionRequestOf(
-            editorRequestIdentityOf(model),
+            identity,
             text,
             position.lineNumber,
             position.column,
             kernel.project.current(),
             // 触发字符**原样递**：键入的那一个字符是不是触发符，判据在语言层
             context?.triggerCharacter,
+            // 事实袋只喂给 descriptor 点了名的那门语言（见 `SlotServiceHost.completionFacts`）。
+            // 取事实可能抛（索引在途 / 表求值坏），**吞成"这一轮没有事实"**：退化到加这一格
+            // 之前的行为（依赖事实的那几路零候选），绝不让整轮补全消失。
+            wantsFacts(identity.languageId) ? safeFacts(host, model, position.lineNumber) : undefined,
           ),
         );
         return { suggestions: toMonacoCompletionItems(monaco, items, wordRangeAt(model, position)) };

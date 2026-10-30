@@ -70,19 +70,30 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
   matchesPath: (filePath) => isErbDialectPath(filePath),
   register: registerErbLanguage,
   languageServices: true,
-  /**
-* LAU-4 引用腿（2026-10-31）：查找引用的**判据**已整块搬进 `@kojo/plugin-erb-parser`
+/**
+   * LAU-4 引用腿（2026-10-31）：查找引用的**判据**已整块搬进 `@kojo/plugin-erb-parser`
    * （`$` 标签 / `#DIM` 声明 / 反向索引三腿合一）；这一格点名把"这条腿交给插件答"写下来，
    * 复用的就是 kojo2 那张表。`languageServices: true` 保留——其余 v1 腿还没搬（补全
    * 剩余 facet、signature / format），所以 ERB 仍走旧桥挂其余全腿；点名这一格
    * 只是让引用腿的归属可从数据读出（宿主据此做投影面发问位点的行尾对齐，
    * 见 `ui/editor-global-providers.ts` 的 `referenceRequestPointOf`）。
-   *
+*
    * ERB-PARITY G1（2026-10-31）：悬停交给插件供方（`@kojo/plugin-erb-parser` 的 `erb-hover`）。
    * 点名这一格的作用是**把旧桥那枚让开**（`kojo-hover.ts` 的安装器按 `excludeNamed` 跳过
    * 点名了 `hover` 的语言）——注册本身早已由 `languageServices: true` 覆盖。
+   *
+   * LAU-4 补全腿（2026-10-31 第三批）**不在这里点名**：ERB 仍走 `languageServices: true`
+   * 的旧桥（补全 / 悬停 / 签名 / 格式化四条腿的 v1 面还在宿主），补全腿因此已经被挂在
+   * ERB 上；点名一格只对"只声明点名腿"的语言才有意义，重复点名等于第二份台账。
    */
   slotServices: ['references', 'hover'],
+  // LAU-4 补全腿第三批（2026-10-31）：ERB 补全的判据全在插件 `@kojo/plugin-erb-parser`，
+  // 事实（adapter 表 / 项目名录 / 宿主词表 / 偏好）由组合根经槽腿的 `completionFacts`
+  // 现取并随请求递下去。声明在这里 = 收口侧不必按语言 id 分支。
+  completionFacts: true,
+  // 触发字符的**追加**清单：`#` / `@` 已在共享那份里，这里只补 ERB 独有三枚——
+  // `[` 区间标记行、`$` 跳转标签目标、`.` 点号成员位（ERB 没有点号语法，它是族查询键）。
+  completionTriggerCharacters: ['[', '$', '.'],
   // LANG-PARITY-GATE：已交付的能力面（真源 = language-capabilities.ts 的矩阵；声明只列已交付的）
   capabilities: ERB_CAPABILITIES,
   // ERB-PARITY G8 / G9：四项族级右键项全在（codeAction / decorator + codeAction 槽、

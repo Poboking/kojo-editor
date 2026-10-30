@@ -160,6 +160,26 @@ export interface LanguageDescriptor {
    */
   readonly slotServices?: readonly SlotServiceKind[];
   /**
+   * 这门语言的补全要不要**宿主事实袋**（LAU-4 补全腿第三批，additive）。
+   *
+   * 为什么是"要不要"而不是"怎么取"：事实（adapter 表 / 项目名录 / 宿主词表 / 偏好）由
+   * 组合根经 `SlotServiceHost.completionFacts` 交出来，而**哪门语言需要**是 descriptor
+   * 的事——收口那一侧按 `descriptor.completionFacts === true` 现取，宿主因此不必在任何
+   * 地方按语言 id 分支（M2：宿主不认识语言）。缺省 `false` = 请求里不带事实袋，
+   * 与加这一格之前逐字相同。
+   */
+  readonly completionFacts?: boolean;
+  /**
+   * 补全的**触发字符**（LAU-4 补全腿第三批，additive）：这门语言希望"键入这些记号时自动弹
+   * 补全"的追加清单。
+   *
+   * 为什么是"追加"而不是"整份"：Monaco 的 `triggerCharacters` 挂在 **provider 对象**上，
+   * 而共享槽腿对每一门语言登记的是**同一枚** provider（`registerForLanguageServices` 的
+   * 既有形态）。一份对象只有一个字符表 ⇒ 这里的语义只能是**并集**：每门语言声明自己
+   * 多出来的记号，收口把它们合进那一份。缺省 = 不加（与加这一格之前逐字相同）。
+   */
+  readonly completionTriggerCharacters?: readonly string[];
+  /**
    * 这门语言的**语义着色 legend**（additive，B3 语义收口 2026-10-30）。
    *
    * 缺省 = 契约名字层（`EDITOR_SEMANTIC_TOKEN_TYPES` 三值 + 两枚修饰）。一门语言如果

@@ -1,17 +1,19 @@
 /**
- * ERB 补全的**语言判据**（LAU-4 补全腿第二批）：位置门 v2、名字槽 / 标签位 / 变量段 /
- * 位坑 / 成员位，以及经 `ui.editor.languageService` 的 `completion` 成员应答的候选装配。
+ * ERB 补全的**语言判据**（LAU-4 补全腿：第二批四 facet + 第三批其余七路）。
+ *
+ * 位置门 v2、名字槽 / 标签位 / 变量段 / 位坑 / 成员位；**十一路上候选**的生成、去重、
+ * 排序与详情；以及经 `ui.editor.languageService` 的 `completion` 成员应答的装配。
  *
  * ## 为什么住在解析器插件（而不是 `@kojo/erb-lang`）
  *
  * 判据要由**槽的供方**回答，而供方是常驻插件 `@kojo/plugin-erb-parser`；插件读不到宿主
  * `packages/app/src/**`，也**不许静态引 `@kojo/erb-lang` 的补全叶子**——那会把 2.0 补全
  * 词表链（`kojo-lang/completion` + `kojo-vocab/{engine,keywords}` 等 9 枚）拽上开机图，
- * 直接撞碎 ps10 的 199 文件闸（实测 199 ⇒ 208）。故判据折进本包，宿主那六个
- * `monaco/erb-completion-*` 文件只剩 re-export 与「契约 → Monaco 形状」翻译。
+ * 直接撞碎 ps10 的 199 文件闸（实测 199 ⇒ 208）。故判据折进本包，宿主那几枚
+ * `monaco/erb-completion-*` 只剩「收集事实」与「契约 → Monaco 形状」翻译。
  *
- * 本文件此前散在三处（`erb-lang/src/completion-{context,bits,variables}.ts` 的判据 +
- * 宿主 `monaco/erb-completion*.ts` 的候选装配），逐条**原样搬入**，唯一改动是地基：
+ * 判据从宿主整块搬入（第二批 `2d4581c0` / `d9e9d207`；第三批 2026-10-31 收官），逐条
+ * **原样搬入**，唯一改动是地基：
  *
  * - 空白类改引契约层 `ERB_BLANK_CLASS_STR` / `isErbBlank` / `isAllErbBlank`
  *   （`@kojo/plugin-api`）——与 `.kojo` 侧 `BLANK_CLASS_STR` 同一字符集，由
@@ -22,20 +24,22 @@
  * - 引擎族表 `ENGINE_VARIABLE_FAMILIES` 引 `@kojo/kojo-vocab/engine`（纯数据叶子，零运行时
  *   import）——族头位与成员位都要它，抄一份就是第二判据。
  *
- * ## 这一批走槽的 facet
+ * ## 事实输入（第三批的接线口径）
  *
- * `erb-snippet` / `erb-labels` / `erb-families` / `erb-declared`（相对次序与宿主源表一致：
- * 先注册者胜的去重语义原样保留）。**仍未搬**的 facet 与理由见交付回执：变量名 / 位号
- * （要 adapter 变量表）、项目函数与系统函数（详情回表是两段式 `resolveCompletionItem`，
- * 契约还没有 resolve 成员）、指令词表（宿主 Monarch 与本文件共用的大表未上提）、
- * 文档词（编辑器通用能力，与 `.kojo` 共用一份）。
+ * 插件读不到 adapter 槽、项目索引与设置，故这些**事实**由宿主经请求的 `facts`
+ * （`EditorCompletionFacts`）递进来：变量 schema / 变量字典 / 调用协议 / 行首指令名 /
+ * 系统函数中文别名 / 文档词开关 / `#DIM` 名 / 标签名 / 项目函数名。缺哪一份，依赖它的
+ * 那一路就零候选（**不猜、不抛**），其余路照常出货——与「表缺席 ⇒ 该路空」的旧口径逐字相同。
  */
 import type {
+  EditorCompletionFacts,
   EditorCompletionItem,
   EditorCompletionItemKind,
+EditorCompletionResult,
   EditorHoverRequest,
   EditorHoverResult,
   EditorLanguageRange,
+  EditorLanguageServiceRequest,
   ErbDim,
   ErbFile,
   ErbFunction,
@@ -43,10 +47,14 @@ import type {
   ErbIndex,
   KojoInstructionTable,
   KojoLibraryTable,
+  VariableInfo,
   VariableSchema,
 } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import {
+  buildCallSnippetText,
+  callSignatureLine,
+  callSlotsOf,
   ERB_BLANK_CLASS_STR,
   ERB_BLANK_RE,
   ERB_CONTINUATION_MARKERS,
@@ -62,8 +70,11 @@ import {
   unicodeTokenAt,
 } from '@kojo/plugin-api';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
+// 控制流真源与内建式中函数表**同住本包**（`scanner.ts` / `builtins.ts`），不是契约件：
+// 补全的"行中关键字"与"系统函数名"两路都要它们，与解析 / 实参诊断同一张表。
+import { BUILTIN_FUNCTION_NAMES, builtinSignatureLabel } from './builtins';
+import { ERB_CONTROL_STATEMENTS, classifyControlFlow, parseDimDeclaration } from './scanner';
 import { ERB_DECLARATION_DIRECTIVES, ERB_STATEMENT_DIRECTIVES } from './instructions';
-import { parseDimDeclaration } from './scanner';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { dimDeclarationOf, isErbDimNameChar, normalizePathKey } from './symbols';
 
@@ -797,24 +808,65 @@ export function isLineHeadContext(line: string, column: number): boolean {
   return isAllErbBlank(line.slice(0, range.startColumn - 1));
 }
 
-/* ============================== 候选装配（本批走槽的四个 facet） ============================== */
+/* ============================== 候选装配（LAU-4 补全腿第三批：十一路 facet 全在这） ============================== */
 
-/** 索引里按 `path` 归一找文件（宿主键与报文路径在 Windows 上分隔符 / 大小写不一致） */
-function fileForPath(index: ErbIndex | null, path: string): ErbFile | null {
-  if (!index) return null;
-  const want = normalizePathKey(path);
-  for (const [key, file] of index.files) {
-    if (normalizePathKey(key) === want) return file;
-  }
-  return null;
+/**
+ * 这一段是 ERB 补全**全部候选**的产地：位置门之后的"弹什么、什么次序、谁被去重掉"。
+ *
+ * 2026-10-31（第三批）把宿主 `monaco/erb-completion*.ts` 剩下的六路（指令词 / 变量名 /
+ * 项目函数 / 系统函数 / 位号 / 成员 + 文档词）整块搬进来，于是宿主只剩「收集事实 → 组请求
+ * → 调槽 → 契约项 → Monaco 条目」。搬的是**判据**（哪一位弹什么、怎么排序、怎么去重），
+ * 留下的**事实**（adapter 表 / 项目名录 / 宿主词表 / 偏好开关）经请求的
+ * `facts`（`EditorCompletionFacts`）递进来——插件读不到槽、也不许读盘。
+ *
+ * 排序 / 去重与宿主装配核（`monaco/completion-core.ts` 的 `mergeSuggestions`）**同一条
+ * 口径**：按 label 去重（先注册者胜）→ 排名键（前缀精确 > 前缀命中 > 原文子序列 > 其它，
+ * 同档沿用各源的 `sortText`）→ 上限截断。逐字复刻的理由只有一个：搬完之后作者看到的
+ * 候选集、次序与图标必须与搬之前一模一样。
+ *
+ * **一处已知差异**（记在回执里）：宿主装配核的排名键还有两档拼音（首字母 / 全拚）与
+ * `filterText` 的拼音补键，而拼音表住在宿主（`monaco/pinyin.ts`，22 KB）。插件不许为
+ * 此把那张表拽上开机图，故这里只保留前四档；中文候选按罗马字输入时的**次序**与
+ * **可搜性**因此退化（按汉字输入不受影响）。
+ */
+
+/** 装配级候选上限（与宿主装配核 `MAX_ASSEMBLED_SUGGESTIONS` 同值） */
+const MAX_ASSEMBLED_CANDIDATES = 1000;
+/** 单源名字命中上限（与宿主装配核 `MAX_NAME_CANDIDATES` 同值） */
+const MAX_NAME_CANDIDATES = 1000;
+/** 文档词源的数字（与宿主 `document-words.ts` 同一批：上限 / 词长 / 行数闸） */
+const MAX_DOCUMENT_WORD_SUGGESTIONS = 200;
+const WORD_SUGGESTIONS_MAX_LINES = 5000;
+const MAX_WORD_INDEX = 4000;
+const MIN_WORD_LENGTH = 2;
+const MAX_WORD_LENGTH = 32;
+const PURE_NUMBER_RE = /^\d+$/;
+
+/** 一次补全的上下文：行文本 / 光标 / 替换区间 / 事实输入（各 facet 只吃这一枚） */
+interface ErbCompletionContext {
+  readonly line: string;
+  readonly column: number;
+  readonly lineNumber: number;
+  readonly text: string;
+  readonly path: string;
+  readonly range: EditorLanguageRange;
+  readonly prefix: string;
+  readonly facts: EditorCompletionFacts;
 }
+
+/** 一条候选 + 它的来源 id（去重时说清谁先注册） */
+interface SourcedItem {
+  readonly item: EditorCompletionItem;
+  readonly sourceId: string;
+}
+
+/* ============================== 缓冲区回退扫描（未索引时的唯一事实） ============================== */
 
 /**
  * 全文扫描标签定义名（去重、保序）——**仅未索引时的回退路径**。
  *
- * 导出给宿主 `monaco/erb-completion-labels.ts` 用（2026-10-31 收口）：搬判据时这段扫描被
- * 复制过一份，两处各有一套"什么算 `$标签` 定义"的正则；宿主的回退路径改读这里，判据回到一格。
- * 口径与宿主当年逐字相同（行首可含前导空白、名字止于空白 / `;`）。
+ * 口径与宿主当年逐字相同（行首可含前导空白、名字止于空白 / `;`）。宿主 `monaco/` 侧
+ * 已不再保留第二份：这条回退与索引事实共用同一个"什么算 `$标签` 定义"的判据。
  */
 export function definedLabels(text: string): string[] {
   const out: string[] = [];
@@ -832,9 +884,8 @@ export function definedLabels(text: string): string[] {
 /**
  * 扫一份文本里的 `#DIM*` 声明名（大小写不敏感去重、展示保首个原形；跳过 `[SKIPSTART]…[SKIPEND]`）。
  *
- * 行判据是 `dimDeclarationOf`（解析器 `parseDimDeclaration` 的单源包装），本函数只负责**遍历
- * 与屏蔽**。导出给宿主 `monaco/erb-completion-declared.ts` 的回退路径（同一段扫描此前在两处
- * 各存一份，2026-10-31 收口到这一格）。
+ * 行判据是 `dimDeclarationOf`（解析器 `parseDimDeclaration` 的单源包装），本函数只负责
+ * **遍历与屏蔽**——`#DIM` 名只有这一个产地。
  */
 export function dimNamesOfBuffer(text: string): readonly string[] {
   if (text.length === 0) return [];
@@ -861,83 +912,718 @@ export function dimNamesOfBuffer(text: string): readonly string[] {
   return out;
 }
 
-/** 门 → 该 source 能否出货（缺键 = 不过滤；`in-string` 由调用方整轮置空） */
-function gateAllows(gate: ErbCompletionGate, sourceId: string): boolean {
-  const allowed = ERB_GATE_SOURCE_WHITELIST[gate];
-  return allowed === undefined || allowed.has(sourceId);
-}
+/* ============================== 块骨架（snippet 源） ============================== */
 
-/** 块骨架候选（只在行首；与指令源同名项按 label 去重 ⇒ 本源先出、骨架胜） */
-function snippetItems(
-  line: string,
-  column: number,
-  range: EditorLanguageRange,
-  kind: EditorCompletionItemKind,
-): EditorCompletionItem[] {
-  if (!isLineHeadContext(line, column)) return [];
+/**
+ * 块骨架候选（只在**行首**）：ERB 控制流块成对闭合，漏一个闭合引擎直接加载失败。
+ * 骨架**不带缩进**（原文语料口径不缩进，插出缩进只会制造与周边行的 diff 噪声）。
+ *
+ * 本源注册在源表**最前**：行首与指令源的同名纯文本项按 label 去重（先注册者胜）⇒ 行首
+ * 只留骨架、行中纯文本照旧。
+ */
+function snippetCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  if (!isLineHeadContext(ctx.line, ctx.column)) return [];
   return ERB_COMPLETION_SNIPPETS.map((s, idx) => ({
     label: s.label,
-    kind,
+    kind: 'snippet',
     insertText: s.insertText,
-    insertTextFormat: 'snippet' as const,
+    insertTextFormat: 'snippet',
     detail: s.detail,
-    range,
+    range: ctx.range,
     sortText: `0_${String(idx).padStart(2, '0')}_${s.label}`,
   }));
 }
 
-/** `$标签` 候选（本文件、光标行所属函数内；索引缺席才回退全文扫描） */
-function labelItems(
-  line: string,
-  column: number,
-  range: EditorLanguageRange,
-  text: string,
-  path: string,
-  lineNumber: number,
-  index: ErbIndex | null,
-): EditorCompletionItem[] {
-  const slot = erbLabelSlot(line, column);
+/* ============================== 排名键（与宿主装配核同式，减拼音两档） ============================== */
+
+/** `needle` 是否为 `haystack` 的字符子序列（大小写归一由调用方负责） */
+function isSubsequence(needle: string, haystack: string): boolean {
+  let i = 0;
+  const n = needle.length;
+  for (const ch of haystack) {
+    if (i < n && ch === needle[i]) {
+      i += 1;
+      if (i === n) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * 模糊档（`undefined` = 落「其它」档）：只剩**原文子序列**那一档。
+ * 宿主那一份还有「拼音首字母」「全拚」两档（表住宿主，见段头「一处已知差异」）。
+ */
+function fuzzyTier(label: string, prefix: string): 'a' | undefined {
+  return isSubsequence(prefix.toLowerCase(), label.toLowerCase()) ? 'a' : undefined;
+}
+
+/**
+ * 排名键：`0|` 前缀精确 > `1|` 前缀命中 > `2a|` 原文子序列 > `2|` 其它；
+ * 同档沿用各源自带的 `sortText`，再以 label 兜底（与宿主 `rankKey` 逐字同式）。
+ */
+function rankKeyOf(label: string, sortText: string | undefined, prefix: string): string {
+  const base = sortText ?? '';
+  if (prefix.length === 0) return `2|${base}|${label}`;
+  if (label === prefix) return `0|${base}|${label}`;
+  if (label.startsWith(prefix)) return `1|${base}|${label}`;
+  const tier = fuzzyTier(label, prefix);
+  return tier === undefined ? `2|${base}|${label}` : `2${tier}|${base}|${label}`;
+}
+
+/**
+ * 去重（按 label，先注册者胜）→ 排序（排名键）→ 上限截断 → 写回 `sortText`。
+ *
+ * `sortText` 必须写回：Monaco 的客户端排序先比 `sortText`，不写回就白算了一遍排名键
+ * （宿主装配核当年也是这条：`{...item, sortText: key}`）。
+ */
+function mergeCandidates(entries: readonly SourcedItem[], prefix: string): EditorCompletionItem[] {
+  const byLabel = new Map<string, SourcedItem>();
+  for (const entry of entries) {
+    if (!byLabel.has(entry.item.label)) byLabel.set(entry.item.label, entry);
+  }
+  const ranked = [...byLabel.values()]
+    .map((entry) => ({ entry, key: rankKeyOf(entry.item.label, entry.item.sortText, prefix) }))
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return ranked.slice(0, MAX_ASSEMBLED_CANDIDATES).map(({ entry, key }) => ({ ...entry.item, sortText: key }));
+}
+
+/* ============================== 大小写不敏感前缀索引（项目函数名 / 成员族共用） ============================== */
+
+/** 折叠：`a`–`z` 折成大写，其余码元原样（与宿主装配核 `foldCode` 同口径） */
+function foldCode(c: number): number {
+  return c >= 97 && c <= 122 ? c - 32 : c;
+}
+
+/** 大小写不敏感比较（等价于两者 `toUpperCase()` 的字典序；非 ASCII 退回真身上比较） */
+function compareFold(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const ca = a.charCodeAt(i);
+    const cb = b.charCodeAt(i);
+    if (ca === cb) continue;
+    if (ca < 128 && cb < 128) {
+      const fa = foldCode(ca);
+      const fb = foldCode(cb);
+      if (fa !== fb) return fa < fb ? -1 : 1;
+      continue;
+    }
+    const ua = a.toUpperCase();
+    const ub = b.toUpperCase();
+    return ua < ub ? -1 : ua > ub ? 1 : 0;
+  }
+  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+}
+
+/** `text` 是否以 `prefix` 开头（大小写不敏感、零分配；口径同 {@link compareFold}） */
+function startsWithFold(text: string, prefix: string): boolean {
+  if (text.length < prefix.length) return false;
+  for (let i = 0; i < prefix.length; i++) {
+    const ct = text.charCodeAt(i);
+    const cp = prefix.charCodeAt(i);
+    if (ct === cp) continue;
+    if (ct < 128 && cp < 128) {
+      if (foldCode(ct) !== foldCode(cp)) return false;
+      continue;
+    }
+    return text.toUpperCase().startsWith(prefix.toUpperCase());
+  }
+  return true;
+}
+
+/** 入参是否已是"全是字符串 + 折叠序严格递增"（= 可以零复制当索引） */
+function isSortedUniqueNames(names: readonly string[]): boolean {
+  let prev: string | null = null;
+  for (const name of names) {
+    if (typeof name !== 'string' || name.length === 0) return false;
+    if (prev !== null && compareFold(prev, name) >= 0) return false;
+    prev = name;
+  }
+  return true;
+}
+
+/** 按数组身份记忆化的折叠序名字表（十万条量级只排一次） */
+const NAME_INDEX_CACHE = new WeakMap<readonly string[], readonly string[]>();
+
+function foldedNameIndex(names: readonly string[]): readonly string[] {
+  const cached = NAME_INDEX_CACHE.get(names);
+  if (cached !== undefined) return cached;
+  // 快路：宿主交过来的名录本就按归一化名升序去重 ⇒ 它自己就是索引，零复制零排序。
+  const sorted = isSortedUniqueNames(names) ? names : [...names].sort(compareFold);
+  NAME_INDEX_CACHE.set(names, sorted);
+  return sorted;
+}
+
+/** 首个小写等于或大于 `target` 的下标（升序表；`target` 已归一化为大写） */
+function lowerBound(names: readonly string[], target: string): number {
+  let lo = 0;
+  let hi = names.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (compareFold(names[mid]!, target) < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/* ============================== 行首 / 行中词表（指令源） ============================== */
+
+/**
+ * **必须行首**的预处理指令（`#DIM` / `#FUNCTION` …）——名字不出现在表达式里，故只进「行首」集。
+ */
+const ERB_PREPROCESSOR_DIRECTIVES: readonly string[] = [
+  '#DIM', '#DIM CONST', '#DIM SAVEDATA', '#DIM GLOBAL',
+  '#DIMS', '#DIMSTR', '#DIMCHAR',
+  '#FUNCTION', '#FUNCTIONS', '#DEFINE', '#INCLUDE', '#ONLY',
+  '#LOCALSIZE', '#LOCALSSIZE',
+  '#PRI', '#LATER', '#SINGLE',
+];
+
+/** **必须行首**的 `[` 标记行（区间停用标记 + 预处理器条件块骨架），全量派生自契约真源 */
+const ERB_BRACKET_DIRECTIVES: readonly string[] = [
+  ...ERB_PREPROC_CANDIDATES.map((c) => c.label),
+  ERB_SKIP_MARKERS.start,
+  ERB_SKIP_MARKERS.end,
+];
+
+/** 「行中」可出现的**控制流关键字**——由 scanner 配对表真源派生（结构认 ⇒ 行中也补） */
+const ERB_MIDLINE_CONTROL_KEYWORDS: readonly string[] = ERB_CONTROL_STATEMENTS.filter(
+  (word) => classifyControlFlow(word) !== null,
+);
+
+/** 「行中」的**直系调用 / FORM 形态**语句词（位置门单源清单去掉 `label` 槽） */
+const ERB_MIDLINE_CALL_KEYWORDS: readonly string[] = ERB_CALL_STATEMENTS.filter((s) => s.slot !== 'label').map(
+  (s) => s.kw,
+);
+
+/** **未进任何真源表**的单行流程语句（配对表与调用表都不收；删词即回退） */
+const ERB_MIDLINE_EXTRA_KEYWORDS: readonly string[] = ['RETURN', 'BREAK', 'CONTINUE'];
+
+/**
+ * 「行中」可出现的关键字子集：控制流（配对表派生）+ 调用形态（调用表派生）+ 跳转族
+ * （{@link ERB_JUMP_KEYWORDS} 单源展开）+ 三枚手抄保留 + `PRINT*`（宿主词表派生）。
+ *
+ * `PRINT*` 那一支读的是**请求里的 `directiveWords`**（宿主词表，含 adapter 指令名）——
+ * 词表本身不住插件（那是宿主 Monarch 与 `.kojo` 原生区共用的单一真源）。
+ */
+function erbMidlineKeywords(directiveWords: readonly string[]): readonly string[] {
+  return [
+    ...ERB_MIDLINE_CONTROL_KEYWORDS,
+    ...ERB_MIDLINE_CALL_KEYWORDS,
+    ...ERB_JUMP_KEYWORDS,
+    ...ERB_MIDLINE_EXTRA_KEYWORDS,
+    ...directiveWords.filter((d) => d.startsWith('PRINT')),
+  ];
+}
+
+/**
+ * 指令 / 关键字候选：**行首**给 `directiveWords`（宿主词表 ∪ adapter 指令名）+ 预处理指令
+ * + `[` 标记行（按**全记号前缀**收窄，前缀含吞并的 `#` / `[`）；**行中**只给表达式 /
+ * 实参可出现的关键字子集。大小写不敏感去重（首见者胜）。
+ */
+function directiveCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  const { line, column, range, facts } = ctx;
+  const items: EditorCompletionItem[] = [];
+  const seen = new Set<string>();
+  const push = (label: string, detail: string): void => {
+    const key = label.toUpperCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push({
+      label,
+      kind: 'keyword',
+      insertText: label,
+      detail,
+      range,
+      sortText: `0_${label}`,
+    });
+  };
+  if (isLineHeadContext(line, column)) {
+    const prefix = line.slice(range.startColumn - 1, range.endColumn - 1).toUpperCase();
+    const hit = (label: string): boolean => prefix.length === 0 || label.toUpperCase().startsWith(prefix);
+    for (const d of facts.directiveWords ?? []) if (hit(d)) push(d, '指令');
+    for (const d of ERB_PREPROCESSOR_DIRECTIVES) if (hit(d)) push(d, '预处理指令');
+    for (const d of ERB_BRACKET_DIRECTIVES) if (hit(d)) push(d, '指令行');
+  } else {
+    for (const k of erbMidlineKeywords(facts.directiveWords ?? [])) push(k, '关键字');
+  }
+  return items;
+}
+
+/* ============================== 变量名 / 位号（adapter 变量表） ============================== */
+
+/** 变量引用末段的候选（族:名 / 族:段:名）；族头不在白名单 / 无表 ⇒ 零候选 */
+function variableCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  const schema = ctx.facts.variableSchema;
+  const names = schema?.names;
+  if (names === undefined) return [];
+  const context = erbVariableSlotAt(ctx.line, ctx.column);
+  if (context === null) return [];
+
+  const range: EditorLanguageRange = {
+    line: ctx.lineNumber,
+    startColumn: context.start + 1,
+    endColumn: context.end + 1,
+  };
+  // 三段式的末段是"作用域记录里的一项" ⇒ field；二段式是族自身的索引 ⇒ variable。
+  const kind: EditorCompletionItemKind = context.scoped ? 'field' : 'variable';
+  const items: EditorCompletionItem[] = [];
+  const seen = new Set<string>();
+  for (const info of names(context.family) ?? []) {
+    const name = info.name;
+    if (name.length === 0 || seen.has(name)) continue;
+    if (context.prefix.length > 0 && !name.startsWith(context.prefix)) continue;
+    seen.add(name);
+    const index: number | string | undefined = info.index ?? info.resolvedIndex;
+    const exact = context.prefix.length > 0 && name === context.prefix;
+    items.push({
+      label: name,
+      kind,
+      insertText: name,
+      detail: index === undefined ? context.family : `${context.family}:${index}`,
+      range,
+      sortText: `${exact ? '0' : '1'}_${name}`,
+      ...(info.description !== undefined && info.description.length > 0
+        ? { documentation: info.description, documentationFormat: 'markdown' as const }
+        : {}),
+    });
+  }
+  return items;
+}
+
+/** 位槽第二实参的候选：`GETBIT(变量, 位)` / `SETBIT 变量, 位` 的位号 + 中文位名 */
+function bitCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  const schema = ctx.facts.variableSchema;
+  if (!schema) return [];
+  const slot = findBitSlot(ctx.line, ctx.column);
+  if (slot === null) return [];
+  // 位坑已有内容（作者写了位号 / 写成变量 `LOCAL`）⇒ 不抢候选
+  if (!erbBitSlotRegionBlank(ctx.line, slot)) return [];
+
+  const first = slot.variableRef.indexOf(':');
+  const last = slot.variableRef.lastIndexOf(':');
+  const name = first < 0 ? slot.variableRef : slot.variableRef.slice(0, first);
+  const index = last < 0 ? undefined : slot.variableRef.slice(last + 1);
+  let bits: ReadonlyArray<{ bit: number; label: string }> | undefined;
+  try {
+    bits = schema.lookup(name, index)?.bits;
+  } catch {
+    return [];
+  }
+  if (bits === undefined || bits.length === 0) return [];
+
+  // 替换区间 = 光标处的**零宽**插入点（位号是往里插的，不覆盖任何既有字）
+  const range: EditorLanguageRange = {
+    line: ctx.lineNumber,
+    startColumn: ctx.column,
+    endColumn: ctx.column,
+  };
+  const items: EditorCompletionItem[] = [];
+  const seen = new Set<string>();
+  for (const b of bits) {
+    const label = `${b.bit} ${b.label}`;
+    if (seen.has(label)) continue;
+    seen.add(label);
+    items.push({
+      label,
+      kind: 'enumMember',
+      insertText: String(b.bit),
+      detail: slot.variableRef,
+      documentation: b.label,
+      range,
+      sortText: `${String(b.bit).padStart(4, '0')}_${label}`,
+    });
+  }
+  return items;
+}
+
+/* ============================== 项目函数名（名字槽） ============================== */
+
+/**
+ * 调用位（长词在前 + 关键字后必须有空白）；只吃 `'func'` / `'form'` 槽——`'label'` 槽
+ * （跳转家族）是标签位，候选归标签源。
+ */
+const CALL_RE = erbCallStatementRe(['func', 'form'], true);
+
+/**
+ * 光标处的 ERB **函数名槽**（定义位 `@…` 或调用位；纯函数，可单测）。
+ * `'form'`（`*FORM*` 全族）之后的槽是 FORM 串，允许 `%…%` / `{…}` 段；`'func'` 之后只收名字字符。
+ */
+export function erbFunctionNameSlot(line: string, column: number): ErbNameSlot | null {
+  const col0 = Math.min(Math.max(column - 1, 0), line.length);
+  const def = DEF_RE.exec(line);
+  if (def !== null) return parseErbNameSlot(line, col0, def[0].length, false);
+  const call = CALL_RE.exec(line);
+  if (call !== null) {
+    const allowInterp = ERB_CALL_SLOT_BY_KEYWORD.get(call[1]!.toUpperCase()) === 'form';
+    return parseErbNameSlot(line, col0, call[0].length, allowInterp);
+  }
+  return null;
+}
+
+/** 函数名槽的候选：二分找前缀下界 + 连续前扫（`O(log n + 命中数)`，与总量无关） */
+function functionCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  const functionNames = ctx.facts.functionNames;
+  if (functionNames === undefined || functionNames.length === 0) return [];
+  const slot = erbFunctionNameSlot(ctx.line, ctx.column);
   if (slot === null) return [];
 
-  let labels: readonly string[] | undefined;
-  const file = fileForPath(index, path);
-  if (file !== null) {
-    const fn = file.functions.find((f) => f.startLine <= lineNumber && lineNumber <= f.endLine);
-    labels = fn === undefined
-      ? []
-      : [...new Set((file.labels ?? []).filter((l) => l.functionStartLine === fn.startLine).map((l) => l.name))];
+  const names = foldedNameIndex(functionNames);
+  const norm = slot.prefix.toUpperCase();
+  const from = lowerBound(names, norm);
+  if (from >= names.length || !startsWithFold(names[from]!, norm)) return [];
+
+  const range: EditorLanguageRange = {
+    line: ctx.lineNumber,
+    startColumn: slot.start + 1,
+    endColumn: slot.end + 1,
+  };
+  const items: EditorCompletionItem[] = [];
+  for (let i = from; i < names.length && items.length < MAX_NAME_CANDIDATES; i++) {
+    const name = names[i]!;
+    if (!startsWithFold(name, norm)) break;
+    const exact = name.length === norm.length;
+    items.push({
+      label: name,
+      kind: 'function',
+      insertText: name,
+      range,
+      sortText: `${exact ? '0' : '1'}_${name}`,
+    });
   }
-  if (labels === undefined) labels = definedLabels(text);
+  return items;
+}
+
+/* ============================== 系统函数名（引擎 exmeth 静态表） ============================== */
+
+/** 系统函数候选的 documentation 头段：中文别名（查得到才挂）+ 引擎签名（exmeth 静态表） */
+function systemFunctionDocumentation(facts: EditorCompletionFacts, name: string): string {
+  const label = builtinSignatureLabel(name) ?? name;
+  let cn: string | undefined;
+  for (const [key, alias] of facts.systemFunctionAliases ?? []) {
+    if (key === name) {
+      cn = alias;
+      break;
+    }
+  }
+  const head = cn === undefined ? `**${name}**` : `**${name}** ↔ ${cn}`;
+  return label === name ? head : `${head}\n\n${label}`;
+}
+
+/**
+ * 系统函数名候选（英文名 `GETBIT(`）：词表 = 本包 `BUILTIN_FUNCTION_NAMES`（exmeth 静态签名表）。
+ *
+ * 位置防守（不满足 ⇒ 整路零候选）：行首 `;` 注释行 / 光标前 `"` 计数为奇（串内）/
+ * 词前全是空白（行首指令位）/ 词紧前是 `$`（标签名位）。**不过滤前缀**（宿主当年也不过滤：
+ * 整表出货，由 Monaco 的客户端过滤收窄——排序档按 精确 / 命中 / 其它 三档）。
+ *
+ * 括号调用形态：`insertText` = `名字(`；协议认识这个函数时改写成带 tabstop 的骨架
+ * （`名字(${1:ARG:0 …})`，`insertTextFormat: 'snippet'`）；作者自己已敲了 `(` ⇒ 收回纯名字。
+ */
+function systemFunctionCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  const { line, column } = ctx;
+  const col0 = Math.min(column - 1, line.length);
+
+  if (/^\s*;/.test(line)) return [];
+  let quotes = 0;
+  for (let i = 0; i < col0; i++) {
+    if (line[i] === '"') quotes++;
+  }
+  if (quotes % 2 === 1) return [];
+
+  // 光标处的名字段（左含右不含；与 `erbTokenRange` 的记号口径同一个字符类）
+  let start = col0;
+  while (start > 0 && isNameChar(line[start - 1])) start--;
+  let end = col0;
+  while (end < line.length && isNameChar(line[end])) end++;
+  if (start === end) return [];
+  if (isAllErbBlank(line.slice(0, start))) return [];
+  if (start > 0 && line[start - 1] === '$') return [];
+
+  const range: EditorLanguageRange = { line: ctx.lineNumber, startColumn: start + 1, endColumn: end + 1 };
+  const prefix = line.slice(start, col0).toUpperCase();
+  const charAfter = line.slice(end, end + 1);
+
+  const items: EditorCompletionItem[] = [];
+  for (const name of BUILTIN_FUNCTION_NAMES) {
+    const exact = prefix.length > 0 && name === prefix;
+    const hit = prefix.length > 0 && name.startsWith(prefix);
+    let insertText = `${name}(`;
+    let insertTextFormat: 'plainText' | 'snippet' | undefined;
+    if (charAfter === '(') {
+      // 作者已自己开了括号：落字只补名字，否则原样插入的 `名字(` 与那枚 `(` 叠成 `名字((`
+      insertText = name;
+    } else {
+      const snippet = buildCallSnippetText(name, callSlotsOf(ctx.facts.callProtocol, [name]));
+      if (snippet !== undefined) {
+        insertText = snippet;
+        insertTextFormat = 'snippet';
+      }
+    }
+    items.push({
+      label: name,
+      kind: 'function',
+      insertText,
+      ...(insertTextFormat !== undefined ? { insertTextFormat } : {}),
+      detail: '系统函数',
+      documentation: systemFunctionDocumentation(ctx.facts, name),
+      documentationFormat: 'markdown',
+      range,
+      sortText: `${exact ? '0' : hit ? '1' : '2'}_${name}`,
+    });
+  }
+  return items;
+}
+
+/* ============================== 成员 / 属性 / 函数族 ============================== */
+
+/** 名录的族成员查询（按「数组身份 + 族键」记忆化；上限只防无界，丢了只是重扫一遍） */
+const FAMILY_INDEX_CACHE = new WeakMap<readonly string[], Map<string, readonly string[]>>();
+const FAMILY_CACHE_LIMIT = 32;
+
+function familyMembersOf(names: readonly string[], key: string): readonly string[] {
+  let cache = FAMILY_INDEX_CACHE.get(names);
+  if (cache === undefined) {
+    cache = new Map<string, readonly string[]>();
+    FAMILY_INDEX_CACHE.set(names, cache);
+  }
+  const hit = cache.get(key);
+  if (hit !== undefined) return hit;
+
+  const members: string[] = [];
+  const guard = new Set<string>();
+  for (const name of names) {
+    if (typeof name !== 'string' || name.length <= key.length) continue;
+    if (!startsWithFold(name, key)) continue;
+    const upper = name.toUpperCase();
+    if (guard.has(upper)) continue;
+    guard.add(upper);
+    members.push(name);
+  }
+  while (cache.size >= FAMILY_CACHE_LIMIT) {
+    const oldest = cache.keys().next();
+    if (oldest.done) break;
+    cache.delete(oldest.value);
+  }
+  cache.set(key, members);
+  return members;
+}
+
+/** 系统函数族成员（`receiver*`；接收者至少两字符——单字母会把整张系统函数表抖进候选） */
+function systemFamilyMembers(receiver: string): readonly string[] {
+  const needle = receiver.toUpperCase();
+  if (needle.length < 2) return [];
+  const out: string[] = [];
+  for (const name of BUILTIN_FUNCTION_NAMES) {
+    if (name === needle) continue;
+    if (name.startsWith(needle)) out.push(name);
+  }
+  return out;
+}
+
+/** 一条族成员命中：完整名 + 族后缀（作者在点号之后继续打的那一段）+ 排名键（只算一次） */
+interface MemberHit {
+  readonly name: string;
+  readonly suffix: string;
+  readonly key: string;
+}
+
+/** 点号成员候选（`receiver.|` ⇒ 同族成员）：项目函数族 `receiver_*` + 系统函数族 `receiver*` */
+function dotMemberCandidates(ctx: ErbCompletionContext, slot: ErbMemberSlot): EditorCompletionItem[] {
+  const receiver = slot.receiver;
+  if (receiver === undefined) return [];
+  const fragment = slot.prefix;
+  const hits: MemberHit[] = [];
+  const seen = new Set<string>();
+  const collect = (member: string, suffixStart: number): boolean => {
+    if (hits.length >= MAX_NAME_CANDIDATES) return false;
+    const suffix = member.slice(suffixStart);
+    if (suffix.length === 0) return true;
+    const normalized = member.toUpperCase();
+    if (seen.has(normalized)) return true;
+    const key = fragment.length === 0 ? `2|${suffix}` : rankKeyOf(suffix, undefined, fragment);
+    // 已输入片段与族后缀无关的成员不入面（"其它"档 = 排名键的 `2|` 档）
+    if (fragment.length > 0 && key.startsWith('2|')) return true;
+    seen.add(normalized);
+    hits.push({ name: member, suffix, key });
+    return hits.length < MAX_NAME_CANDIDATES;
+  };
+  const functionNames = ctx.facts.functionNames;
+  if (functionNames !== undefined && functionNames.length > 0) {
+    for (const member of familyMembersOf(functionNames, `${receiver.toUpperCase()}_`)) {
+      if (!collect(member, receiver.length + 1)) break;
+    }
+  }
+  if (hits.length < MAX_NAME_CANDIDATES) {
+    for (const member of systemFamilyMembers(receiver)) {
+      if (!collect(member, receiver.length)) break;
+    }
+  }
+  if (hits.length === 0) return [];
+
+  const start = slot.receiverStart ?? slot.start;
+  const range: EditorLanguageRange = { line: ctx.lineNumber, startColumn: start + 1, endColumn: slot.end + 1 };
+  hits.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
+  return hits.map(({ name, suffix, key }) => ({
+    label: name,
+    kind: 'function',
+    // ERB 没有点号语法：点号只是族查询键，落字一律是**完整函数名**（替换范围连接收者一起覆盖）
+    insertText: name,
+    filterText: suffix,
+    detail: `函数族成员（${receiver}）`,
+    documentation: [
+      `点号成员推断：\`${receiver}.\` ⇒ 项目函数族 \`${receiver}_*\` / 系统函数族 \`${receiver}*\``,
+      'ERB 无点号语法：接受后落字为完整函数名（点号只是族查询键，写回正文的是 `名字`）。',
+    ].join('\n\n'),
+    documentationFormat: 'markdown',
+    range,
+    sortText: key,
+  }));
+}
+
+/** 成员位候选：族头位 → 族表；点号成员位 → 同族成员；字段位 → 零候选（本包没有静态数据） */
+function memberCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  const slot = erbMemberSlotAt(ctx.line, ctx.column);
+  if (slot === null) return [];
+  if (slot.kind === 'variable-family') {
+    const needle = slot.prefix.toUpperCase();
+    const range: EditorLanguageRange = {
+      line: ctx.lineNumber,
+      startColumn: slot.start + 1,
+      endColumn: slot.end + 1,
+    };
+    const items: EditorCompletionItem[] = [];
+    for (const family of ENGINE_VARIABLE_FAMILIES) {
+      const upper = family.toUpperCase();
+      if (needle.length > 0 && !upper.startsWith(needle)) continue;
+      const exact = needle.length > 0 && upper === needle;
+      items.push({
+        label: family,
+        kind: 'variable',
+        insertText: family,
+        filterText: family,
+        detail: '引擎变量族',
+        range,
+        sortText: `${exact ? '0' : '1'}_${family}`,
+      });
+    }
+    return items;
+  }
+  return slot.kind === 'member' ? dotMemberCandidates(ctx, slot) : [];
+}
+
+/* ============================== 文档词 ============================== */
+
+/** 一行里除字符串内容 / `;` 行注释外的代码部分（与 `erbCodeViewOf` 同向的保守切法） */
+function stripStringsAndComment(line: string): string {
+  let out = '';
+  let inString = false;
+  for (const ch of line) {
+    if (inString) {
+      if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === ';') break;
+    out += ch;
+  }
+  return out;
+}
+
+/** 一行里的全部连续名字段（字符类与 {@link NAME_CHAR_RE} 同一个真源） */
+function nameWordsOf(line: string): string[] {
+  const re = new RegExp(NAME_CHAR_RE.source, 'gu');
+  const out: string[] = [];
+  for (let m = re.exec(line); m !== null; m = re.exec(line)) {
+    if (m[0].length > 0) out.push(m[0]);
+  }
+  return out;
+}
+
+/** 整篇代码行的词条（去重保序、跳过纯数字；大小写不敏感去重 = ERB 名字口径） */
+function documentWordsOf(text: string): readonly string[] {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  if (lines.length > WORD_SUGGESTIONS_MAX_LINES) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const line of lines) {
+    for (const word of nameWordsOf(stripStringsAndComment(line))) {
+      if (word.length < MIN_WORD_LENGTH || word.length > MAX_WORD_LENGTH) continue;
+      if (PURE_NUMBER_RE.test(word)) continue;
+      const key = word.toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(word);
+      if (out.length >= MAX_WORD_INDEX) return out;
+    }
+  }
+  return out;
+}
+
+/**
+ * 文档词候选（当前文件里的同前缀代码词）：开关缺席 / `false` ⇒ 零候选；光标前无词 ⇒ 零候选；
+ * 与已输入词完全相同的不出（插了也是原位不动）。`sortText` 以 `9_` 打头 ⇒ 排在上下文候选之后。
+ */
+function wordCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  if (ctx.facts.wordBasedSuggestions !== true) return [];
+  const col0 = Math.min(ctx.column - 1, ctx.line.length);
+  let start = col0;
+  while (start > 0 && isNameChar(ctx.line[start - 1])) start--;
+  const word = ctx.line.slice(start, col0);
+  if (word.length === 0) return [];
+
+  const prefix = word.toLowerCase();
+  const items: EditorCompletionItem[] = [];
+  for (const candidate of documentWordsOf(ctx.text)) {
+    const lower = candidate.toLowerCase();
+    if (lower === prefix) continue;
+    if (!lower.startsWith(prefix)) continue;
+    items.push({
+      label: candidate,
+      kind: 'text',
+      insertText: candidate,
+      filterText: candidate,
+      detail: '文档词',
+      range: ctx.range,
+      sortText: `9_${candidate}`,
+    });
+    if (items.length >= MAX_DOCUMENT_WORD_SUGGESTIONS) break;
+  }
+  return items;
+}
+
+/* ============================== 条目标签（$标签 / #DIM 名） ============================== */
+
+/** `$标签` 候选：作用域表由宿主递进来（光标行所属函数内；`undefined` = 未索引 ⇒ 回退缓冲区） */
+function labelCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  const slot = erbLabelSlot(ctx.line, ctx.column);
+  if (slot === null) return [];
+
+  const labels = ctx.facts.labelNames ?? definedLabels(ctx.text);
   if (labels.length === 0) return [];
 
   const prefix = slot.prefix.toUpperCase();
   const matched = prefix.length === 0 ? labels : labels.filter((name) => name.toUpperCase().startsWith(prefix));
   if (matched.length === 0) return [];
-
   return matched.map((name) => ({
     label: name,
     kind: 'reference' as const,
     insertText: name,
     detail: '标签（本文件）',
-    range: { line: range.line, startColumn: slot.start + 1, endColumn: slot.end + 1 },
+    range: { line: ctx.range.line, startColumn: slot.start + 1, endColumn: slot.end + 1 },
     sortText: `${prefix.length > 0 && name.toUpperCase() === prefix ? '0' : '1'}_${name}`,
   }));
 }
 
-/** `#DIM` 声明名候选（索引有意见就以它为准，未索引才回退当前缓冲区） */
-function declaredItems(
-  line: string,
-  column: number,
-  range: EditorLanguageRange,
-  text: string,
-  path: string,
-  index: ErbIndex | null,
-): EditorCompletionItem[] {
-  const slot = erbDeclaredNameSlot(line, column);
+/** `#DIM` 声明名候选：索引有意见（数组，含 `[]`）就以它为准，`undefined` 才回退当前缓冲区 */
+function declaredCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
+  const slot = erbDeclaredNameSlot(ctx.line, ctx.column);
   if (slot === null) return [];
 
-  const file = fileForPath(index, path);
-  const dims = file !== null ? [...new Set(file.dims.map((d) => d.name))] : dimNamesOfBuffer(text);
+  const dims = ctx.facts.dimNames ?? dimNamesOfBuffer(ctx.text);
   if (dims.length === 0) return [];
 
   const needle = slot.prefix.toUpperCase();
@@ -956,19 +1642,81 @@ function declaredItems(
       insertText: name,
       filterText: name,
       detail: '#DIM 声明（本文件）',
-      range: { line: range.line, startColumn: slot.start + 1, endColumn: slot.end + 1 },
+      range: { line: ctx.range.line, startColumn: slot.start + 1, endColumn: slot.end + 1 },
       sortText: `${exact ? '4' : '5'}_${name}`,
     });
   }
   return items;
 }
 
-/* ============================== 槽供方 ============================== */
+/* ============================== 详情（provide 时就算：契约没有 resolve 成员） ============================== */
 
-/** 供方的注入面：索引**现取**（未开项目 / 索引在途 ⇒ `null`，各 facet 按"未索引"降级） */
-export interface ErbCompletionDeps {
-  readonly index: ErbIndex | null;
+/** `VariableInfo.source` → 名表面可读说法（与宿主同一张措辞表） */
+const VARIABLE_SOURCE_LABEL: Readonly<Record<string, string>> = {
+  primary: '主名表',
+  append: '追加名表',
+  const: '具名常量',
+};
+
+/** 候选 `detail`（`族` / `族:编号`）里的族头 */
+function familyFromDetail(detail: string | undefined): string | undefined {
+  if (detail === undefined) return undefined;
+  const head = detail.split(':')[0];
+  return head !== undefined && head.length > 0 ? head : undefined;
 }
+
+/** 位表摘要（条数多时截断；条名为 adapter 原文） */
+function bitsLine(bits: VariableInfo['bits']): string | undefined {
+  if (bits === undefined || bits.length === 0) return undefined;
+  const shown = bits
+    .slice(0, 12)
+    .map((b) => `${String(b.bit)} ${b.label}`)
+    .join('、');
+  return `位表 ${shown}${bits.length > 12 ? ' …' : ''}（共 ${String(bits.length)} 项）`;
+}
+
+/**
+ * 变量候选的详情：编号 / 说明 / 名表来源 / 位表 / 原生引用（事实全来自 `variableSchema`
+ * 与 `dictionary`，一条查不到就不写；一条都没有 ⇒ 不给文档，不编话术）。
+ */
+function variableDocumentation(facts: EditorCompletionFacts, label: string, detail: string | undefined): string | undefined {
+  const family = familyFromDetail(detail) ?? facts.dictionary?.resolveFamily?.(label);
+  if (family === undefined) return undefined;
+  let entry: VariableInfo | undefined;
+  try {
+    entry = facts.variableSchema?.names?.(family)?.find((e) => e.name === label);
+  } catch {
+    entry = undefined;
+  }
+  const lines: string[] = [];
+  if (entry !== undefined) {
+    const index: number | string | undefined = entry.index ?? entry.resolvedIndex;
+    if (index !== undefined) lines.push(`编号 \`${String(index)}\``);
+    if (entry.description !== undefined && entry.description.length > 0) lines.push(entry.description);
+    const tier = entry.source === undefined ? undefined : VARIABLE_SOURCE_LABEL[entry.source];
+    if (tier !== undefined) lines.push(`来源 ${tier}`);
+    const bits = bitsLine(entry.bits);
+    if (bits !== undefined) lines.push(bits);
+  }
+  let native: string | undefined;
+  try {
+    native = facts.dictionary?.resolve?.(label);
+  } catch {
+    native = undefined;
+  }
+  if (native !== undefined && native.length > 0 && native !== label) lines.push(`原生引用 \`${native}\``);
+  if (lines.length === 0) return undefined;
+  return [`**${label}** · 索引名 \`${family}\``, ...lines].join('\n\n');
+}
+
+/** 项目函数候选的详情：调用签名（协议不认 ⇒ 不给文档，不编话术） */
+function functionDocumentation(facts: EditorCompletionFacts, label: string): string | undefined {
+  const sig = callSignatureLine(label, [label], facts.callProtocol);
+  if (sig === undefined) return undefined;
+  return [`**${label}** · 项目函数`, sig].join('\n\n');
+}
+
+/* ============================== 槽供方 ============================== */
 
 /** 从全文取第 `line` 行（1 基；越界 ⇒ 空串）。逐行切只在需要时做一次，不缓存跨请求状态。 */
 function lineOf(text: string, line: number): string {
@@ -991,18 +1739,31 @@ function isErbPath(path: string): boolean {
   return /\.(erb|erh|erd)$/i.test(path);
 }
 
+/** 门 → 该 source 能否出货（缺键 = 不过滤；`in-string` 由调用方整轮置空） */
+function gateAllows(gate: ErbCompletionGate, sourceId: string): boolean {
+  const allowed = ERB_GATE_SOURCE_WHITELIST[gate];
+  return allowed === undefined || allowed.has(sourceId);
+}
+
 /**
- * 应答 `ui.editor.languageService` 的 `completion` 成员。
+ * 应答 `ui.editor.languageService` 的 `completion` 成员——**ERB 补全的唯一产地**。
  *
  * 三态（与 definition / rename 同一条纪律）：
  * - 不是 `completion` 请求 / 不是 ERB 方言 ⇒ `undefined`（**弃权**，让下一家供方接手）；
  * - 认这个位置但一个候选都没有（串内 / 注释内 / 名位前缀不命中）⇒ `{ items: [] }`（**不猜**）；
- * - 有候选 ⇒ 全部条目（次序 = 宿主源表里这四个 facet 的相对次序，先注册者胜的去重语义不变）。
+ * - 有候选 ⇒ 已合并 / 去重 / 排序 / 截断的整表（次序 = 宿主源表的相对次序）。
+ *
+ * 位置门（{@link erbCompletionGate}）先于一切候选：串内非插值位整轮零候选；`keep` 白名单
+ * （{@link ERB_GATE_SOURCE_WHITELIST}）按**来源 id**过滤；点号成员位整轮只留成员源，
+ * 而"光标紧前是 `.` 却不是成员位"（`1.|` 的小数点）⇒ 整轮零候选（否则每敲一个小数点
+ * 都会弹一次系统函数整表）。
+ *
+ * 事实输入全在 `request.facts`（adapter 表 / 项目名录 / 宿主词表 / 偏好开关）：
+ * 缺哪一份，依赖它的那一路就零候选（不猜、不抛），其余路照常出货。
  */
 export function provideErbCompletion(
-  request: { readonly kind: string; readonly path?: string; readonly text?: string; readonly line?: number; readonly column?: number },
-  deps: ErbCompletionDeps,
-): { kind: 'completion'; items: EditorCompletionItem[] } | undefined {
+  request: EditorLanguageServiceRequest,
+): EditorCompletionResult | undefined {
   if (request.kind !== 'completion') return undefined;
   const path = request.path ?? '';
   if (!isErbPath(path)) return undefined;
@@ -1019,17 +1780,61 @@ export function provideErbCompletion(
   }
   if (gate === 'in-string') return { kind: 'completion', items: [] };
 
+  // 点号位：落在成员位 ⇒ 整轮只留成员源；紧前是 `.` 但不是成员位 ⇒ 整轮零候选
+  const col0 = Math.min(column - 1, line.length);
+  let memberOnly = false;
+  const memberSlot = erbMemberSlotAt(line, column);
+  if (memberSlot !== null && memberSlot.kind === 'member') memberOnly = true;
+  else if (col0 > 0 && line[col0 - 1] === '.') return { kind: 'completion', items: [] };
+
   const range = erbTokenRange(line, column);
-  const items: EditorCompletionItem[] = [];
+  const prefix = line.slice(range.startColumn - 1, range.endColumn - 1);
+  const ctx: ErbCompletionContext = {
+    line,
+    column,
+    lineNumber,
+    text,
+    path,
+    range,
+    prefix,
+    facts: request.facts ?? {},
+  };
+
+  const entries: SourcedItem[] = [];
+  const add = (sourceId: string, items: EditorCompletionItem[]): void => {
+    for (const item of items) entries.push({ item, sourceId });
+  };
+  const allows = (sourceId: string): boolean => (memberOnly ? sourceId === 'erb-members' : gateAllows(gate, sourceId));
+
   try {
-    if (gateAllows(gate, 'erb-snippet')) items.push(...snippetItems(line, column, range, 'snippet'));
-    if (gateAllows(gate, 'erb-labels')) items.push(...labelItems(line, column, range, text, path, lineNumber, deps.index));
-    if (gateAllows(gate, 'erb-families')) items.push(...erbFamilyCandidates(line, column, range.line));
-    if (gateAllows(gate, 'erb-declared')) items.push(...declaredItems(line, column, range, text, path, deps.index));
+    if (allows('erb-snippet')) add('erb-snippet', snippetCandidates(ctx));
+    if (allows('erb-directives')) add('erb-directives', directiveCandidates(ctx));
+    if (allows('erb-variables')) add('erb-variables', variableCandidates(ctx));
+    if (allows('erb-functions')) add('erb-functions', functionCandidates(ctx));
+    if (allows('erb-labels')) add('erb-labels', labelCandidates(ctx));
+    if (allows('erb-system-functions')) add('erb-system-functions', systemFunctionCandidates(ctx));
+    if (allows('erb-bits')) add('erb-bits', bitCandidates(ctx));
+    if (allows('erb-families')) add('erb-families', erbFamilyCandidates(line, column, lineNumber));
+    if (allows('erb-declared')) add('erb-declared', declaredCandidates(ctx));
+    if (allows('erb-words')) add('erb-words', wordCandidates(ctx));
+    if (allows('erb-members')) add('erb-members', memberCandidates(ctx));
   } catch {
     return { kind: 'completion', items: [] };
   }
-  return { kind: 'completion', items };
+// 详情（变量 / 项目函数）在合并前补齐：契约没有 resolve 成员，二段式回表到这里收口。
+  const withDocs = entries.map((entry) => {
+    if (entry.item.documentation !== undefined) return entry;
+    const value =
+      entry.sourceId === 'erb-variables'
+        ? variableDocumentation(ctx.facts, entry.item.label, entry.item.detail)
+        : entry.sourceId === 'erb-functions'
+          ? functionDocumentation(ctx.facts, entry.item.label)
+          : undefined;
+    return value === undefined
+      ? entry
+      : { ...entry, item: { ...entry.item, documentation: value, documentationFormat: 'markdown' as const } };
+  });
+  return { kind: 'completion', items: mergeCandidates(withDocs, prefix) };
 }
 
 

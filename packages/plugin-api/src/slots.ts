@@ -3,6 +3,7 @@ import type { PluginContextMenuRequest } from './context-menu';
 import type { RevealRange, RevealSpan } from './events';
 import type { GameAdapter } from './game';
 import type { GameProject } from './game';
+import type { KojoCallProtocol, VariableSchema } from './game';
 import type { EolStyle } from './io';
 import type { InlineCompletionSourceContribution } from './inline-completion';
 import type { MonacoLanguageContribution } from './monaco-language';
@@ -1255,6 +1256,72 @@ export interface EditorCompletionRequest extends EditorDocumentIdentity {
   readonly lineCount?: number;
   /** 触发字符（键入的那一个字符）；缺省 = 手动触发 */
   readonly triggerCharacter?: string;
+  /**
+   * **事实输入**（LAU-4 补全腿第三批 additive，2026-10-31）：宿主能取到、供方取不到，
+   * 但**候选怎么生成**要用的那批数据（词典 / 项目名录 / 宿主词表 / 偏好开关）。
+   *
+   * 为什么必须走请求而不是供方自己读：这些都是**宿主侧事实**——它们住在 adapter 贡献
+   * （`game.adapter` 槽）、项目索引与设置里，而插件读不到槽、也不许读盘。把它们当数据
+   * 递进来之后，供方对"这个词该不该弹、弹哪几条、怎么排序"才有完整判据，宿主对"哪个词
+   * 是引擎族头"则一无所知（M2：宿主不认识语言）。
+   *
+   * 缺席（旧宿主 / 该语言不需要）= **与该字段不存在之前逐字相同**的行为：供方按
+   * "这类事实取不到"降级（零候选或回退到自身可得的事实），不猜、不抛。
+   */
+  readonly facts?: EditorCompletionFacts;
+}
+
+/**
+ * 变量字典的最小**结构面**（`EditorCompletionFacts.dictionary` 的类型）。
+ *
+ * 为什么不引 `DictionaryLookup` 的实现包：契约层不认识词表面包，两格方法签名已足够
+ * 表达供方要用的两件事（原生名反查 / 族头反解）。adapter 那边把 `DictionaryLookup`
+ * 结构赋值进来即可（它本就有这两格）。
+ */
+export interface EditorCompletionDictionary {
+  /** 名字 → 原生引用（术语原形）；查不到 ⇒ `undefined` */
+  resolve?(name: string): string | undefined;
+  /** 名字 → 所属族头；查不到 ⇒ `undefined` */
+  resolveFamily?(name: string): string | undefined;
+}
+
+/**
+ * 补全的**事实输入**一袋（LAU-4 补全腿第三批，2026-10-31；additive —— 每个字段都可选，
+ * 缺一即该路按"取不到"降级，绝不猜）。
+ *
+ * 纪律：这里只放**数据**，一条语言判据都不许住进来。字段的取舍口径 = "供方读不到、
+ * 宿主恰好有"——adapter 表（变量 schema / 词表 / 调用协议）、项目索引派生件（名字表 /
+ * 文件级声明名 / 标签名）、宿主词表与偏好开关。判据（哪个位置弹什么、怎么排序去重）
+ * 永远在供方那一侧。
+ */
+export interface EditorCompletionFacts {
+  /** adapter 变量 schema 本体（枚举名字 / 位表 / 说明）；缺席 = 变量与位号两路零候选 */
+  readonly variableSchema?: VariableSchema;
+  /** 变量字典（原生引用反查 + 族头反解）；缺席 = 变量详情少这两条事实 */
+  readonly dictionary?: EditorCompletionDictionary;
+  /** adapter 调用协议（签名详情 / 括号调用骨架）；缺席 = 不出签名、纯文本插入 */
+  readonly callProtocol?: KojoCallProtocol;
+  /**
+   * 行首可出现的**指令名**（宿主词表 ∪ adapter 指令名，已合并去重；顺序即宿主给的顺序）。
+   * 缺席 = 行首指令源零候选（骨架与其它源照旧）。
+   */
+  readonly directiveWords?: readonly string[];
+  /** 系统函数的中文别名（`英文名 → 中文名`；查不到就不挂这一条，不是双源） */
+  readonly systemFunctionAliases?: readonly (readonly [string, string])[];
+  /** 「文档词补全」开关（宿主设置页偏好）；缺席 / `false` = 该路零候选 */
+  readonly wordBasedSuggestions?: boolean;
+  /**
+   * 当前文件的 `#DIM*` 声明名（已去重、保序）。
+   * `undefined` = 索引此刻对该文件没有意见 ⇒ 供方回退当前缓冲区（数组含 `[]` 才不回退）。
+   */
+  readonly dimNames?: readonly string[];
+  /**
+   * 光标行所属函数内的 `$标签` 名（解析器事实）。
+   * `undefined` = 未索引 ⇒ 供方回退当前缓冲区的全文扫描（数组含 `[]` 才不回退）。
+   */
+  readonly labelNames?: readonly string[];
+  /** 项目内全部函数名（已按归一化名升序、已去重）；缺席 = 函数名 / 成员两路零候选 */
+  readonly functionNames?: readonly string[];
 }
 
 /**
@@ -1293,6 +1360,14 @@ export type EditorCompletionItemKind =
   | 'keyword'
   | 'function'
   | 'variable'
+  /**
+   * **记录 / 作用域里的一项**（LAU-4 补全腿第三批 additive，第十五档）。
+   *
+   * 与 `variable` 差在哪：`variable` 是"这个名字本身是一个变量"，本档是"这个名字是某个
+   * 作用域记录里的一格"（ERB 的 `CFLAG:TARGET:好感` 三段式末段）——Monaco 的 `Field`
+   * 图标正是作者对"它不是独立变量、而是某条记录的一项"的记忆锚点。
+   */
+  | 'field'
   | 'value'
   /**
    * 带占位符的模板候选。宿主侧规则（B3c 写进契约——此前只在宿主翻译层隐式发生）：
@@ -1320,6 +1395,15 @@ export type EditorCompletionItemKind =
   | 'struct'
   /** 固定值域里列举出来的成员（宿主挑枚举图标；不属于任何值域的归 `value`） */
   | 'enum'
+  /**
+   * 值域里**一个具体成员**（LAU-4 补全腿第三批 additive，第十四档）。
+   *
+   * 与 {@link EditorCompletionItemKind} 的 `enum` 差在哪：`enum` 是"这一格的值域"本身
+   * （Monaco `Enum`），本档是"值域里的某一项"（Monaco `EnumMember`）——ERB 的位号候选
+   * （`0 好感` / `1 警戒`）正是后者。降级成 `enum` 会让作者在列表里分不清"选族"与
+   * "选成员"（与 B3c 扩档同一条理由：图标档位一旦合并，判断就断）。
+   */
+  | 'enumMember'
   /** 容器级候选——跳过去的是"一块区域"而不是"一条定义"（宿主挑模块图标） */
   | 'module'
   /* ---- LAU-4 补全腿（2026-10-31）additive：第十三档 ---- */

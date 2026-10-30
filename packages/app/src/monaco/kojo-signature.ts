@@ -2,6 +2,8 @@ import type * as Monaco from './entry';
 import type { KojoCallProtocol, KojoCallSlot } from '@kojo/plugin-api';
 import { registerForLanguageServices } from './register-dialects';
 import { errorText } from '@kojo/plugin-api';
+// LAU-4 补全腿第三批：槽标签格式化的**唯一实现**已上提契约层（插件侧拼括号调用骨架要同一份）
+import { slotParameterLabel } from '@kojo/plugin-api';
 
 /**
  * 签名帮助（B5，形参槽语义）——`Ctrl+Shift+Space` / 打字触发的参数提示。
@@ -242,10 +244,13 @@ export interface ResolvedSignature {
 /**
  * 槽 → 参数标签。`kind` 决定前缀（契约自述：数值槽 `ARG:n`、字符串槽 `ARGS:n`），
  * `index` 与 `label` 原文照抄，宿主不加解释。
+ *
+ * 2026-10-31（LAU-4 补全腿第三批）：**实现已上提契约层** `@kojo/plugin-api` 的
+ * `slotParameterLabel`——同一个格式化要同时服务签名浮层与插件侧的括号调用骨架，
+ * 两份实现必然漂移（"列表里看到的"与"浮层里看到的"不一致）。本处只 re-export，
+ * 既有 import 点（`completion-core` / 测试）一字不改。
  */
-export function slotParameterLabel(slot: KojoCallSlot): string {
-  return `${slot.kind === 'str' ? 'ARGS' : 'ARG'}:${slot.index} ${slot.label}`;
-}
+export { slotParameterLabel };
 
 /**
  * 组装签名（**纯函数**）：`函数名(ARG:0 含义, ARGS:1 含义)`。

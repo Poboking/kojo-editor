@@ -5,6 +5,9 @@
  * v0.1 覆盖：函数边界、#DIM 声明、#FUNCTION(S) 文件标记、SKIPSTART/SKIPEND 区间。
  * v0.2 追加：PRINT 变体、IF/SELECTCASE 嵌套、TRYCALLFORM 引用、条件谓词抽取。
  */
+// 类型专用 import：调用槽语义的格式化指向契约类型本身，**不**把 `game.ts` 的运行时常量
+// 拽进桶图（LAU-4 之前 +45.4 KB 的教训，见 `active-adapter.ts` 头注）。
+import type { KojoCallProtocol, KojoCallSlot } from './game';
 
 
 /** ERB 函数形参 */
@@ -1269,4 +1272,78 @@ export function functionLookupOf(
       }
     },
   };
+}
+
+/* ------------------- 调用槽位格式化（LAU-4 补全腿第三批，2026-10-31） ------------------- */
+
+/**
+ * 槽位的显示标签（`ARG:0 含义` / `ARGS:1 含义`）——签名浮层与括号调用骨架**共用这一枚**。
+ *
+ * 为什么住在契约层：同一句格式化要在两个地方出现——签名帮助的形参表（宿主）与补全的
+ * `名字(${1:ARG:0 含义})` 骨架（判据搬进插件之后由插件拼）。两边各写一份的代价是
+ * 「列表里看到的和签名浮层看到的」不一致；槽的语义本来就是 `KojoCallSlot` 自己的事，
+ * 格式化跟着类型走 ⇒ 一个落点、两侧 import。
+ */
+export function slotParameterLabel(slot: KojoCallSlot): string {
+  return `${slot.kind === 'str' ? 'ARGS' : 'ARG'}:${slot.index} ${slot.label}`;
+}
+
+/** snippet 控制字符（反斜杠 / 美元符 / 右花括号）转义——槽含义原文可能带它们 */
+export function escapeSnippetText(text: string): string {
+  return text.replace(/[\\$}]/g, (ch) => `\\${ch}`);
+}
+
+/**
+ * 形参槽 → 带 tabstop 的调用片段（**纯函数**）。
+ * `slots === undefined`（协议缺席 / 不认 / 抛错）⇒ `undefined` ⇒ 调用方保持纯文本（**不猜形参**）；
+ * `slots` 为空数组是协议明确声明"无槽"这一**事实** ⇒ 给 `名字()`。
+ */
+export function buildCallSnippetText(
+  name: string,
+  slots: readonly KojoCallSlot[] | undefined,
+): string | undefined {
+  if (slots === undefined) return undefined;
+  if (slots.length === 0) return `${name}()`;
+  const stops = slots.map((slot, i) => {
+    const placeholder = escapeSnippetText(slotParameterLabel(slot).replace(/\s+/g, ' ').trim());
+    return `\${${String(i + 1)}:${placeholder}}`;
+  });
+  return `${name}(${stops.join(', ')})`;
+}
+
+/**
+ * 依次用这几个键回协议表取槽（命中仍来自表本身）；全不认 / 表缺席 ⇒ `undefined`。
+ *
+ * `onError` 可选（additive）：协议实现抛错时把 `(键, 错误)` 交给调用方——宿主用它记一行
+ * warn（不静默）；插件侧不传（判据相同、只是没有日志面）。**空数组是命中**（协议声明
+ * "无槽"），只有 `null` / `undefined` 是"不认"。
+ */
+export function callSlotsOf(
+  protocol: KojoCallProtocol | undefined,
+  keys: readonly (string | undefined)[],
+  onError?: (key: string, error: unknown) => void,
+): readonly KojoCallSlot[] | undefined {
+  if (protocol === undefined) return undefined;
+  for (const key of keys) {
+    if (key === undefined || key.length === 0) continue;
+    try {
+      const slots = protocol.slotsFor(key);
+      if (slots) return slots;
+    } catch (error: unknown) {
+      onError?.(key, error);
+    }
+  }
+  return undefined;
+}
+
+/** 签名详情行（`调用签名 \`名字(ARG:0 含义)\``）；取不到槽 ⇒ `undefined`（不进文档，不猜） */
+export function callSignatureLine(
+  display: string,
+  keys: readonly (string | undefined)[],
+  protocol: KojoCallProtocol | undefined,
+  onError?: (key: string, error: unknown) => void,
+): string | undefined {
+  const slots = callSlotsOf(protocol, keys, onError);
+  if (slots === undefined) return undefined;
+  return `调用签名 \`${display}(${slots.map(slotParameterLabel).join(', ')})\``;
 }

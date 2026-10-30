@@ -127,6 +127,12 @@ const NEW_KINDS = ['operator', 'event', 'constant', 'struct', 'enum', 'module'] 
  * 分组本身就是记账（谁加的、为什么加，看分组注释）。
  */
 const LAU_KINDS = ['reference'] as const;
+/**
+ * LAU-4 补全腿第三批（2026-10-31）additive 的两档：值域里的**某一项**（`enumMember`，ERB 位号）
+ * 与作用域记录里的**一格**（`field`，ERB 三段式变量末段）。同样单列分组，理由同上——
+ * 记账的是"谁加的、为什么加"，不是"凑够几档"。
+ */
+const LAU3_KINDS = ['enumMember', 'field'] as const;
 
 describe('B3c · 缺省 = 旧行为（新格全部可选，最小形状照过）', () => {
   it('`EditorCompletionItem` 的三个新格都是可选字段（必填写法一出现即红）', () => {
@@ -221,10 +227,13 @@ describe('B3d · 格式化区间 additive（缺省 = 整篇，给区间 = 只落
 });
 
 describe('B3c · 新增值可用（六档新 kind 与新格能被类型接住）', () => {
-  it('kind 联合恰好十三档：旧六档 + B3c 六档 + LAU-4 一档，一张表封死（多一档少一档都要先读到注释）', () => {
-    expect(kindLiterals()).toEqual([...OLD_KINDS, ...NEW_KINDS, ...LAU_KINDS]);
+  it('kind 联合恰好十五档：旧六档 + B3c 六档 + LAU-4 三批共三档，一张表封死（多一档少一档都要先读到注释）', () => {
+    expect(kindLiterals()).toEqual([...OLD_KINDS, ...NEW_KINDS, ...LAU_KINDS, ...LAU3_KINDS]);
     expectTypeOf<EditorCompletionItemKind>().toEqualTypeOf<
-      (typeof OLD_KINDS)[number] | (typeof NEW_KINDS)[number] | (typeof LAU_KINDS)[number]
+      | (typeof OLD_KINDS)[number]
+      | (typeof NEW_KINDS)[number]
+      | (typeof LAU_KINDS)[number]
+      | (typeof LAU3_KINDS)[number]
     >();
   });
 

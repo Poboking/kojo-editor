@@ -1,5 +1,5 @@
 import type * as Monaco from './entry';
-import { errorText } from '@kojo/plugin-api';
+import { buildCallSnippetText, callSlotsOf, errorText, escapeSnippetText } from '@kojo/plugin-api';
 import type {
   KojoCallProtocol,
   KojoCallSlot,
@@ -12,7 +12,12 @@ import type {
 } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import { pinyinKeysOf } from './pinyin';
-import { describeCallSignature, slotParameterLabel } from './kojo-signature';
+import { describeCallSignature } from './kojo-signature';
+
+/* 调用槽 / 片段格式化的**唯一实现**已上提契约层（LAU-4 补全腿第三批，2026-10-31）：
+ * 同一个格式化要同时服务签名浮层、`.kojo` 装配核与（判据搬进插件后的）ERB 补全，三处
+ * 各写一份必然漂移。本文件原样 re-export，既有 import 点一字不改。 */
+export { buildCallSnippetText, escapeSnippetText };
 
 /**
  * COMPL-SHARED · 补全的**共享装配核**（`.kojo` 与 `.erb` 唯一的装配实现）。
@@ -504,47 +509,26 @@ function withPinyinFilterText(item: Monaco.languages.CompletionItem): Monaco.lan
 
 /* ============================== 调用协议 → snippet / 签名 ============================== */
 
-/** snippet 控制字符（`\` / `$` / `}`）转义——槽含义原文可能带它们 */
-export function escapeSnippetText(text: string): string {
-  return text.replace(/[\\$}]/g, (ch) => `\\${ch}`);
-}
+/**
+ * 形参槽 → 带 tabstop 的调用片段：**实现已上提契约层**（`@kojo/plugin-api` 的
+ * `buildCallSnippetText`，2026-10-31；本文件顶部 re-export）。搬走的原因见那段注释：
+ * 同一句格式化要同时服务签名浮层、`.kojo` 装配核与 ERB 补全（判据搬进插件之后由插件拼），
+ * 三份实现 = 三条会漂的口径。
+ */
 
 /**
- * 形参槽 → 带 tabstop 的调用片段（**纯函数**）。
- * `slots === undefined`（协议缺席 / 不认 / 抛错）⇒ `undefined` ⇒ 调用方保持纯文本（**不猜形参**）；
- * `slots` 为空数组是协议明确声明"无槽"这一**事实** ⇒ 给 `名字()`。
+ * 依次用这几个键回协议表取槽（命中仍来自表本身）；全不认 / 表缺席 ⇒ `undefined`。
+ * 判据（"空数组是命中"）已上提契约层 {@link callSlotsOf}；本函数只剩**日志面**：
+ * 协议实现抛错时记一行 warn（不静默），其余逐字相同。
  */
-export function buildCallSnippetText(
-  name: string,
-  slots: readonly KojoCallSlot[] | undefined,
-): string | undefined {
-  if (slots === undefined) return undefined;
-  if (slots.length === 0) return `${name}()`;
-  const stops = slots.map((slot, i) => {
-    const placeholder = escapeSnippetText(slotParameterLabel(slot).replace(/\s+/g, ' ').trim());
-    return `\${${String(i + 1)}:${placeholder}}`;
-  });
-  return `${name}(${stops.join(', ')})`;
-}
-
-/** 依次用这几个键回协议表取槽（命中仍来自表本身）；全不认 / 表缺席 ⇒ `undefined` */
 export function slotsForCallee(
   protocol: KojoCallProtocol | undefined,
   keys: readonly (string | undefined)[],
   tag: string,
 ): readonly KojoCallSlot[] | undefined {
-  if (protocol === undefined) return undefined;
-  for (const key of keys) {
-    if (key === undefined || key.length === 0) continue;
-    try {
-      const slots = protocol.slotsFor(key);
-      // 空数组（协议声明"无槽"）是**命中**：`if (slots)` 只对 `null` / `undefined`（不认）落空
-      if (slots) return slots;
-    } catch (e: unknown) {
-      console.warn(`${tag} 调用协议对 '${key}' 求槽抛错：${errorText(e)}`);
-    }
-  }
-  return undefined;
+  return callSlotsOf(protocol, keys, (key, error: unknown) => {
+    console.warn(`${tag} 调用协议对 '${key}' 求槽抛错：${errorText(error)}`);
+  });
 }
 
 /** 签名详情行（`调用签名 \`名字(ARG:0 含义)\``）；取不到槽 ⇒ `undefined`（不进文档，不猜） */

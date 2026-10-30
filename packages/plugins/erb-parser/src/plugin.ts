@@ -2172,17 +2172,20 @@ export function createErbParserPlugin(): Plugin {
        静态引库会把 2.0 补全词表链拽上开机图（实测 199 ⇒ 208 文件、+113 KB），直接撞碎
        ps10 的文件闸；住宿主则是"宿主认识 ERB"，与本批的反面。
 
-       本批只应答四个 facet（snippet / labels / families / declared，次序与宿主源表一致）；
-       变量名 / 位号 / 项目函数 / 系统函数 / 指令词表 / 文档词仍由宿主装配，理由逐条写在
-       `completion.ts` 段头与提交回执里（契约暂缺两段式详情回表是主要一条）。
+       第二批先应答四个 facet（snippet / labels / families / declared）；**第三批（2026-10-31
+       收官）把其余七路一并搬进**：指令词 / 变量名 / 项目函数 / 系统函数 / 位号 / 成员 / 文档词。
+       从此 ERB 补全的候选**只有这一个产地**，宿主 `monaco/erb-completion.ts` 只剩
+       「收集事实 → 组请求 → 调槽 → 契约项 → Monaco 条目」。
 
-       索引**现取**（与 definition / rename 同一条纪律）：未开项目 / 索引在途 ⇒ `null`，
-       各 facet 按"未索引"降级（标签与 `#DIM` 声明名回退当前缓冲区，不猜）。
+       事实怎么进来：插件读不到 adapter 槽、项目索引与设置，故这些**事实**由宿主经请求的
+       `facts`（`EditorCompletionFacts`：变量 schema / 字典 / 调用协议 / 行首指令名 /
+       系统函数别名 / 文档词开关 / `#DIM` 名 / 标签名 / 项目函数名）递进来。缺一份 ⇒ 依赖
+       它的那一路零候选（不猜、不抛），其余路照常出货——与"表缺席 ⇒ 该路空"的旧口径逐字相同。
        */
       ctx.slots.register('ui.editor.languageService', {
         id: 'erb-completion',
         order: 20,
-        provide: (request) => provideErbCompletion(request, { index }),
+        provide: (request) => provideErbCompletion(request),
       });
 
       /* ---------------- LAU-4 调用层级腿（2026-10-31）：调用层级 ----------------

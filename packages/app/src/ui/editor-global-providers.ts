@@ -198,7 +198,8 @@ import {
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 // `erbFileFacts` 的注入契约形状（通道语义 / `undefined` 与 `[]` 的分家，见该文件头注）
 import type { ErbFileFactsProvider } from '../monaco/completion-core';
-import { installErbCompletion, memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
+import { memoizedErbFunctionNames, type ErbCompletionTables } from '../monaco/erb-completion';
+import { erbCompletionFactsOf } from '../monaco/erb-completion-facts';
 import { createApplyToClosedFile, installErbRename } from '../monaco/erb-rename';
 // K2 batch-9：ERB 的同符号高亮与结构化扩选（两语言同权面；只挂 `kojo-erb`）。
 import { installErbHighlightProvider } from '../monaco/erb-highlight';
@@ -2138,6 +2139,9 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       filePathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
       projectIndex: () => kojo2ProjectIndex,
       uriForPath: (path) => monaco.Uri.file(path),
+      // ERB 补全的事实袋（LAU-4 补全腿第三批）：adapter 表 / 项目名录 / 宿主词表 / 偏好
+      // 全在这条腿上现取，判据一枚都不留（descriptor 声明了 `completionFacts` 的语言才取）。
+      completionFacts: (model, line) => erbCompletionFactsOf(model, line),
       applyCodeActionEdits: (model, edits) => {
         const ctx = owningPaneOf(model);
         const ed = ctx?.editorRef.current ?? null;
@@ -2325,8 +2329,12 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     });
     // `.kojo` 补全（C-1 seam）：唯一装配点，候选由 `KOJO_COMPLETION_SOURCES` 可扩展数组提供。
     globalDisposers.push(installKojoCompletion(monaco, () => editorTables(requireKernel())));
-    // `.erb` 方言补全（EC-1 seam）：同 `editorTables` 单一数据源；候选由 `ERB_COMPLETION_SOURCES` 提供。
-    globalDisposers.push(installErbCompletion(monaco, () => editorTables(requireKernel())));
+    // `.erb` 方言补全：**宿主不再自装配 provider**（LAU-4 补全腿第三批，2026-10-31）。
+    // 判据整块住进常驻插件 `@kojo/plugin-erb-parser`，候选由槽 `ui.editor.languageService`
+    // 的唯一供方回答、经共享槽腿（`installSlotServiceProviders` 的 `completion` 腿）翻译成
+    // Monaco 条目。两枚 provider 并存时 Monaco 对补全是**并集**（同一份候选出现两遍），
+    // 所以这里连"备用的旧 provider"也不留。宿主剩下的唯一职责是交**事实袋**
+    // （`completionFacts`，见 `slotServiceHost` 那一段）。
     /* 幽灵文本（IC 批 A 车道，2026-10-27）：把 Monaco 的 inline completions 通道接到槽
      * `completion.source`。
      *

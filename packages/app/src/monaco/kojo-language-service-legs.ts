@@ -5,6 +5,7 @@ import type {
   EditorCallHierarchyResult,
   EditorCodeLensRequest,
   EditorCodeLensResult,
+  EditorCompletionFacts,
   EditorCompletionItem,
   EditorCompletionRequest,
   EditorDocumentHighlightRequest,
@@ -357,6 +358,11 @@ export function completionRequestOf(
   column: number,
   project: EditorCompletionRequest['project'],
   triggerCharacter?: string,
+  /**
+   * 事实输入（LAU-4 补全腿第三批，additive 可选）：宿主能取到、供方取不到的那批数据
+   * （adapter 表 / 项目名录 / 宿主词表 / 偏好）。缺席 = 与加这一格之前逐字相同。
+   */
+  facts?: EditorCompletionFacts,
 ): EditorCompletionRequest {
   return {
     kind: 'completion',
@@ -369,6 +375,7 @@ export function completionRequestOf(
     project,
     lineCount: text.length === 0 ? 1 : countLines(text),
     ...(triggerCharacter !== undefined ? { triggerCharacter } : {}),
+    ...(facts !== undefined ? { facts } : {}),
   };
 }
 
