@@ -1,5 +1,6 @@
 import type {
   EditorLanguageServiceContribution,
+  EditorProjectFile,
   EditorWorkspaceSymbol,
   GameProject,
   ErbIndexState,
@@ -67,6 +68,47 @@ export interface WorkspaceSymbolCollection {
 }
 
 const NO_SYMBOLS: WorkspaceSymbolCollection = { symbols: [], totalMatched: 0, scope: null, droppedOutOfScope: 0 };
+
+/* ------------------- 项目文件快照（ERB-PARITY G4，additive） ------------------- */
+
+/**
+ * 一次查询随请求递下去的**项目文件快照**（形状与宿主既有的事实同源：文件列表 + 是否完整）。
+ *
+ * 为什么放在这里而不是让 `workspace-symbols.ts` 自己 import 2.0 项目索引：本文件在**开机图**里
+ * （`ShellLayout` 静态 import），索引那一链（`monaco/kojo2-project-index` → 语言面）在懒边上；
+ * 直接 import 会把整条链拖上首屏（PS-10）。
+ */
+export interface WorkspaceSymbolProjectFiles {
+  readonly files: readonly EditorProjectFile[];
+  readonly complete: boolean;
+}
+
+/** 快照来源（编辑器装配层注册；返回 `undefined` = 这轮没有快照） */
+export type WorkspaceSymbolProjectFilesSource = () => WorkspaceSymbolProjectFiles | undefined;
+
+let projectFilesSource: WorkspaceSymbolProjectFilesSource | null = null;
+
+/**
+ * 注册唯一的快照来源（装配层调一次；后装覆盖先装，传 `null` = 撤掉）。
+ *
+ * 判据仍然只有一份：本文件只把文件**当数据**递进请求，不解释哪门语言要它——要它的供方
+ * 自己按路径认领（2.0 的供方 `kojo2-workspaceSymbols`），不要它的供方（ERB 的索引自持）
+ * 一个字段都不读。没注册来源 ⇒ 请求里不出现 `projectFiles`，行为与加这一格之前逐字相同。
+ */
+export function installWorkspaceSymbolProjectFilesSource(
+  source: WorkspaceSymbolProjectFilesSource | null,
+): void {
+  projectFilesSource = source;
+}
+
+/** 现取一份快照（来源抛错按"没有快照"处理：检索的面不该因取数失败而消失） */
+function currentProjectFiles(): WorkspaceSymbolProjectFiles | undefined {
+  try {
+    return projectFilesSource?.() ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * 带范围时向提供方多要几档（`SCOPED_QUERY_FACTOR`）：宿主这一层的过滤发生在
@@ -185,6 +227,12 @@ export function collectWorkspaceSymbols(
     project: GameProject | null;
     limit?: number;
     scope?: ErbScopeStamp | null;
+    /**
+     * 项目文件快照（ERB-PARITY G4，**additive 可选**）。缺省 ⇒ 读唯一来源
+     * （{@link installWorkspaceSymbolProjectFilesSource}，与 `scope` 读 `activeNavScope()`
+     * 同一个模式：调用方不必认识这个概念的接线细节）；显式传 `null` = 本轮强制不带。
+     */
+    projectFiles?: WorkspaceSymbolProjectFiles | null;
   },
 ): WorkspaceSymbolCollection {
   const query = args.query.trim();
@@ -192,6 +240,7 @@ export function collectWorkspaceSymbols(
   const scope = args.scope === undefined ? activeNavScope() : args.scope;
   const roots = scope?.roots ?? [];
   const providerLimit = providerLimitFor(args.limit, roots.length > 0);
+  const projectFiles = args.projectFiles === undefined ? currentProjectFiles() : args.projectFiles ?? undefined;
 
   const answers: (readonly EditorWorkspaceSymbol[])[] = [];
   let reportedTotal = 0;
@@ -203,6 +252,10 @@ export function collectWorkspaceSymbols(
         query: args.query,
         project: args.project,
         ...(providerLimit !== undefined ? { limit: providerLimit } : {}),
+        // 缺席 ⇒ 请求里**不出现**这一格（旧供方零改动；与 references 的 `projectFiles` 同口径）
+        ...(projectFiles === undefined
+          ? {}
+          : { projectFiles: projectFiles.files, projectFilesComplete: projectFiles.complete }),
       });
     } catch (e: unknown) {
       console.warn(

@@ -27,6 +27,9 @@ export { provideFormatting } from './format';
 // B3j（2026-10-30）：槽 `ui.editor.codeAction` 的供方（一键迁移）。
 export { provideCodeActions, coreDiagnosticsOf, type Kojo2CodeActionFile } from './code-actions';
 export { provideDocumentSymbols, symbolFactsToTree } from './symbols';
+// ERB-PARITY G4（2026-10-31）：`Ctrl+T` 的工作区符号供方（项目文件快照 → 契约候选；
+// 判据复用 `@kojo/kojo-lang/symbols`，不另写一份"什么算符号"）。
+export { provideWorkspaceSymbols } from './workspace-symbols';
 export { provideInlayHints, toEditorInlayHints } from './inlay';
 export { isKojo2Request } from './request';
 export { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';

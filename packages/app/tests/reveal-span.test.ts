@@ -137,7 +137,9 @@ function implementationLanding(location: DefinitionLocation): Landing {
   } as unknown as typeof Monaco;
   const sent: KernelEventMap['editor.revealLocation'][] = [];
   installImplementationProvider(monaco, {
-    resolve: () => [location],
+    // G3：实现腿的取数口是 `resolveImplementation`（请求判别式 `kind: 'implementation'`）
+    resolve: () => [],
+    resolveImplementation: () => [location],
     navigate: (target) =>
       sent.push(
         revealLocationOf(

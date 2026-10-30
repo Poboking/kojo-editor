@@ -559,6 +559,12 @@ ERB 与 kojo2 的差别只在**供方住在哪**：LAU-4 把 ERB 的 11 枚 prov
 （**第一步已落 `cca040fb`**：同符号高亮 / 扩选两条腿——判据住 `@kojo/erb-lang`、供方是
 `@kojo/plugin-erb-lang`，两门语言已同用一条槽、同一份契约），彻底收口后宿主只剩"注册一次 provider"。
 
+**ERB-PARITY G3（2026-10-31，additive）**：`Ctrl+F12`（跳到实现）也是这条槽的一枚判成员
+（`implementation`）。ERB 由 `@kojo/plugin-erb-parser` 的 `provideErbDefinition` 与 `definition`
+共用同一份判据（标签 > `#DIM` > 函数索引，产出 kind 跟随请求），宿主只做请求装配与落点编排；
+kojo2 **不点名**这条腿（能力矩阵里 `implementation` 记 `{ exempt }`：F12 已覆盖），
+`language-slot-conformance.test.ts` 的供方台账以 `unattendedFor` 如实记"无人认领"，不造空供方。
+
 **与 SDK B0–B5 的实际进度对账（v1.1 补，决定 LAU-4 能不能排）**：B0 已把该槽扩出 4 个 `kind` + 4 条数据腿
 （`8f74dae5`）；B1 已建 `@kojo/kojo-lang` 并搬走 symbols / declarations / sourcemap / expand-view / constants
 （`e4477343`）；B2 接线 5 项**已全部接上**（`references` 由 B3e、`foldingRange` 由 B3h）；B3a–B3j 已落（B3d 起

@@ -138,3 +138,44 @@ describe('erb-definition · 索引缺席', () => {
     expect(provideErbDefinition(req(2, 2), null)).toEqual({ kind: 'definition', locations: [] });
   });
 });
+
+/* ============================== ERB-PARITY G3：implementation ============================== */
+
+/**
+ * `Ctrl+F12`（`kind: 'implementation'`）在 ERB 里就是 `F12`（`kind: 'definition'`）——
+ * 两条 Monaco provider 对应槽里两条**各自点名**的腿，但判据只有这一份。本组钉三件事：
+ * 同一位置两条腿的目标**逐字相同**（含顺序与去重）、判别式跟随请求、非方言仍弃权。
+ */
+describe('erb-implementation · 与 definition 共用同一份判据', () => {
+  const implReq = (line: number, column: number, text = TEXT, path = PATH): EditorLanguageServiceRequest =>
+    ({ kind: 'implementation', path, text, line, column, project: null }) as EditorLanguageServiceRequest;
+
+  it('同一位置 ⇒ 目标、顺序、span 与 definition 逐字相同（索引缺席 / 在场各测一遍）', () => {
+    const spots: readonly (readonly [number, number])[] = [
+      [3, 3], // `#DIM` 声明名
+      [8, 8], // `$` 标签跳转目标（CJK）
+      [7, 2], // 标签定义名自跳
+      [9, 9], // 无命中
+    ];
+    for (const [line, column] of spots) {
+      expect(provideErbDefinition(implReq(line, column), null)!.locations).toEqual(
+        provideErbDefinition(req(line, column), null)!.locations,
+      );
+    }
+    expect(provideErbDefinition(implReq(3, 3), indexWith('好感度', 9, 1))!.locations).toEqual(
+      provideErbDefinition(req(3, 3), indexWith('好感度', 9, 1))!.locations,
+    );
+  });
+
+  it('判别式跟随请求：implementation 请求交回 `kind: "implementation"`，不串成 definition', () => {
+    const out = provideErbDefinition(implReq(3, 3), null);
+    expect(out?.kind).toBe('implementation');
+    expect(provideErbDefinition(req(3, 3), null)?.kind).toBe('definition');
+  });
+
+  it('其它 kind / 非 ERB 方言仍弃权（`undefined`，不是空作答）', () => {
+    expect(provideErbDefinition({ kind: 'documentSymbol', path: PATH, text: TEXT } as never, null)).toBeUndefined();
+    expect(provideErbDefinition(implReq(3, 3, TEXT, 'C:/proj/erb/loco.kojo'), null)).toBeUndefined();
+    expect(provideErbDefinition(implReq(3, 3, TEXT, '/tmp/a.txt'), null)).toBeUndefined();
+  });
+});

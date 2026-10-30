@@ -3,6 +3,7 @@ import type {
   ControlFlowStatement,
   EditorCallHierarchyResult,
   EditorDefinitionResult,
+  EditorImplementationResult,
   EditorLanguageServiceRequest,
   EditorSymbolLocation,
   ErbFile,
@@ -408,19 +409,25 @@ export function collectErbSemanticDiagnostics(
 }
 
 /**
- * `erb-definition` 的应答体（LAU-4 第二步；槽注册只转一手）。
+ * `erb-definition` / `erb-implementation` 的应答体（LAU-4 第二步；槽注册只转一手）。
  *
  * 三条腿一次按序合：`$` 标签（`labelScopeAt`）→ `#DIM` 声明（`resolveErbDimDefinition`）
  * → 函数索引（`definitionTargetsAt`），同处去重保留带 `span` 的那一枚。前两腿是缓冲区事实，
  * 索引缺席也照答；非 ERB 方言弃权（`undefined`），认这门语言总是作答（空数组≠弃权）。
  * 判据折在本插件：语言面库叶子会把整包（含 32 KB 的 `highlight.ts`）拖上首屏。
+ *
+ * **ERB-PARITY G3（2026-10-31）**：`implementation`（`Ctrl+F12`）与 `definition`（`F12`）
+ * 在 ERB 里是**同一件事**——这个名字的定义位。本函数因此同时答两个 `kind`（产出 `kind`
+ * 跟随请求），而不是在宿主或别处再写一份"实现"判据。返回序逐字不变
+ * （标签 > `#DIM` 声明 > 函数索引），所以两条腿跳到的位置不可能分叉。
  */
 export function provideErbDefinition(
   request: EditorLanguageServiceRequest,
   index: ErbIndex | null,
-): EditorDefinitionResult | undefined {
-  if (request.kind !== 'definition') return undefined;
+): EditorDefinitionResult | EditorImplementationResult | undefined {
+  if (request.kind !== 'definition' && request.kind !== 'implementation') return undefined;
   if (!isDialect(request.path)) return undefined;
+  const kind = request.kind;
   try {
     // 序① 标签：作用域在解析器（`labelScopeAt`）、落点投影在语言面库。
     const scope = labelScopeAt(request.text, request.path, request.line, request.column);
@@ -428,14 +435,14 @@ export function provideErbDefinition(
     // 序② 声明：`#DIM` 族纯判据（库包）。
     const dims = resolveErbDimDefinition(request.text, request.line, request.column, request.path);
     const local = mergeSymbolLocations(labels, dims);
-    if (index === null) return { kind: 'definition', locations: local };
+    if (index === null) return { kind, locations: local };
     // 序③ 函数索引：沿用 `definitionTargetsAt`（标签入口命中时它自己会让位，不会把
     // `GOTO` 目标当函数名；标签那部分与序①重复，`mergeSymbolLocations` 按同处去重）。
     const refs = definitionTargetsAt(index, request.path, request.text, request.line, request.column);
-    return { kind: 'definition', locations: mergeSymbolLocations(local, functionLocationsOf(refs)) };
+    return { kind, locations: mergeSymbolLocations(local, functionLocationsOf(refs)) };
   } catch {
     // 判据抛错 ⇒ 空结果（"这篇没有可跳的定义"是作者能读懂的退化）。
-    return { kind: 'definition', locations: [] };
+    return { kind, locations: [] };
   }
 }
 

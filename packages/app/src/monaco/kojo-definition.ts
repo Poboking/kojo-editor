@@ -48,6 +48,11 @@ export function collectDefinitionLocations(
   request: EditorLanguageServiceRequest,
 ): DefinitionLocation[] {
   const out: DefinitionLocation[] = [];
+  // ERB-PARITY G3（2026-10-31）：`implementation`（Ctrl+F12）与 `definition`（F12）是**同一形状**
+  // （`{kind, locations}`，判别式与请求对应）。收的是哪一个由**请求**说了算——本函数不按语言
+  // 或位置另判一次，否则"谁能答实现"就成了宿主里的第二份判据。
+  const expectedKind: 'definition' | 'implementation' =
+    request.kind === 'implementation' ? 'implementation' : 'definition';
   const indexByKey = new Map<string, number>();
   for (const contribution of contributions) {
     let result: ReturnType<EditorLanguageServiceContribution['provide']>;
@@ -60,7 +65,7 @@ export function collectDefinitionLocations(
       continue;
     }
     // `undefined` = 该贡献方不认这个文件（跳过）；空数组 = 认但不给目标（同样不加东西）
-    if (!result || result.kind !== 'definition') continue;
+    if (!result || result.kind !== expectedKind) continue;
     for (const location of result.locations) {
       // 契约已带 `span`（W9 收口）：位置事实直接就是 `DefinitionLocation`，零 cast。
       // 去重键的"列"一位取**区间起点**（`span` 优先于裸 `column`）：

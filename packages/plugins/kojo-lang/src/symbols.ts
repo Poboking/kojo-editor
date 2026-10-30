@@ -47,6 +47,17 @@ const SYMBOL_KIND: Readonly<Record<Kojo2SymbolKind, EditorDocumentSymbolKind>> =
 };
 
 /**
+ * 符号种类 → 契约的中性类别（**本文件是唯一映射表**；G4 的 `workspaceSymbol` 腿也读它）。
+ *
+ * 为什么抽成函数：`workspaceSymbol` 的候选也带 `kind`（宿主按它挑图标），而那张映射表
+ * 若在 `workspace-symbols.ts` 再抄一份，就会出现"大纲把 `# 幕` 画成 section、`Ctrl+T`
+ * 画成别的"——同一个符号两套图标，正是本仓最讨厌的那类漂移。
+ */
+export function editorSymbolKindOf(kind: Kojo2SymbolKind): EditorDocumentSymbolKind {
+  return SYMBOL_KIND[kind] ?? 'declaration';
+}
+
+/**
  * 平铺事实 → 大纲树。
  *
  * `container` 的三种坏值（`undefined` / 负数 / 不在 `[0, i)` 内）一律当**顶层**：

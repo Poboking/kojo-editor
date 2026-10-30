@@ -926,13 +926,30 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ——"判据全在图内、宿主只剩翻译"的账面形态与改名腿同款。新增测试
     //     `erb-parser/tests/call-hierarchy.test.ts`（+11,797 B）不在首屏（测试不进图）。
     //     ⇒ 闸 **3,319 → 3,332**（余量约 0.4 KB；文件闸仍 199）。
+    //
+    //   - **ERB-PARITY G3（implementation 槽腿，2026-10-31）**：读数 **199 文件 / 3,337 KB**
+    //     （3,416,904 B；base 3,412,293 B，比上一笔台账的 3,412,149 多 144 B —— 那一格是
+    //     上一笔之后另一条 dev 提交落在图内既有文件里的字节，本笔按本树实测重算）。
+    //     **零新进图模块**（199 未动）。净 **+4,611 B** 全落在图内三枚，逐枚按
+    //     「本树 vs `origin/dev` 同路径 `git cat-file -s`」实测：
+    //     `plugin-api/src/slots.ts` **+3,904**（`implementation` 请求 / 结果两形状 + 两枚联合的
+    //     末尾成员 + 契约头注）、`plugins/erb-parser/src/plugin.ts` **+525**（`provideErbDefinition`
+    //     同时答 definition / implementation，产出 kind 跟随请求）、
+    //     `plugin-api/src/index.ts` **+182**（契约再导出）。宿主那三枚改动
+    //     （`ui/editor-global-providers.ts` +3,575、`monaco/kojo-definition.ts` +461、
+    //     `monaco/erb-implementation.ts` +1,471）与 `monaco/language-registry.ts` +1,012
+    //     **都不在开机图里**（monaco 装配在懒边），`ui/workspace-symbols.ts` +2,639 同理
+    //     ——所以这笔账只有 4,611 B。
+    //     ⇒ 闸 **3,332 → 3,337**（余量约 0.2 KB；文件闸仍 199）。这一档加的是**能力**：
+    //     `Ctrl+F12` 从"借 definition 那条请求"变成一条自己点名的槽腿（kojo2 不点名 ⇒ 不挂，
+    //     矩阵里如实记 `{ exempt }`）。欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,332 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,337 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_332);
+    expect(totalKb).toBeLessThanOrEqual(3_337);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

@@ -62,7 +62,21 @@ export type SlotServiceKind =
   // B3g：行上注解同批进共享收口（供方 = 插件 `kojo2-codeLens`）。
   | 'codeLens'
   // B3 语义收口（2026-10-30）：结构化着色也进共享收口（供方 = 插件 `kojo2-semanticTokens`）。
-  | 'semanticToken';
+  | 'semanticToken'
+  /**
+   * ERB-PARITY G3（2026-10-31）：跳到实现（`Ctrl+F12`）也进共享收口。
+   *
+   * 为什么这枚必须进联合：它驱动的正是 `registerForLanguageServices` 的挂载名单——
+   * 进联合意味着"点名了这条腿的语言自动挂上"。今天**只有 ERB**
+   * 会挂（`languageServices: true` 全腿）：kojo2 的矩阵里这条能力明写"不做（F12 已覆盖）"，
+   * 它的 descriptor 不点名这条腿，`SlotServiceKind` 里多这一格对它**零影响**。
+   * 供方与判据同在 `@kojo/plugin-erb-parser`（同一份"标签 > `#DIM` > 函数索引"），宿主只做
+   * 请求装配与落点编排——不再有"实现 = 直读定义索引"的第二条腿。
+   *
+   * ⚠ 本文件里的 `SlotServiceKind` 联合由 `language-slot-conformance.test.ts` **按源码字面量**
+   * 解析（只剥行注释、不剥块注释）⇒ 块注释里别再写带引号的同样的字面量，否则会被数成第二个成员。
+   */
+  | 'implementation';
 
 /**
  * 「语言族」编辑器右键项的身份（additive，ERB-PARITY G8）。

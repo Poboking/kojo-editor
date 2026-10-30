@@ -21,6 +21,7 @@
  * | `codeLens`（B3g） | `codelens.ts` 的 `kojo2CodeLenses`（计数复用 `references.ts`） | `src/codelens.ts` |
  * | `foldingRange`（B3h） | `folding.ts` 的 `kojo2FoldingSnapshotRanges`（**宿主预取的快照**） | `src/folding.ts` |
  * | `semanticToken`（B3 语义收口） | `semantic.ts` 的 `kojo2SemanticSpansFromCaptures`（**宿主预取的捕获快照**） | `src/semantic.ts` |
+ * | `workspaceSymbol`（G4，`Ctrl+T`） | `@kojo/kojo-lang/symbols` 的 `kojo2DocumentSymbols`（**宿主递进来的项目文件快照**） | `src/workspace-symbols.ts` |
  * | `codeAction`（B3j，另一枚槽） | `code-actions.ts` 的 `kojo2CodeActionFacts` | `src/code-actions.ts` |
  *
  * B4 起还有一枚**不同形状**的贡献——槽 `ui.monaco.language` 交的是注册期的一次性数据
@@ -74,6 +75,7 @@ import { provideFoldingRanges } from './folding';
 import { provideSemanticTokens } from './semantic';
 import { provideSignatureHelp } from './signature';
 import { provideCodeLenses } from './codelens';
+import { provideWorkspaceSymbols } from './workspace-symbols';
 import { provideCodeActions } from './code-actions';
 import { createKojo2DiagnosticsContribution } from './diagnostics';
 import { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
@@ -205,6 +207,15 @@ export function createKojoLangPlugin(): Plugin {
         id: 'kojo2-semanticTokens',
         order: CONTRIBUTION_ORDER,
         provide: (request) => provideSemanticTokens(request),
+      });
+      // ERB-PARITY G4（2026-10-31）：`Ctrl+T`（工作区符号）的 2.0 供方。
+      // 与文档大纲同一份事实（`@kojo/kojo-lang/symbols`），文件由宿主随请求递进来
+      // （`projectFiles`，additive）——插件不读盘、不碰宿主索引；没有快照就弃权，
+      // 不把"还没名录"答成"没有匹配"。
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo2-workspaceSymbols',
+        order: CONTRIBUTION_ORDER,
+        provide: (request) => provideWorkspaceSymbols(request),
       });
       // B3j（2026-10-30）：一键迁移动作进**既有槽** `ui.editor.codeAction`（不是给语言服务
       // 再开一个判别成员——诊断 / 快速修复各有专用槽，开新路等于同一能力两条路径）。判据在

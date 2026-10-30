@@ -212,6 +212,10 @@ import {
   sugarSourceOf,
   type PaneCtx,
 } from './editor-pane-registry';
+import {
+  installWorkspaceSymbolProjectFilesSource,
+  type WorkspaceSymbolProjectFiles,
+} from './workspace-symbols';
 import { sourceLineToSugar } from './sugar-view';
 import { loadWordBasedSuggestionsPref } from './suggest-pref';
 // IC 批（A 车道）：幽灵文本的宿主接线层 + 它的三格偏好真源（localStorage 单源，同 suggest-pref 形态）
@@ -245,6 +249,35 @@ export function kojo2ProjectIndexUpdate(path: string, text: string | null): void
 export function kojo2CallHierarchyResolvers() {
   return createKojo2ProjectCallHierarchyResolvers(kojo2ProjectIndex);
 }
+
+/**
+ * ERB-PARITY G4（2026-10-31）：把这份索引**当数据**交给 `Ctrl+T` 的槽请求
+ * （`EditorWorkspaceSymbolRequest.projectFiles`）。宿主只做"取快照"，不在这一层做任何符号判据。
+ *
+ * - 来源函数按**索引代数**缓存：`snapshot().generation` 只在真正写过的轮次 +1，所以同一轮里
+ *   每击键一次只是复用同一个数组（数组里是文本引用，不复制正文）；索引一变就整份重取；
+ * - 空索引 ⇒ 快照为空数组：2.0 供方会弃权（`sources.length === 0`），ERB 那条腿逐字不受影响；
+ * - 注册在**模块作用域**：本模块只在编辑器装配的懒边下求值，而索引本身也只在这里被喂养
+ *   （打开中的 model + 项目扫描），所以"模块在 = 索引在"；开机图一个字节都不增。
+ */
+let workspaceSymbolSnapshot: { generation: number; files: WorkspaceSymbolProjectFiles } | null = null;
+installWorkspaceSymbolProjectFilesSource(() => {
+  let generation: number;
+  try {
+    generation = kojo2ProjectIndex.snapshot().generation;
+  } catch {
+    return undefined;
+  }
+  if (workspaceSymbolSnapshot !== null && workspaceSymbolSnapshot.generation === generation) {
+    return workspaceSymbolSnapshot.files;
+  }
+  // 空 `requestPath` = 不排除任何文件（工作区符号问的是"整个工作区"）；上限与引用 / 改名同一组。
+  const snapshot = projectFilesSnapshotOf(kojo2ProjectIndex, '');
+  if (snapshot === undefined) return undefined; // 索引缺席（理论上不会：上面刚拿到代数）
+  const files: WorkspaceSymbolProjectFiles = { files: snapshot.files, complete: snapshot.complete };
+  workspaceSymbolSnapshot = { generation, files };
+  return files;
+});
 
 /**
  * 用户片段补全 provider（S18；语言面常开，与内置补全**并存**——Monaco 同一语言允许多枚
@@ -835,37 +868,71 @@ function definitionRequestPointOf(
 }
 
 /**
- * 转到定义 / 跳到实现共用的读类腿（换算 → 问槽 → 折回）。
+ * 转到定义（`kind: 'definition'`）的读类腿（换算 → 问槽 → 折回）。
  *
- * **跨文件声明**（K2 跨文件批）分两段问，顺序就是语义：
- * 1. 先按同文件判据问一遍——本地有落点就结束，快照一分钱不花；
- * 2. 本地没有**才**取项目快照（`projectFilesSnapshotOf`，与引用 / 改名同一条取数腿、
- *    同一组上限）并重问一次，供方据此到别的文件找同名声明。
- *
- * 快照只给"definition 由槽供方应答"的语言（descriptor 的 `slotServices` 点名）：`projectFiles`
- * 这一格今天只有 kojo2 供方读，v1 方言由解析器原生应答、且 F12 远比 2.0 频繁——"每次按 F12
- * 都把整项目文本过一遍槽"是这里唯一要防的退化。
- * 索引缺席 / 取数失败 ⇒ 请求里不出现 `projectFiles`，行为与加这一格之前逐字相同。
+ * 与 {@link readImplementationTargets} 共用 {@link readNameTargets}——**落地与坐标换算一份**，
+ * 取数请求的 `kind` 各发各的（ERB-PARITY G3：两条 Monaco provider 对应两条槽腿）。
  */
 export function readDefinitionTargets(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
   kernel: Kernel,
 ): DefinitionLocation[] {
+  return readNameTargets(model, position, kernel, 'definition');
+}
+
+/**
+ * 跳到实现（`kind: 'implementation'`）的读类腿（ERB-PARITY G3）。
+ *
+ * **不是**第二条判据：请求只是把判别式换成 `implementation`，"这个名字的实现在哪"仍由槽里
+ * 点名这条腿的供方答（ERB = `@kojo/plugin-erb-parser`，返回序与 `definition` 逐字相同）。
+ * 宿主这一侧只差一个字面量——这正是"哪条腿在答"必须写在请求里的理由：合并成 `definition`
+ * 就等于宿主替 kojo2 假装有实现面。
+ */
+export function readImplementationTargets(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  kernel: Kernel,
+): DefinitionLocation[] {
+  return readNameTargets(model, position, kernel, 'implementation');
+}
+
+/**
+ * 两条"名字 → 落点"的读类腿共用的**编排**（换算 → 问槽 → 折回）。
+ *
+ * **跨文件声明**（K2 跨文件批）分两段问，顺序就是语义：
+ * 1. 先按同文件判据问一遍——本地有落点就结束，快照一分钱不花；
+ * 2. 本地没有**才**取项目快照（`projectFilesSnapshotOf`，与引用 / 改名同一条取数腿、
+ *    同一组上限）并重问一次，供方据此到别的文件找同名声明。
+ *
+ * 快照只给"这条腿由槽供方应答"的语言（descriptor 的 `slotServices` 点名）：`projectFiles`
+ * 这一格今天只有 kojo2 供方读，v1 方言由解析器原生应答、且 F12 远比 2.0 频繁——"每次按 F12
+ * 都把整项目文本过一遍槽"是这里唯一要防的退化。
+ * 索引缺席 / 取数失败 ⇒ 请求里不出现 `projectFiles`，行为与加这一格之前逐字相同。
+ */
+function readNameTargets(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  kernel: Kernel,
+  kind: 'definition' | 'implementation',
+): DefinitionLocation[] {
   const target = readTargetOf(model);
   if (!target) return [];
   const at = definitionRequestPointOf(model, target, position);
   if (at === null) return [];
   const contributions = kernel.slots.query('ui.editor.languageService');
-  const request = {
-    kind: 'definition' as const,
+  const base = {
     ...documentRequestFields(target.model, target.path, kernel.project.current()),
     line: at.line,
     column: at.column,
   };
+  const request =
+    kind === 'implementation'
+      ? { kind: 'implementation' as const, ...base }
+      : { kind: 'definition' as const, ...base };
   let locations = collectDefinitionLocations(contributions, request);
   if (locations.length === 0) {
-    const snapshot = definitionProjectSnapshotOf(target.model, target.path);
+    const snapshot = nameLegProjectSnapshotOf(target.model, target.path, kind);
     if (snapshot !== undefined) {
       locations = collectDefinitionLocations(contributions, {
         ...request,
@@ -877,17 +944,18 @@ export function readDefinitionTargets(
   return target.sugar ? foldLocationsToPreview(model, target, locations) : locations;
 }
 
-/** 2.0 的项目文件快照（`undefined` = 这门语言不用槽供方答 definition / 索引缺席 / 取数抛错） */
-function definitionProjectSnapshotOf(
+/** 2.0 的项目文件快照（`undefined` = 这门语言不用槽供方答这条腿 / 索引缺席 / 取数抛错） */
+function nameLegProjectSnapshotOf(
   model: Monaco.editor.ITextModel,
   path: string,
+  kind: 'definition' | 'implementation',
 ): Kojo2ProjectFilesSnapshot | undefined {
   try {
-    // 判据是"这门语言的 definition 由**槽供方**应答"（descriptor 的 `slotServices` 点名），
+    // 判据是"这门语言的这条腿由**槽供方**应答"（descriptor 的 `slotServices` 点名），
     // 不是某个具体语言 id：v1 方言由解析器原生应答、一个字段都不读 `projectFiles`，
     // 替它们取快照就是白付"整项目文本过一遍槽"的钱。
     const slotServices = descriptorForLanguageId(model.getLanguageId())?.slotServices;
-    if (slotServices === undefined || !slotServices.includes('definition')) return undefined;
+    if (slotServices === undefined || !slotServices.includes(kind)) return undefined;
     return projectFilesSnapshotOf(kojo2ProjectIndex, path);
   } catch {
     return undefined;
@@ -1863,9 +1931,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // App 据此开文件、编辑器据此滚动）——与 codeAction 的"宿主零业务"同一分层。
     // D4（2026-10-15 Peek 批）追加两条腿：目标在同文件/已开标签时**返回真 LocationLink**
     // （Monaco 的 `Alt+F12` Peek 与就地跳都以这份返回为数据源），其余情形照旧发事件。
-    // 转到定义与跳到实现**共用这一条取数腿**（W9：`ImplementationHandlers = DefinitionHandlers`，
-    // 两者要的"名字 → 定义位"是同一份数据；写两份就是允许第二条腿自己再算一遍，
-    // 旧 `erb-implementation` 直读 `ErbIndex.byName` 正是这么长出第二份计算的）。
+    // 转到定义与跳到实现**共用同一条落地腿**（W9：`planDefinitionJump` / `toDefinitionLinks` /
+    // `clampRevealPosition` 是与语言无关的落点判据），但**取数各发各的 `kind`**
+    // （ERB-PARITY G3：definition / implementation 两条槽腿；旧写法把两条 Monaco provider
+    // 接到同一个 `kind: 'definition'` 请求上，等于宿主替语言决定"实现"是什么）。
     const resolveDefinitionTargets = (
       model: Monaco.editor.ITextModel,
       position: Monaco.Position,
@@ -2368,14 +2437,17 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         setReferenceTally({ tally, explanation, path: tallySourcePath });
       },
     }));
-    // 跳到实现（R3 残项，2026-10-16；W9 收口）：数据源与转到定义**同一个 `kind: 'definition'`
-    // 的取数腿**（上方 `resolveDefinitionTargets`，只问 `ui.editor.languageService` 槽）。
-    // 引擎系统函数不在任何供方的索引里 ⇒ 给不出定义位 = 不应答 = 真话"没有实现"。
+    // 跳到实现（R3 残项，2026-10-16；W9 收口；ERB-PARITY G3 2026-10-31 进槽）：数据源是
+    // `kind: 'implementation'` 的槽腿（`readImplementationTargets` **只问槽**），不再借
+    // `kind: 'definition'` 那条请求——"哪条 Monaco provider 对应哪条槽腿"从此写在请求里，
+    // kojo2 不点名这条腿 ⇒ 它的 Ctrl+F12 与改动前一样没有 provider（矩阵里记的决定）。
     // 三条腿（同 model 就地跳 / 已开标签 Peek / 未开文件事件通道）整个复用
-    // `planDefinitionJump` / `toDefinitionLinks` / `clampRevealPosition`——宿主一行取数都不做，
-    // `canAnswer` / `currentIndex` 随旧的 byName 直读一起删（那是第二份计算）。
+    // `planDefinitionJump` / `toDefinitionLinks` / `clampRevealPosition`——那是**与语言无关的
+    // 落点判据**，宿主不因此多认一个语言概念。
     globalDisposers.push(installImplementationProvider(monaco, {
       resolve: resolveDefinitionTargets,
+      resolveImplementation: (model, position) =>
+        readImplementationTargets(model, position, requireKernel()),
       navigate: (location) => {
         // W9 判据①：与转到定义同一个载荷出口
         requireKernel().bus.emit(

@@ -49,28 +49,33 @@ describe('跨文件定义 · 契约与宿主接线', () => {
     expect(request).toMatch(/readonly projectFilesComplete\?: boolean;/);
   });
 
-  it('宿主把快照塞进 definition 请求，且复用引用 / 改名那条取数腿', () => {
+  it('宿主把快照塞进这条腿的请求，且复用引用 / 改名那条取数腿', () => {
     const host = read('packages/app/src/ui/editor-global-providers.ts');
     expect(host).toMatch(/import \{[\s\S]{0,160}projectFilesSnapshotOf[\s\S]{0,160}\} from '\.\.\/monaco\/kojo-language-service-legs';/);
-    const leg = bodyOf(host, 'export function readDefinitionTargets(');
+    // G3：definition / implementation 两条腿共用这段编排（请求的判别式由 `kind` 参数决定）
+    const leg = bodyOf(host, 'function readNameTargets(');
     expect(leg).toContain('projectFiles: snapshot.files');
     expect(leg).toContain('projectFilesComplete: snapshot.complete');
   });
 
-  it('快照只在"definition 由槽供方应答"的语言上取（v1 方言的 F12 不付这份钱）', () => {
+  it('快照只在"这条腿由槽供方应答"的语言上取（v1 方言的 F12 不付这份钱）', () => {
     const host = read('packages/app/src/ui/editor-global-providers.ts');
-    const snapshot = bodyOf(host, 'function definitionProjectSnapshotOf(');
+    const snapshot = bodyOf(host, 'function nameLegProjectSnapshotOf(');
     expect(snapshot).toContain('descriptorForLanguageId(');
-    expect(snapshot).toMatch(/slotServices\.includes\('definition'\)/);
+    // 判据按**腿**（definition / implementation）而不是硬写某一个：G3 之后两条腿共用一个函数
+    expect(snapshot).toMatch(/slotServices\.includes\(kind\)/);
     expect(snapshot).toContain('projectFilesSnapshotOf(');
+    // 腿名从调用方传进来（不许在这里回落到固定字面量）
+    const leg = bodyOf(host, 'function readNameTargets(');
+    expect(leg).toContain('nameLegProjectSnapshotOf(target.model, target.path, kind)');
   });
 
   it('同文件优先：先问一次，本地为空才取快照重问（顺序即语义）', () => {
     const host = read('packages/app/src/ui/editor-global-providers.ts');
-    const leg = bodyOf(host, 'export function readDefinitionTargets(');
+    const leg = bodyOf(host, 'function readNameTargets(');
     const firstAsk = leg.indexOf('collectDefinitionLocations(contributions, request)');
     const guard = leg.indexOf('if (locations.length === 0)');
-    const takeSnapshot = leg.indexOf('definitionProjectSnapshotOf(');
+    const takeSnapshot = leg.indexOf('nameLegProjectSnapshotOf(');
     const secondAsk = leg.indexOf('projectFiles: snapshot.files');
     expect(firstAsk).toBeGreaterThanOrEqual(0);
     expect(guard).toBeGreaterThan(firstAsk);

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
@@ -13,6 +13,7 @@ import type {
 import { WorkspaceSymbols } from '../src/ui/Palette';
 import {
   collectWorkspaceSymbols,
+  installWorkspaceSymbolProjectFilesSource,
   pickWorkspaceSymbols,
   symbolPickerItems,
   workspaceSymbolNotice,
@@ -107,6 +108,71 @@ describe('collectWorkspaceSymbols · 问齐与合并', () => {
     } as unknown as EditorLanguageServiceContribution;
     collectWorkspaceSymbols([c], { query: 'A', project: null, limit: 7 });
     expect(seen[0]).toEqual({ kind: 'workspaceSymbol', query: 'A', project: null, limit: 7 });
+  });
+});
+
+describe('collectWorkspaceSymbols · 项目文件快照（ERB-PARITY G4）', () => {
+  /** 记下请求的应答方（三态一律弃权——这里只量"宿主递了什么"） */
+  function probe(): { contribution: EditorLanguageServiceContribution; seen: EditorLanguageServiceRequest[] } {
+    const seen: EditorLanguageServiceRequest[] = [];
+    const c = {
+      id: 'probe',
+      provide: (request: EditorLanguageServiceRequest) => {
+        seen.push(request);
+        return undefined;
+      },
+    } as unknown as EditorLanguageServiceContribution;
+    return { contribution: c, seen };
+  }
+
+  const FILES = [{ path: 'C:/p/a.kojo', text: '# 设 甲 整数' }];
+
+  afterEach(() => {
+    installWorkspaceSymbolProjectFilesSource(null);
+  });
+
+  it('来源注册后，请求里出现 projectFiles / projectFilesComplete（两条 additive 格）', () => {
+    installWorkspaceSymbolProjectFilesSource(() => ({ files: FILES, complete: false }));
+    const { contribution: c, seen } = probe();
+    collectWorkspaceSymbols([c], { query: '甲', project: null });
+    expect(seen[0]).toEqual({
+      kind: 'workspaceSymbol',
+      query: '甲',
+      project: null,
+      projectFiles: FILES,
+      projectFilesComplete: false,
+    });
+  });
+
+  it('没有来源 ⇒ 请求里不出现这两格（旧供方零改动，与加这一格之前逐字相同）', () => {
+    const { contribution: c, seen } = probe();
+    collectWorkspaceSymbols([c], { query: '甲', project: null });
+    expect(seen[0]).toEqual({ kind: 'workspaceSymbol', query: '甲', project: null });
+  });
+
+  it('显式传 null 覆盖来源（本轮强制不带）；显式传快照覆盖来源', () => {
+    installWorkspaceSymbolProjectFilesSource(() => ({ files: FILES, complete: true }));
+    const forcedOff = probe();
+    collectWorkspaceSymbols([forcedOff.contribution], { query: '甲', project: null, projectFiles: null });
+    expect(forcedOff.seen[0]).not.toHaveProperty('projectFiles');
+
+    const forcedOn = probe();
+    const other = [{ path: 'C:/p/b.kojo', text: '# 设 乙 整数' }];
+    collectWorkspaceSymbols([forcedOn.contribution], {
+      query: '乙',
+      project: null,
+      projectFiles: { files: other, complete: true },
+    });
+    expect(forcedOn.seen[0]).toMatchObject({ projectFiles: other, projectFilesComplete: true });
+  });
+
+  it('来源抛错按"没有快照"处理：检索面不因取数失败而消失', () => {
+    installWorkspaceSymbolProjectFilesSource(() => {
+      throw new Error('索引挂了');
+    });
+    const { contribution: c, seen } = probe();
+    expect(() => collectWorkspaceSymbols([c], { query: '甲', project: null })).not.toThrow();
+    expect(seen[0]).not.toHaveProperty('projectFiles');
   });
 });
 

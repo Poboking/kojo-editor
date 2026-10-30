@@ -1056,3 +1056,6 @@ export type {
   EditorCallHierarchySite,
   EditorCallHierarchySymbol,
 } from './slots';
+
+/* ---- ERB-PARITY G3 独占追加区块（勿在他处重排）：跳到实现 kind ---- */
+export type { EditorImplementationRequest, EditorImplementationResult } from './slots';

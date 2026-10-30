@@ -188,6 +188,18 @@ interface SlotKindSupply {
   readonly providerPlugin: string | null;
   /** `providerPlugin === null` 时必填：宿主哪一面在供、为什么不需要插件 */
   readonly hostFact?: string;
+  /**
+   * **这条腿对哪些一等语言是"无人认领"**（ERB-PARITY G3 起，additive）。
+   *
+   * 语义只有一句：该语言的 descriptor **不点名**这条腿（`slotServices` 里没有它），
+   * 也不假装有供方——它在能力矩阵里必须是 `{ exempt }`，理由写在那一格。
+   * 台账因此可以如实写"这条腿只服务 ERB"，而**不必**为 kojo2 造一枚永远弃权的空贡献
+   * （那会让"这门语言没有这一面"从数据变成障眼法）。
+   *
+   * 判据由本文件的用例双向钉住：列进来的语言 (a) 不许在豁免检查里被当成"有面"，
+   * (b) 其能力矩阵那一格必须真是 `{ exempt }`，(c) 它的 `slotServices` 必须不含这条腿。
+   */
+  readonly unattendedFor?: readonly string[];
 }
 
 const SLOT_KIND_SUPPLY: Readonly<Record<string, SlotKindSupply>> = {
@@ -205,6 +217,19 @@ const SLOT_KIND_SUPPLY: Readonly<Record<string, SlotKindSupply>> = {
   selectionRange: { capability: LanguageCapability.Selection, providerPlugin: 'kojo-lang' },
   codeLens: { capability: LanguageCapability.CodeLens, providerPlugin: 'kojo-lang' },
   semanticToken: { capability: LanguageCapability.Semantic, providerPlugin: 'kojo-lang' },
+  /**
+   * ERB-PARITY G3（2026-10-31）：跳到实现（`Ctrl+F12`）。
+   *
+   * 供方 = `erb-parser` 的 `provideErbDefinition`——它同时答 `definition` / `implementation`
+   * 两个判别式（同一份"标签 > `#DIM` > 函数索引"，产出 kind 跟随请求），所以两条腿的顺序
+   * 不可能分叉。kojo2 **不点名**这条腿：能力矩阵里 `implementation` 那格是 `{ exempt }`
+   * （2.0 里"跳实现"与"转定义"同义，F12 已覆盖）⇒ 在这里记成"无人认领"，**不造空供方**。
+   */
+  implementation: {
+    capability: LanguageCapability.Implementation,
+    providerPlugin: 'erb-parser',
+    unattendedFor: [KOJO2_LANGUAGE_ID],
+  },
 };
 
 /** 一条台账合格吗（`null` 分支的理由判据；纯函数，负例直接对它断言） */
@@ -235,10 +260,20 @@ describe('供方覆盖：descriptor 声明的每条槽腿都有供方', () => {
     );
   });
 
-  it('每条腿映射到一张已交付的能力面（两门语言都不在豁免名单里），且映射一对一', () => {
+  it('每条腿映射到一张已交付的能力面（无人认领的语言除外，且必须在台账里点名），且映射一对一', () => {
     const capabilities = Object.entries(SLOT_KIND_SUPPLY).map(([kind, entry]) => {
+      const unattended = entry.unattendedFor ?? [];
       for (const languageId of PARITY_LANGUAGE_IDS) {
         const status = LANGUAGE_CAPABILITY_MATRIX[languageId][entry.capability];
+        if (unattended.includes(languageId)) {
+          // "无人认领"必须与矩阵的豁免**成对**出现：台账说这条腿不服务它，矩阵就必须把这一格
+          // 记成已知缺口（理由在那儿写）。两处任一单独放宽都是静默降级（铁律 4）。
+          expect(
+            isLanguageCapabilityExemption(status),
+            `${kind} 在 ${languageId} 上记了"无人认领"，矩阵那一格却不是 { exempt }（台账与矩阵打架）`,
+          ).toBe(true);
+          continue;
+        }
         expect(
           isLanguageCapabilityExemption(status),
           `${kind} → ${entry.capability} 在 ${languageId} 上是豁免项：槽腿必须对应一面已交付的能力`,
@@ -250,9 +285,7 @@ describe('供方覆盖：descriptor 声明的每条槽腿都有供方', () => {
     expect(new Set(capabilities).size).toBe(capabilities.length);
 
     // 反向只看 kojo2：它的共享面**逐条点名**（`slotServices`），所以"记了共享收口"与
-    // "有一条同名槽腿"必须一一对上。ERB 不走这条：它走 `languageServices: true` 的旧桥，
-    // 那 11 枚 provider 里 `implementation` 这类**不是**槽腿（`SlotServiceKind` 里没有它，
-    // 也没有对应的契约判别成员），拿它去要槽腿等于要求旧桥改签名。
+    // "有一条同名槽腿"必须一一对上。ERB 不走这条：它走 `languageServices: true` 的旧桥。
     const kojo2Row = LANGUAGE_CAPABILITY_MATRIX[KOJO2_LANGUAGE_ID];
     const slotBacked = Object.values(SLOT_KIND_SUPPLY).map((entry) => entry.capability);
     for (const capability of Object.values(LanguageCapability)) {
@@ -264,6 +297,19 @@ describe('供方覆盖：descriptor 声明的每条槽腿都有供方', () => {
         `${KOJO2_LANGUAGE_ID}/${capability} 记的是共享收口，却没有对应的槽腿`,
       ).toContain(capability);
     }
+  });
+
+  it('「无人认领」只在台账里点名一次，且该语言真的没挂这条腿（G3：kojo2 × implementation）', () => {
+    const unattended = Object.entries(SLOT_KIND_SUPPLY).filter(
+      ([, entry]) => (entry.unattendedFor ?? []).length > 0,
+    );
+    expect(unattended.map(([kind]) => kind).sort()).toEqual(['implementation']);
+    const kojo2Legs = effectiveSlotKinds(languageDescriptorOf(KOJO2_LANGUAGE_ID));
+    expect(kojo2Legs, 'kojo2 的 descriptor 点名了 implementation：台账说它不服务这条腿').not.toContain(
+      'implementation',
+    );
+    // ERB 侧仍全腿（旧桥 languageServices: true）：台账的 unattended 不许把 ERB 也带进去
+    expect(effectiveSlotKinds(languageDescriptorOf(ERB_LANGUAGE_ID))).toContain('implementation');
   });
 
   it('每条腿的主导供方包真的在供：包内既有槽注册、又认得这个 kind', () => {
@@ -290,9 +336,15 @@ describe('供方覆盖：descriptor 声明的每条槽腿都有供方', () => {
     const erbLegs = effectiveSlotKinds(languageDescriptorOf(ERB_LANGUAGE_ID));
     expect([...erbLegs].sort()).toEqual([...kinds].sort());
 
-    // kojo2 是逐条点名：既不许少（少 = 这条腿没人挂）也不许多（多 = 声明了没人认）
+    // kojo2 是逐条点名：既不许少（少 = 这条腿没人挂）也不许多（多 = 声明了没人认）。
+    // 例外只有台账里点名的"无人认领"腿（G3：`implementation`——矩阵里它是 { exempt }，
+    // kojo2 不点名、不造空供方；见 SLOT_KIND_SUPPLY 那一格的理由）。
+    const unattended = Object.entries(SLOT_KIND_SUPPLY)
+      .filter(([, entry]) => (entry.unattendedFor ?? []).includes(KOJO2_LANGUAGE_ID))
+      .map(([kind]) => kind);
+    const kojo2Expected = kinds.filter((kind) => !unattended.includes(kind));
     const kojo2Descriptor = languageDescriptorOf(KOJO2_LANGUAGE_ID);
-    expect([...effectiveSlotKinds(kojo2Descriptor)].sort()).toEqual([...kinds].sort());
+    expect([...effectiveSlotKinds(kojo2Descriptor)].sort()).toEqual([...kojo2Expected].sort());
     // 逐条点名（不是走旧桥）：这条断言防"把 kojo2 也改成 languageServices: true"悄悄放宽口径
     expect(kojo2Descriptor.languageServices).toBeUndefined();
   });
@@ -577,9 +629,10 @@ describe('三态契约：undefined（弃权）/ 空结果（作答）/ 有结果
     expect(LEGS.filter((leg) => leg.shape === 'first-answer').length).toBeGreaterThan(1);
 
     // 共享取数模块（`kojo-language-service-legs.ts`）只收口这十一条（十条槽腿 +
-    // `callHierarchy`）；其余五条槽腿由各自模块作答
-    // （`kojo2-definition.ts` / `kojo2-symbols…` / `kojo2-folding.ts` / `kojo2-indent.ts` 等），
-    // 它们的三态与注册由各自的单测钉住。这条台账防"某条腿悄悄搬走却没人接"。
+    // `callHierarchy`）；其余槽腿由各自模块作答
+    // （`kojo-definition.ts` 的 `collectDefinitionLocations` 收 `definition` /
+    // `implementation` 两条同形腿；`kojo2-symbols…` / `kojo2-folding.ts` / `kojo2-indent.ts`
+    // 等各答一条），它们的三态与注册由各自的单测钉住。这条台账防"某条腿悄悄搬走却没人接"。
     const withoutSharedCollector = Object.keys(SLOT_KIND_SUPPLY)
       .filter((kind) => !legKinds.includes(kind))
       .sort();
@@ -587,6 +640,7 @@ describe('三态契约：undefined（弃权）/ 空结果（作答）/ 有结果
       'definition',
       'documentSymbol',
       'foldingRange',
+      'implementation',
       'inlayHint',
       'semanticToken',
     ]);

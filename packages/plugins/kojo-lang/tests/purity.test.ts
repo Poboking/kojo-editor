@@ -105,7 +105,8 @@ describe('@kojo/plugin-kojo-lang 是纯插件（零 Monaco / 零 React / 零 IO 
     // + B3 语义收口：semantic（语义着色供方，槽 `ui.editor.languageService` 的
     //   `semanticToken`——捕获快照随请求递进来，这里只做裁与答）
     // + B3 收口最后一格：diagnostics（文档级诊断供方，槽 `ui.editor.decorator`）
-    expect(files).toHaveLength(20);
+    // + G4：workspace-symbols（`Ctrl+T` 供方——项目文件快照随请求递进来，本层只筛与答）
+    expect(files).toHaveLength(21);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

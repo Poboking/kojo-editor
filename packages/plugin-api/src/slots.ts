@@ -526,7 +526,8 @@ export interface EditorDocumentSymbolRequest extends EditorDocumentIdentity {
  * 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` /
  * `codeLens` / `semanticToken` / `references` / `rename` / `inlayHint`，LS-B0 起另有
  * `completion` / `hover` / `formatting` / `signatureHelp`，LAU-4 改名腿起另有
- * `renameTarget`，LAU-4 调用层级腿起另有 `callHierarchy`；
+ * `renameTarget`，LAU-4 调用层级腿起另有 `callHierarchy`，ERB-PARITY G3 起另有
+ * `implementation`；
  * 新增能力 additive 追加联合成员，不改旧成员）。**文档型成员一律 `extends
  * EditorDocumentIdentity`**（带 `languageId` / `version`），`workspaceSymbol` 除外——
  * 它不钉在任何一份缓冲区上。
@@ -555,7 +556,9 @@ export type EditorLanguageServiceRequest =
   // LAU-4 改名腿（2026-10-30）：改名求值（additive，加在联合末尾）。
   | EditorRenameTargetRequest
   // LAU-4 调用层级腿（2026-10-31）：调用层级（additive，加在联合末尾）。
-  | EditorCallHierarchyRequest;
+  | EditorCallHierarchyRequest
+  // ERB-PARITY G3（2026-10-31）：跳到实现（additive，加在联合末尾）。
+  | EditorImplementationRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -610,6 +613,49 @@ export interface EditorSymbolLocation {
 export interface EditorDefinitionResult {
   readonly kind: 'definition';
   /** 候选目标（重名函数的多处定义都给）；空数组 = 认这个文件但这处没有定义 */
+  readonly locations: readonly EditorSymbolLocation[];
+}
+
+/**
+ * 跳到实现请求（ERB-PARITY G3，additive）——与 `definition` **逐字同族**
+ * （文件 + 光标位置 + 项目快照），差别只在判别式。
+ *
+ * ## 为什么单开一枚判别成员而不是复用 `definition`
+ *
+ * 两者的**语义**在这门语言里相同（ERB 的"实现"就是这个名字的定义位），但它们是 Monaco 协议
+ * 里**两枚不同的 provider**（`registerDefinitionProvider` / `registerImplementationProvider`）。
+ * 复用 `definition` 会让"谁在答 F12"与"谁在答 Ctrl+F12"变成同一格——那么"这门语言没有实现面"
+ * （kojo2：矩阵里明写不做、F12 已覆盖）就无处表达，宿主只能替它假装有。
+ *
+ * 契约侧不解释"实现"是什么：哪门语言认这枚 kind、按什么顺序给目标（ERB = 标签 > `#DIM` 声明 >
+ * 函数索引）都由**供方**决定；宿主只做请求装配与落点编排。可折叠、可省略的字段与
+ * {@link EditorDefinitionRequest} 逐字相同（跨文件快照那一格只在该语言的 descriptor 点名这条腿
+ * 时才会出现，与 `definition` 同一条判据）。
+ */
+export interface EditorImplementationRequest extends EditorDocumentIdentity {
+  readonly kind: 'implementation';
+  readonly path: string;
+  /** 模型全文（真文件文本；糖视图下不供——与 `definition` 同一判据） */
+  readonly text: string;
+  /** 光标行（1 基） */
+  readonly line: number;
+  /** 光标列（1 基；UTF-16 码元，与 Monaco 同坐标系） */
+  readonly column: number;
+  readonly project: GameProject | null;
+  /** 文件行数（体量事实；缺省 = 未知，按不降级处理） */
+  readonly lineCount?: number;
+  /** 项目内其他文档的快照（additive 口径同 `definition`）；缺席 / 空 = 只看请求文件 */
+  readonly projectFiles?: readonly EditorProjectFile[];
+  /** 快照是否完整；`false` = 宿主少给了，跨文件落点须如实降级 */
+  readonly projectFilesComplete?: boolean;
+}
+
+/**
+ * 跳到实现响应：与 {@link EditorDefinitionResult} 同形（`kind` 与请求对应）。
+ * 空数组 = **认这个位置、但这里没有可跳的实现**（作答），不是弃权（弃权 = `undefined`）。
+ */
+export interface EditorImplementationResult {
+  readonly kind: 'implementation';
   readonly locations: readonly EditorSymbolLocation[];
 }
 
@@ -702,7 +748,9 @@ export type EditorLanguageServiceResult =
   // LAU-4 改名腿（2026-10-30）：与请求侧同批追加，成员顺序逐项对齐。
   | EditorRenameTargetResult
   // LAU-4 调用层级腿（2026-10-31）：与请求侧同批追加，成员顺序逐项对齐。
-  | EditorCallHierarchyResult;
+  | EditorCallHierarchyResult
+  // ERB-PARITY G3（2026-10-31）：与请求侧同批追加，成员顺序逐项对齐。
+  | EditorImplementationResult;
 
 /**
  * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
@@ -722,6 +770,25 @@ export interface EditorWorkspaceSymbolRequest {
   readonly query: string;
   readonly project: GameProject | null;
   readonly limit?: number;
+  /**
+   * 项目内文档的快照（**additive 可选**，ERB-PARITY G4 2026-10-31）。
+   *
+   * 为什么工作区符号这条**无文件**的腿也要快照：一门语言的名录可能既不在供方手里
+   * （ERB 的索引由解析器插件自持），也没有宿主级服务可读（2.0 的项目索引是宿主缓存，
+   * 插件拿不到、也不许读盘）。宿主把"这个项目里有哪些文本"当**数据**递进来，供方用自己
+   * 的纯函数摊符号——判据仍只有一份，宿主不多认一个语言概念。
+   *
+   * 缺席 = 宿主这轮没有快照（旧宿主 / 索引未建 / 该语言不需要）：供方**弃权**（`undefined`），
+   * 不答"没有匹配"（那会把"我还没名录"说成"你的查询错了"）。旧供方不认识这一格 ⇒ 行为
+   * 与加它之前逐字相同。
+   */
+  readonly projectFiles?: readonly EditorProjectFile[];
+  /**
+   * 快照是否完整（additive 可选）：`false` = 宿主按上限截断或取文失败。
+   * 供方据此**如实计数**（`totalMatched` 可以大于 `symbols.length`），不得把"少给了"
+   * 说成"项目里就这么多"（铁律 4）。
+   */
+  readonly projectFilesComplete?: boolean;
 }
 
 /** 一条工作区符号（位置 = 定义点，1 基行号；`column` 缺省 = 行首） */
@@ -1701,7 +1768,7 @@ export interface EditorCallHierarchyResult {
  *
  * 同 kind 多家供方时按注册顺序逐家问、不排序不投票：集合型（definition / references /
  * documentSymbol / foldingRange / codeLens / semanticToken / inlayHint / workspaceSymbol /
- * completion）取并集去重，一家抛错只让这家缺席；单答型（rename / hover / formatting /
+ * completion / implementation）取并集去重，一家抛错只让这家缺席；单答型（rename / hover / formatting /
  * signatureHelp / documentHighlight / selectionRange，LAU-4 改名腿起另有 renameTarget，
  * LAU-4 调用层级腿起另有 callHierarchy）第一家作答的说了算。
  * 不引入 priority：需要主 / 备的只在 Monaco provider 层裁决。
