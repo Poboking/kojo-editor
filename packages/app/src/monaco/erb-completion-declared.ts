@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import type { ErbFileFactsProvider } from './completion-core';
 import { erbDeclaredNameSlot } from './erb-completion-families';
-import { dimDeclarationOf } from '@kojo/plugin-erb-parser';
+import { dimNamesOfBuffer } from '@kojo/plugin-erb-parser';
 import { lineAt } from './kojo-completion-position';
 
 /**
@@ -65,37 +65,15 @@ function textOf(model: Monaco.editor.ITextModel): string {
 }
 
 /**
- * 扫一份文本里的 `#DIM*` 声明名（去重按大小写不敏感、展示保首个原形；`[SKIPSTART]…[SKIPEND]`
- * 区间整段跳过）。
+ * 扫一份文本里的 `#DIM*` 声明名——**实现已搬进插件**（`@kojo/plugin-erb-parser` 的
+ * `completion.ts`，2026-10-31 收口）。
  *
- * 行判据一律是 {@link dimDeclarationOf}（解析器 `parseDimDeclaration` 的单源包装），本函数只
- * 负责**遍历与屏蔽**——屏蔽面与包里的 `dimDeclarationsOf` 逐字同式，
- * 不是第二份"什么算 `#DIM` 声明"的判据。
+ * 搬补全判据时这段扫描在宿主与插件各存了一份（同一段遍历 + 同一套 `[SKIPSTART]…[SKIPEND]`
+ * 屏蔽面）；现在宿主回退路径直接读插件那枚 `dimNamesOfBuffer`，判据 / 遍历都回到一格。
+ * 逐行判据仍是 `dimDeclarationOf`（解析器 `parseDimDeclaration` 的单源包装），本文件只留
+ * 「什么时候回退到缓冲区」这一层判断。
  */
-export function dimNamesOfBuffer(text: string): readonly string[] {
-  if (text.length === 0) return [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  let inSkipBlock = false;
-  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
-    const trimmed = raw.trim();
-    if (inSkipBlock) {
-      if (trimmed === '[SKIPEND]') inSkipBlock = false;
-      continue;
-    }
-    if (trimmed === '[SKIPSTART]') {
-      inSkipBlock = true;
-      continue;
-    }
-    const dim = dimDeclarationOf(raw);
-    if (dim === null) continue;
-    const key = dim.name.toUpperCase();
-    if (key.length === 0 || seen.has(key)) continue;
-    seen.add(key);
-    out.push(dim.name);
-  }
-  return out;
-}
+export { dimNamesOfBuffer };
 
 /**
  * 按 model 记忆化的缓冲区声明名（与 `kojoDeclarationsOf` / `cachedLabels` 同一纪律）。

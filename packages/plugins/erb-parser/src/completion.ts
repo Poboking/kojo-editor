@@ -791,8 +791,14 @@ function fileForPath(index: ErbIndex | null, path: string): ErbFile | null {
   return null;
 }
 
-/** 全文扫描标签定义名（去重、保序）——**仅未索引时的回退路径** */
-function definedLabels(text: string): string[] {
+/**
+ * 全文扫描标签定义名（去重、保序）——**仅未索引时的回退路径**。
+ *
+ * 导出给宿主 `monaco/erb-completion-labels.ts` 用（2026-10-31 收口）：搬判据时这段扫描被
+ * 复制过一份，两处各有一套"什么算 `$标签` 定义"的正则；宿主的回退路径改读这里，判据回到一格。
+ * 口径与宿主当年逐字相同（行首可含前导空白、名字止于空白 / `;`）。
+ */
+export function definedLabels(text: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const m of text.matchAll(/^\s*\$([^\s;]+)/gm)) {
@@ -805,8 +811,14 @@ function definedLabels(text: string): string[] {
   return out;
 }
 
-/** 扫一份文本里的 `#DIM*` 声明名（大小写不敏感去重、展示保首个原形；跳过 `[SKIPSTART]…[SKIPEND]`） */
-function dimNamesOfBuffer(text: string): readonly string[] {
+/**
+ * 扫一份文本里的 `#DIM*` 声明名（大小写不敏感去重、展示保首个原形；跳过 `[SKIPSTART]…[SKIPEND]`）。
+ *
+ * 行判据是 `dimDeclarationOf`（解析器 `parseDimDeclaration` 的单源包装），本函数只负责**遍历
+ * 与屏蔽**。导出给宿主 `monaco/erb-completion-declared.ts` 的回退路径（同一段扫描此前在两处
+ * 各存一份，2026-10-31 收口到这一格）。
+ */
+export function dimNamesOfBuffer(text: string): readonly string[] {
   if (text.length === 0) return [];
   const out: string[] = [];
   const seen = new Set<string>();

@@ -168,6 +168,8 @@ export {
   erbVariableContextAt,
   erbVariableReferenceSlotAt,
   erbVariableSlotAt,
+  definedLabels,
+  dimNamesOfBuffer,
   findBitSlot,
   isLineHeadContext,
   matchingParen,

@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
 import type { ErbFileFactsProvider } from './completion-core';
+import { definedLabels } from '@kojo/plugin-erb-parser';
 import { erbLabelSlot } from './erb-completion-context';
 import { erbFactsPathOf } from './erb-completion-declared';
 
@@ -23,22 +24,13 @@ import { erbFactsPathOf } from './erb-completion-declared';
  * 位置不符 / 无标签定义 ⇒ 返回 `[]`，**不猜、不抛**。
  */
 
-/** 标签定义扫描：行首（可含前导空白）`$名字`，名字止于空白 / `;`（与 `erb-language` 词法一致）。 */
-const LABEL_DEF_RE = /^\s*\$([^\s;]+)/gm;
-
-/** 全文扫描标签定义名（去重、保序）——**仅未索引时的回退路径**（`labelsAt` 缺席 / 返回 `undefined`）。 */
-function definedLabels(text: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const m of text.matchAll(LABEL_DEF_RE)) {
-    const name = m[1];
-    if (name !== undefined && name.length > 0 && !seen.has(name)) {
-      seen.add(name);
-      out.push(name);
-    }
-  }
-  return out;
-}
+/**
+ * 标签定义扫描（行首可含前导空白 `$名字`，名字止于空白 / `;`）**判据已搬进插件**。
+ *
+ * 2026-10-31 收口：搬补全判据时这段扫描在宿主与 `@kojo/plugin-erb-parser` 的 `completion.ts`
+ * 各存过一份（两套同形正则）；现在宿主的**未索引回退**直接读插件那枚 `definedLabels`，
+ * 判据回到一格——谁改标签定义口径，两条路一起变。
+ */
 
 /**
  * 按 model 版本记忆化的标签表（**回退路径专用**）。全文正则扫描是每击键 `O(文件大小)`；同一版本
