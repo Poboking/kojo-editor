@@ -219,6 +219,7 @@ describe('注册纪律：两条腿分枚注册、order 10、零游戏事实', ()
       'kojo2-completion',
       'kojo2-definition',
       'kojo2-documentHighlight',
+      'kojo2-foldingRange',
       'kojo2-formatting',
       'kojo2-hover',
       'kojo2-inlay',
