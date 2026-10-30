@@ -1,4 +1,7 @@
 import type {
+  EditorCallHierarchyGroup,
+  EditorCallHierarchySite,
+  EditorCallHierarchySymbol,
   EditorRenameEdit,
   EditorRenameRelated,
   EditorRenameResult,
@@ -867,4 +870,140 @@ export function provideRename(
 ): EditorRenameResult | undefined {
   if (!isDialect(request.path)) return undefined;
   return planErbRename(index, request.path, request.text, request.line, request.column, request.newName, request.related);
+}
+
+/* ============================== 调用层级（LAU-4 调用层级腿，2026-10-31） ============================== */
+
+/**
+ * 调用层级的**语言判据**——从宿主 `monaco/erb-call-hierarchy.ts` 整块搬进常驻解析器插件，
+ * 口径一条未改（宿主只留面板渲染、请求组装与契约→形状翻译）。
+ *
+ * - 引用判据**单源**：什么叫一次"调用"由 `references.ts` 落表的 `ErbReference.kind` 说
+ *   （`call` = CALL 直系族名字槽里那个记号；`mention` = 表达式 / 条件 / 实参里的同名词），
+ *   这里**只按 kind 过滤**，绝不抄第二份正则；
+ * - 入边 = `bySymbol` 里该名的全部引用点（剔除 `definition`）→ 逐条反查所属调用者；
+ * - 出边 = `bySymbol` 全表里 `kind === 'call'` 且落在本函数区间内的点——正向扫函数体会
+ *   重写一遍"什么算 CALL 引用"，而反向索引里的每一枚 `call` 都已是那条判据的产物；
+ * - 所属函数反查走 `functionAt` 通道（"行 → 函数"单一真源）的**三态**，缺席才退化到
+ *   同一份索引上的同一把尺子 `enclosingAt(..., 'innermost')`；
+ * - fail-open：反查不了（顶层代码 / 行号漂移出索引缝）⇒ 跳过那一条，不猜归属；
+ *   索引未建 / 名字不在名录 ⇒ 空结果，不猜。
+ *
+ * 陈旧索引：只读不写、与现场文本之间没有锁。刚改过的行可能坐标漂移，反查不了就少一条边
+ * ——文本复核那套是 rename 的**写前**判据，只读展示用不上。
+ */
+
+/**
+ * `functionAt` 通道的三态形状：命中 ⇒ 函数；`undefined` ⇒ 通道在场、权威答"不在此函数内"
+ * （尊重，不退化）；`null` ⇒ 通道不存在（服务 / 方法缺席）⇒ 调用方退化到索引自扫。
+ */
+export type ErbFunctionAtResolver = (path: string, line: number) => ErbFunction | null | undefined;
+
+/** 取一枚可调用体的坐标事实（`nameColumn` 缺席就不给：不补 1 冒充列） */
+export function callHierarchySymbolOf(fact: {
+  readonly name: string;
+  readonly normalizedName: string;
+  readonly filePath: string;
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly nameColumn?: number;
+}): EditorCallHierarchySymbol {
+  return {
+    name: fact.name,
+    normalizedName: fact.normalizedName,
+    filePath: fact.filePath,
+    startLine: fact.startLine,
+    endLine: fact.endLine,
+    ...(fact.nameColumn === undefined ? {} : { nameColumn: fact.nameColumn }),
+  };
+}
+
+/**
+ * 位置 → 包围函数（fail-open，反查不了返回 `undefined`）。
+ *
+ * `functionAt` 在场时它是终局（答 `undefined` 就是权威答案，不夹取）；答 `null`（通道缺席）
+ * 或抛错才退化自扫——两套判据只在"通道根本没接上"时兜底，不叠加制造漂移面。
+ */
+export function resolveEnclosingFunction(
+  index: ErbIndex,
+  functionAt: ErbFunctionAtResolver | null,
+  filePath: string,
+  line: number,
+  mode: EnclosingMode = 'innermost',
+): ErbFunction | undefined {
+  if (functionAt) {
+    try {
+      const hit = functionAt(filePath, line);
+      if (hit !== null) return hit ?? undefined;
+    } catch {
+      // 通道抛错 ⇒ 退化到本地区间判断（不把一次查询带崩）
+    }
+  }
+  const file = index?.files?.get(filePath);
+  if (!file) return undefined;
+  return enclosingAt(file.functions, line, mode);
+}
+
+/**
+ * 入边收集：`归一化名` 的全部引用点 → 逐条反查所属函数 → 按调用者分组。
+ *
+ * - `definition` 类引用是函数定义行自身，不是"被谁调用"，剔除；
+ * - 引用点不在任何函数体内（顶层代码 / 行号漂移出索引缝）⇒ 跳过该条，不猜归属；
+ * - 分组按首现序（索引本身按 构建序→行→列 确定排序，组间天然稳定）。
+ */
+export function incomingCalls(
+  index: ErbIndex,
+  functionAt: ErbFunctionAtResolver | null,
+  normalizedName: string,
+): EditorCallHierarchyGroup[] {
+  const refs = index.references?.bySymbol.get(normalizedName.toUpperCase());
+  if (!refs || refs.length === 0) return [];
+  const groups: EditorCallHierarchyGroup[] = [];
+  const byCaller = new Map<string, { symbol: EditorCallHierarchySymbol; sites: EditorCallHierarchySite[] }>();
+  for (const ref of refs) {
+    if (ref.kind === 'definition') continue;
+    const caller = resolveEnclosingFunction(index, functionAt, ref.filePath, ref.line);
+    if (!caller) continue;
+    let group = byCaller.get(caller.normalizedName);
+    if (!group) {
+      group = { symbol: callHierarchySymbolOf(caller), sites: [] };
+      byCaller.set(caller.normalizedName, group);
+      groups.push({ symbol: group.symbol, sites: group.sites });
+    }
+    group.sites.push(ref);
+  }
+  return groups;
+}
+
+/**
+ * 出边收集：反向索引全表里 `kind === 'call'` 且落在本函数定义区间内的调用点 →
+ * 按被调名分组（组间按各组首个调用行排序 = 函数体里的阅读序）。
+ *
+ * 代价是一次全表遍历（真语料 5 万级调用点 ≈ 毫秒级），只在请求到达时发生。
+ * 反向索引缺席（提供方未建 / 增量后保守失效）⇒ 空数组——出边与入边同源，
+ * 索引没有就都没有，由宿主据契约的 `referencesAvailable` 给可见说明。
+ */
+export function outgoingCalls(
+  index: ErbIndex,
+  def: { readonly filePath: string; readonly startLine: number; readonly endLine: number },
+): EditorCallHierarchyGroup[] {
+  const bySymbol = index.references?.bySymbol;
+  if (!bySymbol) return [];
+  const groups: EditorCallHierarchyGroup[] = [];
+  for (const [calleeName, refs] of bySymbol) {
+    const sites = refs.filter(
+      (r) =>
+        r.kind === 'call' &&
+        r.filePath === def.filePath &&
+        r.line >= def.startLine &&
+        r.line <= def.endLine,
+    );
+    if (sites.length === 0) continue;
+    const callee = index.byName.get(calleeName)?.[0];
+    if (!callee) continue;
+    groups.push({ symbol: callHierarchySymbolOf(callee), sites });
+  }
+  // sites 已是 行→列 序 ⇒ 每组首元素就是该组最早调用行
+  groups.sort((a, b) => a.sites[0]!.line - b.sites[0]!.line);
+  return groups;
 }
