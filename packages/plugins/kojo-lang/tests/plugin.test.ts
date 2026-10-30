@@ -299,7 +299,7 @@ describe('inlayHint 供方', () => {
 });
 
 describe('插件装配', () => {
-  it('注册十二枚语言服务 + 一枚语言面，id 稳定、order 相同', () => {
+  it('注册十四枚语言服务 + 一枚语言面，id 稳定、order 相同', () => {
     const registered: { slot: string; item: { id: string; order?: number } }[] = [];
     const ctx = {
       pluginId: 'kojo-lang',
@@ -334,6 +334,8 @@ describe('插件装配', () => {
       'kojo2-codeLens',
       // B3h：折叠区间（结构快照 → 契约区间；槽内同步作答，不 await worker）
       'kojo2-foldingRange',
+      // B3 语义收口：结构化着色（捕获快照 → 契约区间；与折叠同形，槽内同步作答）
+      'kojo2-semanticTokens',
       // B3j：一键迁移动作进**既有槽** `ui.editor.codeAction`（不是语言服务的第十三个 kind）
       'kojo2-codeActions',
       // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
@@ -353,7 +355,8 @@ describe('插件装配', () => {
       'ui.editor.languageService',
       'ui.editor.languageService',
       'ui.editor.languageService',
-      // B3h 折叠一枚
+      // B3h 折叠 / B3 语义收口各一枚
+      'ui.editor.languageService',
       'ui.editor.languageService',
       // B3j：一键迁移走专用槽（诊断 / 快速修复各有专用槽，不开语言服务的新判别成员）
       'ui.editor.codeAction',
