@@ -24,6 +24,7 @@ import type { DirEntry } from '@kojo/plugin-api';
 import { ProblemPanel, PROBLEM_VROWS_FALLBACK } from '../src/ui/ProblemPanel';
 import { setProblems, clearAllProblems, type EditorProblem } from '../src/ui/problem-store';
 import { DirRows } from '../src/ui/file-tree-dir-rows';
+import { sortedDirsAndFiles } from '../src/ui/file-tree-model';
 import type { DirState } from '../src/ui/file-tree-types';
 import { rankFiles } from '../src/ui/palette-search';
 import { readFileSync } from 'node:fs';
@@ -116,35 +117,22 @@ const dirProps = (entries: DirEntry[]) => ({
   onOpenFile: () => {},
 });
 
-/** 数一次真实比较（把 `localeCompare` 临时包起来；用完还原） */
-function countLocaleCompare(run: () => void): number {
-  const proto = String.prototype as unknown as { localeCompare: (other: string) => number };
-  const original = proto.localeCompare;
-  let calls = 0;
-  proto.localeCompare = function (this: string, other: string): number {
-    calls++;
-    return original.call(this, other);
-  };
-  try {
-    run();
-  } finally {
-    proto.localeCompare = original;
-  }
-  return calls;
-}
-
+/**
+ * 断言口径（2026-10-30 改）：排序已按库内统一口径改成**码元序**（`localeCompare` 会随
+ * 宿主 ICU 漂，见 `file-tree-model.ts` 注释），所以"包住 localeCompare 数比较次数"的旧探针
+ * 恒数 0、量不到东西。改成直接验缓存机制本身：**同一份数组身份 ⇒ 同一份结果对象**。
+ */
 describe('DirRows · 一份目录的排序结果按数组身份缓存', () => {
   const entries = dirEntries(300);
 
   it('第一帧排一次（300 条 ⇒ O(n log n) 次比较），第二帧零次', () => {
-    const first = countLocaleCompare(() => {
-      renderToStaticMarkup(h(DirRows, dirProps(entries)));
-    });
-    expect(first).toBeGreaterThan(0);
-    const second = countLocaleCompare(() => {
-      renderToStaticMarkup(h(DirRows, dirProps(entries)));
-    });
-    expect(second).toBe(0);
+    const firstMarkup = renderToStaticMarkup(h(DirRows, dirProps(entries)));
+    // 首帧已经把这批条目排过 ⇒ 此刻取到的是缓存那一份
+    const cached = sortedDirsAndFiles(entries);
+    const secondMarkup = renderToStaticMarkup(h(DirRows, dirProps(entries)));
+    expect(secondMarkup).toBe(firstMarkup); // 两帧逐字相同：口径没漂
+    expect(sortedDirsAndFiles(entries)).toBe(cached); // 第二帧没有另排一份
+    expect(sortedDirsAndFiles(entries).files.length).toBeGreaterThan(0);
   });
 
   it('顺序仍然是名字升序（缓存不许把排序口径换成插入序）', () => {
@@ -155,11 +143,13 @@ describe('DirRows · 一份目录的排序结果按数组身份缓存', () => {
   });
 
   it('换新数组（重新列举）⇒ 重新排序，不会捞到旧那份顺序', () => {
-    const fresh = dirEntries(300).slice().reverse();
-    const calls = countLocaleCompare(() => {
-      renderToStaticMarkup(h(DirRows, dirProps(fresh)));
-    });
-    expect(calls).toBeGreaterThan(0);
+    const fresh = dirEntries(300).slice().reverse(); // 新数组、倒序内容
+    const oldOne = sortedDirsAndFiles(entries);
+    const newOne = sortedDirsAndFiles(fresh);
+    expect(newOne).not.toBe(oldOne); // 新数组 = 新的一格
+    expect(newOne.files).not.toBe(oldOne.files);
+    // 排完仍与旧那份同名同序：缓存换格不等于口径换掉
+    expect(newOne.files.map((f) => f.name)).toEqual(oldOne.files.map((f) => f.name));
   });
 });
 
