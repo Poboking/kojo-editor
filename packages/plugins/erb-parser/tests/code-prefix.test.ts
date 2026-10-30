@@ -136,22 +136,23 @@ describe('可见行遍历：前缀行是调用行，列坐标按原文算', () =
 /* ============================== 两处落地同一份语言事实（对拍） ============================== */
 
 /**
- * `packages/app/src/monaco/erb-highlight.ts` 被源码卫生守卫钉住"零插件包 import"，
- * 所以它自带一份字形判据（`CODE_PREFIXES` / `codePrefixLength`）。这里把两处对拍起来：
- * 改一处不改另一处 ⇒ 本用例红。与 `preproc-block.test.ts` 对拍语言包的做法同一条纪律。
+ * LAU-4 起字形判据（`CODE_PREFIXES` / `codePrefixLength`）随高亮判据整块搬进
+ * `@kojo/erb-lang/highlight`（宿主 `monaco/erb-highlight.ts` 只剩翻译，不再自带字面量）。
+ * 这里把三处对拍起来：改一处不改另一处 ⇒ 本用例红。与 `preproc-block.test.ts`
+ * 对拍语言包的做法同一条纪律。
  */
-describe('对拍：宿主高亮层的本地字形判据 ≡ `plugin-api` 真源', () => {
+describe('对拍：ERB 语言包的字形判据 ≡ `plugin-api` 真源', () => {
   const HIGHLIGHT_SRC = path.resolve(
     import.meta.dirname,
-    '..', '..', '..', 'app', 'src', 'monaco', 'erb-highlight.ts',
+    '..', '..', '..', 'erb-lang', 'src', 'highlight.ts',
   );
 
-  it('三处落地逐项相同：plugin-api 真源 ≡ scanner 镜像 ≡ 宿主高亮层字形表', () => {
+  it('三处落地逐项相同：plugin-api 真源 ≡ scanner 镜像 ≡ ERB 语言包字形表', () => {
     const src = readFileSync(HIGHLIGHT_SRC, 'utf8');
     const m = /const CODE_PREFIXES: readonly string\[\] = \[([^\]]*)\]/.exec(src);
-    expect(m, '没找到 erb-highlight.ts 的 CODE_PREFIXES（改名了？同步改本对拍）').not.toBeNull();
+    expect(m, '没找到 @kojo/erb-lang/highlight 的 CODE_PREFIXES（改名了？同步改本对拍）').not.toBeNull();
     const highlight = [...m![1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
     expect(SCANNER_PREFIXES, 'scanner 镜像与契约层真源不一致').toEqual([...API_PREFIXES]);
-    expect(highlight, '宿主高亮层字形表与契约层真源不一致').toEqual([...API_PREFIXES]);
+    expect(highlight, 'ERB 语言包字形表与契约层真源不一致').toEqual([...API_PREFIXES]);
   });
 });

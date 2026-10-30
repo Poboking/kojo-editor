@@ -147,6 +147,8 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       // Kojo 语言面插件（B2，2026-10-24）。位置紧随 sugar：两者都是"语言层"，
       // 且本插件零 require（判据全在 `@kojo/kojo-lang`），次序不参与激活判定。
       'createKojoLangPlugin',
+      // LAU-4 第一步：ERB 语言面插件（高亮 / 扩选两条腿的供方）紧随 kojo 语言插件之后装配。
+      'createErbLangPlugin',
       'createUiStatusPlugin',
       'createUiConventionReportPlugin',
       'createUiKojoNavigatorPlugin',
