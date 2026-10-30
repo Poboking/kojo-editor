@@ -25,6 +25,7 @@
 > **P0 布线 + P1 识别与导航**为一批；2.0 事实面（`kojo2/`）、发射面（backend）、conventions、糖面留给后续批。
 
 | ID | 任务 | 关键判据 / 已实测事实 | 状态 |
+| SDK-DIALECT | **方言可扩展性**：`tools/new-dialect.mjs` 脚手架（生成包 + 清单一行 + 散点）、conformance 的 language 列改**清单驱动**、`docs/DIALECT-AUTHORING.md` | 判据：生成物过双 typecheck + 包内 purity/形态闸；`adapter-manifest.test.ts` 双向自证在生成物在场时绿；`language --adapter <新 id>` 11 条共享 golden 逐字相等；不硬编码 adapter id | 进行中 · 认领：qoder 2026-10-30 |
 | PERF-KOJO2-ANALYSIS | **先行红（非多游戏批引入）**：`packages/app/tests/kojo2-project-analysis.test.ts`「10000 个 @函（解析桩）判定中位数 ≤ 100ms」在本机反复贴阈值。复现：`node node_modules/vitest/vitest.mjs run packages/app/tests/kojo2-project-analysis.test.ts`（空闲独跑，无别的重活）。期望 vs 实际：屏上原样 `AssertionError: expected 103.19970000000012 to be less than or equal to 100`；同一棵树枝四次读数 = 两绿（<100）+ 119.99 + 141.69。定责：该文件 import 面只有 `@kojo/kojo-core` 与 `app/src/ui`（`:17`、`:38`），与适配器/清单零交集；多游戏批两轮全量都撞上它。**同族第二条（2026-10-27 美学收口批补读数，不另立行）**：`packages/app/tests/tree-sitter-parse.perf.test.ts`「32 次单击键增量 p95 ≤ 16 ms」在**同一台机器**上给出过 21.56（红·池内）/ 89.78（红·独跑）/ 9.77（绿·独跑）三种读数，而**同机 A/B 对拍会翻转**：先跑的那棵 p50 6.19 / p95 9.77 绿，后跑的 `origin/dev` 游离树（`git worktree add --detach`，本批代码不在里面）反成 p50 10.55 / **p95 19.64 红**——红绿跟着"谁先占满机器"走，不跟着改动走。同池 `kojo-core/incremental` 同状（池内红、独跑 62/62 绿＝PITFALLS 72 饿死族）。⇒ 判它红的口径：先看断言消息里"退回整篇的击键"那行有没有内容（有＝真回归），再**同机对拍两棵树的先后顺序各跑一次**；本批改动手是 CSS 切片 + 两枚 UI tsx，与该文件 import 面（`src/monaco/tree-sitter/{engine,edit,types}` + perf 夹具）零交集。同日功能池总墙钟 332 s vs 基线 174 s＝本机慢 1.9×，n=32 的 p95 取第 31 小，一枚后台进程就够一票否决 |
 
 ## 在办 · Kojo 2.0（设计基线 v0.9）

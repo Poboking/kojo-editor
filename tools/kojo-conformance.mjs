@@ -39,10 +39,11 @@
  * 退出码：透传 main.ts / migration.ts / corpus.ts 的 0 / 1 / 2；启动失败 = 1。
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { createServer } from 'vite';
 
+import { manifestAdapterEntries } from './adapter-manifest-entries.mjs';
 import { CorpusError, corpusHint, resolveCorpusDir } from './corpus.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '..');
@@ -87,22 +88,91 @@ const CORPUS_ABSENT_ENTRIES = {
 const LANGUAGE_SUITE_ENTRY = '/packages/kojo-conformance/src/language.ts';
 
 /**
- * language 子命令按 `--adapter` **按需**加载的真方言入口（SDK B5a：三种列 + 抽象列）。
+ * language 子命令**不来自适配器清单**的两列（其余一律从清单派生）：
  *
- * 为什么按需而不是齐载：一枚 adapter 包就是一条 `kojo-core` 桶入口的 SSR 冷载
- * （PITFALLS 187 记的 60s 量级传输超时）。三轮全载会把启动面顶到超时线上，
- * 而一次命令只会用到一个 adapter——多载的两枚纯属陪跑。
+ * - `eratw`：`scope:'boot'` 常驻项，2.0 两面走 `bootstrap.ts` 的静态 import，清单条目
+ *   不声明导出名 ⇒ 这里显式指到它的 2.0 入口。这是本文件唯一还写着具体落点的地方，
+ *   理由同注释（静态路径是 PS-10 开机图的既有口径）；
+ * - `demo`：conformance 自己的夹具（`tests/fixtures/dialect-demo`），用来证明
+ *   "新增一个包 ⇒ 多一列"，不是可发布方言，因此也不该进适配器清单。
+ * - `fixture`：抽象列由 `language.ts` 自供，不需要加载任何模块。
+ *
+ * 方言列的选择**按需**：一次命令只载本次要用的那一枚（理由见下）。
  */
-const LANGUAGE_ADAPTER_ENTRIES = {
-  eratw: '/packages/plugins/eratw-adapter/src/kojo2/index.ts',
-  // eraFL 走包面窄子路径（本包 `exports["./kojo2"]`）：与 `language-shared.test.ts` 同一条
-  // 解析口径。eraTW 没有等价子路径导出，这一批不给它补（加导出是另一件事，不顺手扩面）。
-  erafl: '@kojo/plugin-erafl-adapter/kojo2',
-  // 第三列（SDK B5a 的终态判据）：一枚最小 profile + 它自己的机壳，住在 conformance 的
-  // fixture 目录里。它证明"新增一个包 ⇒ 多一列"——套件（`language.ts` 判定逻辑）零改动，
-  // CLI 只在固定注册表 `LANGUAGE_ADAPTER_ENTRIES` + `runLanguage` 各加一条。
-  demo: '/packages/kojo-conformance/tests/fixtures/dialect-demo/index.ts',
+const LANGUAGE_BUILTIN_ENTRIES = {
+  eratw: {
+    name: 'eratw',
+    module: '/packages/plugins/eratw-adapter/src/kojo2/index.ts',
+    adapterExport: 'ERATW_GAME_ADAPTER',
+    backendExport: 'createEratwEmitBackend',
+  },
+  demo: {
+    name: 'demo',
+    module: '/packages/kojo-conformance/tests/fixtures/dialect-demo/index.ts',
+    adapterExport: 'DEMO_GAME_ADAPTER',
+    backendExport: 'createDemoEmitBackend',
+  },
 };
+
+/**
+ * 清单里的方言 → conformance 列（**纯数据驱动**：加一个方言包，这里零改动）。
+ *
+ * 只收「两面都声明」的条目（adapter + backend 工厂）：只有一半的适配器（eraAV /
+ * eratohok 那一族）本来就跑不了共享列，硬塞会报"未知 adapter"，不如不登记。
+ *
+ * 模块落点从包自己的 `exports` 里挑：优先 `./kojo2`（窄子路径，与既有 eraFL 列同一条
+ * 解析口径），其次 `"."`；挑的判据是**文件里真的写着那两个导出名**（读文本，不执行包）。
+ * 找不到就跳过——conformance 只认能证明的列，不猜。
+ */
+let manifestLanguageCache = null;
+
+function languageModuleFor(entry, adapterExport, backendExport) {
+  const packageDir = path.join(REPO, 'packages/plugins', entry.dir);
+  let exportsField;
+  try {
+    exportsField = JSON.parse(readFileSync(path.join(packageDir, 'package.json'), 'utf8')).exports;
+  } catch {
+    return null;
+  }
+  const declared =
+    typeof exportsField === 'string'
+      ? [exportsField]
+      : exportsField !== null && typeof exportsField === 'object'
+        ? Object.values(exportsField)
+        : [];
+  const candidates = [exportsField?.['./kojo2'], ...declared].filter((value) => typeof value === 'string');
+  for (const rel of candidates) {
+    const file = path.join(packageDir, rel);
+    if (!existsSync(file)) continue;
+    const text = readFileSync(file, 'utf8');
+    if (text.includes(adapterExport) && text.includes(backendExport)) {
+      return '/' + path.relative(REPO, file).replaceAll('\\', '/');
+    }
+  }
+  return null;
+}
+
+function manifestLanguageEntries() {
+  if (manifestLanguageCache !== null) return manifestLanguageCache;
+  const out = new Map();
+  for (const entry of manifestAdapterEntries(REPO)) {
+    const adapterExport = entry.kojo2AdapterExport;
+    const backendExport = entry.kojo2BackendFactoryExport;
+    if (adapterExport === undefined || backendExport === undefined) continue;
+    const module = languageModuleFor(entry, adapterExport, backendExport);
+    if (module === null) continue;
+    out.set(entry.id, { name: entry.id, module, adapterExport, backendExport });
+  }
+  manifestLanguageCache = out;
+  return out;
+}
+
+/** `--adapter <名称>` → 列描述（内建优先；清单派生兜底；都没有 ⇒ null＝CLI 报未知 adapter） */
+function languageAdapterSpec(name) {
+  const builtin = LANGUAGE_BUILTIN_ENTRIES[name];
+  if (builtin !== undefined) return builtin;
+  return manifestLanguageEntries().get(name) ?? null;
+}
 
 /** `--adapter <名称>`（缺省 fixture）；只认最朴素的 `--adapter X` 形态，其余交给 language.ts 判用法 */
 function languageAdapterOf(argv) {
@@ -112,11 +182,9 @@ function languageAdapterOf(argv) {
 }
 
 /** language 子命令的入口组：套件 + 本次真要用的那一枚 adapter（未知名称 ⇒ 只有套件，交给 CLI 报错） */
-function languageEntries(argv) {
+function languageEntries(spec) {
   const entries = { language: LANGUAGE_SUITE_ENTRY };
-  const adapter = languageAdapterOf(argv);
-  const entry = LANGUAGE_ADAPTER_ENTRIES[adapter];
-  if (entry !== undefined) entries[adapter] = entry;
+  if (spec !== null) entries[spec.name] = spec.module;
   return entries;
 }
 
@@ -135,7 +203,7 @@ function languageEntries(argv) {
  * `kind === 'corpus-absent'` 时连 `main.ts` 都不载（见 `CORPUS_ABSENT_ENTRIES`）：那枚入口
  * 把整条真链路拖进 SSR，本机实测单体 67.1s、六枚齐载 137–140s。
  */
-async function loadModules(kind, argv = []) {
+async function loadModules(kind, spec = null) {
   const server = await createServer({
     configFile: path.join(REPO, 'vitest.config.ts'),
     root: REPO,
@@ -154,7 +222,7 @@ async function loadModules(kind, argv = []) {
       kind === 'migrate'
         ? MIGRATE_ENTRIES
         : kind === 'language'
-          ? languageEntries(argv)
+          ? languageEntries(spec)
           : kind === 'corpus'
             ? CORPUS_ENTRIES
             : kind === 'corpus-absent'
@@ -271,37 +339,35 @@ function runMigrateDiff(modules, argv) {
  *
  * 两档列（SDK B5a）：
  * - `fixture`（缺省）＝**抽象列**：`# 机 开场` 这类占位事件，与具体方言的事件表无关；
- * - `eratw` / `erafl` / `demo` ＝**共享列**：同一份 fixture、同一份 body golden（只比
- *   `# 机` 之后的语义面），机壳由各列的 backend 给。故三列的 JSON 可直接逐字对拍。
+ * - 真方言＝**共享列**：同一份 fixture、同一份 body golden（只比 `# 机` 之后的语义面），
+ *   机壳由各列的 backend 给。故各列的 JSON 可直接逐字对拍。
+ *
+ * 注册表是**清单驱动**的（2026-10-30 SDK 方言批）：`--adapter <id>` 的条目从
+ * `adapter-manifest.ts` 的 `id` / `dir` / 两个 `kojo2*Export` 派生（见
+ * {@link manifestLanguageEntries}），加一个方言包**不再需要改本文件**；
+ * 只有两枚非清单列（eraTW 的静态入口、conformance 自己的 `demo` 夹具）留在
+ * {@link LANGUAGE_BUILTIN_ENTRIES}。
  *
  * 旧口径（真方言也跑抽象列、42/47 `event-unknown`）仍在 `runLanguageSuite` 层面可复现
  * （`packages/kojo-conformance/tests/language.test.ts` 注入 eraTW 那条），不是被删掉。
  */
-function runLanguage(modules, argv) {
-  const { language, eratw, erafl, demo, main } = modules;
+function runLanguage(modules, argv, spec) {
+  const { language, main } = modules;
   const compileText = (expr) => expr.text;
   const registrations = { ...language.createLanguageAdapters() };
-  // 按需装载（见 `languageEntries`）：没载进来的列不进注册表，CLI 会如实报"未知 adapter"
-  if (eratw !== undefined) {
-    registrations.eratw = {
-      adapter: eratw.ERATW_GAME_ADAPTER,
-      backend: eratw.createEratwEmitBackend({ compileExpression: compileText, charNo: '12' }),
-      column: 'shared',
-    };
-  }
-  if (erafl !== undefined) {
-    registrations.erafl = {
-      adapter: erafl.ERAFL_GAME_ADAPTER,
-      backend: erafl.createEraflEmitBackend({ compileExpression: compileText }),
-      column: 'shared',
-    };
-  }
-  if (demo !== undefined) {
-    registrations.demo = {
-      adapter: demo.DEMO_GAME_ADAPTER,
-      backend: demo.createDemoEmitBackend({ compileExpression: compileText }),
-      column: 'shared',
-    };
+  // 按需装载（见 `languageEntries`）：没载进来的列不进注册表，CLI 会如实报"未知 adapter"。
+  // 导出名与 backend 工厂名都来自清单，这里只按名字取（不认识任何具体方言）。
+  if (spec !== null) {
+    const adapter = modules[spec.name]?.[spec.adapterExport];
+    const factory = modules[spec.name]?.[spec.backendExport];
+    if (adapter !== undefined && typeof factory === 'function') {
+      registrations[spec.name] = {
+        adapter,
+        // `charNo` 是 eraTW 一族要的文件级角色号；不用的方言忽略它（契约里的可选入参）
+        backend: factory({ compileExpression: compileText, charNo: '12' }),
+        column: 'shared',
+      };
+    }
   }
   return main.runMain({ argv, languageAdapters: registrations });
 }
@@ -401,14 +467,19 @@ function skipFastEligible(argv) {
  */
 function planFor(argv) {
   const command = argv[0];
-  if (command === MIGRATE_COMMAND) return { kind: 'migrate', resolution: null };
-  if (command === LANGUAGE_COMMAND) return { kind: 'language', resolution: null };
-  if (command === CORPUS_COMMAND) {
-    if (!skipFastEligible(argv)) return { kind: 'corpus', resolution: null };
-    const resolution = createCorpusRootResolver()();
-    return resolution.ok ? { kind: 'corpus', resolution: null } : { kind: 'corpus-absent', resolution };
+  if (command === MIGRATE_COMMAND) return { kind: 'migrate', resolution: null, spec: null };
+  if (command === LANGUAGE_COMMAND) {
+    // 列描述在这一步就定（清单是数据，读一次）；`fixture` / 未知名称 ⇒ null ⇒ 只载套件
+    return { kind: 'language', resolution: null, spec: languageAdapterSpec(languageAdapterOf(argv)) };
   }
-  return { kind: null, resolution: null };
+  if (command === CORPUS_COMMAND) {
+    if (!skipFastEligible(argv)) return { kind: 'corpus', resolution: null, spec: null };
+    const resolution = createCorpusRootResolver()();
+    return resolution.ok
+      ? { kind: 'corpus', resolution: null, spec: null }
+      : { kind: 'corpus-absent', resolution, spec: null };
+  }
+  return { kind: null, resolution: null, spec: null };
 }
 
 const argv = process.argv.slice(2);
@@ -418,7 +489,7 @@ let modules;
 let lastError;
 for (let attempt = 1; attempt <= START_ATTEMPTS; attempt++) {
   try {
-    modules = await loadModules(plan.kind, argv);
+    modules = await loadModules(plan.kind, plan.spec);
     break;
   } catch (error) {
     // 本机实测过一次并发起两个 Vite 时的瞬时 transform 错（同一条命令随后单跑即绿）；
@@ -433,6 +504,6 @@ if (modules === undefined) {
 } else if (plan.kind === 'corpus-absent') {
   process.exitCode = runCorpusAbsent(modules, argv, plan.resolution);
 } else if (argv[0] === MIGRATE_COMMAND) process.exitCode = runMigrateDiff(modules, argv);
-else if (argv[0] === LANGUAGE_COMMAND) process.exitCode = runLanguage(modules, argv);
+else if (argv[0] === LANGUAGE_COMMAND) process.exitCode = runLanguage(modules, argv, plan.spec);
 else if (argv[0] === CORPUS_COMMAND) process.exitCode = runCorpus(modules, argv);
 else process.exitCode = modules.main.main(argv);
