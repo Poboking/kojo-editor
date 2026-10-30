@@ -21,8 +21,8 @@ import { provideFormatting, provideSignatureHelp } from '@kojo/plugin-kojo-lang'
 import type * as Monaco from '../src/monaco/entry';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { setGlobalKernel, requireKernel } from '../src/ui/editor-pane-registry';
-import { installKojo2DocumentFormatter } from '../src/monaco/kojo2-format';
-import { installKojo2SignatureHelpProvider } from '../src/monaco/kojo2-signature';
+// SDK-B5b 车 2（2026-10-31）：两枚安装器并入语言无关的槽腿工厂（按 kind 只装那一条腿）。
+import { installSlotServiceLegs } from '../src/monaco/slot-service-providers';
 
 /* ============================== 夹具 ============================== */
 
@@ -155,7 +155,7 @@ describe('签名帮助：provider 两跳 vs 直调 `kojo2SignatureAt`', () => {
         },
       },
     } as unknown as typeof Monaco;
-    installKojo2SignatureHelpProvider(fakeMonacoStub);
+    installSlotServiceLegs(fakeMonacoStub, ['signatureHelp']);
     if (provider === undefined) throw new Error('签名 provider 没挂上');
 
     // 预检：两条路径必须都真的**答出同一条签名**（不然计的是空转）
@@ -202,7 +202,7 @@ describe('格式化：provider 两跳 vs 直调 `formatKojo2Source`', () => {
         },
       },
     } as unknown as typeof Monaco;
-    installKojo2DocumentFormatter(fakeMonacoStub);
+    installSlotServiceLegs(fakeMonacoStub, ['formatting']);
     if (provider === undefined) throw new Error('格式化 provider 没挂上');
 
     const directResult = formatKojo2Source(SOURCE);

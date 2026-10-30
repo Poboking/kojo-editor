@@ -525,22 +525,25 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
     }
   });
 
-  it('kojo2 的 format 面两条腿齐：整篇 + 区间 provider 都走共享收口（能力名 `formatting`），装配点两枚 installer 都调用', () => {
-    const formatModule = sourceOf('monaco/kojo2-format.ts').text;
+  it('kojo2 的 format 面两条腿齐：整篇 + 区间 provider 同属一条槽腿（能力名 `formatting`），装配点只调一枚工厂', () => {
+    const factory = sourceOf('monaco/slot-service-providers.ts').text;
     // 一条能力（format）= 两枚 Monaco provider：document（Shift+Alt+F）+ range（Ctrl+K Ctrl+F）。
-    // B3d 起两枚都经共享收口挂上（kojo2 由 descriptor 的 `slotServices: ['formatting']` 点名），
-    // 语言 id 不再写在本模块里——`registerForLanguageServices` 按 descriptor 铺。
-    expect(formatModule).toMatch(
-      /registerForLanguageServices\(\s*monaco,[\s\S]{0,200}?registerDocumentFormattingEditProvider\s*\(/,
+    // B3d 起两枚都经共享收口挂上（kojo2 由 descriptor 的 `slotServices: ['formatting']` 点名）；
+    // SDK-B5b 车 2 起两枚**同属一条腿**——表项点名 `'formatting'`，登记闭包里两枚 API 各一次。
+    expect(factory).toMatch(
+      /legOf\('formatting',[\s\S]{0,400}?registerDocumentFormattingEditProvider\s*\(/,
     );
-    expect(formatModule).toMatch(
-      /registerForLanguageServices\(\s*monaco,[\s\S]{0,200}?registerDocumentRangeFormattingEditProvider\s*\(/,
+    expect(factory).toMatch(
+      /legOf\('formatting',[\s\S]{0,400}?registerDocumentRangeFormattingEditProvider\s*\(/,
     );
-    expect(formatModule).not.toMatch(/registerDocumentFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/);
-    expect(formatModule).not.toMatch(/registerDocumentRangeFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/);
+    expect(factory).not.toMatch(
+      /registerDocumentFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/,
+    );
+    expect(factory).not.toMatch(
+      /registerDocumentRangeFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/,
+    );
     const host = sourceOf(GLOBAL_PROVIDERS).text;
-    expect(host).toContain('installKojo2DocumentFormatter(monaco)');
-    expect(host).toContain('installKojo2RangeFormatter(monaco)');
+    expect(host).toContain('installSlotServiceProviders(monaco, {');
   });
 
   it('注册单源：register-dialects.ts 只按 descriptor.languageServices 挑语言，不写死语言 id', () => {
@@ -851,14 +854,10 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
       // （`installSlotServiceProviders`，两条腿在表里）；名字不再带 kojo2，判据不变
       'installSlotServiceProviders',
       'installKojo2IndentProvider',
-      'installKojo2DocumentFormatter',
-      'installKojo2RangeFormatter',
-      'installKojo2ProjectReferenceProvider',
-      'installKojo2RenameProvider',
-      'installKojo2SignatureHelpProvider',
-      'installKojo2CodeLensProvider',
-      'installKojo2HighlightProvider',
-      'installKojo2SelectionRangeProvider',
+      // SDK-B5b 车 2–4（2026-10-31）：格式化 / 签名 / 引用 / 改名 / 高亮 / 扩选 / 行上注解的
+      // 安装器也已并进上面那枚语言无关的槽腿工厂（七枚 `kojo2-*` 文件随批删除）——
+      // 名字逐个点在这儿，是为了让"谁把某一腿塞回切流块"当场红（名字已不存在 ⇒ 第二行断言
+      // 会先红，等于钉住它们**没有**从别处复活）。
       // B3h：折叠的原生 provider 清零，装配点只装**预取器**（注册在共享收口那一枚）
       'installKojo2FoldsCache',
     ]) {

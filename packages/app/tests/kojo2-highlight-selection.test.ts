@@ -25,19 +25,16 @@ import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
+// SDK-B5b 车 4（2026-10-31）：两枚宿主翻译层并入语言无关的槽腿工厂
+// （`legOf('documentHighlight' | 'selectionRange', …)`）。档位映射表同住工厂。
 import {
-  installKojo2HighlightProvider,
-  kojo2HighlightKindToMonaco,
-} from '../src/monaco/kojo2-highlight';
-import { installKojo2SelectionRangeProvider } from '../src/monaco/kojo2-selection-range';
+  documentHighlightKindOf,
+  installSlotServiceLegs,
+} from '../src/monaco/slot-service-providers';
 
 const HERE = import.meta.dirname;
-const HIGHLIGHT_SOURCE = readFileSync(
-  path.resolve(HERE, '..', 'src', 'monaco', 'kojo2-highlight.ts'),
-  'utf8',
-);
-const SELECTION_SOURCE = readFileSync(
-  path.resolve(HERE, '..', 'src', 'monaco', 'kojo2-selection-range.ts'),
+const LAYER_SOURCE = readFileSync(
+  path.resolve(HERE, '..', 'src', 'monaco', 'slot-service-providers.ts'),
   'utf8',
 );
 
@@ -183,8 +180,7 @@ function providerOf(
   selectors: readonly string[],
 ): Record<string, unknown> {
   const fake = fakeMonaco();
-  if (kind === 'highlight') installKojo2HighlightProvider(fake.monaco);
-  else installKojo2SelectionRangeProvider(fake.monaco);
+  installSlotServiceLegs(fake.monaco, [kind === 'highlight' ? 'documentHighlight' : 'selectionRange']);
   const provider = fake.registrations.find((entry) => entry.selector === selectors[0])?.provider;
   if (provider === undefined) throw new Error(`${kind} 上没有挂 provider（selector=${selectors[0]}）`);
   return provider as Record<string, unknown>;
@@ -230,9 +226,9 @@ afterEach(() => {
 describe('①契约 → Monaco：单行区间 + 三档映射', () => {
   it('三档 → DocumentHighlightKind（唯一映射表）', () => {
     const fake = fakeMonaco();
-    expect(kojo2HighlightKindToMonaco(fake.monaco, 'text')).toBe(HIGHLIGHT_KINDS.Text);
-    expect(kojo2HighlightKindToMonaco(fake.monaco, 'read')).toBe(HIGHLIGHT_KINDS.Read);
-    expect(kojo2HighlightKindToMonaco(fake.monaco, 'write')).toBe(HIGHLIGHT_KINDS.Write);
+    expect(documentHighlightKindOf(fake.monaco, 'text')).toBe(HIGHLIGHT_KINDS.Text);
+    expect(documentHighlightKindOf(fake.monaco, 'read')).toBe(HIGHLIGHT_KINDS.Read);
+    expect(documentHighlightKindOf(fake.monaco, 'write')).toBe(HIGHLIGHT_KINDS.Write);
   });
 
   it('高亮：line / 起止列 → 同行 IRange，kind 逐条翻', () => {
@@ -388,8 +384,7 @@ describe('③三态：无人应答 ⇒ undefined（不顶掉别家）；答空 �
 describe('④注册：共享收口带能力名、dispose 幂等、原生注册形状归零', () => {
   it('两枚都挂到 descriptor 点名的语言上（含 kojo2），且只挂一次', () => {
     const fake = fakeMonaco();
-    installKojo2HighlightProvider(fake.monaco);
-    installKojo2SelectionRangeProvider(fake.monaco);
+    installSlotServiceLegs(fake.monaco, ['documentHighlight', 'selectionRange']);
     const highlightSelectors = fake.registrations
       .filter((entry) => entry.kind === 'highlight')
       .map((entry) => entry.selector);
@@ -405,8 +400,8 @@ describe('④注册：共享收口带能力名、dispose 幂等、原生注册�
 
   it('dispose 幂等：两次只撤一轮', () => {
     const fake = fakeMonaco();
-    const highlight = installKojo2HighlightProvider(fake.monaco);
-    const selection = installKojo2SelectionRangeProvider(fake.monaco);
+    const highlight = installSlotServiceLegs(fake.monaco, ['documentHighlight']);
+    const selection = installSlotServiceLegs(fake.monaco, ['selectionRange']);
     const before = fake.disposeCalls();
     highlight.dispose();
     highlight.dispose();
@@ -417,29 +412,29 @@ describe('④注册：共享收口带能力名、dispose 幂等、原生注册�
   });
 
   it('安装器不读切流开关；Monaco 只许 type-only 引入', () => {
-    for (const source of [HIGHLIGHT_SOURCE, SELECTION_SOURCE]) {
-      expect(source).not.toMatch(/isKojo2CutoverEnabled/);
-      expect(source).toMatch(/import type \* as Monaco from '\.\/entry'/);
-      expect(source).not.toMatch(/import \* as Monaco from/);
-      expect(source).not.toMatch(/from 'monaco-editor'/);
-    }
+    expect(LAYER_SOURCE).not.toMatch(/isKojo2CutoverEnabled/);
+    expect(LAYER_SOURCE).toMatch(/import type \* as Monaco from '\.\/entry'/);
+    expect(LAYER_SOURCE).not.toMatch(/import \* as Monaco from/);
+    expect(LAYER_SOURCE).not.toMatch(/from 'monaco-editor'/);
   });
 
   it('原生注册形状归零：直挂 KOJO2_LANGUAGE_ID 的两条写法一处都不许有', () => {
-    expect(HIGHLIGHT_SOURCE).not.toMatch(/registerDocumentHighlightProvider\(\s*KOJO2_LANGUAGE_ID/);
-    expect(SELECTION_SOURCE).not.toMatch(/registerSelectionRangeProvider\(\s*KOJO2_LANGUAGE_ID/);
-    // 反向钉住收口形状确实在（否则上面两条"没出现"是空匹配）
-    expect(HIGHLIGHT_SOURCE).toMatch(
-      /registerForLanguageServices\([\s\S]{0,400}?registerDocumentHighlightProvider/,
+    expect(LAYER_SOURCE).not.toMatch(/registerDocumentHighlightProvider\(\s*KOJO2_LANGUAGE_ID/);
+    expect(LAYER_SOURCE).not.toMatch(/registerSelectionRangeProvider\(\s*KOJO2_LANGUAGE_ID/);
+    // 反向钉住表格形状确实在（否则上面两条"没出现"是空匹配）：
+    // 腿是数据 —— `legOf('<kind>', … registerXxxProvider(` 与收口调用缺一不可。
+    expect(LAYER_SOURCE).toMatch(
+      /legOf\('documentHighlight',[\s\S]{0,200}?registerDocumentHighlightProvider/,
     );
-    expect(SELECTION_SOURCE).toMatch(
-      /registerForLanguageServices\([\s\S]{0,400}?registerSelectionRangeProvider/,
+    expect(LAYER_SOURCE).toMatch(
+      /legOf\('selectionRange',[\s\S]{0,200}?registerSelectionRangeProvider/,
     );
+    expect(LAYER_SOURCE).toMatch(/registerForLanguageServices\(\s+monaco,[\s\S]{0,200}?leg\.register/);
   });
 
   it('宿主不再留判据：不高亮函数名 / 扩选函数名都不在本层', () => {
-    expect(HIGHLIGHT_SOURCE).not.toMatch(/kojo2DocumentHighlights/);
-    expect(SELECTION_SOURCE).not.toMatch(/kojo2SelectionRangeAt|kojo2SelectionRangeChainsAt/);
+    expect(LAYER_SOURCE).not.toMatch(/kojo2DocumentHighlights/);
+    expect(LAYER_SOURCE).not.toMatch(/kojo2SelectionRangeAt|kojo2SelectionRangeChainsAt/);
   });
 
   it('宿主语言门：共享收口把 kojo2 这枚也挂到 ERB，遇到 erb model 必须弃权', () => {

@@ -38,7 +38,8 @@ import { pkey } from '../ui/file-tree-ops';
  *
  * B0 只落"合并纪律"、B3c（补全 / 悬停）与 B3d（签名 / 格式化）把**安装器交回槽**：
  * 四个能力的唯一供方都是插件 `@kojo/plugin-kojo-lang`，宿主侧只剩"model → 请求"与
- * "契约 → Monaco"两段翻译（`slot-service-providers.ts` / `kojo2-signature.ts` / `kojo2-format.ts`）。
+ * "契约 → Monaco"两段翻译（都在 `slot-service-providers.ts`：车 1 收补全 / 悬停，车 2–4 收
+ * 格式化 / 签名 / 引用 / 改名 / 高亮 / 扩选 / 行上注解）。
  *
  * 为什么必须等宿主原生实现删干净才能装 provider：同一格两份答案时，Monaco 对补全取并集
  * （候选翻倍）、对悬停取多家（两个浮层段落）、对格式化按"第一个非空"（谁先注册谁说了算，
@@ -747,7 +748,7 @@ export function collectCallHierarchy(
  * `snapshot` 缺席 ⇒ 请求里**不出现** `projectFiles`（与加这一格之前逐字相同，供方只答本篇）；
  * 给出就同时带 `projectFilesComplete`——与 {@link referencesRequestOf} 逐字同一条口径。
  *
- * **今天装配点不传快照**，理由写在宿主 `monaco/kojo2-codelens.ts` 的头注里：Monaco 在**每次
+ * **今天装配点不传快照**，理由写在 `monaco/slot-service-providers.ts` 的 `codeLensProvider` 头注里：Monaco 在**每次
  * 内容变化后**都会重问整篇注解（契约 `EditorCodeLensRequest` 的头注已取证），而一份项目快照
  * 的代价是"全项目文本 + 一张临时索引"，那是显式动作（Shift+F12 / F2）才付得起的钱 ——
  * 放在停笔重算的路径上就是每敲一会儿付一次项目级扫描。要开这一档先量再开。

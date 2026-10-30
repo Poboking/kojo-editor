@@ -25,16 +25,18 @@ import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
+// SDK-B5b 车 2（2026-10-31）：宿主翻译层从 `monaco/kojo2-signature.ts` 并进语言无关的槽腿
+// 工厂（`legOf('signatureHelp', …)`）；触发字符与合并去重仍是**注册期语言事实**，同住工厂。
 import {
   KOJO2_SIGNATURE_TRIGGER_CHARS,
-  installKojo2SignatureHelpProvider,
+  installSlotServiceLegs,
   mergeTriggerCharacters,
   toMonacoSignatureHelp,
-} from '../src/monaco/kojo2-signature';
+} from '../src/monaco/slot-service-providers';
 
 const HERE = import.meta.dirname;
 const LAYER_SOURCE = readFileSync(
-  path.resolve(HERE, '..', 'src', 'monaco', 'kojo2-signature.ts'),
+  path.resolve(HERE, '..', 'src', 'monaco', 'slot-service-providers.ts'),
   'utf8',
 );
 
@@ -182,12 +184,10 @@ const SIGNATURE: EditorSignature = {
   documentation: '默认值：10',
 };
 
-/** 起一枚安装器，取回 kojo2 上那一枚 provider（没挂上直接抛：证据缺席不许静默） */
-function kojo2ProviderOf(
-  options: Parameters<typeof installKojo2SignatureHelpProvider>[1] = {},
-): Monaco.languages.SignatureHelpProvider {
+/** 装一条槽腿，取回 kojo2 上那一枚 provider（没挂上直接抛：证据缺席不许静默） */
+function kojo2ProviderOf(): Monaco.languages.SignatureHelpProvider {
   const fake = fakeMonaco();
-  installKojo2SignatureHelpProvider(fake.monaco, options);
+  installSlotServiceLegs(fake.monaco, ['signatureHelp']);
   const provider = fake.registrations.find(
     (entry) => entry.selector === KOJO2_LANGUAGE_ID,
   )?.provider;
@@ -261,11 +261,15 @@ describe('②触发字符：`(` / `,`（只服务注册）+ 合并去重', () =>
     expect(copy).not.toBe(KOJO2_SIGNATURE_TRIGGER_CHARS);
   });
 
-  it('安装器的 provider 真带上（含 extra 合并结果）', () => {
+  it('provider 真带上合并后的清单（生产不传 extra ⇒ 就是基础那两枚，且是一份副本）', () => {
     const fake = fakeMonaco();
-    installKojo2SignatureHelpProvider(fake.monaco, { extraTriggerCharacters: [')', ','] });
+    installSlotServiceLegs(fake.monaco, ['signatureHelp']);
     for (const registration of fake.registrations) {
-      expect(registration.provider.signatureHelpTriggerCharacters).toEqual(['(', ',', ')']);
+      expect(registration.provider.signatureHelpTriggerCharacters).toEqual(['(', ',']);
+      // 副本：Monaco 读的是它自己那一份，别让人从外面改回包叶常量
+      expect(registration.provider.signatureHelpTriggerCharacters).not.toBe(
+        KOJO2_SIGNATURE_TRIGGER_CHARS,
+      );
     }
   });
 });
@@ -275,7 +279,7 @@ describe('②触发字符：`(` / `,`（只服务注册）+ 合并去重', () =>
 describe('③注册：共享收口 + 能力名 `signatureHelp`（不读开关）', () => {
   it('selector 清单 = descriptor 现算：全铺语言 + 点名了 `signatureHelp` 的语言', () => {
     const fake = fakeMonaco();
-    installKojo2SignatureHelpProvider(fake.monaco);
+    installSlotServiceLegs(fake.monaco, ['signatureHelp']);
     expect(fake.registrations.map((entry) => entry.selector)).toEqual(SIGNATURE_SELECTORS);
     // 反证：kojo2 确实在列（descriptor 点名了这枚能力），且不止它一门
     expect(SIGNATURE_SELECTORS).toContain(KOJO2_LANGUAGE_ID);
@@ -284,7 +288,7 @@ describe('③注册：共享收口 + 能力名 `signatureHelp`（不读开关）
 
   it('每一门挂的是**同一枚** provider；dispose 幂等（逐枚各撤一次，第二次零动作）', () => {
     const fake = fakeMonaco();
-    const handle = installKojo2SignatureHelpProvider(fake.monaco);
+    const handle = installSlotServiceLegs(fake.monaco, ['signatureHelp']);
     const providers = new Set(fake.registrations.map((entry) => entry.provider));
     expect(providers.size).toBe(1);
     handle.dispose();
@@ -295,7 +299,7 @@ describe('③注册：共享收口 + 能力名 `signatureHelp`（不读开关）
 
   it('半途抛错 ⇒ 已挂上的先撤回，错误原样外抛', () => {
     const fake = fakeMonaco(1);
-    expect(() => installKojo2SignatureHelpProvider(fake.monaco)).toThrow(/桩：注册抛错/);
+    expect(() => installSlotServiceLegs(fake.monaco, ['signatureHelp'])).toThrow(/桩：注册抛错/);
     expect(fake.registrations).toHaveLength(1);
     expect(fake.disposeCalls()).toBe(1);
   });

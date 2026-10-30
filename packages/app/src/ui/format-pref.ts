@@ -67,7 +67,7 @@ export function saveFormatOnSavePref(on: boolean): void {
  *
  * 覆盖面不是只有 `.kojo`：本偏好同时服务 **ERB**（`dialectForLanguage` 认 `kojo` / `erb`
  * 两种方言，ERB 与 `.kojo` 共用 `kojo-sugar` 的规则核心）；**kojo2 不是"没有格式化"，而是
- * 走自己的 `monaco/kojo2-format.ts`**——规则开关形状与这里同源（`indent` 等加法布尔），
+ * 走自己的槽腿（`monaco/slot-service-providers.ts` 的 `formatting` 腿）**——规则开关形状与这里同源（`indent` 等加法布尔），
  * 但不是同一份偏好键。
  *
  * ## 为什么是新键而不是往老键里塞

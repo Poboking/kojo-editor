@@ -8,7 +8,7 @@
  *
  * 1. **请求构造**：`kind: 'codeLens'`、文件身份（注入位 → `model.uri`）、`languageId` /
  *    `version` / `lineCount` / 当前项目；**快照缺席**时请求里没有 `projectFiles`
- *    （开快照要走 `getIndex`，装配点今天不传——理由见 `monaco/kojo2-codelens.ts` 头注）；
+ *    （开快照要走 `codeLensProjectIndex`，装配点今天不传——理由见槽腿工厂 `codeLensProvider` 头注）；
  * 2. **契约 → Monaco**：翻译复用 v1 那枚 `toMonacoCodeLenses`（命令 id = 已注册的
  *    `kojo.codeLens.execute`、越界行丢弃、逐条唯一 id、无落点 ⇒ 空参数）；
  * 3. **三态不混**：无人应答 ⇒ provider 交 **`undefined`**（空列表会顶掉别家）；有人答空 /
@@ -33,7 +33,11 @@ import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { CODE_LENS_COMMAND } from '../src/monaco/kojo-code-lens';
-import { installKojo2CodeLensProvider } from '../src/monaco/kojo2-codelens';
+// SDK-B5b 车 4（2026-10-31）：宿主翻译层并入语言无关的槽腿工厂（`legOf('codeLens', …)`）。
+import {
+  installSlotServiceLegs,
+  type SlotServiceHost,
+} from '../src/monaco/slot-service-providers';
 import type { Kojo2ProjectIndex } from '../src/monaco/kojo2-project-index';
 import {
   codeLensRequestOf,
@@ -42,7 +46,7 @@ import {
 import { KOJO2_CODE_LENS_LARGE_FILE_LINES } from '@kojo/kojo-lang/codelens';
 
 const HOST_SOURCE = readFileSync(
-  path.resolve(import.meta.dirname, '..', 'src', 'monaco', 'kojo2-codelens.ts'),
+  path.resolve(import.meta.dirname, '..', 'src', 'monaco', 'slot-service-providers.ts'),
   'utf8',
 );
 
@@ -161,13 +165,13 @@ function codeLensContribution(
 }
 
 /** 取回挂上来的 provider（没挂上直接抛：证据缺席不许静默） */
-function providerOf(options: Parameters<typeof installKojo2CodeLensProvider>[1] = {}): {
+function providerOf(options: SlotServiceHost = {}): {
   readonly provider: Monaco.languages.CodeLensProvider;
   readonly registrations: Registration[];
   readonly disposeCalls: () => number;
 } {
   const fake = fakeMonaco();
-  installKojo2CodeLensProvider(fake.monaco, options);
+  installSlotServiceLegs(fake.monaco, ['codeLens'], options);
   const registration = fake.registrations.find((entry) => entry.selector === SELECTORS[0]);
   if (registration === undefined) {
     throw new Error(`codeLens 上没有挂 provider（selector=${SELECTORS[0]}）`);
@@ -178,7 +182,7 @@ function providerOf(options: Parameters<typeof installKojo2CodeLensProvider>[1] 
 /** 问一次（provider 的返回值原样交回：`undefined` 与空列表是两件事） */
 function ask(
   model: Monaco.editor.ITextModel,
-  options: Parameters<typeof installKojo2CodeLensProvider>[1] = {},
+  options: SlotServiceHost = {},
 ): ReturnType<Monaco.languages.CodeLensProvider['provideCodeLenses']> {
   return providerOf(options).provider.provideCodeLenses(model, TOKEN);
 }
@@ -188,7 +192,7 @@ function lensesOf(
   result: ReturnType<typeof ask>,
 ): readonly Monaco.languages.CodeLens[] | null {
   if (result === undefined || result === null) return null;
-  // Monaco 的类型面允许 Thenable；宿主这一枚**同步**交回（`installKojo2CodeLensProvider`
+  // Monaco 的类型面允许 Thenable；宿主这一枚**同步**交回（`legOf('codeLens', …)`
   // 里没有 async / Promise），按既有测试（`w6-dual-language-switch`）的口径收窄一次。
   return Array.isArray(result) ? result : (result as Monaco.languages.CodeLensList).lenses;
 }
@@ -213,7 +217,7 @@ afterEach(() => {
 describe('①注册：共享收口带能力名 `codeLens`，原生形状清零', () => {
   it('selector 恰是 descriptor 全铺 / 点名 codeLens 的那些语言（kojo2 在内）', () => {
     const fake = fakeMonaco();
-    installKojo2CodeLensProvider(fake.monaco);
+    installSlotServiceLegs(fake.monaco, ['codeLens']);
     expect(fake.registrations.map((entry) => entry.selector).sort()).toEqual(
       [...SELECTORS].sort(),
     );
@@ -222,7 +226,7 @@ describe('①注册：共享收口带能力名 `codeLens`，原生形状清零',
 
   it('dispose 幂等：连撤两次，每一门的注册各撤一次、不抛', () => {
     const fake = fakeMonaco();
-    const handle = installKojo2CodeLensProvider(fake.monaco);
+    const handle = installSlotServiceLegs(fake.monaco, ['codeLens']);
     handle.dispose();
     handle.dispose();
     expect(fake.disposeCalls()).toBe(SELECTORS.length);
@@ -237,7 +241,7 @@ describe('①注册：共享收口带能力名 `codeLens`，原生形状清零',
         },
       },
     } as unknown as typeof Monaco;
-    expect(() => installKojo2CodeLensProvider(monaco)).toThrow('桩：注册抛错');
+    expect(() => installSlotServiceLegs(monaco, ['codeLens'])).toThrow('桩：注册抛错');
   });
 
   it('源码里没有 `registerCodeLensProvider(KOJO2_LANGUAGE_ID` 的原生形状，也不读切流开关', () => {
@@ -251,7 +255,9 @@ describe('①注册：共享收口带能力名 `codeLens`，原生形状清零',
     expect(HOST_SOURCE).toContain("from './kojo-language-service-legs'");
     expect(HOST_SOURCE).toContain("from './kojo-code-lens'");
     // 判据（三档识别 / 计数）一件都不在宿主：包叶子只在插件里被引。
-    expect(HOST_SOURCE).not.toMatch(/from\s+'@kojo\/kojo-lang/);
+    // 判据一件都不在宿主：codelens 的包叶子只在插件里被引（其余叶子 import 是常量 /
+    // prepare 尺子，与这一格无关）。
+    expect(HOST_SOURCE).not.toMatch(/@kojo\/kojo-lang\/codelens/);
     expect(HOST_SOURCE).not.toContain('kojo2ReferencesAt');
   });
 
@@ -281,12 +287,12 @@ describe('②请求构造：身份三格 / 项目 / 快照缺席', () => {
     const seen: EditorLanguageServiceRequest[] = [];
     installKernel([codeLensContribution(LENSES, seen)]);
 
-    lensesOf(ask(fakeModel(SOURCE), { getFilePath: () => 'D:/别的/path.kojo2' }));
+    lensesOf(ask(fakeModel(SOURCE), { filePathOf: () => 'D:/别的/path.kojo2' }));
     expect((seen[0] as EditorCodeLensRequest).path).toBe('D:/别的/path.kojo2');
 
     lensesOf(
       ask(fakeModel(SOURCE), {
-        getFilePath: () => {
+        filePathOf: () => {
           throw new Error('桩：身份取不到');
         },
       }),
@@ -297,7 +303,7 @@ describe('②请求构造：身份三格 / 项目 / 快照缺席', () => {
     expect((seen[2] as EditorCodeLensRequest).path).toBe('');
   });
 
-  it('快照缺席（装配点今天不给 `getIndex`）⇒ 请求里没有 `projectFiles` 这两格', () => {
+  it('快照缺席（装配点今天不给 `codeLensProjectIndex`）⇒ 请求里没有 `projectFiles` 这两格', () => {
     const seen: EditorLanguageServiceRequest[] = [];
     installKernel([codeLensContribution(LENSES, seen)]);
     lensesOf(ask(fakeModel(SOURCE)));
@@ -306,7 +312,7 @@ describe('②请求构造：身份三格 / 项目 / 快照缺席', () => {
     expect(request.projectFilesComplete).toBeUndefined();
   });
 
-  it('给了 `getIndex` ⇒ 快照经 B3e 同一条腿进请求（本文件被排除、截断如实）', () => {
+  it('给了 `codeLensProjectIndex` ⇒ 快照经 B3e 同一条腿进请求（本文件被排除、截断如实）', () => {
     const seen: EditorLanguageServiceRequest[] = [];
     installKernel([codeLensContribution(LENSES, seen)]);
     const files = new Map([
@@ -318,7 +324,7 @@ describe('②请求构造：身份三格 / 项目 / 快照缺席', () => {
       ask(fakeModel(SOURCE), {
         // 桩索引只给快照取数用到的两面（与 `kojo-language-service-legs-references-rename`
         // 的同形桩一致：索引的其余面这一格走不到）。
-        getIndex: () =>
+        codeLensProjectIndex: () =>
           ({
             files: () => [...files.keys()],
             getFile: (filePath: string) => ({ path: filePath, text: files.get(filePath) ?? '' }),
@@ -337,7 +343,7 @@ describe('②请求构造：身份三格 / 项目 / 快照缺席', () => {
     installKernel([codeLensContribution(LENSES, seen)]);
     lensesOf(
       ask(fakeModel(SOURCE), {
-        getIndex: () => {
+        codeLensProjectIndex: () => {
           throw new Error('桩：索引炸了');
         },
       }),

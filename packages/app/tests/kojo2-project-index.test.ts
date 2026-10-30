@@ -23,11 +23,12 @@ import {
   createKojo2ProjectIndex,
   type Kojo2ProjectIndex,
 } from '../src/monaco/kojo2-project-index';
+// SDK-B5b 车 3（2026-10-31）：`monaco/kojo2-references` 转发壳随批删除，直接取包叶。
 import {
   kojo2ProjectReferencesAt,
   type Kojo2ReferencePosition,
   type Kojo2ReferenceSpan,
-} from '../src/monaco/kojo2-references';
+} from '@kojo/kojo-lang/references';
 
 const PATH_A = 'D:/proj/a.kojo2';
 const PATH_B = 'D:/proj/b.kojo2';

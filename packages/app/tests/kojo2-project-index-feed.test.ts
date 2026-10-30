@@ -23,7 +23,8 @@ import {
   createKojo2ProjectRenameResolvers,
   type Kojo2ProjectIndex,
 } from '../src/monaco/kojo2-project-index';
-import { kojo2RenamePlanXFile } from '../src/monaco/kojo2-rename';
+// SDK-B5b 车 3（2026-10-31）：`monaco/kojo2-rename` 转发壳随批删除，直接取包叶（同一份实现）。
+import { kojo2RenamePlanXFile } from '@kojo/kojo-lang/rename';
 import {
   KOJO2_INDEX_FEED_CHUNK,
   mountProjectScan,

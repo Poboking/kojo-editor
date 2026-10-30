@@ -23,11 +23,15 @@ import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import type { Kojo2ProjectIndex } from '../src/monaco/kojo2-project-index';
-import { installKojo2ProjectReferenceProvider } from '../src/monaco/kojo2-references';
+// SDK-B5b 车 3（2026-10-31）：宿主翻译层并入语言无关的槽腿工厂（`legOf('references', …)`）。
+import {
+  installSlotServiceLegs,
+  type SlotServiceHost,
+} from '../src/monaco/slot-service-providers';
 
 const HERE = import.meta.dirname;
 const LAYER_SOURCE = readFileSync(
-  path.resolve(HERE, '..', 'src', 'monaco', 'kojo2-references.ts'),
+  path.resolve(HERE, '..', 'src', 'monaco', 'slot-service-providers.ts'),
   'utf8',
 );
 
@@ -150,14 +154,14 @@ function fakeIndex(files: ReadonlyArray<{ path: string; text: string }>): Kojo2P
 
 /** 安装一枚 provider 并取回它（注册集合按共享收口铺语言，取 kojo2 那一枚） */
 function installAndProvider(
-  options: Parameters<typeof installKojo2ProjectReferenceProvider>[1] = {},
+  options: SlotServiceHost = {},
 ): {
   readonly fake: ReturnType<typeof fakeMonaco>;
   readonly disposable: Monaco.IDisposable;
   readonly provider: Monaco.languages.ReferenceProvider;
 } {
   const fake = fakeMonaco();
-  const disposable = installKojo2ProjectReferenceProvider(fake.monaco, options);
+  const disposable = installSlotServiceLegs(fake.monaco, ['references'], options);
   const registration = fake.registrations.find((entry) => entry.selector === KOJO2_LANGUAGE_ID);
   if (registration === undefined) throw new Error('kojo2 上没有挂引用 provider');
   return {
@@ -187,7 +191,7 @@ function provide(
 describe('注册：共享收口 + 能力名 references（kojo2 由 descriptor 点名）', () => {
   it('铺到"全铺语言 + 点名 references 的语言"；kojo2 在列、ERB / kojo1 也在列', () => {
     const fake = fakeMonaco();
-    installKojo2ProjectReferenceProvider(fake.monaco);
+    installSlotServiceLegs(fake.monaco, ['references']);
     const selectors = fake.registrations.map((entry) => entry.selector);
     expect(selectors).toEqual(REFERENCE_SELECTORS);
     expect(selectors).toContain(KOJO2_LANGUAGE_ID);
@@ -202,7 +206,7 @@ describe('注册：共享收口 + 能力名 references（kojo2 由 descriptor �
 
   it('注册半途抛错 ⇒ 先撤回已挂上的再外抛', () => {
     const fake = fakeMonaco(1);
-    expect(() => installKojo2ProjectReferenceProvider(fake.monaco)).toThrow(
+    expect(() => installSlotServiceLegs(fake.monaco, ['references'])).toThrow(
       /注册引用 provider 抛错/,
     );
     expect(fake.disposeCalls()).toBe(1);
@@ -268,7 +272,7 @@ describe('model → 请求：身份三格 / 全文 / 光标 / 快照', () => {
       { path: 'D:/proj/a.kojo2', text: '> 自己' },
       { path: 'D:/proj/b.kojo2', text: '> 别人' },
     ]);
-    const { provider } = installAndProvider({ getIndex: () => index });
+    const { provider } = installAndProvider({ projectIndex: () => index });
     provide(provider, fakeModel('> x').model, 1, 1);
     expect(captured.projectFiles).toEqual([{ path: 'D:/proj/b.kojo2', text: '> 别人' }]);
     expect(captured.projectFilesComplete).toBe(true);
@@ -287,7 +291,7 @@ describe('model → 请求：身份三格 / 全文 / 光标 / 快照', () => {
       { path: 'D:/proj/c.kojo2', text: 'c' },
     ]);
     const { provider } = installAndProvider({
-      getIndex: () => index,
+      projectIndex: () => index,
       snapshotLimits: { maxFiles: 1 },
     });
     provide(provider, fakeModel('> x').model, 1, 1);
@@ -304,7 +308,7 @@ describe('model → 请求：身份三格 / 全文 / 光标 / 快照', () => {
     ]);
     const index = fakeIndex([{ path: 'D:/proj/b.kojo2', text: '0123456789' }]);
     const { provider } = installAndProvider({
-      getIndex: () => index,
+      projectIndex: () => index,
       snapshotLimits: { maxBytes: 4 },
     });
     provide(provider, fakeModel('> x').model, 1, 1);

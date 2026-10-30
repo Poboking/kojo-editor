@@ -152,17 +152,16 @@ import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
 // **预取器**在打开 / 改动时算进缓存，请求构造时取快照（槽内不 await）。
 import { installKojo2FoldsCache, kojo2FoldsSnapshotFor, prefetchKojo2Folds } from '../monaco/kojo2-folding';
 import { installKojo2IndentProvider } from '../monaco/kojo2-indent';
-// K2 batch-7：2.0 格式化器（走 Monaco 内建 `editor.action.formatDocument`
-//（Shift+Alt+F），本文件不新增命令）。
 // 注：2.0 的**大纲**注册在 B2 批已删除（改由 `installDocumentSymbolProvider` 的槽腿承担，
 // 供方 = 插件 `@kojo/plugin-kojo-lang`），故这里不再 import `kojo2-symbols`。
-import { installKojo2DocumentFormatter, installKojo2RangeFormatter } from '../monaco/kojo2-format';
-// K2 batch-8：语言服务补齐（ERB/kojo2 同权）——引用 / 重命名 / 签名 / code lens /
-// 同符号高亮 / 结构化扩选。全部不读切流开关，且安装器内零 IO。B3b–B3g 之后其中
-// 引用 / 改名 / 签名 / 高亮 / 扩选 / 行上注解已改为共享收口的**翻译层**（判据在包里、
-// 供方是插件），安装器名字与装配行不变；行内提示（B2c）与大纲（B2）连翻译层都归共享收口
-// ⇒ 宿主不再 import `kojo2-inlay` / `kojo2-symbols`（两枚在 B5b 整块删除）。
-import { installKojo2ProjectReferenceProvider } from '../monaco/kojo2-references';
+// SDK-B5b 车 2–4（2026-10-31）：格式化 / 签名 / 引用 / 改名 / 同符号高亮 / 结构化扩选 /
+// 行上注解的**翻译与注册**也整块搬进 `monaco/slot-service-providers.ts`（每条腿各住一枚
+// 文件的写法在车 1 已被判定为抄本温床）。宿主此后只交**它自己才知道的三格**：这份 model
+// 是哪个文件、当前项目有哪些文件、跨文件落点怎么造 URI（见下面装配点的 `host` 实参）。
+// 于是本文件不再 import `kojo2-format` / `kojo2-signature` / `kojo2-references` /
+// `kojo2-rename` / `kojo2-highlight` / `kojo2-selection-range` / `kojo2-codelens` 七枚——
+// 七枚随批删除。行内提示（B2c）与大纲（B2）更早归共享收口（`kojo2-inlay` / `kojo2-symbols`
+// 已在 B5b 删除）。
 import {
   createKojo2ProjectCallHierarchyResolvers,
   createKojo2ProjectIndex,
@@ -177,11 +176,6 @@ import { installDocumentLinks } from '../monaco/document-links';
 import { createUserSnippetProvider } from '../monaco/user-snippet-completion';
 import { USER_SNIPPET_LANGUAGES, loadUserSnippets } from './user-snippets';
 import { KOJO2_LANGUAGE_ID } from '../monaco/kojo2-language';
-import { installKojo2RenameProvider } from '../monaco/kojo2-rename';
-import { installKojo2SignatureHelpProvider } from '../monaco/kojo2-signature';
-import { installKojo2CodeLensProvider } from '../monaco/kojo2-codelens';
-import { installKojo2HighlightProvider } from '../monaco/kojo2-highlight';
-import { installKojo2SelectionRangeProvider } from '../monaco/kojo2-selection-range';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 // 项目扫描（未打开文件）→ 项目索引的喂养通道（扫描侧投放，这里订阅后写索引）
 import {
@@ -2019,7 +2013,24 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 这一行的**位置**是契约：它在语义捕获预取之后、切流块之前，且工厂内部按
     // `SLOT_SERVICE_LEGS` 的数组序挂腿（补全先、悬停后）——Monaco 的单答型 provider 是
     // "第一家说了算"，相对序变了就是"谁答悬停"变了（`kojo2-providers.test.ts` 有顺序断言）。
-    globalDisposers.push(installSlotServiceProviders(monaco));
+    //
+    // **SDK-B5b 车 2–4（2026-10-31）**：格式化 / 签名 / 引用 / 改名 / 同符号高亮 / 结构化扩选 /
+    // 行上注解的翻译层也并进这张表（同一枚安装器），于是本文件这七条腿各一枚安装器的写法
+    // 全部消失。**留下的仍是插件看不到的宿主事实**，只是从"七个注入面"收成三格：
+    // - `filePathOf`：这份 model 归属于哪个 EditorPane（未命名 / 内存 model 的 uri 未必是
+    //   作者看到的路径）；
+    // - `projectIndex`：项目文件快照的现取口（引用 / 改名两条显式动作各取一次；行上注解**不取**，
+    //   理由见 `slot-service-providers.ts` 的「为什么行上注解不取项目快照」）；
+    // - `uriForPath`：跨文件落点怎么造 URI（缺省 `monaco.Uri.file`）。
+    // 三格都不是语言判据：`@巡` 的 adapter 事实、判据、措辞全在包与插件。
+    globalDisposers.push(
+      installSlotServiceProviders(monaco, {
+        // 文件身份以**归属实例**为准（与 code action 那一枚同一条口径）。
+        filePathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
+        projectIndex: () => kojo2ProjectIndex,
+        uriForPath: (path) => monaco.Uri.file(path),
+      }),
+    );
     if (isKojo2CutoverEnabled()) {
       // K2 batch-5 → **B3j（2026-10-30）**：Kojo 2.0 一键迁移 code action（裸旁白 / 裸引号 /
       // 心形 / 着色 / 随机 / 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进 / 语义三条），
@@ -2061,66 +2072,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 可撤销——K2-SURFACE-DEFAULT 把它算**语言面**（作者不该因为没切流就缩不进去），因此
     // 无条件装配。缩进判不准就一个字符都不改（`onEnterRules` 仍是按键瞬间的那一层）。
     globalDisposers.push(installKojo2IndentProvider(monaco));
-    // K2 batch-7 → **B3d（2026-10-28）**：格式化器只服务显式格式化动作（不接保存链路——作者
-    // 不按 Shift+Alt+F / Ctrl+K Ctrl+F 就不动缓冲内容）；格式化属语言面，无条件装配。
-    // 本批把规则（缩进 / 空行 / 行尾 / EOL / 幂等 + 可解析两道闸）整块搬进
-    // `@kojo/kojo-lang/format`，作答来自插件 `kojo2-formatting` 贡献；两枚安装器只做
-    // "model + 选区 → 请求"与"契约 edits → Monaco TextEdit"，注册走
-    // `registerForLanguageServices(..., 'formatting')`。`applyKojo2Format` 同批删除（无消费方）。
-    globalDisposers.push(installKojo2DocumentFormatter(monaco));
-    // K2 batch-8：ERB/kojo2 同权面——7 枚语言服务 + 选区格式化。B3c 之后补全的事件参数形状
-    // 与 `faceTemplates` / `hintNames` 都不在这条腿上了：三路投影住在 `@kojo/kojo-lang`
-    // （`kojo2CompletionOptionsFromAdapter`），由插件供方在请求时按 adapter 现取
-    //（本层仍零游戏名词；旧 adapter 缺字段 ⇒ 对应候选位零候选，不猜）。
-    // K2 batch-9：引用面换成**项目级**（`kojo2ProjectIndex` 由宿主喂；索引空时自动退回同文件）。
-    globalDisposers.push(
-      installKojo2ProjectReferenceProvider(monaco, {
-        getIndex: () => kojo2ProjectIndex,
-        pathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
-        uriForPath: (path) => monaco.Uri.file(path),
-      }),
-    );
-    // 跨文件改名（S18 → B3e）：把**同一份**项目索引当快照来源喂给 installer——请求文件路径
-    // 与快照都由宿主给，判据（引用集合 / 全或无 / 上限）住 `@kojo/kojo-lang/rename`。
-    globalDisposers.push(
-      installKojo2RenameProvider(monaco, {
-        getIndex: () => kojo2ProjectIndex,
-        pathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
-        uriForPath: (path) => monaco.Uri.file(path),
-      }),
-    );
-    // B3d（2026-10-28）：签名帮助的原生安装**已清零** —— 判据（调用位 / 声明头 / `@巡` 集合名）
-    // 整块搬进 `@kojo/kojo-lang/signature`，作答来自插件 `kojo2-signatureHelp` 贡献；这一枚
-    // 安装器只把 model + 光标翻成请求、把契约签名翻成 Monaco 形状，注册走
-    // `registerForLanguageServices(..., 'signatureHelp')`（kojo2 由 descriptor 点名）。
-    // 不传注入面：`@巡` 的 adapter 事实由插件请求时现取并核 id（与补全 / 悬停同一条纪律）。
-    globalDisposers.push(installKojo2SignatureHelpProvider(monaco));
-    // B2c（2026-10-24）：2.0 的 inlay hints 原生注册**已删除** —— 它现在由
-    // `installInlayHintsProvider` 那一枚槽腿挂上（kojo2 descriptor 声明了
-    // `slotServices: ['inlayHint']`），应答来自插件 `@kojo/plugin-kojo-lang`。
-    // adapter 事实经 `@kojo/kojo-lang/adapter-source` 的登记表交给插件（见本函数开头）。
-    // B3g（2026-10-30）：行上注解的原生判据**已清零**——三档标注（`# 机` / `@织` / `@函`）
-    // 与「被用到几处」的计数整块搬进 `@kojo/kojo-lang/codelens`（计数复用包内 references
-    // 判据，不自扫第二份），作答来自插件 `kojo2-codeLens` 贡献；这一枚安装器只做
-    // "model → 请求"与"契约 → Monaco"（翻译复用 v1 那枚 `toMonacoCodeLenses`），注册走
-    // `registerForLanguageServices(..., 'codeLens')`（kojo2 由 descriptor 点名）。
-    // **不传 `getIndex`**：项目快照只在显式动作（Shift+F12 / F2）才付得起，行上注解是每次
-    // 停笔重算整篇的那一格——理由与实测口径见 `monaco/kojo2-codelens.ts` 头注。
-    globalDisposers.push(
-      installKojo2CodeLensProvider(monaco, {
-        getFilePath: (model) => owningPaneOf(model)?.filePathRef.current ?? null,
-      }),
-    );
-    // B3f（2026-10-29）：同符号高亮 / 结构化扩选的原生判据**已清零**——判据整块搬进
-    // `@kojo/kojo-lang/highlight` / `/selection-range`，作答来自插件
-    // `kojo2-documentHighlight` / `kojo2-selectionRange`；这两枚安装器只做"model → 请求"与
-    // "契约 → Monaco"，注册走 `registerForLanguageServices(..., 'documentHighlight' |
-    // 'selectionRange')`（kojo2 由 descriptor 点名）。
-    globalDisposers.push(installKojo2HighlightProvider(monaco));
-    globalDisposers.push(installKojo2SelectionRangeProvider(monaco));
-    // B3d：区间格式化（Ctrl+K Ctrl+F）与整篇同一条能力（`formatting`）——规则同一台，
-    // 只把 Monaco range 折成 `lineRange` 两枚行号塞进请求；选区之外由供方保证逐字节不动。
-    globalDisposers.push(installKojo2RangeFormatter(monaco));
+    // 注：2.0 的 inlay hints（B2c）与大纲（B2）更早归各自的共享收口（kojo2 descriptor 用
+    // `slotServices` 点名），本段从来没有它们；行上注解的「不取项目快照」那一条缺口与理由
+    // 随本批搬进 `slot-service-providers.ts` 的 `codeLensProvider` 头注（口径一字未改）。
+    //
     // B3h（2026-10-30）：折叠的**预取器**先于下面那段 2.0 模型事件装上——装配时已经开着的
     // model 也要在第一次被问之前就把快照算好（那一段的 `feedIndexModel` 逐枚调
     // `prefetchKojo2Folds`，装晚了首开就只剩"provider 被问时踢一次"这一条路）。

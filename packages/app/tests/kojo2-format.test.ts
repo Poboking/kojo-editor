@@ -13,6 +13,10 @@
  * 4. **注册**：两枚 provider 都经 `registerForLanguageServices(..., 'formatting')`
  *    挂到"全铺语言 + descriptor 点名了这枚能力"的语言上；dispose 幂等、半途抛错回滚。
  *
+ * **SDK-B5b 车 2（2026-10-31）**：这一格从 `monaco/kojo2-format.ts` 搬进语言无关的槽腿工厂
+ * （`monaco/slot-service-providers.ts` 的 `legOf('formatting', …)`）——一条能力 = 一个腿 =
+ * 两枚 provider（整篇 + 区间），随工厂的回滚 / 幂等纪律一起走。下面是"腿"的闸，不是"文件"的闸。
+ *
  * 桩 monaco 只实现被真正用到的那几格；`applyKojo2Format` 已随批删除（无生产消费方——
  * 保存链路本来就不接它），它那组落地/撤销测试同批移除。
  */
@@ -26,14 +30,11 @@ import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
-import {
-  installKojo2DocumentFormatter,
-  installKojo2RangeFormatter,
-} from '../src/monaco/kojo2-format';
+import { installSlotServiceLegs } from '../src/monaco/slot-service-providers';
 
 const HERE = import.meta.dirname;
 const LAYER_SOURCE = readFileSync(
-  path.resolve(HERE, '..', 'src', 'monaco', 'kojo2-format.ts'),
+  path.resolve(HERE, '..', 'src', 'monaco', 'slot-service-providers.ts'),
   'utf8',
 );
 
@@ -158,8 +159,8 @@ function providerOf(
   kind: ProviderKind,
 ): Record<string, unknown> {
   const fake = fakeMonaco();
-  if (kind === 'document') installKojo2DocumentFormatter(fake.monaco);
-  else installKojo2RangeFormatter(fake.monaco);
+  // 一条腿 = 两枚 provider（整篇 + 区间）一次挂完；这里按 kind 取其中一枚
+  installSlotServiceLegs(fake.monaco, ['formatting']);
   const provider = fake.registrations.find(
     (entry) => entry.kind === kind && entry.selector === selectors[0],
   )?.provider;
@@ -360,10 +361,9 @@ describe('③三态：弃权 / 空表 / 有编辑', () => {
 /* ============================== ④ 注册（共享收口） ============================== */
 
 describe('④注册：两枚 provider 走共享收口 + 能力名 `formatting`（不读开关）', () => {
-  it('两枚各自挂满 selector 清单（descriptor 现算：全铺语言 + 点名 `formatting` 的语言）', () => {
+  it('一条腿挂满 selector 清单，且每门语言恰好两枚（整篇 + 区间）', () => {
     const fake = fakeMonaco();
-    installKojo2DocumentFormatter(fake.monaco);
-    installKojo2RangeFormatter(fake.monaco);
+    installSlotServiceLegs(fake.monaco, ['formatting']);
     expect(fake.registrations.filter((entry) => entry.kind === 'document').map((e) => e.selector))
       .toEqual(FORMAT_SELECTORS);
     expect(fake.registrations.filter((entry) => entry.kind === 'range').map((e) => e.selector))
@@ -373,41 +373,47 @@ describe('④注册：两枚 provider 走共享收口 + 能力名 `formatting`�
     expect(FORMAT_SELECTORS).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID]);
   });
 
-  it('每一条能力挂的是**同一枚** provider；两枚安装器互不越界（整篇不注册区间，反之亦然）', () => {
+  it('每一条能力挂的是**同一枚** provider；两枚互不越界（整篇那枚没有区间方法，反之亦然）', () => {
     const fake = fakeMonaco();
-    installKojo2DocumentFormatter(fake.monaco);
-    const documentOnly = fake.registrations.filter((entry) => entry.kind === 'range');
-    expect(documentOnly).toEqual([]);
-    const providers = new Set(
-      fake.registrations.filter((entry) => entry.kind === 'document').map((entry) => entry.provider),
-    );
-    expect(providers.size).toBe(1);
-
-    const second = fakeMonaco();
-    installKojo2RangeFormatter(second.monaco);
-    expect(second.registrations.filter((entry) => entry.kind === 'document')).toEqual([]);
+    installSlotServiceLegs(fake.monaco, ['formatting']);
+    const documents = fake.registrations
+      .filter((entry) => entry.kind === 'document')
+      .map((entry) => entry.provider as Record<string, unknown>);
+    const ranges = fake.registrations
+      .filter((entry) => entry.kind === 'range')
+      .map((entry) => entry.provider as Record<string, unknown>);
+    // 每门语言各拿到**同一枚**（整条腿建一次，不是每门现造一枚）
+    expect(new Set(documents).size).toBe(1);
+    expect(new Set(ranges).size).toBe(1);
+    expect(documents[0]).not.toBe(ranges[0]);
+    // 互不越界：整篇那枚没有区间方法，区间那枚没有整篇方法
+    expect(typeof documents[0]!.provideDocumentFormattingEdits).toBe('function');
+    expect('provideDocumentRangeFormattingEdits' in documents[0]!).toBe(false);
+    expect(typeof ranges[0]!.provideDocumentRangeFormattingEdits).toBe('function');
+    expect('provideDocumentFormattingEdits' in ranges[0]!).toBe(false);
   });
 
-  it('dispose 幂等（逐枚各撤一次，第二次零动作）', () => {
+  it('dispose 幂等（每门两枚各撤一次，第二次零动作）', () => {
     const fake = fakeMonaco();
-    const handle = installKojo2DocumentFormatter(fake.monaco);
+    const handle = installSlotServiceLegs(fake.monaco, ['formatting']);
     handle.dispose();
-    expect(fake.disposeCalls()).toBe(FORMAT_SELECTORS.length);
+    expect(fake.disposeCalls()).toBe(FORMAT_SELECTORS.length * 2);
     handle.dispose();
-    expect(fake.disposeCalls()).toBe(FORMAT_SELECTORS.length);
+    expect(fake.disposeCalls()).toBe(FORMAT_SELECTORS.length * 2);
   });
 
-  it('半途抛错 ⇒ 已挂上的先撤回，错误原样外抛', () => {
+  it('半途抛错 ⇒ 同一门已挂上的整篇那枚先撤回，错误原样外抛', () => {
     const fake = fakeMonaco(1);
-    expect(() => installKojo2DocumentFormatter(fake.monaco)).toThrow(/桩：注册抛错/);
+    expect(() => installSlotServiceLegs(fake.monaco, ['formatting'])).toThrow(/桩：注册抛错/);
     expect(fake.registrations).toHaveLength(1);
     expect(fake.disposeCalls()).toBe(1);
   });
 
-  it('源码钉子：共享收口 + 能力名；不读开关、不留第二套编辑机制、判据不在本层', () => {
+  it('源码钉子：收口 + 能力名；不读开关、不留第二套编辑机制、判据不在本层', () => {
     const code = codeOf(LAYER_SOURCE);
-    expect(code.match(/registerForLanguageServices\(/g) ?? []).toHaveLength(2);
-    expect(code.match(/'formatting',/g) ?? []).toHaveLength(2);
+    // 收口在安装器里调一次（腿是数据，表里点名一次 `'formatting'`）
+    expect(code).toContain('registerForLanguageServices(');
+    expect(code.match(/legOf\('formatting'/g) ?? []).toHaveLength(1);
     // 原生自建注册（第一参写死 kojo2）已删干净——闸门按这两条形状 grep 归零
     expect(code).not.toMatch(/registerDocumentFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/);
     expect(code).not.toMatch(/registerDocumentRangeFormattingEditProvider\(\s*KOJO2_LANGUAGE_ID/);

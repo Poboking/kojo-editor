@@ -165,8 +165,10 @@ describe('automated：真读源码，读不到就红', () => {
     expect(report.exitCode).toBe(1);
   });
 
-  it('删掉 kojo2 rename 的 self 注册行 ⇒ kojo2/rename FAIL', () => {
-    const rel = 'packages/app/src/monaco/kojo2-rename.ts';
+  it('删掉 kojo2 rename 的表项（槽腿工厂）⇒ kojo2/rename FAIL', () => {
+    // SDK-B5b 车 3（2026-10-31）：改名那枚安装器并进语言无关的槽腿工厂
+    // （`monaco/slot-service-providers.ts` 的 `legOf('rename', …)`），取证点随之搬家。
+    const rel = 'packages/app/src/monaco/slot-service-providers.ts';
     const report = evaluateMatrix({
       reader: fixtureReader({ [rel]: BASE.readFile(rel).replace('registerRenameProvider', 'registerRenameProviderGone') }),
     });

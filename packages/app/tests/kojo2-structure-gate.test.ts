@@ -254,16 +254,12 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
     expect(existsSync(symbolsPath), 'kojo2-symbols.ts 已被 B5b 删除，别再把它加回来').toBe(false);
     for (const rel of [
       'kojo2-semantic.ts',
-      'kojo2-highlight.ts',
-      'kojo2-format.ts',
-      'kojo2-codelens.ts',
       'kojo2-indent.ts',
-      // SDK-B5b 车 1（2026-10-31）：补全 / 悬停的安装器已并进语言无关的槽腿工厂
+      // SDK-B5b 车 1–4（2026-10-31）：补全 / 悬停 / 格式化 / 签名 / 引用 / 改名 / 高亮 / 扩选 /
+      // 行上注解的安装器已并进语言无关的槽腿工厂 ⇒ 判据收成这一枚。
+      // （车 2–4 删掉的七枚 `kojo2-*.ts` 不再逐个读源码：文件不存在，读它反而会把
+      // "删除"这件事变成异常而不是断言。）
       'slot-service-providers.ts',
-      'kojo2-references.ts',
-      'kojo2-rename.ts',
-      'kojo2-signature.ts',
-      'kojo2-selection-range.ts',
       'kojo2-callhierarchy.ts',
     ]) {
       const source = readFileSync(

@@ -24,11 +24,15 @@ import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import type { Kojo2ProjectIndex } from '../src/monaco/kojo2-project-index';
-import { installKojo2RenameProvider } from '../src/monaco/kojo2-rename';
+// SDK-B5b 车 3（2026-10-31）：宿主翻译层并入语言无关的槽腿工厂（`legOf('rename', …)`）。
+import {
+  installSlotServiceLegs,
+  type SlotServiceHost,
+} from '../src/monaco/slot-service-providers';
 
 const HERE = import.meta.dirname;
 const LAYER_SOURCE = readFileSync(
-  path.resolve(HERE, '..', 'src', 'monaco', 'kojo2-rename.ts'),
+  path.resolve(HERE, '..', 'src', 'monaco', 'slot-service-providers.ts'),
   'utf8',
 );
 
@@ -146,14 +150,14 @@ function fakeIndex(files: ReadonlyArray<{ path: string; text: string }>): Kojo2P
 }
 
 function installAndProvider(
-  options: Parameters<typeof installKojo2RenameProvider>[1] = {},
+  options: SlotServiceHost = {},
 ): {
   readonly fake: ReturnType<typeof fakeMonaco>;
   readonly disposable: Monaco.IDisposable;
   readonly provider: Monaco.languages.RenameProvider;
 } {
   const fake = fakeMonaco();
-  const disposable = installKojo2RenameProvider(fake.monaco, options);
+  const disposable = installSlotServiceLegs(fake.monaco, ['rename'], options);
   const registration = fake.registrations.find((entry) => entry.selector === KOJO2_LANGUAGE_ID);
   if (registration === undefined) throw new Error('kojo2 上没有挂 rename provider');
   return {
@@ -182,7 +186,7 @@ function editAt(
 describe('注册：共享收口 + 能力名 rename（kojo2 由 descriptor 点名）', () => {
   it('铺到"全铺语言 + 点名 rename 的语言"；kojo2 在列', () => {
     const fake = fakeMonaco();
-    installKojo2RenameProvider(fake.monaco);
+    installSlotServiceLegs(fake.monaco, ['rename']);
     const selectors = fake.registrations.map((entry) => entry.selector);
     expect(selectors).toEqual(RENAME_SELECTORS);
     expect(selectors).toContain(KOJO2_LANGUAGE_ID);
@@ -197,15 +201,17 @@ describe('注册：共享收口 + 能力名 rename（kojo2 由 descriptor 点名
 
   it('注册半途抛错 ⇒ 先撤回已挂上的再外抛', () => {
     const fake = fakeMonaco(1);
-    expect(() => installKojo2RenameProvider(fake.monaco)).toThrow(/注册 rename 抛错/);
+    expect(() => installSlotServiceLegs(fake.monaco, ['rename'])).toThrow(/注册 rename 抛错/);
     expect(fake.disposeCalls()).toBe(1);
   });
 
   it('源码纪律：只一个注册点、语言 id 不写死、不自己 executeEdits', () => {
     expect(LAYER_SOURCE.match(/registerRenameProvider/g) ?? []).toHaveLength(1);
     expect(LAYER_SOURCE).not.toMatch(/registerRenameProvider\(\s*KOJO2_LANGUAGE_ID/);
-    expect(LAYER_SOURCE).not.toContain('executeEdits');
-    expect(LAYER_SOURCE).not.toContain('applyTextEdits');
+    // 只钉**代码**：头注里提到"不碰 undo 停点"不该把这条针弄红（与 kojo2-format 同一条口径）
+    const code = LAYER_SOURCE.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ 	]*\/\/.*$/gm, '');
+    expect(code).not.toContain('executeEdits');
+    expect(code).not.toContain('applyTextEdits');
   });
 });
 
@@ -304,7 +310,7 @@ describe('model → 请求：身份三格 / 新名 / 快照', () => {
       { path: 'D:/proj/c.kojo2', text: '> {心情}' },
     ]);
     const { provider } = installAndProvider({
-      getIndex: () => index,
+      projectIndex: () => index,
       snapshotLimits: { maxFiles: 1 },
     });
     editAt(provider, fakeModel('# 设 心情 整数 = 0'), 1, 5, '情绪');

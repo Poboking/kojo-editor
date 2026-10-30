@@ -273,8 +273,8 @@ const BUILTIN_PROBES: Readonly<
       { rel: 'monaco/kojo-definition.ts', re: /'definition',\s*\)/ },
       { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'definition'/ },
       // B3e：引用同样归插件（原探针指那枚原生 2.0 provider，现已不存在）。
-      { rel: 'monaco/kojo2-references.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerReferenceProvider/ },
-      { rel: 'monaco/kojo2-references.ts', re: /'references',\s*\)/ },
+      { rel: 'monaco/slot-service-providers.ts', re: /legOf\('references',[\s\S]{0,200}?registerReferenceProvider/ },
+      { rel: 'monaco/slot-service-providers.ts', re: /legOf\('references',/ },
       { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'references'/ },
     ],
   },
@@ -486,7 +486,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '引用',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/find-references.ts（共享收口）+ monaco/kojo2-references.ts',
+        evidence: 'monaco/find-references.ts（共享收口）+ monaco/slot-service-providers.ts（槽腿表）',
         assembled: true,
       },
       {
@@ -494,7 +494,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '重命名',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/erb-rename.ts + monaco/kojo2-rename.ts',
+        evidence: 'monaco/erb-rename.ts + monaco/slot-service-providers.ts（槽腿表）',
         assembled: true,
       },
       {
@@ -510,7 +510,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '格式化',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/kojo-format.ts（共享收口）+ monaco/kojo2-format.ts（共享收口 + 插件供方）',
+        evidence: 'monaco/kojo-format.ts（共享收口）+ monaco/slot-service-providers.ts（formatting 槽腿）',
         assembled: true,
       },
       {
@@ -550,7 +550,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '展开',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/erb-selection-range.ts + monaco/kojo2-selection-range.ts',
+        evidence: 'monaco/erb-selection-range.ts + monaco/slot-service-providers.ts（槽腿表）',
         assembled: true,
       },
       {
@@ -652,15 +652,15 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
     { rel: 'monaco/find-references.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerReferenceProvider/ },
     // B3e（2026-10-29）：2.0 的引用不再自建 provider——共享收口带能力名 `references`，
     // descriptor 用 `slotServices` 点名挂上，应答来自插件（形状同 B3b/B3c/B3d）。
-    { rel: 'monaco/kojo2-references.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerReferenceProvider/ },
-    { rel: 'monaco/kojo2-references.ts', re: /'references',\s*\)/ },
+    { rel: 'monaco/slot-service-providers.ts', re: /legOf\('references',[\s\S]{0,200}?registerReferenceProvider/ },
+    { rel: 'monaco/slot-service-providers.ts', re: /legOf\('references',/ },
     { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'references'/ },
   ],
   rename: [
     { rel: 'monaco/erb-rename.ts', re: /registerRenameProvider\(\s*ERB_LANGUAGE_ID/ },
     // B3e（2026-10-29）：2.0 改名同批走共享收口（能力名 `rename`）。
-    { rel: 'monaco/kojo2-rename.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerRenameProvider/ },
-    { rel: 'monaco/kojo2-rename.ts', re: /'rename',\s*\)/ },
+    { rel: 'monaco/slot-service-providers.ts', re: /legOf\('rename',[\s\S]{0,200}?registerRenameProvider/ },
+    { rel: 'monaco/slot-service-providers.ts', re: /legOf\('rename',/ },
     { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'rename'/ },
   ],
   completion: [
@@ -680,15 +680,15 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   format: [
     { rel: 'monaco/kojo-format.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerDocumentFormattingEditProvider/ },
-    // B3d（2026-10-28）：2.0 的格式化不再由 `kojo2-format.ts` 直挂 `kojo2` —— 整篇与区间
-    // 两枚 provider 都改走共享收口（能力名 `formatting`），由 descriptor 的 `slotServices`
-    // 点名挂上，应答来自插件 `@kojo/plugin-kojo-lang`。取证点随之从"那条原生注册行"变成
-    // "两处声明"（收口带能力名 + 语言进 descriptor），与补全 / 大纲同一条形状。
+    // B3d（2026-10-28）：2.0 的格式化改走共享收口（能力名 `formatting`），由 descriptor 的
+    // `slotServices` 点名挂上，应答来自插件 `@kojo/plugin-kojo-lang`。
+    // SDK-B5b 车 2（2026-10-31）：整篇 + 区间两枚 provider **同属一条槽腿**，取证点落在
+    // `slot-service-providers.ts` 的 `legOf('formatting', …)` 表项（登记闭包里两枚 API 各一次）。
     {
-      rel: 'monaco/kojo2-format.ts',
-      re: /registerForLanguageServices\([\s\S]{0,500}?registerDocumentFormattingEditProvider/,
+      rel: 'monaco/slot-service-providers.ts',
+      re: /legOf\('formatting',[\s\S]{0,400}?registerDocumentFormattingEditProvider/,
     },
-    { rel: 'monaco/kojo2-format.ts', re: /'formatting',\s*\)/ },
+    { rel: 'monaco/slot-service-providers.ts', re: /'formatting',/ },
     { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'formatting'/ },
   ],
   diagnostics: [
@@ -729,8 +729,8 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
     { rel: 'monaco/erb-selection-range.ts', re: /'selectionRange',\s*\)/ },
     // B3f（2026-10-29）：2.0 的扩选不再自建 provider——共享收口带能力名 `selectionRange`，
     // descriptor 用 `slotServices` 点名挂上，应答来自插件（形状同 B3b/B3c/B3d/B3e）。
-    { rel: 'monaco/kojo2-selection-range.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerSelectionRangeProvider/ },
-    { rel: 'monaco/kojo2-selection-range.ts', re: /'selectionRange',\s*\)/ },
+    { rel: 'monaco/slot-service-providers.ts', re: /legOf\('selectionRange',[\s\S]{0,200}?registerSelectionRangeProvider/ },
+    { rel: 'monaco/slot-service-providers.ts', re: /legOf\('selectionRange',/ },
     { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'selectionRange'/ },
   ],
   peek: [
@@ -793,11 +793,12 @@ const ASSEMBLY_PROBES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   refs: [
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/find-references'/ },
-    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo2-references'/ },
+    // SDK-B5b 车 3（2026-10-31）：2.0 引用归槽腿工厂（同一枚安装器里装配）
+    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/slot-service-providers'/ },
   ],
   rename: [
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/erb-rename'/ },
-    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo2-rename'/ },
+    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/slot-service-providers'/ },
   ],
   completion: [
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/erb-completion'/ },
@@ -805,7 +806,7 @@ const ASSEMBLY_PROBES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   format: [
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo-format'/ },
-    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo2-format'/ },
+    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/slot-service-providers'/ },
   ],
   diagnostics: [
     { rel: 'ui/EditorPane.tsx', re: /query\('ui\.editor\.decorator'\)/ },
@@ -825,7 +826,7 @@ const ASSEMBLY_PROBES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   expand: [
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/erb-selection-range'/ },
-    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo2-selection-range'/ },
+    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/slot-service-providers'/ },
   ],
   peek: [
     { rel: GLOBAL_PROVIDERS, re: /openModelFor:\s*modelForPeekPath/ },
@@ -1029,17 +1030,17 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
     expect(apis).not.toContain('registerDocumentHighlightProvider');
     expect(apis).not.toContain('registerSelectionRangeProvider');
     expect(sharedRegistrationFiles('registerDocumentHighlightProvider')).toEqual(
-      expect.arrayContaining(['monaco/erb-highlight.ts', 'monaco/kojo2-highlight.ts']),
+      expect.arrayContaining(['monaco/erb-highlight.ts', 'monaco/slot-service-providers.ts']),
     );
     expect(sharedRegistrationFiles('registerSelectionRangeProvider')).toEqual(
-      expect.arrayContaining(['monaco/erb-selection-range.ts', 'monaco/kojo2-selection-range.ts']),
+      expect.arrayContaining(['monaco/erb-selection-range.ts', 'monaco/slot-service-providers.ts']),
     );
     // B3g（2026-10-30）：行上注解同理——2.0 那条改走共享收口（能力名 `codeLens` + descriptor
     // 点名），v1 方言那条本来就在收口里（`kojo-code-lens.ts`）。两门都不再有单语言注册行，
     // 反向钉住"看不见它"，正向钉住两处收口都还在（kojo2 这枚是本批新写的）。
     expect(apis).not.toContain('registerCodeLensProvider');
     const codeLensShared = sharedRegistrationFiles('registerCodeLensProvider');
-    expect(codeLensShared).toContain('monaco/kojo2-codelens.ts');
+    expect(codeLensShared).toContain('monaco/slot-service-providers.ts');
     expect(codeLensShared).toContain('monaco/kojo-code-lens.ts');
   });
 

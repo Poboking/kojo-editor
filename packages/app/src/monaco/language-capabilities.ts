@@ -271,8 +271,9 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     // 宿主侧零原生 provider；供方 = 插件 `@kojo/plugin-kojo-lang`。
     [LanguageCapability.Outline]: 'shared',
     // B3d（2026-10-28）：格式化走**共享收口**（能力名 `formatting`）——规则住
-    // `@kojo/kojo-lang/format`，供方是插件；宿主 `monaco/kojo2-format.ts` 只剩两枚 provider 的
-    // model → 请求 / 契约 → Monaco 翻译，装配点两枚 installer 都调用（见 language-parity 闸）。
+    // `@kojo/kojo-lang/format`，供方是插件；宿主那一格（两枚 provider 的 model → 请求 /
+    // 契约 → Monaco 翻译）**SDK-B5b 车 2（2026-10-31）**起住 `monaco/slot-service-providers.ts`
+    // 的 `legOf('formatting', …)`（一条能力两枚 provider，装配点只调一枚工厂）。
     // 落到 ERB / kojo1 上的那一枚不抢它们的话语权：插件对非 kojo2 弃权，而它们自己的格式化
     // provider 后注册、按 Monaco 的"同分后注册在前"排第一位。
     [LanguageCapability.Format]: 'shared',
@@ -292,11 +293,13 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     [LanguageCapability.Indent]: 'self',
     [LanguageCapability.Brackets]: 'builtin',
     // B3e（2026-10-29）：引用 / 改名同批走共享收口（能力名 `references` / `rename`），判据住
-    // `@kojo/kojo-lang` 的两枚叶子，供方是插件，宿主只剩请求与翻译。
+    // `@kojo/kojo-lang` 的两枚叶子，供方是插件，宿主只剩请求与翻译；**SDK-B5b 车 3
+    // （2026-10-31）**起这两格也住 `monaco/slot-service-providers.ts` 的槽腿表。
     [LanguageCapability.References]: 'shared',
     [LanguageCapability.Rename]: 'shared',
     // B3d（2026-10-28）：签名帮助同批走**共享收口**（能力名 `signatureHelp`）——判据住
     // `@kojo/kojo-lang/signature`，供方是插件；`@巡` 的集合事实由插件经 `adapter-source` 现取。
+    // 宿主那一格（含 `(` / `,` 触发字符）自 **SDK-B5b 车 2** 起住槽腿表。
     [LanguageCapability.Signature]: 'shared',
     // B2c（2026-10-24）起 `inlay` 走**共享收口**：`kojo-inlay-hints.ts` 的
     // `installInlayHintsProvider` 带能力名 `inlayHint` 挂上（kojo2 descriptor 点名
@@ -306,7 +309,8 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     [LanguageCapability.Inlay]: 'shared',
     // B3g（2026-10-30）：行上注解同批走共享收口（能力名 `codeLens`）——判据住
     // `@kojo/kojo-lang/codelens`（计数复用包内 references），供方是插件的 `kojo2-codeLens`，
-    // 宿主 `monaco/kojo2-codelens.ts` 只剩请求与 Monaco 翻译（翻译复用 v1 那枚既有函数）。
+    // 宿主那一格只剩请求与 Monaco 翻译（翻译复用 v1 那枚既有函数）——**SDK-B5b 车 4
+    // （2026-10-31）**起住 `monaco/slot-service-providers.ts` 的 `legOf('codeLens', …)`。
     [LanguageCapability.CodeLens]: 'shared',
     [LanguageCapability.Implementation]: {
       exempt:
@@ -314,7 +318,8 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     },
     // B3f（2026-10-29）：同符号高亮 / 结构化扩选同批走共享收口（能力名 `documentHighlight` /
     // `selectionRange`）——判据住 `@kojo/kojo-lang/highlight` / `/selection-range`，供方是插件，
-    // 宿主 `monaco/kojo2-highlight.ts` / `kojo2-selection-range.ts` 只剩请求与 Monaco 翻译。
+    // 宿主只剩请求与 Monaco 翻译——**SDK-B5b 车 4（2026-10-31）**起两条腿都住
+    // `monaco/slot-service-providers.ts`（`legOf('documentHighlight' | 'selectionRange', …)`）。
     [LanguageCapability.Highlight]: 'shared',
     [LanguageCapability.Selection]: 'shared',
     [LanguageCapability.CallHierarchy]: {

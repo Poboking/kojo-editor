@@ -26,7 +26,7 @@
  *
  * ## 一把尺子（本文件最重要的纪律）
  *
- * 每份文件的符号事实直接取 {@link kojo2ReferenceSymbolsOf}（`kojo2-references.ts`）：
+ * 每份文件的符号事实直接取 {@link kojo2ReferenceSymbolsOf}（`@kojo/kojo-lang/references`）：
  * 声明表来自 `kojo2DocumentOf`（`@函 / # 对照表 / # 池 / # 模 / # 设 / # 设 / # 幕`），
  * 事件名来自同一份 `# 机` / `@织` 挂点判据，引用位来自同一套表达式扫描（插值 / 调用 /
  * 条件 / `# 对照表 由` / `@算` 体 / `@返` / `@着色` / 数组长度）。
@@ -74,7 +74,10 @@ import {
   type Kojo2DeclarationKind,
   type Kojo2Document,
 } from '@kojo/kojo-lang';
-import type { Kojo2RenameResolvers } from './kojo2-rename';
+// SDK-B5b 车 3（2026-10-31）：`monaco/kojo2-rename` / `kojo2-references` 两枚转发壳随批删除
+// （它们的安装器已并进 `slot-service-providers.ts`），这里直接取包叶——同一份实现、同一个
+// 模块图位置（原来那两枚也只是转发这两条包叶）。
+import type { Kojo2RenameResolvers } from '@kojo/kojo-lang/rename';
 import {
   kojo2ReferenceCandidatesOf,
   kojo2ReferenceSymbolsOf,
@@ -83,7 +86,7 @@ import {
   type Kojo2ReferenceSiteKind,
   type Kojo2ReferenceSpan,
   type Kojo2ReferenceSymbolKind,
-} from './kojo2-references';
+} from '@kojo/kojo-lang/references';
 
 /* ============================== 公共形状 ============================== */
 
