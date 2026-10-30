@@ -885,13 +885,28 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ⇒ 闸 **3,234 → 3,254**（余量约 0.4 KB；文件闸仍 199）。这一档加的是**能力**：
     //     改名（函数名 + `$` 标签）从此走 `ui.editor.languageService` 槽，宿主不认识 ERB；
     //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
+    //   - **ERB 调用层级判据进常驻插件（2026-10-31，LAU-4 调用层级腿）**：读数 **199 文件 /
+    //     3,268 KB**（3,346,097 B = 3,331,662 + 14,435）——文件数零变化（199 未动）；净增
+    //     **逐枚对账精确相等**，落在图内**六枚**：`erb-parser/src/symbols.ts` +6,262（调用层级
+    //     三条腿：入边剔 `definition` / 出边只认 `call` / 所属函数反查 `enclosingAt` 兜底）、
+    //     `plugin-api/src/slots.ts` +4,348（`callHierarchy` 请求 / 结果 / 节点 / 调用点四形状）、
+    //     `erb-parser/src/plugin.ts` +3,040（槽供方 + 段头）、`erb-parser/src/index.ts` +405
+    //     （宿主 / 测试经包读同一批函数）、`plugin-api/src/index.ts` +276（契约再导出）、
+    //     `ui/shell-overlays.ts` +104（面板依赖从 `functionAt` 换成槽贡献表——宿主本来就是
+    //     开机图里的装配点，这一格只有两行接线）。
+    //     **宿主 `monaco/erb-call-hierarchy.ts` −7,561 B 不进图**（monaco 装配是懒边），
+    //     另五枚宿主改动（`erb-callhierarchy-provider` −527、`kojo-language-service-legs` +2,324、
+    //     `CallHierarchyOverlay` +1,821、`language-capabilities` +83、`monaco/*` 其余）同样不在图上
+    //     ——"判据全在图内、宿主只剩翻译"的账面形态与改名腿同款。新增测试
+    //     `erb-parser/tests/call-hierarchy.test.ts`（+11,797 B）不在首屏（测试不进图）。
+    //     ⇒ 闸 **3,254 → 3,268**（余量约 0.4 KB；文件闸仍 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,254 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,268 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_254);
+    expect(totalKb).toBeLessThanOrEqual(3_268);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
