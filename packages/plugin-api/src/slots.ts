@@ -833,7 +833,17 @@ export const EDITOR_SEMANTIC_TOKEN_TYPES = ['function', 'variable', 'parameter']
 /** 语义着色的中性修饰（同上口径；`declaration` = 声明位，`readonly` = 写了会编译不过的只读名字） */
 export const EDITOR_SEMANTIC_TOKEN_MODIFIERS = ['declaration', 'readonly'] as const;
 
-export type EditorSemanticTokenType = (typeof EDITOR_SEMANTIC_TOKEN_TYPES)[number];
+/**
+ * 语义着色的类别名（additive，B3 语义收口 2026-10-30）。
+ *
+ * 三值表是**缺省词表**（名字层），仍是没声明 legend 的语言唯一认的名字；语言在
+ * descriptor 里声明了自己的 legend（kojo2 的 `role.*`）就发那一套。两边不许混：span 的
+ * 名字必须在该请求所属语言的 legend 里，否则宿主丢掉并告警（不猜相近类别）。
+ */
+export type EditorSemanticTokenType =
+  | (typeof EDITOR_SEMANTIC_TOKEN_TYPES)[number]
+  // `string & {}` 保住上面三个字面量的补全，同时允许语言自己的 legend 名字。
+  | (string & {});
 export type EditorSemanticTokenModifier = (typeof EDITOR_SEMANTIC_TOKEN_MODIFIERS)[number];
 
 /**
@@ -851,6 +861,30 @@ export interface EditorSemanticTokenSpan {
 }
 
 /**
+ * 一条**结构捕获**（additive，B3 语义收口 2026-10-30）：宿主预取的结构引擎 capture 快照，
+ * 按契约坐标（1 基行 / 1 基 UTF-16 码元列 / `endColumn` 半开）交出。
+ *
+ * 槽 `provide` 是同步的、结构引擎是异步的 —— 与 B3h 折叠同一形态：宿主打开 / 改动时预取，
+ * 按 model 版本缓存，缺席不 await（供方本轮答空）。`name` 是捕获名（不带 `@`），
+ * "捕获 → token 名"的翻译归供方。`origin`：`main` = 主树（缺省），`injection` = `@原生`
+ * 一类注入体子树；子树在覆盖列上优先于主树，谁覆盖谁由供方裁，宿主不猜。
+ */
+export interface EditorSemanticCapture {
+  /** 捕获名（不带 `@`；`none` / 空名 = 这一条不上色） */
+  readonly name: string;
+  /** 1 基行号 */
+  readonly line: number;
+  /** 1 基起始列（UTF-16 码元） */
+  readonly startColumn: number;
+  /** 1 基结束列（**半开**：`endColumn` 那一格不涂） */
+  readonly endColumn: number;
+  /** 跨行捕获的末行（1 基，闭区间；缺省 = `line`，即单行捕获） */
+  readonly endLine?: number;
+  /** 来自哪棵树（缺省 `main`）；`injection` = 注入体子树的捕获 */
+  readonly origin?: 'main' | 'injection';
+}
+
+/**
  * 语义着色请求：形状与 `documentSymbol` / `foldingRange` 逐字同族（整篇结构、不是光标处记号），
  * 因此 `text` 同样是**模型全文**、`provide` 同样是**纯函数**（不读盘、不写盘、不发事件）。
  */
@@ -861,6 +895,13 @@ export interface EditorSemanticTokenRequest extends EditorDocumentIdentity {
   readonly project: GameProject | null;
   /** 文件行数（体量事实，供贡献方按大小自行降级；缺省 = 未知，按不降级处理） */
   readonly lineCount?: number;
+  /**
+   * 宿主预取的**结构捕获快照**（additive，B3 2026-10-30）。缺席 = 还没预取到（或这门
+   * 语言没有结构层）⇒ 供方同步答空，不等待、不自己起解析。旧贡献方不认识 ⇒ 行为不变。
+   */
+  readonly captures?: readonly EditorSemanticCapture[];
+  /** 快照是否覆盖请求全文（additive）；`false` / 缺省 = 部分或来源失败，供方不据此猜。 */
+  readonly capturesComplete?: boolean;
   /**
    * 宿主这次**真的**要哪一段（additive，R3 2026-10-28）。缺省 = 整篇。
    *

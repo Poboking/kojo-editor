@@ -6,7 +6,7 @@
 | 日期 | 2026-10-25（v1.0）· 2026-10-25（v1.1 修订，逐条带 file:line 取证） |
 | 状态 | **v1.1 交付状态（2026-10-25 七路批已落 dev）**：LAU-0 `ebf8e03c` · GATE `6ca3c4c3` · 2a `f006547c` · D1a `875b05d3` · 1a `4c1487c4` · 6a `45d18791` · SYNTAX `3a76d857`＋`87b7e26c` · FIXTURE `b9e87b2e`（交付回执在各提交信息，基线读数见 `STATE.md` §一）。设计主张仍是设计稿——未落地的批次按 §8 推进。用户 2026-10-25 已拍板：§6.1 采用方案 A（`.kojo` 让给 2.0）、断言关键字定为 `# 方言`（**词位已入表并过 wasm 棘轮，消费方已接线**——`# 方言` 由词法 / 文法 / Monarch 三面认出，解析链按 D11 只做断言：与解析结果不一致 ⇒ `core/dialect/mismatch`，不再等 LAU-D1b）。**LAU-1 / LAU-D1b 的两个前置已解**：① 契约落点由用户 **2026-10-27 裁定 = `@kojo/kojo-core`**（BOARD K2-CONTRACT 已结，不再镜像 plugin-api）；② LAU-4 仍与 **ERB-PARITY**、SDK **B4/B5** 同文件，须串行合流（§8）。已做完的是 LAU-0（＝v1.1 文档批）/ LAU-1a / LAU-2a / LAU-6a + GATE / SYNTAX / FIXTURE / D1a；**LAU-3 框架批已交付（2026-10-27，分支 `b/qoder/1027-lau-framework`）**——§6 的 id 二选一已按用户口径定案＝改名 `kojo-legacy`（插件 id / 包名不动），缺省档翻 `2.0-default`，封存层连语义分析一起停；**LAU-3b 解耦批（同分支）已落前半**：kojo1 插件族按切流阶段装配（缺省档不实例化）、ERB / kojo2 / 宿主共用词表迁至 `@kojo/kojo-vocab`、v1 转译包整体离开开机静态图。**LAU-3b 收尾批（2026-10-27，同分支）已交付**：`.kojo → .kojo1` 改名工具（内容指纹只挑 v1 写法、清单先过目、逐文件写权限闸 + 写前备份 + 只改名不改内容；只读域拒绝）与封存档首开说明（一次性台账 + 直达设置页）。**扩展名翻转（`.kojo` 让给 2.0）已随本批最终落地（2026-10-27，用户口径「现在就让」）**：路由只认扩展名——`.kojo` / `.kojo2` → 2.0，`.kojo1` → kojo1；内容指纹退居迁移与改名工具的提示面（不再参与路由/归属）；迁移是原地改写（候选恒 `.kojo`），`resolveSugarTarget` 只认封存层 `.kojo1`。**LAU-4（ERB 进槽、与 kojo2 同一条供方路径）方案未变，仍等 SDK B4/B5** |
 | 范围 | ① ERB / kojo v1（封存）/ kojo2 三条并行结构栈收成一套：**一份协议、一份角色表、一个槽位契约**；② 多 era 适配收进**方言层**（§5），语法不分叉 |
-| 前置 | `KOJO-2.0-LANGUAGE-SPEC.md` §0.2（单一模式）/ §5.3 / §12.1（旧拼写 error+迁移）/ §10（adapter 契约，**§10.1 十五格就是本方案的事实面**）；`HANDOFF-kojo2-sdk-packages.md` B0–B5；`HANDOFF-erafl-adapter.md`（多 era 事实）；**BOARD 在办批次**：`K2-CONTRACT`（契约落点待 D0 裁决）、`ERB-PARITY`（同文件，串行）、`POS-UTIL`（坐标换算收口，§4.6 的 `includedRanges` 归它管） |
+| 前置 | `KOJO-2.0-LANGUAGE-SPEC.md` §0.2（单一模式）/ §5.3 / §12.1（旧拼写 error+迁移）/ §10（adapter 契约，**§10.1 十五格就是本方案的事实面**）；**BOARD 在办批次**：`K2-CONTRACT`（契约落点待 D0 裁决）、`ERB-PARITY`（同文件，串行）、`POS-UTIL`（坐标换算收口，§4.6 的 `includedRanges` 归它管） |
 | 不做 | 不改 2.0 语法；不动 `EDITOR_SEMANTIC_TOKEN_TYPES`；不新增 workspace 包；**不为任何 era 分叉语法** |
 
 ---
@@ -689,11 +689,10 @@ MISSING·类型计数·缩进面偏差**全为 0**：
 
 四条实测事实（v1.1：出处逐条标注——第 1 条是 `ab1c5146` 的**修前**状态与当时**现存**的三处同类点
 （**该三处已由 LAU-1a `4c1487c4` 收掉，改口见其下**），
-第 2、3 条出自 `HANDOFF-erafl-adapter.md`，第 4 条是适配器盘点），
+第 2、3 条出自 `packages/plugins/erafl-adapter` 实现盘点，第 4 条是适配器清单），
 一个都不是"还没做"，而是"做错了"或"只做了一半"：
 
-1. **宿主把 2.0 的 adapter 写死成 eraTW** —— **这一条已于 2026-10-24 修掉**（`ab1c5146`，即
-   `HANDOFF-erafl-adapter.md:285-327` 的入口 A；该 handoff `:287` 写的"现状：写死"是修前状态）。
+1. **宿主把 2.0 的 adapter 写死成 eraTW** —— **这一条已于 2026-10-24 修掉**（`ab1c5146`；修前"写死"为当时现状）。
    今天 `ui/editor-pane/use-monaco-instance.ts:283` 是
    `ensureGlobalProviders({ kojo2Adapter: () => kojo2AdapterForProject(kernel.project.current()) })`：
    按**当前项目**的 v1 `adapterId` 从组合根登记簿现取，取不到 ⇒ `null`
@@ -721,16 +720,16 @@ MISSING·类型计数·缩进面偏差**全为 0**：
    `ERATW_GAME_ADAPTER.storageClasses` 与 `gameFingerprint.digest`；
    `ui/kojo2-project-scan-adapter.ts:48-51` 默认装载器 `loadEratwGameAdapter` 无条件 eraTW。）
 2. **eraFL 的口上主战场是 XML**（`<command com="300" name="会話" kojoPlace="TOP">`，出处
-   `HANDOFF-erafl-adapter.md:51`），ERB 侧只剩一个注册壳。于是 2.0 的 `# 机` / `@织` / `# 对照表` / `# 池` / `选项`
+   `packages/plugins/erafl-adapter/src`），ERB 侧只剩一个注册壳。于是 2.0 的 `# 机` / `@织` / `# 对照表` / `# 池` / `选项`
    在作者真正写东西的地方**没有落点**；照抄 eraTW 那 16 件，作者打开口上 XML 会发现"什么也没变"。
-   （同一份 handoff `:97` 还有一条更硬的事实：eraFL 的九事件里**只有 4 个是引擎事件**，其余五个是
+   （适配器实现里还有一条更硬的事实：eraFL 的九事件里**只有 4 个是引擎事件**，其余五个是
    eraFL 自己包的一层——这正是"事件目录必须是数据"的直接证据。）
 3. **事件架构因 era 而异**：eraTW-family 唯一函数 / eraSQN 共享 `EVENTTRAIN` / eraFL `RESULTS` 元数据 /
    eraKoumakan `KOJO_MESSAGE_*`。这是**同一个概念的不同落点**，不是几种语法。
    ⚠ v1.0 这条有两处失真，已改：① 说"四种"却列了五项；② 末项 `eraNTR 无口上层` **在本仓无据**——
    `eraNTR` 全仓除本文件外零命中，六个适配器是 eratw / erafl / eraakumamaid / erakoumakan / erasqc / eratohok
    （`adapter-manifest.ts:49-103`），而"eraSQN 共享 `EVENTTRAIN`"也只是 spec §10.5 里的举例、不是已适配事实。
-   被引的 `HANDOFF-erafl-adapter.md` 里**没有**跨 era 事件架构分类（其 §2 是 eraFL 四处结构差异 `:44`）。
+   早期交接件里**没有**跨 era 事件架构分类（只有 eraFL 四处结构差异）。
    结论（同一概念、不同落点 ⇒ 归事实面而非语法）不变，但论据只保留已适配的四个 era，
    跨 era 分类要立论得另做取证（属 RESEARCH，不属本稿）。
 4. **六个适配器里四个没有 2.0 面**（v1.1 新增，直接决定 §5.6 / §8 的排期）：
@@ -1175,7 +1174,7 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 | **LAU-D1** 方言解析链<br>（**契约片 ✅ `875b05d3`＝LAU-D1a；上屏片 D1b 等 D0 落点裁决**；可与 LAU-1/2 并行） | **不新造 `dialect.ts`**（D13）：`GameAdapter` additive 加 `carriers?`；`EditorDocumentIdentity.dialect?`；`dialect-resolver`（识别链 → binding，`workspace.json` 的 `meta` 只做覆盖）；状态栏显示方言。**注意 LAU-1a 已经把三处错事实点收掉了，这批不再包含它们** | 打开 eraFL 工程，状态栏显示 `erafl`；未绑定时事实类服务返回空 + 一条 `core/dialect/unbound`，**不出现任何 eraTW 事实**；覆盖与 `detect()` 不一致 ⇒ `core/dialect/mismatch`（error）且以覆盖为准；`pnpm audit:language` ✅ | `carriers` 与 `dialect?` 都是可选格，删掉即回滚（adapter 本来就从插件取） |
 | **LAU-D2** 事实面接线 + `dialect lint` | **只动 2.0 语言面**（v1 十二个可选槽一行不改，见 §5.2 尾注）：补全 / 悬停 / 签名 / 符号 / 跳转 / 诊断改吃当前项目的 `GameAdapter`；`# 机` / `@织` 的事件名按 `eventCatalog` 校验；`dialect lint` 七项；~~先给 core 闭集加 6 枚码~~（**已由 LAU-D1a `875b05d3` 加好**，§5.5 尾注，本批直接从"发码"起步）；把 `erb-language.ts:159` 与 `erb-parser/src/undefined-name.ts:148-240` 的引擎变量族外提到方言数据 | 方言矩阵（eraTW + eraFL，**夹具已就位 `b9e87b2e`**，见 §5.6 判据 2）同一组断言全绿；把 eraTW 的事实喂给 eraFL 夹具 ⇒ **必红**；**四个只有 v1 面的适配器读数列不变**（§5.6 判据 4） | 每类事实一个 commit，逐个可回 |
 | **LAU-D3** 多载体（eraFL 的 XML 面） | `carriers` 归属；`kojo-xml` descriptor 接方言：`command` / `name` / `kojoPlace` 由 `eventCatalog` 校验（对齐既有 `plugin-api/src/kojo-xml.ts` + `WellKnownServices.KojoXml`）；ERB 壳函数得到"这条事件在 xml"的提示 | 打开 eraFL 口上 XML：`command` 有补全、未登记 `command` 报 `core/event/unknown`；`event/wrong-carrier` 能把"eraFL 的 `会話` 写在 ERB 里"判出来；ERB 壳函数不再被当成"没实现的口上" | 载体绑定是数据，删掉即回到"XML 只是数据格式面" |
-| **LAU-D4** 方言包 + 翻译表<br>（**与 SDK B5 合并派工**） | eraTW / eraFL 两枚方言数据（**纯数据**，即 spec §10.1 十五格的取值）；日文原名走 aliases；`conformance` 夹具。⚠ `HANDOFF-kojo2-sdk-packages.md:226` 已把「eraFL 写自己的 2.0 profile」分给 B5——**同一件事不要派两次**，两批合并 | 新增第三个 era 只加一个包：宿主零改动、语法零改动，矩阵自动跑第三列 | 包可卸载 |
+| **LAU-D4** 方言包 + 翻译表<br>（**与 SDK B5 合并派工**） | eraTW / eraFL 两枚方言数据（**纯数据**，即 spec §10.1 十五格的取值）；日文原名走 aliases；`conformance` 夹具。⚠ 「eraFL 写自己的 2.0 profile」当年已把分给 B5——**同一件事不要派两次**，两批合并 | 新增第三个 era 只加一个包：宿主零改动、语法零改动，矩阵自动跑第三列 | 包可卸载 |
 
 **七路批的落点与偏差（2026-10-25，组长 krosama；逐枚回执在各自提交信息里）**
 
@@ -1300,7 +1299,7 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 | 6 | A | `providers.ts` 里「那处」`if (ERB)` | **两处**（onSyntax / onSyntaxClear）；另有九处按具体语言 id 分支 | `tree-sitter/providers.ts:378,385`；清单见 §3-R1 |
 | 7 | A | 注入节点名 `native_block` | **`native_body`**（`native_block` 全仓零命中） | `grammar.v2.js:133,167,254`、`node-types.v2.json:45,87,331` |
 | 8 | A | 「宿主把 2.0 adapter 写死成 eraTW（`use-monaco-instance.ts:280`）」 | **已于 2026-10-24 修掉**（`ab1c5146`，入口 A）；现存同类点是另外三处 + 一枚 `'erafl'` 字面量分支 | `use-monaco-instance.ts:283`、`bootstrap.ts:45-58,250-263`、`App.tsx:237-249,406,421`、`kojo2-project-scan-adapter.ts:48-51` |
-| 9 | A | 「事件架构有四种」并列五项、含 `eraNTR` | 改为「因 era 而异」，删 `eraNTR`（本仓无据）；补 eraFL 九事件里 4 引擎 / 5 自包的真事实 | `adapter-manifest.ts:49-103`、`HANDOFF-erafl-adapter.md:44,97` |
+| 9 | A | 「事件架构有四种」并列五项、含 `eraNTR` | 改为「因 era 而异」，删 `eraNTR`（本仓无据）；补 eraFL 九事件里 4 引擎 / 5 自包的真事实 | `adapter-manifest.ts:49-103`、`erafl-adapter` 实现 |
 | 10 | A | 工程根 `kojo.project.json` | **该文件不存在**；真清单是作者工作区的 `workspace.json`（`meta` 可 additive） | `plugin-api/src/workspace.ts:22,38-46`、`kernel/src/workspace.ts:155,169,185` |
 | 11 | A | LAU-5「实测 15.7ms」 | **本仓无出处**，改为该批自己出读数 | `STATE.md` / `BASELINES.md` 零命中 |
 | 12 | B | D3：取消 `change`，每版传全文 | **保留差集**，`parse` 走 `text` \| `edit` 二选一；「结构化克隆零拷贝」的说法纠正 | `edit.ts:38`、`client.ts:285-303`；性能批 `483098b7` |
@@ -1309,7 +1308,7 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 | 15 | B | §5.5 七个诊断码 | 四行**复用既有 core 码**、六枚**新增进 core 闭集**（第 7 枚 `core/injection/child-failed` 归 LAU-6）；`dialect/*`、`injection/*` 按今日 `DiagnosticCode` 过不了类型 | `kojo-core/src/diagnostics.ts:14,20-247,249,251`、`adapter.ts:576-593,590` |
 | 16 | B | §5.3「`# 方言` 零语法改动」 | 必须**重生成 `tree-sitter-kojo2.wasm`**，且只能追加在 `KOJO_DECL_WORDS` 尾部 | `grammar.v2.js:70,218-229`、`tools/build-v2.mjs`、`kojo2-format.ts:55,77` |
 | 17 | B | §9 判据用裸 grep「零命中」 | 改走 `tools/audit-language.mjs`，继承 `audit-decoupling` 三条豁免，并标注**今日基线**（257 行 / 62 行） | `tools/audit-decoupling.mjs:37-47,69,78-85,133` |
-| 18 | B | §8 批次表 | 增 **LAU-0 / LAU-1a / LAU-2a / LAU-3b / LAU-6a** 五枚；标注 LAU-1/D1 等 D0 裁决、LAU-3/4 与 ERB-PARITY + SDK B4/B5 串行、LAU-D4 与 B5 合并 | §8 排期纪律段、`HANDOFF-kojo2-sdk-packages.md:36-41,226` |
+| 18 | B | §8 批次表 | 增 **LAU-0 / LAU-1a / LAU-2a / LAU-3b / LAU-6a** 五枚；标注 LAU-1/D1 等 D0 裁决、LAU-3/4 与 ERB-PARITY + SDK B4/B5 串行、LAU-D4 与 B5 合并 | §8 排期纪律段 |
 | 19 | B | §6.1 方案 A 只写"一键改名工具" | 补四笔代价：50 处引用 / 18 文件、cutover 判据**翻面**、常量外字面量、工具不存在且要写**只读域**（须走 `writablePaths` 批准） | `sugar.ts:1214`、`kojo2-cutover.ts:162,361-390`、`corpus.ts:66`、`migrate/*` |
 | 20 | B | §6 语言 id 直接改 `kojo-legacy` | 指出改 id 与改扩展名是两笔代价，给出"保留 `kojo-sugar` + `availability:'legacy'`"的更便宜选项，LAU-3 前定案 | `kojo-language.ts:35` |
 | 21 | B | §5.6 矩阵三条判据 | 增第 4 条「**v1 面不退化**」：四个只有 v1 面的适配器读数逐格相等（§9-11 同源） | §5.1 事实 4 的适配器盘点表 |

@@ -131,7 +131,7 @@ describe('顶层 `[SKIPSTART]` … `[SKIPEND]`：写形 → 编译 → 块内逐
   it('AST 形态＝复用现成 `rawFunctionBlock`（不新增节点种类 ⇒ codegen / formatter 零改动的根据）', () => {
     const doc = svc().parse(source);
     // 公开契约把 `topLevel` 收窄成「别名 + 时机」，`buildDoc` 实际装的是全量 `TopNode`
-    // （口径同 `sugar-autoidx.perf.test.ts`：按内部视图取那枚块节点）
+    // （按内部视图取那枚块节点）
     const inner = doc.topLevel as unknown as readonly TopNode[];
     const block = inner.filter((n): n is RawFunctionBlock => n.kind === 'rawFunctionBlock');
     expect(block).toHaveLength(1);

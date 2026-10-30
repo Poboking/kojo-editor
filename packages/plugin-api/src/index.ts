@@ -667,6 +667,7 @@ export type { SearchScopeContribution, SearchScopeOption } from './slots';
 /* ---- 语义着色判别成员（1016 独占追加区块；勿在他处重排） ---- */
 export { EDITOR_SEMANTIC_TOKEN_TYPES, EDITOR_SEMANTIC_TOKEN_MODIFIERS } from './slots';
 export type {
+  EditorSemanticCapture,
   EditorSemanticTokenModifier,
   EditorSemanticTokenRequest,
   EditorSemanticTokenResult,

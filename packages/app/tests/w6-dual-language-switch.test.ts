@@ -5,11 +5,15 @@
  * 钉的是**注册面与开关的形状**，不是插件的判据（判据同源那条由
  * `packages/plugins/kojo-sugar/tests/langsvc-parity.test.ts` 用两枚真插件对拍打）：
  *
- * ① **一枚 provider 挂两门语言**（B6 着色 / B8 注解 / LS-R6 提示三面各自如此）——
+ * ① **一枚 provider 挂多门语言**（B8 注解 / LS-R6 提示两面如此）——
  *    两次注册拿到的是**同一个对象引用**。这一条是"开关跨语言"的全部技术内容：
  *    开关若是按语言各挂一份，就得各翻一次；共用一枚 provider 时开关只能落在
- *    Monaco 的**编辑器级选项**上（`semanticHighlighting.enabled` / `codeLens`），
- *    翻一次天然覆盖两种语言。
+ *    Monaco 的**编辑器级选项**上（`codeLens` 等），翻一次天然覆盖两种语言。
+ *    **着色面（B6）自 B3 语义收口（`ceedc0c8`）起是例外**：`getLegend()` 不带 model
+ *    参数，图例只能是 provider 级的，而 kojo2 的语法角色层与 ERB 的名字层正交（D6
+ *    不许合并）⇒ 只能一门语言一枚、各发各的图例。开关仍是编辑器级
+ *    （`semanticHighlighting.enabled`），但"共用一枚"这个前提对它不成立，
+ *    所以那一格改钉"分枚 + 图例按语言声明"（判据仍只有一份）。
  * ② **同一次应答**：`.erb` 与 `.kojo1` 两个 model 走同一个 provider 都拿到真实候选，
  *    条数与形状一致（不是"一边有另一边空"）。
  * ③ **守门谓词只许一份**：这里的两个供方各用契约层的 `isErbDialectPath` /
@@ -153,8 +157,8 @@ const sortedLanguages = (rs: readonly Registration[]): string[] => rs.map((r) =>
 
 /* ---------------------------------------- ① 注册面 ---------------------------------------- */
 
-describe('W6 · 三面各一枚 provider 挂多门语言（开关因此必然是编辑器级）', () => {
-  it('codeLens / inlayHint / semanticToken 的多次注册是**同一个对象引用**', () => {
+describe('W6 · 注解 / 提示各一枚挂多门语言，着色按语言分枚（开关仍必然是编辑器级）', () => {
+  it('codeLens / inlayHint 的多次注册是同一对象引用；semanticToken 各语言一枚、图例按语言声明', () => {
     const a = stubMonaco();
     installCodeLensProvider(a.monaco, { resolve: () => [], navigate: () => undefined });
     installInlayHintsProvider(a.monaco, { resolve: () => [] });
@@ -162,14 +166,32 @@ describe('W6 · 三面各一枚 provider 挂多门语言（开关因此必然是
     expect(sortedLanguages(a.lens)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
     // B2c：kojo2 的 descriptor 点名了 `slotServices: ['inlayHint']`，共享收口于是也给它挂上
     // **同一枚** provider（供方是插件）。这里跟着变的是"几门语言"，不是"几枚 provider"——
-    // 所以下面那三条 `toBe` 的判据（同一对象引用）一个字没改。
+    // 所以下面那两条 `toBe` 的判据（同一对象引用）一个字没改。
     expect(sortedLanguages(a.hints)).toEqual(
       [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID].sort(),
     );
-    expect(sortedLanguages(a.semantic)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    // B3 语义收口（`ceedc0c8`）之后着色面**不再共用一枚**：Monaco 的 `getLegend()` 不带 model
+    // 参数，图例只能是 provider 级的；而 kojo2 的语法角色层与 ERB 的名字层是两套正交命名
+    // （D6 明令不许合并进同一份图例）⇒ 只能一门语言一枚。
+    // 所以这一格断的不再是"同一对象引用"，而是**分枚且各发各的图例**——分枚不是为了各写一套
+    // 判据（判据仍是同一份，由 `collectSemanticTokenSpans` 统一裁），只是为了各带一份词表。
+    expect(sortedLanguages(a.semantic)).toEqual(
+      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID].sort(),
+    );
+    expect(new Set(a.semantic.map((r) => r.provider)).size).toBe(3);
+    const legendOf = (id: string) => {
+      const reg = a.semantic.find((r) => r.languageId === id)!;
+      return (reg.provider as Monaco.languages.DocumentSemanticTokensProvider).getLegend!();
+    };
+    // 名字层（ERB / `.kojo1`）三值 + 两枚修饰；角色层（kojo2）按自己的角色表，无修饰。
+    expect(legendOf(ERB_LANGUAGE_ID).tokenTypes).toEqual(['function', 'variable', 'parameter']);
+    expect(legendOf(ERB_LANGUAGE_ID).tokenModifiers).toEqual(['declaration', 'readonly']);
+    expect(legendOf(KOJO2_LANGUAGE_ID).tokenModifiers).toEqual([]);
+    expect(legendOf(KOJO2_LANGUAGE_ID).tokenTypes).not.toEqual(
+      legendOf(ERB_LANGUAGE_ID).tokenTypes,
+    );
     expect(a.lens[0]!.provider).toBe(a.lens[1]!.provider);
     expect(new Set(a.hints.map((r) => r.provider)).size).toBe(1);
-    expect(a.semantic[0]!.provider).toBe(a.semantic[1]!.provider);
   });
 
   it('dispose 成对回收（codeLens 连点击命令一共三条）', () => {
@@ -183,7 +205,7 @@ describe('W6 · 三面各一枚 provider 挂多门语言（开关因此必然是
     expect(disposed.filter((d) => d.startsWith('lens:'))).toHaveLength(2);
     // 三门语言 ⇒ 三次注册，dispose 一次全收回（多挂一门不许留孤儿订阅）
     expect(disposed.filter((d) => d.startsWith('hints:'))).toHaveLength(3);
-    expect(disposed.filter((d) => d.startsWith('semantic:'))).toHaveLength(2);
+    expect(disposed.filter((d) => d.startsWith('semantic:'))).toHaveLength(3);
     expect(disposed).toContain(`command:${CODE_LENS_COMMAND}`);
   });
 });

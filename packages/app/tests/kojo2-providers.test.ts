@@ -1003,15 +1003,21 @@ describe('装配纪律：共享收口 + 插件供方是唯一落点（读源码�
   const read = (...segments: string[]): string =>
     readFileSync(resolve(REPO_ROOT, ...segments), 'utf8');
 
-  it('`editor-global-providers` 在 flag 守卫块之外装配语义着色与两枚语言服务', () => {
+  it('`editor-global-providers` 在 flag 守卫块之外装配捕获预取器与两枚语言服务', () => {
     const source = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
     expect(source).toContain("from '../monaco/kojo2-providers'");
-    expect(source).toContain('installKojo2SemanticTokensProvider(monaco)');
+    // B3 语义收口（`ceedc0c8`）之后纪律**反向**了：着色 provider 的注册搬进共享收口
+    // （kojo2 由 descriptor 的 `slotServices: ['semanticToken']` 点名），宿主这一侧只剩
+    // 「把捕获快照预热好」。所以这里断的是"只装预取器、且不再自己注册 provider"——
+    // 若哪天有人把 `installKojo2SemanticTokensProvider` 加回来，同一门语言就会有第二枚
+    // provider 报名，收口的"恰好一份"立刻破功。
+    expect(source).toContain('installKojo2SemanticCaptures(monaco)');
+    expect(source).not.toMatch(/installKojo2SemanticTokensProvider\s*\(/);
     expect(source).toContain('installKojo2SlotProviders(monaco)');
     const start = source.indexOf('if (isKojo2CutoverEnabled()) {');
     const blockEnd = source.indexOf('\n    }', start);
     const block = source.slice(start, blockEnd);
-    expect(block).not.toContain('installKojo2SemanticTokensProvider');
+    expect(block).not.toContain('installKojo2SemanticCaptures');
     expect(block).not.toContain('installKojo2SlotProviders');
   });
 

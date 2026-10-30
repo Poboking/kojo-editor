@@ -19,6 +19,9 @@ export { provideSelectionRanges } from './selection-range';
 export { provideCodeLenses } from './codelens';
 // B3h（2026-10-30）：折叠区间的供方（结构快照 → 契约区间；判据在 `@kojo/kojo-lang/folding`）。
 export { provideFoldingRanges } from './folding';
+// B3 语义收口（2026-10-30）：结构化着色的供方（捕获快照 → 契约区间；判据在
+// `@kojo/kojo-lang/semantic`）。
+export { provideSemanticTokens } from './semantic';
 export { provideSignatureHelp } from './signature';
 export { provideFormatting } from './format';
 // B3j（2026-10-30）：槽 `ui.editor.codeAction` 的供方（一键迁移）。

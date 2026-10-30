@@ -86,7 +86,10 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     // + B3j（2026-10-30）：一键迁移 code action 的判据再进一枚——`code-actions`（诊断 + 光标行
     //   → 动作描述；迁移规则全部转交 core 迁移器）。同样只引 `@kojo/kojo-core` + 同包相对路径
     //   （`KOJO2_DECL_WORDS` 走 `lexicon`），Monaco 翻译 / 落地 / 切流开关留在宿主。
-    expect(files).toHaveLength(31);
+    // + B3 语义收口（2026-10-30）：结构捕获 → 语义 token 区间的判据再进一枚——`semantic`
+    //   （捕获快照 → 5 元组区间；宿主只预取快照，供方是插件）。零外部依赖，Monaco 的
+    //   `SemanticTokens` 形状翻译留在宿主。
+    expect(files).toHaveLength(32);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

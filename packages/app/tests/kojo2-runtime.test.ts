@@ -3,7 +3,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { Node as SyntaxNode, Tree } from 'web-tree-sitter';
-import { capturesToTokenSpans, type Kojo2Capture } from '../src/monaco/tree-sitter/kojo2-tokenizer';
+import type { Kojo2Capture } from '../src/monaco/tree-sitter/kojo2-tokenizer';
+import { KOJO2_TOKEN } from '@kojo/kojo-sdk/semantic-roles';
+import {
+  kojo2ContractCaptures,
+  kojo2SemanticSpansFromCaptures,
+  type Kojo2SemanticOptions,
+} from '@kojo/kojo-lang/semantic';
 import {
   disposeKojo2TreeSitterRuntime,
   getKojo2TreeSitterRuntime,
@@ -77,6 +83,17 @@ function capture(name: string, startRow: number, startCol: number, endRow: numbe
     startPosition: { row: startRow, column: startCol },
     endPosition: { row: endRow, column: endCol },
   };
+}
+
+/**
+ * 旧宿主 tokenizer 的等价入口（B3 语义收口后判据在包）：先 0 基 → 契约 1 基，
+ * 再走包里的唯一实现。测试保留"纯几何"这一面的断言，档位名换成语义角色。
+ */
+function spansOf(
+  captures: readonly Kojo2Capture[] | null | undefined,
+  options: Kojo2SemanticOptions,
+): ReturnType<typeof kojo2SemanticSpansFromCaptures> {
+  return kojo2SemanticSpansFromCaptures(kojo2ContractCaptures(captures), options);
 }
 
 afterEach(async () => {
@@ -316,7 +333,7 @@ describe('失败面：可判别、不抛、不挂', () => {
 
 describe('Monaco 适配：capture → 区间（纯函数）', () => {
   it('1 基行列、跨行拆段、none 不上色、@ 前缀容错', () => {
-    const tokens = capturesToTokenSpans(
+    const tokens = spansOf(
       [
         capture('keyword.control', 0, 0, 0, 4),
         capture('string', 1, 2, 2, 3),
@@ -328,10 +345,10 @@ describe('Monaco 适配：capture → 区间（纯函数）', () => {
       { lineCount: 4, maxColumn: (line) => (line === 2 ? 10 : line === 3 ? 8 : 20) },
     );
     expect(tokens).toEqual([
-      { line: 1, startColumn: 1, endColumn: 5, tokenType: 'keyword.control' },
-      { line: 2, startColumn: 2, endColumn: 4, tokenType: 'string' },
-      { line: 3, startColumn: 1, endColumn: 4, tokenType: 'string' },
-      { line: 4, startColumn: 3, endColumn: 6, tokenType: 'comment' },
+      { line: 1, startColumn: 1, endColumn: 5, tokenType: KOJO2_TOKEN.keyword },
+      { line: 2, startColumn: 2, endColumn: 4, tokenType: KOJO2_TOKEN.speech },
+      { line: 3, startColumn: 1, endColumn: 4, tokenType: KOJO2_TOKEN.speech },
+      { line: 4, startColumn: 3, endColumn: 6, tokenType: KOJO2_TOKEN.comment },
     ]);
   });
 
@@ -346,19 +363,19 @@ describe('Monaco 适配：capture → 区间（纯函数）', () => {
       capture('string', 0, 999, 0, 1000), // 列越界 ⇒ 夹成零宽后丢
       capture('string', 0, 0, 250, 3), // 跨 251 行
     ];
-    expect(() => capturesToTokenSpans(bad, { lineCount: 300, maxColumn: () => 5 })).not.toThrow();
-    expect(capturesToTokenSpans(bad, { lineCount: 300, maxColumn: () => 5 })).toEqual([]);
+    expect(() => spansOf(bad, { lineCount: 300, maxColumn: () => 5 })).not.toThrow();
+    expect(spansOf(bad, { lineCount: 300, maxColumn: () => 5 })).toEqual([]);
 
-    expect(capturesToTokenSpans(null, { lineCount: 3 })).toEqual([]);
-    expect(capturesToTokenSpans([], { lineCount: 3 })).toEqual([]);
-    expect(capturesToTokenSpans([capture('string', 0, 0, 0, 2)], { lineCount: Number.NaN })).toEqual([]);
-    expect(capturesToTokenSpans([capture('string', 0, 0, 0, 2)], { lineCount: -1 })).toEqual([]);
+    expect(spansOf(null, { lineCount: 3 })).toEqual([]);
+    expect(spansOf([], { lineCount: 3 })).toEqual([]);
+    expect(spansOf([capture('string', 0, 0, 0, 2)], { lineCount: Number.NaN })).toEqual([]);
+    expect(spansOf([capture('string', 0, 0, 0, 2)], { lineCount: -1 })).toEqual([]);
     // 没有行几何时跨行捕获整条丢（不知道"行尾"在哪，不许只画半截）
-    expect(capturesToTokenSpans([capture('string', 0, 0, 2, 3)], { lineCount: 5 })).toEqual([]);
+    expect(spansOf([capture('string', 0, 0, 2, 3)], { lineCount: 5 })).toEqual([]);
   });
 
   it('重叠只留先到（同起点长者优先），相邻不算重叠', () => {
-    const tokens = capturesToTokenSpans(
+    const tokens = spansOf(
       [
         capture('string', 0, 0, 0, 10),
         capture('keyword', 0, 2, 0, 6),
@@ -368,19 +385,19 @@ describe('Monaco 适配：capture → 区间（纯函数）', () => {
       { lineCount: 2, maxColumn: () => 40 },
     );
     expect(tokens).toEqual([
-      { line: 1, startColumn: 1, endColumn: 11, tokenType: 'string' },
-      { line: 1, startColumn: 11, endColumn: 15, tokenType: 'comment' },
+      { line: 1, startColumn: 1, endColumn: 11, tokenType: KOJO2_TOKEN.speech },
+      { line: 1, startColumn: 11, endColumn: 15, tokenType: KOJO2_TOKEN.comment },
     ]);
   });
 
   it('maxTokens 截断且不改入参', () => {
     const captures: Kojo2Capture[] = [
-      capture('a', 0, 0, 0, 2),
-      capture('b', 0, 3, 0, 5),
-      capture('c', 0, 6, 0, 8),
+      capture('keyword', 0, 0, 0, 2),
+      capture('string', 0, 3, 0, 5),
+      capture('comment', 0, 6, 0, 8),
     ];
     const snapshot = JSON.stringify(captures);
-    expect(capturesToTokenSpans(captures, { lineCount: 1, maxTokens: 2 }).length).toBe(2);
+    expect(spansOf(captures, { lineCount: 1, maxTokens: 2 }).length).toBe(2);
     expect(JSON.stringify(captures)).toBe(snapshot);
   });
 });
@@ -398,7 +415,7 @@ describe('运行时 captures + tokenizer 端到端', () => {
     expect(captured.captures.length).toBeGreaterThan(100);
 
     const lineCount = FULL_TEXT.split('\n').length;
-    const tokens = capturesToTokenSpans(captured.captures, { lineCount });
+    const tokens = spansOf(captured.captures, { lineCount });
     expect(tokens.length).toBeGreaterThan(100);
     for (const token of tokens) {
       expect(token.line).toBeGreaterThanOrEqual(1);
@@ -408,9 +425,9 @@ describe('运行时 captures + tokenizer 端到端', () => {
       expect(token.tokenType.length).toBeGreaterThan(0);
     }
     const types = new Set(tokens.map((token) => token.tokenType));
-    expect(types.has('keyword.control')).toBe(true);
-    expect(types.has('string')).toBe(true);
-    expect(types.has('comment')).toBe(true);
+    expect(types.has(KOJO2_TOKEN.keyword)).toBe(true);
+    expect(types.has(KOJO2_TOKEN.speech)).toBe(true);
+    expect(types.has(KOJO2_TOKEN.comment)).toBe(true);
     parsed.tree.delete();
   });
 });

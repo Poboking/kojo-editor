@@ -75,6 +75,9 @@ const ALLOWED_PACKAGES = new Set([
   '@kojo/kojo-lang/folding',
   // B3j：一键迁移 code action 的判据叶子（供方在 `src/code-actions.ts`）。
   '@kojo/kojo-lang/code-actions',
+  // B3 语义收口：结构捕获 → 语义 token 区间的判据叶子（供方在 `src/semantic.ts`；
+  // 捕获快照由宿主预取后随请求递进来，供方不碰 wasm、不碰 Monaco）。
+  '@kojo/kojo-lang/semantic',
   // B4：语言面供方交数据（词法 / 语言配置 / 主题声明）。三枚都是**纯数据叶子**，
   // 引它们不会把 Monaco 带进插件——契约类型才是这一层的形状来源。
   '@kojo/kojo-lang/monarch',
@@ -96,7 +99,9 @@ describe('@kojo/plugin-kojo-lang 是纯插件（零 Monaco / 零 React / 零 IO 
     // + B3g：codelens（行上注解供方）
     // + B3h：folding（折叠区间供方——结构快照 → 契约区间）
     // + B3j：code-actions（一键迁移供方，槽 `ui.editor.codeAction`）
-    expect(files).toHaveLength(18);
+    // + B3 语义收口：semantic（语义着色供方，槽 `ui.editor.languageService` 的
+    //   `semanticToken`——捕获快照随请求递进来，这里只做裁与答）
+    expect(files).toHaveLength(19);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

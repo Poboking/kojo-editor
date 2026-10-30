@@ -1,14 +1,14 @@
 # v0.4.0-beta.1 实机测试清单
 
 > **2026-10-13 更新**：本清单随批次增量维护，**不再绑定某一次打包产物**。
-> 当前应对齐的基线见 `docs/STATE.md`（测试数）与 `docs/log/`（逐批记录；历史冻结在 `docs/archive/`）。
+> 当前应对齐的基线见 `docs/STATE.md`（测试数）；逐批记录在 git 提交信息里。
 > §六 是口上项目 / 导出 / 部署 / 语法糖视图的勾验项，2026-10-13 新增。
 
 > 产物：`packages/app/src-tauri/target/release/bundle/nsis/kojo-editor_0.1.0_x64-setup.exe`（安装器）  
 > 或裸 exe：`packages/app/src-tauri/target/release/kojo-editor.exe`  
 > 测试游戏：当前 4.980 语料目录（目录名会变 ⇒ 认内容不认名；`tools/corpus.mjs` 按 `ERB/`+`CSV/` 自动发现，`KOJO_CORPUS_DIR` 可指定，指纹表见 `docs/STATE.md` §三）
 > （⚠ 本机只有 `C:` 盘；本文件早期版本里的 `<本机目录>\...` 路径**照抄必失败**，
-> 　路径换算见 `docs/STATE.md` §三 与 `docs/archive/HANDOFF.md` §一 的历史换算表。）
+> 　路径换算见 `docs/STATE.md` §三。）
 > 本清单合并：S7-UI 保存闭环（发版判据①终验）+ **文件监视（判据②终验，§2.J）** +
 > 桌面壳冒烟（判据③）+ 打包判据（④）。  
 > 勾完把结果告诉我，有问题贴截图/报错原文即可。

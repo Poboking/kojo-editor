@@ -32,8 +32,6 @@ const KNOWN_PERF = [
   'packages/kernel/tests/rescan-scale.perf.test.ts',
   'packages/plugins/ui-kojo-navigator/tests/search-perf.test.ts',
   'packages/plugins/kojo-sugar/tests/hotpath-bench.test.ts',
-  'packages/plugins/kojo-sugar/tests/semantic-tokens.perf.test.ts',
-  'packages/plugins/kojo-sugar/tests/sugar-autoidx.perf.test.ts',
   'packages/plugins/erb-parser/tests/workspace-symbols.test.ts',
   'packages/plugins/erb-parser/tests/semantic-tokens.perf.test.ts',
   'packages/plugins/erb-parser/tests/snapshot-hot-load.perf.test.ts',

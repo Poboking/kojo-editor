@@ -233,14 +233,14 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
 /**
  * Kojo 2.0 的状态表。
  *
- * 4 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
+ * 3 枚 `self` 全是 `installKojo2*` 系列（语言 id 直接写在注册调用里，见
  * `ui/editor-global-providers.ts` 的 2.0 段），且**装配点无条件调用**（K2-SURFACE-DEFAULT：
  * 语言面不读切流开关，`language-parity.test.ts` 逐格对拍"装配点真调了 + 安装器自己不读开关"）；
- * 13 枚 `shared` 是**已交给插件**的十三条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
+ * 15 枚 `shared` 是**已交给插件**的十五条腿（`outline` 自 B2、`inlay` 自 B2c、`definition` 自 B3b，
  * `completion` / `hover` 自 B3c，`signature` / `format` 自 B3d，`refs` / `rename` 自 B3e，
- * `highlight` / `selection` 自 B3f，`codelens` 自 B3g，`folding` 自 B3h），宿主只经
- * `registerForLanguageServices` 带能力名挂上、判据全在 `@kojo/kojo-lang` + 供方
- * `@kojo/plugin-kojo-lang`；
+ * `highlight` / `selection` 自 B3f，`codelens` 自 B3g，`folding` 自 B3h，`semantic` 自
+ * B3 语义收口），宿主只经 `registerForLanguageServices` 带能力名挂上、判据全在
+ * `@kojo/kojo-lang` + 供方 `@kojo/plugin-kojo-lang`；
  * `brackets` / `preview` 与 ERB 同档（语言配置 / Monaco 内建）；`diagnostics` 是 `self`：
  * 2.0 有自己的诊断链（`ui/kojo2-problem-sync.ts` → `setModelMarkers(...,
  * KOJO2_PROBLEM_MARKER_OWNER, …)`，与 v1 的 decorator 腿并行、不共用），同样属语言面
@@ -275,7 +275,12 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
     // 落到 ERB / kojo1 上的那一枚不抢它们的话语权：插件对非 kojo2 弃权，而它们自己的格式化
     // provider 后注册、按 Monaco 的"同分后注册在前"排第一位。
     [LanguageCapability.Format]: 'shared',
-    [LanguageCapability.Semantic]: 'self',
+    // B3 语义收口（2026-10-30）：语义着色改走**共享收口**（能力名 `semanticToken`）——捕获快照
+    // 来自结构 worker（异步），宿主预取进缓存、随请求的 `captures` 递下去；供方（插件
+    // `kojo2-semanticTokens`）同步翻译，判据住 `@kojo/kojo-lang/semantic`，宿主
+    // `monaco/kojo2-semantic.ts` 只剩预取与缓存，原生注册形状清零。档位变了、能力没少：
+    // 合计仍是 3 + 15 = 18（含 diagnostics 的 self 档）。
+    [LanguageCapability.Semantic]: 'shared',
     // B3i（2026-10-30）：缩进 / 回车判据已整块住 `@kojo/kojo-lang/indent`，宿主
     // `monaco/kojo2-indent.ts` 只剩 on-type provider 的装配与 1 基区间 → Monaco `TextEdit`
     // 的翻译。仍记 `self` 而不是 `shared`：on-type formatter 是 **Monaco 引擎面**，不是
