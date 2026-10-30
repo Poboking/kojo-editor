@@ -4,7 +4,7 @@
  * ERB 结构感知解析器（服务 `erb.parser`）。
  * 零游戏知识——命名约定与家族识别属于 game.adapter。
  */
-export { createErbParserPlugin, provideErbDefinition } from './plugin';
+export { createErbParserPlugin, provideErbCallHierarchy, provideErbDefinition } from './plugin';
 export {
   ERB_CONTROL_STATEMENTS,
   classifyControlFlow,
@@ -125,6 +125,15 @@ export {
   type ErbDimDeclaration,
 } from './symbols';
 
+// 调用层级判据（LAU-4 调用层级腿，2026-10-31；纯函数 + 槽供方形状，宿主只翻面板形状）。
+// 与改名判据同住 `symbols.ts`：整包进首屏，另开文件只多一份模块壳（ps10 记账）。
+export {
+  callHierarchySymbolOf,
+  incomingCalls,
+  outgoingCalls,
+  resolveEnclosingFunction,
+  type ErbFunctionAtResolver,
+} from './symbols';
 // 改名判据（LAU-4 改名腿，2026-10-30；纯函数 + 槽供方形状，宿主只翻 Monaco 形状）。
 // 与本地名字落点判据同住 `symbols.ts`：整包进首屏，另开文件只多一份模块壳（ps10 记账）。
 export {

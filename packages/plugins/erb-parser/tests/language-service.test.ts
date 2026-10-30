@@ -115,6 +115,7 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
         .map((s) => s.contribution.id)
         .sort(),
     ).toEqual([
+'erb-call-hierarchy',
       'erb-completion',
       'erb-definition',
       'erb-folding',

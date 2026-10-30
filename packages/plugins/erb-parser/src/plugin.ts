@@ -1,6 +1,7 @@
 import type {
   ComputePool,
   ControlFlowStatement,
+  EditorCallHierarchyResult,
   EditorDefinitionResult,
   EditorLanguageServiceRequest,
   EditorSymbolLocation,
@@ -62,6 +63,12 @@ import { provideErbCompletion } from './completion';
 import { erbFoldingRanges } from './folding';
 import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
 import { definitionTargetsAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition } from './symbols';
+import {
+  callHierarchySymbolOf,
+  incomingCalls,
+  outgoingCalls,
+  resolveEnclosingFunction,
+} from './symbols';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
 import { erbSemanticTokens } from './semantic-tokens';
@@ -444,6 +451,47 @@ function functionLocationsOf(refs: readonly ErbFunctionRef[]): EditorSymbolLocat
       ? {}
       : { column: ref.nameColumn, span: { columnStart: ref.nameColumn, columnEnd: ref.nameColumn + ref.name.length } }),
   }));
+}
+
+/**
+ * `callHierarchy` 的应答体（LAU-4 调用层级腿；槽注册只转一手）。
+ *
+ * 三态：非 ERB 方言 / 索引未建 ⇒ `undefined`（弃权——"真没有调用关系"与"我还没有名录"
+ * 是两件事，同 `erb-usage-lens` / `erb-workspace-symbols` 的区分）；认这个文件就总是作答，
+ * `subject: null` = 这一行不在任何函数体内（不夹取到邻近函数）。判据全在 `symbols.ts`，
+ * 与宿主原先那份 `monaco/erb-call-hierarchy.ts` 逐条同义（入边剔 `definition`、出边只认
+ * `call`、所属函数反查单源 `enclosingAt(...,'innermost')`、反查不了即跳过）。
+ *
+ * `referencesAvailable` 必填：增量更新后反向引用保守失效，那一刻"空"不是"没有调用关系"，
+ * 宿主据此换一句可见说明（铁律 4 不静默）。
+ */
+export function provideErbCallHierarchy(
+  request: EditorLanguageServiceRequest,
+  index: ErbIndex | null,
+): EditorCallHierarchyResult | undefined {
+  if (request.kind !== 'callHierarchy') return undefined;
+  if (!isDialect(request.path)) return undefined;
+  const idx = index;
+  if (idx === null) return undefined;
+  try {
+    // 引用台账这一轮可不可用（惰性 getter：读一次就触发聚合 / 失效后的整扫排期）
+    const referencesAvailable = idx.references !== undefined;
+    const fact = request.subject ?? resolveEnclosingFunction(idx, null, request.path, request.line);
+    if (!fact) {
+      return { kind: 'callHierarchy', subject: null, incoming: [], outgoing: [], referencesAvailable };
+    }
+    const subject = callHierarchySymbolOf(fact);
+    return {
+      kind: 'callHierarchy',
+      subject,
+      incoming: incomingCalls(idx, null, subject.normalizedName),
+      outgoing: outgoingCalls(idx, subject),
+      referencesAvailable,
+    };
+  } catch {
+    // 判据抛错 ⇒ 弃权：宿主那侧可见地报"这一轮没有供方应答"，不把异常伪装成"没有调用关系"。
+    return undefined;
+  }
 }
 
 /**
@@ -2070,6 +2118,21 @@ export function createErbParserPlugin(): Plugin {
         id: 'erb-completion',
         order: 20,
         provide: (request) => provideErbCompletion(request, { index }),
+      });
+
+      /* ---------------- LAU-4 调用层级腿（2026-10-31）：调用层级 ----------------
+
+       这一批把宿主 `monaco/erb-call-hierarchy.ts` 的**判据**整块搬进来（三条腿见
+       `symbols.ts` 的调用层级段头）：宿主只剩面板渲染、请求组装（model / 项目身份）
+       与契约→面板形状。判据不能住宿主——"什么算一次 CALL 引用"的单源是 `references.ts`
+       的 `ErbReference.kind`，"这一行属于哪个函数"的单源是 `enclosingAt(...,'innermost')`，
+       两把尺子都在本包；宿主那侧留一份就是两份答案。
+
+       `order` 20（与其余 `erb-*` 一致）：同 kind 只有本包一家认 ERB。 */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-call-hierarchy',
+        order: 20,
+        provide: (request) => provideErbCallHierarchy(request, index),
       });
     },
   };
