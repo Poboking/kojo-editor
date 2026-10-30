@@ -16,6 +16,7 @@ import type {
   ComputePool,
   ConventionLinterService,
   ConventionPolicy,
+  ConventionReport,
   ConventionRule,
   ConventionRunOptions,
   ErbParserService,
@@ -31,6 +32,7 @@ import {
   buildConventionIssueView,
   conventionCodeActionsForFile,
   conventionDecorationsForFile,
+  type ConventionIssueView,
 } from './diagnostics';
 import { conventionIssueFixes } from './fixes';
 import {
@@ -255,11 +257,22 @@ export function createConventionLinterPlugin(): Plugin {
        **刻意不声明 `offloadKind`**：本装饰器吃的是**插件内的报告态**（`view`），搬进 worker
        就得把整份报告复制过去（第二个真源）。`decorate` 因此只是一次 `Map` 取表（O(1)、零 CPU
        压力），留在同步装饰轮里恰好与它的成本形状相配（与 `erb-reference` 同一取舍）。
+
+       **视图惰性化**（MEM-14）：`view` 过去在订阅回调里**立即**物化——真语料 799 条问题 ⇒
+       每份报告都摊出 ~790 条装饰对象 + 按文件分桶的 Map，实测 **159 KB** 常驻，而开项目
+       时若没有任何文件被装饰（没开标签 / 装饰轮还没跑）这笔钱是白付的。现在只在**第一次
+       真有人来取**时建（`currentView()`），报告一变就置空等下一次取——`decorate` 与
+       `provideActions` 读的仍是同一份、同一次构建的视图（不新建第二套事件）。
        */
-      let view = buildConventionIssueView([]);
+      let lastReport: ConventionReport | null = null;
+      let view: ConventionIssueView | null = null;
+      /** 报告变了就把视图作废；下一次装饰/动作请求时再建（无请求 ⇒ 一分钱不花） */
+      const currentView = (): ConventionIssueView =>
+        (view ??= buildConventionIssueView(lastReport?.issues ?? []));
       ctx.onDispose(
         service.subscribe((report) => {
-          view = buildConventionIssueView(report?.issues ?? []);
+          lastReport = report;
+          view = null;
         }),
       );
 
@@ -268,7 +281,7 @@ export function createConventionLinterPlugin(): Plugin {
           id: 'convention-issues',
           title: '约定校验波浪线',
           order: 22,
-          decorate: (file) => conventionDecorationsForFile(view, file.path),
+          decorate: (file) => conventionDecorationsForFile(currentView(), file.path),
         }),
       );
 
@@ -288,7 +301,7 @@ export function createConventionLinterPlugin(): Plugin {
           id: 'convention-quickfix',
           order: 31,
           provideActions: (file) =>
-            conventionCodeActionsForFile(view, {
+            conventionCodeActionsForFile(currentView(), {
               path: file.path,
               text: file.text,
               ...(file.line !== undefined ? { line: file.line } : {}),

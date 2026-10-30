@@ -503,14 +503,25 @@
    证据边界：已排除 `@vitest/runner` 双实例（`--preserve-symlinks` 不复现）、宿主 `NODE_OPTIONS` shim（`env -u` / `env -i` 仍复现）、测试内容（未改动的文件同样挂）；**但没有做"删缓存前 vs 后"的对照实验，所以只记为"并发 + 清共享缓存"的过程风险，不宣称因果已被证明**。
    ⇒ 三条纪律：① 共用树里不要清 `node_modules/.vite`、`.turbo`、`dist` 这类别人正在用的共享缓存——要清先确认没有同树任务在跑；② 看到"收集期 0 test / `runner.config` undefined"，先隔离而不是改代码：`cd` 到树根重跑 + 拿一个**本轮未改动**的测试文件对拍，仍然红再怀疑依赖；③ 不要用 `pnpm install --force` 去"修"它——共用树重装会打断别人，而且这类瞬态本来就会自愈。
 
-277. **把"写权限确认框"做成可脚本应答 = 脚本自己签发权限；同族的第二个坑是"私有 DOM 形态静默失效"——读数退化成永远 null，看着像功能没做**（2026-10-30 调试第二批立规；`dialog-policy.ts` 既定裁决 + CLI 的 `--writable` 硬拒 + `editor.selfCheck()`）：
+277. **"为一次点击建全表索引"是最常见的过度预建：11 万条名字的前缀索引 9.39 MB、族索引 35.9 MB，而作者一次只问一个键**（2026-10-30 MEM-12 实拍，`packages/app/src/monaco/`）：
+   两处都是"名录一变就预建全表"的写法：
+   ① **前缀索引**：给每条名字造一份大写串 + 一个 `{name, file}` 对象 ⇒ 常驻 **9.39 MB**、建索引 157–183 ms。改成"只存一份原文名数组，大小写折叠在查询时当场算"（ASCII 零分配）⇒ **0.16 MB**、建索引 21–23 ms。
+   ② **族索引**（点号成员补全）：为每个名字的**每个下划段**建桶 + 一枚守卫 `Set`（`M_KOJO_K1_HATSUMI` 进 `M_` / `M_KOJO_` / `M_KOJO_K1_` 三桶）⇒ 常驻 **35.9 MB**、首问 **541–1008 ms**。改成"按族键按需扫一遍 + 上限 32 条的 LRU 记忆化"⇒ 常驻 **0.7 MB**、首问 **24 ms**。
+   ⇒ 纪律：预建索引的判据不是"这样查询 O(1) 好看"，而是**"一次会话里这个键会被问几次 × 键有多少种"**。这里 11 万个名字 → 几万个族键，而一次点号只问一个；按需扫一遍 110k 条只要 24 ms，比"省下来的 35 MB 常驻"便宜得多。反过来，**按需扫必须有上限**（LRU 32），否则等于把预建改成"慢慢泄漏"。
+
+278. **并行拆批做内存优化时，开机图闸的"逐文件点名对账"是唯一能防止漏账的手段；而"文件被写成 CRLF"这类老坑会在多人并行时复发**（2026-10-30 MEM-10~14 实拍，五个子任务同时改七个文件）：
+   本批七个源文件合计 +24,114 B，但闸只涨了 **+16,979 B**。差额 7,135 B 不是量错——`app/src/monaco/*` 三枚与 `convention-linter/*` 两枚**都在懒边之下、根本不在开机图里**。对账方式：先量总量（3,261,066 → 3,278,045），再逐文件量"本树 vs `HEAD`"，最后只把**图内那两枚**写进台账（13,450 + 3,529 = 16,979，逐字节对上）。若不做这一步，要么漏抬闸（闸红），要么把懒边文件也算进去（抬多、白让 7 KB 预算）。
+   另一个复发：子 agent 在 Windows 上写文件把两枚文件变成了 **CRLF**（1,188 + 470 行），`git status` 只给一句 `warning: CRLF will be replaced by LF`——正是 PITFALLS 268 那个坑。**合并前必须用二进制口径查一遍**（`readFileSync(f).toString('latin1').match(/\r\n/g)`），别信 `git diff --stat`。
+   ⇒ 纪律：并行拆批要**按包/按目录切**（本次五路互不重叠：erb-parser / condition-extractor / app / tools / 校验器+适配器），并在合并时统一做三件事：类型检查、逐文件字节对账、二进制查行尾。
+
+279. **把"写权限确认框"做成可脚本应答 = 脚本自己签发权限；同族的第二个坑是"私有 DOM 形态静默失效"——读数退化成永远 null，看着像功能没做**（2026-10-30 调试第二批立规；`dialog-policy.ts` 既定裁决 + CLI 的 `--writable` 硬拒 + `editor.selfCheck()`）：
    现象 A（权限面）：真壳里 `open-project <dir> --writable` 被 CLI **直接 exit 2 拒掉**。这不是"功能没做"，而是拒绝得**对**：`packages/app/src/debug/dialog-policy.ts` 的 `POLICY_DIALOG_COMMANDS` 只收两条**只选取器**——`choose_directory`（打开＝读）、`pick_save_path`（另存为落点：只交回路径、一字节不写、不授予许可）；`confirm_write_domain`、`export_file`、`choose_file`、`choose_workspace_root` **刻意不在册**。原因是 `confirm_write_domain` 这条命令里"弹确认框"与"登记写域"是**同一条命令的两半**：凡能应答那枚框的通道，就等于把"脚本能不能写这个目录"的决定权交给了脚本（铁律 6/7：写域准入门只认真实对话框交付的那一次）。**这正是 275 的同一种错**——275 是"改 policy 就扩权"，这里是"答确认框就扩权"，两者都属"不需要凭证即可改变自身权限"。经调试面应答打开的项目天然只能只读浏览，是**如实行为**；`status` 因此在 shell 模式恒打 `写权限：只读浏览（debug 通道不代答确认框）`（纯读数，不参与 exit 0 判据）。
    **可验证判据（三条，都能当场 grep/跑出来）**：① `grep -n "POLICY_DIALOG_COMMANDS" packages/app/src/debug/dialog-policy.ts` 的集合里**只有** `choose_directory` / `pick_save_path`，一旦出现 `confirm_write_domain` / `export_file` / `choose_file` / `choose_workspace_root` 就是**权限面被拆了**，先回滚再谈功能；② shell 会话里 `node tools/debug-cli.mjs open-project <dir> --writable` 必须 **exit 2**，且文案同时给出两条**可走**的路（web `serve` 验写链路 / 真壳对**已授权目录** §160·§161 不加 `--writable` 直接开）；③ `node tools/debug-cli.mjs status` 在 shell 模式必须打出那行写权限读数。三条任一不成立＝裁决被绕开。
    现象 B（读数面，同族）：`hoverAt` / `suggestAt` / `foldingRanges` 依赖 Monaco **私有 DOM 形态**（`.monaco-hover` / `.suggest-widget` / `.label-name`）与**私有贡献点**（`editor.contrib.folding`）。这些一升级就会**静默失效**，而它们的约定语义是"读不到回 `null`、不抛"——于是"选择器跟不上了"和"provider 真没内容"**在返回值上完全同形**，看起来像"这个功能压根没做"。这就是加 `editor.selfCheck()` 的动机：给一套**形态自检读数**，把"静默"变成"可断言"。
    口径（别把它当全绿证明）：`selfCheck().ok` **只由** `monacoVersion !== null && selectors.hover && selectors.suggest && selectors.foldingContribution` 三项决定；`suggestRow` / `labelName` / `detailsLabel` 是**纯 DOM 尽力探测**（面板没弹本来就 0 命中），**不参与 `ok`**，只用于人工定位。0.57 实测 `ok=true` 而 `suggestRow/labelName/detailsLabel` 全 `false` 是**真实漂移**（候选行改用 `.left` + `IconLabel`，旧类名不再存在）——看到这三项 false **不要**去改 `ok` 的定义。`foldingShape='promise'` 同理是 0.57 的正常形态（`getFoldingModel()` 返 Promise ⇒ 同步读数取不到 ⇒ `foldingRanges()` 回 `null` 属已知边界，不是缺陷）。
    ⇒ 纪律：① **升级 Monaco / 换编辑器依赖后第一条命令就是 `eval "__kojoDebug.editor.selfCheck()"`**；`ok===false` 时先修选择器/贡献点，**别去改测试**（那些 `null` 此刻没有诊断价值）；② 自检本身**永不抛**、也不改任何既有 API 行为——脏值/半截对象统一过纯函数 `summarizeSelfCheck()` 归一，`selectors.*` 只认**字面量 `true`**（`'true'` / `1` 不算：读数是给脚本断言的，不猜）；③ 权限类"应答框"新增之前先问一句：**应答它的那个东西，是不是同时也在授权？** 是就别加（同 275）；④ "功能没做"与"读数失效"要分开证：先跑形态自检，再谈 provider。
 
-278. **`profile 2000`（文档里最顺手的写法）其实从没启动过采样器：分发表把 `positional[0]` 原样当子命令，数值落进 `mode`，两个分支都不进，于是直接 `Profiler.stop` ⇒ `CDP No recording profiles found`**（2026-10-30 第二批真壳实测）：
+280. **`profile 2000`（文档里最顺手的写法）其实从没启动过采样器：分发表把 `positional[0]` 原样当子命令，数值落进 `mode`，两个分支都不进，于是直接 `Profiler.stop` ⇒ `CDP No recording profiles found`**（2026-10-30 第二批真壳实测）：
    症状极具误导性——报错来自 CDP、栈里全是 `ws.onmessage` / `undici`，看起来像 WebView2 不支持 Profiler 或连接断了。直连同一条 CDP 复算 `Profiler.enable → start → sleep → stop` 却拿到 `nodes=3` 正常收口 ⇒ 问题在 CLI 不在 CDP。
    根因：`profile: () => cmdProfile(positional, positional[0], positional[1])` 把「第一个位置参数」同时当子命令；`profile 2000` 于是 `mode='2000'`，`if (mode==='run')` 与 `if (mode==='start')` 都不成立，`Profiler.start` 一次没跑。而外层没有兜底 catch，未捕获的 rejection 让 Node 打整段栈，最后一行是 `Node.js v22.22.2`——人读到的是运行时版本号，不是"哪一步错了"。
    ⇒ 修法两条，缺一条都还会复发：① **形态归一**（`/^\d+$/` 的 `sub` 视为 `run` + 毫秒数），未知子命令一次说清并 `exit 2`，不靠 CDP 报错兜底；② **顶层兜底 catch**：子命令 throw 一律收敛成一行 `[FAIL] <message>` + `exit 1`，栈只在 `KOJO_DEBUG_TRACE=1` 时打。

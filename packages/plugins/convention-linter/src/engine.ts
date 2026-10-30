@@ -279,8 +279,15 @@ export class ConventionEngine implements ConventionLinterService {
    * 只是提前量热，**过期判定仍按装载后的盘上结论**；漏猜的文件走装载后的批量兜底，语义不变。
    * 取不到（新页面 / 新内核 / 判据变了）⇒ 本轮**不投机**，绝不让候选退化成"全库都要重读"
    * （PERF-12c：真语料 2,325 棵上那一退就是每轮 4.1 s 白读，而同轮 reuse 显示零重算）。
+   *
+   * **持引用而不是拷贝**（MEM-14）：这里只要"上一轮的 mtime 是什么"，而 `ErbIndex.fileMtimes`
+   * 就是那份事实本身（索引每次重建都给一枚**新 Map**，`erb-parser` 的 `plugin.ts` /
+   * `incremental.ts` 从不原地改它 ⇒ 引用安全）。真语料 4,258 棵上原来每轮抄一份
+   * 4,258 条目的 Map = 151 KB 常驻（实测），现在为零；比较语义逐字不变（同一个 Map 与
+   * 自己比 ⇒ 全部相等 ⇒ 本轮不投机，与"抄一份再比"的结果一致）。
+   * 提供方若原地改自己的 Map，最坏后果也只是"候选恒为空"（少一次提前量热，不影响结论）。
    */
-  private lastRun: { fingerprint: string; mtimes: Map<string, number | null> } | null = null;
+  private lastRun: { fingerprint: string; mtimes: ReadonlyMap<string, number | null> } | null = null;
   /**
    * 热缓存（PERF-12b）：本引擎**上一次实际装载/产出**的 `LintCache`（内存镜像，键 =
    * 全局判据）。同一内核里连续运行（开项目→改一棵→重校验）不必再走一趟
@@ -797,9 +804,10 @@ export class ConventionEngine implements ConventionLinterService {
           ` · 投机候选 ${specPaths.size} 补取 ${restPaths.length}`,
       );
     }
-    // 记下本轮 mtime ⇒ 同引擎下一轮的投机预取候选（判据变了/新引擎 ⇒ 本轮不投机）
+    // 记下本轮 mtime ⇒ 同引擎下一轮的投机预取候选（判据变了/新引擎 ⇒ 本轮不投机）。
+    // 持索引那枚 Map 的引用，不抄副本（见 `lastRun` 注释：每轮省 151 KB 常驻）
     this.lastRun = expect && index.fileMtimes
-      ? { fingerprint: expect.fingerprint, mtimes: new Map(index.fileMtimes) }
+      ? { fingerprint: expect.fingerprint, mtimes: index.fileMtimes }
       : null;
     /**
      * 半轮**不覆盖订阅面**：波浪线那一层只看 `issues`，把没扫到的文件画成"没有线"就是

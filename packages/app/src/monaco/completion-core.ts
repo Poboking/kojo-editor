@@ -1001,14 +1001,21 @@ export interface CompletionNameSlot {
   readonly prefix: string;
 }
 
-interface NameEntry {
-  readonly name: string;
-  readonly file?: string;
-}
-
+/**
+ * 前缀索引（**只存一份名字**）。
+ *
+ * MEM-12：旧形态是 `{ keys, entries }` 两条并列数组——`keys` 是每名字一条**新造的**
+ * `toUpperCase()` 串（11 万条 ≈ 5.0 MB）、`entries` 是每名字一个 `{name, file}` 对象
+ * （≈ 3.5 MB）。两条都是纯派生：折叠序可以**当场算**（`compareFold`，ASCII 零分配）、
+ * 名字原文本来就是入参里那一批串。改成一条 `names`（按折叠序排好的**原文**）后，
+ * 索引对 110,049 条名字的常驻从 9.4 MB 降到 0（ERB 路径连数组都不复制，直接复用
+ * `memoizedErbFunctionNames` 交出来的那张已排序表；实测见 MEM-12 读数）。
+ */
 interface PrefixIndex {
-  readonly keys: readonly string[];
-  readonly entries: readonly NameEntry[];
+  /** 按大小写不敏感升序排好的名字**原文**（字符串对象来自入参，绝不复制） */
+  readonly names: readonly string[];
+  /** 与 `names` 同序的文件归属；入参里没有任何 `file` 时是 `null`（ERB 路径，省一条 11 万级数组） */
+  readonly files: readonly (string | undefined)[] | null;
 }
 
 /** 单源命中上限（空前缀 / 极短前缀会命中全表；逐条造对象既慢又无意义） */
@@ -1017,35 +1024,117 @@ export const MAX_NAME_CANDIDATES = 1000;
 /** 按数组身份记忆化的前缀索引（十万条量级只建一次） */
 const INDEX_CACHE = new WeakMap<object, PrefixIndex>();
 
+/** `a`/`A`…`z`/`Z` 折叠：ASCII 之外的码元原样返回（非 ASCII 由调用方退回真 `toUpperCase`） */
+function foldCode(c: number): number {
+  return c >= 97 /* a */ && c <= 122 /* z */ ? c - 32 : c;
+}
+
+/**
+ * 大小写不敏感比较（**零分配**）：等价于比较两者 `toUpperCase()` 的字典序。
+ *
+ * 逐码元折叠比较；一旦出现非 ASCII 码元，直接退回 `toUpperCase()` 真身比较——
+ * 保真优先（全角字母 / 带变音符号这类折叠在 JS 里不是逐码元的，别自己猜），
+ * 而真语料的函数名全是 ASCII 标识符，这条退路实际不触发。
+ */
+function compareFold(a: string, b: string): number {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const ca = a.charCodeAt(i);
+    const cb = b.charCodeAt(i);
+    if (ca === cb) continue;
+    if (ca < 128 && cb < 128) {
+      const fa = foldCode(ca);
+      const fb = foldCode(cb);
+      if (fa !== fb) return fa < fb ? -1 : 1;
+      continue;
+    }
+    const ua = a.toUpperCase();
+    const ub = b.toUpperCase();
+    return ua < ub ? -1 : ua > ub ? 1 : 0;
+  }
+  return a.length === b.length ? 0 : a.length < b.length ? -1 : 1;
+}
+
+/** `text` 是否以 `prefix` 开头（大小写不敏感；口径同 {@link compareFold}，零分配） */
+export function startsWithFold(text: string, prefix: string): boolean {
+  if (text.length < prefix.length) return false;
+  for (let i = 0; i < prefix.length; i++) {
+    const ct = text.charCodeAt(i);
+    const cp = prefix.charCodeAt(i);
+    if (ct === cp) continue;
+    if (ct < 128 && cp < 128) {
+      if (foldCode(ct) !== foldCode(cp)) return false;
+      continue;
+    }
+    return text.toUpperCase().startsWith(prefix.toUpperCase());
+  }
+  return true;
+}
+
+/** 入参是否已经是"全部字符串 + 折叠序严格递增"（= 可以直接当索引用，零复制零排序） */
+function isSortedUniqueNames(functionNames: readonly (string | { name: string; file?: string })[]): boolean {
+  let prev: string | null = null;
+  for (const item of functionNames) {
+    if (typeof item !== 'string' || item.length === 0) return false;
+    if (prev !== null && compareFold(prev, item) >= 0) return false;
+    prev = item;
+  }
+  return true;
+}
+
 function prefixIndexFor(functionNames: readonly (string | { name: string; file?: string })[]): PrefixIndex {
   const cached = INDEX_CACHE.get(functionNames);
   if (cached !== undefined) return cached;
 
-  const seen = new Set<string>();
-  const pairs: { key: string; entry: NameEntry }[] = [];
+  // 快路（ERB 唯一的形态）：`memoizedErbFunctionNames` 交出来的就是"按归一化名升序、已去重"
+  // 的原文表 ⇒ 它自己就是索引，一条数组都不复制（旧实现为它再造了 11 万条大写串 + 11 万对象）
+  if (isSortedUniqueNames(functionNames)) {
+    const index: PrefixIndex = { names: functionNames as readonly string[], files: null };
+    INDEX_CACHE.set(functionNames, index);
+    return index;
+  }
+
+  // 慢路（`.kojo` 等未排序 / 带 file 的入参）：排一遍 + 相邻去重（稳定排序 ⇒ 保留首次出现的那条）。
+  // 排序键是**临时**的大写串（只活到本函数返回）：C++ 串比较比逐码元折叠快一个量级，
+  // 而它建完就成垃圾——常驻里只留 `names` / `files` 两条数组。
+  const names: string[] = [];
+  const files: (string | undefined)[] = [];
+  const keys: string[] = [];
+  let hasFile = false;
   for (const item of functionNames) {
     const name = typeof item === 'string' ? item : item.name;
     if (name.length === 0) continue;
-    const key = name.toUpperCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
     const file = typeof item === 'string' ? undefined : item.file;
-    pairs.push({ key, entry: file === undefined ? { name } : { name, file } });
+    if (file !== undefined) hasFile = true;
+    names.push(name);
+    files.push(file);
+    keys.push(name.toUpperCase());
   }
-  pairs.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  const order = names.map((_, i) => i);
+  order.sort((i, j) => (keys[i]! < keys[j]! ? -1 : keys[i]! > keys[j]! ? 1 : i - j));
+  const sortedNames: string[] = [];
+  const sortedFiles: (string | undefined)[] = [];
+  let prevKey: string | null = null;
+  for (const i of order) {
+    const key = keys[i]!;
+    if (prevKey !== null && prevKey === key) continue; // 大小写重名 ⇒ 一条（首次者胜）
+    prevKey = key;
+    sortedNames.push(names[i]!);
+    sortedFiles.push(files[i]);
+  }
 
-  const index: PrefixIndex = { keys: pairs.map((p) => p.key), entries: pairs.map((p) => p.entry) };
+  const index: PrefixIndex = { names: sortedNames, files: hasFile ? sortedFiles : null };
   INDEX_CACHE.set(functionNames, index);
   return index;
 }
 
 /** 首个小写等于或大于 `target` 的下标（升序数组；`target` 已归一化为大写） */
-function lowerBound(keys: readonly string[], target: string): number {
+function lowerBound(names: readonly string[], target: string): number {
   let lo = 0;
-  let hi = keys.length;
+  let hi = names.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (keys[mid]! < target) lo = mid + 1;
+    if (compareFold(names[mid]!, target) < 0) lo = mid + 1;
     else hi = mid;
   }
   return lo;
@@ -1067,10 +1156,11 @@ export function projectFunctionCandidates(
 ): Monaco.languages.CompletionItem[] {
   if (!monaco || !functionNames || functionNames.length === 0 || slot === null) return [];
   const index = prefixIndexFor(functionNames);
-  const keys = index.keys;
+  const names = index.names;
+  const files = index.files;
   const norm = slot.prefix.toUpperCase();
-  const from = lowerBound(keys, norm);
-  if (from >= keys.length || !keys[from]!.startsWith(norm)) return [];
+  const from = lowerBound(names, norm);
+  if (from >= names.length || !startsWithFold(names[from]!, norm)) return [];
 
   const range: Monaco.IRange = {
     startLineNumber: lineNumber,
@@ -1080,18 +1170,18 @@ export function projectFunctionCandidates(
   };
   const kind = monaco.languages.CompletionItemKind.Function;
   const items: Monaco.languages.CompletionItem[] = [];
-  for (let i = from; i < keys.length && items.length < MAX_NAME_CANDIDATES; i++) {
-    const key = keys[i]!;
-    if (!key.startsWith(norm)) break;
-    const entry = index.entries[i]!;
-    const exact = key === norm;
+  for (let i = from; i < names.length && items.length < MAX_NAME_CANDIDATES; i++) {
+    const name = names[i]!;
+    if (!startsWithFold(name, norm)) break;
+    const exact = name.length === norm.length;
+    const file = files?.[i];
     items.push({
-      label: entry.name,
+      label: name,
       kind,
-      insertText: entry.name,
+      insertText: name,
       range,
-      sortText: `${exact ? '0' : '1'}_${entry.name}`,
-      ...(entry.file !== undefined ? { detail: entry.file } : {}),
+      sortText: `${exact ? '0' : '1'}_${name}`,
+      ...(file !== undefined ? { detail: file } : {}),
     });
   }
   return items;

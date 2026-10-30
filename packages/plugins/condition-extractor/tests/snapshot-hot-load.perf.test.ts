@@ -263,7 +263,24 @@ describe('PERF-7 抽取快照热载合成基准（2,000 文件 / 28k 函数桶 /
         ` ｜ 省 ${ms(beforeLoadMs - afterLoadMs)}（after/before = ${(afterLoadMs / beforeLoadMs).toFixed(2)}）·` +
         ` 全消费最坏口径 ${ms(consumeMs)}（= 装载 + 每个函数都被问一次）· 同段共有的 JSON.parse ${ms(jsonParseMs)}`,
     );
-    expect(afterLoadMs).toBeLessThanOrEqual(beforeLoadMs);
+    /**
+     * **判据从"after ≤ before"放宽到"after ≤ before × 1.15"，并如实记账**（MEM-11，2026-10-30）。
+     *
+     * 为什么放宽：MEM-11 把条件壳从"字面量里写 `get dependencies()`"改成"数据属性字面量 +
+     * `defineProperty` 补**共享**访问器 + 状态放 `WeakMap`"。后者每枚壳多两次调用
+     * （`defineProperty` + `WeakMap.set`），实测 **109.3 ms vs before 99.8 ms（1.10×，+9.5 ms）**；
+     * 换来的是**形状从字典态回到快路径**：`(object properties)` 22.75 MB → **0.35 MB**，
+     * 真实快照 decode 后 heapUsed **46.6 → 21.8 MB**。
+     *
+     * 也就是说：这条闸原本量的"懒还原比急还原便宜"，现在**不成立了**——懒还原要多付一笔
+     * 固定的"装访问器"成本（52k 枚 × 0.18 µs）。但**净账仍是压倒性的**：一次开项目 +9.5 ms，
+     * 常驻 −22 MB。按 PITFALLS 263 的纪律，这里不删闸、不假装没变慢，而是**把 1.20× 写成
+     * 明确的可接受上界**（实测两轮 1.10 / 1.14；留到 1.20 是防共享 CPU 的抖动，不是放宽账），
+     * 并把两个数（+9.5~13.7 ms / −22 MB）留在日志与台账里。
+     * 若要重新拿回这 9.5 ms，唯一出路是"不装自有访问器"（走原型访问器），但那会改
+     * `Object.keys` / `toEqual` 的口径 ⇒ 不在本批。
+     */
+    expect(afterLoadMs).toBeLessThanOrEqual(beforeLoadMs * 1.2);
     expect(afterLoadMs).toBeLessThan(8000);
   });
 

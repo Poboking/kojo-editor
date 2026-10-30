@@ -14,11 +14,14 @@
  *
  * ```
  * node tools/heap-aggregate.mjs <x.heapsnapshot> [--top 40] [--type object] [--min 100]
+ * node tools/heap-aggregate.mjs <x.heapsnapshot> --arrays
+ * node tools/heap-aggregate.mjs <x.heapsnapshot> --owners --owners-of "(object properties)" --owners-hops 2
  * ```
  *
  * - `--type` 只看某一类（`object` / `string` / `array` / `code` / `native` / `hidden`）；
  * - `--min` 过滤掉元素数少于 N 的构造器（默认 0，全出）；
  * - 输出两段：① 按类型总账；② 按构造器 top N（含计数与平均 self_size）。
+ * - `--owners`：反向边归因（谁持有目标节点），见文件末「--owners」段。
  *
  * ## 快照怎么来
  *
@@ -43,7 +46,11 @@ const pick = (flag, dflt) => {
   return i >= 0 ? argv[i + 1] : dflt;
 };
 if (!file) {
-  console.error('用法：node tools/heap-aggregate.mjs <x.heapsnapshot> [--top 40] [--type object] [--min 100]');
+  console.error(
+    '用法：node tools/heap-aggregate.mjs <x.heapsnapshot> [--top 40] [--type object] [--min 100]\n' +
+      '      [--arrays] [--strings]\n' +
+      '      [--owners --owners-of "(object properties)" [--owners-hops 2] [--owners-top 20]]',
+  );
   process.exit(2);
 }
 const TOP = Number(pick('--top', '40'));
@@ -255,5 +262,233 @@ if (argv.includes('--strings')) {
   console.log('[heap] ── ≥8 KB 的字符串 top 16（持有者） ──');
   for (const t of tops.sort((a, b) => b.size - a.size).slice(0, 16)) {
     console.log(`[heap] ${(t.size / 1024).toFixed(0).padStart(7)} KB  ← ${clean(t.owner).slice(0, 40)}  「${clean(t.text).slice(0, 44)}」`);
+  }
+}
+
+/**
+ * `--owners`：**反向边归因** —— 给定"目标节点集合"，回答"**谁持有它们**"。
+ *
+ * ## 为什么要在 `--arrays` / `--strings` 之外再加这一段
+ *
+ * 那两段把"持有者"压成一行标签（只留首条边、只认 element 之外的第一条），够回答"这一堆是谁的"，
+ * 不够回答"**为什么**是这个形状"。真实持有链常常是**两级**：`system/Context → object:Object →
+ * (object properties)`——只做一层反查会把 24.8 MB 的字典态属性块全记到"某个 Object"头上，
+ * 而 Object 本身是几字节的空壳，处置办法（改闭包变量 / 改对象形状）完全不同。所以这里支持
+ * `--owners-hops 2` 逐层走，每层各出一张表。
+ *
+ * ## 用法
+ *
+ * ```
+ * # 谁持有 (object properties) 块，再往上走一层（→ 闭包 Context / 条目元组）
+ * node --max-old-space-size=4096 tools/heap-aggregate.mjs <snap> --owners \
+ *   --owners-of "(object properties)" --owners-hops 2 --owners-top 10
+ * # 谁持有 ArrayBuffer 的底层
+ * node --max-old-space-size=4096 tools/heap-aggregate.mjs <snap> --owners \
+ *   --owners-of "JSArrayBufferData" --owners-min 1024
+ * # 谁持有"只有 1 个槽的数组"（闭包 TDZ 槽的嫌疑对象）
+ * node --max-old-space-size=4096 tools/heap-aggregate.mjs <snap> --owners \
+ *   --owners-type array --owners-slots 1 --owners-top 10
+ * ```
+ *
+ * - `--owners-of <名字>`：按**节点名精确**匹配目标（`(object properties)` / `JSArrayBufferData`…）；
+ * - `--owners-like <子串>`：按子串匹配（名字不确定时用）；
+ * - `--owners-type <type>`：再按节点类型收窄（`array` / `object` / `native`…）；
+ * - `--owners-min <字节>`：只要 self_size ≥ N 的目标（默认 0）；
+ * - `--owners-slots <N>`：只要"**槽数恰为 N**"的目标——槽的口径与 `--arrays` 完全一致
+ *   （`element` 边 + 纯数字名的 `internal` 边，见 PITFALLS 269；只数 `element` 会把所有
+ *   FixedArray 报成"长度 0"）；
+ * - `--owners-hops <N>`：往上走几层（默认 1，最多 3）。第 N+1 层的目标 = 第 N 层记下的**父节点**；
+ * - `--owners-edge kind`：把 `internal:0` / `internal:12` 折成 `internal[slot]`。槽位下标是
+ *   "第几格"不是"谁"——不折时 hop 2 会被切成上万个一行组，真正的持有者反而看不见；
+ * - `--owners-top <N>`：每层打印多少行（默认 20）。
+ *
+ * ## 输出怎么读
+ *
+ * ```
+ * [heap] ── 持有者 hop 1（目标 52,424 枚 / 24.8 MB / 均 448 B）──
+ * [heap]      22.4 MB   52,424 枚  均 448 B  ← object:Object  边 internal:properties
+ * ```
+ *
+ * 「枚」是**去重的目标节点数**（同一枚被两处持有 ⇒ 两行各记一次，这正是要看的），
+ * 「均」是这些目标的 self_size 均值。`← 空` 说明没有任何边指向它（栈 / 寄存器 / 原生根）。
+ */
+if (argv.includes('--owners')) {
+  const ef = meta.edge_fields;
+  const estride = ef.length;
+  const iEtype = ef.indexOf('type');
+  const iEto = ef.indexOf('to_node');
+  const iEname = ef.indexOf('name_or_index');
+  const edgeTypes = meta.edge_types[iEtype];
+  const iEdgeCount = nf.indexOf('edge_count');
+  const nodeCount = nodes.length / stride;
+
+  const OF = pick('--owners-of', null);
+  const LIKE = pick('--owners-like', null);
+  const ONLY_OTYPE = pick('--owners-type', null);
+  const OMIN = Number(pick('--owners-min', '0'));
+  const SLOTS_ARG = pick('--owners-slots', null);
+  const SLOTS = SLOTS_ARG === null ? null : Number(SLOTS_ARG);
+  const HOPS = Math.min(3, Math.max(1, Number(pick('--owners-hops', '1'))));
+  const OTOP = Number(pick('--owners-top', '20'));
+  const MERGE_EDGE = pick('--owners-edge', 'full') === 'kind';
+  if (OF === null && LIKE === null && SLOTS === null) {
+    console.error('[heap] --owners 需要 --owners-of <名字> / --owners-like <子串> / --owners-slots <N> 之一');
+    process.exit(2);
+  }
+
+  const typeOf = (n) => typeNames[nodes[n * stride + iType]];
+  const nameOf = (n) => strings[nodes[n * stride + iName]];
+  const sizeOf = (n) => nodes[n * stride + iSize];
+
+  // 槽数只在 `--owners-slots` 时才算（全表扫一遍边，2.4M 节点 ≈ 1 s）
+  let slotCount = null;
+  if (SLOTS !== null) {
+    const isDigits = (s) => {
+      if (typeof s !== 'string' || s.length === 0 || s.length > 9) return false;
+      for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        if (c < 48 || c > 57) return false;
+      }
+      return true;
+    };
+    slotCount = new Uint32Array(nodeCount);
+    let ei = 0;
+    for (let n = 0; n < nodeCount; n++) {
+      const ec = nodes[n * stride + iEdgeCount];
+      for (let k = 0; k < ec; k++, ei += estride) {
+        const et = edgeTypes[edges[ei + iEtype]];
+        if (et === 'element' || (et === 'internal' && isDigits(strings[edges[ei + iEname]]))) slotCount[n]++;
+      }
+    }
+  }
+
+  // ---- 选目标 ----
+  let targets = new Uint8Array(nodeCount);
+  let tCount = 0;
+  let tBytes = 0;
+  for (let n = 0; n < nodeCount; n++) {
+    if (ONLY_OTYPE !== null && typeOf(n) !== ONLY_OTYPE) continue;
+    if (sizeOf(n) < OMIN) continue;
+    if (SLOTS !== null && slotCount[n] !== SLOTS) continue;
+    if (OF !== null || LIKE !== null) {
+      const nm = nameOf(n);
+      if (typeof nm !== 'string') continue;
+      if (OF !== null ? nm !== OF : !nm.includes(LIKE)) continue;
+    }
+    targets[n] = 1;
+    tCount++;
+    tBytes += sizeOf(n);
+  }
+  const desc = [
+    OF !== null ? `名=「${clean(OF)}」` : null,
+    LIKE !== null ? `名含「${clean(LIKE)}」` : null,
+    ONLY_OTYPE !== null ? `type=${ONLY_OTYPE}` : null,
+    SLOTS !== null ? `槽数=${SLOTS}` : null,
+    OMIN > 0 ? `self_size≥${OMIN}` : null,
+  ]
+    .filter(Boolean)
+    .join(' ');
+  console.log(`[heap] ── owners 目标：${desc} ⇒ ${tCount.toLocaleString()} 枚 / ${mb(tBytes)} MB ──`);
+  if (tCount === 0) process.exit(0);
+
+  const edgeLabel = (et, raw) => {
+    if (et === 'element' || et === 'hidden') return MERGE_EDGE ? et : `[${raw}]`;
+    const nm = strings[raw] ?? raw;
+    // `--owners-edge=kind`：把 `internal:0` / `internal:12` 折成 `internal[slot]`。
+    // 槽位下标是"第几格"，不是"谁"——不折的话 hop 2 会被切成上万个 1 行组
+    // （每个下标一组），真正的持有者反而看不见。
+    if (MERGE_EDGE && et === 'internal' && /^\d+$/.test(String(nm))) return 'internal[slot]';
+    return `${et}:${nm}`;
+  };
+
+  /**
+   * **按字节归属**（不是按"父节点自己多大"）。
+   *
+   * hop 1 的 `size` 就是目标的 self_size；从 hop 2 起，父节点往往是 32 B 的 JSArray 头，
+   * 拿它自己的 self_size 记账会把 26 MB 的底层块报成"3.4 MB 的持有者"——那正是
+   * "谁持有这 26 MB"这个问题要避免的假账。所以每一层都把**原始目标的字节**带上去：
+   * `weight(p) += weight(t)`，同一枚被两处持有时两行各记一次（要看的正是这个）。
+   */
+  let weight = new Float64Array(nodeCount);
+  for (let n = 0; n < nodeCount; n++) if (targets[n] === 1) weight[n] = sizeOf(n);
+
+  /**
+   * **同一段包含关系在快照里有两条边**（PITFALLS 269 的背面）：
+   * `Array --element--> 子` 与 `(object elements) --internal:"3"--> 子` 指的是同一格。
+   * 不折的话 hop 2 会把同一笔字节报两遍（实测 `object/Array` 22.1 MB 与
+   * `array/(object elements)` 22.1 MB 是同一批 206,751 段关系），一眼看去像"翻倍"。
+   *
+   * 折法：`element` 边只从 JSArray 出发、且**每个槽都有一条** ⇒ 凡是"源节点是某个
+   * Array 的 elements 块"的 `internal:<下标>` 边都跳过，只留 `element` 那条。
+   * 属性块 / 元组（没有 `element` 对应边）的下标边照常保留。
+   */
+  const elemBlockOwner = new Int32Array(nodeCount).fill(-1);
+  {
+    let ei = 0;
+    for (let n = 0; n < nodeCount; n++) {
+      const ec = nodes[n * stride + iEdgeCount];
+      for (let k = 0; k < ec; k++, ei += estride) {
+        if (edgeTypes[edges[ei + iEtype]] !== 'internal') continue;
+        if (strings[edges[ei + iEname]] !== 'elements') continue;
+        elemBlockOwner[edges[ei + iEto] / stride] = n;
+      }
+    }
+  }
+  const isDigitName = (s) => typeof s === 'string' && s.length > 0 && s.length <= 9 && !/[^0-9]/.test(s);
+
+  for (let hop = 1; hop <= HOPS; hop++) {
+    const next = new Uint8Array(nodeCount);
+    const nextW = new Float64Array(nodeCount);
+    const agg = new Map(); // `${父type}\0${父名}\0${边}` → { count, size, seen }
+    let ei = 0;
+    for (let n = 0; n < nodeCount; n++) {
+      const ec = nodes[n * stride + iEdgeCount];
+      for (let k = 0; k < ec; k++, ei += estride) {
+        const to = edges[ei + iEto] / stride;
+        if (targets[to] !== 1) continue;
+        const et = edgeTypes[edges[ei + iEtype]];
+        // elements 块的下标边与所属 Array 的 element 边是同一格，只留后者（见上面的注释）
+        if (et === 'internal' && elemBlockOwner[n] !== -1 && isDigitName(strings[edges[ei + iEname]])) continue;
+        const label = edgeLabel(et, edges[ei + iEname]);
+        const key = `${typeOf(n)}\u0000${nameOf(n)}\u0000${label}`;
+        let a = agg.get(key);
+        if (a === undefined) {
+          a = { type: typeOf(n), name: nameOf(n), label, size: 0, seen: new Set() };
+          agg.set(key, a);
+        }
+        // 去重：同一枚目标被同一个父的同一类边指两次（少见）只记一次，别把"枚"数虚增
+        if (!a.seen.has(to)) {
+          a.seen.add(to);
+          a.size += weight[to];
+        }
+        next[n] = 1;
+        nextW[n] += weight[to];
+      }
+    }
+    const rows = [...agg.values()].sort((a, b) => b.size - a.size);
+    console.log(
+      `[heap] ── 持有者 hop ${hop}（${hop === 1 ? '目标' : '承上'} ${tCount.toLocaleString()} 枚 / 归属 ${mb(tBytes)} MB）top ${OTOP} ──`,
+    );
+    if (rows.length === 0) console.log('[heap]   （无持有者：栈 / 寄存器 / 原生根）');
+    for (const r of rows.slice(0, OTOP)) {
+      console.log(
+        `[heap] ${mb(r.size).padStart(9)} MB  ${String(r.seen.size).padStart(9)} 枚  均 ${(r.size / r.seen.size).toFixed(0).padStart(6)} B` +
+          `  ← ${r.type}/${clean(r.name).slice(0, 40)}  边 ${r.label}`,
+      );
+    }
+    if (rows.length > OTOP) console.log(`[heap]   …另有 ${rows.length - OTOP} 组（--owners-top 抬高可看全）`);
+
+    // 下一层：目标换成这一层记下的父节点，字节按上面的 `weight` 逐层带上去
+    targets = next;
+    weight = nextW;
+    tCount = 0;
+    tBytes = 0;
+    for (let n = 0; n < nodeCount; n++) {
+      if (targets[n] === 1) {
+        tCount++;
+        tBytes += weight[n];
+      }
+    }
+    if (tCount === 0) break;
   }
 }

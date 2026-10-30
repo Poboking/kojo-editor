@@ -120,6 +120,8 @@ const gc = () => {
   forceGc();
 };
 const mb = (n) => +(n / 1024 / 1024).toFixed(1);
+/** 带符号的差值（`a` 相对 `b` 的变化）：释放量写 `-X`，反而涨了写 `+X`——别让 `--157.6` 这种双负号进日志 */
+const signed = (deltaMb) => `${deltaMb >= 0 ? '-' : '+'}${Math.abs(deltaMb).toFixed(1)}MB`;
 const snap = () => {
   const m = process.memoryUsage();
   return { rss: mb(m.rss), heap: mb(m.heapUsed) };
@@ -498,6 +500,30 @@ if (!process.argv.includes('--no-cond')) {
   }
 }
 
+/**
+ * `--ablate-only=textCache`：会话文本缓存**只能在释放之前量**。
+ *
+ * 稳态（`3 release`）那一步之后这张表已经空了，在那里再"消融"一次必然报 `-0 MB`
+ * ——一个不报错、也不像错的假读数（PITFALLS 260 ③ 同族）。所以这一步**提前到释放点**：
+ * 在 `releaseTextCache` 之前 gc 一次、量一次、真释放、再量一次，报的就是这张表自己的驻留。
+ * 只在 `--ablate-only=textCache` 时执行（默认路径的释放时机与读数一概不变）。
+ */
+const ABLATE_ONLY = (() => {
+  const a = process.argv.find((x) => x.startsWith('--ablate-only='));
+  return a === undefined ? null : a.slice('--ablate-only='.length);
+})();
+if (ABLATE_ONLY === 'textCache') {
+  const t = kernel.io.debugCaches?.().text ?? null;
+  gc();
+  const before = process.memoryUsage().heapUsed;
+  kernel.io.releaseTextCache?.('manual');
+  gc();
+  const after = process.memoryUsage().heapUsed;
+  console.log(
+    `[mem] ablate ${'textCache'.padEnd(16)} ${signed((before - after) / 1048576).padStart(9)}（剩 ${mb(after)}MB）` +
+      ` 释放前 text=${JSON.stringify(t)}`,
+  );
+}
 kernel.io.releaseTextCache?.('manual');
 gc();
 const afterRelease = snap();
@@ -537,11 +563,11 @@ if (SNAPSHOT_AFTER) {
   console.log(`[mem] snapshot(after) → ${SNAPSHOT_AFTER}（${Date.now() - t0}ms）`);
 }
 
-/** 带符号的差值（`a` 相对 `b` 的变化）：释放量写 `-X`，反而涨了写 `+X`——别让 `--157.6` 这种双负号进日志 */
-const signed = (deltaMb) => `${deltaMb >= 0 ? '-' : '+'}${Math.abs(deltaMb).toFixed(1)}MB`;
 const drop = (a, b) => signed(a.heap - b.heap);
 
-if (process.argv.includes('--ablate') && index) {
+// `--ablate-only=<key>` 本身就意味着"只跑那一步"——别逼使用者再补一个 `--ablate`
+// （忘了补就会得到一句都不打印的静默成功，是"跑通了但什么也没做"的典型形态）
+if ((process.argv.includes('--ablate') || ABLATE_ONLY !== null) && index) {
   // 消融：摘掉索引的一块，看堆掉多少——比追持有链快，也比猜快照准。
   //
   // ⚠ **一次只许跑一步**（`--ablate-only=<key>`）。串着跑会把读数毁掉：每一步的 `gc()`
@@ -551,8 +577,7 @@ if (process.argv.includes('--ablate') && index) {
   // 另：删单个字段会触发 V8 把对象转字典模式，**堆反而涨**（`byName.docComment` 报 +18.6 MB），
   // 所以"删字段"这类步骤只能看方向，不能当数值。
   console.log(`[mem] ablate index frozen=${Object.isFrozen(index)} keys=${Object.keys(index).join(',')}`);
-  const onlyArg = process.argv.find((a) => a.startsWith('--ablate-only='));
-  const only = onlyArg === undefined ? null : onlyArg.slice('--ablate-only='.length);
+  const only = ABLATE_ONLY;
   const step = (key, label, fn) => {
     if (only !== null && only !== key) return;
     // 基线用"刚 gc 过"的值：不然 before 里含着上一步的垃圾
@@ -590,6 +615,66 @@ if (process.argv.includes('--ablate') && index) {
   step('files', 'files.clear', () => index.files.clear());
   step('mtimes', 'fileMtimes.clear', () => index.fileMtimes?.clear?.());
   step('snapshot', 'snapshot entries', dropEntries);
+  /**
+   * `entries`：只摘**条目里的重字段**（`functions` / `dims` / `refs` / `labels` / 候选集），
+   * 条目本身（3,971 枚 `SnapshotEntry` + 键）留着——与 `snapshot`（整条删）配对，
+   * 两者之差就是"条目壳 + 键"自己的常驻。
+   *
+   * ⚠ 三个口径都是踩过的：
+   * 1. **就地 `length = 0`，不是换新数组**：惰性壳的 getter 闭包攥着**同一个** `fns` / `dims`
+   *    数组，`tuple[5] = []` 只是把元组那一格换掉，闭包手里的旧数组照样钉住全部函数元组
+   *    ⇒ 报 `-0 MB`（PITFALLS 267 同款：两处持有，只清一处等于没清）。
+   * 2. **不许读 `e.file.functions`**：热载下那是 getter，读一次就把 10 万枚函数对象实体化
+   *    （PITFALLS 257 ④），量的就不是"摘掉"而是"先建后摘"。
+   * 3. 候选集是 `Uint32Array`，收不缩，只能两处（条目字段 + 元组第 11 格）一起置 `null`。
+   */
+  const dropHeavy = (t) => {
+    for (const i of [5, 6, 7, 8]) if (Array.isArray(t[i])) t[i].length = 0;
+    t[10] = null;
+  };
+  step('entries', 'entries 重字段', () => {
+    const svc = kernel.services.get?.('erb.parser');
+    const snap = svc?.snapshotForDebug?.() ?? null;
+    const entries = snap?.entries ?? null;
+    // 先打印一次形状：`snapshotForDebug` 缺失 / 热载没保留快照时这里静默 return，
+    // 读数会变成一句漂亮的 `-0.0MB`（PITFALLS 260 ③ 的"跑通了但什么也没做"）
+    if (!entries) {
+      console.log('[mem] ⚠ entries 不可达（snapshotForDebug 缺失或本轮无快照），本步无效');
+      return;
+    }
+    let n = 0;
+    let tupleForm = 0;
+    for (const k in entries) {
+      n++;
+      if (Array.isArray(entries[k])) tupleForm++;
+    }
+    console.log(`[mem] ablate-probe entries=${n}（元组形态 ${tupleForm}）`);
+    for (const k in entries) {
+      const e = entries[k];
+      if (Array.isArray(e)) {
+        dropHeavy(e);
+        continue;
+      }
+      if (e === null || typeof e !== 'object') continue;
+      if (Array.isArray(e.refs)) e.refs.length = 0;
+      if ('candidateHashes' in e) e.candidateHashes = null;
+      const shell = e.file;
+      if (shell === null || typeof shell !== 'object') continue;
+      for (const sym of Object.getOwnPropertySymbols(shell)) {
+        const t = shell[sym];
+        if (Array.isArray(t) && t.length === 11) dropHeavy(t);
+      }
+    }
+  });
+  /**
+   * `cond`：条件抽取器索引（热载下要 `ensureIndex()` 显式跑才有；`--no-cond` 时为空）。
+   * `ConditionEngine.clear()` 同时清 `last` / 明细缓存 / 正文缓存——三块一起摘才是这一坨的账。
+   */
+  step('cond', 'condition 索引', () => {
+    const svc = kernel.services.get?.('condition.extractor');
+    console.log(`[mem] ablate-probe condition.extractor clear=${typeof svc?.clear}`);
+    svc?.clear?.();
+  });
   // `candidates`（REFS-PROVENANCE，2026-10-22）是**每文件一份的候选记号集**，`'\n'` 连接。
   // 稳态没人读它（只有"名录变了"时 `refsProvableUnchanged` 才逐段查），但它跨轮落盘、
   // 每份都是两字节串（含日文标识符）⇒ 常驻很贵。
