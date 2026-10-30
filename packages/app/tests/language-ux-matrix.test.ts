@@ -147,10 +147,17 @@ function selfRegistrationFiles(api: string, languageId: ParityLanguageId): reado
  * 这是**宿主共享面**的唯一形状：同一枚 provider 挂到每一门声明 `languageServices: true` 的语言。
  */
 function sharedRegistrationFiles(api: string): readonly string[] {
-  const pattern = new RegExp(
+  const inline = new RegExp(
     `registerForLanguageServices\\([\\s\\S]{0,500}?\\.languages\\.${api}\\s*\\(`,
   );
-  return SOURCE_FILES.filter((file) => pattern.test(file.text)).map((file) => file.rel);
+  // SDK-B5b 车 1（2026-10-31）：补全 / 悬停并进槽腿表（`monaco/slot-service-providers.ts`），
+  // API 写在表项里、收口只在安装器里调一次。两条判据仍要**同时**成立：
+  // 文件里有收口调用 + 文件里有这条 API 的表项。
+  const table = new RegExp(`legOf\\s*\\([\\s\\S]{0,300}?\\.languages\\.${api}\\s*\\(`);
+  const collector = /registerForLanguageServices\(\s+monaco,[\s\S]{0,200}?leg\.register/;
+  return SOURCE_FILES.filter(
+    (file) => inline.test(file.text) || (collector.test(file.text) && table.test(file.text)),
+  ).map((file) => file.rel);
 }
 
 /** 声明 `languageServices: true` 的语言 id（registerForLanguageServices 实际会挂到的那些） */
@@ -471,7 +478,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         erb: 'registered',
         kojo2: 'registered',
         evidence:
-          'monaco/kojo-definition.ts（共享收口）+ monaco/kojo2-providers.ts；ERB 另有 erb-implementation.ts',
+          'monaco/kojo-definition.ts（共享收口）+ monaco/slot-service-providers.ts（悬停槽腿）；ERB 另有 erb-implementation.ts',
         assembled: true,
       },
       {
@@ -495,7 +502,7 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '补全',
         erb: 'registered',
         kojo2: 'registered',
-        evidence: 'monaco/erb-completion.ts（装配核）+ monaco/kojo2-providers.ts（共享收口 + 插件供方）',
+        evidence: 'monaco/erb-completion.ts（装配核）+ monaco/slot-service-providers.ts（槽腿表 + 插件供方）',
         assembled: true,
       },
       {
@@ -633,7 +640,7 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   jump: [
     { rel: 'monaco/kojo-definition.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerDefinitionProvider/ },
-    // B3b（2026-10-24）：2.0 的转定义不再由 `kojo2-providers.ts` 自建 provider —— 它改走
+    // B3b（2026-10-24）：2.0 的转定义不再由那枚补全 / 悬停安装器自建 provider —— 它改走
     // 同一枚槽腿（`kojo-definition.ts`），由 descriptor 的 `slotServices` 点名挂上，
     // 应答来自插件 `@kojo/plugin-kojo-lang`。取证点随之从"那枚原生 provider"变成
     // "两处声明"：能力名进 `registerForLanguageServices`、语言进 descriptor。
@@ -662,11 +669,13 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
     // B3c（2026-10-28）：2.0 的补全不再由 `kojo2-providers.ts` 自建 provider —— 它改走共享
     // 收口（能力名 `completion`），由 descriptor 的 `slotServices` 点名挂上，应答来自插件
     // `@kojo/plugin-kojo-lang`。取证点随之从"那条原生注册行"变成"两处声明"。
+    // SDK-B5b 车 1（2026-10-31）：两条腿并进语言无关的槽腿表 ⇒ 取证点换成
+    // `slot-service-providers.ts` 的 `legOf('completion', …)` 表项。
     {
-      rel: 'monaco/kojo2-providers.ts',
-      re: /registerForLanguageServices\([\s\S]{0,500}?registerCompletionItemProvider/,
+      rel: 'monaco/slot-service-providers.ts',
+      re: /legOf\('completion',[\s\S]{0,200}?registerCompletionItemProvider/,
     },
-    { rel: 'monaco/kojo2-providers.ts', re: /'completion',\s*\)/ },
+    { rel: 'monaco/slot-service-providers.ts', re: /legOf\('completion',/ },
     { rel: 'monaco/languages.ts', re: /slotServices:\s*\[[^\]]*'completion'/ },
   ],
   format: [
@@ -779,7 +788,7 @@ const ASSEMBLY_PROBES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   jump: [
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo-definition'/ },
-    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo2-providers'/ },
+    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/slot-service-providers'/ },
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/erb-implementation'/ },
   ],
   refs: [
@@ -792,7 +801,7 @@ const ASSEMBLY_PROBES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   completion: [
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/erb-completion'/ },
-    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo2-providers'/ },
+    { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/slot-service-providers'/ },
   ],
   format: [
     { rel: GLOBAL_PROVIDERS, re: /'\.\.\/monaco\/kojo-format'/ },
@@ -1012,7 +1021,7 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
     // "扫描器确实看不见它"，同时正向钉住收口仍在（缺一条就会让下面"另一门也有注册面"空转）。
     expect(apis).not.toContain('registerCompletionItemProvider');
     expect(sharedRegistrationFiles('registerCompletionItemProvider')).toContain(
-      'monaco/kojo2-providers.ts',
+      'monaco/slot-service-providers.ts',
     );
     // LAU-4（2026-10-30）：同符号高亮 / 结构化扩选两侧**都**改走共享收口（ERB 由
     // `languageServices: true`、kojo2 由 `slotServices` 收进来）⇒ 单语言注册行两侧都归零。

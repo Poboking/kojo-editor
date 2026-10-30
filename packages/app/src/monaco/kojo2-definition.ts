@@ -18,7 +18,8 @@
  * "语言事实"。把它们塞进包里会立刻违反包的三条硬约束（零 Monaco / 零 IO / 零游戏名词）。
  *
  * 注：2.0 的**展开视图**那两条追加落点（`expand-view.ts` 的 `via === 'definition'`）
- * 不在这里判——那是消费方拿到落点之后的 additive 追加，见 `kojo2-providers.ts`。
+ * 不在这里判——那是消费方拿到落点之后的 additive 追加，现由插件侧合成
+ * （`@kojo/plugin-kojo-lang` 的 `definition` 贡献）。
  */
 import type * as Monaco from './entry';
 import type { EditorSymbolLocation } from '@kojo/plugin-api';

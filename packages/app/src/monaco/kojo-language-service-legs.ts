@@ -38,7 +38,7 @@ import { pkey } from '../ui/file-tree-ops';
  *
  * B0 只落"合并纪律"、B3c（补全 / 悬停）与 B3d（签名 / 格式化）把**安装器交回槽**：
  * 四个能力的唯一供方都是插件 `@kojo/plugin-kojo-lang`，宿主侧只剩"model → 请求"与
- * "契约 → Monaco"两段翻译（`kojo2-providers.ts` / `kojo2-signature.ts` / `kojo2-format.ts`）。
+ * "契约 → Monaco"两段翻译（`slot-service-providers.ts` / `kojo2-signature.ts` / `kojo2-format.ts`）。
  *
  * 为什么必须等宿主原生实现删干净才能装 provider：同一格两份答案时，Monaco 对补全取并集
  * （候选翻倍）、对悬停取多家（两个浮层段落）、对格式化按"第一个非空"（谁先注册谁说了算，
@@ -290,7 +290,7 @@ export function signatureRequestOf(
 /**
  * 取整篇源文；模型已 dispose / 桩 model ⇒ `null`（调用方给空结果，绝不抛进击键路径）。
  *
- * B3d 起从 `kojo2-providers.ts` 提上来：补全 / 悬停 / 签名 / 格式化四条腿都要这同一刀，
+ * B3d 起从补全 / 悬停那枚安装器提上来：补全 / 悬停 / 签名 / 格式化四条腿都要这同一刀，
  * 各抄一份就是"取文失败"有四种处置口径（其中一种迟早会抛）。
  */
 export function modelTextOf(model: Monaco.editor.ITextModel): string | null {

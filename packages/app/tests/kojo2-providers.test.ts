@@ -5,16 +5,22 @@
  *
  * 补全与悬停的**判据**已整块搬进 `@kojo/kojo-lang`，作答的是插件
  * `@kojo/plugin-kojo-lang` 在 `ui.editor.languageService` 槽里的 `kojo2-completion` /
- * `kojo2-hover` 两枚贡献。宿主 `monaco/kojo2-providers.ts` 只剩三件事：
+ * `kojo2-hover` 两枚贡献。宿主只剩三件事：
  * ① model → 请求（宿主事实：path / languageId / version / 全文 / 当前项目）；
  * ② 契约响应 → Monaco 协议（range / documentation / insertTextFormat / 悬停 contents）；
- * ③ 注册（`registerForLanguageServices(monaco, register, 'completion' | 'hover')` 共享收口）。
+ * ③ 注册（`registerForLanguageServices(monaco, register, kind)` 共享收口）。
  *
- * 因此本文件的判据分五层，**每一层都只钉这一层的事**（越界就是给搬家后的位置留下第二份答案）：
+ * **SDK-B5b 车 1（2026-10-31）**：这三件事从 kojo2 专属的 `monaco/kojo2-providers.ts` 搬进
+ * **语言无关**的 `monaco/slot-service-providers.ts`——`kind` →（注册 API、请求构造、
+ * 契约 → Monaco 形状）的一张表 + 一枚安装器，本车只开 `completion` / `hover` 两格。
+ * 下面「注册顺序」那一组是搬家时新增的：表格序 = 实际注册序 = 装配点位置，三者任一变了都红。
+ *
+ * 因此本文件的判据分六层，**每一层都只钉这一层的事**（越界就是给搬家后的位置留下第二份答案）：
  * 1. **注册**：语言 selector 来自 descriptor（`languageServices` ∪ 点名 `completion` / `hover`
  *    的 `slotServices`），不是当年那个"注册调用第一个实参写死 `KOJO2_LANGUAGE_ID`"；
- * 2. **图标**：契约十二档 → Monaco 枚举逐格对表（含 B3c 新增的 operator / event / constant /
- *    struct / enum / module 六档）；
+ * 1b. **注册顺序**：表格数组序 = 实际注册序（补全先、悬停后）＋ 装配点相对序不变；
+ * 2. **图标**：契约十三档 → Monaco 枚举逐格对表（含 B3c 新增的 operator / event / constant /
+ *    struct / enum / module 六档与 LAU-4 的 reference）；
  * 3. **插入语义**：`insertTextFormat === 'snippet'` 才开 `InsertAsSnippet`；`kind: 'snippet'`
  *    只挑图标；桩缺枚举时**丢弃带模板的那一档**（不把 undefined 写进 kind）；
  * 4. **协议翻译**：range → `IRange`、documentation 按 `documentationFormat` 分形态、
@@ -50,12 +56,13 @@ import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import {
-  installKojo2SlotProviders,
-  kojo2CompletionKindOf,
+  SLOT_SERVICE_LEGS,
+  completionKindOf,
+  installSlotServiceProviders,
   toMonacoCompletionItem,
   toMonacoCompletionItems,
   toMonacoHover,
-} from '../src/monaco/kojo2-providers';
+} from '../src/monaco/slot-service-providers';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '../../..');
@@ -168,7 +175,7 @@ function fakeMonaco(options: FakeMonacoOptions = {}): FakeMonaco {
 
 function installForTest(options: FakeMonacoOptions = {}): FakeMonaco {
   const fake = fakeMonaco(options);
-  installKojo2SlotProviders(fake.monaco);
+  installSlotServiceProviders(fake.monaco);
   return fake;
 }
 
@@ -367,12 +374,50 @@ describe('注册：selector 来自共享收口（descriptor 的 languageServices
   });
 });
 
+/* ============================== ①b 注册顺序（B5b 车 1 新增） ============================== */
+
+/**
+ * **为什么顺序也要钉成判据**：Monaco 对**单答型** provider（悬停）是"第一家说了算"，
+ * 对补全是并集；而对悬挂在同一个 `kind` 上的多份供方，谁是"第一家"只由注册顺序决定
+ * （`register-dialects.ts` 头注有这条取证）。表格化之后顺序从"两行 `push` 的书写次序"变成
+ * "数组元素的次序"——迁移时最容易悄悄改掉的就是它，所以这里钉三层：
+ * ① 表格序 = 搬家前的两枚 push 序（completion → hover）；
+ * ② 实际注册序 = 表格序（每条腿逐门挂完再挂下一条）；
+ * ③ 装配点那道调用的相对位置（语义捕获之后、切流块之前）也照旧。
+ */
+describe('注册顺序：补全先于悬停（单答型第一家说了算）', () => {
+  it('表格数组序 = 搬家前的 push 序（completion → hover，且只有这两格）', () => {
+    expect(SLOT_SERVICE_LEGS.map((leg) => leg.kind)).toEqual(['completion', 'hover']);
+  });
+
+  it('实际注册序 = 表格序：补全整组在前、悬停整组在后', () => {
+    const fake = installForTest();
+    expect(fake.registrations.map((entry) => entry.kind)).toEqual([
+      ...COMPLETION_SELECTORS.map(() => 'completion'),
+      ...HOVER_SELECTORS.map(() => 'hover'),
+    ]);
+  });
+
+  it('装配点相对序不变：语义捕获预取 → 槽腿工厂 → 切流块', () => {
+    const source = readFileSync(
+      resolve(REPO_ROOT, 'packages', 'app', 'src', 'ui', 'editor-global-providers.ts'),
+      'utf8',
+    );
+    const captures = source.indexOf('globalDisposers.push(installKojo2SemanticCaptures(monaco))');
+    const legs = source.indexOf('globalDisposers.push(installSlotServiceProviders(monaco))');
+    const cutover = source.indexOf('if (isKojo2CutoverEnabled()) {');
+    expect(captures).toBeGreaterThan(-1);
+    expect(legs).toBeGreaterThan(captures);
+    expect(cutover).toBeGreaterThan(legs);
+  });
+});
+
 /* ============================== ② dispose / 回滚 ============================== */
 
 describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
   it('dispose 幂等：两次只撤一轮，两条腿逐门各撤一次', () => {
     const fake = installForTest();
-    const installed = installKojo2SlotProviders(fake.monaco);
+    const installed = installSlotServiceProviders(fake.monaco);
     installed.dispose();
     installed.dispose();
     expect(fake.disposeCalls.filter((kind) => kind === 'completion')).toHaveLength(
@@ -386,7 +431,7 @@ describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
 
   it('一枚 dispose 抛错不带走其余，也不把错误抛给调用方', () => {
     const fake = fakeMonaco({ failDisposeOn: 'hover' });
-    const installed = installKojo2SlotProviders(fake.monaco);
+    const installed = installSlotServiceProviders(fake.monaco);
     expect(() => installed.dispose()).not.toThrow();
     // 补全那一组全撤了；悬停组第一枚就抛，被"逐枚 try-catch"吞掉（不许带走别的注册组）
     expect(fake.disposeCalls.filter((kind) => kind === 'completion')).toHaveLength(
@@ -399,9 +444,9 @@ describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
     // 这一格钉的是**旧安装器承诺过的语义**：注册半途抛错 ⇒ 撤回已挂上的那几枚再外抛。
     // 搬家后两枚能力都由 `registerForLanguageServices` 一次铺完所有语言；如果写成
     // `registrations.push(a, b)`，第二枚抛错时第一枚的句柄还没进数组 ⇒ 撤不回来（静默残留）。
-    // 实现改成逐枚 push（见 `kojo2-providers.ts` 的注），这里的回滚就必须真的发生。
+    // 实现改成逐条腿 push（见 `slot-service-providers.ts` 的注），这里的回滚就必须真的发生。
     const fake = fakeMonaco({ failOn: 'hover' });
-    expect(() => installKojo2SlotProviders(fake.monaco)).toThrow(/注册 hover/);
+    expect(() => installSlotServiceProviders(fake.monaco)).toThrow(/注册 hover/);
     // 挂上过（可见事实）
     expect(fake.registrations.map((entry) => entry.kind)).toEqual(
       COMPLETION_SELECTORS.map(() => 'completion'),
@@ -413,7 +458,7 @@ describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
     expect(fake.disposeCalls).not.toContain('hover');
     // 回滚代码仍在（实现若退回 `push(a, b)`，上面那条 dispose 断言会先红，这条是二道保险）
     const source = readFileSync(
-      resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'kojo2-providers.ts'),
+      resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'slot-service-providers.ts'),
       'utf8',
     );
     expect(source).toContain('for (const registration of registrations)');
@@ -421,7 +466,7 @@ describe('dispose 与半途失败：聚合句柄幂等、逐枚隔离', () => {
 
   it('安装器不读切流开关（K2-SURFACE-DEFAULT：只读语言面装配即注册）', () => {
     const source = readFileSync(
-      resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'kojo2-providers.ts'),
+      resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'slot-service-providers.ts'),
       'utf8',
     );
     expect(source).not.toContain('isKojo2CutoverEnabled');
@@ -450,20 +495,20 @@ describe('图标：契约十三档 → Monaco 枚举逐格对表', () => {
 
   for (const [kind, expected] of TABLE) {
     it(`${kind} ⇒ ${expected}`, () => {
-      expect(kojo2CompletionKindOf(fakeMonaco().monaco, kind)).toBe(expected);
+      expect(completionKindOf(fakeMonaco().monaco, kind)).toBe(expected);
     });
   }
 
   it('未知档 / 缺省 ⇒ Text（不借邻居的色）', () => {
     expect(
-      kojo2CompletionKindOf(fakeMonaco().monaco, '未来新增的档' as EditorCompletionItemKind),
+      completionKindOf(fakeMonaco().monaco, '未来新增的档' as EditorCompletionItemKind),
     ).toBe(KINDS.Text);
-    expect(kojo2CompletionKindOf(fakeMonaco().monaco, undefined)).toBe(KINDS.Text);
+    expect(completionKindOf(fakeMonaco().monaco, undefined)).toBe(KINDS.Text);
   });
 
   it('桩缺 Snippet 枚举：`snippet` 档退 Text（纯图标那一路；带模板的那一路整枚丢弃，见下一组）', () => {
     const fake = fakeMonaco({ omitSnippetKind: true });
-    expect(kojo2CompletionKindOf(fake.monaco, 'snippet')).toBe(KINDS.Text);
+    expect(completionKindOf(fake.monaco, 'snippet')).toBe(KINDS.Text);
   });
 });
 
@@ -1007,9 +1052,9 @@ describe('装配纪律：共享收口 + 插件供方是唯一落点（读源码�
   const read = (...segments: string[]): string =>
     readFileSync(resolve(REPO_ROOT, ...segments), 'utf8');
 
-  it('`editor-global-providers` 在 flag 守卫块之外装配捕获预取器与两枚语言服务', () => {
+  it('`editor-global-providers` 在 flag 守卫块之外装配捕获预取器与通用槽腿工厂', () => {
     const source = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
-    expect(source).toContain("from '../monaco/kojo2-providers'");
+    expect(source).toContain("from '../monaco/slot-service-providers'");
     // B3 语义收口（`ceedc0c8`）之后纪律**反向**了：着色 provider 的注册搬进共享收口
     // （kojo2 由 descriptor 的 `slotServices: ['semanticToken']` 点名），宿主这一侧只剩
     // 「把捕获快照预热好」。所以这里断的是"只装预取器、且不再自己注册 provider"——
@@ -1017,28 +1062,30 @@ describe('装配纪律：共享收口 + 插件供方是唯一落点（读源码�
     // provider 报名，收口的"恰好一份"立刻破功。
     expect(source).toContain('installKojo2SemanticCaptures(monaco)');
     expect(source).not.toMatch(/installKojo2SemanticTokensProvider\s*\(/);
-    expect(source).toContain('installKojo2SlotProviders(monaco)');
+    expect(source).toContain('installSlotServiceProviders(monaco)');
+    // 旧安装器名**归零**：搬家后谁再写回 kojo2 专属的那一枚，就等于同一格两份答案
+    expect(source).not.toContain('installKojo2SlotProviders');
     const start = source.indexOf('if (isKojo2CutoverEnabled()) {');
     const blockEnd = source.indexOf('\n    }', start);
     const block = source.slice(start, blockEnd);
     expect(block).not.toContain('installKojo2SemanticCaptures');
-    expect(block).not.toContain('installKojo2SlotProviders');
+    expect(block).not.toContain('installSlotServiceProviders');
   });
 
   it('安装调用**不传注入面**（adapter / 路径 / 编译成品都已归插件与包）', () => {
     const source = read('packages', 'app', 'src', 'ui', 'editor-global-providers.ts');
-    expect(source).toMatch(/globalDisposers\.push\(installKojo2SlotProviders\(monaco\)\)/);
-    expect(source).not.toMatch(/installKojo2SlotProviders\(\s*monaco\s*,\s*\{/);
+    expect(source).toMatch(/globalDisposers\.push\(installSlotServiceProviders\(monaco\)\)/);
+    expect(source).not.toMatch(/installSlotServiceProviders\(\s*monaco\s*,\s*\{/);
   });
 
-  it('两枚 provider 都经共享收口挂上，能力名各写一次（不点名语言 id）', () => {
-    const source = read('packages', 'app', 'src', 'monaco', 'kojo2-providers.ts');
-    // 只数**调用形状**（`registerForLanguageServices(\n  monaco,`）；头注里那几处提及不算
-    expect(source.match(/registerForLanguageServices\(\s+monaco,/g) ?? []).toHaveLength(2);
-    expect(source).toMatch(
-      /registerCompletionItemProvider\(id, completionProvider\)[\s\S]{0,400}'completion',/,
-    );
-    expect(source).toMatch(/registerHoverProvider\(id, hoverProvider\)[\s\S]{0,400}'hover',/);
+  it('两枚 provider 都经共享收口挂上，能力名由表格的 `kind` 给（不点名语言 id）', () => {
+    const source = read('packages', 'app', 'src', 'monaco', 'slot-service-providers.ts');
+    // 只数**调用形状**（`registerForLanguageServices(\n  monaco,`）：头注里那几处提及不算。
+    // 搬家前是两枚各调一次收口；搬家后收口只剩**一处**（循环里的 `leg.register`），
+    // 能力名改由表项的 `kind` 递进去——"哪条腿点了哪个名"仍逐条写在表里（下面两行）。
+    expect(source.match(/registerForLanguageServices\(\s+monaco,/g) ?? []).toHaveLength(1);
+    expect(source).toMatch(/legOf\('completion',[\s\S]{0,200}registerCompletionItemProvider\(/);
+    expect(source).toMatch(/legOf\('hover',[\s\S]{0,200}registerHoverProvider\(/);
     // 红线形状：注册调用的首个实参不许写死 kojo2 常量（今天写的是收口给的 `id`）
     expect(source).not.toMatch(
       new RegExp(`registerCompletionItemProvider\\(\\s*${KOJO2_LANGUAGE_ID}`),
@@ -1047,7 +1094,7 @@ describe('装配纪律：共享收口 + 插件供方是唯一落点（读源码�
   });
 
   it('语言层不 import 任何插件包、不出现游戏名词，Monaco 只 type-only 引入', () => {
-    const source = read('packages', 'app', 'src', 'monaco', 'kojo2-providers.ts');
+    const source = read('packages', 'app', 'src', 'monaco', 'slot-service-providers.ts');
     // `@kojo/plugin-api` 是宿主唯一允许的契约依赖；"插件包"指 `@kojo/plugin-<具体插件>`
     expect(source).not.toMatch(/from\s+['"]@kojo\/plugin-(?!api)/);
     expect(source).not.toMatch(/\b(eratw|eraK|eraSQN|eraNAS)\b/i);

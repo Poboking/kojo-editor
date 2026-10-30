@@ -39,7 +39,7 @@ import {
   type Kojo2SourceMapModel,
 } from '@kojo/kojo-lang';
 import { kojo2HoverAt, kojo2HoverMarkdown } from '@kojo/kojo-lang/hover';
-import { toMonacoHover } from '../src/monaco/kojo2-providers';
+import { toMonacoHover } from '../src/monaco/slot-service-providers';
 import { toDefinitionLinks, type DefinitionLocation } from '../src/monaco/kojo-definition';
 import { provideDefinition, provideHover } from '@kojo/plugin-kojo-lang';
 import {
@@ -833,7 +833,7 @@ describe('纯函数纪律：同一查询永远同一答案', () => {
 
 describe('注册纪律：展开段不新造第二个 provider，措辞仍只有一处', () => {
   const providerSource = readFileSync(
-    fileURLToPath(new URL('../src/monaco/kojo2-providers.ts', import.meta.url)),
+    fileURLToPath(new URL('../src/monaco/slot-service-providers.ts', import.meta.url)),
     'utf8',
   );
   const pluginHoverSource = readFileSync(
@@ -843,10 +843,11 @@ describe('注册纪律：展开段不新造第二个 provider，措辞仍只有�
 
   it('悬停只有一枚注册入口，且经共享收口点名 `hover`；转定义**零枚**', () => {
     expect(providerSource.match(/registerHoverProvider\(/g) ?? []).toHaveLength(1);
-    // 收口调用只数**调用形状**（`registerForLanguageServices(\n  monaco,`）：头注提及不算。
-    // completion + hover 各一次（多出来的第二次收口 = 第二条悬停路）
-    expect(providerSource.match(/registerForLanguageServices\(\s+monaco,/g) ?? []).toHaveLength(2);
-    expect(providerSource).toMatch(/registerHoverProvider\(id, hoverProvider\)[\s\S]{0,120}'hover',/);
+    // SDK-B5b 车 1（2026-10-31）把两条腿收进**一张表**：收口调用只剩安装器里那一处
+    // （`registerForLanguageServices(monaco, leg.register, leg.kind)`），能力名由表项的
+    // `kind` 给；"悬停只挂一处"由下面两行（表项 + 收口仅一处）共同钉住。
+    expect(providerSource.match(/registerForLanguageServices\(\s+monaco,/g) ?? []).toHaveLength(1);
+    expect(providerSource).toMatch(/legOf\('hover',[\s\S]{0,200}registerHoverProvider\(/);
     // 这条断言在 B3b 之前是"恰好 1"，现在是"恰好 0"——**收紧，不是放宽**：
     // 转定义由 descriptor 的 `slotServices: ['definition']` 经共享收口挂上（供方是插件），
     // 本文件再注册一枚就是两个 DefinitionProvider 并存，Monaco 的合并顺序不可控，

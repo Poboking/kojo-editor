@@ -139,6 +139,20 @@ function sharedCallPattern(api: string): RegExp {
   return new RegExp(`registerForLanguageServices\\([^;]{0,400}?${api}\\s*\\(`, 'im');
 }
 
+/**
+ * `shared` 档的**表格形状**（SDK-B5b 车 1，2026-10-31）：补全 / 悬停两条腿并进
+ * `monaco/slot-service-providers.ts` 的 `SLOT_SERVICE_LEGS`，Monaco 注册 API 写在表项里、
+ * 收口只在安装器里调一次（`registerForLanguageServices(monaco, leg.register, leg.kind)`）。
+ *
+ * 判据仍要**两条同时成立**，不是放宽：文件里既要有收口调用，也要有这条能力在表里的登记
+ * （`legOf('<kind>', … registerXxxProvider(`）；少任一条 ⇒ 这门语言挂不上。
+ */
+const SLOT_COLLECTOR_CALL = /registerForLanguageServices\(\s+monaco,[\s\S]{0,200}?leg\.register/;
+
+function tableEntryPattern(kind: string, api: string): RegExp {
+  return new RegExp(`legOf\\('${kind}'[\\s\\S]{0,200}?${api}\\s*\\(`, 'im');
+}
+
 /** 源码里按 `self` 形状注册某能力、且指向某门语言的文件 */
 function selfRegistrationFiles(
   capability: LanguageCapability,
@@ -150,12 +164,20 @@ function selfRegistrationFiles(
   return SOURCE_FILES.filter((file) => pattern.test(file.text));
 }
 
-/** 源码里按 `shared` 收口形状注册某能力的文件 */
+/** 源码里按 `shared` 收口形状注册某能力的文件（行内形状 ∪ 槽腿表形状） */
 function sharedRegistrationFiles(capability: LanguageCapability): readonly SourceFile[] {
   const api = CAPABILITY_PROVIDER_API[capability];
   if (api === undefined) return [];
-  const pattern = sharedCallPattern(api);
-  return SOURCE_FILES.filter((file) => pattern.test(file.text));
+  const inline = sharedCallPattern(api);
+  const kind = SLOT_SERVICE_OF[capability];
+  const table =
+    kind === undefined ? null : tableEntryPattern(kind, api);
+  return SOURCE_FILES.filter(
+    (file) =>
+      inline.test(file.text) ||
+      // 表格形状：收口调用 + 表项都在同一个文件里（两条判据缺一不可）
+      (table !== null && SLOT_COLLECTOR_CALL.test(file.text) && table.test(file.text)),
+  );
 }
 
 /** 这份注册模块是否被宿主装配点 import（写了没人调 = 死代码） */
@@ -694,11 +716,14 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     // `kojo2-symbols.ts` 自建 provider，改由共享收口按 `slotServices: ['documentSymbol']`
     // 挂上，供方是插件 `@kojo/plugin-kojo-lang`（那枚自建模块在 B5b 已整块删除）。
     // B3b（2026-10-24）：`definition` 同理挪到 shared —— 判据与展开体那两条落点都归插件，
-    // 宿主 `installKojo2SlotProviders` 不再注册任何 `DefinitionProvider`。
+    // 宿主那枚补全 / 悬停安装器不再注册任何 `DefinitionProvider`。
     // B2c（2026-10-24）：`inlay` 同批挪到 shared —— 原生安装器已不在装配路径上。
-    // B3c（2026-10-28）：`completion` / `hover` 也挪到 shared —— `installKojo2SlotProviders`
-    // 不再直挂 `kojo2`，两枚 provider 经 `registerForLanguageServices(..., 'completion'|'hover')`
-    // 挂上，供方是插件 `@kojo/plugin-kojo-lang`（判据在 `@kojo/kojo-lang`）。
+    // B3c（2026-10-28）：`completion` / `hover` 也挪到 shared —— 注册不再直挂 `kojo2`，
+    // 两枚 provider 经 `registerForLanguageServices(..., 'completion'|'hover')` 挂上，
+    // 供方是插件 `@kojo/plugin-kojo-lang`（判据在 `@kojo/kojo-lang`）。
+    // SDK-B5b 车 1（2026-10-31）：这两条腿的安装器并进语言无关的槽腿工厂
+    // `monaco/slot-service-providers.ts`（表格 + 一枚安装器），能力名仍是 `'completion'` /
+    // `'hover'`，注册序与装配点位置照旧。
     // B3d（2026-10-28）：`signature` / `format` 同批挪到 shared —— 判据搬进
     // `@kojo/kojo-lang`，供方是插件的 `kojo2-signatureHelp` / `kojo2-formatting` 两枚贡献，
     // 注册经 `registerForLanguageServices(..., 'signatureHelp'|'formatting')`。
@@ -822,7 +847,9 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
     for (const installer of [
       // B3 语义收口：原生 provider 安装器已清零，装配点只装**捕获预取器**（注册在共享收口）
       'installKojo2SemanticCaptures',
-      'installKojo2SlotProviders',
+      // SDK-B5b 车 1（2026-10-31）：补全 / 悬停的安装器已改名并语言无关化
+      // （`installSlotServiceProviders`，两条腿在表里）；名字不再带 kojo2，判据不变
+      'installSlotServiceProviders',
       'installKojo2IndentProvider',
       'installKojo2DocumentFormatter',
       'installKojo2RangeFormatter',

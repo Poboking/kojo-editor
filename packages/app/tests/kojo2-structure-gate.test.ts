@@ -258,7 +258,8 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
       'kojo2-format.ts',
       'kojo2-codelens.ts',
       'kojo2-indent.ts',
-      'kojo2-providers.ts',
+      // SDK-B5b 车 1（2026-10-31）：补全 / 悬停的安装器已并进语言无关的槽腿工厂
+      'slot-service-providers.ts',
       'kojo2-references.ts',
       'kojo2-rename.ts',
       'kojo2-signature.ts',

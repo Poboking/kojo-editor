@@ -777,7 +777,15 @@ function shouldRequireText(ctx, rel, pattern, label, failures, evidence) {
   else failures.push(`${rel} 里找不到 ${label}`);
 }
 
-/** 注册行按档位取证：`self` = 本语言 id 直挂；`shared` = registerForLanguageServices 收口 */
+/**
+ * 注册行按档位取证：`self` = 本语言 id 直挂；`shared` = registerForLanguageServices 收口。
+ *
+ * `shared` 有两种合法形状（SDK-B5b 车 1，2026-10-31 起）：
+ * ① 行内形状——收口调用的回调里直接写 `registerXxxProvider(`；
+ * ② 槽腿表形状——补全 / 悬停并进 `monaco/slot-service-providers.ts` 的 `SLOT_SERVICE_LEGS`，
+ *    Monaco API 写在 `legOf('<kind>', …)` 的表项里、收口只在安装器里调一次。判据仍是
+ *    "**同一文件**里既有收口调用、又有这条能力的注册 API"，两条缺一不可。
+ */
 function findRegistrations(ctx, api, mode, language) {
   if (typeof api !== 'string' || api.length === 0) return [];
   const selector = new RegExp(
@@ -787,10 +795,16 @@ function findRegistrations(ctx, api, mode, language) {
     mode === 'self'
       ? new RegExp(`${escapeRegExp(api)}\\s*\\([^;]{0,600}?${selector.source}`, 'm')
       : new RegExp(`registerForLanguageServices\\s*\\([^;]{0,600}?${escapeRegExp(api)}\\s*\\(`, 'm');
+  const tableEntry =
+    mode === 'shared'
+      ? new RegExp(`legOf\\s*\\([^;]{0,400}?${escapeRegExp(api)}\\s*\\(`, 'm')
+      : null;
+  const collector = /registerForLanguageServices\s*\([^;]{0,600}?leg\.register/;
   const hits = [];
   for (const rel of ctx.sourceFiles) {
     const text = ctx.code.get(rel) ?? '';
-    if (pattern.test(text)) hits.push(rel);
+    const tableShape = tableEntry !== null && collector.test(text) && tableEntry.test(text);
+    if (pattern.test(text) || tableShape) hits.push(rel);
   }
   return hits;
 }

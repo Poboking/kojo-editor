@@ -321,11 +321,11 @@ const KOJO2_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapab
       exempt:
         '纯模型 monaco/kojo2-callhierarchy.ts 已交付，宿主面板 ui/CallHierarchyOverlay.tsx 已按 model 语言分派消费（批次十）；Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83），没有可注册的宿主位，矩阵留豁免',
     },
-    // B3c（2026-10-28）：2.0 的补全与悬停走**共享收口**——`monaco/kojo2-providers.ts` 的
-    // `installKojo2LanguageProviders` 带能力名 `completion` / `hover` 经
-    // `registerForLanguageServices` 挂上（descriptor 点名 `slotServices`），宿主侧零原生
-    // 注册、零判据；供方 = 插件 `@kojo/plugin-kojo-lang`（候选组装 / 区间 / Markdown 措辞
-    // 全在 `@kojo/kojo-lang`，含悬停的展开段）。
+    // B3c（2026-10-28）：2.0 的补全与悬停走**共享收口**——**SDK-B5b 车 1（2026-10-31）**起
+    // 注册与翻译都收进通用槽腿工厂 `monaco/slot-service-providers.ts`
+    // `installSlotServiceProviders`（按 descriptor 的 `slotServices` 铺开，补全先于悬停），
+    // 宿主侧零原生注册、零判据；供方 = 插件 `@kojo/plugin-kojo-lang`（候选组装 / 区间 /
+    // Markdown 措辞全在 `@kojo/kojo-lang`，含悬停的展开段）。
     [LanguageCapability.Completion]: 'shared',
     [LanguageCapability.Hover]: 'shared',
     // B3b（2026-10-24）：2.0 的转定义改走**共享收口**（`kojo-definition.ts` 的

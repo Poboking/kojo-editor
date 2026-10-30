@@ -138,10 +138,10 @@ import {
   registerMonacoLanguageSurfaceSource,
   unregisterMonacoLanguageSurfaceSource,
 } from '../monaco/monaco-language-surface';
-// K2 batch-4：Kojo 2.0 的补全 / 悬停 / 转定义三枚 provider（纯模型 → Monaco 协议）。
-// **本文件仍不认识任何具体 adapter**：2.0 adapter 由宿主组合根经 `GlobalProviderOptions`
-// 注入（那枚对象不在 `game.adapter` 槽位上，见该接口的注），语言层零游戏名词（解耦审计 A）。
-import { installKojo2SlotProviders } from '../monaco/kojo2-providers';
+// K2 batch-4 → SDK-B5b 车 1（2026-10-31）：2.0 的补全 / 悬停**只经通用槽腿工厂**装配
+// （`monaco/slot-service-providers.ts`：`kind` → 注册 API / 请求构造 / 契约 → Monaco 形状的
+// 一张表，按 descriptor 的 `slotServices` 铺开）。本文件不再认识具体腿名，也不再传注入面。
+import { installSlotServiceProviders } from '../monaco/slot-service-providers';
 // K2 batch-5：2.0 一键迁移 code action（纯逻辑 + Monaco 翻译层同在那一枚里）。
 // 宿主只注入"怎么落地"（同一条 `applyTextEdits`），本文件仍零游戏名词。
 import { installKojo2CodeActionProvider } from '../monaco/kojo2-code-actions';
@@ -1999,15 +1999,13 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // descriptor 的 `slotServices: ['semanticToken']` 点名）；这里只装**捕获预取器**。
     // 它同时持有缩进规则同步的句柄（K2-INDENT-WIRE 的挂点随捕获成功触发）。
     globalDisposers.push(installKojo2SemanticCaptures(monaco));
-    // K2 batch-4 → **B3c（2026-10-28）**：这一枚安装器只剩补全 / 悬停两腿，且**不传注入面**。
-    // 转定义早在 B3b 归插件；本批把判据（触发字符 / 名字段区间 / 声明索引 / Markdown 措辞 /
-    // adapter 三路投影）整块搬进 `@kojo/kojo-lang`，作答的是插件 `@kojo/plugin-kojo-lang` 在
-    // `ui.editor.languageService` 上的 `kojo2-completion` / `kojo2-hover` 两枚贡献，注册走
-    // `registerForLanguageServices(..., 'completion' | 'hover')` 的共享收口（kojo2 由
-    // descriptor 的 `slotServices` 点名）。
+    // K2 batch-4 → **B3c（2026-10-28）**：判据（触发字符 / 名字段区间 / 声明索引 / Markdown
+    // 措辞 / adapter 三路投影）早在 B3c 整块搬进 `@kojo/kojo-lang`，作答的是插件
+    // `@kojo/plugin-kojo-lang` 在 `ui.editor.languageService` 上的 `kojo2-completion` /
+    // `kojo2-hover` 两枚贡献；**SDK-B5b 车 1（2026-10-31）**起连"注册 + 翻译"也收进通用槽腿
+    // 工厂（`monaco/slot-service-providers.ts`，按 descriptor 的 `slotServices` 铺开）。
     //
-    // **留下的必须是插件看不到的宿主事实**：`installKojo2SlotProviders(monaco)` 之后，
-    // 这里不再传 `{ adapter, getFilePath, getCompile, completion }`——adapter 由插件经
+    // **留下的必须是插件看不到的宿主事实**：工厂**不传任何注入面**——adapter 由插件经
     // `@kojo/kojo-lang/adapter-source` 登记簿（本函数开头那枚 `registerKojo2AdapterSource`）
     // 在请求时现取并核过 `adapter.id === project.adapterId`；文件身份 / 版本 / 项目事实由
     // provider 自己从 model 与内核现取（`requireKernel()`）。**判据一律在插件与包，宿主一份
@@ -2017,7 +2015,11 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 本函数开头那枚 `registerKojo2AdapterSource` 就是靠它登记 getter，插件侧的
     // 补全 / 悬停 / 行内提示 / 签名四条腿都从那张表拿事实；删掉它等于把插件的 adapter 事实
     // 一起掐了。名字取自宿主组合根注入的形状，与本层零游戏知识无关。
-    globalDisposers.push(installKojo2SlotProviders(monaco));
+    //
+    // 这一行的**位置**是契约：它在语义捕获预取之后、切流块之前，且工厂内部按
+    // `SLOT_SERVICE_LEGS` 的数组序挂腿（补全先、悬停后）——Monaco 的单答型 provider 是
+    // "第一家说了算"，相对序变了就是"谁答悬停"变了（`kojo2-providers.test.ts` 有顺序断言）。
+    globalDisposers.push(installSlotServiceProviders(monaco));
     if (isKojo2CutoverEnabled()) {
       // K2 batch-5 → **B3j（2026-10-30）**：Kojo 2.0 一键迁移 code action（裸旁白 / 裸引号 /
       // 心形 / 着色 / 随机 / 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进 / 语义三条），

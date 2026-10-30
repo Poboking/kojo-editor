@@ -309,6 +309,16 @@ describe('供方覆盖：descriptor 声明的每条槽腿都有供方', () => {
           }
           at = text.indexOf('registerForLanguageServices(', at + 1);
         }
+        // SDK-B5b 车 1 起的**共享工厂**形状：一条腿在表里用 `legOf('<kind>', …)` 声明，
+        // 注册 API 作为该腿自己的第三件事实（工厂统一走 `registerForLanguageServices`）。
+        // 判据不变——仍要求"kind 与一枚 Monaco register*Provider 在同一个模块里且经收口"。
+        if (!text.includes('registerForLanguageServices(')) return false;
+        let legAt = text.indexOf(`legOf('${kind}'`);
+        while (legAt >= 0) {
+          const window = text.slice(legAt, legAt + 400);
+          if (/\.register[A-Za-z]+Provider\(/.test(window)) return true;
+          legAt = text.indexOf(`legOf('${kind}'`, legAt + 1);
+        }
         return false;
       }).map((file) => file.rel);
       expect(files, `${kind} 没有走共享收口的 Monaco 注册`).not.toEqual([]);

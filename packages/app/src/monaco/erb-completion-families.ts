@@ -15,13 +15,13 @@
  *
  * ## 翻译口径
  *
- * 走宿主既有的那份**中性候选 → Monaco** 翻译件（`kojo2-providers.ts` 的
+ * 走宿主既有的那份**中性候选 → Monaco** 翻译件（`slot-service-providers.ts` 的
  * `toMonacoCompletionItems`：档→图标、区间→`IRange` 都在那一张表里）。这里不另写第二份，
  * 否则同一档在不同家族里会挑出不同图标。
  */
 import type * as Monaco from './entry';
 import { erbFamilyCandidates } from '@kojo/plugin-erb-parser';
-import { toMonacoCompletionItems } from './kojo2-providers';
+import { toMonacoCompletionItems } from './slot-service-providers';
 
 export { ERB_SIGIL_BEFORE, erbDeclaredNameSlot } from '@kojo/plugin-erb-parser';
 export type { ErbNameSlot } from '@kojo/plugin-erb-parser';
