@@ -562,11 +562,18 @@ function entryFromTuple(path: string, tuple: EntryTuple, interner?: NameInterner
  * PITFALLS 255 同一个坑，只是这条在"从盘上读回来"的路上。
  *
  * 表的寿命：只活到解码结束（随后即可回收），**不进稳态**——它只是这一趟的脚手架。
+ *
+ * **代价（2026-10-30 补记，MEM-5 批发现）**：这一趟要过约 90 万次 `Map.get`（引用名 61 万
+ * + 函数名/注释/形参/声明/标签），热载解码实测 **+66 ms**（合成 2,000 文件 / 100k 函数口径：
+ * 99 → 165 ms）。这笔钱此前**没有记账**，直接把 `snapshot-hot-load.perf.test.ts` 的
+ * `after ≤ before` 打破——那个 A/B 的 before 臂是"改动前的解码"冻结副本，不含本表，
+ * 于是它量到的是"去重表的开销"而不是"急 vs 懒"。修法是让 before 臂付同一笔（见该测试），
+ * **不是放宽断言**。导出这个工厂就是为了那条测试不必再抄一份同口径实现。
  */
-interface NameInterner {
+export interface NameInterner {
   intern(value: string): string;
 }
-function createNameInterner(): NameInterner {
+export function createNameInterner(): NameInterner {
   const table = new Map<string, string>();
   return {
     intern(value: string): string {

@@ -26,6 +26,7 @@ import { buildReferenceIndex, scanFileRefs, type FileRefs } from '../src/referen
 import {
   aggregateIndex,
   coerceSnapshot,
+  createNameInterner,
   decodeEntries,
   encodeEntries,
   SNAPSHOT_VERSION,
@@ -136,6 +137,16 @@ type Tuple = [number | null, number | null, number, number, 0 | 1, unknown[], un
  */
 function decodeEntriesEager(raw: Record<string, unknown>): Record<string, SnapshotEntry> | null {
   const out: Record<string, SnapshotEntry> = {};
+  /**
+   * **MEM-4 之后这个参照臂也要过去重表**（2026-10-30 补，MEM-5 批发现）。
+   *
+   * 这条 A/B 的判据是"懒还原（after）≤ 急还原（before）"，前提是两条腿付**同一笔** decode
+   * 成本。MEM-4 给解码加了字符串去重表（约 90 万次 `Map.get`，实测 +66 ms），而 before 臂
+   * 是"改动前的解码"冻结副本、不含它 ⇒ 这条闸量到的其实是"去重表的开销"，直接红了
+   * （after 165 ms > before 99 ms）。修法是**让 before 臂付同一笔**，不是放宽断言：
+   * 参照臂照样是"同一份校验 + 当场建全部对象"，只是字符串也过表（内容不变，只换实例）。
+   */
+  const interner = createNameInterner();
   for (const [path, value] of Object.entries(raw)) {
     const t = value as unknown[];
     // v7 起条目是 10 位（第 10 位 = refs 名录摘要）、v11 起 11 位（第 11 位 = 候选记号集）；
@@ -186,7 +197,7 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
     if (!refs.every(okRef)) return null;
     if (!labels.every(okLabel)) return null;
     const functions: ErbFunction[] = fns.map((x) => {
-      const [name, startLine, endLine, params, flags, doc, nameColumn] = x as unknown as [
+      const [rawName, startLine, endLine, params, flags, rawDoc, nameColumn] = x as unknown as [
         string,
         number,
         number,
@@ -195,10 +206,13 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
         string | null | undefined,
         number | null | undefined,
       ];
+      // 去重表：与 `internEntryStrings` 同口径（内容不变、只换实例；见函数头注）
+      const name = interner.intern(rawName);
+      const doc = typeof rawDoc === 'string' ? interner.intern(rawDoc) : rawDoc;
       const fn: ErbFunction = {
         name,
         normalizedName: name.toUpperCase(),
-        params: params.map(([pname, hasDefault]) => ({ name: pname, hasDefault: hasDefault === 1 })),
+        params: params.map(([pname, hasDefault]) => ({ name: interner.intern(pname), hasDefault: hasDefault === 1 })),
         startLine,
         endLine,
         filePath: path,
@@ -219,7 +233,7 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
         path,
         functions,
         dims: (dims as unknown as Array<[string, string, number]>).map(([name, directive, line]) => ({
-          name,
+          name: interner.intern(name),
           directive,
           line,
         })),
@@ -227,7 +241,7 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
         lineCount,
       },
       refs: (refs as unknown as Array<[string, number, number, 0 | 1 | 2]>).map(
-        ([name, line, column, kind]) => [name, line, column, kind] as never,
+        ([rname, line, column, kind]) => [interner.intern(rname), line, column, kind] as never,
       ),
     };
   }
