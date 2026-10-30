@@ -1001,7 +1001,7 @@ fn resume_all_threads_of(pid: u32) -> (u32, u32) {
 
 /// **Q1-(c)**：不挂起、拉起后立刻 assign —— 竞态窗口到底有多宽？
 ///
-/// 做法：给 assign 前加不同延迟（0/10/25/100 ms），看"孙进程逃出 Job"从哪一档开始出现，
+/// 做法：给 assign 前加不同延迟（0/5/10/25/100 ms），看"孙进程逃出 Job"从哪一档开始出现，
 /// 并对每个孙进程直接问一次 `IsProcessInJob(grandchild, job)`（逃逸与"不在 Job 里"必须一一对应）。
 /// 逃出来的孙进程由探针显式 `TerminateProcess` 收掉（它们已不在 Job 里，只能手杀）。
 ///
@@ -1023,7 +1023,10 @@ fn q1c_unsuspended_assign_race_window() {
     }
     let mut recs: Vec<Rec> = Vec::new();
 
-    for delay_ms in [0u64, 10, 25, 100] {
+    // 夹具的派生见证写在 spawn 后 ~10 ms，故 0/5 两档才稳定落在"assign 早于派生"一侧；
+    // 只留 0 档时 CI 上"早 assign"样本常只有 5~7 条（10 档有一半掉进 ±2 ms 临界桶），
+    // 会撞 `before >= 8` 这条夹具质量闸——不是判据错，是样本档位不够。加 5 档把该侧钉成 10 条。
+    for delay_ms in [0u64, 5, 10, 25, 100] {
         let mut escaped_count = 0;
         let mut ok_count = 0;
         let mut assign_failures: Vec<String> = Vec::new();
