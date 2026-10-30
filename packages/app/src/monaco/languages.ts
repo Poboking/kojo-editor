@@ -70,6 +70,15 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
   matchesPath: (filePath) => isErbDialectPath(filePath),
   register: registerErbLanguage,
   languageServices: true,
+  /**
+   * LAU-4 引用腿（2026-10-31）：查找引用的**判据**已整块搬进 `@kojo/plugin-erb-parser`
+   * （`$` 标签 / `#DIM` 声明 / 反向索引三腿合一）；这一格点名把"这条腿交给插件答"写下来，
+   * 复用的就是 kojo2 那张表。`languageServices: true` 保留——其余 v1 腿还没搬（补全
+   * 剩余 facet、hover / signature / format），所以 ERB 仍走旧桥挂满全腿；点名这一格
+   * 只是让引用腿的归属可从数据读出（宿主据此做投影面发问位点的行尾对齐，
+   * 见 `ui/editor-global-providers.ts` 的 `referenceRequestPointOf`）。
+   */
+  slotServices: ['references'],
   // LANG-PARITY-GATE：已交付的能力面（真源 = language-capabilities.ts 的矩阵；声明只列已交付的）
   capabilities: ERB_CAPABILITIES,
   // ERB-PARITY G8 / G9：四项族级右键项全在（codeAction / decorator + codeAction 槽、

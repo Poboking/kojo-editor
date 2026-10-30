@@ -114,6 +114,8 @@ export { planScanRoots, rootsSignature, type ScanRootPlan } from './index-state'
 export {
   dimDeclarationOf,
   dimDeclarationsOf,
+  erbDimReferencesAt,
+  erbReferencesAt,
   isErbDefinitionPath,
   isErbDimNameChar,
   labelDefinitionLocations,

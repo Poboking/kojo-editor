@@ -17,7 +17,7 @@ import type {
 } from '@kojo/plugin-api';
 import { MODEL_TOKEN_CLASS, enclosingAt, enclosingChainAt, erbCodeBodyOf, symbolTokenAt } from '@kojo/plugin-api';
 import { parseDimDeclaration, parseErbText, parseLabelDefinition } from './scanner';
-import { codeViewOf, functionNameTokenAt, referencesOf } from './references';
+import { codeViewOf, erbReferenceLocationsAt, functionNameTokenAt, referencesOf } from './references';
 
 /**
  * 位置 → 符号（B0，2026-10-15 语言服务批）。
@@ -550,6 +550,127 @@ export function mergeNavigationLegs(
   slot: readonly EditorSymbolLocation[],
 ): EditorSymbolLocation[] {
   return mergeSymbolLocations(labels, mergeSymbolLocations(dims, slot));
+}
+
+/* ============================== 查找引用判据（LAU-4 引用腿） ============================== */
+
+/**
+ * 引用扫描的可见代码行（注释 / 指令行 / 定义行 / `#` / `$` / `@` 行一概不进）。
+ * 判据逐字搬自宿主 `monaco/erb-dim-navigation.ts`（2026-10-31 LAU-4：宿主不再有 ERB 判据）。
+ */
+function* dimCodeLinesOf(text: string): Generator<{ line: number; view: string }> {
+  const lines = linesOf(text);
+  let inSkipBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]!;
+    // 代码前缀（`;!;` / `;#;`）之后是真代码（判据单源 `plugin-api`），不算注释行
+    const trimmed = erbCodeBodyOf(raw.trim());
+    if (inSkipBlock) {
+      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      continue;
+    }
+    if (trimmed === '[SKIPSTART]') {
+      inSkipBlock = true;
+      continue;
+    }
+    if (trimmed.length === 0 || /^[;#$@]/.test(trimmed)) continue;
+    yield { line: i + 1, view: codeViewOf(raw) };
+  }
+}
+
+/**
+ * `#DIM` 声明名上的查找引用（Shift+F12）：**只在本文件**内列出现点。
+ *
+ * 命中前提（严格）：光标必须落在**声明行**的名字上——这是唯一可证明的入口（任意变量位置上
+ * 按 Shift+F12 会把同名散文 / 成员名一起卷进来，误报比少答更坏）。声明行自身算
+ * `definition`，其余同记号出现算 `mention`；成员访问（`FLAG:名字`）不算变量引用。
+ * 大小写按 `toUpperCase()` 归一（与 `dimDeclarationsOf` 同一把尺子），全角字符原样参与比较。
+ */
+export function erbDimReferencesAt(
+  text: string,
+  line: number,
+  column: number,
+  filePath: string | null,
+): EditorSymbolLocation[] {
+  if (!filePath || !isErbDefinitionPath(filePath)) return [];
+  if (!Number.isFinite(line) || !Number.isFinite(column)) return [];
+  const lineText = linesOf(text)[Math.trunc(line) - 1];
+  if (lineText === undefined) return [];
+  const decl = dimDeclarationOf(lineText);
+  if (!decl) return [];
+  const col0 = Math.trunc(column) - 1;
+  // Monaco 的光标是"字符之间"：名字末尾那一列（nameStart + len）也算落在名字上
+  if (col0 < decl.nameStart || col0 > decl.nameStart + decl.name.length) return [];
+  const want = decl.name.toUpperCase();
+  const out: EditorSymbolLocation[] = [];
+  const seen = new Set<string>();
+  const push = (atLine: number, start: number, length: number, kind: 'definition' | 'mention'): void => {
+    const key = `${atLine}\u0000${start}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      filePath,
+      line: atLine,
+      column: start + 1,
+      span: { columnStart: start + 1, columnEnd: start + 1 + length },
+      kind,
+    });
+  };
+  for (const { line: atLine, dim } of dimDeclarationsOf(text)) {
+    if (dim.name.toUpperCase() === want) push(atLine, dim.nameStart, dim.name.length, 'definition');
+  }
+  for (const { line: atLine, view } of dimCodeLinesOf(text)) {
+    let i = 0;
+    while (i < view.length) {
+      if (!isErbDimNameChar(view[i])) {
+        i++;
+        continue;
+      }
+      const start = i;
+      while (i < view.length && isErbDimNameChar(view[i])) i++;
+      if (view.slice(start, i).toUpperCase() !== want) continue;
+      const prev = start > 0 ? view[start - 1] : '';
+      if (prev === ':' || prev === '：') continue;
+      push(atLine, start, i - start, 'mention');
+    }
+  }
+  out.sort((a, b) => a.line - b.line || (a.column ?? 0) - (b.column ?? 0));
+  return out;
+}
+
+/** 标签入口的廉价前置：只有 `$` 定义行与跳转系语句才可能承载标签入口（免得每次 F12 全文 parse） */
+const LABEL_ENTRY_RE = /^\s*(?:\$|(?:JUMP|GOTO|TRYJUMP|TRYGOTO)\b)/i;
+
+/**
+ * 查找引用的**三腿合一**（`$` 标签 → `#DIM` 声明 → 反向索引；LAU-4 引用腿，2026-10-31）。
+ *
+ * 前两条腿是**缓冲区局部**事实（与项目开闭无关），第三条腿是项目反向索引（跨文件）。
+ * 优先序与去重单源 {@link mergeNavigationLegs}（与 F12 转到定义同一条裁决），因此
+ * "面板说有一处、F12 跳空"这类漂移不可能发生。
+ *
+ * 三态留在供方（`plugin.ts`）：方言不符 / 索引缺席且本地两腿空 ⇒ `undefined`（不答），
+ * 其余一律**作答**——本地两腿是本包独有的事实，不该因"名录还没建好"而一起消失。
+ *
+ * `index` 缺席时第三腿按空处理；`path` 的方言闸分两条：本地两腿认 `isErbDefinitionPath`
+ * （`erb/erh/erd`，与搬到本包前逐字相同），索引腿认 `isErbDialectPath`（`erb/erm/erh`）——
+ * `.erm` 今天由索引腿应答、本地两腿不参与，行为与搬家前一致。
+ */
+export function erbReferencesAt(
+  index: ErbIndex | null,
+  text: string,
+  path: string,
+  line: number,
+  column: number,
+): EditorSymbolLocation[] {
+  const lineText = linesOf(text)[Math.trunc(line) - 1];
+  const labelScope =
+    isErbDefinitionPath(path) && lineText !== undefined && LABEL_ENTRY_RE.test(lineText)
+      ? labelScopeAt(text, path, line, column)
+      : null;
+  const labels = labelScope === null ? [] : labelReferenceLocations(labelScope);
+  const dims = erbDimReferencesAt(text, line, column, path);
+  const slot = index === null ? [] : erbReferenceLocationsAt(index, text, line, column);
+  return mergeNavigationLegs(labels, dims, slot);
 }
 
 /* ============================== 改名判据（LAU-4 改名腿） ============================== */

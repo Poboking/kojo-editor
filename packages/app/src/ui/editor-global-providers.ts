@@ -64,7 +64,7 @@ import {
   withinCodeLensBudget,
 } from '../monaco/kojo-code-lens';
 import { collectDefinitionLocations, installDefinitionProvider, type DefinitionLocation } from '../monaco/kojo-definition';
-import { derivedLegSurfaceOf, surfaceRequestPointOf } from '../monaco/erb-dim-navigation';
+import { derivedLegSurfaceOf, localLegPointOf, surfaceRequestPointOf } from '../monaco/erb-dim-navigation';
 import { createPeekLeases, type PeekLeases } from './peek-leases';
 import { editorModelPool } from './editor-model-pool-instance';
 import {
@@ -982,7 +982,7 @@ export function readReferences(
 ): { readonly path: string; readonly locations: readonly EditorSymbolLocation[] } | null {
   const target = readTargetOf(model);
   if (!target) return null;
-  const at = sourcePointOf(target, position);
+  const at = referenceRequestPointOf(model, target, position);
   if (at === null) return null;
   const locations = collectReferenceLocations(kernel.slots.query('ui.editor.languageService'), {
     kind: 'references',
@@ -994,6 +994,39 @@ export function readReferences(
     path: target.path,
     locations: target.sugar ? foldLocationsToPreview(model, target, locations) : locations,
   };
+}
+
+/**
+ * 引用腿的发问位点（LAU-4 引用腿，2026-10-31：ERB 判据搬进插件之后**只有宿主**做得了的
+ * 那一步——投影面上的行列换算）。
+ *
+ * 原文面与既有一字不差（`sourcePointOf` 直通）。投影面上两条路：
+ * - **点名了 `references` 槽腿的语言**（descriptor 的 `slotServices`，今天 = ERB）：与定义腿
+ *   同一套**行尾对齐**（{@link definitionRequestPointOf}，单源 `erb-dim-navigation.ts` 的
+ *   `surfaceRequestPointOf`）。供方那侧按"光标处那个记号"取词（函数名 / `#DIM` 声明名 /
+ *   `$` 标签），列收成 1 只会问在行首谓词上 ⇒ 投影面上按 Shift+F12 会静默失灵；
+ * - **其余语言**（v1 旧桥的 `.kojo1`）：保持"列收 1"（{@link sourcePointOf} 纪律②）——
+ *   行为与搬家前逐字相同，不替糖线改口径。
+ *
+ * 为什么判据是 descriptor 而不是语言 id：本文件不认识具体语言名（M2 棘轮），"这条腿交给
+ * 插件答"是 descriptor 已经写下来的事实（与 `nameLegProjectSnapshotOf` 同一形状）。
+ */
+function referenceRequestPointOf(
+  model: Monaco.editor.ITextModel,
+  target: ReadTarget,
+  position: Monaco.Position,
+): { readonly line: number; readonly column: number } | null {
+  if (!target.sugar) return sourcePointOf(target, position);
+  let named = false;
+  try {
+    named = descriptorForLanguageId(model.getLanguageId())?.slotServices?.includes('references') === true;
+  } catch {
+    named = false;
+  }
+  if (!named) return sourcePointOf(target, position);
+  // 换算单源 `localLegPointOf`（与 `#DIM` 定义腿、`$` 标签腿同一枚），本层不另写一份行尾对齐
+  const at = localLegPointOf(model, position);
+  return at === null ? null : { line: at.line, column: at.column };
 }
 
 /** 文档大纲腿（吸顶与"转到符号"的数据源；糖面上折回预览行，两层消费方同一棵坐标一致的树） */

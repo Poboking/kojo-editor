@@ -8,17 +8,33 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import { labelScopeAt, provideErbDefinition } from '@kojo/plugin-erb-parser';
+import {
+  isErbDefinitionPath,
+  labelDefinitionLocations,
+  labelReferenceLocations,
+  labelScopeAt,
+  provideErbDefinition,
+  type ErbLabelScope,
+} from '@kojo/plugin-erb-parser';
 import { livePanes } from '../src/ui/editor-pane-registry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { installDefinitionProvider } from '../src/monaco/kojo-definition';
 import { installReferenceProvider } from '../src/monaco/find-references';
-import { derivedLegSurfaceOf, isDerivedModelUri } from '../src/monaco/erb-dim-navigation';
-import {
-  labelDefinitionLocations,
-  labelReferenceLocations,
-  resolveErbLabelScopeAt,
-} from '../src/monaco/erb-label-navigation';
+import { derivedLegSurfaceOf, isDerivedModelUri, localLegPointOf } from '../src/monaco/erb-dim-navigation';
+
+/**
+ * 生产路径的**同构合成**（LAU-4 引用腿，2026-10-31）：`$` 标签的判据已在解析器插件
+ * （`labelScopeAt`），宿主只剩投影面位点换算（`localLegPointOf`）。
+ */
+function resolveErbLabelScopeAt(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+): ErbLabelScope | null {
+  const at = localLegPointOf(model, position);
+  // 方言闸与供方逐字同源（`erbReferencesAt` 里那条 `isErbDefinitionPath`）
+  if (at === null || !isErbDefinitionPath(at.path)) return null;
+  return labelScopeAt(at.text, at.path, at.line, at.column);
+}
 
 const PATH = String.raw`c:\proj\erb\label.erb`;
 
@@ -154,9 +170,14 @@ describe('$ 标签导航 · provider 接线', () => {
     expect(links.map((l) => l.targetSelectionRange!.startLineNumber)).toEqual([2]);
   });
 
-  it('Shift+F12 → 定义 + 本函数全部跳转（区间来自 span）', () => {
+  it('Shift+F12 → 定义 + 本函数全部跳转（区间来自 span；判据在插件，宿主只翻形状）', () => {
     const { monaco, references } = stubMonaco();
-    installReferenceProvider(monaco, { resolve: () => [], navigate: () => undefined, openModelFor: () => model });
+    installReferenceProvider(monaco, {
+      // LAU-4 之后宿主不再有本地标签腿：`resolve` 里接的就是插件判据（与生产路径逐字同源）
+      resolve: (m, p) => labelReferenceLocations(resolveErbLabelScopeAt(m, p) ?? { occurrences: [] }),
+      navigate: () => undefined,
+      openModelFor: () => model,
+    });
     const provider = references.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
     const locations = provider.provideReferences!(
       model,

@@ -21,8 +21,9 @@ import {
   mergeNavigationLegs,
   mergeSymbolLocations,
   resolveErbDimDefinition,
-  resolveErbDimReferences,
 } from '../src/monaco/erb-dim-navigation';
+// LAU-4 引用腿（2026-10-31）：判据在插件，宿主的 provider 只翻形状
+import { erbDimReferencesAt as resolveErbDimReferences } from '@kojo/plugin-erb-parser';
 
 /** 真实语料里的形态：Windows 反斜杠路径（`String.raw` 防 `\\` 被吞） */
 const PATH = String.raw`c:\proj\erb\dim.erb`;
@@ -280,10 +281,11 @@ describe('#DIM 导航 · provider 接线', () => {
     });
   });
 
-  it('Shift+F12：同一条管线返回 3 处（声明 + 2 处引用）', () => {
+  it('Shift+F12：同一条管线返回 3 处（声明 + 2 处引用；判据在插件，宿主只翻形状）', () => {
     const { monaco, references } = stubMonaco();
     installReferenceProvider(monaco, {
-      resolve: () => [],
+      // LAU-4 之后宿主不再有本地腿：`resolve` 里接的就是插件判据（与生产路径逐字同源）
+      resolve: () => resolveErbDimReferences(TEXT, 3, 8, PATH),
       navigate: () => undefined,
       openModelFor: () => model,
     });

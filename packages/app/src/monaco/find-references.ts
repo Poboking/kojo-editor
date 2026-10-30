@@ -7,9 +7,6 @@ import type {
 } from '@kojo/plugin-api';
 import { registerForLanguageServices } from './register-dialects';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
-import { labelReferenceLocations, mergeNavigationLegs } from '@kojo/plugin-erb-parser';
-import { resolveErbDimReferencesAt } from './erb-dim-navigation';
-import { resolveErbLabelScopeAt } from './erb-label-navigation';
 import { normalizePathKey } from './kojo-hover';
 import { sugarOwningPaneOf, sugarPreviewLineOf, type PaneCtx } from '../ui/editor-pane-registry';
 import {
@@ -30,6 +27,13 @@ import {
  * `Location[]` 出）分开。宿主**不认识** ERB / 函数 / 引用口径：数据全部来自
  * `ui.editor.languageService` 槽（ERB 方言由解析器答、`.kojo` 由糖线答），宿主只决定
  * "Peek 给什么、点了去哪"。
+ *
+ * **LAU-4 引用腿（2026-10-31）之后这条路上一枚 ERB 判据都没有**：此前挂在
+ * `provideReferences` 里的两条缓冲区本地腿（`$` 标签作用域 / `#DIM` 声明名）与"标签 →
+ * `#DIM` → 槽腿"的合并优先序整块搬进了 `@kojo/plugin-erb-parser`（`symbols.ts` 的
+ * `erbReferencesAt`）。本模块只剩请求构造（`readReferences`）+ 契约 → Monaco 形状 +
+ * 注册；投影面折回、未打开文件 opener、台账读数照旧住这里（它们是**宿主事实**：哪份
+ * model 是投影、哪些标签是开着的），供方够不着。
  *
  * ## 三条腿（与 D4 转到定义同构，取证自 monaco 0.57 源码）
  *
@@ -257,27 +261,18 @@ export function installReferenceProvider(
   };
   const provider: Monaco.languages.ReferenceProvider = {
     provideReferences(model, position) {
-      // `#DIM` 腿（2026-10-19）：光标在声明名上 ⇒ 本文件内同记号出现（声明 + 引用）。
-      // 走同一条管线：与槽结果合并后一起进台账 / 夹取 / 未打开文件 opener——
-      // 不另开 provider、不另算落点。非声明名 ⇒ 零贡献，既有行为逐字不变（fail-open）。
-      const dimRefs = resolveErbDimReferencesAt(model, position);
-      // `$` 标签腿（W-2，2026-10-19）：光标在标签定义名或跳转目标上 ⇒ 本函数内全部出现。
-      // 与 `#DIM` 腿同一条合并纪律（跨腿去重保区间），同样 fail-open。
-      const labelScope = resolveErbLabelScopeAt(model, position);
-      const labelRefs = labelScope === null ? [] : labelReferenceLocations(labelScope);
+      // **本模块不含任何 ERB 判据**（LAU-4 引用腿，2026-10-31）：`$` 标签 / `#DIM` 声明 /
+      // 反向索引三条腿的判据整块住 `@kojo/plugin-erb-parser`（`symbols.ts` 的
+      // `erbReferencesAt`），宿主在这一格只做"问槽 → 翻形状"。
       let locations: readonly ReferenceLocation[];
       try {
         locations = handlers.resolve(model, position);
       } catch (e: unknown) {
-        // 宿主自己的 resolve（查槽 + 组请求）出错也不能让 Shift+F12 崩掉编辑器；
-        // 已命中的 `#DIM` / 标签引用照常交付（隔离粒度仍到贡献方）
-        const localRefs = dimRefs.length + labelRefs.length;
-        console.warn(`[find-references] resolve 抛错${localRefs > 0 ? '（本地腿照常交付）' : ''}：${errorText(e)}`);
-        if (localRefs === 0) return undefined;
-        locations = [];
+        // 宿主自己的 resolve（查槽 + 组请求）出错也不能让 Shift+F12 崩掉编辑器。
+        // 本地腿已随判据搬进供方 ⇒ 这里没有"本地兜底"可交，如实退化成"这次没有引用"。
+        console.warn(`[find-references] resolve 抛错：${errorText(e)}`);
+        return undefined;
       }
-      // 优先序只在这一枚函数里定（`mergeNavigationLegs`，与转到定义共用同一份裁决）
-      locations = mergeNavigationLegs(labelRefs, dimRefs, locations);
       const out: Monaco.languages.Location[] = [];
       // 投影面上**同文件**的引用点先折回屏幕上那一行（判据见文件头"升糖预览面上的 Peek"段）；
       // 折不过去的那一枚整条不给。这一趟必须在台账之前：计数与列表同源是本模块的立身判据，

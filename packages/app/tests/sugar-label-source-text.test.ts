@@ -29,12 +29,22 @@ import { composeSugarDoc, type SugarSegmentInput } from '../src/ui/sugar-view';
 import { livePanes, type PaneCtx } from '../src/ui/editor-pane-registry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { installDefinitionProvider } from '../src/monaco/kojo-definition';
-import { derivedLegSurfaceOf, mergeSymbolLocations } from '../src/monaco/erb-dim-navigation';
-import {
-  labelDefinitionLocations,
-  labelReferenceLocations,
-  resolveErbLabelScopeAt,
-} from '../src/monaco/erb-label-navigation';
+import { derivedLegSurfaceOf, localLegPointOf, mergeSymbolLocations } from '../src/monaco/erb-dim-navigation';
+import { isErbDefinitionPath, labelDefinitionLocations, labelReferenceLocations, type ErbLabelScope } from '@kojo/plugin-erb-parser';
+
+/**
+ * 生产路径的**同构合成**（LAU-4 引用腿，2026-10-31）：宿主位点换算（`localLegPointOf`）→
+ * 插件判据（`labelScopeAt`）。`find-references.ts` 里已没有本地腿，本文件测的就是那两段。
+ */
+function resolveErbLabelScopeAt(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+): ErbLabelScope | null {
+  const at = localLegPointOf(model, position);
+  // 方言闸与供方逐字同源（`erbReferencesAt` 里那条 `isErbDefinitionPath`）
+  if (at === null || !isErbDefinitionPath(at.path)) return null;
+  return labelScopeAt(at.text, at.path, at.line, at.column);
+}
 
 /* ============================== 夹具 ============================== */
 
@@ -243,12 +253,14 @@ describe('标签腿 · 原文面一个字节都不碰', () => {
     expect(resolveErbLabelScopeAt(plain, pos(7, 4))).toBeNull(); // `标签 NAME` 不是 `$` 行
   });
 
-  it('原文面走的是 model 自己的取文那条腿（本批一个字没改：`getValue` / `getLineContent` 照旧被问）', () => {
+  it('原文面走的是 model 自己的取文那条腿（`getValue` 照旧被问；入口前置闸已随判据搬进插件）', () => {
     const counters = { getValue: 0, getLineContent: 0 };
     const plain = fakeModel(SOURCE, 'C:/game/投影乙原文.ERB', 'file', counters);
     expect(derivedLegSurfaceOf(plain)).toBeNull();
     resolveErbLabelScopeAt(plain, pos(11, 8));
-    expect(counters.getLineContent).toBe(1); // 前置闸问的是屏幕上这一行
+    // LAU-4 引用腿：`LABEL_ENTRY_RE` 前置闸与取词都在插件里对**同一份文本**做，
+    // 宿主只取一次全文（不再逐行问 `getLineContent`——那是判据住宿主时的省算法）
+    expect(counters.getLineContent).toBe(0);
     expect(counters.getValue).toBe(1); // 发问的文本就是这份 model 自己
   });
 });

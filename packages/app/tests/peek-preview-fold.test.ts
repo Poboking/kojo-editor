@@ -27,6 +27,14 @@ import { livePanes, type PaneCtx } from '../src/ui/editor-pane-registry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { installReferenceProvider } from '../src/monaco/find-references';
+import { localLegPointOf } from '../src/monaco/erb-dim-navigation';
+import { erbDimReferencesAt } from '@kojo/plugin-erb-parser';
+
+/** 生产路径的**同构合成**（LAU-4 引用腿）：宿主位点换算 → 插件判据（宿主已无本地腿） */
+function dimRefsAt(model: Monaco.editor.ITextModel, position: Monaco.Position): EditorSymbolLocation[] {
+  const at = localLegPointOf(model, position);
+  return at === null ? [] : erbDimReferencesAt(at.text, at.line, at.column, at.path);
+}
 
 /**
  * monaco 运行时不进 node（本池 `environment: 'node'`）：引用链上任何一环吃到装配模块
@@ -293,7 +301,8 @@ describe('投影面 Peek · ①同文件的引用点折回屏幕上那一行', (
     mountProjection();
     const navigated: EditorSymbolLocation[] = [];
     const out = peekAt(PREVIEW_MODEL, pos(5, 8), {
-      resolve: () => [],
+      // LAU-4 之后宿主不再有本地腿：接的是"位点换算 + 插件判据"这一对（与生产路径同构）
+      resolve: (model, position) => dimRefsAt(model, position),
       navigate: (location) => navigated.push(location),
       openModelFor: (filePath) => (filePath === ARCHIVE ? ARCHIVE_MODEL : undefined),
     });

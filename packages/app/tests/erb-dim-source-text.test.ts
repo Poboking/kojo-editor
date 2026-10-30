@@ -29,11 +29,25 @@ import { installDefinitionProvider } from '../src/monaco/kojo-definition';
 import { installReferenceProvider } from '../src/monaco/find-references';
 import {
   derivedLegSurfaceOf,
+  localLegPointOf,
   resolveErbDimDefinition,
   resolveErbDimDefinitionAt,
-  resolveErbDimReferences,
-  resolveErbDimReferencesAt,
 } from '../src/monaco/erb-dim-navigation';
+// LAU-4 引用腿（2026-10-31）：判据在插件；宿主只做投影面位点换算（同构合成见下方测试助手）
+import { erbDimReferencesAt as resolveErbDimReferences } from '@kojo/plugin-erb-parser';
+import type { EditorSymbolLocation } from '@kojo/plugin-api';
+
+/**
+ * 生产路径的**同构合成**：宿主位点换算（`localLegPointOf`，与定义腿同一枚）→ 插件判据
+ * （`erbDimReferencesAt`）。`find-references.ts` 里已没有本地腿，这里测的就是那两段。
+ */
+function resolveErbDimReferencesAt(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+): EditorSymbolLocation[] {
+  const at = localLegPointOf(model, position);
+  return at === null ? [] : resolveErbDimReferences(at.text, at.line, at.column, at.path);
+}
 
 /* ============================== 夹具 ============================== */
 
@@ -278,7 +292,8 @@ describe('装配点 · 投影面上的 F12 / Shift+F12', () => {
     mountProjection();
     const { monaco, references } = stubMonaco();
     installReferenceProvider(monaco, {
-      resolve: () => [],
+      // LAU-4 之后宿主不再有本地腿：接的是"位点换算 + 插件判据"这一对（与生产路径同构）
+      resolve: (model, position) => resolveErbDimReferencesAt(model, position),
       navigate: () => undefined,
       openModelFor: (filePath) => (filePath === ARCHIVE ? ARCHIVE_MODEL : undefined),
     });

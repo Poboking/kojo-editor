@@ -1,11 +1,9 @@
 import type * as Monaco from './entry';
 import type { EditorSymbolLocation } from '@kojo/plugin-api';
-import { erbCodeBodyOf } from '@kojo/plugin-api';
-import { erbCodeViewOf } from '@kojo/erb-lang/highlight';
-import { dimDeclarationOf, dimDeclarationsOf, isErbDefinitionPath, isErbDimNameChar, resolveErbDimDefinition } from '@kojo/plugin-erb-parser';
+import { resolveErbDimDefinition } from '@kojo/plugin-erb-parser';
 import { livePanes, sourceModelOf, sugarOwningPaneOf, sugarSourceOf, type PaneCtx } from '../ui/editor-pane-registry';
 
-// 判据已随供方搬进解析器插件（LAU-4 第二步定稿批；不留在语言面库是因为整包会进首屏）。
+// 判据已随供方搬进解析器插件（LAU-4；不留在语言面库是因为整包会进首屏）。
 // 用例（`erb-dim-navigation.test.ts`）仍从本模块取这几枚，故原样转出。
 export {
   dimDeclarationOf,
@@ -17,18 +15,21 @@ export {
 /**
  * `#DIM` 系列声明的**宿主侧剩余部分**。
  *
- * ## 2026-10-30（LAU-4 第二步定稿批）之后这个模块还剩什么
+ * ## 2026-10-31（LAU-4 引用腿）之后这个模块还剩什么
  *
  * `#DIM` 的**名字判据**（`dimDeclarationOf` / `resolveErbDimDefinition` / 声明名取词 /
- * 合并优先序）全部住在解析器插件（`@kojo/plugin-erb-parser` 的 `symbols.ts`）：转到定义的
- * 供方是它自己，宿主 `monaco/kojo-definition.ts` 不再有本地腿。本模块只剩**宿主才有资格做**
- * 的两件事 + 一条只有宿主在用的腿：
+ * 合并优先序）与**查找引用那条腿**（`erbDimReferencesAt` / 三腿合一 `erbReferencesAt`）
+ * 全部住在解析器插件（`@kojo/plugin-erb-parser` 的 `symbols.ts`）：转到定义与查找引用的
+ * 供方都是它，宿主 `monaco/kojo-definition.ts` / `monaco/find-references.ts` 不再有本地腿。
+ * 本模块只剩**宿主才有资格做**的两件事：
  *
  * 1. **投影面坐标换算**（`derivedLegSurfaceOf` / `surfaceRequestPointOf`）：升糖预览那份
  *    `inmemory://sugar/…` model 的行列不属于存档，换算要问登记簿（`editor-pane-registry`）
  *    ——那是宿主事实，包不认识、插件也拿不到；
- * 2. **查找引用那条腿**（`resolveErbDimReferencesAt` / `resolveErbDimReferences`）：
- *    Shift+F12 的三条腿（`#DIM` / 标签 / 槽）仍在宿主合并，判据只借插件的声明名扫描。
+ * 2. **定义腿的转换壳**（`resolveErbDimDefinitionAt`）：投影面问原文、答存档坐标。
+ *
+ * 查找引用那条腿的位点也走同一枚 `surfaceRequestPointOf`（`ui/editor-global-providers.ts`
+ * 的 `referenceRequestPointOf`），族内几条本地腿不许各持一套映射。
  *
  * ## 两条本地腿共同的坐标纪律
  *
@@ -197,150 +198,62 @@ function modelPathOf(model: Monaco.editor.ITextModel): string | null {
 }
 
 /**
+ * 一次**缓冲区本地腿**发问的完整位点：问哪份文本、哪一行哪一列、答案是哪个路径的坐标。
+ *
+ * 这是 `#DIM` 定义腿 / `$` 标签腿 / 查找引用腿**唯一**的投影面换算（族内几条腿不许各持
+ * 一套映射）：原文面直通（一个字节都不碰），投影面问**原文缓冲 + 换算过的存档位点**
+ * （判据见 `derivedLegSurfaceOf` / `surfaceRequestPointOf`）。
+ *
+ * 生产消费方两处：`resolveErbDimDefinitionAt`（定义腿）与 `ui/editor-global-providers.ts`
+ * 的 `referenceRequestPointOf`（引用腿发问）；判据本身全在 `@kojo/plugin-erb-parser`。
+ * 登记簿认不出归属实例的派生面 / 原文取不到 / 空文本 ⇒ `null`（这一面没有可问的文本）。
+ */
+export interface LocalLegPoint {
+  readonly path: string;
+  readonly text: string;
+  readonly line: number;
+  readonly column: number;
+}
+
+export function localLegPointOf(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+): LocalLegPoint | null {
+  try {
+    const surface = derivedLegSurfaceOf(model);
+    if (surface !== null) {
+      if (surface.path.length === 0 || surface.sourceText.length === 0 || surface.sourceLineCount === 0) {
+        return null;
+      }
+      const at = surfaceRequestPointOf(surface, position);
+      return at === null
+        ? null
+        : { path: surface.path, text: surface.sourceText, line: at.line, column: at.column };
+    }
+    if (isDerivedModelUri(model)) return null;
+    const path = modelPathOf(model);
+    if (path === null) return null;
+    const text = model.getValue();
+    return text.length === 0
+      ? null
+      : { path, text, line: position.lineNumber, column: position.column };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Monaco model + 位置 → `#DIM` 定义落点（取文本 / 路径全程 fail-open）。
  *
  * 判据本身在解析器插件（`resolveErbDimDefinition`），本函数只做**投影面换算**：
  * 投影把 `#DIM X` 显示成 `声明数组 X`，在投影文本里扫声明行恒 0 命中 ⇒ 发问一律吃
  * 原文缓冲 + 换算过的存档位点；出口不折行号、不收列（命中与取词都生在存档侧）。
+ * 方言闸（`isErbDefinitionPath`）也在判据里，这里不再抄一份。
  */
 export function resolveErbDimDefinitionAt(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
 ): EditorSymbolLocation[] {
-  try {
-    const surface = derivedLegSurfaceOf(model);
-    if (surface !== null) {
-      // 方言闸走**存档路径**的后缀（投影 URI 只是编码过的字符串，拿它的尾巴当判据是巧合不是判据）
-      if (surface.path.length === 0 || !isErbDefinitionPath(surface.path)) return [];
-      if (surface.sourceText.length === 0 || surface.sourceLineCount === 0) return [];
-      const at = surfaceRequestPointOf(surface, position);
-      if (at === null) return [];
-      return resolveErbDimDefinition(surface.sourceText, at.line, at.column, surface.path);
-    }
-    if (isDerivedModelUri(model)) return [];
-    const path = modelPathOf(model);
-    if (path === null) return [];
-    const text = model.getValue();
-    if (text.length === 0) return [];
-    return resolveErbDimDefinition(text, position.lineNumber, position.column, path);
-  } catch {
-    return [];
-  }
-}
-
-/** 引用扫描的可见代码行（注释 / 指令行 / 定义行 / `#` / `$` / `@` 行一概不进） */
-function* dimCodeLinesOf(text: string): Generator<{ line: number; view: string }> {
-  const lines = linesOf(text);
-  let inSkipBlock = false;
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]!;
-    // 代码前缀（`;!;` / `;#;`）之后是真代码（判据单源 `plugin-api`），不算注释行
-    const trimmed = erbCodeBodyOf(raw.trim());
-    if (inSkipBlock) {
-      if (trimmed === '[SKIPEND]') inSkipBlock = false;
-      continue;
-    }
-    if (trimmed === '[SKIPSTART]') {
-      inSkipBlock = true;
-      continue;
-    }
-    if (trimmed.length === 0 || /^[;#$@]/.test(trimmed)) continue;
-    yield { line: i + 1, view: erbCodeViewOf(raw) };
-  }
-}
-
-/**
- * `#DIM` 声明名上的查找引用（Shift+F12）：**只在本文件**内列出现点。
- *
- * 命中前提（严格）：光标必须落在**声明行**的名字上——这是唯一可证明的入口（任意变量位置上
- * 按 Shift+F12 会把同名散文 / 成员名一起卷进来，误报比少答更坏）。声明行自身算
- * `definition`，其余同记号出现算 `mention`；成员访问（`FLAG:名字`）不算变量引用。
- */
-export function resolveErbDimReferences(
-  text: string,
-  line: number,
-  column: number,
-  filePath: string | null,
-): EditorSymbolLocation[] {
-  if (!filePath || !isErbDefinitionPath(filePath)) return [];
-  if (!Number.isFinite(line) || !Number.isFinite(column)) return [];
-  const lineText = linesOf(text)[Math.trunc(line) - 1];
-  if (lineText === undefined) return [];
-  const decl = dimDeclarationOf(lineText);
-  if (!decl) return [];
-  const col0 = Math.trunc(column) - 1;
-  // Monaco 的光标是"字符之间"：名字末尾那一列（nameStart + len）也算落在名字上
-  if (col0 < decl.nameStart || col0 > decl.nameStart + decl.name.length) return [];
-  const want = decl.name.toUpperCase();
-  const out: EditorSymbolLocation[] = [];
-  const seen = new Set<string>();
-  const push = (atLine: number, start: number, length: number, kind: 'definition' | 'mention'): void => {
-    const key = `${atLine}\u0000${start}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({
-      filePath,
-      line: atLine,
-      column: start + 1,
-      span: { columnStart: start + 1, columnEnd: start + 1 + length },
-      kind,
-    });
-  };
-  for (const { line: atLine, dim } of dimDeclarationsOf(text)) {
-    if (dim.name.toUpperCase() === want) push(atLine, dim.nameStart, dim.name.length, 'definition');
-  }
-  for (const { line: atLine, view } of dimCodeLinesOf(text)) {
-    let i = 0;
-    while (i < view.length) {
-      if (!isErbDimNameChar(view[i])) {
-        i++;
-        continue;
-      }
-      const start = i;
-      while (i < view.length && isErbDimNameChar(view[i])) i++;
-      if (view.slice(start, i).toUpperCase() !== want) continue;
-      const prev = start > 0 ? view[start - 1] : '';
-      if (prev === ':' || prev === '：') continue;
-      push(atLine, start, i - start, 'mention');
-    }
-  }
-  out.sort((a, b) => a.line - b.line || (a.column ?? 0) - (b.column ?? 0));
-  return out;
-}
-
-/**
- * Monaco model + 位置 → `#DIM` 引用点（查找引用那条腿的本地半；判据在包里，
- * 本函数只做投影面换算与 fail-open）。
- *
- * **原文面**（`derivedLegSurfaceOf` 回 `null` 且不是派生 URI）：屏幕上那份 model 就是原文，
- * 判据、文本、行列一个字节都不碰。
- *
- * **投影面**：发问吃**原文缓冲 + 换算过的存档位点**（DIM-1 收口）。投影把 `#DIM X` 显示成
- * `声明数组 X`，在投影文本里扫声明行**恒 0 命中**；而投影列与原列不同源。出口**不折行号、
- * 不收列**：命中与取词都生在存档侧，交出的就是源坐标（真行真列真区间）。
- * 原文 model 取不到 / 位点越界 / 那一格没有源行 ⇒ 本腿**不给结果**，绝不退回投影文本凑一个形状。
- */
-export function resolveErbDimReferencesAt(
-  model: Monaco.editor.ITextModel,
-  position: Monaco.Position,
-): EditorSymbolLocation[] {
-  try {
-    const surface = derivedLegSurfaceOf(model);
-    if (surface !== null) {
-      // 方言闸走**存档路径**的后缀（投影 URI 只是编码过的字符串，拿它的尾巴当判据是巧合不是判据）
-      if (surface.path.length === 0 || !isErbDefinitionPath(surface.path)) return [];
-      if (surface.sourceText.length === 0 || surface.sourceLineCount === 0) return [];
-      const at = surfaceRequestPointOf(surface, position);
-      if (at === null) return [];
-      return resolveErbDimReferences(surface.sourceText, at.line, at.column, surface.path);
-    }
-    if (isDerivedModelUri(model)) return [];
-    const path = modelPathOf(model);
-    if (path === null) return [];
-    const text = model.getValue();
-    if (text.length === 0) return [];
-    return resolveErbDimReferences(text, position.lineNumber, position.column, path);
-  } catch {
-    return [];
-  }
+  const at = localLegPointOf(model, position);
+  return at === null ? [] : resolveErbDimDefinition(at.text, at.line, at.column, at.path);
 }

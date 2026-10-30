@@ -31,16 +31,41 @@ import { installDefinitionProvider } from '../src/monaco/kojo-definition';
 import { installReferenceProvider } from '../src/monaco/find-references';
 import {
   derivedLegSurfaceOf,
+  localLegPointOf,
   resolveErbDimDefinition,
   resolveErbDimDefinitionAt,
-  resolveErbDimReferencesAt,
   toArchiveCoords,
 } from '../src/monaco/erb-dim-navigation';
 import {
+  erbDimReferencesAt,
+  isErbDefinitionPath,
   labelDefinitionLocations,
   labelReferenceLocations,
-  resolveErbLabelScopeAt,
-} from '../src/monaco/erb-label-navigation';
+  labelScopeAt,
+  type ErbLabelScope,
+} from '@kojo/plugin-erb-parser';
+
+/* LAU-4 引用腿（2026-10-31）：判据整块搬进解析器插件，宿主的 find-references 只剩翻形状。
+ * 下面两枚是**生产路径的同构合成**（宿主位点换算 → 插件判据），本文件测的就是这两段：
+ * 投影面问原文、交源坐标这一条纪律仍在，只是判据那一段换了住处。 */
+
+function resolveErbDimReferencesAt(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+): EditorSymbolLocation[] {
+  const at = localLegPointOf(model, position);
+  return at === null ? [] : erbDimReferencesAt(at.text, at.line, at.column, at.path);
+}
+
+function resolveErbLabelScopeAt(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+): ErbLabelScope | null {
+  const at = localLegPointOf(model, position);
+  // 方言闸与供方逐字同源（`erbReferencesAt` 里那条 `isErbDefinitionPath`）
+  if (at === null || !isErbDefinitionPath(at.path)) return null;
+  return labelScopeAt(at.text, at.path, at.line, at.column);
+}
 
 /* ============================== 夹具 ============================== */
 
@@ -397,7 +422,8 @@ describe('装配点 · 投影面上 F12 / Shift+F12 的落点', () => {
     mountProjection();
     const { monaco, references } = stubMonaco();
     installReferenceProvider(monaco, {
-      resolve: () => [],
+      // LAU-4 之后宿主不再有本地腿：接的是"位点换算 + 插件判据"这一对（与生产路径同构）
+      resolve: (model, position) => resolveErbDimReferencesAt(model, position),
       navigate: () => undefined,
       openModelFor: (filePath) => (filePath === ARCHIVE ? ARCHIVE_MODEL : undefined),
     });

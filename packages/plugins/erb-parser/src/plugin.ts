@@ -62,8 +62,8 @@ import { checkStructure, erbDocumentSymbols } from './structure';
 import { buildStructureFixes } from './structure-fix';
 import { provideErbCompletion } from './completion';
 import { erbFoldingRanges } from './folding';
-import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
-import { definitionTargetsAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition } from './symbols';
+import { buildReferenceIndex, erbReferenceDecorations, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
+import { definitionTargetsAt, erbReferencesAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition } from './symbols';
 import {
   callHierarchySymbolOf,
   incomingCalls,
@@ -1972,15 +1972,24 @@ export function createErbParserPlugin(): Plugin {
         },
       });
 
-      /* ---------------- 查找引用（R2，2026-10-16 语言服务批） ----------------
+      /* ---------------- 查找引用（R2，2026-10-16 语言服务批；LAU-4 引用腿 2026-10-31） ----------------
 
        同一枚槽的第七个判别成员（additive：往联合末尾追加，宿主与既有贡献方零改动）。
        判据与 rename 完全同源——`referencesOf`（反向索引）+ `symbolTokenAt`（光标 →
        名字），单一真源都在本包（`references.ts`），宿主只做 Monaco 协议翻译。
 
-       索引缺席（未开项目 / 还没建好）⇒ `undefined` = **本包不答**，而不是答"没有引用"
-       （与 `erb-workspace-symbols` 同一区分：真没有 ≠ 我根本还没有名录，铁律 4 不静默）。
-       记号不在索引里（变量 / 标签 / 散文）⇒ 空数组（**不猜**，作者看到"没有引用"）。
+       LAU-4（2026-10-31）：原先住在宿主 `monaco/find-references.ts` 的两条**缓冲区本地腿**
+       （`$` 标签作用域 / `#DIM` 声明名）整块搬进本包（判据 `symbols.ts` 的 `erbReferencesAt`），
+       宿主那枚 provider 从此只剩「model / 位置 → 请求」「契约 → Monaco 形状」与落点通道。
+       三腿合一的优先序与去重单源 `mergeNavigationLegs`（与 F12 转到定义同一条裁决）。
+
+       三态：非方言文件 ⇒ `undefined`；方言文件里索引缺席**且**本地两腿也没有可证明的出现 ⇒
+       `undefined`（= 本包不答，"真没有引用"与"我根本还没有名录"是两件事，铁律 4）；其余
+       一律作答（本地两腿是缓冲区事实，不该因名录未建而消失）。
+       记号不在索引里（变量 / 标签 / 散文）⇒ 本地两腿各自按自己的入口判，都没有 ⇒ 空数组
+       （**不猜**，作者看到"没有引用"）。
+       跨文件：反向索引本就是项目级；请求里的 `projectFiles` 快照本包**不读**（判据不碰宿主
+       状态，缺省只看当前文件 + 既有索引），传入与否结果逐字相同。
        */
       ctx.slots.register('ui.editor.languageService', {
         id: 'erb-references',
@@ -1988,12 +1997,15 @@ export function createErbParserPlugin(): Plugin {
         provide: (request) => {
           if (request.kind !== 'references') return undefined;
           if (!isDialect(request.path)) return undefined;
-          const idx = index;
-          if (!idx) return undefined;
-          return {
-            kind: 'references',
-            locations: erbReferenceLocationsAt(idx, request.text, request.line, request.column),
-          };
+          const locations = erbReferencesAt(
+            index,
+            request.text,
+            request.path,
+            request.line,
+            request.column,
+          );
+          if (index === null && locations.length === 0) return undefined;
+          return { kind: 'references', locations };
         },
       });
 
