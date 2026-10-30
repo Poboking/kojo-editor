@@ -236,6 +236,14 @@ export interface LanguageDescriptor {
    * kojo1 的宿主常量、2.0 的 `@kojo/kojo-lang/constants`）。缺省 = 这门语言没有注释链接面。
    */
   readonly lineComment?: string;
+  /**
+   * 游戏目录里这份语言的盘上文件**默认只读**（additive，ERB-PARITY G6）。声明 = 这门语言的
+   * 文件是**作者源文件**（ADR-0005 写保护的对象）；缺省 = 不做只读保护（数据格式面，
+   * 如 JSON / 口上 XML）。消费方唯一出口 = `monaco/language-guard.ts` 的只读门，
+   * 宿主不按语言 id 分支。**不看可用性**：封存档只影响"能不能被认领"，保护位跟路径走，
+   * 否则切流档位一改，`.kojo1` 就会静默从只读变可编辑。
+   */
+  readonly gameDirReadOnly?: boolean;
 }
 
 const descriptors: LanguageDescriptor[] = [];

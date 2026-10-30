@@ -15,7 +15,7 @@
  *   「切换行尾」根本撤不掉，作者按 Ctrl+Z 退的是自己上一次打字。现改走 `pushEOL` +
  *   **前后各一颗 `pushStackElement()`** ⇒ 产品口径钉死为「一次 Ctrl+Z 只退行尾档位、作者打字留下」
  *   （取证见下面 ② 那组三段，全在**真 monaco model** 上跑；① 的脏判定读数不受影响）；
- * - 只读 / 预览面由 `eolSwitchAllowed` 拒绝（写权限 + `erbReadOnlyGate` + 非预览）。
+ * - 只读 / 预览面由 `eolSwitchAllowed` 拒绝（写权限 + `sourceReadOnlyGate` + 非预览）。
  *
  * **保存面未闭环（本批取证结论，别把这里读成闭环）**：缺省保存走
  * `kernel.io.writeText(path, text)` 的"逐行保换行"——未改动行保留盘上原换行、
@@ -226,10 +226,10 @@ describe('接线：动作句柄、焦点组转发、状态上报同一链路', (
     expect(SWITCH_EOL).toContain('applyEolToModel(entry.model, eol)');
     expect(SWITCH_EOL).toContain('entry.eol = eol');
     expect(SWITCH_EOL).toContain('pushSelStatus(true)');
-    // 判据本体：预览面 / 写权限 / erbReadOnlyGate（与换文件 effect 同一门）
+    // 判据本体：预览面 / 写权限 / sourceReadOnlyGate（与换文件 effect 同一门）
     expect(SOURCE).toContain('if (sugarModelRef.current !== null) return false;');
     expect(SOURCE).toContain('if (!kernel.io.isWritable(path)) return false;');
-    expect(SOURCE).toContain('return !erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit });');
+    expect(SOURCE).toContain('return !sourceReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit });');
   });
 
   it('动作句柄注册了 switchEol（状态栏菜单经宿主转发到编辑器）', () => {

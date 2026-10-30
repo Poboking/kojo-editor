@@ -35,6 +35,11 @@
 - ⚠ **但"编辑器当前这份文件能不能打字"不走 `isWritable`**：落地时它是内联的三条件式
   `readOnly = isErbLike(path) && !inWorkspace(path) && !allowEdit`，
   在 `EditorPane.tsx` 里**各写了一遍**（切文件时的 `updateOptions` 与 `setErbEditable` 解锁/回锁各一处）。
+  2026-10-31（ERB-PARITY G6）起这份三条件式收成一枚纯函数
+  `sourceReadOnlyGate(path, { inWorkspace, canEdit })`（`monaco/language-guard.ts`），
+  第一轴的语言面判据改成 descriptor 声明 `gameDirReadOnly`——受保护的是**作者源文件**
+  （ERB 方言 + kojo 家族的 `.kojo` / `.kojo2` / `.kojo1`），不再只有 ERB；数据格式面
+  （JSON / 口上 XML）不声明、不进这道门。
   `isWritable` 只管**落盘那一侧**（保存路径上的拒绝 + 保存按钮的 `disabled`）。
   两者语义一致但实现分离 —— 原稿"判定唯一真源"的说法过强，已按实现校正。
   **后续如要合并成单一真源，注意别把轴二（会话内解锁）漏掉**：`isWritable` 不知道解锁态。

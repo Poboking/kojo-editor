@@ -444,7 +444,7 @@ describe('CTX-SUGGEST · 抑制条件逐条', () => {
     expect(fired(s)).toBe(0);
   });
 
-  it('只读（`erbReadOnlyGate` 设进 Monaco 的 `readOnly`）⇒ 不弹', async () => {
+  it('只读（`sourceReadOnlyGate` 设进 Monaco 的 `readOnly`）⇒ 不弹', async () => {
     const s = stubEditor({ line: '时机', readOnly: true });
     s.type(' ');
     await s.settle();

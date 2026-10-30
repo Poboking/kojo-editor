@@ -454,7 +454,9 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       const sugarPreview = sugarModelRef.current !== null;
       // 糖预览的可用门与 `EditorPane.applySugarView` **等价**（不是第二份判据）：
       // 那份门 = 方言 ∧ 不在工作区 ∧ 未解锁；而"游戏目录里未解锁的方言文件"正是
-      // 编辑器只读面（`erbReadOnlyGate` 同一个表达式）⇒ `readOnly` 一位就够。
+      // 编辑器只读面（`sourceReadOnlyGate` 同一个表达式）⇒ `readOnly` 一位就够。
+      // ERB-PARITY G6：只读门已铺到 kojo 家族（受保护的源文件），所以**方言**这一半
+      // 必须留着——`isErbLike` 答的就是"糖视图有没有可投影面"。
       // 这样本 hook 不必把 `unlockedPathsRef` 再搬进来一份。
       const canToggleSugar = isErbLike(path) && !isInWorkspaceFile(kernel, path) && readOnly;
       return {

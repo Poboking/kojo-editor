@@ -21,18 +21,11 @@ export function isErbLike(path: string): boolean {
 }
 
 /**
- * 编辑器只读门（**两轴合一**，纯函数便于单测；ADR-0005）：
- *
- * - 轴一 · 目录分野：作者工作区（常驻可写根）里的方言文件是创作源文件，恒可编辑；
- *   游戏目录里的默认只读。
- * - 轴二 · 显式解锁：`canEdit` = 本次会话已解锁该文件 **或** 直连模式开门且该路径已获写权限。
- *
- * 只有"方言文件 ∧ 不在工作区 ∧ 没拿到可编辑"三者同时成立才锁。`.ERH` 进来后走的是
- * **同一条门**——写保护铁律不被新扩展名绕开：能不能真落盘仍由内核 io 的写允许域决定。
+ * 编辑器只读门已搬去 `monaco/language-guard.ts`（ERB-PARITY G6）：它的语言面判据是
+ * descriptor 声明（`gameDirReadOnly`），要读语言注册表——而本模块在**开机图**内
+ * （`ShellLayout → file-area` 这条边），把表拖到首屏是 PS-10 字节闸不许的事。
+ * 这里只留升糖预览自己的"是不是 ERB 方言"（`isErbLike`）。
  */
-export function erbReadOnlyGate(path: string, axes: { inWorkspace: boolean; canEdit: boolean }): boolean {
-  return isErbLike(path) && !axes.inWorkspace && !axes.canEdit;
-}
 
 /** ViewZone 计划（插入点 + 高度；纯函数，便于断言"不会把预览插到第 0 行之前"） */
 export interface LiftZonePlan {

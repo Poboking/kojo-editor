@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ERB_DIALECT_EXTENSIONS, erbMonacoExtensions, isErbDialectPath } from '@kojo/plugin-api';
 import { registerErbLanguage } from '../src/monaco/erb-language';
-import { erbReadOnlyGate, isErbLike } from '../src/ui/lift-preview';
+import { sourceReadOnlyGate } from '../src/monaco/language-guard';
+import { isErbLike } from '../src/ui/lift-preview';
 import { classifyDrop, dropHintText, openableExtensions, processDroppedFiles } from '../src/ui/drag-drop';
 
 /**
@@ -112,22 +113,26 @@ describe('③ 能看能存：只读门按既有两轴走，.ERH 不绕开任何�
     expect(isErbLike(GAME_ERH)).toBe(isErbDialectPath(GAME_ERH));
   });
 
-  it('真值表：只有"方言文件 ∧ 不在作者工作区 ∧ 没拿到可编辑"才锁', () => {
+  it('真值表：只有"受保护的源文件 ∧ 不在作者工作区 ∧ 没拿到可编辑"才锁', () => {
     // 游戏目录里的声明文件：默认只读（写允许域没批就是读）
-    expect(erbReadOnlyGate(GAME_ERH, { inWorkspace: false, canEdit: false })).toBe(true);
+    expect(sourceReadOnlyGate(GAME_ERH, { inWorkspace: false, canEdit: false })).toBe(true);
     // 作者工作区（常驻可写根）：恒可编辑——存得出去
-    expect(erbReadOnlyGate(WORKSPACE_ERH, { inWorkspace: true, canEdit: false })).toBe(false);
+    expect(sourceReadOnlyGate(WORKSPACE_ERH, { inWorkspace: true, canEdit: false })).toBe(false);
     // 会话内显式解锁 / 直连模式开门：照样不锁（`.ERH` 没把这套逻辑绕开）
-    expect(erbReadOnlyGate(GAME_ERH, { inWorkspace: false, canEdit: true })).toBe(false);
-    // 非方言文件（`.kojo` / `.md`）不经这道门
-    expect(erbReadOnlyGate('D:\\x\\事件.kojo', { inWorkspace: false, canEdit: false })).toBe(false);
-    expect(erbReadOnlyGate('D:\\x\\readme.md', { inWorkspace: false, canEdit: false })).toBe(false);
+    expect(sourceReadOnlyGate(GAME_ERH, { inWorkspace: false, canEdit: true })).toBe(false);
+    // ERB-PARITY G6：kojo 家族的源文件同样是受保护对象（旧判据只认 ERB 方言 ⇒ 这里曾全是 false）
+    for (const name of ['事件.kojo', '事件.kojo2', '事件.kojo1']) {
+      expect(sourceReadOnlyGate(`D:\\x\\${name}`, { inWorkspace: false, canEdit: false }), name).toBe(true);
+    }
+    // 数据格式面 / 普通文本不经这道门
+    expect(sourceReadOnlyGate('D:\\x\\readme.md', { inWorkspace: false, canEdit: false })).toBe(false);
+    expect(sourceReadOnlyGate('D:\\x\\cfg.json', { inWorkspace: false, canEdit: false })).toBe(false);
   });
 
   it('留位未接线的 `.ERD` 三件都不给（不写没盘可证的行为）', () => {
     const erd = 'C:\\game\\ERB\\カラム機能\\COLUMNDIV@2.ERD';
     expect(classifyDrop([erd]).files).toEqual([]);
     expect(isErbLike(erd)).toBe(false);
-    expect(erbReadOnlyGate(erd, { inWorkspace: false, canEdit: false })).toBe(false);
+    expect(sourceReadOnlyGate(erd, { inWorkspace: false, canEdit: false })).toBe(false);
   });
 });

@@ -62,7 +62,8 @@ import {
   setViewState,
   withFind,
 } from './view-state-store';
-import { clampRange, erbReadOnlyGate, isErbLike } from './lift-preview';
+import { clampRange, isErbLike } from './lift-preview';
+import { isGuardedGameSourcePath, sourceReadOnlyGate } from '../monaco/language-guard';
 import { pathLabelParts } from './path-label';
 // SAVE-BUTTON-IO-SEAM（出路②）：保存按钮的可用性从此**同时认宿主那份事实**——
 // 判定与文案都住在 `write-domain.ts` 会话单例（写方只有 use-project-session 一处），
@@ -704,14 +705,14 @@ export function EditorPane({
    * 这份文件此刻能不能切换 EOL（W7-H）：只读门与写可行性与保存同一把尺子。
    * - 预览面：屏上是只读派生 model，切换改不到真文件 ⇒ 不提供入口；
    * - `kernel.io.isWritable`：写权限未批准 / 未解锁的游戏目录 ERB ⇒ 改也存不了；
-   * - `erbReadOnlyGate`：与 Monaco `readOnly` 同一个门（判定参数与换文件 effect 一致）。
+   * - `sourceReadOnlyGate`：与 Monaco `readOnly` 同一个门（判定参数与换文件 effect 一致）。
    */
   const eolSwitchAllowed = useCallback(
     (path: string): boolean => {
       if (sugarModelRef.current !== null) return false;
       if (!kernel.io.isWritable(path)) return false;
       const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
-      return !erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit });
+      return !sourceReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit });
     },
     [kernel],
   );
@@ -1184,7 +1185,7 @@ export function EditorPane({
           // 按当前文件重算 readOnly（解锁 / 直连 / 工作区口径与切换标签 effect 一致）
           const path = filePathRef.current;
           const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
-          applyEditabilityAndSuggest(ed, erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }));
+          applyEditabilityAndSuggest(ed, sourceReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }));
           sugarModel.dispose();
         } else {
           return; // 无处可还原：保留挂载、不 dispose，至少不白屏
@@ -1473,7 +1474,7 @@ export function EditorPane({
     const p = filePathRef.current;
     if (!ed || !p) return;
     const canEdit = unlockedPathsRef.current.has(p) || directEditable(p);
-    applyEditabilityAndSuggest(ed, erbReadOnlyGate(p, { inWorkspace: inWorkspace(p), canEdit }));
+    applyEditabilityAndSuggest(ed, sourceReadOnlyGate(p, { inWorkspace: inWorkspace(p), canEdit }));
     applySugarView();
     // 可编辑来源变了 ⇒ 状态栏 EOL 切换入口跟着重算（与 readOnly 同一门）
     pushSelStatus(true);
@@ -2451,7 +2452,7 @@ export function EditorPane({
       // 下渲染一帧（大文件降级清单见 editor-options.ts）。
       const allowEdit = unlockedPathsRef.current.has(filePath) || directEditable(filePath);
       setUnlocked(allowEdit);
-      const readOnly = erbReadOnlyGate(filePath, { inWorkspace: inWorkspace(filePath), canEdit: allowEdit });
+      const readOnly = sourceReadOnlyGate(filePath, { inWorkspace: inWorkspace(filePath), canEdit: allowEdit });
       // 档位判据 = 此刻屏幕上这份**原文**的行数；可写态与快建议在 overrides 里盖在档位之后
       const tierLines = entry.model.getLineCount();
       applySizeTier(ed, tierLines, tierOverrides(tierLines, isErbLike(filePath), {
@@ -2541,7 +2542,7 @@ export function EditorPane({
       // （ADR-0005 给糖组的适配项——别把写保护铁律的代价转嫁到正常操作上）。
       // 回锁时若直连开门仍应保持可编辑（直连是独立的可编辑来源）。
       const canEdit = allowEdit || directEditable(path);
-      applyEditabilityAndSuggest(ed, erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }));
+      applyEditabilityAndSuggest(ed, sourceReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit }));
       // 解锁 → 糖视图必须让位（原文要看得见）；回锁 → 重新生成糖视图
       applySugarView();
       // 可编辑门翻转 ⇒ EOL 切换入口跟着收回/恢复（只读面不提供切换）
@@ -2583,7 +2584,9 @@ export function EditorPane({
     if (!ed) return;
     const disposable = ed.onDidAttemptReadOnlyEdit(() => {
       const path = filePathRef.current;
-      if (!isErbLike(path) || unlockedPathsRef.current.has(path) || directEditable(path)) return;
+      // 门与换文件 effect 同一个（`sourceReadOnlyGate`）：锁着就得给解锁出路（不然只读是死路）
+      const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
+      if (!sourceReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit })) return;
       // 已弹着就不再重复弹（连按键盘会产生一串事件）
       setUnlockAsk((cur) => cur ?? path);
     });
@@ -2690,7 +2693,7 @@ export function EditorPane({
       return;
     }
     const canEdit = unlockedPathsRef.current.has(path) || directEditable(path);
-    if (erbReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit })) {
+    if (sourceReadOnlyGate(path, { inWorkspace: inWorkspace(path), canEdit })) {
       notify({ kind: 'info', message: '这份文件当前只读，一键修复不动它——先按提示允许编辑这份文件。' });
       return;
     }
@@ -3031,10 +3034,13 @@ export function EditorPane({
         <div className="band-actions">
           {/* 次要徽章族（校验暂停 / 折叠超额）**不再上带子**：JSX 单源在上方 `bandNoticeNodes`，
               落点改到编辑区左下的浮层（`.editor-notice-layer`，见 `.editor-body` 那一格）。 */}
-          {isErbLike(filePath) && !inWorkspace(filePath) ? (
+          {/* ERB-PARITY G6：这一簇挂在**受保护的作者源文件**上（ERB + kojo 家族），不按语言 id
+              手写名单——解锁 / 直连两种破例态必须对每一种受保护语言都看得见（铁律 4：
+              只读不能是静默的）；糖视图那几件仍只属于 ERB（见下面的 `isErbLike` 分叉）。 */}
+          {(isErbLike(filePath) || isGuardedGameSourcePath(filePath)) && !inWorkspace(filePath) ? (
             <>
-              {/* 两道正交轴的呈现（ADR-0005）：能走到这里说明这是**游戏目录里的 ERB**
-                （工作区 ERB 恒可编辑，不开预览）。
+              {/* 两道正交轴的呈现（ADR-0005）：能走到这里说明这是**游戏目录里的作者源文件**
+                （工作区里的恒可编辑，不开预览）。
                 只读**不再在这里挂胶囊**——它与底部状态栏那颗是同一件事，两处并排等于互相抢答
                 （2026-10-14 去重），原先挂在徽章上的那句解释迁进了状态栏胶囊的悬停。
                 纯说明性标签不带操作入口——旧的「强制编辑 ERB」按钮按需求 §1.4 作废。 */}
@@ -3061,7 +3067,7 @@ export function EditorPane({
               >
                 直连可编辑
               </span>
-            ) : sealedSugarNotice !== null ? (
+            ) : !isErbLike(filePath) ? null : sealedSugarNotice !== null ? (
               /* kojo1 封存 ⇒ 预览入口整簇不渲染（不留一颗"点了没反应"的按钮），
                  换成一句说明：只对本来就开着预览的作者出现（判据见 `sealedSugarNotice`）。 */
               sealedSugarNotice

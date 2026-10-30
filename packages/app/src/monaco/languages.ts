@@ -76,6 +76,9 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
   // `documentSymbol` 槽腿、糖视图原文侧）；行注释 `;` 取 `erb-enter.ts` 的唯一常量。
   contextFaces: ['quick-fix', 'fix-all', 'jump-to-state', 'toggle-sugar'],
   lineComment: ERB_LINE_COMMENT,
+  // ERB-PARITY G6：游戏目录里的 ERB 是作者源文件 ⇒ 默认只读，解锁后才给写面
+  // （判据的唯一出口 = `monaco/language-guard.ts`；宿主不按语言 id 分支）。
+  gameDirReadOnly: true,
   /**
    * R3（2026-10-28）：ERB 的两条语言服务腿（行内提示 `callArgumentHints` / 结构化着色
    * `erbSemanticTokens`）都把行窗口吃进了输入，且窗口内逐行说法与整篇一字不差
@@ -113,6 +116,9 @@ const KOJO_DESCRIPTOR: LanguageDescriptor = {
   // 与 ERB 同面（行为零变化：它此前就在那枚手写名单里）；糖视图的**投影侧**就是它。
   contextFaces: ['quick-fix', 'fix-all', 'jump-to-state', 'toggle-sugar'],
   lineComment: KOJO1_LINE_COMMENT,
+  // ERB-PARITY G6：糖源同样是作者源文件 ⇒ 游戏目录里默认只读（与语言可用性无关：
+  // 封存档只影响"能不能被认领"，保护位跟路径走）。
+  gameDirReadOnly: true,
   structure: {
     load: () => import('./tree-sitter/kojo-runtime').then((m) => m.KOJO_STRUCTURE_RUNTIME),
   },
@@ -205,6 +211,9 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
   // ERB-PARITY G9：行注释 `//` 取 `@kojo/kojo-lang/constants`（语言配置读同一枚）。
   contextFaces: ['quick-fix', 'fix-all', 'jump-to-state'],
   lineComment: KOJO2_LINE_COMMENT,
+  // ERB-PARITY G6：`.kojo` / `.kojo2` 也是作者源文件 ⇒ 游戏目录里默认只读
+  // （门在 `monaco/language-guard.ts`；JSON / 口上 XML 这类数据格式面不声明）。
+  gameDirReadOnly: true,
 };
 
 registerLanguage(ERB_DESCRIPTOR);
