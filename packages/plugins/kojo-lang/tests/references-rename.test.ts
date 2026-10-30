@@ -231,6 +231,7 @@ describe('注册纪律：两条腿分枚注册、order 10、零游戏事实', ()
       'kojo2-semanticTokens',
       'kojo2-signatureHelp',
       'kojo2-symbols',
+      'kojo2-workspaceSymbols',
     ]);
     expect(contributions.get('kojo2-references')!.order).toBe(10);
     expect(contributions.get('kojo2-rename')!.order).toBe(10);

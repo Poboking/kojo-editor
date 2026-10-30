@@ -200,6 +200,8 @@ describe('格式化：provider 两跳 vs 直调 `formatKojo2Source`', () => {
           provider = registered as Monaco.languages.DocumentFormattingEditProvider;
           return { dispose: () => undefined };
         },
+        // 工厂的 formatting 腿同时挂整篇与区间两枚 provider（B5b 车 2）；桩要能应答两者。
+        registerDocumentRangeFormattingEditProvider: () => ({ dispose: () => undefined }),
       },
     } as unknown as typeof Monaco;
     installSlotServiceLegs(fakeMonacoStub, ['formatting']);

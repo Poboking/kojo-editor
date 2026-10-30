@@ -260,6 +260,7 @@ describe('注册纪律：两条腿分枚注册、order 10、不读切流开关',
       'kojo2-semanticTokens',
       'kojo2-signatureHelp',
       'kojo2-symbols',
+      'kojo2-workspaceSymbols',
     ]);
     expect(contributions.get('kojo2-signatureHelp')!.order).toBe(10);
     expect(contributions.get('kojo2-formatting')!.order).toBe(10);
