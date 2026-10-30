@@ -33,6 +33,7 @@ import {
 } from '../src/monaco/erb-highlight';
 import { installErbSelectionRangeProvider } from '../src/monaco/erb-selection-range';
 import { ERB_LANGUAGE_IDS } from '@kojo/erb-lang/constants';
+import { erbStructureOf } from '@kojo/erb-lang/highlight';
 import {
   createErbLangPlugin,
   provideDocumentHighlights as provideErbHighlights,
