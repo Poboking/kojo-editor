@@ -291,8 +291,10 @@ export default defineConfig({
       // B3 收口最后一格：文档级诊断判据 + 一次编译两处消费的成品交接（同样排在桶之前）。
       '@kojo/kojo-lang/diagnostics': r('../kojo-lang/src/diagnostics.ts'),
       '@kojo/kojo-lang/diagnostic-result': r('../kojo-lang/src/diagnostic-result.ts'),
-      // SDK-B5b 车 C（2026-10-31）：调用层级判据整块进包（同样排在桶之前）。
+// SDK-B5b 车 C（2026-10-31）：调用层级判据整块进包（同样排在桶之前）。
       '@kojo/kojo-lang/call-hierarchy': r('../kojo-lang/src/call-hierarchy.ts'),
+      // B5b C 类第二车：方言体检判据（原宿主 `monaco/kojo2-dialect-lint.ts`）进包（同样排在桶之前）。
+      '@kojo/kojo-lang/dialect-lint': r('../kojo-lang/src/dialect-lint.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('../kojo-sdk/src/semantic-roles.ts'),
       '@kojo/kojo-sdk/structure-protocol': r('../kojo-sdk/src/structure-protocol.ts'),
       '@kojo/kojo-sdk/contracts': r('../kojo-sdk/src/contracts.ts'),

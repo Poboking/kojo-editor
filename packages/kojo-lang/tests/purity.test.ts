@@ -92,11 +92,15 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     // + B3 收口最后一格（2026-10-30）：文档级诊断再进两枚——`diagnostics`（编译 → 行 / 落点归一 /
     //   失败口径 + 两面取数缝）与 `diagnostic-result`（一次编译两处消费的成品交接）。同样只引
     //   `@kojo/kojo-core` 的类型与函数，槽形状翻译 / 调度 / 降级留在宿主与插件。
-    // + SDK-B5b 车 C（2026-10-31）：调用层级的判据整块从宿主 `monaco/kojo2-callhierarchy.ts`
+// + SDK-B5b 车 C（2026-10-31）：调用层级的判据整块从宿主 `monaco/kojo2-callhierarchy.ts`
     //   搬进来——`call-hierarchy`（prepare / 入边 / 出边 + 跨文件口 + provider 工厂）。同样只引
     //   `@kojo/kojo-core` 与同包相对路径（`kojo2DocumentOf` / `kojo2DefinitionAt` / 文本面判读
     //   各走本包叶子）；provider 的 `ITextModel` / `Position` 类型换成结构面，Monaco 的值原样满足。
-    expect(files).toHaveLength(35);
+    // + B5b C 类第二车（2026-10-31）：方言体检（`dialect lint`，§5.5 七项）再进一枚——`dialect-lint`
+    //   （事件名 / 事件落点 / 同一次编译诊断的筛选 / 载体归属 / 等待面 + `(码, 方言)` 聚合）。判据
+    //   逐字搬自宿主 `monaco/kojo2-dialect-lint.ts`（该文件同批删除）；同包文档 / 事件挂点走相对
+    //   路径，问题面板那一行改成本包自持的 `Kojo2DialectLintProblem`（不引宿主 UI 类型）。
+    expect(files).toHaveLength(36);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

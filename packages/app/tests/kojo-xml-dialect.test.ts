@@ -6,7 +6,7 @@
  * 2. **未登记 command ⇒ `core/event/unknown`**：位置指到属性值那一段；
  * 3. **错载体 ⇒ `core/event/wrong-carrier`**：XML 条目落在 ERB 载体上（`会話` 就是那一格）；
  * 4. **载体归属按当前方言的 `carriers`**：XML 路径归 xml、别的路径归不上就一条不问；
- * 5. **复用 D2a**：诊断码 / 严重级 / 聚合器 / 排序全走 `kojo2-dialect-lint.ts` 那一份，
+ * 5. **复用 D2a**：诊断码 / 严重级 / 聚合器 / 排序全走 `@kojo/kojo-lang/dialect-lint` 那一份，
  *    并且 D2a 的事件名判定在"没声明 carriers"的方言上原样成立（不回退）。
  *
  * 夹具只住测试目录（`tests/fixtures/kojo-xml-dialect/`），不往仓库其它地方放语料。
@@ -21,7 +21,7 @@ import {
   aggregateKojo2DialectLint,
   kojo2DialectLintProblems,
   lintKojo2Dialect,
-} from '../src/monaco/kojo2-dialect-lint';
+} from '@kojo/kojo-lang/dialect-lint';
 import {
   knownXmlCommandTokens,
   lintKojoXmlDialect,

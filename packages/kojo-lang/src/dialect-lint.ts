@@ -36,9 +36,19 @@
  * ## 呈现纪律（§5.5 末段）
  *
  * 诊断 → {@link aggregateKojo2DialectLint} 按 `(码, 方言)` 聚成一条 →
- * {@link kojo2DialectLintProblems} 翻成**既有**问题面板的行（`EditorProblem`）。
+ * {@link kojo2DialectLintProblems} 翻成**既有**问题面板的行（{@link Kojo2DialectLintProblem}）。
  * 本模块**不产生 markers**（波浪线只属于编译/方言解析那一条链）：一张清单一条汇总，
  * 明细（行号）落在同一条消息里，点行跳到第一处。
+ *
+ * ## 为什么判据住在包（B5b C 类第二车）
+ *
+ * 宿主那枚 `monaco/kojo2-dialect-lint.ts` 已删，消费者（`kojo-xml-dialect` /
+ * `kojo2-problem-wiring`）改指 `@kojo/kojo-lang/dialect-lint`。判据本体逐字搬来，只换了两处
+ * 指路：同包的文档 / 事件挂点走相对路径（`./declarations` / `./event-sites`），以及问题面板
+ * 那一行的形状改成本文件自持的 {@link Kojo2DialectLintProblem}——宿主那个
+ * `EditorProblem` 住在 `packages/app/src/ui/problem-store.ts`，包看不见宿主、也不许把它搬进来。
+ * 两者字段逐格对齐（可选格 `code` / `source` 在这里恒有值），宿主拿返回值直接当
+ * `EditorProblem[]` 用，**没有映射函数**。
  */
 import {
   eventNames,
@@ -57,9 +67,8 @@ import {
 import {
   kojo2DocumentOf,
   type Kojo2Document,
-} from '@kojo/kojo-lang';
-import { kojo2EventSitesOf, type Kojo2EventSite } from '@kojo/kojo-lang/event-sites';
-import type { EditorProblem } from '../ui/problem-store';
+} from './declarations';
+import { kojo2EventSitesOf, type Kojo2EventSite } from './event-sites';
 
 /** 体检清单的来源标签（问题面板那一列；与 `Kojo 2.0` 波浪线那条分开说得出"谁报的"） */
 export const KOJO2_DIALECT_LINT_SOURCE = 'Kojo 2.0 方言体检';
@@ -192,7 +201,7 @@ function validatesKind(binding: CarrierBinding | undefined, kind: DialectFactKin
  *
  * ⚠ `no-binding` 与 `unowned` 是两件事（LAU-D3 续跑据实收窄，别合并）：
  * - **没交绑定** = 调用方没做归属解析（D2a 的 `lintOf(source, facts)` 就是这一态）⇒
- *   载体级判断没有输入，名字面照目录校验（`# 机 训练` 在 eraFL 下仍是 `unknown`）；
+ *   载体级判断没有输入，名字面照目录校验（`# 机 训练` 在没声明 `carriers` 的方言上仍是 `unknown`）；
  * - **交了绑定但 `carrier === null`** = 解析器问过且判不出来（`core/carrier/unowned` 已报）
  *   ⇒ 整面跳过，不猜。
  * 把两者合成一支会让"没有归属输入"静默变成"归属不明"，那是 D2a 语义的回退。
@@ -449,6 +458,28 @@ export function aggregateKojo2DialectLint(
 }
 
 /**
+ * 一条聚合 → **问题面板的一行**（结构化等价件；宿主 `EditorProblem` 的镜像，不 import 宿主）。
+ *
+ * 为什么自持一份：本包是纯库，宿主 UI 类型（`packages/app/src/ui/problem-store.ts`）对它不可见，
+ * 反向依赖是分层倒挂。六格与 `EditorProblem` 逐格同名同义——`path` / `line` / `severity` /
+ * `message` 为必填，`code` / `source` 在 `EditorProblem` 里是可选格，这里恒有值（本投影总会写），
+ * 因此**可赋值性**成立：宿主把它直接当 `EditorProblem[]` 用，不做映射、不写第二份转换。
+ * `span` / `origin` 两格本投影不产出（体检只给行级汇总），宿主那两格保持缺省语义。
+ */
+export interface Kojo2DialectLintProblem {
+  /** 文件路径（原样保留，跳源行与分组都靠它） */
+  readonly path: string;
+  /** 1 基行号（第一处出现行；没有行号时落 1） */
+  readonly line: number;
+  readonly severity: 'error' | 'warning';
+  readonly message: string;
+  /** 稳定诊断码（core 码表原样；面板按码归组 / 过滤） */
+  readonly code: string;
+  /** 可读来源标签（{@link KOJO2_DIALECT_LINT_SOURCE}） */
+  readonly source: string;
+}
+
+/**
  * 聚合清单 → **既有问题面板**的行（一条聚合 = 一行；`code` 原样进行，面板按码归组/过滤）。
  *
  * `path` = 这份文件（行可点、可跳）；`line` = 第一处出现行（没有行号时落 1）。
@@ -457,7 +488,7 @@ export function aggregateKojo2DialectLint(
 export function kojo2DialectLintProblems(
   path: string,
   groups: readonly Kojo2DialectLintGroup[],
-): EditorProblem[] {
+): Kojo2DialectLintProblem[] {
   return groups.map((group) => ({
     path,
     line: group.lines[0] ?? 1,

@@ -9,6 +9,9 @@
  * 4. **聚合去重**：同类 400 条 ⇒ 1 条汇总（`count = 400`，行号去重升序）；
  * 5. **不产波浪线**：体检结论走 `lint` 那一格，`markers` / `errorCount` 一个字不动；
  * 6. **位置指到事件名那一段**：`core/event/unknown` 的 span 就是事件名的列区间。
+ *
+ * 判据本体住在 `../src/dialect-lint.ts`（B5b C 类第二车从宿主 `monaco/kojo2-dialect-lint.ts`
+ * 搬来），所以这道闸跟着搬进本包；断言一条未改、未放宽。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -25,7 +28,7 @@ import {
   aggregateKojo2DialectLint,
   kojo2DialectLintProblems,
   lintKojo2Dialect,
-} from '../src/monaco/kojo2-dialect-lint';
+} from '../src/dialect-lint';
 import { kojo2EventSitesOf } from '@kojo/kojo-lang/event-sites';
 import { kojo2DocumentOf } from '@kojo/kojo-lang';
 

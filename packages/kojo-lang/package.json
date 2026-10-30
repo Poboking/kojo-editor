@@ -41,7 +41,8 @@
     "./codelens": "./src/codelens.ts",
     "./diagnostics": "./src/diagnostics.ts",
     "./diagnostic-result": "./src/diagnostic-result.ts",
-    "./call-hierarchy": "./src/call-hierarchy.ts"
+"./call-hierarchy": "./src/call-hierarchy.ts",
+    "./dialect-lint": "./src/dialect-lint.ts"
   },
   "dependencies": {
     "@kojo/kojo-core": "workspace:*",

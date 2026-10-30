@@ -31,7 +31,8 @@
  * ## 聚合
  *
  * 本模块只产诊断；按 `(码, 方言)` 聚成一条走 **LAU-D2 同一枚** `aggregateKojo2DialectLint`
- * （`kojo2-dialect-lint.ts`），顺序用同一枚 `sortDialectDiagnostics`。不新造第二张码表：
+ * （`@kojo/kojo-lang/dialect-lint`；B5b C 类第二车起判据住包），顺序用同一枚
+ * `sortDialectDiagnostics`。不新造第二张码表：
  * 产出的码全部来自 core 闭集，严重级由 `severityOf` 决定。
  */
 import {
@@ -47,7 +48,7 @@ import {
   makeEventDiagnostic,
   sortDialectDiagnostics,
   type Kojo2DialectLintReport,
-} from './kojo2-dialect-lint';
+} from '@kojo/kojo-lang/dialect-lint';
 import { kojoXmlEventSitesOf, type KojoXmlEventSite } from './kojo-xml-event-sites';
 
 /** 体检输入（纯数据；零 IO、零 Monaco） */

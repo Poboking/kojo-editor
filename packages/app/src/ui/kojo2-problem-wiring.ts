@@ -82,7 +82,7 @@ import {
   kojo2DialectLintProblems,
   lintKojo2Dialect,
   type Kojo2DialectLintReport,
-} from '../monaco/kojo2-dialect-lint';
+} from '@kojo/kojo-lang/dialect-lint';
 import type { Kojo2PreviewCompilation } from './kojo2-preview-entry';
 import {
   KOJO2_PROBLEM_DEBOUNCE_MS,
