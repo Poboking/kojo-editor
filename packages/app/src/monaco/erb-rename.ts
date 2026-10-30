@@ -13,13 +13,12 @@ import type {
 } from '@kojo/plugin-api';
 import { errorText } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from './erb-language';
-import { KOJO_LANGUAGE_ID } from './kojo-language';
 import { reject } from './rename-rejection';
 import { erbFactsPathOf } from './erb-completion-declared';
 import {
   findNameTokenPositions,
   isCallShapedMention,
-  isKojoSourcePath,
+  isSugarSourcePath,
   languageOfPath,
   mergeOccurrences,
   planReferenceWrites,
@@ -51,11 +50,15 @@ import {
  *
  * ## 跨语言腿（W8 XLANG-RENAME）：宿主编排，判据不搬
  *
- * `.kojo` 是源、`.erb` 是产物：只改 `.erb` 时下一次保存会把按旧名重新生成的产物盖回。
- * "哪些 `.kojo` 记号属于这个函数"的判据在糖线供方（转译器当判官），而**供方之间不能
+ * `.kojo1` 是源、`.erb` 是产物：只改 `.erb` 时下一次保存会把按旧名重新生成的产物盖回。
+ * "哪些 `.kojo1` 记号属于这个函数"的判据在糖线供方（转译器当判官），而**供方之间不能
  * 互问**——所以宿主做两件事：枚举候选源（已开标签 + `kojoSources`）并逐个问 references 槽，
  * 把结果当**数据**塞进 `EditorRenameRequest.related`；"判据缺席 ⇒ 整次拒绝"的裁决在插件里
  * （`related.unprovable`）。宿主只搬运，不解释。
+ *
+ * 候选口径 = **转译产物的来源**（ERB-PARITY G7）：只有 v1 糖源（`.kojo1`）会把 `.erb`
+ * 生成回来；2.0 的 `.kojo` / `.kojo2` 不产出 `.erb`，它们的同名记号属于 2.0 自己的命名空间，
+ * 列进候选就是"列得出、判不了"。判据单源 `ui/reference-utils` 的 `isSugarSourcePath`。
  *
  * ## 双通道送达的取证（monaco 0.57 standalone 源码，两种通道各管一半）
  *
@@ -197,7 +200,7 @@ function occurrencesOf(
 
 /* ============================== 跨语言腿：宿主编排（零语言判据） ============================== */
 
-/** `kojoSources` 的产出：一份 `.kojo` 源文件的路径与全文 */
+/** `kojoSources` 的产出：一份 `.kojo1` 糖源文件的路径与全文 */
 export interface KojoSourceFile {
   readonly filePath: string;
   readonly text: string;
@@ -224,10 +227,16 @@ const unprovableFileLabel = (filePath: string, positions: number, note?: string)
   `'${filePath}'（${positions} 处${note === undefined ? '' : `，${note}`}）`;
 
 /**
- * 枚举 `.kojo` 候选源（**已开标签 + 宿主枚举**，路径归一后去重）。
+ * 枚举 `.kojo1` 候选源（**已开标签 + 宿主枚举**，路径归一后去重）。
  *
  * 只做"找到候选文件"，不判"哪些记号算引用"——后者在糖线供方（转译器当判官），
  * 本函数零糖语法知识。
+ *
+ * **候选口径 = 转译产物的来源**（ERB-PARITY G7）：只认 v1 糖源（`isSugarSourcePath`，
+ * 即 `.kojo1`）。2.0 的 `.kojo` / `.kojo2` 不生成 `.erb`，它们的同名记号属于 2.0 自己的
+ * 命名空间（有各自的引用 / 改名腿）——列进候选只会让糖线答不上来（整批拒绝）或按 2.0
+ * 引用面改错文件。两条取数腿共用同一枚判据：已开标签按**路径**判（不再按语言 id，
+ * 因为 `.kojo` 与 `.kojo1` 是两门语言、同一扩展名族），宿主枚举回来的也按它过滤。
  */
 async function collectKojoCandidates(
   monaco: typeof Monaco,
@@ -239,32 +248,31 @@ async function collectKojoCandidates(
   if (typeof getModels === 'function') {
     for (const model of getModels.call(monaco.editor)) {
       try {
-        if (model.getLanguageId() !== KOJO_LANGUAGE_ID) continue;
         // 派生预览 model（`inmemory://sugar/`）的行列属于派生物，不是盘上的源
         if (model.uri.scheme !== 'file') continue;
         const filePath = model.uri.fsPath || model.uri.path;
-        if (!filePath) continue;
+        if (!filePath || !isSugarSourcePath(filePath)) continue;
         candidates.set(filePath, model.getValue());
       } catch (e: unknown) {
-        console.warn(`[erb-rename] 已开 .kojo 标签枚举失败：${errorText(e)}`);
+        console.warn(`[erb-rename] 已开 .kojo1 标签枚举失败：${errorText(e)}`);
       }
     }
   }
   if (handlers.kojoSources) {
     try {
       for (const file of await handlers.kojoSources(normalizedName)) {
-        if (isKojoSourcePath(file.filePath)) candidates.set(file.filePath, file.text);
+        if (isSugarSourcePath(file.filePath)) candidates.set(file.filePath, file.text);
       }
     } catch (e: unknown) {
-      // 枚举抛错 = **看不见**未打开的 .kojo 源（判据不是"这份源没有这个记号"，是"我没看见它"）。
-      return { candidates, error: `宿主 .kojo 源枚举抛错（${errorText(e)}）——未打开的 .kojo 源无从查证` };
+      // 枚举抛错 = **看不见**未打开的 .kojo1 源（判据不是"这份源没有这个记号"，是"我没看见它"）。
+      return { candidates, error: `宿主 .kojo1 源枚举抛错（${errorText(e)}）——未打开的 .kojo1 源无从查证` };
     }
   }
   return { candidates };
 }
 
 /**
- * `.erb` 函数改名时把生成它的 `.kojo` 源一起收进台账（**同一条全或无判定**）。
+ * `.erb` 函数改名时把生成它的 `.kojo1` 糖源一起收进台账（**同一条全或无判定**）。
  *
  * 判读全在糖线：本函数只负责"找到候选文件"与"问一次槽"，把回来的位置原样交回——
  * "这些记号是不是这个函数的引用"由供方答，"判据缺席怎么办"由 ERB 改名供方裁决。
@@ -338,12 +346,12 @@ export interface ErbRenameHandlers {
     normalizedName: string,
   ): Promise<{ applied: number; stale: number; skippedProse?: number }>;
   /**
-   * **跨语言腿 ①**：归一化名可能出现在哪些 `.kojo` 源里（宿主枚举 + 读文，
-   * 内核 io 的读权限由宿主兜）。缺席 = 只能看到**已打开标签**里的 `.kojo` 源。
+   * **跨语言腿 ①**：归一化名可能出现在哪些 `.kojo1` 糖源里（宿主枚举 + 读文，
+   * 内核 io 的读权限由宿主兜）。缺席 = 只能看到**已打开标签**里的 `.kojo1` 源。
    */
   kojoSources?(normalizedName: string): Promise<readonly KojoSourceFile[]> | readonly KojoSourceFile[];
   /**
-   * **跨语言腿 ②**：`.kojo` 源里这一处记号**是不是**这个函数的引用
+   * **跨语言腿 ②**：`.kojo1` 糖源里这一处记号**是不是**这个函数的引用
    * （宿主查 `ui.editor.languageService` 槽的 `references` 成员）。缺席 ⇒ 该文件的同名记号
    * 判为"不可证明" ⇒ 插件整次拒绝（绝不静默改一半）。
    */

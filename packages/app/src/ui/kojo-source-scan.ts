@@ -1,7 +1,7 @@
 import type { Kernel } from '@kojo/kernel';
 import type { EditorLanguageServiceContribution, EditorSymbolLocation } from '@kojo/plugin-api';
 import type { KojoReferenceProbe, KojoSourceFile } from '../monaco/erb-rename';
-import { isKojoSourcePath } from './reference-utils';
+import { isSugarSourcePath } from './reference-utils';
 import { searchRootsOf, workspaceFoldersOf } from './workspace-folders';
 import { errorText } from '@kojo/plugin-api';
 
@@ -12,9 +12,12 @@ import { errorText } from '@kojo/plugin-api';
  * `ui.editor.languageService` 槽（糖线探针法，转译器当判官），把"改哪些文件、
  * 怎么落盘"放在它自己那一侧；中间**缺的就是这两条取数**：
  *
- * 1. `listKojoSourceTexts`：项目里**所有** `.kojo` 源（含未打开标签）。只做后缀枚举
+ * 1. `listKojoSourceTexts`：项目里**所有 v1 糖源（`.kojo1`，含未打开标签）**。只做后缀枚举
  *    与读文，**零糖语法知识**——本模块不认识 `函数` / `调用` 任何一个词，
  *    也不许在这里判读（判读在糖线，抄第二份就漂，见 `ui/reference-utils.ts` 头注）。
+ *    候选口径 = 转译产物的来源（ERB-PARITY G7）：只有 v1 糖源会把 `.erb` 生成回来，
+ *    2.0 的 `.kojo` / `.kojo2` 不产出 `.erb`，列进来就是"列得出、判不了"（判据单源
+ *    `isSugarSourcePath`，扩展名清单取契约层 `KOJO_V1_SOURCE_EXTENSIONS`）。
  *    检索根口径与搜索面板**同源**：工作区根模型（`workspace-folders.ts`）里带 `search`
  *    的那一组——项目根 ∪ 作品目录 ∪ 会话附加根（2026-10-27 收窄批：从"工作区全部根"
  *    收窄到作品目录——自选项目位置根可能正是游戏目录，按根枚举会把整个游戏目录拖进来）。
@@ -39,7 +42,7 @@ export class KojoSourceEnumerateError extends Error {}
 export class KojoReferenceUnansweredError extends Error {}
 
 /**
- * 项目内全部 `.kojo` 源（路径 + 全文）。
+ * 项目内全部 `.kojo1` 糖源（路径 + 全文；候选口径见模块头，ERB-PARITY G7）。
  * 逐根一次递归列举、整批一次 `readTexts`（每批一次 IPC，命中会话级文本缓存）。
  */
 export async function listKojoSourceTexts(kernel: Kernel): Promise<readonly KojoSourceFile[]> {
@@ -54,14 +57,14 @@ export async function listKojoSourceTexts(kernel: Kernel): Promise<readonly Kojo
       entries = await kernel.io.walkDir(root, {
         includeFiles: true,
         includeDirs: false,
-        filter: (e) => e.isDirectory || isKojoSourcePath(e.name),
+        filter: (e) => e.isDirectory || isSugarSourcePath(e.name),
       });
     } catch (e: unknown) {
       throw new KojoSourceEnumerateError(
         `.kojo 源枚举失败（${root}）：${errorText(e)}`,
       );
     }
-    for (const e of entries) if (!e.isDirectory && isKojoSourcePath(e.name)) paths.push(e.path);
+    for (const e of entries) if (!e.isDirectory && isSugarSourcePath(e.name)) paths.push(e.path);
   }
   if (paths.length === 0) return [];
   let texts;

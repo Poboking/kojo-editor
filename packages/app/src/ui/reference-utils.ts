@@ -64,6 +64,23 @@ export function languageOfPath(path: string): ReferenceLanguage {
   return isKojoSourcePath(path) ? 'kojo' : 'erb';
 }
 
+/**
+ * 是不是**糖源的 v1 源文件**（`.kojo1`）——改名 / 台账**跨语言候选的唯一口径**
+ * （ERB-PARITY G7）。
+ *
+ * 与 {@link isKojoSourcePath} 问的不是同一件事：那枚回答"台账走 kojo 语义腿还是 ERB 语义腿"
+ * （`.kojo` / `.kojo2` 归 2.0，语言族同属 kojo）；这一枚回答"**哪份源会把 `.erb` 生成回来**"
+ * ——只有 v1 糖源（转译产物 = 同名 `.ERB`，判据单源 `resolveSugarTarget` 同样只认 `.kojo1`）。
+ * 2.0 源不产出 `.erb`：`.kojo` 里的同名记号是 2.0 自己的名字（有它自己的引用 / 改名腿），
+ * 把 2.0 源列进候选就是"列得出、判不了"——轻则被糖线判成不可证明而整批拒绝，
+ * 重则按 2.0 的引用面改写与本动作无关的文件。扩展名清单取契约层
+ * `KOJO_V1_SOURCE_EXTENSIONS`（与 `resolveSugarTarget` 同一枚常量），宿主不另抄字面量。
+ */
+export function isSugarSourcePath(path: string): boolean {
+  const lower = path.toLowerCase();
+  return KOJO_V1_SOURCE_EXTENSIONS.some((ext) => lower.endsWith(ext));
+}
+
 /* ============================== 台账本体 ============================== */
 
 /**

@@ -24,7 +24,7 @@ import { createProjectNameLedger } from '../src/ui/name-ledger';
 import { createFileReplaceRunner, type FileReplaceDeps } from '../src/ui/search-replace-exec';
 
 const ERB_A = 'C:/p/ERB/a.ERB';
-const KOJO_1 = 'C:/p/kojo/one.kojo';
+const KOJO_1 = 'C:/p/kojo/one.kojo1';
 const NAME = 'FOO_BAR';
 
 const refsOf = (path: string): ErbReference[] => [

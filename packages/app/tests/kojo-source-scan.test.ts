@@ -51,7 +51,7 @@ describe('listKojoSourceTexts（糖源枚举 + 读文）', () => {
     expect(await listKojoSourceTexts(fakeKernel({ project: null }))).toEqual([]);
   });
 
-  it('只收 `.kojo`（大小写不敏感），根 = 项目根 ∪ 作者作品目录且去重', async () => {
+  it('只收 `.kojo1` 糖源（大小写不敏感；2.0 的 `.kojo` / `.kojo2` 不在候选里），根 = 项目根 ∪ 作者作品目录且去重', async () => {
     const walked: string[] = [];
     const kernel = fakeKernel({
       project: { rootDir: PROJECT_ROOT },
@@ -60,10 +60,13 @@ describe('listKojoSourceTexts（糖源枚举 + 读文）', () => {
         walkDir: async (path) => {
           walked.push(path);
           return [
-            { name: 'A.KOJO', path: `${path}/A.KOJO`, isDirectory: false },
+            { name: 'A.KOJO1', path: `${path}/A.KOJO1`, isDirectory: false },
             { name: 'b.erb', path: `${path}/b.erb`, isDirectory: false },
             { name: '子目录', path: `${path}/子目录`, isDirectory: true },
-            { name: 'C.kojo', path: `${path}/C.kojo`, isDirectory: false },
+            { name: 'C.kojo1', path: `${path}/C.kojo1`, isDirectory: false },
+            // ERB-PARITY G7：2.0 的源不生成 `.erb`，列进候选就是"列得出、判不了"
+            { name: 'D.kojo', path: `${path}/D.kojo`, isDirectory: false },
+            { name: 'E.kojo2', path: `${path}/E.kojo2`, isDirectory: false },
           ];
         },
       },
@@ -71,10 +74,10 @@ describe('listKojoSourceTexts（糖源枚举 + 读文）', () => {
     const files = await listKojoSourceTexts(kernel);
     expect(walked).toEqual([PROJECT_ROOT, WS_ROOT]);
     expect(files.map((f) => f.filePath)).toEqual([
-      `${PROJECT_ROOT}/A.KOJO`,
-      `${PROJECT_ROOT}/C.kojo`,
-      `${WS_ROOT}/A.KOJO`,
-      `${WS_ROOT}/C.kojo`,
+      `${PROJECT_ROOT}/A.KOJO1`,
+      `${PROJECT_ROOT}/C.kojo1`,
+      `${WS_ROOT}/A.KOJO1`,
+      `${WS_ROOT}/C.kojo1`,
     ]);
     expect(files.every((f) => f.text.length > 0)).toBe(true);
   });
@@ -86,7 +89,7 @@ describe('listKojoSourceTexts（糖源枚举 + 读文）', () => {
       io: {
         walkDir: async (path) => {
           if (path === WS_ROOT) throw new Error('盘没了');
-          return [{ name: 'A.kojo', path: `${path}/A.kojo`, isDirectory: false }];
+          return [{ name: 'A.kojo1', path: `${path}/A.kojo1`, isDirectory: false }];
         },
       },
     });
@@ -98,8 +101,8 @@ describe('listKojoSourceTexts（糖源枚举 + 读文）', () => {
       project: { rootDir: PROJECT_ROOT },
       io: {
         walkDir: async (path) => [
-          { name: 'A.kojo', path: `${path}/A.kojo`, isDirectory: false },
-          { name: 'B.kojo', path: `${path}/B.kojo`, isDirectory: false },
+          { name: 'A.kojo1', path: `${path}/A.kojo1`, isDirectory: false },
+          { name: 'B.kojo1', path: `${path}/B.kojo1`, isDirectory: false },
         ],
         readTexts: async () => [{ text: '调用 X()\n' }, null],
       },
@@ -111,7 +114,7 @@ describe('listKojoSourceTexts（糖源枚举 + 读文）', () => {
     const kernel = fakeKernel({
       project: { rootDir: PROJECT_ROOT },
       io: {
-        walkDir: async (path) => [{ name: 'A.kojo', path: `${path}/A.kojo`, isDirectory: false }],
+        walkDir: async (path) => [{ name: 'A.kojo1', path: `${path}/A.kojo1`, isDirectory: false }],
         readTexts: async () => {
           throw new Error('IPC 断了');
         },

@@ -17,7 +17,7 @@ import { installErbRename, type ErbRenameHandlers } from '../src/monaco/erb-rena
 import { kojoLabelMentions, labelRenameRejection, provideRename, provideRenameTarget } from '@kojo/plugin-erb-parser';
 
 const PATH = 'C:/p/ERB/label.ERB';
-const KOJO = 'C:/p/kojo/a.kojo';
+const KOJO = 'C:/p/kojo/a.kojo1';
 
 function modelOf(path: string, text: string): Monaco.editor.ITextModel {
   const lines = text.split('\n');
@@ -180,14 +180,14 @@ describe('$ 标签重命名 · provider', () => {
     expect(out.rejectReason).toContain('只读');
   });
 
-  it('.kojo 源里有同名标签写法 ⇒ 整次拒绝（已开标签 / 宿主枚举，路径去重计一份）', async () => {
+  it('.kojo1 糖源里有同名标签写法 ⇒ 整次拒绝（已开标签 / 宿主枚举，路径去重计一份）', async () => {
     const model = modelOf(PATH, TEXT);
     const kojo = kojoModelOf(KOJO, '标签 NEXT\n');
     const provider = install(
       handlersOf({
         kojoSources: async () => [
           { filePath: KOJO, text: '标签 NEXT\n' },
-          { filePath: 'C:/p/kojo/b.kojo', text: '跳到 $NEXT\n' },
+          { filePath: 'C:/p/kojo/b.kojo1', text: '跳到 $NEXT\n' },
         ],
       }),
       [model, kojo],
@@ -195,6 +195,26 @@ describe('$ 标签重命名 · provider', () => {
     const out = (await provider.provideRenameEdits(model, AT(3, 7), 'LOOP', null as never)) as { rejectReason?: string };
     expect(out.rejectReason).toContain('2 份 .kojo 源');
     expect(out.rejectReason).toContain('请先在 .kojo 源里改名');
+  });
+
+  it('2.0 的 `.kojo` / `.kojo2` 不在候选里 ⇒ 同名标签写法不再拦下这次改名（ERB-PARITY G7）', async () => {
+    const model = modelOf(PATH, TEXT);
+    const kojo = kojoModelOf('C:/p/kojo/two.kojo', '标签 NEXT\n');
+    const provider = install(
+      handlersOf({
+        kojoSources: async () => [
+          { filePath: 'C:/p/kojo/two.kojo', text: '标签 NEXT\n' },
+          { filePath: 'C:/p/kojo/two2.kojo2', text: '跳到 $NEXT\n' },
+        ],
+      }),
+      [model, kojo],
+    );
+    const out = (await provider.provideRenameEdits(model, AT(3, 7), 'LOOP', null as never)) as {
+      rejectReason?: string;
+      edits?: unknown[];
+    };
+    expect(out.rejectReason).toBeUndefined();
+    expect(out.edits).toHaveLength(2); // 定义 + 跳转两处照改
   });
 
   it('.kojo 枚举抛错 ⇒ 整次拒绝（看不见 ≠ 没有）', async () => {

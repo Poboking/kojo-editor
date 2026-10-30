@@ -428,15 +428,18 @@ describe('installErbRename', () => {
 /* ============================== 跨语言腿（W8 XLANG-RENAME） ============================== */
 
 /**
- * `.erb` 改名与生成它的 `.kojo` 源并成**一条写通道**（钉四件行为契约）：
+ * `.erb` 改名与生成它的 `.kojo1` 糖源并成**一条写通道**（钉四件行为契约）：
  * ① 糖线判据证明的同名记号进同一批编辑（已开 → WorkspaceEdit、未开 → 同一条 io 通道）；
  * ② 判读缺席 ⇒ 整批拒绝 + 可读理由（绝不静默只改 `.erb` 那半边，下次保存会被冲掉）；
- * ③ `.kojo` 只读文件并入**同一个**只读计数（同一次全或无）；
+ * ③ `.kojo1` 只读文件并入**同一个**只读计数（同一次全或无）；
  * ④ 落盘通道 `createApplyToClosedFile` 的三步纪律（只读先闸 / 现文本验证 / 零改动不写）。
+ *
+ * 扩展名 `.kojo1`：候选口径 = **转译产物的来源**（ERB-PARITY G7）。2.0 的 `.kojo` /
+ * `.kojo2` 不生成 `.erb`，不在候选里——那两条边由 `erb-rename-candidate-scope.test.ts` 钉。
  */
 
-const K = 'C:/p/kojo/A.kojo';
-const K2 = 'C:/p/kojo/B.kojo';
+const K = 'C:/p/kojo/A.kojo1';
+const K2 = 'C:/p/kojo/B.kojo1';
 
 /** `.kojo` 源 model（真文件 model：scheme = file；糖预览 model 是 inmemory，不参与） */
 function kojoModelOf(filePath: string, ...lines: string[]): Monaco.editor.ITextModel {
@@ -541,7 +544,7 @@ describe('erb-rename 跨语言腿（.kojo 源）', () => {
     const edits = (result?.edits ?? []) as Monaco.languages.IWorkspaceTextEdit[];
     // 定义处 + .kojo 源两处 = 三处，一次交付
     expect(edits).toHaveLength(3);
-    const kojoEdits = edits.filter((e) => e.resource.toString().includes('A.kojo'));
+    const kojoEdits = edits.filter((e) => e.resource.toString().includes('A.kojo1'));
     expect(kojoEdits.map((e) => [e.textEdit.range.startLineNumber, e.textEdit.range.startColumn])).toEqual([
       [1, 4],
       [2, 7],
