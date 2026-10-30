@@ -49,8 +49,9 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // constants（语言 id 叶子）/ highlight（同符号高亮判据）/ selection-range（扩选判据）/ index
-    expect(files).toHaveLength(4);
+    // constants（语言 id 叶子）/ completion-bits（位槽扫描件）/ completion-context（补全位置门九态）/
+    // completion-variables（变量引用名字位）/ highlight（同符号高亮判据）/ selection-range（扩选判据）/ index
+    expect(files).toHaveLength(7);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
@@ -67,7 +68,17 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
      * 唯一成员——库包引插件包就是分层倒置。表上提到非插件库包后，插件那条 specifier 必须
      * **重新变成违规**，否则倒置会以"没人拦"的形态回来。
      */
-    const allowed = new Set(['@kojo/erb-vocab/control-flow']);
+    const allowed = new Set([
+      // ERB 控制流配对表的单一真源（见上注）
+      '@kojo/erb-vocab/control-flow',
+      // 2026-10-30（LAU-4 续）：补全位置门搬进本包后，它读的三样东西都是**非插件库包**的叶子：
+      // 空白类单源（与糖层 lexer 同口径）、ERB 名字字符集、引擎变量族白名单（降糖器认得的那张表）。
+      // 三者都是"跨语言共享的语言事实"，与"库包引插件包"不是一回事——`@kojo/plugin-*` 仍在
+      // 下面的 `forbidden` 里。
+      '@kojo/kojo-lang/completion',
+      '@kojo/kojo-lang/name-chars',
+      '@kojo/kojo-vocab/engine',
+    ]);
     const forbidden = new Set(['@kojo/plugin-erb-parser']);
     const offenders: string[] = [];
     for (const file of files) {

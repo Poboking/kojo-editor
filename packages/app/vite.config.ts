@@ -320,6 +320,9 @@ export default defineConfig({
       '@kojo/kernel': r('../kernel/src/index.ts'),
       // LAU4-ERB-A：ERB 语言面库（叶子排在桶之前，理由同上）。
       '@kojo/erb-lang/constants': r('../erb-lang/src/constants.ts'),
+      '@kojo/erb-lang/completion-bits': r('../erb-lang/src/completion-bits.ts'),
+      '@kojo/erb-lang/completion-context': r('../erb-lang/src/completion-context.ts'),
+      '@kojo/erb-lang/completion-variables': r('../erb-lang/src/completion-variables.ts'),
       '@kojo/erb-lang/highlight': r('../erb-lang/src/highlight.ts'),
       '@kojo/erb-lang/selection-range': r('../erb-lang/src/selection-range.ts'),
       '@kojo/erb-lang': r('../erb-lang/src/index.ts'),
