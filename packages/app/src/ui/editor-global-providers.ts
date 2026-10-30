@@ -61,6 +61,7 @@ import {
   withinCodeLensBudget,
 } from '../monaco/kojo-code-lens';
 import { collectDefinitionLocations, installDefinitionProvider, type DefinitionLocation } from '../monaco/kojo-definition';
+import { derivedLegSurfaceOf, surfaceRequestPointOf } from '../monaco/erb-dim-navigation';
 import { createPeekLeases, type PeekLeases } from './peek-leases';
 import { editorModelPool } from './editor-model-pool-instance';
 import {
@@ -801,6 +802,31 @@ export function previewSourcePathOf(model: Monaco.editor.ITextModel): string | n
 }
 
 /**
+ * 定义腿的发问位点：糖面上**行列都要对齐**（不是只对行、列收 1）。
+ *
+ * 其余读类腿（引用 / 签名）走 `sourcePointOf`（列收 1）是对的：投影行与源行不是同一串文本，
+ * 把投影列套上去只会把问句落在别的字上。定义腿不同——它要问的名字（`#DIM` 声明名 /
+ * `$` 标签名，供方是插件）**逐字停在行尾**，与投影行只差行首那串中文谓词的长度 ⇒
+ * 按"离行尾多远"对齐就是源列。列收成 1 的话，`#DIM 好感度` 那一行上只有 `#` 会被问到，
+ * 投影面上的 F12 静默失效。
+ *
+ * 位点算术**单源** `monaco/erb-dim-navigation.ts` 的 `surfaceRequestPointOf`
+ * （与 `#DIM` 引用腿、`$` 标签腿同一份，不在这里另写一个"行尾对齐"）。
+ * 原文面零换算：`sourcePointOf` 直通。
+ */
+function definitionRequestPointOf(
+  model: Monaco.editor.ITextModel,
+  target: ReadTarget,
+  position: Monaco.Position,
+): { readonly line: number; readonly column: number } | null {
+  if (!target.sugar) return sourcePointOf(target, position);
+  const surface = derivedLegSurfaceOf(model);
+  if (surface === null) return null; // 投影退化（原文取不到 / 空文件）⇒ 这一面没有可问的位点
+  const at = surfaceRequestPointOf(surface, position);
+  return at === null ? null : { line: at.line, column: at.column };
+}
+
+/**
  * 转到定义 / 跳到实现共用的读类腿（换算 → 问槽 → 折回）。
  *
  * **跨文件声明**（K2 跨文件批）分两段问，顺序就是语义：
@@ -820,7 +846,7 @@ export function readDefinitionTargets(
 ): DefinitionLocation[] {
   const target = readTargetOf(model);
   if (!target) return [];
-  const at = sourcePointOf(target, position);
+  const at = definitionRequestPointOf(model, target, position);
   if (at === null) return [];
   const contributions = kernel.slots.query('ui.editor.languageService');
   const request = {

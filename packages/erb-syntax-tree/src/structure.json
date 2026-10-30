@@ -1,6 +1,7 @@
 {
   "source": {
     "scanner": "packages/plugins/erb-parser/src/scanner.ts",
+    "dim": "packages/erb-vocab/src/control-flow.ts",
     "preproc": "packages/plugin-api/src/erb.ts"
   },
   "markers": {

@@ -317,11 +317,11 @@ function stubMonaco(): {
 }
 
 describe('装配点 · 中文标签行上的 F12', () => {
-  it('改前一次都不响：现在跳到**存档第 8 行**、带源行那一列的区间', () => {
+  it('槽腿给的就是存档坐标：跳到**存档第 8 行**、带源行那一列的区间', () => {
     mountProjection();
     const { monaco, definitions } = stubMonaco();
     installDefinitionProvider(monaco, {
-      resolve: () => [],
+      resolve: () => [{ filePath: ARCHIVE, line: 8, column: 2, span: { columnStart: 2, columnEnd: 6 } }],
       navigate: () => undefined,
       openModelFor: (filePath) => (filePath === ARCHIVE ? ARCHIVE_MODEL : undefined),
     });

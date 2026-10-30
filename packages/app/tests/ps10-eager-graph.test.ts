@@ -857,13 +857,20 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ⇒ 闸 **3,204 → 3,225**（余量 2 KB）。这一档是"代码多花 18 KB、换同一语料 A/B 热载
     //     −6.1 / −6.4 / −12.9 MB（索引 / idle / 稳态；4,258 文件口径，见 STATE 该行）"：函数流水 −3.37 MB、
     //     候选哈希 6.5→3.6 MB、文本缓存 3× 绳索消除、条件壳装载回收费 −5.4 ms。文件闸维持 199（顶格）。
+    //   - **ERB 定义判据折回常驻插件（2026-10-30，本批）**：读数 **199 文件 / 3,232 KB**
+    //     （3,309,352 B = 3,299,843 + 9,509）——文件数零变化，净增逐枚点名：`symbols.ts`
+    //     +7,217（`#DIM` / `$` 标签的落点判据）、`plugin.ts` +1,727（三腿合流与槽注册）、
+    //     `index.ts` +558（宿主经本包读同一批函数）、`references.ts` +7。为什么躲不开：
+    //     `erb-parser` 在 `bootstrap.ts` 常驻，判据只有住这里才能让宿主"不认识 ERB"；
+    //     住 `@kojo/erb-lang/definition` 会把整包（含 32 KB `highlight.ts`）拖上首屏
+    //     （前两版实测 201 文件 / 3,230 KB）。⇒ 闸 **3,225 → 3,234**（余量约 2 KB；文件闸仍 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,225 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,234 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_225);
+    expect(totalKb).toBeLessThanOrEqual(3_234);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

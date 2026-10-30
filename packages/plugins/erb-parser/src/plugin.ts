@@ -1,7 +1,11 @@
 import type {
   ComputePool,
   ControlFlowStatement,
+  EditorDefinitionResult,
+  EditorLanguageServiceRequest,
+  EditorSymbolLocation,
   ErbFile,
+  ErbFunctionRef,
   ErbIndex,
   ErbIndexFileFailure,
   ErbIndexState,
@@ -49,7 +53,7 @@ import { buildStructureFixes } from './structure-fix';
 import { erbDocumentSymbols } from './document-symbols';
 import { erbFoldingRanges } from './folding';
 import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
-import { definitionTargetsAt, functionAt } from './symbols';
+import { definitionTargetsAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, resolveErbDimDefinition } from './symbols';
 import { workspaceSymbolsInIndex } from './workspace-symbols';
 import { usageLenses } from './usage-lens';
 import { erbSemanticTokens } from './semantic-tokens';
@@ -386,6 +390,52 @@ export function collectErbSemanticDiagnostics(
   }
 
   return { decorations: sortAndDedupe(decorations), failedRules };
+}
+
+/**
+ * `erb-definition` 的应答体（LAU-4 第二步；槽注册只转一手）。
+ *
+ * 三条腿一次按序合：`$` 标签（`labelScopeAt`）→ `#DIM` 声明（`resolveErbDimDefinition`）
+ * → 函数索引（`definitionTargetsAt`），同处去重保留带 `span` 的那一枚。前两腿是缓冲区事实，
+ * 索引缺席也照答；非 ERB 方言弃权（`undefined`），认这门语言总是作答（空数组≠弃权）。
+ * 判据折在本插件：语言面库叶子会把整包（含 32 KB 的 `highlight.ts`）拖上首屏。
+ */
+export function provideErbDefinition(
+  request: EditorLanguageServiceRequest,
+  index: ErbIndex | null,
+): EditorDefinitionResult | undefined {
+  if (request.kind !== 'definition') return undefined;
+  if (!isDialect(request.path)) return undefined;
+  try {
+    // 序① 标签：作用域在解析器（`labelScopeAt`）、落点投影在语言面库。
+    const scope = labelScopeAt(request.text, request.path, request.line, request.column);
+    const labels = scope === null ? [] : labelDefinitionLocations(scope);
+    // 序② 声明：`#DIM` 族纯判据（库包）。
+    const dims = resolveErbDimDefinition(request.text, request.line, request.column, request.path);
+    const local = mergeSymbolLocations(labels, dims);
+    if (index === null) return { kind: 'definition', locations: local };
+    // 序③ 函数索引：沿用 `definitionTargetsAt`（标签入口命中时它自己会让位，不会把
+    // `GOTO` 目标当函数名；标签那部分与序①重复，`mergeSymbolLocations` 按同处去重）。
+    const refs = definitionTargetsAt(index, request.path, request.text, request.line, request.column);
+    return { kind: 'definition', locations: mergeSymbolLocations(local, functionLocationsOf(refs)) };
+  } catch {
+    // 判据抛错 ⇒ 空结果（"这篇没有可跳的定义"是作者能读懂的退化）。
+    return { kind: 'definition', locations: [] };
+  }
+}
+
+/**
+ * 函数索引腿的落点映射（**不给假列**：索引里没有列这个事实时只交行，宿主按它的唯一
+ * 退化判据落到行首；供方不补 1）。
+ */
+function functionLocationsOf(refs: readonly ErbFunctionRef[]): EditorSymbolLocation[] {
+  return refs.map((ref) => ({
+    filePath: ref.filePath,
+    line: ref.startLine,
+    ...(ref.nameColumn === undefined
+      ? {}
+      : { column: ref.nameColumn, span: { columnStart: ref.nameColumn, columnEnd: ref.nameColumn + ref.name.length } }),
+  }));
 }
 
 /**
@@ -1750,43 +1800,23 @@ export function createErbParserPlugin(): Plugin {
         },
       });
 
-      /* ---------------- 转到定义（2026-10-15 语言服务批） ----------------
+      /* ---------------- 转到定义（2026-10-15 语言服务批；2026-10-30 本地名字腿归位） ----------------
 
-       为什么由解析器插件自己应答：判据（"光标处那个名字是不是本项目的一个函数"）
-       只有 `ErbIndex.byName` 说了算。放进任何别的插件都得先拿到索引，等于把同一份
-       判据抄第二遍、并在项目开闭时机上与解析器赛跑。
+       为什么由解析器插件自己应答：函数腿的判据（"光标处那个名字是不是本项目的一个函数"）
+       只有 `ErbIndex.byName` 说了算；标签腿的判据（跨函数隔离 / `[SKIPSTART]` 屏蔽 /
+       跳转槽字形）只有本包的 `labelScopeAt` 说了算。放进任何别的插件都得先拿到索引或解析器，
+       等于把同一份判据抄第二遍、并在项目开闭时机上与解析器赛跑。
 
-       数据面只有两件事：光标处记号（`symbolTokenAt`）＋ `byName` 反查；跨文件怎么
-       跳由**宿主**决定（插件只给"文件:行"，不碰导航——宿主那条 `editor.revealLocation`
-       通道已经能开文件定位，不新造机制）。
+       2026-10-30：`#DIM` 声明名与 `$` 标签名的定义并入本贡献（两条本地腿都住本插件；
+       不留在语言面库是因为静态引用会把整包拖上首屏）。返回序 = 标签 → 声明 → 函数索引。
 
-       三态返回（见契约 `EditorLanguageServiceContribution`）：非 ERB 方言或未打开
-       项目 → `undefined`（不是本包的活）；认这个文件但记号不在索引里 → 空数组
-       （**不猜**，作者会看到"没有定义"，而不是被跳到错地方）。
+       三态返回（见契约 `EditorLanguageServiceContribution`）：非 ERB 方言 → `undefined`；
+       认这个文件但此处没有可跳的名字 → 空数组（**不猜**，作者会看到"没有定义"）。
        */
       ctx.slots.register('ui.editor.languageService', {
         id: 'erb-definition',
         order: 20,
-        provide: (request) => {
-          if (request.kind !== 'definition') return undefined;
-          if (!isDialect(request.path)) return undefined;
-          const idx = index;
-          if (!idx) return undefined;
-          const refs = definitionTargetsAt(idx, request.path, request.text, request.line, request.column);
-          return {
-            kind: 'definition',
-            // 有列才给区间（`column + 名字长度`，与 `ErbReference.endColumn` 同一条口径）；
-            // 索引里没有列这个事实 ⇒ 只交行，让宿主按它的唯一退化判据落到行首——
-            // 供方**不补 1**（补了就是假事实），宿主侧的夹取/退化也不许在插件里重抄一遍。
-            locations: refs.map((ref) => ({
-              filePath: ref.filePath,
-              line: ref.startLine,
-              ...(ref.nameColumn === undefined
-                ? {}
-                : { column: ref.nameColumn, span: { columnStart: ref.nameColumn, columnEnd: ref.nameColumn + ref.name.length } }),
-            })),
-          };
-        },
+        provide: (request) => provideErbDefinition(request, index),
       });
 
       /* ---------------- 文档大纲（B3，2026-10-15 编辑器特性批） ----------------

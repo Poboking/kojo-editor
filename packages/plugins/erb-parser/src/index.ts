@@ -4,7 +4,7 @@
  * ERB 结构感知解析器（服务 `erb.parser`）。
  * 零游戏知识——命名约定与家族识别属于 game.adapter。
  */
-export { createErbParserPlugin } from './plugin';
+export { createErbParserPlugin, provideErbDefinition } from './plugin';
 export {
   ERB_CONTROL_STATEMENTS,
   classifyControlFlow,
@@ -108,3 +108,19 @@ export {
 export { erbSemanticTokens } from './semantic-tokens';
 // 索引扫描根的合成与签名（IDX-ROOT，2026-10-19；纯函数，零 IO）
 export { planScanRoots, rootsSignature, type ScanRootPlan } from './index-roots';
+
+// 本地名字（`#DIM` / `$` 标签）的落点判据（LAU-4 第二步定稿批）：供方在本插件，宿主悬停 /
+// 补全 / 查引用读同一批函数（不留在语言面库是因为整包会进首屏，见 `symbols.ts` 段头）。
+export {
+  dimDeclarationOf,
+  dimDeclarationsOf,
+  isErbDefinitionPath,
+  isErbDimNameChar,
+  labelDefinitionLocations,
+  labelReferenceLocations,
+  mergeNavigationLegs,
+  mergeSymbolLocations,
+  normalizePathKey,
+  resolveErbDimDefinition,
+  type ErbDimDeclaration,
+} from './symbols';

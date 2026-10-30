@@ -166,12 +166,13 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
     });
   });
 
-  it('索引未建（未打开项目）→ undefined（不是本包的活，别谎报"没有定义"）', () => {
+  it('索引未建（未打开项目）→ 照答空结果（本地两腿是缓冲区事实，不是弃权）', () => {
     const { slots } = activate();
     const c = languageServiceOf(slots);
-    expect(c.provide({ kind: 'definition', path: B, text: FILES[B]!, line: 2, column: 8, project: null })).toBe(
-      undefined,
-    );
+    expect(c.provide({ kind: 'definition', path: B, text: FILES[B]!, line: 2, column: 8, project: null })).toEqual({
+      kind: 'definition',
+      locations: [],
+    });
   });
 
   it('`erb.parser.functionAt` 只读当前索引：未建 → undefined；建好 → 包围反查', async () => {

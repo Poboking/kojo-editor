@@ -7,8 +7,6 @@ import type {
 } from '@kojo/plugin-api';
 import { clampRevealPosition, revealSpanOf, type RevealSpan } from './reveal-position';
 import { registerForLanguageServices } from './register-dialects';
-import { mergeNavigationLegs, resolveErbDimDefinitionAt } from './erb-dim-navigation';
-import { labelDefinitionLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
 
 /**
  * 转到定义的**宿主接线**（2026-10-15 语言服务批；D4 Peek 就地预览同文件改写；
@@ -20,6 +18,11 @@ import { labelDefinitionLocations, resolveErbLabelScopeAt } from './erb-label-na
  * 与 **Monaco 绑定**（`installDefinitionProvider`：位置进、位置出）分开——前者可单测，
  * 后者只做协议翻译。宿主**不认识** ERB / 家族 / 角色：数据全部来自
  * `ui.editor.languageService` 槽，宿主只决定"跳去哪、能不能交给 Monaco 自己跳"。
+ *
+ * **LAU-4 第二步（2026-10-30）**：本文件最后一块 ERB 本地判据（`#DIM` 声明名与 `$` 标签名的
+ * 本地腿）也已搬走——判据在解析器插件 `@kojo/plugin-erb-parser`，供方是它自己，宿主不再 import
+ * `erb-dim-navigation` / `erb-label-navigation`。投影面（升糖预览）上的坐标换算在**读类腿**
+ * （`ui/editor-global-providers.ts` 的 `readDefinitionTargets`）里做，本文件零坐标知识。
  */
 
 /**
@@ -464,39 +467,13 @@ export function installDefinitionProvider(
   const findModel = createDefinitionModelResolver(handlers);
   const provider: Monaco.languages.DefinitionProvider = {
     provideDefinition(model, position) {
-      // `#DIM` 腿（2026-10-19）：同文件声明**优先**——命中就把落点排在槽结果之前
-      // （`provideLocations` 的事件通道兜底取第一枚 ⇒ 优先权在数据层就已确定）。
-      // 没有声明 ⇒ 本腿零贡献，既有函数 / 标签腿逐字不变（fail-open，不猜）。
-      // 两条本地腿读的都是**屏幕上这份文本**，但交回的坐标一律属于存档（2026-10-20 源坐标批，
-      // 判据 `erb-dim-navigation.ts` 的 `derivedLegSurfaceOf`）：投影面（`inmemory://sugar/…`）上
-      // 若交回投影 URI + 预览行，这条"优先"就变成"幻影顶掉真落点"——本层排在最前的那一枚
-      // 正是 `planDefinitionJump` 兜底取走的那一枚。换算不出的那一枚由腿自己丢，
-      // 到这里的每一枚都可以直接和槽结果（同是存档坐标）合并去重。
-      const dims = resolveErbDimDefinitionAt(model, position);
-      // `$` 标签腿（W-2，2026-10-19）：定义名自跳 + CJK 跳转目标（槽腿的 ASCII 记号集
-      // 认不出中文）；同一份 `labelScopeAt` 也是引用与重命名的真源。零贡献时行为不变。
-      const labelScope = resolveErbLabelScopeAt(model, position);
-      const labels = labelScope === null ? [] : labelDefinitionLocations(labelScope);
-      if (dims.length === 0 && labels.length === 0) return provideLocations(handlers, findModel, model, position);
-      return provideLocations(
-        {
-          ...handlers,
-          resolve: (m, p) => {
-            let slot: DefinitionLocation[] = [];
-            try {
-              slot = handlers.resolve(m, p);
-            } catch (e: unknown) {
-              // 槽腿出错不能把已经命中的 `#DIM` / 标签一起吞掉（隔离粒度仍到贡献方）
-              console.warn(`[kojo-definition] resolve 抛错（本地腿照常交付）：${errorText(e)}`);
-            }
-            // 优先序只在这一枚函数里定（`mergeNavigationLegs`，与查找引用共用）
-            return mergeNavigationLegs(labels, dims, slot);
-          },
-        },
-        findModel,
-        model,
-        position,
-      );
+      // 宿主这一层**不再有自己的 ERB 判据**（LAU-4 第二步，2026-10-30）：`#DIM` 声明名与
+      // `$` 标签名的落点由插件 `@kojo/plugin-erb-lang` 的 `erb-nameDefinition` 贡献给出，
+      // 优先级由**槽序**表达（那条贡献 `order = 10` < `erb-parser` 的 `erb-definition` 20）
+      // ⇒ `collectDefinitionLocations` 收集出来的顺序仍是"标签 > 声明 > 函数索引"，
+      // 与宿主 `mergeNavigationLegs`（查找引用那条腿仍用它）逐字同序。
+      // 宿主留给自己的只有两件事：查槽（`handlers.resolve`）与 Monaco 协议翻译。
+      return provideLocations(handlers, findModel, model, position);
     },
   };
   const opener = registerLocationOpener(monaco, handlers);

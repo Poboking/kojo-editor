@@ -13,6 +13,11 @@
  * 两条腿**分枚注册**（`order` 都是 10，与 kojo2 那家同权）：它们的输入 / 产出形状不同
  * （单槽 + `kind` 判别），塞进同一枚 `provide` 等于让"高亮算不出来"顺手把扩选也带走。
  *
+ * 2026-10-30（定义判据归位批）：本插件**不再供 `definition`**。那个 kind 的本地名字腿
+ * （`$` 标签作用域 + `#DIM` 声明）住在**解析器插件** `@kojo/plugin-erb-parser` 的
+ * `erb-definition` 贡献里——标签作用域的真源是解析器的 `labelScopeAt`，放在本插件就得
+ * 跨插件 import（审计 C 项）或让库包反向依赖插件包（分层倒置）。
+ *
  * ## 与 kojo2 的关系：同一条槽、同一份契约、**互斥作答**
  *
  * 两家认的 `languageId` 不重叠（kojo2 只认 `kojo2`，本插件只认 ERB 的两个 id / 方言扩展名），
@@ -24,8 +29,8 @@
  * - **零 Monaco**：翻 `DocumentHighlightKind`、摊平 0.57 的扁平 `SelectionRange[]` 的是宿主
  *   （`app/src/monaco/erb-highlight.ts` / `erb-selection-range.ts`，只剩请求 / 翻译 / 注册）；
  * - **零 IO**：不读盘、不看项目——请求里的 `text` 就是全文，位点就在请求里；
- * - **零游戏知识**：不认识任何一部具体游戏（配对词表来自 `@kojo/plugin-erb-parser` 的引擎
- *   配对表，与游戏无关）。
+ * - **零游戏知识**：不认识任何一部具体游戏（配对词表来自非插件库包 `@kojo/erb-vocab`
+ *   的引擎控制流表，与游戏无关；本插件与宿主、解析器同是它的读者）。
  *
  * ## 为什么"插件没加载"要表现为**无人应答**
  *
@@ -54,7 +59,7 @@ export function createErbLangPlugin(): Plugin {
     version: '0.0.0',
     activate(ctx: PluginContext): void {
       // 两条腿都是**单答型**，分枚注册：一条腿的"作答与否"不带走另一条。
-      // 两者都只读请求里的文本与位点，不取 adapter（没有游戏命名集合参与判据）。
+      // 两条都只读请求里的文本与位点，不取 adapter（没有游戏命名集合参与判据）。
       ctx.slots.register('ui.editor.languageService', {
         id: 'erb-documentHighlight',
         order: CONTRIBUTION_ORDER,

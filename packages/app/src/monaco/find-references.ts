@@ -7,8 +7,9 @@ import type {
 } from '@kojo/plugin-api';
 import { registerForLanguageServices } from './register-dialects';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
-import { mergeNavigationLegs, resolveErbDimReferencesAt } from './erb-dim-navigation';
-import { labelReferenceLocations, resolveErbLabelScopeAt } from './erb-label-navigation';
+import { labelReferenceLocations, mergeNavigationLegs } from '@kojo/plugin-erb-parser';
+import { resolveErbDimReferencesAt } from './erb-dim-navigation';
+import { resolveErbLabelScopeAt } from './erb-label-navigation';
 import { normalizePathKey } from './kojo-hover';
 import { sugarOwningPaneOf, sugarPreviewLineOf, type PaneCtx } from '../ui/editor-pane-registry';
 import {

@@ -13,6 +13,7 @@ import type {
 import { symbolTokenAt, unicodeTokenAt } from '@kojo/plugin-api';
 import type { DialectCarrier } from '@kojo/kojo-core';
 import { parseDimDeclaration } from '@kojo/plugin-erb-parser';
+import { isErbDimNameChar as isDimNameChar, normalizePathKey } from '@kojo/plugin-erb-parser';
 import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
 import { livePanes } from '../ui/editor-pane-registry';
@@ -680,13 +681,14 @@ function stripUnquotedComment(text: string): string {
   return text;
 }
 
-/** 路径比较键（Windows 分隔符 + 大小写不敏感；索引键与 model.uri 来自不同腿） */
-export function normalizePathKey(p: string): string {
-  return p.replace(/\\/g, '/').toLowerCase();
-}
-
-/** `#DIM` 名字字符：非空白、非运算符/分隔符（中文与全角字母都是合法声明名） */
-export const isDimNameChar = (ch: string): boolean => !/[\s,;:()[\]{}=+\-*/<>%!&|'"`]/.test(ch);
+/**
+ * 路径比较键 / `#DIM` 名字字符：判据**单源**在 `@kojo/plugin-erb-parser`（`symbols.ts`）
+ * （导航、补全、改名、引用四条腿共用同一份；这里只 re-export，不许长出第二个字符集）。
+ *
+ * - `normalizePathKey`：Windows 分隔符 + 大小写不敏感（索引键与 model.uri 来自不同腿）；
+ * - `isDimNameChar`：非空白、非运算符/分隔符（中文与全角字母都是合法声明名）。
+ */
+export { isDimNameChar, normalizePathKey };
 
 /** 读 model 某一行（1 基；抛错 / 非字符串 ⇒ 读不到） */
 function safeModelLine(model: Monaco.editor.ITextModel, line: number): string | undefined {

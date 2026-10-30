@@ -8,7 +8,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import { labelScopeAt } from '@kojo/plugin-erb-parser';
+import { labelScopeAt, provideErbDefinition } from '@kojo/plugin-erb-parser';
 import { livePanes } from '../src/ui/editor-pane-registry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { installDefinitionProvider } from '../src/monaco/kojo-definition';
@@ -120,9 +120,18 @@ function stubMonaco(): {
 describe('$ 标签导航 · provider 接线', () => {
   const model = fakeModel(TEXT, PATH);
 
-  it('F12 在 `$NEXT` 定义名上 → 定义自跳', () => {
+  // 宿主不再有本地标签腿（LAU-4 第二步）：定义一律经槽，这里把槽腿直接接成插件供方。
+  const slotOf =
+    (m: Monaco.editor.ITextModel) =>
+    (p: Monaco.Position) =>
+      provideErbDefinition(
+        { kind: 'definition', path: PATH, text: m.getValue(), line: p.lineNumber, column: p.column, project: null } as never,
+        null,
+      )!.locations.slice();
+
+  it('F12 在 `$NEXT` 定义名上 → 定义自跳（经槽：供方是插件）', () => {
     const { monaco, definitions } = stubMonaco();
-    installDefinitionProvider(monaco, { resolve: () => [], navigate: () => undefined, openModelFor: () => model });
+    installDefinitionProvider(monaco, { resolve: (m, p) => slotOf(m)(p), navigate: () => undefined, openModelFor: () => model });
     const provider = definitions.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
     const links = provider.provideDefinition(model, at(3, 2), {} as Monaco.CancellationToken) as Monaco.languages.LocationLink[];
     expect(links.map((l) => [l.targetSelectionRange!.startLineNumber, l.targetSelectionRange!.startColumn])).toEqual([[3, 2]]);
@@ -131,7 +140,15 @@ describe('$ 标签导航 · provider 接线', () => {
   it('F12 在 CJK 跳转目标上 → 槽腿认不出也照样跳到定义（宿主标签腿兜底）', () => {
     const cjk = fakeModel('@F\n$开始\n\tGOTO 开始\n', PATH);
     const { monaco, definitions } = stubMonaco();
-    installDefinitionProvider(monaco, { resolve: () => [], navigate: () => undefined, openModelFor: () => cjk });
+    installDefinitionProvider(monaco, {
+      resolve: (m, p) =>
+        provideErbDefinition(
+          { kind: 'definition', path: PATH, text: m.getValue(), line: p.lineNumber, column: p.column, project: null } as never,
+          null,
+        )!.locations.slice(),
+      navigate: () => undefined,
+      openModelFor: () => cjk,
+    });
     const provider = definitions.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
     const links = provider.provideDefinition(cjk, at(3, 7), {} as Monaco.CancellationToken) as Monaco.languages.LocationLink[];
     expect(links.map((l) => l.targetSelectionRange!.startLineNumber)).toEqual([2]);

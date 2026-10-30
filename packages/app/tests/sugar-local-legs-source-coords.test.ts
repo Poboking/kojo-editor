@@ -334,11 +334,11 @@ function stubMonaco(): {
 }
 
 describe('装配点 · 投影面上 F12 / Shift+F12 的落点', () => {
-  it('本地腿那一枚排在最前，且 URI 与行号都是**存档那一侧**（Peek 落在原文 model 的第 6 行）', () => {
+  it('槽腿那一枚的 URI 与行号都是**存档那一侧**（Peek 落在原文 model 的第 6 行）', () => {
     mountProjection();
     const { monaco, definitions } = stubMonaco();
     installDefinitionProvider(monaco, {
-      resolve: () => [],
+      resolve: () => [{ filePath: ARCHIVE, line: 6, column: 8, span: { columnStart: 8, columnEnd: 11 } }],
       navigate: () => undefined,
       openModelFor: (filePath) => (filePath === ARCHIVE ? ARCHIVE_MODEL : undefined),
     });
@@ -381,7 +381,7 @@ describe('装配点 · 投影面上 F12 / Shift+F12 的落点', () => {
     const navigated: EditorSymbolLocation[] = [];
     const { monaco, definitions } = stubMonaco();
     installDefinitionProvider(monaco, {
-      resolve: () => [],
+      resolve: () => [{ filePath: ARCHIVE, line: 6, column: 8, span: { columnStart: 8, columnEnd: 11 } }],
       navigate: (location) => navigated.push(location),
     });
     const provider = definitions.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
@@ -416,10 +416,10 @@ describe('装配点 · 投影面上 F12 / Shift+F12 的落点', () => {
     ]);
   });
 
-  it('原文面逐字不变：同一条装配腿仍交声明名的**那一列**', () => {
+  it('原文面逐字不变：槽腿交的就是声明名的**那一列**', () => {
     const { monaco, definitions } = stubMonaco();
     installDefinitionProvider(monaco, {
-      resolve: () => [],
+      resolve: () => [{ filePath: ARCHIVE, line: 6, column: 8, span: { columnStart: 8, columnEnd: 11 } }],
       navigate: () => undefined,
       openModelFor: () => ARCHIVE_MODEL,
     });

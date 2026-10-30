@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import type { ErbFileFactsProvider } from './completion-core';
 import { erbDeclaredNameSlot } from './erb-completion-families';
-import { dimDeclarationOf } from './erb-dim-navigation';
+import { dimDeclarationOf } from '@kojo/plugin-erb-parser';
 import { lineAt } from './kojo-completion-position';
 
 /**
@@ -20,8 +20,8 @@ import { lineAt } from './kojo-completion-position';
  *    ⇒ `dimsOf` 恒 `undefined` ⇒ 糖面（`kojo-completion.ts` 的本文件声明名一路）与原生区
  *    （`route` 进 ERB 册的那一路）同时拿零候选。
  *
- * 两条路都**不写第二份 `#DIM` 正则**：逐行判据一律经 `erb-dim-navigation.ts` 的
- * {@link dimDeclarationOf}（其名字 / 指令切分取解析器 `parseDimDeclaration`，
+ * 两条路都**不写第二份 `#DIM` 正则**：逐行判据一律经 `@kojo/plugin-erb-parser` 的
+ * {@link dimDeclarationOf}（其名字 / 指令切分取解析器 `parseDimDeclaration`；
  * `[SKIPSTART]…[SKIPEND]` 区间整段跳过与导航腿同一份屏蔽面）。
  *
  * ## 位置判据（单源共享）
@@ -69,7 +69,7 @@ function textOf(model: Monaco.editor.ITextModel): string {
  * 区间整段跳过）。
  *
  * 行判据一律是 {@link dimDeclarationOf}（解析器 `parseDimDeclaration` 的单源包装），本函数只
- * 负责**遍历与屏蔽**——屏蔽面与 `erb-dim-navigation.ts` 的私有 `dimDeclarationsOf` 逐字同式，
+ * 负责**遍历与屏蔽**——屏蔽面与包里的 `dimDeclarationsOf` 逐字同式，
  * 不是第二份"什么算 `#DIM` 声明"的判据。
  */
 export function dimNamesOfBuffer(text: string): readonly string[] {

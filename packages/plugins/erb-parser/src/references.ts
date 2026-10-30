@@ -110,7 +110,7 @@ export function splitErbLines(text: string): readonly string[] {
  * **产出的字符串逐字符不变**——`references.test.ts` 的引号/注释/落单引号用例
  * 与语料朴素对拍共同钉死。
  */
-function codeViewOf(line: string): string {
+export function codeViewOf(line: string): string {
   if (line.indexOf('"') === -1 && line.indexOf(';') === -1) return line;
   let out = '';
   let seg = 0; // 下一段"原文"的起点（此前各段已并入 out）

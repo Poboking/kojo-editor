@@ -185,7 +185,6 @@ describe('erb-parser · 方言守门（判据收成一处）', () => {
     } as unknown as PluginContext;
     createErbParserPlugin().activate(ctx);
     const indexDependent = [
-      { id: 'erb-definition', kind: 'definition' },
       { id: 'erb-references', kind: 'references' },
       { id: 'erb-usage-lens', kind: 'codeLens' },
       { id: 'erb-inlay-hints', kind: 'inlayHint' },
@@ -207,6 +206,24 @@ describe('erb-parser · 方言守门（判据收成一处）', () => {
     expect(
       registered.find((c) => c.id === 'erb-workspace-symbols')!.provide({ kind: 'workspaceSymbol', query: 'ALPHA', project: null }),
     ).toBeUndefined();
+    // 定义腿：本地名字照答（缓冲区事实），函数索引腿零贡献（`locations: []`，不是弃权）
+    const define = registered.find((c) => c.id === 'erb-definition')!.provide as (request: unknown) => unknown;
+    expect(
+      define({
+        kind: 'definition',
+        path: '/t/B.ERB',
+        text: ['#DIM 好感度', '  好感度 = 1', ''].join('\n'),
+        line: 2,
+        column: 3,
+        project: null,
+      }),
+    ).toEqual({
+      kind: 'definition',
+      locations: [{ filePath: '/t/B.ERB', line: 1, column: 6, span: { columnStart: 6, columnEnd: 9 } }],
+    });
+    expect(
+      define({ kind: 'definition', path: '/t/B.ERB', text: FILES['/t/B.ERB']!, line: 2, column: 7, project: null }),
+    ).toEqual({ kind: 'definition', locations: [] });
     // 缓冲区事实那三枚不受项目开闭影响（缺席也要能说"这篇没有定义 / 这篇的结构是这样"）
     expect(
       registered.find((c) => c.id === 'erb-symbols')!.provide({ kind: 'documentSymbol', path: '/t/B.ERB', text: FILES['/t/B.ERB']!, project: null }),

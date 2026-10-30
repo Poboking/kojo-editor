@@ -2,9 +2,10 @@
 /**
  * gen-erb-structure.mjs —— ERB 结构语法（tree-sitter）的**构建期投影**。
  *
- * 真源（只读，绝不回写）两枚：`packages/plugins/erb-parser/src/scanner.ts`（行式结构）与
- * `packages/plugin-api/src/erb.ts`（预处理器标记的语言事实）。
- * scanner.ts 已经是 ERB 行式结构的唯一实现（函数头 / 控制流配对 / `[SKIPSTART]` 区间 / `#DIM` 族），
+ * 真源（只读，绝不回写）三枚：`packages/plugins/erb-parser/src/scanner.ts`（行式结构）、
+ * `packages/erb-vocab/src/control-flow.ts`（`#DIM` 族正则；2026-10-30 从 scanner.ts 上提到的
+ * 零依赖库包，理由见该文件头注）与 `packages/plugin-api/src/erb.ts`（预处理器标记的语言事实）。
+ * scanner.ts 是 ERB 行式结构的唯一实现（函数头 / 控制流配对 / `[SKIPSTART]` 区间），
  * 本包不另抄第二份关键字表：
  *
  * - **控制流配对**：直接 import 真源模块（Node >= 22.18 的类型擦除），用其公开面
@@ -26,7 +27,9 @@
  *   标志不一致、带 `g`/`y`（`test()` 变有状态、共享实例就会漂）一律抛。
  *   文法侧不吃这一段（预处理条件块在 grammar 里**故意不建块**，见 grammar.js 头注），
  *   所以加这一格**不触碰 parser 产物**。
- * - **`#DIM` 族**：真源的 `DIM_RE` 是 `/^#(DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\s+(.*)$/i`。
+ * - **`#DIM` 族**：真源是 `packages/erb-vocab/src/control-flow.ts` 的 `DIM_RE`
+ *   `/^#(DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\s+(.*)$/i`（与 `DIM_MODIFIERS` 同枚；
+ *   2026-10-30 起从 scanner.ts 上提到零依赖库包，scanner 只 `re-export`）。
  *   本脚本只投影它的一级分支与 `i` 标志，由 grammar 逐字母展开大小写（tree-sitter 记号正则
  *   没有 `/i`），不投影 `(.*)$`——那是"行内容"不是"结构"。
  *
@@ -46,6 +49,8 @@ const pkgRoot = resolve(here, '..');
 const repoRoot = resolve(pkgRoot, '..', '..');
 const SCANNER_REL = 'packages/plugins/erb-parser/src/scanner.ts';
 const SCANNER_ABS = join(repoRoot, SCANNER_REL);
+const VOCAB_REL = 'packages/erb-vocab/src/control-flow.ts';
+const VOCAB_ABS = join(repoRoot, VOCAB_REL);
 const PREPROC_SOURCE_REL = 'packages/plugin-api/src/erb.ts';
 const PREPROC_SOURCE_ABS = join(repoRoot, PREPROC_SOURCE_REL);
 const OUT = join(pkgRoot, 'src', 'structure.json');
@@ -201,9 +206,9 @@ export function projectPreproc(erbSource) {
 }
 
 /** 从源码抽 `DIM_RE` 的一级分支（`#` 之后、`\s+` 之前的那组择一分支）与标志。 */
-export function projectDimDirectives(scannerSource) {
-  const m = /const DIM_RE = \/(.+)\/([a-z]*);/.exec(scannerSource);
-  if (!m) throw new Error('真源里找不到 `const DIM_RE = /…/flags;`——投影脚本与 scanner.ts 已漂移');
+export function projectDimDirectives(dimSource) {
+  const m = /const DIM_RE = \/(.+)\/([a-z]*);/.exec(dimSource);
+  if (!m) throw new Error('真源里找不到 `const DIM_RE = /…/flags;`——投影脚本与 erb-vocab/control-flow.ts 已漂移');
   const [, pattern, flags] = m;
   if (!flags.includes('i')) {
     throw new Error(`DIM_RE 的标志是 "${flags}"（预期含 i）；grammar 的大小写展开依赖这条判据`);
@@ -227,9 +232,9 @@ export function projectDimDirectives(scannerSource) {
  * 修饰词表漏一个词，名字就会被记成那个关键字（`#DIM DYNAMIC CNT_CHARA` → `DYNAMIC`），
  * 所以投影与真源漂移时必须抛错，不许静默回退空表。
  */
-export function projectDimModifiers(scannerSource) {
-  const m = /const DIM_MODIFIERS =\s*\/\^\(([^)]+)\)\\s\+\/([a-z]*);/.exec(scannerSource);
-  if (!m) throw new Error('真源里找不到 `const DIM_MODIFIERS = /^(…)\\s+/flags;`——投影脚本与 scanner.ts 已漂移');
+export function projectDimModifiers(dimSource) {
+  const m = /const DIM_MODIFIERS =\s*\/\^\(([^)]+)\)\\s\+\/([a-z]*);/.exec(dimSource);
+  if (!m) throw new Error('真源里找不到 `const DIM_MODIFIERS = /^(…)\\s+/flags;`——投影脚本与 erb-vocab/control-flow.ts 已漂移');
   const [, pattern, flags] = m;
   if (!flags.includes('i')) {
     throw new Error(`DIM_MODIFIERS 的标志是 "${flags}"（预期含 i）；grammar 的大小写展开依赖这条判据`);
@@ -291,14 +296,14 @@ export function projectControlFlow(words, classify) {
 }
 
 /** 全部投影的纯函数形态（测试注入/变异用）。 */
-export function buildStructure({ scannerSource, erbSource, words, classify }) {
+export function buildStructure({ scannerSource, dimSource, erbSource, words, classify }) {
   const markers = { ...projectMarkers(scannerSource), ...projectContinuationMarkers(erbSource) };
   const preproc = projectPreproc(erbSource);
-  const dim = projectDimDirectives(scannerSource);
-  const dimMods = projectDimModifiers(scannerSource);
+  const dim = projectDimDirectives(dimSource);
+  const dimMods = projectDimModifiers(dimSource);
   const flow = projectControlFlow(words, classify);
   return {
-    source: { scanner: SCANNER_REL, preproc: PREPROC_SOURCE_REL },
+    source: { scanner: SCANNER_REL, dim: VOCAB_REL, preproc: PREPROC_SOURCE_REL },
     markers,
     preproc,
     dimDirectives: dim.patterns,
@@ -343,15 +348,16 @@ export function serializeSkipHeader(structure) {
   ].join('\n');
 }
 
-/** 真源加载（活模块 + 两份源码文本；Node 原生类型擦除）。 */
+/** 真源加载（活模块 + 三份源码文本；Node 原生类型擦除）。 */
 export async function loadTruth() {
   const mod = await import(pathToFileURL(SCANNER_ABS).href);
   const scannerSource = readFileSync(SCANNER_ABS, 'utf8');
+  const dimSource = readFileSync(VOCAB_ABS, 'utf8');
   const erbSource = readFileSync(PREPROC_SOURCE_ABS, 'utf8');
   if (!Array.isArray(mod.ERB_CONTROL_STATEMENTS) || typeof mod.classifyControlFlow !== 'function') {
     throw new Error('scanner.ts 公开面缺 ERB_CONTROL_STATEMENTS / classifyControlFlow——投影契约变了');
   }
-  return { scannerSource, erbSource, words: mod.ERB_CONTROL_STATEMENTS, classify: mod.classifyControlFlow };
+  return { scannerSource, dimSource, erbSource, words: mod.ERB_CONTROL_STATEMENTS, classify: mod.classifyControlFlow };
 }
 
 async function main() {
@@ -371,7 +377,7 @@ async function main() {
     }
     if (current !== serialized) {
       throw new Error(
-        'control-flow / 标记 / #DIM 投影与 scanner.ts 不一致，或 preproc 段与 plugin-api/src/erb.ts 不一致——重跑 node tools/gen-erb-structure.mjs',
+        'control-flow / 标记 / #DIM 投影与真源（scanner.ts / erb-vocab/control-flow.ts）不一致，或 preproc 段与 plugin-api/src/erb.ts 不一致——重跑 node tools/gen-erb-structure.mjs',
       );
     }
     if (currentHeader !== header) {

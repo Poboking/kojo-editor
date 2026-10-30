@@ -1,7 +1,7 @@
-import type { EnclosingMode, ErbFile, ErbFunction, ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
-import { MODEL_TOKEN_CLASS, enclosingAt, enclosingChainAt } from '@kojo/plugin-api';
-import { parseErbText, parseLabelDefinition } from './scanner';
-import { functionNameTokenAt } from './references';
+import type { EditorSymbolLocation, EnclosingMode, ErbFile, ErbFunction, ErbFunctionRef, ErbIndex } from '@kojo/plugin-api';
+import { MODEL_TOKEN_CLASS, enclosingAt, enclosingChainAt, erbCodeBodyOf, symbolTokenAt } from '@kojo/plugin-api';
+import { parseDimDeclaration, parseErbText, parseLabelDefinition } from './scanner';
+import { codeViewOf, functionNameTokenAt } from './references';
 
 /**
  * 位置 → 符号（B0，2026-10-15 语言服务批）。
@@ -365,4 +365,173 @@ function lineTextOf(text: string, line: number): string | undefined {
   if (n < 1) return undefined;
   const lines = text.split(/\r\n?|\n/);
   return lines[n - 1];
+}
+
+/* 本地名字（`#DIM` 声明名 / `$` 标签名）的落点判据 —— `erb-definition` 的本地两腿。
+ * 2026-10-30 从 `@kojo/erb-lang/definition` 折回本插件：常驻包静态引库叶子会把整包拖进首屏。 */
+
+/** `.kojo` 是派生文本（行号不属于原文 ⇒ 不答）；比 `isErbDialectPath` 多认 `.erd` */
+const LOCAL_NAME_DIALECT_RE = /\.(?:erb|erh|erd)$/i;
+
+export function isErbDefinitionPath(path: string): boolean {
+  return LOCAL_NAME_DIALECT_RE.test(path);
+}
+
+/** 行首 `#DIM*`（名字与修饰词的切分以 `parseDimDeclaration` 为准） */
+const DIM_HEAD_RE = /^#(?:DIMSTR|DIMCHAR|DIMS|DIM)\b/i;
+const DIM_MODIFIERS = new Set(['CONST', 'SAVEDATA', 'GLOBAL', 'REF', 'NOINIT', 'CHARA']);
+
+/** 一条 `#DIM*` 声明（`nameStart` = 行内 0 基列偏移） */
+export interface ErbDimDeclaration {
+  readonly directive: string;
+  readonly name: string;
+  readonly nameStart: number;
+}
+
+/** 名字字符：非空白、非运算符 / 分隔符（中文与全角字母都合法，绝不用 `\w`） */
+export function isErbDimNameChar(ch: string | undefined): boolean {
+  return ch !== undefined && !/[\s,;:()[\]{}=+\-*/<>%!&|'"`]/.test(ch);
+}
+
+/** 归一变行后切行（1 基行号 = 下标 + 1；与解析器同规则） */
+const linesOf = (text: string): string[] => text.replace(/\r\n?/g, '\n').split('\n');
+
+/** 一行 `#DIM*`：名字与指令取 `parseDimDeclaration`，本函数只补名字起始列 */
+export function dimDeclarationOf(line: string): ErbDimDeclaration | null {
+  const trimmed = line.trim();
+  const parsed = parseDimDeclaration(trimmed);
+  const head = parsed === null ? null : DIM_HEAD_RE.exec(trimmed);
+  if (!parsed || !head) return null;
+  const indent = line.length - line.trimStart().length;
+  let i = head[0].length;
+  let nameStart = -1;
+  while (i < trimmed.length) {
+    while (i < trimmed.length && /\s/.test(trimmed[i]!)) i++;
+    const start = i;
+    while (i < trimmed.length && !/[\s,=[\]]/.test(trimmed[i]!)) i++;
+    if (start === i) break;
+    if (!DIM_MODIFIERS.has(trimmed.slice(start, i).toUpperCase())) {
+      nameStart = start;
+      break;
+    }
+  }
+  if (nameStart < 0) return null;
+  const name = parsed.name.replace(/\[[^\]]*\]$/, '');
+  if (name.length === 0 || !trimmed.startsWith(name, nameStart)) return null;
+  return { directive: parsed.directive, name, nameStart: indent + nameStart };
+}
+
+/** 本文件全部 `#DIM*`（跳过 `[SKIPSTART]…[SKIPEND]`，与解析器同口径） */
+export function dimDeclarationsOf(text: string): { line: number; dim: ErbDimDeclaration }[] {
+  const out: { line: number; dim: ErbDimDeclaration }[] = [];
+  let inSkipBlock = false;
+  const lines = linesOf(text);
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i]!.trim();
+    if (inSkipBlock) {
+      if (trimmed === '[SKIPEND]') inSkipBlock = false;
+      continue;
+    }
+    if (trimmed === '[SKIPSTART]') {
+      inSkipBlock = true;
+      continue;
+    }
+    const dim = dimDeclarationOf(lines[i]!);
+    if (dim) out.push({ line: i + 1, dim });
+  }
+  return out;
+}
+
+/** 光标处变量名 → 本文件同名声明的落点；注释 / 字符串不算变量位置，跨文件不猜 */
+export function resolveErbDimDefinition(
+  text: string,
+  line: number,
+  column: number,
+  filePath: string | null,
+): EditorSymbolLocation[] {
+  if (!filePath || !isErbDefinitionPath(filePath)) return [];
+  if (!Number.isFinite(line) || !Number.isFinite(column)) return [];
+  const lineText = linesOf(text)[Math.trunc(line) - 1];
+  if (lineText === undefined) return [];
+  const token = symbolTokenAt(codeViewOf(lineText), column, isErbDimNameChar);
+  if (!token) return [];
+  const want = token.text.toUpperCase();
+  const out: EditorSymbolLocation[] = [];
+  for (const { line: atLine, dim } of dimDeclarationsOf(text)) {
+    if (dim.name.toUpperCase() !== want) continue;
+    out.push({
+      filePath,
+      line: atLine,
+      column: dim.nameStart + 1,
+      span: { columnStart: dim.nameStart + 1, columnEnd: dim.nameStart + 1 + dim.name.length },
+    });
+  }
+  return out;
+}
+
+/** 落点投影只要标签出现的这五格（作用域其余字段与投影无关） */
+type LabelSpanFacts = Pick<ErbLabelOccurrence, 'filePath' | 'line' | 'column' | 'endColumn' | 'kind'>;
+
+/** 一处标签出现 → 落点（零宽那一格不给区间：硬拼 `{n,n}` 是给下游发假区间） */
+function labelLocation(occurrence: LabelSpanFacts, kind: EditorSymbolLocation['kind']): EditorSymbolLocation {
+  return {
+    filePath: occurrence.filePath,
+    line: occurrence.line,
+    column: occurrence.column,
+    ...(occurrence.endColumn > occurrence.column
+      ? { span: { columnStart: occurrence.column, columnEnd: occurrence.endColumn } }
+      : {}),
+    kind,
+  };
+}
+
+/** 作用域里的 `$` 定义 → 导航落点（F12 自跳；重复定义全部保留） */
+export function labelDefinitionLocations(scope: { readonly occurrences: readonly LabelSpanFacts[] }): EditorSymbolLocation[] {
+  return scope.occurrences
+    .filter((occurrence) => occurrence.kind === 'definition')
+    .map((occurrence) => labelLocation(occurrence, 'definition'));
+}
+
+/** 作用域里的全部出现 → 引用落点（Shift+F12）；跳转目标记 `mention`（`GOTO` 不是调用） */
+export function labelReferenceLocations(scope: { readonly occurrences: readonly LabelSpanFacts[] }): EditorSymbolLocation[] {
+  return scope.occurrences.map((occurrence) =>
+    labelLocation(occurrence, occurrence.kind === 'definition' ? 'definition' : 'mention'),
+  );
+}
+
+/** 路径判等形态（`\` → `/`，大小写折叠）：两条腿的 `filePath` 来源不同，裸比会留下两份同一落点 */
+export function normalizePathKey(p: string): string {
+  return p.replace(/\\/g, '/').toLowerCase();
+}
+
+/** 合并两批位置（`primary` 在前），按 `路径(归一) + 行 + 区间起点` 去重；同处先到者没区间、后到者补上 */
+export function mergeSymbolLocations(
+  primary: readonly EditorSymbolLocation[],
+  secondary: readonly EditorSymbolLocation[],
+): EditorSymbolLocation[] {
+  const out: EditorSymbolLocation[] = [];
+  const at = new Map<string, number>();
+  for (const loc of [...primary, ...secondary]) {
+    const start = loc.span?.columnStart ?? loc.column ?? 0;
+    const key = `${normalizePathKey(loc.filePath)}\u0000${loc.line}\u0000${start}`;
+    const seenAt = at.get(key);
+    if (seenAt === undefined) {
+      at.set(key, out.length);
+      out.push(loc);
+      continue;
+    }
+    const kept = out[seenAt]!;
+    if (!kept.span && loc.span) out[seenAt] = { ...kept, span: loc.span };
+    if (kept.column === undefined && loc.column !== undefined) out[seenAt] = { ...out[seenAt]!, column: loc.column };
+  }
+  return out;
+}
+
+/** 三腿优先序：`$` 标签 → `#DIM` 声明 → 槽腿；收成一条链，F12 与 Shift+F12 不会各写一份 */
+export function mergeNavigationLegs(
+  labels: readonly EditorSymbolLocation[],
+  dims: readonly EditorSymbolLocation[],
+  slot: readonly EditorSymbolLocation[],
+): EditorSymbolLocation[] {
+  return mergeSymbolLocations(labels, mergeSymbolLocations(dims, slot));
 }

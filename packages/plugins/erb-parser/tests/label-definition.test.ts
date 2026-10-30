@@ -215,10 +215,21 @@ type DefinitionContribution = {
 };
 
 describe('erb-parser · erb-definition 装配（标签导航）', () => {
-  it('索引未建 ⇒ undefined（本包不答的三态不变）', () => {
+  it('索引未建 ⇒ 本地标签腿照答（认这门语言就作答，不因索引缺席弃权）', () => {
     const { languageServices } = activate();
     const c = languageServices.get('erb-definition') as unknown as DefinitionContribution;
-    expect(c.provide({ kind: 'definition', path: A, text: FILES[A]!, line: 4, column: 7, project: null })).toBeUndefined();
+    expect(c.provide({ kind: 'definition', path: A, text: FILES[A]!, line: 4, column: 7, project: null })).toEqual({
+      kind: 'definition',
+      locations: [
+        {
+          filePath: A,
+          line: 2,
+          column: 2,
+          kind: 'definition',
+          span: { columnStart: 2, columnEnd: 6 },
+        },
+      ],
+    });
   });
 
   it('GOTO NEXT → 跳到本函数的 $NEXT 标签行（既有 definition 通道，零新 kind）', async () => {
@@ -227,8 +238,17 @@ describe('erb-parser · erb-definition 装配（标签导航）', () => {
     const c = languageServices.get('erb-definition') as unknown as DefinitionContribution;
     expect(c.provide({ kind: 'definition', path: A, text: FILES[A]!, line: 4, column: 7, project: null })).toEqual({
       kind: 'definition',
-      // W-DEF-COL：标签腿的定义位也带列（`$NEXT` ⇒ 名字从第 2 列起，4 个码元）
-      locations: [{ filePath: A, line: 2, column: 2, span: { columnStart: 2, columnEnd: 6 } }],
+      // W-DEF-COL：标签腿的定义位也带列（`$NEXT` ⇒ 名字从第 2 列起，4 个码元）；
+      // `kind` 用既有值域（`definition`），不新造一格
+      locations: [
+        {
+          filePath: A,
+          line: 2,
+          column: 2,
+          kind: 'definition',
+          span: { columnStart: 2, columnEnd: 6 },
+        },
+      ],
     });
   });
 });

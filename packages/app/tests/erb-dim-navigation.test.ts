@@ -197,13 +197,15 @@ describe('多条腿的优先序 · mergeNavigationLegs（标签 > 声明 > 槽�
     expect(mergeNavigationLegs([], [], [])).toEqual([]);
   });
 
-  it('provider 端到端：中文声明名同点位撞上函数索引 ⇒ 声明腿排第一、函数腿仍在列表里', () => {
+  it('provider 端到端：槽腿把声明腿排在函数索引腿之前 ⇒ 两枚都在、顺序由供方定', () => {
     const { monaco, definitions } = stubMonaco();
+    // 供方（插件）的返回序就是槽的返回序：声明在前、函数索引腿在后
     const slotFromIndex: EditorSymbolLocation[] = [
+      { filePath: PATH, line: 3, column: 8, span: { columnStart: 8, columnEnd: 11 }, kind: 'definition' },
       { filePath: PATH, line: 12, column: 2, span: { columnStart: 2, columnEnd: 5 }, kind: 'definition' },
     ];
     installDefinitionProvider(monaco, {
-      resolve: () => slotFromIndex, // 槽腿（项目函数索引）答的另一个文件位
+      resolve: () => slotFromIndex,
       navigate: () => undefined,
       openModelFor: () => fakeModel(PATH),
     });
@@ -262,7 +264,8 @@ describe('#DIM 导航 · provider 接线', () => {
   it('F12：返回真 `LocationLink`，选区落在声明名的列区间（同文件就地跳）', () => {
     const { monaco, definitions } = stubMonaco();
     installDefinitionProvider(monaco, {
-      resolve: () => [],
+      // 定义一律经槽（宿主没有本地腿）：这里接插件供方在原位点上的答案
+      resolve: () => [{ filePath: PATH, line: 3, column: 8, span: { columnStart: 8, columnEnd: 11 }, kind: 'definition' }],
       navigate: () => undefined,
       openModelFor: () => model,
     });
