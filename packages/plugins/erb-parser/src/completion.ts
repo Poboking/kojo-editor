@@ -1223,8 +1223,9 @@ function erbIndexOf(getIndex: (() => ErbIndex | null | undefined) | undefined): 
 
 /** 「项目函数索引认不认这个名字」的唯一查询（第 2 路的裁决与第 5 路共用） */
 function erbDefsOf(index: ErbIndex, upper: string): ErbFunctionRef[] | undefined {
-  const defs = index.byName.get(upper);
-  return defs === undefined || defs.length === 0 ? undefined : defs;
+  // 列式 `byName`（MEM-19）：`defsOf` = 旧写法 `byName.get(n) ?? []` 的同一枚
+  const defs = index.byName.defsOf(upper);
+  return defs.length === 0 ? undefined : defs;
 }
 
 /**

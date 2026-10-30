@@ -11,12 +11,20 @@
  */
 
 import { functionLookupOf } from '@kojo/plugin-api';
+import { provideErbHover } from '@kojo/plugin-erb-parser';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import type { ErbIndex, KojoInstructionTable, KojoLibraryTable } from '@kojo/plugin-api';
+import type {
+  EditorLanguageServiceContribution,
+  ErbIndex,
+  KojoInstructionTable,
+  KojoLibraryTable,
+} from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { installSlotServiceLegs } from '../src/monaco/slot-service-providers';
+import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import { type HoverTables, installHover, resolveHoverName } from '../src/monaco/kojo-hover';
 
 /** 桩变量字典：CFLAG 1088 = 好感度（另含一条具名索引，用于钉住"中文名不进反查面"） */
@@ -120,15 +128,20 @@ describe('悬停中文名 · fail-visible 负例（绝不猜）', () => {
 });
 
 /**
- * ERB 悬浮拓展（EC-6）——证明 `.erb` 语言 id 下**复用同一 hover provider**。
+ * ERB 悬浮（ERB-PARITY G1，2026-10-31）——**ERB 的悬停已改走槽**。
  *
- * `installHover` 对 `ERB_LANGUAGE_ID` 与 `KOJO_LANGUAGE_ID` 注册**同一个** provider 实例；
- * provider 只做"位置 → `resolveHoverName` → Monaco hover"的薄翻译，本身与语言无关，
- * 故 ERB 语境下的变量路（`CFLAG:TARGET:1088`）与函数路（`GETBIT`）天然出货中文名。
- * 这里用**假 Monaco** 捕获注册与出货，不引入真 Monaco 运行时。
+ * 判据（六路）整块搬进 `@kojo/plugin-erb-parser`（`completion.ts` 的 `provideErbHover`），
+ * 由 `ui.editor.languageService` 的 `erb-hover` 供方在槽里作答；宿主 `installHover` 只剩
+ * **kojo1**（v1 糖面）那一枚旧桥 provider——ERB descriptor 点名了 `slotServices: ['hover']`，
+ * 旧桥那枚按 `excludeNamed` 让开（否则同一门语言上两枚 HoverProvider 同时摊开正文）。
+ *
+ * 本组因此钉三件事：旧桥只剩 kojo1、释放句柄只清它自己那枚、以及**槽级**上 ERB 的
+ * `hover` 请求确实由插件供方应答（非 ERB 请求弃权）。假内核 / 假 Monaco 的替身口径与
+ * `dialect-extension.conformance.test.ts` 同款：只桩 `slots.query`、`project.current` 与
+ * Monaco 的注册函数，判据一行都不抄。
  */
 
-/** 假 Monaco：只记录 hover provider 注册（含释放句柄），用于钉住"同一 provider 挂两个语言 id" */
+/** 假 Monaco：只记录 hover provider 注册（含释放句柄） */
 function fakeMonaco() {
   const regs: { langId: string; provider: Monaco.languages.HoverProvider; disposed: boolean }[] = [];
   const monaco = {
@@ -152,56 +165,123 @@ const noopToken = {
   onCancellationRequested: () => ({ dispose: () => undefined }),
 } as unknown as Monaco.CancellationToken;
 
-/** 让给定 provider 在带 `|` 标记的行文本上出货（1 基列 = 标记前字符数 + 1；与 `at` 同口径） */
+/** 槽级替身用的 ERB 路径（供方按扩展名认方言，缺了它一律弃权） */
+const SLOT_ERB_PATH = 'C:/game/M_KOJO_K12_口上.ERB';
+
+/** 让给定 provider 在带 `|` 标记的**单行**文本上出货（1 基列 = 标记前字符数 + 1；与 `at` 同口径） */
 function hoverAt(provider: Monaco.languages.HoverProvider, marked: string) {
   const line = marked.replace('|', '');
-  const model = { getLineContent: () => line } as unknown as Monaco.editor.ITextModel;
+  const model = {
+    getLineContent: () => line,
+    getValue: () => line,
+    getLanguageId: () => ERB_LANGUAGE_ID,
+    getVersionId: () => 1,
+    uri: { scheme: 'file', path: SLOT_ERB_PATH, fsPath: SLOT_ERB_PATH },
+  } as unknown as Monaco.editor.ITextModel;
   const position = { lineNumber: 1, column: marked.indexOf('|') + 1 } as Monaco.Position;
   return provider.provideHover(model, position, noopToken) as Monaco.languages.Hover | undefined;
 }
 
-describe('ERB 悬浮 · installHover 复用同一 provider', () => {
-  it('对 `ERB_LANGUAGE_ID` 与 `KOJO_LANGUAGE_ID` 注册**同一个** provider 实例', () => {
+type KernelLike = Parameters<typeof setGlobalKernel>[0];
+
+/** 假内核：只答语言服务槽（`project` 固定 null——本组不需要项目事实） */
+function installSlotKernel(contributions: readonly EditorLanguageServiceContribution[]): void {
+  setGlobalKernel({
+    slots: {
+      query: (slot: string) => (slot === 'ui.editor.languageService' ? contributions : []),
+    },
+    project: { current: () => null },
+  } as unknown as KernelLike);
+}
+
+/**
+ * 插件供方的**替身口径**：贡献体直接用真实判据 `provideErbHover`，只把索引通道与 adapter
+ * 三张表用闭包喂进去（生产里这两格来自 `erb.parser` 服务与 `game.adapter` 槽）。
+ */
+function erbHoverContribution(t: HoverTables): EditorLanguageServiceContribution {
+  const facts = {
+    ...(t.dictionary !== undefined ? { dictionary: t.dictionary } : {}),
+    ...(t.variableSchema !== undefined ? { variableSchema: t.variableSchema } : {}),
+    ...(t.libraryTable !== undefined ? { libraryTable: t.libraryTable } : {}),
+  };
+  return {
+    id: 'erb-hover',
+    provide: (request) =>
+      request.kind === 'hover'
+        ? provideErbHover(request, {
+            index: () => (t.erbIndex === undefined ? null : (t.erbIndex() ?? null)),
+            adapterTables: () => facts,
+          })
+        : undefined,
+  };
+}
+
+describe('ERB 悬浮 · 槽供方接手（installHover 不再挂 ERB）', () => {
+  it('`installHover` 只挂 `KOJO_LANGUAGE_ID`：ERB 点名了 `hover`，旧桥那枚让开', () => {
     const { monaco, regs } = fakeMonaco();
     installHover(monaco, () => tables);
-    expect(regs.map((r) => r.langId)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID]);
-    expect(regs[0]!.provider).toBe(regs[1]!.provider);
+    expect(regs.map((r) => r.langId)).toEqual([KOJO_LANGUAGE_ID]);
   });
 
-  it('ERB 语境 · 变量路：`CFLAG:TARGET:1088` 出货中文名「好感度」', () => {
+  it('释放句柄 → 只清 kojo1 那一枚（ERB 的注册与它无关）', () => {
     const { monaco, regs } = fakeMonaco();
-    installHover(monaco, () => tables);
-    const erb = regs.find((r) => r.langId === ERB_LANGUAGE_ID)!;
-    const text = JSON.stringify(hoverAt(erb.provider, 'IF CFLAG:TARGET:|1088 >= 500')?.contents);
+    installHover(monaco, () => tables).dispose();
+    expect(regs.map((r) => r.langId)).toEqual([KOJO_LANGUAGE_ID]);
+    expect(regs.every((r) => r.disposed)).toBe(true);
+  });
+
+  it('槽级 · 变量路：ERB 的 `hover` 请求由 `erb-hover` 供方应答（「好感度」/ 变量）', () => {
+    const { monaco, regs } = fakeMonaco();
+    installSlotKernel([erbHoverContribution(tables)]);
+    const handle = installSlotServiceLegs(monaco, ['hover']);
+    const erb = regs.find((r) => r.langId === ERB_LANGUAGE_ID);
+    expect(erb, 'ERB 的 hover 腿没挂上').toBeDefined();
+    const text = JSON.stringify(hoverAt(erb!.provider, 'IF CFLAG:TARGET:|1088 >= 500')?.contents);
     expect(text).toContain('好感度');
     expect(text).toContain('变量');
+    handle.dispose();
   });
 
-  it('ERB 语境 · 函数路：英文函数名 `GETBIT` 出货中文名「获取标记」', () => {
+  it('槽级 · 函数路：英文函数名 `GETBIT` 由插件供方出货「获取标记」', () => {
     const { monaco, regs } = fakeMonaco();
-    installHover(monaco, () => tables);
+    installSlotKernel([erbHoverContribution(tables)]);
+    const handle = installSlotServiceLegs(monaco, ['hover']);
     const erb = regs.find((r) => r.langId === ERB_LANGUAGE_ID)!;
     const text = JSON.stringify(hoverAt(erb.provider, 'SIF |GETBIT(A,0)')?.contents);
     expect(text).toContain('获取标记');
     expect(text).toContain('GETBIT');
+    handle.dispose();
   });
 
-  it('释放句柄 → 两个语言 id 的注册一并 dispose', () => {
+  it('槽级 · 非 ERB 请求弃权 ⇒ 交回 `undefined`（让 v1 那枚旧桥接手）', () => {
     const { monaco, regs } = fakeMonaco();
-    installHover(monaco, () => tables).dispose();
-    expect(regs.map((r) => r.langId)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID]);
-    expect(regs.every((r) => r.disposed)).toBe(true);
+    installSlotKernel([erbHoverContribution(tables)]);
+    const handle = installSlotServiceLegs(monaco, ['hover']);
+    const kojo1 = regs.find((r) => r.langId === KOJO_LANGUAGE_ID)!;
+    const model = {
+      getValue: () => 'IF CFLAG:TARGET:1088 >= 500',
+      getLineContent: () => 'IF CFLAG:TARGET:1088 >= 500',
+      getLanguageId: () => KOJO_LANGUAGE_ID,
+      getVersionId: () => 1,
+      uri: { scheme: 'file', path: 'C:/game/a.kojo1', fsPath: 'C:/game/a.kojo1' },
+    } as unknown as Monaco.editor.ITextModel;
+    const position = { lineNumber: 1, column: 17 } as Monaco.Position;
+    expect(kojo1.provider.provideHover(model, position, noopToken)).toBeUndefined();
+    handle.dispose();
   });
 });
 
 /**
- * 「本文件是哪一份文件」的注入位（`installHover` 第三参，2026-10-20 预览面读类换算批）。
+ * 「本文件是哪一份文件」的注入位（ERB-PARITY G1 搬家后：槽腿的 `host.filePathOf`）。
  *
  * 悬停第 5.5 路（`#DIM` 声明名）是**唯一**需要文件身份的一路：数据住在 `ErbIndex.files`，
  * 键是磁盘上的路径。派生面（升糖预览那份只读内存 model）的 URI 是 `inmemory://sugar/…`，
  * 索引里必然对不到任何文件 ⇒ 不换算就是整路静默，而这条静默在预览面上看不出任何差别。
- * 换算规则本身（"这份 model 背后是哪个文件"）是**归属**知识，住在登记簿，不该进 `kojo-hover.ts`
- * 一行——所以这里只钉注入位的四种形状。
+ * 换算规则本身（"这份 model 背后是哪个文件"）是**归属**知识，住在登记簿，不该进判据一行。
+ *
+ * 搬家前这一格是 `installHover` 的第三参；判据进插件后它是槽腿请求的 `path` 来源
+ * （`SlotServiceHost.filePathOf`）——**同一条契约**：注入胜过 `model.uri`、注入回 `null`
+ * 不改判据、注入抛错不没收整条悬停、两处都给不出 ⇒ 这一路闭嘴。本组只把"问谁"改到槽。
  */
 describe('悬停 · 文件身份注入位（派生面上的 `#DIM` 声明路）', () => {
   const DIM_PATH = 'C:/game/M_KOJO_K12_口上.ERB';
@@ -214,10 +294,15 @@ describe('悬停 · 文件身份注入位（派生面上的 `#DIM` 声明路）'
   };
   const dimTables: HoverTables = { erbIndex: () => index };
 
-  /** 只给 `getLineContent` 与 `uri`（本路只需要这两样；桩 model 也可能压根没有 uri） */
+  /** 桩 model：取文 / 语言 id / 版本（`text` 由带 `|` 标记的行折成一行），`uri` 可选 */
   function modelFor(marked: string, uri?: string): Monaco.editor.ITextModel {
     const line = marked.replace('|', '');
-    const model = { getLineContent: () => line } as unknown as { uri?: unknown };
+    const model = {
+      getLineContent: () => line,
+      getValue: () => line,
+      getLanguageId: () => ERB_LANGUAGE_ID,
+      getVersionId: () => 1,
+    } as unknown as { uri?: unknown };
     if (uri !== undefined) model.uri = { fsPath: uri, path: uri };
     return model as unknown as Monaco.editor.ITextModel;
   }
@@ -229,10 +314,19 @@ describe('悬停 · 文件身份注入位（派生面上的 `#DIM` 声明路）'
     sourcePathOf?: (model: Monaco.editor.ITextModel) => string | null,
   ): Monaco.languages.Hover | undefined {
     const { monaco, regs } = fakeMonaco();
-    installHover(monaco, () => t, sourcePathOf);
+    installSlotKernel([erbHoverContribution(t)]);
+    const handle = installSlotServiceLegs(
+      monaco,
+      ['hover'],
+      sourcePathOf === undefined ? {} : { filePathOf: sourcePathOf },
+    );
     const provider = regs.find((r) => r.langId === ERB_LANGUAGE_ID)!.provider;
     const position = { lineNumber: 1, column: marked.indexOf('|') + 1 } as Monaco.Position;
-    return provider.provideHover(modelFor(marked, uri), position, noopToken) as Monaco.languages.Hover | undefined;
+    const hover = provider.provideHover(modelFor(marked, uri), position, noopToken) as
+      | Monaco.languages.Hover
+      | undefined;
+    handle.dispose();
+    return hover;
   }
   const hoverWithDim = (marked: string, uri?: string, sourcePathOf?: (model: Monaco.editor.ITextModel) => string | null) =>
     hoverWith(marked, dimTables, uri, sourcePathOf);

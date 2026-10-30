@@ -980,13 +980,35 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     **都不在开机图里**（monaco 装配在懒边）。
     //     ⇒ 闸 **3,352 → 3,356**（余量约 0.2 KB；文件闸仍 199）。这一档是能力：
     //     ERB 的"查找引用"从此与 kojo2 走同一槽，跨文件那条腿由宿主随请求递索引快照。
+    //   - **ERB 悬停判据进槽（2026-10-31，ERB-PARITY G1 · 悬停腿批）**：读数 **199 文件 /
+    //     3,412 KB**（3,493,949 B）——文件数零变化（**199 顶格**：两枚旧进图模块并回既有文件，
+    //     没有新增进图模块）。逐枚按「本树 vs `origin/dev` 同路径 `git cat-file -s`」实测，
+    //     图内只有**五枚**（其余改动全在懒边）：
+    //     `erb-parser/src/completion.ts` **+27,446**（六路悬停判据整块搬入：变量 / 系统函数 /
+    //     指令编号 / 位号 / 函数索引 / `#DIM` 声明与原生标记；另含 `byName` 列式口子
+    //     `.get()` → `.defsOf()` 的一行对齐）、`erb-parser/src/symbols.ts` **+14,525**
+    //     （`usage-lens.ts` 与 `workspace-symbols.ts` 两枚模块的判据并入——`usageLenses` /
+    //     `workspaceSymbolsInIndex`；并入时同步采了 dev 的 `keys()` + `defsOf()` 两段式）、
+    //     `erb-parser/src/plugin.ts` **+3,732**（`erb-hover` 槽供方、段头与行上注解的落点注）、
+    //     `erb-parser/src/instructions.ts` **+3,571**（指令名反查判据从宿主搬入）、
+    //     `erb-parser/src/index.ts` **+284**（宿主 / 测试经包读同一批函数）。
+    //     两枚被并掉的图内模块同时消失：`erb-parser/src/usage-lens.ts` **−7,162**、
+    //     `erb-parser/src/workspace-symbols.ts` **−7,185**（字节进了 `symbols.ts`，所以上面
+    //     那笔 +14,525 是并入后的净额）。**宿主 `monaco/kojo-hover.ts` −508 行 / −7,xxx B 与
+    //     `monaco/kojo-hover-marks.ts` 整枚删除都不在图里**（monaco 装配在懒边），这正是
+    //     "判据全在图内、宿主只剩请求与形状翻译"的账面形态。合计 **+49,558 B**（五枚净额；
+    //     台账口径与上一条相同：只算现图内的五枚，被并掉的两枚不在现图）。
+    //     ⇒ 闸 **3,356 → 3,412**（余量约 0.06 KB；文件闸仍 199）。这一档加的是**能力**：
+    //     ERB 悬停从此由 `ui.editor.languageService` 的 `erb-hover` 供方作答，宿主
+    //     `installHover` 只剩 kojo1 那枚旧桥；欠账照旧：下一枚进图模块仍须先挪一枚出去
+    //     （文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,356 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,412 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_356);
+    expect(totalKb).toBeLessThanOrEqual(3_412);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

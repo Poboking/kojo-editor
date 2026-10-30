@@ -831,19 +831,35 @@ function completionProvider(monaco: typeof Monaco): Monaco.languages.CompletionI
 /**
  * 悬停 provider（单答型）：声明段 + 展开段由**同一家**供方合成一条 `contents`
  * （K2-EXPAND-VIEW 的分家）。这里不新造第二个 HoverProvider，也不把两段拆回两个 part——
- * Monaco 多 provider 的合并顺序不可控，当年写下的那条理由照旧成立。
+ * Monaco 多 provider 的合并顺序不可控，当年写下的那条理由照旧沿用。
+ *
+ * **文件身份（悬停判据搬进插件后新增的一格）**：请求的 `path` 走 {@link pathOfModel}
+ * ——注入（`host.filePathOf`，宿主知道这份 model 归属哪个实例）优先，回空 / 抛错 ⇒ 退回
+ * `model.uri`。这与搬家前宿主 `installHover` 第三参（派生面上的 `#DIM` 声明路）**同一条
+ * 契约**（注入胜过 uri、注入回 null 不改判据、注入抛错不没收整条悬停）：判据搬走后，
+ * "这份 model 是哪个文件"仍是宿主事实，只能由宿主递进来。不给注入面（`host` 缺席 / 桩
+ * 环境）= 逐字退回 `model.uri`，与搬家前"没给注入位"的行为相同。
  */
-function hoverProvider(): Monaco.languages.HoverProvider {
+function hoverProvider(_monaco: typeof Monaco, host: SlotServiceHost): Monaco.languages.HoverProvider {
   return {
     provideHover(model, position) {
       try {
         const text = modelTextOf(model);
         if (text === null) return undefined;
         const kernel = requireKernel();
+        const identity = editorRequestIdentityOf(model);
+        // `pathOfModel` 已经含"注入优先、否则 uri"的两级回退；undefined = 两处都没有文件身份
+        const path = pathOfModel(model, host.filePathOf);
         return toMonacoHover(
           collectHoverResult(
             kernel.slots.query('ui.editor.languageService'),
-            hoverRequestOf(editorRequestIdentityOf(model), text, position.lineNumber, position.column, kernel.project.current()),
+            hoverRequestOf(
+              path === undefined ? identity : { ...identity, path },
+              text,
+              position.lineNumber,
+              position.column,
+              kernel.project.current(),
+            ),
           ),
         );
       } catch {
