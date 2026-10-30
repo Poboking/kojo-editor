@@ -1,6 +1,6 @@
 //! 市场（无服务器口上包分发）的 IO 原语：**远程下载**、**不落盘的远程取文本**（注册表索引）
 //! 与**发布上传**。ZIP 容器的安全解压（条目路径 / 类型 / 数量 / 命名 / 字节闸与真落盘）
-//! 已抽到 `archive_guard.rs`（启动器复用同一份），本文件只经 `pub(crate) use` 转发名字。
+//! 已抽到 `archive_guard.rs`（启动器复用同一份），本文件只按需引入自己用得到的几枚。
 //!
 //! 分层（ADR-0003：Rust 只做 IO 原语、零业务逻辑、零游戏知识）：
 //! - **下载 / 解包侧不算任何哈希**：校验语义属于"判定"，判定不下沉本层；本层只保证
@@ -36,15 +36,13 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{ensure_write_allowed, tmp_unique_id, WriteDomainState};
 
-// 容器安全闸全部住在 `archive_guard.rs`（启动器复用的是同一份实现）；这里 `pub(crate) use`
-// 把它们**原样重新导出**——旧调用点与 `market_tests.rs` 的 `crate::market::…` 路径因此一行未改，
-// 公开函数签名也不变。
-pub(crate) use crate::archive_guard::{
-    advance_byte_cap, cap_staging_limits, central_directory, container_name_problem,
-    declared_entries_problem, declared_entry_count, entry_contract_problem, entry_type_problem,
-    extract_staging, extract_staging_off_thread, staging_component_problem, stream_capped,
-    stream_capped_report, zip_roundtrip_contract, DeclaredEntries, MarketExtractResultDto,
-    RawEntry, StagingLimits, ZIP_FLAG_UTF8, ZIP_ROUNDTRIP_CONTRACT_JSON,
+// 容器安全闸全部住在 `archive_guard.rs`（市场侧与启动器侧复用同一份实现）；这里只**按需引入**
+// 本模块自己用得到的那几枚。旧的 `pub(crate) use` 转发层已撤：启动器改成直调
+// `archive_guard::…` 之后，转发名只剩 `market_tests` 在用 ⇒ 那层在非测试构建里没人引用，
+// 于是测试改直引 `archive_guard::…`（守卫只有一份实现，不留第二条名字路径）。
+use crate::archive_guard::{
+    cap_staging_limits, container_name_problem, extract_staging_off_thread, stream_capped,
+    stream_capped_report, MarketExtractResultDto, StagingLimits,
 };
 
 /* --------------------------- 编译期固定的闸 --------------------------- */
@@ -175,6 +173,10 @@ pub(crate) fn url_problem(url: &reqwest::Url) -> Option<String> {
 }
 
 /// 重定向逐跳闸（下载闸；发布链路走 [`redirect_problem_in`]，同一份形态）。
+///
+/// **只在测试构建里存在**：下载链路本身走 `redirect_action_for(&DOWNLOAD_GATE)`（同一份实现、
+/// 同一张表），本包装没有生产调用方 ⇒ 留在非测试构建里就是一条 `dead_code` 警告。
+#[cfg(test)]
 pub(crate) fn redirect_problem(previous: &[reqwest::Url], next: &reqwest::Url) -> Option<String> {
     redirect_problem_in(previous, next, &DOWNLOAD_GATE)
 }

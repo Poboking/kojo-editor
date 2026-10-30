@@ -13,13 +13,18 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+// 容器守卫（ZIP / 解包 / 往返契约）住在 `archive_guard.rs`，**直引那一份**——
+// `market.rs` 的旧转发层已撤（启动器改直调后只剩测试在用转发名，留着就是非测试构建里的
+// 一堆悬空导入）；守卫只有一份实现，不留第二条名字路径。
+use crate::archive_guard::{
+    advance_byte_cap, cap_staging_limits, central_directory, container_name_problem,
+    declared_entries_problem, declared_entry_count, entry_contract_problem, entry_type_problem,
+    extract_staging, extract_staging_off_thread, staging_component_problem, zip_roundtrip_contract,
+    DeclaredEntries, StagingLimits, ZIP_FLAG_UTF8, ZIP_ROUNDTRIP_CONTRACT_JSON,
+};
 use crate::market::{
-    advance_byte_cap, cap_download_limits, cap_fetch_limits, cap_staging_limits,
-    central_directory, container_name_problem, content_length_problem, declared_entries_problem,
-    declared_entry_count, download_to_staging, entry_contract_problem, entry_type_problem,
-    extract_staging, extract_staging_off_thread, fetch_text, host_in_allowlist, market_fetch_text,
-    redirect_problem, staging_component_problem, url_problem, utf8_text, zip_roundtrip_contract,
-    DeclaredEntries, DownloadOptions, StagingLimits, ZIP_FLAG_UTF8, ZIP_ROUNDTRIP_CONTRACT_JSON,
+    cap_download_limits, cap_fetch_limits, content_length_problem, download_to_staging, fetch_text,
+    host_in_allowlist, market_fetch_text, redirect_problem, url_problem, utf8_text, DownloadOptions,
 };
 
 /// 限额字面照契约常量（`plugin-api/market.ts`）；Rust 侧不写死，测试里显式传入。
@@ -642,7 +647,7 @@ fn extract_off_thread_matches_sync_and_keeps_the_name_gate() {
     ))
     .expect("off-thread 形态必须与同步形态同样成功");
 
-    let pair = |r: &crate::market::MarketExtractResultDto| -> Vec<(String, u64)> {
+    let pair = |r: &crate::archive_guard::MarketExtractResultDto| -> Vec<(String, u64)> {
         r.entries
             .iter()
             .map(|e| (e.path.clone(), e.bytes))
@@ -1312,8 +1317,8 @@ fn tamper(bytes: &[u8], case_of: &serde_json::Value) -> Vec<u8> {
     // 篡改前先用自己的中央目录原语定位（两侧同一份布局：偏移由读器给出，不靠猜）
     let container = central_directory(&mut std::io::Cursor::new(bytes.to_vec()))
         .expect("篡改前的夹具必须能被中央目录原语读出");
-    let hit = |name: &str| -> crate::market::RawEntry {
-        let hits: Vec<crate::market::RawEntry> = container
+    let hit = |name: &str| -> crate::archive_guard::RawEntry {
+        let hits: Vec<crate::archive_guard::RawEntry> = container
             .entries
             .iter()
             .filter(|e| e.name == name)

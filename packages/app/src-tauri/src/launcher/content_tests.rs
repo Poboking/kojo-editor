@@ -44,10 +44,6 @@ impl TestDir {
     pub(super) fn join(&self, name: &str) -> PathBuf {
         self.path.join(name)
     }
-
-    pub(super) fn path_of(&self, name: &str) -> PathBuf {
-        self.path.join(name)
-    }
 }
 
 impl Drop for TestDir {
