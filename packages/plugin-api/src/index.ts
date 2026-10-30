@@ -1044,3 +1044,12 @@ export type {
   EditorRenameTargetRequest,
   EditorRenameTargetResult,
 } from './slots';
+
+/* ---- LAU-4 调用层级腿独占追加区块（勿在他处重排）：调用层级 kind ---- */
+export type {
+  EditorCallHierarchyGroup,
+  EditorCallHierarchyRequest,
+  EditorCallHierarchyResult,
+  EditorCallHierarchySite,
+  EditorCallHierarchySymbol,
+} from './slots';
