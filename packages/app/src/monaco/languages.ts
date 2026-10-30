@@ -30,6 +30,9 @@ import { ERB_LANGUAGE_ID, registerErbLanguage } from './erb-language';
 import { JSON_LANGUAGE_ID, JSON_SOURCE_EXTENSION, registerJsonLanguage } from './json-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from './kojo-language';
 import { ERB_CAPABILITIES, KOJO2_CAPABILITIES } from './language-capabilities';
+// B3 语义收口：kojo2 的着色图例是**语法角色层**（`role.*`，与契约名字层正交）。名字集在
+// 语言面库的语义叶子里；这里只把它声明给 descriptor（宿主不另抄一份角色名单）。
+import { KOJO2_SEMANTIC_TOKEN_TYPES } from '@kojo/kojo-lang/semantic';
 import {
   KOJO2_LANGUAGE_ID,
   KOJO2_SOURCE_EXTENSION,
@@ -118,15 +121,16 @@ const JSON_DESCRIPTOR: LanguageDescriptor = {
  * - 认 **`.kojo`（主场，2026-10-27 起从 v1 手里接过）与 `.kojo2`（旧名，兼容）**；
  *   v1 的 descriptor 只剩 `.kojo1`，两边不重叠；
  * - **不声明 `languageServices`**：通用双注册那 11 枚 provider 是 v1 语义的供方，挂到
- *   `kojo2` 上只会拿空结果顶掉 Monaco 内建行为（2.0 仍自建的那几枚——缩进 / 语义着色 /
- *   诊断——各自只认 `kojo2` 语言 id；行上注解与折叠自 B3g / B3h 起改走共享收口 + 插件供方）；
- *   声明面由 `capabilities` 与闸门负责；
+ *   `kojo2` 上只会拿空结果顶掉 Monaco 内建行为（2.0 仍自建的那几枚——缩进 / 诊断——各自
+ *   只认 `kojo2` 语言 id；行上注解、折叠与语义着色自 B3g / B3h / B3 语义收口起改走共享
+ *   收口 + 插件供方）；声明面由 `capabilities` 与闸门负责；
  * - **`slotServices`（B2 起）**：只点名**确实已由插件接管**的那几条腿。今天是
  *   `documentSymbol`（B2）、`inlayHint`（B2c）、`definition`（B3b），B3c（2026-10-28）补上的
  *   `completion` 与 `hover`，B3d（2026-10-28）补上的 `signatureHelp` 与 `formatting`，
  *   B3e（2026-10-29）补上的 `references` 与 `rename`，B3f（2026-10-29）补上的
  *   `documentHighlight` 与 `selectionRange`，B3g（2026-10-30）补上的 `codeLens`，以及
- *   B3h（2026-10-30）补上的 `foldingRange`——这十三条的原生 provider 已在对应批次删除，
+ *   B3h（2026-10-30）补上的 `foldingRange`，以及 B3 语义收口（2026-10-30）补上的
+ *   `semanticToken`——这十四条的原生 provider 已在对应批次删除，
  *   唯一供方都是 `@kojo/plugin-kojo-lang`，注册走共享收口（`registerForLanguageServices`
  *   带能力名那一枚）。B5b（2026-10-30）把两条最老的腿残留的宿主模块
  *   （`kojo2-symbols.ts` / `kojo2-inlay.ts`，各自零生产调用）也删了 ⇒ 这两条腿的 Monaco 翻译
@@ -169,7 +173,15 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
     // B3h（2026-10-30）：折叠交给共享收口 + 插件供方——可折区间来自结构 worker（异步），
     // 宿主打开 / 改动时预取进缓存、随请求的 `folds` 递过去；槽内同步作答。
     'foldingRange',
+    // B3 语义收口（2026-10-30）：结构化着色同样交给共享收口 + 插件供方——捕获快照由宿主
+    // 预取（`monaco/kojo2-semantic.ts`），随请求的 `captures` 递过去；槽内同步作答。
+    'semanticToken',
   ],
+  // 着色图例是**语法角色层**（`role.*`）：与契约名字层正交（D6），故按语声明、不与 ERB 合并。
+  semanticTokenLegend: {
+    tokenTypes: KOJO2_SEMANTIC_TOKEN_TYPES,
+    tokenModifiers: [],
+  },
   capabilities: KOJO2_CAPABILITIES,
 };
 

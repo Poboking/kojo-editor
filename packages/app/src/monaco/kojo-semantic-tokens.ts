@@ -8,7 +8,7 @@ import type {
 } from '@kojo/plugin-api';
 import {errorText,  EDITOR_SEMANTIC_TOKEN_MODIFIERS, EDITOR_SEMANTIC_TOKEN_TYPES } from '@kojo/plugin-api';
 import { registerForLanguageServices } from './register-dialects';
-import { lineWindowFor } from './language-registry';
+import { descriptorForLanguageId, lineWindowFor } from './language-registry';
 import { HUGE_FILE_LINES } from '../ui/editor-options';
 
 /**
@@ -45,9 +45,33 @@ import { HUGE_FILE_LINES } from '../ui/editor-options';
  * `kojo-dark`。
  * 贡献方给出 legend 里没有的名字 ⇒ 该 span **不着色**，并且 `console.warn` 一次
  * （铁律 4：退化可见；静默丢色会被当成"插件没生效"猜半天）。
+ *
+ * ## 供方缺席时宿主怎么降级（B3 语义收口，2026-10-30）
+ *
+ * 本文件只**注册 provider 与翻译形状**，"这段是什么角色"一律由槽 `ui.editor.languageService`
+ * 的 `semanticToken` 供方答（kojo2 的供方是插件 `@kojo/plugin-kojo-lang`）。由此有三条
+ * **显式**结局，宿主一条都不猜：
+ *
+ * - **供方在、肯答** ⇒ 用它的 span；
+ * - **供方在、弃权**（`undefined`，如非 kojo2 的请求被 kojo-lang 让掉）⇒ 下一家接手；
+ * - **供方缺席**（插件停用 / 卸掉，槽里零贡献）⇒ `collectSemanticTokenSpans` 交空数组 ⇒
+ *   这一门只剩 Monarch 词法色，编辑照旧、不抛、不补假 token。可见性由内核的插件清单
+ *   （inactive 必须可见）与本文件的空结果共同给出——**宿主不替缺席的插件造颜色**。
  */
 
-/** 交给 Monaco 的 legend（下标即 delta 数据里的类型序号；顺序 = 契约词表顺序，不许本地重排） */
+/** 一门语言的 legend（名字集与修饰集；kojo2 声明自己的 `role.*` 角色层，其余用契约名字层） */
+export interface SemanticTokenLegendSpec {
+  readonly tokenTypes: readonly string[];
+  readonly tokenModifiers: readonly string[];
+}
+
+/** 缺省 legend = 契约词表（顺序 = 词表顺序，不许本地重排） */
+const DEFAULT_LEGEND: SemanticTokenLegendSpec = Object.freeze({
+  tokenTypes: EDITOR_SEMANTIC_TOKEN_TYPES,
+  tokenModifiers: EDITOR_SEMANTIC_TOKEN_MODIFIERS,
+});
+
+/** 交给 Monaco 的缺省 legend（ERB / `.kojo1` 读到的就是这一枚） */
 export const KOJO_SEMANTIC_TOKEN_LEGEND: Monaco.languages.SemanticTokensLegend = {
   tokenTypes: [...EDITOR_SEMANTIC_TOKEN_TYPES],
   tokenModifiers: [...EDITOR_SEMANTIC_TOKEN_MODIFIERS],
@@ -68,9 +92,40 @@ export const KOJO_SEMANTIC_TOKEN_LEGEND: Monaco.languages.SemanticTokensLegend =
  */
 export { KOJO_SEMANTIC_THEME_RULES } from '@kojo/kojo-lang/theme-rules';
 
-/** 类别名 → legend 下标；`-1` = legend 里没有（不着色 + 一次性告警） */
-const TYPE_INDEX = new Map<string, number>(EDITOR_SEMANTIC_TOKEN_TYPES.map((t, i) => [t, i]));
-const MODIFIER_BITS = new Map<string, number>(EDITOR_SEMANTIC_TOKEN_MODIFIERS.map((m, i) => [m, 1 << i]));
+/**
+ * 语言 → legend（**descriptor 声明，宿主不另存语言名单**）。
+ *
+ * 缺省 = 契约名字层三值 + 两枚修饰；一门语言若在 descriptor 里声明了 `semanticTokenLegend`
+ * （今天只有 kojo2：`role.*` 语法角色层），就用它自己的那一份。两套 legend **不合并**——
+ * 名字层与语法角色层是两个正交维度（`@kojo/kojo-sdk/semantic-roles` 的模块头 D6），
+ * 而 Monaco 的语义图例是**按 provider（= 按语言）**声明的。
+ */
+export function semanticTokenLegendFor(languageId: string): SemanticTokenLegendSpec {
+  return descriptorForLanguageId(languageId)?.semanticTokenLegend ?? DEFAULT_LEGEND;
+}
+
+/** 语言 → 类型名 → legend 下标（每个 legend 只算一次） */
+const TYPE_INDEX_CACHE = new Map<string, { legend: SemanticTokenLegendSpec; index: ReadonlyMap<string, number> }>();
+const MODIFIER_BITS_CACHE = new Map<string, { legend: SemanticTokenLegendSpec; bits: ReadonlyMap<string, number> }>();
+
+function typeIndexMapOf(legend: SemanticTokenLegendSpec): ReadonlyMap<string, number> {
+  const key = legend.tokenTypes.join('\u0000');
+  const hit = TYPE_INDEX_CACHE.get(key);
+  if (hit !== undefined && hit.legend.tokenTypes === legend.tokenTypes) return hit.index;
+  const index = new Map(legend.tokenTypes.map((type, at) => [type, at]));
+  TYPE_INDEX_CACHE.set(key, { legend, index });
+  return index;
+}
+
+function modifierBitsOf(legend: SemanticTokenLegendSpec): ReadonlyMap<string, number> {
+  const key = legend.tokenModifiers.join('\u0000');
+  const hit = MODIFIER_BITS_CACHE.get(key);
+  if (hit !== undefined && hit.legend.tokenModifiers === legend.tokenModifiers) return hit.bits;
+  const bits = new Map(legend.tokenModifiers.map((modifier, at) => [modifier, 1 << at]));
+  MODIFIER_BITS_CACHE.set(key, { legend, bits });
+  return bits;
+}
+
 const warnedUnknown = new Set<string>();
 
 function warnOnce(key: string, message: string): void {
@@ -81,32 +136,38 @@ function warnOnce(key: string, message: string): void {
 
 /**
  * 类别名 → 类型序号；未知名字 → `-1` 并告警（**不猜**：legend 之外就没有颜色，
- * 而不是挑个"最像的"类别凑数）。
+ * 而不是挑个"最像的"类别凑数）。缺省按契约名字层；按语言取请传该语言的 legend。
  */
-export function semanticTokenTypeIndex(tokenType: EditorSemanticTokenType): number {
-  const at = TYPE_INDEX.get(tokenType);
-  if (at !== undefined) return at;
+export function semanticTokenTypeIndex(
+  tokenType: EditorSemanticTokenType,
+  tokenTypes: readonly string[] = EDITOR_SEMANTIC_TOKEN_TYPES,
+): number {
+  const at = tokenTypes.indexOf(tokenType);
+  if (at >= 0) return at;
   warnOnce(
     `type:${tokenType}`,
-    `类别 "${tokenType}" 不在宿主 legend（${EDITOR_SEMANTIC_TOKEN_TYPES.join('/')}）里 ⇒ 该类 span 不着色；` +
-      '要么给契约词表补这一类并在主题里给它颜色，要么删掉这条产出',
+    `类别 "${tokenType}" 不在宿主 legend（${tokenTypes.join('/')}）里 ⇒ 该类 span 不着色；` +
+      '要么给这门语言的 legend 补这一类并在主题里给它颜色，要么删掉这条产出',
   );
   return -1;
 }
 
 /** 修饰名 → 位掩码；未知名字同样告警并**丢掉这个修饰**（类别本身照旧着色） */
-export function semanticTokenModifierBits(modifiers: readonly EditorSemanticTokenModifier[] | undefined): number {
+export function semanticTokenModifierBits(
+  modifiers: readonly EditorSemanticTokenModifier[] | undefined,
+  tokenModifiers: readonly string[] = EDITOR_SEMANTIC_TOKEN_MODIFIERS,
+): number {
   let bits = 0;
   for (const modifier of modifiers ?? []) {
-    const bit = MODIFIER_BITS.get(modifier);
-    if (bit === undefined) {
+    const at = tokenModifiers.indexOf(modifier);
+    if (at < 0) {
       warnOnce(
         `modifier:${modifier}`,
-        `修饰 "${modifier}" 不在宿主 legend（${EDITOR_SEMANTIC_TOKEN_MODIFIERS.join('/')}）里 ⇒ 该修饰被丢掉`,
+        `修饰 "${modifier}" 不在宿主 legend（${tokenModifiers.join('/')}）里 ⇒ 该修饰被丢掉`,
       );
       continue;
     }
-    bits |= bit;
+    bits |= 1 << at;
   }
   return bits;
 }
@@ -215,6 +276,15 @@ const FRESH_CARRY: EncodeCarry = { written: 0, line: 0, start: 0, endOnLine: 0 }
 const byPosition = (a: EditorSemanticTokenSpan, b: EditorSemanticTokenSpan): number =>
   a.line - b.line || a.startColumn - b.startColumn || b.endColumn - a.endColumn;
 
+/** 类型名不在该语言 legend 里：告警一次并丢弃（不猜相近类别） */
+function warnUnknownType(tokenType: string, tokenTypes: readonly string[]): void {
+  warnOnce(
+    `type:${tokenTypes.join('/')}:${tokenType}`,
+    `类别 "${tokenType}" 不在宿主 legend（${tokenTypes.join('/')}）里 ⇒ 该类 span 不着色；` +
+      '要么给这门语言的 legend 补这一类并在主题里给它颜色，要么删掉这条产出',
+  );
+}
+
 /**
  * 编码一段**已按 {@link byPosition} 排好序**的 span。`carry` 让它能接着别人往后写：
  * 增量那一路只重编码「变更窗口」那几条，前面那几万条的 `deltaLine` / `deltaStart` 直接搬字节。
@@ -222,7 +292,13 @@ const byPosition = (a: EditorSemanticTokenSpan, b: EditorSemanticTokenSpan): num
  * 三条编码纪律照旧（见本文件 `encodeSemanticTokens` 的旧头注）：升序、同行不重叠（保留先到的）、
  * 零宽不进数据。`carry.written === 0` 表示**这条是整份数据的头**（绝对分量按 0 基写）。
  */
-function encodeRun(sorted: readonly EditorSemanticTokenSpan[], carry: EncodeCarry): EncodedTokens {
+function encodeRun(
+  sorted: readonly EditorSemanticTokenSpan[],
+  carry: EncodeCarry,
+  legend: SemanticTokenLegendSpec = DEFAULT_LEGEND,
+): EncodedTokens {
+  const typeIndexMap = typeIndexMapOf(legend);
+  const modifierBits = modifierBitsOf(legend);
   const buffer = new Uint32Array(sorted.length * 5);
   const kept: EditorSemanticTokenSpan[] = [];
   let written = carry.written;
@@ -233,8 +309,11 @@ function encodeRun(sorted: readonly EditorSemanticTokenSpan[], carry: EncodeCarr
   for (const span of sorted) {
     const length = span.endColumn - span.startColumn;
     if (length <= 0) continue;
-    const typeIndex = semanticTokenTypeIndex(span.tokenType);
-    if (typeIndex < 0) continue; // legend 之外 ⇒ 不着色（已经告过一次）
+    const typeIndex = typeIndexMap.get(span.tokenType);
+    if (typeIndex === undefined) {
+      warnUnknownType(span.tokenType, legend.tokenTypes);
+      continue; // legend 之外 ⇒ 不着色
+    }
     const isHead = written === 0;
     if (!isHead && span.line === previousLine && span.startColumn < lastEndOnLine) {
       skippedOverlaps++;
@@ -246,7 +325,7 @@ function encodeRun(sorted: readonly EditorSemanticTokenSpan[], carry: EncodeCarr
     buffer[at + 1] = isHead || span.line !== previousLine ? span.startColumn - 1 : span.startColumn - previousStart;
     buffer[at + 2] = length;
     buffer[at + 3] = typeIndex;
-    buffer[at + 4] = semanticTokenModifierBits(span.modifiers);
+    buffer[at + 4] = modifierBitsOfBits(modifierBits, span.modifiers, legend);
     kept.push(span);
     written++;
     previousLine = span.line;
@@ -262,9 +341,33 @@ function encodeRun(sorted: readonly EditorSemanticTokenSpan[], carry: EncodeCarr
   return { data: kept.length === sorted.length ? buffer : buffer.slice(0, kept.length * 5), spans: kept };
 }
 
+/** 修饰位：已按该 legend 建好的位表；表外修饰告警一次后丢掉那一位 */
+function modifierBitsOfBits(
+  bits: ReadonlyMap<string, number>,
+  modifiers: readonly string[] | undefined,
+  legend: SemanticTokenLegendSpec,
+): number {
+  let value = 0;
+  for (const modifier of modifiers ?? []) {
+    const bit = bits.get(modifier);
+    if (bit === undefined) {
+      warnOnce(
+        `modifier:${legend.tokenModifiers.join('/')}:${modifier}`,
+        `修饰 "${modifier}" 不在宿主 legend（${legend.tokenModifiers.join('/')}）里 ⇒ 该修饰被丢掉`,
+      );
+      continue;
+    }
+    value |= bit;
+  }
+  return value;
+}
+
 /** 整篇编码（顺序无关：内部排序），并交回**真正写进 data 的那些 span**（增量拼接的基线） */
-export function encodeTokenSpans(spans: readonly EditorSemanticTokenSpan[]): EncodedTokens {
-  return encodeRun([...spans].sort(byPosition), FRESH_CARRY);
+export function encodeTokenSpans(
+  spans: readonly EditorSemanticTokenSpan[],
+  legend: SemanticTokenLegendSpec = DEFAULT_LEGEND,
+): EncodedTokens {
+  return encodeRun([...spans].sort(byPosition), FRESH_CARRY, legend);
 }
 
 /**
@@ -298,8 +401,11 @@ export function encodeTokenSpans(spans: readonly EditorSemanticTokenSpan[]): Enc
  *
  * 空输入返回**长度 0 的数组**（= "认这个文件，但整篇没有要着色的名字"）。
  */
-export function encodeSemanticTokens(spans: readonly EditorSemanticTokenSpan[]): Uint32Array {
-  return encodeTokenSpans(spans).data;
+export function encodeSemanticTokens(
+  spans: readonly EditorSemanticTokenSpan[],
+  legend: SemanticTokenLegendSpec = DEFAULT_LEGEND,
+): Uint32Array {
+  return encodeTokenSpans(spans, legend).data;
 }
 
 /** Monaco `SemanticTokensEdit`：`start` / `deleteCount` 是 **`data` 的元素下标**（每 token 5 个） */
@@ -343,15 +449,17 @@ function upperBound(spans: readonly EditorSemanticTokenSpan[], line: number): nu
  */
 class LazyEncodedTokens implements EncodedTokens {
   readonly spans: readonly EditorSemanticTokenSpan[];
+  private readonly legend: SemanticTokenLegendSpec;
   private encoded: Uint32Array | null;
 
-  constructor(spans: readonly EditorSemanticTokenSpan[]) {
+  constructor(spans: readonly EditorSemanticTokenSpan[], legend: SemanticTokenLegendSpec) {
     this.spans = spans;
+    this.legend = legend;
     this.encoded = null;
   }
 
   get data(): Uint32Array {
-    if (this.encoded === null) this.encoded = encodeRun(this.spans, FRESH_CARRY).data;
+    if (this.encoded === null) this.encoded = encodeRun(this.spans, FRESH_CARRY, this.legend).data;
     return this.encoded;
   }
 }
@@ -400,6 +508,7 @@ export function spliceTokenSpans(
   window: { readonly from: number; readonly to: number },
   windowSpans: readonly EditorSemanticTokenSpan[],
   lineDelta: number,
+  legend: SemanticTokenLegendSpec = DEFAULT_LEGEND,
 ): { readonly edits: SemanticTokensEdit[]; readonly tokens: EncodedTokens } {
   const beforeEnd = lowerBound(previous.spans, window.from);
   const afterStart = upperBound(previous.spans, window.to - lineDelta);
@@ -411,7 +520,7 @@ export function spliceTokenSpans(
     line: last?.line ?? 0,
     start: last?.startColumn ?? 0,
     endOnLine: last?.endColumn ?? 0,
-  });
+  }, legend);
   const edits: SemanticTokensEdit[] = [
     { start: cut, deleteCount: tailAt - cut, ...(run.data.length > 0 ? { data: run.data } : {}) },
   ];
@@ -440,11 +549,11 @@ export function spliceTokenSpans(
         ? headSpan.startColumn - 1
         : headSpan.startColumn - previousSpan.startColumn;
     patch[2] = headSpan.endColumn - headSpan.startColumn;
-    patch[3] = semanticTokenTypeIndex(headSpan.tokenType);
-    patch[4] = semanticTokenModifierBits(headSpan.modifiers);
+    patch[3] = typeIndexMapOf(legend).get(headSpan.tokenType) ?? -1;
+    patch[4] = modifierBitsOfBits(modifierBitsOf(legend), headSpan.modifiers, legend);
     edits.push({ start: tailAt, deleteCount: 5, data: patch });
   }
-  return { edits, tokens: new LazyEncodedTokens(spans) };
+  return { edits, tokens: new LazyEncodedTokens(spans, legend) };
 }
 
 /** 一次整篇着色 = 三条贡献方各一遍单遍扫描 + 排序 + 编码，全压在**主线程**上。
@@ -625,52 +734,79 @@ export function installSemanticTokensProvider(
   monaco: typeof Monaco,
   handlers: SemanticTokenHandlers,
 ): Monaco.IDisposable {
-  const provider: Monaco.languages.DocumentSemanticTokensProvider = {
-    getLegend: () => KOJO_SEMANTIC_TOKEN_LEGEND,
-    provideDocumentSemanticTokens(model, lastResultId) {
-      const session = sessionFor(model);
-      const version = versionOf(model);
-      const lineCount = model.getLineCount();
-      const geometry = { lineCount, maxColumn: (n: number) => model.getLineMaxColumn(n) };
-      const pending = session.pending;
-      // 能不能只问那一小段
-      let from = 0;
-      let to = 0;
-      /** 净行位移（窗口之后每一行平移多少）——只从行数差里取，见 `PendingChange` 头注 */
-      const shift = lineCount - session.lineCount;
-      if (
-        pending !== null &&
-        !session.whole &&
-        !session.hasSkipMarker &&
-        semanticTokensWindowed(model.getLanguageId()) &&
-        lastResultId !== null &&
-        lastResultId === session.resultId &&
-        version >= 0 &&
-        version > session.version &&
-        typeof model.getValueInRange === 'function'
-      ) {
-        // 窗口末行 = 上一版坐标的末行 + 净位移；整行删除时它会落在起点之前 ⇒ 夹到起点
-        to = Math.min(Math.max(1, pending.oldTo + shift), lineCount);
-        from = Math.max(1, Math.min(pending.from, to));
-        // 窗口里出现 `[SKIPSTART]`/`[SKIPEND]` ⇒ 后面所有行的可见性都可能变 ⇒ 整篇
-        const windowText = model.getValueInRange({
-          startLineNumber: from,
-          startColumn: 1,
-          endLineNumber: to,
-          endColumn: model.getLineMaxColumn(to),
-        });
-        if (to - from > DELTA_MAX_LINES || windowText.includes(SKIP_PROBE)) from = 0;
-      }
-      if (from > 0) {
-        return deltaReply(model, session, handlers, version, { from, to }, shift, geometry);
-      }
-      return fullReply(model, session, handlers, version, geometry);
-    },
-    releaseDocumentSemanticTokens: () => undefined,
+  /**
+   * **每门语言一枚 provider**（legend 按语言声明；Monaco 的 `getLegend()` 不带 model 参数）。
+   *
+   * 为什么不能只挂一枚共享 provider：legend 是 **provider 级**的，而 kojo2 的语法角色层
+   * （`role.*`）与 ERB 的名字层（`function` / `variable` / `parameter`）是两套名字——把两套
+   * 塞进同一份图例就是合并两个正交维度（D6 明令不许）。descriptor 声明哪套，这里就发哪套。
+   */
+  const providerFor = (languageId: string): Monaco.languages.DocumentSemanticTokensProvider => {
+    const legend = semanticTokenLegendFor(languageId);
+    return {
+      getLegend: () =>
+        legend === DEFAULT_LEGEND
+          ? KOJO_SEMANTIC_TOKEN_LEGEND
+          : { tokenTypes: [...legend.tokenTypes], tokenModifiers: [...legend.tokenModifiers] },
+      provideDocumentSemanticTokens(model, lastResultId) {
+        return provideForLanguage(model, lastResultId, handlers, legend);
+      },
+      releaseDocumentSemanticTokens: () => undefined,
+    };
   };
-  return registerForLanguageServices(monaco, (m, id) =>
-    m.languages.registerDocumentSemanticTokensProvider(id, provider),
+  return registerForLanguageServices(
+    monaco,
+    (m, id) => m.languages.registerDocumentSemanticTokensProvider(id, providerFor(id)),
+    // B3 语义收口：kojo2 由 descriptor 的 `slotServices: ['semanticToken']` 点名挂上；
+    // ERB / `.kojo1` 本来就走 `languageServices: true`，这一格对它们零变化。
+    'semanticToken',
   );
+}
+
+/** 一枚 provider 的请求主循环（按该语言的 legend 记账） */
+function provideForLanguage(
+  model: Monaco.editor.ITextModel,
+  lastResultId: string | null | undefined,
+  handlers: SemanticTokenHandlers,
+  legend: SemanticTokenLegendSpec,
+): Monaco.languages.SemanticTokens | Monaco.languages.SemanticTokensEdits {
+    const session = sessionFor(model);
+    const version = versionOf(model);
+    const lineCount = model.getLineCount();
+    const geometry = { lineCount, maxColumn: (n: number) => model.getLineMaxColumn(n) };
+    const pending = session.pending;
+    // 能不能只问那一小段
+    let from = 0;
+    let to = 0;
+    /** 净行位移（窗口之后每一行平移多少）——只从行数差里取，见 `PendingChange` 头注 */
+    const shift = lineCount - session.lineCount;
+    if (
+      pending !== null &&
+      !session.whole &&
+      !session.hasSkipMarker &&
+      semanticTokensWindowed(model.getLanguageId()) &&
+      lastResultId !== null &&
+      lastResultId === session.resultId &&
+      version >= 0 &&
+      version > session.version &&
+      typeof model.getValueInRange === 'function'
+    ) {
+      // 窗口末行 = 上一版坐标的末行 + 净位移；整行删除时它会落在起点之前 ⇒ 夹到起点
+      to = Math.min(Math.max(1, pending.oldTo + shift), lineCount);
+      from = Math.max(1, Math.min(pending.from, to));
+      // 窗口里出现 `[SKIPSTART]`/`[SKIPEND]` ⇒ 后面所有行的可见性都可能变 ⇒ 整篇
+      const windowText = model.getValueInRange({
+        startLineNumber: from,
+        startColumn: 1,
+        endLineNumber: to,
+        endColumn: model.getLineMaxColumn(to),
+      });
+      if (to - from > DELTA_MAX_LINES || windowText.includes(SKIP_PROBE)) from = 0;
+    }
+    if (from > 0) {
+      return deltaReply(model, session, handlers, version, { from, to }, shift, geometry, legend);
+    }
+    return fullReply(model, session, handlers, version, geometry, legend);
 }
 
 /** 整篇：问全量 → 归一 → 编码 → 换基线 */
@@ -680,6 +816,7 @@ function fullReply(
   handlers: SemanticTokenHandlers,
   version: number,
   geometry: SemanticGeometry,
+  legend: SemanticTokenLegendSpec,
 ): Monaco.languages.SemanticTokens {
   let spans: EditorSemanticTokenSpan[];
   try {
@@ -696,7 +833,7 @@ function fullReply(
       spans,
     );
   }
-  const tokens = encodeTokenSpans(normalized.spans);
+  const tokens = encodeTokenSpans(normalized.spans, legend);
   session.tokens = tokens;
   session.version = version;
   session.lineCount = geometry.lineCount;
@@ -716,6 +853,7 @@ function deltaReply(
   window: { from: number; to: number },
   shift: number,
   geometry: SemanticGeometry,
+  legend: SemanticTokenLegendSpec,
 ): Monaco.languages.SemanticTokensEdits {
   const range = {
     startLineNumber: window.from,
@@ -732,7 +870,7 @@ function deltaReply(
     return { edits: [], resultId: session.resultId };
   }
   const normalized = normalizeSemanticSpans(spans, geometry);
-  const spliced = spliceTokenSpans(session.tokens, window, normalized.spans, shift);
+  const spliced = spliceTokenSpans(session.tokens, window, normalized.spans, shift, legend);
   session.tokens = spliced.tokens;
   session.version = version;
   session.lineCount = geometry.lineCount;

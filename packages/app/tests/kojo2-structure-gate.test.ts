@@ -231,9 +231,13 @@ describe('④ 源码：语言面全在 cutover 块之外，安装器自身不再
     expect(block).not.toContain('installKojo2DocumentSymbolProvider');
     expect(block).not.toContain('installKojo2IndentProvider');
     expect(block).not.toContain('installKojo2DocumentFormatter');
+    // B3 语义收口（2026-10-30）：着色的**原生注册**也清零了 —— 注册改走 `kojo-semantic-tokens.ts`
+    // 的共享收口（kojo2 由 descriptor 的 `slotServices: ['semanticToken']` 点名），宿主只装预取器。
+    expect(block).not.toContain('installKojo2SemanticCaptures');
     expect(block).not.toContain('installKojo2SemanticTokensProvider');
 
     expect(hostSource).toContain('globalDisposers.push(installKojo2FoldsCache());');
+    expect(hostSource).toContain('globalDisposers.push(installKojo2SemanticCaptures(monaco));');
     // B3h（2026-10-30）：折叠的**原生注册**也清零了 —— 注册改走 `kojo-folding.ts` 的共享收口
     // （kojo2 由 descriptor 的 `slotServices: ['foldingRange']` 点名），宿主这一段只装预取器。
     expect(hostSource).not.toContain('installKojo2FoldingProvider');

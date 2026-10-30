@@ -235,6 +235,9 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
   // B3h（2026-10-30）：折叠走共享收口（能力名 `foldingRange`）——可折区间来自结构 worker，
   // 宿主预取进缓存、随请求递下去，供方（插件）同步裁与答。
   [LanguageCapability.Folding]: 'foldingRange',
+  // B3 语义收口（2026-10-30）：着色走共享收口（能力名 `semanticToken`）——捕获快照来自结构
+  // worker，宿主预取进缓存、随请求的 `captures` 递下去，供方（插件）同步翻译与裁剪。
+  [LanguageCapability.Semantic]: 'semanticToken',
 };
 
 /* ============================== 矩阵形状 ============================== */
@@ -686,7 +689,7 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     ]);
   });
 
-  it('kojo2：4 枚 self、13 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停 / 签名 / 格式化 / 引用 / 改名 / 高亮 / 扩选 / 行上注解 / 折叠走槽腿）、2 枚 builtin、2 项豁免', () => {
+  it('kojo2：2 枚 self、15 枚 shared（大纲 / 行内提示 / 转定义 / 补全 / 悬停 / 签名 / 格式化 / 引用 / 改名 / 高亮 / 扩选 / 行上注解 / 折叠 / 语义着色走槽腿）、2 枚 builtin、2 项豁免', () => {
     // B2（2026-10-24）：`outline` 从 self 挪到 shared —— 2.0 的大纲不再由
     // `kojo2-symbols.ts` 自建 provider，改由共享收口按 `slotServices: ['documentSymbol']`
     // 挂上，供方是插件 `@kojo/plugin-kojo-lang`（那枚自建模块在 B5b 已整块删除）。
@@ -713,11 +716,11 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
     // 供方是插件的 `kojo2-foldingRange`，注册经 `registerForLanguageServices(..., 'foldingRange')`；
     // worker 事实由宿主**预取**（`installKojo2FoldsCache`）随请求的 `folds` 递下去。
     // **档位变了，能力没少**：两侧的合计仍是 4 + 13 = 17。
-    expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'self')).toEqual([
-      'diagnostics',
-      'indent',
-      'semantic',
-    ]);
+    // B3 语义收口（2026-10-30）：`semantic` 从 self 挪到 shared —— 判据搬进
+    // `@kojo/kojo-lang/semantic`，供方是插件的 `kojo2-semanticTokens`，注册经
+    // `registerForLanguageServices(..., 'semanticToken')`；worker 事实由宿主**预取**随请求的
+    // `captures` 递下去。**档位变了，能力没少**：两侧的合计仍是 2 + 15 = 17。
+    expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'self')).toEqual(['diagnostics', 'indent']);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')).toEqual([
       'codelens',
       'completion',
@@ -731,6 +734,7 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
       'refs',
       'rename',
       'selection',
+      'semantic',
       'signature',
     ]);
     expect(capabilitiesInTier(KOJO2_LANGUAGE_ID, 'builtin')).toEqual(['brackets', 'preview']);
@@ -780,7 +784,7 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
     }
   });
 
-  it('kojo2 的 shared 面：注册模块被装配，且点名的那条槽服务（documentSymbol / inlayHint / definition / completion / hover / signatureHelp / formatting / foldingRange）真有一处收口点了名', () => {
+  it('kojo2 的 shared 面：注册模块被装配，且点名的那条槽服务（documentSymbol / inlayHint / definition / completion / hover / signatureHelp / formatting / foldingRange / semanticToken）真有一处收口点了名', () => {
     for (const capability of capabilitiesInTier(KOJO2_LANGUAGE_ID, 'shared')) {
       const files = sharedRegistrationFiles(capability).filter((file) => importedByGlobal(file.rel));
       expect(
@@ -816,7 +820,8 @@ describe('注册面对账：self 项无条件装配、shared 项真挂槽腿', (
     expect(new Set(installersInBlock)).toEqual(new Set(['installKojo2CodeActionProvider']));
     // 语言面逐项在块外（块外的装配行由上面两条用例按能力逐项取证，这里反向点名）
     for (const installer of [
-      'installKojo2SemanticTokensProvider',
+      // B3 语义收口：原生 provider 安装器已清零，装配点只装**捕获预取器**（注册在共享收口）
+      'installKojo2SemanticCaptures',
       'installKojo2SlotProviders',
       'installKojo2IndentProvider',
       'installKojo2DocumentFormatter',

@@ -18,14 +18,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { STRUCTURE_PROTOCOL_VERSION } from '@kojo/kojo-core';
 import type * as Monaco from '../src/monaco/entry';
 import {
+  createKojo2SemanticCapturesCache,
+  injectionHostNodes,
+} from '../src/monaco/kojo2-semantic';
+import {
   KOJO2_CAPTURE_TOKEN_TYPES,
   KOJO2_SEMANTIC_TOKEN_TYPES,
-  createKojo2SemanticTokensProvider,
-  injectionHostNodes,
-  injectionLineNumbers,
-  injectionTokenSpans,
-  mergeInjectionSpans,
-} from '../src/monaco/kojo2-semantic';
+  kojo2SemanticSpansFromCaptures,
+} from '@kojo/kojo-lang/semantic';
+import { encodeSemanticTokens } from '../src/monaco/kojo-semantic-tokens';
 import { createKojo2FoldsCache } from '../src/monaco/kojo2-folding';
 import { KOJO2_INJECTIONS, KOJO2_TOKEN } from '../src/monaco/kojo2-language';
 import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
@@ -41,7 +42,7 @@ import type { StructureLanguageRuntime } from '../src/monaco/tree-sitter/structu
 import { StructureEngine } from '../src/monaco/tree-sitter/engine';
 import { erbCaptureTier } from '../src/monaco/tree-sitter/erb-tiers';
 import type { KojoStructureReply, KojoStructureToken } from '../src/monaco/tree-sitter/types';
-import type { Kojo2Capture, Kojo2TokenSpan } from '../src/monaco/tree-sitter/kojo2-tokenizer';
+import type { Kojo2Capture } from '../src/monaco/tree-sitter/kojo2-tokenizer';
 import type {
   Kojo2CapturesReply,
   Kojo2FoldsReply,
@@ -163,9 +164,29 @@ describe('区间口径 · 整行对齐 + 末行换行收口 + EOF 补虚拟换�
     expect(plan.ranges).toEqual([]);
   });
 
-  it('`injectionLineNumbers`：末行换行之后那一行不算覆盖行（主树原文不该被白裁一行）', () => {
-    const plan = planInjectionRanges(BASIC_DOC, [BASIC_HOST]);
-    expect([...injectionLineNumbers(plan.ranges)].sort((a, b) => a - b)).toEqual([4, 5, 6, 7]);
+  it('子树只影响它**真涂到的行**：末行换行之后那一行不白裁（主树原文照旧）', () => {
+    // 区间是 4..7 行，但子树只涂第 4 行 ⇒ 5..7 行的主树 raw 一条不少（旧 `injectionLineNumbers`
+    // 的"末行换行之后不算覆盖行"在按实际 span 优先的新判据里是自然结果）。
+    const caps = [
+      ...[4, 5, 6, 7].map((line) => ({ name: 'embedded', line, startColumn: 1, endColumn: 5 })),
+      { name: 'comment', line: 4, startColumn: 2, endColumn: 4, origin: 'injection' as const },
+    ];
+    const spans = kojo2SemanticSpansFromCaptures(caps, { lineCount: 10 });
+    // 第 4 行被子树切成两段兜底（1..2 / 4..5），5–7 行整段照旧——列区间减法，不是整行让位
+    expect(
+      spans
+        .filter((span) => span.tokenType === KOJO2_TOKEN.raw)
+        .map((span) => [span.line, span.startColumn, span.endColumn]),
+    ).toEqual([
+      [4, 1, 2],
+      [4, 4, 5],
+      [5, 1, 5],
+      [6, 1, 5],
+      [7, 1, 5],
+    ]);
+    expect(spans.filter((span) => span.tokenType === KOJO2_TOKEN.comment)).toEqual([
+      { line: 4, startColumn: 2, endColumn: 4, tokenType: KOJO2_TOKEN.comment },
+    ]);
   });
 });
 
@@ -208,28 +229,36 @@ describe('宿主节点 · 只按 descriptor 的 hostNode 等值匹配', () => {
 });
 
 describe('合并 · 子树覆盖主树原文，未涂到的列仍由 role.raw 兜底', () => {
-  it('子树涂到的列让位；子树没涂的列保留主树；区间外的行一个字节不动', () => {
-    const main: Kojo2TokenSpan[] = [
+  it('子树涂到的列让位；子树没涂的列保留主树；其它行一个字节不动', () => {
+    const spans = kojo2SemanticSpansFromCaptures(
+      [
+        { name: 'embedded', line: 1, startColumn: 1, endColumn: 9 },
+        { name: 'embedded', line: 2, startColumn: 1, endColumn: 21 },
+        { name: 'embedded', line: 3, startColumn: 1, endColumn: 6 },
+        { name: 'comment', line: 2, startColumn: 5, endColumn: 12, origin: 'injection' },
+      ],
+      { lineCount: 10 },
+    );
+    expect(spans).toEqual([
       { line: 1, startColumn: 1, endColumn: 9, tokenType: KOJO2_TOKEN.raw },
-      { line: 2, startColumn: 1, endColumn: 21, tokenType: KOJO2_TOKEN.raw },
-      { line: 3, startColumn: 1, endColumn: 6, tokenType: KOJO2_TOKEN.raw },
-    ];
-    const injected: Kojo2TokenSpan[] = [
+      { line: 2, startColumn: 1, endColumn: 5, tokenType: KOJO2_TOKEN.raw },
       { line: 2, startColumn: 5, endColumn: 12, tokenType: KOJO2_TOKEN.comment },
-    ];
-    const merged = mergeInjectionSpans(main, injected, new Set([2]));
-    expect(merged).toContainEqual({ line: 1, startColumn: 1, endColumn: 9, tokenType: KOJO2_TOKEN.raw });
-    expect(merged).toContainEqual({ line: 2, startColumn: 1, endColumn: 5, tokenType: KOJO2_TOKEN.raw });
-    expect(merged).toContainEqual({ line: 2, startColumn: 5, endColumn: 12, tokenType: KOJO2_TOKEN.comment });
-    expect(merged).toContainEqual({ line: 2, startColumn: 12, endColumn: 21, tokenType: KOJO2_TOKEN.raw });
-    expect(merged).toContainEqual({ line: 3, startColumn: 1, endColumn: 6, tokenType: KOJO2_TOKEN.raw });
+      { line: 2, startColumn: 12, endColumn: 21, tokenType: KOJO2_TOKEN.raw },
+      { line: 3, startColumn: 1, endColumn: 6, tokenType: KOJO2_TOKEN.raw },
+    ]);
   });
 
   it('子树整行盖住主树 ⇒ 那一行没有残留 raw；空子树 = 主树原样', () => {
-    const main: Kojo2TokenSpan[] = [{ line: 2, startColumn: 1, endColumn: 10, tokenType: KOJO2_TOKEN.raw }];
-    const full = mergeInjectionSpans(main, [{ line: 2, startColumn: 1, endColumn: 10, tokenType: KOJO2_TOKEN.speech }], new Set([2]));
-    expect(full).toEqual([{ line: 2, startColumn: 1, endColumn: 10, tokenType: KOJO2_TOKEN.speech }]);
-    expect(mergeInjectionSpans(main, [], new Set([2]))).toEqual(main);
+    const main = [{ name: 'embedded', line: 2, startColumn: 1, endColumn: 10 }];
+    expect(
+      kojo2SemanticSpansFromCaptures(
+        [...main, { name: 'string', line: 2, startColumn: 1, endColumn: 10, origin: 'injection' }],
+        { lineCount: 10 },
+      ),
+    ).toEqual([{ line: 2, startColumn: 1, endColumn: 10, tokenType: KOJO2_TOKEN.speech }]);
+    expect(kojo2SemanticSpansFromCaptures(main, { lineCount: 10 })).toEqual([
+      { line: 2, startColumn: 1, endColumn: 10, tokenType: KOJO2_TOKEN.raw },
+    ]);
   });
 });
 
@@ -252,7 +281,16 @@ describe('子树捕获 → kojo2 档（宿主侧唯一翻译点，按捕获名�
       { startRow: 5, startCol: 0, endRow: 5, endCol: 9, tier: 'keyword.raw', capture: 'raw', node: 'skip_body' },
       { startRow: 6, startCol: 0, endRow: 6, endCol: 9, tier: 'anything', capture: 'table.unknown', node: 'x' },
     ];
-    const spans = injectionTokenSpans(tokens, { lineCount: 10, maxColumn: () => 40 });
+    const spans = kojo2SemanticSpansFromCaptures(
+      tokens.map((token) => ({
+        name: token.capture ?? '',
+        line: token.startRow + 1,
+        startColumn: token.startCol + 1,
+        endColumn: token.endCol + 1,
+        origin: 'injection' as const,
+      })),
+      { lineCount: 10, maxColumn: () => 40 },
+    );
     expect(spans.map((span) => [span.line, span.tokenType])).toEqual([
       [4, KOJO2_TOKEN.keyword],
       [5, KOJO2_TOKEN.interp],
@@ -312,31 +350,38 @@ function mainCaptures(withHost: boolean): Kojo2Capture[] {
   return captures;
 }
 
-async function tokensOfProvider(
+async function tokensOfCache(
   text: string,
-  runInjection: (
-    model: Monaco.editor.ITextModel,
-    request: { readonly hosts: readonly InjectionHost[] },
-  ) => Promise<InjectionOutcome>,
+  runInjection: (model: Monaco.editor.ITextModel, request: { readonly hosts: readonly InjectionHost[] }) => Promise<InjectionOutcome>,
   withHost = true,
 ): Promise<{ data: Uint32Array; warn: ReturnType<typeof vi.fn> }> {
   const warn = vi.fn();
-  const handle = createKojo2SemanticTokensProvider({
+  const cache = createKojo2SemanticCapturesCache({
     getClient: async () => ({ captures: async () => capturesReply(mainCaptures(withHost)) }),
     runInjection: runInjection as never,
     warn,
   });
-  const result = await handle.provider.provideDocumentSemanticTokens(fakeModel(text).model, null, {} as never);
-  const data = (result as { data: Uint32Array }).data;
+  const { model } = fakeModel(text);
+  await cache.prefetch(model);
+  const snapshot = cache.snapshotFor(model)!;
+  const spans = kojo2SemanticSpansFromCaptures(snapshot.captures, {
+    lineCount: model.getLineCount(),
+    maxColumn: (line) => model.getLineMaxColumn(line),
+  });
+  const data = encodeSemanticTokens(spans, {
+    tokenTypes: KOJO2_SEMANTIC_TOKEN_TYPES,
+    tokenModifiers: [],
+  });
+  cache.dispose();
   return { data, warn };
 }
 
 const SEMANTIC_TEXT = BASIC_DOC;
 
-describe('provider · 只在真有宿主节点时才问子树（DoD 2）', () => {
+describe('预取 + 供方判据 · 只在真有宿主节点时才问子树（DoD 2）', () => {
   it('没有 `@原生` 体捕获 ⇒ 注入执行器零调用、ERB 一个字节都不请求', async () => {
     const runInjection = vi.fn();
-    const { data } = await tokensOfProvider(SEMANTIC_TEXT, runInjection, false);
+    const { data } = await tokensOfCache(SEMANTIC_TEXT, runInjection, false);
     expect(runInjection).not.toHaveBeenCalled();
     expect(data.length).toBeGreaterThan(0);
   });
@@ -357,7 +402,7 @@ describe('provider · 只在真有宿主节点时才问子树（DoD 2）', () =>
         ],
       }),
     );
-    const { data } = await tokensOfProvider(SEMANTIC_TEXT, runInjection);
+    const { data } = await tokensOfCache(SEMANTIC_TEXT, runInjection);
     expect(runInjection).toHaveBeenCalledTimes(1);
     const call = runInjection.mock.calls[0]!;
     expect(call[1].hosts).toHaveLength(1);
@@ -376,7 +421,7 @@ describe('provider · 只在真有宿主节点时才问子树（DoD 2）', () =>
       const runInjection = vi.fn(
         async (): Promise<InjectionOutcome> => ({ ok: false, reason: 'timeout', message: '4s 没回话' }),
       );
-      const { data, warn } = await tokensOfProvider(SEMANTIC_TEXT, runInjection);
+      const { data, warn } = await tokensOfCache(SEMANTIC_TEXT, runInjection);
       expect(data.length).toBeGreaterThan(0); // 主树着色照旧
       const decoded = await decodeWithMonaco(data);
       // 体内四行仍是主树的 raw（子树一段也没有盖上来）

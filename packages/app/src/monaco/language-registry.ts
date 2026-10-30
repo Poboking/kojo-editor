@@ -60,7 +60,9 @@ export type SlotServiceKind =
   | 'documentHighlight'
   | 'selectionRange'
   // B3g：行上注解同批进共享收口（供方 = 插件 `kojo2-codeLens`）。
-  | 'codeLens';
+  | 'codeLens'
+  // B3 语义收口（2026-10-30）：结构化着色也进共享收口（供方 = 插件 `kojo2-semanticTokens`）。
+  | 'semanticToken';
 
 /**
  * 一门语言的**可用性档**（LAU-3 / 设计稿 §4.3、§6）。
@@ -115,6 +117,20 @@ export interface LanguageDescriptor {
    * 不写这一格，也参与全部槽腿（v1 的 ERB / .kojo 就是这种）。
    */
   readonly slotServices?: readonly SlotServiceKind[];
+  /**
+   * 这门语言的**语义着色 legend**（additive，B3 语义收口 2026-10-30）。
+   *
+   * 缺省 = 契约名字层（`EDITOR_SEMANTIC_TOKEN_TYPES` 三值 + 两枚修饰）。一门语言如果
+   * 画的是**另一套名字**（kojo2 的 `role.*` 语法角色层与名字层是两个正交维度，见
+   * `@kojo/kojo-sdk/semantic-roles` 的 D6），就在这里声明自己的图例；`installSemanticTokensProvider`
+   * 按语言发 provider（Monaco 的 `getLegend()` 不带 model 参数，一枚 provider 只有一份图例）。
+   *
+   * 两套图例**不合并**：名字必须在**本语言**的图例里，否则宿主丢掉并告警。
+   */
+  readonly semanticTokenLegend?: {
+    readonly tokenTypes: readonly string[];
+    readonly tokenModifiers: readonly string[];
+  };
   /**
    * 语言服务的**归并形状**（LAU-3 additive 那一条路，§4.3 的差量注①）。
    *

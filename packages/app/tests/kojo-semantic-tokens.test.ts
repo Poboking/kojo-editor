@@ -19,6 +19,8 @@ import type {
 } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
+import { KOJO2_SEMANTIC_TOKEN_TYPES } from '@kojo/kojo-lang/semantic';
 import { descriptorForLanguageId } from '../src/monaco/language-registry';
 import { HUGE_FILE_LINES, LARGE_FILE_LINES } from '../src/ui/editor-options';
 import {
@@ -331,18 +333,27 @@ function stubModel(): Monaco.editor.ITextModel {
 }
 
 describe('installSemanticTokensProvider · 装配', () => {
-  it('ERB 与 `.kojo` 各注册一枚 provider；dispose 全部回收', () => {
+  it('ERB / `.kojo` / kojo2 各注册一枚 provider（legend 按语言）；dispose 全部回收', () => {
     const { monaco, registered, disposed } = stubMonaco();
     const handle = installSemanticTokensProvider(monaco, { resolve: () => [] });
-    expect(registered.map((r) => r.languageId).sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
-    expect(registered[0]!.provider.getLegend()).toBe(KOJO_SEMANTIC_TOKEN_LEGEND);
+    expect(registered.map((r) => r.languageId).sort()).toEqual(
+      [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID].sort(),
+    );
+    // 缺省名字层：ERB / `.kojo1` 两枚读到的是同一枚契约 legend
+    for (const entry of registered.filter((r) => r.languageId !== KOJO2_LANGUAGE_ID)) {
+      expect(entry.provider.getLegend()).toBe(KOJO_SEMANTIC_TOKEN_LEGEND);
+    }
+    // kojo2 声明自己的角色层 legend（descriptor 的 `semanticTokenLegend`；不与名字层合并）
+    const kojo2 = registered.find((r) => r.languageId === KOJO2_LANGUAGE_ID)!;
+    expect(kojo2.provider.getLegend().tokenTypes).toEqual([...KOJO2_SEMANTIC_TOKEN_TYPES]);
+    expect(kojo2.provider.getLegend().tokenModifiers).toEqual([]);
     handle.dispose();
-    expect(disposed.sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(disposed.sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID].sort());
   });
 
   it('provider 产出的是**已按模型夹取并编码**的数据', () => {
     const { monaco, registered } = stubMonaco();
-    installSemanticTokensProvider(monaco, { resolve: () => [span(1, 1, 99, 'function', ['declaration'])] });
+    const handle = installSemanticTokensProvider(monaco, { resolve: () => [span(1, 1, 99, 'function', ['declaration'])] });
     const value = registered[0]!.provider.provideDocumentSemanticTokens(
       stubModel(),
       null,
@@ -350,6 +361,7 @@ describe('installSemanticTokensProvider · 装配', () => {
     ) as Monaco.languages.SemanticTokens;
     // 第 1 行第 1 列 ⇒ 0 基 delta (0, 0)；终点夹到 getLineMaxColumn(1)=6 ⇒ 宽度 5
     expect(Array.from(value.data)).toEqual([0, 0, 5, 0, 1]);
+    handle.dispose();
   });
 
   it('宿主 resolve 抛错 → 空数据、不崩（着色不许掀桌子）', () => {
