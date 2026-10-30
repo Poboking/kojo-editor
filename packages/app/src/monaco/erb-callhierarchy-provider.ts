@@ -465,8 +465,8 @@ function callHierarchyRegistrarOf(monaco: typeof Monaco): CallHierarchyRegistrar
  *   "没接线"伪装成"这个文件没有调用关系"；
  * - Monaco 0.57 没有 `registerCallHierarchyProvider`（PITFALLS §83）⇒ **零注册**并交回
  *   幂等句柄：宿主用 {@link createErbCallHierarchyProvider} 走自建面板，两者同一份实现；
- * - 只挂 `ERB_LANGUAGE_ID`（方言族 `.erb` / `.erm` / `.erh` 都由这一枚收；
- *   2.0 的 `installKojo2CallHierarchyProvider` 各挂各的，不重不漏）；
+ * - 只挂 `ERB_LANGUAGE_ID`（方言族 `.erb` / `.erm` / `.erh` 都由这一枚收；2.0 侧没有
+ *   注册器，宿主面板直接拿 `createKojo2CallHierarchyProvider`，两门语言不重不漏）；
  * - 注册抛错原样外抛（只有一枚注册，没有半成品要回滚；宿主那侧的"全有或全无"才有东西可撤）；
  * - `dispose` 幂等；注册句柄的 `dispose` 抛错也吞掉（一枚撤不掉不许把卸载链带崩，
  *   错误也没有第二个消费者）。

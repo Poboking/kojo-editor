@@ -11,8 +11,9 @@
  *   表达式取表达式 span）、自递归 / 互递归各一条边、字符串里的同名文本不产边、未解析的
  *   外部名跳过；
  * - **上限**：调用点 / 返回组数封顶 {@link KOJO2_CALL_HIERARCHY_LIMIT}（200）；
- * - **provider 形状 / 安装**：flag 关零注册；Monaco 0.57 没有 CallHierarchy API ⇒ 零注册且
- *   句柄幂等；注册位存在时只挂 `kojo2`；取文抛错回空（prepare ⇒ `null`，边 ⇒ `[]`）；
+ * - **provider 形状 / 异常回空**：三条腿齐全；与纯函数同结果；Monaco 0.57 没有 CallHierarchy
+ *   API（PITFALLS §83）⇒ 本模块不注册任何东西，宿主面板直接拿 provider；取文抛错回空
+ *   （prepare ⇒ `null`，边 ⇒ `[]`）；
  * - **确定性 / 卫生**：同输入逐字相等、CRLF 同结果、坏输入不抛；Monaco 只 type-only、
  *   不碰插件包。
  *
@@ -21,18 +22,16 @@
  */
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import {
   KOJO2_CALL_HIERARCHY_LIMIT,
   createKojo2CallHierarchyProvider,
-  installKojo2CallHierarchyProvider,
   kojo2IncomingCalls,
   kojo2OutgoingCalls,
   kojo2PrepareCallHierarchy,
   type Kojo2CallHierarchyItem,
   type Kojo2CallHierarchyPosition,
-  type Kojo2CallHierarchyProvider,
 } from '../src/monaco/kojo2-callhierarchy';
 import { kojo2DocumentOf, type Kojo2DeclarationKind } from '@kojo/kojo-lang';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
@@ -42,7 +41,6 @@ const FIXTURE = readFileSync(
   'utf8',
 );
 const DOCUMENT = kojo2DocumentOf(FIXTURE);
-const KOJO2_KEY = 'kojo.ui.kojo2Cutover.v1';
 
 /* ============================== 小工具：坐标 ============================== */
 
@@ -104,45 +102,7 @@ function namesOfOutgoing(
   return (kojo2OutgoingCalls(source, item) ?? []).map((call) => call.to.name);
 }
 
-/* ============================== 假 Monaco / model ============================== */
-
-interface Registration {
-  readonly selector: unknown;
-  readonly provider: Kojo2CallHierarchyProvider;
-}
-
-interface FakeMonaco {
-  readonly monaco: typeof Monaco;
-  readonly registrations: Registration[];
-  readonly disposeCalls: number[];
-}
-
-interface FakeMonacoOptions {
-  /** Monaco 0.57 没有这个注册位（结构性探测的缺省形态） */
-  readonly withoutRegistrar?: boolean;
-  readonly failRegister?: boolean;
-  readonly failDispose?: boolean;
-}
-
-function fakeMonaco(options: FakeMonacoOptions = {}): FakeMonaco {
-  const registrations: Registration[] = [];
-  const disposeCalls: number[] = [];
-  const languages: Record<string, unknown> = {};
-  if (options.withoutRegistrar !== true) {
-    languages.registerCallHierarchyProvider = (selector: unknown, provider: unknown) => {
-      if (options.failRegister === true) throw new Error('桩：注册调用层级 provider 抛错');
-      registrations.push({ selector, provider: provider as Kojo2CallHierarchyProvider });
-      return {
-        dispose: () => {
-          if (options.failDispose === true) throw new Error('桩：撤调用层级 provider 抛错');
-          disposeCalls.push(registrations.length);
-        },
-      };
-    };
-  }
-  const fake = { languages };
-  return { monaco: fake as unknown as typeof Monaco, registrations, disposeCalls };
-}
+/* ============================== 假 model ============================== */
 
 interface FakeModel {
   readonly model: Monaco.editor.ITextModel;
@@ -163,26 +123,10 @@ function fakeModel(text: string): FakeModel {
   return { model, breakModel: () => void (broken = true) };
 }
 
-function stubFlag(on: boolean): void {
-  const store = new Map<string, string>();
-  if (on) store.set(KOJO2_KEY, 'on');
-  vi.stubGlobal('window', {
-    localStorage: {
-      getItem: (key: string): string | null => store.get(key) ?? null,
-      setItem: (key: string, value: string): void => void store.set(key, value),
-      removeItem: (key: string): void => void store.delete(key),
-    },
-  });
-}
-
 /** 纯模型的 1 基行列 → Monaco `Position`（provider 面只认 `lineNumber` / `column`） */
 function monacoPosition(position: Kojo2CallHierarchyPosition): Monaco.Position {
   return { lineNumber: position.line, column: position.column } as Monaco.Position;
 }
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
 
 /* ============================== ① prepare：声明位 ============================== */
 
@@ -471,9 +415,9 @@ describe('上限：调用点与返回组数封顶 200', () => {
   });
 });
 
-/* ============================== ⑦ provider 形状 / 安装 ============================== */
+/* ============================== ⑦ provider 形状 / 异常回空 ============================== */
 
-describe('provider 与安装：flag 闸、0.57 无注册位、只挂 kojo2、异常回空', () => {
+describe('provider：形状、与纯函数一致、取文抛错回空', () => {
   it('provider 形状：displayName + 三条腿都是函数', () => {
     const provider = createKojo2CallHierarchyProvider();
     expect(provider.displayName).toBe('kojo2');
@@ -482,62 +426,8 @@ describe('provider 与安装：flag 闸、0.57 无注册位、只挂 kojo2、异
     expect(typeof provider.provideCallHierarchyOutgoingCalls).toBe('function');
   });
 
-  it('缺省档（v1-only）⇒ 照样注册一枚（只读呈现面，不再读开关）', () => {
-    stubFlag(false);
-    const fake = fakeMonaco();
-    const handle = installKojo2CallHierarchyProvider(fake.monaco);
-    expect(fake.registrations).toHaveLength(1);
-    expect(() => {
-      handle.dispose();
-      handle.dispose();
-    }).not.toThrow();
-    // 注册是真发生的 ⇒ 两次 dispose 只撤一次（幂等）
-    expect(fake.disposeCalls).toHaveLength(1);
-  });
-
-  it('flag 开 + 注册位存在 ⇒ 恰好一枚注册，selector 只有 kojo2', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2CallHierarchyProvider(fake.monaco);
-    expect(fake.registrations).toHaveLength(1);
-    expect(fake.registrations[0]!.selector).toBe(KOJO2_LANGUAGE_ID);
-  });
-
-  it('Monaco 0.57（没有 registerCallHierarchyProvider）⇒ 零注册且句柄幂等', () => {
-    stubFlag(true);
-    const fake = fakeMonaco({ withoutRegistrar: true });
-    const handle = installKojo2CallHierarchyProvider(fake.monaco);
-    expect(fake.registrations).toEqual([]);
-    expect(() => handle.dispose()).not.toThrow();
-  });
-
-  it('dispose 幂等：两次只撤一轮', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    const handle = installKojo2CallHierarchyProvider(fake.monaco);
-    handle.dispose();
-    handle.dispose();
-    expect(fake.disposeCalls).toHaveLength(1);
-  });
-
-  it('注册的 dispose 抛错不带走卸载链', () => {
-    stubFlag(true);
-    const fake = fakeMonaco({ failDispose: true });
-    const handle = installKojo2CallHierarchyProvider(fake.monaco);
-    expect(() => handle.dispose()).not.toThrow();
-  });
-
-  it('注册失败 ⇒ 错误外抛（宿主那侧的"全有或全无"才有东西可回滚）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco({ failRegister: true });
-    expect(() => installKojo2CallHierarchyProvider(fake.monaco)).toThrow(/注册调用层级/);
-  });
-
-  it('注册后的 provider 在同一枚 model 上给出与纯函数一致的 item / 入边 / 出边', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2CallHierarchyProvider(fake.monaco);
-    const provider = fake.registrations[0]!.provider;
+  it('provider 在同一枚 model 上给出与纯函数一致的 item / 入边 / 出边', () => {
+    const provider = createKojo2CallHierarchyProvider();
     const model = fakeModel(FIXTURE).model;
     const position = monacoPosition(declarationPosition('function', '阶乘'));
     const items = provider.prepareCallHierarchy(model, position);
@@ -551,10 +441,7 @@ describe('provider 与安装：flag 闸、0.57 无注册位、只挂 kojo2、异
   });
 
   it('取文抛错 / 模型已释放 ⇒ prepare `null`、入边 / 出边 `[]`（不抛进 Monaco）', () => {
-    stubFlag(true);
-    const fake = fakeMonaco();
-    installKojo2CallHierarchyProvider(fake.monaco);
-    const provider = fake.registrations[0]!.provider;
+    const provider = createKojo2CallHierarchyProvider();
     const broken = fakeModel(FIXTURE);
     broken.breakModel();
     const item = itemAtDeclaration('function', '阶乘');
@@ -610,7 +497,7 @@ describe('确定性：同输入必同输出、CRLF 同结果、坏输入不抛',
 
 /* ============================== ⑨ 源码卫生 ============================== */
 
-describe('源码卫生：Monaco 只 type-only、不碰插件包、安装器自带 flag 闸', () => {
+describe('源码卫生：Monaco 只 type-only、不碰插件包、不自建注册器', () => {
   const source = readFileSync(
     path.join(import.meta.dirname, '..', 'src', 'monaco', 'kojo2-callhierarchy.ts'),
     'utf8',
@@ -627,9 +514,10 @@ describe('源码卫生：Monaco 只 type-only、不碰插件包、安装器自�
     expect(source).not.toMatch(/\b(eratw|eraK|eraSQN|eraNAS)\b/i);
   });
 
-  it('安装器不读切流开关（语言面），并结构性探测 CallHierarchy 注册位（0.57 没有它）', () => {
+  it('不读切流开关（语言面），也不自建注册器（0.57 无 API ⇒ 只剩 provider 工厂）', () => {
     expect(source).not.toMatch(/isKojo2CutoverEnabled/);
-    expect(source).toMatch(/registerCallHierarchyProvider\(\s*KOJO2_LANGUAGE_ID/);
-    expect(source).toMatch(/typeof register !== 'function'/);
+    expect(source).not.toMatch(/export function installKojo2/);
+    expect(source).not.toMatch(/registerCallHierarchyProvider\(/);
+    expect(source).toMatch(/export function createKojo2CallHierarchyProvider\(/);
   });
 });

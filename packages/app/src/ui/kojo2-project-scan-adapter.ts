@@ -116,19 +116,3 @@ export function createLazyKojo2ProjectOptions(
     adapter,
   };
 }
-
-/** `mountProjectScan` 调用点要摊进去的那一格 */
-export interface Kojo2ProjectScanWiring {
-  readonly kojo2Project: Kojo2ProjectPassOptions;
-}
-
-/**
- * 宿主接线入口：`mountProjectScan({ ..., ...installKojo2ProjectScan() })`。
- *
- * 名字叫 install 是就调用点语义（装一格装配面）；实现是纯工厂，可在测试里反复调。
- */
-export function installKojo2ProjectScan(
-  config: LazyKojo2ProjectOptionsConfig = {},
-): Kojo2ProjectScanWiring {
-  return { kojo2Project: createLazyKojo2ProjectOptions(config) };
-}
