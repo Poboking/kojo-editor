@@ -793,6 +793,12 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     （`monaco/kojo2-symbols.ts` 164 行、`monaco/kojo2-inlay.ts` 155 行）都只在**懒边**
     //     （`editor-global-providers → monaco 装配`）之下，从不在开机图里；全图字节数与上一档
     //     逐字相同就是直接证据。两枚闸维持 **≤199 / ≤3,178**，**不抬不降**。
+    //   - **B5b 余项·第二步（2026-10-30，本批）**：读数 **199 文件 / 3,174 KB**
+    //     （3,250,582 B）——两枚闸**不抬**（≤199 / ≤3,178）。删掉的两枚零调用安装器里，
+    //     `ui/kojo2-project-scan-adapter.ts` 的 `installKojo2ProjectScan` 在图内（`App.tsx`
+    //     静态 import 同文件的 `createLazyKojo2ProjectOptions`），**−553 B** 就是这一笔；
+    //     `monaco/kojo2-callhierarchy.ts` 的 `installKojo2CallHierarchyProvider` 只在
+    //     `ui/call-hierarchy.ts` 的动态边上、不在图里。文件数零变化（199 未动，无整文件删除）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
