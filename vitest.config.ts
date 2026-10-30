@@ -43,6 +43,8 @@ export const config = defineConfig({
       '@kojo/kojo-lang/codelens': r('./packages/kojo-lang/src/codelens.ts'),
       // B3h：折叠区间判据的叶子（同样必须排在桶之前）。
       '@kojo/kojo-lang/folding': r('./packages/kojo-lang/src/folding.ts'),
+      // B3j：一键迁移 code action 的判据叶子（同样必须排在桶之前）。
+      '@kojo/kojo-lang/code-actions': r('./packages/kojo-lang/src/code-actions.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('./packages/kojo-sdk/src/semantic-roles.ts'),
       '@kojo/kojo-sdk/structure-protocol': r('./packages/kojo-sdk/src/structure-protocol.ts'),
       '@kojo/kojo-sdk/contracts': r('./packages/kojo-sdk/src/contracts.ts'),

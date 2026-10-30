@@ -73,7 +73,11 @@ describe('语言分派（isKojo2Request）', () => {
   it('没有 languageId 才退回扩展名，且大小写不敏感', () => {
     expect(isKojo2Request({ path: 'D:/x/a.kojo2' })).toBe(true);
     expect(isKojo2Request({ path: 'D:/x/A.KOJO2' })).toBe(true);
-    expect(isKojo2Request({ path: 'D:/x/a.kojo' })).toBe(false);
+    // B3j：LAU-3b-FLIP 起 `.kojo` 是 2.0 的主场扩展名——槽 `ui.editor.codeAction` 的请求
+    // 只有 `path`、没有 languageId，这条路必须认得出主场文件（`.kojo1` 不匹配）。
+    expect(isKojo2Request({ path: 'D:/x/a.kojo' })).toBe(true);
+    expect(isKojo2Request({ path: 'D:/x/A.KOJO' })).toBe(true);
+    expect(isKojo2Request({ path: 'D:/x/a.kojo1' })).toBe(false);
     expect(isKojo2Request({ path: 'D:/x/a.kojo2x' })).toBe(false);
   });
 });
@@ -283,6 +287,8 @@ describe('插件装配', () => {
       'kojo2-codeLens',
       // B3h：折叠区间（结构快照 → 契约区间；槽内同步作答，不 await worker）
       'kojo2-foldingRange',
+      // B3j：一键迁移动作进**既有槽** `ui.editor.codeAction`（不是语言服务的第十三个 kind）
+      'kojo2-codeActions',
       // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
       'kojo2-monaco-language',
     ]);
@@ -302,6 +308,8 @@ describe('插件装配', () => {
       'ui.editor.languageService',
       // B3h 折叠一枚
       'ui.editor.languageService',
+      // B3j：一键迁移走专用槽（诊断 / 快速修复各有专用槽，不开语言服务的新判别成员）
+      'ui.editor.codeAction',
       'ui.monaco.language',
     ]);
     expect(new Set(registered.map((r) => r.item.order)).size).toBe(1);

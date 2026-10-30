@@ -20,6 +20,7 @@
  * | `selectionRange`（B3f） | `selection-range.ts` 的 `kojo2SelectionRangeChainsAt` | `src/selection-range.ts` |
  * | `codeLens`（B3g） | `codelens.ts` 的 `kojo2CodeLenses`（计数复用 `references.ts`） | `src/codelens.ts` |
  * | `foldingRange`（B3h） | `folding.ts` 的 `kojo2FoldingSnapshotRanges`（**宿主预取的快照**） | `src/folding.ts` |
+ * | `codeAction`（B3j，另一枚槽） | `code-actions.ts` 的 `kojo2CodeActionFacts` | `src/code-actions.ts` |
  *
  * B4 起还有一枚**不同形状**的贡献——槽 `ui.monaco.language` 交的是注册期的一次性数据
  * （Monarch / 语言配置 / 三套主题声明），不是 `provide(request)`：见 `src/monaco-language.ts`。
@@ -71,6 +72,7 @@ import { provideSelectionRanges } from './selection-range';
 import { provideFoldingRanges } from './folding';
 import { provideSignatureHelp } from './signature';
 import { provideCodeLenses } from './codelens';
+import { provideCodeActions } from './code-actions';
 import { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
 
 /**
@@ -192,6 +194,15 @@ export function createKojoLangPlugin(): Plugin {
         order: CONTRIBUTION_ORDER,
         provide: (request) => provideFoldingRanges(request),
       });
+      // B3j（2026-10-30）：一键迁移动作进**既有槽** `ui.editor.codeAction`（不是给语言服务
+      // 再开一个判别成员——诊断 / 快速修复各有专用槽，开新路等于同一能力两条路径）。判据在
+      // `@kojo/kojo-lang/code-actions`；宿主那枚 provider 只做定位、翻译、落地与切流开关。
+      // 非 2.0 文件一律 `[]`（弃权写在供方里，见 `src/code-actions.ts` 头注）。
+      ctx.slots.register('ui.editor.codeAction', {
+        id: 'kojo2-codeActions',
+        order: CONTRIBUTION_ORDER,
+        provideActions: (file) => provideCodeActions(file),
+      });
       ctx.slots.register('ui.monaco.language', {
         id: 'kojo2-monaco-language',
         order: CONTRIBUTION_ORDER,
@@ -199,7 +210,8 @@ export function createKojoLangPlugin(): Plugin {
       });
       ctx.log.info(
         `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting / references / rename / documentHighlight / selectionRange / codeLens / foldingRange（languageId=${KOJO2_LANGUAGE_ID}）；` +
-          `语言面已交出：Monarch / 语言配置 / 三套主题（ui.monaco.language）`,
+          `语言面已交出：Monarch / 语言配置 / 三套主题（ui.monaco.language）；` +
+          `一键迁移动作已交出：codeAction`,
       );
     },
   };

@@ -1896,13 +1896,32 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 一起掐了。名字取自宿主组合根注入的形状，与本层零游戏知识无关。
     globalDisposers.push(installKojo2SlotProviders(monaco));
     if (isKojo2CutoverEnabled()) {
-      // K2 batch-5：Kojo 2.0 一键迁移 code action（裸旁白 / 裸引号 / 心形 / 着色 / 随机 /
-      // 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进），语言 id 只认 `kojo2`。
-      // 改写规则全在 core 迁移器（本层只做定位 + 搬运 + 校验）；**落地走同一条**
-      // `applyTextEdits`（前后各一颗 undo 停点，CODEACTION-UNDO-STACK 口径）——
-      // 不新造第二条编辑应用机制，也不让 Monaco 自己 apply（那会绕开停点）。
+      // K2 batch-5 → **B3j（2026-10-30）**：Kojo 2.0 一键迁移 code action（裸旁白 / 裸引号 /
+      // 心形 / 着色 / 随机 / 分支 / 表 / 初回 / 补 `否` / 补 `[插槽]` / 修缩进 / 语义三条），
+      // 语言 id 只认 `kojo2`。**判据已整块搬进 `@kojo/kojo-lang/code-actions`、供方是插件
+      // `@kojo/plugin-kojo-lang` 的 `kojo2-codeActions` 贡献（槽 `ui.editor.codeAction`）**；
+      // 这一枚安装器只做"定位（model / 光标 / marker）→ 问槽 → 翻 Monaco 形状 → 落地"，
+      // 以及切流开关（迁移是写面）。落地走**同一条** `applyTextEdits`（前后各一颗 undo 停点，
+      // CODEACTION-UNDO-STACK 口径）——不新造第二条编辑应用机制，也不让 Monaco 自己 apply。
       globalDisposers.push(
         installKojo2CodeActionProvider(monaco, {
+          // 插件是 bootstrap 的动态 import ⇒ 可能比本安装器晚激活；槽**每次请求现取**。
+          contributions: () => {
+            try {
+              return requireKernel().slots.query('ui.editor.codeAction');
+            } catch {
+              return [];
+            }
+          },
+          project: () => {
+            try {
+              return requireKernel().project.current();
+            } catch {
+              return null;
+            }
+          },
+          // 文件身份以**归属实例**为准（未命名 / 内存 model 的 uri 未必是作者看到的路径）。
+          filePath: (model) => owningPaneOf(model)?.filePathRef.current ?? null,
           applyEdits: (model, edits) => {
             const ctx = owningPaneOf(model);
             const ed = ctx?.editorRef.current ?? null;

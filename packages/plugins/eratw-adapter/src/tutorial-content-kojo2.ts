@@ -16,7 +16,8 @@
  *    （`event-catalog.ts:34-55` 九事件、`profile.ts:20-38`、`domain-symbols.ts:32-100,147-153`、
  *    `collections.ts:26-47`、`storage.ts:16-45`、`presentation.ts:29-67`、`program.ts:11-18`、
  *    `backend.ts`）；壳侧核 `app/src/ui/kojo2-cutover.ts`（档位三态）、
- *    `app/src/monaco/kojo2-code-actions.ts`（💡 一键迁移的覆盖面）、
+ *    `packages/kojo-lang/src/code-actions.ts`（💡 一键迁移的覆盖面，B3j 起判据在此）
+ *    与 `app/src/monaco/kojo2-code-actions.ts`（宿主适配腿）、
  *    `app/src/ui/kojo2-problem-wiring.ts` 与 `kojo2-preview-*`（波浪线与编译预览）。
  *
  * **规格有、实现没有 ⇒ 不写进教程**（纪律：不提未实现的功能）。本批据此**没收进来**的条目，

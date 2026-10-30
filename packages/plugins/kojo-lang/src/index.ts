@@ -21,6 +21,8 @@ export { provideCodeLenses } from './codelens';
 export { provideFoldingRanges } from './folding';
 export { provideSignatureHelp } from './signature';
 export { provideFormatting } from './format';
+// B3j（2026-10-30）：槽 `ui.editor.codeAction` 的供方（一键迁移）。
+export { provideCodeActions, coreDiagnosticsOf, type Kojo2CodeActionFile } from './code-actions';
 export { provideDocumentSymbols, symbolFactsToTree } from './symbols';
 export { provideInlayHints, toEditorInlayHints } from './inlay';
 export { isKojo2Request } from './request';

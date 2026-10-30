@@ -70,6 +70,11 @@ export * from './selection-range';
 // 含越界 / 倒置 / 重复四道闸。理由同上：供方是插件、插件看不见宿主。开机侧引叶子
 // （`@kojo/kojo-lang/folding`）。
 export * from './folding';
+// B3j（2026-10-30）：2.0 **一键迁移 code action 的判据**整块从宿主 `monaco/kojo2-code-actions.ts`
+// 搬进来——诊断 + 光标行 + 源码 → 动作描述（标题 / 类别 / 编辑 / 认领的诊断），不 apply、
+// 不碰 Monaco。供方是插件的 `kojo2-codeActions` 贡献（槽 `ui.editor.codeAction`），
+// 宿主只剩 model/marker 的定位、Monaco 形状翻译、`applyTextEdits` 落地与切流开关。
+export * from './code-actions';
 // B4：角色表与角色调色板（架构 §7.2「角色表住 SDK 不住 app」）——**开机侧引叶子**，
 // 这两枚进桶只是为了让"要整块"的消费方一次拿全。
 export * from '@kojo/kojo-sdk/semantic-roles';

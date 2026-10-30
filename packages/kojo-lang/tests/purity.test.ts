@@ -83,7 +83,10 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     //   同包相对路径，Monaco 的形状翻译留在宿主。
     // + B3h（2026-10-30）：折叠区间再进一枚——`folding`（worker 行对 0 基 → 契约区间 1 基，
     //   越界 / 倒置 / 非整数 / 重复四道闸）。零外部依赖，形状翻译（Monaco `FoldingRange`）留在宿主。
-    expect(files).toHaveLength(30);
+    // + B3j（2026-10-30）：一键迁移 code action 的判据再进一枚——`code-actions`（诊断 + 光标行
+    //   → 动作描述；迁移规则全部转交 core 迁移器）。同样只引 `@kojo/kojo-core` + 同包相对路径
+    //   （`KOJO2_DECL_WORDS` 走 `lexicon`），Monaco 翻译 / 落地 / 切流开关留在宿主。
+    expect(files).toHaveLength(31);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
