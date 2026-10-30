@@ -82,7 +82,9 @@ function interfaceBody(name: string): string {
 
 /** `EditorCompletionItemKind` 联合里的字面量档名（按源码顺序） */
 function kindLiterals(): string[] {
-  return [...unionBody('EditorCompletionItemKind').matchAll(/'([a-z]+)'/g)].map(
+  // 大小写都要：`enumMember` / `field` 这批 LAU-4 档里前一枚是驼峰，只扫 `[a-z]` 会把它
+  // 静默漏掉（本批实踩：联合明明有 15 档、断言只数到 14）。
+  return [...unionBody('EditorCompletionItemKind').matchAll(/'([A-Za-z]+)'/g)].map(
     (m) => m[1] as string,
   );
 }

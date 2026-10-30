@@ -266,11 +266,15 @@ describe('⑤ 宿主通道只查表（九文件 × 八把尺子，多一处即�
 
 describe('⑥ 悬停那条通道没地方说（判据钉住"不许为它新开显示面"）', () => {
   const HOVER = 'packages/app/src/monaco/kojo-hover.ts';
+  /** ERB 悬停判据（LAU-4 悬停腿，2026-10-31）已搬进常驻插件：那条腿的"缺席 ⇒ 不产结果"在它里面 */
+  const ERB_HOVER = 'packages/plugins/erb-parser/src/completion.ts';
 
   it('索引缺席时悬停**只许不产结果**（`return undefined`），不许 pop 一句解释（那是新显示面）', () => {
     // 两处取索引的腿各有一枚"缺席 ⇒ 不产结果"，多一处说明有人在这里加了文案
-    expect(hits(HOVER, /if \(index === null\) return undefined;/)).toHaveLength(2);
-    expect(hits(HOVER, /return undefined/).length).toBeGreaterThan(2);
+    expect(hits(ERB_HOVER, /if \(index === null\) return undefined;/)).toHaveLength(2);
+    expect(hits(ERB_HOVER, /return undefined/).length).toBeGreaterThan(2);
+    // 宿主那台安装器里不许再有这类判据（判据全在插件）
+    expect(hits(HOVER, /if \(index === null\) return undefined;/)).toEqual([]);
   });
 
   it('悬停这一格不查宿主那张表（它没有可查的文案面；接上 = 新开面 ⇒ 红）', () => {
@@ -345,8 +349,10 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
     }
   });
 
-  it('补全两枚安装点仍**不接**降级落点；`onDegrade…:` 只出现在两条格式化腿上（补全 / 面包屑不许加）', () => {
-    expect(hits(PROVIDERS, /install(?:Kojo|Erb)Completion\(monaco, \(\) => editorTables\(requireKernel\(\)\)\)/)).toHaveLength(2);
+  it('补全只留 kojo1 一枚旧桥安装点；`onDegrade…:` 只出现在两条格式化腿上（补全 / 面包屑不许加）', () => {
+    // LAU-4 补全腿第三批（2026-10-31）：ERB 补全改走槽供方，宿主不再有它自己的安装点。
+    expect(hits(PROVIDERS, /installKojoCompletion\(monaco, \(\) => editorTables\(requireKernel\(\)\)\)/)).toHaveLength(1);
+    expect(hits(PROVIDERS, /installErbCompletion/)).toEqual([]);
     const wired = hits(PROVIDERS, /onDegrade\w*:/);
     // 批次十三：`.kojo` 区间格式化从装配点的无参注册搬到宿主带闸版 ⇒ 格式化腿由一条变两条
     // （整篇那条不在此正则里）。判据不变：两处都必须落在格式化腿上，补全 / 面包屑一处都不许有。
@@ -357,7 +363,8 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
 
   it('索引未建时补全**连一条降级都不产生**（提供者永不缺席 + 装配核只认 undefined/null ⇒ 这一格确实无话可改）', () => {
     expect(hits(PROVIDERS, /function erbFunctionNamesFor\(kernel: Kernel\): \(\) => readonly string\[\] \{/)).toHaveLength(1);
-    expect(hits(ERB_COMPLETION, /if \(!index\) return \[\];/)).toHaveLength(1);
+    // 取索引那条腿随补全判据搬进 `erb-completion-facts.ts`（LAU-4 补全腿第三批）
+    expect(hits('packages/app/src/monaco/erb-completion-facts.ts', /if \(!index\) return \[\];/)).toHaveLength(1);
     expect(hits(CORE, /return value === undefined \|\| value === null \? key : undefined;/)).toHaveLength(1);
   });
 

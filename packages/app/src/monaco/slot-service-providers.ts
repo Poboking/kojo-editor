@@ -141,7 +141,6 @@ import { LARGE_FILE_LINES } from '../ui/editor-options';
 import {
   declaredSlotKinds,
   descriptorForLanguageId,
-  languageDescriptors,
   type SlotServiceKind,
 } from './language-registry';
 import {
@@ -832,15 +831,6 @@ function emptyLensList(): { lenses: Monaco.languages.CodeLens[]; dispose: () => 
 
 /* ============================== 各腿 provider ============================== */
 
-/** 各 descriptor 追加声明的补全触发字符（并集；顺序 = descriptor 顺序，去重由调用方做） */
-function declaredTriggerCharacters(): readonly string[] {
-  const out: string[] = [];
-  for (const descriptor of languageDescriptors()) {
-    for (const ch of descriptor.completionTriggerCharacters ?? []) out.push(ch);
-  }
-  return out;
-}
-
 /**
  * 这门语言要不要宿主事实袋（descriptor 的事实，不是收口层的判断） */
 function wantsFacts(languageId: string | undefined): boolean {
@@ -871,11 +861,22 @@ function safeFacts(
  * 补全 provider（集合型）：取文 / 身份 / 项目 / 触发字符 → 槽 → 并集去重 → Monaco 条目。
  * 任何一抛都只让**这一轮**空结果（Monaco 读得懂的唯一空形状）。
  */
-function completionProvider(monaco: typeof Monaco, host: SlotServiceHost): Monaco.languages.CompletionItemProvider {
+function completionProvider(
+  monaco: typeof Monaco,
+  host: SlotServiceHost,
+  languageId?: string,
+): Monaco.languages.CompletionItemProvider {
   return {
-    // 触发字符 = 共享那份 ∪ 各 descriptor 追加的（见 `completionTriggerCharacters`）：
-    // 一枚 provider 只有一个字符表，只能取并集；去重保序（先见者胜）。
-    triggerCharacters: [...new Set([...KOJO2_COMPLETION_TRIGGER_CHARS, ...declaredTriggerCharacters()])],
+    // 触发字符 = 共享那份 ∪ **本门语言** descriptor 追加的（`completionTriggerCharacters`）：
+    // provider 逐门建一枚，所以这里能按语言取值，不再被迫取所有语言的并集。
+    triggerCharacters: [
+      ...new Set([
+        ...KOJO2_COMPLETION_TRIGGER_CHARS,
+        ...(languageId === undefined
+          ? []
+          : (descriptorForLanguageId(languageId)?.completionTriggerCharacters ?? [])),
+      ]),
+    ],
     provideCompletionItems(model, position, context) {
       try {
         const text = modelTextOf(model);
@@ -1571,10 +1572,15 @@ function codeActionProviders(
 export interface SlotServiceLeg {
   readonly kind: SlotServiceKind;
   /**
-   * 建 provider（**每次安装建一次**，同一条腿铺到的每一门语言共用那一枚）。
-   * 与搬家前逐字相同：七枚安装器都是"建一枚 provider，再挂到每一门语言上"。
+   * 建 provider（**每门语言建一枚**，见 {@link SlotServiceLeg.register} 的调用点）。
+   *
+   * 为什么不建一枚挂多门（LAU-4 补全腿第三批，2026-10-31）：Monaco 的
+   * `registerCompletionItemProvider` 的**触发字符是注册参数**，而 ERB 与 kojo2 的触发
+   * 字符集不同（ERB 独有 `[` / `$` / `.`）。建一枚共用 provider 就只能取并集，等于让
+   * `.kojo` 在 `[` `$` `.` 上也弹补全——这是语言属性，不该被"建几枚"的实现细节决定。
+   * 语言对 provider 的其余部分无感，逐门建一枚只多几次纯对象构造。
    */
-  readonly create: (monaco: typeof Monaco, host: SlotServiceHost) => unknown;
+  readonly create: (monaco: typeof Monaco, host: SlotServiceHost, languageId?: string) => unknown;
   /** 挂到收口给的 `id` 上（provider 由 {@link SlotServiceLeg.create} 给，无共享可变状态） */
   readonly register: (
     monaco: typeof Monaco,
@@ -1585,7 +1591,7 @@ export interface SlotServiceLeg {
 
 function legOf<P>(
   kind: SlotServiceKind,
-  create: (monaco: typeof Monaco, host: SlotServiceHost) => P,
+  create: (monaco: typeof Monaco, host: SlotServiceHost, languageId?: string) => P,
   register: (monaco: typeof Monaco, languageId: string, provider: P) => Monaco.IDisposable,
 ): SlotServiceLeg {
   return {
@@ -1711,15 +1717,15 @@ export function installSlotServiceLegs(
       const leg = slotServiceLegOf(kind);
       // 表里没写这枚 kind ⇒ 不挂：宿主不许"顺手"给一门语言挂上一条没有供方的腿。
       if (leg === undefined) continue;
-      // provider **建一次**（与搬家前"建一枚挂多门"逐字相同）；建它本身不接触 Monaco，
-      // 抛错只可能来自各腿自己的工厂，那时还没有任何注册需要回滚。
-      const provider = leg.create(monaco, host);
+      // provider **逐门语言建一枚**：Monaco 的触发字符是注册参数、而各门语言不同
+      // （见 `SlotServiceLeg.create` 头注）。建它本身不接触 Monaco，抛错只可能来自各腿
+      // 自己的工厂，那时还没有任何注册需要回滚。
       // **逐条 push，不写成 `push(a, b)`**：求值都在参数位上，第二条抛错时第一条的句柄还没进
       // 数组，catch 里就是"无东西可撤"——那正是"全有或全无"承诺的反面。
       registrations.push(
         registerForLanguageServices(
           monaco,
-          (m, id) => leg.register(m, id, provider),
+          (m, id) => leg.register(m, id, leg.create(m, host, id)),
           leg.kind,
           // 写面腿只挂**点名**它的语言（见 `register-dialects.ts` 的 `namedOnly`）：
           // v1 的语言自带写面 provider，不该被铺一枚永远弃权的空腿。

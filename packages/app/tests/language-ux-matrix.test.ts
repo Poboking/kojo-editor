@@ -41,7 +41,7 @@ import {
 } from '../src/monaco/language-capabilities';
 // descriptor 在 languages.ts 模块求值时登记（本文件要读 languageServices 声明）
 import '../src/monaco/languages';
-import { languageDescriptors } from '../src/monaco/language-registry';
+import { declaredSlotKinds, languageDescriptors, usesLegacyBridge } from '../src/monaco/language-registry';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
 
 /* ============================== 取证基建 ============================== */
@@ -198,9 +198,9 @@ const SLOT_SERVICE_OF: Readonly<Partial<Record<LanguageCapability, string>>> = {
 function sharedReachable(languageId: string, capability: LanguageCapability): boolean {
   const descriptor = languageDescriptors().find((entry) => entry.id === languageId);
   if (descriptor === undefined) return false;
-  if (descriptor.languageServices === true) return true;
+  if (usesLegacyBridge(descriptor)) return true;
   const kind = SLOT_SERVICE_OF[capability];
-  return kind !== undefined && (descriptor.slotServices ?? []).includes(kind as never);
+  return kind !== undefined && declaredSlotKinds(descriptor).includes(kind as never);
 }
 
 /* ============================== 专项探针（没有统一注册 API 的面） ============================== */
@@ -1081,9 +1081,11 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
     expect(problems).toEqual([]);
   });
 
-  it('共享收口只按 descriptor 的 languageServices 挑语言，不写死语言 id', () => {
+  it('共享收口只按 descriptor 声明挑语言，不写死语言 id', () => {
     const dialects = sourceOf('monaco/register-dialects.ts').text;
-    expect(dialects).toContain('descriptor.languageServices === true');
+    // SDK-DIALECT（2026-10-31）：旧桥判据收进语言表的 `usesLegacyBridge`（两个名字同效），
+    // 口径不变——挑语言仍只按 descriptor 字段，不认语言 id。
+    expect(dialects).toMatch(/usesLegacyBridge\(descriptor\)|descriptor\.languageServices === true/);
     for (const constant of ['ERB_LANGUAGE_ID', 'KOJO_LANGUAGE_ID', 'KOJO2_LANGUAGE_ID']) {
       expect(dialects, `register-dialects.ts 不该出现 ${constant}`).not.toContain(constant);
     }

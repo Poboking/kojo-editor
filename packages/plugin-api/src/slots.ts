@@ -1360,14 +1360,6 @@ export type EditorCompletionItemKind =
   | 'keyword'
   | 'function'
   | 'variable'
-  /**
-   * **记录 / 作用域里的一项**（LAU-4 补全腿第三批 additive，第十五档）。
-   *
-   * 与 `variable` 差在哪：`variable` 是"这个名字本身是一个变量"，本档是"这个名字是某个
-   * 作用域记录里的一格"（ERB 的 `CFLAG:TARGET:好感` 三段式末段）——Monaco 的 `Field`
-   * 图标正是作者对"它不是独立变量、而是某条记录的一项"的记忆锚点。
-   */
-  | 'field'
   | 'value'
   /**
    * 带占位符的模板候选。宿主侧规则（B3c 写进契约——此前只在宿主翻译层隐式发生）：
@@ -1395,15 +1387,6 @@ export type EditorCompletionItemKind =
   | 'struct'
   /** 固定值域里列举出来的成员（宿主挑枚举图标；不属于任何值域的归 `value`） */
   | 'enum'
-  /**
-   * 值域里**一个具体成员**（LAU-4 补全腿第三批 additive，第十四档）。
-   *
-   * 与 {@link EditorCompletionItemKind} 的 `enum` 差在哪：`enum` 是"这一格的值域"本身
-   * （Monaco `Enum`），本档是"值域里的某一项"（Monaco `EnumMember`）——ERB 的位号候选
-   * （`0 好感` / `1 警戒`）正是后者。降级成 `enum` 会让作者在列表里分不清"选族"与
-   * "选成员"（与 B3c 扩档同一条理由：图标档位一旦合并，判断就断）。
-   */
-  | 'enumMember'
   /** 容器级候选——跳过去的是"一块区域"而不是"一条定义"（宿主挑模块图标） */
   | 'module'
   /* ---- LAU-4 补全腿（2026-10-31）additive：第十三档 ---- */
@@ -1414,7 +1397,25 @@ export type EditorCompletionItemKind =
    * 是一处引用"——Monaco 的 `Reference` 图标正是作者对"本文件内可达"的记忆锚点，降级成
    * 变量图标就断了（与 B3c 扩档同一条理由）。宿主只拿它挑图标，其余语义零改变。
    */
-  | 'reference';
+  | 'reference'
+  /* ---- LAU-4 补全腿第三批（2026-10-31）additive：第十四、十五档（追加在联合末尾） ---- */
+  /**
+   * 值域里**一个具体成员**（第十四档）。
+   *
+   * 与 {@link EditorCompletionItemKind} 的 `enum` 差在哪：`enum` 是"这一格的值域"本身
+   * （Monaco `Enum`），本档是"值域里的某一项"（Monaco `EnumMember`）——ERB 的位号候选
+   * （`0 好感` / `1 警戒`）正是后者。降级成 `enum` 会让作者在列表里分不清"选族"与
+   * "选成员"（与 B3c 扩档同一条理由：图标档位一旦合并，判断就断）。
+   */
+  | 'enumMember'
+  /**
+   * **记录 / 作用域里的一项**（第十五档）。
+   *
+   * 与 `variable` 差在哪：`variable` 是"这个名字本身是一个变量"，本档是"这个名字是某个
+   * 作用域记录里的一格"（ERB 的 `CFLAG:TARGET:好感` 三段式末段）——Monaco 的 `Field`
+   * 图标正是作者对"它不是独立变量、而是某条记录的一项"的记忆锚点。
+   */
+  | 'field';
 
 /** 一条补全候选 */
 export interface EditorCompletionItem {

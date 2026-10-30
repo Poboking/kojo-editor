@@ -116,7 +116,10 @@ describe('① 消费方一字不抄（连注释行一起查）', () => {
     // 旧的那把自写尺子不许以任何形态复活
     expect(text).not.toMatch(/isIdentChar/);
     expect(text).toMatch(/unicodeTokenAt\(lineText, column\)/);
-    expect(text).toMatch(/symbolTokenAt\(lineText, col0 \+ 1\)/);
+    // ERB 悬停判据（LAU-4 悬停腿，2026-10-31）已搬进插件：那把 ASCII 尺（原生名反查）
+    // 随之落在 `@kojo/plugin-erb-parser`，宿主这台安装器不再持有它。
+    const erbHover = read('packages/plugins/erb-parser/src/completion.ts').join('\n');
+    expect(erbHover).toMatch(/symbolTokenAt\(lineText, col0 \+ 1\)/);
   });
 
   it('差异视图不另立语言判据（复用编辑器那份单源，且不再自己 import 语言 id 常量）', () => {
@@ -361,8 +364,8 @@ describe('⑤ F12 取词判据只有一处（两条腿不许各写各的）', ()
     const token = read('packages/plugin-api/src/symbol-token.ts').join('\n');
     expect(token).toMatch(/const DEFAULT_IS_CHAR = \(ch: string\): boolean => \/\[A-Za-z0-9_\]\/\.test\(ch\);/);
     // 宿主反查那一路仍旧用这把 ASCII 尺（放宽它就会让库表回显抢掉函数索引的正文），
-    // 而且**不许**长成 Unicode 尺——把 172 行换成 `unicodeTokenAt` 时下面两条一起红。
-    const hover = read('packages/app/src/monaco/kojo-hover.ts').join('\n');
+    // 而且**不许**长成 Unicode 尺——LAU-4 悬停腿之后判据住插件，这条钉在插件那枚函数上。
+    const hover = read('packages/plugins/erb-parser/src/completion.ts').join('\n');
     expect(hover).toMatch(/const fnToken = symbolTokenAt\(lineText, col0 \+ 1\);/);
     expect(hover).not.toMatch(/const fnToken = unicodeTokenAt/);
     expect(hover).toMatch(/!echoYieldsToIndex\(cn, fnToken\.text, tables\)/);
