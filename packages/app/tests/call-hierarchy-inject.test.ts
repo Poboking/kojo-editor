@@ -75,7 +75,8 @@ function render(
   setCallHierarchyState({ kind: 'request', request });
   const deps: CallHierarchyDeps = {
     currentIndex: () => null,
-    functionAt: () => null,
+    // ERB 腿在本套件里永远走不到（模型都是 kojo2）：判据已搬进插件包，贡献表给空即可
+    contributions: () => [],
     modelFor: () => options.model,
     kojo2Panel: () => (options.panel === 'loading' ? null : kojo2Module),
     ...(options.resolvers !== undefined ? { kojo2Resolvers: options.resolvers } : {}),

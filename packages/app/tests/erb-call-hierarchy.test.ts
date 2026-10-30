@@ -1,31 +1,41 @@
 /**
- * ERB 调用层级（`erb-call-hierarchy.ts` + overlay）单测——**不依赖 Monaco / 内核**。
+ * ERB 调用层级面板（`ui/CallHierarchyOverlay.tsx`）单测——**不依赖 Monaco / 内核**。
  *
- * 三条腿（形态照 `erb-rename.test.ts` + `diff-view.test.ts` + `search-panel-render.test.ts`）：
- * 1. 数据层纯函数：所属函数反查（`functionAt` 优先 / 缺席退化 / 抛错退化 / fail-open）、
- *    入边收集（definition 剔除、按调用者分组、索引缝跳过）、出边收集（只认 `call`、
- *    区间包含、跨文件剔除、缺 callee 跳过）——假索引驱动；
- * 2. 状态单源：set → 订阅 → 清空（关闭后不留旧请求）；
- * 3. overlay 静态渲染（react-dom/server）：给定位点 ⇒ 目标函数名 / 入边组 / 调用点行
- *    / 计数画出来；拒绝与索引缺席都**可见**（铁律「不静默」）。
+ * 判定侧（所属函数反查 / 入边 / 出边三条腿）已随 LAU-4 调用层级腿整块搬进
+ * `@kojo/plugin-erb-parser`，用例跟着搬去 `packages/plugins/erb-parser/tests/call-hierarchy.test.ts`
+ * （期望值一字未改）。本文件只留**宿主那半**（形态照 `diff-view.test.ts` + `search-panel-render.test.ts`）：
+ * 1. 状态单源：set → 订阅 → 清空（关闭后不留旧请求）；
+ * 2. overlay 静态渲染（react-dom/server）：给定位点 ⇒ 目标函数名 / 入边组 / 调用点行
+ *    / 计数画出来；拒绝、索引缺席、无人应答都**可见**（铁律「不静默」）。
+ *
+ * 取数走与生产同一条腿：`ui.editor.languageService` 槽的 `callHierarchy` 成员——
+ * 用例里用本仓真供方 `provideErbCallHierarchy` 拼一枚贡献（不另造判据），
+ * 于是"面板画出来的"就是"插件答出来的"。
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import type { ErbFile, ErbFunction, ErbFunctionRef, ErbIndex, ErbIndexState, ErbReference } from '@kojo/plugin-api';
-import {
-  incomingCalls,
-  outgoingCalls,
-  resolveEnclosingFunction,
-  type FunctionAtResolver,
-} from '../src/monaco/erb-call-hierarchy';
+import type {
+  EditorLanguageServiceContribution,
+  ErbFile,
+  ErbFunction,
+  ErbFunctionRef,
+  ErbIndex,
+  ErbIndexState,
+  ErbReference,
+} from '@kojo/plugin-api';
+import { provideErbCallHierarchy } from '@kojo/plugin-erb-parser';
 import {
   getCallHierarchyState,
   setCallHierarchyState,
   subscribeCallHierarchy,
 } from '../src/ui/call-hierarchy';
-import { createCallHierarchyOverlay, CALL_HIERARCHY_WINDOW_INITIAL } from '../src/ui/CallHierarchyOverlay';
+import {
+  createCallHierarchyOverlay,
+  CALL_HIERARCHY_WINDOW_INITIAL,
+  type CallHierarchyDeps,
+} from '../src/ui/CallHierarchyOverlay';
 import {
   erbOccurrences,
   explainReferenceCounts,
@@ -76,132 +86,6 @@ function makeIndex(opts: {
   } as ErbIndex;
 }
 
-/* ============================== 所属函数反查 ============================== */
-
-describe('resolveEnclosingFunction', () => {
-  const index = makeIndex({ files: [file(FILE_A, [fn('FOO', FILE_A, 10, 20), fn('BAR', FILE_A, 30, 40)])] });
-
-  it('functionAt 在场 ⇒ 它的答案就是终局（答 undefined 也不退化自扫）', () => {
-    const functionAt: FunctionAtResolver = (path, line) => (path === FILE_A && line === 15 ? fn('FOO', FILE_A, 10, 20) : undefined);
-    expect(resolveEnclosingFunction(index, functionAt, FILE_A, 15)?.name).toBe('FOO');
-    // 25 行明明落在文件里两个函数之间——通道说没有就没有，不做第二判据叠加
-    expect(resolveEnclosingFunction(index, functionAt, FILE_A, 25)).toBeUndefined();
-  });
-
-  it('functionAt 抛错 ⇒ 退化到索引定义区间判断', () => {
-    const functionAt: FunctionAtResolver = () => {
-      throw new Error('service hiccup');
-    };
-    expect(resolveEnclosingFunction(index, functionAt, FILE_A, 35)?.name).toBe('BAR');
-  });
-
-  it('functionAt 缺席 ⇒ 直接走索引定义区间（含端点）', () => {
-    expect(resolveEnclosingFunction(index, null, FILE_A, 10)?.name).toBe('FOO'); // @ 行本身
-    expect(resolveEnclosingFunction(index, null, FILE_A, 20)?.name).toBe('FOO'); // 末行
-    expect(resolveEnclosingFunction(index, null, FILE_A, 25)).toBeUndefined(); // 函数之间
-    expect(resolveEnclosingFunction(index, null, FILE_B, 15)).toBeUndefined(); // 未知文件
-  });
-});
-
-/* ============================== 入边 ============================== */
-
-describe('incomingCalls', () => {
-  const files = [
-    file(FILE_A, [fn('TARGET', FILE_A, 10, 20), fn('CALLER1', FILE_A, 30, 40)]),
-    file(FILE_B, [fn('CALLER2', FILE_B, 5, 15)]),
-  ];
-  const bySymbol: ReadonlyArray<[string, ErbReference[]]> = [
-    [
-      'TARGET',
-      [
-        ref('definition', FILE_A, 10, 2, 8), // 定义行自身：剔除
-        ref('call', FILE_A, 31, 3, 9), // CALLER1 体内
-        ref('call', FILE_A, 33, 5, 11), // CALLER1 体内第二处
-        ref('mention', FILE_B, 7, 1, 7), // CALLER2 体内（表达式调用）
-        ref('call', FILE_A, 99, 1, 6), // 顶层代码（不在任何函数体内）：fail-open 跳过
-      ],
-    ],
-  ];
-  const index = makeIndex({
-    files,
-    byName: [['TARGET', [fnRef('TARGET', FILE_A, 10, 20)]]],
-    bySymbol,
-  });
-
-  it('名字大小写不敏感（归一化大写查表）', () => {
-    expect(incomingCalls(index, null, 'target').length).toBeGreaterThan(0);
-    expect(incomingCalls(index, null, 'TARGET').length).toBeGreaterThan(0);
-  });
-
-  it('definition 剔除；组内点位序、组间首现序；索引缝条目跳过', () => {
-    const groups = incomingCalls(index, null, 'TARGET');
-    expect(groups.map((g) => g.caller.name)).toEqual(['CALLER1', 'CALLER2']);
-    expect(groups[0]!.sites.map((s) => s.line)).toEqual([31, 33]);
-    expect(groups[1]!.sites.map((s) => s.line)).toEqual([7]);
-  });
-
-  it('functionAt 在场时走通道（反查不了的行照样跳过）', () => {
-    const functionAt: FunctionAtResolver = (path, line) => {
-      if (path === FILE_A && line >= 30 && line <= 40) return fn('CALLER1', FILE_A, 30, 40);
-      return undefined; // CALLER2 的行反查不了 ⇒ 那条整组消失
-    };
-    const groups = incomingCalls(index, functionAt, 'TARGET');
-    expect(groups.map((g) => g.caller.name)).toEqual(['CALLER1']);
-  });
-
-  it('名字无记录 / 反向索引缺席 ⇒ 空数组（不猜）', () => {
-    expect(incomingCalls(index, null, 'NOBODY')).toEqual([]);
-    expect(incomingCalls(makeIndex({ files, withReferences: false }), null, 'TARGET')).toEqual([]);
-  });
-});
-
-/* ============================== 出边 ============================== */
-
-describe('outgoingCalls', () => {
-  const index = makeIndex({
-    files: [file(FILE_A, [fn('FOO', FILE_A, 10, 20), fn('BAR', FILE_A, 30, 40)])],
-    byName: [
-      ['FOO', [fnRef('FOO', FILE_A, 10, 20)]],
-      ['BAR', [fnRef('BAR', FILE_A, 30, 40)]],
-      ['BAZ', [fnRef('BAZ', FILE_B, 1, 9)]],
-    ],
-    bySymbol: [
-      [
-        'BAR',
-        [
-          ref('call', FILE_A, 12, 1, 4), // FOO 体内调 BAR
-          ref('mention', FILE_A, 14, 1, 4), // mention 不进出边
-          ref('call', FILE_A, 31, 1, 4), // BAR 自己体内——不属于 FOO
-          ref('call', FILE_B, 12, 1, 4), // 别的文件
-        ],
-      ],
-      ['BAZ', [ref('call', FILE_A, 18, 2, 6)]], // FOO 体内调 BAZ
-      ['QUX', [ref('call', FILE_A, 11, 1, 4)]], // byName 没有这个名字：fail-open 跳过
-    ],
-  });
-
-  it('只认 call + 本文件 + 本函数区间；组按首调用行排序', () => {
-    const groups = outgoingCalls(index, { filePath: FILE_A, startLine: 10, endLine: 20 });
-    // QUX（byName 查不到）被 fail-open 跳过；mention 与跨文件/跨函数的 call 都不沾；
-    // 首调用行 12（BAR）在 18（BAZ）之前
-    expect(groups.map((g) => g.callee.name)).toEqual(['BAR', 'BAZ']);
-    expect(groups[0]!.sites.map((s) => s.line)).toEqual([12]);
-    expect(groups[1]!.sites.map((s) => s.line)).toEqual([18]);
-  });
-
-  it('区间按函数切：BAR 区间只收它体内的调用（含自调用递归边）', () => {
-    const groups = outgoingCalls(index, { filePath: FILE_A, startLine: 30, endLine: 40 });
-    // line 31 是 BAR 体内的 CALL BAR（自调用）；12/18 在 FOO 区间、FILE_B 的不沾
-    expect(groups.map((g) => g.callee.name)).toEqual(['BAR']);
-    expect(groups[0]!.sites.map((s) => s.line)).toEqual([31]);
-  });
-
-  it('反向索引缺席 ⇒ 空数组（与入边同源，索引没有就都没有）', () => {
-    const bare = makeIndex({ files: [file(FILE_A, [fn('FOO', FILE_A, 10, 20)])], withReferences: false });
-    expect(outgoingCalls(bare, { filePath: FILE_A, startLine: 10, endLine: 20 })).toEqual([]);
-  });
-});
-
 /* ============================== 状态单源 ============================== */
 
 describe('调用层级状态单源', () => {
@@ -251,12 +135,26 @@ describe('CallHierarchyOverlay 渲染', () => {
     ],
   });
 
-  const deps = {
-    currentIndex: () => index,
-    functionAt: (): null => null, // 通道缺席 ⇒ 走数据层退化腿（索引自扫）
-    reveal: () => undefined,
-    close: () => undefined,
-  };
+  /**
+   * 面板依赖（与 `ui/shell-overlays.ts` 同一形状）：取数走**真供方**——插件
+   * `provideErbCallHierarchy` 拼一枚 `ui.editor.languageService` 贡献，于是"面板画出来的"
+   * 就是"插件答出来的"（不另造判据、不喂罐头）。
+   */
+  function depsFor(target: ErbIndex | null, over: Partial<CallHierarchyDeps> = {}): CallHierarchyDeps {
+    const contribution: EditorLanguageServiceContribution = {
+      id: 'erb-call-hierarchy',
+      provide: (request) => provideErbCallHierarchy(request, target),
+    };
+    return {
+      currentIndex: () => target,
+      contributions: () => [contribution],
+      reveal: () => undefined,
+      close: () => undefined,
+      ...over,
+    };
+  }
+
+  const deps = depsFor(index);
 
   // 工厂返回 `() => unknown`（UIPanelComponent 形状）；渲染判据按 React 组件消费
   function render(): string {
@@ -384,11 +282,13 @@ describe('CallHierarchyOverlay 渲染', () => {
   });
 
   /** 带事实面的 deps（空索引 = 本轮产出了索引对象但什么都没有） */
-  const emptyIndexDeps = (indexState: ErbIndexState | null) => ({
-    ...deps,
-    currentIndex: () => (indexState === null ? index : makeIndex({ files: [], byName: [], bySymbol: [] })),
-    indexState: () => indexState,
-  });
+  const emptyIndexDeps = (indexState: ErbIndexState | null) => {
+    const empty = makeIndex({ files: [], byName: [], bySymbol: [] });
+    return {
+      ...depsFor(indexState === null ? index : empty),
+      indexState: () => indexState,
+    };
+  };
 
   function renderWith(d: unknown): string {
     setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 999 } });
@@ -466,7 +366,7 @@ describe('CallHierarchyOverlay 渲染', () => {
     setCallHierarchyState({ kind: 'request', request: { filePath: FILE_A, line: 15 } });
     const html = renderToStaticMarkup(
       createElement(
-        createCallHierarchyOverlay({ ...deps, currentIndex: () => bigIndex }) as () => ReactElement,
+        createCallHierarchyOverlay(depsFor(bigIndex)) as () => ReactElement,
       ),
     );
     // 首帔窗口 = 组行 1 + 点位 119（`↳` 每点位行一枚）

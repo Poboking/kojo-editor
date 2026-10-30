@@ -137,10 +137,11 @@ export function useShellOverlays(kernel: Kernel | null): void {
         });
       },
     });
-    // 调用层级（批 E，2026-10-16；批次十 2026-10-23 补语言分派）：宿主自建只读查询面板
-    // （Monaco standalone 无 CallHierarchy API，取证见 PITFALLS §83）。面板按当前 model
-    // 的语言分派取数依赖：`.erb`（及 v1 `.kojo`）走 `monaco/erb-call-hierarchy.ts`（复用
-    // erb.parser 反向索引与 functionAt 通道），kojo2 走 `createKojo2CallHierarchyProvider()`。
+    // 调用层级（批 E，2026-10-16；批次十 2026-10-23 补语言分派；LAU-4 调用层级腿 2026-10-31）：
+    // 宿主自建只读查询面板（Monaco standalone 无 CallHierarchy API，取证见 PITFALLS §83）。
+    // 面板按当前 model 的语言分派：kojo2 走 `createKojo2CallHierarchyProvider()`；其余走
+    // `ui.editor.languageService` 槽的 `callHierarchy` 成员（ERB 的判据已整块搬进
+    // `@kojo/plugin-erb-parser`，本文件只递槽的贡献表与项目身份，不裁决语言）。
     // 这里只做两件接线：命令面板入口 + overlay 注册。位点现取 `readJumpProbe()`
     // （G1 既有探针——`EditorCommandContext` 没有光标行，不为此扩宿主管道）；
     // 跳转落既有 `editor.revealLocation`，与转到定义同一条通道。
@@ -166,12 +167,12 @@ export function useShellOverlays(kernel: Kernel | null): void {
                 return null;
               }
             },
-            functionAt: (path, line) => {
+            // LAU-4 调用层级腿：判据住 `@kojo/plugin-erb-parser`，面板经
+            // `ui.editor.languageService` 槽的 `callHierarchy` 成员问供方（本层不裁决语言）。
+            contributions: () => kernel.slots.query('ui.editor.languageService'),
+            project: () => {
               try {
-                const service = parser();
-                // 三态：通道不存在（服务/方法缺席）⇒ null（数据层退化到索引自扫）；
-                // 在场则它的 undefined 是权威的"不在此函数内"
-                return service?.functionAt ? service.functionAt(path, line) : null;
+                return kernel.project.current();
               } catch {
                 return null;
               }

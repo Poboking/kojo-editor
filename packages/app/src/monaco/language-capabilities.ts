@@ -122,9 +122,10 @@ export function isLanguageCapabilityExemption(
  * ERB **已交付**的能力（descriptor 直接引用；也是矩阵该语言行的生成依据）。
  *
  * 排除的一项（矩阵里是 `{ exempt }`，理由见状态表）：
- * `callhierarchy` —— Monaco 0.57 无该 API；纯模型 `erb-call-hierarchy.ts` 与 provider 模块
- * `erb-callhierarchy-provider.ts` 已交付，宿主面板 `ui/CallHierarchyOverlay.tsx` 已按 model
- * 语言分派消费（批次十）。矩阵按**注册面**记账：装配点接 `installErbCallHierarchyProvider`
+ * `callhierarchy` —— Monaco 0.57 无该 API；判据住 `@kojo/plugin-erb-parser`（经
+ * `ui.editor.languageService` 的 `callHierarchy` 成员应答，LAU-4 调用层级腿），provider 模块
+ * `erb-callhierarchy-provider.ts` 与宿主面板 `ui/CallHierarchyOverlay.tsx` 已交付。
+ * 矩阵按**注册面**记账：装配点接 `installErbCallHierarchyProvider`
  * 之前仍记豁免，接线后改 `self`。
  */
 export const ERB_CAPABILITIES: readonly LanguageCapability[] = Object.freeze([
@@ -221,7 +222,7 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
     [LanguageCapability.Selection]: 'shared',
     [LanguageCapability.CallHierarchy]: {
       exempt:
-        'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；纯模型 monaco/erb-call-hierarchy.ts 与 provider 模块 monaco/erb-callhierarchy-provider.ts 已交付，宿主面板 ui/CallHierarchyOverlay.tsx 已按 model 语言分派消费（批次十）；矩阵按注册面记账，待装配点 ui/editor-global-providers.ts 接 installErbCallHierarchyProvider 后改 self',
+        'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；判据住 @kojo/plugin-erb-parser（槽 ui.editor.languageService 的 callHierarchy 成员，LAU-4 调用层级腿），provider 模块 monaco/erb-callhierarchy-provider.ts 与宿主面板 ui/CallHierarchyOverlay.tsx 已交付；矩阵按注册面记账，待装配点 ui/editor-global-providers.ts 接 installErbCallHierarchyProvider 后改 self',
     },
     [LanguageCapability.Completion]: 'self',
     [LanguageCapability.Hover]: 'shared',

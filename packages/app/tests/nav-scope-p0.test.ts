@@ -3,14 +3,14 @@ import type { EditorDocumentSymbol, ErbFile, ErbFunction, ErbIndex } from '@kojo
 import { functionAt } from '@kojo/plugin-erb-parser';
 import { symbolChainAt } from '../src/ui/breadcrumb-path';
 import { functionNameAt } from '../src/ui/jump-to-state';
-import { resolveEnclosingFunction } from '../src/monaco/erb-call-hierarchy';
+import { resolveEnclosingFunction } from '@kojo/plugin-erb-parser';
 
 /**
  * W7 NAV-SCOPE · P0 对拍（2026-10-18 接力批）。
  *
  * **同一行输入，四个消费方必须得到同一结论**——此前四份判据各给各的答案：
  *   ① `erb-parser/symbols.functionAt`（索引通道）
- *   ② `monaco/erb-call-hierarchy.resolveEnclosingFunction`（调用层级；`functionAt` 缺席时
+ *   ② `@kojo/plugin-erb-parser` 的 `resolveEnclosingFunction`（调用层级；`functionAt` 缺席时
  *      在索引 `files` 上自扫，兜底与真源不许给出两种答案）
  *   ③ `ui/breadcrumb-path.symbolChainAt`（面包屑链上最后一个 function 层）
  *   ④ `ui/jump-to-state.functionNameAt`（跳状态：链上取最内 function）

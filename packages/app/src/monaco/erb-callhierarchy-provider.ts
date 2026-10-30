@@ -1,52 +1,43 @@
 import type * as Monaco from './entry';
-import type { ErbFunction, ErbFunctionRef, ErbIndex, ErbReference } from '@kojo/plugin-api';
-import {
-  incomingCalls,
-  outgoingCalls,
-  resolveEnclosingFunction,
-  type FunctionAtResolver,
-} from './erb-call-hierarchy';
+import type {
+  EditorCallHierarchyGroup,
+  EditorCallHierarchyResult,
+  EditorCallHierarchySymbol,
+} from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from './erb-language';
 
 /**
- * ERB **调用层级 provider**（ERB-CALLHIER，批次九）——把既有纯模型
- * `monaco/erb-call-hierarchy.ts` 包成 Monaco provider 形状，**两语言同权**：
- * `.kojo2` 有 `monaco/kojo2-callhierarchy.ts` 的同款形状，ERB 从此也有。
+ * ERB **调用层级 provider**（ERB-CALLHIER，批次九；LAU-4 调用层级腿 2026-10-31 改薄）——
+ * 把 `ui.editor.languageService` 槽的 `callHierarchy` 应答包成 Monaco provider 形状，
+ * **两语言同权**：`.kojo2` 有 `monaco/kojo2-callhierarchy.ts` 的同款形状，ERB 从此也有。
  *
- * ## 分层（**纯模型说了算，provider 只做坐标翻译**）
+ * ## 分层（**判据一枚都不在这里**）
  *
- * 判定与收集**一行都不在这里重写**：
- * - 光标 → 包围函数：`resolveEnclosingFunction`（`functionAt` 优先、缺席退化同一份索引；
- *   口径与调用层级面板 `ui/CallHierarchyOverlay.tsx` **逐字同一条腿**）；
- * - 入边：`incomingCalls`（反向索引 `bySymbol` 的引用点 → 按调用者分组，`definition` 剔除、
- *   索引缝 fail-open）；
- * - 出边：`outgoingCalls`（同一张反向索引里 `kind === 'call'` 且落在函数区间内的点）。
- *
- * 本模块只做三件事：把 Monaco 的 model / position 换成 `(filePath, line)`；把
- * `ErbFunction` / `ErbFunctionRef` / `ErbReference` 换成 Monaco 的
- * item / range / `fromRanges`；把 provider 的三条腿接到那三个纯函数上。
+ * 判定与收集整块住 `@kojo/plugin-erb-parser`（`symbols.ts` 的调用层级段：入边剔
+ * `definition`、出边只认 `kind === 'call'`、所属函数反查单源 `enclosingAt(...,'innermost')`），
+ * 由供方经槽应答。本模块只剩三件事：
+ * 1. **model / 位置 → 请求**（`path` / 正文 / 行，续问时换成上一轮 item 的节点）；
+ * 2. **契约 → Monaco 形状**（`EditorCallHierarchySymbol` → item，`EditorCallHierarchySite` →
+ *    区间，唯一的翻译点 {@link itemOf} / {@link callSiteRange}）；
+ * 3. 注册位探测与幂等句柄。
  *
  * ## prepare 答什么（与面板同一把尺子）
  *
- * **`prepareCallHierarchy` 返回"光标所在的那个函数"**，不是"光标那一格被谁引用"。
- * 调用层级面板的入口参数就是 `{ filePath, line }`，它取的也是
- * `resolveEnclosingFunction`——provider 若另造"光标词 → 被调定义"的解析判据，立刻就是
- * 第二份语言事实（且会与面板对同一格给出两种答案）。所以：
- * - 函数声明头 / 名字段 / 函数体内任意一行 ⇒ 交回该函数；调用位交出**调用者**
- *   （要看被调者用转定义 F12，那条腿由 `ui.editor.languageService` 槽承担）；
- * - 不在任何函数体内（顶层代码 / 行号漂移）⇒ `null`（不猜、不夹取到邻近函数）；
- * - 索引未建 / 路径取不到 / 位置不可用 ⇒ `null`。
+ * **`prepareCallHierarchy` 返回"光标所在的那个函数"**，不是"光标那一格被谁引用"。面板的
+ * 入口参数就是 `{ filePath, line }`，供方取的也是同一个"行 → 函数"判据——provider 若另造
+ * "光标词 → 被调定义"的解析，立刻就是第二份语言事实（且会与面板对同一格给出两种答案）。
  *
  * ## Monaco 面（0.57 没有 CallHierarchy API）
  *
  * Monaco standalone（含 0.57.0）从未暴露 `registerCallHierarchyProvider`（取证见
  * `docs/PITFALLS.md` §83）。{@link installErbCallHierarchyProvider} **结构性探测**该注册位：
  * 在位就按正规 provider 注册；不在位就**零注册**并交回幂等句柄。{@link createErbCallHierarchyProvider}
- * 单独导出，宿主自建面板（overlay / devtools）可直接复用同一份实现，不必等上游 API
- * ——与 `kojo2-callhierarchy.ts` 的 `createKojo2CallHierarchyProvider` 同一形状。
+ * 单独导出，宿主自建面板（overlay / devtools）可直接复用同一份实现——与
+ * `kojo2-callhierarchy.ts` 的 `createKojo2CallHierarchyProvider` 同一形状。
  *
- * 安装器的第二参数是本 provider 的**数据源**（`currentIndex` / 可选的 `functionAt`）：
- * 没有数据源就不注册——一枚永远答空的 provider 只会让"这个功能突然没了"更难查。
+ * 安装器的第二参数是本 provider 的**取数口**（`ask`：生产装配点把它接到槽上，见
+ * `ui/shell-overlays.ts` 的注入形态）：没有取数口就不注册——一枚永远答空的 provider
+ * 只会让"这个功能突然没了"更难查。
  *
  * ## 失败面
  *
@@ -57,9 +48,9 @@ import { ERB_LANGUAGE_ID } from './erb-language';
  * ## 数据回传（**可序列化坐标，不缓存对象**）
  *
  * item 的 `data` 只有 `{ name, normalizedName, filePath, startLine, endLine }`：Monaco 会把
- * item 原样交给入边 / 出边查询（可能跨会话 / 从 JSON 还原），本层不持有 `ErbIndex` 对象
- * 引用，也不按名字重新解析文件——坐标就是全部事实。认不出（缺 `data` / 行列非法 /
- * 名字为空）⇒ `null`，不拿名字瞎猜。
+ * item 原样交给入边 / 出边查询（可能跨会话 / 从 JSON 还原），本层不持有索引对象引用，
+ * 也不按名字重新解析文件——坐标就是全部事实。认不出（缺 `data` / 行列非法 / 名字为空）
+ * ⇒ `null`，不拿名字瞎猜。
  *
  * 路径比较只在"要不要用当前 model 的行宽补尾列"这一处用到，按 Windows 口径归一
  * （分隔符 + 大小写）；不参与任何语言判定。
@@ -79,8 +70,6 @@ export interface ErbCallHierarchyRange {
  * item 的 `data`（Monaco / LSP 的 item 会把它原样回传给入边 / 出边查询）。
  *
  * 全部是**可序列化的坐标事实**：函数名、归一化名、文件、定义行区间。
- * 回传时按这些坐标直接喂纯模型（入边只要归一化名，出边只要定义区间），
- * 不需要在本层重新解析源文。
  */
 export interface ErbCallHierarchyData {
   readonly name: string;
@@ -121,16 +110,31 @@ export interface ErbOutgoingCall {
 }
 
 /**
- * provider 的数据源（宿主注入；**软取、不抛**）。
+ * 取数口（宿主注入；**软取、不抛**）：一次 `ui.editor.languageService` 的
+ * `callHierarchy` 请求的整条腿（含"第一家作答的说了算"的裁决）。
  *
- * - `currentIndex`：当前 ERB 索引；未建 / 服务缺席 ⇒ `null`（宿主那侧是
- *   `ui/editor-global-providers.ts` 的 `erbParserIndex()` 同一枚软取）；
- * - `functionAt`：解析器"行 → 函数"通道；`null` / 缺席 ⇒ 纯模型退化到索引自扫
- *   （三态语义见 `erb-call-hierarchy.ts` 的 `FunctionAtResolver`）。
+ * - `path`：请求文件（prepare = 当前 model 的路径；续问 = 上一轮 item 的路径）；
+ * - `text`：当前 model 的正文，取不到 ⇒ `null`（契约允许省略：本能力只读项目索引）；
+ * - `line`：1 基行号（续问时只作占位，供方按 `subject` 取边）；
+ * - `subject`：续问节点；缺席 = 按位置求包围函数。
+ *
+ * 返回 `undefined` = 无人应答（插件缺席 / 弃权 / 判据抛错）。
+ */
+export type CallHierarchyAsk = (
+  path: string,
+  text: string | null,
+  line: number,
+  subject?: EditorCallHierarchySymbol,
+) => EditorCallHierarchyResult | undefined;
+
+/**
+ * provider 的取数依赖（宿主注入；**软取、不抛**）。
+ *
+ * 只有一格：`ask`（判据住 `@kojo/plugin-erb-parser`，经槽应答）。没有第二格
+ * "索引 / 通道"——那两格在被搬走时一并取消了：provider 不认识索引，也不需要认识。
  */
 export interface ErbCallHierarchyDeps {
-  currentIndex(): ErbIndex | null;
-  functionAt?: FunctionAtResolver | null;
+  ask: CallHierarchyAsk;
 }
 
 /** 调用层级 provider 的形状（Monaco 0.57 没有对应接口；见模块头「Monaco 面」）。 */
@@ -152,9 +156,6 @@ export interface ErbCallHierarchyProvider {
 
 /* ============================== 内部形状 ============================== */
 
-/** 一个可调用声明的最小事实（`ErbFunction` 与 `ErbFunctionRef` 的公共面）。 */
-type CallableFact = ErbFunction | ErbFunctionRef;
-
 /** 一次 provider 调用的模型事实（只用于**尾列**翻译；判定一律不读它）。 */
 interface ModelContext {
   /** 整篇源文；取不到 ⇒ `null`（不猜行宽） */
@@ -165,16 +166,16 @@ interface ModelContext {
   readonly lines: readonly string[] | null;
 }
 
-/** 无注册位 / 无数据源时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
+/** 无注册位 / 无取数口时交回的句柄（调用方照常 `dispose()`，什么也不会发生） */
 const NOOP_DISPOSABLE: Monaco.IDisposable = { dispose: () => undefined };
 
 /**
- * 零参工厂的缺省数据源（**没有索引**）：三条腿一律回空。
+ * 零参工厂的缺省取数口（**没有供方**）：三条腿一律回空。
  *
- * 只服务"先占住形状"的调用方（宿主面板在索引接线之前拿一份可传的 provider）；
- * 真实面板必须自己注入 `currentIndex`，否则它看到的永远是"没有调用关系"。
+ * 只服务"先占住形状"的调用方（宿主面板在取数口接线之前拿一份可传的 provider）；
+ * 真实面板必须自己注入 `ask`，否则它看到的永远是"没有调用关系"。
  */
-const NO_INDEX_DEPS: ErbCallHierarchyDeps = { currentIndex: () => null };
+const NO_ASK_DEPS: ErbCallHierarchyDeps = { ask: () => undefined };
 
 /* ============================== 小工具 ============================== */
 
@@ -229,7 +230,7 @@ function isUsablePosition(position: Monaco.Position | null | undefined): boolean
 }
 
 /** 名字段起点列：索引给了 `nameColumn` 就用它；缺席 ⇒ 行首（**不猜缩进**） */
-function nameStartOf(fact: CallableFact): number {
+function nameStartOf(fact: EditorCallHierarchySymbol): number {
   const column = fact.nameColumn;
   return typeof column === 'number' && Number.isInteger(column) && column >= 1 ? column : 1;
 }
@@ -237,10 +238,10 @@ function nameStartOf(fact: CallableFact): number {
 /**
  * 名字段终点列（半开）：起点 + 名字长度。
  *
- * 名字长度按**原样**（`ErbFunction.name` / `ErbFunctionRef.name`）计——索引里名字就是
- * 源文那一段（大小写归一不改长度），UTF-16 码元与 Monaco 列同单位。
+ * 名字长度按**原样**（`symbol.name`）计——索引里名字就是源文那一段（大小写归一不改长度），
+ * UTF-16 码元与 Monaco 列同单位。
  */
-function nameEndOf(fact: CallableFact, startColumn: number): number {
+function nameEndOf(fact: EditorCallHierarchySymbol, startColumn: number): number {
   return startColumn + Math.max(fact.name.length, 1);
 }
 
@@ -252,7 +253,7 @@ function nameEndOf(fact: CallableFact, startColumn: number): number {
  *   Monaco 的区间只需要能包住 `selectionRange`，跨文件行宽本来就不在这份 model 里，
  *   不拿一个好听的数字冒充。
  */
-function rangeEndColumn(fact: CallableFact, startColumn: number, ctx: ModelContext): number {
+function rangeEndColumn(fact: EditorCallHierarchySymbol, startColumn: number, ctx: ModelContext): number {
   const selectionEnd = nameEndOf(fact, startColumn);
   let endColumn: number;
   if (ctx.lines !== null && ctx.path !== null && pathKey(ctx.path) === pathKey(fact.filePath)) {
@@ -265,8 +266,8 @@ function rangeEndColumn(fact: CallableFact, startColumn: number, ctx: ModelConte
   return fact.endLine === fact.startLine ? Math.max(endColumn, selectionEnd) : Math.max(endColumn, 1);
 }
 
-/** 可调用事实 → item（**唯一**翻译点）。 */
-function itemOf(fact: CallableFact, ctx: ModelContext): ErbCallHierarchyItem {
+/** 可调用体 → item（**唯一**翻译点）。 */
+function itemOf(fact: EditorCallHierarchySymbol, ctx: ModelContext): ErbCallHierarchyItem {
   const startColumn = nameStartOf(fact);
   return {
     name: fact.name,
@@ -296,10 +297,10 @@ function itemOf(fact: CallableFact, ctx: ModelContext): ErbCallHierarchyItem {
 /**
  * 一处调用点 → Monaco 区间（恒等搬运 1 基半开坐标；坏列只夹到合法下界，不改行）。
  *
- * `ErbReference` 的 `column` / `endColumn` 与 Monaco 列**同单位**（1 基 UTF-16 码元、
- * 尾列不含端点），所以这里没有第二套坐标换算。
+ * 契约的 `column` / `endColumn` 与 Monaco 列**同单位**（1 基 UTF-16 码元、尾列不含端点），
+ * 所以这里没有第二套坐标换算。
  */
-function callSiteRange(site: ErbReference): ErbCallHierarchyRange {
+function callSiteRange(site: { readonly line: number; readonly column: number; readonly endColumn: number }): ErbCallHierarchyRange {
   const startColumn = site.column >= 1 ? site.column : 1;
   return {
     startLine: site.line,
@@ -309,16 +310,16 @@ function callSiteRange(site: ErbReference): ErbCallHierarchyRange {
   };
 }
 
-/** 一组调用点 → 区间列表（保持索引给的行→列序，不排序、不去重：纯模型已经定序） */
-function callSiteRanges(sites: readonly ErbReference[]): ErbCallHierarchyRange[] {
-  return sites.map(callSiteRange);
+/** 一组调用点 → 区间列表（保持供方给的行→列序，不排序、不去重：判据已定序） */
+function groupRanges(group: EditorCallHierarchyGroup): ErbCallHierarchyRange[] {
+  return group.sites.map(callSiteRange);
 }
 
 /**
  * item 的 `data` 校验（Monaco 会把 item 原样传回来；它可能来自旧版本 / 别的文件 / 手工构造）。
  * 认不出 ⇒ `null`（调用方回 `null`，不拿名字瞎猜）。
  */
-function dataOf(item: ErbCallHierarchyItem | null | undefined): ErbCallHierarchyData | null {
+function dataOf(item: ErbCallHierarchyItem | null | undefined): EditorCallHierarchySymbol | null {
   if (item === null || item === undefined || typeof item !== 'object') return null;
   const raw: unknown = (item as { data?: unknown }).data;
   if (raw === null || raw === undefined || typeof raw !== 'object') return null;
@@ -342,19 +343,19 @@ function dataOf(item: ErbCallHierarchyItem | null | undefined): ErbCallHierarchy
   };
 }
 
-/** 软取当前索引（服务缺席 / 通道抛错 ⇒ `null`） */
-function currentIndexOf(deps: ErbCallHierarchyDeps): ErbIndex | null {
+/** 软取一次应答（取数口缺席 / 抛错 ⇒ `undefined`） */
+function askOf(
+  deps: ErbCallHierarchyDeps,
+  path: string,
+  text: string | null,
+  line: number,
+  subject?: EditorCallHierarchySymbol,
+): EditorCallHierarchyResult | undefined {
   try {
-    return deps.currentIndex() ?? null;
+    return deps.ask(path, text, line, subject);
   } catch {
-    return null;
+    return undefined;
   }
-}
-
-/** 软取解析器通道（缺席 / 非函数 ⇒ `null`；通道自身抛错由纯模型兜底） */
-function functionAtOf(deps: ErbCallHierarchyDeps): FunctionAtResolver | null {
-  const resolver = deps.functionAt;
-  return typeof resolver === 'function' ? resolver : null;
 }
 
 /* ============================== provider ============================== */
@@ -363,15 +364,15 @@ function functionAtOf(deps: ErbCallHierarchyDeps): FunctionAtResolver | null {
  * 创建 ERB 调用层级 provider（导出给宿主自建面板 / 未来上游 API 共用；
  * **不依赖 Monaco 运行时**）。
  *
- * `deps` 缺席 ⇒ 无数据源（三条腿回空，见 {@link NO_INDEX_DEPS}）：那是给"先占形状"的
- * 调用方留的口子，**真实面板必须注入 `currentIndex`**——与安装器"无数据源不注册"
- * 同一条纪律（一枚永远答空的 provider 不该被误读成"这个文件没有调用关系"）。
+ * `deps` 缺席 ⇒ 无取数口（三条腿回空，见 {@link NO_ASK_DEPS}）：那是给"先占形状"的
+ * 调用方留的口子，**真实面板必须注入 `ask`**——与安装器"无取数口不注册"同一条纪律
+ * （一枚永远答空的 provider 不该被误读成"这个文件没有调用关系"）。
  *
  * 三条腿都自带 try/catch：任何一条抛错只让**那一轮**回空（prepare ⇒ `null`，
  * 入边 / 出边 ⇒ `[]`），不把异常送进 Monaco 的吞异常通道。
  */
 export function createErbCallHierarchyProvider(
-  deps: ErbCallHierarchyDeps = NO_INDEX_DEPS,
+  deps: ErbCallHierarchyDeps = NO_ASK_DEPS,
 ): ErbCallHierarchyProvider {
   return {
     displayName: 'erb',
@@ -379,47 +380,39 @@ export function createErbCallHierarchyProvider(
       if (!isUsablePosition(position)) return null;
       const ctx = contextOf(model);
       if (ctx.source === null || ctx.path === null) return null;
-      const index = currentIndexOf(deps);
-      if (index === null) return null;
       try {
-        const target = resolveEnclosingFunction(
-          index,
-          functionAtOf(deps),
-          ctx.path,
-          position.lineNumber,
-        );
-        return target === undefined ? null : [itemOf(target, ctx)];
+        const result = askOf(deps, ctx.path, ctx.source, position.lineNumber);
+        const subject = result?.subject ?? null;
+        return subject === null ? null : [itemOf(subject, ctx)];
       } catch {
         return null;
       }
     },
     provideCallHierarchyIncomingCalls(model, item) {
-      const data = dataOf(item);
-      if (data === null) return null;
-      const index = currentIndexOf(deps);
-      if (index === null) return [];
+      const subject = dataOf(item);
+      if (subject === null) return null;
       const ctx = contextOf(model);
       if (ctx.source === null) return [];
       try {
-        return incomingCalls(index, functionAtOf(deps), data.normalizedName).map((group) => ({
-          from: itemOf(group.caller, ctx),
-          fromRanges: callSiteRanges(group.sites),
+        const result = askOf(deps, subject.filePath, ctx.source, subject.startLine, subject);
+        return (result?.incoming ?? []).map((group) => ({
+          from: itemOf(group.symbol, ctx),
+          fromRanges: groupRanges(group),
         }));
       } catch {
         return [];
       }
     },
     provideCallHierarchyOutgoingCalls(model, item) {
-      const data = dataOf(item);
-      if (data === null) return null;
-      const index = currentIndexOf(deps);
-      if (index === null) return [];
+      const subject = dataOf(item);
+      if (subject === null) return null;
       const ctx = contextOf(model);
       if (ctx.source === null) return [];
       try {
-        return outgoingCalls(index, data).map((group) => ({
-          to: itemOf(group.callee, ctx),
-          fromRanges: callSiteRanges(group.sites),
+        const result = askOf(deps, subject.filePath, ctx.source, subject.startLine, subject);
+        return (result?.outgoing ?? []).map((group) => ({
+          to: itemOf(group.symbol, ctx),
+          fromRanges: groupRanges(group),
         }));
       } catch {
         return [];
@@ -461,7 +454,7 @@ function callHierarchyRegistrarOf(monaco: typeof Monaco): CallHierarchyRegistrar
 /**
  * 为 ERB 注册调用层级 provider，返回**幂等** disposable。
  *
- * - **无数据源**（`deps` 缺席）⇒ 空操作（**零注册**）：一枚永远答空的 provider 只会把
+ * - **无取数口**（`deps` 缺席）⇒ 空操作（**零注册**）：一枚永远答空的 provider 只会把
  *   "没接线"伪装成"这个文件没有调用关系"；
  * - Monaco 0.57 没有 `registerCallHierarchyProvider`（PITFALLS §83）⇒ **零注册**并交回
  *   幂等句柄：宿主用 {@link createErbCallHierarchyProvider} 走自建面板，两者同一份实现；

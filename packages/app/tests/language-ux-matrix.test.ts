@@ -560,10 +560,10 @@ export const LANGUAGE_UX_MATRIX: readonly LanguageUxMatrixRow[] = Object.freeze(
         label: '调用层级',
         erb: 'exempt',
         kojo2: 'exempt',
-        evidence: 'ui/CallHierarchyOverlay.tsx（按 model 语言分派）+ monaco/erb-call-hierarchy.ts + monaco/kojo2-callhierarchy.ts',
+        evidence: 'ui/CallHierarchyOverlay.tsx（按 model 语言分派）+ @kojo/plugin-erb-parser（槽 callHierarchy 供方）+ monaco/kojo2-callhierarchy.ts',
         assembled: true,
         note:
-          'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；两门语言都由宿主面板按 model 语言分派消费（批次十）',
+          'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；两门语言都由宿主面板按 model 语言分派消费（批次十）；ERB 的判据自 LAU-4 调用层级腿起住插件供方',
       },
       {
         surface: 'documentLinks',
@@ -731,7 +731,8 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
     { rel: 'ui/editor-global-providers.ts', re: /createPeekLeases/ },
   ],
   callhierarchy: [
-    { rel: 'monaco/erb-call-hierarchy.ts', re: /export function incomingCalls\(/ },
+    // LAU-4 调用层级腿：判据住插件供方（宿主只剩面板渲染与形状翻译）
+    { rel: 'plugins/erb-parser/src/symbols.ts', re: /export function incomingCalls\(/ },
     { rel: 'monaco/kojo2-callhierarchy.ts', re: /export function createKojo2CallHierarchyProvider\(/ },
     { rel: 'ui/CallHierarchyOverlay.tsx', re: /KOJO2_LANGUAGE_ID/ },
     { rel: 'ui/CallHierarchyOverlay.tsx', re: /loadKojo2CallHierarchyPanel/ },
