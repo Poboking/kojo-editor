@@ -41,7 +41,7 @@ export function visibleEntries(
 /**
  * 一份目录清单的排序结果（PS-6 第 4 项；本批从 `file-tree-dir-rows` 提到模型层）。
  *
- * `localeCompare` 是这批行里最贵的一步：旧实现每次渲染、每一层都要把整份清单重排一遍，
+ * 全排序是这批行里最贵的一步：旧实现每次渲染、每一层都要把整份清单重排一遍，
  * 一次外部改动重列 K 层就是 K 次全排序，而清单内容压根没换。
  * 键用**条目数组的引用**（`DirEntry[]` 由 `listDir` 一次产出、放进 dirCache 就不再变），
  * ⇒ 数组身份 = 内容身份；列举换新数组自然就是新的一格，不会捞到旧顺序。
@@ -55,7 +55,11 @@ const sortedByEntries = new WeakMap<readonly DirEntry[], { dirs: DirEntry[]; fil
 export function sortedDirsAndFiles(entries: readonly DirEntry[]): { dirs: DirEntry[]; files: DirEntry[] } {
   const hit = sortedByEntries.get(entries);
   if (hit) return hit;
-  const byName = (a: DirEntry, b: DirEntry): number => a.name.localeCompare(b.name);
+  // **码元序，不用 `localeCompare`**：库里的排序口径一律如此（见 `commands.ts` / `kojo2-project-index.ts`）。
+  // `localeCompare` 把中文位置交给宿主 ICU——开发机 zh-CN 排「附.ERB」在 readme 前，CI 的 en-US
+  // 排在其后，同一份目录在两台机器上行序不同：Ctrl+A 的全集顺序、键盘上下导航、虚拟化行高
+  // 全部跟着漂。这里钉死码元序，换台机器读数逐字可复现。
+  const byName = (a: DirEntry, b: DirEntry): number => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
   const out = {
     dirs: entries.filter((d) => d.isDirectory).sort(byName),
     files: entries.filter((d) => !d.isDirectory).sort(byName),
@@ -172,7 +176,8 @@ export function buildFileGroups(
       .sort((a, b) => {
         if (a[0] === null) return -1;
         if (b[0] === null) return 1;
-        return a[0].localeCompare(b[0]);
+        // 包名同为中文占比高，码元序同 `sortedDirsAndFiles`（localeCompare 随宿主 ICU 漂）
+        return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
       })
       .map(([subLabel, files]) => ({ label: subLabel, files: files.sort() }));
     return { label, prefix: g.prefix, subs, total: subs.reduce((n, s) => n + s.files.length, 0) };
