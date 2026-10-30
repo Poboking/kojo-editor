@@ -1,5 +1,5 @@
 import type { ControlFlowStatement, ErbDim, ErbFile, ErbFunction, ErbLabel, ErbParam } from '@kojo/plugin-api';
-import type { ControlFlowRole } from '@kojo/erb-vocab/control-flow';
+import { DIM_MODIFIERS, DIM_RE, type ControlFlowRole } from '@kojo/erb-vocab/control-flow';
 
 /**
  * 行首「代码前缀」`;!;` / `;#;`（2026-10-25 ERB 语法缺口批 P2-1）。
@@ -211,8 +211,10 @@ export function parseFunctionDefinition(trimmed: string): { name: string; params
  * `DIMF` 收不到（本盘 0 行，但契约注释早就自称含它——注释与实现不符即假文档）。
  * 交替次序**必须**长的在前：`DIM` 排在 `DIMF` 前面时 `#DIMF x` 会退化成"不匹配"
  * （`\s+` 卡在 `F` 上），而不是匹配出个假名字。
+ *
+ * 2026-10-31：两枚正则上提到 `@kojo/erb-vocab/control-flow`（与配对表同居），构建期投影
+ * `gen-erb-structure.mjs` 从那里抽同一份生成 `structure.json`；本文件只 import 使用。
  */
-const DIM_RE = /^#(DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\s+(.*)$/i;
 /**
  * 声明行的前置关键字（修饰词）。集合来源同上（`ERH_DECL_KEYWORDS`），
  * 外加本仓既有的 `NOINIT` / `CHARA`（不收会倒退）。
@@ -221,8 +223,9 @@ const DIM_RE = /^#(DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\s+(.*)$/i;
  * 被记成**那个关键字**。基线语料实测 2,866 行因此进了错名（`#DIM DYNAMIC CNT_CHARA`
  * 在索引里的变量名是 `DYNAMIC`）——悬停、补全、`#DIM` 引用查找全部指着这条假记录。
  * `LOCAL` / `STATIC` / `DYNAMIC` / `OUT` / `CHARADATA` 此前都在漏网之列。
+ *
+ * 2026-10-31：与 `DIM_RE` 同批上提到 `@kojo/erb-vocab/control-flow`（构建期投影的第三枚真源）。
  */
-const DIM_MODIFIERS = /^(CONST|SAVEDATA|GLOBAL|REF|NOINIT|CHARA|LOCAL|STATIC|DYNAMIC|OUT|CHARADATA)\s+/i;
 
 /** 解析 `#DIM` 族声明行 */
 export function parseDimDeclaration(trimmed: string): { directive: string; name: string } | null {

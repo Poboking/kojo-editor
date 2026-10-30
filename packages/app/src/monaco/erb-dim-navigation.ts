@@ -275,7 +275,7 @@ export function resolveErbDimReferences(
   const out: EditorSymbolLocation[] = [];
   const seen = new Set<string>();
   const push = (atLine: number, start: number, length: number, kind: 'definition' | 'mention'): void => {
-    const key = `${atLine} ${start}`;
+    const key = `${atLine}\u0000${start}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push({

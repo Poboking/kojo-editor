@@ -11,6 +11,19 @@
  * 硬约束：**零运行时 import**（裸 node 类型擦除档要能直接解析）、纯数据 / 纯函数、零游戏名词。
  */
 
+/**
+ * `#DIM` 族声明行的**指令全集**（`DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE`）。
+ *
+ * 与配对表同住本包（2026-10-31 从 `erb-parser/scanner.ts` 上提）：构建期投影脚本
+ * `erb-syntax-tree/tools/gen-erb-structure.mjs` 从本文件抽这两枚正则生成 `structure.json`
+ * 与 external scanner 头；此前脚本已按这个落点取名，而正则仍在插件里 ⇒ 投影闸恒红。
+ * 交替次序**必须**长的在前：`DIM` 排在 `DIMF` 前会让 `#DIMF x` 退化成不匹配。
+ */
+export const DIM_RE = /^#(DIMSTR|DIMCHAR|DIMF|DIMS|DIM|DEFINE)\s+(.*)$/i;
+
+/** 声明前置修饰词（`CONST|SAVEDATA|GLOBAL|REF|NOINIT|CHARA|LOCAL|STATIC|DYNAMIC|OUT|CHARADATA`） */
+export const DIM_MODIFIERS = /^(CONST|SAVEDATA|GLOBAL|REF|NOINIT|CHARA|LOCAL|STATIC|DYNAMIC|OUT|CHARADATA)\s+/i;
+
 /** 开块语句：kind → 配对类别 */
 const OPEN_KINDS: Readonly<Record<string, string>> = {
   IF: 'if',
