@@ -1,9 +1,11 @@
 /**
- * `definition` 供方：包里的同文件落点 → 契约的 `EditorSymbolLocation`。
+ * `definition` 供方：包里的落点（同文件优先，其次项目快照）→ 契约的 `EditorSymbolLocation`。
  *
  * ## 交什么
  *
- * 1. **声明落点**（`kojo2DefinitionAt`）：名字 → 本文档哪一行哪一列，落在名字段上；
+ * 1. **声明落点**（`kojo2DefinitionAcrossProject`）：名字 → 哪一份文件的哪一行哪一列，
+ *    落在名字段上。同文件有落点就只交那一条；同文件没有、而请求里带了 `projectFiles`
+ *    （additive）时才到项目快照的声明里找同名声明，`filePath` 填**真实命中文件**；
  * 2. **展开体的两条附加落点**（B3b）：光标在展开体源行上（`view.via === 'definition'`）时，
  *    在声明落点之后追加"调用处"与"定义段"——
  *
@@ -22,11 +24,13 @@
  * （`expand-compile.ts`），于是这里 `kojo2ExpandCompilationFor(request.path)` 一问就有。
  * **零注册 ⇒ `null` ⇒ 不追加**，与"宿主还没编译过这一篇"逐字一致。
  *
- * ## 为什么只交**同文件**落点
+ * ## 跨文件落点只认快照（不猜路径）
  *
- * `kojo2DefinitionAt` 只回答"名字 → 本文档哪一行哪一列"。跨文件（跳进别的 `.kojo2`、
- * 跳进 `ERB/` 里的定义）需要**项目索引**，而索引是宿主 / 另一个服务的事——本供方没有它，
- * 就不假装有：交回空数组而不是猜一个位置。展开落点同理，全在当前文件内。
+ * 请求里的 `projectFiles` 是宿主现取的项目快照；缺席 / 空 = 只答本篇，与加这一格之前
+ * **逐字相同**。判据（同文件优先 / 哪一格算引用位 / 排序 / 上限）全在包里；本供方只做
+ * 两件事：把落点翻成契约形状、给同文件命中补上本文身份（判据只认位置，不认"这是哪个
+ * 文件"）。快照没扫完时打一条 warn——`definition` 的结果没有 `truncated` 位，静默少给
+ * 会让作者以为"项目里没有别的声明"。
  *
  * ## 为什么不用 `project`
  *
@@ -39,7 +43,10 @@ import type {
   EditorSymbolLocation,
 } from '@kojo/plugin-api';
 import type { KojoSpan } from '@kojo/kojo-core';
-import { kojo2DefinitionAt } from '@kojo/kojo-lang/definition';
+import {
+  kojo2DefinitionAcrossProject,
+  type Kojo2ProjectDefinitionTarget,
+} from '@kojo/kojo-lang/definition';
 import { kojo2ExpandCompilationFor } from '@kojo/kojo-lang/expand-compile';
 import { expandViewAt } from '@kojo/kojo-lang/expand-view';
 import { isKojo2Request } from './request';
@@ -67,9 +74,31 @@ function expandLocationOf(filePath: string, span: KojoSpan): EditorSymbolLocatio
 }
 
 /**
+ * 包的落点 → 契约落点。
+ *
+ * `filePath` 为空的落点（查询没带本文路径）换成本文身份——判据只认位置，文件身份归调用方
+ * （派生 model / 糖投影下它不一定等于 `model.uri`）。跨文件那条带 `kind: 'definition'`
+ * 标注"这是声明位"；同文件那条保持加这一格之前**不带 `kind`** 的形状（旧消费方零改动）。
+ */
+function locationOf(
+  requestPath: string,
+  target: Kojo2ProjectDefinitionTarget,
+): EditorSymbolLocation {
+  const filePath = target.filePath.length > 0 ? target.filePath : requestPath;
+  return {
+    filePath,
+    line: target.line,
+    column: target.column,
+    // 名字段区间：`columnStart` 与 `column` 同值（落点在名字首列），`columnEnd` 半开。
+    span: { columnStart: target.column, columnEnd: target.endColumn },
+    ...(filePath !== requestPath ? { kind: 'definition' as const } : {}),
+  };
+}
+
+/**
  * 交回 `{ kind: 'definition', locations }`，或 `undefined`（弃权）。
  *
- * 抛错面：`kojo2DefinitionAt` / `expandViewAt` 都是纯函数且对越界行列自行夹取，
+ * 抛错面：`kojo2DefinitionAcrossProject` / `expandViewAt` 都是纯函数且对越界行列自行夹取，
  * 理论上不抛；真抛了也**不让它冒到宿主**——宿主会把 throw 吞成"F12 没反应"，
  * 那是作者看不到任何原因的假死。这里归成空数组（"这篇没有可跳的声明"），
  * 与"此处没有定义"同一个可见语义。
@@ -82,25 +111,25 @@ export function provideDefinition(
 ): { kind: 'definition'; locations: EditorSymbolLocation[] } | undefined {
   if (request.kind !== 'definition') return undefined;
   if (!isKojo2Request(request)) return undefined;
-  let target;
+  const locations: EditorSymbolLocation[] = [];
   try {
-    target = kojo2DefinitionAt({
-      source: request.text,
-      line: request.line,
-      column: request.column,
-    });
+    const found = kojo2DefinitionAcrossProject(
+      {
+        source: request.text,
+        line: request.line,
+        column: request.column,
+        path: request.path,
+        ...(request.lineCount !== undefined ? { lineCount: request.lineCount } : {}),
+      },
+      request.projectFiles,
+    );
+    for (const target of found.targets) locations.push(locationOf(request.path, target));
+    // 两条"少给"的来源合流：判据自己的预算闸 + 宿主快照不完整（`projectFilesComplete`）。
+    if (found.truncated || request.projectFilesComplete === false) {
+      console.warn('[kojo2-definition] 项目快照没扫完：跨文件落点可能不全（同文件落点不受影响）');
+    }
   } catch {
     return { kind: 'definition', locations: [] };
-  }
-  const locations: EditorSymbolLocation[] = [];
-  if (target !== undefined) {
-    locations.push({
-      filePath: request.path,
-      line: target.line,
-      column: target.column,
-      // 名字段区间：`columnStart` 与 `column` 同值（落点在名字首列），`columnEnd` 半开。
-      span: { columnStart: target.column, columnEnd: target.endColumn },
-    });
   }
   locations.push(...expandLocationsOf(request));
   return { kind: 'definition', locations };
