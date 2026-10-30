@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { ErbFunction, ErbReference } from '@kojo/plugin-api';
-import { USAGE_LENS_BIG_COUNT, usageLenses, type UsageLensSource } from '../src/usage-lens';
+import { USAGE_LENS_BIG_COUNT, usageLenses, type UsageLensSource } from '../src/symbols';
 
 const fn = (name: string, line: number): ErbFunction =>
   ({

@@ -120,3 +120,79 @@ const INSTRUCTION_NAME_SET: ReadonlySet<string> = new Set(ERB_INSTRUCTION_NAMES.
 export function isInstructionName(name: string): boolean {
   return INSTRUCTION_NAME_SET.has(name.trim().toUpperCase());
 }
+
+/* ============================== ERB 语句 / 声明词表（ERB-PARITY G1，2026-10-31） ============================== */
+
+/**
+ * 非控制流的手写常用语句（补全 / 悬停分类共用）。**控制流词不在这里**——一律从
+ * `ERB_CONTROL_STATEMENTS`（scanner 配对表）派生，两份清单零交集由
+ * `packages/app/tests/erb-directive-words.test.ts` 的闸钉住。
+ *
+ * 收录口径 = **口上高频子集**（非 Emuera 全集）：eraNAS / eraTW 4.980 真语料按"真语句判据"
+ * （行首词后不得是赋值 / 自增 / `(`）实测频次 ≥10 的词；逐词频次与拒收档仍在宿主那张闸表里。
+ * 2026-10-31 从宿主 `monaco/erb-directives.ts` 整表搬来（悬停分类的判据在插件侧，宿主只
+ * re-export）——**搬的只是落点，词与闸一字未改**。
+ */
+export const ERB_STATEMENT_DIRECTIVES: readonly string[] = [
+  'PRINT', 'PRINTL', 'PRINTW', 'PRINTV', 'PRINTVL',
+  'PRINTFORM', 'PRINTFORML', 'PRINTFORMS', 'PRINTFORMW', 'PRINTFORMV',
+  'PRINTDATAS',
+  'PRINTDW', 'PRINTDL',
+  'PRINTFORMD', 'PRINTFORMDL', 'PRINTFORMDW',
+  'DATAFORM',
+  'PRINTSINGLE', 'PRINTSINGLEL', 'PRINTSINGLEFORM', 'PRINTSINGLEFORML',
+  'PRINTBUTTON',
+  'BREAK', 'CONTINUE', 'RETURN', 'RETURNF',
+  'GOTO',
+  'CALL', 'CALLL', 'JUMP', 'CALLFORM', 'CALLFORML', 'TRYCALLFORM', 'TRYCALLFORMF',
+  'TRYCALL', 'TRYJUMP', 'CALLF', 'CALLFORMF',
+  'DIM', 'DIMS', 'SWAP', 'VARSET',
+  'SETCOLOR', 'RESETCOLOR', 'FONTBOLD', 'FONTITALIC', 'FONTREGULAR', 'FONTSIZE', 'FONTSTYLE',
+  'WAIT', 'WAITANYKEY', 'INPUT', 'INPUTS', 'ONEINPUT', 'TINPUT', 'TINPUTS', 'TWAIT',
+  'SAVEDATA', 'LOADDATA', 'DELDATA', 'SAVEGLOBAL', 'LOADGLOBAL',
+  'GETTIME', 'GETMILLISECOND', 'SETBIT', 'CLEARBIT', 'INVERTBIT', 'GETBIT', 'SETCOLORBYNAME',
+  'RANDOMIZE', 'RAND', 'TIMES', 'EXISTCSV', 'GETNUM', 'BAR', 'BARL', 'DRAWLINE', 'CLEARLINE', 'ALIGNMENT',
+  'ADDCHARA', 'ADDSPCHARA', 'DELCHARA', 'SWAPCHARA', 'PICKUPCHARA', 'GETCHARA', 'CHKCHARA',
+  'EQUIP', 'UNEQUIP', 'EQUIPCHECK', 'CHANGE_CFLAG', 'CFLAG', 'DOWNBASE', 'RESETDATA', 'BEGIN', 'EVENTCOM',
+  'DEBUGPRINTFORML', 'SKIPDISP', 'REUSELASTLINE', 'RESTART', 'SETFONT',
+  'DATA',
+  'DT_ROW_ADD', 'DT_COLUMN_ADD', 'DT_CELL_SET', 'DT_SELECT', 'DT_ROW_REMOVE', 'DT_CREATE', 'DT_RELEASE',
+  'THROW',
+  'PRINTFORMC', 'PRINTS', 'PRINTLC', 'PRINTC', 'PRINTFORMLC', 'PRINTD',
+  'PRINTPLAINFORM', 'PRINTFORMSL', 'PRINTPLAIN', 'PRINTBUTTONLC', 'PRINTSL', 'PRINTSINGLEFORMS',
+  'PLAYSOUND', 'STOPSOUND',
+  'CUSTOMDRAWLINE', 'DRAWLINEFORM',
+  'CVARSET', 'ARRAYCOPY', 'ARRAYREMOVE', 'ARRAYSHIFT', 'ARRAYSORT',
+  'SETBGCOLOR', 'RESETBGCOLOR', 'SPRITECREATE', 'SPRITEDISPOSE',
+  'GDRAWSPRITE', 'GDISPOSE', 'GCREATE', 'GCREATEFROMFILE', 'GDRAWTEXT',
+  'GSETFONT', 'GSETPEN', 'GCLEAR', 'CBGCLEAR', 'CBGSETG',
+  'SPLIT', 'REPLACE', 'SUBSTRING',
+  'TRYCALLF', 'CHKDATA', 'RESET_STAIN', 'FINDELEMENT', 'SETANIMETIMER', 'DOTRAIN', 'GETDEFCOLOR',
+  'TONEINPUTS', 'BINPUT',
+  'XML_GET', 'XML_ADDNODE',
+  'MAP_SET', 'MAP_CREATE',
+  'GDRAWG', 'PRINT_RECT', 'GETCOLOR', 'TOOLTIP_SETDELAY', 'AWAIT',
+];
+
+/**
+ * `#` 声明族（**不含 `#` 前缀**）：`#DIM` 族 6 枚 + 文件级 / 返回类型 8 枚。
+ * 集合口径与转译器直通谓词同源（`kojo-vocab` 的 `DIM_DIRECTIVE_RE` 前 6 枚 +
+ * `native-display/control.ts` 的 8 枚文件级声明）。
+ */
+export const ERB_DECLARATION_DIRECTIVES: readonly string[] = [
+  'DIM',
+  'DIMS',
+  'DIMSTR',
+  'DIMCHAR',
+  'DIMF',
+  'DEFINE',
+  'FUNCTION',
+  'FUNCTIONS',
+  'GLOBAL',
+  'LOCALSIZE',
+  'LOCALSSIZE',
+  'SFUNCTION',
+  'XFUNCTION',
+  'TESTMEMORY',
+];
+

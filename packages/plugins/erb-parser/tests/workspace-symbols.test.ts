@@ -28,7 +28,7 @@ import { makeComputeStub } from './support';
 import {
   DEFAULT_WORKSPACE_SYMBOL_LIMIT,
   workspaceSymbolsInIndex,
-} from '../src/workspace-symbols';
+} from '../src/symbols';
 
 /** 由多份文本建索引（生产路径：解析 → 聚合） */
 function indexOf(files: { path: string; text: string }[]): ErbIndex {

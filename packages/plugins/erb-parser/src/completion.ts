@@ -33,21 +33,39 @@
 import type {
   EditorCompletionItem,
   EditorCompletionItemKind,
+  EditorHoverRequest,
+  EditorHoverResult,
   EditorLanguageRange,
+  ErbDim,
   ErbFile,
+  ErbFunction,
+  ErbFunctionRef,
   ErbIndex,
+  KojoInstructionTable,
+  KojoLibraryTable,
+  VariableSchema,
 } from '@kojo/plugin-api';
+import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import {
   ERB_BLANK_CLASS_STR,
   ERB_BLANK_RE,
+  ERB_CONTINUATION_MARKERS,
   ERB_PREPROC_CANDIDATES,
   ERB_SKIP_MARKERS,
   MODEL_TOKEN_CLASS,
+  erbContinuationRoleOf,
+  erbPreprocRoleOf,
   isAllErbBlank,
   isErbBlank,
+  isErbDialectPath,
+  symbolTokenAt,
+  unicodeTokenAt,
 } from '@kojo/plugin-api';
+import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
+import { ERB_DECLARATION_DIRECTIVES, ERB_STATEMENT_DIRECTIVES } from './instructions';
+import { parseDimDeclaration } from './scanner';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
-import { dimDeclarationOf, normalizePathKey } from './symbols';
+import { dimDeclarationOf, isErbDimNameChar, normalizePathKey } from './symbols';
 
 /* ============================== 词法地基 ============================== */
 
@@ -1012,4 +1030,648 @@ export function provideErbCompletion(
     return { kind: 'completion', items: [] };
   }
   return { kind: 'completion', items };
+}
+
+
+/* ============================== 悬停（ERB-PARITY G1，2026-10-31） ============================== */
+
+/**
+ * `.erb` 悬停的**内容判据**（原来是宿主 `monaco/kojo-hover.ts` 的 1–6 路 + `kojo-hover-marks.ts`）。
+ *
+ * 为什么住本文件而不是新开 `hover.ts`：位槽判据 {@link findBitSlot} 在这里，而 `symbols.ts`
+ * 已被本文件 import（反向 import 就是模块环）——悬停要按原优先序把位号那一路夹在指令编号
+ * 与函数索引之间，只能与位槽判据同住一枚文件。开机图文件闸 199 是另一条（本批零新增文件）。
+ *
+ * ## 六路优先序（**一个字都没改**，搬家前在 `kojo-hover.ts` 的 `resolveHoverNameCore`）
+ *
+ * 1 变量索引 `CFLAG:TARGET:1088` → 中文名（adapter 字典）；
+ * 2 原生函数名（系统表反向优先，再查 adapter 基础库表）；
+ * 3 指令编号（**只在糖的 `时机 <分野> <编号>：` 块头里认**——上下文正则由调用方注入，
+ *   `.erb` 悬停不注入 ⇒ 这一路对 `.erb` 不产结果，与搬家前逐字一致：`.erb` 里没有这种块头）；
+ * 4 位号（`GETBIT` 四种原语的第二实参，adapter `VariableInfo.bits`）；
+ * 5 项目函数索引（`ErbIndex.byName`：docComment + 形参签名 + 定义位置）；
+ * 5.5 本文件 `#DIM` 声明（声明处 + 声明原文 + 初值；同文件重名取最近，形参遮蔽同名变量）；
+ * 6 原生标记分类（`{`/`}` 行连接、`[IF …]` 预处理、`#DIM` 族、行首大写语句 / 族头）。
+ *
+ * 宿主那侧只保留两条**糖面**事实（`.kojo1` 独有、`.erb` 不出现）：载体注册壳前缀提示与
+ * 中文 → 原生形态反查；它们住在 `monaco/kojo-hover.ts` 与 `kojo-hover-native.ts`。
+ *
+ * ## 纪律（与搬家前同一条）
+ *
+ * 查不到 ⇒ `undefined`（不猜）；纯函数（不读盘、不写盘、不发事件）；表全部可选，
+ * 缺席只让那一路闭嘴。
+ */
+
+/** 悬停解析所需的表（全部可选；缺席 = 该路不产结果，**不猜**） */
+export interface ErbHoverTables {
+  /** 变量字典（adapter `variableSchema` → `makeLookup`） */
+  readonly dictionary?: DictionaryLookup;
+  /** 基础库 / 常用函数名表（adapter） */
+  readonly libraryTable?: KojoLibraryTable;
+  /** 指令名表（adapter）；只在注入 {@link timingPrefixRe} 时可达 */
+  readonly instructionTable?: KojoInstructionTable;
+  /** adapter 变量 schema 本体（位名反查用） */
+  readonly variableSchema?: VariableSchema;
+  /** 项目函数索引通道（**每次悬停现取**：索引随项目开闭重建，缓存会带来脏索引） */
+  readonly erbIndex?: () => ErbIndex | null | undefined;
+  /** 指令编号的上下文（`时机 <分野> <编号>：` 块头）；缺席 = 第 3 路不产结果 */
+  readonly timingPrefixRe?: RegExp;
+  /** 「这一行是原生直通行吗」（糖面才需要）；缺席 = 按原生行处理（`.erb` 恒为此） */
+  readonly isRawLine?: (lineText: string) => boolean;
+}
+
+/** 悬停命中（1 基列区间，供宿主画浮层范围） */
+export interface ErbHoverHit {
+  readonly name: string;
+  readonly kind: string;
+  readonly startColumn: number;
+  readonly endColumn: number;
+  /** 附加正文行：docComment / 形参签名 / 定义位置 / 声明原文 …（每行一个 markdown 块） */
+  readonly lines?: readonly string[];
+  /** 声明 / 定义的**源坐标**（派生预览面上列属于显示面，这条永远指回源文件） */
+  readonly source?: { readonly filePath: string; readonly line: number };
+}
+
+/** 悬停所在的**显示面**事实（`.kojo1` 糖投影用；`.erb` 恒源面） */
+export interface ErbHoverSurface {
+  readonly line?: number;
+  readonly derived?: boolean;
+  readonly readSourceLine?: (line: number) => string | undefined;
+}
+
+const isRefChar = (ch: string): boolean => /[A-Za-z0-9_:]/.test(ch);
+const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
+
+/** 变量引用：`族名` + 至少一段 `:段` */
+const REF_RE = /^([A-Za-z][A-Za-z0-9_]*):(.+)$/;
+
+/** 命中光标（含其左右邻接同类字符）的最长一段（`col0` = 0 基字符下标；无同类字符返回 null） */
+function spanAround(
+  line: string,
+  col0: number,
+  isChar: (ch: string) => boolean,
+): { start: number; end: number } | null {
+  let start: number;
+  let end: number;
+  if (col0 < line.length && isChar(line[col0]!)) {
+    start = col0;
+    end = col0 + 1;
+  } else if (col0 > 0 && isChar(line[col0 - 1]!)) {
+    start = col0 - 1;
+    end = col0;
+  } else {
+    return null;
+  }
+  while (start > 0 && isChar(line[start - 1]!)) start--;
+  while (end < line.length && isChar(line[end]!)) end++;
+  return { start, end };
+}
+
+/**
+ * 解析光标下的悬停事实（**纯函数**）。`column` = Monaco 的 1 基列；
+ * `filePath` / `surface` 只服务 `#DIM` 那一路（派生预览面上行号不是源行号）。
+ */
+export function resolveErbHoverAt(
+  lineText: string,
+  column: number,
+  tables: ErbHoverTables,
+  filePath: string | null = null,
+  surface: ErbHoverSurface = {},
+): ErbHoverHit | undefined {
+  if (!Number.isFinite(column) || column < 1) return undefined;
+  const col0 = Math.min(column - 1, lineText.length);
+
+  // 1) 数值变量索引（具名索引 `description == 索引` 时等于回显，无增益 → 跳过）
+  const refSpan = spanAround(lineText, col0, isRefChar);
+  if (refSpan) {
+    const token = lineText.slice(refSpan.start, refSpan.end);
+    const m = REF_RE.exec(token);
+    if (m) {
+      const family = m[1]!;
+      const segs = m[2]!.split(':');
+      const index = segs[segs.length - 1]!;
+      const name = tables.dictionary?.nameAt?.(family, index);
+      if (name !== undefined && name.length > 0 && name !== index) {
+        return {
+          name,
+          kind: `变量 · ${token}`,
+          startColumn: refSpan.start + 1,
+          endColumn: refSpan.end + 1,
+        };
+      }
+    }
+  }
+
+  // 2) 原生函数名（ASCII 记号；中文词在这一路必然判不出记号——那是反查表的键形状）
+  const fnToken = symbolTokenAt(lineText, col0 + 1);
+  if (fnToken) {
+    const cn = SYSTEM_FUNCTION_REVERSE.get(fnToken.text) ?? tables.libraryTable?.lookupByFunction?.(fnToken.text);
+    if (cn !== undefined && cn.length > 0 && !echoYieldsToIndex(cn, fnToken.text, tables)) {
+      return { name: cn, kind: `函数 · ${fnToken.text}`, startColumn: fnToken.startColumn, endColumn: fnToken.endColumn };
+    }
+  }
+
+  // 3) 指令编号：只在可证明的块头里认（上下文正则由调用方注入；不注入 = 这一路闭嘴）
+  const timingRe = tables.timingPrefixRe;
+  if (timingRe !== undefined && tables.instructionTable) {
+    const digitSpan = spanAround(lineText, col0, isDigit);
+    if (digitSpan) {
+      const token = lineText.slice(digitSpan.start, digitSpan.end);
+      if (timingRe.test(lineText.slice(0, digitSpan.start))) {
+        const cn = tables.instructionTable.lookupByNo(Number(token));
+        if (cn !== undefined && cn.length > 0) {
+          return {
+            name: cn,
+            kind: `指令 · 编号 ${token}`,
+            startColumn: digitSpan.start + 1,
+            endColumn: digitSpan.end + 1,
+          };
+        }
+      }
+    }
+  }
+
+  // 4) 位号：只在可证明的位槽里认；查不到位表一律不显示
+  const bit = erbBitHoverName(lineText, column, tables.variableSchema);
+  if (bit !== undefined) {
+    return { name: bit.name, kind: `位号 · ${bit.bit}`, startColumn: bit.startColumn, endColumn: bit.endColumn };
+  }
+
+  // 5) ERB 函数定义（docComment + 形参签名 + 定义位置；定义行与调用点同词同命中）
+  const erbFn = resolveErbFunctionHover(lineText, column, tables.erbIndex);
+  if (erbFn !== undefined) return erbFn;
+
+  // 5.5) 本文件 `#DIM` 声明（声明处 + 声明原文 + 初值；同文件重名取最近的声明）
+  const erbDim = resolveErbDimHover(lineText, col0, tables.erbIndex, filePath, surface);
+  if (erbDim !== undefined) return erbDim;
+
+  // 6) 原生标记分类（`[IF …]` / `#DIM` / `{` `}` / 行首大写 ERB 语句）
+  return resolveErbMarkHover(lineText, column, tables);
+}
+
+/**
+ * 函数索引通道的**唯一**取法：缺席 / 未建 / 求值抛错 ⇒ `null`（不猜、fail-open）。
+ */
+function erbIndexOf(getIndex: (() => ErbIndex | null | undefined) | undefined): ErbIndex | null {
+  if (typeof getIndex !== 'function') return null;
+  try {
+    return getIndex() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** 「项目函数索引认不认这个名字」的唯一查询（第 2 路的裁决与第 5 路共用） */
+function erbDefsOf(index: ErbIndex, upper: string): ErbFunctionRef[] | undefined {
+  const defs = index.byName.get(upper);
+  return defs === undefined || defs.length === 0 ? undefined : defs;
+}
+
+/**
+ * 第 2 路与第 5 路的**优先序裁决**（一条判据一枚函数）：库表那条只是**回显**
+ * （中文名 === 原生名）时让位给函数索引——回显给不出 docComment / 签名 / 定义位；
+ * 库表给的是**真翻译**（两个名字不同）时库表先答（实测语料 471 条里 458 条是真翻译）。
+ */
+function echoYieldsToIndex(cn: string, token: string, tables: ErbHoverTables): boolean {
+  if (cn !== token) return false;
+  const index = erbIndexOf(tables.erbIndex);
+  return index !== null && erbDefsOf(index, token.toUpperCase()) !== undefined;
+}
+
+/** ERB 函数路：光标词 ∈ `byName`（归一大写）⇒ docComment + 形参签名 + 定义位置 */
+function resolveErbFunctionHover(
+  lineText: string,
+  column: number,
+  getIndex: (() => ErbIndex | null | undefined) | undefined,
+): ErbHoverHit | undefined {
+  const index = erbIndexOf(getIndex);
+  if (index === null) return undefined;
+  const span = unicodeTokenAt(lineText, column);
+  if (!span) return undefined;
+  const defs = erbDefsOf(index, span.text.toUpperCase());
+  if (defs === undefined) return undefined;
+
+  const def = defs[0]!;
+  const lines: string[] = [];
+  if (def.docComment !== undefined && def.docComment.length > 0) {
+    lines.push(...def.docComment.split('\n').filter((l) => l.trim().length > 0));
+  }
+  const file = index.files.get(def.filePath);
+  const fn = file?.functions.find((f) => f.normalizedName === def.normalizedName && f.startLine === def.startLine);
+  if (fn && fn.params.length > 0) {
+    lines.push(`\`${def.name}(${fn.params.map((p) => p.name).join(', ')})\``);
+  }
+  lines.push(`定义于 \`${def.filePath}:${def.startLine}\``);
+  if (defs.length > 1) lines.push(`另有 ${defs.length - 1} 处同名定义`);
+
+  return {
+    name: def.name,
+    kind: 'ERB 函数',
+    startColumn: span.startColumn,
+    endColumn: span.endColumn,
+    lines,
+    source: { filePath: def.filePath, line: def.startLine },
+  };
+}
+
+/** 索引里的声明名可能带数组后缀；悬停按**裸名**匹配与显示（`[10]` 是规模，不是名字） */
+function bareDimNameOf(name: string): string {
+  return name.replace(/\[[^\]]*\]$/, '');
+}
+
+/** 索引里的一份文件（只取悬停用得到的字段） */
+type IndexedErbFile = {
+  readonly path: string;
+  readonly dims?: readonly ErbDim[];
+  readonly functions?: readonly ErbFunction[];
+};
+
+/** 源行号（1 基、有限、≥1）；派生面 / 缺省 / 坏值 ⇒ `null`（不猜） */
+function sourceLineOf(line: number | undefined): number | null {
+  return typeof line === 'number' && Number.isFinite(line) && line >= 1 ? Math.trunc(line) : null;
+}
+
+/** 光标行落在哪个函数里（多个命中取最内层 = 起点最大的那个）；不在任何函数里 ⇒ `undefined` */
+function enclosingFunctionOf(functions: readonly ErbFunction[], line: number): ErbFunction | undefined {
+  let best: ErbFunction | undefined;
+  for (const fn of functions) {
+    if (line < fn.startLine || line > fn.endLine) continue;
+    if (best === undefined || fn.startLine > best.startLine) best = fn;
+  }
+  return best;
+}
+
+/** 同名声明的**最近一条**：当前函数内优先 → 函数外文件级 → 全文件行距（`null` = 索引首条） */
+function nearestDimOf(dims: readonly ErbDim[], functions: readonly ErbFunction[], useLine: number | null): ErbDim {
+  if (dims.length === 1 || useLine === null) return dims[0]!;
+  const scope = enclosingFunctionOf(functions, useLine);
+  if (scope !== undefined) {
+    const inside = dims.filter((d) => d.line >= scope.startLine && d.line <= scope.endLine);
+    if (inside.length > 0) return nearestByLine(inside, useLine);
+    const outside = dims.filter((d) => enclosingFunctionOf(functions, d.line) === undefined);
+    if (outside.length > 0) return nearestByLine(outside, useLine);
+  }
+  return nearestByLine(dims, useLine);
+}
+
+/** 行距最近（同距时取**声明在前**的那条；之前没有才取之后最早的一条） */
+function nearestByLine(dims: readonly ErbDim[], useLine: number): ErbDim {
+  let best = dims[0]!;
+  for (const d of dims) {
+    const beforeD = d.line <= useLine;
+    const beforeBest = best.line <= useLine;
+    if (beforeD !== beforeBest) {
+      if (beforeD) best = d;
+      continue;
+    }
+    if (beforeD ? d.line > best.line : d.line < best.line) best = d;
+  }
+  return best;
+}
+
+/** 读源文件某一行（读腿抛错 / 非字符串一律当读不到） */
+function readSourceRow(
+  read: ((line: number) => string | undefined) | undefined,
+  line: number,
+): string | undefined {
+  if (read === undefined) return undefined;
+  try {
+    const text = read(line);
+    return typeof text === 'string' ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 声明行原文（**校验它确实声明了同名变量**）：行号对不上 / 不是 `#DIM*` 行 / 名字不同
+ * ⇒ `undefined`（不拿别的声明冒充）。超长行截断（悬停块不是正文阅读器）。
+ */
+function declarationTextOf(line: string | undefined, name: string): string | undefined {
+  if (line === undefined) return undefined;
+  const trimmed = line.trim();
+  if (trimmed.length === 0) return undefined;
+  let parsed: { directive: string; name: string } | null;
+  try {
+    parsed = parseDimDeclaration(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (parsed === null) return undefined;
+  const bare = parsed.name.replace(/\[[^\]]*\]$/, '');
+  if (bare.toUpperCase() !== name.toUpperCase()) return undefined;
+  return trimmed.length > 200 ? `${trimmed.slice(0, 199)}…` : trimmed;
+}
+
+/**
+ * 声明行里 `=` 之后的初值（去掉引号外的 `;` 注释尾巴）；数组规模不算初值。
+ * 读不出 / 为空 ⇒ `undefined`（不写「初值：空」这种假事实）。
+ */
+function initializerOfDimLine(line: string, name: string): string | undefined {
+  const head = /^#[A-Za-z]+/.exec(line);
+  const from = head === null ? 0 : head[0].length;
+  const at = line.toLowerCase().indexOf(name.toLowerCase(), from);
+  if (at < 0) return undefined;
+  let rest = line.slice(at + name.length);
+  if (rest.startsWith('[')) {
+    const close = rest.indexOf(']');
+    if (close < 0) return undefined;
+    rest = rest.slice(close + 1);
+  }
+  const eq = rest.indexOf('=');
+  if (eq < 0) return undefined;
+  const value = stripUnquotedComment(rest.slice(eq + 1)).trim();
+  return value.length === 0 ? undefined : value;
+}
+
+/** 去掉第一个**引号外**的 `;` 及其后内容（ERB 注释；字符串里的 `;` 不算） */
+function stripUnquotedComment(text: string): string {
+  let inStr = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '"') inStr = !inStr;
+    else if (ch === ';' && !inStr) return text.slice(0, i);
+  }
+  return text;
+}
+
+/**
+ * `#DIM` 声明名悬停：先按路径归一（分隔符 / 大小写）找到当前文件，再在 `dims` 里按
+ * 大小写不敏感整词匹配。文件不在索引 / 索引缺席 / 词不是声明名 ⇒ `undefined`（不猜）。
+ * 名字字符集用 `symbols.ts` 的 `isErbDimNameChar`（声明名可带冒号 / 括号等，比函数记号集宽）。
+ */
+function resolveErbDimHover(
+  lineText: string,
+  col0: number,
+  getIndex: (() => ErbIndex | null | undefined) | undefined,
+  filePath: string | null,
+  surface: ErbHoverSurface = {},
+): ErbHoverHit | undefined {
+  if (!filePath) return undefined;
+  const index = erbIndexOf(getIndex);
+  if (index === null) return undefined;
+  const span = spanAround(lineText, col0, isErbDimNameChar);
+  if (!span) return undefined;
+  const token = lineText.slice(span.start, span.end);
+  if (token.length === 0) return undefined;
+  const key = normalizePathKey(filePath);
+  let file: IndexedErbFile | undefined;
+  for (const [p, f] of index.files) {
+    if (normalizePathKey(p) === key) {
+      file = f as IndexedErbFile;
+      break;
+    }
+  }
+  if (!file) return undefined;
+  const want = token.toUpperCase();
+  // 派生面的行号是**显示面**坐标，不是源行号 ⇒ 不参与作用域与「最近」判定
+  const useLine = surface.derived === true ? null : sourceLineOf(surface.line);
+
+  // 函数形参遮蔽同名变量（只在源面可判）
+  if (useLine !== null) {
+    const fn = enclosingFunctionOf(file.functions ?? [], useLine);
+    const param = fn?.params.find((p) => p.name.toUpperCase() === want);
+    if (fn !== undefined && param !== undefined) {
+      return {
+        name: param.name,
+        kind: '函数形参',
+        startColumn: span.start + 1,
+        endColumn: span.end + 1,
+        lines: [`所在函数：\`@${fn.name}\``, `形参声明于 \`${file.path}:${fn.startLine}\``],
+        source: { filePath: file.path, line: fn.startLine },
+      };
+    }
+  }
+
+  const dims = (file.dims ?? []).filter((d) => bareDimNameOf(d.name).toUpperCase() === want);
+  if (dims.length === 0) return undefined;
+  const dim = nearestDimOf(dims, file.functions ?? [], useLine);
+  const dimName = bareDimNameOf(dim.name);
+  const lines: string[] = [`声明于 \`${file.path}:${dim.line}\``];
+  // 值 / 类型「若可判」：只在**源文件**那一行读（读不到 / 不同名 ⇒ 只给落点，不编值）
+  const raw = declarationTextOf(readSourceRow(surface.readSourceLine, dim.line), dimName);
+  if (raw !== undefined) {
+    lines.push(`声明：\`${raw}\``);
+    const init = initializerOfDimLine(raw, dimName);
+    if (init !== undefined) lines.push(`初值：\`${init}\``);
+  }
+  if (dims.length > 1) {
+    const others = dims
+      .filter((d) => d !== dim)
+      .map((d) => d.line)
+      .sort((a, b) => a - b);
+    lines.push(`另有 ${others.length} 处同名声明（第 ${others.join('、')} 行）`);
+  }
+  return {
+    name: dimName,
+    kind: `#${dim.directive} 声明`,
+    startColumn: span.start + 1,
+    endColumn: span.end + 1,
+    lines,
+    source: { filePath: file.path, line: dim.line },
+  };
+}
+
+/**
+ * 位号悬停（D7）：光标下**位槽里的位号** → 中文位名（adapter `VariableInfo.bits`）。
+ * 返回 `undefined` = 非位槽 / 光标不在数字上 / 查不到位表 / 位号不在表内（不猜）。
+ */
+export function erbBitHoverName(
+  lineText: string,
+  column: number,
+  schema: VariableSchema | undefined,
+): { readonly name: string; readonly bit: number; readonly startColumn: number; readonly endColumn: number } | undefined {
+  if (!schema) return undefined;
+  const slot = findBitSlot(lineText, column);
+  if (slot === null) return undefined;
+  const col0 = Math.min(column - 1, lineText.length);
+
+  let start = col0;
+  while (start > slot.regionStart && isDigit(lineText[start - 1]!)) start--;
+  let end = col0;
+  while (end < slot.regionEnd && isDigit(lineText[end]!)) end++;
+  if (start === end) return undefined;
+  const token = lineText.slice(start, end);
+  if (!/^\d+$/.test(token)) return undefined;
+
+  const bits = resolveErbBitLabels(schema, slot.variableRef);
+  if (bits === undefined) return undefined;
+  const bit = Number(token);
+  const entry = bits.find((b) => b.bit === bit);
+  if (entry === undefined) return undefined;
+  return { name: entry.label, bit, startColumn: start + 1, endColumn: end + 1 };
+}
+
+/**
+ * 把第一实参变量引用解析成 `VariableInfo.bits`：族 = 第一个冒号前段，索引 = **最后一个**
+ * 冒号后段（三段式 `族:角色:名` 的中段是角色表达式，名字在末段；adapter 只按单段名查表）。
+ */
+export function resolveErbBitLabels(
+  schema: VariableSchema,
+  variableRef: string,
+): ReadonlyArray<{ bit: number; label: string }> | undefined {
+  if (variableRef.length === 0) return undefined;
+  const first = variableRef.indexOf(':');
+  const last = variableRef.lastIndexOf(':');
+  const name = first < 0 ? variableRef : variableRef.slice(0, first);
+  const index = last < 0 ? undefined : variableRef.slice(last + 1);
+  let bits: ReadonlyArray<{ bit: number; label: string }> | undefined;
+  try {
+    bits = schema.lookup(name, index)?.bits;
+  } catch {
+    return undefined;
+  }
+  return bits !== undefined && bits.length > 0 ? bits : undefined;
+}
+
+const DECLARATION_SET: ReadonlySet<string> = new Set(ERB_DECLARATION_DIRECTIVES.map((w) => w.toUpperCase()));
+const DIRECTIVE_SET: ReadonlySet<string> = new Set(ERB_STATEMENT_DIRECTIVES.map((w) => w.toUpperCase()));
+const FAMILY_SET: ReadonlySet<string> = new Set(ENGINE_VARIABLE_FAMILIES);
+
+/** 行首（缩进之后）第一个字符的 0 基下标 */
+function firstNonBlank(line: string): number {
+  const m = /^[ \t\u3000]*/.exec(line);
+  return m === null ? 0 : m[0].length;
+}
+
+/**
+ * 原生标记分类（v1.9 P2「悬停」面）：只回答"这是什么"，不给逐词文档，也不抢前五路的事实。
+ * 判据全部来自单源：预处理 / 行连接角色 = 契约 `erb.ts`；声明族与语句词表 = `./instructions.ts`。
+ */
+export function resolveErbMarkHover(
+  lineText: string,
+  column: number,
+  tables: ErbHoverTables = {},
+): ErbHoverHit | undefined {
+  if (!Number.isFinite(column) || column < 1) return undefined;
+  const col0 = Math.min(column - 1, lineText.length);
+  const trimmed = lineText.trim();
+  if (trimmed.length === 0) return undefined;
+
+  // 1) `{` / `}` 行连接标记（整行严格等值）
+  if (erbContinuationRoleOf(trimmed) !== null) {
+    const start = firstNonBlank(lineText);
+    if (col0 !== start) return undefined; // 只认标记字符本身
+    const mark = lineText.slice(start, start + 1);
+    return {
+      name: `行连接标记 ${mark}`,
+      kind: '引擎记号 · 行连接',
+      startColumn: start + 1,
+      endColumn: start + 2,
+      lines: [
+        `引擎把 \`${ERB_CONTINUATION_MARKERS.open}\` … \`${ERB_CONTINUATION_MARKERS.close}\` 之间的物理行拼成一条逻辑行。`,
+      ],
+    };
+  }
+
+  // 2) 预处理标记 `[IF …]` 族（整行严格等值）
+  if (erbPreprocRoleOf(trimmed) !== null) {
+    const start = firstNonBlank(lineText);
+    if (col0 < start) return undefined;
+    return {
+      name: trimmed,
+      kind: '预处理标记',
+      startColumn: start + 1,
+      endColumn: Math.min(lineText.length, start + trimmed.length) + 1,
+      lines: [
+        '整行严格等值（大小写不敏感），引擎按文件级裁剪。',
+        '糖形写法：`预处理 如果 <宏>：` … `预处理结束`（回读为同一批标记）。',
+      ],
+    };
+  }
+
+  const token = unicodeTokenAt(lineText, column);
+  if (token === null) return undefined;
+  const upper = token.text.toUpperCase();
+
+  // 3) `#` 声明族（`#DIM` / `#FUNCTION` …）
+  const prefix = lineText.slice(0, token.startColumn - 1);
+  if (prefix.trimEnd().endsWith('#')) {
+    if (!DECLARATION_SET.has(upper)) return undefined;
+    return {
+      name: `#${upper}`,
+      kind: 'ERB 声明',
+      startColumn: token.startColumn - 1,
+      endColumn: token.endColumn,
+      lines: ['文件级 / 返回类型声明：逐字节直通，不拆中文写形。'],
+    };
+  }
+
+  // 4) 行首大写词：ERB 语句 / 引擎族头（糖区行必须让位给台词里的普通大写词）
+  if (token.startColumn - 1 !== firstNonBlank(lineText)) return undefined;
+  const rawLine = tables.isRawLine === undefined ? true : tables.isRawLine(lineText);
+  if (!rawLine) {
+    if (!FAMILY_SET.has(upper)) return undefined;
+    return {
+      name: upper,
+      kind: '引擎族头',
+      startColumn: token.startColumn,
+      endColumn: token.endColumn,
+      lines: ['引擎变量族头（`族:段:…` 引用形态）。'],
+    };
+  }
+  if (!DIRECTIVE_SET.has(upper)) return undefined;
+  return {
+    name: upper,
+    kind: 'ERB 语句',
+    startColumn: token.startColumn,
+    endColumn: token.endColumn,
+    lines: ['原生 ERB 语句（整行直通，不拆糖形）。'],
+  };
+}
+
+/**
+ * 悬停正文的 markdown 拼装（**唯一一份**）：首块是 `**名字**（档位）`，其余每条附加行
+ * 各成一段（`\n\n` 分隔）。宿主只把它塞进 `contents`，不另拼一份。
+ */
+export function erbHoverMarkdown(hit: ErbHoverHit): string {
+  return [`**${hit.name}**（${hit.kind}）`, ...(hit.lines ?? [])].join('\n\n');
+}
+
+/** 悬停供方从 adapter 现取的**静态面**（与宿主 `editorTables` 同一判据：按项目 adapterId 精确匹配） */
+export interface ErbHoverAdapterFacts {
+  readonly dictionary?: DictionaryLookup;
+  readonly variableSchema?: VariableSchema;
+  readonly libraryTable?: KojoLibraryTable;
+}
+
+/**
+ * 槽 `ui.editor.languageService` 的 `hover` 供方（ERB）。
+ *
+ * 三态：非 ERB 方言 ⇒ `undefined`（弃权，下一家接手）；ERB 但六路都没事实 ⇒ `undefined`
+ * （**不是**空串——空串＝作答，会把 `.kojo1` 那套 v1 糖面悬停顶掉）；有事实 ⇒ 一条
+ * `format: 'markdown'` 的作答。
+ *
+ * 数据源全部由调用方注入（`index` = 本包索引；`adapterTables` = 宿主侧那几张 adapter 表，
+ * 经 `game.adapter` 槽现取）——本函数不读盘、不碰项目生命周期，纯到可单测。
+ */
+export function provideErbHover(
+  request: EditorHoverRequest,
+  deps: {
+    readonly index: () => ErbIndex | null;
+    readonly adapterTables?: () => ErbHoverAdapterFacts;
+  },
+): EditorHoverResult | undefined {
+  try {
+    if (!isErbDialectPath(request.path)) return undefined;
+    const lines = request.text.replace(/\r\n?/g, '\n').split('\n');
+    const lineText = lines[request.line - 1] ?? '';
+    const facts = deps.adapterTables === undefined ? {} : deps.adapterTables();
+    const hit = resolveErbHoverAt(
+      lineText,
+      request.column,
+      { ...facts, erbIndex: deps.index },
+      request.path,
+      { line: request.line, derived: false, readSourceLine: (n) => lines[n - 1] },
+    );
+    if (hit === undefined) return undefined;
+    return {
+      kind: 'hover',
+      contents: erbHoverMarkdown(hit),
+      format: 'markdown',
+      range: { line: request.line, startColumn: hit.startColumn, endColumn: hit.endColumn },
+    };
+  } catch {
+    return undefined;
+  }
 }

@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
 import type { VariableSchema } from '@kojo/plugin-api';
+import { resolveErbBitLabels } from '@kojo/plugin-erb-parser';
 import {
   erbBitSlotOpen,
   erbBitSlotRegionBlank,
@@ -54,44 +55,7 @@ export { erbBitSlotOpen, findBitSlot, matchingParen, topLevelComma };
 /** 位原语单字 → 语句形（无括号）还是表达式形（带括号） */
 const BIT_PRIMITIVES = /\b(GETBIT|SETBIT|CLEARBIT|INVERTBIT)\b/gi;
 
-/** 位名悬停命中（1 基列区间，供 hover 高亮） */
-export interface ErbBitHoverHit {
-  /** 中文位名（`VariableInfo.bits[].label` 原文） */
-  readonly name: string;
-  /** 位号 */
-  readonly bit: number;
-  readonly startColumn: number;
-  readonly endColumn: number;
-}
-
-const isDigit = (ch: string): boolean => ch >= '0' && ch <= '9';
-
 export type { ErbBitSlot } from '@kojo/plugin-erb-parser';
-
-/**
- * 把第一实参变量引用解析成 `VariableInfo.bits`（**纯函数**；段切法见文件头注）。
- * 族 = 第一个冒号前段；索引 = **最后一个**冒号后段（无冒号 = 裸族头 ⇒ `index` 缺省）。
- * 依据：adapter `lookup` 按**单段名**查 `byIndex` / `byName`，三段式中段是角色表达式、
- * 名字在末段；两段式首末冒号同一条 ⇒ 与旧切法逐字等价。
- * 查不到 / 无位表 / 抛错 ⇒ `undefined`（**不猜**，绝不静默造位号）。
- */
-function resolveBits(
-  schema: VariableSchema,
-  variableRef: string,
-): ReadonlyArray<{ bit: number; label: string }> | undefined {
-  if (variableRef.length === 0) return undefined;
-  const first = variableRef.indexOf(':');
-  const last = variableRef.lastIndexOf(':');
-  const name = first < 0 ? variableRef : variableRef.slice(0, first);
-  const index = last < 0 ? undefined : variableRef.slice(last + 1);
-  let bits: ReadonlyArray<{ bit: number; label: string }> | undefined;
-  try {
-    bits = schema.lookup(name, index)?.bits;
-  } catch {
-    return undefined;
-  }
-  return bits !== undefined && bits.length > 0 ? bits : undefined;
-}
 
 /**
  * 产出位槽的补全候选（**纯函数**，供补全基座调用）。
@@ -117,7 +81,7 @@ export function erbBitCompletionItems(
   // 位坑已有内容（作者写了位号 / 写成变量 `LOCAL`）⇒ 不抢候选（不打扰作者写变量）
   if (!erbBitSlotRegionBlank(line, slot)) return [];
 
-  const bits = resolveBits(schema, slot.variableRef);
+  const bits = resolveErbBitLabels(schema, slot.variableRef);
   if (bits === undefined) return [];
 
   const range: Monaco.IRange = {
@@ -146,34 +110,7 @@ export function erbBitCompletionItems(
 }
 
 /**
- * 解析光标下**位槽里的位号** → 中文位名（**纯函数**，供悬停基座调用）。
- *
- * 返回 `undefined` = 该处没有可显示的位名（**不猜**：非位槽 / 光标不在数字上 /
- * 第一实参变量查不到位表 / 位号不在表内，一律不显示）。
+ * 位名悬停的**判据已搬进插件**（ERB-PARITY G1，2026-10-31）：`@kojo/plugin-erb-parser` 的
+ * `erbBitHoverName`（位槽判据本就在那里）。本文件只 re-export，宿主不再有第二份实现。
  */
-export function erbBitHoverName(
-  lineText: string,
-  column: number,
-  schema: VariableSchema | undefined,
-): ErbBitHoverHit | undefined {
-  if (!schema) return undefined;
-  const slot = findBitSlot(lineText, column);
-  if (slot === null) return undefined;
-  const col0 = Math.min(column - 1, lineText.length);
-
-  // 光标所在（或紧邻）的**数字串**，须整体落在位槽区间内
-  let start = col0;
-  while (start > slot.regionStart && isDigit(lineText[start - 1]!)) start--;
-  let end = col0;
-  while (end < slot.regionEnd && isDigit(lineText[end]!)) end++;
-  if (start === end) return undefined;
-  const token = lineText.slice(start, end);
-  if (!/^\d+$/.test(token)) return undefined;
-
-  const bits = resolveBits(schema, slot.variableRef);
-  if (bits === undefined) return undefined;
-  const bit = Number(token);
-  const entry = bits.find((b) => b.bit === bit);
-  if (entry === undefined) return undefined;
-  return { name: entry.label, bit, startColumn: start + 1, endColumn: end + 1 };
-}
+export { erbBitHoverName } from '@kojo/plugin-erb-parser';

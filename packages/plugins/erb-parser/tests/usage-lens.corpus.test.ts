@@ -25,7 +25,7 @@ import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { MemoryStorageBackend } from '../../../kernel/tests/helpers/memory-storage';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
-import { USAGE_LENS_BIG_COUNT } from '../src/usage-lens';
+import { USAGE_LENS_BIG_COUNT } from '../src/symbols';
 
 /**
  * 宿主三道降级的**当前取值**（真源：`app/src/ui/editor-options.ts` 的 `LARGE_FILE_LINES`、

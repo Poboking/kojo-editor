@@ -60,7 +60,19 @@ export function registerForLanguageServices(
    * 再给它们铺一枚**永远弃权**的 provider 既是白问一次、也会让"这门语言有几枚 💡 provider"
    * 从数据变成噪声。缺省 `false` = 旧行为逐字不变。
    */
-  options: { readonly namedOnly?: boolean } = {},
+  options: {
+    readonly namedOnly?: boolean;
+    /**
+     * `excludeNamed` = **跳过**点名了这一格槽腿的语言（additive，ERB-PARITY G1）。
+     *
+     * 理由：一门语言把某条腿交给插件供方之后，**旧桥语言的自建 provider 必须让位**——
+     * 否则同一门语言上会同时挂两枚同种 provider（Monaco 把两份悬停正文**同时**摊开，
+     * 不是后者覆盖前者）。判据照样是 descriptor 的声明（`slotServices` / `services.slot`），
+     * 不写任何语言 id：`hover` 这一格今天只有 ERB 点名，它的 legacy 悬停因此不再自挂，
+     * 由共享收口那一枚应答。
+     */
+    readonly excludeNamed?: SlotServiceKind;
+  } = {},
 ): Monaco.IDisposable {
   // B3d：逐门挂上时**半途抛错就回滚**。此前 `.map` 写在表达式里，第二门注册抛错会让
   // 第一门那枚 disposable 当场丢失（它只活在 map 的中间值里）——调用方再"撤回已挂上的"
@@ -68,10 +80,16 @@ export function registerForLanguageServices(
   const subs: Monaco.IDisposable[] = [];
   try {
     for (const descriptor of languageDescriptors()) {
-      // 两种写法同效（SDK-DIALECT，2026-10-31）：`languageServices: true` / `services.legacyBridge`
+// 两种写法同效（SDK-DIALECT，2026-10-31）：`languageServices: true` / `services.legacyBridge`
       // 都是旧桥；`slotServices` / `services.slot` 都是点名。判据读语言注册表那两枚 helper——
       // 本文件不再自抄一份（此前只读旧写法，照指南用新写法登记的方言会被静默漏挂）。
-      const servesAll = options.namedOnly !== true && usesLegacyBridge(descriptor);
+      // `excludeNamed`（ERB-PARITY G1）：点名了该槽腿的语言让旧桥那枚退出，
+      // 只影响"共享旧桥枚"，不影响点名腿自己的注册。
+      const namesExcluded =
+        options.excludeNamed !== undefined &&
+        declaredSlotKinds(descriptor).includes(options.excludeNamed);
+      const servesAll =
+        options.namedOnly !== true && usesLegacyBridge(descriptor) && !namesExcluded;
       const namedBySlot = kind !== undefined && declaredSlotKinds(descriptor).includes(kind);
       if (!servesAll && !namedBySlot) continue;
       subs.push(register(monaco, descriptor.id));

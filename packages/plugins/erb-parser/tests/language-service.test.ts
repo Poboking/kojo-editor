@@ -119,6 +119,7 @@ describe('erb-parser · ui.editor.languageService 装配', () => {
       'erb-completion',
       'erb-definition',
       'erb-folding',
+      'erb-hover',
       'erb-inlay-hints',
       'erb-references',
       'erb-rename',

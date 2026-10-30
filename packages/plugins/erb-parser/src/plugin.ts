@@ -16,9 +16,11 @@ import type {
   ErbScanSourceFact,
   FileIO,
   FileStat,
+  GameAdapter,
   GameProject,
   LineDecoration,
   Plugin,
+  SlotRegistry,
   WorkspaceService,
 } from '@kojo/plugin-api';
 import {
@@ -26,11 +28,13 @@ import {
   ERB_ENGINE_RESERVED_IDENTIFIERS,
   ERB_ENGINE_STRING_IDENTIFIERS,
   KernelServices,
+  activeGameAdapter,
   isErbDialectPath,
   isPathUnder,
   pathKey,
   projectFingerprintOf,
 } from '@kojo/plugin-api';
+import { makeLookup } from '@kojo/kojo-vocab/engine';
 import { applyIndexDelta, type IncrementalFileUpdate } from './incremental';
 import {
   idleIndexState,
@@ -60,18 +64,16 @@ import {
 import { parseErbText, scanControlFlow } from './scanner';
 import { checkStructure, erbDocumentSymbols } from './structure';
 import { buildStructureFixes } from './structure-fix';
-import { provideErbCompletion } from './completion';
+import { provideErbCompletion, provideErbHover, type ErbHoverAdapterFacts } from './completion';
 import { erbFoldingRanges } from './folding';
-import { buildReferenceIndex, erbReferenceDecorations, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
-import { definitionTargetsAt, erbReferencesAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition } from './symbols';
+import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
+import { definitionTargetsAt, erbReferencesAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition, usageLenses, workspaceSymbolsInIndex } from './symbols';
 import {
   callHierarchySymbolOf,
   incomingCalls,
   outgoingCalls,
   resolveEnclosingFunction,
 } from './symbols';
-import { workspaceSymbolsInIndex } from './workspace-symbols';
-import { usageLenses } from './usage-lens';
 import { erbSemanticTokens } from './semantic-tokens';
 import { callArgumentHints, inlaySlotsOf } from './inlay-hints';
 import { arityParamsOf, collectArityDiagnostics, type ArityCatalog } from './arity';
@@ -525,6 +527,49 @@ export function createErbParserPlugin(): Plugin {
       for (const [kind, impl] of Object.entries(erbParserTasks)) compute.registerTask(kind, impl as never);
       /** 本插件命名空间的存储域：索引快照的落点（`{appData}/store/erb-parser/`） */
       const storage = ctx.storage;
+
+      /**
+       * 槽注册表（**软取**，ERB-PARITY G1）——悬停要按当前项目的 adapter 取三张表
+       * （变量字典 / 变量 schema / 基础库函数名表），而 adapter 的事实只经槽
+       * `game.adapter` 交出（`plugin-api` 的 `activeGameAdapter` 认"当前那枚"）。
+       * 软取理由与 `erb.parser` 的消费者同一条：读不到槽只该让"adapter 那三路"退化，
+       * 不该让整个解析器 inactive。
+       */
+      const slotRegistry = (): SlotRegistry | undefined => {
+        try {
+          return ctx.tryInject<SlotRegistry>(KernelServices.Slots);
+        } catch {
+          return undefined;
+        }
+      };
+
+      /**
+       * adapter 三张表的**现取**（与宿主 `editorTables` 同一判据：按请求里那份项目的
+       * `adapterId` 精确匹配；对不上 ⇒ 只给静态基础库表，与宿主的无项目回退同向）。
+       * 每次悬停现取：项目开闭会换 adapter，缓存会把上一个项目的表带过来。
+       */
+      const adapterTablesOf = (adapterId: string | undefined): ErbHoverAdapterFacts => {
+        const slots = slotRegistry();
+        if (slots === undefined) return {};
+        let contributions: readonly { readonly adapter: GameAdapter }[];
+        try {
+          contributions = slots.query('game.adapter');
+        } catch {
+          return {};
+        }
+        const matched = activeGameAdapter(contributions, adapterId);
+        const adapter =
+          matched ??
+          contributions.find((c) => c.adapter.kojoLibraryTable !== undefined)?.adapter ??
+          null;
+        if (adapter === null) return {};
+        return {
+          ...(adapter.variableSchema
+            ? { dictionary: makeLookup(adapter.variableSchema), variableSchema: adapter.variableSchema }
+            : {}),
+          ...(adapter.kojoLibraryTable ? { libraryTable: adapter.kojoLibraryTable } : {}),
+        };
+      };
 
       /**
        * 让一次路（宏任务边界）；测试面替身只实现用得到的方法 ⇒ 缺席按"微任务"处理。
@@ -2152,6 +2197,33 @@ export function createErbParserPlugin(): Plugin {
         id: 'erb-call-hierarchy',
         order: 20,
         provide: (request) => provideErbCallHierarchy(request, index),
+      });
+
+      /* ---------------- LAU-4 悬停腿（ERB-PARITY G1，2026-10-31）：悬停 ----------------
+
+       这一批把宿主 `monaco/kojo-hover.ts` 的**六路内容判据**（变量中文名 / 系统函数反向 /
+       指令编号 / 位号 / 函数索引 / `#DIM` / 原生标记）与 `kojo-hover-marks.ts` 整块搬进
+       `./completion.ts`；宿主那侧只剩「model / 位置 → 请求」「契约 → Monaco `Hover`」与注册。
+
+       为什么判据必须住本插件：`ErbIndex`（函数 / `#DIM` / 位表上下文）与位槽判据都是本包私产；
+       宿主那侧留一份就是两份答案，而槽腿的供方又读不到宿主。
+
+       三态（见契约 `EditorLanguageServiceContribution`）：非 ERB 方言 ⇒ `undefined`（弃权，
+       `.kojo` / `.kojo1` 由各自的腿接手）；ERB 但六路都没有事实 ⇒ 同样 `undefined`
+       （不弹浮层；**不交空串**——空串＝作答，会把下一家顶掉）。
+
+       adapter 三张表按 `request.project.adapterId` 现取（`game.adapter` 槽；缺席只让
+       变量 / 系统函数 / 位号三路退化）。`order` 20：与其余 `erb-*` 一致，同 kind 只有本包认 ERB。 */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-hover',
+        order: 20,
+        provide: (request) =>
+          request.kind === 'hover'
+            ? provideErbHover(request, {
+                index: () => index,
+                adapterTables: () => adapterTablesOf(request.project?.adapterId),
+              })
+            : undefined,
       });
     },
   };

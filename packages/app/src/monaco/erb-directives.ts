@@ -70,70 +70,17 @@
  * 族头词（CFLAG / DOWNBASE …）在此照收不误：`.erb` 侧统一 keyword 档即正确；`.kojo` 侧
  * 由 `FAMILY_HEAD_SET` 滤出另立 `keyword.erb.family` 档（`kojo-language.ts` 派生处）。
  */
-import { ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
+import {
+  ERB_CONTROL_STATEMENTS,
+  ERB_DECLARATION_DIRECTIVES,
+  ERB_STATEMENT_DIRECTIVES,
+} from '@kojo/plugin-erb-parser';
 
 /**
- * 非控制流的手写常用语句（补全口径）。控制流词由 `ERB_CONTROL_STATEMENTS` 派生后追加，
- * 这里**一个都不许出现**（否则就是第二份清单）。
+ * 手写常用语句与 `#` 声明族两张词表**已搬进插件**（ERB-PARITY G1，2026-10-31）：
+ * 悬停分类的判据在 `@kojo/plugin-erb-parser` 侧，宿主只 re-export（单源，不抄第二份）。
  */
-export const ERB_STATEMENT_DIRECTIVES: readonly string[] = [
-  'PRINT', 'PRINTL', 'PRINTW', 'PRINTV', 'PRINTVL',
-  'PRINTFORM', 'PRINTFORML', 'PRINTFORMS', 'PRINTFORMW', 'PRINTFORMV',
-  'PRINTDATAS',
-  'PRINTDW', 'PRINTDL',
-  'PRINTFORMD', 'PRINTFORMDL', 'PRINTFORMDW',
-  'DATAFORM',
-  'PRINTSINGLE', 'PRINTSINGLEL', 'PRINTSINGLEFORM', 'PRINTSINGLEFORML',
-  'PRINTBUTTON',
-  'BREAK', 'CONTINUE', 'RETURN', 'RETURNF',
-  'GOTO',
-  'CALL', 'CALLL', 'JUMP', 'CALLFORM', 'CALLFORML', 'TRYCALLFORM', 'TRYCALLFORMF',
-  'TRYCALL', 'TRYJUMP', 'CALLF', 'CALLFORMF',
-  'DIM', 'DIMS', 'SWAP', 'VARSET',
-  'SETCOLOR', 'RESETCOLOR', 'FONTBOLD', 'FONTITALIC', 'FONTREGULAR', 'FONTSIZE', 'FONTSTYLE',
-  'WAIT', 'WAITANYKEY', 'INPUT', 'INPUTS', 'ONEINPUT', 'TINPUT', 'TINPUTS', 'TWAIT',
-  'SAVEDATA', 'LOADDATA', 'DELDATA', 'SAVEGLOBAL', 'LOADGLOBAL',
-  'GETTIME', 'GETMILLISECOND', 'SETBIT', 'CLEARBIT', 'INVERTBIT', 'GETBIT', 'SETCOLORBYNAME',
-  'RANDOMIZE', 'RAND', 'TIMES', 'EXISTCSV', 'GETNUM', 'BAR', 'BARL', 'DRAWLINE', 'CLEARLINE', 'ALIGNMENT',
-  'ADDCHARA', 'ADDSPCHARA', 'DELCHARA', 'SWAPCHARA', 'PICKUPCHARA', 'GETCHARA', 'CHKCHARA',
-  'EQUIP', 'UNEQUIP', 'EQUIPCHECK', 'CHANGE_CFLAG', 'CFLAG', 'DOWNBASE', 'RESETDATA', 'BEGIN', 'EVENTCOM',
-  // —— 2026-10-25 P1-1 第二批（行首语句口径，频次 ≥10 的 Top 59；逐词频次见测试里的闸表）——
-  // 调试输出 / 显示
-  'DEBUGPRINTFORML', 'SKIPDISP', 'REUSELASTLINE', 'RESTART', 'SETFONT',
-  // PRINTDATA / STRDATA 块的数据行（结构扫描器不建模，必须手写）
-  'DATA',
-  // DataTable（DT_* 族）
-  'DT_ROW_ADD', 'DT_COLUMN_ADD', 'DT_CELL_SET', 'DT_SELECT', 'DT_ROW_REMOVE', 'DT_CREATE', 'DT_RELEASE',
-  // 异常
-  'THROW',
-  // PRINT 扩展族（引擎方言：居中 / 单行 / 纯文本 / 按钮）
-  'PRINTFORMC', 'PRINTS', 'PRINTLC', 'PRINTC', 'PRINTFORMLC', 'PRINTD',
-  'PRINTPLAINFORM', 'PRINTFORMSL', 'PRINTPLAIN', 'PRINTBUTTONLC', 'PRINTSL', 'PRINTSINGLEFORMS',
-  // 音频
-  'PLAYSOUND', 'STOPSOUND',
-  // 自绘
-  'CUSTOMDRAWLINE', 'DRAWLINEFORM',
-  // 数组 / 变量
-  'CVARSET', 'ARRAYCOPY', 'ARRAYREMOVE', 'ARRAYSHIFT', 'ARRAYSORT',
-  // 背景 / 图形 / 精灵
-  'SETBGCOLOR', 'RESETBGCOLOR', 'SPRITECREATE', 'SPRITEDISPOSE',
-  'GDRAWSPRITE', 'GDISPOSE', 'GCREATE', 'GCREATEFROMFILE', 'GDRAWTEXT',
-  'GSETFONT', 'GSETPEN', 'GCLEAR', 'CBGCLEAR', 'CBGSETG',
-  // 字符串
-  'SPLIT', 'REPLACE', 'SUBSTRING',
-  // 调用 / 数据 / 杂项
-  'TRYCALLF', 'CHKDATA', 'RESET_STAIN', 'FINDELEMENT', 'SETANIMETIMER', 'DOTRAIN', 'GETDEFCOLOR',
-  // —— 2026-10-25 K5 第三批（eraTW 4.980 基线语料、同一真语句判据、频次 ≥10 的 11 枚；
-  //    逐词频次与**原样语句样例**见测试闸表 CORPUS_STATEMENT_GAPS / K5_BATCH）——
-  // 输入族（TONEINPUTS：ONEINPUT/TINPUT 系扩展；BINPUT：按钮输入，结果落 RESULT）
-  'TONEINPUTS', 'BINPUT',
-  // XML 文档操作（XML_DOCUMENT 系列；配合 HTML/STRCDATA 用）
-  'XML_GET', 'XML_ADDNODE',
-  // 字符串键值 Map 集合
-  'MAP_SET', 'MAP_CREATE',
-  // 图形 / 颜色 / 提示气泡 / 等待（GDRAW 家族；GETCOLOR 与 SETCOLOR/RESETCOLOR 相对）
-  'GDRAWG', 'PRINT_RECT', 'GETCOLOR', 'TOOLTIP_SETDELAY', 'AWAIT',
-];
+export { ERB_DECLARATION_DIRECTIVES, ERB_STATEMENT_DIRECTIVES };
 
 /** 大小写归一去重（先出现者保留原样），保持插入顺序 */
 function appendUnseen(base: readonly string[], extra: readonly string[]): string[] {
@@ -158,30 +105,6 @@ export const ERB_DIRECTIVES: readonly string[] = appendUnseen(
 );
 
 /* ============================== 原生标记（v1.9 P2 面接线） ============================== */
-
-/**
- * `#` 声明族（**不含 `#` 前缀**，由调用点补）：`#DIM` 族 6 枚 + 文件级 / 返回类型 8 枚。
- *
- * 集合口径与转译器直通谓词同源：`kojo-vocab` 的 `DIM_DIRECTIVE_RE`（前 6 枚）与
- * `native-display/control.ts` 的 8 枚文件级声明（后 8 枚，v1.9 §3.3）。两处改动时此处跟变；
- * 补全只提供这一份清单，不再在插件侧另抄。
- */
-export const ERB_DECLARATION_DIRECTIVES: readonly string[] = [
-  'DIM',
-  'DIMS',
-  'DIMSTR',
-  'DIMCHAR',
-  'DIMF',
-  'DEFINE',
-  'FUNCTION',
-  'FUNCTIONS',
-  'GLOBAL',
-  'LOCALSIZE',
-  'LOCALSSIZE',
-  'SFUNCTION',
-  'XFUNCTION',
-  'TESTMEMORY',
-];
 
 /**
  * 预处理标记（补全骨架；整行严格等值，见 `plugin-api/erb.ts` 的 `ERB_PREPROC_PATTERNS`）。

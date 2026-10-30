@@ -18,7 +18,7 @@ import {
   kojoNativeMarkRange,
   kojoNativeMarkSlotAt,
 } from '../src/monaco/kojo-native-marks';
-import { resolveErbMarkHover } from '../src/monaco/kojo-hover-marks';
+import { resolveErbMarkHover } from '@kojo/plugin-erb-parser';
 import { compileMonarch, driveLexer, stubMonaco, type Emit } from './monarch-harness';
 
 const KOJO_ID = 'kojo-legacy';

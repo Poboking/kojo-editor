@@ -12,13 +12,17 @@ import type {
 } from '@kojo/plugin-api';
 import { symbolTokenAt, unicodeTokenAt } from '@kojo/plugin-api';
 import type { DialectCarrier } from '@kojo/kojo-core';
-import { parseDimDeclaration } from '@kojo/plugin-erb-parser';
-import { isErbDimNameChar as isDimNameChar, normalizePathKey } from '@kojo/plugin-erb-parser';
+import {
+  isErbDimNameChar as isDimNameChar,
+  normalizePathKey,
+  resolveErbHoverAt,
+  type ErbHoverHit,
+  type ErbHoverSurface,
+} from '@kojo/plugin-erb-parser';
 import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
 import { livePanes } from '../ui/editor-pane-registry';
-import { erbBitHoverName } from './erb-completion-bits';
-import { resolveErbMarkHover } from './kojo-hover-marks';
+import { classifyKojoLine } from './kojo-native-zone';
 import { BLANK_CLASS_STR } from './kojo-completion-position';
 import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from './kojo-hover-native';
 import { registerForLanguageServices } from './register-dialects';
@@ -95,45 +99,21 @@ export interface CarrierShellHint {
   readonly prefixes: readonly string[];
 }
 
-/** 一次解析的产物：显示名 + 类别 + 命中的列区间（1 基，供 hover 高亮）+ 附加行 */
-export interface HoverHit {
-  readonly name: string;
-  readonly kind: string;
-  readonly startColumn: number;
-  readonly endColumn: number;
-  /**
-    /**
-     * 附加正文行（additive 可选）——命中带可读正文时逐行给出：ERB 函数的 docComment / 形参签名 /
-     * 定义位置，或中文反查出的**拼出来的函数名 / 模板 / 含义 / 原文对照**。每行渲染为独立的
-     * markdown 块。缺省 = 只显示名字行（正向各路的行为与改前逐字一致）。
-     */
-    readonly lines?: readonly string[];
-  /**
-   * 声明 / 定义的**源坐标**（additive 可选）——派生预览面（`.kojo` 糖面）上，`startColumn` /
-   * `endColumn` 属于**显示面**（预览那一行），而这条事实永远指回源文件：文件路径 + 源行号。
-   * 缺省 = 本行内没有可跳的落点（变量反查 / 中文反查那几路只换名字、不指位置）。
-   */
-  readonly source?: { readonly filePath: string; readonly line: number };
-}
+/**
+ * 一次解析的产物：显示名 + 类别 + 命中的列区间（1 基，供 hover 高亮）+ 附加行。
+ *
+ * 形状的真源在 `@kojo/plugin-erb-parser`（判据搬进插件后，宿主只做别名——不再长出第二份）。
+ */
+export type HoverHit = ErbHoverHit;
 
 /**
  * 悬停所在的**显示面**事实（additive 可选；缺省 = 源面、行号 1、不读原文）。
  *
- * 存在的理由只有一条：`.kojo` 糖面（升糖预览）是一份**派生文本**，它的行号不是源行号。
- * 于是「最近声明」不能用它来比行距，声明原文也不能在预览 model 的同一行号上读——那会读到
- * 另一个名字。源面（盘上的 `.erb` / `.kojo`）与派生面在这里分开，判据只写一遍。
+ * 存在的理由只有一条：`.kojo` 糖面（升糖预览）是一份**派生文本**，它的行号不是源行号
+ * ——「最近声明」不能用它比行距，声明原文也不能在预览 model 的同一行号上读。形状与判据
+ * 都住在 `@kojo/plugin-erb-parser`（`ErbHoverSurface`），宿主只是别名的消费方。
  */
-export interface HoverSurface {
-  /** 光标所在行（1 基，**显示面**坐标）；缺省 1 */
-  readonly line?: number;
-  /** true = 显示面是派生预览（`.kojo` 糖面），`line` 不参与「最近声明」判定 */
-  readonly derived?: boolean;
-  /**
-   * 读**源文件**某一行（1 基）。源面 = 当前 model；派生面由宿主翻到原文 model 后交进来。
-   * 缺席 = 读不到声明原文（不显示声明原文与初值，**不猜**）。
-   */
-  readonly readSourceLine?: (line: number) => string | undefined;
-}
+export type HoverSurface = ErbHoverSurface;
 
 /**
  * 取词的两把尺子（DRIFT-APP 2，2026-10-19：**字符集一个字都不在本文件写**）。
@@ -258,8 +238,15 @@ function withCarrierShellHint(
 }
 
 /**
- * 悬停第 1–6 路的本体（原 `resolveHoverName`；LAU-D3 只在其外**追加**一路壳提示，
- * 六路的判定与优先序一个字未动）。
+ * 悬停第 1–6 路的**本体**（ERB-PARITY G1，2026-10-31：判据整块搬进 `@kojo/plugin-erb-parser`
+ * 的 `completion.ts`；宿主这一层只剩把**宿主事实**递进去）。
+ *
+ * 递进去的三格全是宿主才知道、且判据并不解释的数据：
+ * - 表（变量字典 / 基础库 / 指令表 / 位表 / 函数索引通道）来自当前项目的 adapter；
+ * - `timingPrefixRe` 是 v1 糖的 `时机 <分野> <编号>：` 块头判据（`.erb` 里没有这种块头）；
+ * - `isRawLine` 是 `.kojo` 的糖区 / 原生区分型（`.erb` 恒原生行）。
+ *
+ * 六路的判定与优先序在插件里**一个字都没动**；本函数不再有第二份实现。
  */
 function resolveHoverNameCore(
   lineText: string,
@@ -269,416 +256,35 @@ function resolveHoverNameCore(
   filePath: string | null,
   surface: HoverSurface,
 ): HoverHit | undefined {
-  if (!Number.isFinite(column) || column < 1) return undefined;
-  const col0 = Math.min(column - 1, lineText.length);
-
-  // 1) 数值变量索引：`CFLAG:TARGET:1088` → nameAt(族, 末段)。具名索引 `description == 索引`
-  //    时等于回显（名字本就是中文），无增益 → 跳过。
-  const refSpan = spanAround(lineText, col0, isRefChar);
-  if (refSpan) {
-    const token = lineText.slice(refSpan.start, refSpan.end);
-    const m = REF_RE.exec(token);
-    if (m) {
-      const family = m[1]!;
-      const segs = m[2]!.split(':');
-      const index = segs[segs.length - 1]!;
-      const name = tables.dictionary?.nameAt?.(family, index);
-      if (name !== undefined && name.length > 0 && name !== index) {
-        return {
-          name,
-          kind: `变量 · ${token}`,
-          startColumn: refSpan.start + 1,
-          endColumn: refSpan.end + 1,
-        };
-      }
-    }
-  }
-
-  // 2) 原生函数名（ASCII 记号）：`GETBIT` → 获取标记（系统表反向优先，再查 adapter 基础库表反查）。
-  //    尺子 = 契约 `symbolTokenAt` 的缺省记号集（**原生名字查表**那一路的尺，本文件不再自己
-  //    写字符集）。中文词在这一路**必然**判不出记号——那是有意口径（反查表的键就是 ASCII
-  //    原生名），中文名字另有第 5 路与第 6 路。
-  //    `!echoYieldsToIndex` 是本路与第 5 路的**优先序裁决**（一条判据一枚函数，见该函数）：
-  //    库里只有回显、而项目函数索引认这个名字时，本路让位——让位给带 docComment / 定义位的那条。
-  const fnToken = symbolTokenAt(lineText, col0 + 1);
-  if (fnToken) {
-    const cn = SYSTEM_FUNCTION_REVERSE.get(fnToken.text) ?? tables.libraryTable?.lookupByFunction?.(fnToken.text);
-    if (cn !== undefined && cn.length > 0 && !echoYieldsToIndex(cn, fnToken.text, tables)) {
-      return { name: cn, kind: `函数 · ${fnToken.text}`, startColumn: fnToken.startColumn, endColumn: fnToken.endColumn };
-    }
-  }
-
-  // 3) 指令编号：只在糖的 `时机 <分野> <编号>：` 块头里认（上下文可证明，别处一个数不敢认）。
-  const digitSpan = spanAround(lineText, col0, isDigit);
-  if (digitSpan && tables.instructionTable) {
-    const token = lineText.slice(digitSpan.start, digitSpan.end);
-    if (TIMING_PREFIX_RE.test(lineText.slice(0, digitSpan.start))) {
-      const cn = tables.instructionTable.lookupByNo(Number(token));
-      if (cn !== undefined && cn.length > 0) {
-        return {
-          name: cn,
-          kind: `指令 · 编号 ${token}`,
-          startColumn: digitSpan.start + 1,
-          endColumn: digitSpan.end + 1,
-        };
-      }
-    }
-  }
-
-  // 4) 位号（D7）：`GETBIT/SETBIT/CLEARBIT/INVERTBIT` 第二实参的位号 → 中文位名。
-  //    只在可证明的位槽里认；非位槽 / 查不到位表一律不显示（不猜）。
-  const bit = erbBitHoverName(lineText, column, tables.variableSchema);
-  if (bit !== undefined) {
-    return { name: bit.name, kind: `位号 · ${bit.bit}`, startColumn: bit.startColumn, endColumn: bit.endColumn };
-  }
-
-  // 5) ERB 函数定义（宿主注入 `erbIndex` 通道）：光标词 ∈ `ErbIndex.byName`（归一化大写名）
-  //    ⇒ docComment（多行正文）+ 形参签名 + 定义位置。定义行与调用点同词同命中——查表只认词，
-  //    不认语法位。通道缺席 / 索引未建 / 词不在索引 ⇒ 本路不产结果（不猜）。
-  //    取词尺 = 契约 `unicodeTokenAt`（DRIFT-APP 2：作者自定的函数名大量是中文，ASCII 尺
-  //    量不出记号 ⇒ 整路查不到；F2 改名与引用面板早就是这把 Unicode 尺，两路现在同源）。
-  const erbFn = resolveErbFunctionHover(lineText, column, tables.erbIndex);
-  if (erbFn !== undefined) return erbFn;
-
-  // 5.5) 本文件 `#DIM` 声明（EC-DECL 的悬停半边，2026-10-19）：`#DIM 好感度` 声明过之后，
-  //      正文里写这个名字时显示「声明处 + 声明原文 + 初值（可判时）」；同文件重名取最近的
-  //      声明（当前函数内优先），函数形参遮蔽同名变量时报形参。数据源 = 同一份
-  //      `ErbIndex.files`（不扫全文、不写第二份正则）；文件不在索引 / 声明表缺席 ⇒ 不显示（不猜）。
-  const erbDim = resolveErbDimHover(lineText, col0, tables.erbIndex, filePath, surface);
-  if (erbDim !== undefined) return erbDim;
-
-  // 6) 中文 → **原生形态**反查（ZH-D3；`kojo-hover-native.ts`）：族头中文别名、中文函数名 /
-  //    语句形调用、时机块头的分野与中文指令名。前五路只认 ASCII 记号与位槽，本路只认中文，
-  //    两条路天然不撞；同样「查不到即不显示」（不猜）。
-  // 6.5) 原生标记分类（v1.9 P2）：`[IF …]` / `#DIM` / `{` `}` / 行首大写 ERB 语句。
-  //    前六路的事实优先；这里只补"这是什么"，不给逐词文档（见 `kojo-hover-marks.ts`）。
-  const mark = resolveErbMarkHover(lineText, column);
-  if (mark !== undefined) return mark;
-
-  return resolveNativeHover(lineText, column, tables, header);
+  return resolveErbHoverAt(
+    lineText,
+    column,
+    {
+      ...(tables.dictionary !== undefined ? { dictionary: tables.dictionary } : {}),
+      ...(tables.libraryTable !== undefined ? { libraryTable: tables.libraryTable } : {}),
+      ...(tables.instructionTable !== undefined ? { instructionTable: tables.instructionTable } : {}),
+      ...(tables.variableSchema !== undefined ? { variableSchema: tables.variableSchema } : {}),
+      ...(tables.erbIndex !== undefined ? { erbIndex: tables.erbIndex } : {}),
+      timingPrefixRe: TIMING_PREFIX_RE,
+      isRawLine: (line) => classifyKojoLine(line).kind === 'rawLine',
+    },
+    filePath,
+    surface,
+  ) ?? resolveNativeFallback(lineText, column, tables, header);
 }
 
 /**
- * 函数索引通道的**唯一**取法：通道缺席 / 索引未建 / 求值抛错 ⇒ `null`
- * （不猜、fail-open；本文件其余地方一律不碰 `getIndex` 本身）。
+ * 中文 → **原生形态**反查（ZH-D3；`kojo-hover-native.ts`）——**只服务 `.kojo1` 的糖写形**，
+ * 因此仍住宿主：作者在 `.kojo` 里写的中文词（族头 / 中文函数名 / 时机分野与指令名）不在
+ * 任何 ERB 判据里。查不到即不显示（不猜）。
  */
-function erbIndexOf(
-  getIndex: (() => ErbIndex | null | undefined) | undefined,
-): ErbIndex | null {
-  if (typeof getIndex !== 'function') return null;
-  try {
-    return getIndex() ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 「项目函数索引认不认这个名字」的**唯一**查询（第 2 路的裁决与第 5 路的取正文共用它，
- * 两条腿各写一遍 `byName.get` 就是第二判据）。名录里没有 ⇒ `undefined` = **不认领**。
- */
-function erbDefsOf(index: ErbIndex, upper: string): ErbFunctionRef[] | undefined {
-  const defs = index.byName.defsOf(upper);
-  return defs.length === 0 ? undefined : defs;
-}
-
-/**
- * 两条**名字查表路**在同一位置的优先序（F12-TOKEN 2026-10-19；一条判据一枚函数，
- * 第 2 路与第 5 路不许各写自己的 `if`）。
- *
- * 判据一条：库表那条**只是回显**（`中文名 === 原生名`）时让位给函数索引——回显给不出
- * docComment、形参签名与定义位置，索引那条结果是它的严格超集；库表给的是**真翻译**
- * （两个名字不同）时库表先答，因为那个中文名是函数索引里根本不存在的信息。
- *
- * 为什么这条判据必须由数据形状决定、而不是由取词尺决定（实测语料，`eratw-adapter` 库表
- * 471 条）：原生名含 CJK 的正好 **13** 条，且 **13/13 都是恒等条目**（`充填率` → `充填率`），
- * 且 13 条**全部**在项目函数索引里有 `@` 定义（它们本就是基础库函数）；而原生名为 ASCII
- * 且同时在库表与索引里的 458 条**全部**带真翻译（`CURRENT_CLOTHES_SET` → 当前衣装套）。
- * ⇒ 把两路的尺子合成一把 Unicode 尺，抢掉正文的正好是那 13 条回显；而一句"索引优先"
- * 会打沉另外 458 条真翻译（占库表 97.2%）。恒等/翻译这一条判据把两半精确切开。
- */
-function echoYieldsToIndex(cn: string, token: string, tables: HoverTables): boolean {
-  if (cn !== token) return false;
-  const index = erbIndexOf(tables.erbIndex);
-  return index !== null && erbDefsOf(index, token.toUpperCase()) !== undefined;
-}
-
-/**
- * ERB 函数路（**纯函数**）：光标词在 `ErbIndex.byName` 里 ⇒ 产出带正文的命中。
- *
- * - 取词尺 = 契约 `unicodeTokenAt`（字母 / 数字 / 下划线的 Unicode 记号，与 F2 改名、
- *   引用面板、结构化着色同一把）——函数索引里存的就是作者自己起的名字，**含中文的
- *   函数名是常态不是例外**，用 ASCII 尺量出的记号在 `byName` 里根本查不到（DRIFT-APP 2）；
- *   F12-TOKEN 2026-10-19 起转到定义 / 查找引用两条腿也用这一把（`erb-parser/references.ts`
- *   的 `functionNameTokenAt` = 本尺 + 成员冒号退让），悬停与 F12 从此对称；
- * - 名词查表用**归一化大写**（Emuera 函数名大小写不敏感，与 `byName` 键同口径），
- *   认领判据走 `erbDefsOf`（与第 2 路的裁决同一枚函数）；
- * - 正文 = docComment（有则按行拆开）+ 形参签名（参数取自同一索引的 `files` 全量定义，
- *   文件不在索引 ⇒ 只省签名这一行，不猜）+ 定义位置（`文件路径:行号`）；
- * - 同名多处定义：显示首条的正文与位置，并追加一行注明剩余处数（重名事实不藏）。
- */
-function resolveErbFunctionHover(
+function resolveNativeFallback(
   lineText: string,
   column: number,
-  getIndex: (() => ErbIndex | null | undefined) | undefined,
+  tables: HoverTables,
+  header: KojoDocHeader,
 ): HoverHit | undefined {
-  const index = erbIndexOf(getIndex);
-  if (index === null) return undefined;
-  const span = unicodeTokenAt(lineText, column);
-  if (!span) return undefined;
-  const defs = erbDefsOf(index, span.text.toUpperCase());
-  if (defs === undefined) return undefined;
-
-  const def = defs[0]!;
-  const lines: string[] = [];
-  if (def.docComment !== undefined && def.docComment.length > 0) {
-    lines.push(...def.docComment.split('\n').filter((l) => l.trim().length > 0));
-  }
-  const file = index.files.get(def.filePath);
-  const fn = file?.functions.find((f) => f.normalizedName === def.normalizedName && f.startLine === def.startLine);
-  if (fn && fn.params.length > 0) {
-    lines.push(`\`${def.name}(${fn.params.map((p) => p.name).join(', ')})\``);
-  }
-  lines.push(`定义于 \`${def.filePath}:${def.startLine}\``);
-  if (defs.length > 1) lines.push(`另有 ${defs.length - 1} 处同名定义`);
-
-  return {
-    name: def.name,
-    kind: 'ERB 函数',
-    startColumn: span.startColumn,
-    endColumn: span.endColumn,
-    lines,
-    // 定义落点永远是**源坐标**：派生预览面上 `span` 是预览列，这一条指回真文件
-    source: { filePath: def.filePath, line: def.startLine },
-  };
-}
-
-/**
- * `#DIM` 声明名悬停（2026-10-19，EC-DECL 的显示半边；2026-10-20 补值 / 最近声明 / 派生面）。
- *
- * 与函数路共用同一份 `ErbIndex.files`（**不扫全文、不写第二份 `#DIM` 正则**）：先按
- * 路径归一（分隔符 / 大小写）找到当前文件，再在 `dims` 里按大小写不敏感整词匹配
- * （索引里的名字可能带数组后缀 `配列[10]`，匹配与显示都按裸名）。
- * 文件不在索引 / 索引缺席 / 词不是声明名 ⇒ `undefined`（不猜）。
- *
- * **声明处 + 值/类型**（`HoverSurface.readSourceLine`）：声明的值只能从**源文件那一行**读
- * （`#DIM 好感度 = 100`）；读不到 / 那一行不是同名声明 ⇒ 只给落点。派生预览面由宿主
- * 把读行腿接到**原文 model**，绝不拿预览同号行凑值（见 `HoverSurface`）。
- *
- * **最近声明**：同文件多处同名声明时，当前函数内的那条优先，其次函数外的文件级声明，
- * 最后才按行距退让；函数形参遮蔽同名变量时直接报形参（源面才可判——派生面的行号不是源行号）。
- *
- * 名字字符集比函数路那把 Unicode 尺还宽：`#DIM 好感度[10]` 这类声明名允许带冒号 /
- * 括号 / 空白以外的任意字符，故 span 用"非空白 + 非运算符"判据（`isDimNameChar`），
- * 不复用函数路的记号集——两把尺各自服务一条取词路，合成一把就一定有一侧判错。
- */
-function resolveErbDimHover(
-  lineText: string,
-  col0: number,
-  getIndex: (() => ErbIndex | null | undefined) | undefined,
-  filePath: string | null,
-  surface: HoverSurface = {},
-): HoverHit | undefined {
-  if (!filePath) return undefined;
-  // 索引通道的取法与函数路同一枚函数（缺席 / 未建 / 抛错 ⇒ 不产结果，不各写一遍）
-  const index = erbIndexOf(getIndex);
-  if (index === null) return undefined;
-  const span = spanAround(lineText, col0, isDimNameChar);
-  if (!span) return undefined;
-  const token = lineText.slice(span.start, span.end);
-  if (token.length === 0) return undefined;
-  const key = normalizePathKey(filePath);
-  let file: IndexedErbFile | undefined;
-  for (const [p, f] of index.files) {
-    if (normalizePathKey(p) === key) {
-      file = f as IndexedErbFile;
-      break;
-    }
-  }
-  if (!file) return undefined;
-  const want = token.toUpperCase();
-  // 派生面的行号是**显示面**坐标，不是源行号 ⇒ 不参与作用域与「最近」判定
-  const useLine = surface.derived === true ? null : sourceLineOf(surface.line);
-
-  // 函数形参遮蔽同名变量（只在源面可判）：最近的声明就是包围当前行的函数形参
-  if (useLine !== null) {
-    const fn = enclosingFunctionOf(file.functions ?? [], useLine);
-    const param = fn?.params.find((p) => p.name.toUpperCase() === want);
-    if (fn !== undefined && param !== undefined) {
-      return {
-        name: param.name,
-        kind: '函数形参',
-        startColumn: span.start + 1,
-        endColumn: span.end + 1,
-        lines: [`所在函数：\`@${fn.name}\``, `形参声明于 \`${file.path}:${fn.startLine}\``],
-        source: { filePath: file.path, line: fn.startLine },
-      };
-    }
-  }
-
-  const dims = (file.dims ?? []).filter((d) => bareDimNameOf(d.name).toUpperCase() === want);
-  if (dims.length === 0) return undefined;
-  const dim = nearestDimOf(dims, file.functions ?? [], useLine);
-  const dimName = bareDimNameOf(dim.name);
-  const lines: string[] = [`声明于 \`${file.path}:${dim.line}\``];
-  // 值 / 类型「若可判」：只在**源文件**那一行读（派生面由宿主交原文 model 的读行腿），
-  // 读不到 / 那一行不是同名声明 ⇒ 只给落点，绝不拿预览同号行凑一个值。
-  const raw = declarationTextOf(readSourceRow(surface.readSourceLine, dim.line), dimName);
-  if (raw !== undefined) {
-    lines.push(`声明：\`${raw}\``);
-    const init = initializerOfDimLine(raw, dimName);
-    if (init !== undefined) lines.push(`初值：\`${init}\``);
-  }
-  if (dims.length > 1) {
-    const others = dims
-      .filter((d) => d !== dim)
-      .map((d) => d.line)
-      .sort((a, b) => a - b);
-    lines.push(`另有 ${others.length} 处同名声明（第 ${others.join('、')} 行）`);
-  }
-  return {
-    name: dimName,
-    kind: `#${dim.directive} 声明`,
-    startColumn: span.start + 1,
-    endColumn: span.end + 1,
-    lines,
-    source: { filePath: file.path, line: dim.line },
-  };
-}
-
-/**
- * 索引里的声明名可能带数组后缀（scanner 的 `parseDimDeclaration` 原样存 `配列[10]`）；
- * 悬停按**裸名**匹配与显示——`[10]` 是规模，不是名字的一部分。
- */
-function bareDimNameOf(name: string): string {
-  return name.replace(/\[[^\]]*\]$/, '');
-}
-
-/** 索引里的一份文件（`ErbIndex.files` 的值；只取悬停用得到的字段） */
-type IndexedErbFile = {
-  readonly path: string;
-  readonly dims?: readonly ErbDim[];
-  readonly functions?: readonly ErbFunction[];
-};
-
-/** 源行号（1 基、有限、≥1）；派生面 / 缺省 / 坏值 ⇒ `null`（不猜） */
-function sourceLineOf(line: number | undefined): number | null {
-  return typeof line === 'number' && Number.isFinite(line) && line >= 1 ? Math.trunc(line) : null;
-}
-
-/** 光标行落在哪个函数里（多个命中取最内层 = 起点最大的那个）；不在任何函数里 ⇒ `undefined` */
-function enclosingFunctionOf(functions: readonly ErbFunction[], line: number): ErbFunction | undefined {
-  let best: ErbFunction | undefined;
-  for (const fn of functions) {
-    if (line < fn.startLine || line > fn.endLine) continue;
-    if (best === undefined || fn.startLine > best.startLine) best = fn;
-  }
-  return best;
-}
-
-/**
- * 同名声明的**最近一条**：先看当前函数内部，再看函数外的文件级声明，最后才退到全文件行距。
- *
- * `useLine = null`（派生面 / 调用方没给行号）⇒ 索引首条——派生面的行号不是源行号，
- * 拿它量「最近」只会得到一个看起来很近的错答案；「另有 N 处」那行会把重名事实说清。
- */
-function nearestDimOf(
-  dims: readonly ErbDim[],
-  functions: readonly ErbFunction[],
-  useLine: number | null,
-): ErbDim {
-  if (dims.length === 1 || useLine === null) return dims[0]!;
-  const scope = enclosingFunctionOf(functions, useLine);
-  if (scope !== undefined) {
-    const inside = dims.filter((d) => d.line >= scope.startLine && d.line <= scope.endLine);
-    if (inside.length > 0) return nearestByLine(inside, useLine);
-    const outside = dims.filter((d) => enclosingFunctionOf(functions, d.line) === undefined);
-    if (outside.length > 0) return nearestByLine(outside, useLine);
-  }
-  return nearestByLine(dims, useLine);
-}
-
-/** 行距最近（同距时取**声明在前**的那条；之前没有才取之后最早的一条） */
-function nearestByLine(dims: readonly ErbDim[], useLine: number): ErbDim {
-  let best = dims[0]!;
-  for (const d of dims) {
-    const beforeD = d.line <= useLine;
-    const beforeBest = best.line <= useLine;
-    if (beforeD !== beforeBest) {
-      if (beforeD) best = d;
-      continue;
-    }
-    if (beforeD ? d.line > best.line : d.line < best.line) best = d;
-  }
-  return best;
-}
-
-/** 读源文件某一行（读腿抛错 / 非字符串一律当读不到） */
-function readSourceRow(
-  read: ((line: number) => string | undefined) | undefined,
-  line: number,
-): string | undefined {
-  if (read === undefined) return undefined;
-  try {
-    const text = read(line);
-    return typeof text === 'string' ? text : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * 声明行原文（**校验它确实声明了同名变量**）：索引可能来自上一次落盘的快照，
- * 行号对不上 / 不是 `#DIM*` 行 / 名字不同 ⇒ `undefined`（不拿别的声明冒充）。
- * 超长行截断（悬停块不是正文阅读器）。
- */
-function declarationTextOf(line: string | undefined, name: string): string | undefined {
-  if (line === undefined) return undefined;
-  const trimmed = line.trim();
-  if (trimmed.length === 0) return undefined;
-  let parsed: { directive: string; name: string } | null;
-  try {
-    parsed = parseDimDeclaration(trimmed);
-  } catch {
-    return undefined;
-  }
-  if (parsed === null) return undefined;
-  const bare = parsed.name.replace(/\[[^\]]*\]$/, '');
-  if (bare.toUpperCase() !== name.toUpperCase()) return undefined;
-  return trimmed.length > 200 ? `${trimmed.slice(0, 199)}…` : trimmed;
-}
-
-/**
- * 声明行里 `=` 之后的初值（去掉引号外的 `;` 注释尾巴）；数组规模（`[10]` / `, 10`）不算初值。
- * 读不出 / 为空 ⇒ `undefined`（不写「初值：空」这种假事实）。
- */
-function initializerOfDimLine(line: string, name: string): string | undefined {
-  const head = /^#[A-Za-z]+/.exec(line);
-  const from = head === null ? 0 : head[0].length;
-  // 索引里的名字大小写可能与这一行不同（Emuera 名字大小写不敏感）⇒ 按小写找起点
-  const at = line.toLowerCase().indexOf(name.toLowerCase(), from);
-  if (at < 0) return undefined;
-  let rest = line.slice(at + name.length);
-  if (rest.startsWith('[')) {
-    const close = rest.indexOf(']');
-    if (close < 0) return undefined;
-    rest = rest.slice(close + 1);
-  }
-  const eq = rest.indexOf('=');
-  if (eq < 0) return undefined;
-  const value = stripUnquotedComment(rest.slice(eq + 1)).trim();
-  return value.length === 0 ? undefined : value;
-}
-
-/** 去掉第一个**引号外**的 `;` 及其后内容（ERB 注释；字符串里的 `;` 不算） */
-function stripUnquotedComment(text: string): string {
-  let inStr = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (ch === '"') inStr = !inStr;
-    else if (ch === ';' && !inStr) return text.slice(0, i);
-  }
-  return text;
+  return resolveNativeHover(lineText, column, tables, header);
 }
 
 /**
@@ -821,7 +427,14 @@ function injectedHoverPathOf(model: Monaco.editor.ITextModel, sourcePathOf?: Hov
 }
 
 /**
- * 为 ERB 方言（`.erb` / `.erh` / `.erd`）与 `.kojo` 两种语言注册**只读** hover provider。
+ * 为 `.kojo1`（封存的 v1 糖面）注册**只读** hover provider。
+ *
+ * ERB-PARITY G1（2026-10-31）之后 ERB 不再由本安装器挂：判据整块搬进
+ * `@kojo/plugin-erb-parser`，ERB 的悬停由共享收口那一枚（槽 `ui.editor.languageService`
+ * 的 `hover` 腿）回答。本模块剩给自己的只有 `.kojo1` 的两条**糖写形**事实
+ * （中文 → 原生形态反查、载体注册壳提示）——它们不是 ERB 判据，且作者只在 `.kojo` 里写。
+ * 挂载口径用 `excludeNamed: 'hover'`：descriptor 点名了这一格的语言（今天的 ERB）
+ * 不再叠一枚旧桥 provider（否则 Monaco 会把两份悬停正文同时摊开）。
  *
  * `getTables` 每次悬停时才调用（表按当前项目 adapterId 实时取，同 `refreshMarkers` 纪律）。
  * 文件头事实（`角色:` / `口上:`）同样**当场从模型读**（只读 `getLineContent` /
@@ -870,5 +483,10 @@ export function installHover(
       };
     },
   };
-  return registerForLanguageServices(monaco, (m, id) => m.languages.registerHoverProvider(id, provider));
+  return registerForLanguageServices(
+    monaco,
+    (m, id) => m.languages.registerHoverProvider(id, provider),
+    undefined,
+    { excludeNamed: 'hover' },
+  );
 }

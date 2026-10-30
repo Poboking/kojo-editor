@@ -43,7 +43,12 @@ export {
 // 实参个数（用户函数；纯函数，目录查询）
 export { ARITY_MISMATCH_CODE, arityParamsOf, collectArityDiagnostics, erbCallSitesOf, type ArityCatalog, type ArityInput, type ArgSpan, type ErbCallSite } from './arity';
 // 引擎指令名全集（A3；出处 = Emuera `enum FunctionCode`，静态数据，不进索引契约）
-export { ERB_INSTRUCTION_NAMES, isInstructionName } from './instructions';
+export {
+  ERB_DECLARATION_DIRECTIVES,
+  ERB_INSTRUCTION_NAMES,
+  ERB_STATEMENT_DIRECTIVES,
+  isInstructionName,
+} from './instructions';
 export { checkDeclarationIssues, parseDimLine, dimLineViolations, type DimLine } from './declarations';
 export {
   ERB_CODE_PREFIXES,
@@ -181,14 +186,24 @@ export {
   erbVariableSlotAt,
   definedLabels,
   dimNamesOfBuffer,
+  erbBitHoverName,
+  erbHoverMarkdown,
   findBitSlot,
   isLineHeadContext,
   matchingParen,
   parseErbNameSlot,
   provideErbCompletion,
+  provideErbHover,
+  resolveErbHoverAt,
+  resolveErbMarkHover,
+  resolveErbBitLabels,
   topLevelComma,
   type ErbBitSlot,
   type ErbCallSlotKind,
+  type ErbHoverAdapterFacts,
+  type ErbHoverHit,
+  type ErbHoverSurface,
+  type ErbHoverTables,
   type ErbCallStatement,
   type ErbCodeView,
   type ErbCompletionDeps,
