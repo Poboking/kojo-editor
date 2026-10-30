@@ -70,6 +70,11 @@ export * from './selection-range';
 // 含越界 / 倒置 / 重复四道闸。理由同上：供方是插件、插件看不见宿主。开机侧引叶子
 // （`@kojo/kojo-lang/folding`）。
 export * from './folding';
+// B3（2026-10-30）：2.0 **结构化着色**的判据进包——捕获快照（契约 1 基）→ 语义 token 区间，
+// 含捕获名→档位映射 / 跨行拆段 / 重叠裁剪 / 每组预算 / 注入子树优先。供方是插件
+// `kojo2-semanticTokens` 贡献；宿主只剩"预取捕获 → 填请求"与 Monaco 形状翻译。
+// 开机侧引叶子（`@kojo/kojo-lang/semantic`）。
+export * from './semantic';
 // B3j（2026-10-30）：2.0 **一键迁移 code action 的判据**整块从宿主 `monaco/kojo2-code-actions.ts`
 // 搬进来——诊断 + 光标行 + 源码 → 动作描述（标题 / 类别 / 编辑 / 认领的诊断），不 apply、
 // 不碰 Monaco。供方是插件的 `kojo2-codeActions` 贡献（槽 `ui.editor.codeAction`），
