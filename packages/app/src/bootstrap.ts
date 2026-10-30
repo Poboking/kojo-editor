@@ -369,6 +369,8 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     uiMarket,
     uiKojoXml,
     inlineCompletionLocal,
+    // LAU4-ERB-A：ERB 语言面的供方插件（同符号高亮 / 结构化扩选）。
+    erbLang,
   ] = await Promise.all([
     import('@kojo/plugin-convention-linter'),
     import('@kojo/plugin-condition-extractor'),
@@ -390,6 +392,8 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-ui-market'),
     import('@kojo/plugin-ui-kojo-xml'),
     import('@kojo/plugin-inline-completion-local'),
+    // LAU4-ERB-A：ERB 语言面供方（判据在 @kojo/erb-lang）。
+    import('@kojo/plugin-erb-lang'),
   ]);
   // 项目级 adapter 的 2.0 两面：**清单驱动**登记（LAU-1a，泛化原 erafl 特例）——
   // 导出名住在 `adapter-manifest.ts`，组合根只见清单不见游戏名（口径见
@@ -422,6 +426,8 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     // 本批只接了 definition / documentSymbol 两项；其余三项（references /
     // foldingRange / inlayHint）在 B3 批接上（它们各自的判据还没搬进包）。
     kojoLang.createKojoLangPlugin(),
+    // LAU4-ERB-A：ERB 语言面插件；与 kojo2 同槽同契约（order 10），languageId 不重叠。
+    erbLang.createErbLangPlugin(),
     // UI：面板（内核状态 + 校验结果 + 函数树导航 + 状态回放 + 归档浏览 + 状态注入）
     uiStatus.createUiStatusPlugin(),
     uiConventionReport.createUiConventionReportPlugin(),

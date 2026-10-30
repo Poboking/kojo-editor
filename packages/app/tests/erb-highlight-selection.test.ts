@@ -1,201 +1,140 @@
+// @vitest-environment happy-dom
 /**
- * ERB-HIGHLIGHT-SELECT · ERB 侧**同符号高亮 + 选择范围**的闸（batch-9）。
+ * LAU-4 · ERB **同符号高亮 / 结构化扩选的宿主翻译层**闸（判据已整块搬进
+ * `@kojo/erb-lang/highlight` / `/selection-range`，供方是插件 `@kojo/plugin-erb-lang`）。
  *
- * 覆盖四件事：
- * 1. **高亮判据**：控制流关键字块配对（开块 write / 分支 text / 收束 read）、函数名
- *    （`@NAME` 写 + `CALL` 直系族名字槽读 + 代码面同名提及 text）、`$` 标签
- *    （定义写 + `JUMP` / `GOTO` 目标读）；字符串 / 注释 / `[SKIPSTART]` 死区**不误报**；
- *    无符号 ⇒ `[]`；
- * 2. **扩选层级**：词 → 行 → 分支段 → ERB 标签块（可多级）→ 函数块 → 全文；死区不扩、
- *    越界显式空、行尾光标取左侧词；
- * 3. **Monaco 面**：DocumentHighlight / SelectionRange（0.57：每位点一条扁平数组）形状、
- *    只挂 `ERB_LANGUAGE_ID`、不看任何偏好开关、dispose 幂等、provider 异常回空；
- * 4. **源码卫生**：Monaco 只 type-only、零 `@kojo/plugin-*` import、不碰结构层开关
- *    （与 kojo2 两枚语言服务同一层纪律）。
+ * 判据本体（三档识别 / 位置门 / 扩选层级）在 `packages/erb-lang/tests/highlight.test.ts`
+ * 与 `selection-range.test.ts`；供方的三态与**双向弃权**在 `packages/plugins/erb-lang/tests/
+ * highlight-selection.test.ts`。本文件只钉宿主自己那一格：
+ *
+ * 1. **契约 → Monaco**：高亮单行区间 + 三档 `DocumentHighlightKind` 映射；扩选链按
+ *    0.57 摊平成"每位点一个数组"（内 → 外）；
+ * 2. **逐位点独立**：某位点 `null`（空链）⇒ 该位点 `[]`，别的位点一格不动；
+ * 3. **三态不混**：无人应答 ⇒ provider 交 **`undefined`**（Monaco 对高亮按"第一应答"
+ *    裁决，空数组会顶掉下一家）；有人答空 ⇒ `[]`；异常 ⇒ `[]`；
+ * 4. **注册**：两枚都经 `registerForLanguageServices` 带能力名挂上（ERB 由
+ *    `languageServices: true` 收进来），dispose 幂等；源码里没有直挂 `ERB_LANGUAGE_ID`
+ *    的原生注册形状、也不读切流开关；
+ * 5. **与 kojo2 同一条槽**：两家真供方同时在槽里时，ERB 请求**只有 ERB 那家作答**
+ *    （换哪一家在前都一样），kojo2 请求则由 kojo2 那家作答。
  */
 import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import * as path from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { EditorLanguageServiceContribution, EditorSelectionChain } from '@kojo/plugin-api';
 import type * as Monaco from '../src/monaco/entry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
+import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
+import { languageDescriptors } from '../src/monaco/language-registry';
+import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import {
-  erbDocumentHighlights,
-  erbHighlightKindToMonaco,
-  erbStructureOf,
   installErbHighlightProvider,
-  type ErbDocumentHighlight,
-  type ErbHighlightKind,
-  type ErbPosition,
-  type ErbRange,
+  erbHighlightKindToMonaco,
 } from '../src/monaco/erb-highlight';
+import { installErbSelectionRangeProvider } from '../src/monaco/erb-selection-range';
+import { ERB_LANGUAGE_IDS } from '@kojo/erb-lang/constants';
 import {
-  erbSelectionRangeAt,
-  installErbSelectionRangeProvider,
-  type ErbSelectionRange,
-} from '../src/monaco/erb-selection-range';
+  createErbLangPlugin,
+  provideDocumentHighlights as provideErbHighlights,
+  provideSelectionRanges as provideErbSelections,
+} from '@kojo/plugin-erb-lang';
+import { createKojoLangPlugin, provideDocumentHighlights as provideKojo2Highlights } from '@kojo/plugin-kojo-lang';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(HERE, '../../..');
+const HERE = import.meta.dirname;
+const HIGHLIGHT_SOURCE = readFileSync(
+  path.resolve(HERE, '..', 'src', 'monaco', 'erb-highlight.ts'),
+  'utf8',
+);
+const SELECTION_SOURCE = readFileSync(
+  path.resolve(HERE, '..', 'src', 'monaco', 'erb-selection-range.ts'),
+  'utf8',
+);
 
-/* ============================== 夹具 ============================== */
+/* ============================== 共享收口的期望 selector ============================== */
 
-/**
- * 高亮主夹具（每行都按内容定位）。埋伏的陷阱：
- * - 第 1 行注释里写满 `IF` / `CALL FUNC` / `$LOOP`；
- * - 第 6 行字符串里有 `IF` 与 `FUNC`；
- * - 第 9 行是没有 `CALL` 的散文式同名提及（⇒ text 档）；
- * - 第 10 行 `SIF` 是单行语句（没有配对块）；
- * - 第 15–18 行是 `[SKIPSTART]` 死区，里面还有一枚 `IF` 与一处 `CALL FUNC`；
- * - 第 20 行的 `IF` 在函数边界（第 22 行）前没有收束。
- */
-const HILITE: string = [
-  '; 顶部注释：IF / CALL FUNC / $LOOP 都不是符号',
-  '#DIM CNT, 10',
-  '@FUNC(A, B)',
-  '    $LOOP',
-  '    IF A AND B',
-  '        PRINTL "字符串里的 IF 与 FUNC"',
-  '        CALL OTHER(1)',
-  '        CALL FUNC(A)',
-  '        PRINTL FUNC について',
-  '        SIF A > 1',
-  '        PRINTLX',
-  '    ELSE',
-  '        CALL FUNC(B)',
-  '    ENDIF',
-  '    [SKIPSTART]',
-  '    IF A',
-  '    CALL FUNC(A)',
-  '    [SKIPEND]',
-  '    JUMP LOOP',
-  '    IF A',
-  '        PRINTL 未闭合',
-  '@OTHER()',
-  '    CALL FUNC(1)',
-].join('\n');
+const selectorsFor = (kind: 'documentHighlight' | 'selectionRange'): string[] =>
+  languageDescriptors()
+    .filter(
+      (descriptor) =>
+        descriptor.languageServices === true || descriptor.slotServices?.includes(kind) === true,
+    )
+    .map((descriptor) => descriptor.id);
 
-/** 扩选主夹具：两层控制块（IF ⊃ SELECTCASE）+ 一个分支段 + 两个函数 */
-const SELECT: string = [
-  '; 头部',
-  '@FUNC(A)',
-  '    IF A',
-  '        SELECTCASE A',
-  '            CASE 1',
-  '                PRINTL 一',
-  '        ENDSELECT',
-  '    ENDIF',
-  '@OTHER()',
-  '    CALL FUNC(1)',
-].join('\n');
+const HIGHLIGHT_SELECTORS = selectorsFor('documentHighlight');
+const SELECTION_SELECTORS = selectorsFor('selectionRange');
 
-/** `ELSE` 分支段夹具（IF 块里只有一条分支） */
-const BRANCH: string = [
-  '@FUNC(A, B)',
-  '    IF A AND B',
-  '        PRINTL "字符串"',
-  '    ELSE',
-  '        CALL FUNC(B)',
-  '    ENDIF',
-  '@OTHER()',
-  '    CALL FUNC(1)',
-].join('\n');
+/* ============================== 假 Monaco / 假 model / 假内核 ============================== */
 
-/** 死区夹具：`[SKIPSTART]` 里还写着 `IF B`（不解析、不扩选） */
-const DEAD: string = [
-  '@FUNC(A)',
-  '    IF A',
-  '        [SKIPSTART]',
-  '        IF B',
-  '        [SKIPEND]',
-  '    ENDIF',
-].join('\n');
-
-/** 大小写 / CJK：`if` / `endif` 小写形态与中文函数名 */
-const CJK: string = [
-  '@中文函(A)',
-  '    CALL 中文函(A)',
-  '    if A > 1',
-  '        PRINTL A',
-  '    endif',
-].join('\n');
-
-/** `TRYCCALL` 既是 try 开块、又把函数名放在名字槽里（引擎同一语句两种身份） */
-const TRY: string = [
-  '@T()',
-  '    TRYCCALL 靶(1)',
-  '        CALL 靶(2)',
-  '    CATCH',
-  '        PRINTL 捕',
-  '    ENDCATCH',
-].join('\n');
-
-/** 跳转目标带 `$` / `*` 前缀（引擎两种写法都认） */
-const LABEL: string = [
-  '@L()',
-  '    $NEXT',
-  '    JUMP $NEXT',
-  '    GOTO NEXT',
-].join('\n');
-
-/** 空行落在函数块里（没有词级，但函数 / 全文仍在） */
-const BLANK: string = ['@FUNC(A)', '', '    PRINTL 一', '@OTHER()', '    PRINTL 二'].join('\n');
-
-/** 没有函数头的顶层块（没有函数级，块与全文同级时只留一级） */
-const TOPLEVEL: string = ['IF A', '    PRINTL 一', 'ENDIF'].join('\n');
-
-/* ============================== 假 Monaco / 假 model ============================== */
+type ProviderKind = 'highlight' | 'selection';
 
 const HIGHLIGHT_KINDS = { Text: 0, Read: 1, Write: 2 } as const;
 
 interface Registration {
-  readonly selector: string;
+  readonly kind: ProviderKind;
+  readonly selector: unknown;
   readonly provider: unknown;
 }
 
-interface FakeMonaco {
+function fakeMonaco(): {
   readonly monaco: typeof Monaco;
   readonly registrations: Registration[];
-  readonly disposeCalls: number[];
-}
-
-function fakeMonaco(): FakeMonaco {
+  readonly disposeCalls: () => number;
+} {
   const registrations: Registration[] = [];
-  const disposeCalls: number[] = [];
+  let disposeCalls = 0;
+  const register = (kind: ProviderKind) => (selector: unknown, provider: unknown) => {
+    registrations.push({ kind, selector, provider });
+    return {
+      dispose: () => {
+        disposeCalls += 1;
+      },
+    };
+  };
   const fake = {
     languages: {
       DocumentHighlightKind: HIGHLIGHT_KINDS,
-      registerDocumentHighlightProvider: (selector: string, provider: unknown) => {
-        registrations.push({ selector, provider });
-        return { dispose: () => disposeCalls.push(registrations.length) };
-      },
-      registerSelectionRangeProvider: (selector: string, provider: unknown) => {
-        registrations.push({ selector, provider });
-        return { dispose: () => disposeCalls.push(registrations.length) };
-      },
+      registerDocumentHighlightProvider: register('highlight'),
+      registerSelectionRangeProvider: register('selection'),
     },
   };
-  return { monaco: fake as unknown as typeof Monaco, registrations, disposeCalls };
+  return {
+    monaco: fake as unknown as typeof Monaco,
+    registrations,
+    disposeCalls: () => disposeCalls,
+  };
 }
 
 interface FakeModel {
   readonly model: Monaco.editor.ITextModel;
-  readonly breakModel: () => void;
+  readonly breakGetValue: () => void;
 }
 
-function fakeModel(text: string): FakeModel {
+function fakeModel(source: string, languageId: string = ERB_LANGUAGE_ID): FakeModel {
   let broken = false;
   const model = {
     getValue: () => {
       if (broken) throw new Error('桩：模型已释放');
-      return text;
+      return source;
     },
-    getLineCount: () => text.split(/\r\n|\r|\n/).length,
-    getLineContent: (line: number) => text.split(/\r\n|\r|\n/)[line - 1] ?? '',
-    isDisposed: () => broken,
-    getLanguageId: () => ERB_LANGUAGE_ID,
+    getLanguageId: () => languageId,
+    getVersionId: () => 11,
+    uri: { scheme: 'file', path: '/proj/a.erb', fsPath: '/proj/a.erb' },
   } as unknown as Monaco.editor.ITextModel;
-  return { model, breakModel: () => (broken = true) };
+  return { model, breakGetValue: () => (broken = true) };
+}
+
+type KernelLike = Parameters<typeof setGlobalKernel>[0];
+
+function installKernel(
+  contributions: readonly EditorLanguageServiceContribution[],
+  project: unknown = { adapterId: 'proj-a' },
+): void {
+  setGlobalKernel({
+    slots: {
+      query: (slot: string) => (slot === 'ui.editor.languageService' ? contributions : []),
+    },
+    project: { current: () => project },
+  } as unknown as KernelLike);
 }
 
 const TOKEN = {
@@ -203,545 +142,411 @@ const TOKEN = {
   onCancellationRequested: () => ({ dispose: () => undefined }),
 } as unknown as Monaco.CancellationToken;
 
-/* ============================== 小工具 ============================== */
-
-function splitLines(source: string): string[] {
-  return source.split(/\r\n|\r|\n/);
+function position(lineNumber: number, column: number): Monaco.Position {
+  return { lineNumber, column } as unknown as Monaco.Position;
 }
 
-function lineText(source: string, line: number): string {
-  return splitLines(source)[line - 1] ?? '';
+/** 一条贡献（`provide` 的返回由用例决定） */
+function contributionOf(
+  provide: EditorLanguageServiceContribution['provide'],
+  id = 'stub-leg',
+): EditorLanguageServiceContribution {
+  return { id, provide };
 }
 
-/** 第 `line` 行第 `occurrence` 个 `needle` 的首列（1 基） */
-function at(source: string, line: number, needle: string, occurrence = 1): ErbPosition {
-  const text = lineText(source, line);
-  let index = -1;
-  let from = 0;
-  for (let i = 0; i < occurrence; i++) {
-    index = text.indexOf(needle, from);
-    if (index < 0) throw new Error(`第 ${line} 行没有第 ${i + 1} 个「${needle}」`);
-    from = index + 1;
-  }
-  return { line, column: index + 1 };
+/** 只答 `documentHighlight` 的贡献 */
+function highlightContribution(
+  highlights: ReadonlyArray<{
+    line: number;
+    startColumn: number;
+    endColumn: number;
+    kind: 'text' | 'read' | 'write';
+  }>,
+  id = 'stub-highlight',
+): EditorLanguageServiceContribution {
+  return contributionOf(
+    (request) => (request.kind === 'documentHighlight' ? { kind: 'documentHighlight', highlights } : undefined),
+    id,
+  );
 }
 
-/** 1 基区间 → `[行, 列, 行, 列]` */
-function flat(range: ErbRange): [number, number, number, number] {
-  return [range.startLine, range.startColumn, range.endLine, range.endColumn];
+/** 只答 `selectionRange` 的贡献 */
+function selectionContribution(
+  selections: ReadonlyArray<EditorSelectionChain | null>,
+  id = 'stub-selection',
+): EditorLanguageServiceContribution {
+  return contributionOf(
+    (request) => (request.kind === 'selectionRange' ? { kind: 'selectionRange', selections } : undefined),
+    id,
+  ) as EditorLanguageServiceContribution;
 }
+
+/** 取回 ERB 那枚 provider（没挂上直接抛：证据缺席不许静默） */
+function providerOf(kind: ProviderKind): Record<string, unknown> {
+  const fake = fakeMonaco();
+  if (kind === 'highlight') installErbHighlightProvider(fake.monaco);
+  else installErbSelectionRangeProvider(fake.monaco);
+  const provider = fake.registrations.find((entry) => entry.selector === ERB_LANGUAGE_ID)?.provider;
+  if (provider === undefined) throw new Error(`${kind} 上没挂 provider（selector=${ERB_LANGUAGE_ID}）`);
+  return provider as Record<string, unknown>;
+}
+
+function askHighlight(
+  model: Monaco.editor.ITextModel,
+  line = 5,
+  column = 6,
+): Monaco.languages.DocumentHighlight[] | undefined {
+  const provider = providerOf('highlight') as unknown as Monaco.languages.DocumentHighlightProvider;
+  return provider.provideDocumentHighlights(model, position(line, column), TOKEN) as
+    | Monaco.languages.DocumentHighlight[]
+    | undefined;
+}
+
+function askSelection(
+  model: Monaco.editor.ITextModel,
+  positions: ReadonlyArray<Monaco.Position>,
+): Monaco.languages.SelectionRange[][] | undefined {
+  const provider = providerOf('selection') as unknown as Monaco.languages.SelectionRangeProvider;
+  return provider.provideSelectionRanges(model, [...positions], TOKEN) as
+    | Monaco.languages.SelectionRange[][]
+    | undefined;
+}
+
+const SOURCE = ['@FUNC(A)', '    IF A', '        PRINTL 一', '    ENDIF'].join('\n');
 
 function flatIRange(range: Monaco.IRange): [number, number, number, number] {
   return [range.startLineNumber, range.startColumn, range.endLineNumber, range.endColumn];
 }
 
-/** 桩 `Position`（provider 的入参只读 `lineNumber` / `column`） */
-function position(lineNumber: number, column: number): Monaco.Position {
-  return { lineNumber, column } as unknown as Monaco.Position;
-}
-
-/** 高亮结果 → `[行, 起列, 行, 终列, 档位]`（便于整表对拍） */
-function hitsOf(source: string, at_: ErbPosition): Array<[number, number, number, number, ErbHighlightKind]> {
-  return erbDocumentHighlights(source, at_).map((hit) => [...flat(hit.range), hit.kind] as [number, number, number, number, ErbHighlightKind]);
-}
-
-/** 扩选链（最内层在前）→ 1 基区间数组 */
-function chainOf(source: string, at_: ErbPosition): ErbRange[] {
-  const node = erbSelectionRangeAt(source, [at_])[0];
-  const out: ErbRange[] = [];
-  let cursor: ErbSelectionRange | undefined = node;
-  while (cursor !== undefined) {
-    out.push({
-      startLine: cursor.range.startLineNumber,
-      startColumn: cursor.range.startColumn,
-      endLine: cursor.range.endLineNumber,
-      endColumn: cursor.range.endColumn,
-    });
-    cursor = cursor.parent;
-  }
-  return out;
-}
-
-function chainFlats(source: string, at_: ErbPosition): Array<[number, number, number, number]> {
-  return chainOf(source, at_).map(flat);
-}
-
-function highlightProviderOf(fake: FakeMonaco): Monaco.languages.DocumentHighlightProvider {
-  const registration = fake.registrations[0];
-  if (registration === undefined) throw new Error('没有注册 DocumentHighlightProvider');
-  return registration.provider as Monaco.languages.DocumentHighlightProvider;
-}
-
-function selectionProviderOf(fake: FakeMonaco): Monaco.languages.SelectionRangeProvider {
-  const registration = fake.registrations[0];
-  if (registration === undefined) throw new Error('没有注册 SelectionRangeProvider');
-  return registration.provider as Monaco.languages.SelectionRangeProvider;
-}
-
-/* ============================== ① 高亮：控制流关键字配对 ============================== */
-
-describe('高亮：控制流关键字块配对', () => {
-  const IF_BLOCK: Array<[number, number, number, number, ErbHighlightKind]> = [
-    [5, 5, 5, 7, 'write'],
-    [12, 5, 12, 9, 'text'],
-    [14, 5, 14, 10, 'read'],
-  ];
-
-  it('光标在开块 `IF` 上：开块 write + 分支 text + 收束 read', () => {
-    expect(hitsOf(HILITE, at(HILITE, 5, 'IF'))).toEqual(IF_BLOCK);
-  });
-
-  it('光标在收束 `ENDIF` 上：给出同一条块（对称）', () => {
-    expect(hitsOf(HILITE, at(HILITE, 14, 'ENDIF'))).toEqual(IF_BLOCK);
-  });
-
-  it('光标在分支 `ELSE` 上：给出它所属那一条块', () => {
-    expect(hitsOf(HILITE, at(HILITE, 12, 'ELSE'))).toEqual(IF_BLOCK);
-  });
-
-  it('死区里的 `IF` 不开块 ⇒ `[]`（引擎不编译那些行）', () => {
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 16, 'IF'))).toEqual([]);
-  });
-
-  it('函数边界前的未闭合 `IF`：配对缺席时只给自己的那一枚（不猜收束）', () => {
-    expect(hitsOf(HILITE, at(HILITE, 20, 'IF'))).toEqual([[20, 5, 20, 7, 'write']]);
-  });
-
-  it('`SIF` 是单行语句（没有配对块）⇒ `[]`', () => {
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 10, 'SIF'))).toEqual([]);
-  });
-
-  it('`TRYCCALL … CATCH … ENDCATCH`：开块 write + 分支 text + 收束 read', () => {
-    expect(hitsOf(TRY, at(TRY, 2, 'TRYCCALL'))).toEqual([
-      [2, 5, 2, 13, 'write'],
-      [4, 5, 4, 10, 'text'],
-      [6, 5, 6, 13, 'read'],
-    ]);
-  });
-
-  it('结构事实：死区行不是控制行，未闭合的开块不产块', () => {
-    const structure = erbStructureOf(HILITE);
-    expect(structure.controlByLine.has(16)).toBe(false);
-    expect(structure.controlByLine.has(17)).toBe(false);
-    expect(structure.blocks).toHaveLength(1);
-    expect(structure.blocks[0]!.open.line).toBe(5);
-    expect(structure.blocks[0]!.close?.line).toBe(14);
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
-/* ============================== ② 高亮：函数名与 `$` 标签 ============================== */
+/* ============================== ① 契约 → Monaco ============================== */
 
-describe('高亮：函数名（声明写 / 调用读 / 提及弱）', () => {
-  const FUNC_HITS: Array<[number, number, number, number, ErbHighlightKind]> = [
-    [3, 2, 3, 6, 'write'],
-    [8, 14, 8, 18, 'read'],
-    [9, 16, 9, 20, 'text'],
-    [13, 14, 13, 18, 'read'],
-    [23, 10, 23, 14, 'read'],
-  ];
-
-  it('`@FUNC` 声明 + 两处 `CALL` 名字槽 + 一处散文提及（text）', () => {
-    expect(hitsOf(HILITE, at(HILITE, 3, 'FUNC'))).toEqual(FUNC_HITS);
-  });
-
-  it('光标停在 `@` 上也解析到同一枚声明（与正文面同一条符号）', () => {
-    expect(hitsOf(HILITE, { line: 3, column: 1 })).toEqual(FUNC_HITS);
-  });
-
-  it('死区里的 `CALL FUNC` 不进结果（第 17 行缺席）', () => {
-    expect(FUNC_HITS.some(([line]) => line === 17)).toBe(false);
-  });
-
-  it('字符串里的同名 `FUNC` 不进结果（第 6 行缺席）', () => {
-    expect(FUNC_HITS.some(([line]) => line === 6)).toBe(false);
-  });
-
-  it('声明之外的第二枚函数：声明 + 它自己的调用点', () => {
-    expect(hitsOf(HILITE, at(HILITE, 22, 'OTHER'))).toEqual([
-      [7, 14, 7, 19, 'read'],
-      [22, 2, 22, 7, 'write'],
-    ]);
-  });
-
-  it('`CALL` 关键字本身不是符号 ⇒ `[]`', () => {
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 7, 'CALL'))).toEqual([]);
-  });
-
-  it('`CALLFORM` 的参数不是名字槽（未声明的名字 ⇒ `[]`，判窄不判宽）', () => {
-    const source = ['@F()', '    CALLFORM UNDECLARED'].join('\n');
-    expect(erbDocumentHighlights(source, { line: 2, column: source.split('\n')[1]!.indexOf('UNDECLARED') + 1 })).toEqual([]);
-  });
-
-  it('`TRYCCALL` 的目标同时是名字槽（既是 try 开块又按名调用）', () => {
-    expect(hitsOf(TRY, at(TRY, 3, '靶'))).toEqual([
-      [2, 14, 2, 15, 'read'],
-      [3, 14, 3, 15, 'read'],
-    ]);
-  });
-});
-
-describe('高亮：`$` 标签（定义写 / 跳转读）', () => {
-  it('`$LOOP` 定义 + `JUMP LOOP` 目标', () => {
-    expect(hitsOf(HILITE, at(HILITE, 4, 'LOOP'))).toEqual([
-      [4, 6, 4, 10, 'write'],
-      [19, 10, 19, 14, 'read'],
-    ]);
-  });
-
-  it('跳转目标可带 `$` 前缀（两种写法都是同一枚标签）', () => {
-    expect(hitsOf(LABEL, at(LABEL, 2, 'NEXT'))).toEqual([
-      [2, 6, 2, 10, 'write'],
-      [3, 11, 3, 15, 'read'],
-      [4, 10, 4, 14, 'read'],
-    ]);
-  });
-
-  it('纯数字跳转目标是行号不是标签名（不产标签符号）', () => {
-    const source = ['@L()', '    GOTO 123'].join('\n');
-    expect(erbDocumentHighlights(source, { line: 2, column: 10 })).toEqual([]);
-  });
-});
-
-/* ============================== ③ 高亮：不误报 / 边界 ============================== */
-
-describe('高亮：字符串 / 注释 / 死区 / 无符号', () => {
-  it('字符串内容不出符号（光标落在串里的 `IF`）', () => {
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 6, 'IF'))).toEqual([]);
-  });
-
-  it('字符串内容不出符号（光标落在串里的 `FUNC`）', () => {
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 6, 'FUNC'))).toEqual([]);
-  });
-
-  it('整行注释不出符号', () => {
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 1, 'CALL'))).toEqual([]);
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 1, 'LOOP'))).toEqual([]);
-  });
-
-  it('死区里的 `CALL FUNC` 不出符号', () => {
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 17, 'FUNC'))).toEqual([]);
-  });
-
-  it('空白 / 数字 / 未知词 / `#DIM` 指令行 ⇒ `[]`', () => {
-    expect(erbDocumentHighlights(HILITE, { line: 2, column: 6 })).toEqual([]); // #DIM CNT
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 10, '1'))).toEqual([]); // 条件里的数字
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 21, 'PRINTL'))).toEqual([]); // 未声明词
-  });
-
-  it('越界行 / 越界列 / 非法坐标 / 空文件 / 非字符串 ⇒ `[]`（不抛）', () => {
-    expect(erbDocumentHighlights(HILITE, { line: 9_999, column: 1 })).toEqual([]);
-    expect(erbDocumentHighlights(HILITE, { line: 3, column: 999 })).toEqual([]);
-    expect(erbDocumentHighlights(HILITE, { line: 0, column: 1 })).toEqual([]);
-    expect(erbDocumentHighlights(HILITE, { line: 1, column: 0 })).toEqual([]);
-    expect(erbDocumentHighlights(HILITE, { line: Number.NaN, column: 1 })).toEqual([]);
-    expect(erbDocumentHighlights('', { line: 1, column: 1 })).toEqual([]);
-    expect(erbDocumentHighlights(null as unknown as string, { line: 1, column: 1 })).toEqual([]);
-  });
-});
-
-describe('高亮：确定性、CRLF、大小写、CJK', () => {
-  it('同输入两次逐字相等', () => {
-    expect(erbDocumentHighlights(HILITE, at(HILITE, 3, 'FUNC'))).toEqual(
-      erbDocumentHighlights(HILITE, at(HILITE, 3, 'FUNC')),
-    );
-  });
-
-  it('CRLF 与 LF 同结果（列口径不受行尾影响）', () => {
-    const crlf = HILITE.replace(/\n/g, '\r\n');
-    expect(erbDocumentHighlights(crlf, at(crlf, 3, 'FUNC'))).toEqual(
-      erbDocumentHighlights(HILITE, at(HILITE, 3, 'FUNC')),
-    );
-  });
-
-  it('关键字大小写不敏感：小写 `if` 配对小写 `endif`', () => {
-    expect(hitsOf(CJK, at(CJK, 3, 'if'))).toEqual([
-      [3, 5, 3, 7, 'write'],
-      [5, 5, 5, 10, 'read'],
-    ]);
-  });
-
-  it('中文函数名整词（声明 + 调用）', () => {
-    expect(hitsOf(CJK, at(CJK, 1, '中文函'))).toEqual([
-      [1, 2, 1, 5, 'write'],
-      [2, 10, 2, 13, 'read'],
-    ]);
-  });
-
-  it('档位 → Monaco DocumentHighlightKind（唯一映射表）', () => {
+describe('①契约 → Monaco：单行区间 + 三档映射', () => {
+  it('三档 → DocumentHighlightKind（唯一映射表）', () => {
     const fake = fakeMonaco();
     expect(erbHighlightKindToMonaco(fake.monaco, 'text')).toBe(HIGHLIGHT_KINDS.Text);
     expect(erbHighlightKindToMonaco(fake.monaco, 'read')).toBe(HIGHLIGHT_KINDS.Read);
     expect(erbHighlightKindToMonaco(fake.monaco, 'write')).toBe(HIGHLIGHT_KINDS.Write);
   });
-});
 
-/* ============================== ④ 高亮 provider ============================== */
-
-describe('高亮 provider：只挂 ERB、dispose 幂等、异常回空', () => {
-  it('注册一枚，selector 只有 `ERB_LANGUAGE_ID`（不看任何偏好开关）', () => {
-    const fake = fakeMonaco();
-    installErbHighlightProvider(fake.monaco);
-    expect(fake.registrations).toHaveLength(1);
-    expect(fake.registrations[0]!.selector).toBe(ERB_LANGUAGE_ID);
-  });
-
-  it('provider 形状：IRange + DocumentHighlightKind（write=2 / read=1 / text=0）', () => {
-    const fake = fakeMonaco();
-    installErbHighlightProvider(fake.monaco);
-    const result = highlightProviderOf(fake).provideDocumentHighlights(
-      fakeModel(HILITE).model,
-      position(5, 6),
-      TOKEN,
-    ) as Monaco.languages.DocumentHighlight[];
+  it('高亮：line / 起止列 → 同行 IRange，kind 逐条翻', () => {
+    installKernel([
+      highlightContribution([
+        { line: 1, startColumn: 2, endColumn: 6, kind: 'write' },
+        { line: 2, startColumn: 5, endColumn: 7, kind: 'read' },
+        { line: 3, startColumn: 9, endColumn: 15, kind: 'text' },
+      ]),
+    ]);
+    const result = askHighlight(fakeModel(SOURCE).model)!;
     expect(result.map((hit) => [flatIRange(hit.range), hit.kind])).toEqual([
-      [[5, 5, 5, 7], HIGHLIGHT_KINDS.Write],
-      [[12, 5, 12, 9], HIGHLIGHT_KINDS.Text],
-      [[14, 5, 14, 10], HIGHLIGHT_KINDS.Read],
+      [[1, 2, 1, 6], HIGHLIGHT_KINDS.Write],
+      [[2, 5, 2, 7], HIGHLIGHT_KINDS.Read],
+      [[3, 9, 3, 15], HIGHLIGHT_KINDS.Text],
     ]);
   });
 
-  it('模型已释放 / 取文抛错 ⇒ `[]`（不抛进 Monaco）', () => {
-    const fake = fakeMonaco();
-    installErbHighlightProvider(fake.monaco);
-    const broken = fakeModel(HILITE);
-    broken.breakModel();
-    expect(
-      highlightProviderOf(fake).provideDocumentHighlights(broken.model, position(5, 6), TOKEN),
-    ).toEqual([]);
-  });
-
-  it('dispose 幂等：两次只撤一轮', () => {
-    const fake = fakeMonaco();
-    const handle = installErbHighlightProvider(fake.monaco);
-    handle.dispose();
-    handle.dispose();
-    expect(fake.disposeCalls).toHaveLength(1);
-  });
-});
-
-/* ============================== ⑤ 扩选：层级 ============================== */
-
-describe('扩选：词 → 行 → 分支段 → 块（多级）→ 函数 → 全文', () => {
-  it('嵌套块：词 / 行 / CASE 段 / SELECTCASE 块 / IF 块 / 函数 / 全文 七级', () => {
-    expect(chainFlats(SELECT, at(SELECT, 6, 'PRINTL'))).toEqual([
-      [6, 17, 6, 23],
-      [6, 1, 6, 25],
-      [5, 1, 6, 25],
-      [4, 1, 7, 18],
-      [3, 1, 8, 10],
-      [2, 1, 8, 10],
-      [1, 1, 10, 17],
+  it('请求带身份三格 + 全文 + 位点 + 项目（宿主只搬运）', () => {
+    let seen:
+      | {
+          path?: string;
+          text?: string;
+          line?: number;
+          column?: number;
+          languageId?: string;
+          version?: number;
+          project?: unknown;
+        }
+      | undefined;
+    installKernel([
+      contributionOf((request) => {
+        seen = request as typeof seen;
+        return { kind: 'documentHighlight', highlights: [] };
+      }),
     ]);
+    askHighlight(fakeModel(SOURCE).model, 2, 6);
+    expect(seen).toBeDefined();
+    expect(seen!.path).toBe('/proj/a.erb');
+    expect(seen!.text).toBe(SOURCE);
+    expect(seen!.line).toBe(2);
+    expect(seen!.column).toBe(6);
+    expect(seen!.languageId).toBe(ERB_LANGUAGE_ID);
+    expect(seen!.version).toBe(11);
+    expect(seen!.project).toEqual({ adapterId: 'proj-a' });
   });
 
-  it('行级恒为整行（含缩进；起列 1、终列行长 + 1）', () => {
-    const chain = chainOf(SELECT, at(SELECT, 6, 'PRINTL'));
-    expect(chain[1]!.startColumn).toBe(1);
-    expect(chain[1]!.endColumn).toBe(lineText(SELECT, 6).length + 1);
-  });
-
-  it('`ELSE` 分支段：兄弟分支不并进来，段尾 = 收束前一行', () => {
-    expect(chainFlats(BRANCH, at(BRANCH, 5, 'FUNC'))).toEqual([
-      [5, 14, 5, 18],
-      [5, 1, 5, 21],
-      [4, 1, 5, 21],
-      [2, 1, 6, 10],
-      [1, 1, 6, 10],
-      [1, 1, 8, 17],
+  it('扩选：嵌套链摊平成 0.57 的"每位点一个数组"（内 → 外）', () => {
+    installKernel([
+      selectionContribution([
+        {
+          range: { startLine: 2, startColumn: 5, endLine: 2, endColumn: 7 },
+          parent: {
+            range: { startLine: 2, startColumn: 1, endLine: 2, endColumn: 10 },
+            parent: { range: { startLine: 1, startColumn: 1, endLine: 4, endColumn: 11 } },
+          },
+        },
+      ]),
     ]);
-  });
-
-  it('函数块不跨到下一个 `@`（`@OTHER` 之后的内容归 OTHER）', () => {
-    expect(chainFlats(SELECT, at(SELECT, 10, 'FUNC'))).toEqual([
-      [10, 10, 10, 14],
-      [10, 1, 10, 17],
-      [9, 1, 10, 17],
-      [1, 1, 10, 17],
-    ]);
-  });
-
-  it('死区不扩：词 → 行 → 全文（块 / 函数边界在那里没有判据）', () => {
-    expect(chainFlats(DEAD, at(DEAD, 4, 'B'))).toEqual([
-      [4, 12, 4, 13],
-      [4, 1, 4, 13],
-      [1, 1, 6, 10],
-    ]);
-  });
-
-  it('死区标记行本身也不扩（`[SKIPSTART]` 行）', () => {
-    expect(chainFlats(DEAD, at(DEAD, 3, 'SKIPSTART'))).toEqual([
-      [3, 10, 3, 19],
-      [3, 1, 3, 20],
-      [1, 1, 6, 10],
-    ]);
-  });
-
-  it('空行位点：没有词级，行 → 函数 → 全文', () => {
-    expect(chainFlats(BLANK, { line: 2, column: 1 })).toEqual([
-      [2, 1, 2, 1],
-      [1, 1, 3, 13],
-      [1, 1, 5, 13],
-    ]);
-  });
-
-  it('没有函数头时链只有 词 / 行 / 块（块与全文同级只留一级）', () => {
-    expect(chainFlats(TOPLEVEL, at(TOPLEVEL, 2, 'PRINTL'))).toEqual([
-      [2, 5, 2, 11],
-      [2, 1, 2, 13],
-      [1, 1, 3, 6],
-    ]);
-  });
-
-  it('全文区间 = 1:1 到末行末列', () => {
-    const chain = chainOf(SELECT, at(SELECT, 6, 'PRINTL'));
-    expect(flat(chain[chain.length - 1]!)).toEqual([
-      1,
-      1,
-      splitLines(SELECT).length,
-      lineText(SELECT, splitLines(SELECT).length).length + 1,
-    ]);
-  });
-});
-
-/* ============================== ⑥ 扩选：空 / 越界 / 多光标 ============================== */
-
-describe('扩选：空文件、越界、多光标、确定性', () => {
-  it('空串 / 纯空白 / 空位点数组 ⇒ `[]`', () => {
-    expect(erbSelectionRangeAt('', [{ line: 1, column: 1 }])).toEqual([]);
-    expect(erbSelectionRangeAt('   \n\t\n', [{ line: 1, column: 1 }])).toEqual([]);
-    expect(erbSelectionRangeAt(SELECT, [])).toEqual([]);
-  });
-
-  it('越界行 / 越界列 / 非法坐标 ⇒ 该位点显式空（不夹取）', () => {
-    expect(erbSelectionRangeAt(SELECT, [{ line: 9_999, column: 1 }])).toEqual([]);
-    expect(erbSelectionRangeAt(SELECT, [{ line: 1, column: 0 }])).toEqual([]);
-    expect(erbSelectionRangeAt(SELECT, [{ line: 1, column: 999 }])).toEqual([]);
-    expect(erbSelectionRangeAt(SELECT, [{ line: Number.NaN, column: 1 }])).toEqual([]);
-    expect(erbSelectionRangeAt(SELECT, [{ line: 1, column: Number.POSITIVE_INFINITY }])).toEqual([]);
-  });
-
-  it('多光标：结果与输入同序、各自一条链', () => {
-    const positions = [at(SELECT, 6, 'PRINTL'), at(BRANCH, 5, 'FUNC')];
-    const chains = erbSelectionRangeAt(SELECT, positions);
-    expect(chains).toHaveLength(2);
-    expect(chainOf(SELECT, positions[0]!)[0]!.startLine).toBe(6);
-    expect(chainOf(SELECT, positions[1]!)[0]!.startLine).toBe(5);
-  });
-
-  it('行末光标取左侧词（行尾列可停靠）', () => {
-    const end = { line: 3, column: lineText(SELECT, 3).length + 1 };
-    const chain = chainOf(SELECT, end);
-    expect(flat(chain[0]!)).toEqual([3, 8, 3, 9]);
-  });
-
-  it('中文名字整词（不按字节切）', () => {
-    expect(flat(chainOf(CJK, at(CJK, 1, '中文函'))[0]!)).toEqual([1, 2, 1, 5]);
-  });
-
-  it('CRLF 与 LF 同结果', () => {
-    const crlf = SELECT.replace(/\n/g, '\r\n');
-    expect(chainFlats(crlf, at(crlf, 6, 'PRINTL'))).toEqual(chainFlats(SELECT, at(SELECT, 6, 'PRINTL')));
-  });
-});
-
-/* ============================== ⑦ 扩选 provider ============================== */
-
-describe('扩选 provider：0.57 形状（每位点一条扁平数组）、dispose、异常', () => {
-  it('注册一枚，selector 只有 `ERB_LANGUAGE_ID`', () => {
-    const fake = fakeMonaco();
-    installErbSelectionRangeProvider(fake.monaco);
-    expect(fake.registrations).toHaveLength(1);
-    expect(fake.registrations[0]!.selector).toBe(ERB_LANGUAGE_ID);
-  });
-
-  it('provider 返回 SelectionRange[][]：每位点一条内 → 外的链', () => {
-    const fake = fakeMonaco();
-    installErbSelectionRangeProvider(fake.monaco);
-    const result = selectionProviderOf(fake).provideSelectionRanges(
-      fakeModel(SELECT).model,
-      [position(6, 17)],
-      TOKEN,
-    ) as Monaco.languages.SelectionRange[][];
+    const result = askSelection(fakeModel(SOURCE).model, [position(2, 5)])!;
     expect(result).toHaveLength(1);
     expect(result[0]!.map((node) => flatIRange(node.range))).toEqual([
-      [6, 17, 6, 23],
-      [6, 1, 6, 25],
-      [5, 1, 6, 25],
-      [4, 1, 7, 18],
-      [3, 1, 8, 10],
-      [2, 1, 8, 10],
-      [1, 1, 10, 17],
+      [2, 5, 2, 7],
+      [2, 1, 2, 10],
+      [1, 1, 4, 11],
     ]);
   });
 
-  it('多位点 ⇒ 数组与位点一一对应；越界位点给空数组（不缩短外层）', () => {
-    const fake = fakeMonaco();
-    installErbSelectionRangeProvider(fake.monaco);
-    const result = selectionProviderOf(fake).provideSelectionRanges(
-      fakeModel(SELECT).model,
-      [position(6, 17), position(9_999, 1)],
-      TOKEN,
-    ) as Monaco.languages.SelectionRange[][];
+  it('扩选请求把 Monaco 位点折成 1 基行列（原样、不排序）', () => {
+    let seen: { positions?: unknown; text?: string } | undefined;
+    installKernel([
+      contributionOf((request) => {
+        seen = request as typeof seen;
+        return { kind: 'selectionRange', selections: [] };
+      }),
+    ]);
+    askSelection(fakeModel(SOURCE).model, [position(3, 9), position(1, 1)]);
+    expect(seen!.positions).toEqual([
+      { line: 3, column: 9 },
+      { line: 1, column: 1 },
+    ]);
+    expect(seen!.text).toBe(SOURCE);
+  });
+});
+
+/* ============================== ② 逐位点独立 ============================== */
+
+describe('②扩选：null 位点给空数组，别的位点一格不动', () => {
+  it('第 2 个位点 null ⇒ `[]`；第 1 位点整条链照旧', () => {
+    installKernel([
+      selectionContribution([{ range: { startLine: 2, startColumn: 5, endLine: 2, endColumn: 7 } }, null]),
+    ]);
+    const result = askSelection(fakeModel(SOURCE).model, [position(2, 5), position(9_999, 1)])!;
     expect(result).toHaveLength(2);
-    expect(result[0]!.length).toBeGreaterThan(1);
+    expect(result[0]!.map((node) => flatIRange(node.range))).toEqual([[2, 5, 2, 7]]);
     expect(result[1]).toEqual([]);
   });
 
-  it('模型已释放 / 取文抛错 ⇒ `[]`（不抛进 Monaco）', () => {
+  it('与输入同序：位置越界与否不影响位次', () => {
+    installKernel([
+      selectionContribution([
+        null,
+        { range: { startLine: 2, startColumn: 5, endLine: 2, endColumn: 7 } },
+      ]),
+    ]);
+    const result = askSelection(fakeModel(SOURCE).model, [position(9_999, 1), position(2, 5)])!;
+    expect(result[0]).toEqual([]);
+    expect(flatIRange(result[1]![0]!.range)).toEqual([2, 5, 2, 7]);
+  });
+});
+
+/* ============================== ③ 三态不混 ============================== */
+
+describe('③三态：无人应答 ⇒ undefined（不顶掉别家）；答空 ⇒ []；异常 ⇒ []', () => {
+  it('高亮：槽里无人应答 ⇒ provider 交 `undefined`（空数组会按"第一应答"顶掉下一家）', () => {
+    installKernel([contributionOf(() => undefined)]);
+    expect(askHighlight(fakeModel(SOURCE).model)).toBeUndefined();
+  });
+
+  it('高亮：有人答空表 ⇒ `[]`，且不再问下一家（空结果也是作答）', () => {
+    const second = vi.fn<EditorLanguageServiceContribution['provide']>(() => undefined);
+    installKernel([highlightContribution([], 'first'), contributionOf(second, 'second')]);
+    expect(askHighlight(fakeModel(SOURCE).model)).toEqual([]);
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it('扩选：无人应答 ⇒ `undefined`（不伪造"没有扩选"）', () => {
+    installKernel([contributionOf(() => undefined)]);
+    expect(askSelection(fakeModel(SOURCE).model, [position(2, 5)])).toBeUndefined();
+  });
+
+  it('取文失败（模型已释放）⇒ `[]`（不抛进 Monaco）', () => {
+    installKernel([highlightContribution([{ line: 1, startColumn: 2, endColumn: 6, kind: 'write' }])]);
+    const broken = fakeModel(SOURCE);
+    broken.breakGetValue();
+    expect(askHighlight(broken.model)).toEqual([]);
+    expect(askSelection(broken.model, [position(2, 5)])).toEqual([]);
+  });
+});
+
+/* ============================== ④ 注册与源码卫生 ============================== */
+
+describe('④注册：共享收口带能力名、dispose 幂等、原生注册形状归零', () => {
+  it('两枚都挂到 scope 内的每一门语言上（ERB 由 languageServices 收进来），且只挂一次', () => {
     const fake = fakeMonaco();
+    installErbHighlightProvider(fake.monaco);
     installErbSelectionRangeProvider(fake.monaco);
-    const broken = fakeModel(SELECT);
-    broken.breakModel();
-    expect(
-      selectionProviderOf(fake).provideSelectionRanges(broken.model, [position(6, 17)], TOKEN),
-    ).toEqual([]);
+    const highlightSelectors = fake.registrations
+      .filter((entry) => entry.kind === 'highlight')
+      .map((entry) => entry.selector);
+    const selectionSelectors = fake.registrations
+      .filter((entry) => entry.kind === 'selection')
+      .map((entry) => entry.selector);
+    expect(highlightSelectors).toEqual(HIGHLIGHT_SELECTORS);
+    expect(selectionSelectors).toEqual(SELECTION_SELECTORS);
+    expect(highlightSelectors).toContain(ERB_LANGUAGE_ID);
+    expect(selectionSelectors).toContain(ERB_LANGUAGE_ID);
+    expect(new Set(highlightSelectors).size).toBe(highlightSelectors.length);
+  });
+
+  it('插件认的 id 清单里含宿主那枚 `ERB_LANGUAGE_ID`（两处真源对拍，改名即红）', () => {
+    expect(ERB_LANGUAGE_IDS).toContain(ERB_LANGUAGE_ID);
   });
 
   it('dispose 幂等：两次只撤一轮', () => {
     const fake = fakeMonaco();
-    const handle = installErbSelectionRangeProvider(fake.monaco);
-    handle.dispose();
-    handle.dispose();
-    expect(fake.disposeCalls).toHaveLength(1);
+    const highlight = installErbHighlightProvider(fake.monaco);
+    const selection = installErbSelectionRangeProvider(fake.monaco);
+    const before = fake.disposeCalls();
+    highlight.dispose();
+    highlight.dispose();
+    selection.dispose();
+    selection.dispose();
+    expect(fake.disposeCalls() - before).toBe(
+      HIGHLIGHT_SELECTORS.length + SELECTION_SELECTORS.length,
+    );
   });
-});
 
-/* ============================== ⑧ 源码卫生 ============================== */
-
-describe('源码卫生：Monaco 只 type-only、零插件包 import、不碰结构层开关', () => {
-  const highlightSource = readFileSync(
-    resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'erb-highlight.ts'),
-    'utf8',
-  );
-  const selectionSource = readFileSync(
-    resolve(REPO_ROOT, 'packages', 'app', 'src', 'monaco', 'erb-selection-range.ts'),
-    'utf8',
-  );
-
-  it('Monaco 运行时只许 type-only 引入', () => {
-    for (const source of [highlightSource, selectionSource]) {
+  it('安装器不读切流开关 / 不碰结构层开关；Monaco 只许 type-only 引入', () => {
+    for (const source of [HIGHLIGHT_SOURCE, SELECTION_SOURCE]) {
+      expect(source).not.toMatch(/isKojo2CutoverEnabled/);
+      expect(source).not.toMatch(/localStorage/);
+      expect(source).not.toMatch(/from '\.\.?\/?(?:monaco\/)?tree-sitter/);
       expect(source).toMatch(/import type \* as Monaco from '\.\/entry'/);
       expect(source).not.toMatch(/import \* as Monaco from/);
       expect(source).not.toMatch(/from 'monaco-editor'/);
     }
   });
 
-  it('不 import 任何插件包、不出现游戏名词', () => {
-    for (const source of [highlightSource, selectionSource]) {
-      expect(source).not.toMatch(/from\s+['"]@kojo\/plugin-/);
-      expect(source).not.toMatch(/\b(eratw|eraK|eraSQN|eraNAS)\b/i);
+  it('原生注册形状归零：直挂 ERB_LANGUAGE_ID 的两条写法一处都不许有', () => {
+    expect(HIGHLIGHT_SOURCE).not.toMatch(/registerDocumentHighlightProvider\(\s*ERB_LANGUAGE_ID/);
+    expect(SELECTION_SOURCE).not.toMatch(/registerSelectionRangeProvider\(\s*ERB_LANGUAGE_ID/);
+    // 反向钉住收口形状确实在（否则上面两条"没出现"是空匹配）
+    expect(HIGHLIGHT_SOURCE).toMatch(
+      /registerForLanguageServices\([\s\S]{0,400}?registerDocumentHighlightProvider/,
+    );
+    expect(SELECTION_SOURCE).toMatch(
+      /registerForLanguageServices\([\s\S]{0,400}?registerSelectionRangeProvider/,
+    );
+  });
+
+  it('宿主不再留判据（判据只在 `@kojo/erb-lang`）', () => {
+    for (const source of [HIGHLIGHT_SOURCE, SELECTION_SOURCE]) {
+      expect(source).not.toMatch(/erbDocumentHighlights|erbSelectionRangeAt|erbSelectionRangeChainsAt/);
+      expect(source).not.toMatch(/from '@kojo\/erb-lang/);
+      expect(source).not.toMatch(/from\s+['"]@kojo\/plugin-erb-lang/);
+    }
+  });
+});
+
+/* ============================== ⑤ 与 kojo2 同一条槽 ============================== */
+
+describe('⑤同一条槽：ERB 请求只由 ERB 那家作答（两家同时在场，换顺序都一样）', () => {
+  const ERB_TEXT = ['@FUNC(A)', '    CALL FUNC(A)'].join('\n');
+  const KOJO2_TEXT = ['# 幕 一', '# 设 心情 整数 = 0 存档', '> 心情'].join('\n');
+
+  /** 真供方（两家插件的贡献都经各自的 activate 取出） */
+  function realContributions(): {
+    erb: EditorLanguageServiceContribution[];
+    kojo2: EditorLanguageServiceContribution[];
+  } {
+    const collect = (activate: (ctx: never) => void): EditorLanguageServiceContribution[] => {
+      const out: EditorLanguageServiceContribution[] = [];
+      const ctx = {
+        log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+        slots: {
+          register: (slot: string, item: EditorLanguageServiceContribution) => {
+            if (slot === 'ui.editor.languageService') out.push(item);
+            return () => undefined;
+          },
+        },
+      } as unknown as never;
+      activate(ctx);
+      return out;
+    };
+    return {
+      erb: collect((ctx) => createErbLangPlugin().activate(ctx)),
+      kojo2: collect((ctx) => createKojoLangPlugin().activate(ctx)),
+    };
+  }
+
+  it('ERB 请求：不论哪家在前，作答都来自 erb 供方（kojo2 供方弃权）', () => {
+    const both = realContributions();
+    // 两家在槽里的顺序按 order 同档，宿主按注册顺序问 ⇒ 两种顺序都必须给出同一个答案
+    for (const order of [
+      [...both.erb, ...both.kojo2],
+      [...both.kojo2, ...both.erb],
+    ]) {
+      installKernel(order);
+      const result = askHighlight(fakeModel(ERB_TEXT).model, 1, 3)!;
+      expect(result.map((hit) => hit.kind)).toEqual([HIGHLIGHT_KINDS.Write, HIGHLIGHT_KINDS.Read]);
     }
   });
 
-  it('不看结构层开关（编辑器语言服务），且只挂 ERB_LANGUAGE_ID', () => {
-    for (const source of [highlightSource, selectionSource]) {
-      // 不读偏好 / 不 import 结构层与 2.0 开关：这两枚 provider 与那条实验开关无关
-      expect(source).not.toMatch(/isKojo2CutoverEnabled|localStorage/);
-      expect(source).not.toMatch(/from '\.\.?\/ui\/kojo2-flag'/);
-      expect(source).not.toMatch(/from '\.\.?\/?(?:monaco\/)?tree-sitter/);
-    }
-    expect(highlightSource).toMatch(/registerDocumentHighlightProvider\(ERB_LANGUAGE_ID/);
-    expect(selectionSource).toMatch(/registerSelectionRangeProvider\(ERB_LANGUAGE_ID/);
+  it('kojo2 请求：槽里两家同时在时只有 kojo2 供方作答（宿主那层由语言门弃权）', () => {
+    const both = realContributions();
+    const ask = {
+      kind: 'documentHighlight',
+      path: '/proj/a.kojo',
+      text: KOJO2_TEXT,
+      line: 2,
+      column: 6,
+      project: null,
+      languageId: KOJO2_LANGUAGE_ID,
+    } as never;
+    const answers = [...both.erb, ...both.kojo2]
+      .map((contribution) => contribution.provide(ask))
+      .filter((result) => result !== undefined && result.kind === 'documentHighlight');
+    expect(answers).toHaveLength(1);
+    // 声明写 + 正文里的同名提及（text）：这是 kojo2 那家的判据形状（ERB 那家对 kojo2 请求
+    // 弃权，若它作答则会多出第二份答案）
+    expect(
+      (answers[0] as { highlights: ReadonlyArray<{ kind: string }> }).highlights.map((hit) => hit.kind),
+    ).toEqual(['write', 'text']);
+  });
+
+  it('供方层直接对拍：erb 供方对 kojo2 请求 `undefined`、kojo2 供方对 erb 请求 `undefined`', () => {
+    const erbAsk = {
+      kind: 'documentHighlight',
+      path: '/proj/a.erb',
+      text: ERB_TEXT,
+      line: 1,
+      column: 3,
+      project: null,
+      languageId: ERB_LANGUAGE_ID,
+    } as never;
+    const kojo2Ask = {
+      kind: 'documentHighlight',
+      path: '/proj/a.kojo',
+      text: KOJO2_TEXT,
+      line: 2,
+      column: 6,
+      project: null,
+      languageId: KOJO2_LANGUAGE_ID,
+    } as never;
+    expect(provideErbHighlights(erbAsk)).toBeDefined();
+    expect(provideErbHighlights(kojo2Ask)).toBeUndefined();
+    // 反方向：kojo2 那家对 ERB 请求也弃权（B3f 立的判据，本批补上跨供方的这一条）
+    expect(provideKojo2Highlights(kojo2Ask)).toBeDefined();
+    expect(provideKojo2Highlights(erbAsk)).toBeUndefined();
+    expect(
+      provideErbSelections({
+        ...(erbAsk as object),
+        kind: 'selectionRange',
+        positions: [{ line: 1, column: 3 }],
+      } as never),
+    ).toBeDefined();
+  });
+});
+
+/* ============================== 宿主语言门（LAU-4 集成） ============================== */
+
+describe('宿主语言门：共享收口把 ERB 这枚也挂到 kojo2，遇到 kojo2 model 必须弃权', () => {
+  it('kojo2 model ⇒ 高亮 / 扩选都交 `undefined`（不替 kojo2 那家作答，免得叠两份）', () => {
+    const model = fakeModel(SOURCE, KOJO2_LANGUAGE_ID).model;
+    expect(askHighlight(model)).toBeUndefined();
+    expect(askSelection(model, [position(1, 1)])).toBeUndefined();
   });
 });
 

@@ -445,8 +445,9 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
     const shared = capabilitiesInTier(ERB_LANGUAGE_ID, 'shared').filter(
       (capability) => capability !== LanguageCapability.Diagnostics, // 诊断是上屏腿，专用用例
     );
-    // 收口就是 11 枚（register-dialects.ts 头注的"11 枚 provider"）——数字写死，少一枚就红
-    expect(shared).toHaveLength(11);
+    // 收口就是 13 枚（register-dialects.ts 头注的"11 枚 provider" + LAU-4 的同符号高亮 /
+    // 结构化扩选两枚）——数字写死，少一枚就红
+    expect(shared).toHaveLength(13);
     for (const capability of shared) {
       const files = sharedRegistrationFiles(capability);
       const api = CAPABILITY_PROVIDER_API[capability];
@@ -644,26 +645,30 @@ describe('语言 id / 扩展名关系：两门语言互不蚕食', () => {
 /* ============================== 档位清单（锁死） ============================== */
 
 describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变了"', () => {
-  it('ERB：11 枚共享 provider + 共享诊断上屏腿；self 有补全/改名/高亮/扩选；1 项豁免（callhierarchy，0.57 无 API）', () => {
+  it('ERB：13 枚共享 provider（含 LAU-4 的同符号高亮 / 结构化扩选）+ 共享诊断上屏腿；self 只剩补全/改名；1 项豁免（callhierarchy，0.57 无 API）', () => {
+    // LAU-4（2026-10-30）：`highlight` / `selection` 从 self 挪到 shared —— 判据搬进
+    // `@kojo/erb-lang/highlight` / `/selection-range`，供方是插件 `@kojo/plugin-erb-lang`，
+    // 注册经 `registerForLanguageServices(..., 'documentHighlight'|'selectionRange')`
+    // （ERB 由 `languageServices: true` 收进来）。**档位变了，能力没少**：13 + 2 + 3 = 18。
     expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'shared')).toEqual([
       'codelens',
       'definition',
       'diagnostics',
       'folding',
       'format',
+      'highlight',
       'hover',
       'implementation',
       'inlay',
       'outline',
       'refs',
+      'selection',
       'semantic',
       'signature',
     ]);
     expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'self')).toEqual([
       'completion',
-      'highlight',
       'rename',
-      'selection',
     ]);
     expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'builtin')).toEqual([
       'brackets',

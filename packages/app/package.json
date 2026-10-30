@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@kojo/kernel": "workspace:*",
+    "@kojo/erb-lang": "workspace:*",
     "@kojo/kojo-core": "workspace:*",
     "@kojo/kojo-lang": "workspace:*",
     "@kojo/kojo-sdk": "workspace:*",
@@ -28,6 +29,7 @@
     "@kojo/plugin-eratohok-adapter": "workspace:*",
     "@kojo/plugin-eratohoreverse-adapter": "workspace:*",
     "@kojo/plugin-eratw-adapter": "workspace:*",
+    "@kojo/plugin-erb-lang": "workspace:*",
     "@kojo/plugin-erb-parser": "workspace:*",
     "@kojo/plugin-inline-completion-local": "workspace:*",
     "@kojo/plugin-kojo-lang": "workspace:*",

@@ -39,6 +39,7 @@
  */
 import type * as Monaco from './entry';
 import type { EditorSelectionChain } from '@kojo/plugin-api';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { requireKernel } from '../ui/editor-pane-registry';
 import {
   collectSelectionRanges,
@@ -70,6 +71,16 @@ function flattenChain(chain: EditorSelectionChain): Monaco.languages.SelectionRa
 
 /* ============================== 安装 ============================== */
 
+/** 共享收口也会把这枚 provider 挂到 ERB；宿主先按 model 语言弃权，避免两份同一链。 */
+function servesKojo2(model: Monaco.editor.ITextModel): boolean {
+  try {
+    const id = model.getLanguageId();
+    return typeof id !== 'string' || id.length === 0 || id === KOJO2_LANGUAGE_ID;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * 为 `kojo2` 语言注册选择范围 provider，返回**幂等** disposable。
  *
@@ -84,6 +95,7 @@ export function installKojo2SelectionRangeProvider(
   const provider: Monaco.languages.SelectionRangeProvider = {
     provideSelectionRanges(model, positions) {
       try {
+        if (!servesKojo2(model)) return undefined;
         const text = modelTextOf(model);
         if (text === null) return [];
         const wanted = Array.isArray(positions)

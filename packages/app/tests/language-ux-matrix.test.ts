@@ -703,7 +703,11 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
     { rel: 'ui/EditorPane.tsx', re: /<CrumbBar/ },
   ],
   expand: [
-    { rel: 'monaco/erb-selection-range.ts', re: /registerSelectionRangeProvider\(\s*ERB_LANGUAGE_ID/ },
+    // LAU-4（2026-10-30）：ERB 的扩选不再自建 provider —— 判据搬进
+    // `@kojo/erb-lang/selection-range`，共享收口带能力名 `selectionRange`，
+    // 应答来自插件 `@kojo/plugin-erb-lang`（ERB 由 `languageServices: true` 收进来）。
+    { rel: 'monaco/erb-selection-range.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerSelectionRangeProvider/ },
+    { rel: 'monaco/erb-selection-range.ts', re: /'selectionRange',\s*\)/ },
     // B3f（2026-10-29）：2.0 的扩选不再自建 provider——共享收口带能力名 `selectionRange`，
     // descriptor 用 `slotServices` 点名挂上，应答来自插件（形状同 B3b/B3c/B3d/B3e）。
     { rel: 'monaco/kojo2-selection-range.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerSelectionRangeProvider/ },
@@ -976,12 +980,7 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
   it('扫描器确实命中了真实的单语言注册行（防空转）', () => {
     const apis = [...singleLanguageRegistrations().keys()];
     // 这几枚都有一侧是"单语言注册"的真实写法；一条都没扫到说明正则坏了，后面的断言就是空转
-    for (const api of [
-      'registerRenameProvider',
-      'registerDocumentHighlightProvider',
-      'registerSelectionRangeProvider',
-      'registerCodeLensProvider',
-    ]) {
+    for (const api of ['registerRenameProvider', 'registerCodeLensProvider']) {
       expect(apis, `扫描器漏了 ${api} 的单语言注册行`).toContain(api);
     }
     // B3c（2026-10-28）：两门一等语言的补全都**不再**有单语言注册行——2.0 那条改走共享收口
@@ -990,6 +989,17 @@ describe('断言 3：不许"某 provider 只挂一门语言"（两语言同权�
     expect(apis).not.toContain('registerCompletionItemProvider');
     expect(sharedRegistrationFiles('registerCompletionItemProvider')).toContain(
       'monaco/kojo2-providers.ts',
+    );
+    // LAU-4（2026-10-30）：同符号高亮 / 结构化扩选两侧**都**改走共享收口（ERB 由
+    // `languageServices: true`、kojo2 由 `slotServices` 收进来）⇒ 单语言注册行两侧都归零。
+    // 反向钉住两条收口仍在，否则上面"另一门也有注册面"那组会空转。
+    expect(apis).not.toContain('registerDocumentHighlightProvider');
+    expect(apis).not.toContain('registerSelectionRangeProvider');
+    expect(sharedRegistrationFiles('registerDocumentHighlightProvider')).toEqual(
+      expect.arrayContaining(['monaco/erb-highlight.ts', 'monaco/kojo2-highlight.ts']),
+    );
+    expect(sharedRegistrationFiles('registerSelectionRangeProvider')).toEqual(
+      expect.arrayContaining(['monaco/erb-selection-range.ts', 'monaco/kojo2-selection-range.ts']),
     );
   });
 

@@ -44,6 +44,9 @@ importers:
 
   packages/app:
     dependencies:
+      '@kojo/erb-lang':
+        specifier: workspace:*
+        version: link:../erb-lang
       '@kojo/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -92,6 +95,9 @@ importers:
       '@kojo/plugin-eratw-adapter':
         specifier: workspace:*
         version: link:../plugins/eratw-adapter
+      '@kojo/plugin-erb-lang':
+        specifier: workspace:*
+        version: link:../plugins/erb-lang
       '@kojo/plugin-erb-parser':
         specifier: workspace:*
         version: link:../plugins/erb-parser
@@ -183,6 +189,12 @@ importers:
       vite:
         specifier: ^7.3.7
         version: 7.3.7(@types/node@22.20.5)(lightningcss@1.33.0)
+
+  packages/erb-lang:
+    dependencies:
+      '@kojo/plugin-erb-parser':
+        specifier: workspace:*
+        version: link:../plugins/erb-parser
 
   packages/erb-syntax-tree:
     dependencies:
@@ -396,6 +408,15 @@ importers:
       react:
         specifier: ^19.3.0
         version: 19.3.0
+
+  packages/plugins/erb-lang:
+    dependencies:
+      '@kojo/erb-lang':
+        specifier: workspace:*
+        version: link:../../erb-lang
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
 
   packages/plugins/erb-parser:
     dependencies:

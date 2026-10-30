@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EditorLanguageServiceContribution, EditorSelectionChain } from '@kojo/plugin-api';
 import type * as Monaco from '../src/monaco/entry';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
+import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import {
@@ -104,14 +105,14 @@ interface FakeModel {
   readonly breakGetValue: () => void;
 }
 
-function fakeModel(source: string): FakeModel {
+function fakeModel(source: string, languageId: string = KOJO2_LANGUAGE_ID): FakeModel {
   let broken = false;
   const model = {
     getValue: () => {
       if (broken) throw new Error('桩：模型已释放');
       return source;
     },
-    getLanguageId: () => KOJO2_LANGUAGE_ID,
+    getLanguageId: () => languageId,
     getVersionId: () => 7,
     uri: { scheme: 'file', path: '/proj/a.kojo', fsPath: '/proj/a.kojo' },
   } as unknown as Monaco.editor.ITextModel;
@@ -439,5 +440,11 @@ describe('④注册：共享收口带能力名、dispose 幂等、原生注册�
   it('宿主不再留判据：不高亮函数名 / 扩选函数名都不在本层', () => {
     expect(HIGHLIGHT_SOURCE).not.toMatch(/kojo2DocumentHighlights/);
     expect(SELECTION_SOURCE).not.toMatch(/kojo2SelectionRangeAt|kojo2SelectionRangeChainsAt/);
+  });
+
+  it('宿主语言门：共享收口把 kojo2 这枚也挂到 ERB，遇到 erb model 必须弃权', () => {
+    const model = fakeModel(SOURCE, ERB_LANGUAGE_ID).model;
+    expect(askHighlight(model)).toBeUndefined();
+    expect(askSelection(model, [position(1, 1)])).toBeUndefined();
   });
 });

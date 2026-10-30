@@ -1,0 +1,16 @@
+{
+  "name": "@kojo/plugin-erb-lang",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ERB 语言面插件：把 @kojo/erb-lang 的同符号高亮与结构化扩选判据接到 ui.editor.languageService 槽（documentHighlight / selectionRange）。纯函数纯数据、零 Monaco、零 IO、零游戏知识。",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/erb-lang": "workspace:*",
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

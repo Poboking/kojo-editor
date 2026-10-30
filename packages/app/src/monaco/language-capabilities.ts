@@ -187,12 +187,15 @@ export const KOJO2_CAPABILITIES: readonly LanguageCapability[] = Object.freeze([
  * ERB 的状态表。
  *
  * 逐项读法：
- * - 11 枚 `shared` = `registerForLanguageServices` 的通用 provider（折叠 / 大纲 / 文档格式化 /
- *   语义着色 / 引用 / 签名 / 行内提示 / 行上注解 / 跳实现 / 悬停 / 转定义）；
+ * - 13 枚 `shared` = `registerForLanguageServices` 的通用 provider（折叠 / 大纲 / 文档格式化 /
+ *   语义着色 / 引用 / 签名 / 行内提示 / 行上注解 / 跳实现 / 悬停 / 转定义，含 LAU-4 的
+ *   同符号高亮 / 结构化扩选）；
  * - `diagnostics` 也是 `shared`：v1 的波浪线来自 `ui.editor.decorator` 槽 → `setModelMarkers`
  *   这条**语言无关**的上屏腿（ERB 与 `.kojo` 同一份），不是 Monaco 的 provider；
  * - `completion` / `rename` 是 `self`：`.erb` 专属的两枚 provider（`erb-completion.ts` 的装配核
  *   带 `languageId: ERB_LANGUAGE_ID`；`erb-rename.ts` 直挂 `ERB_LANGUAGE_ID`）；
+ * - LAU-4：`highlight` / `selection` 由 `self` 改 `shared`（判据进 `@kojo/erb-lang`，
+ *   供方 `@kojo/plugin-erb-lang`）。**档位变了，能力没少**。
  * - `indent` / `brackets` 是 `builtin`：ERB 的缩进与括对走**语言配置**（`onEnterRules` /
  *   `indentationRules` / `brackets` / `autoClosingPairs`），Monaco 自己按配置做，不注册 provider。
  *   区间格式化 + on-type 在 `kojo-format-range.ts` 里是 ERB 专属（`self`），本行按"文档级 = 共享"
@@ -213,8 +216,9 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
     [LanguageCapability.Inlay]: 'shared',
     [LanguageCapability.CodeLens]: 'shared',
     [LanguageCapability.Implementation]: 'shared',
-    [LanguageCapability.Highlight]: 'self',
-    [LanguageCapability.Selection]: 'self',
+    // LAU-4：同符号高亮 / 扩选走共享收口（能力名 `documentHighlight` / `selectionRange`）。
+    [LanguageCapability.Highlight]: 'shared',
+    [LanguageCapability.Selection]: 'shared',
     [LanguageCapability.CallHierarchy]: {
       exempt:
         'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；纯模型 monaco/erb-call-hierarchy.ts 与 provider 模块 monaco/erb-callhierarchy-provider.ts 已交付，宿主面板 ui/CallHierarchyOverlay.tsx 已按 model 语言分派消费（批次十）；矩阵按注册面记账，待装配点 ui/editor-global-providers.ts 接 installErbCallHierarchyProvider 后改 self',

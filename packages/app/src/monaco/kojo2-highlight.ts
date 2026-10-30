@@ -37,6 +37,7 @@
  */
 import type * as Monaco from './entry';
 import type { EditorDocumentHighlightKind } from '@kojo/plugin-api';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { requireKernel } from '../ui/editor-pane-registry';
 import {
   collectDocumentHighlights,
@@ -71,6 +72,20 @@ export function kojo2HighlightKindToMonaco(
 /* ============================== 安装 ============================== */
 
 /**
+ * 共享收口也会把这枚 provider 挂到 ERB（两门语言都 `languageServices: true`）。
+ * ERB 从 LAU-4 起也有同槽供方——宿主不按 model 语言弃权，就会在 ERB 里叠出 kojo2
+ * 那家的结果。插件按请求 languageId 认语言，宿主这层必须先把门。
+ */
+function servesKojo2(model: Monaco.editor.ITextModel): boolean {
+  try {
+    const id = model.getLanguageId();
+    return typeof id !== 'string' || id.length === 0 || id === KOJO2_LANGUAGE_ID;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * 为 `kojo2` 语言注册文档高亮 provider，返回**幂等** disposable。
  *
  * - **无条件注册**（K2-SURFACE-DEFAULT）：只读呈现面，切流阶段 `v1-only` 下也照常可见；
@@ -83,6 +98,7 @@ export function installKojo2HighlightProvider(monaco: typeof Monaco): Monaco.IDi
   const provider: Monaco.languages.DocumentHighlightProvider = {
     provideDocumentHighlights(model, position) {
       try {
+        if (!servesKojo2(model)) return undefined;
         const text = modelTextOf(model);
         if (text === null) return [];
         const kernel = requireKernel();

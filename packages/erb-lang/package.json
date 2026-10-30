@@ -1,0 +1,18 @@
+{
+  "name": "@kojo/erb-lang",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ERB（EraBasic 脚本）语言面库：编辑器要知道的判据——同符号高亮（write / read / text 三档）与结构化扩选（词 → 行 → 分支段 → 标签块 → 函数块 → 全文）。纯函数纯数据，零 Monaco、零 React、零 DOM、零 IO。语言层，零游戏名词。",
+  "license": "GPL-3.0-or-later",
+  "main": "./src/index.ts",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./constants": "./src/constants.ts",
+    "./highlight": "./src/highlight.ts",
+    "./selection-range": "./src/selection-range.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-erb-parser": "workspace:*"
+  }
+}

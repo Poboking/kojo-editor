@@ -126,7 +126,8 @@ const EAGER_PLUGINS = ['@kojo/plugin-erb-parser', '@kojo/plugin-eratw-adapter'];
 describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢迎页被解析）', () => {
   const graph = eagerClosure('packages/app/src/main.tsx');
   const files = [...graph.keys()];
-  const totalKb = Math.round([...graph.values()].reduce((a, b) => a + b, 0) / 1024);
+  const totalBytes = [...graph.values()].reduce((a, b) => a + b, 0);
+  const totalKb = Math.round(totalBytes / 1024);
 
   it('走图工具自己先自证：入口与两个常驻插件确实在图里（否则下面的判据全是空匹配）', () => {
     expect(files.some((f) => f.endsWith('packages/app/src/main.tsx'))).toBe(true);
@@ -769,7 +770,9 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
-    console.log(`[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB（闸：≤199 文件 / ≤3,162 KB）`);
+    console.log(
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,162 KB）`,
+    );
     expect(totalKb).toBeLessThanOrEqual(3_162);
     expect(files.length).toBeLessThanOrEqual(199);
   });

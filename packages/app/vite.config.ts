@@ -305,6 +305,11 @@ export default defineConfig({
       '@kojo/kojo-vocab/engine': r('../kojo-vocab/src/engine.ts'),
       '@kojo/kojo-vocab': r('../kojo-vocab/src/index.ts'),
       '@kojo/kernel': r('../kernel/src/index.ts'),
+      // LAU4-ERB-A：ERB 语言面库（叶子排在桶之前，理由同上）。
+      '@kojo/erb-lang/constants': r('../erb-lang/src/constants.ts'),
+      '@kojo/erb-lang/highlight': r('../erb-lang/src/highlight.ts'),
+      '@kojo/erb-lang/selection-range': r('../erb-lang/src/selection-range.ts'),
+      '@kojo/erb-lang': r('../erb-lang/src/index.ts'),
       '@kojo/plugin-erb-parser': r('../plugins/erb-parser/src/index.ts'),
       '@kojo/plugin-eratw-adapter': r('../plugins/eratw-adapter/src/index.ts'),
       '@kojo/plugin-convention-linter': r('../plugins/convention-linter/src/index.ts'),
@@ -313,6 +318,8 @@ export default defineConfig({
       '@kojo/plugin-state-replay': r('../plugins/state-replay/src/index.ts'),
       '@kojo/plugin-kojo-sugar': r('../plugins/kojo-sugar/src/index.ts'),
       '@kojo/plugin-kojo-lang': r('../plugins/kojo-lang/src/index.ts'),
+      // LAU4-ERB-A：ERB 语言面的供方插件（同符号高亮 / 结构化扩选两条腿）。
+      '@kojo/plugin-erb-lang': r('../plugins/erb-lang/src/index.ts'),
       '@kojo/plugin-ui-convention-report': r('../plugins/ui-convention-report/src/index.ts'),
       '@kojo/plugin-ui-state-replay': r('../plugins/ui-state-replay/src/index.ts'),
       '@kojo/plugin-ui-kojo-navigator': r('../plugins/ui-kojo-navigator/src/index.ts'),

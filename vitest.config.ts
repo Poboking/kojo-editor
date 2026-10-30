@@ -49,6 +49,12 @@ export const config = defineConfig({
       '@kojo/kojo-lang/language-config': r('./packages/kojo-lang/src/language-config.ts'),
       '@kojo/kojo-lang/monaco-theme': r('./packages/kojo-lang/src/monaco-theme.ts'),
       '@kojo/kojo-lang': r('./packages/kojo-lang/src/index.ts'),
+      // LAU-4 ERB 语言面库（2026-10-30）：叶子**排在桶之前**（理由同 kojo-lang：alias 的
+      // 匹配口径是「等于 find」或「以 `find + /` 开头」，桶在前会把 `/highlight` 也吃掉）。
+      '@kojo/erb-lang/constants': r('./packages/erb-lang/src/constants.ts'),
+      '@kojo/erb-lang/highlight': r('./packages/erb-lang/src/highlight.ts'),
+      '@kojo/erb-lang/selection-range': r('./packages/erb-lang/src/selection-range.ts'),
+      '@kojo/erb-lang': r('./packages/erb-lang/src/index.ts'),
       // 语言层共用词表（LAU-3b 解耦批）：叶子同样必须排在桶之前。
       '@kojo/kojo-vocab/keywords': r('./packages/kojo-vocab/src/keywords.ts'),
       '@kojo/kojo-vocab/system-functions': r('./packages/kojo-vocab/src/system-functions.ts'),
@@ -87,6 +93,8 @@ export const config = defineConfig({
       '@kojo/plugin-state-replay': r('./packages/plugins/state-replay/src/index.ts'),
       '@kojo/plugin-kojo-sugar': r('./packages/plugins/kojo-sugar/src/index.ts'),
       '@kojo/plugin-kojo-lang': r('./packages/plugins/kojo-lang/src/index.ts'),
+      // LAU-4：ERB 语言面的供方插件（同符号高亮 / 结构化扩选两条腿）。
+      '@kojo/plugin-erb-lang': r('./packages/plugins/erb-lang/src/index.ts'),
       '@kojo/plugin-kojo-market': r('./packages/plugins/kojo-market/src/index.ts'),
       '@kojo/plugin-ui-condition-matrix': r('./packages/plugins/ui-condition-matrix/src/index.ts'),
       '@kojo/plugin-ui-convention-report': r('./packages/plugins/ui-convention-report/src/index.ts'),
