@@ -70,12 +70,13 @@ LAU 就是把它们逐条剥出去。
    v1 是一条 `parse`（`client.ts:248`）推四条回复（`engine.ts:724,731,736,745`）。
    ⇒ 统一方向应是**kojo2 学 v1**（一条请求、四面回复），而不是反过来把 v1 的差集通道拆掉（§4.1）。
 
-`kojo2-*.ts` 在 `packages/app/src` 下共 **50 个文件 / 27,090 行**（`monaco/` 29 个 15,286 行、
-`ui/` 21 个 11,804 行），另有 4 个 `.tsx` 共 1,853 行。B3c–B3f 已把补全 / 悬停 / 签名 / 格式化 /
-引用 / 改名 / 同符号高亮 / 扩选搬进 `@kojo/kojo-lang` 包与插件，B3i 把缩进 / 回车判据搬进
+`kojo2-*.ts` 在 `packages/app/src` 下共 **42 个文件 / 19,383 行**（`monaco/` 21 个 7,634 行、
+`ui/` 21 个 11,749 行），另有 4 个 `.tsx` 共 1,853 行。B3c–B3j 已把补全 / 悬停 / 签名 / 格式化 /
+引用 / 改名 / 同符号高亮 / 扩选 / 行上注解（codeLens）/ 折叠区间 / 一键迁移 code action 搬进
+`@kojo/kojo-lang` 包与插件，B3i 把缩进 / 回车判据搬进
 `@kojo/kojo-lang/indent`（宿主 `monaco/kojo2-indent.ts` 只剩 on-type 装配与 Monaco 翻译），
 B4（语言面进槽）与 B5a（`@kojo/kojo-sdk` 立包）已交付；
-剩下的宿主直装语言面归 B5b，仍等 B3 余项收口。LAU 沿着这条既有路线走，不另起炉灶（§8）。
+剩下的宿主直装语言面（诊断 / 语义着色 / 缩进装配）归 B5b，仍等 B3 余项收口。LAU 沿着这条既有路线走，不另起炉灶（§8）。
 
 ---
 
@@ -554,22 +555,26 @@ export function isAvailable(descriptor: LanguageDescriptor): boolean;   // 缺�
 ## 4.5 槽位契约（不变）
 
 `ui.editor.languageService` 保持"单槽 + `kind` 判别 + `EditorDocumentIdentity`"的形状，`EDITOR_SEMANTIC_TOKEN_TYPES` 三值不动（legend 在 `plugin-api/src/slots.ts:758`）。
-ERB 与 kojo2 的差别只在**供方住在哪**：LAU-4 把 ERB 的 11 枚 provider 从宿主搬成插件供方，
-届时两门语言用同一条槽、同一份契约，宿主只剩"注册一次 provider"。
+ERB 与 kojo2 的差别只在**供方住在哪**：LAU-4 把 ERB 的 11 枚 provider 从宿主搬成插件供方
+（**第一步已落 `cca040fb`**：同符号高亮 / 扩选两条腿——判据住 `@kojo/erb-lang`、供方是
+`@kojo/plugin-erb-lang`，两门语言已同用一条槽、同一份契约），彻底收口后宿主只剩"注册一次 provider"。
 
 **与 SDK B0–B5 的实际进度对账（v1.1 补，决定 LAU-4 能不能排）**：B0 已把该槽扩出 4 个 `kind` + 4 条数据腿
 （`8f74dae5`）；B1 已建 `@kojo/kojo-lang` 并搬走 symbols / declarations / sourcemap / expand-view / constants
-（`e4477343`）；B2 接线 5 项**只完成 4 项**（`foldingRange` 未接；`references` 已由 B3e 接上）；B3a–B3f、B3i 已落（B3d 起
-签名帮助 / 格式化也由插件应答；B3i 起缩进 / 回车判据住 `@kojo/kojo-lang/indent`，宿主只装配）；
+（`e4477343`）；B2 接线 5 项**已全部接上**（`references` 由 B3e、`foldingRange` 由 B3h）；B3a–B3j 已落（B3d 起
+签名帮助 / 格式化也由插件应答；B3g 行上注解、B3h 折叠区间（宿主预取结构快照随请求递下去）、B3j 一键迁移
+code action 的判据也进包；B3i 起缩进 / 回车判据住 `@kojo/kojo-lang/indent`，宿主只装配）；
 **B4（`ui.monaco.language`：Monarch / 主题 / 缩进 / 回车进插件）与 B5 已按两段推进**：B4 done
 （`7f02ff73` / `f0be5efb`，变基后 `5f70b9ae`）——2.0 的 Monarch / 语言配置 / 主题声明进 `@kojo/kojo-lang`，
 宿主只剩唯一落点 `monaco/monaco-language-surface.ts`；B5a done（`9fd1e700` / `d0761751` / `a221954d`）
 ——`@kojo/kojo-sdk` 立包 + 角色表搬家 + conformance 三列共享 golden；**B5b（删宿主直装残留）仍阻塞
-于 B3 余项**：宿主直装 21 文件 / 15,055 行（B3e/B3f 后未重数）、13 条 `installKojo2*` 调用（逐条见 `d0761751` 的回执表）。
+于 B3 余项**：宿主直装语言面已收窄（B3c–B3j 后未逐文件重数）、装配点 13 条 `installKojo2*` 调用
+（逐条见 `d0761751` 的回执表；B3g–B3j 后其中四条只剩装配与翻译）。
 今天这 11 枚是 `registerForLanguageServices`（`register-dialects.ts:32-53`）按 descriptor 的
 `languageServices: true` 或点名的 `slotServices` 铺下去的**通用** provider；ERB 在此之外还有一批
-自己的宿主内 provider（`monaco/erb-*.ts` 共 24 个文件：补全 12 个分面 / 重命名 / 调用层级 / 实现 /
-选区范围 / 高亮 / 指令 / `#DIM` 与标签导航 / 回车规则），kojo2 侧同理（`monaco/kojo2-*.ts`，实测 60 文件 / 32,941 行）。
+自己的宿主内 provider（`monaco/erb-*.ts` 共 26 个文件：补全 12 个分面 / 重命名 / 调用层级 / 实现 /
+指令 / `#DIM` 与标签导航 / 回车规则；高亮与扩选的判据已搬进 `@kojo/erb-lang`，这两枚只剩翻译），
+kojo2 侧同理（`monaco/kojo2-*.ts`，实测 21 文件 / 7,634 行）。
 ⇒ **LAU-4 的前置是 B4/B5，不是 LAU-3**；在 B4/B5 落地前谈"宿主只剩注册一次 provider"是空的。
 
 ## 4.6 `injection`：`@原生` 体内不再是黑块（D14 / LAU-6）

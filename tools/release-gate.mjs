@@ -320,7 +320,7 @@ export const ARTIFACT_LIMITS = Object.freeze({
    * 两枚数仍是"收紧的上界"：11.0 MiB 距现值 0.35 MiB、90 件距现值 5 件——正常增件不红，
    * 一次性进整包才会红。启动器的内容包 / 插件 / 存档面板还会再加几个懒块，届时按同一口径重钉。
    */
-  distBytes: Math.round(11.1 * 1024 * 1024),
+  distBytes: Math.round(11.2 * 1024 * 1024),
   /*
    * 2026-10-27 LAU-3b 收尾批：件数 90 → 92（顶格，零余量）、总量与入口不动。
    *
@@ -384,8 +384,18 @@ export const ARTIFACT_LIMITS = Object.freeze({
    * · **+1**：`structure-pool-*.js` **909 B**——池被 `client.ts` / `injection.ts` /
    *   `editor-global-providers.ts` 三处消费，rollup 抽成共享块。**不进开机图**（ps10 仍 199 / 3,037）。
    * 两枚 worker 合成一枚让总量降了约 0.1 MiB；件数一进一出恰好仍是 94（顶格），别在这里加东西。
+   *
+   * 2026-10-30 LAU-4 第一步（ERB 高亮 / 扩选进槽）：件数 94 → **96**、总量 11.07 → **11.11 MiB**。
+   *
+   * 增量逐枚点名（同一棵树一次真实构建，`dist/assets` +2 枚）：
+   * · `erb-runtime-*.js` **7.0 KB**——`@kojo/erb-lang` 的判据叶子同时被宿主翻译层与插件供方
+   *   引用，rollup 只能抽成共享块（与 `theme-*` / `protocol-*` 同一种"共享边界搬位置"）；
+   * · 承载 `plugin-erb-lang` 的懒块 1 枚（新插件注册面，按需加载，不进开机图）。
+   * 总量 11,654,551 B（11.11 MiB）顶穿旧上限 11.1 MiB 约 0.01 MiB，故抬到 11.2 MiB；入口
+   * 272,419 → **273,274 B**（上限 1,100 kB）。ps10 开机图 199 / 3,162 KB 不动（两枚都
+   * 在动态边之下）。**下次改动先看能不能并块，别在这里顺手加。**
    */
-  files: 94,
+  files: 96,
 });
 
 const MIB = 1024 * 1024;
