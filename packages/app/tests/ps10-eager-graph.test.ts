@@ -885,13 +885,35 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ⇒ 闸 **3,234 → 3,254**（余量约 0.4 KB；文件闸仍 199）。这一档加的是**能力**：
     //     改名（函数名 + `$` 标签）从此走 `ui.editor.languageService` 槽，宿主不认识 ERB；
     //     欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
+    //   - **LAU-4 补全腿第二批·判据进常驻插件（2026-10-31，本批）**：读数 **199 文件 /
+    //     3,317 KB**（3,397,010 B = 3,331,662 + 65,348）——补全的四枚判据（snippet / labels /
+    //     families / declared）从宿主搬进插件，**文件数闸仍是 199**：新增两枚进图模块
+    //     `erb-parser/src/completion.ts`（+39,396，本批新文件）与 `kojo-vocab/src/engine.ts`
+    //     （+19,479，只取 `ENGINE_VARIABLE_FAMILIES`；它自己只 import 类型），
+    //     于是**并掉同等两枚旧进图模块**：`erb-parser/src/document-symbols.ts`（2,527）并入
+    //     `structure.ts`、`erb-parser/src/index-roots.ts`（4,529）并入 `index-state.ts`
+    //     （两个并入目标各自只被 `plugin.ts` / 包桶引用，合并后判据与用例一字未改）。
+    //     为什么躲不开：`@kojo/erb-lang` 的补全判据叶子会拖 10~12 枚 / 164~176 KB 上首屏
+    //     （`completion-context` 实测 +10 文件，`completion-members` +12），文件闸必炸；
+    //     `erb-parser` 常驻，判据只有重新落在这里才既不进懒边也不拖桶。
+    //     逐枚字节归因（本树 vs `origin/dev` 同路径 `git cat-file -s`；新文件从 0 起算）：
+    //     新增 `completion.ts` +39,396、`kojo-vocab/src/engine.ts` +19,479；
+    //     合并净额 `structure.ts` +2,966 / `index-state.ts` +5,056 − 删掉 2,527 / 4,529 ⇒ +966；
+    //     `erb-parser/src/plugin.ts` +1,493（槽注册与四腿合流）、`erb-parser/src/index.ts`
+    //     +1,401（宿主 / 测试经包读同一批函数）；契约面 `plugin-api/src/erb.ts` +1,722
+    //     （空白类与刚体名判据）、`slots.ts` +574（第 13 档 `reference`）、`index.ts` +317（再导出）。
+    //     合计 **+65,348 B，与全图增量精确相等**（宿主 `monaco/erb-completion-*.ts` 五枚
+    //     −113 B 在懒边之下、不在图里，所以不进这笔账）。
+    //     ⇒ 闸 **3,254 → 3,319**（余量约 1.6 KB；文件闸仍 199）。这一档加的是**能力**：
+    //     补全从此有插件供方回答，宿主只做"请求 → 契约 → Monaco 形状"；欠账照旧：
+    //     下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,254 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,319 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_254);
+    expect(totalKb).toBeLessThanOrEqual(3_319);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
