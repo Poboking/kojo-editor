@@ -2,44 +2,23 @@
  * Kojo 2.0 **结构化着色的判据**（B3 语义收口，2026-10-30）：结构引擎的捕获快照 →
  * 契约语义 token 区间。纯函数、零 Monaco、零 IO。
  *
- * ## 为什么这一格必须住在包里
+ * 结构引擎在 worker 里是异步事实，槽 `provide(request)` 是同步的 —— 照 B3h 折叠的解法：
+ * 宿主预取捕获、按 model 版本缓存，请求里带 `captures` 快照（1 基），供方同步作答。
+ * 供方是插件、看不见宿主 ⇒ 翻译与裁剪只能住本包（与 folding / codelens 同一条）。
  *
- * "这段语法是什么角色"只有结构查询（`queries/v2/highlights.scm` 的捕获）答得出，而结构
- * 引擎是 `worker` 里的异步事实；槽 `ui.editor.languageService` 的 `provide(request)` 是
- * **同步**的。B3h 折叠先立的解法在这里照抄：宿主打开 / 改动时**预取**捕获、按 model 版本
- * 缓存，请求里带 `captures` 快照（契约的 `EditorSemanticCapture`，1 基坐标），供方同步作答。
- * 供方是插件，插件看不见宿主 ⇒ 翻译与裁剪的判据只能住本包（与 `folding` / `codelens` 同一条）。
+ * 坐标：契约 1 基行 / 1 基 UTF-16 码元列 / `endColumn` 半开；0→1 只在
+ * {@link kojo2ContractCaptures} 一处换算。列越界由宿主最后夹取，但跨行捕获必须给
+ * `maxColumn`——没有行几何就整条丢（不许只画前半截）。
  *
- * ## 坐标与"谁裁"
+ * 四条纪律（与旧宿主 tokenizer 逐条同源）：①越界 / 倒置 / 零宽 / 非有限数一律丢，绝不抛；
+ * ②跨行逐行拆段，超过 {@link KOJO2_SEMANTIC_MAX_SPAN_LINES} 行整条丢；③同一行不叠
+ * （长者优先，相邻不算）；④主树与注入子树各限 {@link KOJO2_SEMANTIC_MAX_TOKENS} 条。
  *
- * 契约坐标是 **1 基行 / 1 基 UTF-16 码元列 / `endColumn` 半开**；结构引擎给的是 0 基。
- * 0→1 的换算由 {@link kojo2ContractCaptures} 一处完成（宿主预取时调它），本文件的其余函数
- * 只吃 1 基。**列越界由宿主最后一道夹取**（`normalizeSemanticSpans`）：本文件对单行捕获
- * 不查行长（宿主会夹），但**跨行捕获必须给 `maxColumn`**——没有行几何就不知道"行尾"在哪，
- * 整条丢（不许只画前半截）。
+ * 注入子树（LAU-6）：子捕获在自己的覆盖列上优先于主树 `embedded`，没涂到的列仍由主树兜底；
+ * 两张捕获表分开，`tag` / `function` / `raw` 只在子树表，`embedded` 只在主树表。
  *
- * ## 四条纪律（与旧宿主 tokenizer 逐条同源，行为逐字等价）
- *
- * 1. **越界一律丢**：行号不在 `[1, lineCount]`、倒置行、零宽、非有限数 ⇒ 这一条消失，绝不抛；
- * 2. **跨行逐行拆段**：首行从起始列到行尾、中间行整行、末行到结束列；单条跨过
- *    {@link KOJO2_SEMANTIC_MAX_SPAN_LINES} 行整条丢（错误恢复撑出来的"色块"不是着色）；
- * 3. **同一行不叠**：按（行，起始列，长者优先，token 名）排序后，与上一条重叠的后到者丢掉；
- *    相邻不算重叠；
- * 4. **预算**：主树与注入子树**各自**最多 {@link KOJO2_SEMANTIC_MAX_TOKENS} 条（与旧实现
- *    同口径；合并后可以略多，编码层不再截）。
- *
- * ## 注入子树（LAU-6）优先
- *
- * `@原生` 一类的注入体由子语言再解析一次，子捕获（`origin: 'injection'`）在自己的覆盖列上
- * **优先**于主树：主树那一整行 `embedded`（→ `role.raw`）让位给子树真涂到的列，子树没涂到的
- * 列仍由主树兜底。两张捕获表分开（主树 / 子树对同名捕获的说法可以不同），但并集今天恰好
- * 同义——`tag` / `function` / `raw` 只在子树表里，`embedded` 只在主树表里。
- *
- * ## legend 的名字也在这一格
- *
- * {@link KOJO2_SEMANTIC_TOKEN_TYPES} = 主树捕获表实际用到的档位（声明序 = 首次出现序）。
- * 它与三套 `kojo2-*` 主题的规则逐字对齐由测试钉住（本文件**不 import** `monaco-theme`：
- * 开机静态图里只该出现这一枚叶子）。
+ * {@link KOJO2_SEMANTIC_TOKEN_TYPES} = 主树实际用到的档位（声明序 = 首次出现序），与三套
+ * `kojo2-*` 主题逐字对齐由测试钉住；本文件**不 import** `monaco-theme`（开机图只该有这一枚）。
  */
 import { KOJO2_TOKEN } from '@kojo/kojo-sdk/semantic-roles';
 
