@@ -526,7 +526,7 @@ export interface EditorDocumentSymbolRequest extends EditorDocumentIdentity {
  * 语言服务请求（`definition` / `documentSymbol` / `foldingRange` / `workspaceSymbol` /
  * `codeLens` / `semanticToken` / `references` / `rename` / `inlayHint`，LS-B0 起另有
  * `completion` / `hover` / `formatting` / `signatureHelp`，LAU-4 改名腿起另有
- * `renameTarget`；
+ * `renameTarget`，LAU-4 调用层级腿起另有 `callHierarchy`；
  * 新增能力 additive 追加联合成员，不改旧成员）。**文档型成员一律 `extends
  * EditorDocumentIdentity`**（带 `languageId` / `version`），`workspaceSymbol` 除外——
  * 它不钉在任何一份缓冲区上。
@@ -553,7 +553,9 @@ export type EditorLanguageServiceRequest =
   | EditorDocumentHighlightRequest
   | EditorSelectionRangeRequest
   // LAU-4 改名腿（2026-10-30）：改名求值（additive，加在联合末尾）。
-  | EditorRenameTargetRequest;
+  | EditorRenameTargetRequest
+  // LAU-4 调用层级腿（2026-10-31）：调用层级（additive，加在联合末尾）。
+  | EditorCallHierarchyRequest;
 
 /** 一个目标位置（1 基行列；`column` 缺省 = 行首） */
 export interface EditorSymbolLocation {
@@ -698,7 +700,9 @@ export type EditorLanguageServiceResult =
   | EditorDocumentHighlightResult
   | EditorSelectionRangeResult
   // LAU-4 改名腿（2026-10-30）：与请求侧同批追加，成员顺序逐项对齐。
-  | EditorRenameTargetResult;
+  | EditorRenameTargetResult
+  // LAU-4 调用层级腿（2026-10-31）：与请求侧同批追加，成员顺序逐项对齐。
+  | EditorCallHierarchyResult;
 
 /**
  * 工作区符号请求（D2，2026-10-15 工作区符号批）——同一单槽的**第四个**判别成员
@@ -1599,6 +1603,93 @@ export interface EditorRenameRelated {
   readonly sources?: readonly EditorProjectFile[];
 }
 
+/* --------------- 编辑器面第五批（LAU-4 调用层级腿，2026-10-31）：调用层级 kind --------------- */
+
+/**
+ * 调用层级里的一个**可调用体**（ERB = 一个 `@函数`）。
+ *
+ * 全部是可序列化的坐标事实：宿主拿它画行、跳转、以及在续问时原样递回，
+ * **不按名字重新解析文件**。`nameColumn` 缺省 = 索引没有这个事实（宿主退化到行首，
+ * 不在这里补一个 1 冒充列）。
+ */
+export interface EditorCallHierarchySymbol {
+  readonly name: string;
+  /** 归一化名（大小写不敏感语言的查表键）：宿主不解释，只回传给续问 */
+  readonly normalizedName: string;
+  readonly filePath: string;
+  /** 声明行（1 基） */
+  readonly startLine: number;
+  /** 体末行（1 基，含） */
+  readonly endLine: number;
+  /** 名字起始列（1 基；缺省 = 未知） */
+  readonly nameColumn?: number;
+}
+
+/** 一处调用点（1 基行列、`endColumn` 不含端点；模型坐标）。 */
+export interface EditorCallHierarchySite {
+  readonly filePath: string;
+  readonly line: number;
+  readonly column: number;
+  readonly endColumn: number;
+}
+
+/**
+ * 入边 / 出边的一组。`symbol` 是**对端**（入边 = 调用者，出边 = 被调者），
+ * `sites` 是那条边上的调用点（入边落在对端体内、出边落在本方体内）。
+ *
+ * 组与组内的点位序由供方定（索引本身的构建序 → 行 → 列）：宿主只按序画，
+ * 再排一遍就是第二份判据。宿主只把"每组几处 / 共几处"当**清单形状**，
+ * 台账读数（如 F12 那一次计算）是另一个来源，不许互相冒充。
+ */
+export interface EditorCallHierarchyGroup {
+  readonly symbol: EditorCallHierarchySymbol;
+  readonly sites: readonly EditorCallHierarchySite[];
+}
+
+/**
+ * 调用层级请求（LAU-4 调用层级腿）——**一次求值答三面**：光标处（或续问节点）的函数 +
+ * 入边 + 出边。
+ *
+ * ## 为什么不是 LSP 那三步握手
+ * Monaco standalone 从未暴露 `registerCallHierarchyProvider`（PITFALLS §83），本仓的
+ * 消费面是**面板**（一次看全的清单）。三步会逼宿主自持中间 item 与两轮往返，而
+ * "哪一行属于哪个函数 / 哪些引用算一次调用"本来就是同一份判据——拆三问只是同一判据
+ * 被问三遍，且三处的失败面要各答一次。
+ *
+ * ## 续问（`subject`）
+ * 给出 `subject` 时按该节点取边（provider 那类"拿着上一轮 item 再问"的消费面用）；
+ * 缺席 = 按 `line` 求光标所在函数。两条路的判据同一处，不因续问换尺子。
+ *
+ * `text` **可省**：本能力只读项目索引（"什么算调用"的判据在供方的索引里），
+ * 宿主取不到正文时省略；供方**不得**据此拒答或降级。
+ */
+export interface EditorCallHierarchyRequest extends EditorDocumentIdentity {
+  readonly kind: 'callHierarchy';
+  readonly path: string;
+  readonly text?: string;
+  /** 光标行（1 基）；`subject` 在场时忽略 */
+  readonly line: number;
+  readonly project: GameProject | null;
+  readonly lineCount?: number;
+  /** 续问：上一轮已认出的节点 */
+  readonly subject?: EditorCallHierarchySymbol;
+}
+
+/**
+ * 调用层级响应（三态见 {@link EditorLanguageServiceContribution}：`undefined` = 弃权）。
+ *
+ * - `subject: null` = **认这个位置，但这一行不在任何可调用体内**（不夹取到邻近函数）；
+ * - `referencesAvailable: false` = 供方的引用台账这一轮不可用 ⇒ 两个方向都空，
+ *   而这里的"空"**不是**"没有调用关系"。必填，不静默：调用方据此换一句可见说明。
+ */
+export interface EditorCallHierarchyResult {
+  readonly kind: 'callHierarchy';
+  readonly subject: EditorCallHierarchySymbol | null;
+  readonly incoming: readonly EditorCallHierarchyGroup[];
+  readonly outgoing: readonly EditorCallHierarchyGroup[];
+  readonly referencesAvailable: boolean;
+}
+
 /**
  * 编辑器语言服务贡献（槽 `ui.editor.languageService`）。
  *
@@ -1611,8 +1702,8 @@ export interface EditorRenameRelated {
  * 同 kind 多家供方时按注册顺序逐家问、不排序不投票：集合型（definition / references /
  * documentSymbol / foldingRange / codeLens / semanticToken / inlayHint / workspaceSymbol /
  * completion）取并集去重，一家抛错只让这家缺席；单答型（rename / hover / formatting /
- * signatureHelp / documentHighlight / selectionRange，LAU-4 改名腿起另有 renameTarget）
- * 第一家作答的说了算。
+ * signatureHelp / documentHighlight / selectionRange，LAU-4 改名腿起另有 renameTarget，
+ * LAU-4 调用层级腿起另有 callHierarchy）第一家作答的说了算。
  * 不引入 priority：需要主 / 备的只在 Monaco provider 层裁决。
  *
  * 文档型请求带 `languageId` 时以它为准，缺席才按 `path` 自认；`provide` 同步返回，
