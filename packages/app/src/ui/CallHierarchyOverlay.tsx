@@ -80,7 +80,8 @@ import { pkey } from './file-tree-ops';
  * **处数不是这里数的**（W8 收口的第二判据，仅 ERB 分支）：面板头的「被调用 · N 处」读
  * `ui/reference-tally-store` 里 F12 那一次计算的 `tally.nonDefinitionCount`，
  * 差值解释直接交回 `explainReferenceCounts` 的原文（文案也只有一份真源）。
- * 本面板自己那份 `incomingCalls` 只用来**列清单**（哪个调用者、哪一处点位），
+ * 本面板自己那份 `incoming` 清单（槽应答的 `EditorCallHierarchyGroup[]`）只用来**列清单**
+ * （哪个调用者、哪一处点位），
  * 组行的「k 处」是"这位调用者名下的点位行数"——列表的形状数据，不是第二把尺子。
  * 没有读数（这个名字还没按过 F12）就明说"处数未读"，不拿清单长度冒充台账读数。
  * kojo2 没有 F12 台账这条腿，面板只列清单，不为它伪造第二份"处数"。
