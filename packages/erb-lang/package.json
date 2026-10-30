@@ -13,6 +13,6 @@
     "./selection-range": "./src/selection-range.ts"
   },
   "dependencies": {
-    "@kojo/plugin-erb-parser": "workspace:*"
+    "@kojo/erb-vocab": "workspace:*"
   }
 }

@@ -1,4 +1,4 @@
-import { classifyControlFlow, ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
+import { classifyControlFlow, ERB_CONTROL_STATEMENTS } from '@kojo/erb-vocab/control-flow';
 
 /**
  * ERB **同符号高亮**的判据（`@kojo/erb-lang/highlight`，LAU-4 第一步）。
@@ -36,11 +36,11 @@ import { classifyControlFlow, ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-pa
  * - 本包是**纯判据**：源码 + 1 基行列进、出现处出，零 IO / 零 Monaco / 零 React / 零 DOM；
  * - 档位值域（`text` / `read` / `write`）与契约 `EditorDocumentHighlightKind` **同名同值域**：
  *   供方（插件 `@kojo/plugin-erb-lang`）原样搬运，翻 `DocumentHighlightKind` 的是宿主；
- * - 角色词表**零抄本**：从 `@kojo/plugin-erb-parser` 的配对表（`ERB_CONTROL_STATEMENTS`
+ * - 角色词表**零抄本**：从 `@kojo/erb-vocab/control-flow` 的配对表（`ERB_CONTROL_STATEMENTS`
  *   + `classifyControlFlow`，引擎 `FunctionIdentifier.cs` 的单一真源）现派生，一个词形
  *   都不在本包复写。这也是本包**唯一**的外部依赖——依赖方向是"语言面库读引擎配对表"，
- *   与宿主 `monaco/erb-enter.ts` 读同一张表是同一条路（配对表住在插件包里，宿主与语言面
- *   库都只读不写）。
+ *   与宿主 `monaco/erb-enter.ts` 读同一张表是同一条路（配对表住在**非插件库包**里，
+ *   插件 `@kojo/plugin-erb-parser`、宿主与语言面库**三方并列只读**，谁也不引谁）。
  *
  * 结构事实（行分类 / 控制行栈 / 函数与标签行）由 {@link erbStructureOf} 一次性建好，
  * 高亮与扩选（`@kojo/erb-lang/selection-range`）**共用这一份**——两处各扫一遍必然漂移。

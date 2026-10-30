@@ -31,11 +31,15 @@
  *
  * ## 唯一的外部依赖
  *
- * `@kojo/plugin-erb-parser`：ERB 控制流**配对表**的单一真源（`ERB_CONTROL_STATEMENTS` +
+ * `@kojo/erb-vocab/control-flow`：ERB 控制流**配对表**的单一真源（`ERB_CONTROL_STATEMENTS` +
  * `classifyControlFlow`，逐条对齐引擎 `FunctionIdentifier.cs` 的 `funcMatch`）。高亮与扩选
  * 都要问"这个词是不是控制词、是哪一档"，那张表不能在这里抄第二份（抄了就必然漂移，
- * 漂移的表现是"高亮指错的块"）。宿主 `monaco/erb-enter.ts` 读的是同一张表——本包与宿主
- * 是并列的两个读者，不是谁引谁。
+ * 漂移的表现是"高亮指错的块"）。
+ *
+ * 2026-10-30（ERB-VOCAB 批）之前这条依赖指向**插件** `@kojo/plugin-erb-parser`——库包引
+ * 插件包是分层倒置。表已上提到非插件库包 `@kojo/erb-vocab`（与 `@kojo/kojo-vocab` 同性质），
+ * 插件 `@kojo/plugin-erb-parser` 改为 re-export 它、宿主 `monaco/erb-enter.ts` 经插件照旧读
+ * 同一张表：**三方并列读者**，谁也不引谁，单一真源一格未动。
  */
 export * from './constants';
 export * from './highlight';
