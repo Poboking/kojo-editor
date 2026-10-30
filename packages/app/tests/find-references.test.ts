@@ -23,7 +23,7 @@ import {
   installReferenceProvider,
   KNOWN_PATHS_LIMIT,
 } from '../src/monaco/find-references';
-import { incomingCalls, outgoingCalls } from '../src/monaco/erb-call-hierarchy';
+import { incomingCalls, outgoingCalls } from '@kojo/plugin-erb-parser';
 import { erbOccurrences, explainReferenceCounts, tallyReferenceOccurrences } from '../src/ui/reference-utils';
 
 /* ============================== 纯逻辑：合并与去重 ============================== */
@@ -340,8 +340,8 @@ describe('installReferenceProvider 的读数出口（onTally）', () => {
 
 /**
  * 「这个名字出现在哪」的计数**必须**是一个数据结构的两枚投影：
- * F12/Peek 走 `collectReferenceReport` 的台账，调用层级面板走 `erb-call-hierarchy` 的
- * 入边/出边集——两者读的必须是同一份 `ErbReference.kind`（判据真源在
+ * F12/Peek 走 `collectReferenceReport` 的台账，调用层级面板走 `@kojo/plugin-erb-parser`
+ * 的入边/出边集——两者读的必须是同一份 `ErbReference.kind`（判据真源在
  * `erb-parser/references.ts`），数字必须相等，差值必须叫得出名字。
  * 这条对拍钉的就是"面板各数一遍"永远回不来。
  */
@@ -381,7 +381,11 @@ describe('F12 台账读数与调用层级读数同源对拍', () => {
     const outgoing = outgoingCalls(index, { filePath: A, startLine: 1, endLine: 40 });
     const sites = outgoing.reduce((n, g) => n + g.sites.length, 0);
     expect(sites).toBe(1); // A 文件区间内的 CALL 槽只有一处（B 的两处不归本函数）
-    expect(outgoing.every((g) => g.sites.every((s) => s.kind === 'call'))).toBe(true);
+    // 契约的调用点（`EditorCallHierarchySite`）不带 `kind`：出边已由供方按 `call` 过滤
+    // （判据在 `@kojo/plugin-erb-parser` 的 `outgoingCalls`），宿主再证一遍就是第二份分类。
+    // 这里改钉**可读事实**：交回的点位就是那条 CALL 槽本身。
+    const positions = outgoing.flatMap((g) => g.sites.map((s) => `${s.filePath}:${s.line}:${s.column}`));
+    expect(positions).toEqual([`${A}:30:6`]);
     expect(tally.callSiteCount).toBe(2); // 直系族全集（跨文件）
   });
 });

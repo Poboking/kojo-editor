@@ -3,29 +3,31 @@
  *
  * 覆盖面（按 describe 分组）：
  * - **prepare**：函数声明 / 体内任意行交回同一枚 item；调用位交回**所在函数**（与调用层级
- *   面板 `request.filePath + line → resolveEnclosingFunction` 同一把尺子）；函数之间 / 越界 /
+ *   面板同一把尺子——判据住 `@kojo/plugin-erb-parser`，本层只转手）；函数之间 / 越界 /
  *   未知文件 / 索引缺席 / 坏位点 / 已释放 model 一律 `null`；`nameColumn` 缺席时行首退化；
- *   宿主注入的 `functionAt` 通道被真的用上（命中优先、抛错退化）；
- * - **入边**：按调用者分组、组内点位序与纯模型逐条对拍；跨文件调用者的区间尾列退化；
+ *   取数口交回的节点就是终局（命中即翻形状、抛错回空）；
+ * - **入边**：按调用者分组、组内点位序与判据逐条对拍；跨文件调用者的区间尾列退化；
  *   名字大小写不敏感；JSON 往返后仍可查询；坏 item / 无名 / 无索引 / 取数腿抛错都回空；
  * - **出边**：只认本函数区间内的 `call`、组序按首调用行；跨文件被调函数的区间尾列退化；
- *   与纯模型逐条对拍；坏 item / 无索引 / 反向索引缺席都回空；
+ *   与判据逐条对拍；坏 item / 无索引 / 反向索引缺席都回空；
  * - **安装**：Monaco 0.57 无 `registerCallHierarchyProvider` ⇒ **零注册**且句柄幂等；
- *   有注册位 + 有数据源 ⇒ 恰好一枚、selector 只有 `ERB_LANGUAGE_ID`；无数据源 ⇒ 零注册
+ *   有注册位 + 有取数口 ⇒ 恰好一枚、selector 只有 `ERB_LANGUAGE_ID`；无取数口 ⇒ 零注册
  *   （不装一枚永远答空的 provider）；dispose 幂等 / 撤不掉不抛 / 注册失败外抛；
- *   注册后的 provider 与 `createErbCallHierarchyProvider` 逐字同一份读数；索引按调用时软取；
+ *   注册后的 provider 与 `createErbCallHierarchyProvider` 逐字同一份读数；取数口按调用时现取；
  * - **源码卫生 / 确定性**：Monaco 只 type-only、不碰 monaco 运行时、不 import 插件包；
  *   provider 里没有第二份引用判据（`bySymbol` / `kind === 'call'` 一概不出现）；
  *   同输入逐字相等、CRLF 同结果、item 区间包住 selectionRange。
  *
- * 夹具索引与 `erb-call-hierarchy.test.ts` 同形（假 `ErbIndex`，不依赖内核 / Monaco 运行时）：
- * 同名的入边 / 出边读数两处用**同一批**调用点，provider 只是翻译层，读数不许漂。
+ * 夹具索引与 `packages/plugins/erb-parser/tests/call-hierarchy.test.ts` 同形（假 `ErbIndex`，
+ * 不依赖内核 / Monaco 运行时）：用例里的取数口把**真判据**（插件供方）接到假索引上，
+ * 于是 provider 交出的读数与判据逐条可对拍——翻译层不许漂。
  */
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import type {
+  EditorLanguageServiceRequest,
   ErbFile,
   ErbFunction,
   ErbFunctionRef,
@@ -33,19 +35,21 @@ import type {
   ErbReference,
 } from '@kojo/plugin-api';
 import {
+  incomingCalls,
+  outgoingCalls,
+  provideErbCallHierarchy,
+  resolveEnclosingFunction,
+} from '@kojo/plugin-erb-parser';
+import {
   createErbCallHierarchyProvider,
   installErbCallHierarchyProvider,
+  type CallHierarchyAsk,
   type ErbCallHierarchyDeps,
   type ErbCallHierarchyItem,
   type ErbCallHierarchyProvider,
   type ErbIncomingCall,
   type ErbOutgoingCall,
 } from '../src/monaco/erb-callhierarchy-provider';
-import {
-  incomingCalls,
-  outgoingCalls,
-  resolveEnclosingFunction,
-} from '../src/monaco/erb-call-hierarchy';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 
 /* ============================== 夹具：假索引 ============================== */
@@ -218,8 +222,27 @@ function positionAt(line: number, column = 2): Monaco.Position {
   return { lineNumber: line, column } as Monaco.Position;
 }
 
+/**
+ * 取数口（与生产同一条腿的**测试替身**）：把真判据（插件供方 `provideErbCallHierarchy`）
+ * 接到假索引上——`null` 索引 ⇒ 无人应答（与真插件"索引未建 ⇒ 弃权"同语义）。
+ */
+function askOf(index: ErbIndex | null): CallHierarchyAsk {
+  return (path, text, line, subject) => {
+    if (index === null) return undefined;
+    const request: EditorLanguageServiceRequest = {
+      kind: 'callHierarchy',
+      path,
+      line,
+      project: null,
+      ...(text === null ? {} : { text }),
+      ...(subject === undefined ? {} : { subject }),
+    };
+    return provideErbCallHierarchy(request, index);
+  };
+}
+
 function depsOf(index: ErbIndex | null): ErbCallHierarchyDeps {
-  return { currentIndex: () => index };
+  return { ask: askOf(index) };
 }
 
 function providerFor(index: ErbIndex | null = INDEX): ErbCallHierarchyProvider {
@@ -298,7 +321,7 @@ describe('prepare：函数声明 / 体内行 / 调用位都落到"光标所在�
     expect(itemAt(15)).toEqual(itemAt(10));
   });
 
-  it('调用位 → 所在函数（与面板 `resolveEnclosingFunction` 同一把尺子，不解析被调者）', () => {
+  it('调用位 → 所在函数（与槽供方 `resolveEnclosingFunction` 同一把尺子，不解析被调者）', () => {
     const viaProvider = itemAt(31); // 31 行是 CALLER1 体内对 TARGET 的调用点
     const viaModel = resolveEnclosingFunction(INDEX, null, FILE_A, 31);
     expect(viaModel?.name).toBe('CALLER1');
@@ -369,10 +392,17 @@ describe('prepare：函数声明 / 体内行 / 调用位都落到"光标所在�
     });
   });
 
-  it('宿主注入的 `functionAt` 通道优先（通道说是谁就是谁，跨文件尾列退化）', () => {
-    const virtual = fn('VIRTUAL', FILE_A, 100, 110, 3);
+  it('取数口交回的节点就是终局（命中即翻形状，跨文件尾列退化）', () => {
     const items = prepareAt(15, {
-      deps: { currentIndex: () => INDEX, functionAt: () => virtual },
+      deps: {
+        ask: () => ({
+          kind: 'callHierarchy',
+          subject: { name: 'VIRTUAL', normalizedName: 'VIRTUAL', filePath: FILE_A, startLine: 100, endLine: 110, nameColumn: 3 },
+          incoming: [],
+          outgoing: [],
+          referencesAvailable: true,
+        }),
+      },
     });
     expect(items?.[0]?.name).toBe('VIRTUAL');
     expect(items?.[0]?.data.startLine).toBe(100);
@@ -380,16 +410,15 @@ describe('prepare：函数声明 / 体内行 / 调用位都落到"光标所在�
     expect(items?.[0]?.range.endColumn).toBe(1);
   });
 
-  it('`functionAt` 抛错 ⇒ 退化到索引自扫（纯模型的既有兜底，provider 不另写）', () => {
+  it('取数口抛错 ⇒ `null`（异常回空，不把一次查询带崩）', () => {
     const items = prepareAt(15, {
       deps: {
-        currentIndex: () => INDEX,
-        functionAt: () => {
+        ask: () => {
           throw new Error('service hiccup');
         },
       },
     });
-    expect(items?.[0]?.name).toBe('TARGET');
+    expect(items).toBeNull();
   });
 });
 
@@ -411,7 +440,7 @@ describe('入边：与纯模型逐条对拍（组序 / 点位序 / 跨文件尾�
     const pure = incomingCalls(INDEX, null, 'TARGET');
     const viaProvider = incomingOf(itemAt(10));
     expect(viaProvider?.map((call) => call.from.name)).toEqual(
-      pure.map((group) => group.caller.name),
+      pure.map((group) => group.symbol.name),
     );
     for (let index = 0; index < pure.length; index++) {
       expect(viaProvider?.[index]?.fromRanges.map(rangeTuple)).toEqual(
@@ -493,7 +522,7 @@ describe('入边：与纯模型逐条对拍（组序 / 点位序 / 跨文件尾�
   it('索引未建 / 取数腿抛错 ⇒ `[]`（不抛进 Monaco）', () => {
     expect(incomingOf(itemAt(10), providerFor(null))).toEqual([]);
     const throwing: ErbCallHierarchyDeps = {
-      currentIndex: () => {
+      ask: () => {
         throw new Error('index service hiccup');
       },
     };
@@ -537,7 +566,7 @@ describe('出边：只认函数区间内的 `call`，与纯模型逐条对拍', 
     const pure = outgoingCalls(INDEX, { filePath: FILE_A, startLine: 10, endLine: 20 });
     const viaProvider = outgoingOf(itemAt(10));
     expect(viaProvider?.map((call) => call.to.name)).toEqual(
-      pure.map((group) => group.callee.name),
+      pure.map((group) => group.symbol.name),
     );
     for (let index = 0; index < pure.length; index++) {
       expect(viaProvider?.[index]?.fromRanges.map(rangeTuple)).toEqual(
@@ -637,7 +666,7 @@ describe('安装：0.57 零注册、有注册位只挂 ERB、句柄幂等、异�
     expect(typeof provider.provideCallHierarchyOutgoingCalls).toBe('function');
   });
 
-  it('零参工厂 = 无数据源占位：三条腿回空、不抛（真实面板必须注入 currentIndex）', () => {
+  it('零参工厂 = 无取数口占位：三条腿回空、不抛（真实装配必须注入 ask）', () => {
     const provider = createErbCallHierarchyProvider();
     const { model } = fakeModel(TEXT_A);
     expect(provider.prepareCallHierarchy(model, positionAt(10))).toBeNull();
@@ -713,10 +742,10 @@ describe('安装：0.57 零注册、有注册位只挂 ERB、句柄幂等、异�
     );
   });
 
-  it('索引按调用时软取：换索引 / 索引消失立刻反映到下一次查询', () => {
+  it('取数口按调用时现取：换索引 / 索引消失立刻反映到下一次查询', () => {
     const fake = fakeMonaco();
     let current: ErbIndex | null = INDEX;
-    installErbCallHierarchyProvider(fake.monaco, { currentIndex: () => current });
+    installErbCallHierarchyProvider(fake.monaco, { ask: (path, text, line, subject) => askOf(current)(path, text, line, subject) });
     const provider = fake.registrations[0]!.provider;
     const { model } = fakeModel(TEXT_A);
     expect(provider.prepareCallHierarchy(model, positionAt(10))?.[0]?.name).toBe('TARGET');
@@ -751,18 +780,19 @@ describe('源码卫生：纯模型独任判定、Monaco 只 type-only、无第�
     expect(source).not.toMatch(/\b(eratw|eraK|eraSQN|eraNAS)\b/i);
   });
 
-  it('判定全部委托纯模型：provider 里没有反向索引 / 调用点判据的抄本', () => {
-    // 只看**代码行**：头注里引述纯模型口径（"bySymbol 的引用点"）是设计说明，不是抄本
+  it('判定全部委托取数口（槽供方）：provider 里没有反向索引 / 调用点判据的抄本', () => {
+    // 只看**代码行**：头注里引述判据口径（"入边剔 definition、出边只认 call"）是设计说明，不是抄本
     const code = source
       .split('\n')
       .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
       .join('\n');
-    expect(code).toMatch(/from '\.\/erb-call-hierarchy'/);
-    expect(code).toMatch(/\bincomingCalls\b/);
-    expect(code).toMatch(/\boutgoingCalls\b/);
-    expect(code).toMatch(/\bresolveEnclosingFunction\b/);
+    // 判据搬走后这一层只剩三件事：model→请求（`deps.ask`）、契约→形状（itemOf / callSiteRange）、注册
+    expect(code).toMatch(/\bdeps\.ask\b/);
+    expect(code).toMatch(/function itemOf\(/);
+    expect(code).toMatch(/function callSiteRange\(/);
     expect(code).not.toMatch(/bySymbol/);
     expect(code).not.toMatch(/kind === 'call'/);
+    expect(code).not.toMatch(/enclosingAt/);
   });
 
   it('安装器结构性探测注册位（0.57 没有它），并只挂 ERB_LANGUAGE_ID', () => {

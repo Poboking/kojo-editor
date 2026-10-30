@@ -17,12 +17,14 @@ import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type * as Monaco from '../src/monaco/entry';
 import type {
+  EditorLanguageServiceContribution,
   ErbFile,
   ErbFunction,
   ErbFunctionRef,
   ErbIndex,
   ErbReference,
 } from '@kojo/plugin-api';
+import { provideErbCallHierarchy } from '@kojo/plugin-erb-parser';
 import * as kojo2Module from '../src/monaco/kojo2-callhierarchy';
 import {
   createKojo2CallHierarchyProvider,
@@ -135,10 +137,16 @@ function render(
   setCallHierarchyState({ kind: 'request', request });
   const reveals: Array<readonly [string, number, number | undefined]> = [];
   const modelRequests: string[] = [];
+  // ERB 腿走**真供方**（判据已搬进 `@kojo/plugin-erb-parser`）：假索引接上插件供方，
+  // 于是"面板画出来的"就是"插件答出来的"（不另造判据、不喂罐头）。
+  const erbContribution: EditorLanguageServiceContribution = {
+    id: 'erb-call-hierarchy',
+    provide: (request) => provideErbCallHierarchy(request, options.index ?? null),
+  };
   const deps: CallHierarchyDeps = {
     // ERB 腿故意给 null：kojo2 分支若去读索引就是分派没兜住（本套件按渲染结果钉住）
     currentIndex: () => options.index ?? null,
-    functionAt: () => null,
+    contributions: () => [erbContribution],
     modelFor: (p) => {
       modelRequests.push(p);
       return options.model ?? null;

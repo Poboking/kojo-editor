@@ -1,6 +1,8 @@
 import type * as Monaco from './entry';
 import { errorText } from '@kojo/plugin-api';
 import type {
+  EditorCallHierarchyRequest,
+  EditorCallHierarchyResult,
   EditorCodeLensRequest,
   EditorCodeLensResult,
   EditorCompletionItem,
@@ -681,6 +683,57 @@ export function collectSelectionRanges(
   for (const contribution of contributions) {
     const result = provideOf(contribution, request);
     if (!result || result.kind !== 'selectionRange') continue;
+    return result;
+  }
+  return undefined;
+}
+
+/* ============================== 调用层级（LAU-4 调用层级腿） ============================== */
+
+/**
+ * 构造一个 `callHierarchy` 请求（宿主接线用；同源形状）。
+ *
+ * `text === null` ⇒ 请求里**不出现**正文：契约写明本能力只读项目索引（"什么算一次调用"
+ * 的判据在供方的索引里），宿主取不到正文时省略，供方不得据此拒答或降级——写法与
+ * `codeLens` 的 `projectFiles` 同一条"缺席即不出现"。
+ *
+ * `subject` 是续问的口子（provider 那类"拿着上一轮 item 再问"的消费面用）；
+ * 缺席 = 按 `line` 求光标所在函数。两条路在供方那侧同一份判据，不换尺子。
+ */
+export function callHierarchyRequestOf(
+  identity: { readonly path: string; readonly languageId?: string; readonly version?: number },
+  text: string | null,
+  line: number,
+  project: EditorCallHierarchyRequest['project'],
+  subject?: EditorCallHierarchyRequest['subject'],
+): EditorCallHierarchyRequest {
+  return {
+    kind: 'callHierarchy',
+    path: identity.path,
+    ...(identity.languageId !== undefined ? { languageId: identity.languageId } : {}),
+    ...(identity.version !== undefined ? { version: identity.version } : {}),
+    ...(text === null ? {} : { text }),
+    line,
+    project,
+    ...(text === null ? {} : { lineCount: text.length === 0 ? 1 : countLines(text) }),
+    ...(subject === undefined ? {} : { subject }),
+  };
+}
+
+/**
+ * 问出这一格的调用层级（**单答型**）。`undefined` = 无人应答（插件缺席 / 弃权 / 判据抛错）。
+ *
+ * 与 `collectRenameTarget` 同一裁决：第一家作答的说了算。"认这门语言、但这一行不在任何
+ * 函数体内"是 `subject: null` 的**作答**（不是弃权），不再问下一家——两家各答一半会让
+ * 面板内容按注册顺序漂移。
+ */
+export function collectCallHierarchy(
+  contributions: readonly EditorLanguageServiceContribution[],
+  request: EditorLanguageServiceRequest,
+): EditorCallHierarchyResult | undefined {
+  for (const contribution of contributions) {
+    const result = provideOf(contribution, request);
+    if (!result || result.kind !== 'callHierarchy') continue;
     return result;
   }
   return undefined;

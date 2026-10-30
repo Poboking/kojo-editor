@@ -1,16 +1,22 @@
 import { createElement as h, useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import { basename, nextWindow, windowSize, type RenderWindow } from '@kojo/plugin-api';
-import type { ErbFunction, ErbIndex, ErbIndexState } from '@kojo/plugin-api';
+import type {
+  EditorLanguageServiceContribution,
+  ErbIndex,
+  ErbIndexState,
+  GameProject,
+} from '@kojo/plugin-api';
 import type * as Monaco from '../monaco/entry';
 import {
   callHierarchyIndexCopy,
   callHierarchyIndexTitle,
 } from './index-state-copy';
 import {
-  incomingCalls,
-  outgoingCalls,
-  resolveEnclosingFunction,
-} from '../monaco/erb-call-hierarchy';
+  callHierarchyRequestOf,
+  collectCallHierarchy,
+  editorRequestIdentityOf,
+  modelTextOf,
+} from '../monaco/kojo-language-service-legs';
 import type {
   Kojo2CallHierarchyProvider,
   Kojo2CallHierarchyResolvers,
@@ -47,7 +53,8 @@ import { pkey } from './file-tree-ops';
  *
  * 形态照 `DiffViewOverlay` / `FileHistoryOverlay` 同款（工厂注依赖 + 模块级状态单源）。
  * **按当前 model 的语言分派取数依赖**：
- * - `.erb`（及 v1 `.kojo`）⇒ 既有 `monaco/erb-call-hierarchy.ts`（`erb.parser` 的反向索引）；
+ * - `.erb`（及 v1 `.kojo`）⇒ `ui.editor.languageService` 槽的 `callHierarchy` 成员
+ *   （LAU-4 调用层级腿起判据住 `@kojo/plugin-erb-parser`，本层只组装请求、翻面板形状）；
  * - `kojo2` ⇒ `createKojo2CallHierarchyProvider()`（纯模型 `monaco/kojo2-callhierarchy.ts`
  *   的 provider 面，宿主自建面板消费；两个分支的"位点 → 声明 → 出入边"搬运都在
  *   `ui/call-hierarchy.ts` 的 `resolveKojo2CallHierarchy`）。
@@ -58,7 +65,7 @@ import { pkey } from './file-tree-ops';
  * 宿主）⇒ 逐字退回 ERB 分支的旧行为（additive，不改变任何既有调用方）。
  *
  * **两条腿的就绪口径不同**（批次十一 CALLHIER-INJECT 的结论）：
- * - ERB 分支**没有异步缺口**：`currentIndex()` / `functionAt()` / `indexState()` 每帧同步
+ * - ERB 分支**没有异步缺口**：`currentIndex()` / `indexState()` / 槽应答每帧同步
  *   现取，索引未建时走 `callHierarchyIndexCopy` 的可见文案（不静默）；
  * - kojo2 分支的取数模块与项目索引 resolver 都只能走动态 `import()`（PS-10 ①）。两者
  *   合成一条 `loadKojo2CallHierarchyPanelBundle()`：装好后写模块级快照，**再打开面板同步取用**；首帧
@@ -80,7 +87,7 @@ import { pkey } from './file-tree-ops';
  */
 
 export interface CallHierarchyDeps {
-  /** 当前 ERB 索引（`null` = 未建 / 服务缺席；软取不抛） */
+  /** 当前 ERB 索引（`null` = 未建 / 服务缺席；软取不抛）；只用于"索引未建"那一格可见说明 */
   currentIndex(): ErbIndex | null;
   /**
    * 索引这一轮的**可查事实**（ST-CONSUMERS，**additive 可选**）：`erb.parser` 的
@@ -89,13 +96,16 @@ export interface CallHierarchyDeps {
    */
   indexState?(): ErbIndexState | null;
   /**
-   * 位置 → 包围函数（三态语义见 `FunctionAtResolver`：命中 / `undefined` 权威答否 /
-   * `null` 通道缺席 ⇒ 数据层退化索引自扫）。
+   * `ui.editor.languageService` 槽的贡献表（宿主注入；**每次现取**——槽是只增表，
+   * 插件晚装一步也照问得到）。调用层级经 `callHierarchy` 成员由供方应答
+   * （判据住 `@kojo/plugin-erb-parser`），本层只裁决"第一家作答的说了算"。
    */
-  functionAt(path: string, line: number): ErbFunction | null | undefined;
+  contributions(): readonly EditorLanguageServiceContribution[];
+  /** 当前项目（请求身份用；缺席 = `null`，供方不需要也无从伪造） */
+  project?(): GameProject | null;
   /**
-   * 请求文件的活动 model（**additive 可选**）：语言分派（`getLanguageId()`）与 kojo2
-   * 取数都读它。缺席 / 返回 `null`（文件已关）= 旧行为：一律走 ERB 分支。
+   * 请求文件的活动 model（**additive 可选**）：语言分派（`getLanguageId()`）、请求身份
+   * 三格与 kojo2 取数都读它。缺席 / 返回 `null`（文件已关）= 旧行为：一律走 ERB 分支。
    */
   modelFor?(path: string): Monaco.editor.ITextModel | null;
   /** kojo2 provider（additive 可选；缺席 = 面板自建：取数模块 + 项目索引 resolver，见 `kojo2Resolvers`） */
@@ -525,7 +535,31 @@ function renderRequest(
   if (!index) {
     return chFrame(deps, '调用层级', notice(blockedCopy ?? 'ERB 函数索引未建（索引随项目打开自动构建，稍后再试）。'));
   }
-  const target = resolveEnclosingFunction(index, deps.functionAt, request.filePath, request.line);
+  /* LAU-4 调用层级腿：判定全部交给供方（`@kojo/plugin-erb-parser` 经
+     `ui.editor.languageService` 的 `callHierarchy` 成员应答）——本层只组装请求
+     （model 身份 + 位点 + 项目）并把契约结果翻成面板行。 */
+  const requestModel = deps.modelFor?.(request.filePath) ?? null;
+  const requestText = requestModel === null ? null : modelTextOf(requestModel);
+  /* 路径以**面板正在看的那一格**为准（`request.filePath`）：model 的 uri 只是同一格的
+     另一种写法，桩 model / 旧宿主可能根本没有 uri。`languageId` / `version` 仍从 model 取
+     （供方据此做过期复核），取不到就"缺省不出现"——那是腿构造器的既有口径。 */
+  const identity =
+    requestModel === null
+      ? { path: request.filePath }
+      : { ...editorRequestIdentityOf(requestModel), path: request.filePath };
+  const panel = collectCallHierarchy(
+    deps.contributions(),
+    callHierarchyRequestOf(identity, requestText, request.line, deps.project?.() ?? null),
+  );
+  if (panel === undefined) {
+    // 无人应答：插件未装 / 这一轮弃权 / 判据抛错。明说"不是没有调用关系"（不静默）。
+    return chFrame(
+      deps,
+      '调用层级',
+      notice('调用层级这一轮没有供方应答（ERB 解析器插件缺席或判据抛错）——这不是"没有调用关系"，重开面板或查看日志再试。'),
+    );
+  }
+  const target = panel.subject;
   if (!target) {
     // 「第 N 行不在任何函数体内」只在**本轮确实扫出了东西**时才成立：一个位置都没走到 /
     // 扫过但名录为空时，那句是把"索引没内容"污蔑成"你把光标放错了"（同一张表判的相位）
@@ -541,22 +575,22 @@ function renderRequest(
     );
   }
 
-  const referencesAvailable = index.references !== undefined;
-  const incoming = referencesAvailable ? incomingCalls(index, deps.functionAt, target.normalizedName) : [];
-  const outgoing = referencesAvailable ? outgoingCalls(index, target) : [];
+  const referencesAvailable = panel.referencesAvailable;
+  const incoming = referencesAvailable ? panel.incoming : [];
+  const outgoing = referencesAvailable ? panel.outgoing : [];
   const incomingRows = flatten(
     incoming.map((g) => ({
-      name: g.caller.name,
-      path: g.caller.filePath,
-      startLine: g.caller.startLine,
+      name: g.symbol.name,
+      path: g.symbol.filePath,
+      startLine: g.symbol.startLine,
       sites: g.sites,
     })),
   );
   const outgoingRows = flatten(
     outgoing.map((g) => ({
-      name: g.callee.name,
-      path: g.callee.filePath,
-      startLine: g.callee.startLine,
+      name: g.symbol.name,
+      path: g.symbol.filePath,
+      startLine: g.symbol.startLine,
       sites: g.sites,
     })),
   );

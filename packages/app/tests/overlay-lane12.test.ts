@@ -167,7 +167,8 @@ describe('L12-6 换壳不掉批次十的菜单面', () => {
     // 本批纪律是行为零改动，不动公共签名，测试侧定点收窄成 React 组件形态。
     const Overlay = createCallHierarchyOverlay({
       currentIndex: () => null,
-      functionAt: () => null,
+      // 空态在 `currentIndex()` 那格就返回，走不到槽：贡献表给空（判据已搬进插件包）
+      contributions: () => [],
       reveal: () => undefined,
       close: () => undefined,
     }) as () => ReactElement;
