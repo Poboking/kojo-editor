@@ -178,7 +178,7 @@ export interface ReferenceTally {
   readonly callSiteCount: number;
   /**
    * 「被调用」**非定义位**口径：定义以外的一切出现点（call + mention + unclassified）。
-   * 调用层级面板的入边集就是这一投影（`erb-call-hierarchy.incomingCalls` 只剔 `definition`）——
+   * 调用层级面板的入边集就是这一投影（`@kojo/plugin-erb-parser` 的 `incomingCalls` 只剔 `definition`）——
    * 面板要读数就取这里，**不许再自己数一遍**（那是 W8 要收口的第二判据）。
    */
   readonly nonDefinitionCount: number;
