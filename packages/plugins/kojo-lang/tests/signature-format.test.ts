@@ -255,6 +255,9 @@ describe('注册纪律：两条腿分枚注册、order 10、不读切流开关',
       'kojo2-references',
       'kojo2-rename',
       'kojo2-selectionRange',
+      // B3 语义收口（`ffb65f83`）：语义着色供方入插件（槽 `ui.editor.languageService` 的
+      // `semanticToken`）。它进的是"贡献 id 全集"快照，本用例钉的两条腿一字未动。
+      'kojo2-semanticTokens',
       'kojo2-signatureHelp',
       'kojo2-symbols',
     ]);
