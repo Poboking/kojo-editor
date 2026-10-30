@@ -114,6 +114,53 @@ describe('definition 供方', () => {
     expect(provideDefinition(defRequest(3, 4, { languageId: 'erb' }))).toBeUndefined();
     expect(provideDefinition({ kind: 'documentSymbol' } as never)).toBeUndefined();
   });
+
+  it('`projectFiles` 缺席 / 空 ⇒ 与同文件判据逐字相同（旧宿主零改动）', () => {
+    const baseline = provideDefinition(defRequest(12, 11));
+    expect(provideDefinition(defRequest(12, 11, { projectFiles: [] }))).toEqual(baseline);
+    expect(baseline!.locations).toHaveLength(1);
+    expect(baseline!.locations[0]!.filePath).toBe('D:/proj/口上/1_测试.kojo2');
+  });
+
+  it('本文没有声明 ⇒ 跨文件落点带真实 `filePath`（本次新增的 additive 腿）', () => {
+    const source = '灵梦：「{声望}还差一点。」';
+    const result = provideDefinition(
+      defRequest(1, 6, {
+        text: source,
+        projectFiles: [{ path: 'D:/proj/口上/0_共用.kojo2', text: '# 设 声望 整数 = 1' }],
+      }),
+    );
+    expect(result!.locations).toHaveLength(1);
+    expect(result!.locations[0]).toEqual({
+      filePath: 'D:/proj/口上/0_共用.kojo2',
+      line: 1,
+      column: 5,
+      span: { columnStart: 5, columnEnd: 7 },
+      kind: 'definition',
+    });
+  });
+
+  it('同文件有声明时不再交项目里的同名声明（同文件优先）', () => {
+    const result = provideDefinition(
+      defRequest(12, 11, {
+        projectFiles: [{ path: 'D:/proj/口上/0_共用.kojo2', text: '# 设 今天已触发 整数 = 1' }],
+      }),
+    );
+    expect(result!.locations).toHaveLength(1);
+    expect(result!.locations[0]!.filePath).toBe('D:/proj/口上/1_测试.kojo2');
+  });
+
+  it('快照不完整（projectFilesComplete=false）不影响已算出的落点（只提示，不猜也不吞）', () => {
+    const result = provideDefinition(
+      defRequest(1, 6, {
+        text: '灵梦：「{声望}还差一点。」',
+        projectFiles: [{ path: 'D:/proj/口上/0_共用.kojo2', text: '# 设 声望 整数 = 1' }],
+        projectFilesComplete: false,
+      }),
+    );
+    expect(result!.locations).toHaveLength(1);
+    expect(result!.locations[0]!.filePath).toBe('D:/proj/口上/0_共用.kojo2');
+  });
 });
 
 describe('documentSymbol 供方', () => {
