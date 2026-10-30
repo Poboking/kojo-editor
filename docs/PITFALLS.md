@@ -543,3 +543,7 @@
 284. **量具的自举钩子把契约包 `@kojo/plugin-api` 按 `plugin-` 前缀指到 `packages/plugins/api`（不存在）——本树靠 node_modules 兜底照跑，换到"量改前"的游离树就 `ERR_MODULE_NOT_FOUND`**（2026-10-30 MEM-18 实拍，`tools/mem-readings.mjs`）：
    AGENTS §六 规定的量"改前"方式是 `git worktree add <临时目录> HEAD --detach`，而那棵树**没有 node_modules**；钩子写成 `name.startsWith('plugin-') ? packages/plugins/<rest> : packages/<name>`，一刀切把 `@kojo/plugin-api`（真身在 `packages/plugin-api`，**是契约包不是插件**）指空 ⇒ 解析落回 Node 包解析 ⇒ 报"包没装"，看着像环境坏。
    修法：先试 `packages/<name>`、存在就用它，不存在再退 `packages/plugins/<rest>`。另有一层：那棵树仍缺第三方依赖（`iconv-lite` / `react`，从各自的包目录解析）⇒ 用目录联接把本树各级 `node_modules` **只读镜像**过去即可，量完连树一起删（本批就是这么做的，见回执）。
+
+285. **给插件加一枚槽贡献，新用例与 purity 全绿，但"贡献 id 全集"快照仍钉着旧名单 ⇒ 三条插件自测红，只有跑全量才抓到**（2026-10-31 G4 实拍，`packages/plugins/kojo-lang/tests/{plugin,signature-format,references-rename}.test.ts`）：
+   新增 `kojo2-workspaceSymbols` 后，定向只跑了新供方的测试与 purity；三条断言 `[...contributions.keys()].sort()` 逐字相等的用例仍是 14 个 id ⇒ 全量 7 红里 3 条是这一族。它们刻意钉"全集"（新增贡献必须同批改名单），所以**这不是误报、正是锚点在工作**。
+   ⇒ 纪律：① 插件新增/删除一枚 `ctx.slots.register` 后，**同批跑该插件 tests 整个目录**，不能只跑新文件；② 名单型断言（id 全集 / slot 序列 / order 唯一值）遇到红先改名单并在提交信息点名"第 N 枚贡献"，不许改成 `toContain` 放宽；③ 全量红的正确归因是"新红 / 已知常红"两类分开写（同 §281），本批新红全是名单陈旧，没有产品缺陷。
