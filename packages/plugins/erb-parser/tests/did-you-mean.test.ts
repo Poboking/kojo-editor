@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { editDistance, suggestNames } from '../src/did-you-mean';
+import { editDistance, suggestNames } from '../src/undefined-name';
 
 /**
  * did-you-mean 纯函数单测：

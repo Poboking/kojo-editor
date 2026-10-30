@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/erb-vocab",
+  "version": "0.0.0",
+  "private": true,
+  "description": "ERB 语言面的**引擎词表与纯函数**：控制流配对表（开 / 分支 / 收束 / 单行）与逐词分类。零 Monaco、零 React、零 IO、零运行时 import；不属于任何插件——插件（erb-parser）与语言面库（erb-lang）都是它的读者，谁也不引谁。",
+  "license": "GPL-3.0-or-later",
+  "main": "./src/index.ts",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./control-flow": "./src/control-flow.ts"
+  }
+}
