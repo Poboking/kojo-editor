@@ -51,18 +51,24 @@ function interfaceBody(name: string): string {
 
 /* ============================== ① 联合成员：加在末尾 ============================== */
 
-describe('两个新成员加在联合末尾（旧顺序一格不动）', () => {
+describe('新成员只许加在联合末尾（既有顺序一格不动）', () => {
   const requests = unionMembers('EditorLanguageServiceRequest');
   const results = unionMembers('EditorLanguageServiceResult');
 
-  it('请求 / 结果尾部就是这两枚，且顺序一致', () => {
-    expect(requests.slice(-2)).toEqual([
+  it('请求 / 结果尾部就是后加的五枚，且顺序一致', () => {
+    expect(requests.slice(-5)).toEqual([
       'EditorDocumentHighlightRequest',
       'EditorSelectionRangeRequest',
+      'EditorRenameTargetRequest',
+      'EditorCallHierarchyRequest',
+      'EditorImplementationRequest',
     ]);
-    expect(results.slice(-2)).toEqual([
+    expect(results.slice(-5)).toEqual([
       'EditorDocumentHighlightResult',
       'EditorSelectionRangeResult',
+      'EditorRenameTargetResult',
+      'EditorCallHierarchyResult',
+      'EditorImplementationResult',
     ]);
   });
 

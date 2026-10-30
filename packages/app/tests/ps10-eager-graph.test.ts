@@ -943,13 +943,22 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ⇒ 闸 **3,332 → 3,337**（余量约 0.2 KB；文件闸仍 199）。这一档加的是**能力**：
     //     `Ctrl+F12` 从"借 definition 那条请求"变成一条自己点名的槽腿（kojo2 不点名 ⇒ 不挂，
     //     矩阵里如实记 `{ exempt }`）。欠账照旧：下一枚进图模块仍须先挪一枚出去（文件闸顶格 199）。
+    //
+    //   - **`#DIM` 家族正则上提（2026-10-31，投影单源修复批）**：读数 **199 文件 / 3,338 KB**
+    //     （3,417,916 B = 3,416,904 + 1,012）——零新进图文件；`DIM_RE` / `DIM_MODIFIERS` 从
+    //     `erb-parser/src/scanner.ts` 上提到 `@kojo/erb-vocab/control-flow`（构建期投影脚本
+    //     `gen-erb-structure.mjs` 早已按那个落点抽正则，插件侧却还各自留着一份 ⇒ 投影闸恒红）。
+    //     逐枚：`erb-vocab/src/control-flow.ts` +823（两枚正则与落点注）、
+    //     `erb-parser/src/scanner.ts` +189（改成 import + 落点注）。宿主
+    //     `monaco/erb-dim-navigation.ts` 的字面 NUL 改 `\u0000` 转义（+5 B，懒边不进图）。
+    //     ⇒ 闸 **3,337 → 3,338**（余量约 0.2 KB；文件闸仍 199）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,337 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,338 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_337);
+    expect(totalKb).toBeLessThanOrEqual(3_338);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

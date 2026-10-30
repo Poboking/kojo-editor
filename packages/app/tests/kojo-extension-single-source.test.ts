@@ -343,11 +343,17 @@ describe('⑤ F12 取词判据只有一处（两条腿不许各写各的）', ()
     expect(refs).not.toContain('\\p{L}');
   });
 
-  it('两条腿都调那一枚函数，且都不再碰 ASCII 尺', () => {
+  it('两条腿都调那一枚函数，且本地名字记号走 Unicode 尺', () => {
     for (const rel of ['packages/plugins/erb-parser/src/symbols.ts', 'packages/plugins/erb-parser/src/references.ts']) {
       const text = read(rel).join('\n');
+      // 函数名取词：两腿共用 `functionNameTokenAt`（唯一判据）
       expect(text, rel).toMatch(/functionNameTokenAt\(lineText, (Math\.trunc\(column\)|column)\)/);
-      expect(text, rel).not.toMatch(/\bsymbolTokenAt\(/);
+      // 本地名字（`#DIM` / `$` 标签）记号：LAU-4 之后走契约的 `symbolTokenAt`，但**必须**
+      // 显式传 Unicode 判据；裸调 = 退回 ASCII 缺省尺（CJK 名字当场失明）。
+      const calls = text.match(/symbolTokenAt\(/g)?.length ?? 0;
+      const unicodeCalls =
+        text.match(/symbolTokenAt\(codeViewOf\(lineText\), column, isErbDimNameChar\)/g)?.length ?? 0;
+      expect(unicodeCalls, `${rel}: symbolTokenAt 必须显式传 Unicode 判据（${calls} 处调用）`).toBe(calls);
     }
   });
 

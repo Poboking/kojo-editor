@@ -335,7 +335,7 @@ describe('糖面读类腿 · ①往返钉（预览行 → 源行 → 折回预�
     }
   });
 
-  it('定义：预览行 → 源行交出去，同文件的落点**留源行**、列收到行首（③④两条判据同时成立）', () => {
+  it('定义：预览行 → 源行交出去，落点与列都按供方原样（判据已进插件，宿主不再改列）', () => {
     const surface = makeSurface(A_PATH, A_SOURCE, A_SEGMENTS);
     mount(surface);
     const asks: EditorLanguageServiceRequest[] = [];
@@ -345,9 +345,15 @@ describe('糖面读类腿 · ①往返钉（预览行 → 源行 → 折回预�
       const at = readDefinitionTargets(surface.preview.model, position(previewLine, 9), kernel);
       expect(asks.at(-1)!.kind).toBe('definition');
       expect(askedLineOf(asks.at(-1)!)).toBe(sourceLine);
-      expect((asks.at(-1) as unknown as { column: number }).column).toBe(1);
+      // LAU-4 定义腿之后请求带**换算后的源列**（插件按列取名字记号；宿主的"一律收到行首"
+      // 随本地腿一起退役）：期望值按同一口径（行尾对齐：源行比预览行多出的宽度 + 光标列，
+      // 夹在 `[1, 源行长度 + 1]`）现算，不手抄公式。
+      const row = A_SOURCE[sourceLine - 1]!;
+      const shown = surface.preview.model.getLineContent(previewLine);
+      const expectedColumn = Math.min(Math.max(row.length - shown.length + 9, 1), row.length + 1);
+      expect((asks.at(-1) as unknown as { column: number }).column).toBe(expectedColumn);
+      // 落点仍在存档侧、列收到行首（`foldLocationsToPreview` 的跨面纪律未变）
       expect(at).toHaveLength(1);
-      // 行号不折第二遍（源行 → 预览行那一跳住在 `applyReveal`），但**必须**折得回去才交出去
       expect(at[0]!.line).toBe(sourceLine);
       expect(FOLD_A(sourceLine)).toBe(previewLine);
       expect(at[0]!.column).toBe(1);
