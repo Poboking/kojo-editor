@@ -86,7 +86,22 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
    * 的旧桥（补全 / 悬停 / 签名 / 格式化四条腿的 v1 面还在宿主），补全腿因此已经被挂在
    * ERB 上；点名一格只对"只声明点名腿"的语言才有意义，重复点名等于第二份台账。
    */
-slotServices: ['references', 'hover'],
+slotServices: [
+    'references',
+    'hover',
+    /*
+     * DOUBLE-LEG-1032（2026-10-31）：同符号高亮 / 结构化扩选 / 行上注解三格也点名。
+     * 点名的消费方是 **`excludeNamed`**（`register-dialects.ts`）：这三格的供方今天已全在插件
+     * （`@kojo/plugin-erb-lang` 的 `erb-documentHighlight` / `erb-selectionRange`、
+     * `@kojo/plugin-erb-parser` 的 `erb-usage-lens`），宿主那三枚**纯翻译腿**
+     * （`erb-highlight.ts` / `erb-selection-range.ts` / `kojo-code-lens.ts` 的 ERB 挂载）
+     * 按点名让位，Monaco 每一 kind 只剩共享槽腿那一枚 provider——同一次请求不再白问两趟供方，
+     * "谁在答"由这张声明表决定，不再由注册顺序决定。`.kojo1`（不点名）仍由旧桥腿答，零改动。
+     */
+    'documentHighlight',
+    'selectionRange',
+    'codeLens',
+  ],
   // LAU-4 补全腿第三批（2026-10-31）：ERB 补全的判据全在插件 `@kojo/plugin-erb-parser`，
   // 事实（adapter 表 / 项目名录 / 宿主词表 / 偏好）由组合根经槽腿的 `completionFacts`
   // 现取并随请求递下去。声明在这里 = 收口侧不必按语言 id 分支。
