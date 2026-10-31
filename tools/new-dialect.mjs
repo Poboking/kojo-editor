@@ -109,19 +109,21 @@ function adapterSource(ctx) {
   return `/**
  * ${title} 的 2.0 事实面（由 \`tools/new-dialect.mjs\` 生成）。
  *
- * 这个文件回答「本方言里这些名字是什么意思」——**只有数据**：事件目录、profile、
- * 演出面、程序层开关、存储期。识别规则 / IO / Monaco 都不在这里（那是宿主与
+ * 这个文件回答「本方言里这些名字是什么意思」——**只有数据**：事件目录、载体归属、
+ * profile、演出面、程序层开关、存储期。识别规则 / IO / Monaco 都不在这里（那是宿主与
  * 语言层的事；本包只提供事实与落点）。
  *
  * 生成物是**最小可跑**起点，不是真实方言的终态：
  * - 事件目录只有共享用例（\`packages/kojo-conformance/tests/fixtures/language-shared/\`）
  *   认的那一条（\`初见\`），引擎记号由 id 派生（\`${constant}_FIRST\`）；
+ * - \`carriers\` 给 Emuera 系最小骨架（正文 ERB + 2.0 面 \`.kojo2\`）；主战场不在这两格的真
+ *   方言（如正文在 XML 的）按自己盘上事实增删，并记得收窄 erb 面的 \`validates\`；
  * - \`storageClasses\` / \`domainSymbols\` 暂时沿用 core 的 fixture 形状（共享用例不踩这两面）；
  *   真方言按自己盘上的事实逐格改写，**不要**从别的 adapter 借；
  * - \`profile\` 的三轴（取色 / 等待 / 池·随机落点）按 Emuera 系起步值给；
  *   与 backend 的降糖读数同源（\`./backend.ts\` 的 \`${ctx.id}LoweringProfile\`）。
  */
-import type { GameAdapter } from '@kojo/kojo-core';
+import type { CarrierBinding, GameAdapter } from '@kojo/kojo-core';
 import { FIXTURE_ADAPTER, freezeAdapter } from '@kojo/kojo-core';
 
 /** 方言自述（id / 展示名 / 源文件扩展名；清单、识别、conformance 共用这一把） */
@@ -158,6 +160,20 @@ export const ${constant}_EVENT_CATALOG = Object.freeze({
 });
 
 /**
+ * 载体归属（LAU-D4 车 ① 的骨架形态）：**正文写在哪**是数据不是宿主分支。
+ * 最小起点取 Emuera 系默认两格——正文在 \`ERB/**\`（\`# 机\` 的引擎落点也在这里成立），
+ * 2.0 内联面在 \`.kojo2\`。真方言按自己盘上事实增删：主战场不在 ERB 的（正文在 XML 一类），
+ * 要么给 erb 面收窄 \`validates\`（剥掉 \`event\`，参照 eraFL 那份），要么整格删掉；
+ * **不要**从别的 adapter 抄 glob——归属错了事件就在错误的载体上被校验。
+ */
+export const ${constant}_CARRIERS: readonly CarrierBinding[] = Object.freeze([
+  Object.freeze({ carrier: 'erb' as const, glob: 'ERB/**/*.ERB' }),
+  Object.freeze({ carrier: 'erb' as const, glob: 'ERB/**/*.erb' }),
+  Object.freeze({ carrier: 'erb' as const, glob: 'ERB/**/*.ERH' }),
+  Object.freeze({ carrier: 'inline' as const, glob: '**/*.kojo2' }),
+]);
+
+/**
  * 落点 profile 的**数据面**（三轴：取色 / 等待 / 池·随机）。
  *
  * \`narrationColor\` / \`dialogueColor\` 故意不是 \`default\`：本起点的文本落点用
@@ -181,6 +197,7 @@ export const ${constant}_GAME_ADAPTER: GameAdapter = freezeAdapter({
   version: '2.0.0',
   gameFingerprint: ${constant}_GAME_FINGERPRINT,
   eventCatalog: ${constant}_EVENT_CATALOG,
+  carriers: ${constant}_CARRIERS,
   profile: ${constant}_PROFILE,
   presentation: Object.freeze({
     heart: null,
@@ -674,6 +691,7 @@ function indexSource(ctx) {
  */
 export { create${pascal}AdapterPlugin, detect${pascal}Project, DIALECT_MARKER_FILE } from './plugin.js';
 export {
+  ${constant}_CARRIERS,
   ${constant}_DIALECT,
   ${constant}_EVENT_CATALOG,
   ${constant}_GAME_ADAPTER,
@@ -727,6 +745,7 @@ describe('纯度 · 方言包只读契约', () => {
   it('导出面 = 清单要求的工厂 + 2.0 两面（增删要显式改这份名单）', () => {
     expect(Object.keys(surface).sort()).toEqual([
       'DIALECT_MARKER_FILE',
+      '${constant}_CARRIERS',
       '${constant}_DIALECT',
       '${constant}_EVENT_CATALOG',
       '${constant}_GAME_ADAPTER',
@@ -747,16 +766,19 @@ function shapeTestSource(ctx) {
   return `/**
  * 生成包的形态闸（由 \`tools/new-dialect.mjs\` 生成）。
  *
- * 钉三件清单/宿主真的会读的事：
+ * 钉四件清单/宿主真的会读的事：
  * - 2.0 事实面自证 id = 清单键（bootstrap 按 id 对账，不等就跳过整个条目）；
  * - 事件目录 / profile / 程序层开关的形状（共享用例吃这几格）；
- * - v1 识别的三态（命中 / 标记件不是本方言 / 标记件缺席）。
+ * - v1 识别的三态（命中 / 标记件不是本方言 / 标记件缺席）；
+ * - 载体归属（LAU-D4 车 ① 骨架）：声明过、形状合法、事实面自带它且过契约校验。
  */
 import { describe, expect, it } from 'vitest';
 import type { FileIO } from '@kojo/plugin-api';
 import { join } from '@kojo/plugin-api';
+import { validateGameAdapter } from '@kojo/kojo-core';
 
 import {
+  ${constant}_CARRIERS,
   ${constant}_DIALECT,
   ${constant}_GAME_ADAPTER,
   ${constant}_PROFILE,
@@ -810,6 +832,24 @@ describe('形态 · 2.0 事实面', () => {
     const backend = create${pascal}EmitBackend({ compileExpression: (expr) => expr.text });
     expect(backend.id).toBe(${constant}_GAME_ADAPTER.id);
     expect(backend.profile.waitDefault).toBe('wait');
+  });
+});
+
+describe('形态 · 载体归属', () => {
+  it('carriers 已声明：每条有合法载体名与非空 glob，2.0 面在 .kojo2 上立一条', () => {
+    expect(${constant}_CARRIERS.length).toBeGreaterThanOrEqual(4);
+    for (const binding of ${constant}_CARRIERS) {
+      expect(['erb', 'xml', 'inline']).toContain(binding.carrier);
+      expect(binding.glob.length).toBeGreaterThan(0);
+    }
+    expect(
+      ${constant}_CARRIERS.some((binding) => binding.carrier === 'inline' && binding.glob === '**/*.kojo2'),
+    ).toBe(true);
+  });
+
+  it('事实面自带 carriers（同一参照），validateGameAdapter 零诊断（契约自证）', () => {
+    expect(${constant}_GAME_ADAPTER.carriers).toBe(${constant}_CARRIERS);
+    expect(validateGameAdapter(${constant}_GAME_ADAPTER)).toEqual([]);
   });
 });
 
