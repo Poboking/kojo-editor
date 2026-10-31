@@ -37,6 +37,7 @@ import type {
   LineDecoration,
 } from '@kojo/plugin-api';
 import { diagnosticDisplay, isKojoFile, pathKey } from '@kojo/plugin-api';
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import { isSugarFamilyRuleId, sugarFamilyCodeOf } from './rules/sugar-conventions';
 
 /**
@@ -220,7 +221,7 @@ export function conventionDecorationsForFile(
 
 /** 与规则侧 `split(/\r\n|\n|\r/)` 同一口径：行号坐标系必须和产 issue 的那批扫描器一致 */
 export function toIssueLines(text: string): string[] {
-  return text.replace(/\r\n?/g, '\n').split('\n');
+  return splitEolLines(text);
 }
 
 /**

@@ -31,6 +31,7 @@
  * 系统函数中文别名 / 文档词开关 / `#DIM` 名 / 标签名 / 项目函数名。缺哪一份，依赖它的
  * 那一路就零候选（**不猜、不抛**），其余路照常出货——与「表缺席 ⇒ 该路空」的旧口径逐字相同。
  */
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import type {
   EditorCompletionFacts,
   EditorCompletionItem,
@@ -892,7 +893,7 @@ export function dimNamesOfBuffer(text: string): readonly string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   let inSkipBlock = false;
-  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+  for (const raw of splitEolLines(text)) {
     const trimmed = raw.trim();
     if (inSkipBlock) {
       if (trimmed === '[SKIPEND]') inSkipBlock = false;
@@ -1547,7 +1548,7 @@ function nameWordsOf(line: string): string[] {
 
 /** 整篇代码行的词条（去重保序、跳过纯数字；大小写不敏感去重 = ERB 名字口径） */
 function documentWordsOf(text: string): readonly string[] {
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lines = splitEolLines(text);
   if (lines.length > WORD_SUGGESTIONS_MAX_LINES) return [];
   const seen = new Set<string>();
   const out: string[] = [];
@@ -2462,7 +2463,7 @@ export function provideErbHover(
 ): EditorHoverResult | undefined {
   try {
     if (!isErbDialectPath(request.path)) return undefined;
-    const lines = request.text.replace(/\r\n?/g, '\n').split('\n');
+    const lines = splitEolLines(request.text);
     const lineText = lines[request.line - 1] ?? '';
     const facts = deps.adapterTables === undefined ? {} : deps.adapterTables();
     const hit = resolveErbHoverAt(

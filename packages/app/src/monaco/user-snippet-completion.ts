@@ -1,3 +1,4 @@
+import { normalizeEol } from '@kojo/plugin-api/eol';
 import type * as Monaco from './entry';
 import { snippetsForLanguage, type UserSnippet } from '../ui/user-snippets';
 
@@ -17,7 +18,7 @@ import { snippetsForLanguage, type UserSnippet } from '../ui/user-snippets';
 
 /** 片段正文 → Monaco snippet insertText（换行归一；snippet 语法原样交给 Monaco） */
 export function toMonacoSnippetText(body: string): string {
-  return body.replace(/\r\n?/g, '\n');
+  return normalizeEol(body);
 }
 
 /** 供组长接线的片段 provider（语言 id 列表在创建时定死，片段表可随时刷新） */

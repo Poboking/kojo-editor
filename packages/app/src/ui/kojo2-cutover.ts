@@ -53,6 +53,7 @@ import {
   type MigrateResult,
 } from '@kojo/kojo-core';
 import { KOJO_LEGACY_SOURCE_EXTENSION, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 import {
   buildMigrateDiff,
@@ -528,7 +529,7 @@ export interface Kojo2MigrationPreviewRequest {
 
 /** 去掉末尾换行后的物理行（与迁移引擎 `readSource` 的"不产生伪行"同口径） */
 function splitSourceLines(source: string): string[] {
-  const lines = source.replace(/\r\n?/g, '\n').split('\n');
+  const lines = splitEolLines(source);
   if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();
   return lines;
 }

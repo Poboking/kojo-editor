@@ -1,5 +1,18 @@
 import type { ControlFlowStatement, ErbDim, ErbFile, ErbFunction, ErbLabel, ErbParam } from '@kojo/plugin-api';
 import { DIM_MODIFIERS, DIM_RE, type ControlFlowRole } from '@kojo/erb-vocab/control-flow';
+/**
+ * 换行归一与切行 —— **契约层唯一一份**（`@kojo/plugin-api/eol`，R7B 收口）。
+ *
+ * 此前这里是 `text.replace(/\r\n?/g, '\n')` 的私有复制（注释写着"插件内自带，不依赖
+ * kernel"）。那是一句实话但不完整：插件确实不许依赖 kernel，可契约层有零依赖叶子——
+ * 而"`\r\n` 与裸 `\r` 各算一个换行"是一个事实，不是三个包各自的实现细节。真语料
+ * 1.17 亿码元实测：私有复制版单遍 **2,415ms**，契约层那份（`indexOf` 先行 + split/join）
+ * 在**已归一化**的正文上 **< 1ms**（索引链路上同一份正文被替换了 5 遍，见 PITFALLS 295）。
+ *
+ * 本文件对 `@kojo/plugin-api` 的**值**导入仍受"裸 node 解析"约束（见上方头注）：`eol.ts`
+ * 是零运行时 import 的自包含叶子，且 `package.json` 里有 `./eol` 导出 ⇒ 两条约束同时满足。
+ */
+import { splitEolLines } from '@kojo/plugin-api/eol';
 
 /**
  * 行首「代码前缀」`;!;` / `;#;`（2026-10-25 ERB 语法缺口批 P2-1）。
@@ -69,10 +82,9 @@ export function isErbCommentLine(trimmed: string): boolean {
  * PRINT 变体与条件块留给 v0.2。
  */
 
-/** 行内换行归一（插件内自带，不依赖 kernel——插件只允许依赖 plugin-api） */
-function normalizeEol(text: string): string {
-  return text.replace(/\r\n?/g, '\n');
-}
+/**
+ * 行内换行归一/切行 —— **契约层那一份**（`@kojo/plugin-api/eol`，R7B 收口；见文件头 import 注）。
+ */
 
 /** 顶层分隔符切分（感知括号与双引号；用于参数表） */
 export function splitTopLevel(s: string, sep: string): string[] {
@@ -319,7 +331,7 @@ export function detachString(value: string): string {
 
 /** 解析单文件文本（**纯函数**）。`preSplit` = 已归一化并切好的行数组（`splitErbLines` 的产物），不传则就地切 */
 export function parseErbText(text: string, path = '<memory>', preSplit?: readonly string[]): ErbFile {
-  const lines = preSplit ?? normalizeEol(text).split('\n');
+  const lines = preSplit ?? splitEolLines(text);
   const lineCount = lines.length;
 
   const functions: ErbFunction[] = [];
@@ -614,7 +626,7 @@ export interface ControlFlowLine {
  * 排查成本极高。屏蔽规则（注释、`@`/`#`/`$`、`[SKIPSTART]…[SKIPEND]`）从此只写在这里。
  */
 export function forEachControlFlowLine(text: string, visit: (l: ControlFlowLine) => void): void {
-  const lines = normalizeEol(text).split('\n');
+  const lines = splitEolLines(text);
   let inSkipBlock = false;
   for (let i = 0; i < lines.length; i++) {
     // 代码前缀（`;!;` / `;#;`）先剥掉：`;!;[SKIPSTART]` 要真的开停用区，

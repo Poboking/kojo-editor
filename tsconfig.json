@@ -17,6 +17,7 @@
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {
+      "@kojo/plugin-api/*": ["./packages/plugin-api/src/*.ts"],
       "@kojo/plugin-api": ["./packages/plugin-api/src/index.ts"],
       "@kojo/kojo-project-kit": ["./packages/kojo-project-kit/src/index.ts"],
       "@kojo/kojo-core": ["./packages/kojo-core/src/index.ts"],

@@ -42,6 +42,7 @@
  * 该态直接重试。**检查中 / 已最新 / 检查失败都不出弹窗**：`updateDialogPhase` 是唯一判据。
  */
 
+import { normalizeEol } from '@kojo/plugin-api/eol';
 import {
   compareVersions,
   coreVersion,
@@ -172,7 +173,7 @@ export const UPDATE_NOTE_LINE_LIMIT = 400;
  */
 export function normalizeUpdateNotes(notes: string | undefined): string | undefined {
   if (notes === undefined) return undefined;
-  const text = notes.replace(/\r\n?/g, '\n');
+  const text = normalizeEol(notes);
   return text.trim() === '' ? undefined : text;
 }
 

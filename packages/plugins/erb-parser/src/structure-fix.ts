@@ -1,3 +1,4 @@
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import type { EditorTextEdit, ErbStructureIssue, LineDecoration } from '@kojo/plugin-api';
 import { checkControlFlowStructure, structureIssueCode } from './structure';
 /**
@@ -62,7 +63,7 @@ function isRequested(diagnostic: LineDecoration, requested: readonly LineDecorat
 
 /** 与 `scanner.normalizeEol` 同一口径：行号坐标系必须和体检器一致 */
 function toLines(text: string): string[] {
-  return text.replace(/\r\n?/g, '\n').split('\n');
+  return splitEolLines(text);
 }
 
 /** 取某一行的原文（越界 / 陈旧行号一律给空串，调用方据此放弃动作而不是崩） */

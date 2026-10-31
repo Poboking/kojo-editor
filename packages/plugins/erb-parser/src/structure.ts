@@ -1,3 +1,4 @@
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import type { EditorDocumentSymbol, ErbFile, ErbFunction, ErbStructureIssue } from '@kojo/plugin-api';
 import { ERB_SKIP_MARKERS, erbPreprocRoleOf, isErbDeclarationPath } from '@kojo/plugin-api';
 import { checkDeclarationIssues } from './declarations';
@@ -191,7 +192,7 @@ export function preprocMarkerAt(lineText: string): PreprocMarkerRead | null {
  */
 export function checkPreprocStructure(text: string): ErbStructureIssue[] {
   const issues: ErbStructureIssue[] = [];
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lines = splitEolLines(text);
   const open: { kind: string; line: number }[] = [];
   let inSkipBlock = false;
 
@@ -334,7 +335,7 @@ export function collectPreprocDeadRanges(
   definedMacros: ReadonlySet<string> | null | undefined,
 ): PreprocDeadRange[] {
   if (definedMacros === null || definedMacros === undefined) return [];
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lines = splitEolLines(text);
   const stack: PreprocFrame[] = [];
   const raw: PreprocDeadRange[] = [];
   let inSkipBlock = false;
@@ -444,7 +445,7 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
   const issues: ErbStructureIssue[] = [];
   let stack: OpenBlock[] = [];
   /** 行尾多空行也算一行：追加点要指着"最后一行之后"，与 walker 用同一种归一 */
-  const lastLine = text.replace(/\r\n?/g, '\n').split('\n').length;
+  const lastLine = splitEolLines(text).length;
 
   /**
    * 栈里剩下的开块 = 到这里还没闭合。

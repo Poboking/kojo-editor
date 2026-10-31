@@ -336,21 +336,35 @@ export class FileIOServiceImpl implements FileIO {
    * 批量读文本（2026-10-16 批量 IO 批）：
    * 批量 stat 校验会话缓存 → 未命中者按批 `readFilesRaw`（每批一趟 IPC）→ 逐文件解码。
    * 失败位为 null（与 `readText` 抛错的失败条件一致；批量语义下不整批抛）。
+   *
+   * **只给"可能命中"的路径付 stat（R7B，2026-10-31）**：旧形态对入参**全部**路径批量
+   * stat，再拿 stat 结果去表里查——可表里根本没有的路径，无论 stat 说什么都是 miss。
+   * 冷开（表空）那一轮等于白付 4,258 次 stat / 9 趟 IPC（真语料 4,072 文件实测约
+   * **300–420ms**，且全在主线程的等待路径上）；热轮（refs / 抽取 / 校验的重复消费）表里
+   * 有货，stat 次数不变，命中判据一字未动。
+   *
+   * 本方法**不降级成 `peekTexts`**：缓存新鲜度必须由 mtime+size 自证（见那枚方法的注）。
+   * `peekTexts` 是"调用方自己能证明新鲜"时的零 IPC 路，两条腿各管一段。
    */
   async readTexts(paths: readonly string[]): Promise<Array<TextFile | null>> {
     if (paths.length === 0) return [];
     const out: Array<TextFile | null> = new Array(paths.length).fill(null);
 
-    // 1) 缓存命中判定：批量 stat（小载荷）。mtime+size 任一缺失或不等 ⇒ 判未命中（保守）。
+    // 1) 分流：表里有 ⇒ 才需要 stat 自证新鲜；表里没有 ⇒ 必 miss，不必为它付这趟 IPC。
+    const maybeHit: number[] = [];
     const missIdx: number[] = [];
-    for (let start = 0; start < paths.length; start += STAT_CHUNK_SIZE) {
-      const end = Math.min(start + STAT_CHUNK_SIZE, paths.length);
-      const chunk = paths.slice(start, end);
+    for (let i = 0; i < paths.length; i++) {
+      if (this.textCache.has(pathKey(paths[i]!))) maybeHit.push(i);
+      else missIdx.push(i);
+    }
+    for (let start = 0; start < maybeHit.length; start += STAT_CHUNK_SIZE) {
+      const idx = maybeHit.slice(start, start + STAT_CHUNK_SIZE);
+      const chunk = idx.map((i) => paths[i]!);
       const stats = await this.bridge.statFiles(chunk);
-      for (let k = 0; k < chunk.length; k++) {
+      for (let k = 0; k < idx.length; k++) {
+        const i = idx[k]!;
         const st: BatchFileStat | undefined = stats[k];
-        const key = pathKey(chunk[k]!);
-        const cached = this.textCache.get(key);
+        const cached = this.textCache.get(pathKey(paths[i]!));
         if (
           cached &&
           st?.exists === true &&
@@ -361,13 +375,16 @@ export class FileIOServiceImpl implements FileIO {
           cached.mtimeMs === st.mtimeMs &&
           cached.size === st.size
         ) {
-          out[start + k] = cached.file;
+          out[i] = cached.file;
           this.textCacheHits++;
         } else {
-          missIdx.push(start + k);
+          missIdx.push(i);
         }
       }
     }
+    // 分段收集会打乱顺序（先"表里没有"、后"表里有但过期"）⇒ 复原成入参升序：
+    // 读批的磁盘局部性与调用方顺序一致，也让同一批输入在同一缓存状态下发出同一串读请求
+    missIdx.sort((a, b) => a - b);
     // 2) 未命中：按批读（一批一趟 IPC），逐文件解码、入缓存
     for (let start = 0; start < missIdx.length; start += READ_BATCH_SIZE) {
       const idx = missIdx.slice(start, start + READ_BATCH_SIZE);

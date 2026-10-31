@@ -28,6 +28,7 @@
  * - 全部入参 / 返回值 readonly，零 `any`；错误只以字符串消息露出，不吞成静默；
  * - 整批默认 fail-closed：只要有一个文件阻断，`applyMigratePlan` 一个字节都不写。
  */
+import { normalizeEol, splitEolLines } from '@kojo/plugin-api/eol';
 import {
   migrateKojoSourceSemantic,
   summarizeMigration,
@@ -874,14 +875,14 @@ async function rollbackAndReport(
 
 /** 按 `\n` 切行；丢掉末尾换行产生的伪空行（与迁移引擎的 `readSource` 同口径） */
 function splitLines(text: string): string[] {
-  const parts = text.replace(/\r\n?/g, '\n').split('\n');
+  const parts = splitEolLines(text);
   if (parts.length > 0 && parts[parts.length - 1] === '') parts.pop();
   return parts;
 }
 
 /** readback / stale 判等用：内核读文本已归一化，这里再兜一层 CRLF 源 */
 function normalizeText(text: string): string {
-  return text.replace(/\r\n?/g, '\n');
+  return normalizeEol(text);
 }
 
 function writePlanFor(targetPath: string): MigrateWritePlan {

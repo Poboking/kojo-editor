@@ -10,6 +10,7 @@ import type {
   SymbolToken,
 } from '@kojo/plugin-api';
 import { isErbDialectPath, MODEL_TOKEN_CLASS, unicodeTokenAt } from '@kojo/plugin-api';
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import { detachString, erbCodePrefixLength } from './scanner';
 
 /**
@@ -87,15 +88,17 @@ export function forEachRef(
   }
 }
 
-/** 行内换行归一（与 scanner 同规则；插件内自带，不依赖 kernel） */
-function normalizeEol(text: string): string {
-  return text.replace(/\r\n?/g, '\n');
-}
-
-/** 归一化换行后**切一次行**（`visibleCodeLines` / `parseErbText` 共用）：24,197 行实测 2.6 ms，
- *  贵的是每多一家消费方就多一遍整篇遍历（16.8 ms/遍） */
+/**
+ * 归一化换行后**切一次行**（`visibleCodeLines` / `parseErbText` 共用）：24,197 行实测 2.6 ms，
+ * 贵的是每多一家消费方就多一遍整篇遍历（16.8 ms/遍）。
+ *
+ * R7B（2026-10-31）：实现收口到 `@kojo/plugin-api/eol::splitEolLines`，且**不再先 join
+ * 回整串再切**——旧写法 `replace(/\r\n?/g,'\n').split('\n')` 在真语料 1.17 亿码元上单遍
+ * **2,415ms**，新写法在已归一化的正文上 `indexOf('\r')` 直接命中 ⇒ **< 1ms**，有 `\r`
+ * 时也只切一遍（836ms）。产出逐元素相等（`plugin-api/tests/eol.test.ts` 钉死）。
+ */
 export function splitErbLines(text: string): readonly string[] {
-  return normalizeEol(text).split('\n');
+  return splitEolLines(text);
 }
 
 /**
@@ -809,7 +812,7 @@ export function erbReferenceLocationsAt(
   if (!Number.isFinite(line) || !Number.isFinite(column)) return [];
   const n = Math.trunc(line);
   if (n < 1) return [];
-  const lineText = text.replace(/\r\n?/g, '\n').split('\n')[n - 1];
+  const lineText = splitEolLines(text)[n - 1];
   if (lineText === undefined) return [];
   const token = functionNameTokenAt(lineText, Math.trunc(column));
   if (!token) return [];

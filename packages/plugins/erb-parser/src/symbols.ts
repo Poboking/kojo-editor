@@ -1,3 +1,4 @@
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import type {
   EditorCallHierarchyGroup,
   EditorCallHierarchySite,
@@ -246,7 +247,7 @@ export function labelScopeAt(
   if (!Number.isFinite(line) || !Number.isFinite(column)) return null;
   const n = Math.trunc(line);
   if (n < 1) return null;
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lines = splitEolLines(text);
   const lineText = lines[n - 1];
   if (lineText === undefined) return null;
   const entry = labelDefinitionAt(lineText, column) ?? jumpSlotAt(lineText, column);
@@ -423,7 +424,7 @@ export function isErbDimNameChar(ch: string | undefined): boolean {
 }
 
 /** 归一变行后切行（1 基行号 = 下标 + 1；与解析器同规则） */
-const linesOf = (text: string): string[] => text.replace(/\r\n?/g, '\n').split('\n');
+const linesOf = (text: string): string[] => splitEolLines(text);
 
 /** 一行 `#DIM*`：名字与指令取 `parseDimDeclaration`，本函数只补名字起始列 */
 export function dimDeclarationOf(line: string): ErbDimDeclaration | null {
@@ -773,7 +774,7 @@ function occurrenceAt(scope: ErbLabelScope, line: number, column: number): ErbLa
  */
 export function kojoLabelMentions(text: string, normalizedName: string): boolean {
   const want = normalizedName.toUpperCase();
-  for (const raw of text.replace(/\r\n?/g, '\n').split('\n')) {
+  for (const raw of splitEolLines(text)) {
     const code = raw.replace(/;.*$/, '').trim();
     if (code.length === 0) continue;
     const sugar = /^(?:标签|跳到)\s+(\S+)/.exec(code);
@@ -805,7 +806,7 @@ export function resolveErbRenameAt(
   column: number,
 ): ErbRenameResolution {
   if (!Number.isFinite(line) || !Number.isFinite(column) || line < 1) return { kind: 'none' };
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lines = splitEolLines(text);
   const lineText = lines[Math.trunc(line) - 1] ?? '';
   const scope = labelScopeAt(text, path, Math.trunc(line), Math.trunc(column));
   const labelHit = scope === null ? undefined : occurrenceAt(scope, Math.trunc(line), Math.trunc(column));

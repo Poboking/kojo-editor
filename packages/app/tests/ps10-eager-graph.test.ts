@@ -1098,11 +1098,39 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ⇒ **闸值不动（仍 ≤3,502 KB / 199 文件）**，但字节余量只剩 **86 B**（翻到 3,503 KB
     //     需 3,586,560 B）。下一笔进图字节**必红**：要么按 PITFALLS 278 逐文件点名抬一档，
     //     要么先挪一枚出图；不要指望"取整还差一点"能再混一批。
+    //
+    //   - **R7B 换行归一收口（变基到语言面第七波之后，2026-10-31）**：读数 **200 文件 / 3,509 KB**
+    //     （3,593,324 B = 上一条的 3,586,474 + **6,850**）——**新进图一枚**：
+    //     `plugin-api/src/eol.ts` **+3,316 B**（契约层零依赖叶子：`normalizeEol` /
+    //     `splitEolLines`，全仓 26 处 `replace(/\r\n?/g,'\n')` 判据收口到这一份）。
+    //     图内既有文件按「现树 `stat` vs `origin/dev` 同路径 `git cat-file -s`」实测，逐枚点名
+    //     （**差值求和 6,850 B，与实测总差逐字相符**）：
+    //     · `kernel/src/io.ts` **+1,183**（`readTexts` 只给"表里可能命中"的路径付 stat）、
+    //       `plugins/erb-parser/src/scanner.ts` **+902**（改引契约层叶子，删私有复制）、
+    //       `kernel/src/encoding.ts` **+756**（`normalizeEol` 转一手 + `detectEol` 改
+    //       `indexOf('\n')` 跳跃式）、`plugins/erb-parser/src/references.ts` **+275**、
+    //       `plugin-api/src/semantic-locate.ts` **+231**（`splitModelLines` 转一手）；
+    //     · `app/src/ui/kojo2-migrate-model.ts` **+37**，另六枚各 **+33**（一行 import 与一处
+    //       调用替换）：`app/src/ui/kojo2-cutover.ts`、`condition-extractor/src/{engine,offload}.ts`、
+    //       `erb-parser/src/{declarations,erh,structure-fix}.ts`；
+    //     · 三枚**收缩**：`erb-parser/src/{completion,structure}.ts` 各 **−9**、`symbols.ts` **−30**
+    //       ——删掉的私有 `normalizeEol` 与"先 join 回整串再 split"比新加的 import 还多。
+    //     ⇒ 闸 **3,502 → 3,509**、**文件闸 199 → 200**。这一档是**架构 + 性能**：同一条换行判决
+    //     此前写着 26 份，索引链路上同一份正文被"全文正则替换"了 5 遍；收口后真语料冷开
+    //     `read+parse` 6,095 → 5,274ms（探针 3 轮中位；**单跑读数，A/B 交替的真值是 0.958，
+    //     见 PITFALLS 295③ 的更正**）。
+    //     口径注意：闸比的是 `Math.round(totalBytes/1024)`，`round(x) ≤ 3,509` 的临界是
+    //     3,593,728 B ⇒ 现树余量只有 **404 B**。下一笔进图字节必红，届时照 PITFALLS 278
+    //     逐文件点名再抬。
+    //     另：本批还改了五枚**不在图里**的文件（`ui/update-check.ts` +43、
+    //     `monaco/user-snippet-completion.ts` +43、`monaco/erb-dim-navigation.ts` +33、
+    //     `convention-linter/src/diagnostics.ts` +33、`state-replay/src/engine.ts` +33），
+    //     全在懒边 ⇒ 对图零字节零文件，故不上账。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,502 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤200 文件 / ≤3,509 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_502);
-    expect(files.length).toBeLessThanOrEqual(199);
+    expect(totalKb).toBeLessThanOrEqual(3_509);
+    expect(files.length).toBeLessThanOrEqual(200);
   });
 
   /**

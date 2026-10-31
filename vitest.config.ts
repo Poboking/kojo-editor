@@ -10,6 +10,8 @@ export const config = defineConfig({
   resolve: {
     extensions: ['.ts', '.tsx', '.mts', '.js', '.jsx', '.mjs', '.cjs', '.json'],
     alias: {
+      // 契约层零依赖叶子：**排在桶之前**（alias 口径是「等于 find」或「以 find + / 开头」）
+      '@kojo/plugin-api/eol': r('./packages/plugin-api/src/eol.ts'),
       '@kojo/plugin-api': r('./packages/plugin-api/src/index.ts'),
       '@kojo/kojo-core': r('./packages/kojo-core/src/index.ts'),
       // 语言面库：叶子**必须排在桶之前**（alias 的匹配口径是「等于 find」或

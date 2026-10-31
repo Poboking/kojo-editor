@@ -253,6 +253,10 @@ export default defineConfig({
   plugins: [react(), injectAppVersion()],
   resolve: {
     alias: {
+      // 契约层的零依赖叶子（换行归一切行）：**必须排在桶之前**，理由同下面 kojo-lang
+      // 那一族——alias 的匹配口径是「等于 find」或「以 `find + /` 开头」，桶在前会把
+      // `/eol` 一起吃掉（落回 index.ts 的桶 ⇒ 裸 node 消费方解析失败）。
+      '@kojo/plugin-api/eol': r('../plugin-api/src/eol.ts'),
       '@kojo/plugin-api': r('../plugin-api/src/index.ts'),
       // 语言面库的叶子**必须排在桶之前**：alias 的匹配口径是
       // 「等于 find」或「以 `find + /` 开头」，桶若在前会把 `/constants` 也吃掉。

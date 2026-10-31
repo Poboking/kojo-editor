@@ -10,6 +10,7 @@
  * 文本缓存与内联缓存随项目生命周期（`resetCaches`，装配层在 project.closed 调用）。
  */
 
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import type {
   FunctionPredicate,
   FunctionPredicates,
@@ -174,7 +175,7 @@ export class StateReplayEngine implements StateReplayService {
           return hit;
         }
         const text = await deps.readFileText(path);
-        const lines = text.replace(/\r\n?/g, '\n').split('\n');
+        const lines = splitEolLines(text);
         this.putLines(path, lines);
         return lines;
       },

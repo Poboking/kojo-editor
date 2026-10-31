@@ -37,6 +37,7 @@
  * 只在作者真撞上时说话。
  */
 
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import type { ErbStructureIssue } from '@kojo/plugin-api';
 import { builtinSignatureOf } from './builtins';
 import { isInstructionName } from './instructions';
@@ -294,7 +295,7 @@ const FUNCTION_MARKER = /^#FUNCTIONS?(?![A-Za-z0-9_])(\s|$)/i;
  */
 export function checkDeclarationIssues(text: string): ErbStructureIssue[] {
   const issues: ErbStructureIssue[] = [];
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lines = splitEolLines(text);
 
   /** 当前函数（`@` 头）；`isExpr` 由 `#FUNCTION` 标记点亮 */
   let cur: { name: string; isExpr: boolean } | null = null;

@@ -1,3 +1,4 @@
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import type * as Monaco from './entry';
 import type { EditorSymbolLocation } from '@kojo/plugin-api';
 import { resolveErbDimDefinition } from '@kojo/plugin-erb-parser';
@@ -115,7 +116,7 @@ export function derivedLegSurfaceOf(model: Monaco.editor.ITextModel): DerivedLeg
 
 /** 归一化换行后切行（1 基行号 = 下标 + 1；与解析器同规则） */
 function linesOf(text: string): string[] {
-  return text.replace(/\r\n?/g, '\n').split('\n');
+  return splitEolLines(text);
 }
 
 /**

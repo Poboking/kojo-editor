@@ -73,6 +73,7 @@
  * 少报一行不痛；把前缀表扩成三枚是另一件事（会同时改高亮与 scanner 的口径）。
  */
 
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import type { ErbStructureIssue } from '@kojo/plugin-api';
 import { ERB_CONTINUATION_MARKERS, erbContinuationJoin, erbContinuationRoleOf } from '@kojo/plugin-api';
 import { erbCodeBodyOf, isErbCommentLine } from './scanner';
@@ -111,7 +112,7 @@ function headWordOf(body: string): string {
  */
 export function checkHeaderIssues(text: string): ErbStructureIssue[] {
   const issues: ErbStructureIssue[] = [];
-  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  const lines = splitEolLines(text);
 
   const push = (line: number, statement: string, message: string): void => {
     if (issues.length < HEADER_ISSUE_CAP) {

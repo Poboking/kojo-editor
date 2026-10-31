@@ -24,6 +24,7 @@
  */
 
 import { isPathUnder } from './paths';
+import { splitEolLines } from './eol';
 
 /** 记号字符集（Unicode 字母 / 数字 / 下划线）的**字面源**：单字符判定与整体分词都从它组装 */
 export const MODEL_TOKEN_CLASS = String.raw`[\p{L}\p{N}_]`;
@@ -74,9 +75,11 @@ export function unicodeTokenAt(lineText: string, column: number): { startColumn:
   return { startColumn: start + 1, endColumn: end + 1, text: lineText.slice(start, end) };
 }
 
-/** 换行归一并切成行数组（与 `parseErbText` / `scanFileRefs` 逐字同一条规则：`\r\n` 与裸 `\r` 都算一行） */
+/** 换行归一并切成行数组（`\r\n` 与裸 `\r` 都算一行）——**实现收口在 {@link ./eol}**（R7B）：
+ *  这条规则此前在仓里写着 6 份，`parseErbText` / `scanFileRefs` / 条件抽取 / 约定校验
+ *  各抄一遍 ⇒ 同一条判决有六个可能的漂移点。本函数只剩"叫那个名字"这一件事。 */
 export function splitModelLines(text: string): string[] {
-  return text.replace(/\r\n?/g, '\n').split('\n');
+  return splitEolLines(text);
 }
 
 /** 取 1 基行号的原文（`modelLineAt`：与 `structure-fix.ts` 那个会夹取的 `lineAt` 区分——这里越界**必须**给 undefined）；越界 → `undefined`（调用方据此**不画**，不夹取——夹取会把颜色画到别的行上） */

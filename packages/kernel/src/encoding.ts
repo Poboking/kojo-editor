@@ -1,5 +1,6 @@
 import type { DecodeBomRule, FileEncoding } from '@kojo/plugin-api';
 import { DECODE_LABEL, DECODE_PROBE_POLICY } from '@kojo/plugin-api';
+import { normalizeEol as normalizeEolContract } from '@kojo/plugin-api/eol';
 
 /**
  * 编码探测与换行处理。
@@ -159,19 +160,21 @@ export type EolStyle = 'crlf' | 'lf';
  * 返回 'lf'，从而被整文件重写。逐行保真把这两条都堵住了。
  */
 export function detectEol(text: string): EolStyle {
+  // 快筛：正文里一个 `\r` 都没有 ⇒ 全是 LF（含无换行的纯文本）。真语料 4,072 份里
+  // 只有 30 份走这条，但它把"空文件 / 纯 ASCII 小文件"这一类零成本滤掉。
+  if (text.indexOf('\r') < 0) return 'lf';
+  // R7B（2026-10-31）：**按 `\n` 跳跃**而不是逐字符 `charCodeAt`。`indexOf` 在 V8 里是
+  // 字节级的 memchr，1.17 亿码元真语料实测 **465ms → 274ms**（`\n` 数约 436 万，跳跃次数
+  // 只有逐字符扫描的 1/27）。判据与旧实现逐位等价：`\r\n` 里的 `\n` 前驱是 `\r` ⇒ 记
+  // crlf；其余 `\n` 记 lf；孤立 `\r` 不进任何桶——与旧实现 `i++` 跳过的口径相同。
   let crlf = 0;
   let lf = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charCodeAt(i);
-    if (c === 13 /* \r */) {
-      if (text.charCodeAt(i + 1) === 10) {
-        crlf++;
-        i++;
-      }
-      // 孤立 \r（旧 Mac）不参与多数派计数
-    } else if (c === 10 /* \n */) {
-      lf++;
-    }
+  let i = -1;
+  for (;;) {
+    i = text.indexOf('\n', i + 1);
+    if (i < 0) break;
+    if (i > 0 && text.charCodeAt(i - 1) === 13 /* \r */) crlf++;
+    else lf++;
   }
   return crlf > lf ? 'crlf' : 'lf';
 }
@@ -179,28 +182,27 @@ export function detectEol(text: string): EolStyle {
 /**
  * 归一化为内部表示（`\n`）——编辑器模型/逐行比较的规范形态。
  *
- * MEM-16：**不得**用 `text.replace(/\r\n?/g, '\n')`。V8 的 `String.prototype.replace`
- * 在"真发生替换且结果够长"时产出 **ConsString（绳索）**：`%DebugPrint` 报
- * `CONS_TWO_BYTE_STRING_TYPE`，实测驻留 **5.68 B/字符**（2,000 份真语料 CRLF 形态
- * 193.9 MB），而这串会被 `readText`/`readTexts` 长期持在会话文本缓存里。
+ * **实现已收口到契约层**（R7B，2026-10-31）：`@kojo/plugin-api/eol` 是唯一一份，本函数
+ * 只转一手。收口理由：同一条判决此前在仓里写着 6 份（本文件、`erb-parser` 的 scanner /
+ * references、`condition-extractor` ×2、`convention-linter`、`plugin-api` 的
+ * `splitModelLines`），其中 5 份是 `text.replace(/\r\n?/g, '\n')` 的字面复制 ⇒ 索引链路上
+ * 同一份正文被"全文正则替换"了 5 遍（真语料 1.17 亿码元实测 2,415ms/遍）。契约层那一份
+ * 再补了 `splitEolLines`（切行不再先 join 回整串），单遍 836ms。
  *
- * 现写法：先 `indexOf('\r')` 探"有没有要改的"——绝大多数文件（eraTW 真语料 3,818 份里
- * 只有 3 份含 `\r`）走这条**零拷贝**路（返回入参本身，与旧写法 no-match 时的行为一致，
- * 且比 `replace` 的全文扫描更快：13.2ms vs 18.2ms/2,000 份）；有 `\r` 才按同一个
- * 分隔符集合 `split` 后 `join('\n')`。
- *
- * 为什么 `join` 保证平铺：V8 的 `Array.prototype.join` 走 `StringBuilderConcat`，
- * 它先算总长、再 `NewRawOneByteString`/`NewRawTwoByteString` 分配一条平铺串并逐段
- * `WriteToFlat` 拷贝（不建绳索）。实测 30,001 段 / 165,000 字符仍报
+ * MEM-16 的读数仍然成立、仍是"不许改回 `replace`"的依据：V8 的
+ * `String.prototype.replace` 在"真发生替换且结果够长"时产出 **ConsString（绳索）**，
+ * `%DebugPrint` 报 `CONS_TWO_BYTE_STRING_TYPE`，实测驻留 **5.68 B/字符**（2,000 份真语料
+ * CRLF 形态 193.9 MB），而这串会被 `readText`/`readTexts` 长期持在会话文本缓存里。
+ * 现写法先 `indexOf('\r')` 探"有没有要改的"（无 ⇒ 零拷贝返回入参），有 `\r` 才
+ * `split` + `join('\n')`——`join` 走 `StringBuilderConcat`，先算总长再分配一条平铺串
+ * 逐段 `WriteToFlat` 拷贝（不建绳索），实测 30,001 段 / 165,000 字符仍报
  * `SEQ_TWO_BYTE_STRING_TYPE`，驻留 2.01 B/字符。
  *
- * 等价性：`/\r\n?/` 只把 `\r\n` 与孤立 `\r` 各算一个分隔符，`split(/\r\n|\r|\n/)`
- * 的切分点与之逐位相同，`join('\n')` 的产物与旧实现逐字相等（含尾部/连续分隔符
- * 产生的空段；2,000 份语料逐串比对 0 处不等）。
+ * 等价性（`/\r\n?/` ↔ `split(/\r\n|\r|\n/)`）由 `plugin-api/tests/eol.test.ts` 以旧写法为
+ * 参照实现钉死；本仓不再有第二份实现。
  */
 export function normalizeEol(text: string): string {
-  if (text.indexOf('\r') < 0) return text;
-  return text.split(/\r\n|\r|\n/).join('\n');
+  return normalizeEolContract(text);
 }
 
 /**

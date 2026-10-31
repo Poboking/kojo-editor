@@ -5,6 +5,7 @@
   "description": "Public plugin API contracts for kojo-editor. The only shared API surface between the kernel and plugins.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./eol": "./src/eol.ts"
   }
 }

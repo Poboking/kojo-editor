@@ -594,7 +594,13 @@ describe('FileIOService · PS-2 缓存闸 / 懒指纹 / peekTexts / 换项目清
     expect(pa?.text).toBe('@A\n');
     expect(pb).toBeNull();
     expect(stats.readFilesRaw).toBe(1); // 还是 readTexts 那一趟
-    expect(stats.statFiles).toBe(1); // peek 没有追加任何 stat 趟
+    // R7B：**表里没有的路径不再为"自证新鲜"付 stat**——冷读一次 stat 都不发
+    // （旧形态对入参全量 stat，冷开那一轮白付 4,258 次，见 `readTexts` 方法注）
+    expect(stats.statFiles).toBe(0); // peek 没有追加任何 stat 趟，readTexts 也不为冷路径白付
+    // 热读（表里有 a）才走 stat 自证：这一次必须发，且只发一趟；命中后不再读盘
+    await io.readTexts([a]);
+    expect(stats.statFiles).toBe(1);
+    expect(stats.readFilesRaw).toBe(1);
 
     const dbg = io.debugCaches().text;
     expect(dbg.hits).toBeGreaterThan(0); // peek 计入命中观测面
