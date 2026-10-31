@@ -53,7 +53,7 @@
   scrollbar-gutter: stable;
   /* 底部留白 + 渐隐（视觉批十三）：滚到底不切半行；渐隐区只在滚动中途起作用 */
   padding: var(--space-1) 0 20px;
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  mask-image: var(--scroll-fade);
   font-size: var(--fs-1);
   /* 长列表隔离带（口径同 problem-panel.css）：结果集上限 2,000 条，窗口每换一次就换几十行，
      不隔离时整棵子树都要重排重绘；`paint` 把重绘收在盒内（高亮行、命中闪动都在行内）。 */

@@ -245,15 +245,18 @@ describe('滚动族：几何走 token、渐隐有原语、一条不重抄', () =
     expect(offenders, `这些滚动条声明回到裸 px 了：\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  it('两处"本批故意没收"的口子必须仍然在册（欠账不许静默变成现状）', () => {
-    // ① 六条把手里唯独编辑器分隔条的热态仍是中性灰：它的**终值**被 B-5 的逐字对拍台账钉着
-    //    （那批的承诺是"零视觉变化"），改色＝替别人改写判据。收它要先由该闸 owner 把口径从
-    //    "终值对拍"迁到"落点在册"。看板 AE-SPLIT4。
+  it('仍欠着的一处口子必须在册；已收口的一处必须留下收口证据（欠账不许静默变成现状）', () => {
+    // ① **仍欠**：六条把手里唯独编辑器分隔条的热态仍是中性灰：它的**终值**被 B-5 的逐字对拍
+    //    台账钉着（那批的承诺是"零视觉变化"），改色＝替别人改写判据。收它要先由该闸 owner 把
+    //    口径从"终值对拍"迁到"落点在册"。看板 AE-SPLIT4。
     expect(declOf(HEAVY, '.editor-divider:active', 'background')).toBe('var(--wash-gray-strong)');
     // 台账标记在**注释**里（判据注释不算活声明，故这里读原文而不是 strip 后的正文）
     expect(read('styles-project.css')).toMatch(/AE-SPLIT4/);
-    // ② 滚动渐隐仍是四处各抄一份 mask：收口成一条原语会撞 `ui-chrome-polish.test.ts` 三条
-    //    "读元素自己那一格"的判据。看板 AE-SCROLLFADE。
+    // ② **已收口（2026-10-31）**：滚动渐隐不再是四处各抄一份——配方落 `tokens.css` 两枚 token，
+    //    四个滚动面（`.tree-groups` / `.nav-tree` / `.ksp-results` / `.editor-tabs`）只引 `var()`。
+    //    收口顺序照当初的欠账注记来：**先把 `ui-chrome-polish.test.ts` 的判据迁到"读 token +
+    //    读类名在册"，再落的原语**（反着做会先红后绿两次）。
+    //    这条从"欠账在册"转成常态判据：谁再抄回一份自写配方就红。
     const copiers = [
       'styles.css',
       'styles-project.css',
@@ -263,11 +266,11 @@ describe('滚动族：几何走 token、渐隐有原语、一条不重抄', () =
       'problem-panel.css',
       'market.css',
     ].filter((f) => /mask-image:\s*linear-gradient\(\s*to (bottom|right),\s*#000/.test(strip(read(f))));
-    expect(copiers, '这两处口子一处被真收口、另一处判据没跟上，也要红给人看').toEqual([
-      'styles-project.css',
-      'search-panel.css',
-    ]);
+    expect(copiers, '渐隐配方又被抄回去了（应只引 tokens.css 的 --scroll-fade[-x]）').toEqual([]);
     expect(read('tokens.css')).toMatch(/AE-SCROLLFADE/);
+    for (const f of ['styles-project.css', 'search-panel.css']) {
+      expect(read(f), `${f} 不再引渐隐 token`).toContain('var(--scroll-fade');
+    }
   });
 
   it('五条把手同吃 --split-*（第六条故意留档），市场那条滚动条宽高成对', () => {

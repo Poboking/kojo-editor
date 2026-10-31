@@ -44,17 +44,51 @@ describe('视觉批十三 · 壳层打磨的防回退判据', () => {
     expect(body).toContain('font-size: var(--fs-2)');
   });
 
-  it('三个滚动列表都是「底部留白 + 渐隐」，且留白不小于渐隐带（到底整行可见）', () => {
+  it('四个滚动面都是「底部留白 + 同一份渐隐配方」，留白不小于渐隐带（到底整行可见）', () => {
+    const { y } = fadeSizes();
     const project = read('styles-project.css');
-    const trees = webkit(ruleBody(project, '.tree-groups'));
-    expect(trees.pad).toBeGreaterThanOrEqual(trees.fade);
+
+    // ① 树列表：留白 ≥ 渐隐带（数值仍比，避免"引了 token 但留白不够"的假绿）
+    const trees = ruleBody(project, '.tree-groups');
+    const pad = Number(/padding:\s*0 0 (\d+)px/.exec(trees)?.[1] ?? -1);
+    expect(pad, '树列表缺底部留白').toBeGreaterThan(0);
+    expect(pad).toBeGreaterThanOrEqual(y);
+    expect(trees).toContain('mask-image: var(--scroll-fade)');
+
+    // ② 导航树 / ③ 检索结果：同一枚纵向 token
     const nav = ruleBody(project, '.nav-tree,\n.nav-hits');
-    expect(nav).toContain('mask-image');
+    expect(nav).toContain('mask-image: var(--scroll-fade)');
     expect(nav).toContain('padding: 6px 0 20px');
     const search = read('search-panel.css');
     const results = ruleBody(search, '.panel-search.ksp > .ksp-results');
-    expect(results).toContain('mask-image');
+    expect(results).toContain('mask-image: var(--scroll-fade)');
     expect(results).toContain('20px');
+
+    // ④ 标签条：横向那一枚（AE-SCROLLFADE 收口前它自写 `to right` 16px）
+    const tabs = ruleBody(project, '.editor-tabs');
+    expect(tabs).toContain('mask-image: var(--scroll-fade-x)');
+  });
+
+  it('渐隐配方只有一处真源：全站不许再自写 mask-image: linear-gradient', () => {
+    const tokens = read('tokens.css');
+    expect(tokens.match(/--scroll-fade(?:-x)?:/g), 'tokens.css 应恰好两枚配方').toHaveLength(2);
+    // 只钉"尺寸是 token、不是散装字面量"，**不钉具体像素**——改高度是设计决定，不该让这条红
+    expect(tokens).toMatch(/--scroll-fade-size:\s*\d+px/);
+    expect(tokens).toMatch(/--scroll-fade-x-size:\s*\d+px/);
+    // 消费方只许引 token：这几份 css 里出现自写配方就是回退（新增滚动面也照这条）
+    for (const css of [
+      'styles-project.css',
+      'search-panel.css',
+      'styles.css',
+      'tabs-bar.css',
+      'file-tree.css',
+      'problem-panel.css',
+      'outline-panel.css',
+      'market.css',
+      'settings-search.css',
+    ]) {
+      expect(read(css), `${css} 又自写了一份渐隐配方`).not.toMatch(/mask-image:\s*linear-gradient/);
+    }
   });
 
   it('浮层退场覆盖设置面：壳层保活 + 两处渲染都挂 `.ov-exiting`', () => {
@@ -86,11 +120,16 @@ describe('视觉批十三 · 壳层打磨的防回退判据', () => {
   });
 });
 
-/** 从 `.tree-groups` 的声明体里读留白与渐隐带（数值比较，避免"写了 mask 但留白不够"的假绿） */
-function webkit(body: string): { pad: number; fade: number } {
-  const pad = Number(/padding:\s*0 0 (\d+)px/.exec(body)?.[1] ?? -1);
-  const fade = Number(/calc\(100% - (\d+)px\)/.exec(body)?.[1] ?? -1);
-  expect(pad, '树列表缺底部留白').toBeGreaterThan(0);
-  expect(fade, '树列表缺渐隐带').toBeGreaterThan(0);
-  return { pad, fade };
+/**
+ * 渐隐带尺寸的**真源在 `tokens.css`**（AE-SCROLLFADE 收口）：各站点不再写自己的
+ * `calc(100% - Npx)`，所以这里也不能再从元素那一格里读像素——那样只能证明"有人写了数字"，
+ * 证明不了"四个面用的是同一份"。
+ */
+function fadeSizes(): { y: number; x: number } {
+  const tokens = read('tokens.css');
+  const y = Number(/--scroll-fade-size:\s*(\d+)px/.exec(tokens)?.[1] ?? -1);
+  const x = Number(/--scroll-fade-x-size:\s*(\d+)px/.exec(tokens)?.[1] ?? -1);
+  expect(y, '纵向渐隐带尺寸缺失').toBeGreaterThan(0);
+  expect(x, '横向渐隐带尺寸缺失').toBeGreaterThan(0);
+  return { y, x };
 }

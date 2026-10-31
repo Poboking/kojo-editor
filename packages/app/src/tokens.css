@@ -357,13 +357,22 @@
      轨道不是内容，读起来全站一根拇指。要改任何一格先算这条等式，别单点调。
      圆角跟 `--radius-sm`——4px 正好把 6px 的 thumb 收成胶囊，`--radius-xs`(2) 在细拇指上读成
      方条（上面 `--radius-xs` 那行"滚动条"注记已按现值改成"细指示条"，别照注释回改）。
-     滚动区**边缘渐隐**（mask）是另一族，与本族无关；那一族今天仍是四处各抄一份配方——
-     收口成一条原语会撞 `ui-chrome-polish.test.ts` 那三条"读元素自己那一格"的判据，
-     已按实测登记成看板 AE-SCROLLFADE，不在本批顺手做。 */
+     滚动区**边缘渐隐**（mask）是另一族，与本族无关。**已收口（AE-SCROLLFADE，2026-10-31）**：
+    配方只在下面这两枚 token 里，四个滚动面（`.tree-groups` / `.nav-tree` / `.ksp-results` /
+    `.editor-tabs`）一律 `mask-image: var(--scroll-fade[-x])`，不许再自写 gradient。
+    收口前是四处各抄一份、且撞着 `ui-chrome-polish.test.ts` 那三条"读元素自己那一格"的判据；
+    本轮先把判据迁到"读 token + 读类名在册"，再落的原语。
+    两枚而不是一枚是**故意的**：方向与尺寸都不同（纵 18 / 横 16），硬合成一条会让"横竖尺寸"
+    重新变成散装数字——那正是这一批要收掉的东西。 */
   --scroll-w: 10px;
   --scroll-w-slim: 8px;
   --scroll-gap: 2px;
   --scroll-gap-slim: 1px;
+  /* 滚动区边缘渐隐的真源（见上一条注记）：尺寸两枚、配方两枚；改高度只改尺寸那一枚。 */
+  --scroll-fade-size: 18px;
+  --scroll-fade-x-size: 16px;
+  --scroll-fade: linear-gradient(to bottom, #000 calc(100% - var(--scroll-fade-size)), transparent);
+  --scroll-fade-x: linear-gradient(to right, #000 calc(100% - var(--scroll-fade-x-size)), transparent);
   /* 分栏把手两态（美学批 1027）：全仓**六条**把手——壳层 `.resizer`、教程树底 `.kp-splitter`、
      命令矩阵行分隔 `.cm-split` 与列把手 `.cm-corner-resize`、底栏 `.dock-cell-resizer`、
      编辑器组 `.editor-divider`——按实测**分了三家**（口径比"四种颜色"更难看也更准）：

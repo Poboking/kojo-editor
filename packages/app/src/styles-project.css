@@ -841,7 +841,7 @@ textarea {
   scrollbar-width: none;
   /* 溢出渐隐（视觉批十六）：右侧压淡 16px 作"还有标签在后面"的信号；滚动与列表入口
      仍是旁边那组 `.tab-overflow-tools` 的按钮，这里不加计数（数量由列表承担）。 */
-  mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent);
+  mask-image: var(--scroll-fade-x);
 }
 .editor-tabs::-webkit-scrollbar {
   display: none;
@@ -1047,7 +1047,7 @@ textarea {
   padding: 0 0 20px;
   overflow: auto;
   flex: 1;
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  mask-image: var(--scroll-fade);
   /* 长列表隔离带（照 problem-panel.css 的实测口径：35–47ms → 17–18ms）：
      树是全站最长的滚动面，行级 hover / 入场动画 / 选中态任何一处变化都会把整棵子树
      标脏；`layout` 让子树布局不外溢、`paint` 把重绘收在盒内。没有可见溢出：
@@ -2026,7 +2026,7 @@ button.erb-mode-hint.unlocked:hover {
   border-top: 1px solid var(--border);
   /* 底部留白 + 渐隐（同 `.tree-groups`）：滚到底整行可见，中途边缘压淡示意还有更多 */
   padding: 6px 0 20px;
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  mask-image: var(--scroll-fade);
 }
 .nav-family,
 .nav-face {
