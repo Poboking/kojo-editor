@@ -13,6 +13,10 @@ export const config = defineConfig({
       // 契约层零依赖叶子：**排在桶之前**（alias 口径是「等于 find」或「以 find + / 开头」）
       '@kojo/plugin-api/eol': r('./packages/plugin-api/src/eol.ts'),
       '@kojo/plugin-api': r('./packages/plugin-api/src/index.ts'),
+      // LAU-D4 车②：表层↔原生双向映射表的读表面**只走这条懒边**（包 `exports` 新叶，
+      // 不进 `src/index.ts` 桶——PS-10 预算顶格，见 `kojo-core/src/surface-map.ts` 头注）。
+      // 叶子必须排在桶之前（alias 口径是「等于 find」或「以 find + / 开头」）。
+      '@kojo/kojo-core/surface-map': r('./packages/kojo-core/src/surface-map.ts'),
       '@kojo/kojo-core': r('./packages/kojo-core/src/index.ts'),
       // 语言面库：叶子**必须排在桶之前**（alias 的匹配口径是「等于 find」或
       // 「以 `find + /` 开头」，桶在前会把 `/constants` 也吃掉）。
@@ -101,6 +105,9 @@ export const config = defineConfig({
       '@kojo/kojo-project-kit': r('./packages/kojo-project-kit/src/index.ts'),
       '@kojo/kernel': r('./packages/kernel/src/index.ts'),
       '@kojo/plugin-erb-parser': r('./packages/plugins/erb-parser/src/index.ts'),
+      // LAU-D4 车②：eraTW 的表层↔原生映射表走**懒边**（包 `exports` 新叶，不进 `src/index.ts`
+      // 桶——PS-10 开机图预算顶格）。叶子必须排在桶之前（alias 口径见上面 kojo-lang 那段注释）。
+      '@kojo/plugin-eratw-adapter/kojo2-surface-map': r('./packages/plugins/eratw-adapter/src/kojo2/surface-map.ts'),
       '@kojo/plugin-eratw-adapter': r('./packages/plugins/eratw-adapter/src/index.ts'),
       // 2.0 面叶子（SDK B5 收尾）：conformance 第二列改走包面，不再按相对路径直捅别人的 src。
       // 叶子排在桶之前——将来若给本包加桶别名，这两行必须留在它上面（B3c 就加了一枚桶）。

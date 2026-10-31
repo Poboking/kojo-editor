@@ -6,3 +6,4 @@
  */
 export { DEMO_CARRIERS, DEMO_EVENT_CATALOG, DEMO_GAME_ADAPTER } from './adapter.js';
 export { createDemoEmitBackend, demoLoweringProfile } from './backend.js';
+export { DEMO_SURFACE_MAP } from './surface-map.js';

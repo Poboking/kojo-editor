@@ -82,6 +82,20 @@ const LAU6_CODES: readonly CoreDiagnosticCode[] = ['core/injection/child-failed'
 const NATIVE_BRACE_CODES: readonly CoreDiagnosticCode[] = ['core/native/unclosed'];
 
 /**
+ * LAU-D4 车②（表层↔原生双向映射表）additive 的**三枚** `core/surface/*`：
+ * `dangling`（表指向不存在的原生写法 / 落点与事实面不同 / 条目形状坏）、
+ * `contested`（同一原生写法被两条表层名争用，及一名两落点、同名两遍）、
+ * `unmapped`（事实面有名字而表里缺）。生产者只有一处
+ * （`surface-map.ts::checkSurfaceMap`），三枚**全 error**——车② 的判据就是"错配必红"，
+ * 降级成 warning 等于把方言包的数据写反说成"仅供参考"。
+ */
+const LAUD4_SURFACE_CODES: readonly CoreDiagnosticCode[] = [
+  'core/surface/dangling',
+  'core/surface/contested',
+  'core/surface/unmapped',
+];
+
+/**
  * batch-4 收工时的全表（`git show <batch-4>/diagnostics.ts`）。
  *
  * **这是"闭集只增不改"的锁**：既有码逐条仍须在场；本批相对它的差集必须**恰为**
@@ -169,12 +183,21 @@ describe('码表 · 闭集只增（S5.6）', () => {
     expect(missing, `既有码被删/改名：${missing.join(' / ')}`).toEqual([]);
   });
 
-  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚 + 2026-10-26 批一条 + LAU-6 一枚 + 原生花括号一枚（多一条/少一条都要过审）', () => {
+  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚 + 2026-10-26 批一条 + LAU-6 一枚 + 原生花括号一枚 + LAU-D4 车② 三枚（多一条/少一条都要过审）', () => {
     const baseline = new Set(BATCH4_BASELINE);
     const added = declared.filter((code) => !baseline.has(code));
     expect(added.sort()).toEqual(
-      [...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES, ...LAU6_CODES, ...NATIVE_BRACE_CODES].sort(),
+      [...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES, ...LAU6_CODES, ...NATIVE_BRACE_CODES, ...LAUD4_SURFACE_CODES].sort(),
     );
+  });
+
+  it('LAU-D4 车② 三枚都在闭集里、全是 error（错配必红 ⇒ 一张表不许降级成"仅供参考"）', () => {
+    for (const code of LAUD4_SURFACE_CODES) {
+      expect(declared, `${code} 不在 CoreDiagnosticCode 联合里`).toContain(code);
+      expect(CORE_WARNING_CODES.has(code), `${code} 不该是 warning`).toBe(false);
+      expect(severityOf(code)).toBe('error');
+      expect(CORE_DIAGNOSTIC_CODES.has(code)).toBe(true);
+    }
   });
 
   it('原生花括号批的 `core/native/unclosed` 在闭集里、是 error（缺收口不静默）', () => {
