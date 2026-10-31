@@ -26,7 +26,7 @@ import { composeSugarDoc, type SugarSegmentInput } from '../src/ui/sugar-view';
 import { livePanes, type PaneCtx } from '../src/ui/editor-pane-registry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { installDefinitionProvider } from '../src/monaco/kojo-definition';
-import { installReferenceProvider } from '../src/monaco/find-references';
+import { createReferenceLanding } from '../src/monaco/find-references';
 import {
   derivedLegSurfaceOf,
   localLegPointOf,
@@ -288,27 +288,24 @@ describe('装配点 · 投影面上的 F12 / Shift+F12', () => {
     });
   });
 
-  it('Shift+F12：本地腿交源坐标，`find-references` 折回屏幕上那几行（列仍收行首）', () => {
+  it('Shift+F12：判据交源坐标，落点通道折回屏幕上那几行（列仍收行首）', () => {
     mountProjection();
-    const { monaco, references } = stubMonaco();
-    installReferenceProvider(monaco, {
-      // LAU-4 之后宿主不再有本地腿：接的是"位点换算 + 插件判据"这一对（与生产路径同构）
-      resolve: (model, position) => resolveErbDimReferencesAt(model, position),
+    const { monaco } = stubMonaco();
+    // LAU-4 之后宿主不再有本地腿；LAU-DUALLEG 车 3 之后 ERB 的宿主引用腿整条让位
+    // （descriptor 点名 `references` ⇒ 槽腿应答），生产装配点把这一枚通道接到
+    // `SlotServiceHost.landReferences`。本用例钉的是"位点换算 + 插件判据 → 源坐标 → 折回"
+    // 这条链上属于宿主的那两格（换算与折回），判据仍是插件那份。
+    const landing = createReferenceLanding(monaco, {
       navigate: () => undefined,
       openModelFor: (filePath) => (filePath === ARCHIVE ? ARCHIVE_MODEL : undefined),
     });
-    const provider = references.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
-    const locations = provider.provideReferences!(
-      PREVIEW_MODEL,
-      pos(2, 6),
-      {} as Monaco.languages.ReferenceContext,
-      {} as Monaco.CancellationToken,
-    ) as Monaco.languages.Location[];
+    const locations = landing.land(PREVIEW_MODEL, resolveErbDimReferencesAt(PREVIEW_MODEL, pos(2, 6)));
     expect(locations.map((l) => [l.uri.toString(), l.range.startLineNumber, l.range.startColumn])).toEqual([
       [PREVIEW_MODEL.uri.toString(), 2, 1],
       [PREVIEW_MODEL.uri.toString(), 4, 1],
       [PREVIEW_MODEL.uri.toString(), 6, 1],
       [PREVIEW_MODEL.uri.toString(), 7, 1],
     ]);
+    landing.dispose();
   });
 });

@@ -12,7 +12,10 @@
  * 3. **三态**：无人应答 / 空结果 ⇒ `[]`；`truncated` ⇒ 照给落点 + warn 一条；
  * 4. **失败面**：取文抛错 / model 无 uri ⇒ `[]`（不抛进 Monaco）；
  * 5. **注册**：经 `registerForLanguageServices(..., 'references')` 挂上（kojo2 由 descriptor
- *    点名）；dispose 幂等；注册半途抛错先回滚再外抛。
+ *    点名）；dispose 幂等；注册半途抛错先回滚再外抛；
+ * 6. **两半宿主通道**（LAU-DUALLEG 车 3）：`landReferences`（引用点怎么变成屏幕上能点开的一行）
+ *    与 `askReferences`（这一面该拿哪份文本、哪个位点去问）——点名这一格的语言能让旧桥腿退场，
+ *    靠的就是这两格把宿主事实接住；两半都不给时本腿逐字旧行为。
  */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -438,5 +441,135 @@ describe('三态与失败面：无人应答 / 空结果 / 取文失败 / 无 uri
     expect(provide(provider, fakeModel('> x').model, 1, 1)).toEqual([]);
     expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
+  });
+});
+
+/* ============================== ⑤ 落点 / 发问两半通道（LAU-DUALLEG 车 3） ============================== */
+
+/**
+ * 让位合法性的**全部**依据就在这两格：判据（哪些位置算引用）交得出插件，
+ * 而「这一面该拿哪份文本、哪个位点去问」与「交回的位置怎么变成屏幕上能点开的一行」
+ * 是只有宿主知道的事实。缺任一半都不许把旧桥腿摘掉——只给落点 ⇒ 投影面上拿着中文谓词
+ * 文本发问、恒 0 命中（静默没有）；只给发问 ⇒ 未开文件点不开、处数读数失踪。
+ */
+describe('SlotServiceHost.landReferences / askReferences：点名这一格的语言让位后仍然活着的那两半', () => {
+  const ANSWER = [
+    { filePath: 'D:/proj/a.kojo2', line: 1, column: 5, span: { columnStart: 5, columnEnd: 7 }, kind: 'definition' },
+    { filePath: 'D:/proj/closed.kojo2', line: 8, column: 2, kind: 'mention' },
+  ];
+
+  it('落点：给了通道 ⇒ 本腿一次都不自己翻形状（交回的就是通道那份，`uriForPath` 不被叫）', () => {
+    installKernel([referencesContribution(() => ({ kind: 'references', locations: ANSWER }))]);
+    const uriForPath = vi.fn((target: string) => ({ path: target }) as Monaco.Uri);
+    const landed: Monaco.languages.Location[] = [
+      { uri: { toString: () => 'channel://1' } as Monaco.Uri, range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } },
+    ];
+    // 通道收到的两参用闭包收（形状与 `SlotServiceHost.landReferences` 逐字一致）
+    const seen: { model?: Monaco.editor.ITextModel; locations?: readonly unknown[] } = {};
+    const landReferences = vi.fn(
+      (model: Monaco.editor.ITextModel, locations: readonly unknown[]): Monaco.languages.Location[] => {
+        seen.model = model;
+        seen.locations = locations;
+        return landed;
+      },
+    );
+    const { provider } = installAndProvider({ landReferences, uriForPath });
+    const { model } = fakeModel('> x');
+    const out = provide(provider, model, 1, 5);
+    expect(out).toBe(landed); // 逐字同一份：通道说是什么就是什么，本腿不再加工
+    expect(landReferences).toHaveBeenCalledTimes(1);
+    expect(seen.model).toBe(model); // 第一参 = **屏幕上这一面**（折回与夹取认的是它）
+    expect(seen.locations).toEqual(ANSWER); // 第二参 = 供方交回的全集
+    expect(uriForPath).not.toHaveBeenCalled();
+  });
+
+  it('落点：`includeDeclaration === false` ⇒ 声明位在**进通道之前**滤掉（通道只管怎么落地）', () => {
+    installKernel([referencesContribution(() => ({ kind: 'references', locations: ANSWER }))]);
+    let delivered: readonly unknown[] = [];
+    const landReferences = vi.fn(
+      (_model: Monaco.editor.ITextModel, locations: readonly unknown[]): Monaco.languages.Location[] => {
+        delivered = locations;
+        return [];
+      },
+    );
+    const { provider } = installAndProvider({ landReferences });
+    provide(provider, fakeModel('> x').model, 1, 5, false);
+    expect(delivered).toEqual([ANSWER[1]]);
+  });
+
+  it('发问：ask ⇒ 请求发在换算出来的那份原文上（文本 / 身份 / 路径 / 行列全跟着那一面走）', () => {
+    let captured: Record<string, unknown> = {};
+    installKernel([
+      referencesContribution(() => ({ kind: 'references', locations: [] }), (request) => {
+        captured = request as Record<string, unknown>;
+      }),
+    ]);
+    const { model: preview } = fakeModel('（升糖预览）\n> {心情}'); // 屏幕上这一面：中文谓词文本
+    const source = {
+      getValue: () => '#DIM 好感度\n  好感度 = 1',
+      getLanguageId: () => 'kojo-erb',
+      getVersionId: () => 99,
+      uri: { fsPath: 'D:/src/a.erb', toString: () => 'file:///D:/src/a.erb' },
+    } as unknown as Monaco.editor.ITextModel;
+    const { provider } = installAndProvider({
+      askReferences: () => ({ outcome: 'ask', model: source, path: 'D:/src/a.erb', line: 42, column: 7 }),
+    });
+    provide(provider, preview, 2, 4);
+    expect(captured).toMatchObject({
+      path: 'D:/src/a.erb',
+      languageId: 'kojo-erb',
+      version: 99,
+      line: 42,
+      column: 7,
+      lineCount: 2,
+      text: '#DIM 好感度\n  好感度 = 1',
+    });
+    expect(captured.text, '发问落在投影文本上就是恒 0 命中那件事').not.toBe('（升糖预览）\n> {心情}');
+  });
+
+  it('发问：no-source ⇒ 空列表且一次都不问槽（绝不拿投影坐标去猜一份文件）', () => {
+    const provideSpy = vi.fn(() => ({ kind: 'references', locations: [] }));
+    installKernel([
+      { id: 'stub-references', provide: provideSpy } as unknown as EditorLanguageServiceContribution,
+    ]);
+    const { provider } = installAndProvider({ askReferences: () => ({ outcome: 'no-source' }) });
+    expect(provide(provider, fakeModel('> x').model, 1, 1)).toEqual([]);
+    expect(provideSpy).not.toHaveBeenCalled();
+  });
+
+  it('发问：foreign（与没注入同一语义）⇒ 按屏幕上这份 model 原样发问，逐字旧行为', () => {
+    let captured: Record<string, unknown> = {};
+    installKernel([
+      referencesContribution(() => ({ kind: 'references', locations: [] }), (request) => {
+        captured = request as Record<string, unknown>;
+      }),
+    ]);
+    const { model } = fakeModel('# 设 心情 整数 = 0\n> {心情}');
+    const viaForeign = installAndProvider({ askReferences: () => ({ outcome: 'foreign' }) });
+    provide(viaForeign.provider, model, 2, 4);
+    const foreign = { ...captured };
+    const viaAbsent = installAndProvider();
+    provide(viaAbsent.provider, model, 2, 4);
+    expect(captured).toEqual(foreign);
+    expect(foreign).toMatchObject({
+      path: 'D:/proj/a.kojo2',
+      languageId: KOJO2_LANGUAGE_ID,
+      version: 7,
+      line: 2,
+      column: 4,
+    });
+  });
+
+  it('两半各自独立：只给落点不给发问 ⇒ 落点走通道、发问照旧（缺一半都不算收敛完成，也不许互相顶替）', () => {
+    let captured: Record<string, unknown> = {};
+    installKernel([
+      referencesContribution(() => ({ kind: 'references', locations: ANSWER }), (request) => {
+        captured = request as Record<string, unknown>;
+      }),
+    ]);
+    const { provider } = installAndProvider({ landReferences: () => [] });
+    const { model } = fakeModel('> {心情}');
+    provide(provider, model, 1, 5);
+    expect(captured).toMatchObject({ path: 'D:/proj/a.kojo2', text: '> {心情}', line: 1, column: 5 });
   });
 });

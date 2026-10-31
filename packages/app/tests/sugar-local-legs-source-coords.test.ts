@@ -28,7 +28,7 @@ import { composeSugarDoc, type SugarSegmentInput } from '../src/ui/sugar-view';
 import { livePanes, type PaneCtx } from '../src/ui/editor-pane-registry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { installDefinitionProvider } from '../src/monaco/kojo-definition';
-import { installReferenceProvider } from '../src/monaco/find-references';
+import { createReferenceLanding } from '../src/monaco/find-references';
 import {
   derivedLegSurfaceOf,
   localLegPointOf,
@@ -418,28 +418,24 @@ describe('装配点 · 投影面上 F12 / Shift+F12 的落点', () => {
     ]);
   });
 
-  it('Shift+F12：本地腿交存档坐标，`find-references` 在投影面上把它折回屏幕上那一行（Peek 落在投影 model）', () => {
+  it('Shift+F12：判据交存档坐标，落点通道在投影面上把它折回屏幕上那一行（Peek 落在投影 model）', () => {
     mountProjection();
-    const { monaco, references } = stubMonaco();
-    installReferenceProvider(monaco, {
-      // LAU-4 之后宿主不再有本地腿：接的是"位点换算 + 插件判据"这一对（与生产路径同构）
-      resolve: (model, position) => resolveErbDimReferencesAt(model, position),
+    const { monaco } = stubMonaco();
+    // LAU-4 之后宿主不再有本地腿；LAU-DUALLEG 车 3 之后 ERB 的宿主引用腿整条让位
+    // （descriptor 点名 `references` ⇒ 由槽腿应答）。生产装配点把同一枚**落点通道**
+    // 接到 `SlotServiceHost.landReferences`，本用例钉的就是通道那一半：投影面折回。
+    const landing = createReferenceLanding(monaco, {
       navigate: () => undefined,
       openModelFor: (filePath) => (filePath === ARCHIVE ? ARCHIVE_MODEL : undefined),
     });
-    const provider = references.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
-    const locations = provider.provideReferences!(
-      PREVIEW_MODEL,
-      pos(4, 8),
-      {} as Monaco.languages.ReferenceContext,
-      {} as Monaco.CancellationToken,
-    ) as Monaco.languages.Location[];
+    const locations = landing.land(PREVIEW_MODEL, resolveErbDimReferencesAt(PREVIEW_MODEL, pos(4, 8)));
     // 存档 6 / 7 / 8 三处 ⇒ 预览 4 / 5 / 6 三行；列一律收到行首（`tests/peek-preview-fold.test.ts` 钉全套判据）
     expect(locations.map((l) => [l.uri.toString(), l.range.startLineNumber, l.range.startColumn])).toEqual([
       [PREVIEW_MODEL.uri.toString(), 4, 1],
       [PREVIEW_MODEL.uri.toString(), 5, 1],
       [PREVIEW_MODEL.uri.toString(), 6, 1],
     ]);
+    landing.dispose();
   });
 
   it('原文面逐字不变：槽腿交的就是声明名的**那一列**', () => {

@@ -12,18 +12,28 @@
  * W8 XLANG-RENAME 追加（判据④）：出现点**分类随位置穿过槽**（`EditorSymbolLocation.kind`），
  * F12 的"N 处"与「被调用 M 处」在**同一份** tally 上读数、差值可解释，
  * 同位多方上报取最具体分类，且旧消费方看到的位置形状零改动。
+ *
+ * LAU-DUALLEG 车 3（2026-10-31）追加：落点通道 `createReferenceLanding` 与 provider 注册**分家**。
+ * 本文件的挂载组因此改判到新形状——宿主腿只服务**没**点名 `references` 的旧桥语言，
+ * 而未开文件的点击通道 / 行号夹取 / 台账读数是一枚可被子（装配点）借走的对象：
+ * 借来 ⇒ 不再自建第二枚 opener、撤宿主腿也不许带走槽腿还在用的那枚；
+ * 没借 ⇒ 自建一枚，行为与分离前逐字相同。读数归属路径改为现算（两侧共用一枚通道之后，
+ * 任何"上一次问的是谁"的记忆都会把读数报在隔壁文件上）。
  */
 
 import { functionLookupOf } from '@kojo/plugin-api';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { EditorLanguageServiceContribution, EditorSymbolLocation, ErbFunction, ErbIndex, ErbReference } from '@kojo/plugin-api';
 import {
   collectReferenceLocations,
   collectReferenceReport,
+  createReferenceLanding,
   installReferenceProvider,
   KNOWN_PATHS_LIMIT,
+  type ReferenceLanding,
 } from '../src/monaco/find-references';
+import { livePanes, type PaneCtx } from '../src/ui/editor-pane-registry';
 import { incomingCalls, outgoingCalls } from '@kojo/plugin-erb-parser';
 import { erbOccurrences, explainReferenceCounts, tallyReferenceOccurrences } from '../src/ui/reference-utils';
 
@@ -79,10 +89,13 @@ interface Stub {
   providers: { languageId: string; provider: Monaco.languages.ReferenceProvider }[];
   monaco: typeof Monaco;
   readonly opener: Monaco.editor.ICodeEditorOpener | undefined;
+  /** 本桩收到过的 `registerEditorOpener`（LAU-DUALLEG 车 3 的"只许一枚"判据要能数出来） */
+  openers: Array<{ opener: Monaco.editor.ICodeEditorOpener; disposed: () => boolean }>;
 }
 
 function stubMonaco(): Stub {
   const providers: Stub['providers'] = [];
+  const openers: Stub['openers'] = [];
   let openerRef: Monaco.editor.ICodeEditorOpener | undefined;
   const monaco = {
     languages: {
@@ -94,14 +107,16 @@ function stubMonaco(): Stub {
     editor: {
       registerEditorOpener: (o: Monaco.editor.ICodeEditorOpener) => {
         openerRef = o;
-        return { dispose: () => undefined };
+        let disposed = false;
+        openers.push({ opener: o, disposed: () => disposed });
+        return { dispose: () => { disposed = true; } };
       },
     },
     Uri: {
       file: (p: string) => ({ fsPath: p, toString: () => `file:///${p.replace(/\\/g, '/')}` }),
     },
   } as unknown as typeof Monaco;
-  return { providers, monaco, get opener() { return openerRef; } };
+  return { providers, monaco, get opener() { return openerRef; }, openers };
 }
 
 function modelOf(path: string, lines: readonly string[]): Monaco.editor.ITextModel {
@@ -122,11 +137,37 @@ const LOCATIONS: readonly EditorSymbolLocation[] = [
   { filePath: '/t/B.ERB', line: 4, column: 8 },
 ];
 
+/**
+ * 把一份 model 挂成"某实例正显示的那一面"（归属判据的唯一真源是登记簿 `livePanes`，
+ * 落点通道的台账读数归属就现算自它 ⇒ 测读数必须测登记簿，不能测一条私有变量）。
+ * `sugar` 非空 = 屏幕上挂着的是那份糖投影（投影不是文件，读数必须钉在主人路径上）。
+ */
+function mountPane(shown: Monaco.editor.ITextModel, path: string, sugar: Monaco.editor.ITextModel | null): void {
+  const pane = {
+    paneId: `refs-${path}`,
+    filePathRef: { current: path },
+    editorRef: { current: { getModel: () => shown } as unknown as Monaco.editor.IStandaloneCodeEditor },
+    sugarModelRef: { current: sugar },
+    sugarLineMapRef: { current: [] as readonly number[] },
+    entriesRef: { current: new Map<string, never>() },
+    pendingActionsRef: { current: new Map<string, never>() },
+    actionSeqRef: { current: 0 },
+    crumbTreeCacheRef: { current: null },
+  } as unknown as PaneCtx;
+  livePanes.set(pane.paneId, pane);
+}
+
+afterEach(() => {
+  livePanes.clear();
+});
+
 describe('installReferenceProvider', () => {
-  it('为 ERB 与 .kojo 两种语言 id 注册同一 provider', () => {
+  it('宿主腿只挂**没点名** references 的旧桥语言（今天 = `.kojo1`；ERB 点名 ⇒ 让位给槽腿）', () => {
     const stub = stubMonaco();
     installReferenceProvider(stub.monaco, { resolve: () => [], navigate: () => undefined });
-    expect(stub.providers.map((p) => p.languageId).sort()).toEqual(['kojo-erb', 'kojo-legacy']);
+    // LAU-DUALLEG 车 3 之前这一格是双挂：同一次 Shift+F12 问两趟供方、"谁在答"由注册顺序裁决。
+    // 让位的合法性靠**落点通道 + 发问通道**两半（见本文件下面那组），不是靠少挂一门语言。
+    expect(stub.providers.map((p) => p.languageId)).toEqual(['kojo-legacy']);
   });
 
   it('已打开文件用真 model 的 uri；未打开文件发 file URI 且不进 opener 反查表', () => {
@@ -214,6 +255,142 @@ describe('installReferenceProvider', () => {
     const last = locations[locations.length - 1]!;
     expect(stub.opener!.openCodeEditor(editor, last.uri, at)).toBe(true);
     expect(navigated).toEqual([{ filePath: `/t/f${String(KNOWN_PATHS_LIMIT + 9).padStart(4, '0')}.ERB`, line: 1, column: 1 }]);
+  });
+});
+
+/* ============================== LAU-DUALLEG 车 3：判据让位、通道留宿主 ============================== */
+
+/**
+ * 「引用判据」（哪些位置算这个符号的引用）已整块在插件里，这一组钉的是**另一侧**：
+ * 落点（未开文件怎么点开、行号夹取、台账读数）是一枚独立的宿主对象，
+ * 宿主腿与共享槽腿**共用同一枚**——让位之后功能一格不丢，靠的就是这一枚。
+ * 反面（为什么只许一枚 opener）：`registerEditorOpener` 是全局单表、先应答的先接，
+ * 两枚通道 = 两张 `uri → 路径` 反查表，点击落到没人登记过的那一张上就是"按了没反应"。
+ */
+describe('落点通道 createReferenceLanding（宿主腿让位后仍然活着的那一半）', () => {
+  /** 装配点形状：一枚通道 + 一枚只服务未点名语言的宿主腿 provider */
+  function assemble(): {
+    stub: Stub;
+    landing: ReferenceLanding;
+    navigated: EditorSymbolLocation[];
+    hostProvider: Monaco.languages.ReferenceProvider;
+  } {
+    const stub = stubMonaco();
+    const navigated: EditorSymbolLocation[] = [];
+    const landing = createReferenceLanding(stub.monaco, {
+      navigate: (location) => navigated.push(location),
+      openModelFor: () => undefined,
+    });
+    // 落点三格全交通道（类型上不许宿主腿再带一份 `navigate`/`openModelFor`——那是第二枚 opener）
+    installReferenceProvider(stub.monaco, {
+      resolve: () => LOCATIONS,
+      landing,
+    });
+    const hostProvider = stub.providers[0]!.provider;
+    return { stub, landing, navigated, hostProvider };
+  }
+
+  it('交来共用通道 ⇒ 全进程只注册一枚 opener（本安装器不再自建第二枚）', () => {
+    const { stub } = assemble();
+    expect(stub.openers).toHaveLength(1);
+  });
+
+  it('不给通道才自建一枚（单测与没有装配点的宿主那条路，与分离前逐字相同）', () => {
+    const stub = stubMonaco();
+    installReferenceProvider(stub.monaco, { resolve: () => [], navigate: () => undefined });
+    expect(stub.openers).toHaveLength(1);
+  });
+
+  it('撤宿主腿不许带走借来的通道（槽腿还在用它）；通道自己撤才撤 opener', () => {
+    const { stub, landing } = assemble();
+    installReferenceProvider(stub.monaco, { resolve: () => [], landing }).dispose();
+    expect(stub.openers[0]!.disposed()).toBe(false);
+    landing.dispose();
+    expect(stub.openers[0]!.disposed()).toBe(true);
+  });
+
+  it('自建那条路：dispose 连自己的通道一起撤（不留一枚没人撤的 opener）', () => {
+    const stub = stubMonaco();
+    const sub = installReferenceProvider(stub.monaco, { resolve: () => [], navigate: () => undefined });
+    expect(stub.openers).toHaveLength(1);
+    sub.dispose();
+    expect(stub.openers[0]!.disposed()).toBe(true);
+  });
+
+  it('未打开文件那条腿走共用通道：宿主腿问出的 URI 由**同一枚** opener 接回 navigate', () => {
+    const { stub, hostProvider, navigated } = assemble();
+    const out = hostProvider.provideReferences!(
+      modelOf('/t/A.ERB', ['CALL ALPHA']),
+      AT(1, 6),
+      {} as Monaco.languages.ReferenceContext,
+      {} as Monaco.CancellationToken,
+    ) as Monaco.languages.Location[];
+    expect(out).toHaveLength(LOCATIONS.length);
+    const closed = out[1]!; // `/t/B.ERB` 没开 ⇒ file URI + 反查表
+    expect(closed.uri.toString()).toBe('file:////t/B.ERB');
+    expect(stub.openers[0]!.opener.openCodeEditor(
+      modelOf('/t/A.ERB', ['x']) as unknown as Monaco.editor.ICodeEditor,
+      closed.uri,
+      { lineNumber: 4, column: 8 },
+    )).toBe(true);
+    expect(navigated).toEqual([{ filePath: '/t/B.ERB', line: 4, column: 8 }]);
+  });
+
+  it('槽腿那一趟也翻同一枚通道：两侧发过的未开文件 URI 在同一张反查表里', () => {
+    const stub = stubMonaco();
+    const navigated: EditorSymbolLocation[] = [];
+    const landing = createReferenceLanding(stub.monaco, {
+      navigate: (location) => navigated.push(location),
+      openModelFor: () => undefined,
+    });
+    // 槽腿的注入面形状（生产装配点把它接到 `SlotServiceHost.landReferences`）
+    const fromSlotLeg = landing.land(modelOf('/t/A.ERB', ['CALL ALPHA']), [
+      { filePath: '/t/C.ERB', line: 7, column: 3 },
+    ]);
+    // 宿主腿再问一次另一份未开文件（落点与点击通道都还是同一枚 `landing`）
+    installReferenceProvider(stub.monaco, {
+      resolve: () => [{ filePath: '/t/D.ERB', line: 9, column: 4 }],
+      landing,
+    });
+    const fromHostLeg = stub.providers[0]!.provider.provideReferences!(
+      modelOf('/t/A.ERB', ['CALL ALPHA']),
+      AT(1, 6),
+      {} as Monaco.languages.ReferenceContext,
+      {} as Monaco.CancellationToken,
+    ) as Monaco.languages.Location[];
+    expect(stub.openers).toHaveLength(1);
+    const editor = modelOf('/t/A.ERB', ['x']) as unknown as Monaco.editor.ICodeEditor;
+    expect(stub.openers[0]!.opener.openCodeEditor(editor, fromSlotLeg[0]!.uri, { lineNumber: 7, column: 3 })).toBe(true);
+    expect(stub.openers[0]!.opener.openCodeEditor(editor, fromHostLeg[0]!.uri, { lineNumber: 9, column: 4 })).toBe(true);
+    expect(navigated).toEqual([
+      { filePath: '/t/C.ERB', line: 7, column: 3 },
+      { filePath: '/t/D.ERB', line: 9, column: 4 },
+    ]);
+  });
+
+  it('台账读数的归属路径**现算**（两侧共用一枚通道后，"上一次问的是谁"必报错文件）', () => {
+    const stub = stubMonaco();
+    const seen: Array<[string, number]> = [];
+    const landing = createReferenceLanding(stub.monaco, {
+      navigate: () => undefined,
+      openModelFor: () => undefined,
+      onTally: (tally, _explanation, path) => seen.push([path, tally.f12Count]),
+    });
+    // ① 原文面：读数钉在归属实例的存档路径上
+    const archive = modelOf('/t/A.ERB', ['CALL ALPHA']);
+    mountPane(archive, '/t/A.ERB', null);
+    landing.land(archive, [{ filePath: '/t/B.ERB', line: 4, column: 8 }]);
+    expect(seen).toEqual([['/t/A.ERB', 1]]);
+    // ② 投影面：投影不是文件，读数仍钉在**主人**那份存档路径上
+    const preview = modelOf('/t/sugar.erb', ['声明数组 好感度']);
+    mountPane(preview, '/t/A.ERB', preview);
+    seen.length = 0;
+    landing.land(preview, [{ filePath: '/t/B.ERB', line: 4, column: 8 }]);
+    expect(seen).toEqual([['/t/A.ERB', 1]]);
+    // ③ 登记簿里没有这一面（游离 model / 单测桩）⇒ 空串，**不许**留着上一趟的路径
+    seen.length = 0;
+    landing.land(modelOf('/t/orphan.ERB', ['x']), [{ filePath: '/t/B.ERB', line: 4, column: 8 }]);
+    expect(seen).toEqual([['', 1]]);
   });
 });
 
