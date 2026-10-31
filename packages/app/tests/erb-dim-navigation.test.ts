@@ -7,7 +7,9 @@
  * - 注释 / 字符串内的同名记号 ⇒ 空数组（非变量位置，不猜）；
  * - 引用列表 = 声明行 + 声明行之外的 2 处（字符串 / 注释不计）；
  * - 路径归一（`String.raw` 的 Windows 反斜杠 vs 正斜杠大写）在合并去重时生效；
- * - provider 接线：F12 返回 `LocationLink`、Shift+F12 返回 `Location[]`，桩 model 无路径 ⇒ fail-open。
+ * - provider 接线：F12 返回 `LocationLink`、Shift+F12 返回 `Location[]`，桩 model 无路径 ⇒ fail-open
+ *   （LAU-DUALLEG 车 3 之后 ERB 的 `references` 由槽腿应答，宿主这一侧的接线判据就是落点通道
+ *   `createReferenceLanding` —— 判据仍是插件那份 `erbDimReferencesAt`，两半的分工在这里测）。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -15,7 +17,7 @@ import type * as Monaco from 'monaco-editor';
 import type { EditorSymbolLocation } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { installDefinitionProvider } from '../src/monaco/kojo-definition';
-import { installReferenceProvider } from '../src/monaco/find-references';
+import { createReferenceLanding, installReferenceProvider } from '../src/monaco/find-references';
 import {
   dimDeclarationOf,
   mergeNavigationLegs,
@@ -281,36 +283,38 @@ describe('#DIM 导航 · provider 接线', () => {
     });
   });
 
-  it('Shift+F12：同一条管线返回 3 处（声明 + 2 处引用；判据在插件，宿主只翻形状）', () => {
-    const { monaco, references } = stubMonaco();
-    installReferenceProvider(monaco, {
-      // LAU-4 之后宿主不再有本地腿：`resolve` 里接的就是插件判据（与生产路径逐字同源）
-      resolve: () => resolveErbDimReferences(TEXT, 3, 8, PATH),
+  it('Shift+F12：同一条管线返回 3 处（声明 + 2 处引用；判据在插件，落点通道在宿主）', () => {
+    const { monaco } = stubMonaco();
+    // LAU-4 之后宿主不再有本地腿、LAU-DUALLEG 车 3 之后宿主腿整条让位（ERB 点名 references）：
+    // ERB 的引用由槽腿应答，而"引用点 → 屏幕上那一行"这一半是宿主通道
+    // （生产装配点把它同时接到槽腿的 `SlotServiceHost.landReferences`）。
+    const landing = createReferenceLanding(monaco, {
       navigate: () => undefined,
       openModelFor: () => model,
     });
-    const provider = references.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
-    const locations = provider.provideReferences!(
+    const locations = landing.land(
       model,
-      { lineNumber: 3, column: 8 } as Monaco.Position,
-      {} as Monaco.languages.ReferenceContext,
-      {} as Monaco.CancellationToken,
-    ) as Monaco.languages.Location[];
+      // 判据仍是插件那份（与生产路径逐字同源）：`resolveErbDimReferences` = `erbReferencesAt` 的声明腿
+      resolveErbDimReferences(TEXT, 3, 8, PATH),
+    );
     expect(locations.map((l) => l.range.startLineNumber)).toEqual([3, 7, 8]);
     expect(locations.map((l) => l.range.startColumn)).toEqual([8, 3, 6]);
+    landing.dispose();
   });
 
   it('fail-open：桩 model 没有 fsPath / path ⇒ 两条腿都零贡献，且不抛', () => {
     const { monaco, definitions, references } = stubMonaco();
     installDefinitionProvider(monaco, { resolve: () => [], navigate: () => undefined, openModelFor: () => model });
-    installReferenceProvider(monaco, { resolve: () => [], navigate: () => undefined, openModelFor: () => model });
+    // 车 3 之后宿主腿不再挂 ERB ⇒ 引用那一侧的接线判据落在通道上（同一条 fail-open 判据）
+    installReferenceProvider(monaco, { resolve: () => [], navigate: () => undefined });
+    expect(references.map((r) => r.languageId)).not.toContain(ERB_LANGUAGE_ID);
+    const landing = createReferenceLanding(monaco, { navigate: () => undefined, openModelFor: () => model });
     const bare = fakeModel(null);
     const def = definitions.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
-    const ref = references.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
     expect(() => def.provideDefinition(bare, position, {} as Monaco.CancellationToken)).not.toThrow();
     expect(def.provideDefinition(bare, position, {} as Monaco.CancellationToken)).toBeUndefined();
-    expect(
-      ref.provideReferences!(bare, position, {} as Monaco.languages.ReferenceContext, {} as Monaco.CancellationToken),
-    ).toEqual([]);
+    expect(() => landing.land(bare, [])).not.toThrow();
+    expect(landing.land(bare, [])).toEqual([]);
+    landing.dispose();
   });
 });

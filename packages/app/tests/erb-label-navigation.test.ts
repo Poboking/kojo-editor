@@ -19,7 +19,7 @@ import {
 import { livePanes } from '../src/ui/editor-pane-registry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { installDefinitionProvider } from '../src/monaco/kojo-definition';
-import { installReferenceProvider } from '../src/monaco/find-references';
+import { createReferenceLanding, installReferenceProvider } from '../src/monaco/find-references';
 import { derivedLegSurfaceOf, isDerivedModelUri, localLegPointOf } from '../src/monaco/erb-dim-navigation';
 
 /**
@@ -170,39 +170,39 @@ describe('$ 标签导航 · provider 接线', () => {
     expect(links.map((l) => l.targetSelectionRange!.startLineNumber)).toEqual([2]);
   });
 
-  it('Shift+F12 → 定义 + 本函数全部跳转（区间来自 span；判据在插件，宿主只翻形状）', () => {
-    const { monaco, references } = stubMonaco();
-    installReferenceProvider(monaco, {
-      // LAU-4 之后宿主不再有本地标签腿：`resolve` 里接的就是插件判据（与生产路径逐字同源）
-      resolve: (m, p) => labelReferenceLocations(resolveErbLabelScopeAt(m, p) ?? { occurrences: [] }),
+  it('Shift+F12 → 定义 + 本函数全部跳转（区间来自 span；判据在插件，落点通道在宿主）', () => {
+    const { monaco } = stubMonaco();
+    // LAU-4 之后宿主不再有本地标签腿、LAU-DUALLEG 车 3 之后宿主腿整条让位（ERB 点名 references）：
+    // 判据仍是插件那份（`labelScopeAt`），本用例钉的是剩下的那一半——落点通道。
+    const landing = createReferenceLanding(monaco, {
       navigate: () => undefined,
       openModelFor: () => model,
     });
-    const provider = references.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
-    const locations = provider.provideReferences!(
+    const locations = landing.land(
       model,
-      at(5, 8),
-      {} as Monaco.languages.ReferenceContext,
-      {} as Monaco.CancellationToken,
-    ) as Monaco.languages.Location[];
+      labelReferenceLocations(resolveErbLabelScopeAt(model, at(5, 8)) ?? { occurrences: [] }),
+    );
     expect(locations.map((l) => [l.range.startLineNumber, l.range.startColumn, l.range.endColumn])).toEqual([
       [3, 2, 6],
       [5, 8, 12],
     ]);
+    landing.dispose();
   });
 
   it('fail-open：桩 model 没有路径 ⇒ 两条腿都零贡献，且不抛', () => {
     const bare = fakeModel(TEXT, null);
     const { monaco, definitions, references } = stubMonaco();
     installDefinitionProvider(monaco, { resolve: () => [], navigate: () => undefined, openModelFor: () => bare });
+    // 车 3：宿主引用腿不再挂 ERB（点名 ⇒ 让位），接线判据随之下移到通道
     installReferenceProvider(monaco, { resolve: () => [], navigate: () => undefined, openModelFor: () => bare });
+    expect(references.map((r) => r.languageId)).not.toContain(ERB_LANGUAGE_ID);
+    const landing = createReferenceLanding(monaco, { navigate: () => undefined, openModelFor: () => bare });
     const def = definitions.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
-    const ref = references.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
     expect(() => def.provideDefinition(bare, at(5, 8), {} as Monaco.CancellationToken)).not.toThrow();
     expect(def.provideDefinition(bare, at(5, 8), {} as Monaco.CancellationToken)).toBeUndefined();
-    expect(
-      ref.provideReferences!(bare, at(5, 8), {} as Monaco.languages.ReferenceContext, {} as Monaco.CancellationToken),
-    ).toEqual([]);
+    expect(() => landing.land(bare, [])).not.toThrow();
+    expect(landing.land(bare, [])).toEqual([]);
+    landing.dispose();
   });
 });
 

@@ -763,15 +763,93 @@ describe('DOUBLE-LEG-1032：ERB 旧桥三腿按点名让位——每一 kind 恰
   });
 
   it('没让位的 kind 逐字留账（供方不答 / 宿主载体在旧桥上——刻意双挂，不是漏收敛）', () => {
-    // references：已关文件的点击通道（`registerEditorOpener` + knownPaths LRU）在宿主腿上；
+    // references 已收成（LAU-DUALLEG 车 3，2026-10-31）：判据让位 + 两半通道留宿主，
+    // 那一格的判据在下面 `DOUBLE-LEG-1032C`。
     // rename：闭文件回写通道（applyToClosedFile）在宿主腿上，槽腿 prepare 是 kojo2 尺子；
     // signatureHelp：插件槽里**没有** ERB 供方——供方不答的 kind 一律不动。
-    expect(sourceOf('monaco/find-references.ts').text).toMatch(/registerEditorOpener/);
     expect(sourceOf('monaco/erb-rename.ts').text).toMatch(/applyToClosedFile/);
-    for (const rel of ['monaco/find-references.ts', 'monaco/erb-rename.ts', 'monaco/kojo-signature.ts']) {
+    for (const rel of ['monaco/erb-rename.ts', 'monaco/kojo-signature.ts']) {
       expect(sourceOf(rel).text, `${rel} 不该按 excludeNamed 让位（让了就是静默没有）`).not.toMatch(
         /excludeNamed/,
       );
+    }
+  });
+});
+
+/* ============================== DOUBLE-LEG-1032C：references 判据让位、两半通道留宿主 ============================== */
+
+/**
+ * `references` 这一格的收敛（LAU-DUALLEG 车 3，2026-10-31）——本系列**第一条"判据与通道分家"**
+ * 的形状，与前两车各管各的 kind：
+ *
+ * - **判据**（哪些位置算这个符号的引用）今天整块在插件（`@kojo/plugin-erb-parser` 的
+ *   `erbReferencesAt`，LAU-4 引用腿批搬过去的），descriptor 又早点名了 `references`
+ *   ⇒ 旧桥那枚纯翻译腿本来就只在做"问槽 → 翻形状"；
+ * - **通道**（一枚引用点怎么变成屏幕上能点开的一行 / 这一次问句该发在哪份文本哪个位点）
+ *   是五格宿主事实：投影折回、已开标签的 live model 与行列夹取、未开文件的 `uri → 路径`
+ *   反查 + `registerEditorOpener`、台账读数归属、发问位点换算。它们收成一枚
+ *   `createReferenceLanding` + 一枚 `referencesAskOf`，经 `SlotServiceHost.landReferences` /
+ *   `askReferences` 同时喂给两侧腿。
+ *
+ * **两半缺一半都不许让位**（这是本组存在的理由，也是第二车的"前置条件"那一格的答案）：
+ * 只交落点 ⇒ 升糖预览面上拿着中文谓词文本发问、恒 0 命中（静默没有）；
+ * 只交发问 ⇒ 未开文件点不开、F12 处数读数失踪。行为面钉在三处：
+ * `find-references.test.ts` 的挂载组与通道组、`kojo2-references.test.ts` 的⑤组、
+ * `peek-preview-fold.test.ts` 的"折回判据只有一份"。
+ */
+describe('DOUBLE-LEG-1032C：ERB 的 references 按点名让位——判据交插件，两半宿主通道留装配点', () => {
+  it('ERB descriptor 点名 references：点名仍是"谁在答"的唯一台账（本格不是新声明，核对的是消费方）', () => {
+    const erb = descriptorForLanguageId(ERB_LANGUAGE_ID);
+    expect(erb).not.toBeNull();
+    expect(erb?.slotServices ?? []).toContain('references');
+  });
+
+  it('旧桥腿走 `undefined, { excludeNamed: \'references\' }`（第三参写成 kind 就把点名语言重新挂上，恰一枚立刻破）', () => {
+    const text = sourceOf('monaco/find-references.ts').text;
+    expect(text).toMatch(
+      /registerForLanguageServices\([\s\S]{0,400}?registerReferenceProvider\(id, provider\)[\s\S]{0,200}?undefined,\s*\{\s*excludeNamed:\s*'references'\s*\}/,
+    );
+  });
+
+  it('槽腿表里有 references 这一枚腿（"恰一枚"的另一半：没有接手车就不许让位）', () => {
+    const factory = sourceOf('monaco/slot-service-providers.ts').text;
+    expect(SLOT_COLLECTOR_CALL.test(factory)).toBe(true);
+    expect(factory).toMatch(tableEntryPattern('references', 'registerReferenceProvider'));
+  });
+
+  it('让位的合法性：两半通道都在注入面上，装配点两半都接了同一枚实现', () => {
+    const factory = sourceOf('monaco/slot-service-providers.ts').text;
+    expect(factory).toMatch(/readonly landReferences\?:/);
+    expect(factory).toMatch(/readonly askReferences\?:/);
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    expect(host).toMatch(/landReferences: \(model, locations\) => referenceLanding\.land\(model, locations\)/);
+    expect(host).toMatch(/askReferences: referencesAskOf/);
+    expect(host).toMatch(/export function referencesAskOf/);
+    expect(sourceOf('monaco/find-references.ts').text).toMatch(/export function createReferenceLanding/);
+  });
+
+  it('装配点只建**一枚**通道、只调**一次**旧桥安装器（两枚通道 = 两张反查表 + 两枚全局 opener 抢答）', () => {
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    expect(host.split('createReferenceLanding(').length - 1).toBe(1);
+    expect(host.split('installReferenceProvider(').length - 1).toBe(1);
+    // 旧桥那条路把通道借走（`landing:`），不再自带第二套落点判据
+    expect(host).toMatch(/landing: referenceLanding/);
+  });
+
+  it('读数归属路径现算：装配点不许留"上一次问的是谁"那枚变量（共用通道后它会把读数报在隔壁文件）', () => {
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    expect(host).not.toMatch(/tallySourcePath/);
+    const landing = sourceOf('monaco/find-references.ts').text;
+    expect(landing).toMatch(/onTally\?\.\(tally, explainReferenceCounts\(tally\), landingPathOf\(model\)\)/);
+  });
+
+  it('通道不付快照账、也不挂第二枚 provider：`find-references.ts` 里 `registerReferenceProvider` 恰一次、一次快照都不取', () => {
+    // 代价账口径（1032B 已钉）：点名 `references` 就意味着每次请求先过 `nameLegProjectSnapshotOf`
+    // 那道闸，而 ERB 的三条腿由解析器索引原生应答 —— 通道这一侧**再**取一份快照就是第二笔白付。
+    const landing = sourceOf('monaco/find-references.ts').text;
+    expect(landing.split('registerReferenceProvider(').length - 1).toBe(1);
+    for (const forbidden of ['projectFilesSnapshotOf', 'projectIndex', 'kojo2ProjectIndex']) {
+      expect(landing, `落点通道不该出现 ${forbidden}（快照只由问句那一侧取一次）`).not.toMatch(new RegExp(forbidden));
     }
   });
 });

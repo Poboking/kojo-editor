@@ -145,6 +145,7 @@ import {
   SLOT_SERVICE_WRITE_LEGS,
   installSlotServiceLegs,
   installSlotServiceProviders,
+  type ReferenceAsk,
   type SlotServiceHost,
 } from '../monaco/slot-service-providers';
 // SDK-B5b 车 5（2026-10-31）：一键迁移 code action 的注册与翻译也并进上面那张槽腿表
@@ -204,7 +205,11 @@ import { createApplyToClosedFile, installErbRename } from '../monaco/erb-rename'
 // K2 batch-9：ERB 的同符号高亮与结构化扩选（两语言同权面；只挂 `kojo-erb`）。
 import { installErbHighlightProvider } from '../monaco/erb-highlight';
 import { installErbSelectionRangeProvider } from '../monaco/erb-selection-range';
-import { collectReferenceLocations, installReferenceProvider } from '../monaco/find-references';
+import {
+  collectReferenceLocations,
+  createReferenceLanding,
+  installReferenceProvider,
+} from '../monaco/find-references';
 import { installKojoRename } from '../monaco/kojo-rename';
 import { installImplementationProvider } from '../monaco/erb-implementation';
 import {
@@ -972,8 +977,9 @@ function nameLegProjectSnapshotOf(
 /**
  * 引用腿（读类，与 `readDefinitionTargets` 同形状）：糖面换算到原文问一次，交回**源坐标**。
  *
- * `path` 一起交回是必要的而非顺手：引用计数读数（`onTally` → 台账 → 「被调用」面板）要知道
- * 这批读数是谁家的，糖面上那一位必须是**源路径**——投影不是文件，拿它的 URI 去对文件就是猜。
+ * `path` 一起交回是必要的而非顺手：糖面上的读类消费方（面板 / 状态栏）要知道这批结果是谁家的，
+ * 而投影不是文件——要拿它去对文件就得先有这一格源路径（引用台账同样按这一格归属现算，
+ * 见 `monaco/find-references.ts` 的 `landingPathOf`；调用方**不许**再抄一份"上次问的是谁"）。
  * 返回 `null` = 无主 / 没有可问的原文 / 映射缺席 / 这一行没有源行（调用方据此给空列表）。
  */
 export function readReferences(
@@ -994,6 +1000,40 @@ export function readReferences(
   return {
     path: target.path,
     locations: target.sugar ? foldLocationsToPreview(model, target, locations) : locations,
+  };
+}
+
+/**
+ * 引用腿的**发问落点**（LAU-DUALLEG 车 3 分离出来的那一格宿主事实；共享槽腿经
+ * `SlotServiceHost.askReferences` 拿它，旧桥腿那条路走的是**同一枚** `readTargetOf` +
+ * `referenceRequestPointOf`——一条尺子两个消费方，不许有第二份），两侧问的必须是
+ * **同一份文本、同一个位点**，否则"宿主腿让位"就等于把投影面上的 Shift+F12 换成静默没有。
+ *
+ * 三态的分工（少一格就误伤）：
+ * - `ask` = 照这一格问（投影面上 = 它背后那份原文 + 换算过的存档位点）；
+ * - `no-source` = 这一面**有主人**（屏幕上确实挂着某实例的投影）却没有可问的原文：映射缺席 /
+ *   这一行没有源行 ⇒ 消费方交回空列表，绝不拿投影坐标去猜一份文件；
+ * - `foreign` = 登记簿压根认不出这份 model（无主的游离 model、单测里的桩）⇒ 通道没有意见，
+ *   消费方按屏幕上这一面自己问——与加这一格之前逐字相同。
+ */
+export function referencesAskOf(
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+): ReferenceAsk {
+  const target = readTargetOf(model);
+  if (target === null) {
+    // 「投影换算不出来」与「压根不是宿主的面」必须分开：前者该闭嘴（交空表），
+    // 后者该让调用方照自己那份问——把后者也判成前者，无主 model 上的查引用就整条静默。
+    return sugarOwningPaneOf(model) === null ? { outcome: 'foreign' } : { outcome: 'no-source' };
+  }
+  const at = referenceRequestPointOf(model, target, position);
+  if (at === null) return { outcome: 'no-source' };
+  return {
+    outcome: 'ask',
+    model: target.model,
+    path: target.path,
+    line: at.line,
+    column: at.column,
   };
 }
 
@@ -2134,11 +2174,48 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     //   undo 停点，CODEACTION-UNDO-STACK 口径）——只有宿主知道哪枚 EditorPane 持有这份 model、
     //   以及糖视图那种"编辑无处可落"的实例档案。
     // 四格都不是语言判据：`@巡` 的 adapter 事实、判据、措辞全在包与插件。
+    //
+    // **引用落点通道**（LAU-DUALLEG 车 3）先于那张注入面建立：旧桥 provider 与 `references`
+    // 槽腿共用**同一枚**（一张 `uri → 路径` 反查表、一枚 opener、一份台账），所以两趟里谁答的
+    // 都一样可点开、行号一样真、处数一样进台账。这一枚注册的是 `registerEditorOpener`
+    // （与转到定义那枚同形、各认自己发过的 URI），不是第二枚 ReferenceProvider。
+    //
+    // 发问那一侧同一个道理（`askReferences`，单源 {@link referencesAskOf}）：投影面上要问的是
+    // **它背后那份原文**、位点要换算成存档行列（中文谓词文本里没有行首原生记号，拿它发问恒
+    // 0 命中）。两侧共用一条换算，一次都不重算——两张映射表一漂移，Peek 列的就是隔壁一行。
+    const referenceLanding = createReferenceLanding(monaco, {
+      navigate: (location) => {
+        // W9 判据①：与转到定义同一个载荷出口
+        requireKernel().bus.emit(
+          'editor.revealLocation',
+          revealLocationOf(
+            { path: location.filePath, line: location.line, column: location.column, span: location.span },
+            '查找引用',
+          ),
+        );
+      },
+      openModelFor: openModelAcrossGroups,
+      // W8 台账读数：F12 的"N 处"与「被调用」面板的入边读数同源（面板读 tally.nonDefinitionCount）。
+      // 这里只**搬运**，一次都不重数——重数就是 W8 要收口的第二判据。路径由落点通道现算
+      // （投影面上交的是**源路径**：读数必须钉在文件上，而投影不是文件）。
+      onTally: (tally, explanation, path) => setReferenceTally({ tally, explanation, path }),
+    });
+    globalDisposers.push(referenceLanding);
     const slotServiceHost: SlotServiceHost = {
       // 文件身份以**归属实例**为准（与 code action 那一腿同一条口径）。
       filePathOf: (model) => owningPaneOf(model)?.filePathRef.current ?? undefined,
       projectIndex: () => kojo2ProjectIndex,
       uriForPath: (path) => monaco.Uri.file(path),
+      // 引用腿的**落点通道**（LAU-DUALLEG 车 3）：与下面那枚旧桥 provider 共用同一份判据
+      // （`monaco/find-references.ts` 的 `createReferenceLanding`）——投影面折回、已开标签的
+      // live model 与行列夹取、未打开文件的 `uri → 路径` 反查（点击开通道）与 F12 处数台账
+      // 全在这一枚里。正因如此 ERB 的 descriptor 点名 `references` 之后，宿主腿可以按
+      // `excludeNamed` 让位而一格不丢：这一格在 ERB 上恰好一枚 provider，答数据的是插件供方。
+      landReferences: (model, locations) => referenceLanding.land(model, locations),
+      // 发问落点同一枚通道的另一半：与上面旧桥腿那条 `readReferences` 用的是同一枚
+      // `readTargetOf` + `referenceRequestPointOf`（换算只此一份），所以两侧问的必然是
+      // 同一份原文、同一个位点——两张映射表一漂移，Peek 列的就是隔壁一行。
+      askReferences: referencesAskOf,
       // ERB 补全的事实袋（LAU-4 补全腿第三批）：adapter 表 / 项目名录 / 宿主词表 / 偏好
       // 全在这条腿上现取，判据一枚都不留（descriptor 声明了 `completionFacts` 的语言才取）。
       completionFacts: (model, line) => erbCompletionFactsOf(model, line),
@@ -2449,32 +2526,19 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 读类换算批（2026-10-20）：糖面不再是整条静默——位点换算到原文问一次，交回的**引用列表
     // 留在源坐标**（面板列的就是源位置，落点侧 `applyReveal` 按同一张表折回预览行，折两遍就跳
     // 到隔壁）。写类那三条闸（改名 / quickfix / 格式化）一字未动。
-    // 引用腿的"读数是谁家的"随 `resolve` 记录（Monaco 的 provideReferences 同步问一次、
-    // 同步出一读数 ⇒ 这一变量就是那一次请求的路径，不另开第二条通道）
-    let tallySourcePath = '';
+    //
+    // **LAU-DUALLEG 车 3（2026-10-31）**：这一枚安装器按 `excludeNamed` 挂载 ⇒ 点名了
+    // `references` 的语言（今天 = ERB）不再由它应答，剩下的只有 `.kojo1` 那条旧桥（它不点名这一格，
+    // 糖线的取数口径还归宿主装配）。两侧现在共用**同一枚通道的两半**：落点那一半是上面那枚
+    // `referenceLanding`（`SlotServiceHost.landReferences` ⇒ 一张反查表、一枚 opener、一份台账），
+    // 发问那一半是 `referencesAskOf`（`SlotServiceHost.askReferences` ⇒ 投影面上交原文那一份
+    // model 与换算过的存档位点）。两半齐了才谈得上让位：只交落点，ERB 在升糖预览上会拿着
+    // 中文谓词文本发问、恒 0 命中——那是"让位＝静默没有"，比双挂更糟。
+    // 读数归属路径也随通道现算（以前那枚随 `resolve` 记的 `let` 变量在共用之后会把**上一次**
+    // 请求的路径盖到这一次的读数上——槽腿那趟根本不经过 `resolve`）。
     globalDisposers.push(installReferenceProvider(monaco, {
-      resolve: (model, position) => {
-        const read = readReferences(model, position, requireKernel());
-        if (read === null) return [];
-        tallySourcePath = read.path;
-        return read.locations;
-      },
-      navigate: (location) => {
-        // W9 判据①：与转到定义同一个载荷出口
-        requireKernel().bus.emit(
-          'editor.revealLocation',
-          revealLocationOf(
-            { path: location.filePath, line: location.line, column: location.column, span: location.span },
-            '查找引用',
-          ),
-        );
-      },
-      openModelFor: openModelAcrossGroups,
-      // W8 台账读数：F12 的"N 处"与「被调用」面板的入边读数同源（面板读 tally.nonDefinitionCount）。
-      // 这里只**搬运**，一次都不重数——重数就是 W8 要收口的第二判据。
-      onTally: (tally, explanation) => {
-        setReferenceTally({ tally, explanation, path: tallySourcePath });
-      },
+      resolve: (model, position) => readReferences(model, position, requireKernel())?.locations ?? [],
+      landing: referenceLanding,
     }));
     // 跳到实现（R3 残项，2026-10-16；W9 收口；ERB-PARITY G3 2026-10-31 进槽）：数据源是
     // `kind: 'implementation'` 的槽腿（`readImplementationTargets` **只问槽**），不再借

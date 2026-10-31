@@ -52,10 +52,18 @@
  *
  * ## 宿主事实的注入面（{@link SlotServiceHost}）
  *
- * 只有三格，且都**不是语言判据**：`filePathOf`（model 归属实例的磁盘路径——宿主知道哪个
- * EditorPane 持有它，插件不知道）、`projectIndex`（项目文件快照的现取口，只有宿主持有）、
- * `uriForPath`（跨文件落点的 URI 造法）。生产装配点全给；不传 = 各腿退回自己的缺省
- * （`model.uri` / 无快照 / `monaco.Uri.file`），行为与搬家前"没给注入面"逐字相同。
+ * 注入面逐批 additive 长出（`filePathOf` / `projectIndex` / `uriForPath` / `completionFacts` /
+ * `codeLensProjectIndex` / `snapshotLimits` / `applyCodeActionEdits` / `codeActionSlot` /
+ * `formatRules` / `onFormatDegraded` / `landReferences` / `askReferences`），**没有一格是语言判据**：
+ * 它们答的都是"这份 model 是哪个文件 / 这个项目有哪些文件 / 跨文件落点怎么造 URI 与怎么落地 /
+ * 这次问句发在哪一份文本上 / 偏好开没开"，
+ * 只有宿主知道，插件与工厂都不许猜。生产装配点全给；不传 = 各腿退回自己的缺省
+ * （`model.uri` / 无快照 / `monaco.Uri.file` / 本层自己翻形状），行为与搬家前"没给注入面"逐字相同。
+ *
+ * 引用那两格（`landReferences` + `askReferences`，LAU-DUALLEG 车 3）单说一句：它们合起来才是
+ * "把判据与通道分开"——槽供方只答**哪些位置算引用**，而「该拿哪一份文本、哪个位点去问」与
+ * 「交回的位置怎么变成屏幕上能点开的一行」都是宿主事实。分开之后，点名 `references` 的语言才敢
+ * 让宿主旧桥腿退场（否则让位 = 已关文件点不开 + F12 处数读数失踪 + 投影面上静默 0 命中）。
  *
  * 快照只在**显式动作**（Shift+F12 / F2）里取：行上注解是每次停笔重算整篇的那一格，装配点
  * 不给它 `projectIndex`，本层也不替它开（理由与实测口径见文件尾「行上注解」段）。
@@ -185,6 +193,30 @@ import {
 import { withPinyinFilterText } from './completion-core';
 import { registerForLanguageServices } from './register-dialects';
 import { reject } from './rename-rejection';
+// 引用通道的形状（本层声明、装配点实现）：值那一侧在
+// `ui/editor-global-providers.ts` 的 `referencesAskOf` 与 `monaco/find-references.ts` 的
+// `createReferenceLanding`，两半都经 `SlotServiceHost` 递进来，本层只描述形状。
+/** 一次发问该落在哪一份文本的哪一格（全是宿主事实，一条判据都没有） */
+export interface ReferenceAskTarget {
+  /** 取文与身份（`languageId` / `version`）都从这一份 model 现取（投影面上 = 它背后那份原文） */
+  readonly model: Monaco.editor.ITextModel;
+  /** 请求里的文件身份 = **存档路径**（投影不是文件，拿它的 URI 去问谁都是猜） */
+  readonly path: string;
+  readonly line: number;
+  readonly column: number;
+}
+/**
+ * {@link SlotServiceHost.askReferences} 的三态——**少了第三态就会误伤**：
+ * - `ask` = 照这一格发问（投影面上 = 原文那一份 + 换算过的存档位点）；
+ * - `no-source` = 这一面**有主人但没有可问的原文**（映射缺席 / 这一行没有源行）⇒ 交回空列表，
+ *   绝不拿投影坐标去猜一份文件；
+ * - `foreign` = 登记簿认不出这份 model（无主的游离 model / 单测里的桩）⇒ 通道没有意见，
+ *   调用方按屏幕上这一面自己问（与加这一格之前逐字相同）。
+ */
+export type ReferenceAsk =
+  | ({ readonly outcome: 'ask' } & ReferenceAskTarget)
+  | { readonly outcome: 'no-source' }
+  | { readonly outcome: 'foreign' };
 
 /* ============================== 契约档 → Monaco 枚举 ============================== */
 
@@ -461,6 +493,41 @@ export interface SlotServiceHost {
    * 形状与 `kojo-format-range.ts` 的 `onDegraded` 同款（同一词表、同一台账），文案一个字都不住本层。
    */
   readonly onFormatDegraded?: (notice: FormatDegradationNotice) => void;
+  /**
+   * 引用腿的**落点通道**（LAU-DUALLEG 车 3，additive；缺省不给 = 本腿自己翻形状，逐字不变）。
+   *
+   * 存在的理由是把两件事分开：槽供方只答"哪些位置引用了这个名字"，而"一枚位置怎么变成
+   * 屏幕上可点开、可预览、行号真实的一行"是宿主事实——哪份 model 是某实例的糖投影、哪些标签
+   * 开着（夹取要问 model）、没打开的文件点了开谁（URI 反查表）、F12 的计数读数交给哪一格。
+   * 装配点把 {@link ../monaco/find-references.ts} 的 `createReferenceLanding` 交进来，
+   * 于是宿主旧桥腿与这一枚槽腿**共用同一份落点判据**，`references` 这一格在点名它的语言上
+   * 才能只挂一枚 provider（宿主腿让位而不丢「已关文件点开」与「处数台账」）。
+   *
+   * 与 `applyCodeActionEdits` / `formatRules` 同一性质：宿主事实，不是语言判据；本层不认识
+   * 任何语言 id，也不在这里数第二遍引用（台账单源在落点通道那一侧）。
+   */
+  readonly landReferences?: (
+    model: Monaco.editor.ITextModel,
+    locations: readonly EditorSymbolLocation[],
+  ) => Monaco.languages.Location[];
+  /**
+   * 引用腿的**发问通道**（LAU-DUALLEG 车 3，additive；缺省不给 = 本腿按屏幕上这份 model 原样发问）。
+   *
+   * 与 {@link landReferences} 是同一枚通道的两半，缺一半都收不成"让位"：
+   * 落点那半管"引用点怎么变成能点开的行"，这一半管"**这一面该拿哪份文本、哪个位点去问**"。
+   * 升糖预览那份 `inmemory://sugar/…` model 的行列不属于存档、文本也不是原文（`#DIM` 被换成
+   * `声明数组`、`GOTO` 被换成 `跳到`），拿它发问恒 0 命中——判据搬进插件之后，这一步换算
+   * **只有宿主做得了**（登记簿才认得那张 `sugarLineMapRef`）。没有这一格就点头让位，
+   * 得到的不是"一条腿应答"而是"投影面上静默没有"，比双挂更糟。
+   *
+   * 回 `{ outcome: 'no-source' }` = 这一面没有可问的原文（映射缺席 / 这一行没有源行）⇒ 本腿如实
+   * 交回空列表，绝不拿投影坐标去猜一份文件；`{ outcome: 'foreign' }`（或没注入）= 通道没有意见，
+   * 按屏幕上这份 model 原样发问，逐字旧行为。
+   */
+  readonly askReferences?: (
+    model: Monaco.editor.ITextModel,
+    position: Monaco.Position,
+  ) => ReferenceAsk;
 }
 
 /* ============================== 共享小工具（宿主事实，不是判据） ============================== */
@@ -1074,10 +1141,19 @@ function signatureHelpProvider(): Monaco.languages.SignatureHelpProvider {
   };
 }
 
+/** 通道缺席时的那一格（= "本腿自己按屏幕上这一面问"，与加 {@link SlotServiceHost.askReferences} 之前逐字相同） */
+const FOREIGN_ASK: ReferenceAsk = Object.freeze({ outcome: 'foreign' });
+
 /**
  * 引用 provider（集合型，Shift+F12）。三态：无人应答 ⇒ `[]`；有人答空 ⇒ `[]`；有结果 ⇒ 逐条
  * 翻译。`truncated === true` 时 warn 一条（Peek 列表没有"截断"位；不静默少给，是这一层能做的
  * 如实表达）。`includeDeclaration === false` 去掉声明位（契约里声明位的 `kind` 是 `definition`）。
+ *
+ * **两半通道**（LAU-DUALLEG 车 3）：`askReferences` 管"这一面该拿哪份文本、哪个位点去问"，
+ * `landReferences` 管"引用点怎么变成屏幕上能点开的一行"。两半都是宿主事实（哪份 model 是某
+ * 实例的糖投影、投影行与存档行那张映射表、哪些标签开着、没打开的文件点了开谁），一条判据都不在
+ * 这里——判据是"哪些位置算这个符号的引用"，住在供方。缺任一半都不许把宿主腿摘掉：只给落点
+ * ⇒ 投影面上的问句带着中文谓词文本恒 0 命中（静默没有），只给发问 ⇒ 已关文件点不开。
  */
 function referencesProvider(
   monaco: typeof Monaco,
@@ -1086,13 +1162,20 @@ function referencesProvider(
   return {
     provideReferences(model, position, context) {
       try {
-        const source = sourceOf(model);
+        // 发问落点（宿主通道）：`no-source` ⇒ 这一面没有可问的原文，如实空列表；
+        // `foreign` / 没注入 ⇒ 按屏幕上这份 model 原样发问（逐字旧行为）。
+        const ask = host.askReferences?.(model, position) ?? FOREIGN_ASK;
+        if (ask.outcome === 'no-source') return [];
+        const asked = ask.outcome === 'ask' ? ask.model : model;
+        const source = sourceOf(asked);
         if (source === null) return [];
         const modelUri = uriOf(model);
         if (modelUri === undefined) return [];
 
-        const identity = editorRequestIdentityOf(model);
-        const path = pathOfModel(model, host.filePathOf);
+        // 身份取**被问的那一份** model（投影面上 = 原文的 `languageId` / `version`）；
+        // 文件身份只认通道给的那一格存档路径，通道没意见才退回本腿自己的两级回退。
+        const identity = editorRequestIdentityOf(asked);
+        const path = ask.outcome === 'ask' ? ask.path : pathOfModel(asked, host.filePathOf);
         const requestIdentity = path === undefined ? identity : { ...identity, path };
 
         const snapshot = projectFilesSnapshotOf(
@@ -1108,8 +1191,8 @@ function referencesProvider(
           referencesRequestOf(
             requestIdentity,
             source,
-            position.lineNumber,
-            position.column,
+            ask.outcome === 'ask' ? ask.line : position.lineNumber,
+            ask.outcome === 'ask' ? ask.column : position.column,
             kernel.project.current(),
             snapshot,
           ),
@@ -1117,15 +1200,25 @@ function referencesProvider(
         if (result === undefined) return [];
 
         const includeDeclaration = context?.includeDeclaration !== false;
-        const locations: Monaco.languages.Location[] = [];
-        for (const location of result.locations) {
-          if (!includeDeclaration && location.kind === 'definition') continue;
-          const sameFile = path === undefined || location.filePath === path || location.filePath === '';
-          const uri = sameFile
-            ? modelUri
-            : (uriForProjectPath(monaco, location.filePath, host.uriForPath) ?? modelUri);
-          locations.push({ uri, range: rangeOfLocation(location) });
-        }
+        // 「不含声明位」是 Monaco 的语义，不是供方的 ⇒ 在交落点通道**之前**滤（通道只管
+        // "一枚位置怎么落地"，它不该知道谁问的是引用还是定义位）。
+        const delivered = includeDeclaration
+          ? result.locations
+          : result.locations.filter((location) => location.kind !== 'definition');
+        // 落点通道（`SlotServiceHost.landReferences`）给了就只交数据：投影折回、已开标签的
+        // live model 与行列夹取、未开文件的点击反查、台账读数全在宿主那一侧（同一枚通道也服务
+        // 旧桥腿，所以点名这一格的语言让位时一格都不丢）。不给 = 本层自己翻形状，逐字不变。
+        const locations =
+          host.landReferences !== undefined
+            ? host.landReferences(model, delivered)
+            : delivered.map((location) => {
+                const sameFile =
+                  path === undefined || location.filePath === path || location.filePath === '';
+                const uri = sameFile
+                  ? modelUri
+                  : (uriForProjectPath(monaco, location.filePath, host.uriForPath) ?? modelUri);
+                return { uri, range: rangeOfLocation(location) };
+              });
         if (result.truncated === true) {
           console.warn(
             `[slot-service-providers] 引用集合被截断（${locations.length} 条已显示）：项目快照或单次上限先到`,

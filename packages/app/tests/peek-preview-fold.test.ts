@@ -24,9 +24,8 @@ import type * as Monaco from 'monaco-editor';
 import type { EditorSymbolLocation } from '@kojo/plugin-api';
 import { composeSugarDoc, sourceLineToSugar, type SugarSegmentInput } from '../src/ui/sugar-view';
 import { livePanes, type PaneCtx } from '../src/ui/editor-pane-registry';
-import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
-import { installReferenceProvider } from '../src/monaco/find-references';
+import { createReferenceLanding, installReferenceProvider } from '../src/monaco/find-references';
 import { localLegPointOf } from '../src/monaco/erb-dim-navigation';
 import { erbDimReferencesAt } from '@kojo/plugin-erb-parser';
 
@@ -169,8 +168,10 @@ function stubMonaco(): {
   provider: Monaco.languages.ReferenceProvider;
   registered: Array<{ languageId: string; provider: Monaco.languages.ReferenceProvider }>;
   opener: Monaco.editor.ICodeEditorOpener | undefined;
+  openers: Monaco.editor.ICodeEditorOpener[];
 } {
   const registered: Array<{ languageId: string; provider: Monaco.languages.ReferenceProvider }> = [];
+  const openers: Monaco.editor.ICodeEditorOpener[] = [];
   let openerRef: Monaco.editor.ICodeEditorOpener | undefined;
   const monaco = {
     Uri: { file: (p: string) => ({ fsPath: p, toString: () => `file:///${p.replace(/\\/g, '/')}` }) },
@@ -183,17 +184,20 @@ function stubMonaco(): {
     editor: {
       registerEditorOpener: (opener: Monaco.editor.ICodeEditorOpener) => {
         openerRef = opener;
+        openers.push(opener);
         return { dispose: () => undefined };
       },
     },
   };
   return {
     monaco: monaco as unknown as typeof Monaco,
-    // 两种语言 id 注册的是**同一枚** provider（`registerForLanguageServices`），取第一枚即可
+    // LAU-DUALLEG 车 3：宿主腿只挂**没**点名 references 的旧桥语言 ⇒ 现在只有一枚注册，
+    // 取第一枚即可（屏幕上那份投影带的就是这一门的语言 id）
     get provider() {
       return registered[0]!.provider;
     },
     registered,
+    openers,
     get opener() {
       return openerRef;
     },
@@ -277,24 +281,37 @@ describe('投影面 Peek · ①同文件的引用点折回屏幕上那一行', (
     expect(out.map((l) => l.range.startLineNumber)).toEqual([4, 4]);
   });
 
-  it('投影面吃的是 `.kojo` 那一枚注册：两面共用同一 provider ⇒ 折回判据不可能按语言 id 分叉', () => {
+  it('折回判据**只有一份**：`.kojo` 面吃宿主腿那一枚注册，槽腿那一趟经同一枚通道出同一批行', () => {
     mountProjection();
     const stub = stubMonaco();
-    installReferenceProvider(stub.monaco, {
-      resolve: () => [{ filePath: ARCHIVE, line: 7, column: 6 }],
+    // LAU-DUALLEG 车 3：ERB 点名 `references` ⇒ 宿主腿不再挂它（第三参给成 kind 就会重新挂上，
+    // 那一坑由 `language-parity` 的 1032C 钉着）。屏幕上这份投影带的是 `.kojo`，
+    // 仍然由本模块那一枚应答；而 ERB 那一面改由槽腿应答，两侧**共用同一枚落点通道**
+    // ——折回判据因此不可能按语言 id 分叉（比"两面同一枚 provider"更强的形状）。
+    const landing = createReferenceLanding(stub.monaco, {
       navigate: () => undefined,
       openModelFor: () => ARCHIVE_MODEL,
     });
-    expect(stub.registered.map((r) => r.languageId)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID]);
-    expect(stub.registered[0]!.provider).toBe(stub.registered[1]!.provider);
-    // 屏幕上那份投影带的语言 id = `.kojo`；它问出来的那一枚同样是预览行
-    const sugar = stub.registered[1]!.provider.provideReferences!(
+    // 落点三格（怎么落地 / 哪些标签开着 / 读数交给谁）整块住在通道里：
+    // 类型上堵掉了"宿主腿再交一份"，那会是第二枚全局 opener。
+    installReferenceProvider(stub.monaco, {
+      resolve: () => [{ filePath: ARCHIVE, line: 7, column: 6 }],
+      landing,
+    });
+    expect(stub.registered.map((r) => r.languageId)).toEqual([KOJO_LANGUAGE_ID]);
+    const sugar = stub.registered[0]!.provider.provideReferences!(
       PREVIEW_MODEL,
       CURSOR_ON_PREVIEW,
       {} as Monaco.languages.ReferenceContext,
       {} as Monaco.CancellationToken,
     ) as Monaco.languages.Location[];
     expect(sugar.map(rowOf)).toEqual([[PREVIEW_MODEL.uri.toString(), 5, 1, 5, 1]]);
+    // 槽腿那一趟（生产 = `SlotServiceHost.landReferences`）：同一枚通道、同一批输入 ⇒ 逐字同一批行
+    expect(landing.land(PREVIEW_MODEL, [{ filePath: ARCHIVE, line: 7, column: 6 }]).map(rowOf))
+      .toEqual(sugar.map(rowOf));
+    // 只此一枚 opener（两枚 = 两张反查表抢答，点击落到没人登记过的那张上就是"按了没反应"）
+    expect(stub.openers).toHaveLength(1);
+    landing.dispose();
   });
 
   it('端到端：`#DIM` 本地腿 + 真投影 ⇒ 声明与两处引用全列在预览行上（原文那一面一次都不出现）', () => {
