@@ -1044,3 +1044,85 @@ export function kojo2CompletionOptionsFromAdapter(
     ...(hintNames === undefined ? {} : { hintNames }),
   };
 }
+
+/* ============================== 行内续写（幽灵文本）：同一把尺子 + 「几乎唯一才给」 ============================== */
+
+/**
+ * 只由**这篇源文**证明得了的候选档（名录来自源文自己的声明表）。
+ *
+ * 幽灵文本的请求**刻意没有整篇正文**（契约 `inline-completion.ts` 的"零 IO 与零切词"一节：
+ * 整篇复制会把每一次击键变成 full-model copy），供方只能拿到以光标为心的**行窗口**。窗口是
+ * 切片时，这一档的名录**可能不完整**：上面还有两条 `# 表` 声明在窗外 ⇒ 窗内数出来"只剩一条"
+ * 是**假唯一**，把错名字写进作者的行里。弹窗那条腿不吃这个亏（它拿的是整篇 `text`），
+ * 所以这一档在窗口切片时一律不给幽灵文本（宁可漏报，不可错报——同
+ * `@kojo/plugin-inline-completion-local` 的 uniqueness 判据方向）。
+ */
+const KOJO2_INLINE_DOCUMENT_KINDS: readonly Kojo2CompletionKind[] = Object.freeze([
+  'declaration',
+  'templateParam',
+]);
+
+/** 一次行内续写的三档结论（**没有第四档**："这个位置不补"与"补得出但不唯一"都答得出话）。 */
+export type Kojo2InlineResult =
+  | {
+      readonly state: 'unique';
+      readonly candidate: Kojo2CompletionCandidate;
+      /** 替换区间的列（1 基、尾列半开）；**行号由调用方补**——窗口切片里的那一行不是绝对行 */
+      readonly startColumn: number;
+      readonly endColumn: number;
+    }
+  | { readonly state: 'ambiguous'; readonly count: number }
+  | { readonly state: 'none' };
+
+export interface Kojo2InlinePolicy {
+  /**
+   * 请求里的文本是不是**整篇**（弹窗那条腿 = true；幽灵文本的行窗口 = false）。
+   * 缺省 `false`：保守方向是"少给候选"，判错成 false 只是漏一次灰字，判错成 true 会写错字。
+   */
+  readonly wholeDocument?: boolean;
+}
+
+/**
+ * 行内续写的**唯一判据出口**：位置 + 候选 + 「几乎唯一才给」。
+ *
+ * **它不是第二把尺子**——整条判据就是 {@link kojo2CompletionAt} 那一次调用：
+ * 台词 / 旁白 / 转义正文 / 注释 / 旧写法行 / 串与注释内 / `@原生` 围栏（含栏头）那些退让，
+ * 以及"哪一格属于哪个位置"（锚点位 / 声明词位 / 类型位 / 存储期 / 事件位 / 参数位 / 颜绘位 /
+ * 行尾提示位 / 插值表达式位），全部住在那一枚函数里，这里一格都不重写。
+ * 本函数只在其结果上再加两件事：
+ * 1. **唯一性**：0 条 ⇒ `none`（这个位置不补，或补不出与已打字面相容的名字）；≥2 条 ⇒ `ambiguous`
+ *    （给哪一条都没有依据，作者该用弹窗列表）；恰 1 条才 `unique`；
+ * 2. **已写完不作候选**：那唯一一条与光标处那枚名字段逐字相同 ⇒ `none`
+ *    （幽灵文本要替换的就是它自己，弹出来只是噪声）。
+ *
+ * 刻意**不含块级骨架**（`kojo2SnippetCandidatesAt`）：一次击键就把五行模板糊进缓冲区不是
+ * "下一格的字"，那是弹窗与片段的任务；这里只补**一格名字 / 一枚记号**。
+ */
+export function kojo2InlineCompletionAt(
+  query: Kojo2Query,
+  options: Kojo2CompletionOptions = {},
+  policy: Kojo2InlinePolicy = {},
+): Kojo2InlineResult {
+  const candidates = kojo2CompletionAt(query, options);
+  if (candidates.length === 0) return { state: 'none' };
+  if (
+    policy.wholeDocument !== true &&
+    candidates.some((candidate) => KOJO2_INLINE_DOCUMENT_KINDS.includes(candidate.kind))
+  ) {
+    // 名录可能不完整 ⇒ "窗内唯一"不是唯一：按 ambiguous 记账（供方答"看过，没有"）
+    return { state: 'ambiguous', count: candidates.length };
+  }
+  if (candidates.length > 1) return { state: 'ambiguous', count: candidates.length };
+  const only = candidates[0]!;
+  const lineText = query.source.split(/\r\n|\r|\n/)[query.line - 1] ?? '';
+  const range = kojo2CompletionRangeAt(query.line, lineText, query.column);
+  if (only.insertText === lineText.slice(range.startColumn - 1, range.endColumn - 1)) {
+    return { state: 'none' };
+  }
+  return {
+    state: 'unique',
+    candidate: only,
+    startColumn: range.startColumn,
+    endColumn: range.endColumn,
+  };
+}

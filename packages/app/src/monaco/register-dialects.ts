@@ -4,6 +4,7 @@ import {
   declaredSlotKinds,
   languageDescriptors,
   usesLegacyBridge,
+  type LanguageDescriptor,
   type SlotServiceKind,
 } from './language-registry';
 
@@ -72,6 +73,18 @@ export function registerForLanguageServices(
      * 由共享收口那一枚应答。
      */
     readonly excludeNamed?: SlotServiceKind;
+    /**
+     * `alsoFor` = 旧桥语言之外**再挂上**这一格 descriptor 声明点名的语言（additive，
+     * LAU-KOJO2-INLINE 2026-10-31）。
+     *
+     * 为什么需要它（而不是让这门语言去点名一条 `SlotServiceKind` 腿）：有些 Monaco 面
+     * 的应答者住在**另一枚专用槽**、形状也与十四条语言服务腿不同（今天的行内续写：
+     * 供方在 `completion.source`，注册面是 `registerInlineCompletionsProvider`）。
+     * 它的"谁被挂上"照样必须是**写下来的 descriptor 事实**，而不是宿主按语言 id 分支——
+     * 判据住在语言注册表（`declaresInlineCompletion`），这里只吃一枚谓词，零语言知识。
+     * 缺省 = 不给 ⇒ 与加这一格之前逐字相同。
+     */
+    readonly alsoFor?: (descriptor: LanguageDescriptor) => boolean;
   } = {},
 ): Monaco.IDisposable {
   // B3d：逐门挂上时**半途抛错就回滚**。此前 `.map` 写在表达式里，第二门注册抛错会让
@@ -91,7 +104,8 @@ export function registerForLanguageServices(
       const servesAll =
         options.namedOnly !== true && usesLegacyBridge(descriptor) && !namesExcluded;
       const namedBySlot = kind !== undefined && declaredSlotKinds(descriptor).includes(kind);
-      if (!servesAll && !namedBySlot) continue;
+      const alsoDeclared = options.alsoFor?.(descriptor) === true;
+      if (!servesAll && !namedBySlot && !alsoDeclared) continue;
       subs.push(register(monaco, descriptor.id));
     }
   } catch (error) {

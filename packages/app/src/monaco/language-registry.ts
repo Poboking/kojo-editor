@@ -290,6 +290,24 @@ export interface LanguageDescriptor {
    * 否则切流档位一改，`.kojo1` 就会静默从只读变可编辑。
    */
   readonly gameDirReadOnly?: boolean;
+  /**
+   * 这门语言要不要**行内续写（幽灵文本）** provider（additive，LAU-KOJO2-INLINE 2026-10-31）。
+   *
+   * 为什么是"要不要"而不是"谁作答"：应答者住在槽 `completion.source`（多供方、可弃权），
+   * 而**这一枚 Monaco provider 该不该为这门语言挂上**是 descriptor 的事——收口那一侧
+   * 按 `descriptor.inlineCompletion === true` 现读，宿主因此不必在任何地方按语言 id 分支
+   * （M2：宿主不认识语言；`tools/audit-language.mjs` 的 M2 棘轮盯的就是这个）。
+   *
+   * 为什么不进 `capabilities` / `SlotServiceKind`：那两本台账记的是
+   * `ui.editor.languageService` 的槽腿与它的注册面，而行内续写是**另一枚专用槽**
+   * （`completion.source`）+ 另一枚 Monaco 面（`registerInlineCompletionsProvider`），
+   * 与 `contextFaces` / `lineComment` 同口径："只是 descriptor 上的一格声明"。
+   * v1 旧桥语言（ERB / `.kojo`）不写这一格也照样挂得上（`register-dialects.ts` 的
+   * `servesAll` 那条腿本来就是"对一等语言拉平"）——这一格是给**只点名槽腿**的方言开的门。
+   *
+   * 缺省 `false` = 不挂（加这一格之前逐字相同）。
+   */
+  readonly inlineCompletion?: boolean;
 }
 
 const descriptors: LanguageDescriptor[] = [];
@@ -328,6 +346,21 @@ export function declaredSlotKinds(descriptor: LanguageDescriptor): readonly Slot
  */
 export function usesLegacyBridge(descriptor: LanguageDescriptor): boolean {
   return descriptor.languageServices === true || descriptor.services?.legacyBridge === true;
+}
+
+/**
+ * 这门语言**点名**要行内续写 provider（{@link LanguageDescriptor.inlineCompletion} 的读数口）。
+ *
+ * 挂载收口（`register-dialects.ts`）拿它当"除旧桥语言外还要挂谁"的谓词，闸门拿它当
+ * "这门语言的代码位判据归供方"的事实——两侧读同一枚，不许第二处去摸 descriptor 的字段。
+ */
+export function declaresInlineCompletion(descriptor: LanguageDescriptor): boolean {
+  return descriptor.inlineCompletion === true;
+}
+
+/** id → 点名了行内续写吗（认不出的 id / 没声明 ⇒ `false`；每次击键都要问一次，**不抛**） */
+export function declaresInlineCompletionFor(languageId: string): boolean {
+  return descriptorForLanguageId(languageId)?.inlineCompletion === true;
 }
 
 /* ============================== 可用性门（LAU-3 / §4.4） ============================== */
