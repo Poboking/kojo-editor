@@ -18,7 +18,7 @@
  * 抽象 fixture 派生，只把"共享用例真的踩到的那几格"换成本列自己的值
  * （事件表 / 程序层开关 / 演出面 / profile）。任何真实工程都不会用它识别。
  */
-import type { GameAdapter } from '@kojo/kojo-core';
+import type { CarrierBinding, GameAdapter } from '@kojo/kojo-core';
 import { FIXTURE_ADAPTER, freezeAdapter } from '@kojo/kojo-core';
 
 /** 本列自己的事件表：只有一个共享事件，引擎 token 是本列自己的名字（不借 eraTW / eraFL） */
@@ -47,11 +47,25 @@ export const DEMO_EVENT_CATALOG = Object.freeze({
  * - `features`：program 层取共享用例真用到的四项（数组 / 循环 / 跳转 / 重复）；
  *   递归与 `@巡` 不声明——共享用例里没有它们（那属"各自事实"）。
  */
+/**
+ * 本列的载体归属（LAU-D4 车 ① 的"新方言夹具"半格）。
+ *
+ * 形状取 Emuera 系与 eraTW 同侧的事实：`# 机` 从 `.kojo2` 成立（inline），发射产物落
+ * `ERB/**`（erb）；两格都省略 `validates` = 四类事实全量。这一列存在的意义就是把
+ * "第三门方言带 carriers 进来"钉成**只加数据**：`resolveDialectBinding` 与归属闸
+ * （`tests/carriers.test.ts`）吃三列走同一张表，套件、CLI、宿主一个字不改。
+ */
+export const DEMO_CARRIERS: readonly CarrierBinding[] = Object.freeze([
+  Object.freeze({ carrier: 'erb' as const, glob: 'ERB/**/*.ERB' }),
+  Object.freeze({ carrier: 'inline' as const, glob: '**/*.kojo2' }),
+]);
+
 export const DEMO_GAME_ADAPTER: GameAdapter = freezeAdapter({
   ...FIXTURE_ADAPTER,
   id: 'demo',
   version: '2.0.0',
   eventCatalog: DEMO_EVENT_CATALOG,
+  carriers: DEMO_CARRIERS,
   profile: Object.freeze({
     narrationColor: 'default',
     dialogueColor: 'default',

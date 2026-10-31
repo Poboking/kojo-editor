@@ -17,6 +17,7 @@ import type { GameAdapter, GameFingerprint } from '../../../../kojo-core/src/ada
 import { freezeAdapter } from '../../../../kojo-core/src/adapter.js';
 
 import { ERATW_PROFILE } from './profile.js';
+import { ERATW_CARRIERS } from './carriers.js';
 import { ERATW_EVENT_CATALOG } from './event-catalog.js';
 import { ERATW_DOMAIN_SYMBOLS } from './domain-symbols.js';
 import { ERATW_PRESENTATION } from './presentation.js';
@@ -33,6 +34,7 @@ import {
 } from './capabilities.js';
 
 export * from './profile.js';
+export * from './carriers.js';
 export * from './event-catalog.js';
 export * from './domain-symbols.js';
 export * from './presentation.js';
@@ -60,6 +62,9 @@ export const ERATW_GAME_ADAPTER: GameAdapter = freezeAdapter({
   version: '2.0.0',
   gameFingerprint: ERATW_GAME_FINGERPRINT,
   eventCatalog: ERATW_EVENT_CATALOG,
+  // LAU-D4 车 ①：正文与事件同落 ERB 面、2.0 面在 `.kojo2`、XML 不是 eraTW 的方言载体——
+  // 归属是数据（`carriers.ts`），与 eraFL 那份同契约不同值（`# 机` 落口上运行时是这里的对面事实）。
+  carriers: ERATW_CARRIERS,
   domainSymbols: ERATW_DOMAIN_SYMBOLS,
   profile: ERATW_PROFILE,
   presentation: ERATW_PRESENTATION,
