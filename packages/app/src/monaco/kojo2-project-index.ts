@@ -34,6 +34,9 @@
  * 不要求名字在本文件里有声明——否则"只在 A 文件声明、B 文件引用"的跨文件引用根本看不见。
  * 归属仍按本地声明种类隔离（B 文件把同名声明成变量，它就不会被算成 A 文件那张表的引用）。
  * **本文件不写第二份扫描器**——跨文件与同文件因此不可能给出两套事实。
+ * LAU-B11（2026-10-31）起**查询规则也不在本文件抄第二份**：`refsOf` / `declsOf` / `symbolAt`
+ * 委托 `@kojo/kojo-lang/references` 的 {@link createKojo2ReferenceFactsQueryIndex}——快照供方
+ * （插件那侧）读的是同一条实现；宿主这层只剩缓存与读取路径（逐文件事实建好，查询不重扫）。
  *
  * ## 缓存与性能
  *
@@ -79,8 +82,10 @@ import {
 // 模块图位置（原来那两枚也只是转发这两条包叶）。
 import type { Kojo2RenameResolvers } from '@kojo/kojo-lang/rename';
 import {
+  createKojo2ReferenceFactsQueryIndex,
   kojo2ReferenceCandidatesOf,
   kojo2ReferenceSymbolsOf,
+  KOJO2_PROJECT_REF_LIMIT,
   type Kojo2DocumentSymbolFacts,
   type Kojo2ReferenceCandidate,
   type Kojo2ReferenceSiteKind,
@@ -90,8 +95,11 @@ import {
 
 /* ============================== 公共形状 ============================== */
 
-/** 单次 `refsOf` 的结果上限（超出按源码序截断并置 `truncated`） */
-export const KOJO2_PROJECT_REF_LIMIT = 2000;
+/**
+ * 单次 `refsOf` 结果的上限——**转发包那枚**（LAU-B11：查询规则与上限同住
+ * `@kojo/kojo-lang/references`，宿主不再另定义第二份值；旧消费方从本模块的导入零改动）。
+ */
+export { KOJO2_PROJECT_REF_LIMIT };
 
 /** 喂给索引的一份文件（文本由宿主读好；索引不碰盘） */
 export interface Kojo2ProjectFileInput {
@@ -241,23 +249,6 @@ export interface Kojo2ProjectIndex {
 
 /* ============================== 内部工具 ============================== */
 
-/** 合法符号种类（八类：七类声明 + 事件；用 Set 收口，坏值直接空结果） */
-const SYMBOL_KINDS: ReadonlySet<string> = new Set<Kojo2ReferenceSymbolKind>([
-  'scene',
-  'variable',
-  'constant',
-  'table',
-  'pool',
-  'template',
-  'function',
-  'event',
-]);
-
-/** 查询种类的形态闸（未知字符串一律不进索引） */
-function isSymbolKind(value: unknown): value is Kojo2ReferenceSymbolKind {
-  return typeof value === 'string' && SYMBOL_KINDS.has(value);
-}
-
 /** 码元序比较（与 `kojo2-references` / core 项目层同一口径：不用 `localeCompare`） */
 function compareText(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -266,41 +257,6 @@ function compareText(a: string, b: string): number {
 /** 路径序：归一键优先（大小写 / 分隔符不敏感），再按原文路径（同键两写法仍有确定序） */
 function comparePaths(a: string, b: string): number {
   return compareText(pkey(a), pkey(b)) || compareText(a, b);
-}
-
-/** 出现点角色序（只用于同起点并列时给一个确定次序） */
-const ROLE_RANK: Readonly<Record<Kojo2ReferenceSiteKind, number>> = {
-  decl: 0,
-  ref: 1,
-  call: 2,
-};
-
-/** 跨文件出现点的规范序：路径 → 行 → 起始列 → 结束列 → 角色 */
-function compareReferences(a: Kojo2ProjectReference, b: Kojo2ProjectReference): number {
-  return (
-    comparePaths(a.path, b.path) ||
-    a.span.startLine - b.span.startLine ||
-    a.span.startColumn - b.span.startColumn ||
-    a.span.endColumn - b.span.endColumn ||
-    ROLE_RANK[a.kind] - ROLE_RANK[b.kind]
-  );
-}
-
-/** 声明规范序：路径 → 行 → 起始列 → 结束列 → 名字 → 种类 */
-function compareDeclarations(a: Kojo2ProjectDeclaration, b: Kojo2ProjectDeclaration): number {
-  return (
-    comparePaths(a.path, b.path) ||
-    a.span.startLine - b.span.startLine ||
-    a.span.startColumn - b.span.startColumn ||
-    a.span.endColumn - b.span.endColumn ||
-    compareText(a.name, b.name) ||
-    compareText(a.kind, b.kind)
-  );
-}
-
-/** 出现点去重键（路径归一键 + 区间 + 角色；同位置同角色只留一条） */
-function siteKey(path: string, span: Kojo2ReferenceSpan, kind: Kojo2ReferenceSiteKind): string {
-  return `${pkey(path)}\u0000${span.startLine}\u0000${span.startColumn}\u0000${span.endLine}\u0000${span.endColumn}\u0000${kind}`;
 }
 
 /**
@@ -323,12 +279,6 @@ function countSites(
   for (const candidate of candidates) add(candidate.span, candidate.kind);
   return seen.size;
 }
-
-/** 空结果（共享的冻结对象：查询无命中不是错误，也不该每次造新垃圾） */
-const EMPTY_REFS: Kojo2ProjectReferencesResult = Object.freeze({
-  refs: Object.freeze([]) as readonly Kojo2ProjectReference[],
-  truncated: false,
-});
 
 /** 缺省符号事实入口：同一份已建文档索引交给 `kojo2ReferenceSymbolsOf`（不再 lex + parse 一遍） */
 function defaultSymbolsOf(
@@ -430,121 +380,26 @@ export function createKojo2ProjectIndex(
     return entries.get(pkey(path));
   };
 
-  const refsOf = (query: Kojo2ProjectRefQuery): Kojo2ProjectReferencesResult => {
-    if (query === null || typeof query !== 'object') return EMPTY_REFS;
-    const name: unknown = (query as { name?: unknown }).name;
-    const kind: unknown = (query as { kind?: unknown }).kind;
-    if (typeof name !== 'string' || name.length === 0) return EMPTY_REFS;
-    if (!isSymbolKind(kind)) return EMPTY_REFS;
+  /**
+   * 查询视图（LAU-B11）：`refsOf` / `declsOf` / `symbolAt` 的规则实现**只有一处**，住在
+   * `@kojo/kojo-lang/references` 的 `createKojo2ReferenceFactsQueryIndex`——快照供方读的
+   * 同一条。本层把**已缓存**的逐文件事实原样交过去（每次查询按规范序重排条目引用，
+   * 不重扫源文、不重解析），只负责缓存与读取路径；宿主不再手抄第二份口径。
+   * 「名录未建 ⇒ 不答」与「真没有 ⇒ 答空」的分歧不在这里：那一格归取数腿
+   * （`projectFilesSnapshotOf` 的 `undefined`），本索引只对已喂进来的事实作答。
+   */
+  const factsQuery = () => createKojo2ReferenceFactsQueryIndex(orderedEntries());
 
-    const only = validatePath((query as { onlyPath?: unknown }).onlyPath)
-      ? pkey((query as { onlyPath: string }).onlyPath)
-      : null;
-    const exclude = validatePath((query as { excludePath?: unknown }).excludePath)
-      ? pkey((query as { excludePath: string }).excludePath)
-      : null;
+  const refsOf = (query: Kojo2ProjectRefQuery): Kojo2ProjectReferencesResult =>
+    factsQuery().refsOf(query);
 
-    const ordered = orderedEntries();
-    // 没有声明就没有符号：候选位只在"这个名字 + 种类确实被声明过"时才归属得上。
-    const declared = ordered.some((entry) =>
-      entry.symbols.some((facts) => facts.symbol.name === name && facts.symbol.kind === kind),
-    );
-    if (!declared) return EMPTY_REFS;
-
-    const seen = new Set<string>();
-    const refs: Kojo2ProjectReference[] = [];
-    const add = (path: string, span: Kojo2ReferenceSpan, role: Kojo2ReferenceSiteKind): void => {
-      const key = siteKey(path, span, role);
-      if (seen.has(key)) return;
-      seen.add(key);
-      refs.push({ path, span, kind: role });
-    };
-
-    for (const entry of ordered) {
-      if (only !== null && pkey(entry.path) !== only) continue;
-      if (only === null && exclude !== null && pkey(entry.path) === exclude) continue;
-
-      // 本文件里这个名字的所有**声明种类**：候选表达式位按"最近的本地声明"归属——
-      // 与 `kojo2ReferencesAt` 的家族隔离同一条判据（变量位不会被算成同名表的引用）。
-      const localDeclKinds = new Set<Kojo2ReferenceSymbolKind>();
-      for (const facts of entry.symbols) {
-        if (facts.symbol.name !== name) continue;
-        if (facts.symbol.kind === kind) {
-          // 声明位 / 事件监听位：符号事实已按同一把尺子收好（`# 幕` 也走这一格）。
-          for (const site of facts.refs) add(entry.path, site.span, site.kind);
-        }
-        if (facts.symbol.kind === 'scene' || facts.symbol.kind === 'event') continue;
-        localDeclKinds.add(facts.symbol.kind);
-      }
-
-      // 表达式位：事件不靠表达式引用；幕没有引用位。
-      if (kind === 'event' || kind === 'scene') continue;
-      if (localDeclKinds.size > 0 && !localDeclKinds.has(kind)) continue;
-      for (const candidate of entry.candidates) {
-        if (candidate.name !== name) continue;
-        add(entry.path, candidate.span, candidate.kind);
-      }
-    }
-
-    refs.sort(compareReferences);
-    if (refs.length <= KOJO2_PROJECT_REF_LIMIT) return { refs, truncated: false };
-    return { refs: refs.slice(0, KOJO2_PROJECT_REF_LIMIT), truncated: true };
-  };
-
-  const declsOf = (name: string): readonly Kojo2ProjectDeclaration[] => {
-    if (typeof name !== 'string' || name.length === 0) return [];
-    const seen = new Set<string>();
-    const out: Kojo2ProjectDeclaration[] = [];
-    for (const entry of orderedEntries()) {
-      for (const facts of entry.symbols) {
-        if (facts.symbol.name !== name) continue;
-        const span = facts.symbol.declSpan;
-        const key = siteKey(entry.path, span, 'decl');
-        if (seen.has(key)) continue;
-        seen.add(key);
-        out.push({ path: entry.path, name, kind: facts.symbol.kind, span });
-      }
-    }
-    out.sort(compareDeclarations);
-    return out;
-  };
+  const declsOf = (name: string): readonly Kojo2ProjectDeclaration[] =>
+    factsQuery().declsOf(name);
 
   const files = (): readonly string[] => orderedEntries().map((entry) => entry.path);
 
-  const symbolAt = (query: Kojo2ProjectSymbolQuery): Kojo2ProjectSymbolRef | null => {
-    if (query === null || typeof query !== 'object') return null;
-    const path: unknown = (query as { path?: unknown }).path;
-    const line: unknown = (query as { line?: unknown }).line;
-    const column: unknown = (query as { column?: unknown }).column;
-    if (!validatePath(path)) return null;
-    if (typeof line !== 'number' || !Number.isFinite(line) || line < 1) return null;
-    if (typeof column !== 'number' || !Number.isFinite(column) || column < 1) return null;
-
-    const entry = entries.get(pkey(path));
-    if (entry === undefined) return null;
-    const col0 = column - 1;
-    const candidate = entry.candidates.find(
-      (candidate) =>
-        candidate.span.startLine === line &&
-        col0 >= candidate.span.startColumn - 1 &&
-        col0 <= candidate.span.endColumn - 1,
-    );
-    if (candidate === undefined) return null;
-
-    // 项目里这个名字的声明种类：只认进命名空间的声明（幕 / 事件不是表达式引用的目标）。
-    const kinds = new Set<Kojo2DeclarationKind>();
-    for (const other of entries.values()) {
-      for (const facts of other.symbols) {
-        if (facts.symbol.name !== candidate.name) continue;
-        if (facts.symbol.kind === 'scene' || facts.symbol.kind === 'event') continue;
-        kinds.add(facts.symbol.kind);
-        // 同名多家族是 core 错误：这里没有可靠判据，交 `null`（不猜）。
-        if (kinds.size > 1) return null;
-      }
-    }
-    for (const kind of kinds) return { name: candidate.name, kind };
-    return null;
-  };
+  const symbolAt = (query: Kojo2ProjectSymbolQuery): Kojo2ProjectSymbolRef | null =>
+    factsQuery().symbolAt(query);
 
   const snapshot = (): Kojo2ProjectIndexSnapshot => {
     const ordered = orderedEntries();
