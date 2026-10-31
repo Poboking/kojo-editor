@@ -5,7 +5,8 @@
   "description": "eraTW game adapter: project detection, CHARA CSV parsing, kojo paths. All eraTW-specific knowledge lives here; the kernel stays game-agnostic.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./kojo2-surface-map": "./src/kojo2/surface-map.ts"
   },
   "dependencies": {
     "@kojo/plugin-api": "workspace:*",

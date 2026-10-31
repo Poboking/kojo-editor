@@ -23,6 +23,10 @@ import type { KojoSpan } from './ast.js';
  *
  * 2026-10-26 批 additive 扩入**一枚** `core/decl/multiple-dialect`（`# 方言` 断言查重；
  * 解析层只吃单值 `fileAssertion`，多条断言必有一条被静默丢弃）。
+ *
+ * LAU-D4 车②（表层↔原生双向映射表）additive 扩入**三枚** `core/surface/*`
+ * （`dangling` / `contested` / `unmapped`，全 error；生产者 `surface-map.ts::checkSurfaceMap`）——
+ * 表与事实面错配必红，不静默（铁律 4）。
  */
 const CORE_DIAGNOSTIC_CODE_LIST = [
   /* 词法与结构（C1 additive） */
@@ -339,6 +343,49 @@ const CORE_DIAGNOSTIC_CODE_LIST = [
    * 消息模板：`文件 {路径} 不在方言 {方言} 声明的任何载体归属里（carriers 的 glob 都没命中）：该文件的载体级校验跳过。`
    */
   'core/carrier/unowned',
+  /**
+   * **表层映射表指向不存在的原生写法**（§8 LAU-D4 车②；生产者 `surface-map.ts::checkSurfaceMap`）。
+   * 两种成因同码（与上面 `core/carrier/unowned` 承载"glob 非字符串"同一先例：都是**表自己不合格**）：
+   * ① 表里某个作者名在该 `kind` 的事实面里根本没有；② 名字有、写的落点与事实面给的不同
+   * （表与事实分家，双向投影从此两套口径）。条目形状坏（非对象 / kind 不在四格 / 名字空串）
+   * 也报本码——坏条目不参与对账，它名下的作者名一律查不到落点，这是同一件事的形状版本。
+   *
+   * 与 `core/event/unknown` 的分工：那条是**作者**在文件里写了目录没有的事件（作者面，逐文件判）；
+   * 本条是**方言包的表**与自己的事实面写分歧（数据面，装载期一次性判）。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里；错配不能被"看起来还能查"掩盖，铁律 4）。
+   * 消息模板：`表层映射表把「{名字}」（{面}）写成 {落点}，而事实面给的是 {事实落点}⇒ 表与事实分家。`
+   */
+  'core/surface/dangling',
+  /**
+   * **同一原生写法被两条表层名争用**（`surface-map.ts::checkSurfaceMap`；车② 的第二枚）。
+   * 三种形态同码：① 一个落点两个作者名（反查必须二选一）；② 一个作者名两个落点（正向只按
+   * 声明序取到第一条，第二条永远查不到）；③ 同一条名字在表里写了两遍（反向投影出重影）。
+   *
+   * **唯一合法的重合**由事实面自己说：`domainSymbols.pronouns` 里 `{我}` 与 `{她}` 同指一个引用
+   * 模板是契约建模过的状态（`requiresView` / `viewBound` 正是为区分"何时重合"而存在），事实面
+   * 本来就有 ≥2 条同落点时表照抄不算争用；其余子面（事件常量 / 属性族槽 / 名字函数 / 外部变量 /
+   * 存储期变量族 / 演出指令）两名一槽就是数据写反。
+   *
+   * 与 `core/decl/duplicate-name` 的分工：那条是**作者文件里**同一个名字声明两次；本条是
+   * **方言包的表**里两格互相咬。与 `core/surface/dangling` 的分工：那边"对不上"，这边"对得上但撞车"。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里；冲突必须 error）。
+   * 消息模板：`原生写法 {落点}（{面}）被 {n} 条表层名争用（{名单}）⇒ 反查会二选一。`
+   */
+  'core/surface/contested',
+  /**
+   * **事实面有这个名字、表层映射表里没有**（`surface-map.ts::checkSurfaceMap`；车② 的第三枚）。
+   * 表"少写"与"写错"同样是错配：双向表一旦缺一格，作者名反查落不到、投影少一条，而事实面还在
+   * 给它发补全/悬停——两套口径分家的开始。空数组的表（显式声明"本方言不映射任何名字"）会为
+   * 事实面的每一条报本码；**未声明**（`undefined`）一概不判，与 `carriers` 的"没问就不判"同口径。
+   *
+   * 与 `core/dialect/unbound` 的分工：那边是方言没绑定（没有事实可查）；这边事实齐、只缺表。
+   *
+   * 级别：error（不在 `CORE_WARNING_CODES` 里；车② 的判据是"错配必红"，少一格也是错配）。
+   * 消息模板：`事实面（{面}）里有「{名字}」→ {落点}，表层映射表里没有这一条⇒ 作者面少一格。`
+   */
+  'core/surface/unmapped',
   /**
    * **注入子解析失败**（§4.6 / LAU-6；生产者在宿主侧注入层——今天落在
    * `packages/app/src/monaco/tree-sitter/injection.ts`，随「子树失败」那一条回落一起发）。
