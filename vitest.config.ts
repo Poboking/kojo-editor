@@ -92,6 +92,8 @@ export const config = defineConfig({
       '@kojo/kojo-vocab/formatter': r('./packages/kojo-vocab/src/formatter.ts'),
       '@kojo/kojo-vocab/enter': r('./packages/kojo-vocab/src/enter.ts'),
       '@kojo/kojo-vocab/engine': r('./packages/kojo-vocab/src/engine.ts'),
+      '@kojo/kojo-vocab/native-hover': r('./packages/kojo-vocab/src/native-hover.ts'),
+      '@kojo/kojo-vocab/native-marks': r('./packages/kojo-vocab/src/native-marks.ts'),
       '@kojo/kojo-vocab': r('./packages/kojo-vocab/src/index.ts'),
       '@kojo/kojo-conformance': r('./packages/kojo-conformance/src/index.ts'),
       '@kojo/kojo-project-kit': r('./packages/kojo-project-kit/src/index.ts'),

@@ -14,10 +14,13 @@ import type * as Monaco from '../src/monaco/entry';
 import { registerKojoLanguage } from '../src/monaco/kojo-language';
 import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
 import {
-  kojoNativeMarkCandidates,
+  kojoNativeMarkCandidateTables,
   kojoNativeMarkRange,
   kojoNativeMarkSlotAt,
-} from '../src/monaco/kojo-native-marks';
+} from '@kojo/kojo-vocab/native-marks';
+import { ERB_DECLARATION_DIRECTIVES } from '@kojo/plugin-erb-parser';
+import { ERB_PREPROC_MARKERS } from '@kojo/erb-vocab/directives';
+import { ERB_DIRECTIVES } from '../src/monaco/erb-highlight-words';
 import { resolveErbMarkHover } from '@kojo/plugin-erb-parser';
 import { compileMonarch, driveLexer, stubMonaco, type Emit } from './monarch-harness';
 
@@ -112,15 +115,20 @@ describe('P2 · 原生标记位（补全）', () => {
     expect(kojoNativeMarkRange('PRI', 3)).toEqual({ startColumn: 1, endColumn: 4 });
   });
 
-  it('候选表来自 erb-directives 单源', () => {
-    const decls = kojoNativeMarkCandidates('declaration').map((c) => c.label);
+  it('候选表来自 erb-directives 单源（判据在包叶，词表由调用方注入——与宿主装配点同款接线）', () => {
+    const candidates = kojoNativeMarkCandidateTables({
+      declaration: ERB_DECLARATION_DIRECTIVES,
+      preproc: ERB_PREPROC_MARKERS,
+      statement: ERB_DIRECTIVES,
+    });
+    const decls = candidates.declaration.map((c) => c.label);
     expect(decls).toHaveLength(14);
     for (const w of ['#DIM', '#DIMSTR', '#FUNCTION', '#TESTMEMORY']) expect(decls).toContain(w);
-    const pre = kojoNativeMarkCandidates('preproc').map((c) => c.label);
+    const pre = candidates.preproc.map((c) => c.label);
     for (const w of ['[IF]', '[ELSEIF]', '[ELSE]', '[ENDIF]', '[IF_DEBUG]', '[IF_NDEBUG]', '[SKIPSTART]', '[SKIPEND]']) {
       expect(pre).toContain(w);
     }
-    expect(kojoNativeMarkCandidates('statement').map((c) => c.label)).toContain('PRINTFORM');
+    expect(candidates.statement.map((c) => c.label)).toContain('PRINTFORM');
   });
 });
 

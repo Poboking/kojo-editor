@@ -7,40 +7,60 @@ import type {
   VariableSchema,
 } from '@kojo/plugin-api';
 import { kojoIndexNameOf, resolveKojoIndexName } from '@kojo/plugin-api';
-import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
-import { lookupFunctionName } from '@kojo/kojo-vocab/system-functions';
-import { STATEMENT_FUNCTIONS } from '@kojo/kojo-vocab/statement-functions';
-import { SUGAR_LEXICON_WORDS, TIMING_NAMED_PARAMS } from '@kojo/kojo-vocab/keywords';
-import { buildFunctionName } from '@kojo/plugin-kojo-sugar';
+import type { DictionaryLookup } from './types';
+import { lookupFunctionName } from './system-functions';
+import { STATEMENT_FUNCTIONS } from './statement-functions';
+import { SUGAR_LEXICON_WORDS, TIMING_NAMED_PARAMS } from './keywords';
 
 /**
  * ZH-D3 · 悬停**原生形态**反查（中文 → 原文，显示线的第三面）。
  *
- * 姊妹模块 `kojo-hover.ts` 做的是**正向**（原生记号 → 中文名）；作者在 `.kojo` 里写的却是
- * **中文**（族头 `现在:`、函数名 `意识清醒(...)`、块头 `时机 指令 摸屁股：`），正向面对它
- * 一无所出 ⇒ 改产物、和游戏侧对照、问人都卡在"这个名字到底是哪个原生形态"。本模块补上反向路。
+ * 判据整块住在语言层包叶 `@kojo/kojo-vocab/native-hover`（原宿主 `monaco/kojo-hover-native.ts`，
+ * NAT-HOV 搬家批）：这里零 Monaco、零 IO，数据表与拼名通道全部由宿主注入。
+ *
+ * 姊妹模块（宿主 `monaco/kojo-hover.ts` 的正向路）做的是**正向**（原生记号 → 中文名）；作者在
+ * `.kojo` 里写的却是**中文**（族头 `现在:`、函数名 `意识清醒(...)`、块头 `时机 指令 摸屁股：`），
+ * 正向面对它一无所出 ⇒ 改产物、和游戏侧对照、问人都卡在"这个名字到底是哪个原生形态"。
+ * 本模块补上反向路。
  *
  * ## 数据源（**零新表**：每一条都是降糖 / 拼名链上已经在用的那张表）
  *
  * - 族头：契约 `VariableSchema.familyAlias`（中文名 → 引擎族头；表住 adapter），
  *   经 `makeLookup` 转发到 `DictionaryLookup.familyAlias`；
- * - 函数名：`kojo-sugar` 的 `lookupFunctionName`（**系统函数表优先、再查 adapter 基础库表**
- *   ——与降糖**同一个函数**，故"能降糖的必能反查"构造性成立）；
+ * - 函数名：本包 `system-functions` 的 `lookupFunctionName`（**系统函数表优先、再查 adapter
+ *   基础库表**——与降糖**同一个函数**，故"能降糖的必能反查"构造性成立）；
  * - 语句形函数名：`STATEMENT_FUNCTIONS`（严格 3 枚白名单，与系统表同源）；
- * - 时机分野：adapter `KojoFaceTable.faces[*].template` + **转译器的 `buildFunctionName`**
- *   （`{t}` 家族段 / `{n}` 角色号 / `{i}` 编号）——本模块不拼一个字符；
+ * - 时机分野：adapter `KojoFaceTable.faces[*].template` + 注入的**转译器拼名通道**
+ *   {@link NativeHoverTables.buildFunctionName}（`{t}` 家族段 / `{n}` 角色号 / `{i}` 编号）——
+ *   本模块不拼一个字符；词包不得值引插件，所以这条通道由宿主装配点注入（与
+ *   `@kojo/plugin-erb-parser` 悬停腿注入 `erbIndex` / `isRawLine` 同款形态）。
  * - 段取值 / 成否位值：`KojoFaceTemplate.segments`、`KojoFaceTable.successFlag.values`；
  * - 指令中文名 → 编号：`KojoInstructionTable.lookupByName`（计数器名走 `KojoCounterTable`）。
  *
  * ## 纪律
  *
  * 1. **不猜**：表查不到 ⇒ 不显示；缺角色号 / 缺编号 ⇒ 只给模板、不给拼出来的名字
- *    （半个函数名比没有更坏）；
+ *    （半个函数名比没有更坏）；拼名通道缺席 ⇒ 同一条"只给模板"降级；
  * 2. **只读**：纯函数，零 IO、零事件、不碰诊断与产物字节；
- * 3. 词形（`角色:` / `口上:` / `时机`）**不硬编码**，由语言层词表 `SUGAR_LEXICON_WORDS` 派生；
+ * 3. 词形（`角色:` / `口上:` / `时机`）**不硬编码**，由本包词表 `SUGAR_LEXICON_WORDS` 派生；
  * 4. 段求值与编号求值的口径逐条对齐转译器（`resolveFace` / `resolveTimingIndex`），
  *    只在**上游同一张表**上取值。
  */
+
+/**
+ * 转译器的拼名通道（`@kojo/plugin-kojo-sugar` 的 `buildFunctionName` 签名）。
+ *
+ * 词包**不得值引插件**（分层倒置，LAU-3b 同一条纪律），所以这条通道由宿主装配点注入；
+ * 注入的是转译器那**同一个函数**——本包不写第二份拼法（判据"拼名结果与直接调用
+ * buildFunctionName 逐字相等"由测试钉住）。
+ */
+export type KojoFunctionNameBuilder = (
+  template: string,
+  familySeg: string,
+  charNo: string,
+  index: string | undefined,
+  paramIndex: boolean,
+) => string;
 
 /** 反查所需的数据表（全部**可选**；缺席 = 该路不反查，与正向同一条纪律） */
 export interface NativeHoverTables {
@@ -56,6 +76,8 @@ export interface NativeHoverTables {
   readonly faceTable?: KojoFaceTable;
   /** 适配器变量 schema 本体：族级说明 / 具名索引 → 编号 */
   readonly variableSchema?: VariableSchema;
+  /** 拼名通道（宿主注入转译器的 `buildFunctionName`；缺席 = 不拼函数名，只给模板） */
+  readonly buildFunctionName?: KojoFunctionNameBuilder;
 }
 
 /** 文件头事实（拼 `{n}` / `{t}` 用；由装配点从模型只读解析，作者没写就没有） */
@@ -293,9 +315,10 @@ function resolveIndex(
 }
 
 /**
- * 分野 → **拼出来的函数名**（占位符求值全交转译器的 `buildFunctionName`；
- * 本模块只做段求值与编号取值）。`want = 'success'` 走该面的成否子模板。
- * 拼不出（缺角色号 / 缺编号 / 无成否子模板）⇒ `undefined`。
+ * 分野 → **拼出来的函数名**（占位符求值全交注入的转译器拼名通道
+ * {@link NativeHoverTables.buildFunctionName}；本模块只做段求值与编号取值）。
+ * `want = 'success'` 走该面的成否子模板。
+ * 拼不出（缺角色号 / 缺编号 / 无成否子模板 / 拼名通道缺席）⇒ `undefined`。
  */
 function renderFaceName(
   spec: KojoFaceTemplate,
@@ -312,7 +335,8 @@ function renderFaceName(
   const index = resolveIndex(spec, head.indexText, tables);
   const paramIndex = want === 'success' ? true : template.includes('{i}');
   if (paramIndex && index === undefined) return undefined;
-  return buildFunctionName(template, header.familySeg ?? '', header.charNo, index, paramIndex);
+  if (tables.buildFunctionName === undefined) return undefined;
+  return tables.buildFunctionName(template, header.familySeg ?? '', header.charNo, index, paramIndex);
 }
 
 /** 光标落在第几枚词元（不在任何词元内 ⇒ -1） */

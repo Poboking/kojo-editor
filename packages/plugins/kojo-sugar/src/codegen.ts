@@ -1295,7 +1295,7 @@ function resolveTimingIndex(
     return { ok: true, index: timing.index };
   }
   // IX-1：`{i}` 取值口径（含 `literal` 直通 / 数字直通 / 两张表的分流）**只此一条真源**——
-  // 与悬停拼名（`app/monaco/kojo-hover-native.ts`）和编号槽补全（`app/monaco/kojo-completion-*`）
+  // 与悬停拼名（`kojo-vocab/src/native-hover.ts`，拼名通道由宿主注入）和编号槽补全（`app/monaco/kojo-completion-*`）
   // 调同一枚契约纯函数，三处不再各写一遍 `indexKind` 分支。具体分支语义见表头注。
   const kind = face.indexKind;
   const probe = resolveKojoIndexName(kind, name, {

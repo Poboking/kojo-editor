@@ -2,7 +2,7 @@
   "name": "@kojo/kojo-vocab",
   "version": "0.0.0",
   "private": true,
-  "description": "ERB / kojo1 / kojo2 共用的语言层词表与纯函数：表层词表、系统函数中文名、引擎族事实、行判型、回车规则、格式化。零 Monaco、零 React、零 IO；不属于任何插件，kojo1 退役后继续存活。",
+  "description": "ERB / kojo1 / kojo2 共用的语言层词表与纯函数：表层词表、系统函数中文名、引擎族事实、行判型、回车规则、格式化、悬停原生形态反查（native-hover）、原生标记位（native-marks）。零 Monaco、零 React、零 IO；不属于任何插件，kojo1 退役后继续存活。",
   "license": "GPL-3.0-or-later",
   "main": "./src/index.ts",
   "type": "module",
@@ -19,7 +19,9 @@
     "./lexer": "./src/lexer.ts",
     "./formatter": "./src/formatter.ts",
     "./enter": "./src/enter.ts",
-    "./engine": "./src/engine.ts"
+    "./engine": "./src/engine.ts",
+    "./native-hover": "./src/native-hover.ts",
+    "./native-marks": "./src/native-marks.ts"
   },
   "dependencies": {
     "@kojo/kojo-core": "workspace:*",

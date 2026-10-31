@@ -328,6 +328,8 @@ export default defineConfig({
       '@kojo/kojo-vocab/formatter': r('../kojo-vocab/src/formatter.ts'),
       '@kojo/kojo-vocab/enter': r('../kojo-vocab/src/enter.ts'),
       '@kojo/kojo-vocab/engine': r('../kojo-vocab/src/engine.ts'),
+      '@kojo/kojo-vocab/native-hover': r('../kojo-vocab/src/native-hover.ts'),
+      '@kojo/kojo-vocab/native-marks': r('../kojo-vocab/src/native-marks.ts'),
       '@kojo/kojo-vocab': r('../kojo-vocab/src/index.ts'),
       '@kojo/kernel': r('../kernel/src/index.ts'),
       // LAU4-ERB-A：ERB 语言面库（叶子排在桶之前，理由同上）。

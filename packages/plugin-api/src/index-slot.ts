@@ -5,7 +5,7 @@
  *
  * 同一个槽位有三个消费者，各算一次：
  * 1. **转译器**（`kojo-sugar/codegen.ts::resolveTimingIndex`）——算出来的编号直接进产物字节；
- * 2. **悬停**（`app/monaco/kojo-hover-native.ts::resolveIndex`）——算出来的编号拼进"这个时机
+ * 2. **悬停**（`kojo-vocab/src/native-hover.ts::resolveIndex`）——算出来的编号拼进"这个时机
  *    会生成哪个函数名"；
  * 3. **编号槽补全**（`app/monaco/kojo-completion-instructions.ts`）——枚举该槽能写哪些候选名。
  *

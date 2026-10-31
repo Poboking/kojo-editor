@@ -9,10 +9,17 @@ import {
   SUGAR_LEXICON_WORDS,
 } from '@kojo/kojo-vocab/keywords';
 import { SYSTEM_FUNCTION_ALIASES } from '@kojo/kojo-vocab/system-functions';
+import {
+  kojoNativeMarkCandidateTables,
+  kojoNativeMarkRange,
+  kojoNativeMarkSlotAt,
+} from '@kojo/kojo-vocab/native-marks';
 import { KOJO_LANGUAGE_ID, NOTIN_MARKS, PRIMARY_WORDS, SYSTEM_FUNCTION_WORDS } from './kojo-language';
+import { ERB_DECLARATION_DIRECTIVES } from '@kojo/plugin-erb-parser';
+import { ERB_PREPROC_MARKERS } from '@kojo/erb-vocab/directives';
+import { ERB_DIRECTIVES } from './erb-highlight-words';
 import { ERB_COMPLETION_ASSEMBLY, resolveErbCompletionDetail } from './erb-completion';
 import { kojoNativeZoneAt } from './kojo-native-zone';
-import { kojoNativeMarkCandidates, kojoNativeMarkRange, kojoNativeMarkSlotAt } from './kojo-native-marks';
 import { kojoCodePositionAt } from './kojo-suggest-gate';
 import { variableCompletionItems } from './kojo-completion-variables';
 import { erbDimNamesOf } from './erb-completion-declared';
@@ -666,12 +673,25 @@ const WORDS_SOURCE: CompletionSource = {
 };
 
 /**
+ * 候选表（词表注入位：判据在 `@kojo/kojo-vocab/native-marks`，词形真源分别是
+ * `@kojo/plugin-erb-parser`（声明族）/ `@kojo/erb-vocab/directives`（预处理标记）/
+ * `erb-highlight-words.ts`（语句全表）；停用标记走契约，本包不另抄。
+ */
+const NATIVE_MARK_CANDIDATES = kojoNativeMarkCandidateTables({
+  declaration: ERB_DECLARATION_DIRECTIVES,
+  preproc: ERB_PREPROC_MARKERS,
+  statement: ERB_DIRECTIVES,
+});
+
+/**
  * 糖区的**原生标记位**（v1.9 P2 整个烧进去的一枚 source）：`#` 声明族 / `[` 预处理与停用标记 /
  * 行首大写 ERB 指令。
  *
  * 为什么需要它：这三种写法在**写完整之前**都还落 `text` 行类（`#` 单枚 / `[` 单枚 / `HIT`），
  * 原生区的跨装配路由要等行类变成 `rawLine` 才接管；不补这一路，作者敲 `#` 与 `[` 永远是零候选
- * （见 `kojo-native-marks.ts` 头注）。候选表全部取自 `kojo-native-marks.ts` 的单源链，本路不另抄词形。
+ * （见 `@kojo/kojo-vocab/native-marks` 头注）。候选词表由本装配点注入（声明族在
+ * `@kojo/plugin-erb-parser`、预处理标记在 `@kojo/erb-vocab/directives`、全表在
+ * `erb-highlight-words.ts`），本路不另抄词形。
  *
  * 替换区间**含起手字符**（`#` / `[`）：Monaco 的默认词法不含这两个字符，照默认区间替换会插出
  * `##DIM` / `[[IF]`；区间由 `kojoNativeMarkRange` 单独算。
@@ -692,7 +712,7 @@ const NATIVE_MARKS_SOURCE: CompletionSource = {
       startColumn: span.startColumn,
       endColumn: span.endColumn,
     };
-    return kojoNativeMarkCandidates(slot).map((candidate, i) => ({
+    return NATIVE_MARK_CANDIDATES[slot].map((candidate, i) => ({
       label: candidate.label,
       kind: K.Keyword,
       insertText: candidate.insertText,

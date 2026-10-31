@@ -1,7 +1,7 @@
 import { SUGAR_LEXICON_WORDS } from '@kojo/kojo-vocab/keywords';
 import { STATEMENT_FUNCTIONS } from '@kojo/kojo-vocab/statement-functions';
+import { kojoNativeMarkSlotAt } from '@kojo/kojo-vocab/native-marks';
 import { classifyKojoLine } from './kojo-native-zone';
-import { kojoNativeMarkSlotAt } from './kojo-native-marks';
 import {
   BLANK_CLASS_STR,
   col0Of,

@@ -28,7 +28,7 @@ import {
 import type { DictionaryLookup } from '@kojo/plugin-kojo-sugar';
 import { buildFunctionName, SYSTEM_FUNCTION_ALIASES, SYSTEM_FUNCTION_REVERSE } from '@kojo/plugin-kojo-sugar';
 import { type HoverTables, installHover, resolveHoverName } from '../src/monaco/kojo-hover';
-import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from '../src/monaco/kojo-hover-native';
+import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from '@kojo/kojo-vocab/native-hover';
 
 /* ============================ 真表装配（零手抄镜像） ============================ */
 
@@ -78,9 +78,9 @@ const K12: KojoDocHeader = { charNo: '12' };
 /** 没有文件头（未写 `角色:`）⇒ 反向路只给模板 */
 const NO_HEADER: KojoDocHeader = {};
 
-/** 用 `|` 标记光标处（1 基列 = 标记前字符数 + 1）走**反向**解析 */
+/** 用 `|` 标记光标处（1 基列 = 标记前字符数 + 1）走**反向**解析（拼名通道与宿主装配点同款注入） */
 const at = (marked: string, t: HoverTables = tables, header = K12) =>
-  resolveNativeHover(marked.replace('|', ''), marked.indexOf('|') + 1, t, header);
+  resolveNativeHover(marked.replace('|', ''), marked.indexOf('|') + 1, { ...t, buildFunctionName }, header);
 
 /** 正向 + 反向的完整入口（`resolveHoverName`）同口径 */
 const atFull = (marked: string, t: HoverTables = tables, header = K12) =>
@@ -256,7 +256,7 @@ describe('悬停反查 · 时机块头（分野 → 拼出来的函数名）', (
     expect(faces.length).toBeGreaterThan(30);
     const bad: string[] = [];
     for (const face of faces) {
-      const hit = resolveNativeHover(`时机 ${face} 310：`, 4, tables, K12);
+      const hit = resolveNativeHover(`时机 ${face} 310：`, 4, { ...tables, buildFunctionName }, K12);
       if (hit === undefined) bad.push(`${face}：无命中`);
       else if (hit.name.includes('{') || hit.name.includes('}')) bad.push(`${face}：${hit.name}`);
     }

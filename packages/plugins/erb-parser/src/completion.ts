@@ -1861,7 +1861,7 @@ export function provideErbCompletion(
  * 6 原生标记分类（`{`/`}` 行连接、`[IF …]` 预处理、`#DIM` 族、行首大写语句 / 族头）。
  *
  * 宿主那侧只保留两条**糖面**事实（`.kojo1` 独有、`.erb` 不出现）：载体注册壳前缀提示与
- * 中文 → 原生形态反查；它们住在 `monaco/kojo-hover.ts` 与 `kojo-hover-native.ts`。
+ * 中文 → 原生形态反查；它们住在 `monaco/kojo-hover.ts` 与包叶 `native-hover`。
  *
  * ## 纪律（与搬家前同一条）
  *

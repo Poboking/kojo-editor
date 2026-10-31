@@ -1,10 +1,10 @@
 import { ERB_SKIP_MARKERS } from '@kojo/plugin-api';
-import { ERB_DECLARATION_DIRECTIVES } from '@kojo/plugin-erb-parser';
-import { ERB_PREPROC_MARKERS } from '@kojo/erb-vocab/directives';
-import { ERB_DIRECTIVES } from './erb-highlight-words';
 
 /**
  * `.kojo1` 糖区的**原生标记位**（v1.9 P2 补全面）。
+ *
+ * 判据整块住在语言层包叶 `@kojo/kojo-vocab/native-marks`（原宿主
+ * `monaco/kojo-native-marks.ts`，NAT-HOV 搬家批）。
  *
  * 写成完整行之前，`#` / `[` / 行首大写指令都还落在 `text`（台词）行类里，
  * 各 source 的位置判据全部落空 ⇒ 作者敲 `#` 看不到 `#DIM`，敲 `[` 看不到 `[IF]`。
@@ -13,8 +13,9 @@ import { ERB_DIRECTIVES } from './erb-highlight-words';
  * 1. 认**位置**：`#` 起手 / `[` 起手 / 行首大写指令前缀；
  * 2. 给**替换区间**：必须**含**起手字符（Monaco 的 `getWordUntilPosition` 不含 `#` / `[`，
  *    照它替换会插出 `##DIM` / `[[IF]`）；
- * 3. 给候选：词表全部来自单源链（声明族与语句表在 `@kojo/plugin-erb-parser`、预处理标记在
- *    `@kojo/erb-vocab/directives`、全表在 `erb-highlight-words.ts`），不在此手抄词形。
+ * 3. 给候选：词表由**调用方注入**（补全侧唯一真源是插件的 directive 表，词包不手抄
+ *    词形、不引插件），停用标记 `[SKIPSTART]` / `[SKIPEND]` 走契约
+ *    `ERB_SKIP_MARKERS`，与 `@kojo/erb-vocab/directives` 同一片真源。
  */
 
 export type KojoNativeMarkSlot = 'declaration' | 'preproc' | 'statement';
@@ -62,40 +63,36 @@ export function kojoNativeMarkRange(
   return { startColumn: start + 1, endColumn: Math.min(col0, line.length) + 1 };
 }
 
-const DECLARATION_CANDIDATES: readonly KojoNativeMarkCandidate[] = ERB_DECLARATION_DIRECTIVES.map(
-  (word) => ({
-    label: `#${word}`,
-    insertText: `#${word}`,
-    detail: 'ERB 声明族（原生直通，不拆中文写形）',
-  }),
-);
+/** 三个标记位的**词表输入**（调用方从补全侧唯一真源注入；本包不抄词形） */
+export interface KojoNativeMarkWords {
+  readonly declaration: readonly string[];
+  readonly preproc: readonly string[];
+  readonly statement: readonly string[];
+}
 
-const PREPROC_CANDIDATES: readonly KojoNativeMarkCandidate[] = [
-  ...ERB_PREPROC_MARKERS,
-  ERB_SKIP_MARKERS.start,
-  ERB_SKIP_MARKERS.end,
-].map((mark) => ({
-  label: mark,
-  insertText: mark,
-  detail: '整行标记（引擎按整行严格等值识别）',
-}));
-
-const STATEMENT_CANDIDATES: readonly KojoNativeMarkCandidate[] = ERB_DIRECTIVES.map((word) => ({
-  label: word,
-  insertText: word,
-  detail: 'ERB 语句（原生直通）',
-}));
-
-/** 位置 → 候选清单（模块级一次构建） */
-export function kojoNativeMarkCandidates(
-  slot: KojoNativeMarkSlot,
-): readonly KojoNativeMarkCandidate[] {
-  switch (slot) {
-    case 'declaration':
-      return DECLARATION_CANDIDATES;
-    case 'preproc':
-      return PREPROC_CANDIDATES;
-    case 'statement':
-      return STATEMENT_CANDIDATES;
-  }
+/**
+ * 位置 → 候选清单（纯函数：同一份词表进、同一份清单出；停用标记走契约
+ * `ERB_SKIP_MARKERS` 追加在预处理标记之后，与搬家前逐字一致）。
+ * 调用方在模块级建一次即可（宿主 `kojo-completion.ts` 的 `kojo-native-marks` source）。
+ */
+export function kojoNativeMarkCandidateTables(
+  words: KojoNativeMarkWords,
+): Readonly<Record<KojoNativeMarkSlot, readonly KojoNativeMarkCandidate[]>> {
+  return {
+    declaration: words.declaration.map((word) => ({
+      label: `#${word}`,
+      insertText: `#${word}`,
+      detail: 'ERB 声明族（原生直通，不拆中文写形）',
+    })),
+    preproc: [...words.preproc, ERB_SKIP_MARKERS.start, ERB_SKIP_MARKERS.end].map((mark) => ({
+      label: mark,
+      insertText: mark,
+      detail: '整行标记（引擎按整行严格等值识别）',
+    })),
+    statement: words.statement.map((word) => ({
+      label: word,
+      insertText: word,
+      detail: 'ERB 语句（原生直通）',
+    })),
+  };
 }

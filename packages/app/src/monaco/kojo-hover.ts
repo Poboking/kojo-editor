@@ -21,10 +21,11 @@ import {
 } from '@kojo/plugin-erb-parser';
 import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
+import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from '@kojo/kojo-vocab/native-hover';
+import { buildFunctionName } from '@kojo/plugin-kojo-sugar';
 import { livePanes } from '../ui/editor-pane-registry';
 import { classifyKojoLine } from './kojo-native-zone';
 import { BLANK_CLASS_STR } from './kojo-completion-position';
-import { type KojoDocHeader, docHeaderOf, resolveNativeHover } from './kojo-hover-native';
 import { registerForLanguageServices } from './register-dialects';
 
 /**
@@ -42,10 +43,10 @@ import { registerForLanguageServices } from './register-dialects';
  * 本模块是**只读显示**：不产生编辑、不写盘、不发事件。纯逻辑（`resolveHoverName`）与
  * Monaco 绑定（`installHover`）分离——前者可单测，后者只做位置 → 内容的薄翻译。
  *
- * **ZH-D3 反向面**（中文 → 原生形态）在同一入口末尾接上 `kojo-hover-native.ts`：
+ * **ZH-D3 反向面**（中文 → 原生形态）在同一入口末尾接上 `@kojo/kojo-vocab/native-hover`：
  * 上面四条正向路都只认 ASCII 记号，作者在 `.kojo` 里写的中文词（族头 / 中文函数名 /
  * 时机分野与指令名）此前查不到原生形态。反查**不新建任何映射**，只复用降糖与拼名链上
- * 已在用的那几张表（详见 `kojo-hover-native.ts` 头注）；正向命中优先，正向无果才走反向。
+ * 已在用的那几张表（详见 `kojo-vocab/src/native-hover.ts` 头注）；正向命中优先，正向无果才走反向。
  */
 export interface HoverTables {
   /** 变量字典（`makeLookup(adapter.variableSchema)` 产物）；缺席 = 不做变量反查 */
@@ -274,9 +275,10 @@ function resolveHoverNameCore(
 }
 
 /**
- * 中文 → **原生形态**反查（ZH-D3；`kojo-hover-native.ts`）——**只服务 `.kojo1` 的糖写形**，
- * 因此仍住宿主：作者在 `.kojo` 里写的中文词（族头 / 中文函数名 / 时机分野与指令名）不在
- * 任何 ERB 判据里。查不到即不显示（不猜）。
+ * 中文 → **原生形态**反查（ZH-D3；判据整块住 `@kojo/kojo-vocab/native-hover`，NAT-HOV 搬家批）
+ * ——**只服务 `.kojo1` 的糖写形**：作者在 `.kojo` 里写的中文词（族头 / 中文函数名 / 时机分野与
+ * 指令名）不在任何 ERB 判据里。宿主这一层只剩两格注入：转译器的拼名通道（词包不得值引插件）
+ * 与当前项目的表。查不到即不显示（不猜）。
  */
 function resolveNativeFallback(
   lineText: string,
@@ -284,7 +286,7 @@ function resolveNativeFallback(
   tables: HoverTables,
   header: KojoDocHeader,
 ): HoverHit | undefined {
-  return resolveNativeHover(lineText, column, tables, header);
+  return resolveNativeHover(lineText, column, { ...tables, buildFunctionName }, header);
 }
 
 /**

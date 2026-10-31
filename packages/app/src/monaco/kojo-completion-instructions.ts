@@ -20,7 +20,7 @@ import {
  *
  * 分流口径**不在此处自造**：一律调契约纯函数 `kojoIndexCandidates(kind, tables)`
  * （`packages/plugin-api/src/index-slot.ts`），表选择 / 枚举回号 / `literal` 零候选都在那一份里
- * ——与转译器 `resolveTimingIndex`、悬停 `kojo-hover-native.ts` **同一真源**，同槽异口径从构造上
+ * ——与转译器 `resolveTimingIndex`、悬停 `@kojo/kojo-vocab/native-hover` **同一真源**，同槽异口径从构造上
  * 不可能再出现（IX-1 前：悬停认计数器表、补全只出指令名，写下去必被 `timing-counter-unknown` 拦）。
  *
  * 名字来源 = 各表的 `names()`（**可选**枚举能力；只有反查面时**零候选**，降级信号由装配层的

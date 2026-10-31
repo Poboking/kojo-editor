@@ -8,8 +8,8 @@ import { ERB_STATEMENT_DIRECTIVES } from '@kojo/plugin-erb-parser';
  * 读插件那张手写表与包里的配对表，装配边拉回包就是"库包引插件"的分层倒置）。
  * 顺序：手写清单原序在前（既有候选序不动），派生词按真源自带的码元序追加。
  * `erb-language.ts` 原样 re-export，既有 import 点（补全 / 装配 / 测试）逐字零改动；
- * `.kojo` 侧（`kojo-language.ts` / `kojo-native-marks.ts`）直引本叶——本模块零环依赖，
- * 不在 `erb-language → theme → kojo-language` 那条环上。收录纪律与闸见包叶头注。
+ * `.kojo` 侧（`kojo-language.ts` / `kojo-completion.ts` 的原生标记位候选表）直引本叶——本模块
+ * 零环依赖，不在 `erb-language → theme → kojo-language` 那条环上。收录纪律与闸见包叶头注。
  */
 export const ERB_DIRECTIVES: readonly string[] = appendUnseen(
   ERB_STATEMENT_DIRECTIVES,
