@@ -1,6 +1,6 @@
 import type * as Monaco from './entry';
-import { ERB_DIRECTIVES, ERB_STATEMENT_DIRECTIVES } from './erb-directives';
-import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
+import { ERB_STATEMENT_DIRECTIVES } from '@kojo/plugin-erb-parser';
+import { ERB_DIRECTIVES, ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { erbEnterRulePatterns, ERB_LINE_COMMENT } from './erb-enter';
 import { toMonacoEnterConfig } from './enter-rules';
 import {
@@ -20,7 +20,8 @@ import { ENGINE_VARIABLE_REFERENCE_HEADS } from '@kojo/kojo-vocab/engine';
  * - 行首 `;` 注释、引号外行尾 `;` 起注释到行末、`@` 函数定义、`#` 预处理指令、`$` 跳转标签
  *   （注释/字符串两判据与语义层 `erb-parser/references.ts` 的 `codeViewOf` **同口径**——
  *   同一份"什么是注释/什么是串"不许有两个真相：串里的 `;` 不是注释、未闭合引号只到行尾）；
- * - 指令表 = 口上高频子集（单一真源 `erb-directives.ts`）；高亮另吃补集
+ * - 指令表 = 口上高频子集（派生判据 `@kojo/erb-vocab/directives`，全表在
+ *   `erb-highlight-words.ts` 物化）；高亮另吃补集
  *   `erb-highlight-words.ts`（控制流语句 + 引擎内建单行语句，补全不消费）；
  * - 变量多段引用（CFLAG:ARG:口上セレクタ）整体高亮；
  * - FORM 串内 `{表达式}` / `%字符串%` 是字符串内的第二层（`str` 态规则序，见该态注；
@@ -35,14 +36,16 @@ import { ENGINE_VARIABLE_REFERENCE_HEADS } from '@kojo/kojo-vocab/engine';
  */
 
 /**
- * 指令词表单一真源在叶子模块 `erb-directives.ts`（零 app 内依赖——kojo 侧要同一份清单，
- * 走本文件会踩 `erb-language → theme → kojo-language` 模块环的 TDZ）。
- * 此处**原样 re-export**：既有 import 点（`erb-completion` / `editor-global-providers` /
- * 测试）逐字零改动，引用的是同一数组本体。
+ * 指令词表落点（2026-11 指令词表下沉批）：派生判据与整行标记在包叶
+ * `@kojo/erb-vocab/directives`，两张词表数据在常驻插件 `@kojo/plugin-erb-parser`，
+ * 显示 / 补全全表 `ERB_DIRECTIVES` 在 `erb-highlight-words.ts` 物化——kojo 侧要同一份
+ * 清单，仍不许 import 本文件（`erb-language → theme → kojo-language` 是模块环，
+ * 取值会踩 TDZ；这条环不许再长回来）。
+ * 此处**原样 re-export**：既有 import 点（`erb-completion` / `erb-completion-facts` /
+ * `editor-global-providers` / 测试）逐字零改动，引用的是同一数组本体。
  *
- * 2026-10-25 P0-2 起该模块导出两份：`ERB_STATEMENT_DIRECTIVES`（手写常用语句）与
- * `ERB_DIRECTIVES`（= 手写 ∪ 结构真源派生的控制流词）；两者都从这里转出，消费方不必
- * 直接摸叶子模块。
+ * `ERB_STATEMENT_DIRECTIVES` = 手写常用语句；`ERB_DIRECTIVES` = 手写 ∪ 结构真源派生的
+ * 控制流词；两者都从这里转出，消费方不必直接摸包叶与插件。
  */
 export { ERB_DIRECTIVES, ERB_STATEMENT_DIRECTIVES };
 

@@ -23,6 +23,8 @@
       "@kojo/kojo-lang": ["../kojo-lang/src/index.ts"],
       "@kojo/erb-lang": ["../erb-lang/src/index.ts"],
       "@kojo/erb-lang/*": ["../erb-lang/src/*.ts"],
+      "@kojo/erb-vocab": ["../erb-vocab/src/index.ts"],
+      "@kojo/erb-vocab/*": ["../erb-vocab/src/*.ts"],
       "@kojo/kojo-sdk": ["../kojo-sdk/src/index.ts"],
       "@kojo/kojo-sdk/*": ["../kojo-sdk/src/*.ts"],
       "@kojo/kojo-lang/*": ["../kojo-lang/src/*.ts"],

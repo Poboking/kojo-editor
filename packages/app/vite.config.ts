@@ -329,6 +329,8 @@ export default defineConfig({
       '@kojo/erb-lang': r('../erb-lang/src/index.ts'),
       // ERB-VOCAB 批：控制流配对表上提到非插件库包（叶子排在桶之前，理由同上）。
       '@kojo/erb-vocab/control-flow': r('../erb-vocab/src/control-flow.ts'),
+      // 指令词表下沉批：派生判据与整行标记住包叶（词表数据仍在常驻插件，装配在宿主）。
+      '@kojo/erb-vocab/directives': r('../erb-vocab/src/directives.ts'),
       '@kojo/erb-vocab': r('../erb-vocab/src/index.ts'),
       '@kojo/plugin-erb-parser': r('../plugins/erb-parser/src/index.ts'),
       '@kojo/plugin-eratw-adapter': r('../plugins/eratw-adapter/src/index.ts'),

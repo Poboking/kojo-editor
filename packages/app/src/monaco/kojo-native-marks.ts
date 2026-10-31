@@ -1,9 +1,7 @@
 import { ERB_SKIP_MARKERS } from '@kojo/plugin-api';
-import {
-  ERB_DECLARATION_DIRECTIVES,
-  ERB_DIRECTIVES,
-  ERB_PREPROC_MARKERS,
-} from './erb-directives';
+import { ERB_DECLARATION_DIRECTIVES } from '@kojo/plugin-erb-parser';
+import { ERB_PREPROC_MARKERS } from '@kojo/erb-vocab/directives';
+import { ERB_DIRECTIVES } from './erb-highlight-words';
 
 /**
  * `.kojo1` 糖区的**原生标记位**（v1.9 P2 补全面）。
@@ -15,7 +13,8 @@ import {
  * 1. 认**位置**：`#` 起手 / `[` 起手 / 行首大写指令前缀；
  * 2. 给**替换区间**：必须**含**起手字符（Monaco 的 `getWordUntilPosition` 不含 `#` / `[`，
  *    照它替换会插出 `##DIM` / `[[IF]`）；
- * 3. 给候选：词表全部来自 `erb-directives.ts`（补全侧唯一真源），不在此手抄词形。
+ * 3. 给候选：词表全部来自单源链（声明族与语句表在 `@kojo/plugin-erb-parser`、预处理标记在
+ *    `@kojo/erb-vocab/directives`、全表在 `erb-highlight-words.ts`），不在此手抄词形。
  */
 
 export type KojoNativeMarkSlot = 'declaration' | 'preproc' | 'statement';

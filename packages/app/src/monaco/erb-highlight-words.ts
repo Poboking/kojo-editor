@@ -1,5 +1,20 @@
-import { ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
-import { ERB_DIRECTIVES } from './erb-directives';
+import { ERB_CONTROL_STATEMENTS } from '@kojo/erb-vocab/control-flow';
+import { appendUnseen } from '@kojo/erb-vocab/directives';
+import { ERB_STATEMENT_DIRECTIVES } from '@kojo/plugin-erb-parser';
+
+/**
+ * 显示 / 补全全表 = 手写常用语句 ∪ **结构真源派生的控制流词**（2026-11 指令词表下沉批：
+ * 判据本体在 `@kojo/erb-vocab/directives` 的 `appendUnseen`，此处只接料物化——并集要同时
+ * 读插件那张手写表与包里的配对表，装配边拉回包就是"库包引插件"的分层倒置）。
+ * 顺序：手写清单原序在前（既有候选序不动），派生词按真源自带的码元序追加。
+ * `erb-language.ts` 原样 re-export，既有 import 点（补全 / 装配 / 测试）逐字零改动；
+ * `.kojo` 侧（`kojo-language.ts` / `kojo-native-marks.ts`）直引本叶——本模块零环依赖，
+ * 不在 `erb-language → theme → kojo-language` 那条环上。收录纪律与闸见包叶头注。
+ */
+export const ERB_DIRECTIVES: readonly string[] = appendUnseen(
+  ERB_STATEMENT_DIRECTIVES,
+  ERB_CONTROL_STATEMENTS,
+);
 
 /**
  * ERB 高亮**补集**（2026-10-18 SUGGEST-2C；2026-10-25 P0-2 收窄）。
@@ -9,8 +24,8 @@ import { ERB_DIRECTIVES } from './erb-directives';
  * 引擎语句无论频次都该有颜色，否则 `SETVAR` / `REDRAW` 这类词在屏上就是白字。
  * 两个口径共用**同一份真源**，只是消费面不同：
  *
- * - 控制流语句：**P0-2 起已并入 `ERB_DIRECTIVES` 的派生面**（`erb-directives.ts`
- *   从 `ERB_CONTROL_STATEMENTS` 追加），所以这里不再需要为它们兜底——结构认的词
+ * - 控制流语句：**P0-2 起已并入 `ERB_DIRECTIVES` 的派生面**（上方并集直接从
+ *   `ERB_CONTROL_STATEMENTS` 追加），所以这里不再需要为它们兜底——结构认的词
  *   现在补全也认、着色也认，一个来源；
  * - 结构扫描器**不建模**的引擎内建单行语句：`ERB_ENGINE_EXTRA_STATEMENTS`
  *   （本模块是这批词的单一真源；出处 = 引擎 `FunctionIdentifier.cs` 的语句组，

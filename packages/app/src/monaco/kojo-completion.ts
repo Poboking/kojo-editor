@@ -671,7 +671,7 @@ const WORDS_SOURCE: CompletionSource = {
  *
  * 为什么需要它：这三种写法在**写完整之前**都还落 `text` 行类（`#` 单枚 / `[` 单枚 / `HIT`），
  * 原生区的跨装配路由要等行类变成 `rawLine` 才接管；不补这一路，作者敲 `#` 与 `[` 永远是零候选
- * （见 `kojo-native-marks.ts` 头注）。候选表全部取自 `erb-directives.ts`，本路不另抄词形。
+ * （见 `kojo-native-marks.ts` 头注）。候选表全部取自 `kojo-native-marks.ts` 的单源链，本路不另抄词形。
  *
  * 替换区间**含起手字符**（`#` / `[`）：Monaco 的默认词法不含这两个字符，照默认区间替换会插出
  * `##DIM` / `[[IF]`；区间由 `kojoNativeMarkRange` 单独算。

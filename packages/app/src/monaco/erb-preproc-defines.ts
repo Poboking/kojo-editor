@@ -3,7 +3,7 @@
  *
  * 为什么单独成叶：`erb-preproc-dim.ts` 要点 Monaco 的装饰 API，而这条取数判据是**纯数据**
  * （索引进、集合出），单测要在 node 里直接跑——挂在装饰模块里就会把整个 Monaco 拖进
- * 测试进程（`window is not defined`）。同 `erb-directives.ts` 拆叶的理由。
+ * 测试进程（`window is not defined`）。同指令词表拆叶的理由（判据现下沉在包叶 `@kojo/erb-vocab/directives`）。
  *
  * 复用 `ErbFile.dims` 而不是另扫文本：`#DEFINE` 早已被扫描器收进 `dims`
  * （`directive === 'DEFINE'`，与 `#DIM` 族同一条解析路径），索引就是它的真源——

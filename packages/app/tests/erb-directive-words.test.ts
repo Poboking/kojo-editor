@@ -7,7 +7,8 @@
  *
  * 本批追加（口上高频子集补齐，缺陷①）：
  * ① 语料高频缺失名钉在 `ERB_DIRECTIVES`（简报例名 13 个 + 实测 ≥1000 的 GETNUM；
- *   真源 = 叶子模块 `erb-directives.ts`）；
+ *   真源 = 包叶 `@kojo/erb-vocab/directives` 的派生判据 + 插件两张词表，全表在
+ *   `erb-highlight-words.ts` 物化）；
  * ② `.kojo` 侧 `ERB_COMMANDS` ≡ `ERB_DIRECTIVES` 去族头（派生恒等式，无第二份清单）；
  * ③ 宿主源码零手抄扫描守卫：kojo-language / erb-language 的字面量里不许出现指令词抄本。
  *
@@ -135,7 +136,7 @@ const CORPUS_HOT_GAPS: readonly string[] = [
   'GOTO', 'VARSET', 'DATALIST', 'ENDLIST', 'PRINTFORMD', 'DOWNBASE', 'PRINTBUTTON',
 ];
 
-describe('ERB_DIRECTIVES 口上高频子集（真源 = 叶子模块 erb-directives.ts）', () => {
+describe('ERB_DIRECTIVES 口上高频子集（真源 = 包叶派生判据 + 插件词表，物化在 erb-highlight-words）', () => {
   it('13 个语料高频缺失名逐一在列', () => {
     for (const w of CORPUS_HOT_GAPS) expect(ERB_DIRECTIVES, `缺语料高频名 ${w}`).toContain(w);
   });
@@ -158,7 +159,7 @@ describe('ERB_DIRECTIVES 口上高频子集（真源 = 叶子模块 erb-directiv
 
 /* ============================== .kojo 侧派生（单一真源恒等式） ============================== */
 
-describe('ERB_COMMANDS 派生自 erb-directives 真源（无第二份清单）', () => {
+describe('ERB_COMMANDS 派生自 ERB_DIRECTIVES 真源（无第二份清单）', () => {
   it('恒等式：ERB_COMMANDS ≡ ERB_DIRECTIVES 去族头（逐项同位）', () => {
     const family = new Set(ERB_FAMILY_HEADS);
     expect(ERB_COMMANDS).toEqual(ERB_DIRECTIVES.filter((d) => !family.has(d)));
@@ -280,7 +281,7 @@ describe('P1-1 词表扩容闸（证据表 ↔ 词表，双向对账）', () => 
  * 或同族在仓佐证），把握不足的记号本批一个没收。`GDRAWG` 是按判据单文件货（19 次全在
  * `ステータス表示関連\縁取り.ERB` 且 skip 区外；`SHOP関連\TEST.ERB` 的另外 9 行整块住在
  * `[SKIPSTART]…[SKIPEND]` 演示区、且写作 `GDRAWG ++i, …` 形，被双重判据正确排除在计数外）——
- * 收，取舍与掉线删除纪律见 `erb-directives.ts` 头部 K5 段。
+ * 收，取舍与掉线删除纪律见 git 提交（K5 批）与包叶 `@kojo/erb-vocab/directives` 头注。
  */
 const K5_BATCH: readonly (readonly [word: string, count: number, sample: string, source: string])[] = [
   ['TONEINPUTS', 39, 'TONEINPUTS 制限時間, "p", 1', 'BATTLE.ERB'],
@@ -299,7 +300,7 @@ const K5_BATCH: readonly (readonly [word: string, count: number, sample: string,
 /**
  * eraTW 实测 3~9 次的 32 词（合计 159 次）——本批口径（≥10）下**一律不收**，钉成拒收闸。
  * 抬档收词的前提是重新取证并同批把它们移进证据表，不是把这里删空了再塞。
- * （1~2 档 64 词同为噪声带不收，名单未存档，纪律同 §erb-directives.ts 头部 K5 段。）
+ * （1~2 档 64 词同为噪声带不收，名单未存档，纪律同 git 提交的 K5 批归因与包叶头注。）
  */
 const CORPUS_UNCOLLECTED_TIER_3TO9: readonly string[] = [
   'STRLENFORM', 'DEBUGPRINTFORM', 'QUIT', 'TOOLTIP_SETDURATION', 'MAP_GETKEYS', 'ISNUMERIC',
@@ -384,7 +385,7 @@ describe('宿主源码零手抄指令串（kojo-language / erb-language 一律�
     for (const file of ['kojo-language.ts', 'erb-language.ts']) {
       const src = readFileSync(path.join(MONACO_SRC_DIR, file), 'utf8');
       const hits = quotedWordForms(src).filter((w) => words.has(w));
-      expect(hits, `${file} 出现指令词手抄字面量（真源只有 erb-directives.ts）：${hits.join(', ')}`).toEqual([]);
+      expect(hits, `${file} 出现指令词手抄字面量（真源 = 包叶判据 + 插件词表，宿主不许另抄）：${hits.join(', ')}`).toEqual([]);
     }
   });
 

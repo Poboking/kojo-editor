@@ -20,6 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import * as controlFlow from '@kojo/erb-vocab/control-flow';
+import * as directives from '@kojo/erb-vocab/directives';
 import {
   DIM_MODIFIERS,
   DIM_RE,
@@ -27,6 +28,12 @@ import {
   classifyControlFlow,
   closerNameForPair,
 } from '@kojo/erb-vocab/control-flow';
+import {
+  ERB_DECLARATION_LINE_RE,
+  ERB_PREPROC_LINE_RE,
+  ERB_PREPROC_MARKERS,
+  appendUnseen,
+} from '@kojo/erb-vocab/directives';
 
 const SRC = fileURLToPath(new URL('../src', import.meta.url));
 const PKG = fileURLToPath(new URL('../package.json', import.meta.url));
@@ -59,8 +66,8 @@ describe('@kojo/erb-vocab 是分层上的中立词表包（不可能是倒置的
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // control-flow（共享事实）/ index（桶）。加一枚必须显式改这里。
-    expect(files.map((f) => path.basename(f))).toEqual(['control-flow.ts', 'index.ts']);
+    // control-flow（共享事实）/ directives（词表派生判据与整行标记）/ index（桶）。加一枚必须显式改这里。
+    expect(files.map((f) => path.basename(f))).toEqual(['control-flow.ts', 'directives.ts', 'index.ts']);
   });
 
   it('src 零外部依赖（**强于**"不许引插件"：连任何包名都不许出现）', () => {
@@ -247,5 +254,45 @@ describe('共享事实黄金对拍（库与插件"逐字不变"的兜底）', ()
       ['X Y', null],
       ['CONSTX', null],
     ]);
+  });
+});
+
+/**
+ * directives 叶的黄金对拍（2026-11 指令词表下沉批新增，**只加不改**上面既有判据）：
+ * 派生判据与整行标记从宿主 `monaco/erb-directives.ts` 逐字搬来，行为"逐字不变"由这里兜底。
+ */
+describe('directives 叶黄金对拍（派生判据与整行标记逐字不变）', () => {
+  it('导出面逐字（加一枚共享值必须显式改这里）', () => {
+    expect(Object.keys(directives).sort()).toEqual([
+      'ERB_DECLARATION_LINE_RE',
+      'ERB_PREPROC_LINE_RE',
+      'ERB_PREPROC_MARKERS',
+      'appendUnseen',
+    ]);
+  });
+
+  it('预处理标记骨架逐字（六枚，整行严格等值形）', () => {
+    expect(ERB_PREPROC_MARKERS).toEqual(['[IF]', '[ELSEIF]', '[ELSE]', '[ENDIF]', '[IF_DEBUG]', '[IF_NDEBUG]']);
+  });
+
+  it('appendUnseen 判据逐字：大小写归一去重、先出现者保留原样、插入顺序不动、不改动入参', () => {
+    const base = Object.freeze(['PRINT', 'print']);
+    const extra = Object.freeze(['PRINT', 'CALL', 'CallForm', 'call']);
+    expect(appendUnseen(base, extra)).toEqual(['PRINT', 'print', 'CALL', 'CallForm']);
+    expect(base.length).toBe(2);
+  });
+
+  it('整行预处理正则逐字（大小写写进字符类而非 i 标志；允许缩进与宏名）', () => {
+    const yes = ['[IF 宏A]', '   [endif]   ', '[If_Debug]', '[ELSEIF 宏B]', '[Else]', '[IF_NDEBUG]', '[IF]', '  [ELSEIF]'];
+    const no = ['[IF_DEBUG x]', '[SKIPSTART]', 'IF A', '#DIM x', '[[IF]'];
+    for (const s of yes) expect(ERB_PREPROC_LINE_RE.test(s), s).toBe(true);
+    for (const s of no) expect(ERB_PREPROC_LINE_RE.test(s), s).toBe(false);
+  });
+
+  it('整行 # 声明正则逐字（`\\b` 保证长形在前互不吃；`#` 后必须紧跟声明词）', () => {
+    const yes = ['#DIM x, 10', '#dimstr s', '#DIMF y', '#DEFINE Z 1', '#FUNCTIONS foo', '#TESTMEMORY', '#SFUNCTION', '#DIM'];
+    const no = ['#DIMX q', '#FUNCTIONSX', 'DIM x', '#  GLOBAL', '#GLOBALX'];
+    for (const s of yes) expect(ERB_DECLARATION_LINE_RE.test(s), s).toBe(true);
+    for (const s of no) expect(ERB_DECLARATION_LINE_RE.test(s), s).toBe(false);
   });
 });

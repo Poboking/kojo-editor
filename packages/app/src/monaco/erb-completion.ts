@@ -283,7 +283,7 @@ const ERB_BRACKET_DIRECTIVES: readonly string[] = [
  * `ENDDATA` / `ENDFUNC` / `NOSKIP` / `ENDNOSKIP` / `DATALIST` / `ENDLIST` / `STRDATA` /
  * `TRYC*` 一整批）。
  *
- * 收录口径 = 「**结构认 ⇒ 行中也补**」（与 `erb-directives.ts` P0-2 的「结构认的词着色/补全
+ * 收录口径 = 「**结构认 ⇒ 行中也补**」（与 `@kojo/erb-vocab/directives` P0-2 的「结构认的词着色/补全
  * 也认、一个来源」同一条纪律）：`ERB_CONTROL_STATEMENTS` 全词进集，`classifyControlFlow` 作
  * 守卫闸（分不出档的词 = 配对表与本表漂移，不收）。
  *

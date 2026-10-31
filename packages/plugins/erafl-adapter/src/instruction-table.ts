@@ -4,7 +4,7 @@
  * ## 这份表回答什么
  *
  * 「eraFL 的作者真在写、而编辑器词表不认识」的引擎词有哪些。宿主词表是两份：
- * `packages/app/src/monaco/erb-directives.ts`（`ERB_DIRECTIVES`，119 词）与
+ * `packages/app/src/monaco/erb-highlight-words.ts`（`ERB_DIRECTIVES`，119 词）与
  * `erb-highlight-words.ts`（`ERB_HIGHLIGHT_EXTRA_WORDS` = 控制流 45 + 引擎内建 8，
  * 减去指令表后剩 29）——两者并集 148 词，就是本表求差集的分母。
  *
@@ -45,7 +45,7 @@
  *
  * 表序 = **按族分组、族内语料出现次数降序**（同频按词面码元序），族头注释写清这一族
  * 是哪种引擎能力。谁在表里、为什么在、出现过几次、出自哪一行，四件事一条注释里读完。
- * 增删词只改本表，别在语言定义里另写字面量（同 `erb-directives.ts` 的纪律）。
+ * 增删词只改本表，别在语言定义里另写字面量（同包叶 `@kojo/erb-vocab/directives` 的纪律）。
  *
  * ## 与宿主的关系（本批**没有**接线）
  *

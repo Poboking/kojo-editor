@@ -30,7 +30,7 @@ import type {
 import { functionLookupOf } from '@kojo/plugin-api';
 import { provideErbCompletion } from '@kojo/plugin-erb-parser';
 import { ERB_COMPLETION_ASSEMBLY } from '../src/monaco/erb-completion';
-import { ERB_DIRECTIVES } from '../src/monaco/erb-directives';
+import { ERB_DIRECTIVES } from '../src/monaco/erb-highlight-words';
 import { mergeDirectiveWords } from '../src/monaco/erb-language';
 import { createCompletionProvider, type CompletionTables } from '../src/monaco/completion-core';
 import { toMonacoCompletionItems } from '../src/monaco/slot-service-providers';

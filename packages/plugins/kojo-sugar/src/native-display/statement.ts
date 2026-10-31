@@ -384,7 +384,7 @@ const CALL_RE = /^(?:([A-Z][A-Z0-9_]*)[ \t]+(\S[\s\S]*)|([A-Z][A-Z0-9_]*))$/;
  * 前缀剥离是 ZH-C 的 `GOTO` 才有的装置（它那里目标是纯标签名）。
  *
  * `CALLF`（盘上 245 行落兜底）按 **`按钮C` 的同一条拼法**保留区别字母：它是 `CALL` 族里
- * 带 `F` 的那一枚（引擎内建单行语句，取证见 `packages/app/src/monaco/erb-directives.ts`
+ * 带 `F` 的那一枚（引擎内建单行语句，取证见 `@kojo/plugin-erb-parser` 的词表
  * 与 `tests/erb-completion-context.test.ts` 的 `CALLF FOO(1)` 实参括号形态），
  * **我不替读者判定 `F` 改了哪一档语义**，所以既不写成 `调用` 也不写成 `调用形`，
  * 只把词头换成 `调用F`、实参逐字带走。
@@ -529,7 +529,7 @@ interface LayoutShape {
  * `CLEARLINE` 的档位从 `none` 改成 `optional`（2026-10-20 兜底归因：盘上 395 行带参数的
  * `CLEARLINE …` 全落兜底 ⇒ 带参数的是同一条指令，参数是**载荷**、逐字带走，不是"另一条指令"）。
  * `HTML_PRINT` / `FONTREGULAR` / `FONTSTYLE` / `VARSET` 四枚同批补登：都是引擎内建单行语句
- * （名单与频次取证见 `packages/app/src/monaco/erb-directives.ts` 的语料词频注释），
+ * （名单与频次取证见 `packages/app/src/monaco/erb-highlight-words.ts` 的语料词频注释），
  * 义项只翻**词头那一枚记号**，参数一律原样照抄（`arg` 非 `none` 的档都只做"换词首"）。
  */
 const LAYOUT_SHAPES: Readonly<Record<string, LayoutShape>> = {

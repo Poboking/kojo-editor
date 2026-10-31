@@ -5,8 +5,8 @@ import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { sugarEditorLexicon } from '@kojo/kojo-vocab/keywords';
 import { SYSTEM_FUNCTION_ALIASES } from '@kojo/kojo-vocab/system-functions';
 import { sugarEnterRulePatterns } from '@kojo/kojo-vocab/enter';
-import { ERB_DECLARATION_LINE_RE, ERB_DIRECTIVES, ERB_PREPROC_LINE_RE } from './erb-directives';
-import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
+import { ERB_DECLARATION_LINE_RE, ERB_PREPROC_LINE_RE } from '@kojo/erb-vocab/directives';
+import { ERB_DIRECTIVES, ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
 import { toMonacoEnterConfig } from './enter-rules';
 import { CJK_WORD_PATTERN } from './word-separators';
 import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
@@ -23,7 +23,8 @@ import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
  * 故**高亮 / 补全 / 悬停与转译器词法永不脱节**——本文件不复制任何词形清单
  * （守卫：`packages/app/tests/kojo-lexicon-single-source.test.ts` 逐文件扫宿主源码，
  * 词表里的中文词形一旦在本层被手抄成字面量就红）。
- * 与手写 ASCII 词表（叶子模块 `erb-directives.ts` 的 `ERB_DIRECTIVES`）的取舍不同：
+ * 与手写 ASCII 词表（`erb-highlight-words.ts` 物化的 `ERB_DIRECTIVES`，判据在
+ * `@kojo/erb-vocab/directives`）的取舍不同：
  * `.kojo` 词表是活表，并行批次随时往表里登记新的中文主形，宿主侧必须**零改动**就认得；
  * 而原生直通行的指令档（`ERB_COMMANDS`）恰恰**派生自**那份 ASCII 真源——
  * 本文件不写任何指令字串，凡出现即手抄（守卫扫描见 `erb-directive-words.test.ts`）。
@@ -108,9 +109,10 @@ export const ERB_FAMILY_HEADS: readonly string[] = ENGINE_VARIABLE_FAMILIES;
 
 /**
  * 原生直通行里可识别的高频 ERB 指令（高亮口径；不做语义分析；族头已另立一档）。
- * **派生自** `erb-directives.ts` 的单一真源（与 `.erb` 高亮/补全同一份清单）：
- * 叶模块 import 是防环形态——本文件已在 `erb-language → theme → kojo-language` 环上，
- * 经 `erb-language` 取值会踩 TDZ。族头由 `FAMILY_HEAD_SET` 滤出，另发 `keyword.erb.family`。
+ * **派生自** `erb-highlight-words.ts` 物化的 `ERB_DIRECTIVES`（与 `.erb` 高亮/补全同一份
+ * 清单，判据在 `@kojo/erb-vocab/directives`）：本文件已在 `erb-language → theme →
+ * kojo-language` 环上，经 `erb-language` 取值会踩 TDZ，引包叶与本叶都是无环形态。
+ * 族头由 `FAMILY_HEAD_SET` 滤出，另发 `keyword.erb.family`。
  */
 const FAMILY_HEAD_SET = new Set(ERB_FAMILY_HEADS);
 export const ERB_COMMANDS: readonly string[] = ERB_DIRECTIVES.filter((d) => !FAMILY_HEAD_SET.has(d));

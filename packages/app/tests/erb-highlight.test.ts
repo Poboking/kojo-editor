@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { ERB_DIRECTIVES } from '../src/monaco/erb-directives';
+import { ERB_DIRECTIVES } from '../src/monaco/erb-highlight-words';
 import {
   ERB_ENGINE_EXTRA_STATEMENTS,
   ERB_HIGHLIGHT_EXTRA_WORDS,
