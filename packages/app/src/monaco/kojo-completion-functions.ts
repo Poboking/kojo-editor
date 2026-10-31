@@ -5,6 +5,7 @@ import {
   kojoKeywordAnchor,
   nameSlotAfterAnchor,
 } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 
 /**
  * COMPL-SHARED · `.kojo` 的**项目函数名**候选（跨语言候选打通的那一半）。
@@ -46,7 +47,7 @@ const FUNCTION_ANCHOR: RegExp = kojoKeywordAnchor(FUNCTION_SLOT_IDS);
  * 位置不符 ⇒ `null`（不猜）。字符串内 / 注释内同样 `null`（与 `.kojo` 其余源同一判据）。
  */
 export function kojoFunctionNameSlot(line: string, column: number): CompletionNameSlot | null {
-  if (insideStringOrComment(line, Math.min(Math.max(column - 1, 0), line.length))) return null;
+  if (insideStringOrComment(line, columnIndexIn(line, column))) return null;
   const field = nameSlotAfterAnchor(line, column, FUNCTION_ANCHOR);
   return field === null ? null : { start: field.start, end: field.end, prefix: field.prefix };
 }

@@ -2,6 +2,7 @@ import type * as Monaco from './entry';
 import { BUILTIN_FUNCTION_NAMES, builtinSignatureLabel } from '@kojo/plugin-erb-parser';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
 import { isAllBlank } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 
 /**
  * 系统函数候选的 documentation 头段：**中文别名（糖层，若有）+ 引擎签名（exmeth 静态表）**。
@@ -56,7 +57,7 @@ export function erbSystemFunctionCompletionItems(
   if (!Number.isFinite(position.column) || position.column < 1) return [];
 
   const line = model.getLineContent(position.lineNumber);
-  const col0 = Math.min(position.column - 1, line.length);
+  const col0 = columnIndexIn(line, position.column);
 
   // 1) 行首 `;` 整行注释
   if (/^\s*;/.test(line)) return [];

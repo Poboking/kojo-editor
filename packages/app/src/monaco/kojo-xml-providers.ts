@@ -11,6 +11,7 @@
  */
 import type * as Monaco from './entry';
 import type { KojoXmlAttributeSpec, KojoXmlSchema } from '@kojo/plugin-api';
+import { columnIndexIn } from './positions';
 
 /** 规格来源（宿主注入；抛错按"没有规格"处理，绝不把异常抛进编辑器） */
 export type KojoXmlSchemaSource = () => KojoXmlSchema | null;
@@ -187,7 +188,7 @@ export function registerKojoXmlProviders(monaco: typeof Monaco): void {
       const schema = currentKojoXmlSchema();
       if (!schema) return null;
       const line = model.getLineContent(position.lineNumber);
-      const col = position.column - 1;
+      const col = columnIndexIn(line, position.column);
       for (const attr of attrsOnLine(line)) {
         if (col >= attr.nameStart && col <= attr.valueEnd) {
           const spec = schema.attributes.find((a) => a.name === attr.name);
@@ -213,7 +214,8 @@ export function registerKojoXmlProviders(monaco: typeof Monaco): void {
       // 没有规格就什么都不补：猜属性名比不补更糟（作者会以为那是游戏支持的写法）
       if (!schema) return { suggestions: [] };
       const line = model.getLineContent(position.lineNumber);
-      const before = line.slice(0, position.column - 1);
+      const col0 = columnIndexIn(line, position.column);
+      const before = line.slice(0, col0);
       // 只在标签内部给补全（`<` 之后、`>` 之前）
       const lt = before.lastIndexOf('<');
       const gt = before.lastIndexOf('>');
@@ -230,7 +232,7 @@ export function registerKojoXmlProviders(monaco: typeof Monaco): void {
 
       // 值位置（光标在引号内）：给枚举值
       const inValue = attrsOnLine(line).find(
-        (a) => position.column - 1 > a.valueStart && position.column - 1 <= a.valueEnd + 1,
+        (a) => col0 > a.valueStart && col0 <= a.valueEnd + 1,
       );
       if (inValue) {
         const spec = schema.attributes.find((a) => a.name === inValue.name);

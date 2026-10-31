@@ -9,6 +9,7 @@ import {
   kojoKeywordAnchor,
   nameSlotAfterAnchor,
 } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 
 /**
  * KC-4 · `.kojo` 中文**库函数名**的正向补全（`libraryCompletionItems`）。
@@ -62,8 +63,8 @@ export function libraryCompletionItems(
   if (typeof enumerate !== 'function') return [];
 
   const line = model.getLineContent(position.lineNumber);
-  const col0 = position.column - 1;
-  if (col0 > line.length) return [];
+  if (position.column - 1 > line.length) return []; // 光标越过行尾（陈旧坐标）⇒ 不做行内判读
+  const col0 = columnIndexIn(line, position.column);
   if (insideStringOrComment(line, col0)) return [];
   if (insideInterpolation(line, col0)) return [];
 

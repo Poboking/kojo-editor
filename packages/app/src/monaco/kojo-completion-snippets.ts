@@ -7,6 +7,7 @@ import {
 import { escapeSnippetText } from './completion-core';
 import type { CompletionSource } from './kojo-completion';
 import { isAllBlank } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 
 /**
  * `.kojo` 补全 · **Snippet 模板源**（R4）：把"从零敲一整个块头 + 缩进骨架"收成一条
@@ -130,7 +131,7 @@ const BLOCK_SNIPPETS: readonly { label: string; insertText: string; detail: stri
  */
 function atLineHead(model: Monaco.editor.ITextModel, position: Monaco.Position): boolean {
   const line = model.getLineContent(position.lineNumber);
-  return isAllBlank(line.slice(0, position.column - 1));
+  return isAllBlank(line.slice(0, columnIndexIn(line, position.column)));
 }
 
 /**

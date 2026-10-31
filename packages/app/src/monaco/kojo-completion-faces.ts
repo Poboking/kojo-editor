@@ -7,6 +7,7 @@ import {
   timingHeadParts,
   type KojoNameField,
 } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 
 /**
  * 语法糖（`.kojo`）补全 · **时机块头**——沿用单一 `kojo-face` source：
@@ -210,7 +211,7 @@ export function faceCompletionItems(
 
   const faceStart = parts.faceStart;
   const faceEnd = parts.faceEnd;
-  const col0 = position.column - 1;
+  const col0 = columnIndexIn(line, position.column);
   if (col0 < faceStart) return [];
 
   // 块头在光标处已收口（存在块冒号且下标 < col0）⇒ 本模块零候选（交回其它补全面）；

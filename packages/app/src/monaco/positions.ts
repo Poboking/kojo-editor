@@ -4,7 +4,20 @@
  *
  * 这里只做边界换算，不做 CST↔AST 节点映射，也不做 UTF-8/字节偏移换算。
  * 任何位置穿过 tree-sitter ↔ Monaco 边界都必须走本模块，避免每处各写一遍 `+ 1`。
+ *
+ * ## POS-UTIL 收口（本模块的定位）
+ *
+ * - **0 基 ↔ 1 基只有这一处**（`toMonacoLine` / `toZeroBasedRow` / `toMonacoColumn` /
+ *   `toZeroBasedColumn` / 点与区间两枚）：tree-sitter 的 `startPosition`、Monaco 语义 token
+ *   五元组这些**协议原生 0 基**的点，就在调用点用它们换，**不把 0 基线往上层传**；
+ * - **1 基的夹取与列内下标不是本模块的实现**：`clampMonacoLine` / `clampMonacoColumn` /
+ *   `columnIndexIn` 一律委托 `@kojo/kojo-core` 的 `clampLine` / `clampColumn` /
+ *   `clampLogicalOffset`（core `positions.ts` / `lower/column-fold.ts` 是唯一实现）——
+ *   口径漂移（NaN / 越界 / 全角空格）只可能在那一处发生；
+ * - 本模块只被主线程的 Monaco 侧 import（worker 图不取 core 值，见
+ *   `tree-sitter/worker-bootstrap.ts` 纪律 1）。
  */
+import { clampColumn, clampLine, clampLogicalOffset } from '@kojo/kojo-core';
 
 /** tree-sitter（或其它内部协议）的 0 基点 */
 export interface ZeroBasedPoint {
@@ -73,12 +86,25 @@ export function toMonacoLineRange(range: ZeroBasedLineRange): MonacoLineRange {
   };
 }
 
-/** 把 1 基行夹到 Monaco 模型现实；非法值退回首行（与既有折叠/诊断口径一致） */
+/**
+ * 把 1 基行夹到 Monaco 模型现实；非有限 / 非法值退回首行（规则在 core `clampLine`：
+ * `NaN` / `±Infinity` / 0 都当"没给"，不夹到边界冒充一个真实行）。
+ */
 export function clampMonacoLine(line: number, lineCount: number): number {
-  return Math.min(Math.max(1, Math.trunc(line) || 1), lineCount);
+  return clampLine(line, lineCount);
 }
 
-/** 把 1 基列夹到该行合法列；非法值退回第一列 */
+/** 把 1 基列夹到该行合法列；非有限 / 非法值退回第一列（规则在 core `clampColumn`）。 */
 export function clampMonacoColumn(column: number, maxColumn: number): number {
-  return Math.min(Math.max(1, Math.trunc(column) || 1), maxColumn);
+  return clampColumn(column, maxColumn);
+}
+
+/**
+ * 1 基列 → 行内 0 基码元下标（**越界夹取的唯一入口**，规则在 core `clampLogicalOffset`）。
+ *
+ * 用于"光标列 ⇒ 这一行字符串的下标"这类行内判读（补全 / 悬停 / 签名 / 内联补全）；调用方
+ * 不许再写 `Math.min(column - 1, line.length)`。
+ */
+export function columnIndexIn(line: string, column: number): number {
+  return clampLogicalOffset(column, line.length);
 }

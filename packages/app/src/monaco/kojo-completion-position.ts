@@ -47,6 +47,12 @@ import { NAME_CHAR_CLASS, isCjk, isNameChar } from '@kojo/kojo-lang/name-chars';
  * 既有 import 点一行不动（与 `isNameChar` 搬迁时同一条纪律）。
  */
 import { insideInterpolation, insideStringOrComment } from '@kojo/kojo-lang/interpolation';
+/**
+ * 「1 基列 → 行内 0 基下标」的**唯一实现**在 core `lower/column-fold.ts::clampLogicalOffset`
+ * （与诊断折回共用同一套越界夹取）。本文件只加一层"非法列 ⇒ `null`"的判据外衣，
+ * 不再自持 `Math.min(column - 1, line.length)`。
+ */
+import { clampLogicalOffset } from '@kojo/kojo-core';
 
 export { isCjk, isNameChar, insideInterpolation, insideStringOrComment };
 
@@ -206,14 +212,18 @@ export function nameSlotAfterAnchor(
   anchor: RegExp,
 ): KojoNameField | null {
   if (!Number.isFinite(column) || column < 1) return null;
-  const col0 = Math.min(column - 1, line.length);
+  const col0 = clampLogicalOffset(column, line.length);
   const head = anchor.exec(line);
   if (head === null) return null;
   return nameFieldAfter(line, col0, head[0].length);
 }
 
-/** 列 → 0 基下标（夹进线内；非法列 ⇒ `null`，判据一律落空而不抛） */
+/**
+ * 列 → 0 基下标（夹进线内；非法列 ⇒ `null`，判据一律落空而不抛）。
+ *
+ * 夹取实现是 core 的 `clampLogicalOffset`（POS-UTIL 收口；诊断折回与补全判读同一把尺子）。
+ */
 export function col0Of(line: string, column: number): number | null {
   if (!Number.isFinite(column) || column < 1) return null;
-  return Math.min(column - 1, line.length);
+  return clampLogicalOffset(column, line.length);
 }

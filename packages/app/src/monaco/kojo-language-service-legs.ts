@@ -28,6 +28,7 @@ import type {
   EditorSignature,
   EditorSignatureHelpRequest,
 } from '@kojo/plugin-api';
+import { createPositionIndex } from '@kojo/kojo-core';
 import type { Kojo2ProjectIndex } from './kojo2-project-index';
 import { pkey } from '../ui/file-tree-ops';
 
@@ -428,13 +429,12 @@ export function hoverRequestOf(
   };
 }
 
-/** 行数（`\n` 计数 + 1；空串算 1 行——与 Monaco 的 `getLineCount()` 同口径） */
+/**
+ * 行数（空串算 1 行——与 Monaco 的 `getLineCount()` 同口径）。
+ * 实现只用 core 的行索引（POS-UTIL 收口）：行数口径全仓一份，不再逐处数 `\n`。
+ */
 function countLines(text: string): number {
-  let lines = 1;
-  for (let i = 0; i < text.length; i += 1) {
-    if (text.charCodeAt(i) === 10) lines += 1;
-  }
-  return lines;
+  return createPositionIndex(text).lineCount;
 }
 
 /* ============================== 引用 / 改名（B3e） ============================== */

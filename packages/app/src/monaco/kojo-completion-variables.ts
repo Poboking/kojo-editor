@@ -1,5 +1,6 @@
 import type * as Monaco from './entry';
 import type { KojoNameField } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 import type { VariableSchema } from '@kojo/plugin-api';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { isNameChar } from '@kojo/kojo-lang/name-chars';
@@ -50,7 +51,7 @@ function pronounPrefixLength(interpContent: string): number {
  */
 function parseNameContext(lineText: string, column: number): NameContext | null {
   if (!Number.isFinite(column) || column < 1) return null;
-  const col0 = Math.min(column - 1, lineText.length);
+  const col0 = columnIndexIn(lineText, column);
 
   // 1) 光标须在 `{ … }` 插值内：向左找 `{`，途中遇 `}` 即视为已在插值外。
   let open = -1;

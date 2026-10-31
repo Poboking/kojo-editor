@@ -15,6 +15,7 @@ import { erbWordCompletionItems } from './erb-completion-words';
 import { ERB_SNIPPET_SOURCE } from './erb-completion-snippets';
 import { errorText } from '@kojo/plugin-api';
 import { isAllBlank } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 import {
   applyCallSnippet,
   buildCallSnippetText,
@@ -585,7 +586,7 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
     // ② 光标紧前的字符就是 `.` 但不是成员位（`1.|` / `1.5` 的小数点）⇒ **整轮零候选**
     //    ——`. `如今在 triggerCharacters 里，不拦就会每敲一个小数点弹一次系统函数整表。
     // 判定用同一份纯函数（`erbMemberSlotAt`），不在装配点另写点号正则。
-    const col0 = Math.min(position.column - 1, line.length);
+    const col0 = columnIndexIn(line, position.column);
     const memberSlot = erbMemberSlotAt(line, position.column);
     if (memberSlot !== null && memberSlot.kind === 'member') {
       return {

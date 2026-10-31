@@ -39,6 +39,7 @@ import {
   KOJO_STORAGE_WORDS,
   KOJO_TYPE_WORDS,
   collectIntegerConstants,
+  createPositionIndex,
   lex,
   parse,
   planStorageSlots,
@@ -375,14 +376,15 @@ interface SourceIndex {
   lineMaxColumn(line: number): number;
 }
 
+/**
+ * 落在 core 的行索引上（POS-UTIL 收口）：行数 / 行宽（`\r` 不计）/ `getLineMaxColumn` 口径
+ * 都是 `createPositionIndex` 那一份，本函数只改名不改算法。
+ */
 function makeSourceIndex(source: string): SourceIndex {
-  const parts = source.split('\n');
-  const lengths = parts.map((part) => (part.endsWith('\r') ? part.length - 1 : part.length));
+  const index = createPositionIndex(source);
   return {
-    lineCount: Math.max(1, lengths.length),
-    lineMaxColumn(line: number) {
-      return Math.max(1, (lengths[line - 1] ?? 0) + 1);
-    },
+    lineCount: index.lineCount,
+    lineMaxColumn: (line: number) => index.lineMaxColumn(line),
   };
 }
 

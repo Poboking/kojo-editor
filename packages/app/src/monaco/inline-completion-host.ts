@@ -14,6 +14,7 @@ import {
   singleInsertedChar,
 } from './suggest-context-trigger';
 import { lineAt } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 
 /**
  * 内联补全（幽灵文本）的**宿主接线层**（IC 批 A 车道，2026-10-27）。
@@ -853,8 +854,8 @@ async function provideForModel(
       column,
       lineText: atLineText,
       // 宿主**不切词**：光标把当前行切成两段原始字面（按语言判词边界是供方的知识）
-      prefix: atLineText.slice(0, Math.max(0, column - 1)),
-      suffix: atLineText.slice(Math.max(0, column - 1)),
+      prefix: atLineText.slice(0, columnIndexIn(atLineText, column)),
+      suffix: atLineText.slice(columnIndexIn(atLineText, column)),
       contextBefore: window.before,
       contextAfter: window.after,
       project: facts.project,

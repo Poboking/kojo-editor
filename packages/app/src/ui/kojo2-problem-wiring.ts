@@ -66,6 +66,7 @@ import { isPathUnder, pathKey } from '@kojo/plugin-api';
 // `@kojo/kojo-lang/diagnostics` 的登记表现取，宿主这一侧只剩"表达式端口"一个注入面
 // （见 `kojo2IdentityCompileExpression`）与槽位调度。
 import type { DialectBindingResolution, KojoDiagnostic } from '@kojo/kojo-core';
+import { createPositionIndex } from '@kojo/kojo-core';
 import {
   KOJO2_DIAGNOSTIC_SOURCE,
   KOJO2_DIAGNOSTICS_CONTRIBUTION_ID,
@@ -160,25 +161,17 @@ function rowToDecoration(row: Kojo2DiagnosticRow): LineDecoration {
   };
 }
 
-/** 源文本行宽表（marker 落点夹取；与旧 `createSourceLineIndex` 同一口径，只留夹取要用的两格） */
+/**
+ * 源文本行宽表（marker 落点夹取；只留夹取要用的两格）。
+ *
+ * 行首表与行宽口径的**唯一实现**在 core `positions.ts::createPositionIndex`（POS-UTIL 收口：
+ * 与 `@kojo/kojo-lang/diagnostics` 的落点归一、`ui/kojo2-storage-registry` 的模型行索引同一份）。
+ */
 function lineWidthsOf(sourceText: string): { readonly lineCount: number; widthOf(line: number): number } {
-  const starts: number[] = [0];
-  for (let offset = 0; offset < sourceText.length; offset += 1) {
-    if (sourceText.charCodeAt(offset) === 10) starts.push(offset + 1);
-  }
-  const endOf = (line: number): number => {
-    const next = starts[line];
-    const rawEnd = next === undefined ? sourceText.length : next - 1;
-    const start = starts[line - 1] ?? 0;
-    if (rawEnd > start && sourceText.charCodeAt(rawEnd - 1) === 13) return rawEnd - 1;
-    return rawEnd;
-  };
+  const index = createPositionIndex(sourceText);
   return {
-    lineCount: starts.length,
-    widthOf(line) {
-      const start = starts[line - 1] ?? 0;
-      return Math.max(1, endOf(line) - start + 1);
-    },
+    lineCount: index.lineCount,
+    widthOf: (line: number) => index.lineMaxColumn(line),
   };
 }
 

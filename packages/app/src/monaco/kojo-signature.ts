@@ -4,6 +4,7 @@ import { registerForLanguageServices } from './register-dialects';
 import { errorText } from '@kojo/plugin-api';
 // LAU-4 补全腿第三批：槽标签格式化的**唯一实现**已上提契约层（插件侧拼括号调用骨架要同一份）
 import { slotParameterLabel } from '@kojo/plugin-api';
+import { columnIndexIn } from './positions';
 
 /**
  * 签名帮助（B5，形参槽语义）——`Ctrl+Shift+Space` / 打字触发的参数提示。
@@ -103,7 +104,7 @@ export function splitArguments(
 export function findCallSite(lineText: string, column: number): CallSite | null {
   if (!Number.isFinite(column) || column < 1) return null;
   if (/^\s*;/.test(lineText)) return null;
-  const col0 = Math.min(column - 1, lineText.length);
+  const col0 = columnIndexIn(lineText, column);
 
   // 光标之前的扫描：字符串态 + 左括号栈（栈里剩的就是未闭合的那些）
   const stack: number[] = [];

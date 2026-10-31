@@ -6,6 +6,7 @@ import { erbFunctionNameSlot } from './erb-completion-functions';
 import { erbBitSlotOpen } from './erb-completion-bits';
 import { erbVariableSlotAt } from './erb-completion-variables';
 import { insideStringOrComment, isBlank, lineAt } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 import { kojoCodePositionAt } from './kojo-suggest-gate';
 import { caseValueSlotAt, timingNumberSlotAt } from './kojo-completion-instructions';
 import { timingFaceSlot, timingNamedParamValueSlot } from './kojo-completion-faces';
@@ -185,7 +186,7 @@ export const KOJO_NAME_SLOTS: readonly NameSlotProbe[] = [
   kojoFunctionNameSlot,
   kojoVariableNameSlot,
   // `[[ … ]]` 属性名位：探针收 0 基列（其余探针收 Monaco 1 基列），换算口径同 `parseNameContext`
-  (line, column) => (column < 1 ? null : kojoRenameBracketSlotAt(line, Math.min(column - 1, line.length))),
+  (line, column) => (column < 1 ? null : kojoRenameBracketSlotAt(line, columnIndexIn(line, column))),
   // `timingNamedParamValueSlot` 签名定死 boolean（A3 接线注）⇒ 折一道，见上注
   (line, column) => (timingNamedParamValueSlot(line, column) ? true : null),
 ];
@@ -242,8 +243,7 @@ export function isSlotOpeningChar(ch: string): boolean {
 export function isNonCodePosition(languageId: string, line: string, column: number): boolean {
   if (languageId === ERB_LANGUAGE_ID) return erbCompletionGate(line, column) === 'in-string';
   if (languageId === KOJO_LANGUAGE_ID) {
-    const col0 = Math.min(Math.max(column - 1, 0), line.length);
-    return insideStringOrComment(line, col0);
+    return insideStringOrComment(line, columnIndexIn(line, column));
   }
   return true; // 未知语言（上游已拦）兜底为"不给弹"
 }
@@ -550,7 +550,7 @@ export function installSuggestContextTrigger(
     const primary = editor.getSelection();
     const signature = positionSignature(
       { languageId, path, lineNumber: position.lineNumber, column: position.column },
-      line.slice(0, Math.min(Math.max(position.column - 1, 0), line.length)),
+      line.slice(0, columnIndexIn(line, position.column)),
     );
     if (signature === lastSignature) return; // 同位置签名：弹过一次就不再重弹
     const ok = shouldTriggerContextSuggest({

@@ -9,6 +9,7 @@ import {
   insideStringOrComment,
   timingHeadParts,
 } from './kojo-completion-position';
+import { columnIndexIn } from './positions';
 
 /**
  * KC-3 · `.kojo` **编号槽**的正向补全（`kojoIndexCompletionItems`，IX-1 起按面分流）。
@@ -181,7 +182,7 @@ function buildItems(
   kind: KojoIndexKind,
   candidates: readonly { readonly name: string; readonly no: number }[],
 ): Monaco.languages.CompletionItem[] {
-  const prefix = line.slice(slot.start, position.column - 1);
+  const prefix = line.slice(slot.start, columnIndexIn(line, position.column));
   const range = lineRange(position, slot.start, slot.end);
   const itemKind = monaco.languages.CompletionItemKind.EnumMember;
   // CJK-primary（规范 §4.1，同 `kojo-face` 的 `valueSetOf` 口径）：表里有中文名 ⇒ 纯 ASCII
@@ -228,8 +229,8 @@ export function kojoIndexCompletionItems(
   if (!Number.isFinite(position.column) || position.column < 1) return [];
 
   const line = model.getLineContent(position.lineNumber);
-  const col0 = position.column - 1;
-  if (col0 > line.length) return [];
+  if (position.column - 1 > line.length) return []; // 光标越过行尾（陈旧坐标）⇒ 不做行内判读
+  const col0 = columnIndexIn(line, position.column);
   if (insideStringOrComment(line, col0)) return [];
 
   const timing = timingNumberSlotAt(line, position.column);

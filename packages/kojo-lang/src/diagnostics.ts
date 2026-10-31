@@ -41,7 +41,7 @@ import type {
   KojoSpan,
   SourceMap,
 } from '@kojo/kojo-core';
-import { compileKojoSource } from '@kojo/kojo-core';
+import { clampColumn as coreClampColumn, clampLine as coreClampLine, compileKojoSource, createPositionIndex } from '@kojo/kojo-core';
 
 /** 悬浮 / 问题面板里显示的来源标签（与 v1 的「结构解析」等标签并列时不撞名） */
 export const KOJO2_DIAGNOSTIC_SOURCE = 'Kojo 2.0';
@@ -184,41 +184,33 @@ interface SourceLineIndex {
  *
  * 与 Monaco 的 model 坐标口径一致：列 = 码元数 + 1（行尾光标位）；CRLF 的 `\r` 不计入
  * 行宽（Monaco 模型内换行被归一成 `\n`，源文本可能仍是 CRLF，落点必须同一口径）。
+ *
+ * **行首表 / 行宽 / 夹取的实现全在 core**（`@kojo/kojo-core` 的 `createPositionIndex`、
+ * `clampLine`、`clampColumn`，POS-UTIL 收口）：本函数只是"按行取码元"这一层薄外衣，
+ * 不再自建第二份行首表。
  */
 function createSourceLineIndex(source: string): SourceLineIndex {
-  const lineStarts: number[] = [0];
-  for (let offset = 0; offset < source.length; offset += 1) {
-    if (source.charCodeAt(offset) === 10) lineStarts.push(offset + 1);
-  }
-  const lineCount = lineStarts.length;
-  const startOf = (line: number): number => lineStarts[line - 1] ?? 0;
-  const endOf = (line: number): number => {
-    const nextStart = lineStarts[line];
-    const rawEnd = nextStart === undefined ? source.length : nextStart - 1;
-    if (rawEnd > startOf(line) && source.charCodeAt(rawEnd - 1) === 13) return rawEnd - 1;
-    return rawEnd;
-  };
+  const index = createPositionIndex(source);
   return {
-    lineCount,
+    lineCount: index.lineCount,
     clampLine(value) {
-      const line = Number.isFinite(value) ? Math.trunc(value) : 1;
-      return Math.min(Math.max(1, line), lineCount);
+      return coreClampLine(value, index.lineCount);
     },
     lineMaxColumn(line) {
-      return Math.max(1, endOf(line) - startOf(line) + 1);
+      return index.lineMaxColumn(line);
     },
     charCodeAt(line, column) {
       if (column < 1) return -1;
-      const offset = startOf(line) + column - 1;
-      if (offset >= endOf(line)) return -1;
-      return source.charCodeAt(offset);
+      const at = coreClampLine(line, index.lineCount);
+      if (column > index.lineWidth(at)) return -1;
+      return source.charCodeAt(index.lineStart(at) + column - 1);
     },
   };
 }
 
+/** 列夹取（规则在 core `clampColumn`：非有限 / 越界都落到该行合法列，不抛错） */
 function clampColumn(index: SourceLineIndex, line: number, value: number): number {
-  if (!Number.isFinite(value)) return 1;
-  return Math.min(Math.max(1, Math.trunc(value)), index.lineMaxColumn(line));
+  return coreClampColumn(value, index.lineMaxColumn(line));
 }
 
 interface NormalizedRowSpan {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { clampColumn, clampLine, clampLogicalOffset } from '@kojo/kojo-core';
 import {
   clampMonacoColumn,
   clampMonacoLine,
+  columnIndexIn,
   toMonacoColumn,
   toMonacoLine,
   toMonacoLineRange,
@@ -46,5 +48,30 @@ describe('positions：tree-sitter 0 基 ↔ Monaco 1 基', () => {
     expect(clampMonacoColumn(0, 5)).toBe(1);
     expect(clampMonacoColumn(6, 5)).toBe(5);
     expect(clampMonacoColumn(Number.NaN, 5)).toBe(1);
+  });
+
+  it('夹取实现单源（POS-UTIL）：与 core `clampLine` / `clampColumn` 逐字同口径', () => {
+    const lines = [0, 1, 3.7, 11, Number.NaN, Number.POSITIVE_INFINITY, -1];
+    for (const line of lines) expect(clampMonacoLine(line, 10)).toBe(clampLine(line, 10));
+    const columns = [0, 1, 2.9, 6, Number.NaN, Number.POSITIVE_INFINITY, -1];
+    for (const column of columns) expect(clampMonacoColumn(column, 5)).toBe(clampColumn(column, 5));
+    // 非有限值退回首行/首列（不夹到边界冒充一个真实位置）
+    expect(clampMonacoLine(Number.POSITIVE_INFINITY, 10)).toBe(1);
+    expect(clampMonacoColumn(Number.POSITIVE_INFINITY, 5)).toBe(1);
+  });
+
+  it('行内列 → 0 基下标：实现在 core `clampLogicalOffset`（CJK / emoji / 越界同一把尺子）', () => {
+    for (const line of ['', '恋', '😀哈', '    心形 「甲」']) {
+      for (const column of [-2, 0, 1, 2, 3, 99]) {
+        expect(columnIndexIn(line, column)).toBe(clampLogicalOffset(column, line.length));
+      }
+    }
+    // 1 基列 1 = 行首下标 0；emoji 占 2 码元，列 3 = `哈` 之前的插入点（下标 2）
+    expect(columnIndexIn('😀哈', 1)).toBe(0);
+    expect(columnIndexIn('😀哈', 2)).toBe(1); // 代理对中间：码元口径，仍是一个合法下标
+    expect(columnIndexIn('😀哈', 3)).toBe(2);
+    expect(columnIndexIn('😀哈', 99)).toBe(3); // 行尾之后
+    expect(columnIndexIn('恋', 0)).toBe(0);
+    expect(columnIndexIn('恋', Number.NaN)).toBe(0);
   });
 });

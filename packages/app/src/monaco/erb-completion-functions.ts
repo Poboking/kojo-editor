@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import { columnIndexIn } from './positions';
 import { projectFunctionCandidates, type CompletionNameSlot } from './completion-core';
 import {
   DEF_RE,
@@ -47,7 +48,7 @@ const CALL_RE = erbCallStatementRe(['func', 'form'], true);
  * 之后的槽是 FORM 串，允许 `%…%` / `{…}` 段；`'func'` 之后的槽只收名字字符。
  */
 export function erbFunctionNameSlot(line: string, column: number): CompletionNameSlot | null {
-  const col0 = Math.min(Math.max(column - 1, 0), line.length);
+  const col0 = columnIndexIn(line, column);
   const def = DEF_RE.exec(line);
   if (def !== null) return parseErbNameSlot(line, col0, def[0].length, false);
   const call = CALL_RE.exec(line);

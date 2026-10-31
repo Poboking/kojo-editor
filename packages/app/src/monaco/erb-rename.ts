@@ -12,6 +12,7 @@ import type {
   GameProject,
 } from '@kojo/plugin-api';
 import { errorText } from '@kojo/plugin-api';
+import { createPositionIndex } from '@kojo/kojo-core';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { reject } from './rename-rejection';
 import { erbFactsPathOf } from './erb-completion-declared';
@@ -102,13 +103,14 @@ export interface RenameSpan {
   readonly language?: ReferenceLanguage;
 }
 
-/** 每行的 0 基起始偏移（`text` 按 `\r\n` / `\n` 分行，行偏移含换行长度） */
+/**
+ * 每行的 0 基起始偏移（`text` 按 `\r\n` / `\n` 分行，行偏移含换行长度）。
+ *
+ * 行首表实现是 core `positions.ts::createPositionIndex`（POS-UTIL 收口）——本函数只把
+ * 「第 n 行 + 1 基列 → 绝对偏移」这条路交给它，不再自建第二张行首表。
+ */
 function lineStartOffsets(text: string): number[] {
-  const starts = [0];
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === '\n') starts.push(i + 1);
-  }
-  return starts;
+  return [...createPositionIndex(text).lineStarts];
 }
 
 export interface AppliedReferenceEdits {
