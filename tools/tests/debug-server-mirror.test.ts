@@ -113,6 +113,18 @@ const MIRROR_GAPS: Record<string, string> = {
   launcher_content_diagnose:
     '内容包冲突诊断（读实例清单 + 文件归属判定）。参数：{ instance_id }。',
 
+  // ---- 工程投影 / 解投影（L7B）----
+  launcher_project_hash:
+    '对真实工程根做逐文件摘要：先 `assert_project_root` 复验 `project_dir` 落在启动器三方授权表内' +
+    '（`launcher/approvals.json`，出处 ADR-0008 决策 7），再按 `artifact_dir` 的在册条目算指纹。' +
+    'web 模式既没有 launcher 根布局也没有那份授权表，落点复验这一步在原理上无从执行，镜像不复制。' +
+    '参数：{ project_dir, artifact_dir, entries }。',
+  launcher_project_extract:
+    '把工程归档解到 `launcher/project-staging/{id}/`：落点由 Rust 侧 `LauncherLayout` 唯一合成' +
+    '（TS 不传目标路径），解包走 `archive_guard` 的逃逸/符号链接闸 + HostState 读根允许域。' +
+    '安全执法全在桌面壳，镜像不复制这套（同 launcher_content_plan）。' +
+    '参数：{ archive_path, opts }。',
+
   // ---- 存档备份 / 导入导出 ----
   launcher_save_list:
     '列实例存档文件（扫实例存档目录）。参数：{ instance_id }。',

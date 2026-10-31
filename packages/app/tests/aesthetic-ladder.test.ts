@@ -245,7 +245,6 @@ describe('滚动族：几何走 token、渐隐有原语、一条不重抄', () =
     expect(offenders, `这些滚动条声明回到裸 px 了：\n${offenders.join('\n')}`).toEqual([]);
   });
 
-  // @debt-ledger BOARD:AE-SPLIT4
   it('已收口的一处必须留下收口证据；滚动渐隐那处欠账不许静默变成现状', () => {
     // ① **已收口（2026-11-01，AE-SPLIT4）**：六条把手里编辑器分隔条的按下档从与悬停共用的中性灰
     //    拆出来，转 `--split-hot` 与其余五条同族；收口顺序照看板判据走——先由
