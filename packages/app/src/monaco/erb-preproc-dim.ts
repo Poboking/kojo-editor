@@ -6,6 +6,13 @@
  * `ErbLoader.PPState` 逐条对得上），本模块只负责把它变成 Monaco 的区间装饰——
  * 宿主不重新解释 `[IF xxx]` 的语义，否则就有了第二份判据。
  *
+ * ## 取数腿（`definedMacrosOf`）今天仍住宿主 `erb-preproc-defines.ts` 一枚叶子（B5b C 类余账）
+ * 它是纯判据（索引进、集合出、零 Monaco、零 IO），按口径应与 `collectPreprocDeadRanges`
+ * 同住插件——**收不动的唯一理由是量的**：erb-parser 是开机常驻两包之一，PS-10 开机图
+ * 200 文件 / 3,509 KB 已顶格、字节余量 404 B < 这枚判据正文的 696 B（归因见批次提交信息），
+ * 抬闸不归本批裁量。台账与"不许为凑改动把它安到别处"的判据钉在
+ * `tests/erb-preproc-single-source.test.ts` 的取数腿那一组。
+ *
  * ## 为什么挂 `onDidCreateEditor` 而不是塞进 EditorPane
  * 装饰集是**编辑器实例级**资源（`createDecorationsCollection`），而"哪个 model 在屏上"
  * 随时会变（切标签、糖预览、分屏）。挂在这一层的好处：所有实例（含日后新增的分屏）
@@ -41,9 +48,6 @@ export const ERB_PREPROC_DEAD_CLASS = 'erb-preproc-dead';
 
 /** 编辑停顿后重算的去抖窗口（与波浪线的 `MARKER_DEBOUNCE_MS` 同量级，各走各的） */
 const DEBOUNCE_MS = 220;
-
-/** `#DEFINE` 名集的取数腿住叶子模块（零 monaco 依赖，可在 node 里单测）；这里只为旧 import 点留个面 */
-export { definedMacrosOf } from './erb-preproc-defines';
 
 /** 一个编辑器实例上的装饰状态 */
 interface DimEntry {
