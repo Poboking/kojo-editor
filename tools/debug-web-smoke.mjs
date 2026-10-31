@@ -1279,6 +1279,53 @@ seg('semantic', ['session', 'editor'], async (c) => {
   );
 });
 
+/* ============ legs-probes：LAU-DUALLEG 让位三腿的取证探针（2026-10-31 批，只追加在末尾） ============
+ * 这三枚探针与 definitionAt 同一套收集腿（`collectFromProviders` 直问 ILanguageFeaturesService），
+ * **不靠键盘快捷键驱动**（PITFALLS 304：CDP 的组合键到不了 Monaco 命令层）。
+ * 冒烟只钉"形状合规 + 绝不抛"，**不钉内容**：槽腿答不答由三态字段现场判——夹具的项目索引
+ * 未必建过，`erb-usage-lens` 按口径交 `undefined`（弃权）是合法读数（PITFALLS 304 附注②），
+ * 把 `items.length >= 1` 写成红线就是拿判据编造事实。组长取证读 `providers` / `answered`：
+ * null＝没问到（深路径不通）；0＝无人应答；>0 而 items 空看 answered——答空与弃权分得开。 */
+seg('legs-probes', ['session', 'editor'], async (c) => {
+  const { cdp } = c;
+  let res = null;
+  let err = '';
+  try {
+    res = await cdp.evalJs(
+      `(async () => {
+        const ed = __kojoDebug.editor;
+        if (typeof ed.highlightsAt !== 'function' || typeof ed.selectionRangesAt !== 'function' || typeof ed.lensesAt !== 'function') {
+          return { __missing: '三枚探针不齐全：' + [typeof ed.highlightsAt, typeof ed.selectionRangesAt, typeof ed.lensesAt].join('/') };
+        }
+        const h = await ed.highlightsAt(2, 2, { timeoutMs: 1500 });
+        const s = await ed.selectionRangesAt(2, 2, { timeoutMs: 1500 });
+        const l = await ed.lensesAt(2, { timeoutMs: 1500 });
+        const providersOk = (v) => v === null || typeof v === 'number';
+        const shapeH = !!h && Array.isArray(h.items) && providersOk(h.providers) && typeof h.answered === 'number';
+        const shapeS = !!s && Array.isArray(s.chains) && providersOk(s.providers) && typeof s.answered === 'number';
+        const shapeL = !!l && Array.isArray(l.items) && providersOk(l.providers) && typeof l.answered === 'number' && typeof l.resolvedCount === 'number';
+        const rangeOk = (x) => !!x && typeof x.line === 'number' && typeof x.column === 'number' && typeof x.endLine === 'number' && typeof x.endColumn === 'number';
+        return {
+          shapeH, shapeS, shapeL,
+          itemsOk: shapeH && shapeS && shapeL
+            && h.items.every((x) => rangeOk(x) && typeof x.kind === 'number')
+            && s.chains.every((chain) => Array.isArray(chain) && chain.every(rangeOk))
+            && l.items.every((x) => rangeOk(x) && typeof x.title === 'string' && typeof x.resolved === 'boolean'),
+          readings: { h, s, l },
+        };
+      })()`,
+      30000,
+    );
+  } catch (e) {
+    err = String(e?.message ?? e);
+  }
+  check(
+    'editor.{highlightsAt,selectionRangesAt,lensesAt}(2,2/2)：不抛、形状合规、三态字段（providers/answered）在场',
+    !err && res?.shapeH === true && res?.shapeS === true && res?.shapeL === true && res?.itemsOk === true,
+    err || JSON.stringify(res?.readings ?? res).slice(0, 400),
+  );
+});
+
 /* ------------------------------ main ------------------------------ */
 
 async function main() {

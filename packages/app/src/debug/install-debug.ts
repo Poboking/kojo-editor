@@ -31,6 +31,14 @@
  *   `getModelMarkers` 取数腿，只加裁剪与当前文档作用域）。全部经纯函数裁剪
  *   （`slimLocations` / `slimCodeActions` / `slimSignature` / `slimSymbols` / `slimDiagnostics`），
  *   **不依赖任何私有 DOM 类名**（`.monaco-hover` 那一类是 `selfCheck` 的职责，不是新读数的）；
+ * - `editor` 的**让位三腿取证读数**（1031 批，只读、绝不抛）：LAU-DUALLEG 把 ERB 的
+ *   `documentHighlight` / `selectionRange` / `codeLens` 三格按 descriptor 点名让位给共享槽腿，
+ *   `highlightsAt()` / `selectionRangesAt()` / `lensesAt()` 就经**同一个** `collectFromProviders`
+ *   直问这三枚注册表（`documentHighlightProvider` / `selectionRangeProvider` / `codeLensProvider`），
+ *   与 selectHighlights / smartSelect.expand / codeLens 贡献点吃的是同一批 provider；
+ *   读数带 `providers` / `answered` 两个字段把**三态分开**（没问到 / 无人应答 / 有人答空 / 有结果，
+ *   见 `DebugHighlightsReading` 头注）；lens 交回的是**尽力解析后**的形态：没 command 的条目逐枚问
+ *   provider 自己的 `resolveCodeLens`（预算与开关见 `lensesAt`），每条带 `resolved` 明说解析成没成；
  * - `invoke(cmd, args)`：直达宿主命令（桌面壳 = 真 Tauri IPC；浏览器 = 调试宿）；
  * - `dialogPolicy.{arm,armed,clear,status}`：对话框一次性自动应答（真壳 fetch 腿 /
  *   web 页面腿；只答**只选取器** choose_directory 与 pick_save_path——都是"只选不写"，
@@ -131,6 +139,24 @@ export interface KojoDebugApi {
      * 本条只加"当前文档作用域 + 裁剪"（`severity` 与 `markers()` 同口径，见 `slimDiagnostics`）。
      */
     diagnostics(): Promise<DebugDiagnostic[]>;
+    /**
+     * 该位置的同符号高亮区间（1031 批，只读）：走 `documentHighlightProvider` 注册表——
+     * 与 selectHighlights / 悬停同符号是同一批 provider。`providers` / `answered` 分三态
+     * （见 `DebugHighlightsReading` 头注）；上限 50 条；绝不抛。
+     */
+    highlightsAt(line: number, column: number, opts?: SemanticQueryOptions): Promise<DebugHighlightsReading>;
+    /**
+     * 该位置的扩选链（1031 批，只读）：走 `selectionRangeProvider` 注册表——与 smartSelect.expand
+     * 同源。每条链**按供方交回的原序**（近→远），不替 UI 腿重排去重；上限 8 链 × 10 档；绝不抛。
+     */
+    selectionRangesAt(line: number, column: number, opts?: SemanticQueryOptions): Promise<DebugSelectionRangesReading>;
+    /**
+     * 该行的 code lens（1031 批，只读）：`provideCodeLenses` 是**整篇文档**口径，本条按行过滤。
+     * 交回的是**尽力解析后**的读数：没有 `command` 的条目逐枚问它**原供方**的 `resolveCodeLens`
+     * （单次预算 10 枚；`opts.resolve === false` 关掉解析——关掉交回的就是未解析形态，
+     * `resolved===false` 明说"这条没解出标题"，不是"这条 lens 不存在"）；上限 30 条；绝不抛。
+     */
+    lensesAt(line: number, opts?: LensQueryOptions): Promise<DebugLensesReading>;
   };
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   /**
@@ -297,6 +323,68 @@ export interface DebugDiagnostic {
   readonly column: number;
   /** 产出这条诊断的语言服务名；缺失 ⇒ 不挂键 */
   readonly source?: string;
+}
+
+/* -------------------- 让位三腿取证读数（1031 批，只读）的契约面 -------------------- */
+
+/** 四角区间（1 基）：尾缺 ⇒ 同起点（退化区间，**不编造跨行**）；脏到起点都读不出 ⇒ 整条丢弃 */
+export interface DebugRange {
+  readonly line: number;
+  readonly column: number;
+  readonly endLine: number;
+  readonly endColumn: number;
+}
+
+/** 一条同符号高亮：`kind` 是 Monaco `DocumentHighlightKind` 数字（0 Text / 1 Read / 2 Write），缺 ⇒ 0（协议默认本就是 text，**不是猜**） */
+export interface DebugHighlightItem extends DebugRange {
+  readonly kind: number;
+}
+
+/**
+ * `highlightsAt` 的读数。三态靠 `providers` / `answered` / `items` 三个字段分开说：
+ * - `providers === null`：**没问到**——provider 注册表深路径在当前构建上不通，或没有焦点编辑器；
+ * - `providers === 0`：**无人应答**——当前 model 上这个特性一个 provider 都没挂（对应 UI 腿确实不会亮）；
+ * - `providers > 0 && items.length === 0`：**有人答空**（`answered > 0`：供方答了 `[]`／没有该位置）
+ *   或**全体弃权/抛错/超时**（`answered === 0`）；
+ * - `items.length > 0`：有结果。
+ * 别让「没人答」伪装成「答案是空」——这三格是排障的第一分岔。
+ */
+export interface DebugHighlightsReading {
+  readonly items: DebugHighlightItem[];
+  readonly providers: number | null;
+  readonly answered: number;
+}
+
+/**
+ * `selectionRangesAt` 的读数：`chains` 每个 answered 供方最多一条（该供方答空 ⇒ 没有这一条，
+ * 空答案由 `answered` 计数说，不占链位）。内层顺序**按供方交回的原序**（近→远）——
+ * smartSelect 的 UI 腿还有合并/排序/去重/补 trivia 的后处理，那是它的账，读数不替它做。
+ */
+export interface DebugSelectionRangesReading {
+  readonly chains: DebugRange[][];
+  readonly providers: number | null;
+  readonly answered: number;
+}
+
+/** `lensesAt` 的共用选项：超时 + 解析开关（缺省解析；`false` ⇒ 交回未解析形态） */
+export interface LensQueryOptions extends SemanticQueryOptions {
+  readonly resolve?: boolean;
+}
+
+/** 一条 code lens：`title` / `commandId` 取自 `command`，没有 command ⇒ 空串 + `resolved: false` */
+export interface DebugCodeLensItem extends DebugRange {
+  readonly title: string;
+  readonly commandId: string;
+  /** true＝这条拿到了 command（provider 直接给，或 `resolveCodeLens` 解出）；false＝没解出 */
+  readonly resolved: boolean;
+}
+
+/** `lensesAt` 的读数；三态口径同 `DebugHighlightsReading`，另给 `resolvedCount`＝本次真正解析掉的枚数 */
+export interface DebugLensesReading {
+  readonly items: DebugCodeLensItem[];
+  readonly providers: number | null;
+  readonly answered: number;
+  readonly resolvedCount: number;
 }
 
 /**
@@ -614,6 +702,14 @@ const SYMBOL_DEPTH_LIMIT = 20;
 const DIAGNOSTIC_LIMIT = 200;
 const PARAMETER_LIMIT = 50;
 const SEMANTIC_TIMEOUT_DEFAULT_MS = 2000;
+/* 让位三腿（1031 批）的裁剪上限 */
+const HIGHLIGHT_LIMIT = 50;
+/** 扩选链：单链最多 10 档、最多 8 条链（链正常个位数；超了是失控 provider，读数不陪跑） */
+const SELECTION_CHAIN_LIMIT = 10;
+const SELECTION_CHAINS_LIMIT = 8;
+const LENS_LIMIT = 30;
+/** 单次调用的 lens 解析预算：resolveCodeLens 是一 lens 一趟的追问，读数不许把整屏扫一遍 */
+const LENS_RESOLVE_LIMIT = 10;
 /** 单行文本上限**沿用 `slimHoverText` 的口径**（300 字符 + 省略号），不另立一套 */
 const SLIM_TEXT_LIMIT = HOVER_ROW_CHAR_LIMIT;
 
@@ -696,6 +792,24 @@ function readRangeStart(raw: unknown): { line: number; column: number } | null {
   // 列缺失 ⇒ 1（行内首列是唯一"不编造"的默认值）；行缺失则整条丢弃
   const column = toPositiveInt(record.startColumn ?? nested.column ?? nested.character) ?? 1;
   return { line, column };
+}
+
+/**
+ * range 的四角（1031 批，扩选链 / 高亮 / lens 共用）：`IRange`（`startLineNumber`/`endLineNumber`）
+ * 与嵌套 `{start,end}` 两种形态都认。**尾缺失 ⇒ 同起点**（退化区间，不编造跨行）；
+ * 起点都读不出 ⇒ null（调用方整条丢弃）。尾比头小（脏 provider）原样交回——读数不替供方圆场。
+ */
+function readRangeFull(raw: unknown): DebugRange | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const record = raw as Record<string, unknown>;
+  const nestedStart = (record.start && typeof record.start === 'object' ? record.start : {}) as Record<string, unknown>;
+  const nestedEnd = (record.end && typeof record.end === 'object' ? record.end : {}) as Record<string, unknown>;
+  const line = toPositiveInt(record.startLineNumber ?? nestedStart.lineNumber ?? nestedStart.line);
+  if (line === null) return null;
+  const column = toPositiveInt(record.startColumn ?? nestedStart.column ?? nestedStart.character) ?? 1;
+  const endLine = toPositiveInt(record.endLineNumber ?? nestedEnd.lineNumber ?? nestedEnd.line) ?? line;
+  const endColumn = toPositiveInt(record.endColumn ?? nestedEnd.column ?? nestedEnd.character) ?? column;
+  return { line, column, endLine, endColumn };
 }
 
 function slimLocation(raw: unknown, rootDir: string | null | undefined): DebugLocation | null {
@@ -873,6 +987,165 @@ export function slimDiagnostics(raw: unknown, limit = DIAGNOSTIC_LIMIT): DebugDi
     out.push({ severity, message, line, column, ...(source ? { source } : {}) });
   }
   return out;
+}
+
+/* ---------------- 让位三腿取证读数（1031 批）的纯函数裁剪 ---------------- */
+
+/** `DocumentHighlightKind` 归一：非数字 ⇒ 0 = Text（协议默认就是 text occurrence，**不是猜**） */
+function toHighlightKind(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.floor(value));
+}
+
+/**
+ * 同符号高亮裁剪（纯函数）：入参是 `collectFromProviders` 的 raw 清单——
+ * `provideDocumentHighlights` 交回 `DocumentHighlight[]`，`pushProviderResults` 已摊平成条目序列。
+ * 缺 `range` / range 读不出起点 ⇒ 整条丢弃（定位不到的高亮留着只会让"有结果"假绿）；默认上限 50 条。
+ */
+export function slimHighlights(raw: unknown, limit = HIGHLIGHT_LIMIT): DebugHighlightItem[] {
+  const out: DebugHighlightItem[] = [];
+  if (!Array.isArray(raw)) return out;
+  const cap = clampInt(limit, HIGHLIGHT_LIMIT, 1, REFERENCE_TOTAL_LIMIT);
+  for (const item of raw) {
+    if (out.length >= cap) break;
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const range = readRangeFull(record.range);
+    if (!range) continue;
+    out.push({ ...range, kind: toHighlightKind(record.kind) });
+  }
+  return out;
+}
+
+/**
+ * 扩选链裁剪（纯函数）：`provideSelectionRanges` 回 `SelectionRange[][]`（外层=逐位置），
+ * 本读数只问一枚位置，raw 摊平后每个元素就是**一个供方的那条链**（`SelectionRange[]`）。
+ * - 非数组的元素 ⇒ 丢（形态不认识的答——该供方仍被 `answered` 计到，链位不硬凑）；
+ * - 链内逐档：缺 `range` 的档丢弃；每链 ≤ `SELECTION_CHAIN_LIMIT` 档、共 ≤ `SELECTION_CHAINS_LIMIT` 链；
+ * - **不重排、不去重**：供方按什么序交（词→行→块→函数体…）就按什么序读，
+ *   smartSelect 的合并/排序/补 trivia 是 UI 腿自己的后处理，读数不替它做、也不混进它的账。
+ */
+export function slimSelectionChains(raw: unknown): DebugRange[][] {
+  const chains: DebugRange[][] = [];
+  if (!Array.isArray(raw)) return chains;
+  for (const item of raw) {
+    if (chains.length >= SELECTION_CHAINS_LIMIT) break;
+    if (!Array.isArray(item)) continue;
+    const chain: DebugRange[] = [];
+    for (const rung of item) {
+      if (chain.length >= SELECTION_CHAIN_LIMIT) break;
+      if (!rung || typeof rung !== 'object') continue;
+      const range = readRangeFull((rung as Record<string, unknown>).range);
+      if (range) chain.push(range);
+    }
+    if (chain.length > 0) chains.push(chain);
+  }
+  return chains;
+}
+
+/** 一条 lens 条目：`provider` 必须留着——`resolveCodeLens` 只能问**产出它的那家**，问别家是编造 */
+export interface DebugLensEntry {
+  readonly range: DebugRange;
+  /** provider 的原始 CodeLens；`resolveLensEntryCommands` 解出后**替换**成解析过的回包 */
+  lens: Record<string, unknown>;
+  readonly provider: unknown;
+}
+
+/** codeLens 回包的认得形态：`CodeLensList{lenses}` / `CodeLens[]` / `{value}` 包装 / 单条 `{range}`——其余不认，不猜 */
+function collectLensList(result: unknown, out: unknown[]): void {
+  if (!result) return;
+  if (Array.isArray(result)) {
+    out.push(...result);
+    return;
+  }
+  if (typeof result !== 'object') return;
+  const record = result as Record<string, unknown>;
+  if (Array.isArray(record.lenses)) {
+    out.push(...record.lenses);
+    return;
+  }
+  if (record.value !== undefined) {
+    collectLensList(record.value, out);
+    return;
+  }
+  if (record.range) out.push(record);
+}
+
+/**
+ * 逐 provider 的整篇 lens 答卷按行过滤（纯函数）：只留 range **覆盖该行**（`line ≤ 该行 ≤ endLine`）
+ * 的条目；缺 range / 读不出 ⇒ 丢弃。上限 `LENS_LIMIT` 条。
+ * 入参是 `collectFromProviders` 的 stats.entries（provider ↔ 原始回包对齐）——**不是**摊平的 raw：
+ * lens 的解析追问要找回原 provider，摊平就把归属摊丢了。
+ */
+export function unpackCodeLenses(
+  entries: readonly { provider: unknown; result: unknown }[],
+  line: number,
+  limit = LENS_LIMIT,
+): DebugLensEntry[] {
+  const out: DebugLensEntry[] = [];
+  if (!Array.isArray(entries)) return out;
+  const cap = clampInt(limit, LENS_LIMIT, 1, REFERENCE_TOTAL_LIMIT);
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const lenses: unknown[] = [];
+    collectLensList((entry as { result?: unknown }).result, lenses);
+    for (const lens of lenses) {
+      if (out.length >= cap) return out;
+      if (!lens || typeof lens !== 'object') continue;
+      const record = lens as Record<string, unknown>;
+      const range = readRangeFull(record.range);
+      if (!range || range.line > line || range.endLine < line) continue;
+      out.push({ range, lens: record, provider: (entry as { provider?: unknown }).provider ?? null });
+    }
+  }
+  return out;
+}
+
+/**
+ * 没 command 的 lens 逐枚问**原 provider** 的 `resolveCodeLens`（异步腿可单测：model / token 喂伪对象即可）。
+ * - 已带 `command` ⇒ 不动（那就是已解析），也不吃预算；
+ * - provider 没有 `resolveCodeLens` / 不是函数 ⇒ 跳过（如实维持 resolved:false）；
+ * - 超时 / 抛错 / 回包形态不认识（不是带 range 的对象）⇒ 保留原 lens，**不拿半截当解析成功**；
+ * - 预算：单轮最多 `budget` 枚（缺省 `LENS_RESOLVE_LIMIT`）。
+ * 返回真正解析掉的枚数（读数里的 `resolvedCount`）。
+ */
+export async function resolveLensEntryCommands(
+  entries: readonly DebugLensEntry[],
+  model: unknown,
+  token: unknown,
+  opts?: { readonly timeoutMs?: number; readonly budget?: number },
+): Promise<number> {
+  const timeoutMs =
+    typeof opts?.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs)
+      ? opts.timeoutMs
+      : SEMANTIC_TIMEOUT_DEFAULT_MS;
+  const budget = clampInt(opts?.budget, LENS_RESOLVE_LIMIT, 0, LENS_LIMIT);
+  let resolved = 0;
+  for (const entry of entries) {
+    if (resolved >= budget) break;
+    if (!entry || typeof entry !== 'object') continue;
+    if (entry.lens.command) continue;
+    const provider = entry.provider as { resolveCodeLens?: unknown } | null;
+    const fn = provider?.resolveCodeLens;
+    if (typeof fn !== 'function') continue;
+    const answer = await callWithin(timeoutMs, () =>
+      (fn as (m: unknown, lens: unknown, t: unknown) => unknown).call(provider, model, entry.lens, token),
+    );
+    if (answer && typeof answer === 'object' && !Array.isArray(answer) && (answer as { range?: unknown }).range) {
+      entry.lens = answer as Record<string, unknown>;
+      resolved += 1;
+    }
+  }
+  return resolved;
+}
+
+/** 条目 → 读数（纯函数）：`resolved`＝这条拿到 command 没有；title / commandId 没 command ⇒ 空串 */
+export function lensItemOf(entry: DebugLensEntry): DebugCodeLensItem {
+  const command = entry.lens.command;
+  const record = (command && typeof command === 'object' ? command : null) as Record<string, unknown> | null;
+  const title = record ? slimText(record.title) : '';
+  const commandId = record ? slimText(record.id) : '';
+  return { ...entry.range, title, commandId, resolved: record !== null };
 }
 
 const BUS_RING_LIMIT = 500;
@@ -1108,6 +1381,11 @@ interface LanguageFeaturesLike {
   codeActionProvider?: RegistryLike;
   signatureHelpProvider?: RegistryLike;
   documentSymbolProvider?: RegistryLike;
+  /* 让位三腿（1031 批）的注册表；名字逐字取自 monaco 0.57
+     `editor/common/services/languageFeaturesService.js` 的 LanguageFeaturesService 构造 */
+  documentHighlightProvider?: RegistryLike;
+  selectionRangeProvider?: RegistryLike;
+  codeLensProvider?: RegistryLike;
 }
 
 /** `ILanguageFeaturesService` 只取一次（standalone 的 DI 单例，与 editor 同寿） */
@@ -1273,17 +1551,42 @@ async function semanticTarget(line: unknown, column: unknown): Promise<SemanticT
   return { ...base, line: lineNumber, column: columnNumber, position: new base.monaco.Position(lineNumber, columnNumber) };
 }
 
-/** 逐 provider 取数（query 决定调哪个方法、吃什么参数）；单条抛错只丢它自己 */
+/**
+ * 逐 provider 取数（query 决定调哪个方法、吃什么参数）；单条抛错只丢它自己。
+ *
+ * `stats`（1031 批，additive——不传时行为与从前逐字一致）是给"让位三腿"读数的三态账：
+ * - `unreachable`：服务没到手 / 这版没有这枚注册表 / 注册表没有 `ordered` ⇒ true
+ *   （**没问到**——与"问到了、答案是一个 provider 都没有"是两件事，不许混）；
+ * - `asked`：该特性对当前 model 交回的 provider 数（0 ⇒ **无人应答**）；
+ * - `answered`：交回了可辨认结果（含 `[]` 这种**答空**）的 provider 数；弃权 / 抛错 / 超时不算；
+ * - `entries`：provider ↔ 原始回包对齐清单——lens 的 `resolveCodeLens` 必须找回**原 provider** 问，
+ *   摊平后的 raw 清单丢了这层归属。
+ */
+interface ProviderCollectStats {
+  asked: number;
+  answered: number;
+  unreachable: boolean;
+  entries: { provider: unknown; result: unknown }[];
+}
+
+function createProviderStats(): ProviderCollectStats {
+  return { asked: 0, answered: 0, unreachable: false, entries: [] };
+}
+
 async function collectFromProviders(
   providerName: keyof LanguageFeaturesLike,
   method: string,
   target: ModelTarget,
   timeoutMs: number,
   makeArgs: (token: unknown) => unknown[],
+  stats?: ProviderCollectStats,
 ): Promise<unknown[]> {
   const raw: unknown[] = [];
   const service = await languageFeaturesService();
-  const providers = providersOf(service?.[providerName], target.model, method);
+  const registry = service?.[providerName];
+  if (stats) stats.unreachable = !service || !registry || typeof registry.ordered !== 'function';
+  const providers = providersOf(registry, target.model, method);
+  if (stats) stats.asked = providers.length;
   if (providers.length === 0) return raw;
   const cts = new target.monaco.CancellationTokenSource();
   try {
@@ -1293,6 +1596,10 @@ async function collectFromProviders(
       const result = await callWithin(timeoutMs, () =>
         (fn as (...args: unknown[]) => unknown).apply(provider, makeArgs(cts.token)),
       );
+      if (stats && result !== null && result !== undefined) {
+        stats.answered += 1;
+        stats.entries.push({ provider, result });
+      }
       pushProviderResults(raw, result);
     }
   } finally {
@@ -1496,6 +1803,11 @@ const PROVIDER_METHODS: Record<keyof LanguageFeaturesLike, string> = {
   codeActionProvider: 'provideCodeActions',
   signatureHelpProvider: 'provideSignatureHelp',
   documentSymbolProvider: 'provideDocumentSymbols',
+  // 后三枚只进这张**方法名对照表**（`collectFromProviders` 的判据用）；
+  // `selfCheck().semantic` 的六键形状是既有契约，一个键都不加——三枚新读数自己带三态账。
+  documentHighlightProvider: 'provideDocumentHighlights',
+  selectionRangeProvider: 'provideSelectionRanges',
+  codeLensProvider: 'provideCodeLenses',
 };
 
 /**
@@ -2001,6 +2313,97 @@ export function installDebug(): KojoDebugApi {
           return slimDiagnostics(monaco.editor.getModelMarkers({ resource: model.uri }), DIAGNOSTIC_LIMIT);
         } catch {
           return [];
+        }
+      },
+      async highlightsAt(line, column, opts) {
+        // 走 `collectFromProviders` 直问 `documentHighlightProvider`（与 selectHighlights 同一批
+        // provider）；不碰贡献点、不发消息——PITFALLS 304：键盘通道到不了编辑器命令层。
+        try {
+          const target = await semanticTarget(line, column);
+          if (!target) return { items: [], providers: null, answered: 0 };
+          const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
+          const stats = createProviderStats();
+          const raw = await collectFromProviders(
+            'documentHighlightProvider',
+            'provideDocumentHighlights',
+            target,
+            timeoutMs,
+            (token) => [target.model, target.position, token],
+            stats,
+          );
+          return {
+            items: slimHighlights(raw),
+            providers: stats.unreachable ? null : stats.asked,
+            answered: stats.answered,
+          };
+        } catch {
+          return { items: [], providers: null, answered: 0 };
+        }
+      },
+      async selectionRangesAt(line, column, opts) {
+        try {
+          const target = await semanticTarget(line, column);
+          if (!target) return { chains: [], providers: null, answered: 0 };
+          const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
+          const stats = createProviderStats();
+          const raw = await collectFromProviders(
+            'selectionRangeProvider',
+            'provideSelectionRanges',
+            target,
+            timeoutMs,
+            // positions 是**数组**契约（smartSelect 逐 selection 喂）；本读数只问一枚位置
+            (token) => [target.model, [target.position], token],
+            stats,
+          );
+          return {
+            chains: slimSelectionChains(raw),
+            providers: stats.unreachable ? null : stats.asked,
+            answered: stats.answered,
+          };
+        } catch {
+          return { chains: [], providers: null, answered: 0 };
+        }
+      },
+      async lensesAt(line, opts) {
+        // `provideCodeLenses` 是整篇口径（签名里没有位置——0.57 `CodeLensProvider` 契约），
+        // 所以本条收整篇答卷、按行过滤；解析追问找回**产出该 lens 的那家 provider**。
+        try {
+          const target = await modelTarget();
+          if (!target) return { items: [], providers: null, answered: 0, resolvedCount: 0 };
+          if (typeof line !== 'number' || !Number.isFinite(line)) {
+            return { items: [], providers: null, answered: 0, resolvedCount: 0 };
+          }
+          const wanted = Math.min(Math.max(1, Math.floor(line)), target.model.getLineCount());
+          const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
+          const stats = createProviderStats();
+          await collectFromProviders(
+            'codeLensProvider',
+            'provideCodeLenses',
+            target,
+            timeoutMs,
+            (token) => [target.model, token],
+            stats,
+          );
+          const entries = unpackCodeLenses(stats.entries, wanted);
+          // 交回的是**尽力解析后**的读数：opts.resolve===false 显式关掉这一腿，
+          // 那时每条的 resolved 如实反映"provider 直接给了 command 没有"。
+          let resolvedCount = 0;
+          if (opts?.resolve !== false && entries.length > 0) {
+            const cts = new target.monaco.CancellationTokenSource();
+            try {
+              resolvedCount = await resolveLensEntryCommands(entries, target.model, cts.token, { timeoutMs });
+            } finally {
+              cts.dispose();
+            }
+          }
+          return {
+            items: entries.map((entry) => lensItemOf(entry)),
+            providers: stats.unreachable ? null : stats.asked,
+            answered: stats.answered,
+            resolvedCount,
+          };
+        } catch {
+          return { items: [], providers: null, answered: 0, resolvedCount: 0 };
         }
       },
     },

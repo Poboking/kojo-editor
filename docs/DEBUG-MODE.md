@@ -274,6 +274,9 @@ perf.{start,stop,isRunning,lastReport,summary}}`。
 | `signatureAt(line, column, opts?)` | `{label, parameters, activeParameter, documentation?}` 或 `null`：第一个给得出签名的 provider 即答案，`activeParameter` 0 基（与 provider 同口径） |
 | `documentSymbols()` | `[{name, kind, depth}]`：父子关系压平成 `depth`（0＝顶层），不吃行列；上限 200 条 |
 | `diagnostics()` | `[{line, column, severity, message, source?}]`：`markers()` 的契约形态，`severity` 是 `MarkerSeverity` 的 1/2/4/8，缺 `source` 不挂键 |
+| `highlightsAt(line, column, opts?)` | `{items:[{line,column,endLine,endColumn,kind}], providers, answered}`：同符号高亮区间（`documentHighlightProvider` 直读，与 selectHighlights 同一批 provider）；`kind` 是 `DocumentHighlightKind` 数字（0 Text / 1 Read / 2 Write，缺 ⇒ 0）；上限 50 条。**三态**：`providers===null` 没问到（深路径不通/无编辑器）、`===0` 无人应答、`>0` 而 `items` 空看 `answered`（`>0` 答空 / `0` 全体弃权或超时） |
+| `selectionRangesAt(line, column, opts?)` | `{chains:[[{line,column,endLine,endColumn}, …]], providers, answered}`：扩选链（`selectionRangeProvider` 直读，与 smartSelect.expand 同源）。每条链**按供方交回的原序**（词→行→块→函数体…），读数不替 UI 腿重排去重；上限 8 链 × 10 档；答空的供方不占链位（看 `answered`） |
+| `lensesAt(line, opts?)` | `{items:[{line,column,endLine,endColumn,title,commandId,resolved}], providers, answered, resolvedCount}`：该行覆盖到的 code lens（`provideCodeLenses` 是整篇口径，按行过滤；上限 30 条）。交回的是**尽力解析后**形态：没 command 的逐枚问**原供方** `resolveCodeLens`（单轮预算 10 枚；`opts.resolve===false` 关掉，交回未解析）；`resolved===false` ＝ "这条没解出标题"，**不是** "这条 lens 不存在" |
 
 **口径（重要）**：这一族**一律不抛**。没有焦点编辑器 / 文件没开 / UI 部件没起来时，
 返回 `null`（对象型）、`false`（布尔型）或 `[]`（数组型）。所以脚本里判「功能坏了」不能只看有没有异常，
