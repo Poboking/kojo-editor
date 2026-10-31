@@ -19,6 +19,8 @@
     "tauri:fresh": "node tools/tauri-dev-fresh.mjs",
     "audit:decoupling": "node tools/audit-decoupling.mjs",
     "audit:language": "node tools/audit-language.mjs",
+    "audit:board": "node tools/board-audit.mjs",
+    "audit:bytes": "node tools/scan-bytes.mjs",
     "verify": "node tools/verify.mjs"
   },
   "devDependencies": {

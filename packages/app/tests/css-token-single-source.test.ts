@@ -29,6 +29,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { expectLedger } from './helpers/debt-ledger';
 
 const PKG_ROOT = fileURLToPath(new URL('../../../packages', import.meta.url));
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
@@ -157,8 +158,13 @@ describe('CSS 自定义属性单源 · 消费面必须有定义点', () => {
     expect(declaredInCss.size).toBeGreaterThan(100);
   });
 
+  // @debt-ledger LOCAL:fallback-phantom
   it(`幻影名单逐字相等：现算 ${phantoms.length} 枚 == 账上 ${FALLBACK_PHANTOM_ROSTER.length} 枚（新增即红，转正就划行）`, () => {
-    expect(phantoms).toEqual([...FALLBACK_PHANTOM_ROSTER].sort());
+    expectLedger(phantoms, FALLBACK_PHANTOM_ROSTER, {
+      ledgerName: 'FALLBACK_PHANTOM_ROSTER',
+      marker: 'LOCAL:fallback-phantom',
+      how: '转正一枚（在某个 CSS 里补上 `--x:` 定义或由 TS 行内注入）就划掉一行；新增必须说清"为什么这个 token 只配吃字面回落"',
+    });
   });
 
   it('账上每一枚都带字面回落：裸 `var(--x)` 且无定义 = 声明整体失效，那是坏码不是欠账', () => {

@@ -27,6 +27,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { expectLedger } from './helpers/debt-ledger';
 
 const SRC = fileURLToPath(new URL('../src', import.meta.url));
 
@@ -82,8 +83,17 @@ describe('裸 font-size: Npx 现状（非 token 文件）', () => {
     expect(sites.length).toBeGreaterThan(0);
   });
 
+  // @debt-ledger LOCAL:sub-rung-11px
   it(`亚 11px 欠账逐枚在册：现 ${sites.length} 处 == 账上 ${SUB_RUNG_LEDGER.length} 处，且每处都带理由注释`, () => {
-    expect(sites.map((s) => s.bare).sort()).toEqual([...SUB_RUNG_LEDGER].sort());
+    expectLedger(
+      sites.map((s) => s.bare),
+      SUB_RUNG_LEDGER,
+      {
+        ledgerName: 'SUB_RUNG_LEDGER',
+        marker: 'LOCAL:sub-rung-11px',
+        how: '转正一枚就划掉一行（先在 tokens.css 开档并在 UI_FONT_SCALE_TOKENS 登记同名）；新增必须带行尾"亚 11px 档"理由注释，并在提交信息里说清为什么新增',
+      },
+    );
     expect(unmarked, `这些裸字号没有说明注释：${unmarked.join(' / ')}`).toEqual([]);
     console.log(
       `[fs-scale] 裸 font-size: Npx（非 token 文件）本批 12 → ${sites.length}；` +
