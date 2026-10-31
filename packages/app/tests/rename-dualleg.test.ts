@@ -16,7 +16,8 @@
  *    铺到「旧桥语言 + 点名 rename 的语言」= `kojo-erb` / `kojo-legacy` / `kojo2` 三枚 id 上，
  *    而 ERB 与 kojo1 各自还挂着一枚宿主腿（`monaco/erb-rename.ts` / `monaco/kojo-rename.ts`）
  *    ⇒ 一枚 model 上两枚同种 provider。今天不出事**只因为**槽腿对这两门恒弃权
- *    （`servesSlotOf(model,'rename')` 读 descriptor 的点名表，ERB 那三条里没有 `rename`），
+ *    （`servesSlotOf(model,'rename')` 读 descriptor 的点名表——双挂车 1 之后 ERB 点名了六格，
+ *    里面**没有** `rename`），
  *    连一次槽都不问；kojo2 不声明旧桥，槽腿是它唯一那一枚。**这不叫收敛**：让位条件不成立
  *    （见第二条），所以按「注册面两枚 / 应答面一枚」留账。
  * 2. **槽腿只带 kojo2 那把尺子**：`renameProvider` 的 `resolveRenameLocation` 唯一调用
