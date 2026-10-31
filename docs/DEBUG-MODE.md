@@ -66,6 +66,16 @@ node tools/debug-cli.mjs stop
 `node -e "require('fs').cpSync('fixtures/mini-game','%TEMP%/kojo-debug/sandbox/mini-game',{recursive:true})"`
 然后 `open-project` 指沙盒那份（Windows 下 `%TEMP%` 换实际路径，`serve` 打印的 sandbox 路径可直接抄）。
 
+### 内存预算：1G 容器里浏览器会被杀（2026-10-31）
+
+这条链是**三件套**（调试宿 + vite + 浏览器），实测地板 1.0~1.2 GB、峰值 2.6 GB（fixture=mini-game，`--only semantic` 31s，WorkingSet 求和是上界）。容器只给 1G 时，浏览器的渲染进程会被 cgroup OOM killer 杀掉——**不是浏览器 bug，也不是本仓的限制**：全仓没有任何浏览器内存闸（`js-flags` / `renderer-process-limit` / `dev-shm` 零命中）。
+
+- `serve` 会按本机预算给调试宿算堆上限（`--max-old-space-size`）：1G ⇒ 512 MB，2G ⇒ 921 MB，64G ⇒ 4096 MB（与原写死值一致，常态输出不多一行）。
+- `KOJO_DEBUG_HOST_HEAP=<MB>` 可显式覆盖；覆盖时 `serve` 会打一行 `内存预算 … ⇒ 调试宿堆上限 …`。
+- Windows 容器（Job Object 上限在进程内读不到、`os.totalmem()` 常报宿主总量）用 `KOJO_MEM_BUDGET_MB=<MB>` 声明真实预算；只在小于探测值且 ≥256 时采信。
+- 预算 < 2048 MB 时，冒烟会在 boot 段先打两行告警（**只提示不失败**）。
+- 判容量还是判泄漏：同一会话反复开文件后堆**单调上涨且不回落**才是泄漏；只死一次、读数停在某个水位是容量不够。进程"神秘消失"先看 `debug-cli status` 的 `exits` 与 `signal`（137 / SIGKILL ⇒ 外部杀）。
+
 ### 打开失败判据（2026-10-30 批：快速失败，不再等满 60s）
 
 对**不是工程根**的目录（如 `fixtures/sugar`：只有 `.kojo`、没有 CSV/ERB），应用会当场拒绝并把

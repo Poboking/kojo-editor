@@ -87,8 +87,12 @@ import {
   expandCollapsedUntilMatch,
   findBrowser,
   freePort,
+  HOST_HEAP_DEFAULT_MB,
   killProcessesMarked,
+  memorySourceLabel,
+  MEMORY_TIGHT_MB,
   portOpen,
+  resolveHostHeap,
   sessionDir,
   sessionKey,
   sleep,
@@ -476,7 +480,23 @@ async function cmdServe(args) {
 
   // 1) 调试宿（--max-old-space-size：全项目重检索的解码峰值实测能把默认堆顶穿——OOM 退出
   //    是「挂」的主嫌疑，直接给大堆；再挂也会经 watchChild 落进 status 读数）
-  const serverArgs = ['--max-old-space-size=4096', 'tools/debug-server.mjs', '--port', String(session.serverPort), '--sandbox', session.sandbox, '--appdata', session.appdata];
+  //    2026-10-31：大堆改成**按本机预算收**（debug-lib.hostHeapMb）。写死 4096 在小内存容器里
+  //    帮倒忙——V8 不早 GC，容器 OOM 先到，内核挑 RSS 最大的杀（常常是渲染进程），现场像
+  //    "浏览器 bug"。64GB 本机算出仍夹回 4096，常态输出与行为逐字不变（PITFALLS 293）。
+  const heap = resolveHostHeap();
+  if (heap.heapMb !== HOST_HEAP_DEFAULT_MB) {
+    console.log(
+      `[cli] 内存预算 ${heap.budgetMb} MB（${memorySourceLabel(heap.source)}）` +
+        `⇒ 调试宿堆上限 ${heap.heapMb} MB；浏览器另需 ≥0.7 GB，总量不足先加内存（KOJO_DEBUG_HOST_HEAP 可覆盖）`,
+    );
+  }
+  if (heap.budgetMb < MEMORY_TIGHT_MB) {
+    console.warn(
+      `[cli] [warn] 内存预算 ${heap.budgetMb} MB 低于 ${MEMORY_TIGHT_MB} MB：本链路实测地板 1.0~1.2 GB，` +
+        '浏览器很可能被容器 OOM 杀掉（内核挑 RSS 最大的），不是编辑器 bug',
+    );
+  }
+  const serverArgs = [`--max-old-space-size=${heap.heapMb}`, 'tools/debug-server.mjs', '--port', String(session.serverPort), '--sandbox', session.sandbox, '--appdata', session.appdata];
   for (const r of session.readonly) serverArgs.push('--readonly', r);
   // 调试宿是**有鉴权的**（契约 §1.1）：缺这两枚 token 就是给本机任意页面开读写后门
   serverArgs.push('--token', session.token, '--policy-token', session.policyToken);

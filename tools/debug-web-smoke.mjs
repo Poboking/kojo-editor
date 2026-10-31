@@ -49,7 +49,10 @@ import {
   findBrowser,
   freePort,
   killProcessesMarked,
+  memorySourceLabel,
+  MEMORY_TIGHT_MB,
   portOpen,
+  resolveMemoryBudget,
   sleep,
   waitFor,
 } from './debug-lib.mjs';
@@ -234,6 +237,21 @@ async function forensics() {
 /* ------------------------------ boot：前置 + 起服务 + 页面就位 ------------------------------ */
 
 seg('boot', [], async (c) => {
+  /* ---- 内存预检（2026-10-31 反哺） ---- */
+  // 这条链的地板本来就超过 1G：实测（64GB 本机，fixture=mini-game，31s）Node 侧 285~553MB、
+  // Edge 侧 690~890MB，合计稳态 1.0~1.2GB、峰值 2.6GB。容器给小了会被 OOM killer 杀掉
+  // **渲染进程**，现场像"浏览器 bug"。这里只量预算并明说，**不拦路**（2G 通常够跑，
+  // 别把能跑的机器判红）；真判断容量还是泄漏，看读数是否单调上涨。
+  const budget = resolveMemoryBudget();
+  if (budget.budgetMb < MEMORY_TIGHT_MB) {
+    console.warn(
+      `[smoke] [warn] 内存预算 ${budget.budgetMb} MB（${memorySourceLabel(budget.source)}）低于 ${MEMORY_TIGHT_MB} MB：`,
+    );
+    console.warn(
+      '[smoke] [warn] 本链路实测地板 1.0~1.2 GB、峰值 2.6 GB——这个预算下浏览器会被容器 OOM 杀掉（内核挑 RSS 最大的），不是编辑器 bug。',
+    );
+  }
+
   /* ---- 前置 ---- */
   const browser = findBrowser(null);
   if (!browser) {

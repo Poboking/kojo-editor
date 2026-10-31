@@ -98,6 +98,118 @@ export async function freePort(start) {
   throw new Error(`从 ${start} 起 200 个端口都被占用`);
 }
 
+/* ------------------------------ 内存预算（2026-10-31 反哺） ------------------------------ */
+
+/**
+ * 「无头浏览器跑到 1G 就被杀，是谁的限制」问诊结论（2026-10-31）：
+ * 本仓**没有任何**浏览器内存闸——`js-flags` / `renderer-process-limit` / `disable-dev-shm`
+ * 全零命中，给浏览器的参数只有 remote-debugging-port / user-data-dir / headless / window-size。
+ * 杀来自容器 cgroup（Linux）或 Job Object（Windows）的上限，而内核按 RSS 挑最大的杀，
+ * 常常正是渲染进程 ⇒ 现场伪装成「浏览器 bug」。本机实测（64GB，fixture=mini-game，
+ * `--only semantic` 31s）：Node 侧 285~553MB、Edge 侧 690~890MB（瞬峰 2.0GB），
+ * 合计稳态 1.0~1.2GB、峰值 2.6GB——**1G 下连地板都过不去**，不是泄漏。
+ */
+const MIB = 1024 * 1024;
+
+/** 调试宿堆上限的缺省值与地板（MB）。缺省值＝原先写死的 `--max-old-space-size=4096`（常态逐字不变） */
+export const HOST_HEAP_DEFAULT_MB = 4096;
+export const HOST_HEAP_MIN_MB = 512;
+/** 低于这个预算就别指望整条链跑得动（实测地板 1.0~1.2GB），调用方据此告警 */
+export const MEMORY_TIGHT_MB = 2048;
+
+/**
+ * 读 cgroup 的内存上限（MB）；读不到（非 Linux / 无限制 / 全失败）⇒ null。
+ *
+ * 顺序：`/proc/self/cgroup` 指出的**子树**在前（容器里收紧通常落在子树上），再兜根部的
+ * `memory.max`（v2）与 `memory.limit_in_bytes`（v1）；多处命中取最小。v1 的「无限制」
+ * 写成一个天文数字、v2 写 `max`，这里统一当"没设"，折算交给 memoryBudget 按物理内存做。
+ */
+function readCgroupLimitMb(readFile) {
+  const files = [];
+  try {
+    for (const line of String(readFile('/proc/self/cgroup')).split('\n')) {
+      const m = /^0::(.*)$/.exec(line.trim());
+      if (m) files.push(`/sys/fs/cgroup/${m[1].replace(/^\/+|\/+$/g, '')}/memory.max`.replace(/\/{2,}/g, '/'));
+    }
+  } catch {}
+  files.push('/sys/fs/cgroup/memory.max', '/sys/fs/cgroup/memory/memory.limit_in_bytes');
+  let best = null;
+  for (const f of files) {
+    let raw;
+    try {
+      raw = String(readFile(f)).trim();
+    } catch {
+      continue;
+    }
+    if (!raw || raw === 'max') continue;
+    const bytes = Number(raw);
+    if (!Number.isFinite(bytes) || bytes <= 0) continue;
+    const mb = Math.round(bytes / MIB);
+    if (mb <= 0) continue;
+    best = best === null ? mb : Math.min(best, mb);
+  }
+  return best;
+}
+
+/**
+ * 本进程实际可用的内存预算（MB）＋来源。
+ * `limitMb` 只在**严格低于物理内存**时才认：等于/高于物理内存的 cgroup 值与没设同义
+ * （v1 无限制那枚约 9.2e18，不能当真的 90 亿 GB 去算堆）。
+ * `readFile` / `platform` / `totalMb` 都可注入——判据要能在任何机器上单测。
+ */
+export function memoryBudget({
+  platform = process.platform,
+  totalMb = Math.round(os.totalmem() / MIB),
+  readFile = (p) => fs.readFileSync(p, 'utf8'),
+} = {}) {
+  const cgroupMb = platform === 'linux' ? readCgroupLimitMb(readFile) : null;
+  const limitMb = cgroupMb !== null && cgroupMb < totalMb ? cgroupMb : null;
+  return { totalMb, limitMb, budgetMb: limitMb ?? totalMb, source: limitMb === null ? 'total' : 'cgroup' };
+}
+
+/**
+ * 预算 ⇒ 调试宿 `--max-old-space-size`（MB）。
+ *
+ * 为什么不再写死 4096：大堆在 1G 环境里**帮倒忙**——V8 以为自己有四 GB 就不早 GC，
+ * 容器 OOM 先到，内核挑 RSS 最大的杀；被杀的多半是渲染进程，现场看起来像"浏览器挂了"。
+ * 收紧后同样的内存不够会变成 `JavaScript heap out of memory` 打在调试宿 stderr 上，
+ * **责任方一眼可辨**（`watchChild` 还会把退出码记进 `session.exits`）。
+ *
+ * 0.45 的来历：调试宿只是三件套之一（还有 vite 与浏览器），且 V8 堆只是 RSS 的一部分
+ * （Node 自身 + external + 栈另有 80~120MB）。64GB 本机算出 29GB ⇒ 夹回 4096，
+ * **与旧行为逐字一致**；`KOJO_DEBUG_HOST_HEAP`（MB）可显式覆盖，复现旧行为也不用改代码。
+ */
+export function hostHeapMb({ budgetMb, overrideMb = null } = {}) {
+  const override = Number(overrideMb);
+  if (Number.isFinite(override) && override >= 128) return Math.round(override);
+  if (!Number.isFinite(budgetMb) || budgetMb <= 0) return HOST_HEAP_DEFAULT_MB;
+  const share = Math.floor(budgetMb * 0.45);
+  return Math.max(HOST_HEAP_MIN_MB, Math.min(HOST_HEAP_DEFAULT_MB, share));
+}
+
+/** 一步到位：量环境 ⇒ 给预算。`budget` 可注入（默认现场量），便于单测声明式覆盖 */
+export function resolveMemoryBudget(env = process.env, budget = memoryBudget()) {
+  // Windows 容器（Job Object 上限）在进程内**读不到**，os.totalmem() 还常常报宿主总量；
+  // 这种环境下 `KOJO_MEM_BUDGET_MB=<MB>` 就是唯一的真话来源。只在它**比探测值更小**时采信
+  // （显式声明不该把大机器平白改小），256MB 以下当笔误。
+  const declared = Number(env.KOJO_MEM_BUDGET_MB);
+  if (Number.isFinite(declared) && declared >= 256 && declared < budget.budgetMb) {
+    return { ...budget, limitMb: declared, budgetMb: declared, source: 'env' };
+  }
+  return budget;
+}
+
+/** 预算来源 → 人话（CLI / 冒烟的告警共用一份措辞） */
+export function memorySourceLabel(source) {
+  return source === 'cgroup' ? 'cgroup 上限' : source === 'env' ? 'KOJO_MEM_BUDGET_MB' : '物理内存';
+}
+
+/** 一步到位：量环境 ⇒ 给上限。`env` 只为可测（默认 process.env） */
+export function resolveHostHeap(env = process.env) {
+  const budget = resolveMemoryBudget(env);
+  return { ...budget, heapMb: hostHeapMb({ budgetMb: budget.budgetMb, overrideMb: env.KOJO_DEBUG_HOST_HEAP }) };
+}
+
 /** Chrome / Edge / Chromium 发现（KOJO_DEBUG_BROWSER 可指定；找不到 ⇒ null，由调用方定退路） */
 export function findBrowser(explicit) {
   if (explicit) {

@@ -186,6 +186,11 @@ CI 上这条跑在 `.github/workflows/debug-smoke.yml`（nightly + 手动触发�
 
 ## 硬边界（别撞）
 
+- **内存在 1G 上下会被 OOM 杀掉浏览器**（2026-10-31）：三件套实测地板 1.0~1.2 GB、峰值 2.6 GB
+  （fixture=mini-game）。被杀的是渲染进程，看着像浏览器 bug，其实是容器上限——本仓没有任何浏览器内存闸。
+  `serve` 已按预算收敛调试宿堆（1G ⇒ 512 MB，64G ⇒ 4096 MB），`KOJO_DEBUG_HOST_HEAP=<MB>` 可覆盖；
+  Windows 容器读不到 Job Object 上限，用 `KOJO_MEM_BUDGET_MB=<MB>` 声明；
+  预算 < 2048 MB 时冒烟会先打两行告警（只提示不失败）。判容量还是泄漏：反复开文件后堆单调上涨才是泄漏。
 - **多 agent 并发**：会话按仓库工作树自动隔离（`<tmp>/kojo-debug/sessions/<树哈希>/`）——`serve/status/stop`
   只看得见自己这棵树的会话；动手前先 `status` 核首行「会话＝<键>（<你的树路径>）」，别量了别人的树
   （要接管别的会话用 `KOJO_DEBUG_SESSION=<session.json>`，同树第二会话用 `KOJO_DEBUG_SESSION_NAME`）。

@@ -587,3 +587,11 @@
    **附带挖出的第二个坑**：`packages/plugins/eratw-adapter/tests/family-index.test.ts` **从来没在主套件里跑过**——仓库有「含 `performance.now()` + 比较断言的测试自动进 perf 池」的机制（`tools/perf-suite.mjs`），这份 350 行的核心文件因为一处计时断言被整份踢出，所以这个 bug 活了很久。而我第一版回归用例**加了计时断言**，等于亲手把它又踢出去一次；改成 `it(..., { timeout: 2000 })` 才对。⇒ 同步死循环时 vitest 的超时**根本无效**（同步代码不可中断，整个进程挂死而不是给出失败），所以真正兜底的是下面第 ② 条的结构性保险。
    修法两条，缺一条都还会复发：① **语义修复** `if (k === 0) return null;`（`_K` 前面再无可作 `(.*)` 的内容，等价于正则无匹配）；② **结构性保险** 把 `for (;;)` 换成 `for (step < (s.length >> 1) + 2)`——`_K` 最多出现 `floor(len/2)` 次、`limit` 每轮严格左移，所以有效轮数天然有界。这个函数跑在**UI 主线程的微任务**里（条件矩阵建索引 → `buildCharacterIndex` → `factsOfFile` → 这里），一次不终止就是整个编辑器不可用，**这种位置的失败代价决定它值得双层保险**：宁可退化成"拒绝判定"。
    验收读数：修复前 `活=2 死=32`（3.6s 起永久失联）、`[9] 首次失败原因：CDP 超时`；修复后 `活=40 死=0`（60s 全程）、`[ix] microtask-alive / build done / macrotask-alive` 全部恢复、`[9] 首次失败原因：（一直活着）`；`family-index.test.ts` 46 条全绿（含 4 条新回归用例），eratw-adapter + ui-condition-matrix 共 1073 条全绿。
+
+293. **容器只给 1G 时无头浏览器被 OOM 杀掉，元凶却是我们写死的 `--max-old-space-size=4096`**（2026-10-31 反哺问诊，`tools/debug-cli.mjs` / `tools/debug-web-smoke.mjs` / `tools/debug-lib.mjs`）：
+   现象像"浏览器 bug"：跑着跑着进程没了，`session.exits` 里只剩一条退出码。先否掉浏览器这一侧——全仓 `js-flags` / `renderer-process-limit` / `disable-dev-shm` / `single-process` **零命中**，给浏览器的参数只有 `remote-debugging-port` / `user-data-dir` / `headless=new` / `no-first-run` / `window-size`，没有任何内存闸 ⇒ 杀来自容器 cgroup（Linux）或 Job Object（Windows）的上限，内核按 RSS 挑最大的杀，**正好常是渲染进程**。
+   本机实测地板（64GB，fixture=mini-game，`--only semantic` 31s，WorkingSet 逐进程求和含共享页=上界）：Node 侧 285~553MB、Edge 侧 690~890MB（瞬峰 2.0GB），合计稳态 **1.0~1.2GB**、峰值 **2.6GB**。⇒ 1G 下**连地板都过不去**，不是泄漏；泄漏的判据是同一会话反复开文件后堆**单调上涨且不回落**，只死一次且读数停在某个水位是容量不够。
+   真正的缺陷在第二层：调试宿堆写死 4096MB。小内存环境里 V8 以为自己有四 GB 就不早 GC，容器 OOM 先到 —— 等于亲手把"RSS 最大的那个"推给浏览器，现场彻底跑偏。
+   ⇒ 修法：`debug-lib.hostHeapMb()` 按预算收敛（cgroup v2 `memory.max` / v1 `limit_in_bytes`，本进程子树优先并与根取最小；`max` 与 v1 的天文数字都当"没设"；份额 0.45，夹在 [512, 4096]）。64GB 本机仍算出 4096，**常态输出与行为逐字不变**；`KOJO_DEBUG_HOST_HEAP=<MB>` 可显式覆盖（复现旧行为不用改代码），读不到上限的 Windows 容器用 `KOJO_MEM_BUDGET_MB=<MB>` 声明真实预算。收紧后同样的内存不够会变成 `JavaScript heap out of memory` 打在宿的 stderr 上，责任方一眼可辨。
+   ⇒ 冒烟侧只做**预检告警、不拦路**（预算 < 2048MB 时打一行实测地板）：2G 通常能跑，别把能跑的机器判红。
+   ⇒ 纪律：①"进程神秘消失"先看 `session.exits` 的 `code/signal`（137 / SIGKILL ⇒ 外部杀，不是崩溃）；②量内存要量**整棵进程树**并分账（Node / 浏览器各记一行），单进程 RSS 在这条三件套链上没有解释力；③浏览器侧的"限制"问题先 `grep` 启动参数再谈复现——这次就是 grep 一步否掉的。
