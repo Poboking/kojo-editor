@@ -617,6 +617,13 @@ export const ERB_COMPLETION_ASSEMBLY: CompletionAssembly = {
 
 /**
  * 为 `.erb` / `.erh`（`ERB_LANGUAGE_ID`）注册**一个**补全 provider。
+ *
+ * ⚠ **零生产调用**（LAU-4 补全腿第三批）：装配点不再调本函数——`kojo-erb` 上的补全只有共享
+ * 槽腿那一枚。本函数留着只作两件事：驱动 {@link ERB_COMPLETION_ASSEMBLY} 那本册的用例入口，
+ * 以及 `.kojo1` 原生区经 `KOJO_COMPLETION_ASSEMBLY.route` 借用的同一册的装配形状。
+ * 要重新挂到生产上必须同时点名 descriptor 的 `completion` 并把旧桥挂载写成
+ * `excludeNamed: 'completion'`（判据与反向取证在 `language-parity.test.ts` / `languages.ts`）。
+ *
  * `triggerCharacters` = 五个**只有补全能补**的记号：`#` 指令头、`[` 区间标记、
  * `@` 函数定义头（函数名候选）、`$` 标签目标（`JUMP $-` / `GOTO $-` 一族）、
  * `.` 点号成员位（`erb-members` 的函数族成员；R4 之前没有源由 `.` 触发）。

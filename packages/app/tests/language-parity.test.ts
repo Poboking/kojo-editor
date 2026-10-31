@@ -476,9 +476,9 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
     const shared = capabilitiesInTier(ERB_LANGUAGE_ID, 'shared').filter(
       (capability) => capability !== LanguageCapability.Diagnostics, // 诊断是上屏腿，专用用例
     );
-    // 收口就是 13 枚（register-dialects.ts 头注的"11 枚 provider" + LAU-4 的同符号高亮 /
-    // 结构化扩选两枚）——数字写死，少一枚就红
-    expect(shared).toHaveLength(13);
+    // 收口就是 14 枚（register-dialects.ts 头注的"11 枚 provider" + LAU-4 的同符号高亮 /
+    // 结构化扩选两枚 + LAU-4 补全腿第三批的补全一枚）——数字写死，少一枚就红
+    expect(shared).toHaveLength(14);
     for (const capability of shared) {
       const files = sharedRegistrationFiles(capability);
       const api = CAPABILITY_PROVIDER_API[capability];
@@ -495,15 +495,43 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
     }
   });
 
-  it('ERB 的 self 面：补全走装配核（languageId = ERB），改名直挂 ERB id；两枚都被装配', () => {
+  it('ERB 的 self 面只剩改名；补全已交共享槽腿（宿主自装配那枚不再挂 = 一个 kind 恰一枚）', () => {
+    const renameFiles = selfRegistrationFiles(LanguageCapability.Rename, ERB_LANGUAGE_ID);
+    expect(renameFiles.map((file) => file.rel)).toContain('monaco/erb-rename.ts');
+    expect(importedByGlobal('monaco/erb-rename.ts')).toBe(true);
+
+    // ---- 补全：档位 self → shared（LAU-4 补全腿第三批，2026-10-31）----
+    // 判据整块在 `@kojo/plugin-erb-parser`，生产路径上 `.erb` 的补全靠共享槽腿那一枚
+    // （`legOf('completion', …)` 经 `languageServices: true` 铺到 ERB）。这里钉三件：
+    // ① 挂载判据齐（收口 + 表项 + 注册模块被装配）；② 装配点**不再**调宿主那枚自装配
+    // provider——两枚 CompletionProvider 并存时 Monaco 取并集 ⇒ 作者看到同一份候选两遍，
+    // 「谁在答」退化成注册序；③ ERB 那本册还在，但只作为 `.kojo1` 原生区 `route` 的目标
+    // 被借用，不再挂在 `kojo-erb` 上。
+    const completionFiles = sharedRegistrationFiles(LanguageCapability.Completion).filter((file) =>
+      importedByGlobal(file.rel),
+    );
+    expect(
+      completionFiles.map((file) => file.rel),
+      'ERB/completion 没有 registerForLanguageServices 收口（槽腿表形状）',
+    ).toContain('monaco/slot-service-providers.ts');
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    expect(host).toContain('installSlotServiceProviders(monaco, slotServiceHost');
+    expect(
+      host,
+      '装配点不许重新挂宿主自装配的 ERB 补全 provider：一个 kind 只许一枚。真要挂，必须同时' +
+        '在 ERB descriptor 的 slotServices 点名 `completion`，并写成 ' +
+        'registerForLanguageServices(monaco, register, undefined, { excludeNamed: \'completion\' })' +
+        '（第三参给 kind 就把点名语言重新挂上）',
+    ).not.toMatch(/installErbCompletion\s*\(/);
+    expect(descriptorForLanguageId(ERB_LANGUAGE_ID)?.languageServices).toBe(true);
+    // 那本册的形状证据仍在（`.kojo1` 原生区吃的就是它），但归属已从"ERB 的注册面"改成"被 route 借用"
     const completionModule = sourceOf('monaco/erb-completion.ts').text;
     expect(completionModule).toContain('installCompletion(monaco, ERB_COMPLETION_ASSEMBLY');
     expect(completionModule).toContain('languageId: ERB_LANGUAGE_ID');
     expect(importedByGlobal('monaco/erb-completion.ts')).toBe(true);
-
-    const renameFiles = selfRegistrationFiles(LanguageCapability.Rename, ERB_LANGUAGE_ID);
-    expect(renameFiles.map((file) => file.rel)).toContain('monaco/erb-rename.ts');
-    expect(importedByGlobal('monaco/erb-rename.ts')).toBe(true);
+    expect(sourceOf('monaco/kojo-completion.ts').text).toContain(
+      '? ERB_COMPLETION_ASSEMBLY : undefined',
+    );
   });
 
   it('kojo2 的 self 面：逐项有注册行，且注册模块被宿主装配点 import', () => {
@@ -801,13 +829,19 @@ describe('语言 id / 扩展名关系：两门语言互不蚕食', () => {
 /* ============================== 档位清单（锁死） ============================== */
 
 describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变了"', () => {
-  it('ERB：13 枚共享 provider（含 LAU-4 的同符号高亮 / 结构化扩选）+ 共享诊断上屏腿；self 只剩补全/改名；1 项豁免（callhierarchy，0.57 无 API）', () => {
+  it('ERB：14 枚共享 provider（含 LAU-4 的同符号高亮 / 结构化扩选 / 补全）+ 共享诊断上屏腿；self 只剩改名；1 项豁免（callhierarchy，0.57 无 API）', () => {
     // LAU-4（2026-10-30）：`highlight` / `selection` 从 self 挪到 shared —— 判据搬进
     // `@kojo/erb-lang/highlight` / `/selection-range`，供方是插件 `@kojo/plugin-erb-lang`，
     // 注册经 `registerForLanguageServices(..., 'documentHighlight'|'selectionRange')`
     // （ERB 由 `languageServices: true` 收进来）。**档位变了，能力没少**：13 + 2 + 3 = 18。
+    // LAU-4 补全腿第三批（2026-10-31）：`completion` 也从 self 挪到 shared —— 判据整块进
+    // `@kojo/plugin-erb-parser`，宿主那枚自装配 provider 的调用点删除，`.erb` 只剩共享槽腿
+    // 那一枚（旧桥铺的，ERB 不点名，见 `languages.ts` 那段判据）。**档位变了，能力没少**：
+    // 声明的 19 项 = 15 shared（含诊断上屏腿；下面 `shared` 那格把它滤掉所以数到 14）
+    // + 1 self + 3 builtin，外加 callhierarchy 一项豁免。
     expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'shared')).toEqual([
       'codelens',
+      'completion',
       'definition',
       'diagnostics',
       'folding',
@@ -822,10 +856,7 @@ describe('档位清单锁死：接线是"有意改动"，不是"矩阵悄悄变�
       'semantic',
       'signature',
     ]);
-    expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'self')).toEqual([
-      'completion',
-      'rename',
-    ]);
+    expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'self')).toEqual(['rename']);
     expect(capabilitiesInTier(ERB_LANGUAGE_ID, 'builtin')).toEqual([
       'brackets',
       'indent',

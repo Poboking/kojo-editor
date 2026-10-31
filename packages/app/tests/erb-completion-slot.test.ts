@@ -11,7 +11,9 @@
  * - **事实袋只喂点名它的语言**（`descriptor.completionFacts`）：ERB 取、kojo2 不取；
  * - **触发字符**：descriptor 追加的三枚（`[` / `$` / `.`）并进共享那份（并集、去重、保序）；
  * - **翻译**：契约新档（`field` / `enumMember`）→ Monaco 枚举、模板通道只在
- *   `insertTextFormat === 'snippet'` 时开、中文候选补拼音可检索键。
+ *   `insertTextFormat === 'snippet'` 时开、中文候选补拼音可检索键；
+ * - **恰一枚**：每门语言从这枚腿只拿到**一枚** CompletionProvider（宿主自装配那枚
+ *   `installErbCompletion` 已零生产调用；并存的形状在 `language-parity.test.ts` 反向钉住）。
  *
  * 假 Monaco / 假内核只实现被真正用到的那几格（与 `kojo2-providers.test.ts` 同一套桩口径）。
  */
@@ -168,6 +170,17 @@ describe('LAU-4 补全腿第三批 · descriptor 声明', () => {
     expect(usesLegacyBridge(erb)).toBe(true);
     expect(declaredSlotKinds(erb)).toContain('references');
     expect(declaredSlotKinds(erb)).not.toContain('completion');
+  });
+
+  it('一个 kind 恰一枚：ERB 的补全只由共享槽腿这一枚挂上（宿主自装配那枚已让位）', () => {
+    // 判据：旧桥铺腿时**每门语言一枚** provider（补全腿是 `perLanguage`，触发字符各门不同）。
+    // 同一门语言上第二枚 CompletionProvider 不会被 Monaco 丢掉，而是取**并集** ⇒ 作者看到
+    // 同一份候选两遍；所以"挂了几枚"必须按 selector 计数钉死，而不是只看它挂没挂上。
+    // 宿主那枚 `installErbCompletion` 的调用点已在 LAU-4 补全腿第三批删除（装配面取证在
+    // `language-parity.test.ts` 的 ERB 补全档，反向钉装配点不再调它）。
+    const { fake } = installCompletions();
+    expect(fake.registrations.filter((entry) => entry.selector === ERB_LANGUAGE_ID)).toHaveLength(1);
+    expect(fake.registrations.filter((entry) => entry.selector === KOJO2_LANGUAGE_ID)).toHaveLength(1);
   });
 });
 
