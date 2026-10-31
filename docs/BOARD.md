@@ -8,6 +8,8 @@
 
 | ID | 任务 | 关键判据 | 状态 |
 |---|---|---|---|
+| PERF-R6 | 快照保存链可恢复（E 批）：关窗 / 关项目那一拍等在途存储写落地——索引快照是 `void storage.set(...)`，42.7M 码元 / 写窗口实测 **0.6s 起**，进程一走整轮索引白算 | 两条退出路径过同一个屏障；等不完也放行（关不掉的窗口比丢一次缓存严重）且说出来；常态关闭**不多等一毫秒** | 已交付余项 · 2026-10-31（欠真壳关窗取证；强杀仍丢整轮，见 STATE §四 E 批） |
+| PERF-R7 | 冷开归因 + 量具（F 批）：R7 的旧读数（`read+parse` 10,249ms vs 纯解析 635ms）**已被后续四批批量路径推翻**（现 3,043ms）；余下大头是 refs scan 7,284ms（占 11,203ms 的 65%）。`tools/perf-ab.mjs` 仍缺 | 先复测冷开剖面再决定投哪；量具自证 A/A 比值 1.00±0.08 | 待认领 · 来源：路线图 v2 §3 R7/R10 |
 | MK-PUB | **市场发布通道**：编辑器一键上传 zip → CF Worker 校验 → R2 `pending/` → 自动开 PR 到注册表仓（merge=放行）；客户端 additive：publish 意图/进度事件 + Rust publish 命令 + 上传主机闸 + `ui-market` 发布面板。Worker 独立仓 `DSH/kojo-market-worker`；不动 `MARKET_DEFAULT_INDEX_URL` 与 ADR-0007 封闭集 | Worker 全链 curl 可验证（签 token→上传→pending→PR）+ 全量不回退 + 双 typecheck + audit + cargo；新文案中文 | 进行中 · 认领：claude 2026-10-16 |
 | POS-UTIL | 位置换算收口：tree-sitter 0-based 行/UTF-16 码元、Monaco 与 plugin-api 1-based 行、range 端点各写各的。**否决** CST↔AST `PositionMapper`（`.erb` 无 CST、`.kojo` 的 tree-sitter 可选且默认关），只收口边界换算 | 所有行列/区间换算走同一模块；覆盖 CJK、emoji、CRLF、折叠行；不新增运行期节点身份映射或第三套坐标系 | 进行中 · 认领：lead 2026-10-20 |
 | ERB-PARITY | **ERB 是一等语言**，不是 Kojo 的附属：语言注册 / 服务 / 树叠层 / 默认语言与能力矩阵都不得只给 Kojo | ERB 与 Kojo 走同一 descriptor/registry/engine；ERB 直写不依赖 `.kojo`；provider 双语言对齐；tree-sitter 按 descriptor 选。**2026-10-31 审计差 9 条（G1–G9），已修 G1（ERB 悬停进槽）/G3（implementation 槽腿）/G4（kojo2 workspaceSymbol）/G6（只读门按 descriptor 声明位）/G7（改名候选 ⊆ 可改集合）/G8（右键语言族按 descriptor）/G9（文档链接按行注释记号判语言），另加 ERB 查引用与补全余项进槽；余 G2（ERB 排版判据本就在 `plugin-kojo-sugar`，只欠注册面进槽——缺"请求带语言身份"的前置，属架构余项）、G5（kojo2 无 structure descriptor，裁决豁免） | 进行中 · 认领：lead 2026-10-20（基础设施已拉平） |
