@@ -700,7 +700,7 @@ describe('万级 @函 的判定耗时', () => {
   /** 解析走恒等桩：本节量的是**判定 + 映射**（口径见断言消息），词法/解析不计入 */
   const stubParse = (text: string): KojoFile => files[Number(text)]!;
 
-  it(`${TOTAL} 个 @函（解析桩）判定中位数 ≤ 100ms（打印读数）`, () => {
+  it(`${TOTAL} 个 @函（解析桩）判定 min ≤ 100ms，且机器占用可自证（打印读数）`, () => {
     const input = { documents, parse: stubParse };
     analyzeKojo2Project(input);
     analyzeKojo2Project(input); // 预热（JIT / Map 分配），不计入读数
@@ -716,13 +716,26 @@ describe('万级 @函 的判定耗时', () => {
     const min = samples[0]!;
     const median = samples[2]!;
     const max = samples[samples.length - 1]!;
+    const spread = min > 0 ? median / min : 1;
     // eslint-disable-next-line no-console
     console.log(
       `[bench] kojo2-project-analysis ${TOTAL} @函 / ${DOC_COUNT} 文件：` +
         `min ${min.toFixed(2)}ms · median ${median.toFixed(2)}ms · max ${max.toFixed(2)}ms` +
-        `（上界 100ms；问题 ${diagnostics} 条；口径：AST 已解析（parse 注入恒等桩），只计判定 + 映射）`,
+        `（算法锚 100ms；median/min ${spread.toFixed(1)}×；问题 ${diagnostics} 条；` +
+        `口径：AST 已解析（parse 注入恒等桩），只计判定 + 映射）`,
     );
     expect(diagnostics).toBeGreaterThan(0);
-    expect(median).toBeLessThanOrEqual(100);
+    // 算法锚取 **min**：调度抖动只会让某次变慢、不会把真实超预算读成达标
+    // （同 `kojo2-project-index.perf.test.ts` 的取数口径）。
+    expect(min, `判定本身超预算（min ${min.toFixed(2)}ms > 100ms）`).toBeLessThanOrEqual(100);
+    // 机器占用自证：median 远高于 min ⇒ 这一轮读数**不可信**。出声，但别让它把 p95 的
+    // 红绿算到算法头上（PERF-KOJO2-ANALYSIS 的原始症状就是这条判据跟着机器负载漂）。
+    if (spread > 2.5) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[bench] ⚠ 本机被占用（median/min = ${spread.toFixed(1)}× > 2.5×）：` +
+          '这一轮的 median/max 只作参考，判据以 min 为准。要可比读数，先空机独跑。',
+      );
+    }
   });
 });

@@ -565,6 +565,60 @@ describe('incremental：keystroke 性能护栏（5000+ 行）', () => {
       expect(incrementalMedianMs).toBeLessThan(fullMedianMs * 0.25);
     }
   });
+
+  /**
+   * 回退路径的墙钟：**这一条只报数、不设预算**（K2-INCR-HOLES，2026-10-31）。
+   *
+   * 为什么只报数：回退走的是 `rebuildAll` → `tryBuild`，即"为增量重建缓存"——它为**下一次**
+   * 编辑铺路，而这一帧的产物本来 `fullResult` 就能给。实测这份 5.2k 行 fixture 上它是
+   * 全量 compile 的数倍（读数见日志），差额来自 `tryBuild` 的结构性成本：每个单元各一次
+   * `parseSliceInto` + `lowerUnit`（5,200 次），而全量 compile 只 parse/lower 各一趟。
+   *
+   * 不设预算的理由：设成"≤ 全量 × 2"就得同步把那 5,200 次调用摊平（改成从全量结果切分单元），
+   * 那是另一批的事；设成"≤ 全量 × 8"等于把现状写成期望。**留读数、留可见性**，等那一批做完
+   * 再把这条升级成硬预算。
+   *
+   * 硬判据只有三条，与耗时无关：`fallbackFull` 必须为真、`fallbackReason` 必须能区分
+   * （`view-changed`）、结果必须与全量逐字节等价。
+   */
+  it('视角变化回退：可见 + 逐字节等价，成本只报数（不设预算）', () => {
+    const { source } = buildPerfSource(PERF_LINES);
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(source);
+    fullCompile(buildPerfSource(300).source); // 预热
+    const fullTimes: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const started = performance.now();
+      fullCompile(source);
+      fullTimes.push(performance.now() - started);
+    }
+
+    let text = source;
+    const times: number[] = [];
+    for (let i = 0; i < 3; i++) {
+      const from = i % 2 === 0 ? '灵梦' : '魔理沙';
+      const to = i % 2 === 0 ? '魔理沙' : '灵梦';
+      const at = text.indexOf(`# 视角 ${from}`) + '# 视角 '.length;
+      expect(at, 'fixture 的 `# 视角` 行不见了').toBeGreaterThan('# 视角 '.length - 1);
+      const edit: IncrementalEdit = { offset: at, removedLength: from.length, insertedText: to };
+      text = applyEdit(text, edit);
+      const started = performance.now();
+      const update = compiler.update(text, edit);
+      times.push(performance.now() - started);
+      expect(update.stats.fallbackFull).toBe(true);
+      expect(update.stats.fallbackReason).toBe('view-changed');
+      expect(compiler.degraded).toBe(false); // 非粘性：下一轮还能回到增量
+      expectSameResult(update.result, fullCompile(text));
+    }
+
+    const fallbackMedianMs = median(times);
+    // eslint-disable-next-line no-console
+    console.log(
+      `[incremental] 视角变化回退（${PERF_LINES} 行）：中位 ${fallbackMedianMs.toFixed(1)}ms、` +
+        `全量 compile 中位 ${median(fullTimes).toFixed(1)}ms、比值 ` +
+        `${(fallbackMedianMs / median(fullTimes)).toFixed(2)}×（只报数；结构性成本见本用例头注）`,
+    );
+  });
 });
 
 /* ============================== 结构化增量：行号平移 ============================== */

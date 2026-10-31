@@ -473,3 +473,56 @@
 
 300. **shell 参数里传不了 NUL：`grep -c $'\x00' file` 会量出"355 行全命中"，而文件里一个 NUL 都没有**（2026-10-31 核 CMD-NUL-BYTE 实拍）：① 成因：bash 的 `$'\x00'` 在**参数**里被截成空串（NUL 是 C 字符串终止符），pattern 退化成"匹配所有行"，`grep -c` 于是返回总行数；读数看着像"整份文件都是问题"，结论完全反了。② 纪律：查裸字节只能走**字节层**（Node `Buffer.indexOf(0x00)` / Python `data.count(b'\x00')`），不经过 shell 的参数字符串；`file <path>` 只回答"是不是二进制"，回答不了"NUL 在第几处"。③ 机制 `tools/scan-bytes.mjs`（`npm run audit:bytes`）：扫 NUL / BOM / 非法 UTF-8（`--cr` 加查孤立 CR），报 `path:line` + 字节偏移，退出码可入闸。④ 首跑就有真产出：`packages/app/src/ui/welcome.css` 带 UTF-8 BOM（在块注释前，无视觉影响，但违反本仓不写 BOM 的约定），去掉后引用它的 63 条测试全绿；另两处 BOM 在 `bom-narration.*` 夹具里是**故意**的（文件名即意图），已在工具里逐枚登记豁免——体检工具不给自己留"永远红"的口子，否则没人会跑。
 
+
+301. **探针的读盘方式会让你把分项账算错一倍——`readFileSync` 的"并发"是假的**
+
+    R7B 记的分项（解码 1,039ms / EOL 探测 465ms / 归一 910ms，合计 2,354ms）是拿
+    `fs.readFileSync` + `Promise.all` 8 路量出来的。**`readFileSync` 在 Node 里是同步阻塞**，
+    8 个"并发"实际完全串行：每个文件都要先走一次系统调用再解码，Buffer 进 L2 前就被下一次
+    读顶掉。同一份语料换成 `fs/promises.readFile`（真异步、线程池并发），同一份代码的读数变成：
+
+    | 阶段 | readFileSync 探针 | 异步探针（三次中位） | 差 |
+    |---|---|---|---|
+    | 读盘 | 7,430ms | 2,677ms | 2.8× |
+    | 解码 | 1,588ms | 430ms | 3.7× |
+    | `detectEol` | 406ms | 210ms | 1.9× |
+    | `normalizeEol` | 766ms | 580ms | 1.3× |
+
+    推论打穿了 R7C 的判据：`read+parse 5,480ms` 里 decode+EOL 只占 **约 1.0s（19%）**，
+    不是 2,354ms（43%）。所以"把 decode+EOL 搬出主线程"的理论收益是 `index_ms` **−10%**，
+    不是 −20%；而它要求 io 交字节、解析与引用两条 worker 腿各自解码、文本缓存换形态
+    （跨 5 个插件的契约改造）⇒ **性价比不成立，本批裁决不做**（见 STATE §二）。
+    教训与 296 同族：**量具的形状不对，账就整段错**；而且"看起来并发"的写法要逐条验证
+    它是不是真的并发（同步 API 放进 `Promise.all` 只是排队）。
+
+    另记两条已试并被实测否掉的"便宜路子"，省得下一批重试：① `new TextDecoder` 复用
+    （实测构造只要 0.40μs/次，4,258 次 = 1.7ms，不是瓶颈）；② `buffer.isUtf8()` +
+    `buf.toString('utf8')` 替代 `TextDecoder({fatal:true})`（比值 **0.996**，V8 的
+    TextDecoder 已经是原生速度）。
+
+302. **"回退全量"比"真全量"慢 6.3 倍——增量引擎的回退路径是 `tryBuild`，不是 `compile`**
+
+    K2-INCR-HOLES 的四个洞（`选项`/BOM 粘性降级、整份替换、改 `# 视角`、声明单元内编辑）
+    一直按"退化"记账，但没人量过**退化要多久**。5.2k 行 fixture 实测（`incremental.test.ts`
+    新增的"只报数"用例）：
+
+    - 全量 `compileKojoSource`：**36.8ms**
+    - 改 `# 视角` 触发的回退：**231.8ms**（`view-changed`）⇒ **6.30×**
+    - 同一份文档的 keystroke 增量：8.0ms（正常）
+
+    根因不是某个坏实现，是 `rebuildAll` 走 `tryBuild`——**为增量重建缓存**：每个单元各一次
+    `parseSliceInto` + `lowerUnit`（5,757 行切出 5,200 个单元 ⇒ 5,200 次调用），而全量
+    `compile` 只 parse/lower 各一趟。CPU profile 也印证"没有单点"：除 GC(16.8%) 外最热的是
+    构建期自检的 `deepEqual`(7.4%)、`existsSync`(3.8%)、`createDiagnosticSink`(3.2%)、
+    `scanSegments`(2.4%)……**摊得很平**，所以"砍某一个函数"最多省一成。
+
+    两条已证伪的优化（别重试）：
+    ① `deepEqual` 去掉每次比对的 `new Set([...keys, ...keys])` 分配——**开关自检实测
+       454ms vs 452ms，零收益**（`sameSourceMap` 逐行调它 5,200 次，但这些调用大头走
+       `Object.is` 短路），已回退，不留无读数支撑的改动；
+    ② 关掉构建期自检——同样零收益，说明自检不是瓶颈（它是保险，不该关）。
+
+    结构性解法只有一个：`tryBuild` 不再逐单元 parse/lower，而是**跟全量 compile 一样
+    一趟出全文产物，再按单元行范围切分产物行与 source map**（切分要重编行号与列级分段）。
+    方向明确、自检可兜底，但那是独立一批的量，本批只把读数与判据留在测试里（**只报数、
+    不设预算**——设松等于把现状写成期望，设紧就得同步做完那一批）。

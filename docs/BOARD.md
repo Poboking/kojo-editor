@@ -13,16 +13,15 @@
 |ID|任务|关键判据|状态|
 |---|---|---|---|
 |PERF-R6|快照链：关窗/关项目等 `storage.set` 落地（42.7M 码元，写实测 0.6s 起）|两条退出路径共用屏障；等不完也放行且明说；常态关闭不多等|已交付余项 · 2026-10-31（欠真壳关窗取证；强杀丢整轮）|
-|PERF-R7C|冷开 `read+parse` 段 **94% 在主线程**：读盘 2,232ms / 解码 1,039ms / EOL 探测+归一 1,375ms（全量 **1.17 亿码元**，4 槽并行下 worker 解析只占约 290ms）|把 decode+EOL 搬出主线程（或 io 直接交行数组/字节）；`index_ms` 为主判据；产出与现路径逐字节相等；不许把「两遍遍历合并」再当靶子（已裁决，见 PITFALLS 296）|待认领 · R7B 归因 2026-10-31|
+|PERF-R7C|冷开 `read+parse` 段的 decode+EOL：**已量清是约 1.0s（19%），不是 2.35s（43%）**——旧分项用 `readFileSync`+`Promise.all` 量的，同步 API 放进 Promise.all 只是排队（PITFALLS 301）|裁决：**不做**。理论收益 `index_ms` −10%，代价是 io 交字节 + 解析腿/引用腿各自解码 + 文本缓存换形态（跨 5 插件）。要重启得先答一句：为 10% 换 5 个插件的契约值不值|已量清 · 裁决不做 · R7C 2026-10-31|
 |MK-PUB|市场发布：zip → Worker 校验 → R2 `pending/` → 自动开 PR（merge=放行）；客户端意图/进度 + Rust 命令 + 主机闸|全链 curl 可验证 + 全量不回退 + 双 typecheck + audit + cargo；不动 `MARKET_DEFAULT_INDEX_URL` 与 ADR-0007|进行中 · 认领：claude 2026-10-16|
 |POS-UTIL|位置换算收口（tree-sitter 0-based/UTF-16 vs Monaco、plugin-api 1-based）；否决 CST↔AST `PositionMapper`|换算走同一模块；覆盖 CJK/emoji/CRLF/折叠行；不新增第三套坐标系|进行中 · 认领：lead 2026-10-20|
 |ERB-PARITY|ERB 一等语言：注册/服务/树叠层/能力矩阵不得只给 Kojo；审计 G1–G9 **已全修**（G2＝第七波：排版整篇+区间两腿进槽、契约 `options`、降级接 FMT-TOAST 台账），G5 裁决豁免|同 descriptor/registry/engine；ERB 直写不依赖 `.kojo`；一个 kind 只一枚 provider（双挂收敛见 LAU-DUALLEG）|进行中 · 认领：lead 2026-10-31（G1–G9 收口，转入 DUALLEG）|
 |MK-SMOKE-RECAL|`smoke-tauri-market.mjs` 本机 4 红：f2/g/h 锚点钉外部注册表内容；k 容差 300ms 踩采样噪声|f2/g/h 改「schema 合规 + 远程与盘上自洽」；k 容差 > 2×采样间隔|待认领 · chief 2026-10-22|
-|PERF-KOJO2-ANALYSIS|「万级 @函 ≤100ms」反复贴阈值；p95 红绿跟机器占用走|先看「退回整篇的击键」有无内容，再同机对拍两棵树；空闲独跑读数入回执|进行中 · 多游戏批 2026-10-26|
 |K2-CORE-PKG|`packages/kojo-core` 布局与 audit 放行（非插件库，B/C 不拦）；§15.2 复用清单核对|audit A–D ✅；单文件转译纯函数|进行中 · 认领：lead 2026-10-21|
 |K2-PRE-REUSE|旧后端复用面余项：①心形字面量编码器 ④诊断列折回物理行（与 POS-UTIL 合流）；②③⑤ 已落 dev|每条红→绿用例；只修复用面|待派 · 语言实现审阅|
 |K2-RELEASE|R9 发布闸：core/eraTW/program/UI gate + STATE/BOARD 落账 + 双 typecheck/audit + 真机验收|eraTW 完整体验；反向回滚可用|待认领|
-|K2-INCR-HOLES|增量洞：`选项`/BOM 全量；整份替换/改 `# 视角` 仍重建（~200–300ms）；声明单元内编辑 55–75ms；槽族只盖 `rand/foreach`|每次退化可见；与全量逐字节等价不破|待认领 · lead 2026-10-22|
+|K2-INCR-HOLES|四个洞的**可见性判据早已齐**（`options-block`/`bom-source`/`whole-file-replacement`/`view-changed`：各有 `fallbackFull`+`fallbackReason`+「下一轮恢复增量」+逐字节等价）。真问题是**成本**：回退走 `tryBuild` 为增量重建缓存，5,200 单元各一次 parse+lower ⇒ 231.8ms vs 全量 36.8ms = **6.30×**（PITFALLS 302）|结构性解法：`tryBuild` 不再逐单元 parse/lower，改成与全量 compile 一样一趟出全文产物、再按单元行范围切分产物行与 source map（含行号/列级分段重编）；自检可兜底。读数已钉在 `incremental.test.ts`（只报数不设预算），做完再把它升级成硬预算|待派 · 已量清 2026-10-31|
 |K2-CORPUS-SOURCE|语料机无输入：eraTW 4.980 基线盘 `.kojo` 0 份；须 `KOJO_CORPUS_DIR` 指向含 v1 作者源工程或迁移快照盘，重生成 golden|发现 ≥1 份 `.kojo` 且状态/原因分类可读|待认领|
 |LAU-BLOCKED|LAU-1/D2/6/D3/2/5 已交付；LAU-4 各腿 + SDK B4/B5、B5b 车 1–6 + C 类两车 + **第七波（G2 排版进槽）**已落|LAU-D4 未开工，**方案已定**＝两车（① 方言包骨架 + 声明数据：eraTW 补 `carriers`、`new-dialect` 产物过形态闸、`packages/app` 零改动；② 表层↔原生双向映射表：纯数据只住方言包、core 一份 additive 读表函数、错配必红），backend 不动（吃 backend 的第三档与 D2/D3 重叠，判不派）；LAU-5 余 kojo2 worker 不进池|已交付余项 · 2026-10-31|
 |LAU-DUALLEG|ERB 旧桥双挂收敛：`languageServices: true` 让共享槽腿与宿主纯翻译腿挂在同一枚 model 上，同一次请求问两趟、"谁在答"由注册顺序判|**车 1 已落**（第七波后）：`documentHighlight`/`selectionRange`/`codeLens` 三格由 descriptor 点名、宿主腿改 `undefined, { excludeNamed: kind }`（第三参给 kind 就前功尽弃），一个 kind 恰一枚；**刻意不收**：`references`（已关文件点击通道在宿主）、`rename`（闭文件回写通道 + 槽腿 prepare 是 kojo2 尺子）、`signatureHelp`（槽里无 ERB 供方，让位＝静默没有）；余补全/定义/悬停逐 kind 判定|进行中 · 认领：lead 2026-10-31|
