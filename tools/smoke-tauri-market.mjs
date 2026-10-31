@@ -11,20 +11,30 @@
  *
  * 覆盖项：
  *   f1 白名单外的 URL 经**真 IPC** 也被拒（命令面没被绕过）
- *   f2 白名单内的真实索引经**真 IPC** 取回 = 200 / 钉数字节
- *   g  面板点「拉取列表」⇒ index.json 落盘、schema 合规、条目逐字对平
- *   h  匿名读回的 index 与本地落盘内容**逐字节**对平（含 sha256 锚）
+ *   f2 白名单内的真实索引经**真 IPC** 取回：200 + 声明字节 = 实读字节 + 终止 URL 仍在放行主机
+ *      + 正文过索引 schema 形状闸（**不钉线上的字节数 / sha256 / 包条数**——那是外部内容）
+ *   g  面板点「拉取列表」⇒ index.json 落盘、schema 合规、条目与**同一时刻匿名取回的那份**逐条对平
+ *   h  匿名读回的 index 与本地落盘内容**逐字节**对平（含 sha256 读数；不钉数，只要求两边是同一份）
  *   i  面板屏上给出「已拉取」人话 + 数据时间行 + 条目数（不是静默成功）
  *   j  盘上那份的坏条目会重新报进 dropped（镜像不洗盘）——只在注册表当前有坏条目时才判，
  *      现在没有 ⇒ 明确 SKIP（不假装绿）
  *   k  **真装一个包再卸掉**：面板点「安装」⇒ 真下载 + 真解压 + 真落盘 + 真记账 ⇒
- *      屏上「已安装」+ 盘上逐条目对平 + 记账容器核对码对平 ⇒ 点「卸载」确认 ⇒ 目录消失、零残壳。
+ *      屏上「已安装」+ 盘上逐条目对平 + 记账容器核对码与注册表那条自证的一致性 ⇒ 点「卸载」确认
+ *      ⇒ 目录消失、行消失、零残壳。目标包与期望事实**从这一次取回的注册表现场解析**
+ *      （`resolveInstallTarget`：优先 demo.era-tw 1.0.3，它不在就退回同种类最小的包），
+ *      不钉死外部包的摘要。
  *      容器落在 github.com（本机直连必超时）⇒ **不带代理时这一项报 SKIP 并打印复跑命令**，不算过。
- *      **MK-1 的三个毫秒数**（每次跑都进读数，PASS/FAIL/SKIP 都带）：
- *      ① 装成 → 「已装」行出现且卸载点得动；② 卸载确认 → 落点目录消失；③ 卸载确认 → 屏上那一行消失。
- *      ②③ 同基线同轮取样 ⇒ 判据「③ ≤ ② + 300ms」直接可比；取样一律走 `pollUntil`/`pollWhere`
- *      的**显式值**轮询（教训①：`waitFor` 认"返回真值"为就绪，而"还没好"返回的是字符串——字符串是真值；
- *      教训②：动作后固定 `sleep` 一次性判读会把"慢一点"读成"没做完"）。
+ *      **MK-1 的毫秒数**（每次跑都进读数，PASS/FAIL/SKIP 都带）：
+ *      ① 装成 → 「已装」行出现且卸载点得动；② 卸载确认 → 落点目录消失；
+ *      ③ 卸载确认 → 屏上那一行消失；④ 卸载确认 → 「已卸掉…」结果句上屏。
+ *      **判据（2026-11-01 MK-SMOKE-RECAL 重定）**：③ 比的是 ④（同一次 React 提交 ⇒ 同拍），
+ *      容差 = `rowLagToleranceMs(实测采样周期)` = max(900ms, 3×周期) ⇒ 恒 > 2× 采样周期；
+ *      ③ 与 ② 的差值只上读数（它量的是整段卸载尾巴：记账写盘 + 祖先目录 + 暂存清扫），
+ *      另判一条方向：屏上那条不许比盘上先消失。旧口径「③ ≤ ② + 300ms」的 300ms 正好等于一个
+ *      采样周期，测出来的是"这一轮谁先被采到"而不是产品滞后（实测 469ms / 2,013ms 两跑皆红）。
+ *      取样一律走 `pollUntil`/`pollWhere` 的**显式值**轮询（教训①：`waitFor` 认"返回真值"为就绪，
+ *      而"还没好"返回的是字符串——字符串是真值；教训②：动作后固定 `sleep` 一次性判读会把
+ *      "慢一点"读成"没做完"）。
  *
  * 用法：node tools/smoke-tauri-market.mjs [游戏目录]
  *   k 项要真出网取容器 ⇒ 复跑口径：`HTTPS_PROXY=http://127.0.0.1:7890 node tools/smoke-tauri-market.mjs`
@@ -54,18 +64,37 @@ import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { resolveCorpusDir, discoverCorpora, corpusHint } from './corpus.mjs';
 import { answerAskDialogs, assertPageOrigin, devTarget, portBusy, recentRowClickSrc, recentRowWaitSrc } from './smoke-lib.mjs';
+import {
+  hostAllowlisted,
+  parseIndexBytes,
+  resolveInstallTarget,
+  rowLagToleranceMs,
+  sortRows,
+  uninstallTailProblems,
+} from './lib/market-smoke-rules.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CDP_PORT = 9223;
-/** 默认注册表端点（与契约 `MARKET_DEFAULT_INDEX_URL` 同值；本工具按字面读线上资产，不引 TS 源码） */
+/**
+ * 默认注册表端点（与契约 `MARKET_DEFAULT_INDEX_URL` 同值；本工具按字面读线上资产，不引 TS 源码）。
+ *
+ * 这是本工具**唯一**钉死的外部字面量，理由：端点属于本仓可控内容（改它 = 改了产品默认源），
+ * 校验收在 `tools/tests/market-smoke-rules.test.ts` 的源形状闸里（与契约同值）。
+ */
 const INDEX_URL = 'https://poboking.github.io/kojo-market/index.json';
-/** 锚点读数（2026-10-17 复算——demo.era-tw 1.0.3 经发布链路真发过一版，注册表重生成；`packs` = 2 条） */
-const ANCHOR_BYTES = 1612;
-const ANCHOR_SHA256 = 'f1b72c014b3dd126b1e6a8b60f6dc77a29c0dac22352245c20e3da28a3f1bdb7';
-const ANCHOR_PACKS = [
-  ['dict-pack', 'demo.dict', '1.0.0', 1, 77],
-  ['kojo-pack', 'demo.era-tw', '1.0.3', 1, 471],
-];
+/*
+ * 索引面的锚点（2026-11-01 MK-SMOKE-RECAL 重定）：**只钉本仓可控的东西**——
+ * 端点字面、schema 版本、包种类枚举、体积上限（全在 `lib/market-smoke-rules.mjs`）。
+ *
+ * **不再**钉注册表的字节数 / sha256 / 包条数 / 具体条目：旧的 `ANCHOR_BYTES=1612` /
+ * `ANCHOR_SHA256=f1b72c01…` / 期望 2 条包钉的是**会变的外部内容**——社区投稿进注册表后
+ * 线上实测 4,141 B / e100bb76… / 6 条包，于是 f2/g/h 三条一起红，而链路与产品一个字节都没坏。
+ * 现在外部内容的正确性由 f2/g/h **自证**：真 IPC 取回 / 匿名取回 / 盘上落盘三方逐字节相同，
+ * 且每条都过 `parseIndexBytes` 的形状闸（schema=1 / packs 数组 / 每条的
+ * kind/id/version/fileCount/unpackedBytes/zip 合法）。注册表长出新包不该判红，长出**坏包**才该。
+ */
+/** k 项的**首选**装包目标（本仓夹具包）；它不在注册表里时由 `resolveInstallTarget` 现场改选 */
+const K_PREFERRED_TARGET = { kind: 'kojo-pack', id: 'demo.era-tw', version: '1.0.3' };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const stripAnsi = (s) => s.replace(/\u001b\[[0-9;]*m/g, '');
@@ -290,9 +319,8 @@ async function main() {
   let indexPath = null;
   let indexBackup = null; // Buffer | null（null = 本机原本没有这份）
   let indexSeen = false;
-  /* 装包那一项会落 `packs/` 与记账 ⇒ 跑完必须回到跑前状态（重复跑同结果） */
-  const K_TARGET = { kind: 'kojo-pack', id: 'demo.era-tw', version: '1.0.3' };
-  const K_CONTAINER_SHA = 'd88a4a2422cc47ff3df18068b0c93b209418ccd6c10a5867a27e905448232ae5';
+  /* 装包那一项会落 `packs/` 与记账 ⇒ 跑完必须回到跑前状态（重复跑同结果）。
+     目标包要到 f2 取回注册表之后才能定（`resolveInstallTarget`），故 `kTargetDir` 那时才赋值。 */
   let kTargetDir = null;
   let kRecordsPath = null;
   let kRecordsBackup = null;
@@ -344,11 +372,9 @@ async function main() {
     indexBackup = fs.existsSync(indexPath) ? fs.readFileSync(indexPath) : null;
     indexSeen = indexBackup !== null;
     console.log(`[market-smoke] appDataDir=${appData} index=${path.basename(indexPath)} 备份=${indexBackup ? `${indexBackup.length} B` : '本机原本没有'}`);
-    kTargetDir = path.join(appData, 'market', 'packs', K_TARGET.kind, K_TARGET.id, K_TARGET.version);
     kRecordsPath = path.join(appData, 'store', 'kojo-market', 'installed.json');
     kRecordsBackup = fs.existsSync(kRecordsPath) ? fs.readFileSync(kRecordsPath) : null;
-    kTargetExistedBefore = fs.existsSync(kTargetDir);
-    console.log(`[market-smoke] 安装态备份：目标包${kTargetExistedBefore ? '已在本机（跑完不动它）' : '原本没有'} · 记账${kRecordsBackup ? ` ${kRecordsBackup.length} B` : '原本没有'}`);
+    console.log(`[market-smoke] 记账备份：${kRecordsBackup ? ` ${kRecordsBackup.length} B` : '本机原本没有'}`);
 
     /* -------- f1) 白名单外的 URL 经真 IPC 也被拒 -------- */
     for (const bad of ['http://poboking.github.io/kojo-market/index.json', 'https://evil.example.com/index.json']) {
@@ -361,21 +387,39 @@ async function main() {
       else P('f1', `白名单外 URL 经真 IPC 被拒（${bad.slice(0, 28)}…）`, r.err.slice(0, 90));
     }
 
-    /* -------- f2) 白名单内的真实索引经真 IPC 取回（同一份判定、同一条链路） -------- */
+    /* -------- f2) 白名单内的真实索引经真 IPC 取回（同一份判定、同一条链路） --------
+       判据只落在**本仓能负责**的三件事上（外部注册表长出新包不该判红）：
+       ① 真 IPC 取回是 200，且重定向后的终止 URL 仍在放行主机（白名单没被绕）；
+       ② 响应声明的字节数 = 正文实读字节数（桥没截断、没补字节）；
+       ③ 正文过索引 schema 形状闸（`parseIndexBytes`：schema=1 / generatedAt 可解析 /
+          packs 数组 / 每条的 kind/id/version/fileCount/unpackedBytes/zip 合法、三元组不重复）。
+       取回的那一份同时留作下面 g/h/k 的对照物（远程 ⇔ 盘上 ⇔ 屏上三方自证）。 */
     const f2 = await cdp.evalJs(`(async () => {
       try {
         const v = await (${INV})('market_fetch_text', { url: ${JSON.stringify(INDEX_URL)}, timeoutMs: 15000, maxBytes: 524288 });
         return { ok: true, v };
       } catch (e) { return { ok: false, err: String(e) }; }
     })()`);
-    if (!f2.ok) F('f2', '真 IPC 取回线上索引', `market_fetch_text 失败：${f2.err}`);
+    let remoteIndex = null; // parseIndexBytes 的结果（f2 成功时才有）
+    if (!f2.ok) F('f2', '真 IPC 取回线上索引（200 + 声明=实读 + schema 合规）', `market_fetch_text 失败：${f2.err}`);
     else {
       const v = f2.v;
-      const bytes = Buffer.byteLength(v.text, 'utf8');
-      if (v.status === 200 && v.bytes === ANCHOR_BYTES && bytes === ANCHOR_BYTES && sha256(Buffer.from(v.text, 'utf8')) === ANCHOR_SHA256) {
-        P('f2', '真 IPC 取回线上索引', `status=200 bytes=${v.bytes} sha256=${ANCHOR_SHA256.slice(0, 12)}… finalUrl=${v.finalUrl}`);
+      const remoteBuf = Buffer.from(v.text, 'utf8');
+      const parsedRemote = parseIndexBytes(remoteBuf);
+      let finalHost = '';
+      try { finalHost = new URL(v.finalUrl).host; } catch { finalHost = ''; }
+      const problems = [];
+      if (v.status !== 200) problems.push(`status=${v.status}`);
+      if (!Number.isInteger(v.bytes) || v.bytes !== remoteBuf.length) problems.push(`响应声明 ${v.bytes} B ≠ 实读 ${remoteBuf.length} B`);
+      if (!hostAllowlisted(finalHost)) problems.push(`终止 URL 的主机 ${finalHost || '（读不出）'} 不在放行名单`);
+      problems.push(...parsedRemote.problems);
+      if (problems.length === 0) {
+        remoteIndex = parsedRemote;
+        P('f2', '真 IPC 取回线上索引（200 + 声明=实读 + schema 合规）',
+          `status=200 ${remoteBuf.length} B sha256=${sha256(remoteBuf).slice(0, 12)}… packs=${parsedRemote.packs.length} 条 `
+          + `generatedAt=${parsedRemote.json?.generatedAt} finalUrl=${v.finalUrl}`);
       } else {
-        F('f2', '真 IPC 取回线上索引', `status=${v.status} 声明=${v.bytes} 实读=${bytes} sha=${sha256(Buffer.from(v.text, 'utf8')).slice(0, 12)}（钉数 ${ANCHOR_BYTES} / ${ANCHOR_SHA256.slice(0, 12)}…）`);
+        F('f2', '真 IPC 取回线上索引（200 + 声明=实读 + schema 合规）', problems.join('；'));
       }
     }
 
@@ -428,39 +472,54 @@ async function main() {
     if (panelPoll.timedOut) throw new Error(`面板没给出「已拉取注册表列表」（等了 ${panelPoll.ms}ms）`);
     const panel = panelPoll.value;
 
-    /* -------- g) 落盘 + schema 合规 + 条目逐字对平 -------- */
-    if (!fs.existsSync(indexPath)) F('g', '面板拉取 ⇒ index.json 落盘', `文件不在位：${indexPath}`);
+    /* -------- g) 落盘 + schema 合规 + 条目与**同一时刻的远程**逐条对平 --------
+       对平的参照物是"这一次匿名取回的那份"，**不是**钉死的包清单：注册表里有哪些包是外部内容，
+       社区投稿会让它长（2 条 → 6 条），钉死就等于把"注册表长大了"判成"本仓回归"。 */
+    const local = fs.existsSync(indexPath) ? fs.readFileSync(indexPath) : null;
+    const disk = local === null ? null : parseIndexBytes(local);
+    let anonBuf = null;
+    let anon = null;
+    try {
+      anonBuf = Buffer.from(await (await fetch(INDEX_URL, { cache: 'no-store' })).arrayBuffer());
+      anon = parseIndexBytes(anonBuf);
+    } catch (e) {
+      anonBuf = null;
+      anon = null;
+      console.log(`[market-smoke] 匿名读回失败（h 会据此判红）：${String(e).slice(0, 160)}`);
+    }
+    if (disk === null) F('g', '面板拉取 ⇒ index.json 落盘 + schema 合规 + 条目对平', `文件不在位：${indexPath}`);
     else {
-      const local = fs.readFileSync(indexPath);
-      let parsed = null;
-      try { parsed = JSON.parse(local.toString('utf8')); } catch (e) { F('g', '面板拉取 ⇒ index.json 落盘', `落盘的不是合法 JSON：${e}`); }
-      if (parsed !== null) {
-        const rows = (parsed.packs ?? [])
-          .map((p) => [p.kind, p.id, p.version, p.fileCount, p.unpackedBytes])
-          .sort((a, b) => String(a).localeCompare(String(b)));
-        const want = [...ANCHOR_PACKS].sort((a, b) => String(a).localeCompare(String(b)));
-        const shapeOk = parsed.schema === 1 && typeof parsed.generatedAt === 'string' && Array.isArray(parsed.packs);
-        const rowsOk = JSON.stringify(rows) === JSON.stringify(want);
-        if (shapeOk && rowsOk) P('g', '面板拉取 ⇒ index.json 落盘 + schema 合规 + 条目对平', `packs=${parsed.packs.length} generatedAt=${parsed.generatedAt} 条目=${rows.map((r) => r.slice(0, 3).join('/')).join(' ')}`);
-        else F('g', '面板拉取 ⇒ index.json 落盘 + schema 合规 + 条目对平', `shape=${shapeOk}（schema=${parsed.schema}）条目不符：${JSON.stringify(rows)} ≠ ${JSON.stringify(want)}`);
+      const rows = sortRows(disk.packs);
+      const want = anon === null ? null : sortRows(anon.packs);
+      const problems = [];
+      if (disk.problems.length > 0) problems.push(`盘上 schema 不合规：${disk.problems.join('；')}`);
+      if (anon === null) problems.push('匿名取不回远程那一份（没有对平参照物）');
+      else if (anon.problems.length > 0) problems.push(`远程 schema 不合规：${anon.problems.join('；')}`);
+      else if (JSON.stringify(rows) !== JSON.stringify(want)) {
+        problems.push(`条目与远程不符：盘上 ${JSON.stringify(rows)} ≠ 远程 ${JSON.stringify(want)}`);
+      }
+      if (problems.length === 0) {
+        P('g', '面板拉取 ⇒ index.json 落盘 + schema 合规 + 条目与远程对平',
+          `packs=${disk.packs.length} generatedAt=${disk.json?.generatedAt} 条目=${rows.map((r) => r.slice(0, 3).join('/')).join(' ')}`);
+      } else {
+        F('g', '面板拉取 ⇒ index.json 落盘 + schema 合规 + 条目与远程对平', problems.join('；'));
       }
       /* -------- h) 匿名读回 ⇔ 本地落盘**逐字节**对平（同一份内容，两个取法） -------- */
-      const anon = await (await fetch(INDEX_URL, { cache: 'no-store' })).arrayBuffer();
-      const anonBuf = Buffer.from(anon);
-      const anonSha = sha256(anonBuf);
       const localSha = sha256(local);
-      if (anonBuf.equals(local) && localSha === ANCHOR_SHA256 && anonSha === ANCHOR_SHA256) {
-        P('h', '匿名读回与本地落盘逐字节对平', `${local.length} B 同一份；sha256 三方一致 = ${localSha.slice(0, 12)}…（远程 / 盘上 / 钉数）`);
+      if (anonBuf !== null && anonBuf.equals(local)) {
+        P('h', '匿名读回与本地落盘逐字节对平',
+          `${local.length} B 同一份；sha256 两边一致 = ${localSha.slice(0, 12)}…（远程 / 盘上；不钉外部摘要）`);
       } else {
-        F('h', '匿名读回与本地落盘逐字节对平', `远程 ${anonBuf.length} B / 盘上 ${local.length} B；sha 远程=${anonSha.slice(0, 12)} 盘上=${localSha.slice(0, 12)} 钉数=${ANCHOR_SHA256.slice(0, 12)}`);
+        const anonSha = anonBuf === null ? '(取不回)' : `${anonBuf.length} B / ${sha256(anonBuf).slice(0, 12)}`;
+        F('h', '匿名读回与本地落盘逐字节对平', `远程 ${anonSha} / 盘上 ${local.length} B ${localSha.slice(0, 12)}`);
       }
       /* -------- i) 面板屏上的事实与盘上一致（不是静默成功） -------- */
       const noteRows = (panel.note.match(/（(\d+) 个包）/) ?? [])[1];
       const timeOk = /数据时间/.test(panel.time) && /拉取/.test(panel.time);
-      if (noteRows === String(parsed.packs.length) && timeOk && panel.rows === parsed.packs.length) {
+      if (noteRows === String(disk.packs.length) && timeOk && panel.rows === disk.packs.length) {
         P('i', '面板给出人话 + 数据时间 + 条目数', `note=「${panel.note}」 time=「${panel.time}」 屏上条目行 ${panel.rows} 行`);
       } else {
-        F('i', '面板给出人话 + 数据时间 + 条目数', `note=「${panel.note}」(包数 ${noteRows}) time=「${panel.time}」 行=${panel.rows} 盘上=${parsed.packs.length} status=「${panel.status}」`);
+        F('i', '面板给出人话 + 数据时间 + 条目数', `note=「${panel.note}」(包数 ${noteRows}) time=「${panel.time}」 行=${panel.rows} 盘上=${disk.packs.length} status=「${panel.status}」`);
       }
       /* -------- j) 坏条目 ⇒ dropped 出声（注册表当前没有坏条目时明确 SKIP） -------- */
       if (panel.dropped === '') S('j', '坏条目进 dropped 并出声', '线上注册表当前没有坏条目（本地服务侧的判据见 kernel/tests/integration-market.test.ts）');
@@ -468,39 +527,75 @@ async function main() {
 
       /* -------- k) 真装一个包再卸掉：真下载 + 真解压 + 真落盘 + 真记账 + 即时失效 -------- */
       /**
-       * 三个毫秒数**每一次跑都上读数**（看板 MK-1 的量化靶）：
+       * 目标包与期望事实**从这一次取回的注册表现场解析**（`resolveInstallTarget`），不钉死外部包的
+       * 摘要 / 文件数 / 解压字节：注册表一变（旧口径钉的 `demo.era-tw 1.0.3 = d88a4a24…` 只是碰巧还在）
+       * 就会变成假红。钉的只有"优先拿本仓夹具包，它不在就退回同种类最小的包"，其余一律取自索引自述。
+       *
+       * 四个毫秒数**每一次跑都上读数**（看板 MK-1 的量化靶）：
        * ① 装成那句人话 → 「已装」行出现且卸载点得动；② 卸载确认 → 落点目录消失；
-       * ③ 卸载确认 → 屏上那一行消失。② 与 ③ 共用同一条基线（按下「确认」的那一刻）、
-       * 在同一段循环里一起取 ⇒ "行消失 ≤ 目录消失 + 300ms" 是**同一轮内**可比的两之数，
-       * 不是两次采样的近似。取不到的那个写「未取」，不改写成 SKIP 蒙过去。
+       * ③ 卸载确认 → 屏上那一行消失；④ 卸载确认 → 「已卸掉…」结果句上屏。
+       *
+       * **判据（2026-11-01 MK-SMOKE-RECAL 重定）**：
+       * · 主判据是 ③ ≤ ④ + 容差。撤行与结果句是同一次 React 提交里的两笔 ⇒ 这个差值只受采样粒度
+       *   影响，与"卸载本身要花多久"无关；容差 `rowLagToleranceMs(实测采样周期)` = max(900ms, 3×周期)
+       *   ⇒ 恒 > 2× 采样周期。
+       * · 旧口径「③ ≤ ② + 300ms」把**整段卸载尾巴**（记账写盘 + 祖先目录收尾 + 暂存清扫）也算进
+       *   一个正好等于采样周期的 300ms 里 ⇒ 测出来的是"这一轮谁先被采到"（实测 469ms / 2,013ms
+       *   两跑皆红，而盘上 / 记账 / 屏幕逐字节全对）。现在 ③−② 只上读数，另判一条方向：
+       *   屏上那条不许比盘上先消失（那是"屏上先于盘上"的假象）。
+       * · 功能面一条不松：行必须真出现、目录必须真消失、行必须真消失、消失后不许复活。
+       * 取不到的那个写「未取」，不改写成 SKIP 蒙过去。
        */
       const kHow = '复跑：HTTPS_PROXY=http://127.0.0.1:7890 node tools/smoke-tauri-market.mjs';
+      const kName = '真装一个包再卸掉（真下载+解压+落盘+记账+卸载+即时失效）';
+      const kPicked = resolveInstallTarget(
+        // 目标从**面板此刻列的那份索引**里挑（盘上那份 = 屏上那份），取不到才退回 f2 的远程快照
+        disk !== null && disk.packs.length > 0 ? disk.packs : (remoteIndex?.packs ?? []),
+        K_PREFERRED_TARGET,
+      );
+      const kSkip = kPicked === null;
+      const K = kPicked?.entry ?? { kind: '', id: '', version: '', fileCount: 0, unpackedBytes: 0, zipSha256: '', zipBytes: 0 };
+      const kKey = `${K.kind}/${K.id}@${K.version}`;
       let kRowMs = null;
       let kDirMs = null;
       let kGoneMs = null;
+      let kDoneMs = null;
+      let kSamplingMs = 0;
+      let kFailNote = '';
       const fmtMs = (n) => (n === null ? '未取' : `${n}ms`);
-      const kRead = () => `三个毫秒数：①行出现=${fmtMs(kRowMs)} ②目录消失=${fmtMs(kDirMs)} ③行消失=${fmtMs(kGoneMs)}`;
-      const kRowSel = `[...document.querySelectorAll('.panel-market .mk-list .mk-row')].find((r) => r.innerText.includes('版本 ${K_TARGET.version}'))`;
+      const kRead = () => `毫秒数：①行出现=${fmtMs(kRowMs)} ②目录消失=${fmtMs(kDirMs)} ③行消失=${fmtMs(kGoneMs)} ④结果句=${fmtMs(kDoneMs)}；采样周期≈${kSamplingMs}ms 容差=${rowLagToleranceMs(kSamplingMs)}ms`;
+      if (kSkip) {
+        S('k', kName, '未验证：盘上那份索引与 f2 的远程快照里都挑不出可安装的包——没有装包目标，不假装测过');
+      } else {
+        kTargetDir = path.join(appData, 'market', 'packs', K.kind, K.id, K.version);
+        kTargetExistedBefore = fs.existsSync(kTargetDir);
+        console.log(`[market-smoke] k 目标包 = ${kKey}（${kPicked.why}）；落点${kTargetExistedBefore ? '已在本机（跑完不动它）' : '原本没有'}`);
+      }
+      /* 行身份走 `data-market-key`（= `kind/id@version`，面板自己写上去的那个键）：
+         旧写法按「版本 x.y.z」在行文本里找，注册表里多个包同版本时会挑错行。 */
+      const kRowSel = kSkip ? 'null' : `document.querySelector('.panel-market .mk-list .mk-row[data-market-key="${kKey}"]')`;
       const kRowStateExpr = `(() => (${kRowSel} ? 'listed' : 'gone'))()`;
-      const kName = '真装一个包再卸掉（真下载+解压+落盘+记账+卸载+即时失效）';
 
       /* 1) 注册表行上点「安装」（显式值轮询：只认 'clicked'） */
-      const kClick = await pollUntil(
-        cdp,
-        `(() => {
-          const row = [...document.querySelectorAll('.panel-market .mk-group .mk-row')]
-            .find((r) => r.innerText.includes('版本 ${K_TARGET.version}'));
-          if (!row) return 'no-registry-row';
-          const b = [...row.querySelectorAll('button')].find((e) => /安装|更新/.test(e.textContent));
-          if (!b) return 'no-action-button';
-          if (b.disabled) return 'install-disabled';
-          b.click();
-          return 'clicked';
-        })()`,
-        ['clicked'],
-        { timeoutMs: 60000, intervalMs: 300 },
-      );
-      if (kClick.value !== 'clicked') {
+      const kClick = kSkip
+        ? { value: 'skipped(没有装包目标)', ms: 0, timedOut: true }
+        : await pollUntil(
+            cdp,
+            `(() => {
+              const row = document.querySelector('.panel-market section.mk-group .mk-row[data-market-key="${kKey}"]');
+              if (!row) return 'no-registry-row';
+              const b = [...row.querySelectorAll('button')].find((e) => /安装|更新/.test(e.textContent));
+              if (!b) return 'no-action-button';
+              if (b.disabled) return 'install-disabled';
+              b.click();
+              return 'clicked';
+            })()`,
+            ['clicked'],
+            { timeoutMs: 60000, intervalMs: 300 },
+          );
+      if (kSkip) {
+        /* 已在上一条报过 SKIP：没有装包目标时这条链路一次都不走 */
+      } else if (kClick.value !== 'clicked') {
         F('k', kName, `注册表行上点不动安装：${String(kClick.value)}（等了 ${kClick.ms}ms）；${kRead()}`);
       } else {
         /* 2) 等装成那句人话（对象返回值 ⇒ 显式谓词，仍然是带耗时的轮询） */
@@ -531,23 +626,21 @@ async function main() {
             const raw = JSON.parse(fs.readFileSync(kRecordsPath, 'utf8'));
             const arr = Array.isArray(raw) ? raw : (raw?.packs ?? raw?.installed ?? []);
             kRec = arr.find(
-              (r) => r?.id === K_TARGET.id && r?.kind === K_TARGET.kind && r?.version === K_TARGET.version,
+              (r) => r?.id === K.id && r?.kind === K.kind && r?.version === K.version,
             ) ?? null;
             if (kRec === null) kProbs.push('记账里没有这一条');
           } catch (e) { kProbs.push(`记账读不出：${String(e).slice(0, 80)}`); }
 
           const kDeclared = kRec !== null && Array.isArray(kRec.files) ? kRec.files : [];
           if (kRec !== null) {
-            if (kRec.containerSha256 !== K_CONTAINER_SHA) {
-              kProbs.push(`记账容器核对码 ${kRec.containerSha256 ?? '（没有）'} ≠ 注册表钉的那份`);
+            // 容器核对码与**这一次索引自述的那一条**对平（钉死外部摘要的旧做法见 k 项注释）
+            if (kRec.containerSha256 !== K.zipSha256) {
+              kProbs.push(`记账容器核对码 ${kRec.containerSha256 ?? '（没有）'} ≠ 注册表这一条声明的 ${K.zipSha256}`);
             }
-            // 与注册表那一行对平（fileCount / unpackedBytes 的权威值由索引锚 sha 保证）
-            const kWant = ANCHOR_PACKS.find((a) => a[1] === K_TARGET.id && a[2] === K_TARGET.version);
-            if (kWant !== undefined) {
-              if (kDeclared.length !== kWant[3]) kProbs.push(`文件数 ${kDeclared.length} ≠ 注册表 ${kWant[3]}`);
-              const total = kDeclared.reduce((s, f) => s + Number(f?.bytes ?? -1), 0);
-              if (total !== kWant[4]) kProbs.push(`解压总字节 ${total} ≠ 注册表 ${kWant[4]}`);
-            }
+            // 与注册表那一行对平（fileCount / unpackedBytes 的权威值由索引自述给出）
+            if (kDeclared.length !== K.fileCount) kProbs.push(`文件数 ${kDeclared.length} ≠ 注册表 ${K.fileCount}`);
+            const total = kDeclared.reduce((s, f) => s + Number(f?.bytes ?? -1), 0);
+            if (total !== K.unpackedBytes) kProbs.push(`解压总字节 ${total} ≠ 注册表 ${K.unpackedBytes}`);
             for (const f of kDeclared) {
               const p = path.join(kTargetDir, ...String(f.path).split('/'));
               if (!fs.existsSync(p)) { kProbs.push(`落点缺 ${f.path}`); continue; }
@@ -612,25 +705,45 @@ async function main() {
             kProbs.push(`卸载没走完：${String(kConf.value)}（等了 ${kConf.ms}ms）`);
           }
 
-          /* 5) ②与③同基线、同一段循环里取 ⇒ 判据"行消失 ≤ 目录消失 +300ms"在同一轮内可比 */
+          /* 5) ②盘上 / ③屏上 / ④结果句 在同一段循环里采：
+                ② 走**紧循环**（`fs.existsSync`，中间不夹 CDP 往返 ⇒ 采样误差 ~10ms）；
+                ③④ 由**同一次** evalJs 一起读回来（屏上那一行还在不在 + 状态行原文），
+                    时间戳取**页内** `Date.now()`（CDP 往返的延迟记在采样自己头上，
+                    不记成"屏上晚了"，这是旧判据被采样噪声吃掉的那一半根因）。 */
           if (kConf.value === 'confirmed' || kConf.value === 'row-gone') {
+            const kWatchExpr = `(() => {
+              const row = ${kRowSel};
+              const note = document.querySelector('.panel-market .mk-note')?.innerText ?? '';
+              return { row: row ? 'listed' : 'gone', note, t: Date.now() };
+            })()`;
             const tUn = Date.now();
+            const rounds = [];
             for (;;) {
-              if (kDirMs === null && !fs.existsSync(kTargetDir)) kDirMs = Date.now() - tUn;
-              if (kGoneMs === null) {
-                let state = null;
-                try { state = await cdp.evalJs(kRowStateExpr, 15000); } catch { state = null; }
-                if (state === 'gone') kGoneMs = Date.now() - tUn;
+              const tRound = Date.now();
+              if (kDirMs === null && !fs.existsSync(kTargetDir)) kDirMs = tRound - tUn;
+              let sample = null;
+              try { sample = await cdp.evalJs(kWatchExpr, 15000); } catch { sample = null; }
+              if (sample !== null && typeof sample === 'object') {
+                const at = Math.max(0, (Number.isFinite(sample.t) ? sample.t : Date.now()) - tUn);
+                if (kGoneMs === null && sample.row === 'gone') kGoneMs = at;
+                if (kDoneMs === null && /已卸掉/.test(String(sample.note))) kDoneMs = at;
+                if (kFailNote === '' && /卸载没有成功/.test(String(sample.note))) kFailNote = String(sample.note);
               }
-              if (kDirMs !== null && kGoneMs !== null) break;
+              if (kDirMs !== null && kGoneMs !== null && kDoneMs !== null) break;
               if (Date.now() - tUn > 30000) break;
-              await sleep(80);
+              await sleep(120);
+              rounds.push(Date.now() - tRound);
             }
+            // 实测采样周期（中位数）：容差按它换算，采样变慢时容差跟着变粗，判据不会退化到噪声面
+            kSamplingMs = rounds.length === 0 ? 0 : [...rounds].sort((a, b) => a - b)[Math.floor(rounds.length / 2)];
             if (kDirMs === null) kProbs.push('卸载确认后 30s 落点目录仍在（盘上没卸掉，这是功能断裂不是滞后）');
-            if (kGoneMs === null) kProbs.push(`卸载确认后 30s 屏上那条还在（目录消失=${fmtMs(kDirMs)} 时它仍挂着）`);
-            if (kDirMs !== null && kGoneMs !== null && kGoneMs > kDirMs + 300) {
-              kProbs.push(`屏上那条比盘上晚 ${kGoneMs - kDirMs}ms 消失（判据：行消失 ≤ 目录消失 +300ms）`);
-            }
+            kProbs.push(...uninstallTailProblems({
+              rowGoneMs: kGoneMs,
+              doneMs: kDoneMs,
+              dirGoneMs: kDirMs,
+              samplingMs: kSamplingMs,
+              failNote: kFailNote,
+            }));
             if (kGoneMs !== null) {
               // 不许"消失后又复活"：面板被在途旧读数倒灌就是这个形态
               await sleep(400);
@@ -640,11 +753,12 @@ async function main() {
             }
           }
 
-          const kFact = `${K_TARGET.id} v${K_TARGET.version}：盘上 ${kDeclared.length} 个条目逐条对平（${kDeclared.map((f) => `${f.path}:${f.bytes}B`).join(' ')}）；记账容器核对码=${K_CONTAINER_SHA.slice(0, 12)}…；暂存区残壳 ${kLeft} 条`;
+          const kFact = `${kKey}：盘上 ${kDeclared.length} 个条目逐条对平（${kDeclared.map((f) => `${f.path}:${f.bytes}B`).join(' ')}）；记账容器核对码=${String(K.zipSha256).slice(0, 12)}…（与注册表自述一致）；暂存区残壳 ${kLeft} 条`;
           const kScreen = `屏上「${kOutcome.value.note}」`;
           const kDelta = kDirMs !== null && kGoneMs !== null ? `${kGoneMs - kDirMs}ms` : '未取';
-          if (kProbs.length === 0) P('k', kName, `${kFact}；${kScreen}；${kRead()}；行消失-目录消失=${kDelta}（判据 ≤300ms）`);
-          else F('k', kName, `${kProbs.join('；')}｜${kFact}｜${kScreen}｜${kRead()}`);
+          const kTail = `③−②=${kDelta}（读数：整段卸载尾巴，不设噪声级阈值）`;
+          if (kProbs.length === 0) P('k', kName, `${kFact}；${kScreen}；${kRead()}；${kTail}；判据 ③ ≤ ④ + ${rowLagToleranceMs(kSamplingMs)}ms`);
+          else F('k', kName, `${kProbs.join('；')}｜${kFact}｜${kScreen}｜${kRead()}｜${kTail}`);
         }
       }
     }
