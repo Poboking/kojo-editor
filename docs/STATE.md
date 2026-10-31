@@ -161,9 +161,14 @@
   **顺带修好一个更隐蔽的账**：这份 350 行的核心测试文件此前**从未进过主套件**——`tools/perf-suite.mjs`
   会把「含 `performance.now()` + 比较断言」的文件自动划进 perf 池，它因一处计时断言被整份踢出。新用例
   刻意不加计时断言（改用用例超时），已回到功能池（1,133 个文件）。教训入 PITFALLS 291。
-  **新欠账一条**：`matrix-store` 的 `refresh()` 把 `rebuild(index)`（全量 117k 函数聚合，实测 **292 ms**）
-  直接放在 `ensureIndex().then()` 里同步跑，等于占掉一帧；`navigator-store` 早已用 `scheduleRebuild` +
-  `setTimeout` 推到宏任务。同一形态应收口（未做，本批只修卡死）。
+  **该欠账已收口（2026-10-31）**：`matrix-store` 的 `refresh()` 原把 `rebuild(index)`（全量 117k 函数
+  聚合，实测 **292 ms**）直接放在 `ensureIndex().then()` 里同步跑，等于占掉一帧。现照 `navigator-store`
+  的 `scheduleRebuild`（`pendingBuild` + `buildScheduled` + `setTimeout(…, 0)` + `onDispose` 清理）
+  推到宏任务，同一轮多次触发只建一次；顺带补了**归属守卫**（回包时 `project.current()` 已换就不建，
+  否则建成「A 索引 + B 角色字典」）与 `closed` 时清挂起（否则宏任务把已关项目的矩阵建回来）。
+  判据 4 条住 `ui-condition-matrix/tests/matrix-store-schedule.test.ts`，逐条验过证明力
+  （回退旧实现 3 红 1 绿；单删 `pendingBuild = null` 一行仅第 4 条红）。
+  总工作量不变（同一个纯函数），变的只是它落在哪一帧；**未取端到端帧读数**，不声称降了多少毫秒。
 - **F 批 · R10 量具 + R7 冷开归因（2026-10-31，`tools/perf-ab.mjs` + `tools/perf-cold-open.mjs`）**：
   性能路线图 v2 的最后一格落地。R10 交付**同树 A/B 量具**：`--a/--b` 接 git ref 或现成目录
   （ref 自动建游离树、自动 junction `node_modules`、自动补探针），交替跑 + 中位数 + 极差，
