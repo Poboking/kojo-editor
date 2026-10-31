@@ -736,10 +736,13 @@ const SURFACE_SOURCES: Readonly<Record<UxSurface, readonly SourceProbe[]>> = {
   ],
   expand: [
     // LAU-4（2026-10-30）：ERB 的扩选不再自建 provider —— 判据搬进
-    // `@kojo/erb-lang/selection-range`，共享收口带能力名 `selectionRange`，
-    // 应答来自插件 `@kojo/plugin-erb-lang`（ERB 由 `languageServices: true` 收进来）。
+    // `@kojo/erb-lang/selection-range`，应答来自插件 `@kojo/plugin-erb-lang`。
+    // DOUBLE-LEG-1032（2026-10-31，第一车）之后形状再变一次：ERB 由 descriptor **点名**
+    // `selectionRange`，宿主这条纯翻译腿按 `excludeNamed` 让位 ⇒ 这里钉的是「第三参给
+    // `undefined` + excludeNamed 该格」，而不是旧写法「第三参给能力名」（给能力名就等于
+    // 把点名语言重新挂上，一个 kind 恰一枚就破了）。
     { rel: 'monaco/erb-selection-range.ts', re: /registerForLanguageServices\([\s\S]{0,500}?registerSelectionRangeProvider/ },
-    { rel: 'monaco/erb-selection-range.ts', re: /'selectionRange',\s*\)/ },
+    { rel: 'monaco/erb-selection-range.ts', re: /undefined,\s*\{\s*excludeNamed:\s*'selectionRange'\s*\}/ },
     // B3f（2026-10-29）：2.0 的扩选不再自建 provider——共享收口带能力名 `selectionRange`，
     // descriptor 用 `slotServices` 点名挂上，应答来自插件（形状同 B3b/B3c/B3d/B3e）。
     { rel: 'monaco/slot-service-providers.ts', re: /legOf\('selectionRange',[\s\S]{0,200}?registerSelectionRangeProvider/ },

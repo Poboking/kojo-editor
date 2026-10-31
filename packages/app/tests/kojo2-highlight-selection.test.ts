@@ -437,9 +437,44 @@ describe('④注册：共享收口带能力名、dispose 幂等、原生注册�
     expect(LAYER_SOURCE).not.toMatch(/kojo2SelectionRangeAt|kojo2SelectionRangeChainsAt/);
   });
 
-  it('宿主语言门：共享收口把 kojo2 这枚也挂到 ERB，遇到 erb model 必须弃权', () => {
-    const model = fakeModel(SOURCE, ERB_LANGUAGE_ID).model;
-    expect(askHighlight(model)).toBeUndefined();
-    expect(askSelection(model, [position(1, 1)])).toBeUndefined();
+  it('语言门（DOUBLE-LEG-1032 改判）：ERB 点名了这两格 ⇒ 同一条腿也服务 ERB，请求带 ERB 的语言身份；未登记的语言 id 仍弃权', () => {
+    /**
+     * 这一枚原来钉的是「ERB 不点名 ⇒ 这条腿见 erb model 必须弃权」（那时答 ERB 的是宿主纯翻译腿）。
+     * `b/agent/1032-double-leg` 第一车把 `documentHighlight` / `selectionRange` 写进 ERB 的
+     * `slotServices`、宿主那两枚纯翻译腿按 `excludeNamed` 让位 ⇒ 台账改由 descriptor 说话：
+     * **同一条腿现在要服务 ERB**，且请求里带的是 ERB 自己的语言身份（不许把 kojo2 的答案贴过去）。
+     * 门没拆：判据仍是 descriptor 声明而不是语言 id，所以**未登记的语言 id 照旧弃权**（末两条）。
+     */
+    const seen: string[] = [];
+    installKernel([
+      contributionOf((request) => {
+        const { languageId } = request as { languageId?: string };
+        seen.push(`${request.kind}:${languageId}`);
+        if (request.kind === 'documentHighlight') {
+          return {
+            kind: 'documentHighlight',
+            highlights: [{ line: 1, startColumn: 6, endColumn: 8, kind: 'write' }],
+          };
+        }
+        if (request.kind === 'selectionRange') {
+          return {
+            kind: 'selectionRange',
+            selections: [{ range: { startLine: 1, startColumn: 1, endLine: 1, endColumn: 8 } }],
+          };
+        }
+        return undefined;
+      }),
+    ]);
+    const erbModel = () => fakeModel(SOURCE, ERB_LANGUAGE_ID).model;
+    expect(askHighlight(erbModel())).toHaveLength(1);
+    expect(askSelection(erbModel(), [position(1, 1)])).toHaveLength(1);
+    expect(seen).toEqual([
+      `documentHighlight:${ERB_LANGUAGE_ID}`,
+      `selectionRange:${ERB_LANGUAGE_ID}`,
+    ]);
+    // 弃权门仍在（判据是 descriptor，不是「有 getLanguageId 就服务」）
+    const alien = () => fakeModel(SOURCE, 'this-language-is-not-registered').model;
+    expect(askHighlight(alien())).toBeUndefined();
+    expect(askSelection(alien(), [position(1, 1)])).toBeUndefined();
   });
 });
