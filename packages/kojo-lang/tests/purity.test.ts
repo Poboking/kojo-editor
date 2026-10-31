@@ -100,7 +100,11 @@ describe('@kojo/kojo-lang 是纯库（零 Monaco / 零 React / 零 IO）', () =>
     //   （事件名 / 事件落点 / 同一次编译诊断的筛选 / 载体归属 / 等待面 + `(码, 方言)` 聚合）。判据
     //   逐字搬自宿主 `monaco/kojo2-dialect-lint.ts`（该文件同批删除）；同包文档 / 事件挂点走相对
     //   路径，问题面板那一行改成本包自持的 `Kojo2DialectLintProblem`（不引宿主 UI 类型）。
-    expect(files).toHaveLength(36);
+    // + B5b C 类第三车（2026-10-31）：XML 开标签的**属性词法**再进一枚——`xml-attrs`（逐字搬自宿主
+    //   `monaco/kojo-xml-providers.ts`，那条正则原本被补全 / 悬停 / 诊断三条腿共用）。进本包的理由与
+    //   `event-sites` 同形：吃它的一方从这一车起有一枚在插件侧（`@kojo/plugin-ui-kojo-xml` 的事件三格
+    //   投影），插件看不见 `packages/app/src/**`。零外部依赖，宿主那三处 import 经 re-export 一字未动。
+    expect(files).toHaveLength(37);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

@@ -295,6 +295,14 @@ export default defineConfig({
       '@kojo/kojo-lang/call-hierarchy': r('../kojo-lang/src/call-hierarchy.ts'),
       // B5b C 类第二车：方言体检判据（原宿主 `monaco/kojo2-dialect-lint.ts`）进包（同样排在桶之前）。
       '@kojo/kojo-lang/dialect-lint': r('../kojo-lang/src/dialect-lint.ts'),
+      // B5b C 类第三车：XML 属性词法（原宿主 `monaco/kojo-xml-providers.ts` 的 `attrsOnLine`）进包，
+      // 宿主与插件侧的事件三格投影引同一枚（同样排在桶之前）。
+      '@kojo/kojo-lang/xml-attrs': r('../kojo-lang/src/xml-attrs.ts'),
+      // B5b C 类第三车：kojo XML 方言事件面判据（原宿主 `monaco/kojo-xml-{dialect,event-sites}.ts`）
+      // 进 `@kojo/plugin-ui-kojo-xml` 的两枚子路径——宿主 `kojo-xml-diagnostics.ts` 只引叶子，
+      // 不引那枚带面板 React 面的桶。
+      '@kojo/plugin-ui-kojo-xml/kojo-xml-dialect': r('../plugins/ui-kojo-xml/src/kojo-xml-dialect.ts'),
+      '@kojo/plugin-ui-kojo-xml/kojo-xml-event-sites': r('../plugins/ui-kojo-xml/src/kojo-xml-event-sites.ts'),
       '@kojo/kojo-sdk/semantic-roles': r('../kojo-sdk/src/semantic-roles.ts'),
       '@kojo/kojo-sdk/structure-protocol': r('../kojo-sdk/src/structure-protocol.ts'),
       '@kojo/kojo-sdk/contracts': r('../kojo-sdk/src/contracts.ts'),

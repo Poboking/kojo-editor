@@ -43,8 +43,9 @@
  * ## 为什么判据住在包（B5b C 类第二车）
  *
  * 宿主那枚 `monaco/kojo2-dialect-lint.ts` 已删，消费者（`kojo-xml-dialect` /
- * `kojo2-problem-wiring`）改指 `@kojo/kojo-lang/dialect-lint`。判据本体逐字搬来，只换了两处
- * 指路：同包的文档 / 事件挂点走相对路径（`./declarations` / `./event-sites`），以及问题面板
+ * `kojo2-problem-wiring`）改指 `@kojo/kojo-lang/dialect-lint`——`kojo-xml-dialect` 的判据本体
+ * 再由 C 类第三车搬进 `@kojo/plugin-ui-kojo-xml`，两边吃的仍是本叶子这一枚。判据本体逐字搬来，
+ * 只换了两处指路：同包的文档 / 事件挂点走相对路径（`./declarations` / `./event-sites`），以及问题面板
  * 那一行的形状改成本文件自持的 {@link Kojo2DialectLintProblem}——宿主那个
  * `EditorProblem` 住在 `packages/app/src/ui/problem-store.ts`，包看不见宿主、也不许把它搬进来。
  * 两者字段逐格对齐（可选格 `code` / `source` 在这里恒有值），宿主拿返回值直接当

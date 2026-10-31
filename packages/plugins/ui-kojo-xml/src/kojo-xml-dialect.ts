@@ -34,6 +34,15 @@
  * （`@kojo/kojo-lang/dialect-lint`；B5b C 类第二车起判据住包），顺序用同一枚
  * `sortDialectDiagnostics`。不新造第二张码表：
  * 产出的码全部来自 core 闭集，严重级由 `severityOf` 决定。
+ *
+ * ## 为什么住插件不住宿主（B5b C 类第三车）
+ *
+ * 判据本体逐字搬自宿主 `monaco/kojo-xml-dialect.ts`（该文件同批删除），指路只换两处：
+ * 事件三格投影改同包相对路径（`./kojo-xml-event-sites`），命令表类型仍是契约层的
+ * `KojoXmlSchema`（本插件本来就依赖 `@kojo/plugin-api`）。落点选插件而不是
+ * `@kojo/kojo-lang`：那枚包自己的 purity 闸整文件禁 `口上` / 方言名（连注释与文案都扫），
+ * 而本模块的诊断文案是给作者看的人话、一字不许改 ⇒ 逐字搬进去必红；
+ * 判据消费方只有宿主的 `kojo-xml` marker 装配与单测，都在懒边上 ⇒ 开机图一枚字节都不涨。
  */
 import {
   findEvent,

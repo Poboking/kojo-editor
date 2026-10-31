@@ -33,39 +33,15 @@ export function currentKojoXmlSchema(): KojoXmlSchema | null {
 
 /* ------------------------------ 文本工具 ------------------------------ */
 
-/** 一行里所有属性（名字 + 值 + 值区间），不解析嵌套结构——够悬停与补全用 */
-export interface XmlAttrOnLine {
-  readonly name: string;
-  readonly value: string;
-  /** 值在行内的起止列（0 基，不含引号） */
-  readonly valueStart: number;
-  readonly valueEnd: number;
-  /** 属性名在行内的起止列（0 基） */
-  readonly nameStart: number;
-  readonly nameEnd: number;
-}
-
-const ATTR_RE = /([A-Za-z_][\w.:-]*)\s*=\s*("[^"]*"|'[^']*')/g;
-
-export function attrsOnLine(line: string): XmlAttrOnLine[] {
-  const out: XmlAttrOnLine[] = [];
-  ATTR_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = ATTR_RE.exec(line)) !== null) {
-    const nameStart = m.index;
-    const raw = m[2]!;
-    const valueStart = m.index + m[0].length - raw.length + 1;
-    out.push({
-      name: m[1]!,
-      value: raw.slice(1, -1),
-      nameStart,
-      nameEnd: nameStart + m[1]!.length,
-      valueStart,
-      valueEnd: valueStart + raw.length - 2,
-    });
-  }
-  return out;
-}
+/**
+ * 属性词法（名字 + 值 + 值区间）住在 `@kojo/kojo-lang/xml-attrs`（B5b C 类第三车搬出去）。
+ *
+ * 三条腿（补全 / 悬停 / 诊断）与插件侧的事件三格投影吃**同一枚**正则——词法一旦有两个家，
+ * "补全认得出的值、诊断认不出"只是时间问题。宿主这边保持原有的导出面（本文件与
+ * `kojo-xml-diagnostics.ts`、单测的 `from './kojo-xml-providers'` 一字未改），只是转一手。
+ */
+export { attrsOnLine, type XmlAttrOnLine } from '@kojo/kojo-lang/xml-attrs';
+import { attrsOnLine } from '@kojo/kojo-lang/xml-attrs';
 
 /** 该行是否是开始标签（且不是自闭合 / 结束标签） */
 export function openTagNameOf(line: string): string | null {

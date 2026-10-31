@@ -2,12 +2,16 @@
   "name": "@kojo/plugin-ui-kojo-xml",
   "version": "0.1.0",
   "private": true,
-  "description": "口上 XML 面板（ui.panel 贡献）：角色 -> 文件 -> <command> 条目，点击经 editor.revealLocation 跳转。索引来自 kojo.xml 服务（可能缺席），本插件不读盘、不解释游戏属性。",
+  "description": "口上 XML 面板（ui.panel 贡献）：角色 -> 文件 -> <command> 条目，点击经 editor.revealLocation 跳转。索引来自 kojo.xml 服务（可能缺席），面板本身不读盘、不解释游戏属性。另持 kojo XML 方言事件面判据（kojo-xml-dialect / kojo-xml-event-sites 两枚纯函数叶子，宿主 marker 装配与单测经子路径取用）。",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./kojo-xml-dialect": "./src/kojo-xml-dialect.ts",
+    "./kojo-xml-event-sites": "./src/kojo-xml-event-sites.ts"
   },
   "dependencies": {
+    "@kojo/kojo-core": "workspace:*",
+    "@kojo/kojo-lang": "workspace:*",
     "@kojo/plugin-api": "workspace:*"
   },
   "peerDependencies": {

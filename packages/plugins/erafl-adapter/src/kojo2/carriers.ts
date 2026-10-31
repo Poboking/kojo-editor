@@ -71,7 +71,8 @@ export const ERAFL_ERB_SHELL_PREFIXES: readonly string[] = Object.freeze([
 
 /** eraFL 的载体表（冻结；顺序 = 归属优先序） */
 export const ERAFL_CARRIERS: readonly CarrierBinding[] = Object.freeze([
-  // 口上正文：XML。事件/命令面只在这一格校验（`command` 三格见 `kojo-xml-dialect.ts`）。
+  // 口上正文：XML。事件/命令面只在这一格校验（`command` 三格见
+  // `packages/plugins/ui-kojo-xml/src/kojo-xml-dialect.ts`）。
   Object.freeze({
     carrier: 'xml' as const,
     glob: ERAFL_XML_CARRIER_GLOB,

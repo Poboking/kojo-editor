@@ -28,6 +28,9 @@ export const config = defineConfig({
       '@kojo/kojo-lang/completion-snippets': r('./packages/kojo-lang/src/completion-snippets.ts'),
       '@kojo/kojo-lang/hover': r('./packages/kojo-lang/src/hover.ts'),
       '@kojo/kojo-lang/event-sites': r('./packages/kojo-lang/src/event-sites.ts'),
+      // B5b C 类第三车：XML 开标签的属性词法（原宿主 `monaco/kojo-xml-providers.ts` 里那枚
+      // 三条腿共用的 `attrsOnLine`）进包；宿主与插件侧的事件三格投影都引这一枚叶子。
+      '@kojo/kojo-lang/xml-attrs': r('./packages/kojo-lang/src/xml-attrs.ts'),
       '@kojo/kojo-lang/adapter-source': r('./packages/kojo-lang/src/adapter-source.ts'),
       '@kojo/kojo-lang/expand-compile': r('./packages/kojo-lang/src/expand-compile.ts'),
       // B3d：签名帮助 / 格式化的判据叶子（同样必须排在桶之前）。
@@ -102,6 +105,11 @@ export const config = defineConfig({
       // "同一份文本、两个方言"的对拍（原在 `packages/app/tests` 时靠 app 的 node_modules 解析，
       // 换到 kojo-lang 就没有那枚 workspace 链接了）；与上面 `plugin-eratw-adapter` 同一条路。
       '@kojo/plugin-erafl-adapter': r('./packages/plugins/erafl-adapter/src/index.ts'),
+      // B5b C 类第三车：kojo XML 方言事件面判据（原宿主 `monaco/kojo-xml-{dialect,event-sites}.ts`）
+      // 进 `@kojo/plugin-ui-kojo-xml`；宿主 marker 装配与 `app/tests/kojo-xml-dialect.test.ts`
+      // 走这两枚子路径（桶里有面板的 React 面，语言腿不引桶）。
+      '@kojo/plugin-ui-kojo-xml/kojo-xml-dialect': r('./packages/plugins/ui-kojo-xml/src/kojo-xml-dialect.ts'),
+      '@kojo/plugin-ui-kojo-xml/kojo-xml-event-sites': r('./packages/plugins/ui-kojo-xml/src/kojo-xml-event-sites.ts'),
       '@kojo/plugin-eraakumamaid-adapter': r('./packages/plugins/eraakumamaid-adapter/src/index.ts'),
       '@kojo/plugin-erakoumakan-adapter': r('./packages/plugins/erakoumakan-adapter/src/index.ts'),
       '@kojo/plugin-erasqc-adapter': r('./packages/plugins/erasqc-adapter/src/index.ts'),

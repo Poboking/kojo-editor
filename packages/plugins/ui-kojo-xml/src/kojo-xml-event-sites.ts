@@ -8,8 +8,9 @@
  *
  * ## 为什么复用 `attrsOnLine` 而不新写扫描器
  *
- * 属性词法（引号、单引号、值内空白）在 `kojo-xml-providers.ts` 已经有一份**被补全/悬停/
- * 诊断三条腿共用**的实现。再写一份正则 = 同一份 XML 有两种切法，"补全认得出的值、
+ * 属性词法（引号、单引号、值内空白）在 `@kojo/kojo-lang/xml-attrs` 已经有一份**被补全/悬停/
+ * 诊断三条腿共用**的实现（B5b C 类第三车从宿主 `kojo-xml-providers.ts` 搬进包，宿主那边改成
+ * re-export、三个消费点一字未动）。再写一份正则 = 同一份 XML 有两种切法，"补全认得出的值、
  * 诊断认不出"就只是时间问题。所以本模块只做**选哪些属性算事件格**，词法一律调用那一枚。
  *
  * ## 凭什么元素算口上条目
@@ -21,8 +22,13 @@
  *
  * 不认识的元素 / 拼错的标签（`<command_>`）一律不进表——拼写问题由解析器报
  * `kojo-xml.tag.command-misspelled`，本模块不替它猜。
+ *
+ * ## 为什么住插件不住宿主（B5b C 类第三车）
+ *
+ * 本模块与 `./kojo-xml-dialect` 是同一条判据链的两段（投影 → 诊断），宿主只剩 marker 装配，
+ * 于是跟着方言体检那一车一起离开 `packages/app/src/monaco/**`。零 Monaco、零 React、零 IO。
  */
-import { attrsOnLine } from './kojo-xml-providers';
+import { attrsOnLine } from '@kojo/kojo-lang/xml-attrs';
 
 /** 事件三格：命令 / 名字 / 位置 */
 export type KojoXmlEventCell = 'command' | 'name' | 'place';

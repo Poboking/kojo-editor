@@ -294,8 +294,8 @@ const CORE_DIAGNOSTIC_CODE_LIST = [
    * **作者写了当前方言事件目录里没有的事件**（§5.5 第 1 行；`# 机` / `@织` / XML `command` 三条落点共用）。
    *
    * **生产者（2026-10-28 实测，D2/D3 已接线；2026-10-31 判据进包）**：`packages/kojo-lang/src/dialect-lint.ts`
-   * （`# 机` / `@织` 的事件名对 `eventCatalog`）与 `packages/app/src/monaco/kojo-xml-dialect.ts`
-   * （口上 XML 的 `command` 格对同一张表）。作者面这条**已启用**；适配器族的
+   * （`# 机` / `@织` 的事件名对 `eventCatalog`）与 `packages/plugins/ui-kojo-xml/src/kojo-xml-dialect.ts`
+   * （口上 XML 的 `command` 格对同一张表；B5b C 类第三车从宿主搬进该插件）。作者面这条**已启用**；适配器族的
    * `event/unknown`（见下一条分工）仍在自检面并行，两者语义同源、表不合并。
    *
    * 与既有 `event/unknown`（`ADAPTER_VALIDATION_CODES.eventUnknown`）的分工：那条是**适配器族**，
@@ -311,7 +311,7 @@ const CORE_DIAGNOSTIC_CODE_LIST = [
    * **事件写在了错误的载体上**（§5.5 第 2 行）。
    *
    * **生产者（2026-10-28 实测，D3 已接线；2026-10-31 判据进包）**：`packages/kojo-lang/src/dialect-lint.ts`
-   * （`carriers[].validates` ＋ 已解析的载体）与 `packages/app/src/monaco/kojo-xml-dialect.ts`
+   * （`carriers[].validates` ＋ 已解析的载体）与 `packages/plugins/ui-kojo-xml/src/kojo-xml-dialect.ts`
    * （XML 命令格里写别家载体的事件，`expected.glob` 说去处）。作者面这条**已启用**。
    * 事件名在目录里存在，但 `carriers[]` 声明它属于另一个载体——写在 ERB 里就落不到引擎的派发点。
    *

@@ -1,5 +1,5 @@
 /**
- * LAU-D3 · 口上 XML 的方言事件面（`kojo-xml-dialect.ts`）判据。
+ * LAU-D3 · 口上 XML 的方言事件面（`@kojo/plugin-ui-kojo-xml/kojo-xml-dialect`）判据。
  *
  * 钉五件事（与 §8 LAU-D3 的 DoD 逐条对应）：
  * 1. **`command` 有补全**：命令值候选来自 `KojoXmlSchema.commands`（adapter 交来的表）；
@@ -26,8 +26,8 @@ import {
   knownXmlCommandTokens,
   lintKojoXmlDialect,
   kojoXmlDialectProblems,
-} from '../src/monaco/kojo-xml-dialect';
-import { kojoXmlEventSitesOf } from '../src/monaco/kojo-xml-event-sites';
+} from '@kojo/plugin-ui-kojo-xml/kojo-xml-dialect';
+import { kojoXmlEventSitesOf } from '@kojo/plugin-ui-kojo-xml/kojo-xml-event-sites';
 import { xmlCommandValueCandidates } from '../src/monaco/kojo-xml-providers';
 
 /* ============================== 夹具与基座 ============================== */

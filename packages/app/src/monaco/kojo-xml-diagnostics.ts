@@ -22,7 +22,7 @@ import type * as Monaco from './entry';
 import type { KojoXmlSchema } from '@kojo/plugin-api';
 import type { DialectBinding, GameAdapter } from '@kojo/kojo-core';
 import { attrsOnLine, currentKojoXmlSchema } from './kojo-xml-providers';
-import { kojoXmlDialectProblems, lintKojoXmlDialect } from './kojo-xml-dialect';
+import { kojoXmlDialectProblems, lintKojoXmlDialect } from '@kojo/plugin-ui-kojo-xml/kojo-xml-dialect';
 
 export interface KojoXmlProblem {
   /** 1 基行 */
@@ -73,7 +73,8 @@ export function currentKojoXmlDialect(path: string, text: string): KojoXmlDialec
  * 方言事件面（LAU-D3）：整份文本 → 事件面问题（纯函数，**不抛**）。
  *
  * 与 {@link checkKojoXmlText} 合并进同一条 marker owner（`kojo-xml`）：波浪线不给方言面
- * 另开第二个 owner（`kojoXmlDialectProblems` 只做投影，判据在 `kojo-xml-dialect.ts`）。
+ * 另开第二个 owner（`kojoXmlDialectProblems` 只做投影，判据在
+ * `@kojo/plugin-ui-kojo-xml/kojo-xml-dialect`——B5b C 类第三车起宿主这层只剩装配与翻译）。
  * `dialect === null`（宿主没注入 / 未绑定）⇒ 零问题：不猜、也不回落到任何默认方言。
  */
 export function checkKojoXmlDialectProblems(
