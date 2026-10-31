@@ -78,6 +78,7 @@ import { provideCodeLenses } from './codelens';
 import { provideWorkspaceSymbols } from './workspace-symbols';
 import { provideCodeActions } from './code-actions';
 import { createKojo2DiagnosticsContribution } from './diagnostics';
+import { createKojo2InlineContribution } from './inline-completion';
 import { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
 
 /**
@@ -236,11 +237,18 @@ export function createKojoLangPlugin(): Plugin {
         order: CONTRIBUTION_ORDER,
         surface: KOJO2_MONACO_LANGUAGE_SURFACE,
       });
+      // LAU-KOJO2-INLINE（2026-10-31）：**行内续写（幽灵文本）**进**专用槽** `completion.source`
+      // （它不是 `ui.editor.languageService` 的判别成员——多供方、异步、可弃权三态与那十四条都不同形，
+      // 契约 `plugin-api/inline-completion.ts` 为它单开了一份文件）。判据仍住 `@kojo/kojo-lang`：
+      // 位置门与名录是弹窗补全那一枚 `kojo2CompletionAt`，本家只加"几乎唯一才给"。
+      // `order` 取 11（本地源一族：ERB 那家 10，外部模型源从 20 起步）。
+      ctx.slots.register('completion.source', createKojo2InlineContribution({ adapterFor }));
       ctx.log.info(
         `语言服务已接入：definition / documentSymbol / inlayHint / completion / hover / signatureHelp / formatting / references / rename / documentHighlight / selectionRange / codeLens / foldingRange / semanticToken（languageId=${KOJO2_LANGUAGE_ID}）；` +
           `语言面已交出：Monarch / 语言配置 / 三套主题（ui.monaco.language）；` +
           `一键迁移动作已交出：codeAction；` +
-          `文档级诊断已交出：ui.editor.decorator`,
+          `文档级诊断已交出：ui.editor.decorator；` +
+          `行内续写已交出：completion.source`,
       );
     },
   };

@@ -7,6 +7,7 @@ import type {
   InlineCompletionSourceContribution,
 } from '@kojo/plugin-api';
 import { registerForLanguageServices } from './register-dialects';
+import { declaresInlineCompletion, declaresInlineCompletionFor } from './language-registry';
 import {
   codeViewAt,
   cursorReasonBreaksTypingLeg,
@@ -22,15 +23,17 @@ import { lineAt } from './kojo-completion-position';
  * `completion.source` 上。契约（`plugin-api/inline-completion.ts`）只定义"供方说什么"，
  * 本模块定义"宿主怎么问、怎么落地、什么时候干脆不问"。
  *
- * ## 为什么注册走 `registerForLanguageServices`（且**不传** `kind`）
+ * ## 为什么注册走 `registerForLanguageServices`（`kind` 不给，声明位给）
  *
- * 「宿主侧能力对一等语言拉平」是契约，那 11 枚 provider 都从那一处收口。这一枚同理：
- * 只有 `languageServices: true` 的语言（ERB / `.kojo`）拿到幽灵文本——正是组长的裁决
- * 「默认 on，但只对声明了 `languageServices` 的一等语言生效」。
- * **刻意不传 `kind`**：`SlotServiceKind` 里没有 `inlineCompletion` 这一档，而 `kojo2` 的
- * descriptor 只点名了 `documentSymbol` / `inlayHint` / `definition` 三条腿。要挂它得先改
- * 语言注册表的枚举 + descriptor 声明（那是"谁为 2.0 供候选"的前置事实，目前无人供），
- * 不是在这里顺手铺满——那 11 枚的教训就写在 `register-dialects.ts` 的头注里。
+ * 「宿主侧能力对一等语言拉平」是契约，那 11 枚 provider 都从那一处收口。这一枚同理，
+ * 但它比那 11 枚多一条腿：**只点名槽腿的方言也要能进门**。于是收口吃一枚谓词
+ * `alsoFor: declaresInlineCompletion`（读 descriptor 的 `inlineCompletion` 声明位），
+ * 挂载名单由「旧桥语言（ERB / `.kojo`，作者裁决的"默认 on"那一族）∪ 点名了这一格的语言
+ * （今天 = `.kojo2`）」并出来，宿主一处语言 id 都不写（M2）。
+ * `kind` 仍**不给**：`SlotServiceKind` 那十四条对应的是 `ui.editor.languageService` 的判别成员，
+ * 而行内续写的应答者住在**另一枚专用槽**（`completion.source`）、Monaco 面也是另一枚
+ * （`registerInlineCompletionsProvider`）——照 `codeAction` 的先例它不进那本台账，
+ * 判据也不进 `capabilities`（与 `contextFaces` / `lineComment` 同口径：descriptor 上的一格声明）。
  *
  * ## 为什么宿主侧**不**用名字位探针（闸门 ⑩ 的对面是契约的弃权）
  *
@@ -42,6 +45,10 @@ import { lineAt } from './kojo-completion-position';
  * 代码位门（{@link codeViewAt}：`.kojo` 的台词 / 旁白 / 注释、ERB 的串 / 注释），⑩ 那一副留给
  * 弹窗自己（单一真源在 `suggest-context-trigger.ts`，"同一判据只许定义一次"由
  * `tests/inline-completion-single-source.test.ts` 按源码文本钉住）。
+ * 点名了 `inlineCompletion` 的语言**不问 `codeViewAt`**：它的代码位判据住在**语言包**里
+ * （2.0 是 `@kojo/kojo-lang/completion` 的 `kojo2CompletionAt` 那一族退让：台词 / 旁白 /
+ * 注释 / 串 / `@原生`），由供方在出货前自己判；宿主再问一份就是第二把尺子，而那把尺子
+ * 本来就够不着包里的判据（判据进宿主 = 插件只能复制一份去应答，B3c 的教训）。
  *
  * ## 三态与"第一家说了算"
  *
@@ -620,8 +627,12 @@ export function installInlineCompletion(
 
   const subs: Monaco.IDisposable[] = [];
   subs.push(
-    registerForLanguageServices(monaco, (m, languageId) =>
-      m.languages.registerInlineCompletionsProvider(languageId, provider),
+    registerForLanguageServices(
+      monaco,
+      (m, languageId) => m.languages.registerInlineCompletionsProvider(languageId, provider),
+      undefined,
+      // 旧桥语言之外，descriptor 点名了 `inlineCompletion` 的方言也挂上（今天 = `.kojo2`）。
+      { alsoFor: declaresInlineCompletion },
     ),
   );
   subs.push(installTypingLegs(monaco));
@@ -822,8 +833,15 @@ async function provideForModel(
   const typed = typedCharAt(model, version);
   const explicit = context?.triggerKind === explicitKind;
   if (!explicit && typed === null) return skip('not-just-typed');
-  // ⑧⑨ 的语言侧代码位门：只读 / 预览已由上面挡掉，这里挡台词 / 旁白 / 注释 / 字符串
-  if (!codeViewAt(languageId, lineText, column)) return skip('non-code-position');
+  // ⑧⑨ 的语言侧代码位门：只读 / 预览已由上面挡掉，这里挡台词 / 旁白 / 注释 / 字符串。
+  // 点名了 `inlineCompletion` 的语言不问这一枚——它的代码位判据住在语言包里、由供方出货前
+  // 自己判（见文件头那一节）；ERB / `.kojo` 这条腿逐字不变。
+  if (
+    !declaresInlineCompletionFor(languageId) &&
+    !codeViewAt(languageId, lineText, column)
+  ) {
+    return skip('non-code-position');
+  }
 
   const controller = new AbortController();
   if (typeof token?.onCancellationRequested === 'function') {

@@ -260,6 +260,12 @@ const KOJO2_DESCRIPTOR: LanguageDescriptor = {
   // ERB-PARITY G6：`.kojo` / `.kojo2` 也是作者源文件 ⇒ 游戏目录里默认只读
   // （门在 `monaco/language-guard.ts`；JSON / 口上 XML 这类数据格式面不声明）。
   gameDirReadOnly: true,
+  // LAU-KOJO2-INLINE（2026-10-31）：**行内续写（幽灵文本）进门**。供方 = 插件
+  // `@kojo/plugin-kojo-lang` 在专用槽 `completion.source` 注册的 `kojo2-near-unique`
+  // （判据住 `@kojo/kojo-lang/completion` 的 `kojo2InlineCompletionAt`，与弹窗同一把尺子）；
+  // 这一格只回答"这门语言该不该挂 Monaco 的那枚 provider"，宿主因此不必按 id 分支。
+  // ERB / `.kojo` 不写这格：它们走 `languageServices: true` 的旧桥拉平（既有行为逐字不变）。
+  inlineCompletion: true,
 };
 
 registerLanguage(ERB_DESCRIPTOR);
