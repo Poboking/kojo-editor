@@ -1966,8 +1966,8 @@ C2 与 A3 可以在 C1 契约冻结后并行；P5 依赖 C1/C2；E4 依赖 A3；
 
 | V1 写法 | 2.0 形态 | 现有实现（复用点） | 复用方式 |
 |---|---|---|---|
-| 裸台词 `「…」` / 裸旁白 | `角色：「…」` / `>` | `codegen.ts::emitTextLine` / `printLine` / `detectSpeechOf` | 只换行首分类；PRINT 变体、插值、转义复用 |
-| `心形` / `心形：` | 行尾 `(心形)` | `codegen.ts::heartCall` / `heartCallAnchored` / `emitHeartBlock` | HPH 模式字母与块体发射复用；**字面量编码必须先修**（见 K2-PRE-REUSE） |
+| 裸台词 `「…」` / 裸旁白 | `角色：「…」` / `>` | `codegen.ts::emitTextLine` / `printLine`、`@kojo/kojo-vocab/lexer.ts::detectSpeechOf`（经 `kojo-sugar/src/lexer.ts` 兼容壳再导出） | 只换行首分类；PRINT 变体、插值、转义复用 |
+| `心形` / `心形：` | 行尾 `(心形)` | `codegen.ts::heartCall` / `emitHeartBlock` | HPH 模式字母与块体发射复用；字面量编码已收口到 `literal.ts::erbStringLiteral`（K2-PRE-REUSE ① 已落 `bd6354b2`） |
 | `着色 0xFF8080：` | `@着色 0xFF8080` | `codegen.ts::emitColorBlock` | SETCOLOR/RESETCOLOR 配对与环境色恢复复用 |
 | `随机：` / `组：` / 行内 `随机` | `@随机` / `@组` | `codegen.ts::emitRandomBlock` / `emitRandomInline` / `slotName` | RAND+SELECTCASE、LOCAL 槽、等概率复用 |
 | `数据表：`（PRINTDATA 随机数据表） | `@随机` 的纯文本候选 | `parser.ts` 的 `DataBlock`、`codegen.ts::emitDataBlock` / `emitRandomBlock` | PRINTDATA/DATAFORM 数据体发射复用；不映射为 `# 池` |
@@ -1988,7 +1988,7 @@ C2 与 A3 可以在 C1 契约冻结后并行；P5 依赖 C1/C2；E4 依赖 A3；
 | 旧成果 | 复用方式 |
 |---|---|
 | `fixtures/sugar/release-check.kojo` / `release-check.expected.erb` | 作为迁移输入与行为 differential；不作 2.0 golden 基线 |
-| `packages/plugins/kojo-sugar/tests/*`（lexer/parser/codegen/rule-pool/native-display） | 保留为共享后端回归；2.0 前端另建自己的快照 |
+| `packages/plugins/kojo-sugar/tests/*`（parser/codegen/rule-pool/native-display；词法真源已迁 `@kojo/kojo-vocab/lexer`，其回归随本目录跑） | 保留为共享后端回归；2.0 前端另建自己的快照 |
 | `eratw-adapter/src/face-templates.ts` 37 面、`library-table.ts` 基础库名表 | 直接作为 adapter 数据源；不重抄 |
 | `docs/SYNTAX-SUGAR-SURFACE-SPEC.md` 的关键字/模板表 | 作为迁移与 adapter 数据的核对源；不作 2.0 语法正典 |
 

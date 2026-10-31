@@ -16,8 +16,6 @@
 |PERF-R7C|冷开 `read+parse` 段的 decode+EOL：**已量清是约 1.0s（19%），不是 2.35s（43%）**——旧分项用 `readFileSync`+`Promise.all` 量的，同步 API 放进 Promise.all 只是排队（PITFALLS 301）|裁决：**不做**。理论收益 `index_ms` −10%，代价是 io 交字节 + 解析腿/引用腿各自解码 + 文本缓存换形态（跨 5 插件）。要重启得先答一句：为 10% 换 5 个插件的契约值不值|已量清 · 裁决不做 · R7C 2026-10-31|
 |MK-PUB|市场发布：zip → Worker 校验 → R2 `pending/` → 自动开 PR（merge=放行）；客户端意图/进度 + Rust 命令 + 主机闸|全链 curl 可验证 + 全量不回退 + 双 typecheck + audit + cargo；不动 `MARKET_DEFAULT_INDEX_URL` 与 ADR-0007|进行中 · 认领：claude 2026-10-16|
 |ERB-PARITY|ERB 一等语言：注册/服务/树叠层/能力矩阵不得只给 Kojo；审计 G1–G9 **已全修**（G2＝第七波：排版整篇+区间两腿进槽、契约 `options`、降级接 FMT-TOAST 台账），G5 裁决豁免|同 descriptor/registry/engine；ERB 直写不依赖 `.kojo`；一个 kind 只一枚 provider（双挂收敛见 LAU-DUALLEG）|进行中 · 认领：lead 2026-10-31（G1–G9 收口，转入 DUALLEG）|
-|K2-CORE-PKG|`packages/kojo-core` 布局与 audit 放行（非插件库，B/C 不拦）；§15.2 复用清单核对|audit A–D ✅；单文件转译纯函数|进行中 · 认领：lead 2026-10-21|
-|K2-PRE-REUSE|旧后端复用面余项：①心形字面量编码器 ④诊断列折回物理行（与 POS-UTIL 合流）；②③⑤ 已落 dev|每条红→绿用例；只修复用面|进行中 · 认领：qoder 2026-11-01|
 |K2-RELEASE|R9 发布闸：core/eraTW/program/UI gate + STATE/BOARD 落账 + 双 typecheck/audit + 真机验收|eraTW 完整体验；反向回滚可用|待认领|
 |K2-CORPUS-SOURCE|语料机无输入：eraTW 4.980 基线盘 `.kojo` 0 份；须 `KOJO_CORPUS_DIR` 指向含 v1 作者源工程或迁移快照盘，重生成 golden|发现 ≥1 份 `.kojo` 且状态/原因分类可读|可控夹具已接通（`fixtures/corpus-v1`：4 份 `.kojo1`，1 normalized-equal + 3 migration-unsupported 分类可读）· **余真实作者语料**（本机 0 份）· qoder 2026-11-01|
 |LAU-BLOCKED|LAU-1/D2/6/D3/2/5 已交付；LAU-4 各腿 + SDK B4/B5、B5b 车 1–6 + C 类两车 + **第七波（G2 排版进槽）**已落|LAU-D4 车 ① 已落、车 ② 未开工，**方案已定**＝两车（① 方言包骨架 + 声明数据：eraTW 补 `carriers`、`new-dialect` 产物过形态闸、`packages/app` 零改动——✅ 2026-10-31 交付，回执见分支提交信息；② 表层↔原生双向映射表：纯数据只住方言包、core 一份 additive 读表函数、错配必红），backend 不动（吃 backend 的第三档与 D2/D3 重叠，判不派）；LAU-5 余 kojo2 worker 不进池|车② 待派 · 认领：lead10 2026-10-31（车①）|
