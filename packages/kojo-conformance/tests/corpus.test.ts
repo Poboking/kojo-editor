@@ -10,6 +10,9 @@
  * 4. **抽样 manifest**：≤60、等距稳定、sha256/bytes 真值、`.v1.kojo.txt` 字节保真、meta 字段克制、
  *    落点不越界（注入 IO 端口逐条看写入路径），合成语料 manifest 一字不动；
  * 5. **真语料**：`node tools/corpus.mjs --print` rc=0 才真跑并读现状；rc≠0 ⇒ SKIP 并写明。
+ * 6. **可控语料夹具**（K2-CORPUS-SOURCE）：`fixtures/corpus-v1/`（scaffold 样本补 `角色:` 头 +
+ *    mini-game 的 `ERB/`/`CSV/`）在本机无作者工程时仍证明「发现 ≥1 份 v1 源 + 状态/原因分类可读」，
+ *    且同一口径下 0 份仍是 rc=1。它是**可控输入**，不是作者语料读数。
  *
  * 假编译器 + 内存 IO：本文件的主体不碰真盘、不碰真 core（真链路那一段只在语料在位时走）。
  * 真 sha256（`node:crypto`）注入，抽样凭据按真字节算。
@@ -653,56 +656,70 @@ const realIo: CorpusIo = {
   },
 };
 
+/**
+ * 真链路（v1 真转译 / 迁移语义层 / 2.0 真 core + 真 eraTW backend）——按需加载。
+ *
+ * 真实语料（`PROBE_ROOT`，缺席即跳过）与仓内可控夹具（`fixtures/corpus-v1`）共用同一套注入：
+ * 两种语料读数可比，只有"语料来源"不同。
+ */
+async function realChain(): Promise<{
+  readonly compileV1: (text: string) => MigrationCompilerOutput;
+  readonly compile2: (text: string) => MigrationCompilerOutput;
+  readonly migrate: (text: string) => { ok: boolean; code: string; unsupported: { line: number; construct: string; code?: string }[] };
+}> {
+  const [core, sugar, support, eratw] = await Promise.all([
+    import('../../kojo-core/src/index.js'),
+    import('../../plugins/kojo-sugar/src/service.js'),
+    import('../../plugins/kojo-sugar/tests/support.js'),
+    import('../../plugins/eratw-adapter/src/kojo2/index.js'),
+  ]);
+  const sugarService = sugar.createSugarTranspileService({ dictionary: support.stubDict, faceTable: support.stubFaceTable() });
+  const backend = eratw.createEratwEmitBackend({ compileExpression: (expr) => expr.text, charNo: '12' });
+  const adapter = {
+    ...eratw.ERATW_GAME_ADAPTER,
+    profile: { ...eratw.ERATW_GAME_ADAPTER.profile, narrationColor: 'default' as const },
+  };
+  const compileV1 = (text: string): MigrationCompilerOutput => {
+    const result = sugarService.transpile(text);
+    return {
+      ok: result.diagnostics.every((diagnostic) => diagnostic.severity !== 'error'),
+      text: result.erb,
+      diagnostics: result.diagnostics.map((diagnostic) => ({
+        code: diagnostic.code,
+        severity: diagnostic.severity,
+        message: diagnostic.message,
+      })),
+    };
+  };
+  const compile2 = (text: string): MigrationCompilerOutput => {
+    const result = core.compileKojoSource({ source: text, adapter, backend });
+    return {
+      ok: result.ok,
+      text: result.erb,
+      diagnostics: result.diagnostics.map((diagnostic) => ({
+        code: diagnostic.code,
+        severity: diagnostic.severity,
+        message: diagnostic.message,
+      })),
+    };
+  };
+  const migrate = (text: string) => {
+    const result = core.migrateKojoSourceSemantic(text, {
+      eventNames: eratw.ERATW_EVENT_NAMES,
+      eventArgs: core.projectEventArgs(eratw.ERATW_EVENT_CATALOG),
+    });
+    return {
+      ok: result.ok,
+      code: result.code,
+      unsupported: result.unsupported.map((entry) => ({ line: entry.line, construct: entry.construct, code: entry.code })),
+    };
+  };
+  return { compileV1, compile2, migrate };
+}
+
 describe('真实语料：`node tools/corpus.mjs --print` rc=0 才真跑', () => {
   it.skipIf(!CORPUS_PRESENT)('语料在位：真跑发现 + 迁移读数（0 份 `.kojo` 如实记缺口，不当绿）', async () => {
-    // 真链路按需加载：语料缺席时整段不进这个用例（跳过分支零成本）
-    const [core, sugar, support, eratw] = await Promise.all([
-      import('../../kojo-core/src/index.js'),
-      import('../../plugins/kojo-sugar/src/service.js'),
-      import('../../plugins/kojo-sugar/tests/support.js'),
-      import('../../plugins/eratw-adapter/src/kojo2/index.js'),
-    ]);
-    const sugarService = sugar.createSugarTranspileService({ dictionary: support.stubDict, faceTable: support.stubFaceTable() });
-    const backend = eratw.createEratwEmitBackend({ compileExpression: (expr) => expr.text, charNo: '12' });
-    const adapter = {
-      ...eratw.ERATW_GAME_ADAPTER,
-      profile: { ...eratw.ERATW_GAME_ADAPTER.profile, narrationColor: 'default' as const },
-    };
-    const compileV1Real = (text: string): MigrationCompilerOutput => {
-      const result = sugarService.transpile(text);
-      return {
-        ok: result.diagnostics.every((diagnostic) => diagnostic.severity !== 'error'),
-        text: result.erb,
-        diagnostics: result.diagnostics.map((diagnostic) => ({
-          code: diagnostic.code,
-          severity: diagnostic.severity,
-          message: diagnostic.message,
-        })),
-      };
-    };
-    const compile2Real = (text: string): MigrationCompilerOutput => {
-      const result = core.compileKojoSource({ source: text, adapter, backend });
-      return {
-        ok: result.ok,
-        text: result.erb,
-        diagnostics: result.diagnostics.map((diagnostic) => ({
-          code: diagnostic.code,
-          severity: diagnostic.severity,
-          message: diagnostic.message,
-        })),
-      };
-    };
-    const migrateReal = (text: string) => {
-      const result = core.migrateKojoSourceSemantic(text, {
-        eventNames: eratw.ERATW_EVENT_NAMES,
-        eventArgs: core.projectEventArgs(eratw.ERATW_EVENT_CATALOG),
-      });
-      return {
-        ok: result.ok,
-        code: result.code,
-        unsupported: result.unsupported.map((entry) => ({ line: entry.line, construct: entry.construct, code: entry.code })),
-      };
-    };
+    const { compileV1: compileV1Real, compile2: compile2Real, migrate: migrateReal } = await realChain();
 
     const discovery = discoverCorpus(PROBE_ROOT, { io: realIo, limit: 3 });
     if (discovery.total === 0) {
@@ -763,4 +780,104 @@ describe('真实语料：`node tools/corpus.mjs --print` rc=0 才真跑', () => 
     },
     240_000,
   );
+});
+
+/* ============================== 6. 仓内可控语料（K2-CORPUS-SOURCE） ============================== */
+
+/**
+ * 本机**没有**作者工程可指：2026-11-01 递归扫 `D:/Game` 八盘 + `D:/DSH` 五个 clone，
+ * `.kojo`/`.kojo1` 均为 0 份（详见提交回执）。所以这里钉的是**仓内可控夹具**，
+ * 读数只证明"语料机有输入、分类可读"，**不是**真实作者语料的读数：
+ *
+ * `fixtures/corpus-v1/` = `ERB/` + `CSV/`（`tools/corpus.mjs` 的内容条件）
+ * + 4 份 `.kojo1`：`fixtures/scaffold/*.kojo1` **逐字节**复制，只在首行补 `角色: 12`
+ * （脚手架是片段、没有文件头声明；补角色号与合成迁移语料的 `completion.prependChara` 同口径）。
+ *
+ * 四条判据：①解析链认这个夹具（`KOJO_CORPUS_DIR` 内容条件 + 只读）；②发现 ≥1 份 v1 源；
+ * ③状态/原因分类可读（1 份 normalized-equal + 3 份 migration-unsupported，各带面词证据）；
+ * ④同一套口径下 0 份仍是 rc=1（`fixtures/mini-game/` 有 ERB/+CSV/、没有 `.kojo1`）。
+ */
+const FIXTURE_ROOT = path.join(REPO, 'fixtures', 'corpus-v1');
+const FIXTURE_SOURCES = path.join(FIXTURE_ROOT, 'ERB', '口上・メッセージ関連', '作者口上');
+const MINI_GAME = path.join(REPO, 'fixtures', 'mini-game');
+const SCAFFOLD_STEMS = ['事件', '刻印取得', '性骚扰指令', '日常指令'] as const;
+
+/** 换行归一：夹具内容判据不随 checkout 的 autocrlf 变红（EOL 事实由读数里的 `eol` 记） */
+const lf = (text: string): string => text.replaceAll('\r\n', '\n');
+
+describe('仓内可控语料 fixtures/corpus-v1：发现 v1 源 + 状态/原因可读（不是作者语料）', () => {
+  it('夹具 = `fixtures/scaffold/*.kojo1` 逐字节 + 首行 `角色: 12`（可溯源，不偷偷改内容）', () => {
+    for (const stem of SCAFFOLD_STEMS) {
+      const source = readFileSync(path.join(FIXTURE_SOURCES, `${stem}.kojo1`), 'utf8');
+      const scaffold = readFileSync(path.join(REPO, 'fixtures', 'scaffold', `${stem}.kojo1`), 'utf8');
+      expect(lf(source), `${stem}.kojo1 与 scaffold 样本漂移`).toBe(`角色: 12\n${lf(scaffold)}`);
+    }
+  });
+
+  it('`KOJO_CORPUS_DIR` 解析链认这个夹具（内容条件过、rc=0、回显同一目录）', () => {
+    const env: NodeJS.ProcessEnv = { ...process.env, KOJO_CORPUS_DIR: FIXTURE_ROOT };
+    delete env['KOJO_CORPUS_SCAN_DIRS'];
+    const spawned = spawnSync(process.execPath, [path.join(REPO, 'tools', 'corpus.mjs'), '--print'], {
+      encoding: 'utf8',
+      env,
+      timeout: 30_000,
+    });
+    expect(spawned.status, spawned.stderr).toBe(0);
+    const same = (value: string): string => value.trim().replaceAll('\\', '/').toLowerCase();
+    expect(same(spawned.stdout)).toBe(same(FIXTURE_ROOT));
+  });
+
+  it('发现 4 份 `.kojo1`；真链路读数：1 份 normalized-equal + 3 份 migration-unsupported（原因带面词）', async () => {
+    const discovery = discoverCorpus(FIXTURE_ROOT, { io: realIo });
+    expect(discovery.total).toBe(4);
+    expect(discovery.selected).toHaveLength(4);
+    for (const id of discovery.selected) {
+      expect(id.startsWith('ERB/'), id).toBe(true);
+      expect(id.endsWith('.kojo1'), id).toBe(true);
+    }
+
+    const chain = await realChain();
+    const result = runCorpusMigration({
+      root: FIXTURE_ROOT,
+      discovery,
+      io: realIo,
+      sha256,
+      ...chain,
+      json: true,
+    });
+
+    // 逐份身份读数按真字节（bytes / sha256 是现算的，不是抄来的常量）
+    for (const item of result.cases) {
+      const bytes = new Uint8Array(readFileSync(path.join(FIXTURE_ROOT, item.id)));
+      expect(item.bytes, item.id).toBe(bytes.byteLength);
+      expect(item.sha256, item.id).toBe(sha256(bytes));
+    }
+
+    expect(result.ok).toBe(true);
+    expect(result.problems).toHaveLength(0);
+    expect(result.summary).toMatchObject({ cases: 4, identical: 0, normalizedEqual: 1, differs: 0, blocked: 3 });
+    expect(result.summary.blockedByReason).toEqual([{ reason: 'migration-unsupported', cases: 3 }]);
+    expect(result.rate).toMatchObject({ total: 4, migratable: 1, unmigratable: 3, rate: 0.25 });
+
+    const migratable = result.cases.filter((item) => item.readings.migration.ok);
+    expect(migratable.map((item) => item.id)).toEqual(['ERB/口上・メッセージ関連/作者口上/性骚扰指令.kojo1']);
+    expect(migratable[0]?.status).toBe('normalized-equal');
+    expect(migratable[0]?.reason).toBeNull();
+
+    // blocked 的原因分类可读：原因 ∈ 语料机词表，且逐份能指到具体写法
+    const reasonsSeen = new Set(result.cases.filter((item) => item.status === 'blocked').map((item) => item.reason));
+    expect([...reasonsSeen]).toEqual(['migration-unsupported']);
+    const causes = new Map(result.cases.map((item) => [path.basename(item.id), item.readings.migration.unsupportedConstructs.join('|')]));
+    expect(causes.get('事件.kojo1')).toContain('「事件」');
+    expect(causes.get('刻印取得.kojo1')).toContain('「标记」');
+    expect(causes.get('日常指令.kojo1')).toContain('「日常」');
+  });
+
+  it('同口径下 0 份仍是 rc=1（mini-game 有 ERB/+CSV/、无 `.kojo1`）', () => {
+    const result = run(['corpus', '--dir', MINI_GAME], realIo);
+    expect(result.exitCode).toBe(1);
+    expect(result.report.verdict).toBe('fail');
+    expect(result.report.discovery?.total).toBe(0);
+    expect(result.text).toContain('RESULT: FAIL');
+  });
 });
