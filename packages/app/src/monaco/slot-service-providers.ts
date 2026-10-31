@@ -52,10 +52,16 @@
  *
  * ## 宿主事实的注入面（{@link SlotServiceHost}）
  *
- * 只有三格，且都**不是语言判据**：`filePathOf`（model 归属实例的磁盘路径——宿主知道哪个
- * EditorPane 持有它，插件不知道）、`projectIndex`（项目文件快照的现取口，只有宿主持有）、
- * `uriForPath`（跨文件落点的 URI 造法）。生产装配点全给；不传 = 各腿退回自己的缺省
- * （`model.uri` / 无快照 / `monaco.Uri.file`），行为与搬家前"没给注入面"逐字相同。
+ * 注入面逐批 additive 长出（`filePathOf` / `projectIndex` / `uriForPath` / `completionFacts` /
+ * `codeLensProjectIndex` / `snapshotLimits` / `applyCodeActionEdits` / `codeActionSlot` /
+ * `formatRules` / `onFormatDegraded` / `landReferences`），**没有一格是语言判据**：它们答的都是
+ * "这份 model 是哪个文件 / 这个项目有哪些文件 / 跨文件落点怎么造 URI 与怎么落地 / 偏好开没开"，
+ * 只有宿主知道，插件与工厂都不许猜。生产装配点全给；不传 = 各腿退回自己的缺省
+ * （`model.uri` / 无快照 / `monaco.Uri.file` / 本层自己翻形状），行为与搬家前"没给注入面"逐字相同。
+ *
+ * `landReferences`（LAU-DUALLEG 车 3）单说一句：它是**引用落点通道**，存在的目的就是把"答数据"
+ * 与"把数据变成可点开的行"分开——分开之后点名 `references` 的语言才敢让宿主旧桥腿退场
+ * （否则让位 = 已关文件点不开 + F12 处数读数失踪）。
  *
  * 快照只在**显式动作**（Shift+F12 / F2）里取：行上注解是每次停笔重算整篇的那一格，装配点
  * 不给它 `projectIndex`，本层也不替它开（理由与实测口径见文件尾「行上注解」段）。
@@ -461,6 +467,23 @@ export interface SlotServiceHost {
    * 形状与 `kojo-format-range.ts` 的 `onDegraded` 同款（同一词表、同一台账），文案一个字都不住本层。
    */
   readonly onFormatDegraded?: (notice: FormatDegradationNotice) => void;
+  /**
+   * 引用腿的**落点通道**（LAU-DUALLEG 车 3，additive；缺省不给 = 本腿自己翻形状，逐字不变）。
+   *
+   * 存在的理由是把两件事分开：槽供方只答"哪些位置引用了这个名字"，而"一枚位置怎么变成
+   * 屏幕上可点开、可预览、行号真实的一行"是宿主事实——哪份 model 是某实例的糖投影、哪些标签
+   * 开着（夹取要问 model）、没打开的文件点了开谁（URI 反查表）、F12 的计数读数交给哪一格。
+   * 装配点把 {@link ../monaco/find-references.ts} 的 `createReferenceLanding` 交进来，
+   * 于是宿主旧桥腿与这一枚槽腿**共用同一份落点判据**，`references` 这一格在点名它的语言上
+   * 才能只挂一枚 provider（宿主腿让位而不丢「已关文件点开」与「处数台账」）。
+   *
+   * 与 `applyCodeActionEdits` / `formatRules` 同一性质：宿主事实，不是语言判据；本层不认识
+   * 任何语言 id，也不在这里数第二遍引用（台账单源在落点通道那一侧）。
+   */
+  readonly landReferences?: (
+    model: Monaco.editor.ITextModel,
+    locations: readonly EditorSymbolLocation[],
+  ) => Monaco.languages.Location[];
 }
 
 /* ============================== 共享小工具（宿主事实，不是判据） ============================== */
@@ -1117,15 +1140,25 @@ function referencesProvider(
         if (result === undefined) return [];
 
         const includeDeclaration = context?.includeDeclaration !== false;
-        const locations: Monaco.languages.Location[] = [];
-        for (const location of result.locations) {
-          if (!includeDeclaration && location.kind === 'definition') continue;
-          const sameFile = path === undefined || location.filePath === path || location.filePath === '';
-          const uri = sameFile
-            ? modelUri
-            : (uriForProjectPath(monaco, location.filePath, host.uriForPath) ?? modelUri);
-          locations.push({ uri, range: rangeOfLocation(location) });
-        }
+        // 「不含声明位」是 Monaco 的语义，不是供方的 ⇒ 在交落点通道**之前**滤（通道只管
+        // "一枚位置怎么落地"，它不该知道谁问的是引用还是定义位）。
+        const delivered = includeDeclaration
+          ? result.locations
+          : result.locations.filter((location) => location.kind !== 'definition');
+        // 落点通道（`SlotServiceHost.landReferences`）给了就只交数据：投影折回、已开标签的
+        // live model 与行列夹取、未开文件的点击反查、台账读数全在宿主那一侧（同一枚通道也服务
+        // 旧桥腿，所以点名这一格的语言让位时一格都不丢）。不给 = 本层自己翻形状，逐字不变。
+        const locations =
+          host.landReferences !== undefined
+            ? host.landReferences(model, delivered)
+            : delivered.map((location) => {
+                const sameFile =
+                  path === undefined || location.filePath === path || location.filePath === '';
+                const uri = sameFile
+                  ? modelUri
+                  : (uriForProjectPath(monaco, location.filePath, host.uriForPath) ?? modelUri);
+                return { uri, range: rangeOfLocation(location) };
+              });
         if (result.truncated === true) {
           console.warn(
             `[slot-service-providers] 引用集合被截断（${locations.length} 条已显示）：项目快照或单次上限先到`,

@@ -8,7 +8,7 @@ import type {
 import { registerForLanguageServices } from './register-dialects';
 import { clampRevealPosition, revealSpanOf } from './reveal-position';
 import { normalizePathKey } from './kojo-hover';
-import { sugarOwningPaneOf, sugarPreviewLineOf, type PaneCtx } from '../ui/editor-pane-registry';
+import { owningPaneOf, sugarOwningPaneOf, sugarPreviewLineOf, type PaneCtx } from '../ui/editor-pane-registry';
 import {
   explainReferenceCounts,
   isMoreSpecificKind,
@@ -34,6 +34,24 @@ import {
  * `erbReferencesAt`）。本模块只剩请求构造（`readReferences`）+ 契约 → Monaco 形状 +
  * 注册；投影面折回、未打开文件 opener、台账读数照旧住这里（它们是**宿主事实**：哪份
  * model 是投影、哪些标签是开着的），供方够不着。
+ *
+ * ## LAU-DUALLEG 车 3（2026-10-31）：落点通道与 provider **分离**
+ *
+ * 收口之前这一格是**双挂**的：共享槽腿（`slot-service-providers.ts` 的 `references` 那一格）
+ * 按旧桥把一枚 provider 铺在 ERB 上，本模块的宿主腿也铺一枚 ⇒ 同一次 Shift+F12 问两趟供方，
+ * 同一枚引用点还可能以两种行形状进 Peek 树（宿主夹取过 / 槽腿原样），"谁在答"由 Monaco 的
+ * 注册顺序裁决。要收的不是"把宿主腿整条搬进插件"，而是先把四格**宿主事实**分离成一枚通道
+ * （{@link createReferenceLanding}）：① 屏幕上这份 model 是不是某实例的糖投影、投影行怎么折回；
+ * ② 已开标签那份 live model 的 URI 与行列夹取；③ **未打开的文件点了要开得先记住这枚 URI 是
+ * 谁发出去的**（`knownPaths` LRU + 一枚 opener）；④ 台账读数交给哪一格。
+ * 这枚通道**不再以第二枚 `registerReferenceProvider` 的形式存在**：宿主腿用它翻形状，槽腿经
+ * `SlotServiceHost.landReferences` 用同一枚翻形状。于是 ERB 的 descriptor 点名 `references`
+ * 之后，宿主腿按 `excludeNamed` 让位、这一格在 ERB 上恰好一枚 provider，而「已关文件点开」与
+ * 「处数读数」两格不因让位而丢（缺哪一格都会立刻红在 `find-references.test.ts` 的落点组）。
+ *
+ * kojo1 仍留在宿主腿上（它不点名这一格）：它的取数要先问投影面背后那份原文
+ * （`ui/editor-global-providers.ts` 的 `readReferences`）——投影不是文件，拿它的 URI 去问谁
+ * 都是猜；那一格槽腿没有，也不该有。反面钉在 `language-parity.test.ts` 的 DUALLEG 组。
  *
  * ## 三条腿（与 D4 转到定义同构，取证自 monaco 0.57 源码）
  *
@@ -178,10 +196,15 @@ export function collectReferenceLocations(
   return [...collectReferenceReport(contributions, request).locations];
 }
 
-/** 宿主注入：怎么问（含糖视图判据）、怎么落地、哪些文件已经开着 */
-export interface ReferenceHandlers {
-  /** 位置 → 引用点全集（宿主在此查槽；空数组 = 此处没有可证明的引用） */
-  resolve(model: Monaco.editor.ITextModel, position: Monaco.Position): readonly ReferenceLocation[];
+/**
+ * 落点通道要的宿主注入（**一条引用判据都没有**：怎么落地、哪些文件开着、计数读数交去哪一格）。
+ *
+ * `onTally` 的第三参 `path` = 这批读数是谁家的：屏幕上这份 model 归属实例的**存档路径**
+ * （投影面上也是那一份——投影不是文件，拿它的 URI 去对文件就是猜）。以前这一格由装配点
+ * 一枚 `let` 变量随 `resolve` 记着，宿主腿与槽腿共用一枚通道之后必须现算，否则槽腿那一次
+ * 请求会把**上一次**的路径盖在读数上（面板据此报的就是谎）。
+ */
+export interface ReferenceLandingHandlers {
   /** 落地一次跳转（未打开文件那条腿的落点；与转到定义同一条 `editor.revealLocation`，W9 起带区间） */
   navigate(location: ReferenceLocation): void;
   /** 文件路径 → 已打开标签的 live model（查不到 = 未打开） */
@@ -191,7 +214,28 @@ export interface ReferenceHandlers {
    * 从此读**同一份** `ReferenceTally`，宿主把它接到状态栏 / 面板头即可，
    * 差值由 `explainReferenceCounts` 一句话讲清。缺席 = 只出列表不出读数（旧行为）。
    */
-  onTally?(tally: ReferenceTally, explanation: string): void;
+  onTally?(tally: ReferenceTally, explanation: string, path: string): void;
+}
+
+/** 宿主注入：落点三格（见 {@link ReferenceLandingHandlers}）+ 怎么问（含糖视图判据） */
+export interface ReferenceHandlers extends ReferenceLandingHandlers {
+  /** 位置 → 引用点全集（宿主在此查槽；空数组 = 此处没有可证明的引用） */
+  resolve(model: Monaco.editor.ITextModel, position: Monaco.Position): readonly ReferenceLocation[];
+  /**
+   * 共用的落点通道（additive，LAU-DUALLEG 车 3）：装配点把同一枚通道同时交给宿主腿与槽腿
+   * （`SlotServiceHost.landReferences`），于是全局只有一张 `knownPaths` 反查表、一枚 opener。
+   * 不给 = 本安装器自建一枚（与分离前逐字相同，单测按这一路走）。
+   */
+  landing?: ReferenceLanding;
+}
+
+/** 一枚装配产出的落点通道：翻译 + 未打开文件的点击通道共用同一张反查表 */
+export interface ReferenceLanding extends Monaco.IDisposable {
+  /** 引用点 → Peek 的行：投影面折回、已开标签夹取、未开文件登记，并顺手报出台账读数 */
+  land(
+    model: Monaco.editor.ITextModel,
+    locations: readonly ReferenceLocation[],
+  ): Monaco.languages.Location[];
 }
 
 /** 本模块 opener 反查表容量上限（LRU；见 `rememberPath`） */
@@ -211,6 +255,17 @@ interface ProjectionSurface {
 function projectionSurfaceOf(model: Monaco.editor.ITextModel): ProjectionSurface | null {
   const ctx = sugarOwningPaneOf(model);
   return ctx === null ? null : { ctx, path: ctx.filePathRef.current };
+}
+
+/**
+ * 这批引用读数是谁家的 = 屏幕上这份 model 归属实例的**存档路径**（投影面上取投影主人那一份，
+ * 与 `ui/editor-global-providers.ts` 的 `readTargetOf` 同一条判据：投影不是文件，拿它的 URI
+ * 去对文件就是猜）。两侧（宿主腿 / 槽腿）共用一枚通道，所以这一格必须现算而不能由调用方递。
+ */
+function landingPathOf(model: Monaco.editor.ITextModel): string {
+  const sugar = sugarOwningPaneOf(model);
+  if (sugar !== null) return sugar.filePathRef.current;
+  return owningPaneOf(model)?.filePathRef.current ?? '';
 }
 
 /** 一条要交给 Peek 的出现点（`previewLine` = 它在屏幕上这一面的那一行；缺席 = 不属于这一面，原样交付） */
@@ -240,16 +295,25 @@ function rememberPath<T>(map: Map<string, T>, key: string, value: T): void {
 }
 
 /**
- * 为 ERB 方言与 `.kojo` 两种语言 id 注册 ReferenceProvider，并注册**未打开文件**那条
- * 腿的 opener（只认本 provider 发过的 URI——不抢别人的请求，见 `openCodeEditor` 判据）。
+ * 装配**引用落点通道**（LAU-DUALLEG 车 3 分离出来的那一枚宿主模块）。
+ *
+ * 交进来的只有引用点，产出的是 Peek 能用的 `Location[]`；这一趟里四件事全是宿主事实：
+ * ① 屏幕上这份 model 若在某实例的糖投影上 ⇒ 同文件的引用点折回预览行（判据见文件头
+ *    "升糖预览面上的 Peek"段，折不过来的**整条不给**，绝不给猜的行号）；
+ * ② 已开标签那份 model 的 URI 与行列夹取（`clampRevealPosition` 全仓唯一点）；
+ * ③ 未打开文件发 `file` URI 并把 `uri → 路径` 记进 {@link rememberPath} 那张有界表，
+ *    点击由本通道注册的那枚 opener 接回 `navigate`（只认自己发过的 URI——不抢别人的请求）；
+ * ④ 台账读数（计数与列表同源：先折行、后进台账，Peek 表头那枚 N 必须等于树里的行数）。
+ *
+ * **它不注册任何 ReferenceProvider**——注册是各腿自己的事，这一枚只回答"一枚位置怎么落地"。
  */
-export function installReferenceProvider(
+export function createReferenceLanding(
   monaco: typeof Monaco,
-  handlers: ReferenceHandlers,
-): Monaco.IDisposable {
-  /** 本 provider 发出去过的 `uri → 路径`（opener 反查表；只含**未打开**文件——已开的走既有 opener） */
+  handlers: ReferenceLandingHandlers,
+): ReferenceLanding {
+  /** 本通道发出去过的 `uri → 路径`（opener 反查表；只含**未打开**文件——已开的走既有 opener） */
   const knownPaths = new Map<string, string>();
-  const findModel: ReferenceHandlers['openModelFor'] = (filePath) => {
+  const findModel: ReferenceLandingHandlers['openModelFor'] = (filePath) => {
     try {
       return handlers.openModelFor?.(filePath);
     } catch (e: unknown) {
@@ -259,20 +323,33 @@ export function installReferenceProvider(
       return undefined;
     }
   };
-  const provider: Monaco.languages.ReferenceProvider = {
-    provideReferences(model, position) {
-      // **本模块不含任何 ERB 判据**（LAU-4 引用腿，2026-10-31）：`$` 标签 / `#DIM` 声明 /
-      // 反向索引三条腿的判据整块住 `@kojo/plugin-erb-parser`（`symbols.ts` 的
-      // `erbReferencesAt`），宿主在这一格只做"问槽 → 翻形状"。
-      let locations: readonly ReferenceLocation[];
-      try {
-        locations = handlers.resolve(model, position);
-      } catch (e: unknown) {
-        // 宿主自己的 resolve（查槽 + 组请求）出错也不能让 Shift+F12 崩掉编辑器。
-        // 本地腿已随判据搬进供方 ⇒ 这里没有"本地兜底"可交，如实退化成"这次没有引用"。
-        console.warn(`[find-references] resolve 抛错：${errorText(e)}`);
-        return undefined;
-      }
+  const opener = monaco.editor.registerEditorOpener({
+    openCodeEditor(_source, resource, selectionOrPosition) {
+      const path = knownPaths.get(resource.toString());
+      if (!path || !selectionOrPosition) return false; // 不是本通道发过的 URI：交回其它 handler
+      rememberPath(knownPaths, resource.toString(), path); // LRU：被点中的条目续命
+      const landedAt = selectionOrPosition as Partial<Monaco.IRange & Monaco.IPosition>;
+      const line = landedAt.lineNumber ?? landedAt.startLineNumber;
+      if (line === undefined) return false;
+      const column = landedAt.column ?? landedAt.startColumn;
+      // 真给了宽度才升级成 `span`（与 `registerLocationOpener` 逐字同判据）：
+      // 零宽/点式请求仍是一条 `column`，在 `reveal-position` 与转到定义那条腿合流
+      const endColumn = landedAt.endColumn;
+      const span =
+        column !== undefined && endColumn !== undefined && endColumn > column
+          ? { columnStart: column, columnEnd: endColumn }
+          : undefined;
+      handlers.navigate({
+        filePath: path,
+        line,
+        ...(column !== undefined ? { column } : {}),
+        ...(span !== undefined ? { span } : {}),
+      });
+      return true;
+    },
+  });
+  return {
+    land(model, locations) {
       const out: Monaco.languages.Location[] = [];
       // 投影面上**同文件**的引用点先折回屏幕上那一行（判据见文件头"升糖预览面上的 Peek"段）；
       // 折不过去的那一枚整条不给。这一趟必须在台账之前：计数与列表同源是本模块的立身判据，
@@ -292,7 +369,7 @@ export function installReferenceProvider(
       // 计数与列表同源：位置进台账（分类由供方带过来，缺席即未分类），读数与列表一次算出
       const tally = tallyReferenceOccurrences(occurrencesFromLocations(rows.map((row) => row.location)));
       try {
-        handlers.onTally?.(tally, explainReferenceCounts(tally));
+        handlers.onTally?.(tally, explainReferenceCounts(tally), landingPathOf(model));
       } catch (e: unknown) {
         console.warn(`[find-references] onTally 抛错（不影响列表交付）：${errorText(e)}`);
       }
@@ -344,7 +421,7 @@ export function installReferenceProvider(
           endColumn = landing.columnEnd;
         }
         // 已开文件用真 model 的 uri（Monaco 才能给预览与就地跳）；未开文件发 file URI，
-        // 预览物化会失败但树项保留（计数不说谎），点击由下方 opener 兜住
+        // 预览物化会失败但树项保留（计数不说谎），点击由上面那枚 opener 兜住
         const uri = live ? live.uri : monaco.Uri.file(location.filePath);
         if (!live) rememberPath(knownPaths, uri.toString(), location.filePath);
         out.push({
@@ -359,37 +436,56 @@ export function installReferenceProvider(
       }
       return out;
     },
+    dispose: () => opener.dispose(),
   };
-  const opener = monaco.editor.registerEditorOpener({
-    openCodeEditor(_source, resource, selectionOrPosition) {
-      const path = knownPaths.get(resource.toString());
-      if (!path || !selectionOrPosition) return false; // 不是本 provider 发过的 URI：交回其它 handler
-      rememberPath(knownPaths, resource.toString(), path); // LRU：被点中的条目续命
-      const landedAt = selectionOrPosition as Partial<Monaco.IRange & Monaco.IPosition>;
-      const line = landedAt.lineNumber ?? landedAt.startLineNumber;
-      if (line === undefined) return false;
-      const column = landedAt.column ?? landedAt.startColumn;
-      // 真给了宽度才升级成 `span`（与 `registerLocationOpener` 逐字同判据）：
-      // 零宽/点式请求仍是一条 `column`，在 `reveal-position` 与转到定义那条腿合流
-      const endColumn = landedAt.endColumn;
-      const span =
-        column !== undefined && endColumn !== undefined && endColumn > column
-          ? { columnStart: column, columnEnd: endColumn }
-          : undefined;
-      handlers.navigate({
-        filePath: path,
-        line,
-        ...(column !== undefined ? { column } : {}),
-        ...(span !== undefined ? { span } : {}),
-      });
-      return true;
+}
+
+/**
+ * 为**没有**把 `references` 这条腿交给槽供方的语言（今天 = `.kojo1`）注册 ReferenceProvider。
+ *
+ * 挂载口径（LAU-DUALLEG 车 3）：`registerForLanguageServices(monaco, register, undefined,
+ * { excludeNamed: 'references' })`——**第三参必须是 `undefined`**：再传一次 `'references'`
+ * 就等于把点名了这一格的语言（今天的 ERB）重新挂上，"一个 kind 恰一枚 provider"立刻破。
+ * ERB 由共享槽腿那一枚应答（数据仍来自同一枚 `ui.editor.languageService` 槽的解析器供方），
+ * 两侧交回的引用点走**同一枚落点通道**（装配点注入的 `landing`），所以「已关文件点开」
+ * 「行号夹取」「处数台账」没有一格因为让位而丢。
+ */
+export function installReferenceProvider(
+  monaco: typeof Monaco,
+  handlers: ReferenceHandlers,
+): Monaco.IDisposable {
+  const shared = handlers.landing !== undefined;
+  const landing = handlers.landing ?? createReferenceLanding(monaco, handlers);
+  const provider: Monaco.languages.ReferenceProvider = {
+    provideReferences(model, position) {
+      // **本模块不含任何 ERB 判据**（LAU-4 引用腿，2026-10-31）：`$` 标签 / `#DIM` 声明 /
+      // 反向索引三条腿的判据整块住 `@kojo/plugin-erb-parser`（`symbols.ts` 的
+      // `erbReferencesAt`），宿主在这一格只做"问槽 → 交落点通道"。
+      let locations: readonly ReferenceLocation[];
+      try {
+        locations = handlers.resolve(model, position);
+      } catch (e: unknown) {
+        // 宿主自己的 resolve（查槽 + 组请求）出错也不能让 Shift+F12 崩掉编辑器。
+        // 本地腿已随判据搬进供方 ⇒ 这里没有"本地兜底"可交，如实退化成"这次没有引用"。
+        console.warn(`[find-references] resolve 抛错：${errorText(e)}`);
+        return undefined;
+      }
+      return landing.land(model, locations);
     },
-  });
-  const dialectSubs = registerForLanguageServices(monaco, (m, id) => m.languages.registerReferenceProvider(id, provider));
+  };
+  const dialectSubs = registerForLanguageServices(
+    monaco,
+    (m, id) => m.languages.registerReferenceProvider(id, provider),
+    undefined,
+    { excludeNamed: 'references' },
+  );
   return {
     dispose: () => {
       dialectSubs.dispose();
-      opener.dispose();
+      // 借来的通道归装配点撤（谁建的谁撤），自建的才在这里撤——两枚 provider 共用一枚通道时
+      // 先撤的那一枚不许把另一枚的点击通道一起带走。
+      if (!shared) landing.dispose();
     },
   };
 }
+
