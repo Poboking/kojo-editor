@@ -26,6 +26,7 @@ import { describe, expect, it } from 'vitest';
 
 import * as barrel from '../src/index.js';
 import * as constants from '../src/constants.js';
+import * as enter from '../src/enter.js';
 import * as highlight from '../src/highlight.js';
 import * as selectionRange from '../src/selection-range.js';
 
@@ -34,6 +35,10 @@ const leafKeys = (mod: Record<string, unknown>): string[] => Object.keys(mod).so
 describe('@kojo/erb-lang 导出面', () => {
   it('constants 的运行时导出 = 清单（1 枚：认 ERB 请求的语言 id 清单）', () => {
     expect(leafKeys(constants)).toEqual(['ERB_LANGUAGE_IDS']);
+  });
+
+  it('enter 的运行时导出 = 清单（3 枚：行注释唯一常量 + 角色分桶派生 + 正则族装配）', () => {
+    expect(leafKeys(enter)).toEqual(['ERB_LINE_COMMENT', 'erbEnterRulePatterns', 'erbEnterVocabulary']);
   });
 
   it('highlight 的运行时导出 = 清单（5 枚；判据入口 + 结构事实 + 两枚字符/词工具）', () => {
@@ -69,13 +74,22 @@ describe('@kojo/erb-lang 导出面', () => {
     expect(leafKeys(barrel)).not.toContain('erbMemberSlotAt');
   });
 
-  it('package.json 的 exports 恰是桶 + 三枚叶子（宿主与插件按子路径引，漏一枚即解析不到）', () => {
+  it('回车判据**不进桶**（`./enter` 只作叶子导出：PS-10 叶子纪律，桶消费者不许白拖 kojo-vocab/enter）', () => {
+    // 桶的运行时键并集不含 enter 三枚 ⇒ 有人从 `src/index.ts` 再导出 `./enter` 就在这里红
+    // （上面「桶的运行时键 = 值叶子之并集」同时会红，两条互为对侧证据）。
+    expect(leafKeys(barrel)).not.toContain('ERB_LINE_COMMENT');
+    expect(leafKeys(barrel)).not.toContain('erbEnterVocabulary');
+    expect(leafKeys(barrel)).not.toContain('erbEnterRulePatterns');
+  });
+
+  it('package.json 的 exports 恰是桶 + 四枚叶子（宿主与插件按子路径引，漏一枚即解析不到）', () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
     ) as { exports?: Record<string, string> };
     expect(Object.keys(manifest.exports ?? {}).sort()).toEqual([
       '.',
       './constants',
+      './enter',
       './highlight',
       './selection-range',
     ]);

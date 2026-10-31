@@ -10,6 +10,7 @@
  * | --- | --- | --- |
  * | `@kojo/erb-lang/highlight` | 同符号高亮（write / read / text 三档 + 位置门） | 插件 `@kojo/plugin-erb-lang` 的 `erb-documentHighlight` |
  * | `@kojo/erb-lang/selection-range` | 结构化扩选（词 → 行 → 分支段 → 标签块 → 函数块 → 全文） | 插件 `@kojo/plugin-erb-lang` 的 `erb-selectionRange` |
+ * | `@kojo/erb-lang/enter`（**不进桶**，2026-10-31 erb-enter 裁决批） | 回车层级派生（配对表 → 角色 → 三档正则 + `ERB_LINE_COMMENT` 唯一份） | 宿主 `monaco/erb-language.ts`（Monaco `LanguageConfiguration` 翻译）与 `tree-sitter/erb-indent.ts`（结构缩进基底）——回车不是槽能力，descriptor 点名表不为其扩格 |
  *
  * 这与 kojo2 在 B3f 批走的路**逐字同形**（判据进包 → 供方进插件 → 宿主只剩请求 / 翻译 /
  * 注册）：两门语言从此用同一条槽 `ui.editor.languageService`、同一份契约、同一套三态。
@@ -29,16 +30,18 @@
  * 别名表逐条对应 `package.json` 的 `exports`——三处漂了，PS-10 的走图器会当场报
  * "解析不到"（它读的就是 vite 的别名表）。
  *
- * ## 唯一的外部依赖
+ * ## 外部依赖（白名单只有这两枚，purity 闸逐条钉住）
  *
  * `@kojo/erb-vocab/control-flow`：ERB 控制流**配对表**的单一真源（`ERB_CONTROL_STATEMENTS` +
  * `classifyControlFlow`，逐条对齐引擎 `FunctionIdentifier.cs` 的 `funcMatch`）。高亮与扩选
  * 都要问"这个词是不是控制词、是哪一档"，那张表不能在这里抄第二份（抄了就必然漂移，
- * 漂移的表现是"高亮指错的块"）。
+ * 漂移的表现是"高亮指错的块"）；`./enter` 的派生链吃同一张表。
+ * `./enter` 另引 `@kojo/kojo-vocab/enter`（`enterRulePatternsFromRoles` 通用装配，与 `.kojo` 的
+ * `sugarEnterRulePatterns()` 同一条尺子）——两枚白名单逐条钉在 `tests/purity.test.ts`。
  *
  * 2026-10-30（ERB-VOCAB 批）之前这条依赖指向**插件** `@kojo/plugin-erb-parser`——库包引
  * 插件包是分层倒置。表已上提到非插件库包 `@kojo/erb-vocab`（与 `@kojo/kojo-vocab` 同性质），
- * 插件 `@kojo/plugin-erb-parser` 改为 re-export 它、宿主 `monaco/erb-enter.ts` 经插件照旧读
+ * 插件 `@kojo/plugin-erb-parser` 改为 re-export 它、宿主经插件照旧读（回车派生 2026-10-31 已进本包 `./enter`）
  * 同一张表：**三方并列读者**，谁也不引谁，单一真源一格未动。
  */
 export * from './constants';
@@ -61,4 +64,8 @@ export * from './selection-range';
  *
  * 本包此后只剩**两条腿**（高亮 / 扩选）——它们不由槽的供方驱动（供方在 `@kojo/plugin-erb-lang`，
  * 那座插件是**懒装载**的，不占开机图），所以留在这里是对的。
+ *
+ * 2026-10-31（erb-enter 裁决批）另加第三枚叶子 `./enter`（回车层级派生，**不进桶**）：判据是纯函数
+ * （配对表 → 角色 → 正则装配），宿主编排（`toMonacoEnterConfig` / `mergeIndentConfig`）照旧留宿主；
+ * 它同样不由槽供方驱动（回车没有对应的 Monaco 槽 kind，descriptor 点名表不为其扩格）。
  */

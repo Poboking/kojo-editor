@@ -27,7 +27,7 @@
 import type * as Monaco from './entry';
 import { extname, isErbDialectPath, KOJO_SOURCE_EXTENSION, KOJO_V1_SOURCE_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from './erb-language';
-import { ERB_LINE_COMMENT } from './erb-enter';
+import { ERB_LINE_COMMENT } from '@kojo/erb-lang/enter';
 import { JSON_LANGUAGE_ID, JSON_SOURCE_EXTENSION, registerJsonLanguage } from './json-language';
 import { KOJO1_LINE_COMMENT, KOJO_LANGUAGE_ID, registerKojoLanguage } from './kojo-language';
 import { ERB_CAPABILITIES, KOJO2_CAPABILITIES } from './language-capabilities';
@@ -134,7 +134,7 @@ slotServices: [
   // LANG-PARITY-GATE：已交付的能力面（真源 = language-capabilities.ts 的矩阵；声明只列已交付的）
   capabilities: ERB_CAPABILITIES,
   // ERB-PARITY G8 / G9：四项族级右键项全在（codeAction / decorator + codeAction 槽、
-  // `documentSymbol` 槽腿、糖视图原文侧）；行注释 `;` 取 `erb-enter.ts` 的唯一常量。
+  // `documentSymbol` 槽腿、糖视图原文侧）；行注释 `;` 取 `@kojo/erb-lang/enter` 的唯一常量。
   contextFaces: ['quick-fix', 'fix-all', 'jump-to-state', 'toggle-sugar'],
   lineComment: ERB_LINE_COMMENT,
   // ERB-PARITY G6：游戏目录里的 ERB 是作者源文件 ⇒ 默认只读，解锁后才给写面

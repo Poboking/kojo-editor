@@ -74,6 +74,7 @@ export const config = defineConfig({
       // LAU-4 ERB 语言面库（2026-10-30）：叶子**排在桶之前**（理由同 kojo-lang：alias 的
       // 匹配口径是「等于 find」或「以 `find + /` 开头」，桶在前会把 `/highlight` 也吃掉）。
       '@kojo/erb-lang/constants': r('./packages/erb-lang/src/constants.ts'),
+      '@kojo/erb-lang/enter': r('./packages/erb-lang/src/enter.ts'),
       '@kojo/erb-lang/highlight': r('./packages/erb-lang/src/highlight.ts'),
       '@kojo/erb-lang/selection-range': r('./packages/erb-lang/src/selection-range.ts'),
       '@kojo/erb-lang': r('./packages/erb-lang/src/index.ts'),

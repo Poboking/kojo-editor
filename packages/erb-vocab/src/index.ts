@@ -18,7 +18,8 @@
  * 另有构建期裸 node 工具 `gen-erb-structure.mjs` 吃它的运行时值）与同符号高亮 / 扩选
  * （库 `@kojo/erb-lang`）。表若留在插件里，库包就得 import 插件包——**分层倒置**（上一波
  * 验收记下的架构债）；各抄一份则必然漂移，漂移的表现是"高亮连错块"，比不标更糟。
- * 上提到非插件库包之后：插件 re-export 它、宿主 `monaco/erb-enter.ts` 经插件照旧读，
- * 三方是**并列读者**，谁也不引谁，单一真源一格未动。
+ * 上提到非插件库包之后：插件 re-export 它、宿主 `monaco/erb-highlight-words.ts` 直引本包叶，
+ * 回车派生住 `@kojo/erb-lang/enter`（2026-10-31 erb-enter 裁决批：宿主 `monaco/erb-enter.ts`
+ * 副本已删），各方是**并列读者**，谁也不引谁，单一真源一格未动。
  */
 export * from './control-flow';

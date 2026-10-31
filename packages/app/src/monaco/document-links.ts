@@ -28,7 +28,7 @@
  */
 
 import type * as Monaco from './entry';
-import { ERB_LINE_COMMENT } from './erb-enter';
+import { ERB_LINE_COMMENT } from '@kojo/erb-lang/enter';
 import { CODE_LENS_COMMAND } from './kojo-code-lens';
 import {
   descriptorForPath,

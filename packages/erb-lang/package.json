@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./constants": "./src/constants.ts",
+    "./enter": "./src/enter.ts",
     "./highlight": "./src/highlight.ts",
     "./selection-range": "./src/selection-range.ts"
   },

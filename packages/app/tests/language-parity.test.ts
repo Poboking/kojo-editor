@@ -32,7 +32,7 @@
  *   接线是把豁免项搬进 `self` 的**有意的**改动，改矩阵时必须同时改这里的清单——闸门要的是
  *   "看得见的变更"，不是"矩阵悄悄变了"。
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -881,6 +881,126 @@ describe('DOUBLE-LEG-1032C：改名（rename）——注册面两枚 / 应答面
     expect(factory, '槽腿出现落盘通道 = 第二套写盘路径；不许用这条捷径去收敛 rename').not.toMatch(
       /applyToClosedFile|rewriteClosedFile/,
     );
+  });
+});
+
+/* ============================== ERB-ENTER-1031D：回车判据进包 @kojo/erb-lang/enter（旧车道 abdf76ac 裁决重做） ============================== */
+
+/**
+ * ERB 回车/续行那一格的「谁在答 + 判据住哪」台账（2026-10-31 裁决批）。形状照
+ * `DOUBLE-LEG-1032` / `1032B` / `1032C`（点名台账 / 注册面计数 / 留账逐字），**判据不另开尺子**；
+ * 差别要说清：**回车不是一种槽 kind**——Monaco 没有 `registerEnterProvider`，回车走
+ * `LanguageConfiguration`（`onEnterRules` / `indentationRules`），由 `registerErbLanguage()`
+ * 整枚装载。所以本组不钉"恰一枚 provider"，钉的是：
+ * ① descriptor 点名表**不许为回车扩格**（点名台账 = 槽能力唯一清单，六条之外加一枚
+ *    "enter"式 kind 就是伪造槽能力——那条腿在 `slot-service-providers.ts` 里造不出 `legOf`）；
+ * ② 判据单源在 `@kojo/erb-lang/enter`（旧车道 `abdf76ac` 按现行分层重做：宿主
+ *    `monaco/erb-enter.ts` 副本已删，配对表经 `@kojo/erb-vocab/control-flow` 直读，不再绕插件）；
+ * ③ 宿主只剩翻译/消费面，消费者计数钉死——第三枚 `erbEnterRulePatterns()` 消费者一出现
+ *    要先说清它翻译给谁；
+ * ④ 宿主事实逐字留账：按键时序绑定（`toMonacoEnterConfig`）与结构层合并
+ *    （`mergeIndentConfig`）搬不动，照 rename/definition 两组的口径**留账不收**。
+ *
+ * 行为面不在这里重复：三档派生、`@` 续行不被误伤、撤规则必红钉在 `tests/erb-enter.test.ts`；
+ * 包内纯度钉在 `erb-lang/tests/purity.test.ts`（白名单两枚）与 `export-surface.test.ts`
+ * （enter 不进桶）。
+ */
+describe('ERB-ENTER-1031D：回车判据单源在 @kojo/erb-lang/enter——点名表不扩格、宿主零副本', () => {
+  /** 全仓各包 `src/` 目录（定义面取证要跨包，SOURCE_FILES 只覆盖宿主 app/src） */
+  const PKG_SRC_SNAPSHOT: readonly { readonly rel: string; readonly text: string }[] = (() => {
+    const out: { rel: string; text: string }[] = [];
+    const walk = (dirRel: string): void => {
+      for (const entry of readdirSync(path.join(REPO_ROOT, dirRel), { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          walk(`${dirRel}/${entry.name}`);
+          continue;
+        }
+        if (!/\.tsx?$/.test(entry.name)) continue;
+        out.push({ rel: `${dirRel}/${entry.name}`, text: readFileSync(path.join(REPO_ROOT, dirRel, entry.name), 'utf8') });
+      }
+    };
+    const hasSrc = (dirRel: string): boolean => {
+      try {
+        return statSync(path.join(REPO_ROOT, dirRel, 'src')).isDirectory();
+      } catch {
+        return false;
+      }
+    };
+    for (const entry of readdirSync(path.join(REPO_ROOT, 'packages'), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === 'plugins') {
+        for (const plug of readdirSync(path.join(REPO_ROOT, 'packages', 'plugins'), { withFileTypes: true })) {
+          if (plug.isDirectory() && hasSrc(`packages/plugins/${plug.name}`)) walk(`packages/plugins/${plug.name}/src`);
+        }
+        continue;
+      }
+      if (hasSrc(`packages/${entry.name}`)) walk(`packages/${entry.name}/src`);
+    }
+    return out.sort((a, b) => (a.rel < b.rel ? -1 : 1));
+  })();
+
+  it('点名台账：ERB descriptor 的 slotServices 恰六条，回车不是槽 kind——第七格（enter 式）一出现就叫', () => {
+    const erb = descriptorForLanguageId(ERB_LANGUAGE_ID);
+    expect(erb).not.toBeNull();
+    expect(
+      erb?.slotServices ?? [],
+      'ERB 的点名表读空了：下面两条 not.toContain 就成了假通过',
+    ).toEqual(
+      expect.arrayContaining(['references', 'hover', 'formatting', 'documentHighlight', 'selectionRange', 'codeLens']),
+    );
+    expect(erb?.slotServices ?? []).toHaveLength(6);
+    expect(erb?.slotServices ?? [], '回车走 LanguageConfiguration，不是槽能力：点名表不许为它扩格').not.toContain(
+      'onTypeFormatting',
+    );
+    expect(erb?.slotServices ?? [], '同上：造不出 registerEnterProvider，就没有 "enter" 这一格').not.toContain('enter');
+    // 槽腿工厂里也不许出现 enter 式腿（`legOf('enter', …)` 是伪形状——没有对应的 Monaco 注册 API）
+    const factory = sourceOf('monaco/slot-service-providers.ts').text;
+    expect(factory).not.toMatch(/legOf\('(enter|onTypeFormatting)'/);
+  });
+
+  it('判据单源：`erbEnterVocabulary` / `erbEnterRulePatterns` / `ERB_LINE_COMMENT` 的定义全仓各恰一处，且都在 `packages/erb-lang/src/enter.ts`', () => {
+    for (const pattern of [/export function erbEnterVocabulary\b/, /export function erbEnterRulePatterns\b/, /export const ERB_LINE_COMMENT\b/]) {
+      const hits = PKG_SRC_SNAPSHOT.filter((f) => pattern.test(f.text)).map((f) => f.rel);
+      expect(hits, `${pattern.source} 的定义面不是恰一处（第二份回车判据一出现，"词表零抄本"就破了）`).toEqual([
+        'packages/erb-lang/src/enter.ts',
+      ]);
+    }
+    // 宿主副本已删（重做批的交付面：不是 re-export 壳，是整块搬家）
+    expect(existsSync(path.join(SRC_ROOT, 'monaco', 'erb-enter.ts'))).toBe(false);
+    // 宿主全仓不引桶：`@kojo/erb-lang` 桶会把 kojo-vocab/enter 之类一并拖给每个消费者（PS-10 叶子纪律）
+    expect(
+      SOURCE_FILES.filter((f) => /from '@kojo\/erb-lang'/.test(f.text)).map((f) => f.rel),
+      '宿主出现了对 @kojo/erb-lang 桶的值引用：只许引叶子',
+    ).toEqual([]);
+  });
+
+  it('注册/翻译面计数：宿主引 `@kojo/erb-lang/enter` 恰四枚文件，`erbEnterRulePatterns();` 取用面恰两枚（回车档装配 + 结构缩进基底）', () => {
+    const importers = SOURCE_FILES.filter((f) => f.text.includes("from '@kojo/erb-lang/enter'")).map((f) => f.rel).sort();
+    expect(importers).toEqual(
+      ['monaco/document-links.ts', 'monaco/erb-language.ts', 'monaco/languages.ts', 'monaco/tree-sitter/erb-indent.ts'].sort(),
+    );
+    for (const rel of ['monaco/document-links.ts', 'monaco/erb-language.ts', 'monaco/languages.ts', 'monaco/tree-sitter/erb-indent.ts']) {
+      expect(sourceOf(rel).text, `${rel} 改读别的路径：上面那张消费者台账要逐枚点名理由`).toContain("from '@kojo/erb-lang/enter'");
+    }
+    // 只数**代码调用**（注释里的 `erbEnterRulePatterns()` 是记账不是消费，与守卫口径一致）
+    const stripComments = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    const callSites = SOURCE_FILES.filter((f) => /erbEnterRulePatterns\(\)/.test(stripComments(f.text))).map((f) => f.rel).sort();
+    expect(
+      callSites,
+      '宿主取用回车派生的文件不是恰两枚：第三枚消费方要先说清它翻译给谁，再逐枚点名进本条台账',
+    ).toEqual(['monaco/erb-language.ts', 'monaco/tree-sitter/erb-indent.ts'].sort());
+  });
+
+  it('宿主事实逐字留账：按键时序绑定与结构层合并不进包（搬不动就不收，也不许因搬不动丢功能）', () => {
+    const erb = sourceOf('monaco/erb-language.ts').text;
+    expect(erb).toMatch(/toMonacoEnterConfig\(monaco, erbEnterRulePatterns\(\)\)/); // Monaco LanguageConfiguration 装载（按键时序 = 宿主事实）
+    expect(erb).toMatch(/comments:\s*\{\s*lineComment:\s*ERB_LINE_COMMENT\s*\}/); // 注释格与回车派生吃同一个唯一常量
+    const indent = sourceOf('monaco/tree-sitter/erb-indent.ts').text;
+    expect(indent).toMatch(/mergeIndentConfig\(/); // 结构层 additive 合并（基底三格 + worker 规则）
+    const langs = sourceOf('monaco/languages.ts').text;
+    expect(langs).toMatch(/lineComment:\s*ERB_LINE_COMMENT/); // descriptor 声明位取包内唯一常量
+    const rules = sourceOf('monaco/enter-rules.ts').text;
+    expect(rules).toContain('@kojo/kojo-vocab/enter'); // 两门语言共用同一套正则装配（ERB-PARITY：能力不进语言名分支）
   });
 });
 
