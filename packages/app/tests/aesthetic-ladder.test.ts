@@ -246,11 +246,13 @@ describe('滚动族：几何走 token、渐隐有原语、一条不重抄', () =
   });
 
   // @debt-ledger BOARD:AE-SPLIT4
-  it('仍欠着的一处口子必须在册；已收口的一处必须留下收口证据（欠账不许静默变成现状）', () => {
-    // ① **仍欠**：六条把手里唯独编辑器分隔条的热态仍是中性灰：它的**终值**被 B-5 的逐字对拍
-    //    台账钉着（那批的承诺是"零视觉变化"），改色＝替别人改写判据。收它要先由该闸 owner 把
-    //    口径从"终值对拍"迁到"落点在册"。看板 AE-SPLIT4。
-    expect(declOf(HEAVY, '.editor-divider:active', 'background')).toBe('var(--wash-gray-strong)');
+  it('已收口的一处必须留下收口证据；滚动渐隐那处欠账不许静默变成现状', () => {
+    // ① **已收口（2026-11-01，AE-SPLIT4）**：六条把手里编辑器分隔条的按下档从与悬停共用的中性灰
+    //    拆出来，转 `--split-hot` 与其余五条同族；收口顺序照看板判据走——先由
+    //    `styles-wash-token-discipline.test.ts` 把这一格从"终值对拍"迁到"落点在册"，再改色。
+    //    悬停档保留中性灰预兆（B-5 那格的终值承诺不变，仍在 wash 台账里逐字对拍）。
+    expect(declOf(HEAVY, '.editor-divider:active', 'background'), '按下档没跟其余五条把手同族').toBe('var(--split-hot)');
+    expect(declOf(HEAVY, '.editor-divider:hover', 'background'), '悬停档被一起改成了热态 = 两态又并回一条').toBe('var(--wash-gray-strong)');
     // 台账标记在**注释**里（判据注释不算活声明，故这里读原文而不是 strip 后的正文）
     expect(read('styles-project.css')).toMatch(/AE-SPLIT4/);
     // ② **已收口（2026-10-31）**：滚动渐隐不再是四处各抄一份——配方落 `tokens.css` 两枚 token，
@@ -274,7 +276,7 @@ describe('滚动族：几何走 token、渐隐有原语、一条不重抄', () =
     }
   });
 
-  it('五条把手同吃 --split-*（第六条故意留档），市场那条滚动条宽高成对', () => {
+  it('六条把手同吃 --split-*（热态分档写在各家自己的切片里），市场那条滚动条宽高成对', () => {
     /* 把手全仓实测**六条**（不是四条约：命令矩阵另有行分隔 `.cm-split` 与列把手
        `.cm-corner-resize`，它们的热态与壳层同色却各写各的）。同名规则在文件后段
        还有一份"观感对齐新面"的覆写（`.cm-corner-resize:hover::after` 出现两次）——
@@ -286,10 +288,14 @@ describe('滚动族：几何走 token、渐隐有原语、一条不重抄', () =
       '.kp-splitter:hover::after',
       '.cm-split:hover::after',
       '.cm-corner-resize:hover::after',
+      '.editor-divider:active',
     ]) {
       expect(declOf(HEAVY, sel, 'background'), `${sel} 的热态没落到 --split-hot`).toBe('var(--split-hot)');
     }
-    expect(declOf(DOCK, '.bottombar .dock-cell-resizer:active', 'background'), '底栏把手的热态没跟上面').toBe('var(--split-hot)');
+    // 底栏那条悬停 / 按下两档都写在自己的切片里（AE-SPLIT4 前它只写 `:active`）
+    for (const state of [':hover', ':active'] as const) {
+      expect(declOf(DOCK, `.bottombar .dock-cell-resizer${state}`, 'background'), `底栏把手${state}没跟上面`).toBe('var(--split-hot)');
+    }
     expect(declOf(HEAVY, '.kp-splitter::after', 'background'), '教程把手的静息档没落到 --split-rest').toBe('var(--split-rest)');
     const mk = ruleFor(blocks(read('market.css')), '.mk-body::-webkit-scrollbar');
     expect(mk, '市场那份滚动条规则不见了').toBeDefined();

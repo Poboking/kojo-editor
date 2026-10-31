@@ -8181,14 +8181,19 @@ button.resume-session {
   transition: background-color var(--dur-1) var(--ease-out);
 }
 
-/* ⚠ 这一条转**中性灰**（--wash-gray-strong）而其余五条把手转 accent（--split-hot）——同一个"可以拉"的
-   声明给出两种反馈，是本批实测到的口径缺口（看板 AE-SPLIT4）。**今天故意不改**：
-   `styles-wash-token-discipline.test.ts` 的 B-5 台账把这一格的**终值**逐字钉成
-   `rgba(128,128,128,.35)`（那批的承诺是"零视觉变化"），改色等于替别人把对拍判据改写。
-   要收这一档：先由该闸的 owner 把它从"终值对拍"迁到"落点在册"，再统一吃 --split-hot。 */
-.editor-divider:hover,
-.editor-divider:active {
+/* 热态分两档（AE-SPLIT4 收口 2026-11-01）：悬停先给一记中性灰的"可拉"预兆，按住才转 accent——
+   与其余五条把手（`.resizer` / `.kp-splitter` / `.cm-split` / `.cm-corner-resize` /
+   `.dock-cell-resizer`）的 `--split-hot` 同族。旧写法把两态并成同一条中性灰，按下时反馈不升级。
+   收口顺序照看板判据走：`styles-wash-token-discipline.test.ts` 先把这一格从"终值对拍"迁到
+   "落点在册"（名字进 LANDED、值必须吃 tokens.css 已登记的 token），`:active` 才改吃
+   `--split-hot`；B-5 的中性灰终值承诺原样留给 `:hover` 那一格，不替它改值。 */
+.editor-divider:hover {
   background: var(--wash-gray-strong);
+}
+
+.editor-divider:active {
+  background: var(--split-hot);
+  opacity: 0.6;
 }
 
 /* MM-9 列向排列（上下堆叠）：data-orientation 由宿主组态的 orientation 驱动。

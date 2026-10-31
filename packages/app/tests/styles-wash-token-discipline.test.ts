@@ -264,7 +264,7 @@ const SLOTS: readonly Slot[] = [
   { selector: '.cm-table tbody tr.cm-even > td', prop: 'background', before: 'rgba(255, 255, 255, 0.012)', token: '--zebra-stripe', projectOnly: true },
   { selector: '.cm-cell.on', prop: 'box-shadow', before: 'inset 0 1px 0 rgba(255, 255, 255, 0.12)', token: '--edge-on-fill', projectOnly: true },
   { selector: '.editor-group-close:hover', prop: 'background', before: 'rgba(128, 128, 128, 0.15)', token: '--wash-gray', projectOnly: true },
-  { selector: '.editor-divider:active', prop: 'background', before: 'rgba(128, 128, 128, 0.35)', token: '--wash-gray-strong', projectOnly: true },
+  { selector: '.editor-divider:hover', prop: 'background', before: 'rgba(128, 128, 128, 0.35)', token: '--wash-gray-strong', projectOnly: true },
   { selector: '.wizard-actions .primary', prop: 'color', before: '#fff', token: '--on-fill', projectOnly: true },
   { selector: 'button.primary .hint', prop: 'color', before: '#fff', token: '--on-fill', projectOnly: true },
   { selector: 'button.primary .hint', prop: 'border-color', before: 'rgba(255, 255, 255, 0.32)', token: '--hint-edge', projectOnly: true },
@@ -389,6 +389,67 @@ describe('B-5 · wash / 叠色收编：dark 档展开后与改前逐字相等', 
     }
     expect(where.length, `真裸色涨到 ${where.length} 枚：\n${where.join('\n')}`).toBeLessThanOrEqual(4);
     console.log(`[wash-ledger] styles.css + styles-project.css 真裸色（剥兜底）= ${where.length}（B-5 改前 43）：\n  ${where.join('\n  ')}`);
+  });
+});
+
+/* ------------------------------ ④ AE-SPLIT4：「落点在册」档 ------------------------------ */
+
+/**
+ * 看板 AE-SPLIT4 的收口顺序：先让本闸把那一格从「终值对拍」迁到「落点在册」，再改色。
+ * 迁的口径不是放宽——B-5 那条「零视觉变化」的承诺**原样留给仍未变值的 `:hover` 格**（仍在上面
+ * SLOTS 名单里逐字对拍）；**有意变值**的格改守三件事：
+ *   ① 规则还在（不许删规则换绿）；
+ *   ② 必须吃 `var(<token>)`（字面量回潮 = 定义点外又开第二张嘴）；
+ *   ③ 那枚 token 在 tokens.css 的裸 `:root` 有定义点、且能展开成具体值（指向空槽 / 环也算没落地）。
+ * 值可以变，但「落在哪一枚已登记的语义档上」必须可读、可查、可回滚。
+ */
+interface LandedSlot {
+  selector: string;
+  prop: string;
+  token: string;
+}
+
+const LANDED: readonly LandedSlot[] = [
+  // 编辑器组把手的按下档：从与悬停共用的中性灰拆出来转 accent（其余五条把手同一档）。
+  { selector: '.editor-divider:active', prop: 'background', token: '--split-hot' },
+];
+
+describe('AE-SPLIT4 · 有意变值格：落点在册（不钉终值，但必须落在已登记 token 上）', () => {
+  it('名单够格（1 格 = 本批唯一被授权变值的把手档；扩名单要走看板）', () => {
+    expect(LANDED).toHaveLength(1);
+  });
+
+  it('每格都还在、吃已登记 token、token 定义点在册且可展开', () => {
+    const rules = parseRules(read('../src/styles-project.css'));
+    const missing: string[] = [];
+    const bad: string[] = [];
+    for (const s of LANDED) {
+      const got = declOf(rules, s.selector, s.prop);
+      if (got === undefined) {
+        missing.push(`styles-project.css: ${s.selector} { ${s.prop} }`);
+        continue;
+      }
+      if (!got.includes(`var(${s.token})`)) {
+        bad.push(`${s.selector} { ${s.prop}: ${got} } —— 没吃 ${s.token}（字面量回潮 = 定义点外第二张嘴）`);
+        continue;
+      }
+      if (!DARK.has(s.token)) {
+        bad.push(`${s.selector} 落在 ${s.token} 上，但 tokens.css 的裸 :root 没有这枚定义点（私造 token）`);
+        continue;
+      }
+      if (expandVars(got, DARK) === null) {
+        bad.push(`${s.selector} { ${s.prop}: ${got} } —— var() 展开失败（指向空槽 / 环）`);
+      }
+    }
+    expect(missing, `规则消失了（不许靠删规则换绿）：\n${missing.join('\n')}`).toEqual([]);
+    expect(bad, `落点不合格 ${bad.length} 格：\n${bad.join('\n')}`).toEqual([]);
+  });
+
+  it('把手族语义档成对在册，且按下档不再回到中性洗色（中性灰只留给悬停预兆那格）', () => {
+    expect(DARK.get('--split-rest')).toBe('var(--border)');
+    expect(DARK.get('--split-hot')).toBe('var(--accent)');
+    const rules = parseRules(read('../src/styles-project.css'));
+    expect(declOf(rules, '.editor-divider:active', 'background')).not.toMatch(/--wash-/);
   });
 });
 

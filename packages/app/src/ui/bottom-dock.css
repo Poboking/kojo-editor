@@ -116,7 +116,11 @@
   box-shadow: inset 2px 0 0 var(--accent-soft);
 }
 
-/* 拖拽中：整根把手实一点，告诉手"这格归你管"（只动背景，不做位移动画） */
+/* 悬停 / 拖拽中：整根把手实一点，告诉手"这格归你管"（只动背景，不做位移动画）。
+   两态都要在本切片里写明（AE-SPLIT4）：`.resizer:hover` 那条通用规则虽然也会落到这里，
+   但底栏的把手状态只写 `:active` 就等于把悬停档挂在别人的选择器上——换命中区 / 收窄那条
+   通用规则时这里会静默失去反馈。热态语义与其余五条把手同一档 `--split-hot`。 */
+.bottombar .dock-cell-resizer:hover,
 .bottombar .dock-cell-resizer:active {
   background: var(--split-hot);
   opacity: 0.6;

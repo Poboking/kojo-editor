@@ -373,16 +373,16 @@
   --scroll-fade-x-size: 16px;
   --scroll-fade: linear-gradient(to bottom, #000 calc(100% - var(--scroll-fade-size)), transparent);
   --scroll-fade-x: linear-gradient(to right, #000 calc(100% - var(--scroll-fade-x-size)), transparent);
-  /* 分栏把手两态（美学批 1027）：全仓**六条**把手——壳层 `.resizer`、教程树底 `.kp-splitter`、
-     命令矩阵行分隔 `.cm-split` 与列把手 `.cm-corner-resize`、底栏 `.dock-cell-resizer`、
-     编辑器组 `.editor-divider`——按实测**分了三家**（口径比"四种颜色"更难看也更准）：
-     ① 热态两色——前五条转 accent，唯独 `.editor-divider` 转**中性灰**（同一个"可以拉"的
-        声明给出两种反馈）；② 静息三种可见度——`.resizer` / `.dock-cell-resizer` 不显（透明），
-        `.kp-splitter::after` 吃 `--border`，`.cm-split::after` 吃 `--border-subtle`；
-     ③ 底栏那条只写了 `:active`，**悬停零反馈**（手移上去不动，只有按住才亮）。
+  /* 分栏把手两态（美学批 1027；AE-SPLIT4 收口 2026-11-01）：全仓**六条**把手——壳层 `.resizer`、
+     教程树底 `.kp-splitter`、命令矩阵行分隔 `.cm-split` 与列把手 `.cm-corner-resize`、
+     底栏 `.dock-cell-resizer`、编辑器组 `.editor-divider`——按实测**分了三家**（口径比"四种颜色"
+     更难看也更准）：
+     ① 热态同色——六条按下档一律 accent（`.editor-divider` 的按下档本批从共用的中性灰拆出来，
+        悬停档仍保留中性灰预兆，两态不再并成一条）；② 静息三种可见度——`.resizer` /
+        `.dock-cell-resizer` 不显（透明），`.kp-splitter::after` 吃 `--border`，
+        `.cm-split::after` 吃 `--border-subtle`；③ 底栏那条悬停 / 按下两档都在自己的切片里写明。
      收进两枚语义档：静息＝发丝线色，热态＝accent（把手是"可以拉"的声明，与选中/焦点同族，
-     不该是中性灰）。第五条 `.editor-divider` 今天仍转灰，原因见该条注释与看板 AE-SPLIT4。
-     命中区几何（4px / 8px / 10px、负 margin）各家结构不同，不并入本族。 */
+     不该是中性灰）。命中区几何（4px / 8px / 10px、负 margin）各家结构不同，不并入本族。 */
   --split-rest: var(--border);
   --split-hot: var(--accent);
   --on-accent: #fff; /* accent 填充上的文字/滑块色（各主题多为白） */
