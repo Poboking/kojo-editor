@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { encodeErbText } from '../src/literal';
 import { createSugarTranspileService } from '../src/service';
 import { stubDict, stubFaceTable } from './support';
 
@@ -122,5 +123,74 @@ describe('① 心形字面量 · 装不下的字符 fail-closed', () => {
     const src = doc('    心形 「正常」\n    心形 「坏\u0000行」');
     expect(hphLines(src)).toEqual(['CALL HPH_PRINT(@"正常","w")']);
     expect(errs(src).length).toBeGreaterThan(0);
+  });
+});
+
+/* ============================================================================ */
+/* C. 字符串值（普通串 `"…"`）：别名右值同走唯一编码器                              */
+/* ============================================================================ */
+
+/**
+ * 缺陷形态（与心形同源）：`别名 台词 = "…"` 的**字符串值**在表达式 / 分支值位置
+ * 曾裸拼 `"${text}"`——文本里一个半角 `"` 就截断产物字面量（`"他说"好""`），
+ * 一个 `\` 就被引擎吃掉下一字符，且**零诊断**。修法：三处（插值降糖 / `是 <别名>：`
+ * CASE 值 / `-> <别名>` 分支值）都走 `literal.ts::erbStringLiteral`。
+ */
+describe('① 字符串值 · 别名右值走同一编码器', () => {
+  const ALIAS = '别名 台词 = "他说"好""\n';
+
+  it('插值里的字符串别名：半角 `"` 降全角（不截断 `"…"`）', () => {
+    const src = `角色: 12\n${ALIAS}时机 指令 310：\n    「{台词}」\n`;
+    const r = t(src);
+    expect(errs(src)).toEqual([]);
+    expect(r.erb).toContain('PRINTFORMW 「他说＂好＂」');
+    expect(r.erb).not.toContain('"他说"好""');
+  });
+
+  it('字符串别名里的 `\\` 双写（引擎只吃一个转义引导符）', () => {
+    const src = '角色: 12\n别名 路径 = "C:\\存档"\n时机 指令 310：\n    「{路径}」\n';
+    const r = t(src);
+    expect(errs(src)).toEqual([]);
+    expect(r.erb).toContain('「{"C:\\\\存档"}」');
+  });
+
+  it('`当 … 是 <别名>：` 的 CASE 值同样编码（不产截断分支）', () => {
+    const src = `角色: 12\n${ALIAS}时机 指令 310：\n    当 TFLAG:193：\n        是 台词：\n            「嗯。」\n`;
+    const r = t(src);
+    expect(errs(src)).toEqual([]);
+    expect(r.erb).toContain('CASE "他说＂好＂"');
+  });
+
+  it('表达式 `-> <别名>` 的分支值同样编码（赋值右侧不产截断字面量）', () => {
+    const src =
+      `角色: 12\n${ALIAS}时机 指令 310：\n` +
+      '    她的心情 = 当 她的好感度：\n        是 0 到 99 -> 台词\n        否则 -> 2\n';
+    const r = t(src);
+    expect(errs(src)).toEqual([]);
+    expect(r.erb).toContain('CFLAG:TARGET:心情 = "他说＂好＂"');
+  });
+});
+
+/* ============================================================================ */
+/* D. 编码器本体：回车符 fail-closed 的口径钉住                                      */
+/* ============================================================================ */
+
+/**
+ * 转译器按物理行切源（`splitPhysicalLines` 认 `\r\n` / `\r` / `\n`），CR 进不到
+ * 单行文本体里——所以 CR 分支只能在编码器本体上钉住：`failures` 里有事实、
+ * `body` 里没有坏字节（调用方据此不发射）。
+ */
+describe('① encodeErbText · 回车符 fail-closed 与合法代理项放行', () => {
+  it('U+000D 进 failures、不进 body', () => {
+    const r = encodeErbText('甲\u000D乙');
+    expect(r.ok).toBe(false);
+    expect(r.failures).toEqual([{ reason: 'carriage-return', offset: 1, char: 'U+000D' }]);
+    expect(r.body).toBe('甲乙');
+  });
+
+  it('合法代理对（emoji）原样放行（fail-closed 不误伤可表达字符）', () => {
+    const r = encodeErbText('😀"\\');
+    expect(r.ok).toBe(true);
+    expect(r.body).toBe('😀＂\\\\');
   });
 });

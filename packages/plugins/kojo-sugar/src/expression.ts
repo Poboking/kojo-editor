@@ -25,6 +25,7 @@ import { isKnownFunctionName, lowerSystemFunctions, suggestFunctionName } from '
 import { resolveEngineGlobal } from './engine-globals';
 import { isIdentPart, isIdentStart } from './identifier-chars';
 import { CJK } from './lexer';
+import { erbStringLiteral } from './literal';
 import type { AliasTable, DictionaryLookup } from './types';
 
 /** 降糖上下文 */
@@ -182,7 +183,9 @@ export function aliasValueToExpression(value: AliasValue, ctx?: ExprContext): st
     case 'number':
       return value.text;
     case 'string':
-      return `"${value.text}"`;
+      // 字符串值一律走唯一编码器（同 `RESULTS:` / 标签）：裸拼 `"…"` 遇 `"` / `\`
+      // 会截断或丢字符，产物不可加载。
+      return erbStringLiteral(value.text);
     case 'conditional':
       return conditionalAliasExpression(value, ctx);
   }

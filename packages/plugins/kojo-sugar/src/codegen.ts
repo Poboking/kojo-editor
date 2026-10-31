@@ -2850,7 +2850,8 @@ function renderCaseValue(raw: string, ctx: BodyContext, loc: { line: number; col
   if (alias) {
     const v = alias.value;
     if (v.kind === 'number') return v.text;
-    if (v.kind === 'string') return `"${v.text}"`;
+    // 字符串值一律走唯一编码器（同 `RESULTS:` / 标签；裸拼 `"…"` 遇 `"` / `\` 会截断字面量）
+    if (v.kind === 'string') return erbStringLiteral(v.text);
     if (v.kind === 'variable') return v.text;
     if (v.kind === 'character') return `%CALLNAME:${v.no}%`;
   }
@@ -3330,7 +3331,8 @@ function renderExprValue(node: SugarNode, ctx: BodyContext): string {
     if (alias) {
       const v = alias.value;
       if (v.kind === 'number') return v.text;
-      if (v.kind === 'string') return `"${v.text}"`;
+      // 字符串值一律走唯一编码器（同 `RESULTS:` / 标签；裸拼 `"…"` 遇 `"` / `\` 会截断字面量）
+      if (v.kind === 'string') return erbStringLiteral(v.text);
       if (v.kind === 'variable') return v.text;
       if (v.kind === 'character') return `%CALLNAME:${v.no}%`;
     }
