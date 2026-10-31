@@ -50,6 +50,12 @@ export interface CloseProjectSessionDeps {
 export async function closeProjectSession(deps: CloseProjectSessionDeps): Promise<void> {
   const errors: string[] = [];
 
+  // 0. 落盘屏障（E·R6）：插件的写一律是 fire-and-forget，关项目这一拍不等它，
+  //    整轮索引就白算了（下一轮还得从头扫）。上限 1.2s——关闭这条路径不许被写盘卡住，
+  //    等不完就放行，并在收尾那条里说清楚"没等到"（下一轮 `snapshotDirty` 会自己重算，
+  //    丢的这一轮不需要任何标记来"提醒"）。
+  const lateWrite = await flushStorageBarrier(deps.kernel, CLOSE_FLUSH_BUDGET_MS);
+
   try {
     await deps.kernel.project.close();
   } catch (e: unknown) {
@@ -85,5 +91,31 @@ export async function closeProjectSession(deps: CloseProjectSessionDeps): Promis
   }
 
   // 合成一条（通知条与错误卡都按 pre-wrap 显示，多行不会糊成一行）
+  if (lateWrite !== null) errors.push(lateWrite);
   if (errors.length > 0) deps.reportError(errors.join('\n'));
+}
+
+/**
+ * 关项目时等落盘的预算（毫秒）。写窗口实测 0.7s 起（42.7M 码元 / 54.66 MB 落盘，
+ * 见 E·R6 回执），留一倍余量；等不完就放行——关闭这条路不许被写盘卡住。
+ */
+const CLOSE_FLUSH_BUDGET_MS = 1200;
+
+/**
+ * E·R6 的落盘屏障：等在途存储写落地，返回一句**人话**（没等到 / 等失败）；一切正常返回 null。
+ *
+ * 两条退出路径（关项目 / 关窗）共用这一份：判据只有一份，接线点各自一行。
+ * `kernel` 可为 null（面板还没装配完就点了关闭）；`flushStorage` 是 additive 可选的
+ * （替身 kernel 不实现）⇒ 缺了都当作"没有在途写"。
+ */
+export async function flushStorageBarrier(kernel: Kernel | null, budgetMs: number): Promise<string | null> {
+  const flush = kernel?.flushStorage;
+  if (!flush) return null;
+  try {
+    const report = await flush(budgetMs);
+    if (report.drained || report.pending === 0) return null;
+    return `还有 ${report.pending} 笔缓存没写完（等了 ${report.ms}ms 先放行），下次打开会重新算一遍`;
+  } catch (e: unknown) {
+    return `关闭项目时等待缓存落盘失败：${errorText(e)}`;
+  }
 }

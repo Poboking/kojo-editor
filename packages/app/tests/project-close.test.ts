@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Kernel } from '@kojo/kernel';
+import type { Kernel, StorageFlushReport } from '@kojo/kernel';
 import type { RecentProject } from '@kojo/plugin-api';
 import {
   closeProjectSession,
@@ -19,6 +19,8 @@ interface MakeKernelOptions {
   close?: () => Promise<void>;
   recent?: () => Promise<RecentProject[]>;
   stop?: () => void;
+  /** E·R6：落盘屏障（不传 = 替身 kernel 不实现这条 optional） */
+  flushStorage?: (timeoutMs?: number) => Promise<StorageFlushReport>;
 }
 
 function makeKernel(opts: MakeKernelOptions = {}): { kernel: Kernel; calls: string[] } {
@@ -40,6 +42,14 @@ function makeKernel(opts: MakeKernelOptions = {}): { kernel: Kernel; calls: stri
         opts.stop?.();
       },
     },
+    ...(opts.flushStorage
+      ? {
+          flushStorage: async (timeoutMs?: number) => {
+            calls.push(`flush:${timeoutMs ?? 'default'}`);
+            return opts.flushStorage!(timeoutMs);
+          },
+        }
+      : {}),
   } as unknown as Kernel;
   return { kernel, calls };
 }
@@ -193,5 +203,58 @@ describe('crashExitDecision：崩溃退出不许绕过未保存确认', () => {
   it('有脏文件 ⇒ 必须走「明确丢弃」确认（EditorPane 已卸载，saveAll 是空操作）', () => {
     expect(crashExitDecision(1)).toBe('confirm-discard');
     expect(crashExitDecision(12)).toBe('confirm-discard');
+  });
+});
+
+/**
+ * E·R6：关项目时的落盘屏障（2026-10-31）。
+ *
+ * 插件的写是 fire-and-forget（索引快照 42.7M 码元 / 写窗口 0.7s 起）。关项目这一拍不等它，
+ * 整轮索引就白算了——下一次开项目还得从头扫。判据三条：
+ * ① 屏障排在拆除序**最前面**（先等写，再关项目）；
+ * ② 没等到也不许把关闭卡住（照走拆除序），但必须**说出来**；
+ * ③ 屏障自己抛错同样不阻断（关不掉的窗口比丢一次缓存严重）。
+ */
+describe('closeProjectSession：落盘屏障（E·R6）', () => {
+  it('先等写、再关项目：顺序 = flush → close → …', async () => {
+    const { kernel, calls } = makeKernel({
+      flushStorage: async () => ({ pending: 1, drained: true, ms: 12 }),
+    });
+    const { deps, reportError } = makeDeps(kernel, calls);
+
+    await closeProjectSession(deps);
+
+    expect(calls[0]).toBe('flush:1200'); // 预算 1.2s（写窗口 0.7s 起，留一倍余量）
+    expect(calls[1]).toBe('close');
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('没等到（drained:false）⇒ 拆除序照走，但把"还有几笔没写完"说出来', async () => {
+    const { kernel, calls } = makeKernel({
+      flushStorage: async () => ({ pending: 2, drained: false, ms: 1200 }),
+    });
+    const { deps, reset, reportError } = makeDeps(kernel, calls);
+
+    await closeProjectSession(deps);
+
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const message = String(reportError.mock.calls[0]?.[0]);
+    expect(message).toContain('还有 2 笔缓存没写完');
+    expect(message).toContain('下次打开会重新算一遍');
+    expect(message).toContain('1200ms');
+  });
+
+  it('屏障自己抛错：不阻断关闭，另起一行说清楚（与既有错误可同框）', async () => {
+    const { kernel, calls } = makeKernel({
+      flushStorage: async () => Promise.reject(new Error('存储域炸了')),
+    });
+    const { deps, reset, reportError } = makeDeps(kernel, calls);
+
+    await expect(closeProjectSession(deps)).resolves.toBeUndefined();
+
+    expect(calls).toEqual(['flush:1200', 'close', 'stop', 'clear', 'reset', 'recent', 'set-recent:0']);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(String(reportError.mock.calls[0]?.[0])).toContain('等待缓存落盘失败：存储域炸了');
   });
 });

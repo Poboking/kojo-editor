@@ -1041,10 +1041,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
+    //   - **E 批·R6 快照落盘屏障（2026-10-31）**：读数 **199 文件 / 3,501 KB**
+    //     （3,584,673 B = 上一条 3,576,406 + **8,267**）——**零新进图文件**（199 未动）。
+    //     逐枚按「现树 `stat` vs `HEAD` 同路径 `git cat-file -s`」实测，图内共**六枚**：
+    //     `kernel/src/storage.ts` **+3,052**（在途写登记表 + `flush()` + `StorageFlushReport`）、
+    //     `app/src/ui/project-close.ts` **+1,677**（屏障接线 + 没等到时那句人话，两条退出路径共用）、
+    //     `app/src/ui/window-close-guard.ts` **+1,497**（`beforeClose` + 桥的 `close()`：
+    //     无脏也要先拦一下、等完再由守卫自己关）、`app/src/ui/App.tsx` **+1,049**
+    //     （`kernelRef` + 接线）、`kernel/src/kernel.ts` **+965**（`flushStorage?` additive、
+    //     `stop()` 末尾补等一拍）、`kernel/src/index.ts` **+27**（类型导出）。
+    //     六枚合计 **8,267 B**，与闸取数**逐字节相等**（这一条难得对得这么齐，记一笔）。
+    //     ⇒ 闸 **3,493 → 3,501**。这一档是**行为**不是能力：插件侧的写一律
+    //     `void storage.set(...)`（索引快照 42.68M 码元 / 落盘 54.66 MB / 写窗口实测 0.6s 起），
+    //     关窗与关项目两处原来都没人等它，进程一走整轮索引白算。文件闸仍 199 ⇒
+    //     下一枚**新**进图模块依旧必须先挪一枚出去；本条只吃既有六枚里的字节。
+
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,493 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,501 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_493);
+    expect(totalKb).toBeLessThanOrEqual(3_501);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

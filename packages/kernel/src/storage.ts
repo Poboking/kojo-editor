@@ -122,10 +122,28 @@ export class FileStorageBackend implements StorageBackend {
   }
 }
 
+/**
+ * 落盘屏障的读数（E·R6，2026-10-31）。
+ *
+ * 存的写是 fire-and-forget（索引快照 42.7M 码元 / 写窗口实测 0.7s 起），关窗与关项目两条
+ * 路径原来都不等它：`void storage.set(...)` 之后进程一走，这一轮的快照就白算了。
+ * 宿主可以在退出前拿这份读数说清楚"等到了没有"，而不是静默丢掉。
+ */
+export interface StorageFlushReport {
+  /** flush 开始那一刻登记在册的在途写条数 */
+  readonly pending: number;
+  /** true = 全部落地；false = 超过上限仍在途（调用方据此决定放不放行） */
+  readonly drained: boolean;
+  /** 实际等了多久（毫秒） */
+  readonly ms: number;
+}
+
 export class ScopedStorageImpl implements ScopedStorage {
   constructor(
     private readonly scope: string,
     private readonly backend: StorageBackend,
+    /** 在途写登记处（StorageServiceImpl）；单独构造（测试 / 独立域）时为 undefined，flush 无从等起 */
+    private readonly owner?: { track<T>(p: Promise<T>): Promise<T> },
   ) {}
 
   /**
@@ -166,8 +184,12 @@ export class ScopedStorageImpl implements ScopedStorage {
     // 序列化**不在调用方的任务里做**：`JSON.stringify` 是同步的，写成
     // `backend.write(..., JSON.stringify(value))` 时它在 set() 被调用那一拍就烧完全部时间
     // （索引快照 18 MB ≈ 200ms，正好压在"索引收尾"那帧的尾巴上）。写盘本身就是异步的。
-    await yieldToMain();
-    await this.backend.write(this.scope, key, JSON.stringify(value));
+    // E·R6：整段登记进在途表——调用方仍旧可以不 await（语义不变），但宿主退出前能等齐。
+    const work = (async (): Promise<void> => {
+      await yieldToMain();
+      await this.backend.write(this.scope, key, JSON.stringify(value));
+    })();
+    await (this.owner ? this.owner.track(work) : work);
   }
 
   async delete(key: string): Promise<void> {
@@ -184,15 +206,54 @@ export class ScopedStorageImpl implements ScopedStorage {
 export const GLOBAL_SCOPE = '_global';
 
 export class StorageServiceImpl implements StorageService {
+  /**
+   * 在途写（E·R6）：`set` 一被调用就登记，settle（成功或失败）即摘除。
+   *
+   * 只记**当前**一批，不做历史：`flush` 的语义是"把我叫来之前已经发起的那批等完"，
+   * 等的过程中新起的写不追（它们属于下一拍，追下去会变成"永远等不完"）。
+   */
+  private readonly inFlight = new Set<Promise<unknown>>();
+
   constructor(private readonly backend: StorageBackend) {}
 
   /** 返回窄类型：内核侧（与未来的契约扩展）可经 `entry()` 拿到显式三态；契约消费者不受影响 */
   scope(pluginId: string): ScopedStorageImpl {
     assertSafeSegment('scope', pluginId);
-    return new ScopedStorageImpl(pluginId, this.backend);
+    return new ScopedStorageImpl(pluginId, this.backend, this);
   }
 
   global(): ScopedStorageImpl {
-    return new ScopedStorageImpl(GLOBAL_SCOPE, this.backend);
+    return new ScopedStorageImpl(GLOBAL_SCOPE, this.backend, this);
+  }
+
+  /** 内部：登记一笔在途写。错误仍由调用方自己的 catch / await 接，这里只负责"知道它在飞" */
+  track<T>(p: Promise<T>): Promise<T> {
+    this.inFlight.add(p);
+    const drop = (): void => {
+      this.inFlight.delete(p);
+    };
+    // 两条分支都挂：写失败不该在登记表里留下幽灵，也不该把 rejection 变成 unhandled
+    void p.then(drop, drop);
+    return p;
+  }
+
+  /**
+   * 等在途写落地，最多等 `timeoutMs`（默认 1.5s —— 写窗口实测 0.7s 起，留一倍余量）。
+   *
+   * 为什么要有上限：这条路径挂在**关窗**上，等不完也必须放行，否则"没写完"会变成
+   * "关不掉"。超时不算异常：返回值里 `drained: false` 就是"没等到"，由调用方决定怎么说。
+   */
+  async flush(timeoutMs = 1500): Promise<StorageFlushReport> {
+    const startedAt = Date.now();
+    const batch = [...this.inFlight];
+    if (batch.length === 0) return { pending: 0, drained: true, ms: 0 };
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), Math.max(0, timeoutMs));
+    });
+    const settled = Promise.allSettled(batch).then(() => 'settled' as const);
+    const verdict = await Promise.race([settled, timeout]);
+    if (timer !== null) clearTimeout(timer);
+    return { pending: batch.length, drained: verdict === 'settled', ms: Date.now() - startedAt };
   }
 }

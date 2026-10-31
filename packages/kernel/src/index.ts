@@ -16,6 +16,7 @@ export {
   GLOBAL_SCOPE,
   assertSafeSegment,
   type StorageBackend,
+  type StorageFlushReport,
 } from './storage';
 export { FileIOServiceImpl } from './io';
 export { RemoteServiceImpl } from './remote';

@@ -24,6 +24,7 @@ import { PluginRuntime } from './runtime';
 import { RemoteServiceImpl } from './remote';
 import { SlotRegistryImpl } from './slots';
 import { FileStorageBackend, StorageServiceImpl } from './storage';
+import type { StorageFlushReport } from './storage';
 import { WorkspaceServiceImpl } from './workspace';
 import { FileWatcherServiceImpl, type FileWatchController } from './watcher';
 
@@ -84,6 +85,14 @@ export interface Kernel {
   start(): Promise<void>;
   /** 停止：逆序停用全部插件 */
   stop(): Promise<void>;
+  /**
+   * 在途存储写落地屏障（E·R6，2026-10-31；additive 可选 —— 替身 kernel 不必实现）。
+   *
+   * 插件侧的写一律是 `void storage.set(...)`（索引快照尤其如此：42.7M 码元 / 写窗口 0.7s 起）。
+   * 宿主在**关项目 / 关窗**这两个"进程马上就要走"的点上等一等，才不会把整轮索引白算掉。
+   * 有上限：等不完返回 `drained: false`，由调用方决定怎么说（这条路径不许把窗口卡住）。
+   */
+  flushStorage?(timeoutMs?: number): Promise<StorageFlushReport>;
 }
 
 /** 只读服务查询器 */
@@ -221,6 +230,12 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
     async stop(): Promise<void> {
       fileWatch.stop();
       await runtime.stopAll();
+      // E·R6：停插件可能刚发起最后一次落盘（`void storage.set`），这里补等一拍再算停干净
+      await storage.flush();
+    },
+    // E·R6：宿主在"进程马上要走"的两个点上主动等（关项目 / 关窗）；stop() 里那次是兜底
+    async flushStorage(timeoutMs?: number) {
+      return storage.flush(timeoutMs);
     },
   };
 }

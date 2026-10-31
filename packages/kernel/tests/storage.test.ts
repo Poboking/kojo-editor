@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlatformBridge, RawFileRead } from '@kojo/plugin-api';
 import { FileStorageBackend, StorageServiceImpl, assertSafeSegment } from '../src/storage';
+import type { StorageBackend, StorageReadResult } from '../src/storage';
 import { MemoryStorageBackend } from './helpers/memory-storage';
 import { NodeBridge } from './helpers/node-bridge';
 import { newWireFacts, tauriShapedBridge, type WireFacts } from './helpers/ipc-shaped-bridge';
@@ -215,5 +216,125 @@ describe('存储域 · 文件后端（PS-2：一趟 IPC + 显式三态）', () =
     expect(facts.singleReads).toEqual([]);
     expect(facts.batchInvocations.every((b) => b.size === 1)).toBe(true);
     expect(facts.batchInvocations).toHaveLength(3);
+  });
+});
+
+/**
+ * 落盘屏障（E·R6，2026-10-31）。
+ *
+ * 背景：插件侧的写一律是 `void storage.set(...)`（索引快照 42.7M 码元 / 写窗口 0.7s 起）。
+ * 宿主在"进程马上要走"的点上必须能问一句「还有几笔在飞、等不等得到」，否则整轮索引白算。
+ * 这里的判据只钉屏障本身：等谁、等多久、等不完怎么报、失败算不算等到。
+ */
+describe('落盘屏障 flush（E·R6）', () => {
+  /**
+   * 写入可控：`release(key)` 之前这个键的 write 一直挂着——模拟"写还在飞"。
+   * 按**键**放行而不是"一次全放"：否则"等待中新起的写"会被同一发 release 顺手放掉，
+   * 那一条判据（屏障不追新账）就测不出来了。
+   */
+  class GatedBackend implements StorageBackend {
+    readonly written: string[] = [];
+    private readonly gates = new Map<string, (() => void)[]>();
+    read(): Promise<StorageReadResult> { return Promise.resolve({ kind: 'missing' }); }
+    write(_scope: string, key: string): Promise<void> {
+      this.written.push(key);
+      return new Promise<void>((resolve) => {
+        const bucket = this.gates.get(key) ?? [];
+        bucket.push(resolve);
+        this.gates.set(key, bucket);
+      });
+    }
+    remove(): Promise<void> { return Promise.resolve(); }
+    list(): Promise<string[]> { return Promise.resolve([]); }
+    release(key: string): void {
+      const bucket = this.gates.get(key) ?? [];
+      this.gates.delete(key);
+      for (const g of bucket) g();
+    }
+    get inflight(): number {
+      let n = 0;
+      for (const bucket of this.gates.values()) n += bucket.length;
+      return n;
+    }
+  }
+
+  /** 让一笔 set 走到 backend.write（它前面有一跳 yieldToMain） */
+  const reachWrite = (): Promise<void> => new Promise((r) => setTimeout(r, 10));
+
+  it('没有在途写 ⇒ 立即返回，不白等', async () => {
+    const storage = new StorageServiceImpl(new GatedBackend());
+    const report = await storage.flush(500);
+    expect(report).toEqual({ pending: 0, drained: true, ms: 0 });
+  });
+
+  it('有在途写 ⇒ 等它落地，且报出"等了几笔"', async () => {
+    const backend = new GatedBackend();
+    const storage = new StorageServiceImpl(backend);
+    const writing = storage.scope('plugin-a').set('k', { v: 1 });
+    const flushing = storage.flush(500);
+    let settled = false;
+    void flushing.then(() => { settled = true; });
+    await reachWrite();
+    expect(settled).toBe(false); // 写没落地，屏障就不许放行
+    backend.release('k');
+    await writing;
+    expect(await flushing).toMatchObject({ pending: 1, drained: true });
+  });
+
+  it('超时 ⇒ drained:false 且按时返回（关窗这条路不许被写盘卡住）', async () => {
+    const backend = new GatedBackend();
+    const storage = new StorageServiceImpl(backend);
+    const writing = storage.scope('plugin-a').set('k', 1);
+    const startedAt = Date.now();
+    const report = await storage.flush(20);
+    const elapsed = Date.now() - startedAt;
+    expect(report.pending).toBe(1);
+    expect(report.drained).toBe(false);
+    expect(elapsed).toBeGreaterThanOrEqual(15);
+    expect(elapsed).toBeLessThan(500); // 有上限，不是"等到天荒地老"
+    backend.release('k');
+    await writing;
+  });
+
+  it('写失败也算"等到"：错误仍由原调用方接，屏障不吞也不改语义', async () => {
+    const failing: StorageBackend = {
+      read: () => Promise.resolve({ kind: 'missing' }),
+      write: () => Promise.reject(new Error('boom')),
+      remove: () => Promise.resolve(),
+      list: () => Promise.resolve([]),
+    };
+    const storage = new StorageServiceImpl(failing);
+    const writing = storage.scope('plugin-a').set('k', 1);
+    const report = await storage.flush(500);
+    expect(report).toMatchObject({ pending: 1, drained: true });
+    await expect(writing).rejects.toThrow('boom');
+  });
+
+  it('只等"叫它之前"那批：等待中新起的写不追（否则永远等不完）', async () => {
+    const backend = new GatedBackend();
+    const storage = new StorageServiceImpl(backend);
+    const a = storage.scope('plugin-a');
+    const first = a.set('k1', 1);
+    const flushing = storage.flush(500);
+    const second = a.set('k2', 2); // 屏障已经在等了，这一笔属于下一拍
+    await reachWrite();
+    backend.release('k1');
+    await first;
+    const report = await flushing;
+    expect(report).toMatchObject({ pending: 1, drained: true });
+    expect(backend.inflight).toBe(1); // k2 仍在飞——屏障没追它
+    backend.release('k2');
+    await second;
+  });
+
+  it('落地之后登记表清空（不攒幽灵，重复 flush 立刻返回）', async () => {
+    const backend = new GatedBackend();
+    const storage = new StorageServiceImpl(backend);
+    const writing = storage.scope('plugin-a').set('k', 1);
+    await reachWrite();
+    backend.release('k');
+    await writing;
+    await new Promise((r) => setTimeout(r, 0));
+    expect(await storage.flush(500)).toEqual({ pending: 0, drained: true, ms: 0 });
   });
 });

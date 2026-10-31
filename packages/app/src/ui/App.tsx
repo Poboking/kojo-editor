@@ -182,7 +182,7 @@ import { useProjectSession, useSessionFlush, useSessionStore } from './use-proje
 import { syncErbIndexAfterDiskChange } from './erb-index-sync';
 import { ProjectErrorBoundary } from './error-boundary';
 import { ProjectErrorNotice, raiseProjectErrorBar, visibleProjectError, type ProjectErrorAction, type ProjectErrorBar } from './project-error-notice';
-import { crashExitDecision } from './project-close';
+import { crashExitDecision, flushStorageBarrier } from './project-close';
 import { discardRecoveryJournal } from './crash-recovery';
 
 /**
@@ -1635,6 +1635,10 @@ export function App(): ReactElement {
 
   const phaseRef = useRef<AppPhase>(phase);
   phaseRef.current = phase;
+  // E·R6：关窗守卫的 effect 只装一次（[] 依赖），kernel 是异步装配的 state ⇒ 经 ref 取值，
+  // 否则守卫拿到的是首次渲染那个 null。
+  const kernelRef = useRef<Kernel | null>(null);
+  kernelRef.current = kernel;
 
   // Alt+F4 / 关窗守卫（深审 A2）：Tauri 的 onCloseRequested 不 preventDefault 就直接
   // 关窗（EditorPane 卸载 dispose 全部 model，脏修改静默丢失）。一律先拦下再分流：
@@ -1649,6 +1653,8 @@ export function App(): ReactElement {
       const cleanup = await installWindowCloseGuard(
         {
           onCloseRequested: (handler) => getCurrentWindow().onCloseRequested(handler),
+          // 主动关闭：beforeClose 走完由守卫自己再关一次（这一次 isApproved 已置位 ⇒ 直接放行）
+          close: () => getCurrentWindow().close(),
         },
         {
           isApproved: () => windowCloseApprovedRef.current,
@@ -1656,6 +1662,14 @@ export function App(): ReactElement {
           onConfirm: () => {
             exitAfterCloseRef.current = true;
             setPendingProjectClose(dirtyRef.current);
+          },
+          // E·R6：放行前等在途存储写落地（索引快照 42.7M 码元 / 写窗口实测 0.6s 起）。
+          // 上限 1.2s 由内核 flush 自己封顶：等不完也放行——关不掉的窗口比丢一次缓存严重。
+          // 判据与关项目那条共用 `flushStorageBarrier`（一份逻辑两处接线）。
+          beforeClose: async () => {
+            const lateWrite = await flushStorageBarrier(kernelRef.current, 1200);
+            if (lateWrite !== null) console.warn('[kojo]', lateWrite);
+            windowCloseApprovedRef.current = true;
           },
         },
       );
