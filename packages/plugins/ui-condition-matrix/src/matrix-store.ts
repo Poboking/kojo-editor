@@ -276,18 +276,54 @@ export function createMatrixStore(ctx: PluginContext, deps: {
     notify();
   };
 
+  /**
+   * 建表调度（STATE §四 记的那条欠账，2026-10-31 收口）：`buildCharacterIndex` 是**全量**扫
+   * 117k 函数的一次性成本（实测 **292ms**），而触发它的 `kojo.functionChanged` 是**索引任务里
+   * 同步发出来**的——直接跟在同一拍上，等于让「索引已可用」那一帧再背一次建表的账。
+   *
+   * 推到下一轮宏任务（与 `navigator-store.scheduleRebuild` 同形）：索引帧按时收尾（面板先落
+   * 「建表中」），建表自成一条短帧；同一轮里的多次触发只建一次（后到的索引赢），已建过的
+   * 索引仍由 `rebuild` 的实例去重兜底。这不是"少算一次"——`characterIndex` 仍是同一个纯函数
+   * 的结果，只是不跟索引挤在同一帧里。
+   */
+  let pendingBuild: ErbIndex | null = null;
+  let buildScheduled = false;
+  const scheduleRebuild = (index: ErbIndex | null): void => {
+    pendingBuild = index;
+    if (buildScheduled) return;
+    buildScheduled = true;
+    setTimeout(() => {
+      buildScheduled = false;
+      const next = pendingBuild;
+      pendingBuild = null;
+      rebuild(next);
+    }, 0);
+  };
+  ctx.onDispose(() => {
+    buildScheduled = false;
+    pendingBuild = null;
+  });
+
   /** 等待索引就绪并重建（项目刚打开时索引可能在途） */
   function refresh(): void {
     if (!project.current()) {
+      pendingBuild = null; // 清挂起：否则宏任务会把已关项目的矩阵建回来
       rebuild(null);
       return;
     }
+    // 归属守卫（照 `navigator-store` 2026-10-16 那条）：`ensureIndex` 在途时可能跨项目切换，
+    // 旧回包落地前必须校验归属，否则建成「A 索引 + B 角色字典」的矩阵。
+    const requested = project.current();
     state.loadError = null;
     notify();
     void parser
       .ensureIndex()
-      .then((index) => rebuild(index))
+      .then((index) => {
+        if (project.current() !== requested) return;
+        scheduleRebuild(index);
+      })
       .catch((err: unknown) => {
+        if (project.current() !== requested) return;
         const msg = err instanceof Error ? err.message : String(err);
         state.loadError = msg;
         state.indexReady = false;
@@ -307,6 +343,8 @@ export function createMatrixStore(ctx: PluginContext, deps: {
   ctx.onDispose(
     ctx.bus.on('project.closed', () => {
       resetWorkspaceMatrix();
+      // 清挂起的建表：否则宏任务会把已关项目刚算出的索引建回来
+      pendingBuild = null;
       rebuild(null);
     }),
   );
