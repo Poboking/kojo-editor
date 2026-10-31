@@ -569,3 +569,9 @@
 290. **「补一条记忆」式设计与「条件每轮重算」的事实冲突时，先问一句：它到底救回了什么**（2026-10-31 E 批·R6 实拍，路线图 v2 的 R6）：设计稿写的是「落一个几字节的待写账（pending 标记），启动时若发现它且输入位未变，就续跑那次写」。实现完之后逐条走场景，发现**一个场景也救不回来**——① 数据在内存里，进程走了就没有可续的字节；② 「提醒下一轮补写」也不需要：`snapshotDirty` 的三个触发源（`salvaged !== null` / `fresh.size > 0` / 条目数与文件数不符）**每轮都从盘上那份旧快照与当前文件表现算**，丢写那一轮之所以要写正是因为有 stale 文件/salvage/数目不符，而这同一批输入在下一轮**原样还在**（旧快照没更新）⇒ 下一轮本来就再写一次，丢写从来不会"静默地一直丢"；③ 唯一「丢一次就再不写」的组合是"命中轮 + `snapshotDirty=false`"，而命中轮压根没发起过写 ⇒ 无从丢起。净结果：三处改动 + 一个键形态约定，回退成 0 行。
     **判据模板**：写这类"记忆"之前，把**触发写的那三个条件**逐条问一遍"下一轮它还在不在"；只要还在，记忆就是纯负担。真正值得做的只有**数据还在内存里**的那一拍——关窗 / 关项目（本批落的屏障，见 §四 E 批·R6）。
     附一条对称的量测：那笔"丢掉的写"值多少钱，得量它自己——`set()` 走真 `FileStorageBackend`（42.68M 码元 / 落盘 54.66 MB）**565–619 ms**；在此之前谁也说不清"等不等得起"（1.2s 预算 = 2× 余量），而这正是"先量后设计"的意义。
+
+291. **按"包装形状"解 Monaco 的 provider 注册表 ⇒ 六个语义读数在真机上恒为空，而单测全绿**（2026-10-31 端到端冒烟实拍，`packages/app/src/debug/install-debug.ts`）：
+   `LanguageFeatureRegistry.ordered(model)` 在 0.57 上**直接返回 provider 数组**——上游实现是 `_orderedForEach(model, …, entry => result.push(entry.provider))`（`monaco-editor/esm/vs/editor/common/languageFeatureRegistry.js`），拆包这一步它自己做完了。我们按 `entry.provider` 再解一层，于是每条都解出 `undefined`：`providersOf` 恒空、`presenceOf` 恒 `false`，`definitionAt` / `referencesAt` / `codeActionsAt` / `signatureAt` / `documentSymbols` / `diagnostics` 六条腿**全部返回空**，`selfCheck().semantic.providers` 五项全 `false`。
+   ⇒ 为什么三个月没被发现：48 条单测喂的全是 `{ provider: … }` 包装形状——**正好是错的那一侧**，纯函数自然全绿；只有端到端冒烟打真 app 才撞破（`symbols` 从 0 变 3）。
+   ⇒ 判据：解包要**两种形态都收**（有条目上的 `provider` 对象就用它，否则看条目自己有没有该特性的方法 `provideDocumentSymbols` 之类——有方法才算这个特性的 provider）；同时把「上游真实形状」钉成回归用例的第一类，包装形态降为兼容项。
+   ⇒ 附带一条：`providers.X === true` 只说明"注册表里看得到 provider"，不说明"它会作答"。本仓插件的供方对非 kojo2 请求**显式弃权**（`plugins/kojo-lang/src/references.ts` 头注三态），所以 ERB 文件上 `references` 回空是**正确答案**，不是链路坏了。别把这两个事实混成一个判据。

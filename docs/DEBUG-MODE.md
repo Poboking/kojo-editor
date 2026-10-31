@@ -31,6 +31,9 @@ Web 调试模式的形态：编辑器在**纯浏览器**里跑（vite dev 页面
 
 ```bash
 # 0) 在 kojo-editor 仓库内；先 pnpm install 过（vite 在位）
+#    起不来 / 读数可疑，先体检（八项：node 版本 / 仓库根 / 会话文件 / 宿口 / CDP 口 / dist / vite 缓存 / 残留进程）
+node tools/debug-cli.mjs doctor
+#    ↳ 任一 FAIL ⇒ 退出码 1；WARN 只提示不失败；每项尾部带可复制的 fix 命令（体检只读：不删缓存、不杀进程）
 # 1) 拉起整套（调试宿 + vite + 无头浏览器 + CDP），打印编辑器 URL
 node tools/debug-cli.mjs serve --headless
 #    ↳ 有窗模式去掉 --headless（真人看屏）；不带浏览器加 --no-browser；
@@ -147,6 +150,22 @@ error toast 原文 > 判据理由**：
   `editor.suggestAt(line,col)` 触发补全并读 `.suggest-widget` 行——**别用 CDP 模拟鼠标**（对 Monaco 悬停
   不生效，PITFALLS 247）；补全光标必须落在引号内合法位置，否则只会给属性名候选。
   完整清单与"读不到返回 null/false 不抛"的口径见 §三 页内 API。
+- **UI 层真鼠标（悬停 / 双击 / 拖拽 / 滚轮）**：`hover <选择器|"x,y"> [--settle <ms>]`（`mouseMoved` 停在目标
+  中心再等静默窗，默认 120ms——hover provider 是异步的，事件送达那一刻弹窗必然还不在）、`dblclick <选择器|"x,y">`
+  （`pressed`/`released` 两轮、`clickCount` 依次 1、2）、`drag <起点> <终点> [--steps <n>]`（按下 → n 帧带
+  `buttons:1` 的移动 → 抬起，默认 8 帧）、`wheel <选择器|"x,y"> --dy 120`（先把指针移到目标再滚，滚的是指针
+  下的那个滚动容器；`--dx/--dy` 都为 0 直接 exit 2）。
+  选择器会过一遍 `document.elementFromPoint` 自证落点：被 toast / 遮罩 / 粘性工具栏盖住时打
+  `[debug] ⚠ elementFromPoint 未命中 …` 后**仍按坐标操作**——"点了没反应"先看这行，再 `dom` 查遮罩，
+  别先把账记到功能上。⚠ Monaco 编辑器里的**悬停文本**仍走 `editor.hoverAt`（PITFALLS 247：鼠标事件不弹
+  `.monaco-hover`）；`hover` 用在 UI 层提示（按钮 tooltip、树条目、hover 才出现的操作条）。
+- **语义读数（定义 / 引用 / 代码动作 / 签名 / 符号 / 诊断）**：`definition <行> <列>`、`references`、
+  `code-actions`、`signature`（行列 **1 基**，与 Monaco position 同口径）、`symbols`、`diagnostics`（对整篇文档）。
+  它们直读 provider 注册表（与真人点菜单同源，**不改光标、不弹面板**）；**空结果是正常读数**（打 `(空)`、
+  退出码 0），只有"没有焦点编辑器 / 行列非法 / 页面没有 `.editor` 分面"才 exit 2——所以先 `open-project`
+  + `open-file` 再查。`code-actions` 只列"有哪些动作"（`title/kind/isPreferred/hasEdit`），**绝不 apply**，
+  要真改走 `run`。读数为空想分清"没挂 provider"与"这里确实没有"，先看 `selfCheck().semantic.providers`
+  （§三「自检」）。
 - **升级 Monaco / 动编辑器依赖后，先跑 `editor.selfCheck()`**（见 §三「自检」）：这一族读数依赖 Monaco
   **私有 DOM 形态**（`.monaco-hover` / `.suggest-widget` / `.label-name`）与**私有贡献点**
   （`editor.contrib.folding`），升级会**静默失效**——`hoverAt` 永远回 `null`、`foldingRanges` 永远回
@@ -176,6 +195,48 @@ error toast 原文 > 判据理由**：
 | `screenshot <png> [--full]` | 截图 | 拍前自动 `Page.bringToFront` + 双 rAF 强制产帧，**不吃缓存帧**（切主题/Monaco 重绘后也是新帧）；agent 的「眼睛」 |
 | `perf <start\|stop\|quick [ms]>` | UI 卡顿体检（可开关探针） | start/stop 跨命令存活（探针在页内）；报告四路：帧分档 / 长任务×事件 hint / 交互延迟 / 逐源码帧耗时（render 型长帧归 `(render)` 桶） |
 | `profile <run [ms]> [--eval "<js>"]` | CPU 采样归因（函数级热点） | selfTime Top25；⚠ 绑 CDP 连接——start/stop 跨调用无效，用 run 一条龙；KOJO_PROFILE_OUT 落 .cpuprofile |
+| `doctor [--json] [--repo <路径>]` | 工具链体检（八项） | `node-version / repo-root / session-file / host-port / cdp-port / dist-build / vite-cache / stale-procs` 逐项 PASS/WARN/FAIL；**任一 FAIL ⇒ 退出码 1**，WARN 不改变退出码；`--repo` 缺省＝本 CLI 所在仓库（不是 cwd）；只读（不删缓存、不杀进程），fix 只给可复制的命令；`--json` 与 `node tools/debug-doctor.mjs --json` 同一形态 |
+| `hover <选择器\|"x,y"> [--settle <ms>]` | CDP 真鼠标悬停 | `mouseMoved` 停在目标中心再等静默窗（默认 120ms）；hover 是异步给的，静默窗不够就加大；Monaco 悬停文本仍走 `editor.hoverAt`（§二 语言面配方） |
+| `dblclick <选择器\|"x,y">` | 真双击 | `pressed`/`released` 跑两轮、`clickCount` 依次 1、2——不是"连发两次 click"（两轮互不相干的单击浏览器不会合成 dblclick） |
+| `drag <起点> <终点> [--steps <n>]` | 真拖拽 | 按下 → `n` 帧带 `buttons:1` 的 `mouseMoved`（末帧即终点）→ 抬起，`n` 默认 8；两端都收选择器或 `"x,y"`。中间帧不能省：HTML5 拖拽靠 mousemove 累积位移判落区 |
+| `wheel <选择器\|"x,y"> [--dx <n>] [--dy <n>]` | 真滚轮 | 先把指针移到目标再 `mouseWheel`（滚的是指针下的滚动容器）；`--dx/--dy` 都为 0 ⇒ **exit 2**（空滚轮事件＝"滚了没反应"的假绿） |
+| `definition <行> <列>` / `references <行> <列>` / `code-actions <行> <列>` / `signature <行> <列>` | 语义读数（行列为 **1 基**） | 走页内 `editor.*At()` 的 provider 链；`code-actions` **只列不 apply**；空结果是有效读数（打 `(空)`、exit 0），只有"没有焦点编辑器 / 行列非法"才 exit 2；`references` 带 `total` 与截断标记 |
+| `symbols` / `diagnostics` | 文档符号 / 当前文档诊断 | 不吃行列（对整篇文档）；诊断按 `MarkerSeverity` 打档位名（Hint/Info/Warning/Error），未知值原样打 |
+
+### 指针族：坐标是**一个**参数
+
+- 坐标写成 `"x,y"` 一个位置参数：`drag 10,20 300,200`。拆成两个就把 `drag <起点> <终点>` 的位置参数占满，
+  与 `type --mode` 把模式当成待输入文本是同一类翻车。
+- 带逗号的选择器（`a[href], b`）不会被当成坐标：判据是"以数字或小数点打头**且**含逗号"。
+- 坐标形态但数字写坏（`"10,y"` / `"10,,20"` / `"10,20,30"`）⇒ exit 2 并回显原文——`10,20` 与 `10 20`
+  的报错必须能分辨，否则用户无从改。
+- 数值参数（`--settle / --steps / --dx / --dy`）非法当场 exit 2，不静默落默认：`wheel --dy abc` 若变 0，
+  用户看到的是"滚了没反应"，比报错贵。
+- 四个命令都把落点回报出来（`--json` 里是 `point` / `from,to,moves`）；被遮挡时那行
+  `[debug] ⚠ elementFromPoint 未命中 …` 在 stderr，人读形态的 `[ok]` 行仍会打出来。
+
+### 语义族：空结果是读数，不是失败
+
+- **行列 1 基**，列是字符列、从 1 开始（与 Monaco position、`editor.tokens()` 同口径）；输出回显
+  `at: {line, column}`——位置错一位时读数照样"有内容"，只能靠回显抓。
+- 空结果 ⇒ 打 `(空)`、**退出码 0**。只有这几种才 exit 2：`__kojoDebug.editor` 分面不在（页面跑的是旧构建）/
+  没有焦点编辑器（先 `open-project` + `open-file`，或 `click` 编辑器）/ 行列不是 >=1 的整数。
+- 数据源是 provider 注册表（`ILanguageFeaturesService`），不是编辑器动作：动作是**副作用**
+  （`revealDefinition` 会搬光标、跨文件还换标签；quickFix 的清单只活在弹出的菜单里），注册表是那些动作
+  背后的同一批 provider，读它不动编辑器状态。
+- 读数都裁剪过：`definition` 20 条、`references` 显示 50 条而 `total` 是真实总数（裁剪上限 500，超出标
+  "已截断"）、`code-actions` 30 条、`symbols` 200 条（父子已压平成 `depth`）、`diagnostics` 200 条。
+- 读数为空时分流看 `selfCheck().semantic.providers`（见下「自检」）：`false`＝这个语言真的没挂 provider
+  （空是**正确**读数）；`null`＝没问到（再调一次）；`true` 却读空 ⇒ 换行列，或 provider 对该位置确实没货。
+
+### `--json`：stdout 只有一个 JSON 文档
+
+`status / state / commands / dom / events / wait / assert` 与指针族、语义族、`doctor` 都吃 `--json`：
+
+- `--json` 时 stdout **只有一个 JSON 文档**（无 ANSI、键序＝对象字面量顺序），可直接 `JSON.parse`；
+- 失败 ⇒ stderr + 非 0，**stdout 一个字符都不留**（宁可空，也不给半截文档——半截 JSON 的报错位置极具误导性）；
+- **不加 `--json` 时人类输出逐字不变**：`[ok] wait 满足（…）`、`（最近 N 条）`、`（12 条）` 这些字面量
+  有脚本和人照着读，改一个字都算回归。
 
 页内 API（`?kojo-debug=1` 选入后）：`__kojoDebug.{mode, host, state(), kernel(), commands.{list,run},
 bus.{recent,on}, editor.{…}, invoke, dialogPolicy.{arm,armed,clear,status},
@@ -196,7 +257,13 @@ perf.{start,stop,isRunning,lastReport,summary}}`。
 | `setSelection(startLine, startColumn, endLine, endColumn)` / `revealLine(line, reveal?)` | 回 `boolean` |
 | `foldingRanges()` | 尽力而为：拿不到折叠模型 ⇒ `null`（不同 Monaco 版本内部形状会变，不许假装有） |
 | `tokens(lineFrom, lineTo)` | `[{line, tokens:[{type, startIndex}]}]`（`monaco.editor.tokenize`） |
-| `selfCheck()` | **私有形态自检**（只读、绝不抛）：`{monacoVersion, languageId, selectors, foldingShape, ok}`——升级 Monaco 后**先跑它**，`ok===false` 说明私有 DOM 形态或折叠贡献点已变，此时 `hoverAt`/`suggestAt`/`foldingRanges` 的 `null` **不可信**（见下方「自检」） |
+| `selfCheck()` | **私有形态 + 语义自检**（只读、绝不抛）：`{monacoVersion, languageId, selectors, foldingShape, ok, semantic}`——升级 Monaco 后**先跑它**，`ok===false` 说明私有 DOM 形态或折叠贡献点已变，此时 `hoverAt`/`suggestAt`/`foldingRanges` 的 `null` **不可信**（见下方「自检」） |
+| `definitionAt(line, column, opts?)` | `[{path, line, column}]`（1 基；`path` 相对工程根，拿不到工程根时给归一化后的绝对路径）——provider 注册表直读，不改光标；上限 20 条 |
+| `referencesAt(line, column, opts?)` | `{items, total}`：`items` 最多 50 条、`total` 是真实总数（裁剪上限 500）；`opts.includeDeclaration` 缺省 `true`（与菜单「查找引用」同源） |
+| `codeActionsAt(line, column, opts?)` | `[{title, kind, isPreferred, hasEdit}]`（零宽区间＝光标停在这一格按 Alt+Enter）；**只读，绝不 apply** |
+| `signatureAt(line, column, opts?)` | `{label, parameters, activeParameter, documentation?}` 或 `null`：第一个给得出签名的 provider 即答案，`activeParameter` 0 基（与 provider 同口径） |
+| `documentSymbols()` | `[{name, kind, depth}]`：父子关系压平成 `depth`（0＝顶层），不吃行列；上限 200 条 |
+| `diagnostics()` | `[{line, column, severity, message, source?}]`：`markers()` 的契约形态，`severity` 是 `MarkerSeverity` 的 1/2/4/8，缺 `source` 不挂键 |
 
 **口径（重要）**：这一族**一律不抛**。没有焦点编辑器 / 文件没开 / UI 部件没起来时，
 返回 `null`（对象型）、`false`（布尔型）或 `[]`（数组型）。所以脚本里判「功能坏了」不能只看有没有异常，
@@ -213,6 +280,7 @@ node tools/debug-cli.mjs eval "__kojoDebug.editor.selfCheck()"
 // {"monacoVersion":"0.57.0","languageId":"kojo","selectors":{"hover":true,"suggest":true,
 //  "suggestRow":false,"labelName":false,"detailsLabel":false,"foldingContribution":true},
 //  "foldingShape":"promise","ok":true}
+// 同一份输出末尾还有一块 `semantic`（形状与口径见下）
 ```
 
 | 字段 | 取值 | 口径 |
@@ -224,7 +292,7 @@ node tools/debug-cli.mjs eval "__kojoDebug.editor.selfCheck()"
 | `selectors.suggestRow` / `labelName` / `detailsLabel` | `boolean` | **纯 DOM 探测、尽力而为**（0 命中即 false）：面板没弹本来就 0 命中，所以**不参与 `ok`**，只用于人工定位「候选行/名字/细节」三个类名还在不在 |
 | `selectors.foldingContribution` | `boolean` | `getContribution('editor.contrib.folding')` 非空（真实探测） |
 | `foldingShape` | `'regions' \| 'ranges' \| 'promise' \| 'none'` | 折叠模型真实形态：**0.57 是 `promise`**（`getFoldingModel()` 返 Promise ⇒ 同步读数取不到值，这就是 `foldingRanges()` 回 `null` 的原因，**形态合法不是缺陷**）；早期版本是 `ranges`；`regions` 是 `FoldingRegions` 实例形态；探不到 `none` |
-| `ok` | `boolean` | **只由三项决定**：`monacoVersion !== null && selectors.hover && selectors.suggest && selectors.foldingContribution` |
+| `ok` | `boolean` | **只由三项决定**：`monacoVersion !== null && selectors.hover && selectors.suggest && selectors.foldingContribution`。`semantic` **不进 `ok`**（见下） |
 
 用法纪律：
 - **升级 Monaco / 换编辑器依赖之后的第一条命令就是它**。`ok===true` 才继续信任 `hoverAt` / `suggestAt` /
@@ -237,6 +305,47 @@ node tools/debug-cli.mjs eval "__kojoDebug.editor.selfCheck()"
 - `selfCheck()` **永不抛**、也**不改**任何既有 API 行为（内部每步各自吞错，最后统一过纯函数
   `summarizeSelfCheck()` 归一——脏值/半截对象一律归成上表形状）。想单测形状就用 `summarizeSelfCheck`。
 - 脚本里断言 `ok` 与 `foldingShape` 两项即可；逐项 `selectors.*` 只用来**人工定位**（哪些类名/贡献点没了）。
+
+##### `semantic`：六条语义读数有没有货
+
+```js
+node tools/debug-cli.mjs eval "__kojoDebug.editor.selfCheck().semantic"
+// 形状（值随语言与调用次数变；首调 providers 常为全 null，再调一次才是真实读数）：
+// {"actions":{"definition":{"present":true,"supported":true},"codeAction":{…},
+//   "signatureHelp":{…},"documentSymbol":{…}},
+//  "providers":{"definition":true,"references":true,"codeAction":false,
+//   "signatureHelp":true,"documentSymbol":true,"diagnostics":null}}
+```
+
+它回答的是「`definitionAt` / `referencesAt` / `codeActionsAt` / `signatureAt` / `documentSymbols` /
+`diagnostics` 这六条读数，在当前构建、当前语言下**有没有货可读**」——因为那六条读不到时一律回
+`null` / `[]`，与"这里确实没有定义"**同形**，光看读数分不开。
+
+| 字段 | 取值 | 口径 |
+|---|---|---|
+| `semantic.actions.{definition, codeAction, signatureHelp, documentSymbol}` | `{present: boolean, supported: boolean \| null}` | 每族取一枚**代表动作**，分别是 `editor.action.revealDefinition` / `editor.action.refactor` / `editor.action.triggerParameterHints` / `editor.action.quickOutline`。`present`：`getAction(id)` 交回对象——**只证明这枚动作注册着**。`supported`：该动作 `isSupported()` 的实测值；动作缺席 / 没这个方法 / 调用抛错 ⇒ `null`（没问到，不猜） |
+| `semantic.providers.{definition, references, codeAction, signatureHelp, documentSymbol}` | `true \| false \| null` | **三态**：`true`＝注册表可查且当前 model 有 ≥1 个 provider；`false`＝可查但为空（对应读数**必然**是 `[]`/`null`）；`null`＝**没问到**（深路径 import 不通 / 没有 model / 服务还没结算） |
+| `semantic.providers.diagnostics` | 恒 `null` | 诊断是语言服务**主动往模型推 marker**（读 `monaco.editor.getModelMarkers`），没有 provider 可问：给 `true` 是"诊断会自己来"，给 `false` 是"诊断坏了"，两种都是编造 |
+
+三条口径（这一块最容易误读）：
+
+1. **`present` 与 `supported` 都不等于 provider 存在。** Monaco 的动作是**静态注册**的：一个完全没有
+   definition provider 的语言里，`getAction('editor.action.revealDefinition')` 照样交回对象，点下去什么
+   也不会发生。`isSupported()` 强一些（走动作自己的 precondition，definition 那枚正是
+   `hasDefinitionProvider`），但仍分辨不了"没有 provider"与"上下文键还没算出来"——所以它是
+   `boolean | null`，不是结论。
+2. **`providers.*` 的 `null` 不是 `false` 的另一种写法。** `false` 是"问到了，答案是没有"；`null` 是
+   "这条问题此刻答不了"。`selfCheck()` 是同步 API，而 provider 注册表只能走深路径 import 的 DI 单例，
+   **第一次调用常常六项全 `null`**（这次调用顺手把 import 踢起来）——**再调一次**就有真实读数。
+3. **`semantic` 不进 `ok`。** `ok` 的语义是"这套私有 DOM 形态与私有贡献点还成立吗"（`hover` /
+   `suggest` / `folding`），`semantic` 里全是**近似**：动作注册着不等于 provider 在，provider 在也不等于
+   这一次调用有结果。把近似塞进 `ok`，`ok===true` 就会从"升级没漂"偷换成"语言服务齐活"——一个结论
+   变两个，读它的人没法再分开排查。
+
+排障用法：语义读数为空 ⇒ 先看 `providers.*`。`false`＝这个语言真的没挂 provider（空是**正确**读数，
+别去改测试）；全 `null`＝再调一次 `selfCheck`，仍全 `null` 说明 provider 注册表这条深路径在当前构建上
+不通（读数本身仍可用，只是没法自证有没有货）；`true` 却读空 ⇒ 换行列，或 provider 对该位置确实没货。
+`diagnostics` 恒 `null` 与"诊断坏了"无关：诊断走 `markers()`，空就是当前文档没有 marker。
 
 ## 四、调试宿（debug-server.mjs）速览
 
@@ -258,6 +367,27 @@ node tools/debug-cli.mjs eval "__kojoDebug.editor.selfCheck()"
   `walk_dir` 带元数据 0.88s→0.39s、200 文件批读 131ms→81ms、24MB 批读 268ms→118ms、5MiB 单读
   164ms→77ms；`stat_files` 2000 条基本持平（Windows 元数据 I/O 下限）。**口径**：同一行多处命中
   全列出（与 Rust `scan_text` 的 `find_iter(line)` 对齐）；`maxResults` 截断落点仍按 readdir 序确定。
+
+### `/invoke`：命令不存在的两种情形（501 / 404）
+
+页面侧**不看状态码**（`web-host-transport` 只读 `body.ok` / `body.error`，所以真人用的界面行为不变），
+但 CLI / curl / 脚本可以只看 `status` 或 `code` 分流——"镜像没做"与"名字拼错"的下一步完全不同，
+不该在传输层同形：
+
+| 情形 | HTTP | `code` | 内容 |
+|---|---|---|---|
+| Rust 有、镜像**刻意**没有 | **501** | `mirror_missing` | `cmd` / `reason`（为什么 web 模式给不出：要原生对话框、要能收尸的进程树、要 launcher 根布局……）/ `next`（换真壳：`node tools/debug-cli.mjs shell`） |
+| 两边都没有（拼错） | **404** | `unknown_command` | `cmd` / `suggestions`（最多 3 条近似名，**可能为空数组**）/ `error`（"你是不是想用：…" 或"没有相近的命令名可推荐"） |
+| 命中镜像 | 200 | — | 行为与改动前**一字未变**：成功 `{ok:true,value}`、业务失败 `200 + {ok:false,error}` |
+
+- 缺口清单只此一份：`tools/debug-server.mjs` 的 `MIRROR_GAP_COMMANDS`（36 条 `launcher_*` + 旧 base64
+  读通道 `read_file_bytes`）。`reason` 写得短（会进页面报错文本），长原因在测试里。
+- `suggestions` 按命令名的最小编辑距离挑（距离 ≤2 或前缀互含；最多 3 条、近的排前面），候选集是
+  「镜像实有的命令 ∪ 缺口清单」：所以**拼错**的 `launcher_*` 走 404，但 `suggestions` 里常常就给你
+  缺口清单里的正名（下一次调用会落到 501，那一支自己会解释清楚）。
+- 不用 200 报"没有这条命令"：那会让"命令执行失败"与"根本没有这条命令"在传输层同形（旧行为正是如此）。
+- 自查一条命令在不在镜像里：`GET /config` 的 `supportedCommands` 是全量清单；`invoke` 报错时看 `code`
+  比读中文文案可靠（文案是给人看的，`code` 是给脚本分流的）。
 
 ### 四a、安全模型（2026-10-30 升级批）——为什么"只绑回环"不够
 
@@ -415,4 +545,9 @@ node tools/debug-cli.mjs open-project "D:/Game/myproject"
 | `open-project` 报「第 4 步 …ms 内既没等到弹窗也没等到文件树」 | 屏卡在别处（overlay / 遮罩 / 相位半截）：`screenshot` + `dom` 看现场；确认是慢盘再放预算 `--timeout <ms>`；相位 `unknown` 先 `close-project` 重开 |
 | 真壳 `open-project --writable` 直接 exit 2 | **设计如此**（安全裁决，非缺陷）：`dialogPolicy` 刻意不代答 `confirm_write_domain`。验写链路走 web `serve`，或对真人已授权目录不加 `--writable` 开（§四b 两条路） |
 | `hoverAt` / `suggestAt` / `foldingRanges` **永远** `null` | 先跑 `eval "__kojoDebug.editor.selfCheck()"`：`ok===false` ⇒ Monaco 私有 DOM 形态 / `editor.contrib.folding` 贡献点已变（升级导致），**读数不可信**，去对照 `install-debug.ts` 的选择器；`ok===true` 且 `foldingShape==='promise'` ⇒ 0.57 正常边界（§三「自检」） |
+| 工具链整体可疑（起不来 / `status` 与屏上不符 / 端口像是被占） | 先 `node tools/debug-cli.mjs doctor`：八项逐条 PASS/WARN/FAIL + 可复制的 fix。`host-port`/`cdp-port` **FAIL** ⇒ 会话里记着的端口探不通（残会话 / 进程已退，后续每条子命令都会撞 ECONNREFUSED），按 fix 跑 `stop` 再起；`vite-cache` WARN ⇒ `pnpm-lock.yaml` 比缓存新，删 `node_modules/.vite/deps` 再 `serve`；`dist-build` WARN ⇒ 缺 `dist`，只影响真壳 / 静态产物通道（`serve` 走 vite dev 不读它）；`stale-procs` WARN ⇒ 会话里记着已退出的 pid，`stop` 一遍再起 |
+| 点击 / 悬停 / 双击 / 拖拽 / 滚轮「没反应」 | 先看有没有 `[debug] ⚠ elementFromPoint 未命中 …`（被 toast / 遮罩 / 粘性工具栏盖住）：有 ⇒ `dom` 查遮罩（`open-project` 已自动关首启遮罩）；没有 ⇒ `state().phase` + `dom` 看是不是压根没点在目标上。`wheel` 还要给滚动量（`--dx/--dy` 全 0 直接 exit 2）；`dblclick` 必须是 clickCount 1→2 那一版，连发两次 click 合成不出 dblclick |
+| 语义族一直打 `(空)` | 先确认有焦点编辑器（没开文件时这几条是 exit 2，不是空读数）；再 `eval "__kojoDebug.editor.selfCheck().semantic"`：`providers.* === false` ⇒ 这个语言真没挂 provider，空是**正确**读数；全 `null` ⇒ **再调一次**（首调 DI 未结算）；`true` 却读空 ⇒ 换行列（1 基，别用 0） |
+| `invoke <cmd>` 回 **501** `code=mirror_missing` | 这条命令只在真壳里有（缺口清单见 `MIRROR_GAP_COMMANDS`）：换 `node tools/debug-cli.mjs shell` 验；web 模式下它不是"坏了"，是**不存在** |
+| `invoke <cmd>` 回 **404** `code=unknown_command` | Rust 与镜像都没有这个名字，多半拼错：看 `suggestions`；全量清单在 `GET /config` 的 `supportedCommands` |
 | `type --mode keys` 打出重复字符 / 缺字符 | `keys` 走 `keyDown`+`char`+`keyUp` 三段；输出里的 `fallback=N` 表示这 N 个非 BMP 字符退成了 `insertText`。要逐字对拍长度时用 `[...text].length`（码位）口径，别和 `text.length` 混比 |

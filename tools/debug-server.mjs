@@ -9,6 +9,10 @@
  * 协议（刻意零依赖，只用 node 内置）：
  * - `POST /invoke`  `{cmd, args}` → `{ok:true, value}` | `{ok:false, error}`
  *   二进制应答（`read_file_bytes_raw` / `read_files_raw`）装 `{__b64}` 信封，页面侧还原。
+ *   「命令本身没有」这一种另按状态码 + `code` 分流（2026-10-31 可诊断性批）：
+ *   `501 {code:'mirror_missing', cmd, reason, next}`（Rust 有、镜像刻意没有）与
+ *   `404 {code:'unknown_command', cmd, suggestions[]}`（两边都没有，多半拼错）。
+ *   其余一切（含命令执行失败）仍是 200 + 上面的信封，逐字未改。
  * - `GET /events`   SSE：具名事件 `kojo:fs-changed` / `kojo:fs-watch-error` / `kojo:debug-notice`
  *   （事件名字面与桌面壳 Tauri 事件同对——`tauri-bridge.watchDirs` 的浏览器腿直接消费）。
  * - `GET /health` / `GET /config`、`POST /policy`（运行时改对话框自动应答，CLI `open-project` 用）。
@@ -800,6 +804,150 @@ export const SUPPORTED_COMMANDS = Object.freeze([
 ]);
 
 /**
+ * 已知缺口集合：**Rust 有、镜像刻意没有**的那批（`launcher_*` 桌面壳独占能力 + 旧 base64 读通道）。
+ *
+ * 为什么镜像自己也要持一份，而不是运行时去 parse `packages/app/src-tauri/src/lib.rs`：
+ * 1. 调试宿是运行时代码，跑在用户机器上；为了一句报错去读仓库里的 `.rs` 源码，路径假设、
+ *    编码、解析失败全都会变成「宿起不来」的风险——报错诊断不值得换这个耦合；
+ * 2. 解析 `generate_handler!` 是**测试**的职责（`tools/tests/debug-server-mirror.test.ts`），
+ *    那里红了可以人去看，宿这里红了就是产品事故；
+ * 3. 代价是两份清单可能漂移，所以漂移必须由一道闸盯住——见
+ *    `tools/tests/debug-server-missing-command.test.ts` 里「缺口集合 × MIRROR_GAPS 逐字对账」那例。
+ *
+ * key = 命令名，value = 一句「web 模式为什么给不出」。value 只求**够用来下判断**，
+ * 不抄测试里那份长原因（那份要写清参数形状，给维护者看；这份要短，会进页面报错文本）。
+ */
+export const MIRROR_GAP_COMMANDS = Object.freeze({
+  // 旧 base64 读通道：页面侧已全走 read_file_bytes_raw 的二进制帧
+  read_file_bytes: '旧 base64 读通道，页面侧已改走 read_file_bytes_raw 的二进制帧，镜像只实现 raw 一支',
+
+  // 启动器 · 原生对话框 / 真实盘布局（launcher 根目录与实例元数据只存在于桌面壳）
+  launcher_pick_source_root: '要弹系统目录对话框选游戏源根，web 模式没有原生目录选择器',
+  launcher_pick_write_root: '要按实例根布局与 root_id 挑写入根，依赖桌面壳持有的实例目录结构',
+  launcher_instance_list: '实例清单来自桌面壳扫描真实 launcher 根目录，web 模式没有那套根与实例元数据',
+  launcher_instance_get: '按 id 读实例元数据，依赖桌面壳的 launcher 根布局',
+  launcher_instance_create: '建实例要落盘目录骨架与元数据，web 模式没有 launcher 根可落',
+  launcher_instance_update: '改实例元数据要合并补丁并落盘，前提同 launcher_instance_create',
+  launcher_instance_remove: '删实例（含 delete_files / keep_backups）是破坏性落盘操作，web 模式连实例都没有',
+  launcher_instance_duplicate: '复制实例目录树要真实 launcher 根布局',
+  launcher_instance_open_folder: '在系统文件管理器里打开实例目录，是操作系统外壳能力',
+  launcher_trust_executable: '把实例可执行文件登记进信任表，这份安全库只存在于桌面壳',
+
+  // 启动器 · 进程控制（挂起创建 / Job 收尸 / 日志泵）
+  launcher_start: '拉起游戏进程要挂起创建 + Job 对象收尸 + 日志泵，web 模式没有可被收尸的子进程树',
+  launcher_stop: '停实例进程走 Job 终止语义，依赖 launcher_start 建出来的进程',
+  launcher_process_status: '查实例进程状态要进程句柄与 Job 记账，web 模式没有这张表',
+  launcher_process_list: '列出全部实例进程要桌面壳的进程表',
+  launcher_log_tail: '读日志泵写出的日志文件，web 模式既无泵也无产物',
+  launcher_log_sessions: '枚举日志会话目录，同样依赖日志泵产物',
+  launcher_log_read: '按游标读日志页，依赖日志泵产物',
+  launcher_log_export: '导出日志会话连同诊断打包，依赖日志泵产物与诊断落盘',
+
+  // 启动器 · 归档 / 内容包（解压闸与暂存盘的安全执法在 Rust 侧）
+  launcher_pick_archive: '弹系统文件对话框选归档包，web 模式没有原生文件选择器',
+  launcher_content_list: '列实例已装内容包要读实例根下的内容清单',
+  launcher_content_plan: '解归档并出安装计划要过 Rust 侧的归档解压闸与暂存盘',
+  launcher_content_apply: '按 plan_id 落盘安装，plan 本身由 Rust 侧产生',
+  launcher_content_uninstall: '卸载内容包要按 files 回滚落盘',
+  launcher_content_set_enabled: '开关内容包要改实例清单并落盘',
+  launcher_content_set_order: '重排内容包加载顺序要写回实例清单',
+  launcher_content_diagnose: '内容包冲突诊断要读实例清单并判定文件归属',
+
+  // 启动器 · 存档备份 / 导入导出
+  launcher_save_list: '列实例存档要扫实例存档目录',
+  launcher_save_backups: '列存档备份清单要扫实例备份目录，web 模式没有那份备份盘',
+  launcher_save_backup: '建存档备份要拷贝并落元数据',
+  launcher_save_restore: '从 backup_id 还原存档（含 RestoreOptions 决议）要真实备份盘',
+  launcher_save_delete_backup: '删备份目录是破坏性操作，要真实备份盘',
+  launcher_save_import: '从归档导入存档要过解压闸与暂存盘，安全执法在 Rust 侧',
+  launcher_save_apply_import: '按 plan_id 落盘导入结果，plan 由 Rust 侧产生',
+  launcher_save_export: '把存档打包导出要写归档与清单',
+
+  // 启动器 · 长任务簿记
+  launcher_task_list: '在跑的长任务由 Rust 侧任务表持有（任务由 plan / backup 等命令派生）',
+  launcher_task_cancel: '取消长任务要按 task_id 收回桌面壳的任务句柄',
+});
+
+const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
+
+/** 这条命令是不是「Rust 有、镜像刻意没有」——只有这一种情况才配「未实现」的定性 */
+function isKnownGap(cmd) {
+  return typeof cmd === 'string' && hasOwn(MIRROR_GAP_COMMANDS, cmd);
+}
+
+/** 两个命令名的最小编辑距离（插入 / 删除 / 替换各算 1）。命令名都是短 snake_case，两行滚动足够 */
+function editDistance(a, b) {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  const cur = new Array(b.length + 1);
+  for (let i = 1; i <= a.length; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = cur.slice();
+  }
+  return prev[b.length];
+}
+
+/**
+ * 近似命令名推荐：编辑距离 ≤2（几乎一定是手滑）或前缀互含（可能是截断了名字）。
+ *
+ * 为什么**必须限量**（最多 3 条）：`launcher` 这种前缀能命中二十多条缺口命令，把候选全倒出来
+ * 只是把「不知道叫什么」换成「不知道该看哪条」；报错文本的价值在于给出**一个明显的下一步**。
+ * 同理排序把编辑距离近的排前面：距离 1 的命中是「你打错了一个字符」，而纯前缀命中只说明
+ * 「你可能没写完」，后者更模糊，排在后面。
+ *
+ * 候选池同时含镜像已实现与缺口两类名字：拼错了缺口命令（`launcher_strat`）时，
+ * 推出来的 `launcher_start` 会在下一次调用里落到「未实现」分支——那一支自己会解释清楚。
+ */
+function suggestCommandNames(cmd, knownNames) {
+  const q = String(cmd).toLowerCase();
+  if (q === '') return [];
+  const scored = [];
+  for (const name of knownNames) {
+    const n = name.toLowerCase();
+    if (n === q) continue;
+    const d = editDistance(q, n);
+    const prefix = n.startsWith(q) || q.startsWith(n);
+    if (d > 2 && !prefix) continue;
+    scored.push({ name, d, prefix });
+  }
+  scored.sort(
+    (x, y) =>
+      Number(x.d > 2) - Number(y.d > 2) ||
+      x.d - y.d ||
+      Number(x.prefix) - Number(y.prefix) ||
+      x.name.length - y.name.length ||
+      (x.name < y.name ? -1 : 1),
+  );
+  return scored.slice(0, 3).map((s) => s.name);
+}
+
+/**
+ * 镜像命令表（**防漂移闸的锚点**，含实现体的全量表）。
+ *
+ * 为什么要有这道闸：本文件是桌面壳 `src-tauri/src/lib.rs` 命令面的手写 Node 镜像。
+ * Rust 侧一加命令、这里没跟上，浏览器调试模式不会报「镜像缺了这条」，而是把
+ * `invoke()` 变成一条普通的 `调试宿没有实现命令：xxx` 业务错误——看起来像功能坏了，
+ * 实际是调试面落后（同 PITFALLS 275 / 277 的坑：两处实现靠人肉同步必然静默分叉）。
+ * `tools/tests/debug-server-mirror.test.ts` 就是拿这张表与 `generate_handler![...]` 对账。
+ *
+ * 为什么是「先声明空壳、实例化时登记」而不是模块级 `export const = { ... }`：
+ * 处理器闭包了**单个实例**的读写域状态（`state` / `admitRead` / `admitWrite` / 写临时名序号），
+ * 脱离 `createDebugServer` 的上下文根本不存在，把字面量搬到模块作用域等于重写全部实现。
+ * 因此这里只持有一份「名字 → 处理器」的登记表，由 `createDebugServer` 在命令表构造完就地并入。
+ * 好处是闸读到的**不是源码文本，而是真正会被 `POST /invoke` 命中的那张表**——比正则扒字面量更硬。
+ *
+ * 注意：本表在第一次 `createDebugServer()` 之后才有键（同一次进程内多实例是幂等并集，
+ * 键集恒定）。测试里必须先起一个实例再读，读空前请当成「实例没起来」而不是「没有命令」。
+ */
+export const DEBUG_HOST_COMMANDS = Object.create(null);
+
+/**
  * 建一个调试宿实例（导出供 vitest 直接拉起；CLI 形态只是包了 argv 解析的这一层）。
  *
  * @param options {port?, sandbox, appdata, readonly?: string[], policy?: {chooseDir?, chooseFile?},
@@ -1197,6 +1345,11 @@ export async function createDebugServer(options) {
     },
   };
 
+  // 镜像命令表登记到模块级锚点（见 `DEBUG_HOST_COMMANDS` 的说明）。不改任何处理器，
+  // 只把这张表的名字-实现对应关系挂出去，供 `tools/tests/debug-server-mirror.test.ts` 对账
+  // `generate_handler![...]`——Rust 加了命令而这里没跟上时，闸先红，而不是浏览器里静默假失败。
+  Object.assign(DEBUG_HOST_COMMANDS, commands);
+
   function failMarket(cmd) {
     throw new HostError(
       `调试宿不支持市场网络命令（${cmd}）：市场链路的出网白名单 / 签名 / 暂存闸在桌面壳（Rust）侧，浏览器调试不复制这套执法——市场面板的联网功能请走桌面壳验证`,
@@ -1310,11 +1463,51 @@ export async function createDebugServer(options) {
             json(res, 400, { ok: false, error: '/invoke 应答体不是 JSON' });
             return;
           }
-          const handler = Object.prototype.hasOwnProperty.call(commands, req2?.cmd)
-            ? commands[req2?.cmd]
-            : undefined;
+          const cmdName = typeof req2?.cmd === 'string' ? req2.cmd : '';
+          const cmdLabel = cmdName === '' ? String(req2?.cmd) : cmdName;
+          const handler = hasOwn(commands, cmdName) ? commands[cmdName] : undefined;
           if (!handler) {
-            json(res, 200, { ok: false, error: `调试宿没有实现命令：${String(req2?.cmd)}` });
+            /* 「镜像未实现」与「命令名拼错」必须分开报——这是本批的全部意义所在。
+             *
+             * 未合并成一条的理由：两者的**下一步完全不同**。镜像未实现 ⇒ 功能在这个模式下就是
+             * 不存在，别在 web 里继续查、换真壳；命令名拼错 ⇒ 改一个字符就好。合并成一句
+             * 「没有实现命令：xxx」时，两种都会被读成「功能坏了」或「命令名写错了」，排障方向直接跑偏。
+             *
+             * 状态码也分开（页面不依赖它——`web-host-transport` 只看 body.ok 与 error 文本——
+             * 但 CLI / 脚本 / curl 可以只凭状态码分流，不用解析中文文案）：
+             * - 501 Not Implemented：服务端认识这个能力，本实现不提供 ⇒ 镜像缺口；
+             * - 404 Not Found：根本没有这个名字 ⇒ 拼错。
+             * 不用 200：那会让「命令失败」与「没有这条命令」在传输层同形（旧行为正是如此）。
+             */
+            if (isKnownGap(cmdName)) {
+              const reason = MIRROR_GAP_COMMANDS[cmdName];
+              const next =
+                '这条命令只在桌面壳可用：换真壳模式验证 node tools/debug-cli.mjs shell';
+              json(res, 501, {
+                ok: false,
+                code: 'mirror_missing',
+                cmd: cmdName,
+                reason,
+                next,
+                error: `调试宿没有实现命令：${cmdName}——web 模式无镜像（${reason}）。${next}`,
+              });
+              return;
+            }
+            const suggestions = suggestCommandNames(cmdLabel, [
+              ...Object.keys(commands),
+              ...Object.keys(MIRROR_GAP_COMMANDS),
+            ]);
+            const hint =
+              suggestions.length > 0
+                ? `你是不是想用：${suggestions.join(' / ')}`
+                : '没有相近的命令名可推荐（全量清单见 GET /config 的 supportedCommands）';
+            json(res, 404, {
+              ok: false,
+              code: 'unknown_command',
+              cmd: cmdLabel,
+              suggestions,
+              error: `调试宿没有实现命令：${cmdLabel}——Rust 与镜像都没有这条命令，疑似拼错。${hint}`,
+            });
             return;
           }
           try {

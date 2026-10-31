@@ -148,6 +148,14 @@ fn clear_domain_core(state: &WriteDomainState) -> Result<(), String> {
 
 /// 规范化路径：找到最深的已存在祖先做 canonicalize（解析 `..` 与符号链接），
 /// 再把其余组件追加回去。不存在于磁盘的目标（原子写的待建文件）同样可判定。
+///
+/// **`..` 上方还有不存在的目录 ⇒ 失败**（fail-closed，见下面 `_` 支）：真实落点要等那些目录
+/// 被创建之后才确定，按字符串算等于把"可能在外面"当"在里面"。这里失败是天然成立的
+/// （`file_name()` 对以 `..` 结尾的路径返回 `None`，循环走不到"把 `..` 追加回结果"那一步），
+/// 但原因得说对：盘符没挂载和"路径里挂着 `..`"是两件不同的事，作者看到的话术不一样。
+///
+/// 失败原因只由本函数产出（底层 `canonicalize` 的错误一律丢弃，不往上抛）⇒ 作者面
+/// 看到的永远是下面两句中文之一，不会是 `Os { code: 5, kind: PermissionDenied, ... }`。
 fn canonicalize_deep(path: &Path) -> std::io::Result<PathBuf> {
     let mut cur = path;
     let mut extra: Vec<std::ffi::OsString> = Vec::new();
@@ -166,10 +174,14 @@ fn canonicalize_deep(path: &Path) -> std::io::Result<PathBuf> {
                     cur = parent;
                 }
                 _ => {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "no existing ancestor to canonicalize",
-                    ))
+                    let dangling_dotdot =
+                        cur.components().next_back() == Some(std::path::Component::ParentDir);
+                    let reason = if dangling_dotdot {
+                        "路径里的 `..` 上方还有不存在的目录，无法确定真实落点"
+                    } else {
+                        "往上找不到任何一层真实存在的目录（盘符未挂载，或位置已被移走）"
+                    };
+                    return Err(std::io::Error::new(std::io::ErrorKind::NotFound, reason));
                 }
             },
         }
@@ -193,6 +205,32 @@ fn is_within(canonical_path: &Path, canonical_root: &Path) -> bool {
 /// 同一个目录的两种写法（大小写 / 尾分隔符）算一个根：整串组件相等才算。
 fn is_same_path(a: &Path, b: &Path) -> bool {
     lowered_components(a) == lowered_components(b)
+}
+
+/// 这条字符串路径是不是**网络（UNC）形态**。
+///
+/// 为什么收敛成一个纯函数：注册准入、确认框、OS 拖放三处以前各写一句 `starts_with(r"\\")`，
+/// 判定散在三处 ⇒ 补一条形态（`//server/share`、`\\?\UNC\…`）就要改三遍，漏一处就是一条
+/// 能绕过网络路径拦截的口子；也给不出可单测的判据。
+///
+/// 口径（设备命名空间**不是** UNC）：`\\?\C:\…` / `\\?\Volume{…}` / `\\.\COM1` 都是本地卷或
+/// 设备的另一种写法，canonicalize 之后就是普通盘符路径，把它们当"网络路径"拒掉等于把合法项目
+/// 挡在门外。`//` 与 `\\` 同等看待：Windows 的路径 API 两者都吃，POSIX 的 `//x` 也是
+/// 实现定义的网络形态，两侧都当网络路径处理只严不松。
+fn is_unc_like(p: &str) -> bool {
+    // 统一分隔符后再判前缀：`//server/share` 与 `\\server\share` 是同一条路径
+    let s = p.replace('/', "\\");
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        // `\\?\UNC\server\share` 仍是网络路径；其余（盘符 / `Volume{…}` / 设备名）是本地命名空间
+        return match rest.split_once('\\') {
+            Some((head, _)) => head.eq_ignore_ascii_case("UNC"),
+            None => rest.eq_ignore_ascii_case("UNC"),
+        };
+    }
+    if s.starts_with(r"\\.\") {
+        return false;
+    }
+    s.starts_with(r"\\")
 }
 
 /// 两个路径是否**重叠**（相等 / 一个在另一个里面）：规范化后双向 `is_within`。
@@ -693,7 +731,7 @@ fn invalidate_canon_roots(state: &WriteDomainState) {
 /// 这一件事实，不写「准入门 / 准入清单 / 宿主交付」这类机制名——2026-10-28 作者实测原话
 /// 「我选了一个普通文件夹，给我报这个」，黑话把那一条出路挡死了。出路见 [`confirm_write_domain`]。
 ///
-/// UNC（`\\...`）在规范化之前先拒：既绕开网络命名空间触发的凭据外泄与主线程阻塞，
+/// UNC（见 [`is_unc_like`]）在规范化之前先拒：既绕开网络命名空间触发的凭据外泄与主线程阻塞，
 /// 拖放/对话框也从不交付 UNC 作为可写根。
 #[tauri::command]
 async fn register_write_domain(
@@ -702,7 +740,7 @@ async fn register_write_domain(
     root: String,
 ) -> Result<(), String> {
     use tauri::Manager;
-    if root.starts_with(r"\\") {
+    if is_unc_like(&root) {
         return Err(format!("这个项目文件夹不能是网络路径（{root}）"));
     }
     let app_dir = app
@@ -769,7 +807,7 @@ async fn confirm_write_domain(
     root: String,
 ) -> Result<bool, String> {
     use tauri::Manager;
-    if root.starts_with(r"\\") {
+    if is_unc_like(&root) {
         return Err(format!("这个项目文件夹不能是网络路径（{root}）"));
     }
     let app_dir = app
@@ -4221,7 +4259,8 @@ pub fn run() {
                     let state = window.state::<WriteDomainState>();
                     if let Ok(app_dir) = window.path().app_data_dir() {
                         for p in paths {
-                            if p.to_string_lossy().starts_with(r"\\") {
+                            let shown = p.to_string_lossy();
+                            if is_unc_like(&shown) {
                                 continue;
                             }
                             if !p.is_dir() {
@@ -4402,11 +4441,11 @@ mod write_domain_tests {
         clear_domain_core, commit_project_root, confirm_dialog_description, confirm_target_guard,
         domain_change_snapshot, ensure_in_domain_with,
         ensure_in_write_domain, ensure_write_allowed_from_parts, human_root_path,
-        invalidate_canon_roots, is_reserved_state_file, is_root_approved, is_same_path, is_within,
-        memo_insert_canon_if_current,
+        invalidate_canon_roots, is_reserved_state_file, is_root_approved, is_same_path, is_unc_like,
+        is_within, memo_insert_canon_if_current,
         merge_workspace_roots, paths_overlap, push_approved_root, push_extra_root,
-        read_approved_roots, read_workspace_roots, remove_same_root, write_approved_roots,
-        write_workspace_roots, WriteDomainState,
+        read_approved_roots, read_workspace_roots, record_approved_root, remove_same_root,
+        write_approved_roots, write_workspace_roots, WriteDomainState,
     };
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
@@ -4509,7 +4548,12 @@ mod write_domain_tests {
             "write",
         )
         .unwrap_err();
-        assert!(err.contains("可写范围拒绝"), "unexpected: {err}");
+        // 拒的形态随平台不同、拒这件事不变：Windows 的 canonicalize 按词法折叠 `..`（折到域外
+        // ⇒ 域外拒绝），POSIX 折不动、`不存在` 的那一层解析不了 ⇒ 走解析失败。两者都是 fail-closed。
+        assert!(
+            err.contains("可写范围拒绝") || err.contains("路径解析失败"),
+            "unexpected: {err}"
+        );
         let _ = outside; // 保持存在
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -5107,6 +5151,206 @@ mod write_domain_tests {
         ensure_write_allowed_from_parts(&appdata, &state, &appdata.join("other.txt"), "write")
             .unwrap();
         let _ = std::fs::remove_dir_all(&appdata);
+    }
+
+    /* -------- 2026-10-30 测试加固批：UNC 收敛 / 失败文案 / fail-closed / 降级路径 / POSIX -------- */
+
+    /// 缺口 1：UNC 判定只有一份（[`is_unc_like`]），三条判据逐条钉死。
+    /// 设备命名空间与盘符路径**不是** UNC —— 它们本地可 canonicalize，按"网络路径"拒掉
+    /// 等于把合法项目挡在门外；反过来 `\\?\UNC\…` 与 `//server/share` 都是网络路径，
+    /// 漏判一条就是一条绕过口（以前三处各写一句 `starts_with(r"\\")`，形态补不全）。
+    #[test]
+    fn unc_predicate_covers_network_forms_and_spares_device_namespaces() {
+        // 是 UNC
+        for unc in [
+            r"\\server\share",
+            r"//server/share",
+            r"\\?\UNC\server\share",
+            r"\\?\unc\server\share",
+            r"\\server\share\作品\包",
+        ] {
+            assert!(is_unc_like(unc), "网络路径必须判成 UNC：{unc}");
+        }
+        // 不是 UNC
+        for local in [
+            r"\\?\C:\x",
+            r"\\?\Volume{6a1f9d0e-0000-0000-0000-100000000000}\x",
+            r"\\.\C:\x",
+            r"C:\x",
+            r"C:/x",
+            "/home/x",
+            "/tmp/x",
+            r"\Users\x",
+            "",
+        ] {
+            assert!(!is_unc_like(local), "本地路径被误判成 UNC：{local}");
+        }
+    }
+
+    /// 缺口 2：规范化失败的文案必须**带原始路径**、给出**作者读得懂的原因**，
+    /// 且绝不把底层 `io::Error` 的 Debug（`Os { code: 5, kind: PermissionDenied, ... }`）
+    /// 或英文内部术语甩到作者眼前——这句话会原样出现在写失败的提示里。
+    #[test]
+    fn resolve_failure_copy_names_the_path_and_reads_like_a_sentence() {
+        let base = temp_root("badcopy");
+        let root = mkdir(&base.join("root"));
+        let appdata = temp_root("appdata");
+        let target = unresolvable_target(&root);
+        let err = ensure_in_write_domain(Some(&root), &appdata, &[], &target, "write").unwrap_err();
+
+        let shown = target.display().to_string();
+        assert!(
+            err.contains(&shown),
+            "错误文案必须逐字带原始路径（作者要认出是哪一次写入）：{err}"
+        );
+        assert!(err.contains("路径解析失败"), "要点明失败在哪一步：{err}");
+        assert!(!err.contains("Os {"), "不许把 io::Error 的 Debug 甩给作者：{err}");
+        assert!(
+            !err.contains("no existing ancestor"),
+            "原因不能是英文内部术语：{err}"
+        );
+        // 原因非空：`可写范围（op）：路径解析失败 <path>: <原因>`
+        let reason = err.rsplit(": ").next().unwrap_or("");
+        assert!(!reason.trim().is_empty(), "原因不能是空的：{err}");
+        assert!(
+            reason.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+            "原因得是一句中文，作者才读得懂：{err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&appdata);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 缺口 3：判定顺序上"算不出落点"必须落在**拒绝**这一侧，不能因为字符串前缀命中根就放行。
+    /// 两条夹具：①用户报的那类写法 `<root>/不存在/../../..`（前缀在域内、落点在域外）；
+    /// ②真正解析不动的目标（见 [`unresolvable_target`]）——顺序错一点点就会变成 fail-open。
+    #[test]
+    fn unresolvable_target_fails_closed_even_when_string_prefix_looks_inside() {
+        let base = temp_root("failclosed");
+        let root = mkdir(&base.join("root"));
+        let appdata = temp_root("appdata");
+
+        // ① `<root>/不存在/../../..`：字符串以根开头，`..` 把它带出域外
+        let sneaky = root.join("不存在").join("..").join("..").join("..");
+        assert!(
+            sneaky.display().to_string().starts_with(&root.display().to_string()),
+            "夹具：前缀必须看起来仍在域内：{}",
+            sneaky.display()
+        );
+        let err = ensure_in_write_domain(Some(&root), &appdata, &[], &sneaky, "write")
+            .expect_err("前缀命中根但落点在域外，必须拒");
+        assert!(
+            err.contains("可写范围拒绝") || err.contains("路径解析失败"),
+            "unexpected: {err}"
+        );
+
+        // ② 落点根本算不出来（[`unresolvable_target`]）：同样必须拒。
+        // 这一条不再附带"前缀看起来在域内"的断言——没有已存在祖先的路径不可能同时以真实根开头，
+        // 两件事互斥；能钉的是"规范化失败 ⇒ 拒绝"这一半。
+        let target = unresolvable_target(&root);
+        let err = ensure_in_write_domain(Some(&root), &appdata, &[], &target, "write")
+            .expect_err("落点算不出来的目标不许放行（fail-closed）");
+        assert!(
+            err.contains("路径解析失败"),
+            "这一支必须走「解析失败」而不是「域外」（后者会让人以为路径算清楚了）：{err}"
+        );
+
+        let _ = std::fs::remove_dir_all(&appdata);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 缺口 4：`record_approved_root` 的降级路径——**钉现状，不是钉应当**。
+    /// 现有契约（见函数注释）：落盘失败只出声、不阻断；内存态已更新，本次会话内照样能开项目。
+    /// 这条测试把"不 panic / 返回 Ok / 内存态仍生效 / 磁盘上那份东西没被写坏"四件事一起钉住，
+    /// 将来若改成"落盘失败即拒绝"，这条会红——那时应同步改契约与注释，而不是绕过它。
+    #[test]
+    fn record_approved_root_degrades_to_memory_only_when_persist_fails() {
+        let appdata = temp_root("recordfail");
+        // 让落盘必定失败：清单该是文件的位置先占成一个目录（`fs::write` 对目录必然报错）
+        let blocked = appdata.join("approved_roots.txt");
+        mkdir(&blocked);
+        let state = WriteDomainState::default();
+        let picked = mkdir(&temp_root("recordfail-picked"));
+
+        record_approved_root(&state, &appdata, &picked)
+            .expect("落盘失败不该 panic、也不该连坐本次会话的授权");
+
+        let listed = state.approved_roots.lock().unwrap().clone();
+        assert_eq!(listed.len(), 1, "内存态必须已经收下这个根：{listed:?}");
+        assert!(is_same_path(&listed[0], &canon(&picked)));
+        // 内存态"生效"的可观测判据：拿它当准入根时这个目录确实被放行
+        assert!(is_root_approved(&appdata, &listed, &[], &canon(&picked)));
+
+        // 幂等：已在册时重复登记只重写一遍清单，不新增条目、也不 panic
+        record_approved_root(&state, &appdata, &picked).expect("重复登记同样不该失败");
+        assert_eq!(state.approved_roots.lock().unwrap().len(), 1);
+
+        // 落盘目标是目录 ⇒ 写失败但没被破坏（没被写成文件、没被删掉）
+        assert!(blocked.is_dir(), "落盘失败不许把占位目录写坏");
+        // 读回失败按空处理（出声不 panic）：磁盘上确实什么都没落下去
+        assert!(read_approved_roots(&appdata).is_empty());
+
+        let _ = std::fs::remove_dir_all(&appdata);
+        let _ = std::fs::remove_dir_all(&picked);
+    }
+
+    /// 缺口 5：Windows 的盘符/UNC 规则不许把 POSIX 绝对路径判成非法。
+    /// 只在 Unix 上真跑（Windows 上 `Path::new("/home/x")` 是当前盘下的相对路径，判据不同形，
+    /// 伪造"通过"没有意义）⇒ `#[cfg(unix)]` 门控。
+    #[cfg(unix)]
+    #[test]
+    fn posix_absolute_paths_are_not_read_as_windows_drive_or_unc() {
+        assert!(!is_unc_like("/home/kiro/x"), "POSIX 绝对路径不是 UNC");
+        assert!(!is_unc_like("/tmp/x"));
+
+        let base = temp_root("posix");
+        let inside = mkdir(&base.join("作品").join("包"));
+        // 域内照常放行：判定不因"没有盘符"而误拒
+        ensure_in_write_domain(
+            Some(&base),
+            &temp_root("appdata"),
+            &[],
+            &inside.join("事件.ERB"),
+            "write",
+        )
+        .unwrap();
+        // 确认框的落点闸同样只看"是不是目录 / 是不是卷根"，不看盘符
+        assert!(confirm_target_guard(&canon(&inside)).is_ok());
+        // 域外照旧拒绝（不是"什么都被放行"）
+        let outside = mkdir(&temp_root("posix-outside"));
+        assert!(ensure_in_write_domain(
+            Some(&base),
+            &temp_root("appdata"),
+            &[],
+            &outside.join("evil.erb"),
+            "write"
+        )
+        .is_err());
+
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// 构造一条"规范化必然失败"的目标：**没有任何一层祖先真实存在**的路径。
+    /// Windows 上这是 canonicalize 唯一真会失败的情形——只要有一个已存在祖先，系统会按词法
+    /// 折叠 `..`（`<root>/不存在/..` 折回 `<root>`），折完总能算出一个落点；POSIX 不折叠，
+    /// 不存在的段后面挂 `..` 就解析不动。两平台都得先有一个真实根，故 Windows 侧只能借
+    /// "未挂载的盘符"来造这一条。
+    #[cfg(windows)]
+    fn unresolvable_target(_root: &Path) -> PathBuf {
+        let free = ('A'..='Z')
+            .map(|c| format!("{c}:\\"))
+            .find(|drive| !Path::new(drive.as_str()).exists())
+            .expect("夹具：这块机器上每个盘符都挂载了，造不出解析失败的路径");
+        PathBuf::from(free).join("kojo-没有这个位置").join("无法落盘.erb")
+    }
+
+    #[cfg(unix)]
+    fn unresolvable_target(root: &Path) -> PathBuf {
+        root.join("不存在")
+            .join("..")
+            .join("幽灵")
+            .join("无法落盘.erb")
     }
 }
 

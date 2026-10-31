@@ -27,7 +27,10 @@ describe('debug-web-smoke：IPv4 绑定 + origin 钉（PITFALLS 230 同族）', 
 
   it('页面挂上后第一件事是 assertPageOrigin，期望值就是我们自己的 127.0.0.1:vitePort', () => {
     expect(smokeSrc).toMatch(/from '\.\/smoke-lib\.mjs'/);
-    expect(smokeSrc).toMatch(/assertPageOrigin\(cdp, `http:\/\/127\.0\.0\.1:\$\{vitePort\}`\)/);
+    // 2026-10-31：冒烟切成具名段后，vite 端口在段里是 `c.vitePort`（跨段共享现场）。
+    // 判据要的是"期望 origin 由我们自己的 vite 端口拼出来"，不是那个标识符非得叫 vitePort ——
+    // 两种写法都收，但**端口来源必须是同一处**（`c.` 之外不许出现别的端口表达式）。
+    expect(smokeSrc).toMatch(/assertPageOrigin\(cdp, `http:\/\/127\.0\.0\.1:\$\{(?:c\.)?vitePort\}`\)/);
     // 必须在欢迎页等待之前——漂了要当场带 href 红，不是等 30s 超时谜之红
     expect(smokeSrc.indexOf('assertPageOrigin(cdp')).toBeLessThan(smokeSrc.indexOf("label: '欢迎页'"));
   });

@@ -22,7 +22,15 @@
  *   （`.monaco-hover` / `.suggest-widget` / `.label-name` / `.details-label`）与**私有贡献点**
  *   （`editor.contrib.folding`）在**当前构建**上还成不成立的自检读数。Monaco 一升级，这些
  *   会静默失效、读数恒为 null，看起来像"功能没做"——所以升级后先跑它，`ok===false` 就是
- *   "该重新对照 DOM 了"，不是"调试面坏了"；
+ *   "该重新对照 DOM 了"，不是"调试面坏了"；1030 批次 3 追加 `semantic` 一块：六条语义读数
+ *   背后的**动作 / provider 有没有货**，`ok` 判据不动（动作存在 ≠ provider 齐全，照旧不进 `ok`）；
+ * - `editor` 的**跳转与诊断读数**（1030 批，只读、绝不抛）：`definitionAt()` / `referencesAt()`
+ *   走 Monaco 的 provider 注册表（`ILanguageFeaturesService`，与"转到定义 / 查找引用"菜单吃的是
+ *   同一批 provider），跨文件结果归一成仓库内相对路径；`codeActionsAt()` 只读"有哪些动作"、
+ *   **绝不 apply**；`signatureAt()` / `documentSymbols()` / `diagnostics()`（复用 `markers()` 的
+ *   `getModelMarkers` 取数腿，只加裁剪与当前文档作用域）。全部经纯函数裁剪
+ *   （`slimLocations` / `slimCodeActions` / `slimSignature` / `slimSymbols` / `slimDiagnostics`），
+ *   **不依赖任何私有 DOM 类名**（`.monaco-hover` 那一类是 `selfCheck` 的职责，不是新读数的）；
  * - `invoke(cmd, args)`：直达宿主命令（桌面壳 = 真 Tauri IPC；浏览器 = 调试宿）；
  * - `dialogPolicy.{arm,armed,clear,status}`：对话框一次性自动应答（真壳 fetch 腿 /
  *   web 页面腿；只答**只选取器** choose_directory 与 pick_save_path——都是"只选不写"，
@@ -97,8 +105,32 @@ export interface KojoDebugApi {
     foldingRanges(): DebugFoldingRange[] | null;
     /** 词法 token（`monaco.editor.tokenize`，逐行；行号 1 基） */
     tokens(lineFrom: number, lineTo: number): Promise<DebugTokenLine[]>;
-    /** 私有 DOM 形态 / 私有贡献点的自检读数（只读、绝不抛；升级 Monaco 后先跑它） */
+    /**
+     * 私有 DOM 形态 / 私有贡献点的自检读数（只读、绝不抛；升级 Monaco 后先跑它）。
+     * `semantic` 一块另给六条语义读数背后的动作 / provider 有没有货，**不进 `ok`**。
+     */
     selfCheck(): DebugSelfCheck;
+    /**
+     * 转到定义（1030 批，只读）：走真 definition provider 链，跨文件结果归一成仓库内相对路径，
+     * 前 20 条；无 provider / 读不到 ⇒ `[]`（不抛、不 reject）。
+     */
+    definitionAt(line: number, column: number, opts?: SemanticQueryOptions): Promise<DebugLocation[]>;
+    /** 查找引用（与 `definitionAt` 同一条 provider 链）：前 50 条，另给未截断的 `total` */
+    referencesAt(line: number, column: number, opts?: ReferenceQueryOptions): Promise<DebugReferencesReading>;
+    /**
+     * 该位置的可用动作（快速修复 / 重构）：前 30 条。**只读**——读的是"有哪些动作"，
+     * 绝不 apply（apply 是 `commands.run` / 真人点菜单的事）。
+     */
+    codeActionsAt(line: number, column: number, opts?: SemanticQueryOptions): Promise<DebugCodeAction[]>;
+    /** 参数提示（签名帮助）；该位置没有 provider 或 provider 给不出签名 ⇒ null */
+    signatureAt(line: number, column: number, opts?: SemanticQueryOptions): Promise<DebugSignature | null>;
+    /** 文档符号树（父子关系压平成 `depth`）：前 200 条 */
+    documentSymbols(): Promise<DebugSymbol[]>;
+    /**
+     * 当前文档的诊断：前 200 条。**复用** `markers()` 的取数腿（`getModelMarkers`），
+     * 本条只加"当前文档作用域 + 裁剪"（`severity` 与 `markers()` 同口径，见 `slimDiagnostics`）。
+     */
+    diagnostics(): Promise<DebugDiagnostic[]>;
   };
   invoke(cmd: string, args?: Record<string, unknown>): Promise<unknown>;
   /**
@@ -193,6 +225,80 @@ export interface DebugTokenLine {
   readonly tokens: readonly { readonly type: string; readonly startIndex: number }[];
 }
 
+/* -------------------- 跳转与诊断读数（1030 批，只读）的契约面 -------------------- */
+
+/** 一次跳转/查询的共用选项：只给超时（provider 是第三方代码，可能永远不 resolve） */
+export interface SemanticQueryOptions {
+  readonly timeoutMs?: number;
+}
+
+export interface ReferenceQueryOptions extends SemanticQueryOptions {
+  /** 是否把声明本身算进结果；缺省 true（与 Monaco 菜单的"查找引用"一致） */
+  readonly includeDeclaration?: boolean;
+}
+
+/** 跳转目标：`path` 是**归一后的仓库内相对路径**（拿不到工程根时是归一后的绝对路径） */
+export interface DebugLocation {
+  readonly path: string;
+  /** 1 基 */
+  readonly line: number;
+  /** 1 基 */
+  readonly column: number;
+}
+
+export interface DebugReferencesReading {
+  /** 受上限截断的条目（读不到 ⇒ 空数组） */
+  readonly items: DebugLocation[];
+  /** provider 交回的有效条目数（未截断；上限 `REFERENCE_TOTAL_LIMIT`） */
+  readonly total: number;
+}
+
+/**
+ * 一条可用动作（**只读**，不含 edit 内容：读数只回答"有哪些动作"，不回答"改成什么"）。
+ * `kind` 是 Monaco 的动作种类串（`quickfix` / `refactor.extract` / `source.fixAll` …），
+ * 缺 ⇒ 空串（不是 null：调用方不必判两种空值，与 `DebugSuggestItem.detail` 同一纪律）。
+ */
+export interface DebugCodeAction {
+  readonly title: string;
+  readonly kind: string;
+  /** 只认 provider 的字面量 `true`（读数是给脚本断言的，不猜真值） */
+  readonly isPreferred: boolean;
+  /** `edit.edits` 非空才算有编辑；只有 `command` 的动作 ⇒ false */
+  readonly hasEdit: boolean;
+}
+
+/** 当前生效的那条签名（`activeSignature` 指向的那一个）；无签名 ⇒ null */
+export interface DebugSignature {
+  readonly label: string;
+  /** 0 基下标（沿用 provider / Monaco 的语义；**不是**行号那种 1 基）；越界夹到 0..99 */
+  readonly activeParameter: number;
+  /** 逐条参数的 label（`string | {label}` 两种形态都归一成字符串） */
+  readonly parameters: string[];
+  /** provider 给了才有这个键（空文档 ⇒ 不挂键，与 `alias` 同一纪律） */
+  readonly documentation?: string;
+}
+
+/** 文档符号的一条：`kind` 是 Monaco `SymbolKind` 数字（1 起），缺 ⇒ 0 = 未知 */
+export interface DebugSymbol {
+  readonly name: string;
+  readonly kind: number;
+  /** 0 = 顶层；父子关系压平后的层级（不按 `children` 递归缩进，脚本自己乘） */
+  readonly depth: number;
+}
+
+/**
+ * 一条诊断：`severity` 与 `markers()` 同口径（Monaco `MarkerSeverity`：1 Hint / 2 Info /
+ * 4 Warning / 8 Error），缺 ⇒ 0 = 未知——**不编造"错误"**。
+ */
+export interface DebugDiagnostic {
+  readonly severity: number;
+  readonly message: string;
+  readonly line: number;
+  readonly column: number;
+  /** 产出这条诊断的语言服务名；缺失 ⇒ 不挂键 */
+  readonly source?: string;
+}
+
 /**
  * 自检的六条选择器口径。**这是"能力探测"，不是"此刻屏上有元素"**：
  * 面板没弹出来时 `document.querySelector` 当然是 0 命中，那不代表选择器失效——
@@ -217,16 +323,87 @@ export interface DebugSelfCheckSelectors {
 export type DebugFoldingShape = 'regions' | 'ranges' | 'promise' | 'none';
 
 /**
- * `editor.selfCheck()` 的返回形状（契约面）。`monacoVersion` / `languageId` 取不到就是 null
- * （不编造），`ok` 只由 `monacoVersion !== null && hover && suggest && foldingContribution`
+ * 自检的**老契约**（`summarizeSelfCheck` 的返回形状）：`monacoVersion` / `languageId` 取不到
+ * 就是 null（不编造），`ok` 只由 `monacoVersion !== null && hover && suggest && foldingContribution`
  * 三项决定——`suggestRow` / `labelName` / `detailsLabel` 是纯 DOM 探测，**不参与** `ok`。
+ *
+ * 为什么单独立这个类型而不是直接往 `DebugSelfCheck` 里加键：`summarizeSelfCheck` 的返回**形状**
+ * 本身是既有契约（`debug-language-surface.test.ts` 按整对象 `toEqual` 断言它），新增读数只许
+ * additive 地挂在 `selfCheck()` 的外层，不许把老形状改宽——改宽就等于让所有按整对象断言的
+ * 脚本在一夜之间读到多出来的键。
  */
-export interface DebugSelfCheck {
+export interface DebugSelfCheckCore {
   readonly monacoVersion: string | null;
   readonly languageId: string | null;
   readonly selectors: DebugSelfCheckSelectors;
   readonly foldingShape: DebugFoldingShape;
   readonly ok: boolean;
+}
+
+/**
+ * 一条编辑器动作的两个**互不等价**的事实（`probeAction` 的口径）：
+ * - `present`：`getAction(id)` 交回了一个对象——只证明这枚动作**注册着**；
+ * - `supported`：那枚动作 `isSupported()` 的实测值；动作缺席 / 动作没这个方法 / 调用抛错
+ *   ⇒ null（没问到，**不猜**）。
+ *
+ * 为什么非要拆成两个字段、而不是压成一个布尔：Monaco 的动作是**静态注册**的，
+ * 查 `editor.action.revealDefinition`（`getAction` 的入参）在完全没有 definition provider 的
+ * 语言里**照样返回动作**——点下去什么也不会发生。把"动作在"与"功能可用"压成一个布尔，就是
+ * 把近似当等价；而 `isSupported()` 走的是动作自己的 precondition（definition 那枚的
+ * precondition 正是 `hasDefinitionProvider`），它比 `present` 强，但仍然不是 provider 注册表的
+ * 直读——不可区分"没有 provider"与"上下文键还没算出来"，所以它是 `boolean | null`，不是结论。
+ */
+export interface DebugSelfCheckActionProbe {
+  readonly present: boolean;
+  readonly supported: boolean | null;
+}
+
+/** 六条语义读数各自的**代表动作**（为什么是这几枚、为什么 codeAction 不是 quickFix：见 `SEMANTIC_ACTION_IDS`） */
+export interface DebugSelfCheckSemanticActions {
+  readonly definition: DebugSelfCheckActionProbe;
+  readonly codeAction: DebugSelfCheckActionProbe;
+  readonly signatureHelp: DebugSelfCheckActionProbe;
+  readonly documentSymbol: DebugSelfCheckActionProbe;
+}
+
+/**
+ * provider 的三态（`probeProviderPresence` 的口径）：
+ * - `true`：注册表可查，且对**当前 model** 有 ≥1 个 provider；
+ * - `false`：注册表可查，但当前 model 下**一个都没有**——这时候对应读数**必然**是 `[]` / `null`，
+ *   与"这里确实没有定义"同形，正是自检要拆掉的那个歧义；
+ * - `null`：**没问到**（深路径 import 失败 / 没有 model / 该读数根本不走 provider 注册表）。
+ *   null 不是"false 的另一种写法"：false 是"问到了，答案是没有"，null 是"这条问题此刻答不了"。
+ */
+export type SemanticProviderPresence = boolean | null;
+
+/** 六条语义读数背后的 provider 三态（键与六条读数同名，方便对着结果看） */
+export interface DebugSelfCheckProviders {
+  readonly definition: SemanticProviderPresence;
+  readonly references: SemanticProviderPresence;
+  readonly codeAction: SemanticProviderPresence;
+  readonly signatureHelp: SemanticProviderPresence;
+  readonly documentSymbol: SemanticProviderPresence;
+  /** 诊断不走 provider 注册表（`getModelMarkers` 是公开 API）⇒ **恒 null**，见 `probeProviderPresence` */
+  readonly diagnostics: SemanticProviderPresence;
+}
+
+/** `selfCheck().semantic`：语义读数的可用性（**读数**，不是判据） */
+export interface DebugSelfCheckSemantic {
+  readonly actions: DebugSelfCheckSemanticActions;
+  readonly providers: DebugSelfCheckProviders;
+}
+
+/**
+ * `editor.selfCheck()` 的返回形状（契约面）= 老形状 + 一块 additive 的 `semantic`。
+ *
+ * `semantic` 回答"六条语义读数在当前构建 / 当前语言下有没有货可读"，但它**不参与 `ok`**：
+ * `ok` 的语义是"这套私有 DOM 形态与私有贡献点还成立吗"（`hover` / `suggest` / `folding`），
+ * 而 `semantic` 里全是**近似**——动作注册着不等于 provider 在，provider 在也不等于这一次调用
+ * 有结果。把近似塞进 `ok`，`ok===true` 就会从"升级没漂"偷换成"语言服务齐活"，一个结论变成
+ * 两个结论，读它的人没法再分开排查。所以：`ok` 一个字节都不动，`semantic` 只当读数看。
+ */
+export interface DebugSelfCheck extends DebugSelfCheckCore {
+  readonly semantic: DebugSelfCheckSemantic;
 }
 
 /** 悬浮文本/行的上限：悬停面板里整篇文档也可能被塞进来，读数不该原样搬 */
@@ -347,7 +524,7 @@ function normalizeOneLine(value: unknown): string {
  * - `foldingShape` 只认四个枚举值，其余归 `'none'`；
  * - `ok` 只看三项（version + hover + suggest + foldingContribution），**不看** DOM 行级探测。
  */
-export function summarizeSelfCheck(raw: unknown): DebugSelfCheck {
+export function summarizeSelfCheck(raw: unknown): DebugSelfCheckCore {
   const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const rawSelectors = (
     source.selectors && typeof source.selectors === 'object' ? source.selectors : {}
@@ -372,6 +549,330 @@ export function summarizeSelfCheck(raw: unknown): DebugSelfCheck {
     foldingShape,
     ok: monacoVersion !== null && selectors.hover && selectors.suggest && selectors.foldingContribution,
   };
+}
+
+/**
+ * `semantic` 归一（纯函数，供单测）：与 `summarizeSelfCheck` 同一套纪律——入参 `unknown`、
+ * 脏值不许抛、键集固定。
+ *
+ * 取严的规则：
+ * - `present` 只认**字面量 true**（`'true'` / 1 都不算：读数是给脚本断言的，不猜）；
+ * - `supported` / `providers.*` 只认字面量 `true` / `false`，其余（缺键、字符串、`undefined`）
+ *   一律 null —— null 与 false **不许混**（见 `SemanticProviderPresence` 头注）；
+ * - `providers.diagnostics` **恒 null**（连入参都不看）：诊断不走 provider 注册表，
+ *   这里出现任何 true / false 都只可能是编造的，正常化的时候就把它按死。
+ */
+export function summarizeSemanticCheck(raw: unknown): DebugSelfCheckSemantic {
+  const source = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const rawActions = (
+    source.actions && typeof source.actions === 'object' ? source.actions : {}
+  ) as Record<string, unknown>;
+  const rawProviders = (
+    source.providers && typeof source.providers === 'object' ? source.providers : {}
+  ) as Record<string, unknown>;
+  const probe = (key: string): DebugSelfCheckActionProbe => {
+    const entry = rawActions[key];
+    const record = (entry && typeof entry === 'object' ? entry : {}) as Record<string, unknown>;
+    const supported = record.supported;
+    return {
+      present: record.present === true,
+      supported: supported === true ? true : supported === false ? false : null,
+    };
+  };
+  const presence = (key: string): SemanticProviderPresence => {
+    const value = rawProviders[key];
+    return value === true ? true : value === false ? false : null;
+  };
+  return {
+    actions: {
+      definition: probe('definition'),
+      codeAction: probe('codeAction'),
+      signatureHelp: probe('signatureHelp'),
+      documentSymbol: probe('documentSymbol'),
+    },
+    providers: {
+      definition: presence('definition'),
+      references: presence('references'),
+      codeAction: presence('codeAction'),
+      signatureHelp: presence('signatureHelp'),
+      documentSymbol: presence('documentSymbol'),
+      diagnostics: null,
+    },
+  };
+}
+
+/* ------------------ 跳转与诊断读数（1030 批）的纯函数裁剪 ------------------ */
+
+const DEFINITION_LIMIT = 20;
+const REFERENCE_LIMIT = 50;
+/** references 的 `total` 也只数到这把上限：再多就按 500 计（读数不该为一个计数扫全项目） */
+const REFERENCE_TOTAL_LIMIT = 500;
+const CODE_ACTION_LIMIT = 30;
+const SYMBOL_LIMIT = 200;
+/** 符号树的递归深度护栏：坏 provider 交回环状 `children` 时不许把读数打爆 */
+const SYMBOL_DEPTH_LIMIT = 20;
+const DIAGNOSTIC_LIMIT = 200;
+const PARAMETER_LIMIT = 50;
+const SEMANTIC_TIMEOUT_DEFAULT_MS = 2000;
+/** 单行文本上限**沿用 `slimHoverText` 的口径**（300 字符 + 省略号），不另立一套 */
+const SLIM_TEXT_LIMIT = HOVER_ROW_CHAR_LIMIT;
+
+/**
+ * 单行文本裁剪（纯函数）：空白折叠 + 300 字符截断。
+ * 标题 / 符号名 / 诊断消息 / 签名 label 都该是"人能扫一眼的一行"，不是 provider 的原始长串。
+ */
+function slimText(value: unknown): string {
+  const line = normalizeOneLine(value);
+  return line.length > SLIM_TEXT_LIMIT ? `${line.slice(0, SLIM_TEXT_LIMIT)}…` : line;
+}
+
+/** 正整数归一：非有限数 / 小于 1 ⇒ null（"没有位置"与"位置是 0"不该被混成同一件事） */
+function toPositiveInt(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  const n = Math.floor(value);
+  return n >= 1 ? n : null;
+}
+
+/**
+ * URI / 路径文本归一（纯函数，不导出）：解百分号编码 → 拆 `file://` → 分隔符统一成 `/`。
+ *
+ * - **先解编码再比前缀**：provider 交回的 uri 是第三方拼的，`%E5%8F%A3` 这类编码不解开就永远
+ *   对不上工程根；`decodeURIComponent` 对半截编码会抛，所以解不开就按原文继续（绝不抛）。
+ * - `file:///C:/x` → `C:/x`（盘符前的斜杠是 URL 形态的一部分）；`file:///home/x` → `/home/x`；
+ *   `file://server/share` → `//server/share`（UNC 保留双斜杠，**别把它伪装成相对路径**）。
+ * - 非 file scheme（`inmemory://model/3` 这种未落盘模型）原样保留：它不是文件路径，硬算相对
+ *   路径只会编造一个不存在的文件。
+ */
+function normalizeUriText(raw: string): string {
+  let text = raw.trim();
+  if (!text) return '';
+  if (text.includes('%')) {
+    try {
+      text = decodeURIComponent(text);
+    } catch {
+      /* 半截编码：按原文继续 */
+    }
+  }
+  const fileMatch = /^file:\/\/(\/?)(.*)$/i.exec(text);
+  if (fileMatch) {
+    const leadingSlash = fileMatch[1] ?? '';
+    const rest = fileMatch[2] ?? '';
+    if (/^[A-Za-z]:/.test(rest)) text = rest;
+    else if (leadingSlash === '') text = rest ? `//${rest}` : '';
+    else text = `/${rest}`;
+  }
+  return text.replace(/\\/g, '/');
+}
+
+/**
+ * URI / 路径 → 仓库内相对路径（纯函数，导出供单测）。
+ *
+ * 三条纪律：
+ * 1. 分隔符一律 `/`：Windows 的 `C:\repo\a.kojo` 与 POSIX 的 `/home/me/repo/a.kojo` 走同一条
+ *    前缀比对，跨平台读数才对得上脚本里的断言；
+ * 2. 前缀必须落在**分隔符**上：`/repo` 不许吃掉 `/repo2/a.kojo`（与
+ *    `ui/dialect-binding.ts` 的 `relativeToProjectRoot` 同一把尺）；
+ * 3. 大小写不敏感（Windows 盘符与目录不区分大小写），只用于**判前缀**，返回的仍是原文大小写。
+ *
+ * `rootDir` 缺席 / 空串 / 不是前缀（含相对路径）⇒ **归一后原样返回**：不编造相对路径。
+ */
+export function toRepoRelativePath(rawPath: unknown, rootDir?: string | null): string {
+  const text = normalizeUriText(typeof rawPath === 'string' ? rawPath : '');
+  if (!text) return '';
+  const root = normalizeUriText(typeof rootDir === 'string' ? rootDir : '').replace(/\/+$/, '');
+  if (!root || root === '/' || text.length <= root.length) return text;
+  if (text.slice(0, root.length).toLowerCase() !== root.toLowerCase()) return text;
+  if (text[root.length] !== '/') return text;
+  return text.slice(root.length + 1);
+}
+
+/** range 的起点：`IRange`（`startLineNumber`）与 `{start:{lineNumber}}` 两种形态都认 */
+function readRangeStart(raw: unknown): { line: number; column: number } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const record = raw as Record<string, unknown>;
+  const nested = (record.start && typeof record.start === 'object' ? record.start : {}) as Record<string, unknown>;
+  const line = toPositiveInt(record.startLineNumber ?? nested.lineNumber ?? nested.line);
+  if (line === null) return null;
+  // 列缺失 ⇒ 1（行内首列是唯一"不编造"的默认值）；行缺失则整条丢弃
+  const column = toPositiveInt(record.startColumn ?? nested.column ?? nested.character) ?? 1;
+  return { line, column };
+}
+
+function slimLocation(raw: unknown, rootDir: string | null | undefined): DebugLocation | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const record = raw as Record<string, unknown>;
+  // 两种 provider 回包：`Location{uri,range}` 与 `LocationLink{targetUri,targetSelectionRange}`
+  const path = toRepoRelativePath(record.uri ?? record.targetUri, rootDir);
+  if (!path) return null;
+  const start = readRangeStart(record.range ?? record.targetSelectionRange ?? record.targetRange);
+  if (!start) return null;
+  return { path, line: start.line, column: start.column };
+}
+
+/**
+ * 跳转目标裁剪（纯函数）：空 / 非数组 ⇒ `[]`；缺 uri、缺 range、行号非正的脏条目**整条丢弃**
+ * （它们定位不到，留着只会让 `total` 虚高）；默认上限 20 条（`definitionAt` 的口径），
+ * `referencesAt` 显式传 50。
+ */
+export function slimLocations(raw: unknown, opts?: SlimLocationOptions): DebugLocation[] {
+  const out: DebugLocation[] = [];
+  if (!Array.isArray(raw)) return out;
+  const limit = clampInt(opts?.limit, DEFINITION_LIMIT, 1, REFERENCE_TOTAL_LIMIT);
+  for (const item of raw) {
+    if (out.length >= limit) break;
+    const location = slimLocation(item, opts?.rootDir);
+    if (location) out.push(location);
+  }
+  return out;
+}
+
+export interface SlimLocationOptions {
+  /** 工程根（缺 ⇒ 返回归一后的路径本身，不算相对路径） */
+  readonly rootDir?: string | null;
+  readonly limit?: number;
+}
+
+/** `edit` 里真有编辑才算 `hasEdit`：`{edits: []}` 这种空壳与"只有 command"都不算 */
+function hasRealEdit(edit: unknown): boolean {
+  if (!edit || typeof edit !== 'object') return false;
+  const edits = (edit as { edits?: unknown }).edits;
+  return Array.isArray(edits) && edits.length > 0;
+}
+
+/**
+ * 动作表裁剪（纯函数）：**只读形态**，不碰 `edit` 内容（读数回答"有哪些动作"，不回答"改成什么"）。
+ * - 缺 `title` ⇒ 丢弃（没有标题的动作点不到，留着只污染读数，与 `mapSuggestRows` 同一条纪律）；
+ * - `kind` 缺 ⇒ 空串；`isPreferred` 只认字面量 `true`；
+ * - 默认上限 30 条。
+ */
+export function slimCodeActions(raw: unknown, limit = CODE_ACTION_LIMIT): DebugCodeAction[] {
+  const out: DebugCodeAction[] = [];
+  if (!Array.isArray(raw)) return out;
+  const cap = clampInt(limit, CODE_ACTION_LIMIT, 1, REFERENCE_TOTAL_LIMIT);
+  for (const item of raw) {
+    if (out.length >= cap) break;
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const title = slimText(record.title);
+    if (!title) continue;
+    out.push({
+      title,
+      kind: slimText(record.kind),
+      isPreferred: record.isPreferred === true,
+      hasEdit: hasRealEdit(record.edit),
+    });
+  }
+  return out;
+}
+
+/** provider 可能返 `{value, dispose}`（Hover/SignatureResult 形态）也可能直接返值：统一解包 */
+function unwrapProviderResult(raw: unknown): unknown {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    const holder = raw as { value?: unknown };
+    if (holder.value !== undefined) return holder.value;
+  }
+  return raw;
+}
+
+/** `documentation` 的两种形态：字符串 / `{value: string}`；其余 ⇒ 空串 */
+function readDocumentation(raw: unknown): unknown {
+  if (typeof raw === 'string') return raw;
+  if (raw && typeof raw === 'object') return (raw as { value?: unknown }).value;
+  return '';
+}
+
+/**
+ * 签名读数裁剪（纯函数）：只取**当前生效**的那一条（`activeSignature` 指向的），
+ * 越界夹到最后一个；`activeParameter` 非数 ⇒ 0、夹到 0..99（不按参数表长度夹：provider 说
+ * 第 3 个就是第 3 个，参数表给不全不代表下标错）。缺 `label` / 无签名 ⇒ null。
+ */
+export function slimSignature(raw: unknown): DebugSignature | null {
+  const help = unwrapProviderResult(raw);
+  if (!help || typeof help !== 'object') return null;
+  const record = help as Record<string, unknown>;
+  const signatures = Array.isArray(record.signatures) ? record.signatures : [];
+  if (signatures.length === 0) return null;
+  const activeIndex = clampInt(record.activeSignature, 0, 0, signatures.length - 1);
+  const active = signatures[activeIndex];
+  if (!active || typeof active !== 'object') return null;
+  const info = active as Record<string, unknown>;
+  const label = slimText(info.label);
+  if (!label) return null;
+  const rawParameters = Array.isArray(info.parameters) ? info.parameters : [];
+  const parameters: string[] = [];
+  for (const param of rawParameters.slice(0, PARAMETER_LIMIT)) {
+    const text = slimText(typeof param === 'string' ? param : (param as { label?: unknown } | null)?.label);
+    if (text) parameters.push(text);
+  }
+  const documentation = slimText(readDocumentation(info.documentation));
+  return {
+    label,
+    activeParameter: clampInt(record.activeParameter, 0, 0, 99),
+    parameters,
+    ...(documentation ? { documentation } : {}),
+  };
+}
+
+/** `SymbolKind` 归一并夹住：非数字 ⇒ 0 = 未知（**不猜**成 Function 之类） */
+function toSymbolKind(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.floor(value));
+}
+
+/**
+ * 符号树裁剪（纯函数）：父子关系压平成 `depth`（0 = 顶层）。
+ *
+ * 逐节点丢弃的界限：**缺 `name` 的节点连子树一起丢**——读数里点不到的名字没有价值，它的
+ * 子节点也失去了「谁的子节点」这层语境，硬留着只会让脚本读到一堆无主条目。递归另有
+ * `SYMBOL_DEPTH_LIMIT` 护栏（provider 交回环状 `children` 时不许打爆）。默认上限 200 条。
+ */
+export function slimSymbols(raw: unknown, limit = SYMBOL_LIMIT): DebugSymbol[] {
+  const out: DebugSymbol[] = [];
+  const cap = clampInt(limit, SYMBOL_LIMIT, 1, 1000);
+  const walk = (list: unknown, depth: number): void => {
+    if (!Array.isArray(list) || depth > SYMBOL_DEPTH_LIMIT || out.length >= cap) return;
+    for (const item of list) {
+      if (out.length >= cap) return;
+      if (!item || typeof item !== 'object') continue;
+      const record = item as Record<string, unknown>;
+      const name = slimText(record.name);
+      if (!name) continue;
+      out.push({ name, kind: toSymbolKind(record.kind), depth });
+      walk(record.children, depth + 1);
+    }
+  };
+  walk(raw, 0);
+  return out;
+}
+
+/**
+ * 诊断裁剪（纯函数）：`markers()` 的原始条目（`startLineNumber`）与 `diagnostics()` 的契约形态
+ * （`line` / `column` / `source`）都认。
+ * - 缺 `message` / 缺行号 ⇒ 丢弃（定位不到或没有内容的诊断在读数里没有价值）；
+ * - `column` 缺 ⇒ 1；`severity` 缺 ⇒ 0 = 未知（**不编造错误等级**）；
+ * - `source` 空串 ⇒ **不挂键**（与 `alias` 同一条"空值不挂键"纪律）；默认上限 200 条。
+ */
+export function slimDiagnostics(raw: unknown, limit = DIAGNOSTIC_LIMIT): DebugDiagnostic[] {
+  const out: DebugDiagnostic[] = [];
+  if (!Array.isArray(raw)) return out;
+  const cap = clampInt(limit, DIAGNOSTIC_LIMIT, 1, 1000);
+  for (const item of raw) {
+    if (out.length >= cap) break;
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    const message = slimText(record.message);
+    if (!message) continue;
+    const line = toPositiveInt(record.line ?? record.startLineNumber);
+    if (line === null) continue;
+    const column = toPositiveInt(record.column ?? record.startColumn) ?? 1;
+    const severity =
+      typeof record.severity === 'number' && Number.isFinite(record.severity)
+        ? Math.max(0, Math.floor(record.severity))
+        : 0;
+    const source = slimText(record.source);
+    out.push({ severity, message, line, column, ...(source ? { source } : {}) });
+  }
+  return out;
 }
 
 const BUS_RING_LIMIT = 500;
@@ -583,6 +1084,223 @@ function mapFoldingModel(model: object): DebugFoldingRange[] | null {
   return out;
 }
 
+/* --------- 跳转与诊断的取数腿（1030 批，不导出；provider 链，不碰私有 DOM） --------- */
+
+/**
+ * 为什么走 **provider 注册表**而不是编辑器动作（revealDefinition / peekDefinition / quickFix 那一套）：
+ *
+ * - 动作是**副作用**，不是**查询**：revealDefinition 会把光标与视图搬到目标（跨文件还会换标签），
+ *   peekDefinition 只弹 peek 面板——想拿到结果就得读 peek 面板的 DOM（那一串私有类名），
+ *   quickFix 更糟：触发之后动作清单只活在弹出的菜单里。三条都不满足"只读"。
+ * - provider 注册表（`ILanguageFeaturesService`）是那些动作**背后的同一批 provider**：菜单点
+ *   "转到定义"时走的就是 `definitionProvider.ordered(model)`。直接调它 = 读与真人同源的数据，
+ *   且完全不改编辑器状态（不改光标、不弹面板、不动模型）。
+ * - 代价是这两条深路径没有公开类型面（包只发 `editor.api` 的 .d.ts），所以取数腿整套放在
+ *   `try/catch` 后面：路径不可用 ⇒ 如实 null / 空数组，绝不让调试面自己炸掉。
+ */
+interface RegistryLike {
+  ordered?: (model: unknown) => readonly { provider?: unknown }[];
+}
+
+interface LanguageFeaturesLike {
+  definitionProvider?: RegistryLike;
+  referenceProvider?: RegistryLike;
+  codeActionProvider?: RegistryLike;
+  signatureHelpProvider?: RegistryLike;
+  documentSymbolProvider?: RegistryLike;
+}
+
+/** `ILanguageFeaturesService` 只取一次（standalone 的 DI 单例，与 editor 同寿） */
+let featuresServicePromise: Promise<LanguageFeaturesLike | null> | null = null;
+/**
+ * 同一枚服务的**同步快照**：`selfCheck()` 是同步 API，等不了 Promise；结算后写在这里，
+ * `probeProvidersNow` 只读它。没结算（还在 import / 这条路不通）⇒ null ⇒ provider 三态全 null。
+ */
+let featuresServiceNow: LanguageFeaturesLike | null = null;
+
+function languageFeaturesService(): Promise<LanguageFeaturesLike | null> {
+  if (featuresServicePromise === null) {
+    featuresServicePromise = (async () => {
+      try {
+        // @ts-ignore 深路径不带 .d.ts（包只发 editor.api 的类型面）；形态在 monaco 0.57 核对过
+        const services = await import('monaco-editor/editor/standalone/browser/standaloneServices.js');
+        // @ts-ignore 同上：`ILanguageFeaturesService` 是 createDecorator 出来的令牌
+        const decorators = await import('monaco-editor/editor/common/services/languageFeatures.js');
+        const standalone = (services as { StandaloneServices?: { get(token: unknown): unknown } })
+          .StandaloneServices;
+        const instance = standalone?.get((decorators as { ILanguageFeaturesService?: unknown }).ILanguageFeaturesService);
+        featuresServiceNow = (instance ?? null) as LanguageFeaturesLike | null;
+        return featuresServiceNow;
+      } catch {
+        // 打包器不认 exports 映射 / 版本改名：这条路在当前构建上不通，如实回 null（不编造 provider）
+        return null;
+      }
+    })();
+  }
+  return featuresServicePromise;
+}
+
+/**
+ * 注册表条目 → provider（两种形态都收）。
+ *
+ * 0.57 的 `LanguageFeatureRegistry.ordered()` **直接返回 provider 数组**：上游实现是
+ * `_orderedForEach(model, …, entry => result.push(entry.provider))`（见
+ * `monaco-editor/esm/vs/editor/common/languageFeatureRegistry.js`），也就是说拆包这一步
+ * 它自己做完了，交给调用方的已经是 provider 本身。
+ *
+ * 这里原先按 `{ provider }` 包装去解，于是每条都解出 `undefined` ⇒ `providersOf` 恒空、
+ * `presenceOf` 恒 `false`，六个语义读数在真机上**一直返回空**；而当时的单测喂的正是包装
+ * 形状，所以全绿也照不出来（真机读数只有端到端冒烟才会撞破）。教训记在 PITFALLS 291。
+ *
+ * 两种形态都收：条目上挂着 `provider` 对象就用它（上游若改回包装不必再改这里），否则看
+ * 条目自己有没有该特性的方法 —— 有方法才算这个特性的 provider，不是随便一个对象都算。
+ */
+function unwrapProvider(entry: unknown, method: string): unknown | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const wrapped = (entry as { provider?: unknown }).provider;
+  if (wrapped && typeof wrapped === 'object') return wrapped;
+  return typeof (entry as Record<string, unknown>)[method] === 'function' ? entry : null;
+}
+
+/** 某个特性注册表里对当前 model 生效的 provider（顺序即 Monaco 的打分顺序） */
+function providersOf(registry: RegistryLike | undefined, model: unknown, method: string): unknown[] {
+  if (!registry || typeof registry.ordered !== 'function') return [];
+  try {
+    const entries = registry.ordered(model);
+    if (!Array.isArray(entries)) return [];
+    const out: unknown[] = [];
+    for (const entry of entries) {
+      const provider = unwrapProvider(entry, method);
+      if (provider) out.push(provider);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 一次 provider 调用：**同步抛 / 异步 reject / 挂死** 三种失败都归成 null。
+ * provider 是第三方代码（本仓的 kojo-* 与插件都算），读数器不能让它把调试会话拖住——
+ * 所以每条腿都自带超时（缺省 2s，`opts.timeoutMs` 可调，夹在 50ms..15s）。
+ */
+function callWithin<T>(timeoutMs: number, task: () => T | Promise<T>): Promise<T | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const done = (value: T | null): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      resolve(value);
+    };
+    timer = setTimeout(() => done(null), timeoutMs);
+    let produced: T | Promise<T>;
+    try {
+      produced = task();
+    } catch {
+      done(null);
+      return;
+    }
+    Promise.resolve(produced).then(
+      (value) => done(value ?? null),
+      () => done(null),
+    );
+  });
+}
+
+/**
+ * provider 回包展开成"条目数组"：`Location[]` / `LocationLink[]` 直接摊平，
+ * `{value: [...]}`（Signal 形态）解一层，单条结果包成一项。null / undefined 一律不算。
+ */
+function pushProviderResults(out: unknown[], raw: unknown): void {
+  if (raw === null || raw === undefined) return;
+  if (Array.isArray(raw)) {
+    out.push(...raw);
+    return;
+  }
+  if (typeof raw === 'object') {
+    const holder = raw as { value?: unknown };
+    if (holder.value !== undefined) {
+      pushProviderResults(out, holder.value);
+      return;
+    }
+  }
+  out.push(raw);
+}
+
+/** 当前工程的根目录（拿不到 ⇒ null：路径就只做归一、不硬算相对） */
+function currentRootDir(): string | null {
+  try {
+    const root = kernelNow?.project.current()?.rootDir;
+    return typeof root === 'string' && root.length > 0 ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+interface ModelTarget {
+  readonly model: Monaco.editor.ITextModel;
+  readonly monaco: typeof Monaco;
+  readonly rootDir: string | null;
+}
+
+async function modelTarget(): Promise<ModelTarget | null> {
+  const model = focusedCtx()?.editorRef.current?.getModel() ?? null;
+  if (!model) return null;
+  const monaco = await import('../monaco/entry');
+  return { model, monaco, rootDir: currentRootDir() };
+}
+
+interface SemanticTarget extends ModelTarget {
+  readonly position: Monaco.Position;
+  readonly line: number;
+  readonly column: number;
+}
+
+/**
+ * 把外部手敲的行列夹进当前 model 的合法范围（eval 里传 0 / 1e9 / 小数都不许抛）。
+ * 越界夹而不是拒绝：调试时"最后一行"是最常猜的一个位置。
+ */
+async function semanticTarget(line: unknown, column: unknown): Promise<SemanticTarget | null> {
+  const base = await modelTarget();
+  if (!base) return null;
+  if (typeof line !== 'number' || !Number.isFinite(line)) return null;
+  if (typeof column !== 'number' || !Number.isFinite(column)) return null;
+  const lineCount = Math.max(1, base.model.getLineCount());
+  const lineNumber = Math.min(Math.max(1, Math.floor(line)), lineCount);
+  const columnNumber = Math.min(Math.max(1, Math.floor(column)), base.model.getLineMaxColumn(lineNumber));
+  return { ...base, line: lineNumber, column: columnNumber, position: new base.monaco.Position(lineNumber, columnNumber) };
+}
+
+/** 逐 provider 取数（query 决定调哪个方法、吃什么参数）；单条抛错只丢它自己 */
+async function collectFromProviders(
+  providerName: keyof LanguageFeaturesLike,
+  method: string,
+  target: ModelTarget,
+  timeoutMs: number,
+  makeArgs: (token: unknown) => unknown[],
+): Promise<unknown[]> {
+  const raw: unknown[] = [];
+  const service = await languageFeaturesService();
+  const providers = providersOf(service?.[providerName], target.model, method);
+  if (providers.length === 0) return raw;
+  const cts = new target.monaco.CancellationTokenSource();
+  try {
+    for (const provider of providers) {
+      const fn = (provider as Record<string, unknown>)[method];
+      if (typeof fn !== 'function') continue;
+      const result = await callWithin(timeoutMs, () =>
+        (fn as (...args: unknown[]) => unknown).apply(provider, makeArgs(cts.token)),
+      );
+      pushProviderResults(raw, result);
+    }
+  } finally {
+    cts.dispose();
+  }
+  return raw;
+}
+
 /* --------------------------- 自检读数（1030 批，只读） --------------------------- */
 
 /**
@@ -666,6 +1384,165 @@ function probeSelectors(ed: LiveEditor | null): DebugSelfCheckSelectors {
   };
 }
 
+/* -------------- 语义读数的可用性自检（1030 批次 3，additive；口径见契约面） -------------- */
+
+/**
+ * 六条语义读数各自的**代表动作** id。
+ *
+ * 这不是读数的取数腿——六条读数走 provider 注册表（见 `collectFromProviders` 头注：动作是
+ * **副作用**、不是**查询**）。这里只问一句"这枚动作还在 `getAction` 表里吗"，抓的是
+ * "升级改名 / 贡献点被裁掉"这类静默漂移。
+ *
+ * `codeAction` 为什么取 `editor.action.refactor` 而不是更贴切的 quickFix：0.57 的 quickFix 是
+ * `registerAction2` 注册的（走 CommandService，**不进** `editor._actions` 那张表），拿它当
+ * `getAction` 探针恒为 null——只会得到永远 false 的假阴性；refactor 是同一批 codeActionProvider
+ * 背后、由 `registerEditorAction` 注册的那一枚，连 precondition 都同一条
+ * （`writable && hasCodeActionsProvider`）。
+ */
+const SEMANTIC_ACTION_IDS = {
+  definition: 'editor.action.revealDefinition',
+  codeAction: 'editor.action.refactor',
+  signatureHelp: 'editor.action.triggerParameterHints',
+  documentSymbol: 'editor.action.quickOutline',
+} as const;
+
+/** 只取 `getAction` 这一面：真实 `IStandaloneCodeEditor` 结构兼容，单测喂伪对象即可 */
+export interface ActionLookupLike {
+  getAction?(id: string): unknown;
+}
+
+/**
+ * 单枚动作探测：`present` 只认"`getAction` 交回了一个对象"。
+ *
+ * 为什么不把 `isSupported() === false` 也算成 `present: false`：两个字段回答的不是同一个问题。
+ * `present` 回答"这枚动作还注册着吗"（升级改名 ⇒ false，正是要抓的漂移）；`supported` 回答
+ * "它自己此刻认不认能跑"。混在一起，`present: false` 就再也没法区分"Monaco 改了这个 id"与
+ * "没有 provider 让它的 precondition 不成立"——而这两件事的修法完全相反。
+ *
+ * `supported` 的取法刻意**不同于** `mapSupportedActions`：那里"拿不到就当 true"是动作表读数的
+ * 乐观默认（表里存在即视为可用）；自检的职责恰恰是把"可用 / 不可用 / 不知道"分开，所以
+ * 没这个方法、返回非布尔、抛错，一律记 null，不许借用乐观默认。
+ */
+function probeAction(ed: ActionLookupLike | null, id: string): DebugSelfCheckActionProbe {
+  if (!ed || typeof ed.getAction !== 'function') return { present: false, supported: null };
+  let action: unknown;
+  try {
+    action = ed.getAction(id);
+  } catch {
+    // getAction 抛错（编辑器半销毁 / 被代理拦住）⇒ 与"没有"同形：拿不到就是拿不到
+    return { present: false, supported: null };
+  }
+  if (!action || typeof action !== 'object') return { present: false, supported: null };
+  let supported: boolean | null = null;
+  const fn = (action as { isSupported?: unknown }).isSupported;
+  if (typeof fn === 'function') {
+    try {
+      const value = (fn as () => unknown).call(action);
+      supported = typeof value === 'boolean' ? value : null;
+    } catch {
+      supported = null;
+    }
+  }
+  return { present: true, supported };
+}
+
+/** 四枚动作一次探完（导出供单测：伪 editor 即可，不碰 Monaco 运行时） */
+export function probeSemanticActions(
+  ed: ActionLookupLike | null | undefined,
+): DebugSelfCheckSemanticActions {
+  const lookup = ed ?? null;
+  return {
+    definition: probeAction(lookup, SEMANTIC_ACTION_IDS.definition),
+    codeAction: probeAction(lookup, SEMANTIC_ACTION_IDS.codeAction),
+    signatureHelp: probeAction(lookup, SEMANTIC_ACTION_IDS.signatureHelp),
+    documentSymbol: probeAction(lookup, SEMANTIC_ACTION_IDS.documentSymbol),
+  };
+}
+
+/**
+ * 一个特性注册表对当前 model 有没有 provider（三态）。
+ *
+ * 只有"注册表在、`ordered` 能调、返回的是数组"这三件事都成立，答案才是 true / false；
+ * 其余一切（服务没到手 / 这版注册表换了名字 / `ordered` 抛错 / 返回值形态不认识）都归 null：
+ * 升级之后我们看不懂它，就说看不懂，**不拿猜的当答案**。
+ *
+ * `method` 是判"这个条目到底是不是该特性的 provider"的依据（见 `unwrapProvider`）：
+ * 注册表里可能混着别的特性的条目，光看"有条目"会把没有 provider 说成 true。
+ */
+function presenceOf(registry: unknown, model: unknown, method: string): SemanticProviderPresence {
+  if (!model || !registry || typeof registry !== 'object') return null;
+  const ordered = (registry as RegistryLike).ordered;
+  if (typeof ordered !== 'function') return null;
+  try {
+    const entries = ordered.call(registry, model);
+    if (!Array.isArray(entries)) return null;
+    // 与 `providersOf` 同一条判据（同一个 `unwrapProvider`），两处读数才不会互相打架
+    return entries.some((entry) => unwrapProvider(entry, method) !== null);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 特性注册表字段 → provider 上的方法名。
+ *
+ * 0.57 把拆包做在 `ordered()` 里，条目就是 provider；要判断"这条到底是哪个特性的 provider"，
+ * 唯一可靠的办法是看它有没有该特性的方法名。名字取自 Monaco 的 provider 契约
+ * （`DocumentSymbolProvider.provideDocumentSymbols` 等），不是我们编的。
+ */
+const PROVIDER_METHODS: Record<keyof LanguageFeaturesLike, string> = {
+  definitionProvider: 'provideDefinition',
+  referenceProvider: 'provideReferences',
+  codeActionProvider: 'provideCodeActions',
+  signatureHelpProvider: 'provideSignatureHelp',
+  documentSymbolProvider: 'provideDocumentSymbols',
+};
+
+/**
+ * 语义读数的 provider 三态（导出供单测：伪 service + 伪 model 即可）。
+ *
+ * `service` 是 `ILanguageFeaturesService`（`languageFeaturesService()` 的结算值）。**它为什么
+ * 会整体是 null**：Monaco 的 provider 注册表**没有公开读接口**——`monaco.languages.*` 只发
+ * register*（0.57 上没有对应的 get*），注册表活在 standalone 的 DI 单例里，只能走
+ * `monaco-editor/editor/standalone/browser/standaloneServices.js` 深路径 import（同文件
+ * `languageFeaturesService` 那条腿）。打包器不认 exports / 版本改名 ⇒ 整块 null。
+ * 所以整块 null 的含义是"这条路在当前构建上不通"，**不是**"当前语言没有 provider"——后者是 false。
+ *
+ * `diagnostics` 恒 null：`diagnostics()` 读的是 `monaco.editor.getModelMarkers`（公开 API，
+ * 标记由语言服务自己往模型上推），**根本不经过 provider 注册表**。这里没有可问的 provider：
+ * 给 true 会让人以为"诊断会自己来"，给 false 会让人以为"诊断坏了"，两种都是编造。
+ */
+export function probeProviderPresence(service: unknown, model: unknown): DebugSelfCheckProviders {
+  const svc = (service && typeof service === 'object' ? service : null) as LanguageFeaturesLike | null;
+  return {
+    definition: presenceOf(svc?.definitionProvider, model, PROVIDER_METHODS.definitionProvider),
+    references: presenceOf(svc?.referenceProvider, model, PROVIDER_METHODS.referenceProvider),
+    codeAction: presenceOf(svc?.codeActionProvider, model, PROVIDER_METHODS.codeActionProvider),
+    signatureHelp: presenceOf(svc?.signatureHelpProvider, model, PROVIDER_METHODS.signatureHelpProvider),
+    documentSymbol: presenceOf(svc?.documentSymbolProvider, model, PROVIDER_METHODS.documentSymbolProvider),
+    diagnostics: null,
+  };
+}
+
+/**
+ * provider 三态的**实时**读数。
+ *
+ * 拿不到 model / 服务还没结算 ⇒ 全 null（首调就是这种情形）：`selfCheck()` 是同步 API，
+ * 这里只**踢一脚** `languageFeaturesService()` 不让它白等，本次如实给 null，下一次调用
+ * 就能读到真实注册表。宁可第一次答"不知道"，也不许为了好看把同步读数退化成 async。
+ */
+function probeProvidersNow(ed: LiveEditor | null): DebugSelfCheckProviders {
+  let model: unknown = null;
+  try {
+    model = ed?.getModel() ?? null;
+  } catch {
+    model = null; // 编辑器已销毁：取不到 model 就没有"当前语言"可言
+  }
+  if (!model) return probeProviderPresence(null, null);
+  if (featuresServiceNow === null) void languageFeaturesService();
+  return probeProviderPresence(featuresServiceNow, model);
+}
+
 /**
  * 折叠模型形态（只判形状，不取数）：0.57 的 `getFoldingModel()` 返 **Promise**（⇒ `'promise'`，
  * 同步读数取不到值）；早期版本同步返回、模型上是 `ranges` 数组；更有版本用 `regions`
@@ -705,12 +1582,22 @@ function readSelfCheckRaw(): DebugSelfCheck {
   } catch {
     languageId = null;
   }
-  return summarizeSelfCheck({
+  const core = summarizeSelfCheck({
     monacoVersion: resolveMonacoVersion(),
     languageId,
     selectors: probeSelectors(ed),
     foldingShape: foldingShapeOf(ed),
   });
+  return {
+    ...core,
+    // `semantic` 拼在 `summarizeSelfCheck` **之外**：那个函数的返回形状是既有契约（单测按整对象
+    // 断言），新读数只许 additive 地挂在外层。两块各探各的、各吞各的错：动作是同步查询，
+    // provider 要等 DI 服务结算（首调如实 null），谁拿不到都不许拖垮另一半。
+    semantic: summarizeSemanticCheck({
+      actions: probeSemanticActions(ed),
+      providers: probeProvidersNow(ed),
+    }),
+  };
 }
 
 export function installDebug(): KojoDebugApi {
@@ -966,7 +1853,8 @@ export function installDebug(): KojoDebugApi {
         try {
           return readSelfCheckRaw();
         } catch {
-          return summarizeSelfCheck(null);
+          // 兜底也要交回**完整**形状（含 semantic）：只给 core 会让脚本读到 undefined
+          return { ...summarizeSelfCheck(null), semantic: summarizeSemanticCheck(null) };
         }
       },
       async tokens(lineFrom, lineTo) {
@@ -990,6 +1878,127 @@ export function installDebug(): KojoDebugApi {
             out.push({ line, tokens });
           }
           return out;
+        } catch {
+          return [];
+        }
+      },
+      async definitionAt(line, column, opts) {
+        try {
+          const target = await semanticTarget(line, column);
+          if (!target) return [];
+          const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
+          const raw = await collectFromProviders(
+            'definitionProvider',
+            'provideDefinition',
+            target,
+            timeoutMs,
+            (token) => [target.model, target.position, token],
+          );
+          return slimLocations(raw, { rootDir: target.rootDir, limit: DEFINITION_LIMIT });
+        } catch {
+          return [];
+        }
+      },
+      async referencesAt(line, column, opts) {
+        try {
+          const target = await semanticTarget(line, column);
+          if (!target) return { items: [], total: 0 };
+          const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
+          // 与菜单里的"查找引用"同源：`includeDeclaration` 缺省 true
+          const includeDeclaration = opts?.includeDeclaration !== false;
+          const raw = await collectFromProviders(
+            'referenceProvider',
+            'provideReferences',
+            target,
+            timeoutMs,
+            (token) => [target.model, target.position, { includeDeclaration }, token],
+          );
+          const all = slimLocations(raw, { rootDir: target.rootDir, limit: REFERENCE_TOTAL_LIMIT });
+          return { items: all.slice(0, REFERENCE_LIMIT), total: all.length };
+        } catch {
+          return { items: [], total: 0 };
+        }
+      },
+      async codeActionsAt(line, column, opts) {
+        try {
+          const target = await semanticTarget(line, column);
+          if (!target) return [];
+          const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
+          // 零宽区间：与"光标停在这一格按 Alt+Enter"完全一样的位置语义
+          const range = new target.monaco.Range(target.line, target.column, target.line, target.column);
+          const raw = await collectFromProviders(
+            'codeActionProvider',
+            'provideCodeActions',
+            target,
+            timeoutMs,
+            // triggerKind=1 是 `CodeActionTriggerKind.Invoke`：真人按键触发的就是这一档
+            (token) => [target.model, range, { triggerKind: 1, only: undefined }, token],
+          );
+          // 回包是 `CodeActionList{actions,…}`：只摊 `actions`（其余是给你 dispose 的句柄）。
+          // 少数 provider 直接返 `CodeAction[]`：带 title 的裸动作也认，别让它们静默消失。
+          const actions: unknown[] = [];
+          for (const item of raw) {
+            if (!item || typeof item !== 'object') continue;
+            const list = (item as { actions?: unknown }).actions;
+            if (Array.isArray(list)) actions.push(...list);
+            else if ('title' in (item as Record<string, unknown>)) actions.push(item);
+          }
+          return slimCodeActions(actions, CODE_ACTION_LIMIT);
+        } catch {
+          return [];
+        }
+      },
+      async signatureAt(line, column, opts) {
+        try {
+          const target = await semanticTarget(line, column);
+          if (!target) return null;
+          const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
+          const raw = await collectFromProviders(
+            'signatureHelpProvider',
+            'provideSignatureHelp',
+            target,
+            timeoutMs,
+            (token) => [
+              target.model,
+              target.position,
+              token,
+              { triggerKind: 1, isRetrigger: false, triggerCharacter: undefined },
+            ],
+          );
+          // 第一个给得出签名的 provider 就是答案：与 Monaco 对多 provider 的取舍一致
+          for (const item of raw) {
+            const reading = slimSignature(item);
+            if (reading) return reading;
+          }
+          return null;
+        } catch {
+          return null;
+        }
+      },
+      async documentSymbols() {
+        try {
+          const target = await modelTarget();
+          if (!target) return [];
+          const raw = await collectFromProviders(
+            'documentSymbolProvider',
+            'provideDocumentSymbols',
+            target,
+            SEMANTIC_TIMEOUT_DEFAULT_MS,
+            (token) => [target.model, token],
+          );
+          return slimSymbols(raw, SYMBOL_LIMIT);
+        } catch {
+          return [];
+        }
+      },
+      async diagnostics() {
+        // **复用** `markers()` 的取数腿：同一条 `editor.getModelMarkers`，本条只加
+        // "当前文档作用域 + 裁剪"（markers() 仍是全模型、不裁剪，行为一个字节都不动）。
+        try {
+          const model = focusedCtx()?.editorRef.current?.getModel() ?? null;
+          if (!model) return [];
+          const monaco = await import('../monaco/entry');
+          return slimDiagnostics(monaco.editor.getModelMarkers({ resource: model.uri }), DIAGNOSTIC_LIMIT);
         } catch {
           return [];
         }

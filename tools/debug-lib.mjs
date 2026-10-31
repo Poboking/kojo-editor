@@ -253,23 +253,159 @@ export async function waitFor(cdp, expression, { timeoutMs = 30000, intervalMs =
   throw new Error(`等待超时（${timeoutMs}ms）：${label || expression}${lastErr ? `；最后一错：${lastErr}` : ''}`);
 }
 
-/** CDP 真实点击：元素中心 → elementFromPoint 自证（被遮挡时告警不冒充成功）→ Input 派发 */
-export async function cdpClick(cdp, selector) {
+/**
+ * 目标点解析：所有指针原语共用的一段——**选择器 → 元素中心（视口坐标）**。
+ *
+ * 为什么要过一遍 `document.querySelector` 而不是让调用方传像素：选择器是断言的一环
+ * （元素没了要当场红，不能静默点在空白处），而坐标是执行的一环。
+ *
+ * 为什么要 `elementFromPoint` 自证：`getBoundingClientRect` 给的是**布局位置**，
+ * 布局位置可点不等于「点下去会落到它身上」——被 toast / 遮罩 / 粘性工具栏盖住时，
+ * 事件会跑到覆盖层，测试便以「点了没反应」的形态假绿成「功能坏了」。这里如实告警
+ * （不抛、不冒充成功），把「为什么没反应」留在日志里；要红由调用方的判定负责。
+ *
+ * 选择器找不到 ⇒ 抛带选择器原文的错；对象一律当坐标且必须有限数（NaN/undefined
+ * 进 Input.dispatchMouseEvent 只会得到一条看不懂的 CDP 错误）。
+ */
+async function resolvePoint(cdp, target) {
+  if (typeof target !== 'string') {
+    const { x, y } = target ?? {};
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      throw new Error(`坐标必须是有限数：${JSON.stringify(target)}`);
+    }
+    return { x, y };
+  }
   const center = await cdp.evalJs(`(() => {
-    const el = document.querySelector(${JSON.stringify(selector)});
+    const el = document.querySelector(${JSON.stringify(target)});
     if (!el) return null;
     const r = el.getBoundingClientRect();
     return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
   })()`);
-  if (!center) throw new Error(`页面上没有 ${selector}`);
+  if (!center) throw new Error(`页面上没有 ${target}`);
   const hit = await cdp.evalJs(
-    `(() => { const el = document.elementFromPoint(${center.x}, ${center.y}); return el ? (el.closest(${JSON.stringify(selector)}) !== null) : false; })()`,
+    `(() => { const el = document.elementFromPoint(${center.x}, ${center.y}); return el ? (el.closest(${JSON.stringify(target)}) !== null) : false; })()`,
   );
-  if (!hit) console.warn(`[debug] ⚠ elementFromPoint 未命中 ${selector}（可能被遮挡）——仍按坐标点击`);
-  for (const type of ['mousePressed', 'mouseReleased']) {
-    await cdp.send('Input.dispatchMouseEvent', { type, x: center.x, y: center.y, button: 'left', clickCount: 1 });
-  }
+  if (!hit) console.warn(`[debug] ⚠ elementFromPoint 未命中 ${target}（可能被遮挡）——仍按坐标操作`);
   return center;
+}
+
+/**
+ * 拖拽中间帧：返回**从 from 走到 to 的 steps 个落点**（末点恒为 to），供 `cdpDrag` 逐帧派发。
+ *
+ * 为什么 drag 必须插中间帧：浏览器的拖拽不是「按下 + 抬起」两次事件就成立，而是
+ * 由 `mousemove` 序列喂出来的——HTML5 dragstart / dragover / drop、以及自绘的分栏
+ * 拖拽，都要在移动过程中累积位移、判定落区才有反应。只发 pressed → released，
+ * 页面看到的是「在原地按了一下又松开」，于是拖文件不进编辑器、拖分栏不动。
+ *
+ * 退化与夹取：steps<1（含 0 / 负数 / NaN）退化为「一步到位」= 只有终点，避免空数组
+ * 让 release 落在一个从未移动过的位置上；非整数取整（四舍五入，至少 1 步）；
+ * 负坐标夹到 0（CDP 不认负的视口点，且负值通常是调用方算错的兜底）。
+ */
+export function mousePath(from, to, steps) {
+  const n = Number.isFinite(steps) ? Math.max(1, Math.round(steps)) : 1;
+  const num = (v) => (Number.isFinite(v) ? v : 0);
+  const fx = num(from?.x);
+  const fy = num(from?.y);
+  const tx = Math.max(0, num(to?.x));
+  const ty = Math.max(0, num(to?.y));
+  const path = [];
+  for (let i = 1; i <= n; i++) {
+    const t = i / n;
+    path.push({ x: Math.max(0, fx + (tx - fx) * t), y: Math.max(0, fy + (ty - fy) * t) });
+  }
+  // 末点直接取夹取后的 to，避免浮点误差让「最后一帧停在 89.99999」这种落区判定失败
+  path[path.length - 1] = { x: tx, y: ty };
+  return path;
+}
+
+/**
+ * CDP 真实点击：元素中心 → elementFromPoint 自证（被遮挡时告警不冒充成功）→ Input 派发。
+ * 中心解析与自证已抽到 `resolvePoint`（与 hover / 双击 / 拖拽 / 滚轮共用同一段判据）。
+ */
+export async function cdpClick(cdp, selectorOrPoint) {
+  const point = await resolvePoint(cdp, selectorOrPoint);
+  for (const type of ['mousePressed', 'mouseReleased']) {
+    await cdp.send('Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount: 1 });
+  }
+  return point;
+}
+
+/**
+ * 悬停：一次 `mouseMoved` 停在目标中心，再等 `settleMs` 让 hover provider 弹出来。
+ *
+ * 为什么等而不是立刻断言：hover 是**异步提供**的（Monaco 的 hover 有 debounce 与一次
+ * 语言服务的往返），事件送达那一刻弹窗必然还不在。这里只给一个可调的静默窗，
+ * 不做「轮询到出现为止」——是否真弹属于业务判据，留给调用方用 `waitFor` 判；
+ * `settleMs: 0` 表示完全不等（调用方自己接 waitFor）。
+ */
+export async function cdpHover(cdp, selectorOrPoint, { settleMs = 120 } = {}) {
+  const point = await resolvePoint(cdp, selectorOrPoint);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, button: 'none' });
+  if (settleMs > 0) await sleep(settleMs);
+  return point;
+}
+
+/**
+ * 双击：pressed/released 走两轮，`clickCount` 依次 1、2。
+ *
+ * 为什么不是「连发两次 cdpClick」：dblclick 由浏览器按 clickCount 合成，两轮里
+ * clickCount 不递进的话，页面收到的是两次互不相干的单击（选中词 / 打开文件都不触发）。
+ */
+export async function cdpDoubleClick(cdp, selectorOrPoint) {
+  const point = await resolvePoint(cdp, selectorOrPoint);
+  for (const clickCount of [1, 2]) {
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await cdp.send('Input.dispatchMouseEvent', { type, x: point.x, y: point.y, button: 'left', clickCount });
+    }
+  }
+  return point;
+}
+
+/**
+ * 拖拽：按下 → `steps` 次带 `buttons: 1` 的移动（中间帧，理由见 `mousePath`）→ 抬起。
+ * 起终点都接受选择器或 `{x,y}`；返回实际起终点与移动帧数，便于调用方在日志里对账。
+ */
+export async function cdpDrag(cdp, from, to, { steps = 8 } = {}) {
+  const start = await resolvePoint(cdp, from);
+  const end = await resolvePoint(cdp, to);
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: start.x,
+    y: start.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  });
+  const path = mousePath(start, end, steps);
+  for (const p of path) {
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, button: 'left', buttons: 1 });
+  }
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: end.x,
+    y: end.y,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  });
+  return { from: start, to: end, moves: path.length };
+}
+
+/**
+ * 滚轮：先 `mouseMoved` 把指针放到目标上再 `mouseWheel`——滚轮作用在**指针下的滚动容器**
+ * （虚拟化列表常是内部某个 div），不发移动就滚的话，事件会落到上一次指针所在的位置。
+ */
+export async function cdpWheel(cdp, selectorOrPoint, { dx = 0, dy = 0 } = {}) {
+  const point = await resolvePoint(cdp, selectorOrPoint);
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y, button: 'none' });
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseWheel',
+    x: point.x,
+    y: point.y,
+    deltaX: dx,
+    deltaY: dy,
+  });
+  return point;
 }
 
 /**

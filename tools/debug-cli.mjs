@@ -50,6 +50,22 @@
  *   dom                        # DOM 结构快照（相位/标签/面板/通知/状态栏）
  *   events [n]                 # 内核事件旁听（最近 n 条，默认 40）
  *   invoke <命令> [JSON参数]   # 直达宿主命令（调试宿或桌面壳 IPC 同一入口）
+ *   doctor [--json] [--repo <路径>]
+ *         # 调试工具链七项体检：**直接 import 复用** debug-doctor.mjs 的判据（不复制、不 spawn），
+ *         # 退出码走它的 exitCodeFor（任一 FAIL ⇒ 1，WARN 不改变）
+ *   hover <选择器|"x,y"> [--settle ms]     # CDP 真鼠标悬停：停在目标中心，再等 settle 给 hover provider
+ *   dblclick <选择器|"x,y">                # 真双击（clickCount 1→2：两轮互不相干的单击浏览器不会合成 dblclick）
+ *   drag <起点> <终点> [--steps n]         # 真拖拽（按下 → n 帧带 buttons:1 的移动 → 抬起）
+ *   wheel <选择器|"x,y"> [--dx n] [--dy n] # 真滚轮（先移动指针再滚：滚的是指针下的那个滚动容器）
+ *   definition|references|code-actions|signature <行> <列>
+ *   symbols · diagnostics
+ *         # 语义读数（页面调试面 `__kojoDebug.editor.*`）：**行列 1 基**（与 Monaco position、
+ *         # `tokens()` 同口径）；查询位置原样回显在 `at: {line, column}`；空结果**不是错误**
+ *         # （打 `(空)`、退出码 0——"这里没有定义"本身就是一条有效读数）
+ *
+ * `--json`：status / state / commands / dom / events / wait / assert + 上面三族都支持。加了之后
+ *   stdout **只有一个 JSON 文档**（不混人类可读行、无 ANSI），可直接 JSON.parse；不加时输出与
+ *   旧版**逐字一致**（有脚本和人在照着读，默认形态不能变）。失败仍走 stderr + 非 0，stdout 不留半截文档。
  *
  * 退出码：0 成功；1 失败；2 前置不满足（无会话 / 浏览器找不到 / 端口被占）。
  */
@@ -61,7 +77,11 @@ import * as path from 'node:path';
 import {
   Cdp,
   cdpClick,
+  cdpDoubleClick,
+  cdpDrag,
+  cdpHover,
   cdpPage,
+  cdpWheel,
   debugHome,
   dismissDevNoteMask,
   expandCollapsedUntilMatch,
@@ -74,6 +94,9 @@ import {
   sleep,
   waitFor,
 } from './debug-lib.mjs';
+// 体检判据只有一份（debug-doctor.mjs）：这里**直接 import 复用**，不复制逻辑、不 spawn 子进程——
+// 两份判据迟早漂移，而"体检说没事、真跑起不来"正是体检工具最不能犯的错。
+import { exitCodeFor, formatHuman, pidAlive, probePort, runDoctor } from './debug-doctor.mjs';
 import { devTarget } from './smoke-lib.mjs';
 
 const REPO = path.resolve(import.meta.dirname, '..');
@@ -151,6 +174,126 @@ function normPath(p) {
   const s = String(p ?? '').replace(/\\/g, '/');
   return process.platform === 'win32' ? s.toLowerCase() : s;
 }
+
+/* --------------------------- 输出闸门（--json） --------------------------- */
+
+/**
+ * `--json` 的**唯一**闸门（由入口在 parseArgs 之后写一次）。
+ *
+ * 为什么必须只有一个闸门、且默认形态逐字不变：这套 CLI 的默认输出已经有人和脚本在照着读
+ * （`commands` 的行、`events` 的 `+Nms`、`wait` 的 `[ok] …`），改一个字都可能是别人的回归；
+ * 反过来，要让 agent 能 `JSON.parse` 就必须保证 stdout **只有一个完整 JSON 文档**——
+ * 人类读的行（`[ok] …`、`（12 条）`）混进去，解析当场失败且报错位置极具误导性。
+ * 所以两种形态彻底分开：`emit` 只在一处判，命令里不再散落 `if (opts.json)`。
+ *
+ * 失败不在这里兜：`die` 走 stderr + 非 0，stdout 一个字符都不留（宁可空，也不给半截文档）。
+ */
+let jsonOut = false;
+
+/** 统一出口：`--json` 打单行 JSON（键序＝对象字面量顺序），否则走原来的 `humanFn` */
+function emit(value, humanFn) {
+  if (jsonOut) {
+    console.log(JSON.stringify(value));
+    return;
+  }
+  humanFn(value);
+}
+
+/* ------------------------ 参数解析（纯函数，供单测） ------------------------ */
+
+/**
+ * 带值选项的数值解析：非法值**当场红并回显原文**。
+ * 为什么不像 `run --settle` 那样静默落默认：`wheel --dy abc` 若静默变 0，用户看到的是
+ * "滚了但没反应"，而不是"参数打错了"——调试工具里这种静默降级比报错贵得多。
+ */
+function numberOption(name, raw, fallback) {
+  if (raw === undefined) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) die(`${name} 需要数字，收到「${raw}」`, 2);
+  return n;
+}
+
+/**
+ * 指针目标解析：**一个**位置参数，`"x,y"` 或选择器。
+ *
+ * 为什么坐标不拆成两个位置参数：`drag <起点> <终点>` 已经要吃两个位置参数，若坐标再拆两个，
+ * 一条命令就是四个位置参数，`drag .a .b` 与 `drag 10,20 30,40` 的歧义只能靠"猜"——
+ * 而猜错的后果是"点在空白处"的假绿。保持**一个**参数，形态自明，也和直觉写法一致。
+ *
+ * 判据只看形状：以数字/小数点打头且含逗号 ⇒ 按坐标理解（这样 `a[href], b` 这类带逗号的
+ * 选择器不会被误判）；坐标形态但数字不合法 ⇒ 回 `bad-point` 并带上**收到的原文**，
+ * 由调用方 die 出去——用户得看见自己写的那串，否则无从改。
+ */
+export function parseTargetArg(raw) {
+  const text = String(raw ?? '').trim();
+  if (text === '') return { kind: 'missing' };
+  if (text.includes(',') && /^[+-]?(?:\d|\.\d)/.test(text)) {
+    const m = /^([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)$/.exec(text);
+    if (!m) return { kind: 'bad-point', raw: text };
+    return { kind: 'point', x: Number(m[1]), y: Number(m[2]), raw: text };
+  }
+  return { kind: 'selector', selector: text };
+}
+
+/** 解析结果 → `debug-lib` 的 target（字符串＝选择器，对象＝坐标） */
+function cdpTarget(t) {
+  return t.kind === 'point' ? { x: t.x, y: t.y } : t.selector;
+}
+
+/** 解析结果 → --json 的稳定形状（不带 raw：机器读数只要语义） */
+function jsonTarget(t) {
+  return t.kind === 'point' ? { kind: 'point', x: t.x, y: t.y } : { kind: 'selector', selector: t.selector };
+}
+
+/** 人类读的一行目标回显（坐标形态带引号：一眼看出"这是坐标、不是某个选择器"） */
+function describeTarget(t) {
+  return t.kind === 'point' ? `"${t.raw}"` : `${t.selector}`;
+}
+
+/** 位置参数缺 / 坐标写坏时的统一出口（永远带原文） */
+function requireTarget(raw, command, form) {
+  const t = parseTargetArg(raw);
+  if (t.kind === 'missing') die(`${command}：${form}（坐标写成 "x,y" 一个参数，不要拆两个）`, 2);
+  if (t.kind === 'bad-point') {
+    die(`${command}：坐标写法不认识「${t.raw}」——要 "x,y" 两个数（如 "320,480"），不要空格/多余符号`, 2);
+  }
+  return t;
+}
+
+/**
+ * 语义族的 `<行> <列>` 解析（**1 基**，与 Monaco position / `editor.tokens()` 同口径）。
+ *
+ * 为什么校验得这么死：0 基 / 1 基混用是这类命令最常见的事故，而 Monaco 对越界行列**不报错**，
+ * 只会给一个错位的结果——读数看上去"有内容"，实际查的是隔壁那一格。这里把非正整数当场挡掉，
+ * 并把收到的原文一起打出来（`definition 3 0` 与 `definition 3` 的报错必须能区分）。
+ */
+export function parseLineColumn(lineArg, columnArg, command = '') {
+  const rawLine = lineArg === undefined ? '' : String(lineArg);
+  const rawCol = columnArg === undefined ? '' : String(columnArg);
+  const line = Number(rawLine);
+  const column = Number(rawCol);
+  if (!Number.isInteger(line) || line < 1) {
+    return {
+      ok: false,
+      error: `${command} 的行号必须是 >= 1 的整数（**1 基**，与 Monaco position 同口径），收到「${rawLine}」`,
+    };
+  }
+  if (!Number.isInteger(column) || column < 1) {
+    return {
+      ok: false,
+      error: `${command} 的列号必须是 >= 1 的整数（**1 基**，与 Monaco position 同口径），收到「${rawCol}」`,
+    };
+  }
+  return { ok: true, at: { line, column } };
+}
+
+/** parseLineColumn + die：语义族每条命令的第一句 */
+function requireAt(lineArg, columnArg, command) {
+  const r = parseLineColumn(lineArg, columnArg, command);
+  if (!r.ok) die(`${r.error}\n  （列号是字符列、从 1 开始；「行 列」两个位置参数都要给）`, 2);
+  return r.at;
+}
+
 
 /* --------------------- open-project 的失败判据（纯函数） --------------------- */
 
@@ -677,29 +820,27 @@ async function cmdStatus() {
     if (ex) return `[FAIL] pid=${ex.pid} 已退出 code=${ex.code} signal=${ex.signal ?? '-'} at=${ex.at}（serve 输出有同期日志）`;
     return ok === false ? `[FAIL] pid=${pid} 不在（无退出记录——serve 进程可能已死，整会话作废重开）` : '—（未起）';
   };
-  console.log(
-    JSON.stringify(
-      {
-        会话: `${s.sessionId ?? '?'}（${s.repoRoot ?? '?'}${isShell ? ' · mode=shell 真桌面壳' : ''}）`,
-        调试宿: serverOk === null ? '—（mode=shell：真 Tauri IPC，无调试宿）' : serverOk ? `[ok] :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}` : `[FAIL] :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}`,
-        vite: `${viteOk ? '[ok]' : '[FAIL]'} :${s.vitePort}${isShell ? '' : ` ${childLine('vite', s.vitePid, alive(s.vitePid))}`}`,
-        浏览器CDP: cdpOk
-          ? `[ok] :${s.cdpPort} ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`
-          : `[FAIL] ${cdpWhy} ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`,
-        页面相位: pagePhase,
-        // 真壳的写权限只由真人对话框交付（铁律 6/7）：调试通道不代答确认框 ⇒ 恒为只读浏览。
-        // 这条只是读数，不参与下面的退出码判定。
-        ...(isShell ? { 写权限: '只读浏览（debug 通道不代答确认框）' } : {}),
-        退出记录: (s.exits ?? []).slice(-5),
-        // token 只留在会话文件里：status 常被粘进工单/日志，页面 token 一律脱敏（要完整 URL 用 url 子命令）
-        URL: maskUrl(s.url),
-        sandbox: s.sandbox ?? null,
-        readonly: s.readonly ?? [],
-      },
-      null,
-      2,
-    ),
-  );
+  // 读数先成对象、再决定怎么打：`--json` 与人类形态共用同一份形状（键序即下面的字面量顺序），
+  // 这样"加 --json 之后看到的东西"与"人看到的东西"永远不会是两套口径。
+  const report = {
+    会话: `${s.sessionId ?? '?'}（${s.repoRoot ?? '?'}${isShell ? ' · mode=shell 真桌面壳' : ''}）`,
+    调试宿: serverOk === null ? '—（mode=shell：真 Tauri IPC，无调试宿）' : serverOk ? `[ok] :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}` : `[FAIL] :${s.serverPort} ${childLine('host', s.serverPid, alive(s.serverPid))}`,
+    vite: `${viteOk ? '[ok]' : '[FAIL]'} :${s.vitePort}${isShell ? '' : ` ${childLine('vite', s.vitePid, alive(s.vitePid))}`}`,
+    浏览器CDP: cdpOk
+      ? `[ok] :${s.cdpPort} ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`
+      : `[FAIL] ${cdpWhy} ${isShell ? childLine('shell', s.shellPid, alive(s.shellPid)) : childLine('browser', s.browserPid, alive(s.browserPid))}`,
+    页面相位: pagePhase,
+    // 真壳的写权限只由真人对话框交付（铁律 6/7）：调试通道不代答确认框 ⇒ 恒为只读浏览。
+    // 这条只是读数，不参与下面的退出码判定。
+    ...(isShell ? { 写权限: '只读浏览（debug 通道不代答确认框）' } : {}),
+    退出记录: (s.exits ?? []).slice(-5),
+    // token 只留在会话文件里：status 常被粘进工单/日志，页面 token 一律脱敏（要完整 URL 用 url 子命令）
+    URL: maskUrl(s.url),
+    sandbox: s.sandbox ?? null,
+    readonly: s.readonly ?? [],
+  };
+  // 默认形态逐字不变（缩进 2 的人类形态有脚本/人在读）；--json 收成单行，保证 stdout 只有一个文档
+  console.log(jsonOut ? JSON.stringify(report) : JSON.stringify(report, null, 2));
   // shell 模式没有调试宿：判据换成「vite 在 + CDP 能连 + 真壳进程活着」——
   // 只看 vite 会把「壳崩了但 vite 还挂着」判成健康（假绿）。
   if (isShell) process.exit(viteOk && cdpOk && alive(s.shellPid) === true ? 0 : 1);
@@ -791,7 +932,8 @@ async function cmdEval(_, expr) {
 async function cmdState() {
   await withCdp(async (s, cdp) => {
     await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
-    console.log(JSON.stringify(await cdp.evalJs('__kojoDebug.state()'), null, 2));
+    const value = await cdp.evalJs('__kojoDebug.state()');
+    emit(value, (v) => console.log(JSON.stringify(v, null, 2)));
   });
 }
 
@@ -801,10 +943,13 @@ async function cmdCommands(_, filter) {
     const list = await cdp.evalJs('__kojoDebug.commands.list()');
     if (list && list.error) die(`命令注册表不可用：${list.error}（项目态命令要在开项目后才有）`, 1);
     const arr = (list ?? []).filter((c) => !filter || `${c.category ?? ''} ${c.title} ${c.id}`.toLowerCase().includes(filter.toLowerCase()));
-    for (const c of arr) {
-      console.log(`${c.id.padEnd(36)} ${c.keybinding ? `[${c.keybinding}] `.padEnd(16) : ''.padEnd(16)} ${c.category ?? ''}｜${c.title}`);
-    }
-    console.log(`（${arr.length} 条${filter ? `，过滤「${filter}」` : ''}）`);
+    // --json 的键序：filter（用了哪个过滤串）→ count → items（原样，不裁剪字段）
+    emit({ filter: filter ?? null, count: arr.length, items: arr }, () => {
+      for (const c of arr) {
+        console.log(`${c.id.padEnd(36)} ${c.keybinding ? `[${c.keybinding}] `.padEnd(16) : ''.padEnd(16)} ${c.category ?? ''}｜${c.title}`);
+      }
+      console.log(`（${arr.length} 条${filter ? `，过滤「${filter}」` : ''}）`);
+    });
   });
 }
 
@@ -833,7 +978,8 @@ async function cmdWait(opts, expr) {
       try {
         const v = await cdp.evalJs(wrapExpr(expr), 5000);
         if (v) {
-          console.log(`[ok] wait 满足（${Date.now() - t0}ms）：${expr}`);
+          const elapsedMs = Date.now() - t0;
+          emit({ ok: true, expression: expr, elapsedMs }, () => console.log(`[ok] wait 满足（${elapsedMs}ms）：${expr}`));
           return;
         }
         last = JSON.stringify(v) ?? String(v);
@@ -842,6 +988,7 @@ async function cmdWait(opts, expr) {
       }
       await sleep(200);
     }
+    // 超时走 die（stderr + 非 0）：--json 的 stdout 宁可空，也不给"看着像成功"的半截文档
     die(`[FAIL] wait 超时（${timeoutMs}ms）：${expr}${last ? `\n       最后一次读到：${last}` : ''}`, 1);
   });
 }
@@ -853,7 +1000,7 @@ async function cmdAssert(_, expr) {
     await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
     const v = await cdp.evalJs(wrapExpr(expr), 30000);
     if (v) {
-      console.log(`[ok] 断言成立：${expr}`);
+      emit({ ok: true, expression: expr, value: v }, () => console.log(`[ok] 断言成立：${expr}`));
       return;
     }
     die(`[FAIL] 断言不成立：${expr} => ${JSON.stringify(v)}`, 1);
@@ -1299,7 +1446,8 @@ async function cmdScreenshot(args, out) {
 async function cmdDom() {
   await withCdp(async (s, cdp) => {
     await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
-    console.log(JSON.stringify(await cdp.evalJs('__kojoDebug.dom.snapshot()'), null, 2));
+    const snap = await cdp.evalJs('__kojoDebug.dom.snapshot()');
+    emit(snap, (v) => console.log(JSON.stringify(v, null, 2)));
   });
 }
 
@@ -1308,12 +1456,15 @@ async function cmdEvents(args, nArg) {
   await withCdp(async (s, cdp) => {
     await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
     const list = await cdp.evalJs(`__kojoDebug.bus.recent(${n})`);
+    // --json 的键序：count → events（`t` 是页内 performance.now()，原样给，不折算）
+    emit({ count: list?.length ?? 0, events: list ?? [] }, (reading) => {
       // e.t 与探针同域（performance.now() 页内钟，口径修②）——不再是墙钟：相对首条的偏移毫秒展示
-      const firstT = list?.[0]?.t;
-      for (const e of list ?? []) {
+      const firstT = reading.events?.[0]?.t;
+      for (const e of reading.events ?? []) {
         console.log(`+${Math.max(0, Math.round(e.t - firstT))}ms ${e.name} ${JSON.stringify(e.payload).slice(0, 160)}`);
       }
-    console.log(`（最近 ${list?.length ?? 0} 条）`);
+      console.log(`（最近 ${reading.count} 条）`);
+    });
   });
 }
 
@@ -1472,9 +1623,251 @@ async function printProfileSummary(profile) {
   }
 }
 
+/* ------------------------------ 体检（doctor） ------------------------------ */
+
+/**
+ * `doctor`：把 `debug-doctor.mjs` 那七项判据接到 CLI 面上。
+ *
+ * 为什么是 import 而不是 spawn / 复制：判据只有一份才有意义——复制出来的第二份迟早与第一份
+ * 漂移，而"体检说没事、真跑起不来"正是体检工具最不能犯的错；spawn 又会多一层子进程与
+ * 退出码转译（还丢 `--json` 的原始键序）。所以直接调 `runDoctor`，人读形态用它的
+ * `formatHuman`，退出码用它的 `exitCodeFor`（任一 FAIL ⇒ 1，WARN 不改变）。
+ *
+ * `--repo` 缺省取**本 CLI 所在的仓库**（不是 cwd）：会话目录按工作树哈希隔离
+ * （`sessionDir(REPO)`），在别的目录下敲命令时要看的仍然是这棵树的会话。
+ *
+ * `--json` 与独立脚本 `debug-doctor.mjs --json` 保持同一形态（缩进 2），两份输出可逐字对拍。
+ */
+async function cmdDoctor(args) {
+  const repo = args.repo ? path.resolve(args.repo) : REPO;
+  const result = await runDoctor({
+    repo,
+    nodeVersion: process.versions.node,
+    probe: (port) => probePort(port),
+    isAlive: pidAlive,
+  });
+  if (jsonOut) console.log(JSON.stringify(result, null, 2));
+  else console.log(formatHuman(result));
+  process.exit(exitCodeFor(result));
+}
+
+/* ---------------------------- 指针族（CDP 真鼠标） ---------------------------- */
+
+/**
+ * 这四个命令只是 `debug-lib` 那批原语的**接线**，判据不在这里：`resolvePoint` 负责
+ * 选择器→元素中心 + `elementFromPoint` 自证（被遮挡时告警、不冒充成功），
+ * `mousePath` 负责拖拽中间帧。CLI 这层要做的只有两件事：把位置参数解析对、把读数打出来。
+ */
+
+async function cmdHover(args, targetArg) {
+  const target = requireTarget(targetArg, 'hover', '<选择器|"x,y">');
+  const settleMs = Math.max(0, numberOption('--settle', args.settle, 120));
+  await withCdp(async (s, cdp) => {
+    const point = await cdpHover(cdp, cdpTarget(target), { settleMs });
+    emit({ target: jsonTarget(target), point, settleMs }, () =>
+      console.log(`[ok] 已悬停 ${describeTarget(target)}（落点 ${point.x},${point.y}，settle ${settleMs}ms）`),
+    );
+  });
+}
+
+async function cmdDblClick(args, targetArg) {
+  const target = requireTarget(targetArg, 'dblclick', '<选择器|"x,y">');
+  await withCdp(async (s, cdp) => {
+    const point = await cdpDoubleClick(cdp, cdpTarget(target));
+    emit({ target: jsonTarget(target), point }, () =>
+      console.log(`[ok] 已双击 ${describeTarget(target)}（落点 ${point.x},${point.y}）`),
+    );
+  });
+}
+
+async function cmdDrag(args, fromArg, toArg) {
+  const from = requireTarget(fromArg, 'drag', '起点 <选择器|"x,y">');
+  const to = requireTarget(toArg, 'drag', '终点 <选择器|"x,y">');
+  // steps 缺省 8（与 cdpDrag 默认同值）；非法值不静默落默认——拖拽帧数是"为什么没拖动"的第一嫌疑
+  const steps = Math.max(1, Math.round(numberOption('--steps', args.steps, 8)));
+  await withCdp(async (s, cdp) => {
+    const r = await cdpDrag(cdp, cdpTarget(from), cdpTarget(to), { steps });
+    emit({ from: r.from, to: r.to, steps, moves: r.moves }, (v) =>
+      console.log(
+        `[ok] 已拖拽 ${describeTarget(from)} → ${describeTarget(to)}` +
+          `（${v.moves} 帧：${v.from.x},${v.from.y} → ${v.to.x},${v.to.y}）`,
+      ),
+    );
+  });
+}
+
+async function cmdWheel(args, targetArg) {
+  const target = requireTarget(targetArg, 'wheel', '<选择器|"x,y">');
+  const dx = numberOption('--dx', args.dx, 0);
+  const dy = numberOption('--dy', args.dy, 0);
+  // 两个 delta 都是 0 就是一条空事件：CDP 会照发，页面一动不动，用户看到的是"滚轮坏了"。
+  // 当场红（exit 2）比让它静静什么都不做强。
+  if (dx === 0 && dy === 0) die('wheel 需要滚动量：--dx <n> 和/或 --dy <n>（都为 0 等于不滚）', 2);
+  await withCdp(async (s, cdp) => {
+    const point = await cdpWheel(cdp, cdpTarget(target), { dx, dy });
+    emit({ target: jsonTarget(target), point, dx, dy }, () =>
+      console.log(`[ok] 已滚轮 ${describeTarget(target)}（落点 ${point.x},${point.y}，dx=${dx} dy=${dy}）`),
+    );
+  });
+}
+
+/* -------------------------- 语义族（页面调试面） -------------------------- */
+
+/**
+ * 语义族公共前置：等 `__kojoDebug` 装载（照 `cmdState` 的 waitFor）→ 确认 `.editor` 分面在场
+ * → 确认**有焦点编辑器**。
+ *
+ * 为什么"没有焦点编辑器"要红而不是给 `(空)`：这两种情况的处置完全不同——`(空)` 是"这里确实
+ * 没有定义/引用"（一条有效读数），没有编辑器是"你还没打开文件"（前置不满足）。混成一样，
+ * 用户会去查语言服务，而真正该做的是 `open-file`。
+ */
+async function ensureEditor(cdp) {
+  await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 10000, label: '__kojoDebug 装载' });
+  const has = await cdp.evalJs(
+    '(() => { const d = window.__kojoDebug; return !!(d && d.editor && typeof d.editor === "object"); })()',
+  );
+  if (!has) die('页面调试面没有 editor 分面（壳/页面跑的是旧构建？stop 后重开 serve 或 shell 再试）', 2);
+  const info = await cdp.evalJs('__kojoDebug.editor.info()');
+  if (!info) die('当前没有焦点编辑器——先 open-project <目录> + open-file <片段>（或 click 编辑器），再查语义读数', 2);
+  return info;
+}
+
+/**
+ * 调一个语义读数。
+ *
+ * 这些 API 全部返回 Promise（走 Monaco provider 链，有一次语言服务往返）。`Cdp.evalJs` 里
+ * `awaitPromise: true`（debug-lib.mjs 的 `Runtime.evaluate` 参数），所以**不需要**在页内再包
+ * 一层 async IIFE、也不需要 sleep 猜完成时机；反过来说，谁把 awaitPromise 关掉，拿到的会是
+ * Promise 的序列化壳（`{}`）——它看起来恰好长得像"没有结果"，是最坏的一种假绿/假红。
+ */
+function querySemantic(cdp, api, at, timeoutMs = 30000) {
+  return cdp.evalJs(`__kojoDebug.editor.${api}(${at.line}, ${at.column})`, timeoutMs);
+}
+
+/** 语义族共同的「查的位置」行：行列一错位，读数看上去照样"有内容"，只能靠回显抓 */
+function atLine(at) {
+  return `at ${at.line}:${at.column}`;
+}
+
+async function cmdDefinition(args, lineArg, columnArg) {
+  const at = requireAt(lineArg, columnArg, 'definition');
+  await withCdp(async (s, cdp) => {
+    await ensureEditor(cdp);
+    const items = await querySemantic(cdp, 'definitionAt', at);
+    const list = Array.isArray(items) ? items : [];
+    emit({ at, count: list.length, items: list }, () => {
+      console.log(`${atLine(at)} · ${list.length === 0 ? '(空)' : `${list.length} 条`}`);
+      for (const loc of list) console.log(`  ${loc.path}:${loc.line}:${loc.column}`);
+    });
+  });
+}
+
+async function cmdReferences(args, lineArg, columnArg) {
+  const at = requireAt(lineArg, columnArg, 'references');
+  await withCdp(async (s, cdp) => {
+    await ensureEditor(cdp);
+    const reading = await querySemantic(cdp, 'referencesAt', at);
+    const list = Array.isArray(reading?.items) ? reading.items : [];
+    const total = Number.isInteger(reading?.total) ? reading.total : list.length;
+    // 截断必须说清：只报"50 条"会让人以为整个工程就 50 处引用
+    const truncated = total > list.length;
+    emit({ at, total, count: list.length, truncated, items: list }, () => {
+      if (list.length === 0) {
+        console.log(`${atLine(at)} · 共 ${total} 条 → (空)`);
+        return;
+      }
+      console.log(`${atLine(at)} · 共 ${total} 条（显示 ${list.length} 条${truncated ? '，已截断' : ''}）`);
+      for (const loc of list) console.log(`  ${loc.path}:${loc.line}:${loc.column}`);
+    });
+  });
+}
+
+async function cmdCodeActions(args, lineArg, columnArg) {
+  const at = requireAt(lineArg, columnArg, 'code-actions');
+  await withCdp(async (s, cdp) => {
+    await ensureEditor(cdp);
+    const items = await querySemantic(cdp, 'codeActionsAt', at);
+    const list = Array.isArray(items) ? items : [];
+    emit({ at, count: list.length, items: list }, () => {
+      console.log(`${atLine(at)} · ${list.length === 0 ? '(空)' : `${list.length} 条`}`);
+      for (const a of list) {
+        // 只读摘要：告诉你"有哪些动作"，不说"改成什么"（apply 是 commands run 的事）
+        console.log(`  ${a.isPreferred ? '*' : ' '} [${a.kind || '-'}] ${a.title}（${a.hasEdit ? '有编辑' : '仅命令'}）`);
+      }
+    });
+  });
+}
+
+async function cmdSignature(args, lineArg, columnArg) {
+  const at = requireAt(lineArg, columnArg, 'signature');
+  await withCdp(async (s, cdp) => {
+    await ensureEditor(cdp);
+    const sig = (await querySemantic(cdp, 'signatureAt', at)) ?? null;
+    emit({ at, signature: sig }, () => {
+      if (!sig) {
+        console.log(`${atLine(at)} · (空)`);
+        return;
+      }
+      console.log(`${atLine(at)} · ${sig.label}`);
+      const active = Number(sig.activeParameter);
+      (sig.parameters ?? []).forEach((p, i) => console.log(`  ${i === active ? '→' : ' '} 参数 ${i}: ${p}`));
+      console.log(`  当前参数下标：${Number.isFinite(active) ? active : 0}（0 基，与 provider 同口径）`);
+      if (sig.documentation) console.log(`  文档：${String(sig.documentation).slice(0, 200)}`);
+    });
+  });
+}
+
+async function cmdSymbols() {
+  await withCdp(async (s, cdp) => {
+    await ensureEditor(cdp);
+    const items = await cdp.evalJs('__kojoDebug.editor.documentSymbols()', 30000);
+    const list = Array.isArray(items) ? items : [];
+    emit({ count: list.length, items: list }, () => {
+      if (list.length === 0) {
+        console.log('(空)');
+        return;
+      }
+      for (const sym of list) {
+        const indent = '  '.repeat(Math.max(0, Number(sym.depth) || 0));
+        console.log(`${indent}${sym.name}${sym.kind ? `  (kind=${sym.kind})` : ''}`);
+      }
+    });
+  });
+}
+
+/** Monaco `MarkerSeverity` 的四档（1/2/4/8）；未知值原样打出来，不编造"错误" */
+const SEVERITY_NAME = { 1: 'Hint', 2: 'Info', 4: 'Warning', 8: 'Error' };
+
+async function cmdDiagnostics() {
+  await withCdp(async (s, cdp) => {
+    await ensureEditor(cdp);
+    const items = await cdp.evalJs('__kojoDebug.editor.diagnostics()', 30000);
+    const list = Array.isArray(items) ? items : [];
+    emit({ count: list.length, items: list }, () => {
+      if (list.length === 0) {
+        console.log('(空)');
+        return;
+      }
+      console.log(`${list.length} 条诊断（当前文档）`);
+      for (const d of list) {
+        const sev = SEVERITY_NAME[d.severity] ?? `severity=${d.severity}`;
+        console.log(`  ${d.line}:${d.column} [${sev}] ${d.message}${d.source ? `（${d.source}）` : ''}`);
+      }
+    });
+  });
+}
+
 /* ------------------------------ main ------------------------------ */
 
-function parseArgs(argv) {
+/**
+ * 参数解析（纯函数，单测直接从源码取来跑）。
+ *
+ * 铁律：**带值参数必须在这里吃掉**——没吃掉的 `--steps 4` 会变成两个位置参数
+ * （`4` 落到 positional[0]），于是 `drag .a .b --steps 4` 的终点变成 `"4"`、`--steps`
+ * 本身变成选择器。本仓库已经为此踩过一次坑（`type --mode` 的 mode 被当成待输入文本），
+ * 所以 `--steps / --dx / --dy / --settle / --repo` 一律走 `argv[++i]`。
+ */
+export function parseArgs(argv) {
   const flags = [];
   const opts = { readonly: [] };
   const positional = [];
@@ -1490,7 +1883,14 @@ function parseArgs(argv) {
     // `type --mode text|keys|ime`：带值参数必须在这里吃掉，否则 mode 会被当成位置参数
     // （第二个位置参数是**待输入文本**，被占走就等于把字打错地方）
     else if (a === '--mode') opts.mode = argv[++i];
+    // 指针族 / 体检的带值参数（同上：不吃掉就会污染 positional——drag 有两个位置参数）
+    else if (a === '--steps') opts.steps = argv[++i];
+    else if (a === '--dx') opts.dx = argv[++i];
+    else if (a === '--dy') opts.dy = argv[++i];
+    else if (a === '--repo') opts.repo = argv[++i];
     else if (a === '--browser') opts.browser = argv[++i];
+    // --json 是**布尔**开关：放进 opts（命令直接读）而不是 flags（flags 只喂给 serve/shell 的形态判定）
+    else if (a === '--json') opts.json = true;
     else if (a === '--headless' || a === '--no-browser' || a === '--record' || a === '--fresh' || a === '--writable' || a === '--full' || a === '--isolate' || a === '--no-debug-api') flags.push(a);
     else positional.push(a);
   }
@@ -1499,6 +1899,8 @@ function parseArgs(argv) {
 
 const [rawCmd, ...rest] = process.argv.slice(2);
 const { flags, opts, positional } = parseArgs(rest);
+// 输出闸门在这里落定一次（之后所有命令共用一个 `jsonOut`，不再各自判 opts.json）
+jsonOut = Boolean(opts.json);
 const commands = {
   serve: () =>
     cmdServe({
@@ -1534,12 +1936,32 @@ const commands = {
   invoke: () => cmdInvoke(positional, positional[0], positional[1]),
   perf: () => cmdPerf(positional, positional[0], positional[1]),
   profile: () => cmdProfile(positional, positional[0], positional[1]),
+  // 体检（复用 debug-doctor 的判据）
+  doctor: () => cmdDoctor(opts),
+  // 指针族（CDP 真鼠标）：坐标写成 "x,y" **一个**位置参数
+  hover: () => cmdHover(opts, positional[0]),
+  dblclick: () => cmdDblClick(opts, positional[0]),
+  drag: () => cmdDrag(opts, positional[0], positional[1]),
+  wheel: () => cmdWheel(opts, positional[0]),
+  // 语义族（页面调试面 editor.*）：<行> <列> **1 基**
+  definition: () => cmdDefinition(opts, positional[0], positional[1]),
+  references: () => cmdReferences(opts, positional[0], positional[1]),
+  'code-actions': () => cmdCodeActions(opts, positional[0], positional[1]),
+  signature: () => cmdSignature(opts, positional[0], positional[1]),
+  symbols: () => cmdSymbols(),
+  diagnostics: () => cmdDiagnostics(),
 };
 if (!rawCmd || !commands[rawCmd]) {
   console.log('用法：node tools/debug-cli.mjs <子命令> […]\n  ' + [...Object.keys(commands)].join(' · '));
-  // 两个带值参数的速查（文件头的完整清单很长，这里只点最常被问的两条参数形态）
+  // 带值参数的速查（文件头的完整清单很长，这里只点最常被问的几条参数形态）
   console.log('  type [<选择器>] <文本> [--mode text|keys|ime]   # 默认 text；keys=真实键盘路径；ime=输入法组合→上屏');
   console.log('  open-project <目录> [--writable] [--timeout <ms>]   # 第 4 步预算，默认 60000，夹 [3000,300000]');
+  console.log('  doctor [--json] [--repo <路径>]   # 七项体检；任一 FAIL ⇒ 退出码 1（WARN 不改变）');
+  console.log('  hover <选择器|"x,y"> [--settle <ms>] · dblclick <选择器|"x,y">   # CDP 真鼠标；坐标是**一个**参数');
+  console.log('  drag <起点> <终点> [--steps <n>] · wheel <选择器|"x,y"> [--dx <n>] [--dy <n>]');
+  console.log('  definition|references|code-actions|signature <行> <列> · symbols · diagnostics');
+  console.log('       ↑ 行列 **1 基**（与 Monaco position 同口径）；空结果打 (空)、退出码 0');
+  console.log('  --json   # status/state/commands/dom/events/wait/assert + 上面三族：stdout 只有一个 JSON 文档');
   process.exit(rawCmd ? 1 : 0);
 }
 await (async () => {

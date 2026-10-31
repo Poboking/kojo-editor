@@ -10,9 +10,24 @@ on:
     # 每天 18:00 UTC = 次日 02:00（北京），避开欧美工作时段与 release 窗口。
     - cron: '0 18 * * *'
   workflow_dispatch:
+    inputs:
+      # 分段化（2026-10-30 批次 3）：手动补跑时只跑点名段（boot/project/editor/language/ui/perf/cli/
+      # pointer/semantic……脚本按 needs 自动补齐前置），几十秒就能拿到结果，不必整轮 5~10 分钟。
+      # 留空 = 全跑，与定时任务**逐字一致**（schedule 触发没有 inputs，这里恒为空）。
+      only:
+        description: '只跑指定段（逗号分隔，如 semantic 或 pointer,ui）；留空 = 全跑'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
+
+# 同 ref 只留最新的那一跑：夜间闸 + 手动补跑撞在一起时，两条会各自起浏览器、抢端口
+# （调试宿/vite/CDP 都按端口探测），旧的那条既没意义又添噪——直接取消它。
+concurrency:
+  group: debug-smoke-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke:
@@ -53,7 +68,35 @@ jobs:
       - name: 调试面单测（宿侧 + 页面 + 语言面）
         run: pnpm exec vitest run tools/tests/debug-server.test.ts packages/app/tests/debug-
 
-      # 端到端：起调试宿 + vite + 无头 Edge，真点开项目/开文件/跑命令/截图/语言面 provider。
+      # 端到端：起调试宿 + vite + 无头 Edge，真点开项目/开文件/跑命令/截图/语言面 provider，
+      # 末尾再真起 debug-cli 子进程验 wait/assert/close-project/type（含一条故意失败的 assert）。
       # 断言条数以脚本本次输出为准（每批都在加），这里不写死数字。
+      #
+      # 产物落点：KOJO_DEBUG_HOME 钉到 runner.temp（**不放仓库内**——browser-profile 里的
+      # Cookies 会被 Edge 锁住，任何对仓库建整树 watcher 的工具扫到就 EBUSY，见 debug-lib 头注），
+      # 下面 upload-artifact 按同一路径取。--keep 让脚本**不删**这一轮的工作目录
+      # （非 --keep 时 cleanup 会清掉 WORK，传上去就是空壳）。
       - name: Web 调试模式冒烟
-        run: node tools/debug-web-smoke.mjs
+        env:
+          KOJO_DEBUG_HOME: ${{ runner.temp }}/kojo-debug
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force $env:KOJO_DEBUG_HOME | Out-Null
+          # 分段化（2026-10-30 批次 3）：把 dispatch 的 only 透传给脚本；留空则一个参数都不加，
+          # 保证定时任务与"手动全跑"走的是**同一条**命令（--keep 之外零差异）。
+          $only = '${{ inputs.only }}'.Trim()
+          $smokeArgs = @('tools/debug-web-smoke.mjs', '--keep')
+          if ($only) { $smokeArgs += @('--only', $only) }
+          node @smokeArgs 2>&1 | Tee-Object -FilePath "$env:KOJO_DEBUG_HOME/smoke-console.log"
+          exit $LASTEXITCODE
+
+      # 红了要能看见"屏上是什么"：截图（smoke-final.png / smoke-fail.png）、沙盒里的
+      # fixtures 副本、CLI 用的 session.json、以及上面 tee 下来的控制台日志，整包上传。
+      - name: 失败取证（截图 / 日志 / 沙盒）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-smoke-logs
+          path: ${{ runner.temp }}/kojo-debug/
+          if-no-files-found: warn
+          retention-days: 7
