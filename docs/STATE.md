@@ -157,3 +157,25 @@
 
 插件 31：`erb-parser` / `eratw-adapter` / `eraakumamaid-adapter` / `eraav-adapter` / `erafl-adapter` / `erakoumakan-adapter` / `erasqc-adapter` / `eratohok-adapter` / `eratohoreverse-adapter` / `convention-linter` / `condition-extractor` / `sav-parser` / `state-replay` / `kojo-lang` / `kojo-market` / `kojo-sugar` / `erb-lang` / `inline-completion-local` / `launcher-core` / `ui-convention-report` / `ui-kojo-navigator` / `ui-kojo-xml` / `ui-market` / `ui-condition-matrix` / `ui-state-replay` / `ui-archive-browser` / `ui-snapshot-injector` / `ui-plugin-status` / `ui-sugar-preview` / `ui-sugar-editor` / `ui-sugar-lift`。
 目录结构与关键文件注释见 `docs/ARCHITECTURE.md`；批次回执在 git 提交信息（`docs/log/` 为旧制存档，不再新增）。
+- **条件矩阵建索引时的死循环（2026-11 修复，`eratw-adapter/src/family-index.ts::splitAtLastKAnchor`）**：
+  症状是"打开项目、等索引时大幅滚动 ⇒ 编辑器彻底卡死"（满核自旋、CDP 投递不进去、`--cpu-prof` 无产物）。
+  真因与滚动无关：锚点搜索退到 `k === 0` 后，下一轮 `lastIndexOf('_K', -1)` 被 JS 把负 position
+  **钳到 0**，若名字以 `_K` 开头则 `k` 原地不动 ⇒ `for(;;)` 空转。触发形态是「剥前缀后以 `_KX` 开头」，
+  而 `_KX` 正是同文件下方显式支持的占位符形态（`/_KX(?:_|$)/`）——不在锚点搜索里止血，那一支永远
+  执行不到。eraTW 语料 **120,284** 个函数名里 **4 个**命中。卡死时刻恒等于 `[ix] settled`（索引完成那一拍），
+  与是否开文件、是否滚动无关。
+  修法两层：`if (k === 0) return null;`（语义修复）+ 把 `for (;;)` 换成 `for (step < (s.length >> 1) + 2)`
+  （结构性保险：`_K` 最多出现 `floor(len/2)` 次，有效轮数天然有界）。**理由是失败代价**——该函数跑在
+  UI 主线程的微任务里（条件矩阵 `buildCharacterIndex` → `factsOfFile` → 这里），一次不终止就是整个
+  编辑器不可用，宁可退化成"拒绝判定"。
+  读数：修复前 `活=2 死=32`（3.6s 起永久失联）、`首次失败原因：CDP 超时`、CPU 稳定 **1.00 核**；
+  修复后 `活=40 死=0`（60s 全程）、`[ix] microtask-alive / build done / macrotask-alive` 全部恢复、
+  `首次失败原因：（一直活着）`。索引本身耗时不变（13.2s / 4,258 文件 / 117,032 函数）。
+  测试：`family-index.test.ts` **46 条全绿**（含 4 条新回归用例，用真实触发名 + `timeout: 2000` 做终止性兜底）；
+  eratw-adapter + ui-condition-matrix **1,073 条全绿**；`tsc --noEmit` 零错。
+  **顺带修好一个更隐蔽的账**：这份 350 行的核心测试文件此前**从未进过主套件**——`tools/perf-suite.mjs`
+  会把「含 `performance.now()` + 比较断言」的文件自动划进 perf 池，它因一处计时断言被整份踢出。新用例
+  刻意不加计时断言（改用用例超时），已回到功能池（1,133 个文件）。教训入 PITFALLS 291。
+  **新欠账一条**：`matrix-store` 的 `refresh()` 把 `rebuild(index)`（全量 117k 函数聚合，实测 **292 ms**）
+  直接放在 `ensureIndex().then()` 里同步跑，等于占掉一帧；`navigator-store` 早已用 `scheduleRebuild` +
+  `setTimeout` 推到宏任务。同一形态应收口（未做，本批只修卡死）。
