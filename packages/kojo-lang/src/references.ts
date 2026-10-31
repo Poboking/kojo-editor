@@ -50,8 +50,9 @@
  * - {@link kojo2ProjectReferencesAt} 把本文件结果与一份项目索引的跨文件结果合并（声明位在前）；
  * - {@link kojo2ReferencesInProjectFiles} 是 B3e 给插件用的**快照口**：项目文件由宿主按请求
  *   递进来（`projectFiles`），本文件用同一套 per-file 事实建一张**临时**索引再走上面同一条
- *   合并判据。临时索引的查询规则逐条照 `app/src/monaco/kojo2-project-index.ts`（那边是宿主
- *   的常驻缓存层；这里只是把"文件集"换成"一批快照"，尺子不变）。
+ *   合并判据。查询规则自 LAU-B11 起只有这一处实现（{@link createKojo2ReferenceFactsQueryIndex}）：
+ *   宿主常驻缓存索引（`app/src/monaco/kojo2-project-index.ts`）也读它——同一份输入两处不可能
+ *   各答一套口径；缓存与取数方式不同（那边逐文件缓存、这里按请求现建），尺子是同一条。
  *
  * ## 已知边界
  *
@@ -1058,7 +1059,7 @@ export interface Kojo2ProjectLookupOptions {
   readonly getIndex?: Kojo2ReferenceIndexSource;
 }
 
-/** 跨文件单次 `refsOf` 的结果上限（与宿主索引 `KOJO2_PROJECT_REF_LIMIT` 同值同口径） */
+/** 跨文件单次 `refsOf` 的结果上限（LAU-B11 起宿主索引**转发这一枚**，值不再有两份定义） */
 export const KOJO2_PROJECT_REF_LIMIT = 2000;
 
 /** `refsOf` 的查询面（与宿主项目索引同形；这里只收结构，不收实例） */
@@ -1366,20 +1367,41 @@ function snapshotFactsOf(files: readonly Kojo2ReferenceProjectFile[]): SnapshotF
 }
 
 /**
- * 一批项目文件 → 满足 {@link Kojo2ReferenceProjectIndex} 的**临时**索引。
+ * 一份已建好的逐文件引用事实（LAU-B11 查询面的**唯一输入形状**）。
  *
- * 查询规则逐条照宿主 `app/src/monaco/kojo2-project-index.ts` 的 `refsOf` / `declsOf` /
- * `symbolAt`：同一份 per-file 事实（`kojo2ReferenceSymbolsOf` / `kojo2ReferenceCandidatesOf`）、
- * 同一套路径序 / 去重 / 上限。宿主那侧是常驻缓存层，这里只是"把快照当项目"——
- * 两边的**尺子**是同一条，缓存与读取方式不同。
- *
- * 空文件集 ⇒ 空索引（`refsOf` 回空、`declsOf` 回空、`symbolAt` 回 `null`），
- * 于是 {@link kojo2ProjectReferencesAt} 自然退化成同文件查询。
+ * 两个入口都交它：宿主的常驻缓存索引（`app/src/monaco/kojo2-project-index.ts` 逐文件缓存
+ * `symbols` / `candidates`）与快照口现建的一份（{@link createKojo2ReferenceSnapshotIndex} →
+ * `snapshotFactsOf`）。宿主与供方因此读**同一条**查询实现
+ * （{@link createKojo2ReferenceFactsQueryIndex}）——「按名字取声明数 + 取引用位点」只有
+ * 一处提供，不再有第二份手抄口径。
  */
-export function createKojo2ReferenceSnapshotIndex(
-  files: readonly Kojo2ReferenceProjectFile[],
+export interface Kojo2ReferenceFactsEntry {
+  readonly path: string;
+  readonly symbols: readonly Kojo2DocumentSymbolFacts[];
+  readonly candidates: readonly Kojo2ReferenceCandidate[];
+}
+
+/**
+ * 逐文件引用事实 → 查询索引（满足 {@link Kojo2ReferenceProjectIndex}；LAU-B11）。
+ *
+ * `refsOf` / `declsOf` / `symbolAt` 三条规则的**唯一实现**——宿主常驻索引与快照临时索引
+ * 都从这里出，同一份输入不存在"两处各答一遍"：
+ * - 规范序与去重（路径归一键 → 行 → 列 → 角色；声明按路径 → 行 → 列 → 名字 → 种类）在这一处定死；
+ * - 没有声明就没有符号：候选位只在"这个名字 + 种类在项目里被声明过"时归属；同名家族隔离
+ *   与 `kojo2ReferencesAt` 同一条判据（变量位不会被算成同名表的引用）；
+ * - `refsOf` 结果上限 {@link KOJO2_PROJECT_REF_LIMIT}，超出按规范序截掉并置 `truncated`
+ *   （绝不静默少给）；`declsOf` 不设上限（声明被截会让跳转直接错，比慢更糟）。
+ *
+ * "名录未建 vs 真没有"两态归**调用方**（本函数只对交到手的名录作答）：名录缺席 = 不答，
+ * 由宿主腿的 `undefined` 表达（`projectFilesSnapshotOf(null)` ⇒ `undefined`、请求里不出现
+ * `projectFiles`）；名录在场但查无此名 = 作答（`refs: []` / `decls: []` / `null`）。
+ * 与 ERB 侧 `erb-workspace-symbols` / `erb-usage-lens` 的"未建 ⇒ `undefined` 不答"同形。
+ */
+export function createKojo2ReferenceFactsQueryIndex(
+  entriesIn: readonly Kojo2ReferenceFactsEntry[],
 ): Kojo2ReferenceProjectIndex {
-  const entries = snapshotFactsOf(files);
+  const entries = [...entriesIn];
+  entries.sort((a, b) => comparePaths(a.path, b.path));
   const validatePath = (path: unknown): path is string =>
     typeof path === 'string' && path.length > 0;
 
@@ -1496,6 +1518,23 @@ export function createKojo2ReferenceSnapshotIndex(
   };
 
   return { refsOf, declsOf, symbolAt };
+}
+
+/**
+ * 一批项目文件 → 满足 {@link Kojo2ReferenceProjectIndex} 的**临时**索引（B3e 快照口）。
+ *
+ * 两步：`snapshotFactsOf` 用同一套 per-file 事实（`kojo2ReferenceSymbolsOf` /
+ * `kojo2ReferenceCandidatesOf`）把一批文本建成事实条目，再交
+ * {@link createKojo2ReferenceFactsQueryIndex}——查询规则与宿主常驻索引**同一处实现**，
+ * 这里只是"把快照当项目"的入口。
+ *
+ * 空文件集 ⇒ 空索引（`refsOf` 回空、`declsOf` 回空、`symbolAt` 回 `null`），
+ * 于是 {@link kojo2ProjectReferencesAt} 自然退化成同文件查询。
+ */
+export function createKojo2ReferenceSnapshotIndex(
+  files: readonly Kojo2ReferenceProjectFile[],
+): Kojo2ReferenceProjectIndex {
+  return createKojo2ReferenceFactsQueryIndex(snapshotFactsOf(files));
 }
 
 /**
