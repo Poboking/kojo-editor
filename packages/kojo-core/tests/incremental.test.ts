@@ -567,21 +567,25 @@ describe('incremental：keystroke 性能护栏（5000+ 行）', () => {
   });
 
   /**
-   * 回退路径的墙钟：**这一条只报数、不设预算**（K2-INCR-HOLES，2026-10-31）。
+   * 回退路径的墙钟：**回退帧 ≤ 全量 compile × 3**（K2-INCR-HOLES，2026-10-31 收口）。
    *
-   * 为什么只报数：回退走的是 `rebuildAll` → `tryBuild`，即"为增量重建缓存"——它为**下一次**
-   * 编辑铺路，而这一帧的产物本来 `fullResult` 就能给。实测这份 5.2k 行 fixture 上它是
-   * 全量 compile 的数倍（读数见日志），差额来自 `tryBuild` 的结构性成本：每个单元各一次
-   * `parseSliceInto` + `lowerUnit`（5,200 次），而全量 compile 只 parse/lower 各一趟。
+   * 回退走的是 `rebuildAll` → `tryBuild`，即"为增量重建缓存"——它为**下一次**编辑铺路，
+   * 而这一帧的产物本来 `fullResult` 就能给。所以这里的尺子是"这一帧该付几趟全量"：
    *
-   * 不设预算的理由：设成"≤ 全量 × 2"就得同步把那 5,200 次调用摊平（改成从全量结果切分单元），
-   * 那是另一批的事；设成"≤ 全量 × 8"等于把现状写成期望。**留读数、留可见性**，等那一批做完
-   * 再把这条升级成硬预算。
+   * - **1× = 构建本身**：lex → parse → 一趟 `walkNarrative` 出全文产物 → 按单元行范围切分
+   *   （节点归属直接取全量 AST，不再逐单元切片 parse）；
+   * - **1× = 构建期自检**：`compose` 的拼接结果与真正的 `compileKojoFile` 逐字对拍
+   *   （erb / 每行 source map / 诊断序 / 隐藏槽 / AST）。这条保险不省；
+   * - 余下 ~1× 是切分、装配、深比较的固定开销与机器抖动。
    *
-   * 硬判据只有三条，与耗时无关：`fallbackFull` 必须为真、`fallbackReason` 必须能区分
-   * （`view-changed`）、结果必须与全量逐字节等价。
+   * 修前是 **6.30×**（231.8ms vs 36.8ms，PITFALLS 302）：那时每个单元各建一份 ctx + buffer
+   * 并各自 `finish()` 一次 source map（5,200 次），成本不在 lowering，在"把全量产物拆成
+   * 5,200 份再拼回去"。PITFALLS 303 记这一笔。
+   *
+   * 硬判据三条与耗时无关：`fallbackFull` 必须为真、`fallbackReason` 必须能区分
+   * （`view-changed`）、结果必须与全量逐字节等价。超时预算只是第四道护栏（比值稳定，不用 CI 放宽）。
    */
-  it('视角变化回退：可见 + 逐字节等价，成本只报数（不设预算）', () => {
+  it('视角变化回退：可见 + 逐字节等价，且成本 ≤ 全量 × 3', () => {
     const { source } = buildPerfSource(PERF_LINES);
     const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
     compiler.update(source);
@@ -592,6 +596,7 @@ describe('incremental：keystroke 性能护栏（5000+ 行）', () => {
       fullCompile(source);
       fullTimes.push(performance.now() - started);
     }
+    const fullMedianMs = median(fullTimes);
 
     let text = source;
     const times: number[] = [];
@@ -615,9 +620,10 @@ describe('incremental：keystroke 性能护栏（5000+ 行）', () => {
     // eslint-disable-next-line no-console
     console.log(
       `[incremental] 视角变化回退（${PERF_LINES} 行）：中位 ${fallbackMedianMs.toFixed(1)}ms、` +
-        `全量 compile 中位 ${median(fullTimes).toFixed(1)}ms、比值 ` +
-        `${(fallbackMedianMs / median(fullTimes)).toFixed(2)}×（只报数；结构性成本见本用例头注）`,
+        `全量 compile 中位 ${fullMedianMs.toFixed(1)}ms、比值 ` +
+        `${(fallbackMedianMs / fullMedianMs).toFixed(2)}×（预算 3×，依据见本用例头注）`,
     );
+    expect(fallbackMedianMs).toBeLessThan(fullMedianMs * 3);
   });
 });
 

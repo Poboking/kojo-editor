@@ -11,10 +11,22 @@
  * 空行是否断链与 parser 的"块体吸收"同口径（下一个非空非注释行仍缩进 ⇒ 空行并进上一分支的体、
  * 链不断；回到行首 ⇒ 断链）。每个单元缓存三层：
  *   1. **LexedDocument 片段**：只对该单元的行重新 `lex`（切片从行首开始，列号天然对齐）；
- *   2. **AST 节点**：该单元源码单独 `parse` 出来的节点（局部行号 + 单元起始行 = 全文件坐标）；
- *   3. **IR**：该单元节点单独走 `walkNarrative` 得到的产物行 + source map 行 + 隐藏槽 + 诊断。
+ *   2. **AST 节点**：构建时直接取**全量 parse 的 AST**（按 span 起始行归属，见下"构建形状"）；
+ *      编辑时只对该单元的切片 `parse`（局部行号 + 单元起始行 = 全文件坐标）；
+ *   3. **IR**：该单元的产物行 + source map 行 + 隐藏槽 + 诊断（构建时一趟 walk 出来再切分）。
  * 编辑落在某个单元里时，只重算这一个单元的三层；其余单元的行/节点/IR 原样复用，
  * 最后按单元顺序拼接（声明索引、表/池校验、`@织` 装配、`# 机` 包装在文件级做一次）。
+ *
+ * ── 构建形状（K2-INCR-HOLES 的成本解法） ────────────────────────────────
+ * 缓存构建 = **一趟全量形状**，不是"逐单元各跑一遍"：
+ *   lex → parse（各一次）→ `partitionLines` 划单元 → 节点按 span 归属（不切片 parse）→
+ *   同一份 ctx / buffer / sink 上按源序把各单元节点走一遍（每单元只记产物行区间、隐藏槽增量、
+ *   诊断增量）→ 一次 `finish()` 后按区间切分。
+ * 旧实现每单元各建 ctx + buffer 并各自 `finish()` 一次 source map（5,200 个单元 = 5,200 次），
+ * 构建成本因此是全量 compile 的 6.3 倍（PITFALLS 302/303）。节点改为取全量 AST 之后，
+ * 自检里的 AST 对拍也从深比较降成引用比较（同一批节点对象）。
+ * 切分网格与 parser 块体吸收不一致时（节点跨单元）构建期直接 fail-closed（`node-crosses-unit`）：
+ * 这种文档的增量重算必然错位，宁可慢不可错。
  *
  * ── 安全切分点（safe split points） ─────────────────────────────────────────
  * - 普通叙事单元内部可以改（含块体行、`@着色` / `@随机` 体、`?` 分支体）——只要编辑后
@@ -45,13 +57,14 @@
  * `tests/incremental.test.ts` 的 golden 断言（随机编辑增量 === 全量）钉住同一条契约。
  *
  * ── 性能口径（实测见 tests/incremental.test.ts） ──────────────────────────
- * 5000+ 行 / ~5500 单元的源文本：全量 compile 中位数 25–40ms 量级，整份缓存重建（旧回退路径）
- *   200–350ms；单字符编辑的增量路径只做 O(脏单元行数) 的 lex/parse/lower + O(总产物行数) 的
- *   拼接与 source map 重登记 + 一次 `wrapMachine`，实测 4–7ms。结构化增量
+ * 5000+ 行 / ~5500 单元的源文本：全量 compile 中位数 25–40ms 量级；**整份缓存重建**
+ *   （首帧 / 回退帧付的代价）≈ **全量 × 2**（真实读数 2.2×：1× 构建 + 1× 构建期自检），
+ *   修前是 6.3×（PITFALLS 302）。单字符编辑的增量路径只做 O(脏单元行数) 的 lex/parse/lower
+ *   + O(总产物行数) 的拼接与 source map 重登记 + 一次 `wrapMachine`，实测 4–7ms。结构化增量
  *   （K2-PERF-INCR-FALLBACK + K2-INCR-HOLES ②）实测：**纯换行插入/删除 17–25ms**、
  *   **5 行粘贴 / 3 行跨行删 20–24ms**、**单个声明单元内编辑 55–75ms**（该 fixture 每 7 行
  *   调用一次被改的池 ⇒ 重算 ~13% 的单元），都远低于旧的整份重建（粘贴/跨行删修前 185–195ms）。
- *   构建期（首帧）是 O(单元数) 的探针 + 一次全量自检，属冷路径：编辑器在文档打开时付一次。
+ *   构建期（首帧）是冷路径：编辑器在文档打开时付一次。
  */
 import type {
   KojoCallStmt,
@@ -87,7 +100,7 @@ import type { EmitResult, KojoEmitBackend, KojoHiddenSlot } from './lower/backen
 import { isEmitFailure } from './lower/backend.js';
 import { createEmitBuffer } from './lower/buffer.js';
 import type { ExpandContext } from './lower/expand/context.js';
-import { createExpandContext, hiddenSlots, indexDeclarations } from './lower/expand/context.js';
+import { createExpandContext, estimateLines, hiddenSlots, indexDeclarations } from './lower/expand/context.js';
 import { validateAllPools } from './lower/expand/pool.js';
 import { validateAllTables } from './lower/expand/tables.js';
 import { walkNarrative } from './lower/expand/walk.js';
@@ -514,26 +527,41 @@ function tryBuild(
     unit.scene = { title: scene.title, headerSpan: spanOfLine(header, lexed.positions) };
   }
 
-  // 每个非声明单元单独 parse（局部坐标 → 抬行号）；节点与 parse 诊断都来自这一步。
+  // ── 节点归属：直接取**全量 parse 的 AST**，按 span 起始行落到单元上 ─────────────
+  // 为什么不再逐单元切片 parse：切片 parse 是把全量 parse 已经做过的事再做 N 遍
+  // （每单元一次 lex + parse），在 5.2k 行 / 5,200 单元的 fixture 上实测占构建时间 34%；
+  // 它还自造了一类风险——"切片 parse 与全文件 parse 是否同形"。取全量 AST 之后两边是
+  // **同一批节点对象**，构建期自检的 AST 对拍也从深比较降为引用比较。
+  const unitNodes: KojoNarrativeNode[][] = units.map(() => []);
+  for (const scene of parsed.scenes) {
+    for (const node of scene.items) {
+      const unitIndex = unitOfLine[node.span.start.line - 1];
+      if (unitIndex === undefined || unitIndex < 0) return buildFailure('node-unmapped');
+      // 单元必须**整段包住**节点：切分网格（`partitionLines`）与 parser 的块体吸收判到两处去时，
+      // 节点会跨单元——这种文档的增量重算一定错位，就地 fail-closed（宁可慢，不可错）。
+      // 旧实现靠"切片 parse 各自的节点"间接撞上这个事实（自检不等价），这条检查把它显式化。
+      if (unitOfLine[node.span.end.line - 1] !== unitIndex) return buildFailure('node-crosses-unit');
+      unitNodes[unitIndex]!.push(node);
+    }
+  }
   for (let i = 0; i < units.length; i++) {
-    if (declOfUnit[i] === true) continue;
     const unit = units[i]!;
-    const unitText = sliceLines(text, starts, unit.startLine, unit.endLine);
-    const unitParse = parseUnitSlice(unitText, unit.startLine, declKindLabels);
-    unit.nodes = unitParse.nodes;
-    unit.lexDiags = unitParse.lexDiags;
-    unit.sourceDiags = unitParse.sourceDiags;
-    unit.postDiags = unitParse.postDiags;
+    unit.nodes = unitNodes[i]!;
+    if (declOfUnit[i] === true) continue;
+    // 收尾诊断（`core/template/unexpected-slot`）按**文件级** declKinds 复算：切片内自带的
+    // declKinds 只认识切片自己的声明，口径与全量不等价。
+    const postDiags: KojoDiagnostic[] = [];
+    collectCallBodyDiags(unit.nodes, declKindLabels, postDiags);
+    unit.postDiags = postDiags;
   }
 
-  // 声明单元的诊断来自全量 parse 的归属（声明不被增量重算，顺序由全量钉死）。
-  // 全量 parse 的输出 = 词法诊断（lex 阶段，全文件源序）在前，parse 诊断在后；
-  // 声明单元的 lex 诊断从 `lexed.diagnostics` 按行归属，parse 诊断从后半段归属。
+  // 诊断归属：全量 parse 的输出 = 词法诊断（全文件源序）在前、parse 诊断在后，两类都按 span
+  // 落到单元上。compose 按"全部 lexDiags → 全部 sourceDiags → 声明单元 post → 非声明单元 post"
+  // 的段序重排；段内是单元序 = 源序，因此与全量 parse 的诊断序列逐项相同。
   for (const diagnostic of lexed.diagnostics) {
     if (diagnostic.span === null) return buildFailure('unpositioned-diagnostic');
     const unitIndex = unitOfLine[diagnostic.span.start.line - 1];
     if (unitIndex === undefined || unitIndex < 0) return buildFailure('diagnostic-unmapped');
-    if (declOfUnit[unitIndex] !== true) continue; // 非声明单元的词法诊断由该单元 lex 复现
     const unit = units[unitIndex]!;
     unit.lexDiags = [...unit.lexDiags, diagnostic];
   }
@@ -544,10 +572,14 @@ function tryBuild(
     if (diagnostic.span === null) return buildFailure('unpositioned-diagnostic');
     const unitIndex = unitOfLine[diagnostic.span.start.line - 1];
     if (unitIndex === undefined || unitIndex < 0) return buildFailure('diagnostic-unmapped');
-    if (declOfUnit[unitIndex] !== true) continue; // 非声明单元的 parse 诊断由该单元 parse 复现
     const unit = units[unitIndex]!;
-    if (CALL_BODY_CODES.has(diagnostic.code)) unit.postDiags = [...unit.postDiags, diagnostic];
-    else unit.sourceDiags = [...unit.sourceDiags, diagnostic];
+    if (CALL_BODY_CODES.has(diagnostic.code)) {
+      // 非声明单元的收尾诊断已在上面的 `collectCallBodyDiags` 里按文件级 declKinds 复算过
+      if (declOfUnit[unitIndex] !== true) continue;
+      unit.postDiags = [...unit.postDiags, diagnostic];
+    } else {
+      unit.sourceDiags = [...unit.sourceDiags, diagnostic];
+    }
   }
 
   // 文件级：表/池校验、`# 机` 校验、`@织` 装配（只依赖声明；声明不变就复用）。
@@ -574,19 +606,61 @@ function tryBuild(
   const weaveDiags = weaveSink.all.slice();
   const weaveMap = extractMap(woven.sourceMap);
 
-  // IR：每个非声明单元单独走 walkNarrative（声明索引/校验结果通过 fork 共享只读面）。
+  // ── IR：**一趟 walk 出全文产物**，再按单元行范围切分（K2-INCR-HOLES 的成本解法） ─────
+  // 与全量 compile 同形：同一份 ctx / buffer / sink 上按源序把各单元的节点走一遍，每个单元只记
+  // "产物行区间 / 隐藏槽增量 / 诊断增量"，末尾一次 `finish()` 后按区间切分。
+  // 旧实现每个单元各建一份 ctx + buffer 并各自 `finish()` 一次 source map（5,200 次），实测占
+  // 构建时间 26%——那不是 lowering 的成本，是"把全量产物拆成 5,200 份再拼回来"的成本。
+  // `state` 仍**每单元一份**（color / loopDepth / region 这类区域状态不跨单元）：增量更新时
+  // 单个单元也是用一份新 state 重 lower，两边口径必须一致。
+  const lowerSink = createDiagnosticSink();
+  const lowerCtx = forkExpandContext(baseCtx, lowerSink, text);
+  const lowerBuffer = createEmitBuffer(estimateLines(text));
+  const lineStart = new Array<number>(units.length);
+  const lineEnd = new Array<number>(units.length);
+  const slotStart = new Array<number>(units.length);
+  const slotEnd = new Array<number>(units.length);
+  const diagStart = new Array<number>(units.length);
+  const diagEnd = new Array<number>(units.length);
   for (let i = 0; i < units.length; i++) {
-    if (declOfUnit[i] === true) continue;
     const unit = units[i]!;
-    if (unit.nodes.length === 0) continue;
-    const lowered = lowerUnit(unit.nodes, baseCtx, backend, view, text);
-    unit.lines = lowered.lines;
-    unit.mapKinds = lowered.mapKinds;
-    unit.mapSources = lowered.mapSources;
-    unit.mapOrigins = lowered.mapOrigins;
-    unit.mapSegments = lowered.mapSegments;
-    unit.slots = lowered.slots;
-    unit.walkDiags = lowered.walkDiags;
+    lineStart[i] = lowerBuffer.lineCount;
+    slotStart[i] = lowerCtx.slotOrder.length;
+    diagStart[i] = lowerSink.all.length;
+    if (declOfUnit[i] !== true && unit.nodes.length > 0) {
+      const state = createLowerState({
+        backend,
+        buffer: lowerBuffer,
+        sink: lowerSink,
+        view,
+        featureGate: lowerCtx.featureGate,
+      });
+      walkNarrative(unit.nodes, lowerCtx, state);
+      // 一次 walk 用完清栈：与"每单元 fork 一份 ctx"（`foreachFrames: []`）同口径
+      lowerCtx.foreachFrames.length = 0;
+    }
+    lineEnd[i] = lowerBuffer.lineCount;
+    slotEnd[i] = lowerCtx.slotOrder.length;
+    diagEnd[i] = lowerSink.all.length;
+  }
+  const loweredAll = lowerBuffer.finish();
+  const loweredMap = extractMap(loweredAll.sourceMap);
+  for (let i = 0; i < units.length; i++) {
+    if (lineStart[i] === lineEnd[i] && slotStart[i] === slotEnd[i] && diagStart[i] === diagEnd[i]) continue;
+    const unit = units[i]!;
+    const from = lineStart[i]!;
+    const to = lineEnd[i]!;
+    unit.lines = loweredAll.lines.slice(from, to);
+    unit.mapKinds = loweredMap.kinds.slice(from, to);
+    unit.mapSources = loweredMap.sources.slice(from, to);
+    unit.mapOrigins = loweredMap.origins.slice(from, to);
+    unit.mapSegments = loweredMap.segments.slice(from, to);
+    // 隐藏槽：共享 ctx 里只取本单元新增的那一段（同名槽由 compose 按"先到先得"去重）
+    const names = lowerCtx.slotOrder.slice(slotStart[i], slotEnd[i]);
+    const unitSlots = new Array<KojoHiddenSlot>(names.length);
+    for (let s = 0; s < names.length; s++) unitSlots[s] = lowerCtx.slots.get(names[s]!)!;
+    unit.slots = unitSlots;
+    unit.walkDiags = lowerSink.all.slice(diagStart[i], diagEnd[i]);
   }
 
   let totalNodes = 0;
