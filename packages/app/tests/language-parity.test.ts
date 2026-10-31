@@ -567,6 +567,113 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
   });
 });
 
+/* ============================== DOUBLE-LEG-1032C：改名一格（注册面两枚 / 应答面一枚 / 不收敛留账） ============================== */
+
+/**
+ * `rename`（F2）的「谁在答」台账（LAU-DUALLEG 第十波，2026-10-31）。形状照
+ * `DOUBLE-LEG-1032` / `DOUBLE-LEG-1032B`（点名为唯一台账 / 注册面计数 / 装配面计数 /
+ * 第三参口径 / 不许让位 / 未收敛的宿主事实逐字留账），**判据不另开一份尺子**；
+ * 行为面（弃权、两把尺子的读数、槽腿不写盘）钉在同波的 `tests/rename-dualleg.test.ts`。
+ *
+ * **本格与 definition/implementation 那两格的差别要说清**（简报前提在这里不成立）：
+ * `SLOT_SERVICE_LEGS` 里**有** `rename` 这枚腿，所以「槽腿表缺席 ⇒ 宿主腿禁 `excludeNamed`」
+ * 那条尺子用不上。让位的理由换成了另外两条，都在下面的留账用例里：
+ * ① 槽腿的 prepare 只有 **kojo2 那把尺子**（`kojo2PrepareRename`），ERB 一旦点名 `rename`
+ *    就从"没枚 provider"变成"用 2.0 的尺子判 ERB 的符号"——不是少功能，是**答错**；
+ * ② ERB 的**闭文件回写通道**（`applyToClosedFile` → `rewriteClosedFile` → 内核 io）只在宿主腿上，
+ *    槽腿只交 `WorkspaceEdit`；让位＝未打开文件不落盘（或更糟：盘上改一半）。
+ *
+ * 因此今天的判定＝**不收敛留账**：注册面 ERB / kojo1 各两枚（宿主答 + 槽腿恒弃权），
+ * kojo2 一枚；应答面每门恰一枚。真要收敛的前置条件写死在最后一条用例里。
+ */
+describe('DOUBLE-LEG-1032C：改名（rename）——注册面两枚 / 应答面一枚，不收敛留账', () => {
+  /** 三枚宿主/槽腿注册点：文件 → Monaco 注册 API → 装配点安装器 */
+  const RENAME_LEGS: readonly (readonly [string, string])[] = [
+    ['monaco/erb-rename.ts', 'installErbRename'],
+    ['monaco/kojo-rename.ts', 'installKojoRename'],
+    ['monaco/slot-service-providers.ts', 'installSlotServiceProviders'],
+  ];
+
+  it('全仓 src 里 registerRenameProvider 恰三枚文件、每枚文件恰一次调用（第四枚同种 provider 一出现本组就红）', () => {
+    const hits = SOURCE_FILES.filter((file) => file.text.includes('.registerRenameProvider('));
+    expect(
+      hits.map((file) => file.rel).sort(),
+      'rename 的注册点文件清单变了：谁在答要重数',
+    ).toEqual(
+      ['monaco/erb-rename.ts', 'monaco/kojo-rename.ts', 'monaco/slot-service-providers.ts'].sort(),
+    );
+    for (const rel of ['monaco/erb-rename.ts', 'monaco/kojo-rename.ts', 'monaco/slot-service-providers.ts']) {
+      const occurrences = sourceOf(rel).text.split('.registerRenameProvider(').length - 1;
+      expect(occurrences, `${rel} 里 registerRenameProvider 调了 ${occurrences} 次：一条 kind 挂了两枚 provider`).toBe(1);
+    }
+  });
+
+  it('装配点对三枚各只调一次安装器（第二次调用 = 同一枚 model 上的第二枚 provider）', () => {
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    for (const [, installer] of RENAME_LEGS) {
+      const calls = host.split(`${installer}(`).length - 1;
+      expect(calls, `${GLOBAL_PROVIDERS} 里 ${installer} 被调了 ${calls} 次`).toBe(1);
+    }
+  });
+
+  it('槽腿表里有 rename 这枚腿（所以本格不是"表缺席"那一族），且它是语言面不是写面腿', () => {
+    const factory = sourceOf('monaco/slot-service-providers.ts').text;
+    expect(factory).toMatch(tableEntryPattern('rename', 'registerRenameProvider'));
+    // 写面腿表（`SLOT_SERVICE_WRITE_LEGS`）只登记 codeAction：改名是只读语言面，不受切流门控
+    expect(factory).toMatch(/SLOT_SERVICE_WRITE_LEGS[^\n]*= Object\.freeze\(\['codeAction'\]\)/);
+  });
+
+  it('反向形状：槽腿安装的第三参必须是能力名（写成 undefined 就摘掉 kojo2——它不声明旧桥，点名是它唯一的挂载通道）', () => {
+    const factory = sourceOf('monaco/slot-service-providers.ts').text;
+    expect(
+      factory,
+      'installSlotServiceLegs 的第三参不再是 leg.kind：kojo2 的 rename 腿会静默挂不上',
+    ).toMatch(/registerForLanguageServices\(\s*monaco,[\s\S]{0,200}?leg\.kind,/);
+    const kojo2 = descriptorForLanguageId(KOJO2_LANGUAGE_ID);
+    expect(kojo2).not.toBeNull();
+    expect(kojo2?.slotServices ?? [], 'kojo2 的点名表读空了：下面那条 toContain 就成了假通过').toEqual(
+      expect.arrayContaining(['rename']),
+    );
+    expect(kojo2?.languageServices, 'kojo2 一旦声明旧桥，本条"第三参必须能力名"的理由就换了').not.toBe(true);
+  });
+
+  it('ERB / kojo1 都不点名 rename，两枚宿主腿都不许 excludeNamed（让位＝换错尺子 + 闭文件不落盘）', () => {
+    const erb = descriptorForLanguageId(ERB_LANGUAGE_ID);
+    expect(erb).not.toBeNull();
+    // 反空匹配自证：读到的确实是那份点名表（今天三条），不是 `undefined ?? []` 蒙过去的
+    expect(erb?.slotServices ?? [], 'ERB 的点名表读空了：下面两条 not.toContain 就成了假通过').toEqual(
+      expect.arrayContaining(['references', 'hover', 'formatting']),
+    );
+    expect(erb?.slotServices ?? [], 'ERB 点名 rename = 把 2.0 的 prepare 尺子按到 .erb 上').not.toContain('rename');
+    const kojo1 = descriptorForLanguageId(KOJO_LANGUAGE_ID);
+    expect(kojo1?.slotServices ?? [], 'kojo1（封存层）点名了 rename：它是待删除物，不进统一层').not.toContain('rename');
+    for (const rel of ['monaco/erb-rename.ts', 'monaco/kojo-rename.ts']) {
+      expect(sourceOf(rel).text, `${rel} 不该按 excludeNamed 让位`).not.toMatch(/excludeNamed/);
+    }
+    // 宿主腿仍是"直挂语言 id"那一枚（改成共享收口形状 = 本组的计数前提没了）
+    expect(sourceOf('monaco/erb-rename.ts').text).toMatch(/registerRenameProvider\(\s*ERB_LANGUAGE_ID/);
+    expect(sourceOf('monaco/kojo-rename.ts').text).toMatch(/registerRenameProvider\(\s*KOJO_LANGUAGE_ID/);
+  });
+
+  it('不收敛的宿主事实逐字留账：闭文件回写通道与跨语言改名判据都在宿主腿上（搬不动就不收，也不许因搬不动丢功能）', () => {
+    const erb = sourceOf('monaco/erb-rename.ts').text;
+    expect(erb).toMatch(/export function createApplyToClosedFile/); // 未打开文件唯一落盘通道
+    expect(erb).toMatch(/landedFiles/); // 全或无最后一道：rejectReason 与已落盘永不同时
+    expect(erb).toMatch(/kojoSources\?/); // 跨语言腿①：糖源枚举（宿主才看得见）
+    expect(erb).toMatch(/kojoReferences\?/); // 跨语言腿②：逐处判读（供方之间不许互问）
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    expect(host).toMatch(/applyToClosedFile: createApplyToClosedFile\(renameClosedFileIo\)/);
+    // 真收敛的前置条件（两条都要齐，缺一律不收）：
+    const factory = sourceOf('monaco/slot-service-providers.ts').text;
+    expect(factory, '槽腿 rename 的 prepare 仍只有 kojo2 那把尺子 ⇒ 收敛要先按 descriptor 分派尺子').toContain(
+      'kojo2PrepareRename',
+    );
+    expect(factory, '槽腿出现落盘通道 = 第二套写盘路径；不许用这条捷径去收敛 rename').not.toMatch(
+      /applyToClosedFile|rewriteClosedFile/,
+    );
+  });
+});
+
 /* ============================== 诊断 / builtin 专项 ============================== */
 
 describe('上游腿的专项取证（没有 Monaco 注册 API 的那几项）', () => {
