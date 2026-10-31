@@ -24,7 +24,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { registerErbLanguage } from '../src/monaco/erb-language';
-import { erbCodeViewOf } from '../src/monaco/erb-completion-context';
+import { erbCodeViewOf } from '@kojo/plugin-erb-parser';
 import { scanTextTernaries } from '@kojo/plugin-condition-extractor';
 import { compileMonarch, driveLine, stubMonaco, type CompiledLexer, type Emit } from './monarch-harness';
 

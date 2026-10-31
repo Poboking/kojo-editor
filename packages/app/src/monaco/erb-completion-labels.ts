@@ -1,7 +1,6 @@
 import type * as Monaco from './entry';
 import type { ErbFileFactsProvider } from './completion-core';
-import { definedLabels } from '@kojo/plugin-erb-parser';
-import { erbLabelSlot } from './erb-completion-context';
+import { definedLabels, erbLabelSlot } from '@kojo/plugin-erb-parser';
 import { erbFactsPathOf } from './erb-completion-declared';
 
 /**
@@ -14,7 +13,7 @@ import { erbFactsPathOf } from './erb-completion-declared';
  * - `undefined`（未索引 / 提供者抛错）⇒ 回退全文扫描 `definedLabels`（**仅未索引时用**）；
  * - `[]`（已索引确无该项）⇒ 零候选，**不回退**。
  *
- * 检测判据 = `erb-completion-context.ts` 的 {@link erbLabelSlot} **单源**（四个跳转词、全角
+ * 检测判据 = `@kojo/plugin-erb-parser` 的 {@link erbLabelSlot} **单源**（四个跳转词、全角
  * 空白分隔、可选 `$`）；本文件不再手抄 `JUMP_CONTEXT_RE` / `JUMP_KEYWORDS` / `isLabelChar`。
  * 前缀过滤大小写不敏感（Emuera 标签名不区分大小写，解析器 `ErbLabel` 注释有实据）：
  * 比较统一 `toUpperCase`，展示保留解析器原文。

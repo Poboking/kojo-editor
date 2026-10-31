@@ -30,7 +30,7 @@
  * - 条件里写中文运算符（§5.1「沿用现有中文表」）：2.0 的表达式词法复刻的是 v1 的
  *   **符号**管线（`kojo-core/src/expr/tokenize.ts:1-20`），中文词形还住在糖层
  *   （`plugin-api`/`kojo-sugar` 的 `keywords.ts:543`），宿主也只是拿它上色
- *   （`app/src/monaco/kojo2-lexicon.ts:9-10` 自述「core 的表达式层尚未自持该表」）
+ *   （`kojo-lang/src/lexicon.ts` 头注自述「core 的表达式层尚未自持该表」）
  *   ⇒ 教程一律教 `== != >= <= && || !`；
  * - 读取未声明名字要报错（§3.4.5）：语义层只查**赋值目标**与数组越界
  *   （`sema/check.ts:780-800,840-850,1164-1192` 的 `checkExpr` 只看 `名[` 下标），

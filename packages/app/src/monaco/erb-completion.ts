@@ -1,15 +1,9 @@
 import type * as Monaco from './entry';
 import type { ErbIndex } from '@kojo/plugin-api';
-import { builtinSignatureOf, classifyControlFlow, ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
+import { builtinSignatureOf, classifyControlFlow, ERB_CALL_STATEMENTS, ERB_CONTROL_STATEMENTS, ERB_GATE_SOURCE_WHITELIST, ERB_JUMP_KEYWORDS, erbCompletionGate } from '@kojo/plugin-erb-parser';
 import { ERB_PREPROC_CANDIDATES, ERB_SKIP_MARKERS } from '@kojo/plugin-api';
 import { ERB_DIRECTIVES, ERB_LANGUAGE_ID, mergeDirectiveWords } from './erb-language';
 import { erbBitCompletionItems } from './erb-completion-bits';
-import {
-  ERB_CALL_STATEMENTS,
-  erbCompletionGate,
-  ERB_GATE_SOURCE_WHITELIST,
-  ERB_JUMP_KEYWORDS,
-} from './erb-completion-context';
 import { erbDeclaredCompletionItems } from './erb-completion-declared';
 import { erbFamilyCompletionItems } from './erb-completion-families';
 import { erbFunctionCompletionItems, erbFunctionNameSlot } from './erb-completion-functions';

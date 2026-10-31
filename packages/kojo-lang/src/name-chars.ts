@@ -77,7 +77,7 @@ export const NAME_CHAR_CLASS: string = `${SHARED_NAME_CHAR_CLASS}$`;
 
 /**
  * ERB 的名字字符类 = 共用集（**无 `$`**）。
- * `erb-completion-context.ts` 的 `NAME_CHAR_RE` 从这里派生——ERB 名字槽只有这一处真源。
+ * `@kojo/plugin-erb-parser` 的 `NAME_CHAR_RE` 从这里派生——ERB 名字槽只有这一处真源。
  */
 export const ERB_NAME_CHAR_CLASS: string = SHARED_NAME_CHAR_CLASS;
 

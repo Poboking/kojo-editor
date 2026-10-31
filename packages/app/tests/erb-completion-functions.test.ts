@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import { erbFunctionCompletionItems } from '../src/monaco/erb-completion-functions';
-import { ERB_CALL_STATEMENTS, ERB_JUMP_KEYWORDS } from '../src/monaco/erb-completion-context';
+import { ERB_CALL_STATEMENTS, ERB_JUMP_KEYWORDS } from '@kojo/plugin-erb-parser';
 
 /** 合成 Monaco：本纯函数只用到 CompletionItemKind.Function */
 const monaco = { languages: { CompletionItemKind: { Function: 1 } } } as unknown as typeof Monaco;

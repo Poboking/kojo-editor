@@ -2,7 +2,7 @@
  * ERB 插值/内联三元：**语义面 ↔ 补全面** 的跨面对拍（lead 名下，K2 报告 §待决 1 的落槌）。
  *
  * 为什么要有这个文件：`@kojo/plugin-condition-extractor` 的 `inline.ts` 认「哪一段文本是谓词」，
- * `packages/app/src/monaco/erb-completion-context.ts` 的 `erbInterpRegionAt` 认「光标落在串内哪个
+ * `@kojo/plugin-erb-parser` 的 `erbInterpRegionAt` 认「光标落在串内哪个
  * 插值区」——两者是**同一份字形判据的第二实现**（契约 §一禁插件与宿主互相 import，
  * 第二实现是被迫的）。被迫的双实现必须有闸：谓词那一枚标记在补全面**不许被判成零候选**。
  *
@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { scanBraceTernaries, scanTextTernaries } from '@kojo/plugin-condition-extractor';
-import { erbCompletionGate, erbInterpRegionAt } from '../src/monaco/erb-completion-context';
+import { erbCompletionGate, erbInterpRegionAt } from '@kojo/plugin-erb-parser';
 
 /** 真语料行（`\@…?…#…\@` 文本形；行首制表符原样保留） */
 const TEXT_TERNARY_LINES: readonly (readonly [string, string])[] = [

@@ -24,7 +24,7 @@ import { ENGINE_VARIABLE_REFERENCE_HEADS } from '@kojo/kojo-vocab/engine';
  *   `erb-highlight-words.ts`（控制流语句 + 引擎内建单行语句，补全不消费）；
  * - 变量多段引用（CFLAG:ARG:口上セレクタ）整体高亮；
  * - FORM 串内 `{表达式}` / `%字符串%` 是字符串内的第二层（`str` 态规则序，见该态注；
- *   这一层的存在性由语义层背书——`erb-completion-context.ts` 的 `'form'` 槽判据 +
+ *   这一层的存在性由语义层背书——`@kojo/plugin-erb-parser` 的 `'form'` 槽判据 +
  *   `condition-extractor` 的 `\` 转义判据同一条语言事实）；
  * - 内联**文本形三元** `\@<条件>?<真文>#<假文>\@` 的边界着色（串内 ⓪ + root 一条整形状群组规则；
  *   形状判据从 `condition-extractor/src/inline.ts` 的顶层记号口径派生、取窄，见 `erbInlineTernaryShape`）。
@@ -547,7 +547,7 @@ function erbMonarch(directives: readonly string[]): Monaco.languages.IMonarchLan
       //      上一批定下的那条"未闭合只到本行行尾"纪律当场破功。保守方向与 codeViewOf 一致：
       //      等不到闭合的残段留在串里，不冒充表达式。
       //    ④⑤ 开层（前瞻要求闭合记号出现在闭合引号之前）。这一层的存在性由语义层背书：
-      //      `erb-completion-context.ts` 的 `'form'` 槽明写"FORM 串，可含 `%…%` / `{…}` 插值"，
+      //      `@kojo/plugin-erb-parser` 的 `'form'` 槽明写"FORM 串，可含 `%…%` / `{…}` 插值"，
       //      `insideInterp` 对未闭合 `{` 判"停在插值内 ⇒ 不猜"；真语料形态见
       //      `erb-parser/src/structure.ts` 头注那条
       //      `@"给%CALLNAME:TARGET%使用避孕套（剩余{ITEM:45}枚）"`（一枚串里两层同时出现）；

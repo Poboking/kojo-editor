@@ -32,11 +32,10 @@ import { sugarEditorLexicon } from '@kojo/kojo-vocab/keywords';
  *
  * ## 住址为什么跟着 Monarch 走
  *
- * B4 之前它是宿主的 `monaco/kojo2-lexicon.ts`。词法面搬进本包之后它必须同批搬：
- * 供方拿不到宿主模块，而"宿主留一份、包里再抄一份"正是这一串批次一直在消掉的东西。
- * 宿主侧那个文件现在只剩一行 re-export——**既有 import 点与测试一字未改**（B3a 的
- * `expand-compile` 同形），单源闸扫的是真身所在（见 `app/tests/kojo2-language-lexicon.test.ts`
- * 的 `KOJO2_SOURCES`）。
+ * B4 之前它住在宿主的 `monaco` 目录（壳清理批之后连那枚一行 re-export 壳也删了）。词法面搬进
+ * 本包之后它必须同批搬：供方拿不到宿主模块，而"宿主留一份、包里再抄一份"正是这一串批次一直
+ * 在消掉的东西。消费方（`app/tests/kojo2-language-lexicon.test.ts` 等）直读本模块——
+ * **一个判据只有一个落点**，单源闸扫的也是真身所在（见该测试的 `KOJO2_SOURCES`）。
  */
 
 /** 2.0 一级缩进（空格数）；栏头缩进阶梯与 `@原生` 体判定都按它算（core 同一常量）。 */

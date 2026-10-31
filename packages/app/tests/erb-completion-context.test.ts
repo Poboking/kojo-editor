@@ -22,7 +22,7 @@ import {
   erbLabelSlot,
   type ErbCallSlotKind,
   type ErbCompletionGate,
-} from '../src/monaco/erb-completion-context';
+} from '@kojo/plugin-erb-parser';
 import { installErbCompletion } from '../src/monaco/erb-completion';
 
 /** 用 `|` 标记光标处（1 基列 = 标记前的字符数 + 1） */

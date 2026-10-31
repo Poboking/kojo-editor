@@ -2,7 +2,7 @@
  * `kojo2` 词表**单一真源**守卫（U6）：宿主层不许再抄一份 2.0 词表。
  *
  * 三条判据：
- * - (a) **转发不是重写**：`kojo2-lexicon.ts` 导出的每个数组/常量都与 core（或糖聚合）的
+ * - (a) **转发不是重写**：`@kojo/kojo-lang/lexicon` 导出的每个数组/常量都与 core（或糖聚合）的
  *   同名真源逐项相等；`KOJO2_RESERVED_WORDS` 的每一项都能在 core 词表里找到出处（无自造词）。
  * - (b) **`@原生` 围栏词由 core 语义反证**：用 core 词法器对 16 枚调度词逐词实测"哪一枚真能
  *   开围栏"，结果必须**恰等于** `KOJO2_NATIVE_FENCE_WORD`（该常量因此能安全地集中一处手写）。
@@ -44,7 +44,7 @@ import {
   KOJO2_TABLE_DEFAULT_WORD,
   KOJO2_TEMPLATE_SLOT,
   KOJO2_WAIT_CONTINUE,
-} from '../src/monaco/kojo2-lexicon';
+} from '@kojo/kojo-lang/lexicon';
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
 const MONACO_DIR = path.join(ROOT, 'packages', 'app', 'src', 'monaco');
@@ -263,10 +263,10 @@ describe('零抄本：语言面不许手写 2.0 词形', () => {
   it('扩展名 `.kojo2` 全仓只有一处字面量（B1 后住在语言面库的零依赖叶子 constants.ts）', () => {
     // B1（2026-10-24）：字面源随 `kojo2-constants` 搬进 `@kojo/kojo-lang`。
     // B4（本批）：语言面正文（Monarch / 配置）也搬了进去 ⇒ 这一格从"宿主四枚文件零处"扩成
-    // **宿主指针 + 包内正文**全零处。不变量（一处可改）没变，只是那一处换了地址。
+    // **包内正文**全零处（宿主的词表指针壳已在壳清理批删除，连指针都不剩）。
+    // 不变量（一处可改）没变，只是那一处换了地址。
     const files = [
       'kojo2-language.ts',
-      'kojo2-lexicon.ts',
       ...KOJO2_SOURCES,
     ];
     const occurrences: string[] = [];

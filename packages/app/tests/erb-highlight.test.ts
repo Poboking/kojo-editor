@@ -513,7 +513,7 @@ describe('着色层与语义层同口径（erb-parser/references.ts codeViewOf �
  * 就**永远轮不上** ⇒ `strExpr` 历史不可达，串内 `{表达式}` 二级解析从不发生。
  *
  * 动它之前先取证（"引号内的 `{…}` 算不算表达式位"这条语言事实不许着色层自己发明）：
- * - `erb-completion-context.ts` 的 `'form'` 槽（ERB 补全的单一真源判据）明写
+ * - `@kojo/plugin-erb-parser` 的 `'form'` 槽（ERB 补全的单一真源判据）明写
  *   "名字位是**表达式**（FORM 串，可含 `%…%` / `{…}` 插值）"，`insideInterp` 对未闭合 `{`
  *   判"停在插值内 ⇒ 不猜"——**认 `{` 会开一层**；
  * - 真语料形态：`erb-parser/src/structure.ts` 头注那条
@@ -595,7 +595,7 @@ describe('FORM 串内 `{表达式}` / `%字符串%` 两层都真解析（规则�
   it('⑥ Emuera 的 `""` 字面引号：着色层"闭合+立刻重开"两次翻转落回同一侧，可见颜色与语义层同口径', async () => {
     const lexer = await erbLexer();
     const line = driveLine(lexer, 'PRINTL "含""转义"的文字');
-    // 语义层（erb-completion-context.ts 的 erbCodeViewBlocked）认 `""` 是一枚字面引号、仍在串内；
+    // 语义层（`@kojo/plugin-erb-parser` 的串内判据）认 `""` 是一枚字面引号、仍在串内；
     // 着色层按"闭合 + 立刻重开"处理——两次翻转后 `转义` 仍归 string、`的文字` 仍归代码，
     // 与"什么是串"的可见结果同口径（差异只在 bracket 配对计数，不在本工包三件里，故只钉不改）。
     expect(line.emitted.find((e) => e.text === '转义')?.token.startsWith(`${ROLE.string}.`), '转义 应仍是串内 string').toBe(true);

@@ -31,7 +31,7 @@ import {
 } from '../src/monaco/suggest-context-trigger';
 import { kojoVariableNameSlot } from '../src/monaco/kojo-completion-variables';
 import { timingFaceSlot } from '../src/monaco/kojo-completion-faces';
-import { erbLabelSlot } from '../src/monaco/erb-completion-context';
+import { erbLabelSlot } from '@kojo/plugin-erb-parser';
 import { erbVariableSlotAt } from '../src/monaco/erb-completion-variables';
 
 /** 桩编辑器的可控事实（默认全绿：可写、有焦点、widget 关着、单选、真文件） */

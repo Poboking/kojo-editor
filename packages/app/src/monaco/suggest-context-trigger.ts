@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { KOJO_LANGUAGE_ID } from './kojo-language';
-import { erbCompletionGate, erbLabelSlot } from './erb-completion-context';
+import { erbCompletionGate, erbLabelSlot } from '@kojo/plugin-erb-parser';
 import { erbFunctionNameSlot } from './erb-completion-functions';
 import { erbBitSlotOpen } from './erb-completion-bits';
 import { erbVariableSlotAt } from './erb-completion-variables';
@@ -169,7 +169,7 @@ type NameSlotProbe = (line: string, column: number) => unknown;
  * - `.kojo`：分野位（KC-2）/ 编号位（KC-3）/ 分支头值位（KC-3）/ `调用`·`函数` 名槽 /
  *   插值变量名位（KC-1，`的` 转场键在这一枚） / `[[属性名]]` 位 / 命名参数**取值位**（KC-2b，键冒号当拍）；
  * - `.erb`：`@` 定义位与 `CALL` 系调用位（`erbFunctionNameSlot`，语句清单单源在
- *   `erb-completion-context` 的 `ERB_CALL_STATEMENTS`）/ 跳转标签位（`erbLabelSlot`）/
+ *   `@kojo/plugin-erb-parser` 的 `ERB_CALL_STATEMENTS`）/ 跳转标签位（`erbLabelSlot`）/
  *   位原语第二实参坑（`erbBitSlotOpen`）/ 变量引用末段（`erbVariableSlotAt`，族冒号当拍）。
  *
  * 刻意**不**在宿主侧再写一条"看起来像名字位"的正则：判据一旦有两份，弹了没货（骚扰）或

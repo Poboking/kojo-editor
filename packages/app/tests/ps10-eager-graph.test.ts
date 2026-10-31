@@ -358,7 +358,7 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     逐字相同（**零新常驻模块**，本批纪律），KB 闸随现值 2,810 → **2,830**（+0.3% 余量，粗闸）。
     //     增量全部落在既有常驻文件（源码字节差 ≈ +45 KB，图内 ≈ +21 KB，九成是中文注释与派生
     //     名单）：`monaco/erb-language.ts` +14.2 KB（预处理器三条行首规则 + 内联三元形状构建器
-    //     + 族头名单收口成 `ERB_VARIABLE_FAMILY_FORMS` 单源）、`monaco/erb-completion-context.ts`
+    //     + 族头名单收口成 `ERB_VARIABLE_FAMILY_FORMS` 单源）、补全位置门的宿主壳（已删）
     //     +8.0 KB（九态门新增 `interp-expr` 与串内插值区判据 `erbInterpRegionAt`）、
     //     `erb-parser/folding.ts` +7.2 KB（预处理块折叠接进 `erbFoldingRanges` ⇒ 上屏）、
     //     `monaco/erb-completion.ts` +4.7 KB（`[` 位候选与行中关键字改派生）、

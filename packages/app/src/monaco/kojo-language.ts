@@ -44,7 +44,7 @@ import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
  *   「kojo1（封存）」，id 跟着叫 `kojo-legacy`，屏上/代码里不再出现 `kojo-sugar` 这个
  *   看起来像"当前语言"的名字；
  * - **只改语言 id，不改插件 id**：`plugins/kojo-sugar/src/index.ts` 那枚 `id: 'kojo-sugar'`
- *   是插件注册名，2.0 侧还在 import 这个包（`kojo2-lexicon.ts` 取 `sugarEditorLexicon`），
+ *   是插件注册名，2.0 侧还在 import 这个包（`kojo2-language-lexicon.test.ts` 取 `sugarEditorLexicon`），
  *   改它是另一场迁移，不在本批；
  * - 常量名仍叫 `KOJO_LANGUAGE_ID`（全仓 200+ 处引用；`audit:language` 的 M2 棘轮按
  *   `*_LANGUAGE_ID` **常量名**计数，改名不减反增）。名字是历史包袱，语义由本注与

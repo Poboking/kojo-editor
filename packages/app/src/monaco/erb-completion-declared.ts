@@ -31,7 +31,7 @@ import { lineAt } from './kojo-completion-position';
  * 比较（ERB 方言与 `#DIM` 引用同走引擎语义，大小写不敏感），展示保留声明原形。
  *
  * 名槽收口不在本模块：由装配层按**候选源 sourceId 白名单**执行（`.erb` =
- * `erb-completion-context.ts` 的 `ERB_GATE_SOURCE_WHITELIST`；`.kojo` = `kojo-completion.ts`
+ * `@kojo/plugin-erb-parser` 的 `ERB_GATE_SOURCE_WHITELIST`；`.kojo` = `kojo-completion.ts`
  * 的 `locate().keep`）——同为 `Variable` kind 的族头 / 属性名 / 声明名按 kind 收不干净。
  *
  * ## 路径口径

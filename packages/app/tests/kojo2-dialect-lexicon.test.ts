@@ -23,7 +23,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { KOJO_DECL_WORDS } from '@kojo/kojo-core';
 import { parseSource } from '@kojo/kojo-core';
 import { compileMonarch, driveLine, stubMonaco, type CompiledLexer } from './monarch-harness';
-import { KOJO2_DECL_WORDS } from '../src/monaco/kojo2-lexicon';
+import { KOJO2_DECL_WORDS } from '@kojo/kojo-lang/lexicon';
 import { KOJO2_TOKEN, registerKojo2Language } from '../src/monaco/kojo2-language';
 // B3d：格式化判据搬进语言面库（宿主那枚文件只剩翻译层），测试直接取包内叶子。
 import { formatKojo2Source } from '@kojo/kojo-lang/format';

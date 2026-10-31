@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { ErbFileFactsProvider } from '../src/monaco/completion-core';
 import { erbLabelCompletionItems } from '../src/monaco/erb-completion-labels';
-import { erbCompletionGate } from '../src/monaco/erb-completion-context';
+import { erbCompletionGate } from '@kojo/plugin-erb-parser';
 
 /** 合成 Monaco：本纯函数只用到 CompletionItemKind.Reference */
 const monaco = { languages: { CompletionItemKind: { Reference: 21 } } } as unknown as typeof Monaco;

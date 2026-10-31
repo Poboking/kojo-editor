@@ -2,8 +2,8 @@
  * Kojo 2.0 的**零依赖身份叶子**（K2-CUTOVER-THEME）：语言 id 与源扩展名两枚字符串。
  *
  * 为什么单开一层：这两枚此前住在 `kojo2-language.ts`，而那个模块一加载就拖上
- * `kojo2-enter → kojo2-lexicon → @kojo/plugin-kojo-sugar`（~900 KB 词表 + 表达式表；
- * 那条指针壳 `kojo2-enter.ts` 已在 B3d 删除）。
+ * 2.0 词表链（~900 KB；链上 `kojo2-enter.ts` 与宿主词表壳已随 B3d / 壳清理批删除，
+ * 消费方直读 `@kojo/kojo-lang/lexicon`）。
  * 但真正的消费方要的只是两个字符串——
  * - `ui/kojo2-cutover.ts`（路由层，刻意零 Monaco、零 DOM，见其头注）要用扩展名；
  * - `ui/kojo2-model-language.ts`（重挂层）要用语言 id 与"这是不是 2.0 文件"的判据。

@@ -926,7 +926,7 @@ export interface EditorDocumentIdentity {
 > 加它**必须重跑 `packages/kojo-syntax-tree/tools/build-v2.mjs` 重生成 `tree-sitter-kojo2.wasm`**
 > （改前 47,116 B ⇒ **改后 48,057 B，棘轮随组长点头抬到该值**，＋941 B＝一条 `dialect_decl` 规则 + 词表；
 > 归因写在 `v2-wasm-size.test.ts` 注释与提交信息里，照的是该测试自己定的规矩）。
-> 第三个消费方是 Monarch 词表（`app/src/monaco/kojo2-lexicon.ts:37` →
+> 第三个消费方是 Monarch 词表（`packages/kojo-lang/src/lexicon.ts` 的 `KOJO2_DECL_WORDS` →
 > `kojo2-language.ts:308 declWords`）；另注意 `kojo2-format.ts:55,77` 按**位置**解构这个数组
 > （`[, , , , , TABLE_WORD, POOL_WORD, TEMPLATE_WORD]` 与 `.slice(0,5)`）⇒ **只能追加在尾部**，
 > 插队会静默改格式化行为——落地按此办理（`方言`＝下标 8，`DIALECT_WORD = KOJO2_DECL_WORDS[8]`，

@@ -5,13 +5,13 @@ import {
   ERB_CALL_SLOT_BY_KEYWORD,
   erbCallStatementRe,
   parseErbNameSlot,
-} from './erb-completion-context';
+} from '@kojo/plugin-erb-parser';
 
 /**
  * EC-3 · `.erb` **函数名补全** —— 定义位（行首 `@<前缀>`）与调用位
  * （`CALL` 系 / `*FORM*` 系之后）弹出项目函数名候选。
  *
- * 「哪些语句之后那一位算名字位」**不在本文件声明**——单源是 `erb-completion-context.ts`
+ * 「哪些语句之后那一位算名字位」**不在本文件声明**——单源是 `@kojo/plugin-erb-parser`
  * 的 `ERB_CALL_STATEMENTS`（门与候选源共用同一张表，缺陷 2 的分叉由此消掉）；
  * 本文件只按槽种类决定**那一位里能不能有插值**（`'form'` 槽可以，`'func'` 槽不行）。
  *
@@ -22,7 +22,7 @@ import {
  * 名字来源 = 基座传入的 `functionNames`（`ErbIndex.byName` 的键，按 `fingerprint` 记忆化）；
  * 本模块**不读盘、不 import 内核 / 插件**，只做**本方言的位置判定**：
  * 哪些列是"名字槽"（`@` 之后 / 调用关键字之后 / FORM 串的插值例外）是 ERB 语法知识，
- * 判据实现（`DEF_RE` / `parseErbNameSlot`）单源在 `erb-completion-context.ts`，本文件只引用；
+ * 判据实现（`DEF_RE` / `parseErbNameSlot`）单源在 `@kojo/plugin-erb-parser`，本文件只引用；
  * **槽里怎么出货**（前缀二分索引、大小写归一、千条上限、按数组身份记忆化）
  * 一律吃 `completion-core.projectFunctionCandidates` 那一份实现——`.kojo` 的
  * `kojo-completion-functions.ts` 用的是同一份，两语言不再各抄一遍索引。

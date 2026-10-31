@@ -16,8 +16,7 @@ import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { ErbFunctionRef, ErbIndex, KojoInstructionTable, VariableSchema } from '@kojo/plugin-api';
 import { ERB_PREPROC_CANDIDATES, ERB_SKIP_MARKERS } from '@kojo/plugin-api';
-import { ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
-import { ERB_CALL_STATEMENTS } from '../src/monaco/erb-completion-context';
+import { ERB_CALL_STATEMENTS, ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import {
