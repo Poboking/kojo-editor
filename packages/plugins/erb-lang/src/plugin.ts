@@ -9,8 +9,9 @@
  * | --- | --- | --- |
  * | `documentHighlight` | `highlight.ts` 的 `erbDocumentHighlights` | `src/highlight.ts` |
  * | `selectionRange` | `selection-range.ts` 的 `erbSelectionRangeChainsAt` | `src/selection-range.ts` |
+ * | `formatting` | `@kojo/kojo-vocab/formatter` 的 `computeFormatEdits`（与 `.kojo` 共用） | `src/formatting.ts` |
  *
- * 两条腿**分枚注册**（`order` 都是 10，与 kojo2 那家同权）：它们的输入 / 产出形状不同
+ * 三条腿**分枚注册**（`order` 都是 10，与 kojo2 那家同权）：它们的输入 / 产出形状不同
  * （单槽 + `kind` 判别），塞进同一枚 `provide` 等于让"高亮算不出来"顺手把扩选也带走。
  *
  * 2026-10-30（定义判据归位批）：本插件**不再供 `definition`**。那个 kind 的本地名字腿
@@ -41,6 +42,7 @@
  * 两份判据——判据进包正是为了不让第二份长出来。
  */
 import type { Plugin, PluginContext } from '@kojo/plugin-api';
+import { provideFormatting } from './formatting';
 import { provideDocumentHighlights } from './highlight';
 import { provideSelectionRanges } from './selection-range';
 
@@ -70,9 +72,19 @@ export function createErbLangPlugin(): Plugin {
         order: CONTRIBUTION_ORDER,
         provide: (request) => provideSelectionRanges(request),
       });
+      // ERB-PARITY G2（2026-10-31）：格式化（整篇 + 区间）交给本插件作答。
+      // 判据仍是 `@kojo/kojo-vocab/formatter`（与 `.kojo` 共用的那一份，不抄第二套）；
+      // 宿主侧的 v1 两枚（`kojo-format.ts` 整篇 / `kojo-format-range.ts` 区间）已按
+      // descriptor 的 `slotServices` 让开，ERB 每种 provider 从此恰好一枚。
+      // 规则开关（P2-14）随请求的 `options` 进来：偏好读取点是宿主，本插件不读设置。
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-formatting',
+        order: CONTRIBUTION_ORDER,
+        provide: (request) => provideFormatting(request),
+      });
       ctx.log.info(
-        '语言服务已接入：documentHighlight / selectionRange（languageId=kojo-erb），' +
-          '判据在 @kojo/erb-lang，宿主只剩请求与 Monaco 翻译',
+        '语言服务已接入：documentHighlight / selectionRange / formatting（languageId=kojo-erb），' +
+          '判据在 @kojo/erb-lang 与 @kojo/kojo-vocab，宿主只剩请求与 Monaco 翻译',
       );
     },
   };

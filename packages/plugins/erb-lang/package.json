@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@kojo/erb-lang": "workspace:*",
+    "@kojo/kojo-vocab": "workspace:*",
     "@kojo/plugin-api": "workspace:*"
   }
 }

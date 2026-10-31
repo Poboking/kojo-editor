@@ -122,6 +122,7 @@ import type {
   EditorCompletionItem,
   EditorCompletionItemKind,
   EditorDocumentHighlightKind,
+  EditorFormattingRequest,
   EditorHoverResult,
   EditorLanguageRange,
   EditorRangeEdit,
@@ -439,6 +440,14 @@ export interface SlotServiceHost {
    * 绝不缓存一次（缓存会在"插件晚到"的首个会话里静默少一条腿）。
    */
   readonly codeActionSlot?: () => readonly EditorCodeActionContribution[];
+  /**
+   * 格式化规则开关（ERB-PARITY G2，additive）：**宿主事实**，缺省不给 = 全开。
+   *
+   * 读设置是宿主的事（`ui/format-pref.ts` 的 `loadFormatRulesPref`，P2-14 的唯一读取点），
+   * 装配点在组请求时**现读**、随请求的 `options` 递下去；工厂与插件都不碰 localStorage。
+   * 与 `filePathOf` / `projectIndex` 同一性质：插件拿不到、也不该拿这份偏好。
+   */
+  readonly formatRules?: () => EditorFormattingRequest['options'];
 }
 
 /* ============================== 共享小工具（宿主事实，不是判据） ============================== */
@@ -585,14 +594,18 @@ function textEditsOf(
  */
 function formattingEditsOf(
   model: Monaco.editor.ITextModel,
+  host: SlotServiceHost,
   lineRange?: { readonly startLine: number; readonly endLine: number },
 ): Monaco.languages.TextEdit[] {
   const text = modelTextOf(model);
   if (text === null) return [];
   const kernel = requireKernel();
+  // 规则开关是**宿主事实**（ERB-PARITY G2）：偏好由装配点现读、经注入面递进来，
+  // 本层与供方都不读设置；缺省 = 全开（请求里不带 `options`，与加这一格之前逐字相同）。
+  const options = host.formatRules?.();
   const edits = collectFormattingEdits(
     kernel.slots.query('ui.editor.languageService'),
-    formattingRequestOf(editorRequestIdentityOf(model), text, kernel.project.current(), lineRange),
+    formattingRequestOf(editorRequestIdentityOf(model), text, kernel.project.current(), lineRange, options),
   );
   if (edits === undefined || edits.length === 0) return [];
   return textEditsOf(model, edits);
@@ -609,13 +622,13 @@ interface FormattingProviders {
  * 区间那条把 Monaco 的 range 折成 `{ startLine, endLine }` 两枚**行号**（1 基、闭区间）塞进
  * 请求——不切串、不折列：2.0 的缩进深度是文档级判据、围栏状态跨行，切片视角会排错。
  */
-function formattingProviders(): FormattingProviders {
+function formattingProviders(host: SlotServiceHost): FormattingProviders {
   return {
     document: {
       displayName: 'kojo-editor',
       provideDocumentFormattingEdits(model) {
         try {
-          return formattingEditsOf(model);
+          return formattingEditsOf(model, host);
         } catch {
           return [];
         }
@@ -625,7 +638,7 @@ function formattingProviders(): FormattingProviders {
       displayName: 'kojo-editor',
       provideDocumentRangeFormattingEdits(model, range) {
         try {
-          return formattingEditsOf(model, {
+          return formattingEditsOf(model, host, {
             startLine: range.startLineNumber,
             endLine: range.endLineNumber,
           });
@@ -1623,7 +1636,7 @@ export const SLOT_SERVICE_LEGS: readonly SlotServiceLeg[] = [
   legOf('completion', completionProvider, (m, id, provider) => m.languages.registerCompletionItemProvider(id, provider), true),
   legOf('hover', hoverProvider, (m, id, provider) => m.languages.registerHoverProvider(id, provider)),
   // 车 2：格式化（整篇 + 区间，一条能力两枚 provider）与签名帮助
-  legOf('formatting', formattingProviders, (m, id, providers) => {
+  legOf('formatting', (_monaco, host) => formattingProviders(host), (m, id, providers) => {
     // 两枚 provider 同挂在一个 id 上：区间那条**先**注册也**先**撤——整篇那条是
     // `Shift+Alt+F` 的主路，撤一半时留下的必须是它（与搬家前"两枚安装器各自回滚"同向）。
     const document = m.languages.registerDocumentFormattingEditProvider(id, providers.document);

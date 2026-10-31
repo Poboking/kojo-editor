@@ -250,6 +250,12 @@ export function formattingRequestOf(
    * 给的形状与契约同名（1 基闭区间），宿主只做"Monaco range → 两枚行号"的搬运。
    */
   lineRange?: EditorFormattingLineRange,
+  /**
+   * 规则开关（P2-14，additive，ERB-PARITY G2）：**宿主事实**——偏好由宿主的装配点现读
+   * （`ui/format-pref.ts` 的 `loadFormatRulesPref`），收口层与供方都不读设置。
+   * `undefined` = 全开（与加这一格之前逐字相同），此时请求里**不带** `options` 这个键。
+   */
+  options?: EditorFormattingRequest['options'],
 ): EditorFormattingRequest {
   const lineCount = text.length === 0 ? 1 : countLines(text);
   return {
@@ -261,6 +267,7 @@ export function formattingRequestOf(
     project,
     lineCount,
     ...(lineRange === undefined ? {} : { lineRange }),
+    ...(options === undefined ? {} : { options }),
   };
 }
 

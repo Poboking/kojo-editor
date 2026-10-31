@@ -419,6 +419,9 @@ importers:
       '@kojo/erb-lang':
         specifier: workspace:*
         version: link:../../erb-lang
+      '@kojo/kojo-vocab':
+        specifier: workspace:*
+        version: link:../../kojo-vocab
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api

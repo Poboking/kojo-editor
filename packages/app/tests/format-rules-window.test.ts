@@ -1,12 +1,17 @@
 /**
- * 格式化规则开关 · **区间腿 / 窗口腿**的透传单测（P2-14 的漏接补齐）。
+ * 格式化规则开关 · **区间腿 / on-type 腿**的透传单测（P2-14 的漏接补齐）。
  *
- * 三条腿（整篇 / 区间 / 窗口）共用插件 `computeFormatEdits` / `computeRangeFormatEdits`
- * 的规则核心，规则开关必须三条腿**同一份口径**：
- * ① 区间腿（`formatRangeEdits`）：`request.rules` → 插件第三参，结果 ≡ 插件算整篇后裁行；
- * ② 窗口腿（`installRangeFormatter` + `resolveRange`）：`request.rules` → 插件第四参，
- *    含单行 on-type、多行选区、以及"选区起点落在数据表块体里"的前推锚点路；
+ * 三条入口共用插件 `computeFormatEdits` / `computeRangeFormatEdits` 的规则核心，规则开关必须
+ * **同一份口径**：
+ * ① 区间腿（`formatRangeEdits`，纯函数）：`request.rules` → 插件第三参，结果 ≡ 插件算整篇后裁行；
+ * ② on-type 腿（`installErbOnTypeFormatter` + `resolveRange`）：`request.rules` → 插件第三/四参，
+ *    含单行击键与"块层级由前缀推出来"那一路；
  * ③ `rules` 缺省 ⇒ 与传 `{}`、与不传 options 三者逐字节相同（零回退钉子）。
+ *
+ * > **ERB-PARITY G2（2026-10-31）**：ERB 的**选区**格式化已移出宿主（插件供方作答，
+ * > 判据同一份 `computeFormatEdits`，规则开关经请求的 `options` 递进去——那条链在
+ * > `packages/plugins/erb-lang/tests/formatting.test.ts` 里钉）。本文件因此只钉宿主留下的
+ * > 两条入口；多行选区与"前推锚点"那几组用例随 v1 区间注册一起删了。
  *
  * 契约层的东西一律在插件侧，本文件只钉"宿主有没有把请求里的开关交下去"。
  */
@@ -16,7 +21,7 @@ import type * as Monaco from 'monaco-editor';
 import { computeFormatEdits, computeRangeFormatEdits, type FormatEdit } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import type { FormatRuleSwitches } from '../src/monaco/kojo-format';
-import { formatRangeEdits, installRangeFormatter } from '../src/monaco/kojo-format-range';
+import { formatRangeEdits, installErbOnTypeFormatter } from '../src/monaco/kojo-format-range';
 
 const FW = '\u3000';
 
@@ -38,10 +43,6 @@ const DOC_LINES = [
   `${FW}${FW}`,
 ];
 const DOC = DOC_LINES.join('\n');
-
-/** 起点落在数据表块体里（锚点前推那条路）：块体行受保护，只有块后的注释行会被折算 */
-const ANCHOR_LINES = ['PRINTDATA', `${FW}甲`, 'ENDDATA', `${FW};注${FW}释`];
-const ANCHOR_DOC = ANCHOR_LINES.join('\n');
 
 const key = (edits: readonly FormatEdit[]): string[] =>
   edits.map((e) => `${e.line}:${e.startColumn}:${e.endColumn}:${e.text}`);
@@ -78,9 +79,8 @@ function fakeDoc(lines: readonly string[]) {
 }
 
 interface Registered {
-  kind: 'range' | 'onType';
-  provider: Monaco.languages.DocumentRangeFormattingEditProvider &
-    Partial<Monaco.languages.OnTypeFormattingEditProvider>;
+  kind: 'onType';
+  provider: Monaco.languages.OnTypeFormattingEditProvider;
 }
 
 /** 与生产接线同款：`resolve` = 整篇，`resolveRange` = 窗口，两者带同一份 rules */
@@ -88,10 +88,6 @@ function installBoth(lines: readonly string[], rules?: FormatRuleSwitches) {
   const registered: Registered[] = [];
   const monaco = {
     languages: {
-      registerDocumentRangeFormattingEditProvider: (_id: string, p: unknown) => {
-        registered.push({ kind: 'range', provider: p as Registered['provider'] });
-        return { dispose: () => undefined };
-      },
       registerOnTypeFormattingEditProvider: (_id: string, p: unknown) => {
         registered.push({ kind: 'onType', provider: p as Registered['provider'] });
         return { dispose: () => undefined };
@@ -99,7 +95,7 @@ function installBoth(lines: readonly string[], rules?: FormatRuleSwitches) {
     },
   } as unknown as typeof Monaco;
   const model = fakeDoc(lines);
-  installRangeFormatter(monaco, {
+  installErbOnTypeFormatter(monaco, {
     resolve: (m) => ({ text: m.getValue(), dialect: 'erb' as const, rules }),
     resolveRange: (m, start, end) => ({
       text: m.getValueInRange({
@@ -114,23 +110,9 @@ function installBoth(lines: readonly string[], rules?: FormatRuleSwitches) {
   });
   return {
     model,
-    range: registered.find((r) => r.kind === 'range')!.provider,
     onType: registered.find((r) => r.kind === 'onType')!.provider,
   };
 }
-
-const formatRange = (
-  provider: Monaco.languages.DocumentRangeFormattingEditProvider,
-  model: Monaco.editor.ITextModel,
-  startLine: number,
-  endLine: number,
-): Monaco.languages.TextEdit[] =>
-  provider.provideDocumentRangeFormattingEdits(
-    model,
-    { startLineNumber: startLine, endLineNumber: endLine } as unknown as Monaco.Range,
-    {} as Monaco.languages.FormattingOptions,
-    {} as Monaco.CancellationToken,
-  ) as Monaco.languages.TextEdit[];
 
 const formatOnType = (
   provider: Registered['provider'],
@@ -148,42 +130,28 @@ const formatOnType = (
 
 describe('格式化规则开关 · 夹具自证', () => {
   it('两条规则各自都能在第 3–7 行这一段里改变结果（否则下面的断言不成立）', () => {
-    const allOn = wholeClipped(DOC, 3, 7);
-    expect(allOn.length).toBeGreaterThan(0);
-    expect(wholeClipped(DOC, 3, 7, { fullWidthSpace: false })).not.toEqual(allOn);
-    expect(wholeClipped(DOC, 3, 7, { indent: false })).not.toEqual(allOn);
-    // 单行 on-type 那一条只用得上全角折算
-    expect(wholeClipped(DOC, 6, 6)).not.toEqual([]);
-    expect(wholeClipped(DOC, 6, 6, { fullWidthSpace: false })).toEqual([]);
+    const full = wholeClipped(DOC, 3, 7);
+    expect(full.length).toBeGreaterThan(0);
+    expect(wholeClipped(DOC, 3, 7, { fullWidthSpace: false })).not.toEqual(full);
+    expect(wholeClipped(DOC, 3, 7, { indent: false })).not.toEqual(full);
   });
 });
 
 describe('① 区间腿（formatRangeEdits）· rules 透传', () => {
   it('关全角折算：区间 edits ≡ 插件算整篇后裁行，且与全开不同', () => {
-    const rules: FormatRuleSwitches = { fullWidthSpace: false };
-    const host = key(formatRangeEdits({ text: DOC, dialect: 'erb', rules }, 3, 7));
-    expect(host).toEqual(wholeClipped(DOC, 3, 7, rules));
-    expect(host).not.toEqual(wholeClipped(DOC, 3, 7));
+    const off = key(formatRangeEdits({ text: DOC, dialect: 'erb', rules: { fullWidthSpace: false } }, 3, 7));
+    expect(off).toEqual(wholeClipped(DOC, 3, 7, { fullWidthSpace: false }));
+    expect(off).not.toEqual(wholeClipped(DOC, 3, 7));
   });
 
   it('关缩进：区间 edits ≡ 插件算整篇后裁行，且与全开不同', () => {
-    const rules: FormatRuleSwitches = { indent: false };
-    const host = key(formatRangeEdits({ text: DOC, dialect: 'erb', rules }, 3, 7));
-    expect(host).toEqual(wholeClipped(DOC, 3, 7, rules));
-    expect(host).not.toEqual(wholeClipped(DOC, 3, 7));
+    const off = key(formatRangeEdits({ text: DOC, dialect: 'erb', rules: { indent: false } }, 3, 7));
+    expect(off).toEqual(wholeClipped(DOC, 3, 7, { indent: false }));
+    expect(off).not.toEqual(wholeClipped(DOC, 3, 7));
   });
 });
 
-describe('② 窗口腿（resolveRange）· rules 透传', () => {
-  it('多行选区（第 3–7 行）：两条规则关掉后都与全开不同，且 ≡ 整篇腿裁行', () => {
-    for (const rules of [{ fullWidthSpace: false }, { indent: false }] as const) {
-      const { model, range } = installBoth(DOC_LINES, rules);
-      const host = key(asEdits(formatRange(range, model, 3, 7)));
-      expect(host).toEqual(wholeClipped(DOC, 3, 7, rules));
-      expect(host).not.toEqual(wholeClipped(DOC, 3, 7));
-    }
-  });
-
+describe('② on-type 腿（resolveRange）· rules 透传', () => {
   it('单行 on-type（第 6 行）：关全角折算 ⇒ 零编辑；全开 ⇒ 折算那一条', () => {
     const off = installBoth(DOC_LINES, { fullWidthSpace: false });
     expect(asEdits(formatOnType(off.onType, off.model, 6, FW))).toEqual([]);
@@ -208,11 +176,6 @@ describe('② 窗口腿（resolveRange）· rules 透传', () => {
     expect(key(asEdits(formatOnType(onType, model, 5, FW)))).toEqual(whole);
   });
 
-  it('单行选区在 IF 块体内（第 5 行）：同一条腿 ⇒ ≡ 整篇腿裁该行', () => {
-    const { model, range } = installBoth(DOC_LINES);
-    expect(key(asEdits(formatRange(range, model, 5, 5)))).toEqual(wholeClipped(DOC, 5, 5));
-  });
-
   it('单行 on-type 在块外（第 8 行空白 / 第 6 行注释）：结果与改前逐字相同', () => {
     for (const line of [6, 8]) {
       const before = key(
@@ -223,18 +186,6 @@ describe('② 窗口腿（resolveRange）· rules 透传', () => {
       expect(after).toEqual(before);
       expect(after).toEqual(wholeClipped(DOC, line, line));
     }
-  });
-
-  it('前推锚点路（选区起点在数据表块体里）：规则同样到位，块后注释行按开关折算', () => {
-    const allOn = installBoth(ANCHOR_LINES);
-    expect(key(asEdits(formatRange(allOn.range, allOn.model, 2, 4)))).toEqual(
-      wholeClipped(ANCHOR_DOC, 2, 4),
-    );
-    const off = installBoth(ANCHOR_LINES, { fullWidthSpace: false });
-    expect(key(asEdits(formatRange(off.range, off.model, 2, 4)))).toEqual(
-      wholeClipped(ANCHOR_DOC, 2, 4, { fullWidthSpace: false }),
-    );
-    expect(wholeClipped(ANCHOR_DOC, 2, 4, { fullWidthSpace: false })).toEqual([]);
   });
 });
 
@@ -251,21 +202,13 @@ describe('③ rules 缺省 · 零回退钉子（逐字节等价）', () => {
     expect(noKey).toEqual(plugin);
   });
 
-  it('窗口腿：rules 缺省 / {} / 全开三种接线，选区与 on-type 结果都逐字节相同', () => {
-    const picks = [
-      (h: ReturnType<typeof installBoth>) =>
-        key(asEdits(formatRange(h.range, h.model, 3, 7))),
-      (h: ReturnType<typeof installBoth>) =>
-        key(asEdits(formatRange(h.range, h.model, 1, 8))),
-      (h: ReturnType<typeof installBoth>) =>
-        key(asEdits(formatOnType(h.onType, h.model, 6, FW))),
-    ];
-    for (const pick of picks) {
-      const baseline = pick(installBoth(DOC_LINES));
-      expect(pick(installBoth(DOC_LINES, {}))).toEqual(baseline);
-      expect(
-        pick(installBoth(DOC_LINES, { fullWidthSpace: true, indent: true })),
-      ).toEqual(baseline);
-    }
+  it('on-type 腿：rules 缺省 / {} / 全开三种接线，击键结果逐字节相同', () => {
+    const press = (rules?: FormatRuleSwitches) => {
+      const { model, onType } = installBoth(DOC_LINES, rules);
+      return key(asEdits(formatOnType(onType, model, 6, FW)));
+    };
+    const baseline = press();
+    expect(press({})).toEqual(baseline);
+    expect(press({ fullWidthSpace: true, indent: true })).toEqual(baseline);
   });
 });

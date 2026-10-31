@@ -17,7 +17,7 @@ import { computeFormatEdits, sugarEnterIndentAfter, sugarEnterRulePatterns } fro
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { installEnterIndenter, installRangeFormatter } from '../src/monaco/kojo-format';
-import { installRangeFormatter as installGatedRangeFormatter } from '../src/monaco/kojo-format-range';
+import { installErbOnTypeFormatter } from '../src/monaco/kojo-format-range';
 import { LARGE_FILE_LINES } from '../src/ui/editor-options';
 
 interface Recording {
@@ -135,27 +135,15 @@ describe('installRangeFormatter · 选一段只重排那一段', () => {
     expect(disposed).toEqual([`range:${KOJO_LANGUAGE_ID}`]);
   });
 
-  it('两模块合装 ⇒ ERB 只挂带闸那一枚区间 provider（一门语言一枚，结果不由注册表顺序决定）', () => {
+  it('两模块合装 ⇒ ERB 的区间 provider 一枚都不挂（ERB-PARITY G2：选区格式化已进槽），on-type 仍只挂 ERB', () => {
     const { monaco, rec } = stubMonaco();
-    installRangeFormatter(monaco, kojoHandlers); // 宿主侧（带判据）：只该管 .kojo
-    installGatedRangeFormatter(monaco, { resolve: (m) => ({ text: m.getValue(), dialect: 'erb' }) }); // 宿主侧（带判据）：只该管 ERB
-    const erbRange = rec.range.filter((r) => r.languageId === ERB_LANGUAGE_ID);
-    const kojoRange = rec.range.filter((r) => r.languageId === KOJO_LANGUAGE_ID);
-    expect(erbRange).toHaveLength(1);
-    expect(kojoRange).toHaveLength(1);
-    // ERB 那枚必须是带闸版：判据 null ⇒ 不应答（无闸版会直接按整篇算，把宿主判据绕过去）
-    const { monaco: m2, rec: rec2 } = stubMonaco();
-    installRangeFormatter(m2, kojoHandlers);
-    installGatedRangeFormatter(m2, { resolve: () => null });
-    const gated = rec2.range.find((r) => r.languageId === ERB_LANGUAGE_ID)!.provider;
-    expect(
-      gated.provideDocumentRangeFormattingEdits(
-        asModel(stubModel(['　IF X', 'ENDIF'], ERB_LANGUAGE_ID)),
-        { startLineNumber: 1, endLineNumber: 1 } as Monaco.Range,
-        {} as Monaco.languages.FormattingOptions,
-        {} as Monaco.CancellationToken,
-      ),
-    ).toEqual([]);
+    installRangeFormatter(monaco, kojoHandlers); // `.kojo` 的区间腿：只该管 .kojo
+    installErbOnTypeFormatter(monaco, { resolve: (m) => ({ text: m.getValue(), dialect: 'erb' }) });
+    // 一门语言每种 provider 恰好一枚：ERB 的整篇 / 区间两枚由槽腿工厂挂（这里不装），
+    // 本模块只剩 on-type；`.kojo` 的区间腿不受影响（不搭 ERB 这班车）。
+    expect(rec.range.filter((r) => r.languageId === ERB_LANGUAGE_ID)).toHaveLength(0);
+    expect(rec.range.filter((r) => r.languageId === KOJO_LANGUAGE_ID)).toHaveLength(1);
+    expect(rec.onType.filter((r) => r.languageId === ERB_LANGUAGE_ID)).toHaveLength(1);
   });
 
   it('整篇判据、区间出手：选区外的行一条 edit 都不给；返回一律不带 eol', () => {

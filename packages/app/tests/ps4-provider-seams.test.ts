@@ -39,13 +39,12 @@ import type {
   LineDecoration,
 } from '@kojo/plugin-api';
 import type { Kernel } from '@kojo/kernel';
-import { computeFormatEdits, type FormatEdit } from '@kojo/plugin-kojo-sugar';
 import { FULLWIDTH_SPACE } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang/constants';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { LARGE_FILE_LINES, HUGE_FILE_LINES, editorOptionsForLineCount } from '../src/ui/editor-options';
-import { installRangeFormatter } from '../src/monaco/kojo-format-range';
+import { installErbOnTypeFormatter } from '../src/monaco/kojo-format-range';
 import { toMonacoInlayHints } from '../src/monaco/kojo-inlay-hints';
 import { resolveSignatureInText } from '../src/monaco/kojo-signature';
 import {
@@ -743,9 +742,8 @@ describe('formatRequestWindowFor · 窗口取文的应答判据', () => {
   });
 });
 
-describe('installRangeFormatter · 窗口腿 ≡ 整篇腿（逐字节）', () => {
+describe('installErbOnTypeFormatter · 窗口腿 ≡ 整篇腿（逐字节）', () => {
   const DOC_LINES = [`${FW}IF X`, `PRINTFORMW 　「呀」`, `;　注释　文`, `${FW}${FW}`, 'ENDIF'];
-  const DOC = `${DOC_LINES.join('\n')}\n`;
 
   interface Registered {
     kind: 'range' | 'onType';
@@ -786,38 +784,15 @@ describe('installRangeFormatter · 窗口腿 ≡ 整篇腿（逐字节）', () =
 
   const wholeOnly = (m: Monaco.editor.ITextModel) => ({ text: m.getValue(), dialect: 'erb' as const });
 
-  const asEdits = (out: readonly unknown[]): FormatEdit[] =>
-    (out as Monaco.languages.TextEdit[]).map((e) => ({
-      line: e.range.startLineNumber,
-      startColumn: e.range.startColumn,
-      endColumn: e.range.endColumn,
-      text: e.text,
-    }));
-
-  it('每个行区间上，窗口腿与整篇腿产出的编辑逐字节相同（全区间扫描）', () => {
+  it('只注册 on-type 一枚：区间那一枚已随 ERB-PARITY G2 移出本模块（一门语言每种 provider 恰好一枚）', () => {
     const { monaco, registered } = stubMonaco();
-    installRangeFormatter(monaco, handlers());
-    const range = registered.find((r) => r.kind === 'range')!.provider;
-    const lineCount = DOC_LINES.length + 1; // 末行是文件尾的空行
-    for (let start = 1; start <= lineCount; start++) {
-      for (let end = start; end <= lineCount; end++) {
-        const withWindow = asEdits(
-          range.provideDocumentRangeFormattingEdits(
-            fakeModel([...DOC_LINES, ''], { lineCount }).model,
-            { startLineNumber: start, endLineNumber: end } as unknown as Monaco.Range,
-            {} as Monaco.languages.FormattingOptions,
-            {} as Monaco.CancellationToken,
-          ) as Monaco.languages.TextEdit[],
-        );
-        const wholeDoc = computeFormatEdits(DOC, 'erb').filter((e) => e.line >= start && e.line <= end);
-        expect(withWindow).toEqual(wholeDoc);
-      }
-    }
+    installErbOnTypeFormatter(monaco, handlers()).dispose();
+    expect(registered.map((r) => r.kind)).toEqual(['onType']);
   });
 
   it('on-type 一次击键：走窗口腿时整篇一次都不 copy，结果与整篇腿同一条编辑', () => {
     const { monaco, registered } = stubMonaco();
-    installRangeFormatter(monaco, handlers());
+    installErbOnTypeFormatter(monaco, handlers());
     const onType = registered.find((r) => r.kind === 'onType')!.provider;
     const doc = fakeModel([...DOC_LINES, '']);
     const out = onType.provideOnTypeFormattingEdits!(
@@ -838,35 +813,9 @@ describe('installRangeFormatter · 窗口腿 ≡ 整篇腿（逐字节）', () =
     expect(doc.getValueInRangeCalls()).toBe(1);
   });
 
-  it('CRLF 与"最后一行"两个易错点：窗口文本切行后行号平移仍逐字对', () => {
-    const { monaco, registered } = stubMonaco();
-    installRangeFormatter(monaco, handlers());
-    const range = registered.find((r) => r.kind === 'range')!.provider;
-    const crlf = [`${FW}甲`, `${FW}乙`];
-    // 假 model 的行内容不含行尾，窗口腿拿到的分隔由 `getValueInRange` 决定；这里换一枚 CRLF 版
-    const model = {
-      getLanguageId: () => ERB_LANGUAGE_ID,
-      getLineCount: () => crlf.length,
-      getLineMaxColumn: (l: number) => crlf[l - 1]!.length + 1,
-      getValue: () => crlf.join('\r\n'),
-      getValueInRange: (r: Monaco.IRange) => crlf.slice(r.startLineNumber - 1, r.endLineNumber).join('\r\n'),
-      getAlternativeVersionId: () => 1,
-    } as unknown as Monaco.editor.ITextModel;
-    const second = asEdits(
-      range.provideDocumentRangeFormattingEdits(
-        model,
-        { startLineNumber: 2, endLineNumber: 2 } as unknown as Monaco.Range,
-        {} as Monaco.languages.FormattingOptions,
-        {} as Monaco.CancellationToken,
-      ) as Monaco.languages.TextEdit[],
-    );
-    expect(second).toEqual(computeFormatEdits(crlf.join('\r\n'), 'erb').filter((e) => e.line === 2));
-    expect(second).toHaveLength(1);
-  });
-
   it('宿主没给窗口腿 ⇒ 老路逐字不变（既有调用方零改动）', () => {
     const { monaco, registered } = stubMonaco();
-    installRangeFormatter(monaco, { resolve: (m) => wholeOnly(m) });
+    installErbOnTypeFormatter(monaco, { resolve: (m) => wholeOnly(m) });
     const onType = registered.find((r) => r.kind === 'onType')!.provider;
     const doc = fakeModel([...DOC_LINES, '']);
     const out = onType.provideOnTypeFormattingEdits!(

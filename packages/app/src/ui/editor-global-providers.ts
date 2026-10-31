@@ -82,7 +82,7 @@ import {
   installRangeFormatter as installKojoRangeFormatter,
   type FormatRequest,
 } from '../monaco/kojo-format';
-import { installRangeFormatter, type RangeFormatHandlers } from '../monaco/kojo-format-range';
+import { installErbOnTypeFormatter, type RangeFormatHandlers } from '../monaco/kojo-format-range';
 // FMT-TOAST：格式化让路的一次性台账（去重 + 文案都住 `ui/format-notice-ledger.ts`，
 // 本模块只做"把出口接上"这一件事；上屏由 `EditorPane.tsx` 订阅根通知中心完成）
 import { reportFormatDegradation } from './format-notice-ledger';
@@ -2142,6 +2142,9 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       // ERB 补全的事实袋（LAU-4 补全腿第三批）：adapter 表 / 项目名录 / 宿主词表 / 偏好
       // 全在这条腿上现取，判据一枚都不留（descriptor 声明了 `completionFacts` 的语言才取）。
       completionFacts: (model, line) => erbCompletionFactsOf(model, line),
+      // 格式化规则开关（ERB-PARITY G2）：P2-14 的偏好读取点只有 `format-pref` 一处，
+      // 这里是**宿主事实**的递入口——每次组请求时现读（不缓存旧值），槽腿与插件都不读设置。
+      formatRules: () => loadFormatRulesPref(),
       applyCodeActionEdits: (model, edits) => {
         const ctx = owningPaneOf(model);
         const ed = ctx?.editorRef.current ?? null;
@@ -2553,12 +2556,16 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     // 判据与规则开关（批次十三把注册面从 `monaco/entry.ts` 的无参装配点搬到这里——那边拿不到
     // 偏好读取与降级回调）。一门语言一枚 provider：本行只注册 `.kojo`，ERB 归下一行。
     globalDisposers.push(installKojoRangeFormatter(monaco, { ...formatResolve, onDegraded: reportFormatDegradation }));
-    // 选区格式化 + 打字规范化（T13）：同一份 resolve、同一份规则核心，只多一层行裁剪（ERB 语言）。
+    // 打字规范化（on-type，ERB 语言）：同一份 resolve、同一份规则核心。
     // PS-4：再挂一条**窗口取文腿**（`formatRequestWindowFor`）——一次 `;` 击键只为触发行那一行
     // 取文，不再 copy 整篇；`.kojo` 与糖视图一律退回整篇那条腿（判据见 `RangeFormatHandlers`）。
+    // ERB-PARITY G2（2026-10-31）：ERB 的**选区格式化**已不在这里——descriptor 点名了
+    // `formatting` 槽腿，整篇 + 区间两枚 provider 由槽腿工厂挂上、插件供方作答；本行只剩 on-type。
     // FMT-TOAST：五处让路点从此**不再哑**——`onDegraded` 接台账（同一 `where` + 同一行区间
     // 一次会话只上一条 toast）。台账只读这份 `notice`，格式化那条链的返回值语义一字未动。
-    globalDisposers.push(installRangeFormatter(monaco, { ...formatResolve, onDegraded: reportFormatDegradation }));
+    globalDisposers.push(
+      installErbOnTypeFormatter(monaco, { ...formatResolve, onDegraded: reportFormatDegradation }),
+    );
     // 行上内联注解（B8，2026-10-16）：同一枚 `ui.editor.languageService` 槽的第五个判别成员。
     // 宿主在这里做的事只有四件：定位取数的那份 model（糖面换算到原文，见 `readCodeLenses`）、
     // 把体量/预算两档降级判掉、问槽、把点击落到**既有**的 `editor.revealLocation` 通道

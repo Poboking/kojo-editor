@@ -36,7 +36,7 @@ import type {
 } from '@kojo/plugin-api';
 import type { Kernel } from '@kojo/kernel';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
-import { installRangeFormatter } from '../src/monaco/kojo-format-range';
+import { installErbOnTypeFormatter } from '../src/monaco/kojo-format-range';
 import { LARGE_FILE_LINES } from '../src/ui/editor-options';
 import type { PaneCtx } from '../src/ui/editor-pane-registry';
 import {
@@ -305,7 +305,7 @@ describe('PS-4 读数 · on-type 格式化（52,601 行，一次击键）', () =
       },
     } as unknown as typeof Monaco;
     // 与生产接线同款的两条腿：`resolve` = 整篇，`resolveRange` = 只给触发行那一行
-    installRangeFormatter(monaco, {
+    installErbOnTypeFormatter(monaco, {
       resolve: (m) => ({ text: m.getValue(), dialect: 'erb' }),
       resolveRange: (m, start, end) => ({
         text: m.getValueInRange({ startLineNumber: start, startColumn: 1, endLineNumber: end, endColumn: m.getLineMaxColumn(end) }),

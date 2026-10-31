@@ -2,9 +2,7 @@ import type * as Monaco from './entry';
 import {
   computeFormatEdits,
   computeRangeFormatEdits,
-  erbBodyRegionAtLineEnd,
   erbNewContentWithPrefix,
-  type ErbBodyRegionKind,
   type FormatEdit,
 } from '@kojo/kojo-vocab/formatter';
 import { errorText, FULLWIDTH_SPACE } from '@kojo/plugin-api';
@@ -16,46 +14,36 @@ import {
 } from './kojo-format';
 
 /**
- * 选区格式化 + 打字规范化（T13）——**只做"区间裁剪/编辑裁剪"这一层**。
+ * 打字规范化（on-type）+ 与它共用的"窗口取文 / 区间裁剪"小工具——**只做这一层**。
  *
- * 规则与 edits 的唯一真源仍是插件侧的 `computeFormatEdits`（`kojo-format.ts` 头注
- * 同一款分工：宿主不认识缩进、不认识全角空格）。本模块**不抄一份规则**，只回答两个问题：
+ * > **ERB-PARITY G2（2026-10-31）**：ERB 的**选区格式化**（`Ctrl+K Ctrl+F`）已整条移出本模块。
+ * > 它现在是插件供方（`@kojo/plugin-erb-lang` 的 `erb-formatting`，经 `ui.editor.languageService`
+ * > 槽），Monaco 那枚 `DocumentRangeFormattingEditProvider` 由槽腿工厂
+ * > （`slot-service-providers.ts` 的 `legOf('formatting', …)`）挂上——与 kojo2 同一条腿。
+ * > 当时 ERB 上有 **2 枚区间 + 2 枚整篇** provider 并存（v1 后注册、按 Monaco 的"同分后注册在前"
+ * > 压住槽腿），插件供方等于死代码；现在每种 provider 恰好一枚，"谁在答"由数据（descriptor
+ * > 的 `slotServices`）而不是注册序决定。**on-type 留在本模块**：它是 Monaco 引擎面
+ * > （`SlotServiceKind` 里没有 on-type，也不为它新开一格），判据仍是插件侧那一把尺子。
  *
- * 1. **区间请求该产哪些编辑**：整篇算一遍，再按行裁剪；宿主给了 {@link RangeFormatHandlers.resolveRange}
- *    时**只取要算的那几行**（PS-4，on-type 一次击键不再 copy 整篇）。
- *    为什么不把选区切出来单独算——ERB 形的规则是**逐行纯函数**（每行的新内容只依赖
- *    该行自身，见插件 `formatter.ts` 的 `erbNewContent`），"整篇算 + 按行裁剪"与
- *    "区间单独算"逐字节等价（钉在 `kojo-format-range.test.ts` 的等价性用例）；
- *    而整篇算还保住了跨行上下文（缩进单位探测、`@` 原生块状态），哪天规则长出
- *    跨行语义也不会从这条缝里漏出去。
- *    **这条论证对 `.kojo` 从来就不成立**（缩进单位探测与 `@` 块状态是文档级判据 ⇒ 宿主
- *    侧 `formatRequestWindowFor` 对 `.kojo` 一律交回 `null`；该方言的区间入口是
- *    `kojo-format.ts::installRangeFormatter`，走整篇算 + 按行裁剪），**对 ERB 也不再完全成立**：
- *    `559a878` 给 ERB 形长出了跨行的块状态（数据表块体 / 停用死区，见插件 `erbBodyLineMask`），
- *    切片视角看不见窗口起点之上的开词 ⇒ 会把整篇腿明确保护的字节改掉。于是窗口这条腿
- *    多了下面第 3 项那道**前推锚点**的闸（不是放宽判据，是补上切片缺的那一段上下文）。
- *    成本口径：老路 O(行数)×(一次整篇文本拷贝)，新路 O(请求行数) + **一趟** O(前缀行数) 的
- *    状态机扫描（只在"切片这一腿真的想改字节"时才付；零编辑的单行窗口连扫描都不用跑）。
+ * 规则与 edits 的唯一真源仍是 `@kojo/kojo-vocab/formatter`（`kojo-format.ts` 头注同一款分工：
+ * 宿主不认识缩进、不认识全角空格）。本模块**不抄一份规则**，只回答两个问题：
+ *
+ * 1. **一次击键该产哪些编辑**：整篇算一遍，再按行裁剪；宿主给了 `RangeFormatHandlers.resolveRange`
+ *    时**只取要算的那一行**（PS-4，on-type 一次击键不再 copy 整篇）。
+ *    为什么不切一行单独算——ERB 形的规则是**逐行纯函数**（每行的新内容只依赖该行自身，
+ *    见插件 `formatter.ts` 的 `erbNewContent`），但 `559a878` 之后 ERB 形长出了**跨行的块状态**
+ *    （数据表块体 / 停用死区，见插件 `erbBodyLineMask`），切片视角看不见起点之上的开词 ⇒
+ *    于是这条腿有一道**前推锚点**的闸（不是放宽判据，是补上切片缺的那一段上下文）：
+ *    单行窗口把"整篇第 1 行到触发行之前"按行数组喂进插件 `erbNewContentWithPrefix`，一趟同时
+ *    拿到末态掩码（块体 / 死区）与块层级——与整篇腿是**同一台**状态机（没有第二份判据）。
+ *    成本口径：零编辑的击键仍只付一行的代价（PS-4 的单价前提），真要落笔才付 O(起点之前)。
  * 2. **编辑绝不越界**：`FormatEdit` 本身永不跨物理行（插件规则第 3 条），所以裁剪
  *    就是行号过滤，天然精确；裁剪后每条编辑都落在 `[startLine, endLine]` 内。
- *    块级对齐超出选区的问题在 ERB 形不存在（ERB 规则本就不跨行对齐）；
- *    若未来出现，答案也是"降级为行内规范化"，不是放宽裁剪。
- * 3. **切片必须与整篇同判据**（本批补的口子）：
- *    - **单行**（on-type 每次击键 / 单行选区）：{@link singleLineWindowEdits} 把前缀**按行数组**
- *      喂进插件 `erbNewContentWithPrefix`，一趟同时拿到末态掩码（块体 / 死区）与块层级——与整篇
- *      腿的 `erbBodyLineMask` / `erbIndentPlan` 是**同一台**状态机（没有第二份判据），只算目标行。
- *      前缀行直接读 `model.getLineContent`（**不拼 5 万行大字符串**，也不再为探前缀多取一次窗口），
- *      于是这一击键的窗口取文就是**触发行那 1 次**。改前这条腿不吃前缀 ⇒ IF/块体里的 on-type
- *      拿不到层级，缩进规则在该行静默失效（只折全角空白）。
- *    - **多行**：{@link prefixContext} 拿"整篇第 1 行到窗口之前"那段整行前缀问同一台状态机的
- *      `erbBodyRegionAtLineEnd` 投影——末态在区里就把取文起点**前推到最外层区首标记行**，从那里
- *      喂进去时状态机必然处于"区外"，区段轨迹与整篇逐字重合；末态在区外则把同一段前缀交给插件
- *      `computeRangeFormatEdits` 推块层级，前缀只参与判据、一个字节都不进 edits。
- *    问不到（宿主没给前缀腿 / 抛错 / 方言不是 ERB）就**交回整篇那条腿**，绝不"当作区外"放行。
- *    唯一的免检通道：`startLine === endLine` 且切片判零编辑——逐行规则一个字节都不会改，于是
- *    连前缀都不问（PS-4 的单价前提）。**边界**：这种行若落在 IF 块体里且"逐行视角已经规范"，
- *    整篇腿仍会改成块体缩进，这一小类主动让掉——on-type 的触发字符（`;` / 全角空格）触发时该行
- *    通常已有切片编辑，会走上面那条带块上下文的腿。
+ *
+ * 「整篇算 + 按行裁剪」与「只算这几行再加前缀」的等价性分别钉在
+ * `tests/kojo-format-range.test.ts`（区间切片 ≡ 整篇裁剪）与
+ * `tests/ps4-provider-seams.test.ts`（窗口路径逐字节对照，含 CRLF 与最后一行两个易错点；
+ * 单价见 `tests/ps4-provider-seams.perf.test.ts`）。
  *
  * on-type 触发字符只有两个，宁缺毋滥：
  * - `;`：ERB 整行注释的成形点（去缩进后以 `;` 开头才算注释，成形即折注释区全角）；
@@ -244,42 +232,6 @@ function windowEdits(
   );
 }
 
-/** 宿主窗口通道的调用签名（`RangeFormatHandlers.resolveRange` 去掉可选，便于当参数传） */
-type WindowResolveRange = NonNullable<RangeFormatHandlers['resolveRange']>;
-
-/** 选区之前的整行前缀：`text` 喂给插件层补块层级，`region` 是喂完后块状态机的末态 */
-interface PrefixContext {
-  readonly text: string;
-  readonly region: { kind: ErbBodyRegionKind; openLine: number } | null;
-}
-
-/**
- * 取 `[1, startLine-1]` 这段**整行前缀**（块层级与块末态都从这一段来）。
- *
- * - `startLine <= 1` ⇒ 空串（选区从篇首起，插件层据此与整篇腿逐字等价）。
- * - 契约要求前缀末行带行尾，而 `getValueInRange` 止于最后一列 ⇒ 按文档 EOL（`getEOL()`）补一个，
- *   否则选区首行会被粘到前缀末行上（插件层不猜，见 `RangeFormatContext` 的契约）。
- * - 块末态在区外 ⇒ 切片判据与整篇腿**可证等价**；在区里 ⇒ `region.openLine` 就是最外层区首，
- *   调用方从那里起喂才让切片起点的状态与整篇对齐。
- * - `null` = **问不到**（宿主没给前缀这段 / 交回的不是 ERB）⇒ 调用方交回整篇那条腿；
- *   这里绝不把"问不到"当成"区外"——那正是本批要关的口子。
- *
- * 这条腿只服务**多行选区**：单行（on-type）走 {@link singleLineWindowEdits}——那边按行数组
- * 喂块状态机，一趟就拿到末态掩码与层级，不再需要这里的 `region` 探针。
- */
-function prefixContext(
-  resolveRange: WindowResolveRange,
-  model: Monaco.editor.ITextModel,
-  startLine: number,
-): PrefixContext | null {
-  if (startLine <= 1) return { text: '', region: null };
-  const prefix = resolveRange(model, 1, startLine - 1);
-  if (!prefix || prefix.dialect !== 'erb') return null;
-  const region = erbBodyRegionAtLineEnd(prefix.text);
-  const eol = model.getEOL?.() === '\r\n' ? '\r\n' : '\n';
-  return { text: `${prefix.text}${eol}`, region };
-}
-
 /**
  * 单行窗口（on-type 的每一击键 / 单行选区）：**块层级与保护区判据与整篇腿同一套**。
  *
@@ -332,31 +284,29 @@ function singleLineWindowEdits(
 }
 
 /**
- * 窗口那条腿（PS-4）：宿主给了 `resolveRange` 就只算要算的那几行。
+ * 窗口那条腿（PS-4）：宿主给了 `resolveRange` 就只算触发行那一行。
  *
  * 返回 `null` = **这条腿这次不适用**（宿主没给窗口通道 / 窗口不应答 / 取文抛错 / 锚点问不到），
  * 调用方据此退回整篇那条腿——"不适用"与"算过了、没有编辑"（返回 `[]`）是两件事，
  * 混成一件会让"该零编辑"看起来像"没算"。
+ *
+ * **只服务 on-type 的单行窗口**（ERB-PARITY G2）：多行选区的那半条腿随 v1 区间注册一起删了，
+ * 现在 ERB 的选区格式化由插件供方作答（契约只给整篇 `text` + 行区间，供方自己裁）。
+ * 单行窗口仍在，是因为 on-type 一次击键不该 copy 整篇——这与"谁作答"是两件事。
  */
 function computeWindowSafely(
   handlers: RangeFormatHandlers,
   model: Monaco.editor.ITextModel,
-  startLine: number,
-  endLine: number,
+  line: number,
   stage: FormatStage,
 ): FormatEdit[] | null {
   const resolveRange = handlers.resolveRange;
   if (!resolveRange) return null;
   let request: FormatRequest | null;
   try {
-    request = resolveRange(model, startLine, endLine);
+    request = resolveRange(model, line, line);
   } catch (e: unknown) {
-    degrade(handlers, stage, {
-      where: 'resolveRange',
-      startLine,
-      endLine,
-      reason: errorText(e),
-    });
+    degrade(handlers, stage, { where: 'resolveRange', startLine: line, endLine: line, reason: errorText(e) });
     return null;
   }
   if (!request) return null;
@@ -364,42 +314,18 @@ function computeWindowSafely(
   // ERB 上应答，这里再钉一枚闸：方言不是 ERB ⇒ 交回整篇那条腿，不走窗口。
   if (request.dialect !== 'erb') return null;
   try {
-    const slice = windowEdits(request, startLine - 1, startLine, endLine);
+    const slice = windowEdits(request, line - 1, line, line);
     // 免检通道（保留，PS-4 的单价前提）：单行窗口的切片判零编辑 ⇒ 逐行规则一个字节都不会改。
     // 边界（诚实写在案）：块层级**能**在这条通道之外再加一刀——一行"逐行视角已经规范"（例如
     // 半角 2 空格缩进、无全角空白）的语句若落在 IF 块体里，整篇腿会把它改成块体缩进。这种行
     // 只有真的付一趟 O(前缀) 扫描才判得出；而 on-type 的触发字符是 `;` / 全角空格，触发时该行
     // 通常已有切片编辑（折全角 / 折注释）⇒ 走下面那条带块上下文的腿。主动让掉的是"零切片编辑
     // 却在块里"这一小类，代价是击键常态（`;` 注释行、台词里的全角空格）一次扫描都不跑。
-    if (slice.length === 0 && startLine === endLine) return [];
-    if (startLine === endLine) {
-      // 单行：块层级 / 保护区要一趟 O(前缀) 扫描，前缀按行直读 model（见 `singleLineWindowEdits`）
-      return singleLineWindowEdits(handlers, model, request, startLine, slice, stage);
-    }
-    // 选区之前的整行前缀：插件的块状态机（层级 / 保护区）与整篇腿同判据的唯一来路。
-    // 问不到 ⇒ 交回整篇那条腿（绝不"当作区外"放行）。
-    const prefix = prefixContext(resolveRange, model, startLine);
-    if (prefix === null) {
-      degrade(handlers, stage, {
-        where: 'anchor',
-        startLine,
-        endLine,
-        reason: '前缀末态问不到（窗口腿没有前缀这段）⇒ 交回整篇那条腿',
-      });
-      return null;
-    }
-    // 带上前缀重算：IF/块层级由前缀推出来，选区外的字节仍一个都不进 edits（插件层只回选区行）。
-    const anchored = prefix.text.length === 0 ? slice : windowEdits(request, startLine - 1, startLine, endLine, prefix.text);
-    const anchorLine = prefix.region === null ? startLine : prefix.region.openLine;
-    if (anchorLine === startLine) return anchored;
-    // 窗口起点落在块体/死区里 ⇒ 取文起点前推到最外层区首，再从那里算（保护区一个字节都不许动）
-    const ctx = resolveRange(model, anchorLine, endLine);
-    if (!ctx || ctx.dialect !== 'erb') return null;
-    const ctxPrefix = prefixContext(resolveRange, model, anchorLine);
-    if (ctxPrefix === null) return null;
-    return windowEdits(ctx, anchorLine - 1, startLine, endLine, ctxPrefix.text);
+    if (slice.length === 0) return [];
+    // 单行：块层级 / 保护区要一趟 O(前缀) 扫描，前缀按行直读 model（见 `singleLineWindowEdits`）
+    return singleLineWindowEdits(handlers, model, request, line, slice, stage);
   } catch (e: unknown) {
-    degrade(handlers, stage, { where: 'windowCompute', startLine, endLine, reason: errorText(e) });
+    degrade(handlers, stage, { where: 'windowCompute', startLine: line, endLine: line, reason: errorText(e) });
     return [];
   }
 }
@@ -410,41 +336,31 @@ function clampLine(line: number, lineCount: number): number {
 }
 
 /**
- * 为 ERB 语言注册两个 provider：
- * - `Ctrl+K Ctrl+F`（Monaco 内建 `editor.action.formatSelection`）→ 区间格式化；
- * - 触发字符（`;` / 全角空格）打字后 → 该行的行内规范化。
+ * 为 ERB 语言注册**打字规范化**（on-type formatter，触发字符 `;` / 全角空格）。
  *
- * 只注册 `ERB_LANGUAGE_ID`：整篇格式化已覆盖两个语言（`installDocumentFormatter`），
- * 这两个新入口的语义保守面是按 ERB 形（逐行纯）论证的，`.kojo` 不搭这班车。
+ * 只注册 `ERB_LANGUAGE_ID`；`.kojo1` 的回车缩进是另一枚（`kojo-format.ts` 的
+ * `installEnterIndenter`），两边不重叠。
+ *
+ * **选区格式化不在这里**（ERB-PARITY G2，2026-10-31）：ERB 点名了 descriptor 的 `formatting`
+ * 槽腿 ⇒ 整篇 + 区间两枚 `Document*FormattingEditProvider` 由槽腿工厂挂上、插件供方作答
+ * （`@kojo/plugin-erb-lang` 的 `erb-formatting`）。此前本模块也注册一枚区间 provider，
+ * 同门语言上两枚区间 provider 的输出取决于注册序（v1 后注册 ⇒ 插件供方成了死代码），
+ * 那正是本批要收掉的并存。
+ *
  * `.kojo` 的区间格式化走 `kojo-format.ts::installRangeFormatter`——**同一份 `RangeFormatHandlers`**
- * （宿主 `resolve` 判据 / 规则开关 / `onDegraded` 出口同源），注册面同样在
- * `ui/editor-global-providers.ts`（一门语言一枚 provider；两侧不得同时注册 ERB——否则选区结果
- * 由注册表顺序决定，本模块的宿主判据会被绕过）。
+ * （宿主 `resolve` 判据 / 规则开关 / `onDegraded` 出口同源）。
  */
-export function installRangeFormatter(
+export function installErbOnTypeFormatter(
   monaco: typeof Monaco,
   handlers: RangeFormatHandlers,
 ): Monaco.IDisposable {
-  const rangeProvider: Monaco.languages.DocumentRangeFormattingEditProvider = {
-    provideDocumentRangeFormattingEdits(model, range) {
-      const lineCount = model.getLineCount();
-      const startLine = clampLine(range.startLineNumber, lineCount);
-      const endLine = clampLine(range.endLineNumber, lineCount);
-      const windowed = computeWindowSafely(handlers, model, startLine, endLine, 'range');
-      if (windowed !== null) return toTextEdits(model, windowed);
-      const request = resolveSafely(handlers, model, 'range');
-      if (!request) return [];
-      return toTextEdits(model, computeSafely(handlers, request, startLine, endLine, 'range'));
-    },
-  };
-
   const onTypeProvider: Monaco.languages.OnTypeFormattingEditProvider = {
     autoFormatTriggerCharacters: [...ON_TYPE_TRIGGER_CHARACTERS],
     provideOnTypeFormattingEdits(model, position) {
       // 一次打字只该算**触发行那一行**（PS-4）：走 `resolveRange` 时整篇文本一次都不 copy；
       // 老路（整篇算 + 裁一行）留着兜底，判据与结果与改前逐字相同。
       const line = clampLine(position.lineNumber, model.getLineCount());
-      const windowed = computeWindowSafely(handlers, model, line, line, 'onType');
+      const windowed = computeWindowSafely(handlers, model, line, 'onType');
       if (windowed !== null) return toTextEdits(model, windowed);
       const request = resolveSafely(handlers, model, 'onType');
       if (!request) return [];
@@ -452,9 +368,5 @@ export function installRangeFormatter(
     },
   };
 
-  const subs = [
-    monaco.languages.registerDocumentRangeFormattingEditProvider(ERB_LANGUAGE_ID, rangeProvider),
-    monaco.languages.registerOnTypeFormattingEditProvider(ERB_LANGUAGE_ID, onTypeProvider),
-  ];
-  return { dispose: () => subs.forEach((s) => s.dispose()) };
+  return monaco.languages.registerOnTypeFormattingEditProvider(ERB_LANGUAGE_ID, onTypeProvider);
 }

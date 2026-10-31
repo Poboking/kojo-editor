@@ -98,6 +98,14 @@ export interface FormatHandlers {
  *
  * `Shift+Alt+F` 是 Monaco 内建动作（`editor.action.formatDocument`），
  * **不需要**新命令、也不动快捷键表——注册 provider 就是全部的接线面。
+ *
+ * **ERB-PARITY G2（2026-10-31）：点名了 `formatting` 槽腿的语言让开。**
+ * ERB 的整篇 / 区间格式化改由插件供方（槽 `ui.editor.languageService` 的 `erb-formatting`）
+ * 作答，槽腿工厂（`slot-service-providers.ts` 的 `legOf('formatting', …)`）在收口里挂两枚
+ * provider；本枚 v1 provider 若照旧挂在 ERB 上，同一门语言就有 **2 枚整篇**——Monaco 按
+ * 注册序问、后注册的排前，那枚 v1 会把插件供方压成死代码。判据是 descriptor 的声明
+ * （`excludeNamed`，与 `kojo-hover.ts` 同一形态），不写任何语言 id：今天只有 ERB 点名这一格，
+ * `.kojo1` 照旧吃本枚。
  */
 export function installDocumentFormatter(
   monaco: typeof Monaco,
@@ -126,8 +134,11 @@ export function installDocumentFormatter(
       return toTextEdits(model, edits);
     },
   };
-  return registerForLanguageServices(monaco, (m, id) =>
-    m.languages.registerDocumentFormattingEditProvider(id, provider),
+  return registerForLanguageServices(
+    monaco,
+    (m, id) => m.languages.registerDocumentFormattingEditProvider(id, provider),
+    undefined,
+    { excludeNamed: 'formatting' },
   );
 }
 

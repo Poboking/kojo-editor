@@ -1562,6 +1562,16 @@ export interface EditorFormattingRequest extends EditorDocumentIdentity {
    * 越界 / 倒置由供方按自己的纪律处置（2.0 的实现是"原样返回、`changed=false`"）。
    */
   readonly lineRange?: EditorFormattingLineRange;
+  /**
+   * 规则开关（P2-14，additive）：**缺省 = 全开**，与加本格之前逐字相同。
+   * 中性两布尔（不是判据侧的类型）：宿主现读偏好填进来，供方按它决定哪条规则执行。
+   */
+  readonly options?: {
+    /** 全角空格折算 */
+    readonly fullWidthSpace?: boolean;
+    /** 缩进归一 */
+    readonly indent?: boolean;
+  };
 }
 
 /** 格式化的行区间（1 基、闭区间；见 {@link EditorFormattingRequest.lineRange}） */
