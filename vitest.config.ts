@@ -76,6 +76,7 @@ export const config = defineConfig({
       '@kojo/erb-lang/constants': r('./packages/erb-lang/src/constants.ts'),
       '@kojo/erb-lang/highlight': r('./packages/erb-lang/src/highlight.ts'),
       '@kojo/erb-lang/selection-range': r('./packages/erb-lang/src/selection-range.ts'),
+      '@kojo/erb-lang/signature': r('./packages/erb-lang/src/signature.ts'),
       '@kojo/erb-lang': r('./packages/erb-lang/src/index.ts'),
       // ERB 引擎词表库（2026-10-30 ERB-VOCAB 批）：同样是叶子在前、桶在后。
       '@kojo/erb-vocab/control-flow': r('./packages/erb-vocab/src/control-flow.ts'),

@@ -327,12 +327,13 @@ describe('插件装配', () => {
     return registered;
   }
 
-  it('三枚贡献分枚注册，id 稳定、order 相同、同一个槽（ERB-PARITY G2 起含 formatting）', () => {
+  it('四枚贡献分枚注册，id 稳定、order 相同、同一个槽（ERB-PARITY G2 起含 formatting；LAU-1031-SIG 起含 signatureHelp）', () => {
     const registered = activate();
     expect(registered.map((r) => r.item.id)).toEqual([
       'erb-documentHighlight',
       'erb-selectionRange',
       'erb-formatting',
+      'erb-signatureHelp',
     ]);
     expect(new Set(registered.map((r) => r.slot))).toEqual(new Set(['ui.editor.languageService']));
     const orders = new Set(registered.map((r) => r.item.order));

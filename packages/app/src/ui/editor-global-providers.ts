@@ -195,6 +195,11 @@ import {
   installSignatureHelp,
   resolveSignatureInText,
 } from '../monaco/kojo-signature';
+// LAU-1031-SIG（签名判据搬家批）：ERB 签名的两张宿主表经 `@kojo/erb-lang/signature` 的
+// 模块级登记表交给插件供方（`erb-signatureHelp`）——范式照 `@kojo/kojo-lang/adapter-source`：
+// 组合根登记 getter、供方请求时现取；这里同时把 getter 与旧桥的 `signatureHelpAt` 收到
+// 同一份取表实现上（一条"怎么拿表"不许有两处写法）。
+import { registerErbSignatureSource, type ErbSignatureTables } from '@kojo/erb-lang/signature';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 // `erbFileFacts` 的注入契约形状（通道语义 / `undefined` 与 `[]` 的分家，见该文件头注）
 import type { ErbFileFactsProvider } from '../monaco/completion-core';
@@ -1499,6 +1504,33 @@ export function codeLensesFor(
 }
 
 /**
+ * 签名的两张宿主表（**运行时现取**，LAU-1031-SIG 收口到一处）：
+ * ① adapter 调用协议（槽语义，`editorTables` 的 `callProtocol`）；
+ * ② ERB 用户函数形参（解析器索引：按归一化名查定义、取 `params` 原文；多处定义取**第一条**
+ *    命中的那枚——与搬家前 `signatureHelpAt` 内联闭包的口径逐字相同）。
+ * 旧桥的 `signatureHelpAt`（kojo1）与插件供方的登记表 getter 共用这一份；取不到 = 该路零产出。
+ */
+export function erbSignatureTables(kernel: Kernel): ErbSignatureTables {
+  const tables = editorTables(kernel);
+  return {
+    ...(tables.callProtocol ? { callProtocol: tables.callProtocol } : {}),
+    paramsOf: (callee: string) => {
+      try {
+        const index = erbParserIndex(kernel);
+        if (!index) return null;
+        const ref = index.byName.firstOf(callee.toUpperCase());
+        if (!ref) return null;
+        const file = index.files.get(ref.filePath);
+        const fn = file?.functions.find((f) => f.startLine === ref.startLine);
+        return fn ? fn.params : null;
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+/**
  * 签名帮助（PS-4 的③）：**只取光标行往上那一段窗口**，整篇一次都不 copy。
  *
  * 等价性可证：`findCallSiteAt` 的向上收行有硬上限（`SIGNATURE_LOOKBACK_LINES`），
@@ -1513,7 +1545,7 @@ export function signatureHelpAt(
 ): ResolvedSignature | null {
   if (!Number.isFinite(position.lineNumber) || position.lineNumber < 1) return null;
   if (position.lineNumber > model.getLineCount()) return null;
-  const protocol = editorTables(kernel).callProtocol;
+  const tables = erbSignatureTables(kernel);
   const from = Math.max(1, position.lineNumber - SIGNATURE_LOOKBACK_LINES);
   const windowText = model.getValueInRange({
     startLineNumber: from,
@@ -1521,19 +1553,13 @@ export function signatureHelpAt(
     endLineNumber: position.lineNumber,
     endColumn: model.getLineMaxColumn(position.lineNumber),
   });
-  return resolveSignatureInText(windowText, position.lineNumber - from + 1, position.column, protocol, (callee) => {
-    try {
-      const index = erbParserIndex(kernel);
-      if (!index) return null;
-      const ref = index.byName.firstOf(callee.toUpperCase());
-      if (!ref) return null;
-      const file = index.files.get(ref.filePath);
-      const fn = file?.functions.find((f) => f.startLine === ref.startLine);
-      return fn ? fn.params : null;
-    } catch {
-      return null;
-    }
-  });
+  return resolveSignatureInText(
+    windowText,
+    position.lineNumber - from + 1,
+    position.column,
+    tables.callProtocol,
+    tables.paramsOf,
+  );
 }
 
 /**
@@ -1815,6 +1841,18 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
     });
     globalDisposers.push({ dispose: unregister });
   }
+  /**
+   * LAU-1031-SIG（签名判据搬家批）：把 ERB 签名的两张宿主表**登记进语言面库**
+   * （`@kojo/erb-lang/signature` 的取表缝，范式照上一条 `adapter-source`）。
+   *
+   * 为什么要有这一行：两张表（adapter 调用协议 + 解析器索引形参）只有宿主组合根拿得到，
+   * 而这条腿的答案现在由插件（`@kojo/plugin-erb-lang` 的 `erb-signatureHelp`）作答。
+   * getter 每次请求现取（`requireKernel()` 在装配期之后，内核已就位）；取表抛错被登记表
+   * 吞成"这一枚取不出"⇒ 空表 ⇒ 供方如实答"没有可证明的签名"，**不猜**。
+   * 与旧桥的 `signatureHelpAt` 共用同一份 `erbSignatureTables`——kojo1 与 ERB 拿到的是**同两张表**。
+   */
+  const unregisterErbSignature = registerErbSignatureSource(() => erbSignatureTables(requireKernel()));
+  globalDisposers.push({ dispose: unregisterErbSignature });
   /**
    * B3 收口最后一格：把**两面**（adapter + backend）的现取入口也登记进语言面库
    * （`@kojo/kojo-lang/diagnostics`，插件侧的文档级诊断按文件路径问一次）。

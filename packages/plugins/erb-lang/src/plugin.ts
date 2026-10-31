@@ -10,8 +10,9 @@
  * | `documentHighlight` | `highlight.ts` 的 `erbDocumentHighlights` | `src/highlight.ts` |
  * | `selectionRange` | `selection-range.ts` 的 `erbSelectionRangeChainsAt` | `src/selection-range.ts` |
  * | `formatting` | `@kojo/kojo-vocab/formatter` 的 `computeFormatEdits`（与 `.kojo` 共用） | `src/formatting.ts` |
+ * | `signatureHelp` | `@kojo/erb-lang/signature` 的调用位点解析 + 两张宿主表取表缝 | `src/signature.ts` |
  *
- * 三条腿**分枚注册**（`order` 都是 10，与 kojo2 那家同权）：它们的输入 / 产出形状不同
+ * 四条腿**分枚注册**（`order` 都是 10，与 kojo2 那家同权）：它们的输入 / 产出形状不同
  * （单槽 + `kind` 判别），塞进同一枚 `provide` 等于让"高亮算不出来"顺手把扩选也带走。
  *
  * 2026-10-30（定义判据归位批）：本插件**不再供 `definition`**。那个 kind 的本地名字腿
@@ -45,6 +46,7 @@ import type { Plugin, PluginContext } from '@kojo/plugin-api';
 import { provideFormatting } from './formatting';
 import { provideDocumentHighlights } from './highlight';
 import { provideSelectionRanges } from './selection-range';
+import { provideErbSignatureHelp } from './signature';
 
 /**
  * 贡献的 `order`：与 kojo2 那家同为 10。
@@ -82,8 +84,17 @@ export function createErbLangPlugin(): Plugin {
         order: CONTRIBUTION_ORDER,
         provide: (request) => provideFormatting(request),
       });
+      // LAU-1031-SIG（2026-10-31）：签名帮助交给本插件作答。判据在 `@kojo/erb-lang/signature`
+      // （与宿主旧桥共读同一份），两张宿主表（adapter 调用协议 + 解析器索引形参）经该叶的
+      // 模块级登记表由组合根登记、本供方请求时现取。宿主旧桥（`kojo-signature.ts`）按
+      // descriptor 的 `slotServices` 点名让开 ERB——ERB 的这枚 provider 从此恰好一枚。
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'erb-signatureHelp',
+        order: CONTRIBUTION_ORDER,
+        provide: (request) => provideErbSignatureHelp(request),
+      });
       ctx.log.info(
-        '语言服务已接入：documentHighlight / selectionRange / formatting（languageId=kojo-erb），' +
+        '语言服务已接入：documentHighlight / selectionRange / formatting / signatureHelp（languageId=kojo-erb），' +
           '判据在 @kojo/erb-lang 与 @kojo/kojo-vocab，宿主只剩请求与 Monaco 翻译',
       );
     },

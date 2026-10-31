@@ -52,18 +52,25 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
     // constants（语言 id 叶子）/ highlight（同符号高亮判据）/ selection-range（扩选判据）/ index。
     // LAU-4 补全腿第二批（2026-10-31）：六枚 completion-* 叶子整块搬进
     // `@kojo/plugin-erb-parser`（槽的供方必须是常驻插件、且插件不许引库），本包 10 ⇒ 4。
-    expect(files).toHaveLength(4);
+    // LAU-1031-SIG（2026-10-31）：签名判据叶出宿主进本包（4 ⇒ 5）。住址与高亮 / 扩选
+    // 两条腿同形（判据在这、供方在懒装载的 `@kojo/plugin-erb-lang`），不进开机图。
+    expect(files).toHaveLength(5);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
     /**
-     * 白名单只有一枚：`@kojo/erb-vocab/control-flow`。
+     * 白名单两枚：`@kojo/erb-vocab/control-flow` + `@kojo/plugin-api`。
      *
      * 它提供 `ERB_CONTROL_STATEMENTS` / `classifyControlFlow`——ERB 控制流配对表的
      * **单一真源**（逐条对齐引擎 `FunctionIdentifier.cs` 的 `funcMatch`）。高亮与扩选都要
      * 问"这词是哪一档"，而在本包抄一份表就必然与它漂移（漂移的表现是"高亮指错的块"）。
      * 宿主读的是同一张表（`monaco/erb-enter.ts`，经插件 re-export），所以这是**并列读者**
      * 不是反向分层。
+     *
+     * `@kojo/plugin-api`（LAU-1031-SIG 2026-10-31 加）：签名判据要 `slotParameterLabel`
+     * （槽 → `ARG:n`/`ARGS:n` 的**唯一实现**）与 `KojoCallProtocol` / `KojoCallSlot` 两枚
+     * 类型。这里抄第二份标签格式化，浮层与候选列表就会漂移；契约层是**层**不是插件，
+     * 非插件库包读它已有先例（`@kojo/kojo-vocab` 六枚叶子同一方向）。
      *
      * 反向断言（2026-10-30 ERB-VOCAB 批）：`@kojo/plugin-erb-parser` 曾经是这张白名单的
      * 唯一成员——库包引插件包就是分层倒置。表上提到非插件库包后，插件那条 specifier 必须
@@ -75,6 +82,8 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
     const allowed = new Set([
       // ERB 控制流配对表的单一真源（见上注）
       '@kojo/erb-vocab/control-flow',
+      // 槽参数标签的唯一实现 + 调用协议类型（见上注：契约层不是插件，kojo-vocab 同方向先例）
+      '@kojo/plugin-api',
       // 2026-10-31（补全腿第二批）：原先另有两格（`@kojo/kojo-lang/completion` 的空白类、
       // `@kojo/kojo-vocab/engine` 的引擎族表）随六枚补全叶子一起离开本包——高亮 / 扩选两条腿
       // 只读上面那张配对表，白名单因此**只降不升**：删掉的两格**不许**再回填（回填即红）。

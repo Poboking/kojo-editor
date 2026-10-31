@@ -340,6 +340,7 @@ export default defineConfig({
       '@kojo/erb-lang/constants': r('../erb-lang/src/constants.ts'),
       '@kojo/erb-lang/highlight': r('../erb-lang/src/highlight.ts'),
       '@kojo/erb-lang/selection-range': r('../erb-lang/src/selection-range.ts'),
+      '@kojo/erb-lang/signature': r('../erb-lang/src/signature.ts'),
       '@kojo/erb-lang': r('../erb-lang/src/index.ts'),
       // ERB-VOCAB 批：控制流配对表上提到非插件库包（叶子排在桶之前，理由同上）。
       '@kojo/erb-vocab/control-flow': r('../erb-vocab/src/control-flow.ts'),

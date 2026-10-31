@@ -19,6 +19,10 @@
  * `completion-variables`）整块搬进常驻解析器插件 `@kojo/plugin-erb-parser`，本包只剩
  * 高亮 / 扩选两条腿——那两条的供方是**懒装载**的 `@kojo/plugin-erb-lang`，不占开机图，
  * 与"槽供方必须常驻"的补全腿不是同一种约束。
+ *
+ * LAU-1031-SIG（2026-10-31）：签名判据叶 `./signature` 进包（判据出宿主），供方同样是
+ * **懒装载**的 `@kojo/plugin-erb-lang`（`erb-signatureHelp`）——与上面那条约束同形，
+ * 开机图零进账。宿主 `monaco/kojo-signature.ts` 只留旧桥（kojo1）+ re-export。
  */
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -28,6 +32,7 @@ import * as barrel from '../src/index.js';
 import * as constants from '../src/constants.js';
 import * as highlight from '../src/highlight.js';
 import * as selectionRange from '../src/selection-range.js';
+import * as signature from '../src/signature.js';
 
 const leafKeys = (mod: Record<string, unknown>): string[] => Object.keys(mod).sort();
 
@@ -53,11 +58,30 @@ describe('@kojo/erb-lang 导出面', () => {
     ]);
   });
 
+  it('signature 的运行时导出 = 清单（12 枚：判据 8 + 取表缝 3 + 窗口常量 1）', () => {
+    expect(leafKeys(signature)).toEqual([
+      // 取表缝（LAU-1031-SIG：宿主两张表的模块级登记表，范式照 @kojo/kojo-lang/adapter-source）
+      'SIGNATURE_LOOKBACK_LINES',
+      'describeCallSignature',
+      'describeErbSignature',
+      'erbSignatureAt',
+      'erbSignatureNow',
+      'erbSignatureSourceCount',
+      'findCallSite',
+      'findCallSiteAt',
+      'registerErbSignatureSource',
+      'resolveSignature',
+      'resolveSignatureInText',
+      'splitArguments',
+    ]);
+  });
+
   it('桶的运行时键 = 值叶子之并集', () => {
     const expected = new Set<string>([
       ...leafKeys(constants),
       ...leafKeys(highlight),
       ...leafKeys(selectionRange),
+      ...leafKeys(signature),
     ]);
     expect(leafKeys(barrel)).toEqual([...expected].sort());
   });
@@ -69,7 +93,7 @@ describe('@kojo/erb-lang 导出面', () => {
     expect(leafKeys(barrel)).not.toContain('erbMemberSlotAt');
   });
 
-  it('package.json 的 exports 恰是桶 + 三枚叶子（宿主与插件按子路径引，漏一枚即解析不到）', () => {
+  it('package.json 的 exports 恰是桶 + 四枚叶子（宿主与插件按子路径引，漏一枚即解析不到）', () => {
     const manifest = JSON.parse(
       readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
     ) as { exports?: Record<string, string> };
@@ -78,6 +102,7 @@ describe('@kojo/erb-lang 导出面', () => {
       './constants',
       './highlight',
       './selection-range',
+      './signature',
     ]);
   });
 

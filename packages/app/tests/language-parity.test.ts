@@ -762,17 +762,27 @@ describe('DOUBLE-LEG-1032：ERB 旧桥三腿按点名让位——每一 kind 恰
     }
   });
 
-  it('没让位的 kind 逐字留账（供方不答 / 宿主载体在旧桥上——刻意双挂，不是漏收敛）', () => {
+  it('没让位的 kind 逐字留账（供方不答 / 宿主载体在旧桥上——刻意双挂，不是漏收敛）；已让位的按新事实钉形状', () => {
     // references：已关文件的点击通道（`registerEditorOpener` + knownPaths LRU）在宿主腿上；
-    // rename：闭文件回写通道（applyToClosedFile）在宿主腿上，槽腿 prepare 是 kojo2 尺子；
-    // signatureHelp：插件槽里**没有** ERB 供方——供方不答的 kind 一律不动。
+    // rename：闭文件回写通道（applyToClosedFile）在宿主腿上，槽腿 prepare 是 kojo2 尺子。
     expect(sourceOf('monaco/find-references.ts').text).toMatch(/registerEditorOpener/);
     expect(sourceOf('monaco/erb-rename.ts').text).toMatch(/applyToClosedFile/);
-    for (const rel of ['monaco/find-references.ts', 'monaco/erb-rename.ts', 'monaco/kojo-signature.ts']) {
+    for (const rel of ['monaco/find-references.ts', 'monaco/erb-rename.ts']) {
       expect(sourceOf(rel).text, `${rel} 不该按 excludeNamed 让位（让了就是静默没有）`).not.toMatch(
         /excludeNamed/,
       );
     }
+    // signatureHelp：**1031-SIG 车已让位**（原"插件槽里没有 ERB 供方"的留账前提被同批四件
+    // 拆掉——判据叶 `@kojo/erb-lang/signature` + 供方 `erb-signatureHelp` + descriptor 点名 +
+    // 旧桥 excludeNamed）。改判=钉形状，不删用例：旧桥必须走
+    // `undefined, { excludeNamed: 'signatureHelp' }`（第三参给成 kind 会把点名语言重新挂上，
+    // "一个 kind 恰一枚 provider"立刻破——本系列咬过两次的那条坑）。
+    expect(
+      sourceOf('monaco/kojo-signature.ts').text,
+      "monaco/kojo-signature.ts 的让位形状变了：旧桥又挂上点名语言、或撤了 excludeNamed（双挂回来了）",
+    ).toMatch(
+      /registerForLanguageServices\([\s\S]{0,300}?registerSignatureHelpProvider\(id,\s*\w+\)[\s\S]{0,160}?undefined,\s*\{\s*excludeNamed:\s*'signatureHelp'/,
+    );
   });
 });
 
