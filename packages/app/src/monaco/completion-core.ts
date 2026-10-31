@@ -12,7 +12,7 @@ import type {
 } from '@kojo/plugin-api';
 import type { DictionaryLookup } from '@kojo/kojo-vocab/types';
 import { pinyinKeysOf } from './pinyin';
-import { describeCallSignature } from './kojo-signature';
+import { describeCallSignature } from '@kojo/kojo-vocab/signature';
 
 /* 调用槽 / 片段格式化的**唯一实现**已上提契约层（LAU-4 补全腿第三批，2026-10-31）：
  * 同一个格式化要同时服务签名浮层、`.kojo` 装配核与（判据搬进插件后的）ERB 补全，三处

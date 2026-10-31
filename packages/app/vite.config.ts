@@ -330,6 +330,8 @@ export default defineConfig({
       '@kojo/kojo-vocab/types': r('../kojo-vocab/src/types.ts'),
       '@kojo/kojo-vocab/lexer': r('../kojo-vocab/src/lexer.ts'),
       '@kojo/kojo-vocab/formatter': r('../kojo-vocab/src/formatter.ts'),
+      // LAU-DUALLEG 车 5：v1 面签名帮助判据叶子（宿主答 kojo1、插件供方答 ERB）。
+      '@kojo/kojo-vocab/signature': r('../kojo-vocab/src/signature.ts'),
       '@kojo/kojo-vocab/enter': r('../kojo-vocab/src/enter.ts'),
       '@kojo/kojo-vocab/engine': r('../kojo-vocab/src/engine.ts'),
       '@kojo/kojo-vocab/native-hover': r('../kojo-vocab/src/native-hover.ts'),

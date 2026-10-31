@@ -32,7 +32,7 @@ import type {
 import type { Kernel } from '@kojo/kernel';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
-import { resolveSignatureInText } from '../src/monaco/kojo-signature';
+import { resolveSignatureInText } from '@kojo/kojo-vocab/signature';
 import { composeSugarDoc, sourceLineToSugar, type SugarSegmentInput } from '../src/ui/sugar-view';
 import { livePanes, setGlobalKernel, type PaneCtx } from '../src/ui/editor-pane-registry';
 import { readJumpProbe, setJumpProbe } from '../src/ui/jump-to-state';

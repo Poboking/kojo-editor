@@ -92,6 +92,8 @@ export const config = defineConfig({
       '@kojo/kojo-vocab/types': r('./packages/kojo-vocab/src/types.ts'),
       '@kojo/kojo-vocab/lexer': r('./packages/kojo-vocab/src/lexer.ts'),
       '@kojo/kojo-vocab/formatter': r('./packages/kojo-vocab/src/formatter.ts'),
+      // LAU-DUALLEG 车 5：v1 面签名帮助判据叶子（宿主答 kojo1、插件供方答 ERB）。
+      '@kojo/kojo-vocab/signature': r('./packages/kojo-vocab/src/signature.ts'),
       '@kojo/kojo-vocab/enter': r('./packages/kojo-vocab/src/enter.ts'),
       '@kojo/kojo-vocab/engine': r('./packages/kojo-vocab/src/engine.ts'),
       '@kojo/kojo-vocab/native-hover': r('./packages/kojo-vocab/src/native-hover.ts'),

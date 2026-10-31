@@ -192,9 +192,11 @@ import {
   SIGNATURE_LOOKBACK_LINES,
   type ResolvedSignature,
   type SignatureTables,
-  installSignatureHelp,
   resolveSignatureInText,
-} from '../monaco/kojo-signature';
+} from '@kojo/kojo-vocab/signature';
+// 车 5（LAU-DUALLEG）：签名判据整块上提包叶，本模块只剩「装 kojo1 那枚旧桥腿」这一件事；
+// ERB 的签名自本批起由插件供方 `erb-signatureHelp` 在槽里答（descriptor 点名 `signatureHelp`）。
+import { installSignatureHelp } from '../monaco/kojo-signature';
 import { type CompletionTables, installKojoCompletion } from '../monaco/kojo-completion';
 // `erbFileFacts` 的注入契约形状（通道语义 / `undefined` 与 `[]` 的分家，见该文件头注）
 import type { ErbFileFactsProvider } from '../monaco/completion-core';

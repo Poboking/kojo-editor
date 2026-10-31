@@ -83,7 +83,7 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
    * 点名了 `hover` 的语言）——注册本身早已由 `languageServices: true` 覆盖。
    *
    * LAU-4 补全腿（2026-10-31 第三批）**不在这里点名**：ERB 仍走 `languageServices: true`
-   * 的旧桥（补全 / 签名两条腿的 v1 面还在宿主），补全腿因此已经被挂在
+   * 的旧桥（补全那条腿的 v1 面还在宿主装配核），补全腿因此已经被挂在
    * ERB 上；点名一格只对"只声明点名腿"的语言才有意义，重复点名等于第二份台账。
    *
    * ERB-PARITY G2（2026-10-31）：格式化（整篇 + 区间）交给插件供方
@@ -91,8 +91,15 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
    * 那一把尺子）。点名这一格同时**把旧桥那两枚让开**：`kojo-format.ts` 的整篇安装器按
    * `excludeNamed` 跳过、`kojo-format-range.ts` 的区间注册整条删除（on-type 保留）——
    * 于是 ERB 每种 provider 恰好一枚，「谁在答」不再取决于注册序。
+   *
+   * LAU-DUALLEG 车 5（2026-10-31）：签名帮助交给插件供方（`@kojo/plugin-erb-lang` 的
+   * `erb-signatureHelp`，判据上提到 `@kojo/kojo-vocab/signature`——`.kojo1` 那条宿主腿
+   * 与它共用同一把尺子，宿主不再有第二份）。这一格此前是**双挂**且槽里没有认 ERB 的供方，
+   * 所以点名必须与供方同批落地：早一步点名＝静默没有签名。宿主 `kojo-signature.ts` 从此
+   * 只答 kojo1（`undefined, { excludeNamed: 'signatureHelp' }`）。触发字符 `(` / `,` 两路
+   * 相同，是语言事实但没有分歧，故不另开 descriptor 字段。
    */
-slotServices: ['references', 'hover', 'formatting'],
+slotServices: ['references', 'hover', 'formatting', 'signatureHelp'],
   // LAU-4 补全腿第三批（2026-10-31）：ERB 补全的判据全在插件 `@kojo/plugin-erb-parser`，
   // 事实（adapter 表 / 项目名录 / 宿主词表 / 偏好）由组合根经槽腿的 `completionFacts`
   // 现取并随请求递下去。声明在这里 = 收口侧不必按语言 id 分支。

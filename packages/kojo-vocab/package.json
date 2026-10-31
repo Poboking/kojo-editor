@@ -18,6 +18,7 @@
     "./types": "./src/types.ts",
     "./lexer": "./src/lexer.ts",
     "./formatter": "./src/formatter.ts",
+    "./signature": "./src/signature.ts",
     "./enter": "./src/enter.ts",
     "./engine": "./src/engine.ts",
     "./native-hover": "./src/native-hover.ts",

@@ -9,23 +9,28 @@
  * 桩 monaco 同 `kojo-definition.test.ts` 口径：只记录注册与 dispose。
  */
 
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type { KojoCallProtocol, KojoCallSlot } from '@kojo/plugin-api';
-import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
+import { slotParameterLabel } from '@kojo/plugin-api';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+// 判据（车 5 上提到的包叶）与宿主的 Monaco 翻译面分开引：本文件两组都要钉。
 import {
   SIGNATURE_LOOKBACK_LINES,
-  SIGNATURE_TRIGGER_CHARACTERS,
   describeCallSignature,
   describeErbSignature,
   findCallSite,
   findCallSiteAt,
-  installSignatureHelp,
   resolveSignature,
   resolveSignatureInText,
-  slotParameterLabel,
   splitArguments,
+} from '@kojo/kojo-vocab/signature';
+import {
+  SIGNATURE_TRIGGER_CHARACTERS,
+  installSignatureHelp,
   toMonacoSignatureHelp,
 } from '../src/monaco/kojo-signature';
 
@@ -393,13 +398,36 @@ const lineModel = (text: string) =>
   ({ getLineContent: () => text }) as unknown as Monaco.editor.ITextModel;
 const at = (column: number) => ({ lineNumber: 3, column }) as Monaco.Position;
 
+/** 源码取证用：仓库根（本文件在 `packages/app/tests/`） */
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const srcOf = (rel: string): string => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+
 describe('installSignatureHelp · 装配', () => {
-  it('ERB 与 `.kojo` 两个语言 id 各注册一枚 provider；dispose 全部回收', () => {
+  /**
+   * 车 5（LAU-DUALLEG）：这一格此前**双挂**——本枚旧桥腿与共享槽腿挂在同一枚 ERB model 上，
+   * 同一次请求问两趟，"谁在答"由注册顺序判。ERB 的签名供方进槽（`@kojo/plugin-erb-lang` 的
+   * `erb-signatureHelp`）之后 descriptor 点名 `signatureHelp`，本枚按 `excludeNamed` 让开 ERB，
+   * 于是 ERB 上恰好一枚（槽腿）、kojo1 上恰好一枚（本枚）。
+   */
+  it('只挂 kojo1：ERB 点名了 `signatureHelp`，旧桥那枚让开（一个 kind 恰一枚 provider）', () => {
     const { monaco, registered, disposed } = stubMonaco();
     const handle = installSignatureHelp(monaco, { resolve: () => null });
-    expect(registered.map((r) => r.languageId).sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(registered.map((r) => r.languageId)).toEqual([KOJO_LANGUAGE_ID]);
     handle.dispose();
-    expect(disposed.sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(disposed).toEqual([KOJO_LANGUAGE_ID]);
+  });
+
+  it('挂载形状：第三参 `undefined` + `{ excludeNamed: "signatureHelp" }`（给能力名就前功尽弃）', () => {
+    const source = srcOf('packages/app/src/monaco/kojo-signature.ts');
+    expect(source).toMatch(
+      /registerForLanguageServices\(\s*monaco,[\s\S]{0,200}?registerSignatureHelpProvider[\s\S]{0,200}?\bundefined\b,[\s\S]{0,120}?\{\s*excludeNamed:\s*'signatureHelp'\s*\}/,
+    );
+    // 判据不许留在宿主：这一枚文件里再出现调用位 / 实参切分的实现，就是第二份真源
+    expect(source).not.toMatch(/function (findCallSite|splitArguments|resolveSignatureInText)/);
+    // descriptor 必须点名（点名 ⇔ 让位，两条同批；少一条就是"静默没有签名"）
+    expect(srcOf('packages/app/src/monaco/languages.ts')).toMatch(
+      /slotServices:\s*\[[^\]]*'signatureHelp'[^\]]*\]/,
+    );
   });
 
   it('触发字符：`(` 进入调用括号、`,` 换槽（仅半角；全角 `，` 不是 Emuera 分隔符，不触发）', () => {

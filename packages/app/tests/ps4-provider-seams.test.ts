@@ -46,7 +46,7 @@ import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { LARGE_FILE_LINES, HUGE_FILE_LINES, editorOptionsForLineCount } from '../src/ui/editor-options';
 import { installErbOnTypeFormatter } from '../src/monaco/kojo-format-range';
 import { toMonacoInlayHints } from '../src/monaco/kojo-inlay-hints';
-import { resolveSignatureInText } from '../src/monaco/kojo-signature';
+import { resolveSignatureInText } from '@kojo/kojo-vocab/signature';
 import {
   SELECTION_CHAR_COUNT_MAX_LINES,
   selectionCharCountAffordable,

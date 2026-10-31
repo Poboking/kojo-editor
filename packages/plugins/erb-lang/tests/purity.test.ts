@@ -53,14 +53,16 @@ const ALLOWED_PACKAGES = new Set([
   // ERB-PARITY G2：排版判据的唯一真源是词表库那把与 `.kojo` 共用的尺子（叶子 import，不是桶；
   // 常驻解析器插件引它会进开机静态图——本插件懒装载，判据照样一份、开机图一分不涨）
   '@kojo/kojo-vocab/formatter',
+  // LAU-DUALLEG 车 5：签名判据同理——`@kojo/kojo-vocab/signature` 与 `.kojo1` 那条宿主腿共用
+  '@kojo/kojo-vocab/signature',
 ]);
 
 describe('@kojo/plugin-erb-lang 是纯插件（零 Monaco / 零 React / 零 IO / 零游戏知识）', () => {
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // request / highlight / selection-range / formatting / plugin / index
-    expect(files).toHaveLength(6);
+    // request / highlight / selection-range / formatting / signature / plugin / index
+    expect(files).toHaveLength(7);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
