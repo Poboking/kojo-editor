@@ -4,7 +4,7 @@
 |---|---|
 | 文档版本 | v1.1（设计稿；§8 的七路前置批已落 dev，逐枚落点见下行「状态」）。v1.0 → v1.1 = **LAU-0 事实修订批**：11 处读数 / 出处 / 节点名改正，§4.1 保留差集通道，§5.2 由「新造 `dialect.ts`」改为「既有 2.0 `GameAdapter` 的只读投影」，§5.3 真源改为已上线的 `detect()` 链，§8 增五枚批（LAU-0 / 1a / 2a / 3b / 6a），§9 判据改成 audit 同形态。**逐条对照见附录 A**；设计主张（§2 决策表 / §3 六纪律）未变，只增 D13。**七路交付批的落点与实测改口见 §8.1 + 附录 B（8 条）** |
 | 日期 | 2026-10-25（v1.0）· 2026-10-25（v1.1 修订，逐条带 file:line 取证） |
-| 状态 | **v1.1 交付状态（2026-10-25 七路批已落 dev）**：LAU-0 `ebf8e03c` · GATE `6ca3c4c3` · 2a `f006547c` · D1a `875b05d3` · 1a `4c1487c4` · 6a `45d18791` · SYNTAX `3a76d857`＋`87b7e26c` · FIXTURE `b9e87b2e`（交付回执在各提交信息，基线读数见 `STATE.md` §一）。设计主张仍是设计稿——未落地的批次按 §8 推进。用户 2026-10-25 已拍板：§6.1 采用方案 A（`.kojo` 让给 2.0）、断言关键字定为 `# 方言`（**词位已入表并过 wasm 棘轮，消费方已接线**——`# 方言` 由词法 / 文法 / Monarch 三面认出，解析链按 D11 只做断言：与解析结果不一致 ⇒ `core/dialect/mismatch`，不再等 LAU-D1b）。**LAU-1 / LAU-D1b 的两个前置已解**：① 契约落点由用户 **2026-10-27 裁定 = `@kojo/kojo-core`**（BOARD K2-CONTRACT 已结，不再镜像 plugin-api）；② LAU-4 仍与 **ERB-PARITY**、SDK **B4/B5** 同文件，须串行合流（§8）。已做完的是 LAU-0（＝v1.1 文档批）/ LAU-1a / LAU-2a / LAU-6a + GATE / SYNTAX / FIXTURE / D1a；**LAU-3 框架批已交付（2026-10-27，分支 `b/qoder/1027-lau-framework`）**——§6 的 id 二选一已按用户口径定案＝改名 `kojo-legacy`（插件 id / 包名不动），缺省档翻 `2.0-default`，封存层连语义分析一起停；**LAU-3b 解耦批（同分支）已落前半**：kojo1 插件族按切流阶段装配（缺省档不实例化）、ERB / kojo2 / 宿主共用词表迁至 `@kojo/kojo-vocab`、v1 转译包整体离开开机静态图。**LAU-3b 收尾批（2026-10-27，同分支）已交付**：`.kojo → .kojo1` 改名工具（内容指纹只挑 v1 写法、清单先过目、逐文件写权限闸 + 写前备份 + 只改名不改内容；只读域拒绝）与封存档首开说明（一次性台账 + 直达设置页）。**扩展名翻转（`.kojo` 让给 2.0）已随本批最终落地（2026-10-27，用户口径「现在就让」）**：路由只认扩展名——`.kojo` / `.kojo2` → 2.0，`.kojo1` → kojo1；内容指纹退居迁移与改名工具的提示面（不再参与路由/归属）；迁移是原地改写（候选恒 `.kojo`），`resolveSugarTarget` 只认封存层 `.kojo1`。**LAU-4（ERB 进槽、与 kojo2 同一条供方路径）方案未变，仍等 SDK B4/B5** |
+| 状态 | **v1.1 交付状态（2026-10-25 七路批已落 dev）**：LAU-0 `ebf8e03c` · GATE `6ca3c4c3` · 2a `f006547c` · D1a `875b05d3` · 1a `4c1487c4` · 6a `45d18791` · SYNTAX `3a76d857`＋`87b7e26c` · FIXTURE `b9e87b2e`（交付回执在各提交信息，基线读数见 `STATE.md` §一）。设计主张仍是设计稿——未落地的批次按 §8 推进。用户 2026-10-25 已拍板：§6.1 采用方案 A（`.kojo` 让给 2.0）、断言关键字定为 `# 方言`（**词位已入表并过 wasm 棘轮，消费方已接线**——`# 方言` 由词法 / 文法 / Monarch 三面认出，解析链按 D11 只做断言：与解析结果不一致 ⇒ `core/dialect/mismatch`，不再等 LAU-D1b）。**LAU-1 / LAU-D1b 的两个前置已解**：① 契约落点由用户 **2026-10-27 裁定 = `@kojo/kojo-core`**（BOARD K2-CONTRACT 已结，不再镜像 plugin-api）；② LAU-4 仍与 **ERB-PARITY**、SDK **B4/B5** 同文件，须串行合流（§8）。已做完的是 LAU-0（＝v1.1 文档批）/ LAU-1a / LAU-2a / LAU-6a + GATE / SYNTAX / FIXTURE / D1a；**LAU-3 框架批已交付（2026-10-27，分支 `b/qoder/1027-lau-framework`）**——§6 的 id 二选一已按用户口径定案＝改名 `kojo-legacy`（插件 id / 包名不动），缺省档翻 `2.0-default`，封存层连语义分析一起停；**LAU-3b 解耦批（同分支）已落前半**：kojo1 插件族按切流阶段装配（缺省档不实例化）、ERB / kojo2 / 宿主共用词表迁至 `@kojo/kojo-vocab`、v1 转译包整体离开开机静态图。**LAU-3b 收尾批（2026-10-27，同分支）已交付**：`.kojo → .kojo1` 改名工具（内容指纹只挑 v1 写法、清单先过目、逐文件写权限闸 + 写前备份 + 只改名不改内容；只读域拒绝）与封存档首开说明（一次性台账 + 直达设置页）。**扩展名翻转（`.kojo` 让给 2.0）已随本批最终落地（2026-10-27，用户口径「现在就让」）**：路由只认扩展名——`.kojo` / `.kojo2` → 2.0，`.kojo1` → kojo1；内容指纹退居迁移与改名工具的提示面（不再参与路由/归属）；迁移是原地改写（候选恒 `.kojo`），`resolveSugarTarget` 只认封存层 `.kojo1`。**LAU-4 九腿已落（定义 / 改名 / 补全全 facet / 高亮 / 扩选 / 调用层级 / implementation / 查引用 / 悬停），SDK B4/B5 已落、B5b 车 1–6 已落；余 ERB 排版注册面（G2）与 LAU-D4 方言包** |
 | 范围 | ① ERB / kojo v1（封存）/ kojo2 三条并行结构栈收成一套：**一份协议、一份角色表、一个槽位契约**；② 多 era 适配收进**方言层**（§5），语法不分叉 |
 | 前置 | `KOJO-2.0-LANGUAGE-SPEC.md` §0.2（单一模式）/ §5.3 / §12.1（旧拼写 error+迁移）/ §10（adapter 契约，**§10.1 十五格就是本方案的事实面**）；**BOARD 在办批次**：`K2-CONTRACT`（契约落点待 D0 裁决）、`ERB-PARITY`（同文件，串行）、`POS-UTIL`（坐标换算收口，§4.6 的 `includedRanges` 归它管） |
 | 不做 | 不改 2.0 语法；不动 `EDITOR_SEMANTIC_TOKEN_TYPES`；不新增 workspace 包；**不为任何 era 分叉语法** |
@@ -70,8 +70,8 @@ LAU 就是把它们逐条剥出去。
    v1 是一条 `parse`（`client.ts:248`）推四条回复（`engine.ts:724,731,736,745`）。
    ⇒ 统一方向应是**kojo2 学 v1**（一条请求、四面回复），而不是反过来把 v1 的差集通道拆掉（§4.1）。
 
-`kojo2-*.ts` 在 `packages/app/src` 下共 **42 个文件 / 19,383 行**（`monaco/` 21 个 7,634 行、
-`ui/` 21 个 11,749 行），另有 4 个 `.tsx` 共 1,853 行。B3c–B3j 已把补全 / 悬停 / 签名 / 格式化 /
+`kojo2-*.ts` 在 `packages/app/src` 下共 **35 个文件 / 16,622 行**（`monaco/` 15 个 4,784 行、
+`ui/` 20 个 11,838 行），另有 4 个 `.tsx` 共 1,853 行。B3c–B3j 已把补全 / 悬停 / 签名 / 格式化 /
 引用 / 改名 / 同符号高亮 / 扩选 / 行上注解（codeLens）/ 折叠区间 / 一键迁移 code action 搬进
 `@kojo/kojo-lang` 包与插件，B3i 把缩进 / 回车判据搬进
 `@kojo/kojo-lang/indent`（宿主 `monaco/kojo2-indent.ts` 只剩 on-type 装配与 Monaco 翻译），
@@ -573,9 +573,12 @@ code action 的判据也进包；B3i 起缩进 / 回车判据住 `@kojo/kojo-lan
 **B4（`ui.monaco.language`：Monarch / 主题 / 缩进 / 回车进插件）与 B5 已按两段推进**：B4 done
 （`7f02ff73` / `f0be5efb`，变基后 `5f70b9ae`）——2.0 的 Monarch / 语言配置 / 主题声明进 `@kojo/kojo-lang`，
 宿主只剩唯一落点 `monaco/monaco-language-surface.ts`；B5a done（`9fd1e700` / `d0761751` / `a221954d`）
-——`@kojo/kojo-sdk` 立包 + 角色表搬家 + conformance 三列共享 golden；**B5b（删宿主直装残留）仍阻塞
-于 B3 余项**：宿主直装语言面已收窄（B3c–B3j 后未逐文件重数）、装配点 13 条 `installKojo2*` 调用
-（逐条见 `d0761751` 的回执表；B3g–B3j 后其中四条只剩装配与翻译）。
+——`@kojo/kojo-sdk` 立包 + 角色表搬家 + conformance 三列共享 golden；**B5b（删宿主直装残留）车 1–6
+已落（2026-10-31，`27ec2388` / `f9c9141a` / `e5210160`）**：新建槽腿工厂
+`monaco/slot-service-providers.ts`，删 9 枚 `installKojo2*` 安装器（补全 / 悬停 / 格式化两腿 / 签名 /
+引用 / 改名 / 高亮 / 扩选 / codeLens / codeAction），装配点剩 5 条（semantic 捕获 / indent on-type /
+folds 预取 / problem-wiring / cutover）；C 类 8 文件已逐条定性，其中 `call-hierarchy` 与
+`dialect-lint` 两枚纯判据已进 `@kojo/kojo-lang`（2026-10-31），余 6 枚为宿主事实 / 编排 / UI 接线。
 今天这 11 枚是 `registerForLanguageServices`（`register-dialects.ts:32-53`）按 descriptor 的
 `languageServices: true` 或点名的 `slotServices` 铺下去的**通用** provider；ERB 在此之外还有一批
 自己的宿主内 provider（`monaco/erb-*.ts` 共 26 个文件：补全 12 个分面 / 重命名 / 调用层级 / 实现 /
@@ -1299,7 +1302,7 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 |---|---|---|---|---|
 | 1 | A | ERB Monarch「6 个 token 名」 | **15 个**（6 对象式 + 9 简写式） | `erb-language.ts:129,132,134,136,138,150-284` |
 | 2 | A | kojo2 首帧「4 条请求（含 `parse`）」 | **3 条**（`parse` 宿主无生产调用方） | `kojo2-semantic.ts:348`、`kojo2-folding.ts:180`、`kojo2-indent.ts:656`；`kojo2-worker-runtime.ts:160` |
-| 3 | A | `kojo2-*.ts`「25 文件 / 31,599 行」 | **54 文件 / 28,755 行**（另 4 个 `.tsx` 1,770 行） | `find packages/app/src -name 'kojo2-*.ts'` |
+| 3 | A | `kojo2-*.ts`「25 文件 / 31,599 行」 | **54 文件 / 28,755 行**（另 4 个 `.tsx` 1,770 行；**2026-10-31 复测 = 35 文件 / 16,622 行、tsx 4 / 1,853**，B5b 车 1–6 + C 类两车后） | `find packages/app/src -name 'kojo2-*.ts'` |
 | 4 | A | ERB wasm「0.98 MB」与「1.03 MB」两处 | 一律给字节：**1,030,545 B**（=0.98 MiB=1.03 MB），kojo 821,724 B、kojo2 47,116 B | `packages/*-syntax-tree/*.wasm` |
 | 5 | A | v1「一次超时即整档判死」 | 分两档：**ready 前**整档 `dead`（须切设置项恢复）、**ready 后**只死当前文档那一面 | `client.ts:72,238,318-332,351-363`、`providers.ts:370-375,507-511` |
 | 6 | A | `providers.ts` 里「那处」`if (ERB)` | **两处**（onSyntax / onSyntaxClear）；另有九处按具体语言 id 分支 | `tree-sitter/providers.ts:378,385`；清单见 §3-R1 |

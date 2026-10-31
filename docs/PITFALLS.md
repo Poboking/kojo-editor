@@ -558,3 +558,5 @@
    实测：稳态 **+4.0 MB**（比不改还差），堆快照里 `array (object elements)` 反涨 **9.2 MB**，而 `object Object` 同时少了 8.9 MB——一涨一跌正好抵掉，只看总量会以为"列式没收益"。
    修法：把"喂数 + 压平"拆成**独立函数**（`collectFunctionFacts`），只返回最终存储（TypedArray + 三个必须保引用的普通数组）；返回后那层作用域整层不可达。同一份代码：+4.0 → **−11.1 MB**。
    ⇒ 判据不是"变量在不在返回的对象里"，而是"**它和闭包是不是同一个作用域**"。写完一段闭包工厂后拿 `--snapshot-after` + `heap-aggregate --top` 对一眼 `array (object elements)` 的个数：个数只多出你新增的那几枚数组、字节数却涨一大截，就是这条。
+
+288. **只读缓冲上 `editor.action.triggerSuggest` 会被 Monaco 前置条件（`writable`）直接挡掉，动作"成功"也不弹补全**（2026-10-31 实机验 ERB 补全踩到）：`suggestController.js` 的 `TriggerSuggestAction.precondition = EditorContextKeys.writable && hasCompletionItemProvider && !Context.Visible`，游戏目录里默认只读的 ERB / kojo2 因此在 `debug-cli` 的 `editor.suggestAt()` 下恒返回 `{items:[],count:0}`，看起来像"补全 provider 没接上"。**判 writable 的探针** = `editor.actions().some(a=>a.id==='editor.action.indentLines')`（该动作前置条件只有 `writable`）。要验补全先解锁：`debug-cli key x` 触发 `onDidAttemptReadOnlyEdit` → 弹「文件只读保护」→ 点 `.modal .ghost`（仍要直接编辑）；`open-project --writable` 只批内核写域，**不解除每文件只读门**（`directEditable` 要 `isDirectMode()`）。另：`debug-cli type` 对 Monaco 0.57 的 `DIV.native-edit-context` 会拒（`--mode keys` 同），打真键用 `debug-cli key x`。

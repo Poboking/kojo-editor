@@ -1,7 +1,10 @@
 # 新增一个方言（DIALECT-AUTHORING）
 
-> 判据：**新增一个方言 = 新增一个包 + 清单一行**。宿主（`scheduler` / `bootstrap` / Monaco 接线）、
-> kernel、`kojo-core` 都不改；conformance 也不改（`--adapter <id>` 从适配器清单派生列）。
+> 判据：**新增一个方言 = 新增一个包 + 清单一行**。宿主（`scheduler` / `bootstrap`）、kernel、
+> `kojo-core` 都不改；conformance 也不改（`--adapter <id>` 从适配器清单派生列）。
+> **但 Monaco 侧仍有一处手写散点**：新扩展名要能被认出，必须在
+> `packages/app/src/monaco/languages.ts` 加一枚 `LanguageDescriptor`（id / `matchesPath` /
+> `register` / `capabilities` / `slotServices`，见 §4）；生成器**不代劳**这一处。
 > 本文只讲操作与边界，契约细节见 `docs/ARCH-language-unification.md` §5 与 `packages/kojo-sdk/src/`。
 
 ## 五步
@@ -52,9 +55,12 @@ node tools/new-dialect.mjs --id mygame --title "My Game" --ext kojo2
 ### 4. 契约面（写方言只需要认识这三类）
 
 - **游戏侧**：`GameAdapter`（`@kojo/kojo-core`，SDK 以 `@kojo/kojo-sdk` 的 type 导出面再出口）——
-  十五格事实面，见 `packages/kojo-core/src/adapter.ts`；
+  十七格事实面（含 additive `carriers?`），见 `packages/kojo-core/src/adapter.ts`；
 - **编辑器侧**：`ui.monaco.language` 槽（`packages/plugin-api/src/monaco-language.ts`）——
-  语言 id / 扩展名 / 词法 / 主题 / 能力声明；要语义高亮再加 `ui.editor.languageService`；
+  **语言 id / Monarch / 语言配置 / 主题** 四项（扩展名判定与能力声明不在这个槽：前者是宿主
+  descriptor 的 `matchesPath`，后者是 descriptor 的 `capabilities` / `contextFaces`）；要语义高亮
+  再加 `ui.editor.languageService`；补全要宿主事实时在 descriptor 上点名 `completionFacts`
+  （两种挂载写法同效：`languageServices: true` 旧桥 / `slotServices`（或 `services.slot`）逐格点名）；
 - **共享常量**：`SEMANTIC_ROLES` / `ROLE`（角色表）、`STRUCTURE_PROTOCOL_VERSION`（结构 worker 协议 v4）、
   结构协议类型（`@kojo/kojo-sdk/structure-protocol`）。
 - 纪律：方言**只提供数据**；语法 / 折叠 / 缩进 / 残缺归 tree-sitter，方言不进 wasm、不进 worker
