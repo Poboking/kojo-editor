@@ -20,23 +20,52 @@ import type { StructureLanguageRuntime } from '../src/monaco/tree-sitter/structu
 const harness = vi.hoisted(() => ({
   instances: [] as Array<{
     readonly runtime: { grammarWasmUrl: string };
+    readonly options: {
+      onSyntax?: (model: unknown, faults: readonly unknown[], truncated: boolean) => void;
+      onSyntaxClear?: (model: unknown) => void;
+    };
     readonly state: string;
     readonly disposed: boolean;
     fatal(message?: string): void;
     readonly foldsCalls: number;
   }>,
+  /** DIAG-GATE-1033 接线取证：通用上屏器（桩）收到的每一次 show/clear */
+  presenterShows: [] as Array<{ model: unknown; languageId: string }>,
+  presenterClears: [] as unknown[],
+  ownPresented: 0,
+}));
+
+// 通用上屏器换成桩：本档只钉「providers 交下去的语言 id = 本叠层 descriptor.id」这一枚接线，
+// 上屏器自身的去重/撤下行为由 `tree-sitter-diagnostics.test.ts` 逐条钉着。
+vi.mock('../src/monaco/tree-sitter/syntax-decorations', () => ({
+  DECORATOR_MARKER_OWNER: 'kojo-decorators',
+  STRUCTURE_SYNTAX_OWNER: 'kojo-structure-syntax',
+  createStructureSyntaxPresenter: () => ({
+    show: (model: unknown, _faults: readonly unknown[], _truncated: boolean, languageId: string) => {
+      harness.presenterShows.push({ model, languageId });
+    },
+    clear: (model: unknown) => {
+      harness.presenterClears.push(model);
+    },
+    clearAll: () => undefined,
+    dispose: () => undefined,
+  }),
 }));
 
 vi.mock('../src/monaco/tree-sitter/client', () => {
   class StubStructureClient {
     readonly runtime: { grammarWasmUrl: string };
-    private readonly notifyFatal: (message: string) => void;
+    readonly options: {
+      onFatal?: (message: string) => void;
+      onSyntax?: (model: unknown, faults: readonly unknown[], truncated: boolean) => void;
+      onSyntaxClear?: (model: unknown) => void;
+    };
     private dead = false;
     disposed = false;
     foldsCalls = 0;
     constructor(options: { runtime: { grammarWasmUrl: string }; onFatal?: (message: string) => void }) {
       this.runtime = options.runtime;
-      this.notifyFatal = options.onFatal ?? (() => undefined);
+      this.options = options;
       harness.instances.push(this as unknown as (typeof harness)['instances'][number]);
     }
     get state(): string {
@@ -57,7 +86,7 @@ vi.mock('../src/monaco/tree-sitter/client', () => {
     }
     fatal(message = 'wasm 炸了'): void {
       this.dead = true;
-      this.notifyFatal(message);
+      (this.options.onFatal ?? (() => undefined))(message);
     }
   }
   return { StructureClient: StubStructureClient, STRUCTURE_REQUEST_TIMEOUT_MS: 4_000 };
@@ -150,6 +179,9 @@ describe('installStructureOverlay · 逐语言装配与隔离', () => {
 
   beforeEach(() => {
     harness.instances.length = 0;
+    harness.presenterShows.length = 0;
+    harness.presenterClears.length = 0;
+    harness.ownPresented = 0;
     resetStructureDegradationLedger();
     notices = [];
     unsubscribe = onStructureDegradation((notice) =>
@@ -247,5 +279,40 @@ describe('installStructureOverlay · 逐语言装配与隔离', () => {
     expect(structureOverlayLanguageStates()).toEqual({ 'lang-b': 'ready' });
     expect(providers.folding.has('lang-missing')).toBe(false);
     expect(notices.some((line) => line.includes('资源装载失败'))).toBe(true);
+  });
+
+  it('结构残缺接线（DIAG-GATE-1033）：通用上屏只接本叠层自己的 descriptor.id；运行时自带 presentSyntax 的一枚都不碰通用器', async () => {
+    const { monaco } = fakeMonaco();
+    const ownSyntaxRuntime: StructureLanguageRuntime = {
+      ...fakeRuntime('b', false),
+      presentSyntax: ({ model }) => {
+        harness.ownPresented += 1;
+        void model;
+      },
+      clearSyntax: () => undefined,
+    };
+    installStructureOverlay(monaco, [
+      descriptor('lang-a', fakeRuntime('a', false)), // 不声明 presentSyntax ⇒ 走通用上屏器（今天只有 `.kojo` 这条腿）
+      descriptor('lang-b', ownSyntaxRuntime), // ERB 的形状：上屏方式由运行时自己声明
+    ]);
+    await flush();
+    expect(harness.instances).toHaveLength(2);
+    const [clientA, clientB] = harness.instances;
+    // 残缺到货 ⇒ providers 交下去的语言 id 就是这条叠层自己的（宿主不认识任何具体语言名）；
+    // 语言身份过滤在通用上屏器里做（改判据形态的同结果钉在 `tree-sitter-diagnostics.test.ts`）
+    clientA!.options.onSyntax!(fakeModel('lang-a'), [], false);
+    expect(harness.presenterShows).toHaveLength(1);
+    expect(harness.presenterShows[0]!.languageId).toBe('lang-a');
+    // 撤下走通用上屏器的 clear
+    clientA!.options.onSyntaxClear!(fakeModel('lang-a'));
+    expect(harness.presenterClears).toHaveLength(1);
+    // 声明了 presentSyntax 的运行时 ⇒ 通用上屏器一枚都不接（ERB 的文案路不被串台）
+    harness.presenterShows.length = 0;
+    harness.presenterClears.length = 0;
+    clientB!.options.onSyntax!(fakeModel('lang-b'), [], false);
+    clientB!.options.onSyntaxClear!(fakeModel('lang-b'));
+    expect(harness.ownPresented).toBe(1);
+    expect(harness.presenterShows).toHaveLength(0);
+    expect(harness.presenterClears).toHaveLength(0);
   });
 });

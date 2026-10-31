@@ -524,7 +524,7 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
     const { monaco, published } = fakeMonaco();
     presenter = createStructureSyntaxPresenter(monaco);
     const model = fakeModel(lines);
-    presenter.show(model, [fault({ row: 4, column: 4, endColumn: 12, kind: 'unterminated-string' })], false);
+    presenter.show(model, [fault({ row: 4, column: 4, endColumn: 12, kind: 'unterminated-string' })], false, KOJO_LANGUAGE_ID);
     expect(published).toHaveLength(1);
     expect(published[0]?.owner).toBe(STRUCTURE_SYNTAX_OWNER);
     const marker = markerOf(published);
@@ -542,7 +542,7 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
       ...fakeModel(lines),
       uri: { scheme: 'inmemory', authority: 'sugar', toString: () => 'inmemory://sugar/g/事件.ERB' },
     } as unknown as Monaco.editor.ITextModel;
-    presenter.show(model, [fault({ row: 4, kind: 'unterminated-string' })], false);
+    presenter.show(model, [fault({ row: 4, kind: 'unterminated-string' })], false, KOJO_LANGUAGE_ID);
     expect(published, '预览面被结构诊断画了红线（正常 ERB 会被误报成错）').toHaveLength(0);
   });
 
@@ -551,7 +551,7 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
       { startLineNumber: 5, severity: 8, message: '', owner: DECORATOR_MARKER_OWNER } as unknown as Monaco.editor.IMarker,
     ]);
     presenter = createStructureSyntaxPresenter(monaco);
-    presenter.show(fakeModel(lines), [fault({ row: 4, kind: 'unterminated-string' })], false);
+    presenter.show(fakeModel(lines), [fault({ row: 4, kind: 'unterminated-string' })], false, KOJO_LANGUAGE_ID);
     expect(published).toHaveLength(1);
     expect(published[0]?.owner).toBe(STRUCTURE_SYNTAX_OWNER);
     expect(published[0]?.markers).toEqual([]);
@@ -571,7 +571,7 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
     const { monaco, published } = fakeMonaco(decorated);
     presenter = createStructureSyntaxPresenter(monaco);
     // 结构层这一条落在第 5 行 [11,12)：与插件 [1,6) 不相交 ⇒ 不同问题，两条都该在
-    presenter.show(fakeModel(lines), [fault({ row: 4, column: 10, endColumn: 11, kind: 'unclosed-block', blockHeadText: '循环：', expectedToken: 'loop_end' })], false);
+    presenter.show(fakeModel(lines), [fault({ row: 4, column: 10, endColumn: 11, kind: 'unclosed-block', blockHeadText: '循环：', expectedToken: 'loop_end' })], false, KOJO_LANGUAGE_ID);
     expect(published.at(-1)?.markers).toHaveLength(1);
     expect(published.at(-1)?.markers[0]?.startColumn).toBe(11);
     // 插件改成盖住整行 ⇒ 同一区间同一严重级，只留插件侧
@@ -583,7 +583,7 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
       message: '插件侧',
       owner: DECORATOR_MARKER_OWNER,
     } as unknown as Monaco.editor.IMarker;
-    presenter.show(fakeModel(lines), [fault({ row: 4, column: 10, endColumn: 11, kind: 'unclosed-block', blockHeadText: '循环：', expectedToken: 'loop_end' })], false);
+    presenter.show(fakeModel(lines), [fault({ row: 4, column: 10, endColumn: 11, kind: 'unclosed-block', blockHeadText: '循环：', expectedToken: 'loop_end' })], false, KOJO_LANGUAGE_ID);
     expect(published.at(-1)?.markers).toEqual([]);
   });
 
@@ -591,7 +591,7 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
     const decorator: Monaco.editor.IMarker[] = [];
     const { monaco, published, fireMarkerChange } = fakeMonaco(decorator);
     presenter = createStructureSyntaxPresenter(monaco);
-    presenter.show(fakeModel(lines), [fault({ row: 4, kind: 'unterminated-string' })], false);
+    presenter.show(fakeModel(lines), [fault({ row: 4, kind: 'unterminated-string' })], false, KOJO_LANGUAGE_ID);
     expect(published[0]?.markers).toHaveLength(1);
     // 转译器随后在同一行发了 error（装饰通道是异步的，谁先到都可能）
     decorator.push({ startLineNumber: 5, severity: 8, message: '', owner: DECORATOR_MARKER_OWNER } as unknown as Monaco.editor.IMarker);
@@ -604,7 +604,7 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
   it('重算没变 ⇒ 不再发第二次（自激防护：marker 事件不能变成循环）', () => {
     const { monaco, published, fireMarkerChange } = fakeMonaco();
     presenter = createStructureSyntaxPresenter(monaco);
-    presenter.show(fakeModel(lines), [fault({ row: 4, kind: 'unterminated-string' })], false);
+    presenter.show(fakeModel(lines), [fault({ row: 4, kind: 'unterminated-string' })], false, KOJO_LANGUAGE_ID);
     const before = published.length;
     fireMarkerChange();
     fireMarkerChange();
@@ -615,26 +615,35 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
     const { monaco, published } = fakeMonaco();
     presenter = createStructureSyntaxPresenter(monaco);
     const model = fakeModel(lines);
-    presenter.show(model, [fault({ row: 4, kind: 'unterminated-string' })], false);
+    presenter.show(model, [fault({ row: 4, kind: 'unterminated-string' })], false, KOJO_LANGUAGE_ID);
     presenter.clear(model);
     expect(published.at(-1)?.markers).toEqual([]);
-    presenter.show(model, [fault({ row: 2, kind: 'unclosed-block', blockHeadText: '循环：', expectedToken: 'loop_end' })], false);
+    presenter.show(model, [fault({ row: 2, kind: 'unclosed-block', blockHeadText: '循环：', expectedToken: 'loop_end' })], false, KOJO_LANGUAGE_ID);
     presenter.clearAll();
     expect(published.at(-1)?.markers).toEqual([]);
   });
 
-  it('非 .kojo 的 model：一条都不画（本层只管这份源）', () => {
+  it('非本叠层语言的 model：一条都不画（DIAG-GATE-1033 改判据形态后的同结果钉：交下去的语言 id 与 model 语言不符 ⇒ 拒）', () => {
     const { monaco, published } = fakeMonaco();
     presenter = createStructureSyntaxPresenter(monaco);
     const erb = fakeModel(lines, 'erb');
-    presenter.show(erb, [fault()], false);
+    presenter.show(erb, [fault()], false, KOJO_LANGUAGE_ID);
     expect(published).toHaveLength(0);
+  });
+
+  it('判性是身份比对而非 `.kojo` 白名单：model 语言 = 交下来的叠层语言就画（新增叠层零宿主改动的形状）', () => {
+    const { monaco, published } = fakeMonaco();
+    presenter = createStructureSyntaxPresenter(monaco);
+    const own = fakeModel(lines, 'brand-new-lang');
+    presenter.show(own, [fault({ row: 4, kind: 'unterminated-string' })], false, 'brand-new-lang');
+    expect(published).toHaveLength(1);
+    expect(markerOf(published).code).toBe('kojo.unterminated-string');
   });
 
   it('列越界被夹住（残缺来自另一条线程，不许假定它算准了列）', () => {
     const { monaco, published } = fakeMonaco();
     presenter = createStructureSyntaxPresenter(monaco);
-    presenter.show(fakeModel(lines), [fault({ row: 0, column: 9_999, endColumn: 99_999 })], false);
+    presenter.show(fakeModel(lines), [fault({ row: 0, column: 9_999, endColumn: 99_999 })], false, KOJO_LANGUAGE_ID);
     const marker = markerOf(published);
     expect(marker.startColumn).toBeLessThanOrEqual(marker.endColumn);
     expect(marker.endColumn).toBeLessThanOrEqual((lines[0]?.length ?? 0) + 2);
@@ -644,9 +653,9 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
     const { monaco, published } = fakeMonaco();
     presenter = createStructureSyntaxPresenter(monaco);
     const model = fakeModel(lines);
-    expect(() => presenter?.show(model, [fault({ row: Number.NaN }), fault({ row: -1 })], false)).not.toThrow();
+    expect(() => presenter?.show(model, [fault({ row: Number.NaN }), fault({ row: -1 })], false, KOJO_LANGUAGE_ID)).not.toThrow();
     expect(published.at(-1)?.markers).toEqual([]);
-    expect(() => presenter?.show(model, [], false)).not.toThrow();
+    expect(() => presenter?.show(model, [], false, KOJO_LANGUAGE_ID)).not.toThrow();
   });
 
   it('截断只说一次（台账去重；每解一次刷屏 = 与静默同罪）', () => {
@@ -655,8 +664,8 @@ describe('上屏器：挂自己的 owner、按转译器那一路去过重、撤�
     presenter = createStructureSyntaxPresenter(monaco);
     const model = fakeModel(lines);
     const many = Array.from({ length: 3 }, (_unused, i) => fault({ row: i, kind: 'unterminated-string' }));
-    presenter.show(model, many, true);
-    presenter.show(model, many, true);
+    presenter.show(model, many, true, KOJO_LANGUAGE_ID);
+    presenter.show(model, many, true, KOJO_LANGUAGE_ID);
     const structureWarns = warned(vi.mocked(console.warn)).filter((line) => line.includes('structure'));
     expect(structureWarns).toHaveLength(1);
   });

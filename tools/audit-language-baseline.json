@@ -15,7 +15,7 @@
       }
     },
     "M2(语言id分支)": {
-      "total": 125,
+      "total": 123,
       "files": {
         "packages/app/src/monaco/erb-callhierarchy-provider.ts": 2,
         "packages/app/src/monaco/erb-completion-members.ts": 2,
@@ -40,7 +40,6 @@
         "packages/app/src/monaco/languages.ts": 10,
         "packages/app/src/monaco/suggest-context-trigger.ts": 9,
         "packages/app/src/monaco/tree-sitter/providers.ts": 2,
-        "packages/app/src/monaco/tree-sitter/syntax-decorations.ts": 2,
         "packages/app/src/monaco/xml-language.ts": 5,
         "packages/app/src/ui/CallHierarchyOverlay.tsx": 3,
         "packages/app/src/ui/capability-matrix-view.tsx": 4,

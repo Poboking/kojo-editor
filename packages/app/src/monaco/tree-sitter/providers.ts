@@ -458,12 +458,17 @@ function startLanguage(
     // 结构残缺到货 → 行级波浪线。**上屏方式由运行时自己声明**（LAU-3）：ERB 走它自己的
     // `erb-diagnostics.ts`（文案 / 码名 / `[SKIPSTART]` 配对判据），`.kojo` 走通用上屏器
     // `syntax-decorations.ts`；宿主这里零语言 id（原先那两处 `if (languageId === ERB)` 已删）。
+    // DIAG-GATE-1033（2026-10-31）：通用上屏过去在自己内部按 `.kojo` 语言 id 过滤 model
+    // （`audit-language` M2 的两行命中），现改由本叠层把**自己的 `descriptor.id`** 交下去——
+    // 判据同一枚（model 语言必须就是这条叠层的语言），形态从"语言白名单"变成"身份比对"，
+    // 今天唯一走这一路的 `.kojo` 结果逐字不变（取证见 `tests/tree-sitter-diagnostics.test.ts`
+    // 与 `tests/tree-sitter-multilanguage.test.ts` 的接线档）。
     onSyntax: (model, faults, truncated) => {
       if (runtime.presentSyntax) {
         runtime.presentSyntax({ monaco, model, faults, truncated });
         return;
       }
-      syntax?.show(model, faults, truncated);
+      syntax?.show(model, faults, truncated, languageId);
     },
     onSyntaxClear: (model) => {
       if (runtime.clearSyntax) {
