@@ -567,6 +567,125 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
   });
 });
 
+/* ============================== DOUBLE-LEG-1032B：定义 / 实现两格（恰一枚 + 不收敛留账） ============================== */
+
+/**
+ * ERB 的 `definition`（F12）与 `implementation`（Ctrl+F12）两格的「谁在答」台账
+ * （LAU-DUALLEG 第二车，2026-10-31）。形状照第一车那一组（`DOUBLE-LEG-1032`，提交 `1006817d`，
+ * 尚在 `origin/b/agent/1032-double-leg` 未并入 dev 尖端）：点名为唯一台账 / 安装器形状 /
+ * 槽腿表 = "恰一枚"的另一半 / 未让位 kind 逐字留账——**同款形状，判据不另开一份**，
+ * 两车各钉自己的 kind，并入时两组并列共存。
+ *
+ * **这两格今天不双挂**（本车第一步逐格数出来的）：旧桥 `languageServices: true` 铺的是
+ * **共享槽腿表**那十条腿（`slot-service-providers.ts` 的 `SLOT_SERVICE_LEGS`），而表里
+ * **没有** `definition` / `implementation` ⇒ 全仓 src 里这两种 kind 各只有**一处** Monaco
+ * 注册点（`monaco/kojo-definition.ts` / `monaco/erb-implementation.ts`），装配点各调**一次**
+ * 安装器。既然一枚 model 上只有一枚同种 provider，"同一次请求问两趟、谁在答由注册顺序裁决"
+ * （Monaco 0.57：同分后注册排前）在这两格**不成立** ⇒ 没有"让位"可收。
+ *
+ * **而且不许让位**（第三、四枚用例钉的就是这件事）：`excludeNamed` 的前提是"槽腿表里有一枚
+ * 同 kind 的腿接手"。表里没有 ⇒ 宿主腿一让，ERB 的 F12、kojo2 的 F12、ERB 的 Ctrl+F12 全部
+ * **静默没有**（kojo2 不声明旧桥，descriptor 点名是它唯一的挂载通道；第三参写成 `undefined`
+ * 同样挂不上——这正是本系列"第三参必须 undefined"那条坑的**反向**形状，两枚用例各钉一侧）。
+ *
+ * **真要收敛这一格的前置条件**（留账，不是 TODO 的措辞）：先在工厂补
+ * `legOf('definition' | 'implementation', …)`，同批把四类**宿主事实**接住——
+ * ① `registerEditorOpener`（全进程只认最后一位注册者，只许存在一枚）；
+ * ② `editor.revealLocation` 事件通道（未开标签的兜底腿）；
+ * ③ Peek 租约 + `pathForUri` 反查（已开 / 已关文件的读文通道）；
+ * ④ `clampRevealPosition` 与投影面位点换算（`erb-dim-navigation.ts` 的 `surfaceRequestPointOf`）。
+ * 那四类只有宿主持有：不许当判据搬进插件，也不许因为搬不动就把功能丢掉。
+ *
+ * 供方覆盖那一侧的证据不在这里重复：`language-slot-conformance.test.ts` 的台账钉
+ * "implementation 只服务 ERB、kojo2 是无人认领"；ERB 两条 kind 由同一枚
+ * `provideErbDefinition` 作答（落点逐字同序）钉在 `erb-definition-slot.test.ts`；
+ * "取数只走 `resolveImplementation`"钉在 `erb-implementation.test.ts`。
+ */
+describe('DOUBLE-LEG-1032B：ERB 定义 / 实现两格——各恰一枚，且这两格不许让位', () => {
+  /** kind →（宿主腿文件, Monaco 注册 API, 装配点安装器） */
+  const SINGLE_LEGS: readonly (readonly [string, string, string, string])[] = [
+    ['definition', 'monaco/kojo-definition.ts', 'registerDefinitionProvider', 'installDefinitionProvider'],
+    ['implementation', 'monaco/erb-implementation.ts', 'registerImplementationProvider', 'installImplementationProvider'],
+  ];
+
+  it('全仓 src 里这两种 kind 各只有**一处**注册点（第二枚同种 provider 一出现，"谁在答"就又取决于注册序）', () => {
+    for (const [kind, rel, api] of SINGLE_LEGS) {
+      const hits = SOURCE_FILES.filter((file) => file.text.includes(`.${api}(`));
+      expect(hits.map((file) => file.rel), `${kind} 的 ${api} 注册点不止一枚文件（双挂回来了）`).toEqual([rel]);
+      const occurrences = sourceOf(rel).text.split(`.${api}(`).length - 1;
+      expect(occurrences, `${rel} 里 ${api} 调了 ${occurrences} 次：一条 kind 挂了两枚 provider`).toBe(1);
+    }
+  });
+
+  it('装配点对这两格各只调**一次**安装器（第二次调用 = 同一枚 model 上的第二枚同种 provider）', () => {
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    for (const [kind, , , installer] of SINGLE_LEGS) {
+      const calls = host.split(`${installer}(`).length - 1;
+      expect(calls, `${GLOBAL_PROVIDERS} 里 ${installer}（${kind}）被调了 ${calls} 次`).toBe(1);
+    }
+  });
+
+  it('两枚宿主腿的收口**第三参必须是能力名**（写成 undefined 就摘掉 kojo2：它不声明旧桥，点名是它唯一的挂载通道）', () => {
+    for (const [kind, rel, api] of SINGLE_LEGS) {
+      const text = sourceOf(rel).text;
+      expect(
+        text,
+        `${rel} 的 registerForLanguageServices(…${api}…) 没把 '${kind}' 作为第三参交出去`,
+      ).toMatch(
+        new RegExp(
+          `registerForLanguageServices\\([\\s\\S]{0,400}?${api}\\(id,[\\s\\S]{0,300}?'${kind}',?\\s*\\)`,
+        ),
+      );
+    }
+  });
+
+  it('槽腿表没有这两枚腿 ⇒ 让位 = 静默没有：两枚宿主腿都不许出现 excludeNamed', () => {
+    const factory = sourceOf('monaco/slot-service-providers.ts').text;
+    for (const [kind, rel, api] of SINGLE_LEGS) {
+      expect(
+        factory,
+        `槽腿表新增了 legOf('${kind}', …)：收敛这一格要同批改本组判据，并把上面留账的四类宿主事实接住`,
+      ).not.toMatch(tableEntryPattern(kind, api));
+      expect(
+        sourceOf(rel).text,
+        `${rel} 不该按 excludeNamed 让位（没有腿接手，让了就是静默没有）`,
+      ).not.toMatch(/excludeNamed/);
+    }
+  });
+
+  it('不收敛的理由逐字留账：四类宿主事实都挂在这两枚宿主腿上（搬不动就不收，也不许因搬不动丢功能）', () => {
+    const definition = sourceOf('monaco/kojo-definition.ts').text;
+    expect(definition).toMatch(/registerEditorOpener/); // ① opener 全进程只此一枚（实现腿复用同一条通道）
+    expect(definition).toMatch(/clampRevealPosition/); // ④ reveal 位置换算
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    expect(host).toMatch(/'editor\.revealLocation'/); // ② 未开标签的事件通道
+    expect(host).toMatch(/pathForUri: pathForPeekUri/); // ③ 已开标签的 URI ↔ 宿主路径反查
+    expect(host).toMatch(/peekTarget: \(path\) => peekLeasesOf\(\)\.peek\(path\)/); // ③ Peek 租约
+    expect(sourceOf('monaco/erb-dim-navigation.ts').text).toMatch(/export function surfaceRequestPointOf/); // ④ 投影位点换算
+  });
+
+  it('ERB 不点名这两格是有代价账的：项目快照按 descriptor 点名取，点名 = 每次 F12 先付一份快照', () => {
+    const host = sourceOf(GLOBAL_PROVIDERS).text;
+    // `nameLegProjectSnapshotOf` 的闸：只有 descriptor 点名了这条 kind 的语言才取快照
+    // （`projectFiles` 这一格今天只有 kojo2 供方读；ERB 三条腿由解析器索引原生应答，
+    //  替它取快照就是"每次按 F12 把整项目文本过一遍槽"那笔白付的账）。
+    expect(host).toMatch(/slotServices\.includes\(kind\)/);
+    const erb = descriptorForLanguageId(ERB_LANGUAGE_ID);
+    expect(erb).not.toBeNull();
+    // 反空匹配自证：读到的确实是那份点名表（今天三条），不是 `undefined ?? []` 蒙过去的
+    expect(erb?.slotServices ?? [], 'ERB 的点名表读空了：下面两条 not.toContain 就成了假通过').toEqual(
+      expect.arrayContaining(['references', 'hover', 'formatting']),
+    );
+    expect(erb?.slotServices ?? [], 'ERB 点名 definition 会让每次 F12 付一份项目快照').not.toContain(
+      'definition',
+    );
+    expect(
+      erb?.slotServices ?? [],
+      'ERB 点名 implementation 同上（Ctrl+F12 走同一条 nameLegProjectSnapshotOf 闸）',
+    ).not.toContain('implementation');
+  });
+});
+
 /* ============================== 诊断 / builtin 专项 ============================== */
 
 describe('上游腿的专项取证（没有 Monaco 注册 API 的那几项）', () => {

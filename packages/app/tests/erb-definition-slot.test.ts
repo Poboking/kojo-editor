@@ -7,12 +7,15 @@
  * 只可能是因为插件 `@kojo/plugin-erb-parser` 的 `erb-definition` 供方答了
  * （`provideErbDefinition`：标签作用域在解析器、`#DIM` 纯判据在语言面库）。
  *
- * 钉五条：
+ * 钉六条：
  * 1. 原文面：`#DIM` 正文里的名字 → 声明行 + **名字那一列**；`$` 标签 → 定义行；
  * 2. 优先序：同一记号声明与函数索引都给 ⇒ 声明在前、函数腿在后（供方内部次序，不是槽序）；
  * 3. 投影面（升糖预览）：发问位点按**行尾对齐**换成存档列（不是收行首），落点仍是存档坐标；
  * 4. 投影面的中文谓词行（`跳到 开始`）：槽腿的 ASCII 记号集认不出，插件照样答得出；
- * 5. 源码卫生：宿主 `monaco/kojo-definition.ts` 不再 import 那两条本地腿。
+ * 5. 源码卫生：宿主 `monaco/kojo-definition.ts` 不再 import 那两条本地腿；
+ * 6. （LAU-DUALLEG 第二车）实现腿的覆盖自证：`readImplementationTargets` 发的是自己的 `kind`，
+ *    而同一枚供方交回的落点与 `definition` 逐字相同 ⇒ "ERB 两 kind 已齐"这一条在这里有正向
+ *    证据，`language-parity.test.ts` 的 DOUBLE-LEG-1032B 组才判得下"不收敛"。
  *
  * monaco 运行时不进 node ⇒ `../src/monaco/entry` 用 `vi.mock` 桩掉（形状照
  * `editor-global-providers-tables.test.ts`：任意属性链都是可调用的代理，调用即回一枚可拆的
@@ -50,7 +53,7 @@ vi.mock('../src/monaco/entry', () => ({
 }));
 
 // 动态 import：保证上面的桩先就位（本模块 import 期就会碰 monaco 运行时）
-const { readDefinitionTargets } = await import('../src/ui/editor-global-providers');
+const { readDefinitionTargets, readImplementationTargets } = await import('../src/ui/editor-global-providers');
 
 /* ============================== 夹具 ============================== */
 
@@ -223,6 +226,24 @@ describe('经槽拿定义 · 原文面', () => {
       kernelOf(contributions([], indexWith('好感度', ARCHIVE, 9, 1))),
     );
     expect(at.map((l) => l.line)).toEqual([2, 9]);
+  });
+
+  /**
+   * **实现腿的覆盖自证**（LAU-DUALLEG 第二车，2026-10-31）：这一格是"两 kind 是否已齐"的证据，
+   * 不是第二份判据。`Ctrl+F12` 与 `F12` 各发自己的判别式（宿主不替语言决定"实现"是什么），
+   * 而 ERB 的**同一枚** `provideErbDefinition` 答两个 kind ⇒ 落点与优先序必须逐字相同：
+   * 只要这一条成立，宿主就没有"让位给一枚没供方的腿"可收（分叉才是必须收敛的病）。
+   */
+  it('`implementation` 由同一枚供方作答：请求各发各的 kind，落点与 `definition` 逐字相同', () => {
+    mountRaw();
+    const asks: EditorLanguageServiceRequest[] = [];
+    const kernel = kernelOf(contributions(asks, indexWith('好感度', ARCHIVE, 9, 1)));
+    const definition = readDefinitionTargets(ARCHIVE_MODEL, pos(3, 3), kernel);
+    const implementation = readImplementationTargets(ARCHIVE_MODEL, pos(3, 3), kernel);
+    expect(asks.map((r) => r.kind)).toEqual(['definition', 'implementation']);
+    expect(implementation).toEqual(definition);
+    // 三条腿的序也在实现腿上成立（标签 → `#DIM` 声明 → 函数索引）
+    expect(implementation.map((l) => l.line)).toEqual([2, 9]);
   });
 });
 
