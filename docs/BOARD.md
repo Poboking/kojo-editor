@@ -27,6 +27,5 @@
 |LAUNCH-L7B|core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 打包、`launcher_project_hash`、drift 报告|同内容两次打包逐字节相同；源码/产物分离；三条写边界；`launcher_*` 宿主命令须先补|进行中 · 认领：qoder 2026-11-01|
 |LAUNCH-P0-RESIDUE|P0 真壳验收余项：② ~10 MB fixture 复制进度；③ 二次 `start` 报 `LAUNCHER_INSTANCE_BUSY`；⑤ 信任框后启动、篡改报 `TRUST_CHANGED`；⑥ 退出杀树 + 下次 `app-exit`；① shared 实例仅夹具播种|全部在真壳（`debug-cli shell`）取证；⑤ 无人值守 ⇒ 宿主侧命令取证|待派|
 |SDK-B5b|删宿主语言面残留（原 51 枚/23,797 行，语言面 24/9,672 行；结构层 8 不算）；车 1–6 与 C 类两车已落，M2 142→126；**第七波再出宿主 7 枚**（拆 `kojo2-lexicon`/`erb-completion-context` 两壳、退役 `erb-directives`、`kojo-hover-native`+`kojo-native-marks` 上提 `@kojo/kojo-vocab`、`kojo-xml-dialect`+`kojo-xml-event-sites` 落懒插件 `ui-kojo-xml`），M2 随 `--update-baseline` **126→125**|宿主不再直装语言面；现尺 `find packages/app/src -name 'kojo2-*.ts'` = **34 枚/16,610 行**（monaco 14/4,772），含 tsx 的 `*kojo2*` = 39 枚/19,547 行/809,533 B；余 5 枚留宿主事实（project-index / project-analysis / model-language / problem-sync / scan-adapter），仅 diagnostics-gate 的扩展名常量与 `isKojo2Path` 可择机下沉|进行中 · 认领：lead 2026-10-31|
-|AE-SPLIT4|六条把手热态色不齐：`.editor-divider` 的 `:hover`/`:active` 共用中性灰；`.dock-cell-resizer` 悬停零反馈|先让 `styles-wash-token-discipline.test.ts` 口径迁到「落点在册」，再拆块接 `--split-hot`|进行中 · 认领：qoder 2026-11-01|
 
 > 已裁定/已交付行（K2-D0、K2-CONTRACT、SDK-B5a、多游戏适配 P0/P1、编辑器对标 A–E、PS 系列）已删，回执在 git 提交信息。
