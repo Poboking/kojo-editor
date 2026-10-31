@@ -8,7 +8,9 @@
  * > **on-type 的前缀腿保留**（它是每次击键唯一需要块上下文的那条路），本文件改钉它。
  *
  * 钉四件事：
- * ① IF 体内的击键：前缀推进块状态机，层级按整篇腿算（不吃前缀 ⇒ 这一行会漏掉缩进修正）；
+ * ① IF 体内的击键（该行有切片编辑）：前缀推进块状态机，层级按整篇腿算（不吃前缀 ⇒ 这一行会漏掉缩进修正）；
+ * ①-b 免检通道的让路口径（模块头注写明的那一格）：**零切片编辑却在块里**的行，on-type 不为它
+ *    付 O(前缀) 扫描 ⇒ 判零编辑；整篇腿在那一行仍有一条编辑，反证"不是规则修不动"；
  * ② 顶层击键：不带前缀（或前缀推不出层级）⇒ 与"只算这一行"逐字相同，原缩进不动；
  * ③ 保护区里的击键：数据表块体 / 死区一行都不改（前缀把末态掩码带进来了）；
  * ④ 编辑绝不越界：返回的编辑只落在触发行，行号/列/文本与整篇腿裁到该行逐字节相同。
@@ -25,8 +27,14 @@ import { installErbOnTypeFormatter } from '../src/monaco/kojo-format-range';
 const formatOpts = {} as Monaco.languages.FormattingOptions;
 const token = {} as Monaco.CancellationToken;
 
-/** IF 体内两行：第 2 行缩进正确、第 3 行少一半（只有前缀能判出它该改成 4 空格） */
-const IF_BODY = ['IF X', '    PRINTFORMW 甲', '  PRINTFORMW 乙', 'ENDIF'];
+/**
+ * IF 体内第 3 行行首是**全角空格**：切片判据先折它（免检通道不触发 ⇒ 前缀腿真的跑），
+ * 块体层级（4 空格 = 第 2 行的缩进单位）只有前缀推得出来。
+ */
+const IF_BODY = ['IF X', '    PRINTFORMW 甲', '　PRINTFORMW 乙', 'ENDIF'];
+
+/** 免检通道夹具：第 3 行半角 2 空格——切片视角"已经规范"（零切片编辑），块内该是 4 空格 */
+const IF_BODY_CLEAN_SLICE = ['IF X', '    PRINTFORMW 甲', '  PRINTFORMW 乙', 'ENDIF'];
 
 /** 假 model：`getLineContent` 给前缀行（on-type 的前缀腿逐行直读，不再向宿主取窗口） */
 function fakeDoc(lines: readonly string[]) {
@@ -97,17 +105,35 @@ const press = (
   ) ?? []) as Monaco.languages.TextEdit[];
 
 describe('ERB-ON-TYPE-WIRE · 触发行之前的整行前缀', () => {
-  it('夹具自证：不带前缀时第 3 行判零编辑（"改成 4 空格"只可能来自前缀）', () => {
-    expect(computeFormatEdits(IF_BODY[2]!, 'erb')).toEqual([]);
+  it('夹具自证：第 3 行的"改成 4 空格"只可能来自前缀（切片视角先折全角、判不出层级）', () => {
+    // 免检通道夹具：半角 2 空格行在切片视角零编辑，整篇腿却有一条（块内该 4 空格）
+    expect(computeFormatEdits(IF_BODY_CLEAN_SLICE[2]!, 'erb')).toEqual([]);
+    expect(wholeKeys(IF_BODY_CLEAN_SLICE, 3)).toHaveLength(1);
+    // 本批夹具：全角缩进行切片判据**有**编辑 ⇒ 前缀腿真的会跑
+    expect(computeFormatEdits(IF_BODY[2]!, 'erb')).not.toEqual([]);
     expect(wholeKeys(IF_BODY, 3)).toHaveLength(1);
   });
 
-  it('① IF 体内的击键：前缀推进块状态机，少缩进的那行按层级修正', () => {
+  it('① IF 体内的击键（该行有切片编辑）：前缀推进块状态机，层级按整篇腿算', () => {
     const { doc, onType } = installOnType(IF_BODY);
-    expect(asKeys(press(onType, doc.model, 3))).toEqual(['3:1:19:    PRINTFORMW 乙']);
+    expect(asKeys(press(onType, doc.model, 3))).toEqual(['3:1:14:    PRINTFORMW 乙']);
     expect(asKeys(press(onType, doc.model, 3))).toEqual(wholeKeys(IF_BODY, 3));
-    // 前缀行直读 model（`getLineContent`），不向宿主再要一次窗口：这一击键只取触发行那一行
-    expect(doc.asks).toEqual([]);
+    // 窗口取文**只碰触发行那一行**（两次击键各一次）：前缀行直读 model（`getLineContent`），
+    // 不再向宿主另要一次 `(1, n-1)` 的整段窗口——那正是被删掉的 v1 多行前缀腿的白付。
+    expect(doc.asks).toEqual([
+      { start: 3, end: 3 },
+      { start: 3, end: 3 },
+    ]);
+  });
+
+  it('①-b 免检通道（模块头注写明的让路口径）：零切片编辑却在块里 ⇒ 判零，且只取触发行一行', () => {
+    // 这不是缺陷复发，是 PS-4 单价前提的**那条线**：on-type 不为"切片已规范"的行付
+    // O(前缀) 扫描；整篇腿（Shift+Alt+F）仍会把这一行修成 4 空格（上一条自证钉着）。
+    const { doc, onType } = installOnType(IF_BODY_CLEAN_SLICE);
+    expect(asKeys(press(onType, doc.model, 3))).toEqual([]);
+    expect(wholeKeys(IF_BODY_CLEAN_SLICE, 3)).toHaveLength(1);
+    // 免检 ≠ 免取文：触发行那一行仍取一次（`(1,2)` 那种前缀整段窗口一次都不许出现）
+    expect(doc.asks).toEqual([{ start: 3, end: 3 }]);
   });
 
   it('② 顶层击键（第 1 行）：没有前缀，行为与"只算这一行"逐字相同', () => {
@@ -134,11 +160,12 @@ describe('ERB-ON-TYPE-WIRE · 触发行之前的整行前缀', () => {
     expect(wholeKeys(lines, 2)).toEqual([]);
   });
 
-  it('④ 编辑绝不越界：行号 / 列 / 文本与整篇腿裁到该行逐字节相同', () => {
-    const lines = ['IF X', '    PRINTFORMW 甲', '\u3000PRINTFORMW 乙', 'ENDIF'];
+  it('④ 编辑绝不越界（嵌套 IF）：行号 / 列 / 文本与整篇腿裁到该行逐字节相同', () => {
+    const lines = ['IF X', '  IF Y', '  \u3000PRINTFORMW 乙', '  ENDIF', 'ENDIF'];
     const { doc, onType } = installOnType(lines);
     const out = asKeys(press(onType, doc.model, 3));
     expect(out).toEqual(wholeKeys(lines, 3));
+    expect(out.length).toBeGreaterThan(0);
     for (const key of out) expect(Number(key.split(':')[0])).toBe(3);
   });
 });

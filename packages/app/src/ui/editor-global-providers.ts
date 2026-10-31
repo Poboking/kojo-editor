@@ -2145,6 +2145,11 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       // 格式化规则开关（ERB-PARITY G2）：P2-14 的偏好读取点只有 `format-pref` 一处，
       // 这里是**宿主事实**的递入口——每次组请求时现读（不缓存旧值），槽腿与插件都不读设置。
       formatRules: () => loadFormatRulesPref(),
+      // FMT-TOAST（G2 收尾）：ERB 选区格式化改由插件供方作答后，"这次没格式化"的出口也照搬——
+      // 供方判据抛错经槽腿交回 `FormatDegradationNotice`（`where:'compute'` / `stage:'range'`），
+      // 接同一枚一次性台账（同一 `where` + 同一行区间一次会话只上一条）。纯弃权不报：
+      // "没有供方应答"不是故障。返回值语义照旧 `[]`，台账炸了也不许打断格式化。
+      onFormatDegraded: reportFormatDegradation,
       applyCodeActionEdits: (model, edits) => {
         const ctx = owningPaneOf(model);
         const ed = ctx?.editorRef.current ?? null;

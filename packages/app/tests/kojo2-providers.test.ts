@@ -464,7 +464,7 @@ describe('注册顺序：补全先于悬停（单答型第一家说了算）', (
     for (const later of [
       'installDocumentFormatter(',
       'installKojoRangeFormatter(',
-      'installRangeFormatter(',
+      'installErbOnTypeFormatter(',
       'installErbRename(',
       'installKojoRename(',
       'installReferenceProvider(',

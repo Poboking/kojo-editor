@@ -168,6 +168,9 @@ import {
   signatureRequestOf,
 } from './kojo-language-service-legs';
 import type { Kojo2ProjectIndex } from './kojo2-project-index';
+// 降级台账的 notice 形状（ERB-PARITY G2 收尾）：**type-only 引**，词表唯一真源在
+// `kojo-format-range.ts`（经 `kojo-format.ts` 转口），本层只消费、不再定义第三处。
+import type { FormatDegradationNotice } from './kojo-format';
 import { toMonacoCodeLenses } from './kojo-code-lens';
 // 快速修复的类别映射 / 诊断 ↔ marker 翻译复用 **v1 那枚既有模块**（`kojo-code-action.ts`）：
 // "动作类别只有 quickfix / refactor 两档"与"关联诊断按 model 夹取"是同一份判据，
@@ -448,6 +451,16 @@ export interface SlotServiceHost {
    * 与 `filePathOf` / `projectIndex` 同一性质：插件拿不到、也不该拿这份偏好。
    */
   readonly formatRules?: () => EditorFormattingRequest['options'];
+  /**
+   * 格式化的**宿主侧降级口**（ERB-PARITY G2 收尾，additive）：供方判据抛错 ⇒ 交回一条
+   * `FormatDegradationNotice`（区间腿 `where:'compute'` / `stage:'range'`），宿主决定上屏哪一格。
+   *
+   * 这一格只为把「判据抛错」与「没有供方应答」分开而存在：`collectFormattingEdits` 交回
+   * `undefined` 且**本轮有供方抛过错**才走这里（纯弃权不报台账——那是"这篇不归插件管"，
+   * 不是故障）。缺省不给 = 只 `console.warn`，与 FMT-TOAST 接台账前的老宿主逐字一致。
+   * 形状与 `kojo-format-range.ts` 的 `onDegraded` 同款（同一词表、同一台账），文案一个字都不住本层。
+   */
+  readonly onFormatDegraded?: (notice: FormatDegradationNotice) => void;
 }
 
 /* ============================== 共享小工具（宿主事实，不是判据） ============================== */
@@ -588,9 +601,12 @@ function textEditsOf(
 /**
  * 一次格式化路（`lineRange` 缺席 = 整篇）：取文 → 单答裁决（legs）→ `TextEdit[]`。
  *
- * `undefined` = 无人应答、`[]` = 有人认这篇且不需要改——两种都落成"没有 edits"，宿主不再分辨。
+ * `undefined` = 无人应答、`[]` = 有人认这篇且不需要改——**加这一格之后仍都是"没有 edits"，
+ * 但不再同一条路**：供方**抛错**经 `collectFormattingEdits` 的错态回调如实交回，区间腿报
+ * 降级台账（ERB-PARITY G2 收尾：FMT-TOAST 的 `range` 一档从此不再静默），纯弃权不报——
+ * "没有供方应答"是"这篇不归插件管"，不是故障。
  * Monaco 把返回的 edits 一次 `executeEdits('formatEditsCommand', …)` 落地 ⇒ 天然一个撤销步；
- * 这里只做"该不该应答 + 形状翻译"，不碰 undo 停点。
+ * 这里只做"该不该应答 + 形状翻译 + 错态出口"，不碰 undo 停点。
  */
 function formattingEditsOf(
   model: Monaco.editor.ITextModel,
@@ -603,12 +619,65 @@ function formattingEditsOf(
   // 规则开关是**宿主事实**（ERB-PARITY G2）：偏好由装配点现读、经注入面递进来，
   // 本层与供方都不读设置；缺省 = 全开（请求里不带 `options`，与加这一格之前逐字相同）。
   const options = host.formatRules?.();
+  let failed: { readonly id: string; readonly error: unknown } | undefined;
   const edits = collectFormattingEdits(
     kernel.slots.query('ui.editor.languageService'),
     formattingRequestOf(editorRequestIdentityOf(model), text, kernel.project.current(), lineRange, options),
+    (contributionId, error) => {
+      failed ??= { id: contributionId, error };
+    },
   );
+  // 「判据抛错」与「没有供方」的区分落点：只有**无人交回答案且本轮有供方抛错**才是降级；
+  // 下一家照常作答（哪怕前一家炸了）不算——改动确实落了，台账闭嘴。
+  if (edits === undefined && failed !== undefined) {
+    degradeFormatEdits(host, model, lineRange, failed);
+    return [];
+  }
   if (edits === undefined || edits.length === 0) return [];
   return textEditsOf(model, edits);
+}
+
+/**
+ * 供方抛错的出口（形状逐字照 `kojo-format-range.ts` 的 `degrade`：`console.warn` + 回调两件事，
+ * 同一个 `where` / `stage` 词表 ⇒ 台账不必为槽腿另开一套文案；回调抛错不许打断格式化请求）。
+ *
+ * - **区间腿**（`lineRange` 在场）⇒ `{ where:'compute', stage:'range', 选区行区间 }` 进台账；
+ * - **整篇腿** ⇒ 只 warn——台账的请求表只有 `range` / `onType` 两档，Shift+Alt+F 没有那一格
+ *   文案，硬套"选区"那句是假警报（与 v1 `installDocumentFormatter` 只 warn 的旧口径一致）。
+ */
+function degradeFormatEdits(
+  host: SlotServiceHost,
+  model: Monaco.editor.ITextModel,
+  lineRange: { readonly startLine: number; readonly endLine: number } | undefined,
+  failed: { readonly id: string; readonly error: unknown },
+): void {
+  const reason = `${failed.id}: ${errorText(failed.error)}`;
+  if (lineRange === undefined) {
+    console.warn(`[slot-service-providers] compute 在整篇请求里让了路：${reason}`);
+    return;
+  }
+  let lineCount = 1;
+  try {
+    lineCount = model.getLineCount();
+  } catch {
+    /* 桩 model：不猜行数，退成 1（夹取口径与 v1 区间腿同源） */
+  }
+  const clamp = (line: number): number => Math.min(Math.max(1, Math.trunc(line) || 1), lineCount);
+  const notice: FormatDegradationNotice = {
+    where: 'compute',
+    stage: 'range',
+    startLine: clamp(Math.min(lineRange.startLine, lineRange.endLine)),
+    endLine: clamp(Math.max(lineRange.startLine, lineRange.endLine)),
+    reason,
+  };
+  console.warn(
+    `[slot-service-providers] ${notice.where} 在 ${notice.stage} 请求里让了路（第 ${notice.startLine}–${notice.endLine} 行）：${notice.reason}`,
+  );
+  try {
+    host.onFormatDegraded?.(notice);
+  } catch {
+    /* 呈现面抛错不许打断编辑 */
+  }
 }
 
 interface FormattingProviders {

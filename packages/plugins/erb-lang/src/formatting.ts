@@ -19,11 +19,13 @@
  * **懒装载**的语言面供方（`bootstrap.ts` 的 `import('@kojo/plugin-erb-lang')`），判据照样
  * 一份、开机图一分不涨——这与 ERB 的高亮 / 扩选同一条理由（判据在库包、插件只做接线）。
  *
- * ## 三态（同 hover / references 的同名供方）
+ * ## 三态（同 hover / references 的同名供方；G2 收尾后**抛错是第四个出口**）
  *
  * 非 `formatting` / 非 ERB ⇒ `undefined`（**弃权**，让下一家接手）；认这门语言 ⇒ 总是作答
- * （哪怕零编辑——零编辑是"这篇已经规范"，不是"我不答"）；判据抛错 ⇒ `undefined`
- * （宿主交回空表；不让异常穿回击键路径）。
+ * （哪怕零编辑——零编辑是"这篇已经规范"，不是"我不答"）；判据抛错 ⇒ **上抛**，不再吞成
+ * `undefined`：吞掉就把"规则算炸了"伪装成"没人认领这篇"，FMT-TOAST 的 `range` 一档从此静默。
+ * 上抛由宿主槽腿（`slot-service-providers.ts` 的 `formattingEditsOf`）捕获——warn + 报降级
+ * 台账 + 交回 `[]`，异常照样穿不到击键/快捷键路径上（`provide` 的调用点有 try-catch 兜底）。
  */
 import type {
   EditorFormattingResult,
@@ -51,22 +53,19 @@ function toRangeEdit(edit: FormatEdit): EditorRangeEdit {
   };
 }
 
-/** 交回 `{ kind: 'formatting', edits }`，或 `undefined`（弃权：不是这个 kind / 不是 ERB / 判据抛错） */
+/** 交回 `{ kind: 'formatting', edits }`，或 `undefined`（弃权：不是这个 kind / 不是 ERB）；判据抛错**上抛**（见模块头注） */
 export function provideFormatting(
   request: EditorLanguageServiceRequest,
 ): EditorFormattingResult | undefined {
   if (request.kind !== 'formatting') return undefined;
   if (!isErbRequest(request)) return undefined;
-  try {
-    // 整篇腿算、区间腿裁剪：ERB 的块层级 / 保护区是**文档级**判据（缩进深度从文件头压下来、
-    // 数据表块体与停用死区跨行），切片单独算会把块外行当糖行重排 ⇒ 与 v1 区间腿、
-    // 宿主 `formatRangeEdits` 逐字节同口径（等价性钉在 `packages/app/tests/kojo-format-range.test.ts`）。
-    const all = computeFormatEdits(request.text, 'erb', request.options);
-    const lineRange = request.lineRange;
-    const kept = lineRange === undefined ? all : withinLines(all, lineRange.startLine, lineRange.endLine);
-    return { kind: 'formatting', edits: kept.map(toRangeEdit) };
-  } catch {
-    // 判据抛错：这次不格式化（交回 `undefined` 让宿主退成空表），不把异常穿回编辑器
-    return undefined;
-  }
+  // 整篇腿算、区间腿裁剪：ERB 的块层级 / 保护区是**文档级**判据（缩进深度从文件头压下来、
+  // 数据表块体与停用死区跨行），切片单独算会把块外行当糖行重排 ⇒ 与 v1 区间腿、
+  // 宿主 `formatRangeEdits` 逐字节同口径（等价性钉在 `packages/app/tests/kojo-format-range.test.ts`）。
+  // 不包 try/catch：判据抛错必须原样上抛——吞成 `undefined` 就与"没有供方应答"同形，
+  // 宿主槽腿的降级台账（FMT-TOAST 的 `range` 一档）会被这一口吞掉。
+  const all = computeFormatEdits(request.text, 'erb', request.options);
+  const lineRange = request.lineRange;
+  const kept = lineRange === undefined ? all : withinLines(all, lineRange.startLine, lineRange.endLine);
+  return { kind: 'formatting', edits: kept.map(toRangeEdit) };
 }

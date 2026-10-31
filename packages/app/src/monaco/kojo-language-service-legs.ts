@@ -82,6 +82,12 @@ import { pkey } from '../ui/file-tree-ops';
 function provideOf(
   contribution: EditorLanguageServiceContribution,
   request: EditorLanguageServiceRequest,
+  /**
+   * 错态回调（additive，ERB-PARITY G2 收尾）：给了它，"这家抛错"就**如实交回调用方**
+   * （id + 原错），而不是只留一句 warn。缺省不给 = 与改前逐字相同（warn 后归一为弃权）。
+   * 目的单一：让调用方能区分「判据抛错」与「没有供方应答」——格式化那条腿要拿它报降级台账。
+   */
+  onProviderError?: (contributionId: string, error: unknown) => void,
 ): ReturnType<EditorLanguageServiceContribution['provide']> {
   try {
     return contribution.provide(request);
@@ -89,6 +95,7 @@ function provideOf(
     console.warn(
       `[kojo-language-service-legs] '${contribution.id}' provide 抛错：${errorText(e)}`,
     );
+    onProviderError?.(contribution.id, e);
     return undefined;
   }
 }
@@ -173,9 +180,21 @@ export function collectHoverContents(
 export function collectFormattingEdits(
   contributions: readonly EditorLanguageServiceContribution[],
   request: EditorLanguageServiceRequest,
+  /**
+   * 错态回调（additive，ERB-PARITY G2 收尾）：任一家 `provide` 抛错都**如实**递给调用方
+   * （只给第一家抛错的 id + 原错；问完其余家不中断，与"一家抛错只让这家缺席"逐字同判）。
+   * 缺省不给 = 与改前逐字相同。给它的唯一理由：`undefined` 从此只表示「无人应答」，
+   * 「判据抛错」由槽腿自己拿去报降级台账（`slot-service-providers.ts` 的 `onFormatDegraded`）。
+   */
+  onProviderError?: (contributionId: string, error: unknown) => void,
 ): readonly EditorRangeEdit[] | undefined {
+  let reported = false;
   for (const contribution of contributions) {
-    const result = provideOf(contribution, request);
+    const result = provideOf(contribution, request, (id, error) => {
+      if (reported) return;
+      reported = true;
+      onProviderError?.(id, error);
+    });
     if (!result || result.kind !== 'formatting') continue;
     const usable = usableRangeEdits(contribution, result.edits);
     return usable.sort(

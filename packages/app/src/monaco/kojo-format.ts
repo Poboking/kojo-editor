@@ -12,6 +12,13 @@ import type { FormatDegradationNotice, RangeFormatHandlers } from './kojo-format
 import { registerForLanguageServices } from './register-dialects';
 
 /**
+ * `FormatDegradationNotice` 的**对外形状口**（ERB-PARITY G2 收尾）：`where` / `stage` 词表的
+ * 唯一真源在 `kojo-format-range.ts`（五处让路点住在那里），本行只是将同一类型转口——
+ * 槽腿工厂（`slot-service-providers.ts`）的宿主降级口从这里 type-only 引，词表不许多出第三处定义。
+ */
+export type { FormatDegradationNotice };
+
+/**
  * 文档格式化的**宿主接线**（E1，`Shift+Alt+F`）。
  *
  * 分层照 `kojo-code-action` / `kojo-definition`：**规则与 edits 全在插件**

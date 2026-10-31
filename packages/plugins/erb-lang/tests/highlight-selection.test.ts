@@ -97,6 +97,19 @@ function selectionRequest(
   } as never;
 }
 
+/** 格式化请求（ERB-PARITY G2）：`lineRange` 缺席 = 整篇；给 = 区间（1 基闭区间） */
+function formattingRequest(text: string, lineRange?: { startLine: number; endLine: number }) {
+  return {
+    kind: 'formatting' as const,
+    path: PATH,
+    languageId: 'kojo-erb',
+    text,
+    project: null,
+    lineCount: text.split('\n').length,
+    ...(lineRange === undefined ? {} : { lineRange }),
+  } as never;
+}
+
 /* ============================== ① 语言分派 ============================== */
 
 describe('语言分派：只答 ERB（其余弃权，不是空结果）', () => {
@@ -314,11 +327,12 @@ describe('插件装配', () => {
     return registered;
   }
 
-  it('两枚贡献分枚注册，id 稳定、order 相同、同一个槽', () => {
+  it('三枚贡献分枚注册，id 稳定、order 相同、同一个槽（ERB-PARITY G2 起含 formatting）', () => {
     const registered = activate();
     expect(registered.map((r) => r.item.id)).toEqual([
       'erb-documentHighlight',
       'erb-selectionRange',
+      'erb-formatting',
     ]);
     expect(new Set(registered.map((r) => r.slot))).toEqual(new Set(['ui.editor.languageService']));
     const orders = new Set(registered.map((r) => r.item.order));
@@ -336,6 +350,52 @@ describe('插件装配', () => {
       selectionRequest([{ line: 6, column: 17 }]),
     );
     expect(selection).toMatchObject({ kind: 'selectionRange' });
+    // 格式化：整篇 / 区间两条请求都由这枚供方作答（区间 = 整篇算完按行裁剪，同一把尺子）
+    const formatting = contributions.get('erb-formatting')!;
+    const full = formatting.provide(formattingRequest(`\u3000PRINTFORMW 甲\nENDIF`, undefined));
+    expect(full).toMatchObject({ kind: 'formatting' });
+    if (full?.kind !== 'formatting') throw new Error('整篇请求应以 formatting 作答（不是弃权）');
+    expect(full.edits.length).toBeGreaterThan(0);
+    const clipped = formatting.provide(formattingRequest(`\u3000PRINTFORMW 甲\nENDIF`, { startLine: 2, endLine: 2 }));
+    if (clipped?.kind !== 'formatting') throw new Error('区间裁剪仍应是作答（空表），不是弃权');
+    expect(clipped.edits).toEqual([]); // 第 2 行本就规范 ⇒ 裁剪后零编辑（作答，不是弃权）
+  });
+
+  it('判据抛错**上抛**（G2 收尾：不再吞成弃权——吞了就与"没有供方应答"同形，降级台账会静默）', () => {
+    const contributions = new Map<string, EditorLanguageServiceContribution>();
+    for (const { item } of activate()) contributions.set(item.id, item);
+    const formatting = contributions.get('erb-formatting')!;
+    // 规则开关递一枚"读任何键都抛"的代理：computeFormatEdits 在取规则处炸 ⇒ 异常原样上抛
+    const poisonedRules = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('桩：判据炸了');
+        },
+      },
+    );
+    expect(() =>
+      formatting.provide({
+        kind: 'formatting',
+        languageId: 'kojo-erb',
+        path: 'x.ERB',
+        text: '\u3000PRINTFORMW 甲',
+        project: null,
+        lineCount: 1,
+        options: poisonedRules,
+      } as unknown as Parameters<EditorLanguageServiceContribution['provide']>[0]),
+    ).toThrow('桩：判据炸了');
+    // 非 ERB 的抛错请求照旧**弃权**（不进入判据，异常无从谈起）——认语言在先、算规则在后
+    expect(
+      formatting.provide({
+        kind: 'formatting',
+        languageId: 'not-erb',
+        path: 'x.txt',
+        text: 'ignored',
+        project: null,
+        lineCount: 1,
+      } as unknown as Parameters<EditorLanguageServiceContribution['provide']>[0]),
+    ).toBeUndefined();
   });
 
   it('id 与版本是契约的一部分；零依赖（不吃任何服务）', () => {
