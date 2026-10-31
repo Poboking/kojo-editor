@@ -390,7 +390,7 @@ node tools/debug-cli.mjs eval "__kojoDebug.editor.selfCheck().semantic"
 | 两边都没有（拼错） | **404** | `unknown_command` | `cmd` / `suggestions`（最多 3 条近似名，**可能为空数组**）/ `error`（"你是不是想用：…" 或"没有相近的命令名可推荐"） |
 | 命中镜像 | 200 | — | 行为与改动前**一字未变**：成功 `{ok:true,value}`、业务失败 `200 + {ok:false,error}` |
 
-- 缺口清单只此一份：`tools/debug-server.mjs` 的 `MIRROR_GAP_COMMANDS`（36 条 `launcher_*` + 旧 base64
+- 缺口清单只此一份：`tools/debug-server.mjs` 的 `MIRROR_GAP_COMMANDS`（38 条 `launcher_*` + 旧 base64
   读通道 `read_file_bytes`）。`reason` 写得短（会进页面报错文本），长原因在测试里。
 - `suggestions` 按命令名的最小编辑距离挑（距离 ≤2 或前缀互含；最多 3 条、近的排前面），候选集是
   「镜像实有的命令 ∪ 缺口清单」：所以**拼错**的 `launcher_*` 走 404，但 `suggestions` 里常常就给你

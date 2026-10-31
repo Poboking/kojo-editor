@@ -853,6 +853,10 @@ export const MIRROR_GAP_COMMANDS = Object.freeze({
   launcher_content_set_order: '重排内容包加载顺序要写回实例清单',
   launcher_content_diagnose: '内容包冲突诊断要读实例清单并判定文件归属',
 
+  // 启动器 · 工程投影 / 解投影（LAUNCH-L7B）：落点复验与安全执法都在桌面壳
+  launcher_project_hash: '对真实工程根算逐文件摘要要先复验落点在启动器三方授权表里，web 模式没有那份授权表',
+  launcher_project_extract: '解工程归档的落点由桌面壳的 launcher 布局唯一合成，解包要过归档逃逸与符号链接闸',
+
   // 启动器 · 存档备份 / 导入导出
   launcher_save_list: '列实例存档要扫实例存档目录',
   launcher_save_backups: '列存档备份清单要扫实例备份目录，web 模式没有那份备份盘',
