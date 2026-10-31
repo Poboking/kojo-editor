@@ -329,6 +329,7 @@ export default defineConfig({
       '@kojo/erb-lang': r('../erb-lang/src/index.ts'),
       // ERB-VOCAB 批：控制流配对表上提到非插件库包（叶子排在桶之前，理由同上）。
       '@kojo/erb-vocab/control-flow': r('../erb-vocab/src/control-flow.ts'),
+      '@kojo/erb-vocab/highlight-words': r('../erb-vocab/src/highlight-words.ts'),
       '@kojo/erb-vocab': r('../erb-vocab/src/index.ts'),
       '@kojo/plugin-erb-parser': r('../plugins/erb-parser/src/index.ts'),
       '@kojo/plugin-eratw-adapter': r('../plugins/eratw-adapter/src/index.ts'),

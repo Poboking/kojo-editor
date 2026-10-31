@@ -5,7 +5,8 @@
  *
  * 「eraFL 的作者真在写、而编辑器词表不认识」的引擎词有哪些。宿主词表是两份：
  * `packages/app/src/monaco/erb-directives.ts`（`ERB_DIRECTIVES`，119 词）与
- * `erb-highlight-words.ts`（`ERB_HIGHLIGHT_EXTRA_WORDS` = 控制流 45 + 引擎内建 8，
+ * `erb-directives.ts` 物化的高亮补集（词表真源 `@kojo/erb-vocab/highlight-words`；
+ * `ERB_HIGHLIGHT_EXTRA_WORDS` = 控制流 45 + 引擎内建 8，
  * 减去指令表后剩 29）——两者并集 148 词，就是本表求差集的分母。
  *
  * ## 扫描口径（2026-10-24，语料 `D:/Game/erafl`，只读）

@@ -26,7 +26,7 @@ import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import { ERB_DIRECTIVES, ERB_STATEMENT_DIRECTIVES, mergeDirectiveWords, setErbDirectiveWords } from '../src/monaco/erb-language';
 import { ERB_COMMANDS, ERB_FAMILY_HEADS } from '../src/monaco/kojo-language';
-import { ERB_HIGHLIGHT_WORDS } from '../src/monaco/erb-highlight-words';
+import { ERB_HIGHLIGHT_WORDS } from '../src/monaco/erb-directives';
 import { ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
 import { decodeWithProbe } from '../../kernel/src/encoding';
 

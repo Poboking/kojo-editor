@@ -5,8 +5,7 @@ import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { sugarEditorLexicon } from '@kojo/kojo-vocab/keywords';
 import { SYSTEM_FUNCTION_ALIASES } from '@kojo/kojo-vocab/system-functions';
 import { sugarEnterRulePatterns } from '@kojo/kojo-vocab/enter';
-import { ERB_DECLARATION_LINE_RE, ERB_DIRECTIVES, ERB_PREPROC_LINE_RE } from './erb-directives';
-import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
+import { ERB_DECLARATION_LINE_RE, ERB_DIRECTIVES, ERB_HIGHLIGHT_EXTRA_WORDS, ERB_PREPROC_LINE_RE } from './erb-directives';
 import { toMonacoEnterConfig } from './enter-rules';
 import { CJK_WORD_PATTERN } from './word-separators';
 import { ROLE } from '@kojo/kojo-sdk/semantic-roles';
@@ -117,7 +116,7 @@ export const ERB_COMMANDS: readonly string[] = ERB_DIRECTIVES.filter((d) => !FAM
 
 /**
  * `.kojo` 原生行**高亮**用的指令表 = `ERB_COMMANDS` + 高亮补集（去族头，补集出处见
- * `erb-highlight-words.ts`）。为什么不直接扩 `ERB_COMMANDS`：那张表的口径与
+ * `erb-directives.ts` 物化，词表真源 `@kojo/erb-vocab/highlight-words`）。为什么不直接扩 `ERB_COMMANDS`：那张表的口径与
  * `ERB_DIRECTIVES` 逐项同位（既有恒等式测试钉着），补全是另一条消费线；高亮多认
  * `ENDCATCH` / `NOSKIP` / `SETVAR` 不等于把它们塞进补全候选。行首/行内的大写判定
  * 不变——小写仍是糖英文别名（本文件 `ignoreCase: false`）。

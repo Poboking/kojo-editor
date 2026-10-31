@@ -8,6 +8,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./control-flow": "./src/control-flow.ts"
+    "./control-flow": "./src/control-flow.ts",
+    "./highlight-words": "./src/highlight-words.ts"
   }
 }

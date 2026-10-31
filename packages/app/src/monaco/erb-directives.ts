@@ -75,6 +75,7 @@ import {
   ERB_DECLARATION_DIRECTIVES,
   ERB_STATEMENT_DIRECTIVES,
 } from '@kojo/plugin-erb-parser';
+import { erbHighlightExtraWords, erbHighlightWords } from '@kojo/erb-vocab/highlight-words';
 
 /**
  * 手写常用语句与 `#` 声明族两张词表**已搬进插件**（ERB-PARITY G1，2026-10-31）：
@@ -103,6 +104,16 @@ export const ERB_DIRECTIVES: readonly string[] = appendUnseen(
   ERB_STATEMENT_DIRECTIVES,
   ERB_CONTROL_STATEMENTS,
 );
+
+/**
+ * 高亮补集与 `.erb` 高亮全表（原 `erb-highlight-words.ts`，2026-10-31 词表/判据搬进
+ * `@kojo/erb-vocab/highlight-words`；字面量与派生口径逐字未动）。**物化**留在宿主这一叶：
+ * 减数 `ERB_DIRECTIVES` 含旗标族头一类的引擎变量族名，与本包「零游戏名词」边界闸互斥，
+ * 进不了 `@kojo/erb-vocab`（判据本身是纯函数，指令表作参数）。
+ * 补全**不**消费这两张表——`ERB_DIRECTIVES` 才是补全口径。
+ */
+export const ERB_HIGHLIGHT_EXTRA_WORDS: readonly string[] = erbHighlightExtraWords(ERB_DIRECTIVES);
+export const ERB_HIGHLIGHT_WORDS: readonly string[] = erbHighlightWords(ERB_DIRECTIVES);
 
 /* ============================== 原生标记（v1.9 P2 面接线） ============================== */
 

@@ -1,6 +1,5 @@
 import type * as Monaco from './entry';
-import { ERB_DIRECTIVES, ERB_STATEMENT_DIRECTIVES } from './erb-directives';
-import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
+import { ERB_DIRECTIVES, ERB_HIGHLIGHT_EXTRA_WORDS, ERB_STATEMENT_DIRECTIVES } from './erb-directives';
 import { erbEnterRulePatterns, ERB_LINE_COMMENT } from './erb-enter';
 import { toMonacoEnterConfig } from './enter-rules';
 import {
@@ -21,7 +20,7 @@ import { ENGINE_VARIABLE_REFERENCE_HEADS } from '@kojo/kojo-vocab/engine';
  *   （注释/字符串两判据与语义层 `erb-parser/references.ts` 的 `codeViewOf` **同口径**——
  *   同一份"什么是注释/什么是串"不许有两个真相：串里的 `;` 不是注释、未闭合引号只到行尾）；
  * - 指令表 = 口上高频子集（单一真源 `erb-directives.ts`）；高亮另吃补集
- *   `erb-highlight-words.ts`（控制流语句 + 引擎内建单行语句，补全不消费）；
+ *   （本文件 `ERB_HIGHLIGHT_EXTRA_WORDS` 同叶物化，词表真源 `@kojo/erb-vocab/highlight-words`；控制流语句 + 引擎内建单行语句，补全不消费）；
  * - 变量多段引用（CFLAG:ARG:口上セレクタ）整体高亮；
  * - FORM 串内 `{表达式}` / `%字符串%` 是字符串内的第二层（`str` 态规则序，见该态注；
  *   这一层的存在性由语义层背书——`erb-completion-context.ts` 的 `'form'` 槽判据 +
@@ -386,7 +385,7 @@ function standaloneKeywordPattern(words: readonly string[]): RegExp | null {
  * tokenizer 骨架，只换词表，别处零分叉）。
  *
  * `highlightWords` 是"真正吃 keyword 色的全表"：基底指令 + 高亮补集
- * （`ERB_HIGHLIGHT_EXTRA_WORDS`，出处见 `erb-highlight-words.ts`）。`directives`
+ * （`ERB_HIGHLIGHT_EXTRA_WORDS`，词表真源 `@kojo/erb-vocab/highlight-words`、物化见 `erb-directives.ts`）。`directives`
  * 属性保持**传入原样**——补全面是 monarch 内部实现，不改变 `setErbDirectiveWords`
  * 的公开语义（测试与宿主都按"传什么就回什么"读）。
  */

@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
-import { ERB_DIRECTIVES } from '../src/monaco/erb-directives';
-import {
-  ERB_ENGINE_EXTRA_STATEMENTS,
-  ERB_HIGHLIGHT_EXTRA_WORDS,
-  ERB_HIGHLIGHT_WORDS,
-} from '../src/monaco/erb-highlight-words';
+import { ERB_DIRECTIVES, ERB_HIGHLIGHT_EXTRA_WORDS, ERB_HIGHLIGHT_WORDS } from '../src/monaco/erb-directives';
+import { ERB_ENGINE_EXTRA_STATEMENTS } from '@kojo/erb-vocab/highlight-words';
 import { ERB_COMMANDS, ERB_FAMILY_HEADS, ERB_HIGHLIGHT_COMMANDS, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { registerErbLanguage, setErbDirectiveWords } from '../src/monaco/erb-language';
 import { ERB_CONTROL_STATEMENTS, classifyControlFlow } from '@kojo/plugin-erb-parser';

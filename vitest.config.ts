@@ -74,6 +74,7 @@ export const config = defineConfig({
       '@kojo/erb-lang': r('./packages/erb-lang/src/index.ts'),
       // ERB 引擎词表库（2026-10-30 ERB-VOCAB 批）：同样是叶子在前、桶在后。
       '@kojo/erb-vocab/control-flow': r('./packages/erb-vocab/src/control-flow.ts'),
+      '@kojo/erb-vocab/highlight-words': r('./packages/erb-vocab/src/highlight-words.ts'),
       '@kojo/erb-vocab': r('./packages/erb-vocab/src/index.ts'),
       // 语言层共用词表（LAU-3b 解耦批）：叶子同样必须排在桶之前。
       '@kojo/kojo-vocab/keywords': r('./packages/kojo-vocab/src/keywords.ts'),

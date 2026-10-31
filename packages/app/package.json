@@ -14,6 +14,7 @@
   "dependencies": {
     "@kojo/kernel": "workspace:*",
     "@kojo/erb-lang": "workspace:*",
+    "@kojo/erb-vocab": "workspace:*",
     "@kojo/kojo-core": "workspace:*",
     "@kojo/kojo-lang": "workspace:*",
     "@kojo/kojo-sdk": "workspace:*",

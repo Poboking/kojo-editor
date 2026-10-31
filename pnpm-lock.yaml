@@ -47,6 +47,9 @@ importers:
       '@kojo/erb-lang':
         specifier: workspace:*
         version: link:../erb-lang
+      '@kojo/erb-vocab':
+        specifier: workspace:*
+        version: link:../erb-vocab
       '@kojo/kernel':
         specifier: workspace:*
         version: link:../kernel

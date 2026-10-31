@@ -59,8 +59,8 @@ describe('@kojo/erb-vocab 是分层上的中立词表包（不可能是倒置的
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // control-flow（共享事实）/ index（桶）。加一枚必须显式改这里。
-    expect(files.map((f) => path.basename(f))).toEqual(['control-flow.ts', 'index.ts']);
+    // control-flow（共享事实）/ highlight-words（高亮补集词表与纯判据，2026-10-31 搬包批）/ index（桶）。加一枚必须显式改这里。
+    expect(files.map((f) => path.basename(f))).toEqual(['control-flow.ts', 'highlight-words.ts', 'index.ts']);
   });
 
   it('src 零外部依赖（**强于**"不许引插件"：连任何包名都不许出现）', () => {

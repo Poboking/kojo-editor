@@ -9,7 +9,7 @@ import { enterRulePatternsFromRoles, type EnterRoleVocabulary, type EnterRulePat
  * 只从引擎配对表来：`erb-parser/scanner.ts` 的 `ERB_CONTROL_STATEMENTS`（由开块 / 分支 /
  * 闭合 / 单行四张表 + TRY 三档 + PRINTDATA 系**派生**的并集）逐个过
  * `classifyControlFlow()` 取回**角色**，按角色分桶。配对表增删一词，本表自动跟随——
- * 与 `.erb` 高亮补集（`erb-highlight-words.ts` 吃同一份派生）同一条纪律。
+ * 与 `.erb` 高亮补集（`erb-directives.ts` 物化同一份派生）同一条纪律。
  * 角色分桶之后交给 `kojo-sugar` 的 `enterRulePatternsFromRoles()`，与 `.kojo` 的
  * `sugarEnterRulePatterns()` **共用同一套正则装配**（ERB-PARITY 口径：能力不进语言名分支）。
  *
