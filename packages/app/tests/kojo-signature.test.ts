@@ -9,9 +9,16 @@
  * 桩 monaco 同 `kojo-definition.test.ts` 口径：只记录注册与 dispose。
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import type { KojoCallProtocol, KojoCallSlot } from '@kojo/plugin-api';
+import type { KojoCallProtocol, KojoCallSlot, PluginContext } from '@kojo/plugin-api';
+import { createErbLangPlugin } from '@kojo/plugin-erb-lang';
+// 前置①的对拍对象：判据的**真身**（宿主 re-export 必须指回这里，不许是第二份实现）
+import {
+  findCallSite as leafFindCallSite,
+  splitArguments as leafSplitArguments,
+} from '@kojo/erb-lang/signature';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
@@ -401,12 +408,12 @@ const lineModel = (text: string) =>
 const at = (column: number) => ({ lineNumber: 3, column }) as Monaco.Position;
 
 describe('installSignatureHelp · 装配', () => {
-  it('ERB 与 `.kojo` 两个语言 id 各注册一枚 provider；dispose 全部回收', () => {
+  it('旧桥只给 `.kojo1`（kojo1）挂一枚 provider——ERB 已按点名让位给槽腿；dispose 全部回收', () => {
     const { monaco, registered, disposed } = stubMonaco();
     const handle = installSignatureHelp(monaco, { resolve: () => null });
-    expect(registered.map((r) => r.languageId).sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(registered.map((r) => r.languageId)).toEqual([KOJO_LANGUAGE_ID]);
     handle.dispose();
-    expect(disposed.sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(disposed).toEqual([KOJO_LANGUAGE_ID]);
   });
 
   it('触发字符：`(` 进入调用括号、`,` 换槽（仅半角；全角 `，` 不是 Emuera 分隔符，不触发）', () => {
@@ -486,78 +493,134 @@ describe('installSignatureHelp · 装配', () => {
   });
 });
 
-/* ============================== LAU-DUALLEG 车 5：ERB signatureHelp 不双挂判定 ============================== */
+/* ============================== LAU-1031-SIG：ERB signatureHelp 双挂已收敛 ============================== */
 
 /**
- * 本组是 LAU-DUALLEG 的**签名格**判据（组名带 `-SIG` 后缀：同系列在
- * `language-parity.test.ts` 里已有 `DOUBLE-LEG-1032`（车 1 让位三格）与
- * `DOUBLE-LEG-1032B`（定义 / 实现两格），三组各钉自己的 kind，不许共用一个标题）：
- * ERB 的 `signatureHelp` **不双挂**——旧桥腿独占 ERB 与 kojo1，槽腿只答 kojo2。
+ * 本组是 LAU-DUALLEG 的**签名格**判据（组名保留 `-SIG` 后缀：同系列在
+ * `language-parity.test.ts` 里有 `DOUBLE-LEG-1032`（让位三格）、`DOUBLE-LEG-1032B`
+ * （定义 / 实现两格）与 `DOUBLE-LEG-1032C`（改名一格），各钉自己的 kind，不许共用标题）。
  *
- * 为何不收敛（BOARD 原文「槽里无 ERB 供方，让位＝静默没有」逐字留账）：
- * - `SLOT_SERVICE_LEGS` 确有 `signatureHelp` 这枚腿（基础设施就位），但
- *   `ERB_DESCRIPTOR.slotServices` 不点名它 ⇒ 槽腿收口只给点名了的语言（kojo2）挂；
- * - 旧桥 `installSignatureHelp` 不传 `kind` 也不传 `excludeNamed`：它给所有
- *   `languageServices: true` 的语言（今天 = ERB + kojo1）各挂一枚，恰好唯一；
- * - 若此刻给旧桥加 `excludeNamed: 'signatureHelp'`，ERB 就一枚 provider 都没有
- *   （槽里没有认 ERB 的供方） ⇒ 静默没有签名——铁律 4 禁；
- * - 若此刻给 ERB descriptor 加 `slotServices: ['signatureHelp']`，槽腿会给 ERB
- *   挂一枚永远弃权的空 provider（因为 `erb-lang` 插件今天没有 `erb-signatureHelp` 贡献），
- *   同时旧桥让位，等于同一批代码未就位就先撤旧桥 ⇒ 静默——还是铁律 4 禁。
+ * **2026-10-31 已收敛**（`b/lead12/erb-signature`）：曾钉在"刻意不收"的那四件前置
+ * **同批落齐**，缺任一件本组即红（判据从"为什么不收"翻成"收在哪儿"，用例一条没删、没放宽）：
+ * 1. **判据叶出宿主**：调用位点解析 / 实参切分 / 跨行收点 / 中性组装整块住
+ *    `@kojo/erb-lang/signature`（ERB 语言面判据的既有落点，与高亮 / 扩选两条腿同家；
+ *    宿主 `kojo-signature.ts` 只剩 re-export 与 Monaco 翻译，一条判据不留）；
+ * 2. **插件槽里出供方**：`@kojo/plugin-erb-lang` 的 `erb-signatureHelp` 经
+ *    `ui.editor.languageService` 槽的 `signatureHelp` 成员应答（单槽、`kind` 判别、三态：
+ *    `undefined`=弃权 / 空=答空 / 值=结果）；两张宿主表（adapter 调用协议 + 解析器索引形参）
+ *    经包内**模块级登记表**请求时现取——范式照 `@kojo/kojo-lang/adapter-source`；
+ *    "随请求递下去"的形状**没有**采用：契约面 `plugin-api/slots.ts` 在开机图内，
+ *    ps10 字节余量（~404 B）加不动请求字段，登记表是同一件事的既有合法出路；
+ * 3. **descriptor 点名**：`ERB_DESCRIPTOR.slotServices` 含 `signatureHelp`——点名表是
+ *    "谁在答"的唯一台账；
+ * 4. **旧桥让位**：`installSignatureHelp` 走
+ *    `registerForLanguageServices(monaco, register, undefined, { excludeNamed: 'signatureHelp' })`
+ *    ——**第三参必须 `undefined`**（再传 kind 等于把点名语言重新挂上，"一个 kind 恰一枚
+ *    provider"立刻破，本系列已被这事咬过两次）。
  *
- * 真要收敛的前置条件（缺一即红，本组即闸）：
- * 1. `@kojo/kojo-vocab/signature` 判据叶就位（懒边、不进开机图）；
- * 2. `@kojo/plugin-erb-lang` 的 `erb-signatureHelp` 供方注册且经 `ui.editor.languageService`
- *    槽的 `signatureHelp` 成员应答（adapter 调用协议 + ERB 用户函数形参两张表随请求递下去）；
- * 3. `ERB_DESCRIPTOR.slotServices` 同批加上 `signatureHelp`；
- * 4. 旧桥 `installSignatureHelp` 的 `registerForLanguageServices` 调用**同批**加
- *    `kind = 'signatureHelp'` 与 `excludeNamed: 'signatureHelp'`。
- * 以上 1–4 一条不满足 ⇒ 本组判据红。
+ * 边界（不许越）：kojo1（`.kojo` 封存层，待删除物）**不点名**，它继续由宿主旧桥腿应答；
+ * 没有为旧文件做任何兼容层。
  */
-describe('DOUBLE-LEG-1032-SIG · ERB signatureHelp 不双挂（刻意不收）', () => {
-  it('旧桥注册语言恰是 [ERB, KOJO]（v1 面）；kojo2 不经旧桥（无 languageServices: true）', () => {
+describe('DOUBLE-LEG-1032-SIG · ERB signatureHelp 已按点名让位——每一 kind 恰一枚 provider', () => {
+  it('旧桥注册语言恰是 [kojo1]（ERB 已让位、kojo2 不经旧桥：它不声明 languageServices）', () => {
     const { monaco, registered } = stubMonaco();
     installSignatureHelp(monaco, { resolve: () => null });
-    const ids = registered.map((r) => r.languageId).sort();
-    expect(ids).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
-    // kojo2 绝不出现在旧桥注册列表里
+    const ids = registered.map((r) => r.languageId);
+    expect(ids).toEqual([KOJO_LANGUAGE_ID]);
+    expect(ids).not.toContain(ERB_LANGUAGE_ID);
     expect(ids).not.toContain(KOJO2_LANGUAGE_ID);
   });
 
-  it('旧桥不传 excludeNamed ⇒ ERB 在旧桥列表里（一旦加 excludeNamed 本条即红）', () => {
-    // installSignatureHelp 的注册逻辑只走 registerForLanguageServices(monaco, fn)
-    // 不传 kind、不传 options —— 本测试通过 stubMonaco 已证：ERB 出现即等价于"无 exclusion"。
-    // 若将来 installSignatureHelp 加了 excludeNamed: 'signatureHelp'，ERB 不再出现 ⇒ 本条红。
-    const { monaco, registered } = stubMonaco();
-    installSignatureHelp(monaco, { resolve: () => null });
-    expect(registered.some((r) => r.languageId === ERB_LANGUAGE_ID)).toBe(true);
+  it('旧桥源码形状：`undefined, { excludeNamed: \'signatureHelp\' }`（第三参给成 kind 就把点名语言重新挂上，恰一枚立刻破）', () => {
+    const source = readFileSync(new URL('../src/monaco/kojo-signature.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(
+      /registerForLanguageServices\([\s\S]{0,300}?registerSignatureHelpProvider\(id,\s*\w+\)[\s\S]{0,160}?undefined,\s*\{\s*excludeNamed:\s*'signatureHelp'/,
+    );
   });
 
-  it('ERB descriptor 的 slotServices 不含 signatureHelp（点名即需加供方，缺则静默）', () => {
+  it('ERB descriptor 的 slotServices 点名 signatureHelp（点名表 = "谁在答"的唯一台账）', () => {
     const erb = descriptorForLanguageId(ERB_LANGUAGE_ID);
     expect(erb).not.toBeNull();
     const slots = declaredSlotKinds(erb!);
-    expect(slots).not.toContain('signatureHelp');
+    expect(slots).toContain('signatureHelp');
+    // 反空匹配自证：读到的确实是那份点名表，不是 `undefined ?? []` 蒙过去的
+    expect(slots).toEqual(expect.arrayContaining(['references', 'hover', 'formatting']));
   });
 
-  it('kojo2 descriptor 的 slotServices 含 signatureHelp（槽腿只答它）', () => {
+  it('kojo2 descriptor 的 slotServices 仍含 signatureHelp（槽腿两侧同一条腿）', () => {
     const kojo2 = descriptorForLanguageId(KOJO2_LANGUAGE_ID);
     expect(kojo2).not.toBeNull();
-    const slots = declaredSlotKinds(kojo2!);
-    expect(slots).toContain('signatureHelp');
+    expect(declaredSlotKinds(kojo2!)).toContain('signatureHelp');
   });
 
-  it('SLOT_SERVICE_LEGS 确有 signatureHelp 这枚腿（基础设施就位，但 ERB 没用它）', () => {
+  it('边界：kojo1（封存层，待删除物）不点名 signatureHelp——它继续由宿主旧桥应答，零兼容层', () => {
+    const kojo1 = descriptorForLanguageId(KOJO_LANGUAGE_ID);
+    expect(kojo1).not.toBeNull();
+    expect(kojo1?.slotServices ?? []).not.toContain('signatureHelp');
+  });
+
+  it('SLOT_SERVICE_LEGS 确有 signatureHelp 这枚腿（"恰一枚"的另一半：让位后有腿接手）', () => {
     const leg = slotServiceLegOf('signatureHelp');
     expect(leg).toBeDefined();
     expect(leg!.kind).toBe('signatureHelp');
   });
 
-  it('ERB 走旧桥（usesLegacyBridge=true），故旧桥天然覆盖；不存在双挂的可能', () => {
+  it('前置①实钉：判据住 `@kojo/erb-lang/signature`，宿主 re-export 的是**同一枚函数**（不是抄第二份）', () => {
+    // 身份对拍：旧消费方 import 点拿到的就是包里那一份（抄一份的表现是两边都能跑但行为漂）。
+    expect(leafSplitArguments).toBe(splitArguments);
+    expect(leafFindCallSite).toBe(findCallSite);
+    // 宿主文件里不再有任何判据的**实现**（只剩 re-export + Monaco 翻译 + 旧桥安装器）。
+    const source = readFileSync(new URL('../src/monaco/kojo-signature.ts', import.meta.url), 'utf8');
+    for (const fn of ['splitArguments', 'findCallSite', 'findCallSiteAt', 'describeCallSignature', 'resolveSignatureInText']) {
+      expect(source, `宿主又长出判据实现：${fn}`).not.toMatch(new RegExp(`function ${fn}\\s*\\(`));
+    }
+    expect(source).toMatch(/from '@kojo\/erb-lang\/signature'/);
+    // 括号模型只有一处：半角逗号那张表在包里，宿主文件里不许再出现 SEPARATORS 那种写死的判据表
+    expect(source).not.toMatch(/SEPARATORS|CALLEE_RE/);
+  });
+
+  it('前置②实钉：`@kojo/plugin-erb-lang` 注册了 erb-signatureHelp 供方，且真的认 ERB 请求（让位之后有人接）', () => {
+    const registered: Array<{ slot: string; id: string }> = [];
+    const providers = new Map<string, (request: never) => unknown>();
+    const ctx = {
+      pluginId: 'erb-lang',
+      log: { info: () => undefined, warn: () => undefined, error: () => undefined },
+      slots: {
+        register: (slot: string, item: { id: string; provide: (request: never) => unknown }) => {
+          registered.push({ slot, id: item.id });
+          providers.set(item.id, item.provide);
+          return () => undefined;
+        },
+      },
+    } as unknown as PluginContext;
+    createErbLangPlugin().activate(ctx);
+    expect(registered.map((r) => r.id)).toContain('erb-signatureHelp');
+    expect(new Set(registered.map((r) => r.slot))).toEqual(new Set(['ui.editor.languageService']));
+    const provide = providers.get('erb-signatureHelp')!;
+    const erbAsk = {
+      kind: 'signatureHelp',
+      path: 'D:/proj/ERB/口上/1_测试.erb',
+      text: ['@F(A)', '    CALL HUNT(1, 2)'].join('\n'),
+      line: 2,
+      column: 18,
+      project: null,
+      languageId: ERB_LANGUAGE_ID,
+    } as never;
+    // 认这门语言 ⇒ **作答**（不是弃权；零登记时是空答复，宿主据此不弹浮层）
+    expect(provide(erbAsk)).toBeDefined();
+    // 不是 ERB ⇒ 弃权（`undefined`），把请求让给下一家
+    expect(
+      provide({ ...(erbAsk as object), languageId: KOJO2_LANGUAGE_ID } as never),
+    ).toBeUndefined();
+    // 不是这个 kind ⇒ 同样弃权（单槽 + `kind` 判别）
+    expect(provide({ ...(erbAsk as object), kind: 'hover' } as never)).toBeUndefined();
+  });
+
+  it('ERB 仍走旧桥铺其余腿（usesLegacyBridge=true），让位只发生在被点名的这一格', () => {
     const erb = descriptorForLanguageId(ERB_LANGUAGE_ID);
     expect(usesLegacyBridge(erb!)).toBe(true);
-    // 槽腿 installSlotServiceProviders 只给 slotServices 点名了的语言挂 ⇒ ERB 不在列
-    const erbSlots = declaredSlotKinds(erb!);
-    expect(erbSlots.includes('signatureHelp')).toBe(false);
+    // 点名只撤 `signatureHelp` 一枚：其余（大纲 / 折叠 / 转定义 / 着色 / 行内提示…）照旧由
+    // 旧桥铺——若哪天 `excludeNamed` 撤穿了别的 kind，上面"旧桥注册语言恰是 [kojo1]"仍会红。
+    expect(declaredSlotKinds(erb!).includes('signatureHelp')).toBe(true);
   });
 });

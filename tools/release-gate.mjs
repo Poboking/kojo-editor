@@ -435,8 +435,23 @@ export const ARTIFACT_LIMITS = Object.freeze({
    *   （共享小件的引用面搬运，非新功能）。
    * 抬到 11.25 MiB 后距现值 **42,085 B**、件数仍**顶格 98**——下一批先问能不能并块，别在这里
    * 顺手加分块。入口 276,473 B（上限 1,100 kB，余量大）。
+   *
+   * 2026-11-01 LAU-1031-SIG（ERB 签名判据搬进 `@kojo/erb-lang`）并入批：**件数 98 → 99**，
+   * 总量与入口上限不动。增量逐枚点名（同一棵树一次真实构建）：
+   * · `signature-*.js` **2,979 B**（新）——`@kojo/erb-lang/signature` 被**两个懒消费者**同时
+   *   引用：宿主 `editor-global-providers` 块里的旧桥（kojo1 的 `signatureHelpAt` 走
+   *   `kojo-signature.ts` 的 re-export）与懒插件 `plugin-erb-lang` 的 `erb-signatureHelp` 供方
+   *   ⇒ rollup 只能抽成共享块。与上面 `erb-runtime-*.js` / `highlight-*.js` 同一族
+   *   （"共享边界搬位置"，不是整包回灌）。
+   * · 总量 11,757,336 → **11,758,998 B**（+1,662 B，其中 2,979 B 是新块本体、其余是跨块
+   *   引用面改名的净额）；入口 276,402 → **276,451 B**（+49 B）。
+   * **并块先例已试过再抬**（本批实测，不是没问）：把 `@kojo/erb-lang/src/**` 的懒叶用
+   * manualChunks 并成一块（`lazy-erb-lang`）后件数**仍是 99**——`highlight` / `selection-range`
+   * 这些原本内联在插件块里的叶子被抽出来、`signature` 并进去，一进一出正好相抵（总量 +98 B）。
+   * 所以没有更省的并法：共享块本身是"两个懒消费者"的必然产物，只能抬这一件。
+   * ps10 开机图 **200 文件 / 3,509 KB · 3,593,714 B 逐字不动**（两枚消费者都在动态边之下）。
    */
-  files: 98,
+  files: 99,
 });
 
 const MIB = 1024 * 1024;

@@ -105,6 +105,16 @@ slotServices: [
     'hover',
     'formatting',
     /*
+     * LAU-1031-SIG（2026-10-31，签名判据搬家批）：签名帮助交给插件供方
+     * （`@kojo/plugin-erb-lang` 的 `erb-signatureHelp`，判据在 `@kojo/erb-lang/signature`，
+     * 两张宿主表——adapter 调用协议 + 解析器索引形参——经包内取表缝请求时现取）。
+     * 点名这一格同时**把旧桥那枚让开**（`kojo-signature.ts` 的安装器按
+     * `undefined, { excludeNamed: 'signatureHelp' }` 跳过点名语言；第三参给 kind 会把
+     * 点名语言重新挂上，"一个 kind 恰一枚"立刻破）。kojo1（封存层，待删除物）**不点名**，
+     * 它的签名继续由宿主腿应答。
+     */
+    'signatureHelp',
+    /*
      * DOUBLE-LEG-1032（2026-10-31，变基到 G2 之后）：同符号高亮 / 结构化扩选 / 行上注解三格也点名。
      * 点名的消费方是 **`excludeNamed`**（`register-dialects.ts`）：这三格的供方今天已全在插件
      * （`@kojo/plugin-erb-lang` 的 `erb-documentHighlight` / `erb-selectionRange`、

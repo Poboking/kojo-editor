@@ -10,6 +10,7 @@
  * | --- | --- | --- |
  * | `@kojo/erb-lang/highlight` | 同符号高亮（write / read / text 三档 + 位置门） | 插件 `@kojo/plugin-erb-lang` 的 `erb-documentHighlight` |
  * | `@kojo/erb-lang/selection-range` | 结构化扩选（词 → 行 → 分支段 → 标签块 → 函数块 → 全文） | 插件 `@kojo/plugin-erb-lang` 的 `erb-selectionRange` |
+ * | `@kojo/erb-lang/signature` | 签名帮助（调用位点解析 / 实参切分 / 中性组装 + 两张宿主表的取表缝） | 插件 `@kojo/plugin-erb-lang` 的 `erb-signatureHelp`（LAU-1031-SIG） |
  *
  * 这与 kojo2 在 B3f 批走的路**逐字同形**（判据进包 → 供方进插件 → 宿主只剩请求 / 翻译 /
  * 注册）：两门语言从此用同一条槽 `ui.editor.languageService`、同一份契约、同一套三态。
@@ -44,6 +45,10 @@
 export * from './constants';
 export * from './highlight';
 export * from './selection-range';
+// LAU-1031-SIG（签名判据搬家批）：ERB 签名帮助的判据叶（调用位点解析 + 中性组装 +
+// 两张宿主表的取表缝）。供方是懒装载的 `@kojo/plugin-erb-lang`（`erb-signatureHelp`），
+// 与高亮 / 扩选两条腿同一分层；宿主 `monaco/kojo-signature.ts` 只剩旧桥（kojo1）与 re-export。
+export * from './signature';
 
 /**
  * ## 补全判据已出本包（LAU-4 补全腿第二批，2026-10-31）
@@ -59,6 +64,7 @@ export * from './selection-range';
  * 唯一变化是地基三枚：空白类改引契约层 `ERB_BLANK_CLASS_STR`（`@kojo/plugin-api`）、名字字符集
  * 改引同层的 `MODEL_TOKEN_CLASS`、引擎族表照旧引 `@kojo/kojo-vocab/engine`。
  *
- * 本包此后只剩**两条腿**（高亮 / 扩选）——它们不由槽的供方驱动（供方在 `@kojo/plugin-erb-lang`，
- * 那座插件是**懒装载**的，不占开机图），所以留在这里是对的。
+ * 本包此后剩三条腿（高亮 / 扩选 / 签名）——它们的供方是**懒装载**的 `@kojo/plugin-erb-lang`
+ * （不占开机图），所以判据留在库里是对的；签名腿（LAU-1031-SIG）与补全腿的区别正在于此：
+ * 补全的供方是常驻解析器插件，判据只能落插件；签名的供方是懒插件，判据走库。
  */

@@ -50,6 +50,8 @@ const ALLOWED_PACKAGES = new Set([
   '@kojo/erb-lang/constants',
   '@kojo/erb-lang/highlight',
   '@kojo/erb-lang/selection-range',
+  // LAU-1031-SIG（2026-10-31）：签名判据叶出宿主进语言面库，本插件只做槽供方翻译层。
+  '@kojo/erb-lang/signature',
   // ERB-PARITY G2：排版判据的唯一真源是词表库那把与 `.kojo` 共用的尺子（叶子 import，不是桶；
   // 常驻解析器插件引它会进开机静态图——本插件懒装载，判据照样一份、开机图一分不涨）
   '@kojo/kojo-vocab/formatter',
@@ -59,8 +61,9 @@ describe('@kojo/plugin-erb-lang 是纯插件（零 Monaco / 零 React / 零 IO /
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // request / highlight / selection-range / formatting / plugin / index
-    expect(files).toHaveLength(6);
+    // request / highlight / selection-range / formatting / signature / plugin / index
+    // （LAU-1031-SIG 2026-10-31：signatureHelp 供方进包，6 ⇒ 7）
+    expect(files).toHaveLength(7);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {

@@ -12,4 +12,5 @@ export { createErbLangPlugin } from './plugin';
 export { provideDocumentHighlights } from './highlight';
 export { provideFormatting } from './formatting';
 export { provideSelectionRanges } from './selection-range';
+export { provideErbSignatureHelp } from './signature';
 export { isErbRequest } from './request';
