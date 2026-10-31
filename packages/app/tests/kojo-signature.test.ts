@@ -14,6 +14,13 @@ import type * as Monaco from 'monaco-editor';
 import type { KojoCallProtocol, KojoCallSlot } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
+import { KOJO2_LANGUAGE_ID } from '@kojo/kojo-lang';
+import {
+  descriptorForLanguageId,
+  declaredSlotKinds,
+  usesLegacyBridge,
+} from '../src/monaco/language-registry';
+import { slotServiceLegOf } from '../src/monaco/slot-service-providers';
 import {
   SIGNATURE_LOOKBACK_LINES,
   SIGNATURE_TRIGGER_CHARACTERS,
@@ -476,5 +483,81 @@ describe('installSignatureHelp · 装配', () => {
     expect(monacoHelp.activeParameter).toBe(1);
     expect(monacoHelp.signatures).toHaveLength(1);
     expect(monacoHelp.signatures[0]!.parameters[1]).toEqual({ label: 'ARG:4 日期偏移' });
+  });
+});
+
+/* ============================== LAU-DUALLEG 车 5：ERB signatureHelp 不双挂判定 ============================== */
+
+/**
+ * 本组是 LAU-DUALLEG 的**签名格**判据（组名带 `-SIG` 后缀：同系列在
+ * `language-parity.test.ts` 里已有 `DOUBLE-LEG-1032`（车 1 让位三格）与
+ * `DOUBLE-LEG-1032B`（定义 / 实现两格），三组各钉自己的 kind，不许共用一个标题）：
+ * ERB 的 `signatureHelp` **不双挂**——旧桥腿独占 ERB 与 kojo1，槽腿只答 kojo2。
+ *
+ * 为何不收敛（BOARD 原文「槽里无 ERB 供方，让位＝静默没有」逐字留账）：
+ * - `SLOT_SERVICE_LEGS` 确有 `signatureHelp` 这枚腿（基础设施就位），但
+ *   `ERB_DESCRIPTOR.slotServices` 不点名它 ⇒ 槽腿收口只给点名了的语言（kojo2）挂；
+ * - 旧桥 `installSignatureHelp` 不传 `kind` 也不传 `excludeNamed`：它给所有
+ *   `languageServices: true` 的语言（今天 = ERB + kojo1）各挂一枚，恰好唯一；
+ * - 若此刻给旧桥加 `excludeNamed: 'signatureHelp'`，ERB 就一枚 provider 都没有
+ *   （槽里没有认 ERB 的供方） ⇒ 静默没有签名——铁律 4 禁；
+ * - 若此刻给 ERB descriptor 加 `slotServices: ['signatureHelp']`，槽腿会给 ERB
+ *   挂一枚永远弃权的空 provider（因为 `erb-lang` 插件今天没有 `erb-signatureHelp` 贡献），
+ *   同时旧桥让位，等于同一批代码未就位就先撤旧桥 ⇒ 静默——还是铁律 4 禁。
+ *
+ * 真要收敛的前置条件（缺一即红，本组即闸）：
+ * 1. `@kojo/kojo-vocab/signature` 判据叶就位（懒边、不进开机图）；
+ * 2. `@kojo/plugin-erb-lang` 的 `erb-signatureHelp` 供方注册且经 `ui.editor.languageService`
+ *    槽的 `signatureHelp` 成员应答（adapter 调用协议 + ERB 用户函数形参两张表随请求递下去）；
+ * 3. `ERB_DESCRIPTOR.slotServices` 同批加上 `signatureHelp`；
+ * 4. 旧桥 `installSignatureHelp` 的 `registerForLanguageServices` 调用**同批**加
+ *    `kind = 'signatureHelp'` 与 `excludeNamed: 'signatureHelp'`。
+ * 以上 1–4 一条不满足 ⇒ 本组判据红。
+ */
+describe('DOUBLE-LEG-1032-SIG · ERB signatureHelp 不双挂（刻意不收）', () => {
+  it('旧桥注册语言恰是 [ERB, KOJO]（v1 面）；kojo2 不经旧桥（无 languageServices: true）', () => {
+    const { monaco, registered } = stubMonaco();
+    installSignatureHelp(monaco, { resolve: () => null });
+    const ids = registered.map((r) => r.languageId).sort();
+    expect(ids).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    // kojo2 绝不出现在旧桥注册列表里
+    expect(ids).not.toContain(KOJO2_LANGUAGE_ID);
+  });
+
+  it('旧桥不传 excludeNamed ⇒ ERB 在旧桥列表里（一旦加 excludeNamed 本条即红）', () => {
+    // installSignatureHelp 的注册逻辑只走 registerForLanguageServices(monaco, fn)
+    // 不传 kind、不传 options —— 本测试通过 stubMonaco 已证：ERB 出现即等价于"无 exclusion"。
+    // 若将来 installSignatureHelp 加了 excludeNamed: 'signatureHelp'，ERB 不再出现 ⇒ 本条红。
+    const { monaco, registered } = stubMonaco();
+    installSignatureHelp(monaco, { resolve: () => null });
+    expect(registered.some((r) => r.languageId === ERB_LANGUAGE_ID)).toBe(true);
+  });
+
+  it('ERB descriptor 的 slotServices 不含 signatureHelp（点名即需加供方，缺则静默）', () => {
+    const erb = descriptorForLanguageId(ERB_LANGUAGE_ID);
+    expect(erb).not.toBeNull();
+    const slots = declaredSlotKinds(erb!);
+    expect(slots).not.toContain('signatureHelp');
+  });
+
+  it('kojo2 descriptor 的 slotServices 含 signatureHelp（槽腿只答它）', () => {
+    const kojo2 = descriptorForLanguageId(KOJO2_LANGUAGE_ID);
+    expect(kojo2).not.toBeNull();
+    const slots = declaredSlotKinds(kojo2!);
+    expect(slots).toContain('signatureHelp');
+  });
+
+  it('SLOT_SERVICE_LEGS 确有 signatureHelp 这枚腿（基础设施就位，但 ERB 没用它）', () => {
+    const leg = slotServiceLegOf('signatureHelp');
+    expect(leg).toBeDefined();
+    expect(leg!.kind).toBe('signatureHelp');
+  });
+
+  it('ERB 走旧桥（usesLegacyBridge=true），故旧桥天然覆盖；不存在双挂的可能', () => {
+    const erb = descriptorForLanguageId(ERB_LANGUAGE_ID);
+    expect(usesLegacyBridge(erb!)).toBe(true);
+    // 槽腿 installSlotServiceProviders 只给 slotServices 点名了的语言挂 ⇒ ERB 不在列
+    const erbSlots = declaredSlotKinds(erb!);
+    expect(erbSlots.includes('signatureHelp')).toBe(false);
   });
 });
