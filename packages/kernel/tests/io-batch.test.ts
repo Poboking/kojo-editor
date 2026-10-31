@@ -12,6 +12,7 @@ import { NodeBridge } from './helpers/node-bridge';
  *
  * 1. **IPC 形状**：`readTexts` 全程只走批量原语（readFilesRaw / statFiles），
  *    不落回 readFileBytes / stat 的单文件两趟——这是"~9,000 次单文件读"消掉的结构面；
+ *    且 statFiles **按需**发：冷读（表里没有该路径）0 趟，热读（表里有货）才付 1 趟；
  * 2. **只读一遍**：同一批文件第二次 `readTexts`（mtime+size 未变）零读盘（会话缓存命中）；
  * 3. **真变了要重读**：mtime 或内容变 ⇒ 重读那一个；写盘后缓存失效；
  * 4. **语义与 readText 逐位对齐**：同一文件两条路径产出的 {text, encoding, eol} 全等（含
@@ -75,7 +76,7 @@ beforeEach(async () => {
 });
 
 describe('FileIOService · readTexts（批量路径 + 会话缓存）', () => {
-  it('批量路径全程不落单文件原语；二次读零读盘（只 statFiles）', async () => {
+  it('批量路径全程不落单文件原语；冷读 0 趟 stat，二次读零读盘只 stat 一趟', async () => {
     const dir = path.join(tmpDir, 'proj');
     const files: string[] = [];
     for (let i = 0; i < 40; i++) {
@@ -92,15 +93,16 @@ describe('FileIOService · readTexts（批量路径 + 会话缓存）', () => {
     expect(first[7]!.text).toBe('@F7\nPRINTL 第7条\n');
     // IPC 形状：批量原语各走一趟（40 < 批大小 64 ⇒ 1 趟），单文件原语零调用
     expect(bridge.stats.readFilesRaw).toBe(1);
-    expect(bridge.stats.statFiles).toBe(1);
+    // 冷读 0 趟 stat：表里根本没有的路径，stat 说什么都是 miss，为"自证新鲜"付这趟是白付
+    expect(bridge.stats.statFiles).toBe(0);
     expect(bridge.stats.readFileBytes).toBe(0);
     expect(bridge.stats.stat).toBe(0);
 
-    // 二次读（mtime+size 未变）：零读盘，只再批量 stat 一次
+    // 二次读（mtime+size 未变）：零读盘，这一趟才付 1 次批量 stat（表里有货 ⇒ 必须自证新鲜）
     const second = await io.readTexts(files);
     expect(second.map((t) => t?.text)).toEqual(first.map((t) => t?.text));
     expect(bridge.stats.readFilesRaw).toBe(1);
-    expect(bridge.stats.statFiles).toBe(2);
+    expect(bridge.stats.statFiles).toBe(1);
     expect(bridge.stats.readFileBytes).toBe(0);
   });
 

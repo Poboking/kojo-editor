@@ -25,7 +25,7 @@
  * - **`indexOf('\r')` 先行**：全文无 `\r` 时**零拷贝**返回入参（连 `split` 都省）；
  * - **切行不再先归一**：`splitEolLines` 直接按同一个分隔符集合切一次，消掉
  *   "先 `join('\n')` 拼回整串、再 `split('\n')` 拆开"这一往一来的两次全文遍历。
- *   全量实测：`replace` 2,415ms → `splitEolLines` 836ms（见 PITFALLS 295）。
+ *   全量实测：`replace` 2,415ms → `splitEolLines` 836ms（见 PITFALLS 296）。
  *
  * ## 等价性
  *

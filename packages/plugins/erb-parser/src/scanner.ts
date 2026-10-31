@@ -7,7 +7,7 @@ import { DIM_MODIFIERS, DIM_RE, type ControlFlowRole } from '@kojo/erb-vocab/con
  * kernel"）。那是一句实话但不完整：插件确实不许依赖 kernel，可契约层有零依赖叶子——
  * 而"`\r\n` 与裸 `\r` 各算一个换行"是一个事实，不是三个包各自的实现细节。真语料
  * 1.17 亿码元实测：私有复制版单遍 **2,415ms**，契约层那份（`indexOf` 先行 + split/join）
- * 在**已归一化**的正文上 **< 1ms**（索引链路上同一份正文被替换了 5 遍，见 PITFALLS 295）。
+ * 在**已归一化**的正文上 **< 1ms**（索引链路上同一份正文被替换了 5 遍，见 PITFALLS 296）。
  *
  * 本文件对 `@kojo/plugin-api` 的**值**导入仍受"裸 node 解析"约束（见上方头注）：`eol.ts`
  * 是零运行时 import 的自包含叶子，且 `package.json` 里有 `./eol` 导出 ⇒ 两条约束同时满足。

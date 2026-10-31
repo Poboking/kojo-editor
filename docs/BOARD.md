@@ -9,7 +9,7 @@
 |ID|任务|关键判据|状态|
 |---|---|---|---|
 |PERF-R6|快照链：关窗/关项目等 `storage.set` 落地（42.7M 码元，写实测 0.6s 起）|两条退出路径共用屏障；等不完也放行且明说；常态关闭不多等|已交付余项 · 2026-10-31（欠真壳关窗取证；强杀丢整轮）|
-|PERF-R7B|冷开两遍全量扫描合并：`read+parse` 5,632ms / `refs scan` 3,011ms 各扫 42.7M 码元|一遍产出 `ErbFile` 与候选；11.5s 再降 1.5–2.5s；`bySymbol` 逐字节相等|待认领 · F 批归因 2026-10-31|
+|PERF-R7C|冷开 `read+parse` 段 **94% 在主线程**：读盘 2,232ms / 解码 1,039ms / EOL 探测+归一 1,375ms（全量 **1.17 亿码元**，4 槽并行下 worker 解析只占约 290ms）|把 decode+EOL 搬出主线程（或 io 直接交行数组/字节）；`index_ms` 为主判据；产出与现路径逐字节相等；不许把「两遍遍历合并」再当靶子（已裁决，见 PITFALLS 296）|待认领 · R7B 归因 2026-10-31|
 |MK-PUB|市场发布：zip → Worker 校验 → R2 `pending/` → 自动开 PR（merge=放行）；客户端意图/进度 + Rust 命令 + 主机闸|全链 curl 可验证 + 全量不回退 + 双 typecheck + audit + cargo；不动 `MARKET_DEFAULT_INDEX_URL` 与 ADR-0007|进行中 · 认领：claude 2026-10-16|
 |POS-UTIL|位置换算收口（tree-sitter 0-based/UTF-16 vs Monaco、plugin-api 1-based）；否决 CST↔AST `PositionMapper`|换算走同一模块；覆盖 CJK/emoji/CRLF/折叠行；不新增第三套坐标系|进行中 · 认领：lead 2026-10-20|
 |ERB-PARITY|ERB 一等语言：注册/服务/树叠层/能力矩阵不得只给 Kojo；审计 G1–G9 **已全修**（G2＝第七波：排版整篇+区间两腿进槽、契约 `options`、降级接 FMT-TOAST 台账），G5 裁决豁免|同 descriptor/registry/engine；ERB 直写不依赖 `.kojo`；一个 kind 只一枚 provider（双挂收敛见 LAU-DUALLEG）|进行中 · 认领：lead 2026-10-31（G1–G9 收口，转入 DUALLEG）|
