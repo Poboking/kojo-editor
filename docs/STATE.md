@@ -179,3 +179,25 @@
   **新欠账一条**：`matrix-store` 的 `refresh()` 把 `rebuild(index)`（全量 117k 函数聚合，实测 **292 ms**）
   直接放在 `ensureIndex().then()` 里同步跑，等于占掉一帧；`navigator-store` 早已用 `scheduleRebuild` +
   `setTimeout` 推到宏任务。同一形态应收口（未做，本批只修卡死）。
+- **F 批 · R10 量具 + R7 冷开归因（2026-10-31，`tools/perf-ab.mjs` + `tools/perf-cold-open.mjs`）**：
+  性能路线图 v2 的最后一格落地。R10 交付**同树 A/B 量具**：`--a/--b` 接 git ref 或现成目录
+  （ref 自动建游离树、自动 junction `node_modules`、自动补探针），交替跑 + 中位数 + 极差，
+  A/A 同 ref 时套 **1.00±0.08** 判据。R7 用新量具重取了冷开剖面（真语料 4,258 文件 / 117,032 函数）。
+  **三项验收**：①A/A 自证 `total_ms` **1.007**、`index_ms` **1.005**、`build_ms` **1.005**（A 侧极差
+  仅 2.0% / 1.8% / 1.6%）；②灵敏度对烤（`--probe-a --parallel --probe-a 0` vs 自动并行）给出
+  `total_ms` **0.748** / `build_ms` **0.726** / `seg_refs` **0.582**，且 `parallel_effective` 0→1 自证开关生效；
+  ③旧读数被推翻：`read+parse` 不是 3,043ms 而是 **5,632ms**，冷开端到端 **11,496ms**（open 1,049 + index 10,446）。
+  **冷开剖面（4 轮中位数，并行 4 槽）**：`walk` 988 · `stat` 2 · `snapshot` 1 · **`read+parse` 5,632** ·
+  `aggregate` 181 · **`refs scan` 3,011**（rescan 4,258 全量）· 后台 `lint` 2,265；分段相加 9,812 ≈ `build_ms` 9,866。
+  ⇒ **88% 是两遍全量文本扫描**（同一份 42.7M 码元，一遍解析、一遍扫引用），两者都已并行、参数已调优
+  （`PARSE_CONCURRENCY` 4 / `REFS_WINDOW` 4 / `READ_BATCH` 64）、逐字符实现也已优化过
+  （`tokenCharLen` 有 ASCII 快路径 + 星面字符缓存）⇒ **当前架构下没有安全的低垂果实**。
+  `debugCaches()` 实测 `hits 11,141 / misses 4,321`：解析段冷读一遍，refs / 条件抽取 / lint 各走一遍缓存
+  ——真正的重复成本是**四次序列化进 worker + 多次切行**，不是盘 IO。
+  **探针代表性**：不吃默认参数，必须 `--parallel auto` 才与真实应用同形
+  （`bootstrap.installComputeTransport` = `min(核数-1, 4)`）。串行探针会把 refs 段量成 7,605ms、
+  端到端量成 17.7s，是真实形状的 1.6 倍——归因若建立在串行读数上会瞄准一个并行下不存在的瓶颈。
+  **新欠账（PERF-R7B）**：合并两遍遍历（一遍产出 `ErbFile` + 候选），预计再降 1.5–2.5s。
+  已知偏差：探针的 `walk` 走 `NodeBridge`（纯 Node 递归）比真壳 Rust `walk_consider` 慢，
+  988ms 不可直接当产品读数；`cond_ms` 在并行下常抓不到（条件抽取日志被 tail 窗截断），
+  属"没量到"而非"没跑"，主判据只用 `index_ms`。
