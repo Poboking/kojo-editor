@@ -1,5 +1,5 @@
 import { afterEach, afterAll, describe, expect, it } from 'vitest';
-import { erbEnterRulePatterns } from '../src/monaco/erb-enter';
+import { erbEnterRulePatterns } from '@kojo/erb-lang/enter';
 import {
   erbBaseIndentPatterns,
   erbMergedIndentConfig,

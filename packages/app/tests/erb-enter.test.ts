@@ -30,7 +30,7 @@ import type * as Monaco from 'monaco-editor';
 import { classifyControlFlow, ERB_CONTROL_STATEMENTS } from '@kojo/plugin-erb-parser';
 import { sugarEnterRulePatterns } from '@kojo/plugin-kojo-sugar';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from '../src/monaco/erb-language';
-import { ERB_LINE_COMMENT, erbEnterRulePatterns, erbEnterVocabulary } from '../src/monaco/erb-enter';
+import { ERB_LINE_COMMENT, erbEnterRulePatterns, erbEnterVocabulary } from '@kojo/erb-lang/enter';
 import { KOJO_LANGUAGE_ID, registerKojoLanguage } from '../src/monaco/kojo-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import '../src/monaco/languages'; // descriptor 表在模块顶层登记（宿主真实装配同一入口）
@@ -185,9 +185,9 @@ describe('`.erb` 回车词表 = 引擎配对表的角色投影（零手抄词形
     expect(close.length).toBeGreaterThanOrEqual(10);
   });
 
-  it('宿主 ERB 回车模块零指令抄本（词形只能从配对表来，与 erb-directive-words 同一口径）', () => {
+  it('ERB 回车判据模块零指令抄本（词形只能从配对表来，与 erb-directive-words 同一口径）', () => {
     const src = readFileSync(
-      path.resolve(import.meta.dirname, '..', 'src', 'monaco', 'erb-enter.ts'),
+      path.resolve(import.meta.dirname, '..', '..', 'erb-lang', 'src', 'enter.ts'),
       'utf8',
     ).replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
     const quoted = [...src.matchAll(/(['"])([A-Za-z_][A-Za-z0-9_]*)\1/g)].map((m) => m[2]!);

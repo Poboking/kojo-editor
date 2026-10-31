@@ -49,10 +49,12 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // constants（语言 id 叶子）/ highlight（同符号高亮判据）/ selection-range（扩选判据）/ index。
+    // constants（语言 id 叶子）/ enter（回车层级判据，2026-10-31 从宿主 monaco/erb-enter.ts 整块搬进）/
+    // highlight（同符号高亮判据）/ selection-range（扩选判据）/ index。
     // LAU-4 补全腿第二批（2026-10-31）：六枚 completion-* 叶子整块搬进
-    // `@kojo/plugin-erb-parser`（槽的供方必须是常驻插件、且插件不许引库），本包 10 ⇒ 4。
-    expect(files).toHaveLength(4);
+    // `@kojo/plugin-erb-parser`（槽的供方必须是常驻插件、且插件不许引库），本包曾 10 ⇒ 4；
+    // 同批后 ERB-ENTER 判据自宿主搬回本包 ⇒ 4 ⇒ 5。
+    expect(files).toHaveLength(5);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
@@ -75,6 +77,11 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
     const allowed = new Set([
       // ERB 控制流配对表的单一真源（见上注）
       '@kojo/erb-vocab/control-flow',
+      // 回车层级的通用装配（enterRulePatternsFromRoles）：ERB-ENTER 判据（本包 enter.ts）
+      // 与 `.kojo` 的 sugarEnterRulePatterns 共用同一道装配门，宿主不抄第二份清单（2026-10-31 随
+      // 判据从宿主搬进本包而新增的读者；与"补全腿两格只降不升"无关——那两格是 engine 族表 /
+      // 空白类，此处是装配门，一枚都不回填旧格）。
+      '@kojo/kojo-vocab/enter',
       // 2026-10-31（补全腿第二批）：原先另有两格（`@kojo/kojo-lang/completion` 的空白类、
       // `@kojo/kojo-vocab/engine` 的引擎族表）随六枚补全叶子一起离开本包——高亮 / 扩选两条腿
       // 只读上面那张配对表，白名单因此**只降不升**：删掉的两格**不许**再回填（回填即红）。

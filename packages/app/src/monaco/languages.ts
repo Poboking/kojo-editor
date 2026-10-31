@@ -27,7 +27,7 @@
 import type * as Monaco from './entry';
 import { extname, isErbDialectPath, KOJO_SOURCE_EXTENSION, KOJO_V1_SOURCE_EXTENSIONS } from '@kojo/plugin-api';
 import { ERB_LANGUAGE_ID, registerErbLanguage } from './erb-language';
-import { ERB_LINE_COMMENT } from './erb-enter';
+import { ERB_LINE_COMMENT } from '@kojo/erb-lang/enter';
 import { JSON_LANGUAGE_ID, JSON_SOURCE_EXTENSION, registerJsonLanguage } from './json-language';
 import { KOJO1_LINE_COMMENT, KOJO_LANGUAGE_ID, registerKojoLanguage } from './kojo-language';
 import { ERB_CAPABILITIES, KOJO2_CAPABILITIES } from './language-capabilities';

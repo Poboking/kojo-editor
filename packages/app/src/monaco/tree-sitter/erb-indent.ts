@@ -1,11 +1,11 @@
-import { erbEnterRulePatterns } from '../erb-enter';
+import { erbEnterRulePatterns } from '@kojo/erb-lang/enter';
 import { mergeIndentConfig, type BaseIndentPatterns, type MergedIndentConfig } from './indent';
 import type { KojoStructureIndentRules } from './types';
 
 /**
  * ERB 结构缩进的**基底与合并点**（`StructureLanguageRuntime.baseIndentPatterns` 的来源）。
  *
- * ## 基底不另造：直接接 `erb-enter.ts` 的既有层级
+ * ## 基底不另造：直接接 `@kojo/erb-lang/enter` 的既有层级
  *
  * ERB 的回车层级（ERB-ENTER-RULES）已经有一条**零手抄**的派生链：
  * `scanner.ts` 的配对表 → `classifyControlFlow()` 角色 → `enterRulePatternsFromRoles()` →

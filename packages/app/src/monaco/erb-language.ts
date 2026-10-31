@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import { ERB_DIRECTIVES, ERB_STATEMENT_DIRECTIVES } from './erb-directives';
 import { ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
-import { erbEnterRulePatterns, ERB_LINE_COMMENT } from './erb-enter';
+import { erbEnterRulePatterns, ERB_LINE_COMMENT } from '@kojo/erb-lang/enter';
 import { toMonacoEnterConfig } from './enter-rules';
 import {
   erbMonacoExtensions,
