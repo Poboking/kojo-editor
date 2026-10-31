@@ -71,13 +71,15 @@ button.ghost {
   background: transparent;
   box-shadow: none;
 }
-/* ⚠ 幽灵钮的悬停**没**在本批改档（口径已实测，落点欠着一批）：基类 `button:hover` 那枚
-   `--btn-bg-hover` 是实心灰，落在 `ghost` 的透明底上读作"突然贴了块胶布"——但 `ghost` 全站
-   90+ 处，其中 `.toolbar-btn:hover` / `.ksp-clear:hover` 自写 `border-color: transparent`、
-   `.prob-copy:hover` 自写 `--hover-strong`，而 `button.ghost:hover:not(:disabled)` 的特异性
-   (0,3,1) 会把这三处标定过的值一并压掉（重档还比 problem-panel.css 晚到，平局也是它赢）。
-   要收这一档得先给"组件自写的悬停档"让位——那是 `@layer` 或统一 `.kit-btn` 的活，
-   已按实测登记成看板行，不在本批顺手做。 */
+/* 幽灵钮的悬停只接一层低调洗色（AE-GHOST）：基类 `button:hover` 那枚 `--btn-bg-hover` 是实心灰，
+   落在 `ghost` 的透明底上读作"突然贴了块胶布"（全站 90+ 处）。让位机制走 `:where()`——把
+   `button.ghost` 的元素/类权重清零，整条只剩 `:hover` + `:not(:disabled)` 两枚伪类（0,2,0）：
+   赢基类 `button:hover`（0,1,1），又输给组件自写的悬停档——`.toolbar-btn:hover:not(:disabled)`
+   （0,3,0）、`.panel-search.ksp .ksp-clear:hover` / `.panel-problems.prob .prob-copy:hover`
+   （0,4,0）照旧按各自设计值生效（描边透明 / 强洗色不受影响）。判据钉在 `ghost-hover-tier.test.ts`。 */
+:where(button.ghost):hover:not(:disabled) {
+  background: var(--wash-gray);
+}
 /* 危险钮立档（美学批 1027）：同一个"会丢数据"的语义此前有三种画法——右键菜单项是
    `color-mix(--danger 14%)` 的洗色、键位行的删除钮是裸 `--red` 文字、市场确认钮是实心红底。
    并排看像三家产品。基座这一档取**最克制**的那条路：静息只把字与描边转红（不与 .primary
