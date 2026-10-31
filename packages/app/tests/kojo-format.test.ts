@@ -2,7 +2,7 @@
  * 文档格式化 · 宿主接线（`dialectForLanguage` / `toTextEdits` / `installDocumentFormatter`）单测。
  *
  * 桩 monaco（同 `kojo-definition.test.ts` 口径）：只记录注册与 dispose，不引入真实运行时。
- * 覆盖：(a) 两个语言 id 各注册一枚、dispose 全回收；(b) 语言认不出 / 宿主不应答 ⇒ 零 edits；
+ * 覆盖：(a) 旧桥只挂**没点名 `formatting` 槽腿**的语言（G2 后今天 = `.kojo` 一枚）、dispose 全回收；(b) 语言认不出 / 宿主不应答 ⇒ 零 edits；
  * (c) resolve 抛错 ⇒ 不炸命令；(d) 行号列号过期 ⇒ 夹取；(e) **返回的 edit 一律不带 `eol`**
  * （Monaco 见到 `eol` 就 `model.pushEOL()` 整篇改行尾 —— 这一条是"行尾不许被改"的最后一道闸）。
  */
@@ -98,12 +98,17 @@ describe('toTextEdits · 形状与陈旧坐标', () => {
 });
 
 describe('installDocumentFormatter · 装配与隔离', () => {
-  it('ERB 与 `.kojo` 各注册一枚 provider；dispose 全部回收', () => {
+  it('旧桥只挂没点名 `formatting` 槽腿的语言（今天 = `.kojo` 一枚）；dispose 全回收', () => {
+    // ERB-PARITY G2（2026-10-31）：ERB 的整篇格式化改由**槽腿工厂**挂（descriptor 点名
+    // `formatting`），本安装器按 `excludeNamed` 让开——"一门语言一枚 provider"这条判据没变，
+    // 变的只是 ERB 那一枚的注册者。ERB 整篇/区间的行为面钉在
+    // `erb-format-range-prefix.test.ts`（区间）与 `format-notice-ledger.test.ts`（降级出口），
+    // 注册序与枚数钉在 `kojo2-providers.test.ts` 的「注册顺序」组。
     const { monaco, registered, disposed } = stubMonaco();
     const handle = installDocumentFormatter(monaco, { resolve: () => null });
-    expect(registered.map((r) => r.languageId).sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(registered.map((r) => r.languageId)).toEqual([KOJO_LANGUAGE_ID]);
     handle.dispose();
-    expect(disposed.sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    expect(disposed).toEqual([KOJO_LANGUAGE_ID]);
   });
 
   it('宿主应答 ⇒ 返回规则层算出的 edits（缩进折半角真的落进 range）', () => {

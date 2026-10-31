@@ -2557,9 +2557,10 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       resolveRange: (model, startLine, endLine) => formatRequestWindowFor(model, startLine, endLine),
     };
     globalDisposers.push(installDocumentFormatter(monaco, formatResolve));
-    // `.kojo` 区间格式化（`Ctrl+Shift+I`）：与整篇、ERB 区间三条腿共用**同一份** `resolve`
-    // 判据与规则开关（批次十三把注册面从 `monaco/entry.ts` 的无参装配点搬到这里——那边拿不到
-    // 偏好读取与降级回调）。一门语言一枚 provider：本行只注册 `.kojo`，ERB 归下一行。
+    // `.kojo` 区间格式化（`Ctrl+Shift+I`）：与整篇那条腿共用**同一份** `resolve` 判据与规则开关
+    // （批次十三把注册面从 `monaco/entry.ts` 的无参装配点搬到这里——那边拿不到偏好读取与降级回调）。
+    // 一门语言一枚 provider：本行只注册 `.kojo`；ERB 的整篇 + 区间两条腿自 ERB-PARITY G2 起改由
+    // 槽腿工厂挂（descriptor 点名 `formatting`），宿主这侧不再有 ERB 的区间注册点。
     globalDisposers.push(installKojoRangeFormatter(monaco, { ...formatResolve, onDegraded: reportFormatDegradation }));
     // 打字规范化（on-type，ERB 语言）：同一份 resolve、同一份规则核心。
     // PS-4：再挂一条**窗口取文腿**（`formatRequestWindowFor`）——一次 `;` 击键只为触发行那一行

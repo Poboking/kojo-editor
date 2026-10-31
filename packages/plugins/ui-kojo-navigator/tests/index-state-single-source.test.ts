@@ -349,7 +349,7 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
     }
   });
 
-  it('补全只留 kojo1 一枚旧桥安装点；`onDegrade…:` 只出现在两条格式化腿上（补全 / 面包屑不许加）', () => {
+  it('补全只留 kojo1 一枚旧桥安装点；降级出口只出现在格式化腿上（补全 / 面包屑不许加）', () => {
     // LAU-4 补全腿第三批（2026-10-31）：ERB 补全改走槽供方，宿主不再有它自己的安装点。
     expect(hits(PROVIDERS, /installKojoCompletion\(monaco, \(\) => editorTables\(requireKernel\(\)\)\)/)).toHaveLength(1);
     expect(hits(PROVIDERS, /installErbCompletion/)).toEqual([]);
@@ -358,7 +358,15 @@ describe('⑦ 补全与面包屑没地方说（实测记档；为它们新开一
     // （整篇那条不在此正则里）。判据不变：两处都必须落在格式化腿上，补全 / 面包屑一处都不许有。
     expect(wired, wired.join('\n')).toHaveLength(2);
     expect(hits(PROVIDERS, /installKojoRangeFormatter\(monaco, \{ \.\.\.formatResolve, onDegraded: reportFormat/)).toHaveLength(1);
-    expect(hits(PROVIDERS, /installRangeFormatter\(monaco, \{ \.\.\.formatResolve, onDegraded: reportFormat/)).toHaveLength(1);
+    // ERB-PARITY G2（2026-10-31）：ERB 的整篇 + 区间两条格式化腿改由**槽腿工厂**挂（descriptor
+    // 点名 `formatting`），宿主这侧只剩 on-type 一枚 ⇒ 上面那条 `installRangeFormatter` 的钉
+    // 换成 on-type 的钉；槽那侧的降级出口是新的一格（`onFormatDegraded:`），同样只许一处。
+    // 两枚计数与 `wired` / `onFormatDegraded` 的总数逐字相等 ⇒ "出口只长在格式化腿上"这条判据
+    // 仍然穷尽，补全与面包屑想接就得先红这里。
+    expect(hits(PROVIDERS, /installErbOnTypeFormatter\(monaco, \{ \.\.\.formatResolve, onDegraded: reportFormat/)).toHaveLength(1);
+    const slotWired = hits(PROVIDERS, /onFormatDegraded\w*:/);
+    expect(slotWired, slotWired.join('\n')).toHaveLength(1);
+    expect(hits(PROVIDERS, /onFormatDegraded: reportFormatDegradation/)).toHaveLength(1);
   });
 
   it('索引未建时补全**连一条降级都不产生**（提供者永不缺席 + 装配核只认 undefined/null ⇒ 这一格确实无话可改）', () => {
