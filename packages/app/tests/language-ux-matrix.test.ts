@@ -210,12 +210,25 @@ interface SourceProbe {
   readonly re: RegExp;
 }
 
-/** 能力专项：补全走装配核（语言 id 在同名模块里注入）、诊断走上屏腿 / 2.0 自有 marker 链 */
+/** 能力专项：补全 / 诊断的取证形状（档位对不上通用形状，逐项点名取证点） */
 const SPECIAL_CAPABILITY_PROBES: Readonly<
   Partial<Record<LanguageCapability, Partial<Record<ParityLanguageId, readonly SourceProbe[]>>>>
 > = {
   [LanguageCapability.Completion]: {
     [ERB_LANGUAGE_ID]: [
+      // LAU-4 补全腿第三批（2026-10-31）：`.erb` 的注册面是**共享槽腿**那一枚（旧桥按
+      // `languageServices: true` 铺；ERB 不点名 `completion`，理由见 `languages.ts` 那段判据）。
+      // 下面两格钉"腿真在表里 + 装配点真装了工厂"；第三、四格钉的是**另一件事**：宿主那本
+      // ERB 册仍然存在，但只作为 `.kojo1` 原生区的 `route` 目标被借用（自装配 provider 的
+      // 调用点已删，反向取证在 `language-parity.test.ts`）。
+      {
+        rel: 'monaco/slot-service-providers.ts',
+        re: /legOf\('completion',[\s\S]{0,200}?registerCompletionItemProvider/,
+      },
+      {
+        rel: 'ui/editor-global-providers.ts',
+        re: /installSlotServiceProviders\(\s*monaco,\s*slotServiceHost/,
+      },
       { rel: 'monaco/erb-completion.ts', re: /installCompletion\(monaco,\s*ERB_COMPLETION_ASSEMBLY/ },
       { rel: 'monaco/erb-completion.ts', re: /languageId:\s*ERB_LANGUAGE_ID/ },
     ],

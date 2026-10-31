@@ -188,15 +188,20 @@ export const KOJO2_CAPABILITIES: readonly LanguageCapability[] = Object.freeze([
  * ERB 的状态表。
  *
  * 逐项读法：
- * - 13 枚 `shared` = `registerForLanguageServices` 的通用 provider（折叠 / 大纲 / 文档格式化 /
- *   语义着色 / 引用 / 签名 / 行内提示 / 行上注解 / 跳实现 / 悬停 / 转定义，含 LAU-4 的
+ * - 14 枚 `shared` = `registerForLanguageServices` 的通用 provider（折叠 / 大纲 / 文档格式化 /
+ *   语义着色 / 引用 / 签名 / 行内提示 / 行上注解 / 跳实现 / 悬停 / 转定义 / **补全**，含 LAU-4 的
  *   同符号高亮 / 结构化扩选）；
  * - `diagnostics` 也是 `shared`：v1 的波浪线来自 `ui.editor.decorator` 槽 → `setModelMarkers`
  *   这条**语言无关**的上屏腿（ERB 与 `.kojo` 同一份），不是 Monaco 的 provider；
- * - `completion` / `rename` 是 `self`：`.erb` 专属的两枚 provider（`erb-completion.ts` 的装配核
- *   带 `languageId: ERB_LANGUAGE_ID`；`erb-rename.ts` 直挂 `ERB_LANGUAGE_ID`）；
+ * - `rename` 是 `self`：`.erb` 专属的那枚 provider（`erb-rename.ts` 直挂 `ERB_LANGUAGE_ID`）；
  * - LAU-4：`highlight` / `selection` 由 `self` 改 `shared`（判据进 `@kojo/erb-lang`，
  *   供方 `@kojo/plugin-erb-lang`）。**档位变了，能力没少**。
+ * - **LAU-4 补全腿第三批（2026-10-31）之后 `completion` 同样记 `shared`**：`.erb` 的补全在
+ *   生产路径上只有共享槽腿那一枚 provider（`slot-service-providers.ts` 的
+ *   `legOf('completion', …)`，经 `languageServices: true` 铺到 ERB），宿主自装配那枚
+ *   `installErbCompletion` 的**调用点已删**（两枚并存 ⇒ Monaco 对补全取并集 ⇒ 同一份候选两遍）。
+ *   `erb-completion.ts` 那本册还在，但只作为 `.kojo1` 原生区的 `route` 目标被借用
+ *   （`kojo-completion.ts`），不再挂在 `kojo-erb` 上 ⇒ 按注册面本格是 `shared` 不是 `self`。
  * - `indent` / `brackets` 是 `builtin`：ERB 的缩进与括对走**语言配置**（`onEnterRules` /
  *   `indentationRules` / `brackets` / `autoClosingPairs`），Monaco 自己按配置做，不注册 provider。
  *   区间格式化 + on-type 在 `kojo-format-range.ts` 里是 ERB 专属（`self`），本行按"文档级 = 共享"
@@ -224,7 +229,9 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
       exempt:
         'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；判据住 @kojo/plugin-erb-parser（槽 ui.editor.languageService 的 callHierarchy 成员，LAU-4 调用层级腿），provider 模块 monaco/erb-callhierarchy-provider.ts 与宿主面板 ui/CallHierarchyOverlay.tsx 已交付；矩阵按注册面记账，待装配点 ui/editor-global-providers.ts 接 installErbCallHierarchyProvider 后改 self',
     },
-    [LanguageCapability.Completion]: 'self',
+    // LAU-4 补全腿第三批：判据整块在 `@kojo/plugin-erb-parser`，生产路径上 `.erb` 只由共享
+    // 槽腿那一枚 provider 服务（宿主 `installErbCompletion` 的调用点已删）⇒ 注册面 = `shared`。
+    [LanguageCapability.Completion]: 'shared',
     [LanguageCapability.Hover]: 'shared',
     [LanguageCapability.Definition]: 'shared',
     [LanguageCapability.Diagnostics]: 'shared',

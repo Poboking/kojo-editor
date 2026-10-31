@@ -73,18 +73,26 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
 /**
    * LAU-4 引用腿（2026-10-31）：查找引用的**判据**已整块搬进 `@kojo/plugin-erb-parser`
    * （`$` 标签 / `#DIM` 声明 / 反向索引三腿合一）；这一格点名把"这条腿交给插件答"写下来，
-   * 复用的就是 kojo2 那张表。`languageServices: true` 保留——其余 v1 腿还没搬（补全
-   * 剩余 facet、signature / format），所以 ERB 仍走旧桥挂其余全腿；点名这一格
-   * 只是让引用腿的归属可从数据读出（宿主据此做投影面发问位点的行尾对齐，
-   * 见 `ui/editor-global-providers.ts` 的 `referenceRequestPointOf`）。
+   * 复用的就是 kojo2 那张表。`languageServices: true` 保留——ERB 其余各腿（大纲 / 折叠 /
+   * 转定义 / 着色 / 行内提示 / 注解 / 高亮 / 扩选 / 补全 / 签名）都靠这枚旧桥铺满，
+   * 点名只用来记"这条腿交给插件答、宿主同种 provider 要让位"；点名这一格
+   * 还另有一个消费者：宿主据此做投影面发问位点的行尾对齐，
+   * 见 `ui/editor-global-providers.ts` 的 `referenceRequestPointOf`。
 *
    * ERB-PARITY G1（2026-10-31）：悬停交给插件供方（`@kojo/plugin-erb-parser` 的 `erb-hover`）。
    * 点名这一格的作用是**把旧桥那枚让开**（`kojo-hover.ts` 的安装器按 `excludeNamed` 跳过
    * 点名了 `hover` 的语言）——注册本身早已由 `languageServices: true` 覆盖。
    *
-   * LAU-4 补全腿（2026-10-31 第三批）**不在这里点名**：ERB 仍走 `languageServices: true`
-   * 的旧桥（补全 / 签名两条腿的 v1 面还在宿主），补全腿因此已经被挂在
-   * ERB 上；点名一格只对"只声明点名腿"的语言才有意义，重复点名等于第二份台账。
+   * LAU-4 补全腿（2026-10-31 第三批）**不点名**，而且这里没有第二份双挂要收：判据整块住
+   * `@kojo/plugin-erb-parser`，宿主那枚自装配 provider（`installErbCompletion`）的**调用点已删**
+   * ⇒ 生产路径上 `.erb` 的补全只有共享槽腿那一枚（旧桥铺的，能力名 `completion`）。
+   * 不点名的理由：这一格今天没有消费者——补全腿不像 `documentHighlight` / `selectionRange` /
+   * `rename` 那样带"只答点名语言"的弃权闸，也没有宿主同种 provider 需要 `excludeNamed` 让位，
+   * 重复点名等于第三份台账。**判据留在这里**：若哪天要重新挂宿主自装配的补全 provider，
+   * 必须同时①在这张表里点名 `completion`，②挂载写成
+   * `registerForLanguageServices(monaco, register, undefined, { excludeNamed: 'completion' })`
+   * ——第三参给成 kind 就把点名语言重新挂上，"一个 kind 恰一枚"立刻破（`language-parity`
+   * 的补全档与 `erb-completion-slot` 的"恰一枚"格钉着这条）。
    *
    * ERB-PARITY G2（2026-10-31）：格式化（整篇 + 区间）交给插件供方
    * （`@kojo/plugin-erb-lang` 的 `erb-formatting`，判据仍是 `@kojo/kojo-vocab/formatter`
