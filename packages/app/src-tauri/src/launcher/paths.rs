@@ -26,6 +26,9 @@ pub const LOCK_FILE: &str = "running.lock";
 pub const INSTANCES_DIR: &str = "instances";
 pub const RUNTIME_DIR: &str = "runtime";
 pub const TRASH_DIR: &str = "trash";
+/// 插件源码项目解包暂存（`launcher/project-staging/{id}/`；§7.2 `launcher_project_extract`）。
+/// 与实例暂存（`instances/{id}/staging/`）分开：那是内容包计划，这是**不带实例**的项目提取。
+pub const PROJECT_STAGING_DIR: &str = "project-staging";
 
 pub const GAME_SUBDIR: &str = "game";
 pub const LOGS_SUBDIR: &str = "logs";
@@ -303,9 +306,14 @@ impl LauncherLayout {
         &self.root
     }
 
-    /// 根目录骨架（`launcher/`、`instances/`、`runtime/`）。
+    /// 根目录骨架（`launcher/`、`instances/`、`runtime/`、`project-staging/`）。
     pub fn ensure_root(&self) -> LauncherResult<()> {
-        for dir in [self.root.clone(), self.instances_dir(), self.runtime_dir()] {
+        for dir in [
+            self.root.clone(),
+            self.instances_dir(),
+            self.runtime_dir(),
+            self.project_staging_root(),
+        ] {
             std::fs::create_dir_all(&dir)
                 .map_err(|e| super::error::io_failure("创建启动器目录", &dir, &e))?;
         }
@@ -330,6 +338,19 @@ impl LauncherLayout {
 
     pub fn trash_dir(&self) -> PathBuf {
         self.root.join(TRASH_DIR)
+    }
+
+    /// 插件项目解包暂存的根：`launcher/project-staging/`（只有宿主往里拼，命令不接受落点）。
+    pub fn project_staging_root(&self) -> PathBuf {
+        self.root.join(PROJECT_STAGING_DIR)
+    }
+
+    /// 一次插件项目解包的暂存目录：`project-staging/{id}/`（id 先过单段名字闸）。
+    pub fn project_staging_dir(&self, id: &str) -> LauncherResult<PathBuf> {
+        if !valid_component(id) {
+            return Err(escape("暂存 id 形状非法", format!("id={id}")));
+        }
+        Ok(self.project_staging_root().join(id))
     }
 
     /// 实例根。**id 必须先过形状闸**——这是"用户输入不参与拼路径"的唯一执行点。

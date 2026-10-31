@@ -21,6 +21,7 @@ pub mod job;
 pub mod logs;
 pub mod paths;
 pub mod process;
+pub mod project;
 pub mod saves;
 pub mod store;
 pub mod tasks;
@@ -28,6 +29,8 @@ pub mod trust;
 
 #[cfg(test)]
 mod content_tests;
+#[cfg(test)]
+mod project_tests;
 #[cfg(test)]
 mod save_tests;
 #[cfg(test)]

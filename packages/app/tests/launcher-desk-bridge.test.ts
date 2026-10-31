@@ -4,8 +4,8 @@
  * 钉六件事（每条都对应 `launcher-bridge.ts` 的一条纪律）：
  * 1. **一个方法 = 一条命令**：P0 的 20 条命令的**命令名与载荷键**逐字断言（表驱动，
  *    一个方法一行）；参数表来自 `src-tauri/src/launcher/commands.rs`，漂一个字就红。
- *    （P1 的十六组——内容包 7 + 存档 8 + 选包 1——判据面在
- *    `launcher-desk-bridge-p1.test.ts`，两边合起来才是 Rust 注册表的全部 36 条。）
+ *    （P1 的十八组——内容包 7 + 存档 8 + 选包 1 + 插件项目 2——判据面在
+ *    `launcher-desk-bridge-p1.test.ts`，两边合起来才是 Rust 注册表的全部 38 条。）
  * 2. **DTO 直通**：宿主 `#[serde(rename_all = "camelCase")]` ⇒ 字段名逐字相同，桥零改名；
  *    反例（喂 snake_case 进来必须原样出去）钉住"没有第二份改名表"。
  * 3. **错误码透传**：`LauncherErrorDto` → `LauncherBridgeError`（code / message / detail /

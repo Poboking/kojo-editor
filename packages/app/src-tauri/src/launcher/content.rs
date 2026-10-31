@@ -412,20 +412,32 @@ fn default_staging_limits() -> LauncherResult<StagingLimits> {
 /// 解包失败 → 契约码（限额 / 越界 / 其余归归档不合法，与 TS `zipEntryContractProblem`
 /// 同一套映射，别让同一个坏包在两层说两句不同的话）。
 fn archive_error(detail: String) -> LauncherErrorDto {
+    archive_error_for("内容包", detail)
+}
+
+/// 同一条码映射，只在人话里点名对象（插件项目解包复用；**判据只有这一份**）。
+pub(crate) fn archive_error_for(what: &str, detail: String) -> LauncherErrorDto {
     let lower = detail.to_lowercase();
     if lower.contains("entries-limit")
         || lower.contains("bytes-limit")
         || lower.contains("path-depth")
     {
-        return LauncherErrorDto::new(ErrorCode::ArchiveLimit, "内容包超出解包限额，已中止")
-            .detail(detail);
+        return LauncherErrorDto::new(
+            ErrorCode::ArchiveLimit,
+            format!("{what}超出解包限额，已中止"),
+        )
+        .detail(detail);
     }
     if lower.contains("path-dotdot") || lower.contains("path-absolute") || lower.contains("path-drive")
     {
         return LauncherErrorDto::new(ErrorCode::PathEscape, "包内路径越出了目标根，已拒绝")
             .detail(detail);
     }
-    LauncherErrorDto::new(ErrorCode::ArchiveInvalid, "内容包不是可安全解开的 ZIP").detail(detail)
+    LauncherErrorDto::new(
+        ErrorCode::ArchiveInvalid,
+        format!("{what}不是可安全解开的 ZIP"),
+    )
+    .detail(detail)
 }
 
 fn is_hex_sha256(text: &str) -> bool {

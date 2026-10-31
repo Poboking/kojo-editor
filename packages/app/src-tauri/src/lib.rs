@@ -706,6 +706,22 @@ fn ensure_write_allowed(
     ensure_write_allowed_from_parts(&app_dir, state, path, op)
 }
 
+/// 启动器**只读**命令的落点判据（`launcher_project_hash` 的 `projectDir`）。
+///
+/// 规格 §7.1 把「插件项目构建的摘要命令」列为唯一接受绝对路径的例外，条件是
+/// 「该目录必须在宿主已登记的写允许域内，且只读不算写」。判定因此**复用同一张三表**
+/// （appData / 已注册项目根 / 常驻工作区根）：不新开路径表，也不给 JS 任何授权入口。
+/// `WriteDomainState` 保持在 crate 根私有——启动器模块只拿到这句话术，不持有判定。
+pub(crate) fn ensure_read_root_allowed(
+    app: &tauri::AppHandle,
+    path: &Path,
+    op: &str,
+) -> Result<(), String> {
+    use tauri::Manager;
+    let state = app.state::<WriteDomainState>();
+    ensure_write_allowed(app, &state, path, op)
+}
+
 /// 允许域任何一处变更（项目根注册 / 清除 / 常驻根增减）⇒ 备忘录整体作废。
 /// 判定的正确性不依赖这一句（命中还要求原路径仍是目录），但它把陈旧窗口压到零。
 fn invalidate_canon_roots(state: &WriteDomainState) {
@@ -4394,6 +4410,8 @@ pub fn run() {
             launcher::commands::launcher_save_import,
             launcher::commands::launcher_save_apply_import,
             launcher::commands::launcher_save_export,
+            launcher::commands::launcher_project_hash,
+            launcher::commands::launcher_project_extract,
             launcher::commands::launcher_task_list,
             launcher::commands::launcher_task_cancel,
             market::market_download,

@@ -1,9 +1,10 @@
 /**
- * 桌面壳桥的启动器面 · **P1 十六组**（L3d 的判据面）：`launcher_pick_archive` +
- * `launcher_content_*` 七条 + `launcher_save_*` 八条。
+ * 桌面壳桥的启动器面 · **P1 十八组**（L3d 十六 + L7B 插件源码项目两条）：
+ * `launcher_pick_archive` + `launcher_content_*` 七条 + `launcher_save_*` 八条 +
+ * `launcher_project_{hash,extract}`。
  *
  * 钉七件事（每条都对应 `launcher-bridge.ts` 里的一条纪律或 L3b 回执点名的一处差异）：
- * 1. **一个方法 = 一条命令**：16 条命令的命令名与**载荷键**逐字断言（表驱动，一个方法一行），
+ * 1. **一个方法 = 一条命令**：18 条命令的命令名与**载荷键**逐字断言（表驱动，一个方法一行），
  *    参数表来自 `src-tauri/src/launcher/commands.rs`，漂一个字就红；
  * 2. **形状对齐到消费方**：`save_list` 的 `{ entries, roots, warnings }` 必须满足
  *    `launcher-core` 的 `HostSaveListing`（`roots[].approved` 是 shared 写回门禁），
@@ -16,8 +17,8 @@
  * 6. **缺席语义**：旧版桌面壳没编进命令（Tauri `Command … not found`）⇒ 中文人话
  *    + `LAUNCHER_PLATFORM_UNSUPPORTED`，不静默、不返回假数据；
  * 7. **命令名与 Rust 同源**：桥里出现的 `launcher_*` 字面量与 `commands.rs::COMMAND_NAMES`
- *    **集合相等**（36 = 20 + 16）——Rust 还没有的命令（`launcher_project_hash` /
- *    `launcher_runtime_*`）一个都不许写调用。
+ *    **集合相等**（38 = 20 + 18）——L7B 收口后 `launcher_project_*` 两条已真接；
+ *    `launcher_runtime_*`（另一张卡）仍未接，一个都不许写调用。
  */
 import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -65,7 +66,7 @@ const TASK = {
   cancellable: false,
 };
 
-/** 表 = P1 的 16 条命令（少接一条就少一行，下面的计数断言会红） */
+/** 表 = P1 的 18 条命令（少接一条就少一行，下面的计数断言会红） */
 const ROWS: ReadonlyArray<{
   readonly method: string;
   readonly cmd: string;
@@ -177,18 +178,31 @@ const ROWS: ReadonlyArray<{
     args: { instanceId: 'inst-1', req: { label: '导出存档', entries: [] } },
     run: () => L.saveExport('inst-1', { label: '导出存档', entries: [] }),
   },
+  {
+    method: 'projectHash',
+    cmd: 'launcher_project_hash',
+    args: { projectDir: 'C:/ws/demo', artifactDir: 'build', entries: ['script/a.txt', 'script/b.txt'] },
+    run: () =>
+      L.projectHash!({ projectDir: 'C:/ws/demo', artifactDir: 'build', entries: ['script/a.txt', 'script/b.txt'] }),
+  },
+  {
+    method: 'projectExtract',
+    cmd: 'launcher_project_extract',
+    args: { archivePath: 'C:/tmp/project.zip', opts: { limits: LIMITS } },
+    run: () => L.projectExtract!('C:/tmp/project.zip', { limits: LIMITS }),
+  },
 ];
 
 describe('启动器桥 P1 · 命令名与载荷（一个方法 = 一条命令）', () => {
-  it('表覆盖 16 条 P1 命令，命令名不重复，且每个方法都在桥面上', () => {
-    expect(ROWS.length).toBe(16);
-    expect(new Set(ROWS.map((r) => r.cmd)).size).toBe(16);
+  it('表覆盖 18 条 P1 命令，命令名不重复，且每个方法都在桥面上', () => {
+    expect(ROWS.length).toBe(18);
+    expect(new Set(ROWS.map((r) => r.cmd)).size).toBe(18);
     for (const row of ROWS) {
       expect(typeof (L as unknown as Record<string, unknown>)[row.method], row.method).toBe('function');
     }
   });
 
-  it('十六条命令一条不重复地真打出去（表驱动逐行断言）', async () => {
+  it('十八条命令一条不重复地真打出去（表驱动逐行断言）', async () => {
     for (const row of ROWS) {
       invokeMock.mockClear();
       await row.run();
@@ -541,7 +555,7 @@ describe('启动器桥 P1 · 错误码透传（LauncherErrorDto 四字段一个�
   });
 });
 
-describe('启动器桥 P1 · 缺席语义（旧桌面壳没编进这 16 条命令）', () => {
+describe('启动器桥 P1 · 缺席语义（旧桌面壳没编进这 18 条命令）', () => {
   it('Tauri「Command … not found」⇒ LAUNCHER_PLATFORM_UNSUPPORTED + 中文人话 + 点名命令', async () => {
     invokeMock.mockRejectedValueOnce(new Error('Command launcher_content_diagnose not found'));
     const err = (await L.contentDiagnose('inst-1').catch((e: unknown) => e)) as LauncherBridgeError;
@@ -590,23 +604,26 @@ describe('启动器桥 P1 · 命令名与 Rust 注册表同源', () => {
   const declared = Number(block?.[1] ?? -1);
   const rustCommands = new Set([...(block?.[2] ?? '').matchAll(/"(launcher_[a-z0-9_]+)"/g)].map((m) => m[1]!));
 
-  it('Rust 注册表读到 36 条（读不到就红，避免下面变成空匹配假绿）', () => {
-    expect(declared).toBe(36);
-    expect(rustCommands.size).toBe(36);
+  it('Rust 注册表读到 38 条（读不到就红，避免下面变成空匹配假绿）', () => {
+    expect(declared).toBe(38);
+    expect(rustCommands.size).toBe(38);
   });
 
-  it('桥的命令名集合 == Rust 命令名集合（36 = 20 P0 + 16 P1，不多不少）', () => {
+  it('桥的命令名集合 == Rust 命令名集合（38 = 20 P0 + 18 P1，不多不少）', () => {
     expect([...bridgeCommands].sort()).toEqual([...rustCommands].sort());
-    expect(bridgeCommands.size).toBe(36);
+    expect(bridgeCommands.size).toBe(38);
   });
 
-  it('Rust 还没有的命令（project_hash / runtime_*）既不注册也不被调用', () => {
-    expect(rustCommands.has('launcher_project_hash')).toBe(false);
+  it('L7B 两条插件项目命令真注册真调用；runtime_* 仍未接', () => {
+    for (const name of ['launcher_project_hash', 'launcher_project_extract']) {
+      expect(rustCommands.has(name), name).toBe(true);
+      expect(bridgeCommands.has(name), name).toBe(true);
+      expect(bridgeSrc).toContain(name);
+    }
     expect([...rustCommands].some((name) => name.startsWith('launcher_runtime_'))).toBe(false);
-    expect(bridgeCommands.has('launcher_project_hash')).toBe(false);
     expect([...bridgeCommands].some((name) => name.startsWith('launcher_runtime_'))).toBe(false);
     // 未接这件事在文件头写明（不是悄悄不接）
-    expect(bridgeSrc).toContain('launcher_project_hash');
+    expect(bridgeSrc).toContain('launcher_runtime_');
     expect(bridgeSrc).toContain('未接');
   });
 });

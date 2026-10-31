@@ -998,6 +998,11 @@ export type {
   HostContentIssueCode,
   HostContentIssue,
   HostContentDiagnosis,
+  /* §7.4 插件源码项目的宿主读数（L7B 收口） */
+  HostProjectHashInput,
+  HostFileDigest,
+  HostProjectExtractEntry,
+  HostProjectExtractResult,
 } from './launcher';
 
 /* ---- 内联补全（幽灵文本）候选源契约（mzuka 1027 IC 批独占追加区块；勿在他处重排） ----

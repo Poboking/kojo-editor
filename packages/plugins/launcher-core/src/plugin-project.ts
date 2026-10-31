@@ -35,6 +35,9 @@ import type {
   FileIO,
   FileStamp,
   GamePluginRules,
+  HostFileDigest,
+  HostProjectExtractResult,
+  HostProjectHashInput,
   LauncherInstance,
   PluginBuildOptions,
   PluginBuildResult,
@@ -116,22 +119,19 @@ const CAPABILITIES: ReadonlySet<string> = new Set<PluginCapability>([
 
 const SAVE_IMPACTS = new Set(['none', 'possible', 'unknown']);
 
-/** 宿主 `launcher_project_hash` 的逐文件读数（§7.2：`{ projectDir, artifactDir, entries }` → `FileDigest[]`） */
-export interface HostFileDigest {
-  /** 入参里那条**相对 `artifactDir`** 的路径（原样回显，本层按它配对） */
-  readonly path: string;
-  readonly sha256: string;
-  readonly size: number;
-}
-
-export interface HostProjectHashInput {
-  /** 项目根绝对路径（宿主复核它在写允许域内） */
-  readonly projectDir: string;
-  /** 制品目录名（单层；条目解析后不得逃逸它） */
-  readonly artifactDir: string;
-  /** 相对 `artifactDir` 的文件路径（POSIX） */
-  readonly entries: readonly string[];
-}
+/**
+ * 宿主读数形状（§7.2 `{ projectDir, artifactDir, entries }` → `FileDigest[]`）。
+ *
+ * **形状只有契约一份**（L7B 收口，照 L1c 内容包 / 存档的先例）：`HostFileDigest` /
+ * `HostProjectHashInput` / `HostProjectExtractEntry` / `HostProjectExtractResult` 住
+ * `plugin-api/launcher.ts` §7.4，本包只 re-export（公开面名字不变）。
+ */
+export type {
+  HostFileDigest,
+  HostProjectHashInput,
+  HostProjectExtractEntry,
+  HostProjectExtractResult,
+} from '@kojo/plugin-api';
 
 /**
  * 构建期唯一的宿主能力面：**只回答「这批字节的哈希是多少」**。
@@ -141,28 +141,11 @@ export interface ProjectHashHost {
   projectHash(input: HostProjectHashInput): Promise<readonly HostFileDigest[]>;
 }
 
-/** `launcher_project_extract` 的一条暂存读数（宿主解包后的逐条目形状） */
-export interface HostProjectExtractEntry {
-  /** 包内路径（`{rootId}/{path}`；宿主已解到 `stagingDir` 下同名相对路径） */
-  readonly path: string;
-  /** 条目类型：符号链接与目录**一律拒绝**（首版只搬普通文件） */
-  readonly kind: 'file' | 'symlink' | 'directory';
-  readonly size: number;
-}
-
-/** `launcher_project_extract` 的返回（宿主暂存目录 + 包内清单 + 逐条目读数） */
-export interface HostProjectExtractResult {
-  /** 宿主解包落点（读侧；本层只读不写，也不删——暂存由宿主 TTL 清理） */
-  readonly stagingDir: string;
-  readonly manifest: ContentPackManifest;
-  readonly entries: readonly HostProjectExtractEntry[];
-}
-
 /**
  * 「把压缩包反解成源码项目」的宿主能力面（本包**不在 JS 里解 zip**）。
  *
- * 真实宿主尚未提供这条命令（`launcher_content_plan` 是实例侧的，且不交字节），
- * 因此这里是**可选能力**：缺席时 `extractArchive` 如实拒绝并点名缺哪条命令。
+ * 宿主侧命令 `launcher_project_extract` 已落地（L7B 收口）；能力探测仍按方法在不在走：
+ * 旧宿主 / 非桌面载体缺席时 `extractArchive` 如实拒绝并点名缺哪条命令。
  */
 export interface ProjectExtractHost {
   projectExtract(

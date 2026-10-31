@@ -3,7 +3,10 @@ import type {
   ContentFileRef,
   CreateInstanceRequest,
   ExecutableTrust,
+  HostFileDigest,
   HostLogPage,
+  HostProjectExtractResult,
+  HostProjectHashInput,
   InstanceCreation,
   InstanceInspection,
   InstanceOpenTarget,
@@ -45,9 +48,9 @@ import type {
 import { invoke } from './invoke';
 
 /**
- * 桌面壳桥的**启动器面**（`PlatformBridge.launcher`）：Rust 36 条 `launcher_*` 命令 +
+ * 桌面壳桥的**启动器面**（`PlatformBridge.launcher`）：Rust 38 条 `launcher_*` 命令 +
  * 4 条事件（`kojo:launcher-process` / `-log` / `-task` / `-instance`）的逐条接线。
- * 命令面清单见下方「本桥覆盖的命令面」（20 P0 + 16 P1，逐条对过 Rust 实签名）。
+ * 命令面清单见下方「本桥覆盖的命令面」（20 P0 + 18 P1，逐条对过 Rust 实签名）。
  *
  * 三条纪律（改之前先读）：
  *
@@ -66,7 +69,7 @@ import { invoke } from './invoke';
  *    漂开）。反例有测试钉住：喂 snake_case 进来，出去仍是 snake_case——casing 的唯一真源是
  *    Rust 的 serde 属性，不是本文件（`packages/app/tests/launcher-desk-bridge.test.ts`）。
  *
- * ## 本桥覆盖的命令面（36 条 = 20 P0 + 16 P1，与 `commands.rs::COMMAND_NAMES[&str; 36]` 逐字对齐）
+ * ## 本桥覆盖的命令面（38 条 = 20 P0 + 18 P1，与 `commands.rs::COMMAND_NAMES[&str; 38]` 逐字对齐）
  *
  * **P0（L3c 已接：实例 / 目录 / 进程 / 日志 / 任务，20 条）**
  * `launcher_instance_{list,get,create,update,remove,duplicate}` ·
@@ -75,10 +78,11 @@ import { invoke } from './invoke';
  * `launcher_process_{status,list}` · `launcher_log_{tail,sessions,read,export}` ·
  * `launcher_task_{list,cancel}`
  *
- * **P1（L3d 本批：内容包 / 存档，16 条）**
+ * **P1（L3d：内容包 / 存档 16 条 + L7B：插件源码项目 2 条）**
  * `launcher_pick_archive` ·
  * `launcher_content_{list,plan,apply,uninstall,set_enabled,set_order,diagnose}` ·
- * `launcher_save_{list,backups,backup,restore,delete_backup,import,apply_import,export}`
+ * `launcher_save_{list,backups,backup,restore,delete_backup,import,apply_import,export}` ·
+ * `launcher_project_{hash,extract}`
  *
  * 三处形状差异（L3b 回执点名的那三处，逐条对齐过）：
  * - `launcher_save_list` 返回 `{ entries, roots, warnings }`（不是裸 `SaveEntry[]`）
@@ -90,12 +94,16 @@ import { invoke } from './invoke';
  *   `launcher_save_import` 比契约多 `entryCount` / `totalBytes` / `expiresAt` ⇒ 两组都
  *   **原样透传**（映射归 `launcher-core`；在本层丢字段 = 让消费方只能靠猜）。
  *
- * **未接（Rust 里根本还没有这两条命令，写调用只会红在运行期而不是编译期）**：
- * `launcher_project_hash`（插件项目源码指纹，`launcher-core::ProjectHashHost` 在等）与
+ * **未接（Rust 里根本没有这些命令，写调用只会红在运行期而不是编译期）**：
  * `launcher_runtime_*`（运行时登记 / 解析，§7.2 标 P1 但宿主尚未落地——`process.rs` 的运行时
  * 解析因此是 fail-closed）。P2 的整合包（bundle）同样没有任何宿主命令。本文件一个字都不写。
  *
- * 旧版桌面壳（没编进这 16 条命令）**不会静默**：`callP1` 认出 Tauri 的「Command … not found」
+ * 插件源码项目的两条（`launcher_project_hash` / `launcher_project_extract`）**已接**（L7B）：
+ * 前者是 §7.1 唯一允许 `projectDir` 绝对路径的例外（只读，宿主复核它在写允许域内）；
+ * 后者解到宿主暂存（`launcher/project-staging/`）并把 `pack.json` 原样读回。两者都不认识
+ * 插件语义——校验 / `buildId` / drift 报告在 `launcher-core::PluginProjectService`。
+ *
+ * 旧版桌面壳（没编进这 18 条 P1 命令）**不会静默**：`callP1` 认出 Tauri 的「Command … not found」
  * 拒绝后改写成 `LauncherBridgeError('LAUNCHER_PLATFORM_UNSUPPORTED', 中文人话)`，
  * 消费方照既有错误码分流即可，不会看到一句英文 `not found`。
  */
@@ -471,6 +479,36 @@ export const launcherBridge: LauncherHostBridge & ContentHostCommands & SaveHost
   saveExport: (instanceId: string, req: SaveExportRequest) =>
     callP1<string | null>('launcher_save_export', { instanceId, req }, '存档导出'),
 
+  /* ---- 插件源码项目（P1：`launcher_project_*` 两条；校验 / 打包全在 launcher-core） ---- */
+
+  /**
+   * `launcher_project_hash`：逐文件流式摘要。
+   *
+   * `projectDir` 是**输入根**（只读）：宿主先复核它在写允许域内，再按 `artifactDir` +
+   * `entries` 解析；本层不拼路径、不规范化条目（第二份路径判据迟早与 `paths.rs` 漂开）。
+   * 三个参数逐字来自 `HostProjectHashInput`，`entries` 原样过桥（顺序即配对依据）。
+   */
+  projectHash: (input: HostProjectHashInput) =>
+    callP1<readonly HostFileDigest[]>(
+      'launcher_project_hash',
+      { projectDir: input.projectDir, artifactDir: input.artifactDir, entries: input.entries },
+      '插件项目构建摘要',
+    ),
+
+  /**
+   * `launcher_project_extract`：解到**宿主暂存**并读回包内清单 + 逐条目读数。
+   *
+   * 限额是 `{ limits }`（Rust `ProjectExtractOptionsDto`）：三个数由 `launcher-core` 从契约
+   * 常量（`ZIP_EXTRACT_LIMITS`）传入，本层不换档、不补默认值；宿主只许收紧。
+   * 暂存落点由宿主拼（`launcher/project-staging/`），返回值里的 `stagingDir` 是**读侧**路径。
+   */
+  projectExtract: (archivePath: string, opts: { readonly limits: ZipContractLimits }) =>
+    callP1<HostProjectExtractResult>(
+      'launcher_project_extract',
+      { archivePath, opts: { limits: opts.limits } },
+      '插件项目解包',
+    ),
+
   /* ---- 事件（§7.3；载荷字段名与宿主 json! 逐字相同，含 seq） ---- */
 
   onProcess: (listener: (event: LauncherProcessEvent) => void) =>
@@ -490,7 +528,7 @@ export const launcherBridge: LauncherHostBridge & ContentHostCommands & SaveHost
  * 把启动器桥挂到平台对象上（**唯一**挂载点，由 `bootstrap.ts::ensureLauncherPlugin` 调用）。
  *
  * 为什么是"后挂"而不是在 `tauri-bridge.ts` 里静态写上 `launcher: launcherBridge`：
- * 那会把整份桥（36 条命令 + 4 条事件 + 错误映射，二十余 KB 源码）算进开机静态图，
+ * 那会把整份桥（38 条命令 + 4 条事件 + 错误映射，二十余 KB 源码）算进开机静态图，
  * 而启动器视图是懒装载的——**桥也应该只在启动器真被打开时才解析**。PS-10 的开机图
  * 闸量得出来这一枚文件（L3c 接线时实测 +1 文件 / +12 KB）。
  *

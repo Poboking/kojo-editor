@@ -29,14 +29,21 @@ pub struct FileDigest {
 
 /// 流式 SHA-256（只读、不写、不改 mtime）。
 pub fn sha256_file(path: &Path) -> LauncherResult<FileDigest> {
-    let mut file = std::fs::File::open(path).map_err(|e| io_failure("打开可执行文件", path, &e))?;
+    sha256_file_labeled(path, "可执行文件")
+}
+
+/// 与 [`sha256_file`] 同一条实现，只是失败文案里的对象名由调用方给
+/// （插件项目摘要读的是作者源码，不该在错误条里写「可执行文件」）。
+pub fn sha256_file_labeled(path: &Path, what: &str) -> LauncherResult<FileDigest> {
+    let mut file =
+        std::fs::File::open(path).map_err(|e| io_failure(&format!("打开{what}"), path, &e))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; HASH_CHUNK];
     let mut size: u64 = 0;
     loop {
         let read = file
             .read(&mut buf)
-            .map_err(|e| io_failure("读取可执行文件", path, &e))?;
+            .map_err(|e| io_failure(&format!("读取{what}"), path, &e))?;
         if read == 0 {
             break;
         }

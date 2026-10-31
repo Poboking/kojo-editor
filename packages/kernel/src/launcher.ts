@@ -70,6 +70,8 @@ export class LauncherHostImpl implements LauncherHostBridge {
   saveImport = this.p1('saveImport', '存档导入预检');
   saveApplyImport = this.p1('saveApplyImport', '存档导入');
   saveExport = this.p1('saveExport', '存档导出');
+  projectHash = this.p1('projectHash', '插件项目构建摘要');
+  projectExtract = this.p1('projectExtract', '插件项目解包');
 
   /* ---- 实例 ---- */
 

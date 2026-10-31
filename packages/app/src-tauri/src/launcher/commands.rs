@@ -25,6 +25,7 @@ use super::error::{internal, platform_unsupported, ErrorCode, LauncherErrorDto, 
 use super::logs::{self, LogPageDto, LogQuery, LogSessionDto};
 use super::paths::{self, LauncherLayout};
 use super::process::{self, ProcessStatusDto};
+use super::project;
 use super::saves::{
     self, RestoreOptionsDto, SaveBackupDto, SaveBackupRequestDto, SaveExportRequestDto,
     SaveImportPlanDto, SaveListingDto, SaveResolutionDto,
@@ -1371,9 +1372,45 @@ pub async fn launcher_save_export(
     .await
 }
 
+/// `launcher_project_hash`（§7.2）：插件项目构建的**逐文件流式摘要**。
+///
+/// `projectDir` 是**输入根**而不是写落点：命令只读，但必须先过宿主写允许域
+/// （`project::assert_project_root` 复用 `WriteDomainState` 那三张表，不新立路径表）。
+/// 本命令不认识插件语义——`plugin.json` 校验、`roots` 映射、`buildId` 全在 TS 侧。
+#[tauri::command]
+pub async fn launcher_project_hash(
+    app: tauri::AppHandle,
+    project_dir: String,
+    artifact_dir: String,
+    entries: Vec<String>,
+) -> LauncherResult<Vec<project::FileDigestDto>> {
+    block("launcher_project_hash", move || {
+        let root = project::assert_project_root(&app, &project_dir)?;
+        project::hash_project(&root, &artifact_dir, &entries)
+    })
+    .await
+}
+
+/// `launcher_project_extract`（§7.2）：把压缩包解到**宿主暂存**并交回逐条目读数。
+///
+/// 解包走内容包同一套 ZIP 守卫（`archive_guard`）；落点只由 `LauncherLayout` 拼
+/// （`launcher/project-staging/{id}/`），命令没有落点参数。清单原样读回、不做插件判断。
+#[tauri::command]
+pub async fn launcher_project_extract(
+    state: HostState<'_>,
+    archive_path: String,
+    opts: project::ProjectExtractOptionsDto,
+) -> LauncherResult<project::ProjectExtractResultDto> {
+    let host = state.inner().clone();
+    block("launcher_project_extract", move || {
+        project::extract_project(&host, &archive_path, &opts)
+    })
+    .await
+}
+
 /// 命令名的唯一清单（测试拿它钉 `lib.rs` 的注册表：少登记一条就红）。
 #[allow(dead_code)]
-pub const COMMAND_NAMES: [&str; 36] = [
+pub const COMMAND_NAMES: [&str; 38] = [
     "launcher_pick_source_root",
     "launcher_pick_write_root",
     "launcher_pick_archive",
@@ -1408,6 +1445,8 @@ pub const COMMAND_NAMES: [&str; 36] = [
     "launcher_save_import",
     "launcher_save_apply_import",
     "launcher_save_export",
+    "launcher_project_hash",
+    "launcher_project_extract",
     "launcher_task_list",
     "launcher_task_cancel",
 ];

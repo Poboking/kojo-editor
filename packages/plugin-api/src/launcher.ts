@@ -1803,6 +1803,53 @@ export interface HostContentDiagnosis {
   readonly issues: readonly HostContentIssue[];
 }
 
+/* ══════════════════════════════════════════════════════════════════════════════
+ * §7.4 插件源码项目的宿主读数（P1：`launcher_project_hash` / `launcher_project_extract`）
+ *
+ * 两条命令都**不认识插件语义**（§7.2 尾注）：hash 只回答「这批字节的哈希是多少」，
+ * extract 只把包解到宿主暂存并把 `pack.json` 原样读回。清单校验、`roots` 映射、`buildId`
+ * 与 drift 报告全在 `PluginProjectService`（ADR-0010 决策 3：宿主不写第二套打包器）。
+ *
+ * 这是 §7.1 唯一允许接受绝对路径的例外：`projectDir` 是**只读输入根**，宿主复核它落在
+ * 已登记的写允许域内（appData / 已授权工作区根），且条目解析后不得逃逸 `artifactDir`。
+ * ══════════════════════════════════════════════════════════════════════════════ */
+
+/** `launcher_project_hash` 的入参（§7.2） */
+export interface HostProjectHashInput {
+  /** 项目根绝对路径（宿主复核它在写允许域内） */
+  readonly projectDir: string;
+  /** 制品目录名（单层；条目解析后不得逃逸它） */
+  readonly artifactDir: string;
+  /** 相对 `artifactDir` 的文件路径（POSIX） */
+  readonly entries: readonly string[];
+}
+
+/** `launcher_project_hash` 的逐文件读数（`FileDigest[]` 的一条） */
+export interface HostFileDigest {
+  /** 入参里那条**相对 `artifactDir`** 的路径（原样回显，消费方按它配对） */
+  readonly path: string;
+  /** 小写十六进制 SHA-256 */
+  readonly sha256: string;
+  readonly size: number;
+}
+
+/** `launcher_project_extract` 的一条暂存读数 */
+export interface HostProjectExtractEntry {
+  /** 包内路径（`{rootId}/{path}`；宿主已解到 `stagingDir` 下同名相对路径） */
+  readonly path: string;
+  /** 条目类型：符号链接与目录**一律拒绝**（首版只搬普通文件） */
+  readonly kind: 'file' | 'symlink' | 'directory';
+  readonly size: number;
+}
+
+/** `launcher_project_extract` 的返回（宿主暂存目录 + 包内清单 + 逐条目读数） */
+export interface HostProjectExtractResult {
+  /** 宿主解包落点（读侧；消费方只读不写，也不删——暂存由宿主 TTL 清理） */
+  readonly stagingDir: string;
+  readonly manifest: ContentPackManifest;
+  readonly entries: readonly HostProjectExtractEntry[];
+}
+
 /**
  * 宿主原语的零逻辑透传（服务键 `kernel.launcher` / 平台桥 `PlatformBridge.launcher`）。
  *
@@ -1938,6 +1985,20 @@ export interface LauncherHostBridge {
   ): Promise<LauncherTask>;
   /** `launcher_save_export`：原生保存对话框 + 写盘同命令；返回用户选的落点或 `null` */
   saveExport?(instanceId: string, req: SaveExportRequest): Promise<string | null>;
+
+  /* ---- 插件源码项目（`launcher_project_*` 两条，全 P1：缺席 = 该宿主没有这组） ----
+   *
+   * `projectDir` 是**只读输入根**（§7.1 的唯一例外），宿主复核它在写允许域内；
+   * 打包不在宿主（ADR-0010 决策 3），extract 的解包守卫与内容包共用同一份。
+   */
+
+  /** `launcher_project_hash`：逐文件流式摘要（大二进制不整包读进 JS） */
+  projectHash?(input: HostProjectHashInput): Promise<readonly HostFileDigest[]>;
+  /** `launcher_project_extract`：解到宿主暂存 + 读回包内清单与逐条目读数 */
+  projectExtract?(
+    archivePath: string,
+    opts: { readonly limits: ZipContractLimits },
+  ): Promise<HostProjectExtractResult>;
 
   /* ---- 事件（§7.3） ---- */
 
