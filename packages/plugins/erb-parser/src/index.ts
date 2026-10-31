@@ -41,7 +41,17 @@ export {
   type BuiltinSignature,
 } from './builtins';
 // 实参个数（用户函数；纯函数，目录查询）
-export { ARITY_MISMATCH_CODE, arityParamsOf, collectArityDiagnostics, erbCallSitesOf, type ArityCatalog, type ArityInput, type ArgSpan, type ErbCallSite } from './arity';
+export { ARITY_MISMATCH_CODE, agreedParamsOf, arityParamsOf, collectArityDiagnostics, erbCallSitesOf, type ArityCatalog, type ArityInput, type ArgSpan, type ErbCallSite } from './arity';
+// 语义诊断合并出口（三条腿一张表；编辑器与整项目扫描共用同一份判据）
+export {
+  ERB_DIAGNOSTICS_RULE_FAILED,
+  UNDEFINED_NAME_DIAGNOSTICS_ENABLED,
+  collectErbSemanticDiagnostics,
+  projectDeclaredNames,
+  type ErbDiagnosticsRuleFailure,
+  type ErbSemanticDiagnosticsOptions,
+  type ErbSemanticDiagnosticsResult,
+} from './offload';
 // 引擎指令名全集（A3；出处 = Emuera `enum FunctionCode`，静态数据，不进索引契约）
 export {
   ERB_DECLARATION_DIRECTIVES,
@@ -78,14 +88,18 @@ export {
   PARSE_FILE_TASK,
   SCAN_FLOW_TASK,
   SCAN_REFS_TASK,
+  SEMANTIC_DIAGNOSTICS_TASK,
   STRUCTURE_DECORATIONS_TASK,
+  buildSemanticBulkContext,
   erbParserTasks,
   erbStructureDecorations,
   scanRefsBatch,
+  semanticDiagnosticsBulk,
   type ParseFilePayload,
   type ParseFileWire,
   type ScanFlowPayload,
   type ScanRefsPayload,
+  type SemanticBulkContext,
 } from './offload';
 // 索引快照（纯函数；增量复扫的判据与合并逻辑）
 export {

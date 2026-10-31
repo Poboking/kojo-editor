@@ -372,6 +372,31 @@ export class StructureClient {
     return folds;
   }
 
+  /**
+   * 把这份文档的解析**排上队**：不 await、不读结果（R5，2026-10-29 折叠单源）。
+   *
+   * 给"推"的那几面一个开跑点。缩进规则与结构残缺都没有自己的拉取时机——它们随 `parse`
+   * 的回话到货，而 `parse` 原先只由 `tokens()` / `foldingRanges()` 这两条**拉取**腿触发。
+   * R5 把折叠搬给语言服务插件之后，折叠那次询问仍然落在宿主上（`providers.ts` 里那枚
+   * `structureFoldingProvider` 的空壳），由它调这里。
+   *
+   * 与那两条腿**同一条跟踪语义**（都走 `track`：换轨 / `pendingParse` / 撤票都照旧），
+   * 区别只有"没人等结果"——回话照常落库、照常触发 `onIndent` / `onSyntax`。
+   */
+  warmUp(model: Monaco.editor.ITextModel): void {
+    const legacy = this.legacy;
+    if (legacy !== null) {
+      // 旧路（v2）没有"预热"这一格：走它自己的拉取腿（与 R5 之前逐字相同），结果丢掉。
+      // 两条 settled 分支都要有——降级本身不许再往外抛。
+      void legacy.foldingRanges(model).then(
+        () => undefined,
+        () => undefined,
+      );
+      return;
+    }
+    this.track(model);
+  }
+
   dispose(): void {
     this.clearOpenTimer();
     this.releaseDoc();
@@ -903,32 +928,42 @@ export class StructureClient {
     if (reply.treeId.length > 0) doc.baseTreeId = reply.treeId;
     const facets = reply.facets;
     /**
-     * 这一面"等不来了"吗（判死 = 别再等，也别每屏重来一遍）。
+     * 这一面**为什么没在回话里**（三档，缺一不可）：
      *
-     * 三档，缺一不可：
-     * - **这份文档压根没要它**（体量档把语义摘掉的那一档）⇒ 现在就可以判：它不会随别的
-     *   请求补上；
-     * - **这一拍没要它**（首帧分层：折叠那一拍没问语义）⇒ 不是它没来，是压根没问；
-     * - **要了却没来，而且后面也没有哪一拍会再要它** ⇒ 查询不可用 / 编译失败（原因见 worker
-     *   控制台）。反面就是**不许**在这里判死：后面那一拍还要它，就得等那一条回话。
+     * - `not-wanted`：**这份文档压根没要它**（体量档把语义摘掉、R5 之后 ERB 的折叠也走这一档）
+     *   ⇒ 它不是失败，是这份文档的清单里没有它。当场判死（别让它把 `awaitFresh` 挂到超时），
+     *   但**不记账、不通知**——把"没要"说成"没回结果"就是假警报，而铁律 4 的另一面是
+     *   **说出去的每一句都必须是真的**。
+     * - `later`：这一拍没要，但后面还有哪一拍会要 ⇒ 等那一条回话。
+     * - `lost`：要了却没来，而且后面也没有哪一拍会再要它 ⇒ 查询不可用 / 编译失败，记账。
      */
-    const missing = (name: StructureFacet): boolean => {
-      if (doc.want !== undefined && !doc.want.includes(name)) return true;
-      if (entry.want !== undefined && !entry.want.includes(name)) return false;
-      return !doc.beats.some((beat) => beat.includes(name));
+    const absent = (name: StructureFacet): 'not-wanted' | 'later' | 'lost' => {
+      if (doc.want !== undefined && !doc.want.includes(name)) return 'not-wanted';
+      if (entry.want !== undefined && !entry.want.includes(name)) return 'later';
+      return doc.beats.some((beat) => beat.includes(name)) ? 'later' : 'lost';
+    };
+    const settleAbsent = (name: FacetName): void => {
+      if (doc.dead[name]) return;
+      const why = absent(name);
+      if (why === 'not-wanted') {
+        doc.dead[name] = true;
+        this.flush(doc);
+        return;
+      }
+      if (why === 'lost') this.markFacetMissing(doc, name);
     };
     if (facets.semantic !== undefined) {
       doc.semantic = { version: reply.version, value: this.tokensOf(facets.semantic) };
-    } else if (!doc.dead.semantic && missing('semantic')) {
-      this.markFacetMissing(doc, 'semantic');
+    } else {
+      settleAbsent('semantic');
     }
     if (facets.folds !== undefined) {
       const spans = facets.folds.spans;
       const folds: KojoStructureFold[] = [];
       for (let i = 0; i + 1 < spans.length; i += 2) folds.push({ startRow: spans[i]!, endRow: spans[i + 1]! });
       doc.folds = { version: reply.version, value: folds };
-    } else if (!doc.dead.folds && missing('folds')) {
-      this.markFacetMissing(doc, 'folds');
+    } else {
+      settleAbsent('folds');
     }
     if (facets.indent !== undefined) {
       this.latestIndent = { version: reply.version, value: facets.indent };

@@ -327,13 +327,17 @@ describe('装饰热路径读数（真装饰器 + 6000 行合成文件）', () =>
     expect(hasWorkerTask('erb.exprSyntaxDecorations')).toBe(true);
     expect(hasWorkerTask('sugar.diagnostics')).toBe(false);
     // PS-11 起 `condition.extractFile`（单文件抽取整链）也经同一张装配表出货；
-    // REFS-WORKER 起 `erb.scanRefs`（引用段扫描）同表，清单仍逐项钉死
+    // REFS-WORKER 起 `erb.scanRefs`（引用段扫描）同表，清单仍逐项钉死。
+    // 2026-10-31 性能线并入：`erb.semanticDiagnosticsBulk`（R4b 整项目扫描的语义诊断批量腿）
+    // 是第七枚——它是**批量**任务（载荷 `EditorDecoratorBulkPayload`），与上面几条单文件腿
+    // 同一张表、由 `ui/project-diagnostics` 按块派发；名单加它而不是放宽成 `toContain`。
     expect(Object.keys(computeTasks).sort()).toEqual([
       'condition.extractFile',
       'erb.exprSyntaxDecorations',
       'erb.parseFile',
       'erb.scanControlFlow',
       'erb.scanRefs',
+      'erb.semanticDiagnosticsBulk',
       'erb.structureDecorations',
     ]);
     // 合成表确实由 erb-parser 的纯扫描器填的（不是空壳），且与插件导出的纯函数同结果

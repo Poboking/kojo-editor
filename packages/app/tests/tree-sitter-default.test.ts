@@ -244,6 +244,11 @@ describe('结构层默认开：偏好与判据', () => {
     // 没声明结构面的语言，折叠也不碰（kojo2 有自己的 worker）
     expect(resolveStructureFoldsEnabled(KOJO2_LANGUAGE_ID, '/w/口上.kojo2')).toBe(false);
     expect(resolveStructureFoldsEnabled(JSON_LANGUAGE_ID, '/w/配置.json')).toBe(false);
+    // R5（2026-10-29 折叠单源）：ERB 的折叠由 `ui.editor.languageService` 槽上的 `erb-folding`
+    // 供（真语料上是超集）⇒ 结构层这一面整体退休。一行都不用删的那种"退休"不算——这里判的是
+    // 判据函数本身，接线面的判据在 `tree-sitter-fallback-wiring.test.ts` 的 (R5) 两例。
+    expect(resolveStructureFoldsEnabled(ERB_LANGUAGE_ID, '/w/口上.ERB')).toBe(false);
+    expect(resolveStructureFoldsEnabled(ERB_LANGUAGE_ID, '/w/口上.ERB', false)).toBe(false);
   });
 });
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
 import { StructureClient } from '../src/monaco/tree-sitter/client';
-import { resetStructureDegradationLedger } from '../src/monaco/tree-sitter/fallback';
+import { onStructureDegradation, resetStructureDegradationLedger } from '../src/monaco/tree-sitter/fallback';
 import type { StructureLanguageRuntime } from '../src/monaco/tree-sitter/structure-runtime';
 import type { KojoStructureIndentRules } from '../src/monaco/tree-sitter/types';
 import { STRUCTURE_PROTOCOL_VERSION, type StructureFacet } from '@kojo/kojo-core';
@@ -338,6 +338,51 @@ describe('结构 client · 首帧分层（R8：折叠先上，着色后补）', 
     });
     await flush();
     expect(parseRequests(worker), '差集之后又发了拍 ⇒ 白付一次全文投递').toHaveLength(before);
+    client.dispose();
+  });
+
+  /* ------------------- R5：折叠退休之后的触发与缺面判据（2026-10-29） ------------------- */
+
+  it('`warmUp` 只把解析排上队：无人等结果，缩进到货照样回调装配层', async () => {
+    const { client, worker } = makeClient(() => ['indent', 'syntax']);
+    const model = fakeModel('一行\n');
+    client.warmUp(model);
+    await flush();
+    expect(wantsOf(worker), '预热就该把这一拍发出去（它是缩进/残缺的唯一开跑点）').toEqual([['indent', 'syntax']]);
+    worker.reply(replyOf(lastParse(worker)!.id, 1, 1, { indent: EMPTY_INDENT, syntax: { faults: [], truncated: false } }));
+    await flush();
+    expect(indentCalls, '没人等结果，缩进照样要落到语言配置上').toBe(1);
+    expect(parseRequests(worker), '预热只发一拍').toHaveLength(1);
+    client.dispose();
+  });
+
+  it('`want` 不含折叠 ⇒ 静默判死：不报「没回结果」，也不把等待挂到超时', async () => {
+    const notices: string[] = [];
+    const off = onStructureDegradation((d) => notices.push(`${d.capability}/${d.stage}`));
+    const { client, worker } = makeClient(() => ['semantic', 'indent', 'syntax']);
+    const model = fakeModel('一行\n');
+    const folds = client.foldingRanges(model);
+    await flush();
+    expect(wantsOf(worker), '折叠不在清单里 ⇒ 第一拍是语义').toEqual([['semantic']]);
+    worker.reply(replyOf(lastParse(worker)!.id, 1, 1, { semantic: captureTable() }));
+    expect(await folds, '这一面这份文档压根没要 ⇒ 立刻交 null，别等超时').toBeNull();
+    expect(notices, '「没要」不是「没回结果」——报出去就是假警报').toEqual([]);
+    off();
+    client.dispose();
+  });
+
+  it('要了却没来（真失败）⇒ 照旧记账，不许被上一条的静默吃掉', async () => {
+    const notices: string[] = [];
+    const off = onStructureDegradation((d) => notices.push(`${d.capability}/${d.stage}`));
+    const { client, worker } = makeClient(() => ['folds']);
+    const model = fakeModel('一行\n');
+    const folds = client.foldingRanges(model);
+    await flush();
+    // 回话里没有 folds（查询编译失败那一形），而这份文档要它、后面也没有别的拍
+    worker.reply(replyOf(lastParse(worker)!.id, 1, 1, { indent: EMPTY_INDENT }));
+    expect(await folds).toBeNull();
+    expect(notices, '真失败必须说（铁律 4 的正面）').toEqual(['folds/query']);
+    off();
     client.dispose();
   });
 

@@ -1,4 +1,4 @@
-import type { ErbIndex, ErbParam, LineDecoration } from '@kojo/plugin-api';
+import type { ErbFunctionRef, ErbIndex, ErbParam, LineDecoration } from '@kojo/plugin-api';
 import { isErbDialectPath, MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
 import { normalizedUpper, visibleCodeLines, type VisibleCodeLine } from './references';
 
@@ -367,20 +367,25 @@ function issueOf(site: ErbCallSite, params: readonly ErbParam[]): LineDecoration
 }
 
 /**
- * 从项目索引取一个函数的形参表（**纯函数**，不读盘）。
+ * 「这一组同名定义能不能合成一张形参表」的**唯一判据**（纯函数）。
  *
- * `byName` 存的是 `ErbFunctionRef`（无形参），形参表在 `files` 的同名定义上——
- * 按 `filePath + startLine` 对回 `ErbFunction`。多处定义（重名函数）**全部一致**
- * （个数、逐名、默认值有无都相同）才给表；分歧 = 证明不了作者调的是哪一个 ⇒ `null`。
- * 口径与 `inlay-hints.ts` 的 `inlaySlotsOf` 同源（那边只比槽名，这边还要比默认值）。
+ * 多处定义（重名函数）**全部一致**（个数、逐名、默认值有无都相同）才给表；
+ * 分歧 = 证明不了作者调的是哪一个 ⇒ `null`。任一处的形参表取不到（快照裁剪 /
+ * 索引只留了 ref）也是 `null`——**证明不了就不猜**。
+ *
+ * `paramsOf` 把「ref → 形参表」这一步留给调用方：索引路径按 `filePath + startLine`
+ * 回查（{@link arityParamsOf}），而**整项目一次成型**的那条路径（R4b 的批量上下文）
+ * 预先建了 `startLine → ErbFunction` 的表，逐名回查是 O(1) 而不是每次 `find` 一遍。
+ * 判据本身只有这一份——两条路径不可能给出不同的答案。
  */
-export function arityParamsOf(index: ErbIndex, normalizedName: string): readonly ErbParam[] | null {
-  const defs = index.byName.defsOf(normalizedName);
-  if (defs.length === 0) return null;
+export function agreedParamsOf(
+  refs: readonly ErbFunctionRef[],
+  paramsOf: (ref: ErbFunctionRef) => readonly ErbParam[] | undefined,
+): readonly ErbParam[] | null {
+  if (refs.length === 0) return null;
   let agreed: readonly ErbParam[] | null = null;
-  for (const def of defs) {
-    const fn = index.files.get(def.filePath)?.functions.find((f) => f.startLine === def.startLine);
-    const params = fn?.params;
+  for (const def of refs) {
+    const params = paramsOf(def);
     if (params === undefined) return null; // 定义体缺席（快照裁剪等）＝证明不了
     if (agreed === null) {
       agreed = params;
@@ -393,6 +398,19 @@ export function arityParamsOf(index: ErbIndex, normalizedName: string): readonly
     }
   }
   return agreed;
+}
+
+/**
+ * 从项目索引取一个函数的形参表（**纯函数**，不读盘）。
+ *
+ * `byName` 存的是 `ErbFunctionRef`（无形参），形参表在 `files` 的同名定义上——
+ * 按 `filePath + startLine` 对回 `ErbFunction`。判据本体在 {@link agreedParamsOf}。
+ * 口径与 `inlay-hints.ts` 的 `inlaySlotsOf` 同源（那边只比槽名，这边还要比默认值）。
+ */
+export function arityParamsOf(index: ErbIndex, normalizedName: string): readonly ErbParam[] | null {
+  const defs = index.byName.defsOf(normalizedName);
+  if (defs.length === 0) return null;
+  return agreedParamsOf(defs, (def) => index.files.get(def.filePath)?.functions.find((f) => f.startLine === def.startLine)?.params);
 }
 
 /**

@@ -228,6 +228,19 @@ export interface LanguageDescriptor {
    */
   readonly structure?: {
     readonly load: () => Promise<StructureLanguageRuntime>;
+    /**
+     * 结构层**管不管折叠**这一面（additive，R5 2026-10-29 折叠单源）。
+     *
+     * 显式 `false` = 这门语言的折叠已经有别人供（ERB 走 `ui.editor.languageService` 槽上的
+     * `erb-folding`，真语料上是超集）⇒ 结构层不注册折叠 provider、`parse` 的 `want` 里也不带
+     * `folds`。缺省（不写这一格）= 照旧由结构层供。
+     *
+     * 为什么不是"谁更好"的择优：同一份文档**不许有两套区间**——Monaco 把同语言的多枚折叠
+     * 供给器**并起来等最慢那条**，所以第二份不只是白算，它把首解顶到 worker 那一趟
+     * （真语料 186–210 ms）。判据住 descriptor（而不是宿主按语言 id 分支）同 `capabilities`：
+     * 宿主不许认识具体语言名。
+     */
+    readonly folds?: boolean;
   };
   /**
    * 这门语言**已交付**的语言面（LANG-PARITY-GATE，additive：旧 descriptor 零改动）。

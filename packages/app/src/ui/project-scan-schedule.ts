@@ -441,6 +441,9 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       extraPaths: () => takeRescanPaths(SCAN_RESCAN_TAKE_LIMIT),
       pendingRescanCount: () => rescanPendingCount(),
       yieldBetween: () => kernel.compute.yieldToMain(),
+      // 批量通道（R4b）：kind 不在任务表 / transport 挂了 ⇒ 计算池自己回退本地实现，
+      // 所以这里不判 `hasWorkerTask`（那条判据的消费者是 `offloadKind` 的编辑器路径）
+      offload: (kind, payload) => kernel.compute.offload(kind, payload),
       maxFiles: SCAN_MAX_FILES_PER_RUN,
       // 原样透传：装配面缺席 ⇒ 采集器连 `.kojo2` 判据都不调（v1 行为逐字不变）
       ...(kojo2Pass === undefined ? {} : { kojo2Project: kojo2Pass }),

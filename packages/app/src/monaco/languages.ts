@@ -120,6 +120,15 @@ slotServices: ['references', 'hover'],
   lineWindow: true,
   structure: {
     load: () => import('./tree-sitter/erb-runtime').then((m) => m.ERB_STRUCTURE_RUNTIME),
+    /**
+     * R5（2026-10-29 折叠单源）：折叠**不由结构层供**——`erb-parser` 的 `erb-folding`
+     * 在 `ui.editor.languageService` 槽上供的那一份是超集（24,197 行真语料：插件 8,066 条 /
+     * 结构层 6,926 条，重合 6,923；结构层独有 3 条里 1 条是它自己的误折、1 条只有空行尾巴之差，
+     * 剩下的 `[SKIPSTART]` 块本批补进了插件侧）。留着两家的代价不是"多算一遍"——
+     * Monaco 把同语言的多枚折叠供给器**并起来等最慢的那条**，于是首解被 worker 那一趟
+     * 顶到 186–210 ms；插件那条是同步的。
+     */
+    folds: false,
   },
 };
 

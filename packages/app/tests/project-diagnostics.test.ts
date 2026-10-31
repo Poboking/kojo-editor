@@ -11,6 +11,10 @@
 import { describe, expect, it } from 'vitest';
 import type { GameProject, LineDecoration } from '@kojo/plugin-api';
 import {
+  SCAN_BULK_CHUNK,
+  SCAN_BULK_CHUNK_MIN,
+  SCAN_BULK_INFLIGHT,
+  bulkChunkSize,
   createProjectScanner,
   decorateScanFile,
   filterInsideRoots,
@@ -20,6 +24,8 @@ import {
   type ProjectScannerDeps,
 } from '../src/ui/project-diagnostics';
 import type { EditorProblem, ProjectScanCoverage } from '../src/ui/problem-store';
+import { computeTasks, hasWorkerTask } from '../src/compute-tasks';
+import { SEMANTIC_DIAGNOSTICS_TASK, semanticDiagnosticsBulk } from '@kojo/plugin-erb-parser';
 
 const ROOT = 'C:/game/ERB';
 const A = `${ROOT}/001/M_KOJO_K1_1.ERB`;
@@ -103,7 +109,226 @@ describe('decorateScanFile · 一路炸不许带走整份文件', () => {
   });
 });
 
-/* ---------------------------------- 分批 ---------------------------------- */
+describe('批量 kind 真的在计算池任务表里', () => {
+  it('`hasWorkerTask` 覆盖它，且表里那一格跑出来的结果就是插件导出的那份（kind 写错会静默退化成逐文件）', () => {
+    // 这条不是形式主义：`compute-tasks.ts` 的头注写着"kind 写错会静默退化为 unknown task"，
+    // 而退化的表现只是变慢、不报错——所以"表里有、且接的是那根线"必须由判据钉住。
+    expect(hasWorkerTask(SEMANTIC_DIAGNOSTICS_TASK)).toBe(true);
+    const payload = { ctx: null, files: [{ path: 'C:/game/ERB/A.ERB', text: '@F()\n    IF UNDECLARED_X == 1\n    ENDIF' }] };
+    const viaTable = (computeTasks[SEMANTIC_DIAGNOSTICS_TASK] as (p: unknown) => { perFile: unknown })(payload);
+    // 表里那格是 `((payload) => semanticDiagnosticsBulk(payload)) as never`（包了一层），
+    // 所以比**产出**不比身份：产出逐字段相同 = 接的就是那一根线
+    expect(viaTable).toEqual(semanticDiagnosticsBulk(payload));
+    expect(JSON.stringify(viaTable)).toContain('ERB_UNDEFINED_NAME');
+  });
+});
+
+/* --------------------------- 批量通道（R4b，2026-10-29） --------------------------- */
+
+/** 带批量面的贡献：`decorate` 是回退路径（批量成了就**不该**被走到） */
+const bulkContrib = (
+  id: string,
+  fn: (file: { path: string; text: string; project: GameProject | null }) => LineDecoration[],
+  opts: { kind?: string; context?: () => unknown } = {},
+): ScanContributor => ({
+  id,
+  decorate: fn,
+  bulk: { kind: opts.kind ?? `k.${id}`, context: opts.context ?? (() => ({ tag: id })) },
+});
+
+describe('批量通道 · 一块只派一次，逐文件上账照旧', () => {
+  it('凑不满一块 ⇒ 攒到收尾派一次；载荷带齐路径与上下文，产物按文件摊开、贡献顺序不变', async () => {
+    const calls: { kind: string; files: string[]; ctx: unknown }[] = [];
+    const h = harness({
+      files: { [A]: 'bad', [B]: 'clean', [C]: 'bad' },
+      contributors: [
+        bulkContrib('bulk-a', () => {
+          throw new Error('批量成功了就不该走就地');
+        }),
+        contrib('plain', ({ text }) => (text.includes('bad') ? [deco({ line: 3 })] : [])),
+      ],
+      offload: async (kind, payload) => {
+        const p = payload as { ctx: unknown; files: { path: string; text: string }[] };
+        calls.push({ kind, files: p.files.map((f) => f.path), ctx: p.ctx });
+        return { perFile: p.files.map((f) => (f.text.includes('bad') ? [deco({ line: 7 })] : [])) };
+      },
+    });
+    const out = await h.scanner.run();
+    // 分批键 = 父目录（/001 的 A,B 一批、/002 的 C 一批）是**上账**粒度；
+    // 派发粒度是 `SCAN_BULK_CHUNK`（128）⇒ 三份文件凑不满一块，攒到收尾派**一次**
+    expect(calls.map((c) => c.files)).toEqual([[A, B, C]]);
+    expect(calls.map((c) => c.kind)).toEqual(['k.bulk-a']);
+    expect(calls[0]!.ctx).toEqual({ tag: 'bulk-a' });
+    expect(out).toMatchObject({ status: 'complete', scanned: 3, published: 3, degraded: 0 });
+    // 同一份文件里：bulk-a 的（第 7 行）在前、plain 的（第 3 行）在后
+    // ——顺序 = 贡献声明顺序，**不按行号重排**（去重是"留先到的"）
+    expect(h.published.get(A)!.map((p) => p.line)).toEqual([7, 3]);
+    expect(h.published.get(B)).toEqual([]);
+    expect(h.published.get(C)!.map((p) => p.line)).toEqual([7, 3]);
+  });
+
+  it('凑够一块就派：129 份按「计划数 / 在飞宽度」切成 33×3 + 30，顺序不颠倒', async () => {
+    const files: Record<string, string> = {};
+    const order: string[] = [];
+    for (let i = 0; i < 129; i++) {
+      const p = `${ROOT}/001/F${String(i).padStart(3, '0')}.ERB`;
+      files[p] = 'bad';
+      order.push(p);
+    }
+    const sizes: number[] = [];
+    const h = harness({
+      files,
+      contributors: [bulkContrib('bulk-a', () => [])],
+      offload: async (_kind, payload) => {
+        const sent = (payload as { files: { path: string }[] }).files;
+        sizes.push(sent.length);
+        // 每份文件带一条自己的行号，用来验"按文件摊开"没串位
+        return { perFile: sent.map((f) => [deco({ line: Number(f.path.slice(-7, -4)) + 1 })]) };
+      },
+    });
+    const out = await h.scanner.run();
+    // 129 / 4（缺省在飞宽度）= 33 ⇒ 33/33/33/30。**不是** 128 + 1：尾巴块只装 1 份时，
+    // 另外三块各背 128 份，并行墙钟就由最慢那块决定（真语料实测差 3.05× vs 3.74×）
+    expect(sizes).toEqual([33, 33, 33, 30]);
+    expect(out).toMatchObject({ status: 'complete', scanned: 129, published: 129 });
+    expect(h.published.get(order[0]!)!.map((p) => p.line)).toEqual([1]);
+    expect(h.published.get(order[128]!)!.map((p) => p.line)).toEqual([129]);
+  });
+
+  it('在飞宽度钉成 1 ⇒ 回到 R4b 的 128 + 1 口径，**结果一字不差**', async () => {
+    // 这条钉的是"并行只是调度，不是语义"：同一份输入、同一份通道，块怎么切都不许
+    // 改变任何一份文件的产出。切块方式一变就改判据面的实现，在这里会被当场抓住。
+    const files: Record<string, string> = {};
+    const order: string[] = [];
+    for (let i = 0; i < 129; i++) {
+      const p = `${ROOT}/001/G${String(i).padStart(3, '0')}.ERB`;
+      files[p] = 'bad';
+      order.push(p);
+    }
+    const sizes: number[] = [];
+    const h = harness({
+      files,
+      bulkInflight: 1,
+      contributors: [bulkContrib('bulk-a', () => [])],
+      offload: async (_kind, payload) => {
+        const sent = (payload as { files: { path: string }[] }).files;
+        sizes.push(sent.length);
+        return { perFile: sent.map((f) => [deco({ line: Number(f.path.slice(-7, -4)) + 1 })]) };
+      },
+    });
+    const out = await h.scanner.run();
+    expect(sizes, '129 / 1 ⇒ 一块 128（上界）+ 余数 1').toEqual([128, 1]);
+    expect(out).toMatchObject({ status: 'complete', scanned: 129, published: 129 });
+    expect(h.published.get(order[0]!)!.map((p) => p.line)).toEqual([1]);
+    expect(h.published.get(order[128]!)!.map((p) => p.line)).toEqual([129]);
+  });
+
+  it('通道炸一次 ⇒ 这一路整轮回退就地（产出与就地逐条相同，不再白试第二批）', async () => {
+    let calls = 0;
+    const h = harness({
+      files: { [A]: 'bad', [C]: 'bad' },
+      perBatch: 1,
+      contributors: [bulkContrib('bulk-a', ({ text }) => (text.includes('bad') ? [deco({ line: 5, code: 'c.1' })] : []))],
+      offload: async () => {
+        calls++;
+        throw new Error('channel down');
+      },
+    });
+    const out = await h.scanner.run();
+    expect(calls).toBe(1);
+    expect(out).toMatchObject({ status: 'complete', scanned: 2, published: 2, degraded: 0 });
+    expect(h.published.get(A)!.map((p) => p.code)).toEqual(['c.1']);
+    expect(h.published.get(C)!.map((p) => p.code)).toEqual(['c.1']);
+  });
+
+  it('形状不符（perFile 长度对不上）⇒ 回退就地，绝不按错位的结果上账', async () => {
+    const h = harness({
+      files: { [A]: 'bad' },
+      contributors: [bulkContrib('bulk-a', ({ text }) => (text.includes('bad') ? [deco({ line: 5 })] : []))],
+      offload: async () => ({ perFile: [] }),
+    });
+    const out = await h.scanner.run();
+    expect(out.published).toBe(1);
+    expect(h.published.get(A)!.map((p) => p.line)).toEqual([5]);
+  });
+
+  it('没有批量通道 ⇒ 一次都不派（与 R4b 之前逐字相同）', async () => {
+    let decorated = 0;
+    const h = harness({
+      files: { [A]: 'bad' },
+      contributors: [
+        bulkContrib('bulk-a', ({ text }) => {
+          decorated++;
+          return text.includes('bad') ? [deco({ line: 5 })] : [];
+        }),
+      ],
+    });
+    await h.scanner.run();
+    expect(decorated).toBe(1);
+  });
+
+  it('上下文每轮只构造一次（批次再多也只付一次固定税）', async () => {
+    let built = 0;
+    const h = harness({
+      files: { [A]: 'bad', [C]: 'bad' },
+      perBatch: 1,
+      contributors: [
+        bulkContrib('bulk-a', () => [], {
+          context: () => {
+            built++;
+            return null;
+          },
+        }),
+      ],
+      offload: async (_kind, payload) => ({
+        perFile: (payload as { files: unknown[] }).files.map(() => []),
+      }),
+    });
+    await h.scanner.run();
+    expect(built).toBe(1);
+  });
+
+  it('上下文构造不出来 ⇒ 这一路整轮就地（整轮不失败、也不白派）', async () => {
+    let calls = 0;
+    const h = harness({
+      files: { [A]: 'bad' },
+      contributors: [
+        bulkContrib('bulk-a', ({ text }) => (text.includes('bad') ? [deco({ line: 2 })] : []), {
+          context: () => {
+            throw new Error('no index');
+          },
+        }),
+      ],
+      offload: async () => {
+        calls++;
+        return { perFile: [] };
+      },
+    });
+    const out = await h.scanner.run();
+    expect(calls).toBe(0);
+    expect(out).toMatchObject({ status: 'complete', published: 1 });
+    expect(h.published.get(A)!.map((p) => p.line)).toEqual([2]);
+  });
+
+  it('读失败的文件不进批量载荷（它已经记了 skipped，不该再冒充"算过"）', async () => {
+    const sent: string[][] = [];
+    const h = harness({
+      files: { [A]: 'bad', [C]: 'bad' }, // B 不存在 ⇒ readFile 抛
+      listFiles: () => [A, B, C],
+      contributors: [bulkContrib('bulk-a', () => [])],
+      offload: async (_kind, payload) => {
+        const files = (payload as { files: { path: string }[] }).files;
+        sent.push(files.map((f) => f.path));
+        return { perFile: files.map(() => []) };
+      },
+    });
+    const out = await h.scanner.run();
+    expect(out).toMatchObject({ status: 'complete', scanned: 3, skipped: 1, published: 2 });
+    expect(sent).toEqual([[A, C]]);
+  });
+});
+
+
 
 describe('planScanBatches · 上限、分批、确定性', () => {
   it('按父目录成组（组间码点序、组内路径码点序），perBatch 只切组内不跨组', () => {
@@ -167,6 +392,8 @@ function harness(
     readFile?: (path: string) => Promise<string>;
     listFiles?: () => readonly string[];
     yieldBetween?: () => Promise<void>;
+    offload?: (kind: string, payload: unknown) => Promise<unknown>;
+    bulkInflight?: number;
   },
 ): Harness {
   const published = new Map<string, readonly EditorProblem[]>();
@@ -194,6 +421,8 @@ function harness(
     extraPaths: opts.extraPaths,
     pendingRescanCount: opts.pendingRescanCount,
     yieldBetween: opts.yieldBetween,
+    ...(opts.offload === undefined ? {} : { offload: opts.offload }),
+    ...(opts.bulkInflight === undefined ? {} : { bulkInflight: opts.bulkInflight }),
     perBatch: opts.perBatch ?? 8,
     maxFiles: opts.maxFiles ?? 0,
   };
@@ -367,5 +596,208 @@ describe('createProjectScanner · 三条不可让步的纪律', () => {
     const h = harness({ files: { [A]: 'bad' }, pendingRescanCount: () => 3 });
     await h.scanner.run();
     expect(h.coverages.at(-1)).toMatchObject({ status: 'complete', pendingRescan: 3 });
+  });
+});
+
+/* --------------------- 多块在飞（C 批遗留，2026-10-29） --------------------- */
+
+describe('bulkChunkSize · 块大小由「计划数 / 在飞宽度」算，不是定值', () => {
+  it('铺满池子：块数 ≈ 在飞宽度（真语料 400 份 ⇒ 4 块各 100）', () => {
+    expect(bulkChunkSize(400, 4)).toBe(100);
+    expect(bulkChunkSize(129, 4)).toBe(33);
+    expect(bulkChunkSize(1000, 4)).toBe(128); // 上界：再大就过不了"取消要能有限步生效"
+  });
+
+  it('上下界都在：小盘子不被切碎（≥16），大盘子不被切成超大块（≤128）', () => {
+    expect(bulkChunkSize(16, 4)).toBe(SCAN_BULK_CHUNK_MIN); // 4 份一块会白交 4 次克隆税
+    expect(bulkChunkSize(1, 4)).toBe(SCAN_BULK_CHUNK_MIN);
+    expect(bulkChunkSize(4000, 4)).toBe(SCAN_BULK_CHUNK);
+    expect(bulkChunkSize(400, 1)).toBe(SCAN_BULK_CHUNK); // 单槽 ⇒ 一块到底（R4b 口径）
+  });
+
+  it('宽度非法也不炸：0 / 负数 / 小数都按 1 算', () => {
+    expect(bulkChunkSize(400, 0)).toBe(SCAN_BULK_CHUNK);
+    expect(bulkChunkSize(400, -3)).toBe(SCAN_BULK_CHUNK);
+    expect(bulkChunkSize(400, 2.7)).toBe(128);
+  });
+});
+
+/** 手动闸：让 offload 悬在"已派出、未回话"那个状态上（并行度只能这样测） */
+function gate(): { p: Promise<unknown>; resolve: (v: unknown) => void } {
+  let resolve!: (v: unknown) => void;
+  const p = new Promise<unknown>((r) => {
+    resolve = r;
+  });
+  return { p, resolve };
+}
+
+/** 造 n 份文件（同一目录，父目录批键相同） */
+function manyFiles(prefix: string, n: number): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (let i = 0; i < n; i++) out[`${ROOT}/001/${prefix}${String(i).padStart(3, '0')}.ERB`] = 'bad';
+  return out;
+}
+
+describe('并行派发 · 多块同时在飞，上账仍按文件序', () => {
+  it('80 份 / 宽度 4 ⇒ 四块各 20 份**同时**在飞（不是派一块等一块）', async () => {
+    let live = 0;
+    let maxLive = 0;
+    const gates: ReturnType<typeof gate>[] = [];
+    const sizes: number[] = [];
+    const h = harness({
+      files: manyFiles('H', 80),
+      perBatch: 80,
+      contributors: [bulkContrib('bulk-a', () => [])],
+      offload: (_kind, payload) => {
+        sizes.push((payload as { files: unknown[] }).files.length);
+        live++;
+        maxLive = Math.max(maxLive, live);
+        const g = gate();
+        gates.push(g);
+        return g.p.then(
+          (v) => {
+            live--;
+            return v;
+          },
+          (e: unknown) => {
+            live--;
+            throw e;
+          },
+        );
+      },
+    });
+    const p = h.scanner.run();
+    await tick();
+    await tick();
+    // 四块都派出去了，而且一块都还没回 —— 串行派发在这里只会看到 1
+    expect(sizes, '80 / 4 = 20 份一块，四块').toEqual([20, 20, 20, 20]);
+    expect(maxLive, '同时在飞 = 池的宽度（R4b 的缺口正是这里只有 1）').toBe(SCAN_BULK_INFLIGHT);
+    expect(h.published.size, '一个都没回话，一份都不许上账').toBe(0);
+    for (const g of gates) g.resolve({ perFile: Array.from({ length: 20 }, () => []) });
+    const out = await p;
+    expect(out).toMatchObject({ status: 'complete', scanned: 80, published: 80, degraded: 0 });
+  });
+
+  it('后块先回也不许插队：队首没回来，后面算完的都等着（上账顺序 = 文件序）', async () => {
+    const files = manyFiles('O', 80);
+    const want = Object.keys(files).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const gates: ReturnType<typeof gate>[] = [];
+    const h = harness({
+      files,
+      perBatch: 80,
+      contributors: [bulkContrib('bulk-a', () => [])],
+      offload: () => {
+        const g = gate();
+        gates.push(g);
+        return g.p;
+      },
+    });
+    const p = h.scanner.run();
+    await tick();
+    await tick();
+    expect(gates).toHaveLength(4); // 80 / 4 = 20 份一块 ⇒ 四块
+    // 第 2/3/4 块先回，第 1 块还悬着
+    for (const i of [1, 2, 3]) gates[i]!.resolve({ perFile: Array.from({ length: 20 }, () => []) });
+    await tick();
+    await tick();
+    expect(h.published.size, '队首没回来 ⇒ 后面的一律排队，一份都不许先上账').toBe(0);
+    gates[0]!.resolve({ perFile: Array.from({ length: 20 }, () => []) });
+    const out = await p;
+    expect(out.status).toBe('complete');
+    // Map 的插入序就是上账序：必须与文件的计划序逐位相同
+    expect([...h.published.keys()]).toEqual(want);
+  });
+
+  it('窗口 = 1 ⇒ 同一时刻只有一块在飞（回压真的生效，不是"想派就派"）', async () => {
+    let live = 0;
+    let maxLive = 0;
+    const gates: ReturnType<typeof gate>[] = [];
+    const h = harness({
+      files: manyFiles('B', 200),
+      perBatch: 16,
+      bulkInflight: 1,
+      contributors: [bulkContrib('bulk-a', () => [])],
+      offload: () => {
+        live++;
+        maxLive = Math.max(maxLive, live);
+        const g = gate();
+        gates.push(g);
+        return g.p.then((v) => {
+          live--;
+          return v;
+        });
+      },
+    });
+    const p = h.scanner.run();
+    await tick();
+    await tick();
+    // 200 / 1 ⇒ 一块 128（上界）。**读盘都被这一块堵住了**：窗口是硬背压，不是"派了再等"
+    expect(gates, '第一块没回来之前，第二块一次都不许派').toHaveLength(1);
+    expect(maxLive).toBe(1);
+    gates[0]!.resolve({ perFile: Array.from({ length: 128 }, () => []) });
+    await tick();
+    await tick();
+    expect(gates, '第一块上完账，才派余数那 72 份').toHaveLength(2);
+    expect(maxLive).toBe(1);
+    gates[1]!.resolve({ perFile: Array.from({ length: 72 }, () => []) });
+    const out = await p;
+    expect(out).toMatchObject({ status: 'complete', scanned: 200, published: 200 });
+  });
+
+  it('一块炸 ⇒ 只退这一块；同一波里已经派出去的其余块照旧批量', async () => {
+    const files = manyFiles('E', 80);
+    const paths = Object.keys(files).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    let call = 0;
+    const h = harness({
+      files,
+      perBatch: 80,
+      contributors: [
+        // 就地那一路（回退时走它）
+        contrib('seen-inline', () => [deco({ line: 5, code: 'inline' })]),
+        bulkContrib('bulk-a', () => [deco({ line: 5, code: 'inline' })]),
+      ],
+      offload: async () => {
+        call++;
+        if (call === 1) throw new Error('这一块炸了');
+        return { perFile: Array.from({ length: 20 }, () => [deco({ line: 7, code: 'bulk' })]) };
+      },
+    });
+    const out = await h.scanner.run();
+    // 同一波四块都派出去了才回话 ⇒ 四块各试一次；第一块炸了之后**不再派新块**
+    expect(call).toBe(4);
+    expect(out).toMatchObject({ status: 'complete', scanned: 80, published: 80, degraded: 0 });
+    // 前 20 份：块炸了 ⇒ 逐文件回退 ⇒ **两路各出一条**（就地那路 + 回退的 decorate）
+    for (const p of paths.slice(0, 20)) expect(h.published.get(p)!.map((x) => x.code)).toEqual(['inline', 'inline']);
+    // 后 60 份：同一波的另外三块算成了 ⇒ 就地那路 + 批量那份（批量那条不会被回退顶掉）
+    for (const p of paths.slice(20)) expect(h.published.get(p)!.map((x) => x.code)).toEqual(['inline', 'bulk']);
+  });
+
+  it('取消 ⇒ 已派出去的块一份都不上账，且不再派新块', async () => {
+    const gates: ReturnType<typeof gate>[] = [];
+    let calls = 0;
+    const h = harness({
+      files: manyFiles('C', 200),
+      perBatch: 16,
+      bulkInflight: 1,
+      contributors: [bulkContrib('bulk-a', () => [])],
+      offload: () => {
+        calls++;
+        const g = gate();
+        gates.push(g);
+        return g.p;
+      },
+    });
+    const p = h.scanner.run();
+    await tick();
+    await tick();
+    expect(calls).toBe(1);
+    h.scanner.cancel();
+    const before = calls;
+    // 迟到的批量结论：算完了也一个字都不许上账
+    gates[0]!.resolve({ perFile: Array.from({ length: 128 }, () => []) });
+    const out = await p;
+    expect(out.status).toBe('cancelled');
+    expect(calls, '取消之后不许再派').toBe(before);
+    expect(h.published.size, '已派出去的块：取消后一份都不写').toBe(0);
   });
 });

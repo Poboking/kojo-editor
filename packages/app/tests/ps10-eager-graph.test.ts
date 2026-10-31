@@ -1018,13 +1018,33 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ⇒ 闸 **3,412 → 3,455**（余量约 0.1 KB；文件闸仍 199）。这一档是能力：ERB 补全的
     //     候选从"宿主 11 源自装配 + 插件答 4 facet"变成"插件一份判据 + 宿主现取事实"，
     //     拼音可检索键与触发字符改为 descriptor 点名（收口不再按语言 id 分支）。
+    //   - **性能线并入主干（2026-10-31，`b/workbuddy/1029-perf-trunk` 27 条提交里 13 条未落）**：
+    //     读数 **199 文件 / 3,493 KB**（3,576,406 B = 上一条 3,537,725 + 38,681）——**零新进图
+    //     文件**（199 未动）。逐枚按「现树 `stat` vs `origin/dev` 同路径 `git cat-file -s`」实测，
+    //     图内共**九枚**：`erb-parser/src/offload.ts` **+21,988**（R4b 批量诊断任务
+    //     `erb.semanticDiagnosticsBulk`＋跨文件上下文编码＋**合并出口并入**，见下）、
+    //     `app/src/ui/project-diagnostics.ts` **+15,164**（C 批遗留：多块并行派发、在飞窗口、
+    //     每块 128 上限）、`erb-parser/src/folding.ts` **+5,263**（折叠单源判据）、
+    //     `plugin-api/src/slots.ts` **+3,302**（R4b bulk 载荷与 `EditorDecoratorContribution.bulk`
+    //     additive 契约）、`erb-parser/src/arity.ts` **+945**（`agreedParamsOf` 从 `arityParamsOf`
+    //     里抽出来给批量腿复用同一条判据）、`erb-parser/src/index.ts` **+495**、
+    //     `app/src/ui/project-scan-schedule.ts` **+297**、`plugin-api/src/index.ts` **+59**、
+    //     `erb-parser/src/plugin.ts` **−9,004**（语义诊断收集器整块搬走）。九枚合计 38,509 B，
+    //     与闸取数差 172 B（登账用现树 `stat`、闸用图工具自己的取数，同一文件两条口径的微小差）。
+    //     台账记一笔踩空：收集器原本在独立模块 `semantic-diagnostics.ts`（性能线 R4b 为破
+    //     `plugin.ts ↔ offload.ts` 的模块环而拆出来的），并进主干后它是**第 200 枚进图模块**
+    //     ⇒ 文件闸顶到 200。它的消费者只有两处（本文件的装饰贡献 + `offload.ts` 的批量任务），
+    //     于是**并回 `offload.ts`**（`plugin.ts` 本来就在 import 它，环不存在），文件闸回到 199。
+    //     ⇒ 闸 **3,455 → 3,493**（余量约 0.2 KB）。这一档是能力：整项目扫描的语义诊断从
+    //     "逐文件 × 三腿" 变成 "一批文件一次派发 / 跨文件上下文每轮只序列化一次"
+    //     （真语料 400 文件主线程 7,231.6 ms → 36.9 ms），外加折叠单源（首解 186.4 → 86.7 ms）。
     // 读数随跑随打（同 `styles-split.equivalence` E 闸的口径）：闸绿时也能从日志拿到现值，
     // 交付回执不必靠人肉复算。
 
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,455 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,493 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_455);
+    expect(totalKb).toBeLessThanOrEqual(3_493);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

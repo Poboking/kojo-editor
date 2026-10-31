@@ -279,6 +279,8 @@ export type {
   EditorCommandContext,
   EditorCommandContribution,
   EditorDecoratePayload,
+  EditorDecoratorBulkPayload,
+  EditorDecoratorBulkResult,
   EditorDecoratorContribution,
   EditorDefinitionRequest,
   EditorDefinitionResult,

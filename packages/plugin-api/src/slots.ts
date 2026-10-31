@@ -1919,6 +1919,28 @@ export interface EditorDecoratePayload {
   readonly text: string;
 }
 
+/**
+ * `bulk` 任务的统一载荷（additive，2026-10-29 性能路线图 R4b）：**一批文件 × 一路贡献**。
+ *
+ * 为什么不是"逐文件再进 worker"：整项目扫描的固定税不在单文件的判据上，而在
+ * **跨文件上下文**（声明名表 / 实参目录 / 函数名录）上——那是整份项目态，逐文件搬一遍
+ * 等于每份文件都把名录序列化一次。批量载荷让上下文**每批只序列化一次、随批带走**。
+ *
+ * `ctx` 的形状由供方自己定（宿主只搬运、不解读）：必须是**可结构化克隆**的纯数据，
+ * 由贡献的 {@link EditorDecoratorContribution.bulk} 的 `context()` 在主线程构造。
+ */
+export interface EditorDecoratorBulkPayload {
+  /** 跨文件上下文（供方 `context()` 的返回值；`null` = 本轮没有项目态） */
+  readonly ctx: unknown;
+  /** 这一批的文件（顺序即 `perFile` 的顺序） */
+  readonly files: readonly EditorDecoratePayload[];
+}
+
+/** `bulk` 任务的返回：**与 `files` 同序**的逐文件装饰（`perFile[i]` 属于 `files[i]`） */
+export interface EditorDecoratorBulkResult {
+  readonly perFile: readonly (readonly LineDecoration[])[];
+}
+
 export interface EditorDecoratorContribution extends ContributionBase {
   readonly title: string;
   /**
@@ -1958,6 +1980,38 @@ export interface EditorDecoratorContribution extends ContributionBase {
    * **不声明 = 行为与本批之前完全一致**（同步、就地、零缓存语义变化）。
    */
   readonly offloadKind?: string;
+  /**
+   * 可选（additive，2026-10-29 性能路线图 R4b）：**整项目扫描**走批量通道。
+   *
+   * 与 `offloadKind` 的分工不是"快慢两档"，而是**两种消费场景**：
+   *
+   * - `offloadKind` 服务**编辑器**：一份文件一变就重算一份，载荷 `EditorDecoratePayload`；
+   * - `bulk` 服务**整项目扫描**（`ui.projectScan` 那一轮 400 文件起）：同一份跨文件上下文
+   *   被 N 份文件共用，逐文件搬等于把名录序列化 N 遍。
+   *
+   * 声明之后宿主会把「一批文件 × 本贡献」整批送进 `compute.offload(kind, payload)`，
+   * 载荷 `EditorDecoratorBulkPayload`、返回 `EditorDecoratorBulkResult`。三条约束：
+   *
+   * 1. `context()` 在**主线程**调用、**每轮一次**（不是每批），返回值必须可结构化克隆；
+   *    它必须只读（不许改索引、不许发事件），因为它可能在扫描中途被叫到。
+   * 2. `kind` 必须在计算池任务表里（装配层 `compute-tasks.ts`；`hasWorkerTask` 是唯一判据）。
+   *    不在表里 / 通道不可用 / 任务抛错 ⇒ 宿主**回退逐文件**调用 `decorate`，行为与未声明
+   *    本字段时**逐字相同**（这条回退路径是契约的一部分，不是兜底恩赐）。
+   * 3. 判据面不变：`bulk` 的产出与 `decorate({..., bulk: true})` 逐文件**逐条相等**
+   *    （条数/位置/severity/code），`message` 也应当相等——R4b 的落实方式是两侧共用
+   *    同一个纯函数，而不是"再实现一遍再对齐"。
+   */
+  readonly bulk?: {
+    /** 计算池任务 kind（`compute-tasks.ts` 的表里必须有；宿主据此 offload） */
+    readonly kind: string;
+    /**
+     * 构造跨文件上下文（主线程、每轮一次、必须可结构化克隆）。
+     *
+     * 返回 `null` 是合法值，语义 = "本轮没有项目态"（未开项目 / 索引还没建好）——
+     * 那时供方该退回"只看文本自身"的那一档，与 `decorate` 的同一状态**逐条等价**。
+     */
+    context(): unknown;
+  };
 }
 
 /* ----------------------- ui.editor.saveHandler ----------------------- */

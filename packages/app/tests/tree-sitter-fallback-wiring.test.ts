@@ -50,6 +50,7 @@ const harness = vi.hoisted(() => ({
   mode: 'error' as 'error' | 'reject' | 'throwCtor' | 'ok',
   tokensCalls: 0,
   foldsCalls: 0,
+  warmUps: 0,
   disposed: 0,
   fatalCount: 0,
   instance: null as { fatal(): void } | null,
@@ -57,6 +58,7 @@ const harness = vi.hoisted(() => ({
     harness.mode = 'error';
     harness.tokensCalls = 0;
     harness.foldsCalls = 0;
+    harness.warmUps = 0;
     harness.disposed = 0;
     harness.fatalCount = 0;
     harness.instance = null;
@@ -95,6 +97,10 @@ vi.mock('../src/monaco/tree-sitter/client', async () => {
       if (harness.mode === 'ok') return [];
       reportStructureDegradation({ capability: 'semantic', stage: 'parse', message: '整篇解析抛错：wasm 报 bad memory（桩）' });
       return null; // 拿不到 ⇒ 调用方什么都不画（词法层本来就是底）
+    }
+    /** R5：折叠退休之后，宿主靠这一下把解析排上队（不 await、不取结果） */
+    warmUp(): void {
+      harness.warmUps += 1;
     }
     async foldingRanges(): Promise<readonly unknown[] | null> {
       harness.foldsCalls += 1;
@@ -166,6 +172,8 @@ interface FoldingProvider {
 interface Captured {
   semantic: SemanticProvider | null;
   folding: FoldingProvider | null;
+  /** R5：逐语言留一份折叠 provider（`folding` 只留最后注册的那一枚，判不了"谁是谁"） */
+  foldings: Map<string, FoldingProvider>;
   semanticDisposed: boolean;
   foldingDisposed: boolean;
   optionWrites: boolean[];
@@ -186,6 +194,7 @@ function fakeMonaco(): { monaco: unknown; captured: Captured } {
   const captured: Captured = {
     semantic: null,
     folding: null,
+    foldings: new Map(),
     semanticDisposed: false,
     foldingDisposed: false,
     optionWrites: [],
@@ -207,6 +216,7 @@ function fakeMonaco(): { monaco: unknown; captured: Captured } {
       },
       registerFoldingRangeProvider: (_id: string, provider: FoldingProvider) => {
         captured.folding = provider;
+        captured.foldings.set(_id, provider);
         return { dispose: () => (captured.foldingDisposed = true) };
       },
       setLanguageConfiguration: () => {
@@ -416,5 +426,27 @@ describe('结构层回落接线（报错 ⇒ 只有词法层 / 说一次 / 不�
     const skipLines = warned(warn).filter((l) => l.includes('行的文件这次不由结构层着色'));
     expect(skipLines).toHaveLength(1);
     expect(harness.tokensCalls).toBe(0);
+  });
+
+  /* ------------------------- R5：折叠单源（2026-10-29） ------------------------- */
+
+  it('(R5) ERB 的折叠不由结构层供：provider 只把解析排上队、同步交回空表', async () => {
+    const captured = await installAndActivate();
+    const folding = captured.foldings.get(ERB_LANGUAGE_ID);
+    if (!folding) throw new Error('ERB 没注册折叠 provider（空壳也得注册，它是"上屏"触发点）');
+    const folds = await folding.provideFoldingRanges(model(40, ERB_LANGUAGE_ID));
+    expect(folds, '结构层不该再交第二份区间——Monaco 合并多枚供给器要等最慢那条').toEqual([]);
+    expect(harness.warmUps, '解析必须排上队：缩进与残缺这两条推的面没有别的开跑点').toBe(1);
+    expect(harness.foldsCalls, '连 client 的折叠取数都不该走到').toBe(0);
+    expect(notices, '「没要」不是「没回结果」——不许在作者面报一条假警报').toEqual([]);
+  });
+
+  it('(R5) `.kojo1` 照旧由结构层供：同一次询问真去取数（别把整条路一起关掉）', async () => {
+    const captured = await installAndActivate();
+    const folding = captured.foldings.get(KOJO_LANGUAGE_ID);
+    if (!folding) throw new Error('kojo 没注册折叠 provider');
+    await folding.provideFoldingRanges(model(40));
+    expect(harness.foldsCalls).toBe(1);
+    expect(harness.warmUps, '供折叠的那门不需要预热腿（取数本身就是开跑）').toBe(0);
   });
 });

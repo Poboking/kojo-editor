@@ -24,14 +24,18 @@
 
 import { describe, expect, it } from 'vitest';
 import type { ControlFlowStatement } from '@kojo/plugin-api';
-import { ERB_PREPROC_PATTERNS, ERB_SKIP_MARKERS, erbPreprocRoleOf } from '@kojo/plugin-api';
+import { ERB_CONTINUATION_MARKERS, ERB_PREPROC_PATTERNS, ERB_SKIP_MARKERS, erbPreprocRoleOf } from '@kojo/plugin-api';
 import {
+  FOLD_CONTINUATION_MARKERS,
   FOLD_PREPROC_PATTERNS,
+  FOLD_SKIP_MARKERS,
+  continuationFoldingRanges,
   controlFlowFoldingRanges,
   erbFoldingRanges,
   foldPreprocRoleOf,
   functionFoldingRanges,
   preprocFoldingRanges,
+  skipBlockFoldingRanges,
 } from '../src/folding';
 import { parseErbText, scanControlFlow } from '../src/scanner';
 import { checkPreprocStructure, preprocRoleOf } from '../src/structure';
@@ -451,5 +455,86 @@ describe('erbFoldingRanges · 预处理区间接进真壳消费的那条路', ()
     expect(has(ranges, 3, 8)).toBe(true);
     expect(has(ranges, 1, 9)).toBe(true);
     expect(elapsed).toBeLessThan(4_000);
+  });
+});
+
+/* ==================== 停用区折叠（R5，2026-10-29 折叠单源） ==================== */
+
+describe('skipBlockFoldingRanges · 停用区（[SKIPSTART]…[SKIPEND]）', () => {
+  it('标记串是契约真源的字形镜像（不是"看着像"）', () => {
+    expect(FOLD_SKIP_MARKERS.start, '折叠侧 start 偏离真源').toBe(ERB_SKIP_MARKERS.start);
+    expect(FOLD_SKIP_MARKERS.end, '折叠侧 end 偏离真源').toBe(ERB_SKIP_MARKERS.end);
+  });
+
+  it('配对的一区 ⇒ 一条区间（1 基闭区间，块内行数 > 0 才产）', () => {
+    const text = ['@F', 'IF A', '[SKIPSTART]', 'IF 死代码', 'ENDIF', '[SKIPEND]', 'ENDIF'].join('\n');
+    expect(skipBlockFoldingRanges(text)).toEqual([{ startLine: 3, endLine: 6 }]);
+  });
+
+  it('区内嵌套的 [SKIPSTART] 不叠层（与 parseErbText 同判：只认 [SKIPEND]）', () => {
+    const text = ['[SKIPSTART]', '[SKIPSTART]', 'x', '[SKIPEND]', 'y'].join('\n');
+    expect(skipBlockFoldingRanges(text)).toEqual([{ startLine: 1, endLine: 4 }]);
+  });
+
+  it('裸 [SKIPEND] 不动任何东西；未闭合的区不产区间（不许吞到文末）', () => {
+    expect(skipBlockFoldingRanges(['a', '[SKIPEND]', 'b'].join('\n'))).toEqual([]);
+    expect(skipBlockFoldingRanges(['a', '[SKIPSTART]', 'b', 'c'].join('\n'))).toEqual([]);
+  });
+
+  it('代码前缀 `;!;` 真的开区 / 收区（与 scanner 的屏蔽状态机同源）', () => {
+    const text = [';!;[SKIPSTART]', '死代码', ';!;[SKIPEND]'].join('\n');
+    expect(skipBlockFoldingRanges(text)).toEqual([{ startLine: 1, endLine: 3 }]);
+  });
+
+  it('CRLF 与首尾空白不影响判据（行切分与 scanner 的 normalizeEol 同一条）', () => {
+    const text = 'a\r\n  [SKIPSTART]  \r\nb\r\n\t[SKIPEND]\r\nc';
+    expect(skipBlockFoldingRanges(text)).toEqual([{ startLine: 2, endLine: 4 }]);
+  });
+
+  it('端到端：停用区里的 IF/ENDIF 不进控制流栈，但停用区自身可折', () => {
+    const text = ['@F', 'IF A == 1', '[SKIPSTART]', 'IF B == 2', 'ENDIF', '[SKIPEND]', 'ENDIF'].join('\n');
+    const ranges = erbFoldingRanges(text);
+    // 停用区那一条在
+    expect(has(ranges, 3, 6)).toBe(true);
+    // 外面的 IF A 折到 ENDIF（第 7 行）——若停用区里的 ENDIF 进了栈，这条会被拆成两截
+    expect(has(ranges, 2, 7)).toBe(true);
+    // 区内那条 IF B 不该有自己的区间（引擎根本不编译那一段）
+    expect(has(ranges, 4, 5)).toBe(false);
+  });
+});
+
+/* ==================== 行连接块折叠（R5，2026-10-29 折叠单源） ==================== */
+
+describe('continuationFoldingRanges · 行连接（`{` … `}`）', () => {
+  it('标记串是契约真源的字形镜像', () => {
+    expect(FOLD_CONTINUATION_MARKERS.open, '折叠侧 open 偏离真源').toBe(ERB_CONTINUATION_MARKERS.open);
+    expect(FOLD_CONTINUATION_MARKERS.close, '折叠侧 close 偏离真源').toBe(ERB_CONTINUATION_MARKERS.close);
+  });
+
+  it('配对 ⇒ 一条区间；收束行**允许缩进**（契约判据是 trim 等值，不是列 0）', () => {
+    const text = ['IF GROUPMATCH(A,', '{', '  [[甲]], [[乙]],', ' [[丙]])', ' }', 'PRINTL x', 'ENDIF'].join('\n');
+    expect(continuationFoldingRanges(text)).toEqual([{ startLine: 2, endLine: 5 }]);
+  });
+
+  it('未闭合 / 行内花括号 / `;!;{` 一律不产（契约层那三条语言事实）', () => {
+    expect(continuationFoldingRanges(['{', 'A', 'B'].join('\n'))).toEqual([]);
+    expect(continuationFoldingRanges(['IF A && { 1, 2 }', 'PRINTL x'].join('\n'))).toEqual([]);
+    expect(continuationFoldingRanges([';!;{', 'A', '}'].join('\n'))).toEqual([]);
+  });
+
+  it('多块各归各的；中间的普通行不受影响', () => {
+    const text = ['{', 'A', '}', 'PRINTL x', '{', 'B', '}'].join('\n');
+    expect(continuationFoldingRanges(text)).toEqual([
+      { startLine: 1, endLine: 3 },
+      { startLine: 5, endLine: 7 },
+    ]);
+  });
+
+  it('端到端：块内那三层 IF 各自成折，行连接块只包住它自己（不许吞到下一个结构行）', () => {
+    const text = ['@F', '{', 'IF A', 'PRINTL x', 'ENDIF', '}', 'IF B', 'PRINTL y', 'ENDIF'].join('\n');
+    const ranges = erbFoldingRanges(text);
+    expect(has(ranges, 2, 6)).toBe(true); // 行连接块
+    expect(has(ranges, 3, 5)).toBe(true); // 块内的 IF
+    expect(has(ranges, 7, 9)).toBe(true); // 块外的 IF 不受影响
   });
 });

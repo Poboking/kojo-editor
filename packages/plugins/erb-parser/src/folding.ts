@@ -1,5 +1,9 @@
 import type { ControlFlowStatement, EditorFoldingRange, ErbFile } from '@kojo/plugin-api';
-import { forEachControlFlowLine, parseErbText, classifyControlFlow, scanControlFlow } from './scanner';
+import { erbCodeBodyOf, forEachControlFlowLine, parseErbText, classifyControlFlow, scanControlFlow } from './scanner';
+// 行切分走 `references.ts` 的单源 `splitErbLines`（与 scanner 的私有 `normalizeEol(text).split('\n')`
+// 逐字等价，等价性见 `references.ts` 的 `splitErbLines` 注）；折叠单源批（R5/D 批）把这里从私有函数
+// 换成公开入口。
+import { splitErbLines } from './references';
 
 /**
  * ERB 折叠区间（D3，2026-10-15 折叠/面包屑批）。
@@ -221,10 +225,111 @@ export function preprocFoldingRanges(text: string): EditorFoldingRange[] {
 }
 
 /**
- * 整篇 ERB 文本 → 折叠区间（函数块 + 控制流块 + 预处理块）。
- * 纯函数，**三遍线性扫描**（`parseErbText` / `scanControlFlow` / 预处理那一遍的
- * `forEachControlFlowLine`），每遍都是"逐行 trim + 至多几次整行锚定正则"，
- * 没有第二次全文正则回溯；预处理那一遍不重扫控制流、只做 `[` 行的角色判定（K7）。
+ * 停用区两枚标记的**字形镜像**（真源＝契约层 `ERB_SKIP_MARKERS`）。
+ *
+ * 为什么是镜像而不是 import：本文件被 `packages/erb-syntax-tree/tools/fold-compare.mjs`
+ * 用**裸 node** 直读（`registerHooks` 只补 `.ts` 后缀，替不了解析 `@kojo/plugin-api` 的
+ * 无扩展名相对导入），值导入契约层会直接 `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`
+ * （PITFALLS §151，与上面 `FOLD_PREPROC_PATTERNS` 同一条理由）。
+ * "这份不可能漂开"由 `tests/folding.test.ts` 的字节闸钉住：逐字比对真源。
+ */
+export const FOLD_SKIP_MARKERS: Readonly<{ start: string; end: string }> = Object.freeze({
+  start: '[SKIPSTART]',
+  end: '[SKIPEND]',
+});
+
+/**
+ * `[SKIPSTART]` … `[SKIPEND]` 停用区 → 折叠区间（R5，2026-10-29 折叠单源）。
+ *
+ * ## 为什么这条忽然要在插件侧补
+ *
+ * 真语料 24,197 行上两家的差集只有 3 条（结构层独有）：其中**唯一一条真块**就是
+ * `[SKIPSTART]`…`[SKIPEND]`（另一条是结构层自己的误折、第三条只差一个空行尾巴）。
+ * 折叠单源之后结构层那一份整体退役，这条得由留下的这一家供上——否则"逐条等价"
+ * 直接从"少 3 条"变成"少一个真块"。
+ *
+ * ## 判据（与 `scanner.ts` 的屏蔽状态机**同源同序**，不新发明一套）
+ *
+ * - 代码前缀 `;!;` / `;#;` 先剥（`;!;[SKIPSTART]` 真的开区，见 `code-prefix` 那节）；
+ * - 区内**只认** `[SKIPEND]`——嵌套的 `[SKIPSTART]` 不叠层（与 `parseErbText` 同判）；
+ * - 区外整行严格等值才开区；裸 `[SKIPEND]` 不动任何东西；
+ * - 走到文末仍开着的区**不产区间**（与控制流块 / 预处理块同一条"不许吞到文末"纪律）；
+ * - 不产分支段：停用区没有"段"的概念，整块就是一条。
+ *
+ * 单遍线性、只做"整行 trim + 至多一次前缀剥离 + 两次字符串比较"，与其余三遍同量级。
+ */
+export function skipBlockFoldingRanges(text: string): EditorFoldingRange[] {
+  const out: EditorFoldingRange[] = [];
+  const lines = splitErbLines(text);
+  let openLine = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = erbCodeBodyOf((lines[i] ?? '').trim());
+    if (openLine === 0) {
+      if (trimmed === FOLD_SKIP_MARKERS.start) openLine = i + 1;
+      continue;
+    }
+    if (trimmed !== FOLD_SKIP_MARKERS.end) continue;
+    const endLine = i + 1;
+    if (endLine > openLine) out.push({ startLine: openLine, endLine });
+    openLine = 0;
+  }
+  return out;
+}
+
+/**
+ * 行连接两枚标记的**字形镜像**（真源＝契约层 `ERB_CONTINUATION_MARKERS`；理由同上一条）。
+ *
+ * 判据是**严格等值**（`trim()` 之后整行只有那一个字符），而且**不剥代码前缀**——
+ * 引擎在 `{` 分支里比的是整行：`;!;{` 不成立行连接，它会走 `CharacterAfterContinuation`
+ * 直接报错（契约层那条注释把语言事实写全了，这里一个字节都不许自己发明）。
+ */
+export const FOLD_CONTINUATION_MARKERS: Readonly<{ open: string; close: string }> = Object.freeze({
+  open: '{',
+  close: '}',
+});
+
+/**
+ * `{` … `}` 行连接块 → 折叠区间（R5，2026-10-29 折叠单源）。
+ *
+ * ## 它折的是什么
+ *
+ * 不是程序块，是**一条被折成多行的逻辑行**：引擎把两者之间的物理行拼成一条语句
+ * （`ERB_CONTINUATION_SEPARATOR` = 一个空格）。语料里 300 份抽样有 140 块，
+ * 全部是超长 `IF` 条件或长参数表——不折就只能左右拖着看。
+ *
+ * ## 与结构层那条的两处差别（都是"按契约，不按语法"）
+ *
+ * 1. **收束行允许缩进**：结构层文法要求 `}` 落在列 0，于是 ` }` 那样只缩进一格的收束
+ *    不被认，块一路吞到下一个结构行（真语料 24,197 行那份的 `15697..15710` 就是它：
+ *    一个 `{` 把头三层 `IF` 全折进一个假块）。契约层的判据是 `trim()` 严格等值，
+ *    这里跟契约走。
+ * 2. **未闭合不产区间**：与控制流 / 预处理 / 停用区同一条"不许吞到文末"纪律。
+ *    结构层在那种情况下会一直折到文件尾。
+ */
+export function continuationFoldingRanges(text: string): EditorFoldingRange[] {
+  const out: EditorFoldingRange[] = [];
+  const lines = splitErbLines(text);
+  let openLine = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = (lines[i] ?? '').trim();
+    if (openLine === 0) {
+      if (trimmed === FOLD_CONTINUATION_MARKERS.open) openLine = i + 1;
+      continue;
+    }
+    if (trimmed !== FOLD_CONTINUATION_MARKERS.close) continue;
+    const endLine = i + 1;
+    if (endLine > openLine) out.push({ startLine: openLine, endLine });
+    openLine = 0;
+  }
+  return out;
+}
+
+/**
+ * 整篇 ERB 文本 → 折叠区间（函数块 + 控制流块 + 预处理块 + 停用区 + 行连接块）。
+ * 纯函数，**五遍线性扫描**（`parseErbText` / `scanControlFlow` / 预处理那一遍的
+ * `forEachControlFlowLine` / 停用区与行连接那两遍裸行扫描），每遍都是"逐行 trim +
+ * 至多几次整行比较或锚定正则"，没有全文正则回溯；预处理那一遍不重扫控制流，
+ * 只做 `[` 行的角色判定（K7）。
  */
 export function erbFoldingRanges(text: string): EditorFoldingRange[] {
   if (text.length === 0) return [];
@@ -234,5 +339,7 @@ export function erbFoldingRanges(text: string): EditorFoldingRange[] {
     ...functionFoldingRanges(file),
     ...controlFlowFoldingRanges(scanControlFlow(text), starts),
     ...preprocFoldingRanges(text),
+    ...skipBlockFoldingRanges(text),
+    ...continuationFoldingRanges(text),
   ];
 }

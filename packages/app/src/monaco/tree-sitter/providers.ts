@@ -45,9 +45,13 @@ import type { KojoStructureFold } from './types';
  *   文档没有结果时**返回 null**，让「定义与调用的名字分色」那枚 provider 应答。
  *   ERB 首版不声明这一面（结构专用 grammar 不做 semantic tokens），因此宿主不会给它
  *   挂空 provider。
- * - **折叠**：每门结构语言注册 `registerFoldingRangeProvider`；Monaco 把同语言的
- *   **多枚折叠供给器的结果并起来**（`syntaxRangeProvider.js::collectSyntaxRanges`）
- *   ⇒ 既有折叠照旧，结构折叠是增量。
+ * - **折叠**：结构语言里**只有 `structure.folds !== false` 的那些**注册
+ *   `registerFoldingRangeProvider`；Monaco 把同语言的**多枚折叠供给器的结果并起来**
+ *   （`syntaxRangeProvider.js::collectSyntaxRanges`）⇒ 既有折叠照旧，结构折叠是增量。
+ *   **R5（2026-10-29）起 ERB 不在此列**：它的折叠由语言服务插件供（更全），结构层这一面
+ *   退休——但那条 provider 仍注册着（同步回空表），因为"Monaco 问折叠"是宿主唯一一个
+ *   与"这份文档上屏了"对齐的信号，缩进 / 残缺两条推的面靠它开跑（见
+ *   {@link structureFoldingProvider} 头注）。
  * - **缩进**：`setLanguageConfiguration` 只写 `onEnterRules` / `indentationRules` 两个
  *   属性，并且只在结构层真的给出规则时才写。基底规则由运行时声明（`.kojo` 派生自糖词表；
  *   没声明 = 只发结构层自己的规则）。
@@ -84,6 +88,17 @@ let syntax: StructureSyntaxPresenter | null = null;
 const optionHooks: Monaco.IDisposable[] = [];
 
 /**
+ * 结构层**管不管**折叠这一面（R5 2026-10-29：一件事只有一个供方）。
+ *
+ * `descriptor.structure.folds === false` = 这门语言的折叠已经有别人供了（ERB 走
+ * `ui.editor.languageService` 槽的 `erb-folding`），结构层不再注册 provider、`parse` 的
+ * `want` 里也不带 `folds`。缺省（没写这一格）= 照旧由结构层供。
+ */
+function servesStructureFolds(descriptor: LanguageDescriptor | null): boolean {
+  return descriptor?.structure !== undefined && descriptor.structure.folds !== false;
+}
+
+/**
  * 结构**着色 / 缩进**这一路的体量闸：与语义着色同一档（`LARGE_FILE_LINES`）。
  *
  * **折叠不看这一条**（2026-10-28 拆开）：详见 {@link resolveStructureFoldsEnabled}。
@@ -95,6 +110,15 @@ export function structureSemanticAffordable(lineCount: number): boolean {
   return Number.isFinite(lineCount) && lineCount <= STRUCTURE_MAX_LINES;
 }
 
+/** 这门语言（或这条路径）对应的 descriptor；认不出 ⇒ `null`（**不猜**） */
+function descriptorOf(languageId: string, path: string | null | undefined): LanguageDescriptor | null {
+  return (
+    descriptorForLanguageId(languageId) ??
+    overlays.get(languageId)?.descriptor ??
+    (languageId === FALLBACK_LANGUAGE_ID || !path ? null : descriptorForPath(path))
+  );
+}
+
 /** 偏好 + 语言声明两条腿（**不带体量**）：体量怎么判由每个面自己决定 */
 function structureCapable(
   languageId: string,
@@ -104,11 +128,7 @@ function structureCapable(
   // 偏好开（缺省开；显式 `off` ⇒ 假）——作者关掉后即便 provider 还没被摘除也不许顶上
   if (!prefOn) return false;
   // 已装上的结构层 descriptor 也算数（测试替身语言 / 尚未进注册表的语言），再退回按路径认领
-  const descriptor =
-    descriptorForLanguageId(languageId) ??
-    overlays.get(languageId)?.descriptor ??
-    (languageId === FALLBACK_LANGUAGE_ID || !path ? null : descriptorForPath(path));
-  return descriptor?.structure !== undefined;
+  return descriptorOf(languageId, path)?.structure !== undefined;
 }
 
 /**
@@ -155,13 +175,25 @@ export function resolveStructureEnabled(
  * - `folding:false`（`TIER_HUGE`，≥50,000 行）把整条折叠槽撤掉——那时 provider 根本不会被问；
  * - `FOLDING_MAX_RANGES` / Monaco 的 `foldingMaximumRegions` 按**区间条数**封顶，超额有可见提示；
  * - worker 侧超时判死仍走 `fallback.ts` 台账（与其余各面同一套）。
+ *
+ * ## R5（2026-10-29）：这一路在 ERB 上整体关掉
+ *
+ * 上面那张表说的是"折叠比其余三面便宜"，但**便宜不等于该有第二份**：ERB 的折叠由
+ * `erb-parser` 的语言服务插件供，而且是超集。两家的代价加起来不是"多算一遍"，是
+ * "Monaco 合并多枚供给器要等最慢那条"——首解因此被 worker 那一趟顶到 186–210 ms。
+ * 所以判据从"要不要给折叠设行数闸"变成"**这份文档的折叠有没有别人供**"，
+ * 由 descriptor 的 `structure.folds` 回答（见 {@link servesStructureFolds}）。
  */
 export function resolveStructureFoldsEnabled(
   languageId: string,
   path: string | null | undefined,
   prefOn: boolean = loadTreeSitterPref(),
 ): boolean {
-  return structureCapable(languageId, path, prefOn);
+  if (!structureCapable(languageId, path, prefOn)) return false;
+  // R5（2026-10-29）：这门语言的折叠已经有别人供了 ⇒ 结构层这一面退休。
+  // 判据不是"谁更好"，是"同一份文档不许有两套区间"——Monaco 把多枚供给器并起来**等最慢的
+  // 那条**，所以第二份不只是白算，它还把首解顶到 worker 那一趟（186–210 ms）。
+  return servesStructureFolds(descriptorOf(languageId, path));
 }
 
 /** 没有基底规则的语言：`mergeIndentConfig` 要求三条腿齐全，用"永不匹配"占位 */
@@ -287,12 +319,35 @@ function structureSemanticProvider(
   };
 }
 
+/**
+ * 折叠 provider。**两种供法，按 descriptor 二选一**（R5，2026-10-29 折叠单源）：
+ *
+ * - `descriptor.structure.folds !== false` → 结构层自己算（今天只剩 `.kojo1`）；
+ * - `=== false`（ERB）→ 折叠已经由 `ui.editor.languageService` 槽上的 `erb-folding` 供了，
+ *   这里**同步交回空表**，只把这份文档的解析**排上队**（`client.warmUp`）。
+ *
+ * ## 为什么留一枚"不折的折叠 provider"而不是干脆不注册
+ *
+ * Monaco 问折叠的那一刻，恰好就是"**这份文档上屏了**"那一刻——这是宿主今天唯一一个
+ * 与"可见"对齐、且与语言无关的拉取信号。结构层还剩两条**推**的面（缩进规则写进语言配置、
+ * 结构残缺写进 marker），它们没有自己的拉取时机，全都靠这一下开跑。把它拆掉就只剩
+ * "按 model 创建事件预热"那条路——而一条线程只持一棵树（同门语言两份文档要换轨），
+ * 在模型创建时抢轨会和真正显示的那一份互踢。**所以留着这个空壳，是把它当触发器用**，
+ * 代价是一次同步 `return []`（Monaco 合并多枚供给器时不增不减）。
+ *
+ * 空壳只在 `folds === false` 的语言上出现，别处仍是原来那条真取数的路。
+ */
 function structureFoldingProvider(languageId: string): Monaco.languages.FoldingRangeProvider {
   return {
     async provideFoldingRanges(model) {
       if (!active || model.getLanguageId() !== languageId) return [];
       const overlay = overlays.get(languageId);
       if (!overlay) return [];
+      if (!servesStructureFolds(overlay.descriptor)) {
+        // 同一份文档的第二套区间到此为止；解析照旧排上队（缩进 / 残缺在回话里到货）
+        overlay.client.warmUp(model);
+        return [];
+      }
       if (!resolveStructureFoldsEnabled(languageId, model.uri?.path)) return [];
       let folds: readonly KojoStructureFold[] | null;
       try {
@@ -381,14 +436,15 @@ function startLanguage(
     // 只进 `open.languageId`（worker 侧日志与自证）；宿主不按语言 id 分支（LAU-3 已收口）
     languageId,
     /**
-     * 这一份文档要哪几面：**语义那一面只在"装配了 + 这一档还供"时才要**。
+     * 这一份文档要哪几面：**语义那一面只在"装配了 + 这一档还供"时才要**，折叠那一面
+     * **只在结构层真的供折叠时才要**（R5：ERB 已经由语言服务插件供，结构层不再问）。
      *
      * `parse` 的 `want` 缺省 = 四面全查，而 ≥5,000 行的文档本就不供语义（上面那道闸），
      * 全查是白烧——24,197 行 ERB 实测 365 ms（四面）vs 299 ms（折叠+缩进+残缺）。
-     * 折叠这一面自从拆出体量闸后任何大小都要，缩进跟着折叠的同一趟回话到货。
+     * 缩进与残缺任何大小都要：一条管回车，一条管波浪线。
      */
     facetsFor: (model) => {
-      const facets: StructureFacet[] = ['folds', 'indent', 'syntax'];
+      const facets: StructureFacet[] = servesStructureFolds(descriptor) ? ['folds', 'indent', 'syntax'] : ['indent', 'syntax'];
       if (runtime.semantic !== undefined && structureSemanticAffordable(model.getLineCount())) {
         facets.push('semantic');
       }
