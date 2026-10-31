@@ -7,8 +7,9 @@
  * 会红**。故判据写在这里，不看运行时，只看源码。
  *
  * 四条：
- * 1. **外部依赖只在白名单里**：只有 `@kojo/erb-vocab/control-flow`（ERB 控制流配对表的单一真源）。
- *    方向是"语言面库读引擎配对表"，与宿主 `monaco/erb-enter.ts` 读同一张表是同一条路；
+ * 1. **外部依赖只在白名单里**：只有 `@kojo/erb-vocab/control-flow`（ERB 控制流配对表的单一真源）
+ *    与 `@kojo/kojo-vocab/enter`（`./enter` 叶的通用正则装配，2026-10-31 erb-enter 裁决批）。
+ *    方向是"语言面库读引擎配对表 / 共享回车装配"，与宿主读同一张表是同一条路；
  *    **不许**再指向插件 `@kojo/plugin-erb-parser`（库包引插件包＝分层倒置，2026-10-30 已清）。
  * 2. **零 Monaco / React / DOM / IO**（含 `type` 导入——理由同 kojo-lang 那条）；
  * 3. **零游戏名词**：包是语言面，不认识任何一部具体游戏；
@@ -49,22 +50,30 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
   const files = sources();
 
   it('扫到的文件数与预期一致（防止走空匹配）', () => {
-    // constants（语言 id 叶子）/ highlight（同符号高亮判据）/ selection-range（扩选判据）/ index。
+    // constants（语言 id 叶子）/ enter（回车层级派生，2026-10-31 erb-enter 裁决批进包）/
+    // highlight（同符号高亮判据）/ selection-range（扩选判据）/ signature（签名判据，LAU-1031-SIG）/
+    // index。
     // LAU-4 补全腿第二批（2026-10-31）：六枚 completion-* 叶子整块搬进
-    // `@kojo/plugin-erb-parser`（槽的供方必须是常驻插件、且插件不许引库），本包 10 ⇒ 4。
-    // LAU-1031-SIG（2026-10-31）：签名判据叶出宿主进本包（4 ⇒ 5）。住址与高亮 / 扩选
-    // 两条腿同形（判据在这、供方在懒装载的 `@kojo/plugin-erb-lang`），不进开机图。
-    expect(files).toHaveLength(5);
+    // `@kojo/plugin-erb-parser`（槽的供方必须是常驻插件、且插件不许引库），本包 10 ⇒ 4；
+    // 此后两批各加一枚叶子、住址都与高亮 / 扩选同形（判据在库、消费方在宿主或懒插件）：
+    // · LAU-1031-SIG（2026-10-31）：签名判据叶出宿主进本包（4 ⇒ 5），供方是懒装载的
+    //   `@kojo/plugin-erb-lang`，不进开机图；
+    // · erb-enter 裁决批（2026-10-31）：宿主 `monaco/erb-enter.ts` 的三枚纯判据整块进包（5 ⇒ 6），
+    //   消费者是宿主的 `LanguageConfiguration` 翻译与结构缩进基底。
+    expect(files).toHaveLength(6);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
     /**
-     * 白名单两枚：`@kojo/erb-vocab/control-flow` + `@kojo/plugin-api`。
+     * 白名单三枚：`@kojo/erb-vocab/control-flow` + `@kojo/kojo-vocab/enter`（后者只被 `./enter`
+     * 叶值引，桶里三条腿不碰它）+ `@kojo/plugin-api`（签名腿的槽标签与协议类型）。
+     * 三枚都是**非插件**库/契约包——插件包一律不许（见下条反向断言）。
      *
-     * 它提供 `ERB_CONTROL_STATEMENTS` / `classifyControlFlow`——ERB 控制流配对表的
+     * `@kojo/erb-vocab/control-flow` 提供 `ERB_CONTROL_STATEMENTS` / `classifyControlFlow`——ERB 控制流配对表的
      * **单一真源**（逐条对齐引擎 `FunctionIdentifier.cs` 的 `funcMatch`）。高亮与扩选都要
      * 问"这词是哪一档"，而在本包抄一份表就必然与它漂移（漂移的表现是"高亮指错的块"）。
-     * 宿主读的是同一张表（`monaco/erb-enter.ts`，经插件 re-export），所以这是**并列读者**
+     * 宿主读的也是同一张表（`monaco/erb-highlight-words.ts` 直引包叶；回车派生 2026-10-31
+     * 起住本包 `./enter`，宿主 `monaco/erb-enter.ts` 副本已删），所以这是**并列读者**
      * 不是反向分层。
      *
      * `@kojo/plugin-api`（LAU-1031-SIG 2026-10-31 加）：签名判据要 `slotParameterLabel`
@@ -84,6 +93,11 @@ describe('@kojo/erb-lang 是纯库（零 Monaco / 零 React / 零 IO）', () => 
       '@kojo/erb-vocab/control-flow',
       // 槽参数标签的唯一实现 + 调用协议类型（见上注：契约层不是插件，kojo-vocab 同方向先例）
       '@kojo/plugin-api',
+      // 2026-10-31（erb-enter 裁决批）：`./enter` 叶的角色分桶之后交给通用正则装配
+      // `enterRulePatternsFromRoles`（`.kojo` 的 `sugarEnterRulePatterns()` 吃的是同一枚函数，
+      // ERB-PARITY 口径"能力不进语言名分支"）。这是 `@kojo/kojo-vocab/**` 的**第二枚不同叶子**，
+      // 不是下面撤掉的两格之一——`engine`（引擎族表）与 `kojo-lang/completion`（空白类）照旧不许回填。
+      '@kojo/kojo-vocab/enter',
       // 2026-10-31（补全腿第二批）：原先另有两格（`@kojo/kojo-lang/completion` 的空白类、
       // `@kojo/kojo-vocab/engine` 的引擎族表）随六枚补全叶子一起离开本包——高亮 / 扩选两条腿
       // 只读上面那张配对表，白名单因此**只降不升**：删掉的两格**不许**再回填（回填即红）。

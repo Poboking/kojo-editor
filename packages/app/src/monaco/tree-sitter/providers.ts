@@ -411,7 +411,7 @@ function syncIndentConfig(languageId: string): void {
       increaseIndentPattern: merged.increaseIndentPattern,
       decreaseIndentPattern: merged.decreaseIndentPattern,
       // 基底这两格必须原样带出：Monaco 的 `indentationRules` 是整对象替换，漏写 = 撤掉
-      // 语言自己的 `SIF` 只抬一行 / 注释行不继承（ERB 的基底两格都由 `erb-enter.ts` 派生）。
+      // 语言自己的 `SIF` 只抬一行 / 注释行不继承（ERB 的基底两格都由 `@kojo/erb-lang/enter` 派生）。
       ...(merged.indentNextLinePattern ? { indentNextLinePattern: merged.indentNextLinePattern } : {}),
       ...(merged.unIndentedLinePattern ? { unIndentedLinePattern: merged.unIndentedLinePattern } : {}),
     },

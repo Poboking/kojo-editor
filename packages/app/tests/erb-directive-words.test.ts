@@ -20,7 +20,7 @@
  * 各走第几层。判据是**加层不是放宽**：层 2/3 用与主盘同一把真语句判据，层 1 逐字保留。
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -393,6 +393,58 @@ describe('宿主源码零手抄指令串（kojo-language / erb-language 一律�
     const synthetic = "const X = ['PRINTFORMDW', 'GOTO'];\n// 'VARSET' 是注释引用\n/* \"PRINTDW\" */\nconst y = './erb-directives';";
     const words = new Set(ERB_DIRECTIVES);
     expect(quotedWordForms(synthetic).filter((w) => words.has(w))).toEqual(['PRINTFORMDW', 'GOTO']);
+  });
+
+  it('指令词表的家恰一份（c292353c 车道判废钉闸：`@kojo/erb-vocab/highlight-words` 第二叶不许长回来）', () => {
+    // 判废依据（2026-10-31 裁决批）：该车道把词表+`unionSorted` 搬进 `@kojo/erb-vocab/highlight-words`
+    // 新叶、物化收编宿主 `erb-directives.ts`——而第七波已把**派生判据**落 `@kojo/erb-vocab/directives`
+    // （`appendUnseen`，"派生判据只有这一份、宿主只接料"）并**退役**了宿主 `erb-directives.ts`，
+    // 物化现家 = 宿主 `erb-highlight-words.ts`。同一条去重并集判据（appendUnseen vs unionSorted）
+    // 在两枚包叶各立一家 = 正面冲突 ⇒ 判废。本条按既有"零手抄/无第二份清单"口径钉**定义面**：
+    // 五枚名字各恰一处定义、家逐字点名；第二家（宿主副本或包内新叶）一出现即红。
+    // 包内文件数白名单（`erb-vocab/tests/control-flow-boundary.test.ts` 钉三枚叶）是它的对侧证据，
+    // 两条判据都不许放宽。
+    const roots: string[] = [];
+    const hasSrc = (dir: string): string | null =>
+      existsSync(path.join(REPO_ROOT, dir, 'src')) ? `${dir}/src` : null;
+    for (const entry of readdirSync(path.join(REPO_ROOT, 'packages'), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === 'plugins') {
+        for (const plug of readdirSync(path.join(REPO_ROOT, 'packages', 'plugins'), { withFileTypes: true })) {
+          if (!plug.isDirectory()) continue;
+          const rel = hasSrc(`packages/plugins/${plug.name}`);
+          if (rel) roots.push(rel);
+        }
+        continue;
+      }
+      const rel = hasSrc(`packages/${entry.name}`);
+      if (rel) roots.push(rel);
+    }
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(path.join(REPO_ROOT, dir), { withFileTypes: true })) {
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules') continue;
+          walk(`${dir}/${entry.name}`);
+        } else if (/\.tsx?$/.test(entry.name)) files.push(`${dir}/${entry.name}`);
+      }
+    };
+    for (const root of roots) walk(root);
+    const posix = (p: string): string => p.split(path.sep).join('/');
+    const DEFINITION_HOME: readonly (readonly [RegExp, string])[] = [
+      [/export const ERB_ENGINE_EXTRA_STATEMENTS\b/, 'packages/app/src/monaco/erb-highlight-words.ts'],
+      [/export const ERB_HIGHLIGHT_EXTRA_WORDS\b/, 'packages/app/src/monaco/erb-highlight-words.ts'],
+      [/export const ERB_HIGHLIGHT_WORDS\b/, 'packages/app/src/monaco/erb-highlight-words.ts'],
+      [/function unionSorted\b/, 'packages/app/src/monaco/erb-highlight-words.ts'],
+      [/export function appendUnseen\b/, 'packages/erb-vocab/src/directives.ts'],
+    ];
+    for (const [pattern, home] of DEFINITION_HOME) {
+      const hits = files
+        .filter((rel) => pattern.test(readFileSync(path.join(REPO_ROOT, rel), 'utf8')))
+        .map(posix)
+        .sort();
+      expect(hits, `${pattern.source} 的定义面不是恰一处（第二份词表家出现了）`).toEqual([home]);
+    }
   });
 });
 

@@ -16,7 +16,7 @@ import type { StructureLanguageRuntime } from './structure-runtime';
  * - 语义着色：`semantic` 面 = `erb-semantic.ts`（ERB 自己的档位表与编码器；查询是
  *   `highlights.scm`）。`providers.ts` 看到这面就会给 ERB 注册
  *   `DocumentSemanticTokensProvider`，没数据时那枚 provider 回 `null`，让名字分色应答；
- * - 缩进：`baseIndentPatterns` 接 `erb-enter.ts` 的既有层级（基底三格 + `SIF` / 注释两格），
+ * - 缩进：`baseIndentPatterns` 接 `@kojo/erb-lang/enter` 的既有层级（基底三格 + `SIF` / 注释两格），
  *   worker 的 `indents.scm` 再把结构规则合并上去——**加法，不替换**既有回车手感；
  * - 结构残缺上屏：`presentSyntax` / `clearSyntax`（LAU-3）。ERB 的文案、码名与
  *   `[SKIPSTART]` 配对判据都在 `erb-diagnostics.ts`，与 `.kojo` 那套通用上屏器不混用；

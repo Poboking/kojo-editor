@@ -5,7 +5,7 @@ import type { EnterRulePatterns } from '@kojo/kojo-vocab/enter';
  * 回车层级的**宿主唯一翻译层**（ERB-ENTER-RULES，2026-10-21）。
  *
  * 派生规则（`EnterRulePatterns`）住在词表那一侧：`.kojo` 由 `kojo-sugar` 的
- * `sugarEnterRulePatterns()` 从糖词表出，`.erb` 由 `erb-enter.ts` 从**引擎配对表**
+ * `sugarEnterRulePatterns()` 从糖词表出，`.erb` 由 `@kojo/erb-lang/enter` 从**引擎配对表**
  * （`erb-parser/scanner.ts` 的 `classifyControlFlow`）出的词表喂进同一个
  * `enterRulePatternsFromRoles()`。两侧产物同形，到这里只过一次 Monaco 协议翻译 ⇒
  * "两门一等语言的回车面长什么样"这件事只有这一处实现，新增一门语言不必再抄一遍

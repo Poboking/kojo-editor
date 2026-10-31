@@ -1,7 +1,7 @@
 import type * as Monaco from './entry';
 import { ERB_STATEMENT_DIRECTIVES } from '@kojo/plugin-erb-parser';
 import { ERB_DIRECTIVES, ERB_HIGHLIGHT_EXTRA_WORDS } from './erb-highlight-words';
-import { erbEnterRulePatterns, ERB_LINE_COMMENT } from './erb-enter';
+import { erbEnterRulePatterns, ERB_LINE_COMMENT } from '@kojo/erb-lang/enter';
 import { toMonacoEnterConfig } from './enter-rules';
 import {
   erbMonacoExtensions,
@@ -667,7 +667,7 @@ export function registerErbLanguage(monaco: typeof Monaco): void {
   monarchDisposable = monaco.languages.setMonarchTokensProvider(ERB_LANGUAGE_ID, erbMonarch(ERB_DIRECTIVES));
 
   // ERB-ENTER-RULES（2026-10-21）：回车层级与 `.kojo` 走同一道翻译层（`enter-rules.ts`），
-  // 词表由引擎配对表派生（`erb-enter.ts`，零手抄词形）——ERB 是一等语言，
+  // 词表由引擎配对表派生（`@kojo/erb-lang/enter`，零手抄词形）——ERB 是一等语言，
   // 打字手感这一格不是 `.kojo` 的专属福利。
   const enterConfig = toMonacoEnterConfig(monaco, erbEnterRulePatterns());
   monaco.languages.setLanguageConfiguration(ERB_LANGUAGE_ID, {

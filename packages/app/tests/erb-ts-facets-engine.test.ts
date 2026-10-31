@@ -2,7 +2,7 @@ import { afterEach, afterAll, describe, expect, it } from 'vitest';
 import { ERB_SEMANTIC_FACET, ERB_SEMANTIC_LEGEND, encodeErbStructureTokens } from '../src/monaco/tree-sitter/erb-semantic';
 import { ERB_STRUCTURE_RUNTIME } from '../src/monaco/tree-sitter/erb-runtime';
 import { lostStructureSpans } from '../src/monaco/tree-sitter/structure-runtime';
-import { erbEnterRulePatterns } from '../src/monaco/erb-enter';
+import { erbEnterRulePatterns } from '@kojo/erb-lang/enter';
 import {
   FIXTURE,
   disposeAllEngines,
