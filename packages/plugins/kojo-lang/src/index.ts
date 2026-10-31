@@ -32,6 +32,19 @@ export { provideDocumentSymbols, symbolFactsToTree } from './symbols';
 export { provideWorkspaceSymbols } from './workspace-symbols';
 export { provideInlayHints, toEditorInlayHints } from './inlay';
 export { isKojo2Request } from './request';
+// LAU-KOJO2-INLINE（2026-10-31）：槽 `completion.source` 的 2.0 供方（判据复用包内
+// `kojo2InlineCompletionAt`，本层只做语言门 / 窗口对账 / 契约形状）。
+export {
+  createKojo2InlineContribution,
+  isKojo2InlineRequest,
+  KOJO2_INLINE_ORDER,
+  KOJO2_INLINE_SOURCE_ID,
+  KOJO2_INLINE_TITLE,
+  kojo2InlineCompletion,
+  kojo2InlineQueryOf,
+  type Kojo2InlineDeps,
+  type Kojo2InlineQuery,
+} from './inline-completion';
 export { KOJO2_MONACO_LANGUAGE_SURFACE } from './monaco-language';
 // B3 收口最后一格（2026-10-30）：文档级诊断的供方（槽 `ui.editor.decorator`；判据在
 // `@kojo/kojo-lang/diagnostics`）。导出给测试直调，也导出贡献工厂让宿主按 id 认这一家。

@@ -370,7 +370,7 @@ afterEach(() => {
 /* ============================== A · 装配与真注册表 ============================== */
 
 describe('A · 装配落在真 vendor 注册表上', () => {
-  it('装好后 ERB 与 .kojo 两门一等语言各拿到一枚 provider，2.0 与 plaintext 没有', () => {
+  it('装好后 ERB / .kojo 两门一等语言各拿到一枚 provider；2.0 经 descriptor 声明位进门，plaintext 没有', () => {
     const erb = makeModel('CALL 甲\n');
     const kojo = makeModel('是 1\n', KOJO_LANGUAGE_ID);
     const kojo2 = makeModel('是 1\n', KOJO2_LANGUAGE_ID);
@@ -380,7 +380,9 @@ describe('A · 装配落在真 vendor 注册表上', () => {
     for (const model of [erb, kojo]) {
       expect(hostProviderOf(model)).toBeTruthy();
     }
-    expect(registryProviders(kojo2).filter((p) => (p as any).displayName === HOST_DISPLAY)).toHaveLength(0);
+    // LAU-KOJO2-INLINE（2026-10-31）：`.kojo2` 的 descriptor 点名了 `inlineCompletion: true` ⇒ 进门，
+    // 与旧桥两门同挂一枚宿主 provider（此前是能力缺口，故断言 0；声明位到位后这里必须读到 1）。
+    expect(registryProviders(kojo2).filter((p) => (p as any).displayName === HOST_DISPLAY)).toHaveLength(1);
     expect(registryProviders(plain).filter((p) => (p as any).displayName === HOST_DISPLAY)).toHaveLength(0);
   });
 
