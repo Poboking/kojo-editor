@@ -12,7 +12,7 @@
 |PERF-R7B|冷开两遍全量扫描合并：`read+parse` 5,632ms / `refs scan` 3,011ms 各扫 42.7M 码元|一遍产出 `ErbFile` 与候选；11.5s 再降 1.5–2.5s；`bySymbol` 逐字节相等|待认领 · F 批归因 2026-10-31|
 |MK-PUB|市场发布：zip → Worker 校验 → R2 `pending/` → 自动开 PR（merge=放行）；客户端意图/进度 + Rust 命令 + 主机闸|全链 curl 可验证 + 全量不回退 + 双 typecheck + audit + cargo；不动 `MARKET_DEFAULT_INDEX_URL` 与 ADR-0007|进行中 · 认领：claude 2026-10-16|
 |POS-UTIL|位置换算收口（tree-sitter 0-based/UTF-16 vs Monaco、plugin-api 1-based）；否决 CST↔AST `PositionMapper`|换算走同一模块；覆盖 CJK/emoji/CRLF/折叠行；不新增第三套坐标系|进行中 · 认领：lead 2026-10-20|
-|ERB-PARITY|ERB 一等语言：注册/服务/树叠层/能力矩阵不得只给 Kojo；审计差 G1–G9，已修 G1/3/4/6/7/8/9|同 descriptor/registry/engine；ERB 直写不依赖 `.kojo`；余 G2 欠语言身份前置，G5 豁免|进行中 · 认领：lead 2026-10-20|
+|ERB-PARITY|ERB 一等语言：注册/服务/树叠层/能力矩阵不得只给 Kojo；审计 G1–G9 **已全修**（G2＝第七波：排版整篇+区间两腿进槽、契约 `options`、降级接 FMT-TOAST 台账），G5 裁决豁免|同 descriptor/registry/engine；ERB 直写不依赖 `.kojo`；一个 kind 只一枚 provider（双挂收敛见 LAU-DUALLEG）|进行中 · 认领：lead 2026-10-31（G1–G9 收口，转入 DUALLEG）|
 |TUT-UGUIDE|`docs/USER-GUIDE.md` 全文 0 处提 2.0 ⇒ 只讲 v1|写清默认档只认 v1 / 切档才认 2.0 / `.kojo2` 无落盘产物；只改冲突行|待认领 · chief 2026-10-22|
 |CMD-NUL-BYTE|`ui/commands.ts` 唯一带裸 NUL ⇒ 判二进制、NUL 后行失明|换 `\u0000`；`includes(0)` 为 false、`grep -c nonce` 得 6、`ps14-source-cache.test.ts` 绿|待认领 · chief 2026-10-22|
 |MK-SMOKE-RECAL|`smoke-tauri-market.mjs` 本机 4 红：f2/g/h 锚点钉外部注册表内容；k 容差 300ms 踩采样噪声|f2/g/h 改「schema 合规 + 远程与盘上自洽」；k 容差 > 2×采样间隔|待认领 · chief 2026-10-22|
@@ -22,10 +22,12 @@
 |K2-RELEASE|R9 发布闸：core/eraTW/program/UI gate + STATE/BOARD 落账 + 双 typecheck/audit + 真机验收|eraTW 完整体验；反向回滚可用|待认领|
 |K2-INCR-HOLES|增量洞：`选项`/BOM 全量；整份替换/改 `# 视角` 仍重建（~200–300ms）；声明单元内编辑 55–75ms；槽族只盖 `rand/foreach`|每次退化可见；与全量逐字节等价不破|待认领 · lead 2026-10-22|
 |K2-CORPUS-SOURCE|语料机无输入：eraTW 4.980 基线盘 `.kojo` 0 份；须 `KOJO_CORPUS_DIR` 指向含 v1 作者源工程或迁移快照盘，重生成 golden|发现 ≥1 份 `.kojo` 且状态/原因分类可读|待认领|
-|LAU-BLOCKED|LAU-1/D2/6/D3/2/5 已交付；LAU-4 各腿 + SDK B4/B5、B5b 车 1–6 已落|余 ERB 排版注册面 G2（判据在 `@kojo/kojo-vocab/formatter`；方案：`formatting` 槽腿 + 契约 `options` + 删 v1 区间）；LAU-D4 未开工；LAU-5 余 kojo2 worker 不进池|已交付余项 · 2026-10-31|
+|LAU-BLOCKED|LAU-1/D2/6/D3/2/5 已交付；LAU-4 各腿 + SDK B4/B5、B5b 车 1–6 + C 类两车 + **第七波（G2 排版进槽）**已落|LAU-D4 未开工，**方案已定**＝两车（① 方言包骨架 + 声明数据：eraTW 补 `carriers`、`new-dialect` 产物过形态闸、`packages/app` 零改动；② 表层↔原生双向映射表：纯数据只住方言包、core 一份 additive 读表函数、错配必红），backend 不动（吃 backend 的第三档与 D2/D3 重叠，判不派）；LAU-5 余 kojo2 worker 不进池|已交付余项 · 2026-10-31|
+|LAU-DUALLEG|ERB 旧桥双挂收敛：`languageServices: true` 让共享槽腿与宿主纯翻译腿挂在同一枚 model 上，同一次请求问两趟、"谁在答"由注册顺序判|**车 1 已落**（第七波后）：`documentHighlight`/`selectionRange`/`codeLens` 三格由 descriptor 点名、宿主腿改 `undefined, { excludeNamed: kind }`（第三参给 kind 就前功尽弃），一个 kind 恰一枚；**刻意不收**：`references`（已关文件点击通道在宿主）、`rename`（闭文件回写通道 + 槽腿 prepare 是 kojo2 尺子）、`signatureHelp`（槽里无 ERB 供方，让位＝静默没有）；余补全/定义/悬停逐 kind 判定|进行中 · 认领：lead 2026-10-31|
+|LAU-KOJO2-INLINE|`.kojo2` 无行内续写：**能力没做**，不是注册缺口|唯一供方 `plugin-inline-completion-local` 的三条名字槽（行首 `@`/`CALL`/`#`）与名录全是 ERB 专属，`codeViewAt` 对未知语言恒假；要开得先出 descriptor 声明位 + 2.0 代码位判据进包 + 按 2.0 语法重写"几乎唯一才给"；ps10 只剩 86 B 余量 ⇒ 走已图内文件或懒边|待派 · 2026-10-31 核查|
 |LAUNCH-L7B|core 插件源码项目 `PluginProjectService`：工作区项目、`buildZip` 打包、`launcher_project_hash`、drift 报告|同内容两次打包逐字节相同；源码/产物分离；三条写边界；`launcher_*` 宿主命令须先补|待派（依赖 L7A）|
 |LAUNCH-P0-RESIDUE|P0 真壳验收余项：② ~10 MB fixture 复制进度；③ 二次 `start` 报 `LAUNCHER_INSTANCE_BUSY`；⑤ 信任框后启动、篡改报 `TRUST_CHANGED`；⑥ 退出杀树 + 下次 `app-exit`；① shared 实例仅夹具播种|全部在真壳（`debug-cli shell`）取证；⑤ 无人值守 ⇒ 宿主侧命令取证|待派|
-|SDK-B5b|删宿主语言面残留（原 51 枚/23,797 行，语言面 24/9,672 行；结构层 8 不算）；车 1–6 与 C 类两车已落，M2 142→126|宿主不再直装语言面；余 6 枚＝留宿主事实/编排；仅 diagnostics-gate 常量与 `isKojo2Path` 可下沉|进行中 · 认领：lead 2026-10-31|
+|SDK-B5b|删宿主语言面残留（原 51 枚/23,797 行，语言面 24/9,672 行；结构层 8 不算）；车 1–6 与 C 类两车已落，M2 142→126；**第七波再出宿主 7 枚**（拆 `kojo2-lexicon`/`erb-completion-context` 两壳、退役 `erb-directives`、`kojo-hover-native`+`kojo-native-marks` 上提 `@kojo/kojo-vocab`、`kojo-xml-dialect`+`kojo-xml-event-sites` 落懒插件 `ui-kojo-xml`），M2 随 `--update-baseline` **126→125**|宿主不再直装语言面；现尺 `find packages/app/src -name 'kojo2-*.ts'` = **34 枚/16,610 行**（monaco 14/4,772），含 tsx 的 `*kojo2*` = 39 枚/19,547 行/809,533 B；余 5 枚留宿主事实（project-index / project-analysis / model-language / problem-sync / scan-adapter），仅 diagnostics-gate 的扩展名常量与 `isKojo2Path` 可择机下沉|进行中 · 认领：lead 2026-10-31|
 |AE-GHOST|`button.ghost` 悬停吃基类实心灰（全站 90+ 处）；改法会压掉三处自写标定|先给自写悬停档让位（`@layer` 或 `:where()` 低特异），再收这一档；不许直接压特异性|待认领 · shiori 2026-10-27|
 |AE-SPLIT4|六条把手热态色不齐：`.editor-divider` 的 `:hover`/`:active` 共用中性灰；`.dock-cell-resizer` 悬停零反馈|先让 `styles-wash-token-discipline.test.ts` 口径迁到「落点在册」，再拆块接 `--split-hot`|待认领 · shiori 2026-10-27|
 |AE-SCROLLFADE|滚动区边缘渐隐同一份配方抄四遍（editor-tabs/tree-groups/nav-tree/ksp-results）|由 `ui-chrome-polish.test.ts` owner 把判据迁到「读类名在册」，再落 `--scroll-fade` 单源|待认领 · shiori 2026-10-27|
