@@ -345,3 +345,50 @@ describe('KX 占位符按文件路径编号还原（additive：第二参 filePat
     expect(at('M_KOJO_K75刻印取得.ERB').characterNo).toBe(75);
   });
 });
+
+/**
+ * 锚点搜索的**终止性**（2026-11 卡死回归）。
+ *
+ * 病史：`splitAtLastKAnchor` 从右往左退锚点，靠 `limit = k` 递减。退到 `k === 0` 之后，
+ * 下一轮 `lastIndexOf('_K', -1)` 会被 JS 把负 position **钳到 0**——若这个名字恰以 `_K`
+ * 开头，它返回的还是 0，`k` 原地不动 ⇒ `for(;;)` 空转。表现不是报错而是**页面满核自旋**
+ * （单线程 1.00 核、无日志、连 CDP 都投递不进去），打开大项目索引一完成就必然复现。
+ *
+ * 触发形态全是「剥前缀后以 `_KX` 开头」：`_K` 后跟非数字 ⇒ 不进"数字 + 槽位"那条分支
+ * ⇒ 直接落到 `limit = k`。而 `_KX` 正是本适配器显式支持的占位符形态（`/_KX(?:_|$)/`），
+ * 所以这个 bug 的实际效果是**占位符那一整支永远执行不到**。
+ *
+ * 下面 4 个名字全部取自 eraTW 4.981 语料（120284 个函数名里就这 4 个命中）。
+ */
+describe('锚点搜索必须终止（无面段的 _KX 形态）', () => {
+  const rule = createEratwFamilyIndex();
+
+  const STUCK_NAMES = [
+    'M_KOJO_KX_X',
+    'M_KOJO_KX_X内的RESULTS:2，可以写入剧本描述文。<br>',
+    'DIARY_KX_YY_HAPPEN',
+    'DIARY_KX_YY',
+  ];
+
+  for (const name of STUCK_NAMES) {
+    // 终止性兜底就是这条超时：若 `for(;;)` 空转回归，用例会一直挂在这里直到超时失败。
+    // （不用墙钟断言——那会把整份文件推进 perf 池，主套件就再也跑不到它了。）
+    it(`${name} → 有限步内给出占位符判定`, { timeout: 2000 }, () => {
+      const m = rule.match(name);
+      expect(m).toMatchObject({ kind: 'placeholder', isPlaceholder: true, characterNo: null });
+    });
+  }
+
+  it('正常形态的判定一字未动（修终止性不动语义）', () => {
+    expect(rule.match('M_KOJO_MESSAGE_COM_K1_30')).toMatchObject({
+      kind: 'ok',
+      face: 'MESSAGE_COM',
+      characterNo: 1,
+      slot: '30',
+    });
+    // 最右锚点仍然生效（BUG-3 的贪婪语义）
+    expect(rule.match('X_K3_MESSAGE_COM_K1_1')?.characterNo).toBe(1);
+    // 无锚点的名字仍旧拒绝
+    expect(rule.match('M_KOJO_MESSAGE_COM')).toBeNull();
+  });
+});

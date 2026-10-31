@@ -290,8 +290,13 @@ function parseKojoFamilyRaw(rawName: string): FamilyMatch | null {
  * 从头回溯（99k 名字两处调用，self 76.8ms），从右往左只走"`_K` 个数 + 1"步。
  */
 function splitAtLastKAnchor(s: string): { head: string; no: number; tail: string } | null {
+  // 结构上限：`_K` 在串里最多出现 `floor(len / 2)` 次，`limit` 每轮严格左移，
+  // 所以有效轮数天然 ≤ 这个数。用**有界 for** 而不是 `for (;;)`：本函数跑在 UI 主线程
+  // 的微任务里（条件矩阵建索引 → `buildCharacterIndex` → `factsOfFile` → 这里），
+  // 一次不终止就是整个编辑器满核自旋、连调试通道都进不去。宁可退化成"拒绝判定"。
+  const maxSteps = (s.length >> 1) + 2;
   let limit = s.length;
-  for (;;) {
+  for (let step = 0; step < maxSteps; step += 1) {
     const k = s.lastIndexOf('_K', limit - 1);
     if (k < 0) return null;
     let j = k + 2;
@@ -307,8 +312,18 @@ function splitAtLastKAnchor(s: string): { head: string; no: number; tail: string
       // `_.+` 形态：分隔符后面必须还有东西（`A_K1_` 不算槽位）
       if (s.charCodeAt(j) === 95 && j + 1 < s.length) return { head, no, tail: s.slice(j) };
     }
+    // 已到最左端：`_K` 前面再无内容可作 `(.*)`，等价于正则无匹配。
+    //
+    // 这一行是"页面卡死"的根因修复（2026-11）：`limit` 只能严格递减，退到 0 之后
+    // 下一轮 `lastIndexOf('_K', -1)` 会被 JS 把负 position **钳到 0**——若 `s` 恰以
+    // `_K` 开头，它返回的还是 0，`k` 原地不动 ⇒ 空转（满核自旋、无日志、CDP 投递不进去）。
+    // 触发形态全是 `_KX_`：`_K` 后跟非数字 ⇒ 不进上面那个 if ⇒ 直接落到 `limit = k`。
+    // 而 `_KX` 正是本文件下方显式支持的口上占位符（`/_KX(?:_|$)/`）——不在这里止血，
+    // 那一支代码永远执行不到。eraTW 语料里 120284 个函数名中有 4 个命中。
+    if (k === 0) return null;
     limit = k;
   }
+  return null;
 }
 
 interface PartialMatch {
