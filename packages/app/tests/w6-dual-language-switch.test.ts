@@ -163,10 +163,12 @@ describe('W6 · 注解 / 提示各一枚挂多门语言，着色按语言分枚�
     installCodeLensProvider(a.monaco, { resolve: () => [], navigate: () => undefined });
     installInlayHintsProvider(a.monaco, { resolve: () => [] });
     installSemanticTokensProvider(a.monaco, { resolve: () => [] });
-    expect(sortedLanguages(a.lens)).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
-    // B2c：kojo2 的 descriptor 点名了 `slotServices: ['inlayHint']`，共享收口于是也给它挂上
-    // **同一枚** provider（供方是插件）。这里跟着变的是"几门语言"，不是"几枚 provider"——
-    // 所以下面那两条 `toBe` 的判据（同一对象引用）一个字没改。
+    // DOUBLE-LEG-1032：ERB descriptor 点名了 `codeLens`，v1 这枚按 `excludeNamed` 让位，
+    // 挂载面只剩没点名的旧桥语言 `.kojo1`；ERB 的行上注解由共享槽腿那一枚 provider 应答
+    // （恰一枚）。inlayHint 未点名、面不变——这里跟着变的是"几门语言"，不是判据。
+    expect(sortedLanguages(a.lens)).toEqual([KOJO_LANGUAGE_ID]);
+    // B2c：kojo2 的 descriptor 点名了 `slotServices: [...'inlayHint'...]`，共享收口于是也给它
+    // 挂上**同一枚** provider（供方是插件）。这里跟着变的是"几门语言"，不是"几枚 provider"。
     expect(sortedLanguages(a.hints)).toEqual(
       [ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID, KOJO2_LANGUAGE_ID].sort(),
     );
@@ -190,11 +192,13 @@ describe('W6 · 注解 / 提示各一枚挂多门语言，着色按语言分枚�
     expect(legendOf(KOJO2_LANGUAGE_ID).tokenTypes).not.toEqual(
       legendOf(ERB_LANGUAGE_ID).tokenTypes,
     );
-    expect(a.lens[0]!.provider).toBe(a.lens[1]!.provider);
+    // DOUBLE-LEG-1032：lens 只剩一枚挂载（`.kojo1`），"多挂同一对象"在本腿自然退化为
+    // "就一枚"；hints 仍三门语言共用同一对象，那条判据一个字没改。
+    expect(a.lens).toHaveLength(1);
     expect(new Set(a.hints.map((r) => r.provider)).size).toBe(1);
   });
 
-  it('dispose 成对回收（codeLens 连点击命令一共三条）', () => {
+  it('dispose 成对回收（codeLens 让位后连点击命令共两条；inlayHint / semanticToken 三门语言各三条）', () => {
     const { monaco, disposed } = stubMonaco();
     const h1 = installCodeLensProvider(monaco, { resolve: () => [], navigate: () => undefined });
     const h2 = installInlayHintsProvider(monaco, { resolve: () => [] });
@@ -202,7 +206,8 @@ describe('W6 · 注解 / 提示各一枚挂多门语言，着色按语言分枚�
     h1.dispose();
     h2.dispose();
     h3.dispose();
-    expect(disposed.filter((d) => d.startsWith('lens:'))).toHaveLength(2);
+    // DOUBLE-LEG-1032：ERB 点名 `codeLens` 让位 ⇒ 本腿只挂 `.kojo1` 一枚，多挂一门不许留孤儿订阅
+    expect(disposed.filter((d) => d.startsWith('lens:'))).toHaveLength(1);
     // 三门语言 ⇒ 三次注册，dispose 一次全收回（多挂一门不许留孤儿订阅）
     expect(disposed.filter((d) => d.startsWith('hints:'))).toHaveLength(3);
     expect(disposed.filter((d) => d.startsWith('semantic:'))).toHaveLength(3);
@@ -362,18 +367,22 @@ describe('W6 · B8「行上内联注解 / 被谁调用」开关跨语言生效',
     expect(storage.getItem('kojo.ui.codeLens.v1')).toBeNull();
   });
 
-  it('同一枚 code lens provider 服务两门语言 ⇒ 这一次编辑器选项翻转同时翻转两边', () => {
+  it('codeLens 翻转仍两边同时生效：本腿只挂 `.kojo1`（DOUBLE-LEG-1032 让位），ERB 由槽腿应答——两枚走同一份翻译与同一条命令 ⇒ 产出逐字相同', () => {
     const { monaco, lens } = stubMonaco();
     installCodeLensProvider(monaco, {
       resolve: (model) => collectCodeLenses(CONTRIBUTIONS, ask('codeLens', pathOf(model))),
       navigate: () => undefined,
     });
+    // 挂载面：旧桥让位后只剩 `.kojo1` 一枚；开关是编辑器级、无语言维度，一次翻转
+    // 同时作用于本腿与共享槽腿两家，所以"跨语言生效"不靠"同一枚 provider"，
+    // 靠的是同一份 `collectCodeLenses` + 同一条 `CODE_LENS_COMMAND`（下面两条断言）。
+    expect(lens.map((r) => r.languageId)).toEqual([KOJO_LANGUAGE_ID]);
     const provider = lens[0]!.provider as Monaco.languages.CodeLensProvider;
-    expect(lens[1]!.provider).toBe(provider);
     const erb = lensesOf(provider, ERB_PATH);
     const kojo = lensesOf(provider, KOJO_PATH);
     // 同一条命令 id（点击通道也只有一条）
     expect(kojo[0]!.command?.id).toBe(erb[0]!.command?.id);
+    expect(kojo[0]!.command?.id).toBe(CODE_LENS_COMMAND);
     expect(kojo[0]!.command?.title).toBe(erb[0]!.command?.title);
   });
 });

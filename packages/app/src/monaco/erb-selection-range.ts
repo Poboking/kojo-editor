@@ -20,9 +20,10 @@
  *    在前，`parent` 逐级向外），而 0.57 的 provider 入参形状是"**每位点一个
  *    `SelectionRange[]`**（内 → 外）"——摊平**只在这一层做**（换 Monaco 版本只动这里）。
  *    契约里的 `null`（该位点空链）摊成空数组：**不夹取、不猜**，也绝不缩短别的位点；
- * 3. **注册**：经 `registerForLanguageServices(monaco, register, 'selectionRange')` 挂上
- *    （ERB descriptor 已声明 `languageServices: true`）。当年那枚直挂 `ERB_LANGUAGE_ID` 的
- *    原生安装器已随批删除。
+ * 3. **注册**：经 `registerForLanguageServices(monaco, register, undefined, { excludeNamed:
+ *    'selectionRange' })` 挂上——DOUBLE-LEG-1032（2026-10-31）起点名了这一格的语言让位
+ *    （ERB / kojo2 由共享槽腿那一枚应答），本腿只留 `.kojo1`。当年那枚直挂 `ERB_LANGUAGE_ID`
+ *    的原生安装器已随批删除。
  *
  * ## 三态
  *
@@ -69,7 +70,8 @@ function flattenChain(chain: EditorSelectionChain): Monaco.languages.SelectionRa
 
 /* ============================== 安装 ============================== */
 
-/** 共享收口也会把这枚 provider 挂到 kojo2；宿主先按 model 语言弃权，避免两份同一链。 */
+/** DOUBLE-LEG-1032 之后本腿只挂在 `.kojo1` 上；挂载面 ≠ 应答面：糖投影 model 的行号属
+ *  派生物，宿主先按 model 语言弃权（老桩 model 没有 `getLanguageId` ⇒ 保持旧行为）。 */
 function servesErb(model: Monaco.editor.ITextModel): boolean {
   try {
     const id = model.getLanguageId();
@@ -119,12 +121,14 @@ export function installErbSelectionRangeProvider(monaco: typeof Monaco): Monaco.
   };
 
   // 注册失败原样外抛：`registerForLanguageServices` 已把半途挂上的逐枚撤回（见 register-dialects.ts）。
+  // DOUBLE-LEG-1032（2026-10-31）：挂载口径改为 `excludeNamed: 'selectionRange'`——
+  // 点名了这一格的语言（ERB / kojo2）由共享槽腿那一枚应答（同一枚槽、同一条 collect、同一份
+  // 三态），本宿主纯翻译腿不再叠第二枚；只留 `.kojo1` 那门不点名的旧桥语言。
   const registration = registerForLanguageServices(
     monaco,
     (m, id) => m.languages.registerSelectionRangeProvider(id, provider),
-    // 带能力名：descriptor 点名了 `selectionRange` 的语言（kojo2）也挂这一枚；
-    // ERB 由 `languageServices: true` 收进来。
-    'selectionRange',
+    undefined,
+    { excludeNamed: 'selectionRange' },
   );
 
   let disposed = false;

@@ -171,15 +171,18 @@ function stubMonaco(): {
 }
 
 describe('installCodeLensProvider · 协议翻译与回收', () => {
-  it('两种语言都注册；dispose 把两枚 provider 与命令一起回收', () => {
+  it('只挂没点名 codeLens 的旧桥语言（DOUBLE-LEG-1032 起只剩 `.kojo1`）；dispose 把 provider 与命令一起回收', () => {
     const { monaco, registered, disposed } = stubMonaco();
     const handle = installCodeLensProvider(monaco, {
       resolve: () => [],
       navigate: () => undefined,
     });
-    expect(registered.map((r) => r.languageId).sort()).toEqual([ERB_LANGUAGE_ID, KOJO_LANGUAGE_ID].sort());
+    const ids = registered.map((r) => r.languageId);
+    expect(ids).toEqual([KOJO_LANGUAGE_ID]);
+    // 点名 `codeLens` 的语言（ERB / kojo2）由共享槽腿应答——本腿让位后 ERB 恰一枚 provider。
+    expect(ids).not.toContain(ERB_LANGUAGE_ID);
     handle.dispose();
-    expect(disposed).toHaveLength(3);
+    expect(disposed).toHaveLength(2);
   });
 
   it('resolve 抛错 ⇒ 这一篇「没有注解」，编辑器输入链不被带崩', () => {

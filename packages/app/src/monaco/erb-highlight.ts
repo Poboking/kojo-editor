@@ -18,8 +18,10 @@
  * 2. **响应 → Monaco `DocumentHighlight[]`**：契约的单行区间（`line` + 起止列）→ 同数值的
  *    `IRange`，档位 → `DocumentHighlightKind`（{@link erbHighlightKindToMonaco} 是**唯一**
  *    映射表；契约的 `kind` 必填，缺省不猜）；
- * 3. **注册**：经 `registerForLanguageServices(monaco, register, 'documentHighlight')` 挂上
- *    ——ERB descriptor 已声明 `languageServices: true`，共享收口按 descriptor 铺；
+ * 3. **注册**：经 `registerForLanguageServices(monaco, register, undefined, { excludeNamed:
+ *    'documentHighlight' })` 挂上——DOUBLE-LEG-1032（2026-10-31）起**点名了这一格的语言让位**
+ *    （ERB / kojo2 由共享槽腿那一枚应答，见 `languages.ts` 的 `slotServices` 与
+ *    `slot-service-providers.ts` 的 `legOf('documentHighlight', …)`），本腿只留 `.kojo1`；
  *    当年那枚"注册调用第一个参数直接写死 `ERB_LANGUAGE_ID`"的原生安装器已随批删除
  *    （闸门正是按那条形状 grep 归零的）。
  *
@@ -76,10 +78,9 @@ export function erbHighlightKindToMonaco(
 /* ============================== 安装 ============================== */
 
 /**
- * 共享收口会把这枚 provider 也挂到 kojo2（两门语言都 `languageServices: true`）。
- * 宿主层必须先按 model 的语言弃权：插件只按请求里的 `languageId` 认语言，而 kojo2 的
- * 请求会由 kojo2 那家插件作答——不弃权就会在 kojo2 里叠出**两份**同一结果。
- * 老桩 model 没有 `getLanguageId` ⇒ 保持旧行为（直接调用方按 ERB 用）。
+ * DOUBLE-LEG-1032 之后本腿只挂在 `.kojo1` 上，但**挂载面 ≠ 应答面**：糖投影 model 的
+ * 语言 id 是 `kojo-legacy`，屏幕上行号属派生物，高亮它就是把框画在一份不存在的文本上。
+ * 宿主层先按 model 的语言弃权（老桩 model 没有 `getLanguageId` ⇒ 保持旧行为，直接按 ERB 服务）。
  */
 function servesErb(model: Monaco.editor.ITextModel): boolean {
   try {
@@ -91,12 +92,12 @@ function servesErb(model: Monaco.editor.ITextModel): boolean {
 }
 
 /**
- * 为声明了通用语言服务的语言（ERB 是其中之一）注册文档高亮 provider，返回**幂等**
- * disposable。
+ * 为**没**把同符号高亮交给槽腿的旧桥语言（今天 = `.kojo1`）注册文档高亮 provider，
+ * 返回**幂等** disposable。
  *
  * - **无条件注册**（K2-SURFACE-DEFAULT）：只读呈现面，切流阶段 `v1-only` 下也照常可见；
- * - 注册经共享收口 + 能力名 `documentHighlight`——落到 `.kojo` / `kojo2` 上的那一枚不会抢
- *   它们：插件对非 ERB 请求弃权，本层交回空列表/`undefined`；
+ * - 挂载经共享收口 + `excludeNamed: 'documentHighlight'`（DOUBLE-LEG-1032）：点名这一格的
+ *   语言（ERB / kojo2）由共享槽腿那一枚应答，本腿在其上**零挂载**——同一次请求不再白问两趟供方；
  * - provider 内任何异常回 `[]`；
  * - 注册失败原样外抛（共享收口已把半途挂上的逐枚撤回，见 `register-dialects.ts`）。
  */
@@ -140,12 +141,15 @@ export function installErbHighlightProvider(monaco: typeof Monaco): Monaco.IDisp
   };
 
   // 注册失败原样外抛：`registerForLanguageServices` 已把半途挂上的逐枚撤回（见 register-dialects.ts）。
+  // DOUBLE-LEG-1032（2026-10-31）：挂载口径改为 `excludeNamed: 'documentHighlight'`——
+  // 点名了这一格的语言（ERB / kojo2）由**共享槽腿那一枚**应答（同一枚槽、同一条 collect、
+  // 同一份三态），本宿主纯翻译腿不再叠第二枚；只留 `.kojo1` 那门不点名的旧桥语言。
+  // 判据仍只看 descriptor 声明，不写任何语言 id（与 `kojo-hover.ts` 的 `hover` 既有用法同一条路）。
   const registration = registerForLanguageServices(
     monaco,
     (m, id) => m.languages.registerDocumentHighlightProvider(id, provider),
-    // 带能力名：descriptor 点名了 `documentHighlight` 的语言（kojo2）也挂这一枚；
-    // ERB 由 `languageServices: true` 收进来（与其它 11 枚共享 provider 同一条路）。
-    'documentHighlight',
+    undefined,
+    { excludeNamed: 'documentHighlight' },
   );
 
   let disposed = false;

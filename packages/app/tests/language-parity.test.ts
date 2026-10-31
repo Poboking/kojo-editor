@@ -599,10 +599,9 @@ describe('注册点取证：`self` / `shared` 项都真的注册了、而且被�
 
 /**
  * ERB 的 `definition`（F12）与 `implementation`（Ctrl+F12）两格的「谁在答」台账
- * （LAU-DUALLEG 第二车，2026-10-31）。形状照第一车那一组（`DOUBLE-LEG-1032`，提交 `1006817d`，
- * 尚在 `origin/b/agent/1032-double-leg` 未并入 dev 尖端）：点名为唯一台账 / 安装器形状 /
- * 槽腿表 = "恰一枚"的另一半 / 未让位 kind 逐字留账——**同款形状，判据不另开一份**，
- * 两车各钉自己的 kind，并入时两组并列共存。
+ * （LAU-DUALLEG 第二车，2026-10-31）。形状照第一车那一组（`DOUBLE-LEG-1032`，本批同车并入）：
+ * 点名为唯一台账 / 安装器形状 / 槽腿表 = "恰一枚"的另一半 / 未让位 kind 逐字留账——
+ * **同款形状，判据不另开一份**，两车各钉自己的 kind，两组并列共存。
  *
  * **这两格今天不双挂**（本车第一步逐格数出来的）：旧桥 `languageServices: true` 铺的是
  * **共享槽腿表**那十条腿（`slot-service-providers.ts` 的 `SLOT_SERVICE_LEGS`），而表里
@@ -711,6 +710,69 @@ describe('DOUBLE-LEG-1032B：ERB 定义 / 实现两格——各恰一枚，且�
       erb?.slotServices ?? [],
       'ERB 点名 implementation 同上（Ctrl+F12 走同一条 nameLegProjectSnapshotOf 闸）',
     ).not.toContain('implementation');
+  });
+});
+
+/* ============================== DOUBLE-LEG-1032：ERB 双挂收敛第一批（高亮 / 扩选 / 行上注解） ============================== */
+
+/**
+ * ERB 每一 kind「恰一枚 provider」的新事实钉（2026-10-31，`b/agent/1032-double-leg` 第一车）：
+ * `documentHighlight` / `selectionRange` / `codeLens` 三格由 descriptor 点名，
+ * 旧桥那三枚纯翻译腿按 `excludeNamed` 让位（与 `kojo-hover.ts` 的 `hover` 既有用法
+ * 同一条路），应答面只剩共享槽腿一枚。判据只看 descriptor 声明与注册形状，不写语言 id。
+ *
+ * 与上一组（`DOUBLE-LEG-1032B`）的分工：那组钉「槽腿表里没有的 kind 一律不许让位」，
+ * 这一组钉「槽腿表里有的 kind 让位让得干净」——各管自己的 kind，判据同形。
+ */
+describe('DOUBLE-LEG-1032：ERB 旧桥三腿按点名让位——每一 kind 恰一枚 provider', () => {
+  /** kind →（旧桥腿安装器文件，Monaco 注册 API） */
+  const CONVERGED_LEGS: readonly (readonly [string, string, string])[] = [
+    ['documentHighlight', 'monaco/erb-highlight.ts', 'registerDocumentHighlightProvider'],
+    ['selectionRange', 'monaco/erb-selection-range.ts', 'registerSelectionRangeProvider'],
+    ['codeLens', 'monaco/kojo-code-lens.ts', 'registerCodeLensProvider'],
+  ];
+
+  it('ERB descriptor 点名了这三格：点名是"谁在答"的唯一台账', () => {
+    const erb = descriptorForLanguageId(ERB_LANGUAGE_ID);
+    expect(erb).not.toBeNull();
+    expect(erb?.slotServices).toEqual(
+      expect.arrayContaining(['documentHighlight', 'selectionRange', 'codeLens']),
+    );
+  });
+
+  it('旧桥三枚安装器都走 `undefined, { excludeNamed: kind }`（第三参必须 undefined：再传 kind 会把点名语言重新挂上，恰一枚就破了）', () => {
+    for (const [kind, rel, api] of CONVERGED_LEGS) {
+      const text = sourceOf(rel).text;
+      expect(
+        text,
+        `${rel} 的 registerForLanguageServices(…${api}…) 没带 \`undefined, { excludeNamed: '${kind}' }\``,
+      ).toMatch(
+        new RegExp(
+          `registerForLanguageServices\\([\\s\\S]{0,300}?${api}\\(id,\\s*\\w+\\)[\\s\\S]{0,160}?undefined,\\s*\\{\\s*excludeNamed:\\s*'${kind}'`,
+        ),
+      );
+    }
+  });
+
+  it('槽腿表三枚齐（"恰一枚"的另一半）：`legOf` 登记与共享收口调用同在工厂文件里', () => {
+    const factory = sourceOf('monaco/slot-service-providers.ts').text;
+    expect(SLOT_COLLECTOR_CALL.test(factory)).toBe(true);
+    for (const [kind, , api] of CONVERGED_LEGS) {
+      expect(factory, `槽腿表里缺 ${kind} 这一枚腿`).toMatch(tableEntryPattern(kind, api));
+    }
+  });
+
+  it('没让位的 kind 逐字留账（供方不答 / 宿主载体在旧桥上——刻意双挂，不是漏收敛）', () => {
+    // references：已关文件的点击通道（`registerEditorOpener` + knownPaths LRU）在宿主腿上；
+    // rename：闭文件回写通道（applyToClosedFile）在宿主腿上，槽腿 prepare 是 kojo2 尺子；
+    // signatureHelp：插件槽里**没有** ERB 供方——供方不答的 kind 一律不动。
+    expect(sourceOf('monaco/find-references.ts').text).toMatch(/registerEditorOpener/);
+    expect(sourceOf('monaco/erb-rename.ts').text).toMatch(/applyToClosedFile/);
+    for (const rel of ['monaco/find-references.ts', 'monaco/erb-rename.ts', 'monaco/kojo-signature.ts']) {
+      expect(sourceOf(rel).text, `${rel} 不该按 excludeNamed 让位（让了就是静默没有）`).not.toMatch(
+        /excludeNamed/,
+      );
+    }
   });
 });
 

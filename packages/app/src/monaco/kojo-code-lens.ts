@@ -198,11 +198,13 @@ export interface CodeLensHandlers {
 }
 
 /**
- * 为 ERB 方言与 `.kojo` 两种语言 id 注册 code lens 供给器 + 点击命令。
+ * 为**没**把行上注解交给槽腿的旧桥语言（今天 = `.kojo1`）注册 code lens 供给器 + 点击命令。
  *
- * **为什么两种语言都注册**：应答判据（`resolve`）本来就在宿主接线里逐次现判，
- * 注册面多一门语言不产生任何代价；而 `.kojo` 这一路将来若由糖线给出注解，
- * 不必再回来改这里（与 hover / definition / folding 各批同形）。
+ * DOUBLE-LEG-1032（2026-10-31）：ERB 已点名 `codeLens`（`languages.ts` 的 `slotServices`），
+ * 挂载按 `excludeNamed` 让位——那一格由**共享槽腿**（`slot-service-providers.ts` 的
+ * `legOf('codeLens', …)`，同一枚 `ui.editor.languageService` 槽、同一个 `toMonacoCodeLenses`
+ * 翻译器）应答，ERB 原文面上不再叠第二枚。点击命令 `CODE_LENS_COMMAND` 仍由本安装器注册
+ * （槽腿的注解复用这同一条导航通道，装配点保证本安装器总是被调 ⇒ 命令必在）。
  *
  * 卸载纪律（注册即托管）：provider 与 command 一起 dispose，不留第二份。
  */
@@ -225,7 +227,14 @@ export function installCodeLensProvider(monaco: typeof Monaco, handlers: CodeLen
       return { lenses: toMonacoCodeLenses(model, lenses), dispose: () => undefined };
     },
   };
-  const dialectSubs = registerForLanguageServices(monaco, (m, id) => m.languages.registerCodeLensProvider(id, provider));
+  // DOUBLE-LEG-1032：点名 `codeLens` 的语言（ERB / kojo2）由共享槽腿应答，本腿只留旧桥里
+  // 没点名的那门（`.kojo1`）。判据只看 descriptor 声明，不写语言 id。
+  const dialectSubs = registerForLanguageServices(
+    monaco,
+    (m, id) => m.languages.registerCodeLensProvider(id, provider),
+    undefined,
+    { excludeNamed: 'codeLens' },
+  );
   return {
     dispose: () => {
       dialectSubs.dispose();

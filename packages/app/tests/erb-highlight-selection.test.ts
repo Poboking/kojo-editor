@@ -12,8 +12,9 @@
  * 2. **逐位点独立**：某位点 `null`（空链）⇒ 该位点 `[]`，别的位点一格不动；
  * 3. **三态不混**：无人应答 ⇒ provider 交 **`undefined`**（Monaco 对高亮按"第一应答"
  *    裁决，空数组会顶掉下一家）；有人答空 ⇒ `[]`；异常 ⇒ `[]`；
- * 4. **注册**：两枚都经 `registerForLanguageServices` 带能力名挂上（ERB 由
- *    `languageServices: true` 收进来），dispose 幂等；源码里没有直挂 `ERB_LANGUAGE_ID`
+ * 4. **注册**：两枚都经 `registerForLanguageServices` 挂上，但 **DOUBLE-LEG-1032** 起
+ *    带 `excludeNamed`——点名了该 kind 的语言（ERB / kojo2）由共享槽腿应答，本腿只留
+ *    没点名的旧桥语言（`.kojo1`），dispose 幂等；源码里没有直挂 `ERB_LANGUAGE_ID`
  *    的原生注册形状、也不读切流开关；
  * 5. **与 kojo2 同一条槽**：两家真供方同时在槽里时，ERB 请求**只有 ERB 那家作答**
  *    （换哪一家在前都一样），kojo2 请求则由 kojo2 那家作答。
@@ -24,6 +25,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EditorLanguageServiceContribution, EditorSelectionChain } from '@kojo/plugin-api';
 import type * as Monaco from '../src/monaco/entry';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
+import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
 import { languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
@@ -53,11 +55,17 @@ const SELECTION_SOURCE = readFileSync(
 
 /* ============================== 共享收口的期望 selector ============================== */
 
+/**
+ * DOUBLE-LEG-1032（2026-10-31）：两枚安装器改带 `excludeNamed` 后，挂载面 = 旧桥语言里
+ * **没点名**这一格的那些（今天只剩 `.kojo1`）；点名者（ERB / kojo2）由共享槽腿单独应答，
+ * ERB 每一 kind 恰一枚 provider。判据仍是 descriptor 声明表，不写语言 id。
+ */
 const selectorsFor = (kind: 'documentHighlight' | 'selectionRange'): string[] =>
   languageDescriptors()
     .filter(
       (descriptor) =>
-        descriptor.languageServices === true || descriptor.slotServices?.includes(kind) === true,
+        descriptor.languageServices === true &&
+        descriptor.slotServices?.includes(kind) !== true,
     )
     .map((descriptor) => descriptor.id);
 
@@ -182,13 +190,17 @@ function selectionContribution(
   ) as EditorLanguageServiceContribution;
 }
 
-/** 取回 ERB 那枚 provider（没挂上直接抛：证据缺席不许静默） */
+/**
+ * 取回本腿那枚 provider（没挂上直接抛：证据缺席不许静默）。
+ * DOUBLE-LEG-1032 后锚点是 `kojo-legacy`（ERB 已点名让位，本腿不再挂 ERB）；
+ * provider 是同一个对象，按 model 的 languageId 搬运/弃权的行为不因锚点而变。
+ */
 function providerOf(kind: ProviderKind): Record<string, unknown> {
   const fake = fakeMonaco();
   if (kind === 'highlight') installErbHighlightProvider(fake.monaco);
   else installErbSelectionRangeProvider(fake.monaco);
-  const provider = fake.registrations.find((entry) => entry.selector === ERB_LANGUAGE_ID)?.provider;
-  if (provider === undefined) throw new Error(`${kind} 上没挂 provider（selector=${ERB_LANGUAGE_ID}）`);
+  const provider = fake.registrations.find((entry) => entry.selector === KOJO_LANGUAGE_ID)?.provider;
+  if (provider === undefined) throw new Error(`${kind} 上没挂 provider（selector=${KOJO_LANGUAGE_ID}）`);
   return provider as Record<string, unknown>;
 }
 
@@ -374,7 +386,7 @@ describe('③三态：无人应答 ⇒ undefined（不顶掉别家）；答空 �
 /* ============================== ④ 注册与源码卫生 ============================== */
 
 describe('④注册：共享收口带能力名、dispose 幂等、原生注册形状归零', () => {
-  it('两枚都挂到 scope 内的每一门语言上（ERB 由 languageServices 收进来），且只挂一次', () => {
+  it('只挂没点名这一格的旧桥语言（DOUBLE-LEG-1032：ERB / kojo2 点名让位），且只挂一次', () => {
     const fake = fakeMonaco();
     installErbHighlightProvider(fake.monaco);
     installErbSelectionRangeProvider(fake.monaco);
@@ -386,8 +398,15 @@ describe('④注册：共享收口带能力名、dispose 幂等、原生注册�
       .map((entry) => entry.selector);
     expect(highlightSelectors).toEqual(HIGHLIGHT_SELECTORS);
     expect(selectionSelectors).toEqual(SELECTION_SELECTORS);
-    expect(highlightSelectors).toContain(ERB_LANGUAGE_ID);
-    expect(selectionSelectors).toContain(ERB_LANGUAGE_ID);
+    // 让位钉：点名了该 kind 的语言（ERB / kojo2）不再被本腿挂上——ERB 那一格今天
+    // 恰一枚 provider（共享槽腿），这是 DOUBLE-LEG-1032 要钉的新事实。
+    expect(highlightSelectors).not.toContain(ERB_LANGUAGE_ID);
+    expect(selectionSelectors).not.toContain(ERB_LANGUAGE_ID);
+    expect(highlightSelectors).not.toContain(KOJO2_LANGUAGE_ID);
+    expect(selectionSelectors).not.toContain(KOJO2_LANGUAGE_ID);
+    // 没点名的旧桥语言（`.kojo1`）照常挂到，糖视图投影面不空转。
+    expect(highlightSelectors).toContain(KOJO_LANGUAGE_ID);
+    expect(selectionSelectors).toContain(KOJO_LANGUAGE_ID);
     expect(new Set(highlightSelectors).size).toBe(highlightSelectors.length);
   });
 
@@ -543,7 +562,7 @@ describe('⑤同一条槽：ERB 请求只由 ERB 那家作答（两家同时在�
 
 /* ============================== 宿主语言门（LAU-4 集成） ============================== */
 
-describe('宿主语言门：共享收口把 ERB 这枚也挂到 kojo2，遇到 kojo2 model 必须弃权', () => {
+describe('宿主语言门：本腿 provider 遇到 kojo2 model 必须弃权（不再挂 kojo2，语言门仍是第二道保险）', () => {
   it('kojo2 model ⇒ 高亮 / 扩选都交 `undefined`（不替 kojo2 那家作答，免得叠两份）', () => {
     const model = fakeModel(SOURCE, KOJO2_LANGUAGE_ID).model;
     expect(askHighlight(model)).toBeUndefined();

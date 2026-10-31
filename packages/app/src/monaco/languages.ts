@@ -100,7 +100,23 @@ const ERB_DESCRIPTOR: LanguageDescriptor = {
    * `excludeNamed` 跳过、`kojo-format-range.ts` 的区间注册整条删除（on-type 保留）——
    * 于是 ERB 每种 provider 恰好一枚，「谁在答」不再取决于注册序。
    */
-slotServices: ['references', 'hover', 'formatting'],
+slotServices: [
+    'references',
+    'hover',
+    'formatting',
+    /*
+     * DOUBLE-LEG-1032（2026-10-31，变基到 G2 之后）：同符号高亮 / 结构化扩选 / 行上注解三格也点名。
+     * 点名的消费方是 **`excludeNamed`**（`register-dialects.ts`）：这三格的供方今天已全在插件
+     * （`@kojo/plugin-erb-lang` 的 `erb-documentHighlight` / `erb-selectionRange`、
+     * `@kojo/plugin-erb-parser` 的 `erb-usage-lens`），宿主那三枚**纯翻译腿**
+     * （`erb-highlight.ts` / `erb-selection-range.ts` / `kojo-code-lens.ts` 的 ERB 挂载）
+     * 按点名让位，Monaco 每一 kind 只剩共享槽腿那一枚 provider——同一次请求不再白问两趟供方，
+     * "谁在答"由这张声明表决定，不再由注册顺序决定。`.kojo1`（不点名）仍由旧桥腿答，零改动。
+     */
+    'documentHighlight',
+    'selectionRange',
+    'codeLens',
+  ],
   // LAU-4 补全腿第三批（2026-10-31）：ERB 补全的判据全在插件 `@kojo/plugin-erb-parser`，
   // 事实（adapter 表 / 项目名录 / 宿主词表 / 偏好）由组合根经槽腿的 `completionFacts`
   // 现取并随请求递下去。声明在这里 = 收口侧不必按语言 id 分支。
