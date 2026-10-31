@@ -272,6 +272,35 @@ function effectiveSlotKinds(descriptor: LanguageDescriptor): readonly string[] {
   return [...named];
 }
 
+/**
+ * 单枚 kind 的宿主腿取证：哪些文件里有"这条 kind 经共享收口挂上一枚 Monaco provider"的注册
+ * （正组与「新 kind 三件套负例」共用同一把尺子，判据只此一份）。
+ */
+function legMountFilesFor(kind: string): readonly string[] {
+  return APP_SOURCES.filter((file) => {
+    const text = file.text;
+    let at = text.indexOf('registerForLanguageServices(');
+    while (at >= 0) {
+      const window = text.slice(at, at + 700);
+      if (window.includes(`'${kind}'`) && /\.register[A-Za-z]+(?:Provider|EditProvider|EditProvider)\(/.test(window)) {
+        return true;
+      }
+      at = text.indexOf('registerForLanguageServices(', at + 1);
+    }
+    // SDK-B5b 车 1 起的**共享工厂**形状：一条腿在表里用 `legOf('<kind>', …)` 声明，
+    // 注册 API 作为该腿自己的第三件事实（工厂统一走 `registerForLanguageServices`）。
+    // 判据不变——仍要求"kind 与一枚 Monaco register*Provider 在同一个模块里且经收口"。
+    if (!text.includes('registerForLanguageServices(')) return false;
+    let legAt = text.indexOf(`legOf('${kind}'`);
+    while (legAt >= 0) {
+      const window = text.slice(legAt, legAt + 400);
+      if (/\.register[A-Za-z]+Provider\(/.test(window)) return true;
+      legAt = text.indexOf(`legOf('${kind}'`, legAt + 1);
+    }
+    return false;
+  }).map((file) => file.rel);
+}
+
 describe('供方覆盖：descriptor 声明的每条槽腿都有供方', () => {
   const kinds = slotServiceKindsFromSource();
 
@@ -377,28 +406,7 @@ describe('供方覆盖：descriptor 声明的每条槽腿都有供方', () => {
 
   it('宿主腿：每条 kind 都有一枚经 registerForLanguageServices 挂的 Monaco provider，且模块被装配点 import', () => {
     for (const kind of kinds) {
-      const files = APP_SOURCES.filter((file) => {
-        const text = file.text;
-        let at = text.indexOf('registerForLanguageServices(');
-        while (at >= 0) {
-          const window = text.slice(at, at + 700);
-          if (window.includes(`'${kind}'`) && /\.register[A-Za-z]+(?:Provider|EditProvider|EditProvider)\(/.test(window)) {
-            return true;
-          }
-          at = text.indexOf('registerForLanguageServices(', at + 1);
-        }
-        // SDK-B5b 车 1 起的**共享工厂**形状：一条腿在表里用 `legOf('<kind>', …)` 声明，
-        // 注册 API 作为该腿自己的第三件事实（工厂统一走 `registerForLanguageServices`）。
-        // 判据不变——仍要求"kind 与一枚 Monaco register*Provider 在同一个模块里且经收口"。
-        if (!text.includes('registerForLanguageServices(')) return false;
-        let legAt = text.indexOf(`legOf('${kind}'`);
-        while (legAt >= 0) {
-          const window = text.slice(legAt, legAt + 400);
-          if (/\.register[A-Za-z]+Provider\(/.test(window)) return true;
-          legAt = text.indexOf(`legOf('${kind}'`, legAt + 1);
-        }
-        return false;
-      }).map((file) => file.rel);
+      const files = legMountFilesFor(kind);
       expect(files, `${kind} 没有走共享收口的 Monaco 注册`).not.toEqual([]);
       // 至少有一枚落在 monaco/ 且被装配点接上（ui/ 里的直接注册也算装配，见 importedByGlobal）
       expect(
@@ -422,6 +430,47 @@ describe('供方覆盖：descriptor 声明的每条槽腿都有供方', () => {
     ).toBeNull();
     // 今天没有一条腿走宿主事实：十四条全是插件供方（走 null 分支必须同批改这里）
     expect(Object.values(SLOT_KIND_SUPPLY).filter((entry) => entry.providerPlugin === null)).toEqual([]);
+  });
+});
+
+/* ============================== 一b、新 kind 三件套的负例自证 ============================== */
+
+/**
+ * 「新增一条 `SlotServiceKind` 而漏补 供方 / 腿 / 台账 ⇒ 至少一枚闸红」的**可执行证明**。
+ *
+ * 钉什么：上面「供方覆盖」那三把尺子（联合 ↔ 台账逐项相等、每条 kind 有台账条目、每条 kind
+ * 有经共享收口的注册）对一枚**凭空多出来的 kind** 逐条真的会抛——不是口号，是把同一段断言
+ * 喂给假 kind 跑一遍。不钉会怎样：三把尺子若哪天集体空转（filter 写歪、table 判据被
+ * `?? 兜底` 吞掉），新 kind 就能带着"供方/腿/矩阵三件套全缺"静默过关——这正是本文件
+ * 头注承诺要拦的"静默通过"。
+ */
+describe('新 kind 三件套负例自证：只加 SlotServiceKind、不补供方/腿/台账 ⇒ 每把尺子都抛', () => {
+  const PROBE_KIND = 'acmeProbeLeg';
+
+  it('假想 kind 喂进三把尺子：相等闸抛、台账闸抛、挂载腿闸空表（原断言形状即红）', () => {
+    // 前置事实：这枚 kind 确实"三件套全缺"（今天源码里没人认识它）。
+    expect(SLOT_KIND_SUPPLY[PROBE_KIND]).toBeUndefined();
+    expect(legMountFilesFor(PROBE_KIND)).toEqual([]);
+    const fakeKinds = [...slotServiceKindsFromSource(), PROBE_KIND];
+    // 尺子 1：联合 ↔ 台账逐项相等（「供方覆盖」第一格的原文判据）。
+    expect(() =>
+      expect([...fakeKinds].sort()).toEqual(Object.keys(SLOT_KIND_SUPPLY).sort()),
+    ).toThrowError();
+    // 尺子 2：每条 kind 必须有台账条目（原文是 expect(entry).toBeDefined()）。
+    expect(() => expect(SLOT_KIND_SUPPLY[PROBE_KIND], `${PROBE_KIND} 没有台账条目`).toBeDefined()).toThrowError();
+    // 尺子 3：每条 kind 必须有经共享收口的 Monaco 腿（原文是 expect(files).not.toEqual([])）。
+    expect(() =>
+      expect(legMountFilesFor(PROBE_KIND), `${PROBE_KIND} 没有走共享收口的 Monaco 注册`).not.toEqual([]),
+    ).toThrowError();
+  });
+
+  it('真实 kind 当前三把尺子全绿（负例的红来自"新 kind 缺件套"，不是尺子本身坏了）', () => {
+    const kinds = slotServiceKindsFromSource();
+    expect([...kinds].sort()).toEqual(Object.keys(SLOT_KIND_SUPPLY).sort());
+    for (const kind of kinds) {
+      expect(SLOT_KIND_SUPPLY[kind], `${kind} 没有台账条目`).toBeDefined();
+      expect(legMountFilesFor(kind), `${kind} 没有走共享收口的 Monaco 注册`).not.toEqual([]);
+    }
   });
 });
 

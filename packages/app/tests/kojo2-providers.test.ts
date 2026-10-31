@@ -53,10 +53,11 @@ import { createKojoLangPlugin } from '@kojo/plugin-kojo-lang';
 import { ERB_LANGUAGE_ID } from '../src/monaco/erb-language';
 import { KOJO_LANGUAGE_ID } from '../src/monaco/kojo-language';
 import { KOJO2_LANGUAGE_ID } from '../src/monaco/kojo2-language';
-import { languageDescriptors } from '../src/monaco/language-registry';
+import { declaredSlotKinds, languageDescriptors } from '../src/monaco/language-registry';
 import { setGlobalKernel } from '../src/ui/editor-pane-registry';
 import {
   SLOT_SERVICE_LEGS,
+  SLOT_SERVICE_WRITE_LEGS,
   completionKindOf,
   installSlotServiceLegs,
   installSlotServiceProviders,
@@ -86,6 +87,17 @@ const HOVER_SELECTORS = languageDescriptors()
   .filter(
     (descriptor) =>
       descriptor.languageServices === true || descriptor.slotServices?.includes('hover') === true,
+  )
+  .map((descriptor) => descriptor.id);
+
+/**
+ * 写面腿（`SLOT_SERVICE_WRITE_LEGS`）的期望 selector：**点名了这条腿的语言才有**
+ * （`namedOnly` ⇒ 旧桥全腿不铺写面）。同样**从 descriptor 表现算**，判据走
+ * `language-registry` 的 `declaredSlotKinds`（与挂载收口同一枚声明面），不手抄语言 id。
+ */
+const WRITE_LEGS_SELECTORS = languageDescriptors()
+  .filter((descriptor) =>
+    SLOT_SERVICE_WRITE_LEGS.some((kind) => declaredSlotKinds(descriptor).includes(kind)),
   )
   .map((descriptor) => descriptor.id);
 
@@ -186,6 +198,35 @@ function installForTest(options: FakeMonacoOptions = {}): FakeMonaco {
 
 function selectorsOf(fake: FakeMonaco, kind: ProviderKind): unknown[] {
   return fake.registrations.filter((entry) => entry.kind === kind).map((entry) => entry.selector);
+}
+
+/**
+ * 写面腿专用的最小桩 Monaco：`legOf('codeAction', …)` 的注册路径只摸两格——
+ * `editor.registerCommand`（动作落地命令，全局一枚）与 `languages.registerCodeActionProvider`
+ * （逐门挂上）。其余注册函数一概不桩：装错腿当场 TypeError，不会被静默吞掉。
+ */
+function fakeMonacoForWriteLegs(): {
+  readonly monaco: typeof Monaco;
+  readonly codeActionSelectors: string[];
+  readonly commandIds: string[];
+} {
+  const codeActionSelectors: string[] = [];
+  const commandIds: string[] = [];
+  const fake = {
+    languages: {
+      registerCodeActionProvider: (id: string) => {
+        codeActionSelectors.push(id);
+        return { dispose: () => undefined };
+      },
+    },
+    editor: {
+      registerCommand: (id: string) => {
+        commandIds.push(id);
+        return { dispose: () => undefined };
+      },
+    },
+  };
+  return { monaco: fake as unknown as typeof Monaco, codeActionSelectors, commandIds };
 }
 
 function registrationOf(fake: FakeMonaco, kind: ProviderKind, selector: string): Registration {
@@ -454,6 +495,44 @@ describe('注册顺序：补全先于悬停（单答型第一家说了算）', (
     expect(captures).toBeGreaterThan(-1);
     expect(legs).toBeGreaterThan(captures);
     expect(cutover).toBeGreaterThan(legs);
+  });
+
+  it('写面腿真装：SLOT_SERVICE_WRITE_LEGS 非空、经 installSlotServiceLegs 只挂点名语言（namedOnly）', () => {
+    // 钉什么：今天只验了写面腿"不随只读面装配"（不挂的一侧）——这里钉**挂的那一侧**：
+    // 名单是真数据、安装走同一条收口、namedOnly 让旧桥全腿语言（ERB / kojo1）不摊上永远
+    // 弃权的 💡 provider，点名者（kojo2）挂上且全局命令只注册一次。
+    // 不钉会怎样：namedOnly 传错（或 SLOT_SERVICE_WRITE_LEGS 被掏空 / 摘掉），要么 v1 语言
+    // 被铺第二枚 CodeActionProvider（动作两份），要么写面从此一枚都不挂——两头都是静默。
+    expect(SLOT_SERVICE_WRITE_LEGS.length).toBeGreaterThan(0);
+    expect(SLOT_SERVICE_LEGS.some((leg) => SLOT_SERVICE_WRITE_LEGS.includes(leg.kind))).toBe(true);
+    const fake = fakeMonacoForWriteLegs();
+    const installed = installSlotServiceLegs(fake.monaco, SLOT_SERVICE_WRITE_LEGS);
+    expect(fake.codeActionSelectors, '写面腿挂的语言 ≠ descriptor 点名清单').toEqual(WRITE_LEGS_SELECTORS);
+    expect(WRITE_LEGS_SELECTORS).toContain(KOJO2_LANGUAGE_ID);
+    expect(WRITE_LEGS_SELECTORS, 'namedOnly 失效：旧桥语言被铺了写面 provider').not.toContain(
+      ERB_LANGUAGE_ID,
+    );
+    expect(WRITE_LEGS_SELECTORS, 'namedOnly 失效：旧桥语言被铺了写面 provider').not.toContain(
+      KOJO_LANGUAGE_ID,
+    );
+    expect(fake.commandIds, '落地命令是全局的：铺几门语言都只注册一次').toHaveLength(1);
+    installed.dispose();
+  });
+
+  it('宿主策略块**真调用**写面安装器：切流开关块里逐字存在那一行', () => {
+    // 钉什么：`editor-global-providers.ts` 的 `if (isKojo2CutoverEnabled())` 块内确实调了
+    // `installSlotServiceLegs(monaco, SLOT_SERVICE_WRITE_LEGS, slotServiceHost)`——工厂侧只是
+    // 把它从无条件装配里**排除**，装回来的是宿主策略块这一行。
+    // 不钉会怎样：有人删掉那一行（或把名单传成空数组），生产里写面永远不装；"不挂"侧的
+    // 既有断言照样全绿，功能静默消失。
+    const source = readFileSync(
+      resolve(REPO_ROOT, 'packages', 'app', 'src', 'ui', 'editor-global-providers.ts'),
+      'utf8',
+    );
+    const cutover = source.indexOf('if (isKojo2CutoverEnabled()) {');
+    expect(cutover).toBeGreaterThan(-1);
+    const block = source.slice(cutover, source.indexOf('\n    }', cutover));
+    expect(block).toContain('installSlotServiceLegs(monaco, SLOT_SERVICE_WRITE_LEGS');
   });
 });
 
