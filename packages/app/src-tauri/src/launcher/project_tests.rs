@@ -48,7 +48,11 @@ fn project_zip(dir: &TestDir, payload: &[(&str, &[u8])]) -> PathBuf {
         "pack.json".to_string(),
         serde_json::to_vec_pretty(&manifest).expect("清单序列化"),
     )];
-    entries.extend(payload.iter().map(|(name, bytes)| (name.to_string(), bytes.to_vec())));
+    entries.extend(
+        payload
+            .iter()
+            .map(|(name, bytes)| (name.to_string(), bytes.to_vec())),
+    );
     let path = dir.join("demo.zip");
     write_zip(&path, &entries);
     path
@@ -183,7 +187,10 @@ fn extract_unpacks_into_host_staging_and_reads_manifest_back() {
         "暂存落点必须在 launcher/project-staging/ 下：{}",
         staging.display()
     );
-    assert_eq!(std::fs::read(staging.join("script/a.txt")).expect("a.txt"), b"a\n");
+    assert_eq!(
+        std::fs::read(staging.join("script/a.txt")).expect("a.txt"),
+        b"a\n"
+    );
     assert_eq!(
         std::fs::read(staging.join("script/deep/b.txt")).expect("b.txt"),
         b"b\n"
@@ -225,6 +232,9 @@ fn extract_rejects_entries_escaping_the_staging_dir() {
     let err = project::extract_project(&host, &zip.to_string_lossy(), &opts())
         .expect_err("越界条目必须拒");
     assert_eq!(err.code, "LAUNCHER_PATH_ESCAPE");
-    assert!(!dir.join("evil.txt").exists(), "越界条目一个字节都不许落到暂存外");
+    assert!(
+        !dir.join("evil.txt").exists(),
+        "越界条目一个字节都不许落到暂存外"
+    );
     assert_eq!(staging_children(&host), 0, "失败不许留下暂存残壳");
 }

@@ -23,12 +23,12 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::archive_guard::{self, StagingLimits};
 use super::content::{self, PackManifestDto};
 use super::error::{io_failure, ErrorCode, LauncherErrorDto, LauncherResult};
 use super::paths;
 use super::trust;
 use super::{unix_ms, LauncherHost};
+use crate::archive_guard::{self, StagingLimits};
 
 /// 解包暂存的存活时长（超过它的旧目录在下一次解包时被清掉）。
 ///
@@ -119,12 +119,8 @@ pub fn assert_project_root(app: &tauri::AppHandle, raw: &str) -> LauncherResult<
     if raw.starts_with(r"\\") {
         return Err(escape("插件项目目录不能是网络路径", raw.to_string()));
     }
-    let canonical = std::fs::canonicalize(&path).map_err(|e| {
-        escape(
-            "找不到这个插件项目目录",
-            format!("{raw}：{e}"),
-        )
-    })?;
+    let canonical = std::fs::canonicalize(&path)
+        .map_err(|e| escape("找不到这个插件项目目录", format!("{raw}：{e}")))?;
     if !canonical.is_dir() {
         return Err(escape(
             "插件项目目录不是一个目录",
@@ -184,11 +180,10 @@ pub fn hash_project(
         // 而 canonicalize 对不存在的目标只能报 PathEscape —— 顺序反了会把"缺文件"
         // 误报成"越界"（两者都是 fail-closed，但诊断码必须说真话）。
         if !abs.is_file() {
-            return Err(LauncherErrorDto::new(
-                ErrorCode::Internal,
-                "插件项目里缺少要摘要的文件",
-            )
-            .detail(format!("{entry}（{}）", abs.display())));
+            return Err(
+                LauncherErrorDto::new(ErrorCode::Internal, "插件项目里缺少要摘要的文件")
+                    .detail(format!("{entry}（{}）", abs.display())),
+            );
         }
         // 文件级复核：符号链接指向项目外时，canonical 落点会离开制品根 ⇒ 这里拒。
         paths::assert_inside_existing(&artifact_root, &abs)?;
@@ -254,9 +249,8 @@ pub fn extract_project(
     // 输入件形态闸与内容包同一条（本机绝对路径、存在、是文件、非 UNC、无控制字符）。
     let archive = content::validate_archive_argument(archive_path)?;
     let layout = &host.layout;
-    std::fs::create_dir_all(layout.project_staging_root()).map_err(|e| {
-        io_failure("创建项目暂存目录", &layout.project_staging_root(), &e)
-    })?;
+    std::fs::create_dir_all(layout.project_staging_root())
+        .map_err(|e| io_failure("创建项目暂存目录", &layout.project_staging_root(), &e))?;
     sweep_stale(layout);
 
     let staging = layout.project_staging_dir(&new_staging_id())?;
@@ -277,11 +271,9 @@ fn extract_into_staging(
     archive: &Path,
     limits: &StagingLimits,
 ) -> LauncherResult<ProjectExtractResultDto> {
-    std::fs::create_dir_all(staging)
-        .map_err(|e| io_failure("创建项目暂存目录", staging, &e))?;
+    std::fs::create_dir_all(staging).map_err(|e| io_failure("创建项目暂存目录", staging, &e))?;
     let container = staging.join(CONTAINER_NAME);
-    std::fs::copy(archive, &container)
-        .map_err(|e| io_failure("抄入项目暂存区", &container, &e))?;
+    std::fs::copy(archive, &container).map_err(|e| io_failure("抄入项目暂存区", &container, &e))?;
     let extracted = archive_guard::extract_staging(staging, CONTAINER_NAME, UNPACKED_NAME, limits)
         .map_err(|detail| content::archive_error_for("插件项目压缩包", detail))?;
     let _ = std::fs::remove_file(&container);
@@ -293,8 +285,7 @@ fn extract_into_staging(
             .detail(format!("{}：{e}", manifest_path.display()))
     })?;
     let manifest: PackManifestDto = serde_json::from_slice(&manifest_bytes).map_err(|e| {
-        LauncherErrorDto::new(ErrorCode::ArchiveInvalid, "pack.json 无法解析")
-            .detail(e.to_string())
+        LauncherErrorDto::new(ErrorCode::ArchiveInvalid, "pack.json 无法解析").detail(e.to_string())
     })?;
 
     // `pack.json` 是清单而不是载荷：消费方按 `{rootId}/{path}` 分组，把它掺进去会被判成
