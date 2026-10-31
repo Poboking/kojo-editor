@@ -1079,6 +1079,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     同尺现树重测量得），KB 顶过闸一档而台账未随钉。**闸按 A2 批"把上游已落地的红修回绿"
     //     的先例随现读数 3,501 → 3,502**（不放宽成员断言，余量 0）；文件闸仍 199 顶格，
     //     "下一枚进图模块须先挪一枚出去"的欠账照旧。
+    //
+    //   - **语言面搬家第七波（2026-10-31，本批 7 枚）**：读数 **199 文件 / 3,502 KB**
+    //     （3,586,474 B = 上一条 3,586,093 + 381）——**零新进图文件**（199 未动），进图的字节
+    //     只有契约那一格。逐枚点名（按 `git show origin/dev:<path> | wc -c` 与图内 `stat` 对账，
+    //     差集求和 = +381 B，与实测总差逐字相符）：
+    //     · `plugin-api/src/slots.ts` **+385 B**（G2 的契约格：`EditorFormattingRequest.options`
+    //       两枚中性布尔 fullWidthSpace / indent；宿主现读偏好、供方按它决定执行哪条规则）；
+    //     · `plugin-api/src/index-slot.ts` **−1 B**、`plugins/erb-parser/src/completion.ts`
+    //       **−2 B**、`kojo-lang/src/constants.ts` **−1 B**（三枚都是措辞与空行的顺手收缩）。
+    //     其余全在懒边，对图零影响：拆掉的两枚宿主 re-export 壳（`monaco/kojo2-lexicon.ts` /
+    //     `monaco/erb-completion-context.ts`）、退役的宿主 `monaco/erb-directives.ts`、搬空的
+    //     `monaco/kojo-native-marks.ts` / `monaco/kojo-hover-native.ts`、出宿主的
+    //     `monaco/kojo-xml-{dialect,event-sites}.ts`（落懒插件 `ui-kojo-xml`）、G2 重写的
+    //     `monaco/kojo-format-range.ts`（−5,332 B）；新叶子 `erb-vocab/directives`、
+    //     `kojo-vocab/native-{hover,marks}`、`kojo-lang/xml-attrs` 都**只加 exports、不进桶**
+    //     （桶纪律见下一条判据）。
+    //     ⇒ **闸值不动（仍 ≤3,502 KB / 199 文件）**，但字节余量只剩 **86 B**（翻到 3,503 KB
+    //     需 3,586,560 B）。下一笔进图字节**必红**：要么按 PITFALLS 278 逐文件点名抬一档，
+    //     要么先挪一枚出图；不要指望"取整还差一点"能再混一批。
     console.log(
       `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,502 KB）`,
     );

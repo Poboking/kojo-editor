@@ -320,7 +320,7 @@ export const ARTIFACT_LIMITS = Object.freeze({
    * 两枚数仍是"收紧的上界"：11.0 MiB 距现值 0.35 MiB、90 件距现值 5 件——正常增件不红，
    * 一次性进整包才会红。启动器的内容包 / 插件 / 存档面板还会再加几个懒块，届时按同一口径重钉。
    */
-  distBytes: Math.round(11.2 * 1024 * 1024),
+  distBytes: Math.round(11.25 * 1024 * 1024),
   /*
    * 2026-10-27 LAU-3b 收尾批：件数 90 → 92（顶格，零余量）、总量与入口不动。
    *
@@ -408,6 +408,33 @@ export const ARTIFACT_LIMITS = Object.freeze({
    *   翻译层收进工厂后，插件 `plugin-erb-lang` 的高亮供方成为第二个消费者 ⇒ rollup
    *   抽成共享块，字节量近中性（+34,767 B 里大半是工厂本体，两枚都是"搬位置"）。
    * 两枚都在动态边之下：ps10 开机图 199 文件不动，本批 ps10 增量全在判据文件（见那边台账）。
+   *
+   * 2026-10-31 语言面搬家第七波（拆壳 / ERB 指令词表 / kojo XML 方言 / kojo1 悬停与原生标记 /
+   * conformance / G2 排版收口）：**件数 98 不动**、总量 11.2 → **11.25 MiB**、入口上限不动。
+   *
+   * 先记账一件事：**红不是本批造成的**。上一笔台账停在 11,689,318 B（95 枚 assets + index.html
+   * = 96 件），而本批开工点 dev `71393098` 同命令实测 **98 件 / 11,753,031 B / 入口
+   * `index-tdAjNxKN.js` 276,375 B**——中间各批（家族锚点修复、调试宿内存收敛、读数批等）
+   * 把总量推过了 11.2 MiB 那条线 **8,980 B**、件数 96 → 98，而上限没随钉。按 LAU-3b-FLIP 批
+   * "上游合流推高、本支零新增分块 ⇒ 随现读数重钉"的先例处理；上游那 63,713 B 未拆到单一
+   * chunk（要拆得在中间每枚提交上各起一棵游离树构建对拍，本批未做），如实记作aggregate。
+   *
+   * 本批自己那一笔逐枚点名（改前 = dev `71393098` 游离树、改后 = 本批树，同一命令各真实构建
+   * 一次；**零新增分块**，`dist/assets` 两棵都是 97 枚 + index.html = 98 件；净增 **+1,364 B**，
+   * 与闸的 11,753,031 → 11,754,395 逐字节相等）：
+   * · `lazy-plugin-ui-*.js` **+8,339 B**——kojo XML 方言判据出宿主落进懒插件 `ui-kojo-xml`
+   *   所在的懒块（`kojo-xml-dialect.ts` / `kojo-xml-event-sites.ts` 两枚搬过去）；
+   * · `languages-*.js` **−8,146 B**——同一笔的另一半：宿主 `monaco/languages.ts` 那条装配边
+   *   少了搬走的模块与退役的壳（`erb-directives` / `kojo-native-marks` / `kojo-hover-native`
+   *   / `kojo-xml-*` / `kojo2-lexicon` / `erb-completion-context`），两条相加净 **+193 B**；
+   * · `index-*.js` 六枚合计 **+739 B**、`entry-*.js` **+77 B**——契约 `EditorFormattingRequest.options`
+   *   （G2 的规则开关，`slots.ts` 那一格）与 kojo-vocab / erb-vocab 两枚新叶子的桶侧面；
+   * · `kojo-language-service-legs-*.js` **+84 B**（`provideOf` / `collectFormattingEdits` 的错态回调）、
+   *   `editor-global-providers-*.js` **−198 B**（ERB 区间格式化注册面删除）、`ProjectView-*.js`
+   *   **+87 B**、`DiffViewOverlay`/`diff-view`/`QuickFixPreviewOverlay` 等 **各 +37~79 B**
+   *   （共享小件的引用面搬运，非新功能）。
+   * 抬到 11.25 MiB 后距现值 **42,085 B**、件数仍**顶格 98**——下一批先问能不能并块，别在这里
+   * 顺手加分块。入口 276,473 B（上限 1,100 kB，余量大）。
    */
   files: 98,
 });
