@@ -581,9 +581,9 @@ folds 预取 / problem-wiring / cutover）；C 类 8 文件已逐条定性，其
 `dialect-lint` 两枚纯判据已进 `@kojo/kojo-lang`（2026-10-31），余 6 枚为宿主事实 / 编排 / UI 接线。
 今天这 11 枚是 `registerForLanguageServices`（`register-dialects.ts:32-53`）按 descriptor 的
 `languageServices: true` 或点名的 `slotServices` 铺下去的**通用** provider；ERB 在此之外还有一批
-自己的宿主内 provider（`monaco/erb-*.ts` 共 26 个文件：补全 12 个分面 / 重命名 / 调用层级 / 实现 /
+自己的宿主内 provider（`monaco/erb-*.ts` 共 23 个文件 / 5,047 行（2026-10-31 复测）：补全 12 个分面 / 重命名 / 调用层级 / 实现 /
 指令 / `#DIM` 与标签导航 / 回车规则；高亮与扩选的判据已搬进 `@kojo/erb-lang`，这两枚只剩翻译），
-kojo2 侧同理（`monaco/kojo2-*.ts`，实测 21 文件 / 7,634 行）。
+kojo2 侧同理（`monaco/kojo2-*.ts`，实测 14 文件 / 4,772 行（2026-10-31 复测，含 `monaco/tree-sitter/kojo2-*`））。
 ⇒ **LAU-4 的前置是 B4/B5，不是 LAU-3**；在 B4/B5 落地前谈"宿主只剩注册一次 provider"是空的。
 
 ## 4.6 `injection`：`@原生` 体内不再是黑块（D14 / LAU-6）
@@ -1302,7 +1302,7 @@ Python 里写 `len()`，不写 `builtins.len`。没有一个成熟 SDK 要求使
 |---|---|---|---|---|
 | 1 | A | ERB Monarch「6 个 token 名」 | **15 个**（6 对象式 + 9 简写式） | `erb-language.ts:129,132,134,136,138,150-284` |
 | 2 | A | kojo2 首帧「4 条请求（含 `parse`）」 | **3 条**（`parse` 宿主无生产调用方） | `kojo2-semantic.ts:348`、`kojo2-folding.ts:180`、`kojo2-indent.ts:656`；`kojo2-worker-runtime.ts:160` |
-| 3 | A | `kojo2-*.ts`「25 文件 / 31,599 行」 | **54 文件 / 28,755 行**（另 4 个 `.tsx` 1,770 行；**2026-10-31 复测 = 34 文件 / 16,610 行、tsx 4 / 1,853**，B5b 车 1–6 + C 类两车 + 第七波拆壳后） | `find packages/app/src -name 'kojo2-*.ts'` |
+| 3 | A | `kojo2-*.ts`「25 文件 / 31,599 行」 | **54 文件 / 28,755 行**（另 4 个 `.tsx` 1,770 行；**2026-10-31 复测 = 34 文件 / 16,612 行、tsx 4 / 1,853**，B5b 车 1–6 + C 类两车 + 第七波拆壳后） | `find packages/app/src -name 'kojo2-*.ts'` |
 | 4 | A | ERB wasm「0.98 MB」与「1.03 MB」两处 | 一律给字节：**1,030,545 B**（=0.98 MiB=1.03 MB），kojo 821,724 B、kojo2 47,116 B | `packages/*-syntax-tree/*.wasm` |
 | 5 | A | v1「一次超时即整档判死」 | 分两档：**ready 前**整档 `dead`（须切设置项恢复）、**ready 后**只死当前文档那一面 | `client.ts:72,238,318-332,351-363`、`providers.ts:370-375,507-511` |
 | 6 | A | `providers.ts` 里「那处」`if (ERB)` | **两处**（onSyntax / onSyntaxClear）；另有九处按具体语言 id 分支 | `tree-sitter/providers.ts:378,385`；清单见 §3-R1 |
