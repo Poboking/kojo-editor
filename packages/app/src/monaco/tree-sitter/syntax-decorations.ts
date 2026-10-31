@@ -1,7 +1,7 @@
 import type * as Monaco from '../entry';
 import { SUGAR_LEXICON_WORDS, type SugarLexiconWord } from '@kojo/kojo-vocab/keywords';
 import type { LineDecoration } from '@kojo/plugin-api';
-import { KOJO_LANGUAGE_ID, decorationsToMarkers } from '../kojo-language';
+import { decorationsToMarkers } from '../kojo-language';
 import { toMonacoColumn, toMonacoLine } from '../positions';
 import { reportStructureDegradation } from './fallback';
 import { KOJO_STRUCTURE_MAX_SYNTAX_FAULTS, type KojoStructureSyntaxFault, type KojoStructureSyntaxKind } from './types';
@@ -275,8 +275,17 @@ function markerSignature(markers: readonly Monaco.editor.IMarkerData[]): string 
 /* -------------------------------- 上屏执行 -------------------------------- */
 
 export interface StructureSyntaxPresenter {
-  /** 结构残缺到货：算好装饰、去过重、换成 markers、挂上去 */
-  show(model: Monaco.editor.ITextModel, faults: readonly KojoStructureSyntaxFault[], truncated: boolean): void;
+  /**
+   * 结构残缺到货：算好装饰、去过重、换成 markers、挂上去。
+   *
+   * `overlayLanguageId` = 交下这批残缺的那条叠层自己的语言 id（`descriptor.id`，
+   * DIAG-GATE-1033 2026-10-31）：只给**这门语言**的 model 上屏。判据是**身份比对**
+   * 而不是语言白名单——本层因此不再按固定语言 id 分支（宿主 M2 归零这一族）；
+   * 对今天唯一走这一路的 `.kojo` 而言，效果与旧写法逐字相同（同结果取证：
+   * `tests/tree-sitter-diagnostics.test.ts` 的「非本叠层语言」与「身份比对」两条、
+   * `tests/tree-sitter-multilanguage.test.ts` 的接线档）。
+   */
+  show(model: Monaco.editor.ITextModel, faults: readonly KojoStructureSyntaxFault[], truncated: boolean, overlayLanguageId: string): void;
   /** 这一面撤下（关文件 / 换轨 / 停用）：该 model 清空，别的 model 不动 */
   clear(model: Monaco.editor.ITextModel): void;
   /** 整体撤下（关掉开关 / 整档停用）：每个挂过的 model 都清成空 */
@@ -342,8 +351,9 @@ export function createStructureSyntaxPresenter(monaco: typeof Monaco): Structure
   });
 
   return {
-    show(model, faults, truncated) {
-      if (model.isDisposed() || model.getLanguageId() !== KOJO_LANGUAGE_ID) return;
+    show(model, faults, truncated, overlayLanguageId) {
+      // 身份比对（叠层自己的语言 id × model 当前语言），不是语言白名单——见 show 的头注
+      if (model.isDisposed() || model.getLanguageId() !== overlayLanguageId) return;
       if (isDerivedPreviewModel(model)) return; // 派生投影不吃结构诊断（见 isDerivedPreviewModel）
       tracked.set(model, faults);
       if (truncated) {

@@ -7,14 +7,15 @@ import type { KojoStructureSyntaxFault, KojoStructureSyntaxKind } from './types'
  * ## 与 Kojo 那份上屏器的分工
  *
  * `syntax-decorations.ts` 的文案是 `.kojo` 的（`台词右引号` / 糖词表派生的收束词名），
- * 且它的 `show()` 只接 `KOJO_LANGUAGE_ID`。ERB 的收束记号是 **ASCII 文法记号名**
+ * 且它的 `show()` 只画**交下来的那条叠层自己的语言**的 model（DIAG-GATE-1033 起是身份比对，
+ * 今天那条路只有 `.kojo`）。ERB 的收束记号是 **ASCII 文法记号名**
  * （`endif_line` / `endselect_line` / `skip_end`），文案要照着 ERB 的写法说，不能借 `.kojo`
  * 的词表——所以这里单独一张映射，不让两个语言的文案口径互相污染。
  *
- * 本模块输出的是**plain 诊断事实**（行 / 列 / 码 / 文案），上屏（markers owner、与装饰通道
- * 去重）由装配点决定。ERB 结构诊断的注册点见批次报告：`providers.ts` 的 `onSyntax` 目前
- * 统一交给只认 `.kojo` 的上屏器，接 ERB 需要一处按语言分派（本文件不自带 Monaco 依赖，
- * 就是为了那一步可以直接复用）。
+ * 本模块输出的是**plain 诊断事实**（行 / 列 / 码 / 文案）。ERB 的上屏自 LAU-3 起由
+ * `erb-runtime.ts` 的 `presentSyntax` 声明（markers owner 与 `[SKIPSTART]` 配对都在
+ * `applyErbStructureMarkers`），宿主按运行时声明分派、零语言 id；本文件不自带 Monaco 依赖，
+ * 所以文案与判据可脱离编辑器实例逐条钉死。
  *
  * ## 两类来源
  *

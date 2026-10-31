@@ -35,8 +35,9 @@ const ERB_STRUCTURE_SYNTAX_OWNER = 'erb-structure-syntax';
 /**
  * ERB 的结构残缺 → 行级波浪线（`erb-diagnostics.ts` 只产 plain 事实，上屏的 owner 在这里定）。
  *
- * 为什么不复用 `syntax-decorations.show()`：那个上屏器按 `.kojo` 语言 id 过滤（它的文案是按
- * Kojo 结构写的），ERB 的文案 / 码名 / `[SKIPSTART]` 配对判据都在 `erb-diagnostics.ts` 里。
+ * 为什么不复用 `syntax-decorations.show()`：那个上屏器的文案是按 Kojo 结构写的，
+ * 且自 DIAG-GATE-1033（2026-10-31）起它只画**交下来的那条叠层自己的语言**的 model
+ * （今天那条路只有 `.kojo`），ERB 的文案 / 码名 / `[SKIPSTART]` 配对判据都在 `erb-diagnostics.ts` 里。
  */
 function applyErbStructureMarkers(
   monaco: typeof Monaco,
