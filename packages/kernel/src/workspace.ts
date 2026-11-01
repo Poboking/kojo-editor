@@ -346,8 +346,23 @@ export class WorkspaceServiceImpl implements WorkspaceService {
       }
       root = hit;
     }
+    // 同名冲突判定必须在任何写盘之前（2026-11-02 P2 回滚批）：旧形态会另起一个新 id
+    // 静默建出第二个同名项目，面板里两个名字一模一样、作者分不清哪个是刚建的。
+    const conflict = await this.findNameConflict(root, name);
+    if (conflict === 'project') {
+      throw new Error(
+        `这个位置已经有同名项目：「${name}」。换一个名字再试，或先把旧项目移走/删除（不会覆盖既有项目）。`,
+      );
+    }
+    if (conflict === 'stale-folder') {
+      throw new Error(
+        `这个位置已经有同名文件夹：「${name}」，但它不是一个可用的项目（缺少 ${WORKSPACE_MANIFEST_FILE}），可能是上次新建中断留下的。把它改名或删掉后再新建，或换一个名字。`,
+      );
+    }
+
     let id = newId('p');
     while (await this.deps.io.exists(join(root, id))) id = newId('p');
+    const dir = join(root, id);
 
     const now = Date.now();
     const project: WorkspaceProject = {
@@ -358,13 +373,52 @@ export class WorkspaceServiceImpl implements WorkspaceService {
       artifacts: [],
       meta: input.meta ?? {},
     };
-    this.dirById.set(id, join(root, id)); // 先登记，manifest 才写得到正确的根
+    this.dirById.set(id, dir); // 先登记，manifest 才写得到正确的根
     // 再同步可写根：新作品目录此刻才进 `projectDirs()`，随后 ensureDir / 写 manifest 才过得去
     this.syncWritableRoots();
-    await this.deps.io.ensureDir(join(root, id));
-    await this.writeManifest(project);
+    try {
+      await this.deps.io.ensureDir(dir);
+      await this.writeManifest(project);
+    } catch (err) {
+      // 建目录之后任何一步失败都回滚（2026-11-02 P2 回滚批）：旧形态留下一个没有 manifest
+      // 的半成品目录——列表里看不见、重试又建新目录，越积越多；缓存还留着一条指向坏目录的
+      // 记录。清理失败只出声（不顶替真因），原始错误原样上抛。
+      try {
+        await this.deps.io.removeDir(dir);
+      } catch (cleanupErr) {
+        this.deps.log.warn(
+          `create: 清理半成品项目目录失败（保留现场）：${dir} — ${String(cleanupErr)}`,
+        );
+      }
+      this.dirById.delete(id);
+      this.syncWritableRoots();
+      throw err;
+    }
     this.deps.log.info(`Workspace project created: ${name} (${id}) @ ${root}`);
     return project;
+  }
+
+  /**
+   * 目标根下的同名冲突（新建前守卫，2026-11-02 P2 回滚批）。
+   *
+   * 只看**本次落点根**：不同根里的同名项目是合法的（两个作品库各有一份同名作品互不影响）。
+   * 两种冲突：
+   * - `project`：目录里的 manifest 可读且 `name` 相同 ⇒ 同根重名；
+   * - `stale-folder`：目录名与目标名相同、但没有可用的 manifest ⇒ 上次崩溃残留，
+   *   既不能被当成可用项目，也不该被这次新建绕过去。
+   */
+  private async findNameConflict(root: string, name: string): Promise<'project' | 'stale-folder' | null> {
+    let stale = false;
+    for (const e of await this.deps.io.listDir(root)) {
+      if (!e.isDirectory) continue;
+      const p = await this.readManifestAt(join(root, e.name));
+      if (p !== null) {
+        if (p.name === name) return 'project';
+        continue;
+      }
+      if (e.name === name) stale = true;
+    }
+    return stale ? 'stale-folder' : null;
   }
 
   async update(

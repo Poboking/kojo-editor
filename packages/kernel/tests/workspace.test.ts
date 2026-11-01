@@ -83,6 +83,127 @@ describe('WorkspaceService · 项目 CRUD', () => {
   });
 });
 
+/**
+ * 新建冲突与失败回滚（2026-11-02 P2）。
+ *
+ * 口径：同根同名 = 拒绝（不覆盖、不静默），文案要能被向导的 catch 原样上屏（含下一步）；
+ * 建目录之后的任何失败都清理本次半成品目录、重建可写域/缓存，清理失败只出声。
+ */
+describe('WorkspaceService · 新建冲突与失败回滚（P2）', () => {
+  it('同根同名项目：拒绝新建（不落新目录、不覆盖旧项目，文案给出下一步）', async () => {
+    const first = await ws.create({ name: '同名作品' });
+    const before = await fs.readdir(ws.rootDir());
+    await expect(ws.create({ name: '同名作品' })).rejects.toThrow(/同名项目/);
+    // 向导只把 message 原样显示（new-project-wizard 的 catch），所以下一步必须写进文案本身
+    await expect(ws.create({ name: '同名作品' })).rejects.toThrow(/换一个名字/);
+    expect(await ws.get(first.id)).not.toBeNull();
+    expect(await fs.readdir(ws.rootDir())).toEqual(before);
+    expect((await ws.list()).map((p) => p.name)).toEqual(['同名作品']);
+  });
+
+  it('不同根的同一个名字是合法的（冲突只在本次落点根内判定）', async () => {
+    const extra = path.join(tmpDir, '第二作品库');
+    await fs.mkdir(extra, { recursive: true });
+    const xWs = new WorkspaceServiceImpl({
+      bridge: new NodeBridge(appData, [extra]),
+      io: new FileIOServiceImpl(new NodeBridge(appData, [extra])),
+      log: noopLog,
+    });
+    await xWs.init();
+    const inExtra = await xWs.create({ name: '跨根同名', rootDir: extra });
+    const inDefault = await xWs.create({ name: '跨根同名' });
+    expect(xWs.projectDir(inExtra.id)).toBe(path.join(extra, inExtra.id));
+    expect(xWs.projectDir(inDefault.id)).toBe(path.join(xWs.rootDir(), inDefault.id));
+    expect((await xWs.list()).filter((p) => p.name === '跨根同名')).toHaveLength(2);
+  });
+
+  it('同名目录但没有 manifest（崩溃残留）：拒绝并说明"不是可用的项目"+ 下一步', async () => {
+    const staleName = '残留作品';
+    await fs.mkdir(path.join(ws.rootDir(), staleName), { recursive: true });
+    await expect(ws.create({ name: staleName })).rejects.toThrow(/同名文件夹/);
+    await expect(ws.create({ name: staleName })).rejects.toThrow(/不是一个可用的项目/);
+    await expect(ws.create({ name: staleName })).rejects.toThrow(/改名或删掉/);
+    // 残留目录原样保留（不覆盖、也不顺手删作者盘上的东西），且不会被 list 当成可用项目
+    expect(await fs.readdir(ws.rootDir())).toEqual([staleName]);
+    expect(await ws.list()).toEqual([]);
+  });
+
+  it('其它无 manifest 的残留目录：不被当成项目，也不妨碍新建（原样保留）', async () => {
+    const staleDir = path.join(ws.rootDir(), 'p-stale');
+    await fs.mkdir(staleDir, { recursive: true });
+    const p = await ws.create({ name: '新作品' });
+    expect(await ws.get(p.id)).not.toBeNull();
+    expect((await ws.list()).map((x) => x.id)).toEqual([p.id]);
+    expect(await fs.stat(staleDir).then((s) => s.isDirectory())).toBe(true);
+    expect(ws.projectDir(p.id)).not.toBe(staleDir);
+  });
+
+  it('manifest 写失败：清理本次新建的半成品目录，原错误原样上抛', async () => {
+    const original = io.writeText.bind(io);
+    vi.spyOn(io, 'writeText').mockImplementation(async (p: string, t: string) => {
+      if (p.endsWith(WORKSPACE_MANIFEST_FILE)) throw new Error('boom-manifest');
+      return original(p, t);
+    });
+    await expect(ws.create({ name: '写失败' })).rejects.toThrow(/boom-manifest/);
+    vi.restoreAllMocks();
+    expect(await fs.readdir(ws.rootDir())).toEqual([]);
+    expect(await ws.list()).toEqual([]);
+  });
+
+  it('回滚后缓存/可写域回到干净状态：list 无坏项、projectDirs 只剩默认根', async () => {
+    vi.spyOn(io, 'writeText').mockImplementation(async () => {
+      throw new Error('boom-manifest');
+    });
+    await expect(ws.create({ name: '回滚作品' })).rejects.toThrow(/boom-manifest/);
+    vi.restoreAllMocks();
+    expect(await ws.list()).toEqual([]);
+    expect(ws.projectDirs()).toEqual([ws.rootDir()]);
+    expect(await fs.readdir(ws.rootDir())).toEqual([]);
+  });
+
+  it('清理自身失败：原始错误优先上抛，清理失败出声（不吞）', async () => {
+    const warns: string[] = [];
+    const spyWs = new WorkspaceServiceImpl({
+      bridge: new NodeBridge(appData),
+      io,
+      log: { ...noopLog, warn: (m: string) => warns.push(m) },
+    });
+    await spyWs.init();
+    vi.spyOn(io, 'writeText').mockImplementation(async () => {
+      throw new Error('boom-manifest');
+    });
+    vi.spyOn(io, 'removeDir').mockImplementation(async () => {
+      throw new Error('boom-cleanup');
+    });
+    await expect(spyWs.create({ name: '清理失败作品' })).rejects.toThrow(/boom-manifest/);
+    expect(warns.some((w) => w.includes('清理半成品') && w.includes('boom-cleanup'))).toBe(true);
+    vi.restoreAllMocks();
+    // 清理失败现场保留：目录还在但没有 manifest ⇒ 不会被 list 当成项目
+    expect(await spyWs.list()).toEqual([]);
+    expect(spyWs.projectDirs()).toEqual([spyWs.rootDir()]);
+  });
+
+  it('建目录这一步就失败：同样回滚、原错上抛、不往缓存里留残项', async () => {
+    vi.spyOn(io, 'ensureDir').mockImplementation(async () => {
+      throw new Error('boom-mkdir');
+    });
+    await expect(ws.create({ name: '建目录失败' })).rejects.toThrow(/boom-mkdir/);
+    vi.restoreAllMocks();
+    expect(await fs.readdir(ws.rootDir())).toEqual([]);
+    expect(await ws.list()).toEqual([]);
+    expect(ws.projectDirs()).toEqual([ws.rootDir()]);
+  });
+
+  it('旧默认路径行为不变：不传 rootDir 仍落默认根，manifest/list 正常', async () => {
+    const p = await ws.create({ name: '默认位置作品', meta: { author: '作者' } });
+    expect(ws.projectDir(p.id)).toBe(path.join(ws.rootDir(), p.id));
+    expect(await io.exists(path.join(ws.rootDir(), p.id, WORKSPACE_MANIFEST_FILE))).toBe(true);
+    const list = await ws.list();
+    expect(list.map((x) => x.id)).toEqual([p.id]);
+    expect(list[0]!.name).toBe('默认位置作品');
+  });
+});
+
 describe('WorkspaceService · 制品与文件', () => {
   it('createArtifact 写文件集并登记 manifest；listDir/readText 可读回', async () => {
     const p = await ws.create({ name: '作品' });
