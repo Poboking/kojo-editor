@@ -30,8 +30,20 @@ import type { DirEntry, UIPanelProps, WorkspaceArtifact, WorkspaceProject } from
 import { join } from '@kojo/plugin-api';
 import { attributionSummary, type AttributionState, type PackageAttribution } from '@kojo/kojo-project-kit';
 import type { PanelStatus } from './package-actions';
-import { NEW_ITEM_MENU, newItemPreviewName, type NewItemKind } from '@kojo/kojo-project-kit';
+import {
+  NEW_ITEM_MENU,
+  newItemPreviewName,
+  projectNameProblem,
+  sameRootProjectNames,
+  suggestDuplicateName,
+  type NewItemKind,
+} from '@kojo/kojo-project-kit';
 import type { TutorialId } from './tutorial';
+
+/** 项目行动作（重命名 / 复制）的结果：成功回新（或原）项目 id；失败回中文原因 */
+export type ProjectActionOutcome =
+  | { ok: true; projectId: string }
+  | { ok: false; reason: string };
 
 /** 目录列举态（闭包缓存值）：在途 / 失败（带原因）/ 已加载 */
 export type DirListState = DirEntry[] | 'loading' | { error: string };
@@ -91,6 +103,16 @@ export interface KojoProjectsPanelDeps {
     rawName: string,
     kind: NewItemKind,
   ): Promise<{ ok: true; path: string; displayName: string } | { ok: false; reason: string }>;
+  /**
+   * 重命名项目（2026-11-02 重命名 / 复制批；可选）。缺省 → 项目行不显示「重命名」。
+   * 内核仍会在同根重名时再拒一次；面板先过纯函数校验给出即时提示。
+   */
+  renameProject?(projectId: string, name: string): Promise<ProjectActionOutcome>;
+  /**
+   * 复制项目（同批；可选）。缺省 → 项目行不显示「复制」。
+   * 成功后返回新项目 id，面板据此展开并选中它。
+   */
+  duplicateProject?(projectId: string, name: string): Promise<ProjectActionOutcome>;
 }
 
 /** 目录条目排序：目录在前，其后按名称（中文本地化比较口径） */
@@ -286,8 +308,13 @@ export function createKojoProjectsPanel(
 
     /* ---------------------- 右键新建（反馈 1b） ---------------------- */
 
-    /** 右键菜单（固定定位；dir = 要往哪儿建） */
-    const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; dir: string } | null>(null);
+    /** 右键菜单（固定定位；dir = 要往哪儿建；projectId = 项目行上的动作） */
+    const [ctxMenu, setCtxMenu] = useState<{
+      x: number;
+      y: number;
+      dir: string;
+      projectId?: string;
+    } | null>(null);
     /** 行内命名输入（VSCode 式：不用 window.prompt——WebView2 里它可能直接返回 null） */
     const [draft, setDraft] = useState<{ dir: string; kind: NewItemKind } | null>(null);
     const [draftValue, setDraftValue] = useState('');
@@ -315,11 +342,16 @@ export function createKojoProjectsPanel(
     /** 菜单宽与壳层 `.context-menu` 的 min-width 对齐；靠右边时往左挪，别溢出视口 */
     const MENU_WIDTH = 250;
 
-    const openCtxMenu = (e: PointerEvent, dir: string): void => {
+    const openCtxMenu = (e: PointerEvent, dir: string, project?: WorkspaceProject): void => {
       e.preventDefault();
       e.stopPropagation();
       const vw = e.view?.innerWidth ?? Number.MAX_SAFE_INTEGER;
-      setCtxMenu({ x: Math.min(e.clientX, vw - MENU_WIDTH), y: e.clientY, dir });
+      setCtxMenu({
+        x: Math.min(e.clientX, vw - MENU_WIDTH),
+        y: e.clientY,
+        dir,
+        ...(project !== undefined ? { projectId: project.id } : {}),
+      });
     };
 
     /** 从菜单选中某类型 → 收起菜单、展开目标目录、落下一个待命名的行内输入 */
@@ -380,6 +412,107 @@ export function createKojoProjectsPanel(
         draftError
           ? h('span', { className: 'kp-draft-err', title: draftError }, draftError)
           : h('span', { className: 'kp-draft-hint dim' }, 'Enter 创建 · Esc 取消'),
+      );
+    };
+
+    /* ---------------------- 项目行动作：重命名 / 复制（2026-11-02） ---------------------- */
+
+    /**
+     * 项目行行内输入（与新建条目共用 `.kp-draft` 的样式与键序，但目标是**项目**而不是目录）。
+     * 复制默认值 = 「<原名> 副本」；同根已占用时由纯函数顺延编号。
+     */
+    const [projDraft, setProjDraft] = useState<{
+      projectId: string;
+      kind: 'rename' | 'copy';
+      value: string;
+      error: string | null;
+      busy: boolean;
+    } | null>(null);
+    const projInputRef = useRef<{ focus(): void } | null>(null);
+    useEffect(() => {
+      projInputRef.current?.focus();
+    }, [projDraft?.projectId, projDraft?.kind]);
+
+    /** 与该项目同一落点根下的其它项目名（面板只有扁平列表，靠目录父级分组） */
+    const sameRootNames = (projectId: string): string[] =>
+      sameRootProjectNames(deps.projects(), projectId, deps.projectDir);
+
+    const startProjectAction = (p: WorkspaceProject, kind: 'rename' | 'copy'): void => {
+      setCtxMenu(null);
+      setProjDraft({
+        projectId: p.id,
+        kind,
+        value: kind === 'rename' ? p.name : suggestDuplicateName(p.name, sameRootNames(p.id)),
+        error: null,
+        busy: false,
+      });
+      // 输入框渲染在项目行下：折叠的项目先展开，否则点了像没反应
+      setClosedProjects((prev) => {
+        if (!prev.has(p.id)) return prev;
+        const next = new Set(prev);
+        next.delete(p.id);
+        return next;
+      });
+    };
+
+    const commitProjectAction = async (): Promise<void> => {
+      const d = projDraft;
+      if (!d || d.busy) return;
+      const run = d.kind === 'rename' ? deps.renameProject : deps.duplicateProject;
+      if (run === undefined) return;
+      // 面板侧先校验（空名 / 同根重名即时给原因）；内核仍会再判一次，防并发与跨入口
+      const problem = projectNameProblem(d.value, sameRootNames(d.projectId));
+      if (problem !== null) {
+        setProjDraft({ ...d, error: problem });
+        return;
+      }
+      setProjDraft({ ...d, busy: true, error: null });
+      const r = await run(d.projectId, d.value.trim());
+      if (!r.ok) {
+        // 名字留着让他改（与新建条目同一口径）
+        setProjDraft({ ...d, busy: false, error: r.reason });
+        return;
+      }
+      setProjDraft(null);
+      // 复制成功 → 展开并选中新项目（面板没有选中态，展开即"送到眼前"）
+      setClosedProjects((prev) => {
+        if (!prev.has(r.projectId)) return prev;
+        const next = new Set(prev);
+        next.delete(r.projectId);
+        return next;
+      });
+      deps.ensureDir(deps.projectDir(r.projectId));
+      deps.refresh();
+    };
+
+    /** 项目行下的行内输入（重命名 / 复制共用） */
+    const projectDraftRow = (p: WorkspaceProject, depth: number): ReactNode => {
+      const d = projDraft;
+      if (!d || d.projectId !== p.id) return null;
+      return h(
+        'div',
+        { key: `${p.id}::project-draft`, className: 'kp-draft', style: indent(depth) },
+        h('input', {
+          ref: projInputRef,
+          className: 'kp-draft-input',
+          value: d.value,
+          placeholder: d.kind === 'rename' ? '新项目名' : '副本项目名',
+          disabled: d.busy,
+          onChange: (e: { target: { value: string } }) => {
+            setProjDraft({ ...d, value: e.target.value, error: null });
+          },
+          onKeyDown: (e: { key: string }) => {
+            if (e.key === 'Enter') void commitProjectAction();
+            else if (e.key === 'Escape') setProjDraft(null);
+          },
+        }),
+        d.error
+          ? h('span', { className: 'kp-draft-err', title: d.error }, d.error)
+          : h(
+              'span',
+              { className: 'kp-draft-hint dim' },
+              d.kind === 'rename' ? 'Enter 重命名 · Esc 取消' : 'Enter 复制 · Esc 取消',
+            ),
       );
     };
 
@@ -752,21 +885,56 @@ export function createKojoProjectsPanel(
             'div',
             { key: p.id, className: 'kp-project' },
             h(
-              'button',
-              {
-                className: 'kp-project-btn',
-                title: `项目：${p.name}`,
-                onClick: () => toggleProject(p.id),
-                onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, pDir),
-              },
-              h('span', { className: 'caret' }, pOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
-              h('span', { className: 'kp-project-name', title: p.name }, p.name),
-              h('span', { className: 'kp-count', title: `这个项目里的作者包数：${p.artifacts.length}` }, `${p.artifacts.length} 包`),
+              'div',
+              { className: 'kp-project-row' },
+              h(
+                'button',
+                {
+                  className: 'kp-project-btn',
+                  title: `项目：${p.name}`,
+                  onClick: () => toggleProject(p.id),
+                  // 项目行右键 = 项目动作（重命名 / 复制）+ 往项目根新建条目（菜单在同一处收口）
+                  onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, pDir, p),
+                },
+                h('span', { className: 'caret' }, pOpen ? ic('chevron-down', 12, '▾') : ic('chevron-right', 12, '▸')),
+                h('span', { className: 'kp-project-name', title: p.name }, p.name),
+                h('span', { className: 'kp-count', title: `这个项目里的作者包数：${p.artifacts.length}` }, `${p.artifacts.length} 包`),
+              ),
+              // 行内动作：静息态隐去（悬停 / 键盘聚焦才显），与包行的「导出 / 部署」同一口径
+              deps.renameProject || deps.duplicateProject
+                ? h(
+                    'span',
+                    { className: 'kp-row-actions' },
+                    deps.renameProject
+                      ? h(
+                          'button',
+                          {
+                            className: 'kp-action',
+                            title: '给这个项目改名（同一个文件夹里不能有同名项目）',
+                            onClick: () => startProjectAction(p, 'rename'),
+                          },
+                          '重命名',
+                        )
+                      : null,
+                    deps.duplicateProject
+                      ? h(
+                          'button',
+                          {
+                            className: 'kp-action',
+                            title: '复制这个项目（含全部文件）到同一个文件夹下的新项目',
+                            onClick: () => startProjectAction(p, 'copy'),
+                          },
+                          '复制',
+                        )
+                      : null,
+                  )
+                : null,
             ),
             /* 项目根自己的行内新建框（UI 反馈 6 的缺陷点）：菜单把草稿指向 projectDir，
                但 draftRow 原先只在 renderDir 里产出，而 renderDir 只跑「包目录」与「包内子目录」
                ——项目根从来没有槽位，于是"新建文件夹"点下去只是把 draft 写进 state，界面上什么都没有。
                放在项目行正下方、且**不受 pOpen 影响**：收起的项目同样要能建东西（与 renderDir 同口径）。 */
+            projectDraftRow(p, 1),
             draftRow(pDir, 1),
             pOpen ? renderArtifacts(p, loose.length > 0) : null,
             /* 包与包之间的平级目录（反馈 6 的后半条）：建成功了必须在界面上看得见，
@@ -796,6 +964,11 @@ export function createKojoProjectsPanel(
 
     // 右键菜单：复用壳层同款 `.context-menu`（fixed + token + pop-in），
     // 不在插件里另立一套菜单样式——同一个应用里两套上下文菜单是最典型的"看着像两个系统"。
+    // 项目行上的右键菜单额外给出「重命名 / 复制」两项（2026-11-02）；它们只在该能力在场时出现。
+    const ctxProject =
+      ctxMenu?.projectId === undefined
+        ? undefined
+        : projects.find((p) => p.id === ctxMenu.projectId);
     const menu = ctxMenu
       ? h(
           'div',
@@ -808,6 +981,32 @@ export function createKojoProjectsPanel(
           h(
             'div',
             { className: 'context-menu', style: { left: ctxMenu.x, top: ctxMenu.y }, role: 'menu' },
+            ctxProject !== undefined && deps.renameProject
+              ? h(
+                  'button',
+                  {
+                    key: 'rename-project',
+                    role: 'menuitem',
+                    title: '给这个项目改名（同一个文件夹里不能有同名项目）',
+                    onClick: () => startProjectAction(ctxProject, 'rename'),
+                  },
+                  h('span', { className: 'check' }, ''),
+                  '重命名',
+                )
+              : null,
+            ctxProject !== undefined && deps.duplicateProject
+              ? h(
+                  'button',
+                  {
+                    key: 'duplicate-project',
+                    role: 'menuitem',
+                    title: '复制这个项目（含全部文件）到同一个文件夹下的新项目',
+                    onClick: () => startProjectAction(ctxProject, 'copy'),
+                  },
+                  h('span', { className: 'check' }, ''),
+                  '复制',
+                )
+              : null,
             ...NEW_ITEM_MENU.map((m) =>
               h(
                 'button',

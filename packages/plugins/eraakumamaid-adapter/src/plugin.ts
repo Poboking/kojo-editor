@@ -593,6 +593,42 @@ export function createErakumamaidAdapterPlugin(): Plugin {
       /* ---- 面板（本游戏没有内置教程 ⇒ 不传 openTutorial，教程区整块不渲染） ---- */
 
       /**
+       * 面板项目行动作（2026-11-02 重命名 / 复制批）：内核做事，面板只收结果；
+       * 失败返回中文原因（内核已给人话），由面板行内输入原样呈现。
+       */
+      const renameWsProject = async (
+        projectId: string,
+        name: string,
+      ): Promise<{ ok: true; projectId: string } | { ok: false; reason: string }> => {
+        try {
+          const p = await workspaces.update(projectId, { name });
+          invalidateWs();
+          return { ok: true, projectId: p.id };
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          ctx.log.warn(`项目重命名失败（${projectId}）：${reason}`);
+          return { ok: false, reason };
+        }
+      };
+
+      const duplicateWsProject = async (
+        projectId: string,
+        name: string,
+      ): Promise<{ ok: true; projectId: string } | { ok: false; reason: string }> => {
+        try {
+          const p = await workspaces.duplicateProject(projectId, { name });
+          invalidateWs();
+          // 复制 = 新项目出现：沿用既有语义事件
+          emitProjectCreated(p.id);
+          return { ok: true, projectId: p.id };
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          ctx.log.warn(`项目复制失败（${projectId}）：${reason}`);
+          return { ok: false, reason };
+        }
+      };
+
+      /**
        * 面板 id 落本游戏命名空间（`eraakumamaid-kojo-projects`），与浮层 id 同理：
        * 共享层只给窗口实现，两个 adapter 各注册一个**属于自己**的「我的口上项目」面板
        * （各接自家的新建/导入/部署浮层）。若沿用裸 `kojo-projects`，并装时后者撞同槽同
@@ -628,6 +664,8 @@ export function createErakumamaidAdapterPlugin(): Plugin {
           attribution: (absDir) => wsAttrCache.get(absDir),
           ensureAttribution: ensureWsAttribution,
           createItem,
+          renameProject: renameWsProject,
+          duplicateProject: duplicateWsProject,
         }),
       });
 

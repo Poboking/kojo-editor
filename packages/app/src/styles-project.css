@@ -5407,6 +5407,22 @@ button.primary .hint {
 .kp-artifact-row:focus-within .kp-row-actions {
   opacity: 1;
 }
+/* 项目行 = 标题按钮 + 行内动作（2026-11-02 重命名 / 复制批）：与包行同款"悬停才显"，
+   骨架复用 .kp-row-actions，这里只给项目行一层定位容器。 */
+.kp-project-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.kp-project-row .kp-project-btn {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+.kp-project-row:hover .kp-row-actions,
+.kp-project-row:focus-within .kp-row-actions {
+  opacity: 1;
+}
 .kp-action {
   padding: 1px var(--space-2);
   font-size: var(--fs-1);

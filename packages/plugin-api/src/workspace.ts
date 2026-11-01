@@ -120,10 +120,30 @@ export interface WorkspaceService {
    * 撤销后是否需要刷新列表由调用方决定（作品被拒撤时根本撤不掉）。
    */
   revokeRoot(root: string): Promise<void>;
-  /** 更新名称 / 元数据（updatedAt 自动刷新） */
+  /**
+   * 更新名称 / 元数据（updatedAt 自动刷新）。
+   *
+   * 改名口径（2026-11-02 重命名批）：空名 / 仅空白拒绝；与**同一落点根**下的其它项目
+   * 重名同样拒绝（中文原因），避免列表里出现两个无法区分的同名项目。
+   */
   update(
     projectId: string,
     patch: { name?: string; meta?: Record<string, unknown> },
+  ): Promise<WorkspaceProject>;
+  /**
+   * 复制项目（2026-11-02 项目复制批，additive）。
+   *
+   * 在**该项目当前所在根**（或显式 `rootDir` 且必须命中 `roots()` 的授权根）下新建目录，
+   * 字节级复制原项目全部内容（含二进制），并重写 manifest：新 id / 新 name /
+   * 新 createdAt·updatedAt；制品登记沿用（artifact id 重新生成）。
+   *
+   * `name` 缺省 = 「<原名> 副本」。目标目录已存在 / 目标根里已有同名项目 → 抛中文错误，
+   * **不覆盖**。落点不是自由参数：只允许「已授权根 ∪ 项目当前根」。
+   * 复制完成后 `projectDirs()` 会包含新项目目录（复用既有可写域重建）。
+   */
+  duplicateProject(
+    projectId: string,
+    input?: { name?: string; rootDir?: string },
   ): Promise<WorkspaceProject>;
   /** 删除项目（连同目录全部内容） */
   remove(projectId: string): Promise<void>;

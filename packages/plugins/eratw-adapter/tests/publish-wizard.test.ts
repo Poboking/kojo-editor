@@ -44,6 +44,9 @@ function fakeWorkspaces(): WorkspaceService {
     update: async () => {
       throw new Error('not used');
     },
+    duplicateProject: async () => {
+      throw new Error('not used');
+    },
     remove: async () => {},
     projectDir: (id: string) => `/appdata/workspaces/${id}`,
     createArtifact: async () => {

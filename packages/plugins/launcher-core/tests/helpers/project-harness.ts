@@ -285,6 +285,11 @@ export class FakeWorkspaces implements WorkspaceService {
     return project;
   }
 
+  /** 测试替身不做复制（内核那侧的口径见 workspace.test.ts） */
+  async duplicateProject(): Promise<WorkspaceProject> {
+    throw new Error('FakeWorkspaces 不支持复制项目');
+  }
+
   async remove(projectId: string): Promise<void> {
     const dir = this.projectDir(projectId);
     await this.io.removeDir(dir);

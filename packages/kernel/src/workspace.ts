@@ -11,7 +11,7 @@ import type {
   WorkspaceProject,
   WorkspaceService,
 } from '@kojo/plugin-api';
-import { WORKSPACE_MANIFEST_FILE, isAbsolute, isPathUnder, join } from '@kojo/plugin-api';
+import { WORKSPACE_MANIFEST_FILE, dirname, isAbsolute, isPathUnder, join } from '@kojo/plugin-api';
 
 /**
  * 作者工作区服务实现（内核 `kernel.workspaces`）。
@@ -376,11 +376,132 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     if (patch.name !== undefined) {
       const name = patch.name.trim();
       if (name.length === 0) throw new Error('项目名不能为空。');
+      // 同根重名拒绝（2026-11-02 重命名批）：两个同名项目在面板里无法区分，
+      // 也让「按名字」的后续操作失去意义。判据只看**同一个落点根**下的其它项目。
+      const root = dirname(this.projectDir(projectId));
+      if ((await this.projectNamesInRoot(root, projectId)).includes(name)) {
+        throw new Error(
+          `这个位置已经有同名项目：「${name}」。换一个名字再试（同一个文件夹里不能有两个同名项目）。`,
+        );
+      }
       project.name = name;
     }
     if (patch.meta !== undefined) project.meta = patch.meta;
     project.updatedAt = Date.now();
     await this.writeManifest(project);
+    return project;
+  }
+
+  /** 某个落点根下已登记项目的名称（跳过损坏 manifest；`exceptId` 用于改名时排除自己） */
+  private async projectNamesInRoot(root: string, exceptId?: string): Promise<string[]> {
+    const out: string[] = [];
+    const entries = await this.deps.io.listDir(root);
+    for (const e of entries) {
+      if (!e.isDirectory) continue;
+      if (exceptId !== undefined && e.name === exceptId) continue;
+      const p = await this.readManifestAt(join(root, e.name));
+      if (p !== null) out.push(p.name);
+    }
+    return out;
+  }
+
+  /**
+   * 复制项目（2026-11-02 项目复制批，additive）。
+   *
+   * 落点只允许「已授权根 ∪ 项目当前根」（授权根的判定与 `create` 逐字同源）；
+   * 复制走 `walkDir` + `copyFile`（字节级、零转码，`to` 恒过内核 io 第一道闸），
+   * 不手拼路径写盘。manifest 最后重写，失败时清理半成品目录并摘掉缓存。
+   */
+  async duplicateProject(
+    projectId: string,
+    input?: { name?: string; rootDir?: string },
+  ): Promise<WorkspaceProject> {
+    assertSegment(projectId, '项目名');
+    const sourceDir = await this.locateProjectDir(projectId);
+    const source = await this.readManifestAt(sourceDir);
+    if (!source) throw new Error(`找不到这个工作区项目：${projectId}`);
+
+    const name = (input?.name ?? `${source.name} 副本`).trim();
+    if (name.length === 0) throw new Error('项目名不能为空。');
+
+    let root: string;
+    if (input?.rootDir !== undefined) {
+      // 与 create 同一口径：落点不是自由参数，只核对已授权根名单（铁律 6）
+      await this.refreshAuthorizedRoots();
+      const hit = this.roots().find((r) => isSameRoot(r, input.rootDir!));
+      if (hit === undefined) {
+        throw new Error(
+          `复制项目的目标位置未获得授权：${input.rootDir}（只能在默认工作区或「自选…」对话框里选定的文件夹内复制）`,
+        );
+      }
+      root = hit;
+    } else {
+      const sourceRoot = dirname(sourceDir);
+      const hit = this.roots().find((r) => isSameRoot(r, sourceRoot));
+      if (hit === undefined) {
+        throw new Error(`找不到项目所在的落点根，无法复制：${sourceDir}`);
+      }
+      root = hit;
+    }
+
+    if ((await this.projectNamesInRoot(root)).includes(name)) {
+      throw new Error(
+        `这个位置已经有同名项目：「${name}」。换一个名字再试（不会覆盖既有项目）。`,
+      );
+    }
+
+    const id = newId('p');
+    const targetDir = join(root, id);
+    if (await this.deps.io.exists(targetDir)) {
+      throw new Error(`目标目录已经存在，未覆盖：${targetDir}`);
+    }
+
+    const now = Date.now();
+    const project: WorkspaceProject = {
+      id,
+      name,
+      createdAt: now,
+      updatedAt: now,
+      // 制品登记沿用；artifact id 隶属原项目，复制后重新生成以保持项目内唯一
+      artifacts: source.artifacts.map((a) => ({ ...a, id: newId('a') })),
+      meta: { ...source.meta },
+    };
+
+    this.dirById.set(id, targetDir);
+    // 新作品目录此刻才进 `projectDirs()`，随后 ensureDir / copyFile 才过得去
+    this.syncWritableRoots();
+
+    // 全部文件（含二进制）字节级复制；manifest 单独重写，故跳过旧那份
+    const entries = await this.deps.io.walkDir(sourceDir, { includeFiles: true });
+    try {
+      await this.deps.io.ensureDir(targetDir);
+      for (const e of entries) {
+        if (e.isDirectory) continue;
+        const rel = e.path.slice(sourceDir.length).replace(/^[\\/]+/, '');
+        if (rel === WORKSPACE_MANIFEST_FILE) continue;
+        // 纵深防御：拒绝一切逃逸段（walkDir 输出结构安全，但不信任输入侧）
+        if (rel.split(/[\\/]/).includes('..')) {
+          throw new Error(`路径越出了源项目目录：${rel}`);
+        }
+        const to = join(targetDir, rel);
+        if (!isPathUnder(targetDir, to)) throw new Error(`路径越出了新项目目录：${rel}`);
+        await this.deps.io.copyFile(e.path, to);
+      }
+      await this.writeManifest(project);
+    } catch (err) {
+      try {
+        await this.deps.io.removeDir(targetDir);
+      } catch (cleanupErr) {
+        this.deps.log.warn(
+          `duplicateProject: 清理半成品项目目录失败（保留现场）：${targetDir} — ${String(cleanupErr)}`,
+        );
+      }
+      this.dirById.delete(id);
+      this.syncWritableRoots();
+      throw err;
+    }
+
+    this.deps.log.info(`Workspace project duplicated: ${source.name} → ${name} (${id}) @ ${root}`);
     return project;
   }
 

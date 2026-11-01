@@ -199,9 +199,12 @@ export {
   sortDirEntries,
   TUTORIALS_MIN_H,
 } from './projects-panel';
-export type { DirListState, FactsInput, KojoProjectsPanelDeps } from './projects-panel';
+export type { DirListState, FactsInput, KojoProjectsPanelDeps, ProjectActionOutcome } from './projects-panel';
 export { buildPackageZip, createPackageActions, STATUS_OK_DISMISS_MS } from './package-actions';
 export type { PackageActions, PackageActionsDeps, PanelStatus, PanelStatusKind } from './package-actions';
+
+/* ---- 项目行动作纯函数（重命名校验 / 副本命名建议 / 同根名单；2026-11-02） ---- */
+export { projectNameProblem, sameRootProjectNames, suggestDuplicateName } from './project-actions';
 
 /* ---- 脚手架落盘（`GameAdapter.scaffold?()` 的实现半边） ---- */
 export { writeScaffoldFiles } from './scaffold-writer';

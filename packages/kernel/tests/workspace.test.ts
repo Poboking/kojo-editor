@@ -595,3 +595,144 @@ describe('WorkspaceService · importDirectory 半成品清理', () => {
     expect(warns.some((m) => m.includes('pkg') && m.includes('清理'))).toBe(true);
   });
 });
+
+/**
+ * 重命名 + 复制（2026-11-02 P0-7a）。
+ *
+ * 口径：改名与复制都只动作者工作区；复制落点只允许「已授权根 ∪ 项目当前根」，
+ * 字节级复制（含二进制）且 manifest 必然重写（新 id / 新时间 / artifact id 重生成）。
+ */
+describe('WorkspaceService · 重命名与复制', () => {
+  /** 造一个含文本 + 二进制 + 嵌套目录的项目，返回项目与二进制字节 */
+  async function makeRichProject(name = '原作品'): Promise<{
+    project: Awaited<ReturnType<WorkspaceServiceImpl['create']>>;
+    bin: number[];
+    artifactId: string;
+  }> {
+    const project = await ws.create({ name, meta: { author: '原作者' } });
+    const art = await ws.createArtifact(project.id, {
+      name: '初版包',
+      dirName: '初版包-K1 v1.0',
+      files: { 'README.md': '# 原包\n', '子/深文件.ERB': 'PRINTL 深层\n' },
+      meta: { charaNo: 1 },
+    });
+    const bin = [0x82, 0xb1, 0x82, 0xf1];
+    await fs.writeFile(
+      path.join(ws.projectDir(project.id), art.dirName, '二进制.bin'),
+      Buffer.from(bin),
+    );
+    return { project, bin, artifactId: art.id };
+  }
+
+  it('复制：字节级含二进制 / 嵌套目录，manifest 重写（新 id、新名、新时间、artifact id 重生成）', async () => {
+    const { project, bin, artifactId } = await makeRichProject();
+    const copy = await ws.duplicateProject(project.id, { name: '副本作品' });
+
+    expect(copy.id).not.toBe(project.id);
+    expect(copy.name).toBe('副本作品');
+    expect(copy.createdAt).toBeGreaterThanOrEqual(project.createdAt);
+    expect(copy.meta).toEqual({ author: '原作者' });
+    expect(copy.artifacts).toHaveLength(1);
+    expect(copy.artifacts[0]!.dirName).toBe('初版包-K1 v1.0');
+    expect(copy.artifacts[0]!.id).not.toBe(artifactId);
+
+    const copyDir = ws.projectDir(copy.id);
+    expect((await ws.readText(copy.id, '初版包-K1 v1.0/README.md')).text).toBe('# 原包\n');
+    expect((await ws.readText(copy.id, '初版包-K1 v1.0/子/深文件.ERB')).text).toBe(
+      'PRINTL 深层\n',
+    );
+    const copied = await fs.readFile(path.join(copyDir, '初版包-K1 v1.0', '二进制.bin'));
+    expect([...copied]).toEqual(bin);
+    // 原项目原样存活（复制不是移动）
+    expect((await ws.readText(project.id, '初版包-K1 v1.0/README.md')).text).toBe('# 原包\n');
+    // list 能看到两份
+    const list = await ws.list();
+    expect(list.map((p) => p.name)).toEqual(expect.arrayContaining(['原作品', '副本作品']));
+  });
+
+  it('复制：缺省名 = 「<原名> 副本」', async () => {
+    const { project } = await makeRichProject('甲作品');
+    const copy = await ws.duplicateProject(project.id);
+    expect(copy.name).toBe('甲作品 副本');
+  });
+
+  it('复制：同根重名拒绝（不覆盖既有项目，也不落新目录）', async () => {
+    const { project } = await makeRichProject('甲作品');
+    await ws.create({ name: '甲作品 副本' });
+    const before = (await ws.list()).length;
+    await expect(ws.duplicateProject(project.id)).rejects.toThrow(/同名项目/);
+    expect((await ws.list()).length).toBe(before);
+  });
+
+  it('复制：未授权的 rootDir 拒绝（中文原因），目标目录一个都不落', async () => {
+    const { project } = await makeRichProject();
+    const rogue = path.join(tmpDir, '没授权过的位置');
+    await fs.mkdir(rogue, { recursive: true });
+    await expect(
+      ws.duplicateProject(project.id, { name: '越权副本', rootDir: rogue }),
+    ).rejects.toThrow(/未获得授权/);
+    expect(await fs.readdir(rogue)).toEqual([]);
+  });
+
+  it('复制：显式授权根可用（外部根），新项目目录进可写域且 list 跨根可见', async () => {
+    const extraRoot = path.join(tmpDir, '自选作品库-复制');
+    await fs.mkdir(extraRoot, { recursive: true });
+    const xIo = new FileIOServiceImpl(new NodeBridge(appData, [extraRoot]));
+    const xWs = new WorkspaceServiceImpl({
+      bridge: new NodeBridge(appData, [extraRoot]),
+      io: xIo,
+      log: noopLog,
+    });
+    await xWs.init();
+
+    const p = await xWs.create({ name: '外部原作品', rootDir: extraRoot });
+    await xWs.createArtifact(p.id, { name: '包', dirName: 'pkg', files: { 'a.txt': '1' } });
+    const copy = await xWs.duplicateProject(p.id, { name: '外部副本', rootDir: extraRoot });
+
+    const copyDir = path.join(extraRoot, copy.id);
+    expect((await xWs.readText(copy.id, 'pkg/a.txt')).text).toBe('1');
+    expect(xWs.projectDir(copy.id)).toBe(copyDir);
+    expect(xWs.projectDirs()).toContain(copyDir);
+    expect(xIo.isWritable(path.join(copyDir, 'pkg', 'a.txt'))).toBe(true);
+    expect((await xWs.list()).map((x) => x.name)).toEqual(
+      expect.arrayContaining(['外部原作品', '外部副本']),
+    );
+    // 自选根根身仍不因复制变可写（收窄口径未被本批放宽）
+    expect(xIo.isWritable(path.join(extraRoot, '别处', 'x.txt'))).toBe(false);
+  });
+
+  it('复制：中途失败清理半成品目录并摘掉缓存（不留半份项目）', async () => {
+    const { project } = await makeRichProject();
+    const original = io.copyFile.bind(io);
+    let calls = 0;
+    vi.spyOn(io, 'copyFile').mockImplementation(async (from, to) => {
+      calls += 1;
+      if (calls === 2) throw new Error('boom-copy');
+      return original(from, to);
+    });
+    await expect(ws.duplicateProject(project.id, { name: '半成品' })).rejects.toThrow(/boom-copy/);
+    vi.restoreAllMocks();
+    const names = (await ws.list()).map((p) => p.name);
+    expect(names).not.toContain('半成品');
+    // 刷新后的列表里不出现半成品；磁盘上也没有残留的新目录（原项目仍在）
+    expect(await ws.get(project.id)).not.toBeNull();
+  });
+
+  it('复制不存在的项目：如实拒绝', async () => {
+    await expect(ws.duplicateProject('p-不存在')).rejects.toThrow(/not found/);
+  });
+
+  it('重命名：空名拒绝；与原项目同名（只改空白）放行', async () => {
+    const p = await ws.create({ name: '原名' });
+    await expect(ws.update(p.id, { name: '   ' })).rejects.toThrow(/项目名不能为空/);
+    const same = await ws.update(p.id, { name: '  原名  ' });
+    expect(same.name).toBe('原名');
+  });
+
+  it('重命名：与同根其它项目重名拒绝（中文原因、原名不变）', async () => {
+    const a = await ws.create({ name: '甲' });
+    await ws.create({ name: '乙' });
+    await expect(ws.update(a.id, { name: '乙' })).rejects.toThrow(/同名项目/);
+    expect((await ws.get(a.id))!.name).toBe('甲');
+  });
+});

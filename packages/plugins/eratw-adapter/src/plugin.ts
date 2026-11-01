@@ -742,6 +742,42 @@ export function createEratwAdapterPlugin(): Plugin {
 
       /* ---- 「我的口上项目」面板（P-B）：独立活动栏图标（不声明 group） ---- */
 
+      /**
+       * 面板项目行动作（2026-11-02 重命名 / 复制批）：内核做事，面板只收结果。
+       * 失败返回中文原因（内核已给人话），由面板行内输入原样呈现，不吞成日志。
+       */
+      const renameWsProject = async (
+        projectId: string,
+        name: string,
+      ): Promise<{ ok: true; projectId: string } | { ok: false; reason: string }> => {
+        try {
+          const p = await workspaces.update(projectId, { name });
+          invalidateWs();
+          return { ok: true, projectId: p.id };
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          ctx.log.warn(`项目重命名失败（${projectId}）：${reason}`);
+          return { ok: false, reason };
+        }
+      };
+
+      const duplicateWsProject = async (
+        projectId: string,
+        name: string,
+      ): Promise<{ ok: true; projectId: string } | { ok: false; reason: string }> => {
+        try {
+          const p = await workspaces.duplicateProject(projectId, { name });
+          invalidateWs();
+          // 复制 = 新项目出现：沿用既有语义事件，关心"有新项目"的消费方零改动
+          emitProjectCreated(p.id);
+          return { ok: true, projectId: p.id };
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          ctx.log.warn(`项目复制失败（${projectId}）：${reason}`);
+          return { ok: false, reason };
+        }
+      };
+
       ctx.slots.register('ui.panel', {
         id: 'kojo-projects',
         title: '我的口上项目',
@@ -783,6 +819,8 @@ export function createEratwAdapterPlugin(): Plugin {
           attribution: (absDir) => wsAttrCache.get(absDir),
           ensureAttribution: ensureWsAttribution,
           createItem,
+          renameProject: renameWsProject,
+          duplicateProject: duplicateWsProject,
         }),
       });
 
