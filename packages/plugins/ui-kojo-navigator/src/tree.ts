@@ -244,59 +244,29 @@ export interface NavigatorBuildOptions {
 /* ------------------------------ 面语义排序 ------------------------------ */
 
 /**
- * 面的语义顺序（按游戏调用时机粗排，来自《口上机制深挖》的 CASE 路由表；
- * 未列出的面排在最后按字母序，'' 归「其它」）。
+ * 面排序 = **顺序由方言交来**（`FamilyIndexRule.faceOrder`，游戏知识只住 adapter）。
+ * 缺省（未交顺序）→ 退 `faceLabels` 的声明序（标签表天然自带分组顺序）；
+ * 两者都没交 → 全按字母序（fail-visible，不猜）。
+ * `''`（其它）与 `'declare'`（家族声明）是**语言级语义**、非游戏知识：
+ * `declare` 恒排在已列面之后。
  */
-const FACE_ORDER: readonly string[] = [
-  'FLAGSETTING',
-  'ENCOUNTER',
-  'CUSTOM_EVENT',
-  'EVENT',
-  'SPEVENT',
-  'DAILY_EVENT',
-  'CUSTOM_BUTTON_CONDITION',
-  'CAN_COM',
-  'COM_ABLE',
-  'CUSTOM_BUTTON',
-  'COM_NAME',
-  'COMMAND',
-  'COM',
-  'SUCCESS',
-  'SUCCESS_COM',
-  'SUCCESS_SCOM',
-  'MESSAGE',
-  'MESSAGE_COM',
-  'MESSAGE_SCOM',
-  'MESSAGE_COUNTER',
-  'MESSAGE_PALAMCNG',
-  'MESSAGE_MARKCNG',
-  'MESSAGE_ENDING',
-  'MESSAGE_CUSTOM_COM',
-  'MESSAGE_CUSTOM_SCOM',
-  'EXTRASOURCE',
-  'EXTRASOURCE_COM',
-  'EXTRASOURCE_SCOM',
-  'COLOR',
-  'IMAGE',
-  'IMAGE_EX',
-  'SF_CONTRACT',
-  'SF_CONTRACT_EVENT',
-  'IRAI',
-  'OPTION',
-  'OPTION_EXIST',
-  'VERSION_UPDATE',
-  'UPDATE',
-  'VERSION',
-  'CUSTOM_TALENT_SET',
-  'DIARY',
-  'BEFORETRAIN',
-  'declare',
-];
+const LANGUAGE_FACE_DECLARE = 'declare';
 
-/** 面排序键；未列入 → 大数（排最后） */
-function faceRank(face: string): number {
-  const i = FACE_ORDER.indexOf(face);
-  return i >= 0 ? i : FACE_ORDER.length;
+/** 取顺序表：显式 `faceOrder` 优先，否则用标签表声明序 */
+function faceOrderOf(familyIndex: FamilyIndexRule | null): readonly string[] {
+  if (!familyIndex) return [];
+  return familyIndex.faceOrder ?? Object.keys(familyIndex.faceLabels ?? {});
+}
+
+/** 面排序键；未列入 → 末尾（方言未交顺序时按字母序） */
+function faceRankOf(order: readonly string[]): (face: string) => number {
+  const n = order.length;
+  return (face) => {
+    const i = order.indexOf(face);
+    if (i >= 0) return i;
+    if (face === LANGUAGE_FACE_DECLARE) return n === 0 ? 1 : n;
+    return n === 0 ? 0 : n + 1;
+  };
 }
 
 /** slot 排序：前导数字按数值比较（30 > 2），否则字符串比较 */
@@ -401,6 +371,7 @@ export function buildNavigatorTree(
     }
   }
 
+  const faceRank = faceRankOf(faceOrderOf(familyIndex));
   const charas: CharaNode[] = [...acc.entries()]
     .sort((a, b) => a[0] - b[0])
     .map(([no, byFamily]) => {

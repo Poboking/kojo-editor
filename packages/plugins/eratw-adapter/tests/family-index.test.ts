@@ -161,6 +161,18 @@ describe('FamilyIndexRule 包装', () => {
     expect(labels.declare).toBeUndefined();
   });
 
+  it('faceOrder：按调用时机粗排；已列面与 faceLabels 一一对得上、declare 不入表', () => {
+    const rule = createEratwFamilyIndex();
+    const order = rule.faceOrder!;
+    expect(order).toHaveLength(42);
+    expect(Object.isFrozen(order)).toBe(true);
+    expect(order.slice(0, 6)).toEqual(['FLAGSETTING', 'ENCOUNTER', 'CUSTOM_EVENT', 'EVENT', 'SPEVENT', 'DAILY_EVENT']);
+    expect(order.indexOf('EVENT')).toBeLessThan(order.indexOf('MESSAGE_COM'));
+    expect(order).not.toContain('declare');
+    // 顺序表与标签表不许漂移：每个已列面都必须有标签
+    for (const face of order) expect(rule.faceLabels![face]).toBeTypeOf('string');
+  });
+
   it('instructionFaces：列出 8 个指令承载面（条件矩阵据此细分列）', () => {
     const faces = createEratwFamilyIndex().instructionFaces!;
     expect(faces).toHaveLength(8);

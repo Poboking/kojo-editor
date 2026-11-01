@@ -181,6 +181,56 @@ export const ERATW_FACE_LABELS: Readonly<Record<string, string>> = Object.freeze
   COMMAND: '指令',
 });
 
+/**
+ * 面的**展示顺序**（按游戏调用时机粗排，来自《口上机制深挖》的 CASE 路由表）。
+ * 未列出的面排在已列面之后、按字母序；`''`（其它）与 `'declare'`（家族声明）
+ * 是语言级语义、由消费方兜底，故不入本表。
+ */
+export const ERATW_FACE_ORDER: readonly string[] = Object.freeze([
+  'FLAGSETTING',
+  'ENCOUNTER',
+  'CUSTOM_EVENT',
+  'EVENT',
+  'SPEVENT',
+  'DAILY_EVENT',
+  'CUSTOM_BUTTON_CONDITION',
+  'CAN_COM',
+  'COM_ABLE',
+  'CUSTOM_BUTTON',
+  'COM_NAME',
+  'COMMAND',
+  'COM',
+  'SUCCESS',
+  'SUCCESS_COM',
+  'SUCCESS_SCOM',
+  'MESSAGE',
+  'MESSAGE_COM',
+  'MESSAGE_SCOM',
+  'MESSAGE_COUNTER',
+  'MESSAGE_PALAMCNG',
+  'MESSAGE_MARKCNG',
+  'MESSAGE_ENDING',
+  'MESSAGE_CUSTOM_COM',
+  'MESSAGE_CUSTOM_SCOM',
+  'EXTRASOURCE',
+  'EXTRASOURCE_COM',
+  'EXTRASOURCE_SCOM',
+  'COLOR',
+  'IMAGE',
+  'IMAGE_EX',
+  'SF_CONTRACT',
+  'SF_CONTRACT_EVENT',
+  'IRAI',
+  'OPTION',
+  'OPTION_EXIST',
+  'VERSION_UPDATE',
+  'UPDATE',
+  'VERSION',
+  'CUSTOM_TALENT_SET',
+  'DIARY',
+  'BEFORETRAIN',
+]);
+
 const PREFIXES: readonly string[] = ['M_KOJO', 'KOJO', 'DIARY', 'RUN_INTO'];
 
 const MESSAGECHECK_MARKER = '_MESSAGECHECK';
@@ -584,6 +634,7 @@ export function createEratwFamilyIndex(): FamilyIndexRule {
       return parseKojoFamily(fnName, filePath);
     },
     faceLabels: ERATW_FACE_LABELS,
+    faceOrder: ERATW_FACE_ORDER,
     instructionFaces: [
       'MESSAGE_COM',
       'MESSAGE_SCOM',

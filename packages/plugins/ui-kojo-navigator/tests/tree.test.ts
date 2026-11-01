@@ -110,7 +110,7 @@ describe('buildNavigatorTree', () => {
     expect(fns.map((f) => f.match!.slot)).toEqual(['2', '30']);
   });
 
-  it('面按语义排序：FLAGSETTING 早于 MESSAGE_COM 早于未列表面', () => {
+  it('未交顺序 ⇒ 面按字母序（fail-visible，不猜）', () => {
     const index = makeIndex({
       '/p/a.ERB': [
         'M_KOJO_ZZZ_CUSTOM_K1_1',
@@ -122,6 +122,44 @@ describe('buildNavigatorTree', () => {
     expect(tree.charas[0]!.families[0]!.faces.map((f) => f.face)).toEqual([
       'FLAGSETTING',
       'MESSAGE_COM',
+      'ZZZ_CUSTOM',
+    ]);
+  });
+
+  it('faceOrder（方言交来的顺序）优先于字母序', () => {
+    const index = makeIndex({
+      '/p/a.ERB': ['M_KOJO_FLAGSETTING_K1', 'M_KOJO_MESSAGE_COM_K1_1'],
+    });
+    const rule: FamilyIndexRule = { ...fakeFamilyIndex, faceOrder: ['MESSAGE_COM', 'FLAGSETTING'] };
+    const tree = buildNavigatorTree(index, rule, NO_CHARA);
+    expect(tree.charas[0]!.families[0]!.faces.map((f) => f.face)).toEqual(['MESSAGE_COM', 'FLAGSETTING']);
+  });
+
+  it('未交 faceOrder ⇒ 退 faceLabels 的声明序（不是字母序）', () => {
+    const index = makeIndex({
+      '/p/a.ERB': ['M_KOJO_ZZZ_CUSTOM_K1_1', 'M_KOJO_MESSAGE_COM_K1_1', 'M_KOJO_FLAGSETTING_K1'],
+    });
+    const rule: FamilyIndexRule = {
+      ...fakeFamilyIndex,
+      faceLabels: { ZZZ_CUSTOM: '未列面', MESSAGE_COM: '指令口上', FLAGSETTING: '开关初始化' },
+    };
+    const tree = buildNavigatorTree(index, rule, NO_CHARA);
+    expect(tree.charas[0]!.families[0]!.faces.map((f) => f.face)).toEqual([
+      'ZZZ_CUSTOM',
+      'MESSAGE_COM',
+      'FLAGSETTING',
+    ]);
+  });
+
+  it('declare 是语言级面：恒排在已列面之后（未列面更后）', () => {
+    const index = makeIndex({
+      '/p/a.ERB': ['M_KOJO_K1', 'M_KOJO_MESSAGE_COM_K1_1', 'M_KOJO_ZZZ_CUSTOM_K1_1'],
+    });
+    const rule: FamilyIndexRule = { ...fakeFamilyIndex, faceOrder: ['MESSAGE_COM'] };
+    const tree = buildNavigatorTree(index, rule, NO_CHARA);
+    expect(tree.charas[0]!.families[0]!.faces.map((f) => f.face)).toEqual([
+      'MESSAGE_COM',
+      'declare',
       'ZZZ_CUSTOM',
     ]);
   });

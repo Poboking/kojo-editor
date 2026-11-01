@@ -119,6 +119,18 @@ export interface FamilyIndexRule {
    */
   readonly faceLabels?: Readonly<Record<string, string>>;
   /**
+   * 面（`FamilyMatch.face`）→ **展示顺序键**（可选；**游戏知识，只住 adapter**）。
+   *
+   * 下标即排序权重：越小越靠前；未列入的面排在已列面之后、按字母序。
+   * `''`（其它）与 `'declare'`（家族声明）是语言级语义，由消费方兜底——
+   * `declare` 恒排在已列面之后，不入本表。
+   *
+   * **缺省 = 消费方退 `faceLabels` 的声明序**（标签表天然自带分组顺序），
+   * 标签表也没交 ⇒ 全按字母序（fail-visible，不猜）。
+   * 本字段只影响展示序，不参与任何判据。
+   */
+  readonly faceOrder?: readonly string[];
+  /**
    * 「指令承载面」清单（游戏知识；只住 adapter）。
    * 列出的 face，其 `FamilyMatch.slot` 首位数字 = 指令编号；消费方（条件矩阵）
    * 据此把该面细分为「每指令一列」并经指令表取名。缺省 = 不细分（整面成列）。
