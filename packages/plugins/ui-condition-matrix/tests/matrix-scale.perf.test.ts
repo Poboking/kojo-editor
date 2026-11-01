@@ -186,7 +186,8 @@ describe.skipIf(!process.env.KOJO_SMOKE_PROJECT)('条件矩阵 · 真实语料�
       const m = /^(\d+)/.exec(fn.match.slot);
       return m ? { key: `${fn.face}#${m[1]}`, instructionNo: Number(m[1]) } : { key: fn.face, instructionNo: null };
     };
-    const build = (): ConditionMatrix => buildMatrix(entry, depsOf, () => null, family.faceLabels, columnOf);
+    const build = (): ConditionMatrix =>
+      buildMatrix(entry, depsOf, () => null, family.faceLabels, columnOf, undefined, family.faceOrder);
     const matrix = build();
     expect(matrix.rows.length).toBeGreaterThan(10);
     expect(matrix.columns.length).toBeGreaterThan(5);

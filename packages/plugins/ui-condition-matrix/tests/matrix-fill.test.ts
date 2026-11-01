@@ -177,12 +177,15 @@ describe('工作区包匹配', () => {
 
 /* ------------------------------ 作用域矩阵 ------------------------------ */
 
+/** 测试夹具的面顺序（真源在方言包 `FamilyIndexRule.faceOrder`） */
+const TEST_FACE_ORDER = ['EVENT', 'DAILY_EVENT', 'MESSAGE_COM'] as const;
+
 function scopedMatrix(packKey: string): ConditionMatrix {
   const packEntry = filterEntryByPack(fullEntry, packKey, CHARA_DIR);
   return buildMatrix(packEntry, depsOf, labelOf, undefined, columnOf, {
     columnsFrom: fullEntry,
     rowsFrom: fullEntry,
-  });
+  }, TEST_FACE_ORDER);
 }
 
 describe('buildMatrix · 口上包作用域', () => {

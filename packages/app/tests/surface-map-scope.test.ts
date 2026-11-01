@@ -15,8 +15,7 @@ import { nativeOfSurface, surfaceMappingsOf, surfacesOfNative } from '@kojo/kojo
  *
  * | 处 | 那是什么 | 裁决 |
  * |---|---|---|
- * | `ui-kojo-navigator/src/tree.ts` | `FACE_ORDER`：43 枚**面 token 的语义排序** | 不收：展示顺序，不是名字映射 |
- * | `ui-condition-matrix/src/matrix-logic.ts` | 同一份 `FACE_ORDER`（跨插件不许 import ⇒ 自带一份） | 不收；但两份必须逐字相等（下面 ④） |
+ * | `ui-kojo-navigator/src/tree.ts` + `ui-condition-matrix/src/matrix-logic.ts` | `FACE_ORDER`：43 枚**面 token 的语义排序**（两份曾逐字相等） | 不收：展示顺序，不是名字映射；**已迁**方言包 `FamilyIndexRule.faceOrder`（LAU-FACE-ORDER，UI 零字面量，下面 ④） |
  * | `eraakumamaid-adapter/src/family-index.ts` | `ERAAKUMA_MAID_FACE_LABELS`：面 token → 中文标签 | 不收：游戏知识，已住方言包（正确归属） |
  * | `app/src/monaco/kojo-native-zone.ts` | 原生区分流闸（这一行属不属于 `.kojo` 的直通区） | 不收：语法位，表头注第一条就排除了 |
  * | `kojo-conformance/src/language.ts` | golden 的**期望落点**（产物该长什么样） | 不收：那是判据自身，读表＝自证 |
@@ -31,15 +30,17 @@ import { nativeOfSurface, surfaceMappingsOf, surfacesOfNative } from '@kojo/kojo
  * ① 表的 `kind` 值域**恰四格**（`DialectFactKind`）——有人加第五类 `face` 当场红；
  * ② 拿面 token 去查表，四格**一格都不认**（正向 / 反向都查不到）；
  * ③ `surface` 列不许出现纯 ASCII 大写蛇形 token（那是面 token / 引擎常量的形状，不是作者写的词）；
- * ④ 两份 `FACE_ORDER` 逐字相等（它们确实是第二份数据，今天没有合规的家可搬——见下）；
+ * ④ 两个 UI 插件**零面顺序字面量**（顺序真源只在方言包的 `FamilyIndexRule.faceOrder`，
+ *    `declare` 由消费方兜底）；
  * ⑤ 那五处源码**不读**表层表（不迁移这件事本身要被钉住，否则下次有人"顺手接一下"就悄悄改了归属）。
  *
- * ## 为什么 ④ 不索性搬成一份
+ * ## ④ 为什么是"零字面量"而不是"两份逐字相等"
  *
- * 跨插件 import 是 `audit:decoupling` 的 C 项硬禁；能当公共家的只有非插件包
- * （`kojo-vocab` / `kojo-core`），但那两份 FACE_ORDER 是**展示顺序**（谁排前面），
- * 不是语言词表——放进词表包等于把 UI 口径焊进语言面。于是本批只钉"两份必须同源"，
- * 搬家留给真需要第三份消费者的时候（那时才有理由为它开一个包）。
+ * 本批初版只钉"两份同源"（跨插件 import 是 `audit:decoupling` 的 C 项硬禁，而两份
+ * FACE_ORDER 是**展示顺序**、不是语言词表，放进 `kojo-vocab` 等于把 UI 口径焊进语言面）。
+ * LAU-FACE-ORDER 之后顺序改由方言包交来（`faceOrder`；缺省退 `faceLabels` 声明序），
+ * 两份字面量都删了 ⇒ 判据跟着改成"零字面量 + 必须真的读契约字段"——数据只剩
+ * `eratw-adapter` 一份（42 枚），`declare` 是语言级面、由消费方恒排已列面之后。
  */
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
@@ -57,17 +58,7 @@ function codeLines(rel: string): string {
     .join('\n');
 }
 
-/** 从源码里抠一枚 `const X: readonly string[] = [ ... ]` 的字面量清单 */
-function stringListOf(rel: string, anchor: string): string[] {
-  const src = read(rel);
-  const at = src.indexOf(anchor);
-  if (at < 0) throw new Error(`${rel} 里找不到 ${anchor}`);
-  const eq = src.indexOf('=', at);
-  const open = src.indexOf('[', eq);
-  const close = src.indexOf(']', open);
-  return [...src.slice(open + 1, close).matchAll(/'([^']+)'/g)].map((m) => m[1]!);
-}
-
+/** 曾各持一份面顺序字面量的两个 UI 插件（LAU-FACE-ORDER 之后都改读方言 `faceOrder`） */
 const FACE_ORDER_FILES = [
   'packages/plugins/ui-kojo-navigator/src/tree.ts',
   'packages/plugins/ui-condition-matrix/src/matrix-logic.ts',
@@ -115,13 +106,16 @@ describe('表层表的边界：面 token 不入表（LAU-SURFACE-WIRE 收口裁�
     expect(offenders).toEqual([]);
   });
 
-  it('④ 两份 `FACE_ORDER` 逐字相等（跨插件不许 import ⇒ 只许"两份同源"，不许各长各的）', () => {
-    const [navigator, matrix] = FACE_ORDER_FILES.map((f) => stringListOf(f, 'FACE_ORDER'));
-    expect(navigator!.length).toBeGreaterThan(0);
-    expect(navigator).toEqual(matrix);
-    // 43 枚是当日实读数（新增面 = 一次显式决定，不是顺手加一条）
-    expect(navigator!.length).toBe(43);
-    expect(new Set(navigator).size).toBe(navigator!.length);
+  it('④ 两个 UI 插件零面顺序字面量：顺序真源在方言包 `FamilyIndexRule.faceOrder`', () => {
+    // 两份 43 枚 `FACE_ORDER` 曾逐字相等（跨插件禁 import ⇒ 只许同源）。LAU-FACE-ORDER
+    // 之后都改读方言交来的顺序 ⇒ 数据只剩 eratw-adapter 一份（42 枚 + `declare` 消费方兜底）。
+    const orderLiteral = /\bFACE_ORDER\b/;
+    const offenders = FACE_ORDER_FILES.filter((rel) => orderLiteral.test(codeLines(rel)));
+    expect(offenders).toEqual([]);
+    // 不只是"删了字面量"——取序逻辑必须真的读契约字段
+    for (const rel of FACE_ORDER_FILES) {
+      expect(codeLines(rel), `${rel} 没读 faceOrder`).toMatch(/faceOrder/);
+    }
   });
 
   it('⑤ 四处"面"的家不读表层表：不迁移这件事本身被钉住（谁"顺手接一下"就红）', () => {

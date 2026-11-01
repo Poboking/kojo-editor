@@ -22,7 +22,6 @@ import type {
 import {
   DETAIL_MIN_H,
   rowHasVisibleGap,
-  FACE_ORDER,
   GRID_MIN_RESERVE,
   MATRIX_OVERSCAN,
   MATRIX_ROW_H,
@@ -131,7 +130,6 @@ describe('buildCharacterIndex', () => {
     const ci = buildCharacterIndex(index, fakeFamilyIndex);
     const e = ci.entries.get(1)!;
     expect(e.faces).toEqual(['MESSAGE_COM', 'declare']);
-    expect(FACE_ORDER[FACE_ORDER.length - 1]).toBe('declare');
   });
 
   it('跨文件同角色归并（面去重）', () => {
@@ -141,14 +139,37 @@ describe('buildCharacterIndex', () => {
     });
     const ci = buildCharacterIndex(index, fakeFamilyIndex);
     const e = ci.entries.get(1)!;
-    expect(e.faces).toEqual(['EVENT', 'COM']);
+    // 该规则不交面顺序 ⇒ 字母序（fail-visible，不猜）
+    expect(e.faces).toEqual(['COM', 'EVENT']);
     expect(e.functions).toHaveLength(3);
   });
 
-  it('未知面排在已知面之后、按字母序', () => {
+  it('未知面排在已列面之后、按字母序（方言交来 faceOrder）', () => {
     const index = makeIndex({ '/p/a.ERB': ['FAM_ZZZ_K1', 'FAM_AAA_K1', 'FAM_MESSAGE_COM_K1'] });
-    const ci = buildCharacterIndex(index, fakeFamilyIndex);
+    const rule: FamilyIndexRule = { ...fakeFamilyIndex, faceOrder: ['MESSAGE_COM'] };
+    const ci = buildCharacterIndex(index, rule);
     expect(ci.entries.get(1)!.faces).toEqual(['MESSAGE_COM', 'AAA', 'ZZZ']);
+  });
+
+  it('未交 faceOrder ⇒ 退 faceLabels 的声明序（不是字母序）', () => {
+    const index = makeIndex({ '/p/a.ERB': ['FAM_ZZZ_K1', 'FAM_MESSAGE_COM_K1', 'FAM_AAA_K1'] });
+    const rule: FamilyIndexRule = {
+      ...fakeFamilyIndex,
+      faceLabels: { ZZZ: '未列面', MESSAGE_COM: '指令口上', AAA: '甲' },
+    };
+    const ci = buildCharacterIndex(index, rule);
+    expect(ci.entries.get(1)!.faces).toEqual(['ZZZ', 'MESSAGE_COM', 'AAA']);
+  });
+
+  it('faceOrder 优先于 faceLabels 的声明序', () => {
+    const index = makeIndex({ '/p/a.ERB': ['FAM_ZZZ_K1', 'FAM_MESSAGE_COM_K1'] });
+    const rule: FamilyIndexRule = {
+      ...fakeFamilyIndex,
+      faceOrder: ['MESSAGE_COM', 'ZZZ'],
+      faceLabels: { ZZZ: '未列面', MESSAGE_COM: '指令口上' },
+    };
+    const ci = buildCharacterIndex(index, rule);
+    expect(ci.entries.get(1)!.faces).toEqual(['MESSAGE_COM', 'ZZZ']);
   });
 
   it('无家族规则：全部计为未归属、返回空索引', () => {

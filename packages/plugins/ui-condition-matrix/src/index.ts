@@ -62,6 +62,7 @@ import {
   depsFingerprint,
   DETAIL_MIN_H,
   faceLabel,
+  faceOrderOf,
   functionRangeAt,
   instructionNoOfSlot,
   planMatrixWindow,
@@ -1217,6 +1218,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   services.faceLabels(),
                   columnOf,
                   entry ? { columnsFrom: entry, rowsFrom: entry } : undefined,
+                  faceOrderOf(services.currentFamilyIndex()),
                 ),
               )
             : null
@@ -1233,6 +1235,7 @@ export function createUiConditionMatrixPlugin(): Plugin {
                   services.faceLabels(),
                   columnOf,
                   effectivePackKey === null ? undefined : { columnsFrom: entry, rowsFrom: entry },
+                  faceOrderOf(services.currentFamilyIndex()),
                 );
               })
             : null;

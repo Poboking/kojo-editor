@@ -8,7 +8,8 @@
  *
  * 归属规则：家族解析结果 `FamilyMatch.characterNo` 是唯一归属依据；无法归属的
  * 函数只计数不展开（与函数树导航同一口径）。所有聚合都是**单次全量遍历 + 分桶**，
- * 不解释任何游戏知识（面的语义排序与本插件自带的 `FACE_ORDER` 一份同口径）。
+ * 不解释任何游戏知识（面的语义排序由方言包的 `FamilyIndexRule.faceOrder` 交来，
+ * 本插件不持任何面 token 顺序表；缺省退 `faceLabels` 的声明序，两者都没交才退字母序）。
  */
 
 import type {
@@ -24,60 +25,27 @@ import { pathKey } from '@kojo/plugin-api';
 
 /* ------------------------------ 面语义排序 ------------------------------ */
 
-/**
- * 面的语义顺序（与函数树导航同口径；本插件不得跨插件 import，故自带一份）。
- * 未列出的面排在最后按字母序，'' 归「其它」，declare 单独成面。
- */
-export const FACE_ORDER: readonly string[] = [
-  'FLAGSETTING',
-  'ENCOUNTER',
-  'CUSTOM_EVENT',
-  'EVENT',
-  'SPEVENT',
-  'DAILY_EVENT',
-  'CUSTOM_BUTTON_CONDITION',
-  'CAN_COM',
-  'COM_ABLE',
-  'CUSTOM_BUTTON',
-  'COM_NAME',
-  'COMMAND',
-  'COM',
-  'SUCCESS',
-  'SUCCESS_COM',
-  'SUCCESS_SCOM',
-  'MESSAGE',
-  'MESSAGE_COM',
-  'MESSAGE_SCOM',
-  'MESSAGE_COUNTER',
-  'MESSAGE_PALAMCNG',
-  'MESSAGE_MARKCNG',
-  'MESSAGE_ENDING',
-  'MESSAGE_CUSTOM_COM',
-  'MESSAGE_CUSTOM_SCOM',
-  'EXTRASOURCE',
-  'EXTRASOURCE_COM',
-  'EXTRASOURCE_SCOM',
-  'COLOR',
-  'IMAGE',
-  'IMAGE_EX',
-  'SF_CONTRACT',
-  'SF_CONTRACT_EVENT',
-  'IRAI',
-  'OPTION',
-  'OPTION_EXIST',
-  'VERSION_UPDATE',
-  'UPDATE',
-  'VERSION',
-  'CUSTOM_TALENT_SET',
-  'DIARY',
-  'BEFORETRAIN',
-  'declare',
-];
+/** 语言级面（家族声明）；由消费方恒排已列面之后，不入方言顺序表 */
+const LANGUAGE_FACE_DECLARE = 'declare';
 
-/** 面排序键；未列入 → 大数（排最后） */
-function faceRank(face: string): number {
-  const i = FACE_ORDER.indexOf(face);
-  return i >= 0 ? i : FACE_ORDER.length;
+/**
+ * 方言交来的面顺序（`faceOrder` 优先，缺省退 `faceLabels` 的声明序）。
+ * 本插件不得跨插件 import，故与函数树导航各自持一份取序逻辑（**面 token 数据只住方言包**）。
+ */
+export function faceOrderOf(familyIndex: FamilyIndexRule | null): readonly string[] {
+  if (!familyIndex) return [];
+  return familyIndex.faceOrder ?? Object.keys(familyIndex.faceLabels ?? {});
+}
+
+/** 面排序键；未列入 → 大数（排最后），`declare` 恒在已列面之后 */
+function faceRankOf(order: readonly string[]): (face: string) => number {
+  const n = order.length;
+  return (face) => {
+    const i = order.indexOf(face);
+    if (i >= 0) return i;
+    if (face === LANGUAGE_FACE_DECLARE) return n === 0 ? 1 : n;
+    return n === 0 ? 0 : n + 1;
+  };
 }
 
 /* ------------------------------ 角色聚合 ------------------------------ */
@@ -95,7 +63,7 @@ export interface FaceFunction {
 /** 单个角色的聚合结果（面清单 + 全部归属函数） */
 export interface CharacterEntry {
   readonly no: number;
-  /** 该角色出现过的面（已按 FACE_ORDER 排序，未知面在后按字母序） */
+  /** 该角色出现过的面（已按方言交来的顺序排序，未知面在后按字母序） */
   readonly faces: string[];
   readonly functions: FaceFunction[];
 }
@@ -228,6 +196,7 @@ export function buildCharacterIndex(index: ErbIndex, familyIndex: FamilyIndexRul
     }
   }
 
+  const faceRank = faceRankOf(faceOrderOf(familyIndex));
   const entries = new Map<number, CharacterEntry>();
   for (const [no, bucket] of buckets) {
     // 拼一份**新数组**：缓存里的那份是共享只读事实，绝不能把它的身份交给消费方去改
@@ -505,7 +474,7 @@ function cellFunctionOf(fn: FaceFunction, comparisons: string[]): MatrixCellFunc
  *   都成列），经 `columnOf` 解析成列描述；`columnOf` 缺省 = 每个面一列；
  * - 行集合来自 `rowEntry.functions`（缺省 = `entry`）。按口上包查看时，行/列都传
  *   全角色、只有 `entry` 是单包——于是「别的包写过、这个包没写」也会成为可见缺口；
- * - 面顺序沿用 `FACE_ORDER`/`faceRank`，组内子列按 `instructionNo` 升序；
+ * - 面顺序沿用方言交来的 `faceOrder`（缺省 = 列来源 `entry.faces` 的现序），组内子列按 `instructionNo` 升序；
  * - 行 = 按 `dep.key` 聚合的状态变量；`cells[列键]` 记一次响应（count+1，
  *   并压入该函数的贡献条目）；
  * - 行序：当前作用域 `totalCount` 降序，同数按 `key` 升序（确定性）；
@@ -521,11 +490,16 @@ export function buildMatrix(
   faceLabels?: Readonly<Record<string, string>>,
   columnOf?: (fn: FaceFunction) => ColumnDesc,
   universe?: MatrixUniverse,
+  /** 方言交来的面顺序（缺省 = 列来源 `entry.faces` 的现序）；见 `faceOrderOf` */
+  faceOrder?: readonly string[],
 ): ConditionMatrix {
   const resolveColumn =
     columnOf ?? ((fn: FaceFunction): ColumnDesc => ({ key: fn.face, instructionNo: null }));
   const columnEntry = universe?.columnsFrom ?? entry;
   const rowEntry = universe?.rowsFrom ?? entry;
+  // 面顺序的真源是方言交来的 `faceOrder`；缺省退列来源 `entry.faces` 的现序
+  // （`buildCharacterIndex` 交出的那份已按同一规则排好）
+  const faceRankIn = faceRankOf(faceOrder ?? columnEntry.faces);
 
   // ---- 列聚合（列集合的真源 = columnEntry）----
   // 同时缓存每个函数的列键——第二轮聚合单元格时直接取用，`columnOf` 只解析一次。
@@ -692,7 +666,7 @@ export function buildMatrix(
       label: faceLabel(face, faceLabels),
       columns: [...cols.values()].sort(compareColumn),
     }))
-    .sort((a, b) => faceRank(a.face) - faceRank(b.face) || a.face.localeCompare(b.face));
+    .sort((a, b) => faceRankIn(a.face) - faceRankIn(b.face) || a.face.localeCompare(b.face));
   const columnCount = groupsAcc.reduce((n, g) => n + g.columns.length, 0);
 
   const rows: MatrixRow[] = [...acc.values()].map((r) => ({

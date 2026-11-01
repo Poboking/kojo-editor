@@ -604,9 +604,9 @@
 
     | 处 | 那是什么 | 为什么不是表层表的活 |
     |---|---|---|
-    | `ui-kojo-navigator/src/tree.ts` + `ui-condition-matrix/src/matrix-logic.ts` | `FACE_ORDER`：43 枚面 token 的**语义排序** | 展示顺序，不是"作者名 ↔ 原生写法"；两份**逐字相等**（43 枚实核），跨插件禁 import ⇒ 只许"两份同源" |
+    | `ui-kojo-navigator/src/tree.ts` + `ui-condition-matrix/src/matrix-logic.ts` | `FACE_ORDER`：43 枚面 token 的**语义排序** | 展示顺序，不是"作者名 ↔ 原生写法"；**LAU-FACE-ORDER 之后两份字面量都删**，顺序真源＝方言包 `FamilyIndexRule.faceOrder`（42 枚，`declare` 由消费方兜底） |
     | `eraakumamaid-adapter/src/family-index.ts` | `ERAAKUMA_MAID_FACE_LABELS`：面 token → 中文标签 | 游戏知识，已住方言包 = 正确归属；搬进 core 才是把游戏名词泄出适配器 |
     | `app/src/monaco/kojo-native-zone.ts` | 原生区分流闸（这一行属不属于 `.kojo` 直通区） | 语法位，表头注第一条「`#`/`@` 关键字不收」已经排除 |
     | `kojo-conformance/src/language.ts` | golden 的期望落点（产物该长什么样） | 那是判据自身：读表＝拿表证明表 |
 
-    面 token 的真实身份是**函数名内部的时机段**（`M_KOJO_K1_MESSAGE_COM_K1_1` 里的 `MESSAGE_COM`），既不是 `surface` 也不是 `native`，真源在方言包的 `FamilyIndexRule` / 家族事实里。判据写成五条（`kind` 值域恰四格 / 面 token 四格都查不到 / `surface` 列的 ASCII 大写只许恒等落点 / 两份 `FACE_ORDER` 逐字相等 / 五处源码不读表层表），两条变异实测都真红（删 `matrix-logic.ts` 一枚 token ⇒ ④ 红；给 `kojo-native-zone.ts` 加一行 `import … surface-map` ⇒ ⑤ 红）。**本条自己踩的坑**：③ 第一版写成"`surface` 不许是纯 ASCII 大写蛇形 token"，当场被 5 条**恒等落点**打红（`TIME`→`TIME`、`MONEY`、`RESULTS`、`RESULT`、`ARG`——`domainSymbols` 的外部变量，作者写的与盘上写的是同一个词，悬停那边的纪律是"恒等落点不算信息"）。改判成"ASCII 大写**只许**恒等"之后既保住恒等落点，又挡住"把面 token 填进 surface"（面 token 的 native 是 `族:编号` / 引擎常量，绝不会跟自己相等）。⇒ 写"某列不许出现某形状"的闸之前，先把**合法的那一类**从数据里数出来。
+    面 token 的真实身份是**函数名内部的时机段**（`M_KOJO_K1_MESSAGE_COM_K1_1` 里的 `MESSAGE_COM`），既不是 `surface` 也不是 `native`，真源在方言包的 `FamilyIndexRule` / 家族事实里。判据写成五条（`kind` 值域恰四格 / 面 token 四格都查不到 / `surface` 列的 ASCII 大写只许恒等落点 / 两个 UI 插件零面顺序字面量且必须真读 `faceOrder` / 五处源码不读表层表），两条变异实测都真红（给 `matrix-logic.ts` 加回一行 `FACE_ORDER` 字面量 ⇒ ④ 红；给 `kojo-native-zone.ts` 加一行 `import … surface-map` ⇒ ⑤ 红）。**本条自己踩的坑**：③ 第一版写成"`surface` 不许是纯 ASCII 大写蛇形 token"，当场被 5 条**恒等落点**打红（`TIME`→`TIME`、`MONEY`、`RESULTS`、`RESULT`、`ARG`——`domainSymbols` 的外部变量，作者写的与盘上写的是同一个词，悬停那边的纪律是"恒等落点不算信息"）。改判成"ASCII 大写**只许**恒等"之后既保住恒等落点，又挡住"把面 token 填进 surface"（面 token 的 native 是 `族:编号` / 引擎常量，绝不会跟自己相等）。⇒ 写"某列不许出现某形状"的闸之前，先把**合法的那一类**从数据里数出来。
