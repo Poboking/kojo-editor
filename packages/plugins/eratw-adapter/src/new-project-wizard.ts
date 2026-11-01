@@ -77,7 +77,7 @@ const eratwScaffold = (draft: KojoScaffoldDraft): ScaffoldFileSet =>
     // 表单已按 ERATW_EXTRA_FIELDS 收集；缺省回落 1（与脚手架自身的兜底一致）
     scriptNo: draft.extra.scriptNo ?? 1,
     license: draft.license,
-    // 未声明语言档 ⇒ 草稿没有这个键 ⇒ 缺省糖档（与改前逐字相同的行为）
+    // 未声明语言档 ⇒ 草稿没有这个键 ⇒ 缺省 Kojo 2.0 档
     langDoc: draft.langDoc,
   });
 

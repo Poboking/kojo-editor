@@ -408,7 +408,7 @@ export function scaffoldPreviewLine(args: {
 /**
  * 组装递给 `deps.scaffold` 的草稿（纯函数）。
  *
- * 语言档那一项**由声明决定出不出现这个键**（`draftLangDoc`），缺省档 = 糖；
+ * 语言档那一项**由声明决定出不出现这个键**（`draftLangDoc`），缺省档 = Kojo 2.0；
  * 其余字段与历史逐字一致。
  */
 export function composeScaffoldDraft(

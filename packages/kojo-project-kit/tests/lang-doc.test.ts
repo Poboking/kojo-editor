@@ -1,9 +1,9 @@
 /**
- * 语言档（起手写法）的共享层判据（NEW-ERB 2026-10-20）。
+ * 语言档（起手写法）的共享层判据（NEW-ERB 2026-10-20；P0-5 2026-11-02）。
  *
  * 两件事分开守：
- * ① **行为面**——LAU-3b-FLIP 后默认档 = 原生（糖档随 kojo1 一起封存）、草稿里的键
- *    "没声明就不出现"、落点预览那句随档位现算；
+ * ① **行为面**——P0-5 后默认档 = Kojo 2.0（糖档随 kojo1 一起封存、原生档作为老路径留着）、
+ *    草稿里的键"没声明就不出现"、落点预览那句随档位现算；
  * ② **边界本身**——扩展名不许在任何向导/供数文件里手抄（手法照 `app/tests/kojo-extension-single-source.test.ts`：
  *   连注释行一起查、按行 + 处数钉死，多一处即红）。
  */
@@ -44,14 +44,15 @@ const form = {
 };
 
 describe('① 档位与扩展名：只由契约单源派生', () => {
-  it('两档、默认原生、取值清单就是这两档（糖档随 kojo1 封存）', () => {
-    expect(KOJO_LANG_DOC_VALUES).toEqual(['native', 'sugar']);
-    expect(DEFAULT_KOJO_LANG_DOC).toBe('native');
+  it('三档、默认 Kojo 2.0、取值清单就是这三档（糖档随 kojo1 封存）', () => {
+    expect(KOJO_LANG_DOC_VALUES).toEqual(['kojo2', 'native', 'sugar']);
+    expect(DEFAULT_KOJO_LANG_DOC).toBe('kojo2');
     expect(KOJO_LANG_DOC_CHOICES.map((c) => c.value)).toEqual([...KOJO_LANG_DOC_VALUES]);
     expect(KOJO_LANG_DOC_CHOICES[0]!.value).toBe(DEFAULT_KOJO_LANG_DOC);
   });
 
-  it('扩展名取自契约两份清单（糖 = 封存层源单源；原生 = 正文方言第一项的大写形态）', () => {
+  it('扩展名取自契约三份清单（2.0 = 主场单源；糖 = 封存层源；原生 = 正文方言第一项的大写形态）', () => {
+    expect(kojoLangDocExtension('kojo2')).toBe(KOJO_SOURCE_EXTENSION);
     expect(kojoLangDocExtension('sugar')).toBe(KOJO_LEGACY_SOURCE_EXTENSION);
     // `.kojo` 已归 2.0：糖档起手模板是 kojo1 写法，只能落封存档。
     expect(kojoLangDocExtension('sugar')).not.toBe(KOJO_SOURCE_EXTENSION);
@@ -63,13 +64,13 @@ describe('① 档位与扩展名：只由契约单源派生', () => {
 
   it('文案里出现的扩展名 == 单源派生物（作者看到的与盘上落的一致）', () => {
     for (const c of KOJO_LANG_DOC_CHOICES) {
-      const sugar = kojoLangDocExtension('sugar');
-      const native = kojoLangDocExtension('native');
       expect(c.label).toContain(kojoLangDocExtension(c.value));
-      expect(c.label + c.hint).toContain(sugar);
-      expect(c.label + c.hint).toContain(native);
       expect(c.hint.length).toBeGreaterThan(20);
     }
+    const sugar = kojoLangDocChoice('sugar');
+    expect(sugar.hint).toContain(kojoLangDocExtension('native'));
+    expect(kojoLangDocChoice('native').label).toContain(kojoLangDocExtension('native'));
+    expect(kojoLangDocChoice('kojo2').hint).toContain(kojoLangDocExtension('kojo2'));
   });
 
   it('糖档那句人话如实写明封存（去黑话，开发者注释翻成作者可见）', () => {
@@ -86,7 +87,7 @@ describe('① 档位与扩展名：只由契约单源派生', () => {
     expect(normalizeKojoLangDoc(null)).toBe(DEFAULT_KOJO_LANG_DOC);
     expect(normalizeKojoLangDoc('sao' as never)).toBe(DEFAULT_KOJO_LANG_DOC);
     expect(kojoLangDocChoice('bogus' as never).value).toBe(DEFAULT_KOJO_LANG_DOC);
-    expect(kojoLangDocPreviewParenthesis(undefined)).toBe(kojoLangDocPreviewParenthesis('native'));
+    expect(kojoLangDocPreviewParenthesis(undefined)).toBe(kojoLangDocPreviewParenthesis('kojo2'));
   });
 });
 
@@ -142,14 +143,15 @@ describe('② 声明通道：没有声明就没有这一格', () => {
   });
 });
 
-describe('③ 落点预览那句：随档位现算（缺省 = 原生，糖档写明封存）', () => {
+describe('③ 落点预览那句：随档位现算（缺省 = Kojo 2.0，糖档写明封存）', () => {
+  const KOJO2_PAREN = `（${kojoLangDocExtension('kojo2')}，Kojo 2.0 写法，带一份能解析的起手正文）`;
   const NATIVE_PAREN = `（${kojoLangDocExtension('native')}，只写原生语法、不经转译）`;
   const SUGAR_PAREN = `（${kojoLangDocExtension('sugar')}，kojo1 封存写法，可写糖也可写原生 ERB）`;
 
-  it('缺省 = 原生档那句；糖档由同一骨架换括注', () => {
+  it('缺省 = Kojo 2.0 档那句；糖档由同一骨架换括注', () => {
     const args = { fileCount: 9, coreFaceCount: 8, licenseProduces: true, previewNote: '不含四件套，也不含活函数' };
     expect(scaffoldPreviewLine(args)).toBe(
-      `将生成 9 个文件：中文 README + 8 个核心面空壳${NATIVE_PAREN} + LICENSE；不含四件套，也不含活函数`,
+      `将生成 9 个文件：中文 README + 8 个核心面空壳${KOJO2_PAREN} + LICENSE；不含四件套，也不含活函数`,
     );
     expect(scaffoldPreviewLine({ ...args, langDoc: 'sugar' })).toBe(
       `将生成 9 个文件：中文 README + 8 个核心面空壳${SUGAR_PAREN} + LICENSE；不含四件套，也不含活函数`,
@@ -158,7 +160,7 @@ describe('③ 落点预览那句：随档位现算（缺省 = 原生，糖档写
 
   it('无 LICENSE / 无补充说明那两段拼接形态照旧', () => {
     expect(scaffoldPreviewLine({ fileCount: 9, coreFaceCount: 8, licenseProduces: false })).toBe(
-      `将生成 9 个文件：中文 README + 8 个核心面空壳${NATIVE_PAREN}`,
+      `将生成 9 个文件：中文 README + 8 个核心面空壳${KOJO2_PAREN}`,
     );
   });
 
@@ -198,13 +200,16 @@ describe('④ 单源守卫：向导与档位文件里一个扩展名字面量都
 
   it('糖档扩展名在本文件里的唯一写法是"取契约常量"（不许退回字面量）', () => {
     const lang = read('packages/kojo-project-kit/src/lang-doc.ts').join('\n');
-    expect(lang).toMatch(/export const DEFAULT_KOJO_LANG_DOC: KojoLangDoc = 'native';/);
+    expect(lang).toMatch(/export const DEFAULT_KOJO_LANG_DOC: KojoLangDoc = 'kojo2';/);
+    expect(lang).toMatch(/if \(doc === 'kojo2'\) return KOJO_SOURCE_EXTENSION;/);
     expect(lang).toMatch(/if \(doc === 'sugar'\) return KOJO_LEGACY_SOURCE_EXTENSION;/);
     expect(lang).toMatch(/const body = ERB_BODY_EXTENSIONS\[0\];/);
     expect(lang).toMatch(/return body\.toUpperCase\(\);/);
-    expect(lang).toMatch(
-      /import \{ ERB_BODY_EXTENSIONS, KOJO_LEGACY_SOURCE_EXTENSION \} from '@kojo\/plugin-api';/,
-    );
+    expect(lang).toMatch(/from '@kojo\/plugin-api';/);
+    const apiImport = lang.slice(lang.indexOf('import {'), lang.indexOf("} from '@kojo/plugin-api';"));
+    expect(apiImport).toContain('KOJO_SOURCE_EXTENSION');
+    expect(apiImport).toContain('KOJO_LEGACY_SOURCE_EXTENSION');
+    expect(apiImport).toContain('ERB_BODY_EXTENSIONS');
   });
 
   it('adapter 侧那枚扩展名常量也指回契约（FACE_STUB_EXT 不再是自家的字符串字面量）', () => {
@@ -212,7 +217,9 @@ describe('④ 单源守卫：向导与档位文件里一个扩展名字面量都
     const line = sc.find((l) => /^export const FACE_STUB_EXT = /.test(l));
     expect(line, 'FACE_STUB_EXT 的定义行').toBeDefined();
     expect(line).not.toMatch(/['"`]\.kojo['"`]/);
-    expect(sc.join('\n')).toMatch(/import \{ kojoLangDocExtension, type KojoLangDoc \} from '@kojo\/kojo-project-kit';/);
+    expect(sc.join('\n')).toMatch(
+      /import \{ kojoLangDocExtension, normalizeKojoLangDoc, type KojoLangDoc \} from '@kojo\/kojo-project-kit';/,
+    );
   });
 
   it('反向对照：判据确实住在契约层（不是"哪里都不许有"）', () => {

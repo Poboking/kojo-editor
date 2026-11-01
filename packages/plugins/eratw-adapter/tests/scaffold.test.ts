@@ -56,17 +56,16 @@ describe('脚手架产物', () => {
   it('README + 8 核心面空壳；默认不含 LICENSE', () => {
     const r = scaffoldKojoProject(base);
     expect(r.dirName).toBe('东方口上合集-博丽 灵梦 v1.0');
-    // LAU-3b-FLIP：缺省档已翻原生（封存 kojo1 必须显式选），扩展名取本档单源
+    // P0-5：缺省档 = Kojo 2.0（老档必须显式选），扩展名取本档单源
     expect(Object.keys(r.files).sort()).toEqual(
       ['README.md', ...CORE_FACES.map((f) => `${f.stem}${scaffoldStubExt(undefined)}`)].sort(),
     );
-    expect(scaffoldStubExt(undefined)).toBe(scaffoldStubExt('native'));
+    expect(scaffoldStubExt(undefined)).toBe(scaffoldStubExt('kojo2'));
   });
 
   /**
-   * 用户反馈 1：「新建项目后的文件默认都是 .kojo，这样既能写语法糖也能写原始 ERB」。
-   * `.kojo` 是超集，`.ERB` 只能写原生——脚手架不该替作者先收窄表达。
-   * 这条断言同时守住另一半：**工作区里不该出现 .ERB**，否则同一份内容两个权威源。
+   * 封存糖档 `.kojo1` 是超集（语法糖与原始 ERB 可混排），`.ERB` 只能写原生。
+   * 这条断言同时守住另一半：**糖档工作区里不该出现 .ERB**，否则同一份内容两个权威源。
    */
   it('显式糖档：核心面空壳一律封存 .kojo1，产物里没有任何 .ERB（工作区唯一源）', () => {
     const r = scaffoldKojoProject({ ...base, license: 'template', langDoc: 'sugar' });
@@ -93,9 +92,9 @@ describe('脚手架产物', () => {
     ]);
   });
 
-  it('空壳内容纯注释：无活函数（@ 开头行）、无空行以外的非注释行', () => {
-    const r = scaffoldKojoProject(base);
-    const ext = scaffoldStubExt(undefined);
+  it('糖档空壳内容纯注释：无活函数（@ 开头行）、无空行以外的非注释行', () => {
+    const r = scaffoldKojoProject({ ...base, langDoc: 'sugar' });
+    const ext = scaffoldStubExt('sugar');
     for (const face of CORE_FACES) {
       const text = r.files[`${face.stem}${ext}`]!;
       const lines = text.split('\n');
@@ -104,6 +103,22 @@ describe('脚手架产物', () => {
         expect(line.startsWith(';'), `${face.stem}${ext} 出现非注释行：${line}`).toBe(true);
       }
       expect(text).not.toContain('\n@');
+    }
+  });
+
+  it('Kojo 2.0 档：只有首面带真实起手正文，其余 7 面是 // 注释', () => {
+    const r = scaffoldKojoProject(base);
+    const ext = scaffoldStubExt(undefined);
+    const starter = r.files[`${CORE_FACES[0]!.stem}${ext}`]!;
+    expect(starter).toContain('# 机 初见');
+    expect(starter).toContain('> 在这里写下这个事件的第一句旁白。');
+    for (const face of CORE_FACES.slice(1)) {
+      const text = r.files[`${face.stem}${ext}`]!;
+      expect(text).not.toMatch(/^# 机/m);
+      for (const line of text.split('\n')) {
+        if (line.trim() === '') continue;
+        expect(line.startsWith('//'), `${face.stem}${ext} 出现非注释行：${line}`).toBe(true);
+      }
     }
   });
 

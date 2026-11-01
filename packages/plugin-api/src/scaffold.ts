@@ -20,6 +20,9 @@
  *
  * 活函数由作者写，工具不替作者做决定。`buildScaffoldFaceStub` 只产出 `;` 注释行，
  * 作者在注释之后开始创作。两个适配器都受这条约束（各自测试钉住"无非注释行"）。
+ * Kojo 2.0 档（P0-5，2026-11-02）的 `buildScaffoldKojo2Stub` 是**唯一例外**：adapter
+ * 显式给 `starter` 时，那枚文件带一份作者可继续写的 2.0 正文（`# 机` + 旁白）；
+ * 这是"起手骨架"而不是替作者写完整口上，其余文件仍只有 `//` 注释。
  */
 
 import type { KojoFaceTable } from './game';
@@ -188,6 +191,59 @@ export function buildScaffoldFaceStub(spec: ScaffoldStubSpec, stubExt: string): 
   }
   lines.push(';');
   for (const note of spec.tailNotes ?? DEFAULT_TAIL_NOTES) lines.push(`; ${note}`);
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * 单面 Kojo 2.0 起手正文（游戏事实由 adapter 渲染后注入）。
+ *
+ * `machine` 是 `# 机` 后面那一段（事件名 + 可选参数）；`body` 是至少一行能打印的
+ * 2.0 正文（旁白/台词/条件都行，按 2.0 行法逐行给）。共享层不认任何具体事件名。
+ */
+export interface ScaffoldKojo2Starter {
+  readonly machine: string;
+  readonly body: readonly string[];
+}
+
+/** Kojo 2.0 单面空壳的渲染输入（`starter` 为空 ⇒ 只有注释，不生成正文） */
+export interface ScaffoldKojo2StubSpec {
+  readonly face: ScaffoldFaceSpec;
+  readonly identity: ScaffoldIdentity;
+  /** 元信息行第一段的各段内容（与 {@link ScaffoldStubSpec.metaLead} 同一口径） */
+  readonly metaLead: readonly string[];
+  /** 注释区的补充说明（如 2.0 的锚点口诀）；`undefined` = 不输出 */
+  readonly notes?: readonly string[];
+  /** 有 ⇒ 本文件带一份可解析的 2.0 起手正文；`null`/`undefined` ⇒ 本文件先留空 */
+  readonly starter?: ScaffoldKojo2Starter | null;
+}
+
+/**
+ * Kojo 2.0 单面空壳（`//` 注释 + 可选的起手正文）。
+ *
+ * 与 {@link buildScaffoldFaceStub} 的结构对齐（标题 → 元信息 → 面说明 → 尾注），
+ * 但**不输出**任何老档的函数形态 / 糖写法案例：那些是 2.0 之外的东西。
+ * 注释之后空一行再写 `# 机` 与正文，作者从注释往下读就是一份能跑的最小文档。
+ */
+export function buildScaffoldKojo2Stub(spec: ScaffoldKojo2StubSpec): string {
+  const { face, identity } = spec;
+  const lines: string[] = [];
+  const lead = spec.metaLead.filter((s) => s.length > 0);
+  lines.push(`// 《${identity.workName.trim()}》· ${identity.charaName.trim()}（K${identity.charaNo}）— ${face.stem}`);
+  const metaParts = [...lead, `版本 ${identity.version.trim()}`, `作者：${identity.authorName.trim()}`];
+  lines.push(`// ${metaParts.join(' · ')}`);
+  lines.push('//');
+  lines.push(`// 【面说明】${face.blurb}`);
+  for (const note of spec.notes ?? []) lines.push(`// ${note}`);
+  lines.push('//');
+  const starter = spec.starter;
+  if (starter !== undefined && starter !== null) {
+    lines.push('// 【2.0 起手】下面几行可直接继续写：换事件就改 `# 机` 那一行。');
+    lines.push('');
+    lines.push(`# 机 ${starter.machine}`);
+    for (const line of starter.body) lines.push(line);
+  } else {
+    lines.push('// 【2.0 起手】本文件先留空：写正文前先补一行 `# 机`（挂到哪个游戏事件上），再写台词或旁白。');
+  }
   return `${lines.join('\n')}\n`;
 }
 

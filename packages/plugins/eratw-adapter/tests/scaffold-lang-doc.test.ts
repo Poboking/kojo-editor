@@ -1,18 +1,20 @@
 /**
- * 语言档的 eraTW 侧产物判据（NEW-ERB 2026-10-20）。
+ * 语言档的 eraTW 侧产物判据（NEW-ERB 2026-10-20；P0-5 2026-11-02）。
  *
- * 三条硬账，一条都不许是"改前改后都过"的空测试：
- * ① **默认档逐字节不变**——与**改前金样**（`tests/fixtures/default-sugar/`，见下方出处注）
- *    逐文件比字节；抬默认档动任何一个字节都红；
+ * 硬账，一条都不许是"改前改后都过"的空测试：
+ * ① **老档逐字节不变**——糖档与**改前金样**（`tests/fixtures/default-sugar/`，见下方出处注）
+ *    逐文件比字节；老档任何一个字节被抬动都红；
  * ② **原生档不含糖记号**——判据用的是 kojo-sugar 的**真实词表** `lookupKeyword`
  *    （不是本文件自己数的关键字），糖档那几个带案例的面必须**有**命中（否则 ② 是空判据）；
  * ③ **原生档真的走通下游**——`erb-parser` 的**真实索引函数**扫得到它，
  *    制品计划 `planArtifacts` 对它**一次编译器都不叫**、字节原样携带。
+ * ④ **Kojo 2.0 起手骨架是真的 2.0**——缺省档产 `.kojo`，首面正文能被 core 的
+ *    `parseSource` 解析、被 eraTW 真 adapter + backend 编成 ERB（不是"看起来像 2.0"）。
  *
- * 第④、⑤组是另两笔取证，同样一条都不许空转：
- * ④ 语言档声明真的挂在 eraTW 那枚供数函数上；
- * ⑤ **卡口取证**（收口批 2026-10-20）：`lang-doc.ts` 那句「起手文件直接就是游戏认得的
- *    原生扩展名：不经转译，导出或部署时原样带走」是可证伪的事实主张 ⇒ ⑤ 用**内核真 io**
+ * 第⑤、⑥组是另两笔取证，同样一条都不许空转：
+ * ⑤ 语言档声明真的挂在 eraTW 那枚供数函数上；
+ * ⑥ **卡口取证**（收口批 2026-10-20）：`lang-doc.ts` 那句「起手文件直接就是游戏认得的
+ *    原生扩展名：不经转译，导出或部署时原样带走」是可证伪的事实主张 ⇒ ⑥ 用**内核真 io**
  *    把原生档起手包落到工作区盘上，再跑**真部署链**（`deployPackage`）与**真导出链**
  *    （`buildPackageZip` → ZIP 容器解回），要求 9 份逐字节带走、编译器一次都不叫。
  *    静默跳过、少带一份、被转译，任一种都红。
@@ -27,7 +29,16 @@ import * as os from 'node:os';
 import * as nodePath from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ErbIndex, ErbParserService, EventBus, FileIO, PluginContext, ScaffoldFileSet, SugarCompiledBytes, Unsubscribe } from '@kojo/plugin-api';
-import { ERB_BODY_EXTENSIONS, inflateZipEntry, isErbBodyPath, isErbDialectPath, KOJO_LEGACY_SOURCE_EXTENSION, readZipContainer } from '@kojo/plugin-api';
+import {
+  ERB_BODY_EXTENSIONS,
+  inflateZipEntry,
+  isErbBodyPath,
+  isErbDialectPath,
+  KOJO_LEGACY_SOURCE_EXTENSION,
+  KOJO_SOURCE_EXTENSION,
+  readZipContainer,
+} from '@kojo/plugin-api';
+import { compileKojoSource, parseSource } from '@kojo/kojo-core';
 // 真实链路层：借用内核 io + Node 桥做端到端落盘（与 eratw-adapter/tests/deploy.test.ts 同一先例）
 import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
@@ -45,6 +56,7 @@ import {
 } from '@kojo/kojo-project-kit';
 import { planArtifacts } from '../../../kojo-project-kit/src/artifact';
 import { ERATW_SCAFFOLD_DEPS } from '../src/new-project-wizard';
+import { ERATW_GAME_ADAPTER, createEratwEmitBackend } from '../src/kojo2/index';
 import { deployPackage } from '../src/deploy';
 import {
   CORE_FACES,
@@ -133,11 +145,11 @@ const DEFAULT_KEYS = [
 const goldenBytes = (rel: string): Uint8Array => new Uint8Array(readFileSync(nodePath.join(GOLDEN_DIR, rel)));
 const bytesOf = (text: string): Uint8Array => new TextEncoder().encode(text);
 
-/* ───────────────────────── ① 默认档逐字节不变 ───────────────────────── */
+/* ───────────────────── ① 老档：与改前逐字节相同 ───────────────────── */
 
-describe('① 默认档：与改前逐字节相同（抬默认行为必红）', () => {
-  it('九个文件的键序与逐文件字节全等于改前金样', () => {
-    // LAU-3b-FLIP：缺省档已翻原生 ⇒ 金样比对必须**显式选**封存糖档
+describe('① 老档：与改前逐字节相同（抬老档任何一档都红）', () => {
+  it('显式糖档：九个文件的键序与逐文件字节全等于改前金样', () => {
+    // 缺省档已翻 Kojo 2.0 ⇒ 金样比对必须**显式选**封存糖档
     const out = scaffoldKojoProject({ ...BASE, langDoc: 'sugar' });
     expect(Object.keys(out.files)).toEqual([...DEFAULT_KEYS]);
     expect(out.dirName).toBe('取证作品-影狼 v1.0');
@@ -155,18 +167,21 @@ describe('① 默认档：与改前逐字节相同（抬默认行为必红）', 
     for (const rel of DEFAULT_KEYS.slice(1)) expect(rel.endsWith(FACE_STUB_EXT)).toBe(true);
   });
 
-  it('缺省档 = 原生（封存写法必须显式选；不传字段不再落 kojo1）', () => {
+  it('缺省档 = Kojo 2.0（老档必须显式选；不传字段不再落 .ERB / .kojo1）', () => {
     const def = scaffoldKojoProject(BASE);
-    const native = scaffoldKojoProject({ ...BASE, langDoc: 'native' });
-    expect(def.dirName).toBe(native.dirName);
-    expect(Object.keys(def.files)).toEqual(Object.keys(native.files));
-    for (const rel of Object.keys(native.files)) expect(def.files[rel]).toBe(native.files[rel]);
+    const kojo2 = scaffoldKojoProject({ ...BASE, langDoc: 'kojo2' });
+    expect(def.dirName).toBe(kojo2.dirName);
+    expect(Object.keys(def.files)).toEqual(Object.keys(kojo2.files));
+    for (const rel of Object.keys(kojo2.files)) expect(def.files[rel]).toBe(kojo2.files[rel]);
     expect(Object.keys(def.files).some((r) => r.endsWith(KOJO_LEGACY_SOURCE_EXTENSION))).toBe(false);
+    expect(Object.keys(def.files).some((r) => r.endsWith(kojoLangDocExtension('native')))).toBe(false);
+    expect(Object.keys(def.files).filter((r) => r.endsWith(KOJO_SOURCE_EXTENSION))).toHaveLength(CORE_FACES.length);
   });
 
-  it('糖档扩展名 = 契约单源，不是本包自己抄的一份', () => {
+  it('三档扩展名 = 契约单源，不是本包自己抄的一份', () => {
     expect(FACE_STUB_EXT).toBe(KOJO_LEGACY_SOURCE_EXTENSION);
-    expect(scaffoldStubExt(undefined)).toBe(kojoLangDocExtension('native'));
+    expect(scaffoldStubExt(undefined)).toBe(kojoLangDocExtension('kojo2'));
+    expect(scaffoldStubExt('kojo2')).toBe(KOJO_SOURCE_EXTENSION);
     expect(scaffoldStubExt('sugar')).toBe(KOJO_LEGACY_SOURCE_EXTENSION);
     expect(scaffoldStubExt('native')).toBe(kojoLangDocExtension('native'));
     expect(scaffoldStubExt('native')).toBe(ERB_BODY_EXTENSIONS[0]!.toUpperCase());
@@ -367,23 +382,76 @@ describe('③ 原生档进得了索引、也出得了制品（取证实测固化
   });
 });
 
-/* ───────────────────── ④ 接线腿：声明真的挂在这枚供数函数上 ───────────────────── */
+/* ─────────────── ④ 缺省档 Kojo 2.0：起手骨架是真的 2.0 表面语法 ─────────────── */
 
-describe('④ 供数接线（这一格在 eraTW 的向导里真的会出现）', () => {
-  it('ERATW_SCAFFOLD_DEPS.scaffold 带着两档声明出厂（把 withKojoLangDocs 摘掉即红）', () => {
+describe('④ 缺省档 Kojo 2.0：起手正文能被 core 真解析、被 eraTW 真编译', () => {
+  const kojo2 = scaffoldKojoProject(BASE);
+  const ext = kojoLangDocExtension('kojo2');
+  const starterRel = `${CORE_FACES[0]!.stem}${ext}`;
+
+  it('缺省产物 = README + 8 份 .kojo（扩展名取契约单源）', () => {
+    expect(Object.keys(kojo2.files)).toEqual(['README.md', ...CORE_FACES.map((f) => `${f.stem}${ext}`)]);
+    expect(ext).toBe(KOJO_SOURCE_EXTENSION);
+    expect(starterRel).toBe(`事件${KOJO_SOURCE_EXTENSION}`);
+  });
+
+  it('8 份文件都被 core 的 parseSource 接受（零 error，不是"看起来像 2.0"）', () => {
+    for (const face of CORE_FACES) {
+      const rel = `${face.stem}${ext}`;
+      const file = parseSource(kojo2.files[rel]!);
+      const errors = file.diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+      expect(errors, `${rel} 的解析 error`).toEqual([]);
+    }
+  });
+
+  it('首面正文真能编译：eraTW adapter + backend 出一份带事件函数头的 ERB', () => {
+    const starter = kojo2.files[starterRel]!;
+    expect(starter).toContain('# 机 初见');
+    expect(starter).toContain('> 在这里写下这个事件的第一句旁白。');
+
+    const result = compileKojoSource({
+      source: starter,
+      adapter: ERATW_GAME_ADAPTER,
+      backend: createEratwEmitBackend({ compileExpression: (expr) => expr.text, charNo: String(BASE.charaNo) }),
+    });
+    expect(result.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+    expect(result.ok).toBe(true);
+    expect(result.sourceMap.lineCount).toBeGreaterThan(0);
+    expect(result.erb).toContain('@M_KOJO_ENCOUNTER_K63');
+    expect(result.erb).toContain('在这里写下这个事件的第一句旁白。');
+  });
+
+  it('其余 7 面只有 // 注释：不含 # 机、不含活函数', () => {
+    for (const face of CORE_FACES.slice(1)) {
+      const text = kojo2.files[`${face.stem}${ext}`]!;
+      expect(text, `${face.stem}${ext} 不该带 # 机`).not.toMatch(/^# 机/m);
+      for (const line of text.split(/\r?\n/)) {
+        if (line.trim() === '') continue;
+        expect(line.startsWith('//'), `${face.stem}${ext} 出现非注释行：${line}`).toBe(true);
+      }
+    }
+  });
+});
+
+/* ───────────────────── ⑤ 接线腿：声明真的挂在这枚供数函数上 ───────────────────── */
+
+describe('⑤ 供数接线（这一格在 eraTW 的向导里真的会出现）', () => {
+  it('ERATW_SCAFFOLD_DEPS.scaffold 带着三档声明出厂（把 withKojoLangDocs 摘掉即红）', () => {
     const declared = readScaffoldLangDocs(ERATW_SCAFFOLD_DEPS.scaffold);
-    expect(declared.map((c) => c.value)).toEqual(['native', 'sugar']);
+    expect(declared.map((c) => c.value)).toEqual(['kojo2', 'native', 'sugar']);
     expect(declared[0]!.value).toBe(DEFAULT_KOJO_LANG_DOC);
     expect(ERATW_SCAFFOLD_DEPS.coreFaceCount).toBe(CORE_FACES.length);
   });
 
-  it('这枚供数函数认草稿里的 langDoc：缺省=原生，显式糖档逐字节等于封存金样', () => {
+  it('这枚供数函数认草稿里的 langDoc：缺省=Kojo 2.0，显式糖档逐字节等于封存金样', () => {
     const draft = { ...BASE, extra: { scriptNo: 1 } };
+    const kojo2Out = ERATW_SCAFFOLD_DEPS.scaffold({ ...draft, langDoc: 'kojo2' });
+    expect(Object.keys(kojo2Out.files).filter((r) => r.endsWith(KOJO_SOURCE_EXTENSION))).toHaveLength(CORE_FACES.length);
+    // 不传 langDoc ⇒ 与显式 Kojo 2.0 档同形（老档必须作者明确选）
+    const defaultOut = ERATW_SCAFFOLD_DEPS.scaffold(draft);
+    expect(defaultOut.files).toEqual(kojo2Out.files);
     const nativeOut = ERATW_SCAFFOLD_DEPS.scaffold({ ...draft, langDoc: 'native' });
     expect(Object.keys(nativeOut.files).filter((r) => r.endsWith(kojoLangDocExtension('native')))).toHaveLength(CORE_FACES.length);
-    // 不传 langDoc ⇒ 与显式原生档同形（封存写法必须作者明确选）
-    const defaultOut = ERATW_SCAFFOLD_DEPS.scaffold(draft);
-    expect(defaultOut.files).toEqual(nativeOut.files);
     const sugarOut = ERATW_SCAFFOLD_DEPS.scaffold({ ...draft, langDoc: 'sugar' });
     expect(Object.keys(sugarOut.files)).toEqual([...DEFAULT_KEYS]);
     // 接线腿没夹带任何改写：与改前金样逐字节相同（不只是"和另一个函数一致"）
@@ -403,7 +471,7 @@ describe('④ 供数接线（这一格在 eraTW 的向导里真的会出现）',
   });
 });
 
-/* ─────────────── ⑤ 卡口取证：起手 .ERB 经真链原样带走 ─────────────── */
+/* ─────────────── ⑥ 卡口取证：起手 .ERB 经真链原样带走 ─────────────── */
 
 /** 被叫到就说明这条链没走"原样带走"——计数 + 抛错，两样都响 */
 let compilerCalls = 0;
@@ -412,7 +480,7 @@ const noCompile = (_source: string, label: string): SugarCompiledBytes => {
   throw new Error(`起手就是原生扩展名的文件不该被要求转译：${label}`);
 };
 
-describe('⑤ 卡口取证：原生档起手包经真部署链 / 真导出链原样带走（lang-doc 那句的实测）', () => {
+describe('⑥ 卡口取证：原生档起手包经真部署链 / 真导出链原样带走（lang-doc 那句的实测）', () => {
   const native = scaffoldKojoProject({ ...BASE, langDoc: 'native' });
   const nativeExt = kojoLangDocExtension('native');
   const nativeRels = Object.keys(native.files);

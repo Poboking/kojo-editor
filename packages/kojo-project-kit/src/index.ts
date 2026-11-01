@@ -139,7 +139,7 @@ export type {
   WizardProjectKind,
 } from './new-project-flow';
 
-/* ---- 语言档（起手骨架 = 糖写法 / 原生写法；扩展名一律现算，禁手抄） ---- */
+/* ---- 语言档（起手骨架 = Kojo 2.0 / 原生 / 封存；扩展名一律现算，禁手抄） ---- */
 export {
   DEFAULT_KOJO_LANG_DOC,
   KOJO_LANG_DOC_CHOICES,

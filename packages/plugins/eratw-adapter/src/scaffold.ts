@@ -12,31 +12,23 @@
  * - 部署路径 `ERB/口上・メッセージ関連/個人口上/<dir>/` 与放置规则；
  * - 许可条款文本（`licenses.ts` —— LTOL 是 era 社区约定，刻意留在 adapter）。
  *
- * ## 为什么核心面空壳默认是 `.kojo` 而不是 `.ERB`（用户反馈 1，2026-10-12）
+ * ## 语言档：作者自己选起手形态（用户反馈 1 的下半寸，2026-10-20 NEW-ERB；P0-5 2026-11-02）
  *
- * `.kojo` 是**超集**：语法糖与原始 ERB 写法可以在同一个文件里混排（原生语句按规范
- * 逐行透传），而 `.ERB` 只能写原生。新建项目时作者还没决定要用哪种，所以脚手架
- * 默认给 `.kojo`——**先不要替作者收窄表达**。导出/部署时再统一转译成游戏认得的
- * `.ERB`（见 `#17`），工作区里始终只有 `.kojo` 这一份源。
+ * "默认给超集"和"只给超集"是两回事。于是新建向导多一格「起手写法」（档位、文案、
+ * 扩展名全部由共享层 `@kojo/kojo-project-kit` 的 `lang-doc.ts` 给出，本文件只消费）：
  *
- * 空壳内容全是 `;` 注释，而 `;` 注释在糖里语法完全一样 ⇒ 同一份内容在两种扩展名下
- * 都合法，改的只是"作者接下来能在这个文件里写什么"。
- *
- * ## 语言档：作者自己选起手形态（用户反馈 1 的下半寸，2026-10-20 NEW-ERB）
- *
- * "默认给超集"和"只给超集"是两回事。作者已经明确只写原生时，脚手架照旧给他一份
- * `.kojo` 就是替他做了决定。于是新建向导多一格「起手写法」（档位、文案、扩展名
- * 全部由共享层 `@kojo/kojo-project-kit` 的 `lang-doc.ts` 给出，本文件只消费）：
- *
- * - **糖档（缺省，历史行为）**：产物与改前**逐字节相同**——`tests/scaffold-lang-doc.test.ts`
- *   用 sha256 逐文件钉死，抬默认档的任何改动都会红；
- * - **原生档**：**同一份骨架**写成 `.ERB`，只是①扩展名换掉、②不带【库内现成案例】块
- *   （那几段是糖写法示例，塞进只准写原生的文件里就是把作者往坑里带；宁缺勿编，
- *   与 2026-10-14 案例批同一条纪律，绝不现编"原生版案例"）。
+ * - **Kojo 2.0 档（缺省，P0-5 起）**：产物是 `.kojo`。首面 → `.kojo` 文件带一份
+ *   能被 core 解析、能被 eraTW backend 编译的 2.0 起手正文（`# 机 初见` + 旁白），
+ *   其余面只有 `//` 注释。导出 / 部署 / 转译链尚未接到 2.0，README 如实说明。
+ * - **原生档（老路径）**：**同一份骨架**写成 `.ERB`，只是①扩展名换掉、②不带
+ *   【库内现成案例】块（那几段是糖写法示例，塞进只准写原生的文件里就是把作者往坑里带；
+ *   宁缺勿编，与 2026-10-14 案例批同一条纪律，绝不现编"原生版案例"）。
+ * - **糖档（kojo1 封存写法，仅维护老工程）**：产物落封存层 `.kojo1`，与改前**逐字节相同**
+ *   ——`tests/scaffold-lang-doc.test.ts` 用金样逐文件钉死，抬老档任何一档都会红。
  *
  * 原生档不破坏导出/部署链，这一点是有实据的：制品计划 `planArtifacts` 对非 `.kojo`
  * 文件**字节级原样携带**（`kit/src/artifact.ts` 规矩 2），编译器一次都不叫——
- * 上面那条 sha 断言与 `scaffold-lang-doc.test.ts` 的 `取证③` 用例把这条链钉住。
+ * 上面那条金样断言与 `scaffold-lang-doc.test.ts` 的 `取证⑥` 用例把这条链钉住。
  *
  * 面模板示例取自本包 `face-templates.ts`（游戏知识单一真源；只代入不解释）。
  */
@@ -45,6 +37,7 @@ import {
   assembleScaffold,
   buildScaffoldDirName,
   buildScaffoldFaceStub,
+  buildScaffoldKojo2Stub,
   buildScaffoldReadme,
   faceTemplateExample,
   sanitizePathSegment,
@@ -53,7 +46,7 @@ import {
   type ScaffoldFaceCase,
   type ScaffoldFaceSpec,
 } from '@kojo/plugin-api';
-import { kojoLangDocExtension, type KojoLangDoc } from '@kojo/kojo-project-kit';
+import { kojoLangDocExtension, normalizeKojoLangDoc, type KojoLangDoc } from '@kojo/kojo-project-kit';
 import { createEratwFaceTable } from './face-templates';
 import {
   buildLicenseText,
@@ -83,8 +76,8 @@ export interface KojoScaffoldOptions {
    */
   license: LicenseKind;
   /**
-   * 起手写法（语言档，NEW-ERB 2026-10-20）。**缺省 = 糖档**，与不传这个字段完全同义：
-   * 历史调用方（含另一款游戏的接线路径）零改动、产物零变化。
+   * 起手写法（语言档，NEW-ERB 2026-10-20；P0-5 2026-11-02）。**缺省 = Kojo 2.0 档**：
+   * 不传这个字段就产出 `.kojo` 的 2.0 起手骨架；老档必须由调用方显式选择。
    */
   langDoc?: KojoLangDoc;
 }
@@ -101,22 +94,39 @@ export interface KojoScaffoldResult {
  * 值 = 契约层**封存层**源扩展名（`KOJO_LEGACY_SOURCE_EXTENSION` ＝ `.kojo1`），本文件
  * **不抄字面量**（NEW-ERB 单源守卫 `kit/tests/lang-doc.test.ts` 按行钉死）。
  *
- * LAU-3b-FLIP（2026-10-27）：`.kojo` 归 2.0，而本脚手架的空壳正文仍是 kojo1 写法
- * （全注释 + 糖写法案例）⇒ 只能落 `.kojo1`。2.0 的起手骨架是后续批。
+ * LAU-3b-FLIP（2026-10-27）：`.kojo` 归 2.0，而老档空壳正文是 kojo1 写法
+ * （全注释 + 糖写法案例）⇒ 只能落 `.kojo1`。**P0-5（2026-11-02）**：2.0 起手骨架已落地，
+ * 它是同一条装配链上的第三档，不改变老档的字节。
  */
 export const FACE_STUB_EXT = KOJO_LEGACY_SOURCE_EXTENSION;
 
 /**
- * 本游戏各档的起手扩展名（**显式糖档**才落封存层 `FACE_STUB_EXT`；其余由共享层单源给原生扩展名）。
+ * 本游戏各档的起手扩展名（**唯一取值口**，扩展名一律经共享层单源现算）。
  *
- * LAU-3b-FLIP（2026-10-27，用户口径「kojo2 取代 kojo1 的所有位置」）：缺省不再是封存写法——
- * 没传 `langDoc` 时按原生档出，只有作者明确选了「kojo1 封存写法」才落 `.kojo1`。
+ * 不传 `langDoc` ⇒ 缺省 Kojo 2.0 档（`.kojo`）；糖档落封存层 `FACE_STUB_EXT`；
+ * 原生档仍由共享层给正文扩展名。
  */
 export function scaffoldStubExt(langDoc: KojoLangDoc | undefined): string {
-  return langDoc === 'sugar' ? FACE_STUB_EXT : kojoLangDocExtension('native');
+  return kojoLangDocExtension(normalizeKojoLangDoc(langDoc));
 }
 
-/** 核心面空壳规格（中文命名；文件名 = stem + 封存层源扩展名 `.kojo1`） */
+/**
+ * Kojo 2.0 档起手正文的落点（第一枚核心面）与游戏事实。
+ *
+ * 只有一枚文件带真实 2.0 正文：`# 机 初见` + 一行旁白。其余面保持 `//` 注释空壳，
+ * 作者从这一枚开始写。事件名是本游戏事实（`kojo2/event-catalog.ts` 九事件之一）。
+ */
+const KOJO2_STARTER_FACE = '事件';
+const KOJO2_STARTER_MACHINE = '初见';
+const KOJO2_STARTER_BODY: readonly string[] = ['> 在这里写下这个事件的第一句旁白。'];
+
+/** Kojo 2.0 档的通用说明（不含任何游戏名词） */
+const KOJO2_NOTES: readonly string[] = [
+  '2.0 用行首 `#` `@` `>` `?` `!` 决定这一行是什么；台词写 `角色：「…」`，旁白写 `> …`。',
+  '老档的函数形态与糖写法案例不适用于本文件；要写老写法请选 kojo1 封存写法那一档。',
+];
+
+/** 核心面空壳规格（中文命名；文件名 = stem + 本档扩展名，由 `scaffoldStubExt` 现算） */
 export type CoreFaceSpec = ScaffoldFaceSpec;
 
 /** 8 核心面（讨论纪要定稿清单；顺序即生成顺序） */
@@ -239,13 +249,30 @@ const TEMPLATE_HINTS = [
 /** 与占位符无关的恒输出说明（eraTW 有家族段维度） */
 const ALWAYS_HINTS = ['有家族段（别人版口上）时，家族段插在 M_KOJO 之后的下划线处。'] as const;
 
-/** 单面空壳内容（纯 `;` 注释；不生成任何活函数） */
+/**
+ * 单面空壳内容。
+ *
+ * 老档（原生 / 糖）= 纯 `;` 注释、不生成任何活函数；Kojo 2.0 档由共享骨架产 `//`
+ * 注释，且**仅首面**带一份可继续写的 `# 机` + 旁白起手正文（见 `KOJO2_STARTER_*`）。
+ */
 export function buildFaceStub(
   spec: CoreFaceSpec,
   opts: KojoScaffoldOptions,
   faceTable: KojoFaceTable,
 ): string {
-  const ext = scaffoldStubExt(opts.langDoc);
+  const value = normalizeKojoLangDoc(opts.langDoc);
+  if (value === 'kojo2') {
+    return buildScaffoldKojo2Stub({
+      face: spec,
+      identity: opts,
+      metaLead: [`剧本${opts.scriptNo}`],
+      notes: KOJO2_NOTES,
+      starter:
+        spec.stem === KOJO2_STARTER_FACE
+          ? { machine: KOJO2_STARTER_MACHINE, body: KOJO2_STARTER_BODY }
+          : null,
+    });
+  }
   return buildScaffoldFaceStub(
     {
       face: spec,
@@ -257,9 +284,9 @@ export function buildFaceStub(
       // 【库内现成案例】是**糖写法**的示例（由真实口上经升糖投影转写）。原生档的文件里
       // 只准写原生 ⇒ 整块不输出（共享骨架对 `faceCase: null` 的既定行为：不留空头、
       // 也不把"已用本工具转成 X 写法"那句收尾语塞进对不上号的档位）。绝不现编原生案例。
-      faceCase: opts.langDoc === 'sugar' ? FACE_CASES[spec.stem] ?? null : null,
+      faceCase: value === 'sugar' ? FACE_CASES[spec.stem] ?? null : null,
     },
-    ext,
+    scaffoldStubExt(value),
   );
 }
 
@@ -284,9 +311,12 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
     licenseNote.push('未指定开源协议——默认保留所有权利。');
   }
 
-  const ext = scaffoldStubExt(opts.langDoc);
-  const native = opts.langDoc !== 'sugar';
-  const nativeExt = scaffoldStubExt('native');
+  const value = normalizeKojoLangDoc(opts.langDoc);
+  const ext = scaffoldStubExt(value);
+  const native = value === 'native';
+  const kojo2 = value === 'kojo2';
+  const nativeExt = kojoLangDocExtension('native');
+  const starterRel = `${CORE_FACES[0]!.stem}${ext}`;
 
   return buildScaffoldReadme({
     identity: opts,
@@ -301,7 +331,16 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
     // LAU-3b-FLIP（2026-10-27）：糖档的源扩展名已是封存层 `.kojo1`，这两句跟着改口
     // （扩展名一律取 `FACE_STUB_EXT`，不手抄）；`tests/scaffold-lang-doc.test.ts`
     // 的金样已按本批重导（见该文件顶部说明）。
-    contentNote: native
+    contentNote: kojo2
+      ? [
+          '本包由脚手架生成以下核心面空壳：' +
+            `\`${starterRel}\` 带一份可直接继续写的 Kojo 2.0 起手正文（\`# 机\` + 旁白），` +
+            '其余文件只有 `//` 注释、不含活函数。',
+          `新建时选的是**Kojo 2.0 写法**：起手文件是 \`${ext}\`，按 2.0 现行语法编辑。`,
+          `这一版编辑器还没把 \`${ext}\` 接到导出 / 部署 / 转译链：工作区里照常编辑、上色、诊断，` +
+            `要产出游戏读的文件请改用「原生写法」（${nativeExt}）或「kojo1 封存写法」（${FACE_STUB_EXT}）两档。`,
+        ]
+      : native
       ? [
           '本包由脚手架生成以下核心面空壳（文件内只有 `;` 注释，不含活函数）。' +
             `新建时选的是**原生写法**：起手文件就是游戏认得的 \`${ext}\`，只写原生语法，不经转译，` +
@@ -318,11 +357,20 @@ export function buildReadme(opts: KojoScaffoldOptions): string {
         ],
     faces: CORE_FACES,
     stubExt: ext,
-    deployIntro: native
-      ? [`本包的起手文件就是引擎认得的格式，编辑器的「部署到游戏目录」原样放进游戏目录：`]
-      : ["编辑器的「部署到游戏目录」会把本包转译后放进游戏目录："],
+    deployIntro: kojo2
+      ? [`本包是 Kojo 2.0 源文件包；当前「部署到游戏目录」不会转译 2.0 文件：`]
+      : native
+        ? [`本包的起手文件就是引擎认得的格式，编辑器的「部署到游戏目录」原样放进游戏目录：`]
+        : ["编辑器的「部署到游戏目录」会把本包转译后放进游戏目录："],
     deployPath: `${DEPLOY_KOJO_ROOT}/<角色口上目录>/${scaffoldDirName(opts)}/`,
-    deployNote: native
+    deployNote: kojo2
+      ? [
+          '（游戏目录默认只读，需先批准写权限；目标已存在时不会覆盖。）',
+          '',
+          `想现在就把稿子放进游戏，请改用「原生写法」（${nativeExt}）或「kojo1 封存写法」（${FACE_STUB_EXT}）新建。`,
+          'Kojo 2.0 的导出 / 部署 / 转译链接入后，这一节才会换成"原样带走"。',
+        ]
+      : native
       ? [
           '（游戏目录默认只读，需先批准写权限；目标已存在时不会覆盖。）',
           '',
