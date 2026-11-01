@@ -10,6 +10,8 @@
  * ④ 最近文件往返：`.kojo2` 记录能存能读、pathKey 去重同口径、换项目走 `pendingOpenFile`；
  * ⑤ 新建向导：扩展名与模板语言一致（2.0 档 = `# 机` + 带说话人台词，无 v1 文件头）；
  * ⑥ 单源守门：`.kojo2` 字面量在 app 侧只此一处、插件侧零处（扩展名由宿主下传）。
+ * `B5B-SINK`：BOARD `SDK-B5b` 两枚"可择机下沉"候选（`isKojo2Path` 与 diagnostics-gate 的
+ * 扩展名常量）的判性——今天沉不动，障碍逐条量在账上。
  *
  * 开关用假 `window.localStorage`（`kojo2-wire.test.ts` 同款）：`ui/kojo2-flag.ts` 每次现读，
  * 所以本文件不需要 `resetModules`（`OPENABLE_EXT` 这类静态清单本来也不随开关变）。
@@ -524,5 +526,149 @@ describe('⑥ 单源守门：.kojo2 字面量只住在语言面库那一处，�
     expect(KOJO2_SOURCE_EXTENSION).toBe('.kojo2');
     expect(KOJO2_FILE_EXTENSION).toBe(KOJO2_SOURCE_EXTENSION);
     expect(isKojo2Path(`D:/x/a${KOJO2_SOURCE_EXTENSION}`)).toBe(true);
+  });
+});
+
+/* ───────────────── B5B-SINK：BOARD SDK-B5b 两枚"可择机下沉"候选的判性 ───────────────── */
+
+/**
+ * BOARD `SDK-B5b` 卡原文：宿主语言面残留只剩 5 枚宿主事实，「仅 diagnostics-gate 的扩展名
+ * 常量与 `isKojo2Path` 可择机下沉」。本组把这两枚逐条判性、钉成红得了的判据——**判据不搬家、
+ * 不改写、不放宽**，只把"今天为什么沉不动"量出来（形状照 `erb-preproc-single-source.test.ts`
+ * 的 `B5B-C-DEBT`）。
+ *
+ * 下沉的三条**合取**闸：① 零 Monaco、② 零宿主事实（项目 / 路径 / 设置这类宿主知识）、
+ * ③ 单消费者。逐枚结论：
+ *
+ * - `isKojo2Path`（`ui/kojo2-open.ts`）：① ✓、② ✓（本体只做扩展名比对）、③ ✗（6 个宿主模块
+ *   消费）。更硬的障碍：两枚扩展名字面源分住两个包——`.kojo` 的定义在 `@kojo/plugin-api`
+ *   （`sugar.ts`），`.kojo2` 的唯一字面源 `kojo-lang/src/constants.ts` 必须保持零 import，
+ *   而 `@kojo/kojo-lang` 连 `@kojo/plugin-api` 的依赖都没有 ⇒ **没有既有叶子能同时拿到两枚
+ *   字面源**。任何"下沉"要么让语言包依赖契约桶（分层破），要么把清单抄第二份（单源破）。
+ * - diagnostics-gate 的扩展名常量：它们由 `ui/kojo2-cutover.ts` 从契约 / 零依赖叶子**现算**，
+ *   不是宿主自抄；语言 id 那一侧已由 DIAG-GATE-1033 改成 `descriptor.id` 身份比对。若改由
+ *   descriptor 交扩展名，就得把 Monaco 语言注册表拖进这个**刻意零 Monaco、且在每次击键热路径
+ *   上**的判据模块，并新增第二个组合点 ⇒ 常量保持在 cutover 单点组合，gate 只准消费。
+ *
+ * 红条件（任一变化 ⇒ "可下沉"的前提变了，必须回来重判本组）：`isKojo2Path` 改了定义处 /
+ * 消费者清单变了 / 语言包开始依赖契约 / gate 里长出本地字面量、二次组合或语言 id 分支 /
+ * cutover 的组合点改形 / 叠层装饰重新抄扩展名。
+ */
+const APP_SRC = 'packages/app/src';
+const OPEN_MODULE = `${APP_SRC}/ui/kojo2-open.ts`;
+const GATE_MODULE = `${APP_SRC}/ui/kojo2-diagnostics-gate.ts`;
+const CUTOVER_MODULE = `${APP_SRC}/ui/kojo2-cutover.ts`;
+const OVERLAY_MODULE = `${APP_SRC}/monaco/tree-sitter/syntax-decorations.ts`;
+
+const readSrc = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
+
+/** `from '<spec>'` 的静态导入清单，按文件判定（`spec` 是后缀匹配） */
+function importsFrom(rel: string, specSuffix: string): boolean {
+  const escaped = specSuffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`from\\s*'[^']*${escaped}'`).test(readSrc(rel));
+}
+
+describe('B5B-SINK：`isKojo2Path` 沉不动——单消费者不成立，且没有既有叶子可组合两枚字面源', () => {
+  it('恰一处定义，本体只读 `KOJO2_FILE_EXTENSIONS`（零字面量、零 Monaco）', () => {
+    const defs = sourceFiles(APP_SRC).filter((rel) =>
+      /export function\s+isKojo2Path\b/.test(readSrc(rel)),
+    );
+    expect(defs, 'isKojo2Path 的定义处不止一枚（两份判据迟早漂）').toEqual([OPEN_MODULE]);
+    const open = readSrc(OPEN_MODULE);
+    expect(open).toMatch(
+      /export function isKojo2Path\(filePath: string\): boolean \{\s*return KOJO2_FILE_EXTENSIONS\.includes\(extname\(filePath\)\.toLowerCase\(\)\);\s*\}/,
+    );
+    // ① 零 Monaco：这一枚能站的唯一理由（判据本身不碰 Monaco）
+    expect(open, '打开路由层被拖进 Monaco 图').not.toMatch(/from\s*'[^']*monaco/i);
+    // 本体不抄字面量（`⑥` 组查整份文件，这里查判据函数附近，防止"挪到别处再引回"）
+    expect(open, 'isKojo2Path 附近又多抄了一份扩展名字面量').not.toMatch(/["']\.kojo[12]?["']/);
+  });
+
+  it('③ 单消费者不成立：app/src 恰 6 个宿主模块消费它（少一枚/多一枚都要回来重判）', () => {
+    const importStatement = /import\s*(?:type\s*)?\{[\s\S]{0,600}?\}\s*from\s*'[^']*kojo2-open'/g;
+    const consumers = sourceFiles(APP_SRC)
+      .filter((rel) => rel !== OPEN_MODULE)
+      .filter((rel) => {
+        const text = readSrc(rel);
+        for (const m of text.matchAll(importStatement)) {
+          if (/\bisKojo2Path\b/.test(m[0]!)) return true;
+        }
+        return false;
+      })
+      .sort();
+    expect(
+      consumers,
+      'isKojo2Path 的消费者清单变了：下沉前提是"单消费者"，清单变动必须重判本组',
+    ).toEqual([
+      `${APP_SRC}/ui/App.tsx`,
+      `${APP_SRC}/ui/kojo2-diagnostics-gate.ts`,
+      `${APP_SRC}/ui/kojo2-project-analysis.ts`,
+      `${APP_SRC}/ui/kojo2-storage-refresh.ts`,
+      `${APP_SRC}/ui/project-diagnostics.ts`,
+      `${APP_SRC}/ui/project-scan-schedule.ts`,
+    ]);
+  });
+
+  it('更硬的障碍：`@kojo/kojo-lang` 不许依赖契约包 ⇒ 没有既有叶子能同时拿 `.kojo` 与 `.kojo2`', () => {
+    // `.kojo` 的唯一定义在契约包（另有 conformance 夹具的一份自持清单，不参与宿主判据）
+    expect(readSrc('packages/plugin-api/src/sugar.ts')).toMatch(
+      /export const KOJO_SOURCE_EXTENSION = '\.kojo';/,
+    );
+    // `.kojo2` 的唯一字面源是零 import 叶子
+    const constants = readSrc('packages/kojo-lang/src/constants.ts');
+    expect(constants).toMatch(/export const KOJO2_SOURCE_EXTENSION = '\.kojo2';/);
+    expect(constants, '零依赖叶子长出了 import：字面源不再是"零 import"').not.toMatch(/^\s*import\s/m);
+    // 语言包连契约包的依赖都没有 ⇒ 包内不可能组合两枚字面源
+    const manifest = JSON.parse(readSrc('packages/kojo-lang/package.json')) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(Object.keys(manifest.dependencies ?? {}), '语言包开始依赖契约桶（分层破）').not.toContain(
+      '@kojo/plugin-api',
+    );
+    const foreign = sourceFiles('packages/kojo-lang/src').filter((rel) =>
+      /from\s*'@kojo\/plugin-api'/.test(readSrc(rel)),
+    );
+    expect(foreign, '语言包内出现了对契约包的 import').toEqual([]);
+  });
+});
+
+describe('B5B-SINK：diagnostics-gate 的扩展名常量——cutover 单点组合，gate 只准消费', () => {
+  it('gate 只从 `./kojo2-cutover` 取那两枚常量：零本地字面量、零二次组合、零语言 id 分支', () => {
+    const gate = readSrc(GATE_MODULE);
+    expect(importsFrom(GATE_MODULE, './kojo2-cutover')).toBe(true);
+    expect(gate).toMatch(/KOJO_V1_FILE_EXTENSION/);
+    expect(gate).toMatch(/KOJO2_FILE_EXTENSIONS/);
+    expect(gate, 'gate 里长出了扩展名字面量（第二份单源）').not.toMatch(/["']\.kojo[12]?["']/);
+    expect(gate, 'gate 里二次组合扩展名清单（第二个组合点）').not.toMatch(
+      /\bKOJO2_FILE_EXTENSIONS\s*=|\[[^\]]*KOJO_SOURCE_EXTENSION/,
+    );
+    // DIAG-GATE-1033：语言白名单已改成 `descriptor.id` 身份比对 ⇒ gate 里不该再有 *_LANGUAGE_ID
+    expect(gate, 'gate 里又长出语言 id 分支（M2 账会涨）').not.toMatch(
+      /\b[A-Z][A-Z0-9_]*_LANGUAGE_ID\b/,
+    );
+    // 这枚模块刻意零 Monaco（每次击键热路径）——把注册表拖进来就是为扩展名付 Monaco 的钱
+    expect(gate, '刻意零 Monaco 的判据模块被拖进了 Monaco 语言注册表').not.toMatch(
+      /from\s*'[^']*(?:monaco|entry)[^']*'/i,
+    );
+  });
+
+  it('扩展名常量在 cutover 单点组合（契约 + 零依赖叶子现算，不抄字面量）', () => {
+    const cutover = readSrc(CUTOVER_MODULE);
+    expect(cutover).toMatch(
+      /export const KOJO2_FILE_EXTENSIONS: readonly string\[\] = \[KOJO_SOURCE_EXTENSION, KOJO2_FILE_EXTENSION\];/,
+    );
+    expect(cutover).toMatch(
+      /export const KOJO2_FILE_EXTENSION: string = KOJO2_SOURCE_EXTENSION;/,
+    );
+    expect(cutover).toMatch(
+      /export const KOJO_V1_FILE_EXTENSION: string = KOJO_LEGACY_SOURCE_EXTENSION;/,
+    );
+    expect(cutover, 'cutover 又抄了一份字面量').not.toMatch(/["']\.kojo[12]?["']/);
+  });
+
+  it('语言 id 那条腿已是 `descriptor.id` 身份比对：叠层装饰里零扩展名常量', () => {
+    const overlay = readSrc(OVERLAY_MODULE);
+    expect(overlay).toMatch(/model\.getLanguageId\(\) !== overlayLanguageId/);
+    expect(overlay, '叠层装饰层又抄了一份扩展名判据').not.toMatch(/["']\.kojo[12]?["']/);
   });
 });

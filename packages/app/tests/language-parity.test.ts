@@ -1498,3 +1498,140 @@ afterEach(() => {
   vi.resetModules();
 });
 
+/* ============================== B5B-SINK-5：宿主语言面残留 5 枚宿主事实（可下沉性判性） ============================== */
+
+/**
+ * BOARD `SDK-B5b` 卡：宿主语言面残留车 1–6 + C 类两车 + 第七波已落，**余 5 枚宿主事实**
+ * （`kojo2-project-index` / `project-analysis` / `model-language` / `problem-sync` /
+ * `scan-adapter`）。本组照 `erb-preproc-single-source.test.ts` 的 `B5B-C-DEBT` 形状
+ * （判据不搬家、不改写、不放宽），逐枚把"为什么沉不动"量出来。
+ *
+ * 下沉三条**合取**闸：① 零 Monaco、② 零宿主事实（项目 / 路径 / 设置 / model 池 /
+ * marker 这类宿主知识）、③ 单消费者。**没有一枚同时满足三条 ⇒ 一枚都沉不动**；
+ * 每枚把"今天还在的那条障碍"逐字钉住（import 后缀 / 消费者清单），障碍拆掉时本组必红。
+ *
+ * 红条件（任一 ⇒ "沉不动"的前提变了，必须回来重判）：宿主事实 import 消失 /
+ * Monaco 依赖消失 / 消费者清单变动（尤其归一成单消费者）。那时该枚若三条全中，就当场
+ * 迁到 `@kojo/kojo-lang` 的既有叶子或对应插件，并把本组那一条改成收口证据。
+ */
+interface SinkLedgerCase {
+  /** app/src 相对路径（`sourceOf` 的取证口径） */
+  readonly rel: string;
+  /** ① 零 Monaco：`true` = 今天确实零 Monaco（障碍不在这一条） */
+  readonly monacoFree: boolean;
+  /** `monacoFree = false` 时今天还在的 Monaco 依赖（`from '<spec>'` 的 spec） */
+  readonly monacoImports?: readonly string[];
+  /** ② 宿主事实：今天还在的宿主 import（`from '<spec>'` 的 spec） */
+  readonly hostImports: readonly string[];
+  /** ③ 消费者清单（今天不是单消费者 / 或虽单消费者但 ①② 已挡） */
+  readonly consumers: readonly string[];
+  /** 逐枚判性结论（写进用例名，失败时一眼看出该重判哪一条） */
+  readonly verdict: string;
+}
+
+/** 这份源码里有没有 `from '<spec>'`（spec 逐字匹配、正则元字符转义） */
+function hasImport(text: string, spec: string): boolean {
+  const escaped = spec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`from\\s*'${escaped}'`).test(text);
+}
+
+/** 谁是这份模块的消费者（静态 / 动态 import 都算；本文件自己不算） */
+function importersOf(moduleRel: string): string[] {
+  const name = moduleRel.replace(/\.tsx?$/, '').split('/').pop()!;
+  const spec = new RegExp(`(?:from|import\\s*\\()\\s*'[^']*${name}(?:\\.tsx?)?'`);
+  return SOURCE_FILES.filter((file) => file.rel !== moduleRel && spec.test(file.text))
+    .map((file) => file.rel)
+    .sort();
+}
+
+describe('B5B-SINK-5：余 5 枚宿主事实——一枚都沉不动（障碍逐条在账）', () => {
+  const CASES: readonly SinkLedgerCase[] = [
+    {
+      rel: 'monaco/kojo2-project-index.ts',
+      monacoFree: true,
+      hostImports: ['../ui/file-tree-ops'], // pkey（路径判等宿主事实）
+      consumers: [
+        'monaco/kojo-language-service-legs.ts',
+        'monaco/slot-service-providers.ts',
+        'ui/editor-global-providers.ts',
+      ],
+      verdict: '② 宿主事实（pkey）+ ③ 多消费者 ⇒ 不能沉',
+    },
+    {
+      rel: 'ui/kojo2-project-analysis.ts',
+      monacoFree: true,
+      hostImports: ['./file-tree-ops', './kojo2-open', './problem-store', './kojo2-storage-registry'],
+      consumers: [
+        'ui/kojo2-project-scan-adapter.ts',
+        'ui/project-diagnostics.ts',
+        'ui/project-scan-schedule.ts',
+      ],
+      verdict: '② 宿主事实（路径 / 打开判据 / 问题形状 / 存储注册表）+ ③ 多消费者 ⇒ 不能沉',
+    },
+    {
+      rel: 'ui/kojo2-model-language.ts',
+      monacoFree: false,
+      monacoImports: ['../monaco/language-registry'],
+      hostImports: ['./editor-model-pool', './kojo2-cutover', './kojo2-flag'],
+      consumers: ['ui/editor-model-pool-instance.ts'],
+      verdict: '① Monaco 语言注册表 + ② 宿主事实（model 池 / 切流开关）⇒ 不能沉（③ 单消费者 ✓）',
+    },
+    {
+      rel: 'ui/kojo2-problem-sync.ts',
+      monacoFree: false,
+      monacoImports: ['../monaco/entry'],
+      hostImports: [],
+      consumers: ['ui/kojo2-problem-wiring.ts'],
+      verdict: '① Monaco（marker 上屏）+ ② 宿主事实（model 身份 / 版本 / 活动 model）⇒ 不能沉（③ ✓）',
+    },
+    {
+      rel: 'ui/kojo2-project-scan-adapter.ts',
+      monacoFree: true,
+      hostImports: ['./kojo2-diagnostics-gate', './kojo2-project-analysis'],
+      consumers: ['ui/App.tsx'],
+      verdict: '② 宿主事实（诊断门 / 项目分析装配缝）⇒ 不能沉（①③ ✓）',
+    },
+  ];
+
+  it('名单与 BOARD 的余 5 枚逐字相等（防"少判一枚"）', () => {
+    expect(CASES.map((c) => c.rel)).toEqual([
+      'monaco/kojo2-project-index.ts',
+      'ui/kojo2-project-analysis.ts',
+      'ui/kojo2-model-language.ts',
+      'ui/kojo2-problem-sync.ts',
+      'ui/kojo2-project-scan-adapter.ts',
+    ]);
+  });
+
+  for (const c of CASES) {
+    it(`${c.rel}：${c.verdict}`, () => {
+      const text = sourceOf(c.rel).text;
+      // ① 零 Monaco 若今天成立就钉住（涨回来不算破坏障碍，但会让"零 Monaco ✓"很可疑）；
+      //    若不成立，则把那条依赖逐字钉住——它消失的那天 ① 就拆掉了，必须回来重判。
+      if (c.monacoFree) {
+        expect(text, `${c.rel} 被拖进 Monaco 图（① 不再成立 ⇒ 回来重判本组）`).not.toMatch(
+          /from\s*'[^']*monaco[^']*'/i,
+        );
+      }
+      for (const spec of c.monacoImports ?? []) {
+        expect(
+          hasImport(text, spec),
+          `${c.rel} 的 Monaco 依赖 ${spec} 消失了（① 可能已拆掉 ⇒ 回来重判本组）`,
+        ).toBe(true);
+      }
+      // ② 宿主事实：今天还在的那条就是"沉不动"的直接证据
+      for (const spec of c.hostImports) {
+        expect(
+          hasImport(text, spec),
+          `${c.rel} 的宿主事实 ${spec} 消失了（② 可能已拆掉 ⇒ 回来重判本组）`,
+        ).toBe(true);
+      }
+      // ③ 消费者清单：多消费者 / 单消费者都要钉死；清单变了 ⇒ 前提变了
+      expect(
+        importersOf(c.rel),
+        `${c.rel} 的消费者清单变了（③ 的前提变了 ⇒ 回来重判本组）`,
+      ).toEqual([...c.consumers]);
+    });
+  }
+});
+
