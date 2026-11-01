@@ -610,3 +610,5 @@
     | `kojo-conformance/src/language.ts` | golden 的期望落点（产物该长什么样） | 那是判据自身：读表＝拿表证明表 |
 
     面 token 的真实身份是**函数名内部的时机段**（`M_KOJO_K1_MESSAGE_COM_K1_1` 里的 `MESSAGE_COM`），既不是 `surface` 也不是 `native`，真源在方言包的 `FamilyIndexRule` / 家族事实里。判据写成五条（`kind` 值域恰四格 / 面 token 四格都查不到 / `surface` 列的 ASCII 大写只许恒等落点 / 两个 UI 插件零面顺序字面量且必须真读 `faceOrder` / 五处源码不读表层表），两条变异实测都真红（给 `matrix-logic.ts` 加回一行 `FACE_ORDER` 字面量 ⇒ ④ 红；给 `kojo-native-zone.ts` 加一行 `import … surface-map` ⇒ ⑤ 红）。**本条自己踩的坑**：③ 第一版写成"`surface` 不许是纯 ASCII 大写蛇形 token"，当场被 5 条**恒等落点**打红（`TIME`→`TIME`、`MONEY`、`RESULTS`、`RESULT`、`ARG`——`domainSymbols` 的外部变量，作者写的与盘上写的是同一个词，悬停那边的纪律是"恒等落点不算信息"）。改判成"ASCII 大写**只许**恒等"之后既保住恒等落点，又挡住"把面 token 填进 surface"（面 token 的 native 是 `族:编号` / 引擎常量，绝不会跟自己相等）。⇒ 写"某列不许出现某形状"的闸之前，先把**合法的那一类**从数据里数出来。
+
+318. **全量池在默认 `maxWorkers` 下会报 `[vitest-pool]: Worker forks emitted error` / `write EPIPE`，此时 `Test Files` 往往全过、用例零失败，属负载假红**；改 `node node_modules/vitest/vitest.mjs run --config vitest.config.ts --maxWorkers=8` 重跑即干净（2026-11-01 A+B 合流批连踩两次、第三次 rc=0）。
