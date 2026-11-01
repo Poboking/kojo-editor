@@ -35,7 +35,7 @@ A desktop application that turns a Kojo library of 2,000+ `.ERB` files and ~10�
 | Form factor | Tauri 2 desktop shell + Monaco as the editor body; Windows 10/11 x64 |
 | Kernel | DI, event bus, scoped storage, file IO, projects, slots, workspaces, compute pool — **zero game vocabulary** (enforced by audit) |
 | Extensibility | **31 plugins**: 8 game adapters + language layer + UI panels + market / savefile / sugar |
-| Scale | Functional pool: **1,163 files · 22,158 passed / 0 failed** (plus 143 skipped depending on corpus presence) |
+| Scale | Functional pool: **1,166 files · 22,216 passed / 0 failed** (plus 143 skipped depending on corpus presence; numbers per `docs/STATE.md`) |
 | Gates | Dual typecheck · decoupling audit (A–D) · language-ratchet audit · boot-graph size gate · one-command release gate |
 
 ## 2. Architecture at a glance
