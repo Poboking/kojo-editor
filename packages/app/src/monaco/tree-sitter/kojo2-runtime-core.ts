@@ -9,7 +9,7 @@
  * 当场失败（v1 的 `client.ts` 头注记过同一条坑）。所以：
  *
  * - 本文件**零动态 import**：模块与资源都由调用方以函数形式交进来；
- * - worker 入口（`kojo2-ts.worker.ts`）静态 import 两枚 wasm / 三份查询 / `web-tree-sitter`，
+ * - worker 侧（`kojo2-pool-backend.ts`）静态 import 两枚 wasm / 三份查询 / `web-tree-sitter`，
  *   把 `() => module` 与 `() => assets` 传进来；
  * - 主线程侧的懒加载单例仍在 `kojo2-runtime.ts`（它才允许出现动态 import，且不在 worker 图里）。
  *

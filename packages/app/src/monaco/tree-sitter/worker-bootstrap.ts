@@ -74,6 +74,9 @@ import type { KojoStructureReply } from './types';
  */
 const PROTOCOL: StructureProtocolVersion = 4;
 
+/** 同一枚号给自定义后端发 `open` 用（入口不抄第二份协议字面量） */
+export const STRUCTURE_WORKER_PROTOCOL: StructureProtocolVersion = PROTOCOL;
+
 /**
  * 每条通道的 `doc` 号段宽度（v4 路由用）：第 k 台引擎的 `docBase = k × 本值`。
  * 一百万足够一个客户端一辈子换文件的次数，也让"docBase ≤ doc"这条判据一眼可读。
@@ -85,6 +88,11 @@ interface WorkerScope {
   postMessage(message: StructureReply): void;
   onmessage: ((event: MessageEvent<unknown>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
+}
+
+/** 异常 → 一句话（自定义后端的回话链断了也要能说清） */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** 引擎那一条 error 回话 → v4 的失败原因（闭集里最近的那一枚；不新造词） */
@@ -104,22 +112,57 @@ interface StagedParse {
   readonly includedRanges: readonly StructureRange[] | undefined;
 }
 
+/** 自定义后端的装配回话（`open` 成功 = 带上 `loadMs`；失败 = 闭集里的 `reason` 与一句话） */
+export type StructureSlotInitResult =
+  | { readonly ok: true; readonly loadMs: number }
+  | { readonly ok: false; readonly reason: StructureFailureReason; readonly message: string };
+
+/**
+ * 自定义槽后端（LAU-5 收尾）：不走通用 `StructureEngine`、自带协议环的那门语言（kojo2）
+ * 把它的环交进来，**借这条池线程的号段与 lifecycle**，不再自建 worker。
+ *
+ * 三件事与通用引擎同口径：`initialize()`（`open` 的答案来源）、`handle()`（一条 `parse`
+ * 一条回话）、`dispose()`（槽被摘掉 / 线程拆毁时收账）。号段路由（`docBase ≤ doc` 找槽）仍在
+ * 线程本体，后端只负责"这一条请求的答案"。
+ */
+export interface StructureSlotBackend {
+  initialize(): Promise<StructureSlotInitResult>;
+  handle(request: Extract<StructureRequest, { kind: 'parse' }>): Promise<StructureReply>;
+  dispose(): void;
+}
+
+/** 一份语言资源包：通用引擎的 `StructureEngineAssets`；有 `createBackend` 的走自定义后端那条路 */
+export interface StructureWorkerBundle extends StructureEngineAssets {
+  readonly createBackend?: (docBase: number) => StructureSlotBackend;
+}
+
 /** 一台引擎在**这一条线程里**的全部状态（key 用来找"同一门语言的那台"） */
 class EngineSlot {
-  readonly engine: StructureEngine;
+  /** 通用引擎那台（自定义后端的槽为 null） */
+  readonly engine: StructureEngine | null;
+  /** 自定义后端（与 engine 二选一） */
+  readonly backend: StructureSlotBackend | null;
   /** 引擎装配键：`grammarWasmUrl`（同一门语言第二次 `open` 认这一格） */
   readonly key: string;
   /** 本客户端的 `doc` 号段起点（路由键；缺省 0） */
   docBase: number;
   openId: number | null = null;
+  /** 装配成功（回池后再 `open` 靠它当场回 `ready{loadMs:0}`） */
+  ready = false;
   collected: KojoStructureReply[] = [];
   staged: StagedParse | null = null;
   opening = false;
 
-  constructor(assets: StructureEngineAssets, key: string, docBase: number, emit: (message: KojoStructureReply) => void) {
-    this.engine = new StructureEngine({ assets, emit });
+  constructor(bundle: StructureWorkerBundle, key: string, docBase: number, emit: (message: KojoStructureReply) => void) {
     this.key = key;
     this.docBase = docBase;
+    if (bundle.createBackend !== undefined) {
+      this.engine = null;
+      this.backend = bundle.createBackend(docBase);
+    } else {
+      this.engine = new StructureEngine({ assets: bundle, emit });
+      this.backend = null;
+    }
   }
 }
 
@@ -140,13 +183,13 @@ export interface StructureWorkerHandle {
   dispose(): void;
 }
 
-export function startStructureWorker(assets: StructureEngineAssets | readonly StructureEngineAssets[]): StructureWorkerHandle {
+export function startStructureWorker(assets: StructureWorkerBundle | readonly StructureWorkerBundle[]): StructureWorkerHandle {
   const scope = self as unknown as WorkerScope;
-  const bundles: readonly StructureEngineAssets[] = Array.isArray(assets)
-    ? (assets as readonly StructureEngineAssets[])
-    : [assets as StructureEngineAssets];
+  const bundles: readonly StructureWorkerBundle[] = Array.isArray(assets)
+    ? (assets as readonly StructureWorkerBundle[])
+    : [assets as StructureWorkerBundle];
   /** 默认包（单份形态下任何文法都用它；多份形态下缺省 = 第一份，只在只注册一份时用） */
-  const bundleFor = (grammarWasmUrl: string): StructureEngineAssets | null => {
+  const bundleFor = (grammarWasmUrl: string): StructureWorkerBundle | null => {
     if (bundles.length === 1) return bundles[0]!;
     return bundles.find((bundle) => bundle.grammarWasm === grammarWasmUrl) ?? null;
   };
@@ -188,6 +231,8 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
 
   /** 把这一趟收上来的子回话拼成一条 v4 回话（成功面进 `facets`，整档 error 变失败） */
   const assemble = (slot: EngineSlot, request: { id: number; doc: number; version: number }, incremental: boolean, textLength: number): void => {
+    const engine = slot.engine;
+    if (engine === null) return;
     const sub = slot.collected;
     slot.collected = [];
     const hard = sub.find((message) => message.type === 'error' && message.capability === 'all');
@@ -203,7 +248,7 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
     const folds = sub.find((message) => message.type === 'folds');
     const indent = sub.find((message) => message.type === 'indent');
     const syntax = sub.find((message) => message.type === 'syntax');
-    const timings = slot.engine.lastTimings;
+    const timings = engine.lastTimings;
     const reply: StructureParseReply = {
       ok: true,
       id: request.id,
@@ -211,7 +256,7 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
       doc: request.doc,
       version: request.version,
       // 每次解成一棵就换一枚树身份：宿主拿它当下一条 `parse{edit}` 的 `baseTreeId`
-      treeId: slot.engine.treeId ?? '',
+      treeId: engine.treeId ?? '',
       incremental,
       facets: {
         ...(semantic !== undefined && semantic.type === 'semantic'
@@ -233,7 +278,9 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
   /** 装配完成后要做的两件事：回 `ready`（或补发暂存的首解） */
   const settleOpen = (slot: EngineSlot): void => {
     slot.opening = false;
-    if (!slot.engine.initialized) {
+    const engine = slot.engine;
+    if (engine === null) return;
+    if (!engine.initialized) {
       const hard = slot.collected.find((message) => message.type === 'error');
       slot.collected = [];
       fail(
@@ -248,12 +295,13 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
       return;
     }
     slot.collected = [];
+    slot.ready = true;
     post({
       ok: true,
       id: slot.openId ?? 0,
       kind: 'ready',
       protocol: PROTOCOL,
-      loadMs: slot.engine.loadMs,
+      loadMs: engine.loadMs,
       docBase: slot.docBase,
     });
     // 装配期间暂存过的首解在这里补上（纵深：正常流里宿主门控会等 ready 才发 parse，
@@ -262,9 +310,56 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
     slot.staged = null;
     if (pending !== null) {
       slot.collected = [];
-      slot.engine.parse(pending.doc, pending.version, pending.text, pending.want, pending.includedRanges);
+      engine.parse(pending.doc, pending.version, pending.text, pending.want, pending.includedRanges);
       assemble(slot, { id: 0, doc: pending.doc, version: pending.version }, false, pending.text.length);
     }
+  };
+
+  /** 自定义后端的装配收账：成功回 `ready`（`loadMs` 由后端报）、补发暂存首解；失败删槽并收掉后端 */
+  const settleBackend = (slot: EngineSlot, result: StructureSlotInitResult): void => {
+    slot.opening = false;
+    const backend = slot.backend;
+    if (backend === null) return;
+    if (!result.ok) {
+      fail(slot.openId ?? 0, 'open', result.reason, result.message);
+      // 与通用引擎同口径：装不起来就别留在槽里（下一次 `open` 重新来一遍）
+      slots.delete(slot.docBase);
+      channels.delete(slot.key);
+      backend.dispose();
+      return;
+    }
+    slot.ready = true;
+    post({
+      ok: true,
+      id: slot.openId ?? 0,
+      kind: 'ready',
+      protocol: PROTOCOL,
+      loadMs: result.loadMs,
+      docBase: slot.docBase,
+    });
+    const pending = slot.staged;
+    slot.staged = null;
+    if (pending !== null) {
+      void runBackend(slot, {
+        id: 0,
+        kind: 'parse',
+        doc: pending.doc,
+        version: pending.version,
+        text: pending.text,
+        ...(pending.want === undefined ? {} : { want: pending.want }),
+        ...(pending.includedRanges === undefined ? {} : { includedRanges: pending.includedRanges }),
+      });
+    }
+  };
+
+  /** 一条 `parse` 交给自定义后端：一条请求一条回话；后端抛错 ⇒ `crashed`（与通用引擎同口径） */
+  const runBackend = (slot: EngineSlot, request: Extract<StructureRequest, { kind: 'parse' }>): Promise<void> => {
+    const backend = slot.backend;
+    if (backend === null) return Promise.resolve();
+    return backend.handle(request).then(
+      (reply) => post(reply),
+      (error: unknown) => fail(request.id, 'parse', 'crashed', `worker 处理请求时抛错：${describeError(error)}`),
+    );
   };
 
   const runParse = (request: Extract<StructureRequest, { kind: 'parse' }>): void => {
@@ -306,26 +401,37 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
         return;
       }
     }
+    if (slot.backend !== null) {
+      // 自定义后端自带"整篇 / 差集"两条解析路（kojo2 的环）：`want`、`includedRanges`、
+      // `baseTreeId` 的语义由它的环负责；线程本体只做号段路由与收账。
+      void runBackend(slot, request);
+      return;
+    }
+    const engine = slot.engine;
+    if (engine === null) {
+      fail(request.id, 'parse', 'crashed', '槽既没有通用引擎也没有自定义后端 ⇒ 这条线程内部状态坏了');
+      return;
+    }
     const want = request.want;
     if ('text' in request) {
-      slot.engine.parse(request.doc, request.version, request.text, want, request.includedRanges);
+      engine.parse(request.doc, request.version, request.text, want, request.includedRanges);
       assemble(slot, request, false, request.text.length);
       return;
     }
     const edit = request.edit;
-    if (request.baseTreeId !== undefined && request.baseTreeId !== slot.engine.treeId) {
+    if (request.baseTreeId !== undefined && request.baseTreeId !== engine.treeId) {
       // 基线树不认识（换过线程 / 上一次解没成）：宿主该改发整篇（client 收到这条会重发一次）
       slot.collected = [];
       fail(request.id, 'parse', 'parse-failed', `baseTreeId ${request.baseTreeId} 不是本线程手上那棵树 ⇒ 请改发整篇 text`);
       return;
     }
-    if (slot.engine.treeId === null) {
+    if (engine.treeId === null) {
       slot.collected = [];
       fail(request.id, 'parse', 'parse-failed', '还没有任何可增量的基线树 ⇒ 请改发整篇 text');
       return;
     }
-    const nextLength = Math.max(0, slot.engine.text.length - (edit.oldEnd.offset - edit.start.offset) + edit.newText.length);
-    slot.engine.change({ type: 'change', doc: request.doc, version: request.version, start: edit.start, oldEnd: edit.oldEnd, newEnd: edit.newEnd, newText: edit.newText }, want);
+    const nextLength = Math.max(0, engine.text.length - (edit.oldEnd.offset - edit.start.offset) + edit.newText.length);
+    engine.change({ type: 'change', doc: request.doc, version: request.version, start: edit.start, oldEnd: edit.oldEnd, newEnd: edit.newEnd, newText: edit.newText }, want);
     assemble(slot, request, true, nextLength);
   };
 
@@ -348,7 +454,7 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
         // 装配早就完成 ⇒ 当场回 ready，`loadMs` 记 0；还在装就等 settleOpen 统一回。
         existing.openId = request.id;
         existing.staged = null;
-        if (existing.engine.initialized) {
+        if (existing.ready) {
           post({ ok: true, id: request.id, kind: 'ready', protocol: PROTOCOL, loadMs: 0, docBase: existing.docBase });
         }
         return;
@@ -374,7 +480,12 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
     slots.set(docBase, slot);
     slot.openId = request.id;
     slot.opening = true;
-    void slot.engine.init().then(() => settleOpen(slot));
+    if (slot.backend !== null) {
+      void slot.backend.initialize().then((result) => settleBackend(slot, result));
+      return;
+    }
+    const engine = slot.engine;
+    if (engine !== null) void engine.init().then(() => settleOpen(slot));
   };
 
   scope.onmessage = (event: MessageEvent<unknown>) => {
@@ -409,7 +520,10 @@ export function startStructureWorker(assets: StructureEngineAssets | readonly St
   // 句柄：探针 / 协议表测试要拿它 `dispose()`（多台引擎一起收账）
   return {
     dispose() {
-      for (const slot of slots.values()) slot.engine.dispose();
+      for (const slot of slots.values()) {
+        slot.engine?.dispose();
+        slot.backend?.dispose();
+      }
       slots.clear();
     },
   };

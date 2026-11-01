@@ -29,8 +29,8 @@
  * - 不 import Monaco / 宿主 UI / 插件包，也**不 import `kojo2-runtime.ts`**（那个模块带动态
  *   装载器，进了 worker 图就会切 chunk）：运行时由 `options.loadRuntime` 交进来，类型只从
  *   `kojo2-runtime-core.ts` 取；
- * - **永不抛**：任何一步出错都变成 `{ ok: false, reason, message }`；本地线程级未捕获异常由
- *   `startKojo2Worker` 的 `onerror` 兜一条 `id: 0`（主线程只会记一笔，不会拿它当任何请求的答案）；
+ * - **永不抛**：任何一步出错都变成 `{ ok: false, reason, message }`；线程级未捕获异常由池的
+ *   线程入口兜一条 `id: 0`（主线程只会记一笔，不会拿它当任何请求的答案）；
  * - 查询各面独立降级：`folds` 查询能用就真跑；`indents` 查询的捕获由
  *   {@link indentRulesFromCaptures} 翻成宿主的 `KojoStructureIndentRules` 三条腿
  *   （`increase` / `decrease` / `enter`，`mergeIndentConfig` 直接可吃），**只有查询缺席 /
@@ -290,7 +290,7 @@ export function indentRulesFromCaptures(
 }
 
 /**
- * 造一条 worker 侧引擎（不起线程：消息环在 {@link startKojo2Worker}）。
+ * 造一条 worker 侧引擎（不起线程：消息环由 {@link createKojo2ProtocolRing} 装）。
  *
  * 运行时由 `options.loadRuntime` 交进来；引擎在 `dispose()` 时对它调 `dispose()`
  * （运行时自身的 `dispose` 幂等；worker 线程被 terminate 时 wasm 也会随线程回收）。
@@ -554,13 +554,6 @@ export function createKojo2WorkerEngine(options: Kojo2WorkerEngineOptions): Kojo
   };
 }
 
-/** worker 全局的窄投影（app 的 tsconfig 只挂 DOM lib，不挂 WebWorker lib） */
-export interface Kojo2WorkerScope {
-  postMessage(message: StructureReply): void;
-  onmessage: ((event: MessageEvent<unknown>) => void) | null;
-  onerror: ((event: ErrorEvent) => void) | null;
-}
-
 /** 协议环（LAU-1）：v3 请求进、v3 回话出；引擎仍是 v2 那一套内部请求，翻译只在这一层 */
 export interface Kojo2ProtocolRing {
   handle(request: unknown): Promise<StructureReply>;
@@ -617,6 +610,7 @@ function queryTypeOf(facet: StructureFacet): 'captures' | 'folds' | 'indents' | 
 export function createKojo2ProtocolRing(
   engine: Kojo2WorkerEngine,
   protocol: StructureProtocolVersion = 4,
+  docBase = 0,
 ): Kojo2ProtocolRing {
   /** 预热一次（`open` 与首条 parse 都等它；失败不进缓存，下一次还会再试） */
   let warmed: Promise<Kojo2RuntimeResult> | null = null;
@@ -798,8 +792,9 @@ export function createKojo2ProtocolRing(
         }
         const loaded = await warm();
         if (!loaded.ok) return failed(request.id, 'open', protocolReasonOf(loaded.reason), loaded.message);
-        // kojo2 这条线是单引擎自有 worker（不进 LAU-5 的池）⇒ docBase 恒 0，宿主照旧从 1 起编号
-        return { ok: true, id: request.id, kind: 'ready', protocol, loadMs: loaded.runtime.initMs, docBase: 0 };
+        // 环自带的那枚号段：旧的自有 worker 里恒 0（宿主从 1 起编号）；LAU-5 收尾后，
+        // 池内后端把它挂在线程分给它的 `docBase` 上，宿主按 `docBase + 序号` 发 `parse`。
+        return { ok: true, id: request.id, kind: 'ready', protocol, loadMs: loaded.runtime.initMs, docBase };
       }
       try {
         return await handleParse(request);
@@ -813,57 +808,3 @@ export function createKojo2ProtocolRing(
   };
 }
 
-/**
- * 装消息环并返回引擎（worker 入口 `kojo2-ts.worker.ts` 只调这一句；测试可传自己的 scope）。
- *
- * 收件闸在 ring 里：形状不符的请求回 `invalid-input`（有 id 就带 id），旧形状回
- * `protocol-mismatch`——**不再一声不响**（LAU-1 之前这里直接 return，旧宿主只会看到超时）。
- * 回话失败（主线程已经 `terminate()`）在这里吞掉：线程下一刻就不归我们管了。
- *
- * `options.loadRuntime` 在生产入口里**必须**由静态资源装配（见 `kojo2-ts.worker.ts` 头注）：
- * worker 的 iife 产物不接受动态 import 切 chunk，资源必须由入口静态 import 后注入。
- */
-export function startKojo2Worker(
-  options: Kojo2WorkerEngineOptions,
-  scope?: Kojo2WorkerScope,
-): Kojo2WorkerEngine {
-  const target = scope ?? (self as unknown as Kojo2WorkerScope);
-  const engine = createKojo2WorkerEngine(options);
-  const ring = createKojo2ProtocolRing(engine);
-  target.onmessage = (event: MessageEvent<unknown>) => {
-    void ring.handle(event.data).then(
-      (reply) => {
-        try {
-          target.postMessage(reply);
-        } catch {
-          /* 主线程已经没了：worker 也会被 terminate，没有可补救的 */
-        }
-      },
-      (error: unknown) => {
-        try {
-          target.postMessage({
-            ok: false,
-            id: 0,
-            reason: 'crashed',
-            message: `worker 回话链断了：${describeError(error)}`,
-          });
-        } catch {
-          /* 同上 */
-        }
-      },
-    );
-  };
-  target.onerror = (event: ErrorEvent) => {
-    try {
-      target.postMessage({
-        ok: false,
-        id: 0,
-        reason: 'crashed',
-        message: `worker 线程异常：${event.message || '（无消息）'}`,
-      });
-    } catch {
-      /* 同上 */
-    }
-  };
-  return engine;
-}

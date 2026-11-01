@@ -104,9 +104,7 @@ const harness = vi.hoisted(() => {
   return { FakeWorker };
 });
 
-// 主线程侧对 `?worker` 的静态 import 在 node 池里没有 Vite 装配：换成可编程替身。
-vi.mock('../src/monaco/tree-sitter/kojo2-ts.worker?worker', () => ({ default: harness.FakeWorker }));
-
+// 主线程侧不再有 `?worker` 静态 import（LAU-5 收尾起走池）；测试一律注入 `createWorker`。
 type FakeWorkerInstance = InstanceType<typeof harness.FakeWorker>;
 
 /* ============================ 进程内回环 worker（真 wasm 用） ============================ */

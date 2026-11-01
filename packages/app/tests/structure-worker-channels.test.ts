@@ -13,6 +13,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STRUCTURE_PROTOCOL_VERSION } from '@kojo/kojo-core';
 import type { StructureEngineAssets } from '../src/monaco/tree-sitter/engine';
+import type { StructureSlotBackend, StructureWorkerBundle } from '../src/monaco/tree-sitter/worker-bootstrap';
 
 const fake = vi.hoisted(() => {
   interface FakeReply {
@@ -262,5 +263,89 @@ describe('v4 多通道 · 一条线程多台引擎', () => {
       dedicated.dispose();
       (globalThis as unknown as { self?: unknown }).self = outer;
     }
+  });
+});
+
+/**
+ * LAU-5 收尾：kojo2 自带协议环，以自定义后端挂进同一个槽（不自建 worker）。
+ *
+ * 判的是"后端也吃号段路由、也归线程 lifecycle"——与通用引擎同一条线程、同一张槽表：
+ * `ready` 由线程本体回、`parse` 落到后端、`dispose` 收后端。
+ */
+describe('v4 多通道 · 自定义后端（kojo2 共用一条线程）', () => {
+  it('后端分到自己的号段；parse 落到后端；dispose 收账', async () => {
+    const local = makeScope();
+    const outer = (globalThis as unknown as { self?: unknown }).self;
+    (globalThis as unknown as { self: unknown }).self = local;
+    const disposed: string[] = [];
+    const KEY = 'grammar://kojo2.wasm';
+    const realBackend = (docBase: number): StructureSlotBackend => ({
+      async initialize() {
+        return { ok: true, loadMs: 7 };
+      },
+      async handle(request) {
+        const textLength = 'text' in request ? request.text.length : 0;
+        return {
+          ok: true,
+          id: request.id,
+          kind: 'parse',
+          doc: request.doc,
+          version: request.version,
+          treeId: `${KEY}@${docBase}`,
+          incremental: false,
+          facets: { semantic: { names: [], nodes: [`${KEY}@${docBase}`], spans: [] } },
+          metrics: { parseMs: 0, queryMs: 0, textLength },
+        };
+      },
+      dispose() {
+        disposed.push(KEY);
+      },
+    });
+    const backendBundle: StructureWorkerBundle = {
+      runtimeWasm: 'runtime://shared',
+      grammarWasm: KEY,
+      createBackend: (docBase) => realBackend(docBase),
+    };
+    const handle = startStructureWorker([KOJO, backendBundle]);
+    const ask = (id: number, assets: StructureWorkerBundle): void => {
+      local.sent.length = 0;
+      local.onmessage?.({
+        data: {
+          id,
+          kind: 'open',
+          protocol: STRUCTURE_PROTOCOL_VERSION,
+          languageId: 'probe',
+          runtimeWasmUrl: assets.runtimeWasm,
+          grammarWasmUrl: String(assets.grammarWasm),
+        },
+      } as MessageEvent<unknown>);
+    };
+    try {
+      ask(40, KOJO);
+      await flush();
+      expect(local.sent.at(-1)).toMatchObject({ ok: true, kind: 'ready', docBase: 0 });
+
+      ask(41, backendBundle);
+      await flush();
+      expect(local.sent.at(-1), '后端拿到第二段号（与通用引擎不撞）').toMatchObject({
+        ok: true,
+        kind: 'ready',
+        docBase: STRIDE,
+        loadMs: 7,
+      });
+
+      local.sent.length = 0;
+      local.onmessage?.({
+        data: { id: 42, kind: 'parse', doc: STRIDE + 1, version: 1, text: '甲' },
+      } as MessageEvent<unknown>);
+      await flush();
+      const reply = local.sent.at(-1)!;
+      expect(reply).toMatchObject({ ok: true, kind: 'parse', doc: STRIDE + 1 });
+      expect(answerOf(reply), 'parse 落到后端而不是通用引擎').toBe(`${KEY}@${STRIDE}`);
+    } finally {
+      handle.dispose();
+      (globalThis as unknown as { self?: unknown }).self = outer;
+    }
+    expect(disposed, '线程拆毁时收后端').toEqual([KEY]);
   });
 });

@@ -3,8 +3,8 @@
  *
  * ## 谁 import 本文件
  *
- * - **worker 入口**（`kojo2-ts.worker.ts`）**静态** import：worker 的 iife 产物不接受动态
- *   import 切 chunk，资源必须由入口静态取进来再注入 `createKojo2Runtime()`；
+ * - **worker 侧**（`kojo2-pool-backend.ts`，经 `structure.worker.ts`）**静态** import：worker 的
+ *   iife 产物不接受动态 import，资源必须由入口静态取进来再注入 `createKojo2Runtime()`；
  * - 主线程的懒加载单例（`kojo2-runtime.ts`）**动态** import：flag 关着 / 没人要结构层时，
  *   这些资源连字符串都不进主线程模块图（v1 `kojo-runtime.ts` 同纪律）。
  *

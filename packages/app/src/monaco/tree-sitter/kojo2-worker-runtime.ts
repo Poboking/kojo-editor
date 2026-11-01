@@ -1,12 +1,19 @@
 /**
- * Kojo 2.0 结构解析 worker 的**主线程薄壳**（LAU-1 立协议 v3，LAU-5 抬到 v4——这条线是单引擎
- * 自有 worker，`ready.docBase` 恒 0，不进池）。
+ * Kojo 2.0 结构解析的**主线程薄壳**（LAU-1 立协议 v3，LAU-5 抬到 v4；LAU-5 收尾起**借池**，
+ * 不再自建 worker）。
+ *
+ * ## 线程从哪来（LAU-5 收尾）
+ *
+ * 本客户端不再 `new Kojo2Worker`：它从 `structure-pool.ts` 借一条线程（池键 = `runtimeWasmUrl`，
+ * 与 `.kojo` / ERB 共用同一条），`open` 的 `grammarWasmUrl` 指向 `structure.worker.ts` 里登记的
+ * 那份 kojo2 资源包。线程给 kojo2 分一条**号段**（`ready.docBase`），此后每条 `parse` 的 `doc`
+ * 都是 `docBase + 自己的序号`——同一线程里多台引擎靠这个分流，号段不重叠。
+ * 注入点（`options.createWorker`）保留给测试与回滚；生产不提供（提供即绕过池）。
  *
  * ## 主线程在这里只做四件事
  *
- * 1. **建线程**（`?worker` 入口是 `kojo2-ts.worker.ts`；kojo2 这条线**不进** LAU-5 的池——
- *    它的引擎是自有 worker 协议，与 `structure.worker.ts` 那条 v4 环不是一套），
- *    `start()` 发一条 `open{protocol:3}`；
+ * 1. **借线程**并 `open{protocol}`；`ready` 之前不发 `parse`（那条线程上别的引擎可能刚装好、
+ *    号段还没定下来），请求先排队，`ready` 一到按序补发；
  * 2. 发 `parse{doc,version,text|edit,baseTreeId?,want}`，按 `id` 配对回话；
  * 3. 超时（稳态 4s / 引导期 8s，**与 v1 同一档**——LAU-1 之前这里是 2s，§4.1 把两套超时并成一档）后
  *    把该 `id` 从待办表删掉，**迟到回复直接丢**——一条已经判了 timeout 的请求不许再被改判；
@@ -45,8 +52,9 @@
  *
  * 客户端**不排队**：每条请求各自立刻投递，worker 侧按到达序串行处理（一条 parser，
  * 消息环本来就不该交错）。因此"并发两次 parse"的语义是**先到先解、后到后解**。
+ * 唯一的例外是池路 `open→ready` 之前的那一小段（见上）：那几条请求排在 `queued` 里，
+ * `ready` 一到按到达序补发，语义仍是先到先解。
  */
-import Kojo2Worker from './kojo2-ts.worker?worker';
 import {
   STRUCTURE_BOOTSTRAP_TIMEOUT_MS,
   STRUCTURE_PROTOCOL_VERSION,
@@ -62,6 +70,9 @@ import type {
   StructureRequest,
 } from './protocol';
 import { isStructureReply } from './protocol';
+import { KOJO2_TREE_SITTER_ASSETS } from './kojo2-assets';
+import { acquireStructureThread, type StructureThreadLease } from './structure-pool';
+import type { StructureLanguageRuntime } from './structure-runtime';
 import {
   isKojo2WorkerReply,
   type Kojo2CapturesReply,
@@ -117,6 +128,8 @@ interface PendingRequest {
   readonly version: number;
   /** 这一条是带着 `edit` 发的（`parse-failed` = 基线树不认识 ⇒ 重发整篇，不记失败） */
   fromEdit: boolean;
+  /** 投递时定下的 `doc` 号（池路 = `docBase + 序号`；注入 worker 时恒 0，重发整篇沿用同一枚） */
+  doc: number;
   readonly resolve: (result: Kojo2WorkerResult<Kojo2WorkerReply>) => void;
   readonly timer: ReturnType<typeof setTimeout>;
 }
@@ -136,9 +149,11 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function defaultCreateWorker(): Worker {
-  return new Kojo2Worker();
-}
+/** 池路 `open` 用的运行时描述（`grammarWasmUrl` 必须与 `structure.worker.ts` 登记的那份逐字相同） */
+const KOJO2_STRUCTURE_RUNTIME: StructureLanguageRuntime = {
+  runtimeWasmUrl: KOJO2_TREE_SITTER_ASSETS.runtimeWasmUrl,
+  grammarWasmUrl: String(KOJO2_TREE_SITTER_ASSETS.grammarWasm),
+};
 
 /** 面 ← 上游的请求种类（v3 的 `want` 就是这一格） */
 function facetsOf(type: Kojo2WorkerRequestType): readonly StructureFacet[] {
@@ -162,14 +177,26 @@ export class Kojo2WorkerClient {
   /** 上一条**成功答复**对应的文本与树身份（`parse{edit}` 的基线；两者永远成对更新） */
   private lastText: string | null = null;
   private lastTreeId: string | null = null;
-  private readonly createWorker: () => Worker;
+  private readonly queued: PendingRequest[] = [];
+  /** 池给这条线程的 `doc` 号段起点（`ready.docBase`；未就绪前恒 0） */
+  private docBase = 0;
+  /** 本客户端已发出的 `parse` 条数（`doc` 序号；池路每条 = `docBase + seq`） */
+  private docSeq = 0;
+  /** 线程是否走池（注入 `createWorker` 时为 false：不门控、`doc` 恒 0，与旧契约逐字相同） */
+  private pooled = false;
+  /** 池路：`open→ready` 之前不发 `parse`（号段还没定） */
+  private ready = false;
+  /** 这条借来的线程还能不能回池（崩溃 / 协议不符 / 投递断了三处置 false） */
+  private threadReusable = true;
+  private lease: StructureThreadLease | null = null;
+  private readonly createWorker: (() => Worker) | null;
   private readonly timeoutMs: number;
   private readonly bootstrapTimeoutMs: number;
   private readonly warn: (message: string) => void;
   private readonly warned = new Set<string>();
 
   constructor(options: Kojo2WorkerClientOptions = {}) {
-    this.createWorker = options.createWorker ?? defaultCreateWorker;
+    this.createWorker = options.createWorker ?? null;
     this.timeoutMs = normalizeTimeout(options.timeoutMs, STRUCTURE_TIMEOUT_MS);
     this.bootstrapTimeoutMs = normalizeTimeout(options.bootstrapTimeoutMs, STRUCTURE_BOOTSTRAP_TIMEOUT_MS);
     this.warn = options.warn ?? ((message: string) => console.warn(message));
@@ -205,8 +232,16 @@ export class Kojo2WorkerClient {
     if (this.status === 'starting' || this.status === 'ready') return true;
     if (this.status === 'unavailable' || this.status === 'disposed') return false;
     let worker: Worker;
+    let lease: StructureThreadLease | null = null;
     try {
-      worker = this.createWorker();
+      if (this.createWorker !== null) {
+        worker = this.createWorker();
+      } else {
+        // 生产唯一的出线程口：LAU-5 的池（与 `.kojo` / ERB 共用同一条线程）
+        lease = acquireStructureThread(KOJO2_STRUCTURE_RUNTIME);
+        worker = lease.worker;
+        this.pooled = true;
+      }
     } catch (error) {
       this.markUnavailable(`worker 启动失败：${describeError(error)}`);
       return false;
@@ -215,15 +250,14 @@ export class Kojo2WorkerClient {
       worker.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
       worker.onerror = (event: ErrorEvent) => this.crash(`worker 线程报错：${event.message || '（无消息）'}`);
     } catch (error) {
-      try {
-        worker.terminate();
-      } catch {
-        /* 建到一半的线程：能收就收，收不了随它去 */
-      }
+      // 借来的线程也要交还：装配没装上就不留着占一条池里借出去的账
+      this.worker = worker;
+      this.lease = lease;
       this.markUnavailable(`worker 装配失败：${describeError(error)}`);
       return false;
     }
     this.worker = worker;
+    this.lease = lease;
     this.status = 'starting';
     if (this.mode === 'v3') {
       // 握手：v3 的第一步。旧 worker 不认识它（静默丢掉）⇒ 由引导期超时翻到 v2。
@@ -232,10 +266,13 @@ export class Kojo2WorkerClient {
         kind: 'open',
         protocol: STRUCTURE_PROTOCOL_VERSION,
         languageId: 'kojo2',
-        // 2.0 的 wasm 由入口静态装配，这两格只作自证（worker 不按 URL 装载）
-        runtimeWasmUrl: 'static:kojo2-runtime',
-        grammarWasmUrl: 'static:kojo2-grammar',
+        // 资源早已由 `structure.worker.ts` 静态装配；这两格是路由键（线程按 grammar 找资源包）
+        runtimeWasmUrl: KOJO2_STRUCTURE_RUNTIME.runtimeWasmUrl,
+        grammarWasmUrl: KOJO2_STRUCTURE_RUNTIME.grammarWasmUrl,
       });
+    } else {
+      // 说旧话（v2）时没有握手：那条路不需要等 ready
+      this.ready = true;
     }
     return true;
   }
@@ -256,7 +293,7 @@ export class Kojo2WorkerClient {
     return this.request<Kojo2IndentsReply>('indents', { text, version, oldTreeId });
   }
 
-  /** 幂等、不抛：在途请求一律 resolve 成 `disposed`，线程立即 terminate */
+  /** 幂等、不抛：在途请求一律 resolve 成 `disposed`；借来的池线程按健康度回池，自建线程 terminate */
   dispose(): void {
     if (this.status === 'disposed') return;
     this.status = 'disposed';
@@ -265,10 +302,28 @@ export class Kojo2WorkerClient {
       reason: 'disposed',
       message: '结构解析 worker 客户端已释放 ⇒ 调用方降级到词法层',
     });
-    const worker = this.worker;
-    this.worker = null;
     this.lastText = null;
     this.lastTreeId = null;
+    this.releaseThread(this.threadReusable);
+  }
+
+  /**
+   * 交还线程：借来的走 `lease.release(reusable)`（健康线程回池，坏的当场终结），
+   * 自建的（注入 `createWorker` 时）维持旧契约 `terminate()`。
+   */
+  private releaseThread(reusable: boolean): void {
+    const lease = this.lease;
+    this.lease = null;
+    const worker = this.worker;
+    this.worker = null;
+    if (lease !== null) {
+      try {
+        lease.release(reusable);
+      } catch {
+        /* 收账失败不改变结论 */
+      }
+      return;
+    }
     try {
       worker?.terminate();
     } catch {
@@ -305,6 +360,7 @@ export class Kojo2WorkerClient {
     return new Promise<Kojo2WorkerResult<Kojo2WorkerReply>>((resolve) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        this.dropQueued(id);
         const bootstrapStall = !this.answered;
         resolve({
           ok: false,
@@ -320,20 +376,49 @@ export class Kojo2WorkerClient {
         text: payload.text,
         version: payload.version,
         fromEdit: false,
+        doc: 0,
         timer,
         resolve,
       };
       this.pending.set(id, entry);
-      try {
-        this.dispatch(worker, id, type, payload, entry);
-      } catch (error) {
-        // 投递都失败 = 线程已经死了：这一条与其余在途请求收同一结局，客户端进入终态
-        this.pending.delete(id);
-        clearTimeout(timer);
-        this.markUnavailable(`worker 投递失败：${describeError(error)}`);
-        resolve({ ok: false, reason: 'crashed', message: this.unavailableMessage });
+      // 池路：`open→ready` 之前不发 `parse`（这条线程上的号段还没定下来）⇒ 先排队，
+      // `ready` 一到按到达序补发。注入 `createWorker` 的调用方（测试 / 回滚）不走这条。
+      if (this.pooled && !this.ready) {
+        this.queued.push(entry);
+        return;
       }
+      this.postOrFail(worker, entry);
     }).then((result) => (result.ok ? { ok: true as const, value: result.value as T } : result));
+  }
+
+  /**
+   * 投递一条已入表的请求；线程已经死了 ⇒ 这一条与其余在途请求收同一结局，客户端进入终态。
+   */
+  private postOrFail(worker: Worker, entry: PendingRequest): void {
+    try {
+      this.dispatch(worker, entry.id, entry.type, { text: entry.text, version: entry.version, oldTreeId: entry.baseTreeId }, entry);
+    } catch (error) {
+      this.pending.delete(entry.id);
+      clearTimeout(entry.timer);
+      this.markUnavailable(`worker 投递失败：${describeError(error)}`);
+      entry.resolve({ ok: false, reason: 'crashed', message: this.unavailableMessage });
+    }
+  }
+
+  /** 从待排队列里摘一条（超时之后它不该再被补发） */
+  private dropQueued(id: number): void {
+    const at = this.queued.findIndex((entry) => entry.id === id);
+    if (at >= 0) this.queued.splice(at, 1);
+  }
+
+  /** `ready` 到了：把等号段的那几条按到达序补发 */
+  private flushQueued(): void {
+    const worker = this.worker;
+    if (worker === null) return;
+    for (const entry of this.queued.splice(0)) {
+      if (!this.pending.has(entry.id)) continue;
+      this.postOrFail(worker, entry);
+    }
   }
 
   /**
@@ -360,7 +445,9 @@ export class Kojo2WorkerClient {
       const request: StructureRequest = {
         id,
         kind: 'parse',
-        doc: 0,
+        // 池路：`doc` 落在本客户端借到的那条号段里（同一条线程上别的引擎不会撞号）；
+        // 注入 worker 时沿用旧契约（恒 0，那条线程上只有 kojo2 一台引擎）
+        doc: (entry.doc = this.pooled ? this.docBase + ++this.docSeq : 0),
         version: payload.version,
         ...(entry.fromEdit && base !== null
           ? { edit: edit!, baseTreeId: base.treeId }
@@ -412,7 +499,11 @@ export class Kojo2WorkerClient {
     // 旧路没有差集通道 ⇒ 基线作废（留着只会让下一次 v3 尝试拿一份隔代的文本）
     this.lastText = null;
     this.lastTreeId = null;
+    // 旧路也没有握手：等号段的那几条改按旧形状发；池里答不出 v4 的线程不再回池
+    this.ready = true;
+    if (this.pooled) this.threadReusable = false;
     this.warnOnce(`legacy:${why}`, `[kojo2-worker] v3 通道交给旧路（v2）：${why}`);
+    this.flushQueued();
   }
 
   private receive(data: unknown): void {
@@ -472,7 +563,7 @@ export class Kojo2WorkerClient {
       const request: StructureRequest = {
         id: pending.id,
         kind: 'parse',
-        doc: 0,
+        doc: pending.doc,
         version: pending.version,
         text: pending.text,
         want: facetsOf(pending.type),
@@ -493,7 +584,15 @@ export class Kojo2WorkerClient {
       }
       const pending = this.pending.get(reply.id);
       if (pending === undefined) {
-        if (reply.id !== 0) this.lateReplies += 1; // 与 `pendingFor` 同口径：对不上号就丢
+        if (reply.id !== 0) {
+          if (reply.kind === 'open') {
+            // 池路：`open` 装配失败是**整档**失败（线程里没有这门资源 / 装不起来）——
+            // 别让排队的请求白等到超时，当场说清并降级。
+            this.markUnavailable(`open 装配失败：${reply.message}`);
+            return;
+          }
+          this.lateReplies += 1; // 与 `pendingFor` 同口径：对不上号就丢
+        }
         return;
       }
       if (reply.reason === 'parse-failed' && this.retryAsFullText(pending)) return;
@@ -510,8 +609,12 @@ export class Kojo2WorkerClient {
         this.fallBackToV2(`worker 认的协议是 ${reply.protocol}（本宿主说 ${STRUCTURE_PROTOCOL_VERSION}）`);
         return;
       }
+      // 池路：这条线程给 kojo2 的号段起点（`parse.doc` = `docBase + 序号`，别撞别的引擎）
+      this.docBase = reply.docBase;
+      this.ready = true;
       this.answered = true;
       if (this.status === 'starting') this.status = 'ready';
+      this.flushQueued();
       return;
     }
     const pending = this.pendingFor(reply.id);
@@ -609,19 +712,14 @@ export class Kojo2WorkerClient {
     pending.resolve({ ok: true, value: data });
   }
 
-  /** 整档不可用：记一次告警、终止线程、在途请求全部按 reason 收账（绝不 reject） */
+  /** 整档不可用：记一次告警、交还线程、在途请求全部按 reason 收账（绝不 reject） */
   private markUnavailable(message: string): void {
     if (this.status === 'unavailable' || this.status === 'disposed') return;
     this.status = 'unavailable';
     this.unavailableMessage = message;
     this.warnOnce(`unavailable:${message}`, `[kojo2-worker] ${message} ⇒ 结构层降级到词法层`);
-    const worker = this.worker;
-    this.worker = null;
-    try {
-      worker?.terminate();
-    } catch {
-      /* 收账失败不改变结论 */
-    }
+    this.threadReusable = false;
+    this.releaseThread(false);
     this.flush({ ok: false, reason: 'unavailable', message });
   }
 
@@ -630,13 +728,8 @@ export class Kojo2WorkerClient {
     this.status = 'unavailable';
     this.unavailableMessage = message;
     this.warnOnce(`crash:${message}`, `[kojo2-worker] ${message} ⇒ 结构层降级到词法层`);
-    const worker = this.worker;
-    this.worker = null;
-    try {
-      worker?.terminate();
-    } catch {
-      /* 同上 */
-    }
+    this.threadReusable = false;
+    this.releaseThread(false);
     this.flush({ ok: false, reason: 'crashed', message });
   }
 
@@ -649,6 +742,7 @@ export class Kojo2WorkerClient {
   }
 
   private flush(failure: ClientFailure): void {
+    this.queued.length = 0; // 等号段的那几条也在 `pending` 里，一起收账；之后不许再补发
     const pending = [...this.pending.values()];
     this.pending.clear();
     for (const entry of pending) {
