@@ -132,7 +132,7 @@ pnpm --filter @kojo/app typecheck    # app（両方とも有効）
 
 pnpm audit:decoupling        # 「すべてはプラグイン」監査：A–D と 31 プラグインの計数
 pnpm audit:language          # 言語ラチェット：M1 ゲーム名 / M2 言語 id 分岐 / M3 旧トークン
-pnpm audit:bytes             # リポジトリ全体の符号化 / 改行走査
+pnpm audit:bytes             # 生バイト検査：NUL / BOM / 不正 UTF-8 / 孤立 CR
 pnpm audit:board             # ボード構造と参照の自己検査
 ```
 

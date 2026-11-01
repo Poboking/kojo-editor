@@ -130,7 +130,7 @@ pnpm --filter @kojo/app typecheck    # app（两套都算数）
 
 pnpm audit:decoupling        # 「一切皆插件」解耦审计：A–D 四项 + 31 插件计数
 pnpm audit:language          # 语言面棘轮：M1 游戏名 / M2 语言 id 分支 / M3 旧 token
-pnpm audit:bytes             # 文本文件编码 / 行尾全仓扫描
+pnpm audit:bytes             # 裸字节体检：NUL / BOM / 非法 UTF-8 / 孤立 CR
 pnpm audit:board             # 看板结构与引用自检
 ```
 

@@ -132,7 +132,7 @@ pnpm --filter @kojo/app typecheck    # app (both count)
 
 pnpm audit:decoupling        # "everything is a plugin" audit: A–D plus the 31-plugin count
 pnpm audit:language          # language ratchet: M1 game names / M2 language-id branches / M3 legacy tokens
-pnpm audit:bytes             # repo-wide encoding / EOL scan
+pnpm audit:bytes             # raw-byte health check: NUL / BOM / invalid UTF-8 / stray CR
 pnpm audit:board             # board structure and reference self-check
 ```
 
