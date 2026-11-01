@@ -299,7 +299,7 @@ describe('inlayHint 供方', () => {
 });
 
 describe('插件装配', () => {
-  it('注册十五枚语言服务 + 一枚语言面，id 稳定、order 相同', () => {
+  it('注册十六枚语言服务 + 一枚语言面 + 一枚行内续写源，id 稳定、语言面一族 order 相同', () => {
     const registered: { slot: string; item: { id: string; order?: number } }[] = [];
     const ctx = {
       pluginId: 'kojo-lang',
@@ -344,6 +344,9 @@ describe('插件装配', () => {
       'kojo2-diagnostics',
       // B4：语言面（Monarch / 语言配置 / 三套主题声明）——槽不同，但同样是"注册期交出"
       'kojo2-monaco-language',
+      // LAU-KOJO2-INLINE（2026-10-31）：行内续写（幽灵文本）进**专用槽** `completion.source`
+      // ——不是 `ui.editor.languageService` 的判别成员（多供方 / 异步 / 可弃权与那十四条不同形）
+      'kojo2-near-unique',
     ]);
     expect(registered.map((r) => r.slot)).toEqual([
       'ui.editor.languageService',
@@ -369,8 +372,15 @@ describe('插件装配', () => {
       // B3 收口最后一格：文档级诊断走专用槽 `ui.editor.decorator`（LineDecoration 即诊断形状）
       'ui.editor.decorator',
       'ui.monaco.language',
+      // LAU-KOJO2-INLINE：行内续写走专用槽（契约 `plugin-api/inline-completion.ts` 单开一份）
+      'completion.source',
     ]);
-    expect(new Set(registered.map((r) => r.item.order)).size).toBe(1);
+    // order 分两族：`ui.editor.languageService` 那十六枚同权（CONTRIBUTION_ORDER）；
+    // `completion.source` 取 11（本地源一族：ERB 那家 10，外部模型源从 20 起步）。
+    expect(
+      new Set(registered.filter((r) => r.slot === 'ui.editor.languageService').map((r) => r.item.order)).size,
+    ).toBe(1);
+    expect(registered.find((r) => r.slot === 'completion.source')?.item.order).toBe(11);
   });
 
   it('语言面贡献交出的就是语言面库那几枚对象本体（不抄第二份数据）', () => {

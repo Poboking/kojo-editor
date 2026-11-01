@@ -106,7 +106,9 @@ describe('@kojo/plugin-kojo-lang 是纯插件（零 Monaco / 零 React / 零 IO 
     //   `semanticToken`——捕获快照随请求递进来，这里只做裁与答）
     // + B3 收口最后一格：diagnostics（文档级诊断供方，槽 `ui.editor.decorator`）
     // + G4：workspace-symbols（`Ctrl+T` 供方——项目文件快照随请求递进来，本层只筛与答）
-    expect(files).toHaveLength(21);
+    // + LAU-KOJO2-INLINE：inline-completion（行内续写源供方，槽 `completion.source`——
+    //   判据在 `@kojo/kojo-lang/completion`，本文件只做语言门 / 窗口折回 / 契约三态翻译）
+    expect(files).toHaveLength(22);
   });
 
   it('外部依赖只在白名单里（其余一律是本包内相对路径）', () => {
