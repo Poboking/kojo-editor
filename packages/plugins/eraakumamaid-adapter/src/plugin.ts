@@ -641,6 +641,8 @@ export function createErakumamaidAdapterPlugin(): Plugin {
             workspaces,
             io,
             project,
+            // 作者档案（NPF-1）：记住上次署名 / 版本 / 起手形态，下次新建预填
+            storage: ctx.storage,
             close: () => {
               ctx.bus.emit('ui.overlay.close', {
                 id: NEW_KOJO_PROJECT_OVERLAY_ID,
@@ -658,7 +660,14 @@ export function createErakumamaidAdapterPlugin(): Plugin {
               }
             },
             onCreated: invalidateWs,
-            created: ({ projectId }) => emitProjectCreated(projectId, projectRequestToken ?? undefined),
+            // NPF-1：创建完直接把作者送到正文；有请求方在等时不抢焦点（同上，同 eratw 口径）
+            created: ({ projectId, firstFile }) => {
+              const token = projectRequestToken;
+              emitProjectCreated(projectId, token ?? undefined);
+              if (token === null && firstFile !== undefined) {
+                ctx.bus.emit('editor.revealLocation', { filePath: firstFile, source: 'eraakumamaid-adapter' });
+              }
+            },
           }),
         ),
       });

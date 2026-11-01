@@ -797,6 +797,8 @@ export function createEratwAdapterPlugin(): Plugin {
           // 不碰路径授权本身（授权在平台命令内完成，铁律 6）
           io,
           project,
+          // 作者档案（NPF-1）：记住上次署名 / 版本 / 起手形态，下次新建预填
+          storage: ctx.storage,
           close: () => {
             ctx.bus.emit('ui.overlay.close', { id: NEW_KOJO_PROJECT_OVERLAY_ID, source: 'eratw-adapter' });
             // 意图随窗口关闭作废（创建路径在 close 之前已把关联号带进广播）
@@ -813,7 +815,15 @@ export function createEratwAdapterPlugin(): Plugin {
             }
           },
           onCreated: invalidateWs,
-          created: ({ projectId }) => emitProjectCreated(projectId, projectRequestToken ?? undefined),
+          // NPF-1：创建完直接把作者送到正文。**有请求方在等时不抢焦点**——
+          // 那条链（新建口上文件 → 建项目 → 回填）的发起方自己会落盘并打开它要的文件。
+          created: ({ projectId, firstFile }) => {
+            const token = projectRequestToken;
+            emitProjectCreated(projectId, token ?? undefined);
+            if (token === null && firstFile !== undefined) {
+              ctx.bus.emit('editor.revealLocation', { filePath: firstFile, source: 'eratw-adapter' });
+            }
+          },
           // 游戏侧供数（共享向导不认识本游戏的面清单 / 剧本号 / 四件套说明）
           scaffold: ERATW_SCAFFOLD_DEPS.scaffold,
           coreFaceCount: ERATW_SCAFFOLD_DEPS.coreFaceCount,

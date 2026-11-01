@@ -109,6 +109,30 @@ export type {
   WizardSelectField,
 } from './new-project-wizard';
 
+/* ---- 新建流程通用半边（类型分流 / 空白工作区 / 作者档案；2026-11-02 NPF-1） ---- */
+export {
+  blankProjectDirName,
+  blankSourceChoices,
+  blankSourceExtension,
+  buildBlankProject,
+  firstOpenPath,
+  pickFirstOpenName,
+  projectKindChoiceOf,
+  projectKindChoices,
+  readWizardProfile,
+  WIZARD_PROFILE_KEY,
+  writeWizardProfile,
+} from './new-project-flow';
+export type {
+  BlankProjectDraft,
+  BlankSourceChoice,
+  BlankSourceKind,
+  ProjectKindChoice,
+  WizardProfile,
+  WizardProfileStore,
+  WizardProjectKind,
+} from './new-project-flow';
+
 /* ---- 语言档（起手骨架 = 糖写法 / 原生写法；扩展名一律现算，禁手抄） ---- */
 export {
   DEFAULT_KOJO_LANG_DOC,

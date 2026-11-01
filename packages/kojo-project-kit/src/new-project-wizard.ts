@@ -38,6 +38,7 @@ import type {
   MarketService,
   ProjectService,
   ScaffoldFileSet,
+  ScopedStorage,
   WorkspaceService,
 } from '@kojo/plugin-api';
 import { buildScaffoldDirName, pathKey, sanitizePathSegment } from '@kojo/plugin-api';
@@ -52,6 +53,19 @@ import {
   type KojoLangDoc,
   type KojoLangDocChoice,
 } from './lang-doc';
+import {
+  blankProjectDirName,
+  blankSourceChoices,
+  buildBlankProject,
+  firstOpenPath,
+  pickFirstOpenName,
+  projectKindChoiceOf,
+  projectKindChoices,
+  readWizardProfile,
+  writeWizardProfile,
+  type BlankSourceKind,
+  type WizardProjectKind,
+} from './new-project-flow';
 
 /** 模板来源条目（`deps.listTemplates` 的返回形状；装配侧对已装 `template-pack` 记录的投影） */
 export interface KojoTemplateEntry {
@@ -100,13 +114,18 @@ export interface NewKojoProjectWizardDeps {
   workspaces: WorkspaceService;
   /** 内核 IO：只用它的「自选项目位置」对话框通道（授权发生在平台命令内，见 `location-help` 注释） */
   io: FileIO;
-  /** 游戏项目（角色表来源；无打开项目时向导显式不可用） */
+  /** 游戏项目（角色表来源；**没有打开项目时仍可建空白工作区**） */
   project: ProjectService;
   /**
    * 列出已装的市场模板包（KM-14；**可选**——组装方没接市场时向导与历史逐字一致）。
    * 返回空数组 ⇒ 向导显示灰字「（尚未安装模板包）」并保持默认内置骨架。
    */
   listTemplates?: () => Promise<readonly KojoTemplateEntry[]>;
+  /**
+   * 作者档案（**可选**，2026-11-02 NPF-1）：记住上次的作者名 / 版本 / 起手形态，
+   * 下次新建预填。缺席 ⇒ 每次都是空表单，与历史逐字一致。
+   */
+  storage?: Pick<ScopedStorage, 'get' | 'set'>;
   /** 关闭自身（经内核事件，向导不持有宿主引用） */
   close(): void;
   /** 创建成功后回调（面板刷新：目录缓存失效 + 项目列表重拉） */
@@ -115,8 +134,12 @@ export interface NewKojoProjectWizardDeps {
    * 广播「项目已创建」（反馈 3）。与 `onCreated` 分开是有意的：
    * `onCreated` 是本插件内部的缓存失效，`created` 是对外的**事实通知**——
    * 谁引来的这次创建（关联号）由接线侧决定带不带，组件不参与。
+   *
+   * `firstFile`（2026-11-02 NPF-1，additive）：项目里第一枚可编辑文件的绝对路径。
+   * 接线侧据此把作者直接送到正文；**有请求方在等（关联号非空）时不应抢焦点**，
+   * 那条链的发起方自己会落盘并打开它要的文件。
    */
-  created(info: { projectId: string }): void;
+  created(info: { projectId: string; firstFile?: string }): void;
   /**
    * 本游戏的脚手架（面清单 / 空壳注释 / README / 许可段落全在 adapter 里）。
    * 共享层只负责把表单值装进来——产物长什么样是游戏的事。
@@ -441,6 +464,14 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
+    /**
+     * 「新建什么」（2026-11-02 NPF-1）：没有打开游戏项目时缺省就是空白工作区，
+     * 有项目时缺省仍走历史那条口上作品路径。
+     */
+    const kindChoices = useMemo(() => projectKindChoices(gameProject !== null), [gameProject]);
+    const [kind, setKind] = useState<WizardProjectKind>(gameProject === null ? 'blank' : 'kojo');
+    const [blankSource, setBlankSource] = useState<BlankSourceKind>('erb');
+
     // 目标角色下拉：读游戏项目角色表（按编号升序）
     const charas = useMemo(() => {
       if (!gameProject) return [];
@@ -500,40 +531,101 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       };
     }, [deps, selectedTemplate]);
 
-    /* ---------- 无游戏项目：显式降级（角色表无处可取，不猜） ---------- */
-    if (!gameProject) {
-      return h('div', { className: 'wizard' },
-        h('h3', null, '新建口上项目'),
-        h('p', { className: 'dim' }, '当前无打开的游戏项目。目标角色表来自游戏项目，请先打开项目再新建。'),
-        h('div', { className: 'wizard-actions' },
-          h('button', { className: 'ghost small', onClick: deps.close }, '关闭')));
-    }
+    /* ---------- 作者档案（NPF-1）：预填上次署名 / 版本 / 起手形态（失败不挡创建） ---------- */
+    useEffect(() => {
+      const store = deps.storage;
+      if (store === undefined) return;
+      let cancelled = false;
+      void readWizardProfile(store).then((profile) => {
+        if (cancelled) return;
+        if (profile.authorName !== undefined) setAuthorName(profile.authorName);
+        if (profile.version !== undefined) setVersion(profile.version);
+        if (profile.blankSource !== undefined) setBlankSource(profile.blankSource);
+        // 没有游戏项目时"口上作品"不可选，档案里的 kind 不能把界面掰回一个建不了的类型
+        if (profile.kind !== undefined && (profile.kind === 'blank' || gameProject !== null)) {
+          setKind(profile.kind);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [deps, gameProject]);
+
+    /* ---------- 项目类型：没有游戏也能建（空白工作区） ---------- */
+
+    /**
+     * 实际生效的类型：下拉里被禁用的一档不许被"残留状态"选回去
+     * （游戏项目在窗口开着时关掉也会落到这一格）。
+     */
+    const kindValue: WizardProjectKind =
+      projectKindChoiceOf(kindChoices, kind).disabledReason === null ? kind : 'blank';
 
     const chara = charaNo === null ? null : (charas.find((c) => c.no === charaNo) ?? null);
 
     // 目录名实时预览（逐段消毒；任一段为空 → 预览空 → 禁用创建）
-    const segmentsOk =
-      sanitizePathSegment(workName).length > 0 &&
-      sanitizePathSegment(version).length > 0 &&
-      (chara ? sanitizePathSegment(chara.name).length > 0 : false);
-    const dirNamePreview = chara && segmentsOk
-      ? buildScaffoldDirName({ workName, charaName: chara.name, version })
-      : '';
-    const kojoDirWarning = noKojoDirWarning(chara);
+    const workSegmentsOk = sanitizePathSegment(workName).length > 0;
+    const versionSegmentsOk = sanitizePathSegment(version).length > 0;
+    const kojoSegmentsOk =
+      workSegmentsOk && versionSegmentsOk && (chara ? sanitizePathSegment(chara.name).length > 0 : false);
+    const dirNamePreview =
+      kindValue === 'blank'
+        ? (workSegmentsOk && versionSegmentsOk ? blankProjectDirName(workName, version) : '')
+        : (chara && kojoSegmentsOk ? buildScaffoldDirName({ workName, charaName: chara.name, version }) : '');
+    const kojoDirWarning = kindValue === 'kojo' ? noKojoDirWarning(chara) : null;
 
     const canCreate =
       !busy &&
-      workName.trim().length > 0 &&
-      authorName.trim().length > 0 &&
-      version.trim().length > 0 &&
-      chara !== null &&
-      dirNamePreview.length > 0;
+      workSegmentsOk &&
+      versionSegmentsOk &&
+      dirNamePreview.length > 0 &&
+      // 空白工作区允许不署名；口上作品仍要署名（骨架里那行署名不能凭空生成）
+      (kindValue === 'blank' || (authorName.trim().length > 0 && chara !== null));
+
+    const rememberProfile = (): void => {
+      void writeWizardProfile(deps.storage, {
+        authorName: authorName.trim(),
+        version: version.trim(),
+        kind: kindValue,
+        blankSource,
+      });
+    };
 
     const create = async (): Promise<void> => {
-      if (!chara) return;
+      if (kindValue === 'kojo' && !chara) return;
       setBusy(true);
       setError(null);
       try {
+        /* ---- 空白工作区（NPF-1）：不绑定游戏，产物只有 README + 起手文件 ---- */
+        if (kindValue === 'blank') {
+          const result = buildBlankProject({ workName, authorName, version, sourceKind: blankSource });
+          const wsProject = await deps.workspaces.create(
+            buildCreateInput({ workName, authorName, version }, chosenRoot),
+          );
+          const artifact = await deps.workspaces.createArtifact(wsProject.id, {
+            name: result.dirName,
+            dirName: result.dirName,
+            files: result.files,
+            meta: {
+              kind: 'blank',
+              source: blankSource,
+              ...(authorName.trim().length > 0 ? { author: authorName.trim() } : {}),
+            },
+          });
+          const firstFile = firstOpenPath(
+            deps.workspaces.projectDir(wsProject.id),
+            artifact.dirName,
+            result.files,
+          );
+          rememberProfile();
+          deps.onCreated();
+          deps.created({ projectId: wsProject.id, ...(firstFile !== null ? { firstFile } : {}) });
+          deps.close();
+          return;
+        }
+
+        /* ---- 口上作品：目标角色确定之后才继续（空白分支已在上面返回） ---- */
+        if (chara === null) return;
+
         if (selectedTemplate !== null) {
           // 模板模式（KM-14）：产物 = 模板包 contentDir 的字节级复制；
           // 包署名先从 pack.json 读（读不到也不挡创建，importDirectory 会如实报源目录问题）
@@ -541,7 +633,7 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           const wsProject = await deps.workspaces.create(
             buildCreateInput({ workName, authorName, version }, chosenRoot),
           );
-          await deps.workspaces.importDirectory(
+          const artifact = await deps.workspaces.importDirectory(
             wsProject.id,
             buildTemplateImportInput(
               selectedTemplate,
@@ -549,8 +641,16 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
               pack,
             ),
           );
+          // 模板文件由导入决定；按与骨架同一条规则挑正文（挑不出就不自动定位，不猜文件名）
+          const entries = await deps.workspaces
+            .listDir(wsProject.id, artifact.dirName)
+            .catch(() => []);
+          const files = entries.filter((e) => !e.isDirectory);
+          const pickedName = pickFirstOpenName(files.map((e) => e.name));
+          const firstFile = pickedName === null ? null : (files.find((e) => e.name === pickedName)?.path ?? null);
+          rememberProfile();
           deps.onCreated();
-          deps.created({ projectId: wsProject.id });
+          deps.created({ projectId: wsProject.id, ...(firstFile !== null ? { firstFile } : {}) });
           deps.close();
           return;
         }
@@ -564,14 +664,20 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
         const wsProject = await deps.workspaces.create(
           buildCreateInput({ workName, authorName, version }, chosenRoot),
         );
-        await deps.workspaces.createArtifact(wsProject.id, {
+        const artifact = await deps.workspaces.createArtifact(wsProject.id, {
           name: result.dirName,
           dirName: result.dirName,
           files: result.files,
           meta: { charaNo: chara.no, charaName: chara.name, ...extra },
         });
+        const firstFile = firstOpenPath(
+          deps.workspaces.projectDir(wsProject.id),
+          artifact.dirName,
+          result.files,
+        );
+        rememberProfile();
         deps.onCreated();
-        deps.created({ projectId: wsProject.id });
+        deps.created({ projectId: wsProject.id, ...(firstFile !== null ? { firstFile } : {}) });
         deps.close();
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : String(e));
@@ -606,9 +712,28 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
 
     const fileCount = 1 + (licenseProducesFile(license) ? 1 : 0) + deps.coreFaceCount;
     const defaultRoot = defaultWorkspaceRoot(deps.workspaces);
+    const kindChoice = projectKindChoiceOf(kindChoices, kindValue);
+    const blankChoice =
+      blankSourceChoices().find((c) => c.value === blankSource) ?? blankSourceChoices()[0]!;
 
     return h('div', { className: 'wizard' },
-      h('h3', null, '新建口上项目'),
+      h('h3', null, kindValue === 'blank' ? '新建空白工作区' : '新建口上项目'),
+
+      // 新建什么（NPF-1）：先在"口上作品 / 空白工作区"之间分流。
+      // 没有游戏项目时不是整窗关闭，而是把不可选的一档标出来并说明下一步。
+      h('div', { className: 'wizard-field' },
+        h('span', { className: 'wizard-label' }, '新建什么'),
+        h('select', {
+          value: kindValue,
+          onChange: (e: { target: { value: string } }) => setKind(e.target.value as WizardProjectKind),
+        },
+          kindChoices.map((c) =>
+            h('option', { key: c.value, value: c.value, disabled: c.disabledReason !== null }, c.label))),
+        h('div', { className: 'wizard-hint dim' }, kindChoice.disabledReason ?? kindChoice.hint),
+        gameProject === null
+          ? h('div', { className: 'wizard-hint dim' },
+              '当前没有打开游戏项目：可以先建空白工作区，之后打开游戏再建口上作品。')
+          : null),
 
       // 作品名
       h('label', { className: 'wizard-field' },
@@ -619,12 +744,15 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           onChange: (e: { target: { value: string } }) => setWorkName(e.target.value),
         })),
 
-      // 作者名
+      // 作者名：空白工作区可以留空；口上作品仍要（骨架里那行署名不能凭空生成）。
+      // 上次填过的署名由作者档案预填，作者第二次起只需要写作品名。
       h('label', { className: 'wizard-field' },
-        h('span', { className: 'wizard-label' }, '作者名'),
+        h('span', { className: 'wizard-label' }, kindValue === 'blank' ? '作者名（可留空）' : '作者名'),
         h('input', {
           value: authorName,
-          placeholder: '你的署名（导入他人包时不会被覆盖）',
+          placeholder: kindValue === 'blank'
+            ? '你的署名（可留空）'
+            : '你的署名（导入他人包时不会被覆盖）',
           onChange: (e: { target: { value: string } }) => setAuthorName(e.target.value),
         })),
 
@@ -637,21 +765,23 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           onChange: (e: { target: { value: string } }) => setVersion(e.target.value),
         })),
 
-      // 目标角色（游戏项目角色表）
-      h('label', { className: 'wizard-field' },
-        h('span', { className: 'wizard-label' }, '目标角色'),
-        h('select', {
-          value: charaNo === null ? '' : String(charaNo),
-          onChange: (e: { target: { value: string } }) =>
-            setCharaNo(e.target.value === '' ? null : Number(e.target.value)),
-        },
-          h('option', { value: '' }, charas.length > 0 ? '选择角色…' : '（游戏项目无角色表）'),
-          charas.map((c) => h('option', { key: c.no, value: String(c.no) }, charaOptionLabel(c)))),
+      // 目标角色（游戏项目角色表；只有口上作品需要）
+      kindValue === 'kojo'
+        ? h('label', { className: 'wizard-field' },
+            h('span', { className: 'wizard-label' }, '目标角色'),
+            h('select', {
+              value: charaNo === null ? '' : String(charaNo),
+              onChange: (e: { target: { value: string } }) =>
+                setCharaNo(e.target.value === '' ? null : Number(e.target.value)),
+            },
+              h('option', { value: '' }, charas.length > 0 ? '选择角色…' : '（游戏项目无角色表）'),
+              charas.map((c) => h('option', { key: c.no, value: String(c.no) }, charaOptionLabel(c)))))
+        : null,
 
       // 语言档（NEW-ERB，反馈 1）：本游戏的脚手架声明了才出现这一行。
       // 选中项那句人话常驻显示（与「许可协议」同一手法）——"选了糖也能逐行直写原生"
       // 这件事不写出来，作者就只能猜，而这条反馈的原始症状正是"以为没有原生这条路"。
-      langDocs.length >= 2
+      kindValue === 'kojo' && langDocs.length >= 2
         ? h('div', { className: 'wizard-field' },
             h('span', { className: 'wizard-label' }, '起手写法'),
             h('select', {
@@ -663,9 +793,22 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
             h('div', { className: 'wizard-hint dim' }, kojoLangDocChoice(langDoc).hint))
         : null,
 
+      // 空白工作区的起手文件形态（NPF-1）：只决定那一枚空白文件的扩展名。
+      kindValue === 'blank'
+        ? h('div', { className: 'wizard-field' },
+            h('span', { className: 'wizard-label' }, '起手文件'),
+            h('select', {
+              value: blankSource,
+              onChange: (e: { target: { value: string } }) =>
+                setBlankSource(e.target.value === 'md' ? 'md' : 'erb'),
+            },
+              blankSourceChoices().map((c) => h('option', { key: c.value, value: c.value }, c.label))),
+            h('div', { className: 'wizard-hint dim' }, blankChoice.hint))
+        : null,
+
       // 模板来源（KM-14）：接线方给了 listTemplates 才出现这行（没接市场 ⇒ 与历史逐字一致）。
       // 无模板包时不是把功能藏起来，而是给一条灰字说明——作者看得见"这里还能有别的东西"。
-      deps.listTemplates !== undefined
+      kindValue === 'kojo' && deps.listTemplates !== undefined
         ? h('div', { className: 'wizard-field' },
             h('span', { className: 'wizard-label' }, '模板来源'),
             h('select', {
@@ -678,26 +821,30 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
         : null,
 
       // 游戏自己的下拉字段（如「剧本号」）：adapter 说有才有，取值域也由它给。
-      ...extraFields.map((f) =>
-        h('label', { className: 'wizard-field', key: f.key },
-          h('span', { className: 'wizard-label' }, f.label),
-          h('select', {
-            value: String(extra[f.key] ?? f.defaultValue),
-            onChange: (e: { target: { value: string } }) =>
-              setExtra((prev) => ({ ...prev, [f.key]: Number(e.target.value) })),
-          },
-            f.options.map((o) => h('option', { key: o.value, value: String(o.value) }, o.label))))),
+      ...(kindValue === 'kojo'
+        ? extraFields.map((f) =>
+            h('label', { className: 'wizard-field', key: f.key },
+              h('span', { className: 'wizard-label' }, f.label),
+              h('select', {
+                value: String(extra[f.key] ?? f.defaultValue),
+                onChange: (e: { target: { value: string } }) =>
+                  setExtra((prev) => ({ ...prev, [f.key]: Number(e.target.value) })),
+              },
+                f.options.map((o) => h('option', { key: o.value, value: String(o.value) }, o.label)))))
+        : []),
 
       // 许可协议（反馈 4）：下拉选一种，选中项的一句话说明实时显示在下面。
       // 不用一堆单选按钮：7 个选项会把向导撑长，而作者真正需要的是"选完知道别人能干什么"。
-      h('div', { className: 'wizard-field' },
-        h('span', { className: 'wizard-label' }, '许可协议'),
-        h('select', {
-          value: license,
-          onChange: (e: { target: { value: string } }) => setLicense(e.target.value as LicenseKind),
-        },
-          LICENSE_CHOICES.map((c) => h('option', { key: c.kind, value: c.kind }, c.label))),
-        h('div', { className: 'wizard-hint dim' }, licenseHint(license))),
+      kindValue === 'kojo'
+        ? h('div', { className: 'wizard-field' },
+            h('span', { className: 'wizard-label' }, '许可协议'),
+            h('select', {
+              value: license,
+              onChange: (e: { target: { value: string } }) => setLicense(e.target.value as LicenseKind),
+            },
+              LICENSE_CHOICES.map((c) => h('option', { key: c.kind, value: c.kind }, c.label))),
+            h('div', { className: 'wizard-hint dim' }, licenseHint(license)))
+        : null,
 
       // 项目位置（2026-10-14 自选位置批）：默认落点仍是软件自己的数据目录，
       // 作者可以改成"一个自己认得的文件夹"。文案与样式全部复用既有 wizard-* 类，
@@ -720,16 +867,20 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           h('code', null, dirNamePreview || '—')),
         h('div', { className: 'dim' },
           dirNamePreview
-            ? (selectedTemplate !== null
-              ? templatePreviewLine(selectedTemplate, templateFileCount)
-              : scaffoldPreviewLine({
-                  fileCount,
-                  coreFaceCount: deps.coreFaceCount,
-                  licenseProduces: licenseProducesFile(license),
-                  previewNote: deps.previewNote,
-                  langDoc: langDocs.length >= 2 ? langDoc : undefined,
-                }))
-            : '作品名 / 版本 / 角色名不得为空或仅含非法字符')),
+            ? kindValue === 'blank'
+              ? `将生成 2 个文件：中文 README + ${blankChoice.label}`
+              : selectedTemplate !== null
+                ? templatePreviewLine(selectedTemplate, templateFileCount)
+                : scaffoldPreviewLine({
+                    fileCount,
+                    coreFaceCount: deps.coreFaceCount,
+                    licenseProduces: licenseProducesFile(license),
+                    previewNote: deps.previewNote,
+                    langDoc: langDocs.length >= 2 ? langDoc : undefined,
+                  })
+            : kindValue === 'blank'
+              ? '作品名 / 版本不得为空或仅含非法字符'
+              : '作品名 / 版本 / 角色名不得为空或仅含非法字符'),
         // 后果提前说到选它的那一刻，而不是等作者点「部署」才吃一个拒绝（看板 HK-9）。
         // class 用既有的 `.wizard-warn`（amber）——部署/导入/新建文件三家向导同一口径，
         // 自己新加一处灰字提示就是风格分裂的开始。
