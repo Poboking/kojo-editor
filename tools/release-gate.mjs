@@ -462,8 +462,34 @@ export const ARTIFACT_LIMITS = Object.freeze({
    * · 总量 11,761,476 → **11,772,411 B**（+10,935 B：新块 8,738 B + `adapter-manifest` /
    *   `kojo-hover` 两条动态边改写与跨块引用面）；入口 276,451 → **276,535 B**（+84 B）。
    * · ps10 开机图 **200 文件 / 3,512 KB · 3,596,095 B** 不动（三枚全在动态边之下，见那边台账）。
+   *
+   * 2026-11-01 PS10-LEAK 批：**件数 100 → 88（第一次下调，不是抬）**，总量与入口上限不动。
+   *
+   * 这一笔是**减法**，同一棵树改前/改后各真实构建一次：
+   * 改前 = `LAU-SURFACE-WIRE` 树 99 枚 assets + index.html = **100 件 / 11,772,411 B**（顶格）；
+   * 改后 = 本树 74 枚 + index.html = **75 件 / 11,768,397 B**（入口 `index-DwK28vjj.js` 292,787 B）。
+   *
+   * 减的 25 件**不是删功能**，是 `output.experimentalMinChunkSize = 8 KB` 把「体积小于阈值
+   * 且只有一个引用方」的碎块内联回引用方。逐枚点名（同一份产物名归一后对比，全部是
+   * "块并进唯一引用方"）：
+   * · `editor-options` 6,263 · `kojo-language` 6,975 · `web-host-transport` 5,157 ·
+   *   `editor-model-pool` 4,811 · `launch` 4,389 · `types` 4,204 · `file-save-as` 4,081 ·
+   *   `adapter-manifest` 3,747 · `indent` 2,382 · `kojo-code-action` 1,772 ·
+   *   `overlay-editor-appearance` 1,298 · `UnsavedFilesConfirmDialog` 1,251 ·
+   *   `WritableApprovalDialog` 1,222 · `kojo2-storage-retry-command` 1,087 ·
+   *   `UnsavedConfirmDialog` 1,048 · `welcome-bg-pref` 975 · `ini` 963 · `languageFeatures` 814 ·
+   *   `kit-check` 568 · `debug-registry` 338 · `word-separators` 275 · `legacy-plugin-gate` 262 ·
+   *   `web-tree-sitter`(64 B 的 `fs` 桩壳) · `theme` 23,234 · `editor-global-providers` 225,485
+   *   （最后两枚是**共享边界搬位置**：块名并给了另一个消费者，字节总量未增）。
+   * · 总量 11,772,411 → **11,768,397 B**（−4,014 B：内联消掉了跨块导出面的改名开销）；
+   *   入口 276,535 → **292,787 B**（+16,252 B，上限 1,100 kB，余量仍大）。
+   * · 语义不变：`index.html` 的 preload 名单改前改后**逐字相同**（9 枚），懒边界一枚没少
+   *   ——`experimentalMinChunkSize` 只并「单一引用方」的块，多引用方的共享块不动。
+   * · 闸随之下调 100 → **88**：现读数 75，留 13 件余量。这是本仓第一次**往下**动这个数
+   *   （此前每一笔都是抬），所以口径写清楚：省下来的 25 件不全进下一批的额度，闸跟着收，
+   *   只留"正常增件不红、一次性进整包才红"的那点余量。
    */
-  files: 100,
+  files: 88,
 });
 
 const MIB = 1024 * 1024;

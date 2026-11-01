@@ -583,3 +583,17 @@
 312. **vite 的桶 alias 会吃掉包 exports 的子路径，dev 与 build 一起红，而 ps10 却是绿的**（2026-11-01 LAU-SURFACE-WIRE，`packages/app/vite.config.ts`）：`'@kojo/plugin-eratw-adapter': r('../plugins/eratw-adapter/src/index.ts')` 这条桶 alias 的匹配口径是「等于 find」或「以 `find + /` 开头」，于是 `@kojo/plugin-eratw-adapter/kojo2-surface-map` 被替换成 `…/src/index.ts/kojo2-surface-map`（一个不存在的路径）⇒ 打开项目当场 `Failed to resolve import "@kojo/plugin-eratw-adapter/kojo2-surface-map" from "src/adapter-manifest.ts". Does the file exist?`，`curl http://127.0.0.1:4173/src/adapter-manifest.ts` 直接 500。**ps10 与单测都是绿的**——它们按 node 的 exports 解析，不走 vite alias，所以"闸全绿、dev 起不来"。修法：**叶子 alias 必须排在桶之前**（文件里那一串 `@kojo/kojo-lang/*` 就是为了这个而排的，本批再加 `@kojo/plugin-eratw-adapter/kojo2-surface-map`）。⇒ 凡是新增一条**包 exports 叶子**的动态边，除了跑单测与 ps10，必须再 `curl` 一次被改模块的 dev URL 看是不是 200——这条闸不在任何自动化里。
 
 313. **调试宿的 `serve` 不能用 shell 的 `&` 后台化**（2026-11-01 LAU-SURFACE-WIRE 取证）：`node tools/debug-cli.mjs serve … > log 2>&1 &` 起得来，命令一返回进程树就被收 ⇒ 下一次 `status` 报「`[FAIL] pid=… 不在（无退出记录——serve 进程可能已死，整会话作废重开）`」，日志里还留着上一次会话的噪声行（`stat_file: 调试宿读域外路径被拒` 会刷屏，那是应用在恢复"上次那个不在可读根里的项目"，不是新错误）。用工具的后台任务跑（`run_in_background`），别用 `&` / `nohup` / `setsid`。另：改了 `vite.config.ts` 之后 vite 会自己重启，但**端口会有一段 502**；如果它没回来，`stop` 再 `serve` 一次即可（先 `mv packages/app/node_modules/.vite <仓外>` 避开依赖重优化的批量删除闸，PITFALLS 308 同族）。
+
+314. **包 exports 叶子是「五处齐」的活，少一处，红的地方各不相同**（2026-11-01 PS10-LEAK，`@kojo/plugin-condition-extractor/offload`）：把装配层对某个插件的引用从**桶**改成**叶子**（本条：`compute-tasks.ts` 只要任务表工厂 `conditionExtractorTasks`，不要 `engine` / `snapshot`），要同时改五个地方，缺哪个报的错完全不像同一件事：
+
+    | 处 | 缺了会怎样 |
+    |---|---|
+    | `packages/plugins/<pkg>/package.json` 的 `exports` | node / vitest 侧 `Cannot find package '@kojo/plugin-condition-extractor/offload'` |
+    | `packages/app/vite.config.ts` 的叶子 alias（**排在桶之前**） | dev 起项目 500 / build `Failed to resolve import`（PITFALLS 312） |
+    | 根 `tsconfig.json` 的 `paths` | 根 typecheck `Cannot find module` |
+    | `packages/app/tsconfig.json` 的 `paths` | app typecheck 同上（**两个 tsconfig 各一份，别只改一个**） |
+    | 根 `vitest.config.ts` 的 alias（**排在桶之前**） | 单测整文件 collect 失败、`assertions 0`——**而 `tsc` 与 `vite build` 都是绿的** |
+
+    本条实测顺序就踩了最后一条：`package.json` / 两个 tsconfig / vite 都改了，`tsc` 双绿、`vite build` 绿、ps10 绿，**全量池里 12 个文件 `assertions 0`**（`Cannot find package … imported from compute-tasks.ts`）——因为根 `vitest.config.ts` 自己还有一张 alias 表，桶在前把 `/offload` 吃掉了。**判性口诀**：全量里"多个文件 0 断言 + 同一条 `Cannot find package`"＝模块解析，不是逻辑回归；先数 alias 表有几份（`grep -rn "plugin-condition-extractor" *.config.ts packages/app/*.config.ts tsconfig.json packages/app/tsconfig.json`），别去翻被测代码。
+
+315. **`output.experimentalMinChunkSize` 能真减件数（100 → 75），但它改的是「块的命名归属」，不是「哪段代码在哪」**（2026-11-01 PS10-LEAK，`packages/app/vite.config.ts`）：产物件数闸顶格 100 的实情是二十余枚 < 5 KB 的碎块（最小的 84 B / 262 B / 568 B），它们全是"只被单处 `import()` 的模块"被 rollup 各切一刀。设 `experimentalMinChunkSize = 8 KB` 后，这类块被内联回**唯一引用方**（多引用方的共享块不动 ⇒ 不重复字节），件数 **100 → 75**、总量 −4,014 B、`index.html` 的 preload 名单**逐字不变**（9 枚）⇒ 懒边界语义没动。两条必须知道的行为：① **块名会搬家**——225 KB 的 `editor-global-providers` 块整块不再以那个名字出现，字节出现在 `problem-fix-apply-*.js` 里（rollup 用块内某个模块给共享块命名）。所以**不许拿产物块名当"某模块在哪一块"的判据**，要看就把块名归一后按字节对账（本条做法：改前/改后各构建一次，剥掉 hash 按名字对齐，逐枚列出 25 件并进谁）。② **入口块会略微变胖**（276,535 → 292,787 B，+16,252 B）：跨块引用的导出面改名开销被内联回来了；入口闸 1,100 kB 余量大，可接受。③ 闸的口径：这是本仓**第一次往下调** `ARTIFACT_LIMITS.files`（100 → 88），省下来的 25 件不全进下一批额度——闸跟着收，只留"正常增件不红、一次性进整包才红"的余量。

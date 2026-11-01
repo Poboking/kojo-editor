@@ -378,6 +378,10 @@ export default defineConfig({
       '@kojo/plugin-eratw-adapter/kojo2-surface-map': r('../plugins/eratw-adapter/src/kojo2/surface-map.ts'),
       '@kojo/plugin-eratw-adapter': r('../plugins/eratw-adapter/src/index.ts'),
       '@kojo/plugin-convention-linter': r('../plugins/convention-linter/src/index.ts'),
+      // PS10-LEAK 批：任务表工厂的**包 exports 叶子**（必须排在桶之前，理由同
+      // `kojo2-surface-map`——桶在前会把它拼成 `…/src/index.ts/offload`）。
+      // 装配层只要这张表，不要整包（`engine` / `snapshot` 留在懒边上）。
+      '@kojo/plugin-condition-extractor/offload': r('../plugins/condition-extractor/src/offload.ts'),
       '@kojo/plugin-condition-extractor': r('../plugins/condition-extractor/src/index.ts'),
       '@kojo/plugin-sav-parser': r('../plugins/sav-parser/src/index.ts'),
       '@kojo/plugin-state-replay': r('../plugins/state-replay/src/index.ts'),
@@ -442,7 +446,23 @@ export default defineConfig({
     modulePreload: { polyfill: false },
     chunkSizeWarningLimit: 4200,
     rollupOptions: {
-      output: { manualChunks: createManualChunks() },
+      output: {
+        manualChunks: createManualChunks(),
+        /**
+         * PS10-LEAK 批（2026-11-01）：**小懒块并进它的唯一引用方**。
+         *
+         * 产物件数闸（`tools/release-gate.mjs` 的 `ARTIFACT_LIMITS.files`）此前顶格 100 件，
+         * 其中二十余枚是 < 5 KB 的碎片（最小的 84 B / 262 B / 568 B）。它们不是"独立功能"，
+         * 而是 rollup 为一个只被单处 `import()` 的模块切出来的块——**再小的块也要付一次
+         * 请求 + 一次解析 + 一件配额**。`experimentalMinChunkSize` 让 rollup 把这种
+         * 「体积小于阈值且只有一个引用方」的块内联回引用方（多引用方的共享块不动，
+         * 故不会重复字节），懒边界的**语义不变**：能取到的东西还是那些，只是少切几刀。
+         *
+         * 阈值取 8 KB：再大就会把 `kit-check`（568 B，被两处引用的共享判据）之类
+         * 开始搬家，件数收益递减、边界噪声变大。
+         */
+        experimentalMinChunkSize: 8 * 1024,
+      },
     },
   },
 });

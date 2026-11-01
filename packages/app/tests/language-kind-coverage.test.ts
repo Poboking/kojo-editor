@@ -24,8 +24,10 @@
  * 3. 某格从"有人答"掉成"没人答"（腿删了、供方没了、宿主腿注册点消失、装配点不再调）⇒ 红。
  * 4. **没有供方却点名**（descriptor 点名一条包里没有供方的腿）⇒ 红——这是本系列铁律
  *    （点名＝静默没有）在矩阵层的钉子。
- * 5. `gap` 格脱离看板卡 ⇒ 红（`@debt-ledger BOARD:LAU-COVERAGE` 与卡同批增删，
- *    由 `debt-ledger-registry.test.ts` 兜另一半）。
+ * 5. `gap` 格脱离看板卡 ⇒ 红（`@debt-ledger BOARD:<卡>` 与卡同批增删，
+ *    由 `debt-ledger-registry.test.ts` 兜另一半）。**2026-11-01 起本表零 `gap`**
+ *    （`implementation×kojo1` 收口后），这条规则仍留着——它是下一次冒缺口时的闸，
+ *    不是历史。
  *
  * ## 行为面（不是只验源码形状）
  *
@@ -67,7 +69,6 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '../../..');
 const APP_SRC = path.join(REPO_ROOT, 'packages', 'app', 'src');
 const PLUGINS_ROOT = path.join(REPO_ROOT, 'packages', 'plugins');
-const BOARD_FILE = path.join(REPO_ROOT, 'docs', 'BOARD.md');
 
 const read = (abs: string): string => {
   if (!existsSync(abs)) throw new Error(`[kind-coverage] 取证路径不存在：${abs}`);
@@ -284,13 +285,10 @@ const MATRIX: Readonly<Record<string, Readonly<Record<LangId, Cell>>>> = {
     [ERB_LANGUAGE_ID]: { state: 'host', channels: ['monaco/erb-implementation.ts::.registerImplementationProvider(', "monaco/erb-implementation.ts::'implementation'", 'installer:installImplementationProvider'], supply: [['erb-parser', 'erb-definition']], note: 'ERB 的实现 = 定义位，同一条 provideErbDefinition 答两个 kind（G3）' },
     [KOJO2_LANGUAGE_ID]: { state: 'na', note: '能力矩阵明写 { exempt }：2.0 里跳实现与转定义同义（F12 已覆盖）；descriptor 不点名，不造空供方' },
     [KOJO_LANGUAGE_ID]: {
-      state: 'gap',
-      debt: {
-        card: 'LAU-COVERAGE',
-        precondition:
-          '收口这一格的唯一合法路径＝kojo-sugar 补答 implementation 判别成员（产出同 definition，G3 口径"实现=定义位"归供方说），宿主不得替语言把 definition 腿借给实现（G3 删的正是那条捷径）；封存档若要整体退役，则随退役一并划账',
-      },
-      note: 'ERB-PARITY G3 把"实现复用定义腿"从宿主删掉后，.kojo1 的 Ctrl+F12 两腿皆无人答（槽腿表本无此腿、旧桥腿挂载但供方只认 .erb 族）——本波数出来的唯一真缺口',
+      state: 'host',
+      channels: ['monaco/erb-implementation.ts::.registerImplementationProvider(', "monaco/erb-implementation.ts::'implementation'", 'installer:installImplementationProvider'],
+      supply: [['kojo-sugar', 'kojo-implementation']],
+      note: 'LAU-COVERAGE 收口（2026-11-01）：挂载面仍是宿主那枚收口腿（kojo1 声明 `languageServices: true` ⇒ 照挂），取数面由 kojo-sugar 的 `kojo-implementation` 成员答——「实现 = 定义位」是这门语言的事实，归供方说，与 `kojo-definition` 共用一处取数口',
     },
   },
   completion: {
@@ -503,25 +501,27 @@ describe('LAU-COVERAGE 矩阵：每格每语言至少有人答 + 状态不许说
     }
   });
 
-  it('gap 格恰一格（implementation×kojo1）：不点名、无供方、挂卡在册——收口了就把格改成 host/slot 并划账', () => {
-    // @debt-ledger BOARD:LAU-COVERAGE
+  it('零 gap 格：implementation×kojo1 已收口（供方在册、两腿共用一处取数口、ERB 供方仍弃权 .kojo1）', () => {
     const gaps = Object.entries(MATRIX).flatMap(([row, cells]) =>
       Object.entries(cells)
         .filter(([, cell]) => cell.state === 'gap')
         .map(([lang]) => `${row}×${lang}`),
     );
-    expect(gaps).toEqual([`implementation×${KOJO_LANGUAGE_ID}`]);
+    // 2026-11-01 之前这里是 `['implementation×kojo1']`（矩阵唯一的真缺口）。收口后一格不剩：
+    // 谁再往表里塞 `gap`，先挂看板卡再来（判据不给"先红着"的余地）。
+    expect(gaps, `又冒出了 gap 格：${gaps.join(' / ')}——收口或挂卡`).toEqual([]);
     const cell = (MATRIX.implementation as Record<LangId, Cell>)[KOJO_LANGUAGE_ID];
-    expect(cell.debt).toBeDefined();
-    const board = readFileSync(BOARD_FILE, 'utf8');
-    expect(board, `看板欠账卡 ${cell.debt?.card} 不在——gap 不许脱离看板`).toContain(`|${cell.debt?.card}|`);
-    // 不许用点名遮羞：kojo1 的 descriptor 一枚腿都不点名
+    expect(cell.state, '这一格必须落成 host/slot，不许挂回 gap').toBe('host');
+    expect(cell.debt, 'gap 已收口，欠账字段该删（留着等于欠账没划）').toBeUndefined();
+    expect(pluginSuppliesContribution('kojo-sugar', 'kojo-implementation'), '供方不在册').toBe(true);
+    // 不许用点名遮羞：kojo1 的 descriptor 仍一枚腿都不点名（挂载靠 `languageServices` 全腿）
     expect(declaredSlotKinds(descriptorOf(KOJO_LANGUAGE_ID))).toEqual([]);
-    // 供方确实不存在：kojo-sugar 包里没有 implementation 判别成员
-    const sugarSrc = collectSources(path.join(PLUGINS_ROOT, 'kojo-sugar', 'src'))
-      .map((abs) => readFileSync(abs, 'utf8'))
-      .join('\n');
-    expect(sugarSrc.includes("'implementation'"), 'kojo-sugar 里冒出了 implementation 供方：本格该改判').toBe(false);
+    const sugarIndex = read(path.join(PLUGINS_ROOT, 'kojo-sugar', 'src', 'index.ts'));
+    expect(sugarIndex, 'kojo-sugar 里没有 implementation 判别成员').toContain("id: 'kojo-implementation'");
+    expect(sugarIndex, 'implementation 成员没有交回 implementation 形状').toContain("kind: 'implementation'");
+    // 取数口恰一处：两条 kind 共用 `nameLocationsOf`，不许各抄一份 `resolveKojoDefinition` 调用
+    // （各抄一份的下一次改口径就会只改一条，表现是"F12 跳得对、Ctrl+F12 跳空"）
+    expect(sugarIndex.split('resolveKojoDefinition(').length - 1, '两腿各抄了一份取数判据').toBe(1);
   });
 
   it('铁律·没有供方不许点名：每一门 descriptor 点名的腿，矩阵里那格必须是 slot 或有供方', () => {
@@ -597,7 +597,7 @@ describe('LAU-COVERAGE 行为面：供方对每门语言的应答/弃权拿到�
     }
   });
 
-  it('gap 的证据侧：同一条 implementation 请求打到 .kojo1 路径，ERB 供方弃权（undefined）', () => {
+  it('证据侧：同一条 implementation 请求打到 .kojo1 路径，ERB 供方弃权（⇒ 那一格的答案只可能来自 kojo-sugar）', () => {
     const request = {
       kind: 'implementation',
       path: 'D:/p/legacy.kojo1',

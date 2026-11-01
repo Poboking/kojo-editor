@@ -96,6 +96,80 @@ describe('kojo-sugar · ui.editor.languageService 装配', () => {
   });
 });
 
+/* ============================== 跳到实现（LAU-COVERAGE 收口，2026-11-01） ============================== */
+
+/**
+ * `.kojo1` 的 `Ctrl+F12`（`kind: 'implementation'`）。
+ *
+ * 这一格此前是 LAU-COVERAGE 57 格矩阵里**唯一**的真缺口：宿主那枚收口腿对 kojo1 是挂着的
+ * （`languageServices: true` ⇒ 全腿），但槽里没人答这条腿——ERB 供方只认 `.erb` 族，
+ * 本包当时只有 `kojo-definition`。收口的做法是**供方补一条判别成员**，而不是宿主把定义腿
+ * 借给实现（ERB-PARITY G3 删的正是那条捷径）。
+ */
+describe('kojo-sugar · implementation（Ctrl+F12）装配', () => {
+  type LocationsContribution = {
+    id: string;
+    provide(request: unknown): { kind: string; locations: unknown[] } | undefined;
+  };
+
+  const contributionOf = (slots: SlotRecord[], id: string): LocationsContribution => {
+    const hit = slots.find((s) => s.kind === 'ui.editor.languageService' && s.contribution.id === id);
+    expect(hit, `语言服务成员 ${id} 没注册`).toBeDefined();
+    return hit!.contribution as unknown as LocationsContribution;
+  };
+
+  /**
+   * 真转译能自证的极小源：**原生 `@` 直通行**。
+   *
+   * 为什么不用「函数 …」糖：糖生成的产物名走 adapter 的 `userFunction.template`
+   * （`M_KOJO_K12_<名>`），与源里写的 `计算伤害` 不是同一串，自证腿按"光标取到的名字
+   * 去找同名 `@` 头"必然落空；本夹具又无适配器分野表 / 无项目索引，所以只有**名字在
+   * 源里逐字出现**的原生 `@` 头能拿到非空落点。这与作者在 `.kojo1` 里手写 `@` 块的
+   * 真实情形同形（本包本来就允许原生块直通，源映射 1:1 带列）。
+   */
+  const SOURCE = '@M_KOJO_K12_X(ARG)\n\tRETURN 1\n';
+  /** 声明位：第 1 行第 3 列落在 `M_KOJO_K12_X` 里（`@` 之后第一格） */
+  const DECL_AT = { path: 'C:\\p\\a.kojo1', text: SOURCE, line: 1, column: 3 };
+
+  it('id 稳定；`.kojo1` 之外的文件一律不认（ERB 让给 erb-parser）', () => {
+    const { slots } = activate();
+    const c = contributionOf(slots, 'kojo-implementation');
+    expect(c.id).toBe('kojo-implementation');
+    for (const p of ['C:\\p\\a.ERB', 'C:\\p\\a.erb', 'C:\\p\\a.txt']) {
+      expect(c.provide({ kind: 'implementation', path: p, text: 'CALL X', line: 1, column: 8 })).toBeUndefined();
+    }
+  });
+
+  it('只答 implementation：同一条请求换成 definition 不归它管（两腿各发各的 kind）', () => {
+    const { slots } = activate();
+    expect(
+      contributionOf(slots, 'kojo-implementation').provide({ kind: 'definition', ...DECL_AT }),
+    ).toBeUndefined();
+  });
+
+  it('与定义腿**同一批落点**：实现 = 定义位（口径归供方说，不是宿主借腿）', () => {
+    const { slots } = activate();
+    const def = contributionOf(slots, 'kojo-definition').provide({ kind: 'definition', ...DECL_AT });
+    const impl = contributionOf(slots, 'kojo-implementation').provide({ kind: 'implementation', ...DECL_AT });
+    expect(def, '定义腿在声明位没有落点——样例源或取词口径变了').toBeDefined();
+    expect(def!.locations.length, '定义腿落点为空，本条的对比就失去意义').toBeGreaterThan(0);
+    expect(impl).toEqual({ kind: 'implementation', locations: def!.locations });
+  });
+
+  it('未打开项目（无索引）⇒ 认这个文件但给空目标（不崩、不猜）', () => {
+    const { slots } = activate();
+    expect(
+      contributionOf(slots, 'kojo-implementation').provide({
+        kind: 'implementation',
+        path: 'C:\\p\\a.kojo1',
+        text: '; 空口上\n',
+        line: 1,
+        column: 1,
+      }),
+    ).toEqual({ kind: 'implementation', locations: [] });
+  });
+});
+
 /* ============================== B3 文档大纲 ============================== */
 
 describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
@@ -112,7 +186,7 @@ describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
     return hit.contribution as unknown as SymbolsContribution;
   };
 
-  it('九枚贡献各管一个判别成员（W6 补齐 `workspaceSymbol` / `codeLens` / `inlayHint` 三员）', () => {
+  it('十枚贡献各管一个判别成员（W6 补齐 `workspaceSymbol` / `codeLens` / `inlayHint` 三员，LAU-COVERAGE 补 `implementation` 一员）', () => {
     const { slots } = activate();
     expect(
       slots
@@ -123,6 +197,7 @@ describe('kojo-sugar · documentSymbol（B3 大纲）装配', () => {
       'kojo-code-lens',
       'kojo-definition',
       'kojo-folding',
+      'kojo-implementation',
       'kojo-inlay-hints',
       'kojo-references',
       'kojo-rename',

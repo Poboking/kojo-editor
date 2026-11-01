@@ -130,6 +130,9 @@ export const config = defineConfig({
       '@kojo/plugin-eraav-adapter': r('./packages/plugins/eraav-adapter/src/index.ts'),
       '@kojo/plugin-eratohoreverse-adapter': r('./packages/plugins/eratohoreverse-adapter/src/index.ts'),
       '@kojo/plugin-convention-linter': r('./packages/plugins/convention-linter/src/index.ts'),
+      // PS10-LEAK 批：任务表工厂的包叶子（**必须排在桶之前**——alias 口径是「等于 find」
+      // 或「以 find + / 开头」，桶在前会把 `/offload` 一起吃掉，单测当场 `Cannot find package`）。
+      '@kojo/plugin-condition-extractor/offload': r('./packages/plugins/condition-extractor/src/offload.ts'),
       '@kojo/plugin-condition-extractor': r('./packages/plugins/condition-extractor/src/index.ts'),
       '@kojo/plugin-sav-parser': r('./packages/plugins/sav-parser/src/index.ts'),
       '@kojo/plugin-state-replay': r('./packages/plugins/state-replay/src/index.ts'),

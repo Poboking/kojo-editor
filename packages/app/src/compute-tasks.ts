@@ -21,7 +21,15 @@
  * 两侧（宿主 `registerTask` / worker 入口）拿到的仍是同一份填好的表。
  */
 import type { ComputeTaskTable } from '@kojo/plugin-api';
-import { conditionExtractorTasks } from '@kojo/plugin-condition-extractor';
+// PS10-LEAK 批（2026-11-01）：**引包叶子，不引桶**。
+//
+// 此前这里写 `from '@kojo/plugin-condition-extractor'` ⇒ 桶 `index.ts` 被拽进开机图，
+// 连带 `engine.ts`（全量抽取主循环）与 `snapshot.ts`（快照模型）——这三枚（约 78 KB）
+// 在欢迎页一秒都用不到，只有**项目打开后跑全量抽取**才需要。装配层此刻要的只是
+// 「任务表工厂」`conditionExtractorTasks`，它住在 `offload.ts` 里，叶子导出即可。
+// 与 B1（`@kojo/kojo-lang`）／LAU-SURFACE-WIRE（`kojo2-surface-map`）同一个纪律：
+// **值导出决定模块图**，桶是给懒边上的整包装载用的。
+import { conditionExtractorTasks } from '@kojo/plugin-condition-extractor/offload';
 import { erbParserTasks, scanControlFlow } from '@kojo/plugin-erb-parser';
 
 export const computeTasks: ComputeTaskTable = {

@@ -47,6 +47,7 @@
       "@kojo/plugin-eraav-adapter": ["./packages/plugins/eraav-adapter/src/index.ts"],
       "@kojo/plugin-eratohoreverse-adapter": ["./packages/plugins/eratohoreverse-adapter/src/index.ts"],
       "@kojo/plugin-convention-linter": ["./packages/plugins/convention-linter/src/index.ts"],
+      "@kojo/plugin-condition-extractor/offload": ["./packages/plugins/condition-extractor/src/offload.ts"],
       "@kojo/plugin-condition-extractor": ["./packages/plugins/condition-extractor/src/index.ts"],
       "@kojo/plugin-sav-parser": ["./packages/plugins/sav-parser/src/index.ts"],
       "@kojo/plugin-state-replay": ["./packages/plugins/state-replay/src/index.ts"],

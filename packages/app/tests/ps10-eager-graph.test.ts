@@ -18,8 +18,16 @@ import { describe, expect, it } from 'vitest';
  *    开机图里除**已知漏点**外，项目级插件一枚文件都不许出现；
  * 3. 图的大小闸（粗闸：抓"整包被拽回来"这种量级事故，不追 KB 级抖动）。
  *
- * ⚠ 已知漏点（如实记在这里而不是偷偷放宽判据）：
- * **`condition-extractor`** 仍被宿主 monaco 层静态挂着表达式表，因此留在开机图里。
+ * ⚠ 已知漏点：**本批（PS10-LEAK）已清空**。
+ *
+ * `condition-extractor` 此前是唯一一枚：宿主 `compute-tasks.ts` 静态引它的**桶**，
+ * 于是整包（`engine` / `snapshot` / `extract` / `expr` …8 枚 / 153 KB）挂在欢迎页上，
+ * 而欢迎页一秒都用不到它们——只有项目打开后跑全量抽取才需要。修法不是"藏进懒边"，
+ * 而是把装配层真正要的那一样东西（任务表工厂 `conditionExtractorTasks`）从**包叶子**
+ * `@kojo/plugin-condition-extractor/offload` 取，桶留给懒边上的整包装载。
+ * 读数 **200 → 197 文件 / 3,512 → 3,436 KB**（−77,645 B）。判据同时收紧：
+ * `KNOWN_LEAK_PACKAGES` 现在是空集 ⇒ 它若被拽回来，成员断言当场红。
+ *
  * `kojo-sugar` 那条链（`shell-overlays → diff-view → erb-language → theme → kojo-language
  * → @kojo/plugin-kojo-sugar`）已由 LAU-3b 解耦批断掉：共用词表搬进 `packages/kojo-vocab`，
  * 宿主与 ERB / kojo2 改引新包，v1 转译包不再进开机静态图（下方有专门断言）。
@@ -113,12 +121,15 @@ const TUTORIAL_PROSE_RE = /plugins\/eratw-adapter\/src\/tutorial-(content|overla
 /**
  * 已知漏点的**插件目录名**（相对 `packages/plugins/`）。
  *
- * - `condition-extractor`：宿主 monaco 层仍静态挂着它的表达式表（`erb-language → …` 链）。
+ * **2026-11-01 PS10-LEAK 批起为空集**：唯一那枚 `condition-extractor` 已收口（装配层改引
+ * 包叶子 `…/offload`，见文件头 ⚠ 段）。空集不是"没有判据"，而是判据最紧的一档——
+ * 任何项目级插件重新出现在开机图上都会让下面那条成员断言红，不再有"记过名就放行"的例外。
+ *
  * - `kojo-sugar` **已出列**（LAU-3b 解耦批，2026-10-27）：共用词表 / 词法 / 格式化搬到
  *   `packages/kojo-vocab`（非插件包），宿主与 ERB / kojo2 改引新包之后，v1 转译包的
  *   ~900 KB 链不再被开机静态图拽进来。下面有一条专门断言它**不许回来**。
  */
-const KNOWN_LEAK_PACKAGES = new Set(['condition-extractor']);
+const KNOWN_LEAK_PACKAGES = new Set<string>();
 
 /** 欢迎页 / 无项目态真吃得到的两个常驻插件 */
 const EAGER_PLUGINS = ['@kojo/plugin-erb-parser', '@kojo/plugin-eratw-adapter'];
@@ -200,15 +211,29 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     }
   });
 
-  it('项目级插件在开机图里只剩已知漏点（新拽进来一枚就叫，别悄悄长大）', () => {
+  it('项目级插件在开机图里只剩两个常驻包（新拽进来一枚就叫，别悄悄长大）', () => {
     const presentDirs = new Set(
       files.filter((f) => f.startsWith('packages/plugins/')).map((f) => f.split('/')[2]!),
     );
-    // 常驻两包 + 文件头 ⚠ 记名的漏点包之外，一枚都不该出现在开机图里
+    // 常驻两包之外（`KNOWN_LEAK_PACKAGES` 本批已清空），一枚都不该出现在开机图里。
+    // `leafFamilies` 不是漏点：整包**不在**图上，图上只有点名的那几枚叶子——它的判据是
+    // 下面那条逐文件断言（多一枚、少一枚都红），不是"记过名就放行"。
     const allowed = new Set(['erb-parser', 'eratw-adapter', ...KNOWN_LEAK_PACKAGES]);
-    expect([...presentDirs].filter((d) => !allowed.has(d))).toEqual([]);
-    // 拆分真的生效了：29 个插件包里 ≥15 个整包不在图上（只剩常驻两个 + 已知漏点）
-    const deferredDirs = allPluginPackages().filter((d) => !allowed.has(d));
+    const leafFamilies = new Set(['condition-extractor']);
+    expect([...presentDirs].filter((d) => !allowed.has(d) && !leafFamilies.has(d))).toEqual([]);
+    // PS10-LEAK 批的交付判据：`condition-extractor` 整包不在图上，只剩它的 `offload` 叶子族
+    // （`offload` / `extract` / `expr` / `inline` / `decorator` 五枚，任务表工厂的真实依赖）。
+    // 只要 `engine` / `snapshot` / 桶 `index` 里任意一枚回来 ⇒ 说明又有人引了桶。
+    const condFiles = files.filter((f) => f.startsWith('packages/plugins/condition-extractor/'));
+    expect(condFiles.map((f) => path.basename(f)).sort()).toEqual([
+      'decorator.ts',
+      'expr.ts',
+      'extract.ts',
+      'inline.ts',
+      'offload.ts',
+    ]);
+    // 拆分真的生效了：29 个插件包里 ≥15 个整包不在图上（只剩常驻两个）
+    const deferredDirs = allPluginPackages().filter((d) => !allowed.has(d) && !leafFamilies.has(d));
     expect(deferredDirs.length).toBeGreaterThanOrEqual(15);
     expect(deferredDirs.filter((d) => presentDirs.has(d))).toEqual([]);
     // LAU-3b 解耦批的交付判据：v1 转译包整体不在开机图里（词表已搬去 kojo-vocab）
@@ -1140,11 +1165,24 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       全在图内——**这一格没有"纯懒边"形态**（表本体与读表函数都已经在懒边上，只有
     //       "把它接进悬停"这一句必须在图内）。替代方案（把整条悬停判据搬进插件）要动
     //       `GameAdapter` 契约，是另一辆车。
+    //     **2026-11-01 PS10-LEAK 批：读数 197 文件 / 3,436 KB（3,518,450 B）**
+    //     ——上一行是 200 文件 / 3,596,095 B ⇒ **−3 文件 / −77,645 B**。
+    //     · 逐文件点名（**唯一一笔，是减法**）：`compute-tasks.ts` 的 import 从桶
+    //       `@kojo/plugin-condition-extractor` 改成包叶子 `…/offload`。出图三枚：
+    //       `index.ts` 10,112 B（桶自己）· `engine.ts` 26,893 B（全量抽取主循环）·
+    //       `snapshot.ts` 41,325 B（快照模型）——合计 78,330 B，实测差额 77,645 B 的
+    //       差（685 B）是 `compute-tasks.ts` 自己那几行注释（本仓给理由写字，不给过闸删字）。
+    //     · 留在图里的五枚（`offload` / `extract` / `expr` / `inline` / `decorator`，75,041 B）
+    //       是任务表工厂 `conditionExtractorTasks` 的真实依赖，**不能**再往下拆：任务实现
+    //       就是那两个纯函数（`condition.extractFile` / `erb.exprSyntaxDecorations`）。
+    //     · 闸随之**下调**：文件 200 → 199、KB 3,512 → 3,470（实测余量 2 文件 / 34 KB）。
+    //       这是把"省下来的"留一部分给下一批、而不是原样记成 76 KB 的许可（同 PS10-MENU-SPLIT
+    //       的口径：省下来的不全是下一批的额度）。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤200 文件 / ≤3,512 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,470 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_512);
-    expect(files.length).toBeLessThanOrEqual(200);
+    expect(totalKb).toBeLessThanOrEqual(3_470);
+    expect(files.length).toBeLessThanOrEqual(199);
   });
 
   /**
@@ -1161,8 +1199,10 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
    * 相同（"不许引桶、只许引叶子"），只是取证点从一枚包变成两枚：这不是放宽，是新包进图时
    * 必须回答的同一个问题。
    */
-  it('开机图里对语言面库的引用必须是叶子（不许引桶：桶 = 整包 85 KB）', () => {
-    const barrels = new Set(['@kojo/kojo-lang', '@kojo/kojo-sdk']);
+  it('开机图里对语言面库 / 可搬运任务包的引用必须是叶子（不许引桶：桶 = 整包）', () => {
+    // PS10-LEAK 批加了第三枚：`@kojo/plugin-condition-extractor` 的桶把 `engine` / `snapshot`
+    // 一起 re-export（约 78 KB），装配层要的只是 `offload` 里那一个造表工厂。
+    const barrels = new Set(['@kojo/kojo-lang', '@kojo/kojo-sdk', '@kojo/plugin-condition-extractor']);
     const offenders: string[] = [];
     for (const rel of files) {
       const src = readFileSync(path.join(repoRoot, rel), 'utf8');

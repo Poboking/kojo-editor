@@ -504,6 +504,25 @@ export function createKojoSugarPlugin(): Plugin {
        `.kojo` 的判定复用 `resolveSugarTarget`（"同目录换扩展名"的唯一真源），
        不另写一条正则——两条判据漂移的表现是"保存认得、跳转不认得"这类鬼故事。
        */
+      /**
+       * 「这个名字的定义位」的**唯一取数口**：`definition`（F12）与 `implementation`
+       * （`Ctrl+F12`）共用。
+       *
+       * 为什么抽出来（LAU-COVERAGE 2026-11-01）：两枚 kind 各发各的请求，但答案同一份——
+       * 这门语言里"实现 = 定义位"是**语言事实**，由供方说（契约 `EditorImplementationRequest`
+       * 头注：契约侧不解释"实现"是什么）。两条腿各抄一遍 `resolveKojoDefinition` 的调用，
+       * 下一次改取数口径（比如加项目快照）就会只改一条，表现是"F12 跳得对、Ctrl+F12 跳空"。
+       */
+      const nameLocationsOf = (request: { path: string; text: string; line: number; column: number }) =>
+        resolveKojoDefinition(
+          { path: request.path, text: request.text, line: request.line, column: request.column },
+          {
+            transpile: service.transpile,
+            sourceOf: service.sourceOf,
+            sourceColumnOf: service.sourceColumnOf,
+            index: erbIndexOf,
+          },
+        );
       // 注册入口与另外 17 个插件同一条路（`ctx.slots.register`，单一约定）。
       ctx.slots.register('ui.editor.languageService', {
         id: 'kojo-definition',
@@ -511,18 +530,28 @@ export function createKojoSugarPlugin(): Plugin {
         provide: (request) => {
           if (request.kind !== 'definition') return undefined;
           if (resolveSugarTarget(request.path) === null) return undefined;
-          return {
-            kind: 'definition',
-            locations: resolveKojoDefinition(
-              { path: request.path, text: request.text, line: request.line, column: request.column },
-              {
-                transpile: service.transpile,
-                sourceOf: service.sourceOf,
-                sourceColumnOf: service.sourceColumnOf,
-                index: erbIndexOf,
-              },
-            ),
-          };
+          return { kind: 'definition', locations: nameLocationsOf(request) };
+        },
+      });
+
+      /* ---------------- 跳到实现（LAU-COVERAGE 收口，2026-11-01） ----------------
+
+       同一枚槽的第二个判别成员，`.kojo1` 的 `Ctrl+F12`。为什么必须由本包答、而不是宿主
+       "把定义那条腿借给实现"：ERB-PARITY G3 之前宿主正是那么做的，于是"这门语言没有实现面"
+       无处表达（kojo2 就因此只能靠能力矩阵另记一笔）。现在宿主只发 `kind: 'implementation'`，
+       **"实现是什么"归供方说**——本包按自己的糖语义交回同一批落点。
+
+       这也是 LAU-COVERAGE 57 格矩阵里最后一个真缺口（`implementation×kojo1`：槽腿表本无
+       此腿、旧桥腿挂载但 ERB 供方只认 `.erb` 族 ⇒ 两腿皆无人答）。收口后那一格改判 `host`
+       （挂载面仍是 `monaco/erb-implementation.ts`，取数面换成这里）。
+       */
+      ctx.slots.register('ui.editor.languageService', {
+        id: 'kojo-implementation',
+        order: 20,
+        provide: (request) => {
+          if (request.kind !== 'implementation') return undefined;
+          if (resolveSugarTarget(request.path) === null) return undefined;
+          return { kind: 'implementation', locations: nameLocationsOf(request) };
         },
       });
 
