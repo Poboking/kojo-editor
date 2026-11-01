@@ -82,4 +82,4 @@ node tools/debug-web-smoke.mjs   # 无头浏览器端到端冒烟（欢迎页→
 
 ## 七、版本纪律
 
-抬版本要**三处同步**：root `package.json`、`packages/app/package.json`、`packages/app/src-tauri/tauri.conf.json` 的 `version` 逐字相等（发版提交 `9b2009d` / `e4d4621` 的纪律），现由 `packages/app/tests/app-version.test.ts` 钉住——欢迎页那格即取 app 包清单，不许另抄；`v0.4.0-beta.1` 发版判据见 `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md`（判定行）与 `README.md`（判据节）。
+抬版本要**三处同步**：root `package.json`、`packages/app/package.json`、`packages/app/src-tauri/tauri.conf.json` 的 `version` 逐字相等（发版提交 `9b2009d` / `e4d4621` 的纪律），现由 `packages/app/tests/app-version.test.ts` 钉住——欢迎页那格即取 app 包清单，不许另抄；`v0.4.0-beta.1` 发版判据见 `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md`（判定行）；机器面判据＝`node tools/release-gate.mjs --release`（读数口径见 `docs/STATE.md`，README 自 2026-11-02 起改为开发者向，不再承载判据清单）。
