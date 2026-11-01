@@ -64,6 +64,7 @@ import {
   withinCodeLensBudget,
 } from '../monaco/kojo-code-lens';
 import { collectDefinitionLocations, installDefinitionProvider, type DefinitionLocation } from '../monaco/kojo-definition';
+import { surfaceMapNowOf } from '../adapter-manifest';
 import { derivedLegSurfaceOf, localLegPointOf, surfaceRequestPointOf } from '../monaco/erb-dim-navigation';
 import { createPeekLeases, type PeekLeases } from './peek-leases';
 import { editorModelPool } from './editor-model-pool-instance';
@@ -223,6 +224,7 @@ import {
   openModelAcrossGroups,
   owningPaneOf,
   pathForUriAcrossGroups,
+  registerSemanticLegs,
   requireKernel,
   sourceModelOf,
   sugarOwningPaneOf,
@@ -365,6 +367,10 @@ export function editorTables(kernel: Kernel): EditorTables {
       ...(adapter.kojoInstructionTable ? { instructionTable: adapter.kojoInstructionTable } : {}),
       // B5 签名帮助要的槽语义表（同一枚 adapter 贡献，运行时现取；缺席 = 不产签名）
       ...(adapter.kojoCallProtocol ? { callProtocol: adapter.kojoCallProtocol } : {}),
+      // 表层↔原生表的**同步快照**（LAU-SURFACE-WIRE）：表本体在方言包 exports 的懒叶上，
+      // 这里只交"当前 adapter 那一份已结算的表"；没结算就顺手把装载踢起来（下一次悬停就有）。
+      // 键用项目的 `adapterId`（与清单、`activeGameAdapter` 同一条判据），不另读 adapter 字段。
+      surfaceMap: () => surfaceMapNowOf(kernel.project.current()?.adapterId),
       ...projectSoftLegs(kernel),
     };
   }
@@ -2056,6 +2062,13 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
       model: Monaco.editor.ITextModel,
       position: Monaco.Position,
     ): DefinitionLocation[] => readDefinitionTargets(model, position, requireKernel());
+    // 判据腿登记（DEBUG-SEMANTIC-PROBE 批）：调试面量"这里有没有答案"要问**判据**，不能问
+    // provider 通道——后者拿到跨文件目标时是"发事件跳过去 + 返回 undefined"，与"真没有定义"
+    // 在返回值上同形（PITFALLS 305）。两条腿都是纯读，与下面两枚 provider 共用同一份实现。
+    registerSemanticLegs({
+      definition: resolveDefinitionTargets,
+      references: (model, position) => readReferences(model, position, requireKernel()),
+    });
     globalDisposers.push(installDefinitionProvider(monaco, {
       resolve: resolveDefinitionTargets,
       navigate: (location) => {

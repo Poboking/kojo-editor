@@ -211,6 +211,24 @@ const LAZY_PIN_SUFFIXES: readonly string[] = [
   '/packages/kojo-lang/src/expand-compile.ts',
 ];
 
+/**
+ * 表层↔原生表的**三枚一体**（LAU-SURFACE-WIRE，2026-11-01）：判据懒模块 + 读表面 + 方言包那份表。
+ *
+ * 三枚都不在开机图里（ps10 读数逐字不变），各自的入口是一条**动态边**：`kojo-hover.ts` →
+ * `kojo-surface-name.ts` → `@kojo/kojo-core/surface-map`，以及 `adapter-manifest.ts` →
+ * `eratw-adapter/kojo2/surface-map`。Rollup 按动态入口各切一块 ⇒ 产物件数 99 → **102**
+ * （三枚分别约 4 / 4 / 7 kB）。它们是一条链上同一拍要的东西（一次悬停三枚全要），
+ * 合并既是"一次悬停只多一个请求"，也把件数从 +3 收回 +1。
+ *
+ * 与 `LAZY_PIN_SUFFIXES` 分开立表的理由：那张表的口径是"**单块 0.06–1.6 kB 的切块税**"，
+ * 这三枚是 4–7 kB 的功能单元，混进去会把"懒边碎叶"这条判据说糊。
+ */
+const LAZY_SURFACE_SUFFIXES: readonly string[] = [
+  '/packages/app/src/monaco/kojo-surface-name.ts',
+  '/packages/kojo-core/src/surface-map.ts',
+  '/packages/plugins/eratw-adapter/src/kojo2/surface-map.ts',
+];
+
 function createManualChunks(): (id: string, api: ChunkGraphApi) => string | undefined {
   let isEager: ((id: string) => boolean) | null = null;
   return (id, api) => {
@@ -219,6 +237,11 @@ function createManualChunks(): (id: string, api: ChunkGraphApi) => string | unde
     if (!isEager(id)) {
       // 懒边：只有**同族合并**，没有跨拍搬运（见上面两张表的头注）。
       if (p.endsWith('.css') || p.includes('?worker') || p.includes('?url')) return undefined;
+      // 表层↔原生表的**三枚一体**（LAU-SURFACE-WIRE）：判据懒模块 + 读表面 + 方言包那份表。
+      // 它们是一条链（悬停 → `kojo-surface-name` → `@kojo/kojo-core/surface-map`；清单 →
+      // `kojo2/surface-map`），真被用到时三枚同一拍全要，各自成块就是三枚 4–7 kB 的碎请求
+      // （实测未合并：产物件数 99 → 102）。并成一块既是"一次悬停只多一个请求"，也守住件数闸。
+      if (LAZY_SURFACE_SUFFIXES.some((suffix) => p.endsWith(suffix))) return 'lazy-surface';
       // `@tauri-apps/api` 的四枚（core / dpi / event / window）是同一拍：`window.js` 自己
       // **静态**引另外三枚，所以任何一次 window / event 调用都会把四枚一起取回来
       // （实测：四块合计 17.7 kB，合并后打开窗口标题这条路少三个请求）。
@@ -349,6 +372,10 @@ export default defineConfig({
       '@kojo/erb-vocab/directives': r('../erb-vocab/src/directives.ts'),
       '@kojo/erb-vocab': r('../erb-vocab/src/index.ts'),
       '@kojo/plugin-erb-parser': r('../plugins/erb-parser/src/index.ts'),
+      // LAU-SURFACE-WIRE：表层↔原生映射表的**包 exports 叶子**（同样必须排在桶之前——
+      // 桶在前会把它拼成 `…/src/index.ts/kojo2-surface-map` 这种不存在的路径，实测
+      // dev 起项目当场 `Failed to resolve import`）。
+      '@kojo/plugin-eratw-adapter/kojo2-surface-map': r('../plugins/eratw-adapter/src/kojo2/surface-map.ts'),
       '@kojo/plugin-eratw-adapter': r('../plugins/eratw-adapter/src/index.ts'),
       '@kojo/plugin-convention-linter': r('../plugins/convention-linter/src/index.ts'),
       '@kojo/plugin-condition-extractor': r('../plugins/condition-extractor/src/index.ts'),

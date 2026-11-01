@@ -176,10 +176,16 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
 
     // 适配器的动态 import 在**清单**里（清单本身也是动态取的，不在开机静态图上）
     const manifestSrc = read('packages/app/src/adapter-manifest.ts');
-    const dynamicSpecs = [
+    const rawSpecs = [
       ...[...src.matchAll(/import\(\s*['"](@kojo\/plugin-[^'"]+)['"]\s*\)/g)].map((m) => m[1]!),
       ...[...manifestSrc.matchAll(/import\(\s*['"](@kojo\/plugin-[^'"]+)['"]\s*\)/g)].map((m) => m[1]!),
     ];
+    // **包 exports 的叶子**（`@kojo/plugin-x/<leaf>`，LAU-SURFACE-WIRE 起）不是"装载整包"：
+    // 它不参与下面的覆盖计数（那枚包的整包装载已经在名单里），但包名部分仍必须是**已声明的
+    // 插件**、且叶子必须解析得到——否则清单写错一个字母照样静默。
+    const isLeaf = (spec: string): boolean => spec.split('/').length > 2;
+    const leafSpecs = rawSpecs.filter(isLeaf);
+    const dynamicSpecs = rawSpecs.filter((spec) => !isLeaf(spec));
     expect(new Set(dynamicSpecs).size).toBe(dynamicSpecs.length); // 不重复
     // 名单覆盖 = app 包声明的全部插件依赖，一枚不多一枚不少（新增插件必须进名单）
     const covered = [...EAGER_PLUGINS, ...dynamicSpecs].sort();
@@ -187,6 +193,11 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     expect(dynamicSpecs.length).toBe(declaredPluginSpecs().length - EAGER_PLUGINS.length);
     // 动态 spec 必须都能按 alias / 包名解析到真文件（拼错的名字在源码里看不出来）
     for (const s of dynamicSpecs) expect(ALIASES.get(s), s).toBeTruthy();
+    // 叶子 spec：包名部分必须在声明名单里（不许凭空指向一个没人装的包）
+    for (const s of leafSpecs) {
+      const pkg = s.split('/').slice(0, 2).join('/');
+      expect(declaredPluginSpecs(), s).toContain(pkg);
+    }
   });
 
   it('项目级插件在开机图里只剩已知漏点（新拽进来一枚就叫，别悄悄长大）', () => {
@@ -1119,17 +1130,20 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     此前写着 26 份，索引链路上同一份正文被"全文正则替换"了 5 遍；收口后真语料冷开
     //     `read+parse` 6,095 → 5,274ms（探针 3 轮中位；**单跑读数，A/B 交替的真值是 0.958，
     //     见 PITFALLS 296③ 的更正**）。
-    //     口径注意：闸比的是 `Math.round(totalBytes/1024)`，`round(x) ≤ 3,509` 的临界是
-    //     3,593,728 B ⇒ 现树余量只有 **404 B**。下一笔进图字节必红，届时照 PITFALLS 278
-    //     逐文件点名再抬。
-    //     另：本批还改了五枚**不在图里**的文件（`ui/update-check.ts` +43、
-    //     `monaco/user-snippet-completion.ts` +43、`monaco/erb-dim-navigation.ts` +33、
-    //     `convention-linter/src/diagnostics.ts` +33、`state-replay/src/engine.ts` +33），
-    //     全在懒边 ⇒ 对图零字节零文件，故不上账。
+    //     口径注意：闸比的是 `Math.round(totalBytes/1024)`。
+    //     **2026-11-01 LAU-SURFACE-WIRE 批：3,509 → 3,512 KB**（`round` 临界 3,596,031 B）。
+    //     · 逐文件点名（**唯一一笔**）：`packages/app/src/monaco/kojo-hover.ts` **+2,381 B**
+    //       ——表层↔原生表的反查接线（`HoverTables.surfaceMap` 取数格 + `kickSurfaceHint` /
+    //       `withSurfaceNameHint` 两枚函数）。**文件数 200 不变**（判据本体已整块搬进
+    //       `monaco/kojo-surface-name.ts`，走动态边 ⇒ 零进图；搬之前是 +7 KB 量级）。
+    //     · 为什么必须进图：接线要挂在 `resolveHoverName` 的同步取数链上，而这条链的宿主文件
+    //       全在图内——**这一格没有"纯懒边"形态**（表本体与读表函数都已经在懒边上，只有
+    //       "把它接进悬停"这一句必须在图内）。替代方案（把整条悬停判据搬进插件）要动
+    //       `GameAdapter` 契约，是另一辆车。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤200 文件 / ≤3,509 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤200 文件 / ≤3,512 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_509);
+    expect(totalKb).toBeLessThanOrEqual(3_512);
     expect(files.length).toBeLessThanOrEqual(200);
   });
 

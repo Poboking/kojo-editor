@@ -84,6 +84,14 @@ export interface HoverTables {
      * **声明**，宿主不认识任何一族名字；缺席 = 不做提示（不猜）。
      */
     readonly carrierShells?: readonly CarrierShellHint[];
+  /**
+   * 表层↔原生映射表的**同步快照取数腿**（LAU-SURFACE-WIRE，additive 可选）。
+   *
+   * 表本体住在方言包的 exports 懒叶上（`AdapterManifestEntry.surfaceMapExport`），宿主只拿
+   * 清单点名的那一枚；返回 `null` = 这一版还没装载好 / 该方言没声明这张表 ⇒ 反查这一格缺席。
+   * **同步**是刻意的：悬停 provider 是同步的，改异步会动到一整片既有判据的取数口径。
+   */
+  readonly surfaceMap?: () => unknown | null;
 }
 
 /**
@@ -176,7 +184,11 @@ export function resolveHoverName(
   // LAU-D3 最后一路：载体注册壳前缀（方言声明）⇒ 「这条事件在 xml」。
   // 只在其它各路**都没答案**或**答在同一段记号上**时接管：它不抢已有事实，
   // 只给壳函数补一句"正文不在这里"（DoD 第 4 条）。
-  return withCarrierShellHint(hit, lineText, column, tables.carrierShells);
+  const shelled = withCarrierShellHint(hit, lineText, column, tables.carrierShells);
+  // LAU-SURFACE-WIRE：最后一格是"盘上这个原生写法作者叫什么"。先踢一脚读表面（同步快照
+  // 读不到就得等它结算，首次悬停白丢一格是这条懒边的代价，见 `surfaceReadApi` 头注）。
+  if (tables.surfaceMap !== undefined) kickSurfaceHint();
+  return withSurfaceNameHint(shelled, lineText, column, tables);
 }
 
 /**
@@ -236,6 +248,51 @@ function withCarrierShellHint(
   // 已有命中但落在别的记号（列区间不相交）⇒ 壳提示不接管，免得张冠李戴。
   if (hit.endColumn <= hint.startColumn || hit.startColumn >= hint.endColumn) return hit;
   return { ...hit, lines: [...(hit.lines ?? []), ...hint.lines] };
+}
+
+/* ----------------- 表层↔原生表的**反查**一格（LAU-SURFACE-WIRE；判据住懒模块） ----------------- */
+
+/**
+ * 反查判据整块住 `./kojo-surface-name`（PS-10 开机图顶格 ⇒ 本文件不许长大），这里只留一根**动态边**：
+ * 首次悬停踢一脚装载，之后读模块交回的那枚纯函数。`null` = 还没好 / 这条路不通 ⇒ 这一格缺席。
+ */
+type SurfaceHintFn = (lineText: string, column: number, table: unknown) => SurfaceNameHintLike | null;
+
+interface SurfaceNameHintLike {
+  readonly name: string;
+  readonly kind: string;
+  readonly startColumn: number;
+  readonly endColumn: number;
+}
+
+let surfaceHintFn: SurfaceHintFn | null = null;
+let surfaceHintKicked = false;
+
+function kickSurfaceHint(): void {
+  if (surfaceHintKicked) return;
+  surfaceHintKicked = true;
+  void import('./kojo-surface-name')
+    .then((mod) => {
+      surfaceHintFn = (lineText, column, table) => mod.surfaceNameHintOf(lineText, column, table, mod.surfaceReadApiNow());
+      void mod.surfaceReadApi();
+    })
+    .catch(() => {
+      surfaceHintFn = null;
+    });
+}
+
+/** 反查只补空、不抢答（已有命中 ⇒ 原样返回） */
+function withSurfaceNameHint(
+  hit: HoverHit | undefined,
+  lineText: string,
+  column: number,
+  tables: HoverTables,
+): HoverHit | undefined {
+  if (hit !== undefined || surfaceHintFn === null || tables.surfaceMap === undefined) return hit;
+  const table = tables.surfaceMap();
+  if (table === null || table === undefined) return hit;
+  const hint = surfaceHintFn(lineText, column, table);
+  return hint === null ? hit : { name: hint.name, kind: hint.kind, startColumn: hint.startColumn, endColumn: hint.endColumn };
 }
 
 /**

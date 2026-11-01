@@ -48,6 +48,18 @@ export interface AdapterManifestEntry {
   readonly kojo2AdapterExport?: string;
   /** 2.0 落点面（`KojoEmitBackend` 工厂）在包里的**导出名**（可选；口径与上一条逐字相同） */
   readonly kojo2BackendFactoryExport?: string;
+  /**
+   * 表层↔原生映射表在包里的**导出名**（可选；LAU-SURFACE-WIRE 批）。
+   *
+   * 表**刻意不进 `GameAdapter`**：方言包总装 `*_GAME_ADAPTER` 落在开机静态依赖图里
+   * （PS-10 今天 200 文件 / 3,509 KB 双双顶格），挂进去就是新增一枚在图文件 ⇒ 当场撞闸
+   * （车② 的取舍，见 `packages/kojo-core/src/surface-map.ts` 头注）。所以表走**包 exports
+   * 的懒边**，由本清单点名导出名 + 一条 `loadSurfaceMap` 动态装载；宿主只认清单，
+   * 不认识任何游戏名（识别规则、表本体一律住在各自 adapter 包内）。
+   */
+  readonly surfaceMapExport?: string;
+  /** 表层映射表的懒装载（与 `load` 同形；只有声明了 `surfaceMapExport` 的方言才需要） */
+  readonly loadSurfaceMap?: () => Promise<Record<string, unknown>>;
 }
 
 /**
@@ -67,6 +79,10 @@ export const ADAPTER_MANIFEST: readonly AdapterManifestEntry[] = [
     factory: 'createEratwAdapterPlugin',
     scope: 'boot',
     auditWord: 'eratw',
+    // 表层↔原生映射表（LAU-SURFACE-WIRE）：表本体在包 exports 的懒叶上，**不随常驻包静态
+    // 进图**——只有真去查"这个原生写法作者叫什么"时才把这一枚拉起来（PS-10 顶格）。
+    surfaceMapExport: 'ERATW_SURFACE_MAP',
+    loadSurfaceMap: () => import('@kojo/plugin-eratw-adapter/kojo2-surface-map'),
   },
   {
     id: 'erafl',
@@ -166,4 +182,63 @@ export function createAdapterPlugin(entry: AdapterManifestEntry, mod: Record<str
     throw new Error(`适配器 ${entry.packageName} 没有导出工厂 ${entry.factory}`);
   }
   return (factory as () => Plugin)();
+}
+
+/* --------------------------- 表层映射表：懒装载 + 同步快照（LAU-SURFACE-WIRE） --------------------------- */
+
+/**
+ * 表是**只读数据、按 adapter id 恒定**，所以缓存键就是 id、值就是那一份表本体。
+ * 值是 `Promise` 而不是表：并发首问只拉一次（与 `languageFeaturesService` 同款"踢一脚"形态）。
+ */
+const surfaceMapLoads = new Map<string, Promise<unknown | null>>();
+/** 结算后的同步快照：读表的一方（悬停那条同步腿）等不了 Promise，只读它 */
+const surfaceMapNow = new Map<string, unknown | null>();
+
+/**
+ * 当前 adapter 的表：**同步交回已结算的那一份**，没结算就先踢一脚装载。
+ *
+ * 为什么同步：悬停 provider 是同步的（改异步会动到一整片既有判据的取数口径），而表只是
+ * "多一条反向名"的增益——首次悬停读到 `null` 就等于"这一版还没装好"，第二次就有。为了不让
+ * 首屏那一次白丢，`editorTables()`（每个 provider 调用都会走）顺手把装载踢起来，正常使用时
+ * 早就热了。
+ *
+ * 三态与铁律 4 同口径：**没声明**（清单里没 `surfaceMapExport`）⇒ 恒 `null`，不判不猜；
+ * 装载失败 / 导出名对不上 ⇒ `null`（不编造一张空表——空表会被读表面当成"声明了但一条都没有"）；
+ * 装载成功 ⇒ 表本体（读表函数自己会做 `readSurfaceMap` 的形状校验）。
+ */
+export function surfaceMapNowOf(adapterId: string | null | undefined): unknown | null {
+  if (typeof adapterId !== 'string' || adapterId.length === 0) return null;
+  const settled = surfaceMapNow.get(adapterId);
+  // 结算过就是答案（`null` 也是答案：没声明 / 装载失败），不再重试
+  if (settled !== undefined) return settled;
+  const entry = ADAPTER_MANIFEST.find((candidate) => candidate.id === adapterId);
+  if (entry === undefined || entry.surfaceMapExport === undefined || entry.loadSurfaceMap === undefined) {
+    surfaceMapNow.set(adapterId, null);
+    return null;
+  }
+  void surfaceMapOf(entry);
+  return null;
+}
+
+/** 装载一份表（幂等；失败 ⇒ `null` 并**缓存这个失败**，不让每次悬停都重试一次 IO） */
+export function surfaceMapOf(entry: AdapterManifestEntry): Promise<unknown | null> {
+  const cached = surfaceMapLoads.get(entry.id);
+  if (cached !== undefined) return cached;
+  const exportName = entry.surfaceMapExport;
+  const load = entry.loadSurfaceMap;
+  if (exportName === undefined || load === undefined) return Promise.resolve(null);
+  const pending = (async (): Promise<unknown | null> => {
+    try {
+      const mod = await load();
+      const table = mod[exportName];
+      surfaceMapNow.set(entry.id, table ?? null);
+      return table ?? null;
+    } catch {
+      // 打包器不认 exports 叶子 / 包被裁剪：这条懒边在当前构建上不通 ⇒ 如实 null（不猜）
+      surfaceMapNow.set(entry.id, null);
+      return null;
+    }
+  })();
+  surfaceMapLoads.set(entry.id, pending);
+  return pending;
 }

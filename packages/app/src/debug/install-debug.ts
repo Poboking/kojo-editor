@@ -25,12 +25,17 @@
  *   "该重新对照 DOM 了"，不是"调试面坏了"；1030 批次 3 追加 `semantic` 一块：六条语义读数
  *   背后的**动作 / provider 有没有货**，`ok` 判据不动（动作存在 ≠ provider 齐全，照旧不进 `ok`）；
  * - `editor` 的**跳转与诊断读数**（1030 批，只读、绝不抛）：`definitionAt()` / `referencesAt()`
- *   走 Monaco 的 provider 注册表（`ILanguageFeaturesService`，与"转到定义 / 查找引用"菜单吃的是
- *   同一批 provider），跨文件结果归一成仓库内相对路径；`codeActionsAt()` 只读"有哪些动作"、
+ *   **先读判据腿**（装配点登记的 `SemanticLegs`，见 `editor-pane-registry.ts` 的 `registerSemanticLegs`
+ *   ——纯读、不导航、不改光标），登记簿缺席才退回 Monaco 的 provider 注册表
+ *   （`ILanguageFeaturesService`，与"转到定义 / 查找引用"菜单吃的是同一批 provider）；
+ *   为什么必须这样（PITFALLS 305）：provider 拿到**跨文件目标**时的实现是"发
+ *   `editor.revealLocation` 把文件打开、然后返回 `undefined`"，与"这里真没有定义"在返回值上
+ *   **长得一模一样**——直接调 provider 量到的是**通道**走没走，不是**答案**有没有；
+ *   跨文件结果归一成仓库内相对路径；`codeActionsAt()` 只读"有哪些动作"、
  *   **绝不 apply**；`signatureAt()` / `documentSymbols()` / `diagnostics()`（复用 `markers()` 的
  *   `getModelMarkers` 取数腿，只加裁剪与当前文档作用域）。全部经纯函数裁剪
- *   （`slimLocations` / `slimCodeActions` / `slimSignature` / `slimSymbols` / `slimDiagnostics`），
- *   **不依赖任何私有 DOM 类名**（`.monaco-hover` 那一类是 `selfCheck` 的职责，不是新读数的）；
+ *   （`slimLocations` / `locationsFromLegs` / `slimCodeActions` / `slimSignature` / `slimSymbols` /
+ *   `slimDiagnostics`），**不依赖任何私有 DOM 类名**（`.monaco-hover` 那一类是 `selfCheck` 的职责）；
  * - `editor` 的**让位三腿取证读数**（1031 批，只读、绝不抛）：LAU-DUALLEG 把 ERB 的
  *   `documentHighlight` / `selectionRange` / `codeLens` 三格按 descriptor 点名让位给共享槽腿，
  *   `highlightsAt()` / `selectionRangesAt()` / `lensesAt()` 就经**同一个** `collectFromProviders`
@@ -67,7 +72,7 @@ import { snapshotDocument, type DomSnapshot } from './dom-snapshot';
 import { createPerfProbe, type PerfProbe } from './perf-probe';
 import { summarizeReport } from './perf-probe-core';
 // 编辑器登记簿（只 import 这一个轻模块；Monaco 运行时按需再动态取）
-import { focusedCtx } from '../ui/editor-pane-registry';
+import { focusedCtx, semanticLegsNow } from '../ui/editor-pane-registry';
 
 export interface DebugStateReading extends DomSnapshot {
   readonly ready: true;
@@ -844,6 +849,38 @@ export interface SlimLocationOptions {
   /** 工程根（缺 ⇒ 返回归一后的路径本身，不算相对路径） */
   readonly rootDir?: string | null;
   readonly limit?: number;
+}
+
+/**
+ * **判据腿**的落点 → 调试读数形状（DEBUG-SEMANTIC-PROBE 批）。
+ *
+ * 与 {@link slimLocations} 的分工：那个读的是 **provider 回包**（`Location` / `LocationLink`
+ * 两种协议形状）；这个读的是槽供方交回的 `EditorSymbolLocation`（`filePath` / `line` /
+ * `column?`），中间没有任何协议翻译。**两条腿都要有**：判据腿是首选（纯读、不导航），
+ * provider 那条只在登记簿缺席时兜底。
+ *
+ * 口径与 `readRangeStart` 逐字相同：列缺席 ⇒ 1（行内首列是唯一"不编造"的默认值），
+ * 行非正 ⇒ 整条丢弃（定位不到的目标留着只污染读数）。
+ */
+export function locationsFromLegs(
+  locations: readonly {
+    readonly filePath: string;
+    readonly line: number;
+    readonly column?: number;
+  }[],
+  rootDir: string | null | undefined,
+  limit: number,
+): DebugLocation[] {
+  const out: DebugLocation[] = [];
+  for (const location of locations) {
+    if (out.length >= limit) break;
+    const path = toRepoRelativePath(location.filePath, rootDir);
+    if (!path) continue;
+    const line = toPositiveInt(location.line);
+    if (line === null) continue;
+    out.push({ path, line, column: toPositiveInt(location.column) ?? 1 });
+  }
+  return out;
 }
 
 /** `edit` 里真有编辑才算 `hasEdit`：`{edits: []}` 这种空壳与"只有 command"都不算 */
@@ -2198,6 +2235,12 @@ export function installDebug(): KojoDebugApi {
         try {
           const target = await semanticTarget(line, column);
           if (!target) return [];
+          // **判据腿优先**（PITFALLS 305 的修复）：provider 拿到跨文件目标时是"发事件跳过去 +
+          // 返回 undefined"，与"真没有定义"同形 ⇒ 直接调它量到的是通道，不是答案。
+          const legs = semanticLegsNow();
+          if (legs) {
+            return locationsFromLegs(legs.definition(target.model, target.position), target.rootDir, DEFINITION_LIMIT);
+          }
           const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
           const raw = await collectFromProviders(
             'definitionProvider',
@@ -2215,9 +2258,18 @@ export function installDebug(): KojoDebugApi {
         try {
           const target = await semanticTarget(line, column);
           if (!target) return { items: [], total: 0 };
-          const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
           // 与菜单里的"查找引用"同源：`includeDeclaration` 缺省 true
           const includeDeclaration = opts?.includeDeclaration !== false;
+          const legs = semanticLegsNow();
+          if (legs) {
+            // 声明位的 `kind` 是 `definition`；未分类的落点按 `mention` 保守保留
+            const read = legs.references(target.model, target.position);
+            const all0 = read === null ? [] : read.locations;
+            const kept = includeDeclaration ? all0 : all0.filter((l) => l.kind !== 'definition');
+            const all = locationsFromLegs(kept, target.rootDir, REFERENCE_TOTAL_LIMIT);
+            return { items: all.slice(0, REFERENCE_LIMIT), total: all.length };
+          }
+          const timeoutMs = clampTimeoutMs(opts?.timeoutMs, SEMANTIC_TIMEOUT_DEFAULT_MS);
           const raw = await collectFromProviders(
             'referenceProvider',
             'provideReferences',

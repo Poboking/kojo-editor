@@ -21,6 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  locationsFromLegs,
   slimCodeActions,
   slimDiagnostics,
   slimLocations,
@@ -480,5 +481,60 @@ describe('跳转与诊断 · 源形状守门（provider 链 + 只读 + 不碰私
     }
     // referencesAt 的空读数是 {items, total} 两键（不是裸数组）
     expect(sliceFrom('async referencesAt(line, column, opts)', 1400)).toContain('{ items: [], total: 0 }');
+  });
+});
+
+/* --------------------------- 判据腿优先（DEBUG-SEMANTIC-PROBE 批） --------------------------- */
+
+/**
+ * PITFALLS 305 的根因与修复口径。
+ *
+ * provider 在"跨文件目标"时是**发事件跳过去 + 返回 `undefined`**（`provideLocations` 的
+ * `navigate` 腿），与"这里真没有定义"返回值同形 ⇒ 直接调 provider 量到的是通道，不是答案。
+ * 修法 = 调试面先读**判据腿**（装配点登记的 `SemanticLegs`），登记簿缺席才退回 provider 旧路。
+ * 这一块钉两件事：① 落点整形与 `slimLocations` 同尺；② 源码里判据腿必须**排在** provider 前。
+ */
+describe('跳转与诊断 · 判据腿优先（PITFALLS 305）', () => {
+  const source = read('packages/app/src/debug/install-debug.ts');
+  const sliceFrom = (anchor: string, length = 2600): string => {
+    const at = source.indexOf(anchor);
+    expect(at, `install-debug.ts 里找不到锚点：${anchor}`).toBeGreaterThanOrEqual(0);
+    return source.slice(at, at + length);
+  };
+
+  it('落点整形：filePath/line/column 三格与 slimLocations 同一条"不编造"口径', () => {
+    const out = locationsFromLegs(
+      [
+        { filePath: 'C:\\work\\repo\\ERB\\B_TARGET.ERB', line: 1, column: 2 },
+        // 列缺席 ⇒ 1（行内首列是唯一不编造的默认值）
+        { filePath: 'C:\\work\\repo\\ERB\\C.ERB', line: 7 },
+        // 行非正 / 路径空 ⇒ 整条丢弃（定位不到的目标留着只污染读数）
+        { filePath: 'C:\\work\\repo\\ERB\\D.ERB', line: 0 },
+        { filePath: '', line: 3 },
+      ],
+      'C:\\work\\repo',
+      20,
+    );
+    expect(out).toEqual([
+      { path: 'ERB/B_TARGET.ERB', line: 1, column: 2 },
+      { path: 'ERB/C.ERB', line: 7, column: 1 },
+    ]);
+  });
+
+  it('上限：条数按 limit 截断（与 slimLocations 同一枚夹取）', () => {
+    const many = Array.from({ length: 30 }, (_, i) => ({ filePath: 'C:\\r\\a.ERB', line: i + 1 }));
+    expect(locationsFromLegs(many, 'C:\\r', 5)).toHaveLength(5);
+  });
+
+  it('源码顺序：definitionAt / referencesAt 都先读登记簿，再退回 provider', () => {
+    for (const anchor of ['async definitionAt(line, column, opts)', 'async referencesAt(line, column, opts)']) {
+      const body = sliceFrom(anchor, 1200);
+      const legAt = body.indexOf('semanticLegsNow()');
+      const providerAt = body.indexOf('collectFromProviders(');
+      expect(legAt, `${anchor} 没读判据腿登记簿`).toBeGreaterThan(-1);
+      // 有登记簿时**不许**再走 provider：两处都在 ⇒ 判据腿必须在前（否则旧假阴性照旧）
+      if (providerAt > -1) expect(legAt).toBeLessThan(providerAt);
+      expect(body).toContain('locationsFromLegs(');
+    }
   });
 });

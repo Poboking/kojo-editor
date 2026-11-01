@@ -14,7 +14,7 @@
  */
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
-import type { EditorCodeAction, EditorDocumentSymbol } from '@kojo/plugin-api';
+import type { EditorCodeAction, EditorDocumentSymbol, EditorSymbolLocation } from '@kojo/plugin-api';
 import { matchOpenedPath } from './external-change';
 import { sourceLineToSugar } from './sugar-view';
 
@@ -104,6 +104,50 @@ export function setGlobalKernel(kernel: Kernel): void {
 export function requireKernel(): Kernel {
   if (!globalKernel) throw new Error('[EditorPane] 全局 provider 在无实例时被调用（不应发生）');
   return globalKernel;
+}
+
+/* --------------------------- 判据腿的只读登记簿（DEBUG-SEMANTIC-PROBE 批） --------------------------- */
+
+/**
+ * 一条"位置 → 目标"的**判据腿**：纯读、不导航、不改光标、不发事件。
+ *
+ * 为什么需要这一格（PITFALLS 305 的根因）：Monaco 的 definition / references provider 在本仓
+ * **不是纯读数**——`provideLocations`（`monaco/kojo-definition.ts`）拿到目标后走三条腿：
+ * 目标全都已开着 ⇒ 返回 `LocationLink[]`；否则**发 `editor.revealLocation` 把文件打开、
+ * 然后返回 `undefined`**。也就是说"跨文件目标"与"这里真没有定义"在 provider 的返回值上
+ * **长得一模一样**。调试面 `definitionAt` / `referencesAt` 原先量的正是 provider，于是真机
+ * 恒回空（`selfCheck().semantic.providers` 却报 `true`，因为它问的是注册表而不是这一次请求）。
+ *
+ * 这里登记的是判据腿**本体**（`readDefinitionTargets` / `readReferences`）：位置进、目标数组出。
+ * 调试面优先读它，登记簿缺席才退回 provider 那条旧路（旧行为一个字节都不动）。这与
+ * references 让位车立的"判据与通道分家"是同一条纪律——量"有没有答案"要问判据，不能问通道。
+ *
+ * 只由装配点（`editor-global-providers.ts` 的 `ensureGlobalProviders`）写一次；单测 / 欢迎页
+ * 早注册时是 `null` ⇒ 调试面走旧路。
+ */
+export interface SemanticLegs {
+  /** `definition` 判据腿（糖面已折回预览行；纯读） */
+  readonly definition: (
+    model: Monaco.editor.ITextModel,
+    position: Monaco.Position,
+  ) => readonly EditorSymbolLocation[];
+  /** `references` 判据腿（交回源坐标 + 归属路径；纯读） */
+  readonly references: (
+    model: Monaco.editor.ITextModel,
+    position: Monaco.Position,
+  ) => { readonly path: string; readonly locations: readonly EditorSymbolLocation[] } | null;
+}
+
+let semanticLegs: SemanticLegs | null = null;
+
+/** 装配点登记判据腿（幂等：重挂 / 回滚重试后覆盖成最新那一份） */
+export function registerSemanticLegs(legs: SemanticLegs): void {
+  semanticLegs = legs;
+}
+
+/** 读登记簿；没装配 ⇒ `null`（调试面据此退回 provider 旧路） */
+export function semanticLegsNow(): SemanticLegs | null {
+  return semanticLegs;
 }
 
 /** 跨组反查：哪组的活动编辑器正显示这份 model（糖 model 是派生物，无主 → null） */
