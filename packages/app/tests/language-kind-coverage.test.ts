@@ -309,7 +309,7 @@ const MATRIX: Readonly<Record<string, Readonly<Record<LangId, Cell>>>> = {
     [KOJO_LANGUAGE_ID]: { state: 'host', channels: ['monaco/kojo-format.ts::.registerDocumentFormattingEditProvider(', "monaco/kojo-format.ts::excludeNamed: 'formatting'", 'monaco/kojo-format.ts::.registerDocumentRangeFormattingEditProvider(', 'installer:installDocumentFormatter'], note: '规则尺子 @kojo/kojo-vocab/formatter，宿主腿应答' },
   },
   signatureHelp: {
-    [ERB_LANGUAGE_ID]: { state: 'host', channels: ['monaco/kojo-signature.ts::.registerSignatureHelpProvider(', 'installer:installSignatureHelp'], note: '槽腿表有 signatureHelp 腿并挂在旧桥上，但 ERB 供方缺席（-SIG 组留账：让位＝静默没有）' },
+    [ERB_LANGUAGE_ID]: { state: 'slot', supply: [['erb-lang', 'erb-signatureHelp']], channels: ['monaco/kojo-signature.ts::.registerSignatureHelpProvider(', 'installer:installSignatureHelp'], note: 'LAU-1031-SIG 四件同批（2026-11-01 并入）：descriptor 点名 + 供方 erb-signatureHelp，旧桥按 undefined, { excludeNamed: signatureHelp } 让位——本格由 host 改判 slot' },
     [KOJO2_LANGUAGE_ID]: { state: 'slot', supply: [['kojo-lang', 'kojo2-signatureHelp']], note: 'B3d 起走共享槽腿（descriptor 点名），判据住 @kojo/kojo-lang/signature' },
     [KOJO_LANGUAGE_ID]: { state: 'host', channels: ['monaco/kojo-signature.ts::.registerSignatureHelpProvider(', 'installer:installSignatureHelp'] },
   },
