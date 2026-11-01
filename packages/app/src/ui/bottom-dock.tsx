@@ -1,4 +1,10 @@
-import { memo, useSyncExternalStore, type PointerEvent as ReactPointerEvent, type ReactElement } from 'react';
+import {
+  memo,
+  useSyncExternalStore,
+  type DragEvent as ReactDragEvent,
+  type PointerEvent as ReactPointerEvent,
+  type ReactElement,
+} from 'react';
 import type { UIPanelContribution, UIPanelProps } from '@kojo/plugin-api';
 import { Icon } from './icons';
 import { PanelBody } from './PanelHost';
@@ -87,6 +93,9 @@ export interface DockCellProps {
   onResizeStart: (e: ReactPointerEvent<HTMLElement>, id: string) => void;
   onFloat: (id: string) => void;
   onClose: (id: string) => void;
+  /** 拖拽停靠：格头也是拖拽源（P3 修复——此前只有上方标签条能拖走这一颗） */
+  onCellDragStart?: (e: ReactDragEvent<HTMLElement>, id: string) => void;
+  onCellDragEnd?: () => void;
 }
 
 /**
@@ -106,6 +115,8 @@ export const DockCell = memo(function DockCell({
   onResizeStart,
   onFloat,
   onClose,
+  onCellDragStart,
+  onCellDragEnd,
 }: DockCellProps): ReactElement {
   return (
     <section
@@ -122,7 +133,14 @@ export const DockCell = memo(function DockCell({
       {...(heightPx === undefined ? {} : { 'data-dock-pinned': '' })}
       {...(active ? { 'data-dock-active': '' } : {})}
     >
-      <header className="dock-cell-head">
+      <header
+        className="dock-cell-head"
+        // 拖拽停靠（P3 修复）：格头本身就是抓手——只给回调时才挂 draggable，
+        // 无回调（纯渲染的判据/测试）保持原样，不出现"能抓但抓不动"的死区。
+        draggable={onCellDragStart !== undefined}
+        onDragStart={onCellDragStart === undefined ? undefined : (e) => onCellDragStart(e, panel.id)}
+        onDragEnd={onCellDragEnd}
+      >
         <span className="dock-cell-title">
           {panel.icon !== undefined ? <Icon name={panel.icon} size={14} /> : null}
           {panel.title}
@@ -177,6 +195,9 @@ export interface BottomDockProps {
   onResizeStart: (e: ReactPointerEvent<HTMLElement>, id: string) => void;
   onFloat: (id: string) => void;
   onClose: (id: string) => void;
+  /** 拖拽停靠：原样转给每一格的格头（见 `DockCellProps.onCellDragStart`） */
+  onCellDragStart?: (e: ReactDragEvent<HTMLElement>, id: string) => void;
+  onCellDragEnd?: () => void;
 }
 
 /**
@@ -194,6 +215,8 @@ export function BottomDock({
   onResizeStart,
   onFloat,
   onClose,
+  onCellDragStart,
+  onCellDragEnd,
 }: BottomDockProps): ReactElement {
   return (
     <div className="bottom-dock" data-dock-cell-count={cells.length}>
@@ -209,6 +232,8 @@ export function BottomDock({
           onResizeStart={onResizeStart}
           onFloat={onFloat}
           onClose={onClose}
+          onCellDragStart={onCellDragStart}
+          onCellDragEnd={onCellDragEnd}
         />
       ))}
     </div>

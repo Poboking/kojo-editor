@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { UIPanelContribution } from '@kojo/plugin-api';
-import { defaultLayout, organizePanels, reducer, type LayoutState } from '../src/ui/layout';
+import { DEFAULT_AUX_SIZE, defaultLayout, organizePanels, reconcileLayout, reducer, type LayoutState } from '../src/ui/layout';
 
 /**
  * 壳层布局动作表单测（2026-10-13 P4 补测批）。
@@ -166,6 +166,50 @@ describe('reconcile：封存总闸切换后面板集合增删的再清洗', () =
     expect(s.aux.active).toBe('peek');
     expect(s.panelLocations).toEqual({});
     expect(s.aux.visible).toBe(true); // 容器显隐是用户姿态，不因清洗被静默翻掉
+  });
+});
+
+/**
+ * 持久化尺寸与运行时同一把尺（B2 修复，2026-11-01）。
+ *
+ * `resize` 动作走 `clamp`，但读盘路径此前是原样信任持久化值——一份坏掉的布局能把容器
+ * 做成 0 宽、或 9999 宽把编辑器挤没。这里钉住「读盘也过同一把尺」。
+ */
+describe('reconcile：持久化容器尺寸的钳制（B2 修复）', () => {
+  const org = organizePanels(PANELS, {});
+
+  it('越上限收在 SIZE_LIMITS.max，越下限看容器那一套尺', () => {
+    const s = reconcileLayout(
+      {
+        sidebar: { visible: true, size: 9999, active: null },
+        aux: { visible: true, size: 99999, active: null },
+        bottom: { visible: true, size: 60, active: null },
+      },
+      org,
+    );
+    expect(s.sidebar.size).toBe(520);
+    expect(s.aux.size).toBe(720);
+    expect(s.bottom.size).toBe(120);
+  });
+
+  it('非正 / 非有限 / 非数一律回落默认（不把 0 宽当作"合法钳制结果"）', () => {
+    const s = reconcileLayout(
+      {
+        sidebar: { visible: true, size: -5, active: null },
+        aux: { visible: true, size: Number.NaN, active: null },
+        bottom: { visible: true, size: '300' as unknown as number, active: null },
+      },
+      org,
+    );
+    expect(s.sidebar.size).toBe(defaultLayout(org).sidebar.size);
+    expect(s.aux.size).toBe(DEFAULT_AUX_SIZE);
+    expect(s.bottom.size).toBe(defaultLayout(org).bottom.size);
+  });
+
+  it('缺字段 / 整块缺失回落默认（旧持久化数据原样可读）', () => {
+    // 持久化串里的容器块允许残缺（老数据 / 手改过的 localStorage），类型面上按整块声明
+    const s = reconcileLayout({ aux: { visible: true } } as unknown as Partial<LayoutState>, org);
+    expect(s.aux).toMatchObject({ visible: true, size: DEFAULT_AUX_SIZE });
   });
 });
 

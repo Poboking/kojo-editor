@@ -4034,13 +4034,60 @@ button.erb-mode-hint.unlocked:hover {
 /* 拖拽源手势提示 */
 .ab-item[draggable='true'],
 .sidebar-section-head[draggable='true'],
-.panel-tab[draggable='true'] {
+.panel-tab[draggable='true'],
+.dock-cell-head[draggable='true'],
+.floating-panel-grip[draggable='true'] {
   cursor: grab;
 }
 .ab-item[draggable='true']:active,
 .sidebar-section-head[draggable='true']:active,
-.panel-tab[draggable='true']:active {
+.panel-tab[draggable='true']:active,
+.dock-cell-head[draggable='true']:active,
+.floating-panel-grip[draggable='true']:active {
   cursor: grabbing;
+}
+
+/* 未在场容器的占位落点条（P1 修复）。
+   关闭的容器整个不挂载 ⇒ 拖拽期在这里补一条同位的落点；drop 之后 `move` 会把容器打开。
+   写进布局流而不是绝对定位：不吃状态栏、也不和侧栏把手抢位置。 */
+.dock-drop-strip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-2);
+  transition: background-color var(--dur-2) var(--ease-out);
+}
+.dock-drop-strip-aux {
+  width: 88px;
+  margin: var(--space-1);
+}
+.dock-drop-strip-bottom {
+  height: 56px;
+  margin: var(--space-1) var(--space-2);
+}
+.dock-drop-strip.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+  color: var(--fg);
+  background: var(--accent-dim);
+}
+
+/* 浮窗的停靠抓手（P2 修复）：标题栏里那颗小按钮，只做「拖到容器」这一件事 */
+.floating-panel-grip {
+  flex: none;
+  padding: 0 var(--space-6);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  border-color: transparent;
 }
 
 /* 设置 overlay（壳层私有，容器语义；复用 wizard 容器壳）

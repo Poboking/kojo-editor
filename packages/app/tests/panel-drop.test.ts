@@ -5,6 +5,7 @@ import {
   PANEL_DRAG_MIME,
   acceptsPanelDrop,
   decodeDroppedPanelIds,
+  dropStripsFor,
   nextDropTarget,
   planPanelMoves,
   type DropTargetEvent,
@@ -119,6 +120,34 @@ describe('落点高亮', () => {
   it('drop 与 dragend 都清位（落定或放弃都不留悬空高亮）', () => {
     expect(nextDropTarget('aux', { type: 'dropped' })).toBeNull();
     expect(nextDropTarget('aux', { type: 'dragend' })).toBeNull();
+  });
+});
+
+/**
+ * 未在场容器的占位落点（P1 修复，2026-11-01）。
+ *
+ * 关闭的容器整个不挂载 ⇒ 没有节点就没有 dragover/drop，必须先开容器才拖得进去。
+ * 拖拽期给未挂载的容器补一条落点条，交互上把「先开容器」这个前置动作去掉。
+ */
+describe('未在场容器的占位落点（P1 修复）', () => {
+  it('没在拖拽时一条都不出现（静息界面与改动前逐字相同）', () => {
+    expect(dropStripsFor(false, false, false)).toEqual({ aux: false, bottom: false });
+    expect(dropStripsFor(false, true, true)).toEqual({ aux: false, bottom: false });
+  });
+
+  it('拖拽期只给未挂载的容器补落点：在的那块自己就是落点，不重复叠一条', () => {
+    expect(dropStripsFor(true, false, false)).toEqual({ aux: true, bottom: true });
+    expect(dropStripsFor(true, true, false)).toEqual({ aux: false, bottom: true });
+    expect(dropStripsFor(true, false, true)).toEqual({ aux: true, bottom: false });
+    expect(dropStripsFor(true, true, true)).toEqual({ aux: false, bottom: false });
+  });
+
+  it('落点条按下的 drop 走同一条 move：容器被打开，不必先手动 toggle', () => {
+    const state = defaultLayout(organizePanels(PANELS, {}));
+    expect(state.aux.visible).toBe(false);
+    expect(state.bottom.visible).toBe(false);
+    const s = layoutReducer(state, { type: 'move', id: 'report', to: 'aux', viewKey: 'panel:report' });
+    expect(s.aux).toMatchObject({ visible: true, active: 'report' });
   });
 });
 

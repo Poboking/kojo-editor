@@ -586,15 +586,20 @@ export function resetLayout(): void {
 }
 
 function sanitizeContainer(
+  container: ContainerKey,
   c: Partial<ContainerState> | undefined,
   dflt: ContainerState,
   validActives: ReadonlySet<string>,
 ): ContainerState {
   if (!c || typeof c !== 'object') return dflt;
   const active = typeof c.active === 'string' && validActives.has(c.active) ? c.active : dflt.active;
+  // 持久化尺寸与运行时拖拽过**同一把尺**：越界（含负值 / 非有限）一律钳回
+  // SIZE_LIMITS——否则一份坏掉的布局会把容器做成 0 宽、或把编辑器挤没。
+  const size =
+    typeof c.size === 'number' && Number.isFinite(c.size) && c.size > 0 ? clamp(container, c.size) : dflt.size;
   return {
     visible: typeof c.visible === 'boolean' ? c.visible : dflt.visible,
-    size: typeof c.size === 'number' && c.size > 0 ? c.size : dflt.size,
+    size,
     active,
   };
 }
@@ -661,9 +666,9 @@ export function reconcileLayout(persisted: Partial<LayoutState> | null, org: Org
   }
   const hasHeights = Object.keys(heights).length > 0;
   return {
-    sidebar: sanitizeContainer(persisted.sidebar, dfltEff.sidebar, new Set(orgEff.views.map((v) => v.key))),
-    aux: sanitizeContainer(persisted.aux, dfltEff.aux, new Set(orgEff.aux.map((p) => p.id))),
-    bottom: sanitizeContainer(persisted.bottom, dfltEff.bottom, new Set(orgEff.bottom.map((p) => p.id))),
+    sidebar: sanitizeContainer('sidebar', persisted.sidebar, dfltEff.sidebar, new Set(orgEff.views.map((v) => v.key))),
+    aux: sanitizeContainer('aux', persisted.aux, dfltEff.aux, new Set(orgEff.aux.map((p) => p.id))),
+    bottom: sanitizeContainer('bottom', persisted.bottom, dfltEff.bottom, new Set(orgEff.bottom.map((p) => p.id))),
     zen: persisted.zen === true,
     // 缺省 true（定稿 §八默认限宽）；仅显式 false 关闭
     zenLimitWidth: persisted.zenLimitWidth !== false,

@@ -65,6 +65,7 @@ import {
   PANEL_DRAG_MIME,
   acceptsPanelDrop,
   decodeDroppedPanelIds,
+  dropStripsFor,
   nextDropTarget,
   planPanelMoves,
 } from './panel-drop';
@@ -2854,12 +2855,27 @@ export function ShellLayout(props: Props): ReactElement {
   /** 落点高亮目标（dragover 置位，drop/dragend/真正离开容器时清除） */
   const [dropTarget, setDropTarget] = useState<ContainerKey | null>(null);
 
+  /**
+   * 是否正拖着某颗面板（P1 修复）。
+   *
+   * 关闭的容器整个不挂载 ⇒ 没有落点节点 ⇒ 拖不进去。拖拽期据此补一条空容器
+   * 落点条（见 `dropStripsFor`），落定后 `move` 动作会把容器打开。
+   */
+  const [panelDragActive, setPanelDragActive] = useState(false);
+
   /** 拖拽载荷：面板 id 数组（活动栏图标拖拽 = 整组视图迁移） */
-  const startPanelDrag = (e: ReactDragEvent, ids: readonly string[]): void => {
+  const startPanelDrag = useCallback((e: ReactDragEvent, ids: readonly string[]): void => {
     e.dataTransfer.setData(PANEL_DRAG_MIME, JSON.stringify(ids));
     e.dataTransfer.setData('text/plain', ids.join(','));
     e.dataTransfer.effectAllowed = 'move';
-  };
+    setPanelDragActive(true);
+  }, []);
+
+  /** 单面板拖拽源（dock 格头等「一次只拖一颗」的位置）：恒等引用，别把 memo 格子的重渲半径放大 */
+  const startPanelDragOne = useCallback(
+    (e: ReactDragEvent<HTMLElement>, id: string): void => startPanelDrag(e, [id]),
+    [startPanelDrag],
+  );
 
   /** 容器落点 props：dragover 接受 + 高亮；drop 派发 move（逐面板；sidebar 需 viewKey 激活） */
   const dropProps = (container: ContainerKey) => ({
@@ -2884,7 +2900,25 @@ export function ShellLayout(props: Props): ReactElement {
       }
     },
   });
-  const dragEnd = (): void => setDropTarget((cur) => nextDropTarget(cur, { type: 'dragend' }));
+  const dragEnd = useCallback((): void => {
+    setPanelDragActive(false);
+    setDropTarget((cur) => nextDropTarget(cur, { type: 'dragend' }));
+  }, []);
+
+  // 兜底收尾：拖到窗口外/系统桌面松手时容器上不会有 drop，但窗口仍会收到
+  // dragend（或 drop）。不挂这条，落点条会一直留在屏幕上。
+  useEffect(() => {
+    const clear = (): void => {
+      setPanelDragActive(false);
+      setDropTarget(() => null);
+    };
+    window.addEventListener('dragend', clear);
+    window.addEventListener('drop', clear);
+    return () => {
+      window.removeEventListener('dragend', clear);
+      window.removeEventListener('drop', clear);
+    };
+  }, []);
 
   const doReset = useCallback(() => {
     resetLayout();
@@ -2925,6 +2959,13 @@ export function ShellLayout(props: Props): ReactElement {
   const sidebarPresence = useLayoutPresence(sidebarOpen, SIDEBAR_MOTION_MS);
   const bottomOpen = layout.bottom.visible && activeBottom !== null;
   const bottomPresence = useLayoutPresence(bottomOpen, BOTTOMBAR_MOTION_MS);
+
+  // 拖拽期给**未在场**的容器补一条占位落点（P1 修复）：判据在 panel-drop，组件只管渲染。
+  const strips = dropStripsFor(
+    panelDragActive,
+    layout.aux.visible && activeAux !== null,
+    bottomPresence.mounted && activeBottom !== null,
+  );
 
   /**
    * 底栏 dock 的读数（VIS-13 · D-2）：**在场**的是 `org.bottom`（标签条那排托盘），
@@ -3868,7 +3909,27 @@ export function ShellLayout(props: Props): ReactElement {
             </aside>
           </>
         ) : null}
+        {/* P1 修复：副侧栏关着时没有节点可落 ⇒ 拖拽期补一条占位落点。
+            落在 flex 行里（不是绝对定位），位置与真正的副侧栏同一处，不遮状态栏。 */}
+        {strips.aux ? (
+          <aside
+            className={`dock-drop-strip dock-drop-strip-aux ${dropTarget === 'aux' ? 'drop-target' : ''}`}
+            aria-label="拖到副侧栏停靠"
+            {...dropProps('aux')}
+          >
+            <span>拖到这里＝副侧栏</span>
+          </aside>
+        ) : null}
       </div>
+      {strips.bottom ? (
+        <section
+          className={`dock-drop-strip dock-drop-strip-bottom ${dropTarget === 'bottom' ? 'drop-target' : ''}`}
+          aria-label="拖到底部区停靠"
+          {...dropProps('bottom')}
+        >
+          <span>拖到这里＝底部区</span>
+        </section>
+      ) : null}
       {/* 收口后的判据取 presence 那一侧：`activeBottom` 已含"底部区非空"（它就是
           `org.bottom` 的头一项），而 `bottomPresence.mounted` 比 `layout.bottom.visible`
           多覆盖收起动画那 200ms——节点得留在树上 `transition: height` 才有东西可插值。
@@ -3911,6 +3972,9 @@ export function ShellLayout(props: Props): ReactElement {
                 onResizeStart={startDockCellDrag}
                 onFloat={floatPanel}
                 onClose={closeDockCell}
+                // 拖拽停靠（P3 修复）：格头也能拖走这一颗（此前只有上方标签条能拖）
+                onCellDragStart={startPanelDragOne}
+                onCellDragEnd={dragEnd}
               />
             )}
           </section>
@@ -3939,6 +4003,19 @@ export function ShellLayout(props: Props): ReactElement {
               <Icon name={p.icon ?? 'preview'} size={14} />
               <span className="floating-panel-title">{p.title}</span>
               <span className="spacer" />
+              {/* 拖拽停靠（P2 修复）：浮窗此前只能被搬来搬去、回不去容器。
+                  抓手是 <button>：`startFloatDrag` 对 button 提前返回 ⇒ 在它身上按下
+                  不会抢走指针、原生 dragstart 不被窗口拖拽的 preventDefault 打断。 */}
+              <button
+                className="ghost small floating-panel-grip"
+                title="拖到侧栏 / 副侧栏 / 底部区停靠"
+                aria-label={`拖拽 ${p.title} 停靠到容器`}
+                draggable
+                onDragStart={(e) => startPanelDragOne(e, p.id)}
+                onDragEnd={dragEnd}
+              >
+                <Icon name="layout-panel-bottom" size={14} />
+              </button>
               <button
                 className="ghost small floating-panel-action"
                 title="关闭浮窗（回到侧栏）"

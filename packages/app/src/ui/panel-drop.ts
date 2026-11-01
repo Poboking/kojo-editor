@@ -61,6 +61,30 @@ export function planPanelMoves(
   return out;
 }
 
+/**
+ * 拖拽期「空容器落点条」的在场判据（P1 修复）。
+ *
+ * 关闭的容器**整个不挂载**（`layout.aux.visible` / `bottomPresence.mounted` 为假时
+ * 连节点都没有）⇒ 没有节点就没有 dragover/drop，用户必须先开容器才拖得进去。
+ * 拖拽期给未在场的容器补一条占位落点（drop 之后 `move` 动作会把容器打开），
+ * 把「先开容器再拖」这个前置动作从交互里去掉。
+ *
+ * 主侧栏不在这里：活动栏恒在场且本身就是 sidebar 的落点（`dropProps('sidebar')`）。
+ */
+export interface DropStripPlacement {
+  readonly aux: boolean;
+  readonly bottom: boolean;
+}
+
+export function dropStripsFor(
+  panelDragActive: boolean,
+  auxMounted: boolean,
+  bottomMounted: boolean,
+): DropStripPlacement {
+  if (!panelDragActive) return { aux: false, bottom: false };
+  return { aux: !auxMounted, bottom: !bottomMounted };
+}
+
 /** 落点高亮的四种事件（dragover 置位，drop / dragend / 真正离开清位） */
 export type DropTargetEvent =
   | { readonly type: 'dragover'; readonly container: PanelLocation }
