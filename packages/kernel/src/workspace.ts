@@ -170,8 +170,12 @@ export class WorkspaceServiceImpl implements WorkspaceService {
   /**
    * 解析项目目录，必要时扫一次盘（`projectDir` 的异步半边，专供"必须先知道在哪个根"
    * 才能做对的动作，如删除——删错目录是静默失败：不存在 → 幂等成功 → 项目还在）。
+   *
+   * P0-7b 起找不到时返回 `null` 而不是抛错：`remove` 需要"目录已不存在"的幂等成功
+   * （作者手删了文件夹 / 项目本来就不在这台机器），抛错会让面板把一次正确的清理
+   * 报成假失败。调用方自己决定 null 是"已经不在"还是"不能删"。
    */
-  private async locateProjectDir(projectId: string): Promise<string> {
+  private async locateProjectDir(projectId: string): Promise<string | null> {
     // 段级校验先行（2026-10-16 修复批）：join 会归一化折叠 '..'，
     // '../../backup' 类 id 能把写闸外的备份域整目录删掉——删错目录是静默失败。
     assertSegment(projectId, '项目名');
@@ -186,12 +190,7 @@ export class WorkspaceServiceImpl implements WorkspaceService {
         return dir;
       }
     }
-    // fail-closed（2026-10-17 修复批）：找不到绝不回落默认根。外部根离线/被收回时，
-    // 回落 + removeDir 的幂等成功 = 「项目看着被删了，其实还在原处」的静默失败；
-    // 目录真被手动删过时这个错误也是如实答案，不是误报。
-    throw new Error(
-      `Project directory not found in any authorized root (root offline or already removed?): ${projectId}`,
-    );
+    return null;
   }
 
   private manifestPath(projectId: string): string {
@@ -472,6 +471,9 @@ export class WorkspaceServiceImpl implements WorkspaceService {
   ): Promise<WorkspaceProject> {
     assertSegment(projectId, '项目名');
     const sourceDir = await this.locateProjectDir(projectId);
+    // locateProjectDir 现在以 null 表示"任何授权根里都没有"（P0-7b 幂等口径）；
+    // 复制必须要有一个真实源目录，这里把 null 还原成明确失败。
+    if (sourceDir === null) throw new Error(`找不到这个工作区项目：${projectId}`);
     const source = await this.readManifestAt(sourceDir);
     if (!source) throw new Error(`找不到这个工作区项目：${projectId}`);
 
@@ -561,15 +563,22 @@ export class WorkspaceServiceImpl implements WorkspaceService {
 
   async remove(projectId: string): Promise<void> {
     // 走 locateProjectDir：外部根里的项目若未 `list()` 过，`projectDir()` 会回落默认根，
-    // 而删一个不存在的目录是**幂等成功**（静默失败：项目看着被删了，其实还在原处）
+    // 而删一个不存在的目录是**幂等成功**（静默失败：项目看着被删了，其实还在原处）。
+    // 解析结果恒为"已登记/已扫到的项目目录"，不接受调用方给任意路径（P0-7b 安全口径）。
     const dir = await this.locateProjectDir(projectId);
-    // 删除必须过 io 写闸（双闸第一道，2026-10-16 修复批）：直调 bridge.removeDir
-    // 绕开 assertWritable——常驻根被收回或路径出域时照样删盘。
-    await this.deps.io.removeDir(dir);
+    if (dir !== null) {
+      // 删除必须过 io 写闸（双闸第一道，2026-10-16 修复批）：直调 bridge.removeDir
+      // 绕开 assertWritable——常驻根被收回或路径出域时照样删盘。
+      await this.deps.io.removeDir(dir);
+    } else {
+      // P0-7b：目录已经不存在（作者手删 / 项目本来就不在这台机器）⇒ 列表项本就扫不出来，
+      // 这里只清内存缓存与可写域，**幂等成功、不报假错**。删盘动作一个字节也没发生。
+      this.deps.log.info(`Workspace project already absent (nothing removed): ${projectId}`);
+    }
     this.dirById.delete(projectId);
     // 作品没了 ⇒ 它的目录也别再留在常驻可写根里（只收窄，不放宽）
     this.syncWritableRoots();
-    this.deps.log.info(`Workspace project removed: ${projectId}`);
+    if (dir !== null) this.deps.log.info(`Workspace project removed: ${projectId}`);
   }
 
   /**

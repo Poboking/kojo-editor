@@ -73,6 +73,24 @@ describe('WorkspaceService · 项目 CRUD', () => {
     expect(await io.exists(ws.projectDir(p.id))).toBe(false);
   });
 
+  it('remove 幂等：目录已被手删 / 项目从不存在都不报假错（P0-7b）', async () => {
+    const deleted = await ws.create({ name: '手删' });
+    // 模拟作者在资源管理器里把项目文件夹整个删掉（manifest 一起没）
+    await fs.rm(path.join(appData, 'workspaces', deleted.id), { recursive: true, force: true });
+    await expect(ws.remove(deleted.id)).resolves.toBeUndefined();
+    await expect(ws.remove('p-not-here')).resolves.toBeUndefined();
+    expect((await ws.list()).map((p) => p.id)).not.toContain(deleted.id);
+  });
+
+  it('remove 只删已解析的项目目录，同根邻居不受波及（P0-7b 安全口径）', async () => {
+    const neighbor = path.join(ws.rootDir(), '邻居');
+    await fs.mkdir(neighbor, { recursive: true });
+    await fs.writeFile(path.join(neighbor, 'keep.txt'), 'keep', 'utf8');
+    const p = await ws.create({ name: '目标' });
+    await ws.remove(p.id);
+    expect(await io.exists(path.join(neighbor, 'keep.txt'))).toBe(true);
+  });
+
   it('损坏的 manifest 跳过不静默（list 不含该项，其余正常）', async () => {
     const good = await ws.create({ name: '好' });
     const badDir = path.join(appData, 'workspaces', 'p-broken');
@@ -476,6 +494,14 @@ describe('WorkspaceService · 多根落点（自选项目位置）', () => {
     expect(await freshIo.exists(path.join(fresh.rootDir(), p.id))).toBe(false);
   });
 
+  it('外部根作品删除后从常驻可写根移除（只收窄，不残留可写，P0-7b）', async () => {
+    const p = await ws2.create({ name: '删掉的外部作品', rootDir: extraRoot });
+    expect(ws2.projectDirs()).toContain(path.join(extraRoot, p.id));
+    await ws2.remove(p.id);
+    expect(ws2.projectDirs()).toEqual([ws2.rootDir()]);
+    expect(io2.isWritable(path.join(extraRoot, p.id, 'x.txt'))).toBe(false);
+  });
+
   it('授权根不存在（作者删了那个文件夹）：跳过并出声，不连累启动', async () => {
     const gone = path.join(tmpDir, '已经不存在的作品库');
     const ioGone = new FileIOServiceImpl(new NodeBridge(appData, [gone]));
@@ -840,7 +866,9 @@ describe('WorkspaceService · 重命名与复制', () => {
   });
 
   it('复制不存在的项目：如实拒绝', async () => {
-    await expect(ws.duplicateProject('p-不存在')).rejects.toThrow(/not found/);
+    // locateProjectDir 在 P0-7b 改为以 null 表示"任何授权根里都没有"（remove 需幂等成功）；
+    // duplicateProject 把 null 还原成明确失败，仍是中文人话。
+    await expect(ws.duplicateProject('p-不存在')).rejects.toThrow(/找不到这个工作区项目/);
   });
 
   it('重命名：空名拒绝；与原项目同名（只改空白）放行', async () => {

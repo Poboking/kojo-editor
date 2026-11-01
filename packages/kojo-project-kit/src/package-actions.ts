@@ -103,6 +103,11 @@ export interface PackageActions {
   status(): PanelStatus | null;
   /** 用户手动关闭反馈条 */
   dismiss(): void;
+  /**
+   * 由面板的其他动作（P0-7b 项目删除 / 项目设置）借这条状态栏交代结果。
+   * `ok` 沿用成功态自动收起；`err` 常驻等用户读完（与导出 / 部署同一口径）。
+   */
+  setStatus(kind: PanelStatusKind, text: string): void;
   /** 插件卸载时清理待触发的自动收起定时器 */
   dispose(): void;
   /** 导出包到用户选定的目录（平台对话框 + 整目录复制） */
@@ -141,6 +146,7 @@ export function createPackageActions(deps: PackageActionsDeps): PackageActions {
   return {
     status: () => current,
     dismiss: () => set(null),
+    setStatus: (kind, text) => set({ kind, text }, kind === 'ok' ? STATUS_OK_DISMISS_MS : undefined),
     dispose: clearTimer,
 
     exportArtifact(absDir: string, displayName: string): void {

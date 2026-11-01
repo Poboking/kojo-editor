@@ -123,9 +123,15 @@ describe('createArtifact × journal', () => {
   });
 });
 
-describe('remove · fail-closed 定位', () => {
-  it('任何授权根里都找不到的项目目录 ⇒ 显式拒绝（外部根离线绝不静默成功）', async () => {
+describe('remove · 定位不到时的幂等口径（P0-7b）', () => {
+  it('任何授权根里都找不到的项目目录 ⇒ 幂等成功，但绝无回落删除（外部根离线仍然安全）', async () => {
     const { ws } = await makeWorld();
-    await expect(ws.remove('no-such-project')).rejects.toThrow(/not found in any authorized root/);
+    // 默认根放一个同名但无 manifest 的目录：旧口径里"回落 projectDir + removeDir"会把它删掉，
+    // 那才是 2026-10-17 修掉的静默删错。P0-7b 改为不回落、只清缓存（幂等成功），这里钉住它。
+    const decoy = path.join(ws.rootDir(), 'no-such-project');
+    await fs.mkdir(decoy, { recursive: true });
+    await fs.writeFile(path.join(decoy, 'keep.txt'), 'keep', 'utf8');
+    await expect(ws.remove('no-such-project')).resolves.toBeUndefined();
+    expect((await fs.stat(path.join(decoy, 'keep.txt'))).isFile()).toBe(true);
   });
 });

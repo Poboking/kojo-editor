@@ -202,6 +202,18 @@ export {
 export type { DirListState, FactsInput, KojoProjectsPanelDeps, ProjectActionOutcome } from './projects-panel';
 export { buildPackageZip, createPackageActions, STATUS_OK_DISMISS_MS } from './package-actions';
 export type { PackageActions, PackageActionsDeps, PanelStatus, PanelStatusKind } from './package-actions';
+/* ---- 项目删除 / 项目设置（P0-7b；文案 / 表单初值 / patch 组装） ---- */
+export {
+  buildProjectSettingsPatch,
+  deleteProjectConfirm,
+  projectSettingsInitial,
+} from './project-settings';
+export type {
+  DeleteProjectConfirmCopy,
+  ProjectSettingsForm,
+  ProjectSettingsPatch,
+  ProjectSettingsSnapshot,
+} from './project-settings';
 
 /* ---- 项目行动作纯函数（重命名校验 / 副本命名建议 / 同根名单；2026-11-02） ---- */
 export { projectNameProblem, sameRootProjectNames, suggestDuplicateName } from './project-actions';

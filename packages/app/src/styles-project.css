@@ -5404,11 +5404,14 @@ button.primary .hint {
   transition: opacity var(--dur-1) var(--ease-out);
 }
 .kp-artifact-row:hover .kp-row-actions,
-.kp-artifact-row:focus-within .kp-row-actions {
+.kp-artifact-row:focus-within .kp-row-actions,
+.kp-project-row:hover .kp-row-actions,
+.kp-project-row:focus-within .kp-row-actions {
   opacity: 1;
 }
-/* 项目行 = 标题按钮 + 行内动作（2026-11-02 重命名 / 复制批）：与包行同款"悬停才显"，
-   骨架复用 .kp-row-actions，这里只给项目行一层定位容器。 */
+/* 项目行 = 标题按钮 + 行内动作（设置 / 重命名 / 复制 / 删除）：与包行同款"悬停才显"，
+   骨架复用 .kp-row-actions，这里只给项目行一层定位容器；标题按钮原先独占整行，
+   这里让位给右侧动作。 */
 .kp-project-row {
   display: flex;
   align-items: center;
@@ -5419,9 +5422,8 @@ button.primary .hint {
   width: auto;
   min-width: 0;
 }
-.kp-project-row:hover .kp-row-actions,
-.kp-project-row:focus-within .kp-row-actions {
-  opacity: 1;
+.kp-action-danger {
+  color: var(--danger);
 }
 .kp-action {
   padding: 1px var(--space-2);
@@ -5641,6 +5643,50 @@ button.primary .hint {
   font-size: var(--fs-1);
   color: var(--danger);
   line-height: 1.4;
+}
+
+/* --------- 项目删除确认 / 项目设置（P0-7b）：面板内模态 --------- */
+/* 遮罩与本体复用壳层 `.modal-mask` / `.modal`（毛玻璃与居中都是现成的），
+   这里只把宽度收进侧栏 —— 620px 的默认宽会横穿整个工作区。 */
+.kp-modal {
+  width: min(360px, calc(100vw - var(--space-5)));
+  padding: var(--space-4) var(--space-4);
+}
+.kp-modal-text {
+  font-size: var(--fs-2);
+  line-height: 1.6;
+}
+.kp-modal-err {
+  margin-top: var(--space-1);
+  font-size: var(--fs-1);
+  line-height: 1.5;
+  color: var(--danger);
+}
+.kp-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.kp-field-label {
+  flex: 0 0 4.5em;
+  font-size: var(--fs-1);
+  color: var(--fg-dim);
+  white-space: nowrap;
+}
+.kp-field-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-1);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-0) var(--space-6);
+}
+.kp-field-input:focus-visible {
+  outline: 1px solid var(--focus-ring);
+  outline-offset: 1px;
 }
 
 /* ------------------------------ 动效关键帧（ui-polish） ------------------------------ */

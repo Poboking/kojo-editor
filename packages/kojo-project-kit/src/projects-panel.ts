@@ -38,6 +38,13 @@ import {
   suggestDuplicateName,
   type NewItemKind,
 } from '@kojo/kojo-project-kit';
+import {
+  buildProjectSettingsPatch,
+  deleteProjectConfirm,
+  projectSettingsInitial,
+  type ProjectSettingsForm,
+  type ProjectSettingsSnapshot,
+} from './project-settings';
 import type { TutorialId } from './tutorial';
 
 /** 项目行动作（重命名 / 复制）的结果：成功回新（或原）项目 id；失败回中文原因 */
@@ -113,6 +120,21 @@ export interface KojoProjectsPanelDeps {
    * 成功后返回新项目 id，面板据此展开并选中它。
    */
   duplicateProject?(projectId: string, name: string): Promise<ProjectActionOutcome>;
+  /**
+   * 删除项目（P0-7b；连同项目目录全部内容）。插件侧负责 `workspaces.remove(projectId)` +
+   * 刷新列表 + 成功通知（`name` 只用于通知文案）；面板只发意图并呈现失败原因。
+   * 缺省 → 项目行不显示「删除」入口（没有的能力不摆样子）。
+   */
+  removeProject?(projectId: string, name: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+  /**
+   * 保存项目设置（项目名 / meta.author / meta.version，P0-7b）。patch 由面板的纯函数
+   * 组装，**没有实际改动时根本不会调用**；成功后插件刷新列表并通知。
+   * 缺省 → 项目行不显示「设置」入口。
+   */
+  saveProjectSettings?(
+    projectId: string,
+    patch: { name?: string; meta?: Record<string, unknown> },
+  ): Promise<{ ok: true } | { ok: false; reason: string }>;
 }
 
 /** 目录条目排序：目录在前，其后按名称（中文本地化比较口径） */
@@ -746,6 +768,109 @@ export function createKojoProjectsPanel(
       );
     };
 
+    /* ---------------------- 项目删除 / 项目设置（P0-7b） ---------------------- */
+
+    /** 待确认删除的项目（null = 没有确认层） */
+    const [confirmDelete, setConfirmDelete] = useState<{ projectId: string; name: string } | null>(null);
+    const [deleting, setDeleting] = useState(false);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
+
+    /** 项目设置小面板（`initial` 是 patch 组装与"未改动"判定的基线） */
+    const [settingsFor, setSettingsFor] = useState<{
+      projectId: string;
+      initial: ProjectSettingsSnapshot;
+    } | null>(null);
+    const [settingsDraft, setSettingsDraft] = useState<ProjectSettingsForm | null>(null);
+    const [settingsError, setSettingsError] = useState<string | null>(null);
+    const [savingSettings, setSavingSettings] = useState(false);
+
+    const askDelete = (p: WorkspaceProject): void => {
+      setConfirmDelete({ projectId: p.id, name: p.name });
+      setDeleteError(null);
+    };
+
+    const cancelDelete = (): void => {
+      if (deleting) return;
+      setConfirmDelete(null);
+      setDeleteError(null);
+    };
+
+    /** 确认后真正删：失败原因留在确认层里（不关窗——作者要看原因或改主意） */
+    const commitDelete = async (): Promise<void> => {
+      if (confirmDelete === null || deleting || deps.removeProject === undefined) return;
+      setDeleting(true);
+      setDeleteError(null);
+      const r = await deps.removeProject(confirmDelete.projectId, confirmDelete.name);
+      setDeleting(false);
+      if (!r.ok) {
+        setDeleteError(r.reason);
+        return;
+      }
+      setConfirmDelete(null);
+    };
+
+    const openSettings = (p: WorkspaceProject): void => {
+      const initial = projectSettingsInitial(p);
+      setSettingsFor({ projectId: p.id, initial });
+      setSettingsDraft({ name: initial.name, author: initial.author, version: initial.version });
+      setSettingsError(null);
+    };
+
+    const cancelSettings = (): void => {
+      if (savingSettings) return;
+      setSettingsFor(null);
+      setSettingsDraft(null);
+      setSettingsError(null);
+    };
+
+    const setDraftField = (key: keyof ProjectSettingsForm, value: string): void => {
+      setSettingsDraft((prev) => (prev === null ? prev : { ...prev, [key]: value }));
+      setSettingsError(null);
+    };
+
+    /**
+     * 保存设置：先做重名校验（项目名未改则跳过），再组装 patch。
+     * patch 为 null（未改动 / 空值被过滤后没有可写项）⇒ 直接收窗，不发写请求。
+     */
+    const commitSettings = async (): Promise<void> => {
+      if (
+        settingsFor === null ||
+        settingsDraft === null ||
+        savingSettings ||
+        deps.saveProjectSettings === undefined
+      ) {
+        return;
+      }
+      const initial = settingsFor.initial;
+      if (settingsDraft.name.trim() !== initial.name.trim()) {
+        // 与重命名同一套校验（C 路 projectNameProblem + 同根名单），不另造规则
+        const problem = projectNameProblem(
+          settingsDraft.name,
+          sameRootProjectNames(deps.projects(), settingsFor.projectId, deps.projectDir),
+        );
+        if (problem !== null) {
+          setSettingsError(problem);
+          return;
+        }
+      }
+      const patch = buildProjectSettingsPatch(initial, settingsDraft);
+      if (patch === null) {
+        setSettingsFor(null);
+        setSettingsDraft(null);
+        return;
+      }
+      setSavingSettings(true);
+      setSettingsError(null);
+      const r = await deps.saveProjectSettings(settingsFor.projectId, patch);
+      setSavingSettings(false);
+      if (!r.ok) {
+        setSettingsError(r.reason);
+        return;
+      }
+      setSettingsFor(null);
+      setSettingsDraft(null);
+    };
+
     /* ------------------------------ 骨架 ------------------------------ */
 
     // 双真相源提示（可关闭）：正文用人话，完整口径留在 title。
@@ -881,6 +1006,62 @@ export function createKojoProjectsPanel(
           const loose = pOpen
             ? looseProjectDirs(deps.dirState(pDir), p.artifacts.map((a) => a.dirName))
             : [];
+          /* 项目行动作：设置 / 重命名 / 复制 / 删除。与包行同一套「悬停或键盘聚焦才显」的克制口径；
+             没有对应 deps 的入口不画（缺能力不摆样子）。删除排在最后——破坏性动作不抢首眼。 */
+          const projectActions =
+            deps.saveProjectSettings === undefined &&
+            deps.renameProject === undefined &&
+            deps.duplicateProject === undefined &&
+            deps.removeProject === undefined
+              ? null
+              : h(
+                  'span',
+                  { className: 'kp-row-actions' },
+                  deps.saveProjectSettings === undefined
+                    ? null
+                    : h(
+                        'button',
+                        {
+                          className: 'kp-action',
+                          title: `编辑「${p.name}」的项目名 / 作者署名 / 版本`,
+                          onClick: () => openSettings(p),
+                        },
+                        '设置',
+                      ),
+                  deps.renameProject === undefined
+                    ? null
+                    : h(
+                        'button',
+                        {
+                          className: 'kp-action',
+                          title: '给这个项目改名（同一个文件夹里不能有同名项目）',
+                          onClick: () => startProjectAction(p, 'rename'),
+                        },
+                        '重命名',
+                      ),
+                  deps.duplicateProject === undefined
+                    ? null
+                    : h(
+                        'button',
+                        {
+                          className: 'kp-action',
+                          title: '复制这个项目（含全部文件）到同一个文件夹下的新项目',
+                          onClick: () => startProjectAction(p, 'copy'),
+                        },
+                        '复制',
+                      ),
+                  deps.removeProject === undefined
+                    ? null
+                    : h(
+                        'button',
+                        {
+                          className: 'kp-action kp-action-danger',
+                          title: `删除「${p.name}」：连同文件夹内全部内容一起删除，且不可恢复`,
+                          onClick: () => askDelete(p),
+                        },
+                        '删除',
+                      ),
+                );
           return h(
             'div',
             { key: p.id, className: 'kp-project' },
@@ -900,35 +1081,7 @@ export function createKojoProjectsPanel(
                 h('span', { className: 'kp-project-name', title: p.name }, p.name),
                 h('span', { className: 'kp-count', title: `这个项目里的作者包数：${p.artifacts.length}` }, `${p.artifacts.length} 包`),
               ),
-              // 行内动作：静息态隐去（悬停 / 键盘聚焦才显），与包行的「导出 / 部署」同一口径
-              deps.renameProject || deps.duplicateProject
-                ? h(
-                    'span',
-                    { className: 'kp-row-actions' },
-                    deps.renameProject
-                      ? h(
-                          'button',
-                          {
-                            className: 'kp-action',
-                            title: '给这个项目改名（同一个文件夹里不能有同名项目）',
-                            onClick: () => startProjectAction(p, 'rename'),
-                          },
-                          '重命名',
-                        )
-                      : null,
-                    deps.duplicateProject
-                      ? h(
-                          'button',
-                          {
-                            className: 'kp-action',
-                            title: '复制这个项目（含全部文件）到同一个文件夹下的新项目',
-                            onClick: () => startProjectAction(p, 'copy'),
-                          },
-                          '复制',
-                        )
-                      : null,
-                  )
-                : null,
+              projectActions,
             ),
             /* 项目根自己的行内新建框（UI 反馈 6 的缺陷点）：菜单把草稿指向 projectDir，
                但 draftRow 原先只在 renderDir 里产出，而 renderDir 只跑「包目录」与「包内子目录」
@@ -1150,6 +1303,125 @@ export function createKojoProjectsPanel(
     );
     // ui-kit-candidate: 「一行题头 + 计数摘要 + 展开」的收纳栏，与检索面板 .ksp-options-toggle 同族
 
-    return h('div', { className: 'panel-kojo-projects', ref: rootRef }, notice, toolbar, body, splitter, tutorials, statusBar, menu);
+    /* ---------------------- 确认层 / 设置小面板（P0-7b） ---------------------- */
+
+    const deleteCopy = confirmDelete === null ? null : deleteProjectConfirm(confirmDelete.name);
+    const deleteModal =
+      deleteCopy === null || deps.removeProject === undefined
+        ? null
+        : h(
+            'div',
+            { className: 'modal-mask kp-modal-mask', onMouseDown: () => cancelDelete() },
+            h(
+              'div',
+              {
+                className: 'modal kp-modal',
+                role: 'dialog',
+                'aria-modal': true,
+                onMouseDown: (ev: { stopPropagation(): void }) => ev.stopPropagation(),
+              },
+              h('h2', null, deleteCopy.title),
+              h('div', { className: 'dim kp-modal-text' }, deleteCopy.body),
+              deleteError === null ? null : h('div', { className: 'kp-modal-err' }, deleteError),
+              h(
+                'div',
+                { className: 'modal-actions' },
+                h('button', { className: 'small', disabled: deleting, onClick: () => cancelDelete() }, deleteCopy.cancelLabel),
+                h(
+                  'button',
+                  { className: 'small danger', disabled: deleting, onClick: () => void commitDelete() },
+                  deleting ? '正在删除…' : deleteCopy.confirmLabel,
+                ),
+              ),
+            ),
+          );
+
+    const settingsModal =
+      settingsFor === null || settingsDraft === null || deps.saveProjectSettings === undefined
+        ? null
+        : h(
+            'div',
+            { className: 'modal-mask kp-modal-mask', onMouseDown: () => cancelSettings() },
+            h(
+              'div',
+              {
+                className: 'modal kp-modal',
+                role: 'dialog',
+                'aria-modal': true,
+                onMouseDown: (ev: { stopPropagation(): void }) => ev.stopPropagation(),
+              },
+              h('h2', null, '项目设置'),
+              h(
+                'label',
+                { className: 'kp-field' },
+                h('span', { className: 'kp-field-label' }, '项目名'),
+                h('input', {
+                  className: 'kp-field-input',
+                  value: settingsDraft.name,
+                  disabled: savingSettings,
+                  onChange: (e: { target: { value: string } }) => setDraftField('name', e.target.value),
+                  onKeyDown: (e: { key: string }) => {
+                    if (e.key === 'Enter') void commitSettings();
+                  },
+                }),
+              ),
+              h(
+                'label',
+                { className: 'kp-field' },
+                h('span', { className: 'kp-field-label' }, '作者署名'),
+                h('input', {
+                  className: 'kp-field-input',
+                  value: settingsDraft.author,
+                  placeholder: '未标注',
+                  disabled: savingSettings,
+                  onChange: (e: { target: { value: string } }) => setDraftField('author', e.target.value),
+                  onKeyDown: (e: { key: string }) => {
+                    if (e.key === 'Enter') void commitSettings();
+                  },
+                }),
+              ),
+              h(
+                'label',
+                { className: 'kp-field' },
+                h('span', { className: 'kp-field-label' }, '版本'),
+                h('input', {
+                  className: 'kp-field-input',
+                  value: settingsDraft.version,
+                  placeholder: '未填',
+                  disabled: savingSettings,
+                  onChange: (e: { target: { value: string } }) => setDraftField('version', e.target.value),
+                  onKeyDown: (e: { key: string }) => {
+                    if (e.key === 'Enter') void commitSettings();
+                  },
+                }),
+              ),
+              h('div', { className: 'dim kp-modal-text' }, '留空不覆盖原值；未改动的项不会写入。'),
+              settingsError === null ? null : h('div', { className: 'kp-modal-err' }, settingsError),
+              h(
+                'div',
+                { className: 'modal-actions' },
+                h('button', { className: 'small', disabled: savingSettings, onClick: () => cancelSettings() }, '取消'),
+                h(
+                  'button',
+                  { className: 'small', disabled: savingSettings, onClick: () => void commitSettings() },
+                  savingSettings ? '保存中…' : '保存',
+                ),
+              ),
+            ),
+          );
+
+    return h(
+      'div',
+      { className: 'panel-kojo-projects', ref: rootRef },
+      notice,
+      toolbar,
+      body,
+      splitter,
+      tutorials,
+      statusBar,
+      menu,
+      deleteModal,
+      settingsModal,
+    );
   };
 }

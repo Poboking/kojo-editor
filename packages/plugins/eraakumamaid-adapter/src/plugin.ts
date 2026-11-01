@@ -666,6 +666,32 @@ export function createErakumamaidAdapterPlugin(): Plugin {
           createItem,
           renameProject: renameWsProject,
           duplicateProject: duplicateWsProject,
+          // 项目删除 / 项目设置（P0-7b）：与 eratw 同口径——落盘动作只在 workspaces 里，
+          // 刷新与状态条通知在这一侧收口。
+          removeProject: async (projectId, name) => {
+            try {
+              await workspaces.remove(projectId);
+              invalidateWs();
+              actions.setStatus('ok', `已删除项目「${name}」`);
+              return { ok: true };
+            } catch (err: unknown) {
+              const reason = err instanceof Error ? err.message : String(err);
+              ctx.log.warn(`删除项目失败：${projectId} — ${reason}`);
+              return { ok: false, reason };
+            }
+          },
+          saveProjectSettings: async (projectId, patch) => {
+            try {
+              await workspaces.update(projectId, patch);
+              invalidateWs();
+              actions.setStatus('ok', '项目设置已保存');
+              return { ok: true };
+            } catch (err: unknown) {
+              const reason = err instanceof Error ? err.message : String(err);
+              ctx.log.warn(`保存项目设置失败：${projectId} — ${reason}`);
+              return { ok: false, reason };
+            }
+          },
         }),
       });
 

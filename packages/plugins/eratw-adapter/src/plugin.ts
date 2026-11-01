@@ -821,6 +821,33 @@ export function createEratwAdapterPlugin(): Plugin {
           createItem,
           renameProject: renameWsProject,
           duplicateProject: duplicateWsProject,
+          // 项目删除（P0-7b）：唯一落盘动作仍走 workspaces.remove（内核 io 双闸之内），
+          // 面板只拿到成功/失败；刷新与通知在这一侧收口。
+          removeProject: async (projectId, name) => {
+            try {
+              await workspaces.remove(projectId);
+              invalidateWs();
+              actions.setStatus('ok', `已删除项目「${name}」`);
+              return { ok: true };
+            } catch (err: unknown) {
+              const reason = err instanceof Error ? err.message : String(err);
+              ctx.log.warn(`删除项目失败：${projectId} — ${reason}`);
+              return { ok: false, reason };
+            }
+          },
+          // 项目设置（P0-7b）：patch 由面板纯函数组装（未改动 / 空值不会到这里）。
+          saveProjectSettings: async (projectId, patch) => {
+            try {
+              await workspaces.update(projectId, patch);
+              invalidateWs();
+              actions.setStatus('ok', '项目设置已保存');
+              return { ok: true };
+            } catch (err: unknown) {
+              const reason = err instanceof Error ? err.message : String(err);
+              ctx.log.warn(`保存项目设置失败：${projectId} — ${reason}`);
+              return { ok: false, reason };
+            }
+          },
         }),
       });
 
