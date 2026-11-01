@@ -11,28 +11,89 @@
  *
  * ## 扩展名的态度
  *
- * 作者从菜单里已经选了类型（`.kojo` / `.erb` / `.txt`），所以：
+ * 作者从菜单里已经选了类型（`.kojo` / `.erb` / `.erm` / `.txt` / `.md`），所以：
  * - 没写扩展名 → 按所选类型补上；
  * - 写的就是所选类型 → 原样；
  * - 写的是**别的**扩展名（选 `.kojo` 却打 `事件.ERB`）→ 拒绝。
  *   不静默产出 `事件.ERB.kojo`，也不偷偷改判成 `.ERB`——两者都不是他点的那个菜单项。
  */
 
-import { join } from '@kojo/plugin-api';
+import { ERB_BODY_EXTENSIONS, join, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
 
 /** 可新建的类型（菜单顺序即此顺序） */
-export type NewItemKind = 'folder' | 'kojo' | 'erb' | 'txt';
+export type NewItemKind = 'folder' | 'kojo' | 'erb' | 'erm' | 'txt' | 'md';
+
+/** 文件档（`folder` 之外）；扩展名表只覆盖这几档 */
+type FileKind = Exclude<NewItemKind, 'folder'>;
+
+/**
+ * 每档文件对应的扩展名（含点）。
+ *
+ * `kojo` 与两种 ERB 正文档**一律取契约单源**（`KOJO_SOURCE_EXTENSION` /
+ * `ERB_BODY_EXTENSIONS`），本模块不手抄这两种形态；`.txt` / `.md` 不是游戏编译的
+ * 契约词汇（引擎不认），是新建面板自己的产物，故落点在本模块。
+ */
+const FILE_EXTENSIONS: Record<FileKind, string> = {
+  kojo: KOJO_SOURCE_EXTENSION,
+  erb: erbBodyExtension(0),
+  erm: erbBodyExtension(1),
+  txt: '.txt',
+  md: '.md',
+};
+
+/** 取 ERB 正文扩展名清单的第 n 项；清单短了直接报错，不静默产出一个没根据的名字 */
+function erbBodyExtension(index: number): string {
+  const ext = ERB_BODY_EXTENSIONS[index];
+  if (ext === undefined) throw new Error(`ERB 正文扩展名清单缺少第 ${index + 1} 项：无法给新建条目定扩展名。`);
+  return ext;
+}
+
+/** 去掉前导点并小写：判"这个名字写的是哪种扩展名"用的形态 */
+function bareExtension(ext: string): string {
+  return (ext.startsWith('.') ? ext.slice(1) : ext).toLowerCase();
+}
 
 /** 菜单项：标签给眼睛，hint 给悬停（作者要知道点了会建成什么） */
 export const NEW_ITEM_MENU: readonly { kind: NewItemKind; label: string; hint: string }[] = [
-  { kind: 'kojo', label: '新建口上文件（.kojo，kojo 2.0）', hint: '写 kojo（2.0）写法；行内可嵌 `@原生` 直通 ERB' },
-  { kind: 'erb', label: '新建 ERB 文件（.ERB）', hint: '只写原生语法，不经转译' },
-  { kind: 'txt', label: '新建文本文件（.txt）', hint: '说明、备忘、搬运记录等附加文件' },
+  {
+    kind: 'kojo',
+    label: `新建口上文件（${FILE_EXTENSIONS.kojo}，kojo 2.0）`,
+    hint: '写 kojo（2.0）写法；行内可嵌 `@原生` 直通 ERB',
+  },
+  {
+    kind: 'erb',
+    label: `新建 ERB 文件（${FILE_EXTENSIONS.erb.toUpperCase()}）`,
+    hint: '只写原生语法，不经转译',
+  },
+  {
+    kind: 'erm',
+    label: `新建 ERB 正文文件（${FILE_EXTENSIONS.erm}）`,
+    hint: `部分引擎的正文用 ${FILE_EXTENSIONS.erm} 扩展名：只写原生语法，不经转译`,
+  },
+  {
+    kind: 'txt',
+    label: `新建文本文件（${FILE_EXTENSIONS.txt}）`,
+    hint: '说明、备忘、搬运记录等附加文件',
+  },
+  {
+    kind: 'md',
+    label: `新建笔记文件（${FILE_EXTENSIONS.md}）`,
+    hint: '标题、清单、链接都能标出来的笔记；不参与口上编译与部署',
+  },
   { kind: 'folder', label: '新建文件夹', hint: '在当前位置建一个子目录' },
 ];
 
-/** 已知的文件扩展名（判"写的是别的类型"用） */
-const KNOWN_EXTS = ['kojo', 'erb', 'erm', 'txt', 'md', 'json', 'csv'] as const;
+/**
+ * 已知的文件扩展名（判"写的是别的类型"用）。
+ *
+ * `.kojo` / `.erb` / `.erm` 经 {@link FILE_EXTENSIONS} 从契约单源导出；
+ * `.json` / `.csv` 是工作区里常见但本菜单不产出的类型，仍算"你写的是别的类型"。
+ */
+const KNOWN_EXTS: readonly string[] = [
+  ...Object.values(FILE_EXTENSIONS).map(bareExtension),
+  'json',
+  'csv',
+];
 
 /** Windows 文件名非法字符 + 控制字符（口上库要在 Windows 上跑，按最严的一方来） */
 const ILLEGAL = /[\\/:*?"<>|\u0000-\u001f]/;
@@ -71,21 +132,22 @@ export function resolveNewItemPath(
     return { ok: true, absPath: join(dir, name), displayName: `${name}/` };
   }
 
-  const wanted = kind;
+  const wanted = FILE_EXTENSIONS[kind];
+  const wantedBare = bareExtension(wanted);
   const dot = name.lastIndexOf('.');
   const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
 
-  if (ext === wanted) {
+  if (ext === wantedBare) {
     return { ok: true, absPath: join(dir, name), displayName: name };
   }
-  if (ext !== '' && (KNOWN_EXTS as readonly string[]).includes(ext)) {
+  if (ext !== '' && KNOWN_EXTS.includes(ext)) {
     return {
       ok: false,
-      reason: `你选的是 .${wanted}，但名字以 .${ext} 结尾。去掉扩展名让它自动补上，或改选对应的类型。`,
+      reason: `你选的是 ${wanted}，但名字以 .${ext} 结尾。去掉扩展名让它自动补上，或改选对应的类型。`,
     };
   }
   // 有点号但不是已知扩展名（`v1.2 草稿`）→ 当作无扩展名，补上所选类型
-  return { ok: true, absPath: join(dir, `${name}.${wanted}`), displayName: `${name}.${wanted}` };
+  return { ok: true, absPath: join(dir, `${name}${wanted}`), displayName: `${name}${wanted}` };
 }
 
 /**

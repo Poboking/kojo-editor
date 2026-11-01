@@ -21,10 +21,15 @@ vi.mock('react', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react')>();
   const forceClosed = (): boolean =>
     (globalThis as { __kojoForceClosed?: boolean }).__kojoForceClosed === true;
+  const forceOpenDirs = (): readonly string[] | undefined =>
+    (globalThis as { __kojoOpenDirs?: readonly string[] }).__kojoOpenDirs;
   return {
     ...actual,
     useState: (init: unknown): [unknown, () => void] => {
       const value = typeof init === 'function' ? (init as () => unknown)() : init;
+      // 展开态取证：只替换 Set 型的 state（openDirs / closedProjects），别的初始值不受影响
+      const openDirs = forceOpenDirs();
+      if (openDirs !== undefined && value instanceof Set) return [new Set(openDirs), () => {}];
       return [forceClosed() && value === true ? false : value, () => {}];
     },
     useRef: (init: unknown): { current: unknown } => ({ current: init }),
@@ -107,12 +112,18 @@ function deps(over: Partial<KojoProjectsPanelDeps> = {}): KojoProjectsPanelDeps 
   };
 }
 
-const render = (d: KojoProjectsPanelDeps, forceClosed = false): FakeNode[] => {
+const render = (
+  d: KojoProjectsPanelDeps,
+  forceClosed = false,
+  openDirs?: readonly string[],
+): FakeNode[] => {
   (globalThis as { __kojoForceClosed?: boolean }).__kojoForceClosed = forceClosed;
+  if (openDirs !== undefined) (globalThis as { __kojoOpenDirs?: readonly string[] }).__kojoOpenDirs = openDirs;
   try {
     return walk(createKojoProjectsPanel(d)({}));
   } finally {
     delete (globalThis as { __kojoForceClosed?: boolean }).__kojoForceClosed;
+    delete (globalThis as { __kojoOpenDirs?: readonly string[] }).__kojoOpenDirs;
   }
 };
 
@@ -195,6 +206,23 @@ describe('双真相源提示 · 人话正文 + 完整口径在 title', () => {
     expect(byClass(nodes, 'kp-notice-close')).toHaveLength(1);
     // 旧那条压在面板第一行的口号不再当正文（tutorial-content 引用的整句仍能在 title 找到）
     expect(nodes.some((n) => has(n, 'kp-notice') && n.text === '工作区为权威 · 游戏目录仅部署目标')).toBe(false);
+  });
+});
+
+describe('作品树 · 文件如实列出（不按 kojo 过滤）', () => {
+  it('包内 .md / .txt / .csv / 图片与 .kojo 同屏，一个不少', () => {
+    const dir = '/appdata/workspaces/p0/包0';
+    const entries: DirEntry[] = [
+      { name: '事件.kojo', path: `${dir}/事件.kojo`, isDirectory: false },
+      { name: '写作笔记.md', path: `${dir}/写作笔记.md`, isDirectory: false },
+      { name: '备忘.txt', path: `${dir}/备忘.txt`, isDirectory: false },
+      { name: '角色表.csv', path: `${dir}/角色表.csv`, isDirectory: false },
+      { name: '立绘.png', path: `${dir}/立绘.png`, isDirectory: false },
+    ];
+    const nodes = render(deps({ dirState: (d) => (d === dir ? entries : undefined) }), false, [dir]);
+    const files = byClass(nodes, 'kp-file-name').map((n) => n.text);
+    expect(files).toHaveLength(entries.length);
+    expect(new Set(files)).toEqual(new Set(entries.map((e) => e.name)));
   });
 });
 
