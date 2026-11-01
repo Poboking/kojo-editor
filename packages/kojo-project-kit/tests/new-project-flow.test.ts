@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import type { ScopedStorage } from '@kojo/plugin-api';
+import type { FileIO, ScopedStorage } from '@kojo/plugin-api';
 import {
   blankProjectDirName,
   blankSourceExtension,
   buildBlankProject,
   firstOpenPath,
+  probeRememberedLocation,
   projectKindChoiceOf,
   projectKindChoices,
   readWizardProfile,
+  REMEMBERED_LOCATION_FALLBACK_NOTICE,
+  rememberedLocationView,
+  rememberedRootAuthorized,
   WIZARD_PROFILE_KEY,
   writeWizardProfile,
 } from '../src/new-project-flow';
@@ -122,23 +126,24 @@ describe('firstOpenPath（创建后定位哪枚文件）', () => {
   });
 });
 
-describe('作者档案（readWizardProfile / writeWizardProfile）', () => {
-  const fakeStore = (initial?: unknown): ScopedStorage & { data: Map<string, unknown> } => {
-    const data = new Map<string, unknown>();
-    if (initial !== undefined) data.set(WIZARD_PROFILE_KEY, initial);
-    return {
-      data,
-      get: async <T>(key: string) => data.get(key) as T | undefined,
-      set: async <T>(key: string, value: T) => {
-        data.set(key, value);
-      },
-      delete: async (key: string) => {
-        data.delete(key);
-      },
-      keys: async () => [...data.keys()],
-    };
+/** 内存存储域替身（档案键 → 值；`get`/`set`/`delete`/`keys` 四件套） */
+const fakeStore = (initial?: unknown): ScopedStorage & { data: Map<string, unknown> } => {
+  const data = new Map<string, unknown>();
+  if (initial !== undefined) data.set(WIZARD_PROFILE_KEY, initial);
+  return {
+    data,
+    get: async <T>(key: string) => data.get(key) as T | undefined,
+    set: async <T>(key: string, value: T) => {
+      data.set(key, value);
+    },
+    delete: async (key: string) => {
+      data.delete(key);
+    },
+    keys: async () => [...data.keys()],
   };
+};
 
+describe('作者档案（readWizardProfile / writeWizardProfile）', () => {
   it('没有存储域 → 空档案（向导与历史逐字一致）', async () => {
     expect(await readWizardProfile(undefined)).toEqual({});
     await expect(writeWizardProfile(undefined, { authorName: '张三' })).resolves.toBeUndefined();
@@ -177,5 +182,97 @@ describe('作者档案（readWizardProfile / writeWizardProfile）', () => {
     } as unknown as ScopedStorage;
     await expect(readWizardProfile(broken)).resolves.toEqual({});
     await expect(writeWizardProfile(broken, { authorName: '张三' })).resolves.toBeUndefined();
+  });
+});
+
+describe('项目位置记忆（P0-6b）', () => {
+  const fakeIo = (
+    stat: (p: string) => Promise<{ isDirectory: boolean; size: number; mtimeMs: number } | null>,
+  ): Pick<FileIO, 'stat'> => ({ stat }) as unknown as Pick<FileIO, 'stat'>;
+
+  it('旧档案没有 location：读回来的形状与历史逐字一致，行为不变', async () => {
+    const store = fakeStore({
+      authorName: '张三',
+      version: '1.0',
+      kind: 'kojo',
+      blankSource: 'erb',
+    });
+    const profile = await readWizardProfile(store);
+    expect(profile).toEqual({ authorName: '张三', version: '1.0', kind: 'kojo', blankSource: 'erb' });
+    expect(profile).not.toHaveProperty('location');
+  });
+
+  it('档案里的 location 能读回来（首尾空白归一；非法类型一律忽略）', async () => {
+    expect(await readWizardProfile(fakeStore({ location: '  D:\\作品库  ' }))).toEqual({
+      location: 'D:\\作品库',
+    });
+    expect(await readWizardProfile(fakeStore({ location: 7 }))).toEqual({});
+  });
+
+  it('有 location 且探针 ok → 预填该位置，位置行回显同一路径且不提示', () => {
+    const view = rememberedLocationView('D:\\作品库', 'ok', 'C:\\data\\workspaces');
+    expect(view.chosenRoot).toBe('D:\\作品库');
+    expect(view.line).toBe('D:\\作品库');
+    expect(view.notice).toBeNull();
+  });
+
+  it('失效回落（missing / not-directory / read-failed / not-writable）→ 默认位置 + 一句人话提示', () => {
+    for (const status of ['missing', 'not-directory', 'read-failed', 'not-writable'] as const) {
+      const view = rememberedLocationView('D:\\旧作品库', status, 'C:\\data\\workspaces');
+      expect(view.chosenRoot).toBeNull();
+      expect(view.line).toBe('（默认）C:\\data\\workspaces');
+      expect(view.notice).toBe(REMEMBERED_LOCATION_FALLBACK_NOTICE);
+    }
+  });
+
+  it('没有记忆位置 → 默认位置且不提示（与历史逐字一致）', () => {
+    const view = rememberedLocationView(undefined, null, '/data/workspaces');
+    expect(view.chosenRoot).toBeNull();
+    expect(view.line).toBe('（默认）/data/workspaces');
+    expect(view.notice).toBeNull();
+  });
+
+  it('清空回默认：不带 location 写档案，下次读不到 location（不会永久钉在旧目录）', async () => {
+    const store = fakeStore({ authorName: '张三', location: 'D:\\旧作品库' });
+    expect((await readWizardProfile(store)).location).toBe('D:\\旧作品库');
+    // 「用默认位置」走的就是这条：整份档案重写且不带 location 键
+    await writeWizardProfile(store, { authorName: '张三' });
+    expect(await readWizardProfile(store)).not.toHaveProperty('location');
+  });
+
+  it('写档案失败（含 location）不外溢：选择位置 / 创建都不该被档案写失败挡住', async () => {
+    const broken = {
+      ...fakeStore(),
+      set: async () => {
+        throw new Error('boom');
+      },
+    } as unknown as ScopedStorage;
+    await expect(writeWizardProfile(broken, { location: 'D:\\作品库' })).resolves.toBeUndefined();
+  });
+
+  it('probeRememberedLocation：目录在位 → ok；没有记忆路径 → null', async () => {
+    const io = fakeIo(async () => ({ isDirectory: true, size: 0, mtimeMs: 0 }));
+    expect(await probeRememberedLocation(io, 'D:\\作品库')).toBe('ok');
+    expect(await probeRememberedLocation(io, null)).toBeNull();
+  });
+
+  it('probeRememberedLocation：stat 返回 null → missing；不是目录 → not-directory', async () => {
+    expect(await probeRememberedLocation(fakeIo(async () => null), 'D:\\作品库')).toBe('missing');
+    const fileIo = fakeIo(async () => ({ isDirectory: false, size: 1, mtimeMs: 0 }));
+    expect(await probeRememberedLocation(fileIo, 'D:\\作品库\\README.md')).toBe('not-directory');
+  });
+
+  it('probeRememberedLocation：stat 抛错（读取失败）→ read-failed，不外溢', async () => {
+    const broken = fakeIo(async () => {
+      throw new Error('boom');
+    });
+    await expect(probeRememberedLocation(broken, 'D:\\作品库')).resolves.toBe('read-failed');
+  });
+
+  it('rememberedRootAuthorized：大小写 / 尾分隔符折叠后同一根才算在授权清单里', () => {
+    expect(rememberedRootAuthorized('D:\\Works', ['d:\\works\\'])).toBe(true);
+    expect(rememberedRootAuthorized('D:\\Works', ['D:\\works2'])).toBe(false);
+    expect(rememberedRootAuthorized('/work/lib', ['/work/lib'])).toBe(true);
+    expect(rememberedRootAuthorized('/work/lib', ['/work/lib-old'])).toBe(false);
   });
 });

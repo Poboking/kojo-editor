@@ -21,7 +21,9 @@ import {
   KOJO_SOURCE_EXTENSION,
   extname,
   join,
+  pathKey,
   sanitizePathSegment,
+  type FileIO,
   type ScaffoldFileSet,
   type ScopedStorage,
 } from '@kojo/plugin-api';
@@ -195,6 +197,11 @@ export interface WizardProfile {
   version?: string;
   kind?: WizardProjectKind;
   blankSource?: BlankSourceKind;
+  /**
+   * 上次自选的项目位置绝对路径（P0-6b，additive）。
+   * 缺省 = 走默认工作区根，与历史逐字一致；旧档案里读不到这个键时行为不变。
+   */
+  location?: string;
 }
 
 /** 只用到读写的存储半边（`deps.storage` 缺席时整条档案通道关闭） */
@@ -217,8 +224,10 @@ export async function readWizardProfile(store: WizardProfileStore | undefined): 
     const out: WizardProfile = {};
     const authorName = nonEmpty(rec.authorName);
     const version = nonEmpty(rec.version);
+    const location = nonEmpty(rec.location);
     if (authorName !== null) out.authorName = authorName;
     if (version !== null) out.version = version;
+    if (location !== null) out.location = location;
     if (rec.kind === 'kojo' || rec.kind === 'blank') out.kind = rec.kind;
     if (rec.blankSource === 'erb' || rec.blankSource === 'md') out.blankSource = rec.blankSource;
     return out;
@@ -238,4 +247,96 @@ export async function writeWizardProfile(
   } catch {
     /* 默认值没记住不构成错误 */
   }
+}
+
+/* ---------------- 项目位置记忆（P0-6b：把「自选…」的结果留给下一次） ---------------- */
+
+/**
+ * 「项目位置」行给作者看的文案：没自选过就明说是默认位置，自选过就直接给绝对路径
+ * （作者要的是"我那份作品到底落在哪"，不是内部术语）。
+ *
+ * 住在通用半边（而不是向导组件）是因为它要被位置记忆的纯函数复用，
+ * 也方便直接单测；向导侧照旧从这里 import 并转出。
+ */
+export function locationLabel(chosen: string | null, defaultRoot: string | null): string {
+  if (chosen !== null) return chosen;
+  return defaultRoot === null ? '（默认）位置暂不可用' : `（默认）${defaultRoot}`;
+}
+
+/** 记忆位置不可用时的回落提示（一句人话；失败可见，但绝不挡创建） */
+export const REMEMBERED_LOCATION_FALLBACK_NOTICE = '上次的位置已不可用，已改用默认位置。';
+
+/**
+ * 记忆位置的只读判定结果。
+ *
+ * `not-writable` 指"目录还在，但已不在项目位置授权清单里"（撤销授权 / 平台不再准入），
+ * 由 `rememberedRootAuthorized` 核 `workspaces.roots()` 得出——这份名单正是
+ * `workspaces.create` 认的那一份，不是猜出来的权限。
+ */
+export type RememberedLocationStatus = 'ok' | 'missing' | 'not-directory' | 'read-failed' | 'not-writable';
+
+/**
+ * 用 `deps.io` 的**只读**通道核一下记忆位置：`stat` 一次同时回答"在不在 / 是不是目录 /
+ * 读不读得到"（`exists` 只有布尔、`statFiles` 不给目录类型，`stat` 是唯一够用的人选）。
+ * 只读、不建目录、不试写：写权限由创建工作流自己如实拒绝，打开向导时不猜。
+ */
+export async function probeRememberedLocation(
+  io: Pick<FileIO, 'stat'>,
+  path: string | null,
+): Promise<RememberedLocationStatus | null> {
+  if (path === null) return null;
+  try {
+    const st = await io.stat(path);
+    if (st === null) return 'missing';
+    return st.isDirectory ? 'ok' : 'not-directory';
+  } catch {
+    return 'read-failed';
+  }
+}
+
+/**
+ * 记忆位置是否仍在**已授权项目位置清单**里（纯函数）。
+ *
+ * 2026-10-27 收窄后自选根的根本身不再可写（只有其下解析出的作品目录可写），
+ * 所以不能拿 `io.isWritable(root)` 判"还能不能建"——那对合法自选根恒为 false。
+ * 判据是 `workspaces.create` 认的那份 `roots()`（默认根 + 对话框授权根），
+ * 按 `pathKey` 折叠大小写与尾分隔符。
+ */
+export function rememberedRootAuthorized(remembered: string, roots: readonly string[]): boolean {
+  const key = pathKey(remembered);
+  return roots.some((r) => pathKey(r) === key);
+}
+
+/** 记忆位置 → 预填值 / 位置行文案 / 回落提示 */
+export interface RememberedLocationView {
+  /** 预填进 `chosenRoot` 的值；失效回落时为 null（= 默认位置） */
+  chosenRoot: string | null;
+  /** 「项目位置」行回显（与 `locationLabel` 同一口径） */
+  line: string;
+  /** 失效回落时那句人话提示；一切正常 / 没有记忆时 null */
+  notice: string | null;
+}
+
+/**
+ * 把"档案里的位置 + 只读判定结果"翻成向导要的三样东西（纯函数）。
+ *
+ * 只有判定为 `ok` 才预填；没有记忆 / 判定缺席 / 任何失效状态都回落默认位置。
+ * 失效时**不静默**：给一句提示说明为什么没沿用上次的位置，创建按钮不受影响。
+ */
+export function rememberedLocationView(
+  remembered: string | undefined,
+  status: RememberedLocationStatus | null,
+  defaultRoot: string | null,
+): RememberedLocationView {
+  if (remembered === undefined || remembered.trim().length === 0) {
+    return { chosenRoot: null, line: locationLabel(null, defaultRoot), notice: null };
+  }
+  if (status === 'ok') {
+    return { chosenRoot: remembered, line: locationLabel(remembered, defaultRoot), notice: null };
+  }
+  return {
+    chosenRoot: null,
+    line: locationLabel(null, defaultRoot),
+    notice: REMEMBERED_LOCATION_FALLBACK_NOTICE,
+  };
 }

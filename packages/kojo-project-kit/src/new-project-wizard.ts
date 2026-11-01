@@ -58,14 +58,22 @@ import {
   blankSourceChoices,
   buildBlankProject,
   firstOpenPath,
+  locationLabel,
   pickFirstOpenName,
+  probeRememberedLocation,
   projectKindChoiceOf,
   projectKindChoices,
   readWizardProfile,
+  rememberedLocationView,
+  rememberedRootAuthorized,
   writeWizardProfile,
   type BlankSourceKind,
+  type RememberedLocationStatus,
   type WizardProjectKind,
 } from './new-project-flow';
+
+// 「项目位置」行的文案住在通用半边（位置记忆的纯函数也要用它）；这里转出以保持既有导入路径
+export { locationLabel };
 
 /** 模板来源条目（`deps.listTemplates` 的返回形状；装配侧对已装 `template-pack` 记录的投影） */
 export interface KojoTemplateEntry {
@@ -202,15 +210,6 @@ export interface KojoProjectCreateInput {
 }
 
 /**
- * 「项目位置」行给作者看的文案：没自选过就明说是默认位置，自选过就直接给绝对路径
- * （作者要的是"我那份作品到底落在哪"，不是内部术语）。
- */
-export function locationLabel(chosen: string | null, defaultRoot: string | null): string {
-  if (chosen !== null) return chosen;
-  return defaultRoot === null ? '（默认）位置暂不可用' : `（默认）${defaultRoot}`;
-}
-
-/**
  * 默认工作区根的取值：`rootDir()` 在没有平台数据目录的环境（浏览器开发壳）会抛，
  * 这里吞成 `null` 只用于展示——真正的问题由「创建」那条路径如实报出来。
  */
@@ -270,6 +269,10 @@ export function buildCreateInput(
 const LOCATION_HELP =
   '新建的作品文件夹放在哪里。默认放在软件自己的数据目录里；' +
   '也可以选一个你自己认得的文件夹（例如你的作品库），选好后软件会把那里当作可写的作品目录。';
+
+/** 「用默认位置」的 tooltip（P0-6b）：说清它同时清掉记忆，作者不会怕"点了就回不去" */
+const USE_DEFAULT_LOCATION_HELP =
+  '不再沿用上次选的文件夹（也会清掉记住的位置），放回软件自己的工作区目录。';
 
 /* ---------------- 模板来源（KM-14：纯函数半边，可单测） ---------------- */
 
@@ -460,7 +463,10 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
     // 工具不替作者选定许可，也不默认替他"开放"什么。
     const [license, setLicense] = useState<LicenseKind>('none');
     // 项目位置：null = 没自选过（走默认工作区根）；字符串 = 刚经系统对话框选定的目录
+    // 档案里记着上次的位置时由下面的档案 effect 预填（P0-6b）
     const [chosenRoot, setChosenRoot] = useState<string | null>(null);
+    // 记忆位置失效回落时的那句人话提示（正常 / 没有记忆 ⇒ null，不制造噪音）
+    const [locationNotice, setLocationNotice] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -531,12 +537,12 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       };
     }, [deps, selectedTemplate]);
 
-    /* ---------- 作者档案（NPF-1）：预填上次署名 / 版本 / 起手形态（失败不挡创建） ---------- */
+    /* ---------- 作者档案（NPF-1 / P0-6b）：预填署名 / 版本 / 起手形态 / 项目位置（失败不挡创建） ---------- */
     useEffect(() => {
       const store = deps.storage;
       if (store === undefined) return;
       let cancelled = false;
-      void readWizardProfile(store).then((profile) => {
+      void readWizardProfile(store).then(async (profile) => {
         if (cancelled) return;
         if (profile.authorName !== undefined) setAuthorName(profile.authorName);
         if (profile.version !== undefined) setVersion(profile.version);
@@ -544,6 +550,32 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
         // 没有游戏项目时"口上作品"不可选，档案里的 kind 不能把界面掰回一个建不了的类型
         if (profile.kind !== undefined && (profile.kind === 'blank' || gameProject !== null)) {
           setKind(profile.kind);
+        }
+        // 上次自选的位置：先过 `io.stat`（只读：在不在 / 是不是目录 / 读不读得到），
+        // 再过 `workspaces.roots()`（创建时认的那份授权清单，2026-10-27 收窄后自选根根身
+        // 本身不再可写，`isWritable(root)` 对合法自选根恒 false，不能拿它当判据）。
+        // 核过才预填；失效则回落默认位置并明说原因（不静默、不挡创建）。
+        if (profile.location !== undefined) {
+          let status: RememberedLocationStatus =
+            (await probeRememberedLocation(deps.io, profile.location)) ?? 'read-failed';
+          if (status === 'ok') {
+            try {
+              status = rememberedRootAuthorized(profile.location, deps.workspaces.roots())
+                ? 'ok'
+                : 'not-writable';
+            } catch {
+              // 工作区服务此刻答不出根清单（浏览器壳 / 服务不可用）——按"读不到"回落，不硬撑
+              status = 'read-failed';
+            }
+          }
+          if (cancelled) return;
+          const view = rememberedLocationView(
+            profile.location,
+            status,
+            defaultWorkspaceRoot(deps.workspaces),
+          );
+          setChosenRoot(view.chosenRoot);
+          setLocationNotice(view.notice);
         }
       });
       return () => {
@@ -581,12 +613,20 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       // 空白工作区允许不署名；口上作品仍要署名（骨架里那行署名不能凭空生成）
       (kindValue === 'blank' || (authorName.trim().length > 0 && chara !== null));
 
-    const rememberProfile = (): void => {
+    /**
+     * 记住本次新建的默认值（P0-6b：位置也记）。
+     *
+     * `location` 显式传入是为了「自选…」/「用默认位置」两个动作能立刻落档，
+     * 不必等创建成功；缺省 = 用当前 `chosenRoot`。null ⇒ 不写这个键（走默认位置），
+     * 于是"清空回默认"同时清掉档案里的旧位置。
+     */
+    const rememberProfile = (location: string | null = chosenRoot): void => {
       void writeWizardProfile(deps.storage, {
         authorName: authorName.trim(),
         version: version.trim(),
         kind: kindValue,
         blankSource,
+        ...(location !== null ? { location } : {}),
       });
     };
 
@@ -704,10 +744,22 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
           title: LOCATION_DIALOG_TITLE,
           forbidRoots: gameRootsForbiddingLocation(gameProject),
         });
-        if (picked !== null) setChosenRoot(picked);
+        if (picked !== null) {
+          setChosenRoot(picked);
+          setLocationNotice(null);
+          // 选定即落档：下次打开向导直接预填（写失败由 writeWizardProfile 吞掉，不挡创建）
+          rememberProfile(picked);
+        }
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : String(e));
       }
+    };
+
+    /** 「用默认位置」：清掉本次自选与档案里的旧位置，把作者从旧目录的钉子里放出来 */
+    const useDefaultLocation = (): void => {
+      setChosenRoot(null);
+      setLocationNotice(null);
+      rememberProfile(null);
     };
 
     const fileCount = 1 + (licenseProducesFile(license) ? 1 : 0) + deps.coreFaceCount;
@@ -852,13 +904,24 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       h('div', { className: 'wizard-field' },
         h('span', { className: 'wizard-label' }, '项目位置'),
         h('div', { className: 'dim' }, locationLabel(chosenRoot, defaultRoot)),
+        // 记忆位置失效回落时不静默：一句人话说明为什么没沿用上次的位置（创建不受影响）
+        locationNotice !== null ? h('div', { className: 'wizard-warn' }, locationNotice) : null,
         h('div', null,
           h('button', {
             className: 'ghost small',
             onClick: () => void pickLocation(),
             disabled: busy,
             title: LOCATION_HELP,
-          }, chosenRoot === null ? '自选…' : '改选别的文件夹…')),
+          }, chosenRoot === null ? '自选…' : '改选别的文件夹…'),
+          // 回到默认位置（P0-6b）：没有这个入口，作者会被永久钉在上次的目录里
+          chosenRoot === null
+            ? null
+            : h('button', {
+                className: 'ghost small',
+                onClick: useDefaultLocation,
+                disabled: busy,
+                title: USE_DEFAULT_LOCATION_HELP,
+              }, '用默认位置')),
         h('div', { className: 'wizard-hint dim' }, LOCATION_HELP)),
 
       // 落点预览
