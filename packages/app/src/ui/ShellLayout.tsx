@@ -2850,6 +2850,14 @@ export function ShellLayout(props: Props): ReactElement {
     return un;
   }, [kernel, floatPanel]);
 
+  // 面板定位意图（P0-6 欢迎页一键重开）：侧栏视图激活并展开（不浮动、不遮挡）
+  useEffect(() => {
+    const un = kernel.bus.on('ui.panel.reveal', (ev) =>
+      dispatch({ type: 'activate', container: 'sidebar', key: `panel:${ev.id}` }),
+    );
+    return un;
+  }, [kernel, dispatch]);
+
   /* -------------------- P4：三容器拖拽停靠（定稿 §七；override 持久化在 layout.panelLocations） -------------------- */
 
   /** 落点高亮目标（dragover 置位，drop/dragend/真正离开容器时清除） */

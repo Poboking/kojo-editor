@@ -13,7 +13,7 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     expect(KERNEL_EVENT_CLASSIFICATION_GUARD).toBe(true);
   });
 
-  it('白名单 = 插件可 emit 的 23 个内核事件（快照守门）', () => {
+  it('白名单 = 插件可 emit 的 24 个内核事件（快照守门）', () => {
     expect([...KERNEL_EVENT_NAMES].sort()).toEqual(
       [
         'file.changed',
@@ -37,6 +37,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
         'ui.diffView.open',
         // 2026-10-14 UI 浮动批：请求宿主把某面板弹出为可移动浮窗
         'ui.panel.float',
+        // P0-6 欢迎页一键重开批：请求宿主把某面板切到前台（侧栏视图激活，不浮动）
+        'ui.panel.reveal',
         // 2026-10-16 市场外链批：外链打开意图（闸的唯一执法点在 Rust，载荷只冻结 { url }）
         'ui.openExternal',
         // 2026-10-12 工作区批：导入意图（宿主文件树右键 → 工作区消费方）
@@ -71,7 +73,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     // 2026-10-16 市场外链批新增 ui.openExternal（外链打开意图）⇒ 20 → 21。
     // 用户反馈 4 批新增 market.publishRequested（「发布口上」意图，市场面板 → 适配器）⇒ 21 → 22。
     // 用户反馈 8 批新增 ui.tutorial.open（教程打开意图，欢迎页 → 教程提供方）⇒ 22 → 23。
+    // P0-6 欢迎页一键重开批新增 ui.panel.reveal（面板定位意图）⇒ 23 → 24。
     // 计数以本行结论为准（漏项的话编译期 guard 会红）。
-    expect(KERNEL_EVENT_NAMES.size).toBe(23);
+    expect(KERNEL_EVENT_NAMES.size).toBe(24);
   });
 });

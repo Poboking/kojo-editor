@@ -1,7 +1,14 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import type { FileStat, RecentProject } from '@kojo/plugin-api';
-import { pathKey } from '@kojo/plugin-api';
+import { WORKSPACE_MANIFEST_FILE, join, pathKey } from '@kojo/plugin-api';
 import type { RecentFileRecord } from './recent-files';
+import {
+  RECENT_WORKSPACE_PROJECTS_DISPLAY_LIMIT,
+  workspaceMissingReason,
+  workspaceProjectStatKey,
+  workspaceRowState,
+  type RecentWorkspaceProject,
+} from './recent-workspace-projects';
 // 版本号单一真源 = app 包清单（与 `src/bootstrap.ts` 的 `APP_VERSION` 同一条路）：
 // 欢迎页那格不许再抄一份字面量，抬版本只改三处清单（闸见 `tests/app-version.test.ts`）。
 import { version as APP_VERSION } from '../../package.json';
@@ -26,6 +33,7 @@ export type WelcomeTutorialId = 'kojo' | 'sugar' | 'kojo2' | 'reference';
 
 /** 无接线时的稳定空表（模块级常量：不给探测 effect 每次渲染造新引用） */
 const NO_RECENT_FILES: readonly RecentFileRecord[] = [];
+const NO_RECENT_WORKSPACES: readonly RecentWorkspaceProject[] = [];
 
 /** 教程卡片的静态半边：标题 / 一句说明 / 图标。打开动作由宿主接线成内核意图。 */
 export interface WelcomeTutorialEntry {
@@ -103,6 +111,15 @@ interface Props {
   recentFiles?: readonly RecentFileRecord[];
   /** 最近文件点击：同项目直接开、换项目先开项目再开（接线与判据在 App） */
   onOpenRecentFile?: (path: string, rootDir: string) => void;
+  /**
+   * 最近打开的口上作品（工作区项目，P0-6）：同上，写操作单源在 App。
+   * **可选**（additive 接线）：旧渲染方不传 ⇒ 整区不显示（空态不占地方），不会炸。
+   */
+  recentWorkspaces?: readonly RecentWorkspaceProject[];
+  /** 一键重开（开回记录里的游戏项目 → 展开「我的口上项目」→ 打开首枚可编辑文件） */
+  onOpenWorkspaceProject?: (rec: RecentWorkspaceProject) => void;
+  /** 从列表移除（只动记录，不动磁盘上的作品目录） */
+  onRemoveWorkspaceProject?: (projectId: string) => void;
   /** 失效探测（A4）；resolve undefined = 探测不可用（浏览器壳等），行内不标记 */
   statPath: (path: string) => Promise<FileStat | null | undefined>;
   /** 最近一次打开的项目根（null = 无会话可继续）；退出/崩溃守护批 */
@@ -255,6 +272,9 @@ export function WelcomeView({
   onClearRecent,
   recentFiles,
   onOpenRecentFile,
+  recentWorkspaces,
+  onOpenWorkspaceProject,
+  onRemoveWorkspaceProject,
   statPath,
   resumeRoot,
   onResumeSession,
@@ -265,6 +285,12 @@ export function WelcomeView({
 }: Props): ReactElement {
   // 最近文件（MM-7）：未接线（可选 prop 缺席）时退化为稳定空表——区不显示，不炸
   const files = recentFiles ?? NO_RECENT_FILES;
+  // 最近打开的口上作品（P0-6）：未接线时整区不渲染（空态不占地方）；
+  // 持久层最多 8 条，本页只摆 6 条（计数与行数同一份，别让标题数字大于看得到的行）
+  const workspaces = (recentWorkspaces ?? NO_RECENT_WORKSPACES).slice(
+    0,
+    RECENT_WORKSPACE_PROJECTS_DISPLAY_LIMIT,
+  );
   const opening = phase === 'opening';
   // 失效标记（A4）：逐条异步 stat，null = 目录不存在 → 行内灰态标记（仍可点、仍可移除）。
   // 结果按 pathKey+lastOpenedAt 缓存，recent 变化只补扫缓存缺失的键——不每帧重扫。
@@ -325,6 +351,47 @@ export function WelcomeView({
     };
     // fileStatCache 在依赖里：补扫完自然转 idle（pending 为空即早退），不会成环
   }, [kernelReady, files, statPath, fileStatCache]);
+
+  /**
+   * 失效探测（P0-6 口上作品区）：逐条 stat 两处——项目目录 + `workspace.json`。
+   * 目录不在 ⇒「所在文件夹已不在」；目录在但清单不在 ⇒「workspace.json 不存在」。
+   * 探测不可用（undefined）时整行不标记（同最近项目/最近文件的口径）。
+   */
+  const [wsStatCache, setWsStatCache] = useState<
+    Map<string, { dir: FileStat | null; manifest: FileStat | null }>
+  >(new Map());
+  useEffect(() => {
+    if (!kernelReady) return;
+    const pending = workspaces.filter((r) => !wsStatCache.has(workspaceProjectStatKey(r)));
+    if (pending.length === 0) return;
+    let cancelled = false;
+    void Promise.all(
+      pending.map(async (r): Promise<readonly [string, { dir: FileStat | null; manifest: FileStat | null } | undefined]> => {
+        try {
+          const [dir, manifest] = await Promise.all([
+            statPath(r.dir),
+            statPath(join(r.dir, WORKSPACE_MANIFEST_FILE)),
+          ]);
+          // 任一侧探测不可用 ⇒ 整条不缓存（不标记），等下一次重扫
+          if (dir === undefined || manifest === undefined) return [workspaceProjectStatKey(r), undefined] as const;
+          return [workspaceProjectStatKey(r), { dir, manifest }] as const;
+        } catch {
+          return [workspaceProjectStatKey(r), undefined] as const;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) return;
+      setWsStatCache((prev) => {
+        const next = new Map(prev);
+        for (const [k, v] of entries) if (v !== undefined) next.set(k, v);
+        return next;
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+    // wsStatCache 在依赖里：补扫完自然转 idle（pending 为空即早退），不会成环
+  }, [kernelReady, workspaces, statPath, wsStatCache]);
 
   /* ---------------------- 右键菜单：本页是免右键面 ---------------------- */
   // 根元素挂 `data-context-surface="welcome"`，清单里这一面标了 `suppressMenu` ⇒ 整片不出菜单
@@ -522,6 +589,68 @@ export function WelcomeView({
                   </ul>
                 )}
               </section>
+
+              {/* 最近打开的口上作品（P0-6）：作者自己的工作区项目（不是游戏目录）。
+                  空态整区不渲染——它不该在首屏占一块"还没有"的提示位；
+                  数据与一键重开的落地全在 App，组件只负责呈现与失效标记。 */}
+              {workspaces.length > 0 ? (
+                <section className="welcome-section welcome-workspace" aria-labelledby="welcome-workspace-title">
+                  <div className="welcome-section-head">
+                    <h2 className="welcome-section-title" id="welcome-workspace-title">
+                      最近打开的口上作品
+                      <span className="welcome-section-count">{workspaces.length}</span>
+                    </h2>
+                  </div>
+                  <ul className="welcome-recent-list welcome-workspace-list">
+                    {workspaces.map((r) => {
+                      const stat = wsStatCache.get(workspaceProjectStatKey(r));
+                      const state = workspaceRowState(stat?.dir, stat?.manifest);
+                      const reason = workspaceMissingReason(stat?.dir, stat?.manifest);
+                      const missing = state === 'missing';
+                      return (
+                        <li
+                          key={r.projectId}
+                          className={`welcome-recent-row welcome-workspace-row${missing ? ' is-missing' : ''}`}
+                        >
+                          <button
+                            className="welcome-recent-open"
+                            onClick={() => onOpenWorkspaceProject?.(r)}
+                            disabled={missing || !onOpenWorkspaceProject}
+                            title={
+                              missing
+                                ? reason === 'manifest'
+                                  ? `${r.dir}（workspace.json 不存在，已无法重开）`
+                                  : `${r.dir}（所在文件夹已不在，已无法重开）`
+                                : `重开「${r.name}」：展开「我的口上项目」并打开第一枚可编辑文件`
+                            }
+                          >
+                            <span className="welcome-project-head">
+                              <span className="welcome-project-name">{r.name}</span>
+                            </span>
+                            <span className="welcome-project-meta">
+                              <span className="welcome-project-when">{formatLastOpened(r.openedAt, now)}</span>
+                            </span>
+                            <span className="welcome-recent-path">{r.dir}</span>
+                            {missing ? (
+                              <span className="welcome-recent-badge is-missing">
+                                {reason === 'manifest' ? 'workspace.json 不存在' : '所在文件夹已不在'}
+                              </span>
+                            ) : null}
+                          </button>
+                          <button
+                            className="welcome-recent-remove"
+                            onClick={() => onRemoveWorkspaceProject?.(r.projectId)}
+                            title={`从列表移除：${r.dir}`}
+                            aria-label={`从列表移除：${r.dir}`}
+                          >
+                            移除
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              ) : null}
 
               {/* 最近文件（MM-7）：跨项目的打开记录——次级，默认折叠。
                   区类名 welcome-recent-files 必须留在列表/空态的**祖先**上（用例按后代关系查），

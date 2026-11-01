@@ -10,7 +10,16 @@ import {
   type ReactElement,
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
-import type { ErbIndex, ErbParserService, FileStat, FileWatchStatus, GameProject, RecentProject } from '@kojo/plugin-api';
+import type {
+  DirEntry,
+  ErbIndex,
+  ErbParserService,
+  FileStat,
+  FileWatchStatus,
+  GameProject,
+  RecentProject,
+  WorkspaceProject,
+} from '@kojo/plugin-api';
 import {errorText,  join, pathKey } from '@kojo/plugin-api';
 import { removeRecentOptimistic } from './WelcomeView';
 // 版本号单一真源 = app 包清单（启动品牌锁与欢迎页同一条路）
@@ -31,6 +40,17 @@ import {
   upsertRecentFile,
   type RecentFileRecord,
 } from './recent-files';
+// 最近打开的口上作品（P0-6）：欢迎页一键重开的数据面与纯逻辑
+import {
+  loadRecentWorkspaceProjects,
+  pickFirstBodyName,
+  pickFirstEditableName,
+  removeRecentWorkspaceProject,
+  saveRecentWorkspaceProjects,
+  upsertRecentWorkspaceProject,
+  workspaceProjectIdForPath,
+  type RecentWorkspaceProject,
+} from './recent-workspace-projects';
 import { clearRecoveredContents, setRecoveredContents } from './recovery-store';
 import { resolveProjectSwitch, type ProjectSwitchDecision } from './project-switch';
 // LAU-1a（2026-10-25）：2.0 事实的**按项目取**端口全部收在组合根（bootstrap）——
@@ -393,6 +413,47 @@ function omitPaths(prev: ReadonlySet<string>, gone: ReadonlySet<string>): Readon
 }
 
 /**
+ * 工作区项目「第一枚可编辑文件」（P0-6 一键重开）：**正文优先**——
+ * 先在整个项目里（项目根 → 各制品目录）找 `.kojo → .kojo1 → .ERB → .erm`；
+ * 一枚正文都没有时才退回「任意可编辑文件」（跳过 README / workspace.json）。
+ * 挑选判据在 `recent-workspace-projects.ts::pickFirstBodyName / pickFirstEditableName`
+ * （与新建向导 `pickFirstOpenName` 同口径的宿主本地副本——app 不能反向 import 插件包）。
+ * 返回绝对路径；一枚可列文件都没有 ⇒ null（调用方照样重开项目，只是不预开文件）。
+ */
+async function firstEditablePathInWorkspace(
+  kernel: Kernel,
+  project: WorkspaceProject,
+): Promise<string | null> {
+  const pick = (
+    entries: readonly DirEntry[],
+    choose: (names: readonly string[]) => string | null,
+  ): string | null => {
+    const name = choose(entries.map((e) => e.name));
+    return name === null ? null : (entries.find((e) => e.name === name)?.path ?? null);
+  };
+  const filesIn = async (relDir?: string): Promise<DirEntry[]> => {
+    try {
+      return (await kernel.workspaces.listDir(project.id, relDir)).filter((e) => !e.isDirectory);
+    } catch {
+      return []; // 单个目录列不动不挡整条链路（制品目录可能已被删）
+    }
+  };
+  const listings = await Promise.all([
+    filesIn(),
+    ...project.artifacts.map((a) => filesIn(a.dirName)),
+  ]);
+  for (const entries of listings) {
+    const hit = pick(entries, pickFirstBodyName);
+    if (hit !== null) return hit;
+  }
+  for (const entries of listings) {
+    const hit = pick(entries, pickFirstEditableName);
+    if (hit !== null) return hit;
+  }
+  return null;
+}
+
+/**
  * Kojo 2.0 切换计划（K2-CUTOVER-PRE）：把持久化端口挂上控制器单例。
  *
  * 模块求值一次即可：控制器是进程级单例，存储只影响「阶段 / per-file override」这两个
@@ -561,6 +622,19 @@ export function App(): ReactElement {
   /** 最新值快照（记录点不吃陈旧闭包；与 dirtyRef 同模式） */
   const recentFilesRef = useRef(recentFiles);
   recentFilesRef.current = recentFiles;
+  /**
+   * 最近打开的口上作品（P0-6）：欢迎页「最近打开的口上作品」区数据源；
+   * 持久化走内核全局存储（`recent-workspace-projects-v1`），见 recent-workspace-projects.ts。
+   */
+  const [recentWorkspaces, setRecentWorkspaces] = useState<RecentWorkspaceProject[]>([]);
+  const recentWorkspacesRef = useRef(recentWorkspaces);
+  recentWorkspacesRef.current = recentWorkspaces;
+  /**
+   * 一键重开要在项目态提交后再把「我的口上项目」视图拉出来——openProject 返回时
+   * 壳层可能还没挂载/订阅，直接 emit 事件会丢。这里记一次待兑现的目标根
+   * （只有 phase 转 `project` 且真的落在记录里的那个根上才发，同拍只发一次）。
+   */
+  const pendingPanelRevealRef = useRef<{ rootDir: string } | null>(null);
   /**
    * `Ctrl+P` 空查询时置顶的「最近打开」（1020 编辑器体感批）：欢迎页那块用的是同一份
    * MM-7 记录，这里只取路径清单（最新在前）。数组身份跟着 state 走 ⇒ 面板的 memo 不乱重算。
@@ -771,6 +845,8 @@ export function App(): ReactElement {
         }
         // 最近文件读回（MM-7）：欢迎页「最近文件」区。读不到就是空列表，静默
         loadRecentFiles(k.storage.global()).then(setRecentFiles).catch(() => undefined);
+        // 最近打开的口上作品读回（P0-6）：读不到就是空列表，静默
+        loadRecentWorkspaceProjects(k.storage.global()).then(setRecentWorkspaces).catch(() => undefined);
         // 崩溃探测（退出/崩溃守护批）：journal 非空 + 心跳超龄/缺失 = 上次不正常退出。
         // 探测结果只决定欢迎页横幅与恢复内容注入，**永不自动写游戏目录**
         if (isTauri()) {
@@ -1683,6 +1759,192 @@ export function App(): ReactElement {
   }, []);
   const rootDirRef = useRef<string | null>(null);
   rootDirRef.current = project?.rootDir ?? null;
+
+  /* --------- 最近打开的口上作品（P0-6）：记录 / 移除 / 一键重开 --------- */
+
+  /**
+   * 工作区项目目录缓存（projectId → dir）。
+   *
+   * 「从面板打开作品」的判据：面板本身没有独立的「打开项目」动作，作者在面板里
+   * 展开项目并点开文件才是真正的进入——与新建向导建完后自动送作者到正文是同一拍。
+   * 因此这里收 `editor.revealLocation` 里由**游戏 adapter 自己**发出的打开意图
+   * （面板的 reveal 回调用插件 id 作 source），把落在某个作品目录下的文件折回
+   * projectId 记一次；其它来源（校验面板 / 条件矩阵等）不记。
+   *
+   * 缓存由 `workspaces.list()` 填充——外部授权根里的项目必须 list 过，
+   * `projectDir()` 才不会把它解析回默认根。
+   */
+  const workspaceDirsRef = useRef<readonly { projectId: string; dir: string }[]>([]);
+
+  /** 落盘（失败静默：记录是锦上添花，绝不能挡住作者正在做的事） */
+  const persistRecentWorkspaces = useCallback((next: RecentWorkspaceProject[]) => {
+    recentWorkspacesRef.current = next;
+    setRecentWorkspaces(next);
+    if (kernel) void saveRecentWorkspaceProjects(kernel.storage.global(), next).catch(() => undefined);
+  }, [kernel]);
+
+  /** 刷新 projectId → 目录缓存（列一遍工作区即可同时拿到名字与落点） */
+  const refreshWorkspaceDirs = useCallback(async (): Promise<
+    readonly { projectId: string; dir: string }[]
+  > => {
+    if (!kernel) return workspaceDirsRef.current;
+    try {
+      const list = await kernel.workspaces.list();
+      workspaceDirsRef.current = list.map((p) => ({
+        projectId: p.id,
+        dir: kernel.workspaces.projectDir(p.id),
+      }));
+    } catch {
+      // 工作区服务读不动（未装配 / 根离线）：保持旧表，下一次再试
+    }
+    return workspaceDirsRef.current;
+  }, [kernel]);
+
+  /**
+   * 记一次「作者打开 / 创作了这个口上作品」（P0-6 写入时机）：
+   * - `workspace.projectCreated`：向导 / 导入建出新项目的那一刻；
+   * - 面板里展开项目并打开首文件（代理入口，见 `workspaceDirsRef` 注释）；
+   * - 本页「一键重开」成功回到记录里的作品时（同一 upsert，只刷新时间戳）。
+   *
+   * `gameRoot` = 记录时所在的游戏项目根：欢迎页没有「我的口上项目」面板，
+   * 只有回到那次的工作现场，面板才存在。没项目态（如建项目以外路径）就不写这个键。
+   */
+  const recordWorkspaceProject = useCallback(
+    (projectId: string) => {
+      if (!kernel) return;
+      void (async () => {
+        try {
+          const list = await kernel.workspaces.list();
+          workspaceDirsRef.current = list.map((p) => ({
+            projectId: p.id,
+            dir: kernel.workspaces.projectDir(p.id),
+          }));
+          const hit = list.find((p) => p.id === projectId);
+          if (hit === undefined) return; // 刚被删 / 读不到：不写一条对不上的记录
+          persistRecentWorkspaces(
+            upsertRecentWorkspaceProject(recentWorkspacesRef.current, {
+              projectId: hit.id,
+              name: hit.name,
+              dir: kernel.workspaces.projectDir(hit.id),
+              gameRoot: rootDirRef.current ?? undefined,
+              now: Date.now(),
+            }),
+          );
+        } catch {
+          // 工作区读失败：本轮不记，下次打开再补（不影响编辑）
+        }
+      })();
+    },
+    [kernel, persistRecentWorkspaces],
+  );
+
+  /** 欢迎页「移除」：只动记录，不动磁盘上的作品目录（行随即消失，无需 toast） */
+  const removeRecentWorkspaceEntry = useCallback(
+    (projectId: string) => {
+      const next = removeRecentWorkspaceProject(recentWorkspacesRef.current, projectId);
+      if (next.length === recentWorkspacesRef.current.length) return;
+      persistRecentWorkspaces(next);
+    },
+    [persistRecentWorkspaces],
+  );
+
+  /**
+   * 一键重开（P0-6）：记录里带了「当时的游戏项目根」才回得去——工作区项目
+   * 只能出现在游戏项目上下文的「我的口上项目」面板里，欢迎页没有面板。
+   *
+   * 顺序：先算首枚可编辑文件（正文优先），再开游戏项目并把这份文件排进
+   * `pendingOpenFile`（项目完全就绪后才落进编辑器），最后在 phase 转 `project`
+   * 的 effect 里发 `ui.panel.reveal` 把面板拉出来。
+   */
+  const openRecentWorkspaceProject = useCallback(
+    async (rec: RecentWorkspaceProject) => {
+      if (!kernel) return;
+      if (rec.gameRoot === undefined) {
+        notify({
+          kind: 'info',
+          message: '这条记录没有留下游戏项目位置，无法重开；请在对应的游戏目录里打开「我的口上项目」。',
+        });
+        return;
+      }
+      let hit: WorkspaceProject | null = null;
+      try {
+        hit = (await kernel.workspaces.list()).find((p) => p.id === rec.projectId) ?? null;
+      } catch {
+        hit = null;
+      }
+      if (hit === null) {
+        notify({ kind: 'info', message: `「${rec.name}」已不在工作区列表里，可能已被删除或移动。` });
+        return;
+      }
+      let first: string | null = null;
+      try {
+        first = await firstEditablePathInWorkspace(kernel, hit);
+      } catch {
+        first = null; // 列目录失败不挡重开：面板照样展开，作者自己挑
+      }
+      pendingPanelRevealRef.current = { rootDir: rec.gameRoot };
+      await openProject(rec.gameRoot, first !== null ? { pendingOpenFile: first } : undefined);
+      const current = kernel.project.current();
+      if (current !== null && pathKey(current.rootDir) === pathKey(rec.gameRoot)) {
+        recordWorkspaceProject(rec.projectId); // 重开 = 最近使用，刷新时间戳
+      } else {
+        pendingPanelRevealRef.current = null; // 没开到记录里的根：不许误发面板意图
+      }
+    },
+    [kernel, notify, openProject, recordWorkspaceProject],
+  );
+
+  /** 项目建成的广播（向导 / 导入两种来源）：只带 projectId，名字与目录现读 */
+  useEffect(() => {
+    if (!kernel) return;
+    const un = kernel.bus.on('workspace.projectCreated', (ev) => recordWorkspaceProject(ev.projectId));
+    return un;
+  }, [kernel, recordWorkspaceProject]);
+
+  /** 「面板里打开作品」的代理入口（判据见 `workspaceDirsRef` 注释） */
+  useEffect(() => {
+    if (!kernel) return;
+    const un = kernel.bus.on('editor.revealLocation', (ev) => {
+      if (ev.source === undefined) return;
+      const sources = new Set<string>();
+      for (const c of kernel.slots.query('game.adapter')) {
+        sources.add(c.id);
+        if (c.pluginId !== undefined) sources.add(c.pluginId);
+      }
+      if (!sources.has(ev.source)) return;
+      const hit = workspaceProjectIdForPath(workspaceDirsRef.current, ev.filePath);
+      if (hit !== null) {
+        recordWorkspaceProject(hit);
+        return;
+      }
+      // 缓存表可能还没建（本会话没建过项目、面板也没列过）：补扫一次再认
+      void refreshWorkspaceDirs().then((rows) => {
+        const again = workspaceProjectIdForPath(rows, ev.filePath);
+        if (again !== null) recordWorkspaceProject(again);
+      });
+    });
+    return un;
+  }, [kernel, recordWorkspaceProject, refreshWorkspaceDirs]);
+
+  /**
+   * 一键重开的最后一拍：项目态提交后再拉「我的口上项目」。
+   * 面板 id 不写死——两个游戏 adapter 各注册一枚（`kojo-projects` /
+   * `eraakumamaid-kojo-projects`），按当前项目的 adapterId 现取贡献方。
+   * 壳层对这条意图的落地见 `ShellLayout` 的 `ui.panel.reveal` 订阅。
+   */
+  useEffect(() => {
+    if (kernel === null || project === null || phase !== 'project') return;
+    const pending = pendingPanelRevealRef.current;
+    if (pending === null) return;
+    if (pathKey(project.rootDir) !== pathKey(pending.rootDir)) return;
+    pendingPanelRevealRef.current = null;
+    const owner = kernel.slots
+      .query('game.adapter')
+      .find((c) => c.adapter.gameId === project.adapterId)?.pluginId;
+    const panel =
+      owner === undefined ? undefined : kernel.slots.query('ui.panel').find((p) => p.pluginId === owner);
+    if (panel !== undefined) kernel.bus.emit('ui.panel.reveal', { id: panel.id, source: 'welcome' });
+  }, [kernel, project, phase]);
 
   /* -------- autosave（退出/崩溃守护批）：崩溃兜底快照，Tauri 壳专属 -------- */
 
@@ -2700,6 +2962,9 @@ export function App(): ReactElement {
           onClearRecent={clearRecentEntries}
           recentFiles={recentFiles}
           onOpenRecentFile={openRecentFile}
+          recentWorkspaces={recentWorkspaces}
+          onOpenWorkspaceProject={(rec) => void openRecentWorkspaceProject(rec)}
+          onRemoveWorkspaceProject={removeRecentWorkspaceEntry}
           statPath={statPath}
           resumeRoot={resumeRoot}
           onResumeSession={resumeSession}

@@ -653,6 +653,18 @@
   color: var(--warning);
 }
 
+/* 最近打开的口上作品（P0-6）：行内三行（作品名 / 上次打开 / 路径）；
+   失效行作品名与路径一起降为 dim，说明徽标用 warning 色——行仍可移除。 */
+.welcome-workspace-row .welcome-recent-open {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+}
+
+.welcome-workspace-row.is-missing .welcome-project-name {
+  color: var(--fg-dim);
+}
+
 /* 「移除」降噪（用户反馈）：常驻 6 个按钮抢主操作的焦点 ⇒ 平时收隐，只在行
    hover / 键盘 focus-within 时显现。保留占位（只动 opacity）不引发布局抖动；
    隐藏时 pointer-events:none 防误点，但按钮仍在 Tab 序上——焦点一到行内即因

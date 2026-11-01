@@ -313,6 +313,16 @@ export interface KernelEventMap {
    */
   'ui.panel.float': { id: string; source?: string };
   /**
+   * 定位面板意图（P0-6 欢迎页一键重开批）：请求宿主把某个 `ui.panel` 贡献
+   * 切到前台（侧栏视图激活），不浮动、不遮挡编辑器。与 `ui.panel.float` 同款
+   * 分工——发起方只给贡献 id，具体落点（哪个容器、怎么显示）由宿主决定。
+   *
+   * 新增理由：欢迎页「最近打开的口上作品」重开成功后要替作者把「我的口上项目」
+   * 面板拉到眼前；壳层是唯一知道视图编排的一方，且订阅可能晚于项目态提交，
+   * 因此走总线意图而不是让欢迎页直接持有壳层状态。
+   */
+  'ui.panel.reveal': { id: string; source?: string };
+  /**
    * 关闭 overlay 意图（UI 重设计批 P2）：请求宿主关闭某 `ui.overlay` 贡献。
    * 与 `ui.overlay.open` 对称——overlay 内组件（向导完成/取消）经此自行退出，
    * 无需持有宿主引用。
@@ -482,6 +492,7 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'ui.tutorial.open',
   'ui.diffView.open',
   'ui.panel.float',
+  'ui.panel.reveal',
   'ui.openExternal',
   'workspace.importRequested',
   'workspace.newProjectRequested',
