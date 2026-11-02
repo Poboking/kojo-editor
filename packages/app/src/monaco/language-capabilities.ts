@@ -21,7 +21,10 @@
  *   这一档；B3c 起补全 / 悬停、B3d 起签名帮助 / 格式化改走带能力名的共享收口，故记 `shared`，
  *   别按模块名猜档位）；
  * - `{ exempt }` —— **已知缺口**，`exempt` 必须是人话理由，且**必须点名下一步接什么**
- *   （2.0 的批次八待接线项要写模块文件名）。闸门对"标了豁免、模块却已经被宿主装配点
+ *   （2.0 的批次八待接线项要写模块文件名）；**终态豁免**是另一种合法理由——这一格在本形态
+ *   下**没有可接的注册面**（例如 Monaco standalone 从未暴露某枚 API），理由必须写成"没有
+ *   可注册的宿主位"并点名作者面的真实落点（命令 / 面板 / 供方），**不许写成将来时**。
+ *   闸门对"标了豁免、模块却已经被宿主装配点
  *   `ui/editor-global-providers.ts` 接上"的项会红：那是"接线了忘改矩阵"，不是豁免。
  *
  * ## 单一真源：本表 ↔ descriptor 声明
@@ -122,11 +125,11 @@ export function isLanguageCapabilityExemption(
  * ERB **已交付**的能力（descriptor 直接引用；也是矩阵该语言行的生成依据）。
  *
  * 排除的一项（矩阵里是 `{ exempt }`，理由见状态表）：
- * `callhierarchy` —— Monaco 0.57 无该 API；判据住 `@kojo/plugin-erb-parser`（经
- * `ui.editor.languageService` 的 `callHierarchy` 成员应答，LAU-4 调用层级腿），provider 模块
- * `erb-callhierarchy-provider.ts` 与宿主面板 `ui/CallHierarchyOverlay.tsx` 已交付。
- * 矩阵按**注册面**记账：装配点接 `installErbCallHierarchyProvider`
- * 之前仍记豁免，接线后改 `self`。
+ * `callhierarchy` —— **终态豁免**（KW-18，2026-11-03 判性）：Monaco 0.57 从未暴露
+ * `registerCallHierarchyProvider`，这一格**没有可注册的宿主位**（不是"还没接"），故矩阵按
+ * 注册面记账永远停在 `exempt`；作者面早已在册——命令 `kojo.showCallHierarchy` 开浮层
+ * `ui/CallHierarchyOverlay.tsx`，取数走 `ui.editor.languageService` 槽的 `callHierarchy`
+ * 成员，判据住 `@kojo/plugin-erb-parser`（供方 id `erb-call-hierarchy`）。
  */
 export const ERB_CAPABILITIES: readonly LanguageCapability[] = Object.freeze([
   LanguageCapability.Folding,
@@ -227,7 +230,7 @@ const ERB_CAPABILITY_STATUS: Readonly<Record<LanguageCapability, LanguageCapabil
     [LanguageCapability.Selection]: 'shared',
     [LanguageCapability.CallHierarchy]: {
       exempt:
-        'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；判据住 @kojo/plugin-erb-parser（槽 ui.editor.languageService 的 callHierarchy 成员，LAU-4 调用层级腿），provider 模块 monaco/erb-callhierarchy-provider.ts 与宿主面板 ui/CallHierarchyOverlay.tsx 已交付；矩阵按注册面记账，待装配点 ui/editor-global-providers.ts 接 installErbCallHierarchyProvider 后改 self',
+        '终态豁免（不是待接线）：Monaco 0.57 从未暴露调用层级的 provider 注册函数 registerCallHierarchyProvider（PITFALLS §83），这一格没有可注册的宿主位；作者面已在册——命令 kojo.showCallHierarchy 开宿主面板 ui/CallHierarchyOverlay.tsx（装配点 ui/shell-overlays.ts），取数走 ui.editor.languageService 槽的 callHierarchy 成员，判据住 @kojo/plugin-erb-parser（供方 id erb-call-hierarchy）',
     },
     // LAU-4 补全腿第三批：判据整块在 `@kojo/plugin-erb-parser`，生产路径上 `.erb` 只由共享
     // 槽腿那一枚 provider 服务（宿主 `installErbCompletion` 的调用点已删）⇒ 注册面 = `shared`。

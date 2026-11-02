@@ -191,7 +191,7 @@ describe('automated：真读源码，读不到就红', () => {
     const rel = 'packages/app/src/monaco/language-capabilities.ts';
     const source = BASE.readFile(rel);
     const mutated = source.replace(
-      "        'Monaco 0.57 无 registerCallHierarchyProvider（PITFALLS §83）；判据住 @kojo/plugin-erb-parser（槽 ui.editor.languageService 的 callHierarchy 成员，LAU-4 调用层级腿），provider 模块 monaco/erb-callhierarchy-provider.ts 与宿主面板 ui/CallHierarchyOverlay.tsx 已交付；矩阵按注册面记账，待装配点 ui/editor-global-providers.ts 接 installErbCallHierarchyProvider 后改 self',",
+      "        '终态豁免（不是待接线）：Monaco 0.57 从未暴露调用层级的 provider 注册函数 registerCallHierarchyProvider（PITFALLS §83），这一格没有可注册的宿主位；作者面已在册——命令 kojo.showCallHierarchy 开宿主面板 ui/CallHierarchyOverlay.tsx（装配点 ui/shell-overlays.ts），取数走 ui.editor.languageService 槽的 callHierarchy 成员，判据住 @kojo/plugin-erb-parser（供方 id erb-call-hierarchy）',",
       "        '',",
     );
     expect(mutated).not.toBe(source);
