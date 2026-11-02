@@ -1100,8 +1100,12 @@ describe('面板安装面的渲染判据（哪一行有按钮）', () => {
     const idle = renderView(one, []);
     expect(idle).not.toContain('mk-row busy');
     expect(idle).not.toContain('aria-busy');
-    // 「可安装」档：闲时的安装按钮带 mk-install 视觉档，文字仍是纯字符串「安装」
-    expect(idle).toContain('<button class="ghost small mk-install">安装</button>');
+    // 「可安装」档：闲时的安装按钮带 mk-install 视觉档，文字仍是纯字符串「安装」；
+    // kw8c 段② 起这一枚是**所在行的行代表** ⇒ 同挂契约层行标记 + `none` 可触发档
+    // （↑↓ 踩得住，F4/F8 绝不代为开枪——它会改状态）
+    expect(idle).toContain(
+      '<button class="ghost small mk-install" data-panel-row="" data-panel-row-trigger="none">安装</button>',
+    );
   });
 
   it('长文墙拆行 + 数据时间降级：常驻一行能力句在 details 里，屏上只留「上次同步」、全量在 title', () => {

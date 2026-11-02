@@ -7,7 +7,18 @@
  */
 
 import { createElement, type ReactNode } from 'react';
-import { type InstalledPack, type UIPanelProps } from '@kojo/plugin-api';
+import {
+  applyPanelRowNavFromEvent,
+  PANEL_ROW_ATTR,
+  PANEL_ROW_TRIGGER_ATTR,
+  PANEL_ROW_TRIGGER_NONE,
+  syncRovingTabIndexes,
+  type InstalledPack,
+  type PanelRowRovingHost,
+  type PanelRowTrigger,
+  type RowNavHostEvent,
+  type UIPanelProps,
+} from '@kojo/plugin-api';
 import type { MarketSnapshot } from './actions';
 import {
   ACTION_LABEL,
@@ -144,6 +155,32 @@ export interface MarketPanelViewProps {
  */
 export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
   const { snapshot } = p;
+  /**
+   * 行键盘协议（kw8b 接线、kw8c 段② 按可触发档重标）：名单容器 = 面板根 `.panel-market`，
+   * 键位判据、可触发档裁决、合成期让位、`select`/`textarea` 让位与"打开敲行自己的
+   * `onClick`"全住契约层（`sugar-panels.ts` 行键盘区块），本插件只贴标记。
+   *
+   * 名单 = **这一行的行代表**（一枚，DOM 序即所见序）：
+   * - 索引行「安装 / 更新」主钮：行标记 + **`none` 档**——这枚钮会改状态，F8 绝不代为开枪
+   *   （↑↓ 踩得住、Enter/Space 照常由聚焦者自己敲，鼠标可达性不再高于键盘）；
+   * - 已装行「详情 / 收起」主钮（`aria-expanded` 那枚）：行标记，**默认 `open` 档**——
+   *   展开/收起不改状态，F4/F8 移过去当场打开是对的；
+   * - `action === 'none'` 的索引行（已装最新 / 本机更高 / 版本要求不够）：**行 div 自己**
+   *   当代表 + `none` 档 + `tabIndex=-1`——只读行不再从 ↑↓ 名单里消失（kw8b 上报的缺口，
+   *   kw8c 段① 的可触发档就是为它加的）。
+   * 刻意不进名单：同排的「导入」「卸载」与确认簇两枚（动作簇不是行，收进来 ↑↓ 会在同一张
+   * 卡上打转、F8 会变成随手卸包）、`.mk-detail` 展开层的机器面、工具条与 `.mk-clear`。
+   *
+   * Esc 语义一个字没碰：确认簇自己那条 `onKeyDown` 照旧，行导航对 Esc 不消费。
+   *
+   * **这一层零 React 状态、零 hook**（`integration.test.ts` 把本层当普通函数直接建树，
+   * 出现 hook 就是 Invalid hook call）：漫游位不走 `useEffect`，走**每帧重挂的回调 ref**
+   * （闭包每次渲染新建 ⇒ React 每次 commit 先 null 后挂新节点，等价于宿主面板的
+   * "渲染后再对齐"；`syncRovingTabIndexes(null)` 直接返回，SSR 静态建树压根不跑）。
+   */
+  const roveHost = (host: PanelRowRovingHost | null): void => {
+    syncRovingTabIndexes(host);
+  };
   // 已装清单**原样**交给视图层：三态由契约的 `packUpdateCheck` 从这份清单算。
   // 这一层再拼一份"已装键集"就是第二份真相（`buildGroups` 的签名拦的就是这个）。
   const groups = buildGroups(snapshot.packs, p.appVersion, p.query, snapshot.installed);
@@ -193,12 +230,27 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
    * 动作按钮的统一形状：`ghost small` + 进行中禁用；**文字永远不变**（进度只住 `.mk-note` 一处）。
    * `cls` 多给一枚视觉档：索引行的装/更新带 `mk-install`——「可安装 / 已安装 / 进行中」
    * 三态由 app 侧 `market.css` 分档，本层不多写一个字。
+   * `rowTrigger`（kw8c 段②）：给值 ⇒ 这一枚是**所在行的行代表**，打契约层行标记进 ↑↓ 名单，
+   * 值即该行的可触发档（契约层常量，本插件不写字面量）；不给 ⇒ 动作簇成员，不进名单。
    * ui-kit-candidate: KitButton——`ui-kit` 目前只有 `KitIconButton`（图标钮）与 `KitSegmented`
    * （分段），**没有带文字的普通按钮原语**，所以这里仍发原生 `<button class="ghost small">`；
    * 插件侧不能 import app 的 `ui-kit`（铁律 2），要收编得先由宿主把原语经 `UIPanelProps` 注入。
    */
-  const btn = (label: string, onClick: () => void, disabled: boolean, cls = 'ghost small'): ReactNode =>
-    createElement('button', { className: cls, disabled, onClick }, label);
+  const btn = (
+    label: string,
+    onClick: () => void,
+    disabled: boolean,
+    cls = 'ghost small',
+    rowTrigger?: PanelRowTrigger,
+  ): ReactNode =>
+    createElement('button', {
+      className: cls,
+      disabled,
+      onClick,
+      ...(rowTrigger === undefined
+        ? {}
+        : { [PANEL_ROW_ATTR]: '', [PANEL_ROW_TRIGGER_ATTR]: rowTrigger }),
+    }, label);
   /** 这一行的全部动作都住这里（名字那一排的右端；`.mk-main` 里不再有裸按钮） */
   const actions = (...buttons: ReactNode[]): ReactNode =>
     createElement('div', { className: 'mk-actions' }, ...buttons);
@@ -314,6 +366,12 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
             key,
             'data-market-row': 'index',
             'data-market-key': key,
+            // `action === 'none'` ⇒ 行上没有主钮，**行 div 自己**当行代表进 ↑↓ 名单
+            // （kw8c 可触发档：只导航不打开；kw8b 那份「整行消失」的缺口就此补上）。
+            // 有主钮的行不在这里打标记——标记跟着唯一行代表走，一枚行只许有一枚。
+            ...(row.action === 'none'
+              ? { [PANEL_ROW_ATTR]: '', [PANEL_ROW_TRIGGER_ATTR]: PANEL_ROW_TRIGGER_NONE, tabIndex: -1 }
+              : {}),
           },
           main(
             e.name,
@@ -321,11 +379,18 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
             // （可更新 / 已安装 / 本机更高）没有原语 ⇒ 仍发 `.mk-badge` + 语义色档类名。
             phrase === '' ? null : createElement('span', { className: `mk-badge${badgeTone(row)}` }, phrase),
             // `action === 'none'` ⇒ 这一行没有可点动作（已装最新 / 本机更高 / 版本要求不够），
-            // 行上那句 `mk-badge` 或 `mk-warn` 就是它的说明（动作簇仍占右端位，行与行不错位）
+            // 行上那句 `mk-badge` 或 `mk-warn` 就是它的说明（动作簇仍占右端位，行与行不错位）；
+            // 这一行的键盘可达性由上面行 div 的行代表承担
             actions(
               row.action === 'none'
                 ? null
-                : btn(ACTION_LABEL[row.action], () => p.onInstall(row), acting, installCls(row.action)),
+                : btn(
+                    ACTION_LABEL[row.action],
+                    () => p.onInstall(row),
+                    acting,
+                    installCls(row.action),
+                    PANEL_ROW_TRIGGER_NONE,
+                  ),
             ),
             e.summary ?? null,
             [
@@ -371,6 +436,18 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
       // 市场的右键面（`CONTEXT_SURFACE_MANIFEST` 的 'market'）：面的 build 由插件模块顶层声明，
       // 宿主路由按这个属性把右键交给它（行级靠 `data-market-row` / `data-market-key`）。
       'data-context-surface': 'market',
+      // 行键盘协议（kw8b 接线，kw8c 段② 重标）：↑↓ 移焦点 / F4·F8 只在可触发行里找落点
+      // 并敲那一枚自己的 onClick；`tabIndex=-1` 照 `FileTree.tsx` 先例——不是给 Tab 用的，
+      // 是给"把焦点交给面板"那条腿。没过滤进来的行、没展开的 `.mk-detail` 都不在名单上。
+      ref: roveHost,
+      tabIndex: -1,
+      onKeyDown: (e: RowNavHostEvent) => {
+        applyPanelRowNavFromEvent(e);
+      },
+      onFocus: (e: { currentTarget: PanelRowRovingHost | null }) => {
+        // 鼠标点行 / 装卸后焦点回来时对齐漫游位（Tab 序只留踩住的那一行）
+        syncRovingTabIndexes(e.currentTarget);
+      },
     },
     createElement(
       'div',
@@ -507,11 +584,14 @@ export function MarketPanelView(p: MarketPanelViewProps): ReactNode {
                   null,
                   actions(
                     // 展开切换是这一行的第一个动作：`aria-expanded` 给读屏（行本身是 div，不是按钮语义）
+                    // 行键盘名单（kw8c 段②）就把这一枚当"这一行"：**默认 `open` 档**——
+                    // 展开/收起不改状态，F4/F8 移过去当场敲它是对的
                     createElement(
                       'button',
                       {
                         className: 'ghost small',
                         'aria-expanded': expanded,
+                        [PANEL_ROW_ATTR]: '',
                         onClick: () => p.onToggleDetail(key),
                       },
                       expanded ? '收起' : '详情',
