@@ -1421,6 +1421,18 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     adapter 的这枚名表文件本就静态在图里（装配点直取），本批 8,952 B 全数进图；
     //     真正不吃图的是走 `import('./ProjectView')` 懒边的那一族宿主 UI 与各插件测试。
     //     ⇒ KB 闸 **3,597 → 3,606**（余量 0 B 口径不变）；文件闸 201 不动。
+    //
+    //   - **KW-22 两本账同向闸（2026-11-03）**：读数 **201 文件 / 3,606 KB · 3,693,036 B**
+    //     （= 上一条 3,692,363 + **673**），**闸值不动**（`Math.round` 后仍落 3,606）。
+    //     逐枚实测（现树 `wc -c` vs `git cat-file -s origin/dev:…`，三枚求和 **673 B 与
+    //     总差逐字节相等**；本批零行为改动，只动注释/可见性 + 一枚不进图的测试）：
+    //     · `packages/kojo-vocab/src/engine.ts` **+375**（`CHECKED_FAMILY_NAME_TABLES` 转
+    //       export 供同向闸引真表 + 双账互相指认注）；
+    //     · `packages/plugins/eratw-adapter/src/variable-schema.ts` **+268**（`DERIVED_NAME_TABLE_SOURCES`
+    //       头注对向指认）；`packages/plugins/eratw-adapter/src/index.ts` **+30**（桶转出该表）。
+    //     ⚠ **下一辆车的红沿在这里**：闸比的是 `Math.round(bytes/1024)`，3,606 KB 的**真实
+    //     红沿 = 3,693,055 B** ⇒ 名义"余量 0 B"、机械余量只剩 **19 B**。再进图 20 B 就翻到
+    //     3,607 KB（那是抬闸，归组长逐字节归因后抬），别把"没红"读成"还有空间"。
     console.log(
       `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,606 KB）`,
     );
