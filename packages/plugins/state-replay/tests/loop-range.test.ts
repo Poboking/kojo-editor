@@ -146,7 +146,6 @@ describe('循环量逐值试算 · 收不进来的诚实呈现', () => {
       op: '>',
       left: { kind: 'ref', name: 'PALAM', indices: ['LOCAL'], text: 'PALAM:LOCAL' },
       right: { kind: 'ref', name: 'CUP', indices: ['RESULT:1'], text: 'CUP:RESULT:1' },
-      text: 'PALAM:LOCAL > CUP:RESULT:1',
     };
     expect(
       judgePredicateWithLoops(expr, { read: readTable({}) }, detail(counters), AT_BODY_HEAD),
