@@ -890,7 +890,7 @@ export function createKojoProjectsPanel(
               title:
                 '编辑以工作区为准：工作区是可写的权威副本；游戏目录只读，仅作为部署目标。直接改游戏目录里的文件不会被工作区感知。',
             },
-            '改的是工作区副本 · 部署后才进游戏',
+            '改工作区副本 · 部署后才进游戏',
           ),
           h(
             'button',
@@ -1024,9 +1024,11 @@ export function createKojoProjectsPanel(
                         {
                           className: 'kp-action',
                           title: `编辑「${p.name}」的项目名 / 作者署名 / 版本`,
+                          'aria-label': `设置「${p.name}」`,
                           onClick: () => openSettings(p),
                         },
-                        '设置',
+                        ic('settings', 14, ''),
+                        h('span', { className: 'kp-action-label' }, '设置'),
                       ),
                   deps.renameProject === undefined
                     ? null
@@ -1035,9 +1037,11 @@ export function createKojoProjectsPanel(
                         {
                           className: 'kp-action',
                           title: '给这个项目改名（同一个文件夹里不能有同名项目）',
+                          'aria-label': `重命名「${p.name}」`,
                           onClick: () => startProjectAction(p, 'rename'),
                         },
-                        '重命名',
+                        ic('edit', 14, ''),
+                        h('span', { className: 'kp-action-label' }, '重命名'),
                       ),
                   deps.duplicateProject === undefined
                     ? null
@@ -1046,9 +1050,11 @@ export function createKojoProjectsPanel(
                         {
                           className: 'kp-action',
                           title: '复制这个项目（含全部文件）到同一个文件夹下的新项目',
+                          'aria-label': `复制「${p.name}」`,
                           onClick: () => startProjectAction(p, 'copy'),
                         },
-                        '复制',
+                        ic('copy', 14, ''),
+                        h('span', { className: 'kp-action-label' }, '复制'),
                       ),
                   deps.removeProject === undefined
                     ? null
@@ -1057,9 +1063,11 @@ export function createKojoProjectsPanel(
                         {
                           className: 'kp-action kp-action-danger',
                           title: `删除「${p.name}」：连同文件夹内全部内容一起删除，且不可恢复`,
+                          'aria-label': `删除「${p.name}」`,
                           onClick: () => askDelete(p),
                         },
-                        '删除',
+                        ic('trash', 14, ''),
+                        h('span', { className: 'kp-action-label' }, '删除'),
                       ),
                 );
           return h(

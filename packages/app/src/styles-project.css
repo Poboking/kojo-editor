@@ -5383,7 +5383,14 @@ button.primary .hint {
   color: var(--red);
 }
 /* 包行 = 标题按钮 + 行内动作。动作静息态隐去（悬停 / 键盘聚焦才显），
-   口上树保持清爽；focus-within 保证纯键盘操作同样能发现动作。 */
+   口上树保持清爽；focus-within 保证纯键盘操作同样能发现动作。
+   动作条**绝对定位浮在行尾，不占布局宽度**（260px 侧栏实测：4 枚文字动作曾把项目名
+   挤成 0 宽，整行只剩计数；包名也被压到 5 字以内）。浮起来后标题与计数始终拥有整行，
+   动作只在悬停 / 聚焦时盖住行尾那一小段。 */
+.kp-artifact-row,
+.kp-project-row {
+  position: relative;
+}
 .kp-artifact-row {
   display: flex;
   align-items: center;
@@ -5395,12 +5402,19 @@ button.primary .hint {
   min-width: 0;
 }
 .kp-row-actions {
-  flex: none;
+  position: absolute;
+  right: var(--space-1);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  padding-right: var(--space-1);
+  padding: 0 var(--space-0);
+  border-radius: var(--radius-sm);
+  background: var(--bg-3);
   opacity: 0;
+  pointer-events: none;
   transition: opacity var(--dur-1) var(--ease-out);
 }
 .kp-artifact-row:hover .kp-row-actions,
@@ -5408,6 +5422,28 @@ button.primary .hint {
 .kp-project-row:hover .kp-row-actions,
 .kp-project-row:focus-within .kp-row-actions {
   opacity: 1;
+  pointer-events: auto;
+}
+/* 浮条里的动作钮：透明底 + 紧凑度量。项目行的四枚动作改用图标，
+   全称留给 title / aria-label；文字标签只在读屏（与单测）里可见。 */
+.kp-row-actions .kp-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  padding: 0 var(--space-1);
+  background: transparent;
+}
+.kp-row-actions .kp-action:hover {
+  background: var(--hover);
+}
+.kp-action-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 /* 项目行 = 标题按钮 + 行内动作（设置 / 重命名 / 复制 / 删除）：与包行同款"悬停才显"，
    骨架复用 .kp-row-actions，这里只给项目行一层定位容器；标题按钮原先独占整行，

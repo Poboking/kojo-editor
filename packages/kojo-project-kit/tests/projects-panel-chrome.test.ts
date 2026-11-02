@@ -201,7 +201,7 @@ describe('双真相源提示 · 人话正文 + 完整口径在 title', () => {
   it('正文不含内部口号，整段解释收在 title，并给了关闭键', () => {
     const nodes = render(deps());
     const text = byClass(nodes, 'kp-notice-text')[0]!;
-    expect(text.text).toBe('改的是工作区副本 · 部署后才进游戏');
+    expect(text.text).toBe('改工作区副本 · 部署后才进游戏');
     expect(text.title).toContain('工作区是可写的权威副本');
     expect(byClass(nodes, 'kp-notice-close')).toHaveLength(1);
     // 旧那条压在面板第一行的口号不再当正文（tutorial-content 引用的整句仍能在 title 找到）
