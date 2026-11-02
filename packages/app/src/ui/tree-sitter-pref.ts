@@ -12,8 +12,9 @@ import { useSyncExternalStore } from 'react';
  *    给出规则时才写；拿不到结果一律 `null` / `[]`，Monarch 与转译器那一路逐字不变。
  * 2. **失败不静默**：worker 起不来 / 超时 / 解析抛错都经 `tree-sitter/fallback.ts`
  *    台账说一次再回落（`tests/tree-sitter-default.test.ts` 钉这条）。
- * 3. **大文件的闸按面分**（2026-10-28）：着色 / 缩进超过 `LARGE_FILE_LINES` 让路（那一面要在
- *    主线程把 token 编出来），**折叠不让**——它整趟都在 worker 里，24,197 行实测 210 ms，
+ * 3. **大文件的闸按面分**（2026-10-28 拆开；KW-21 1103 把着色线抬到 `HUGE_FILE_LINES`）：
+ *    着色超过该界让路（主线程编码腿实测 50k 行 11 ms，真语料过界仅 1 枚），**折叠不让**——
+ *    它整趟都在 worker 里，24,197 行实测 210 ms，
  *    比着色那一路还便宜（见 `providers.ts` 的 `resolveStructureFoldsEnabled`）。
  *
  * 资源仍按需装配：`providers.ts` 在 `activate()` 里动态 import，worker 与 wasm 只在

@@ -29,7 +29,8 @@ import {
  * 2. 显式关闭：`off` 跨重启保持关，订阅者当场拆 provider，翻回开又能重挂；
  * 3. worker 失败回落：真 `StructureClient` + 起不来的线程 ⇒ provider 回 `null` / `[]`，
  *    台账只说一次（不静默、不刷屏），叠层整档停用；
- * 4. 超大文件跳过：**着色 / 缩进**超过 `LARGE_FILE_LINES` ⇒ 判据为假、provider 让路、
+ * 4. 超大文件跳过：**着色 / 缩进**超过 `HUGE_FILE_LINES`（KW-21 1103 实测抬档，旧线
+ *    `LARGE_FILE_LINES`）⇒ 判据为假、provider 让路、
  *    线程一次都不起；**折叠不在此列**（2026-10-28 拆开，它整趟在 worker 里，见
  *    `resolveStructureFoldsEnabled`）。
  *
@@ -226,9 +227,11 @@ describe('结构层默认开：偏好与判据', () => {
     expect(resolveStructureEnabled('plaintext', '/w/口上.kojo', 20)).toBe(false);
     // 显式关（第四个参数即偏好真源，生产由 localStorage 给）
     expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', 20, false)).toBe(false);
-    // 着色/缩进的体量闸：等于阈值仍算开，超一行就跳过（与 providers 既有 `>` 口径逐字一致）
+    // 着色的体量闸（KW-21 抬档到 huge 界）：等于阈值仍算开，超一行才跳过（与 providers 既有 `>` 口径逐字一致）
     expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', LARGE_FILE_LINES)).toBe(true);
-    expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', LARGE_FILE_LINES + 1)).toBe(false);
+    expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', LARGE_FILE_LINES + 1)).toBe(true);
+    expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', HUGE_FILE_LINES)).toBe(true);
+    expect(resolveStructureEnabled(KOJO_LANGUAGE_ID, '/w/口上.kojo', HUGE_FILE_LINES + 1)).toBe(false);
   });
 
   it('(3b) 折叠**没有**行数闸：5,000 行以上照供，只认偏好与语言声明', () => {
@@ -323,7 +326,7 @@ describe('结构层默认开：装配与回落', () => {
     const folding = captured.folding;
     if (!semantic || !folding) throw new Error('默认开却没注册 provider（装配面漂）');
 
-    const big = model(LARGE_FILE_LINES + 1);
+    const big = model(HUGE_FILE_LINES + 1);
     // 着色这一面仍按体量让路：一次都不问 client，且只说一次
     for (let i = 0; i < 3; i++) {
       expect(await semantic.provideDocumentSemanticTokens(big, null, NO_CANCEL)).toBeNull();

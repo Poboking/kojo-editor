@@ -420,8 +420,9 @@ describe('结构层回落接线（报错 ⇒ 只有词法层 / 说一次 / 不�
     expect(harness.tokensCalls).toBe(0);
     expect(harness.foldsCalls).toBe(0);
     // 超大文档：**着色**让路（折叠不从这条闸走，见 `resolveStructureFoldsEnabled`），且问都不问 client
+    // （9,999 行在 KW-21 抬档后已在闸内——这里必须用越过 `HUGE_FILE_LINES` 的行数）
     for (let i = 0; i < 5; i++) {
-      expect(await semantic.provideDocumentSemanticTokens(model(9_999), null, NO_CANCEL)).toBeNull();
+      expect(await semantic.provideDocumentSemanticTokens(model(50_001), null, NO_CANCEL)).toBeNull();
     }
     const skipLines = warned(warn).filter((l) => l.includes('行的文件这次不由结构层着色'));
     expect(skipLines).toHaveLength(1);

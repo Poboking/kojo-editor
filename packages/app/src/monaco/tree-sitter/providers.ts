@@ -1,7 +1,7 @@
 import type * as Monaco from '../entry';
 import type { StructureFacet } from '@kojo/kojo-core';
 import '../languages';
-import { LARGE_FILE_LINES } from '../../ui/editor-options';
+import { HUGE_FILE_LINES } from '../../ui/editor-options';
 import { applyNameColorPref, loadNameColorPref, subscribeNameColorPref } from '../../ui/semantic-color-pref';
 import { loadTreeSitterPref, subscribeTreeSitterPref } from '../../ui/tree-sitter-pref';
 import { toMonacoFoldingRanges } from '../kojo-folding';
@@ -99,11 +99,14 @@ function servesStructureFolds(descriptor: LanguageDescriptor | null): boolean {
 }
 
 /**
- * 结构**着色 / 缩进**这一路的体量闸：与语义着色同一档（`LARGE_FILE_LINES`）。
+ * 结构**着色 / 缩进**这一路的体量闸：KW-21（1103）实测后从 `LARGE_FILE_LINES` 抬到 huge 界。
+ * 真语料（EAGLOV3 盘 4,072 枚 ERB）≥5,000 行 150 枚而 ≥50,000 行仅 1 枚；worker 侧整篇解
+ * 5,000/20,000/50,000 行 ≈20/84/148 ms（这趟今天本就为缩进/残缺在跑），抬闸只多加
+ * 语义查询 ≈14 ms（worker）+ 主线程编码 ≈11 ms，均按版本记忆化。
  *
  * **折叠不看这一条**（2026-10-28 拆开）：详见 {@link resolveStructureFoldsEnabled}。
  */
-const STRUCTURE_MAX_LINES = LARGE_FILE_LINES;
+const STRUCTURE_MAX_LINES = HUGE_FILE_LINES;
 
 /** 结构着色 / 缩进在这一行数上还供不供（纯数；折叠另有判据） */
 export function structureSemanticAffordable(lineCount: number): boolean {
@@ -168,7 +171,7 @@ export function resolveStructureEnabled(
  *
  * 折叠是这四条里最便宜的一条，而且**完全在 worker 里**；真正压主线程的是语义那一面的
  * token 编码（`providers.ts` 的 `semantic.encode`）——所以只有它继续留在
- * `LARGE_FILE_LINES` 的闸内，折叠放开。
+ * `HUGE_FILE_LINES` 的闸内（KW-21 1103 抬档：编码腿实测 50k 行 11 ms），折叠放开。
  *
  * ## 放开之后编辑器还剩几道闸（都不是"静默削功能"）
  *
