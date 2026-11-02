@@ -66,6 +66,7 @@ import { checkStructure, erbDocumentSymbols } from './structure';
 import { buildStructureFixes } from './structure-fix';
 import { provideErbCompletion, provideErbHover, type ErbHoverAdapterFacts } from './completion';
 import { erbFoldingRanges } from './folding';
+import { labelLenses } from './label-lens';
 import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
 import { definitionTargetsAt, erbReferencesAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition, usageLenses, workspaceSymbolsInIndex } from './symbols';
 import {
@@ -1812,10 +1813,17 @@ export function createErbParserPlugin(): Plugin {
           if (!isDialect(request.path)) return undefined;
           const idx = index;
           if (!idx) return undefined;
-          const lenses = usageLenses(parseErbText(request.text, request.path).functions, {
-            definitionsOf: (normalizedName) => idx.byName.countOf(normalizedName),
-            referencesOf: (name) => referencesOf(idx, name),
-          });
+          const parsed = parseErbText(request.text, request.path);
+          const lenses = [
+            ...usageLenses(parsed.functions, {
+              definitionsOf: (normalizedName) => idx.byName.countOf(normalizedName),
+              referencesOf: (name) => referencesOf(idx, name),
+            }),
+            // $ 标签行上注解（T12，2026-10-16 erb-deep 批）：引用判据 = 同函数内 JUMP 系
+            // 裸名（`JUMP_FAMILY` 单源，与标签转定义同源），与函数注解同一呈现面、同一宿主
+            // 预算；标签是缓冲区事实（`parseErbText` 的 `labels`），项目索引零参与。
+            ...labelLenses(parsed, request.text),
+          ].sort((a, b) => a.line - b.line);
           return { kind: 'codeLens', lenses };
         },
       });

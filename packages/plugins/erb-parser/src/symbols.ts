@@ -100,8 +100,13 @@ export function functionChainInFile(file: ErbFile, line: number): ErbFunction[] 
   return enclosingChainAt(file?.functions ?? [], line);
 }
 
-/** 跳转系语句：行首关键字后的**第一个记号**是标签目标（`*CALLFORM` 与变量世界不在此列） */
-const JUMP_FAMILY: ReadonlySet<string> = new Set(['JUMP', 'GOTO', 'TRYJUMP', 'TRYGOTO']);
+/**
+ * 跳转系语句：行首关键字后的**第一个记号**是标签目标（`*CALLFORM` 与变量世界不在此列）。
+ * 导出给 `label-lens.ts`（T12 标签引用计数）——"哪条语句的槽位是标签名"只有这一张表，
+ * 转到定义（`labelTargetAt`）与引用计数各写一份必然漂移（表现："转定义跳得过去、
+ * 引用数却是 0"）。
+ */
+export const JUMP_FAMILY: ReadonlySet<string> = new Set(['JUMP', 'GOTO', 'TRYJUMP', 'TRYGOTO']);
 
 /**
  * 行首跳转系关键字的结束偏移（0 基；非跳转行 = -1）。
