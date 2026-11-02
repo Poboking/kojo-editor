@@ -397,6 +397,102 @@ export const FAMILY_ALIAS_EXCLUSIONS: Readonly<Record<string, string>> = aliasTa
 });
 
 /**
+ * **派生族 → 名表来源族**（KW-15B）：引擎把**同一张名称表**挂在两个族头下——派生族自己
+ * 没有 `CSV/{族}.csv`，它的具名索引住在姊妹族的表里（编号同源）。
+ *
+ * 为什么需要这张表：`lookup(族, 名字)` 原先只查 `tables.get(族)` ⇒ 派生族**一张表都没有**，
+ * 于是 `MAXBASE:酒气` 这类**引擎认得**的写法一律落 `named-index` 未知（kw15 真语料实测
+ * 328 条具名索引未知里占 286）。补上它是**换算**（名字 → 姊妹表里的编号），不是猜编号：
+ * 姊妹表里查不到这个名字 ⇒ 照原样落未知，不兜底 0、不 fuzzy。
+ *
+ * **判性取证**（第 0 步，两盘独立复验；口径＝行号:出处）：
+ * - `MAXBASE` → `BASE`：`Base.csv:15 = 酒気` / `Base.als:15 = 酒气`，盘上**无** `MAXBASE.csv|.als`；
+ *   真语料 `ERB/` 里 `MAXBASE:酒気` 658 处，且与 `BASE:` **同一行同名的配对 1819 行**
+ *   （其中 18 行在游戏自带核心文件 `ERB/COMMON.ERB` / `ERB/BATTLE.ERB`，如
+ *   `BATTLE.ERB:14 LOCAL = 100 * BASE:MASTER:体力 / MAXBASE:MASTER:体力` ⇒ 官方同式共用编号）；
+ *   `CSV/VariableSize.csv:93-94` 两族尺寸同为 100。
+ * - `DOWNBASE` → `BASE`：盘上无 `DOWNBASE.*`；`DOWNBASE:気力` 647 / `:体力` 495 / `:精力` 12
+ *   全落在 `Base` 表；`VariableSize.csv` 未改其尺寸（引擎默认与 `BASE` 同轴）。
+ * - `NOWEX` → `EX`：盘上无 `NOWEX.*`；46 个具名索引里 **27 个命中 `ex.csv`、0 个命中 `exp.csv`**
+ *   （`TotalEX` 只在 `ex.csv`，`exp.csv` 0 命中），`VariableSize.csv:97/:101` 给出
+ *   `EXP,200` 与 `EX,100` / `NOWEX,100` —— 尺寸同 `EX` 异 `EXP` ⇒ 同源的是 `EX` 不是 `EXP`。
+ *
+ * **裁决次序（不许被本表破坏）**：本族自有名表**永远优先**（`tables.has(族)` 即不借），
+ * 所以模组若真带一份 `MAXBASE.csv`，本表一条都不生效；借用只发生在"本族一张表都没有"时。
+ * 借来的表就是姊妹族那张**已按 先 `.csv` → 后 `.als` → 再市场字典包 三轮合并完**的成品
+ * ⇒ 追加名表"只并集不覆盖"的轮序在本腿上原样成立（本表不参与合并，只在读端改道）。
+ *
+ * **消费面**：只喂 `lookup()` 的索引腿（编号换算）。`names()` 的枚举面**不改道**——那是
+ * 补全 / 反糖的"这族能写哪些名字"，改道会把姊妹族的槽位当本族候选推给作者；
+ * `slotCn()` 同理不动。全覆盖闸见 `tests/name-table-source.test.ts`。
+ *
+ * 同由 `aliasTable` 造（无原型）：查表键来自作者字节。
+ */
+export const DERIVED_NAME_TABLE_SOURCES: Readonly<Record<string, string>> = aliasTable({
+  MAXBASE: 'BASE',
+  DOWNBASE: 'BASE',
+  NOWEX: 'EX',
+});
+
+/**
+ * `DERIVED_NAME_TABLE_SOURCES` 的**排除台账**（族 → 一句理由）：`ENGINE_FAMILIES` 全集里
+ * 不借姊妹族名表的族**逐族留名**，防"悄悄漏一个派生族"——全覆盖闸要求
+ * **每族恰落一处**（在册借表 / 本台账），两条台账之和 = 全集（`tests/name-table-source.test.ts`）。
+ *
+ * 理由只有三类：**①自有名表**（eraTW 原厂就带 `CSV/{族}.csv`，无需借）；
+ * **②无具名索引轴**（唯一索引位是角色号 / 串号，作者不会写中文槽名）；
+ * **③本批未取到借表实证**（宁缺毋滥——没有"名字落在别族表里且跑得通"的语料配对就不登记，
+ * 语料计数按 `usage` 标出，后续批次拿到证据再升级为在册）。
+ */
+export const DERIVED_NAME_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = aliasTable({
+  BASE: '①自有名表 CSV/Base.csv（＋ Base.als 追加层）',
+  ABL: '①自有名表 CSV/Abl.csv',
+  TALENT: '①自有名表 CSV/Talent.csv',
+  EXP: '①自有名表 CSV/exp.csv（与 EX 是两张**不同**的表：EXP,200 vs EX,100）',
+  MARK: '①自有名表 CSV/Mark.csv',
+  PALAM: '①自有名表 CSV/Palam.csv',
+  SOURCE: '①自有名表 CSV/source.csv',
+  EX: '①自有名表 CSV/ex.csv（本族是 NOWEX 的**来源**，自己不借）',
+  CFLAG: '①自有名表 CSV/CFLAG.csv',
+  JUEL: '①自有名表 CSV/Juel.csv',
+  EQUIP: '①自有名表 CSV/Equip.csv',
+  TEQUIP: '①自有名表 CSV/Tequip.csv',
+  STAIN: '①自有名表 CSV/Stain.csv',
+  TCVAR: '①自有名表 CSV/TCVAR.csv',
+  CSTR: '①自有名表 CSV/CSTR.csv',
+  DAY: '①自有名表 CSV/DAY.csv',
+  ITEM: '①自有名表 CSV/Item.csv',
+  FLAG: '①自有名表 CSV/FLAG.csv',
+  TFLAG: '①自有名表 CSV/TFLAG.csv',
+  TIME: '①自有名表 CSV/TIME.csv',
+  STR: '①自有名表 CSV/Str.csv',
+  TRAIN: '①自有名表 CSV/Train.csv',
+  RELATION: '②唯一索引位是角色号（好感对象），非枚举槽名 ⇒ 无名表轴可借',
+  ISASSI: '②标量族（索引位＝角色号），语料具名索引 0 例',
+  NO: '②标量族（索引位＝角色号）；具名位实为角色变量（語料 967 例经核非槽名）',
+  NAME: '②字符串标量族（索引位＝角色号）；具名位＝角色变量（173 例）',
+  CALLNAME: '②字符串标量族（索引位＝角色号）；具名位＝角色变量（19 万例，MASTER/CHARA 系）',
+  NICKNAME: '②字符串标量族（索引位＝角色号）；具名位＝角色变量（36 例）',
+  MASTERNAME: '②字符串标量族（索引位＝角色号）；具名位＝角色变量（17,437 例）',
+  CDFLAG: '②二维角色标志：索引位＝角色号 + 位号，语料具名索引 0 例',
+  MONEY: '②全局零钱槽（索引＝钱种编号）；具名位是变量名（36 例）⇒ 无借表实证',
+  UP: '③引擎"上回合差值"派生态，槽轴与 BASE 同源但语料未取到与 BASE 同行配对的具名实证（41 例具名位经核为变量名）⇒ 本批不登记',
+  DOWN: '③同 `UP`：语料具名索引 0 例 ⇒ 无实证，不登记',
+  PALAMLV: '③等级门槛族（索引轴疑同 PALAM）；具名位 18 例经核为变量名 ⇒ 本批不登记',
+  EXPLV: '③等级门槛族（索引轴疑同 EXP/EX）；具名索引 0 例 ⇒ 无实证，不登记',
+  EJAC: '③全局射精计数槽（索引疑同 BASE 的 射精 轴）；具名索引 0 例 ⇒ 无实证，不登记',
+  CUP: '③参数上升槽（具名 805 例经核为角色变量 ⇒ 槽名实证 0）⇒ 本批不登记',
+  CDOWN: '③参数下降槽（同 CUP 口径，具名 4 例经核为变量名）⇒ 本批不登记',
+  GOTJUEL: '③取得宝珠数（索引轴疑同 JUEL）；具名 5 例经核为变量名 ⇒ 本批不登记',
+  SAVESTR: '②存档字符串族：索引位＝串号（0..N），无名表轴',
+  TSTR: '②临时字符串族：索引位＝串号，无名表轴',
+  CONF: '①名表按约定属本族（CSV/CONF.csv 由设置模组自带）；本盘缺表 = **数据缺席**，不是"借别族"⇒ 缺表由 loader 日志可见',
+  MFLAG: '①名表按约定属本族（CSV/MFLAG.csv 同上）；本盘缺表 ⇒ 数据缺席，不借表',
+  CHARVAR: '①名表按约定属本族（CSV/CHARVAR.csv 同上）；本盘缺表 ⇒ 数据缺席，不借表',
+  RAND: '②引擎伪变量族（`RAND:x:y` 是取随机数算式，索引位＝表达式）⇒ 无名字可查',
+});
+
+/**
  * 解析游戏自带 JP→CN 名词典（`plugins/tw_csv_chs.xml`）→ `Map<日文名, 中文名>`（纯函数）。
  *
  * 文件形态：`<map>` 下大量 `<p><k>日文</k><v>中文</v></p>`（引擎 `MAP_FROMXML` 消费）。
@@ -830,6 +926,32 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
 
   log.info(`变量字典：${tables.size} 张名称表（${[...tables.keys()].join(', ')}）`);
 
+  /**
+   * **派生族改道腿（KW-15B）**：本族一张表都没有时，按 `DERIVED_NAME_TABLE_SOURCES`
+   * 借姊妹族那张**已合并完**的成品表读名字（裁决只发生在读端，不参与合并 ⇒
+   * 「先 `.csv` 后 `.als`、追加不覆盖」与"首个定义优先"逐字保持）。
+   *
+   * 本族有名表（哪怕是一张空表）⇒ **一律用本族的**，借道绝不生效（模组自带
+   * `MAXBASE.csv` 时本函数零影响）。来源族自己也没表 ⇒ `undefined`（不猜、不兜底 0，
+   * 调用方照旧落 `named-index` 未知）。
+   */
+  const derivedTableOf = (key: string): VariableTable | undefined => {
+    if (tables.has(key)) return undefined;
+    const source = DERIVED_NAME_TABLE_SOURCES[key];
+    return source === undefined ? undefined : tables.get(source);
+  };
+
+  // 不静默（铁律 4）：借道是否真生效，装载时就该看得见——来源族缺表 = 借不到，必须说明。
+  for (const [derived, source] of Object.entries(DERIVED_NAME_TABLE_SOURCES)) {
+    if (tables.has(derived)) {
+      log.info(`派生族名表借道：${derived} 自有名表在位 ⇒ 不借 ${source}（登记仅作模组缺表时的兜底）`);
+    } else if (tables.has(source)) {
+      log.info(`派生族名表借道：${derived} 无名表 ⇒ 读 ${source} 表（${(tables.get(source) as VariableTable).byName.size} 个名字）`);
+    } else {
+      log.warn(`派生族名表借道：${derived} 与来源族 ${source} **都无名表** ⇒ 具名索引照旧落未知（不猜编号）`);
+    }
+  }
+
   // 输入摘要：字典由游戏 CSV 驱动，玩家改一行描述就该让下游派生缓存失效。
   // 一张都没读到也是**确定值**（区别于 undefined = "没有判据"）。
   const inputDigest = foldDigest(digestParts);
@@ -841,7 +963,8 @@ export async function loadEratwVariableSchema(opts: LoadVariableSchemaOptions): 
     ...(dictionaryStatus !== undefined ? { dictionary: dictionaryStatus } : {}),
     lookup(variableName: string, index?: number | string): VariableInfo | undefined {
       const key = variableName.toUpperCase();
-      const table = tables.get(key);
+      // 本族表优先；本族无表才按派生登记借姊妹族的成品表（KW-15B，见 derivedTableOf 注释）
+      const table = tables.get(key) ?? derivedTableOf(key);
       if (!table) return undefined;
       if (index === undefined) {
         // 家族级：游戏无机读的家族名表 → 取适配器内置策展常量（无则只给变量名）
