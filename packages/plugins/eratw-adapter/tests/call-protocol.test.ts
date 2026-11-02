@@ -186,4 +186,35 @@ describe('deriveCallContext —— 确定槽值推导', () => {
     const p = await proto3();
     expect(p.deriveCallContext!('M_KOJO_K49_完全无关函数', 49)).toBeUndefined();
   });
+
+  /**
+   * **KW-28 1103 红线闸**（判性读数在 `state-replay/src/locals.ts` 头注释：真语料 K49 × save03
+   * 本族 858 枚 / 131 个函数，路由层同一 `(种类,时机)` 键的转发实参在不同调用点取值不同
+   * ——`EVENT|34` 实测 29 处调用点、buffer1＝32 / 30 / 31 / 7 / 1 / 2，且 buffer 位常是调用方的
+   * 运行期变量 ⇒ **场景输入**，不是求值能力缺口）。
+   *
+   * 这条判据钉的是**唯一合法的填槽来源**：路由模板里那些值恒等于回放角色号的转发槽
+   * （`ARG:2`＝発言者）。哪天有人加"从某个调用点的字面实参推槽值"的捷径（严格判据下全语料
+   * 也只有 9 / 858 枚＝1%，且要自证调用点枚举完整），这里当场红——**不许把某一次调用的实参
+   * 当成该槽的通用值**。
+   */
+  it('槽值只可能来自路由确定事实：数值槽至多一枚且恒等于角色号、字符串槽一律不填', async () => {
+    const p = await proto3();
+    for (const name of [
+      'M_KOJO_X_EVENT_K1_1', // (ARG:3,ARG:4) 全场景输入
+      'M_KOJO_X_EVENT_K1_SUIKA', // (ARGS:2,ARG:3,ARG:4)
+      'M_KOJO_X_SPEVENT_K1_3',
+      'M_KOJO_X_DAILY_EVENT_K1_2', // (ARG:2,ARG:3,ARG:4,ARG:5,ARG:6,ARGS:1,ARGS:2)
+      'M_KOJO_X_IRAI_K1', // (ARGS:1,ARGS:2,ARG:2)
+      'M_KOJO_K49_完全无关函数',
+    ]) {
+      for (const charNo of [7, 49]) {
+        const ctx = p.deriveCallContext!(name, charNo);
+        const filled = (ctx?.ints ?? []).filter((v) => v !== undefined);
+        expect(filled.length <= 1).toBe(true);
+        for (const v of filled) expect(v).toBe(charNo);
+        expect((ctx?.strs ?? []).some((v) => v !== undefined)).toBe(false);
+      }
+    }
+  });
 });
