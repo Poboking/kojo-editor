@@ -116,10 +116,11 @@ describe('buildStructureFixes · 插入点由配对器给出，不是猜的', ()
 });
 
 describe('buildStructureFixes · 不确定就不给动作', () => {
-  it('孤儿闭合（多写的 ENDIF）**不给删除动作**：漏判函数边界也会长成这个样子', () => {
+  it('孤儿闭合（多写的 ENDIF）：全文唯一发现 ⇒ 供动作（erb-deep 批口径；' +
+    '旧口径"漏判边界也不给"的顾虑由"唯一发现"门消解——边界漏判必然连带一条 unclosed-open）', () => {
     const text = L('@A', 'PRINT X', 'ENDIF');
     expect(checkControlFlowStructure(text).map((i) => i.kind)).toEqual(['orphan-close']);
-    expect(buildStructureFixes(text)).toEqual([]);
+    expect(buildStructureFixes(text)).toHaveLength(2); // 删除 + 注释
   });
 
   it('无主分支（ELSE / CASE / CATCH）同样不给动作', () => {
@@ -199,11 +200,12 @@ describe('buildStructureFixes · 按宿主点明的诊断应答（B9）', () => 
     expect(buildStructureFixes(two, 2, [])).toEqual([]);
   });
 
-  it('`code` 对不上 ⇒ 不给动作（**不假装能修**：孤儿闭合至今没有安全修法）', () => {
+  it('`code` 对不上 ⇒ 不给动作（**不假装能修**：码与行是诊断↔动作的关联键）', () => {
     const orphan = L('@A', 'PRINT X', 'ENDIF');
     const issue = checkControlFlowStructure(orphan)[0]!;
     expect(structureIssueCode(issue)).toBe('erb.orphan-close');
-    expect(buildStructureFixes(orphan, 3, [structureDiagnostic(issue)])).toEqual([]);
+    const asked = { ...structureDiagnostic(issue), code: 'erb.unclosed-open' };
+    expect(buildStructureFixes(orphan, 3, [asked])).toEqual([]);
   });
 
   it('宿主没给诊断（旧宿主 / 非编辑器消费方）⇒ 沿用行判据，行为与改动前一致', () => {
@@ -214,5 +216,78 @@ describe('buildStructureFixes · 按宿主点明的诊断应答（B9）', () => 
   it('行号对不上但码相同 ⇒ 依旧不答（匹配是 code+行，不是"同一个码就万事大吉"）', () => {
     const asked = { line: 99, severity: 'error' as const, message: '别处的', code: 'erb.unclosed-open' };
     expect(buildStructureFixes(two, undefined, [asked])).toEqual([]);
+  });
+});
+
+describe('buildStructureFixes · 孤儿闭合动作（erb-deep 批：全文唯一发现时才供）', () => {
+  /** 孤儿闭合动作的闭环：删除/注释之后复检必须为零 */
+  function orphanFixes(text: string): ReturnType<typeof buildStructureFixes> {
+    const issues = checkControlFlowStructure(text);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.kind).toBe('orphan-close');
+    return buildStructureFixes(text);
+  }
+
+  it('全文唯一一处孤儿闭合 ⇒ 供「删除」与「注释」两个动作，各自改完复检为零', () => {
+    const text = L('@A', 'IF X', 'ENDIF', 'ENDIF', 'PRINT X');
+    const fixes = orphanFixes(text);
+    expect(fixes.map((f) => f.title)).toEqual([
+      '删除多余的 ENDIF（全文只此一处结构问题）',
+      '注释掉多余的 ENDIF',
+    ]);
+    const deleted = applyStructureFix(text, fixes[0]!);
+    expect(deleted).toBe(L('@A', 'IF X', 'ENDIF', 'PRINT X')); // 真删一行，不留空行
+    expect(checkControlFlowStructure(deleted)).toEqual([]);
+    const commented = applyStructureFix(text, fixes[1]!);
+    expect(commented).toBe(L('@A', 'IF X', 'ENDIF', '; ENDIF', 'PRINT X'));
+    expect(checkControlFlowStructure(commented)).toEqual([]);
+  });
+
+  it('删除走"与下一行合并重写"（EditorTextEdit 是整行替换语义）；末行退化为清空', () => {
+    const text = L('@A', 'REPEAT', 'X', 'REND', 'REND');
+    const fixes = orphanFixes(text);
+    expect(fixes[0]!.edits[0]).toEqual({ fromLine: 5, toLine: 5, newText: '' });
+    const deleted = applyStructureFix(text, fixes[0]!);
+    expect(checkControlFlowStructure(deleted)).toEqual([]);
+  });
+
+  it('行内注释不算别的语句：`ENDIF ; 备注` 照样供动作，缩进保留', () => {
+    const text = L('@A', 'IF X', 'ENDIF', '\tENDIF ; 多写的');
+    const fixes = orphanFixes(text);
+    expect(fixes).toHaveLength(2);
+    expect(applyStructureFix(text, fixes[1]!)).toBe(L('@A', 'IF X', 'ENDIF', '\t; ENDIF ; 多写的'));
+  });
+
+  it('该行还有别的语句（`ENDIF EXTRA`）⇒ 不给动作（拿不准 = 不做）', () => {
+    const text = L('@A', 'IF X', 'ENDIF', 'ENDIF EXTRA');
+    expect(buildStructureFixes(text)).toEqual([]);
+  });
+
+  it('全文还有第二条结构发现（吞块形态）⇒ 孤儿闭合不给动作（旧口径保持）', () => {
+    // IF → REPEAT → ENDIF：REPEAT 被吞（unclosed-open）+ 第二个 ENDIF 成孤儿
+    const text = L('@A', 'IF X', 'REPEAT', 'Y', 'ENDIF', 'ENDIF');
+    const issues = checkControlFlowStructure(text);
+    expect(issues.map((i) => i.kind)).toEqual(['unclosed-open', 'orphan-close']);
+    // 只给 unclosed-open 的补闭合动作（锚在被吞的 REPEAT 那一行）；孤儿闭合那两条一个都不出
+    expect(buildStructureFixes(text).every((f) => f.issueLine === 3)).toBe(true);
+  });
+
+  it('PRINTDATA 数据块里恰好运写成 `ENDIF` 的台词行 ⇒ 不给动作（数据行不是代码）', () => {
+    const text = L('@A', 'PRINTDATA', '"你好"', 'ENDIF', 'ENDDATA');
+    const issues = checkControlFlowStructure(text);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.kind).toBe('orphan-close');
+    expect(buildStructureFixes(text)).toEqual([]);
+  });
+
+  it('cursorLine 过滤与 B9 点名对孤儿闭合同样生效', () => {
+    const text = L('@A', 'IF X', 'ENDIF', 'ENDIF', 'PRINT X');
+    expect(buildStructureFixes(text, 2)).toEqual([]); // 光标在别的行
+    const fixes = buildStructureFixes(text, 4);
+    expect(fixes).toHaveLength(2);
+    // 同一条诊断的两个动作（删除/注释）共享同一份 code+行 ⇒ 点名一次、两个都应答
+    expect(buildStructureFixes(text, 4, [fixes[1]!.diagnostic])).toHaveLength(2);
+    // 行号对不上 ⇒ 不应答
+    expect(buildStructureFixes(text, undefined, [{ ...fixes[0]!.diagnostic, line: 99 }])).toEqual([]);
   });
 });

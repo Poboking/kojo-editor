@@ -1,6 +1,7 @@
 import { splitEolLines } from '@kojo/plugin-api/eol';
 import type { EditorTextEdit, ErbStructureIssue, LineDecoration } from '@kojo/plugin-api';
 import { checkControlFlowStructure, structureIssueCode } from './structure';
+import { classifyControlFlow } from './scanner';
 /**
  * 结构体检的**就地修复**（💡 那一下）：给未闭合的开块补上它缺的闭合语句。
  *
@@ -9,14 +10,20 @@ import { checkControlFlowStructure, structureIssueCode } from './structure';
  * 编译都过，语义完全不同。这里给的是**最保守的那一种**：在本函数结束之前补，
  * 也就是体检器判定"这一层到这里一定没关"的那个位置，改完语义等于"这个块覆盖到函数尾"。
  *
- * 为什么**只**修 `unclosed-open`（口径与 `plugin-api/erb.ts` 的 `fixBeforeLine` 同源）：
- * - 少写闭合词：栈里那一层在本函数内确定没关，插入点由配对器给出 ⇒ 可证明；
- * - 多写闭合词 / 无主分支：也可能只是**我们把函数边界漏判了**（漏判是安全方向，
- *   所以判据故意留着它），拿一条不确定推断去删用户写好的行 = 把不确定的事做成了动作。
- *   那两类只报位置，不给动作。
+ * 两类动作的判据（2026-10-16 erb-deep 批起扩到孤儿闭合）：
+ * - **少写闭合词（`unclosed-open`）**：栈里那一层在本函数内确定没关，插入点由配对器
+ *   给出 ⇒ 可证明；
+ * - **多写闭合词（`orphan-close`）**：旧口径一律不给动作，理由是"也可能只是我们把
+ *   函数边界漏判了"。这条理由在"**全文唯一一处发现**"的形态下不再成立——若这条
+ *   闭合其实是某个开块的正当归属，那个开块走到函数边界 / 文件结尾必然被体检器另报一条
+ *   `unclosed-open`（被闭合语句吞掉的形态也会报），"孤儿"就不是孤儿。⇒ 全文**只有**
+ *   这一条 `orphan-close` 时，删除 / 注释是零误删的（删除后复检为零由测试钉死）；
+ *   除此之外（还有别的发现）保持旧行为：只报位置，不给动作。
+ * - **无主分支（`orphan-branch`）**：`ELSE` 不是可删的冗余文本，删了改语义——继续不做。
  *
  * 纯函数：不读盘、不碰 Monaco。`EditorTextEdit` 是**整行替换**语义（宿主按行号降序合并成
- * 一次可撤销编辑），所以插入 = 把锚点那一行原样重写、再把闭合词添在它前面/后面。
+ * 一次可撤销编辑），所以插入 = 把锚点那一行原样重写、再把闭合词添在它前面/后面；
+ * 删除 = 该行与下一行合并重写（真删一行；末行退化为清空，留一空行无害）。
  */
 
 export interface ErbStructureFix {
@@ -137,8 +144,12 @@ export function buildStructureFixes(
   requested?: readonly LineDecoration[],
 ): ErbStructureFix[] {
   const lines = toLines(text);
+  const issues = checkControlFlowStructure(text);
+  // 孤儿闭合的动作判据（本批）：全文**只此一条**发现时才供（理由见文件头注——
+  // 有第二条发现就可能是"边界漏判 / 吞块"形态的另一半，删除就不再零风险）。
+  const soleIssue = issues.length === 1 ? issues[0] : undefined;
   const out: ErbStructureFix[] = [];
-  for (const issue of checkControlFlowStructure(text)) {
+  for (const issue of issues) {
     if (issue.kind !== 'unclosed-open') continue;
     if (cursorLine !== undefined && issue.line !== cursorLine) continue;
     const fix = fixFor(issue, lines);
@@ -146,7 +157,87 @@ export function buildStructureFixes(
     if (requested && !isRequested(fix.diagnostic, requested)) continue;
     out.push(fix);
   }
+  if (soleIssue?.kind === 'orphan-close') {
+    if (cursorLine === undefined || soleIssue.line === cursorLine) {
+      for (const fix of orphanCloseFixes(soleIssue, lines)) {
+        if (requested && !isRequested(fix.diagnostic, requested)) continue;
+        out.push(fix);
+      }
+    }
+  }
   return out;
+}
+
+/**
+ * 该行是不是**只在 PRINTDATA / STRDATA / DATALIST 系的数据块里**。
+ *
+ * 数据块内的行是**台词正文**，不参与配对表——正文恰好运写成 `ENDIF` 一个词时，
+ * 体检器会把它误当孤儿闭合（这层误报属结构体检的既有边界，不在本批修）；把那条
+ * 动作供给作者 = 一键删掉一句台词。⇒ 动作前用**同一张配对表**（`classifyControlFlow`，
+ * 不开第二把尺子）数一遍开着的 `data` 类块：数据行落在开块计数 > 0 的区间里。
+ */
+function insideDataBlock(lines: readonly string[], line: number): boolean {
+  let openData = 0;
+  for (let i = 0; i < lines.length && i < line; i++) {
+    const token = classifyControlFlow(/^([A-Za-z_]+)/.exec(lines[i]!.trim())?.[1]?.toUpperCase() ?? '');
+    if (token === null) continue; // 数据行 / 普通语句行：不进配对表，不影响计数
+    if (token.role === 'open' && token.pair === 'data') openData++;
+    else if (token.role === 'close' && token.pair === 'data' && openData > 0) openData--;
+  }
+  return openData > 0;
+}
+
+/**
+ * 孤儿闭合的两个动作（删除 / 注释）。
+ *
+ * 形状门：该行（引号感知地截掉行内注释后）必须是**只有这一个语句**——`ENDIF ; 备注`
+ * 可以动手，`IF X` 之类同行的任何其他内容都让动作闭嘴（拿不准 = 不做）。
+ * 删除后复检为零由 `structure-fix.test.ts` 钉死。
+ */
+function orphanCloseFixes(issue: ErbStructureIssue, lines: readonly string[]): ErbStructureFix[] {
+  const line = issue.line;
+  const raw = lineAt(lines, line);
+  if (raw === '') return []; // 行取不到（陈旧行号）：宁可不给动作
+  if (insideDataBlock(lines, line)) return [];
+  // 引号感知地截行内注释（与 scanner.sliceExpression 同一规则，局部小写一份免导出私有件）
+  let stripped = '';
+  let inStr = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]!;
+    if (inStr) {
+      if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') {
+      inStr = true;
+      continue;
+    }
+    if (c === ';') break;
+    stripped += c;
+  }
+  if (stripped.trim().toUpperCase() !== issue.statement.toUpperCase()) return [];
+  const diagnostic = structureDiagnostic(issue);
+  const indent = /^[ \t]*/.exec(raw)?.[0] ?? '';
+  // 删除 = 与下一行合并重写（EditorTextEdit 是整行替换语义，这样才是真删一行）；
+  // 末行没有下一行可并，退化为清空（留一空行，无害且诚实）
+  const deleteEdits: readonly EditorTextEdit[] =
+    line < lines.length
+      ? [{ fromLine: line, toLine: line + 1, newText: lines[line] ?? '' }]
+      : [{ fromLine: line, toLine: line, newText: '' }];
+  return [
+    {
+      issueLine: line,
+      diagnostic,
+      title: `删除多余的 ${issue.statement}（全文只此一处结构问题）`,
+      edits: deleteEdits,
+    },
+    {
+      issueLine: line,
+      diagnostic,
+      title: `注释掉多余的 ${issue.statement}`,
+      edits: [{ fromLine: line, toLine: line, newText: `${indent}; ${raw.trim()}` }],
+    },
+  ];
 }
 
 /** 把修复落到文本上（测试与"修完复检"用；宿主走 Monaco，不经过这里） */

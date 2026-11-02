@@ -686,13 +686,16 @@ describe('erb-parser 插件 · ui.editor.codeAction（结构修复动作）', ()
     expect(actions(true, erb, broken, 3)).toEqual([]);
   });
 
-  it('孤儿闭合（`orphan-close`）有诊断、没动作：不确定就不删用户的行', () => {
+  it('孤儿闭合（`orphan-close`）全文唯一发现 ⇒ 给删除/注释两个动作，都挂着那条波浪线（erb-deep 批）', () => {
     const orphan = ['@A', 'PRINTL 甲', 'ENDIF'].join('\n');
     const { slots } = activatePlugin(fakeIO({}, () => true));
     const deco = slots.find((s) => s.kind === 'ui.editor.decorator')?.contribution?.decorate!;
     const decorations = deco({ path: erb, text: orphan, project: null }) as LineDecoration[];
     expect(decorations.map((d) => d.code)).toEqual(['erb.orphan-close']);
-    expect(actions(true, erb, orphan, 3, decorations)).toEqual([]);
+    const out = actions(true, erb, orphan, 3, decorations) as Array<{ diagnostics?: LineDecoration[] }>;
+    expect(out).toHaveLength(2);
+    expect(out[0]!.diagnostics).toEqual(decorations);
+    expect(out[1]!.diagnostics).toEqual(decorations);
   });
 
   /* --------------------- E3：`scope:'document'` = 整篇批量 --------------------- */
