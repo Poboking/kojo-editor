@@ -13,7 +13,9 @@
  *    `kojo.codeLens.execute`、越界行丢弃、逐条唯一 id、无落点 ⇒ 空参数）；
  * 3. **三态不混**：无人应答 ⇒ provider 交 **`undefined`**（空列表会顶掉别家）；有人答空 /
  *    取文失败 / 模型已释放 / 没有内核 ⇒ `{ lenses: [] }`；
- * 4. **大文件档**：≥ `LARGE_FILE_LINES` 不问供方（省一次整篇词法 + 每个 `@函` 一次引用查询）；
+ * 4. **体量闸已撤**（KW2，2026-11-02）：≥ `LARGE_FILE_LINES` **仍问供方**——A 批（`5e53a7f8`）
+ *    已按读数撤掉 v1 那道闸（52,602 行一次整篇 provide 5.8 ms），LAU-DUALLEG 后本槽腿应答
+ *    ERB，不许把撤掉的闸静默装回；两枚**诚实回落**（model 已释放 / 取文失败）与体量无关，照旧；
  * 5. **注册**：经 `registerForLanguageServices(..., 'codeLens')` 挂 descriptor 点名的语言，
  *    dispose 幂等、注册失败原样外抛；源码里**没有** `registerCodeLensProvider(KOJO2_LANGUAGE_ID`
  *    的原生形状、也不读切流开关、不 import 判据。
@@ -432,17 +434,32 @@ describe('④三态与失败面', () => {
   });
 });
 
-/* ============================== ⑤ 大文件档 ============================== */
+/* ============================== ⑤ 体量闸已撤（KW2，2026-11-02） ============================== */
 
-describe('⑤大文件档：≥ LARGE_FILE_LINES 不问供方', () => {
-  it('恰好 LARGE_FILE_LINES 行 ⇒ 已进大文件档（界线是「大于等于」）', () => {
+describe('⑤体量闸已撤：≥ LARGE_FILE_LINES 仍问供方（A 批撤掉的闸不许被槽腿静默装回）', () => {
+  it('恰好 LARGE_FILE_LINES 行 ⇒ 照问（A 批读数：52,602 行一次整篇 provide 5.8 ms，代价曲线是平的）', () => {
     const seen: EditorLanguageServiceRequest[] = [];
     installKernel([codeLensContribution(LENSES, seen)]);
-    expect(lensesOf(ask(fakeModel(SOURCE, { lineCount: LARGE_FILE_LINES })))).toEqual([]);
+    expect(lensesOf(ask(fakeModel(SOURCE, { lineCount: LARGE_FILE_LINES })))).toHaveLength(2);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('52,602 行（语料最大那篇的行数）⇒ 照问——真实口上域里 5,000+ 行的 `.ERB` 是常态，掐了就是静默没有', () => {
+    const seen: EditorLanguageServiceRequest[] = [];
+    installKernel([codeLensContribution(LENSES, seen)]);
+    expect(lensesOf(ask(fakeModel(SOURCE, { lineCount: 52_602 })))).toHaveLength(2);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('拆闸不拆两枚诚实回落：巨型 model 上已释放 / 取文失败 ⇒ 仍 `{ lenses: [] }` 且不问供方', () => {
+    const seen: EditorLanguageServiceRequest[] = [];
+    installKernel([codeLensContribution(LENSES, seen)]);
+    expect(lensesOf(ask(fakeModel(SOURCE, { lineCount: 52_602, disposed: true })))).toEqual([]);
+    expect(lensesOf(ask(fakeModel(SOURCE, { lineCount: 52_602, breakValue: true })))).toEqual([]);
     expect(seen).toHaveLength(0);
   });
 
-  it('LARGE_FILE_LINES - 1 行 ⇒ 照常问（供方自己还有"只产前 N 条"的渲染预算）', () => {
+  it('LARGE_FILE_LINES - 1 行 ⇒ 照常问（供方自己还有"只产前 N 条"的渲染预算，口径在包里）', () => {
     const seen: EditorLanguageServiceRequest[] = [];
     installKernel([codeLensContribution(LENSES, seen)]);
     expect(lensesOf(ask(fakeModel(SOURCE, { lineCount: LARGE_FILE_LINES - 1 })))).toHaveLength(2);

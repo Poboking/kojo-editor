@@ -146,7 +146,6 @@ import { errorText } from '@kojo/plugin-api';
 import { KOJO2_COMPLETION_TRIGGER_CHARS } from '@kojo/kojo-lang/completion';
 import { kojo2PrepareRename, type Kojo2RenameRange } from '@kojo/kojo-lang/rename';
 import { requireKernel } from '../ui/editor-pane-registry';
-import { LARGE_FILE_LINES } from '../ui/editor-options';
 import {
   declaredSlotKinds,
   descriptorForLanguageId,
@@ -1437,11 +1436,14 @@ function selectionRangeProvider(): Monaco.languages.SelectionRangeProvider {
  * 丢弃、零宽区间钉在行首、命令 id 就是已注册的那个（点击复用既有导航通道）。抄一份新的会
  * 立刻漂成两套落点口径。
  *
- * ## 大文件闸判在**问供方之前**，与 v1 注解同一条线
+ * ## 体量闸已撤（KW2，2026-11-02；与 A 批 `5e53a7f8` 撤 v1 那道是同一条线）
  *
- * `LARGE_FILE_LINES` 之上不问供方：省掉的是一次整篇词法 + 每个定义一次引用查询。判在问之前
- * （`getLineCount` 一行就有）。供方自己还有一道"只产前 N 条"的渲染预算（口径在包里），
- * 两档不重叠：这里决定"这一篇办不办"，那里决定"办的话画几条"。
+ * 这里曾按 `LARGE_FILE_LINES` **在问供方之前**掐掉整篇——那是把 A 批已按实测撤掉的闸
+ * 静默装了回来（LAU-DUALLEG 之后 ERB 的 codeLens 改由本槽腿应答）。A 批读数：**52,602 行
+ * 一次整篇 provide 5.8 ms**（124 处定义出 62 条），与门槛内最贵那篇 4,353 行的 7.1–9.4 ms
+ * 同量级甚至更低 ⇒ 单价由**定义数 + 索引查询**决定，不由行数决定，闸失去理由。
+ * 留下的两枚回落（model 已释放 / 取文失败）**不是体量闸**，是诚实回落。供方自己的渲染预算
+ * （"只产前 N 条"，口径在包里）不动。
  *
  * ## 为什么不取项目快照（B3g 明说的一格缺口，理由在此）
  *
@@ -1459,10 +1461,8 @@ function codeLensProvider(host: SlotServiceHost): Monaco.languages.CodeLensProvi
         if (typeof model.isDisposed === 'function' && model.isDisposed()) return emptyLensList();
         const text = modelTextOf(model);
         if (text === null) return emptyLensList();
-        // 大文件档：判在**问供方之前**（省一次整篇词法 + 每个定义一次引用查询）。
-        if (typeof model.getLineCount === 'function' && model.getLineCount() >= LARGE_FILE_LINES) {
-          return emptyLensList();
-        }
+        // 体量闸已撤：A 批实测 52,602 行一次 provide 5.8 ms（代价曲线是平的），此处**照问供方**，
+        // 不许按行数静默掐（详见本函数头注）。
 
         const identity = editorRequestIdentityOf(model);
         const path = pathOfModel(model, host.filePathOf) ?? undefined;
