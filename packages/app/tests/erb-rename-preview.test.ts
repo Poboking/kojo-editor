@@ -5,8 +5,8 @@
  * 不是第二套假实现。钉六件事：
  * ① 预览拍（`resolveRenameLocation` 命中之后、输入框弹出之前）真的递出逐文件清单，
  *    且**一次盘都不写**（预览是只问不写的一拍）；
- * ② 预览只覆盖方言面 ⇒ `deferred` 为真（糖源腿要读全项目 `.kojo1`，不在这一拍跑）；
- *    标签腿是单文件事实 ⇒ `deferred` 为假（预览就是全表）；
+ * ② 预览拍**不读糖源腿** ⇒ 恒标 `deferred`，不许自称全表（函数名少的是会一起改的糖源落点、
+ *    标签名少的是"可能整次取消"的糖源同名写法；这一腿要枚举读回全项目 `.kojo1`）；
  * ③ 预览面炸了不许带走 F2（抛错 → 一条 warn，求值照旧给原词与区间）；
  * ④ 只读落点的拒绝回执从此**逐条点名**「哪个文件 · 几处」，旧前缀逐字保留；
  * ⑤ 落地拍的读数（闭文件实写 / 编辑器内待应用 / 陈旧 / 散文 / 写失败）与两通道对齐；
@@ -126,7 +126,7 @@ describe('KW-12 · 预览拍（按下回车之前就有清单）', () => {
     expect(handlers.applyToClosedFile, '预览拍写盘 = 把"看得见"变成"已经改了"').not.toHaveBeenCalled();
   });
 
-  it('`$` 标签腿是单文件、函数局部事实 ⇒ 预览就是全表（deferred 为假）', async () => {
+  it('`$` 标签腿：落点只有本文件，但预览仍不许自称全表（糖源里的同名写法能整次取消）', async () => {
     const text = '@F\n$Next\n\tGOTO next\n@G\n$Next\n\tGOTO NEXT\n';
     const handlers = realHandlers({ writable: new Set([A]) });
     const previews: RenamePreviewInput[] = [];
@@ -134,8 +134,8 @@ describe('KW-12 · 预览拍（按下回车之前就有清单）', () => {
     const prepared = await provider.resolveRenameLocation!(modelOf(A, text), AT(2, 2), TOKEN);
     expect(prepared && 'text' in prepared ? prepared.text : '').toBe('Next');
     expect(previews).toHaveLength(1);
-    expect(previews[0]!.deferred, '标签腿没跑糖源判读，但落点本来就只有这一份文件').toBe(false);
     expect(previews[0]!.files.map((file) => [file.path, file.occurrences])).toEqual([[A, 2]]);
+    expect(previews[0]!.deferred, '预览拍不读糖源 ⇒ 函数名少落点、标签名少"可能取消"的判据').toBe(true);
   });
 
   it('预览面抛错 / 无人应答都不许带走 F2', async () => {

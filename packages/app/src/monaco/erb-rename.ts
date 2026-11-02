@@ -574,7 +574,9 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
           (path) => handlers.openModelFor(path) !== undefined,
           handlers.describeUnwritable,
         ),
-        deferred: target.scope !== 'label',
+        // 这一拍没读糖源面（函数名少的是会一起改的糖源落点、标签名少的是"可能整次取消"的同名写法）
+        // ⇒ 预览不许自称全表，恒标 deferred，全表交给落地那条
+        deferred: true,
       });
     } catch (e: unknown) {
       console.warn(`[erb-rename] 改动清单预览失败（不影响改名本身）：${errorText(e)}`);

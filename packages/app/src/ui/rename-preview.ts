@@ -137,11 +137,13 @@ export interface RenamePreviewInput {
   readonly oldName: string;
   readonly files: readonly RenamePlanFile[];
   /**
-   * `true` = 这份清单只覆盖**方言面**（`.erb` / `.erm`）。
+   * `true` = 这份清单**没有**经过糖源（`.kojo1`）腿，因而**不许自称全表**。
    *
-   * 糖源（`.kojo1`）腿要在按下回车后才取数——`collectKojoLeg` 要枚举并读回全项目糖源，
-   * 拿它填 F2 输入框弹出的那一拍会把输入框卡住。预览如实写"这一腿稍后并入"，
-   * 落地那条通知再交全表（**不假装预览是全的**）。
+   * 预览拍恒带它：`collectKojoLeg` / `collectKojoCandidates` 要枚举并读回全项目糖源，
+   * 拿它填 F2 输入框弹出的那一拍会把输入框卡住。缺席的那一半两种落点各是什么——
+   * 函数名少的是**会一起改的糖源落点**（按下回车后并入同一张表），
+   * 标签名少的是**糖源里的同名写法**（`跳到 $名` 之类 ⇒ 整次改名会被插件取消）。
+   * 落地那条通知再交全表（**不假装预览是准的**）。
    */
   readonly deferred?: boolean;
 }
@@ -184,7 +186,7 @@ export function renamePreviewNotice(input: RenamePreviewInput): NoticeInput {
     kind: blocked ? 'error' : 'info',
     title: head,
     message: summary,
-    detail: `${head}\n${fileLines(input.files)}${input.deferred === true ? '\n（这份清单只列方言面；生成它的 .kojo1 糖源在按下回车后并入，落地时另发一条全表）' : ''}`,
+    detail: `${head}\n${fileLines(input.files)}${input.deferred === true ? '\n（这份清单只列方言面，没读 .kojo1 糖源：函数名的糖源落点在按下回车后并入同一张表，标签名则可能因糖源里的同名写法整次取消；全表与结果见落地那条通知）' : ''}`,
   };
 }
 
