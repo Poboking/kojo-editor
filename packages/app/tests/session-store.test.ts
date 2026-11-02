@@ -16,6 +16,7 @@ import {
   loadSessionRecord,
   sanitizeSessionRecord,
   saveSessionRecord,
+  sessionLastKindOf,
   sessionProjectKey,
   sessionProjectOf,
   upsertSessionProject,
@@ -88,6 +89,19 @@ describe('sanitizeSessionRecord（损坏容忍）', () => {
     expect(sanitizeSessionRecord({ v: 1, lastRoot: '', projects: {} }).lastRoot).toBeNull();
     expect(sanitizeSessionRecord({ v: 1, lastRoot: 42, projects: {} }).lastRoot).toBeNull();
   });
+
+  // KW4C 解闸批（2026-11-02）：`lastRoot` 从此可能是**作品目录**，欢迎页「继续上次会话」
+  // 要按现场类型决定回游戏还是回作品 ⇒ 这一格必须显式记着，不许拿路径猜。
+  it('lastKind（additive）：只有明确写着 workspace 才认作品会话，其余一律按 game 读', () => {
+    const t = (raw: unknown): unknown => sanitizeSessionRecord(raw);
+    expect(t({ v: 1, lastRoot: 'C:/work', lastKind: 'workspace', projects: { 'c:/work': { tabs: ['C:/work/a.kojo'], active: 'C:/work/a.kojo', pinned: [] } } })).toMatchObject({ lastKind: 'workspace' });
+    // 老记录没有这一格 ⇒ 不补键（逐字形状不动），读出来是 'game'
+    const old = t({ v: 1, lastRoot: 'C:/p', projects: { 'c:/p': { tabs: ['C:/a.ERB'], active: 'C:/a.ERB', pinned: [] } } }) as { lastKind?: string };
+    expect('lastKind' in old).toBe(false);
+    expect(sessionLastKindOf(old as never)).toBe('game');
+    // 乱值同样按 'game'，且不进记录
+    expect(t({ v: 1, lastRoot: 'C:/p', lastKind: 'nope', projects: { 'c:/p': { tabs: ['C:/a.ERB'], active: 'C:/a.ERB', pinned: [] } } })).not.toHaveProperty('lastKind');
+  });
 });
 
 describe('upsertSessionProject / sessionProjectOf（归一键）', () => {
@@ -104,6 +118,21 @@ describe('upsertSessionProject / sessionProjectOf（归一键）', () => {
     expect(next.lastRoot).toBe('C:/p2');
     expect(base.lastRoot).toBeNull(); // 入参未被改
     expect(base.projects).toEqual({});
+  });
+
+  // KW4C：作品会话与游戏会话共用这一族记录（键 = 目录），差别只写在 `kind` 那一格。
+  it('kind=workspace 才落 lastKind；没给 kind 的老写法不补键（读回 game）', () => {
+    const g = upsertSessionProject(emptySessionRecord(), 'C:/p', { ...recOf(['C:/a.ERB'], null, []) });
+    expect(g).not.toHaveProperty('lastKind');
+    expect(sessionLastKindOf(g)).toBe('game');
+    const w = upsertSessionProject(emptySessionRecord(), 'C:/work/p1', {
+      ...recOf(['C:/work/p1/a.kojo'], null, []),
+      kind: 'workspace',
+    });
+    expect(w.lastRoot).toBe('C:/work/p1');
+    expect(sessionLastKindOf(w)).toBe('workspace');
+    // 同一枚记录里两种现场互不覆盖：换现场就换 lastRoot + lastKind（一份真相）
+    expect(sessionLastKindOf(upsertSessionProject(w, 'C:/p', { ...recOf(['C:/a.ERB'], null, []) }))).toBe('game');
   });
 
   it('空标签集 upsert = 删除该项目记录（重开不凭空造标签）', () => {

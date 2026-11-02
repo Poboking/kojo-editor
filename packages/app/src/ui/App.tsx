@@ -29,7 +29,7 @@ import { invoke, isTauri } from '../bridge/invoke';
 import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
 import { AutosaveJournal, HEARTBEAT_INTERVAL_MS, SNAPSHOT_DEBOUNCE_MS } from './autosave-journal';
 import { journalIo } from './autosave-journal-io';
-import { loadSessionRecord } from './session-store';
+import { loadSessionRecord, type SessionRootKind } from './session-store';
 // 最近文件列表（MM-7）：欢迎页「最近文件」区的持久层与纯逻辑
 import {
   loadRecentFiles,
@@ -198,7 +198,7 @@ import { isKojo2Path } from './kojo2-open';
 import { isKojo2CutoverEnabled } from './kojo2-flag';
 // REF-FRONT-PERF：项目生命周期（开/关/写允许域/审批/会话 flush）收在专用 hook；
 // App 只留 UI state 与渲染。项目子树另加错误边界 + 项目态错误条。
-import { useProjectSession, useSessionFlush, useSessionStore } from './use-project-session';
+import { useProjectSession, useSessionFlush, useSessionStore, type WorkspaceSession } from './use-project-session';
 import { syncErbIndexAfterDiskChange } from './erb-index-sync';
 import { ProjectErrorBoundary } from './error-boundary';
 import { ProjectErrorNotice, raiseProjectErrorBar, visibleProjectError, type ProjectErrorAction, type ProjectErrorBar } from './project-error-notice';
@@ -523,6 +523,22 @@ export function App(): ReactElement {
    */
   const [errorBar, setErrorBar] = useState<ProjectErrorBar | null>(null);
   const [project, setProject] = useState<GameProject | null>(null);
+  /**
+   * 「只有口上作品、没有游戏项目」的会话（KW4C 解闸批，2026-11-02）：与 `project` 互斥，
+   * 写入只在 `use-project-session.ts` 那三处（进作品会话 / 开游戏项目 / 关会话）。
+   *
+   * 会话的**根**不从这一格拼：树 / Ctrl+P / 检索 / 诊断一律读工作区根模型
+   * （`workspace-folders.ts`），这里只回答"现在在不在作品会话里、是哪一枚"。
+   */
+  const [workspaceSession, setWorkspaceSession] = useState<WorkspaceSession | null>(null);
+  /**
+   * 本会话的现场根：游戏项目根 ∪ 作品目录 ∪ null（= 不在会话里）。
+   *
+   * 监视腿与会话落盘的键都吃这一格 ⇒ "作品也要挂 watcher / 也要落盘"不需要第二条分支。
+   */
+  const sessionRoot = project?.rootDir ?? workspaceSession?.dir ?? null;
+  /** 现场类型：欢迎页「继续上次会话」按它决定回游戏还是回作品（不在会话里时不参与判定） */
+  const sessionKind: SessionRootKind = project !== null ? 'game' : workspaceSession !== null ? 'workspace' : 'game';
   /**
    * 窗口标题三处同源（视觉批十四）：自绘标题栏、`document.title`（浏览器标签 / 调试宿）、
    * Tauri 系统标题（任务栏 / Alt-Tab）。只吃项目目录名，算法见 `window-title.ts`。
@@ -1424,9 +1440,16 @@ export function App(): ReactElement {
    * 刻意留在 App 的：decideProjectClose / decideProjectSwitch（保存确认与退出放行编排）、
    * 欢迎页恢复入口、会话 flush 的**触发位置**（见下方 useSessionFlush，effect 次序不变）。
    */
-  const { openProject, closeProject, decideApproval, requestReauth } = useProjectSession({
+  const {
+    openProject,
+    closeProject,
+    decideApproval,
+    requestReauth,
+  } = useProjectSession({
     kernel,
     project,
+    workspaceSession,
+    sessionRoot,
     dirtyRef,
     extraRoots,
     notify,
@@ -1439,6 +1462,7 @@ export function App(): ReactElement {
     setError,
     raiseError,
     setProject,
+    setWorkspaceSession,
     setIndex,
     setIndexing,
     setIndexError,
@@ -2566,7 +2590,8 @@ export function App(): ReactElement {
   // 只改焦点、只翻方向、只拖分隔条、只加减附加根，现在各算一次真实变更并落盘。
   useSessionFlush({
     kernel,
-    project,
+    sessionRoot,
+    sessionKind,
     sessionFlushRef,
     openTabsRef,
     activeFileRef,

@@ -55,8 +55,26 @@ export interface SessionProjectRecord {
 export interface SessionRecord {
   v: 1;
   lastRoot: string | null;
+  /**
+   * `lastRoot` 是**哪一种**现场（KW4C 解闸批，2026-11-02，additive）：
+   * - `'game'`（含老记录里这一格缺席）= 游戏项目根 ⇒「继续上次会话」走 `openProject`；
+   * - `'workspace'` = 口上作品目录 ⇒ 走作品会话。
+   *
+   * 为什么必须记这一格而不是拿路径去猜：作品目录与游戏目录长得一样（都是一个绝对路径），
+   * 猜出来的归属一旦错了就是「打开作品却被报成不是游戏目录」那句谎。缺省按 `'game'`
+   * 读 = 老记录逐字零影响。
+   */
+  lastKind?: SessionRootKind;
   /** 键 = pathKey(rootDir) */
   projects: Record<string, SessionProjectRecord>;
+}
+
+/** 会话现场的类型（零游戏名词：只有"有没有游戏现场"这一件事，不认识任何具体游戏） */
+export type SessionRootKind = 'game' | 'workspace';
+
+/** 读一份记录的现场类型；老记录没有这一格 ⇒ `'game'`（与放宽前逐字同形） */
+export function sessionLastKindOf(rec: SessionRecord): SessionRootKind {
+  return rec.lastKind === 'workspace' ? 'workspace' : 'game';
 }
 
 /** 最小存取面（ScopedStorage 的 get/set 子集） */
@@ -134,6 +152,9 @@ export function sanitizeSessionRecord(raw: unknown): SessionRecord {
   return {
     v: 1,
     lastRoot: typeof r.lastRoot === 'string' && r.lastRoot !== '' ? r.lastRoot : null,
+    // lastKind（KW4C additive）：只有明确写着 'workspace' 才认作品会话，其余（含缺省、
+    // 含乱值）一律按 'game' 读，且不补键——老记录的逐字形状不许被我无谓地改动
+    ...(r.lastKind === 'workspace' ? { lastKind: 'workspace' as const } : {}),
     projects,
   };
 }
@@ -176,6 +197,8 @@ export function upsertSessionProject(
     splitSizes?: readonly number[];
     /** WS-08：会话级附加根（未给 = 这次不写这一格；本仓调用方每次都传） */
     extraRoots?: readonly string[];
+    /** KW4C：这一格的现场类型（未给 = `'game'`，与放宽前逐字同形） */
+    kind?: SessionRootKind;
   },
 ): SessionRecord {
   const tabs = [...new Set(data.tabs)];
@@ -183,6 +206,7 @@ export function upsertSessionProject(
   const next: SessionRecord = {
     v: 1,
     lastRoot: rootDir,
+    ...(data.kind === 'workspace' ? { lastKind: 'workspace' as const } : {}),
     projects: { ...rec.projects },
   };
   if (tabs.length === 0 && (extraRoots === undefined || extraRoots.length === 0)) {
@@ -228,6 +252,8 @@ export async function saveSessionRecord(kv: SessionKv, rec: SessionRecord): Prom
  */
 export interface SessionFlushPayload {
   root: string;
+  /** KW4C：现场类型（未给 = `'game'`）；决定「继续上次会话」回哪条路 */
+  kind?: SessionRootKind;
   kv: SessionKv;
   tabs: readonly string[];
   active: string | null;

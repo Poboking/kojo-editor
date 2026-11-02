@@ -170,8 +170,13 @@ describe('workspaceFoldersOf（内核接线：作品目录活读）', () => {
   const kernelWith = (projectDirs: () => string[]): Pick<Kernel, 'workspaces'> =>
     ({ workspaces: { projectDirs } as unknown as Kernel['workspaces'] });
 
-  it('无项目 ⇒ 空模型（欢迎页没有根可谈）', () => {
-    expect(workspaceFoldersOf(kernelWith(() => [WORK_ROOT]), null, [EXTRA])).toEqual([]);
+  it('没有游戏项目也交根（KW4C 解闸）：作品会话的根 = 作品目录 + 附加根', () => {
+    // 解闸前这一格是 `toEqual([])`（"没有游戏项目 = 没有工作区根"），那是 S 级耦合的
+    // 照片；两态判据的正面照在 `workspace-folders-project-coupling.test.ts`。
+    expect(workspaceFoldersOf(kernelWith(() => [WORK_ROOT]), null, [EXTRA])).toEqual([
+      expect.objectContaining({ path: WORK_ROOT, role: 'author', isProjectRoot: false }),
+      expect.objectContaining({ path: EXTRA, role: 'extra' }),
+    ]);
   });
 
   it('每次现读 projectDirs：本会话新建的作品立刻进模型（不缓存）', () => {

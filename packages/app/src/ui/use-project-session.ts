@@ -8,11 +8,12 @@ import {
 } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, GameProject, RecentProject } from '@kojo/plugin-api';
-import { errorText } from '@kojo/plugin-api';
+import { errorText, pathKey } from '@kojo/plugin-api';
 import { ensureProjectPlugins } from '../bootstrap';
 import { invoke, isTauri } from '../bridge/invoke';
 import type { RevealTarget } from '../monaco/reveal-position';
 import type { AppPhase } from './App';
+import { projectDirName } from './window-title';
 import {
   adapterConflictMessage,
   dragDropImportHintMessage,
@@ -44,6 +45,7 @@ import {
   upsertSessionProject,
   type SessionFlushScheduler,
   type SessionRecord,
+  type SessionRootKind,
 } from './session-store';
 import { useWorkspaceFolders } from './use-workspace-folders';
 import { watchRootsOf } from './workspace-folders';
@@ -76,6 +78,23 @@ import {
  * - 布局变化是否落盘：**WS-06 起已改**——方向 / 焦点组 / 组结构 / 分屏比例 / 附加根
  *   任一变化都会 schedule（签名与 payload 见 `useSessionFlush`），不再"只在标签变化时顺带带"。
  */
+
+/**
+ * 只有**口上作品**、没有游戏项目的会话（KW4C 解闸批，2026-11-02）。
+ *
+ * 作品的真源是 `{userData}/workspaces/<id>/`，与游戏目录是两套真相源；作者要改自己的
+ * 东西却必须先开一个游戏目录，这是 S 级缺陷（对标 VSCode「打开文件夹即工作区」）。
+ * 这一格把"只有作品"升格成一种**会话形态**，而不是一条要开着游戏才顺带出现的记录。
+ *
+ * 口径：`dir` 来自内核 `workspaces.projectDir(projectId)`（不是自由路径参数，也不进
+ * 写允许域）；会话的根**不在这里拼**，五条腿一律读 `workspace-folders.ts` 那张表；
+ * 与游戏会话**互斥**（`openProject` 成功即清空，作品会话只在没有游戏现场时进得来）。
+ */
+export interface WorkspaceSession {
+  readonly projectId: string;
+  readonly dir: string;
+  readonly name: string;
+}
 
 /** React ref 的最小形状（避免把 React 类型扩散到参数面） */
 export interface RefLike<T> {
@@ -114,6 +133,18 @@ export interface OpenProjectOptions {
 export interface ProjectSessionHost {
   readonly kernel: Kernel | null;
   readonly project: GameProject | null;
+  /**
+   * 只有口上作品的会话（KW4C）：与 `project` 互斥，两者都空 = 欢迎页（不在会话里）。
+   * 写入只在本 hook（`openWorkspaceSession` / `openProject` / `closeProject` 三处）。
+   */
+  readonly workspaceSession: WorkspaceSession | null;
+  /**
+   * 本会话的**现场根**：游戏项目根 ∪ 口上作品目录 ∪ null。
+   *
+   * 这是"我在不在一个会话里"的唯一判据（此前是 `project !== null`）。监视腿与会话落盘
+   * 都吃这一格 ⇒ 作品会话一起生效，不再需要第二条"作品也要挂 watcher"的分支。
+   */
+  readonly sessionRoot: string | null;
   readonly dirtyRef: RefLike<ReadonlySet<string>>;
   readonly extraRoots: readonly string[];
   readonly notify: Notify;
@@ -134,6 +165,8 @@ export interface ProjectSessionHost {
    */
   readonly raiseError: (message: string, action?: ProjectErrorAction | null) => void;
   readonly setProject: (project: GameProject | null) => void;
+  /** 作品会话的**唯一**写入口（本 hook 内在三处调用：进作品会话 / 开游戏项目 / 关会话） */
+  readonly setWorkspaceSession: (next: WorkspaceSession | null) => void;
   readonly setIndex: (index: ErbIndex | null) => void;
   readonly setIndexing: (indexing: boolean) => void;
   readonly setIndexError: (error: string | null) => void;
@@ -156,6 +189,8 @@ export interface ProjectSessionHost {
 
 export interface ProjectSession {
   readonly openProject: (dir: string, opts?: OpenProjectOptions) => Promise<void>;
+  /** 进「只有口上作品」的会话（KW4C）：不认游戏、不注册项目插件、不交付写允许域 */
+  readonly openWorkspaceSession: (session: WorkspaceSession, opts?: OpenProjectOptions) => Promise<void>;
   readonly closeProject: () => Promise<void>;
   readonly decideApproval: (allow: boolean) => Promise<void>;
   readonly requestReauth: () => void;
@@ -226,6 +261,8 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
   const {
     kernel,
     project,
+    workspaceSession,
+    sessionRoot,
     dirtyRef,
     extraRoots,
     notify,
@@ -238,6 +275,7 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
     setError,
     raiseError,
     setProject,
+    setWorkspaceSession,
     setIndex,
     setIndexing,
     setIndexError,
@@ -353,6 +391,9 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
          */
         reportDictionaryStatus(notify, p.rootDir, variableSchemaFor(kernel, p.adapterId));
         setProject(p);
+        // 会话互斥（KW4C）：游戏现场到手，作品会话这一格同时归零 ⇒ 屏上任何一条腿都只可能
+        // 认一个现场，不存在"既在作品会话又开着游戏"的第三种状态。
+        setWorkspaceSession(null);
         // 换项目（欢迎页首开 / 拖入新目录）：旧项目的整套 UI 态整体带走；
         // 同目录 reload 靠 keepView 保住标签，只清激活与定位（原行为）。
         // 换项目即恢复该项目的会话标签集（退出/崩溃守护批）：重启后重开、同会话
@@ -442,14 +483,91 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
           notify({ kind: 'error', message: `打开项目失败：${msg}` });
         }
         // 内核 open() 失败不会关掉还活着的旧项目——留在项目态，别把用户踢回欢迎页
-        setPhase(kernel.project.current() !== null ? 'project' : 'welcome');
+        // （KW4C：作品会话同样是"还活着的现场"，一次失败的游戏目录打开不许把它踢没）
+        setPhase(kernel.project.current() !== null || workspaceSession !== null ? 'project' : 'welcome');
       } finally {
         unMismatch();
         setIndexing(false);
       }
     },
     // 与搬迁前逐字一致：requestOpenFile 经 ref 取（它 deps 链全空、引用恒稳定）
-    [kernel, notify, project, resetProjectUiState, restoreSessionTabs],
+    [kernel, notify, project, workspaceSession, resetProjectUiState, restoreSessionTabs, setWorkspaceSession],
+  );
+
+  /**
+   * 进「**只有口上作品**」的会话（KW4C 解闸批，2026-11-02）。
+   *
+   * 与 {@link openProject} 的三处不同都是刻意的：
+   * ① **不**调 `ensureProjectPlugins` / `kernel.project.open`：项目级插件与适配器认领都要
+   *    吃游戏现场；这一会话里没有它们，屏上说法见 `recent-workspace-projects.ts` 的
+   *    `WORKSPACE_SESSION_GAPS`（每一项一句话，一枚都不许"点了没反应"）；
+   * ② **不**交付写允许域、不弹授权框：作品的写走**常驻可写根**（铁律 5），与游戏目录那张
+   *    批准表互不继承，可写态直接问 `io.isWritable` 这一份事实；
+   * ③ 标签恢复与游戏会话**同一族记录**（`session-store` 按目录键记），所以退出后
+   *    「继续上次会话」回得来，不需要第二份会话存储。
+   *
+   * 根集合仍然**不在这里拼**：四条腿一律读 `useWorkspaceFolders` 那一张表（KW4C 起
+   * 没有游戏项目它也交作品目录 + 附加根）。
+   */
+  const openWorkspaceSession = useCallback(
+    async (session: WorkspaceSession, opts?: OpenProjectOptions) => {
+      if (!kernel) return;
+      // 会话互斥：作品会话的入口只有欢迎页，走到这里还带着游戏现场 = 别的路径没关干净，
+      // 不许静默把游戏会话覆盖掉（那会让未保存的标签失去归属）。
+      if (project !== null) {
+        notify({
+          kind: 'info',
+          message: `当前还开着游戏项目「${projectDirName(project.rootDir) ?? project.rootDir}」，先关掉它再进作品会话。`,
+        });
+        return;
+      }
+      if (workspaceSession !== null && pathKey(workspaceSession.dir) === pathKey(session.dir)) {
+        setWorkspaceSession(session); // 同一枚作品重进：只刷新名字与 id，不再走一遍拆除
+        setPhase('project');
+        return;
+      }
+      // 脏闸与开项目同款口径：这一趟没有确认框可弹（入口只在欢迎页），真踩到就说人话
+      if (!opts?.skipDirtyConfirm && dirtyRef.current.size > 0) {
+        notify({
+          kind: 'info',
+          message: '还有未保存的修改，先保存或关掉它们再进作品会话。',
+        });
+        return;
+      }
+      const wantRecovery = pendingRecoverRef.current;
+      pendingRecoverRef.current = false;
+      if (!opts?.keepView) setPhase('opening');
+      setError(null);
+      // 宿主写域事实属于游戏项目那一趟；作品会话没有这一格 ⇒ 复位成"没交过"，
+      // 免得上一条被拒的错误条与置灰的保存按钮跟着踩进新现场
+      setSessionWriteDomainFact(initialWriteDomainFact);
+      setWorkspaceSession(session);
+      resetProjectUiState();
+      setExtraRoots(
+        sanitizeExtraRoots(sessionProjectOf(sessionRecordRef.current, session.dir)?.extraRoots, session.dir),
+      );
+      await restoreSessionTabs(session.dir, wantRecovery ? recoveredPaths() : []);
+      setIndex(null);
+      setIndexError(null);
+      setPhase('project');
+      // 可写态取内核 io 的那份事实（常驻可写根认不认这个目录），不引入第二套可写判定
+      try {
+        setWritable(kernel.io.isWritable(session.dir));
+      } catch {
+        setWritable(false); // 问不出可写 ⇒ 按只读显示：说不出可写绝不亮成可写
+      }
+      if (opts?.pendingOpenFile) requestOpenFileRef.current?.(opts.pendingOpenFile);
+    },
+    [
+      kernel,
+      notify,
+      project,
+      workspaceSession,
+      resetProjectUiState,
+      restoreSessionTabs,
+      setWorkspaceSession,
+      setWritable,
+    ],
   );
 
   /**
@@ -463,11 +581,14 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
    */
   const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots);
   useEffect(() => {
-    if (!kernel || !project) return;
+    // 闸跟的是**会话**（`sessionRoot`）而不是 `project`：KW4C 起"只有作品"也算一个会话，
+    // 作品目录与附加根一样要有人盯着（作者在外 editor 里存盘 ⇒ 树/检索要跟上）。
+    // 欢迎页（sessionRoot=null）仍不挂 watcher，零额外 IO。
+    if (!kernel || sessionRoot === null) return;
     // 只监视模型给定的根：自选项目位置根的**根身**可能正是游戏目录，卷进来等于给整个
     // 游戏目录挂全量 watcher（体量 + 噪声都不该发生）——作品目录才进表（2026-10-27 收窄批）。
     void kernel.fileWatch.start(watchRootsOf(workspaceFolders));
-  }, [kernel, project, workspaceFolders]);
+  }, [kernel, sessionRoot, workspaceFolders]);
 
   const closeProject = useCallback(async () => {
     if (!kernel) return;
@@ -479,6 +600,9 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
       // 拆除序的状态复位与搬迁前逐字同序（含 resetSearch 与 phase 回落）
       reset: () => {
         setProject(null);
+        // 作品会话走同一条退出路（KW4C）：`kernel.project.close()` 在没有游戏现场时是
+        // 幂等 no-op，监视句柄、检索态、phase 回落都照同一份拆除序收尾，不另开第二条
+        setWorkspaceSession(null);
         setIndex(null);
         resetProjectUiState();
         setPendingApproval(null);
@@ -505,6 +629,7 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
     setPhase,
     setProject,
     setRecent,
+    setWorkspaceSession,
     setWritable,
   ]);
 
@@ -543,12 +668,29 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
     [kernel, pendingApproval, notify, raiseError, setPendingApproval, setWritable],
   );
 
-  /** 重授权入口（定稿 Q9：状态栏徽章点击 + 通知 action 两者都留） */
+  /**
+   * 重授权入口（定稿 Q9：状态栏徽章点击 + 通知 action 两者都留）。
+   *
+   * KW4C 补上作品会话那一支：徽章在作品会话里点下去**必须有话说**（铁律 4——按下去
+   * 没反应的按钮本仓零容忍）。作品从来就不靠那张项目批准表写盘（常驻可写根，铁律 5），
+   * 所以这里不开授权框、也不假装能开，只把"这一格为什么没有授权可批"说清楚。
+   */
   const requestReauth = useCallback(() => {
-    if (project) setPendingApproval(project);
-  }, [project, setPendingApproval]);
+    if (project) {
+      setPendingApproval(project);
+      return;
+    }
+    if (workspaceSession !== null) {
+      notify({
+        kind: 'info',
+        message:
+          `作品会话里的「${workspaceSession.name}」住在你自己的作品目录，本来就可写——` +
+          '这里没有需要授权的游戏目录；要改游戏里的文件，请打开游戏项目。',
+      });
+    }
+  }, [notify, project, setPendingApproval, workspaceSession]);
 
-  return { openProject, closeProject, decideApproval, requestReauth };
+  return { openProject, openWorkspaceSession, closeProject, decideApproval, requestReauth };
 }
 
 /* ------------------------------ 会话记录落盘 ------------------------------ */
@@ -603,7 +745,16 @@ export function useSessionStore(options: SessionStoreOptions): SessionStore {
 
 export interface SessionFlushOptions {
   readonly kernel: Kernel | null;
-  readonly project: GameProject | null;
+  /**
+   * 会话的现场根（KW4C）：游戏项目根 ∪ 口上作品目录 ∪ null。
+   *
+   * 落盘键与"要不要落盘"都只看这一格 ⇒ 作品会话的标签集与游戏会话的走**同一族记录**
+   * （`session-store` 按目录键），不新造第二份会话存储。原来的判据是 `project`，
+   * 那是同一件事的第二份写法，已删。
+   */
+  readonly sessionRoot: string | null;
+  /** 这一格的现场类型（游戏 / 作品）：欢迎页「继续上次会话」靠它决定回哪条路 */
+  readonly sessionKind: SessionRootKind;
   readonly sessionFlushRef: RefLike<SessionFlushScheduler | null>;
   readonly openTabsRef: RefLike<readonly string[]>;
   readonly activeFileRef: RefLike<string | null>;
@@ -627,7 +778,7 @@ export interface SessionFlushOptions {
 /**
  * 会话标签集落盘 + 拆除强刷（原 App.tsx 两个 effect，位置由 App 决定）。
  * 判据：
- * - debounce 600ms，写 kernel 全局存储；欢迎页（project null）不写；
+ * - debounce 600ms，写 kernel 全局存储；不在会话里（`sessionRoot` 为 null）不写；
  * - **标签 / 焦点 / 方向 / 组结构 / 分屏比例 / 附加根**任一变化都 schedule（WS-06/08）；
  * - 项目拆除 / kernel 更替 / 卸载：layout 相同步 flushNow，防抖窗口里的最后一拍不丢；
  * - 快照由 schedule 那一刻的值构成，关项目 reset 之后不会再回读现场。
@@ -635,7 +786,8 @@ export interface SessionFlushOptions {
 export function useSessionFlush(options: SessionFlushOptions): void {
   const {
     kernel,
-    project,
+    sessionRoot,
+    sessionKind,
     sessionFlushRef,
     openTabsRef,
     activeFileRef,
@@ -649,9 +801,10 @@ export function useSessionFlush(options: SessionFlushOptions): void {
   } = options;
 
   useEffect(() => {
-    if (!kernel || !project) return;
+    if (!kernel || sessionRoot === null) return;
     sessionFlushRef.current?.schedule({
-      root: project.rootDir,
+      root: sessionRoot,
+      kind: sessionKind,
       kv: kernel.storage.global(),
       tabs: openTabsRef.current,
       active: activeFileRef.current,
@@ -659,13 +812,13 @@ export function useSessionFlush(options: SessionFlushOptions): void {
       splitSizes,
       extraRoots,
     });
-  }, [kernel, project, openTabs, activeFile, pinnedPaths, layoutSignature, splitSizes, extraRoots]);
+  }, [kernel, sessionRoot, sessionKind, openTabs, activeFile, pinnedPaths, layoutSignature, splitSizes, extraRoots]);
 
-  // 项目拆除（project→null / 换项目 / kernel 更替 / 组件卸载）：layout 相保证这步在
+  // 会话拆除（现场归零 / 换根 / kernel 更替 / 组件卸载）：layout 相保证这步在
   // commit 内同步发生；无待写时 flushNow 是 no-op，绝不双写。
   useLayoutEffect(() => {
     return () => {
       sessionFlushRef.current?.flushNow();
     };
-  }, [kernel, project]);
+  }, [kernel, sessionRoot]);
 }
