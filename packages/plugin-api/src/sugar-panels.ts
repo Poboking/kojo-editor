@@ -462,6 +462,11 @@ export interface RowNavDomEvent {
   /** 输入法合成期（事件级判据；宿主全局键那三条证据的另两条是会话标志，不归行导航） */
   readonly isComposing?: boolean;
   readonly keyCode?: number;
+  /**
+   * React 合成事件面**不拷贝** `isComposing`（其键盘接口没列这一格），原生事件挂在
+   * `nativeEvent` 上——合成期证据从这一腿补取。非 React 调用方（原生 keydown 直连）无此字段。
+   */
+  readonly nativeEvent?: { readonly isComposing?: boolean; readonly keyCode?: number };
   preventDefault(): void;
 }
 
@@ -477,7 +482,19 @@ export interface RowNavHostEvent extends RowNavDomEvent {
  */
 const IME_COMPOSING_KEY_CODE = 229;
 
-/** 把一次按键落到容器里的行按钮上。返回 `true` = 已消费。
+/** 合成期证据（事件级两格：`isComposing` 主判据 + `Process` 键码兜底；React 面走 `nativeEvent` 补腿） */
+function isImeComposingRowNav(e: RowNavDomEvent): boolean {
+  const native = e.nativeEvent;
+  return (
+    e.isComposing === true ||
+    e.keyCode === IME_COMPOSING_KEY_CODE ||
+    native?.isComposing === true ||
+    native?.keyCode === IME_COMPOSING_KEY_CODE
+  );
+}
+
+/**
+ * 把一次按键落到容器里的行按钮上。返回 `true` = 已消费。
  *
  * 行名单每次现取（不缓存）：结果随流式检索一行行长出来、过滤与折叠也会改名单，
  * 缓存下标一定会指错行。取的是 **DOM 序**，与面板画行的序同一条 ⇒ 所见即所跳。
@@ -485,7 +502,7 @@ const IME_COMPOSING_KEY_CODE = 229;
 export function applyPanelRowNav(host: PanelRowNavHost | null, e: RowNavDomEvent): boolean {
   if (host === null) return false;
   // 合成中的方向键归输入法（候选列表就靠它翻页）——不 preventDefault，原样放行
-  if (e.isComposing === true || e.keyCode === IME_COMPOSING_KEY_CODE) return false;
+  if (isImeComposingRowNav(e)) return false;
   const target = e.target as { closest?(selector: string): unknown } | null;
   // `closest` 只在这一处判一次存在性（TS narrowing 穿不过布尔变量，写成 canClimb 就得再断言一次）
   if (typeof target?.closest !== 'function') {

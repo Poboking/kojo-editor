@@ -197,6 +197,18 @@ describe('applyPanelRowNav：落到行按钮上（含合成期放行与漫游 ta
     expect(rows[1]!.focused).toBe(0);
   });
 
+  it('React 合成面不拷贝 isComposing ⇒ nativeEvent 补腿也认（合成期证据两路同源）', () => {
+    const rows = [makeRow('r0'), makeRow('r1')];
+    const host = makeHost(rows);
+    const synthetic = {
+      ...event(rows[0], 'ArrowDown'),
+      nativeEvent: { isComposing: true },
+    };
+    expect(applyPanelRowNav(host, synthetic)).toBe(false);
+    expect(synthetic.prevented).toBe(0);
+    expect(applyPanelRowNav(host, { ...event(rows[0], 'ArrowDown'), nativeEvent: { keyCode: 229 } })).toBe(false);
+  });
+
   it('空容器 / null 容器 / 非导航键都不消费', () => {
     const rows = [makeRow('r0'), makeRow('r1')];
     expect(applyPanelRowNav(makeHost([]), event(null, 'ArrowDown'))).toBe(false);

@@ -6,13 +6,16 @@ import type {
   ErbParserService,
   FamilyIndexRule,
   GameProject,
+  PanelRowRovingHost,
   Plugin,
   PluginContextMenuAnchor,
   ProjectService,
+  RowNavHostEvent,
   SlotRegistry,
   UIPanelProps,
 } from '@kojo/plugin-api';
 import {
+  applyPanelRowNavFromEvent,
   attachGrowSentinel,
   activeGameAdapter,
   diagnosticDisplay,
@@ -20,7 +23,9 @@ import {
   MORE_ROW_STYLE,
   MORE_ROW_TITLE,
   moreRowLabel,
+  PANEL_ROW_ATTR,
   shortPath,
+  syncRovingTabIndexes,
   WellKnownServices,
 } from '@kojo/plugin-api';
 import { charaDirOwners, type OwnershipDeps } from './ownership';
@@ -142,13 +147,16 @@ export function IssueList(props: IssueListProps): ReactElement {
   const win = issueWindowSize(count, props.limit);
   return createElement(
     'ul',
-    { className: 'conv-issues' },
+    // 行键盘协议（kw8a 1102 批）：条目列表是树里的分组层——`role="group"` 挂在这里，
+    // 名单按 `PANEL_ROW_ATTR` 现取（没画进窗口的条目行天然不在名单上）。
+    { className: 'conv-issues', role: 'group' },
     ...issues.slice(0, win).map((issue, i) =>
       createElement(
         'li',
         {
           key: issue.key ?? `${props.groupKey}-${i}`,
           className: 'conv-issue',
+          role: 'none',
           ...(props.onMenu === undefined
             ? {}
             : { onContextMenu: (e: PluginContextMenuAnchor) => props.onMenu?.(issue, e) }),
@@ -158,6 +166,9 @@ export function IssueList(props: IssueListProps): ReactElement {
           {
             className: `conv-issue-btn sev-${issue.severity}`,
             title: issue.message,
+            [PANEL_ROW_ATTR]: '',
+            role: 'treeitem',
+            'aria-level': 2,
             onClick: () => props.onOpen(issue),
           },
           createElement('span', {
@@ -258,6 +269,19 @@ export function createUiConventionReportPlugin(): Plugin {
         const [groupWindows, setGroupWindows] = useState<Map<string, number>>(new Map());
         /** 分组视角：默认「按规则看」（= 本批之前的视图） */
         const [mode, setMode] = useState<GroupMode>('rule');
+
+        /**
+         * 行键盘协议（kw8a 1102 批）：名单容器 = 面板根；键位判据、合成期让位、
+         * `select`/`textarea` 让位与打开走行自己的 `onClick` 全住契约层
+         * （`sugar-panels.ts` 行键盘区块）——与宿主检索/问题面板同一把尺子，本插件零复制。
+         * 组头也在名单内：组默认全收起，条目行尚未画出来时 ↑↓ 至少走得动组头
+         * （F4/F8 敲组头 = 它的 `onClick` = 展开收起，仍不留第二条通道）。
+         */
+        const rootRef = useRef<PanelRowRovingHost | null>(null);
+        // 每帧渲染后再对齐一次漫游位（折叠/窗口生长都会换名单；键盘那一腿由判据层就地办结）
+        useEffect(() => {
+          syncRovingTabIndexes(rootRef.current);
+        });
 
         /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；计算在 panel-logic 可单测） */
         const growGroup = useCallback((groupKey: string, total: number): void => {
@@ -462,7 +486,7 @@ export function createUiConventionReportPlugin(): Plugin {
             ? createElement('div', { className: 'conv-empty dim' }, '未发现问题 ✅')
             : createElement(
                 'ul',
-                { className: 'conv-groups' },
+                { className: 'conv-groups', role: 'tree' },
                 ...view.groups.map((group) => {
                   const isOpen = expanded.has(group.key);
                   return createElement(
@@ -470,6 +494,7 @@ export function createUiConventionReportPlugin(): Plugin {
                     {
                       key: group.key,
                       className: 'conv-group',
+                      role: 'none',
                       // 分组头右键（1023 批）：展开/收起 · 复制分组名 · 重新校验
                       onContextMenu: (e: PluginContextMenuAnchor) =>
                         openGroupMenu(
@@ -482,7 +507,14 @@ export function createUiConventionReportPlugin(): Plugin {
                     },
                     createElement(
                       'button',
-                      { className: 'conv-group-btn', onClick: () => toggle(setExpanded, group.key) },
+                      {
+                        className: 'conv-group-btn',
+                        onClick: () => toggle(setExpanded, group.key),
+                        [PANEL_ROW_ATTR]: '',
+                        role: 'treeitem',
+                        'aria-level': 1,
+                        'aria-expanded': isOpen,
+                      },
                       createElement('span', { className: 'caret' }, ic(isOpen ? 'chevron-down' : 'chevron-right', 12, isOpen ? '▾' : '▸')),
                       createElement('span', { className: 'conv-rule-id' }, group.title),
                       createElement('span', { className: 'conv-group-count' }, String(group.count)),
@@ -520,6 +552,18 @@ export function createUiConventionReportPlugin(): Plugin {
           'div',
           {
             className: 'panel-convention-report',
+            // 行键盘协议（kw8a 1102 批）：↑↓ 移焦点 / F4·F8 移过去并当场打开（走行自己的
+            // onClick）；`tabIndex=-1` 照 `FileTree.tsx` 先例——不是给 Tab 用的，是给
+            // "把焦点交给面板"用的那条腿。窗口外没画出来的条目天然不在名单上。
+            ref: rootRef,
+            tabIndex: -1,
+            onKeyDown: (e: RowNavHostEvent) => {
+              applyPanelRowNavFromEvent(e);
+            },
+            onFocus: (e: { currentTarget: PanelRowRovingHost | null }) => {
+              // 鼠标点行 / 「显示更多」抢回焦点时对齐漫游位（Tab 序只留踩住的那一行）
+              syncRovingTabIndexes(e.currentTarget);
+            },
             // 空白处右键（1023 批）：三个分组视角 · 重新校验 · 在跑时可叫停
             onContextMenu: (e: PluginContextMenuAnchor) =>
               openConventionPanelMenu(props, e, mode, running, menuHost),
