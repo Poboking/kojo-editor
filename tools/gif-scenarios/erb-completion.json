@@ -1,0 +1,84 @@
+{
+  "name": "erb-completion",
+  "title": "ERB 输入即弹的补全",
+  "fps": 8,
+  "clip": null,
+  "steps": [
+    {
+      "clickText": {
+        "selector": ".tree-file",
+        "text": "M_KOJO_K2",
+        "settle": 1800
+      }
+    },
+    {
+      "waitExpr": {
+        "expr": "__kojoDebug.editor.info().path.includes('M_KOJO_K2')",
+        "timeout": 15000
+      }
+    },
+    {
+      "cursor": [
+        8,
+        1
+      ],
+      "settle": 400
+    },
+    {
+      "unlock": true
+    },
+    {
+      "eval": "document.querySelectorAll('.toast button').forEach(b=>b.click())",
+      "note": "清掉解锁回执 toast（它会抢走 DOM 焦点）"
+    },
+    {
+      "cursor": [
+        8,
+        1
+      ],
+      "settle": 400
+    },
+    {
+      "startSample": true
+    },
+    {
+      "holdFrames": 4,
+      "note": "在语句位打字"
+    },
+    {
+      "type": "LOCAL = #",
+      "perCharMs": 190,
+      "settle": 1300
+    },
+    {
+      "waitExpr": {
+        "expr": "document.querySelectorAll('.suggest-widget.visible .monaco-list-row').length > 0",
+        "timeout": 8000
+      }
+    },
+    {
+      "holdFrames": 8,
+      "note": "整表候选弹出"
+    },
+    {
+      "type": "AB",
+      "perCharMs": 330,
+      "settle": 1300
+    },
+    {
+      "holdFrames": 10,
+      "note": "继续打字即实时过滤"
+    },
+    {
+      "key": "enter",
+      "settle": 1100
+    },
+    {
+      "holdFrames": 8,
+      "note": "回车采纳"
+    },
+    {
+      "stopSample": true
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+;========================================
+; 合成演示：口上路由表（不含任何真实游戏数据）
+; 这一份是「跳转定义 / 查找引用」的调用侧来源之一
+;========================================
+@KOJO_MESSAGE_SEND
+; 先按角色取基础文本
+TRYCALLFORM M_KOJO%KOJO_NAME%_MESSAGE_COM_K{NO:TARGET}_{ARG:1}(ARG:3)
+; 收尾统一拼一行状态描述：F12 可跳到 KOJO_UTIL.ERB
+KOJO_UTIL_MOOD_LINE(NO:TARGET, CFLAG:2)
+RETURN 1
+
+@KOJO_MESSAGE_MAKE_MESSAGE
+IF CFLAG:10 >= 50
+	KOJO_UTIL_APPEND_LINE(CALL:5, "调教进度过半")
+ENDIF
+RETURN 1

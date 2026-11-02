@@ -1056,7 +1056,12 @@ async function cmdOpenProject(args, dir, flags) {
   await withCdp(async (s, cdp) => {
     await waitFor(cdp, 'window.__kojoDebug !== undefined', { timeoutMs: 15000, label: '__kojoDebug 装载' });
     // 0) 已开着同一个项目 ⇒ 幂等直过
-    const cur = await cdp.evalJs('(__kojoDebug.state().project ?? {}).rootDir ?? null');
+    //    但**只在真开着的时候**才直过：`state().project.rootDir` 是「上次会话」的持久值，
+    //    欢迎页上它照样有值（那一行就是「继续上次会话 <rootDir>」）。拿它当"已打开"判据，
+    //    页面重载后会打印「项目已开着」而什么都不做 ⇒ 调用方永远等不到文件树（实测死锁）。
+    const cur = await cdp.evalJs(
+      `(()=>{const s=__kojoDebug.state();if(s.phase==='welcome'||s.phase==='unknown')return null;return (s.project??{}).rootDir??null})()`,
+    );
     if (cur && samePath(path.resolve(String(cur)), abs)) {
       console.log(`[ok] 项目已开着：${abs}`);
       return;

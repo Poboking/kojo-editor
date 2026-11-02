@@ -1,0 +1,19 @@
+;========================================
+; 合成演示：角色 002 口上（故意缺件，用作「有告警」样本）
+; 只写了 COLOR 与一条指令口上，缺 FLAGSETTING / ENCOUNTER / EXTRASOURCE
+;========================================
+@M_KOJO_COLOR_K2
+SETCOLOR 0x88ccff
+RETURN 1
+
+@M_KOJO_MESSAGE_COM_K2_1
+; 诊断演示点：下面这行调用了一个不存在的共用口上
+KOJO_UTIL_MOOD_LINNE(NO:TARGET, CFLAG:2)
+IF CFLAG:2 >= 40
+	PRINTFORMW 「……嗯。」
+ELSE
+	PRINTFORMW 「不要碰我。」
+ENDIF
+; 变量补全演示点：录制时实时打 `CFLAG:` 再按 Ctrl+Space
+LOCAL = CFLAG:10
+RETURN 1

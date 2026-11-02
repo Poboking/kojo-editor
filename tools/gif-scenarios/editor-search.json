@@ -1,0 +1,28 @@
+{
+  "name": "editor-search",
+  "title": "全工程检索（在文件中搜索）",
+  "fps": 8,
+  "clip": null,
+  "steps": [
+    { "clickText": { "selector": ".tree-file", "text": "M_KOJO_K1", "settle": 1600 } },
+    { "run": "workbench.searchInFiles", "settle": 1200 },
+    { "startSample": true },
+    { "holdFrames": 4 },
+    {
+      "setInput": {
+        "selector": "input.search-input",
+        "text": "KOJO_UTIL",
+        "settle": 800
+      },
+      "note": "认 `input.search-input` 本体：`.panel-kojo.search input` 选不到它（输入框不在那枚 `.panel` 里），而 `.panel input` 会先命中左栏文件树的过滤框"
+    },
+    { "key": "enter", "settle": 2000 },
+    {
+      "eval": "JSON.stringify({head:(document.querySelector('.ksp')?.innerText||'').replace(/\\s+/g,' ').slice(0,90)})",
+      "returns": true,
+      "note": "回车后的命中读数（面板自己那行「N 条 · M 文件 · 用时」）"
+    },
+    { "holdFrames": 16, "note": "命中按文件分组列出" },
+    { "stopSample": true }
+  ]
+}

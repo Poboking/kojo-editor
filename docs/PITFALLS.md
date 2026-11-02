@@ -620,3 +620,9 @@
 321. **语料闸里钉「绝对计数 ≥ N」的判据，换一块盘就会把换盘报成回归**（2026-11-02 口上调试统一批复跑实拍，`condition-extractor/tests/display.corpus.test.ts` 不变量 ③）：那枚 `sifGuarded > 30` 是**改版盘**上的实数（该盘 42），而本项目全部基线所依据的**基线盘**上这类行只有 7 行 ⇒ 挂基线盘跑必红，且红得不反映任何代码变化。两件事要分开防：
     · **选盘**：`tools/corpus.mjs` 的裁决是 ①`sav/` 非空 ②`.ERB` 数 ③目录名，且**只扫扫描根的一级目录**。基线盘嵌在游戏盘根的**下一层子目录**里，所以扫描根给到盘根时一级扫描看不见它，自动选中的是盘根下 `.ERB` 最多的改版盘（`sav` 为空、ERB 反而更多）——挂盘前先核 `--print` 回的是哪块，把扫描根给到「基线盘那一层」，别拿盘根的自动结果当基线盘。
     · **判据形状**：随盘摆动的量**不许钉绝对值**，改钉同盘自证的相对判据（本枚改判「一枚都不许丢 `>0`」+「抽取侧 ≥ 同盘朴素分母」），并把两盘实数写进注释。相对判据当场就把分母自己的假阳性揪出来了：`SIF PRINT_COUNT == 0` 里 `PRINT_COUNT` 是变量名，朴素正则不带 `(?![A-Za-z0-9_])` 边界会把它算成打印行（基线盘 7<8 假红）；补边界后两盘抽取与分母**逐枚相等**（7/7、42/42）——这才是这类稀疏行该有的真读数。
+
+322. **`a?.b !== null` 是恒真判据，不是"存在且可见"**：`a` 缺席时整式求值为 `undefined !== null` ⇒ 永远 `true`。README 录制器拿它当 `waitExpr`，把「参数提示弹层压根没进 DOM」读成 `vis:true`，据此录出的那张图是纯假绿（`.parameter-hints-widget` 全程不存在，图里只有光标框住了实参）。要写 `!!a?.b`，或 `a?.b !== undefined`。同类形状：`expect(x?.y !== null).toBe(true)`、`x?.offsetParent !== null` 都不算断言（2026-11-02 README 动图批实拍，已把"场景里禁用这个形状"钉进 `tools/tests/readme-gif.test.ts`）。
+
+323. **给 React 受控输入赋值必须走原生 setter**：`el.value = 'x'` 会被 React 的 value tracker 认成"React 自己写的"而吞掉 `onChange`——实测全工程检索框一个字不进，面板停在「请输入检索词」，而 `setInput` 因为"元素找到了"报成功。改成 `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(el,'x')` 再 `dispatchEvent(new Event('input',{bubbles:true}))`。**赋完必须回读 `el.value` 当验收**，别拿"没抛错"当"写进去了"（2026-11-02 实拍）。
+
+324. **DOM `activeElement` 已是 `.native-edit-context` ≠ Monaco 内部已聚焦**：从文件树点开文件之后，对输入面调 `focus()` 只给到 DOM 焦点，Monaco 的键绑定与只读询问通道仍按"未聚焦"处理——实测合成空格触发不了 `onDidAttemptReadOnlyEdit`，只读确认框永不弹，于是解锁失败，而只读下 Monaco **根本不问语言服务**（hover / 补全 / 改名一起哑），报出来的却是"语言面没货"。要真派发一次 `Input.dispatchMouseEvent` 点进 `.view-lines`，键击才进编辑面（2026-11-02 实拍；同批另一条：确认框可能晚于键击约 500ms 才挂进 DOM，轮询等它，别按一次没有就当这趟不弹）。

@@ -1,0 +1,45 @@
+;========================================
+; 合成演示：角色 001 口上（标配四件套齐全，用作「无告警」样本）
+;========================================
+@M_KOJO_FLAGSETTING_K1
+; 基本标志
+M_KOJO_FLAG_SETTING_K1 = 1
+; 口上标记（合成）
+M_KOJO_MARK_SETTING_K1 = 1
+RETURN 1
+
+@M_KOJO_COLOR_K1
+SETCOLOR 0xff88cc
+RETURN 1
+
+@M_KOJO_ENCOUNTER_K1
+PRINTFORMW 「初次见面，请多指教。」
+; 跳转定义演示点：光标放在下一行的函数名上按 F12
+KOJO_UTIL_MOOD_LINE(NO:TARGET, CFLAG:2)
+; 参数提示演示点：括号内按 Ctrl+Shift+Space
+KOJO_UTIL_TIER(CFLAG:2)
+RETURN 1
+
+@M_KOJO_EXTRASOURCE_K1
+IF CFLAG:2 >= 40
+	SOURCE(0) = 「%CALLNAME:TARGET% 的脸微微发红。」
+ENDIF
+IF CFLAG:70 >= 30
+	SOURCE(1) = 「她开始不再回避视线。」
+ENDIF
+RETURN 1
+
+@M_KOJO_MESSAGE_COM_K1_1
+; 指令 1：握手
+IF CFLAG:2 >= 80
+	PRINTFORMW 「好啊。」
+ELSE
+	PRINTFORMW 「……请便。」
+ENDIF
+RETURN 1
+
+@M_KOJO_SUCCESS_COM_K1_1
+; 指令成功后的追加文本
+TFLAG:3 = 1
+KOJO_UTIL_APPEND_LINE(12, "握手成功")
+RETURN 1

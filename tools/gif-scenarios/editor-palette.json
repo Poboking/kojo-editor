@@ -1,0 +1,35 @@
+{
+  "name": "editor-palette",
+  "title": "命令面板（一切能力都有可编程入口）",
+  "fps": 8,
+  "clip": null,
+  "steps": [
+    { "clickText": { "selector": ".tree-file", "text": "M_KOJO_K1", "settle": 1500 } },
+    { "startSample": true },
+    { "holdFrames": 4 },
+    { "key": "p", "mods": ["ctrl", "shift"], "settle": 900 },
+    {
+      "waitExpr": {
+        "expr": "!!document.querySelector('.picker-input input, input.picker-input')",
+        "timeout": 6000
+      },
+      "note": "面板真身：input.picker-input（占位符「输入命令名称…」，别拿 placeholder 含「搜索」当锚）"
+    },
+    { "holdFrames": 6, "note": "面板打开：全量命令在册" },
+    {
+      "setInput": {
+        "selector": ".picker-input input, input.picker-input",
+        "text": "口上",
+        "settle": 1200
+      }
+    },
+    {
+      "eval": "JSON.stringify({list:(document.querySelector('.picker-list')?.innerText||'').replace(/\\s+/g,' ').slice(0,90)})",
+      "returns": true,
+      "note": "过滤后的清单头几行（面板列表是虚拟滚动，数 DOM 行数不作数）"
+    },
+    { "holdFrames": 12, "note": "过滤到口上族命令" },
+    { "key": "escape", "settle": 400 },
+    { "stopSample": true }
+  ]
+}

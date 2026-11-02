@@ -1,0 +1,37 @@
+;========================================
+; 合成演示：共用工具口上
+; 「跳转定义」的落点、「参数提示 / 悬停文档」的定义侧
+;========================================
+; 按角色与好感度档位交回一句状态描述
+; CHARA：角色编号；LEVEL：好感度（CFLAG:2）
+@KOJO_UTIL_MOOD_LINE(CHARA, LEVEL)
+LOCAL = 0
+IF LEVEL >= 80
+	; 高档位：直接用文本
+	PRINTFORMW 「%CALLNAME:CHARA% 看起来很放松。」
+	LOCAL = 2
+ELSEIF LEVEL >= 40
+	PRINTFORMW 「%CALLNAME:CHARA% 显得有些紧张。」
+	LOCAL = 1
+ELSE
+	PRINTFORMW 「%CALLNAME:CHARA% 保持距离。」
+	LOCAL = 0
+ENDIF
+RETURN LOCAL
+
+; 把一段文本追加到当前行缓冲
+; SLOT：目标槽位；TEXT：追加内容
+@KOJO_UTIL_APPEND_LINE(SLOT, TEXT)
+RESULTS = %RESULTS%%TEXT%
+TFLAG:SLOT = 1
+RETURN 1
+
+; 计算档位（供上面两处复用）
+@KOJO_UTIL_TIER(LEVEL)
+IF LEVEL >= 80
+	RETURN 3
+ENDIF
+IF LEVEL >= 40
+	RETURN 2
+ENDIF
+RETURN 1

@@ -1,0 +1,19 @@
+{
+  "name": "editor-folding",
+  "title": "按结构折叠（tree-sitter CST 驱动）",
+  "fps": 8,
+  "clip": null,
+  "steps": [
+    { "clickText": { "selector": ".tree-file", "text": "KOJO_UTIL", "settle": 1800 } },
+    { "waitExpr": { "expr": "__kojoDebug.editor.info().path.includes('KOJO_UTIL')", "timeout": 15000 } },
+    { "startSample": true },
+    { "holdFrames": 6, "note": "三份共用口上 + 各自的 IF 区块" },
+    { "run": "editor.builtin.foldAll", "settle": 1400 },
+    { "holdFrames": 12, "note": "全部折到函数头" },
+    { "run": "editor.builtin.foldLevel1", "settle": 1200 },
+    { "holdFrames": 8, "note": "折到第 1 层" },
+    { "run": "editor.builtin.unfoldAll", "settle": 1400 },
+    { "holdFrames": 8, "note": "展开回来" },
+    { "stopSample": true }
+  ]
+}

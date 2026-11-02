@@ -1,0 +1,16 @@
+{
+  "name": "erb-definition",
+  "title": "ERB 跳转定义（跨文件）",
+  "fps": 8,
+  "clip": null,
+  "steps": [
+    { "clickText": { "selector": ".tree-file", "text": "M_KOJO_K1", "settle": 1600 } },
+    { "waitExpr": { "expr": "__kojoDebug.editor.info().path.includes('M_KOJO_K1')", "timeout": 15000 } },
+    { "cursor": [18, 10], "settle": 500 },
+    { "startSample": true },
+    { "holdFrames": 6, "note": "光标停在 KOJO_UTIL_MOOD_LINE 调用处" },
+    { "key": "f12", "settle": 1800 },
+    { "holdFrames": 10, "note": "跳到共用口上文件里的定义行" },
+    { "stopSample": true }
+  ]
+}
