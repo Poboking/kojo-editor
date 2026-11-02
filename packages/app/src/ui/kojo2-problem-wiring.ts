@@ -36,8 +36,13 @@
  *
  * 诊断入口抛错 / 编译入口自报失败 ⇒ 第 2 层清空旧 markers，本层再：
  * ① 往问题面板写一条 `kojo2/diagnostics-unavailable`（不是"没问题"，是"没有诊断"）；
- * ② 经注入的 `notify` 发一条 `error` toast（宿主 UI 的通知中心，非新造 UI）。
+ * ② 经注入的 `notify` 发一条 toast（宿主 UI 的通知中心，非新造 UI）。
  * 两条都有，缺一条都会让"屏上什么都没有"被读成"这份文件是干净的"。
+ *
+ * KW-4F 起 ② 按**原因**分档并去重（同一文件同一句话只吵一次）：
+ * - 作品会话（没有游戏现场，两面取不到）⇒ `info` + 人话：能力缺席要出声，但红点
+ *   （状态栏 ✕ / 文件树红标）只留给真错误，"没诊断"不许冒充成"文件有错"；
+ * - 其余（供方缺席 / 编译入口抛错 / 自报失败）⇒ 照旧 `error`。
  *
  * ## 装配口径（B3 收口最后一格，2026-10-30）
  *
@@ -106,6 +111,37 @@ import {
 
 /** 诊断失败在问题面板里的稳定诊断码（不是 core 诊断码；一眼看出这是工具链自己的事） */
 export const KOJO2_DIAGNOSTICS_FAILURE_CODE = 'kojo2/diagnostics-unavailable';
+
+/**
+ * KW-4F（2026-11-03）：**作品会话（没有游戏现场）⇒ 这一格现在诊断不了**的那两句话。
+ *
+ * 判据只在这一处（`Kojo2SessionHasNoProject` 与下面的 `onFailure` 分支共用），别在
+ * 调用方再抄一遍：2.0 文档诊断要按项目的**两面**（方言事实 + 落点规则）作答，作品会话
+ * 没有项目 ⇒ 两面取不到，这不是这份文件的错，也不是工具链坏了。
+ *
+ * 呈现口径（与"真失败"分档，红点只留给真错误）：
+ * - {@link KOJO2_NO_PROJECT_CAUSE}：抛出去的原因句（进 toast 的 `detail`，也是既有判据
+ *   `没有当前项目` 那条正则认的字面）；
+ * - {@link KOJO2_NO_PROJECT_NOTICE}：作者看得懂的那一句（toast 正文 + 面板条目正文）。
+ */
+const KOJO2_NO_PROJECT_CAUSE =
+  '没有当前项目：这一会话只有你的作品、没有游戏现场，2.0 实时诊断要按游戏的方言事实与落点规则两面作答。';
+const KOJO2_NO_PROJECT_NOTICE =
+  '这份文件暂时没有实时诊断：这一会话没有游戏现场（波浪线要按游戏的写法才判得出来）。在打开游戏目录的会话里编辑会自动恢复。';
+
+/**
+ * 「这一会话跑不了 2.0 文档诊断」的异常（KW-4F）：与**真失败**区分开的唯一判据。
+ *
+ * 只由 {@link createSlotKojo2Diagnose} 在没有当前项目时抛出；`onFailure` 据此把这一格
+ * 折成 `info`（面板条目 + 一句话，一次），而不是 `error`（红点 + 红 toast）。
+ * 铁律 4：能力缺席照样出声，只是不许冒充成"这份文件有错"。
+ */
+export class Kojo2SessionHasNoProject extends Error {
+  constructor(message: string = KOJO2_NO_PROJECT_CAUSE) {
+    super(message);
+    this.name = 'Kojo2SessionHasNoProject';
+  }
+}
 
 /** 问题面板 / marker 的来源标签（真源在包内；这里留一枚同值别名给既有消费方） */
 export const KOJO2_DIAGNOSTICS_SOURCE = KOJO2_DIAGNOSTIC_SOURCE;
@@ -314,6 +350,11 @@ export interface Kojo2SlotDiagnoseOptions {
 export function createSlotKojo2Diagnose(options: Kojo2SlotDiagnoseOptions): Kojo2SyncDiagnoseFn {
   return (input) => {
     const project = projectOfKernel(options.kernel);
+    // KW-4F：作品会话（没有游戏现场）连**问都不用问**——两面（方言事实 + 落点规则）
+    // 都按项目现取，项目缺席时答案恒为"跑不了"。先问槽只会拿到一枚更吓人的错
+    // （`供方没有注册`：项目级插件本来就不在无项目会话的装载名单里），把"这一格现在
+    // 不能诊断"误报成"工具链坏了"。判据与文案的家在 {@link Kojo2SessionHasNoProject}。
+    if (project === null) throw new Kojo2SessionHasNoProject();
     let contribution;
     try {
       contribution = options.kernel.slots
@@ -555,13 +596,27 @@ export function kojo2ProblemsOf(
   }));
 }
 
-/** 诊断链路失败时上账的那一条（可见、可点、码稳定；不是"这份文件干净"） */
-export function kojo2FailureProblem(filePath: string, message: string): EditorProblem {
+/**
+ * 诊断链路没跑通时上账的那一条（可见、可点、码稳定；不是"这份文件干净"）。
+ *
+ * KW-4F 起分两档（`severity` 只增一个入参，旧调用点逐字不变）：
+ * - `error`（缺省）= 工具链**真的**失败了（供方缺席 / 编译入口抛错 / 自报失败）；
+ * - `info` = 这一格现在**不能**诊断（作品会话没有游戏现场）——面板有字、状态栏亮 ℹ，
+ *   但不进 ✕、不给文件树红点：红点只留给真错误。
+ */
+export function kojo2FailureProblem(
+  filePath: string,
+  message: string,
+  severity: EditorProblem['severity'] = 'error',
+): EditorProblem {
   return {
     path: filePath,
     line: 1,
-    severity: 'error',
-    message: `Kojo 2.0 诊断链路失败：${message}（本文件旧波浪线已清空，修好前不会自动恢复）`,
+    severity,
+    message:
+      severity === 'info'
+        ? KOJO2_NO_PROJECT_NOTICE
+        : `实时诊断这次没跑成：${message}（本文件旧波浪线已清空，修好前不会自动恢复）`,
     code: KOJO2_DIAGNOSTICS_FAILURE_CODE,
     source: KOJO2_DIAGNOSTICS_SOURCE,
   };
@@ -688,6 +743,19 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
     options.onCompile?.(null);
   };
 
+  /**
+   * 同一条失败原因**只吵一次**（KW-4F）：一轮诊断失败会连着触发好几拍（装配即诊断 +
+   * 切 model + 落正文），真机实测进一次作品会话弹 3–5 条一模一样的红 toast。
+   * 判据 = (这份文件, 这句话)；面板条目照旧每轮整档替换（幂等、不翻倍），撤下的只有
+   * 重复的 toast——重复红字会把作者的注意力训练成"红字可以忽略"。
+   */
+  const warnedFailures = new Set<string>();
+  const notifyOnce = (key: string, notice: NoticeInput): void => {
+    if (warnedFailures.has(key)) return;
+    warnedFailures.add(key);
+    notify(notice);
+  };
+
   const sync = createKojo2ProblemSync({
     markerHost: options.markerHost,
     diagnose,
@@ -719,13 +787,20 @@ export function installKojo2ProblemWiring(options: Kojo2ProblemWiringOptions): (
       // 编译成品同一条真相：波浪线撤了，预览必须一起撤（否则作者看的是上一份字节）。
       forgetCompilation(filePath);
     },
-    onFailure: ({ filePath, message }) => {
+    onFailure: ({ filePath, message, cause }) => {
       // 旧波浪线已由第 2 层清掉；这里补"失败本身"的可见面（面板 + toast），
       // 不然"屏上什么都没了"会被读成"这份文件是干净的"。
-      writeProblems(filePath, [kojo2FailureProblem(filePath, message)]);
-      notify({
-        kind: 'error',
-        message: 'Kojo 2.0 诊断失败：这份文件暂时没有实时诊断（旧波浪线已清空）。',
+      // KW-4F 分档：作品会话没有游戏现场 = **能力缺席**（info，说人话，一次），
+      // 其它 = 工具链真失败（error，红点，同一条原因也只一次）。
+      const noSession = cause instanceof Kojo2SessionHasNoProject;
+      writeProblems(filePath, [
+        kojo2FailureProblem(filePath, message, noSession ? 'info' : 'error'),
+      ]);
+      notifyOnce(`${filePath}\u0000${noSession ? 'no-session' : message}`, {
+        kind: noSession ? 'info' : 'error',
+        message: noSession
+          ? KOJO2_NO_PROJECT_NOTICE
+          : 'Kojo 2.0 诊断失败：这份文件暂时没有实时诊断（旧波浪线已清空）。',
         detail: message,
       });
     },

@@ -9,7 +9,9 @@
  *    通知中心收一条 error（不是"这份文件干净"）；
  * 5. **dispose 幂等**：监听只撤一次，退场后事件不再触发诊断；
  * 6. **adapter/backend 装配**：角色号从 `charaIndex[].kojoDir` 最长前缀推；eraTW backend
- *    真跑一遍（有 charNo 能装配 `# 机`，没有则如实 fail-closed）。
+ *    真跑一遍（有 charNo 能装配 `# 机`，没有则如实 fail-closed）；
+ * 7. **KW-4F 分档**：作品会话（没有游戏现场）⇒ `info` 一档 + 人话 + 同一条原因只吵一次
+ *    （真失败仍 `error`；红点只留给真错误）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type * as Monaco from '../src/monaco/entry';
@@ -358,6 +360,115 @@ describe('失败可见：清 markers + 面板写失败条目 + error 通知', ()
     expect(notify).toHaveBeenCalledTimes(1);
     expect(notify.mock.calls[0]![0].kind).toBe('error');
     expect(String(notify.mock.calls[0]![0].detail)).toContain('编译入口炸了');
+    wiring.dispose();
+  });
+});
+
+/* ============================== KW-4F：作品会话（没有游戏现场）不是"失败" ============================== */
+
+/**
+ * 2026-11-03 KW-4F：作者**只是打开并编辑自己的一枚 `.kojo`**（作品会话，没有游戏现场），
+ * 旧口径把"这一格现在诊断不了"报成 `error` 级 toast（真机一次进会话弹 3–5 条同话），
+ * 并让状态栏 ✕ 与文件树红点亮起来——红点是"这份文件有错"，不是"没有诊断"。
+ * 本批把这一档折成 `info`（照样出声，不静默）并把同一条原因的重复 toast 收成一次。
+ */
+describe('KW-4F：无游戏现场 ⇒ info 一档 + 人话 + 同因只吵一次', () => {
+  /** 走**缺省诊断入口**（问槽）的接线：项目为 null 就是作品会话的真实形状 */
+  function slotWiring(
+    fake: FakeEditor,
+    path: string,
+    notify: (notice: { kind: 'info' | 'error'; message: string; detail?: string }) => void,
+    scheduler?: ManualScheduler,
+  ) {
+    const written: { path: string; items: readonly EditorProblem[] }[] = [];
+    const markerCalls: MarkerCall[] = [];
+    const dispose = installKojo2ProblemWiring({
+      editor: fake.editor,
+      kernel: kernelOf(null),
+      filePathRef: { current: path },
+      markerHost: {
+        editor: {
+          setModelMarkers: (model, owner, markers) => {
+            markerCalls.push({ model, owner, markers });
+          },
+        },
+      },
+      severitySource: SEVERITY_SOURCE,
+      notify: notify as unknown as (notice: {
+        kind: 'info' | 'error';
+        message: string;
+        detail?: string;
+      }) => void,
+      ...(scheduler ? { scheduler: scheduler.scheduler, debounceMs: 200 } : {}),
+      writeProblems: (p, items) => {
+        written.push({ path: p, items });
+      },
+    });
+    return { dispose, written, markerCalls };
+  }
+
+  it('作品会话打开 `.kojo` ⇒ 面板条目是 info（码不变）、toast 是 info 级且说的是人话', async () => {
+    stubFlag(true);
+    const model = fakeModel('C:/userData/workspaces/w-1/正文.kojo', '# 机 开场\n');
+    const fake = fakeEditor(model.model);
+    const notify = vi.fn();
+    const wiring = slotWiring(fake, model.path, notify);
+    await flushMicrotasks();
+
+    const last = wiring.written.at(-1)!;
+    expect(last.path).toBe(model.path);
+    expect(last.items).toHaveLength(1);
+    expect(last.items[0]!.code).toBe(KOJO2_DIAGNOSTICS_FAILURE_CODE);
+    // 红点=真错误：这一档不许进 ✕（状态栏与文件树都从 severity 派生，见 problem-store）
+    expect(last.items[0]!.severity).toBe('info');
+    expect(last.items[0]!.message).toContain('这一会话没有游戏现场');
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0].kind).toBe('info');
+    expect(String(notify.mock.calls[0]![0].message)).not.toContain('失败');
+    // 既有判据的字面（`没有当前项目`）仍在 detail 里：原因照实说，不藏
+    expect(String(notify.mock.calls[0]![0].detail)).toContain('没有当前项目');
+    wiring.dispose();
+  });
+
+  it('作品会话连跑三轮（装配 / 切 model / 敲键）⇒ toast 只有一条，面板条目整档替换不翻倍', async () => {
+    stubFlag(true);
+    const model = fakeModel('C:/userData/workspaces/w-1/正文.kojo', '# 机 开场\n');
+    const fake = fakeEditor(model.model);
+    const notify = vi.fn();
+    const clock = manualScheduler();
+    const wiring = slotWiring(fake, model.path, notify, clock);
+    await flushMicrotasks();
+    // 装配那一拍是立即跑（round 1）；敲键排 debounce，切 model 立即跑
+    expect(notify).toHaveBeenCalledTimes(1);
+    fake.fireContent();
+    expect(clock.pending()).toBe(1);
+    clock.runAll();
+    await flushMicrotasks();
+    fake.setModel(model.model);
+    await flushMicrotasks();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(wiring.written.length).toBeGreaterThanOrEqual(3); // 每一轮都上账（幂等整档替换）
+    for (const round of wiring.written) expect(round.items).toHaveLength(1);
+    wiring.dispose();
+  });
+
+  it('真失败（编译入口抛错）同样只吵一次，但保持 error 级与红点语义', async () => {
+    stubFlag(true);
+    const model = fakeModel('D:/p/a.kojo2', '# 幕\n');
+    const fake = fakeEditor(model.model);
+    const notify = vi.fn();
+    // 同一原因的重复轮次（装配一轮 + 再要一轮，抛出的是同一句话）⇒ toast 只有一条；
+    // 面板条目与 markers 每轮照旧上账/清空，撤下的只是重复的红字。
+    const same = vi.fn(() => {
+      throw new Error('编译器炸了');
+    }) as unknown as Kojo2DiagnoseFn;
+    const wiring = baseWiring(fake, { diagnose: same, path: model.path, notify });
+    await flushMicrotasks();
+    fake.setModel(model.model);
+    await flushMicrotasks();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0].kind).toBe('error');
+    expect(String(notify.mock.calls[0]![0].detail)).toContain('编译器炸了');
     wiring.dispose();
   });
 });
