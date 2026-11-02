@@ -12,6 +12,9 @@
  * KW-15C 1103：谓词判定改走 `judgePredicateWithLoops`——计数循环的循环量在使用点是
  * 体内第一条真代码行时，按抽取侧发布的闭区间逐值试算，**值域内全体一致才收**，
  * 不一致就换 `local-range` 继续报未知（其余点位逐字走改动前的 `judgeCondition`）。
+ * KW-15D 1103：放宽到体内任意行——窗口（循环头→使用点）每行都被证明写不到循环量
+ * 槽位才试算（白名单与三条判性见 `loop-range.ts` 文件头）；行文本经 `getLines`
+ * 同一份缓存供给，读不到 = 回落第一条行档。
  */
 
 import { splitEolLines } from '@kojo/plugin-api/eol';
@@ -94,12 +97,16 @@ type ControlPredicate = FunctionPredicate & { kind: 'IF' | 'ELSEIF' | 'SIF' | 'C
 
 /** 谓词明细 → 回放结果（纯函数；测试可直用）。
  *  `overlay`：本地量数据流 + 调用上下文叠加（v0.2 第六批；可省略 = 纯视图求值）。
- *  `resolveCall`：用户函数内联通道（v0.2 第七批；缺省 = 调用一律 unknown('call')）。 */
+ *  `resolveCall`：用户函数内联通道（v0.2 第七批；缺省 = 调用一律 unknown('call')）。
+ *  `loopBodyLines`（KW-15D 1103；additive）：函数体行文本——循环量窗口档
+ *  （使用点在体内更深行、且循环头到使用点每行都被证明写不到循环量）需要它；
+ *  缺省 = 只走 KW-15C 的第一条行档，旧行为逐字保留。 */
 export function replayPredicates(
   detail: FunctionPredicates,
   read: ValueReader,
   overlay?: OverlayReader,
   resolveCall?: CallResolver,
+  loopBodyLines?: readonly string[],
 ): FunctionReplay {
   // 只回放**控制流语句**的谓词（IF / ELSEIF / SIF / CASE）：本服务的产物是"分支链走向"，
   // 分支链由 `detail.statements` 建、谓词按行匹配成员。文本内联三元（`INLINE`，P0-1）
@@ -120,7 +127,7 @@ export function replayPredicates(
             : base(ref),
         ...(resolveCall ? { resolveCall } : {}),
       };
-      const outcome = judgePredicateWithLoops(p.expr, ctx, detail, at);
+      const outcome = judgePredicateWithLoops(p.expr, ctx, detail, at, loopBodyLines);
       return {
         kind: p.kind,
         text: p.text,
@@ -310,7 +317,17 @@ export class StateReplayEngine implements StateReplayService {
     await this.inline.preanalyze(detail);
     const resolveCall: CallResolver = (name, args, callerCtx) =>
       this.inline.resolveCall(name, args, callerCtx, 0);
-    const replay = replayPredicates(detail, read, overlay ?? undefined, resolveCall);
+    // 循环量窗口档（KW-15D）：有已发布循环才取行文本（同一 lineCache，命中即零 IPC）；
+    // 读盘失败照旧降级——拿不到行 = 只走第一条行档，绝不猜窗口干净。
+    let loopBodyLines: readonly string[] | undefined;
+    if (detail.loopCounters && detail.loopCounters.length > 0) {
+      try {
+        loopBodyLines = await this.getLines(detail.filePath);
+      } catch (err) {
+        this.deps.log.warn(`loop window lines unavailable for ${detail.filePath}: ${String(err)}`);
+      }
+    }
+    const replay = replayPredicates(detail, read, overlay ?? undefined, resolveCall, loopBodyLines);
     // 台词推演（v0.3 口上调试统一批；additive）：有显示行资料且行文本可得时才附——
     // 读文件失败等意外只降级（无 transcript），不影响谓词 / 分支结果。
     if (detail.displays && detail.displays.length > 0) {

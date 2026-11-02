@@ -6,7 +6,10 @@
  *
  * ```
  * FOR LOCAL,0,5
- *   IF PALAM:LOCAL + CUP:LOCAL > 9000   ← 使用点 = 体内第一条真代码行
+ *   IF PALAM:LOCAL + CUP:LOCAL > 9000   ← 体内第一条真代码行（KW-15C 档）
+ *     LOCAL:1 = 2
+ *     BREAK
+ *   ELSEIF PALAM:LOCAL + CUP:LOCAL >= 5000  ← 窗口干净的更深行（KW-15D 档）
  * ```
  *
  * 引擎事实（只用到这一条，且不需要断言 era 的 CALL / 残留值作用域）：`FOR` 把头值写进
@@ -14,6 +17,23 @@
  * 中间一条语句都没执行过，循环量必然是头值 ⇒ 取值落在抽取侧给的**闭区间**里
  * （区间是端点折出来的超近似：终值到底取不取、步进怎么走都不必断言，宽一点的区间
  * 只会让"全体一致"更难成立，不会让它假成立）。
+ *
+ * **KW-15D 1103 放宽（窗口档）**：使用点在体内更深行也收，前提是「循环头到使用点之间
+ * 的每一行都被证明写不到循环量槽位」。三条前提的判性（详见批次提交信息）：
+ * - 体内改写：抽取侧 `assignments` 只认字面数字下标的 `=` 族赋值，语料实存
+ *   `LOCAL:LCOUNT = ARG` 这类**动态下标写**与 SIF 内联赋值（都不进表）⇒ "查表无赋值"
+ *   不成立；改用**按行白名单**：窗口内只许 注释/空行/SKIP 区、无调用形的纯结构行
+ *   （IF/ELSEIF/ELSE/ENDIF/SELECTCASE/CASE/DEFAULT/ENDSELECT）、`BREAK`/`CONTINUE`、
+ *   异槽字面赋值（`LOCAL:1 = 2` 写不到 LOCAL:0）。白名单外（CALL/FOR/GOTO/PRINT/SIF/
+ *   同槽或动态下标写/未知动词）一律判脏——**宁少勿错**。
+ * - CALL 改写调用者槽位：引擎作用域事实**无出处**（本机无引擎文档）⇒ 不硬吃：
+ *   窗口含任何调用形态（行首 CALL 族、结构行里的 `名字(`）直接判脏，规则零依赖
+ *   "被调用体动不动得着调用者的 LOCAL"。
+ * - 迭代取值/步进/终值：窗口干净 ⇒ 第 k 次迭代使用点的值＝该次循环头写入的值，与
+ *   `firstBodyLine` 同迭代同值——值集与 KW-15C 已交付口径**逐字相同**，零新增断言，
+ *   闭区间超近似继续安全。
+ *
+ * 无行文本（`lines` 缺省，纯函数调用方/旧测试）⇒ 只走 KW-15C 的第一条行档，逐字旧行为。
  *
  * 三值口径（红线：值域有限 ≠ 判定得出）：
  * - 区间内**每个**候选值都把谓词判成同一个 true / false ⇒ 该谓词就是这个值
@@ -25,15 +45,16 @@
  *   因此继续按 `pseudo` 记账，不被本层改写、也不新增计数）。
  *
  * 抽取侧的收口条件（见契约 `FunctionLoopCounter`）决定了这里能信任什么：字面端点、
- * 区间 ≤ 64 格、体内无标签行、`FOR` 与 `NEXT` 配对完好。这里再叠一条使用点自身的
- * 约束：谓词所在行必须就是 `firstBodyLine`。
+ * 区间 ≤ 64 格、体内无标签行、`FOR` 与 `NEXT` 配对完好。
  */
 
 import type {
   ConditionExpr,
+  FunctionLoopCounter,
   FunctionPredicates,
   ReplayOutcome,
 } from '@kojo/plugin-api';
+import { erbCodeBodyOf } from '@kojo/plugin-api';
 import { judgeCondition, type EvalContext } from './evaluate';
 import { LOCAL_FAMILY_SLOTS, type OverlayPosition } from './locals';
 
@@ -49,22 +70,125 @@ interface LoopVar {
 /** 逐值试算的组合上限（多枚循环量同时生效时的笛卡尔积；超限即回落原路径） */
 const MAX_COMBOS = 32;
 
+// ---------------------------------------------------------------------------
+// 窗口白名单（KW-15D 1103）：证明「循环头 → 使用点」每行都写不到循环量槽位
+// ---------------------------------------------------------------------------
+
+/** 广义本地量写目标（含 SIF 内联形；动态下标捕获为 `dyn`） */
+const SLOT_WRITE_RE =
+  /^(?:SIF\s+\S.*?\s)?(LOCAL|LOCALS|RESULT|RESULTS)(?::(\d+|[A-Z_][A-Z0-9_]*(?::[A-Z_][A-Z0-9_]*)*))?\s*([+\-*/%]?=)(?!=)\s*\S/i;
+
+/** 纯结构行（只有判据、不执行任何写；判据里的调用形另行拦） */
+const PURE_STRUCT_RE = /^(IF|ELSEIF|ELSE|ENDIF|SELECTCASE|CASE|DEFAULT|ENDSELECT)\b/i;
+
+/** 只改控制流、不碰任何变量的流程行 */
+const FLOW_ONLY_RE = /^(BREAK|CONTINUE)\s*$/i;
+
+/** 引号外出现 `名字(` ＝ 表达式里可能有用户函数调用（作用域事实无出处 ⇒ 判脏） */
+const CALL_SHAPE_RE = /[A-Z_][A-Z0-9_]*\s*\(/i;
+
+function stripQuoted(s: string): string {
+  return s.replace(/"[^"]*"/g, '""');
+}
+
 /**
- * 使用点处的循环量候选：只有"使用点就是体内第一条真代码行"的点位才用得上
- * （为什么只信这一条，见文件头的引擎事实）。
+ * 单行窗口判据：这一行是否被证明写不到 `counter` 的槽位（true = 干净可越过）。
+ * 白名单外的任何行形态（CALL/FOR/NEXT/GOTO/PRINT/SIF 裸行/同槽写/动态下标写/
+ * 未知动词…）一律 false——判不准就脏，这是本档唯一允许的近似方向。
  */
-function loopVarsAt(detail: FunctionPredicates, at: OverlayPosition, expr: ConditionExpr): LoopVar[] {
+function windowLineIsClean(raw: string, counter: FunctionLoopCounterLike, inSkip: { v: boolean }): boolean {
+  const body = erbCodeBodyOf(raw.trim());
+  // SKIP 区（引擎不执行）：区内整段算干净；判据与抽取侧 codeAt 同源
+  if (inSkip.v) {
+    if (body === '[SKIPEND]') inSkip.v = false;
+    return true;
+  }
+  if (body === '[SKIPSTART]') {
+    inSkip.v = true;
+    return true;
+  }
+  // 注释 / 空行 / `@` `#` 非体行（`$` 标签行抽取侧已整条不发布，进不了这里）
+  if (body.length === 0 || body.startsWith(';') || body.startsWith('@') || body.startsWith('#')) return true;
+  const m = SLOT_WRITE_RE.exec(body);
+  if (m) {
+    const name = m[1]!.toUpperCase();
+    const idxRaw = m[2];
+    if (idxRaw === undefined) return counter.name === name && counter.index === 0 ? false : true; // 裸槽写：命中本槽位即脏
+    if (/^\d+$/.test(idxRaw)) {
+      const idx = Number(idxRaw);
+      return counter.name === name && counter.index === idx ? false : true; // 异槽字面写：碰不到本槽位
+    }
+    return false; // 动态下标写（`LOCAL:LCOUNT = ARG`）：落点未知，任何槽位都可能中招
+  }
+  if (FLOW_ONLY_RE.test(body)) return true;
+  if (PURE_STRUCT_RE.test(body)) return !CALL_SHAPE_RE.test(stripQuoted(body)); // 判据带调用形 ⇒ 脏（前提②不硬吃）
+  return false;
+}
+
+/** `windowLineIsClean` 只消费循环量的槽位身份（放宽签名，方便单测直接喂表） */
+interface FunctionLoopCounterLike {
+  name: string;
+  index: number;
+}
+
+/** 窗口 (openLine, useLine) 全干净？（行数组 0 基、行号 1 基） */
+export function loopWindowIsClean(
+  lines: readonly string[],
+  openLine: number,
+  useLine: number,
+  counter: FunctionLoopCounterLike,
+): boolean {
+  const inSkip = { v: false };
+  for (let ln = openLine + 1; ln < useLine; ln++) {
+    if (!windowLineIsClean(lines[ln - 1] ?? '', counter, inSkip)) return false;
+  }
+  return true;
+}
+
+/** 放宽筛选的循环量档位：`'head'` = KW-15C 第一条行档；`'window'` = KW-15D 窗口档 */
+type CounterTier = { counter: FunctionLoopCounter; tier: 'head' | 'window' };
+
+/**
+ * 使用点处命中的循环量（两档）：第一条行档不需要行文本；窗口档仅在 `lines` 提供时启用。
+ */
+function pickCounters(
+  detail: FunctionPredicates,
+  at: OverlayPosition,
+  lines: readonly string[] | undefined,
+): CounterTier[] {
   const counters = detail.loopCounters;
   if (!counters || counters.length === 0) return [];
-  const candidates = counters.filter((c) => c.firstBodyLine === at.line);
+  const out: CounterTier[] = [];
+  for (const c of counters) {
+    if (at.line <= c.openLine || at.line >= c.closeLine) continue;
+    if (!LOCAL_FAMILY_SLOTS.has(c.name)) continue;
+    if (c.firstBodyLine === at.line) {
+      out.push({ counter: c, tier: 'head' }); // 刚写完，中间零条语句——旧档原样
+      continue;
+    }
+    // 窗口档（KW-15D）：放宽到体内任意行，代价=每行都被证明写不到该槽位（文件头判性）
+    if (!lines) continue;
+    if (loopWindowIsClean(lines, c.openLine, at.line, c)) out.push({ counter: c, tier: 'window' });
+  }
+  return out;
+}
+
+/**
+ * 使用点处的循环量候选。
+ */
+function loopVarsAt(
+  detail: FunctionPredicates,
+  at: OverlayPosition,
+  expr: ConditionExpr,
+  lines: readonly string[] | undefined,
+): LoopVar[] {
+  const candidates = pickCounters(detail, at, lines);
   if (candidates.length === 0) return [];
   // 引用筛一次算好（体内逐条谓词都会问一遍，别把 AST 走两趟）
   const used = referencedSlots(expr);
   if (used.size === 0) return [];
   const picked = new Map<string, LoopVar>();
-  for (const c of candidates) {
-    if (at.line <= c.openLine || at.line >= c.closeLine) continue;
-    if (!LOCAL_FAMILY_SLOTS.has(c.name)) continue;
+  for (const { counter: c } of candidates) {
     const key = slotKey(c.name, c.index);
     if (!used.has(key)) continue;
     const values: number[] = [];
@@ -74,6 +198,7 @@ function loopVarsAt(detail: FunctionPredicates, at: OverlayPosition, expr: Condi
     const prev = picked.get(key);
     if (prev) {
       // 同槽位被多层循环同时绑定（嵌套 FOR 用同一个循环量）：并集才是 sound 的超近似
+      // （窗口档下外层必被内层 `FOR` 行判脏，进不了并集；这里只可能并上真干净的多档）
       for (const v of values) if (!prev.values.includes(v)) prev.values.push(v);
       prev.values.sort((a, b) => a - b);
     } else {
@@ -195,8 +320,10 @@ export function judgePredicateWithLoops(
   ctx: EvalContext,
   detail: FunctionPredicates,
   at: OverlayPosition,
+  /** 函数体行文本（1 基行号入参、0 基取用；缺省 = 只走第一条行档，旧行为逐字保留） */
+  lines?: readonly string[],
 ): ReplayOutcome {
-  const vars = loopVarsAt(detail, at, expr);
+  const vars = loopVarsAt(detail, at, expr, lines);
   if (vars.length === 0) return judgeCondition(expr, ctx);
   let combos: Array<ReadonlyMap<string, number>> = [new Map()];
   for (const v of vars) {
