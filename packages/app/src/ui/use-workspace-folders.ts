@@ -25,10 +25,15 @@ function signatureOf(dirs: readonly string[]): string {
 }
 
 /**
- * 当前项目的工作区根模型（项目为空 ⇒ 空数组）。
+ * 当前会话的工作区根模型（**没有游戏项目也交根**：作品目录 + 会话附加根）。
  *
  * 作品目录变化只在**既有时刻**现读：挂载、`file.changed`（新建 / 导入作品落盘）、
  * `project.opened`（换项目后内核那份注册表可能变了）。
+ *
+ * KW4C 解闸（2026-11-02）：这里原本先按 `project` 归零再建表，于是"只有口上作品"的会话
+ * 在树 / Ctrl+P / 检索 / 诊断四条腿上一起变空。判据住 `workspace-folders.ts`，
+ * 本层只留变化信号；两态（有游戏 / 无游戏）各一组判据见
+ * `workspace-folders-project-coupling.test.ts`。
  */
 export function useWorkspaceFolders(
   kernel: Pick<Kernel, 'workspaces' | 'bus'> | null,
@@ -47,7 +52,14 @@ export function useWorkspaceFolders(
       setAuthorDirs((prev) => (signatureOf(prev) === signatureOf(next) ? prev : next));
     };
     read();
-    const uns = [kernel.bus.on('file.changed', read), kernel.bus.on('project.opened', read)];
+    const uns = [
+      kernel.bus.on('file.changed', read),
+      kernel.bus.on('project.opened', read),
+      // 作品会话没有 `project.opened` 可等：内核那份作品注册表是**扫盘**出来的
+      // （`workspaces.list()` 填 `dirById`，`projectDirs()` 才认得自选根里的作品），
+      // 落盘信号与"清单变了"信号都算这一拍的现读时机（缺它就只有默认根进得了表）。
+      kernel.bus.on('workspace.projectCreated', read),
+    ];
     return () => {
       for (const un of uns) un();
     };
@@ -55,15 +67,13 @@ export function useWorkspaceFolders(
 
   return useMemo(
     () =>
-      project === null
-        ? []
-        : buildWorkspaceFolders({
-            projectRoot: project.rootDir,
-            kojoPaths: project.kojoPaths,
-            savDir: project.savDir,
-            authorDirs,
-            extraRoots: extraRoots ?? [],
-          }),
+      buildWorkspaceFolders({
+        projectRoot: project?.rootDir,
+        kojoPaths: project?.kojoPaths,
+        savDir: project?.savDir,
+        authorDirs,
+        extraRoots: extraRoots ?? [],
+      }),
     [project, authorDirs, extraRoots],
   );
 }

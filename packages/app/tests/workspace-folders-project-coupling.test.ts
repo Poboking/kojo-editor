@@ -1,13 +1,13 @@
 /**
- * 「口上工作区是二等公民」的**改前照片**（KW4A 取证批，2026-11-02）。
+ * 工作区根模型的**两态判据**（KW4A 立改前照片 · KW4C 解闸同日翻新，2026-11-02）。
  *
- * 本文件不钉愿望，只钉今日形状：作者要碰自己的作品，必须先打开一个游戏目录。
- * 这张耦合此前只散在读得到的代码里，没有任何一枚测试把它写成事实——所以解闸批
- * 一旦动到根模型，谁都不知道哪些腿会跟着变。这里逐条留影，供后续重构对照。
+ * ① 那一组已在 KW4C 解闸批翻成**正面照**（没有游戏项目也交根，判据只有一份，分支收在
+ *    会话侧）；②③④ 里仍留着**尚未搬走的闸**——每一格都写清是哪一批改的、下一批动哪一行，
+ *    不许静默删。
  *
- * 四组判据：
- * ① **模型层的硬闸**：`workspaceFoldersOf(kernel, null)` / `useWorkspaceFolders` 在
- *    `project === null` 时直接交空表，哪怕内核里明明有作品目录、会话里有附加根；
+ * 五组判据：
+ * ① **会话两态**（有游戏现场 / 只有口上作品）：模型层与 React 接线在两态各交什么、
+ *    监视腿的闸现在认的是**会话**（`sessionRoot`）而不是 `project`；
  * ② **纯判据层的真实形态**：`buildWorkspaceFolders` 对"没有游戏根"本来就答得出来
  *    （缺省 = 交空串，逐字相同）——KW4A 只把类型从必填放宽为可选，判据没动；
  * ③ **五条消费者逐条取根快照**（监视 / 树 / Ctrl+P / 检索 / 整项目诊断）＋各腿自己那道
@@ -27,9 +27,11 @@ import type { GameProject } from '@kojo/plugin-api';
 import {
   browsableRootsOf,
   buildWorkspaceFolders,
+  gameRootOf,
   quickOpenRootsOf,
   scanRootsOf,
   searchRootsOf,
+  sessionDisplayRootOf,
   watchRootsOf,
   workspaceFoldersOf,
   type WorkspaceFolder,
@@ -75,29 +77,68 @@ const project = {
 const shot = (folders: readonly WorkspaceFolder[]): string[] =>
   folders.map((f) => `${f.role}:${f.label}@${f.path}`);
 
-describe('① 模型层的硬闸：没有游戏项目 ⇒ 根集合一张也不交', () => {
-  it('workspaceFoldersOf：project=null 时先于任何判据返回空表（作品目录 / 附加根都拿不到）', () => {
-    // 这一格是"二等公民"的第一现场：内核明明交得出作品目录，模型却答"没有根"
-    expect(workspaceFoldersOf(kernelWith(() => [WORK_ROOT]), null, [EXTRA])).toEqual([]);
-    // 对照：同一份输入加上游戏项目，作者根与附加根立刻进表 ⇒ 少的不是判据，是会话
-    const withP = workspaceFoldersOf(kernelWith(() => [WORK_ROOT]), project, [EXTRA]);
-    expect(withP.some((f) => f.role === 'author')).toBe(true);
-    expect(withP.some((f) => f.role === 'extra')).toBe(true);
+describe('① 会话两态：有没有游戏现场，根表都按同一条判据交根', () => {
+  it('有游戏现场（态 A）：五类根齐全，游戏侧三格 + 作者侧两格一张表', () => {
+    const folders = workspaceFoldersOf(kernelWith(() => [WORK_ROOT]), project, [EXTRA]);
+    expect(shot(folders)).toEqual([
+      'game:项目根@C:/Game',
+      'game:口上域@C:/Game/ERB',
+      `author:workspaces@${WORK_ROOT}`,
+      `extra:参考口上@${EXTRA}`,
+    ]);
+    // 项目根那一格自带身份 ⇒ 消费方要"游戏现场在哪"时问表，不抄 project.rootDir
+    expect(folders.filter((f) => f.isProjectRoot).map((f) => f.path)).toEqual([GAME_ROOT]);
+    expect(gameRootOf(folders)).toBe(GAME_ROOT);
   });
 
-  it('接线闸门的位置就在 workspace-folders.ts 自己身上（解闸批的第一处要动的行）', () => {
-    expect(read('ui/workspace-folders.ts')).toContain('if (project === null) return [];');
-    // React 侧同一道闸（消费方是树 / Ctrl+P / 检索 / 诊断，见 ProjectView）
+  it('只有作品（态 B）：作品目录 + 附加根照进表 —— 解闸前这一格是 toEqual([])', () => {
+    const folders = workspaceFoldersOf(kernelWith(() => [WORK_ROOT]), null, [EXTRA]);
+    expect(shot(folders)).toEqual([`author:workspaces@${WORK_ROOT}`, `extra:参考口上@${EXTRA}`]);
+    // 两态**同一判据**：态 B 只是少了游戏侧那三格输入，不是走了另一条分支
+    expect(folders.every((f) => f.browsable && f.quickOpen && f.search && f.watch)).toBe(true);
+    expect(folders.map((f) => f.writable)).toEqual([true, false]);
+    expect(gameRootOf(folders)).toBeNull();
+    // 单根显示位仍在表里找得出来（会话根 = 那一枚作品所在的根），不另拼一份根
+    expect(sessionDisplayRootOf(folders)).toBe(WORK_ROOT);
+  });
+
+  it('两态都不发生第二份根：五条腿在两态各取各的，全部出自同一张表', () => {
+    const both = workspaceFoldersOf(kernelWith(() => [WORK_ROOT]), project, [EXTRA]);
+    const authorOnly = workspaceFoldersOf(kernelWith(() => [WORK_ROOT]), null, [EXTRA]);
+    for (const folders of [both, authorOnly]) {
+      for (const roots of [
+        watchRootsOf(folders),
+        browsableRootsOf(folders),
+        quickOpenRootsOf(folders),
+        searchRootsOf(folders),
+        scanRootsOf(folders),
+      ]) {
+        // 每一条腿交出的每一枚根，都必须能在表里找到同一写法（没有哪条腿自己补一个根）
+        expect(roots.every((r) => folders.some((f) => f.path === r))).toBe(true);
+      }
+    }
+    // 态 B 的取根快照（"静默为空"那两条腿自此有根可走）
+    expect(quickOpenRootsOf(authorOnly)).toEqual([WORK_ROOT, EXTRA]);
+    expect(searchRootsOf(authorOnly)).toEqual([WORK_ROOT, EXTRA]);
+  });
+
+  it('闸门已从 workspace-folders.ts / use-workspace-folders.ts 撤走（正面照，2026-11-02 KW4C）', () => {
+    const model = read('ui/workspace-folders.ts');
+    expect(model).not.toContain('if (project === null) return [];');
     const hook = read('ui/use-workspace-folders.ts');
-    expect(hook).toContain('project === null');
-    expect(hook).toContain('projectRoot: project.rootDir,');
+    expect(hook).not.toContain('project === null');
+    // 接线层吃的是 `project?.rootDir` —— 两态同一行代码，没有 if/else 两份拼根
+    expect(hook).toContain('projectRoot: project?.rootDir,');
+    expect(hook).toContain('kernel.bus.on(\'workspace.projectCreated\', read)');
   });
 
-  it('根模型挂在项目会话上：use-project-session 是唯一给监视腿喂根的地方', () => {
+  it('监视腿的闸改认「会话」：作品会话也挂 watcher，欢迎页仍然一个也不挂', () => {
     const session = read('ui/use-project-session.ts');
     expect(session).toContain('const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots);');
-    expect(session).toContain('if (!kernel || !project) return;');
+    expect(session).toContain('if (!kernel || sessionRoot === null) return;');
     expect(session).toContain('void kernel.fileWatch.start(watchRootsOf(workspaceFolders));');
+    // 落盘键同源：会话记录按 `sessionRoot` 记，不再各自问 `project`
+    expect(session).toContain('root: sessionRoot,');
   });
 });
 
@@ -180,7 +221,7 @@ describe('③ 五条消费者逐条取根（快照式）', () => {
     expect(read('ui/kojo-source-scan.ts')).toContain('const roots = searchRootsOf(workspaceFoldersOf(kernel, project));');
   });
 
-  it('无模型时五条腿交出的根一律为空 ⇒ "没有游戏项目 = 没有工作区根"是今日事实', () => {
+  it('根表为空（= 不在任何会话里）⇒ 五条腿一律空；有会话就有根（两态见 ①）', () => {
     expect([
       watchRootsOf(noModel),
       browsableRootsOf(noModel),

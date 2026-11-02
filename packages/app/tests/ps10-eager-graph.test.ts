@@ -1283,10 +1283,32 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · 本批主体是 CSS：`tokens.css` 新立 `--alert-*` 九枚与全部消费规则**不在开机图**
     //       （`.css` 不进 JS 依赖图），所以这一档只涨 710 B。
     //     ⇒ KB 闸 **3,547 → 3,548**（余量 0 B 口径不变）；文件闸 201 不动。
+    //   - **口上作品解闸批 · 段 ①（KW4C，2026-11-02）**：读数 **201 文件 / 3,563 KB**
+    //     （3,648,055 B = 上一条 3,633,964 + **14,091**）——**零新进图文件**，图内五枚逐枚实测
+    //     （`wc -c` 现树 vs `git cat-file -s aec8b789:…`；五枚差值求和 **14,091 B 与总差逐字节相等**）：
+    //     · `app/src/ui/use-project-session.ts` **+8,259**（会话形态主体：`WorkspaceSession`
+    //       与 `openWorkspaceSession`（不进图没法用，作品会话的入口腿就长在这里）+ 监视腿的闸
+    //       从 `project` 换成 `sessionRoot` + 落盘键同源）；
+    //     · `app/src/ui/workspace-folders.ts` **+2,207**（`workspaceFoldersOf` 撤 `project` 闸 +
+    //       `isProjectRoot` 那一格与 `gameRootOf` / `sessionDisplayRootOf` 两枚取根入口）；
+    //     · `app/src/ui/session-store.ts` **+1,653**（`lastKind` 一格：`SessionRootKind` /
+    //       `sessionLastKindOf` / sanitize 与 upsert 各一行——「继续上次会话」要认得回的是作品）；
+    //     · `app/src/ui/App.tsx` **+1,245**（`workspaceSession` 状态与 `sessionRoot` 派生、
+    //       注入 host、`useSessionFlush` 换键）；
+    //     · `app/src/ui/use-workspace-folders.ts` **+727**（同一道闸的 React 侧 + 作品新建信号）。
+    //     · 本批余下两段（树与四条腿 / 欢迎页入口）还会继续涨图，归因各自单列。
+    //   - **本车道起点的既有超账（不是本批造成的，一并核清）**：`aec8b789` 起读数已是
+    //     **3,549 KB / 3,633,964 B**，比上一条记录的 3,632,870 B 多 **1,094 B**，来自同期落在
+    //     图内的三枚：`app/src/bridge/search.ts` **+528**、`app/src/ui/workspace-folders.ts`
+    //     **+192**（KW4A 放宽类型那两行）、`plugins/eratw-adapter/src/plugin.ts` **+374**。
+    //     实测法＝把那三枚 + `monaco/slot-service-providers.ts` / `ui/SearchFilterBar.tsx` 一起
+    //     `git checkout 4c215073 --` 回退跑一遍（3,633,244 B），再逐枚读回定位：前两枚在图内，
+    //     后两枚不在图内（`slot-service-providers.ts` +206 / `SearchFilterBar.tsx` +31 不改读数）。
+    //     ⇒ KB 闸 **3,548 → 3,563**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,548 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,563 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_548);
+    expect(totalKb).toBeLessThanOrEqual(3_563);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 

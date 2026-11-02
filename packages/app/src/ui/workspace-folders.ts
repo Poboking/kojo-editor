@@ -42,6 +42,15 @@ export interface WorkspaceFolder {
   readonly role: WorkspaceFolderRole;
   /** 人话标签：项目根 / 口上域 / 存档 / 作品目录末段 / 附加文件夹末段 */
   readonly label: string;
+  /**
+   * 这一格是不是**游戏项目根本身**（`input.projectRoot` 那一次 push 才有，口上域 / 存档
+   * 同 role 但不是它）。
+   *
+   * 为什么单独立一格而不是让消费方去比 `project.rootDir`：KW4C 解闸后消费方拿到的是
+   * `GameProject | null`，"这一会话有没有游戏现场"必须**只从这张表问得出来**——
+   * 否则每一条腿都会自己抄一份 `project?.rootDir`（那正是本模块要消灭的第二份根）。
+   */
+  readonly isProjectRoot: boolean;
   /** 作者可写区（只有 `author` 为真；写闸仍在内核，这里只是"这一格是不是你的作品"） */
   readonly writable: boolean;
   /** 文件树（含文件系统视图）可以浏览 */
@@ -57,8 +66,9 @@ export interface WorkspaceFolder {
 /** `buildWorkspaceFolders` 的输入：五类根各自的原样来源（缺省 = 这一类没有根） */
 export interface WorkspaceFolderInput {
   /**
-   * 游戏根（`project.rootDir`）；**可选**（KW4A 批 2026-11-02 由必填放宽：空串本就与缺省同形，
-   * 两态判据见 `workspace-folders-project-coupling.test.ts`；真闸在调用方那侧）。
+   * 游戏根（`project.rootDir`）；**可选**（KW4A 2026-11-02 放宽类型、KW4C 同日解闸：
+   * 缺省与交空串在模型层逐字同形，`push` 的空根丢弃早已容下缺省。两态判据见
+   * `workspace-folders-project-coupling.test.ts`）。
    */
   readonly projectRoot?: string;
   /** 口上域（`project.kojoPaths`） */
@@ -122,9 +132,10 @@ function folderOf(
   path: string,
   role: WorkspaceFolderRole,
   label: string,
-  caps: Omit<WorkspaceFolder, 'path' | 'role' | 'label'>,
+  caps: Omit<WorkspaceFolder, 'path' | 'role' | 'label' | 'isProjectRoot'>,
+  isProjectRoot: boolean,
 ): WorkspaceFolder {
-  return { path, role, label, ...caps };
+  return { path, role, label, isProjectRoot, ...caps };
 }
 
 /**
@@ -132,14 +143,23 @@ function folderOf(
  *
  * 顺序稳定：游戏根 → 口上域 → 存档 → 作品目录 → 附加根（与"外层在前"一致，
  * 消费者拿到的根序不会因输入里根的位置抖动）。
+ *
+ * **没有游戏根也答得出根**（KW4C 解闸，2026-11-02）：作者只有作品会话时，这张表交出的
+ * 就是作品目录 + 附加根；"先打开游戏目录才有工作区"那条耦合到此为止。
  */
 export function buildWorkspaceFolders(input: WorkspaceFolderInput): WorkspaceFolder[] {
   const candidates: WorkspaceFolder[] = [];
-  const push = (path: unknown, role: WorkspaceFolderRole, label: string, caps: Omit<WorkspaceFolder, 'path' | 'role' | 'label'>): void => {
+  const push = (
+    path: unknown,
+    role: WorkspaceFolderRole,
+    label: string,
+    caps: Omit<WorkspaceFolder, 'path' | 'role' | 'label' | 'isProjectRoot'>,
+    isProjectRoot = false,
+  ): void => {
     if (typeof path !== 'string' || path.length === 0) return; // 空根 = 没有这个根，不许把遍历带成"根为空"
-    candidates.push(folderOf(path, role, label, caps));
+    candidates.push(folderOf(path, role, label, caps, isProjectRoot));
   };
-  push(input.projectRoot, 'game', '项目根', GAME_ROOT_CAPS);
+  push(input.projectRoot, 'game', '项目根', GAME_ROOT_CAPS, true);
   for (const root of input.kojoPaths ?? []) push(root, 'game', '口上域', KOJO_CAPS);
   push(input.savDir, 'game', '存档', SAV_CAPS);
   for (const dir of input.authorDirs ?? []) push(dir, 'author', lastSegment(dir) || '作品目录', AUTHOR_CAPS);
@@ -192,6 +212,26 @@ export function searchRootsOf(folders: readonly WorkspaceFolder[]): string[] {
 }
 
 /**
+ * 表里那枚**游戏项目根**（没有游戏现场 ⇒ null）。
+ *
+ * 单根显示位（标签条的相对路径、差异视图的基准根、面包屑的第一格）读这一枚，
+ * 不再自己去抄 `project.rootDir`——那是"第二份根"的第三种写法。
+ */
+export function gameRootOf(folders: readonly WorkspaceFolder[]): string | null {
+  return folders.find((f) => f.isProjectRoot)?.path ?? null;
+}
+
+/**
+ * 单根显示位的**会话根**：有游戏根用游戏根，只有作品会话用那枚作品/附加根。
+ *
+ * 与 `gameRootOf` 同出一张表 ⇒ 两种会话形态下这一格都只可能有一份真相；
+ * 一张表也没有（欢迎页 / 内核读不动）⇒ null，由调用方按"没有现场"如实说话。
+ */
+export function sessionDisplayRootOf(folders: readonly WorkspaceFolder[]): string | null {
+  return gameRootOf(folders) ?? folders.find((f) => f.browsable)?.path ?? null;
+}
+
+/**
  * 整项目诊断 / 索引的扫描根 = 口上域 + 作品目录 + 附加根。
  *
  * 与 `quickOpenRootsOf` 同一集合不是巧合：**能按名找得到的地方，就是整项目诊断要扫的地方**
@@ -217,17 +257,20 @@ export function folderOfPath(folders: readonly WorkspaceFolder[], path: string):
  *
  * 非 React 的消费者（整项目扫描、糖源枚举）直接调它；React 侧走
  * `use-workspace-folders.ts`（同一份判据 + 一个变化信号）。
+ *
+ * **`project` 为 null 不再交空表**（KW4C 解闸，2026-11-02）：游戏侧那三格（项目根 /
+ * 口上域 / 存档）缺席时，模型照样交出作品目录 + 会话附加根——"作者要碰自己的作品
+ * 必须先打开一个游戏目录"这条 S 级耦合到此为止。判据没动，动的只是这道 `project` 闸。
  */
 export function workspaceFoldersOf(
   kernel: Pick<Kernel, 'workspaces'>,
   project: GameProject | null,
   extraRoots?: readonly string[],
 ): WorkspaceFolder[] {
-  if (project === null) return [];
   return buildWorkspaceFolders({
-    projectRoot: project.rootDir,
-    kojoPaths: project.kojoPaths,
-    savDir: project.savDir,
+    projectRoot: project?.rootDir,
+    kojoPaths: project?.kojoPaths,
+    savDir: project?.savDir,
     authorDirs: workspaceProjectDirsOf(kernel),
     extraRoots,
   });
