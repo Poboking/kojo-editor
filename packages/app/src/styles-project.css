@@ -2668,6 +2668,67 @@ button.erb-mode-hint.unlocked:hover {
   flex: 1;
   min-width: 160px;
 }
+/* 作用域下拉 + 白话路标（「要改谁选谁的名字」那句） */
+.inj-scope-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.inj-scope-wrap .inj-select {
+  width: 100%;
+}
+/* 变量搜索框（键名 + 中文标签都可搜） */
+.inj-var-filter {
+  width: 100%;
+}
+/* 「常用」卡（GameAdapter.quickEditFields 投影）：新手第一眼的高频状态直改区——
+   人话标签 + 当前值 + 一个输入框，族头 / 下标 / 作用域的换算全在面板里 */
+.inj-quick {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2);
+}
+.inj-quick-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-weight: 600;
+  font-size: var(--fs-0);
+}
+.inj-quick-note {
+  font-weight: 400;
+}
+.inj-quick-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.inj-quick-label {
+  flex: none;
+  min-width: 76px;
+  font-size: var(--fs-0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inj-quick-current {
+  flex: none;
+  min-width: 48px;
+  text-align: right;
+  font-family: var(--font-mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.inj-quick-input {
+  flex: 1;
+  min-width: 60px;
+}
 .inj-empty,
 .inj-hint,
 .inj-more {

@@ -15,6 +15,7 @@ import type {
   ArchiveCharacterBlock,
   ArchiveOverrides,
   ArchiveVariable,
+  QuickEditField,
   RenderWindow,
   SnapshotArchive,
   SnapshotInjectionResult,
@@ -237,6 +238,135 @@ export function scopeOptions(archive: SnapshotArchive): ScopeOption[] {
 }
 
 // ---------------------------------------------------------------------------
+// 变量目录过滤（中文名可搜）
+// ---------------------------------------------------------------------------
+
+/**
+ * 变量目录过滤：变量名（`CFLAG`）**与中文标签**（「角色标志」）都参与匹配。
+ *
+ * 为什么必须带标签：旧过滤只对 `key` 做子串匹配——零基础作者搜「好感」，搜的是
+ * 适配器词典里的中文名（`CFLAG:2 好感度`），可 `CFLAG` 这个键名里根本没有这个词，
+ * 搜出来永远是空。本函数大小写不敏感；needle 为空白 ⇒ 原样返回**同一引用**（不触发重渲）。
+ */
+export function filterVarRows(
+  rows: readonly VarRow[],
+  rawNeedle: string,
+  schema: VariableSchema | undefined,
+): readonly VarRow[] {
+  const needle = rawNeedle.trim().toLowerCase();
+  if (needle.length === 0) return rows;
+  return rows.filter((r) => {
+    if (r.key.toLowerCase().includes(needle)) return true;
+    const label = varLabel(schema, r.key);
+    return label !== null && label.toLowerCase().includes(needle);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 「常用状态」快捷编辑（GameAdapter.quickEditFields 的投影；零 React 可单测）
+// ---------------------------------------------------------------------------
+
+/** 「常用」卡的一行：策展项 + 当下这份存档里的当前值 */
+export interface QuickEditRow {
+  /** 策展项原样（提交 PendingEdit 时按它换算族 / 下标 / 作用域） */
+  readonly field: QuickEditField;
+  /** 显示名：词典命中（variableSchema.lookup(family, index).description）优先，否则策展 label */
+  readonly label: string;
+  /** 当前值（数组缺格按 0 计——int 数组空槽的引擎语义就是 0） */
+  readonly current: number | string;
+  /** 值域是否整数（输入校验与提示文案的判据；来自该变量的元素类型） */
+  readonly intLike: boolean;
+  /** 落点形态：标量整体替换 / 数组单元补丁（提交 PendingEdit 时用） */
+  readonly target: 'scalar' | 'cell';
+}
+
+/**
+ * 把策展项解析成「常用」卡的行（纯函数；面板按当前作用域调）。
+ *
+ * 取舍口径：
+ * - **作用域路由**：`scope: 'chara'` 的项只在角色块作用域出现，`'global'` 的只在
+ *   主 / 全局变量区出现——钱不在角色身上，好感不在全局区里；
+ * - **族不在档内 ⇒ 整行隐藏**：策展项对应的变量族在这份存档里压根没有（别的游戏
+ *   的档 / 精简魔改盘）时，显示一个永远写不进去的输入框是纯误导；
+ * - **cells 截断 ⇒ 隐藏**：截断数组的补丁会被引擎拒绝（既有口径），卡上留一行
+ *   「改了也白改」更糟；
+ * - **缺格 = 0**：int 数组里没出现的单元语义就是 0，显示 0 而不是「未知」；
+ * - map / datatable 等不可注入形态 ⇒ 隐藏（与目录行 `kind: 'other'` 同判）。
+ */
+export function quickEditRows(
+  fields: readonly QuickEditField[],
+  archive: SnapshotArchive,
+  scope: ScopeKind,
+  schema: VariableSchema | undefined,
+): QuickEditRow[] {
+  const vars = new Map(listVars(archive, scope).map((r) => [r.key, r]));
+  // 作用域路由：角色项只进角色块、全局项只进主变量区；EM 扩展区没有策展项（写进
+  // emVars 的「金钱」不是金钱——宁可不显示这张卡，也不给一个写错地方的输入框）。
+  const wantScope = scope.kind === 'char' ? 'chara' : scope.kind === 'top' ? 'global' : null;
+  if (wantScope === null) return [];
+  const out: QuickEditRow[] = [];
+  for (const field of fields) {
+    if ((field.scope ?? 'chara') !== wantScope) continue;
+    const row = vars.get(field.family);
+    if (row === undefined) continue; // 族不在档内：隐藏，不猜
+    let current: number | string;
+    let intLike: boolean;
+    if (row.kind === 'array') {
+      if (row.cellsTruncated) continue; // 截断数组不可注入（既有口径）：隐藏
+      intLike = row.type.startsWith('int-array');
+      const cell = (row.cells ?? []).find((c) => c.index.length === 1 && c.index[0] === field.index);
+      if (cell !== undefined) current = cell.value;
+      else current = intLike ? 0 : ''; // int 数组缺格语义 = 0；str 数组缺格 = 空串
+    } else if (row.kind === 'scalar') {
+      intLike = row.type === 'int';
+      current = row.scalarValue ?? (intLike ? 0 : '');
+    } else {
+      continue; // map / datatable 不可注入
+    }
+    const dictLabel = cellLabel(schema, field.family, [field.index]);
+    out.push({
+      field,
+      label: dictLabel ?? field.label,
+      current,
+      intLike,
+      target: row.kind === 'scalar' ? 'scalar' : 'cell',
+    });
+  }
+  return out;
+}
+
+/**
+ * 「常用」卡提交：草稿解析（int 校验同标量口径）→ 待注入编辑。
+ *
+ * 作用域按**策展项的路由**落（不随面板当前下拉漂）：角色项 → 当前角色块
+ * （卡只在角色作用域渲染角色项，此处 `scope` 必为 char 形），全局项 → 主变量区。
+ * 解析失败回 `{ ok: false, error }`（与标量 / 单元录入同一套文案）。
+ */
+export function quickEditToPending(
+  row: QuickEditRow,
+  scope: ScopeKind,
+  raw: string,
+): { ok: true; edit: PendingEdit } | { ok: false; error: string } {
+  const parsed = parseScalarInput(row.intLike ? 'int' : 'str', raw);
+  if (!parsed.ok) return parsed;
+  const charaField = (row.field.scope ?? 'chara') === 'chara';
+  const target: ScopeKind = charaField
+    ? { kind: 'char', blockIndex: scope.kind === 'char' ? scope.blockIndex : 0 }
+    : { kind: 'top' };
+  return {
+    ok: true,
+    edit: {
+      scope: target,
+      key: row.field.family,
+      kind: row.target === 'scalar' ? 'scalar' : 'cell',
+      ...(row.target === 'cell' ? { index: [row.field.index] } : {}),
+      oldValue: row.current,
+      newValue: parsed.value,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
 // 待注入编辑 → ArchiveOverrides / diff
 // ---------------------------------------------------------------------------
 
@@ -338,7 +468,7 @@ function applyEdit(m: Map<string, number | string | readonly ArchiveCellPatch[]>
   m.set(e.key, [...prevPatches, patch]);
 }
 
-/** 位置描述（diff 行与成功提示共用） */
+/** 位置描述（diff 行与成功提示共用；机器面口径） */
 export function editWhere(scope: ScopeKind): string {
   return scope.kind === 'char' ? `chars[${scope.blockIndex}]` : scope.kind === 'em' ? 'emVars' : 'vars';
 }
@@ -353,10 +483,19 @@ export interface DiffRow {
   isNew: boolean;
 }
 
-/** 待注入清单 → diff 行（改前 / 改后） */
-export function diffRows(pending: readonly PendingEdit[]): DiffRow[] {
+/**
+ * 待注入清单 → diff 行（改前 / 改后）。
+ *
+ * `scopeLabelOf`（可选）把 `chars[0]` 这类机器位置换成作者看得懂的「#0 阿蕾」——
+ * 待写入清单是**确认写盘前的最后一眼**，这一眼理应是白话；不传 = 沿用机器位置
+ * （旧调用方与测试零改动）。
+ */
+export function diffRows(
+  pending: readonly PendingEdit[],
+  scopeLabelOf?: (scope: ScopeKind) => string,
+): DiffRow[] {
   return pending.map((e) => ({
-    where: editWhere(e.scope),
+    where: scopeLabelOf ? scopeLabelOf(e.scope) : editWhere(e.scope),
     key: e.key,
     cell: e.kind === 'cell' ? (e.index ?? []).join(',') : null,
     before: e.oldValue === null ? '（新增）' : String(e.oldValue),

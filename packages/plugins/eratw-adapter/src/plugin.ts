@@ -26,6 +26,7 @@ import {
   LAUNCH_SAVE_LAYOUT,
 } from './constants';
 import { createEratwCounterTable, ERATW_COUNTER_ENTRIES } from './counter-table';
+import { ERATW_QUICK_EDIT_FIELDS } from './quick-edit';
 import { EMPTY_INSTRUCTION_TABLE, loadEratwInstructionTable } from './instruction-table';
 import { createEratwLibraryTable, ERATW_LIBRARY_FUNCTIONS } from './library-table';
 import { createEratwMutatorTable, ERATW_MUTATOR_FAMILIES } from './mutator-table';
@@ -562,6 +563,9 @@ export function createEratwAdapterPlugin(): Plugin {
             keys: ['TALENT:愛欲', 'TALENT:爱欲', 'TALENT:184'],
           },
         ],
+        // 状态注入面板「常用状态」快捷编辑卡（additive）：策展表在 `quick-edit.ts`
+        // （实据逐条注在那里；显示名运行时优先查 variableSchema，此处只供数）。
+        quickEditFields: ERATW_QUICK_EDIT_FIELDS,
 
         async detect(rootDir: string): Promise<AdapterDetectResult> {
           // 特征组合：口上・消息域目录 + Chara CSV 目录（同时存在才成局）

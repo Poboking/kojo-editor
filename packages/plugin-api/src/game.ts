@@ -754,6 +754,38 @@ export interface StateLinePreset {
 }
 
 /**
+ * 状态注入面板的「常用状态」快捷编辑项（additive；游戏知识住 adapter，架构铁律 3）。
+ *
+ * 为什么存在：状态注入面板的原始形态是「变量目录 + 单元下标」——作者要改好感度，
+ * 得先知道它在 CFLAG 第 2 号单元。对零基础的口上作者，这就是「不知道要输入什么」的根源。
+ * 本接口让 adapter 策展一小撮**最高频、编号跨版本稳定**的状态项（如 体力 / 好感度），
+ * 注入面板据此在变量目录之外渲染一张「常用」卡：人话标签 + 当前值 + 一个输入框，
+ * 下标、族头、作用域全部由面板按本表换算——作者只看见「好感度：350 → 输入新值」。
+ *
+ * 策展口径（消费方与实现方共同遵守）：
+ * - **宁缺毋滥**：只收有实据（游戏名表 / 引擎常量）且语义不随版本漂移的项；
+ * - 显示名运行时优先查 `variableSchema`（词典汉化跟随游戏），本表 `label` 是查不到时的回落；
+ * - 缺省（adapter 未交本表）= 注入面板不渲染「常用」卡，不猜任何字段。
+ */
+export interface QuickEditField {
+  /** 稳定 id（面板内输入态键；同一 adapter 内唯一） */
+  readonly id: string;
+  /** 显示名（如「好感度」；运行时若 variableSchema 命中同名槽位则优先用词典名） */
+  readonly label: string;
+  /** 变量族头（如 'CFLAG'；引擎标识符，大写） */
+  readonly family: string;
+  /** 单元下标（1D；引擎寻址 `族:下标`） */
+  readonly index: number;
+  /** 一句话说明（悬停提示；可选） */
+  readonly description?: string;
+  /**
+   * 作用域归属：'chara' = 角色块（BASE / CFLAG 这类角色变量），
+   * 'global' = 主变量区（MONEY / DAY 这类全局变量）。缺省 = 'chara'。
+   */
+  readonly scope?: 'chara' | 'global';
+}
+
+/**
  * 游戏适配器（槽位 `game.adapter` 的负载）。
  * 同槽语义：同一项目同一时刻只有一个激活实现；detect 阶段内核轮询全部候选。
  * 「谁是当前那枚」的判据只有一处实现：本文件末尾的 `activeGameAdapter()`。
@@ -856,6 +888,12 @@ export interface GameAdapter {
    * 面板只按 `keys` 精确匹配行，语义全在 adapter；缺省 = 不显示剧情线快选。
    */
   readonly stateLinePresets?: readonly StateLinePreset[];
+  /**
+   * 状态注入面板的「常用状态」快捷编辑清单（additive；游戏知识住 adapter）。
+   * 消费方 = `ui-snapshot-injector`：按本表渲染「常用」卡（人话标签 + 当前值 + 一个输入框），
+   * 族头 / 下标 / 作用域的换算全部由面板承担。缺省 = 不渲染「常用」卡。
+   */
+  readonly quickEditFields?: readonly QuickEditField[];
   /**
    * 启动能力（additive；能力族见本文档 §5 分组）。
    *

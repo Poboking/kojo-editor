@@ -46,6 +46,11 @@ export interface VarListProps {
    * 缺省 = 没有右键菜单（旧调用方与 SSR 判据零改动）。
    */
   readonly onMenu?: (row: VarRow, event: PluginContextMenuAnchor) => void;
+  /**
+   * 空态文案（可选）：缺省 =「该作用域没有变量」；过滤后空时调用方给
+   * 「没有匹配「xx」的变量」——同一片空，成因与动作完全不同。
+   */
+  readonly emptyText?: string;
 }
 
 export function VarList(props: VarListProps): ReactElement {
@@ -101,6 +106,6 @@ export function VarList(props: VarListProps): ReactElement {
           onMore: () => props.onGrow(rows.length),
         })
       : null,
-    rows.length === 0 ? createElement('div', { className: 'dim inj-empty' }, '该作用域没有变量') : null,
+    rows.length === 0 ? createElement('div', { className: 'dim inj-empty' }, props.emptyText ?? '该作用域没有变量') : null,
   );
 }

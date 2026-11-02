@@ -257,6 +257,7 @@ export type {
   KojoFaceTemplate,
   KojoInstructionTable,
   KojoLibraryTable,
+  QuickEditField,
   ScaffoldResult,
   StateLinePreset,
   VariableDictionaryStatus,

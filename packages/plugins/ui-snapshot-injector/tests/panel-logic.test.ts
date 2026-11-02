@@ -24,6 +24,7 @@ import {
   diffRows,
   editKey,
   emptySlotsReason,
+  filterVarRows,
   listScopes,
   listVars,
   nextCellWindow,
@@ -32,6 +33,8 @@ import {
   parseCellIndex,
   parseCellInput,
   parseScalarInput,
+  quickEditRows,
+  quickEditToPending,
   runInjectFlow,
   scopeLabel,
   supersededCount,
@@ -207,6 +210,115 @@ describe('buildOverrides / diffRows / dedupePending', () => {
       before: '（新增）',
       isNew: true,
     });
+  });
+
+  it('diffRows：给了 scopeLabelOf 就把机器位置折成白话（不传 = 旧口径零改动）', () => {
+    const pending: PendingEdit[] = [
+      { scope: C0, key: 'CFLAG', kind: 'cell', index: [2], oldValue: 350, newValue: 600 },
+    ];
+    expect(diffRows(pending)[0]!.where).toBe('chars[0]');
+    const rows = diffRows(pending, (s) => scopeLabel(makeArchive(), s));
+    expect(rows[0]!.where).toBe('#0 灵梦');
+  });
+});
+
+/* ---------------- 变量目录过滤（中文标签可搜） ---------------- */
+
+describe('filterVarRows', () => {
+  const a = makeArchive();
+  const rows = listVars(a, { kind: 'char', blockIndex: 0 });
+  const schema: VariableSchema = {
+    version: '1',
+    inputDigest: 'x',
+    lookup: (name: string, index?: number | string) => {
+      if (name === 'CFLAG' && index === undefined) return { name, description: '角色标志' };
+      return { name };
+    },
+    names: () => [],
+  };
+
+  it('搜中文标签能命中变量（旧过滤只认键名，「好感/角色标志」永远搜空）', () => {
+    expect(filterVarRows(rows, '角色标志', schema).map((r) => r.key)).toEqual(['CFLAG']);
+    expect(filterVarRows(rows, ' 角色标志 ', schema).map((r) => r.key)).toEqual(['CFLAG']); // 前后空白容忍
+  });
+
+  it('键名照旧可搜（大小写不敏感）；两路命中不重复', () => {
+    expect(filterVarRows(rows, 'cflag', schema).map((r) => r.key)).toEqual(['CFLAG']);
+    expect(filterVarRows(rows, 'CFLAG', schema)).toHaveLength(1);
+  });
+
+  it('空白 needle = 原样返回同一引用（不触发无谓重渲）；无标签的行只按键名匹配', () => {
+    expect(filterVarRows(rows, '  ', schema)).toBe(rows);
+    expect(filterVarRows(rows, 'NO', schema).map((r) => r.key)).toEqual(['NO']);
+  });
+});
+
+/* ---------------- 「常用」卡（quickEditFields 投影） ---------------- */
+
+describe('quickEditRows / quickEditToPending', () => {
+  const a = makeArchive();
+  const schema: VariableSchema = {
+    version: '1',
+    inputDigest: 'x',
+    lookup: (name: string, index?: number | string) =>
+      name === 'CFLAG' && index === 2 ? { name, index, description: '好感度' } : { name },
+    names: () => [],
+  };
+  const fields = [
+    { id: 'aff', label: '好感度', family: 'CFLAG', index: 2, scope: 'chara' as const },
+    { id: 'money', label: '所持金', family: 'MONEY', index: 0, scope: 'global' as const },
+    { id: 'ghost', label: '不在档内的族', family: 'GHOST', index: 0 },
+  ];
+
+  it('作用域路由：角色项只进角色块、全局项只进主变量区；EM 区什么都不显示', () => {
+    const withMoney: SnapshotArchive = { ...a, vars: [...(a.vars ?? []), vArr1d('MONEY', [{ index: [0], value: 1200 }])] };
+    const charRows = quickEditRows(fields, a, { kind: 'char', blockIndex: 0 }, schema);
+    expect(charRows.map((r) => r.field.id)).toEqual(['aff']);
+    const topRows = quickEditRows(fields, withMoney, { kind: 'top' }, undefined);
+    expect(topRows.map((r) => r.field.id)).toEqual(['money']);
+    expect(topRows[0]).toMatchObject({ current: 1200, intLike: true, target: 'cell' });
+    expect(quickEditRows(fields, a, { kind: 'em' }, schema)).toEqual([]);
+  });
+
+  it('当前值：有格取格值，int 缺格按 0；词典命中覆盖策展名，查不到回落策展 label', () => {
+    const rows = quickEditRows(fields, a, { kind: 'char', blockIndex: 0 }, schema);
+    expect(rows[0]).toMatchObject({ label: '好感度', current: 0, intLike: true, target: 'cell' }); // CFLAG 只登记了 [1]=3，[2] 缺格 = 0
+    const withCell = quickEditRows(
+      [{ ...fields[0]!, index: 1 }],
+      a,
+      { kind: 'char', blockIndex: 0 },
+      undefined,
+    );
+    expect(withCell[0]).toMatchObject({ label: '好感度', current: 3 }); // 无词典回落策展 label
+  });
+
+  it('族不在档内 / 不可注入形态 / 截断数组 ⇒ 整行隐藏（显示一个写不进的框是误导）', () => {
+    expect(quickEditRows(fields, a, { kind: 'char', blockIndex: 1 }, schema)).toEqual([]); // 紫没有 CFLAG
+    const other = quickEditRows(
+      [{ id: 'm', label: '映射', family: 'MAPISH', index: 0 }],
+      { ...a, chars: [block(0, [{ type: 'map', key: 'MAPISH', count: 3, offset: 0 } as ArchiveVariable])] },
+      { kind: 'char', blockIndex: 0 },
+      undefined,
+    );
+    expect(other).toEqual([]);
+    const truncated = quickEditRows(
+      [{ id: 't', label: '截断', family: 'CFLAG', index: 1 }],
+      { ...a, chars: [block(0, [{ ...vArr1d('CFLAG', [{ index: [1], value: 3 }]), cellsTruncated: true } as ArchiveVariable])] },
+      { kind: 'char', blockIndex: 0 },
+      undefined,
+    );
+    expect(truncated).toEqual([]);
+  });
+
+  it('提交换算：角色项落当前角色块、全局项落主变量区；int 校验同标量口径', () => {
+    const rows = quickEditRows(fields, a, { kind: 'char', blockIndex: 0 }, schema);
+    const ok = quickEditToPending(rows[0]!, { kind: 'char', blockIndex: 0 }, '600');
+    expect(ok.ok).toBe(true);
+    if (ok.ok) {
+      expect(ok.edit).toMatchObject({ scope: { kind: 'char', blockIndex: 0 }, key: 'CFLAG', kind: 'cell', index: [2], oldValue: 0, newValue: 600 });
+    }
+    const bad = quickEditToPending(rows[0]!, { kind: 'char', blockIndex: 0 }, '6.5');
+    expect(bad).toMatchObject({ ok: false });
   });
 });
 

@@ -7,7 +7,7 @@
 
 import { createElement, type ReactNode } from 'react';
 import type { SnapshotInjectionResult, VariableSchema } from '@kojo/plugin-api';
-import { cellLabel, dedupePending, diffRows, varLabel, type PendingEdit } from './panel-logic';
+import { cellLabel, dedupePending, diffRows, varLabel, type PendingEdit, type ScopeKind } from './panel-logic';
 
 export interface PendingBoxProps {
   /** 待注入清单原样（diff / 移除都按面板给出的同一数组口径） */
@@ -22,12 +22,17 @@ export interface PendingBoxProps {
   readonly runInject: () => void;
   readonly setPending: (pending: PendingEdit[]) => void;
   readonly setArmed: (armed: boolean) => void;
+  /**
+   * 位置白话化（可选）：把 `chars[0]` 折成「#0 阿蕾」——待写入清单是确认写盘前的
+   * 最后一眼，理应是作者看得懂的话。缺省 = 沿用机器位置（旧调用方零改动）。
+   */
+  readonly scopeLabelOf?: (scope: ScopeKind) => string;
 }
 
 /** diff 清单 + 注入按钮 */
 export function renderPendingBox(props: PendingBoxProps): ReturnType<typeof createElement> {
-  const { pending, varSchema, injecting, armed, result, injectError, ic, runInject, setPending, setArmed } = props;
-  const diffs = diffRows(dedupePending(pending));
+  const { pending, varSchema, injecting, armed, result, injectError, ic, runInject, setPending, setArmed, scopeLabelOf } = props;
+  const diffs = diffRows(dedupePending(pending), scopeLabelOf);
   return createElement('div', { className: 'inj-pending' },
     createElement('div', { className: 'inj-pending-head' },
       createElement('span', null, `待写入（${diffs.length}）`),
@@ -50,7 +55,7 @@ export function renderPendingBox(props: PendingBoxProps): ReturnType<typeof crea
           onClick: () => setPending(dedupePending(pending).filter((_, j) => j !== i)),
         }, '×'));
     }),
-    diffs.length === 0 ? createElement('div', { className: 'dim inj-hint' }, '在左侧选择变量并编辑；改动先进入清单，确认后才写盘') : null,
+    diffs.length === 0 ? createElement('div', { className: 'dim inj-hint' }, '在上方「常用」卡直接填新值，或在左侧选变量编辑；改动先进入清单，确认后才写盘') : null,
     createElement('div', { className: 'inj-inject-row' },
       createElement('button', {
         className: 'primary',

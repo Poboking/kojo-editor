@@ -10,6 +10,7 @@
 
 import { createElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type {
+  GameAdapter,
   PluginContext,
   PluginContextMenuAnchor,
   ProjectService,
@@ -28,14 +29,19 @@ import {
   buildOverrides,
   dedupePending,
   emptySlotsReason,
+  filterVarRows,
+  quickEditRows,
+  quickEditToPending,
   runInjectFlow,
   listVars,
   parseCellIndex,
   parseCellInput,
   parseScalarInput,
+  scopeLabel,
   scopeOptions,
   supersededCount,
   type PendingEdit,
+  type QuickEditRow,
   type ScopeKind,
 } from './panel-logic';
 import { VarList } from './var-list';
@@ -61,9 +67,10 @@ export interface InjectorPanelDeps {
 /** 构造面板组件：服务与上下文一次性闭包住（槽位注册仍归 `index.ts`） */
 export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelProps) => unknown {
   const { ctx, snapshots, writer, project, slots } = deps;
-  /** 当前适配器的变量语义查询（当前那枚由契约的 `activeGameAdapter` 认；与 condition-extractor 同通道） */
-  const schemaLookup = (): VariableSchema | undefined =>
-    activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId)?.variableSchema;
+  /** 当前适配器（变量语义标签与「常用状态」策展表都认这一枚；与 condition-extractor 同通道） */
+  const adapterLookup = (): GameAdapter | undefined =>
+    activeGameAdapter(slots.query('game.adapter'), project.current()?.adapterId);
+  const schemaLookup = (): VariableSchema | undefined => adapterLookup()?.variableSchema;
 
   /* ------------------------------ 面板组件 ------------------------------ */
 
@@ -180,6 +187,7 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       setScope({ kind: 'top' });
       setVarWindow(undefined); // 换档 = 新变量树，窗口回到初始
       setCellWindow(undefined);
+      setQuickDrafts({}); // 换档 = 常用卡的值全变了，草稿一并清
       if (!path) return;
       setLoading(true);
       let cancelled = false;
@@ -204,6 +212,10 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     }, [path]);
 
     const varSchema = schemaLookup();
+    /** 「常用状态」策展表（adapter 缺省 = 空表 ⇒ 不渲染快捷卡，不猜任何字段） */
+    const quickFields = useMemo(() => adapterLookup()?.quickEditFields ?? [], []);
+    /** 「常用」卡输入草稿（键 = 策展项 id；换作用域 / 换档即清） */
+    const [quickDrafts, setQuickDrafts] = useState<Record<string, string>>({});
     /**
      * 回收行开关（宿主下传的容器偏好；**缺省 / false = 改动前的追加式路径** + 「显示更多」哨兵）。
      *
@@ -217,10 +229,15 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     // 变量目录：旧实现每次渲染都 `listVars` ——一个角色块几百个变量、数组变量的单元表
     // 逐帧重建（改前还逐格深拷贝）。档案实例与作用域对象都不变 ⇒ 复用上一次结果。
     const rowsInScope = useMemo(() => (archive ? listVars(archive, scope) : []), [archive, scope]);
-    const needle = varFilter.trim().toLowerCase();
+    /** 目录过滤：变量名与中文标签都参与（搜「好感」能命中 CFLAG，见 panel-logic） */
     const filtered = useMemo(
-      () => (needle ? rowsInScope.filter((r) => r.key.toLowerCase().includes(needle)) : rowsInScope),
-      [rowsInScope, needle],
+      () => filterVarRows(rowsInScope, varFilter, varSchema),
+      [rowsInScope, varFilter, varSchema],
+    );
+    /** 「常用」卡数据：按当前作用域解析策展项 + 当前值（纯函数，换档 / 换作用域重算） */
+    const quickRows = useMemo(
+      () => (archive && quickFields.length > 0 ? quickEditRows(quickFields, archive, scope, varSchema) : []),
+      [archive, quickFields, scope, varSchema],
     );
     const selected = useMemo(() => (selectedKey ? filtered.find((r) => r.key === selectedKey) ?? null : null), [
       filtered,
@@ -234,6 +251,19 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       const superseded = supersededCount(pending, e);
       setPending([...dedupePending([...pending, e])]);
       if (superseded > 0) ctx.log.info(`Injector: ${superseded} earlier edit(s) superseded by the latest one`);
+    };
+
+    /** 「常用」卡提交：草稿解析 → 待注入编辑（解析失败走既有错误行，不静默） */
+    const submitQuick = (row: QuickEditRow): void => {
+      const raw = (quickDrafts[row.field.id] ?? '').trim();
+      if (raw.length === 0) return;
+      const parsed = quickEditToPending(row, scope, raw);
+      if (!parsed.ok) {
+        setEditError(parsed.error);
+        return;
+      }
+      addPending(parsed.edit);
+      setQuickDrafts((prev) => ({ ...prev, [row.field.id]: '' }));
     };
 
     const submitScalar = (): void => {
@@ -377,22 +407,42 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     if (!archive) return null;
 
     // 作用域下拉（选项与标签取自 `scopeOpts`：一次算好，不再逐帧重扫角色块）
-    const scopeSel = createElement('select', {
-      className: 'inj-select',
-      value: scope.kind === 'char' ? `char:${scope.blockIndex}` : scope.kind,
-      onChange: (e: { target: { value: string } }) => {
-        const v = e.target.value;
-        setSelectedKey(null);
-        setEditError(null);
-        setVarWindow(undefined); // 换作用域 = 新变量目录，窗口回到初始
-        setCellWindow(undefined);
-        if (v === 'top') setScope({ kind: 'top' });
-        else if (v === 'em') setScope({ kind: 'em' });
-        else setScope({ kind: 'char', blockIndex: Number(v.slice(5)) });
+    const scopeSel = createElement('div', { className: 'inj-scope-wrap' },
+      createElement('select', {
+        className: 'inj-select',
+        value: scope.kind === 'char' ? `char:${scope.blockIndex}` : scope.kind,
+        onChange: (e: { target: { value: string } }) => {
+          const v = e.target.value;
+          setSelectedKey(null);
+          setEditError(null);
+          setVarWindow(undefined); // 换作用域 = 新变量目录，窗口回到初始
+          setCellWindow(undefined);
+          setQuickDrafts({}); // 换作用域 = 常用卡换了一批行，草稿一并清
+          if (v === 'top') setScope({ kind: 'top' });
+          else if (v === 'em') setScope({ kind: 'em' });
+          else setScope({ kind: 'char', blockIndex: Number(v.slice(5)) });
+        },
       },
-    },
-      ...scopeOpts.map((o) => createElement('option', { key: o.value, value: o.value }, o.label)),
-    );
+        ...scopeOpts.map((o) => createElement('option', { key: o.value, value: o.value }, o.label)),
+      ),
+      // 一句白话路标：新作者不知道「角色块 / 主变量区」是什么，但知道要改谁
+      createElement('div', { className: 'dim inj-hint' },
+        '要改某个角色的状态就选她的名字；金钱、日期这些全局的选「主变量区」。'));
+
+    // 变量搜索框（键名与中文标签都参与匹配，见 filterVarRows）。
+    // 2026-11-02 补挂：`varFilter` 状态从旧版一路留下、过滤逻辑一直在算，但输入框
+    // 没被渲染——搜索功能整段只能算死代码。这是「找不到要改哪」的直接原因之一。
+    const filterInput = createElement('input', {
+      className: 'inj-input inj-var-filter',
+      value: varFilter,
+      placeholder: '搜变量：英文名或中文（如 好感 / CFLAG）',
+      onChange: (e: { target: { value: string } }) => setVarFilter(e.target.value),
+    });
+
+    /** 常用卡的标题：角色作用域带角色名（复用作用域下拉的同一套标签，不另立口径） */
+    const quickTitle = scope.kind === 'char'
+      ? `常用 · ${scopeOpts.find((o) => o.value === `char:${scope.blockIndex}`)?.label ?? `角色 #${scope.blockIndex}`}`
+      : '常用 · 全局';
 
     // 变量目录（窗口化渲染：初窗 ≤ INITIAL，触底 / 点击「显示更多」按 STEP 追加）
     /**
@@ -417,6 +467,8 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       onGrow: growVars,
       onSelect: selectVar,
       virtualize,
+      // 过滤后空 ≠ 作用域真空：给一句说明成因的文案，不让人以为角色没变量
+      emptyText: filtered.length === 0 && rowsInScope.length > 0 ? `没有匹配「${varFilter.trim()}」的变量` : undefined,
       onMenu: (row, event) =>
         openInjectVarMenu(
           props,
@@ -457,7 +509,43 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       runInject,
       setPending,
       setArmed,
+      // 位置白话化：`chars[0]` → 「#0 阿蕾」（待写入是确认前的最后一眼，理应是白话）
+      scopeLabelOf: (s) => scopeLabel(archive, s),
     });
+
+    /**
+     * 「常用」卡（quickEditFields 投影；无策展表 / 当前作用域没有可用的项 ⇒ 不渲染）。
+     * 一行一个高频状态：人话标签 + 当前值 + 一个输入框——族头、下标、作用域
+     * 全部由 quickEditToPending 按策展项换算，作者不需要知道 CFLAG 是什么。
+     */
+    const quickBox = quickRows.length > 0
+      ? createElement('div', { className: 'inj-quick' },
+          createElement('div', { className: 'inj-quick-head' },
+            quickTitle,
+            createElement('span', { className: 'dim inj-quick-note' }, '改完点「加入清单」，再点下方「写入存档」')),
+          ...quickRows.map((row) => {
+            const draft = quickDrafts[row.field.id] ?? '';
+            return createElement('div', { className: 'inj-quick-row', key: row.field.id },
+              createElement('span', { className: 'inj-quick-label', title: row.field.description }, row.label),
+              createElement('span', { className: 'inj-quick-current dim' }, String(row.current)),
+              createElement('input', {
+                className: 'inj-input inj-quick-input',
+                value: draft,
+                placeholder: row.intLike ? '新数值' : '新内容',
+                title: row.field.description,
+                onChange: (e: { target: { value: string } }) =>
+                  setQuickDrafts((prev) => ({ ...prev, [row.field.id]: e.target.value })),
+                onKeyDown: (e: { key: string }) => {
+                  if (e.key === 'Enter') submitQuick(row);
+                },
+              }),
+              createElement('button', {
+                className: 'ghost small',
+                disabled: draft.trim().length === 0,
+                onClick: () => submitQuick(row),
+              }, '加入清单'));
+          }))
+      : null;
 
     return createElement('div', {
       className: 'panel-snapshot-injector',
@@ -467,8 +555,8 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     },
       head,
       createElement('div', { className: 'inj-body' },
-        createElement('div', { className: 'inj-left' }, scopeSel, varList),
-        createElement('div', { className: 'inj-right' }, editor, pendingBox)),
+        createElement('div', { className: 'inj-left' }, filterInput, scopeSel, varList),
+        createElement('div', { className: 'inj-right' }, quickBox, editor, pendingBox)),
       editError ? createElement('div', { className: 'inj-error' }, editError) : null,
     );
   }

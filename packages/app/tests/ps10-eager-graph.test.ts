@@ -1201,10 +1201,20 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       `styles-project.css` 与既有壳层，不另起模块。
     //     ⇒ 闸 **3,470 → 3,484**（余量 1,065 B；文件闸仍 199，现 198）。取整口径同前：
     //     闸比的是 `Math.round(totalBytes/1024)`，3,485 KB 需 3,568,640 B。
+    //   - **2026-11-02 注入面板「无脑用」批（常用状态快捷编辑）**：读数 **199 文件 / 3,487 KB**
+    //     （3,570,950 B = 上一条 3,567,575 + **3,375**）——文件 +1（199 = 闸顶），逐枚点名：
+    //     · `plugins/eratw-adapter/src/quick-edit.ts` **+3,035**（新进图：eraTW 常用状态策展表
+    //       `ERATW_QUICK_EDIT_FIELDS`——体力/好感度/信赖度/恋慕/恋人/所持金，实据逐条注在表上；
+    //       plugin.ts 在 `GameAdapter` 装配时引用 ⇒ 整文件进图）；
+    //     · `plugins/eratw-adapter/src/plugin.ts` **+322**（adapter 接线 `quickEditFields`）；
+    //     · `plugin-api/src/index.ts` **+18**（`QuickEditField` 类型导出一行）。
+    //     · 注入面板本体（`ui-snapshot-injector` 五枚改文件）**不在开机图**：面板是
+    //       aux 按需懒载，它的 +12.4 KB 不走这条闸。
+    //     ⇒ 闸 **3,484 → 3,487**（文件闸 199 顶格，余量 0 B——再进图必须先出图）。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,484 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,487 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_484);
+    expect(totalKb).toBeLessThanOrEqual(3_487);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
