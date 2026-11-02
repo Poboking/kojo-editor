@@ -102,7 +102,7 @@ The exact panel inventory (including which ones are **sealed by default** and wh
 
 One rule: **every "it's fixed" must come with numbers**.
 
-- functional pool **1,179 files · 22,408 passed / 0 failed** (as of 2026-11-02; ~145 skipped depending on corpus presence) · timing pool 31 files;
+- functional pool **1,184 files · 22,491 passed / 0 failed / 149 skipped** (as of 2026-11-02; the skipped count moves with corpus presence) · timing pool 31 files;
 - dual typecheck (root + app) · four audits (decoupling A–D, language ratchet, raw bytes, board) · boot-graph size gate · a separate `cargo test --lib` gate on the Rust side;
 - **31 plugins**, including adapters for **8** era-series games;
 - real-corpus readings (warm load `read+parse 0ms` / `refs scan 2ms`, memory and cold-open profiles, folding parity checks) are booked batch by batch in [docs/STATE.md](docs/STATE.md) — that file is the single source of truth; the snapshot here will go stale.
