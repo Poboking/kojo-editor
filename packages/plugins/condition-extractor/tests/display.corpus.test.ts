@@ -53,6 +53,8 @@ const DATA_CLOSE_RE = /^(ENDDATA|ENDLIST)$/;
  * 朴素分母（与 `display.ts` **不共享任何代码**，故意写得笨）：
  * 函数区间内"看起来会打印"的行——行首 PRINT 动词，或 `SIF` 行里出现 PRINT 动词。
  * 只排除两类已建模的东西：`[SKIPSTART]`…`[SKIPEND]` 与 `PRINTDATA` 块体。
+ * 两枚动词判据都带 `(?![A-Za-z0-9_])` 边界：`SIF PRINT_COUNT == 0` 里的 `PRINT_COUNT` 是变量名，
+ * 没有边界就会把它算进分母（下面不变量 ③ 记实拍）。
  */
 function naivePrintLines(lines: readonly string[], start: number, end: number): { total: number; sif: number } {
   let total = 0;
@@ -78,7 +80,7 @@ function naivePrintLines(lines: readonly string[], start: number, end: number): 
       continue;
     }
     if (PRINT_LINE_RE.test(code)) total++;
-    else if (SIF_PRINT_LINE_RE.test(code) && / PRINT[A-Z]*/.test(code)) {
+    else if (SIF_PRINT_LINE_RE.test(code) && /\sPRINT[A-Z]*(?![A-Za-z0-9_])/.test(code)) {
       total++;
       sif++;
     }
@@ -96,6 +98,7 @@ describe.skipIf(!process.env.KOJO_SMOKE_PROJECT)('显示行扫描 · 真实语�
     let functionsWithDisplays = 0;
     let displayLines = 0;
     let naiveLines = 0;
+    let naiveSifLines = 0;
     let sifGuarded = 0;
     let formLines = 0;
     let formLinesWithDelimiter = 0;
@@ -117,6 +120,7 @@ describe.skipIf(!process.env.KOJO_SMOKE_PROJECT)('显示行扫描 · 真实语�
         displayLines += body.length;
         const naive = naivePrintLines(lines, fn.startLine + 1, fn.endLine);
         naiveLines += naive.total;
+        naiveSifLines += naive.sif;
         for (const d of body) if (d.sifGuarded) sifGuarded++;
         for (const d of body) {
           const isForm = d.verb.includes('FORM');
@@ -140,7 +144,7 @@ describe.skipIf(!process.env.KOJO_SMOKE_PROJECT)('显示行扫描 · 真实语�
     console.log(
       `[display-corpus] ${files.length} 份 .ERB / ${functions} 函数（含显示行 ${functionsWithDisplays}）｜ ` +
         `显示行 ${displayLines}（朴素分母 ${naiveLines} ⇒ 召回 ${(recall * 100).toFixed(2)}%）｜ ` +
-        `SIF 同行守卫 ${sifGuarded}｜ FORM 行 ${formLines}（带定界符 ${formLinesWithDelimiter}，切出插值 ${formLinesSliced} ⇒ ` +
+        `SIF 同行守卫 ${sifGuarded}（朴素分母 ${naiveSifLines}）｜ FORM 行 ${formLines}（带定界符 ${formLinesWithDelimiter}，切出插值 ${formLinesSliced} ⇒ ` +
         `${(sliceRate * 100).toFixed(2)}%）｜ 插值 ${interpolations}（行内三元 ${ternaries}）`,
     );
     console.log(`[display-corpus] 召回差异样本（只打印，不判绝对值）：\n${missing.map((s) => `  ${s}`).join('\n') || '  （无）'}`);
@@ -149,10 +153,15 @@ describe.skipIf(!process.env.KOJO_SMOKE_PROJECT)('显示行扫描 · 真实语�
     expect(recall).toBeGreaterThan(0.98);
     // ② FORM 行的插值识别：带 `%`/`{` 的行必须几乎全被切开
     expect(sliceRate).toBeGreaterThan(0.99);
-    // ③ 守卫行必须真收到。⚠ 语料实测**只有 37 行**（`grep -E '^\s*SIF\s.*\sPRINT'`；
-    //    同语料 `SIF` 总行 30,953，绝大多数是 `SIF cond CALL/RETURN`）——这条判据钉的是
-    //    "别把这类行整行丢掉"，不是"它很高频"（2026-11-02 语料实测纠正）。
-    expect(sifGuarded).toBeGreaterThan(30);
+    // ③ SIF 同行守卫必须真收到。这类行在语料里**极稀疏**，且稀疏程度随盘换代大幅摆动
+    //    （改版盘抽取 42；基线盘 4.980 抽取 7——`SIF` 总行两万九千条里绝大多数是 `SIF cond CALL/
+    //    RETURN`，真正同行带 PRINT 的就这几行）。钉绝对值（原 `>30`）会把"换了一块盘"报成回归，
+    //    故改判两件与盘无关的事：一枚都不许整行丢掉 + 抽取侧不许少于**同盘**朴素分母。
+    //    分母侧那枚 `(?![A-Za-z0-9_])` 边界不是装饰：基线盘 `QOL_IMAGE.ERB` 有行 `SIF PRINT_COUNT == 0`，
+    //    `PRINT_COUNT` 是变量名，裸 `/ PRINT[A-Z]*/` 把它算成打印行 ⇒ 判据读成 7<8 假红；加边界后两盘
+    //    抽取与分母逐枚相等（7/7、42/42）——这才是这条的真读数。
+    expect(sifGuarded).toBeGreaterThan(0);
+    expect(sifGuarded).toBeGreaterThanOrEqual(naiveSifLines);
   }, 600_000);
 
   it('集成面：extractFunctionPredicates 的 displays 落在函数区间内且按行升序', () => {
