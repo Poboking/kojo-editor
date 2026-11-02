@@ -18,6 +18,7 @@
  *
  * 假 Monaco 只给补全用到的那几格（图标枚举按 0.57 的真实数值，两侧同表 ⇒ 图标可比）。
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import type {
@@ -27,7 +28,7 @@ import type {
   KojoInstructionTable,
   VariableSchema,
 } from '@kojo/plugin-api';
-import { functionLookupOf } from '@kojo/plugin-api';
+import { functionLookupOf, DOCUMENT_WORD_SOURCE } from '@kojo/plugin-api';
 import { provideErbCompletion } from '@kojo/plugin-erb-parser';
 import { ERB_COMPLETION_ASSEMBLY } from '../src/monaco/erb-completion';
 import { ERB_DIRECTIVES } from '../src/monaco/erb-highlight-words';
@@ -376,12 +377,101 @@ describe('LAU-4 补全腿第三批 · 事实缺席 ⇒ 该路零候选，其余�
   });
 
   it('`#DIM` 名缺席（`dimNames: undefined`）⇒ 回退当前缓冲区扫描（索引无意见 ≠ 无名字）', () => {
-    const labels = ask('#DIM 好感度\nX = 好感', 7, { ...facts(), dimNames: undefined });
+    // 与下一条同口径 isolate 掉词源腿：这一条要证的是**声明腿回退真的发生**，
+    // 不是"同名串从别的路冒出来"（KW-25 起文档词腿是活的）
+    const labels = ask('#DIM 好感度\nX = 好感', 7, {
+      ...facts(),
+      dimNames: undefined,
+      wordBasedSuggestions: false,
+    });
     expect(labels).toContain('好感度');
   });
 
   it('索引有意见但确无该项（`dimNames: []`）⇒ 零候选，**不回退**（不回退假事实）', () => {
-    const labels = ask('#DIM 好感度\nX = 好感', 7, { ...facts(), dimNames: [] });
+    // KW-25：切词器修好后文档词腿会把 `#DIM 好感度` 里的同名串供出来 —— 这一条测的是
+    // **声明腿**不回退假事实，故把词源腿关掉 isolate（`#DIM` 名与词源是两路，各自有判据）
+    const labels = ask('#DIM 好感度\nX = 好感', 7, { ...facts(), dimNames: [], wordBasedSuggestions: false });
     expect(labels).not.toContain('好感度');
+  });
+});
+/* ============================== KW-25 · 文档词闸单源（1103） ============================== */
+
+/**
+ * 文档词那一批护栏（行数闸 / 候选上限 / 词长 / 纯数字）**真源在契约层**
+ * （`@kojo/plugin-api` 的 `DOCUMENT_WORD_SOURCE`）。LAU-4 第三批搬判据时在插件里留了一份
+ * **同名同值**的宿主数字 ⇒ 两条生产路各拿一把尺，改一处不会有任何闸红。这里钉三件事：
+ * ①闸的两侧逐字相同；②闸与上限在两侧都**真的在干活**（不是假绿的空相等）；
+ * ③两侧源码都不再自己声明这批数字（谁抄回去就红）。
+ */
+function wordGateFixture(lineCount: number): {
+  readonly text: string;
+  readonly line: number;
+  readonly column: number;
+} {
+  const body: string[] = [];
+  for (let i = 0; i < lineCount - 1; i++) body.push(`\tPRINTFORMW KWZQ${String(i).padStart(5, '0')}`);
+  // 光标落在**赋值右端的词尾**（不是行首指令位：那一格 keep 白名单本来就把词源整路滤掉，
+  // 两条路都对不上，量的就不是这把尺了）
+  body.push('X = KWZQ');
+  return { text: body.join('\n'), line: lineCount, column: 9 };
+}
+
+/** 词源那一腿的候选（按本次夹具的专名前缀认，不与别的源混） */
+function wordLabels(rows: readonly Row[], pattern: RegExp): string[] {
+  return rows.map((r) => r.label).filter((l) => pattern.test(l));
+}
+
+describe('LAU-4 补全腿第三批 · 文档词护栏单源（KW-25）', () => {
+  it(`行数闸两侧逐字相同：${DOCUMENT_WORD_SOURCE.maxLines} 行在闸内出货、+1 行两侧同零`, () => {
+    const inside = wordGateFixture(DOCUMENT_WORD_SOURCE.maxLines);
+    const outside = wordGateFixture(DOCUMENT_WORD_SOURCE.maxLines + 1);
+    const hostIn = hostRows(inside.text, inside.line, inside.column);
+    const pluginIn = pluginRows(inside.text, inside.line, inside.column);
+    expect(pluginIn.map((r) => r.label)).toEqual(hostIn.map((r) => r.label));
+    // 闸内真的出货（否则"两侧都空"也算相等，判据就成了假绿）
+    expect(wordLabels(pluginIn, /^KWZQ\d/).length).toBeGreaterThan(0);
+
+    const hostOut = hostRows(outside.text, outside.line, outside.column);
+    const pluginOut = pluginRows(outside.text, outside.line, outside.column);
+    expect(pluginOut.map((r) => r.label)).toEqual(hostOut.map((r) => r.label));
+    expect(wordLabels(pluginOut, /^KWZQ\d/)).toEqual([]);
+    expect(wordLabels(hostOut, /^KWZQ\d/)).toEqual([]);
+  });
+
+  it(`候选上限 ${DOCUMENT_WORD_SOURCE.maxSuggestions} 条：两侧截在同一格`, () => {
+    const fixture = wordGateFixture(DOCUMENT_WORD_SOURCE.maxLines);
+    const plugin = wordLabels(pluginRows(fixture.text, fixture.line, fixture.column), /^KWZQ\d/);
+    const host = wordLabels(hostRows(fixture.text, fixture.line, fixture.column), /^KWZQ\d/);
+    expect(plugin).toHaveLength(DOCUMENT_WORD_SOURCE.maxSuggestions);
+    expect(host).toEqual(plugin);
+  });
+
+  it('词长上限两侧同判据：超长同前缀词不出、正常词出（两侧逐字相同）', () => {
+    const tooLong = `KWZQ${'X'.repeat(DOCUMENT_WORD_SOURCE.maxWordLength - 4 + 1)}`; // 比上限还长一个字
+    const ok = 'KWZQ1';
+    const text = `X = KWZQ ${tooLong} ${ok}`;
+    const plugin = wordLabels(pluginRows(text, 1, 9), /^KWZQ/);
+    const host = wordLabels(hostRows(text, 1, 9), /^KWZQ/);
+    expect(plugin).toEqual(host);
+    expect(plugin).toContain(ok); // 判据在跑（不是两侧都空）
+    expect(plugin).not.toContain(tooLong);
+  });
+
+  it('纯数字护栏两侧同判据：同前缀的纯数字词不出、字母数字混合的词出', () => {
+    const text = 'X = 1 12345 1AB';
+    const plugin = wordLabels(pluginRows(text, 1, 6), /^1/);
+    const host = wordLabels(hostRows(text, 1, 6), /^1/);
+    expect(plugin).toEqual(host);
+    expect(plugin).toContain('1AB');
+    expect(plugin).not.toContain('12345');
+  });
+
+  it('两处生产路都不再自己声明词源数字（单源 = 只读契约那一份）', () => {
+    for (const rel of ['../src/monaco/document-words.ts', '../../plugins/erb-parser/src/completion.ts']) {
+      const src = readFileSync(new URL(rel, import.meta.url), 'utf8');
+      expect(src).toContain('DOCUMENT_WORD_SOURCE');
+      // 本地再抄一份 5000 / 200 / 4000 就是第二真源：这一条专拦"把数字写回来"
+      expect(/const\s+(WORD_SUGGESTIONS_MAX_LINES|MAX_DOCUMENT_WORD_SUGGESTIONS|MAX_WORD_INDEX|MIN_WORD_LENGTH|MAX_WORD_LENGTH)\s*=\s*\d/.test(src)).toBe(false);
+    }
   });
 });

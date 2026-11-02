@@ -11,11 +11,8 @@
 
 import { describe, expect, it } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import {
-  MAX_DOCUMENT_WORD_SUGGESTIONS,
-  WORD_SUGGESTIONS_MAX_LINES,
-  documentWordItems,
-} from '../src/monaco/document-words';
+import { DOCUMENT_WORD_SOURCE } from '@kojo/plugin-api';
+import { documentWordItems } from '../src/monaco/document-words';
 import { kojoWordCandidateAt, kojoWordCompletionItems } from '../src/monaco/kojo-completion-words';
 import { installKojoCompletion } from '../src/monaco/kojo-completion';
 import { installErbCompletion } from '../src/monaco/erb-completion';
@@ -148,18 +145,25 @@ describe('document-words · 取词面（代码行才进索引）', () => {
     expect(labelsOf(items)).not.toContain('Foo');
   });
 
-  it(`上限 ${MAX_DOCUMENT_WORD_SUGGESTIONS} 条 / 超 ${WORD_SUGGESTIONS_MAX_LINES} 行不建索引`, () => {
+  it(`上限 ${DOCUMENT_WORD_SOURCE.maxSuggestions} 条 / 超 ${DOCUMENT_WORD_SOURCE.maxLines} 行不建索引`, () => {
     const many = Array.from({ length: 250 }, (_, i) => `别名 Word${String(i).padStart(3, '0')} = 1`);
     many.push('别名 Word = 1');
     const model = modelOf(many.join('\n'));
     const position = pos(many.length, '别名 Word'.length + 1);
     const items = documentWordItems(MONACO, model, position, rangeOf(model, position), 'kojo');
-    expect(items).toHaveLength(MAX_DOCUMENT_WORD_SUGGESTIONS);
+    expect(items).toHaveLength(DOCUMENT_WORD_SOURCE.maxSuggestions);
 
-    const huge = Array.from({ length: WORD_SUGGESTIONS_MAX_LINES + 1 }, (_, i) => `别名 W${i} = 1`);
+    const huge = Array.from({ length: DOCUMENT_WORD_SOURCE.maxLines + 1 }, (_, i) => `别名 W${i} = 1`);
     const hugeModel = modelOf(huge.join('\n'));
     const hugePos = pos(1, '别名 W'.length + 1);
     expect(documentWordItems(MONACO, hugeModel, hugePos, rangeOf(hugeModel, hugePos), 'kojo')).toEqual([]);
+
+    // 闸**恰好在那一行**放行（口径是 `>` 不是 `>=`；漂一格就与插件那一侧分叉）
+    const justInside = huge.slice(0, DOCUMENT_WORD_SOURCE.maxLines);
+    const justModel = modelOf(justInside.join('\n'));
+    expect(
+      documentWordItems(MONACO, justModel, pos(1, '别名 W'.length + 1), rangeOf(justModel, pos(1, 5)), 'kojo').length,
+    ).toBeGreaterThan(0);
   });
 
   it('索引按 model 版本号记忆化：版本变化后才看到新词', () => {
