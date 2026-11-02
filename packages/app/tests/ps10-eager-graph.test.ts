@@ -1635,6 +1635,37 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
   });
 
   /**
+   * **「懒而不丢」封口（KW-31，2026-11-03）**：上面那条减面把 `resetSearch` 改成动态取，
+   * 于是留下一个新的偷懒形状——**把这一次清除整格删掉**同样能让开机图变小、还不用维护注释。
+   * 删掉它就是铁律 4 的反面（项目关了、旧检索结果留在屏后头，作者下一次开项目看见别人的路径）。
+   * 所以这里按源码顺序钉三格（口径照 `ps10-boot-order.test.ts`：判据本体就是"谁先谁后"）：
+   * ① 动态取必须**在拆除序之前**（`reset` 的契约是同步执行完毕，见 `project-close.ts` 的
+   *    `reset` 注 —— 把 await 挪进 `reset` 里面就是改行为）；
+   * ② 取到的函数必须在 `reset` 里**真被调用**；
+   * ③ 取不到那一路必须**出声**（不许 `catch {}` 把失败吞成"没做过"）。
+   */
+  it('关项目那条腿「懒而不丢」：动态取在拆除序之前、取到仍同步清检索态、取不到出声', () => {
+    const src = read('packages/app/src/ui/use-project-session.ts');
+    const load = src.indexOf(`await import('./search-store')`);
+    const teardown = src.indexOf('await closeProjectSession({');
+    const call = src.indexOf('resetSearch?.();');
+    expect(load).toBeGreaterThan(-1);
+    expect(teardown).toBeGreaterThan(-1);
+    expect(call).toBeGreaterThan(-1);
+    // ① 先取后拆（取函数这件事在 closeProjectSession 之前）
+    expect(load).toBeLessThan(teardown);
+    // ② 调用点在拆除序内部、`reset` 本体里（`reset: () => {` 之后才算）
+    expect(src.indexOf('reset: () => {')).toBeLessThan(call);
+    expect(call).toBeLessThan(teardown + 20_000); // 同一次 closeProject 内（远端不许另起一处调用）
+    // ③ 失败出声：catch 里必须有 notify，且不许出现空 catch
+    const catchBody = src.slice(src.indexOf('} catch (e: unknown) {', load), src.indexOf('}', src.indexOf('}', src.indexOf('} catch (e: unknown) {', load)) + 1) + 1);
+    expect(catchBody).toContain('notify({');
+    expect(src).not.toMatch(/catch\s*\{\s*\}/);
+    // ④ 静态边不许以"顺手改回去"的形态复活
+    expect(src).not.toMatch(/^import\s+\{[^}]*resetSearch[^}]*\}\s*from\s*'\.\/search-store'/m);
+  });
+
+  /**
    * **叶子纪律**（B1 立的，理由见上一条注释里的"差点翻车"）。
    *
    * `@kojo/kojo-lang` 的桶 re-export 了整个语言面（约 85 KB）。开机图里任何一枚文件
