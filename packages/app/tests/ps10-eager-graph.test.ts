@@ -16,7 +16,10 @@ import { describe, expect, it } from 'vitest';
  *    / `tutorial-inline` 一枚都不许出现（PS-10 ① 的交付面；它们只在浮层被打开时动态装载）；
  * 2. **插件拆分成立**：`bootstrap.ts` 的静态插件入口只剩两个，其余 18 个走 `import()`；
  *    开机图里除**已知漏点**外，项目级插件一枚文件都不许出现；
- * 3. 图的大小闸（粗闸：抓"整包被拽回来"这种量级事故，不追 KB 级抖动）。
+ * 3. 图的大小闸（粗闸：抓"整包被拽回来"这种量级事故，不追 KB 级抖动）；
+ * 4. **KW-31（2026-11-03）两格**：检索面一族只在懒边之下（一条动态边还回 85,428 B），
+ *    而作品会话一族"拆不动的那一半"必须在图里、判据声明只住唯一落点（理由写实并钉成闸，
+ *    不许只留注释）。
  *
  * ⚠ 已知漏点：**本批（PS10-LEAK）已清空**。
  *
@@ -1478,11 +1481,157 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     这就是"唯一分解"那一格的取证），两枚测试与 `docs/BOARD.md` 按口径不进本图。
     //     ⇒ KB 闸 **3,613 → 3,616**；文件闸 201 不动。真实红沿 = **3,703,296 B**，
     //     机械余量 **1,009 B**。
+    //     补账（组长落地时核）：同日的 **KW-28** 只把 `packages/plugin-api/src/replay.ts` 的
+    //     契约注释 **+175 B** 拽进图（`state-replay/src/locals.ts` +2,239 与 `ui-state-replay/src/preview.ts`
+    //     +1,098 实测**都不在**开机图——回放那一族整条挂在 `import('./ProjectView')` 懒边之下），
+    //     取整仍落在同一档 ⇒ **闸不动**，现读数从 3,702,287 变 **3,702,462 B**、机械余量随之
+    //     **1,009 → 834 B**。这一格不留账，下一个人按 1,009 算就会差 175。
+    //   - **KW-31 作品会话半边拆包叶子（2026-11-03，本批）**：读数 **196 文件 / 3,529 KB ·
+    //     3,613,995 B**（= 上一条 3,699,423 − **85,428**），两枚闸随现读数**下调**
+    //     （201 → 196 文件、3,613 → 3,529 KB；降闸不写理由，口径照旧）。
+    //     判定 = **(c) 部分拆**。量的结果不是"作品会话那 29,176 B 拆不动"，而是**这一族在图里
+    //     整块拽着的懒面另有其形**：`use-project-session.ts` 是检索五枚进开机图的**唯一**静态
+    //     入口（另四枚消费者 `ProjectView` / `ShellLayout` / `SearchPanel` / `SearchFilterBar`
+    //     全在 `import('./ProjectView')` 的懒边之下），而静态消费面**只有关项目那一次
+    //     `resetSearch()`** ⇒ 一条动态边换回整族出图。
+    //     · 逐枚字节归因（现树 `fs.statSync` vs `git cat-file -s origin/dev:…`；**差值求和
+    //       −85,428 B 与总差逐字节相等**）：出图五枚 `ui/search-store.ts` −41,419 /
+    //       `ui/search-query.ts` −19,311 / `ui/search-scope.ts` −13,397 /
+    //       `bridge/search.ts` −7,610 / `ui/search-stream.ts` −5,501 ＝ **−87,238**；
+    //       进图字节只有**一枚** `ui/use-project-session.ts` **+1,810**（动态取函数那一格 +
+    //       出处注；本仓给理由写字，不给过闸删字）。**零新增文件进图**（新走动态边的东西
+    //       一枚都不数，所以文件闸从顶格变成 196/201）。
+    //     · 形态：`closeProject` 在**拆除序之前** `await import('./search-store')` 取到函数，
+    //       `reset` 本体照旧同步逐条走完 —— `project-close.ts` 那条「必须同步执行完毕」的契约
+    //       一字未动（把 `reset` 改成 async 才是行为改动，本批不这么做）。会话态下这一族本来
+    //       就被 `ProjectView.tsx:31` 的静态边装好 ⇒ 这一句 `import()` 是即时命中，不给开项目
+    //       加一次网络。取不到（唯一现场＝项目界面根本没装起来）⇒ 一条人话 + 拆除照走，
+    //       不静默（铁律 4）。
+    //     · 屏上没有行为差，只有一处**时机**差如实记着：这一族的模块级初始化（`INITIAL` 里
+    //       两读 localStorage：检索开关与最近检索）原先在开机那一刻跑，现在跟着会话装起来。
+    //       读到的还是同一份存储，且 `resetSearch()` 本来就"现读一次、不复用装载快照"
+    //       （`search-store.ts:999` 那条注），欢迎页也没有任何一面订阅这一族 ⇒ 无可见差。
+    //     ⚠ **拆不动的那一半按 (b) 写实，并钉成下面那条新闸**（「作品会话一族：拆不动的那一半
+    //     钉成闸」，逐格给首屏消费点）：
+    //     · `ui/use-project-session.ts` 43,057——App 渲染期同步调的三枚 hook（`App.tsx:695`
+    //       `useSessionStore` / `:1458` `useProjectSession` / `:2609` `useSessionFlush`），
+    //       React 的钩子挂不到动态边上；剩下的调用面各由**别人车道的源码级静态闸**钉死：
+    //       `ps10-boot-order.test.ts:45`（cancel→ensure→open 次序 + 恰一处注册）、
+    //       `write-domain-admission.test.ts:243`＋`:257`（写方封口：`admitProjectWriteDomain(`
+    //       与 `setSessionWriteDomainFact(` 计数恰 4 处都住本文件）、
+    //       `dictionary-notice-ledger.test.ts:242`（`from './dictionary-notice-ledger'` 这条边
+    //       必须住本文件）⇒ 挪走 = 判据过期，本车不替别人裁闸，报组长（这三格已点名）。
+    //     · `ui/workspace-folders.ts` 23,378——`use-workspace-folders.ts:76` 在**无游戏态**也要
+    //       建这张表（欢迎页那一次 `projectRoot: project?.rootDir` 就是 null 那一支），监视腿
+    //       取 `watchRootsOf`（`use-project-session.ts:597`）；会话根那一族搬到渲染侧就是五条腿
+    //       各抄一份根（WS-04 立表要消灭的形状，KW-4E 段② 已记一次）。
+    //     · `ui/session-store.ts` 21,807——`useSessionStore` / `useSessionFlush` 同为渲染期
+    //       hook；恢复半边（`planSessionRestore` / `probeExistingPaths` 尾部 5,438 B）当年是
+    //       **为守文件闸特意并进这一枚**的（见上方 WS-06/07/08 段），拆回去就是 +1 枚进图文件。
+    //     · `ui/recent-workspace-projects.ts` 12,287 / `ui/window-title.ts` 2,619 /
+    //       `ui/project-error-notice.tsx` 5,726 / `ui/use-workspace-folders.ts` 3,874——首屏
+    //       本体：欢迎页作品卡片与一键重开、标题栏、编辑器面渲染闸，无项目态每帧都在读。
+    //     ⇒ 欠账清偿：台账那笔 **29,176 B**（段① 14,091 + 段③ 6,797 + 段④ 8,288）本车还回
+    //     **85,428 B**（2.9 倍）。红沿随闸下调：3,529 KB 的真实红沿 = **3,614,208 B**，
+    //     机械余量 **213 B**（现 3,613,995）——别读成"随便写"，下一枚进图字节仍须先出图；
+    //     文件闸 196/201 腾出的 5 格是本批**省下来的**，不是新额度。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,616 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤196 文件 / ≤3,529 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_616);
-    expect(files.length).toBeLessThanOrEqual(201);
+    expect(totalKb).toBeLessThanOrEqual(3_529);
+    expect(files.length).toBeLessThanOrEqual(196);
+  });
+
+  /**
+   * **KW-31 减面批（2026-11-03）**：检索面一族从开机图里摘出去（`use-project-session.ts`
+   * 关项目那一次 `resetSearch()` 改成动态边），这里把它**钉住**。
+   *
+   * 为什么单独一条而不靠体积闸：读数只会说"又涨了 87 KB"，说不出是谁拽的；这条直接点名
+   * 一族五枚，并在涨回去的那一刻指出**是哪一枚文件重新静态引了它**。形态照文件头
+   * 「教程正文一枚都不在开机图里」那条（成员断言 + 反空匹配自证两件套）。
+   */
+  it('检索面一族只在懒边之下（KW-31：唯一静态入口已改动态边，不许回来）', { timeout: 120_000 }, () => {
+    const SEARCH_FAMILY = /app\/src\/(?:ui\/search-(?:store|query|scope|stream)|bridge\/search)\.ts$/;
+    const leaked = files.filter((f) => SEARCH_FAMILY.test(f));
+    expect(leaked).toEqual([]);
+    // 反空匹配自证：允许跟动态边，这一族必须回图（否则上面那条可能只是正则拼错而恒真）
+    const withDynamic = [...eagerClosure('packages/app/src/main.tsx', { followDynamic: true }).keys()];
+    expect(withDynamic.filter((f) => SEARCH_FAMILY.test(f)).length).toBeGreaterThanOrEqual(5);
+    // 静态边封口：开机图里任何一枚都不许再**静态**引这一族（谁引就点谁的名）
+    const offenders: string[] = [];
+    for (const rel of files) {
+      const abs = path.join(repoRoot, rel);
+      const src = readFileSync(abs, 'utf8');
+      const specs: string[] = [];
+      for (const m of src.matchAll(STATIC_IMPORT_RE)) if (hasValueBinding(m[1]!)) specs.push(m[2]!);
+      for (const m of src.matchAll(EXPORT_FROM_RE)) specs.push(m[1]!);
+      for (const s of specs) {
+        const target = resolveSpec(s, abs);
+        if (target && SEARCH_FAMILY.test(relOf(target))) offenders.push(`${rel} → ${s}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * **作品会话一族「拆不动的那一半」钉成闸（KW-31，2026-11-03）**。
+   *
+   * 台账那笔欠账（KW4C 段② 立、KW-4E 加严：「下一辆车先量拆得动吗，拆不动就把理由写死」）
+   * 量完的结论是 **(c) 部分拆**：拆得动的那一格只有上面那条检索面的边（实测 −87,238 B /
+   * −5 文件）；其余每一格都在**首屏**有真消费点（逐格读数与 `file:line` 见上一条用例的台账
+   * 注释），把它们挪去懒边要么撞 React 的钩子次序（hook 不许挂在 `import()` 之后），要么
+   * 就是别人车道源码级静态闸的落点（`ps10-boot-order` / `write-domain-admission` /
+   * `dictionary-notice-ledger`）。**理由不能只写在注释里**——注释会变假话，所以这里钉两格：
+   * ① 这一族必须在开机图里（首屏真在读，谁把它们藏进懒边就叫）；
+   * ② 判据的**声明**只许住各自那一枚文件（搬到渲染侧就是五条腿各抄一份根，正是 WS-04
+   *    立这张表要消灭的形状）。
+   */
+  it('作品会话一族：拆不动的那一半钉成闸（在图里 + 判据声明只住唯一落点）', () => {
+    for (const rel of [
+      'packages/app/src/ui/use-project-session.ts',
+      'packages/app/src/ui/workspace-folders.ts',
+      'packages/app/src/ui/use-workspace-folders.ts',
+      'packages/app/src/ui/session-store.ts',
+      'packages/app/src/ui/recent-workspace-projects.ts',
+      'packages/app/src/ui/window-title.ts',
+      'packages/app/src/ui/project-error-notice.tsx',
+    ]) {
+      expect(graph.has(rel), `${rel} 该在开机图里（首屏真消费；见本文件 KW-31 台账的逐格消费点）`).toBe(true);
+    }
+    /** 声明只住这一枚文件；别处出现同名 `export function` ⇒ 第二份根模型长了出来 */
+    const SINGLE_HOME: Record<string, string> = {
+      sessionWorkspaceRootOf: 'packages/app/src/ui/workspace-folders.ts',
+      sessionDisplayRootOf: 'packages/app/src/ui/workspace-folders.ts',
+      topLevelRootFolders: 'packages/app/src/ui/workspace-folders.ts',
+      kojoDomainGapNotice: 'packages/app/src/ui/workspace-folders.ts',
+      workspaceGapsOf: 'packages/app/src/ui/workspace-folders.ts',
+      planRecentWorkspaceOpen: 'packages/app/src/ui/recent-workspace-projects.ts',
+      windowTitleForSession: 'packages/app/src/ui/window-title.ts',
+      planSessionRestore: 'packages/app/src/ui/session-store.ts',
+      probeExistingPaths: 'packages/app/src/ui/session-store.ts',
+      sessionLastKindOf: 'packages/app/src/ui/session-store.ts',
+    };
+    const appSrcFiles: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const abs = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(abs);
+        else if (/\.tsx?$/.test(entry.name)) appSrcFiles.push(relOf(abs));
+      }
+    };
+    walk(path.join(repoRoot, 'packages/app/src'));
+    expect(appSrcFiles.length).toBeGreaterThan(100); // 自证：扫到东西了，不是空集合恒真
+    const declared: Record<string, string[]> = {};
+    for (const rel of appSrcFiles) {
+      const src = readFileSync(path.join(repoRoot, rel), 'utf8');
+      for (const name of Object.keys(SINGLE_HOME)) {
+        if (new RegExp(`^export (?:async )?function ${name}\\b`, 'm').test(src))
+          (declared[name] ??= []).push(rel);
+      }
+    }
+    for (const [name, home] of Object.entries(SINGLE_HOME))
+      expect(declared[name], `${name} 的声明落点`).toEqual([home]);
+>>>>>>> c46bc141 (test(开机图): 两枚闸随现读数下调 + 检索面与作品会话族各钉一枚闸（KW-31 段②）)
   });
 
   /**
