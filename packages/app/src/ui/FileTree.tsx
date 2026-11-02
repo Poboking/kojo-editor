@@ -87,10 +87,11 @@ import { createEntryIfAbsent } from './file-tree-create';
 import {
   browsableRootsOf,
   folderOfPath,
+  kojoDomainGapNotice,
   sessionDisplayRootOf,
-  workspaceGapNotice,
   type WorkspaceFolder,
 } from './workspace-folders';
+import { isQuickOpenSourcePath } from './commands';
 import { filterRenderPlan, nextFilterWindow } from './file-tree-filter-window';
 import {
   allSelectablePaths,
@@ -194,19 +195,55 @@ export async function walkDialectPaths(
   walkDir: (path: string, opts?: WalkOptions) => Promise<DirEntry[]>,
   roots: readonly string[],
 ): Promise<string[]> {
+  return walkPathsUnder(walkDir, roots, isErbDialectPath);
+}
+
+/**
+ * 作者/附加根那一支的列举：**按"能打开的口上源文件"筛**，不按 ERB 方言筛（KW-4E 段②，2026-11-03）。
+ *
+ * 为什么不能沿用 {@link walkDialectPaths}：那把尺子是**游戏现场**的尺（`ERB_DIALECT_EXTENSIONS`
+ * = `.erb/.erm/.erh`，喂的是口上域的角色分组）。作品目录里作者写的是 `.kojo` / `.kojo2` /
+ * `.kojo1`，用 ERB 的尺去量自己的作品目录，量出来就是屏上那一格 `workspaces 可写 0` 与
+ * "这个文件夹里还没有 ERB 方言文件"——而 **同一批文件 Ctrl+P 与全项目检索早就认得**
+ * （`commands.ts::quickOpenSourceExtensions()`，2.0 源文无条件在册）。同一片目录两把尺子
+ * 正是 WS-04 要消灭的那类裂缝；这里不是把 `.kojo` 伪装成 ERB 塞进索引（索引仍然只认游戏现场），
+ * 而是让**目录列举**用它自己该用的那把尺：与找得到 / 搜得到同一份清单。
+ */
+export async function walkOpenableSourcePaths(
+  walkDir: (path: string, opts?: WalkOptions) => Promise<DirEntry[]>,
+  roots: readonly string[],
+): Promise<string[]> {
+  return walkPathsUnder(walkDir, roots, isQuickOpenSourcePath);
+}
+
+/** 两条 walk 共用的唯一实现：逐根一次递归、只筛输出条目（口径见 {@link walkDialectPaths} 的注） */
+async function walkPathsUnder(
+  walkDir: (path: string, opts?: WalkOptions) => Promise<DirEntry[]>,
+  roots: readonly string[],
+  accept: (name: string) => boolean,
+): Promise<string[]> {
   const out: string[] = [];
   for (const root of roots) {
     const entries = await walkDir(root, {
       includeFiles: true,
       includeDirs: false,
-      filter: (e) => e.isDirectory || isErbDialectPath(e.name),
+      filter: (e) => e.isDirectory || accept(e.name),
     });
     for (const e of entries) {
-      if (!e.isDirectory && isErbDialectPath(e.name)) out.push(e.path);
+      if (!e.isDirectory && accept(e.name)) out.push(e.path);
     }
   }
   return out;
 }
+
+/**
+ * 顶层根分组"空"的那一句（KW-4E 段③：文案与判据同一把尺子）。
+ *
+ * 这一格原先写死「还没有 ERB 方言文件」——那是上面那把错的尺子的回声：作品目录按
+ * {@link walkOpenableSourcePaths} 列举，说的就必须是"能打开的口上源文件"。
+ * 行模型（`tree` 那枚 note）与渲染侧两处共用这一枚常量，不各写一遍。
+ */
+export const ROOT_GROUP_EMPTY_NOTE = '这个分组里还没有能打开的口上源文件';
 
 /**
  * CSS 属性选择器的字符串值转义（PS-6 定位那一条）。
@@ -678,7 +715,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     void Promise.all(
       picked.map(async (folder) => {
         try {
-          states.set(pkey(folder.path), await walkDialectPaths(walkDir, [folder.path]));
+          states.set(pkey(folder.path), await walkOpenableSourcePaths(walkDir, [folder.path]));
         } catch {
           states.set(pkey(folder.path), 'error');
         }
@@ -2329,7 +2366,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
           : rg.files.length === 0
             ? rg.status === 'loading'
               ? '读取文件夹…'
-              : '这个文件夹里还没有 ERB 方言文件'
+              : ROOT_GROUP_EMPTY_NOTE
             : undefined,
     }));
     return buildKojoFlatTree({
@@ -2897,10 +2934,11 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
             {/* 口上域（角色 → 作者包）那一组是**游戏现场**的产物：owners 表来自 `kojoPaths`、
                 角色归属来自 `charaIndex`。作品会话里没有这两样 ⇒ **显式不可用**：说一句人话
                 交代"为什么没有、你的东西在哪"，而不是渲染成一片空（空 = 看起来像坏掉）。
-                作品与附加根本来就在下面的顶层分组里（`rootGroupsVisible`），一条也没少。 */}
+                那一句里的"下面的分组"与这张表**同一把尺子**（KW-4E 段③）：表里真交得出顶层根
+                分组才说"都在下面的分组里"，说不出口就照实讲"下面没有分组可展开"。 */}
             {project === null ? (
               <li className="tree-note" role="presentation">
-                {workspaceGapNotice('kojoDomain')}
+                {kojoDomainGapNotice(folders)}
               </li>
             ) : null}
             {visible.map((g, groupIdx) => {
@@ -3141,7 +3179,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                       <li className="tree-note" role="presentation">这个文件夹读不到（可能已移动，或当前环境没有桌面壳权限）</li>
                     ) : files.length === 0 ? (
                       <li className="tree-note" role="presentation">
-                        {status === 'loading' ? '读取文件夹…' : '这个文件夹里还没有 ERB 方言文件'}
+                        {status === 'loading' ? '读取文件夹…' : ROOT_GROUP_EMPTY_NOTE}
                       </li>
                     ) : (
                       <>

@@ -16,7 +16,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { Kernel } from '@kojo/kernel';
 import type { GameProject } from '@kojo/plugin-api';
 import { pathKey } from '@kojo/plugin-api';
-import { buildWorkspaceFolders, type WorkspaceFolder } from './workspace-folders';
+import { buildWorkspaceFolders, type SessionWorkspaceRoot, type WorkspaceFolder } from './workspace-folders';
 import { workspaceProjectDirsOf } from './workspace-roots';
 
 /** 作品目录清单的**身份串**（判"这份清单变了没有"；写法变体不算变） */
@@ -39,6 +39,11 @@ export function useWorkspaceFolders(
   kernel: Pick<Kernel, 'workspaces' | 'bus'> | null,
   project: GameProject | null,
   extraRoots: readonly string[] | undefined,
+  /**
+   * 作品会话那一枚作品（KW-4E 段②，2026-11-03）：给了它，作者那一支就**只交这一枚作品的
+   * 目录**（标题用作品名）。游戏会话 / 欢迎页传 null ⇒ 与改前逐字同形。
+   */
+  sessionWorkspace?: SessionWorkspaceRoot | null,
 ): WorkspaceFolder[] {
   const [authorDirs, setAuthorDirs] = useState<readonly string[]>([]);
 
@@ -73,7 +78,8 @@ export function useWorkspaceFolders(
         savDir: project?.savDir,
         authorDirs,
         extraRoots: extraRoots ?? [],
+        sessionWorkspace: sessionWorkspace ?? null,
       }),
-    [project, authorDirs, extraRoots],
+    [project, authorDirs, extraRoots, sessionWorkspace],
   );
 }

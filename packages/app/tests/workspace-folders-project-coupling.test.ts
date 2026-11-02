@@ -29,12 +29,17 @@ import {
   browsableRootsOf,
   buildWorkspaceFolders,
   gameRootOf,
+  kojoDomainGapNotice,
   quickOpenRootsOf,
   scanRootsOf,
   searchRootsOf,
   sessionDisplayRootOf,
+  sessionWorkspaceRootOf,
+  topLevelRootFolders,
   watchRootsOf,
   workspaceFoldersOf,
+  workspaceGapNotice,
+  workspaceGapsOf,
   type WorkspaceFolder,
 } from '../src/ui/workspace-folders';
 import { filterGameScopedPanels, gameScopeByPlugin } from '../src/ui/layout';
@@ -135,7 +140,11 @@ describe('① 会话两态：有没有游戏现场，根表都按同一条判据
 
   it('监视腿的闸改认「会话」：作品会话也挂 watcher，欢迎页仍然一个也不挂', () => {
     const session = read('ui/use-project-session.ts');
-    expect(session).toContain('const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots);');
+    // KW-4E 段②（2026-11-03）翻新：这条调用**多交一枚会话作品**（第 4 参 `workspaceSession`），
+    // 根表才答得出"作品会话的根 = 这一枚作品的目录"。改前三参的旧形状不得以另一种写法回来
+    // （那条三参调用正是段② 之前屏上 `workspaces 可写 0` 的成因：表里只有常驻落点根）。
+    expect(session).toContain('useWorkspaceFolders(kernel, project, extraRoots, workspaceSession);');
+    expect(session).not.toContain('useWorkspaceFolders(kernel, project, extraRoots);');
     expect(session).toContain('if (!kernel || sessionRoot === null) return;');
     expect(session).toContain('void kernel.fileWatch.start(watchRootsOf(workspaceFolders));');
     // 落盘键同源：会话记录按 `sessionRoot` 记，不再各自问 `project`
@@ -285,5 +294,95 @@ describe('④ 面板归属与欢迎页回路（同一道闸的屏上形态）', 
     expect(rwp).toContain('export function planRecentWorkspaceOpen');
     // `gameRoot` 仍是可选历史键（老记录清洗零影响），但只是"当时的照片"，不再是回路条件
     expect(rwp).toContain('gameRoot?: string;');
+  });
+});
+
+/* ============ ⑤ KW-4E 段②/段③：作品会话的根 = **这一枚作品**（不是常驻落点根） ============ */
+
+/** 常驻落点根下面那一枚作品目录（KW-4E 开工时屏上画的是上面那一格） */
+const SESSION_DIR = `${WORK_ROOT}/pmvzgrrm7-bo4du6`;
+const SESSION_NAME = '组长验收作品';
+
+describe('⑤ 作品会话的根（KW-4E 段②，2026-11-03）：判据只住这张表', () => {
+  it('给了会话作品 ⇒ 作者那一支**只交这一枚作品的目录**，标题用作品名、不是 id', () => {
+    const folders = buildWorkspaceFolders({
+      authorDirs: [WORK_ROOT],
+      extraRoots: [EXTRA],
+      sessionWorkspace: { dir: SESSION_DIR, name: SESSION_NAME },
+    });
+    expect(shot(folders)).toEqual([
+      `author:${SESSION_NAME}@${SESSION_DIR}`,
+      `extra:参考口上@${EXTRA}`,
+    ]);
+    // 常驻落点根（盖住会话目录那一格）**不在表里**：它带着"所有作品"的可见性，
+    // 而按能力覆盖的外层去嵌套规则本来会把会话目录当场折掉——那正是段③ 屏上 0 的成因
+    expect(folders.some((f) => f.path === WORK_ROOT)).toBe(false);
+    expect(folders.filter((f) => f.isSessionWorkspaceRoot).map((f) => f.path)).toEqual([SESSION_DIR]);
+    expect(sessionWorkspaceRootOf(folders)?.label).toBe(SESSION_NAME);
+  });
+
+  it('五条腿在作品会话里都取到那枚作品目录：监视 / 树 / Ctrl+P / 检索 / 整项目诊断同尺', () => {
+    const folders = workspaceFoldersOf(
+      kernelWith(() => [WORK_ROOT]),
+      null,
+      [EXTRA],
+      { dir: SESSION_DIR, name: SESSION_NAME },
+    );
+    expect(watchRootsOf(folders)).toEqual([SESSION_DIR, EXTRA]);
+    expect(browsableRootsOf(folders)).toEqual([SESSION_DIR, EXTRA]);
+    expect(quickOpenRootsOf(folders)).toEqual([SESSION_DIR, EXTRA]);
+    expect(searchRootsOf(folders)).toEqual([SESSION_DIR, EXTRA]);
+    expect(scanRootsOf(folders)).toEqual([SESSION_DIR, EXTRA]);
+    // 单根显示位 / 窗口标题的原点：作品会话 = 这一枚作品（不是 workspaces/、也不是 id）
+    expect(sessionDisplayRootOf(folders)).toBe(SESSION_DIR);
+    expect(gameRootOf(folders)).toBeNull();
+  });
+
+  it('没给会话作品（游戏会话 / 欢迎页）⇒ 作者那一支逐字旧行为，一枚不多一枚不少', () => {
+    const folders = workspaceFoldersOf(kernelWith(() => [WORK_ROOT]), project, [EXTRA]);
+    expect(shot(folders)).toEqual([
+      'game:项目根@C:/Game',
+      'game:口上域@C:/Game/ERB',
+      `author:workspaces@${WORK_ROOT}`,
+      `extra:参考口上@${EXTRA}`,
+    ]);
+    expect(folders.some((f) => f.isSessionWorkspaceRoot)).toBe(false);
+    // 会话/空串两种"没给"逐字同形（与 ② 那格缺省口径一致，不留第二条分支）
+    expect(buildWorkspaceFolders({ ...withProject, sessionWorkspace: null })).toEqual(
+      buildWorkspaceFolders(withProject),
+    );
+    expect(buildWorkspaceFolders({ ...withProject, sessionWorkspace: { dir: '   ' } })).toEqual(
+      buildWorkspaceFolders(withProject),
+    );
+  });
+
+  it('作品名缺席 ⇒ 如实回落目录末段（不编一个名字出来）；尾分隔符照样取得出末段', () => {
+    expect(shot(buildWorkspaceFolders({ sessionWorkspace: { dir: SESSION_DIR } }))).toEqual([
+      `author:pmvzgrrm7-bo4du6@${SESSION_DIR}`,
+    ]);
+    expect(shot(buildWorkspaceFolders({ sessionWorkspace: { dir: 'D:/作品/', name: '  ' } }))).toEqual([
+      'author:作品@D:/作品/',
+    ]);
+  });
+
+  it('段③ 那句人话与顶层分组**同一把尺子**：有分组才承诺，没分组就照实说没有', () => {
+    const withSession = buildWorkspaceFolders({
+      authorDirs: [WORK_ROOT],
+      sessionWorkspace: { dir: SESSION_DIR, name: SESSION_NAME },
+    });
+    // 表里真有顶层分组 ⇒ 承诺那半句（与段② 原文逐字相同，文案只有一处）
+    expect(topLevelRootFolders(withSession).map((f) => f.path)).toEqual([SESSION_DIR]);
+    expect(kojoDomainGapNotice(withSession)).toBe(workspaceGapNotice('kojoDomain'));
+    expect(kojoDomainGapNotice(withSession)).toContain('作品文件都在下面的分组里');
+    // 表里一枚顶层分组都没有 ⇒ 换成一句真话，且**不得**再出现那句承诺（屏上不许同时挂谎话）
+    const nothing = kojoDomainGapNotice([]);
+    expect(nothing).not.toContain('作品文件都在下面的分组里');
+    expect(nothing).toContain('没有');
+    // 那条"逐条显式不可用"的清单也走同一把尺子（不许另一侧抄静态句子）
+    const gaps = workspaceGapsOf(buildWorkspaceFolders({}));
+    expect(gaps.find((g) => g.id === 'kojoDomain')?.notice).toBe(nothing);
+    // 消费方不另拼判据：FileTree 顶层分组与这句人话都问这张表
+    expect(read('ui/FileTree.tsx')).toContain('const rootFolders = useMemo(() => folders.filter((f) => f.role !== \'game\'), [folders]);');
+    expect(read('ui/FileTree.tsx')).toContain('kojoDomainGapNotice(folders)');
   });
 });

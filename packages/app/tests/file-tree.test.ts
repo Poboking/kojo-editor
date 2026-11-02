@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, afterEach } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { CharaInfo, DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
-import { FileTree, middleEllipsis, walkDialectPaths } from '../src/ui/FileTree';
-import { buildWorkspaceFolders, workspaceGapNotice } from '../src/ui/workspace-folders';
+import { FileTree, ROOT_GROUP_EMPTY_NOTE, middleEllipsis, walkDialectPaths, walkOpenableSourcePaths } from '../src/ui/FileTree';
+import { buildWorkspaceFolders, kojoDomainGapNotice } from '../src/ui/workspace-folders';
 import { DirRows } from '../src/ui/file-tree-dir-rows';
 import { FileRows } from '../src/ui/file-tree-rows';
 import { resetSelectionForTest, setActivePath } from '../src/ui/file-tree-selection';
@@ -243,6 +245,57 @@ describe('walkDialectPaths · 冷开快照（索引未就绪时先出树）', ()
     expect(groups.map((g) => g.label)).toEqual(['#1 霊夢', '(未归属)']);
     expect(groups[0]!.total).toBe(4);
     expect(groups[1]!.subs[0]!.files.map((f) => f.split('/').pop())).toEqual(['x.ERB']);
+  });
+});
+
+/* ============ 顶层根分组（作品目录 / 附加根）的列举用**哪把尺**（KW-4E 段②） ============ */
+
+describe('walkOpenableSourcePaths · 作者自己的目录按"能打开的口上源文件"筛（KW-4E 段②）', () => {
+  const WORK = 'C:/users/me/AppData/workspaces/组长验收作品';
+  const tree: WalkTree = {
+    [`${WORK}/正文`]: 'DIR',
+    [`${WORK}/正文/测试.kojo`]: '', // 2.0 源文：作者进自己作品要看见的就是这一枚（屏上曾经数出 0）
+    [`${WORK}/正文/旧版.kojo1`]: '', // v1 糖源
+    [`${WORK}/正文/产物.ERB`]: '', // ERB 方言同样收（与 Ctrl+P 同集合，不是超集也不是子集）
+    [`${WORK}/正文/头文件.erh`]: '',
+    [`${WORK}/正文/说明.txt`]: '', // 不是口上源文件：不收
+    [`${WORK}/设定/台本.kojo2`]: '', // 深度 2（深层不筛掉）
+    [`${WORK}/根目录.kojo`]: '',
+  };
+
+  it('`.kojo` / `.kojo1` / `.kojo2` 与 ERB 方言一并收；非源文件与目录一律不收', async () => {
+    const paths = await walkOpenableSourcePaths(fakeWalkDir(tree), [WORK]);
+    expect(paths.slice().sort()).toEqual(
+      [
+        `${WORK}/正文/测试.kojo`,
+        `${WORK}/正文/旧版.kojo1`,
+        `${WORK}/正文/产物.ERB`,
+        `${WORK}/正文/头文件.erh`,
+        `${WORK}/设定/台本.kojo2`,
+        `${WORK}/根目录.kojo`,
+      ].sort(),
+    );
+    expect(paths.some((p) => p.endsWith('.txt'))).toBe(false);
+    expect(paths.some((p) => p === WORK || p.endsWith('/正文'))).toBe(false);
+  });
+
+  it('同一把尺子：与 Ctrl+P 认得的清单逐条一致（`.kojo` 不是被"伪装成 ERB"收进来的）', async () => {
+    const asSource = await walkOpenableSourcePaths(fakeWalkDir(tree), [WORK]);
+    // ERB 方言那一条腿（索引 / 冷开快照）刻意**不收** `.kojo`——作品会话里没有游戏现场，
+    // 索引那一面本来就是空的；这里证明两把尺各自的边界，不把它们并成一把。
+    const asDialect = await walkDialectPaths(fakeWalkDir(tree), [WORK]);
+    expect(asDialect.slice().sort()).toEqual([`${WORK}/正文/头文件.erh`, `${WORK}/正文/产物.ERB`].sort());
+    expect(asDialect.every((p) => asSource.includes(p))).toBe(true);
+    expect(asSource.filter((p) => p.endsWith('.kojo'))).toHaveLength(2);
+  });
+
+  it('根分组为空时上屏那句与行模型那句是同一枚常量（文案不许写两遍）', () => {
+    const src = readFileSync(fileURLToPath(new URL('../src/ui/FileTree.tsx', import.meta.url)), 'utf8');
+    // 行模型（`tree` 那枚 note）与渲染侧两处都取 ROOT_GROUP_EMPTY_NOTE，旧那句 ERB 口径已绝迹
+    const noteSites = src.split('\n').filter((l) => l.includes('这个文件夹里还没有') || l.includes('ROOT_GROUP_EMPTY_NOTE'));
+    expect(noteSites.length).toBeGreaterThanOrEqual(2);
+    expect(src).not.toContain("'这个文件夹里还没有 ERB 方言文件'");
+    expect(ROOT_GROUP_EMPTY_NOTE).toContain('口上源文件');
   });
 });
 
@@ -563,7 +616,11 @@ describe('FileTree · 只有口上作品的会话（KW4C 段②，SSR）', () =>
 
   it('作品会话：口上域视图**显式不可用**——上屏那一句人话，不是渲染成空', () => {
     const html = renderWorkspace();
-    expect(html).toContain(workspaceGapNotice('kojoDomain'));
+    // KW-4E 段③（2026-11-03）翻新：那一句改由**根表现算**（`kojoDomainGapNotice(folders)`），
+    // 承诺"作品文件都在下面的分组里"之前先看表里到底有没有分组。旧形状是静态句子
+    // `workspaceGapNotice('kojoDomain')`——它与屏上那一格的 0 自相矛盾，正是本批要消灭的谎话。
+    expect(html).toContain(kojoDomainGapNotice(wsFolders));
+    expect(html).toContain('作品文件都在下面的分组里');
   });
 
   it('作品会话：作品目录仍作为顶层分组挂出来（作者的东西看得见）', () => {
@@ -574,7 +631,23 @@ describe('FileTree · 只有口上作品的会话（KW4C 段②，SSR）', () =>
 
   it('游戏会话：同一棵树**不**出现那句"显式不可用"（口上域有现场，逐字旧行为）', () => {
     const html = renderGame();
-    expect(html).not.toContain(workspaceGapNotice('kojoDomain'));
+    expect(html).not.toContain(kojoDomainGapNotice(gameFolders));
+  });
+
+  it('KW-4E 段③：根表交不出顶层分组时，上屏的是那句真话，承诺那句一个字都不许在场', () => {
+    // 内核读不动 / 作品目录不在表里（屏上曾经就是这个形态）——此时"作品文件都在下面的分组里"
+    // 就是谎话；判据与文案同一把尺子，画不出分组就照实说画不出。
+    const html = renderToStaticMarkup(
+      h(FileTree, {
+        project: null,
+        index: null,
+        activeFile: null,
+        onOpenFile: () => {},
+        workspaceFolders: [],
+      }),
+    );
+    expect(html).toContain(kojoDomainGapNotice([]));
+    expect(html).not.toContain('作品文件都在下面的分组里');
   });
 });
 

@@ -24,7 +24,7 @@ import {errorText,  join, pathKey } from '@kojo/plugin-api';
 import { removeRecentOptimistic } from './WelcomeView';
 // 版本号单一真源 = app 包清单（启动品牌锁与欢迎页同一条路）
 import { version as APP_VERSION } from '../../package.json';
-import { windowTitleFor } from './window-title';
+import { windowTitleForSession } from './window-title';
 import { invoke, isTauri } from '../bridge/invoke';
 import { openExternal, tauriBridge } from '../bridge/tauri-bridge';
 import { AutosaveJournal, HEARTBEAT_INTERVAL_MS, SNAPSHOT_DEBOUNCE_MS } from './autosave-journal';
@@ -544,7 +544,12 @@ export function App(): ReactElement {
    * 窗口标题三处同源（视觉批十四）：自绘标题栏、`document.title`（浏览器标签 / 调试宿）、
    * Tauri 系统标题（任务栏 / Alt-Tab）。只吃项目目录名，算法见 `window-title.ts`。
    */
-  const windowTitle = useMemo(() => windowTitleFor(sessionRoot), [sessionRoot]);
+  const windowTitle = useMemo(
+    // KW-4E 段④：游戏会话逐字不变（第二参是 undefined ⇒ 走目录名那条腿）；作品会话用**作品名**
+    // ——作品目录末段是内核生成的 id，标题栏不该报工号。拼法只住在 `window-title.ts` 那一族里。
+    () => windowTitleForSession(project?.rootDir, workspaceSession?.name),
+    [project, workspaceSession],
+  );
   useEffect(() => {
     document.title = windowTitle;
     if (!isTauri()) return;
@@ -2971,6 +2976,9 @@ export function App(): ReactElement {
           <ProjectViewComponent
             kernel={kernel}
             project={project}
+            // KW-4E 段②：这一会话的那枚作品**原样**进根表（互斥保证它在游戏会话里恒 null）。
+            // 根该是哪一格由 `workspace-folders.ts` 判，这里只投递事实、不拼路径。
+            sessionWorkspace={workspaceSession}
             index={index}
             indexing={indexing}
             indexError={indexError}

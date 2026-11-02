@@ -33,7 +33,14 @@ import { runExplorerOp, runExplorerUndoDelete } from './file-clipboard';
 import { EXPLORER_COPY_COMMAND, EXPLORER_CUT_COMMAND, EXPLORER_PASTE_COMMAND, EXPLORER_DUPLICATE_COMMAND, EXPLORER_UNDO_DELETE_COMMAND } from './file-tree-ops';
 import { dirtyNamesIn } from './disk-reconcile';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
-import { quickOpenRootsOf, scanRootsOf, searchRootsOf, sessionDisplayRootOf, type WorkspaceFolder } from './workspace-folders';
+import {
+  quickOpenRootsOf,
+  scanRootsOf,
+  searchRootsOf,
+  sessionDisplayRootOf,
+  type SessionWorkspaceRoot,
+  type WorkspaceFolder,
+} from './workspace-folders';
 import { useWorkspaceFolders } from './use-workspace-folders';
 import { syncErbIndexAfterDiskChange, type DiskDelta } from './erb-index-sync';
 import { useNotify } from './NotificationCenter';
@@ -74,6 +81,15 @@ interface Props {
    * 保存走内核 io（作品根恒可写），**不**因为这一格是 null 而静默。
    */
   project: GameProject | null;
+  /**
+   * 作品会话那一枚作品（KW-4E 段②，2026-11-03）：游戏会话 / 欢迎页 ⇒ null。
+   *
+   * 只把它原样喂进根表（`useWorkspaceFolders` 的第 4 参），**不在这里拼路径、不比对
+   * 目录名**——"作品会话的根是哪一格"这条判据住在 `workspace-folders.ts` 一处。
+   * 树 / Ctrl+P / 检索 / 监视四条腿因此拿到的是**这一枚作品**的目录，而不是盖着所有
+   * 作品的常驻落点根（那一格画出来就是段③ 屏上的 `workspaces 可写 0`）。
+   */
+  sessionWorkspace: SessionWorkspaceRoot | null;
   index: ErbIndex | null;
   indexing: boolean;
   /** 索引构建失败原因（P0 实机反馈：两个树同时空必须能自解释，不能静默） */
@@ -288,6 +304,7 @@ interface GroupCallbacks {
 export function ProjectView({
   kernel,
   project,
+  sessionWorkspace,
   index,
   indexing,
   indexError,
@@ -457,7 +474,7 @@ export function ProjectView({
    * 变化信号与监视那条同源（`use-workspace-folders.ts`），所以"作品建好了但
    * 树里看不见"这类裂缝不会再出现。
    */
-  const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots);
+  const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots, sessionWorkspace);
   /**
    * 这一会话的**显示根**（KW4C 段③）：相对路径标签、diff 标题、跨标签右键这些
    * "以谁为原点看路径"的地方一律问这张表（游戏会话 = 游戏根，逐字不变；作品会话 =

@@ -61,6 +61,27 @@ export interface WorkspaceFolder {
   readonly search: boolean;
   /** 文件监视 */
   readonly watch: boolean;
+  /**
+   * 这一格是不是**本会话那一枚作品**的目录（KW-4E 段②，2026-11-03）。
+   *
+   * 为什么与 `isProjectRoot` 同款单独立一格：作品会话的现场 = 作者进来的那**一枚**作品，
+   * 而内核的常驻可写根是"能在哪里新建作品"的那一层（`<数据目录>/workspaces`，里面躺着
+   * 所有作品、目录名是 id）。消费方要"这一会话的作品在哪"只能问这张表，不许自己
+   * `join(workspacesRoot, projectId)` 再拼一次——那是第二份根。
+   */
+  readonly isSessionWorkspaceRoot: boolean;
+}
+
+/**
+ * 本会话那一枚作品的根（KW-4E 段②）。
+ *
+ * `dir` 的唯一来源是 `WorkspaceSession.dir`（= 内核 `workspaces.projectDir(projectId)`，
+ * 不是自由路径参数、也不由此放宽写允许域）；`name` 是作者给作品起的名字，只用来当标签，
+ * 取不到时回落目录末段。
+ */
+export interface SessionWorkspaceRoot {
+  readonly dir: string;
+  readonly name?: string | undefined;
 }
 
 /** `buildWorkspaceFolders` 的输入：五类根各自的原样来源（缺省 = 这一类没有根） */
@@ -84,6 +105,16 @@ export interface WorkspaceFolderInput {
   readonly authorDirs?: readonly string[] | undefined;
   /** 会话级附加根（D1；只读：可浏览/检索/Ctrl+P/监视，不进写允许域） */
   readonly extraRoots?: readonly string[] | undefined;
+  /**
+   * **本会话那一枚作品**（KW-4E 段②，2026-11-03）：只有作品会话才给。
+   *
+   * 给了以后，作者那一支**只交这一枚作品目录**：其余作品目录（以及盖住它们的常驻可写根
+   * `<数据目录>/workspaces`）是**别的会话**的现场，画进这一会话就是把两间房合成一间——
+   * 段③ 之后屏上那个 `workspaces 可写 0` 的分组头就是这个错误的形状。
+   * 游戏会话不给这一格 ⇒ 作者那一支逐字不变（作品目录照旧整体可见，那是"开着游戏、
+   * 顺手挑别的作品"的合法形态）。
+   */
+  readonly sessionWorkspace?: SessionWorkspaceRoot | null;
 }
 
 /** 角色优先级（同路径多角色时的裁决顺序：越具体越优先） */
@@ -132,10 +163,11 @@ function folderOf(
   path: string,
   role: WorkspaceFolderRole,
   label: string,
-  caps: Omit<WorkspaceFolder, 'path' | 'role' | 'label' | 'isProjectRoot'>,
-  isProjectRoot: boolean,
+  caps: Omit<WorkspaceFolder, 'path' | 'role' | 'label' | 'isProjectRoot' | 'isSessionWorkspaceRoot'>,
+  isProjectRoot = false,
+  isSessionWorkspaceRoot = false,
 ): WorkspaceFolder {
-  return { path, role, label, isProjectRoot, ...caps };
+  return { path, role, label, isProjectRoot, isSessionWorkspaceRoot, ...caps };
 }
 
 /**
@@ -153,16 +185,34 @@ export function buildWorkspaceFolders(input: WorkspaceFolderInput): WorkspaceFol
     path: unknown,
     role: WorkspaceFolderRole,
     label: string,
-    caps: Omit<WorkspaceFolder, 'path' | 'role' | 'label' | 'isProjectRoot'>,
+    caps: Omit<WorkspaceFolder, 'path' | 'role' | 'label' | 'isProjectRoot' | 'isSessionWorkspaceRoot'>,
     isProjectRoot = false,
+    isSessionWorkspaceRoot = false,
   ): void => {
     if (typeof path !== 'string' || path.length === 0) return; // 空根 = 没有这个根，不许把遍历带成"根为空"
-    candidates.push(folderOf(path, role, label, caps, isProjectRoot));
+    candidates.push(folderOf(path, role, label, caps, isProjectRoot, isSessionWorkspaceRoot));
   };
   push(input.projectRoot, 'game', '项目根', GAME_ROOT_CAPS, true);
   for (const root of input.kojoPaths ?? []) push(root, 'game', '口上域', KOJO_CAPS);
   push(input.savDir, 'game', '存档', SAV_CAPS);
-  for (const dir of input.authorDirs ?? []) push(dir, 'author', lastSegment(dir) || '作品目录', AUTHOR_CAPS);
+  /**
+   * **作者那一支的会话两态**（KW-4E 段②，2026-11-03；判据只在这里，消费方一律问表）。
+   *
+   * - **作品会话**（给了 `sessionWorkspace.dir`）⇒ 作者那一支**只交这一枚作品的目录**：
+   *   `authorDirs` 里那些**盖住**它的常驻落点根（`<数据目录>/workspaces`，里面躺着所有作品、
+   *   目录名是 id）与别的作品目录都是**别的会话**的现场，画进这一会话就是把两间房合成一间
+   *   ——而且外层覆盖内层的那条去嵌套规则本来就会把会话目录当场折掉（实测屏上只剩
+   *   `workspaces 可写 0` 那一格）。标题给作品名，不给 id。
+   * - **游戏会话**（没给）⇒ 逐字旧行为，`authorDirs` 整体可见（开着游戏顺手挑别的作品
+   *   是合法形态）。
+   */
+  const sessionDir = input.sessionWorkspace?.dir?.trim() ?? '';
+  if (sessionDir !== '') {
+    const sessionName = input.sessionWorkspace?.name?.trim() ?? '';
+    push(sessionDir, 'author', sessionName !== '' ? sessionName : lastSegment(sessionDir) || '作品目录', AUTHOR_CAPS, false, true);
+  } else {
+    for (const dir of input.authorDirs ?? []) push(dir, 'author', lastSegment(dir) || '作品目录', AUTHOR_CAPS);
+  }
   for (const dir of input.extraRoots ?? []) push(dir, 'extra', lastSegment(dir) || '附加文件夹', EXTRA_CAPS);
 
   // ① 精确去重：同一路径只留更具体的角色（位置取首次出现的那一处，顺序不因裁决而搬）
@@ -221,6 +271,11 @@ export function gameRootOf(folders: readonly WorkspaceFolder[]): string | null {
   return folders.find((f) => f.isProjectRoot)?.path ?? null;
 }
 
+/** 那枚**本会话作品**的根（作品会话才有；游戏会话 / 欢迎页 ⇒ null）。 */
+export function sessionWorkspaceRootOf(folders: readonly WorkspaceFolder[]): WorkspaceFolder | null {
+  return folders.find((f) => f.isSessionWorkspaceRoot) ?? null;
+}
+
 /**
  * 单根显示位的**会话根**：有游戏根用游戏根，只有作品会话用那枚作品/附加根。
  *
@@ -228,7 +283,9 @@ export function gameRootOf(folders: readonly WorkspaceFolder[]): string | null {
  * 一张表也没有（欢迎页 / 内核读不动）⇒ null，由调用方按"没有现场"如实说话。
  */
 export function sessionDisplayRootOf(folders: readonly WorkspaceFolder[]): string | null {
-  return gameRootOf(folders) ?? folders.find((f) => f.browsable)?.path ?? null;
+  // 作品会话那一格现读表里的会话作品根（KW-4E 段②：作品名/目录都在这张表上，
+  // 消费方不比对路径）；没有它才退回"第一枚可浏览根"那条老回落
+  return gameRootOf(folders) ?? sessionWorkspaceRootOf(folders)?.path ?? folders.find((f) => f.browsable)?.path ?? null;
 }
 
 /**
@@ -269,10 +326,41 @@ export interface WorkspaceGap {
   readonly notice: string;
 }
 
+/**
+ * 「口上域为什么没有」那一句的**上半句**（这一半与"下面有没有分组"无关，恒成立）。
+ */
+const KOJO_DOMAIN_GAP_LEAD =
+  '口上域（按角色分组的那一层）要有游戏项目才画得出来——它读的是游戏里的角色表与口上目录。';
+
+/** 下半句两档，**由同一把尺子选**（见 {@link kojoDomainGapNotice}）：屏上不许同时挂一句真话和一句谎话 */
+const KOJO_DOMAIN_GAP_HAS_GROUPS =
+  '这一会话只有你的作品，作品文件都在下面的分组里，一样能打开、能改、能存。';
+const KOJO_DOMAIN_GAP_NO_GROUPS =
+  '这一会话还没能读出任何作品目录——下面**没有**分组可展开；那枚作品多半已被删除或移动，请回欢迎页重新进入。';
+
+/**
+ * 这一会话在树的顶层**该画出几个分组**（作者作品目录 / 会话附加根；游戏侧那三格不走这里，
+ * 它们由角色分组与文件系统视图覆盖 —— 与 `FileTree.tsx` 的 `rootFolders` 同一条判据）。
+ */
+export function topLevelRootFolders(folders: readonly WorkspaceFolder[]): WorkspaceFolder[] {
+  return folders.filter((f) => f.role !== 'game');
+}
+
+/**
+ * 「口上域没有」那一句的**完整**人话（KW-4E 段③，2026-11-03）。
+ *
+ * 为什么必须按根表现算而不是抄一句常量：段② 的原文承诺"作品文件都在下面的分组里"，
+ * 而屏上那一格当时画的是 `workspaces 可写 0`（**0 个文件**）——同屏一句真话一句谎话，
+ * 作者点进自己的作品仍然打不开自己的文件。文案与判据**同一把尺子**：下面真有分组才那么说，
+ * 没有就照实说没有。
+ */
+export function kojoDomainGapNotice(folders: readonly WorkspaceFolder[]): string {
+  return KOJO_DOMAIN_GAP_LEAD + (topLevelRootFolders(folders).length > 0 ? KOJO_DOMAIN_GAP_HAS_GROUPS : KOJO_DOMAIN_GAP_NO_GROUPS);
+}
+
 const WORKSPACE_GAPS: Readonly<Record<WorkspaceGapId, string>> = {
-  kojoDomain:
-    '口上域（按角色分组的那一层）要有游戏项目才画得出来——它读的是游戏里的角色表与口上目录。' +
-    '这一会话只有你的作品，作品文件都在下面的分组里，一样能打开、能改、能存。',
+  /** 静态那一档 = "下面有分组"的形态（与 {@link kojoDomainGapNotice} 共用同两枚常量，不另抄） */
+  kojoDomain: KOJO_DOMAIN_GAP_LEAD + KOJO_DOMAIN_GAP_HAS_GROUPS,
   index:
     '口上域索引与语言服务的项目腿要有游戏现场才跑：它按角色目录铺全量方言文件。' +
     '作品会话里单文件的语法与校验照常工作，"整个口上域"的那一份名录没有。',
@@ -298,7 +386,11 @@ export function workspaceGapNotice(id: WorkspaceGapId): string {
 /** 作品会话（表里没有游戏根）⇒ 逐条显式不可用；有游戏现场 ⇒ 一枚都不缺 */
 export function workspaceGapsOf(folders: readonly WorkspaceFolder[]): WorkspaceGap[] {
   if (gameRootOf(folders) !== null) return [];
-  return (Object.keys(WORKSPACE_GAPS) as WorkspaceGapId[]).map((id) => ({ id, notice: WORKSPACE_GAPS[id] }));
+  return (Object.keys(WORKSPACE_GAPS) as WorkspaceGapId[]).map((id) => ({
+    id,
+    // `kojoDomain` 那一句现算（KW-4E 段③）：它承诺的"下面的分组"必须与这张表真的交得出分组同形
+    notice: id === 'kojoDomain' ? kojoDomainGapNotice(folders) : WORKSPACE_GAPS[id],
+  }));
 }
 
 /** 这一会话有没有游戏现场（决定上面那族能力是否逐条不可用） */
@@ -321,6 +413,12 @@ export function workspaceFoldersOf(
   kernel: Pick<Kernel, 'workspaces'>,
   project: GameProject | null,
   extraRoots?: readonly string[],
+  /**
+   * 作品会话那一枚作品的目录（KW-4E 段②）；游戏会话 / 欢迎页不交 ⇒ 作者那一支走旧行。
+   * 落点决定权在**会话**（`WorkspaceSession.dir`，源自内核 `workspaces.projectDir(id)`），
+   * 这里只是把它喂进表，不在此拼路径。
+   */
+  sessionWorkspace?: SessionWorkspaceRoot | null,
 ): WorkspaceFolder[] {
   return buildWorkspaceFolders({
     projectRoot: project?.rootDir,
@@ -328,5 +426,6 @@ export function workspaceFoldersOf(
     savDir: project?.savDir,
     authorDirs: workspaceProjectDirsOf(kernel),
     extraRoots,
+    sessionWorkspace: sessionWorkspace ?? null,
   });
 }

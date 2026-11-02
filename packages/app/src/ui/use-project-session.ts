@@ -587,7 +587,7 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
    * 与树 / Ctrl+P / 检索 / 整项目诊断**同一份**根表。作品目录是活读数（本会话新建的作品
    * 也立刻进模型），所以这条 effect 跟的是 `workspaceFolders` 的引用而不是 project 的字面量。
    */
-  const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots);
+  const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots, workspaceSession);
   useEffect(() => {
     // 闸跟的是**会话**（`sessionRoot`）而不是 `project`：KW4C 起"只有作品"也算一个会话，
     // 作品目录与附加根一样要有人盯着（作者在外 editor 里存盘 ⇒ 树/检索要跟上）。

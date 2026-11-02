@@ -1372,24 +1372,47 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     KW8C 段②（市场接线）走懒边，零进图。
     //     ⇒ KB 闸 **3,579 → 3,582**（余量 0 B 口径不变）；文件闸 201 不动。
     //
-    //   - **KW4C 段③（作品会话入口腿，2026-11-02；组长落地、KW-4E 车道补账）**：读数
-    //     **201 文件 / 3,589 KB**（3,675,123 B = 上一条 3,668,326 + **6,797**），
-    //     **零新进图文件**（201 顶格不动）。图内五枚逐枚实测（现树 `wc -c` vs 基线
-    //     `git cat-file -s`，五枚求和 **6,797 B 与总差逐字节相等**）：`App.tsx` **+3,053**
-    //     （`planRecentWorkspaceOpen` 点击编排 + "已不在列表里"那人话接线 + `sessionRoot`
-    //     传进编辑器面）、`recent-workspace-projects.ts` **+1,985**（作品名现读 `hit.name`
-    //     与入口可行性判据，欢迎页第一屏本就常驻）、`project-error-notice.tsx` **+1,029**
-    //     （渲染闸 `editorSurfaceOpen` 由认 `project` 改认 `sessionRoot`，两态同一道闸）、
-    //     `use-project-session.ts` **+733**（`openWorkspaceSession` 相位推进）、
-    //     `WelcomeView.tsx` **−3**（那一行去掉 disabled，净收缩）。
-    //     不落图：`ProjectView.tsx`（懒边 `loadProjectView` 那条腿）。
-    //     ⚠ 段② 记下的欠账（把作品会话那半边拆成包叶子）**仍未还**：本笔涨的全是既有
-    //     在图文件，零新模块；文件闸顶格，下一枚进图模块仍须先挪一枚出去。
+    //   - **KW4C 段③（作品会话入口腿，2026-11-02；由组长落地、KW-4E 车道补账）**：
+    //     变基到含 KW8C 段① 的 `origin/dev` 尖端后实测 **201 文件 / 3,589 KB**
+    //     （3,675,123 B = 上一条 3,668,326 B + **6,797**）——**零新进图文件**（201 未动，
+    //     顶格口径不变）。图内五枚逐枚实测
+    //     （现树 `wc -c` vs 该批基线 `git cat-file -s`，五枚差值求和 **6,797 B 与总差逐字节相等**）：
+    //     · `app/src/ui/App.tsx` **+3,053**（`planRecentWorkspaceOpen` 的点击编排与"已不在列表里"
+    //       那一句人话接线、`sessionRoot` 传给编辑器面）；
+    //     · `app/src/ui/recent-workspace-projects.ts` **+1,985**（作品名**现读** `hit.name` 与
+    //       入口可行性判据；这一枚本就常驻，欢迎页第一屏要用）；
+    //     · `app/src/ui/project-error-notice.tsx` **+1,029**（渲染闸 `editorSurfaceOpen` 由认
+    //       `project` 换成认 `sessionRoot`——两态都过同一道闸）；
+    //     · `app/src/ui/use-project-session.ts` **+733**（`openWorkspaceSession` 的相位推进）；
+    //     · `app/src/ui/WelcomeView.tsx` **−3**（那一行去掉 disabled，净收缩）。
     //     ⇒ KB 闸 **3,582 → 3,589**（余量 0 B 口径不变）；文件闸 201 不动。
+    //     ⚠ 段② 台账记下的欠账（把作品会话那半边拆成包叶子）**仍未还**：本笔涨的全是既有人在图
+    //     文件，没有新模块；文件闸顶格，下一枚进图模块仍须先挪一枚出去。
+    //   - **KW-4E 段②③④（作品会话真的看得见自己的文件 + 那句谎话 + 标题取作品名，2026-11-03）**：
+    //     读数 **201 文件 / 3,597 KB**（3,683,411 B = 上一条 3,675,123 B + **8,288**），
+    //     **零新进图文件**（201 未动，顶格口径不变）。图内五枚逐枚实测
+    //     （现树 `wc -c` vs 段③ 落账后的基线 `git cat-file -s`，五枚差值求和
+    //     **8,288 B 与总差逐字节相等**）：
+    //     · `app/src/ui/workspace-folders.ts` **+5,987**（会话作品根那一格：`isSessionWorkspaceRoot`
+    //       / `SessionWorkspaceRoot` / 建表的作者那一支 / `sessionWorkspaceRootOf` /
+    //       `topLevelRootFolders` + `kojoDomainGapNotice` 那两档文案。判据必须住这张表——
+    //       住渲染侧就是五条腿各抄一份根，正是 WS-04 立表要消灭的形状；增量九成为中文理由注）；
+    //     · `app/src/ui/window-title.ts` **+1,284**（`windowTitleForSession` 与那一族的唯一拼法
+    //       `composeWindowTitle`；作品会话的标题取作品名，不取内核生成的 id）；
+    //     · `app/src/ui/App.tsx` **+615**（标题那一格改问会话族 + 把会话作品投进根表的一行接线）；
+    //     · `app/src/ui/use-workspace-folders.ts` **+384**（第 4 参 additive，游戏会话零变化）；
+    //     · `app/src/ui/use-project-session.ts` **+18**（同一张表多交一枚会话事实，逻辑零增）。
+    //     不落图的一并点名（免得下一个人以为是漏账）：`FileTree.tsx`（作者那一支的列举换尺 +
+    //     那句空态常量）、`ProjectView.tsx`（一枚透传 props）全在 `import('./ProjectView')`
+    //     的懒边之下；三枚测试文件按口径不进本图。
+    //     ⇒ KB 闸 **3,589 → 3,597**（余量 0 B 口径不变）；文件闸 201 不动。
+    //     ⚠ 段② 台账那笔"把作品会话半边拆成包叶子"的欠账**仍未还**且更紧了：作品会话这条链
+    //     三笔累计 **29,176 B**（段① 14,091 + 段③ 6,797 + 本笔 8,288），其中大部分只在作品
+    //     会话用得到 ⇒ 下一辆车动这块之前先量"拆得动吗"，拆不动就把理由写死。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,589 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,597 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_589);
+    expect(totalKb).toBeLessThanOrEqual(3_597);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
