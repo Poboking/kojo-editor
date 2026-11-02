@@ -14,7 +14,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react';
-import { MORE_ROW_TITLE, attachGrowSentinel } from '@kojo/plugin-api';
+import { MORE_ROW_TITLE, PANEL_ROW_ATTR, attachGrowSentinel } from '@kojo/plugin-api';
 import type { PluginContextMenuAnchor } from '@kojo/plugin-api';
 import { faceWindowSize, type FunctionNode } from './tree';
 
@@ -83,12 +83,15 @@ export function FaceList(props: FaceListProps): ReactElement {
   const rows = functions.slice(0, win);
   return createElement(
     'ul',
-    { className: 'nav-funcs' },
+    // 行键盘协议（kw8a 1102 批）：函数行是树的第三层（group 里的 treeitem）；
+    // 窗口外没画出来的函数不进名单（「显示更多」哨兵照旧不动）。
+    { className: 'nav-funcs', role: 'group' },
     ...rows.map((fn) =>
       createElement(
         'li',
         {
           key: `${fn.filePath}:${fn.startLine}`,
+          role: 'none',
           ...(props.onMenu === undefined
             ? {}
             : { onContextMenu: (e: PluginContextMenuAnchor) => props.onMenu?.(fn, e) }),
@@ -99,6 +102,9 @@ export function FaceList(props: FaceListProps): ReactElement {
             className: 'nav-func-btn',
             title: props.tooltip(fn),
             onClick: () => props.onOpen(fn),
+            [PANEL_ROW_ATTR]: '',
+            role: 'treeitem',
+            'aria-level': 3,
           },
           createElement('span', { className: 'nav-func-name' }, fn.name),
           ...props.badges(fn),

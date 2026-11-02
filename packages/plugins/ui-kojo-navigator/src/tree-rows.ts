@@ -7,7 +7,7 @@
  */
 
 import { createElement, type ReactNode } from 'react';
-import { shortPath } from '@kojo/plugin-api';
+import { PANEL_ROW_ATTR, shortPath } from '@kojo/plugin-api';
 import type { PluginContextMenuAnchor } from '@kojo/plugin-api';
 import { FaceList } from './face-list';
 import { faceLabel, familyLabel } from './labels';
@@ -47,7 +47,10 @@ export function renderTreeRows(args: TreeRowsArgs): ReactNode {
   const { chara, openFamilies, openFaces, faceWindows } = args;
   return createElement(
     'div',
-    { className: 'nav-tree' },
+    // 行键盘协议（kw8a 1102 批）：树态语义根与 ARIA 形状照宿主 `FileTree.tsx` 先例
+    // （tree / group / treeitem + aria-expanded/aria-level）；名单按 `PANEL_ROW_ATTR`
+    // 现取 DOM 序——没展开的面/没画进窗口的函数天然不在名单上（协议判据住契约层）。
+    { className: 'nav-tree', role: 'tree' },
     ...chara.families.map((family) => {
       const fKey = `${chara.no}|${family.family}`;
       const fOpen = openFamilies.has(fKey);
@@ -56,6 +59,7 @@ export function renderTreeRows(args: TreeRowsArgs): ReactNode {
         {
           key: fKey,
           className: 'nav-family',
+          role: 'none', // 包装层不参与语义（treeitem 与 group 直接落到 tree 下，照 FileTree 的 li role=none 先例）
           ...(args.onGroupMenu === undefined
             ? {}
             : {
@@ -74,7 +78,14 @@ export function renderTreeRows(args: TreeRowsArgs): ReactNode {
         },
         createElement(
           'button',
-          { className: 'nav-family-btn', onClick: () => args.onToggleFamily(fKey) },
+          {
+            className: 'nav-family-btn',
+            onClick: () => args.onToggleFamily(fKey),
+            [PANEL_ROW_ATTR]: '',
+            role: 'treeitem',
+            'aria-level': 1,
+            'aria-expanded': fOpen,
+          },
           createElement('span', { className: 'caret' }, args.icon(fOpen ? 'chevron-down' : 'chevron-right', 12, fOpen ? '▾' : '▸')),
           createElement('span', { className: 'nav-family-name' }, familyLabel(family.family)),
           createElement(
@@ -86,7 +97,7 @@ export function renderTreeRows(args: TreeRowsArgs): ReactNode {
         fOpen
           ? createElement(
               'div',
-              { className: 'nav-faces' },
+              { className: 'nav-faces', role: 'group' },
               ...family.faces.map((face) => {
                 const fcKey = `${fKey}|${face.face}`;
                 const fcOpen = openFaces.has(fcKey);
@@ -95,6 +106,7 @@ export function renderTreeRows(args: TreeRowsArgs): ReactNode {
                   {
                     key: fcKey,
                     className: 'nav-face',
+                    role: 'none',
                     ...(args.onGroupMenu === undefined
                       ? {}
                       : {
@@ -113,7 +125,14 @@ export function renderTreeRows(args: TreeRowsArgs): ReactNode {
                   },
                   createElement(
                     'button',
-                    { className: 'nav-face-btn', onClick: () => args.onToggleFace(fcKey) },
+                    {
+                      className: 'nav-face-btn',
+                      onClick: () => args.onToggleFace(fcKey),
+                      [PANEL_ROW_ATTR]: '',
+                      role: 'treeitem',
+                      'aria-level': 2,
+                      'aria-expanded': fcOpen,
+                    },
                     createElement('span', { className: 'caret' }, args.icon(fcOpen ? 'chevron-down' : 'chevron-right', 12, fcOpen ? '▾' : '▸')),
                     createElement('span', { className: 'nav-face-name' }, faceLabel(face.face, args.faceLabels())),
                     createElement('span', { className: 'nav-count dim' }, String(face.functions.length)),

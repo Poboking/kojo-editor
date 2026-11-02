@@ -16,6 +16,7 @@ import {
   useDeferredValue,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -23,11 +24,19 @@ import type {
   ConditionExtractorService,
   ErbParserService,
   FamilyIndexRule,
+  PanelRowRovingHost,
   PluginContext,
   PluginContextMenuAnchor,
+  RowNavHostEvent,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { CANDIDATE_BUDGETS, shortPath } from '@kojo/plugin-api';
+import {
+  applyPanelRowNavFromEvent,
+  CANDIDATE_BUDGETS,
+  PANEL_ROW_ATTR,
+  shortPath,
+  syncRovingTabIndexes,
+} from '@kojo/plugin-api';
 import {
   FACE_WINDOW_INITIAL,
   functionTooltip,
@@ -106,6 +115,31 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
     /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
     const ic = (name: string, size: number, fallback: string): ReactNode =>
       (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
+
+    /**
+     * 行键盘协议（kw8a 1102 批）：树是**行级漫游**——↑↓ 在可见节点间移焦点、F4/F8 移过去
+     * 并当场敲行自己的 onClick（函数行=定位源码、家族/面行=展开收起，零第二条通道）；
+     * 名单每次现取 DOM 序，没展开的面/没画进窗口的函数天然不在名单上。判据住契约层
+     * （`sugar-panels.ts` 行键盘区块），与宿主检索/问题面板、约定校验面板同一把尺子。
+     * Right/Left 的逐层展开收起**本批刻意不接**：折叠真源住 `openFamilies/openFaces`
+     * 两个 Set（右键菜单与鼠标腿在用），行协议是扁平 DOM 名单、没有层级宾语——另造一套
+     * 层级判据就是第二份折叠真源，故明确放弃（记在提交信息）。
+     */
+    const rootRef = useRef<PanelRowRovingHost | null>(null);
+    useEffect(() => {
+      syncRovingTabIndexes(rootRef.current);
+    });
+    const rowNavRootProps = {
+      ref: rootRef,
+      // `tabIndex=-1` 照 FileTree 先例：不是给 Tab 用的，是给"把焦点交给树"用的那条腿
+      tabIndex: -1,
+      onKeyDown: (e: RowNavHostEvent) => {
+        applyPanelRowNavFromEvent(e);
+      },
+      onFocus: (e: { currentTarget: PanelRowRovingHost | null }) => {
+        syncRovingTabIndexes(e.currentTarget);
+      },
+    };
 
     useEffect(() => {
       const cb = (): void => force((n) => n + 1);
@@ -299,6 +333,7 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
         'div',
         {
           className: 'panel-kojo-nav',
+          ...rowNavRootProps,
           onContextMenu: (e: PluginContextMenuAnchor) => openNavigatorPanelMenu(props, e, menuHost),
         },
         createElement('div', { className: 'nav-toolbar' }, charaSelect, searchBox),
@@ -311,12 +346,13 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
             ? createElement('div', { className: 'nav-empty dim' }, '无匹配函数')
             : createElement(
                 'ul',
-                { className: 'nav-hit-list' },
+                { className: 'nav-hit-list', role: 'tree' },
                 ...hits.map((h, i) =>
                   createElement(
                     'li',
                     {
                       key: `${h.node.filePath}:${h.node.startLine}:${i}`,
+                      role: 'none',
                       // 搜索命中的行与树里的函数行是同一件事 ⇒ 同一份菜单
                       onContextMenu: (e: PluginContextMenuAnchor) =>
                         openNavigatorFunctionMenu(
@@ -332,6 +368,9 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
                         className: 'nav-hit-btn',
                         title: functionTooltip(h.node, shortPath),
                         onClick: () => open(h.node.filePath, h.node.startLine, h.node.name),
+                        [PANEL_ROW_ATTR]: '',
+                        role: 'treeitem',
+                        'aria-level': 1,
                       },
                       createElement('span', { className: 'nav-hit-name' }, h.node.name),
                       ...condBadges(h.node.name),
@@ -394,6 +433,7 @@ export function createNavigatorPanel(deps: NavigatorPanelDeps): (props: UIPanelP
       'div',
       {
         className: 'panel-kojo-nav',
+        ...rowNavRootProps,
         onContextMenu: (e: PluginContextMenuAnchor) => openNavigatorPanelMenu(props, e, menuHost),
       },
       createElement('div', { className: 'nav-toolbar' }, charaSelect, searchBox),
