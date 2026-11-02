@@ -1283,10 +1283,24 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · 本批主体是 CSS：`tokens.css` 新立 `--alert-*` 九枚与全部消费规则**不在开机图**
     //       （`.css` 不进 JS 依赖图），所以这一档只涨 710 B。
     //     ⇒ KB 闸 **3,547 → 3,548**（余量 0 B 口径不变）；文件闸 201 不动。
+    //
+    //   - **KW 系列三车合流补账（2026-11-02，组长合流后实测，本提交零功能改动）**：
+    //     读数 **201 文件 / 3,549 KB**（3,633,964 B = 上一条 3,632,870 + **1,094**）。
+    //     三车各自跑 `ps10` 都在**自己的旧基线**上、都判"闸未抬"，合流后逐枚实测才见顶：
+    //     · `app/src/bridge/search.ts` **+528**（KW3：`globs` 那条"只占位不实现"的过期契约
+    //       注释订正为实际语义——注释本身进图，零行为改动）；
+    //     · `plugins/eratw-adapter/src/plugin.ts` **+374**（KW1：把 `kojo2Sources` 只读前置
+    //       核对接进部署向导 deps）；
+    //     · `app/src/ui/workspace-folders.ts` **+192**（KW4A：`projectRoot` 由必填放宽为可选
+    //       + 放宽依据两行注释；判据零变化，`push()` 本就挡空串）。
+    //     三枚差值求和 **1,094 B 与总差逐字节相等**（量具在仓外：图内名单 × `git cat-file -s`
+    //     两 ref 对拍）。**教训**：字节闸必须在 **rebase 到 dev 之后**复跑，旧基线上的
+    //     "闸未抬"不作数——本条由组长补记，后续各车简报已把这条写进验收口径。
+    //     ⇒ KB 闸 **3,548 → 3,549**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,548 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,549 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_548);
+    expect(totalKb).toBeLessThanOrEqual(3_549);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
