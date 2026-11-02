@@ -50,23 +50,26 @@ interface LoopVar {
 const MAX_COMBOS = 32;
 
 /**
- * 使用点处的循环量候选：抽取侧只在"体内第一条真代码行"发布了这个事实，
- * 于是这里按行号相等取用（`at.line === counter.firstBodyLine`）。
+ * 使用点处的循环量候选：只有"使用点就是体内第一条真代码行"的点位才用得上
+ * （为什么只信这一条，见文件头的引擎事实）。
  */
 function loopVarsAt(detail: FunctionPredicates, at: OverlayPosition, expr: ConditionExpr): LoopVar[] {
   const counters = detail.loopCounters;
   if (!counters || counters.length === 0) return [];
+  const candidates = counters.filter((c) => c.firstBodyLine === at.line);
+  if (candidates.length === 0) return [];
+  // 引用筛一次算好（体内逐条谓词都会问一遍，别把 AST 走两趟）
   const used = referencedSlots(expr);
   if (used.size === 0) return [];
   const picked = new Map<string, LoopVar>();
-  for (const c of counters) {
-    if (c.firstBodyLine !== at.line) continue;
+  for (const c of candidates) {
     if (at.line <= c.openLine || at.line >= c.closeLine) continue;
     if (!LOCAL_FAMILY_SLOTS.has(c.name)) continue;
     const key = slotKey(c.name, c.index);
     if (!used.has(key)) continue;
     const values: number[] = [];
     for (let v = c.lo; v <= c.hi; v++) values.push(v);
+    // 空值域必须筛掉：它会让组合表塌成零行，归并侧取 traced[0] 直接崩
     if (values.length === 0) continue;
     const prev = picked.get(key);
     if (prev) {
