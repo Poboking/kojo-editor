@@ -184,7 +184,8 @@ describe('台词行内标注：落点列区间', () => {
     const text = ['#FUNCTION K7_MESSAGE_A', 'IF CFLAG:7 > 50', 'SIF CFLAG:1 PRINTL こんにちは'].join('\n');
     const s = store();
     s.observeDocument({ filePath: FILE, text, dirty: false });
-    s.publish(replayOf([transcriptLine({ line: 3, verb: 'PRINTL', sifGuarded: true })]), viewOf());
+    // 同行 SIF 不需要 `guardLine`：守卫就在这一行里，列位由正文里的动词位置现算（`sentenceColumns`）。
+    s.publish(replayOf([transcriptLine({ line: 3, verb: 'PRINTL' })]), viewOf());
     const [deco] = s.decorate({ path: FILE, text });
     expect(deco?.startColumn).toBe('SIF CFLAG:1 '.length + 1);
   });
