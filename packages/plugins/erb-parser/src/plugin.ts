@@ -66,9 +66,8 @@ import { checkStructure, erbDocumentSymbols } from './structure';
 import { buildStructureFixes } from './structure-fix';
 import { provideErbCompletion, provideErbHover, type ErbHoverAdapterFacts } from './completion';
 import { erbFoldingRanges } from './folding';
-import { labelLenses } from './label-lens';
 import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
-import { definitionTargetsAt, erbReferencesAt, functionAt, labelDefinitionLocations, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition, usageLenses, workspaceSymbolsInIndex } from './symbols';
+import { definitionTargetsAt, erbReferencesAt, functionAt, labelDefinitionLocations, labelLenses, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition, usageLenses, workspaceSymbolsInIndex } from './symbols';
 import {
   callHierarchySymbolOf,
   incomingCalls,

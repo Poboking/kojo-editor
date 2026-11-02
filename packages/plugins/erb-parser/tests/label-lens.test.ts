@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { EditorCodeLens, FileIO, PluginContext, Unsubscribe } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { labelLenses } from '../src/label-lens';
+import { labelLenses } from '../src/symbols';
 import { parseErbText } from '../src/scanner';
 import { makeComputeStub } from './support';
 
