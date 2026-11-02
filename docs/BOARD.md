@@ -23,6 +23,5 @@
 |DIAG-GATE-1033|LAU 第十波 · 诊断上屏语言分支下沉：结构残缺通用上屏器内部的 `.kojo` 语言 id 过滤（`audit-language` M2 两行）改为按叠层交下的 `descriptor.id` 做身份比对，宿主上屏族零语言白名单|**M2 125→123**（基线 `syntax-decorations.ts` 出账）；行为逐字不变的取证＝`tree-sitter-diagnostics.test.ts`「非本叠层语言拒画」+「身份比对非白名单」两条与 `tree-sitter-multilanguage.test.ts` 接线档（通用器只接本叠层 id、自带 `presentSyntax` 的运行时不碰通用器）；诊断族其余命中判性＝宿主事实（能力矩阵台账 / 组合根装配 / kojo2 索引供面）留账不硬收，逐枚见提交信息|已交付 · 认领：lead10 2026-10-31（回执在提交信息）|
 |LAUNCH-P0-RESIDUE|P0 真壳验收余项：② ~10 MB fixture 复制进度；③ 二次 `start` 报 `LAUNCHER_INSTANCE_BUSY`；⑤ 信任框后启动、篡改报 `TRUST_CHANGED`；⑥ 退出杀树 + 下次 `app-exit`；① shared 实例仅夹具播种|全部在真壳（`debug-cli shell`）取证；⑤ 无人值守 ⇒ 宿主侧命令取证|待派|
 |KW-4E|KW4C 段③ 续车：作品会话真的看得见 / 点得开自己的文件 + 段② 那句"作品文件都在下面的分组里"与树同一把尺 + 作品会话窗口标题取作品名|判据只住 `workspace-folders.ts` 那张表（作品会话的根＝那一枚作品目录，不是常驻可写根）；真机复验硬门槛（`debug-cli serve --headless` 进作品会话点开 `正文/测试.kojo`）；`workspace-session-entry.test.ts` 一条不放宽；文件闸 201 顶格|进行中 · 认领：qoder 2026-11-03|
-|KW-15C|状态回放残余缺口第三车：`LOCAL` 这条语言层数据流能不能在**不做完整解释器**的前提下补上（靶子＝`local-no-write` 196 ＋ `named-index` 残余 40 同根两族）|判性先行：只收**静态可判**的形状，其余保持 unknown 但理由更准；RAND 恒 1,821 一条不许动；分母 11,685 谓词 / 1,356 函数同一把尺；假命中三轴取证|认领：qoder 2026-11-03|
 
 > 已裁定/已交付行（K2-D0、K2-CONTRACT、SDK-B5a、多游戏适配 P0/P1、编辑器对标 A–E、PS 系列）已删，回执在 git 提交信息。

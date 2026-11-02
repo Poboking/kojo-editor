@@ -1433,10 +1433,33 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ⚠ **下一辆车的红沿在这里**：闸比的是 `Math.round(bytes/1024)`，3,606 KB 的**真实
     //     红沿 = 3,693,055 B** ⇒ 名义"余量 0 B"、机械余量只剩 **19 B**。再进图 20 B 就翻到
     //     3,607 KB（那是抬闸，归组长逐字节归因后抬），别把"没红"读成"还有空间"。
+    //
+    //   - **KW-15C 计数循环的循环量逐值试算（2026-11-03）**：读数 **201 文件 / 3,613 KB ·
+    //     3,699,423 B**（= 上一条 3,693,036 + **6,387**），**零新进图文件**。图内四枚，
+    //     逐枚实测（现树 `fs.statSync` vs `git cat-file -s origin/dev:…`，求和 **6,387 B
+    //     与总差逐字节相等**）：
+    //     · `packages/plugin-api/src/conditions.ts` **+2,358**（契约面新枚
+    //       `FunctionLoopCounter`：槽位 / `FOR`–`NEXT` 行号 / 端点折成的闭区间 /
+    //       体内第一条真代码行，加 `FunctionPredicates.loopCounters?` 那一格 additive
+    //       注。区间故意取宽——步进与终值到不到都不必断言，**超近似只会少判不会误判**）；
+    //     · `packages/plugins/condition-extractor/src/extract.ts` **+3,839**（抽取侧
+    //       `collectLoopCounters`：字面端点 / 区间 ≤64 格 / `FOR`–`NEXT` 配对完好 /
+    //       体内无标签行四道收口，任一不满足直接不发布）；
+    //     · `packages/plugin-api/src/replay.ts` **+167**（未知机器码新增 `local-range`
+    //       一档——"值域有限 ≠ 判定得出"那笔账有了自己的码，不再冒充 `named-index`；
+    //       `local-no-write` 只把理由写实，判定口径一字未动）；
+    //     · `packages/plugin-api/src/index.ts` **+23**（桶转出该契约枚）。
+    //     不落图的一并点名（免得下一个人以为是漏账）：本批主体 `state-replay/src/loop-range.ts`
+    //     （新枚 10,134 B）、`state-replay/src/engine.ts`、`state-replay/src/locals.ts`、
+    //     `ui-state-replay/src/preview.ts` 那枚人话、`condition-extractor/src/index.ts`
+    //     的桶转出，以及两枚测试——全在 `import('./ProjectView')` 的懒边之下（回放面板本身
+    //     就是懒加载的），按口径不进本图。
+    //     ⇒ KB 闸 **3,606 → 3,613**；文件闸 201 不动。真实红沿 = **3,700,224 B**，
+    //     机械余量 **801 B**（比上一档宽，别读成"随便写"）。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,606 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,613 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_606);
+    expect(totalKb).toBeLessThanOrEqual(3_613);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
