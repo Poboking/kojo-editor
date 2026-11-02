@@ -13,6 +13,8 @@ import { Icon } from './icons';
  * - **文案原样显示**：不截断、不改写、不加前缀；`.notice.error` 的 pre-wrap 保留换行；
  * - **同屏一条 + 可关闭**：App 的 error 是单值 state，`raiseProjectErrorBar` 对同一文案
  *   保持原引用（React 直接 bail out），不会因重复上报叠出第二条；
+ * - **形状 = 图标 + 正文 + 出路 + 关闭叉**（告警面一族，2026-11-02）：出路按钮**另起一行**，
+ *   不再与正文抢那 420px 的横向空间——中文长 label 挤在一行时正文会被压成窄条；
  * - **错误自带出路**（WRITE-ADMIT-SPLIT 出路①，additive）：这条错误能走哪条路回去，
  *   与文案住在**同一份 state**里 ⇒ 不会出现"话说了、按钮没有"或"按钮还在、话已经不是那条"；
  *   没有出路的错误照旧只显示文案与关闭叉（`action` 缺省即旧行为）。
@@ -69,12 +71,19 @@ export const projectErrorNoticeId = 'project-session-error';
 export function ProjectErrorNotice({ message, onDismiss, action = null }: ProjectErrorNoticeProps): ReactElement {
   return (
     <div id={projectErrorNoticeId} className="notice error project-session-error" role="alert">
-      <span className="project-session-error-message">{message}</span>
-      {action ? (
-        <button type="button" className="small toast-action" title={action.title} onClick={action.run}>
-          {action.label}
-        </button>
-      ) : null}
+      <span className="notice-icon" aria-hidden="true">
+        <Icon name="warning" size={15} />
+      </span>
+      <div className="notice-body">
+        <p className="notice-copy project-session-error-message">{message}</p>
+        {action ? (
+          <div className="notice-actions">
+            <button type="button" className="small toast-action" title={action.title} onClick={action.run}>
+              {action.label}
+            </button>
+          </div>
+        ) : null}
+      </div>
       <button
         type="button"
         className="ghost small toast-close"

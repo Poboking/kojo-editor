@@ -257,8 +257,8 @@ describe('底部浮层抬升 = 实测 token 的算术（不许回到拍来的常
     return (m?.[1] ?? '').replace(/\s+/g, '');
   };
 
-  it('实测余量：错误条 ≥ 89、卡 ≥ 116（真壳读数，槽位与间隙都得 > 0）', () => {
-    expect(ERR).toBeGreaterThanOrEqual(89);
+  it('实测余量：错误条 ≥ 125（2026-11-02 实心面板 + 图标 + 动作换行后重钉）、卡 ≥ 116（间隙都得 > 0）', () => {
+    expect(ERR).toBeGreaterThanOrEqual(125);
     expect(CARD).toBeGreaterThanOrEqual(116);
     expect(GAP).toBeGreaterThan(0);
     expect(SLOT).toBe(36);
@@ -285,7 +285,7 @@ describe('底部浮层抬升 = 实测 token 的算术（不许回到拍来的常
   });
 
   it('抬升算出来真的够（槽位 + 高度 + 间隙 ≥ 被让位者的顶缘）', () => {
-    expect(SLOT + ERR + GAP).toBeGreaterThan(SLOT + 89); // 136 > 错误条顶缘实测 125
+    expect(SLOT + ERR + GAP).toBeGreaterThan(SLOT + 125); // 172 > 错误条顶缘实测 161（2026-11-02 重量）
     expect(SLOT + CARD + GAP).toBeGreaterThan(SLOT + 116); // 164 > 卡顶缘实测 152
   });
 });

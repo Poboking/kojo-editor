@@ -246,19 +246,11 @@
 :root[data-theme='mint-dark'] .u-ripple::after {
   background: radial-gradient(circle, var(--ripple-ink) 0%, var(--ripple-fade) 60%);
 }
-/* 语义 wash 在更深墨绿底上会被"吸进去"：alpha 各补 ~0.02（wash 是承载色，非装饰）。
-   VIS-54：三组 rgba(216,162,105)/rgba(226,112,122)/rgba(98,199,118) 的三元组就是本档
-   `--amber` (#d8a269) / `--red` (#e2707a) / `--green` (#62c776)，一律改派生、合成值逐字不变。 */
-:root[data-theme='mint-dark'] .notice.warn,
-:root[data-theme='mint-dark'] .crash-recovery {
-  background: color-mix(in srgb, var(--amber) 12%, transparent);
-  border-color: color-mix(in srgb, var(--amber) 45%, transparent);
-}
-:root[data-theme='mint-dark'] .notice.error,
-:root[data-theme='mint-dark'] .conv-failed {
-  background: color-mix(in srgb, var(--red) 12%, transparent);
-  border-color: color-mix(in srgb, var(--red) 55%, transparent);
-}
+/* 告警面一族（`.notice.warn` / `.notice.error` / `.crash-recovery` / `.conv-failed`）的
+   覆盖**已退役**（2026-11-02 实心面板批）：基座那几条现在吃 `--alert-*-fill/edge/rail`，
+   全链只引用本档 `--red` / `--amber` / `--bg-2` / `--border` ⇒ 本档自动跟随，无需再按
+   选择器补 alpha。原先"深墨绿底会把 wash 吸进去 ⇒ 各补 ~0.02"这个前提也随实心面板消失：
+   面板是算好的实色，不存在被底色吃掉的问题。 */
 /* 只读横幅（已随视觉批十三撤掉，`.ro-banner` 无消费方——规则也一并删） */
 /* "可写✓"绿牌：原 wash 是旧语义绿 rgba(79,192,141)——太薄荷，换成新叶绿豆沙同族 */
 :root[data-theme='mint-dark'] .sb-writable.ok {

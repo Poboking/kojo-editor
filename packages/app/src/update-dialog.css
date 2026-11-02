@@ -292,21 +292,22 @@
   padding: var(--space-1) 0;
 }
 
-/* 破坏性更新的"停下读一眼"（found 才画）：与失败条同一条左侧色带语言，色换语义 */
+/* 破坏性更新的"停下读一眼"（found 才画）：与失败条同一条左轨语言，色换语义
+   （警示 = 琥珀轨；实心面板不透视，口径同 `--alert-*` 一族） */
 .update-dialog-alert {
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  border-left: 3px solid var(--danger);
+  border: 1px solid var(--alert-warn-edge);
+  border-left: 3px solid var(--alert-warn-rail);
   border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  background: var(--alert-warn-fill);
   color: var(--fg);
   font-size: var(--fs-1);
   line-height: 1.7;
 }
 
 .update-dialog-alert b {
-  color: var(--danger);
+  color: var(--warning);
   font-weight: 600;
 }
 
@@ -335,11 +336,11 @@
 .update-dialog-failure {
   margin: 0;
   padding: var(--space-3);
-  border-left: 3px solid var(--danger);
+  border: 1px solid var(--alert-error-edge);
+  border-left: 3px solid var(--alert-error-rail);
   border-radius: var(--radius-sm);
-  /* 先给不支持 color-mix 的内核一个 token 回落（老 WebView 也不至于透明无底） */
-  background: var(--surface-sunken);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  /* 实心：模态本身是半透玻璃，失败条再掺一层透明就等于"字压在正文上" */
+  background: var(--alert-error-fill);
   color: var(--fg);
   font-size: var(--fs-2);
   line-height: 1.7;

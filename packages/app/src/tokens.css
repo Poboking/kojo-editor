@@ -205,10 +205,14 @@
          今天在三档里都由主题侧的同名选择器覆盖负责翻色，复用=替薄荷档改基座渲染，不是收编。
          （条件矩阵红圈白勾那枚 `#fff` 本批没并进来：它被 `condition-matrix-fill-marker.test.ts`
          钉成字面量断言，登记给组长，不为凑覆盖率去动别人的判据。）
-     ⚠ `themes/light.css` / `themes/mint-dark.css` 仍按选择器覆盖其中几格（`.notice.warn`、
-     `.u-sheen::before`、`.switch-thumb` 等）：那些规则特异性更高、终值照旧，本批不动它们，
+     ⚠ `themes/light.css` / `themes/mint-dark.css` 仍按选择器覆盖其中几格（`.u-sheen::before`、
+     `.switch-thumb` 等）：那些规则特异性更高、终值照旧，本批不动它们，
      但从此它们与本族**同一条通路**（消费点只写 `var()`），主题侧换成同名 token 覆写即可，
-     已登记给 Lane E。 */
+     已登记给 Lane E。
+     （2026-11-02 更新：`.notice.warn` / `.notice.error` / `.crash-recovery` / `.conv-failed`
+     四格**已按这个方向收口完毕**——它们改吃下面的 `--alert-*` 实心档，派生链只引用每档自己的
+     `--red` / `--amber` / `--bg-2` / `--border`，主题侧那几条选择器覆盖随之删除，
+     判据见 `theme-wash-token-source.test.ts` 末尾「告警面一族」一节。） */
   --wash-warn: rgba(209, 154, 102, 0.1);
   --wash-warn-edge: rgba(209, 154, 102, 0.4);
   --wash-error: rgba(224, 108, 117, 0.1);
@@ -232,6 +236,23 @@
      它不在 accent 族里（刻意——品牌色是蓝，紫只做"氛围"），但从此有定义点，浅色档可翻。 */
   --violet: #7c5cff;
   --violet-wash: rgba(124, 92, 255, 0.15);
+  /* —— 告警面一族（实心面板 + 左侧语义轨）· 2026-11-02 ——
+     立论：`.notice.error` 那一族原先是 `rgba(语义色, 0.1)` 的**半透明洗色**，浮在编辑器正文上时
+     台词从错误条底下透出来（真壳截图实锤）——"出错了"读起来像"页面挂了"。这一族把底改成
+     **掺进本档面板色里的实色**：alpha 恒 1，底下压什么都透视不上来。语义只留三处落点
+     ——左轨 3px（色相本体）、边框（同族压深一档）、图标与标题（前景级）；正文一律回 `--fg`。
+     派生全走 `var(--danger / --warning / --accent)` × `var(--surface-raised / --border)`
+     ⇒ 三档翻色只动定义点，主题侧那几条 `.notice.*` 选择器覆盖随之退役（"只翻值、不写规则"）。
+     口径沿用 wash 族：**token 只给色，几何（轨宽 / 圆角 / padding / 抬升）留在消费方**。 */
+  --alert-error-fill: color-mix(in srgb, var(--danger) 9%, var(--surface-raised));
+  --alert-error-edge: color-mix(in srgb, var(--danger) 38%, var(--border));
+  --alert-error-rail: var(--danger);
+  --alert-warn-fill: color-mix(in srgb, var(--warning) 9%, var(--surface-raised));
+  --alert-warn-edge: color-mix(in srgb, var(--warning) 36%, var(--border));
+  --alert-warn-rail: var(--warning);
+  --alert-info-fill: color-mix(in srgb, var(--accent) 9%, var(--surface-raised));
+  --alert-info-edge: color-mix(in srgb, var(--accent) 38%, var(--border));
+  --alert-info-rail: var(--accent);
   /* 底部浮层的竖序升程（2026-10-24 组长真壳复验，批十一 R6 债三的后半）：
      toast 列 / 更新提醒卡 / 项目态错误条三件都锚在视口底，谁在场就把上面的对手抬一档。
      原先抬升写死 122 / 128 / 214，其中「86 ≈ 卡高」是**估的**——真壳（1440×900 dark，卡 CSS
@@ -239,6 +260,8 @@
      （`card_vs_toast` 实测重叠，1440 与 760 两档都重）。现在两枚实测高度 + 一档间隙登记在此，
      抬升一律由 `calc()` 算出：
       - `--notice-err-h`：错误条实测 89（`max-width:420` 长文案两行），留到 92；
+        2026-11-02 告警面改实心面板 + 图标 + 动作另起一行后重钉：长文案两行 + 出路按钮一行
+        ⇒ 实测 **125** ⇒ 92 → **128**（留 3px，宁松不叠字）。
       - `--notice-card-h`：卡实测 116，标题会换行 ⇒ 留到 120（宁松不叠字）。
         2026-11-02 更新卡改四态后重钉（同一把尺，浏览器实测 `getBoundingClientRect`，340 宽）：
         found **104** / downloading **109** / done **109**（骨架恒三行，见 `update-notice-card.css`
@@ -248,7 +271,7 @@
      那是跨模块改造，不在本批。 */
   --notice-slot-bottom: 36px;
   --notice-gap: 8px;
-  --notice-err-h: 92px;
+  --notice-err-h: 128px;
   --notice-card-h: 132px;
   /* 语义表面分层（VSCode 精修批 2026-10-17）：`--bg` / `--bg-2` / `--bg-3` 是这三档的**实现值**，
      全站数百处规则与实机度量过的对比度都钉在上面，故一律不改；这里只给"新写的规则"一个

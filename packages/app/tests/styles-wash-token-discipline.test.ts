@@ -222,16 +222,8 @@ interface Slot {
 }
 
 const SLOTS: readonly Slot[] = [
-  // —— 语义色 wash（`.notice.warn` / `.notice.error` / `.crash-recovery` 在两份文件里同格同值）——
-  { selector: '.notice.warn', prop: 'background', before: 'rgba(209, 154, 102, 0.1)', token: '--wash-warn' },
-  { selector: '.notice.warn', prop: 'border-color', before: 'rgba(209, 154, 102, 0.4)', token: '--wash-warn-edge' },
-  { selector: '.notice.error', prop: 'background', before: 'rgba(224, 108, 117, 0.1)', token: '--wash-error' },
-  { selector: '.notice.error', prop: 'border-color', before: 'rgba(224, 108, 117, 0.5)', token: '--wash-error-edge' },
-  { selector: '.crash-recovery', prop: 'background', before: 'rgba(209, 154, 102, 0.1)', token: '--wash-warn' },
-  { selector: '.crash-recovery', prop: 'border-color', before: 'rgba(209, 154, 102, 0.4)', token: '--wash-warn-edge' },
-  // —— 巡检报告的失败面（重档）——
-  { selector: '.conv-failed', prop: 'border', before: '1px solid rgba(224, 108, 117, 0.5)', token: '--wash-error-edge', projectOnly: true },
-  { selector: '.conv-failed', prop: 'background', before: 'rgba(224, 108, 117, 0.1)', token: '--wash-error', projectOnly: true },
+  // —— 语义色 wash ——（`.notice.*` / `.crash-recovery` / `.conv-failed` 那 8 格 2026-11-02
+  //    迁到下面 AE-SPLIT4 的「落点在册」档：那一族被**有意**改成实心面板 + 左语义轨，终值要变）
   { selector: '.sb-writable.ok', prop: 'background', before: 'rgba(79, 192, 141, 0.1)', token: '--wash-success', projectOnly: true },
   { selector: '.sb-writable.ok', prop: 'border-color', before: 'rgba(79, 192, 141, 0.3)', token: '--wash-success-edge', projectOnly: true },
   // —— 效果库 `.u-*` 与实心件 ——
@@ -333,9 +325,9 @@ describe('B-5 · wash / 叠色收编：dark 档展开后与改前逐字相等', 
     }
   }
 
-  it('名单够格（35 条 = 这两份文件里被收编的每一格，其中 12 条两档同值；覆盖不全的"绿"不算数）', () => {
-    expect(SLOTS.length).toBe(35);
-    expect(SLOTS.filter((s) => !s.projectOnly).length).toBe(12);
+  it('名单够格（27 条 = 这两份文件里仍按**终值**对拍的每一格，其中 6 条两档同值；覆盖不全的"绿"不算数）', () => {
+    expect(SLOTS.length).toBe(27);
+    expect(SLOTS.filter((s) => !s.projectOnly).length).toBe(6);
   });
 
   it('每格都还在（没有靠删规则换绿）', () => {
@@ -407,38 +399,60 @@ interface LandedSlot {
   selector: string;
   prop: string;
   token: string;
+  /** 只有重档（项目态）才有这一格 ⇒ 别拿"轻档找不到"当假红 */
+  projectOnly?: boolean;
 }
 
 const LANDED: readonly LandedSlot[] = [
   // 编辑器组把手的按下档：从与悬停共用的中性灰拆出来转 accent（其余五条把手同一档）。
-  { selector: '.editor-divider:active', prop: 'background', token: '--split-hot' },
+  { selector: '.editor-divider:active', prop: 'background', token: '--split-hot', projectOnly: true },
+  // —— 告警面一族（2026-11-02 实心面板批）：半透明 wash 让正文从错误条底下透出来，
+  //    改成"实色面板 + 3px 左语义轨"。这一族守的就是上面 AE-SPLIT4 那三件事。
+  { selector: '.notice', prop: 'background', token: '--alert-info-fill' },
+  { selector: '.notice', prop: 'border', token: '--alert-info-edge' },
+  { selector: '.notice', prop: 'border-left', token: '--alert-info-rail' },
+  { selector: '.notice.warn', prop: 'background', token: '--alert-warn-fill' },
+  { selector: '.notice.warn', prop: 'border-color', token: '--alert-warn-edge' },
+  { selector: '.notice.warn', prop: 'border-left-color', token: '--alert-warn-rail' },
+  { selector: '.notice.error', prop: 'background', token: '--alert-error-fill' },
+  { selector: '.notice.error', prop: 'border-color', token: '--alert-error-edge' },
+  { selector: '.notice.error', prop: 'border-left-color', token: '--alert-error-rail' },
+  { selector: '.crash-recovery', prop: 'background', token: '--alert-warn-fill' },
+  { selector: '.crash-recovery', prop: 'border-color', token: '--alert-warn-edge' },
+  { selector: '.crash-recovery', prop: 'border-left-color', token: '--alert-warn-rail' },
+  { selector: '.conv-failed', prop: 'border', token: '--alert-error-edge', projectOnly: true },
+  { selector: '.conv-failed', prop: 'border-left', token: '--alert-error-rail', projectOnly: true },
+  { selector: '.conv-failed', prop: 'background', token: '--alert-error-fill', projectOnly: true },
 ];
 
 describe('AE-SPLIT4 · 有意变值格：落点在册（不钉终值，但必须落在已登记 token 上）', () => {
-  it('名单够格（1 格 = 本批唯一被授权变值的把手档；扩名单要走看板）', () => {
-    expect(LANDED).toHaveLength(1);
+  it('名单够格（16 格 = 把手按下档 + 本批改成实心面板的告警面一族 15 格；扩名单要走看板）', () => {
+    expect(LANDED).toHaveLength(16);
   });
 
   it('每格都还在、吃已登记 token、token 定义点在册且可展开', () => {
-    const rules = parseRules(read('../src/styles-project.css'));
     const missing: string[] = [];
     const bad: string[] = [];
-    for (const s of LANDED) {
-      const got = declOf(rules, s.selector, s.prop);
-      if (got === undefined) {
-        missing.push(`styles-project.css: ${s.selector} { ${s.prop} }`);
-        continue;
-      }
-      if (!got.includes(`var(${s.token})`)) {
-        bad.push(`${s.selector} { ${s.prop}: ${got} } —— 没吃 ${s.token}（字面量回潮 = 定义点外第二张嘴）`);
-        continue;
-      }
-      if (!DARK.has(s.token)) {
-        bad.push(`${s.selector} 落在 ${s.token} 上，但 tokens.css 的裸 :root 没有这枚定义点（私造 token）`);
-        continue;
-      }
-      if (expandVars(got, DARK) === null) {
-        bad.push(`${s.selector} { ${s.prop}: ${got} } —— var() 展开失败（指向空槽 / 环）`);
+    for (const [name, raw] of FILES) {
+      const rules = parseRules(raw);
+      for (const s of LANDED) {
+        if (s.projectOnly && name === 'styles.css') continue;
+        const got = declOf(rules, s.selector, s.prop);
+        if (got === undefined) {
+          missing.push(`${name}: ${s.selector} { ${s.prop} }`);
+          continue;
+        }
+        if (!got.includes(`var(${s.token})`)) {
+          bad.push(`${name}: ${s.selector} { ${s.prop}: ${got} } —— 没吃 ${s.token}（字面量回潮 = 定义点外第二张嘴）`);
+          continue;
+        }
+        if (!DARK.has(s.token)) {
+          bad.push(`${s.selector} 落在 ${s.token} 上，但 tokens.css 的裸 :root 没有这枚定义点（私造 token）`);
+          continue;
+        }
+        if (expandVars(got, DARK) === null) {
+          bad.push(`${s.selector} { ${s.prop}: ${got} } —— var() 展开失败（指向空槽 / 环）`);
+        }
       }
     }
     expect(missing, `规则消失了（不许靠删规则换绿）：\n${missing.join('\n')}`).toEqual([]);
@@ -450,6 +464,20 @@ describe('AE-SPLIT4 · 有意变值格：落点在册（不钉终值，但必须
     expect(DARK.get('--split-hot')).toBe('var(--accent)');
     const rules = parseRules(read('../src/styles-project.css'));
     expect(declOf(rules, '.editor-divider:active', 'background')).not.toMatch(/--wash-/);
+  });
+
+  it('告警面一族三档底色都必须**不透明**（这一族立档的唯一理由）', () => {
+    // 半透明 wash 让台词正文从错误条底下透出来 ⇒ 本族的 fill 只能是"掺进面板色的实色"。
+    // 判据不钉终值（终值随主题翻色会变），只钉三件事：token 有定义、展开后仍是 color-mix、
+    // 展开后的两端的颜色都不带 alpha（没有 rgba(…/transparent 就是永远不透视）。
+    for (const token of ['--alert-error-fill', '--alert-warn-fill', '--alert-info-fill']) {
+      for (const [tier, map] of [['dark', DARK], ['light', LIGHT], ['mint-dark', MINT]] as const) {
+        const got = expandVars(`var(${token})`, map);
+        expect(got, `${tier}：${token} 展开失败（指向空槽 / 环）`).not.toBeNull();
+        expect(got!.toLowerCase(), `${tier}：${token} 不再是 color-mix 派生：${got}`).toContain('color-mix(');
+        expect(got!, `${tier}：${token} 掺进了半透明色，会透视底下的正文：${got}`).not.toMatch(/rgba?\([^)]*\s\/\s*0?\.\d|transparent/);
+      }
+    }
   });
 });
 

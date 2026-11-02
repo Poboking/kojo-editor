@@ -285,20 +285,57 @@ textarea {
   margin: 0 0 var(--space-2);
   color: var(--fg-dim);
 }
+/* 告警面一族：实心面板 + 3px 左语义轨（色只住 tokens.css 的 `--alert-*`，轨宽/圆角/padding 归消费方） */
 .notice {
-  background: rgb(var(--accent-rgb) / 0.1);
-  border: 1px solid rgb(var(--accent-rgb) / 0.4);
+  background: var(--alert-info-fill);
+  border: 1px solid var(--alert-info-edge);
+  border-left: 3px solid var(--alert-info-rail);
   border-radius: var(--radius-lg);
   padding: 10px 14px;
+  color: var(--fg);
 }
 .notice.warn {
-  background: var(--wash-warn);
-  border-color: var(--wash-warn-edge);
+  background: var(--alert-warn-fill);
+  border-color: var(--alert-warn-edge);
+  border-left-color: var(--alert-warn-rail);
 }
 .notice.error {
-  background: var(--wash-error);
-  border-color: var(--wash-error-edge);
+  background: var(--alert-error-fill);
+  border-color: var(--alert-error-edge);
+  border-left-color: var(--alert-error-rail);
   white-space: pre-wrap;
+}
+/* 告警面骨架（图标 + 正文 + 动作）：tone 只由左轨与图标着色表达，正文一律走 `--fg` */
+.notice-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.25em;
+  height: 1.25em;
+}
+.notice.error > .notice-icon {
+  color: var(--alert-error-rail);
+}
+.notice.warn > .notice-icon,
+.notice.crash-recovery > .notice-icon {
+  color: var(--alert-warn-rail);
+}
+.notice-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.notice-copy {
+  margin: 0;
+  line-height: 1.65;
+}
+.notice-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 .recent h3 {
   margin: var(--space-6) 0;
@@ -1501,8 +1538,9 @@ textarea {
 /* ——"有事要处理"而不是"出错了"；版式对齐既有 .notice，不另起炉灶。 */
 
 .crash-recovery {
-  background: var(--wash-warn);
-  border-color: var(--wash-warn-edge);
+  background: var(--alert-warn-fill);
+  border-color: var(--alert-warn-edge);
+  border-left-color: var(--alert-warn-rail);
 }
 .crash-recovery p {
   margin: 0 0 var(--space-2);

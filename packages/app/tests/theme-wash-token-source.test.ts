@@ -336,9 +336,9 @@ describe('VIS-54 主题外挂规则零字面色（值只住定义点，规则只
     expect(bad.join('\n'), `mint-dark.css 外挂规则里还有 ${bad.length} 条写着字面色：\n${bad.join('\n')}`).toBe('');
   });
 
-  it('外挂规则条数只许降：light 15→12、mint 11→10（加一条新覆盖先回答"base 为什么兜不住"）', () => {
-    expect(LIGHT_OUTER.length, 'light.css 外挂规则回潮').toBeLessThanOrEqual(12);
-    expect(MINT_OUTER.length, 'mint-dark.css 外挂规则回潮').toBeLessThanOrEqual(10);
+  it('外挂规则条数只许降：light 15→8、mint 11→8（告警面一族 2026-11-02 退役 6 条；加一条新覆盖先回答"base 为什么兜不住"）', () => {
+    expect(LIGHT_OUTER.length, 'light.css 外挂规则回潮').toBeLessThanOrEqual(8);
+    expect(MINT_OUTER.length, 'mint-dark.css 外挂规则回潮').toBeLessThanOrEqual(8);
   });
 
   it('删掉的三条确实是冗余（base 展开后与本档那枚 token 逐字同值）', () => {
@@ -385,20 +385,16 @@ const PRE_E3: readonly Slot[] = [
   { tier: 'light', selector: ":root[data-theme='light'] .tutorial-code code", prop: 'box-shadow', before: 'inset 0 1px 0 rgba(35, 48, 64, 0.06)' },
   // —— light：语义 wash（改前是档内私有色 rgb(14 107 44 / .1) 一类的十进制抄本） ——
   { tier: 'light', selector: ":root[data-theme='light'] .kd-banner.ok", prop: 'background', before: 'rgb(14 107 44 / 0.1)' },
-  { tier: 'light', selector: ":root[data-theme='light'] .notice.warn", prop: 'background', before: 'rgb(138 90 4 / 0.1)' },
-  { tier: 'light', selector: ":root[data-theme='light'] .notice.warn", prop: 'border-color', before: 'rgb(138 90 4 / 0.38)' },
-  { tier: 'light', selector: ":root[data-theme='light'] .notice.error", prop: 'background', before: 'rgb(180 35 46 / 0.08)' },
-  { tier: 'light', selector: ":root[data-theme='light'] .notice.error", prop: 'border-color', before: 'rgb(180 35 46 / 0.38)' },
-  { tier: 'light', selector: ":root[data-theme='light'] .crash-recovery", prop: 'background', before: 'rgb(138 90 4 / 0.1)' },
-  { tier: 'light', selector: ":root[data-theme='light'] .crash-recovery", prop: 'border-color', before: 'rgb(138 90 4 / 0.4)' },
+  // —— light：语义 wash ——（`.notice.warn` / `.notice.error` / `.crash-recovery` / `.conv-failed`
+  //    八格 2026-11-02 起从本档退役：告警面一族有意改成实心面板 + 左语义轨，终值由基座吃的
+  //    `--alert-*-fill/edge/rail` 供，派生链只引用本档 --red/--amber/--bg-2/--border ⇒
+  //    再按选择器覆盖一遍就成了"同格两张嘴"。守口见本文件末尾「告警面一族」一节。）
   { tier: 'light', selector: ":root[data-theme='light'] .sb-writable.ok", prop: 'background', before: 'rgb(14 107 44 / 0.1)' },
   { tier: 'light', selector: ":root[data-theme='light'] .sb-writable.ok", prop: 'border-color', before: 'rgb(14 107 44 / 0.34)' },
   { tier: 'light', selector: ":root[data-theme='light'] .sb-writable.ro", prop: 'background', before: 'rgb(138 90 4 / 0.08)' },
   { tier: 'light', selector: ":root[data-theme='light'] .sb-writable.ro", prop: 'border-color', before: 'rgb(138 90 4 / 0.34)' },
   { tier: 'light', selector: ":root[data-theme='light'] .sb-writable.ro:hover", prop: 'background', before: 'rgb(138 90 4 / 0.1)' },
   { tier: 'light', selector: ":root[data-theme='light'] .sb-writable.ro:hover", prop: 'border-color', before: 'rgb(138 90 4 / 0.55)' },
-  { tier: 'light', selector: ":root[data-theme='light'] .conv-failed", prop: 'background', before: 'rgb(180 35 46 / 0.08)' },
-  { tier: 'light', selector: ":root[data-theme='light'] .conv-failed", prop: 'border-color', before: 'rgb(180 35 46 / 0.42)' },
   // —— mint-dark ——
   {
     tier: 'mint-dark',
@@ -432,10 +428,9 @@ const PRE_E3: readonly Slot[] = [
     prop: 'background',
     before: 'radial-gradient(circle, rgba(214, 255, 236, 0.3) 0%, rgba(214, 255, 236, 0) 60%)',
   },
-  { tier: 'mint-dark', selector: ":root[data-theme='mint-dark'] .notice.warn", prop: 'background', before: 'rgba(216, 162, 105, 0.12)' },
-  { tier: 'mint-dark', selector: ":root[data-theme='mint-dark'] .crash-recovery", prop: 'border-color', before: 'rgba(216, 162, 105, 0.45)' },
-  { tier: 'mint-dark', selector: ":root[data-theme='mint-dark'] .notice.error", prop: 'background', before: 'rgba(226, 112, 122, 0.12)' },
-  { tier: 'mint-dark', selector: ":root[data-theme='mint-dark'] .conv-failed", prop: 'border-color', before: 'rgba(226, 112, 122, 0.55)' },
+  // —— mint-dark：告警面一族四格（`.notice.warn` / `.notice.error` / `.crash-recovery` /
+  //    `.conv-failed`）与 light 档一同退役：基座改吃 `--alert-*` 实心档，派生链只引用本档
+  //    --red/--amber/--bg-2/--border ⇒ 档内不必再按选择器补 alpha。守口见文件末尾那一节。）
   { tier: 'mint-dark', selector: ":root[data-theme='mint-dark'] .sb-writable.ok", prop: 'background', before: 'rgba(98, 199, 118, 0.12)' },
   { tier: 'mint-dark', selector: ":root[data-theme='mint-dark'] .sb-writable.ok", prop: 'border-color', before: 'rgba(98, 199, 118, 0.4)' },
   { tier: 'mint-dark', selector: ":root[data-theme='mint-dark'] .kd-banner.ok", prop: 'background', before: 'rgba(98, 199, 118, 0.14)' },
@@ -445,9 +440,9 @@ const PRE_E3: readonly Slot[] = [
 const THEME_SRC: Readonly<Record<Tier, string>> = { dark: tokensRaw, light: lightRaw, 'mint-dark': mintRaw };
 
 describe('VIS-54 逐格对拍：改前那串字面量 = 改后按档展开的终值', () => {
-  it('名单够长（light 19 格 / mint 13 格，短了就等于把对拍写松）', () => {
-    expect(PRE_E3.filter((s) => s.tier === 'light').length).toBeGreaterThanOrEqual(19);
-    expect(PRE_E3.filter((s) => s.tier === 'mint-dark').length).toBeGreaterThanOrEqual(13);
+  it('名单够长（light 11 格 / mint 9 格，短了就等于把对拍写松；告警面一族 2026-11-02 退役 12 格见末尾那一节）', () => {
+    expect(PRE_E3.filter((s) => s.tier === 'light').length).toBeGreaterThanOrEqual(11);
+    expect(PRE_E3.filter((s) => s.tier === 'mint-dark').length).toBeGreaterThanOrEqual(9);
   });
 
   const missing: string[] = [];
@@ -517,5 +512,72 @@ describe('VIS-52 命令面板遮罩并回 `--scrim-*` 主路（palette.css 不�
   it('palette.css 里的 `[data-theme]` 选择器归零（第二条通路就是这么被掐死的）', () => {
     const themed = parseRules(paletteRaw).filter((r) => /\[data-theme/.test(r.selector));
     expect(themed.map((r) => r.selector).join('\n'), `palette.css 又开始按档供色：\n${themed.map((r) => r.selector).join('\n')}`).toBe('');
+  });
+});
+
+/* ------------------------------ 判据四：告警面一族（2026-11-02 实心面板批） ------------------------------ */
+
+/**
+ * `.notice.*` 那一族今天**故意**换了终值：原先的半透明 wash 让台词正文从错误条底下透出来
+ * （真壳截图实锤），改成"实色面板 + 3px 左语义轨"。终值会变 ⇒ 这里不钉字面量，钉三件更硬的：
+ *  ① 主题侧不再按选择器覆盖（"值只住定义点"的另一种形态：色由 token 链供，档内零张嘴）；
+ *  ② 三档展开后的 fill 终值 alpha 恒为 1 —— 本族立档的全部理由：不许再透视正文；
+ *  ③ 面板上的正文 `--fg` 仍过 AA 4.5:1（承载色从"transparent 叠在父面上"换成算好的实色，
+ *     当年那些"8% / 10% 档合成面"的对比度结论一并作废，必须重算）。
+ */
+const ALERT_FILLS = ['--alert-error-fill', '--alert-warn-fill', '--alert-info-fill'] as const;
+
+/** 先展开 var 链再把 color-mix 求值成 rgba（normalize 只吃"已展开"的形态） */
+function fillOf(token: string, tier: Tier): string | null {
+  const expanded = expandVars(`var(${token})`, LAYERS[tier]);
+  return expanded === null ? null : normalize(expanded, LAYERS[tier]);
+}
+
+/** WCAG 对比度：本文件只有这一节需要亮度算式 */
+function contrastOn(fg: string, bg: string): number {
+  const lum = (c: string): number | null => {
+    const m = /rgba?\(([^)]+)\)/.exec(c);
+    if (!m) return null;
+    const p = m[1]!.split(',').map((n) => Number.parseFloat(n.trim()) / 255);
+    const lin = (v: number): number => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return 0.2126 * lin(p[0]!) + 0.7152 * lin(p[1]!) + 0.0722 * lin(p[2]!);
+  };
+  const a = lum(fg);
+  const b = lum(bg);
+  if (a === null || b === null) return -1;
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+describe('告警面一族：主题侧规则退役 + 三档面板不透视', () => {
+  it('light / mint 都不再按选择器覆盖 .notice / .crash-recovery / .conv-failed（供色只剩基座一条通路）', () => {
+    for (const [label, outer] of [['light', LIGHT_OUTER], ['mint-dark', MINT_OUTER]] as const) {
+      const reusing = outer
+        .filter((r) => r.selector.split(',').some((sel) => /\.(notice|crash-recovery|conv-failed)(\.|\s|$)/.test(sel.trim())))
+        .map((r) => `${label}: ${r.selector}`);
+      expect(reusing.join('\n'), `主题侧又张嘴覆盖告警面：\n${reusing.join('\n')}`).toBe('');
+    }
+  });
+
+  it('三档的 --alert-*-fill 展开后 alpha 恒 1（本族立档就是为了不透视正文）', () => {
+    for (const tier of ['dark', 'light', 'mint-dark'] as Tier[]) {
+      for (const token of ALERT_FILLS) {
+        const got = fillOf(token, tier);
+        expect(got, `${tier}：${token} 求值失败（环 / 未知形式）`).not.toBeNull();
+        expect(got!, `${tier}：${token} 不是实色，会透视底下的正文：${got}`).toMatch(/, 1\)$/);
+      }
+    }
+  });
+
+  it('--fg 压在三枚面板上都 ≥4.5:1（承载色换了 ⇒ 对比度重算，不许顺手掉线）', () => {
+    for (const tier of ['dark', 'light', 'mint-dark'] as Tier[]) {
+      const fg = normalize('var(--fg)', LAYERS[tier]);
+      expect(fg, `${tier}：--fg 解析不出`).not.toBeNull();
+      for (const token of ALERT_FILLS) {
+        const fill = fillOf(token, tier);
+        expect(fill, `${tier}：${token} 解析不出`).not.toBeNull();
+        const ratio = contrastOn(fg!, fill!);
+        expect(ratio, `${tier}：--fg 压 ${token}（${fill}）只有 ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(4.5);
+      }
+    }
   });
 });

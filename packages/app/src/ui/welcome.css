@@ -338,16 +338,16 @@
 }
 
 .welcome-screen .notice.warn .welcome-notice-icon {
-  color: var(--warning);
+  color: var(--alert-warn-rail);
 }
 
 .welcome-screen .notice.error .welcome-notice-icon {
-  color: var(--danger);
+  color: var(--alert-error-rail);
 }
 
-/* 崩溃横幅与 warn 同色温（styles.css 已把 `.crash-recovery` 底/边写成琥珀系） */
+/* 崩溃横幅与 warn 同色温（styles.css 已把 `.crash-recovery` 底/边写成琥珀警示族） */
 .welcome-screen .notice.crash-recovery .welcome-notice-icon {
-  color: var(--warning);
+  color: var(--alert-warn-rail);
 }
 
 .welcome-screen .welcome-notice .welcome-notice-copy {

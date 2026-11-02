@@ -106,8 +106,7 @@ describe('ProjectErrorNotice：文案原样 + 可关闭', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it('带出路的错误：按钮上屏（中文 label + 悬停说明），点了就交出去', async () => {
-    const run = vi.fn();
+  it('带出路的错误：按钮上屏（中文 label + 悬停说明），点了就交出去', async () => {    const run = vi.fn();
     const message = '这个项目文件夹眼下不能写入，只有编辑器自己的文件夹能写：宿主给的原因';
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -139,6 +138,28 @@ describe('ProjectErrorNotice：文案原样 + 可关闭', () => {
     // 出路按钮不顶掉关闭叉：同屏仍只有一条错误条
     expect(container.querySelectorAll('.project-session-error')).toHaveLength(1);
     expect(box?.querySelector('button[aria-label="关闭错误提示"]')).not.toBeNull();
+  });
+
+  it('告警面形状：图标 + 正文 + 出路各占一层（出路不与正文抢那 420px 的横向空间）', async () => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        h(ProjectErrorNotice, {
+          message: '这个项目文件夹眼下不能写入',
+          onDismiss: () => undefined,
+          action: { label: '允许编辑器写入这个文件夹', title: '系统目录选择框', run: () => undefined },
+        }),
+      );
+    });
+    const box = container.querySelector('.project-session-error');
+    expect(box?.querySelector(':scope > .notice-icon'), '缺语义图标位').not.toBeNull();
+    const body = box?.querySelector(':scope > .notice-body');
+    expect(body, '正文与出路没归进同一层 .notice-body').not.toBeNull();
+    expect(body?.querySelector('.project-session-error-message'), '正文不在 .notice-body 里').not.toBeNull();
+    expect(body?.querySelector('.toast-action'), '出路按钮不在 .notice-body 里').not.toBeNull();
+    expect(box?.querySelector(':scope > .toast-close'), '关闭叉仍应是错误条的直接子节点').not.toBeNull();
   });
 
   it('没有出路的错误：只有文案与关闭叉（旧渲染零改动）', async () => {

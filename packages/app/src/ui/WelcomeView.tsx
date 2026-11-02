@@ -225,9 +225,9 @@ export function countFilesByRoot(files: readonly RecentFileRecord[]): Map<string
 }
 
 /**
- * 通知条家族（`.notice` 底色由 styles.css 供给；本批只加"图标 + 文案"这层呈现）：
+ * 通知条家族（`.notice` 的实心面板与左语义轨由 styles.css 的 `--alert-*` 供色；本文件只排"图标位 + 文案"）：
  * 浏览器环境 = warn 档、内核装配 = 状态档（转圈）、失败 = error 档、崩溃恢复 = 行动档。
- * 色值不在这里写：`.notice.warn/.error` 目前把 rgba 写死在 styles.css，属 L01 地盘。
+ * 色值一律不在这里写，也不在 `ui/welcome.css` 里写——图标只吃同族的 `--alert-*-rail`。
  * // ui-kit-candidate: .notice 家族的行内语义图标位（图标 + 一句人话 + 可选动作）
  */
 function NoticeIcon({ kind }: { kind: 'warn' | 'error' | 'info' }): ReactElement {

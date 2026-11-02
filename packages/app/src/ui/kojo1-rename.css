@@ -61,16 +61,19 @@
   font-size: var(--fs-1);
 }
 
+/* 对话框里的错误框：与 `.notice.error` 同一条告警面语言（实心面板 + 3px 左轨）。
+   原先是 10% 透明红压在模态玻璃上——模态本身半透，红框跟着一起糊，字也发灰。 */
 .legacy-rename__error {
   display: flex;
   align-items: flex-start;
   gap: var(--space-2);
   margin: var(--space-2) 0;
   padding: var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border: 1px solid var(--alert-error-edge);
+  border-left: 3px solid var(--alert-error-rail);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-  color: var(--danger-text, var(--danger));
+  background: var(--alert-error-fill);
+  color: var(--danger-text);
   font-size: var(--fs-1);
 }
 

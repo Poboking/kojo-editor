@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactElement, type ReactNode } from 'react';
+import { Icon } from './icons';
 import {
   logFrontendError,
   serializeReason,
@@ -92,7 +93,12 @@ export class ProjectErrorBoundary extends Component<ProjectErrorBoundaryProps, P
     return (
       <div className="project-crash" role="alert">
         <div className="notice error project-crash-card">
-          <h2>项目界面出了点问题</h2>
+          <h2>
+            <span className="notice-icon" aria-hidden="true">
+              <Icon name="warning" size={16} />
+            </span>
+            项目界面出了点问题
+          </h2>
           <p>界面渲染时遇到错误。可以重试，或先回到欢迎页再打开项目。</p>
           <details className="project-crash-details">
             <summary>技术细节（可复制给开发者）</summary>
