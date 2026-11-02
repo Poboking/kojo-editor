@@ -1257,10 +1257,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `ShellLayout` 那侧的接线不落图：它本身在懒边上。
     //     ⇒ KB 闸随现读数 **3,511 → 3,512**（余量 0 B 的口径不变：再进图必须先出图）；
     //     文件闸 201 不动。
+    //
+    //   - **erb-deep 遗账落地 + 1028 通知展开批（2026-11-02，本批）**：读数 **201 文件 / 3,547 KB**
+    //     （3,632,160 B = 上一条 3,595,888 + **36,272**）——**零新进图文件**（201 未动；
+    //     `label-lens.ts` 起先独立成文件会顶到 202，按「再进图必须先出图」并入 `symbols.ts`
+    //     的行上注解段，与 `usage-lens` 2026-10-31 先例同形），逐枚实测（`wc -c` 现树 vs
+    //     `git cat-file -s origin/dev:…`；五项差值求和与总差**逐字节相等**）：
+    //     · `plugins/condition-extractor/src/decorator.ts` **+22,428**（T8：赋值右侧 + 字符串
+    //       插值的表达式表面诊断——`expressionSurfaces` 纯函数与诊断合流；必须进图：这条
+    //       波浪线的运行时真路径是 worker offload，提取逻辑与 `collect` 同文件才两条走法同源）；
+    //     · `plugins/erb-parser/src/symbols.ts` **+5,743**（T12：`$` 标签行上注解并入，
+    //       含 `JUMP_FAMILY` 注释扩写）；
+    //     · `plugins/erb-parser/src/structure-fix.ts` **+4,390**（T11：孤儿闭合的删除/注释动作）；
+    //     · `app/src/ui/NotificationCenter.tsx` **+3,205**（1028 批：收起两行 + ⌄ 展开整段）；
+    //     · `plugins/erb-parser/src/plugin.ts` **+506**（T11/T12 接线与 `codeLens` 合并排序）。
+    //     ⇒ KB 闸 **3,512 → 3,547**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,512 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,547 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_512);
+    expect(totalKb).toBeLessThanOrEqual(3_547);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
