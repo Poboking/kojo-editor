@@ -111,17 +111,21 @@ const DATA_ENTRY_RE = /^\s*(DATAFORM|DATA)\b/;
  */
 const FALLBACK_PREFIX = '未识别语句 · ';
 /**
- * 兜底行总预算：挂盘实测 **1,467**；×1.1 = 1,613（1,613.7 向下取整）。
- * （历史读数：修前 77,329——注释 20,645 / SKIP 区 37,496 / PRINT 族 9,583 全部落兜底；
+ * 兜底行总预算：**2026-11-02 语料换代重取证**——本机语料换成 SANYOUSEI 重打包版
+ * （文件数与目录结构与 2026-10-20 冻结时的画蛇添足原版完全一致：3,971 方言文件 /
+ * .ERB 正文 3,818，`corpus.mjs` 指纹同判据；但口上/模组面内容换代，分格读数见
+ * `FALLBACK_CLASS_BUDGET` 注）。本批修掉三族真投影缺口（`TryCall` 混合大小写 /
+ * `TRYCALLFORMF` / CJK 循环变量）后实测兜底 **7,536** ⇒ 总预算 7,536 × 1.1 = **8,289**
+ * （8,289.6 向下取整）。换代 = 重取证，不是放水；下一刀名单随分格注更新
+ * （`DEBUGPRINTFORML` / `LOCALS` 空右值 / `RESULTS` / `THROW` / `SPLIT` / `SKIPDISP` / `TWAIT`）。
+ * （历史读数，旧语料口径：修前 77,329——注释 20,645 / SKIP 区 37,496 / PRINT 族 9,583 全落兜底；
  *  `@` 函数头与 `#` 声明补上中性显示形后 13,770；`DATALIST`/`ENDLIST`/`STRDATA` 中性形 +
  *  TRY 单行档语句形 9,046；赋值/表达式行与原语补登（`7202f02`）再砍到 **3,744**；
- *  裸自增/自减行（**1,371** 行：`ABL:親密 ++` / `CFLAG:1:1009 ++` / `Snum++;2` 一族）+
- *  `{}` 多行语句括号（**318** 行 = 159 对）⇒ **2,055**；
- *  `TIMES` 小数乘算（**240**）+ `LOCALS '=` 字符串赋值（**170**）+ `|=` 按位或赋值（**178**，
- *  含 CFLAG 64 / STAIN 25 等全部行首记号）⇒ **1,467**。）
+ *  裸自增/自减行（**1,371** 行）+ `{}` 多行语句括号（**318** 行）⇒ **2,055**；
+ *  `TIMES`（**240**）+ `LOCALS '=`（**170**）+ `|=`（**178**）⇒ **1,467**。）
  * 只给规则微调留 ≤10% 余量；超过就是"正常 ERB 又被标成错误"的回归。
  */
-const FALLBACK_LINE_BUDGET = 1_613;
+const FALLBACK_LINE_BUDGET = 8_289;
 
 /* ---------------- 兜底行的**成因归因**（工包 D：总量之外还要问"到底是什么"） ---------------- */
 
@@ -157,28 +161,37 @@ const FALLBACK_ATTRIBUTION_KEYS: readonly FallbackAttributionKey[] = [
 ];
 
 /**
- * 每类上限（**只降不升**的棘轮）。
+ * 每类上限（**只降不升**的棘轮；语料换代时按新盘重取证后整格重钉——见 2026-11-02 注）。
  *
  * 两格是**结构性 0**（判据可证，不依赖实测）：
  * - `tryNine` = 0：本批在 `native-display/control.ts` 给了 `试探 原形 <记号> <原文>` 中性显示形；
  * - `printVariant` = 0：`PRINT` 打头那条判据已由上面的 `print` 类钉成 0，本桶同判据 ⇒ 同 0。
  *
- * 其余四格的首轮上界按池份额给（0.5 / 0.75 × 预算）过一轮；**2026-10-20 挂盘跑出分格实测后
- * 逐字下调**（预算只降不升）：`tryOther` 0 / `dataGrouping` 0（两族的显示形本轮落地 ⇒ 结构性归零）、
- * `controlFlow` 实测 **20**（全是 `FOR` 的异形写法：`FOR 種類,0,MAXPANTS` / `FOR LOCAL, 4`）、
- * `other` 实测 9,026 → 3,724（赋值行收掉之后）→ **2,035**（裸自增/自减 **1,371** +
+ * 历史棘轮（2026-10-20 冻结口径，语料 = eraTW 4.980 画蛇添足原版）：`tryOther` 0 /
+ * `dataGrouping` 0（两族的显示形本轮落地 ⇒ 结构性归零）、`controlFlow` 实测 **20**（全是 `FOR`
+ * 的异形写法）、`other` 实测 9,026 → 3,724（赋值行收掉之后）→ **2,035**（裸自增/自减 **1,371** +
  * `{}` 多行语句括号 **318** 两族落地后）→ **1,447**（`TIMES` **240** / `LOCALS '=` **170** /
- * `|=` **178** 三族落地后；`LOCALS` 仍余 30 行是**空右值** `LOCALS =`——与 `S =` 同一档，
- * 引擎语义未取证 ⇒ 刻意不认）。剩下的头名 = `GETMILLISECOND` 148 / `DEBUGPRINTFORML` 75 /
- * `TWAIT` 74 / `SETFONT` 72 / `REUSELASTLINE` 59 / `RESULTS` 52。
+ * `|=` **178** 三族落地后）。
+ *
+ * **2026-11-02 语料门复跑批（语料换代重取证）**：本机语料换成 SANYOUSEI 重打包版——
+ * 文件数与目录数与原版完全一致（3,971 方言文件 / .ERB 正文 3,818，`corpus.mjs` 指纹同判据），
+ * 但**口上/模组面内容换代**（新增 `DLC/魔法DLC` / `fromEN` 等，对话与调试打印面大改：
+ * `DEBUGPRINTFORML` 75→388 / `TWAIT` 74→186 / `LOCALS` 空右值 30→243 / `RESULTS` 52→232；
+ * 引擎面代码纹丝不动：`GETMILLISECOND` 148→157）。本批同时修掉三族**真投影缺口**
+ * （`TryCall` 混合大小写 / `TRYCALLFORMF` / CJK 循环变量 `FOR 目的地MAPID, …`），分格实测：
+ * `tryOther` 22→**0**、`printVariant` 11→**0**、`controlFlow` 81→**2**；`other` 7,536 为
+ * 新语料首读。钉值：`controlFlow` = 2 × 1.1 取整、`other` = 7,536 × 1.1（**棘轮对同语料
+ * 只降不升**；换代 = 重取证，不是放水——下一刀名单：`DEBUGPRINTFORML` **388** / `LOCALS`
+ * 空右值 **243** / `RESULTS` **232** / `THROW` **211** / `SPLIT` **206** / `SKIPDISP` **206** /
+ * `TWAIT` **186** / `GETMILLISECOND` **157**）。
  */
 const FALLBACK_CLASS_BUDGET: Readonly<Record<FallbackAttributionKey, number>> = {
   tryNine: 0, // 结构性：本批交付中性显示形
-  tryOther: 0, // 结构性：单行档语句形（`尝试跳到 …`）本轮落地，挂盘实测 0
+  tryOther: 0, // 结构性：单行档语句形落地 + 动词大小写归一 + `TRYCALLFORMF` 认领（2026-11-02 实测 0）
   dataGrouping: 0, // 结构性：分组记号中性形本轮落地，挂盘实测 0
-  printVariant: 0, // 结构性：与 `print` 类同一判据
-  controlFlow: 22, // = 实测 20 × 1.1（`FOR` 异形）
-  other: 1_591, // = 实测 1,447 × 1.1（下一刀：`GETMILLISECOND` / `DEBUGPRINTFORML` / `TWAIT` 一族）
+  printVariant: 0, // 结构性：与 `print` 类同一判据（`printing_page` 一类变量名已划出 PRINT 档）
+  controlFlow: 3, // 2026-11-02 换代重取证：实测 2（IF=1 / CASE=1）× 1.1
+  other: 8_289, // 2026-11-02 换代重取证：实测 7,536 × 1.1（下一刀名单见上注）
 };
 
 /**

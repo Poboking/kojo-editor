@@ -147,6 +147,21 @@ function primary(id) {
   return esc(w);
 }
 
+/**
+ * 语义 id 组 → 词形择一分支（**长形优先**）：块头子词之间是前缀关系
+ * （`否则如果` ⊃ `否则`），正则左端优先语义下短形先试会吞掉长形的起手格。
+ * 2026-11-02 语料门复跑批（预处理糖形补齐）新增；判据真源仍是词表投影。
+ */
+function altLongest(...ids) {
+  const merged = [];
+  for (const id of ids) {
+    const w = WF.wordsById[id];
+    if (!w || w.length === 0) throw new Error(`词形表缺 id：${id}`);
+    merged.push(...w);
+  }
+  return [...new Set(merged)].sort((a, b) => b.length - a.length || cmpStr(a, b)).map(esc).join('|');
+}
+
 /** 收束词形（= `blockEndWord(开块 id)`，生成期已对真源恒等式做过校验）。 */
 function endWord(openId) {
   const w = WF.endWordOfId[openId];
@@ -219,6 +234,12 @@ const P = {
   loop_end: 11,
   catch_end: 11,
   data_end: 11,
+  // 预处理糖形（2026-11-02 语料门复跑批补齐）：收束 / 行连接括号 = 整行等值（同 exact_line_marker
+  // 逻辑，高于开块）；块头在块头族同层（10）。
+  preproc_head: 10,
+  preproc_end: 11,
+  brace_start: 11,
+  brace_end: 11,
   choice_item: 11,
   data_entry: 11,
   // TRY 系写形与 `control_malformed` 的 TRY 分支在同一行上**必然等长**（两支都吃到行尾），
@@ -307,8 +328,18 @@ if (RAW.exactMarkers.length === 0) throw new Error('投影里一支整行等值�
 const MARKER_RULES = Object.fromEntries(
   RAW.exactMarkers.map(({ kind, marker }) => [nodeOfKind(kind), () => markerToken(marker)]),
 );
+
 /** 标记节点名（按投影序，确定性）；`_line` 的择一表用它把每一枚挂回行集合。 */
 const MARKER_NODES = Object.keys(MARKER_RULES);
+
+/**
+ * 预处理 / 行连接括号的**容器边界行**（`preproc_head` / `preproc_end` / `brace_start` /
+ * `brace_end`）。它们**不在 `_line` 全集里**（见 `preproc_block` 头注），需要平铺形的
+ * 上下文（`_item` 的孤儿档、`_raw_body` 的 @ 区、三族专体）逐处显式列出——
+ * 规则引用是结构装配不是词形抄本，零抄本守卫 (d) 也因此天然干净。
+ */
+const BOUNDARY_LINE_NODES = ['preproc_head', 'preproc_end', 'brace_start', 'brace_end'];
+const withBoundaryLines = ($, ...members) => [...members, ...BOUNDARY_LINE_NODES.map((name) => $[name])];
 
 module.exports = grammar({
   name: 'kojo',
@@ -320,6 +351,11 @@ module.exports = grammar({
 
   // 「块 vs 单行」的归约冲突由 `_item` 里的 `prec.right` 承担（有更深正文 ⇒ 成块；
   // 没有 ⇒ 块头落回单行节点）——本波规则集下生成器判定无需 conflicts 表。
+  // 例外是预处理 / 行连接括号容器：它们的体**不靠缩进记号**（平铺正文），块头在
+  // `_item` 里有同 token 的孤儿平铺档，同一行两种合法归约是真歧义 ⇒ 交给 GLR 双栈并存，
+  // 配平（后面真的有同族收束行）的容器归约胜出，孤儿头照旧落回单行节点——
+  // 与 `loop_end` 族"孤儿收束词落单行不崩"同一口径，错误恢复不退化。
+  conflicts: ($) => [[$._item, $.preproc_block], [$._item, $.brace_block]],
 
   rules: {
     source_file: ($) => repeat($._item),
@@ -329,7 +365,12 @@ module.exports = grammar({
         // 有体优先成块（prec.right 解"块 vs 单行"的归约冲突）
         prec.right($.block),
         prec.right($.item_block),
+        // 预处理 / 行连接括号容器：同样"能成块就成块"（真源符号树同判）；孤儿头在
+        // 成不了块时落回下面的平铺档（`_line` 已无这四枚，见 BOUNDARY_LINE_NODES 头注）。
+        prec.right($.preproc_block),
+        prec.right($.brace_block),
         $._line,
+        ...withBoundaryLines($),
       ),
 
     // ============================================================
@@ -369,14 +410,14 @@ module.exports = grammar({
      * `@` 族的体：平收到 `_raw_close` 为止（范围由前瞻决定，与缩进无关）。零新节点名
      * （隐藏规则 ⇒ 行节点直接挂在 `block` 下，逐行反查与第一波同口径）。
      */
-    _raw_body: ($) => seq(repeat($._line), $._raw_close),
+    _raw_body: ($) => seq(repeat(choice(...withBoundaryLines($, $._line))), $._raw_close),
 
-    switch_body: ($) => seq($._indent, repeat(choice($.switch_item, $._line, $.block)), $._dedent),
+    switch_body: ($) => seq($._indent, repeat(choice(...withBoundaryLines($, $.switch_item, $._line, $.block))), $._dedent),
 
-    choice_body: ($) => seq($._indent, repeat(choice($._line, $.block, $.item_block)), $._dedent),
+    choice_body: ($) => seq($._indent, repeat(choice(...withBoundaryLines($, $._line, $.block, $.item_block))), $._dedent),
 
     when_body: ($) =>
-      seq($._indent, repeat(choice($._line, $.block, $.arrow_case, $.arrow_else)), $._dedent),
+      seq($._indent, repeat(choice(...withBoundaryLines($, $._line, $.block, $.arrow_case, $.arrow_else))), $._dedent),
 
     /** 选项条目自带的正文块（节点名与 `block` 同族语义，折叠查询一并取）。 */
     item_block: ($) => seq(field('open', $.choice_item), $.block_body),
@@ -636,6 +677,27 @@ module.exports = grammar({
     loop_step: kwSpace(alt('inline.loopStep'), P.loop_step),
 
     // ============================================================
+    // 预处理条件块 / 行连接块糖形（2026-11-02 语料门复跑批补齐）。
+    // 判据真源 = kojo-vocab `lexer.ts` 的 `parsePreprocHead`（块头，闭集子词、全部登记词形）
+    // 与 brace 支（整行等值）；本层经词形投影取同一批串，绝不抄第二份名单。子词是前缀
+    // 关系（`否则如果` ⊃ `否则`）⇒ 用 altLongest 长形优先。残缺形（宏位空 / 子词带正文）
+    // 真源判 controlMalformed，本层暂不投影——语料里没有那种行，两侧同落 text 同判。
+    // ============================================================
+    preproc_head: lineRule(
+      P.preproc_head,
+      `(?:${alt('block.preproc')})[${W}]+(?:${altLongest(
+        'block.elif',
+        'block.if',
+        'block.else',
+        'inline.preprocNonDebug',
+        'inline.preprocDebug',
+      )})(?:${DELIM}${C}*)?`,
+    ),
+    preproc_end: () => tkRE(P.preproc_end, new RegExp(`(?:${alt('block.preprocEnd')})[${HW}]*`)),
+    brace_start: () => tkRE(P.brace_start, new RegExp(`(?:${alt('block.multiStart')})[${HW}]*`)),
+    brace_end: () => tkRE(P.brace_end, new RegExp(`(?:${alt('block.multiEnd')})[${HW}]*`)),
+
+    // ============================================================
     // 语句族
     // ============================================================
 
@@ -687,6 +749,12 @@ module.exports = grammar({
     // 行集合（块头族也在其中——同一记号既可是单行亦可是块头，由 scanner 的缩进记号裁决）
     // ============================================================
 
+    // 全集逐枚 = 既有 choice 列表；**四枚容器边界行不在此表**（见 `BOUNDARY_LINE_NODES` 头注）。
+    // `raw_block_start`（行首 `@`）**也不在这一张表里**：本族的块总是成得了（`_raw_close` 在空体
+    // 时就落到，不像 `时机` 族要等回缩），所以它只作为 `block` 的 `open` 出现一次。留着单行形
+    // 会让生成器在 `@ 行 • 任意行记号` 上判 shift/reduce 冲突（`_raw_body` 的首 token 就是任意
+    // 行记号）；节点面不变——逐行反查经 `index.ts` 的 `lineNodeOf()` 取 `open` 字段，取到的
+    // 仍是同一枚 `raw_block_start`，kind 对照分毫不动。
     _line: ($) =>
       choice(
         // ---- 台词（有内层结构的行规则：`「` + 正文段/行内插值 + 收束段）/ 插值整行（原子记号）----
@@ -694,11 +762,6 @@ module.exports = grammar({
         $.string,
         $.interpolation,
         // ---- 注释 / 原生直通 / 标签 ----
-        // `raw_block_start`（行首 `@`）**不在这一张表里**：本族的块总是成得了（`_raw_close` 在空体
-        // 时就落到，不像 `时机` 族要等回缩），所以它只作为 `block` 的 `open` 出现一次。留着单行形
-        // 会让生成器在 `@ 行 • 任意行记号` 上判 shift/reduce 冲突（`_raw_body` 的首 token 就是任意
-        // 行记号）；节点面不变——逐行反查经 `index.ts` 的 `lineNodeOf()` 取 `open` 字段，取到的
-        // 仍是同一枚 `raw_block_start`，kind 对照分毫不动。
         $.comment_line,
         $.native_line,
         // ---- 整行等值标记行（投影动态生成，枚数随真源走）----
@@ -741,6 +804,9 @@ module.exports = grammar({
         $.data_head,
         $.data_end,
         $.data_entry,
+        // （预处理糖形 / 行连接括号四枚边界行在此表之外：容器头尾必须由容器规则认领，
+        //  平铺形只在无容器供给的上下文里显式列出——否则"头尾平铺"与"成块收拢"真歧义，
+        //  GLR 栈随块数组合爆炸。）
         $.try_statement,
         $.jump_statement,
         $.function_jump,
@@ -759,6 +825,37 @@ module.exports = grammar({
         // ---- 兜底 ----
         $.blank_line,
         $.text_line,
+      ),
+
+    /**
+     * 预处理条件块容器（2026-11-02 折叠批新增）：块头行 → 体 → 收束行。
+     * 折叠真源（糖符号树 `preprocBlock` 符号）就是 head..end 跨度，CST 侧由此供给
+     * 同一跨度（`folds.scm` 捕获）。嵌套（`[IF a] … [IF b] … [ENDIF] [ENDIF]`）经
+     * 体里的 `$.preproc_block` 递归支成立；`brace_block` 互相嵌套同理由交叉支承担。
+     * 体 = `_line`（已无四枚边界行）+ 两容器递归支 ⇒ 配平输入的归约唯一，无组合歧义；
+     * 孤儿头（后面没有同族收束行）成不了块，在 `_item` 的平铺档落回单行节点——
+     * 与 `loop_end` 族"孤儿收束词落单行不崩"同一口径，错误恢复不退化。
+     */
+    preproc_block: ($) =>
+      prec.right(
+        seq(
+          field('open', $.preproc_head),
+          repeat(choice($._line, $.preproc_block, $.brace_block)),
+          field('close', $.preproc_end),
+        ),
+      ),
+
+    /**
+     * 行连接括号块容器（`多行语句开始` → … → `多行语句结束`）：判据真源 =
+     * 糖符号树 `multiLine` 符号（block.multiStart / block.multiEnd 整行等值）。
+     */
+    brace_block: ($) =>
+      prec.right(
+        seq(
+          field('open', $.brace_start),
+          repeat(choice($._line, $.preproc_block, $.brace_block)),
+          field('close', $.brace_end),
+        ),
       ),
 
     /** 可开"通用块"的块头族（其余族走各自的专体）。 */

@@ -17,3 +17,8 @@
 
 (block) @fold
 (item_block) @fold
+
+; 预处理条件块 / 行连接括号块（2026-11-02 折叠批）：显式收束行的多行跨度
+; （块头行 → 收束行），与折叠真源（糖符号树 `preprocBlock` / `multiLine` 符号）同判。
+(preproc_block) @fold
+(brace_block) @fold

@@ -208,13 +208,19 @@ const STILL_NULL: readonly string[] = [
   'GETMILLISECOND',
   'SETCOLORBYNAME "红"',
   'VARSET', // 缺载荷 = 畸形行
-  'callf FOO(1)', // 调用族的记号按引擎写法全大写；小写不猜
+  // `callf FOO(1)` 已从本表撤下（2026-11-02 语料门复跑批）："记号全大写；小写不猜"的前提
+  // 被真语料推翻——eraTW 自家 DLC（`DLC/双重函数.ERB`）全篇写 `TryCall`，Emuera 命令本就
+  // 大小写不敏感；语句档动词正则随之归一，`callf FOO(1)` 现在 ⇒ `调用F FOO(1)`
+  // （正钉在 `native-display-statement.test.ts` 的混合大小写用例）。
   'PRINTKONST', // `PRINT*` 表外变体归投影的台词形，本层不抢
   'PRINTFORMW "a = b"',
   'PRINT%s=1', // 表外变体里"恰好带个 `=`"的漏网形状：`PRINT` 打头一律留给 `printFamilyDisplay`
   'PRINTKONST 服装 = 裸',
   'SOME_UNKNOWN_ENGINE_THING 1',
-  'FOR 種類,0,MAXPANTS', // `FOR` 异形归 controlFlow 那一格（20 行），本批一个字节不碰
+  // `FOR 種類,0,MAXPANTS` 已从负自证撤下（2026-11-02 语料门复跑批）：`LOOP_VAR_RE` 改由
+  // `@kojo/kojo-vocab` 标识符单一真源派生（此前 ASCII 副本不认 CJK 变量名），CJK 循环变量
+  // 的 FOR 是引擎合法写法（真语料 79 行），现在由控制流档认领 ⇒ 正钉见
+  // `native-display-control.test.ts` 的 CJK 循环变量用例。
   'FOR LOCAL, 4',
 ];
 

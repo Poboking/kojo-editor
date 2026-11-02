@@ -4,7 +4,7 @@
   "blockedReason": "v1-compile-failed",
   "v1": {
     "ok": false,
-    "lines": 1325,
+    "lines": 1355,
     "errors": 20,
     "firstErrorCode": "unknown-identifier"
   },
@@ -21,6 +21,6 @@
       "多个 `时机` 块（2.0 一个文件只写一个 `# 机`）",
       "赋值/裸表达式"
     ],
-    "outputLines": 654
+    "outputLines": 684
   }
 }

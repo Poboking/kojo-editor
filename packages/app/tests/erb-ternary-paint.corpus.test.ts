@@ -6,8 +6,8 @@
  * 夹具里的行是我想出来的，真语料里的形状才是作者写出来的（`docs/PITFALLS.md` 的那条老教训）。
  *
  * 四条硬判据（全部走 **真 Monarch 编译**，与 `erb-highlight.test.ts` 同一基座）：
- * ① **零回退**：真语料每一枚闭合的串内插值（`%…%` / `{…}`）的边界字符，改前出 `string.escape`，
- *    改后必须照旧出 `string.escape`——相位机若把插值吞进段色，这里当场数出违例；
+ * ① **零回退**：真语料每一枚闭合的串内插值（`%…%` / `{…}`）的边界字符，改前出 `string.escape`、
+ *    角色层统一后（`ROLE.escape` ＝ `role.escape`）照旧出 `role.escape`——相位机若把插值吞进段色，这里当场数出违例；
  * ② **涂 ⊆ 认**：每一枚涂出来的 `\@` 开记号列，语义真源 `scanTextTernaries` 必在同一列认得
  *    （反方向允许：真源认得的无 else 残形 / 深过四层的括号，本层取窄不涂）；
  * ③ **覆盖率水位**：`涂出的形状 / 真源认得的形状` ≥ 下面的 `FLOOR`。分母只算**活代码视野**的形
@@ -101,7 +101,7 @@ interface Stats {
   formHead: { lines: number; recognized: number; painted: number; blank: number; blankSamples: Boundary[] };
   /** 成因 = `other` 的样例（最多 5 条），这种落点说明相位机还有洞，必须人工看 */
   otherSamples: Boundary[];
-  /** ① 违例：闭合插值的边界字符没出 `string.escape` */
+  /** ① 违例：闭合插值的边界字符没出 `role.escape`（角色层统一前的旧名 `string.escape` 已并档） */
   interpViolations: Boundary[];
   /** ② 违例：涂出的开记号列，真源不认 */
   paintViolations: Boundary[];
@@ -182,7 +182,7 @@ function interpBoundaries(line: string): { col: number; ch: string }[] {
  */
 function paintedOpeners(emitted: readonly Emit[]): number[] {
   const hits = emitted
-    .filter((e) => e.text === '\\@' && e.token.startsWith('string.escape'))
+    .filter((e) => e.text === '\\@' && e.token.startsWith('role.escape'))
     .map((e) => e.start ?? -1);
   return hits.filter((_col, idx) => idx % 2 === 0);
 }
@@ -232,7 +232,7 @@ describe.skipIf(!SMOKE)('ERB-PAINT-21 · 真语料：插值零回退 + 涂⊆认
           stats.formHead.lines++;
           stats.formHead.recognized += recognizedHere.length;
           stats.formHead.painted += openers.length;
-          if (!emitted.some((e) => e.token.startsWith('string'))) {
+          if (!emitted.some((e) => e.token.startsWith('role.string'))) {
             stats.formHead.blank++;
             if (stats.formHead.blankSamples.length < 3) {
               stats.formHead.blankSamples.push({ col: 0, ch: '@"', file: rel, lineNo, line });
@@ -251,7 +251,7 @@ describe.skipIf(!SMOKE)('ERB-PAINT-21 · 真语料：插值零回退 + 涂⊆认
         const at = tokenAt(emitted);
         // ① 插值边界零回退
         for (const b of interpBoundaries(line)) {
-          if (!at(b.col).startsWith('string.escape')) {
+          if (!at(b.col).startsWith('role.escape')) {
             stats.interpViolations.push({ ...b, file: rel, lineNo, line });
           }
         }
@@ -275,7 +275,7 @@ describe.skipIf(!SMOKE)('ERB-PAINT-21 · 真语料：插值零回退 + 涂⊆认
     }
   }, 240_000);
 
-  it('① 闭合插值的边界字符照样出 string.escape（相位机没吞掉既有插值着色）', () => {
+  it('① 闭合插值的边界字符照样出 role.escape（相位机没吞掉既有插值着色）', () => {
     const first = stats.interpViolations[0];
     expect(
       stats.interpViolations.length,

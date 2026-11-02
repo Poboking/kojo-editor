@@ -21,6 +21,13 @@ export const KIND_TO_NODE = {
   // 判据在 `kojo-sugar/src/lexer.ts` 的 `content === '…'` 支，语法层不另立第二份。
   skipStart: 'skip_start',
   skipEnd: 'skip_end',
+  // 预处理糖形 / 行连接括号（2026-11-02 语料门复跑批）：grammar.js 的同名规则经词形投影
+  // 取与 `classifyLine` 同一批串（`parsePreprocHead` / brace 整行等值支），节点名按本表
+  // camelCase→snake_case 约定互查。
+  preprocHead: 'preproc_head',
+  preprocEnd: 'preproc_end',
+  braceStart: 'brace_start',
+  braceEnd: 'brace_end',
   headDecl: 'head_decl',
   aliasDecl: 'alias_decl',
   constDecl: 'const_decl',
@@ -97,6 +104,9 @@ export const NON_LINE_NODES: ReadonlySet<string> = new Set([
   'switch_body',
   'choice_body',
   'when_body',
+  // 2026-11-02 折叠批：预处理条件块 / 行连接括号块容器（同上，跨过去取行节点）。
+  'preproc_block',
+  'brace_block',
   'string',
   'native_string',
   'interpolation',
@@ -114,9 +124,10 @@ export const NON_LINE_NODES: ReadonlySet<string> = new Set([
 
 /**
  * 块容器节点名（折叠查询的目标）：`block` = 有头的块（含三族的显式收束词），
- * `item_block` = 选项/询问条目自带的正文块。两者都是"块头行 → 收束行/体末行"的多行跨度。
+ * `item_block` = 选项/询问条目自带的正文块；`preproc_block` / `brace_block` =
+ * 预处理条件块与行连接括号块（显式收束行，跨度 head..end）。都是“块头行 → 收束行/体末行”的多行跨度。
  */
-export const BLOCK_NODES: ReadonlySet<string> = new Set(['block', 'item_block']);
+export const BLOCK_NODES: ReadonlySet<string> = new Set(['block', 'item_block', 'preproc_block', 'brace_block']);
 
 /**
  * 只有**块上下文**才成立的四种行形（第一真源 `LineClass` 里声明了 kind、但 `classifyLine`

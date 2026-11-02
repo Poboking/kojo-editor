@@ -82,6 +82,9 @@ const CONTAINER_NODES: ReadonlySet<string> = new Set([
   'switch_body',
   'choice_body',
   'when_body',
+  // 预处理条件块 / 行连接括号块容器（2026-11-02 折叠批）：头尾行取 kind、体平铺行照旧逐行。
+  'preproc_block',
+  'brace_block',
 ]);
 
 /**

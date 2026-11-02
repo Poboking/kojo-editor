@@ -8,7 +8,8 @@
  *   指向的项目里 `ERB/` 树，按路径序走、每族取第一条**干净行**：非注释行、`HEAD:` 出现点不在行首注释
  *   之后、且不在双引号奇偶配平的串体外——避免"注释/纯文本里的同形词"制造假红），
  * - 走**真 Monarch 编译**（`monarch-harness` 的 `compileMonarch`，与 `erb-highlight.test.ts` 同一基座），
- *   断言该族头仍发 `variable` 档。
+ *   断言该族头仍发 `role.variable` 档（2026-11-02 语料门复跑批随 `ROLE` 角色层统一更新判据——
+ *   语料离盘期间本钉一直 skip，token 改名没人看见）。
  * 语料不在盘上（两个环境变量都没给）⇒ 整组 **SKIP**，不假绿（守门口径同 `jump-to-state.corpus.test.ts`）。
  */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -96,11 +97,11 @@ describe.skipIf(!SMOKE)('K6 收尾裁决 · 真语料原样行走真 Monarch 仍
       const s = samples.find((x) => x.head === head)!;
       const { emitted } = driveLine(lexer, s.line);
       const hit = emitted.find(
-        (e) => e.token.startsWith('variable.') && e.text.toUpperCase().startsWith(`${head.toUpperCase()}:`),
+        (e) => e.token.startsWith('role.variable.') && e.text.toUpperCase().startsWith(`${head.toUpperCase()}:`),
       );
       expect(
         hit,
-        `「${s.file}:${s.lineNo}」的 ${head}: 没进 variable（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`,
+        `「${s.file}:${s.lineNo}」的 ${head}: 没进 role.variable（实发 ${emitted.map((e) => `${e.text}=${e.token}`).join(' / ')}）`,
       ).toBeDefined();
     });
   }

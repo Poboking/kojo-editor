@@ -42,6 +42,8 @@ const TIMES_CASES: readonly Case[] = [
   // 盘上最大头（SOURCE 1,586 行 / LOCAL 857 行 / CUP 326 行）各抽一形
   ['TIMES SOURCE:CHARA:征服,0.50', DICT, '乘算 欲求:CHARA:征服 × 0.50'],
   ['TIMES LOCAL, 2.0', undefined, '乘算 局部 × 2.0'],
+  /* —— 动词大小写归一（2026-11-02 语料门复跑批）：Emuera 命令大小写不敏感，同 callf/TryCall 一批 —— */
+  ['times LOCAL, 1.5', undefined, '乘算 局部 × 1.5'],
   ['TIMES CUP:ARG:屈服 , 1.10', DICT, '乘算 参数上升:ARG:屈服 × 1.10'],
   ['TIMES FLAG:筹码流通, 0.98', DICT, '乘算 标记:筹码流通 × 0.98'],
   ['TIMES DOWNBASE:ARG:苦痛, 1.50', DICT, '乘算 基础上降:ARG:苦痛 × 1.50'],
@@ -144,7 +146,8 @@ const NULL_CASES: readonly string[] = [
   'TIMES LOCAL,', // 空右值
   'TIMES , 1.5', // 空目标
   'TIMES 3, 1.5', // 目标不是引用
-  'times LOCAL, 1.5', // 引擎记号按大写写法；小写不猜
+  // `times LOCAL, 1.5` 已从负自证撤下（2026-11-02 语料门复跑批）："小写不猜"的前提被真语料推翻
+  // （eraTW 自家 DLC 全篇混合大小写），动词正则归一后由语句档认领 ⇒ 正钉见上方 CASES。
   'LOCALS \'=', // 空右值（与 `S =` 同档）
   'LOCAL |=', // 空右值
   'LOCAL == 1', // 比较不是赋值

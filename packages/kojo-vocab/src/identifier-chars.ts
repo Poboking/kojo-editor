@@ -64,6 +64,14 @@ export function isIdentPart(ch: string): boolean {
  */
 export const IDENT_NAME_CHARS = `${IDENT_CHARS}0-9`;
 
+/**
+ * 标识符**起始集**的字符类源（= 名字集去掉数字；本模块内部
+ * `IDENT_START_RE` 同源）。2026-11-02 语料门复跑批导出：显示层组装循环变量等
+ * 正则时要从同一串派生，别处再抄一份字符集就会重现"副本漂移"的病
+ * （`LOOP_VAR_RE` 只抄 ASCII 一份 ⇒ CJK 变量名的 `FOR 目的地MAPID, …` 整族漏认）。
+ */
+export const IDENT_START_CHARS = IDENT_CHARS;
+
 const IDENT_NAME_CHAR_RE = new RegExp(`[${IDENT_NAME_CHARS}]`);
 
 /** 名字字符判定（头名正则组装与 `symbolTokenAt` 取词共用同一枚谓词） */

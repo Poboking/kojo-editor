@@ -203,10 +203,16 @@ describe('A5 · 被裁支区间 × 真语料', () => {
         }
       }
 
-      // 规模闸（eraNAS 基线盘实测：`[IF DEBUG]` 1 处 / 1 行 / 1 文件）
+      // 规模闸（**2026-11-02 语料换代重取证**，eraTW 4.980 SANYOUSEI 重打包版：`[IF DEBUG]`
+      // 39 处 + `[IF NDEBUG]` 1 处 / 393 行 / 26 文件；钉值逐区判据闸同轮全过——行号不越界、
+      // 被压宏不在定义集）。旧钉 1/1/1 是 eraNAS 盘时代（A5 批 2026-10-28）的读数；
+      // 换代 = 重取证，不是判据放松。
       expect(defines.size).toBeGreaterThan(0);
-      expect({ ranges, deadLines, deadFiles }).toEqual({ ranges: 1, deadLines: 1, deadFiles: 1 });
-      expect([...markers]).toEqual([['[IF DEBUG]', 1]]);
+      expect({ ranges, deadLines, deadFiles }).toEqual({ ranges: 40, deadLines: 393, deadFiles: 26 });
+      expect([...markers]).toEqual([
+        ['[IF DEBUG]', 39],
+        ['[IF NDEBUG]', 1],
+      ]);
     },
   );
 });

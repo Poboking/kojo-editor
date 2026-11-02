@@ -126,6 +126,12 @@ const CASES: readonly Case[] = [
   ['CALLF FOO(1)', undefined, '调用F FOO(1)'],
   ['TRYCALL FOO', undefined, '尝试调用 FOO'],
   ['TRYCALLFORM KOJO_K12(RESULT)', undefined, '尝试调用形 KOJO_K12(RESULT)'],
+  /* —— 动词大小写归一（2026-11-02 语料门复跑批）：Emuera 命令大小写不敏感，真语料
+   *   DLC/双重函数.ERB 全篇 `TryCall`；载荷逐字不动，只换词头 —— */
+  ['TryCall CAN_COM81(LOCAL)', undefined, '尝试调用 CAN_COM81(LOCAL)'],
+  ['trycall FOO', undefined, '尝试调用 FOO'],
+  ['TryCallForm KOJO_K12(RESULT)', undefined, '尝试调用形 KOJO_K12(RESULT)'],
+  ['TRYCALLFORMF K{ARG}_Defaults', undefined, '尝试调用形F K{ARG}_Defaults'],
   ['TRYJUMP 100', undefined, '尝试跳转 100'],
   // goto 家族的单行 try 变体（`sugar-ident` 的 `TRY_SINGLE_LINE`）：目标**逐字带走**，
   // `跳到` 与 ZH-C 的 `GOTO` 显示形同字、`…形` 与 `调用形` 同构
@@ -135,6 +141,7 @@ const CASES: readonly Case[] = [
 
   /* —— 位原语 —— */
   ['SETBIT LOCAL, 3', undefined, '置位 局部 第3位'],
+  ['setbit XYZ, 1', undefined, '置位 XYZ 第1位'],
   ['SETBIT TFLAG:1, 3', DICT, '置位 时标:1 第3位'],
   ['CLEARBIT EX:1, 2', DICT, '清位 EX:1 第2位'], // `EX` 在排除台账（真表无别名）⇒ 族头不替换，仍给中文动词语
   ['INVERTBIT LOCAL:2, 0, 1', undefined, '翻位 局部:2 第0，1位'],
@@ -272,7 +279,9 @@ const NULL_LINES: readonly string[] = [
   '残りムシ数, 3', // 没有顶层 `=` 的裸引用 ⇒ 仍落兜底
   'CFLAG：100 = 1', // 全角冒号：形状判据不认（引擎写法未取证 ⇒ 不猜）
   'VARSET', // 缺载荷 = 畸形行
-  'callf FOO(1)', // 记号按引擎写法全大写；小写不猜
+  // `callf FOO(1)` 已从负自证撤下（2026-11-02 语料门复跑批）："记号全大写；小写不猜"的前提被
+  // 真语料推翻（eraTW 自家 DLC 全篇 `TryCall`，Emuera 命令大小写不敏感）——动词正则归一后
+  // `callf FOO(1)` ⇒ `调用F FOO(1)`，正钉见上方 CASES 的混合大小写用例。
 ];
 
 describe.each(NULL_LINES)('负自证 · "%s" ⇒ null', (line) => {

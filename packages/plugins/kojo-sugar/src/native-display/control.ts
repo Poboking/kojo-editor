@@ -47,6 +47,7 @@
  */
 
 import { erbPreprocRoleOf } from '@kojo/plugin-api';
+import { IDENT_NAME_CHARS, IDENT_START_CHARS } from '../identifier-chars';
 import { BLOCK_END_SUFFIX, NOTIN_KEYWORDS, blockEndWord, operatorTable, primaryWord as word } from '../keywords';
 import { TRY_CATCH_OPEN, TRY_LIST_OPEN } from '../sugar-ident';
 import type { NativeDisplayInput, NativeDisplayLookup } from './types';
@@ -268,8 +269,14 @@ function showCaseValues(raw: string, lookup: NativeDisplayLookup | undefined): s
 
 /** 块头/语句：`词` + 分隔（空白或 `:`） + 余文 */
 const HEAD_RE = /^([A-Za-z_][A-Za-z0-9_]*)(?:\s*:|\s+|$)([\s\S]*)$/;
-/** 循环变量引用（`I` / `LOCAL:2`）——与步进一步同一判据，两侧共用本串 */
-export const LOOP_VAR_RE = String.raw`[A-Za-z_][A-Za-z0-9_]*(?::[A-Za-z0-9_]+)*`;
+/**
+ * 循环变量引用（`I` / `LOCAL:2` / `目的地MAPID`）——**字符集从 `@kojo/kojo-vocab` 的
+ * 单一真源派生**（2026-11-02 语料门复跑批；此前是 ASCII-only 的第二份副本，正是
+ * `identifier-chars` 模块要消的"副本漂移"病：Emuera 变量名本就允许 CJK，真语料
+ * `FOR 目的地MAPID, 0, MAXHOME` 一类 79 行整族落兜底）。作用域段 `:索引` 同尺。
+ * 与步进一步同一判据，两侧共用本串。
+ */
+export const LOOP_VAR_RE = String.raw`[${IDENT_START_CHARS}][${IDENT_NAME_CHARS}]*(?::[${IDENT_NAME_CHARS}]+)*`;
 /** `FOR i = 0 TO 10 STEP 2`（`STEP` 可选；界限体交回 `showExpr`） */
 const FOR_RE = new RegExp(`^(${LOOP_VAR_RE})\\s*=\\s*(.+?)\\s+TO\\s+(.+?)(?:\\s+STEP\\s+(.+))?$`, 'i');
 /** `FOR LOCAL, 0, 5` / `FOR COUNT, 6, 1, -1`——**语料主流形**（eraTW 实测 3,809 : 1） */

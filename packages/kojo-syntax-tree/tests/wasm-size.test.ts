@@ -50,9 +50,32 @@ const wasmPath = join(pkgRoot, 'tree-sitter-kojo.wasm');
  *   尾巴写 `[^\r\n]*` 而非既有 `C` ＝ 873,115 B（+37,397 B）——都更贵，故取"独一枚 token 内四支并列"
  *   这形状（与 821,724 B 那档同形状，只多一条择一臂）。⇒ 这一档是"`#` 文件级声明行在 CST 里有 rawLine
  *   节点"的结构性代价，不是实现浪费。
- * 阈值取实测原样（835,718 B / gzip 见测试打印），不放余量：任何新增体积都必须重新对账。
+ * - 835,718 → **940,405 B**＝2026-11-02 语料门复跑批：预处理糖形 / 行连接括号**四枚行族节点**
+ *   （`preproc_head` / `preproc_end` / `brace_start` / `brace_end`，净 **+104,687 B**）。为什么必须涨：
+ *   发版样例补预处理写法（词表覆盖率闸要求的 11 个词形）后，parity 闸当场抓出 CST 侧整类缺行
+ *   （classifyLine 判 preprocHead / braceStart、CST 落 text，16 行真冲突 > 预算 0）——测试头注写死
+ *   修法层级 = grammar.js / node-types.ts 一侧补节点，不许改判据；宿主按 kind 取色/折叠也只有
+ *   补了节点才覆盖得到这些行。体积对账：四族 × "多一个行族节点在 LR 表里的固定价"（上一档实测
+ *   ≈41,800 B/族）结构性约 167 KB，实测 +104,687 低于估计——三枚整行等值记号共用 marker 形状
+ *   （无 `_line_tail` 尾巴、单 token 一支）。可比方案：不补节点让 parity 永红 = 判据不许；
+ *   把新形降级进 `native_line` = 宿主按 kind 取色失效，同 `try_statement` 那档的否决理由。
+ *   ⇒ 这一档是"预处理/行连接糖形在 CST 里有专属节点"的结构性代价，不是实现浪费。
+ * - 940,405 → **1,004,631 B**＝2026-11-02 折叠批：预处理条件块 / 行连接括号**两枚块容器节点**
+ *   （`preproc_block` / `brace_block`，净 **+64,226 B**）。为什么必须涨：折叠真源（糖符号树
+ *   `preprocBlock` / `multiLine` 符号）对这两族就是 head..end 跨度，而折叠的结构层供给
+ *   （`folds.scm` `@fold` 捕获）只能取**节点自身跨度**——平铺行节点给不出跨行区间，
+ *   A/B 闸实测起点召回 96.29% < 地板 97（真源新增 14 个起点全部缺席）。体积对账：两族 ×
+ *   "多一个容器在 LR 表里的固定价"（行族档实测 ≈41,800 B/族）结构性约 84 KB，实测 +64,226
+ *   低于估计——容器复用既有行节点当头尾（`field('open'/'close')`），本体只是 `repeat(choice(…))`
+ *   一条 seq。可比方案：folds.scm 捕获 `preproc_head` 单行 = 零跨度被 `endRow > startRow` 滤掉，
+ *   折叠缺口原样；降级给真源放水改判据 = 棘轮纪律不许。
+ *   ⇒ 这一档是"预处理/行连接块在 CST 里有可折叠容器"的结构性代价，不是实现浪费。
+ * - 结构口径（同批）：四枚边界行从 `_line` 全集移出、由容器头尾认领（体里平铺形不存在），
+ *   "头尾平铺 vs 成块"的真歧义就此归零，GLR 只在 `_item` 层为孤儿头保双栈
+ *   （`conflicts: [$._item, preproc_block/brace_block]`）。
+ * 阈值取实测原样（1,004,631 B / gzip 见测试打印），不放余量：任何新增体积都必须重新对账。
  */
-const MAX_WASM_BYTES = 835_718;
+const MAX_WASM_BYTES = 1_004_631;
 
 describe('出货 wasm 体积棘轮（tree-sitter-kojo.wasm）', () => {
   const bytes = readFileSync(wasmPath);

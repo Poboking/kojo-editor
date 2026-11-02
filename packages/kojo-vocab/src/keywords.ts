@@ -716,6 +716,26 @@ export function primaryWord(id: KeywordId): string {
   return PRIMARY_BY_ID.get(id) ?? id;
 }
 
+/**
+ * 取 `id` 的**全部登记词形**（中文主形恒在最前；2026-11-02 语料门复跑批 additive）。
+ *
+ * 为什么要有它：写层（转译器块头识别）此前只认 `primaryWord`，而 `KEYWORDS` 同时登记了
+ * 英文别名并承诺"登记 = 写得回去"——`preproc 如果 X：` / `预处理 debug：` / `multiline-start`
+ * 这类**已登记**写形在转译器里整族被拒（发版样例补写法时被覆盖率闸当场抓出）。
+ * 识别侧消费本函数，别名与主形从此同权；主形排第一保证错误消息永远展示中文形。
+ */
+export function wordFormsOf(id: KeywordId): readonly string[] {
+  const forms = SUGAR_LEXICON_WORDS.filter((w) => w.id === id).map((w) => w.word);
+  const primary = PRIMARY_BY_ID.get(id);
+  if (primary === undefined || !forms.includes(primary)) return forms;
+  return [primary, ...forms.filter((f) => f !== primary)];
+}
+
+/** `forms` 里**最长优先**的排列（块头是前缀匹配，长形必须先试：`否则如果` 先于 `否则`） */
+export function longestFirst(forms: readonly string[]): readonly string[] {
+  return [...forms].sort((a, b) => b.length - a.length);
+}
+
 /** 收束词形（`循环` → `循环结束`）；词尾只有 `BLOCK_END_SUFFIX` 一份，两侧同函数派生 */
 export function blockEndWord(openId: KeywordId): string {
   return `${primaryWord(openId)}${BLOCK_END_SUFFIX}`;

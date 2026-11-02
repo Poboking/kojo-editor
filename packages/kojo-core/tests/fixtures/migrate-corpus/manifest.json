@@ -315,7 +315,7 @@
     {
       "id": "release-check",
       "source": "fixtures/sugar/release-check.kojo",
-      "sourceSha256": "965812fc23c2954f837b9117060418e83b9ce542e6d8930418221a35e3afa35c",
+      "sourceSha256": "110127d26c0381f59407458087ce3167a8c2c3fb61107c625c751f424fc13ace",
       "headerLines": 5,
       "eol": "lf",
       "bom": "none",

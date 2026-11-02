@@ -807,6 +807,36 @@ LOCAL = 1
 IF LOCAL
 	CFLAG:TARGET:1088 = 0
 	TCVAR:TARGET:20 = 0
+	; —— 预处理条件块（v1.9 P0-C）· 中英词形全上（词表覆盖率断言要求每个词形真实出现）。
+	; 产物 = `[IF 宏]` / `[IF_DEBUG]` / `[IF_NDEBUG]` / `[ENDIF]` 族标记，宏是作者原文名逐字透传；
+	; `预处理结束` 六块共用，产物 `[ENDIF]` 逐块配平。
+	[IF 恋慕开关]
+		PRINTFORMW 「这一行只在恋慕开关开着时才编译进产物。」
+	[ENDIF]
+	[IF 嫉妒开关]
+		PRINTFORMW 「preproc 是同一块头的英文别名，产物与中文形逐字相同。」
+	[ENDIF]
+	[IF_DEBUG]
+		PRINTFORMW 「调试版 Emuera 才会编译这一行。」
+	[ENDIF]
+	[IF_DEBUG]
+		PRINTFORMW 「debug 是 `调试` 的英文别名，产物同为 [IF_DEBUG]。」
+	[ENDIF]
+	[IF_NDEBUG]
+		PRINTFORMW 「非调试版才编译这一行。」
+	[ENDIF]
+	[IF_NDEBUG]
+		PRINTFORMW 「ndebug 是 `非调试` 的英文别名，产物同为 [IF_NDEBUG]。」
+	[ENDIF]
+	; —— 多行语句括号（v1.9 P0-B）：一条长语句拆多行写，中英两形 ——
+	{
+    PRINTFORMV 这条语句太长，拆成
+        多行写比塞一行好读
+	}
+	{
+    PRINTFORMV multiline-start 是同一对括号的英文别名
+        产物与中文形逐字节相同
+	}
 ENDIF
 RETURN 1
 

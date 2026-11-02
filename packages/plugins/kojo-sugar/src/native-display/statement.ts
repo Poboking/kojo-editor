@@ -44,6 +44,11 @@
  *   只重铺运算符两侧空白；理由见 `isDataReference` 头注）。这一档**不进 `KEYWORDS`**
  *   （显示形不承诺可写，与 `分组` / `试探` 同例）。
  * - 认不出 ⇒ `null`（`passes.ts` 负责显式兜底），宁缺勿猜。
+ * - **动词识别大小写归一（2026-11-02 语料门复跑批）**：Emuera 命令大小写不敏感
+ *   （真语料 `DLC/双重函数.ERB` 全篇写 `TryCall`），动词正则一律放宽成大小写无关——
+ *   查找侧本来就是 `toUpperCase()` 后对表（`CALL_VERBS` / `PRINT_SHAPES` / …），
+ *   **载荷逐字带走的口径不动**（`TryCall CAN_COM81(LOCAL)` → `尝试调用 CAN_COM81(LOCAL)`，
+ *   只换词头不碰载荷）。此前动词正则写死 `[A-Z]`，混合大小写的行整族漏进兜底。
  */
 
 import { isIdentPart, isIdentStart } from '../identifier-chars';
@@ -350,7 +355,7 @@ function renderIncrement(code: string, lookup: NativeDisplayLookup | undefined):
  * 目标与赋值左值**同一把尺子**（`renderTarget`）：语言层槽位 / 族头别名中文化，
  * 查不到就按 `isDataReference` 的形状判据逐字带走。右值逐字照抄，不改写数值写法。
  */
-const TIMES_RE = /^TIMES[ \t]+(\S[\s\S]*)$/;
+const TIMES_RE = /^TIMES[ \t]+(\S[\s\S]*)$/i;
 /** 数值字面量：整数 / 小数 / 尾点（`1.` 盘上真形）；正负号可有 */
 const TIMES_FACTOR_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/;
 
@@ -371,7 +376,7 @@ function renderTimes(code: string, lookup: NativeDisplayLookup | undefined): str
 
 /* ==================== 调用 ==================== */
 
-const CALL_RE = /^(?:([A-Z][A-Z0-9_]*)[ \t]+(\S[\s\S]*)|([A-Z][A-Z0-9_]*))$/;
+const CALL_RE = /^(?:([A-Za-z][A-Za-z0-9_]*)[ \t]+(\S[\s\S]*)|([A-Za-z][A-Za-z0-9_]*))$/;
 /**
  * 语句动词表（**显示词形住本表、档位名单住 `sugar-ident`**，两件事别混）。
  *
@@ -396,6 +401,9 @@ const CALL_VERBS: Readonly<Record<string, { readonly verb: string; readonly tail
   CALLF: { verb: '调用F', tail: '' },
   TRYCALL: { verb: '尝试调用', tail: '' },
   TRYCALLFORM: { verb: '尝试调用形', tail: '' },
+  // `TRYCALLFORMF`（eraTW 自家 DLC 在用，真语料 `ModularCharacterUpdate.ERB` 2 行）：与 `CALLF`
+  // 同一条拼法口径——保留区别字母、不替读者判定 `F` 改了哪档语义，只把词头换成 `尝试调用形F`。
+  TRYCALLFORMF: { verb: '尝试调用形F', tail: '' },
   TRYJUMP: { verb: '尝试跳转', tail: '' },
   TRYGOTO: { verb: '尝试跳到', tail: '' },
   TRYGOTOFORM: { verb: '尝试跳到形', tail: '' },
@@ -426,7 +434,7 @@ function renderCall(code: string): string | null {
 
 /* ==================== 位原语 ==================== */
 
-const BIT_RE = /^(SETBIT|CLEARBIT|INVERTBIT)[ \t]+(\S[\s\S]*)$/;
+const BIT_RE = /^(SETBIT|CLEARBIT|INVERTBIT)[ \t]+(\S[\s\S]*)$/i;
 const BIT_VERBS: Readonly<Record<string, string>> = { SETBIT: '置位', CLEARBIT: '清位', INVERTBIT: '翻位' };
 
 function renderBitOp(code: string, lookup: NativeDisplayLookup | undefined): string | null {
@@ -443,7 +451,7 @@ function renderBitOp(code: string, lookup: NativeDisplayLookup | undefined): str
 
 /* ==================== 输出族 ==================== */
 
-const PRINT_RE = /^(PRINT[A-Z]*)(?:[ \t]+(\S[\s\S]*))?$/;
+const PRINT_RE = /^(PRINT[A-Za-z]*)(?:[ \t]+(\S[\s\S]*))?$/;
 
 interface PrintShape {
   readonly verb: string;
@@ -498,7 +506,7 @@ function renderPrint(code: string): string | null {
 
 /* ==================== 按钮 / 输入 ==================== */
 
-const BUTTON_RE = /^(PRINTBUTTON|PRINTBUTTONC)[ \t]+(\S[\s\S]*)$/;
+const BUTTON_RE = /^(PRINTBUTTON|PRINTBUTTONC)[ \t]+(\S[\s\S]*)$/i;
 
 function renderButton(code: string): string | null {
   const m = BUTTON_RE.exec(code);
@@ -582,7 +590,7 @@ const NOT_MY_LINE_RE = /^[;#$[@]/;
  * 归因闸把 `printVariant` 钉成结构性 0 靠的就是它。表内变体在上面已由 `renderPrint` /
  * `renderButton` 收走，这里只挡"表外 + 行里恰好有个 `=`"的漏网形状（`PRINT%s=1` 一类）。
  */
-const PRINT_LED_RE = /^PRINT/;
+const PRINT_LED_RE = /^PRINT[A-Za-z]*(?![A-Za-z0-9_])/;
 
 /** ZH-S 的入口（签名由 lead 钉死，禁止改名或加参） */
 export const renderStatementLine: NativeDisplayPass = (input: NativeDisplayInput): string | null => {

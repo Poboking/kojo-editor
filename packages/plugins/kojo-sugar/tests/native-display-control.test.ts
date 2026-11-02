@@ -73,6 +73,11 @@ const LOOPS: readonly Case[] = [
   ['FOR i = 1 TO 10 STEP 2', '循环 计数 i 从 1 到 10 步长 2：'],
   ['FOR LOCAL:0 = 0 TO LOCAL:5', '循环 计数 LOCAL:0 从 0 到 LOCAL:5：'],
   ['FOR i = 0 TO CHARANUM - 1', '循环 计数 i 从 0 到 CHARANUM - 1：'],
+  /* —— CJK / 全角循环变量（2026-11-02 语料门复跑批）：`LOOP_VAR_RE` 改由 `@kojo/kojo-vocab`
+   *   标识符单一真源派生，此前 ASCII 副本把这一族整族推给兜底（真语料 79 行）—— */
+  ['FOR 目的地MAPID, 0, MAXHOME', '循环 计数 目的地MAPID 从 0 到 MAXHOME：'],
+  ['FOR 種類,0,MAXPANTS', '循环 计数 種類 从 0 到 MAXPANTS：'],
+  ['FOR Ｃ絶頂, 0, 5', '循环 计数 Ｃ絶頂 从 0 到 5：'],
   ['NEXT', '循环结束'],
   ['WHILE TFLAG:193 != 0', '循环 当 时标：193 不等于 0：'],
   ['WHILE LOCAL < 10', '循环 当 LOCAL 不足 10：'],

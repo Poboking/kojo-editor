@@ -260,7 +260,7 @@ describe('CST ↔ classifyLine 逐行一致率（真实语料全量）', () => {
 
   /** 走树取行节点（与 `src/index.ts` 的 `lineNodes()` 同一套容器表，测试里复刻以免循环依赖）。 */
   function collectLineNodes(root: Node, rows: number[]): { row: number; nodeType: string; kind: KojoKind | null }[] {
-    const CONTAINERS = new Set(['source_file', 'block', 'item_block', 'block_body', 'switch_body', 'choice_body', 'when_body']);
+    const CONTAINERS = new Set(['source_file', 'block', 'item_block', 'block_body', 'switch_body', 'choice_body', 'when_body', 'preproc_block', 'brace_block']);
     const out: { row: number; nodeType: string; kind: KojoKind | null }[] = [];
     const walk = (node: Node): void => {
       if (CONTAINERS.has(node.type)) {
@@ -388,8 +388,10 @@ describe('CST ↔ classifyLine 逐行一致率（真实语料全量）', () => {
   it('KIND_TO_NODE 表闭合（一 kind 一节点、可反查）', () => {
     // 表规模取数：59 类（冻结词表；第二波只加容器与行内节点，其后两批各补 `classifyLine` 已有的
     // 判据——两支整行等值 skipStart / skipEnd，与本批的 TRY 系写形 tryStatement。方向只有一个：
-    // 上游先有 kind、语法层补节点，绝不许反过来）。
-    expect(Object.keys(KIND_TO_NODE).length).toBe(59);
+    // 上游先有 kind、语法层补节点，绝不许反过来）。2026-11-02 语料门复跑批 +4：预处理糖形
+    // preprocHead / preprocEnd 与行连接括号 braceStart / braceEnd（发版样例补预处理写法时
+    // parity 抓出 CST 侧整类缺行——上游 kind 早已存在，本批语法层补节点，方向不变）。
+    expect(Object.keys(KIND_TO_NODE).length).toBe(63);
     const nodes = new Set(Object.values(KIND_TO_NODE));
     expect(nodes.size).toBe(Object.keys(KIND_TO_NODE).length);
     for (const [kind, node] of Object.entries(KIND_TO_NODE)) {
@@ -445,7 +447,7 @@ describe('CST ↔ classifyLine 逐行一致率（真实语料全量）', () => {
 
 /** 与测试内 `collectLineNodes` 同判据的导出（供导出面自证比对）。 */
 function collectExportComparison(root: Node, rows: number[]) {
-  const CONTAINERS = new Set(['source_file', 'block', 'item_block', 'block_body', 'switch_body', 'choice_body', 'when_body']);
+  const CONTAINERS = new Set(['source_file', 'block', 'item_block', 'block_body', 'switch_body', 'choice_body', 'when_body', 'preproc_block', 'brace_block']);
   const out: { row: number; nodeType: string; kind: KojoKind | null }[] = [];
   const walk = (node: Node): void => {
     if (CONTAINERS.has(node.type)) {

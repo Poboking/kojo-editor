@@ -1211,10 +1211,22 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · 注入面板本体（`ui-snapshot-injector` 五枚改文件）**不在开机图**：面板是
     //       aux 按需懒载，它的 +12.4 KB 不走这条闸。
     //     ⇒ 闸 **3,484 → 3,487**（文件闸 199 顶格，余量 0 B——再进图必须先出图）。
+    //   - **2026-11-02 语料门复跑批**：读数 **199 文件 / 3,488 KB**（3,571,393 B =
+    //     上一条 3,570,950 + **443**）——文件数不变，逐枚实测（现树 `wc -c` vs HEAD 同文件）：
+    //     · `kojo-vocab/src/identifier-chars.ts` **+443**（新增 `IDENT_START_CHARS` 导出：
+    //       标识符**首字符**类的单一真源——kojo-sugar `control.ts` 的循环变量正则
+    //       从它派生，eraTW 语料 CJK 循环变量 `FOR 目的地MAPID, …` 的投影缺口由此修）；
+    //     · 本批其余改动文件（`kojo-vocab/keywords.ts` +1,174 / `lexer.ts` +811、
+    //       `kojo-sugar/native-display/statement.ts` +889 / `control.ts` +485、
+    //       `kojo-syntax-tree/src/node-types.ts` +683 / `index.ts` +163）**均不在图内**
+    //       （懒边按需载，与实测总差 443 B 逐字节吻合 ⇒ 无漏点名）。
+    //     · 为什么必须进图：`identifier-chars.ts` 本就在图内（词法基础件），新增导出
+    //       是同文件一行常量，没有"纯懒边"形态。
+    //     ⇒ 闸 **3,487 → 3,488**（文件闸 199 顶格，余量 0 B——再进图必须先出图）。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,487 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,488 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_487);
+    expect(totalKb).toBeLessThanOrEqual(3_488);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 

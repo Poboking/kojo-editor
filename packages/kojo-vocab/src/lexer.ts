@@ -60,9 +60,11 @@ import {
   FULLWIDTH_COLON,
   endsWithBlockColon,
   lookupKeyword,
+  longestFirst,
   primaryWord,
   stripBlockColon,
   WAIT_MARKS,
+  wordFormsOf,
   TIMING_ARGS_PARAM,
   type KeywordId,
 } from './keywords';
@@ -728,9 +730,9 @@ export function classifyLine(line: LogicalLine): LineClass {
 
   // ---- 糖形预处理收束 / 行连接标记（v1.9 P0-B / P0-C）----
   // 判据是**整行恰为该词**（行内 `;` 注释已由 `code` 剥掉，不随产物输出）。
-  if (code === PREPROC_END_W) return { kind: 'preprocEnd' };
-  if (code === MULTI_START_W) return { kind: 'braceStart', sugar: true, text: content };
-  if (code === MULTI_END_W) return { kind: 'braceEnd', sugar: true, text: content };
+  if (matchesAnyForm(code, 'block.preprocEnd')) return { kind: 'preprocEnd' };
+  if (matchesAnyForm(code, 'block.multiStart')) return { kind: 'braceStart', sugar: true, text: content };
+  if (matchesAnyForm(code, 'block.multiEnd')) return { kind: 'braceEnd', sugar: true, text: content };
 
   // ---- 规则池标签 `[条件]`（规范 §3.11）----
   // 只认**整行恰为方括号**的窄形态；判定先于块头/赋值/文本，保证 `[其他]` 不会
@@ -925,7 +927,7 @@ const TRY_W = primaryWord('inline.tryStatement');
 
 /* --------------------------- 预处理条件块 / 行连接块（v1.9 P0） --------------------------- */
 
-/** 预处理块头词头与子词（词形全部取自 `keywords.ts`；显示层取同一批串） */
+/** 预处理块头词头与子词（识别走 `wordFormsOf` 全词形；这里的串只进**错误提示**与显示层） */
 const PREPROC_W = primaryWord('block.preproc');
 const PREPROC_END_W = primaryWord('block.preprocEnd');
 const PREPROC_DEBUG_W = primaryWord('inline.preprocDebug');
@@ -933,9 +935,6 @@ const PREPROC_NDEBUG_W = primaryWord('inline.preprocNonDebug');
 const IF_W = primaryWord('block.if');
 const ELIF_W = primaryWord('block.elif');
 const ELSE_W = primaryWord('block.else');
-/** 行连接两枚写形（与只读面 `control.ts` 的 `MULTILINE_*_W` 同一份表） */
-const MULTI_START_W = primaryWord('block.multiStart');
-const MULTI_END_W = primaryWord('block.multiEnd');
 
 const PREPROC_HEAD_HINT =
   `「${PREPROC_W}」块头的合法写法只有五种：` +
@@ -953,43 +952,60 @@ function isBareMacroName(name: string): boolean {
   return !/[^\p{L}\p{N}_]/u.test(name);
 }
 
+/** 收束 / 行连接括号是**整行等值**匹配：`id` 的任一登记词形（含英文别名）都算（2026-11-02 批） */
+function matchesAnyForm(code: string, id: KeywordId): boolean {
+  return wordFormsOf(id).includes(code);
+}
+
 /**
  * 糖形预处理块头 `预处理 <子词> [<宏>]`（入参已剥尾冒号与行内注释）。
  *
- * 判据 0（闭集）：`预处理` 后必须跟空白，子词必须是 `如果` / `否则如果` / `否则` /
- * `调试` / `非调试` 之一；否则返回 `null`（回落普通文本行，`预处理 一下` 不会被误读成指令）。
+ * 判据 0（闭集）：块头词后必须跟空白，子词必须是 `如果` / `否则如果` / `否则` /
+ * `调试` / `非调试` 之一的**任一登记词形**（2026-11-02 语料门复跑批起：英文别名
+ * `preproc` / `if` / `debug` / `ndebug` 已在 `KEYWORDS` 登记，识别侧同权——此前只认主形，
+ * 别名写形整族被拒，发版样例补写法时被覆盖率闸当场抓出）；否则返回 `null`
+ * （回落普通文本行，`预处理 一下` 不会被误读成指令）。
  * 子词认出但形制残缺（宏位为空 / 多余正文）⇒ `controlMalformed`（fail-closed，不静默）。
  */
 function parsePreprocHead(code: string): LineClass | null {
-  if (!code.startsWith(PREPROC_W)) return null;
-  const after = code.slice(PREPROC_W.length);
-  // `预处理如果 X` 这类无空白连写不是块头（子词必须独立成词）
-  if (after.length === 0 || !/^[ \t\u3000]/.test(after)) return null;
-  const rest = after.trimStart();
+  const headForms = longestFirst(wordFormsOf('block.preproc'));
+  let rest: string | null = null;
+  for (const form of headForms) {
+    if (!code.startsWith(form)) continue;
+    const after = code.slice(form.length);
+    // `预处理如果 X` 这类无空白连写不是块头（子词必须独立成词）
+    if (after.length === 0 || !/^[ \t\u3000]/.test(after)) continue;
+    rest = after.trimStart();
+    break;
+  }
+  if (rest === null) return null;
 
-  const variants: ReadonlyArray<readonly [string, 'if' | 'elseif' | 'else' | 'debug' | 'ndebug', boolean]> = [
-    // 长词优先：`否则如果` 先于 `否则`，`非调试` 后于 `调试` 但两串互不前缀，顺序无碍
-    [ELIF_W, 'elseif', true],
-    [IF_W, 'if', true],
-    [ELSE_W, 'else', false],
-    [PREPROC_NDEBUG_W, 'ndebug', false],
-    [PREPROC_DEBUG_W, 'debug', false],
+  const variants: ReadonlyArray<readonly [KeywordId, 'if' | 'elseif' | 'else' | 'debug' | 'ndebug', boolean]> = [
+    // 长词优先：`否则如果` 先于 `否则`，`非调试` 后于 `调试` 但两串互不前缀，顺序无碍；
+    // 每个 id 的全部登记词形都认（英文别名与主形同权，见函数头注）
+    ['block.elif', 'elseif', true],
+    ['block.if', 'if', true],
+    ['block.else', 'else', false],
+    ['inline.preprocNonDebug', 'ndebug', false],
+    ['inline.preprocDebug', 'debug', false],
   ];
 
-  for (const [word, variant, needsMacro] of variants) {
-    if (!rest.startsWith(word)) continue;
-    const tail = rest.slice(word.length).trimStart();
-    // `如果X`（子词后无空白直接连宏名）不是合法块头
-    if (tail.length > 0 && !/^[ \t\u3000]/.test(rest.slice(word.length))) return null;
-    if (needsMacro) {
-      if (tail.length === 0) return malformed(`${PREPROC_HEAD_HINT}——「${word}」后必须写一个宏名`);
-      if (!isBareMacroName(tail)) {
-        return malformed(`${PREPROC_HEAD_HINT}——宏名必须是单个裸标识符（可以是汉字），不接表达式：\`${tail}\``);
+  for (const [id, variant, needsMacro] of variants) {
+    for (const word of longestFirst(wordFormsOf(id))) {
+      if (!rest.startsWith(word)) continue;
+      const tail = rest.slice(word.length).trimStart();
+      // `如果X`（子词后无空白直接连宏名）不是合法块头
+      if (tail.length > 0 && !/^[ \t\u3000]/.test(rest.slice(word.length))) return null;
+      if (needsMacro) {
+        if (tail.length === 0) return malformed(`${PREPROC_HEAD_HINT}——「${word}」后必须写一个宏名`);
+        if (!isBareMacroName(tail)) {
+          return malformed(`${PREPROC_HEAD_HINT}——宏名必须是单个裸标识符（可以是汉字），不接表达式：\`${tail}\``);
+        }
+        return { kind: 'preprocHead', variant, macro: tail, text: code };
       }
-      return { kind: 'preprocHead', variant, macro: tail, text: code };
+      if (tail.length > 0) return malformed(`${PREPROC_HEAD_HINT}——「${word}」不带宏名`);
+      return { kind: 'preprocHead', variant, macro: '', text: code };
     }
-    if (tail.length > 0) return malformed(`${PREPROC_HEAD_HINT}——「${word}」不带宏名`);
-    return { kind: 'preprocHead', variant, macro: '', text: code };
   }
   // 子词不在闭集 ⇒ 按台词处理（判据 0）
   return null;
