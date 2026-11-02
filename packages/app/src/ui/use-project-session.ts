@@ -33,7 +33,6 @@ import type { Notify } from './NotificationCenter';
 import { closeProjectSession } from './project-close';
 import { planProjectSwitch } from './project-switch';
 import { recoveredPaths } from './recovery-store';
-import { resetSearch } from './search-store';
 import {
   createSessionFlushScheduler,
   emptySessionRecord,
@@ -600,6 +599,32 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
 
   const closeProject = useCallback(async () => {
     if (!kernel) return;
+    /**
+     * 检索面**整族**走动态边（KW-31 减面批，2026-11-03）。
+     *
+     * 台账欠的那笔账在这里的量法：本文件此前是检索五枚进开机图的**唯一**静态入口
+     * （`search-store` 41,419 + `search-query` 19,311 + `search-scope` 13,397 +
+     * `bridge/search` 7,610 + `search-stream` 5,501 = **87,238 B**），而欢迎页一枚都用不到
+     * ——静态消费面只有下面这一次 `resetSearch()`。真正的用户面（检索面板 / 壳层焦点腿）
+     * 全在 `import('./ProjectView')` 的懒边之下，其中 `ProjectView.tsx:31` 静态引同一族
+     * ⇒ 项目一开这一族本来就已经在内存里，这一句 `import()` 在会话态下是即时命中。
+     *
+     * **为什么取在拆除序之前**：`project-close.ts` 的 `reset` 契约写着「必须同步执行完毕」
+     * （`closeProjectSession` 把它放在 finally 里，一步都不许多等）。所以这里 await 的只有
+     * 「拿到函数」这一件事，拿到之后 `reset` 本体照旧同步逐条走完 —— 拆除序一字未动。
+     *
+     * **取不到不许静默**（铁律 4）：唯一能取不到的现场是项目界面根本没装起来（错误边界那
+     * 条退出路），那时旧检索结果会留在屏后头 —— 出声，且拆除照走，绝不假装清过。
+     */
+    let resetSearch: (() => void) | null = null;
+    try {
+      resetSearch = (await import('./search-store')).resetSearch;
+    } catch (e: unknown) {
+      notify({
+        kind: 'error',
+        message: `关闭项目时没能清掉上一次的检索结果（回到欢迎页可能还看得见旧条目）：${errorText(e)}`,
+      });
+    }
     await closeProjectSession({
       kernel,
       // 与搬迁前同相位：Tauri 壳才清 Rust 侧允许域；浏览器壳不发明知会失败的 IPC
@@ -622,13 +647,15 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
         setSessionWriteDomainFact(initialWriteDomainFact);
         setError(null);
         // 检索结果按项目根算出来的：项目一关，旧结果里的路径全部失去意义（留着只会误导）
-        resetSearch();
+        // （KW-31：这一格换成上面那次动态取到的函数——同步调用点、同一族拆除序，一字未动）
+        resetSearch?.();
         setPhase('welcome');
       },
       setRecent,
     });
   }, [
     kernel,
+    notify,
     raiseError,
     resetProjectUiState,
     setIndex,
