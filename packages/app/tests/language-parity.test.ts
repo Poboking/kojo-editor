@@ -359,6 +359,72 @@ describe('豁免契约：有理由、指得出下一步、不过期', () => {
     }
   });
 
+  /**
+   * KW-18 段②：台账口径只许写**现在时**——"某处还没接、接完改档"是预测，不是事实。
+   * （窄钉子：只拦"待装配点 / 接线后改 self|shared"这一族句式，不拦"待接线项"这种
+   * 批次八在册的模块名点名——上一条用例已经把那种假通路按安装器逐枚拦住了。）
+   */
+  it('豁免理由不写将来时（"待装配点…接…后改 self/shared"这一族句式当场红）', () => {
+    const FUTURE_TENSE = /待装配点|接线后改\s*(?:self|shared)|后改\s*(?:self|shared)/;
+    for (const languageId of PARITY_LANGUAGE_IDS) {
+      for (const { capability, reason } of exemptionsOf(languageId)) {
+        expect(reason, `${languageId}/${capability}：豁免理由写了将来时（KW-18 段②）`).not.toMatch(FUTURE_TENSE);
+      }
+    }
+  });
+
+  /**
+   * KW-18 段②（2026-11-03）：豁免理由里的 `installXxx` 只许是**已落地的装配事实**。
+   *
+   * 罪案现场：ERB 的 `callhierarchy` 那格原写"待装配点 `ui/editor-global-providers.ts` 接
+   * `installErbCallHierarchyProvider` 后改 self"——装配点从来没调它（全仓非测试零调用点），
+   * Monaco 0.57 也没有那个注册位（PITFALLS §83），于是那句将来时把**死码**写成了**待办**，
+   * 还把读者指向一条不存在的通路（铁律 4「内核不静默」在台账面的同款罪）。
+   *
+   * 判据形状：理由里点名任何安装器 ⇒ 装配点必须真有一行 `name(` 调用；没有 ⇒ 红。
+   * 修法二选一：真接上（并把矩阵改回 self/shared），或按终态豁免把这一格写成"没有可注册
+   * 的宿主位"（本批选的这条）。
+   */
+  it('豁免理由不许拿"待接 installXxx"记账：点名的安装器必须已被装配点调用', () => {
+    const assembly = sourceOf(GLOBAL_PROVIDERS).text;
+    for (const languageId of PARITY_LANGUAGE_IDS) {
+      for (const { capability, reason } of exemptionsOf(languageId)) {
+        for (const match of reason.matchAll(/\binstall[A-Z][A-Za-z0-9_]*\b/g)) {
+          const name = match[0]!;
+          expect(
+            assembly.includes(`${name}(`),
+            `${languageId}/${capability}：豁免理由点名 ${name}，装配点 ${GLOBAL_PROVIDERS} 却没有调用它` +
+              '——将来时指向不存在的通路；要么接上并改档，要么把这一格写成终态豁免（KW-18）',
+          ).toBe(true);
+        }
+      }
+    }
+  });
+
+  /**
+   * KW-18 段②：`exempt` 的正面半——**作者面必须在册**，且理由点名的每一处都要能在树上摸到。
+   * 矩阵记的是"作者能不能用"，所以缺席理由之外还要交出真实入口（命令 id + 浮层 + 档位）。
+   */
+  it('ERB 的 callhierarchy 豁免点名作者面：命令与浮层逐处都在装配面上摸得到', () => {
+    const reason = exemptionsOf(ERB_LANGUAGE_ID).find(
+      (entry) => entry.capability === LanguageCapability.CallHierarchy,
+    )?.reason;
+    expect(reason, 'ERB 的 callhierarchy 该是 { exempt }').toBeTypeOf('string');
+    expect(reason).toContain('kojo.showCallHierarchy');
+    expect(reason).toContain('ui/CallHierarchyOverlay.tsx');
+    // 命令 id 的真源（`ui/call-hierarchy.ts` 那枚常量），矩阵不许自造第二个名字
+    expect(sourceOf('ui/call-hierarchy.ts').text).toContain(
+      "CALL_HIERARCHY_COMMAND_ID = 'kojo.showCallHierarchy'",
+    );
+    // 入口与浮层都由装配面 `ui/shell-overlays.ts` 挂上（命令进 editor.command、面板进 ui.overlay）
+    const overlays = sourceOf('ui/shell-overlays.ts').text;
+    expect(overlays).toContain('id: CALL_HIERARCHY_COMMAND_ID');
+    expect(overlays).toContain('id: CALL_HIERARCHY_OVERLAY_ID');
+    expect(overlays).toContain("size: 'wide'");
+    // 数据腿：面板逐字经 `collectCallHierarchy` 问槽（不经任何 Monaco provider 注册位）
+    expect(sourceOf('ui/CallHierarchyOverlay.tsx').text).toContain('collectCallHierarchy(');
+  });
+
   it('豁免项不在 descriptor 声明表里（声明 = 已交付，不是"想要"）', () => {
     for (const { capability } of exemptionsOf(ERB_LANGUAGE_ID)) {
       expect(ERB_CAPABILITIES, `ERB/${capability} 标了豁免却写进了声明表`).not.toContain(capability);

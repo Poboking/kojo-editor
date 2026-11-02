@@ -347,8 +347,12 @@ const MATRIX: Readonly<Record<string, Readonly<Record<LangId, Cell>>>> = {
     [KOJO_LANGUAGE_ID]: { state: 'host', channels: ['monaco/kojo-rename.ts::resolveRenameLocation(', 'monaco/kojo-rename.ts::unicodeTokenAt('], note: '宿主通用取词（词区间供输入框；能不能改在 rename 应答里给理由）' },
   },
   callHierarchy: {
-    [ERB_LANGUAGE_ID]: { state: 'host', channels: ["ui/CallHierarchyOverlay.tsx::collectCallHierarchy(", "ui/editor-global-providers.ts::'editor.revealLocation'"], supply: [['erb-parser', 'erb-call-hierarchy']], note: 'Monaco 0.57 无注册 API（PITFALLS §83）：消费面=宿主面板直问槽；erb-callhierarchy-provider 的注册 shim 在 0.57 上零注册' },
-    [KOJO2_LANGUAGE_ID]: { state: 'host', channels: ['ui/CallHierarchyOverlay.tsx::KOJO2_LANGUAGE_ID'], note: 'kojo2 分支消费包模型 @kojo/kojo-lang/call-hierarchy（批次十），无注册位 ⇒ 矩阵留 exempt 是按**注册面**记账，应答面在此在册' },
+    // KW-18 段②（2026-11-03）：这一格的渠道从"注册面"改记**真的那一面**——入口是命令
+    // （`ui/shell-overlays.ts` 把 CALL_HIERARCHY_COMMAND_ID 注进 editor.command）、
+    // 消费面是宿主面板（直问槽，不经任何 Monaco provider 注册位）、落点走既有
+    // `editor.revealLocation` 通道。三样逐枚 verifyChannels 核得到才算在册。
+    [ERB_LANGUAGE_ID]: { state: 'host', channels: ["ui/CallHierarchyOverlay.tsx::collectCallHierarchy(", 'ui/shell-overlays.ts::id: CALL_HIERARCHY_COMMAND_ID', 'ui/shell-overlays.ts::id: CALL_HIERARCHY_OVERLAY_ID', "ui/editor-global-providers.ts::'editor.revealLocation'"], supply: [['erb-parser', 'erb-call-hierarchy']], note: 'Monaco 0.57 无注册 API（PITFALLS §83）⇒ 这一格永远没有注册面；作者面=命令入口 + 宿主面板直问槽（供方 erb-call-hierarchy），矩阵按注册面记 exempt、本表按应答面记 host' },
+    [KOJO2_LANGUAGE_ID]: { state: 'host', channels: ['ui/CallHierarchyOverlay.tsx::KOJO2_LANGUAGE_ID', 'ui/shell-overlays.ts::id: CALL_HIERARCHY_COMMAND_ID'], note: 'kojo2 分支消费包模型 @kojo/kojo-lang/call-hierarchy（批次十），无注册位 ⇒ 矩阵留 exempt 是按**注册面**记账，应答面在此在册' },
     [KOJO_LANGUAGE_ID]: { state: 'na', channels: ['ui/CallHierarchyOverlay.tsx::没有供方应答'], note: '面板对 .kojo1 明说「调用层级这一轮没有供方应答」（可见不静默）；封存层未承诺该面，供方只认 .erb 族（行为面有钉）' },
   },
   // 专用槽腿（`ui.editor.codeAction`，不是 ui.editor.languageService 判别成员；随工厂表进矩阵）
