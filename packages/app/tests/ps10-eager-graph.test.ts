@@ -1409,10 +1409,22 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     ⚠ 段② 台账那笔"把作品会话半边拆成包叶子"的欠账**仍未还**且更紧了：作品会话这条链
     //     三笔累计 **29,176 B**（段① 14,091 + 段③ 6,797 + 本笔 8,288），其中大部分只在作品
     //     会话用得到 ⇒ 下一辆车动这块之前先量"拆得动吗"，拆不动就把理由写死。
+    //
+    //   - **KW-15B 派生族具名索引（2026-11-03）**：读数 **201 文件 / 3,606 KB**
+    //     （3,692,363 B = 上一条 3,683,411 + **8,952**），**零新进图文件**。图内**只一枚**，
+    //     且与总差**逐字节相等**（现树 `wc -c` vs `git cat-file -s origin/dev:…`）：
+    //     · `packages/plugins/eratw-adapter/src/variable-schema.ts` **+8,952**（具名索引的
+    //       "派生族借姊妹族名表"这一格游戏知识：`MAXBASE`/`DOWNBASE` 借 `BASE`、`NOWEX` 借
+    //       `EX`，真语料 `named-index` 328 → 42；借道只在**解析具名索引**那一腿生效，
+    //       `names()` / `slotCn()` 候选与汉化不借道——那是另一条轴的假命中）。
+    //     **口径纠正（组长亲测，别再抄错）**：`packages/plugins/**` **不等于**"不在开机图"——
+    //     adapter 的这枚名表文件本就静态在图里（装配点直取），本批 8,952 B 全数进图；
+    //     真正不吃图的是走 `import('./ProjectView')` 懒边的那一族宿主 UI 与各插件测试。
+    //     ⇒ KB 闸 **3,597 → 3,606**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,597 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,606 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_597);
+    expect(totalKb).toBeLessThanOrEqual(3_606);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
