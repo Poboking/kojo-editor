@@ -1,13 +1,20 @@
-import { createElement, useEffect, useState, type ReactElement } from 'react';
+import { createElement, useEffect, useRef, useState, type ReactElement } from 'react';
 import type {
   OpJournal,
+  PanelRowRovingHost,
   Plugin,
   PluginContextMenuAnchor,
   PluginRegistry,
   PluginStateRecord,
+  RowNavHostEvent,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { KernelServices } from '@kojo/plugin-api';
+import {
+  applyPanelRowNavFromEvent,
+  KernelServices,
+  PANEL_ROW_ATTR,
+  syncRovingTabIndexes,
+} from '@kojo/plugin-api';
 import {
   copyPluginId,
   openPluginPanelMenu,
@@ -174,6 +181,23 @@ export function createUiStatusPlugin(): Plugin {
         /** 右键菜单动作的回执（复制成功/失败一句话；空串 = 没有话要说） */
         const [note, setNote] = useState('');
 
+        /**
+         * 行键盘协议（kw8b 1102 批）：名单容器 = 面板根，判据、合成期让位、`select`/
+         * `textarea` 让位全住契约层（`sugar-panels.ts` 行键盘区块）——与宿主检索/问题面板、
+         * 约定校验面板同一把尺子，本插件零复制。
+         *
+         * **本面板的行是 `li`（不是按钮）**：行上压根没有左键动作（鼠标用户也只能右键——
+         * 重试/停用/复制全在行级右键菜单里）。所以这里 ↑↓ 与 F4/F8 的**差别只有"当场敲一次
+         * 行"**，而那一敲在本面板是空转：不借此新开"键盘也能重试/停用"的第二条通路
+         * （那是右键菜单的既有通路，照旧只走菜单）。行键盘的"打开"语义在本面板无从谈起，
+         * 这一格形状缺口已随本批提交信息上报。
+         */
+        const rootRef = useRef<PanelRowRovingHost | null>(null);
+        // 每帧渲染后再对齐一次漫游位（插件状态变化会增减行；键盘那一腿由判据层就地办结）
+        useEffect(() => {
+          syncRovingTabIndexes(rootRef.current);
+        });
+
         useEffect(() => {
           const refresh = (): void => setRows(registry.list());
           refresh();
@@ -246,6 +270,17 @@ export function createUiStatusPlugin(): Plugin {
           'div',
           {
             className: 'panel-plugin-status',
+            // 行键盘协议（kw8b 1102 批）：↑↓ 移焦点 / F4·F8 移过去并当场敲这一行；
+            // `tabIndex=-1` 照 `FileTree.tsx` 先例——不是给 Tab 用的，是给"把焦点交给面板"那条腿。
+            ref: rootRef,
+            tabIndex: -1,
+            onKeyDown: (e: RowNavHostEvent) => {
+              applyPanelRowNavFromEvent(e);
+            },
+            onFocus: (e: { currentTarget: PanelRowRovingHost | null }) => {
+              // 鼠标点行 / 右键菜单抢回焦点时对齐漫游位（Tab 序只留踩住的那一行）
+              syncRovingTabIndexes(e.currentTarget);
+            },
             // 空白处右键（1023 批）：面板级菜单只有一条真能力——重读插件清单
             onContextMenu: (e: PluginContextMenuAnchor) => openPluginPanelMenu(props, e, menuHost),
           },
@@ -265,6 +300,9 @@ export function createUiStatusPlugin(): Plugin {
                 {
                   key: r.id,
                   className: `plugin-row plugin-${r.status}`,
+                  // 行名单标记（行键盘协议 kw8b 1102 批）：行 = 这一整条 `li`，
+                  // 没画出来的行（清单为空 / 面板降级）天然不在名单上。
+                  [PANEL_ROW_ATTR]: '',
                   // 整行悬停 = 「这一行是什么状态」的唯一去处（静息档的状态词不再上屏）
                   title: pluginRowTooltip(r),
                   // 行级右键：复制 ID / 重试激活 / 停用 / 刷新（按状态决定哪些项存在）
