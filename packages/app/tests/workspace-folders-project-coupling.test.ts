@@ -183,15 +183,17 @@ describe('③ 五条消费者逐条取根（快照式）', () => {
     expect(watchRootsOf(noModel)).toEqual([]);
   });
 
-  it('文件树腿：有项目交三根；无模型 ⇒ 空数组，但 FileTree 自己回落 project.rootDir', () => {
+  it('文件树腿（KW4C 段② 解闸）：只认这张表的 browsable 根，不再自己回落 project.rootDir', () => {
     expect(browsableRootsOf(folders)).toEqual([GAME_ROOT, WORK_ROOT, EXTRA]);
     expect(browsableRootsOf(noModel)).toEqual([]);
     const tree = read('ui/FileTree.tsx');
-    // 这一格是"树这条腿今天炸"的实证：模型缺席就退回游戏根，而不是退回作品根
-    expect(tree).toContain('if (folders.length === 0) return [project.rootDir, ...(extraRoots ?? [])];');
-    expect(tree).toContain('return browsable.length > 0 ? browsable : [project.rootDir];');
-    // 组件入参在类型层就要一枚 GameProject（不是 `| null`）⇒ 无项目连挂都挂不上
-    expect(read('ui/file-tree-types.ts')).toContain('project: GameProject;');
+    // 段② 撤掉了"模型缺席就退回游戏根"那两行——一条腿不许自己补一个根
+    expect(tree).not.toContain('return [project.rootDir, ...(extraRoots ?? [])]');
+    expect(tree).not.toContain('return browsable.length > 0 ? browsable : [project.rootDir];');
+    // 根清单恒出自这张表（游戏会话有游戏根、作品会话有作品根，两态同一行）
+    expect(tree).toContain('const fsRoots = useMemo<string[]>(() => browsableRootsOf(folders), [folders]);');
+    // 组件入参在类型层放宽成 `| null` ⇒ 无游戏现场也挂得上，口上域那一组改走"显式不可用"
+    expect(read('ui/file-tree-types.ts')).toContain('project: GameProject | null;');
   });
 
   it('Ctrl+P 腿：有项目交口上域 ∪ 作品目录 ∪ 附加根；无模型 ⇒ 候选全空（静默为空）', () => {

@@ -10,7 +10,14 @@ import type { OpenFileOptions } from './tabs-ops';
 import type { WorkspaceFolder } from './workspace-folders';
 
 export interface Props {
-  project: GameProject;
+  /**
+   * 游戏项目（KW4C 解闸批起可为 null）：null = **只有口上作品**的会话。
+   *
+   * 两态下这棵树都画得出来，因为根一律从工作区根模型（`workspace-folders.ts`）取；
+   * `project` 只用来回答"口上域（角色 → 作者包）那一组有没有现场"——没有时**显式
+   * 不可用**（一句人话说明为什么没有），不是渲染成空、也不是报错。
+   */
+  project: GameProject | null;
   index: ErbIndex | null;
   activeFile: string | null;
   /** 打开文件（第二参是**方式**：`{preview:true}` 单击浏览、缺省永久打开） */

@@ -3,6 +3,7 @@ import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { CharaInfo, DirEntry, ErbIndex, GameProject, WalkOptions } from '@kojo/plugin-api';
 import { FileTree, middleEllipsis, walkDialectPaths } from '../src/ui/FileTree';
+import { buildWorkspaceFolders, workspaceGapNotice } from '../src/ui/workspace-folders';
 import { DirRows } from '../src/ui/file-tree-dir-rows';
 import { FileRows } from '../src/ui/file-tree-rows';
 import { resetSelectionForTest, setActivePath } from '../src/ui/file-tree-selection';
@@ -513,6 +514,67 @@ describe('FileTree · 文件系统视图（B5，工具条撤除后 SSR 默认态
     const html = render(async () => []);
     expect(html).toContain('tree-filter');
     expect(html).not.toContain('C:/game'); // 项目根路径不出现在默认口上视图里
+  });
+});
+
+/* ============ KW4C 段②：两态下的树（游戏会话 vs 只有口上作品） ============ */
+
+describe('FileTree · 只有口上作品的会话（KW4C 段②，SSR）', () => {
+  const gameProject = {
+    charaIndex: new Map(),
+    kojoPaths: ['C:/game/koa'],
+    rootDir: 'C:/game',
+  } as unknown as GameProject;
+  // 作品根：author 角色、browsable 为真；游戏根缺席时它就顶上来
+  const wsFolders = buildWorkspaceFolders({ authorDirs: ['C:/users/me/work/灵梦新篇'] });
+  const gameFolders = buildWorkspaceFolders({
+    projectRoot: 'C:/game',
+    kojoPaths: ['C:/game/koa'],
+    authorDirs: ['C:/users/me/work/灵梦新篇'],
+  });
+
+  const renderWorkspace = (): string =>
+    renderToStaticMarkup(
+      h(FileTree, {
+        project: null,
+        index: null,
+        activeFile: null,
+        onOpenFile: () => {},
+        workspaceFolders: wsFolders,
+      }),
+    );
+
+  const renderGame = (): string =>
+    renderToStaticMarkup(
+      h(FileTree, {
+        project: gameProject,
+        index: { files: new Map(), byName: new Map() } as unknown as ErbIndex,
+        activeFile: null,
+        onOpenFile: () => {},
+        workspaceFolders: gameFolders,
+      }),
+    );
+
+  it('作品会话：不再吞成"索引中…"占位（那枚闸只在有游戏现场时才拉）', () => {
+    const html = renderWorkspace();
+    expect(html).not.toContain('索引中…');
+    expect(html).not.toContain('正在读取口上目录…');
+  });
+
+  it('作品会话：口上域视图**显式不可用**——上屏那一句人话，不是渲染成空', () => {
+    const html = renderWorkspace();
+    expect(html).toContain(workspaceGapNotice('kojoDomain'));
+  });
+
+  it('作品会话：作品目录仍作为顶层分组挂出来（作者的东西看得见）', () => {
+    const html = renderWorkspace();
+    expect(html).toContain('灵梦新篇'); // 作品根末段进组头
+    expect(html).toContain('tree-root-group');
+  });
+
+  it('游戏会话：同一棵树**不**出现那句"显式不可用"（口上域有现场，逐字旧行为）', () => {
+    const html = renderGame();
+    expect(html).not.toContain(workspaceGapNotice('kojoDomain'));
   });
 });
 
