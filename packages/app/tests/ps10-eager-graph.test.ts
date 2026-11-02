@@ -1347,10 +1347,19 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     （先例：`plugin-api/src/snapshot-overrides.ts` 为省 10,685 B 从桶里拆出去），
     //     拆得动就还账，拆不动就在段③ 的提交信息里把理由写死。
     //     ⇒ KB 闸 **3,562 → 3,576**（余量 0 B 口径不变）；文件闸 201 不动。
+    //
+    //   - **KW4C 段②（文件树两态都画得出，2026-11-02）**：读数 **201 文件 / 3,579 KB**
+    //     （3,664,595 B = 上一条 3,661,323 + **3,272**），**零新进图文件**。图内**只一枚**
+    //     （现树 `stat` vs `git cat-file -s origin/dev:…`，与总差**逐字节相等**）：
+    //     · `app/src/ui/workspace-folders.ts` **+3,272**（新增无游戏态的取根与"这一会话有没有
+    //       游戏现场"入口，供文件树那侧显式判"口上域视图为什么没有"）。
+    //     不落图的两枚一并点名（免得下一个人以为是漏账）：`app/src/ui/FileTree.tsx` **+2,178**、
+    //     `app/src/ui/file-tree-types.ts` **+445**——文件树本体走懒边。
+    //     ⇒ KB 闸 **3,576 → 3,579**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,576 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,579 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_576);
+    expect(totalKb).toBeLessThanOrEqual(3_579);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
