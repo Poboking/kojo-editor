@@ -1178,10 +1178,33 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · 闸随之**下调**：文件 200 → 199、KB 3,512 → 3,470（实测余量 2 文件 / 34 KB）。
     //       这是把"省下来的"留一部分给下一批、而不是原样记成 76 KB 的许可（同 PS10-MENU-SPLIT
     //       的口径：省下来的不全是下一批的额度）。
+    //   - **2026-11-02 新建流程 P0 系列收口（八车：P0-1~4 / P0-5 / P0-6 / P0-6b / P0-7a / P0-7b /
+    //     P1 新建类型 / P2 重名回滚）**：读数 **198 文件 / 3,484 KB**（3,567,575 B =
+    //     上一条 3,519,550 + **48,025**）——**新进图一枚**：
+    //     `app/src/ui/recent-workspace-projects.ts` **+10,302**
+    //     （欢迎页「最近打开的口上作品」纯逻辑：记录合并 / 移除 / 首枚正文挑选 / 目录缓存判据）。
+    //     逐枚按「现树 `stat` vs `83df816c`（系列起点）同路径 `git cat-file -s`」实测，
+    //     图内十二枚**差值求和 48,025 B，与实测总差逐字节相等**：
+    //     · `app/src/ui/App.tsx` **+11,857**（欢迎页作品卡片的记录 / 移除 / 一键重开三拍、
+    //       `workspace.projectCreated` 与 `editor.revealLocation` 两个广播入口、面板拉出时机）；
+    //     · `kernel/src/workspace.ts` **+8,456**（重命名 / 复制 / 删除 / 作品设置四条写路径，
+    //       走既有双闸，无新写域）；`app/src/ui/WelcomeView.tsx` **+6,782**（作品卡片区渲染）；
+    //     · `plugin-api/src/scaffold.ts` **+2,919**（Kojo 2.0 起手骨架与空白工作区契约）、
+    //       `plugins/eratw-adapter/src/scaffold.ts` **+2,289**（起手文件正文与目录摆法）、
+    //       `plugins/eratw-adapter/src/plugin.ts` **+3,601**（新项目向导选项与建后送编辑器）、
+    //       `plugin-api/src/workspace.ts` **+1,071**（`rename` / `duplicate` / `remove` /
+    //       `updateSettings` additive 格）、`plugin-api/src/events.ts` **+709**、
+    //       `plugin-api/src/index.ts` **+75**（两处导出）；
+    //     · 一枚收缩：`plugins/eratw-adapter/src/new-project-wizard.ts` **−29**（改取契约层）。
+    //     · 为什么这一档必须进图：欢迎页是**首屏**（作品卡片与一键重开就在第一屏渲染），
+    //       内核工作区服务在启动时就装配；没有"纯懒边"形态。设置对话框与删除确认挂在
+    //       `styles-project.css` 与既有壳层，不另起模块。
+    //     ⇒ 闸 **3,470 → 3,484**（余量 1,065 B；文件闸仍 199，现 198）。取整口径同前：
+    //     闸比的是 `Math.round(totalBytes/1024)`，3,485 KB 需 3,568,640 B。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,470 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,484 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_470);
+    expect(totalKb).toBeLessThanOrEqual(3_484);
     expect(files.length).toBeLessThanOrEqual(199);
   });
 
