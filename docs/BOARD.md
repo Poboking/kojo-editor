@@ -23,6 +23,4 @@
 |DIAG-GATE-1033|LAU 第十波 · 诊断上屏语言分支下沉：结构残缺通用上屏器内部的 `.kojo` 语言 id 过滤（`audit-language` M2 两行）改为按叠层交下的 `descriptor.id` 做身份比对，宿主上屏族零语言白名单|**M2 125→123**（基线 `syntax-decorations.ts` 出账）；行为逐字不变的取证＝`tree-sitter-diagnostics.test.ts`「非本叠层语言拒画」+「身份比对非白名单」两条与 `tree-sitter-multilanguage.test.ts` 接线档（通用器只接本叠层 id、自带 `presentSyntax` 的运行时不碰通用器）；诊断族其余命中判性＝宿主事实（能力矩阵台账 / 组合根装配 / kojo2 索引供面）留账不硬收，逐枚见提交信息|已交付 · 认领：lead10 2026-10-31（回执在提交信息）|
 |LAUNCH-P0-RESIDUE|P0 真壳验收余项：② ~10 MB fixture 复制进度；③ 二次 `start` 报 `LAUNCHER_INSTANCE_BUSY`；⑤ 信任框后启动、篡改报 `TRUST_CHANGED`；⑥ 退出杀树 + 下次 `app-exit`；① shared 实例仅夹具播种|全部在真壳（`debug-cli shell`）取证；⑤ 无人值守 ⇒ 宿主侧命令取证|待派|
 
-|KW-31|开机图台账那笔「作品会话半边拆包叶子」的欠账（KW4C 段② 立、KW-4E 加严）：先量拆得动吗，拆不动就把理由写死|`ps10-eager-graph.test.ts` 两枚闸只许降不许抬（改前 201 文件 / 3,613 KB · 3,699,423 B）；拆完逐枚字节归因求和与总差逐字节相等；`project-close.ts` 的 `reset` 同步契约与他人车道源码级静态闸（`write-domain-admission` / `ps10-boot-order` / `dictionary-notice-ledger`）一字不动|进行中 · 认领：qoder 2026-11-03|
-
 > 已裁定/已交付行（K2-D0、K2-CONTRACT、SDK-B5a、多游戏适配 P0/P1、编辑器对标 A–E、PS 系列）已删，回执在 git 提交信息。
