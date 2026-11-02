@@ -4,7 +4,8 @@
  * 钉两层：
  *  ① `tabRailsOf` 那侧的档位表——它经实例登记簿现扫解锁集合与派生面（真源仍是各 `EditorPane`
  *     自己的 ref），所以这里用假 pane 走同一条读路，不在测试里另拼一份判定；
- *  ② `TabBar` / `TabRow` 的落屏形状——四态各落哪一枚 class、只读未解锁**不许**带语义 class，
+ *  ② `TabBar` / `TabRow` 的落屏形状——各档各落哪一枚 class（含 KW-16B2 的 `untitled` 一档）、
+ *     只读未解锁**不许**带语义 class，
  *     以及固定针 / 标签 / 脏点 / 关闭钮的**顺序一位不动**（色轨是绝对定位伪元素，不进布局）。
  *
  * 形态照 `tabs-bar.test.ts` / `tab-chip.test.ts` 的 SSR 形状锁先例（真组件 + renderToStaticMarkup，
@@ -17,6 +18,8 @@ import { TabBar } from '../src/ui/tabs-bar';
 import { registerPane, unregisterPane, type PaneRefs } from '../src/ui/editor-pane-registry';
 import { tabRailsOf, RAIL_CLASS, type EditorRailGrade } from '../src/ui/editor-editability';
 import { WRITABLE_HINTS } from '../src/ui/file-area';
+// 未落盘草稿的标签键前缀（单源在 `tabs-ops`，本判据不另抄一份）
+import { UNTITLED_PREFIX } from '../src/ui/tabs-ops';
 
 const WORKSPACE = 'D:/works/口上';
 const GAME = 'C:/games/eratw';
@@ -25,6 +28,9 @@ const GAME_LOCKED = `${GAME}/script/借阅.ERB`;
 const GAME_UNLOCKED = `${GAME}/script/破例.ERB`;
 const GAME_PREVIEW = `${GAME}/script/投影.ERB`;
 const GAME_DIRECT = `${GAME}/script/直连.ERB`;
+/** 未落盘草稿（KW-16B2）：这一枚**不是路径**，所以不进 `ALL_PATHS`（那五枚都是盘上件，
+ *  「四态读数一次看全」那条断言的读数口径不许被一枚非路径键混进去） */
+const DRAFT = `${UNTITLED_PREFIX}1`;
 
 const ALL_PATHS = [AUTHOR_FILE, GAME_LOCKED, GAME_UNLOCKED, GAME_PREVIEW, GAME_DIRECT];
 
@@ -132,6 +138,17 @@ describe('tabRailsOf · 四态各落哪一档', () => {
     });
   });
 
+  it('未落盘草稿 = 第四档给色（不给色就等于和只读件同一张脸，那一档才是沉默的）', () => {
+    const rails = tabRailsOf(fakeKernel(), [...ALL_PATHS, DRAFT]);
+    const rail = rails.get(DRAFT);
+    expect(rail?.grade).toBe('untitled');
+    expect(rail?.railClass).toBe(RAIL_CLASS.untitled);
+    expect(rail?.hint).toContain('未落盘草稿');
+    expect(rail?.hint).toContain('写允许域');
+    // 同一张表里盘上件的判定一位没让：只读未解锁照旧无轨（草稿那一档不替任何真实路径说话）
+    expect(rails.has(GAME_LOCKED)).toBe(false);
+  });
+
   it('表里只收有轨的路径（四态读数一次看全：3 枚有轨 / 1 枚无轨）', () => {
     const id = mountPane({ path: GAME_UNLOCKED, unlocked: [GAME_UNLOCKED] });
     const id2 = mountPane({ path: GAME_PREVIEW, preview: true });
@@ -189,7 +206,7 @@ describe('TabRow · 色轨的落屏形状', () => {
     expect(html).toContain('rail-author');
     expect(html).toContain('rail-unlocked');
     expect(html).toContain('rail-derived');
-    expect(tabSlice(html, GAME_LOCKED)).not.toMatch(/rail-(author|unlocked|derived)/);
+    expect(tabSlice(html, GAME_LOCKED)).not.toMatch(/rail-(author|unlocked|derived|untitled)/);
     // 三档彼此不串门
     expect(tabSlice(html, AUTHOR_FILE)).not.toContain('rail-unlocked');
     expect(tabSlice(html, GAME_UNLOCKED)).not.toContain('rail-author');
@@ -197,7 +214,7 @@ describe('TabRow · 色轨的落屏形状', () => {
 
   it('不传 rails（缺省）⇒ 与改动前逐字同形：一枚语义 class 都不挂、title 就是路径', () => {
     const html = render();
-    expect(html).not.toMatch(/rail-(author|unlocked|derived)/);
+    expect(html).not.toMatch(/rail-(author|unlocked|derived|untitled)/);
     expect(html).toContain(`title="${GAME_LOCKED}"`);
     expect(html).toContain('data-tab-rail="none"');
   });
@@ -229,7 +246,20 @@ describe('TabRow · 色轨的落屏形状', () => {
     expect(pinnedSlice).toContain('editor-tab pinned rail-author');
     expect(pinnedSlice).toContain('（已固定） · 作者区说明');
     // 无轨的只读标签：子件一个不少、语义 class 一个不多
-    expect(slice).not.toMatch(/rail-(author|unlocked|derived)/);
+    expect(slice).not.toMatch(/rail-(author|unlocked|derived|untitled)/);
+  });
+
+  it('未落盘草稿上屏：既有那一族 class（`rail-untitled`）+ `tabName` 那把尺子的中文名', () => {
+    const rails = new Map(railsOf());
+    rails.set(DRAFT, { grade: 'untitled', hint: '未落盘草稿说明', railClass: RAIL_CLASS.untitled });
+    const html = render({ openTabs: [...ALL_PATHS, DRAFT], rails });
+    const slice = tabSlice(html, DRAFT);
+    expect(slice).toContain('rail-untitled');
+    // 标签正文走 `tab-row.tsx` 的 `tabName` 单源 ⇒ 「未命名草稿 1」，不是一个像 bug 的 `untitled:1`
+    const label = /class="tab-label">([^<]*)</.exec(slice)?.[1] ?? '';
+    expect(label).toBe('未命名草稿 1');
+    // 别一格一位不动：盘上件不会因为这枚新标签的出现而改档
+    expect(tabSlice(html, AUTHOR_FILE)).toContain('rail-author');
   });
 
   it('活动标签顶部指示条与左缘色轨不同槽位：`.active` 与 `rail-*` 可以同框', () => {

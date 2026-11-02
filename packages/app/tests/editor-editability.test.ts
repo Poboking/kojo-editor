@@ -2,7 +2,7 @@
  * 可写性判据单测（KW16 标签色轨批 · 第一步"搬家"的那把尺子，2026-11-02）。
  *
  * 钉两件事：
- *  ① **四态映射**：`author / unlocked / derived / read-only` 各由哪条轴成立、谁压过谁；
+ *  ① **档位映射**：`author / unlocked / derived / untitled / read-only` 各由哪条轴成立、谁压过谁；
  *  ② **搬家前后行为逐字相同**：`canEdit` 就是改前那一句 `unlocked || (directMode && isWritable)`
  *     （ADR-0005 两轴合一的轴二读数），短路顺序与 `isWritable` 的调用次数一并钉住——
  *     次数一致才叫"没顺手加一次 IO / 没顺手少问一次"。
@@ -23,6 +23,8 @@ import {
   RAIL_CLASS,
   type EditabilityAxes,
 } from '../src/ui/editor-editability';
+// 未落盘草稿那一档的标签键前缀（单源在 `tabs-ops`，判据不另抄一份字符串）
+import { UNTITLED_PREFIX } from '../src/ui/tabs-ops';
 
 const WORKSPACE = 'D:/works/eraTW-口上';
 const GAME_ROOT = 'C:/games/eratw';
@@ -80,7 +82,7 @@ const axes = (over: Partial<EditabilityAxes> = {}): EditabilityAxes => ({
   ...over,
 });
 
-describe('editabilityOf · 四态映射（色轨的输入）', () => {
+describe('editabilityOf · 档位映射（色轨的输入）', () => {
   it('① 作者作品区文件 = `author`（轴一恒可写；未解锁、直连关也照样是这一档）', () => {
     const r = editabilityOf(axes({ path: `${WORKSPACE}/新作.ERB` }));
     expect(r.inWorkspace).toBe(true);
@@ -134,6 +136,20 @@ describe('editabilityOf · 四态映射（色轨的输入）', () => {
     expect(withFlag.inWorkspace).toBe(withoutFlag.inWorkspace);
     expect(withFlag.grade).toBe('derived');
     expect(withoutFlag.grade).toBe('read-only');
+  });
+
+  it('⑤ 未落盘草稿（`untitled:N`）= `untitled`：两道轴都问不到它，判定在这一层就地回答', () => {
+    const r = editabilityOf(axes({ path: `${UNTITLED_PREFIX}1` }));
+    expect(r.canEdit).toBe(true);
+    expect(r.inWorkspace).toBe(false);
+    expect(r.grade).toBe('untitled');
+    // `canEdit` 只说"这一格能动笔"（内存 model），**不扩权**：同一次调用里对真实路径的回答
+    // 一个字没变——写允许域那把尺子对未批准路径照样是 read-only / 不可编辑。
+    const real = editabilityOf(axes({ path: `${GAME_ROOT}/script/a.ERB` }));
+    expect(real.canEdit).toBe(false);
+    expect(real.grade).toBe('read-only');
+    // 解锁集合与直连都改判不了它（草稿不是"游戏目录里那一份"）
+    expect(editabilityOf(axes({ path: `${UNTITLED_PREFIX}1`, directMode: true, writable: () => false })).grade).toBe('untitled');
   });
 
   it('作者区优先于轴二：工作区文件即使被登记进解锁集合也不给警示色（ADR-0005「轴二只管游戏目录那一份」）', () => {
