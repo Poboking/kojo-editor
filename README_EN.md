@@ -7,74 +7,40 @@
 
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-263146?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d6?style=flat-square)
-![Stack](https://img.shields.io/badge/Tauri_2_·_React_19_·_Monaco-24C8DB?style=flat-square)
-![Latest Release](https://img.shields.io/github/v/release/Poboking/kojo-editor?style=flat-square)
+![Release](https://img.shields.io/github/v/release/Poboking/kojo-editor?style=flat-square)
 ![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg)
 
-**A structure-aware IDE for era-series script sources (`.ERB` / `.kojo`).**  
-Tauri 2 shell (Rust does IO primitives only) + React 19 + Monaco, pnpm monorepo.  
-**Zero game knowledge in the kernel; everything is a plugin.** Windows 10 / 11 x64.
+**An editor for era-series game script sources (`.ERB` / `.kojo`).**  
+Find the function you need, read other people's scripts, get told while you type, ship to the game in one click. Windows 10 / 11.
 
 </div>
-
-## Demo
-
-All six animations were recorded from the real UI and one command replays them (method: [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §8); the demo data is entirely synthetic (see *License and credits* below).
-
-They are not piled onto one screen — **each animation sits next to the sentence it proves**. Start with the one that says "structure-aware" best; the rest live under *ERB language surface* and *The fundamentals* below.
 
 <div align="center">
-  <img src="docs/assets/erb-definition.gif" width="760" alt="Go to definition (cross-file)">
-  <br><sub><b>Go to definition</b> <code>F12</code> — from a call site, into the definition living in <b>another file</b></sub>
+  <img src="docs/assets/erb-definition.gif" width="760" alt="Go to definition">
+  <br><sub>Put the cursor on a call site, press <code>F12</code>, land on the definition in <b>another file</b></sub>
 </div>
 
-## Start with who you are
+## Features
 
-| You | Begin here |
-|---|---|
-| **You want to read and revise other people's scripts, without writing code** | Install → open your game directory following [docs/USER-GUIDE.md](docs/USER-GUIDE.md) §3 (you **may decline write access**; browsing, linting, navigation and replay all still work) → turn on `.kojo` preview to read `.ERB` as a readable surface syntax in place |
-| **You know ERB and want to write in your own syntax, shipping to the game in one click** | [docs/USER-GUIDE.md](docs/USER-GUIDE.md) §7 (create a script project) → §8 (language surface and the save flow, including §8.8 for what `.kojo` 2.0 can and cannot do yet) → §10 (export / deploy) |
-| **You want to read the code, add a plugin, or onboard a new era game** | [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) (environment, verification matrix, language wiring, plugins and adapters, releasing) + [AGENTS.md](AGENTS.md) (invariants and collaboration discipline — read it before you touch anything) |
+- **Browse by structure**: character → family → face → function, one tree. No need to memorize names like `M_KOJO_K12_MESSAGE_COM_310`.
+- **Read other people's `.ERB`**: `IF` / `PRINTFORMW` are displayed as "if …:" and plain lines of dialogue. **Display only — the file is not touched, not one byte**.
+- **The usual IDE moves**: go to definition, find references, rename (across files), hover for the author's comments, parameter hints, jump to symbol.
+- **Mistakes caught while typing**: wrong function names, incomplete families, a branch with no fallback — a squiggle on the line, click to jump there.
+- **Your own work lives separately**: write in your own script project, then **export** a zip to share, or **deploy** it into the game directory.
+- **No need to boot the game to check**: state replay tells you whether a line will fire with an existing save; the state injector sets the variables you need first.
 
-All three paths rest on the same rule: every jump, every squiggle comes from a pure function pinned by unit tests, never from "this looks like ERB".
-
-## The problem it takes on
-
-ERB is a line-oriented scripting language from 1998: no LSP, no AST toolchain, no package manager. A real project holds **3,971 dialect files / 110,049 function definitions** (measured on the eraTW 4.980 baseline; see [docs/STATE.md](docs/STATE.md)), and script functions call each other **by naming convention** (`M_KOJO_{chara}_MESSAGE_COM_{command}`) — change one character and the call sites are scattered across the whole project; mistype a name and the engine **fails silently**.
-
-So the missing piece is not "one more syntax highlighter" but a full IDE surface: **index → symbols → references → diagnostics → rewrite**. This project builds it as three auditable layers — decisions live in library packages (pure functions, no Monaco, no IO), the host only assembles and translates, and game knowledge may only enter adapter plugins (guarded from both sides by `pnpm audit:decoupling` and `pnpm audit:language`).
-
-## ERB language surface
-
-> The keys below are defaults; most can be rebound in the in-app keybindings page (three built-ins are not rebindable yet: writing mode `Ctrl+K Z`, save `Ctrl+S`, find in selection `Ctrl+Alt+F`). For where the logic lives, see [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §6.
-
-| Capability | Default key |
-|---|---|
-| Go to definition (cross-file) · peek definition · go to implementation | `F12` · `Alt+F12` · `Ctrl+F12` |
-| Find references (peek + per-file counts) | `Shift+F12` |
-| Hover docs (author comments + parameter list + definition site) | `Ctrl+K Ctrl+I` |
-| Signature help (active parameter) | `Ctrl+Shift+Space` |
-| Completion (trigger chars `#` `[` `@` `$` `.`; as you type) | `Ctrl+Space` |
-| Live validation (squiggles + problems panel + status bar counts) | `Ctrl+Shift+M` panel · `Alt+F8` per item |
-| Rename symbol (all files at once) | `F2` |
-| Document symbols / go to symbol in file | `Ctrl+Shift+O` |
-| Occurrence highlight · smart select · code lens | `Ctrl+D` · `Shift+Alt+→` · inline |
-| Folding (per function body / block) | folding gutter |
-
-Three animations for three rows of that table:
+## Demo
 
 <table>
   <tr>
     <td width="46%" align="center"><img src="docs/assets/erb-references.gif" width="420" alt="Find references"></td>
-    <td valign="middle"><b>Find references</b> <code>Shift+F12</code><br>
-    A peek widget with hits grouped and counted per file. Script functions call each other by naming convention, so before changing one you need to know which files call it — plain grep gives you line counts, this gives you callers.</td>
+    <td valign="middle"><b>Find references</b> <code>Shift+F12</code><br>Before changing one character, see which files call it.</td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td valign="middle"><b>Completion</b> <code>Ctrl+Space</code> / as you type<br>
-    Candidates come from <b>name slots</b>: nothing pops inside dialogue, narration, comments or string segments; trigger characters are <code>#</code> <code>[</code> <code>@</code> <code>$</code> <code>.</code> It asks "what belongs in this position" instead of dumping the whole vocabulary at you.</td>
+    <td valign="middle"><b>Completion</b> <code>Ctrl+Space</code> / as you type<br>Nothing pops inside dialogue, comments or strings — candidates only appear where they make sense.</td>
     <td width="46%" align="center"><img src="docs/assets/erb-completion.gif" width="420" alt="Completion"></td>
   </tr>
 </table>
@@ -82,108 +48,99 @@ Three animations for three rows of that table:
 <table>
   <tr>
     <td width="46%" align="center"><img src="docs/assets/editor-folding.gif" width="420" alt="Folding"></td>
-    <td valign="middle"><b>Folding</b> per function body / block<br>
-    Ranges come from the tree-sitter CST, never from counting <code>IF/ENDIF</code> with a regex. A script file with tens of thousands of lines is only readable if it collapses by structure; folding recall and line-by-line parity readings on real corpora are booked in <a href="docs/STATE.md">docs/STATE.md</a>.</td>
+    <td valign="middle"><b>Folding</b><br>Collapse by function body or block. A script file with tens of thousands of lines is only readable if it folds.</td>
   </tr>
 </table>
 
-## Panels for script authors
-
-These are plugins, not host code. Usage lives in [docs/USER-GUIDE.md](docs/USER-GUIDE.md) (currently Chinese only).
-
 <table>
   <tr>
-    <td width="50%" align="center"><img src="docs/assets/app-editor.jpg" width="480" alt="Main window"><br><sub><b>Main window</b> — script project tree and tutorial entries on the left, multi-tab editing of `.kojo` / `.ERB` / `.md` in the middle, writability badge and diagnostic counts in the status bar</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/app-condition-matrix.jpg" width="480" alt="Condition matrix"><br><sub><b>Condition matrix</b> — state keys × timing faces as one table; click a filled cell to jump to the script function behind it (floating window)</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/app-syntax-reference.jpg" width="480" alt="KOJO syntax tables"><br><sub><b>KOJO syntax tables (appendix)</b> — how to write it, what it compiles to, and the exact message when you get it wrong; 13 tables in the sidebar</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/app-market.jpg" width="480" alt="Script market"><br><sub><b>Script market</b> — pull the registry, browse and install script / dictionary packages (shown: CI's synthetic demo packages)</sub></td>
-  </tr>
-</table>
-
-> These four screenshots were taken from the 2026-10-20 interface; panel placement shifts batch to batch, so trust the app over the picture. The animations are not affected — replaying them produces the current shape.
-
-The exact panel inventory (including which ones are **sealed by default** and which only exist **in the kojo1 tier**) is in [docs/USER-GUIDE.md](docs/USER-GUIDE.md) §6.3 — we treat "can't find the panel" as a documentation defect, not a user problem.
-
-## The fundamentals
-
-- **Encoding and EOL are preserved byte-for-byte**: files are read with their declared encoding (Shift-JIS / GBK / UTF-8 / UTF-16) and written back in the original EOL/BOM shape — editing one line does not reformat the file.
-- **Game directories are read-only by default**: the first real keystroke asks. The unlock applies to **this file, this session**; after a restart protection is back. Your own work lives in a persistent writable workspace and is never affected.
-- **Three non-inheritable write authorization channels**: kernel `writablePaths`, `exportFile` (the system dialog *is* the authorization), launcher `launcher/approvals.json`.
-- **Every capability has a programmatic entry point**: 100+ commands in the palette, all rebinding-able, and the debug CLI drives the UI through the same path — which is how the animations in this file were recorded.
-- **Editor groups and multi-cursor**: split (`Ctrl+\`), `Ctrl+1..4` focus, column editing, line move, `Ctrl+Shift+L` add all.
-
-<table>
-  <tr>
+    <td valign="middle"><b>Command palette</b> <code>Ctrl+Shift+P</code><br>Anything the UI can do is searchable here, and this is where you rebind keys.</td>
     <td width="46%" align="center"><img src="docs/assets/editor-palette.gif" width="420" alt="Command palette"></td>
-    <td valign="middle"><b>Command palette</b> <code>Ctrl+Shift+P</code><br>
-    Everything the UI can do is searchable, runnable and rebindable here (three built-ins are not rebindable yet). When you cannot find a panel, do not dig through menus — the command list is the same entry point as the interface.</td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td valign="middle"><b>Project-wide search</b><br>
-    Hits grouped per file (shown: 10 hits across 4 files). Use it together with find-references: if you know the symbol's name, use references; if you only remember a line of dialogue or a fragment, search.</td>
     <td width="46%" align="center"><img src="docs/assets/editor-search.gif" width="420" alt="Project-wide search"></td>
+    <td valign="middle"><b>Project-wide search</b><br>Use it when you only remember a line of dialogue or a fragment; hits are grouped per file.</td>
   </tr>
 </table>
 
-## How quality is held
+## Interface
 
-One rule: **every "it's fixed" must come with numbers**.
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/app-editor.jpg" width="480" alt="Main window"><br><sub><b>Main window</b></sub></td>
+    <td width="50%" align="center"><img src="docs/assets/app-condition-matrix.jpg" width="480" alt="Condition matrix"><br><sub><b>Condition matrix</b> — click a filled cell to jump to the script</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/app-syntax-reference.jpg" width="480" alt="Syntax tables"><br><sub><b>Syntax tables</b> — how to write it, what it compiles to, what the error says</sub></td>
+    <td width="50%" align="center"><img src="docs/assets/app-market.jpg" width="480" alt="Script market"><br><sub><b>Script market</b> — install packages published by others</sub></td>
+  </tr>
+</table>
 
-- functional pool **1,184 files · 22,491 passed / 0 failed / 149 skipped** (as of 2026-11-02; the skipped count moves with corpus presence) · timing pool 31 files;
-- dual typecheck (root + app) · four audits (decoupling A–D, language ratchet, raw bytes, board) · boot-graph size gate · a separate `cargo test --lib` gate on the Rust side;
-- **31 plugins**, including adapters for **8** era-series games;
-- real-corpus readings (warm load `read+parse 0ms` / `refs scan 2ms`, memory and cold-open profiles, folding parity checks) are booked batch by batch in [docs/STATE.md](docs/STATE.md) — that file is the single source of truth; the snapshot here will go stale.
+## Download and install
 
-## What it does not do yet (honest list)
+Get it from [Releases](https://github.com/Poboking/kojo-editor/releases/latest):
 
-We would rather put the unfinished parts here than have you discover them the hard way:
+- **Installer** `kojo-editor_<version>_x64-setup.exe` — run it and follow the wizard; later versions update from "Settings → Update".
+- **Portable** `kojo-editor_<version>_x64-portable.zip` — unzip and run `kojo-editor.exe`, nothing written to the registry. Needs the WebView2 runtime (preinstalled on Windows 11; on Windows 10 you may need to [install it](https://developer.microsoft.com/microsoft-edge/webview2/) first).
 
-- **`.kojo` (Kojo 2.0) currently covers editing, coloring, diagnostics and preview only.** Saving to a compiled `.ERB`, and the transpile step in export/deploy, still key on the sealed `.kojo1` layer and native `.ERB` (the predicate is `resolveSugarTarget`). **Say the consequence out loud**: exporting or deploying a package that contains `.kojo` files carries them into the package verbatim — the engine cannot read them, and the export **will not fail**. If your script has to reach the game today, create it as `.ERB` or `.kojo1`.
-- **Windows 10 / 11 x64 only**; no macOS or Linux build.
-- **Installers are not code-signed**: expect a SmartScreen prompt ("Windows protected your PC") on first run. Each Release ships `SHA256SUMS.txt` so you can verify before allowing it. Signing exists only on the auto-update channel.
-- **Pre-release versions (containing `-`) do not enter the stable update channel** — download them manually from the Release page.
-- ERB squiggles **conservatively exclude** `CASE` / `PRINTDATA` conditions; that is a known blind spot. Lines `.kojo` preview does not cover yet (loops, `TRY`, `SIF` branches, data tables, assignments and calls) stay displayed verbatim instead of being hidden.
-- **The function index is not incremental**: files created or changed outside the editor appear via file watching, but newly defined functions need "Reload project" to enter the index.
+Every release ships `SHA256SUMS.txt` so you can verify the download. The installer is **not code-signed**, so Windows may show "protected your PC" on first run — "More info → Run anyway" is the way through.
 
-The full debt ledger is in [docs/STATE.md](docs/STATE.md) §4.
+## First run
 
-## Running it from source
+1. On the welcome page, click "Select game directory" and pick your eraTW root;
+2. it then asks about write access — **say no if you only want to read**; browsing, linting and replay keep working;
+3. open a character's `.ERB` from "Script files" on the left — the first time, it asks whether to turn on `.kojo` preview;
+4. to write your own: "My script projects" on the left → "+ New".
+
+The full manual (creating a project, export and deploy, choosing a license, the safety notes on state injection) is in
+[docs/USER-GUIDE.md](docs/USER-GUIDE.md) (Chinese for now).
+
+## Running from source
 
 ```bash
-corepack enable && pnpm install
-pnpm dev                            # frontend only (vite, runs in a browser, no shell)
-pnpm --filter @kojo/app tauri dev   # shell development (first cargo build takes 20–30 min)
-pnpm test                           # both pools; likewise pnpm typecheck / pnpm audit:decoupling
+corepack enable
+pnpm install
+pnpm --filter @kojo/app tauri dev      # development run (first cargo build takes 20–30 min)
+pnpm --filter @kojo/app tauri build    # produce the installer
 ```
 
-Dependencies: Node.js 22 · pnpm 11.22.0 (pinned by `packageManager`) · Rust stable ≥ 1.77 (desktop shell only) · WebView2.
-For the complete environment matrix, verification matrix, plugin and dialect onboarding, demo recording and release flow: **[docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md)**.
+Requires Node.js 22, pnpm 11.22.0 and Rust stable (MSVC). The environment matrix, verification commands, plugin and adapter development and the release flow are in [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md).
 
-## Documentation map
+## FAQ
 
-| Document | Purpose |
+| Question | Answer |
 |---|---|
-| [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | **the script author's manual** (how to use it, no implementation detail; Chinese only for now) |
-| [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) | developer handbook: environment, verification matrix, language wiring, plugins and adapters, debug and recording, releasing |
-| [AGENTS.md](AGENTS.md) | collaboration entry point: invariants, commands, Git and documentation discipline |
-| [docs/STATE.md](docs/STATE.md) | single source of truth for baseline numbers (tests / size / memory / performance / corpus / debt) |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/adr/](docs/adr/) | layering and slot design rationale, decision records |
-| [docs/KOJO-2.0-LANGUAGE-SPEC.md](docs/KOJO-2.0-LANGUAGE-SPEC.md) · [docs/SYNTAX-SUGAR-SURFACE-SPEC.md](docs/SYNTAX-SUGAR-SURFACE-SPEC.md) | Kojo 2.0 language spec · `.kojo1` surface syntax spec |
-| [docs/DIALECT-AUTHORING.md](docs/DIALECT-AUTHORING.md) | onboarding a new dialect / game in five steps |
-| [docs/DEBUG-MODE.md](docs/DEBUG-MODE.md) | debug mode manual and extension rules |
-| [docs/BOARD.md](docs/BOARD.md) · [docs/PITFALLS.md](docs/PITFALLS.md) | active board · hard-pitfall ledger |
+| Will it damage my game directory? | It is read-only by default; only paths you approve can be written. Files are backed up before each write, and the original encoding and line endings are kept. |
+| Which games are supported? | 8 era-series games are wired up. eraTW is the most polished; eraFL keeps its scripts in XML data files; coverage varies for the rest. |
+| Does it conflict with editing `.ERB` directly? | No. Native files stay editable as they are; the readable surface syntax is just an optional way to view them. |
+| Is there a macOS / Linux build? | Not yet — Windows 10 / 11 x64 only. |
+| I installed something and nothing changed in game? | The engine only reads `.ERB`. Use "Export" or "Deploy" instead of copying source files into the game directory. |
 
-Contributing is "one short-lived branch per batch, through the narrow gate into `dev`": branch model, gates and commit conventions live in [AGENTS.md](AGENTS.md) §4 — please read it, and [docs/PITFALLS.md](docs/PITFALLS.md), before you start.
+## Documentation
 
-## License and credits
+| Document | For |
+|---|---|
+| [docs/USER-GUIDE.md](docs/USER-GUIDE.md) | script authors: how to use it (no implementation detail; Chinese) |
+| [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) | developers: environment, verification, plugins and adapters, releasing |
+| [docs/KOJO-2.0-LANGUAGE-SPEC.md](docs/KOJO-2.0-LANGUAGE-SPEC.md) | the `.kojo` language specification |
+| [docs/STATE.md](docs/STATE.md) | test and performance readings, known debt |
+| [AGENTS.md](AGENTS.md) | rules and commands for AI collaborators |
 
-[GPL-3.0-or-later](LICENSE). The repository ships no game content: every animation and screenshot in this README comes from **synthetic samples** under `tools/gif-scenarios/demo-project/` and `fixtures/`; real corpora used by tests are only ever accessed read-only, in directories installed locally and authorized by the user.
+## Contributing
 
-Thanks to eraTW and the whole era community for years of authoring — this tool only writes down, in a form machines can cross-check, the naming conventions the community has passed on by word of mouth.
+Welcome. Please read [AGENTS.md](AGENTS.md) first (invariants and collaboration discipline), and skim
+[docs/PITFALLS.md](docs/PITFALLS.md) before you start. Adding a game? [docs/DIALECT-AUTHORING.md](docs/DIALECT-AUTHORING.md).
+Opening an issue before a pull request saves everyone work.
 
-Maintainer: [**Poboking**](https://github.com/Poboking) · ideas and bug reports welcome in [Issues](https://github.com/Poboking/kojo-editor/issues)
+## License
+
+[GPL-3.0-or-later](LICENSE). The repository contains no game content: the animations and screenshots here come from
+synthetic samples, and the real corpora used by tests are only ever read, from directories installed locally and
+authorized by the user.
+
+Thanks to eraTW and the whole era community for years of authoring.
+
+Author: [**Poboking**](https://github.com/Poboking) · bugs and ideas welcome in [Issues](https://github.com/Poboking/kojo-editor/issues)
