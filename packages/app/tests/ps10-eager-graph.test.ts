@@ -1272,10 +1272,21 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · `app/src/ui/NotificationCenter.tsx` **+3,205**（1028 批：收起两行 + ⌄ 展开整段）；
     //     · `plugins/erb-parser/src/plugin.ts` **+506**（T11/T12 接线与 `codeLens` 合并排序）。
     //     ⇒ KB 闸 **3,512 → 3,547**（余量 0 B 口径不变）；文件闸 201 不动。
+    //
+    //   - **告警面一族实心化批（2026-11-02，本批）**：读数 **201 文件 / 3,548 KB**
+    //     （3,632,870 B = 上一条 3,632,160 + **710**）——**零新进图文件**，图内三枚逐枚实测
+    //     （`wc -c` 现树 vs `git cat-file -s e28aa55e:…`；三枚差值求和 **710 B 与总差逐字节相等**）：
+    //     · `app/src/ui/project-error-notice.tsx` **+481**（错误条形状：语义图标位 +
+    //       `.notice-body` 把正文与出路归一层，出路按钮不再与正文抢那 420px）；
+    //     · `app/src/ui/error-boundary.tsx` **+186**（恢复卡标题挂图标 ⇒ 新引一枚 `Icon`）；
+    //     · `app/src/ui/WelcomeView.tsx` **+43**（那条通知条家族的注释改口径，零逻辑）。
+    //     · 本批主体是 CSS：`tokens.css` 新立 `--alert-*` 九枚与全部消费规则**不在开机图**
+    //       （`.css` 不进 JS 依赖图），所以这一档只涨 710 B。
+    //     ⇒ KB 闸 **3,547 → 3,548**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,547 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,548 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_547);
+    expect(totalKb).toBeLessThanOrEqual(3_548);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
