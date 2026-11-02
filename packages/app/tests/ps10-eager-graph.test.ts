@@ -1327,10 +1327,30 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · `app/src/ui/panel-row-nav.ts` **−5,109 不落图**（它本就不在开机静态图里）；
     //       两只插件（`ui-convention-report` / `ui-kojo-navigator`）走懒边，零进图。
     //     ⇒ KB 闸 **3,550 → 3,562**（余量 0 B 口径不变）；文件闸 201 不动。
+    //
+    //   - **KW4C 段①（会话两态 / 根模型解闸，2026-11-02；由组长从触顶车道摘出）**：
+    //     读数 **201 文件 / 3,576 KB**（3,661,323 B = 上一条 3,647,232 + **14,091**），
+    //     **零新进图文件**。图内五枚逐枚实测（现树 `stat` vs `git cat-file -s origin/dev:…`，
+    //     五枚求和与总差**逐字节相等**）：
+    //     · `app/src/ui/use-project-session.ts` **+8,259**（新增 `WorkspaceSession` 与
+    //       `openWorkspaceSession`；监视腿的闸由 `!project` 换成 `sessionRoot === null`；
+    //       `useSessionFlush` 的键与判据同源换成 `sessionRoot` + `sessionKind`）；
+    //     · `app/src/ui/workspace-folders.ts` **+2,207**（`workspaceFoldersOf(kernel, null, …)`
+    //       不再先归零 + 新增 `isProjectRoot` / `gameRootOf` / `sessionDisplayRootOf` 三枚取根入口）；
+    //     · `app/src/ui/session-store.ts` **+1,653**（`lastKind` additive：作品目录与游戏目录
+    //       长得一样，"继续上次会话"回哪条路必须显式记着，不许拿路径猜）；
+    //     · `app/src/ui/App.tsx` **+1,245**；`app/src/ui/use-workspace-folders.ts` **+727**
+    //       （React 侧同闸撤除 + `workspace.projectCreated` 现读信号）。
+    //     ⚠ **记下这笔欠账**：本段**屏上行为逐字不变**（欢迎页入口在段③，本段刻意不画
+    //     "能点却进不去"的按钮），却已经先付了 14,091 B 首屏源码字节——其中 `use-project-session.ts`
+    //     那 8.3 KB 大部分只在作品会话用得到。**续车待办**：把作品会话那半边拆成包叶子
+    //     （先例：`plugin-api/src/snapshot-overrides.ts` 为省 10,685 B 从桶里拆出去），
+    //     拆得动就还账，拆不动就在段③ 的提交信息里把理由写死。
+    //     ⇒ KB 闸 **3,562 → 3,576**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,562 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,576 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_562);
+    expect(totalKb).toBeLessThanOrEqual(3_576);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
