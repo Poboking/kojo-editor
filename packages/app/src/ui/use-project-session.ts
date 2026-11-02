@@ -41,6 +41,7 @@ import {
   probeExistingPaths,
   sanitizeExtraRoots,
   saveSessionRecord,
+  sessionLastKindOf,
   sessionProjectOf,
   upsertSessionProject,
   type SessionFlushScheduler,
@@ -95,6 +96,13 @@ export interface WorkspaceSession {
   readonly dir: string;
   readonly name: string;
 }
+
+/**
+ * 「屏上该画哪一面」的**唯一**渲染闸：`editorSurfaceOpen`（KW4C 段③）。
+ * 本体与 `visibleProjectError` 同住在 `project-error-notice.tsx`（phase 查表一族，
+ * 轻 import 图、可单测）；这里只留出处——会话两态都过同一道闸，判据是
+ * `sessionRoot`（游戏根 ∪ 作品目录 ∪ null）而不是 `project`。
+ */
 
 /** React ref 的最小形状（避免把 React 类型扩散到参数面） */
 export interface RefLike<T> {
@@ -701,8 +709,13 @@ export function useProjectSession(host: ProjectSessionHost): ProjectSession {
  */
 export interface SessionStoreOptions {
   readonly editorGroupsRef: RefLike<EditorGroupsState>;
-  /** 最近一次打开过的项目根（欢迎页「继续上次会话」） */
-  readonly onLastRoot: (root: string | null) => void;
+  /**
+   * 最近一次打开的现场（欢迎页「继续上次会话」）。
+   *
+   * KW4C 段③ 起带上**现场类型**：作品目录与游戏目录长得一样，回哪条路必须显式记着
+   * （`sessionLastKindOf`），不许拿路径猜——猜错就是「打开作品却被报成不是游戏目录」那句谎。
+   */
+  readonly onLastRoot: (root: string | null, kind: SessionRootKind) => void;
 }
 
 export interface SessionStore {
@@ -726,7 +739,7 @@ export function useSessionStore(options: SessionStoreOptions): SessionStore {
           groups: serializeGroups(editorGroupsRef.current),
         });
         sessionRecordRef.current = next;
-        onLastRoot(next.lastRoot);
+        onLastRoot(next.lastRoot, sessionLastKindOf(next));
         void saveSessionRecord(p.kv, next).catch(() => undefined);
       },
     });
@@ -735,7 +748,7 @@ export function useSessionStore(options: SessionStoreOptions): SessionStore {
   const adoptSessionRecord = useCallback(
     (rec: SessionRecord) => {
       sessionRecordRef.current = rec;
-      onLastRoot(rec.lastRoot);
+      onLastRoot(rec.lastRoot, sessionLastKindOf(rec));
     },
     [onLastRoot],
   );

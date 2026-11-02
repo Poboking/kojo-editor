@@ -33,7 +33,7 @@ import { runExplorerOp, runExplorerUndoDelete } from './file-clipboard';
 import { EXPLORER_COPY_COMMAND, EXPLORER_CUT_COMMAND, EXPLORER_PASTE_COMMAND, EXPLORER_DUPLICATE_COMMAND, EXPLORER_UNDO_DELETE_COMMAND } from './file-tree-ops';
 import { dirtyNamesIn } from './disk-reconcile';
 import { effectiveKeybindingOf, useKeybindingsVersion } from './keybindings';
-import { quickOpenRootsOf, scanRootsOf, searchRootsOf, type WorkspaceFolder } from './workspace-folders';
+import { quickOpenRootsOf, scanRootsOf, searchRootsOf, sessionDisplayRootOf, type WorkspaceFolder } from './workspace-folders';
 import { useWorkspaceFolders } from './use-workspace-folders';
 import { syncErbIndexAfterDiskChange, type DiskDelta } from './erb-index-sync';
 import { useNotify } from './NotificationCenter';
@@ -67,7 +67,13 @@ const activeFileSymbolsFromEditor = (): ActiveFileSymbolSource | null => {
 
 interface Props {
   kernel: Kernel;
-  project: GameProject;
+  /**
+   * 游戏现场（KW4C 段③ 起可为 null = **只有口上作品**的会话）：
+   * null 时口上域 / 索引 / 词典这些游戏腿显式不可用（判据与那句人话在
+   * `workspace-folders.ts` 的 gap 表，树侧的落在段②），文件的浏览 / 打开 / 编辑 /
+   * 保存走内核 io（作品根恒可写），**不**因为这一格是 null 而静默。
+   */
+  project: GameProject | null;
   index: ErbIndex | null;
   indexing: boolean;
   /** 索引构建失败原因（P0 实机反馈：两个树同时空必须能自解释，不能静默） */
@@ -452,6 +458,12 @@ export function ProjectView({
    * 树里看不见"这类裂缝不会再出现。
    */
   const workspaceFolders = useWorkspaceFolders(kernel, project, extraRoots);
+  /**
+   * 这一会话的**显示根**（KW4C 段③）：相对路径标签、diff 标题、跨标签右键这些
+   * "以谁为原点看路径"的地方一律问这张表（游戏会话 = 游戏根，逐字不变；作品会话 =
+   * 作品目录）。判据单源在 `workspace-folders.ts`，这里不比对路径、不自拼回落。
+   */
+  const displayRoot = useMemo(() => sessionDisplayRootOf(workspaceFolders), [workspaceFolders]);
   /** 壳层工作台 API（空态动作按钮：快速打开 / 命令面板 / 新建口上文件） */
   const [workbench, setWorkbench] = useState<WorkbenchApi | null>(null);
   /** Ctrl+W 命令读最新活动标签（壳层命令注册一次，闭包外取值） */
@@ -899,9 +911,9 @@ export function ProjectView({
    */
   const compareSelectedFiles = useCallback(
     (left: string, right: string) => {
-      kernel.bus.emit('ui.diffView.open', compareSelectedRequest(left, right, project.rootDir));
+      kernel.bus.emit('ui.diffView.open', compareSelectedRequest(left, right, displayRoot ?? undefined));
     },
-    [kernel, project.rootDir],
+    [kernel, displayRoot],
   );
   /**
    * 搬运的脏闸（WS-13 2a 车）：把会话脏态投影成"这批路径里哪几份是脏的"。
@@ -926,6 +938,9 @@ export function ProjectView({
    * 命中规则与各 adapter 侧同口径：按键长降序、`includes` 命中、名字已含对应中文则不重复。
    */
   const nameGloss = useMemo<((name: string) => string) | undefined>(() => {
+    // 作品会话没有游戏现场 ⇒ 没有适配器、没有词典：FileTree 原样显示名字（段② 的
+    // "无词典"分支），这里**不**替它编一份 adapterId
+    if (project === null) return undefined;
     const dict = activeGameAdapter(kernel.slots.query('game.adapter'), project.adapterId)?.nameGlossary;
     if (!dict) return undefined;
     const keys = Object.keys(dict).sort((a, b) => b.length - a.length);
@@ -940,7 +955,7 @@ export function ProjectView({
       }
       return name;
     };
-  }, [kernel, project.adapterId]);
+  }, [kernel, project]);
   /* ---------------- 外部改动 → 文件树目录重列（HK-5；接 §5.87 留下的欠账） ---------------- */
 
 
@@ -1597,7 +1612,7 @@ export function ProjectView({
       extraCommands={extraCommands}
       onRegisterWorkbench={setWorkbench}
       panelHostVersions={panelHostVersions}
-      activeAdapterId={project.adapterId}
+      activeAdapterId={project?.adapterId ?? null}
     >
       {/* 只读**不再**占一整条横幅（视觉批十三）：游戏目录默认只读是常态，常态不该按事故呈现。
           权限入口收进状态栏那枚「只读」徽标（可点，`onReauth`），真正保存被拒时由回执通知
@@ -1652,7 +1667,7 @@ export function ProjectView({
                       previewPath={g.preview ?? null}
                       groupId={g.id}
                       groupCount={groups.length}
-                      rootDir={project.rootDir}
+                      rootDir={displayRoot}
                       onCloseGroup={onCloseGroup}
                       onActivateTab={tabCb.onActivateTab}
                       onRequestCloseTab={tabCb.onRequestCloseTab}

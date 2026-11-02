@@ -23,9 +23,10 @@ import type { SessionKv } from './session-store';
  * - 损坏容忍：盘上任何不合法形态回空列表（列表丢了可以重开项目，绝不能炸启动）；
  * - `dir` = 项目目录绝对路径（只读事实：用于呈现与「文件夹是否还在」探测，
  *   **不是**写路径参数）；
- * - `gameRoot` = 记录时所在的游戏项目根（可选）。欢迎页一键重开要先回到那次
- *   的工作现场（游戏项目开着，才有「我的口上项目」面板）；没有它就只能诚实
- *   提示作者先打开游戏目录，而不是拿一个自由路径去猜。
+ * - `gameRoot` = 记录时所在的游戏项目根（可选，仅历史数据）。KW4C 段③ 起一键重开
+ *   **不再**依赖它：口上作品住作者自己的工作区（常驻可写根），点一枚作品直接进
+ *   作品会话（`openWorkspaceSession`）；「先打开游戏目录」那两句劝退话已撤——
+ *   作者碰自己的作品不该需要先有一个游戏现场（S 级缺陷的入口半边）。
  */
 
 export const RECENT_WORKSPACE_PROJECTS_KEY = 'recent-workspace-projects-v1';
@@ -104,6 +105,46 @@ export function removeRecentWorkspaceProject(
   projectId: string,
 ): RecentWorkspaceProject[] {
   return list.filter((r) => r.projectId !== projectId);
+}
+
+/* -------------------- 欢迎页一键重开（KW4C 段③：直接进作品会话） -------------------- */
+
+/** 作品会话的最小形状（与 `use-project-session.ts` 的 `WorkspaceSession` 同构，这里不 import React 侧） */
+export interface WorkspaceLaunchSession {
+  projectId: string;
+  /** 落点 = `projectDirOf(projectId)`（内核工作区服务现读），**不是**记录里的自由路径 */
+  dir: string;
+  name: string;
+}
+
+export type WorkspaceLaunchPlan =
+  | { kind: 'enter'; session: WorkspaceLaunchSession }
+  | { kind: 'notify'; message: string };
+
+/**
+ * 「点一枚最近作品 → 进哪」的判据（纯函数，KW4C 段③）。
+ *
+ * 口径：
+ * - 作品**现在还在**工作区清单里 ⇒ `enter`：会话的 `dir` 一律取内核
+ *   `projectDirOf(id)` 的现读值（记录里的 `dir` 只是旧照片，拿它当会话根等于信一份
+ *   可能过期的自由路径）；名字同样现读（改过名的作品回屏上是新名字）；
+ * - 不在清单里（被删 / 被移动）⇒ `notify` 一句人话。**绝不静默返回 null**——
+ *   点了没反应正是本批要消灭的缺陷（铁律 4）；
+ * - `gameRoot` 不参与判据：作品会话不认游戏现场，回到那次的工作现场这件事已经作废。
+ */
+export function planRecentWorkspaceOpen(
+  rec: Pick<RecentWorkspaceProject, 'projectId' | 'name'>,
+  projects: readonly { id: string; name: string }[],
+  projectDirOf: (projectId: string) => string,
+): WorkspaceLaunchPlan {
+  const hit = projects.find((p) => p.id === rec.projectId);
+  if (hit === undefined) {
+    return {
+      kind: 'notify',
+      message: `「${rec.name}」已不在工作区列表里，可能已被删除或移动。`,
+    };
+  }
+  return { kind: 'enter', session: { projectId: hit.id, name: hit.name, dir: projectDirOf(hit.id) } };
 }
 
 /**

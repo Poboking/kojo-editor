@@ -13,7 +13,8 @@
  * ③ **五条消费者逐条取根快照**（监视 / 树 / Ctrl+P / 检索 / 整项目诊断）＋各腿自己那道
  *    `project` 闸（静态读源，口径照 `update-wiring.test.ts`）；
  * ④ **面板归属与欢迎页回路**：「我的口上项目」由各 adapter 各注册一枚，壳层内建视图
- *    住在 `ProjectView`（也在项目态里），欢迎页一键重开靠记录里的 `gameRoot`。
+ *    住在 `ProjectView`；欢迎页一键重开**不再**绕游戏现场（KW4C 段③：点作品直接进
+ *    作品会话，`gameRoot` 只剩历史键）。
  *
  * ⚠️ 解闸批读到本文件的静态闸时**不要静默删**：那些 `toContain` 钉的就是你要拆的闸门，
  *    拆掉一处就把那一格改成"新的形状"并写清是哪一批改的（同 `update-wiring.test.ts` 的纪律）。
@@ -201,7 +202,10 @@ describe('③ 五条消费者逐条取根（快照式）', () => {
     expect(quickOpenRootsOf(noModel)).toEqual([]);
     const pv = read('ui/ProjectView.tsx');
     expect(pv).toContain('const sourceRoots = useMemo(() => quickOpenRootsOf(workspaceFolders), [workspaceFolders]);');
-    expect(pv).toContain('project: GameProject;'); // 宿主面板区本身也在项目态里
+    // KW4C 段③ 翻新：面板区不再单认游戏项目——`project` 在类型层放宽成 `| null`，
+    // 作品会话（无游戏现场）也挂得上这一面；候选根恒出自这张表（与树同一口径）。
+    expect(pv).toContain('project: GameProject | null;');
+    expect(pv).not.toContain('project: GameProject;\n');
   });
 
   it('检索腿：有项目交三根；无模型 ⇒ 空根，且既有话术直接写死"请先打开项目"', () => {
@@ -259,14 +263,27 @@ describe('④ 面板归属与欢迎页回路（同一道闸的屏上形态）', 
     ]);
   });
 
-  it('编辑器区（含侧栏面板）只在项目态渲染：欢迎页拿不到面板', () => {
-    expect(read('ui/App.tsx')).toContain("phase === 'project' && kernel && project");
+  it('编辑器区两态会话都渲染（游戏 / 作品），欢迎页只在**不在会话**时出现（KW4C 段③ 翻新正面照）', () => {
+    // 改前照片钉的是 `phase === 'project' && kernel && project`——那道闸让作品会话
+    // 设了 `workspaceSession` 仍落回欢迎页（点一枚作品等于没反应）。段③ 拆闸，
+    // 按本文件头纪律翻成正面照：闸认**会话根**，且旧形状不得以另一种写法回来。
+    const app = read('ui/App.tsx');
+    expect(app).toContain('kernel && editorSurfaceOpen(phase, sessionRoot)');
+    expect(app).not.toContain("phase === 'project' && kernel && project");
+    // 闸本体（phase 查表一族，与 `visibleProjectError` 同住）：判据 = 会话根
+    expect(read('ui/project-error-notice.tsx')).toContain("phase === 'project' && sessionRoot !== null");
   });
 
-  it('欢迎页一键重开依赖记录里的 gameRoot，缺了就只说一句"先去打开游戏目录"', () => {
-    expect(read('ui/recent-workspace-projects.ts')).toContain('gameRoot?: string;');
+  it('欢迎页一键重开**直接进作品会话**，不再依赖记录里的 gameRoot（KW4C 段③）', () => {
+    // 改前照片：没有 `gameRoot` 就只能劝作者"先打开游戏目录"——作者碰自己的作品
+    // 却要先有一个游戏现场，这正是本系列要消灭的 S 级口径。段③ 撤劝退话：
     const app = read('ui/App.tsx');
-    expect(app).toContain('gameRoot: rootDirRef.current ?? undefined');
-    expect(app).toContain('这条记录没有留下游戏项目位置');
+    expect(app).not.toContain('这条记录没有留下游戏项目位置');
+    expect(app).toContain('openWorkspaceSession(plan.session');
+    // 会话归属判据单源在纯函数（点了没清单里 = 一句人话，绝不静默）
+    const rwp = read('ui/recent-workspace-projects.ts');
+    expect(rwp).toContain('export function planRecentWorkspaceOpen');
+    // `gameRoot` 仍是可选历史键（老记录清洗零影响），但只是"当时的照片"，不再是回路条件
+    expect(rwp).toContain('gameRoot?: string;');
   });
 });

@@ -45,6 +45,7 @@ import {
   loadRecentWorkspaceProjects,
   pickFirstBodyName,
   pickFirstEditableName,
+  planRecentWorkspaceOpen,
   removeRecentWorkspaceProject,
   saveRecentWorkspaceProjects,
   upsertRecentWorkspaceProject,
@@ -201,7 +202,7 @@ import { isKojo2CutoverEnabled } from './kojo2-flag';
 import { useProjectSession, useSessionFlush, useSessionStore, type WorkspaceSession } from './use-project-session';
 import { syncErbIndexAfterDiskChange } from './erb-index-sync';
 import { ProjectErrorBoundary } from './error-boundary';
-import { ProjectErrorNotice, raiseProjectErrorBar, visibleProjectError, type ProjectErrorAction, type ProjectErrorBar } from './project-error-notice';
+import { ProjectErrorNotice, editorSurfaceOpen, raiseProjectErrorBar, visibleProjectError, type ProjectErrorAction, type ProjectErrorBar } from './project-error-notice';
 import { crashExitDecision, flushStorageBarrier } from './project-close';
 import { discardRecoveryJournal } from './crash-recovery';
 
@@ -543,7 +544,7 @@ export function App(): ReactElement {
    * 窗口标题三处同源（视觉批十四）：自绘标题栏、`document.title`（浏览器标签 / 调试宿）、
    * Tauri 系统标题（任务栏 / Alt-Tab）。只吃项目目录名，算法见 `window-title.ts`。
    */
-  const windowTitle = useMemo(() => windowTitleFor(project?.rootDir ?? null), [project?.rootDir]);
+  const windowTitle = useMemo(() => windowTitleFor(sessionRoot), [sessionRoot]);
   useEffect(() => {
     document.title = windowTitle;
     if (!isTauri()) return;
@@ -649,12 +650,6 @@ export function App(): ReactElement {
   const recentWorkspacesRef = useRef(recentWorkspaces);
   recentWorkspacesRef.current = recentWorkspaces;
   /**
-   * 一键重开要在项目态提交后再把「我的口上项目」视图拉出来——openProject 返回时
-   * 壳层可能还没挂载/订阅，直接 emit 事件会丢。这里记一次待兑现的目标根
-   * （只有 phase 转 `project` 且真的落在记录里的那个根上才发，同拍只发一次）。
-   */
-  const pendingPanelRevealRef = useRef<{ rootDir: string } | null>(null);
-  /**
    * `Ctrl+P` 空查询时置顶的「最近打开」（1020 编辑器体感批）：欢迎页那块用的是同一份
    * MM-7 记录，这里只取路径清单（最新在前）。数组身份跟着 state 走 ⇒ 面板的 memo 不乱重算。
    */
@@ -682,6 +677,11 @@ export function App(): ReactElement {
   /** 欢迎页「继续上次会话」的目标根（最近一次打开的项目；随会话落盘更新） */
   const [resumeRoot, setResumeRoot] = useState<string | null>(null);
   /**
+   * 目标根是**哪一种**现场（KW4C 段③）：作品目录与游戏目录长得一样，回哪条路必须
+   * 显式记着（`sessionLastKindOf`），不许拿路径猜——猜错就是拿 `openProject` 去开作品。
+   */
+  const [resumeKind, setResumeKind] = useState<SessionRootKind>('game');
+  /**
    * 会话记录的内存权威 + 落盘调度器（S2 #4）：稳态变更只 schedule（600ms 合并写盘），
    * 关项目 / kernel 更替 / 卸载收尾走 flushNow 同步落盘——防抖窗口里的最后一拍
    * 不再被清定时器丢掉。实现整体搬进 `use-project-session.ts`，这里只在该 hook 的
@@ -689,7 +689,10 @@ export function App(): ReactElement {
    */
   const { sessionRecordRef, sessionFlushRef, adoptSessionRecord } = useSessionStore({
     editorGroupsRef,
-    onLastRoot: setResumeRoot,
+    onLastRoot: (root, kind) => {
+      setResumeRoot(root);
+      setResumeKind(kind);
+    },
   });
   /** autosave 引擎（仅 Tauri 壳装配；浏览器壳恒 null，全部相关链路自然空转） */
   const autosaveRef = useRef<AutosaveJournal | null>(null);
@@ -725,17 +728,18 @@ export function App(): ReactElement {
   const welcomePlacementRef = useRef<'pending' | 'placed'>('pending');
 
   /**
-   * 项目非空 = 编辑器窗口（标题栏/外框的渲染条件同这一条），否则欢迎弹窗。
-   * 切项目时 phase 会短暂回到 opening、旧项目还在 ⇒ 保持编辑器窗口，不闪回小弹窗。
+   * **在会话里**（游戏项目或口上作品，KW4C 段③）= 编辑器窗口（标题栏/外框的渲染条件同
+   * 这一条），否则欢迎弹窗。切项目时 phase 会短暂回到 opening、现场根还在 ⇒ 保持编辑器
+   * 窗口，不闪回小弹窗。
    * 欢迎弹窗的**尺寸**不在这里定：要等欢迎卡渲染完量出来（见下一条 effect）。
    */
   useLayoutEffect(() => {
-    const mode = project !== null ? 'editor' : 'popup';
+    const mode = sessionRoot !== null ? 'editor' : 'popup';
     if (mode === windowModeRef.current) return;
     windowModeRef.current = mode;
     if (mode === 'editor') void applyEditorWindow();
     else welcomePlacementRef.current = 'pending';
-  }, [project]);
+  }, [sessionRoot]);
 
   /**
    * 欢迎弹窗整窗拖动：弹窗里除交互控件、滚动条、打开的模态外，任意位置按下都能拖。
@@ -743,7 +747,7 @@ export function App(): ReactElement {
    * 大面积留白按下去没反应；编辑器态由 WindowChrome 自己的拖拽区负责，这里不挂。
    */
   useEffect(() => {
-    if (project !== null || phase === 'boot') return;
+    if (sessionRoot !== null || phase === 'boot') return;
     const frame = frameRef.current;
     if (frame === null) return;
     // 原生拖动必须在 mousedown 栈里同步发起 ⇒ 窗口对象在挂载时预载，不在这里 await
@@ -765,7 +769,7 @@ export function App(): ReactElement {
       cancelled = true;
       frame.removeEventListener('mousedown', onMouseDown);
     };
-  }, [project, phase]);
+  }, [sessionRoot, phase]);
 
   /**
    * 欢迎弹窗贴合卡片核心区：
@@ -775,7 +779,7 @@ export function App(): ReactElement {
    * 只在「无项目 + phase welcome」跑：启动期用固定首帧尺寸，开项目中不弹跳。
    */
   useLayoutEffect(() => {
-    if (phase !== 'welcome' || project !== null) return;
+    if (phase !== 'welcome' || sessionRoot !== null) return;
     const frame = frameRef.current;
     if (!frame) return;
     const seq = ++welcomeFitSeqRef.current;
@@ -819,7 +823,7 @@ export function App(): ReactElement {
     };
   }, [
     phase,
-    project,
+    sessionRoot,
     recent.length,
     recentFiles.length,
     errorBar?.message,
@@ -1442,6 +1446,7 @@ export function App(): ReactElement {
    */
   const {
     openProject,
+    openWorkspaceSession,
     closeProject,
     decideApproval,
     requestReauth,
@@ -1484,20 +1489,22 @@ export function App(): ReactElement {
    * 对话框本身失败也得出声（绝不点了没反应）。
    */
   const addExtraRoot = useCallback(async () => {
-    if (!kernel || !project) return;
+    // 会话内都能加（KW4C 段③）：判据是**现场根**而不是游戏项目——作品会话里附加根
+    // 同样是浏览/检索/监视根；"选了会话自己的根"那句拒绝由 planAddExtraRoot 给
+    if (!kernel || sessionRoot === null) return;
     try {
       const dir = await invoke<string | null>('choose_directory', {
         title: '选择要添加到工作区的文件夹',
       });
       if (!dir) return; // 用户取消：安静返回，不是故障
-      const plan = planAddExtraRoot(extraRoots, dir, project.rootDir);
+      const plan = planAddExtraRoot(extraRoots, dir, sessionRoot);
       setExtraRoots(plan.roots);
       if (plan.note) notify({ kind: 'info', message: plan.note });
     } catch (e: unknown) {
       const msg = errorText(e);
       notify({ kind: 'error', message: `添加文件夹失败：${msg}` });
     }
-  }, [kernel, project, extraRoots, notify]);
+  }, [kernel, sessionRoot, extraRoots, notify]);
 
   /**
    * 「从工作区移除文件夹」（WS-08）：附加根只能加不能减的欠账，收在这里。
@@ -1716,10 +1723,35 @@ export function App(): ReactElement {
           requestOpenFile(path);
           return;
         }
-        void openProject(rootDir, { pendingOpenFile: path });
+        // KW4C 段③：落在某枚作品目录下的最近文件 = 回**作品会话**（带 pendingOpenFile），
+        // 不许拿 `openProject` 去开作品目录（那句"不是游戏目录"的谎就是这段③要消灭的）；
+        // 认不出归属的根照旧走游戏项目那条路，一字不变。
+        void (async () => {
+          if (!kernel || rootDir === '') {
+            void openProject(rootDir, { pendingOpenFile: path });
+            return;
+          }
+          let hit: WorkspaceProject | null = null;
+          try {
+            hit =
+              (await kernel.workspaces.list()).find(
+                (p) => pathKey(kernel.workspaces.projectDir(p.id)) === pathKey(rootDir),
+              ) ?? null;
+          } catch {
+            hit = null;
+          }
+          if (hit !== null) {
+            await openWorkspaceSession(
+              { projectId: hit.id, name: hit.name, dir: kernel.workspaces.projectDir(hit.id) },
+              { pendingOpenFile: path },
+            );
+            return;
+          }
+          void openProject(rootDir, { pendingOpenFile: path });
+        })();
       });
     },
-    [project, openProject, requestOpenFile, routeOpenPath],
+    [kernel, project, openProject, openWorkspaceSession, requestOpenFile, routeOpenPath],
   );
 
   /**
@@ -1785,7 +1817,15 @@ export function App(): ReactElement {
     };
   }, []);
   const rootDirRef = useRef<string | null>(null);
-  rootDirRef.current = project?.rootDir ?? null;
+  // KW4C 段③：作品会话也是"现场"——最近文件记录、导航历史、视图状态迁根都按会话根走；
+  // 消费方的"这是不是游戏项目"判据仍各自问 `project`（这一格只回答"现场在哪"）。
+  rootDirRef.current = project?.rootDir ?? workspaceSession?.dir ?? null;
+  /**
+   * **游戏**现场根（KW4C 段③ 单列一格）：`gameRoot` 记录键只认游戏目录——
+   * 作品会话里 rootDirRef 是作品目录，把它抄进 `gameRoot` 等于给记录写一句谎。
+   */
+  const gameRootRef = useRef<string | null>(null);
+  gameRootRef.current = project?.rootDir ?? null;
 
   /* --------- 最近打开的口上作品（P0-6）：记录 / 移除 / 一键重开 --------- */
 
@@ -1853,7 +1893,7 @@ export function App(): ReactElement {
               projectId: hit.id,
               name: hit.name,
               dir: kernel.workspaces.projectDir(hit.id),
-              gameRoot: rootDirRef.current ?? undefined,
+              gameRoot: gameRootRef.current ?? undefined,
               now: Date.now(),
             }),
           );
@@ -1876,49 +1916,42 @@ export function App(): ReactElement {
   );
 
   /**
-   * 一键重开（P0-6）：记录里带了「当时的游戏项目根」才回得去——工作区项目
-   * 只能出现在游戏项目上下文的「我的口上项目」面板里，欢迎页没有面板。
+   * 一键重开（P0-6 → KW4C 段③）：点一枚最近作品**直接进作品会话**——
+   * 作者的创作住在他自己的作品目录（常驻可写根），回来不该先要一个游戏现场
+   * （那正是 S 级缺陷：碰自己的作品必须先开游戏目录）。
    *
-   * 顺序：先算首枚可编辑文件（正文优先），再开游戏项目并把这份文件排进
-   * `pendingOpenFile`（项目完全就绪后才落进编辑器），最后在 phase 转 `project`
-   * 的 effect 里发 `ui.panel.reveal` 把面板拉出来。
+   * 顺序：列工作区现读归属（判据单源在 `planRecentWorkspaceOpen`：作品没了 ⇒ 一句
+   * 人话，绝不静默）→ 算首枚可编辑文件（正文优先）→ `openWorkspaceSession` 并把这份
+   * 文件排进 `pendingOpenFile`（会话完全就绪后才落进编辑器）→ 刷新最近使用时间戳。
+   *
+   * `gameRoot` 不再参与：旧记录里那一格随下一次 upsert 自然退役（缺省即不写，
+   * `recent-workspace-projects.ts` 的清洗本来就把空串折成不写键）。
    */
   const openRecentWorkspaceProject = useCallback(
     async (rec: RecentWorkspaceProject) => {
       if (!kernel) return;
-      if (rec.gameRoot === undefined) {
-        notify({
-          kind: 'info',
-          message: '这条记录没有留下游戏项目位置，无法重开；请在对应的游戏目录里打开「我的口上项目」。',
-        });
-        return;
-      }
-      let hit: WorkspaceProject | null = null;
+      let list: readonly WorkspaceProject[] = [];
       try {
-        hit = (await kernel.workspaces.list()).find((p) => p.id === rec.projectId) ?? null;
+        list = await kernel.workspaces.list();
       } catch {
-        hit = null;
+        list = []; // 工作区服务读不动：按"不在列表里"给出声，不演"点了没反应"
       }
-      if (hit === null) {
-        notify({ kind: 'info', message: `「${rec.name}」已不在工作区列表里，可能已被删除或移动。` });
+      const plan = planRecentWorkspaceOpen(rec, list, (id) => kernel.workspaces.projectDir(id));
+      if (plan.kind === 'notify') {
+        notify({ kind: 'info', message: plan.message });
         return;
       }
+      const hit = list.find((p) => p.id === rec.projectId)!;
       let first: string | null = null;
       try {
         first = await firstEditablePathInWorkspace(kernel, hit);
       } catch {
-        first = null; // 列目录失败不挡重开：面板照样展开，作者自己挑
+        first = null; // 列目录失败不挡进会话：树照样画得出，作者自己挑
       }
-      pendingPanelRevealRef.current = { rootDir: rec.gameRoot };
-      await openProject(rec.gameRoot, first !== null ? { pendingOpenFile: first } : undefined);
-      const current = kernel.project.current();
-      if (current !== null && pathKey(current.rootDir) === pathKey(rec.gameRoot)) {
-        recordWorkspaceProject(rec.projectId); // 重开 = 最近使用，刷新时间戳
-      } else {
-        pendingPanelRevealRef.current = null; // 没开到记录里的根：不许误发面板意图
-      }
+      await openWorkspaceSession(plan.session, first !== null ? { pendingOpenFile: first } : undefined);
+      recordWorkspaceProject(rec.projectId); // 进来了 = 最近使用，刷新时间戳（同一 upsert）
     },
-    [kernel, notify, openProject, recordWorkspaceProject],
+    [kernel, notify, openWorkspaceSession, recordWorkspaceProject],
   );
 
   /** 项目建成的广播（向导 / 导入两种来源）：只带 projectId，名字与目录现读 */
@@ -1952,26 +1985,6 @@ export function App(): ReactElement {
     });
     return un;
   }, [kernel, recordWorkspaceProject, refreshWorkspaceDirs]);
-
-  /**
-   * 一键重开的最后一拍：项目态提交后再拉「我的口上项目」。
-   * 面板 id 不写死——两个游戏 adapter 各注册一枚（`kojo-projects` /
-   * `eraakumamaid-kojo-projects`），按当前项目的 adapterId 现取贡献方。
-   * 壳层对这条意图的落地见 `ShellLayout` 的 `ui.panel.reveal` 订阅。
-   */
-  useEffect(() => {
-    if (kernel === null || project === null || phase !== 'project') return;
-    const pending = pendingPanelRevealRef.current;
-    if (pending === null) return;
-    if (pathKey(project.rootDir) !== pathKey(pending.rootDir)) return;
-    pendingPanelRevealRef.current = null;
-    const owner = kernel.slots
-      .query('game.adapter')
-      .find((c) => c.adapter.gameId === project.adapterId)?.pluginId;
-    const panel =
-      owner === undefined ? undefined : kernel.slots.query('ui.panel').find((p) => p.pluginId === owner);
-    if (panel !== undefined) kernel.bus.emit('ui.panel.reveal', { id: panel.id, source: 'welcome' });
-  }, [kernel, project, phase]);
 
   /* -------- autosave（退出/崩溃守护批）：崩溃兜底快照，Tauri 壳专属 -------- */
 
@@ -2821,11 +2834,39 @@ export function App(): ReactElement {
     });
   }, [notify]);
 
-  /** 继续上次会话：目标根 = 最近一次打开的项目（标签集由 openProject 的会话恢复装回） */
+  /**
+   * 继续上次会话（KW4C 段③）：目标根 + 现场类型都出自落盘记录（`lastRoot` /
+   * `lastKind`，同源见 `session-store.ts`）——
+   * - `'game'` = 走 `openProject`（标签集由它的会话恢复装回，原行为逐字不变）；
+   * - `'workspace'` = 回到**作品会话**：按目录现读工作区清单找回那枚作品
+   *   （记录里的根可能因作品被删/移动而失效 ⇒ 一句人话，绝不演"点了没反应"）。
+   */
   const resumeSession = useCallback(() => {
     if (!resumeRoot) return;
-    void openProject(resumeRoot);
-  }, [resumeRoot, openProject]);
+    if (resumeKind !== 'workspace') {
+      void openProject(resumeRoot);
+      return;
+    }
+    void (async () => {
+      if (!kernel) return;
+      let hit: WorkspaceProject | null = null;
+      try {
+        hit = (await kernel.workspaces.list()).find(
+          (p) => pathKey(kernel.workspaces.projectDir(p.id)) === pathKey(resumeRoot),
+        ) ?? null;
+      } catch {
+        hit = null;
+      }
+      if (hit === null) {
+        notify({
+          kind: 'info',
+          message: '上次的口上作品已不在工作区列表里（可能被删除或移动），无法继续该会话。',
+        });
+        return;
+      }
+      await openWorkspaceSession({ projectId: hit.id, name: hit.name, dir: kernel.workspaces.projectDir(hit.id) });
+    })();
+  }, [kernel, notify, resumeRoot, resumeKind, openProject, openWorkspaceSession]);
 
   /**
    * 欢迎页教程卡片（用户反馈 8 批）：只发语义意图 `ui.tutorial.open`，
@@ -2909,10 +2950,18 @@ export function App(): ReactElement {
     return () => window.removeEventListener('contextmenu', onContextMenu);
   }, []);
 
+  /**
+   * 渲染闸（KW4C 段③，判据单源在 `editorSurfaceOpen`）：**两态会话都进得了这一面**——
+   * 游戏会话带 `project`，作品会话 `project === null` 但带着会话根。段③ 之前这里写死
+   * `project`，作品会话设了 `workspaceSession` 却仍落进 else 分支的欢迎页，
+   * 点一枚口上作品等于没反应（本批要消灭的那一格）。
+   */
   const body =
-    phase === 'project' && kernel && project ? (
+    kernel && editorSurfaceOpen(phase, sessionRoot) ? (
       <ProjectErrorBoundary
-        resetKey={project.rootDir}
+        // 边界的复位键 = 会话根（两态都会换现场）；`editorSurfaceOpen` 已保证非 null，
+        // 这里的 `?? ''` 只喂类型系统，屏上到不了空串
+        resetKey={sessionRoot ?? ''}
         onRetry={retryProjectView}
         onExit={exitProjectOnCrash}
       >
@@ -2958,7 +3007,12 @@ export function App(): ReactElement {
             onDirtyChange={onDirtyChange}
             registerActions={registerActions}
             onClose={requestCloseProject}
-            onReload={() => void openProject(project.rootDir, { keepView: true })}
+            onReload={() => {
+              // 重开同一现场（两态各回各的门）：游戏会话 keepView 重开项目根；
+              // 作品会话 keepView 重进作品会话（同目录分支只刷新名字，不拆标签）
+              if (project) void openProject(project.rootDir, { keepView: true });
+              else if (workspaceSession) void openWorkspaceSession(workspaceSession, { keepView: true });
+            }}
             writable={writable ?? false}
             onReauth={requestReauth}
             guardFileOp={guardFileOp}
@@ -3019,10 +3073,10 @@ export function App(): ReactElement {
   return (
     <div
       ref={frameRef}
-      className={`app-frame${project === null ? ' app-frame-popup' : ''}`}
+      className={`app-frame${sessionRoot === null ? ' app-frame-popup' : ''}`}
       data-context-surface="app-fallback"
     >
-      {project !== null ? <WindowChrome title={windowTitle} /> : null}
+      {sessionRoot !== null ? <WindowChrome title={windowTitle} /> : null}
       <div className="app-frame-body">
         {phase === 'boot' ? <BootSplashView /> : body}
         {/* 项目态错误条（REF-FRONT-PERF）：写允许域注册/清除、授权失败的 error state

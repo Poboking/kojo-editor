@@ -116,7 +116,7 @@ interface Props {
    * **可选**（additive 接线）：旧渲染方不传 ⇒ 整区不显示（空态不占地方），不会炸。
    */
   recentWorkspaces?: readonly RecentWorkspaceProject[];
-  /** 一键重开（开回记录里的游戏项目 → 展开「我的口上项目」→ 打开首枚可编辑文件） */
+  /** 一键重开（KW4C 段③）：点一枚作品**直接进作品会话**并打开首枚可编辑文件，不再先要游戏现场 */
   onOpenWorkspaceProject?: (rec: RecentWorkspaceProject) => void;
   /** 从列表移除（只动记录，不动磁盘上的作品目录） */
   onRemoveWorkspaceProject?: (projectId: string) => void;
@@ -621,7 +621,7 @@ export function WelcomeView({
                                 ? reason === 'manifest'
                                   ? `${r.dir}（workspace.json 不存在，已无法重开）`
                                   : `${r.dir}（所在文件夹已不在，已无法重开）`
-                                : `重开「${r.name}」：展开「我的口上项目」并打开第一枚可编辑文件`
+                                : `进入「${r.name}」：打开作品会话与第一枚可编辑文件`
                             }
                           >
                             <span className="welcome-project-head">

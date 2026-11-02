@@ -27,6 +27,22 @@ export function visibleProjectError(phase: AppPhase, error: string | null): stri
 }
 
 /**
+ * 「屏上该画哪一面」的**唯一**渲染闸（KW4C 段③，纯函数；与 `visibleProjectError`
+ * 同一族 phase 查表，所以住同一份文件）。
+ *
+ * - 判据是**会话**（`sessionRoot` = 游戏根 ∪ 作品目录 ∪ null）而不是 `project`：
+ *   段③ 之前这一格写死 `phase === 'project' && project`，于是 `openWorkspaceSession`
+ *   设了作品会话却进不了编辑器面——点一枚口上作品等于没反应（S 级缺陷的入口半边）；
+ * - 两态过同一道闸：游戏会话带 `project`，作品会话 `project === null` 也进
+ *   ProjectView（其 `project` 半边按 `GameProject | null` 自适应，口上域那层在无游戏时
+ *   **显式不可用**，判据见 `workspace-folders.ts` 的 gap 表，段②）；
+ * - `kernel` 非空由调用方另查（那是装配事实，不是会话事实）。
+ */
+export function editorSurfaceOpen(phase: AppPhase, sessionRoot: string | null): boolean {
+  return phase === 'project' && sessionRoot !== null;
+}
+
+/**
  * 错误条上的出路动作。形状照 `NotificationCenter` 的 `NoticeAction`（`label` + `run`），
  * 多一枚 `title`：作者面去黑话，按钮那几个字说不清的"点下去会发生什么"放悬停里。
  */

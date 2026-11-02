@@ -249,8 +249,12 @@ describe('接线面：openProject 必须走这份判定，不许再按单侧记�
     // `getSessionWriteDomainFact()`——同一份事实换了住址，不是多了第二份。
     expect(src).toContain('const hostFact = getSessionWriteDomainFact();');
     expect(src).toContain('hostGrant: hostFact.grant');
-    // 写方封口：会话事实只许从 setSessionWriteDomainFact 进出，屏上不许长出第二份宿主事实
-    expect(src.split('setSessionWriteDomainFact(').length - 1).toBe(3);
+    // 写方封口：会话事实只许从 setSessionWriteDomainFact 进出，屏上不许长出第二份宿主事实。
+    // 账目（KW4C 段③ 核清，非放宽）：3 → 4 —— 段① `dc1efc04` 在 `openWorkspaceSession`
+    // 里补了第四处（作品会话进门先把上一条被拒的宿主事实复位成"没交过"，属合法写方），
+    // 当时这条枚举账没跟着抬；写方仍是且仅是 `openProject`（admit / catch 复位）、
+    // `openWorkspaceSession`（复位）、`closeProject`（复位）这一族，逐处对得上号。
+    expect(src.split('setSessionWriteDomainFact(').length - 1).toBe(4);
     expect(src).not.toContain('writeDomainRef.current');
   });
 
