@@ -9,10 +9,17 @@
  * 双真相源的收口就在这一步：窗口里把「工作区为权威、游戏目录只是部署目标」讲明白，
  * 并把两道前置闸门做成**看得见的状态**——游戏目录只读（未批准写权限）与
  * 目标已存在，都直接禁用按钮并说明下一步，而不是让用户点下去吃异常。
+ *
+ * 第三道闸门是**发布诚实闸**（2026-11-02 KW-1，additive）：包里若还留着 Kojo 2.0 源，
+ * 这一版**不会**把它们转译成游戏读得到的文件——原样写进去的结果还是"装了但不生效"。
+ * 这条点名摆在**确认框里**（作者按「部署」之前），按钮照旧可用：出路不剥夺，
+ * 只是不再让作者以为已经装好了。判据与清单都来自 `artifact.ts` 那一处（与导出腿同源，
+ * 两腿共用同一枚 builder，不各抄一套）。
  */
 
 import { createElement as h, useEffect, useMemo, useState } from 'react';
 import type { GameProject } from '@kojo/plugin-api';
+import { KOJO2_PROBE_FAILED_NOTICE, kojo2UntranspiledNotice, type Kojo2UntranspiledSource } from './artifact';
 import { resolveDeployTarget, type DeployTargetOk, type PendingDeploy } from './deploy';
 
 /**
@@ -36,6 +43,17 @@ export interface DeployKojoWizardDeps {
   close(): void;
   /** 发起部署（控制器负责状态条与落盘）；返回是否成功，成功即关窗 */
   deploy(pkg: PendingDeploy, target: DeployTargetOk): Promise<boolean>;
+  /**
+   * 确认框用的**只读前置核对**（additive，2026-11-02 发布诚实闸）。
+   *
+   * 实现在共享层 `artifact.ts` 的 `listKojo2Sources`，由 adapter 用自己的 `io` 接上：
+   * 只取路径、不读字节、一次都不叫转译器——作者此刻只是在"要不要发"之前看一眼。
+   * 本向导因此依旧不碰磁盘（与 `checkTargetExists` 同一形态）。
+   *
+   * 缺席（adapter 没接）⇒ 这一行不出现，窗口与历史逐字一致；抛错 ⇒ 明说"没能核对"，
+   * 不冒认"这个包没有 2.0 源"。
+   */
+  kojo2Sources?(absDir: string): Promise<readonly Kojo2UntranspiledSource[]>;
 }
 
 /** 部署向导 overlay 组件（createElement 风格；壳层 PanelBody 无 props 渲染） */
@@ -47,6 +65,12 @@ export function createDeployKojoWizard(deps: DeployKojoWizardDeps): () => unknow
     const [charaNo, setCharaNo] = useState<number | null>(pending?.charaNo ?? null);
     const [exists, setExists] = useState<boolean | null>(null);
     const [busy, setBusy] = useState(false);
+    /**
+     * 确认框里的 2.0 源点名（发布诚实闸）。
+     * `null` = 还没核完 / 本 adapter 没接这格 ⇒ 不渲染；`''` = **核对过、这个包没有** ⇒ 不渲染；
+     * 其余 = 要上屏的那句白话（含数量与相对路径，或"没能核对"本身）。
+     */
+    const [kojo2Notice, setKojo2Notice] = useState<string>('');
 
     // 换包重新打开时回到该包自己的角色（导入的包无 meta → 回到未选）
     useEffect(() => {
@@ -83,6 +107,31 @@ export function createDeployKojoWizard(deps: DeployKojoWizardDeps): () => unknow
       if (!gameProject) return [];
       return [...gameProject.charaIndex.values()].sort((a, b) => a.no - b.no);
     }, [gameProject]);
+
+    // 发布诚实闸的只读前置核对（同「换包重开」的口径：按包目录重算，不看角色）。
+    // 判据 / 文案都住在 `artifact.ts`，本窗口只负责把它摆进确认框——两腿共用同一枚清单。
+    useEffect(() => {
+      const absDir = pending?.absDir;
+      const probe = deps.kojo2Sources;
+      if (absDir === undefined || probe === undefined) {
+        setKojo2Notice('');
+        return;
+      }
+      let cancelled = false;
+      setKojo2Notice('');
+      probe(absDir)
+        .then((items) => {
+          if (!cancelled) setKojo2Notice(kojo2UntranspiledNotice(items) ?? '');
+        })
+        // 核对失败 ≠ "这个包没有 2.0 源"（读不到就冒认干净，比不核对更糟）
+        .catch(() => {
+          if (!cancelled) setKojo2Notice(KOJO2_PROBE_FAILED_NOTICE);
+        });
+      return () => {
+        cancelled = true;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [deps, pending?.absDir]);
 
     /* ---------- 降级：无待部署请求 / 无游戏项目（不静默，各自讲清下一步） ---------- */
     if (!pending) {
@@ -203,6 +252,11 @@ export function createDeployKojoWizard(deps: DeployKojoWizardDeps): () => unknow
       target.ok && writable && exists === null
         ? h('div', { className: 'dim' }, '正在确认目标是否已存在…')
         : null,
+
+      // 第三道闸门：包里的 Kojo 2.0 源（这一版不转译）。**不禁用按钮**——出路照旧在作者手里，
+      // 但"部署成功"从此不再等于"游戏里有了东西"。同一句白话由 `artifact.ts` 的单源 builder
+      // 给出，与导出腿、与部署结果通知完全同形（判据只此一处）。
+      kojo2Notice !== '' ? h('div', { className: 'wizard-warn' }, kojo2Notice) : null,
 
       // 动作
       h(

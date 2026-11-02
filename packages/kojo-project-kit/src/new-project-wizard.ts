@@ -47,6 +47,8 @@ import { readPackAuthorship, type PackAuthorship } from './attribution';
 import {
   DEFAULT_KOJO_LANG_DOC,
   draftLangDoc,
+  kojo2SwitchChoices,
+  kojo2TierWarning,
   kojoLangDocChoice,
   kojoLangDocPreviewParenthesis,
   readScaffoldLangDocs,
@@ -605,6 +607,17 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
         : (chara && kojoSegmentsOk ? buildScaffoldDirName({ workName, charaName: chara.name, version }) : '');
     const kojoDirWarning = kindValue === 'kojo' ? noKojoDirWarning(chara) : null;
 
+    /**
+     * 2.0 档的拦路警示与一键切换（KW-1 发布诚实闸）。
+     *
+     * 只在「起手写法」这一行**真的出现**时才算（本游戏声明了 ≥2 档；没声明的游戏没有这一格，
+     * 也就无从在选择处拦——那条路的诚实由导出 / 部署两腿的点名兜住）。
+     * 非 2.0 档 → null，屏上文案与改前逐字相同。
+     */
+    const tierRowShown = kindValue === 'kojo' && langDocs.length >= 2;
+    const kojo2Warn = tierRowShown ? kojo2TierWarning(langDoc) : null;
+    const kojo2Switches = tierRowShown ? kojo2SwitchChoices(langDocs, langDoc) : [];
+
     const canCreate =
       !busy &&
       workSegmentsOk &&
@@ -833,6 +846,10 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
       // 语言档（NEW-ERB，反馈 1）：本游戏的脚手架声明了才出现这一行。
       // 选中项那句人话常驻显示（与「许可协议」同一手法）——"选了糖也能逐行直写原生"
       // 这件事不写出来，作者就只能猜，而这条反馈的原始症状正是"以为没有原生这条路"。
+      //
+      // 2.0 档额外占一格**拦路警示**（KW-1 发布诚实闸）：那一条选下去，导出与部署都会
+      // 成功而游戏里什么都不会多出来，一行灰字说明拦不住这种"成功"。警示带**一键切换**
+      // （只列本游戏真声明了的档），出路仍在作者手里——不禁用「创建」，也不替他改决定。
       kindValue === 'kojo' && langDocs.length >= 2
         ? h('div', { className: 'wizard-field' },
             h('span', { className: 'wizard-label' }, '起手写法'),
@@ -842,7 +859,20 @@ export function createNewKojoProjectWizard(deps: NewKojoProjectWizardDeps): () =
                 setLangDoc(langDocs.find((c) => c.value === e.target.value)?.value ?? DEFAULT_KOJO_LANG_DOC),
             },
               langDocs.map((c) => h('option', { key: c.value, value: c.value }, c.label))),
-            h('div', { className: 'wizard-hint dim' }, kojoLangDocChoice(langDoc).hint))
+            h('div', { className: 'wizard-hint dim' }, kojoLangDocChoice(langDoc).hint),
+            kojo2Warn === null
+              ? null
+              : h('div', { className: 'wizard-warn' },
+                  kojo2Warn,
+                  h('div', null,
+                    kojo2Switches.map((c) =>
+                      h('button', {
+                        key: c.value,
+                        className: 'ghost small',
+                        disabled: busy,
+                        onClick: () => setLangDoc(c.value),
+                      }, `改用${c.label}`))))
+                )
         : null,
 
       // 空白工作区的起手文件形态（NPF-1）：只决定那一枚空白文件的扩展名。

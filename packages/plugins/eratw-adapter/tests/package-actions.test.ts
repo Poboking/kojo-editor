@@ -473,3 +473,119 @@ describe('导出链路的往返契约（W14）', () => {
     await expect(buildPackageZip(io, SRC, fakeCompile)).rejects.toThrow(/^path-depth：/);
   });
 });
+
+/**
+ * **发布诚实闸**（KW-1，2026-11-02）：`.kojo` 自 LAU-3b-FLIP 起归 Kojo 2.0，而 2.0 的转译腿
+ * 还没接进导出 / 部署 ⇒ 这种包**发得出去、部署得进去，游戏里却什么都不会多出来**。
+ *
+ * 本组钉的是**整条链上作者看得见的两句**（纯函数侧由 `kojo-project-kit/tests/kojo2-honest-gate.test.ts` 钉）：
+ * 1. 导出腿：确认面是系统保存对话框（唯一确认面，落点即授权），点名进它的**标题**；
+ *    取消照旧是"不发了"这条路，**按钮与出路都不收走**；
+ * 2. 结果通知：有 2.0 源就带上份数与相对路径，**不再是一句光秃秃的"已导出 / 已部署"**；
+ * 3. 零 2.0 源的包 ⇒ 上面每一句与改前**逐字相同**（旧消费方零改动，含"不自动收起"这条也只对有 2.0 源的包生效）。
+ */
+describe('发布诚实闸：导出 / 部署两腿都点名 Kojo 2.0 源', () => {
+  const enc = new TextEncoder();
+
+  /** 混包：封存层 .kojo1（会转译）+ 两份 2.0 .kojo（这一版不转译）+ 一份说明 */
+  function kojo2Io(exportFile: FileIO['exportFile']): Partial<FileIO> {
+    const files: Record<string, Uint8Array> = {
+      [`${SRC}/事件.kojo1`]: enc.encode('如果 A：\n'),
+      [`${SRC}/正文.kojo`]: enc.encode('# 台词\n'),
+      [`${SRC}/子/日常.kojo`]: enc.encode('# 别的\n'),
+      [`${SRC}/说明.txt`]: enc.encode('原样'),
+    };
+    return {
+      walkDir: async () =>
+        Object.keys(files).map((p) => ({ name: p.slice(SRC.length + 1), path: p, isDirectory: false })),
+      readBytes: async (p: string) => files[p] ?? (() => { throw new Error(`没有这个文件：${p}`); })(),
+      exportFile,
+    };
+  }
+
+  it('含 .kojo ⇒ 弹框标题就点名"不会被转译 / 游戏读不到"（确认之前先说清）', async () => {
+    const titles: string[] = [];
+    const { actions } = setup(
+      { ...kojo2Io(async (fileName, _bytes, opts) => { titles.push(opts?.title ?? ''); return null; }) },
+      fakeCompile,
+    );
+    actions.exportArtifact(SRC, NAME);
+    await settle(actions);
+    expect(titles).toHaveLength(1);
+    expect(titles[0]!).toContain(`导出「${NAME}」为…`); // 历史那半句一字不动
+    expect(titles[0]!).toContain('本包含 2 份 Kojo 2.0 源');
+    expect(titles[0]!).toContain('不会被转译');
+    expect(titles[0]!).toContain('游戏读不到');
+    expect(titles[0]!).toContain('正文.kojo');
+  });
+
+  it('含 .kojo ⇒ 成功通知带上份数与相对路径，并且**不自动收起**（会消失的诚实等于没有）', async () => {
+    vi.useFakeTimers();
+    const { actions } = setup({ ...kojo2Io(async () => 'D:/发布/out.zip') }, fakeCompile);
+    actions.exportArtifact(SRC, NAME);
+    await settle(actions);
+    expect(actions.status()?.kind).toBe('ok');
+    const text = actions.status()!.text;
+    expect(text).toContain('已导出');
+    expect(text).toContain('1 个 .kojo1 转译为 .ERB、3 个文件原样打包'); // 原句三格语义零改动
+    expect(text).toContain('本包含 2 份 Kojo 2.0 源');
+    expect(text).toContain('子/日常.kojo');
+    await vi.advanceTimersByTimeAsync(STATUS_OK_DISMISS_MS * 3);
+    expect(actions.status()?.kind).toBe('ok');
+  });
+
+  it('不含 .kojo ⇒ 标题与成功通知逐字与历史相同（含"到点自动收起"）', async () => {
+    vi.useFakeTimers();
+    const titles: string[] = [];
+    const { actions } = exportSetup(async (_f, _b, opts) => {
+      titles.push(opts?.title ?? '');
+      return 'D:/发布/out.zip';
+    });
+    actions.exportArtifact(SRC, NAME);
+    await settle(actions);
+    expect(titles).toEqual([`导出「${NAME}」为…`]);
+    expect(actions.status()!.text).toBe(
+      `已导出「${NAME}」1 个 .kojo1 转译为 .ERB、1 个文件原样打包 → D:/发布/out.zip`,
+    );
+    expect(actions.status()!.text).not.toContain('Kojo 2.0');
+    await vi.advanceTimersByTimeAsync(STATUS_OK_DISMISS_MS);
+    expect(actions.status()).toBeNull();
+  });
+
+  it('部署腿同形：包里有 .kojo ⇒ 成功通知点名同一句（判据与导出腿共用一处）', async () => {
+    const { actions } = setup(
+      deployIo({
+        walkDir: async () => [
+          { name: '01 事件.ERB', path: `${SRC}/01 事件.ERB`, isDirectory: false },
+          { name: '正文.kojo', path: `${SRC}/正文.kojo`, isDirectory: false },
+        ],
+      }),
+    );
+    expect(await actions.deployArtifact(PKG, TARGET)).toBe(true);
+    const text = actions.status()!.text;
+    expect(text).toContain(`已部署「${NAME}」2 个文件 → ${TARGET.targetDir}`);
+    expect(text).toContain('本包含 1 份 Kojo 2.0 源');
+    expect(text).toContain('不会被转译');
+    expect(text).toContain('游戏读不到');
+    expect(text).toContain('正文.kojo');
+  });
+
+  it('部署腿：旁路核对失败 ⇒ 明说"没能核对"，不冒认这个包干净', async () => {
+    // 第一次 walkDir 是制品计划要读包（必须成功，否则整条部署就该红），
+    // 第二次才是发布诚实闸的旁路核对——让它抛，钉的是"核对不上 ≠ 没有问题"。
+    const entries: DirEntry[] = [{ name: '01 事件.ERB', path: `${SRC}/01 事件.ERB`, isDirectory: false }];
+    let calls = 0;
+    const { actions } = setup({
+      ...deployIo(),
+      walkDir: async () => {
+        calls += 1;
+        if (calls > 1) throw new Error('读目录失败');
+        return entries;
+      },
+    });
+    expect(await actions.deployArtifact(PKG, TARGET)).toBe(true);
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(actions.status()!.text).toContain(`已部署「${NAME}」1 个文件 → ${TARGET.targetDir}`);
+    expect(actions.status()!.text).toContain('未能核对包里有没有 Kojo 2.0 源');
+  });
+});

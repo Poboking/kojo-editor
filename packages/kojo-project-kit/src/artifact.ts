@@ -17,9 +17,19 @@
  *    与"保存 `.kojo` 时产物落在哪"完全同源，不在此另立一套命名）。
  * 2. **非 `.kojo` 一律字节级原样携带**（`.txt` 说明、`.md`、图片、作者手写的 `.ERB`）。
  *    口上库的既有编码经一次转码就可能毁半库——这里刻意不解码不重编码。
- * 3. **制品里绝不出现 `.kojo`**。游戏读不到它，留着只会让作者以为"已经装好了"。
+ * 3. **`.kojo`（Kojo 2.0 源）原样携带，但绝不静默**（2026-11-02 发布诚实闸改写本条）。
+ *    这句话写于 `.kojo` 还等于 kojo1 的年代——那时"制品里出现 `.kojo`"= 把该转译的糖源
+ *    漏了出去，留着确实只是骗作者。**2026-10-27 LAU-3b-FLIP 之后 `.kojo` 归 2.0**，
+ *    而 2.0 的转译腿尚未接进保存 / 导出 / 部署，于是这条规矩正在被代码违反而无人报错
+ *    （`.kojo` 走的是下面的规矩 2，导出与部署双双成功，游戏里却什么都不会多出来）。
+ *    今日口径：**不替作者删他自己的文件**（字节级原样照规矩 2 带走），但**点名拦路**——
+ *    计划层把它们列进 `untranspiledKojo2`，导出与部署的确认框当场说清"这一版不会被转译、
+ *    游戏读不到它们"并列出相对路径，成功通知也必须带上这个数量。
+ *    2.0 → `.ERB` 的转译腿接上之日，就是本条收回之时（届时它们会并进规矩 1）。
  * 4. **fail-closed**：任何一个 `.kojo` 转译失败 → 整个计划抛错，**不产半成品包**。
  *    半成品包比没有包更危险：作者会以为发布成功了。
+ *    ⚠ 这一条管的是**会转译的那一档**（kojo1 封存层 `.kojo1`）；2.0 源不转译，
+ *    故不受本条保护，改由规矩 3 的点名拦路兜住——别把"没报错"读成"没问题"。
  *
  * ## 同名 `.ERB` 先认作派生产物（2026-10-18 反馈修复批）
  *
@@ -61,6 +71,8 @@
 
 import {
   compareContent,
+  extname,
+  KOJO_SOURCE_EXTENSION,
   resolveSugarTarget,
   type FileIO,
   type SugarCompiledBytes,
@@ -103,6 +115,16 @@ export interface IgnoredDerivedArtifact {
   reason?: 'encoding';
 }
 
+/**
+ * 制品里**没被转译**的一份 Kojo 2.0 源（additive，2026-11-02 发布诚实闸）。
+ *
+ * 只有相对路径这一项是有意为之：2.0 源走的是字节级原样携带，
+ * 制品名 == 源名（`ArtifactEntry.sourceRel === relPath`），再多列一个字段就是第二份真相。
+ */
+export interface Kojo2UntranspiledSource {
+  relPath: string;
+}
+
 /** 计划结果与统计（反馈文案要能说清"转译了几个、原样带了几个"） */
 export interface ArtifactPlan {
   entries: ArtifactEntry[];
@@ -116,6 +138,14 @@ export interface ArtifactPlan {
    * 内容对不上 = 过期 / 被手改，直接抛错，不会静默跳过。
    */
   ignoredDerived: readonly IgnoredDerivedArtifact[];
+  /**
+   * 包里**不会被转译**的 Kojo 2.0 源（additive，2026-11-02 发布诚实闸；顺序 = 源顺序）。
+   *
+   * 它们仍然照规矩 2 原样进制品（`passthrough` 的计数一字未动）——这份清单不改变产物，
+   * 只改变**作者看见的那句话**：导出 / 部署的确认框与结果通知都要点名它。
+   * 空数组 = 这个包与 2.0 无关，两腿文案与改前逐字相同。
+   */
+  untranspiledKojo2: readonly Kojo2UntranspiledSource[];
 }
 
 /** 把 `.kojo` 源文本编成产物字节 —— 由 `SugarTranspileService.compileToBytes` 提供 */
@@ -134,6 +164,76 @@ export function toRelPath(path: string): string {
  */
 export function isKojoSource(relPath: string): boolean {
   return /\.kojo1$/i.test(relPath);
+}
+
+/**
+ * 是否 **Kojo 2.0 主场源**（大小写不敏感；additive，2026-11-02 发布诚实闸）。
+ *
+ * 判据**只从契约层那一枚常量现算**（`KOJO_SOURCE_EXTENSION`）——本模块不许再抄一份
+ * 扩展名正则：`resolveSugarTarget` 与 `isKojoSource` 已经因为"两处各写一遍"漂过一次，
+ * 同一族字面量的第三份迟早和翻转再来一次。
+ * 大小写归一走 `extname(...).toLowerCase()`，与宿主侧 `monaco/languages` 那条 2.0 判据同形。
+ *
+ * ⚠ 2.0 还有一枚暂挂扩展名（`.kojo2`），它的字面源在语言面库
+ * `@kojo/kojo-lang/constants`——本包（共享工作流层）按纪律只依赖 `@kojo/plugin-api`，
+ * 拿不到也不许抄，故这里只认契约那一枚主场扩展名。
+ */
+export function isKojo2Source(relPath: string): boolean {
+  return extname(relPath).toLowerCase() === KOJO_SOURCE_EXTENSION;
+}
+
+/** 确认框 / 结果通知里最多点名的相对路径条数（再多就把作者淹在路径堆里） */
+export const KOJO2_NOTICE_MAX_PATHS = 6;
+
+/**
+ * 核对本身失败时的那句（**独立于清单**：读不到 ≠ 这个包干净，不能冒认"没有 2.0 源"）。
+ *
+ * 导出腿不需要它——制品计划本来就读了整个目录，读不动时整条链路直接报错；
+ * 需要它的是部署腿的两次旁路核对（确认框与结果通知），两处共用这一句，不各写一遍。
+ */
+export const KOJO2_PROBE_FAILED_NOTICE =
+  '未能核对包里有没有 Kojo 2.0 源（读目录失败）——请自己确认游戏读得到它们再发布';
+
+/**
+ * 「这一版不转译」的那句白话（**导出腿与部署腿共用**，additive）。
+ *
+ * 一句话里说全三件事：几份 / 哪一枚扩展名 / 后果（游戏读不到），后面缀上前若干条相对路径
+ * 指认到底是哪几份。`maxPaths` 给窄面（原生保存对话框的标题）用 `0` = 只报数量。
+ *
+ * 空清单 → `null`（不是空串）：调用方据此**整句不出现**，两腿文案与改前逐字相同。
+ */
+export function kojo2UntranspiledNotice(
+  items: readonly Kojo2UntranspiledSource[],
+  maxPaths: number = KOJO2_NOTICE_MAX_PATHS,
+): string | null {
+  if (items.length === 0) return null;
+  const head =
+    `本包含 ${items.length} 份 Kojo 2.0 源（${KOJO_SOURCE_EXTENSION}），` +
+    '这一版不会被转译，游戏读不到它们';
+  if (maxPaths <= 0) return head;
+  const shown = items.slice(0, maxPaths).map((i) => i.relPath);
+  const rest = items.length - shown.length;
+  const listed = `${head}：${shown.join('、')}`;
+  return rest > 0 ? `${listed}（另有 ${rest} 份未列出）` : listed;
+}
+
+/**
+ * 只读地把目录里现存的 2.0 源点出来（**确认框专用的前置核对**，additive）。
+ *
+ * 为什么不在确认框里跑一遍 `planArtifacts`：那要把每个字节读进内存、还要真叫一次转译器，
+ * 而作者此刻只是在"要不要发"之前看一眼。故只 `walkDir` 取路径，判据仍是同一枚
+ * `isKojo2Source` ——**清单与制品计划同源同判据**，两腿不许各抄一套。
+ */
+export async function listKojo2Sources(io: FileIO, dir: string): Promise<Kojo2UntranspiledSource[]> {
+  const entries = await io.walkDir(dir, { includeFiles: true });
+  const out: Kojo2UntranspiledSource[] = [];
+  for (const e of entries) {
+    if (e.isDirectory) continue;
+    const rel = relUnder(e.path, dir);
+    if (rel.length === 0 || rel.split('/').includes('..')) continue;
+    if (isKojo2Source(rel)) out.push({ relPath: rel });
+  }
+  return out;
 }
 
 /** 文本解码（`.kojo` 源按 UTF-8 读；带 BOM 时剥掉，避免把 BOM 当正文喂给转译器） */
@@ -182,6 +282,9 @@ function scanFunctionNames(text: string): string[] {
  * 3. 按原始源顺序回填条目：`.kojo` 的 claim + 产物条目、命中的同名 `.ERB`
  *    判等后跳过（或过期抛错）、其余非 `.kojo` 正常 claim + 原样携带。
  *
+ * 第 3 步顺带把**原样携带的 Kojo 2.0 源**点进 `untranspiledKojo2`（规矩 3 的点名腿）：
+ * 它不改变任何产物字节，只改变作者在下一次确认框里看见的那句话。
+ *
  * @param sources 包目录下的全部源文件（相对路径 + 字节）
  * @param compile `.kojo` → 产物字节（注入，便于单测用替身驱动 fail-closed）
  * @throws Error 命名冲突 / 派生产物过期 / 函数名冲突 / 转译失败（消息为中文，直接呈现给作者）
@@ -192,6 +295,7 @@ export function planArtifacts(
 ): ArtifactPlan {
   const entries: ArtifactEntry[] = [];
   const ignoredDerived: IgnoredDerivedArtifact[] = [];
+  const untranspiledKojo2: Kojo2UntranspiledSource[] = [];
   const taken = new Map<string, string>(); // 归一化名 → 来源路径（报冲突时指认另一方）
   const fnOwners = new Map<string, { rel: string; name: string }>(); // 折叠函数名 → 首个来源
   let transpiled = 0;
@@ -301,6 +405,9 @@ export function planArtifacts(
       if (isErbArtifact(rel)) claimNames(rel, decodeSource(src.bytes));
       entries.push({ relPath: rel, bytes: src.bytes, sourceRel: rel });
       passthrough += 1;
+      // Kojo 2.0 源（`.kojo`）此刻正静静躺在制品里——转译腿没接上，本层不拦（拦了就等于
+      // 替作者删文件），但**必须留名**：两腿的确认框与结果通知都读这份清单（规矩 3）。
+      if (isKojo2Source(rel)) untranspiledKojo2.push({ relPath: rel });
       continue;
     }
 
@@ -317,11 +424,12 @@ export function planArtifacts(
     transpiled += 1;
   }
 
-  return { entries, transpiled, passthrough, ignoredDerived };
+  return { entries, transpiled, passthrough, ignoredDerived, untranspiledKojo2 };
 }
 
 /**
- * 读取包目录下的全部源文件（本模块**唯一**碰磁盘的函数）。
+ * 读取包目录下的全部源文件（本模块**唯一**读字节的函数；另有一条只取路径的
+ * `listKojo2Sources`，它一个字节都不读）。
  *
  * 走 `readBytes` 而不是 `readText`：非 `.kojo` 的文件要**原样字节**进制品，
  * 一旦按文本读就可能被重编码（口上库里既有 UTF-8 也有 Shift-JIS 的辅助文件）。
@@ -331,9 +439,19 @@ export async function readPackageSources(io: FileIO, srcDir: string): Promise<Ar
   const sources: ArtifactSource[] = [];
   for (const e of entries) {
     if (e.isDirectory) continue;
-    const rel = e.path.slice(srcDir.length).replace(/^[\\/]+/, '');
+    const rel = relUnder(e.path, srcDir);
     if (rel.length === 0) continue;
-    sources.push({ relPath: toRelPath(rel), bytes: await io.readBytes(e.path) });
+    sources.push({ relPath: rel, bytes: await io.readBytes(e.path) });
   }
   return sources;
+}
+
+/**
+ * 绝对路径 → 相对 `root` 的归一化相对路径（`/` 分隔、去首部斜杠）。
+ *
+ * 抽出来是因为**两条腿必须算出同一个 rel**：制品计划按这份键判重名 / 判派生产物，
+ * 而确认框的 2.0 源点名要用同一枚键去对制品——两套切法迟早对不上，就是"双真源"的老坑。
+ */
+function relUnder(path: string, root: string): string {
+  return toRelPath(path.slice(root.length).replace(/^[\\/]+/, ''));
 }

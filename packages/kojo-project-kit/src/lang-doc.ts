@@ -77,7 +77,11 @@ export interface KojoLangDocChoice {
  * 糖档那句是把 adapter `scaffold.ts` 头注里"先不要替作者收窄表达"那段只有开发者
  * 看得到的理由，翻成作者在向导里看得见的一句话——**选了糖也能逐行直写原生**；
  * 这一寸不说明，作者就会以为"用不了原生"而绕路（本条反馈的原始症状）。
- * 2.0 档如实说明"导出 / 部署链还没接到 2.0"，原生档如实标为老路径。
+ * 原生档如实标为老路径。
+ *
+ * 2.0 档那句「导出 / 部署链还没接到 2.0」**不再写在说明行里**（KW-1，2026-11-02）：
+ * 同一件事由 {@link kojo2TierWarning} 长成了**拦路警示 + 一键切换**，摆在选完就看得见的位置。
+ * 一行灰字说明挡不住"导出成功却什么都没进游戏"，故不是叠第二份文案，而是把原来那句升级。
  */
 export const KOJO_LANG_DOC_CHOICES: readonly KojoLangDocChoice[] = [
   {
@@ -85,7 +89,7 @@ export const KOJO_LANG_DOC_CHOICES: readonly KojoLangDocChoice[] = [
     label: `Kojo 2.0 写法（${kojoLangDocExtension('kojo2')}，默认）`,
     hint:
       `起手文件是 ${kojoLangDocExtension('kojo2')}：Kojo 2.0 现行写法（行首 # @ > ? ! 决定这一行是什么），` +
-      '第一枚文件就带一份能直接继续写的 2.0 正文。这一版导出 / 部署链还没接到 2.0，产物只在编辑器里看。',
+      '第一枚文件就带一份能直接继续写的 2.0 正文。',
   },
   {
     value: 'native',
@@ -106,6 +110,42 @@ export const KOJO_LANG_DOC_CHOICES: readonly KojoLangDocChoice[] = [
 /** 取值不认识（缺省 / 越界）一律回落缺省档，不猜、不静默造新档 */
 export function normalizeKojoLangDoc(doc: KojoLangDoc | undefined | null): KojoLangDoc {
   return doc !== undefined && doc !== null && KOJO_LANG_DOC_VALUES.includes(doc) ? doc : DEFAULT_KOJO_LANG_DOC;
+}
+
+/**
+ * 2.0 档的**拦路警示**（KW-1 发布诚实闸，2026-11-02）。
+ *
+ * 为什么不是 tooltip、也不是只写在档位说明里：这一档选下去之后，导出与部署**都会成功**，
+ * 而游戏里什么都不会多出来（2.0 的转译腿尚未接线）。"选完才发现"的代价不对称——
+ * 稿子已经按 2.0 写了几百行，改起来是重写。所以这句必须在选择的那一刻**占住一屏**，
+ * 并给出一键切换的去处（出路不剥夺）。
+ *
+ * 与 `artifact.ts` 的 `kojo2UntranspiledNotice` 是**同一件事的两个时刻**：
+ * 这里是"还没开始写"，那里是"要发出去了"；两句都由扩展名单源现算，不许手抄。
+ *
+ * 非 2.0 档 → `null`（原生与封存两条腿今天都能进游戏，不制造噪音）。
+ */
+export function kojo2TierWarning(doc: KojoLangDoc | undefined | null): string | null {
+  if (normalizeKojoLangDoc(doc) !== 'kojo2') return null;
+  return (
+    `注意：Kojo 2.0 写法（起手文件 ${kojoLangDocExtension('kojo2')}）这一版不会被转译——` +
+    `导出与部署都会原样带上它、都不报错，而游戏里读不到任何东西。` +
+    `急着让稿子进游戏，请改用「${kojoLangDocChoice('native').label}」或「${kojoLangDocChoice('sugar').label}」。`
+  );
+}
+
+/**
+ * 拦路警示上「一键切换」的去处（**只列本游戏真声明了的档**，并按声明顺序给 label）。
+ *
+ * 共享层不知道这个游戏支持几种档——声明里没有的一档不能凭常识摆上屏（点了会落到
+ * 一个没被脚手架支持的取值上）。当前档自己不出现（没什么可"切回去"）。
+ */
+export function kojo2SwitchChoices(
+  langDocs: readonly KojoLangDocChoice[],
+  doc: KojoLangDoc | undefined | null,
+): readonly KojoLangDocChoice[] {
+  if (normalizeKojoLangDoc(doc) !== 'kojo2') return [];
+  return langDocs.filter((c) => c.value !== 'kojo2');
 }
 
 /** 按取值取文案项 */

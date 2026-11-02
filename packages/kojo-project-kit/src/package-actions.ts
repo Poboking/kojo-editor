@@ -14,6 +14,13 @@
  * 且**先于**弹对话框完成：不会让用户选完落点才吃到一个错误。
  *
  * 部署正相反——落点在游戏目录内，**写白名单这道闸必须过**（详见 `deploy.ts`）。
+ *
+ * 2026-11-02 发布诚实闸（KW-1）：`.kojo` 自 2026-10-27 起归 **Kojo 2.0**，而 2.0 的转译腿
+ * 还没接进导出 / 部署——这样的包**发得出去、部署得进去，游戏里却什么都不会多出来**。
+ * 本模块因此多一条纪律：**两腿的确认面与结果通知都要点名这些文件**（清单只有一处真源，
+ * 见 `artifact.ts` 的 `untranspiledKojo2` / `isKojo2Source` / `kojo2UntranspiledNotice`）。
+ * 不剥夺出路（作者仍可选继续），但不再允许一句光秃秃的"导出成功"。
+ * 零 2.0 源的包，两腿屏上文案与改前**逐字相同**——那是旧消费方的自证。
  */
 
 import {
@@ -26,9 +33,13 @@ import {
   type ZipEntry,
 } from '@kojo/plugin-api';
 import {
+  KOJO2_PROBE_FAILED_NOTICE,
+  kojo2UntranspiledNotice,
+  listKojo2Sources,
   planArtifacts,
   readPackageSources,
   type ArtifactPlan,
+  type Kojo2UntranspiledSource,
   type KojoCompiler,
 } from '@kojo/kojo-project-kit';
 import { deployPackage, type DeployTargetOk, type PendingDeploy } from './deploy';
@@ -44,6 +55,54 @@ export interface PanelStatus {
 
 /** 成功态自动收起延时；失败态不自动收起（原因要留给用户读完） */
 export const STATUS_OK_DISMISS_MS = 8000;
+
+/**
+ * 确认框 / 结果通知里点名到第几条相对路径（窄面 = 原生对话框标题，只点两枚就够认路了）。
+ */
+export const KOJO2_TITLE_MAX_PATHS = 2;
+
+/** 有 2.0 源时点名的那一句（两腿共用；null = 这个包与 2.0 无关，文案保持历史原样） */
+const kojo2Line = (items: readonly Kojo2UntranspiledSource[], maxPaths?: number): string | null =>
+  kojo2UntranspiledNotice(items, maxPaths);
+
+/**
+ * 导出腿的**对话框标题**（系统保存对话框是这一腿唯一的确认面，落点即授权）。
+ * 零 2.0 源 ⇒ 与历史逐字相同；有话才多后面那一截。
+ */
+export function exportDialogTitle(displayName: string, plan: ArtifactPlan): string {
+  const base = `导出「${displayName}」为…`;
+  const line = kojo2Line(plan.untranspiledKojo2, KOJO2_TITLE_MAX_PATHS);
+  return line === null ? base : `${base}【${line}】`;
+}
+
+/** 导出成功的通知正文（数量在内；有 2.0 源时不再是一句光秃秃的"已导出"） */
+export function exportOkText(displayName: string, target: string, plan: ArtifactPlan): string {
+  const base =
+    `已导出「${displayName}」${plan.transpiled} 个 .kojo1 转译为 .ERB、` +
+    `${plan.passthrough} 个文件原样打包 → ${target}`;
+  const line = kojo2Line(plan.untranspiledKojo2);
+  return line === null ? base : `${base}；注意：${line}`;
+}
+
+/**
+ * 部署成功的通知正文（与导出腿**同一份清单、同一个 builder**，不各抄一套判据）。
+ * `probe` = 核对结果本身（失败 ≠ 没有，不能拿空数组冒认"这个包干净"）。
+ */
+export function deployOkText(
+  displayName: string,
+  targetDir: string,
+  written: number,
+  probe: readonly Kojo2UntranspiledSource[] | null,
+): string {
+  const base = `已部署「${displayName}」${written} 个文件 → ${targetDir}`;
+  if (probe === null) return `${base}；${KOJO2_PROBE_FAILED_NOTICE}`;
+  const line = kojo2Line(probe);
+  return line === null ? base : `${base}；注意：${line}`;
+}
+
+/** 带上了 2.0 点名的成功通知**不自动收起**（8 秒后消失的诚实等于没有诚实） */
+const okAutoDismissMs = (hasKojo2Notice: boolean): number | undefined =>
+  hasKojo2Notice ? undefined : STATUS_OK_DISMISS_MS;
 
 export interface PackageActionsDeps {
   io: FileIO;
@@ -154,25 +213,24 @@ export function createPackageActions(deps: PackageActionsDeps): PackageActions {
       // 打包（转译 + 组装 ZIP）与"选落点"是两件事：先全量在内存里做好，
       // 再弹对话框。这样**转译失败根本不会打扰用户**（不弹一个注定失败的框），
       // 而对话框一旦弹出就必然成功写盘——用户不会选完目录才吃到一个错误。
+      //
+      // 同一句时序也决定了诚实闸的位置：**制品计划已经在手，确认框还没开**——
+      // 于是 2.0 源点名进的是对话框标题（这一腿唯一的确认面；保存 = 继续、取消 = 不继续，
+      // 出路照旧在作者手里），而落点选完之后还要在通知里再说一遍。
       void buildPackageZip(deps.io, absDir, deps.compileKojo)
         .then(({ fileName, bytes, plan }) => {
           if (bytes.length === 0) throw new Error('包是空的，没有可导出的文件');
           return deps.io
-            .exportFile(fileName, bytes, { title: `导出「${displayName}」为…` })
+            .exportFile(fileName, bytes, { title: exportDialogTitle(displayName, plan) })
             .then((target) => ({ target, plan }));
         })
         .then(({ target, plan }) => {
           // 对话框里取消：既非结果也非错误，收起忙碌态即可（不打扰）
           if (target === null) set(null);
-          else
-            set(
-              {
-                kind: 'ok',
-                text: `已导出「${displayName}」${plan.transpiled} 个 .kojo1 转译为 .ERB、` +
-                  `${plan.passthrough} 个文件原样打包 → ${target}`,
-              },
-              STATUS_OK_DISMISS_MS,
-            );
+          else {
+            const text = exportOkText(displayName, target, plan);
+            set({ kind: 'ok', text }, okAutoDismissMs(plan.untranspiledKojo2.length > 0));
+          }
         })
         .catch((err: unknown) => {
           const reason = err instanceof Error ? err.message : String(err);
@@ -191,13 +249,11 @@ export function createPackageActions(deps: PackageActionsDeps): PackageActions {
           compile: deps.compileKojo,
           journal: deps.journal,
         });
-        set(
-          {
-            kind: 'ok',
-            text: `已部署「${pkg.displayName}」${written} 个文件 → ${target.targetDir}`,
-          },
-          STATUS_OK_DISMISS_MS,
-        );
+        // 与部署向导的确认框同一枚判据、同一个 builder（清单不各抄一套）。
+        // 核对失败按"未能核对"上屏：读不到 ≠ 这个包干净，不能冒认。
+        const probe = await listKojo2Sources(deps.io, pkg.absDir).catch(() => null);
+        const text = deployOkText(pkg.displayName, target.targetDir, written, probe);
+        set({ kind: 'ok', text }, okAutoDismissMs(probe !== null && probe.length > 0));
         return true;
       } catch (err: unknown) {
         const reason = err instanceof Error ? err.message : String(err);

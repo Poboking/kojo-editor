@@ -37,12 +37,23 @@ export type {
 } from './attribution';
 
 /* ---- 制品计划（`.kojo` 内存转译 + 派生物判等，永不改工作区） ---- */
-export { isKojoSource, planArtifacts, readPackageSources, toRelPath } from './artifact';
+export {
+  isKojo2Source,
+  isKojoSource,
+  KOJO2_NOTICE_MAX_PATHS,
+  KOJO2_PROBE_FAILED_NOTICE,
+  kojo2UntranspiledNotice,
+  listKojo2Sources,
+  planArtifacts,
+  readPackageSources,
+  toRelPath,
+} from './artifact';
 export type {
   ArtifactEntry,
   ArtifactPlan,
   ArtifactSource,
   IgnoredDerivedArtifact,
+  Kojo2UntranspiledSource,
   KojoCompiler,
 } from './artifact';
 
@@ -145,6 +156,8 @@ export {
   KOJO_LANG_DOC_CHOICES,
   KOJO_LANG_DOC_VALUES,
   draftLangDoc,
+  kojo2SwitchChoices,
+  kojo2TierWarning,
   kojoLangDocChoice,
   kojoLangDocExtension,
   kojoLangDocPreviewParenthesis,
@@ -200,7 +213,15 @@ export {
   TUTORIALS_MIN_H,
 } from './projects-panel';
 export type { DirListState, FactsInput, KojoProjectsPanelDeps, ProjectActionOutcome } from './projects-panel';
-export { buildPackageZip, createPackageActions, STATUS_OK_DISMISS_MS } from './package-actions';
+export {
+  buildPackageZip,
+  createPackageActions,
+  deployOkText,
+  exportDialogTitle,
+  exportOkText,
+  KOJO2_TITLE_MAX_PATHS,
+  STATUS_OK_DISMISS_MS,
+} from './package-actions';
 export type { PackageActions, PackageActionsDeps, PanelStatus, PanelStatusKind } from './package-actions';
 /* ---- 项目删除 / 项目设置（P0-7b；文案 / 表单初值 / patch 组装） ---- */
 export {

@@ -46,6 +46,7 @@ import {
   createNewKojoProjectWizard,
   createPackageActions,
   createPublishKojoWizard,
+  listKojo2Sources,
   listMarketTemplates,
   readPackageAttribution,
   readRequestToken,

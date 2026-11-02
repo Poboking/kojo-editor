@@ -39,7 +39,7 @@ import { createEratwFaceTable } from './face-templates';
 import { ERATW_NAME_GLOSSARY } from './name-glossary';
 import { createKojoProjectsPanel, type DirListState } from '@kojo/kojo-project-kit';
 import { readPackageAttribution, readSourceAttribution, type AttributionState as AttrState } from '@kojo/kojo-project-kit';
-import { createPackageActions } from '@kojo/kojo-project-kit';
+import { createPackageActions, listKojo2Sources } from '@kojo/kojo-project-kit';
 import { resolveNewItemPath, type NewItemKind } from '@kojo/kojo-project-kit';
 import { workspaceChangeOf } from '@kojo/kojo-project-kit';
 import type { KojoCompiler } from '@kojo/kojo-project-kit';
@@ -938,6 +938,10 @@ export function createEratwAdapterPlugin(): Plugin {
           clearPending: () => {
             pendingDeploy = null;
           },
+          // 发布诚实闸（KW-1，2026-11-02）：确认框里点名包内的 Kojo 2.0 源。
+          // 只读核对走共享层那一枚（walkDir 取路径，不读字节、不叫转译器），
+          // 判据与制品计划 / 导出腿同源——两腿不许各抄一套。
+          kojo2Sources: (absDir) => listKojo2Sources(io, absDir),
           close: () =>
             ctx.bus.emit('ui.overlay.close', { id: DEPLOY_KOJO_OVERLAY_ID, source: 'eratw-adapter' }),
           deploy: (pkg, target) => actions.deployArtifact(pkg, target),

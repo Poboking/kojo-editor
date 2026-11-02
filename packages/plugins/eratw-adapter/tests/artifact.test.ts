@@ -5,9 +5,22 @@
  * 命名冲突、转译失败必须整体拒绝、非 `.kojo1` 一个字节都不能被改动。
  */
 
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { SugarCompiledBytes } from '@kojo/plugin-api';
-import { isKojoSource, planArtifacts, toRelPath, type ArtifactSource, type KojoCompiler } from '@kojo/kojo-project-kit';
+import type { DirEntry, FileIO, SugarCompiledBytes } from '@kojo/plugin-api';
+import { KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import {
+  isKojo2Source,
+  isKojoSource,
+  KOJO2_NOTICE_MAX_PATHS,
+  kojo2UntranspiledNotice,
+  listKojo2Sources,
+  planArtifacts,
+  toRelPath,
+  type ArtifactSource,
+  type KojoCompiler,
+} from '@kojo/kojo-project-kit';
 
 const enc = new TextEncoder();
 const src = (relPath: string, text: string): ArtifactSource => ({ relPath, bytes: enc.encode(text) });
@@ -100,6 +113,9 @@ describe('planArtifacts', () => {
       transpiled: 0,
       passthrough: 0,
       ignoredDerived: [],
+      // 2026-11-02 KW-1 的新字段：这里从 3 键变 4 键是**收紧**（多一枚键必须如实为空），
+      // 不是放宽——原有三键的语义与取值一字未动。
+      untranspiledKojo2: [],
     });
   });
 
@@ -273,5 +289,153 @@ describe('同名 .ERB = 派生产物（2026-10-18 反馈修复批）', () => {
     expect(plan.entries.map((e) => e.relPath).sort()).toEqual(['主口上.ERB', '主口上.ERH']);
     expect(plan.passthrough).toBe(1);
     expect(plan.ignoredDerived).toEqual([]);
+  });
+});
+
+/* ==================== 发布诚实闸（KW-1，2026-11-02） ====================
+ *
+ * `.kojo` 自 2026-10-27 LAU-3b-FLIP 起归 **Kojo 2.0**，而 2.0 的转译腿没接进导出 / 部署。
+ * 于是这种包**发得出去、部署得进去，游戏里却什么都不会多出来**——本批不接转译（那是
+ * 另一批的大工程），只做一件事：**让它点名**。以下每条都盯着"点名而不改产物"这一寸：
+ * 产物字节、`transpiled` / `passthrough` / `ignoredDerived` 三格语义与改前逐字相同，
+ * 多出来的只有 `untranspiledKojo2` 这一份可见清单。
+ */
+
+describe('isKojo2Source：2.0 主场源判据（只认契约那一枚扩展名）', () => {
+  it('认 `.kojo`（大小写不敏感），不认封存档 `.kojo1`、不认原生与文档', () => {
+    expect(isKojo2Source('事件.kojo')).toBe(true);
+    expect(isKojo2Source('事件.KOJO')).toBe(true);
+    expect(isKojo2Source('子/日常.kojo')).toBe(true);
+    expect(isKojo2Source('事件.kojo1')).toBe(false);
+    expect(isKojo2Source('事件.ERB')).toBe(false);
+    expect(isKojo2Source('README.kojo.md')).toBe(false);
+  });
+
+  it('判据指回契约单源（本层不抄第二份扩展名 / 正则）', () => {
+    // 同一枚常量换了，判据当场跟着变——这条断言就是"没抄字面量"的正面证据
+    expect(isKojo2Source(`事件${KOJO_SOURCE_EXTENSION}`)).toBe(true);
+    const impl = readFileSync(
+      path.resolve(import.meta.dirname, '../../../kojo-project-kit/src/artifact.ts'),
+      'utf8',
+    );
+    const fn = /export function isKojo2Source\(relPath: string\): boolean \{\n\s*return ([^\n]+);/.exec(impl);
+    expect(fn, 'isKojo2Source 的实现行（换了形态就得同步改这条）').not.toBeNull();
+    expect(fn![1]).toBe('extname(relPath).toLowerCase() === KOJO_SOURCE_EXTENSION');
+    // 反潮守卫：全文件不许出现手抄的 `\.kojo` 尾巴正则
+    // （`\.kojo1` 那一枚是既有的**封存层**糖源判据，词边界撞不上它，不在本条面上）
+    expect(impl).not.toMatch(/\\\.kojo\b/);
+  });
+});
+
+describe('planArtifacts：2.0 源点名（不改产物，只留名）', () => {
+  it('.kojo 仍走字节级原样携带，同时进 untranspiledKojo2（一次都不叫编译器）', () => {
+    const raw = new TextEncoder().encode('# 台词\n@M_KOJO_K1_TEST\n');
+    const plan = planArtifacts([{ relPath: '事件.kojo', bytes: raw }], () => {
+      throw new Error('2.0 源不许被送去转译');
+    });
+    expect(plan.entries.map((e) => e.relPath)).toEqual(['事件.kojo']);
+    expect(plan.entries[0]!.bytes).toBe(raw); // 同一份引用：连复制都没发生（规矩 2）
+    expect(plan.passthrough).toBe(1);
+    expect(plan.transpiled).toBe(0);
+    expect(plan.untranspiledKojo2).toEqual([{ relPath: '事件.kojo' }]);
+  });
+
+  it('混包（原生 .ERB + 封存 .kojo1 + 2.0 .kojo）：三档各归各位，只有 2.0 被点名', () => {
+    const plan = planArtifacts(
+      [src('原生.ERB', '@A\n'), src('封存.kojo1', '如果 A：\n'), src('正文.kojo', '# x'), src('说明.txt', 'z')],
+      fakeCompile,
+    );
+    expect(plan.transpiled).toBe(1);
+    expect(plan.passthrough).toBe(3);
+    expect(plan.ignoredDerived).toEqual([]);
+    // 顺序 = 源顺序，且只收 2.0 源（.kojo1 走的是转译腿，不是"未转译"）
+    expect(plan.untranspiledKojo2).toEqual([{ relPath: '正文.kojo' }]);
+  });
+
+  it('大小写形态与子目录一起点出来，顺序按源顺序', () => {
+    const plan = planArtifacts(
+      [src('b/第二份.KOJO', 'x'), src('a/第一份.kojo', 'y'), src('README.md', 'z')],
+      fakeCompile,
+    );
+    expect(plan.untranspiledKojo2.map((i) => i.relPath)).toEqual(['b/第二份.KOJO', 'a/第一份.kojo']);
+  });
+
+  it('不含 2.0 源的包 → 清单恒为空数组（两腿文案逐字相同的自证）', () => {
+    const plan = planArtifacts([src('事件.kojo1', 'x'), src('说明.txt', 'y')], fakeCompile);
+    expect(plan.untranspiledKojo2).toEqual([]);
+  });
+});
+
+describe('kojo2UntranspiledNotice：两腿共用的那一句白话', () => {
+  const items = (rels: readonly string[]) => rels.map((relPath) => ({ relPath }));
+
+  it('空清单 → null（调用方整句不出现，不是空串占位）', () => {
+    expect(kojo2UntranspiledNotice([])).toBeNull();
+  });
+
+  it('非空 → 说全"几份 / 哪枚扩展名 / 什么后果"，并列出相对路径', () => {
+    const text = kojo2UntranspiledNotice(items(['事件.kojo', '子/日常.kojo']))!;
+    expect(text).toContain('本包含 2 份');
+    expect(text).toContain(KOJO_SOURCE_EXTENSION);
+    expect(text).toContain('不会被转译');
+    expect(text).toContain('游戏读不到');
+    expect(text).toContain('事件.kojo');
+    expect(text).toContain('子/日常.kojo');
+    // 去黑话：作者看得懂，不许漏出 untranspiled / fail-closed / 制品计划这类词
+    expect(text).not.toMatch(/untranspiled|fail-closed|passthrough/i);
+  });
+
+  it('超出点名上限时如实说"另有 N 份未列出"，不假装列全了', () => {
+    const many = items(Array.from({ length: KOJO2_NOTICE_MAX_PATHS + 3 }, (_v, i) => `f${i}.kojo`));
+    const text = kojo2UntranspiledNotice(many)!;
+    expect(text).toContain('本包含 9 份');
+    expect(text).toContain('另有 3 份未列出');
+    expect(text).toContain('f0.kojo');
+    expect(text).not.toContain('f8.kojo');
+  });
+
+  it('窄面（原生对话框标题）maxPaths=0 → 只报数量，不列路径', () => {
+    const text = kojo2UntranspiledNotice(items(['事件.kojo', '别的.kojo']), 0)!;
+    expect(text).toContain('本包含 2 份');
+    expect(text).not.toContain('事件.kojo');
+  });
+});
+
+describe('listKojo2Sources：确认框的只读前置核对', () => {
+  const DIR = '/appdata/workspaces/p1/包';
+
+  function ioOf(files: readonly string[], overrides: Partial<FileIO> = {}): FileIO {
+    return {
+      walkDir: async () =>
+        files.map((rel): DirEntry => ({ name: rel, path: `${DIR}/${rel}`, isDirectory: false })),
+      readBytes: async () => {
+        throw new Error('前置核对一个字节都不许读（确认框只该拿路径）');
+      },
+      ...overrides,
+    } as unknown as FileIO;
+  }
+
+  it('只走 walkDir：一个字节都不读、一次都不叫编译器', async () => {
+    const io = ioOf(['事件.kojo', '说明.txt']);
+    expect(await listKojo2Sources(io, DIR)).toEqual([{ relPath: '事件.kojo' }]);
+  });
+
+  it('相对路径形态与制品计划同源（反斜杠归一 / 去首斜杠 / 丢目录与越界项）', async () => {
+    const io = {
+      walkDir: async (): Promise<DirEntry[]> => [
+        { name: '子', path: `${DIR}\\子`, isDirectory: true },
+        { name: 'a', path: `${DIR}\\子\\日常.KOJO`, isDirectory: false },
+        { name: 'b', path: `${DIR}/../外面.kojo`, isDirectory: false },
+        { name: 'c', path: `${DIR}/正文.kojo`, isDirectory: false },
+      ],
+    } as unknown as FileIO;
+    expect(await listKojo2Sources(io, DIR)).toEqual([{ relPath: '子/日常.KOJO' }, { relPath: '正文.kojo' }]);
+  });
+
+  it('与 planArtifacts 同一份判据：核对出来的清单 == 计划里的清单', async () => {
+    const rels = ['事件.kojo', '封存.kojo1', '原生.ERB', '子/正文.kojo'];
+    const io = ioOf(rels);
+    const plan = planArtifacts(rels.map((relPath) => src(relPath, 'x')), fakeCompile);
+    expect(await listKojo2Sources(io, DIR)).toEqual(plan.untranspiledKojo2);
   });
 });

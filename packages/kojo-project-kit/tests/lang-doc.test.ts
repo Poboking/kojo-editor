@@ -21,6 +21,8 @@ import {
   KOJO_LANG_DOC_VALUES,
   composeScaffoldDraft,
   draftLangDoc,
+  kojo2SwitchChoices,
+  kojo2TierWarning,
   kojoLangDocChoice,
   kojoLangDocExtension,
   kojoLangDocPreviewParenthesis,
@@ -186,9 +188,12 @@ describe('④ 单源守卫：向导与档位文件里一个扩展名字面量都
     { rel: 'packages/kojo-project-kit/src/lang-doc.ts', count: 0 },
     { rel: 'packages/kojo-project-kit/src/new-project-wizard.ts', count: 0 },
     { rel: 'packages/plugins/eratw-adapter/src/new-project-wizard.ts', count: 0 },
+    // KW-1（2026-11-02）新收的一格：部署确认框这一批往里加了作者可见的文案，
+    // 那些句子一律由 `artifact.ts` 的单源 builder 给出，本文件自己不许出现扩展名。
+    { rel: 'packages/kojo-project-kit/src/deploy-wizard.ts', count: 0 },
   ];
 
-  it('三处文件的扩展名 token 命中数钉死为 0（多一处即红）', () => {
+  it('四处文件的扩展名 token 命中数钉死为 0（多一处即红）', () => {
     for (const s of SCOPED) {
       const hits = read(s.rel)
         .map((line, i) => ({ at: `${s.rel}:${i + 1}`, line }))
@@ -227,5 +232,57 @@ describe('④ 单源守卫：向导与档位文件里一个扩展名字面量都
     expect(sugar).toMatch(/export const KOJO_SOURCE_EXTENSION = '\.kojo'/);
     const erb = read('packages/plugin-api/src/erb-ext.ts').join('\n');
     expect(erb).toContain("'.erb'");
+  });
+});
+
+/* ---------------- ⑤ 2.0 档的拦路警示（KW-1 发布诚实闸，2026-11-02） ---------------- */
+
+/**
+ * 「这一版导出 / 部署链还没接到 2.0」从前只是档位说明行里的一句灰字，而选下去之后
+ * 两腿都**报成功**、游戏里却什么都不会多出来——一句灰字拦不住这种成功。
+ * 本批把它升级成拦路警示 + 一键切换（渲染面见 `new-project-wizard-tier.test.ts`），
+ * 这一组钉的是文案本身与"哪些档该出声、哪些档不该"。
+ */
+describe('⑤ 2.0 档拦路警示：说清后果，并给出一键切换的去处', () => {
+  it('2.0 档 ⇒ 警示到位：不会被转译 / 不报错也读不到 / 出路两枚都点名', () => {
+    const warn = kojo2TierWarning('kojo2');
+    expect(warn).not.toBeNull();
+    const text = warn!;
+    expect(text).toContain('不会被转译');
+    expect(text).toContain('导出与部署');
+    expect(text).toContain('不报错');
+    expect(text).toContain('读不到');
+    expect(text).toContain(kojoLangDocChoice('native').label);
+    expect(text).toContain(kojoLangDocChoice('sugar').label);
+    // 屏上的扩展名 == 盘上会落的那一枚（现算自契约，不是第二处手抄）
+    expect(text).toContain(kojoLangDocExtension('kojo2'));
+    // 去黑话：不许把 fail-closed / 制品计划 / untranspiled 这类开发者词甩给作者
+    expect(text).not.toMatch(/fail-closed|untranspiled|制品计划|DSL/i);
+  });
+
+  it('原生档与封存档 ⇒ null（这两条腿今天真能进游戏，不制造噪音）', () => {
+    expect(kojo2TierWarning('native')).toBeNull();
+    expect(kojo2TierWarning('sugar')).toBeNull();
+  });
+
+  it('认不出的取值回落缺省档 = 2.0 ⇒ 警示跟着出现（不静默当成没风险）', () => {
+    expect(kojo2TierWarning(undefined)).not.toBeNull();
+    expect(kojo2TierWarning('bogus' as never)).toBe(kojo2TierWarning(DEFAULT_KOJO_LANG_DOC));
+  });
+
+  it('同一件事只说一处：档位说明行不再重复那句（灰字说明 + 拦路警示 ≠ 两份文案）', () => {
+    expect(kojoLangDocChoice('kojo2').hint).not.toMatch(/还没接到|不会被转译|读不到/);
+  });
+
+  it('一键切换只列**本游戏真声明了的**档，且不含当前档本身', () => {
+    const three = KOJO_LANG_DOC_CHOICES;
+    expect(kojo2SwitchChoices(three, 'kojo2').map((c) => c.value)).toEqual(['native', 'sugar']);
+    // 这个游戏没声明封存档 ⇒ 上屏只给原生，点了落空的按钮不出现
+    const two = three.filter((c) => c.value !== 'sugar');
+    expect(kojo2SwitchChoices(two, 'kojo2').map((c) => c.value)).toEqual(['native']);
+    // 非 2.0 档没什么可切；没声明 = 没有选择可言（与 `draftLangDoc` 同一口径）
+    expect(kojo2SwitchChoices(three, 'native')).toEqual([]);
+    expect(kojo2SwitchChoices(three, 'sugar')).toEqual([]);
+    expect(kojo2SwitchChoices([], 'kojo2')).toEqual([]);
   });
 });
