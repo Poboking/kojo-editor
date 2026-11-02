@@ -804,9 +804,13 @@ export {
   MORE_ROW_STYLE,
   MORE_ROW_TITLE,
   moreRowLabel,
-  // 面板行键盘协议（kw8a 1102 行键盘批；判据真源见 `sugar-panels.ts` 末段区块头注）
+  // 面板行键盘协议（kw8a 1102 行键盘批；判据真源见 `sugar-panels.ts` 末段区块头注。
+  // kw8c 1102 可触发档批追加 `PANEL_ROW_TRIGGER_*` 行级可触发性一档）
   PANEL_ROW_ATTR,
   PANEL_ROW_SELECTOR,
+  PANEL_ROW_TRIGGER_ATTR,
+  PANEL_ROW_TRIGGER_OPEN,
+  PANEL_ROW_TRIGGER_NONE,
   nextRovingIndex,
   rowNavDecision,
   applyPanelRowNav,
@@ -826,6 +830,7 @@ export type {
   RowNavHostEvent,
   PanelRowElement,
   PanelRowNavHost,
+  PanelRowTrigger,
   PanelRovingRowElement,
   PanelRowRovingHost,
 } from './sugar-panels';

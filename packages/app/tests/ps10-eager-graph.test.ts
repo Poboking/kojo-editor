@@ -1356,10 +1356,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     不落图的两枚一并点名（免得下一个人以为是漏账）：`app/src/ui/FileTree.tsx` **+2,178**、
     //     `app/src/ui/file-tree-types.ts` **+445**——文件树本体走懒边。
     //     ⇒ KB 闸 **3,576 → 3,579**（余量 0 B 口径不变）；文件闸 201 不动。
+    //
+    //   - **KW8C 段①（契约层可触发档，2026-11-03）**：读数 **201 文件 / 3,582 KB**
+    //     （3,668,326 B = 上一条 3,664,595 + **3,731**），**零新进图文件**（文件闸顶格
+    //     201 不动——这一档按闸纪律就在 `sugar-panels.ts` 里长，不新开契约层文件）。
+    //     图内两枚逐枚实测（现树 `wc -c` vs `git cat-file -s origin/dev:…`，两枚求和
+    //     **3,731 B 与总差逐字节相等**；除这两枚外全树零改动，git status 可复验）：
+    //     · `packages/plugin-api/src/sugar-panels.ts` **+3,547**（行键盘协议补"可触发性"
+    //       一档：`PANEL_ROW_TRIGGER_ATTR` 常量与两档值域 + `RowNavInput.triggerable`
+    //       可选掩码 + `rowNavDecision` 功能键落点只在可触发行里找 + `applyPanelRowNav`
+    //       读 DOM 标记递进纯函数——默认档=可触发，老四家宿主/插件面板行为逐字不变，
+    //       由它们既有判据（expect 条数一字不动）自证）；
+    //     · `packages/plugin-api/src/index.ts` **+184**（桶侧 additive 转出上述常量与类型）。
+    //     不落图：`packages/plugin-api/tests/panel-row-nav.test.ts`（测试不进图）；
+    //     KW8C 段②（市场接线）走懒边，零进图。
+    //     ⇒ KB 闸 **3,579 → 3,582**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,579 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,582 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_579);
+    expect(totalKb).toBeLessThanOrEqual(3_582);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 

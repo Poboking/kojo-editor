@@ -334,6 +334,9 @@ export function moreRowLabel(remaining: number): string {
  *   ↑ 从最后一行走（同一条回绕尺子，不留特例）；
  * - **F4 / F8 = 移动焦点并当场打开**（Shift 反向）：等价于"按 ↑↓ 走到那一行再敲 Enter"，
  *   所以打开动作走的还是那一行按钮自己的 `onClick`，面板里不留第二条跳转路径；
+ *   （kw8c 1102 可触发档批补档：行级 `PANEL_ROW_TRIGGER_ATTR` 两档裁**这一腿**——
+ *   `none` 行 ↑↓ 照常进名单，但功能键落点只在 `open` 行里找，对它永不 `click()`；
+ *   整段无可触发行时功能键不消费。会改状态的主钮 / 无动作只读行由此"可达而不开枪"。）
  * - **`<select>` / `<textarea>` 里的方向键一律让位**：下拉框的方向键是改选项、
  *   多行框的方向键是移光标，把它们吃掉就成了"排序框按不动"那种新 bug。
  *   单行检索框不放这条：那里 ↑↓ 本来什么都不做，让给行导航正是作者要的手感。
@@ -355,6 +358,26 @@ export const PANEL_ROW_ATTR = 'data-panel-row';
 /** 行名单的选择器（与行标记 `PANEL_ROW_ATTR` 同一个真源，两处不许各写一遍字符串） */
 export const PANEL_ROW_SELECTOR = `[${PANEL_ROW_ATTR}]`;
 
+/**
+ * 行级**可触发性**标记（kw8c 1102 可触发档批）："这一行允许功能键当场打开吗"。
+ * 名单成员仍只由 `PANEL_ROW_ATTR` 决定（↑↓ 的名单不变宽也不变窄）；这一档只裁
+ * F4/F8 的**落点与点击**：
+ * - `open`（**默认档**，属性缺席即此档）：F4/F8 移过去并 `click()`，协议一字不变；
+ * - `none`：↑↓ 照常进名单（能聚焦、漫游 tabindex 照走），但 F4/F8 **绝不 `click()`**
+ *   ——落点只在 `open` 行里找下一个（Shift 反向、边界回绕照旧）；整段名单没有一个
+ *   `open` 行时功能键**不消费、不 preventDefault**（原样让位，不静默吞键）。
+ *
+ * 用途：主钮会**改状态**的行（市场的「安装 / 更新」）与无动作只读行——键盘可达性
+ * 对齐鼠标（"跳过去看见它"与"跳过去打开它"是两档，对标 VS Code 问题面板），而
+ * F8 不是脚枪。判据只住契约层这一处：插件侧只贴标记，不重写"哪些行能开"的 if。
+ */
+export const PANEL_ROW_TRIGGER_ATTR = 'data-panel-row-trigger';
+
+/** `PANEL_ROW_TRIGGER_ATTR` 的值域两档（插件侧引常量，不写字面量） */
+export type PanelRowTrigger = 'open' | 'none';
+export const PANEL_ROW_TRIGGER_OPEN: PanelRowTrigger = 'open';
+export const PANEL_ROW_TRIGGER_NONE: PanelRowTrigger = 'none';
+
 /** 方向键让位的那几种控件（单行检索框不在内，理由见协议头注） */
 const FIELD_SELECTOR = 'select, textarea';
 
@@ -374,6 +397,12 @@ export interface RowNavInput {
   readonly count: number;
   /** 按键落在下拉框 / 多行框里（方向键要让位，功能键不用） */
   readonly inField: boolean;
+  /**
+   * 逐行的可触发性（`PANEL_ROW_TRIGGER_ATTR` 的 DOM 事实由 `applyPanelRowNav` 读成布尔后
+   * 递进来——纯函数不摸 DOM）。只裁 `open` 那一腿的落点：功能键在**本数组为 true 的行**里
+   * 找下一个（含回绕）；一个 true 都没有 ⇒ `null`（不消费）。缺省 = 全部可触发（kw8c 前形状）。
+   */
+  readonly triggerable?: readonly boolean[];
 }
 
 /**
@@ -435,6 +464,18 @@ export function rowNavDecision(input: RowNavInput): RowNavDecision | null {
   }
   if (open === false && inField) return null; // 下拉框 / 多行框里的方向键归那个控件
   if (count <= 0) return null;
+  const { triggerable } = input;
+  if (open && triggerable !== undefined) {
+    // 功能键的落点只在**可触发行**里找下一枚（kw8c 可触发档批）：从当前行沿 dir 逐格走一圈
+    // （焦点不在行上：dir=1 从首格起走、dir=-1 从末格起走，与旧路径同一起点序）。
+    // 整圈没有一枚可触发 ⇒ null——不消费、不 preventDefault，原样让位（不静默吞键）。
+    const cur = current < 0 ? (dir === 1 ? -1 : count) : Math.min(count - 1, current);
+    for (let step = 1; step <= count; step++) {
+      const idx = (((cur + dir * step) % count) + count) % count;
+      if (triggerable[idx]) return { index: idx, open };
+    }
+    return null;
+  }
   // 焦点还没进列表（在检索框里）：↓ 进**第一行**、↑ 进**最后一行**——这一步不走回绕，
   // 因为 `nextRovingIndex` 把 `-1` 先夹到 `0` 再加一，从输入框按 ↓ 会跳到第二行（少一行）。
   if (current < 0) return { index: dir === 1 ? 0 : count - 1, open };
@@ -447,6 +488,16 @@ export interface PanelRowElement {
   focus(): void;
   click(): void;
   closest?(selector: string): unknown;
+  /** 读可触发档标记用（kw8c）；真实 DOM 元素天然有，桩没有 = 默认 `open` 档 */
+  getAttribute?(name: string): string | null;
+}
+
+/**
+ * 这一行允许功能键当场打开吗（默认档 = `open`：属性缺席 / 桩没有 `getAttribute` 都可触发，
+ * 已接线的老面板行为一字不变）。判据只住这一处，不在消费侧重写。
+ */
+function isRowTriggerOpen(row: PanelRowElement): boolean {
+  return row.getAttribute?.(PANEL_ROW_TRIGGER_ATTR) !== PANEL_ROW_TRIGGER_NONE;
 }
 
 /** 行导航要找的那一段容器（只含结果区，工具条与过滤框不参与 ⇒ 不在同一棵子树里） */
@@ -530,6 +581,8 @@ function applyRowNav(
     current: owner === null ? -1 : rows.indexOf(owner),
     count: rows.length,
     inField,
+    // DOM 事实只在这一处读成布尔再递进纯函数（名单仍只由行标记决定；档只裁功能键落点）
+    triggerable: rows.map(isRowTriggerOpen),
   });
   if (decision === null) return false;
   const next = rows[decision.index];
