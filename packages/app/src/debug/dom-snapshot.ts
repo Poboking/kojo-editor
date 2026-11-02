@@ -22,7 +22,24 @@ export interface DomSnapshot {
   readonly phase: 'welcome' | 'project' | 'unknown';
   readonly theme: string;
   readonly welcome: SurfaceReading | null;
+  /**
+   * **通知条**家族（`.notice`）：欢迎页的常驻卡片（浏览器环境提示 / 内核装配中 / 崩溃恢复）
+   * 与项目报错卡都在这族里。
+   *
+   * KW-23（2026-11-03）判性留字：**这一族不是 toast**。壳层通知中心
+   * （`ui/NotificationCenter.tsx`）渲的是 `.toast` / `.toast-info` / `.toast-error`，
+   * 只订这一格会把"toast 一条都没上屏"读成事实——真机一次差点据此去改接线。
+   * 取 toast 的证一律走下面的 {@link DomSnapshot.toasts}。
+   */
   readonly notices: SurfaceReading;
+  /**
+   * **toast**家族（`.toast`）：通知中心那一片会自动消失（info 6s）或常驻（error）。
+   *
+   * 与 {@link DomSnapshot.notices} 分面而不是并进去，是有意的：`tools/debug-cli.mjs` 的
+   * `open-project` 用 `notices` 的文案判"这次打开失败在哪句上"，而 toast 里常年躺着与
+   * 本次操作无关的后台提示（能力矩阵、格式、大文件）——合成一格就是把无关提示变成假失败。
+   */
+  readonly toasts: SurfaceReading;
   readonly tabs: SurfaceReading;
   readonly treeFiles: SurfaceReading;
   readonly panels: SurfaceReading;
@@ -78,6 +95,11 @@ export function snapshotDocument(doc: Document): DomSnapshot {
       kind: 'notices',
       count: doc.querySelectorAll('.notice').length,
       items: texts(doc, '.notice'),
+    },
+    toasts: {
+      kind: 'toasts',
+      count: doc.querySelectorAll('.toast').length,
+      items: texts(doc, '.toast'),
     },
     tabs: {
       kind: 'tabs',
