@@ -251,6 +251,53 @@ export function folderOfPath(folders: readonly WorkspaceFolder[], path: string):
   return hit;
 }
 
+/* ------------------------------ 没有游戏现场时「显式不可用」的那一族能力 ------------------------------ */
+
+/**
+ * 作品会话里**用不上**的能力（每一项都要有一句人话）。
+ *
+ * 为什么和根表住在一起：这五项的共同判据就是"这张表里有没有游戏根"——判据只此一处，
+ * 每条消费者不许自己再拼一份"没项目就闭嘴"的分支（那正是本批要消灭的静默降级）。
+ * 口径（铁律 4）：**显式不可用 ≠ 静默没有**。每一项都得上屏说清"为什么没有、怎么才有"，
+ * 一枚都不许长成"点了没反应的按钮"或"渲染成空的视图"。
+ */
+export type WorkspaceGapId = 'kojoDomain' | 'index' | 'deploy' | 'gameBoundCreate' | 'saveInject';
+
+export interface WorkspaceGap {
+  readonly id: WorkspaceGapId;
+  /** 屏上那一句人话（含"怎么才有"的出路；零机制名） */
+  readonly notice: string;
+}
+
+const WORKSPACE_GAPS: Readonly<Record<WorkspaceGapId, string>> = {
+  kojoDomain:
+    '口上域（按角色分组的那一层）要有游戏项目才画得出来——它读的是游戏里的角色表与口上目录。' +
+    '这一会话只有你的作品，作品文件都在下面的分组里，一样能打开、能改、能存。',
+  index:
+    '口上域索引与语言服务的项目腿要有游戏现场才跑：它按角色目录铺全量方言文件。' +
+    '作品会话里单文件的语法与校验照常工作，"整个口上域"的那一份名录没有。',
+  deploy:
+    '部署要把文件铺进游戏目录，这一会话没有打开任何游戏目录 ⇒ 没有可铺的目标。' +
+    '要部署请回到欢迎页打开那款游戏，再从其「我的口上项目」面板发起。',
+  gameBoundCreate:
+    '「绑定游戏新建口上作品」要认游戏里的角色，因此只在开着游戏项目时提供。' +
+    '这一会话里可以照常新建自己的作品与文件（落点是你的作品目录）。',
+  saveInject:
+    '存档注入要写游戏现场的存档目录，这一会话没有游戏目录 ⇒ 没有可注入的位置。' +
+    '要注入请回到欢迎页打开那款游戏。',
+};
+
+/** 那一句人话（查表，不靠肉眼看；每项都被判据钉着，见 `workspace-folders-project-coupling.test.ts` ⑤） */
+export function workspaceGapNotice(id: WorkspaceGapId): string {
+  return WORKSPACE_GAPS[id];
+}
+
+/** 作品会话（表里没有游戏根）⇒ 这五项**逐条**显式不可用；有游戏现场 ⇒ 一枚都不缺 */
+export function workspaceGapsOf(folders: readonly WorkspaceFolder[]): WorkspaceGap[] {
+  if (gameRootOf(folders) !== null) return [];
+  return (Object.keys(WORKSPACE_GAPS) as WorkspaceGapId[]).map((id) => ({ id, notice: WORKSPACE_GAPS[id] }));
+}
+
 /**
  * 接线版：从内核工作区服务**活读**作品目录后建模型（每次现读，缓存会把本会话刚
  * 新建的作品永久排除在外，口径同 `workspace-roots.ts`）。

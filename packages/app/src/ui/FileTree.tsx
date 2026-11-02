@@ -563,7 +563,9 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   /** 快照请求序号：项目切换/连续刷新时只认最后一次（与 dirReq 同一套"迟到不认领"口径） */
   const walkSeq = useRef(0);
   useEffect(() => {
-    if (index || !walkDir) return; // 索引就绪 ⇒ 快照退役；无 walkDir（纯浏览器宿主）⇒ 旧行为
+    // 冷开快照走的是 `project.kojoPaths` ⇒ 没有游戏现场就没有可 walk 的口上域
+    // （作品目录那一支由下面的根分组自己惰性列举，不走这条腿）
+    if (index || !walkDir || project === null) return; // 索引就绪 ⇒ 快照退役；无 walkDir（纯浏览器宿主）⇒ 旧行为
     const seq = ++walkSeq.current;
     setWalkFailed(false);
     void walkDialectPaths(walkDir, project.kojoPaths)
@@ -588,6 +590,12 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    */
   const folders = workspaceFolders ?? EMPTY_WORKSPACE_FOLDERS;
   /**
+   * 本会话的**显示根**（游戏根优先，作品会话取那枚可浏览根；一张表里问得出来）：
+   * 相对路径复制、剪贴板跨会话清账、勾选态清账这三处都读它，不再抄 `project.rootDir`。
+   * 空表（不在任何会话里）⇒ 空串，那三处自然都不命中。
+   */
+  const displayRoot = sessionDisplayRootOf(folders) ?? '';
+  /**
    * 需要**独立顶层分组**的根（作者作品目录 + 会话附加根）。
    * 游戏根 / 口上域 / 存档不在此列：它们的内容由角色分组（口上域）与文件系统视图（游戏根）覆盖，
    * 再列一遍就是把同一批游戏文件画成两遍。
@@ -605,7 +613,9 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    */
   const groups = useMemo<Group[]>(() => {
     const paths = index ? [...index.files.keys()] : snapPaths;
-    if (!paths) return [];
+    // 口上域分组是**游戏现场**的产物（角色归属来自 `charaIndex`，owners 表来自 `kojoPaths`）
+    // ⇒ 作品会话里这一组没有来源，交空表；屏上那句"为什么没有"在渲染侧（显式不可用）。
+    if (!paths || project === null) return [];
     const claimed = rootFolders.map((f) => f.path);
     const kept = claimed.length === 0 ? paths : paths.filter((p) => !claimed.some((root) => isUnderPath(root, p)));
     return buildFileGroups(kept, kojoOwners(project));
@@ -858,41 +868,43 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   };
 
   /**
-   * fs 视图的根层清单：取自工作区根模型里带 `browsable` 的那一组（游戏根 + 口上域 +
-   * 存档 + 作品目录 + 附加根，嵌套已折叠）；模型缺席 ⇒ 旧行为（项目根 ∪ 附加根）。
+   * fs 视图的根层清单：**只**取自工作区根模型里带 `browsable` 的那一组（游戏根 + 口上域 +
+   * 存档 + 作品目录 + 附加根，嵌套已折叠）。
+   *
+   * 解闸前这里有两行回落 `project.rootDir`（"模型缺席就退回游戏根"），那是"树这条腿今天
+   * 炸"的实证，也是这张表的第二份根 —— KW4C 一并撤走：表里没有就是没有，
+   * 一条腿不许自己补一个根。
    *
    * 只有**一个**根时维持 B5 原形态（根层直接铺开、无分组头），零视觉扰动；
    * 多根时每根一个分组头（D1 的形态，作品目录同样受益：作者作品在真实文件夹视图里
    * 第一次看得见、点得开）。
    */
-  const fsRoots = useMemo<string[]>(() => {
-    if (folders.length === 0) return [project.rootDir, ...(extraRoots ?? [])];
-    const browsable = browsableRootsOf(folders);
-    return browsable.length > 0 ? browsable : [project.rootDir];
-  }, [folders, project.rootDir, extraRoots]);
+  const fsRoots = useMemo<string[]>(() => browsableRootsOf(folders), [folders]);
+  /** 单根形态的那一枚根（fs 视图铺开 / 面包屑 / 相对路径都以它为准；恒出自这张表） */
+  const fsSingleRoot = fsRoots[0];
   const multiRootFs = fsRoots.length > 1;
   /** fs 视图根头的角色（标题上屏用：可写 / 只读 / 项目根，别让作者猜这一格是谁） */
   const fsRootRoleOf = useCallback(
     (root: string): string => {
       const hit = folders.find((f) => pkey(f.path) === pkey(root));
-      if (hit === undefined) return root === project.rootDir ? '项目根' : '';
+      if (hit === undefined) return '';
       if (hit.role === 'author') return '你的作品目录（可写）';
       if (hit.role === 'extra') return '本次会话添加的文件夹（只读）';
-      return hit.path === project.rootDir ? '项目根' : hit.label;
+      return hit.isProjectRoot ? '项目根' : hit.label;
     },
-    [folders, project.rootDir],
+    [folders],
   );
 
   /**
-   * 进入文件系统视图（B5）时惰性取项目根的第一层：根 = `project.rootDir`
-   * （GameProject 契约的项目根字段，口上目录们与其他一切都在它之下）。
+   * 进入文件系统视图（B5）时惰性取单根形态那一枚根的第一层（根清单来自工作区模型，
+   * 两态同一行代码：游戏会话取到的是游戏根，作品会话取到的是作品所在的根）。
    * 失败（浏览器壳无桌面壳权限等）走 DirRows 既有 error 态口径——「目录读取失败（需要桌面壳权限）」。
    * 多根形态（D1）：根头默认**折叠**，展开（toggleSub）时才取——不为看不见的东西打 IO。
    */
   useEffect(() => {
-    if (view === 'fs' && !multiRootFs) ensureDir(project.rootDir);
+    if (view === 'fs' && !multiRootFs && fsSingleRoot !== undefined) ensureDir(fsSingleRoot);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, project.rootDir, listDir, multiRootFs]);
+  }, [view, fsSingleRoot, listDir, multiRootFs]);
 
   /** 收集作用域内全部作者包（根散文件无包目录，不在真实文件夹视图范围） */
   const collectPackages = (gs: readonly Group[]): Array<{ key: string; dir: string; group: string }> => {
@@ -1285,11 +1297,11 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   const clipTargetDir = (): string | null =>
     clipTargetDirOf(focusIndex >= 0 ? rowAt(tree, focusIndex) : undefined);
 
-  /** 搬运参与跨根判定的根清单（项目根 + 会话附加根 + 工作区各根；`buildFileOpsPlan` 的 roots 口径） */
+  /** 搬运参与跨根判定的根清单（工作区各根 + 会话附加根；`buildFileOpsPlan` 的 roots 口径） */
   const moveRoots = (): string[] => {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const r of [project.rootDir, ...(extraRoots ?? []), ...folders.map((f) => f.path)]) {
+    for (const r of [...folders.map((f) => f.path), ...(extraRoots ?? [])]) {
       if (r === '' || seen.has(pkey(r))) continue;
       seen.add(pkey(r));
       out.push(r);
@@ -1772,13 +1784,13 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
    * 删除台账同一处理：里面装的是**上一个项目的绝对路径**，跨项目留着既撤销不动
    * （回收站的恢复要过新项目这一侧的写允许域，必然被拒），又会把"上次删了什么"留在界面上骗人。
    */
-  const clipRootRef = useRef(project.rootDir);
+  const clipRootRef = useRef(displayRoot);
   useEffect(() => {
-    if (pkey(clipRootRef.current) === pkey(project.rootDir)) return;
-    clipRootRef.current = project.rootDir;
+    if (pkey(clipRootRef.current) === pkey(displayRoot)) return;
+    clipRootRef.current = displayRoot;
     clearFileClipboard();
     clearDeleteBatchLedger();
-  }, [project.rootDir]);
+  }, [displayRoot]);
 
   /** 右键作用域自己那一格的落点目录（粘贴到菜单右击处；口径与 `clipTargetDirOf` 一致） */
   const scopeTargetDir = (scope: FileTreeScope): string | null => {
@@ -1891,7 +1903,10 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         if (path) copyText(path, '已复制完整路径');
         break;
       case 'copy-rel-path':
-        if (scope.kind === 'file') copyText(relativeToRoot(scope.path, project.rootDir), '已复制相对路径');
+        // 相对哪一格：取**包含它的那枚根**（作品会话里就是作品目录，游戏会话里就是游戏根），
+        // 问的仍然是那张表；表里没有命中就退回显示根。
+        if (scope.kind === 'file')
+          copyText(relativeToRoot(scope.path, folderOfPath(folders, scope.path)?.path ?? displayRoot), '已复制相对路径');
         break;
       case 'compare-selected': {
         // 菜单只在"恰选 2 个文件且这一行在其中"时给出这一项（判据在 file-tree-ops），
@@ -2052,9 +2067,9 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
   useEffect(() => {
     clearSelected();
     return () => clearSelected();
-    // 只认项目根：同一项目重载（索引重建 / 重开同目录）不该清掉作者的勾选——
-    // 勾的是"这一份项目里的文件"，根没变，勾选就仍有意义。
-  }, [project.rootDir]);
+    // 只认会话的显示根：同一现场重载（索引重建 / 重开同目录）不该清掉作者的勾选——
+    // 勾的是"这一份会话里的文件"，根没变，勾选就仍有意义。
+  }, [displayRoot]);
 
   /* ---------------- B4：定位当前文件 ---------------- */
 
@@ -2285,7 +2300,9 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
         createInDir,
         roots: multiRootFs
           ? fsRoots.map((root) => ({ key: root, label: baseName(root), dir: root, open: subOpen.has(root) }))
-          : [{ key: project.rootDir, label: baseName(project.rootDir), dir: project.rootDir, open: true }],
+          : fsSingleRoot === undefined
+            ? []
+            : [{ key: fsSingleRoot, label: baseName(fsSingleRoot), dir: fsSingleRoot, open: true }],
       });
     }
     const kojoInputs: KojoGroupInput[] = visible.map((g) => ({
@@ -2319,7 +2336,7 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
     // 依赖里给的都是渲染帧现读的量（`renderLimitOf` / `pkgDirOf` 是每帧重建的纯闭包，
     // 它们吃的 state 已经逐枚列在下面 ⇒ 不会读到上一帧）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, multiRootFs, fsRoots, project.rootDir, visible, rootGroupsVisible, opened, pkgFolder, subOpen, dirCache, plan, deferredFilter, createInDir]);
+  }, [view, multiRootFs, fsRoots, fsSingleRoot, visible, rootGroupsVisible, opened, pkgFolder, subOpen, dirCache, plan, deferredFilter, createInDir]);
 
   /**
    * 本次挂载的行区间。
@@ -2780,22 +2797,21 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
           multiRootFs ? (
             fsRoots.map((root) => {
               const isOpen = subOpen.has(root);
-              const isProjectRoot = root === project.rootDir;
+              // 「项目根」这一格的身份也出自那张表（`isProjectRoot`），不在这里比路径
+              const rootFolder = folders.find((f) => pkey(f.path) === pkey(root));
+              const isProjectRoot = rootFolder?.isProjectRoot === true;
               // 可写态：工作区模型在场取角色判据（`folder.writable`），缺席才按 io 现判；
               // 判定抛错按只读显示——"说不出可写"绝不能亮成可写。
-              const rootFolder = folders.find((f) => pkey(f.path) === pkey(root));
               const writableRoot = !isProjectRoot && (rootFolder !== undefined ? rootFolder.writable : rootWritableOf(io, root));
               /**
                * 只有**会话附加根**可以移除（WS-08）。作者作品目录 / 口上域 / 存档都是
-               * 项目事实，移掉就是在 UI 上撒谎（盘上还在、下次开项目又回来）。
-               * 模型缺席时 fs 根 = 项目根 ∪ `extraRoots` ⇒ 非项目根就是附加根。
+               * 会话事实，移掉就是在 UI 上撒谎（盘上还在、下次开又回来）。
                */
               const removable =
                 !isProjectRoot &&
                 (rootFolder !== undefined
                   ? rootFolder.role === 'extra'
-                  : (extraRoots ?? []).some((r) => pkey(r) === pkey(root)));
-              return (
+                  : (extraRoots ?? []).some((r) => pkey(r) === pkey(root)));              return (
                 <li key={root} className="tree-group" data-open={isOpen ? '1' : '0'} role="none">
                   {/* 组头行（WS-08）：折叠按钮 + 只读/可写标签 + 移除入口。
                       行尾按钮不能嵌进折叠按钮（button 里套 button 是非法结构），故加这层行容器。
@@ -2864,13 +2880,22 @@ const FileTreeBody = memo(function FileTreeBody({ project, index, onOpenFile, li
                 </li>
               );
             })
-          ) : dirCache.has(project.rootDir) ? (
-            <DirRows {...dirRowsBase} dir={project.rootDir} depth={0} skip={EMPTY_SKIP} />
+          ) : fsSingleRoot !== undefined && dirCache.has(fsSingleRoot) ? (
+            <DirRows {...dirRowsBase} dir={fsSingleRoot} depth={0} skip={EMPTY_SKIP} />
           ) : (
             <li className="tree-note">读取目录…</li>
           )
         ) : (
           <>
+        {/* 口上域（角色 → 作者包）那一组是**游戏现场**的产物：owners 表来自 `kojoPaths`、
+            角色归属来自 `charaIndex`。作品会话里没有这两样 ⇒ **显式不可用**：说一句人话
+            交代"为什么没有、你的东西在哪"，而不是渲染成一片空（空 = 看起来像坏掉）。
+            作品与附加根本来就在下面的顶层分组里（`rootGroupsVisible`），一条也没少。 */}
+        {project === null ? (
+          <li className="tree-note" role="presentation">
+            {kojoViewUnavailable}
+          </li>
+        ) : null}
         {visible.map((g, groupIdx) => {
           const isOpen = opened.has(g.label) || deferredFilter.length > 0;
           const groupTid = groupRowId(g.label);
