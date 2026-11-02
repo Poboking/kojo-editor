@@ -290,14 +290,16 @@ function sliceInlineComment(s: string): string {
 }
 
 /**
- * 赋值语句识别：`LOCAL(:n)? = RHS` 与 `ARG(:n)? = RHS` 等
- * （`== / != / <= / >=` 不匹配）。
- * v0.2 第七批：目标扩展到 ARG/ARGS（参数槽直线赋值——口上惯用法
- * `SIF !ARG / ARG = TARGET` 参数补位；静态叠加层不消费，
- * 内联解释器按顺序执行语义消费）。
- * 复合赋值（`+=` 等）→ 记为 opaque 载体的"失效点"（旧值不可知 → 之后读取降级 unknown）。
+ * 赋值语句识别：`LOCAL(:n)? = RHS` / `ARG(:n)? = RHS`（`== != <= >= <>` 不匹配；
+ * ARG/ARGS 系 v0.2 第七批扩的参数槽赋值，内联解释器按顺序执行消费）。
+ * 复合与自增族（KW-33 1103 补全）：`+= -= *= /= %= &= |= ^= '=` `<<= >>=` 与 `A++` / `A--` / `++A`，
+ * 记号表与 `kojo-sugar/native-display/statement.ts` 同源。
+ * **只有裸 `=` 产出具体值**，其余一律 opaque（旧值不可知 → 之后读取降级 unknown）。
+ * 逐族枚数与不收的族（动词写值 / 非字面下标 / 行首 `@`）见 `tests/assignments.test.ts`。
+ * 自增简写无右值 ⇒ 行内注释须在匹配前切（引号感知，与旧 RHS 同一条判据）。
  */
-const ASSIGN_RE = /^(LOCAL|LOCALS|RESULT|RESULTS|ARG|ARGS)(?::(\d+))?\s*([+\-*/%]?=)(?!=)\s*(.*)$/i;
+const ASSIGN_RE =
+  /^(?:(\+\+|--)\s*)?(LOCAL|LOCALS|RESULT|RESULTS|ARG|ARGS)(?::(\d+))?\s*(?:(\+\+|--)|('?(?:<<|>>|[+\-*/%&|^])?=)(?!=)\s*(.*))?\s*$/i;
 
 /** 从函数体原始行收集本地量赋值（结构事实；RHS 无法解析 → opaque，绝不抛） */
 export function collectAssignments(
@@ -325,19 +327,22 @@ export function collectAssignments(
     if (trimmed.length === 0 || trimmed.startsWith(';')) continue;
     if (trimmed.startsWith('@') || trimmed.startsWith('#') || trimmed.startsWith('$')) continue;
 
-    const m = ASSIGN_RE.exec(trimmed);
+    // 行内注释先切：自增简写没有右值，`; 注释` 只能在匹配前处理，否则整行匹配不上
+    const m = ASSIGN_RE.exec(sliceInlineComment(trimmed).trim());
     if (!m) continue;
-    const name = m[1]!.toUpperCase();
+    const name = m[2]!.toUpperCase();
     if (!ASSIGNABLE_LOCALS.has(name)) continue;
-    const index = m[2] ? Number(m[2]) : 0;
-    const op = m[3]!;
-    const rhs = sliceInlineComment(m[4] ?? '').trim();
-    if (rhs.length === 0) continue;
+    const index = m[3] ? Number(m[3]) : 0;
+    // 组 5 = 赋值运算符；组 4 / 组 1 = 后置 / 前置自增自减（三者互斥，全缺位 ⇒ 整行只是个裸引用，不是写值）
+    const op = m[5] ?? m[4] ?? m[1];
+    if (op === undefined) continue;
+    const rhs = (m[6] ?? '').trim();
+    if (m[5] !== undefined && rhs.length === 0) continue; // `LOCAL +=`（右值空）不是写值
 
     out.push({
       name: name as FunctionAssignment['name'],
       index,
-      expr: op === '=' ? parseExpression(rhs) : { kind: 'opaque', text: `${op} ${rhs}` },
+      expr: op === '=' ? parseExpression(rhs) : { kind: 'opaque', text: rhs.length > 0 ? `${op} ${rhs}` : op },
       text: rhs,
       line: i,
       context: contextOf(i),
