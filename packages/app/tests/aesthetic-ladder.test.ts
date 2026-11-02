@@ -318,6 +318,8 @@ describe('小方件的圆角与三态（≤24 见方一律 --radius-sm，且 hov
   const SMALL_SQUARES: readonly [string, Block[]][] = [
     ['.kit-icon-btn', KIT],
     ['.toast-close', HEAVY],
+    /* 1028 错误弹窗批新增的展开钮：与关闭叉同住右侧栏，同一族小方件 */
+    ['.toast-expand', blocks(read('shell-notices.css'))],
     ['.recent-remove', HEAVY],
     ['.update-notice-card-close', blocks(read('update-notice-card.css'))],
   ];

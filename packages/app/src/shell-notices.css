@@ -3,7 +3,8 @@
  * ----------------------------------------------------------------------------
  * 只管六件事，全部是**呈现**：
  *   ① 通知列的「让位」——模态/浮层在场时改锚左下（不动层级、不动 `--z-toast` 定义）；
- *   ② toast 的文案密度——标题 + 一行摘要 + 细节折进展开态（真壳实测排三行、断在「跨/度」中间）；
+ *   ② toast 的文案密度——收起两行（标题 + 一行摘要）、右侧 ⌄ 展开原文整段
+ *     （真壳实测自由换行排成三行、断在「跨/度」中间；1028 批把展开档补成看得见的一颗钮）；
  *   ③ 状态栏两组诊断计数分主次——次组（项目级约定计数）静息只留标签与在途状态，三枚数字点开看；
  *   ④ 插件状态行的重复「运行中」退场（绿点已承载同一信息，20 行重复文字是噪音）；
  *   ⑤ light / mint-dark 的模态遮罩——浅色模态压在深色 Monaco 上，磨砂底糊成一片灰带；
@@ -28,20 +29,35 @@
   max-width: min(400px, calc(100vw - 32px));
 }
 
-/* 正文改成两行形态：标题（人话短句）+ 摘要（剩余句子），图标与动作按钮仍钉第一行。
-   `.toast-message` 这个旧单行随本次形态变更退场：全仓 TS 零消费方（R5 核实），两份重/轻档
-   死规则已由 R6 债四同时删净（只删一边会让 `styles-split.equivalence.test.ts` 的 A/B/C 分叉）。 */
-.notification-shell .toast-body {
+.notification-shell .toast-main {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-0);
+}
+/* 右侧栏：展开钮与关闭叉**横排**钉第一行（1028 错误弹窗批，照 VSCode 通知的右缘）。
+   竖排会让每条 toast 的最小高度变成两枚 20px 钮叠起来（一行信息条白多出一行空高），
+   横排只吃宽度，而宽度在收起档本来就被省略号收着。 */
+.notification-shell .toast-gutter {
+  flex: none;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--space-0);
+}
+/* 动作按钮另起一行：与正文抢同一行时，两枚按钮并排正好吃掉 100+px，
+   而那一刻正是错误文案最长、最需要宽度的时候（磁盘被外部改动那类两个选择） */
+.notification-shell .toast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
-/* **不许词中间断行**：两行可见文本都走 nowrap + 省略号（旧形态是自由换行，
-   「超宽跨度」被切成「跨/度」就是这么来的）。断行不解决任何事，加宽也不解决——
-   真正的修法是把多余的字收进展开态，屏上只留一行。 */
+/* **收起档不许词中间断行**：两行可见文本都走 nowrap + 省略号（旧形态是自由换行，
+   「超宽跨度」被切成「跨/度」就是这么来的）。要看全文点右侧那颗 ⌄——展开档里
+   才允许折行（见 `.toast-full`）。 */
 .notification-shell .toast-head {
   min-width: 0;
   font-size: var(--fs-2);
@@ -64,27 +80,22 @@
   overflow-wrap: normal;
   word-break: normal;
 }
-/* 展开态（详情）：只有这里才允许折行，且只允许在**词**的边界断
-   （`break-word` = 单个 token 长过一整行才劈开；`break-all`/`anywhere` 会把「跨度」劈开，禁用）。 */
-.notification-shell .toast-fold {
-  margin-top: 2px;
+/* 展开档（1028 错误弹窗批）：渲染**调用方原文整段**，`pre-wrap` 保住换行；
+   只有这里才允许折行，且只允许在**词**的边界断（`break-word` = 单个 token 长过一整行才劈开；
+   `break-all`/`anywhere` 会把「跨度」劈开，禁用）。 */
+.notification-shell .toast-full {
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
-.notification-shell .toast-fold > summary {
-  color: var(--fg-dim);
-  font-size: var(--fs-0);
-  cursor: pointer;
-  list-style: none;
-}
-.notification-shell .toast-fold > summary::-webkit-details-marker {
+/* `hidden` 自带 display:none，但这两条在 flex 列里容易被本文件的 display 声明盖掉 ⇒ 显式钉住 */
+.notification-shell .toast-full[hidden],
+.notification-shell .toast-detail[hidden] {
   display: none;
 }
-.notification-shell .toast-fold > summary::before {
-  content: '▸';
-  margin-right: 4px;
-}
-.notification-shell .toast-fold[open] > summary::before {
-  content: '▾';
-}
+/* 技术原文（机器面）：展开档才上屏；收起档由悬停 title 那份承载 */
 .notification-shell .toast-detail {
   margin-top: var(--space-1);
   max-height: 40vh;
@@ -95,6 +106,40 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   word-break: normal;
+}
+
+/* 展开钮：与关闭叉同一族小方件（≤24 见方一律 --radius-sm + 三态齐，见美学阶梯闸）。
+   图标朝下 = 可展开；展开后转 180°（只动 transform，不重排）。 */
+.toast-expand {
+  flex: none;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+}
+.toast-expand:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.toast-expand:active:not(:disabled) {
+  background: var(--hover-strong);
+}
+.toast-expand:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.toast-expand svg {
+  transition: transform var(--dur-1) var(--ease-out);
+}
+.toast-expand[aria-expanded='true'] svg {
+  transform: rotate(180deg);
 }
 
 /* ===================== ① 模态在场时通知让位（行为避让 · 改位不降层） ===================== */

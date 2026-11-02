@@ -180,6 +180,54 @@ describe('视觉隐藏不许吞掉信息（读屏与右键复制仍要拿得到�
 });
 
 /**
+ * 1028 错误弹窗批（照 VSCode 通知）：收起两行 + 右侧 ⌄ 展开原文整段。
+ *
+ * 钉的是三件在 node 池量不到、但一改就静默坏掉的事：
+ *  - 展开档渲染的是**调用方原文**，不是 head + rest 拼回去（`：`/`⇒` 这类连接符会被拼丢
+ *    ⇒ "有损排版、无损信息"的判据破防）；
+ *  - ⌄ 带 aria-expanded / aria-controls（没有目标的 aria-controls 等于假按钮，键盘与读屏拿不到同一档）；
+ *  - 动作按钮另起一行（回到同行就是"文案最长的那一刻最没宽度"的老毛病）。
+ */
+describe('错误正文收起两行 + ⌄ 展开全文（1028 错误弹窗批）', () => {
+  const center = read('../src/ui/NotificationCenter.tsx');
+
+  it('收起档仍是标题 + 摘要；展开档渲染原文整段', () => {
+    expect(center).toContain('className="toast-head"');
+    expect(center).toContain('className="toast-summary"');
+    expect(center).toMatch(/className="toast-full"[\s\S]{0,80}\{n\.message\}/);
+    // 旧的 `<details>详情` 折法退场：同一个展开钮统管原文与技术原文
+    expect(center).not.toContain('toast-fold');
+  });
+
+  it('展开钮：aria-expanded / aria-controls 齐，且只在真有东西可展开时出现', () => {
+    expect(center).toContain('aria-expanded={open}');
+    expect(center).toContain('aria-controls={fullId}');
+    expect(center).toContain('canExpand ?');
+    expect(center).toContain('noticeCanExpand');
+  });
+
+  it('动作按钮住在 .toast-actions 行里（不再和正文抢同一行）', () => {
+    expect(center).toMatch(/className="toast-actions"[\s\S]{0,600}toast-action/);
+    // 动作仍走 noticeActionsOf：`action` 在前、`actions` 在后，与右键菜单同序
+    expect(center).toContain('noticeActionsOf(n)');
+  });
+
+  it('展开档才折行；收起档两行仍是 nowrap + 省略号', () => {
+    expect(noticesCss).toMatch(/\.notification-shell \.toast-full\s*\{[^}]*white-space:\s*pre-wrap/);
+    const head = /\.notification-shell \.toast-head\s*\{([^}]*)\}/.exec(noticesCss)?.[1] ?? '';
+    expect(head).toContain('white-space: nowrap');
+    expect(head).toContain('text-overflow: ellipsis');
+  });
+
+  it('展开钮与关闭叉同族：--radius-sm + hover / 按下 / 焦点三态', () => {
+    expect(noticesCss).toMatch(/\.toast-expand\s*\{[^}]*border-radius:\s*var\(--radius-sm\)/);
+    expect(noticesCss).toContain('.toast-expand:hover');
+    expect(noticesCss).toContain('.toast-expand:active:not(:disabled)');
+    expect(noticesCss).toMatch(/\.toast-expand:focus-visible\s*\{[^}]*--shadow-focus/);
+  });
+});
+
+/**
  * 底部浮层的竖序抬升（2026-10-24 组长真壳复验补）。
  *
  * 为什么单独立一段：R6 交付的 128 / 214 与 L05 的 122 都建立在「卡高 ≈ 86」这个**没量过的数**上，

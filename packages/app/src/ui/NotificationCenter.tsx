@@ -45,6 +45,10 @@ export interface NoticeInput {
    * 为什么要标题：真壳实测一条「结构着色这次没顶上…」在 400px 的 toast 里排成三行，
    * 断行断在「跨/度」中间——正文是**数据倾倒**而不是**一句话**。呈现层因此固定成
    * 「标题 + 一行摘要」，长句折进展开态与悬停，一条都不丢。
+   *
+   * 1028 错误弹窗批把"长句折进"从悬停升级成**看得见的一档**（照 VSCode 通知）：收起时
+   * 标题 + 摘要各一行，右侧一颗 ⌄ 展开成原文整段 + 技术原文。悬停 `title` 仍保留——
+   * 键盘/读屏之外的第三种读法，不是唯一出路。
    */
   readonly title?: string;
 }
@@ -151,6 +155,18 @@ function noticeTooltip(notice: NoticeInput): string | undefined {
 }
 
 /**
+ * 收起两行之后，还有没有没露出来的东西（决定右侧那颗 ⌄ 出不出现）。
+ *
+ * 三档任一命中就算「有」：摘要行非空（正文被切成两截）、有技术原文、或整句长过一行。
+ * 最后一条是**估的**：13px 正文在 360px 宽的 toast 里一行约 19 个汉字（右侧栏还占两枚钮），
+ * 取 18 作保守阈值。宁可多一颗（点开发现字都在），不可少一颗（正文被吃掉却无路读到）——
+ * 铁律 4 只许往这边错。
+ */
+function noticeCanExpand(message: string, summary: string, detail: string): boolean {
+  return summary !== '' || detail !== '' || message.trim().length > 18;
+}
+
+/**
  * 壳层通知中心（2026-10-11 写权限闭环批 P0；定稿 §九-3）。
  *
  * 壳层私有（不进内核事件表）：Provider + toast 渲染一体，任意壳层组件经
@@ -172,6 +188,11 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
    * 它还得画完 200ms 的淡出才真正离开。
    */
   const [exiting, setExiting] = useState<readonly number[]>([]);
+  /**
+   * 已展开全文的通知 id（1028 错误弹窗批）。与 `notices` 同一条生命周期：
+   * 通知离屏时由 `drop` 顺手划掉，不然 id 会在这张表里越积越多。
+   */
+  const [expanded, setExpanded] = useState<readonly number[]>([]);
   /** 退场计时器（按 id）。与上面 `timersRef` 分开：那本是 info 的 TTL，这本是动画时长。 */
   const exitTimersRef = useRef(new Map<number, number>());
   /** 退场要量的是**这一条自己的**计算样式，所以得摸到容器 */
@@ -180,6 +201,7 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
   /** 真正把一条从屏上摘掉（退场动画走完 / 减弱动效 / 无样式表时都是这里） */
   const drop = useCallback((id: number) => {
     setExiting((list) => list.filter((x) => x !== id));
+    setExpanded((list) => list.filter((x) => x !== id));
     setNotices((list) => list.filter((n) => n.id !== id));
   }, []);
 
@@ -198,6 +220,14 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
     },
     [drop],
   );
+
+  /**
+   * 展开 / 收起一条通知的全文。只是画面上换一档，**不动** `notices`（真源）——
+   * 展开态不参与淘汰也不延长 error 的常驻判定。
+   */
+  const toggleExpanded = useCallback((id: number) => {
+    setExpanded((list) => (list.includes(id) ? list.filter((x) => x !== id) : [...list, id]));
+  }, []);
 
   /**
    * 一键清掉屏上全部（右键菜单的「清除全部通知」；计时器由下面那个收敛 effect 一并收）。
@@ -320,6 +350,10 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
             const head = given === '' ? split.head : given;
             const summary = given === '' ? split.rest : n.message;
             const detail = n.detail === undefined ? '' : n.detail.trim();
+            const actions = noticeActionsOf(n);
+            const open = expanded.includes(n.id);
+            const canExpand = noticeCanExpand(n.message, summary, detail);
+            const fullId = `notice-full-${n.id}`;
             return (
               <div
                 key={n.id}
@@ -332,45 +366,68 @@ export function NotificationCenter({ children }: { children: ReactNode }): React
                 <span className="toast-icon" aria-hidden="true">
                   <Icon name={n.kind === 'error' ? 'error' : 'info'} size={16} />
                 </span>
-                <span className="toast-body">
-                  <span className="toast-head">{head}</span>
-                  {summary === '' || summary === head ? null : (
-                    <span className="toast-summary">{summary}</span>
+                <div className="toast-main">
+                  {/* 收起档：标题 + 摘要各一行（省略号收尾）；展开档只留下面那段原文，不重复 */}
+                  {open ? null : (
+                    <>
+                      <span className="toast-head">{head}</span>
+                      {summary === '' || summary === head ? null : (
+                        <span className="toast-summary">{summary}</span>
+                      )}
+                    </>
                   )}
-                  {/* 细节折进展开态：技术原文（机器面）逐字留在这里 + 悬停，正文只有一行人话 */}
+                  {/* 展开档渲染**调用方原文整段**：不拿 head + rest 拼回去（`：`/`⇒` 会被拼丢）。
+                      收起时 `hidden` 挂着 ⇒ display:none，读屏也不会把同一句念两遍。 */}
+                  <span className="toast-full" id={fullId} hidden={!open}>
+                    {n.message}
+                  </span>
+                  {/* 技术原文（机器面）逐字保留，只在展开档上屏；悬停 title 里也一直有一份 */}
                   {detail === '' ? null : (
-                    <details className="toast-fold">
-                      <summary>详情</summary>
-                      <div className="toast-detail">{detail}</div>
-                    </details>
+                    <div className="toast-detail" hidden={!open}>
+                      {detail}
+                    </div>
                   )}
-                </span>
-                {n.action ? (
+                  {/* 动作另起一行：与正文抢同一行时，文案最长的那一刻正是最没宽度的一刻 */}
+                  {actions.length === 0 ? null : (
+                    <div className="toast-actions">
+                      {actions.map((a, i) => (
+                        <button
+                          key={`${n.id}:${i}`}
+                          className="small toast-action"
+                          onClick={() => {
+                            dismiss(n.id);
+                            a.run();
+                          }}
+                        >
+                          {a.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="toast-gutter">
+                  {canExpand ? (
+                    <button
+                      type="button"
+                      className="ghost small toast-expand"
+                      aria-expanded={open}
+                      aria-controls={fullId}
+                      title={open ? '收起' : '展开全文'}
+                      aria-label={open ? '收起通知全文' : '展开通知全文'}
+                      onClick={() => toggleExpanded(n.id)}
+                    >
+                      <Icon name="chevron-down" size={13} />
+                    </button>
+                  ) : null}
                   <button
-                    className="small toast-action"
-                    onClick={() => {
-                      dismiss(n.id);
-                      n.action?.run();
-                    }}
+                    type="button"
+                    className="ghost small toast-close"
+                    title="关闭"
+                    onClick={() => dismiss(n.id)}
                   >
-                    {n.action.label}
+                    <Icon name="close" size={13} />
                   </button>
-                ) : null}
-                {(n.actions ?? []).map((a, i) => (
-                  <button
-                    key={`${n.id}:${i}`}
-                    className="small toast-action"
-                    onClick={() => {
-                      dismiss(n.id);
-                      a.run();
-                    }}
-                  >
-                    {a.label}
-                  </button>
-                ))}
-                <button className="ghost small toast-close" title="关闭" onClick={() => dismiss(n.id)}>
-                  <Icon name="close" size={13} />
-                </button>
+                </div>
               </div>
             );
           })}
