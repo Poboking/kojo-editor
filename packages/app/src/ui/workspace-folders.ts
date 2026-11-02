@@ -56,8 +56,8 @@ export interface WorkspaceFolder {
 
 /** `buildWorkspaceFolders` 的输入：五类根各自的原样来源（缺省 = 这一类没有根） */
 export interface WorkspaceFolderInput {
-  /** 游戏根（`project.rootDir`） */
-  readonly projectRoot: string;
+  /** 游戏根（`project.rootDir`）；**可选**（KW4A 批 2026-11-02 由必填放宽，两态判据见 `workspace-folders-project-coupling.test.ts`） */
+  readonly projectRoot?: string;
   /** 口上域（`project.kojoPaths`） */
   readonly kojoPaths?: readonly string[] | undefined;
   /** 存档目录（`project.savDir`；可能在、也可能没有） */
