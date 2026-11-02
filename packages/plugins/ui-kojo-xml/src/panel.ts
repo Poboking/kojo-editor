@@ -18,14 +18,23 @@
  */
 
 import { createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { KojoXmlService, PluginContext, UIPanelProps } from '@kojo/plugin-api';
+import type {
+  KojoXmlService,
+  PanelRowRovingHost,
+  PluginContext,
+  RowNavHostEvent,
+  UIPanelProps,
+} from '@kojo/plugin-api';
 import {
+  applyPanelRowNavFromEvent,
   attachGrowSentinel,
   growWindow,
   MORE_ROW_STYLE,
   MORE_ROW_TITLE,
   moreRowLabel,
+  PANEL_ROW_ATTR,
   shortPath,
+  syncRovingTabIndexes,
 } from '@kojo/plugin-api';
 import {
   buildPanelTree,
@@ -119,6 +128,9 @@ export function NavHitsList(props: NavHitsListProps): ReactNode {
             key: row.key,
             className: 'nav-hit-btn',
             title: row.chara.label,
+            // 行键盘协议（kw8b 1102 批）：角色行是名单里的一行，"打开"= 它自己的展开收起
+            // （折叠真源仍只住 `openCharas`，键盘不另立第二套折叠态）
+            [PANEL_ROW_ATTR]: '',
             onClick: () => props.onToggleChara(row.chara.id),
           },
           h('span', { className: 'nav-hit-name' }, `${row.open ? '▾' : '▸'} ${row.chara.label}`),
@@ -136,6 +148,7 @@ export function NavHitsList(props: NavHitsListProps): ReactNode {
             className: 'nav-hit-btn',
             style: { paddingLeft: 14 },
             title: row.file.path,
+            [PANEL_ROW_ATTR]: '',
             onClick: () => props.onToggleFile(row.file.id),
           },
           h('span', { className: 'nav-hit-name' }, `${row.open ? '▾' : '▸'} ${row.file.fileName}`),
@@ -157,6 +170,10 @@ export function NavHitsList(props: NavHitsListProps): ReactNode {
               style: { paddingLeft: 28 },
               // 悬停给台词首段：面板窄，正文只在 title 里露出（不截断数据，只截断显示）
               title: row.command.text.slice(0, 200),
+              // 行键盘协议（kw8b 1102 批）：条目行的名单位 = **跳转那一枚**（它的 `onClick`
+              // 就是唯一的 reveal 通路）；右侧「预览」是同一行的第二枚动作钮，不进名单——
+              // 两枚都收的话 ↑↓ 会在同一条口上原地打转（一行 = 一个名单位）。
+              [PANEL_ROW_ATTR]: '',
               onClick: () => props.onReveal(row.command.filePath, row.command.line, row.command.column),
             },
             h('span', { className: 'nav-hit-name' }, row.command.label),
@@ -228,6 +245,26 @@ export function createKojoXmlPanel(deps: KojoXmlPanelDeps): (props: UIPanelProps
      * 只在「显示更多」/触底时按步长增长；树换小而残窗无碍——窗口对 total 取 min。
      */
     const [windowLimit, setWindowLimit] = useState<number | undefined>(undefined);
+
+    /**
+     * 行键盘协议（kw8b 1102 批）：名单容器 = 面板根，键位判据、合成期让位、`select`/
+     * `textarea` 让位与"打开敲行自己的 `onClick`"全住契约层（`sugar-panels.ts` 行键盘区块）
+     * ——与宿主检索/问题面板、约定校验面板、函数树面板同一把尺子，本插件零复制。
+     *
+     * 名单 = **画出来的行**：角色行 / 文件行 / 条目行的跳转钮 / 诊断汇总钮 / 诊断条目钮。
+     * 三处刻意不进名单，各有各的理由：
+     * - `NAV_WINDOW` 窗口之外没挂 DOM 的条目（kw9 规模批的收口面，语义不动）；
+     * - 条目行右侧那枚「预览」（同一行的第二枚动作钮，收进来会让 ↑↓ 在同一条上打转）；
+     * - 「显示更多」哨兵（照 `ui-convention-report` 同一条口径：它是窗口控制件不是结果行）。
+     *
+     * Right/Left 一律不接：折叠真源住 `openCharas/openFiles`，键盘侧再算一层展开态就是
+     * 第二套折叠真相（函数树那一批已就此明确放弃）。
+     */
+    const rootRef = useRef<PanelRowRovingHost | null>(null);
+    // 每帧渲染后再对齐一次漫游位（折叠 / 增窗都换名单；键盘那一腿由判据层就地办结）
+    useEffect(() => {
+      syncRovingTabIndexes(rootRef.current);
+    });
 
     // 扫完 / 刷新由服务通知：面板不轮询，也不自己猜"什么时候该重读"
     useEffect(() => {
@@ -434,6 +471,8 @@ export function createKojoXmlPanel(deps: KojoXmlPanelDeps): (props: UIPanelProps
         'button',
         {
           className: 'nav-hit-btn',
+          // 诊断汇总那一行也是名单里的一行：它的 `onClick` = 既有的展开收起（F4/F8 敲它 = 展开诊断）
+          [PANEL_ROW_ATTR]: '',
           onClick: () => setShowDiagnostics((open) => !open),
           title: '展开诊断（前 50 条）',
         },
@@ -452,6 +491,8 @@ export function createKojoXmlPanel(deps: KojoXmlPanelDeps): (props: UIPanelProps
                   {
                     className: 'nav-hit-btn',
                     title: `${row.code}（点击跳转）`,
+                    // 画出来的诊断条目同样在名单里（同一把尺子：跳转仍只走这一枚的 onClick）
+                    [PANEL_ROW_ATTR]: '',
                     onClick: () => reveal(row.path, row.line, row.column),
                   },
                   h('span', { className: `nav-badge ${row.severity}` }, row.severity),
@@ -466,7 +507,21 @@ export function createKojoXmlPanel(deps: KojoXmlPanelDeps): (props: UIPanelProps
 
     return h(
       'div',
-      { className: 'panel-kojo-nav panel-kojo-xml' },
+      {
+        className: 'panel-kojo-nav panel-kojo-xml',
+        // 行键盘协议（kw8b 1102 批）：↑↓ 移焦点 / F4·F8 移过去并当场打开（走行自己的
+        // onClick）；`tabIndex=-1` 照 `FileTree.tsx` 先例——不是给 Tab 用的，是给
+        // "把焦点交给面板"那条腿。窗口外没挂 DOM 的条目天然不在名单上。
+        ref: rootRef,
+        tabIndex: -1,
+        onKeyDown: (e: RowNavHostEvent) => {
+          applyPanelRowNavFromEvent(e);
+        },
+        onFocus: (e: { currentTarget: PanelRowRovingHost | null }) => {
+          // 鼠标点行 / 「显示更多」抢回焦点时对齐漫游位（Tab 序只留踩住的那一行）
+          syncRovingTabIndexes(e.currentTarget);
+        },
+      },
       h('div', { className: 'nav-toolbar' }, h('span', { className: 'nav-status' }, panelStatsLine(tree)), refreshButton),
       h('input', {
         className: 'nav-search',
