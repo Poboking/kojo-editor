@@ -425,6 +425,28 @@ describe('豁免契约：有理由、指得出下一步、不过期', () => {
     expect(sourceOf('ui/CallHierarchyOverlay.tsx').text).toContain('collectCallHierarchy(');
   });
 
+  /**
+   * KW-18 段③（2026-11-03）：那枚注册 shim 整块出账，这里钉住"不许悄悄回来"。
+   *
+   * 判性过程见提交信息；留在这儿的理由是——死码留在树里，矩阵就只能写半真半假的一句话
+   * （它唯一的读者就是那句将来时）。复活它的正当条件只有一条：装机包真长出
+   * `languages.registerCallHierarchyProvider` 那一格（PITFALLS §83 的 grep 尺子中，
+   * 0.57 现值是全文 0 处 `CallHierarchy`），届时按窄门流程重开一批，别在这里续租。
+   */
+  it('ERB 调用层级不许有第二种实现：注册 shim 已删且不再回宿主树（KW-18 段③）', () => {
+    expect(existsSync(path.join(SRC_ROOT, 'monaco', 'erb-callhierarchy-provider.ts'))).toBe(false);
+    expect(
+      existsSync(path.join(REPO_ROOT, 'packages', 'app', 'tests', 'erb-callhierarchy-provider.test.ts')),
+    ).toBe(false);
+    expect(
+      SOURCE_FILES.filter((file) => /ErbCallHierarchyProvider|erb-callhierarchy-provider/.test(file.text)).map(
+        (file) => file.rel,
+      ),
+      '宿主树里又出现那枚注册 shim 的名字（引用也算）',
+    ).toEqual([]);
+    expect(sourceOf(GLOBAL_PROVIDERS).text).not.toContain('installErbCallHierarchyProvider');
+  });
+
   it('豁免项不在 descriptor 声明表里（声明 = 已交付，不是"想要"）', () => {
     for (const { capability } of exemptionsOf(ERB_LANGUAGE_ID)) {
       expect(ERB_CAPABILITIES, `ERB/${capability} 标了豁免却写进了声明表`).not.toContain(capability);
