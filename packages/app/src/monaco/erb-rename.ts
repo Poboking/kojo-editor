@@ -16,6 +16,8 @@ import { createPositionIndex } from '@kojo/kojo-core';
 import { ERB_LANGUAGE_ID } from './erb-language';
 import { reject } from './rename-rejection';
 import { erbFactsPathOf } from './erb-completion-declared';
+import type { RenameLandedInput, RenamePreviewInput } from '../ui/rename-preview';
+import { renamePlanFilesOf } from '../ui/rename-preview';
 import {
   findNameTokenPositions,
   isCallShapedMention,
@@ -88,6 +90,25 @@ import {
  * 供方交回的编辑带 `occurrenceKind`；`mention` 且名字后不是 `(` 的 ERB 词法出现点是台词
  * 散文 ⇒ 跳过（判据 `isCallShapedMention` 单源，与搜索替换共用）。`.kojo` 腿的 mention 是
  * 探针证明的真引用，不受此闸影响。
+ *
+ * ## 改动清单上屏（KW-12，2026-11-03）：改之前看得见改哪里
+ *
+ * standalone 的 rename 控制器没有预览面：provider 一返回就把编辑糊进已开标签，未打开文件
+ * 更是在这一格里就直接写盘 ⇒ 多文件改名在按下回车**之前**用户看不到清单。本腿因此在两个
+ * 拍点把数据交给呈现层（`handlers.onRenamePreview` / `onRenameLanded`，文案与订阅都在
+ * `ui/rename-preview.ts`，本文件只递读数）：
+ *
+ * 1. **求值那一拍**（`resolveRenameLocation` 命中之后、输入框弹出之前）：问**同一枚** `rename`
+ *    成员拿方言面的编辑集（`newName` 用原词自问自答——插件对"改回自己"是合法判定，落的还是
+ *    同一批坐标），过**同一个** `planReferenceWrites` 闸门 ⇒ 逐文件「几处 / 可不可写 /
+ *    开没开标签」的清单。糖源腿**不**在这一拍跑（`collectKojoLeg` 要枚举并读回全项目
+ *    `.kojo1`，会把输入框卡住），所以这条清单如实标 `deferred`，落地那条再交全表。
+ * 2. **落地之后**：闭文件实写数 / 编辑器内待应用处数 / 陈旧跳过 / 散文跳过 / io 写失败逐条
+ *    ——过去只有 `console.warn` 的四样，屏上从此有读数。
+ *
+ * 只读落点另有一条**硬回执**：`readOnlyFilesReason` 现在把「哪几个文件、各几处」点名进
+ * Monaco 的拒绝信息条（文案真源仍在 `ui/reference-utils.ts`，旧断言的
+ * 「n 个文件只读未纳入」前缀逐字保留），不再只报一个数。
  */
 
 /* ============================== 纯逻辑：编辑分组与只读剔除 ============================== */
@@ -360,6 +381,26 @@ export interface ErbRenameHandlers {
   kojoReferences?(
     probe: KojoReferenceProbe,
   ): Promise<readonly EditorSymbolLocation[]> | readonly EditorSymbolLocation[];
+  /**
+   * **改动清单（KW-12）· 预览拍**：求值命中之后、输入框弹出之前递出逐文件清单。
+   *
+   * 缺席 = 不上屏（本腿的落地行为一字不变——预览是**只读的一问**，不写盘、不改编辑集）。
+   * 抛错被吞（清单炸了不许把 F2 一起带走）。
+   */
+  onRenamePreview?(summary: RenamePreviewInput): void;
+  /**
+   * **改动清单（KW-12）· 落地拍**：编辑算完、交回 Monaco 之前递出"真的落到了哪里 + 哪些没落"。
+   *
+   * 陈旧跳过 / 散文跳过 / 闭文件写失败过去只有 `console.warn`，这一枚把它们抬到屏上（铁律 4）。
+   */
+  onRenameLanded?(report: RenameLandedInput): void;
+  /**
+   * 一句"为什么这一份写不进去"（{@link renamePlanFilesOf} 的呈现用）。
+   *
+   * **不是第二把可写性尺子**：能不能写只由 `isWritable` 判过，这里只在判完不可写之后
+   * 拿区域分野（`ui/file-area.ts`）补一句人话。缺席 = 只点名文件不解释原因。
+   */
+  describeUnwritable?(path: string): string;
 }
 
 /** live model 上的现文本验证：该列区间现在是不是这个名字（大小写不敏感；越界 = 不匹配） */
@@ -464,6 +505,7 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
         };
       }
       const target = result.target;
+      publishPreview(model, position, target);
       return {
         range: {
           startLineNumber: target.line,
@@ -484,6 +526,60 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
       }
     },
   };
+
+  /**
+   * 预览拍（KW-12）：把"这次改名会动哪些文件 × 各几处 / 哪些写不进去"在输入框弹出**之前**交出去。
+   *
+   * 三条纪律：
+   * - 问的是**同一枚** `rename` 成员、过的是**同一个** `planReferenceWrites` 闸门
+   *   （预览与落地之间不许有第二套判据，否则清单会说谎）；
+   * - `newName` 用原词自问自答（插件对"改回自己"合法，symbols.ts 的 `labelRenameRejection`
+   *   对同名直接放行），拿的是**同一批坐标**，与用户随后输入的名字无关；
+   * - **不带 `related`** ⇒ 不跑糖源腿（`collectKojoLeg` 要枚举读回全项目 `.kojo1`，
+   *   这一拍在按键手感上）⇒ 清单如实标 `deferred`，落地那条交全表。
+   *
+   * 任何异常（含呈现面抛错）都吞成一条 `console.warn`：预览炸了不许把 F2 一起带走。
+   */
+  function publishPreview(
+    model: Monaco.editor.ITextModel,
+    position: Monaco.Position,
+    target: NonNullable<EditorRenameTargetResult['target']>,
+  ): void {
+    if (handlers.onRenamePreview === undefined) return;
+    try {
+      const requestPath = pathOf(model);
+      if (requestPath.length === 0) return;
+      const result = handlers.resolveRename({
+        kind: 'rename',
+        path: requestPath,
+        text: modelText(model),
+        line: position.lineNumber,
+        column: position.column,
+        newName: target.text,
+        project: projectOf(handlers),
+        ...(safeLanguageId(model) === undefined ? {} : { languageId: safeLanguageId(model)! }),
+        ...(safeVersionId(model) === undefined ? {} : { version: safeVersionId(model)! }),
+        related: undefined,
+      });
+      if (!result || result.rejectReason !== undefined) return; // 拒绝由 Monaco 的信息条说，不重复
+      const plan = planReferenceWrites(
+        mergeOccurrences([occurrencesOf(result.edits, requestPath)]),
+        handlers.isWritable,
+      );
+      if (plan.writable.length + plan.readOnlyDetail.length === 0) return;
+      handlers.onRenamePreview({
+        oldName: target.text,
+        files: renamePlanFilesOf(
+          plan,
+          (path) => handlers.openModelFor(path) !== undefined,
+          handlers.describeUnwritable,
+        ),
+        deferred: target.scope !== 'label',
+      });
+    } catch (e: unknown) {
+      console.warn(`[erb-rename] 改动清单预览失败（不影响改名本身）：${errorText(e)}`);
+    }
+  }
 
   async function provideEdits(
     model: Monaco.editor.ITextModel,
@@ -545,7 +641,8 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
       handlers.isWritable,
     );
     if (plan.readOnlyFiles.length > 0) {
-      return reject(readOnlyFilesReason(plan.readOnlyFiles.length, '重命名'));
+      // 逐条点名（KW-12）：光报数不报名，作者面对一句计数只能猜目录；闸门与文案真源都未动
+      return reject(readOnlyFilesReason(plan.readOnlyFiles.length, '重命名', plan.readOnlyDetail));
     }
 
     const edits: Monaco.languages.IWorkspaceTextEdit[] = [];
@@ -553,6 +650,10 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
     const writeFailures: string[] = [];
     /** 已经落到盘上的闭文件数（>0 ⇒ 绝不能再返回 rejectReason，见模块头注） */
     let landedFiles = 0;
+    /** 经内核 io 真的写回磁盘的闭文件落点数（`applied` 合计） */
+    let landedOccurrences = 0;
+    /** 陈旧跳过合计：闭文件通道 + 标签通道（两腿各自数，汇总出声一次） */
+    let staleTotal = 0;
     /** 非调用形 mention（散文）跳过计数——两通道各自计数，汇总出声一次 */
     let proseSkipped = 0;
     /** 标签腿的陈旧处数：标签作用域是"整段一起改"的事实，一处对不上就整次取消（旧行为） */
@@ -569,8 +670,12 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
             newName,
             normalizedName,
           );
-          if (applied > 0) landedFiles++;
+          if (applied > 0) {
+            landedFiles++;
+            landedOccurrences += applied;
+          }
           proseSkipped += skippedProse ?? 0;
+          staleTotal += stale;
           if (stale > 0) {
             console.warn(`[erb-rename] '${group.path}' 有 ${stale} 处引用因索引陈旧跳过（实改 ${applied} 处）`);
           }
@@ -584,6 +689,7 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
       for (const occurrence of group.occurrences) {
         if (result.oldName !== undefined && !liveEditMatches(open, occurrence, result.oldName)) {
           // 标签腿：整段一起改的事实缺了一处 ⇒ 计数后整次取消（不静默少改一个跳转点）
+          staleTotal++;
           if (isLabel) labelStale++;
           continue;
         }
@@ -641,7 +747,40 @@ export function installErbRename(monaco: typeof Monaco, handlers: ErbRenameHandl
         `[erb-rename] '${normalizedName}'：${proseSkipped} 处 ERB 词法 mention 非调用形（名字后无 "("），按「改名不重写散文」跳过`,
       );
     }
+    landed({
+      oldName: result.oldName ?? normalizedName,
+      newName,
+      files: renamePlanFilesOf(
+        plan,
+        (path) => handlers.openModelFor(path) !== undefined,
+        handlers.describeUnwritable,
+      ),
+      landedClosedFiles: landedFiles,
+      tabEdits: edits.length,
+      stale: staleTotal,
+      proseSkipped,
+      failures: writeFailures,
+      deferred: false,
+    });
     return { edits };
+  }
+
+  /**
+   * 落地拍的清单（KW-12）：**只报已经发生的事实**，不参与任何判定。
+   *
+   * 三个读数各自指回一条既有通道，不另数一遍：`landedClosedFiles` = 内核 io 真写回的闭文件数
+   * （`applied > 0` 才计，零改动不写盘 ⇒ 不虚报）、`tabEdits` = 交回 Monaco 的 `WorkspaceEdit`
+   * 条数（编辑器内待应用，**未保存** ⇒ 句子必须写"未保存"，不许报成已落盘）、
+   * `stale` / `proseSkipped` / `failures` = 过去只进 `console.warn` 的三样降级。
+   * `deferred` 在这一拍恒为假：糖源腿真的跑过了，落点与只读闸门都并进同一张表。
+   */
+  function landed(report: RenameLandedInput): void {
+    if (handlers.onRenameLanded === undefined) return;
+    try {
+      handlers.onRenameLanded(report);
+    } catch (e: unknown) {
+      console.warn(`[erb-rename] 落地清单上屏失败（改动本身已送达）：${errorText(e)}`);
+    }
   }
 
   const sub = monaco.languages.registerRenameProvider(ERB_LANGUAGE_ID, provider);

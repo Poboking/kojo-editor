@@ -90,6 +90,10 @@ import { reportFormatDegradation } from './format-notice-ledger';
 // W8 XLANG-RENAME 的宿主侧：闭文件落盘的唯一通道（`ClosedFileIo`）与跨语言腿的取数
 // （枚举 + 读文 + 问槽，判读零宿主知识；根口径与检索面板同源）
 import { type ClosedFileIo } from './reference-utils';
+// KW-12 改动清单（重命名预览 + 落地读数 + 不可写为什么）：文案与订阅都住
+// `ui/rename-preview.ts`，装配层只递数据 + 一枚区域读数（判定仍是内核 io 那一把尺子）。
+import { reportRenameLanded, reportRenamePreview, unwritableReasonOf } from './rename-preview';
+import { fileWritableArea } from './file-area';
 import { kojoReferencesViaSlot, listKojoSourceTexts } from './kojo-source-scan';
 import { setReferenceTally } from './reference-tally-store';
 import { collectDocumentSymbols, installDocumentSymbolProvider } from '../monaco/kojo-symbols';
@@ -2564,6 +2568,21 @@ export function ensureGlobalProviders(options: GlobalProviderOptions = {}): void
         const kernel = requireKernel();
         return kojoReferencesViaSlot(kernel.slots.query('ui.editor.languageService'), kernel, probe);
       },
+      /* ---- KW-12 改动清单上屏（2026-11-03）----
+       *
+       * 预览拍在 `resolveRenameLocation`（按下 F2、输入框弹出**之前**）、落地拍在编辑算完之后；
+       * 两拍都只递写计划已经算好的读数，**没有第二次可写性判定**（闸门仍是上面那枚
+       * `isWritable: requireKernel().io.isWritable`，与保存按钮同源）。
+       * `describeUnwritable` 只回答"这一份落在哪一区"（`ui/file-area.ts`，状态栏胶囊同一把尺子），
+       * 它永远在 `isWritable` 判为不可写之后才被问 —— 区域不能写、也不写"能不能写"。
+       */
+      onRenamePreview: (summary) => {
+        reportRenamePreview(summary);
+      },
+      onRenameLanded: (report) => {
+        reportRenameLanded(report);
+      },
+      describeUnwritable: (path) => unwritableReasonOf(fileWritableArea(requireKernel(), path)),
     }));
     // K2 batch-9（ERB-HIGHLIGHT-SELECT）：ERB 侧同符号高亮 + 结构化扩选。
     // 两枚都是**编辑器语言服务**，与结构层/2.0 开关无关（不进 `isKojo2CutoverEnabled()` 块），

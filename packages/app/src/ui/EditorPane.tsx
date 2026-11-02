@@ -46,6 +46,9 @@ import { useNotify } from './NotificationCenter';
 import { subscribeFormatNotices } from './format-notice-ledger';
 // 批次十 S6：大文件档位降级 → 通知中心（去重与文案都在台账侧，见该文件头注）
 import { reportLargeFileTier, subscribeLargeFileNotices } from './large-file-notice';
+// KW-12：F2 改动的「哪些文件 × 几处」清单（预览拍 + 落地拍）→ 通知中心
+// （行序与文案都住 `ui/rename-preview.ts`，本文件只订根通知中心那枚 `notify`）
+import { subscribeRenameNotices } from './rename-preview';
 import { SaveWarningDialog } from './SaveWarningDialog';
 import { applySizeTier, quickSuggestionsFor } from './editor-options';
 import { AUTOSAVE_IDLE_MS, decideAutosave, loadAutosavePref } from './autosave-pref';
@@ -498,6 +501,13 @@ export function EditorPane({
    * 同文件同档只提示一遍）；这里只订根通知中心那枚 `notify`，三个落档点各报一次。
    */
   useEffect(() => subscribeLargeFileNotices(notify), [notify]);
+  /**
+   * F2 改名的「哪些文件 × 几处」清单必须**改之前**就看得见（KW-12，铁律 4 的同一口径）：
+   * 求值拍（输入框弹出之前）与落地拍（送达之后）的两条读数都由 `monaco/erb-rename.ts` 递出，
+   * 行序、摘要与"为什么这一份写不进去"全部住 `ui/rename-preview.ts`；这里只订根通知中心那枚
+   * `notify`（与格式化让路 / 大文件降级同一形态 ⇒ 多枚标签共用一条订阅，不重复上屏）。
+   */
+  useEffect(() => subscribeRenameNotices(notify), [notify]);
   /**
    * 主题偏好（反馈 3）：`THEME_IDS` 的每一档与 `monaco/theme.ts` 的每一套主题
    * 一一对应；偏好一变就把 Monaco 全局主题换过去（同页所有编辑器实例一起换）。
