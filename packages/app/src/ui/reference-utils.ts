@@ -276,11 +276,27 @@ export interface OccurrenceFileGroup {
   readonly occurrences: readonly ReferenceOccurrence[];
 }
 
+/**
+ * 只读落点的一行（KW-12 重命名预览：清单要「哪几个文件 × 几处」，
+ * 光有路径说不出"改不到的是哪几处"）。
+ */
+export interface ReadOnlyOccurrenceGroup {
+  readonly path: string;
+  readonly occurrences: number;
+  /** 语言侧（与 `OccurrenceFileGroup.language` 同口径）：只读行也得说得出它是方言面还是糖源面 */
+  readonly language: ReferenceLanguage;
+}
+
 /** 写计划：可写文件的分组（待送达）+ 只读文件清单（铁律 4：不静默） */
 export interface ReferenceWritePlan {
   readonly writable: readonly OccurrenceFileGroup[];
   /** 只读文件（不是出现点数）——非空 ⇒ 调用方必须整次取消 */
   readonly readOnlyFiles: readonly string[];
+  /**
+   * 只读落点的逐文件处数（KW-12 additive：同一次走图、同一枚 `isWritable` 闸门顺手记的账，
+   * **不是第二次判定**）。旧消费方只读 `readOnlyFiles`，零改动；要"点名是哪几处"的呈现面读这枚。
+   */
+  readonly readOnlyDetail: readonly ReadOnlyOccurrenceGroup[];
 }
 
 /**
@@ -310,10 +326,13 @@ export function planReferenceWrites(
   isWritable: (path: string) => boolean,
 ): ReferenceWritePlan {
   const groups = new Map<string, ReferenceOccurrence[]>();
-  const readOnly = new Set<string>();
+  const readOnly = new Map<string, { occurrences: number; language: ReferenceLanguage }>();
   for (const occ of occs) {
     if (!isWritable(occ.filePath)) {
-      readOnly.add(occ.filePath);
+      // 只读文件：只记处数与语言侧，绝不进分组（同一枚闸门顺手记账，不是第二次判定）
+      const kept = readOnly.get(occ.filePath);
+      if (kept === undefined) readOnly.set(occ.filePath, { occurrences: 1, language: occ.language });
+      else kept.occurrences++;
       continue;
     }
     let list = groups.get(occ.filePath);
@@ -329,16 +348,39 @@ export function planReferenceWrites(
       language: list[0]!.language,
       occurrences: list,
     })),
-    readOnlyFiles: [...readOnly],
+    readOnlyFiles: [...readOnly.keys()],
+    readOnlyDetail: [...readOnly].map(([path, kept]) => ({
+      path,
+      occurrences: kept.occurrences,
+      language: kept.language,
+    })),
   };
 }
 
 /**
  * 「只读未纳入」的唯一文案（rename 与替换共用；REN-1 取证的原句保留在其中，
  * 旧断言 `toContain('n 个文件只读未纳入')` 零改动通过）。
+ *
+ * `detail`（KW-12 additive）缺席时与改前**逐字同形**；给了就把落点逐条点名到
+ * 「文件（n 处）」——铁律 4 的那句"不许静默"不止是"要说有几个"，还得说得出**是哪几个**，
+ * 否则作者面对一句计数只能猜目录。清单有上限（{@link READ_ONLY_DETAIL_MAX_FILES}）：
+ * Monaco 的拒绝回执是一行信息条，几百枚文件名会把真正的原因挤出屏幕。
  */
-export function readOnlyFilesReason(count: number, action: string): string {
-  return `${count} 个文件只读未纳入，整次${action}取消（部分改名会造成同名分叉）；解锁对应目录后重试`;
+export const READ_ONLY_DETAIL_MAX_FILES = 8;
+
+export function readOnlyFilesReason(
+  count: number,
+  action: string,
+  detail?: readonly ReadOnlyOccurrenceGroup[],
+): string {
+  const base = `${count} 个文件只读未纳入，整次${action}取消（部分改名会造成同名分叉）；解锁对应目录后重试`;
+  if (detail === undefined || detail.length === 0) return base;
+  const named = detail
+    .slice(0, READ_ONLY_DETAIL_MAX_FILES)
+    .map((file) => `'${file.path}'（${file.occurrences} 处）`)
+    .join('、');
+  const rest = detail.length - READ_ONLY_DETAIL_MAX_FILES;
+  return `${base}——未纳入的是：${named}${rest > 0 ? ` 等 ${rest} 个文件` : ''}`;
 }
 
 /**
