@@ -15,6 +15,20 @@
  * 2. **调用上下文**：`ARG / ARGS` 引用（裸名 ≡ 0 号槽）按注入的
  *    `ReplayCallContext` 取值；未提供 / 未覆盖的槽位 → unknown('call-context')。
  *    （默认不猜测 0：转发自路由层的值是场景输入，编辑器无从推断。）
+ *    **KW-28 1103 判性读数**（真语料 K49 × save03 · 11,685 枚谓词 / 1,356 函数）：
+ *    本族 858 枚，分布在 **131 个函数**（不是几枚助手函数：单函数最多 38 枚、前 10 名
+ *    合计 250 枚＝29%，17 个函数只有 1 枚）——即各角色自己的 `M_KOJO*_EVENT_K*_*`
+ *    入口函数，谓词形态是 `SELECTCASE ARG` 这类"按本次调用的 buffer 分支"。
+ *    846 枚走 `!callContext`（路由模板里没有确定槽 / 协议不认识该函数名），12 枚走
+ *    "已注入但没填这一格"。逐枚核过路由层的转发链（全语料 522 处 `KOJO_MESSAGE_SEND`
+ *    调用点）：同一 `(种类, 时机)` 键的转发实参**在不同调用点取值不同**（`EVENT|34`
+ *    有 29 处调用点，buffer1＝32 / 30 / 31 / 7 / 1 / 2 …），且 buffer 位常是调用方的
+ *    运行期变量（`Activity_Type:ARG`）；路由层自身对 `ARG:3` / `ARG:4` **只有读没有写**。
+ *    ⇒ 这一族是**场景输入**，不是求值能力缺口：严格判据（该键全语料唯一调用点 **且**
+ *    被引用的那一格是字面量）只覆盖 **9 / 858 枚＝1%**，且它依赖"调用点枚举完整"这一
+ *    静态无从自证的命题 ⇒ **不收**（假命中比未知贵）。红线：任何"把某一次调用的实参
+ *    当作该槽的值"的捷径都要先过 `call-protocol.test.ts` 的那枚"槽值只能来自路由确定
+ *    事实"闸（判据在测试里，读数在这里，两边都不许放宽）。
  *
  * 全部只读：叠加层绝不修改视图；求值复用 evaluate.ts（含 Kleene 语义）。
  */
@@ -124,15 +138,27 @@ export function createFunctionOverlay(opts: CreateOverlayOptions): OverlayReader
       return { kind: 'unknown', unknown: { code: 'call-context', message: `调用参数槽位无法解析：${text}` } };
     }
     if (!callContext) {
+      // KW-28 1103：旧文案只说"未提供"，读起来像"谁忘了给"——实际是**这一格的值取决于
+      // 本次调用的实参**，而回放既没有调用栈（存档只有状态）也无从知道是哪一处调用进来
+      // 的。把因果写实，免得作者去找一个并不存在的"提供入口"。
       return {
         kind: 'unknown',
-        unknown: { code: 'call-context', message: `ARG/ARGS 为调用参数，未提供调用上下文：${text}` },
+        unknown: {
+          code: 'call-context',
+          message: `ARG/ARGS 为调用参数，未提供调用上下文：${text}（这一格的值由本次调用的实参决定；存档里只有状态、没有调用栈，静态也无从确定是哪一处调用带进来的值 ⇒ 不猜）`,
+        },
       };
     }
     const arr = name === 'ARG' ? callContext.ints : callContext.strs;
     const v = arr?.[slot];
     if (v === undefined) {
-      return { kind: 'unknown', unknown: { code: 'call-context', message: `调用上下文未覆盖该槽位：${text}` } };
+      return {
+        kind: 'unknown',
+        unknown: {
+          code: 'call-context',
+          message: `调用上下文未覆盖该槽位：${text}（注入的实参只填了部分槽位；没填的这一格仍取决于本次调用 ⇒ 不猜，也不借用相邻槽位的值）`,
+        },
+      };
     }
     return { kind: 'value', value: v };
   };

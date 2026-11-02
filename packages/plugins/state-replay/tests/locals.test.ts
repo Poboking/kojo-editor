@@ -194,4 +194,43 @@ describe('叠加层 · 调用上下文注入', () => {
     expect(v.kind).toBe('unknown');
     if (v.kind === 'unknown') expect(v.unknown.code).toBe('call-context');
   });
+
+  /**
+   * **KW-28 1103 红线闸 A**：注入的 `0` / `''` 是**真实实参**（引擎语义：省略的签名槽
+   * 收默认值 0/''，见 `plugin-api/src/replay.ts` 的 `ReplayCallContext` 注释与
+   * `inline.ts` 的缺省槽值），不许被当成"未提供"而退化成 unknown。
+   * 这一枚同时钉住反方向：不许为了"少报未知"把 undefined 悄悄当 0——两者是不同事实。
+   */
+  it('注入的 0 / 空串照判为值（0 ≠ 未提供）', () => {
+    const zero: ReplayCallContext = { ints: [0], strs: [''] };
+    const overlay = createFunctionOverlay({ detail: makeDetail([]), callContext: zero, baseRead })!;
+    expect(overlay(ref('ARG'), TOP)).toEqual({ kind: 'value', value: 0 });
+    expect(overlay(ref('ARGS'), TOP)).toEqual({ kind: 'value', value: '' });
+  });
+
+  /**
+   * **KW-28 1103 红线闸 B**：真语料上本族 858 枚（K49 × save03）里，`ARG` 的缺省槽值
+   * 那一档**一次都收不得**——顶层口上函数的槽是路由层转发的场景 buffer，同一 `(种类,时机)`
+   * 键在不同调用点取值不同（`EVENT|34` 实测 29 处调用点）。内联被调函数那一层"缺省槽＝0"
+   * 是引擎 `ConvertArg` 的事实（调用点实参表已知），**不许**把它搬到顶层回放来把
+   * `IF ARG == 0` 这类判据蒙成"假"。这条判据钉的就是那条搬运：没有上下文 ⇒ 一律 unknown。
+   */
+  it('无调用上下文时 ARG == 0 也不许判真假（缺省槽值不外推到顶层）', () => {
+    const withAssign = createFunctionOverlay({
+      detail: makeDetail([assignment('LOCAL', 0, '1', 10, [])]),
+      baseRead,
+    })!;
+    for (const slotText of [[], ['0'], ['1'], ['2']]) {
+      const v = withAssign(ref('ARG', slotText), TOP)!;
+      expect(v.kind).toBe('unknown');
+      if (v.kind === 'unknown') {
+        expect(v.unknown.code).toBe('call-context');
+        // 文案同形（KW-28）：理由要说"取决于本次调用的实参"，不能只说"未提供"
+        expect(v.unknown.message.includes('本次调用的实参')).toBe(true);
+      }
+    }
+    const s = withAssign(ref('ARGS', ['3']), TOP)!;
+    expect(s.kind).toBe('unknown');
+    if (s.kind === 'unknown') expect(s.unknown.code).toBe('call-context');
+  });
 });
