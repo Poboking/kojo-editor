@@ -1,0 +1,182 @@
+/*
+ * 更新反馈基元（UI 打磨批）——状态胶囊 + 下载进度条。
+ *
+ * 为什么单开一张纸：这三件东西今天同时出现在**三张面**上（详情模态 / 右下提醒卡 / 设置页
+ * 关于·更新区）。过去它们只住在 `update-dialog.css` 里、只有模态用得起，另两张面各自抄
+ * 文字形态——「同一个状态在三个地方三种说法」正是本仓美学闸反复清算的那类账。
+ * 现在真源一份：`ui/UpdateProgress.tsx` 渲染，`UpdateDialog` / `UpdateNoticeCard` /
+ * `SettingsPanel` 三个消费方都吃这里的类名。
+ *
+ * 两条纪律照旧（同 update-dialog.css）：
+ * - 颜色只吃 token（含 color-mix 洗色），不写字面 hex；
+ * - 动效时长只吃 `--dur-*` / `--anim-*`；两种降动效口径（系统偏好 + `data-motion='reduced'`）
+ *   都压平，且**不定态压平后仍要留一条静态可见的光带**——进度条停成空白等于把状态吞掉。
+ */
+
+/* ---- 状态胶囊：这是「状态」，不是动作按钮（页脚只留真动作） ---- */
+
+.update-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--fg);
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 语义档：下载=accent、装好=success、没装好=danger（色只在这里换，形态一份） */
+.update-status[data-tone='done'] {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border-subtle));
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+.update-status[data-tone='failed'] {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-subtle));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+/* 呼吸点：告诉作者这行是活的（reduced-motion 下降为常亮，见文件末尾）。
+   周期吃 tokens 的具名动效族 `--anim-breathe`（常驻提示的明暗循环同义 token）。 */
+.update-status-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: update-status-pulse var(--anim-breathe) var(--ease-in-out) infinite;
+}
+
+.update-status[data-tone='done'] .update-status-dot {
+  background: var(--success);
+  animation: none;
+}
+
+.update-status[data-tone='failed'] .update-status-dot {
+  background: var(--danger);
+  animation: none;
+}
+
+/* ---- 下载进度：轨道 + 合成缩放填充 + 一行读数 ---- */
+
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.update-progress-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+}
+
+/* 紧凑档（右下卡 340 宽、设置页行内）：条细一档，读数行不吃字号——
+   卡里那行字是「还剩多少」的证据，不是装饰 */
+.update-progress[data-size='sm'] .update-progress-track {
+  height: 5px;
+}
+
+/* 进度走**合成属性**（P2-12）：下载事件按分片回、很密，`width` 过渡每帧重排；
+   `scaleX` 只走合成。系数由 `UpdateProgress.tsx` 递 `--ud-progress`（0..1）。 */
+.update-progress-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
+  transform-origin: left center;
+  transform: scaleX(var(--ud-progress, 0));
+  transition: transform var(--dur-2) var(--ease-in-out);
+}
+
+/* 总量未知（Started 还没报 contentLength）：不定态光带，方向与「正在下载」一致。
+   周期 `--anim-spin × 2`，与 `ui-kit.css` 的 kit-shimmer 同尺，不另抄字面量。
+   宽度回到 38% 定长条，静态 scaleX 显式让位给 keyframes 的位移。 */
+.update-progress-track[data-indeterminate='true'] .update-progress-fill {
+  width: 38%;
+  transform: none;
+  animation: update-progress-indeterminate calc(var(--anim-spin) * 2) var(--ease-in-out) infinite;
+}
+
+.update-progress-line {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* 读数与轨道同排（卡里只有一行高）：条占余下宽度，字靠右不折 */
+.update-progress[data-inline='true'] {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.update-progress[data-inline='true'] .update-progress-track {
+  flex: 1 1 auto;
+}
+
+.update-progress[data-inline='true'] .update-progress-line {
+  flex: none;
+  justify-content: flex-end;
+  color: var(--fg);
+}
+
+@keyframes update-status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes update-progress-indeterminate {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+/* 系统偏好：入场动画停，但不定态仍留一条静态可见的 38% 光带（不是空白轨道） */
+@media (prefers-reduced-motion: reduce) {
+  .update-progress-fill,
+  .update-status-dot {
+    animation: none !important;
+    transition: none !important;
+  }
+  .update-progress-track[data-indeterminate='true'] .update-progress-fill {
+    animation: none !important;
+    width: 38%;
+    transform: none;
+  }
+}
+
+/* 应用内开关（motion-pref.ts 写 <html data-motion='reduced'>）：同一条降级。
+   全局规则会把动画时长压成 0.01ms 且只跑一帧——不定态会停在「已移出视野」的位置，
+   所以这里必须显式钉回静态光带，否则进度条看起来是空的。 */
+:root[data-motion='reduced'] .update-progress-fill,
+:root[data-motion='reduced'] .update-status-dot {
+  animation: none !important;
+  transition: none !important;
+}
+
+:root[data-motion='reduced'] .update-progress-track[data-indeterminate='true'] .update-progress-fill {
+  animation: none !important;
+  width: 38%;
+  transform: none;
+}

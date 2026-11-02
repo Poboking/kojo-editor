@@ -419,7 +419,7 @@ describe('downloadPercent / downloadProgressText：进度读数同源', () => {
 
 describe('updateStatus：常驻状态行', () => {
   it('各态文案与色调齐备，found 态回 null（它有自己的专属行）', () => {
-    expect(updateStatus(IDLE)).toEqual({ text: '有新版本时，可在这里手动检查', tone: 'dim' });
+    expect(updateStatus(IDLE)).toEqual({ text: '打开编辑器时会自动检查，这里也可以手动查', tone: 'dim' });
     expect(updateStatus(CHECKING)).toEqual({ text: '正在检查更新…', tone: 'dim' });
     expect(updateStatus({ kind: 'latest' })).toEqual({ text: '已是最新版本', tone: 'ok' });
     expect(updateStatus({ kind: 'found', version: '0.2.0' })).toBeNull();

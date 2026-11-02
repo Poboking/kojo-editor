@@ -4605,6 +4605,11 @@ button.danger.armed:active:not(:disabled) {
 .settings-row > span:only-child {
   grid-column: 1 / -1;
 }
+/* 更新下载那一行同理：进度基元（`update-progress.css`，与右下卡/详情模态同一份）没有控件列
+   可对齐，独占整行宽——条才有意义，卡在 1fr 列里会变成一小截 stub。 */
+.settings-row > .update-progress {
+  grid-column: 1 / -1;
+}
 .settings-hint {
   color: var(--fg-dim);
   font-size: var(--fs-1);

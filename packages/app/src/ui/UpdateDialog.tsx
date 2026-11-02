@@ -29,7 +29,6 @@ import {
   useEffect,
   useId,
   useRef,
-  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -40,18 +39,18 @@ import {
   detectUpdateSeverity,
   UPDATE_NOTE_LINE_LIMIT,
   UPDATE_NOTES_EMPTY,
-  downloadPercent,
-  downloadProgressText,
-  formatBytes,
   formatUpdateDate,
   linkifyUpdateNoteLine,
   updateDialogTitle,
+  updateReleaseOf,
   updateStatus,
   visibleUpdateNoteGroups,
   type UpdateDialogPhase,
   type UpdateNoteSegment,
   type UpdateRelease,
 } from './update-check';
+import { UPDATE_DISMISS_HINT } from './update-dismiss-pref';
+import { UpdateProgress, UpdateStatus } from './UpdateProgress';
 import '../update-dialog.css';
 
 export interface UpdateDialogProps {
@@ -161,18 +160,17 @@ export function UpdateDialog({ phase, onClose, onInstall, onRestart, forced = fa
     if (e.target === e.currentTarget) onClose();
   };
 
-  const release: UpdateRelease = phase.kind === 'failed' ? phase.release : phase;
+  const release: UpdateRelease = updateReleaseOf(phase);
   const title = updateDialogTitle(phase);
   const dateText = formatUpdateDate(release.date);
   const hasMeta = release.currentVersion !== undefined || dateText !== null;
   // 破坏性判定只看说明（found 带 notes；后续态 notes 随 release 一路带到）
-  const severity = detectUpdateSeverity(release.notes);
-  const breaking = severity === 'breaking';
-  // 说明只在 found 态详列：一旦开始下载，正文让位给进度（旧版行为，作者盯着条比盯着字有用）
-  const noteView = phase.kind === 'found' ? visibleUpdateNoteGroups(release.notes) : { groups: [], total: 0, truncated: false };
-  const pct = phase.kind === 'downloading' ? downloadPercent(phase.received, phase.total) : null;
-  const progressText =
-    phase.kind === 'downloading' ? downloadProgressText(phase.received, phase.total) : null;
+  const breaking = detectUpdateSeverity(release.notes) === 'breaking';
+  // 说明只在 found 态详列：一旦开始下载，正文让位给进度（作者盯着条比盯着字有用）
+  const noteView =
+    phase.kind === 'found'
+      ? visibleUpdateNoteGroups(release.notes)
+      : { groups: [], total: 0, truncated: false };
   const busy = phase.kind === 'downloading';
 
   return (
@@ -203,7 +201,7 @@ export function UpdateDialog({ phase, onClose, onInstall, onRestart, forced = fa
             {hasMeta ? (
               <p className="update-dialog-meta" id={metaId}>
                 {release.currentVersion !== undefined ? (
-                  <span>当前版本 v{release.currentVersion}</span>
+                  <span>当前 v{release.currentVersion}</span>
                 ) : null}
                 {release.currentVersion !== undefined && dateText !== null ? (
                   <span className="update-dialog-meta-sep" aria-hidden="true">
@@ -226,6 +224,14 @@ export function UpdateDialog({ phase, onClose, onInstall, onRestart, forced = fa
         </header>
 
         <div className="update-dialog-body">
+          {phase.kind === 'found' && breaking ? (
+            // 破坏性更新的"停下读一眼"：警示牌只在标题旁挂一枚小胶囊，容易被当成装饰；
+            // 这一条把它翻译成动作指令（先读标红那一组，再决定装不装）。
+            <p className="update-dialog-alert" role="note">
+              这一版含<b>破坏性变更</b>，请先读完下面「破坏性变更」那一组，再决定装不装。
+            </p>
+          ) : null}
+
           {phase.kind === 'found' && noteView.groups.length > 0 ? (
             <section className="update-dialog-section" aria-labelledby={notesTitleId}>
               <h3 className="update-dialog-section-title" id={notesTitleId}>
@@ -264,36 +270,11 @@ export function UpdateDialog({ phase, onClose, onInstall, onRestart, forced = fa
 
           {phase.kind === 'downloading' ? (
             <div className="update-dialog-progress">
-              <div className="update-dialog-progress-head">
-                {/* 状态胶囊：这是「状态」，不是动作按钮——页脚只留真动作，误读源头掐掉 */}
-                <span className="update-dialog-status" role="status" aria-busy="true">
-                  <span className="update-dialog-status-dot" aria-hidden="true" />
-                  {`正在下载 v${release.version}…`}
-                </span>
-                {busy && progressText === null && phase.received > 0 ? (
-                  <span className="update-dialog-status-bytes">已下载 {formatBytes(phase.received)}</span>
-                ) : null}
-              </div>
-              <div
-                className="update-dialog-progress-track"
-                role="progressbar"
-                aria-label="更新下载进度"
-                aria-valuemin={0}
-                aria-valuemax={100}
-                {...(pct !== null ? { 'aria-valuenow': pct } : {})}
-                {...(pct === null ? { 'aria-valuetext': '正在下载安装，总量未知' } : {})}
-                data-indeterminate={pct === null ? 'true' : 'false'}
-              >
-                <div
-                  className="update-dialog-progress-fill"
-                  style={pct !== null ? ({ '--ud-progress': String(pct / 100) } as CSSProperties) : undefined}
-                />
-              </div>
-              {progressText !== null ? (
-                <div className="update-dialog-progress-line">
-                  <span>{progressText}</span>
-                </div>
-              ) : null}
+              {/* 状态胶囊：这是「状态」，不是动作按钮——页脚只留真动作，误读源头掐掉。
+                  版本号不在这里重复一遍：抬头标题已经写着「正在下载 vX」，
+                  同一屏写三遍同一个号是噪音（右下卡同理，版本只归徽标那一格）。 */}
+              <UpdateStatus tone="active">正在下载…</UpdateStatus>
+              <UpdateProgress received={phase.received} total={phase.total} />
             </div>
           ) : null}
 
@@ -307,7 +288,7 @@ export function UpdateDialog({ phase, onClose, onInstall, onRestart, forced = fa
               </p>
               <p className="update-dialog-hint">
                 {onRestart === undefined
-                  ? '请保存手头的工作后重启应用。'
+                  ? '请保存手头的工作，关闭编辑器后重新打开即生效。'
                   : '更新已就位；重启会关闭编辑器，请先保存手头的工作。'}
               </p>
             </div>
@@ -328,7 +309,7 @@ export function UpdateDialog({ phase, onClose, onInstall, onRestart, forced = fa
         <footer className="update-dialog-actions">
           {phase.kind === 'found' ? (
             <>
-              <button type="button" className="ghost" onClick={onClose}>
+              <button type="button" className="ghost" onClick={onClose} title={UPDATE_DISMISS_HINT}>
                 稍后
               </button>
               <button type="button" className="primary" onClick={onInstall}>
@@ -365,7 +346,7 @@ export function UpdateDialog({ phase, onClose, onInstall, onRestart, forced = fa
           ) : null}
           {phase.kind === 'failed' ? (
             <>
-              <button type="button" className="ghost" onClick={onClose}>
+              <button type="button" className="ghost" onClick={onClose} title={UPDATE_DISMISS_HINT}>
                 稍后
               </button>
               <button type="button" className="primary" onClick={onInstall}>

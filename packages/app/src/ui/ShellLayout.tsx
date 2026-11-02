@@ -32,7 +32,6 @@ import { kojo2AdapterForProject } from '../bootstrap';
 import { setIdentityBandFilled, useIdentityBandSlot } from './identity-band';
 import type { EditorCommandContext, EditorCommandContribution, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, RecentProject, UIPanelContribution } from '@kojo/plugin-api';
 import {errorText,  MARKET_SERVICE_KEY, pathKey } from '@kojo/plugin-api';
-import { check, type Update } from '@tauri-apps/plugin-updater';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -180,14 +179,10 @@ import {
   resetEndpoint,
   type MarketSourceView,
 } from './market-source';
-import {
-  reduceUpdatePhase,
-  updateDialogPhase,
-  updateStatus,
-  type UpdateAction,
-  type UpdatePhase,
-} from './update-check';
+import { updateStatus } from './update-check';
 import { UpdateDialog } from './UpdateDialog';
+import { UpdateNoticeCard } from './UpdateNoticeCard';
+import { useUpdateFlow } from './update-flow';
 import { isTauri } from '../bridge/invoke';
 import { revealFailureText, revealInExplorer } from './reveal-explorer';
 import { modalDepth, closeTopModal } from './modal-stack';
@@ -1116,16 +1111,6 @@ function isLowFreqView(v: ViewDef): boolean {
   return v.panels.every((p) => p.defaultActive === false);
 }
 
-/** 进入编辑器后静默检查更新的延迟（用户反馈第 1 条：3 秒，够首屏与索引喘口气） */
-const AUTO_UPDATE_CHECK_DELAY_MS = 3000;
-
-/**
- * 本次应用会话里作者亲手关掉的更新版本（模块级，活得比一次项目开关更久）：
- * 自动检查不再为同一版重开弹窗；手动检查是明确意图，发现就重开（并把这里清掉）。
- * 不落 localStorage——重启应用时愿意再提醒一次是合理的。
- */
-let dismissedUpdateVersionInSession: string | null = null;
-
 /* ==================== 布局动效（1026-b 动效批） ==================== */
 
 /**
@@ -1621,31 +1606,16 @@ export function ShellLayout(props: Props): ReactElement {
   }, [kernel]);
 
   /**
-   * 检查更新（REL-1 收尾 · REL-2 设置页 · 用户反馈第 1 条）：状态机在 `update-check.ts`
-   * （零 React，可单测），这里只持有会话内镜像 + 调宿主 API。版本号走 `getVersion()`
-   * （core:default 已放行）；非 Tauri 环境（纯浏览器 dev / node 测试）读不到就保持 null。
+   * 检查更新（REL-1 收尾 · 用户反馈第 1 条 · UI 打磨批接线）：
+   * 流程本体（3 秒静默 check、`Update` 宿主资源管理、下载安装）住 `update-flow.tsx`，
+   * 打扰分层（普通更新举右下卡 / 破坏性更新才「打开即模态」/「稍后」落跨会话免打扰）
+   * 住 `UpdateNoticeCard.tsx` 的 `useUpdateNotice`。本文件过去把这两套逐字焊了一遍
+   * （约 230 行），还只服务「已经开了项目」的作者——现在这里只留读数与呈现。
    *
-   * 本批新增的是**入口**与**呈现**：进入编辑器 3 秒后静默检查一次（只查一次，失败/已最新
-   * 都不弹任何东西），发现新版本才自动打开 `UpdateDialog`；设置页继续用手动检查/安装，
-   * 两条入口共享同一份 phase 与同一个 installUpdate。
+   * 版本号走 `getVersion()`（core:default 已放行）；非 Tauri 环境读不到就保持 null，
+   * 设置页那一格照旧写「未知」。
    */
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  const [updatePhase, setUpdatePhase] = useState<UpdatePhase>({ kind: 'idle' });
-  const updateFoundRef = useRef<Update | null>(null);
-  // 给「3 秒后还要不要查」与关闭弹窗读最新 phase：这两个回调刻意不依赖 state，
-  // 避免 getVersion / phase 变化把自动检查的 timer 反复重置。
-  const updatePhaseRef = useRef(updatePhase);
-  updatePhaseRef.current = updatePhase;
-  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
-  /** 并发检查的序号：后发起的那次说了算，先前的结果连 Update 资源一起作废 */
-  const updateCheckSeqRef = useRef(0);
-  /** 下载安装进行中：卸载清理别把正在安装的 Update 资源关掉 */
-  const updateInstallingRef = useRef(false);
-  /** 自动检查只跑一次（timer 真触发后才置位；StrictMode 的 cleanup 重排不会把它吞掉） */
-  const autoUpdateCheckFiredRef = useRef(false);
-  /** 组件还活着：关项目时仍在路上的 check() 回来要还资源，而不是往已卸载的树里塞状态 */
-  const updateAliveRef = useRef(true);
-
   useEffect(() => {
     let cancelled = false;
     getVersion()
@@ -1660,93 +1630,12 @@ export function ShellLayout(props: Props): ReactElement {
     };
   }, []);
 
+  const update = useUpdateFlow();
+  const updatePhase = update.phase;
   // 常驻状态行（found 态回 null——它另有带安装按钮的专属行）
   const updateStatusLine = updateStatus(updatePhase);
-
-  /**
-   * 释放手上那条 Update 的宿主资源（updater 的 `Update` 是 Rust Resource）。
-   * 只在"确定不会再安装它"时调用：换一次检查、或组件卸载且没在安装。
-   */
-  const releaseFoundUpdate = useCallback(() => {
-    const found = updateFoundRef.current;
-    updateFoundRef.current = null;
-    if (found !== null) {
-      void found.close().catch(() => {
-        /* 释放失败不影响用户：宿主进程退出时也会回收 */
-      });
-    }
-  }, []);
-
-  /**
-   * 真去查一次（auto = 进编辑器的静默检查；manual = 设置页那颗按钮）。
-   *
-   * `origin` 只决定"发现新版本时弹窗开不开"：自动检查尊重作者关过的同一版本；
-   * 手动检查是明确意图，发现就重开。**检查失败一律只落状态**，绝不弹窗（私仓端点 404 是常态）。
-   */
-  const performUpdateCheck = useCallback(
-    async (origin: 'auto' | 'manual'): Promise<void> => {
-      const seq = updateCheckSeqRef.current + 1;
-      updateCheckSeqRef.current = seq;
-      releaseFoundUpdate();
-      setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'checkStart' }));
-      try {
-        // 更新检查跟随环境代理（REL-1 收尾）：Rust 侧读标准环境变量（HTTPS > HTTP > ALL，
-        // 畸形值忽略），有的话透传进 check({ proxy })；取不到（含非 Tauri 环境）= None，
-        // check() 与不传参时一字不差。取代理失败也按 None 走，绝不因它让检查失败。
-        const envProxy = await invoke<string | null>('updater_env_proxy').catch(() => null);
-        const found = await check(envProxy === null ? undefined : { proxy: envProxy });
-        if (!updateAliveRef.current) {
-          // 关项目时这次 check 才回来：树已卸载，别把 Update 的宿主资源留在那儿
-          if (found !== null) void found.close().catch(() => {});
-          return;
-        }
-        if (seq !== updateCheckSeqRef.current) {
-          // 后发起的检查已经接管：这次结果作废，别把旧 Update 的宿主资源留在那儿
-          if (found !== null) void found.close().catch(() => {});
-          return;
-        }
-        if (found === null) {
-          setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'checkLatest' }));
-          return;
-        }
-        const currentVersion = found.currentVersion.trim() === '' ? undefined : found.currentVersion;
-        const action: UpdateAction = {
-          type: 'checkFound',
-          version: found.version,
-          ...(currentVersion === undefined ? {} : { currentVersion }),
-          ...(found.body === undefined ? {} : { notes: found.body }),
-          ...(found.date === undefined ? {} : { date: found.date }),
-        };
-        // 先用"检查中"这一态试算：只有真落到 found 才保留 Update 资源并弹窗；
-        // latest / 版本形读不出都是这次检查的结局，资源当场还掉。
-        if (reduceUpdatePhase({ kind: 'checking' }, action).kind !== 'found') {
-          void found.close().catch(() => {});
-          setUpdatePhase((p) => reduceUpdatePhase(p, action));
-          return;
-        }
-        updateFoundRef.current = found;
-        setUpdatePhase((p) => reduceUpdatePhase(p, action));
-        if (origin === 'manual') {
-          dismissedUpdateVersionInSession = null;
-          setUpdateDialogOpen(true);
-        } else if (dismissedUpdateVersionInSession !== found.version) {
-          setUpdateDialogOpen(true);
-        }
-      } catch {
-        // 私仓尚未发布 release：端点现阶段必然 404，失败是常态路径——必须可见、可重试，绝不抛未捕获异常
-        if (!updateAliveRef.current || seq !== updateCheckSeqRef.current) return;
-        releaseFoundUpdate();
-        setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'checkFailed' }));
-      }
-    },
-    [releaseFoundUpdate],
-  );
-
-  /** 设置页的手动检查入口（Public 面保持无参：SettingsPanel 直接把它当 onClick） */
-  const runUpdateCheck = useCallback(
-    () => performUpdateCheck('manual'),
-    [performUpdateCheck],
-  );
+  const runUpdateCheck = update.checkNow;
+  const installUpdate = update.install;
 
   /**
    * 设置页「工作区」一节的数据面（2026-10-27 撤销批）：落点根清单 + 撤销入口。
@@ -1782,79 +1671,11 @@ export function ShellLayout(props: Props): ReactElement {
   );
 
   /**
-   * 进入编辑器 3 秒后静默检查一次——只在 Tauri 壳里跑（浏览器 dev 跳过），
-   * 卸载清 timer。依赖只有稳定的 `performUpdateCheck`，不随渲染重置。
-   * 3 秒内作者若已手动检查/安装（phase 不再是 idle），这次自动检查让位，不叠加请求。
+   * 更新的一整套会话语义都在 `useUpdateFlow` / `useUpdateNotice` 里：
+   * 3 秒静默检查（只在 Tauri 壳跑）、并发检查以最后一次为准并归还 `Update` 宿主资源、
+   * 下载中允许关模态（`downloadAndInstall` 发出后不可取消，关掉不中断安装）、
+   * 「稍后」落同版本跨会话免打扰。这里只留读数（`updatePhase`）与两处呈现。
    */
-  useEffect(() => {
-    if (!isTauri() || autoUpdateCheckFiredRef.current) return;
-    const timer = window.setTimeout(() => {
-      autoUpdateCheckFiredRef.current = true;
-      if (updatePhaseRef.current.kind !== 'idle') return;
-      void performUpdateCheck('auto');
-    }, AUTO_UPDATE_CHECK_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [performUpdateCheck]);
-
-  // 卸载（关项目）时把没在安装的那条 Update 还给宿主；下载中不关，免得把安装打断
-  useEffect(() => {
-    updateAliveRef.current = true;
-    return () => {
-      updateAliveRef.current = false;
-      const found = updateFoundRef.current;
-      updateFoundRef.current = null;
-      if (found !== null && !updateInstallingRef.current) {
-        void found.close().catch(() => {});
-      }
-    };
-  }, []);
-
-  const installUpdate = useCallback(async () => {
-    const found = updateFoundRef.current;
-    if (found === null || updateInstallingRef.current) return;
-    // 设置页「下载并安装」与本弹窗是同一个入口：从设置页点，也把进度抬进弹窗
-    setUpdateDialogOpen(true);
-    updateInstallingRef.current = true;
-    setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installStart', total: null }));
-    try {
-      await found.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installStart', total: event.data.contentLength ?? null }));
-        } else if (event.event === 'Progress') {
-          setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installProgress', chunk: event.data.chunkLength }));
-        } else if (event.event === 'Finished') {
-          setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installDone' }));
-        }
-      });
-      setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installDone' }));
-      updateFoundRef.current = null;
-    } catch {
-      // 下载 / 安装中断（断网、磁盘、取消）：失败态可见可重试。
-      // **保留** Update 资源：重试对同一个 Update 再下一次，不必重新查端点。
-      setUpdatePhase((p) => reduceUpdatePhase(p, { type: 'installFailed' }));
-    } finally {
-      updateInstallingRef.current = false;
-    }
-  }, []);
-
-  /**
-   * 关更新弹窗（稍后 / X / 遮罩 / Esc 共用）。
-   *
-   * 下载中**也允许关**：`downloadAndInstall` 发出后不可取消，关面板不中断安装；
-   * 进度会继续落在设置页的状态行上。把作者锁在全屏模态里等下载是更坏的体验。
-   * 关掉时记住这一版，自动检查不再为它重开（手动检查发现同一版仍可重开）。
-   */
-  const closeUpdateDialog = useCallback(() => {
-    const dialog = updateDialogPhase(updatePhaseRef.current);
-    if (dialog !== null) {
-      dismissedUpdateVersionInSession =
-        dialog.kind === 'failed' ? dialog.release.version : dialog.version;
-    }
-    setUpdateDialogOpen(false);
-  }, []);
-
-  // 弹窗只在 found / downloading / done / failed(install) 出现；别的态连节点都不挂
-  const updateDialog = updateDialogOpen ? updateDialogPhase(updatePhase) : null;
 
   // overlay 打开/关闭意图（内核事件落地；Esc 关闭在全局键盘处理器）。
   // 关闭意图走 `dismissOverlay`（而不是直接 `setActiveOverlay(null)`）：五家浮层自己的 ✕ /
@@ -3827,12 +3648,28 @@ export function ShellLayout(props: Props): ReactElement {
           updateStatusLine={updateStatusLine}
           runUpdateCheck={runUpdateCheck}
           installUpdate={installUpdate}
+          openUpdateDialog={update.openDialog}
         />
       ) : null}
-      {/* 更新弹窗（用户反馈第 1 条）：放在最后 ⇒ 与设置/向导同 z 时压在最上面；
+      {/* 更新的两层呈现（用户反馈第 1 条 · UI 打磨批）：
+          右下卡 = 普通更新的第一落点，也是「后台下载」期间唯一的屏上进度；
+          详情模态 = 作者点「查看」或破坏性更新才出现。都放在最后 ⇒ 与设置/向导同 z 时压在最上面；
           zen 与常规形态共用这一份 overlays，两种形态都看得见。 */}
-      {updateDialog ? (
-        <UpdateDialog phase={updateDialog} onClose={closeUpdateDialog} onInstall={installUpdate} />
+      {update.notice !== null ? (
+        <UpdateNoticeCard
+          state={update.notice}
+          onOpen={update.openDialog}
+          onDismiss={update.dismissNotice}
+          onInstall={update.install}
+        />
+      ) : null}
+      {update.dialog !== null ? (
+        <UpdateDialog
+          phase={update.dialog}
+          onClose={update.closeDialog}
+          onInstall={installUpdate}
+          forced={update.forced}
+        />
       ) : null}
     </>
   );

@@ -1244,10 +1244,23 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · 不在图内（无漏点名）：`state-replay/src/transcript.ts`、两个面板插件与
     //       `styles-project.css`——全部走 aux 懒载，与实测总差吻合。
     //     ⇒ 闸 **3,488 → 3,511**（文件闸 **199 → 201**；余量 0 B——再进图必须先出图）。
+    //
+    //   - **更新 UI 接线批（2026-11-02，本批）**：读数 **201 文件 / 3,512 KB**
+    //     （3,595,888 B = 上一条 3,594,990 + **898**）——**零新进图文件**（201 未动），
+    //     图内只有一枚变化：`app/src/ui/App.tsx` **+898 B**（实测 `git cat-file -s origin/dev:…`
+    //     150,002 → 现树 150,900，与总差**逐字节相等**，没有第二枚）。涨的是欢迎页那两行
+    //     挂载与注释：更新宿主 `<LazyUpdateFlowHost />` 走 `lazy(() => import('./update-flow'))`
+    //     动态边（同 `LazyDevNoteDialog` 先例）——**本批刻意这么做**：静态挂会把
+    //     `update-flow` / `UpdateNoticeCard` / `update-dismiss-pref` / `UpdateProgress` 四枚
+    //     连同 `@tauri-apps/plugin-updater` 一起拽进开机图（第一版实测 3,511 → **3,593 KB**，
+    //     +82 KB / 正是"只在真有新版本时才用得上的一层浮层"给每一台机器的首屏）。
+    //     `ShellLayout` 那侧的接线不落图：它本身在懒边上。
+    //     ⇒ KB 闸随现读数 **3,511 → 3,512**（余量 0 B 的口径不变：再进图必须先出图）；
+    //     文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,511 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,512 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_511);
+    expect(totalKb).toBeLessThanOrEqual(3_512);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 

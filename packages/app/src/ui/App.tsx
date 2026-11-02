@@ -259,6 +259,9 @@ const LazyKojo1RenameDialog = lazy(() =>
   import('./kojo1-rename').then((m) => ({ default: m.Kojo1RenameDialog })),
 );
 const LazyDevNoteDialog = lazy(() => import('./DevNoteDialog').then((m) => ({ default: m.DevNoteDialog })));
+// 更新的欢迎页入口走动态边（PS-10 口径：欢迎页开机图不吃 `@tauri-apps/plugin-updater`）：
+// 一张只在"真有新版本"时才用得上的浮层，不该压在每一台机器的首屏解析链上
+const LazyUpdateFlowHost = lazy(() => import('./update-flow').then((m) => ({ default: m.UpdateFlowHost })));
 const LazyWritableApprovalDialog = lazy(() =>
   import('./WritableApprovalDialog').then((m) => ({ default: m.WritableApprovalDialog })),
 );
@@ -2976,6 +2979,13 @@ export function App(): ReactElement {
         {/* 无项目时的 overlay 宿主：教程等模态由插件常驻注册，宿主却只在 ShellLayout 里，
             这里补上同一份壳（打开/关闭订阅与 ShellLayout 同语义），教程才真的看得见 */}
         <WelcomeOverlayHost kernel={kernel} />
+        {/* 更新的常驻入口（UI 打磨批）：3 秒静默检查 + 右下卡 + 详情模态整套挂在欢迎页上。
+            改前流程焊在 ShellLayout 里 ⇒ 不开项目的作者永远收不到更新（L05 登记的实测缺陷①）。
+            进项目时这张树卸载、由 ShellLayout 里同款 hook 接手；两处各查一次，
+            「同一版几天不再打扰」落在 localStorage 的免打扰偏好上，不会重复举卡。 */}
+        <Suspense fallback={null}>
+          <LazyUpdateFlowHost />
+        </Suspense>
       </>
     );
 

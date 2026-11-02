@@ -29,6 +29,7 @@ const tabsBarCss = read('../src/tabs-bar.css');
 const outlineCss = read('../src/outline-panel.css');
 const noticesCss = read('../src/shell-notices.css');
 const updateCss = read('../src/update-dialog.css');
+const progressCss = read('../src/update-progress.css');
 const settingsCss = read('../src/settings-search.css');
 const motionCss = read('../src/ui/motion-surface.css');
 const tokensCss = read('../src/tokens.css');
@@ -50,6 +51,7 @@ const OWNED: Array<[string, string]> = [
   ['outline-panel.css', outlineCss],
   ['shell-notices.css', noticesCss],
   ['update-dialog.css', updateCss],
+  ['update-progress.css', progressCss],
   ['settings-search.css', settingsCss],
   ['ui/motion-surface.css', motionCss],
 ];
@@ -195,16 +197,18 @@ describe('VIS-33 动效时长一律吃 --dur-*/--anim-*，不留字面秒数', (
   });
 
   it('改前三枚字面量真的没了（1.2s pulse / 1.4s indeterminate / 1.5s 落点回执）', () => {
-    expect(fileTreeCss + tabsBarCss + outlineCss + noticesCss + updateCss + settingsCss + motionCss).not.toMatch(
+    expect(fileTreeCss + tabsBarCss + outlineCss + noticesCss + updateCss + progressCss + settingsCss + motionCss).not.toMatch(
       /animation: [^;]*\b(?:1\.2s|1\.4s|1\.5s)\b/,
     );
   });
 
   it('--anim-* 族有了真消费方（此前全仓只剩 2 处，tokens 那节"只定义不替换"的账在缩）', () => {
-    const hits = (updateCss.match(/var\(--anim-[a-z-]+\)/g) ?? []).length + (settingsCss.match(/var\(--anim-[a-z-]+\)/g) ?? []).length;
+    // 2026-11-02 UI 打磨批：呼吸点与不定态光带从 `update-dialog.css` 搬进共用基元
+    // `update-progress.css`（模态 / 右下卡 / 设置页三张面共用一份），尺子一个字没换
+    const hits = (progressCss.match(/var\(--anim-[a-z-]+\)/g) ?? []).length + (settingsCss.match(/var\(--anim-[a-z-]+\)/g) ?? []).length;
     expect(hits).toBeGreaterThanOrEqual(3);
-    expect(updateCss).toMatch(/animation: update-dialog-pulse var\(--anim-breathe\)/);
-    expect(updateCss).toMatch(/animation: update-dialog-indeterminate calc\(var\(--anim-spin\) \* 2\)/);
+    expect(progressCss).toMatch(/animation: update-status-pulse var\(--anim-breathe\)/);
+    expect(progressCss).toMatch(/animation: update-progress-indeterminate calc\(var\(--anim-spin\) \* 2\)/);
     expect(settingsCss).toMatch(/animation: settings-hit calc\(var\(--anim-spin\) \* 2\) var\(--ease-out\)/);
   });
 

@@ -94,6 +94,7 @@ function panelProps(over: Partial<SettingsPanelProps> = {}): SettingsPanelProps 
     updateStatusLine: null,
     runUpdateCheck: asyncNoop,
     installUpdate: asyncNoop,
+    openUpdateDialog: noop,
     ...over,
   };
 }

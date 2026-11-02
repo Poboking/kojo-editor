@@ -147,7 +147,7 @@ const INJECTED_ROSTER: readonly [string, string][] = [
   ['--kojo2-progress', 'app/src/ui/kojo2-migrate.tsx'], // 迁移向导的进度
   ['--ksp-progress', 'app/src/ui/SearchPanel.tsx'], // 检索进度（不定态时不注入，样式表让位给 keyframes）
   ['--cm-cov', 'plugins/ui-condition-matrix/src/index.ts'], // 条件矩阵状态栏的覆盖率
-  ['--ud-progress', 'app/src/ui/UpdateDialog.tsx'], // 更新下载进度
+  ['--ud-progress', 'app/src/ui/UpdateProgress.tsx'], // 更新下载进度（2026-11-02 起三张面共用同一枚基元）
 ];
 
 describe('CSS 自定义属性单源 · 消费面必须有定义点', () => {

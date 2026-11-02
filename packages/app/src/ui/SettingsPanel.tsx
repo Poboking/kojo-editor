@@ -56,7 +56,10 @@ import {
   sourceRowUi,
   type MarketSourceView,
 } from './market-source';
-import { isUpdateBusy, type UpdatePhase, type UpdateStatusTone } from './update-check';
+import { isUpdateBusy, formatUpdateDate, type UpdatePhase, type UpdateStatusTone } from './update-check';
+import { UPDATE_DISMISS_HINT } from './update-dismiss-pref';
+import { UpdateProgress } from './UpdateProgress';
+import { isTauri } from '../bridge/invoke';
 import { Icon, type IconName } from './icons';
 import { Switch } from './Switch';
 import { nextRovingIndex } from './shell-keys';
@@ -265,6 +268,8 @@ export interface SettingsPanelProps {
   updateStatusLine: { text: string; tone: UpdateStatusTone } | null;
   runUpdateCheck: () => Promise<void>;
   installUpdate: () => Promise<void>;
+  /** 「看更新内容」：抬详情模态（与右下卡同一个出口，设置页不自己抄一份说明） */
+  openUpdateDialog: () => void;
 
   /* ---- 快捷键页双框合一（批次十一 L09）---- */
   /**
@@ -334,6 +339,89 @@ export interface SettingsSection {
  * 分段控件行（`.theme-segment`）本轮不动——`KitSegmented` 是另批的射程。
  */
 
+/* ==================== 关于页「更新」那一节（UI 打磨批） ==================== */
+
+interface UpdateSectionProps {
+  appVersion: string | null;
+  updatePhase: UpdatePhase;
+  updateStatusLine: { text: string; tone: UpdateStatusTone } | null;
+  runUpdateCheck: () => Promise<void>;
+  installUpdate: () => Promise<void>;
+  openUpdateDialog: () => void;
+}
+
+/**
+ * 设置页的更新读数 + 出口（原先长在 about 节的 JSX 里，本批抽成这一节自己的组件，
+ * 因为下面三条口径都需要先算一个局部量）。
+ *
+ * 1. **不抄第二份流程**：进度条吃三张面共用的 `UpdateProgress` 基元；「看更新内容」抬的是
+ *    与右下卡同一个详情模态（`openUpdateDialog`），这里不重排一份 changelog；
+ * 2. **下载中只留一处读数**：`updateStatus` 那句「已下载 X / Y（p%）」与进度基元自带的那行
+ *    字面相同，同屏画两遍就成了回声——该态让位给条；
+ * 3. **桌面版之外不演**：浏览器调试壳里 `check()` 必然抛，与其让作者读到一句
+ *    「编辑器更新没有检查成功，可重试：网络没通」，不如把按钮禁掉并说明这是壳的限制。
+ */
+function UpdateSection({
+  appVersion,
+  updatePhase,
+  updateStatusLine,
+  runUpdateCheck,
+  installUpdate,
+  openUpdateDialog,
+}: UpdateSectionProps): ReactElement {
+  const desktopShell = isTauri();
+  const foundDate = updatePhase.kind === 'found' ? formatUpdateDate(updatePhase.date) : null;
+  return (
+    <div className="settings-group">
+      <div role="heading" aria-level={4} className="settings-group-title">更新</div>
+      <div className="settings-row static" data-settings-key="about.update">
+        <button
+          className="ghost small"
+          onClick={() => void runUpdateCheck()}
+          disabled={isUpdateBusy(updatePhase) || !desktopShell}
+        >
+          {updatePhase.kind === 'checking' ? '检查中…' : '检查更新'}
+        </button>
+        <span>
+          当前版本 {appVersion !== null ? `v${appVersion}` : '未知'}
+          {updateStatusLine !== null && updatePhase.kind !== 'downloading' ? (
+            <span className={hintClassFor(updateStatusLine.tone)} role="status">
+              {updateStatusLine.text}
+            </span>
+          ) : null}
+          {!desktopShell ? (
+            <span className="settings-hint">这里只在桌面版生效：浏览器里的调试壳没有更新通道</span>
+          ) : null}
+        </span>
+      </div>
+
+      {updatePhase.kind === 'downloading' ? (
+        <div className="settings-row static">
+          <UpdateProgress received={updatePhase.received} total={updatePhase.total} size="sm" />
+        </div>
+      ) : null}
+
+      {updatePhase.kind === 'found' ? (
+        <div className="settings-row static">
+          <button className="primary small" onClick={() => void installUpdate()}>
+            下载并安装
+          </button>
+          <button className="ghost small" onClick={openUpdateDialog}>
+            看更新内容
+          </button>
+          <span>
+            {`发现新版本 v${updatePhase.version}`}
+            {foundDate !== null ? <span className="settings-hint">{`发布于 ${foundDate}`}</span> : null}
+            <span className="settings-hint">
+              {`点「下载并安装」后，右下卡会跟着报进度；点「稍后」则${UPDATE_DISMISS_HINT}。`}
+            </span>
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * 节的清单（模块级导出常量 = 下一批的扩展点）。
  *
@@ -389,6 +477,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     updateStatusLine,
     runUpdateCheck,
     installUpdate,
+    openUpdateDialog,
     searchQuery = '',
     onClearSearch,
     workspaceRoots,
@@ -1039,48 +1128,15 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
       icon: 'info',
       render: () => (
         <>
-          {/* 检查更新（REL-1 收尾 · REL-2）：状态机在 update-check.ts，行内三态而非弹窗。
-              当前仓库尚未发布过 release，check() 现阶段必然 404——失败态是常态路径，
-              必须可见可重试（见 runUpdateCheck 的 try-catch），绝不让按钮抛未捕获异常。 */}
-          <div className="settings-group">
-            <div role="heading" aria-level={4} className="settings-group-title">更新</div>
-            <div className="settings-row static" data-settings-key="about.update">
-              <button
-                className="ghost small"
-                onClick={runUpdateCheck}
-                disabled={isUpdateBusy(updatePhase)}
-              >
-                {updatePhase.kind === 'checking' ? '检查中…' : '检查更新'}
-              </button>
-              <span>
-                当前版本 {appVersion !== null ? `v${appVersion}` : '未知'}
-                {updateStatusLine ? (
-                  <span
-                    className={
-                      updateStatusLine.tone === 'ok'
-                        ? 'settings-hint is-ok'
-                        : updateStatusLine.tone === 'err'
-                          ? 'settings-hint is-err'
-                          : 'settings-hint'
-                    }
-                  >
-                    {updateStatusLine.text}
-                  </span>
-                ) : null}
-              </span>
-            </div>
-            {updatePhase.kind === 'found' ? (
-              <div className="settings-row static">
-                <button className="primary small" onClick={installUpdate}>
-                  下载并安装 v{updatePhase.version}
-                </button>
-                <span>
-                  发现新版本 v{updatePhase.version}
-                  <span className="settings-hint">下载安装完成后，重启应用生效</span>
-                </span>
-              </div>
-            ) : null}
-          </div>
+          {/* 更新（REL-1 收尾 · REL-2 · UI 打磨批）：见 `UpdateSection` 的文件头 */}
+          <UpdateSection
+            appVersion={appVersion}
+            updatePhase={updatePhase}
+            updateStatusLine={updateStatusLine}
+            runUpdateCheck={runUpdateCheck}
+            installUpdate={installUpdate}
+            openUpdateDialog={openUpdateDialog}
+          />
 
           {/* 关于（REL-2）：开发者联系卡 + 意见反馈。外链用原生 <a target="_blank">——
               项目未装 opener/shell 插件，WebView2 会把新窗口请求交给系统默认浏览器，

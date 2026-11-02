@@ -1,9 +1,16 @@
 /**
- * 更新提醒卡（层一）与其纯判据的单测（批次十一 L05）。
+ * 更新提醒卡（层一）与其纯判据的单测（批次十一 L05 · UI 打磨批改四态后同步）。
  *
  * 环境是 node + `renderToStaticMarkup`（与 `update-dialog.test.ts` 同款）：只钉
  * 「这一次打扰不打扰、以哪层打扰」的判据与卡的静态可读性。hook 的会话编排
- * （dialogOpen / 免打扰落盘）走真壳冒烟，不在这假装跑 effect。
+ * （模态开合 / 免打扰落盘 / X 收起）在真 React 生命周期里跑，见同批的
+ * `update-notice-flow.test.ts`——这里不假装 effect。
+ *
+ * 本批同步的两处口径（不是放宽判据，是判据本身改了）：
+ * - 卡从「只画 found」扩到模态可渲染的那四态，`notice.version` 这种直读联合类型的写法
+ *   改吃 `updateReleaseVersion`（`failed` 的版本在 `release` 里）；
+ * - 免打扰只拦「作者能拒绝这一版」的两态（found / failed），下载中与已装好不许被拦——
+ *   否则点过「稍后」的同一版一旦开下起来，屏上就再没有任何进度落点（本批要修的死角）。
  */
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -18,6 +25,7 @@ import {
   detectUpdateSeverity,
   groupUpdateNotes,
   linkifyUpdateNoteLine,
+  updateReleaseVersion,
   visibleUpdateNoteGroups,
   type UpdatePhase,
 } from '../src/ui/update-check';
@@ -38,7 +46,7 @@ const found = (over?: Partial<Extract<UpdatePhase, { kind: 'found' }>>): UpdateP
 describe('decideUpdateNotice · 打扰判据（卡/模态/安静的唯一分流）', () => {
   it('found 且没被免打扰 ⇒ 出卡；breaking ⇒ 不出卡、判 forced（打开即模态的许可位）', () => {
     const d = decideUpdateNotice(found(), { dismissal: null, now: Date.now() });
-    expect(d.notice?.version).toBe('0.4.3');
+    expect(d.notice === null ? '' : updateReleaseVersion(d.notice)).toBe('0.4.3');
     expect(d.forced).toBe(false);
 
     const b = decideUpdateNotice(found({ notes: '## 破坏性变更\n- 换存储格式' }), { dismissal: null });
@@ -54,15 +62,31 @@ describe('decideUpdateNotice · 打扰判据（卡/模态/安静的唯一分流�
     const expired = decideUpdateNotice(found(), {
       dismissal: { version: '0.4.3', dismissedAt: dismissedAt - 8 * DAY },
     });
-    expect(expired.notice?.version).toBe('0.4.3');
+    expect(expired.notice === null ? '' : updateReleaseVersion(expired.notice)).toBe('0.4.3');
     // 免打扰只对同版本：作者稍后再说 0.4.3，不妨碍提醒 0.5.0
     const other = decideUpdateNotice(found({ version: '0.5.0' }), {
       dismissal: { version: '0.4.3', dismissedAt },
     });
-    expect(other.notice?.version).toBe('0.5.0');
+    expect(other.notice === null ? '' : updateReleaseVersion(other.notice)).toBe('0.5.0');
   });
 
-  it('非 found 态（checking/latest/failed/downloading/done）连卡都不该有判据', () => {
+  it('破坏性更新被作者推辞过（免打扰期内）⇒ 连模态都不自动开（forced 让位）', () => {
+    const d = decideUpdateNotice(found({ notes: '- 破坏性：换存储格式' }), {
+      dismissal: { version: '0.4.3', dismissedAt: Date.now() - HOUR },
+    });
+    expect(d.forced).toBe(false);
+    expect(d.notice).toBeNull();
+  });
+
+  it('「更新在路上」不吃免打扰：下载中 / 已装好照样举卡（后台下载必须有屏上落点）', () => {
+    const quiet = { dismissal: { version: '0.4.3', dismissedAt: Date.now() - HOUR } };
+    const downloading: UpdatePhase = { kind: 'downloading', version: '0.4.3', received: 1, total: 2 };
+    const done: UpdatePhase = { kind: 'done', version: '0.4.3' };
+    expect(decideUpdateNotice(downloading, quiet).notice?.kind).toBe('downloading');
+    expect(decideUpdateNotice(done, quiet).notice?.kind).toBe('done');
+  });
+
+  it('非四态（idle/checking/latest/failed(check)）连卡都不该有判据', () => {
     for (const phase of [
       { kind: 'idle' },
       { kind: 'checking' },
@@ -72,9 +96,18 @@ describe('decideUpdateNotice · 打扰判据（卡/模态/安静的唯一分流�
       expect(decideUpdateNotice(phase, { dismissal: null }).notice).toBeNull();
     }
   });
+
+  it('安装失败也举卡；同一版被推辞过就安静（推辞语义与 found 同一条）', () => {
+    const failedInstall: UpdatePhase = { kind: 'failed', stage: 'install', release: { version: '0.4.3' } };
+    expect(decideUpdateNotice(failedInstall, { dismissal: null }).notice?.kind).toBe('failed');
+    expect(
+      decideUpdateNotice(failedInstall, { dismissal: { version: '0.4.3', dismissedAt: Date.now() - HOUR } })
+        .notice,
+    ).toBeNull();
+  });
 });
 
-describe('UpdateNoticeCard 渲染面', () => {
+describe('UpdateNoticeCard 渲染面（四态）', () => {
   const state: UpdateNoticeState = {
     kind: 'found',
     version: '0.4.3',
@@ -82,32 +115,69 @@ describe('UpdateNoticeCard 渲染面', () => {
     date: new Date(2026, 9, 17, 12, 0, 0).toISOString(),
   };
 
-  it('标题 + 版本徽标 + 查看/稍后 齐备；role=status 非阻塞（不是 dialog）', () => {
-    const out = renderToStaticMarkup(createElement(UpdateNoticeCard, { state, onOpen: noop, onDismiss: noop }));
-    expect(out).toContain('发现新版本 v0.4.3');
+  const html = (s: UpdateNoticeState | null): string =>
+    renderToStaticMarkup(createElement(UpdateNoticeCard, { state: s, onOpen: noop, onDismiss: noop, onInstall: noop }));
+
+  it('found：标题只说状态、版本归徽标（改前两处各写一遍 v0.4.3）；查看/稍后齐备；role=status 非阻塞', () => {
+    const out = html(state);
+    expect(out).toContain('发现新版本');
     expect(out).toContain('class="update-notice-card-badge">v0.4.3<');
+    expect(out).not.toContain('发现新版本 v0.4.3');
     expect(out).toContain('>查看<');
     expect(out).toContain('>稍后<');
+    expect(out).toContain('data-phase="found"');
     expect(out).toContain('role="status"');
     expect(out).not.toContain('aria-modal');
     expect(out).toContain('当前 v0.4.2');
     expect(out).toContain('发布于 2026-10-17');
+    // 「稍后」把承诺说在明面上（天数只有一个来源：UPDATE_NOTICE_QUIET_DAYS）
+    expect(out).toContain('7 天内不再提醒');
   });
 
   it('state=null ⇒ 整个组件零节点（不留隐形占位）', () => {
-    expect(renderToStaticMarkup(createElement(UpdateNoticeCard, { state: null, onOpen: noop, onDismiss: noop }))).toBe('');
+    expect(html(null)).toBe('');
   });
 
   it('缺 currentVersion / date ⇒ 元信息行整行不画（不出现 "vundefined" 机器味）', () => {
-    const out = renderToStaticMarkup(
-      createElement(UpdateNoticeCard, {
-        state: { kind: 'found', version: '0.4.3' },
-        onOpen: noop,
-        onDismiss: noop,
-      }),
-    );
+    const out = html({ kind: 'found', version: '0.4.3' });
     expect(out).not.toContain('update-notice-card-meta');
     expect(out).not.toContain('vundefined');
+  });
+
+  it('downloading：缩略进度条 + 读数同排；只留「查看」（下载收不回，不给假退路）', () => {
+    const out = html({ kind: 'downloading', version: '0.4.3', received: 512, total: 1024 });
+    expect(out).toContain('data-phase="downloading"');
+    expect(out).toContain('正在下载');
+    expect(out).toContain('role="progressbar"');
+    expect(out).toContain('aria-valuenow="50"');
+    expect(out).toContain('data-inline="true"');
+    expect(out).toContain('已下载 512 B / 1.0 KB（50%）');
+    expect(out).toContain('>查看<');
+    expect(out).not.toContain('>稍后<');
+  });
+
+  it('downloading 总量未知：轨道转不定态，读数说「总量未知」而不是画个假 0%', () => {
+    const out = html({ kind: 'downloading', version: '0.4.3', received: 512, total: null });
+    expect(out).toContain('data-indeterminate="true"');
+    expect(out).toContain('已下载 512 B，总量未知');
+  });
+
+  it('done：那句「重启后生效」在卡上就看得见（不用进设置页找）；出口是「知道了」', () => {
+    const out = html({ kind: 'done', version: '0.4.3', currentVersion: '0.4.2' });
+    expect(out).toContain('data-phase="done"');
+    expect(out).toContain('更新已就位');
+    expect(out).toContain('更新已安装，重启应用后生效');
+    expect(out).toContain('>知道了<');
+    expect(out).not.toContain('>稍后<');
+  });
+
+  it('failed(install)：病因上卡 + 「重试」走同一个 install（与模态、设置页同一条腿）', () => {
+    const out = html({ kind: 'failed', stage: 'install', release: { version: '0.4.3' } });
+    expect(out).toContain('data-phase="failed"');
+    expect(out).toContain('更新没装好');
+    expect(out).toContain('可重试');
+    expect(out).toContain('>重试<');
+    expect(out).toContain('>稍后<');
   });
 });
 

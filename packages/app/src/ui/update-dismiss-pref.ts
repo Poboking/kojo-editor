@@ -31,6 +31,15 @@ export const UPDATE_DISMISS_KEY = 'kojo.ui.updateDismissal.v1';
 export const UPDATE_NOTICE_QUIET_DAYS = 7;
 export const UPDATE_NOTICE_QUIET_MS = UPDATE_NOTICE_QUIET_DAYS * 24 * 60 * 60 * 1000;
 
+/**
+ * 「稍后」到底承诺了什么（一句人话）。
+ *
+ * 改前卡与模态都只写「稍后」两个字：作者不知道点下去是"这一版几天不再提"还是"这次别吵"，
+ * 于是只能试。天数只有 `UPDATE_NOTICE_QUIET_DAYS` 一枚来源，这句文案跟着它走，
+ * 三张面（卡的 X 与「稍后」、模态的「稍后」、设置页那一行）都吃这一份。
+ */
+export const UPDATE_DISMISS_HINT = `这一版 ${UPDATE_NOTICE_QUIET_DAYS} 天内不再提醒`;
+
 /** 一条免打扰记录（哪一版、什么时候点的「稍后」） */
 export interface UpdateDismissal {
   readonly version: string;

@@ -409,7 +409,9 @@ export type UpdateStatusTone = 'dim' | 'ok' | 'err';
 export function updateStatus(phase: UpdatePhase): { text: string; tone: UpdateStatusTone } | null {
   switch (phase.kind) {
     case 'idle':
-      return { text: '有新版本时，可在这里手动检查', tone: 'dim' };
+      // 自动检查已接进欢迎页与编辑器（`update-flow.tsx`）：这一句要说清"不用你动手也会查"，
+      // 否则作者以为必须点这颗按钮才知道有没有新版
+      return { text: '打开编辑器时会自动检查，这里也可以手动查', tone: 'dim' };
     case 'checking':
       return { text: '正在检查更新…', tone: 'dim' };
     case 'latest':
@@ -598,8 +600,39 @@ export function linkifyUpdateNoteLine(line: string): readonly UpdateNoteSegment[
   return segments;
 }
 
-/** 弹窗/卡片统一的「发现新版本 vX」标题（一处措辞，两处消费） */
-export function updateNoticeTitle(release: UpdateRelease): string {
-  return `发现新版本 v${release.version}`;
+/**
+ * 「这一版」的统一读法：`failed` 把发布信息收在 `release` 里，其余四态直接摊在 phase 上。
+ *
+ * 三张面（模态 / 提醒卡 / 设置页）与两个出口回调（关模态、卡「稍后」）都要拿版本号，
+ * 改前每一处各写一遍 `kind === 'failed' ? phase.release : phase`——判据漂移就从这种
+ * 重复开始。请从这里取。
+ */
+export function updateReleaseOf(phase: UpdateDialogPhase): UpdateRelease {
+  return phase.kind === 'failed' ? phase.release : phase;
+}
+
+/** 这一版的版本号（徽标、免打扰落盘、会话内让步三处共用同一个口径） */
+export function updateReleaseVersion(phase: UpdateDialogPhase): string {
+  return updateReleaseOf(phase).version;
+}
+
+/**
+ * 右下卡的短标题：只说「现在走到哪一步」，版本号交给徽标那一格。
+ *
+ * 改前卡上「发现新版本 v0.4.3」与旁边那枚徽标「v0.4.3」把同一串号写了两遍；卡只有 340px 宽，
+ * 重复的那串还挤掉发布日期。四态都有形态（下载中 / 已就位 / 没装好也举卡）是为了
+ * 「后台下载时屏上得有落点」——详见 `UpdateNoticeCard.tsx` 文件头。
+ */
+export function updateNoticeCardTitle(phase: UpdateDialogPhase): string {
+  switch (phase.kind) {
+    case 'found':
+      return '发现新版本';
+    case 'downloading':
+      return '正在下载';
+    case 'done':
+      return '更新已就位';
+    case 'failed':
+      return '更新没装好';
+  }
 }
 

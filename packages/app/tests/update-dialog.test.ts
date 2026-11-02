@@ -33,7 +33,7 @@ describe('UpdateDialog：found', () => {
       notes: '## 修复\n- 甲\n## 新增\n- 乙',
     });
     expect(out).toContain('发现新版本 v0.5.0');
-    expect(out).toContain('当前版本 v0.4.0');
+    expect(out).toContain('当前 v0.4.0');
     expect(out).toContain('发布于 2026-10-17');
     // 分组：已知小节题被组名吸收，行按组落位；展示序「新增」在「修复」前
     expect(out).toContain('data-group="added"');
@@ -59,11 +59,25 @@ describe('UpdateDialog：found', () => {
     expect(forcedOut).toContain('破坏性更新 · 需确认');
   });
 
+  it('破坏性 found：抬头警示牌之外还有一条动作指令（光一枚胶囊容易被当装饰）', () => {
+    const out = html({ kind: 'found', version: '0.5.0', notes: '- 破坏性：存储格式变更' }, { forced: true });
+    expect(out).toContain('class="update-dialog-alert"');
+    expect(out).toContain('请先读完下面「破坏性变更」那一组');
+    // 普通更新不许出现这条（否则每次都提醒作者"要停下读"）
+    const normal = html({ kind: 'found', version: '0.5.0', notes: '- 新增：一张卡' });
+    expect(normal).not.toContain('update-dialog-alert');
+  });
+
+  it('「稍后」把承诺说在明面上：按钮 title 直接写几天不再提醒（天数只有一个真源）', () => {
+    const out = html({ kind: 'found', version: '0.5.0' });
+    expect(out).toContain('title="这一版 7 天内不再提醒"');
+  });
+
   it('说明为空 ⇒ 一句人话，不留空白井', () => {
     const out = html({ kind: 'found', version: '0.5.0', currentVersion: '0.4.0' });
     expect(out).toContain('这个版本没有附更新说明。');
     expect(out).not.toContain('class="update-dialog-notes"');
-    expect(out).toContain('当前版本 v0.4.0');
+    expect(out).toContain('当前 v0.4.0');
     expect(out).not.toContain('发布于');
     expect(out).not.toContain('update-dialog-meta-sep');
   });
@@ -101,7 +115,10 @@ describe('UpdateDialog：downloading / done / failed', () => {
     expect(out).toContain('已下载 512 B / 1.0 KB（50%）');
     expect(out).toContain('aria-busy="true"');
     expect(out).toContain('后台下载');
-    expect(out).toContain('class="update-dialog-status"');
+    expect(out).toContain('class="update-status"');
+    // 胶囊与进度条都是三张面共用的基元（`update-progress.css`），设置页/右下卡吃同一份
+    expect(out).toContain('class="update-progress"');
+    expect(out).toContain('data-size="md"');
     // 缺陷点：「正在下载…」不再是页脚那颗禁用按钮
     expect(out).not.toContain('disabled');
     expect(out).not.toContain('下载并安装');
@@ -116,14 +133,18 @@ describe('UpdateDialog：downloading / done / failed', () => {
       total: null,
     });
     expect(out).toContain('data-indeterminate="true"');
-    expect(out).toContain('正在下载 v0.5.0…');
-    expect(out).toContain('已下载 512 B');
+    // 版本号只归抬头那一格：胶囊再写一遍就成了同屏三次（改前正是「正在下载 v0.5.0…」）
+    expect(out).toContain('正在下载…');
+    expect(out.match(/v0\.5\.0/g)?.length).toBeLessThanOrEqual(2);
+    expect(out).toContain('已下载 512 B，总量未知');
   });
 
   it('done（宿主无重启通道）：重启应用后生效 + 只留一个关闭', () => {
     const out = html({ kind: 'done', version: '0.5.0', currentVersion: '0.4.0' });
     expect(out).toContain('已安装 v0.5.0');
     expect(out).toContain('重启应用后生效');
+    // 没有重启通道时那句指引要能照着做（白话），而不是再来一遍「重启应用」
+    expect(out).toContain('关闭编辑器后重新打开即生效');
     expect(out).toContain('>关闭<');
     expect(out).not.toContain('立即重启');
     expect(out).not.toContain('下载并安装');

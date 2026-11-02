@@ -18,15 +18,16 @@ import { UpdateDialog } from './UpdateDialog';
 import { UpdateNoticeCard, useUpdateNotice } from './UpdateNoticeCard';
 
 /**
- * 更新流程的**触发入口**（批次十一 L05 · 任务 3）：把「3 秒静默 check + 资源管理 +
- * 下载安装」从 `ShellLayout` 焊死的形态解耦成可复用 hook/组件。
+ * 更新流程的**唯一触发入口**（批次十一 L05 造 · 2026-11-02 UI 打磨批接线落地）。
  *
  * 修的是实测缺陷①：欢迎页不挂 ShellLayout ⇒ 不开项目的作者永远收不到更新。
- * 组长接线只需一行：在 `WelcomeView`（或任何常驻界面）挂 `<UpdateFlowHost />`；
- * `ShellLayout` 想收敛内联那套同款逻辑，换成本 hook 也是同一接口
- * （phase/notice/dialog/install 全在这里，呈现零改动）。
+ * 今天两处消费方（`update-wiring.test.ts` 钉着，防"组件有测试、生产没人挂"的静默失效）：
+ * - `App.tsx` 的无项目分支挂 `<LazyUpdateFlowHost />`（动态边：一层只在"真有新版本"时
+ *   才用得上的浮层，不许压进开机图——实测静态挂会把 updater 插件族 +82 KB 拽上首屏）；
+ * - `ShellLayout` 用 `useUpdateFlow()`，把读数喂给设置页、把卡与模态挂在 overlays 末尾。
+ * 两处各查一次（换界面 = 重新挂载），跨会话的"别再举卡"由 `update-dismiss-pref.ts` 拦。
  *
- * 逻辑口径逐字对齐 ShellLayout 现实现（别改语义）：
+ * 逻辑口径（与改前 ShellLayout 内联那套逐字同源，本批把内联那份删了、这里成了真源）：
  * - 非 Tauri 环境（浏览器 dev / node 测试）整个自动检查不启动；
  * - `updater_env_proxy` 取到就透传 `check({ proxy })`，取不到当无参；
  * - 并发检查以后发起者为准（seq），落败的那次连同 `Update` 宿主资源一起作废；
@@ -214,35 +215,32 @@ export function useUpdateFlow(options?: UseUpdateFlowOptions): UpdateFlow {
   };
 }
 
-export interface UpdateFlowHostProps extends UseUpdateFlowOptions {
-  /** 宿主另有状态行消费 phase 时，用它把读数送出去（渲染仍归本组件） */
-  readonly onPhase?: (phase: UpdatePhase) => void;
-}
-
 /**
- * 一行式接线点：`<UpdateFlowHost />` 挂进任何常驻界面（WelcomeView / ShellLayout），
+ * 一行式接线点：挂进任何常驻界面（今天的落点＝ `App` 的无项目分支），
  * 自动检查 + 右下卡 + 详情模态三层全部就位。破坏性严重度由说明文本自判
  * （`normalizeUpdateNotes` 后仍含红线词 ⇒ 打开即模态，其余只举卡）。
+ *
+ * 编辑器那一侧不用这颗壳：`ShellLayout` 直接吃 `useUpdateFlow()`，
+ * 因为它还要把同一份 phase 喂给设置页的状态行（`onPhase` 那类外流口子零消费方，已删）。
  */
-export function UpdateFlowHost({ onPhase, ...flowOptions }: UpdateFlowHostProps): ReactElement | null {
-  const flow = useUpdateFlow(flowOptions);
-  // 状态镜像外流（设置页状态行等）；同值不通知，免得父组件 setState 空转
-  const lastReportedRef = useRef<UpdatePhase | null>(null);
-  useEffect(() => {
-    if (onPhase === undefined || lastReportedRef.current === flow.phase) return;
-    lastReportedRef.current = flow.phase;
-    onPhase(flow.phase);
-  }, [onPhase, flow.phase]);
+export function UpdateFlowHost(props: UseUpdateFlowOptions): ReactElement | null {
+  const flow = useUpdateFlow(props);
   return (
     <>
-      <UpdateNoticeCard state={flow.notice} onOpen={flow.openDialog} onDismiss={flow.dismissNotice} />
+      {/* 卡的四态里只有 failed 需要动作腿（「重试」）——与模态、设置页同一个 install */}
+      <UpdateNoticeCard
+        state={flow.notice}
+        onOpen={flow.openDialog}
+        onDismiss={flow.dismissNotice}
+        onInstall={flow.install}
+      />
       {flow.dialog !== null ? (
         <UpdateDialog
           phase={flow.dialog}
           onClose={flow.closeDialog}
           onInstall={flow.install}
           forced={flow.forced}
-          {...(flowOptions.onRestart === undefined ? {} : { onRestart: flowOptions.onRestart })}
+          {...(props.onRestart === undefined ? {} : { onRestart: props.onRestart })}
         />
       ) : null}
     </>

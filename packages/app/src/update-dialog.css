@@ -2,7 +2,8 @@
  * 更新弹窗（用户反馈第 1 条）。
  *
  * 面由 `.glass` 提供（styles.css 的磨砂 token + fallback 名单已覆盖 .glass），
- * 本文件只管「更新面板」自己的骨架：抬头 / 可滚动说明 / 进度 / 页脚动作。
+ * 本文件只管「更新面板」自己的骨架：抬头 / 可滚动说明 / 页脚动作。
+ * 状态胶囊与下载进度条不在这张纸上——它们是三张面共用一份的基元，住 `update-progress.css`。
  *
  * 两条纪律：
  * - 颜色只取 token（含 color-mix 的语义洗色），不写字面 hex——主题切换自动跟随；
@@ -282,93 +283,31 @@
   font-size: var(--fs-0);
 }
 
+/* 下载那一格：胶囊 + 进度基元都住 `update-progress.css`（三张面共用一份），这里只管排布 */
 .update-dialog-progress {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: var(--space-2);
   padding: var(--space-1) 0;
 }
 
-/* 下载态的「状态行」：胶囊在正文、动作在页脚——两者物理分开，不再并排误读 */
-.update-dialog-progress-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.update-dialog-status {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 3px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  color: var(--fg);
-  font-family: var(--font-meta);
-  font-size: var(--fs-1);
-  font-variant-numeric: tabular-nums;
-}
-
-/* 呼吸点：告诉作者这行是活的（reduced-motion 下降级为常亮，见文件末尾）。
-   周期吃 tokens 的具名动效族——这条本来就是"常驻提示的明暗循环"，
-   `--anim-breathe`（2.8s）是它的同义 token；改前这里写死 1.2s，拧一处全局生效的前提是先吃 token。 */
-.update-dialog-status-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-  animation: update-dialog-pulse var(--anim-breathe) var(--ease-in-out) infinite;
-}
-
-.update-dialog-status-bytes {
-  color: var(--fg-dim);
-  font-family: var(--font-meta);
-  font-size: var(--fs-1);
-  font-variant-numeric: tabular-nums;
-}
-
-.update-dialog-progress-track {
-  position: relative;
-  height: 8px;
-  overflow: hidden;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
+/* 破坏性更新的"停下读一眼"（found 才画）：与失败条同一条左侧色带语言，色换语义 */
+.update-dialog-alert {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--danger);
+  border-radius: var(--radius-sm);
   background: var(--surface-sunken);
-}
-
-/* 下载进度走**合成属性**（P2-12）：进度事件按分片回、很密，`width` 过渡每帧重排；
-   `scaleX` 只走合成。系数由 TSX 递 `--ud-progress`（0..1）。 */
-.update-dialog-progress-fill {
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent-strong), var(--accent));
-  transform-origin: left center;
-  transform: scaleX(var(--ud-progress, 0));
-  transition: transform var(--dur-2) var(--ease-in-out);
-}
-
-/* 总量未知（Started 还没报 contentLength）：不定态光带，方向与"正在下载"一致。
-   周期 `--anim-spin × 2`（= 1400ms，与改前的 1.4s 逐字等值）：`ui-kit.css` 的
-   `kit-shimmer` 早就是这同一把尺（同文件 529 行），这里不再另抄一份字面量。
-   宽度回到 38% 定长条，静态 scaleX 显式让位给 keyframes 的位移。 */
-.update-dialog-progress-track[data-indeterminate='true'] .update-dialog-progress-fill {
-  width: 38%;
-  transform: none;
-  animation: update-dialog-indeterminate calc(var(--anim-spin) * 2) var(--ease-in-out) infinite;
-}
-
-.update-dialog-progress-line {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--space-3);
-  color: var(--fg-dim);
-  font-family: var(--font-meta);
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--fg);
   font-size: var(--fs-1);
-  font-variant-numeric: tabular-nums;
+  line-height: 1.7;
+}
+
+.update-dialog-alert b {
+  color: var(--danger);
+  font-weight: 600;
 }
 
 .update-dialog-done {
@@ -444,52 +383,17 @@
   }
 }
 
-@keyframes update-dialog-indeterminate {
-  from {
-    transform: translateX(-110%);
-  }
-  to {
-    transform: translateX(300%);
-  }
-}
-
-@keyframes update-dialog-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.35;
-  }
-}
-
-/* 系统偏好：入场与不定态都停，但不定态仍留一条静态可见的 38% 光带（不是空白轨道） */
+/* 系统偏好：入场停。进度光带与呼吸点的降级在 `update-progress.css`（基元自己守，
+   消费方不许再各写一份"减弱档怎么压平"） */
 @media (prefers-reduced-motion: reduce) {
-  .update-dialog,
-  .update-dialog-progress-fill,
-  .update-dialog-status-dot {
+  .update-dialog {
     animation: none !important;
     transition: none !important;
   }
-  .update-dialog-progress-track[data-indeterminate='true'] .update-dialog-progress-fill {
-    animation: none !important;
-    width: 38%;
-    transform: none;
-  }
 }
 
-/* 应用内开关（motion-pref.ts 写 <html data-motion='reduced'>）：同一条降级。
-   全局规则会把动画时长压成 0.01ms 且只跑一帧——不定态会停在"已移出视野"的位置，
-   所以这里必须显式钉回静态光带，否则进度条看起来是空的。 */
-:root[data-motion='reduced'] .update-dialog,
-:root[data-motion='reduced'] .update-dialog-progress-fill,
-:root[data-motion='reduced'] .update-dialog-status-dot {
+/* 应用内开关（motion-pref.ts 写 <html data-motion='reduced'>）：同一条降级 */
+:root[data-motion='reduced'] .update-dialog {
   animation: none !important;
   transition: none !important;
-}
-
-:root[data-motion='reduced'] .update-dialog-progress-track[data-indeterminate='true'] .update-dialog-progress-fill {
-  animation: none !important;
-  width: 38%;
-  transform: none;
 }
