@@ -85,13 +85,20 @@ function useRefLike<T>(value: T): RefLike<T> {
 }
 
 /**
- * 宿主事实逐格按 `ProjectSessionHost` 的类型交（字段名拼错 / 少交一格都由 tsc 当场叫，
- * 不拿 `as never` 蒙过去）。
+ * 宿主事实逐格按 `ProjectSessionHost` 的类型交（字段名拼错 / 少交一格都由 tsc 当场叫）。
+ * 两枚最小假对象走 `as unknown as`（照 `workspace-folders-project-coupling.test.ts:74` 的
+ * 先例）：`GameProject` 的其余格子（charaIndex / dictionary …）本批这条路一概不碰，
+ * 给它补满反而会把"到底读了哪一格"糊掉。
  */
 function makeHost(hs: Harness): ProjectSessionHost {
   return {
     kernel: hs.kernel,
-    project: { rootDir: DIR, adapterId: 'eratw', kojoPaths: [], savDir: null } as never,
+    project: {
+      rootDir: DIR,
+      adapterId: 'eratw',
+      kojoPaths: [],
+      savDir: null,
+    } as unknown as GameProject,
     workspaceSession: null,
     sessionRoot: DIR,
     dirtyRef: useRefLike<ReadonlySet<string>>(new Set()),
@@ -100,9 +107,7 @@ function makeHost(hs: Harness): ProjectSessionHost {
     cancelPrefetchRef: useRefLike<(() => void) | null>(null),
     requestOpenFileRef: useRefLike<((path: string) => void) | null>(null),
     resetProjectUiState: () => hs.order.push('resetUi'),
-    sessionRecordRef: useRefLike(() => {
-      throw new Error('本批不读会话记录');
-    }) as never,
+    sessionRecordRef: useRefLike(emptySessionRecord()),
     pendingRecoverRef: useRefLike(false),
     setPhase: (phase) => hs.phases.push(phase),
     setError: () => {},
