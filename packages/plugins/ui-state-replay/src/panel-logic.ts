@@ -23,10 +23,12 @@
 import type {
   BranchChainOutcome,
   ConditionExpr,
+  FunctionConditions,
   FunctionReplay,
   PredicateReplay,
   ReplayCallContext,
   ReplayUnknownCode,
+  VariableSchema,
 } from '@kojo/plugin-api';
 import { nextWindow, pathKey, type RenderWindow } from '@kojo/plugin-api';
 
@@ -151,6 +153,163 @@ export function suggestFunctionNames(names: Iterable<string>, query: string, lim
     }
   }
   return hits;
+}
+
+/* ------------------- 小白可发现性（2026-11-02 白话批） -------------------
+ *
+ * 旧入口的硬门槛：**必须先知道 ERB 函数名**。零基础作者不知道
+ * `MESSAGE_COM_K12_310_1` 是什么，也不知道该搜什么——注入面板能搜「好感」
+ * 找到 `CFLAG:2 好感度`，回放面板却只对函数名做子串过滤。本批对齐：
+ * 搜索词**同时**匹配函数名与该函数条件里出现过的变量**中文标签**
+ * （条件索引的 `StateDependency.schema.description`，词典来自当前 adapter
+ * 的 `variableSchema`——与注入面板同一份真源）。
+ */
+
+/** 一条函数建议（`hint` 非空 = 靠中文标签命中，给作者看"为什么它冒出来"） */
+export interface FunctionSuggest {
+  readonly name: string;
+  readonly hint: string;
+}
+
+/** 标签命中在建议里的配额（函数名命中优先占满；标签命中补位） */
+const LABEL_SUGGEST_LIMIT = 50;
+
+/**
+ * 智能建议（纯函数）：函数名命中 + 条件变量的**中文标签**命中，两路合并。
+ *
+ * 判据与旧 `suggestFunctionNames` 同源（大小写不敏感子串、`q.length >= 2`、
+ * 整名已存在 → 只回它自己）；新增的一路扫 `byFunction` 各函数的依赖表，
+ * 命中的标签（去重、最多展示两个）进 `hint`。两路在一趟迭代里同时收
+ * （31k 函数 × 每函数几条依赖，逐键打字路径已有 `useDeferredValue` 挡着，
+ * 与导航面板同口径——不为省一趟扫描引入第二份数据结构）。
+ */
+export function suggestFunctionsSmart(
+  index: { byFunction: Map<string, FunctionConditions> } | null,
+  query: string,
+  limit = 50,
+): FunctionSuggest[] {
+  const q = query.trim().toUpperCase();
+  if (!index || q.length < 2) return [];
+  const exact = q;
+  if (index.byFunction.has(exact)) return [{ name: exact, hint: '' }];
+  const nameHits: FunctionSuggest[] = [];
+  const labelHits: FunctionSuggest[] = [];
+  const nameHitSet = new Set<string>();
+  for (const [name, cond] of index.byFunction) {
+    if (name.includes(q)) {
+      if (nameHits.length < limit) {
+        nameHits.push({ name, hint: '' });
+        nameHitSet.add(name);
+      }
+    }
+    if (nameHitSet.has(name)) continue; // 两路都命中 → 只留名字路一条（不重复出榜）
+    if (labelHits.length < LABEL_SUGGEST_LIMIT) {
+      const labels: string[] = [];
+      for (const dep of cond.dependencies) {
+        const d = dep.schema?.description;
+        if (typeof d === 'string' && d.length > 0 && d.toUpperCase().includes(q) && !labels.includes(d)) {
+          labels.push(d);
+          if (labels.length >= 2) break;
+        }
+      }
+      if (labels.length > 0) labelHits.push({ name, hint: labels.join('、') });
+    }
+  }
+  return [...nameHits, ...labelHits].slice(0, limit);
+}
+
+/**
+ * 角色浏览（纯函数）：没输入时给「这个角色的段落」当浏览入口。
+ *
+ * 判据是**名字形态启发**而不是新契约：口上模板的函数名携带角色号段
+ * （eraTW 实测 `MESSAGE_COM_K12_310_1` 的 `_K12_`），按 `(?:^|_)K{n}(?:_|$)`
+ * 过滤。命中不了（别的游戏命名法 / 该角色无口上段）→ 空数组，面板不渲染
+ * 这一块——宁可不显示，也不给一个猜出来的列表。输入非空时不调用
+ * （搜索路径走 `suggestFunctionsSmart`，两路不叠加）。
+ */
+export function browseCharaFunctions(names: Iterable<string>, charaNo: number, limit = 50): string[] {
+  if (!Number.isInteger(charaNo) || charaNo < 0) return [];
+  const re = new RegExp(`(?:^|_)K${charaNo}(?:_|$)`);
+  const hits: string[] = [];
+  for (const n of names) {
+    if (re.test(n)) {
+      hits.push(n);
+      if (hits.length >= limit) break;
+    }
+  }
+  return hits;
+}
+
+/* ------------------- 结果白话摘要 + 谓词中文标注 ------------------- */
+
+/**
+ * 结果区顶部的一句人话（纯函数）：先给结论句，数字细节仍归徽章行。
+ * 措辞标准对齐 `describeReading`：不出现「回放 / 谓词 / 链」。
+ */
+export function replaySummarySentence(result: FunctionReplay): string {
+  const { total, hit, miss, unknown } = result.stats;
+  if (total === 0) return '这一段没有登记到可判定的条件（可能这段里压根没有条件语句）。';
+  const parts: string[] = [`${hit} 处成立`, `${miss} 处不成立`];
+  if (unknown > 0) parts.push(`${unknown} 处判不出`);
+  return `对照这份存档：这一段共 ${total} 处条件——${parts.join('、')}。`;
+}
+
+/**
+ * 谓词行的中文标注（纯函数）：扫表达式里的变量引用，查词典把**有中文名的**
+ * 列出来（如 `CFLAG:2 >= 500` → `好感度`）。查不到 / 无词典 → null（不硬凑）。
+ *
+ * 为什么只做标注不改写：条件原文是作者要认得出的自己写的那一句（rollUpLine
+ * 同口径），机器名不能从行上消失——中文跟在旁边作对照即可。
+ */
+export function predicateGloss(expr: ConditionExpr, schema: VariableSchema | undefined): string | null {
+  if (!schema) return null;
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  const walk = (e: ConditionExpr): void => {
+    switch (e.kind) {
+      case 'ref': {
+        const idx = e.indices[0];
+        // 下标三态：数字字面量（CFLAG:2）→ 按数字查；具名下标（TALENT:恋慕）→
+        // 按名字查（词典认识它）；嵌套变量引用（CFLAG:ARG:0，全大写 ASCII）→
+        // 静态看不出是哪一格，跳过不猜。
+        if (idx === undefined) return; // 裸族（LOCAL 这类）：词典按格标注，整族无中文可给
+        if (/^-?\d+$/.test(idx)) {
+          const hit = schema.lookup(e.name, Number(idx))?.description;
+          if (typeof hit === 'string' && hit.length > 0 && !seen.has(hit)) {
+            seen.add(hit);
+            labels.push(hit);
+          }
+          return;
+        }
+        if (/^[A-Z][A-Z0-9_]*$/.test(idx)) return; // 嵌套变量引用，不猜
+        const named = schema.lookup(e.name, idx)?.description;
+        if (typeof named === 'string' && named.length > 0 && !seen.has(named)) {
+          seen.add(named);
+          labels.push(named);
+        }
+        return;
+      }
+      case 'call':
+        for (const a of e.args) walk(a);
+        return;
+      case 'unary':
+        walk(e.operand);
+        return;
+      case 'binary':
+        walk(e.left);
+        walk(e.right);
+        return;
+      case 'ternary':
+        walk(e.cond);
+        walk(e.then);
+        walk(e.else);
+        return;
+      default:
+        return; // literal / nameValue / opaque 不含变量引用
+    }
+  };
+  walk(expr);
+  return labels.length > 0 ? labels.join('、') : null;
 }
 
 /**

@@ -472,3 +472,171 @@ describe('谓词渲染窗口（触底增窗）', () => {
     expect(predWindowSize(5_000, 300, 100)).toBe(300); // 覆盖行在窗口内 → 不动
   });
 });
+
+/* ==================== 白话批（2026-11-02）：可发现性 + 中文标注 ==================== */
+
+import type { ConditionIndex, VariableSchema } from '@kojo/plugin-api';
+import { browseCharaFunctions, predicateGloss, replaySummarySentence, suggestFunctionsSmart } from '../src/panel-logic';
+
+/** 构造最小 ConditionIndex（只填 suggestFunctionsSmart 读的字段；第二项 = 依赖数组） */
+function mkIndex(entries: [string, { key: string; labels?: string[] }[]][]): ConditionIndex {
+  return {
+    projectRoot: '.',
+    finishedAt: 0,
+    durationMs: 0,
+    byFunction: new Map(
+      entries.map(([name, deps]) => [
+        name,
+        {
+          normalizedName: name,
+          filePath: `${name}.erb`,
+          startLine: 1,
+          predicateCount: deps.length,
+          unparsedCount: 0,
+          dependencies: deps.map((d) => ({
+            key: d.key,
+            name: d.key.split(':')[0]!,
+            indices: d.key.includes(':') ? d.key.split(':').slice(1) : [],
+            count: 1,
+            comparisons: [],
+            firstLine: 2,
+            ...(d.labels && d.labels.length > 0
+              ? { schema: { name: d.key.split(':')[0]!, index: Number(d.key.split(':')[1] ?? 0), description: d.labels[0] } }
+              : {}),
+          })),
+        },
+      ]),
+    ),
+    stats: { functions: entries.length, functionsWithDeps: 0, predicates: 0, unparsed: 0, dependencies: 0 },
+  } as unknown as ConditionIndex;
+}
+
+describe('suggestFunctionsSmart（函数名 + 中文标签两路）', () => {
+  const index = mkIndex([
+    ['MESSAGE_COM_K12_310_1', [{ key: 'CFLAG:2', labels: ['好感度'] }]],
+    ['MESSAGE_COM_K12_310_2', [{ key: 'CFLAG:3', labels: ['好感度'] }, { key: 'MONEY' }]],
+    ['LOCAL_CHECK', [{ key: 'BASE:0', labels: ['体力'] }]],
+  ]);
+
+  it('函数名命中：hint 为空（老路行为不回退）', () => {
+    expect(suggestFunctionsSmart(index, 'K12_310', 50)).toEqual([
+      { name: 'MESSAGE_COM_K12_310_1', hint: '' },
+      { name: 'MESSAGE_COM_K12_310_2', hint: '' },
+    ]);
+  });
+
+  it('中文标签命中：hint 给出命中的中文名（搜「好感」找到判好感的段）', () => {
+    expect(suggestFunctionsSmart(index, '好感', 50)).toEqual([
+      { name: 'MESSAGE_COM_K12_310_1', hint: '好感度' },
+      { name: 'MESSAGE_COM_K12_310_2', hint: '好感度' },
+    ]);
+  });
+
+  it('整名已存在 → 只回它自己（与旧判据同源）', () => {
+    expect(suggestFunctionsSmart(index, 'local_check', 50)).toEqual([{ name: 'LOCAL_CHECK', hint: '' }]);
+  });
+
+  it('短查询 / 空索引 → 空', () => {
+    expect(suggestFunctionsSmart(index, '好', 50)).toEqual([]);
+    expect(suggestFunctionsSmart(null, '好感', 50)).toEqual([]);
+  });
+
+  it('两路合并后按 limit 截断（函数名命中优先；两路同中只出一条）', () => {
+    const rich = mkIndex([
+      ['AAA_XX', []], // 名字命中
+      ['BBB_YY', [{ key: 'CFLAG:2', labels: ['XX度'] }]], // 仅标签命中
+      ['CCC_XX', [{ key: 'CFLAG:2', labels: ['XX度'] }]], // 两路都命中 → 只出名字路一条
+      ['DDD_YY', [{ key: 'CFLAG:2', labels: ['XX度'] }]], // 仅标签命中
+    ]);
+    expect(suggestFunctionsSmart(rich, 'xx', 3)).toEqual([
+      { name: 'AAA_XX', hint: '' },
+      { name: 'CCC_XX', hint: '' },
+      { name: 'BBB_YY', hint: 'XX度' },
+    ]);
+  });
+});
+
+describe('browseCharaFunctions（角色浏览启发）', () => {
+  const names = ['MESSAGE_COM_K12_310_1', 'MESSAGE_COM_K12_310_2', 'M_KOJO_EVENT_K49_1', 'LOCAL_CHECK'];
+
+  it('按 K{no} 段过滤（eraTW 口上模板命名法）', () => {
+    expect(browseCharaFunctions(names, 12, 50)).toEqual(['MESSAGE_COM_K12_310_1', 'MESSAGE_COM_K12_310_2']);
+    expect(browseCharaFunctions(names, 49, 50)).toEqual(['M_KOJO_EVENT_K49_1']);
+  });
+
+  it('K 号是别的角色号的子串时不串（K1 ≠ K12）', () => {
+    expect(browseCharaFunctions(names, 1, 50)).toEqual([]);
+  });
+
+  it('非法角色号 / 无命中 → 空（不渲染、不猜）', () => {
+    expect(browseCharaFunctions(names, -1, 50)).toEqual([]);
+    expect(browseCharaFunctions(names, 99, 50)).toEqual([]);
+  });
+});
+
+describe('replaySummarySentence（结果白话摘要）', () => {
+  const mk = (stats: { total: number; hit: number; miss: number; unknown: number }): FunctionReplay =>
+    ({
+      normalizedName: 'F',
+      filePath: 'a.erb',
+      startLine: 1,
+      stats,
+      confidence: 'partial',
+      predicates: [],
+      branches: [],
+    }) as unknown as FunctionReplay;
+
+  it('零条件：直说没有可判定的条件', () => {
+    const s = replaySummarySentence(mk({ total: 0, hit: 0, miss: 0, unknown: 0 }));
+    expect(s).toContain('没有登记到可判定的条件');
+  });
+
+  it('有判不出：三段并列；全判定：两段并列', () => {
+    expect(replaySummarySentence(mk({ total: 10, hit: 4, miss: 3, unknown: 3 }))).toBe(
+      '对照这份存档：这一段共 10 处条件——4 处成立、3 处不成立、3 处判不出。',
+    );
+    expect(replaySummarySentence(mk({ total: 10, hit: 4, miss: 6, unknown: 0 }))).toBe(
+      '对照这份存档：这一段共 10 处条件——4 处成立、6 处不成立。',
+    );
+  });
+});
+
+describe('predicateGloss（谓词行中文标注）', () => {
+  const schema = {
+    version: 't',
+    lookup: (name: string, index?: number | string) => {
+      if (name === 'CFLAG' && index === 2) return { name: 'CFLAG', index: 2, description: '好感度' };
+      if (name === 'TALENT' && index === '恋慕') return { name: 'TALENT', index: '恋慕', description: '恋慕' };
+      return undefined;
+    },
+  } as unknown as VariableSchema;
+
+  it('数字下标查词典：CFLAG:2 → 好感度', () => {
+    const expr: ConditionExpr = { kind: 'binary', op: '>=', left: { kind: 'ref', name: 'CFLAG', indices: ['2'], text: 'CFLAG:2' }, right: { kind: 'literal', value: 500, text: '500' } };
+    expect(predicateGloss(expr, schema)).toBe('好感度');
+  });
+
+  it('具名下标查词典：TALENT:恋慕 → 恋慕', () => {
+    const expr: ConditionExpr = { kind: 'ref', name: 'TALENT', indices: ['恋慕'], text: 'TALENT:恋慕' };
+    expect(predicateGloss(expr, schema)).toBe('恋慕');
+  });
+
+  it('嵌套变量引用（全大写 ASCII 下标）不猜；无词典 / 无命中 → null', () => {
+    const nested: ConditionExpr = { kind: 'ref', name: 'CFLAG', indices: ['ARG'], text: 'CFLAG:ARG' };
+    expect(predicateGloss(nested, schema)).toBeNull();
+    const noDict: ConditionExpr = { kind: 'ref', name: 'CFLAG', indices: ['2'], text: 'CFLAG:2' };
+    expect(predicateGloss(noDict, undefined)).toBeNull();
+    const unknownVar: ConditionExpr = { kind: 'ref', name: 'TARGET', indices: [], text: 'TARGET' };
+    expect(predicateGloss(unknownVar, schema)).toBeNull();
+  });
+
+  it('同标签去重；递归进二元两侧', () => {
+    const expr: ConditionExpr = {
+      kind: 'binary',
+      op: '&&',
+      left: { kind: 'ref', name: 'CFLAG', indices: ['2'], text: 'CFLAG:2' },
+      right: { kind: 'ref', name: 'CFLAG', indices: ['2'], text: 'CFLAG:2' },
+    };
+    expect(predicateGloss(expr, schema)).toBe('好感度');
+  });
+});

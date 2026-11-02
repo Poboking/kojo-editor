@@ -45,22 +45,24 @@ import type {
   StateReplayService,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices, growWindow, shortPath } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, activeGameAdapter, growWindow, shortPath } from '@kojo/plugin-api';
 import type { AssumedSlot, LocateRequest, ReplayScene, SlotOrigin } from './panel-logic';
 import {
   DEFAULT_SCENE_ID,
   PRED_WINDOW,
   analyzeReplay,
+  browseCharaFunctions,
   classifySlotValue,
   collectAssumedSlots,
   defaultScene,
   defaultSlotText,
   locateNoticeFor,
   parseCallContextText,
+  predicateGloss,
   sanitizeScenes,
   sceneSuggestionName,
   slotKey,
-  suggestFunctionNames,
+  suggestFunctionsSmart,
   toCallContext,
 } from './panel-logic';
 import { ASSUME_STYLE, renderReplayPreview, type EmitReveal } from './preview';
@@ -379,20 +381,25 @@ export function createUiStateReplayPlugin(): Plugin {
             ? `语法：槽位=值（如 0=36, 1="文本"）— ${contextParse.detail}`
             : null;
 
-        // ---- 函数名提示（条件索引中的名字；子串过滤） ----
+        // ---- 函数名提示（白话批两路）：中文标签命中 + 函数名命中 ----
         // PS-7 两处收口：①**逐键打字走 deferred**（口径同导航面板：输入框即时响应，
-        // 三万个名字的扫描只对已落定的查询值跑）；②**不再摊平名字表**——旧写法每次渲染
-        // 先 `[...byFunction.keys()]` 摊一个 3.1 万串的数组（`STATE.md` §二的真语料读数），
-        // 摊平那一步与查询无关，每敲一个字符付一次。迭代器 + 记忆化把两者都省掉。
+        // 三万个名字的扫描只对已落定的查询值跑）；②**不再摊平名字表**。白话批在此之上
+        // 对齐注入面板的可发现性：搜索词同时匹配条件变量的**中文标签**（与注入面板同一
+        // 份 variableSchema 词典）——搜「好感」就能找到判好感的那些段。
         const condIndex = extractor.currentIndex();
         const deferredFnQuery = useDeferredValue(fnQuery);
         const suggestions = useMemo(() => {
           if (!condIndex) return [];
           const q = deferredFnQuery.trim();
           if (q.length < 2) return [];
-          if (condIndex.byFunction.has(q.toUpperCase())) return []; // 整名已存在：不给提示
-          return suggestFunctionNames(condIndex.byFunction.keys(), q, SUGGEST_LIMIT);
+          return suggestFunctionsSmart(condIndex, q, SUGGEST_LIMIT);
         }, [condIndex, deferredFnQuery]);
+        // 角色浏览（输入为空时）：选好角色就给「这个角色的段落」当浏览入口，
+        // 不再强迫小白先知道函数名。命中不了 → 不渲染（不猜）。
+        const charaBrowse = useMemo(() => {
+          if (!condIndex || charaNo === null || deferredFnQuery.trim().length > 0) return [];
+          return browseCharaFunctions(condIndex.byFunction.keys(), charaNo, SUGGEST_LIMIT);
+        }, [condIndex, charaNo, deferredFnQuery]);
 
         // ---- 选档/选角色 ----
         const archiveSelect = createElement(
@@ -443,7 +450,7 @@ export function createUiStateReplayPlugin(): Plugin {
         const fnInput = createElement('input', {
           className: 'rp-fn-input',
           type: 'text',
-          placeholder: '函数名（如 MESSAGE_COM_K12_310_1）',
+          placeholder: '挑一段来看：函数名，或用中文搜（如「好感」）',
           value: fnQuery,
           onChange: (e: { target: { value: string } }) => setFnQuery(e.target.value),
           onKeyDown: (e: { key: string }) => {
@@ -477,7 +484,7 @@ export function createUiStateReplayPlugin(): Plugin {
                           '假设',
                         )
                       : null,
-                    createElement('span', { className: 'dim rp-slot-idx' }, `${s.kind === 'str' ? 'ARGS' : 'ARG'}:${s.index}`),
+                    createElement('span', { className: 'dim rp-slot-idx' }, s.label ? `${s.label} · ${s.kind === 'str' ? 'ARGS' : 'ARG'}:${s.index}` : `${s.kind === 'str' ? 'ARGS' : 'ARG'}:${s.index}`),
                     createElement('input', {
                       className: 'rp-slot-input',
                       style: isAssume ? ASSUME_STYLE : undefined,
@@ -492,7 +499,7 @@ export function createUiStateReplayPlugin(): Plugin {
                     }),
                   );
                 }),
-                createElement('span', { className: 'dim rp-slot-hint' }, '空 = 未提供（按未知处理）· 未改的预填 0 = 假设值'),
+                createElement('span', { className: 'dim rp-slot-hint' }, '留空 = 不知道这个参数（判不出会标出来）· 没改过的 0 只是假设'),
               )
             : null;
         // ---- 场景预设工具栏（下拉切换 + 一键应用 / 保存 / 删除） ----
@@ -562,27 +569,48 @@ export function createUiStateReplayPlugin(): Plugin {
         });
         const replayBtn = createElement(
           'button',
-          { className: 'ghost small', disabled: replayBusy || !view, onClick: () => runReplay() },
-          replayBusy ? '回放中…' : '回放',
+          { className: 'ghost small', disabled: replayBusy || !view, onClick: () => runReplay(), title: '对照这份存档，看这段里每个条件走不走' },
+          replayBusy ? '判定中…' : '判定',
+        );
+        /** 建议列表行：函数名 + 中文命中提示（靠标签命中的给作者看「为什么它冒出来」） */
+        const suggestRows = suggestions.map((s) =>
+          createElement(
+            'li',
+            { key: s.name },
+            createElement(
+              'button',
+              { className: 'rp-suggest-btn', onClick: () => setFnQuery(s.name) },
+              s.name,
+              s.hint !== '' ? createElement('span', { className: 'dim' }, `（${s.hint}）`) : null,
+            ),
+          ),
+        );
+        const browseRows = charaBrowse.map((n) =>
+          createElement(
+            'li',
+            { key: n },
+            createElement(
+              'button',
+              { className: 'rp-suggest-btn', onClick: () => setFnQuery(n) },
+              n,
+            ),
+          ),
         );
         const suggestList =
-          suggestions.length > 0
-            ? createElement(
-                'ul',
-                { className: 'rp-suggests' },
-                ...suggestions.map((n) =>
+          suggestRows.length > 0
+            ? createElement('ul', { className: 'rp-suggests' }, ...suggestRows)
+            : browseRows.length > 0
+              ? createElement(
+                  'div',
+                  null,
                   createElement(
-                    'li',
-                    { key: n },
-                    createElement(
-                      'button',
-                      { className: 'rp-suggest-btn', onClick: () => setFnQuery(n) },
-                      n,
-                    ),
+                    'div',
+                    { className: 'dim rp-hint' },
+                    `角色 K${charaNo} 相关的段落（前 ${browseRows.length} 条；也可以在上面用中文搜，比如「好感」）：`,
                   ),
-                ),
-              )
-            : null;
+                  createElement('ul', { className: 'rp-suggests' }, ...browseRows),
+                )
+              : null;
 
         // ---- 结果渲染（预览层：状态 → 分支 / 文本预览；实现见 renderReplayPreview） ----
         // 跳转来的那一次（G1）多带一条"这一行"的横幅，并把对应条目滚进视野。
@@ -607,6 +635,14 @@ export function createUiStateReplayPlugin(): Plugin {
           // eslint-disable-next-line react-hooks/exhaustive-deps
           [],
         );
+        /**
+         * 谓词行中文标注（白话批）：词典来自当前 adapter 的 variableSchema（与注入
+         * 面板同一真源）。经 useMemo 钉身份——它在 `resultBody` 的 memo 依赖里，
+         * 身份每帧都变会把那棵几千行的树每帧重建（PS-7 的口径）。
+         */
+        const adapterNow = activeGameAdapter(slots.query('game.adapter'), projectNow?.adapterId);
+        const schema = adapterNow?.variableSchema;
+        const glossOf = useCallback((p: PredicateReplay) => predicateGloss(p.expr, schema), [schema]);
 
         /**
          * 右键菜单落点（1023 批）：两条动作都接回已有通道（`emitReveal` / `runReplay`），
@@ -666,10 +702,11 @@ export function createUiStateReplayPlugin(): Plugin {
               onGrowPreds: growPreds,
               analysis,
               onPredicateMenu,
+              glossOf,
             }),
           );
           // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [result, analysis, notice, predWindow, props.renderIcon, emitReveal, growPreds]);
+        }, [result, analysis, notice, predWindow, props.renderIcon, emitReveal, growPreds, glossOf]);
 
         // 滚到"就是这一行"那一条：只在结果与位点同批时做一次，找不到就作罢
         // （谓词窗口至少盖住位点那一条——见 PredicateList 的 mustInclude；
@@ -720,7 +757,7 @@ export function createUiStateReplayPlugin(): Plugin {
             ? createElement(
                 'div',
                 { className: 'rp-empty dim' },
-                '选择存档与角色后输入函数名回放；未知结果均带原因分类（近似回放的能力边界）',
+                '选好存档和角色，再挑一段（输函数名、用中文搜、或直接从下面的角色段落里点一个）——这里会告诉你那段里每个条件走不走。',
               )
             : null,
         );

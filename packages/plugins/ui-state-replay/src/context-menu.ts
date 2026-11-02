@@ -69,14 +69,19 @@ export function predicateStateText(target: ReplayPredicateMenuTarget): string {
     : base;
 }
 
-/** 谓词行菜单（判据层，纯函数） */
+/**
+ * 谓词行菜单（判据层，纯函数）。
+ *
+ * 2026-11-02 白话批：菜单项去黑话——「谓词 / 求值状态」是引擎词，作者面说
+ * 「条件 / 判断结果」；id 与文本合成规则不变（测试钉的是 id 与 copyText）。
+ */
 export function buildReplayPredicateMenu(
   target: ReplayPredicateMenuTarget,
 ): PluginContextMenuItem[] {
   return [
-    { id: 'rp.pred.reveal', label: '跳到这一行', icon: 'target', group: '谓词' },
-    { id: 'rp.pred.copyText', label: '复制谓词' },
-    { id: 'rp.pred.copyState', label: '复制求值状态' },
+    { id: 'rp.pred.reveal', label: '跳到这一行', icon: 'target', group: '条件' },
+    { id: 'rp.pred.copyText', label: '复制条件原文' },
+    { id: 'rp.pred.copyState', label: '复制判断结果' },
   ];
 }
 

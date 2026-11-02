@@ -27,7 +27,7 @@ import {
   shortPath,
 } from '@kojo/plugin-api';
 import type { AssumedSlot, LocateNotice, ReplayAnalysis } from './panel-logic';
-import { analyzeReplay, predWindowSize } from './panel-logic';
+import { analyzeReplay, predWindowSize, replaySummarySentence } from './panel-logic';
 /** 置信度徽章样式 */
 const CONFIDENCE_BADGE: Record<FunctionReplay['confidence'], { label: string; className: string }> = {
   exact: { label: '确定', className: 'rp-badge conf-exact' },
@@ -107,6 +107,11 @@ export interface PredicateListProps {
    * 缺省 = 没有右键菜单（旧调用方与 SSR 判据零改动）。
    */
   readonly onMenu?: (predicate: PredicateReplay, event: PluginContextMenuAnchor) => void;
+  /**
+   * 谓词行的中文标注（可选；白话批）——词典命中的变量中文名，跟在原文后作对照。
+   * 缺省 = 不标注（旧调用方零改动）；计算在窗口内逐行进行（走窗才有成本）。
+   */
+  readonly glossOf?: (predicate: PredicateReplay) => string | null;
 }
 
 export function PredicateList(props: PredicateListProps): ReactElement {
@@ -114,6 +119,7 @@ export function PredicateList(props: PredicateListProps): ReactElement {
   // 窗口至少盖住「就是这一行」（findIndex 未命中返回 -1 ⇒ mustInclude = 0）
   const mustInclude = atLine !== null ? predicates.findIndex((p) => p.line === atLine) + 1 : 0;
   const win = predWindowSize(predicates.length, props.limit, mustInclude);
+  const glossOf = props.glossOf;
   return createElement(
     'ul',
     { className: 'rp-preds' },
@@ -121,6 +127,7 @@ export function PredicateList(props: PredicateListProps): ReactElement {
       const cls =
         p.outcome.kind === 'true' ? 'rp-outcome hit' : p.outcome.kind === 'false' ? 'rp-outcome miss' : 'rp-outcome unk';
       const isAt = atLine !== null && p.line === atLine;
+      const gloss = glossOf ? glossOf(p) : null;
       return createElement(
         'li',
         {
@@ -151,6 +158,13 @@ export function PredicateList(props: PredicateListProps): ReactElement {
               )
             : null,
           createElement('span', { className: 'rp-pred-text' }, p.text),
+          gloss !== null
+            ? createElement(
+                'span',
+                { className: 'rp-pred-gloss dim', title: '条件里变量的中文名（来自游戏词典）' },
+                `（${gloss}）`,
+              )
+            : null,
           createElement('span', { className: 'rp-line dim' }, `:${p.line}`),
         ),
       );
@@ -235,6 +249,8 @@ export function renderReplayPreview(opts: {
   onGrowPreds: (total: number) => void;
   /** 右键谓词行（可选；1023 批）——透传给 `PredicateList` */
   onPredicateMenu?: (predicate: PredicateReplay, event: PluginContextMenuAnchor) => void;
+  /** 谓词行中文标注（可选；白话批）——透传给 `PredicateList`（词典命中变量中文名） */
+  glossOf?: (predicate: PredicateReplay) => string | null;
   /**
    * 面板算好的只读统计（PS-7：`analyzeReplay` 的记忆化产物）。
    * 给了就直接用；没给（如单测与别的调用方）就地算——呈现结果逐字相同。
@@ -301,6 +317,8 @@ export function renderReplayPreview(opts: {
     'div',
     { className: 'rp-result' },
     noticeBanner,
+    // 白话摘要（白话批）：徽章行数字之前先给一句结论（措辞对齐 describeReading）
+    createElement('div', { className: 'rp-plain dim' }, replaySummarySentence(result)),
     createElement(
       'div',
       { className: 'rp-summary' },
@@ -319,7 +337,7 @@ export function renderReplayPreview(opts: {
       ? createElement(
           'div',
           { className: 'rp-unknowns' },
-          createElement('span', { className: 'dim' }, '未知原因：'),
+          createElement('span', { className: 'dim' }, '判不出的原因：'),
           ...unknowns.map((u) =>
             createElement(
               'span',
@@ -339,28 +357,35 @@ export function renderReplayPreview(opts: {
       onGrow: onGrowPreds,
       emitReveal,
       ...(opts.onPredicateMenu === undefined ? {} : { onMenu: opts.onPredicateMenu }),
+      ...(opts.glossOf === undefined ? {} : { glossOf: opts.glossOf }),
     }),
   );
 }
 
-/** 未知原因的中文提示（按 code；与 replay.ts 的分类一一对应） */
-const UNKNOWN_HINT: Record<string, string> = {
-  opaque: '表达式未解析',
-  call: '函数调用不可求值',
-  builtin: '内置函数无法求值',
-  rename: '改名记号',
-  pseudo: '伪变量/运行期值',
-  'local-no-write': '本地量无可见赋值',
-  'call-context': '调用上下文未提供',
-  'dynamic-index': '动态索引',
-  'named-index': '具名索引无法解析',
-  'missing-var': '快照中无此变量',
-  'index-oob': '索引越界',
-  truncated: '数组单元被截断',
-  type: '类型不匹配',
-  'divide-by-zero': '除零',
+/**
+ * 未知原因的中文短句（按 code；与 replay.ts 的分类一一对应）。
+ *
+ * 2026-11-02 白话批：旧词表是工程口径（「调用上下文未提供」「本地量无可见赋值」），
+ * 零基础作者读不出因果。全部改成「为什么判不出 + 该怎么办」的白话；机器码仍在
+ * 徽章的 title 里留档（悬停可见），不丢排障能力。
+ */
+export const UNKNOWN_HINT: Record<string, string> = {
+  opaque: '这段写法看不懂',
+  call: '调用了别的函数，存档里看不出来',
+  builtin: '用了内置函数，存档里算不出来',
+  rename: '用了改名记号，对应关系不在存档里',
+  pseudo: '用到了运行中才有的值（比如随机数）',
+  'local-no-write': '这个临时量在存档里没留下数值',
+  'call-context': '没告诉它调用时的参数',
+  'dynamic-index': '下标是算出来的，看不出指哪一格',
+  'named-index': '下标名字认不出来',
+  'missing-var': '存档里没有这个变量',
+  'index-oob': '下标超出了存档范围',
+  truncated: '存档里这格数据被截断了',
+  type: '类型对不上',
+  'divide-by-zero': '除以零',
   'too-many-args': '参数过多',
-  'string-compare': '字符串序比较',
-  'non-numeric': '结果非数值',
+  'string-compare': '文本比大小，存档里定不了',
+  'non-numeric': '结果不是数字',
   other: '其它',
 };

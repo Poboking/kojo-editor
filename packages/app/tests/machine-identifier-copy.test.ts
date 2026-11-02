@@ -363,9 +363,9 @@ const PINNED_COPY: readonly {
   },
   {
     file: 'packages/plugins/ui-state-replay/src/preview.ts',
-    phrase: "rename: '改名记号'",
+    phrase: "rename: '用了改名记号",
     count: 1,
-    why: '未知类别提示与求值侧同口径',
+    why: '未知类别提示的白话说法在位（2026-11-02 白话批重写 18 类词表；rename 条目仍与求值侧同指一码——引擎侧「改名记号无法求值」仍走谓词 title）',
   },
   {
     file: 'packages/plugins/ui-condition-matrix/src/index.ts',
