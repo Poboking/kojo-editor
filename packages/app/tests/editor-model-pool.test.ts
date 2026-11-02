@@ -106,6 +106,18 @@ describe('model 池 · 并发与失败', () => {
     expect(e.eol).toBe('CRLF');
     expect(h.deps.readText).not.toHaveBeenCalled();
   });
+
+  it('未落盘草稿（`untitled:N` 不是路径）同走注入腿：盘上什么都没有也一次读盘都不发', async () => {
+    const h = harness({});
+    const e = await h.pool.acquire({} as never, 'untitled:1', { text: '', encoding: 'utf-8', eol: 'LF' });
+    expect((e.model as unknown as FakeModel).value).toBe('untitled:1::');
+    expect(e.encoding).toBe('utf-8');
+    expect(e.eol).toBe('LF');
+    expect(h.deps.readText).not.toHaveBeenCalled();
+    // 基线由池钉 0（`fromRecovery` 那条既有语义）：脏不脏由消费侧按"草稿有没有内容"回答，
+    // 池不替它作保（空草稿不该一出生就出声，见 untitled-draft.test.ts）
+    expect(h.pool.baseline('untitled:1')).toBe(0);
+  });
 });
 
 describe('model 池 · 已保存基线', () => {

@@ -114,6 +114,8 @@ import { isInWorkspaceFile } from './file-area';
 // 表达式收进 `editor-editability.ts`（同一把尺子，两处消费：这里 + 标签栏色轨）。
 // 搬家不改语义——解锁集合的真源仍是本组件那一只 ref，模块只是经它读、经它判。
 import { canEditNow, notifyEditabilityChange } from './editor-editability';
+// 未落盘草稿（KW-16B2）：`untitled:N` 不是路径——不读盘、不重载，落点在首次保存那拍才由作者给。
+import { isUntitledPath } from './tabs-ops';
 // C1 反向下行批：光标位点广播的载荷构造 + 连续相同载荷去重（纯逻辑，单测在 app/tests）
 import { createCursorBroadcaster, cursorMovedPayload } from './cursor-broadcast';
 // 问题汇总：refreshMarkers 逐文件整份发布两层波浪线（erb-parser / condition-extractor）到 problem-store
@@ -678,6 +680,7 @@ export function EditorPane({
     const entry = entriesRef.current.get(path);
     const base = editorModelPool.baseline(path);
     if (!entry || base === undefined) return false;
+    if (isUntitledPath(path)) return entry.model.getValueLength() > 0;
     return entry.model.getAlternativeVersionId() !== base;
   }, []);
 
@@ -1922,6 +1925,11 @@ export function EditorPane({
     async (path: string): Promise<void> => {
       const entry = entriesRef.current.get(path);
       if (!entry) return; // 该文件未打开 → 与编辑器无关
+      // 未落盘草稿没有"盘上那一份"可读：说清楚，不拿一次读盘失败去冒充答案（铁律 4）
+      if (isUntitledPath(path)) {
+        notify({ kind: 'info', message: '这是未落盘草稿，盘上还没有它——「重新加载」无处可读。要留下它请按保存、在系统对话框里定落点与文件名。' });
+        return;
+      }
       const forced = forceReloadPathsRef.current.delete(path);
       let text: string;
       let diskEol: 'CRLF' | 'LF' = 'LF';
@@ -2406,13 +2414,18 @@ export function EditorPane({
           // 被洗成"干净"：autosave 不存、退出无提示丢弃、外部 file.changed 直接覆盖。
           // 基线钉 0 由**池在建 model 的那一刻**落在记录上（fromRecovery），不依赖闭包里的
           // `recovered` 撑过 await。
-          const recovered = peekRecoveredContent(filePath);
+          const recovered = isUntitledPath(filePath) ? null : peekRecoveredContent(filePath);
           const pooled = await editorModelPool.acquire(
             kernel,
             filePath,
             recovered
               ? { text: recovered.text, encoding: recovered.encoding, eol: recovered.eol }
-              : undefined,
+              // 未落盘草稿：盘上没有它 ⇒ 读盘这条路压根不走，以空正文建 model（池的注入腿
+              // 免 `readText`，基线钉 0）。恢复腿对草稿**一律不接管**——草稿不进会话快照，
+              // 上一轮留下的同键 journal 是孤儿，拿它填新草稿等于把昨天的内容悄悄塞进来。
+              : isUntitledPath(filePath)
+                ? { text: '', encoding: 'utf-8', eol: 'LF' }
+                : undefined,
           );
           stopRead();
           if (cancelled) {
@@ -3206,10 +3219,10 @@ export function EditorPane({
               SAVE-BUTTON-IO-SEAM（出路②）在此口径上**追加**宿主那一半：TS 批准记录在册但
               宿主准入门拒过的目录里，按钮渲染但置灰、悬停指回常驻错误条的那颗出路按钮
               （`save-button.tsx`；按下去必然失败的动作不再按得动）。 */}
-          {kernel.io.isWritable(filePath) ? (
+          {(isUntitledPath(filePath) || kernel.io.isWritable(filePath)) ? (
             <SaveButton
               dirty={dirty}
-              hostBlocked={saveBlockedByHostWriteDomain(filePath)}
+              hostBlocked={isUntitledPath(filePath) ? false : saveBlockedByHostWriteDomain(filePath)}
               onSave={() => void save()}
             />
           ) : null}
