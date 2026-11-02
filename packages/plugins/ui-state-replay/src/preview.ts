@@ -656,6 +656,7 @@ export const UNKNOWN_HINT: Record<string, string> = {
   rename: '用了改名记号，对应关系不在存档里',
   pseudo: '用到了运行中才有的值（比如随机数）',
   'local-no-write': '这个临时量在存档里没留下数值',
+  'local-range': '循环变量有好几种可能的取值，这几种判出来的结果不一样',
   'call-context': '没告诉它调用时的参数',
   'dynamic-index': '下标是算出来的，看不出指哪一格',
   'named-index': '下标名字认不出来',

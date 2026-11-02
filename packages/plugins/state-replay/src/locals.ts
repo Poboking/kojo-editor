@@ -28,8 +28,11 @@ import type {
 } from '@kojo/plugin-api';
 import { evaluateExpr, type ValueReader } from './evaluate';
 
-/** 数据流可解析的本地量槽位（与 extractor ASSIGNABLE_LOCALS 对齐） */
-const OVERLAY_LOCALS = new Set(['LOCAL', 'LOCALS', 'RESULT', 'RESULTS']);
+/**
+ * 数据流可解析的本地量槽位（与 extractor ASSIGNABLE_LOCALS 对齐）。
+ * 导出给 `loop-range.ts` 用——同一插件里"哪些名字算本地量"只许这一份。
+ */
+export const LOCAL_FAMILY_SLOTS = new Set(['LOCAL', 'LOCALS', 'RESULT', 'RESULTS']);
 const OVERLAY_ARGS = new Set(['ARG', 'ARGS']);
 
 /** 使用点位置（谓词行 / 赋值行） */
@@ -90,11 +93,22 @@ export function createFunctionOverlay(opts: CreateOverlayOptions): OverlayReader
       pick = a;
     }
     if (!pick) {
+      // 旧文案对"函数里明明写了、只是不在本使用点的必经路径上"那一族是**假话**
+      // （读起来像没人赋值）。机器码沿用 `local-no-write`（v0.2 第六批立的边界、
+      // 判定口径一字未改），只把"为什么算它无可见赋值"写实。
+      const elsewhere = assignments.filter((a) => a.name === name && a.index === index && a.line < at.line);
+      const why =
+        elsewhere.length === 0
+          ? '本函数内该槽位没有赋值语句，进入函数时的残留值不可知'
+          : `函数内另有 ${elsewhere.length} 处赋值（第 ${elsewhere
+              .slice(0, 6)
+              .map((a) => String(a.line))
+              .join(' / ')} 行${elsewhere.length > 6 ? ' …' : ''}），但都不在本使用点的必经路径上；未被赋值时的残留值不可知`;
       return {
         kind: 'unknown',
         unknown: {
           code: 'local-no-write',
-          message: `本地量在函数内无可见赋值：${name}:${index}（第 ${at.line} 行前，同分支路径）`,
+          message: `本地量在函数内无可见赋值：${name}:${index}（第 ${at.line} 行前，同分支路径）——${why}`,
         },
       };
     }
@@ -126,7 +140,7 @@ export function createFunctionOverlay(opts: CreateOverlayOptions): OverlayReader
   const resolve = (ref: VariableRef, at: OverlayPosition): ReplayValue | null => {
     const name = ref.name.toUpperCase();
     if (OVERLAY_ARGS.has(name)) return resolveArg(name, ref.indices, ref.text);
-    if (!OVERLAY_LOCALS.has(name)) return null;
+    if (!LOCAL_FAMILY_SLOTS.has(name)) return null;
 
     let index: number | null = null;
     if (ref.indices.length === 0) index = 0;

@@ -191,6 +191,7 @@ export type {
   DisplayInterpForm,
   DisplayInterpolation,
   FunctionAssignment,
+  FunctionLoopCounter,
   FunctionConditions,
   FunctionDisplayLine,
   FunctionPredicate,

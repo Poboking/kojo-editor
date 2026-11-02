@@ -21,6 +21,7 @@ import type {
   ControlFlowStatement,
   FunctionAssignment,
   FunctionConditions,
+  FunctionLoopCounter,
   FunctionPredicate,
   FunctionPredicates,
   FunctionReturn,
@@ -345,6 +346,90 @@ export function collectAssignments(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// 计数循环的循环量收集（KW-15C 1103；结构事实，语义留给回放侧）
+// ---------------------------------------------------------------------------
+
+/**
+ * `FOR` 头部：`槽位,字面初值,字面终值[,字面步进]`。
+ * 端点必须都是**字面整数**——表达式端点（`FOR LOCAL,1,CHARANUM`）一律不记：
+ * 区间无从枚举，硬算就是猜。步进接受但不参与区间（区间取两端点折成的闭区间，
+ * 见契约 `FunctionLoopCounter`：超近似只会少判，不会误判）。
+ */
+const LOOP_HEADER_RE = /^([A-Z_][A-Z0-9_]*)(?::(\d+))?\s*,\s*(-?\d+)\s*,\s*(-?\d+)(?:\s*,\s*(-?\d+))?\s*$/i;
+
+/** 区间上限（超过就不发布：逐值试算的代价必须有界） */
+const LOOP_RANGE_MAX = 64;
+
+/** 体内出现标签行 ⇒ 体外可能跳进体内（循环量也就可能是跳入时 carry 进来的旧值）⇒ 整条循环不发布 */
+const LABEL_LINE_RE = /^\$/;
+
+/**
+ * 从函数体原始行 + 控制流骨架收集计数循环的循环量。
+ * 与 `collectAssignments` 同一供应条件（要 `source.lines`）；`[SKIPSTART]…[SKIPEND]`
+ * 内的行不算真代码（同那份的口径）。未配对到 `NEXT` 的 `FOR` 不发布（不猜体区间）。
+ */
+export function collectLoopCounters(
+  lines: readonly string[],
+  stmts: readonly ControlFlowStatement[],
+): FunctionLoopCounter[] {
+  /** 一行的"真代码正文"（非代码 ⇒ 空串；判据与 collectAssignments 同一条） */
+  const codeAt = (lineNo: number): string => {
+    const trimmed = erbCodeBodyOf((lines[lineNo - 1] ?? '').trim());
+    if (trimmed.length === 0 || trimmed.startsWith(';') || trimmed.startsWith('@') || trimmed.startsWith('#')) return '';
+    return trimmed;
+  };
+  const out: FunctionLoopCounter[] = [];
+  for (let i = 0; i < stmts.length; i++) {
+    const open = stmts[i]!;
+    if (open.kind !== 'FOR') continue;
+    const m = LOOP_HEADER_RE.exec(open.expression.trim());
+    if (!m) continue;
+    const from = Number(m[3]);
+    const to = Number(m[4]);
+    const lo = Math.min(from, to);
+    const hi = Math.max(from, to);
+    if (hi - lo + 1 > LOOP_RANGE_MAX) continue;
+    // 配对的 NEXT：引擎侧 FOR 与它的 NEXT 同深度、体内更深 ⇒ 首个同深度 NEXT 就是收口
+    const close = stmts.slice(i + 1).find((t) => t.kind === 'NEXT' && t.depth === open.depth);
+    if (!close || close.line <= open.line + 1) continue;
+    // 体内有标签行 = 存在跳进体内的落点可能（跳进来时循环量未必是本次循环头写的）
+    let hasLabel = false;
+    for (let ln = open.line + 1; ln < close.line; ln++) {
+      if (LABEL_LINE_RE.test((lines[ln - 1] ?? '').trim())) hasLabel = true;
+    }
+    if (hasLabel) continue;
+    // 体内第一条真代码行（跳过区内的行不算）
+    let firstBodyLine = 0;
+    let inSkip = false;
+    for (let ln = open.line + 1; ln < close.line; ln++) {
+      const body = codeAt(ln);
+      if (inSkip) {
+        if (body === '[SKIPEND]') inSkip = false;
+        continue;
+      }
+      if (body === '[SKIPSTART]') {
+        inSkip = true;
+        continue;
+      }
+      if (body.length === 0) continue;
+      firstBodyLine = ln;
+      break;
+    }
+    if (firstBodyLine === 0) continue;
+    out.push({
+      name: m[1]!.toUpperCase(),
+      index: m[2] ? Number(m[2]) : 0,
+      openLine: open.line,
+      closeLine: close.line,
+      lo,
+      hi,
+      firstBodyLine,
+    });
+  }
+  return out;
+}
+
 export interface ExtractFunctionOptions {
   /** 语义标注（可选）：给依赖打上人类可读标签 */
   lookup?: SchemaLookup;
@@ -646,6 +731,9 @@ export function extractFunctionPredicates(
     // 显示行（v0.3 台词推演批；additive）：与赋值 / 内联谓词同一供应条件——
     // 给了 source 才扫（没有行区间就不猜，与 assignments 同口径）。
     ...(source ? { displays: collectDisplayLines(source.lines, fn.startLine + 1, source.endLine, contextOf ?? undefined) } : {}),
+    // 循环量（KW-15C 1103；additive）：与赋值同一供应条件——给了行区间才扫，
+    // 且只有"体内第一条真代码行"这类结构事实；区间语义留给回放侧。
+    ...(source ? { loopCounters: collectLoopCounters(source.lines, stmts) } : {}),
   };
 }
 

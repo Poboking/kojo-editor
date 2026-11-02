@@ -8,6 +8,10 @@
  * v0.2 第七批：内联求值通道——`InlineManager` 对口上域 `#FUNCTION` 纯助手做
  * 有界内联解释（先 `preanalyze` 异步预热 → 同步 `resolveCall` 注入求值上下文）。
  * 文本缓存与内联缓存随项目生命周期（`resetCaches`，装配层在 project.closed 调用）。
+ *
+ * KW-15C 1103：谓词判定改走 `judgePredicateWithLoops`——计数循环的循环量在使用点是
+ * 体内第一条真代码行时，按抽取侧发布的闭区间逐值试算，**值域内全体一致才收**，
+ * 不一致就换 `local-range` 继续报未知（其余点位逐字走改动前的 `judgeCondition`）。
  */
 
 import { splitEolLines } from '@kojo/plugin-api/eol';
@@ -26,10 +30,11 @@ import type {
   SnapshotArchive,
   StateReplayService,
 } from '@kojo/plugin-api';
-import { judgeCondition, type CallResolver, type EvalContext, type ValueReader } from './evaluate';
+import { type CallResolver, type EvalContext, type ValueReader } from './evaluate';
 import { buildBranchOutcomes } from './branches';
 import { InlineManager } from './inline';
 import { createFunctionOverlay, type OverlayPosition, type OverlayReader } from './locals';
+import { judgePredicateWithLoops } from './loop-range';
 import { createStateView, type SchemaLookup } from './state-view';
 import { buildTranscript } from './transcript';
 
@@ -115,7 +120,7 @@ export function replayPredicates(
             : base(ref),
         ...(resolveCall ? { resolveCall } : {}),
       };
-      const outcome = judgeCondition(p.expr, ctx);
+      const outcome = judgePredicateWithLoops(p.expr, ctx, detail, at);
       return {
         kind: p.kind,
         text: p.text,

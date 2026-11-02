@@ -30,7 +30,8 @@ export type ReplayUnknownCode =
   | 'builtin' // 内置函数存在但此调用无法求值（参数未知 / 越界 / 类型不符）
   | 'rename' // `[[词]]` rename 语法（读取期替换，编辑器保留原文）
   | 'pseudo' // 伪变量（RAND / CHARANUM 等计算值）
-  | 'local-no-write' // 本地量在函数内无可见赋值（v0.2 第六批起：本地量数据流的边界）
+  | 'local-no-write' // 本地量在该点位无必得赋值（v0.2 第六批立的边界；KW-15C 1103 只把理由写实，判定口径一字未动）
+  | 'local-range' // 循环量取值已能枚举、但值域内结论不一致（KW-15C 1103：值域有限 ≠ 判定得出）
   | 'call-context' // ARG/ARGS 为调用参数，未提供（或未覆盖该槽位的）调用上下文
   | 'dynamic-index' // 动态索引段（如 `YOGORE:(GET_CHARAHOME(TARGET))`）
   | 'named-index' // 具名索引无法解析（无字典 / 词不在字典）

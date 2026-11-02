@@ -184,6 +184,41 @@ export interface FunctionAssignment {
 }
 
 /**
+ * 计数循环的**循环量**结构事实（KW-15C 1103；additive）——
+ * `FOR 槽位,字面初值,字面终值[,步进]` 这类头部参数全是字面整数的计数循环。
+ *
+ * 抽取侧只记录形状，**不解释语义**（与 `FunctionAssignment` 同一分工）：
+ * - 槽位 = `name:index`（裸名 ≡ `:0`，与索引段声明规则一致）；用户 `#DIM` 变量同样记录，
+ *   消费方自行筛掉不归自己管的槽位名；
+ * - `lo / hi` = 两个端点折成的**闭区间**（`min/max`，不分方向、不看步进）。区间故意为宽：
+ *   引擎循环量到底取遍 `初值..终值-1` 还是 `..终值`、步进怎么走，都不必由消费方断言——
+ *   **超近似只会少判，不会误判**（区间内全体一致才收，见回放侧）；
+ * - `firstBodyLine` = 体内第一条真代码行（注释 / `@` `#` `$` 行不算）。回放侧只在
+ *   **使用点恰是这一行**时才用它：此时从循环头写入循环量到求值之间没有任何语句执行过，
+ *   循环量的取值就是循环头写进去的那个，与"被调用体会不会改写本地量"这类引擎作用域问题无关；
+ * - 抽取侧**不发布**下列循环（宁缺勿错，直接不记）：区间超过 64 格、体内出现标签行
+ *   （`$NAME`，即跳转落点）或跳转语句（`GOTO` / `JUMP` 系，即可能从体外落进体内）。
+ *
+ * 缺省（`undefined`）= 抽取侧未提供（旧数据兼容），消费方按无循环量处理。
+ */
+export interface FunctionLoopCounter {
+  /** 循环量变量名（大写归一） */
+  name: string;
+  /** 槽位下标（裸名 = 0） */
+  index: number;
+  /** `FOR` 行（1 基） */
+  openLine: number;
+  /** 配对的 `NEXT` 行（1 基；找不到配对则不发布该循环） */
+  closeLine: number;
+  /** 端点闭区间下界（含） */
+  lo: number;
+  /** 端点闭区间上界（含） */
+  hi: number;
+  /** 体内第一条真代码行（1 基；见上） */
+  firstBodyLine: number;
+}
+
+/**
  * RETURNF 语句的结构事实（v0.2 第七批）——内联求值的返回点资料。
  * 与 `FunctionAssignment` 同类：抽取层只记录，回放层（内联解释器）消费。
  */
@@ -289,6 +324,11 @@ export interface FunctionPredicates {
    * 仅明细视图填充（聚合路径零开销）；缺省 = 抽取侧未提供（旧数据兼容）。
    */
   displays?: FunctionDisplayLine[];
+  /**
+   * 计数循环的循环量序列（KW-15C 1103；additive；按行序）——见 `FunctionLoopCounter`。
+   * 仅明细视图填充（与 `assignments` 同口径）；缺省 = 抽取侧未提供。
+   */
+  loopCounters?: FunctionLoopCounter[];
 }
 
 /**
