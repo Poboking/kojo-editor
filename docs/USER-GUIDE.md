@@ -242,12 +242,21 @@ Releases 上的 `latest.json`，因此检查更新同样需要能连上 GitHub�
 >
 > 用中文输入法时：候选窗开着按 `Esc` 只是**撤销候选**，不会顺手关掉对话框或退出写作模式。
 
-命令面板与全工程检索的实际样子（演示数据为合成样本）：
+上面这些键位，在屏上长这样（演示数据为合成样本）：
 
 <table>
   <tr>
-    <td width="50%" align="center"><img src="assets/editor-palette.gif" width="420" alt="命令面板"><br><sub><b>命令面板</b> <code>Ctrl+Shift+P</code>：搜命令、看缺省键位、顺手改绑</sub></td>
-    <td width="50%" align="center"><img src="assets/editor-search.gif" width="420" alt="全工程检索"><br><sub><b>全工程检索</b>：命中按文件分组，图示 10 条 · 4 个文件</sub></td>
+    <td width="46%" align="center"><img src="assets/editor-palette.gif" width="420" alt="命令面板"></td>
+    <td valign="middle"><b>命令面板</b> <code>Ctrl+Shift+P</code><br>
+    输关键词就能搜到命令、看到它的缺省键位、顺手改绑。找不到某个面板时别翻菜单——先来这里搜。</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td valign="middle"><b>全工程检索</b><br>
+    命中按文件分组给出（图示 10 条 · 4 个文件）。记得某句台词或某个片段时用它；知道函数叫什么，用 <code>Shift+F12</code> 查引用更准。</td>
+    <td width="46%" align="center"><img src="assets/editor-search.gif" width="420" alt="全工程检索"></td>
   </tr>
 </table>
 

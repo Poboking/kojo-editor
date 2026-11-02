@@ -19,24 +19,14 @@ Tauri 2 壳（Rust 只做 IO 原语）+ React 19 + Monaco，pnpm monorepo。
 
 ## 演示
 
-六枚动图都是**从真界面录出来的**（演示数据全为合成样本，见文末「许可与致谢」），一条命令可重录。
+六枚动图都**从真界面录出来**，一条命令可重录（方法在 [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §8）；演示数据全为合成样本，见文末「许可与致谢」。
 
-<table>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/erb-definition.gif" width="480" alt="跳转定义"><br><sub><b>跳转定义</b> <code>F12</code> —— 读跨文件函数索引，不是当前文件的文本匹配</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/erb-references.gif" width="480" alt="查找引用"><br><sub><b>查找引用</b> <code>Shift+F12</code> —— peek 浮窗按文件分组给命中数</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/erb-completion.gif" width="480" alt="补全"><br><sub><b>补全</b> —— 按名槽出货：台词、旁白、注释、字符串段里不弹</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/editor-search.gif" width="480" alt="全工程检索"><br><sub><b>全工程检索</b> —— 图示为 10 条命中 · 4 个文件</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/editor-palette.gif" width="480" alt="命令面板"><br><sub><b>命令面板</b> <code>Ctrl+Shift+P</code> —— 100+ 条命令，绝大多数键位可改绑</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/editor-folding.gif" width="480" alt="折叠"><br><sub><b>折叠</b> —— 区间来自 tree-sitter CST，不靠正则数 <code>IF/ENDIF</code></sub></td>
-  </tr>
-</table>
+这里不把它们堆成一屏——**一枚动图配一段说明**，各归各的能力：先看最能说明「结构感知」的这一枚，其余分别贴在 §ERB 语言面一览 与 §编辑器的底子 里。
 
-重录方法与场景文件：[docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §8。
+<div align="center">
+  <img src="docs/assets/erb-definition.gif" width="760" alt="跳转定义（跨文件）">
+  <br><sub><b>跳转定义</b> <code>F12</code> —— 光标停在调用处，跳进<b>另一份文件</b>里的定义</sub>
+</div>
 
 ## 先看你是谁
 
@@ -71,6 +61,32 @@ ERB 是 1998 年时代的行式脚本：没有 LSP、没有 AST 工具链、没�
 | 同符号高亮 · 扩选 · code lens | `Ctrl+D` · `Shift+Alt+→` · 行内 |
 | 折叠（按函数体 / 区块） | 编辑器左侧折叠条 |
 
+三枚动图对应上面表里的三行，一张配一句话：
+
+<table>
+  <tr>
+    <td width="46%" align="center"><img src="docs/assets/erb-references.gif" width="420" alt="查找引用"></td>
+    <td valign="middle"><b>查找引用</b> <code>Shift+F12</code><br>
+    peek 浮窗按文件分组给出命中数。口上函数靠命名约定互调，改一处之前得先看清调用点散在哪几份文件里——全文 Grep 给的是行数，这里给的是「谁在调它」。</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td valign="middle"><b>补全</b> <code>Ctrl+Space</code> / 输入即弹<br>
+    候选按<b>名槽</b>出货：台词、旁白、注释、字符串段里不弹，触发字符是 <code>#</code> <code>[</code> <code>@</code> <code>$</code> <code>.</code>。不是把整张词表糊在你脸上，而是先问「这一格该出现什么」。</td>
+    <td width="46%" align="center"><img src="docs/assets/erb-completion.gif" width="420" alt="补全"></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="46%" align="center"><img src="docs/assets/editor-folding.gif" width="420" alt="折叠"></td>
+    <td valign="middle"><b>折叠</b> 按函数体 / 区块<br>
+    区间来自 tree-sitter CST，不靠正则数 <code>IF/ENDIF</code>。一份上万行的口上文件，能按结构收起来才谈得上读；真实语料的折叠起点召回率与逐行对拍读数记在 <a href="docs/STATE.md">docs/STATE.md</a>。</td>
+  </tr>
+</table>
+
 ## 给口上作者的成品面板
 
 这些是插件，不是宿主代码；用法都在 [docs/USER-GUIDE.md](docs/USER-GUIDE.md)。
@@ -95,8 +111,24 @@ ERB 是 1998 年时代的行式脚本：没有 LSP、没有 AST 工具链、没�
 - **编码与换行逐字节保持**：按声明编码读取（Shift-JIS / GBK / UTF-8 / UTF-16），写回保持原文件的 EOL 与 BOM 形态——改一行不会把整份文件重排。
 - **游戏目录默认只读**：第一次真键入弹确认；解锁只在**这一份文件、这一次会话**有效，重启回到默认只读。你自己的作品住在常驻可写的工作区，不受影响。
 - **写盘只有三条互不继承的授权通道**：内核 `writablePaths`、`exportFile`（系统对话框即授权）、启动器 `launcher/approvals.json`。
-- **一切能力都有可编程入口**：命令面板 100+ 条、键位可改绑，调试 CLI 用同一条腿驱动界面——这也是上面六枚动图的录制方式。
+- **一切能力都有可编程入口**：命令面板 100+ 条、键位可改绑，调试 CLI 用同一条腿驱动界面——本文那几枚动图就是这条腿录出来的。
 - **多编辑器组与多光标**：拆分（`Ctrl+\`）、`Ctrl+1..4` 聚焦、列编辑、移行、`Ctrl+Shift+L` 全加。
+
+<table>
+  <tr>
+    <td width="46%" align="center"><img src="docs/assets/editor-palette.gif" width="420" alt="命令面板"></td>
+    <td valign="middle"><b>命令面板</b> <code>Ctrl+Shift+P</code><br>
+    100+ 条命令都能在这儿搜到、执行、改绑键位（三枚内建项暂不可改）。面板找不到时别翻菜单——命令面板是同一个入口，界面上有的东西，命令表里都有。</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td valign="middle"><b>全工程检索</b><br>
+    命中按文件分组给出（图示 10 条 · 4 个文件）。配合上面的「查找引用」一起用：知道符号叫什么就用引用，只记得一句台词或一个片段才用检索。</td>
+    <td width="46%" align="center"><img src="docs/assets/editor-search.gif" width="420" alt="全工程检索"></td>
+  </tr>
+</table>
 
 ## 质量口径
 

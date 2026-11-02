@@ -19,24 +19,14 @@ Tauri 2 shell (Rust does IO primitives only) + React 19 + Monaco, pnpm monorepo.
 
 ## Demo
 
-All six animations were recorded from the real UI. The demo data is entirely synthetic (see *License and credits* below), and one command replays the recording.
+All six animations were recorded from the real UI and one command replays them (method: [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §8); the demo data is entirely synthetic (see *License and credits* below).
 
-<table>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/erb-definition.gif" width="480" alt="Go to definition"><br><sub><b>Go to definition</b> <code>F12</code> — resolves against the cross-file function index, not text matching in the current file</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/erb-references.gif" width="480" alt="Find references"><br><sub><b>Find references</b> <code>Shift+F12</code> — peek widget with hits grouped and counted per file</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/erb-completion.gif" width="480" alt="Completion"><br><sub><b>Completion</b> — candidates come from name slots: nothing pops inside dialogue, narration, comments or string segments</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/editor-search.gif" width="480" alt="Project-wide search"><br><sub><b>Project-wide search</b> — shown: 10 hits across 4 files</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/editor-palette.gif" width="480" alt="Command palette"><br><sub><b>Command palette</b> <code>Ctrl+Shift+P</code> — 100+ commands, most of them rebinding-able</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/editor-folding.gif" width="480" alt="Folding"><br><sub><b>Folding</b> — ranges come from the tree-sitter CST, never from counting <code>IF/ENDIF</code> with a regex</sub></td>
-  </tr>
-</table>
+They are not piled onto one screen — **each animation sits next to the sentence it proves**. Start with the one that says "structure-aware" best; the rest live under *ERB language surface* and *The fundamentals* below.
 
-Recording method and scenario files: [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §8.
+<div align="center">
+  <img src="docs/assets/erb-definition.gif" width="760" alt="Go to definition (cross-file)">
+  <br><sub><b>Go to definition</b> <code>F12</code> — from a call site, into the definition living in <b>another file</b></sub>
+</div>
 
 ## Start with who you are
 
@@ -71,6 +61,32 @@ So the missing piece is not "one more syntax highlighter" but a full IDE surface
 | Occurrence highlight · smart select · code lens | `Ctrl+D` · `Shift+Alt+→` · inline |
 | Folding (per function body / block) | folding gutter |
 
+Three animations for three rows of that table:
+
+<table>
+  <tr>
+    <td width="46%" align="center"><img src="docs/assets/erb-references.gif" width="420" alt="Find references"></td>
+    <td valign="middle"><b>Find references</b> <code>Shift+F12</code><br>
+    A peek widget with hits grouped and counted per file. Script functions call each other by naming convention, so before changing one you need to know which files call it — plain grep gives you line counts, this gives you callers.</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td valign="middle"><b>Completion</b> <code>Ctrl+Space</code> / as you type<br>
+    Candidates come from <b>name slots</b>: nothing pops inside dialogue, narration, comments or string segments; trigger characters are <code>#</code> <code>[</code> <code>@</code> <code>$</code> <code>.</code> It asks "what belongs in this position" instead of dumping the whole vocabulary at you.</td>
+    <td width="46%" align="center"><img src="docs/assets/erb-completion.gif" width="420" alt="Completion"></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="46%" align="center"><img src="docs/assets/editor-folding.gif" width="420" alt="Folding"></td>
+    <td valign="middle"><b>Folding</b> per function body / block<br>
+    Ranges come from the tree-sitter CST, never from counting <code>IF/ENDIF</code> with a regex. A script file with tens of thousands of lines is only readable if it collapses by structure; folding recall and line-by-line parity readings on real corpora are booked in <a href="docs/STATE.md">docs/STATE.md</a>.</td>
+  </tr>
+</table>
+
 ## Panels for script authors
 
 These are plugins, not host code. Usage lives in [docs/USER-GUIDE.md](docs/USER-GUIDE.md) (currently Chinese only).
@@ -95,8 +111,24 @@ The exact panel inventory (including which ones are **sealed by default** and wh
 - **Encoding and EOL are preserved byte-for-byte**: files are read with their declared encoding (Shift-JIS / GBK / UTF-8 / UTF-16) and written back in the original EOL/BOM shape — editing one line does not reformat the file.
 - **Game directories are read-only by default**: the first real keystroke asks. The unlock applies to **this file, this session**; after a restart protection is back. Your own work lives in a persistent writable workspace and is never affected.
 - **Three non-inheritable write authorization channels**: kernel `writablePaths`, `exportFile` (the system dialog *is* the authorization), launcher `launcher/approvals.json`.
-- **Every capability has a programmatic entry point**: 100+ commands in the palette, all rebinding-able, and the debug CLI drives the UI through the same path — which is how the six animations above were recorded.
+- **Every capability has a programmatic entry point**: 100+ commands in the palette, all rebinding-able, and the debug CLI drives the UI through the same path — which is how the animations in this file were recorded.
 - **Editor groups and multi-cursor**: split (`Ctrl+\`), `Ctrl+1..4` focus, column editing, line move, `Ctrl+Shift+L` add all.
+
+<table>
+  <tr>
+    <td width="46%" align="center"><img src="docs/assets/editor-palette.gif" width="420" alt="Command palette"></td>
+    <td valign="middle"><b>Command palette</b> <code>Ctrl+Shift+P</code><br>
+    Everything the UI can do is searchable, runnable and rebindable here (three built-ins are not rebindable yet). When you cannot find a panel, do not dig through menus — the command list is the same entry point as the interface.</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td valign="middle"><b>Project-wide search</b><br>
+    Hits grouped per file (shown: 10 hits across 4 files). Use it together with find-references: if you know the symbol's name, use references; if you only remember a line of dialogue or a fragment, search.</td>
+    <td width="46%" align="center"><img src="docs/assets/editor-search.gif" width="420" alt="Project-wide search"></td>
+  </tr>
+</table>
 
 ## How quality is held
 

@@ -19,24 +19,14 @@ Tauri 2 シェル（Rust は IO プリミティブのみ）+ React 19 + Monaco�
 
 ## デモ
 
-6 枚のアニメーションはすべて実際の画面から録画したものです。デモデータはすべて合成サンプル（末尾の「ライセンスと謝辞」参照）で、1 コマンドで作り直せます。
+6 枚のアニメーションはすべて実際の画面から録画したもので、1 コマンドで作り直せます（手順：[docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §8）。デモデータはすべて合成サンプルです（末尾の「ライセンスと謝辞」参照）。
 
-<table>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/erb-definition.gif" width="480" alt="定義へ移動"><br><sub><b>定義へ移動</b> <code>F12</code> —— ファイル横断の関数インデックスを読む（開いているファイル内のテキスト照合ではない）</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/erb-references.gif" width="480" alt="参照の検索"><br><sub><b>参照の検索</b> <code>Shift+F12</code> —— peek 画面でヒットをファイル別にグループ化・件数表示</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/erb-completion.gif" width="480" alt="補完"><br><sub><b>補完</b> —— 名前のスロットで絞り込む。台詞・ナレーション・コメント・文字列の内側では出ない</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/editor-search.gif" width="480" alt="プロジェクト全体検索"><br><sub><b>プロジェクト全体検索</b> —— 図は 10 件 · 4 ファイル</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/editor-palette.gif" width="480" alt="コマンドパレット"><br><sub><b>コマンドパレット</b> <code>Ctrl+Shift+P</code> —— 100+ のコマンド、大半はキー変更可能</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/editor-folding.gif" width="480" alt="たたみ"><br><sub><b>たたみ</b> —— 区間は tree-sitter CST から取る。正規表現で <code>IF/ENDIF</code> を数えない</sub></td>
-  </tr>
-</table>
+一枚の画面に積みはしません——**1 枚を 1 つの説明の隣に**置きます。まず「構造認識」を最もよく示すこの一枚を。残りは何れも下の「ERB 言語面」と「エディタとしての土台」の各節に散らしてあります。
 
-録画手順とシナリオファイル：[docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §8。
+<div align="center">
+  <img src="docs/assets/erb-definition.gif" width="760" alt="定義へ移動（ファイル横断）">
+  <br><sub><b>定義へ移動</b> <code>F12</code> —— 呼び出し側にいる光标が、<b>別のファイル</b>の中の定義へ飛ぶ</sub>
+</div>
 
 ## まず「自分はどれか」を選ぶ
 
@@ -71,6 +61,32 @@ ERB は 1998 年世代の行指向スクリプトで、LSP も AST ツールチ�
 | 同一シンボル強調 · スマート選択 · code lens | `Ctrl+D` · `Shift+Alt+→` · 行内 |
 | たたみ（関数本体 / ブロック単位） | たたみガター |
 
+上の表の三行に対応する三枚を、一枚一文で：
+
+<table>
+  <tr>
+    <td width="46%" align="center"><img src="docs/assets/erb-references.gif" width="420" alt="参照の検索"></td>
+    <td valign="middle"><b>参照の検索</b> <code>Shift+F12</code><br>
+    peek 画面でヒットをファイル別にグループ化し件数を出す。口上関数は命名規約で呼び合うので、一か所を変える前に「呼び出し側がどのファイルに散っているか」を見ねばならない。全文 Grep が行数をくれるのに対して、これは「誰がそれを呼んでいるか」をくれる。</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td valign="middle"><b>補完</b> <code>Ctrl+Space</code> / 入力即表示<br>
+    候補は<b>名前のスロット</b>で絞る。台詞・ナレーション・コメント・文字列の内側では出ず、トリガ文字は <code>#</code> <code>[</code> <code>@</code> <code>$</code> <code>.</code>。語彙表を丸ごと突きつけるのではなく、「この位置に何が入るか」を先に訊いている。</td>
+    <td width="46%" align="center"><img src="docs/assets/erb-completion.gif" width="420" alt="補完"></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="46%" align="center"><img src="docs/assets/editor-folding.gif" width="420" alt="たたみ"></td>
+    <td valign="middle"><b>たたみ</b> 関数本体 / ブロック単位<br>
+    区間は tree-sitter CST から取り、正規表現で <code>IF/ENDIF</code> を数えない。数万行の口上ファイルは、構造で畳めて初めて読めるようになる。実コーパスでのたたみ召回率と逐行の付き合わせの読み値は <a href="docs/STATE.md">docs/STATE.md</a> に記帳してある。</td>
+  </tr>
+</table>
+
 ## 作者向けのパネル
 
 これらは宿主のコードではなくプラグインです。使い方は [docs/USER-GUIDE.md](docs/USER-GUIDE.md)（現在中国語のみ）。
@@ -95,8 +111,24 @@ ERB は 1998 年世代の行指向スクリプトで、LSP も AST ツールチ�
 - **エンコーディングと改行をバイト単位で保持**：宣言されたエンコーディング（Shift-JIS / GBK / UTF-8 / UTF-16）で読み、元の EOL / BOM の形のまま書き戻す。1 行の編集がファイル全体の並べ替えにならない。
 - **ゲームディレクトリは既定で読み取り専用**：実際の最初のキー入力で確認が出る。解除は**このファイル・このセッション**限定で、再起動すると保護に戻る。あなたの作品は常設の書き込み可能ワークスペースにあり、影響を受けません。
 - **書き込み許可は互いに継承されない 3 経路のみ**：カーネルの `writablePaths`、`exportFile`（システムダイアログがすなわち許可）、ランチャの `launcher/approvals.json`。
-- **あらゆる機能にプログラマブルな入口がある**：コマンドパレット 100+、キー変更可、デバッグ CLI は同じ経路で UI を駆動する——上の 6 枚もこの経路で録った。
+- **あらゆる機能にプログラマブルな入口がある**：コマンドパレット 100+、キー変更可、デバッグ CLI は同じ経路で UI を駆動する——この文書のアニメーションは全部その経路で録った。
 - **グループ分割と複数カーソル**：分割（`Ctrl+\`）、`Ctrl+1..4` フォーカス、矩形編集、行移動、`Ctrl+Shift+L` で全部追加。
+
+<table>
+  <tr>
+    <td width="46%" align="center"><img src="docs/assets/editor-palette.gif" width="420" alt="コマンドパレット"></td>
+    <td valign="middle"><b>コマンドパレット</b> <code>Ctrl+Shift+P</code><br>
+    画面ができることは全部ここで検索・実行・キー変更できる（内建の 3 本は当面変更不可）。パネルが見つからないとき、メニューを漁るのは正解ではない——コマンド表と画面は同じ入口を共有している。</td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td valign="middle"><b>プロジェクト全体検索</b><br>
+    ヒットはファイル別にまとめる（図は 10 件 · 4 ファイル）。上の「参照の検索」と組み合わせて使う。シンボル名が分かっているなら参照、台詞の一節や断片しか覚えていないなら検索。</td>
+    <td width="46%" align="center"><img src="docs/assets/editor-search.gif" width="420" alt="プロジェクト全体検索"></td>
+  </tr>
+</table>
 
 ## 品質の拠り所
 
