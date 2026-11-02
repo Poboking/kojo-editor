@@ -22,19 +22,29 @@
  * 选定的位置）由读取单源按契约决定，面板拿不到任何目标路径参数（架构铁律 6）。
  */
 
-import { createElement, useEffect, useState, type ReactNode } from 'react';
+import { createElement, useEffect, useRef, useState, type ReactNode } from 'react';
 import type {
   ArchiveExtractOutcome,
   ArchiveReaderService,
   CharaInfo,
   ComputePool,
   GameProject,
+  PanelRowRovingHost,
   Plugin,
   PluginContextMenuAnchor,
   ProjectService,
+  RowNavHostEvent,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { archiveEntryLabel, ArchiveServices, KernelServices, isPathUnder } from '@kojo/plugin-api';
+import {
+  applyPanelRowNavFromEvent,
+  archiveEntryLabel,
+  ArchiveServices,
+  KernelServices,
+  isPathUnder,
+  PANEL_ROW_ATTR,
+  syncRovingTabIndexes,
+} from '@kojo/plugin-api';
 import {
   buildArchiveList,
   summarizeCharacters,
@@ -224,6 +234,20 @@ export function createUiArchiveBrowserPlugin(): Plugin {
         /** 右键菜单动作的回执（复制失败这类"按了没反应"要有一句人话） */
         const [note, setNote] = useState('');
 
+        /**
+         * 行键盘协议（kw8b 1102 批）：名单容器 = 面板根 `.panel-archive-browser`，键位判据、
+         * 合成期让位、`select`/`textarea` 让位与"打开敲行自己的 `onClick`"全住契约层
+         * （`sugar-panels.ts` 行键盘区块）——与宿主检索/问题面板、约定校验面板同一把尺子，
+         * 本插件零复制。行 = 档位钮 `.ab-row-btn`（它的 `onClick` 就是既有的"展开角色区摘要 +
+         * 广播 `kojo.snapshotSelected`"那一条，键盘不另开第二条揭示通路）；展开体里的两个
+         * 「取出」按钮不是行——它们是动作簇，混进名单会让 ↑↓ 在同一档上原地打转。
+         */
+        const rootRef = useRef<PanelRowRovingHost | null>(null);
+        // 每帧渲染后再对齐一次漫游位（重扫会增减行；键盘那一腿由判据层就地办结）
+        useEffect(() => {
+          syncRovingTabIndexes(rootRef.current);
+        });
+
         /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
         const ic = (name: string, size: number, fallback: string): ReactNode =>
           (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
@@ -393,6 +417,9 @@ export function createUiArchiveBrowserPlugin(): Plugin {
               {
                 className: 'ab-row-btn',
                 title: `${row.path}${row.saveMes ? ` — ${row.saveMes}` : ''}`,
+                // 行名单标记（行键盘协议 kw8b 1102 批）：没画出来的档位（降级态整列表缺席）
+                // 天然不在名单上
+                [PANEL_ROW_ATTR]: '',
                 onClick: () => toggle(row),
               },
               head,
@@ -436,6 +463,18 @@ export function createUiArchiveBrowserPlugin(): Plugin {
           'div',
           {
             className: 'panel-archive-browser',
+            // 行键盘协议（kw8b 1102 批）：↑↓ 移焦点 / F4·F8 移过去并当场打开（走行自己的
+            // onClick = 展开摘要 + 广播选中）；`tabIndex=-1` 照 `FileTree.tsx` 先例——不是给
+            // Tab 用的，是给"把焦点交给面板"那条腿。
+            ref: rootRef,
+            tabIndex: -1,
+            onKeyDown: (e: RowNavHostEvent) => {
+              applyPanelRowNavFromEvent(e);
+            },
+            onFocus: (e: { currentTarget: PanelRowRovingHost | null }) => {
+              // 鼠标点行 / 右键菜单抢回焦点时对齐漫游位（Tab 序只留踩住的那一行）
+              syncRovingTabIndexes(e.currentTarget);
+            },
             // 空白处右键（1023 批）：刷新 · 复制存档目录
             onContextMenu: (e: PluginContextMenuAnchor) =>
               openArchivePanelMenu(props, e, projectNow.savDir ?? null, menuHost),
