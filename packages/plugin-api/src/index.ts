@@ -804,6 +804,14 @@ export {
   MORE_ROW_STYLE,
   MORE_ROW_TITLE,
   moreRowLabel,
+  // 面板行键盘协议（kw8a 1102 行键盘批；判据真源见 `sugar-panels.ts` 末段区块头注）
+  PANEL_ROW_ATTR,
+  PANEL_ROW_SELECTOR,
+  nextRovingIndex,
+  rowNavDecision,
+  applyPanelRowNav,
+  applyPanelRowNavFromEvent,
+  syncRovingTabIndexes,
 } from './sugar-panels';
 export type {
   LiveTextPool,
@@ -812,6 +820,14 @@ export type {
   PanelTruthController,
   PanelTruthHandlers,
   RenderWindow,
+  RowNavDecision,
+  RowNavInput,
+  RowNavDomEvent,
+  RowNavHostEvent,
+  PanelRowElement,
+  PanelRowNavHost,
+  PanelRovingRowElement,
+  PanelRowRovingHost,
 } from './sugar-panels';
 
 /* ---- 编译闸收口：糖编辑类型走 barrel（additive，勿在他处重排） ---- */

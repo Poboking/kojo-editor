@@ -9,6 +9,10 @@
  *
  * 框架无关纪律：本模块零 React、零 DOM 类型依赖——触底观察器走最小结构化类型 +
  * `globalThis` 探测（不可用即退化为纯点击，行为不丢），面板壳留在各自插件里。
+ *
+ * 2026-11-02 kw8a 行键盘批追加：本模块同时是**面板行键盘协议**（`rowNavDecision` /
+ * `applyPanelRowNav` / `nextRovingIndex`）的契约层真源——宿主两只面板与插件面板共用
+ * 同一把尺子（插件不许 import 宿主，铁律 2），落点理由见该区块头注。
  */
 
 import type { Unsubscribe } from './base';
@@ -316,4 +320,243 @@ export const MORE_ROW_STYLE = { width: '100%', textAlign: 'center', borderStyle:
 export const MORE_ROW_TITLE = '滚到此处会自动加载下一批；也可直接点击';
 export function moreRowLabel(remaining: number): string {
   return `显示更多（还剩 ${remaining}）`;
+}
+
+/* ============================== 面板行键盘导航（行键盘协议） ============================== */
+
+/**
+ * 结果类面板的**行导航**（1020 编辑器体感批定稿的用户反馈项 9；kw8a 1102 行键盘批
+ * 从宿主 `ui/panel-row-nav.ts` + `ui/shell-keys.ts` 上提成契约层单源）。
+ *
+ * 协议口径**逐字不变**：
+ *
+ * - **↑↓ = 只在可见行之间移动焦点**，不打开任何东西：焦点不在行上时，↓ 从第一行走、
+ *   ↑ 从最后一行走（同一条回绕尺子，不留特例）；
+ * - **F4 / F8 = 移动焦点并当场打开**（Shift 反向）：等价于"按 ↑↓ 走到那一行再敲 Enter"，
+ *   所以打开动作走的还是那一行按钮自己的 `onClick`，面板里不留第二条跳转路径；
+ * - **`<select>` / `<textarea>` 里的方向键一律让位**：下拉框的方向键是改选项、
+ *   多行框的方向键是移光标，把它们吃掉就成了"排序框按不动"那种新 bug。
+ *   单行检索框不放这条：那里 ↑↓ 本来什么都不做，让给行导航正是作者要的手感。
+ * - **输入法合成期一律放行**（宿主全局键那条已登记缺口的行导航侧：合成中的键归输入法，
+ *   行导航一个字节都不动）。
+ *
+ * **为什么住契约层**：这条协议要同时喂宿主两只面板与插件面板，而插件不许 import 宿主
+ * 模块（铁律 2）——共享件的唯一合法落点是 `plugin-api`（本文件先例：`attachGrowSentinel`
+ * 同款最小结构化类型，零 DOM 类型依赖，测试桩不必起 jsdom）。
+ * **为什么并入本文件而不另立叶子**：`nextRovingIndex` 的消费者 `ui/shell-keys.ts` 住在
+ * 开机图里，新开一枚文件就是把 201 顶格的文件闸顶爆（本闸纪律"再进图必须先出图"）；
+ * 并入这枚已在图里的面板共享核，文件数持平、只付真实字节（归因见
+ * `packages/app/tests/ps10-eager-graph.test.ts` 台账）。
+ */
+
+/** 结果行的 DOM 标记：容器里带这个属性的按钮才参与行导航（折叠组里没画出来的行自然不在名单上） */
+export const PANEL_ROW_ATTR = 'data-panel-row';
+
+/** 行名单的选择器（与行标记 `PANEL_ROW_ATTR` 同一个真源，两处不许各写一遍字符串） */
+export const PANEL_ROW_SELECTOR = `[${PANEL_ROW_ATTR}]`;
+
+/** 方向键让位的那几种控件（单行检索框不在内，理由见协议头注） */
+const FIELD_SELECTOR = 'select, textarea';
+
+/** 一次导航的落点：第几行（容器内可见行的下标），要不要顺手打开。
+ * **只给"是否打开"这一格事实，不给任何跳转路径**——打开永远敲行自己的 `onClick`。 */
+export interface RowNavDecision {
+  readonly index: number;
+  readonly open: boolean;
+}
+
+export interface RowNavInput {
+  readonly key: string;
+  readonly shiftKey: boolean;
+  /** 当前聚焦行的下标；焦点不在结果行上 = `-1` */
+  readonly current: number;
+  /** 可见结果行数（0 = 没有可导航的行） */
+  readonly count: number;
+  /** 按键落在下拉框 / 多行框里（方向键要让位，功能键不用） */
+  readonly inField: boolean;
+}
+
+/**
+ * 方向键漫游（roving tabindex）的下一个落点（2026-10-14 HK-4 UI 批：焦点环与键盘可达；
+ * kw8a 1102 行键盘批从宿主 `ui/shell-keys.ts` 原样上提——文件树与 tablist 的
+ * `shell-keys.nextRovingIndex` 改成薄转发，全仓只有这一把漫游尺子）。
+ *
+ * 语义（调用方原样消费返回值）：
+ * - `ArrowRight` / `ArrowDown` 前进一格，`ArrowLeft` / `ArrowUp` 后退一格；
+ * - `Home` → `0`，`End` → `count - 1`；
+ * - **边界一律回绕**（wrap-around）：末尾再前进落到 `0`，`0` 再后退落到 `count - 1`。
+ *   选回绕而非停在末尾，与 ARIA APG 的 tablist 范例一致——一组控件是一圈，不是一条死胡同。
+ * - 非漫游键 → `null`（调用方**原样让位**给原生行为：Enter/Space 激活、Tab 跳走都不该被吞）。
+ *
+ * 边界：`count <= 0` 返回 `null`（空集合无可漫游）；`current` 先夹取到 `[0, count-1]`
+ * 再算（`Array#indexOf` 的 `-1` 就是靠这一步归位到 0）。
+ */
+export function nextRovingIndex(current: number, count: number, key: string): number | null {
+  if (count <= 0) return null;
+  const cur = Math.min(count - 1, Math.max(0, current));
+  switch (key) {
+    case 'ArrowRight':
+    case 'ArrowDown':
+      return (cur + 1) % count;
+    case 'ArrowLeft':
+    case 'ArrowUp':
+      return (cur - 1 + count) % count;
+    case 'Home':
+      return 0;
+    case 'End':
+      return count - 1;
+    default:
+      return null;
+  }
+}
+
+/**
+ * 一次按键该怎么走（纯函数；`null` = 不消费，原样让位，绝不吞别人的键）。
+ *
+ * F4 与 F8 走同一条腿是有意的：VS Code 里 F4 属于"检索结果"、F8 属于"问题"，
+ * 但在**面板里**它们问的是同一件事——"下一个 / 上一个"。一把尺子两处用，
+ * 作者从哪个面板学到的手感都到得了另一个。
+ */
+export function rowNavDecision(input: RowNavInput): RowNavDecision | null {
+  const { key, shiftKey, current, count, inField } = input;
+  let dir: 1 | -1;
+  let open: boolean;
+  if (key === 'ArrowDown') {
+    dir = 1;
+    open = false;
+  } else if (key === 'ArrowUp') {
+    dir = -1;
+    open = false;
+  } else if (key === 'F4' || key === 'F8') {
+    dir = shiftKey ? -1 : 1;
+    open = true;
+  } else {
+    return null;
+  }
+  if (open === false && inField) return null; // 下拉框 / 多行框里的方向键归那个控件
+  if (count <= 0) return null;
+  // 焦点还没进列表（在检索框里）：↓ 进**第一行**、↑ 进**最后一行**——这一步不走回绕，
+  // 因为 `nextRovingIndex` 把 `-1` 先夹到 `0` 再加一，从输入框按 ↓ 会跳到第二行（少一行）。
+  if (current < 0) return { index: dir === 1 ? 0 : count - 1, open };
+  const index = nextRovingIndex(current, count, dir === 1 ? 'ArrowDown' : 'ArrowUp');
+  return index === null ? null : { index, open };
+}
+
+/** 一个可导航的结果行（DOM 元素满足这个形状；测试里给桩即可，不必起 jsdom） */
+export interface PanelRowElement {
+  focus(): void;
+  click(): void;
+  closest?(selector: string): unknown;
+}
+
+/** 行导航要找的那一段容器（只含结果区，工具条与过滤框不参与 ⇒ 不在同一棵子树里） */
+export interface PanelRowNavHost {
+  querySelectorAll(selector: string): ArrayLike<PanelRowElement>;
+}
+
+/** 键盘事件里本模块要看的那几样（React 合成事件与原生事件都满足 ⇒ 接线处零适配） */
+export interface RowNavDomEvent {
+  readonly key: string;
+  readonly shiftKey: boolean;
+  readonly target: unknown;
+  /** 输入法合成期（事件级判据；宿主全局键那三条证据的另两条是会话标志，不归行导航） */
+  readonly isComposing?: boolean;
+  readonly keyCode?: number;
+  preventDefault(): void;
+}
+
+/** 挂在容器上的键盘事件：`currentTarget` 就是行名单容器 ⇒ 接线处一行调用，不再自己抓 ref */
+export interface RowNavHostEvent extends RowNavDomEvent {
+  readonly currentTarget: PanelRowNavHost | null;
+}
+
+/**
+ * `keyCode === 229`（`Process`）：输入法合成期的键码。
+ * 与宿主 `ui/shell-keys.ts` 的 `IME_PROCESS_KEY_CODE` 同值不同渠道——那枚喂全局键的
+ * 三层早退（还要叠会话标志），这里只看事件级证据，不许反向 import 宿主（铁律 2）。
+ */
+const IME_COMPOSING_KEY_CODE = 229;
+
+/** 把一次按键落到容器里的行按钮上。返回 `true` = 已消费。
+ *
+ * 行名单每次现取（不缓存）：结果随流式检索一行行长出来、过滤与折叠也会改名单，
+ * 缓存下标一定会指错行。取的是 **DOM 序**，与面板画行的序同一条 ⇒ 所见即所跳。
+ */
+export function applyPanelRowNav(host: PanelRowNavHost | null, e: RowNavDomEvent): boolean {
+  if (host === null) return false;
+  // 合成中的方向键归输入法（候选列表就靠它翻页）——不 preventDefault，原样放行
+  if (e.isComposing === true || e.keyCode === IME_COMPOSING_KEY_CODE) return false;
+  const target = e.target as { closest?(selector: string): unknown } | null;
+  // `closest` 只在这一处判一次存在性（TS narrowing 穿不过布尔变量，写成 canClimb 就得再断言一次）
+  if (typeof target?.closest !== 'function') {
+    return applyRowNav(host, e, null, false);
+  }
+  const climb = target.closest.bind(target);
+  return applyRowNav(host, e, climb(PANEL_ROW_SELECTOR) as PanelRowElement | null, climb(FIELD_SELECTOR) !== null);
+}
+
+/** 挂在容器上的便捷入口：宿主 = 事件自己的 `currentTarget`（接线处只留一行）。 */
+export function applyPanelRowNavFromEvent(e: RowNavHostEvent): boolean {
+  return applyPanelRowNav(e.currentTarget, e);
+}
+
+function applyRowNav(
+  host: PanelRowNavHost,
+  e: RowNavDomEvent,
+  owner: PanelRowElement | null,
+  inField: boolean,
+): boolean {
+  const rows = Array.from(host.querySelectorAll(PANEL_ROW_SELECTOR));
+  const decision = rowNavDecision({
+    key: e.key,
+    shiftKey: e.shiftKey,
+    current: owner === null ? -1 : rows.indexOf(owner),
+    count: rows.length,
+    inField,
+  });
+  if (decision === null) return false;
+  const next = rows[decision.index];
+  if (next === undefined) return false;
+  e.preventDefault();
+  next.focus();
+  // Tab 序跟着焦点走：漫游位只有踩住的那一行是 0（`syncRovingTabIndexes` 同款，就地办结，
+  // 不等重渲染——键盘移动焦点往往恰恰不触发渲染）
+  roveTabIndexesTo(rows, next);
+  // 打开就敲这一枚按钮本身：跳转判据仍然只住在行的 onClick 那一处
+  if (decision.open) next.click();
+  return true;
+}
+
+/** 带漫游 tabindex 的行形状（真实 DOM 元素天然满足；桩没有该属性时赋值即补上，无害） */
+export interface PanelRovingRowElement extends PanelRowElement {
+  tabIndex: number;
+}
+
+/** 能列出行名单、行上带 tabindex 的容器（= `PanelRowNavHost` 的行加强形状） */
+export interface PanelRowRovingHost {
+  querySelectorAll(selector: string): ArrayLike<PanelRovingRowElement>;
+}
+
+function roveTabIndexesTo(rows: readonly PanelRowElement[], target: PanelRowElement | null): void {
+  const keep = target === null ? rows[0] : target;
+  for (const row of rows) {
+    const tabbable = row as { tabIndex?: number };
+    const next = row === keep ? 0 : -1;
+    if (tabbable.tabIndex !== next) tabbable.tabIndex = next;
+  }
+}
+
+/**
+ * 行级 **roving tabindex**（照宿主 `FileTree.tsx` 每帧一趟扫描的先例）：整段名单里只留
+ * 一枚 `tabIndex = 0`——焦点踩住的那一行；焦点不在任何行上时兜底给第一行，其余一律 `-1`。
+ * 面板在渲染后的 effect 与容器 focus 事件两处调用（键盘移动焦点那一腿由
+ * `applyPanelRowNav` 就地办结）。无 `document` 的环境（SSR / 纯函数桩）按"焦点不在行上"
+ * 处理 ⇒ 兜底第一行，判据不静默。
+ */
+export function syncRovingTabIndexes(host: PanelRowRovingHost | null): void {
+  if (host === null) return;
+  const rows = Array.from(host.querySelectorAll(PANEL_ROW_SELECTOR));
+  if (rows.length === 0) return;
+  const active = (globalThis as { document?: { activeElement?: unknown } }).document?.activeElement ?? null;
+  roveTabIndexesTo(rows, rows.find((row) => row === active) ?? rows[0] ?? null);
 }

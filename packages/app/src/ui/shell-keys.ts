@@ -255,31 +255,9 @@ export function shouldRunGlobalCommand(decision: GlobalCommandDecision): boolean
 /**
  * 方向键漫游（roving tabindex）的下一个落点（2026-10-14 HK-4 UI 批：焦点环与键盘可达）。
  *
- * 语义（调用方原样消费返回值）：
- * - `ArrowRight` / `ArrowDown` 前进一格，`ArrowLeft` / `ArrowUp` 后退一格；
- * - `Home` → `0`，`End` → `count - 1`；
- * - **边界一律回绕**（wrap-around）：末尾再前进落到 `0`，`0` 再后退落到 `count - 1`。
- *   选回绕而非停在末尾，与 ARIA APG 的 tablist 范例一致——一组控件是一圈，不是一条死胡同。
- * - 非漫游键 → `null`（调用方**原样让位**给原生行为：Enter/Space 激活、Tab 跳走都不该被吞）。
- *
- * 边界：`count <= 0` 返回 `null`（空集合无可漫游）；`current` 先夹取到 `[0, count-1]`
- * 再算（`Array#indexOf` 的 `-1` 就是靠这一步归位到 0）。
+ * 判据本体（回绕 / 夹取 / 非漫游键让位 / 空集合 `null`）已于 kw8a 1102 行键盘批上提为
+ * 契约层单源（`@kojo/plugin-api` 的 `sugar-panels.ts` 末段，与面板行键盘同一把尺子——
+ * 插件不许 import 宿主，而漫游判据只许有一份）。这条导出是**薄转发壳**：
+ * 文件树与 tablist 照旧从本路径导入，语义与行为逐字不变。
  */
-export function nextRovingIndex(current: number, count: number, key: string): number | null {
-  if (count <= 0) return null;
-  const cur = Math.min(count - 1, Math.max(0, current));
-  switch (key) {
-    case 'ArrowRight':
-    case 'ArrowDown':
-      return (cur + 1) % count;
-    case 'ArrowLeft':
-    case 'ArrowUp':
-      return (cur - 1 + count) % count;
-    case 'Home':
-      return 0;
-    case 'End':
-      return count - 1;
-    default:
-      return null;
-  }
-}
+export { nextRovingIndex } from '@kojo/plugin-api';
