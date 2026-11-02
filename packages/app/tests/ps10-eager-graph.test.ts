@@ -1297,10 +1297,22 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     两 ref 对拍）。**教训**：字节闸必须在 **rebase 到 dev 之后**复跑，旧基线上的
     //     "闸未抬"不作数——本条由组长补记，后续各车简报已把这条写进验收口径。
     //     ⇒ KB 闸 **3,548 → 3,549**（余量 0 B 口径不变）；文件闸 201 不动。
+    //
+    //   - **KW16 可写性判据单源 + 标签色轨批（2026-11-02）**：读数 **201 文件 / 3,550 KB**
+    //     （3,635,023 B = 上一条 3,633,964 + **1,059**），**零新进图文件**。图内两枚逐枚实测
+    //     （现树 `stat` vs `git cat-file -s origin/dev:…`，两枚差值求和 **1,059 B 与总差逐字节相等**）：
+    //     · `app/src/ui/tabs-ops.ts` **+521**（`tabClassName` 那一族多一档色轨类名与档位换算）；
+    //     · `app/src/ui/editor-pane-registry.ts` **+538**（把可写性 env 交出去给标签栏现读，
+    //       判据不再由 `EditorPane` 内联八遍）。
+    //     本批主体**不在开机图**：`EditorPane.tsx` / `tab-row.tsx` / `ProjectView.tsx` /
+    //     `file-area.ts` 与 10,893 B 的新判据模块 `ui/editor-editability.ts` 全在懒边
+    //     （编辑器面本身就不是欢迎页要解析的东西）；CSS 那两枚（`tokens.css` 新立
+    //     `--tab-rail-*`、规则只进重档 `styles-project.css`）按口径不进 JS 依赖图。
+    //     ⇒ KB 闸 **3,549 → 3,550**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,549 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,550 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_549);
+    expect(totalKb).toBeLessThanOrEqual(3_550);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
