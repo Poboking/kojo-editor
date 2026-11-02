@@ -56,6 +56,7 @@ import {
   buildCallSnippetText,
   callSignatureLine,
   callSlotsOf,
+  DOCUMENT_WORD_SOURCE,
   ERB_BLANK_CLASS_STR,
   ERB_BLANK_RE,
   ERB_CONTINUATION_MARKERS,
@@ -835,13 +836,9 @@ export function isLineHeadContext(line: string, column: number): boolean {
 const MAX_ASSEMBLED_CANDIDATES = 1000;
 /** 单源名字命中上限（与宿主装配核 `MAX_NAME_CANDIDATES` 同值） */
 const MAX_NAME_CANDIDATES = 1000;
-/** 文档词源的数字（与宿主 `document-words.ts` 同一批：上限 / 词长 / 行数闸） */
-const MAX_DOCUMENT_WORD_SUGGESTIONS = 200;
-const WORD_SUGGESTIONS_MAX_LINES = 5000;
-const MAX_WORD_INDEX = 4000;
-const MIN_WORD_LENGTH = 2;
-const MAX_WORD_LENGTH = 32;
-const PURE_NUMBER_RE = /^\d+$/;
+// 文档词源的那一批数字（行数闸 / 候选上限 / 索引上限 / 词长 / 纯数字规则）**不在这里**：
+// 搬判据那批（LAU-4 第三批）曾把宿主 `document-words.ts` 的同名同值抄了整整一份，
+// 1103 KW-25 收成契约层单源 `DOCUMENT_WORD_SOURCE`（两条生产路共读，读数与理由也住那里）。
 
 /** 一次补全的上下文：行文本 / 光标 / 替换区间 / 事实输入（各 facet 只吃这一枚） */
 interface ErbCompletionContext {
@@ -1536,11 +1533,24 @@ function stripStringsAndComment(line: string): string {
   return out;
 }
 
-/** 一行里的全部连续名字段（字符类与 {@link NAME_CHAR_RE} 同一个真源） */
+/**
+ * 逐行切词器（字符类与 {@link NAME_CHAR_RE} 同一个真源，`+` 取**连续段**）。
+ *
+ * KW-25（1103）修的一条**静默死路**：搬判据那批（LAU-4 第三批）写的是
+ * `new RegExp(NAME_CHAR_RE.source, 'gu')` —— `MODEL_TOKEN_CLASS` 是**字符类**
+ * `[\p{L}\p{N}_]`，少了 `+` 就退化成"每次一个字符"，于是切出来的"词"全是单字，
+ * 全部被 `DOCUMENT_WORD_SOURCE.minWordLength`（2）滤掉 ⇒ `.erb` 的文档词候选从
+ * 2026-10-31 起**一条不出**（宿主那侧同一句判据用的是带 `+` 的切词器，两本册从此不等；
+ * 插件侧也没有一条用例覆盖这一路，所以没有任何闸红）。
+ * 正则提到模块级：`lastIndex` 每行归零，不再每行新建一枚。
+ */
+const NAME_WORD_RE = new RegExp(`${NAME_CHAR_RE.source}+`, 'gu');
+
+/** 一行里的全部连续名字段（供文档词索引；不判语义、不做长度过滤） */
 function nameWordsOf(line: string): string[] {
-  const re = new RegExp(NAME_CHAR_RE.source, 'gu');
+  NAME_WORD_RE.lastIndex = 0;
   const out: string[] = [];
-  for (let m = re.exec(line); m !== null; m = re.exec(line)) {
+  for (let m = NAME_WORD_RE.exec(line); m !== null; m = NAME_WORD_RE.exec(line)) {
     if (m[0].length > 0) out.push(m[0]);
   }
   return out;
@@ -1549,18 +1559,19 @@ function nameWordsOf(line: string): string[] {
 /** 整篇代码行的词条（去重保序、跳过纯数字；大小写不敏感去重 = ERB 名字口径） */
 function documentWordsOf(text: string): readonly string[] {
   const lines = splitEolLines(text);
-  if (lines.length > WORD_SUGGESTIONS_MAX_LINES) return [];
+  if (lines.length > DOCUMENT_WORD_SOURCE.maxLines) return [];
   const seen = new Set<string>();
   const out: string[] = [];
   for (const line of lines) {
     for (const word of nameWordsOf(stripStringsAndComment(line))) {
-      if (word.length < MIN_WORD_LENGTH || word.length > MAX_WORD_LENGTH) continue;
-      if (PURE_NUMBER_RE.test(word)) continue;
+      if (word.length < DOCUMENT_WORD_SOURCE.minWordLength || word.length > DOCUMENT_WORD_SOURCE.maxWordLength)
+        continue;
+      if (DOCUMENT_WORD_SOURCE.isPureNumber(word)) continue;
       const key = word.toUpperCase();
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(word);
-      if (out.length >= MAX_WORD_INDEX) return out;
+      if (out.length >= DOCUMENT_WORD_SOURCE.maxIndexedWords) return out;
     }
   }
   return out;
@@ -1593,7 +1604,7 @@ function wordCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
       range: ctx.range,
       sortText: `9_${candidate}`,
     });
-    if (items.length >= MAX_DOCUMENT_WORD_SUGGESTIONS) break;
+    if (items.length >= DOCUMENT_WORD_SOURCE.maxSuggestions) break;
   }
   return items;
 }

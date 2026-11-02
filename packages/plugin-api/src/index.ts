@@ -700,7 +700,14 @@ export type {
   EditorInlayHintRequest,
   EditorInlayHintResult,
 } from './slots';
-export { MODEL_TOKEN_CLASS, locateIdentifier, modelLineAt, splitModelLines, unicodeTokenAt } from './semantic-locate';
+export {
+  DOCUMENT_WORD_SOURCE,
+  MODEL_TOKEN_CLASS,
+  locateIdentifier,
+  modelLineAt,
+  splitModelLines,
+  unicodeTokenAt,
+} from './semantic-locate';
 
 /* ---- 编辑器面第二批（LS-B0 独占追加区块；勿在他处重排）：4 个新 kind 的请求/响应 ---- */
 export type {

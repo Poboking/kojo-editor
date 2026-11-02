@@ -270,3 +270,32 @@ export function candidateRank(name: string, filePath: string, query: string): nu
   if (p.includes(q)) return 3;
   return 4;
 }
+
+/**
+ * 文档词源（"当前文件里的同前缀代码词"这一路候选）的取词护栏，**宿主与插件共用这一份**。
+ *
+ * 为什么住契约层：同一条判据有两条生产路各自实现——宿主 `app/src/monaco/document-words.ts`
+ * （`.kojo` 与 `.kojo1` 原生区）与插件 `plugins/erb-parser/src/completion.ts`（`.erb` 生产路，
+ * LAU-4 第三批搬判据时把这一批数字抄了一份**同名同值**的）。两份真源 ⇒ 改一处就是同一份文件
+ * 在两条路上词源忽有忽无，而且没有任何闸会红（与 `MODEL_TOKEN_CLASS` 同一条纪律）。
+ *
+ * `maxLines` 闸的是「一次补全请求 = 整篇扫一遍」这条**按击键**的腿（词源本来就是整篇的，
+ * 没有可窄化的形状）。1103 实测（5,000 行合成 ERB、光标落在赋值右端的词尾，本机同一进程）：
+ * 插件路开词源 **33.57 ms** / 关词源 1.97 ms ⇒ 词源一腿 ≈**31.6 ms/请求**（截到 200 条上限；
+ * **插件侧没有行缓存，每请求都从 `splitEolLines` 起冷扫**）；宿主侧真冷扫（每轮换一份新文本）
+ * 13.65–21.31 ms、版本记忆化直接命中 0.04 ms，与 10-28 那组读数（冷扫 22.4 / 行缓存热 2.58 ms）
+ * 同阶。5,001 行两侧都回到 ~2 ms（零扫描）。
+ */
+export const DOCUMENT_WORD_SOURCE = {
+  /** ≥ 此行数不建词索引 */
+  maxLines: 5_000,
+  /** 单次出货的候选条数上限 */
+  maxSuggestions: 200,
+  /** 索引去重后的词条上限（病态文件里也不把整篇正文塞进 Set） */
+  maxIndexedWords: 4_000,
+  /** 词长下限 / 上限（字符） */
+  minWordLength: 2,
+  maxWordLength: 32,
+  /** 纯数字不算词（两处各写一遍正则就是两份判据） */
+  isPureNumber: (word: string): boolean => /^\d+$/.test(word),
+};

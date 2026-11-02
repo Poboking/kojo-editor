@@ -1,4 +1,5 @@
 import type * as Monaco from './entry';
+import { DOCUMENT_WORD_SOURCE } from '@kojo/plugin-api';
 import { classifyKojoLine } from './kojo-native-zone';
 import { nameWordsOf } from './kojo-completion-position';
 
@@ -17,29 +18,28 @@ import { nameWordsOf } from './kojo-completion-position';
  * - 与上下文候选同一张去重表（先注册者胜）⇒ 同名的中文关键字 / 函数名不会被词源复读；
  * - 单文件词源，不跨文件（`wordBasedSuggestions: 'currentDocument'` 的对位口径）。
  *
- * 体量纪律（R9，2026-10-28 复核）：超过 {@link WORD_SUGGESTIONS_MAX_LINES} 行不建索引。
+ * 体量纪律（R9，2026-10-28 复核；1103 KW-25 把数字换成单源 + 复读）：超过
+ * `DOCUMENT_WORD_SOURCE.maxLines` 行不建索引。**这一批数字的真源在契约层**
+ * （`@kojo/plugin-api` 的 `DOCUMENT_WORD_SOURCE`），因为同一条判据有两条生产路：本文件
+ * 服务 `.kojo` 与 `.kojo1` 原生区，`.erb` 的生产路早在 LAU-4 第三批搬进了插件
+ * （`erb-parser/src/completion.ts`），搬的时候抄了一份同名同值的 ⇒ 两份真源。
  * 索引按 model 版本号记忆化，同一次击键只扫一遍。
  *
- * 这道闸**复核后保留**，但理由换成读数（原来那句"避免每击键全文扫一遍"没有数）：
- * 4,999 行合成语料冷扫 **22.4 ms**、热扫（行级缓存全命中）**2.58 ms**；按线性推到
- * 24,197 行是 **~108 / ~12 ms**。而这条腿**没有可窄化的形状**——词源本来就是整篇的
- * （行内提示能按视口取数、注解的单价由定义数决定，词源不行），它又跑在**补全的每击键**
- * 路径上（建议面板开着时逐键重算）。12 ms/击键是作者能摸到的延迟，所以闸留着。
- * 将来若把词索引做成"按变更行增量"，这道闸才该撤——那时量的是"改一行要多久"。
+ * 这道闸**复核后保留**，理由换成读数（原来那句"避免每击键全文扫一遍"没有数）：
+ * 1103 同机实测（5,000 行合成语料，光标落在赋值右端的词尾，本轮把插件切词器修好之后的数）
+ * ——**本文件这一侧**真冷扫（每轮换一份新文本，绕开行缓存与版本记忆化）13.65–21.31 ms
+ * （两次夹具形态不同给的区间）、版本记忆化直接命中 **0.04 ms**；与 10-28 那组读数
+ * （冷扫 22.4 ms / 行缓存全命中 2.58 ms）在冷扫那一档同阶，复核通过。
+ * **插件那一侧**同一个体量是 **33.57 ms/请求**（关掉词源 1.97 ms ⇒ 词源一腿
+ * ≈**31.6 ms**，出货截到 200 条上限：搬过去的判据没带上行缓存，每请求都从
+ * `splitEolLines` 起冷扫）。与 10-28 头注的**冲突点**就在这个数上：旧注按宿主这一侧的
+ * 22.4 ms 记账，而今天 `.erb` 走的是插件那条**贵一半**的路。两侧都按线性推到 24,197 行
+ * 是 ~100 / ~150 ms。而这条腿**没有可窄化的形状**——词源本来就是整篇的（行内提示能按
+ * 视口取数、注解的单价由定义数决定，词源不行），它又跑在**补全的每击键**路径上
+ * （建议面板开着时逐键重算）。31.6 ms/击键是作者能摸到的延迟，所以闸留着。
+ * 将来若把词索引做成"按变更行增量"（插件侧先补上行缓存才算），这道闸才该撤——那时量的
+ * 是"改一行要多久"。
  */
-
-/** 单个文档词源的候选上限（前缀一条命中的护栏） */
-export const MAX_DOCUMENT_WORD_SUGGESTIONS = 200;
-
-/** 词源生效的最大行数（≥ 该值不供词；与 `LARGE_FILE_LINES` 同阈值口径） */
-export const WORD_SUGGESTIONS_MAX_LINES = 5000;
-
-/** 索引去重后的词条上限（病态文件里也不把整篇正文塞进 Set） */
-const MAX_WORD_INDEX = 4000;
-
-const MIN_WORD_LENGTH = 2;
-const MAX_WORD_LENGTH = 32;
-const PURE_NUMBER_RE = /^\d+$/;
 
 export type DocumentWordLanguage = 'kojo' | 'erb';
 
@@ -96,20 +96,21 @@ function lineWords(line: string, lang: DocumentWordLanguage): readonly string[] 
 
 function collectWords(model: Monaco.editor.ITextModel, lang: DocumentWordLanguage): readonly string[] {
   const lineCount = typeof model.getLineCount === 'function' ? model.getLineCount() : 0;
-  if (lineCount > WORD_SUGGESTIONS_MAX_LINES) return [];
+  if (lineCount > DOCUMENT_WORD_SOURCE.maxLines) return [];
   const seen = new Set<string>();
   const out: string[] = [];
   for (let lineNumber = 1; lineNumber <= lineCount; lineNumber++) {
     const line = model.getLineContent(lineNumber) ?? '';
     for (const word of lineWords(line, lang)) {
-      if (word.length < MIN_WORD_LENGTH || word.length > MAX_WORD_LENGTH) continue;
-      if (PURE_NUMBER_RE.test(word)) continue;
+      if (word.length < DOCUMENT_WORD_SOURCE.minWordLength || word.length > DOCUMENT_WORD_SOURCE.maxWordLength)
+        continue;
+      if (DOCUMENT_WORD_SOURCE.isPureNumber(word)) continue;
       // ERB 名大小写不敏感：索引按大写去重，保留首次出现的写法
       const key = lang === 'erb' ? word.toUpperCase() : word;
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(word);
-      if (out.length >= MAX_WORD_INDEX) return out;
+      if (out.length >= DOCUMENT_WORD_SOURCE.maxIndexedWords) return out;
     }
   }
   return out;
@@ -176,7 +177,7 @@ export function documentWordItems(
       range,
       sortText: `9_${candidate}`,
     });
-    if (items.length >= MAX_DOCUMENT_WORD_SUGGESTIONS) break;
+    if (items.length >= DOCUMENT_WORD_SOURCE.maxSuggestions) break;
   }
   return items;
 }
