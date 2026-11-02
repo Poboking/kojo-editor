@@ -2257,6 +2257,47 @@ button.erb-mode-hint.unlocked:hover {
   flex-wrap: wrap;
   align-items: center;
 }
+/* 控件基座（2026-11-02 美化批）：本面板的 `select` / `input` 此前**只写了尺寸**
+   （`.rp-select` / `.rp-slot-input` 都没有底色与描边）⇒ 深色面板里落的是浏览器原生
+   白控件。这里按全仓"输入比容器暗"的约定补齐：底走 `--input-bg`（= `--surface-sunken`，
+   light/mint 自动翻），描边 `--border`，焦点环与 `ui-kit` 的 `KitSelect` 同一条配方。
+   下拉箭头自己画（两枚 45° 渐变条拼成 chevron）：原生 `appearance` 的箭头不吃 `color`，
+   深色面板上会留一枚墨黑三角——`appearance: none` 之后必须补，不然就是个无箭头白框。 */
+.panel-state-replay select,
+.panel-state-replay input:not([type='checkbox']) {
+  background-color: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  box-shadow: var(--well-edge);
+}
+.panel-state-replay select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 22px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%),
+    linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) calc(50% + 1px),
+    calc(100% - 10px) calc(50% + 1px);
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+/* 弹层菜单面：Chromium / WebView2 允许给 option 上底色与文字色，token 化后各主题跟切 */
+.panel-state-replay select option {
+  background-color: var(--surface-overlay, var(--bg-2));
+  color: var(--fg);
+}
+.panel-state-replay select:focus-visible,
+.panel-state-replay input:not([type='checkbox']):focus-visible {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
 .rp-select {
   flex: 1 1 140px;
   min-width: 0;
@@ -2500,6 +2541,325 @@ button.erb-mode-hint.unlocked:hover {
 }
 .rp-branch-taken {
   font-size: var(--fs-0);
+}
+
+/* ===================== 口上调试区（rp-tr-* / rp-debug / rp-diff-*） =====================
+   两块合成一个"调试台"：上块读「这段会说的话」（消息窗视角），下块改一个数值再看它怎么变。
+   分节头共用 `.rp-section-title`（fs-1 粗体）+ 右侧计数 chip——作者先看"几句会显示"，
+   再逐行核对；行号常驻但很淡、hover 才亮（它是回源把手，不该抢正文注意力）。
+   取色一律走 token：三档可见性 = success / neutral / warn 三族 wash + 同族描边，
+   五套主题（dark / light / mint-dark / one-dark / rose-pine / synthwave84）同名覆写即生效。 */
+
+/* ---- 台词推演：卡片壳 ---- */
+.rp-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  background: var(--bg-2, transparent);
+  box-shadow: var(--well-edge);
+}
+/* ---- 分节头（两块共用） ---- */
+.rp-tr-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.rp-section-title {
+  font-size: var(--fs-1);
+  font-weight: 600;
+  color: var(--fg);
+}
+/* 计数 chip：只做"读数"不做按钮——胶囊底 + fs-0，压在标题右侧 */
+.rp-tr-count {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  background: var(--wash-neutral);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-1);
+  white-space: nowrap;
+}
+.rp-tr-count.maybe {
+  color: var(--amber);
+  background: var(--wash-warn);
+  box-shadow: inset 0 0 0 1px var(--wash-warn-edge);
+}
+/* 边界声明：左侧一道细竖线，读作"注脚"而不是正文 */
+.rp-tr-note {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  border-left: 2px solid var(--border-subtle, var(--border));
+  padding-left: var(--space-1);
+  margin-left: var(--space-0);
+  line-height: 1.5;
+}
+.rp-tr-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.rp-tr-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  font-size: var(--fs-0);
+  padding: 2px var(--space-1);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid transparent;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.rp-tr-row:hover {
+  background: var(--wash-neutral);
+}
+/* 「就是这一行」：与谓词列表同款口径（左侧 accent 竖条 + 淡 accent 底） */
+.rp-tr-row[data-locate='1'] {
+  border-left-color: var(--accent);
+  background: var(--accent-dim);
+}
+/* 徽章：定宽不换行，三档同宽才对得齐（「会显示」比「可能」多一字，留够 3 字位） */
+.rp-tr-mark {
+  flex: 0 0 auto;
+  min-width: 3.4em;
+  text-align: center;
+  font-size: var(--fs-0);
+  line-height: 1.7;
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-0);
+  white-space: nowrap;
+}
+.rp-tr-mark.shown {
+  color: var(--green);
+  background: var(--wash-success);
+  box-shadow: inset 0 0 0 1px var(--wash-success-edge);
+}
+.rp-tr-mark.hidden {
+  color: var(--fg-dim);
+  background: var(--wash-neutral);
+}
+.rp-tr-mark.maybe {
+  color: var(--amber);
+  background: var(--wash-warn);
+  box-shadow: inset 0 0 0 1px var(--wash-warn-edge);
+}
+/* 正文面：游戏台词是**散文**不是代码，字体走 `--font-meta`（Consolas 打头、带 CJK 兜底）
+   ——旧值 `--font-mono` 没有中文兜底，汉字会掉到浏览器默认字面，行高与西文不齐。 */
+.rp-tr-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--font-meta);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+/* 不显示的行：原文划线灰置——保留可读性（作者要知道"这里本来有句话"），
+   但不与"会说的话"抢注意力 */
+.rp-tr-hidden {
+  text-decoration: line-through;
+  color: var(--fg-dim);
+  opacity: 0.55;
+}
+.rp-tr-verb {
+  flex: 0 0 auto;
+  font-size: var(--fs-0);
+}
+/* 空载荷（裸 PRINTL）：给一枚灰注脚当落点，别让行只剩徽章 */
+.rp-tr-blank {
+  color: var(--fg-dim);
+  font-style: italic;
+  opacity: 0.7;
+}
+/* 「显示更多」行：与谓词区同一枚按钮（`ghost small dim rp-more-btn`），这里只补上下留白 */
+.rp-tr-more {
+  padding-top: var(--space-0);
+}
+/* 判不出的插值：行内一枚虚线小 chip（引擎侧已落成 `%?%` 占位，这里补"几处"） */
+.rp-tr-unresolved {
+  display: inline-block;
+  margin-left: var(--space-1);
+  font-size: var(--fs-0);
+  color: var(--amber);
+  border: 1px dashed var(--wash-warn-edge);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-0);
+  white-space: nowrap;
+}
+.rp-tr-line {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0 var(--space-0);
+  color: var(--fg-dim);
+  font-family: var(--font-meta);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.rp-tr-line:hover {
+  color: var(--accent-text, var(--accent));
+  background: none;
+}
+/* 判不出的原因：另起一行压在正文下方（旧版挤在行内、45% 就截断，读不全因果） */
+.rp-tr-reason {
+  display: block;
+  margin-top: 1px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0.9;
+}
+
+/* ---- 注入预演：操作台（不是读数区，所以整块压一层中性 wash 与下方结果分开） ----
+   视觉权重就是操作顺序：**预演是主按钮**（primary），写入是危险动作（danger，落右下角，
+   且要连点两次）；中间是结论，下面是 diff 明细。 */
+.rp-debug {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  background: var(--wash-neutral);
+}
+.rp-debug-sub {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+/* 分节头里的副句推到右端：与左侧标题分开读（标题说"做什么"，副句说"不会动什么"）。
+   底部的 `.rp-debug-sub` 不受影响——它旁边是写入钮，必须留在左边。 */
+.rp-tr-head .rp-debug-sub {
+  margin-left: auto;
+}
+.rp-debug-form {
+  display: flex;
+  gap: var(--space-1);
+  align-items: center;
+  flex-wrap: wrap;
+}
+/* 值与下拉并排：下拉吃掉剩余宽度，值固定窄槽（数值都很短） */
+.rp-debug-form .rp-select {
+  flex: 1 1 200px;
+}
+/* 两个类同时挂在元素上 ⇒ (0,2,0)，压过 `.rp-slot-input` 的 64px 宽（它在本段之后） */
+.rp-slot-input.rp-debug-value {
+  width: 96px;
+  font-family: var(--font-meta);
+  font-size: var(--fs-1);
+  padding: var(--space-1);
+}
+.rp-debug-msg {
+  font-size: var(--fs-0);
+}
+/* 结论区：一条细分隔线切出"表单 / 结果"两段（不用背景色差，避免与 wash 底打架） */
+.rp-debug-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0);
+  border-top: 1px solid var(--border-subtle, var(--border));
+  padding-top: var(--space-1);
+}
+.rp-diff-summary {
+  font-size: var(--fs-1);
+  color: var(--fg);
+}
+/* 零差异：不报"没有变化"当结论，降成灰注脚——这是"没事发生"，不是"结论" */
+.rp-diff-summary.quiet {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.rp-diff-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.rp-diff-row {
+  display: flex;
+  gap: var(--space-1);
+  align-items: baseline;
+  font-size: var(--fs-0);
+  font-family: var(--font-meta);
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid transparent;
+}
+.rp-diff-row.add {
+  color: var(--green);
+  background: var(--wash-success);
+  border-left-color: var(--wash-success-edge);
+}
+.rp-diff-row.remove {
+  color: var(--red);
+  background: var(--wash-error);
+  border-left-color: var(--wash-error-edge);
+}
+/* 增删号单独成列、定宽，行号列也定宽 ⇒ 两列对齐，"＋ 29 台词"读起来是一张表 */
+.rp-diff-sign {
+  flex: 0 0 auto;
+  width: 1em;
+  text-align: center;
+  font-weight: 700;
+}
+.rp-diff-line {
+  flex: 0 0 auto;
+  min-width: 3.2em;
+  color: var(--fg-dim);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.rp-diff-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* 删除行只划掉正文：整行划线连行号都划，读起来像"这行号错了" */
+.rp-diff-row.remove .rp-diff-text {
+  text-decoration: line-through;
+  opacity: 0.75;
+}
+.rp-diff-more {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+/* 底部动作条：写入在右下，与"预演"拉开距离（手滑的代价不一样） */
+.rp-debug-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  border-top: 1px solid var(--border-subtle, var(--border));
+  padding-top: var(--space-1);
+  margin-top: var(--space-0);
+}
+.rp-debug-warn {
+  font-size: var(--fs-0);
+  color: var(--danger-text);
+}
+/* 二次确认态：底色升成红洗 + 红描边 + 一圈内描边，字走 `--danger-text`
+   （`--danger` 当文字压在浅底上只有 4.11:1，破 AA；这档 token 就是为这一刻立的）。
+   实心红留给"不可撤销终局"（`.mk-confirm`），这里只是"还没落地、可以退"。 */
+button.danger.armed,
+button.danger.armed:hover:not(:disabled) {
+  color: var(--danger-text);
+  background: color-mix(in srgb, var(--danger) 28%, transparent);
+  border-color: var(--danger);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--wash-error-edge);
+}
+button.danger.armed:active:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+/* 这里**不写呼吸动效**：`audit-token-scale` 的 D1 把裸时长当棘轮（全仓 22 行 / 基线 21），
+   而 1.8s 这个档在 `--dur-*`（120/200/320ms）里没有位置。armed 的区分已经够——
+   换文案（写入存档 → 确认写入）、升底色、加粗、上面那行红字提示，四重信号都在。 */
+.rp-inject-note {
+  color: var(--accent-text, var(--accent));
 }
 
 /* 协议场景参数输入区（v0.2 第十批） */

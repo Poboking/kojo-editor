@@ -367,6 +367,9 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
           onInjected: (r) => {
             setResult(r);
             setPending([]);
+            // 口上调试统一批：广播「这份存档刚被注入」——回放面板监听后对同档
+            // 自动重算，作者不用在两个面板间手动来回（热闭环）。
+            ctx.bus.emit('debug.snapshotInjected', { archivePath: r.path, source: 'ui-snapshot-injector' });
           },
           onReloaded: (a) => setArchive(a),
           onFailed: (msg) => setInjectError(msg),

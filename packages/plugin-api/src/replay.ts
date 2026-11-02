@@ -21,6 +21,7 @@
  */
 
 import type { ConditionExpr, VariableRef } from './conditions';
+import type { ArchiveOverrides } from './snapshot';
 
 /** 未知原因分类（UI 分组统计 / 提示文案用） */
 export type ReplayUnknownCode =
@@ -130,6 +131,12 @@ export interface FunctionReplay {
    * - `unknown`：全部 unknown（或函数无谓词时 total=0 → exact）。
    */
   confidence: 'exact' | 'partial' | 'unknown';
+  /**
+   * 台词推演（v0.3 台词推演批；additive 可选）——消息窗视角的显示行求值：
+   * 每条 PRINT 行在该状态下"会不会输出、输出什么"。缺省 = 引擎未提供
+   * （行文本不可得 / 抽取侧无显示行资料）；消费方须按缺省降级隐藏该区。
+   */
+  transcript?: TranscriptLine[];
 }
 
 /**
@@ -195,6 +202,38 @@ export function readReplayDeterminability(
 
 /** 分支链类别 */
 export type BranchChainKind = 'if-chain' | 'select-chain';
+
+/**
+ * 台词推演的行可见性（v0.3 台词推演批；additive）。
+ *
+ * - `shown`：该状态确定会输出（所在分支全判定命中）；
+ * - `hidden`：确定不会输出（所在分支未命中 / 链落空 / 不可达 / SIF 为假）；
+ * - `maybe`：判不定（某层守护条件 unknown——诚实呈现，不猜）。
+ */
+export type TranscriptVisibility = 'shown' | 'hidden' | 'maybe';
+
+/** 台词推演单行（消息窗视角的显示行求值结果） */
+export interface TranscriptLine {
+  /** 来源行（1 基） */
+  line: number;
+  /** PRINT 动词（大写归一；UI 作小徽章） */
+  verb: string;
+  /** 可见性（见上） */
+  visibility: TranscriptVisibility;
+  /** 载荷原文（未剥引号；点击回源用） */
+  payload: string;
+  /**
+   * 求值后的文本（插值已替换为快照值）；判定不了的插值以 `%?%` 占位
+   * 并计入 `unresolved`。`visibility = 'hidden'` 时为空串（不输出）。
+   */
+  text: string;
+  /** 本行判定不了的表达式数（0 = 文本全部落定） */
+  unresolved: number;
+  /** `hidden` / `maybe` 的原因（守护它的链或 SIF 的判定结果） */
+  reason?: ReplayUnknown;
+  /** 守护该行的语句行（IF / SELECTCASE / SIF 链头；跳转定位用） */
+  guardLine?: number;
+}
 
 /**
  * 单条分支链的求值结果（v0.2 第九批）。
@@ -330,4 +369,19 @@ export interface StateReplayService {
     functionNames: readonly string[],
     options?: ReplayFunctionOptions,
   ): Promise<(FunctionReplay | null)[]>;
+  /**
+   * 覆盖预演回放（v0.3 口上调试统一批；additive 可选）——把覆盖集应用到
+   * 存档读模型（`applyArchiveOverrides` 纯函数，**不写盘**）后回放单函数。
+   * 注入确认前回答"这些值改掉之后会变成什么"，配合 transcript 做
+   * 注入前后 diff（带着目的改数值）。
+   *
+   * **可选方法**：旧版本引擎未实现，消费方必须先判
+   * `typeof service.replayFunctionWithOverrides === 'function'`，否则降级隐藏预演区。
+   */
+  replayFunctionWithOverrides?(
+    view: ReplayStateView,
+    functionName: string,
+    overrides: ArchiveOverrides,
+    options?: ReplayFunctionOptions,
+  ): Promise<FunctionReplay | null>;
 }

@@ -197,6 +197,64 @@ export interface FunctionReturn {
 }
 
 /**
+ * 显示行插值形态（v0.3 台词推演批；additive）。
+ *
+ * - `percent`：FORM 串插值 `%表达式%`（PRINTFORM 族）；
+ * - `brace`：花括号插值 `{表达式}`（引擎 FORM 串的另一写法；与
+ *   `scanBraceTernaries` 的配对判据同源——引号内外一律照插值处理）；
+ * - `inlineTernary`：文本三元 `\@条件?真文#假文\@` 的**整枚**切片——
+ *   条件半边同时作为 `INLINE` 谓词收录（`collectInlinePredicates`），
+ *   这里补齐真假两支文本，台词推演才能"按条件选一支"。
+ */
+export type DisplayInterpForm = 'percent' | 'brace' | 'inlineTernary';
+
+/** 显示行内的一处插值（切片 + 解析；解析失败 → opaque，绝不猜） */
+export interface DisplayInterpolation {
+  form: DisplayInterpForm;
+  /** 表达式原文（`inlineTernary` = 条件半边原文，已 trim） */
+  text: string;
+  /** 解析后 AST（opaque = 无法求值，推演时灰占位） */
+  expr: ConditionExpr;
+  /**
+   * 载荷内的定界全宽区间（0 基，`[start, end)`；含定界符本身）——
+   * 台词推演重建文本时按它切片替换，**不在回放侧再扫一遍**（单一真源：
+   * 切片判据只住抽取侧）。
+   */
+  start: number;
+  end: number;
+  /** `inlineTernary` 真支文本（不含定界符；原样保留） */
+  thenText?: string;
+  /** `inlineTernary` 假支文本（缺 `#` → 空串 = 引擎语义"假支不输出"） */
+  elseText?: string;
+}
+
+/**
+ * 单条显示行（v0.3 台词推演批；additive）——PRINT 系语句行的**结构事实**。
+ *
+ * 与 `FunctionPredicate` 同族：抽取层只记录，回放层（`transcript` 构建）消费。
+ * 只收录"会往消息窗输出"的行；`PRINTDATA` 数据块体、`PRINTBUTTON` 等交互行
+ * 的边界口径见抽取侧 `collectDisplayLines` 头注。
+ */
+export interface FunctionDisplayLine {
+  /** 来源行（1 基） */
+  line: number;
+  /** PRINT 动词（大写归一，如 `PRINTFORMW`） */
+  verb: string;
+  /** 动词后的载荷原文（未剥引号；展示 / 回溯用） */
+  payload: string;
+  /** 载荷内的插值切片（按出现顺序；无插值 = 空数组） */
+  interpolations: DisplayInterpolation[];
+  /**
+   * 本行是否由**同行 `SIF`** 守卫（`SIF 条件 PRINT…`；additive，v0.3 修正）。
+   * 引擎语义：`SIF` 只约束同一行的语句——守卫谓词就是本行那条 `SIF`
+   * （回放侧按 `line` 查 `SIF` 谓词，不另找前行）。
+   */
+  sifGuarded?: boolean;
+  /** 分支上下文路径（外→内；与 `FunctionPredicate.context` 同构，明细视图填充） */
+  context?: string[];
+}
+
+/**
  * 单函数谓词明细（含完整控制流骨架）。
  * 与 `FunctionConditions`（聚合视图）不同：本结构保留逐条谓词与 AST——
  * 供快照回放求值（v1.0）与未来的明细视图消费，**按需解析、不入常驻索引**。
@@ -225,6 +283,12 @@ export interface FunctionPredicates {
    * 仅明细视图填充（聚合路径零开销）。
    */
   returns: FunctionReturn[];
+  /**
+   * 显示行序列（v0.3 台词推演批；additive；按行序）——PRINT 系语句行的
+   * 结构事实，台词推演（`transcript`）的抽取侧资料。
+   * 仅明细视图填充（聚合路径零开销）；缺省 = 抽取侧未提供（旧数据兼容）。
+   */
+  displays?: FunctionDisplayLine[];
 }
 
 /**

@@ -292,6 +292,7 @@ interface StateReplayer {
 - 明确标注"近似渲染"，不声称与游戏逐像素一致。
 
 - **职责分工（v1.0 收口 A3）**：回放面板负责"状态 → 分支 / 文本预览"（`state.replay` 求值结果 → 分支走向 + 谓词三值）；糖预览（若做）复用本服务产出的 `PreviewLines[]` 渲染，**不自建渲染逻辑**。
+- **2026-11-02 口上调试统一批（实现与上文口径的偏差，据实记一笔）**：本槽位**仍空**——"这句会不会显示、显示什么"没有另立 `preview.renderer` 服务，而是作为 `state.replay` 的 additive 可选字段 `FunctionReplay.transcript`（`TranscriptLine[]`：行号 / 可见性三档 / 求值后文本 / 判不出的处数 / 守护行）由引擎算完交回，渲染归 `ui-state-replay` 面板。理由：可见性判定必须与谓词、分支链**同一份求值**（同一 overlay / 同一内联通道），跨服务再算一遍必漂。`PreviewLines[]` 若将来要做（`SETCOLOR` / 三连符号警告这类富渲染），输入取 `transcript` 即可。
 
 ### 5.5 状态注入器（v1.1 核心）：把"到达状态"的成本挪出游戏
 

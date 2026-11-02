@@ -18,6 +18,9 @@ import type {
   FunctionReplay,
   PluginContextMenuAnchor,
   PredicateReplay,
+  QuickEditField,
+  TranscriptLine,
+  TranscriptVisibility,
 } from '@kojo/plugin-api';
 import {
   MORE_ROW_STYLE,
@@ -26,8 +29,8 @@ import {
   moreRowLabel,
   shortPath,
 } from '@kojo/plugin-api';
-import type { AssumedSlot, LocateNotice, ReplayAnalysis } from './panel-logic';
-import { analyzeReplay, predWindowSize, replaySummarySentence } from './panel-logic';
+import type { AssumedSlot, LocateNotice, ReplayAnalysis, ReplayDiff } from './panel-logic';
+import { analyzeReplay, predWindowSize, replaySummarySentence, trWindowSize } from './panel-logic';
 /** 置信度徽章样式 */
 const CONFIDENCE_BADGE: Record<FunctionReplay['confidence'], { label: string; className: string }> = {
   exact: { label: '确定', className: 'rp-badge conf-exact' },
@@ -237,6 +240,262 @@ function branchRow(
  * 与 ui.panel 壳层（选档 / 选角 / 选函数 / 输入）解耦——纯逻辑复用则下沉到
  * `panel-logic.ts`（`summarizeAssumptions` 等）。
  */
+/**
+ * 台词推演的可见性徽章（口上调试统一批）。措辞白话：作者面说"会显示 / 不显示 /
+ * 可能"，不说 shown / hidden / maybe。
+ */
+const TR_MARK: Record<TranscriptVisibility, { label: string; className: string; hint: string }> = {
+  shown: { label: '会显示', className: 'rp-tr-mark shown', hint: '这个状态下这句话会出现在消息窗里' },
+  hidden: { label: '不显示', className: 'rp-tr-mark hidden', hint: '这个状态下这句话不会出现' },
+  maybe: { label: '可能', className: 'rp-tr-mark maybe', hint: '有条件判不出——这句话可能出现也可能不出现' },
+};
+
+/**
+ * 台词推演列表（消息窗视角）：每条 PRINT 行"会不会显示 + 显示什么"。
+ * `hidden` 行划线呈现原文（点行号可回源）；判不出的插值在引擎侧已落成
+ * `%?%` 占位（诚实边界，不猜）；「A／B」= 行内三元选不出，两支都可能。
+ *
+ * 视觉（2026-11-02 美化批）：头部给"几句会显示"的计数 chip，行分三列（徽章 / 文本 /
+ * 行号），行号常驻但很淡、hover 才亮——它是"回源"的把手，不该抢正文的注意力。
+ */
+export function TranscriptList(props: {
+  lines: readonly TranscriptLine[];
+  filePath: string;
+  emitReveal: EmitReveal;
+  atLine?: number | null;
+  /**
+   * 渲染窗口（可选；2026-11-02 美化批）。缺省 = 全渲染（旧调用方与单测零改动）。
+   * 给了 `onGrow` 才启用窗口：首屏 `TR_WINDOW.initial` 行 + 触底/点击追加。
+   */
+  limit?: number;
+  onGrow?: (total: number) => void;
+}): ReactElement {
+  const shownCount = props.lines.filter((t) => t.visibility === 'shown').length;
+  const maybeCount = props.lines.filter((t) => t.visibility === 'maybe').length;
+  // 窗口必须盖住「就是这一行」（从编辑器跳进来的那条不能在屏外）——与谓词区同口径
+  const mustInclude =
+    props.onGrow === undefined || props.atLine == null
+      ? 0
+      : props.lines.findIndex((t) => t.line === props.atLine) + 1;
+  const win = props.onGrow === undefined ? props.lines.length : trWindowSize(props.lines.length, props.limit, mustInclude);
+  const rest = props.lines.length - win;
+  return createElement(
+    'div',
+    { className: 'rp-transcript' },
+    createElement(
+      'div',
+      { className: 'rp-tr-head' },
+      createElement('span', { className: 'rp-section-title' }, '这段会说的话'),
+      createElement('span', { className: 'rp-tr-count' }, `${shownCount}/${props.lines.length} 行会显示`),
+      maybeCount > 0 ? createElement('span', { className: 'rp-tr-count maybe' }, `${maybeCount} 行判不出`) : null,
+    ),
+    // 边界必须写在脸上：只推这一段自己的 PRINT 行。CALL 出去的段、PRINTDATA 随机块、
+    // 循环体的多次执行都不在推演范围内——不写明就会让作者以为"没显示 = 不会说"。
+    createElement(
+      'div',
+      { className: 'rp-tr-note' },
+      '只推这一段自己的输出行：CALL 出去的段、PRINTDATA 随机块、循环体的多次执行暂不推演。',
+    ),
+    createElement(
+      'div',
+      { className: 'rp-tr-body' },
+      ...props.lines.slice(0, win).map((t, i) => {
+        // 空载荷（裸 `PRINTL` / 只输出换行）也要有个字面落点：只挂一枚徽章的空行
+        // 读起来像渲染坏了。`（空行）` 是灰注脚，不参与"会说的话"的视觉权重。
+        const body = t.visibility === 'hidden' ? t.payload : t.text;
+        const blank = body.trim().length === 0;
+        return createElement(
+          'div',
+          {
+            key: `${t.line}:${i}`,
+            className: `rp-tr-row ${t.visibility}`,
+            'data-locate': props.atLine != null && t.line === props.atLine ? '1' : undefined,
+          },
+          createElement(
+            'span',
+            { className: TR_MARK[t.visibility].className, title: TR_MARK[t.visibility].hint },
+            TR_MARK[t.visibility].label,
+          ),
+          createElement(
+            'span',
+            { className: 'rp-tr-text' },
+            blank
+              ? createElement('span', { className: 'rp-tr-blank' }, '（空行）')
+              : t.visibility === 'hidden'
+                ? createElement('span', { className: 'rp-tr-hidden' }, body)
+                : body,
+            !blank && t.visibility !== 'hidden' && t.unresolved > 0
+              ? createElement('span', { className: 'rp-tr-unresolved' }, `${t.unresolved} 处判不出`)
+              : null,
+            t.reason && t.visibility !== 'shown'
+              ? createElement('span', { className: 'rp-tr-reason', title: t.reason.message }, t.reason.message)
+              : null,
+          ),
+          createElement(
+            'button',
+            {
+              className: 'rp-tr-line',
+              onClick: () => props.emitReveal(props.filePath, t.line),
+              title: `${t.verb} · 在编辑器里打开第 ${t.line} 行`,
+            },
+            `${t.line}`,
+          ),
+        );
+      }),
+      // 触底/点击追加一窗（与谓词区同一枚哨兵组件、同一套口径）
+      rest > 0 && props.onGrow !== undefined
+        ? createElement(
+            'div',
+            { className: 'rp-tr-more' },
+            createElement(MoreRow, {
+              key: 'more',
+              remaining: rest,
+              onMore: () => props.onGrow?.(props.lines.length),
+            }),
+          )
+        : null,
+    ),
+  );
+}
+
+/**
+ * 注入预演面板（2026-11-02 美化批：从面板壳层 `index.ts` 抽出）。
+ *
+ * 为什么抽出来：它是纯呈现（全部状态与回调由壳层持有），抽出来才能 SSR 单测与
+ * 视觉预览；留在壳层里就只能靠"打开真面板、恰好有存档"才能看到。
+ *
+ * 视觉分层：表单（改哪个值）→ 结论（这次改动会怎样）→ diff 明细 → 危险动作（写入）
+ * 靠右下角且需二次确认。**预演是主按钮、写入是危险动作**——顺序与权重都在说这件事。
+ */
+export function DebugPreviewPanel(props: {
+  quickFields: readonly QuickEditField[];
+  fieldId: string;
+  value: string;
+  busy: boolean;
+  canRun: boolean;
+  canWrite: boolean;
+  error: string | null;
+  diff: ReplayDiff | null;
+  diffSummary: string | null;
+  writeArmed: boolean;
+  writeNote: string | null;
+  onFieldChange: (id: string) => void;
+  onValueChange: (value: string) => void;
+  onPreview: () => void;
+  onWriteClick: () => void;
+}): ReactElement {
+  const selected = props.quickFields.find((f) => f.id === props.fieldId) ?? null;
+  const diffRows: ReactElement[] = [];
+  if (props.diff) {
+    for (const t of props.diff.added.slice(0, 12)) {
+      diffRows.push(
+        createElement(
+          'div',
+          { key: `a${t.line}`, className: 'rp-diff-row add' },
+          createElement('span', { className: 'rp-diff-sign' }, '+'),
+          createElement('span', { className: 'rp-diff-line' }, `${t.line}`),
+          createElement('span', { className: 'rp-diff-text' }, t.text || t.payload),
+        ),
+      );
+    }
+    for (const t of props.diff.removed.slice(0, 12)) {
+      diffRows.push(
+        createElement(
+          'div',
+          { key: `r${t.line}`, className: 'rp-diff-row remove' },
+          createElement('span', { className: 'rp-diff-sign' }, '−'),
+          createElement('span', { className: 'rp-diff-line' }, `${t.line}`),
+          createElement('span', { className: 'rp-diff-text' }, t.payload),
+        ),
+      );
+    }
+  }
+  const moreCount = props.diff ? props.diff.added.length + props.diff.removed.length - diffRows.length : 0;
+
+  return createElement(
+    'section',
+    { className: 'rp-debug' },
+    createElement(
+      'div',
+      { className: 'rp-tr-head' },
+      createElement('span', { className: 'rp-section-title' }, '换个数值试试'),
+      createElement('span', { className: 'rp-debug-sub' }, '先在内存里改，存档不动'),
+    ),
+    createElement(
+      'div',
+      { className: 'rp-debug-form' },
+      createElement(
+        'select',
+        {
+          className: 'rp-select rp-debug-field',
+          value: props.fieldId,
+          onChange: (e: { target: { value: string } }) => props.onFieldChange(e.target.value),
+        },
+        createElement('option', { value: '' }, '挑一个要改的数值'),
+        ...props.quickFields.map((f) =>
+          createElement(
+            'option',
+            { key: f.id, value: f.id },
+            `${f.label}（${f.family}:${f.index}${f.scope === 'global' ? ' · 全局' : ''}）`,
+          ),
+        ),
+      ),
+      createElement('input', {
+        className: 'rp-slot-input rp-debug-value',
+        type: 'text',
+        value: props.value,
+        placeholder: selected ? `新值（现在是 ${selected.label}）` : '新值',
+        onChange: (e: { target: { value: string } }) => props.onValueChange(e.target.value),
+        onKeyDown: (e: { key: string }) => {
+          if (e.key === 'Enter') props.onPreview();
+        },
+      }),
+      createElement(
+        'button',
+        {
+          className: 'primary small',
+          disabled: props.busy || !props.canRun,
+          onClick: props.onPreview,
+          title: '在内存里改这个值，看看这段会变成什么样（存档不动）',
+        },
+        props.busy ? '推演中…' : '预演',
+      ),
+    ),
+    props.error !== null ? createElement('div', { className: 'rp-error rp-debug-msg' }, props.error) : null,
+    props.diff !== null
+      ? createElement(
+          'div',
+          { className: 'rp-debug-result' },
+          createElement(
+            'div',
+            { className: `rp-diff-summary${props.diffSummary === null ? ' quiet' : ''}` },
+            props.diffSummary !== null ? `这次改动：${props.diffSummary}。` : '这次改动对这一段没有影响。',
+          ),
+          diffRows.length > 0 ? createElement('div', { className: 'rp-diff-list' }, ...diffRows) : null,
+          moreCount > 0 ? createElement('div', { className: 'rp-diff-more' }, `还有 ${moreCount} 行没列出`) : null,
+        )
+      : null,
+    props.writeNote !== null ? createElement('div', { className: 'rp-debug-msg dim' }, props.writeNote) : null,
+    createElement(
+      'div',
+      { className: 'rp-debug-foot' },
+      props.writeArmed
+        ? createElement('span', { className: 'rp-debug-warn' }, '再点一次「确认写入」就会落盘（写前自动备份）。')
+        : createElement('span', { className: 'rp-debug-sub' }, '写入会改存档文件，先备份原文件。'),
+      createElement(
+        'button',
+        {
+          className: props.writeArmed ? 'small danger armed' : 'small danger',
+          disabled: props.busy || !props.canWrite,
+          onClick: props.onWriteClick,
+          title: '把预演的值真正写进存档（写前自动备份；写完本面板自动重算）',
+        },
+        props.writeArmed ? '确认写入' : '写入存档',
+      ),
+    ),
+  );
+}
+
 export function renderReplayPreview(opts: {
   result: FunctionReplay;
   assumedSlots: readonly AssumedSlot[];
@@ -247,6 +506,12 @@ export function renderReplayPreview(opts: {
   /** 谓词渲染窗口（undefined = 初始窗口）与触底增窗回调（窗口状态归面板壳层持有） */
   predLimit: number | undefined;
   onGrowPreds: (total: number) => void;
+  /**
+   * 台词推演区的渲染窗口与增窗回调（可选；2026-11-02 美化批）。
+   * 缺省 = 全渲染——旧调用方与单测零改动（additive）。
+   */
+  trLimit?: number;
+  onGrowTranscript?: (total: number) => void;
   /** 右键谓词行（可选；1023 批）——透传给 `PredicateList` */
   onPredicateMenu?: (predicate: PredicateReplay, event: PluginContextMenuAnchor) => void;
   /** 谓词行中文标注（可选；白话批）——透传给 `PredicateList`（词典命中变量中文名） */
@@ -313,6 +578,20 @@ export function renderReplayPreview(opts: {
           )
         : null;
 
+  // 台词推演区（口上调试统一批；additive）：引擎附了 transcript 才渲染，
+  // 缺省（旧引擎 / 行文本不可得）整个区不出现——消费方按缺省降级。
+  const transcriptSection =
+    result.transcript && result.transcript.length > 0
+      ? createElement(TranscriptList, {
+          lines: result.transcript,
+          filePath: result.filePath,
+          emitReveal,
+          atLine,
+          ...(opts.trLimit === undefined ? {} : { limit: opts.trLimit }),
+          ...(opts.onGrowTranscript === undefined ? {} : { onGrow: opts.onGrowTranscript }),
+        })
+      : null;
+
   return createElement(
     'div',
     { className: 'rp-result' },
@@ -333,6 +612,7 @@ export function renderReplayPreview(opts: {
       ),
     ),
     branchSection,
+    transcriptSection,
     unknowns.length > 0
       ? createElement(
           'div',

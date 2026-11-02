@@ -182,13 +182,17 @@ export type {
 } from './conventions';
 
 export { dependencyKey } from './conditions';
+export { applyArchiveOverrides } from './snapshot-overrides';
 export type {
   ConditionComparison,
   ConditionExpr,
   ConditionExtractorService,
   ConditionIndex,
+  DisplayInterpForm,
+  DisplayInterpolation,
   FunctionAssignment,
   FunctionConditions,
+  FunctionDisplayLine,
   FunctionPredicate,
   FunctionPredicates,
   FunctionReturn,
@@ -217,6 +221,8 @@ export type {
   ReplayUnknownReducibility,
   ReplayValue,
   StateReplayService,
+  TranscriptLine,
+  TranscriptVisibility,
 } from './replay';
 
 export type {

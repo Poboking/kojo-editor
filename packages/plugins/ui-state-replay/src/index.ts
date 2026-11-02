@@ -32,6 +32,7 @@
 
 import { createElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  ArchiveOverrides,
   ConditionExtractorService,
   FunctionReplay,
   KojoCallSlot,
@@ -39,9 +40,12 @@ import type {
   Plugin,
   PluginContextMenuAnchor,
   ProjectService,
+  QuickEditField,
+  ReplayCallContext,
   ReplayStateView,
   SlotRegistry,
   SnapshotSourceService,
+  SnapshotWriteService,
   StateReplayService,
   UIPanelProps,
 } from '@kojo/plugin-api';
@@ -50,22 +54,26 @@ import type { AssumedSlot, LocateRequest, ReplayScene, SlotOrigin } from './pane
 import {
   DEFAULT_SCENE_ID,
   PRED_WINDOW,
+  TR_WINDOW,
   analyzeReplay,
   browseCharaFunctions,
   classifySlotValue,
   collectAssumedSlots,
   defaultScene,
   defaultSlotText,
+  diffReplays,
   locateNoticeFor,
+  overridesForField,
   parseCallContextText,
   predicateGloss,
+  replayDiffSummary,
   sanitizeScenes,
   sceneSuggestionName,
   slotKey,
   suggestFunctionsSmart,
   toCallContext,
 } from './panel-logic';
-import { ASSUME_STYLE, renderReplayPreview, type EmitReveal } from './preview';
+import { ASSUME_STYLE, DebugPreviewPanel, renderReplayPreview, type EmitReveal } from './preview';
 import { createReplayActivation } from './activation';
 import { createSceneActions } from './scene-actions';
 import {
@@ -98,6 +106,7 @@ export function createUiStateReplayPlugin(): Plugin {
     requires: [
       WellKnownServices.StateReplay,
       WellKnownServices.SnapshotSource,
+      WellKnownServices.SnapshotWriter, // 口上调试统一批：注入预演的落盘手（同由 sav-parser 提供）
       WellKnownServices.ConditionExtractor,
       KernelServices.Project,
       KernelServices.Slots,
@@ -105,6 +114,7 @@ export function createUiStateReplayPlugin(): Plugin {
     activate(ctx) {
       const replay = ctx.inject<StateReplayService>(WellKnownServices.StateReplay);
       const snapshots = ctx.inject<SnapshotSourceService>(WellKnownServices.SnapshotSource);
+      const writer = ctx.inject<SnapshotWriteService>(WellKnownServices.SnapshotWriter);
       const extractor = ctx.inject<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
@@ -144,10 +154,26 @@ export function createUiStateReplayPlugin(): Plugin {
         const [replayError, setReplayError] = useState<string | null>(null);
         /** 谓词渲染窗口（行数；undefined = 初始窗口——旧实现硬截 300 且第 301 条起不可达） */
         const [predWindow, setPredWindow] = useState<number | undefined>(undefined);
+        /** 台词推演渲染窗口（同上；一个段落上百显示行时不许把下面的分支/谓词顶出屏外） */
+        const [trWindow, setTrWindow] = useState<number | undefined>(undefined);
+        /** 注入热闭环提示（同档被注入面板写盘 → 自动重算；口上调试统一批） */
+        const [injectNote, setInjectNote] = useState<string | null>(null);
+        /** 注入预演（口上调试统一批）：字段 / 值 / 预演结果 / 忙 / 错 / 写入二次确认 */
+        const [previewFieldId, setPreviewFieldId] = useState('');
+        const [previewValue, setPreviewValue] = useState('');
+        const [preview, setPreview] = useState<FunctionReplay | null>(null);
+        const [previewBusy, setPreviewBusy] = useState(false);
+        const [previewError, setPreviewError] = useState<string | null>(null);
+        const [writeArmed, setWriteArmed] = useState(false);
+        const [writeNote, setWriteNote] = useState<string | null>(null);
 
         /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；算式在契约层 `sugar-panels`） */
         const growPreds = useCallback((total: number): void => {
           setPredWindow((prev) => growWindow(prev, total, PRED_WINDOW)); // 无增长原样返回 prev ⇒ 跳过重渲
+        }, []);
+        /** 台词区「显示更多」（同一把尺、另一档参数：首屏 60 / 步长 120） */
+        const growTranscript = useCallback((total: number): void => {
+          setTrWindow((prev) => growWindow(prev, total, TR_WINDOW));
         }, []);
         /** 视图代际（换档/换角色时使在途 createView 作废） */
         const viewGenRef = useRef(0);
@@ -277,6 +303,7 @@ export function createUiStateReplayPlugin(): Plugin {
           if (replayBusyRef.current) return;
           const name = (nameOverride ?? fnQuery).trim().toUpperCase();
           setReplayError(null);
+          setInjectNote(null); // 重算完成即撤热闭环提示
           if (!name) {
             setReplayError('先写下要看的那一段的名字。');
             return;
@@ -285,46 +312,17 @@ export function createUiStateReplayPlugin(): Plugin {
             setReplayError('先在这块面板里选好存档和角色——没有存档，就谈不上"这行走不走"。');
             return;
           }
-          // 调用上下文组装：协议槽（结构化输入）优先；无协议 → 文本框解析
-          let callContext;
-          if (callSlots) {
-            const ints: (number | undefined)[] = [];
-            const strs: (string | undefined)[] = [];
-            for (const s of callSlots) {
-              const raw = slotTexts[slotKey(s.kind, s.index)] ?? '';
-              if (raw.trim() === '') continue; // 空 = 未提供该槽（unknown，不猜测）
-              if (s.kind === 'int') {
-                if (!/^-?\d+$/.test(raw.trim())) {
-                  setReplayError(`场景参数 ${s.index}（${s.label}）必须是整数：「${raw}」`);
-                  return;
-                }
-                while (ints.length <= s.index) ints.push(undefined);
-                ints[s.index] = Number(raw.trim());
-              } else {
-                while (strs.length <= s.index) strs.push(undefined);
-                strs[s.index] = raw;
-              }
-            }
-            if (ints.some((v) => v !== undefined) || strs.some((v) => v !== undefined)) {
-              callContext = {
-                ...(ints.some((v) => v !== undefined) ? { ints } : {}),
-                ...(strs.some((v) => v !== undefined) ? { strs } : {}),
-              };
-            }
-          } else {
-            const parsed = parseCallContextText(contextText);
-            if (!parsed.ok) {
-              setReplayError(`调用上下文无法解析：${parsed.detail}`);
-              return;
-            }
-            callContext = toCallContext(parsed);
+          const assembled = assembleCallContext();
+          if (assembled.error !== null) {
+            setReplayError(assembled.error);
+            return;
           }
           // 假设值快照（C9）：与本结果同批——未手改的预填 0 记入"基于假设"标注
           const assumedAtRun = callSlots ? collectAssumedSlots(callSlots, slotTexts, slotEdited) : [];
           replayBusyRef.current = true;
           setReplayBusy(true);
           void replay
-            .replayFunction(view, name, { callContext })
+            .replayFunction(view, name, { callContext: assembled.callContext })
             .then((r) => {
               if (r === null) {
                 setReplayError(`这一段没有登记到可判定的条件（名字：${name}）——多半是这段里根本没有条件语句，或者它没进条件索引。`);
@@ -348,6 +346,60 @@ export function createUiStateReplayPlugin(): Plugin {
             });
         };
         runReplayRef.current = runReplay;
+
+        /**
+         * 调用上下文组装（口上调试统一批从 runReplay 提出）：预演与正式回放
+         * 必须用**同一份**场景输入，否则"预演说要变、写入后没变"——两个动作
+         * 两个判据正是要消灭的割裂。
+         */
+        const assembleCallContext = (): { callContext?: ReplayCallContext; error: string | null } => {
+          if (callSlots) {
+            const ints: (number | undefined)[] = [];
+            const strs: (string | undefined)[] = [];
+            for (const s of callSlots) {
+              const raw = slotTexts[slotKey(s.kind, s.index)] ?? '';
+              if (raw.trim() === '') continue; // 空 = 未提供该槽（unknown，不猜测）
+              if (s.kind === 'int') {
+                if (!/^-?\d+$/.test(raw.trim())) {
+                  return { callContext: undefined, error: `场景参数 ${s.index}（${s.label}）必须是整数：「${raw}」` };
+                }
+                while (ints.length <= s.index) ints.push(undefined);
+                ints[s.index] = Number(raw.trim());
+              } else {
+                while (strs.length <= s.index) strs.push(undefined);
+                strs[s.index] = raw;
+              }
+            }
+            if (ints.some((v) => v !== undefined) || strs.some((v) => v !== undefined)) {
+              return {
+                callContext: {
+                  ...(ints.some((v) => v !== undefined) ? { ints } : {}),
+                  ...(strs.some((v) => v !== undefined) ? { strs } : {}),
+                },
+                error: null,
+              };
+            }
+            return { callContext: undefined, error: null };
+          }
+          const parsed = parseCallContextText(contextText);
+          if (!parsed.ok) return { callContext: undefined, error: `调用上下文无法解析：${parsed.detail}` };
+          return { callContext: toCallContext(parsed), error: null };
+        };
+
+        // ---- 注入热闭环（口上调试统一批）：同一份存档被注入面板写盘后自动重算 ----
+        // 订阅在挂载期；同档才重算（作者选的档是唯一事实），异档不打扰。
+        const archivePathRef = useRef('');
+        archivePathRef.current = archivePath;
+        useEffect(
+          () =>
+            ctx.bus.on('debug.snapshotInjected', (e) => {
+              if (archivePathRef.current !== e.archivePath) return;
+              setInjectNote('这份存档刚在注入面板里被更新，正在重算…');
+              runReplayRef.current?.();
+            }),
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+          [],
+        );
 
         /* ------------------- 场景预设（命名保存 / 一键应用 / 删除） ------------------- */
 
@@ -644,6 +696,84 @@ export function createUiStateReplayPlugin(): Plugin {
         const schema = adapterNow?.variableSchema;
         const glossOf = useCallback((p: PredicateReplay) => predicateGloss(p.expr, schema), [schema]);
 
+        /* ------------------- 注入预演（口上调试统一批；带着目的改数值） ------------------- */
+
+        const quickFields: readonly QuickEditField[] = adapterNow?.quickEditFields ?? [];
+        const selectedField = quickFields.find((f) => f.id === previewFieldId) ?? null;
+        /** 引擎不支持覆盖预演（旧版本）→ 整个区不渲染（契约可选方法的降级口径） */
+        const hasPreviewCap = typeof replay.replayFunctionWithOverrides === 'function';
+
+        /** 解析预演值（整数照数、其余按字符串；空值由调用方拦截） */
+        const parsePreviewValue = (raw: string): number | string => (/^-?\d+$/.test(raw) ? Number(raw) : raw);
+
+        const runPreview = (): void => {
+          setPreviewError(null);
+          setWriteArmed(false);
+          if (!view || !result) {
+            setPreviewError('先判定一次，再谈「改了会怎样」。');
+            return;
+          }
+          if (!selectedField) {
+            setPreviewError('先挑一个要改的数值。');
+            return;
+          }
+          const raw = previewValue.trim();
+          if (raw.length === 0) {
+            setPreviewError('先填新值。');
+            return;
+          }
+          const cc = assembleCallContext();
+          if (cc.error !== null) {
+            setPreviewError(cc.error);
+            return;
+          }
+          setPreviewBusy(true);
+          void snapshots
+            .parse(view.archivePath)
+            .then((archive) => {
+              const ov = overridesForField(archive, selectedField, view.characterNo, parsePreviewValue(raw));
+              if (!ov) throw new Error(`存档里没有「${selectedField.label}」这个变量（${selectedField.family}），改不了。`);
+              return replay.replayFunctionWithOverrides!(view, result.normalizedName, ov, { callContext: cc.callContext });
+            })
+            .then((r) => {
+              setPreview(r);
+            })
+            .catch((err: unknown) => {
+              setPreviewError(err instanceof Error ? err.message : String(err));
+              setPreview(null);
+            })
+            .finally(() => setPreviewBusy(false));
+        };
+
+        const runWrite = (): void => {
+          if (!view || !result || !selectedField) return;
+          const raw = previewValue.trim();
+          if (raw.length === 0) return;
+          setWriteNote(null);
+          void snapshots
+            .parse(view.archivePath)
+            .then((archive) => {
+              const ov = overridesForField(archive, selectedField, view.characterNo, parsePreviewValue(raw));
+              if (!ov) throw new Error(`存档里没有「${selectedField.label}」这个变量（${selectedField.family}），写不了。`);
+              return writer.inject(view.archivePath, ov);
+            })
+            .then((r) => {
+              // 热闭环：广播后本面板与注入面板同口径自动重算（备份信息一并告知）
+              ctx.bus.emit('debug.snapshotInjected', { archivePath: r.path, source: 'ui-state-replay' });
+              setWriteNote(`已写入存档（备份：${r.backupPath ?? '无'}），正在重算…`);
+            })
+            .catch((err: unknown) => {
+              setWriteNote(`写入失败：${err instanceof Error ? err.message : String(err)}`);
+            });
+        };
+
+        // 结果一换，预演基线就作废（diff 必须配对同一次判定的两份读数）
+        useEffect(() => {
+          setPreview(null);
+          setPreviewError(null);
+          setWriteArmed(false);
+        }, [result]);
+
         /**
          * 右键菜单落点（1023 批）：两条动作都接回已有通道（`emitReveal` / `runReplay`），
          * 复制失败写进既有错误行。回调经 ref 转发、身份恒定——否则它进 `resultBody`
@@ -700,13 +830,53 @@ export function createUiStateReplayPlugin(): Plugin {
               notice,
               predLimit: predWindow,
               onGrowPreds: growPreds,
+              trLimit: trWindow,
+              onGrowTranscript: growTranscript,
               analysis,
               onPredicateMenu,
               glossOf,
             }),
           );
           // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [result, analysis, notice, predWindow, props.renderIcon, emitReveal, growPreds, glossOf]);
+        }, [result, analysis, notice, predWindow, trWindow, props.renderIcon, emitReveal, growPreds, growTranscript, glossOf]);
+
+        // ---- 注入预演的差异呈现（diff 纯函数在 panel-logic；这里只渲染） ----
+        const diff = useMemo(() => (result && preview ? diffReplays(result, preview) : null), [result, preview]);
+        const previewBox =
+          result !== null && quickFields.length > 0 && hasPreviewCap
+            ? createElement(DebugPreviewPanel, {
+                quickFields,
+                fieldId: previewFieldId,
+                value: previewValue,
+                busy: previewBusy,
+                canRun: view !== null && selectedField !== null,
+                canWrite: view !== null && selectedField !== null && previewValue.trim().length > 0,
+                error: previewError,
+                diff,
+                diffSummary: diff ? replayDiffSummary(diff) : null,
+                writeArmed,
+                writeNote,
+                onFieldChange: (id: string) => {
+                  setPreviewFieldId(id);
+                  setPreview(null);
+                  setPreviewError(null);
+                  setWriteArmed(false);
+                },
+                onValueChange: (value: string) => {
+                  setPreviewValue(value);
+                  setWriteArmed(false);
+                },
+                onPreview: runPreview,
+                onWriteClick: () => {
+                  if (!writeArmed) {
+                    setWriteArmed(true);
+                    return;
+                  }
+                  setWriteArmed(false);
+                  runWrite();
+                },
+              })
+            : null;
 
         // 滚到"就是这一行"那一条：只在结果与位点同批时做一次，找不到就作罢
         // （谓词窗口至少盖住位点那一条——见 PredicateList 的 mustInclude；
@@ -752,6 +922,9 @@ export function createUiStateReplayPlugin(): Plugin {
           pendingNote !== null ? createElement('div', { className: 'rp-hint dim' }, pendingNote) : null,
           replayErrorEl,
           menuNote === '' ? null : createElement('div', { className: 'rp-hint dim' }, menuNote),
+          injectNote !== null ? createElement('div', { className: 'rp-hint dim rp-inject-note' }, injectNote) : null,
+          // 注入预演区放在结果之上：改数值 → 立刻读到"这次改动会怎样"，再往下看完整判定
+          previewBox,
           resultBody,
           result === null && !replayError
             ? createElement(

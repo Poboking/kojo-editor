@@ -32,6 +32,7 @@ import { erbContinuationJoin, erbContinuationRoleOf } from '@kojo/plugin-api';
 import { dependencyKey, erbCodeBodyOf, erbCodePrefixLength } from '@kojo/plugin-api';
 import { parseExpression, splitTopLevelCommas, walkExpr } from './expr';
 import { scanBraceTernaries, scanTextTernaries } from './inline';
+import { collectDisplayLines } from './display';
 
 /** ERB 语言级局部量（Emuera 内置；不作为状态依赖收录） */
 const LANGUAGE_LOCAL_NAMES = new Set(['LOCAL', 'LOCALS', 'LOCALSS', 'ARG', 'ARGS', 'RESULT', 'RESULTS', 'COUNT']);
@@ -642,6 +643,9 @@ export function extractFunctionPredicates(
       ? collectAssignments(source.lines, fn.startLine + 1, source.endLine, contextOf!)
       : [],
     returns: source ? collectReturns(source.lines, fn.startLine + 1, source.endLine) : [],
+    // 显示行（v0.3 台词推演批；additive）：与赋值 / 内联谓词同一供应条件——
+    // 给了 source 才扫（没有行区间就不猜，与 assignments 同口径）。
+    ...(source ? { displays: collectDisplayLines(source.lines, fn.startLine + 1, source.endLine, contextOf ?? undefined) } : {}),
   };
 }
 

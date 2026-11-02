@@ -13,6 +13,9 @@ import {
   MAX_SCENES,
   PRED_WINDOW_INITIAL,
   PRED_WINDOW_STEP,
+  TR_WINDOW,
+  nextTrWindow,
+  trWindowSize,
   applyScene,
   captureSceneSlots,
   classifySlotValue,
@@ -638,5 +641,28 @@ describe('predicateGloss（谓词行中文标注）', () => {
       right: { kind: 'ref', name: 'CFLAG', indices: ['2'], text: 'CFLAG:2' },
     };
     expect(predicateGloss(expr, schema)).toBe('好感度');
+  });
+});
+
+describe('台词推演区的渲染窗口（2026-11-02 美化批）', () => {
+  it('首屏 = TR_WINDOW.initial；limit 给值就按值；上限是 total', () => {
+    expect(trWindowSize(500, undefined)).toBe(TR_WINDOW.initial);
+    expect(trWindowSize(500, 80)).toBe(80);
+    expect(trWindowSize(10, 80)).toBe(10);
+  });
+
+  it('跳转位点在窗口之外时撑到盖住它（与谓词区同口径）', () => {
+    expect(trWindowSize(500, undefined, 130)).toBe(130);
+    expect(trWindowSize(500, 80, 130)).toBe(130);
+    // 位点在窗口内不动（不许因跳转把窗口缩小）
+    expect(trWindowSize(500, 200, 130)).toBe(200);
+  });
+
+  it('追加一窗：单调不减、步长有界、终值 = total', () => {
+    const a = nextTrWindow(undefined, 500);
+    expect(a).toBe(TR_WINDOW.initial + TR_WINDOW.step);
+    expect(nextTrWindow(a, 500)).toBeGreaterThan(a);
+    expect(nextTrWindow(499, 500)).toBe(500);
+    expect(nextTrWindow(500, 500)).toBe(500);
   });
 });

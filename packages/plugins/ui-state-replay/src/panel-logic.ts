@@ -21,13 +21,19 @@
  */
 
 import type {
+  ArchiveOverrideValue,
+  ArchiveOverrides,
+  ArchiveVariable,
   BranchChainOutcome,
   ConditionExpr,
   FunctionConditions,
   FunctionReplay,
   PredicateReplay,
+  QuickEditField,
   ReplayCallContext,
   ReplayUnknownCode,
+  SnapshotArchive,
+  TranscriptLine,
   VariableSchema,
 } from '@kojo/plugin-api';
 import { nextWindow, pathKey, type RenderWindow } from '@kojo/plugin-api';
@@ -1011,4 +1017,159 @@ export function predWindowSize(total: number, limit: number | undefined, mustInc
  */
 export function nextPredWindow(current: number | undefined, total: number): number {
   return nextWindow(current, total, PRED_WINDOW);
+}
+
+/* ==================== 口上调试统一批：台词推演的渲染窗口 ==================== */
+
+/**
+ * 台词推演的窗口参数（2026-11-02 美化批）。
+ *
+ * 为什么台词区也要窗口：一个口上段落的显示行可以上百行（语料实测：含显示行的函数
+ * 45,989 个、显示行 1,296,967 条，长尾段落整段铺开会把下面的"分支走向 / 谓词"整块
+ * 顶出屏外）。首屏 60 行 ≈ 一屏对话，够读到"这段在说什么"；要全看再点「显示更多」。
+ * 谓词区 120/240 那档是按"每条一行、可扫读"定的，台词行有换行，密度低，故取更小值。
+ */
+export const TR_WINDOW: RenderWindow = { initial: 60, step: 120 };
+
+/**
+ * 台词区当前窗口行数（纯函数）：[0, min(total, max(limit ?? INITIAL, mustInclude))]。
+ * `mustInclude` 与谓词区同口径——从编辑器跳进来的那一行必须看得见（0 = 无需覆盖）。
+ */
+export function trWindowSize(total: number, limit: number | undefined, mustInclude = 0): number {
+  return Math.min(total, Math.max(limit ?? TR_WINDOW.initial, mustInclude));
+}
+
+/** 台词区窗口下一步（纯函数）：min(total, max(INITIAL, 当前 + STEP)) */
+export function nextTrWindow(current: number | undefined, total: number): number {
+  return nextWindow(current, total, TR_WINDOW);
+}
+
+/* ==================== 口上调试统一批：注入预演 diff ==================== */
+
+/**
+ * 注入前后的回放差异（纯数据；渲染措辞归 UI）。
+ *
+ * 口径：**以台词可见性为主、判定翻转为辅**——作者关心的是"她会多说哪句话"，
+ * 不是谓词三值矩阵的逐格变化。
+ */
+export interface ReplayDiff {
+  /** 旧结果不显示、新结果会显示的台词（新增；含"原来判不出、现在确定会显示"） */
+  added: readonly TranscriptLine[];
+  /** 旧结果会显示、新结果不显示的台词（消失） */
+  removed: readonly TranscriptLine[];
+  /** 旧 maybe、新 hidden 的行数（从"可能显示"收窄成"确定不说"） */
+  settled: number;
+  /** 判定结果翻转的谓词数（三值 kind 变化，按行配对） */
+  flippedPredicates: number;
+  /** 走向变化的分支链数（takenLine / outcome 变化，按链头配对） */
+  flippedBranches: number;
+}
+
+/**
+ * 两份同函数回放的差异（纯函数）。按行号配对（同一函数同一坐标系）；
+ * 基线缺 transcript 时只统计谓词 / 分支翻转（预演降级不伪造台词差异）。
+ */
+export function diffReplays(base: FunctionReplay, next: FunctionReplay): ReplayDiff {
+  const baseTr = new Map<number, TranscriptLine>();
+  for (const t of base.transcript ?? []) baseTr.set(t.line, t);
+  const nextTr = new Map<number, TranscriptLine>();
+  for (const t of next.transcript ?? []) nextTr.set(t.line, t);
+
+  const added: TranscriptLine[] = [];
+  const removed: TranscriptLine[] = [];
+  let settled = 0;
+  if (base.transcript && next.transcript) {
+    for (const [line, t2] of nextTr) {
+      const t1 = baseTr.get(line);
+      const v1 = t1?.visibility ?? 'hidden';
+      if (v1 !== 'shown' && t2.visibility === 'shown') added.push(t2);
+      else if (v1 === 'shown' && t2.visibility !== 'shown') removed.push(t2);
+      else if (v1 === 'maybe' && t2.visibility === 'hidden') settled++;
+    }
+  }
+
+  const basePred = new Map<number, string>();
+  for (const p of base.predicates) basePred.set(p.line, p.outcome.kind);
+  let flippedPredicates = 0;
+  for (const p of next.predicates) {
+    const v1 = basePred.get(p.line);
+    if (v1 !== undefined && v1 !== p.outcome.kind) flippedPredicates++;
+  }
+
+  const baseBr = new Map<number, string>();
+  for (const b of base.branches) baseBr.set(b.headLine, `${b.outcome}@${b.takenLine ?? ''}`);
+  let flippedBranches = 0;
+  for (const b of next.branches) {
+    const v1 = baseBr.get(b.headLine);
+    if (v1 !== undefined && v1 !== `${b.outcome}@${b.takenLine ?? ''}`) flippedBranches++;
+  }
+
+  return { added, removed, settled, flippedPredicates, flippedBranches };
+}
+
+/** 差异 → 一句白话（零差异 → null；措辞对齐 describeReading 的口径） */
+export function replayDiffSummary(diff: ReplayDiff): string | null {
+  const parts: string[] = [];
+  if (diff.added.length > 0) parts.push(`会多说 ${diff.added.length} 句`);
+  if (diff.removed.length > 0) parts.push(`会少说 ${diff.removed.length} 句`);
+  if (diff.settled > 0) parts.push(`${diff.settled} 句从"判不出"变成确定不说`);
+  if (diff.flippedBranches > 0) parts.push(`${diff.flippedBranches} 处分支走向翻转`);
+  if (diff.flippedPredicates > 0 && diff.added.length === 0 && diff.removed.length === 0) {
+    parts.push(`${diff.flippedPredicates} 处条件判定改变`);
+  }
+  return parts.length > 0 ? parts.join('、') : null;
+}
+
+/**
+ * 角色块定位（**按 NO 标量**，与 `state-view` 的 `findBlockByNo` 同判据）。
+ *
+ * 为什么不能直接拿 `charaNo` 当块 index：`view.characterNo` 是角色的 **NO**
+ * （CSV 编号），而覆盖集 `chars` 的键是**块序号**（`ArchiveCharacterBlock.index`，
+ * 引擎按角色注册顺序写出）。两者在"角色表有空洞 / 中间有缺号"时不相等——
+ * 拿 NO 当 index 会把值预演到别的角色身上（预演与写入同时错，且错得无声）。
+ */
+export function charaBlockOf(archive: SnapshotArchive, charaNo: number): { index: number; vars: readonly ArchiveVariable[] } | null {
+  for (const block of archive.chars ?? []) {
+    const noVar = block.vars.find((v) => v.key === 'NO');
+    if (noVar && noVar.type === 'int' && noVar.value === charaNo) return block;
+  }
+  return null;
+}
+
+/**
+ * 单字段的覆盖值（按存档里该变量的真实形态定形）：
+ * 数组 → 单元补丁（`[{index, value}]`）；标量 → 直接值；找不到该变量 → null
+ * （显式报错，不猜形态）。`archive` 用 `snapshot.source.parse` 的缓存产物（首次后零开销）。
+ */
+export function overrideValueForField(
+  archive: SnapshotArchive,
+  field: QuickEditField,
+  charaNo: number,
+  value: number | string,
+): ArchiveOverrideValue | null {
+  const area: readonly ArchiveVariable[] | undefined =
+    field.scope === 'global' ? archive.globalVars ?? archive.vars : charaBlockOf(archive, charaNo)?.vars;
+  if (!area) return null;
+  const v = area.find((x) => x.key === field.family);
+  if (!v) return null;
+  if (v.type === 'int' || v.type === 'str') return value; // 标量直接替换（类型不匹配由 applier 跳过）
+  if (v.type.startsWith('int-array') || v.type.startsWith('str-array')) {
+    return [{ index: [field.index], value }];
+  }
+  return null; // map / xml / datatable：不在快改射程内
+}
+
+/** 组装单字段覆盖集（找不到变量 / 角色块 → null，调用方显式报错） */
+export function overridesForField(
+  archive: SnapshotArchive,
+  field: QuickEditField,
+  charaNo: number,
+  value: number | string,
+): ArchiveOverrides | null {
+  const v = overrideValueForField(archive, field, charaNo, value);
+  if (v === null) return null;
+  if (field.scope === 'global') return { vars: new Map([[field.family, v]]) };
+  const block = charaBlockOf(archive, charaNo);
+  if (!block) return null;
+  return { chars: new Map([[block.index, new Map([[field.family, v]])]]) };
 }

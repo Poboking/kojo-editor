@@ -13,7 +13,7 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     expect(KERNEL_EVENT_CLASSIFICATION_GUARD).toBe(true);
   });
 
-  it('白名单 = 插件可 emit 的 24 个内核事件（快照守门）', () => {
+  it('白名单 = 插件可 emit 的 25 个内核事件（快照守门）', () => {
     expect([...KERNEL_EVENT_NAMES].sort()).toEqual(
       [
         'file.changed',
@@ -22,6 +22,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
         'kojo.functionChanged',
         'plugin.statusChanged',
         'state.snapshotLoaded',
+        // 2026-11-02 口上调试统一批：注入写盘成功广播（回放面板热更新）
+        'debug.snapshotInjected',
         'editor.revealLocation',
         'kojo.replayFunction',
         'kojo.snapshotSelected',
@@ -74,7 +76,8 @@ describe('KERNEL_EVENT_NAMES（插件可 emit 的内核事件白名单）', () =
     // 用户反馈 4 批新增 market.publishRequested（「发布口上」意图，市场面板 → 适配器）⇒ 21 → 22。
     // 用户反馈 8 批新增 ui.tutorial.open（教程打开意图，欢迎页 → 教程提供方）⇒ 22 → 23。
     // P0-6 欢迎页一键重开批新增 ui.panel.reveal（面板定位意图）⇒ 23 → 24。
+    // 2026-11-02 口上调试统一批新增 debug.snapshotInjected（存档刚被注入写盘）⇒ 24 → 25。
     // 计数以本行结论为准（漏项的话编译期 guard 会红）。
-    expect(KERNEL_EVENT_NAMES.size).toBe(24);
+    expect(KERNEL_EVENT_NAMES.size).toBe(25);
   });
 });

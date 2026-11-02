@@ -274,6 +274,7 @@ export interface SnapshotWriteService {
   inject(path: string, overrides: ArchiveOverrides): Promise<SnapshotInjectionResult>;
 }
 
+
 /**
  * 快照来源服务（服务键 `snapshot.source`）。
  *

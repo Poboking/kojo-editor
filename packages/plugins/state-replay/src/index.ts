@@ -90,6 +90,7 @@ export { createStateView, ReplayViewError, type CreateStateViewOptions, type Sch
 export { judgeCondition, evaluateExpr, type ValueReader, type EvalContext, type CallResolver } from './evaluate';
 export { InlineManager, analyzeInlineBody, MAX_INLINE_DEPTH, type AnalyzedFunction, type InlineBody } from './inline';
 export { buildBranchOutcomes } from './branches';
+export { buildTranscript, type BuildTranscriptOptions } from './transcript';
 export {
   builtinVarModel,
   isCalcPseudo,

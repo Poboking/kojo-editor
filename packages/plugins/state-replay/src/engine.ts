@@ -11,7 +11,9 @@
  */
 
 import { splitEolLines } from '@kojo/plugin-api/eol';
+import { applyArchiveOverrides } from '@kojo/plugin-api';
 import type {
+  ArchiveOverrides,
   FunctionPredicate,
   FunctionPredicates,
   FunctionReplay,
@@ -29,6 +31,7 @@ import { buildBranchOutcomes } from './branches';
 import { InlineManager } from './inline';
 import { createFunctionOverlay, type OverlayPosition, type OverlayReader } from './locals';
 import { createStateView, type SchemaLookup } from './state-view';
+import { buildTranscript } from './transcript';
 
 /**
  * 函数体行文本缓存上限（2026-10-18 性能批）。
@@ -268,6 +271,20 @@ export class StateReplayEngine implements StateReplayService {
   }
 
 
+  /** 函数体行文本（缓存；内联解释器与台词推演共用同一份） */
+  private async getLines(path: string): Promise<string[]> {
+    const hit = this.lineCache.get(path);
+    if (hit) {
+      this.lineCache.delete(path); // 重读=重新入队尾
+      this.lineCache.set(path, hit);
+      return hit;
+    }
+    const text = await this.deps.readFileText(path);
+    const lines = splitEolLines(text);
+    this.putLines(path, lines);
+    return lines;
+  }
+
   async replayFunction(
     view: ReplayStateView,
     functionName: string,
@@ -288,7 +305,27 @@ export class StateReplayEngine implements StateReplayService {
     await this.inline.preanalyze(detail);
     const resolveCall: CallResolver = (name, args, callerCtx) =>
       this.inline.resolveCall(name, args, callerCtx, 0);
-    return replayPredicates(detail, read, overlay ?? undefined, resolveCall);
+    const replay = replayPredicates(detail, read, overlay ?? undefined, resolveCall);
+    // 台词推演（v0.3 口上调试统一批；additive）：有显示行资料且行文本可得时才附——
+    // 读文件失败等意外只降级（无 transcript），不影响谓词 / 分支结果。
+    if (detail.displays && detail.displays.length > 0) {
+      try {
+        const lines = await this.getLines(detail.filePath);
+        const transcript = buildTranscript({
+          detail,
+          lines,
+          predicates: replay.predicates,
+          branches: replay.branches,
+          read,
+          ...(overlay ? { overlay } : {}),
+          resolveCall,
+        });
+        if (transcript) return { ...replay, transcript };
+      } catch (err) {
+        this.deps.log.warn(`transcript build failed for ${functionName}: ${String(err)}`);
+      }
+    }
+    return replay;
   }
 
   async replayFunctions(
@@ -301,5 +338,22 @@ export class StateReplayEngine implements StateReplayService {
       out.push(await this.replayFunction(view, name, options));
     }
     return out;
+  }
+
+  /**
+   * 覆盖预演回放（v0.3 口上调试统一批；契约可选方法）——把覆盖集应用到
+   * 读模型（`applyArchiveOverrides`，不改入参）后回放。预演视图**不入缓存**
+   * （一次性对象；入参 archive 来自解析记忆，覆盖产物即抛）。
+   */
+  async replayFunctionWithOverrides(
+    view: ReplayStateView,
+    functionName: string,
+    overrides: ArchiveOverrides,
+    options?: ReplayFunctionOptions,
+  ): Promise<FunctionReplay | null> {
+    const archive = await this.deps.parseArchive(view.archivePath);
+    const patched = applyArchiveOverrides(archive, overrides);
+    const previewView = createStateView({ archive: patched, characterNo: view.characterNo, lookup: this.deps.getSchemaLookup() });
+    return this.replayFunction(previewView, functionName, options);
   }
 }

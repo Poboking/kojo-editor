@@ -224,9 +224,12 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     // PS10-LEAK 批的交付判据：`condition-extractor` 整包不在图上，只剩它的 `offload` 叶子族
     // （`offload` / `extract` / `expr` / `inline` / `decorator` 五枚，任务表工厂的真实依赖）。
     // 只要 `engine` / `snapshot` / 桶 `index` 里任意一枚回来 ⇒ 说明又有人引了桶。
+    // 2026-11-02 口上调试统一批：`display.ts` 进图（第六枚）——`extract.ts` 的静态依赖
+    // （显示行扫描），不是桶回灌。
     const condFiles = files.filter((f) => f.startsWith('packages/plugins/condition-extractor/'));
     expect(condFiles.map((f) => path.basename(f)).sort()).toEqual([
       'decorator.ts',
+      'display.ts',
       'expr.ts',
       'extract.ts',
       'inline.ts',
@@ -1223,11 +1226,29 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     · 为什么必须进图：`identifier-chars.ts` 本就在图内（词法基础件），新增导出
     //       是同文件一行常量，没有"纯懒边"形态。
     //     ⇒ 闸 **3,487 → 3,488**（文件闸 199 顶格，余量 0 B——再进图必须先出图）。
+    //   - **2026-11-02 口上调试统一批（台词推演 + 注入预演）**：读数 **201 文件 / 3,511 KB**
+    //     （3,594,789 B = 上一条 3,571,393 + **23,396**）——**新进图两枚**，逐枚实测
+    //     （现树 `Buffer.byteLength` vs `fe18e67c` 同路径 `git cat-file -s`；差值求和
+    //     23,396 B 与总差**逐字节相等**）：
+    //     · `plugins/condition-extractor/src/display.ts` **+11,160**（新进图：PRINT 系显示行
+    //       扫描——`extract.ts` 静态引用，是 `FunctionPredicates.displays` 的抽取侧真源）；
+    //     · `plugin-api/src/snapshot-overrides.ts` **+5,600**（新进图：`applyArchiveOverrides`
+    //       纯函数。**为什么单独成文件**：它起先住在 `plugin-api/src/snapshot.ts` 里，桶里
+    //       一加值导出就把整枚 16,295 B 的契约文件拽进开机图（消费者只有两个动态插件）；
+    //       拆叶子后进图 5,600 B，`snapshot.ts` 退回纯类型引用，实测省下 ~10.7 KB）；
+    //     · 既有文件增量：`plugin-api/src/conditions.ts` **+2,993**（显示行契约）、
+    //       `plugin-api/src/replay.ts` **+2,426**（`TranscriptLine` / 覆盖预演可选方法）、
+    //       `plugin-api/src/events.ts` **+672**（`debug.snapshotInjected` 事件）、
+    //       `plugins/condition-extractor/src/extract.ts` **+373**（接显示行 pass）、
+    //       `plugin-api/src/index.ts` **+172**（两处导出）。
+    //     · 不在图内（无漏点名）：`state-replay/src/transcript.ts`、两个面板插件与
+    //       `styles-project.css`——全部走 aux 懒载，与实测总差吻合。
+    //     ⇒ 闸 **3,488 → 3,511**（文件闸 **199 → 201**；余量 0 B——再进图必须先出图）。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤199 文件 / ≤3,488 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,511 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_488);
-    expect(files.length).toBeLessThanOrEqual(199);
+    expect(totalKb).toBeLessThanOrEqual(3_511);
+    expect(files.length).toBeLessThanOrEqual(201);
   });
 
   /**

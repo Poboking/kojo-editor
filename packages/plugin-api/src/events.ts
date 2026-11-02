@@ -295,6 +295,14 @@ export interface KernelEventMap {
     locate?: { filePath: string; line: number; column?: number; span?: RevealSpan };
   };
   /**
+   * 调试上下文已更新（v0.3 口上调试统一批）：一份存档刚被注入写盘成功。
+   * 通用、游戏无关——注入面板（`snapshot.writer` 的 UI 消费者）发射；
+   * 回放面板监听：正在查看同一份存档时自动重算（引擎视图缓存按 mtime
+   * 失效，`createView` 重建即见新值），把「改数值」和「看后果」接成一个
+   * 连续的调试动作，作者不用在两个面板间手动来回。
+   */
+  'debug.snapshotInjected': { archivePath: string; source?: string };
+  /**
    * 打开 overlay 意图（2026-10-11 UI 重设计批 P2）：请求宿主打开某 `ui.overlay`
    * 贡献（新建向导 / 重授权 / 设置等模态）。
    * 通用、游戏无关——插件发意图、宿主落地，插件间零依赖
@@ -481,6 +489,8 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
   'state.snapshotLoaded',
   'editor.revealLocation',
   'kojo.replayFunction',
+  // 口上调试统一批：注入面板写盘成功后广播（回放面板热更新）
+  'debug.snapshotInjected',
   'kojo.snapshotSelected',
   'editor.activeFileChanged',
   'editor.liftPreview.show',
