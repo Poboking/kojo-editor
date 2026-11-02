@@ -56,7 +56,10 @@ export interface WorkspaceFolder {
 
 /** `buildWorkspaceFolders` 的输入：五类根各自的原样来源（缺省 = 这一类没有根） */
 export interface WorkspaceFolderInput {
-  /** 游戏根（`project.rootDir`）；**可选**（KW4A 批 2026-11-02 由必填放宽，两态判据见 `workspace-folders-project-coupling.test.ts`） */
+  /**
+   * 游戏根（`project.rootDir`）；**可选**（KW4A 批 2026-11-02 由必填放宽：空串本就与缺省同形，
+   * 两态判据见 `workspace-folders-project-coupling.test.ts`；真闸在调用方那侧）。
+   */
   readonly projectRoot?: string;
   /** 口上域（`project.kojoPaths`） */
   readonly kojoPaths?: readonly string[] | undefined;
