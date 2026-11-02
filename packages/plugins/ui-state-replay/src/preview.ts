@@ -19,6 +19,7 @@ import type {
   PluginContextMenuAnchor,
   PredicateReplay,
   QuickEditField,
+  ReplayUnknownCode,
   TranscriptLine,
   TranscriptVisibility,
 } from '@kojo/plugin-api';
@@ -648,8 +649,13 @@ export function renderReplayPreview(opts: {
  * 2026-11-02 白话批：旧词表是工程口径（「调用上下文未提供」「本地量无可见赋值」），
  * 零基础作者读不出因果。全部改成「为什么判不出 + 该怎么办」的白话；机器码仍在
  * 徽章的 title 里留档（悬停可见），不丢排障能力。
+ *
+ * **类型就是穷尽闸**（KW-28 1103）：这张表此前挂在 `Record<string, string>` 上——
+ * 新增一枚机器码忘了配文案，编译期一声不响，屏上直接露出 `local-range` 这种工程词
+ * （组长实测过的形状）。改成 `Record<ReplayUnknownCode, string>` 后少一格就 typecheck 红；
+ * 运行期那把同源尺在 `tests/unknown-hint-exhaustive.test.ts`（键表从契约联合现算，不抄第二份）。
  */
-export const UNKNOWN_HINT: Record<string, string> = {
+export const UNKNOWN_HINT: Record<ReplayUnknownCode, string> = {
   opaque: '这段写法看不懂',
   call: '调用了别的函数，存档里看不出来',
   builtin: '用了内置函数，存档里算不出来',
@@ -657,7 +663,11 @@ export const UNKNOWN_HINT: Record<string, string> = {
   pseudo: '用到了运行中才有的值（比如随机数）',
   'local-no-write': '这个临时量在存档里没留下数值',
   'local-range': '循环变量有好几种可能的取值，这几种判出来的结果不一样',
-  'call-context': '没告诉它调用时的参数',
+  // KW-28 判性：这一族不是"谁忘了给参数"，而是**本次调用的实参根本不在存档里**
+  // （真语料 K49 × save03 实测 858 枚 / 131 个函数，同一路由键的转发实参在各调用点取值不同）。
+  // 旧短句只说"没告诉它"，作者会去找一个并不存在的"告诉"入口；白话批的口径是「为什么 + 该怎么办」，
+  // 所以这里补上那半句——面板里那格可以手填（填了就是作者给的场景值，引擎仍不猜）。
+  'call-context': '这一格要看它是被谁、带着什么调进来的，存档里没有；知道场景就在「场景参数」里填这一格',
   'dynamic-index': '下标是算出来的，看不出指哪一格',
   'named-index': '下标名字认不出来',
   'missing-var': '存档里没有这个变量',
