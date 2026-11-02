@@ -674,8 +674,19 @@ function runnableCommandItem(
 
 /* ------------------------------ 渲染辅助 ------------------------------ */
 
-/** 标签显示名：路径末段（完整路径留 title 悬浮提示；菜单的标签列表子菜单也用它） */
+/** 未落盘草稿（KW-16B）的标签键前缀：`untitled:N` 不是路径（判据与不变量见 `untitled-draft.ts`） */
+export const UNTITLED_PREFIX = 'untitled:';
+
+export function isUntitledPath(path: string): boolean {
+  return path.startsWith(UNTITLED_PREFIX);
+}
+
+/** 标签显示名：路径末段（完整路径留 title 悬浮提示；菜单与关闭确认框同用）；草稿没有末段可取 */
 export function tabName(path: string): string {
+  if (isUntitledPath(path)) {
+    const n = path.slice(UNTITLED_PREFIX.length);
+    return n === '' ? '未命名草稿' : `未命名草稿 ${n}`;
+  }
   const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return i >= 0 ? path.slice(i + 1) : path;
 }

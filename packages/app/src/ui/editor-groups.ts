@@ -12,7 +12,7 @@
  * 这里只提供「给一份旧态 + 一个意图 ⇒ 返回一份新态」的纯函数——与
  * `editor-groups.test.ts` 的闭环口径一一对应。
  */
-import { clampIndexToPinZone, planPreviewOpen } from './tabs-ops';
+import { clampIndexToPinZone, isUntitledPath, planPreviewOpen } from './tabs-ops';
 
 /** 一个编辑器组：自己的标签栈 + 组内激活标签 */
 export interface EditorGroupState {
@@ -374,12 +374,12 @@ export interface GroupsSnapshot {
   groups: GroupsSnapshotGroup[];
 }
 
-/** 组态 ⇒ 快照（纯拷贝；调用方负责 JSON 化落盘） */
+/** 组态 ⇒ 快照（纯拷贝，调用方负责落盘）；未落盘草稿不进快照——重开时它是空的，记下来就是句假话 */
 export function serializeGroups(state: EditorGroupsState): GroupsSnapshot {
   return {
     orientation: state.orientation,
     activeGroupId: state.activeGroupId,
-    groups: state.groups.map((g) => ({ id: g.id, tabs: [...g.tabs], active: g.active })),
+    groups: state.groups.map((g) => ({ id: g.id, tabs: g.tabs.filter((t) => !isUntitledPath(t)), active: g.active })),
   };
 }
 

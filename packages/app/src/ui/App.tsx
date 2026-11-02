@@ -110,6 +110,7 @@ import { routeKojo2OpenPath } from './kojo2-open-paths';
 import {
   applyPin,
   batchCloseEmptyReason,
+  isUntitledPath,
   planBatchClose,
   planReorder,
   type BatchCloseMode,
@@ -1674,6 +1675,8 @@ export function App(): ReactElement {
    */
   const recordRecentFile = useCallback(
     (path: string) => {
+      // 草稿不进最近文件（KW-16B）：那是持久记录，而草稿没有盘上落点，记了就是幽灵
+      if (isUntitledPath(path)) return;
       const next = upsertRecentFile(recentFilesRef.current, {
         path,
         rootDir: rootDirRef.current ?? '',
