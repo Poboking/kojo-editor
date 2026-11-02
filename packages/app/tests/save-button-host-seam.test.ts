@@ -216,8 +216,12 @@ describe('4 · EditorPane 接线（源码切片取证，手法同 editor-pane-wr
 
   it('自动保存读同一个判定（必然被拒的路径不再白敲 IPC），且没动内核写域判定本身', () => {
     expect(SOURCE).toContain('writable: kernel.io.isWritable(path) && !saveBlockedByHostWriteDomain(path)');
-    // 既有的六处 `kernel.io.isWritable` 判定一字未放宽（直连 / EOL 门 / 保存闸 / 自动保存 /
-    // 状态上报 / 直连提示都还在；本批只在其上**追加**读宿主事实的闸，不替换、不删）
-    expect(SOURCE.split('kernel.io.isWritable(').length - 1).toBe(6);
+    // 既有的 `kernel.io.isWritable` 判定不许被放宽（直连 / EOL 门 / 保存闸 / 自动保存 /
+    // 状态上报 / 直连提示都还在；本批只在其上**追加**读宿主事实的闸，不替换、不删）。
+    // 账目 6 → 5（KW-16 可写性单源批 `f3dc81ec`，**不是放宽**）：少的那一处是"编辑意图"那一格，
+    // 它改吃 `canEditAt` → `canEditNow`（EditorPane:448），而那条腿在
+    // `editor-editability.ts:122` 里仍然 `writable: (p) => env.kernel.io.isWritable(p)`
+    // ⇒ 同一条内核事实，只是搬进单源那一处问，屏上不再各写一遍。
+    expect(SOURCE.split('kernel.io.isWritable(').length - 1).toBe(5);
   });
 });

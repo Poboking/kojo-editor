@@ -113,7 +113,10 @@ describe('视觉批十三 · 壳层打磨的防回退判据', () => {
     const app = read('ui/App.tsx');
     // 算法住在 window-title.ts（纯函数另有一份真值测试）；这里只钉"三条出口都接上了"
     expect(app).toContain("from './window-title'");
-    expect(app).toContain('windowTitleFor(project?.rootDir');
+    // KW-4E 段④ 翻新：标题改问会话族（游戏会话取项目根、作品会话取**作品名**，
+    // 不再把内核生成的作品 id 当标题上屏）。旧形状不得以另一种写法回来。
+    expect(app).toContain('windowTitleForSession(project?.rootDir, workspaceSession?.name)');
+    expect(app).not.toContain('windowTitleFor(project?.rootDir');
     expect(app).toContain('document.title = windowTitle');
     expect(app).toContain('getCurrentWindow().setTitle(windowTitle)');
     expect(app).toContain('<WindowChrome title={windowTitle} />');

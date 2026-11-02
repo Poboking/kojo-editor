@@ -91,8 +91,11 @@ describe('App 接线', () => {
   const app = read('../src/ui/App.tsx');
   const welcome = read('../src/ui/WelcomeView.tsx');
 
-  it('只在「无项目且非启动相位」挂整窗拖动，且走统一判定', () => {
-    expect(app).toContain("if (project !== null || phase === 'boot') return;");
+  it('只在「不在任何会话且非启动相位」挂整窗拖动，且走统一判定', () => {
+    // KW-4C 段③ 翻新：这一格判据从 `project` 换成**会话根**（游戏根 ∪ 作品目录 ∪ null）——
+    // 作品会话也是"现场"，不该还按弹窗拖。旧形状（认 project）不得回来。
+    expect(app).toContain("if (sessionRoot !== null || phase === 'boot') return;");
+    expect(app).not.toContain("if (project !== null || phase === 'boot') return;");
     expect(app).toContain('canStartWindowDragFrom(target, event.clientX, event.clientY)');
     expect(app).toContain('prepareWindowDrag()');
     expect(app).toContain('startDrag?.()');
