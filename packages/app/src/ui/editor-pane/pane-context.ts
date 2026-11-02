@@ -57,6 +57,11 @@ export interface EditorPaneRefs {
   actionSeqRef: MutableRef<number>;
   /** 面包屑树缓存（登记进多实例登记簿，供 provider 反查） */
   crumbTreeCacheRef: MutableRef<CrumbTreeCache | null>;
+  /**
+   * 本会话已解锁编辑的路径集合（轴二；真源在组件，登记簿/标签侧只读同一只壳）。
+   * KW16 标签色轨批登记——为了让"这份文件此刻能不能动手"只有一句判据，组件外不再抄写。
+   */
+  unlockedPathsRef: MutableRef<Set<string>>;
   /** 各标签的视图状态（光标/滚动；切换时保存/恢复） */
   viewStatesRef: MutableRef<Map<string, Monaco.editor.ICodeEditorViewState | null>>;
   /** 上一个活动路径（切换时先把它的视图状态存下） */

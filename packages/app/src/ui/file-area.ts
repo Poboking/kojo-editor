@@ -76,3 +76,32 @@ export function writablePillTone(area: FileWritableArea, projectWritable: boolea
   if (area === 'game-erb') return 'ro';
   return projectWritable ? 'ok' : 'ro';
 }
+
+/**
+ * 可写性说明文案的**唯一一处**（KW16 标签色轨批，2026-11-02）。
+ *
+ * 改前这三句只长在 `ShellLayout` 的状态栏胶囊里。标签页的语义色轨问的是同一件事，
+ * 再写一套说法就是第二口径——所以把句子搬到区域判定的家门口，胶囊原样取用（屏上一字不变），
+ * 色轨的悬停说明在它上面加自己的那一档。
+ */
+export const WRITABLE_HINTS = {
+  /** 轴一 · 作者工作区：恒可写，不解释授权 */
+  workspace: '这份文件在你的工作项目区（你自己写的口上文件），可以直接保存。',
+  /** 轴一 · 游戏目录里的原生文件：默认只读 + 出路（胶囊那颗也是这一句） */
+  gameErb:
+    '口上区（游戏目录）里的原生文件：默认只读——直接改它等于改别人装好的游戏内容。开始输入时编辑器会询问你是否破例；点击这里可重新批准写权限。',
+  /** 区域答不出时回落的项目级授权读数（两档） */
+  projectWritable: '写权限已批准',
+  projectReadOnly: '只读：写权限未批准，点击重新授权',
+} as const;
+
+/**
+ * 胶囊那句说明（纯函数，口径与 `writablePillTone` 同一条：区域优先、回落项目级）。
+ *
+ * `ShellLayout` 只负责把这枚文案挂到 `title` 上，判定与文案都不再住在组件里。
+ */
+export function writablePillTitle(area: FileWritableArea, projectWritable: boolean): string {
+  if (area === 'workspace') return WRITABLE_HINTS.workspace;
+  if (area === 'game-erb') return WRITABLE_HINTS.gameErb;
+  return projectWritable ? WRITABLE_HINTS.projectWritable : WRITABLE_HINTS.projectReadOnly;
+}

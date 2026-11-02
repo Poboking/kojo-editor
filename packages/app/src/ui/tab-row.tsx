@@ -11,6 +11,9 @@ import { memo, type DragEvent as ReactDragEvent, type ReactElement } from 'react
 import { middleEllipsis } from './FileTree';
 import { Icon } from './icons';
 import { tabClassName, tabName } from './tabs-ops';
+// 只取类型（`import type` ⇒ 运行时零依赖）：档位与文案由宿主经 `ui/editor-editability.ts`
+// 算好后交下来，本行不许自己再判一次"这份文件能不能编辑"（判据只有一处）。
+import type { TabRail } from './editor-editability';
 
 export { tabName } from './tabs-ops';
 
@@ -29,6 +32,11 @@ export interface TabRowProps {
   readonly dirty: boolean;
   /** 预览态（斜体；再点一次即转正）。缺省 false ⇒ 与改动前逐字同形 */
   readonly isPreview?: boolean;
+  /**
+   * 左侧语义色轨（KW16 标签色轨批）：档位 + 悬停说明 + 类名，全部由宿主算好交下来。
+   * `null` / 缺省 = **不给语义色**（游戏目录里未解锁的只读件走这一档）。
+   */
+  readonly rail?: TabRail | null;
   /** 拖拽落点指示（只在命中标签上非空；PS-6 第 7 项的进一步根治——跨行移动时只换两行） */
   readonly hint: 'before' | 'after' | null;
   /** 以下全部恒定身份（宿主 useCallback 产物）：行级 memo 的生效前提 */
@@ -40,6 +48,16 @@ export interface TabRowProps {
   readonly onDragEnd: () => void;
 }
 
+/**
+ * 悬停说明：路径（+ 固定 / 预览那一档）在前，色轨那句在后。
+ *
+ * 纯函数、模块级 ⇒ 行内不建闭包；无轨时返回的就是改前那一句，一字不多。
+ */
+export function tabHoverTitle(p: string, isPinned: boolean, isPreview: boolean, rail: TabRail | null | undefined): string {
+  const base = isPinned ? `${p}（已固定）` : isPreview ? `${p}（预览中，再点一下即固定）` : p;
+  return rail ? `${base} · ${rail.hint}` : base;
+}
+
 /** 一枚标签（PS-16 行级 memo）：值 props + 恒定基回调 ⇒ 落点/活动/脏三态变化只重画命中的行。 */
 export const TabRow = memo(function TabRow({
   p,
@@ -47,6 +65,7 @@ export const TabRow = memo(function TabRow({
   isPinned,
   dirty,
   isPreview = false,
+  rail = null,
   hint,
   onActivateTab,
   onRequestCloseTab,
@@ -59,8 +78,16 @@ export const TabRow = memo(function TabRow({
     <div
       role="tab"
       aria-selected={isActive}
-      className={tabClassName(p, isActive, isPinned, hint ? { path: p, before: hint === 'before' } : null, isPreview)}
-      title={isPinned ? `${p}（已固定）` : isPreview ? `${p}（预览中，再点一下即固定）` : p}
+      className={tabClassName(
+        p,
+        isActive,
+        isPinned,
+        hint ? { path: p, before: hint === 'before' } : null,
+        isPreview,
+        rail?.railClass ?? '',
+      )}
+      title={tabHoverTitle(p, isPinned, isPreview, rail)}
+      data-tab-rail={rail?.grade ?? 'none'}
       draggable
       data-context-surface="tabs"
       data-tab-path={p}

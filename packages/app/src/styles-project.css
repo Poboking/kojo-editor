@@ -983,6 +983,37 @@ textarea {
   font-style: italic;
   color: var(--fg-dim);
 }
+/* 标签左侧**语义色轨**（KW16 标签色轨批，2026-11-02；对标 IDEA 的 Tab Colors / Stripe）：
+   3px 竖条走告警面一族的同一口径（轨宽与三档色只在 `tokens.css` 的 `--tab-rail-*` 定义）。
+   形态是绝对定位的伪元素，不是 `border-left`——
+    - 加 border 会把标签整体推宽、并让固定针与脏点各挪 3px（这两位的位置不许动）；
+    - 左缘那道 inset box-shadow 已是活动态描边与拖拽落点指示的槽位（`.editor-tab.active`
+      / `.drop-before`），色轨与它们**不同槽位**：那条在顶（活动）与左内缘 2px（落点，瞬时），
+      这一条贴在几何左缘、`pointer-events: none` 不吃命中，落点指示扫过时两者叠着也不互踩；
+    - 伪元素不进布局 ⇒ 解锁 / 挂预览的那一刻只翻色、不抖动。
+   `position: relative` 的承托位由 `tabs-bar.css` 那条 `.editor-tabs-bar .editor-tab` 供
+   （(0,2,0) 稳压本档单类，注入顺序无关）。
+   第四档——游戏目录里未解锁的只读件——**一条规则都不给**：没有额外颜色就是它的颜色。 */
+.editor-tab.rail-author::before,
+.editor-tab.rail-unlocked::before,
+.editor-tab.rail-derived::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--tab-rail-w);
+  pointer-events: none;
+}
+.editor-tab.rail-author::before {
+  background: var(--tab-rail-author);
+}
+.editor-tab.rail-unlocked::before {
+  background: var(--tab-rail-unlocked);
+}
+.editor-tab.rail-derived::before {
+  background: var(--tab-rail-derived);
+}
 /* 关闭按钮平时隐去（活动标签除外），悬停浮出——标签条更安静 */
 .editor-tab .tab-close {
   border: none;

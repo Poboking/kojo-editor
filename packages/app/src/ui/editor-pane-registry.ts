@@ -56,6 +56,14 @@ export interface PaneCtx {
   pendingActionsRef: { current: Map<string, EditorCodeAction> };
   actionSeqRef: { current: number };
   crumbTreeCacheRef: { current: { path: string; versionId: number; symbols: EditorDocumentSymbol[] } | null };
+  /**
+   * 本实例**本会话已解锁编辑**的路径集合（KW16 标签色轨批，2026-11-02）。
+   *
+   * 交出去的是组件持有的同一只 ref 壳（与上面每一位同一条纪律：复制 ref＝让读方拿到影子）。
+   * 登记簿外**没有第二份**解锁账——标签侧经 `ui/editor-editability.ts` 现扫这一位给警示色，
+   * 从而不必在组件里再抄一遍 `canEdit` 表达式。生命周期仍随实例（退册即随 ref 消失）。
+   */
+  unlockedPathsRef: { current: Set<string> };
 }
 
 /** 活实例登记簿（导出的是**同一个 Map**，不是快照）：接线层按 id 反查 / 全表扫描都读它。 */

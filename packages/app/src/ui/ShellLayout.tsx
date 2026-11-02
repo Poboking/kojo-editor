@@ -124,7 +124,7 @@ import {
   useFontSizePref,
   useFontZoomPref,
 } from './font-size-pref';
-import { fileWritableArea, writablePillTone } from './file-area';
+import { fileWritableArea, writablePillTitle, writablePillTone } from './file-area';
 import { workspaceRootsOf } from './workspace-roots';
 // 状态栏三格（批次十 S1）：语言模式 / 缩进 / 编码的偏好与判据都在各自纯逻辑模块里，
 // 这里只取「当前活动文件那份 model」并把选择落到 model 上。
@@ -3361,14 +3361,9 @@ export function ShellLayout(props: Props): ReactElement {
   // 不该跟着壳层的每一次重渲重算一遍。
   const writableArea = useMemo(() => fileWritableArea(kernel, activeFile ?? null), [kernel, activeFile]);
   const writablePill = writablePillTone(writableArea, writable);
-  const writablePillTitle =
-    writableArea === 'workspace'
-      ? '这份文件在你的工作项目区（你自己写的口上文件），可以直接保存。'
-      : writableArea === 'game-erb'
-        ? '口上区（游戏目录）里的原生文件：默认只读——直接改它等于改别人装好的游戏内容。开始输入时编辑器会询问你是否破例；点击这里可重新批准写权限。'
-        : writable
-          ? '写权限已批准'
-          : '只读：写权限未批准，点击重新授权';
+  // 文案住在 `file-area.ts`（KW16 标签色轨批）：标签的悬停说明问的是同一件事，
+  // 句子必须在两处只有一份——这里只负责把它挂到 `title` 上，屏上那三个字一个字没动。
+  const pillTitle = writablePillTitle(writableArea, writable);
 
   /**
    * 状态栏**次组**（项目级约定计数 `.sb-diag`）的展开态（视觉批十一 R5 · 密度分主次）。
@@ -3419,12 +3414,12 @@ export function ShellLayout(props: Props): ReactElement {
     >
       <div className="sb-left">
         {writablePill === 'ok' ? (
-          <span className="sb-writable ok" data-status-cell="" title={writablePillTitle}>
+          <span className="sb-writable ok" data-status-cell="" title={pillTitle}>
             可写
           </span>
         ) : (
           // 只读态加锁形图标（C-1a）：琥珀色 + 文字之外再多一档形状线索；命中区 ≥24px 由 CSS 保证
-          <button className="sb-writable ro" data-status-cell="" title={writablePillTitle} onClick={onReauth}>
+          <button className="sb-writable ro" data-status-cell="" title={pillTitle} onClick={onReauth}>
             <LockIcon /> 只读
           </button>
         )}

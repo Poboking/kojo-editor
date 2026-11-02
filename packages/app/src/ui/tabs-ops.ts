@@ -686,13 +686,21 @@ export interface TabDropHint {
   readonly before: boolean;
 }
 
-/** 标签 className（纯函数）：活动 / 固定 / 预览 / 落点指示四态可叠加（活动+落点 = 双指示） */
+/**
+ * 标签 className（纯函数）：活动 / 固定 / 预览 / 落点指示 / 语义色轨五态可叠加
+ * （活动+落点 = 双指示；色轨是**左侧 3px 轨**，与顶部活动条不同槽位，见 `styles-project.css`）。
+ *
+ * `railClass` 由 `ui/editor-editability.ts` 从可写性档位映射而来（判据与文案都在那一处），
+ * 这里只接受已经算好的类名——标签侧因此不必自己再写一遍可写性判定。缺省空串 = 不给语义色
+ * （游戏目录里未解锁的只读件就是这一档：没有额外颜色本身就是"没有特权"的信号）。
+ */
 export function tabClassName(
   p: string,
   active: boolean,
   pinned: boolean,
   dropAt: TabDropHint | null,
   preview = false,
+  railClass = '',
 ): string {
   return [
     'editor-tab',
@@ -702,6 +710,7 @@ export function tabClassName(
     // preview 是"这次只是浏览"，两者可以同时为真（作者中途改过它 ⇒ 转正但仍是预览位）
     preview ? 'preview' : '',
     dropAt?.path === p ? (dropAt.before ? 'drop-before' : 'drop-after') : '',
+    railClass,
   ]
     .filter(Boolean)
     .join(' ');

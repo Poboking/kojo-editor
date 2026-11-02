@@ -9,6 +9,8 @@ import { Icon } from './icons';
 import { useNotify } from './NotificationCenter';
 import { revealFailureText, revealInExplorer } from './reveal-explorer';
 import { TabRow } from './tab-row';
+// 色轨表的值类型（`import type` ⇒ 运行时零依赖，本组件仍不认得"可写性"这件事怎么算）
+import type { TabRail } from './editor-editability';
 import {
   CLOSE_SAVED_EMPTY_REASON,
   TAB_DRAG_MIME,
@@ -102,6 +104,14 @@ export interface TabBarProps {
    * `toIndex` 是**本组的插入下标**（`undefined` = 追加到末尾）。
    */
   onMoveTabToGroup?: (path: string, targetGroupId: string, toIndex?: number) => void;
+  /**
+   * 左侧语义色轨表（KW16 标签色轨批）：键 = 标签路径，值 = 档位 + 说明 + 类名。
+   *
+   * 由宿主 ProjectView 经 `ui/editor-editability.ts` 算好交下来——本组件与 `TabRow` 都不判
+   * "这份文件能不能编辑"（判据只有一处，消费两处）。**只收有轨的路径**：不在表里 = 不给
+   * 语义色（游戏目录里未解锁的只读件）。缺省（测试 / 无宿主）⇒ 与改动前逐字同形。
+   */
+  rails?: ReadonlyMap<string, TabRail> | null;
 }
 
 /* ------------------------- 右键面：按组桥接（多实例安全） ------------------------- */
@@ -368,6 +378,7 @@ export const TabBar = memo(function TabBar({
   rootDir = null,
   otherGroups = [],
   onMoveTabToGroup,
+  rails = null,
 }: TabBarProps): ReactElement {
   const notify = useNotify();
   const tabsRef = useRef<HTMLDivElement | null>(null);
@@ -694,6 +705,7 @@ export const TabBar = memo(function TabBar({
             isPinned={pinnedPaths.has(p)}
             isPreview={previewPath === p}
             dirty={dirtyPaths.has(p)}
+            rail={rails?.get(p) ?? null}
             hint={tabDropAt?.path === p ? (tabDropAt.before ? 'before' : 'after') : null}
             onActivateTab={onActivateTab}
             onRequestCloseTab={onRequestCloseTab}

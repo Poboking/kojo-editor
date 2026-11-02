@@ -40,6 +40,10 @@ import { useNotify } from './NotificationCenter';
 import { JUMP_TO_STATE_SOURCE, readJumpProbe, requestJumpToState } from './jump-to-state';
 import { TabBar } from './tabs-bar';
 import { requestTabCycle } from './tab-cycle';
+// KW16 标签色轨批：标签左侧的语义色轨问的是「这份文件此刻能不能动手」——判据住在
+// `editor-editability.ts`（与 `EditorPane` 同一把尺子），这里只做接线：订阅变更 + 现算档位表。
+import { tabRailsOf, useEditabilityRevision } from './editor-editability';
+import { useDirectMode } from './direct-mode';
 import { setKojoXmlSchemaSource } from '../monaco/kojo-xml-providers';
 import { setKojoXmlDialectSource } from '../monaco/kojo-xml-diagnostics';
 import { resolveDocumentDialect } from './dialect-binding';
@@ -1441,6 +1445,30 @@ export function ProjectView({
   }, [groupIdKey]);
 
   /**
+   * 标签左侧语义色轨表（KW16 标签色轨批，2026-11-02）。
+   *
+   * 三件事都在这里凑齐，才交得出一张**只读**的档位表：
+   *  - 解锁集合与派生面住在各 `EditorPane` 实例的 ref 里，只动 ref 不惊动 React
+   *    ⇒ 经 `useEditabilityRevision()` 那枚门铃重新现算（`tabRailsOf` 每次现扫登记簿，不留副本）；
+   *  - 直连开关翻上去/下来要立刻反映到警示档 ⇒ 订阅 `useDirectMode()`；
+   *  - 工作区根可以在会话中途长出来（新建作品 / 自选位置）⇒ 依赖 `workspaceFolders`
+   *    这一份变化信号；根表本身仍由判据现取（缓存会把刚建出来的作品永远排除在外）。
+   *
+   * 键 = 标签路径、**只收有轨的那些**：游戏目录里未解锁的只读件不在表里 ⇒ 标签不挂语义色
+   * （"没有额外颜色"就是这一档的表达）。表引用在本格依赖不变时恒定 ⇒ 不打穿 `TabBar` 的 memo。
+   */
+  const editabilityRevision = useEditabilityRevision();
+  const directModeOn = useDirectMode();
+  const tabPathsKey = groups.map((g) => g.tabs.join('|')).join('\u0000');
+  const tabRails = useMemo(() => {
+    const paths: string[] = [];
+    for (const g of groups) for (const p of g.tabs) if (!paths.includes(p)) paths.push(p);
+    return tabRailsOf(kernel, paths);
+    // `groups` 经 `tabPathsKey` 进入依赖（内容不变 ⇒ 引用抖动不算变化）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kernel, tabPathsKey, editabilityRevision, directModeOn, workspaceFolders]);
+
+  /**
    * 跨组拖拽落在某一组正文上的高亮（1027）。
    * 空组没有 TabBar，正文是它**唯一**能接住拖拽的地方（只靠拆分才能往空组放东西的旧限制，
    * 这一条就是那个缺口的补丁）。
@@ -1633,6 +1661,7 @@ export function ProjectView({
                       onBatchCloseTab={tabCb.onBatchCloseTab}
                       otherGroups={otherGroupsByGroup.get(g.id) ?? []}
                       onMoveTabToGroup={tabCb.onMoveTabToGroup}
+                      rails={tabRails}
                       onSaveAllClick={handleSaveAllClick}
                       hasDirty={dirtyPaths.size > 0}
                     />

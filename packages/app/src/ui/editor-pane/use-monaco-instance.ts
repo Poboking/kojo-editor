@@ -199,6 +199,7 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
     pendingActionsRef,
     actionSeqRef,
     crumbTreeCacheRef,
+    unlockedPathsRef,
     viewStatesRef,
     prevPathRef,
   } = refs;
@@ -308,6 +309,9 @@ export function useMonacoInstance(params: MonacoInstanceParams): void {
       pendingActionsRef,
       actionSeqRef,
       crumbTreeCacheRef,
+      // KW16 标签色轨批：解锁集合按**同一只 ref 壳**登记（标签侧经
+      // `ui/editor-editability.ts` 现扫它，组件外不许再抄一遍 `canEdit`）
+      unlockedPathsRef,
     });
     setGlobalKernel(kernel); // 单 kernel 应用：全局 provider 的 kernel 来源随最新实例刷新
     // K2 batch-4：Kojo 2.0 语言服务（`# 机` 事件目录）要的 adapter 由此注入——它**不是**

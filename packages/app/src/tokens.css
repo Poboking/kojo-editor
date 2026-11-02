@@ -33,6 +33,17 @@
   --rail-w: 1px;
   --rail-color: var(--border);
   --rail-color-strong: var(--border-strong);
+  /* 标签**语义色轨**刻度（KW16 标签色轨批，2026-11-02）：编辑器标签左缘那道 3px 竖条，
+     沿用的正是告警面一族（`.notice` 的 `border-left: 3px solid var(--alert-*-rail)`）的口径，
+     只是落在标签上、按"这份文件此刻能不能动手"分档（判据见 `ui/editor-editability.ts`）。
+     三档色全是语义 token 的**别名**（与上面缩进导轨同一写法，不另抄 hex）：light / mint
+     各自重定义 `--accent` / `--amber` / `--border-strong` 时色轨随 var() 链自动翻色，
+     主题文件一处规则都不新增。第四档（游戏目录 · 未解锁的只读件）**没有色轨**——
+     "没有额外颜色"本身就是"没有特权"的信号，拿灰色去冒充一个语义档是假信息。 */
+  --tab-rail-w: 3px;
+  --tab-rail-author: var(--accent);
+  --tab-rail-unlocked: var(--warning);
+  --tab-rail-derived: var(--border-strong);
   --fg: #d7dce2;
   /* 次要文字档（视觉批十二 · BOARD `VIS-CONTRAST`）：原值 `#8b949e` 压在 `--bg-3` 上只有
      **4.27:1**——而计数徽标（`.kp-count` / ui-kit `.kit-count`）正是这枚芯片底，11px 正文级
