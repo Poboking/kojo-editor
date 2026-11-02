@@ -1456,10 +1456,32 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     就是懒加载的），按口径不进本图。
     //     ⇒ KB 闸 **3,606 → 3,613**；文件闸 201 不动。真实红沿 = **3,700,224 B**，
     //     机械余量 **801 B**（比上一档宽，别读成"随便写"）。
+    //
+    //   - **KW-25 文档词护栏单源（2026-11-03）**：读数 **201 文件 / 3,616 KB · 3,702,287 B**
+    //     （= 上一条 3,699,423 + **2,864**），**零新进图文件**。图内三枚，逐枚实测
+    //     （现树 `fs.statSync` vs `git cat-file -s origin/dev:…`，求和 **2,864 B 与总差
+    //     逐字节相等**；分解**唯一**——把第四枚加进来就超出总差）：
+    //     · `packages/plugin-api/src/semantic-locate.ts` **+1,816**（新枚 `DOCUMENT_WORD_SOURCE`
+    //       真源住这里：行数闸 / 候选上限 / 索引上限 / 词长上下限 / 纯数字规则 + 两侧实测读数
+    //       与"闸为什么还留着"的理由。住契约不是审美——同一条判据有**两条生产路**，
+    //       宿主 `document-words.ts` 服务 `.kojo`/`.kojo1`，`.erb` 早在 LAU-4 第三批搬进插件
+    //       并**抄了同名同值的一份**，改一处不会有任何闸红）；
+    //     · `packages/plugins/erb-parser/src/completion.ts` **+1,013**（删抄件 + 修一条
+    //       **静默死路**：搬的时候切词器写成 `new RegExp(NAME_CHAR_RE.source, 'gu')`，而
+    //       `MODEL_TOKEN_CLASS` 是字符类 `[\p{L}\p{N}_]`，**缺 `+` 退化成每次一个字符**，
+    //       单字全被 `minWordLength`（2）滤掉 ⇒ `.erb` 文档词候选自 2026-10-31 起一条不出，
+    //       且插件侧零用例覆盖这一路，所以没有一枚闸红过）；
+    //     · `packages/plugin-api/src/index.ts` **+35**（桶转出该枚——注意桶的税：这一格
+    //       多转一枚值导出就是把整枚真源拽上首屏的那条边）。
+    //     不落图的一并点名：`packages/app/src/monaco/document-words.ts` **+877** 实测**不在**
+    //     开机图（它挂在 `import('./ProjectView')` 的懒边之下；把这枚算进求和会超出总差，
+    //     这就是"唯一分解"那一格的取证），两枚测试与 `docs/BOARD.md` 按口径不进本图。
+    //     ⇒ KB 闸 **3,613 → 3,616**；文件闸 201 不动。真实红沿 = **3,703,296 B**，
+    //     机械余量 **1,009 B**。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,613 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,616 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_613);
+    expect(totalKb).toBeLessThanOrEqual(3_616);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
