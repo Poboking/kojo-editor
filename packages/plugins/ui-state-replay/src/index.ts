@@ -77,6 +77,11 @@ import { ASSUME_STYLE, DebugPreviewPanel, renderReplayPreview, type EmitReveal }
 import { createReplayActivation } from './activation';
 import { createSceneActions } from './scene-actions';
 import {
+  TRANSCRIPT_DECORATOR_ID,
+  TRANSCRIPT_DECORATOR_ORDER,
+  createTranscriptMarkStore,
+} from './transcript-marks';
+import {
   copyReplayText,
   openReplayPanelMenu,
   openReplayPredicateMenu,
@@ -121,6 +126,34 @@ export function createUiStateReplayPlugin(): Plugin {
 
       // ---- 激活层（协议查询 / 存档清单 / 待处理回放意图）：状态见 ./activation.ts ----
       const activation = createReplayActivation(ctx, { project, snapshots, slots, panelId: PANEL_ID });
+
+      /* ---------------- 台词可见性的编辑器内联上屏（KW-14，2026-11-03） ----------------
+       *
+       * 面板算完一次「存档 × 角色 × 段」，就把每条台词的可见性钉回源文件那一行
+       * （既有槽 `ui.editor.decorator`，形状照 `convention-issues`：**异步产物留在插件内存，
+       * `decorate` 只做同步查表**；不新造贡献类型、不开第二条装饰通道）。
+       * 判性结论、四档口径、三道失效闸全写在 `./transcript-marks.ts` 文件头。
+       */
+      const transcriptMarks = createTranscriptMarkStore({ log: ctx.log });
+      // 缓冲真相（`editor.documentChanged` = 宿主 C2 那一条广播）是失效闸的读数来源：
+      // dirty 与指纹都从这儿来，本插件不自己去读盘、也不猜。
+      ctx.onDispose(
+        ctx.bus.on('editor.documentChanged', (ev) => {
+          transcriptMarks.observeDocument({ filePath: ev.filePath, text: ev.text, dirty: ev.dirty });
+        }),
+      );
+      // 换项目 / 关项目：上一盘的标注不是这一盘的真相，整表清空（不许骑到新项目头上）
+      ctx.onDispose(
+        ctx.bus.on('project.closed', () => {
+          transcriptMarks.clear();
+        }),
+      );
+      ctx.slots.register('ui.editor.decorator', {
+        id: TRANSCRIPT_DECORATOR_ID,
+        title: '台词可见性内联标注',
+        order: TRANSCRIPT_DECORATOR_ORDER,
+        decorate: (file) => transcriptMarks.decorate(file),
+      });
 
       /* ------------------------------ 面板组件 ------------------------------ */
 
@@ -335,6 +368,9 @@ export function createUiStateReplayPlugin(): Plugin {
               setResultAssumed(assumedAtRun);
               setResultLocate(locate);
               setPredWindow(undefined); // 新一批谓词 = 新窗口（每次回放从初始窗口看起）
+              // 行内标注只吃**正式回放**：预演（`replayFunctionWithOverrides`）说的是
+              // "改了会怎样"的假设，把它钉进编辑器就是拿假设冒充盘上真相 ⇒ 那条路不上账。
+              transcriptMarks.publish(r, view);
             })
             .catch((err: unknown) => {
               setReplayError(err instanceof Error ? err.message : String(err));
