@@ -1309,10 +1309,28 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     （编辑器面本身就不是欢迎页要解析的东西）；CSS 那两枚（`tokens.css` 新立
     //     `--tab-rail-*`、规则只进重档 `styles-project.css`）按口径不进 JS 依赖图。
     //     ⇒ KB 闸 **3,549 → 3,550**（余量 0 B 口径不变）；文件闸 201 不动。
+    //
+    //   - **kw8a 面板行键盘协议上提批（2026-11-02）**：读数 **201 文件 / 3,562 KB**
+    //     （3,647,232 B = 上一条 3,635,023 + **12,209**），**零新进图文件**。落点选
+    //     `plugin-api/src/sugar-panels.ts`（已在图里的面板共享核）而**不是新立叶子**：
+    //     文件闸 201 顶格（"再进图必须先出图"），而 `ui/shell-keys.ts` 本就常驻开机图——
+    //     新叶子会被宿主的薄转发壳拖进图、当场顶爆文件闸（先例见 WS-06/07/08 与 A5 批）。
+    //     图内三枚逐枚实测（现树 `stat` vs `git cat-file -s origin/dev:…`，求和与总差
+    //     **逐字节相等**）：
+    //     · `plugin-api/src/sugar-panels.ts` **+12,529**（`nextRovingIndex` 从宿主原样搬入 +
+    //       `rowNavDecision` / `applyPanelRowNav` 的 DOM 腿从 `ui/panel-row-nav.ts` 搬入 +
+    //       合成期放行与漫游 tabindex 两处新增；插件吃不到 `app/src/ui/`（铁律 2），共享判据
+    //       的唯一合法落点是契约层）。⚠ 本批新增 260 行里 **97 行是注释**：源码字节是这枚闸的
+    //       口径，minify 后运行时远小于此——记账如实，别把它读成"首屏多背 12 KB"。
+    //     · `plugin-api/src/index.ts` **+415**（桶值导出面随动，同区块）；
+    //     · `app/src/ui/shell-keys.ts` **−735**（实现离宿、改薄转发壳，导出面不变）；
+    //     · `app/src/ui/panel-row-nav.ts` **−5,109 不落图**（它本就不在开机静态图里）；
+    //       两只插件（`ui-convention-report` / `ui-kojo-navigator`）走懒边，零进图。
+    //     ⇒ KB 闸 **3,550 → 3,562**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,550 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,562 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_550);
+    expect(totalKb).toBeLessThanOrEqual(3_562);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
