@@ -33,6 +33,7 @@ export type ReplayUnknownCode =
   | 'local-no-write' // 本地量在该点位无必得赋值（v0.2 第六批立的边界；KW-15C 1103 只把理由写实，判定口径一字未动）
   | 'local-range' // 循环量取值已能枚举、但值域内结论不一致（KW-15C 1103：值域有限 ≠ 判定得出）
   | 'call-context' // ARG/ARGS 为调用参数，未提供（或未覆盖该槽位的）调用上下文
+  // KW-28 判性：这一族的值是**本次调用的实参**（场景输入），只许注入或路由确定事实来填，不许拿某一个调用点的实参当通用值
   | 'dynamic-index' // 动态索引段（如 `YOGORE:(GET_CHARAHOME(TARGET))`）
   | 'named-index' // 具名索引无法解析（无字典 / 词不在字典）
   | 'missing-var' // 快照与引擎变量清单中均无此变量
