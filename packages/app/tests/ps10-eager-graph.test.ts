@@ -1371,10 +1371,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     不落图：`packages/plugin-api/tests/panel-row-nav.test.ts`（测试不进图）；
     //     KW8C 段②（市场接线）走懒边，零进图。
     //     ⇒ KB 闸 **3,579 → 3,582**（余量 0 B 口径不变）；文件闸 201 不动。
+    //
+    //   - **KW4C 段③（作品会话入口腿，2026-11-02；组长落地、KW-4E 车道补账）**：读数
+    //     **201 文件 / 3,589 KB**（3,675,123 B = 上一条 3,668,326 + **6,797**），
+    //     **零新进图文件**（201 顶格不动）。图内五枚逐枚实测（现树 `wc -c` vs 基线
+    //     `git cat-file -s`，五枚求和 **6,797 B 与总差逐字节相等**）：`App.tsx` **+3,053**
+    //     （`planRecentWorkspaceOpen` 点击编排 + "已不在列表里"那人话接线 + `sessionRoot`
+    //     传进编辑器面）、`recent-workspace-projects.ts` **+1,985**（作品名现读 `hit.name`
+    //     与入口可行性判据，欢迎页第一屏本就常驻）、`project-error-notice.tsx` **+1,029**
+    //     （渲染闸 `editorSurfaceOpen` 由认 `project` 改认 `sessionRoot`，两态同一道闸）、
+    //     `use-project-session.ts` **+733**（`openWorkspaceSession` 相位推进）、
+    //     `WelcomeView.tsx` **−3**（那一行去掉 disabled，净收缩）。
+    //     不落图：`ProjectView.tsx`（懒边 `loadProjectView` 那条腿）。
+    //     ⚠ 段② 记下的欠账（把作品会话那半边拆成包叶子）**仍未还**：本笔涨的全是既有
+    //     在图文件，零新模块；文件闸顶格，下一枚进图模块仍须先挪一枚出去。
+    //     ⇒ KB 闸 **3,582 → 3,589**（余量 0 B 口径不变）；文件闸 201 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,582 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤201 文件 / ≤3,589 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_582);
+    expect(totalKb).toBeLessThanOrEqual(3_589);
     expect(files.length).toBeLessThanOrEqual(201);
   });
 
