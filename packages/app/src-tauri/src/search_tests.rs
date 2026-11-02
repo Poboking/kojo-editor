@@ -1100,6 +1100,67 @@ fn search_exclude_globs_blocks_backup_and_keeps_legit_hits() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 端到端（P2-15 × WS-10 合流判据）：include 与 exclude **同时给**时的先后关系——
+/// 先 include 筛候选（挡下的计 `filtered`），筛剩的里再应用 exclude（计 `excluded`），
+/// `!` 取反只在 exclude 腿里回捞、**不能**把 include 已挡下的文件放回来。
+/// 一笔账进错另一笔、或取反越权回捞，都会在这里红。
+#[test]
+fn search_include_and_exclude_globs_apply_include_then_exclude() {
+    let dir = temp_dir("inc-exc-e2e");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::create_dir_all(dir.join("backup")).unwrap();
+    std::fs::write(dir.join("root.erb"), "hit\n").unwrap(); // include 挡下 ⇒ filtered
+    std::fs::write(dir.join("src").join("a.erb"), "hit\n").unwrap(); // 唯一该留下的
+    std::fs::write(dir.join("src").join("old.erb"), "hit\nhit\n").unwrap(); // exclude 挡下 ⇒ excluded
+    std::fs::write(dir.join("backup").join("b.erb"), "hit\n").unwrap(); // include 挡下 ⇒ filtered
+
+    let mut req = request(&dir, "hit");
+    req.options.globs = Some(vec!["src/**/*.erb".to_string()]);
+    req.options.exclude_globs = Some(vec!["src/old.erb".to_string()]);
+    let out = run(&req);
+    assert_eq!(out.files.len(), 1, "只剩 src/a.erb（一条命中）");
+    assert_eq!(out.total_matches, 1);
+    assert_eq!(out.skipped.filtered, 2, "include 挡下 root.erb 与 backup/b.erb（不计 exclude 腿）");
+    assert_eq!(out.skipped.excluded, 1, "src/old.erb 记在排除那一笔");
+
+    // `!` 取反只在 exclude 腿回捞：include 没放行的文件不因 `!` 越权回来
+    let mut req2 = request(&dir, "hit");
+    req2.options.globs = Some(vec!["src/**/*.erb".to_string()]);
+    req2.options.exclude_globs = Some(vec![
+        "**/*.erb".to_string(),
+        "!src/a.erb".to_string(), // 后写赢：src/a.erb 放回
+        "!root.erb".to_string(),  // 但 root.erb 从没进过 include 候选，回捞无门
+    ]);
+    let out2 = run(&req2);
+    let paths: Vec<String> = out2
+        .files
+        .iter()
+        .map(|f| f.path.replace('\\', "/"))
+        .collect();
+    assert_eq!(paths.len(), 1, "取反只回捞 include 筛剩的：{paths:?}");
+    assert!(paths[0].ends_with("src/a.erb"), "unexpected: {paths:?}");
+    assert_eq!(out2.skipped.filtered, 2, "include 那一腿的账不受 exclude 影响");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 指纹判据（P2-15）：**同查询词不同 include 不许命中同一份热文本缓存**——
+/// 语料键由 roots + 扩展名 + glob 三者共同定义，换 glob 就是另一批文件、
+/// 判定与计数都得从头来（见 `corpus_cache_key` 头注）。这条测试钉住 glob 维度的
+/// 缺席=不碰撞（老键零改动）与不同 glob=不同键。
+#[test]
+fn corpus_cache_key_includes_globs_dimension() {
+    let roots = vec!["C:/proj".to_string()];
+    let exts: Vec<String> = vec![];
+    let key = |globs: &[&str]| {
+        super::corpus_cache_key(&roots, &exts, &globs.iter().map(|s| s.to_string()).collect::<Vec<_>>())
+    };
+    assert_eq!(key(&[]), key(&[]), "同一份 glob（都空）恒得同键 ⇒ 缓存照旧复用");
+    assert_ne!(key(&[]), key(&["*.erb"]), "空 vs 非空：换 include 就是换语料面");
+    assert_ne!(key(&["*.erb"]), key(&["src/**/*.erb"]), "同查询不同 include 不许撞同一份缓存");
+    assert_eq!(key(&["*.erb"]), key(&["*.erb"]), "同一 include 恒得同键");
+}
+
 /// 载荷契约：`excludeGlobs` 缺键 ⇒ None；给出 ⇒ camelCase 解析（跨语言字段名一漂就是静默失灵）。
 #[test]
 fn request_dto_exclude_globs_default_and_camel_case() {

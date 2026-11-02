@@ -63,9 +63,14 @@ export interface SearchOptions {
   extensions: string[];
   maxResults?: number;
   /**
-   * glob 过滤（P2-15 预留契约位）：本线（P2-11 流式检索）**只占位、不实现语义**——
-   * 没有任何调用方会发它，Rust 侧 `SearchOptionsDto` 也暂不认这个键（那是 P2-15 的地盘）。
-   * `searchInFiles` 把 `request` 原样交给 `invoke`，字段一旦被填上就会随请求透传，不丢。
+   * include glob（P2-15 已落地、W7-A 接线）：按**路径形态**过滤候选文件
+   * （`*.kojo` / `src/**`/`*.erb` / `?`），与 `extensions` 是**且**的关系（两者都满足才扫），
+   * 大小写**敏感**（显式路径模式显式匹配，与扩展名"折小写再比"刻意不同）。
+   * 匹配基准 = 相对检索根的路径；翻译与判据见 Rust `glob_to_regex` / `collect_files`
+   * （TS 对拍镜像在 `tests/search-glob.test.ts`，`parseFileFilter` 是装配腿）。
+   * 空 / 缺省 = **不带这个键** = 不按形态过滤（老请求体逐字一致，与 Rust DTO 的 `None` 同义）。
+   * 被它挡下的文件计入 `skipped.filtered`（glob 也是类型过滤的一种形态，同一行读数、不静默）。
+   * （本注释里 `**` 与 `/` 刻意分写：块注释中 `*` 紧跟 `/` 会提前终止注释。）
    */
   globs?: readonly string[];
   /**

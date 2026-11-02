@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pathKey } from '@kojo/plugin-api';
 import type { SearchMatch, SearchRequest, SearchResult } from '../src/bridge/search';
-import { SEARCH_HISTORY_LIMIT, setGlobFilterText } from '../src/ui/search-query';
+import { SEARCH_HISTORY_LIMIT, getGlobFilterText, setGlobFilterText } from '../src/ui/search-query';
 import {
   bindSearchPrefs,
   clearSearchResult,
   emptySearchPrefsRecord,
   makeFolderScopeItem,
+  notifySearchPrefsChanged,
   openFolderSearchScope,
   requestReplaceFocus,
   requestSearchFocus,
@@ -747,6 +748,23 @@ describe('search-store · 排除模式进请求（WS-10）', () => {
     const req = runner.mock.calls[0]![0] as SearchRequest;
     expect('excludeGlobs' in req.options).toBe(false);
   });
+
+  it('include 与 exclude 同时给：两个键一起进请求体（先 include 后 exclude 归 Rust 执行）', async () => {
+    resetSearch();
+    setGlobFilterText('');
+    const runner = vi.fn<SearchRunner>(async () => result());
+    setSearchRunner(runner);
+    setQuery('abc');
+    setExtensionText('erb');
+    setGlobFilterText('src/**/*.erb');
+    // 排除保序（! 取反的先后不许被排序改写）与 glob 排序（判据可钉）各归各框，互不串门
+    setExcludeText('**/backup/**, !src/a.erb');
+    await runSearch(ROOTS);
+    const req = runner.mock.calls[0]![0] as SearchRequest;
+    expect(req.options.globs).toEqual(['src/**/*.erb']);
+    expect(req.options.excludeGlobs).toEqual(['**/backup/**', '!src/a.erb']);
+    expect(req.options.extensions).toEqual(['erb']);
+  });
 });
 
 describe('search-store · 「在此文件夹中搜索」（WS-10）', () => {
@@ -864,6 +882,26 @@ describe('search-store · 检索条件按项目持久化（WS-10）', () => {
     resetSearch();
     await bindSearchPrefs(kv as never, 'D:\\other');
     expect(snapshot().query).toBe('');
+  });
+
+  it('include 面随持久化一起记：globText 落盘与回灌（与类型/排除同形）', async () => {
+    vi.useFakeTimers();
+    const kv = fakeKv();
+    await bindSearchPrefs(kv as never, 'C:\\game');
+    // glob 文本住 search-query 模块级、不经过 store 的 set——SearchFilterBar 变更后
+    // 补一声 notifySearchPrefsChanged 才进防抖落盘，这里走同一条腿
+    setGlobFilterText('src/**/*.erb');
+    notifySearchPrefsChanged();
+    vi.advanceTimersByTime(700);
+    await flushMicro();
+    const rec = sanitizeSearchPrefsRecord(kv.dump().get('search-prefs-v1'));
+    expect(rec.projects[pathKey('C:\\game')]?.globText).toBe('src/**/*.erb');
+    // 重启回灌：模块级文本被复位后，同项目绑定必须把它读回来（含 `!` 的 include 不参与——
+    // 取反归排除框；这里只验 glob 面自己的一格）
+    unbindSearchPrefs();
+    setGlobFilterText('');
+    await bindSearchPrefs(kv as never, 'C:\\game');
+    expect(getGlobFilterText()).toBe('src/**/*.erb');
   });
 
   it('坏载荷一律回缺省：v 不对 / 条目形状错 / 文本超长 ⇒ 绝不抛、绝不半恢复', async () => {

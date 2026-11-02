@@ -19,8 +19,8 @@ import {
  * ① **glob 过滤框**——按路径形态过滤（`*.kojo` / `**`/`x/*.erb` / `src/**`/`*.erb` / `?`），
  *    分隔符与「类型」框同款；与扩展名是**且**的关系（两者都满足才扫，理由见
  *    `search-query.parseFileFilter`）。文本住模块级（`get/setGlobFilterText`，
- *    与 `extensionText` 住 store 同理由：面板切走卸载后条件不丢），发请求那一行
- *    接线归 P2-11（`request.options.globs`，契约位在 `bridge/search.ts`）。
+ *    与 `extensionText` 住 store 同理由：面板切走卸载后条件不丢），发请求那一行**已接线**
+ *    （`search-store.runSearch` 现读 → `request.options.globs`，契约见 `bridge/search.ts`）。
  *    （注释里 `**` 与 `/` 刻意分写：块注释中 `*` 紧跟 `/` 会提前终止注释）
  * ② **保留大小写开关**——替换时把命中处的大小写形态借给替换词（`FOO`+`bar`⇒`BAR`、
  *    `Foo`⇒`Bar`、`fOo`⇒`bAr`；回落判据在 `search-replace.preserveReplacementCase`）。
