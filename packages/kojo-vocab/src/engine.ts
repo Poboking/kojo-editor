@@ -161,8 +161,13 @@ export const ENGINE_VARIABLE_REFERENCE_HEADS: readonly string[] = [
  *
  * **入库判据**：adapter 字典（已含 `CSV/*.als` 追加名表）在真语料上把该族实际 warn 面
  * 打到 0，或只剩**真阳性**。只要残余里还有一条系统性假阳性类，该族就不入库。
+ *
+ * **与解析轴双账**（KW-22 判性，2026-11-03）：解析侧的借姊妹族名表另有登记本——
+ * `eratw-adapter/variable-schema` 的 `DERIVED_NAME_TABLE_SOURCES`（准入判据不同：盘上
+ * 配对实证，含本表不收的 `MAXBASE`）；重叠边同向由
+ * `packages/app/tests/name-table-borrow-agreement.test.ts` 钉死，漂了就红。
  */
-const CHECKED_FAMILY_NAME_TABLES: Readonly<Record<string, readonly string[]>> = {
+export const CHECKED_FAMILY_NAME_TABLES: Readonly<Record<string, readonly string[]>> = {
   NOWEX: ['NOWEX', 'EX'],
   MARK: ['MARK'],
   DOWNBASE: ['DOWNBASE', 'BASE'],

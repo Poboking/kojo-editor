@@ -39,6 +39,7 @@ export { FAMILY_ALIASES, FAMILY_ALIASES_REVERSE } from './variable-schema';
 // ZH-N 批：引擎族全集（全覆盖闸分母）+ 显示名表 + 排除台账 + JP→CN 槽名只读词典
 // （additive；消费走契约方法 `slotCn`，此处导出纯数据/工厂供测试零漂移引用真表）
 export {
+  DERIVED_NAME_TABLE_SOURCES,
   ENGINE_FAMILIES,
   FAMILY_ALIAS_EXCLUSIONS,
   FAMILY_LABELS,

@@ -426,6 +426,10 @@ export const FAMILY_ALIAS_EXCLUSIONS: Readonly<Record<string, string>> = aliasTa
  * 补全 / 反糖的"这族能写哪些名字"，改道会把姊妹族的槽位当本族候选推给作者；
  * `slotCn()` 同理不动。全覆盖闸见 `tests/name-table-source.test.ts`。
  *
+ * **与核对轴双账**（KW-22 判性）：核对侧白名单在 kojo-vocab 的 `CHECKED_FAMILY_NAME_TABLES`，
+ * 准入判据不同（warn 面实证，故不收 `MAXBASE`）；两表重叠边同向由 app 侧
+ * `name-table-borrow-agreement.test.ts` 钉死。
+ *
  * 同由 `aliasTable` 造（无原型）：查表键来自作者字节。
  */
 export const DERIVED_NAME_TABLE_SOURCES: Readonly<Record<string, string>> = aliasTable({
