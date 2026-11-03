@@ -24,6 +24,7 @@
  * 5. sema 的 error 与主链 error 同等对待：`ok:false` + 0 字节 + 空 source map + 空 slots。
  */
 import type { KojoFile, KojoMachineDecl, KojoSpan } from '../../ast.js';
+import type { TheaterLoweringUnit, TheaterUnitsStatus } from '../theater-unit.js';
 import { checkEventArgs, checkEvent } from '../../adapter.js';
 import type { GameAdapter } from '../../adapter.js';
 import type { DiagnosticSink, KojoDiagnostic } from '../../diagnostics.js';
@@ -37,7 +38,7 @@ import { createEmitBuffer } from '../buffer.js';
 import { createLowerState } from '../state.js';
 import type { SourceMap, SourceMapLine } from '../../source-map.js';
 import { copySourceMapLine, createSourceMapBuilder } from '../../source-map.js';
-import { createExpandContext, estimateLines, hiddenSlots, indexDeclarations, reportAt, reportDiagnostic } from './context.js';
+import { createExpandContext, createTheaterContext, estimateLines, hiddenSlots, indexDeclarations, isTheaterContextQuiescent, reportAt, reportDiagnostic } from './context.js';
 import { validateAllTables } from './tables.js';
 import { validateAllPools } from './pool.js';
 import { assembleWeave } from './weave.js';
@@ -53,6 +54,8 @@ export interface RunCompileOptions {
   readonly sourceText: string;
   readonly estimatedLines?: number;
   readonly sink?: DiagnosticSink;
+  /** P5 项目级编译：只收集 TheaterLoweringUnit，不尝试 M1 单文件 ERB 装配。 */
+  readonly theaterUnitsOnly?: boolean;
 }
 
 export interface RunCompileResult {
@@ -69,6 +72,14 @@ export interface RunCompileResult {
    * 诊断已并入 `diagnostics`，本字段只供 UI / 项目层消费。
    */
   readonly recursion?: RecursionAnalysis;
+  /**
+   * 新语法中间产物。**不是成功标志**：`ok:false` 时也可能存在
+   * （约束 / 临时桥不安全 / 多剧场等 assembly 限制）。
+   * 旧路径为 `undefined`。
+   */
+  readonly theaterUnits?: readonly TheaterLoweringUnit[];
+  /** theaterUnits 的完整性状态；见 `TheaterUnitsStatus`。 */
+  readonly theaterUnitsStatus?: TheaterUnitsStatus;
 }
 
 function emptyMap(): SourceMap {
@@ -82,8 +93,19 @@ function countErrors(all: readonly KojoDiagnostic[], from: number): number {
   return count;
 }
 
-function failed(sink: DiagnosticSink, from: number): RunCompileResult {
-  return { ok: false, erb: '', sourceMap: emptyMap(), diagnostics: sink.all.slice(from), slots: [] };
+function failed(
+  sink: DiagnosticSink,
+  from: number,
+  extra?: Pick<RunCompileResult, 'theaterUnits' | 'theaterUnitsStatus'>,
+): RunCompileResult {
+  return {
+    ok: false,
+    erb: '',
+    sourceMap: emptyMap(),
+    diagnostics: sink.all.slice(from),
+    slots: [],
+    ...(extra === undefined ? {} : extra),
+  };
 }
 
 /** 文件里的 `# 视角 <目标>`（池内裸引号默认说话人） */
@@ -167,9 +189,21 @@ function mergeSema(result: RunCompileResult, sema: readonly KojoDiagnostic[], si
   if (extra.length === 0) return result;
   for (const diagnostic of extra) sink.report(diagnostic);
   const diagnostics = [...result.diagnostics, ...extra];
-  const ok = result.ok && !extra.some((diagnostic) => diagnostic.severity === 'error');
-  if (ok) return { ...result, diagnostics };
-  return { ok: false, erb: '', sourceMap: emptyMap(), diagnostics, slots: [] };
+  const semaHasError = extra.some((diagnostic) => diagnostic.severity === 'error');
+  if (result.ok && !semaHasError) return { ...result, diagnostics };
+  if (semaHasError && result.theaterUnitsStatus === 'complete') {
+    return {
+      ...result,
+      ok: false,
+      erb: '',
+      sourceMap: emptyMap(),
+      diagnostics,
+      slots: [],
+      theaterUnits: [],
+      theaterUnitsStatus: 'discarded-lowering',
+    };
+  }
+  return { ...result, ok: false, erb: '', sourceMap: emptyMap(), diagnostics, slots: [] };
 }
 
 /**
@@ -192,17 +226,31 @@ export function runCompile(file: KojoFile, options: RunCompileOptions): RunCompi
       span: diagnostic.span,
     });
   }
-  if (countErrors(sink.all, startIndex) > 0) return failed(sink, startIndex);
+  if (countErrors(sink.all, startIndex) > 0) {
+    return failed(
+      sink,
+      startIndex,
+      file.hasTheaterSyntax === true
+        ? { theaterUnits: [], theaterUnitsStatus: 'discarded-syntax' }
+        : undefined,
+    );
+  }
 
   // 2) 语义检查（K2-SEMA-WIRING）：类型/结构/名字链/外部数组越界；能力落点闸交主链（reporting: 'with-lowering'）
   const sema: KojoSemaResult = checkKojoFile(file, { adapter: options.adapter, reporting: 'with-lowering' });
 
-  // 3) 主链（声明索引 → 展开 → 装配 → 包装）+ 语义诊断并表
-  return mergeSema(lowerFile(file, options, sink, startIndex), sema.diagnostics, sink);
+  // 3) 旧语法判定**只看 hasTheaterSyntax**：false / 缺省一律走原有路径。
+  const lowered =
+    file.hasTheaterSyntax !== true
+      ? lowerLegacyFile(file, options, sink, startIndex)
+      : lowerTheaterFile(file, options, sink, startIndex);
+
+  // 4) 语义诊断并表
+  return mergeSema(lowered, sema.diagnostics, sink);
 }
 
-/** 主链（原 `runCompile` 的实现体；语义检查已在外层完成，这里只产产物与主链诊断） */
-function lowerFile(
+/** 旧路径（原 `runCompile` 的实现体，逐字保留；仅改名）。 */
+function lowerLegacyFile(
   file: KojoFile,
   options: RunCompileOptions,
   sink: DiagnosticSink,
@@ -303,6 +351,214 @@ function lowerFile(
   return { ok: true, erb, sourceMap, diagnostics: sink.all.slice(startIndex), slots, recursion };
 }
 
+/**
+ * 新语法路径：每个 Theater 独立 lowering；unit 与最终 ERB 解耦。
+ *
+ * 规则见 `docs/KOJO-2.0-LANGUAGE-SPEC.md` M1 段与 `TheaterUnitsStatus`：
+ * - unit 阶段任何 error ⇒ units 全部丢弃；
+ * - unit 完整但 M1 装配限制（约束 / 临时桥不支持 / 多剧场）⇒ 保留 units、ok:false、erb:''。
+ */
+function lowerTheaterFile(
+  file: KojoFile,
+  options: RunCompileOptions,
+  sink: DiagnosticSink,
+  startIndex: number,
+): RunCompileResult {
+  const baseCtx = createExpandContext({
+    adapter: options.adapter,
+    backend: options.backend,
+    sourceText: options.sourceText,
+    sink,
+    view: options.view !== undefined ? options.view : viewOf(file),
+  });
+
+  if (file.theaters === undefined || file.theaters.length === 0) {
+    reportAt(baseCtx, 'core/theater/syntax', '文件标记了剧场语法，但没有可用的 Theater AST（AST 不自洽）。', null);
+    return failed(sink, startIndex, { theaterUnits: [], theaterUnitsStatus: 'discarded-syntax' });
+  }
+
+  indexDeclarations(baseCtx, file.decls);
+  validateAllTables(baseCtx);
+  validateAllPools(baseCtx);
+  for (const diagnostic of baseCtx.featureGate.diagnostics) reportDiagnostic(baseCtx, diagnostic);
+  const recursion = analyzeFunctions(file, baseCtx);
+  for (const diagnostic of recursion.diagnostics) reportDiagnostic(baseCtx, diagnostic);
+
+  if (countErrors(sink.all, startIndex) > 0) {
+    return failed(sink, startIndex, { theaterUnits: [], theaterUnitsStatus: 'discarded-lowering' });
+  }
+
+  const units: TheaterLoweringUnit[] = [];
+  let isolationFailed = false;
+  for (const theater of file.theaters) {
+    const theaterCtx = createTheaterContext(baseCtx);
+    const buffer = createEmitBuffer(estimateLines(options.sourceText, options.estimatedLines));
+    const state = createLowerState({
+      backend: options.backend,
+      buffer,
+      sink,
+      view: theaterCtx.view,
+      featureGate: theaterCtx.featureGate,
+    });
+    for (const scene of theater.scenes) walkNarrative(scene.items, theaterCtx, state);
+    if (!isTheaterContextQuiescent(theaterCtx)) {
+      isolationFailed = true;
+      reportAt(
+        baseCtx,
+        'core/theater/isolation',
+        `Theater「${theater.target.raw}」lowering 后展开上下文未收敛（疑似状态泄漏）；本轮 unit 全部丢弃。`,
+        theater.headerSpan,
+      );
+      break;
+    }
+    const finished = buffer.finish();
+    units.push({
+      theater,
+      body: finished.lines,
+      sourceMap: finished.sourceMap,
+      slots: hiddenSlots(theaterCtx),
+    });
+  }
+
+  // `@织` 是文件级监听单元：只在 baseCtx 上装配一次，不进入任何 theater body。
+  const weaveBuffer = createEmitBuffer(32);
+  const weaveState = createLowerState({
+    backend: options.backend,
+    buffer: weaveBuffer,
+    sink,
+    view: baseCtx.view,
+    featureGate: baseCtx.featureGate,
+  });
+  for (const decl of file.decls) {
+    if (decl.kind === 'weave') assembleWeave(decl, baseCtx, weaveState, walkNarrative);
+  }
+  const weaveFinished = weaveBuffer.finish();
+
+  if (isolationFailed || countErrors(sink.all, startIndex) > 0) {
+    return failed(sink, startIndex, { theaterUnits: [], theaterUnitsStatus: 'discarded-lowering' });
+  }
+
+  // 单剧场：只有 location/time 都 unrestricted，且 backend 临时桥明确支持时才生成 ERB。
+  if (options.theaterUnitsOnly === true) {
+    return {
+      ok: false,
+      erb: '',
+      sourceMap: emptyMap(),
+      diagnostics: sink.all.slice(startIndex),
+      slots: [],
+      recursion,
+      theaterUnits: units,
+      theaterUnitsStatus: 'complete',
+    };
+  }
+  if (units.length === 1) {
+    const unit = units[0]!;
+    const theater = unit.theater;
+    if (theater.location.kind !== 'unrestricted' || theater.time.kind !== 'unrestricted') {
+      reportAt(
+        baseCtx,
+        'core/feature/unsupported',
+        'M1 尚未实现运行时地点/时间分发：这个 Theater 有场景约束，只产出 TheaterLoweringUnit，不生成 ERB。',
+        theater.headerSpan,
+      );
+      return failed(sink, startIndex, { theaterUnits: units, theaterUnitsStatus: 'complete' });
+    }
+
+    const bridge = options.backend.temporarySingleTheaterBridge;
+    if (bridge === undefined) {
+      reportAt(
+        baseCtx,
+        'core/feature/unsupported',
+        `backend（${options.backend.id}）没有实现 M1 临时单剧场桥：不能确认 target「${theater.target.raw}」的调用签名，不生成 ERB。`,
+        theater.headerSpan,
+      );
+      return failed(sink, startIndex, { theaterUnits: units, theaterUnitsStatus: 'complete' });
+    }
+    const bridged = bridge({
+      theater,
+      body: unit.body,
+      view: baseCtx.view,
+      slots: unit.slots,
+    });
+    if (bridged.kind === 'unsupported') {
+      reportAt(
+        baseCtx,
+        'core/feature/unsupported',
+        `M1 临时单剧场桥不支持 target「${theater.target.raw}」：${bridged.reason}（只产出 unit，不生成 ERB）。`,
+        theater.headerSpan,
+      );
+      return failed(sink, startIndex, { theaterUnits: units, theaterUnitsStatus: 'complete' });
+    }
+
+    const wrap = options.backend.wrapMachine;
+    if (wrap === undefined) {
+      reportAt(
+        baseCtx,
+        'core/feature/unsupported',
+        `backend（${options.backend.id}）没有实现 wrapMachine：不能为临时桥 target「${theater.target.raw}」装配事件头。`,
+        theater.headerSpan,
+      );
+      return failed(sink, startIndex, { theaterUnits: units, theaterUnitsStatus: 'complete' });
+    }
+
+    const body = unit.body;
+    const wrappedResult = wrap({
+      machine: bridged.machine,
+      body,
+      view: baseCtx.view,
+      slots: unit.slots,
+    });
+    const wrapped = materializeWrapped(wrappedResult, sink);
+    if (wrapped === null || countErrors(sink.all, startIndex) > 0) {
+      return failed(sink, startIndex, { theaterUnits: units, theaterUnitsStatus: 'complete' });
+    }
+    const bodyStart = findBodyBlock(wrapped, body);
+    if (bodyStart < 0) {
+      sink.report({
+        code: 'event/wrap-contract',
+        severity: 'error',
+        message: `backend（${options.backend.id}）的 wrapMachine 没有按契约原样嵌入 body 行（顺序/内容被改写），source map 无法登记：不产半成品字节。`,
+        span: bridged.machine.span,
+      });
+      return failed(sink, startIndex, { theaterUnits: units, theaterUnitsStatus: 'complete' });
+    }
+
+    let lines: readonly string[] = wrapped;
+    let sourceMap = rebuildWrappedMap(wrapped, bodyStart, body, unit.sourceMap, bridged.machine.span);
+
+    if (weaveFinished.lines.length > 0) {
+      const builder = createSourceMapBuilder();
+      const offset = lines.length;
+      for (let i = 1; i <= lines.length; i++) appendMapped(builder, i, sourceMap.lineAt(i));
+      for (let j = 1; j <= weaveFinished.lines.length; j++) {
+        appendMapped(builder, offset + j, weaveFinished.sourceMap.lineAt(j));
+      }
+      sourceMap = builder.build();
+      lines = [...lines, ...weaveFinished.lines];
+    }
+
+    const erb = lines.length === 0 ? '' : `${lines.join('\n')}\n`;
+    return {
+      ok: true,
+      erb,
+      sourceMap,
+      diagnostics: sink.all.slice(startIndex),
+      slots: unit.slots,
+      recursion,
+      theaterUnits: units,
+      theaterUnitsStatus: 'complete',
+    };
+  }
+
+  // 多剧场：所有 unit 保留，但 M1 不做 dispatch 装配。
+  reportAt(
+    baseCtx,
+    'core/feature/unsupported',
+    `M1 尚未实现多剧场运行时分发：本文件有 ${units.length} 个 Theater，只产出 TheaterLoweringUnit，不生成 ERB。`,
+    units[1]?.theater.headerSpan ?? units[0]?.theater.headerSpan ?? null,
+  );
+  return failed(sink, startIndex, { theaterUnits: units, theaterUnitsStatus: 'complete' });
+}
 /** 让 expand 目录的走法在别处复用（compile.ts 只走 runCompile；这里保留类型收口） */
 export { walkDispatch, walkNarrative };
 

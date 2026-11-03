@@ -63,6 +63,12 @@ const CORE_DIAGNOSTIC_CODE_LIST = [
    * 消息模板：`一个文件只能写一个 \`# 方言\`：第二条起会被静默丢弃，写下的断言不算数（§3.3）。`
    */
   'core/decl/multiple-dialect',
+  /* 剧场（M1 语法前端）：五个码全 error；isolation 只在内部展开上下文未收敛时出现 */
+  'core/theater/syntax',
+  'core/theater/mixed-machine',
+  'core/theater/body-before-header',
+  'core/theater/not-top-level',
+  'core/theater/isolation',
   /* 类型与表达式 */
   'core/expr/type-mismatch',
   'core/expr/assign-to-constant',

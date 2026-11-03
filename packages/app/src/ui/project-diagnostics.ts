@@ -788,6 +788,7 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
         try {
           // 惰性 adapter 可能异步装载（`import()`）：入口是 async 的，解析失败会自己降级成
           // "无 adapter"并置 `stats.adapterUnavailable`，不把整轮炸掉（判据在分析模块里）。
+          const { contextOf } = kojo2;
           const analysis = await analyzeKojo2ProjectAsync({
             documents: kojo2Documents,
             ...(kojo2.adapter === undefined ? {} : { adapter: kojo2.adapter }),
@@ -798,6 +799,7 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
             ...(kojo2.parse === undefined ? {} : { parse: kojo2.parse }),
             ...(kojo2.projectPath === undefined ? {} : { projectPath: kojo2.projectPath }),
             ...(kojo2.now === undefined ? {} : { now: kojo2.now }),
+            ...(contextOf === undefined ? {} : { contextOf }),
           });
           // await 之后同一纪律：世代已换 ⇒ 这份迟到的结论一个字都不许上账。
           if (stale()) return quit('cancelled');

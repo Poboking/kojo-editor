@@ -53,6 +53,10 @@ import type {
   KojoTableDecl,
   KojoTableRow,
   KojoTemplateDecl,
+  KojoTheater,
+  KojoTheaterLocation,
+  KojoTheaterTarget,
+  KojoTheaterTime,
   KojoTemplateParam,
   KojoTextLine,
   KojoTextPart,
@@ -101,6 +105,9 @@ import {
   KOJO_TABLE_DEFAULT,
   KOJO_TABLE_SUBJECT,
   KOJO_TEMPLATE_SLOT,
+  KOJO_THEATER_SEPARATOR_FULL,
+  KOJO_THEATER_SEPARATOR_HALF,
+  KOJO_THEATER_UNRESTRICTED,
   KOJO_WEAVE_MODIFIERS,
   type KojoCallArg,
   type KojoBareQuoteRecord,
@@ -113,6 +120,7 @@ import {
   type KojoNativeRecord,
   type KojoTextRecord,
   type KojoTextSegment,
+  type KojoTheaterRecord,
   type LexResult,
 } from './tokens.js';
 
@@ -158,6 +166,16 @@ interface SceneDraft {
   explicit: boolean;
 }
 
+/** 解析中的剧场草稿；畸形头也保留一个 invalid 草稿以吞掉后续正文，但不入 AST。 */
+interface TheaterDraft {
+  readonly target: KojoTheaterTarget;
+  readonly location: KojoTheaterLocation;
+  readonly time: KojoTheaterTime;
+  readonly scenes: KojoSceneNode[];
+  readonly headerSpan: KojoSpan;
+  readonly invalid: boolean;
+}
+
 interface ParserState {
   readonly source: string;
   readonly lines: readonly KojoLexLine[];
@@ -166,6 +184,10 @@ interface ParserState {
   i: number;
   readonly decls: KojoDecl[];
   readonly scenes: KojoSceneNode[];
+  /** 新语法剧场（畸形头不入内；隐式 legacy 剧场走单独合成路径） */
+  readonly theaters: KojoTheater[];
+  /** 第一个剧场头之前的场景；仍按源序投影进 file.scenes */
+  readonly preambleScenes: KojoSceneNode[];
   readonly declaredNames: Set<string>;
   /** 名字 → 声明种类标签（`变量`/`常量`/`对照表`/`池`/`模板`/`函数`）；调用体校验用 */
   readonly declKinds: Map<string, string>;
@@ -175,6 +197,12 @@ interface ParserState {
   hasDialect: boolean;
   hasExplicitScene: boolean;
   optionsCount: number;
+  /** 是否见过剧场头（含半角/畸形头；决定是否进入新路径） */
+  sawTheater: boolean;
+  /** 是否见过 # 机（用于 mixed-machine 与隐式 legacy 剧场） */
+  sawMachine: boolean;
+  /** mixed-machine 每文件只报一次 */
+  mixedReported: boolean;
   loopDepth: number;
   functionDepth: number;
 }
@@ -193,6 +221,8 @@ export function parse(input: LexResult): KojoFile {
     i: 0,
     decls: [],
     scenes: [],
+    theaters: [],
+    preambleScenes: [],
     declaredNames: new Set<string>(),
     declKinds: new Map<string, string>(),
     hasMachine: false,
@@ -200,13 +230,22 @@ export function parse(input: LexResult): KojoFile {
     hasDialect: false,
     hasExplicitScene: false,
     optionsCount: 0,
+    sawTheater: false,
+    sawMachine: false,
+    mixedReported: false,
     loopDepth: 0,
     functionDepth: 0,
   };
   runTopLevel(st);
   validateCallBodies(st);
-  reportMissingMachine(st);
-  return { decls: st.decls, scenes: st.scenes, diagnostics: sink.all };
+  if (!input.hasTheaterSyntax) reportMissingMachine(st);
+  return {
+    decls: st.decls,
+    scenes: st.scenes,
+    theaters: st.theaters,
+    hasTheaterSyntax: input.hasTheaterSyntax,
+    diagnostics: sink.all,
+  };
 }
 
 /** 便捷入口：源码一步到 AST（fixtures / 单测用；等价 `parse(lex(source))`） */
@@ -297,6 +336,8 @@ const TOP_CTX: CtxBase = { kind: 'top', labelsAllowed: true, unitTop: true };
 
 function runTopLevel(st: ParserState): void {
   let current: SceneDraft = createSceneDraft(null, false, null);
+  let currentTheater: TheaterDraft | null = null;
+
   while (st.i < st.lines.length) {
     const line = st.lines[st.i]!;
     if (line.kind === 'blank' || line.kind === 'comment') {
@@ -320,15 +361,35 @@ function runTopLevel(st: ParserState): void {
       skipLineAndSubtree(st);
       continue;
     }
+
+    if (line.kind === 'theater') {
+      const finished = flushScene(st, current);
+      if (finished !== null && currentTheater !== null) currentTheater.scenes.push(finished);
+      if (currentTheater !== null) finishTheater(st, currentTheater);
+      if (!st.sawTheater) capturePreamble(st, line);
+      current = createSceneDraft(null, false, null);
+      currentTheater = parseTheaterHeader(st, line);
+      st.sawTheater = true;
+      st.i++;
+      continue;
+    }
+
     if (line.kind === 'decl') {
       if (line.word === '幕') {
-        flushScene(st, current);
+        const finished = flushScene(st, current);
+        if (finished !== null && currentTheater !== null) currentTheater.scenes.push(finished);
         current = createSceneDraft(line.rest, true, spanOfLine(st, line));
         if (line.rest.length === 0) {
           reportSpan(st, 'core/lex/anchor', '`# 幕` 后面缺场景标题（形如 `# 幕 神社清晨`）。', spanOfLine(st, line));
         }
         st.hasExplicitScene = true;
         st.i++;
+        continue;
+      }
+      if (line.word === '机' && st.sawTheater) {
+        reportMixedMachineAt(st, line);
+        st.sawMachine = true;
+        skipLineAndSubtree(st);
         continue;
       }
       parseDeclaration(st, line);
@@ -341,7 +402,11 @@ function runTopLevel(st: ParserState): void {
     const node = parseNarrativeStatement(st, line, TOP_CTX);
     if (node !== null) pushSceneItem(st, current, node);
   }
-  flushScene(st, current);
+
+  const finished = flushScene(st, current);
+  if (finished !== null && currentTheater !== null) currentTheater.scenes.push(finished);
+  if (currentTheater !== null) finishTheater(st, currentTheater);
+  if (!st.sawTheater) synthesizeLegacyTheater(st);
 }
 
 function createSceneDraft(title: string | null, explicit: boolean, span: KojoSpan | null): SceneDraft {
@@ -355,10 +420,10 @@ function pushSceneItem(st: ParserState, draft: SceneDraft, node: KojoNarrativeNo
   draft.endSpan = node.span;
 }
 
-function flushScene(st: ParserState, draft: SceneDraft): void {
-  if (!draft.explicit && draft.items.length === 0) return;
+function flushScene(st: ParserState, draft: SceneDraft): KojoSceneNode | null {
+  if (!draft.explicit && draft.items.length === 0) return null;
   const startSpan = draft.startSpan ?? draft.span;
-  if (startSpan === null) return;
+  if (startSpan === null) return null;
   const endSpan = draft.endSpan ?? draft.span ?? startSpan;
   const startPos = draft.explicit && draft.span !== null ? draft.span.start : startSpan.start;
   const scene: KojoSceneNode = {
@@ -368,6 +433,208 @@ function flushScene(st: ParserState, draft: SceneDraft): void {
     span: { start: startPos, end: endSpan.end },
   };
   st.scenes.push(scene);
+  return scene;
+}
+
+interface TheaterField {
+  readonly raw: string;
+  readonly offset: number;
+}
+
+/** 按全角/半角分隔符切剧场字段；每段 trim 后保留原文与源偏移。 */
+function splitTheaterFields(payload: string, payloadOffset: number): TheaterField[] {
+  const out: TheaterField[] = [];
+  let start = 0;
+  for (let i = 0; i < payload.length; i++) {
+    const ch = payload.charAt(i);
+    if (ch === KOJO_THEATER_SEPARATOR_FULL || ch === KOJO_THEATER_SEPARATOR_HALF) {
+      out.push(makeTheaterField(payload, start, i, payloadOffset));
+      start = i + 1;
+    }
+  }
+  out.push(makeTheaterField(payload, start, payload.length, payloadOffset));
+  return out;
+}
+
+function makeTheaterField(text: string, from: number, to: number, offset: number): TheaterField {
+  const s = trimStartOffset(text, from, to);
+  const e = trimEndOffset(text, s, to);
+  return { raw: text.slice(s, e), offset: offset + s };
+}
+
+function theaterFieldSpan(st: ParserState, field: TheaterField): KojoSpan {
+  return spanOffsets(st, field.offset, field.offset + field.raw.length);
+}
+
+/**
+ * 解析剧场头。畸形头仍返回一个 invalid draft（吞掉后续正文，防止挂到上一个剧场），
+ * 但 finishTheater 不会把它推入 file.theaters。
+ */
+function parseTheaterHeader(st: ParserState, header: KojoTheaterRecord): TheaterDraft {
+  const headerSpan = spanOfLine(st, header);
+  let invalid = header.invalid;
+
+  if (header.prefix === 'halfwidth') {
+    reportSpan(
+      st,
+      'core/theater/syntax',
+      "剧场头前缀必须用全角冒号：写 【剧场：目标｜地点｜时间】。",
+      spanOffsets(st, header.contentOffset, header.contentOffset + 4),
+    );
+    invalid = true;
+  }
+  if (header.closeOffset === null) {
+    reportSpan(st, 'core/theater/syntax', '剧场头缺收口字符。', headerSpan);
+    invalid = true;
+  } else if (header.trailing) {
+    reportSpan(st, 'core/theater/syntax', '剧场头收口之后不能再有内容。', spanOffsets(st, header.closeOffset + 1, header.contentEnd));
+    invalid = true;
+  }
+
+  const fields = splitTheaterFields(header.payload, header.payloadOffset);
+  while (fields.length > 1 && fields[fields.length - 1]!.raw.length === 0) fields.pop();
+  if (fields.length > 3) {
+    const extra = fields[3]!;
+    reportSpan(st, 'core/theater/syntax', '剧场头最多 3 个字段：目标｜地点｜时间。', theaterFieldSpan(st, extra));
+    invalid = true;
+  }
+
+  const targetField = fields[0]!;
+  if (targetField.raw.length === 0) {
+    reportSpan(st, 'core/theater/syntax', '剧场头缺目标；目标不能为空。', headerSpan);
+    invalid = true;
+  } else if (targetField.raw === KOJO_THEATER_UNRESTRICTED) {
+    reportSpan(st, 'core/theater/syntax', '剧场目标不能写 不限：目标是必填的具体目标。', theaterFieldSpan(st, targetField));
+    invalid = true;
+  }
+  const target: KojoTheaterTarget = {
+    raw: targetField.raw,
+    span: targetField.raw.length > 0 ? theaterFieldSpan(st, targetField) : headerSpan,
+  };
+
+  const locationField = fields[1];
+  if (locationField !== undefined && locationField.raw.length === 0) {
+    reportSpan(st, 'core/theater/syntax', '剧场头中间字段不能留空；省略地点请直接省掉该段。', theaterFieldSpan(st, locationField));
+    invalid = true;
+  }
+  const location: KojoTheaterLocation =
+    locationField === undefined || locationField.raw.length === 0
+      ? { kind: 'unrestricted', raw: '', span: null }
+      : locationField.raw === KOJO_THEATER_UNRESTRICTED
+        ? { kind: 'unrestricted', raw: locationField.raw, span: theaterFieldSpan(st, locationField) }
+        : { kind: 'exact', raw: locationField.raw, span: theaterFieldSpan(st, locationField) };
+
+  const timeField = fields[2];
+  if (timeField !== undefined && timeField.raw.length === 0) {
+    reportSpan(st, 'core/theater/syntax', '剧场头中间字段不能留空；省略时间请直接省掉该段。', theaterFieldSpan(st, timeField));
+    invalid = true;
+  }
+  const time: KojoTheaterTime =
+    timeField === undefined || timeField.raw.length === 0
+      ? { kind: 'unrestricted', raw: '', span: null }
+      : timeField.raw === KOJO_THEATER_UNRESTRICTED
+        ? { kind: 'unrestricted', raw: timeField.raw, span: theaterFieldSpan(st, timeField) }
+        : { kind: 'named', raw: timeField.raw, span: theaterFieldSpan(st, timeField) };
+
+  return { target, location, time, scenes: [], headerSpan, invalid };
+}
+
+/** 剧场体区间 = 首个场景起点到末个场景终点（含 # 幕 标题）；空体为 null。 */
+function bodySpanOfScenes(scenes: readonly KojoSceneNode[]): KojoSpan | null {
+  if (scenes.length === 0) return null;
+  const first = scenes[0]!;
+  const last = scenes[scenes.length - 1]!;
+  return { start: first.span.start, end: last.span.end };
+}
+
+function earlierPosition(a: KojoSpan["start"], b: KojoSpan["start"]): KojoSpan["start"] {
+  if (a.line !== b.line) return a.line < b.line ? a : b;
+  return a.column <= b.column ? a : b;
+}
+
+function laterPosition(a: KojoSpan["end"], b: KojoSpan["end"]): KojoSpan["end"] {
+  if (a.line !== b.line) return a.line > b.line ? a : b;
+  return a.column >= b.column ? a : b;
+}
+
+function finishTheater(st: ParserState, draft: TheaterDraft): void {
+  if (draft.invalid) return;
+  const bodySpan = bodySpanOfScenes(draft.scenes);
+  const span: KojoSpan =
+    bodySpan === null ? draft.headerSpan : { start: draft.headerSpan.start, end: bodySpan.end };
+  st.theaters.push({
+    kind: 'theater',
+    target: draft.target,
+    location: draft.location,
+    time: draft.time,
+    origin: 'theater',
+    legacyMachine: null,
+    scenes: draft.scenes,
+    headerSpan: draft.headerSpan,
+    bodySpan,
+    span,
+  });
+}
+
+function capturePreamble(st: ParserState, header: KojoTheaterRecord): void {
+  for (let i = 0; i < st.scenes.length; i++) st.preambleScenes.push(st.scenes[i]!);
+  for (let i = 0; i < st.preambleScenes.length; i++) {
+    const scene = st.preambleScenes[i]!;
+    if (scene.items.length > 0) {
+      reportSpan(st, 'core/theater/body-before-header', '第一个剧场头之前有正文：请先写剧场头，或把这段正文移进剧场。', scene.span);
+      break;
+    }
+  }
+  if (st.sawMachine) reportMixedMachineAt(st, header);
+}
+
+function reportMixedMachineAt(st: ParserState, line: KojoLexLine): void {
+  if (st.mixedReported) return;
+  reportSpan(st, 'core/theater/mixed-machine', '一个文件不能同时使用 # 机 和剧场头：请二选一。', spanOfLine(st, line));
+  st.mixedReported = true;
+}
+
+function synthesizeLegacyTheater(st: ParserState): void {
+  if (!st.sawMachine) return;
+  let machine: KojoMachineDecl | null = null;
+  for (let i = 0; i < st.decls.length; i++) {
+    const decl = st.decls[i]!;
+    if (decl.kind === 'machine') {
+      machine = decl;
+      break;
+    }
+  }
+  if (machine === null) return;
+  st.theaters.push(legacyTheaterFrom(machine, st.scenes));
+}
+
+/**
+ * 由一条旧 `# 机` 与文件场景合成隐式 Theater。
+ *
+ * 导出给增量编译器复用：增量 compose 必须构造与 parser 逐字相同的 `KojoFile`，
+ * 否则构建期自检会把每个旧文件判成 `self-check-compile-mismatch` 而永久退回全量。
+ */
+export function legacyTheaterFrom(machine: KojoMachineDecl, scenes: readonly KojoSceneNode[]): KojoTheater {
+  const bodySpan = bodySpanOfScenes(scenes);
+  const span: KojoSpan =
+    bodySpan === null
+      ? machine.span
+      : {
+          start: earlierPosition(machine.span.start, bodySpan.start),
+          end: laterPosition(machine.span.end, bodySpan.end),
+        };
+  return {
+    kind: 'theater',
+    target: { raw: machine.event, span: machine.span },
+    location: { kind: 'unrestricted', raw: '', span: null },
+    time: { kind: 'unrestricted', raw: '', span: null },
+    origin: 'legacy-machine',
+    legacyMachine: machine,
+    scenes: scenes.slice(),
+    headerSpan: machine.span,
+    bodySpan,
+    span,
+  };
 }
 
 /* ============================== 旧写法 / 未知行 ============================== */
@@ -679,6 +946,7 @@ function declNameValid(st: ParserState, token: KojoCallArg | undefined): boolean
 }
 
 function parseMachineDecl(st: ParserState, header: KojoDeclRecord): void {
+  st.sawMachine = true;
   const tokens = splitSpaces(header.rest, header.restOffset);
   if (tokens.length === 0) {
     reportSpan(st, 'core/lex/anchor', '`# 机` 缺事件名（形如 `# 机 指令 310`）。', spanOfLine(st, header));
@@ -1510,6 +1778,11 @@ function parseDispatchBlock(st: ParserState, baseIndent: number, ctx: CtxBase): 
 /* ============================== 叙事区语句 ============================== */
 
 function parseNarrativeStatement(st: ParserState, line: KojoLexLine, ctx: CtxBase): KojoNarrativeNode | null {
+  if (line.kind === 'theater') {
+    reportSpan(st, 'core/theater/not-top-level', '剧场头只能写在文件顶层：不能缩进放进块里。', spanOfLine(st, line));
+    skipLineAndSubtree(st);
+    return null;
+  }
   switch (line.kind) {
     case 'blank':
     case 'comment':
@@ -1669,6 +1942,11 @@ function parseNarrativeDispatch(st: ParserState, line: KojoLexLine, ctx: CtxBase
 /* ============================== 调度区语句 ============================== */
 
 function parseDispatchStatement(st: ParserState, line: KojoLexLine, ctx: CtxBase): KojoDispatchNode | null {
+  if (line.kind === 'theater') {
+    reportSpan(st, 'core/theater/not-top-level', '剧场头只能写在文件顶层：不能缩进放进块里。', spanOfLine(st, line));
+    skipLineAndSubtree(st);
+    return null;
+  }
   switch (line.kind) {
     case 'blank':
     case 'comment':

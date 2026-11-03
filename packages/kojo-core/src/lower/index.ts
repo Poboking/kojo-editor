@@ -115,6 +115,7 @@ export function lowerNarrative(nodes: readonly KojoNarrativeNode[], options: Low
 }
 
 export * from './backend.js';
+export * from './theater-unit.js';
 export * from './buffer.js';
 export * from './condition.js';
 /* 能力闸单源（K2-FEATURE-GATE-UNIFY）：解析/判定/去重键的公共面。

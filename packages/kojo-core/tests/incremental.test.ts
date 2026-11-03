@@ -2176,3 +2176,78 @@ describe('incremental：多行替换 / 跨行删性能护栏（5.7k 行）', () 
     expect(deleteMedianMs).toBeLessThan(rebuildMedianMs * 0.5);
   });
 });
+
+/* ============================== M1 Theater 语法模式变化回归 ============================== */
+
+describe('增量 · Theater 语法模式变化（M1 P0 回归）', () => {
+  function expectTheaterFallback(initial: string, next: string, edit: IncrementalEdit): void {
+    const compiler = createIncrementalCompiler({ adapter: FIXTURE_ADAPTER, backend: BACKEND });
+    compiler.update(initial);
+    const update = compiler.update(next, edit);
+    const full = fullCompile(next);
+
+    expect(update.stats.fallbackFull).toBe(true);
+    expect(update.stats.fallbackReason).toBe('theater-source');
+    expect(update.result.ok).toBe(full.ok);
+    expect(update.result.erb).toBe(full.erb);
+    expect(update.result.diagnostics).toEqual(full.diagnostics);
+    expect(update.result.file.hasTheaterSyntax).toBe(full.file.hasTheaterSyntax);
+    expect(update.result.file.theaters).toEqual(full.file.theaters);
+    expect(update.result.file.scenes).toEqual(full.file.scenes);
+    expect(update.result.theaterUnits?.map((unit) => ({ target: unit.theater.target.raw, body: unit.body, slots: unit.slots }))).toEqual(
+      full.theaterUnits?.map((unit) => ({ target: unit.theater.target.raw, body: unit.body, slots: unit.slots })),
+    );
+    expect(update.result.theaterUnitsStatus).toBe(full.theaterUnitsStatus);
+    expectSameResult(update.result, full);
+  }
+
+  it('快速增量：旧文件有 # 机，正文变合法 Theater 头 → theater-source 全量回退', () => {
+    const initial = '# 机 开场\n> x';
+    const next = '# 机 开场\n【剧场：初见】';
+    expectTheaterFallback(initial, next, {
+      offset: initial.indexOf('> x'),
+      removedLength: 3,
+      insertedText: '【剧场：初见】',
+    });
+  });
+
+  it('快速增量：旧文件无 # 机，正文变合法 Theater 头 → theater-source 全量回退', () => {
+    const initial = '# 视角 灵梦\n> x';
+    const next = '# 视角 灵梦\n【剧场：初见】';
+    expectTheaterFallback(initial, next, {
+      offset: initial.indexOf('> x'),
+      removedLength: 3,
+      insertedText: '【剧场：初见】',
+    });
+  });
+
+  it('快速增量：半角冒号错误前缀 → theater-source 全量回退', () => {
+    const initial = '# 机 开场\n> x';
+    const next = '# 机 开场\n【剧场:初见】';
+    expectTheaterFallback(initial, next, {
+      offset: initial.indexOf('> x'),
+      removedLength: 3,
+      insertedText: '【剧场:初见】',
+    });
+  });
+
+  it('快速增量：其他合法但结构错误的 Theater 头 → theater-source 全量回退', () => {
+    const initial = '# 机 开场\n> x';
+    const next = '# 机 开场\n【剧场：初见｜｜夜】';
+    expectTheaterFallback(initial, next, {
+      offset: initial.indexOf('> x'),
+      removedLength: 3,
+      insertedText: '【剧场：初见｜｜夜】',
+    });
+  });
+
+  it('结构化增量：跨行插入 Theater 头 → theater-source 全量回退', () => {
+    const initial = '# 机 开场\n> x';
+    const next = '# 机 开场\n\n【剧场：初见】';
+    expectTheaterFallback(initial, next, {
+      offset: initial.indexOf('> x'),
+      removedLength: 3,
+      insertedText: '\n【剧场：初见】',
+    });
+  });
+});

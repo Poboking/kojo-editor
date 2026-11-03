@@ -1650,6 +1650,7 @@ describe('B5B-SINK-5：余 5 枚宿主事实——一枚都沉不动（障碍逐
       monacoFree: true,
       hostImports: ['./file-tree-ops', './kojo2-open', './problem-store', './kojo2-storage-registry'],
       consumers: [
+        'ui/kojo2-project-compile.ts',
         'ui/kojo2-project-scan-adapter.ts',
         'ui/project-diagnostics.ts',
         'ui/project-scan-schedule.ts',

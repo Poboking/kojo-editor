@@ -93,6 +93,14 @@ export const KOJO_TABLE_ARROWS = ['->', '→'] as const;
 export const KOJO_TABLE_ARROW_CANONICAL = '->';
 
 /** `# 模` 的插槽字面量（§7.2：最多一个，只在行首独立成行时有语法意义） */
+export const KOJO_THEATER_PREFIX = '【剧场：';
+export const KOJO_THEATER_ERROR_PREFIX = '【剧场:';
+export const KOJO_THEATER_CLOSE = '】';
+export const KOJO_THEATER_SEPARATOR_FULL = '｜';
+export const KOJO_THEATER_SEPARATOR_HALF = '|';
+export const KOJO_THEATER_SEPARATORS = [KOJO_THEATER_SEPARATOR_FULL, KOJO_THEATER_SEPARATOR_HALF] as const;
+export const KOJO_THEATER_UNRESTRICTED = '不限';
+
 export const KOJO_TEMPLATE_SLOT = '[插槽]';
 
 /** 编译器保留前缀（§3.4.5 / §11.3 `core/decl/reserved-name`） */
@@ -193,6 +201,7 @@ export type KojoLineKind =
   | 'native'
   | 'legacy'
   | 'options'
+  | 'theater'
   | 'unknown';
 
 /** 所有逻辑行共有的源事实 */
@@ -373,6 +382,27 @@ export interface KojoLegacyRecord extends KojoLineBase {
 }
 
 /** `选项：` 待定 UI 块头（§7.5：2.0 保留局部 UI 字面量区，warning 不阻断） */
+/**
+ * 剧场头：形如 【剧场：目标｜地点｜时间】。
+ *
+ * 词法层只负责认出精确前缀并切出 payload / 收口 / 尾随事实；字段数、空字段、
+ * 不限 与半角冒号等语义都在 parser 判。payload 保持原文（未 trim），所有偏移都是
+ * 0 基 UTF-16；缺收口时 closeOffset = null、payload 到行尾。
+ */
+export interface KojoTheaterRecord extends KojoLineBase {
+  readonly kind: 'theater';
+  /** 全角冒号是正式写法；半角冒号在词法层保留事实，parser 报语法错 */
+  readonly prefix: 'fullwidth' | 'halfwidth';
+  /** 前缀与收口之间的原文（未 trim；缺收口时到行尾） */
+  readonly payload: string;
+  /** payload 首字符的 0 基偏移 */
+  readonly payloadOffset: number;
+  /** 收口字符的 0 基偏移；缺收口为 null */
+  readonly closeOffset: number | null;
+  /** 收口之后还有非空白内容（语法错；不静默丢弃） */
+  readonly trailing: boolean;
+}
+
 export interface KojoOptionsRecord extends KojoLineBase {
   readonly kind: 'options';
 }
@@ -400,6 +430,7 @@ export type KojoLexLine =
   | KojoNativeRecord
   | KojoLegacyRecord
   | KojoOptionsRecord
+  | KojoTheaterRecord
   | KojoUnknownRecord;
 
 /* ============================== 旧写法种类 ============================== */
@@ -527,6 +558,8 @@ export interface LexResult {
   readonly diagnostics: readonly KojoDiagnostic[];
   /** 0 基偏移 ⇄ 1 基行列（与 Monaco / plugin-api 同口径） */
   readonly positions: PositionIndex;
+  /** 文件里是否出现过剧场前缀（含半角/畸形头；用于新/旧编译路径分流） */
+  readonly hasTheaterSyntax: boolean;
 }
 
 /* ============================== 待并入的 C1 诊断码 ============================== */

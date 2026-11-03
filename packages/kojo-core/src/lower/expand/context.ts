@@ -190,6 +190,53 @@ export function hiddenSlots(ctx: ExpandContext): readonly KojoHiddenSlot[] {
   return out;
 }
 
+/**
+ * 为单个 Theater 克隆一个执行上下文。
+ *
+ * 文件级索引 / 表计划缓存 / 池错误去重 / sink / adapter / backend 共享；
+ * 所有会在 walk 过程中变化的栈与槽集合必须全新。**不能只靠 captureSlots**：
+ * captureSlots 只切 activeSlotScope，不隔离 foreach/table/pool/template 栈，
+ * 也不隔离 LowerState。
+ */
+export function createTheaterContext(base: ExpandContext): ExpandContext {
+  return {
+    ...base,
+    foreachFrames: [],
+    tableStack: [],
+    poolStack: [],
+    templateStack: [],
+    slots: new Map(),
+    slotOrder: [],
+    activeSlotScope: null,
+    // 文件级纯缓存 / 去重集合：保留引用
+    tables: base.tables,
+    pools: base.pools,
+    templates: base.templates,
+    functions: base.functions,
+    constants: base.constants,
+    arrays: base.arrays,
+    tablePlans: base.tablePlans,
+    invalidPools: base.invalidPools,
+    sink: base.sink,
+    sourceText: base.sourceText,
+    view: base.view,
+    adapter: base.adapter,
+    backend: base.backend,
+    featureGate: base.featureGate,
+    maxDepth: base.maxDepth,
+  };
+}
+
+/** Theater lowering 结束后的隔离不变量：所有展开栈必须收敛，槽作用域必须回到主作用域。 */
+export function isTheaterContextQuiescent(ctx: ExpandContext): boolean {
+  return (
+    ctx.foreachFrames.length === 0 &&
+    ctx.tableStack.length === 0 &&
+    ctx.poolStack.length === 0 &&
+    ctx.templateStack.length === 0 &&
+    ctx.activeSlotScope === null
+  );
+}
 /** 把 `file.decls` 索引进上下文（声明提升：引用点可以出现在声明之前） */
 export function indexDeclarations(ctx: ExpandContext, decls: readonly KojoDecl[]): void {
   // 常量先索引：`# 设 名 整数[长度]` 的长度可能引用声明在后面的 `# 设`

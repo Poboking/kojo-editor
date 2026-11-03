@@ -36,6 +36,7 @@ import {
 export * from './profile.js';
 export * from './carriers.js';
 export * from './event-catalog.js';
+export * from './target-registry.js';
 export * from './domain-symbols.js';
 export * from './presentation.js';
 export * from './storage.js';

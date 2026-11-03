@@ -79,6 +79,7 @@ import {
   planStorageSlots,
 } from '@kojo/kojo-core';
 import type {
+  FunctionNameContext,
   KojoConstDecl,
   KojoDiagnostic,
   KojoFile,
@@ -96,7 +97,8 @@ import type {
   WeaveLayerDocument,
   WeaveLayerUnit,
 } from '@kojo/kojo-core';
-import { isUnderPath, pkey } from './file-tree-ops';
+import { pathKey } from '@kojo/plugin-api';
+import { isUnderPath } from './file-tree-ops';
 import { isKojo2Path } from './kojo2-open';
 import type { EditorProblem } from './problem-store';
 import {
@@ -135,6 +137,47 @@ export interface Kojo2ProjectDocument {
   readonly text: string;
   /** overlay 覆盖层标识（翻译 / 多版本）；缺省 = 基座层（与 core 同口径） */
   readonly layerId?: string;
+}
+
+/**
+ * Host 文件级函数名上下文（D3）的身份入参：按 **path + layerId** 注入，不是按显示路径。
+ * `layerId` 归一成 `string | null`（缺省 = 基座层），与 ProjectFileIR 同口径。
+ */
+export interface Kojo2FunctionNameContextFile {
+  readonly path: string;
+  readonly layerId: string | null;
+}
+
+/**
+ * Host 同步上下文注入器（D3：charNo / familySegment 是 Host 文件事实）。
+ *
+ * 红线：缺席 ≠ 空串——没有事实就不要给 `familySegment`；标准版必须由 Host 显式给 `''`。
+ * 本模块不 await 它、也不提供逐文档异步 loader：一份文档一次同步求值。
+ */
+export type Kojo2FunctionNameContextResolver = (
+  file: Kojo2FunctionNameContextFile,
+) => FunctionNameContext;
+
+/**
+ * 解析一份文档的 Host 函数名上下文。
+ *
+ * - 注入器缺席 ⇒ `{}`（没有事实；绝不补默认 `familySegment`）。
+ * - 只透传字符串字段；显式空串作为 own property 保留（缺席与空串是两件事）。
+ */
+export function resolveKojo2FunctionNameContext(
+  contextOf: Kojo2FunctionNameContextResolver | undefined,
+  file: { readonly path: string; readonly layerId?: string | null },
+): FunctionNameContext {
+  if (contextOf === undefined) return {};
+  const resolved: FunctionNameContext | undefined = contextOf({
+    path: file.path,
+    layerId: file.layerId ?? null,
+  });
+  if (resolved === undefined) return {};
+  const context: { charNo?: string; familySegment?: string } = {};
+  if (typeof resolved.charNo === 'string') context.charNo = resolved.charNo;
+  if (typeof resolved.familySegment === 'string') context.familySegment = resolved.familySegment;
+  return context;
 }
 
 /** adapter 事实（与 core `WeaveLayerAdapterFacts` 同形；真实 `GameAdapter` 结构上直接满足） */
@@ -196,6 +239,8 @@ export interface Kojo2ProjectAnalysisInput {
   readonly documents: readonly Kojo2ProjectDocument[];
   /** adapter 事实；缺席 = 织面退回 `analyzeProject`（不判未知事件 / 优先级模型） */
   readonly adapter?: Kojo2ProjectAdapterFacts;
+  /** Host 同步函数名上下文注入器（D3；缺省 = 无事实 `{}`，绝不补默认 familySegment） */
+  readonly contextOf?: Kojo2FunctionNameContextResolver;
   readonly storage?: Kojo2ProjectStorageOptions;
   /** 解析入口（缺省 core `parse(lex(text))`；测试可注入桩以隔离词法开销） */
   readonly parse?: (text: string) => KojoFile;
@@ -257,6 +302,13 @@ export interface Kojo2ProjectStats {
   readonly timing: Kojo2ProjectTiming;
 }
 
+/** 一份文档的 Host 函数名上下文事实（path + layerId 是身份；`context` 可以为 `{}`）。 */
+export interface Kojo2ProjectFunctionNameContext {
+  readonly path: string;
+  readonly layerId: string | null;
+  readonly context: FunctionNameContext;
+}
+
 export interface Kojo2ProjectAnalysisResult {
   /** 全部问题（按 severity → path → line → 列 → code → message 排序；跨文件结论在此） */
   readonly problems: readonly EditorProblem[];
@@ -267,6 +319,11 @@ export interface Kojo2ProjectAnalysisResult {
   readonly problemsByPath: ReadonlyMap<string, readonly EditorProblem[]>;
   /** 逐监听块的判定表（`effective` / `takeover` / `shadowed` / `blocked`） */
   readonly weaveUnits: readonly WeaveLayerUnit[];
+  /**
+   * 每份文档的 Host 函数名上下文（按 path + layerId 身份；含解析失败的文件）。
+   * 扫描期同步求值一次；项目编译消费同一份事实，链接期不补默认。
+   */
+  readonly functionNameContexts: readonly Kojo2ProjectFunctionNameContext[];
   readonly stats: Kojo2ProjectStats;
 }
 
@@ -289,6 +346,13 @@ export interface Kojo2ProjectPassOptions {
   readonly now?: () => number;
   /** 路径 → overlay 层标识（缺省 = 基座层；翻译 / 多版本项目由宿主注入） */
   readonly layerOf?: (path: string) => string | undefined;
+  /**
+   * 文件身份（path + layerId）→ Host 函数名上下文（D3；同步，缺省 = 无事实 `{}`）。
+   *
+   * 与 {@link layerOf} 同一个注入面：分析期每份文档同步求值一次，不提供逐文档异步
+   * loader；缺席不得补默认 `familySegment`（标准版由 Host 显式给空串）。
+   */
+  readonly contextOf?: Kojo2FunctionNameContextResolver;
   /** 计时读数出口（宿主接 perf / 日志；缺省由扫描器打印一行，见 `project-diagnostics`） */
   readonly onTiming?: (timing: Kojo2ProjectTiming) => void;
 }
@@ -380,7 +444,8 @@ export async function collectKojo2ProjectDocuments(
       outOfRoots++;
       continue;
     }
-    const key = pkey(path);
+    const layerId = deps.layerOf?.(path);
+    const key = `${layerId ?? ''}\u0000${pathKey(path)}`;
     if (considered.has(key)) continue;
     considered.add(key);
     candidates.push(path);
@@ -779,11 +844,20 @@ export function analyzeKojo2Project(input: Kojo2ProjectAnalysisInput): Kojo2Proj
   const parsed: ParsedDocument[] = [];
   const parseProblems: EditorProblem[] = [];
   const seenPaths = new Set<string>();
+  const contexts: Kojo2ProjectFunctionNameContext[] = [];
   let failedDocuments = 0;
   for (const document of input.documents) {
-    const identity = pkey(document.path);
+    const identity = `${document.layerId ?? ''}\u0000${pathKey(document.path)}`;
     if (seenPaths.has(identity)) continue;
     seenPaths.add(identity);
+    contexts.push({
+      path: document.path,
+      layerId: document.layerId ?? null,
+      context: resolveKojo2FunctionNameContext(input.contextOf, {
+        path: document.path,
+        layerId: document.layerId ?? null,
+      }),
+    });
     try {
       parsed.push({ document, file: parseDocument(document.text) });
     } catch (thrown) {
@@ -928,6 +1002,7 @@ export function analyzeKojo2Project(input: Kojo2ProjectAnalysisInput): Kojo2Proj
     problems: ordered,
     problemsByPath: byPath,
     weaveUnits: layers === null ? [] : layers.units,
+    functionNameContexts: contexts,
     stats: {
       documents: parsed.length + failedDocuments,
       failedDocuments,
@@ -966,6 +1041,7 @@ export async function analyzeKojo2ProjectAsync(
     documents: input.documents,
     ...(resolution.facts === undefined ? {} : { adapter: resolution.facts }),
     ...(input.storage === undefined ? {} : { storage: input.storage }),
+    ...(input.contextOf === undefined ? {} : { contextOf: input.contextOf }),
     ...(input.parse === undefined ? {} : { parse: input.parse }),
     ...(input.projectPath === undefined ? {} : { projectPath: input.projectPath }),
     ...(input.now === undefined ? {} : { now: input.now }),

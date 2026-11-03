@@ -20,6 +20,9 @@ import {
   KOJO_DISPATCH_WORD_SET,
   KOJO_INDENT_WIDTH,
   KOJO_TABLE_DEFAULT,
+  KOJO_THEATER_CLOSE,
+  KOJO_THEATER_ERROR_PREFIX,
+  KOJO_THEATER_PREFIX,
   KOJO_WAIT_CONTINUE,
   type KojoBareQuoteRecord,
   type KojoBlankLineRecord,
@@ -44,6 +47,7 @@ import {
   type KojoSourceFacts,
   type KojoTextRecord,
   type KojoTextSegment,
+  type KojoTheaterRecord,
   type KojoTriggerRecord,
   type KojoUnknownRecord,
   type LexResult,
@@ -425,7 +429,14 @@ export function lex(source: string): LexResult {
     logicalLines: lines.length,
     contentStart,
   };
-  return { source, facts, physical, lines, diagnostics: sink.all, positions };
+  let hasTheaterSyntax = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i]!.kind === 'theater') {
+      hasTheaterSyntax = true;
+      break;
+    }
+  }
+  return { source, facts, physical, lines, diagnostics: sink.all, positions, hasTheaterSyntax };
 }
 
 function eolStyleOf(crlf: number, lf: number, cr: number): KojoSourceFacts['eol'] {
@@ -615,6 +626,13 @@ function classifyLine(source: string, p: KojoPhysicalLine, report: LexReporter):
   }
 
   const ctx: LineCtx = { source, p, cs, ce, content, invalid, report };
+  // 剧场头优先于普通分类：只认缩进后的精确前缀；围栏内的 native 行在 classifyAll 已截走。
+  if (content.startsWith(KOJO_THEATER_PREFIX)) {
+    return classifyTheater(ctx, 'fullwidth', KOJO_THEATER_PREFIX.length);
+  }
+  if (content.startsWith(KOJO_THEATER_ERROR_PREFIX)) {
+    return classifyTheater(ctx, 'halfwidth', KOJO_THEATER_ERROR_PREFIX.length);
+  }
   const c0 = content.charCodeAt(0);
   switch (c0) {
     case C_HASH:
@@ -632,6 +650,33 @@ function classifyLine(source: string, p: KojoPhysicalLine, report: LexReporter):
     default:
       return classifyPlain(ctx);
   }
+}
+
+/**
+ * 剧场头：prefix 精确命中后切 payload / 收口 / 尾随事实。字段语义交给 parser，
+ * 这里不报 theater 诊断（半角冒号与畸形头也要保留成 draft 的源事实）。
+ */
+function classifyTheater(
+  ctx: LineCtx,
+  prefix: 'fullwidth' | 'halfwidth',
+  prefixLength: number,
+): KojoTheaterRecord {
+  const { content, cs } = ctx;
+  const closeIndex = content.indexOf(KOJO_THEATER_CLOSE, prefixLength);
+  const closeOffset = closeIndex < 0 ? null : cs + closeIndex;
+  const payload = closeIndex < 0 ? content.slice(prefixLength) : content.slice(prefixLength, closeIndex);
+  const trailing = closeIndex >= 0 ? content.slice(closeIndex + KOJO_THEATER_CLOSE.length).trim().length > 0 : false;
+  const record: KojoTheaterRecord = {
+    kind: 'theater',
+    ...baseOf(ctx),
+    invalid: ctx.invalid,
+    prefix,
+    payload,
+    payloadOffset: cs + prefixLength,
+    closeOffset,
+    trailing,
+  };
+  return record;
 }
 
 function classifyDecl(ctx: LineCtx): KojoLexLine {

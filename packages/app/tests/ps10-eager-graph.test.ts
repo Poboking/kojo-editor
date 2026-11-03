@@ -1537,10 +1537,15 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     **85,428 B**（2.9 倍）。红沿随闸下调：3,532 KB 的真实红沿 = **3,617,280 B**，
     //     机械余量 **246 B**（现 3,617,034）——别读成"随便写"，下一枚进图字节仍须先出图；
     //     文件闸 196/201 腾出的 5 格是本批**省下来的**，不是新额度。
+    //   - **M2 项目级编译（2026-11-03，本车）**：读数 **196 文件 / 3,536 KB**
+    //     （3,621,272 B = 上一条 3,617,034 + **4,238 B**；零新进图文件）。新增字节来自
+    //     TargetRegistry 装载期校验（D7/D8 参数规则、segment 默认值、eventCatalog 源参数对拍）
+    //     与 eraTW 九事件描述符；Project IR / Linker / Host 编译入口均在懒边或测试面。
+    //     ⇒ KB 闸 **3,532 → 3,536**；文件闸 196 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤196 文件 / ≤3,532 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤196 文件 / ≤3,536 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_532);
+    expect(totalKb).toBeLessThanOrEqual(3_536);
     expect(files.length).toBeLessThanOrEqual(196);
   });
 

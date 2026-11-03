@@ -86,7 +86,7 @@ import type { DiagnosticSink, KojoDiagnostic } from './diagnostics.js';
 import { checkKojoFile } from './sema/check.js';
 import { featureDiagnosticKey } from './lower/feature-gate.js';
 import { lex } from './lexer.js';
-import { parse } from './parser.js';
+import { legacyTheaterFrom, parse } from './parser.js';
 import type { PositionIndex } from './positions.js';
 import { createSourceMapBuilder, segmentSpecsOf } from './source-map.js';
 import type {
@@ -107,7 +107,7 @@ import { walkNarrative } from './lower/expand/walk.js';
 import { assembleWeave } from './lower/expand/weave.js';
 import { createLowerState } from './lower/state.js';
 import type { KojoLexLine } from './tokens.js';
-import { KOJO_RESERVED_PREFIX } from './tokens.js';
+import { KOJO_RESERVED_PREFIX, KOJO_THEATER_ERROR_PREFIX, KOJO_THEATER_PREFIX } from './tokens.js';
 
 /* ============================== 公共形状 ============================== */
 
@@ -196,6 +196,7 @@ type LineClass =
   | 'legacy'
   | 'condition'
   | 'native'
+  | 'theater'
   | 'leaf'
   | `dispatch:${string}`;
 
@@ -408,6 +409,16 @@ export function createIncrementalCompiler(options: IncrementalCompilerOptions): 
           },
         };
       }
+      // 文件级语法模式守卫：M1 不为 Theater 做局部增量分析。先对完整 nextText 做
+      // 精确前缀预筛，命中后再用 Lexer 对完整文本裁决；绝不能用脏单元/切片代替。
+      // `lexer.ts` 只在 content.startsWith(两个剧场前缀之一) 时才可能置
+      // hasTheaterSyntax=true，因此预筛不会漏掉任何合法/错误 Theater 头。
+      if (
+        (text.includes(KOJO_THEATER_PREFIX) || text.includes(KOJO_THEATER_ERROR_PREFIX)) &&
+        lex(text).hasTheaterSyntax
+      ) {
+        return rebuildAll(text, 'theater-source', startedAt);
+      }
       const fast = tryIncremental(current, text, edit, adapter, backend);
       if (fast.kind === 'ok') {
         state = fast.state;
@@ -461,6 +472,9 @@ function tryBuild(
 ): BuildOutcome {
   if (text.charCodeAt(0) === 0xfeff) return buildFailure('bom-source');
   const lexed = lex(text);
+  // 剧场语法（含格式错误 / 半角冒号 / 混用）尚未纳入增量单元模型：
+  // 用 lexer 的 hasTheaterSyntax 而不是 AST 判定，保证错误剧场头也不会误走旧路径。
+  if (lexed.hasTheaterSyntax) return buildFailure('theater-source');
   const parsed = parse(lexed);
   const view = resolveView(parsed.decls, viewOption);
 
@@ -779,6 +793,9 @@ function tryIncremental(
   const expectedLines = unit.endLine - unit.startLine;
   const newLexed = lex(newUnitText);
   if (newLexed.lines.length !== expectedLines) return { kind: 'unsafe', reason: 'unit-line-count-changed' };
+  // 第二道防线：即使未来调用方绕过 update 的文件级守卫，脏单元切片里出现剧场语法
+  // 也不能被当成普通 leaf 继续增量。
+  if (newLexed.hasTheaterSyntax) return { kind: 'unsafe', reason: 'theater-source' };
   const oldMeta = unit.meta[lineIdx - unit.startLine]!;
   const editedRecord = newLexed.lines[lineIdx - unit.startLine];
   if (editedRecord === undefined) return { kind: 'unsafe', reason: 'edited-line-missing' };
@@ -1634,7 +1651,15 @@ function compose(state: CacheState, adapter: GameAdapter, backend: KojoEmitBacke
   const missingMachine = missingMachineDiagnostic(state.machines.length > 0, scenes);
   if (missingMachine !== null) parseDiags.push(missingMachine);
 
-  const file: KojoFile = { decls: state.decls, scenes, diagnostics: parseDiags };
+  const machine = state.machines[0];
+  const theaters = machine === undefined ? [] : [legacyTheaterFrom(machine, scenes)];
+  const file: KojoFile = {
+    decls: state.decls,
+    scenes,
+    theaters,
+    hasTheaterSyntax: false,
+    diagnostics: parseDiags,
+  };
   const empty = (): SourceMap => createSourceMapBuilder().build();
   if (hasError(parseDiags)) {
     return { ok: false, erb: '', sourceMap: empty(), diagnostics: parseDiags, slots: [], file };
@@ -1667,7 +1692,6 @@ function compose(state: CacheState, adapter: GameAdapter, backend: KojoEmitBacke
   for (const unit of state.units) for (const line of unit.lines) bodyLines.push(line);
   const slots = composeSlots(state.units);
 
-  const machine = state.machines[0];
   let lines: readonly string[] = bodyLines;
   let prefix = 0;
   let suffix = 0;
@@ -2407,6 +2431,8 @@ function classOf(record: KojoLexLine): LineClass {
       return 'legacy';
     case 'dispatch':
       return record.word === '函' || record.word === '织' ? 'decl' : `dispatch:${record.word}`;
+    case 'theater':
+      return 'theater';
     default:
       return 'leaf';
   }
@@ -2423,6 +2449,7 @@ function classOf(record: KojoLexLine): LineClass {
 function safeLineTransition(oldMeta: LineMeta, nextCls: LineClass, nextIndent: number): boolean {
   if (oldMeta.indent !== nextIndent) return false;
   const oldCls = oldMeta.cls;
+  if (oldCls === 'theater' || nextCls === 'theater') return false;
   if (oldCls === nextCls) return true;
   if (oldCls === 'decl' || nextCls === 'decl') return false;
   if (oldCls === 'options' || nextCls === 'options') return false;

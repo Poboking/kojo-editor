@@ -2308,3 +2308,48 @@ C2 与 A3 可以在 C1 契约冻结后并行；P5 依赖 C1/C2；E4 依赖 A3；
 
 **eraTW 语法做满，SDK 现在打底；核心只共享"口上表面 + 事件形状"，游戏事实全部进 adapter。**
 叙事面保持五个锚点和干净的脸；程序层用 `@循`、数组、`@标`/`@跳`、递归补足表达力；`@原生` 保证任何 ERB 都有落点。这样既不会为了通用而削掉 eraTW 的表达力，也不会让核心被某一部游戏的事实绑死。
+
+---
+
+## 附录 D：M1 Theater 语法与单文件编译解耦
+
+> 状态：M1 只落地**多剧场语法、AST、单文件 unit 降糖与新旧路径分流**；运行时分发、项目级 linker、地点/时间 runtime 表达式均未实现。
+
+### D.1 剧场头
+
+正式形态：
+
+```text
+【剧场：<目标>[｜<地点>][｜<时间>]]
+```
+
+- 只识别行首精确前缀 `【剧场：`；`｜` 与 `|` 等价。
+- 目标必填、非空、不能是 `不限`。
+- 地点/时间可省略；显式 `不限` 归一为 `unrestricted`。
+- 最多 3 段；中间空字段报 `core/theater/syntax`；尾部空字段视为省略。
+- `【剧场:`（半角冒号）是**明确错误前缀**，报 `core/theater/syntax`，不是普通文本。
+- 其他 `【……】` 仍是普通文本；旁白、台词、`@原生` 内部的 `【剧场：…】` 不识别为剧场头。
+
+### D.2 body 边界
+
+- 剧场从 `【剧场：…】` 开始，到**下一个剧场头或文件结束**，不采用整体缩进块。
+- `# 幕` 只切剧场内部场景，不结束剧场。
+- 文件级声明、`@函`、`@织` 及其缩进体保持原有语义，不属于任何剧场 body。
+- 第一个剧场头之前的正文视为 preamble，报 `core/theater/body-before-header`。
+- 剧场头写进块内报 `core/theater/not-top-level`。
+
+### D.3 旧 `# 机` 兼容
+
+- 没有剧场的旧文件仍可使用 `# 机`；parser 合成一个 `origin:'legacy-machine'`、地点/时间均 `unrestricted` 的隐式 Theater。
+- 同一文件禁止混用 `# 机` 与 `【剧场：…】`，报 `core/theater/mixed-machine`。
+- 编译路径以 `KojoFile.hasTheaterSyntax` 为唯一判据：`!== true` 一律走原有 `lowerFile`，旧文件字节行为不变。
+
+### D.4 M1 编译限制
+
+- 新语法先为每个 Theater 产出独立 `TheaterLoweringUnit`（body / sourceMap / slots）。
+- 单 Theater 且地点/时间均 `unrestricted`、且 adapter 临时桥明确支持其调用签名时，才可能生成 ERB。
+- M1 eraTW 临时桥只允许 `初见`；其他 target 一律 fail-closed，只产出 unit。
+- 有场景约束、多个 Theater、或临时桥不安全时：`ok:false`、`erb:''`，但 `theaterUnits` 保留且 `theaterUnitsStatus:'complete'`。
+- 解析/结构/lowering 错误时：`ok:false`、`erb:''`、`theaterUnits:[]`，`theaterUnitsStatus:'discarded-syntax'` 或 `'discarded-lowering'`。
+- `theaterUnits` 不是成功标志；最终是否可运行只看 `ok`。
+- 增量编译器在每次编辑后对完整 `nextText` 做剧场前缀预筛并以 Lexer 裁决；出现合法/错误/半角或混用剧场语法即整档回退全量编译（`theater-source`），M1 不做 Theater 局部增量。

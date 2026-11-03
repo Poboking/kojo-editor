@@ -46,7 +46,11 @@
  * PS-10 判据不受影响。
  */
 import { kojo2DiagnosticsEnabled } from './kojo2-diagnostics-gate';
-import type { Kojo2ProjectAdapterFacts, Kojo2ProjectPassOptions } from './kojo2-project-analysis';
+import type {
+  Kojo2FunctionNameContextResolver,
+  Kojo2ProjectAdapterFacts,
+  Kojo2ProjectPassOptions,
+} from './kojo2-project-analysis';
 
 /** 装载器：交出 adapter 事实，或 `undefined` = 本轮拿不到（接线层唯一的失败形态） */
 export type Kojo2ProjectAdapterLoader = () => Promise<Kojo2ProjectAdapterFacts | undefined>;
@@ -81,6 +85,13 @@ export interface LazyKojo2ProjectOptionsConfig {
    * 它对游戏事实唯一知道的事是"该问谁"。
    */
   readonly loadAdapter?: Kojo2ProjectAdapterLoader;
+  /**
+   * Host 同步函数名上下文注入器（D3；原样保留给分析 / 编译，不在本文件求值）。
+   *
+   * 这里只保留边界：不调它、不读盘、不造默认 `familySegment`——求值归
+   * `kojo2-project-analysis` / `kojo2-project-compile` 的同一个 `contextOf` 边界。
+   */
+  readonly contextOf?: Kojo2FunctionNameContextResolver;
 }
 
 /**
@@ -114,5 +125,6 @@ export function createLazyKojo2ProjectOptions(
   return {
     enabled: () => isEnabled() === true,
     adapter,
+    ...(config.contextOf === undefined ? {} : { contextOf: config.contextOf }),
   };
 }

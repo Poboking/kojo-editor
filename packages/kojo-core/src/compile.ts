@@ -18,6 +18,7 @@ import { runCompile } from './lower/expand/index.js';
 import type { RunCompileResult } from './lower/expand/index.js';
 import { parseSource } from './parser.js';
 import type { SourceMap } from './source-map.js';
+import type { TheaterLoweringUnit, TheaterUnitsStatus } from './lower/theater-unit.js';
 
 export interface CompileKojoFileOptions {
   /** 游戏事实（事件目录 / profile / presentation） */
@@ -32,6 +33,8 @@ export interface CompileKojoFileOptions {
   readonly estimatedLines?: number;
   /** 外部诊断收集器（多文件共用时传入） */
   readonly sink?: DiagnosticSink;
+  /** 项目级 P5：只收集 theaterUnits，不尝试 M1 单文件 ERB 装配。 */
+  readonly theaterUnitsOnly?: boolean;
 }
 
 export interface CompileKojoResult {
@@ -42,6 +45,10 @@ export interface CompileKojoResult {
   readonly diagnostics: readonly KojoDiagnostic[];
   /** 本文件用到的隐藏槽（去重、稳定序；装配层据此发声明） */
   readonly slots: readonly KojoHiddenSlot[];
+  /** 新语法中间产物；不是成功标志，旧路径为 undefined。 */
+  readonly theaterUnits?: readonly TheaterLoweringUnit[];
+  /** theaterUnits 完整性状态。 */
+  readonly theaterUnitsStatus?: TheaterUnitsStatus;
 }
 
 /**
@@ -58,8 +65,17 @@ export function compileKojoFile(file: KojoFile, options: CompileKojoFileOptions)
     sourceText: options.sourceText,
     estimatedLines: options.estimatedLines,
     sink: options.sink,
+    ...(options.theaterUnitsOnly === true ? { theaterUnitsOnly: true } : {}),
   });
-  return { ok: result.ok, erb: result.erb, sourceMap: result.sourceMap, diagnostics: result.diagnostics, slots: result.slots };
+  return {
+    ok: result.ok,
+    erb: result.erb,
+    sourceMap: result.sourceMap,
+    diagnostics: result.diagnostics,
+    slots: result.slots,
+    ...(result.theaterUnits === undefined ? {} : { theaterUnits: result.theaterUnits }),
+    ...(result.theaterUnitsStatus === undefined ? {} : { theaterUnitsStatus: result.theaterUnitsStatus }),
+  };
 }
 
 /** 源码文本入口（宿主/服务层便捷通道：内部 = lex → parse → compileKojoFile） */

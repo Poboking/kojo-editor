@@ -22,6 +22,7 @@ export * from './parser.js';
 export * from './literal.js';
 export * from './table.js';
 export * from './source-map.js';
+export * from './source-map-data.js';
 export * from './lower/index.js';
 /* 降糖主链的展开构造：`选项` 的 ETB 计划（adapter 契约 additive 字段的唯一真源） */
 export * from './lower/expand/options.js';

@@ -28,6 +28,7 @@ import type {
   KojoSpan,
   KojoSpeech,
   KojoTextPart,
+  KojoTheater,
   KojoWeaveModifier,
 } from '../ast.js';
 import type { KojoDiagnostic } from '../diagnostics.js';
@@ -423,6 +424,11 @@ export interface KojoHiddenSlot {
  * - adapter 返回完整产物行时，body 行必须**按原顺序原样嵌入**：可以加缩进（`trimStart()`
  *   后逐字相等即可），**不得改写/删除/插入** body 行；wrapper 行放在 body 前后。
  */
+/** 项目级已解析函数名的最小结构（与 TargetRegistry 的 FunctionNameResolution 结构兼容） */
+export interface ResolvedMachineFunctionName {
+  readonly kind: 'resolved' | 'needs-context' | 'invalid-context' | 'unresolved' | 'unsupported';
+  readonly name: string | null;
+}
 export interface MachineWrapRequest {
   readonly machine: KojoMachineDecl;
   /** 已降糖的正文行（无 wrapper；core 不缩进） */
@@ -430,7 +436,27 @@ export interface MachineWrapRequest {
   readonly view: string | null;
   /** 本文件用到的隐藏槽清单（去重、稳定序；adapter 据此发声明） */
   readonly slots: readonly KojoHiddenSlot[];
+  /** 项目级已解析函数名；缺省 = 单文件 M1 旧路径（backend 可走旧渲染）。 */
+  readonly resolvedFunctionName?: ResolvedMachineFunctionName | null;
 }
+
+/**
+ * M1 临时单剧场桥请求（**不是新的 ERB wrapper 协议**）。
+ *
+ * 只用于把已经通过 allowlist 校验的新语法 Theater 映射成现有 `# 机` wrapper 所需的
+ * `KojoMachineDecl`；桥返回后仍走原 `wrapMachine`，因此不改变 `RETURN` / `LOCAL` / `_1`
+ * 的字节协议。M2 Target Registry 接管后删除。
+ */
+export interface SingleTheaterBridgeRequest {
+  readonly theater: KojoTheater;
+  readonly body: readonly string[];
+  readonly view: string | null;
+  readonly slots: readonly KojoHiddenSlot[];
+}
+
+export type SingleTheaterBridgeResult =
+  | { readonly kind: 'supported'; readonly machine: KojoMachineDecl }
+  | { readonly kind: 'unsupported'; readonly reason: string };
 
 /* ============================== 后端 ============================== */
 
@@ -452,4 +478,13 @@ export interface KojoEmitBackend {
    * 每个文件最多一个 `# 机`，调用一次；`@织` 不走这个钩子（它有自己的 weaveHeader/weaveFooter）。
    */
   readonly wrapMachine?: (request: MachineWrapRequest) => EmitResult;
+  /**
+   * M1 临时单剧场桥（可选，仅新语法单剧场且 location/time 均 unrestricted 时调用）。
+   *
+   * 返回 `supported` 时，core 用返回的 legacy `KojoMachineDecl` 调 `wrapMachine`；
+   * 返回 `unsupported` 或缺省时 fail-closed。M2 由统一 Target Registry 替代。
+   */
+  readonly temporarySingleTheaterBridge?: (
+    request: SingleTheaterBridgeRequest,
+  ) => SingleTheaterBridgeResult;
 }

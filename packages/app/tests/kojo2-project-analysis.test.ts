@@ -407,6 +407,12 @@ describe('空项目 · 单文件 · 坏文件', () => {
     expect(backward.problems.map(key)).toEqual(forward.problems.map(key));
   });
 
+  it('同一路径不同 layerId 是两份事实：去重键必须包含 layer', () => {
+    const zh = doc(A, ['# 机 开场', '# 视角 我', '> 中文层'], 'zh');
+    const ja = doc(A, ['# 机 开场', '# 视角 我', '> 日文层'], 'ja');
+    const result = analyzeKojo2Project({ documents: [zh, ja] });
+    expect(result.stats.documents).toBe(2);
+  });
   it('同一路径重复注入只算一次（身份唯一，不造出假重名）', () => {
     const once = analyzeKojo2Project({ documents: [DUP_A] });
     const twice = analyzeKojo2Project({ documents: [DUP_A, DUP_A] });

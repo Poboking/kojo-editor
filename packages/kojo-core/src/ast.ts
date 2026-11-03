@@ -440,12 +440,61 @@ export type KojoDispatchNode =
 /* ============================== 文件 ============================== */
 
 /**
+ * 剧场目标：M1 只保源切片；目标解析/注册表校验归后续层。
+ */
+export interface KojoTheaterTarget {
+  readonly raw: string;
+  readonly span: KojoSpan;
+}
+
+/**
+ * 剧场地点约束。省略字段与显式 不限 都是 unrestricted；前者 raw 为空、span 为 null，
+ * 后者保留 不限 原文与字段 span。
+ */
+export interface KojoTheaterLocation {
+  readonly kind: 'unrestricted' | 'exact';
+  readonly raw: string;
+  readonly span: KojoSpan | null;
+}
+
+/** 剧场时间约束；省略字段与显式 不限 的区分口径同 KojoTheaterLocation。 */
+export interface KojoTheaterTime {
+  readonly kind: 'unrestricted' | 'named';
+  readonly raw: string;
+  readonly span: KojoSpan | null;
+}
+
+/**
+ * 一个剧场：从剧场头开始，到下一条剧场头或 EOF 结束（不靠缩进收口）。
+ *
+ * origin = theater 时由新语法头产生；legacy-machine 是旧 # 机 文件为路由/桥接合成的
+ * 隐式剧场（legacyMachine 指向那条声明，场景仍是文件全部场景）。
+ */
+export interface KojoTheater {
+  readonly kind: 'theater';
+  readonly target: KojoTheaterTarget;
+  readonly location: KojoTheaterLocation;
+  readonly time: KojoTheaterTime;
+  readonly origin: 'theater' | 'legacy-machine';
+  readonly legacyMachine: KojoMachineDecl | null;
+  readonly scenes: readonly KojoSceneNode[];
+  readonly headerSpan: KojoSpan;
+  readonly bodySpan: KojoSpan | null;
+  readonly span: KojoSpan;
+}
+
+/**
  * 一个 2.0 源文件。声明提升（`decls` 独立于场景），`# 幕` 按书写顺序切成 `scenes`；
  * 没有 `# 幕` 或首个 `# 幕` 之前有正文时，用 `title: null` 的隐式场景承载。
+ * 剧场文件另给 `theaters`；`scenes` 保持源序扁平投影以兼容旧消费方。
  */
 export interface KojoFile {
   readonly decls: readonly KojoDecl[];
   readonly scenes: readonly KojoSceneNode[];
+  /** 新语法剧场列表（仅剧场/隐式 legacy 路径；旧消费方可忽略） */
+  readonly theaters?: readonly KojoTheater[];
+  /** 词法层是否见过剧场前缀（含半角/畸形头；compile 用它分流新旧路径） */
+  readonly hasTheaterSyntax?: boolean;
   /** 文件级诊断（词法/解析阶段）；类型与全局码表同源 */
   readonly diagnostics: readonly import('./diagnostics.js').KojoDiagnostic[];
 }

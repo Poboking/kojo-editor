@@ -19,11 +19,13 @@ import type {
   KojoEmitBackend,
   KojoExprText,
   KojoSpan,
+  KojoTheater,
   MachineWrapRequest,
   RandomEmitRequest,
+  SingleTheaterBridgeRequest,
   TextEmitRequest,
 } from '@kojo/kojo-core';
-import { isEmitFailure } from '@kojo/kojo-core';
+import { compileKojoSource, isEmitFailure } from '@kojo/kojo-core';
 
 import { createKojo2TranspileService } from '@kojo/plugin-kojo-sugar';
 
@@ -461,6 +463,30 @@ const MACHINE = {
   span: SPAN,
 };
 
+function theater(target: string): KojoTheater {
+  return {
+    kind: 'theater',
+    target: { raw: target, span: SPAN },
+    location: { kind: 'unrestricted', raw: '不限', span: null },
+    time: { kind: 'unrestricted', raw: '不限', span: null },
+    origin: 'theater',
+    legacyMachine: null,
+    scenes: [],
+    headerSpan: SPAN,
+    bodySpan: null,
+    span: SPAN,
+  };
+}
+
+function bridgeRequest(target: string): SingleTheaterBridgeRequest {
+  return {
+    theater: theater(target),
+    body: ['PRINTFORMW ……好。'],
+    view: '灵梦',
+    slots: [],
+  };
+}
+
 describe('eraTW backend：wrapMachine 事件头', () => {
   it('从 face-templates 派生根机函数名：wrapper + 伴生 _1 + 記入チェック信封', () => {
     const request: MachineWrapRequest = {
@@ -562,6 +588,42 @@ describe('eraTW backend：wrapMachine 事件头', () => {
     );
     expect(lines[1]).toBe('@M_KOJO_ENCOUNTER_K12');
     expect(lines).toContain('LOCAL = 0');
+  });
+});
+
+describe('eraTW backend：临时单剧场桥', () => {
+  it('初见 + charNo → 零参 synthetic # 机，仍由原 wrapMachine 落字节', () => {
+    const b = backend({ charNo: '12' });
+    const request = bridgeRequest('初见');
+    const result = b.temporarySingleTheaterBridge?.(request);
+
+    expect(result).toEqual({
+      kind: 'supported',
+      machine: { kind: 'machine', event: '初见', args: [], span: SPAN },
+    });
+    if (result?.kind !== 'supported') throw new Error('expected supported bridge');
+
+    const lines = asLines(
+      b.wrapMachine?.({ machine: result.machine, body: request.body, view: request.view, slots: request.slots }) ?? null,
+    );
+    expect(lines[1]).toBe('@M_KOJO_ENCOUNTER_K12');
+    expect(lines[2]).toBe('CALL M_KOJO_ENCOUNTER_K12_1');
+    expect(lines).toContain('    PRINTFORMW ……好。');
+  });
+
+  it('除初见外一律 deny（含需要 {i} 的指令、事件、正常位、未知目标）', () => {
+    const b = backend({ charNo: '12' });
+    for (const target of ['指令', '事件', '正常位', '不存在的剧场']) {
+      const result = b.temporarySingleTheaterBridge?.(bridgeRequest(target));
+      expect(result?.kind).toBe('unsupported');
+      if (result?.kind === 'unsupported') expect(result.reason.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('初见但缺 charNo → deny', () => {
+    const result = backend({ charNo: '' }).temporarySingleTheaterBridge?.(bridgeRequest('初见'));
+    expect(result?.kind).toBe('unsupported');
+    if (result?.kind === 'unsupported') expect(result.reason).toContain('charNo');
   });
 });
 
@@ -822,5 +884,82 @@ describe('eraTW backend：集成 golden（.kojo2 → ERB 逐字节）', () => {
     expect(lines[5]).toMatch(/^#DIM __kojo_rand_\d+$/);
     expect(listener).toContain('__kojo_table_心情 = TALENT:TARGET:恋慕');
     expect(listener).toMatch(/__kojo_rand_\d+ = RAND:2/);
+  });
+});
+
+
+/* ============================== 9. M1 新旧语法 wrapper 兼容 ============================== */
+
+describe('M1 新旧语法 wrapper：旧 # 机 初见 与 【剧场：初见】逐字一致', () => {
+  function compilePair(oldSource: string, newSource: string) {
+    const oldResult = compileKojoSource({
+      source: oldSource,
+      adapter: ERATW_GAME_ADAPTER,
+      backend: backend(),
+    });
+    const newResult = compileKojoSource({
+      source: newSource,
+      adapter: ERATW_GAME_ADAPTER,
+      backend: backend(),
+    });
+    return { oldResult, newResult };
+  }
+
+  it('简单正文 ERB 逐字一致', () => {
+    const body = ['# 视角 灵梦', '> 同一段正文'];
+    const { oldResult, newResult } = compilePair(
+      ['# 机 初见', ...body].join('\n'),
+      ['【剧场：初见】', ...body].join('\n'),
+    );
+
+    expect(oldResult.ok).toBe(true);
+    expect(newResult.ok).toBe(true);
+    expect(newResult.erb).toBe(oldResult.erb);
+    expect(newResult.erb).toContain('@M_KOJO_ENCOUNTER_K12');
+    expect(newResult.erb).toContain('CALL M_KOJO_ENCOUNTER_K12_1');
+    expect(newResult.erb).not.toContain('CALL M_KOJO_ENCOUNTER_K12_1(');
+  });
+
+  it('# 对照表 隐藏槽 ERB 与 slots 逐字一致', () => {
+    const body = [
+      '# 视角 灵梦',
+      '# 对照表 心情 依据 恋慕',
+      '    0..99 -> "疏远"',
+      '    100.. -> "亲近"',
+      '    否 -> "未知"',
+      '> 关系：{心情}',
+    ];
+    const { oldResult, newResult } = compilePair(
+      ['# 机 初见', ...body].join('\n'),
+      ['【剧场：初见】', ...body].join('\n'),
+    );
+
+    expect(oldResult.ok).toBe(true);
+    expect(newResult.ok).toBe(true);
+    expect(newResult.erb).toBe(oldResult.erb);
+    expect(newResult.slots).toEqual(oldResult.slots);
+    expect(newResult.slots.map((slot) => slot.name)).toEqual([
+      '__kojo_table_心情',
+      '__kojo_table_心情__value',
+    ]);
+  });
+
+  it('@织 文件级装配 ERB 逐字一致且监听只装配一次', () => {
+    const body = [
+      '# 视角 灵梦',
+      '> 同一段正文',
+      '@织 初见',
+      '    > 监听体',
+    ];
+    const { oldResult, newResult } = compilePair(
+      ['# 机 初见', ...body].join('\n'),
+      ['【剧场：初见】', ...body].join('\n'),
+    );
+    const weaveCount = (erb: string): number => erb.split(';kojo2: @织 初见').length - 1;
+
+    expect(oldResult.ok).toBe(true);
+    expect(newResult.ok).toBe(true);
+    expect(newResult.erb).toBe(oldResult.erb);
+    expect(weaveCount(newResult.erb)).toBe(1);
   });
 });

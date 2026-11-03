@@ -62,11 +62,14 @@ import type {
   KojoHiddenSlot,
   KojoLoweringProfile,
   KojoDiagnostic,
+  KojoMachineDecl,
   MachineWrapRequest,
   OptionsEmitRequest,
   PoolDispatchEmitRequest,
   RandomEmitRequest,
   ResolvedWait,
+  SingleTheaterBridgeRequest,
+  SingleTheaterBridgeResult,
   TableDispatchEmitRequest,
   TextEmitRequest,
   WeaveEmitRequest,
@@ -509,7 +512,19 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
   /* ---------- `# 机` 事件头 ---------- */
 
   /** 渲染口上函数名（`{t}` / `{n}` / `{i}` + `${段}`）；缺占位值即 fail-closed */
-  function renderMachineName(machine: MachineWrapRequest['machine']): string | EmitFailure {
+  function renderMachineName(
+    machine: MachineWrapRequest['machine'],
+    resolvedFunctionName?: MachineWrapRequest['resolvedFunctionName'],
+  ): string | EmitFailure {
+    if (resolvedFunctionName !== undefined && resolvedFunctionName !== null) {
+      if (resolvedFunctionName.kind === 'unsupported') {
+        return fail('项目级 TargetRegistry 已把目标标成 unsupported：backend 不生成事件头。', machine.span);
+      }
+      if (resolvedFunctionName.kind !== 'resolved' || resolvedFunctionName.name === null || resolvedFunctionName.name.length === 0) {
+        return fail('目标函数名未解析（' + resolvedFunctionName.kind + '）：backend 不猜名字、不产出半成品。', machine.span);
+      }
+      return resolvedFunctionName.name;
+    }
     const face = FACE_TABLE.faces[machine.event];
     if (face === undefined) {
       return fail(
@@ -724,7 +739,7 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
     },
 
     wrapMachine(request: MachineWrapRequest): EmitResult {
-      const name = renderMachineName(request.machine);
+      const name = renderMachineName(request.machine, request.resolvedFunctionName);
       if (isEmitFailure(name)) return name;
 
       const params: string =
@@ -759,6 +774,62 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
       }
       lines.push('RETURN 1');
       return lines;
+    },
+
+    /**
+     * M1 临时单剧场桥：**只**把 allowlist 里的 `初见` 映射成既有 `# 机` 声明。
+     *
+     * 这里不生成 ERB、不扩展 wrapper 协议：真正的字节仍由上面的 `wrapMachine` 产生。
+     * 除 `初见` 外一律 unsupported（不回退、不按其它 face 模板猜调用面）；模板含
+     * `{i}` / `${…}` 时也拒绝，因为零参 `# 机` 无法为它们提供语义。
+     */
+    temporarySingleTheaterBridge(
+      request: SingleTheaterBridgeRequest,
+    ): SingleTheaterBridgeResult {
+      const target = request.theater.target.raw;
+      if (target !== '初见') {
+        return {
+          kind: 'unsupported',
+          reason: `M1 临时单剧场桥仅支持「初见」，不接受目标「${target}」。`,
+        };
+      }
+
+      const face = FACE_TABLE.faces[target];
+      if (face === undefined) {
+        return { kind: 'unsupported', reason: 'eraTW 的 face-templates 缺少「初见」面。' };
+      }
+      if (
+        face.template !== 'M_KOJO{t}_ENCOUNTER_K{n}' ||
+        face.template.includes('{i}') ||
+        face.template.includes('${')
+      ) {
+        return {
+          kind: 'unsupported',
+          reason: '「初见」模板必须是 M_KOJO{t}_ENCOUNTER_K{n}，且不能含 {i} 或 ${…}。',
+        };
+      }
+
+      if (deps.charNo === undefined || deps.charNo.length === 0) {
+        return {
+          kind: 'unsupported',
+          reason: '「初见」模板需要 charNo（{n}），但 backend 未注入。',
+        };
+      }
+
+      const machine: KojoMachineDecl = {
+        kind: 'machine',
+        event: '初见',
+        args: [],
+        span: request.theater.headerSpan,
+      };
+      const name = renderMachineName(machine);
+      if (isEmitFailure(name)) {
+        return {
+          kind: 'unsupported',
+          reason: '「初见」事件头无法由 face-templates 渲染（口上函数名求值失败）。',
+        };
+      }
+      return { kind: 'supported', machine };
     },
   });
 }

@@ -653,7 +653,7 @@ describe('parse：入口契约', () => {
 
 describe('parse：空文件', () => {
   it('空源码 = 空文件，无诊断', () => {
-    expect(parseSource('')).toEqual({ decls: [], scenes: [], diagnostics: [] });
+    expect(parseSource('')).toEqual({ decls: [], scenes: [], theaters: [], hasTheaterSyntax: false, diagnostics: [] });
   });
 });
 

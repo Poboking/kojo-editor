@@ -48,6 +48,7 @@ export function registerKojo2Adapter(gameId: string, adapter: Kojo2GameAdapter):
   kojo2Adapters.set(gameId, adapter);
 }
 
+
 /**
  * 按当前项目取 2.0 adapter：没开项目 / 没有 `adapterId` / 该游戏没有 2.0 面 ⇒ `null`。
  * **不猜**：宁可零候选，不借别游戏的事实。

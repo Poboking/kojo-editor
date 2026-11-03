@@ -70,7 +70,7 @@
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
 import type { GameProject, LineDecoration } from '@kojo/plugin-api';
-import { isPathUnder, pathKey } from '@kojo/plugin-api';
+import { pathKey } from '@kojo/plugin-api';
 // 不吃任何具体 adapter：入口 D（2026-10-25）之前这里静态 import 了 eraTW 的
 // `ERATW_GAME_ADAPTER` + `createEratwEmitBackend`，于是打开 eraFL 工程时波浪线是拿 eraTW
 // 的落点规则算的——不报错、只是错。B3 收口之后两面（adapter + backend）由**插件**经
@@ -423,36 +423,7 @@ export function createSlotKojo2Diagnose(options: Kojo2SlotDiagnoseOptions): Kojo
   };
 }
 
-/**
- * 从 `GameProject.charaIndex` 推角色号：**最长目录前缀**命中者胜（与文件树分组的
- * `kojoOwners` 同一条"长前缀优先"口径，避免嵌套目录误归属）。
- *
- * 纯函数、零 IO；`charaIndex` 缺席 / 文件不在任何 `kojoDir` 下 ⇒ `undefined`（不猜）。
- * 路径归一走契约的 `pathKey`（Windows 分隔符 / 大小写差异下同一个文件必须判得上）。
- */
-export function charNoForProjectPath(project: GameProject | null, filePath: string): string | undefined {
-  if (project === null) return undefined;
-  // 契约上 `charaIndex` 是必填，但 `kernel.project.current()` 交给这里的是**运行期对象**：
-  // 工程正在装载时它可能还是半成品。少了索引就让"这条链路抛 TypeError"顶掉真正的诊断
-  // 结论（`onFailure` 会把 `Cannot read properties of undefined` 原样抖给作者），
-  // 而正确语义是"推不出角色号"——由 backend 的 fail-closed 如实报缺。
-  const index: GameProject['charaIndex'] | undefined = project.charaIndex;
-  if (index === undefined || index === null || typeof index.values !== 'function') return undefined;
-  let bestLength = -1;
-  let found: string | undefined;
-  for (const chara of index.values()) {
-    if (typeof chara.kojoDir !== 'string' || chara.kojoDir.length === 0) continue;
-    // 归属判据（分隔符 / 大小写）走契约的 `isPathUnder`，不在这里手写 startsWith——
-    // win32 归一化后的分隔符是 `\`，拿 `/` 拼前缀在 Windows 上会恒定判不上。
-    if (!isPathUnder(chara.kojoDir, filePath)) continue;
-    const length = pathKey(chara.kojoDir).length;
-    if (length > bestLength) {
-      bestLength = length;
-      found = String(chara.no);
-    }
-  }
-  return found;
-}
+export { charNoForProjectPath } from './kojo2-file-context.js';
 
 /** 从 kernel 现取项目（项目可开可关；每次诊断再读，不缓存上一个项目的事实） */
 function projectOfKernel(kernel: Kernel): GameProject | null {

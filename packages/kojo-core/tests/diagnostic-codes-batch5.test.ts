@@ -89,6 +89,14 @@ const NATIVE_BRACE_CODES: readonly CoreDiagnosticCode[] = ['core/native/unclosed
  * （`surface-map.ts::checkSurfaceMap`），三枚**全 error**——车② 的判据就是"错配必红"，
  * 降级成 warning 等于把方言包的数据写反说成"仅供参考"。
  */
+/** M1 Theater 语法前端新增五枚（全 error；isolation 是内部不变量防线）。 */
+const M1_THEATER_CODES: readonly CoreDiagnosticCode[] = [
+  'core/theater/syntax',
+  'core/theater/mixed-machine',
+  'core/theater/body-before-header',
+  'core/theater/not-top-level',
+  'core/theater/isolation',
+];
 const LAUD4_SURFACE_CODES: readonly CoreDiagnosticCode[] = [
   'core/surface/dangling',
   'core/surface/contested',
@@ -187,7 +195,7 @@ describe('码表 · 闭集只增（S5.6）', () => {
     const baseline = new Set(BATCH4_BASELINE);
     const added = declared.filter((code) => !baseline.has(code));
     expect(added.sort()).toEqual(
-      [...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES, ...LAU6_CODES, ...NATIVE_BRACE_CODES, ...LAUD4_SURFACE_CODES].sort(),
+      [...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES, ...LAU6_CODES, ...NATIVE_BRACE_CODES, ...LAUD4_SURFACE_CODES, ...M1_THEATER_CODES].sort(),
     );
   });
 

@@ -106,6 +106,75 @@ export type {
   KojoDiagnostic,
 } from '@kojo/kojo-core';
 
+/* ---------- 游戏侧：M2 项目级契约（`@kojo/kojo-core`） ---------- */
+
+export type {
+  /** 项目事实源：文件 / Theater / 诊断 / 部分失败状态（不是可发布产物） */
+  ProjectIR,
+  ProjectFileIR,
+  ProjectTheaterIR,
+  ProjectBuildResult,
+  /** 标识：文件 / Theater / 规范化目标 / 注册表（字符串别名，格式由实现决定，不是显示路径） */
+  ProjectFileId,
+  TheaterId,
+  CanonicalTargetId,
+  RegistryId,
+  /** 项目诊断：primary + related 指向文件与 span，不改单文件 `KojoDiagnostic` 的形状 */
+  ProjectDiagnostic,
+  ProjectDiagnosticKind,
+  ProjectLocation,
+  ProjectLocationRole,
+  /** 分析覆盖 / 整体构建 / 单个 Theater 链接：三根轴，不得互相顶替 */
+  ProjectAnalysisStatus,
+  ProjectBuildStatus,
+  ProjectTheaterLinkStatus,
+  /** 项目 provenance：进缓存键，任一字段变化都使项目产物失效 */
+  ProjectBuildProvenance,
+  /** 构造输入：Host 已算好的身份 / 已解析的 AST，进 Core 后不重解析 */
+  ProjectFileIdentity,
+  ProjectFileInput,
+  ProjectIRInput,
+  ProjectTheaterLoweringInput,
+  /** source map 的纯数据投影：只有数组 / 普通对象 / 数字 / 字符串 / null，没有方法 */
+  SourceMapData,
+  SourceMapLineData,
+  /** 目标登记：登记状态与编译支持状态分离，二者不得混用 */
+  TargetRegistry,
+  TargetDescriptor,
+  TargetResolution,
+  TargetResolutionRequest,
+  TargetRegistrationStatus,
+  TargetCompileSupport,
+  TargetRegistryValidationIssue,
+  /** 函数名上下文（Host 文件事实）与解析结果（缺失 ≠ 空串，Core 不补默认） */
+  FunctionNameContext,
+  FunctionNameResolution,
+  FunctionNameResolutionKind,
+  FunctionNameContextKey,
+  FunctionNameIndexOrigin,
+  FunctionNameSourceArgs,
+  FunctionNameRequest,
+  FunctionNameTemplate,
+  FunctionNameParameterRule,
+  FunctionNameParameterSource,
+  FunctionNameParameterToken,
+  /** 调用签名与运行时协议：M2 只做元数据，不执行运行时协议、不据此选 Theater */
+  CallSignature,
+  RuntimeProtocolDescriptor,
+  /** 静态链接：groups 是索引不是运行时唯一选择；M2 不产 dispatch ERB */
+  LinkedProject,
+  LinkedTheaterGroup,
+  ResolvedTheater,
+  ExactTheaterKey,
+  TheaterDuplicateFact,
+  ProjectLinkResult,
+  /** 项目级编译编排：`theaterErb` 只是附加视图，失败项目不发布部分产物 */
+  ProjectCompileFileInput,
+  ProjectCompileInput,
+  ProjectCompileResult,
+  ProjectTheaterErb,
+} from '@kojo/kojo-core';
+
 /* ---------- 编辑器侧：`ui.monaco.language`（`@kojo/plugin-api`） ---------- */
 
 export type {

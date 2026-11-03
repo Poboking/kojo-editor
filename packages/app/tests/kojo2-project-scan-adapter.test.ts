@@ -23,7 +23,9 @@ import {
   analyzeKojo2Project,
   analyzeKojo2ProjectAsync,
   kojo2ProjectPassEnabled,
+  resolveKojo2FunctionNameContext,
   resolveKojo2ProjectAdapter,
+  type Kojo2FunctionNameContextResolver,
   type Kojo2ProjectAdapterFacts,
   type Kojo2ProjectAdapterGetter,
   type Kojo2ProjectDocument,
@@ -343,6 +345,68 @@ describe('createLazyKojo2ProjectOptions', () => {
     // 接线文件不许被调度器静态拉进来（否则装配面工厂白设）：只允许 type import。
     const schedule = read('packages/app/src/ui/project-scan-schedule.ts');
     expect(schedule).not.toMatch(/from\s+['"]\.\/kojo2-project-scan-adapter['"]/);
+  });
+});
+
+/* ============================== 3b. Host 函数名上下文注入边界（D3） ============================== */
+
+describe('contextOf · Host 函数名上下文（同步；缺席 ≠ 空串）', () => {
+  const P = `${ROOT}/ctx/a.kojo2`;
+  const ONE = doc(P, ['@函 a()', '    @返 1']);
+
+  it('分析 pass 未注入 contextOf：每份文档上下文 = {}，没有 familySegment own property', () => {
+    const result = analyzeKojo2Project({ documents: [ONE] });
+    expect(result.functionNameContexts).toHaveLength(1);
+    const context = result.functionNameContexts[0]?.context;
+    expect(context).toEqual({});
+    expect(Object.hasOwn(context ?? {}, 'familySegment')).toBe(false);
+    expect(Object.hasOwn(context ?? {}, 'charNo')).toBe(false);
+  });
+
+  it('显式空串 familySegment 经分析 pass 保留（own property，且不变成缺席）', () => {
+    const result = analyzeKojo2Project({
+      documents: [ONE],
+      contextOf: () => ({ familySegment: '' }),
+    });
+    const context = result.functionNameContexts[0]?.context ?? {};
+    expect(Object.hasOwn(context, 'familySegment')).toBe(true);
+    expect(context.familySegment).toBe('');
+  });
+
+  it('同一 path 不同 layerId 的上下文各自独立（身份 = path + layer，不互相覆盖）', () => {
+    const contextOf = vi.fn((file: { path: string; layerId: string | null }) => ({
+      familySegment: file.layerId === 'overlay' ? '译' : '',
+    }));
+    const result = analyzeKojo2Project({
+      documents: [
+        { ...doc(P, ['@函 a()', '    @返 1']), layerId: 'base' },
+        { ...doc(P, ['@函 b()', '    @返 2']), layerId: 'overlay' },
+      ],
+      contextOf,
+    });
+    expect(result.functionNameContexts).toHaveLength(2);
+    expect(result.functionNameContexts.map((fact) => fact.layerId)).toEqual(['base', 'overlay']);
+    expect(result.functionNameContexts[0]?.path).toBe(P);
+    expect(result.functionNameContexts[1]?.path).toBe(P);
+    expect(result.functionNameContexts[0]?.context).toEqual({ familySegment: '' });
+    expect(result.functionNameContexts[1]?.context).toEqual({ familySegment: '译' });
+    expect(contextOf).toHaveBeenCalledTimes(2);
+    expect(contextOf).toHaveBeenCalledWith({ path: P, layerId: 'base' });
+    expect(contextOf).toHaveBeenCalledWith({ path: P, layerId: 'overlay' });
+  });
+
+  it('resolveKojo2FunctionNameContext：注入器缺席 ⇒ {}（不补默认 familySegment）', () => {
+    expect(resolveKojo2FunctionNameContext(undefined, { path: P, layerId: null })).toEqual({});
+    expect(Object.hasOwn(resolveKojo2FunctionNameContext(undefined, { path: P }), 'familySegment')).toBe(
+      false,
+    );
+  });
+
+  it('createLazyKojo2ProjectOptions 原样保留 contextOf（工厂不调它、不加 IO）', () => {
+    const contextOf = vi.fn<Kojo2FunctionNameContextResolver>(() => ({ familySegment: '' }));
+    const options = createLazyKojo2ProjectOptions({ isEnabled: () => true, contextOf });
+    expect(options.contextOf).toBe(contextOf);
+    expect(contextOf).not.toHaveBeenCalled();
   });
 });
 

@@ -366,6 +366,7 @@ function collectOccurrences(
       case 'blank':
       case 'blankLine':
       case 'options':
+      case 'theater':
         continue;
       case 'decl':
         if (line.word === SCENE_WORD || line.word === VIEW_WORD) continue;
