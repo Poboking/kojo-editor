@@ -8,7 +8,7 @@ import type {
   ResolvedTheater,
   SourceMapPolicy,
 } from '../src/index.js';
-import { selectRuntimeTheater } from '../src/index.js';
+import { buildProjectDispatchPlan, dispatchTargetPlanOf, selectRuntimeTheater } from '../src/index.js';
 
 const CAPABILITY: Capability = {
   executesCode: false,
@@ -181,5 +181,34 @@ describe('M3 Runtime Matcher · location/time 选择', () => {
       });
       expect(result.candidates[0]?.specificity).toBe(item.score);
     }
+  });
+});
+describe('M3 Dispatch Plan · 候选组 → 确定性分支计划', () => {
+  it('branches 按 specificity 降序，fileName 从 resolution 原样带出', () => {
+    const wildcard = theater({ fileId: 'file:wildcard', location: location('unrestricted', ''), time: time('unrestricted', '') });
+    const named = theater({ fileId: 'file:named', location: location('unrestricted', ''), time: time('named', '夜晚') });
+    const exact = theater({ fileId: 'file:exact', location: location('exact', '神社'), time: time('unrestricted', '') });
+    const both = theater({ fileId: 'file:both', location: location('exact', '神社'), time: time('named', '夜晚') });
+    const plan = buildProjectDispatchPlan(linked([wildcard, named, exact, both]));
+    expect(plan.status).toBe('ready');
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.targets[0]?.branches.map((branch) => branch.specificity)).toEqual([3, 2, 1, 0]);
+    expect(plan.targets[0]?.branches.every((branch) => branch.functionName === 'M_KOJO_ENCOUNTER_K12')).toBe(true);
+  });
+
+  it('duplicate 组阻断计划，并点名全部候选', () => {
+    const a = theater({ fileId: 'file:a', location: location('unrestricted', ''), time: time('unrestricted', '') });
+    const b = theater({ fileId: 'file:b', location: location('unrestricted', ''), time: time('unrestricted', '') });
+    const plan = buildProjectDispatchPlan(linked([a, b], true));
+    expect(plan.status).toBe('blocked');
+    expect(plan.diagnostics[0]?.code).toBe('dispatch/duplicate-group');
+    expect(plan.diagnostics[0]?.candidateTheaterIds).toEqual([a.theaterId, b.theaterId]);
+  });
+
+  it('dispatchTargetPlanOf 取目标计划，未知 target 返回 null', () => {
+    const one = theater({ fileId: 'file:one', location: location('exact', '神社'), time: time('unrestricted', '') });
+    const plan = buildProjectDispatchPlan(linked([one]));
+    expect(dispatchTargetPlanOf(plan, 'target.初见')?.branches).toHaveLength(1);
+    expect(dispatchTargetPlanOf(plan, 'target.不存在')).toBeNull();
   });
 });

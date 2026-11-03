@@ -98,5 +98,5 @@ describe('PERF-POOL · 分池判据', () => {
     expect(perfConfig.test?.hookTimeout).toBe(120000);
     // alias 只有一份：计时池直接复用主配置的 resolve
     expect(perfConfig.resolve).toBe(mainConfig.resolve);
-  });
+  }, 120_000); // 全仓配置扫描：满载并行下 I/O 可超默认 20s；判据本身不放宽
 });

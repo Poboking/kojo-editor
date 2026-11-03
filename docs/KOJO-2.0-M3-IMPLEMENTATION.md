@@ -36,3 +36,18 @@ const result = selectRuntimeTheater({
 
 - `packages/kojo-core/tests/runtime-matcher.test.ts`：纯选择矩阵。
 - `packages/plugins/eratw-adapter/tests/kojo2/m3-runtime-matcher.test.ts`：与 `compileProject` 的端到端接缝。
+
+## Dispatch Plan（第二阶段）
+
+- `buildProjectDispatchPlan(linkedProject)`：把候选组转成确定性纯数据计划。
+- `DispatchTargetPlan`：每个 canonical target 的分支表；`branches` 按 specificity 降序，再按 fileId/span/theaterId 稳定排序。
+- `DispatchBranch`：携带 theaterId、functionName、location/time kind/raw、specificity、sourceSpan。
+- duplicate 组阻断计划（`dispatch/duplicate-group`）；无 supported 分支也阻断（`dispatch/no-supported-theater`）。
+- `dispatchTargetPlanOf(plan, canonicalId)`：按目标取计划。
+- 本阶段仍不生成 ERB；adapter 运行时变量与最终 dispatch 渲染属于下一批。
+
+## 当前未实现
+
+- 最终 dispatch ERB 与 adapter 专用运行时变量绑定。
+- 地点/时间别名、区间、继承。
+- `runtimeProtocol.metadata` 的专用匹配策略。

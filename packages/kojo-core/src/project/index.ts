@@ -17,3 +17,4 @@ export * from './target-registry.js';
 export * from './linker.js';
 export * from './compile-project.js';
 export * from './runtime-matcher.js';
+export * from './dispatch-plan.js';

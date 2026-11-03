@@ -3,6 +3,8 @@ import {
   compileProject,
   createProjectFileIdentity,
   parseSource,
+  buildProjectDispatchPlan,
+  dispatchTargetPlanOf,
   selectRuntimeTheater,
   type LinkedProject,
   type ProjectBuildProvenance,
@@ -141,5 +143,22 @@ describe('M3 Runtime Matcher · 与 M2 compileProject 的端到端接缝', () =>
       }).selected?.engineFunctionName.name ?? null;
     expect(pick(backward)).toBe(pick(forward));
     expect(pick(forward)).toContain('K14');
+  });
+});
+describe('M3 Dispatch Plan · compileProject 候选组', () => {
+  it('计划只列 supported 分支，按 specificity 降序', () => {
+    const project = linked(compile([SHRINE, SCHOOL, SCHOOL_NIGHT]));
+    const plan = buildProjectDispatchPlan(project);
+    expect(plan.status).toBe('ready');
+    const target = dispatchTargetPlanOf(plan, 'eratw.event.初见');
+    expect(target?.branches.map((branch) => branch.specificity)).toEqual([3, 2, 2]);
+    expect(target?.branches[0]?.functionName).toContain('K14');
+  });
+
+  it('计划仍保留文件输入无关的稳定顺序', () => {
+    const forward = buildProjectDispatchPlan(linked(compile([SHRINE, SCHOOL, SCHOOL_NIGHT])));
+    const backward = buildProjectDispatchPlan(linked(compile([SCHOOL_NIGHT, SCHOOL, SHRINE])));
+    expect(backward.targets).toEqual(forward.targets);
+    expect(backward.diagnostics).toEqual(forward.diagnostics);
   });
 });

@@ -209,6 +209,13 @@ export type {
   RuntimeSelectionDiagnosticCode,
   RuntimeSelectionDiagnostic,
   RuntimeSelection,
+  /** M3 dispatch plan: deterministic branch table, no ERB. */
+  DispatchBranch,
+  DispatchTargetPlan,
+  DispatchPlanStatus,
+  DispatchPlanDiagnosticCode,
+  DispatchPlanDiagnostic,
+  ProjectDispatchPlan,
 } from '@kojo/kojo-core';
 /* ---------- 编辑器侧：`ui.editor.languageService`（`@kojo/plugin-api`） ---------- */
 
