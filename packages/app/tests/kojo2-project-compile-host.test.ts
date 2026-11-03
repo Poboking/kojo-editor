@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GameProject } from '@kojo/plugin-api';
-import { ERATW_GAME_ADAPTER, ERATW_TARGET_REGISTRY } from '@kojo/plugin-eratw-adapter';
+import { ERATW_DISPATCH_SELECTORS, ERATW_GAME_ADAPTER, ERATW_TARGET_REGISTRY } from '@kojo/plugin-eratw-adapter';
 import { createEratwEmitBackend } from '../../plugins/eratw-adapter/src/kojo2/backend';
 import { ERATW_CAPABILITY, ERATW_SOURCE_MAP } from '../../plugins/eratw-adapter/src/kojo2/capabilities';
 import type { ProjectBuildProvenance } from '@kojo/kojo-core';
@@ -115,6 +115,7 @@ describe('Host compileKojo2Project · M3 dispatch', () => {
   const DOCS = [
     { path: 'D:/p/kojo/12/a.kojo2', text: '【剧场：初见｜神社】\n# 视角 灵梦\n> 甲\n' },
     { path: 'D:/p/kojo/12/b.kojo2', text: '【剧场：初见｜学校】\n# 视角 灵梦\n> 乙\n' },
+    { path: 'D:/p/kojo/12/c.kojo2', text: '【剧场：初见｜学校｜夜】\n# 视角 灵梦\n> 丙\n' },
   ] as const;
 
   it('dispatchSelectors + requireDispatch 走 Host 统一注入并产出最终 dispatch ERB', () => {
@@ -127,14 +128,15 @@ describe('Host compileKojo2Project · M3 dispatch', () => {
       backend: backend(),
       registry: ERATW_TARGET_REGISTRY,
       contextOf: () => ({ charNo: '12', familySegment: '' }),
-      dispatchSelectors: { locationExpr: 'LOCATION', timeExpr: 'TIME' },
+      dispatchSelectors: ERATW_DISPATCH_SELECTORS,
       requireDispatch: true,
     });
 
     expect(result.build.buildStatus).toBe('succeeded');
     expect(result.dispatchComplete).toBe(true);
     expect(result.dispatchErb).toHaveLength(1);
-    expect(result.dispatchErb[0]?.erb).toContain('IF LOCATION == "神社"');
+    expect(result.dispatchErb[0]?.erb).toContain('IF NAME_FROM_PLACE(CFLAG:MASTER:現在位置) == "神社"');
+    expect(result.dispatchErb[0]?.erb).toContain('IF TIME:2 == 6');
     expect(result.dispatchErb[0]?.erb).toContain('CALL M_KOJO_ENCOUNTER_K12__D1');
   });
 

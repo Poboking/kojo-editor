@@ -103,6 +103,27 @@ export interface EratwDispatchSelectors {
   readonly timeExpr: string;
 }
 
+/** eraTW 真实 runtime selector（语料取证；见 M3 文档）。 */
+export const ERATW_DISPATCH_SELECTORS: EratwDispatchSelectors = Object.freeze({
+  locationExpr: 'NAME_FROM_PLACE(CFLAG:MASTER:現在位置)',
+  timeExpr: 'TIME:2',
+});
+
+/** DIM.ERH:182 的七个时辰带；只登记有声明依据的名字。 */
+export const ERATW_TIME_BAND_VALUES: Readonly<Record<string, string>> = Object.freeze({
+  早朝: '1',
+  正午前: '2',
+  昼: '3',
+  昼下がり: '4',
+  夕: '5',
+  夜: '6',
+  深夜: '7',
+});
+
+function eratwTimeBandValue(raw: string): string | null {
+  return ERATW_TIME_BAND_VALUES[raw] ?? null;
+}
+
 export interface EratwEmitDeps {
   /** M3 dispatch ERB 的运行时 selector；缺省时含 exact/named 分支会 fail-closed。 */
   readonly dispatchSelectors?: EratwDispatchSelectors;
@@ -829,9 +850,11 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
           if (selectors === undefined) {
             return fail('M3 dispatch 含 named time 分支，但 Host 没有注入 timeExpr。', branch.span);
           }
-          const literal = dispatchLiteral(branch.timeRaw, branch.span);
-          if (isEmitFailure(literal)) return literal;
-          conditions.push(`${selectors.timeExpr} == ${literal}`);
+          const timeValue = eratwTimeBandValue(branch.timeRaw);
+          if (timeValue === null) {
+            return fail(`M3 dispatch 未登记的时辰名「${branch.timeRaw}」：拒绝猜 TIME:2 数值。`, branch.span);
+          }
+          conditions.push(`${selectors.timeExpr} == ${timeValue}`);
         }
         const branchName = `${request.functionName}__D${index + 1}`;
         let depth = 0;

@@ -67,4 +67,39 @@ const result = selectRuntimeTheater({
 - `compileKojo2Project` 同样接受 `dispatchSelectors` / `requireDispatch` 并原样转给 core。
 - `DispatchRenderRequest.selectors` 是 Host 事实；adapter 只能消费，不得自己补默认变量名。
 - 旧 `createEratwEmitBackend({ dispatchSelectors })` 仅保留为兼容回退；新调用应走项目编译输入。
-- 真实 eraTW selector 仍未被仓内证据证明；生产调用必须先显式配置，缺失时 M3 dispatch 保持 fail-closed。
+- 真实 eraTW selector 已在第五阶段用语料取证；Host 应直接注入 `ERATW_DISPATCH_SELECTORS`，缺失时 M3 dispatch 仍保持 fail-closed。
+
+## 真实语料 selector 取证（第五阶段）
+
+语料：`D:\Game\eraTW4.981-261017-EAGLOV3`。
+
+- 地点：`CFLAG:MASTER:現在位置` 是玩家地点 ID（`ANOTHER_TALK.ERB` / `COMMON.ERB` 大量使用）；
+  `NAME_FROM_PLACE(PLACE_ID)` 是既有地点 ID → 地点名函数（`fromEN/LOCATIONS/LOCATION_PRINT.ERB`）。
+  因此地点 selector 写为 `NAME_FROM_PLACE(CFLAG:MASTER:現在位置)`。
+- 时间：`TIME:2` 是时辰带；`ERB/DIM.ERH:182` 明确 1=早朝(4-6)、2=正午前(6-12)、3=昼(12-15)、
+  4=昼下がり(15-18)、5=夕(18-20)、6=夜(20-23)、7=深夜(23-4)。
+- adapter 导出：`ERATW_DISPATCH_SELECTORS` 与 `ERATW_TIME_BAND_VALUES`。
+- 时辰名只按上述七个有依据的名字映射；例如 `夜` → `TIME:2 == 6`。未登记名字（如 `夜晚`）fail-closed，不猜数值。
+
+Host 用法：
+
+```ts
+import { ERATW_DISPATCH_SELECTORS } from '@kojo/plugin-eratw-adapter';
+
+compileKojo2Project({
+  // ...
+  dispatchSelectors: ERATW_DISPATCH_SELECTORS,
+  requireDispatch: true,
+});
+```
+
+产物形状：
+
+```erb
+IF NAME_FROM_PLACE(CFLAG:MASTER:現在位置) == "神社"
+    IF TIME:2 == 6
+        CALL M_KOJO_ENCOUNTER_K12__D1
+        RETURN RESULT
+    ENDIF
+ENDIF
+```

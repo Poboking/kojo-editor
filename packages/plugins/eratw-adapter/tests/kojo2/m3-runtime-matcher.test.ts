@@ -15,6 +15,8 @@ import { pathKey, stableHash } from '@kojo/plugin-api';
 import {
   createEratwEmitBackend,
   ERATW_CAPABILITY,
+  ERATW_DISPATCH_SELECTORS,
+  ERATW_TIME_BAND_VALUES,
   ERATW_GAME_ADAPTER,
   ERATW_SOURCE_MAP,
   ERATW_TARGET_REGISTRY,
@@ -82,7 +84,7 @@ const SHRINE_12 = fileInput('D:/proj/11-shrine.kojo2', source('【剧场：初�
 const SCHOOL_12 = fileInput('D:/proj/12-school.kojo2', source('【剧场：初见｜学校】', '学校'), '12');
 const SCHOOL_NIGHT_12 = fileInput(
   'D:/proj/13-school-night.kojo2',
-  source('【剧场：初见｜学校｜夜晚】', '夜校'),
+  source('【剧场：初见｜学校｜夜】', '夜校'),
   '12',
 );
 
@@ -192,7 +194,7 @@ describe('M3 Dispatch Plan · 事件函数身份拆分', () => {
 describe('M3 Dispatch ERB · 同函数名合并', () => {
   it('同角色同目标不同地点合成一个事件函数 + 唯一 branch 函数', () => {
     const result = compile([SHRINE_12, SCHOOL_12, SCHOOL_NIGHT_12], {
-      dispatchSelectors: { locationExpr: 'LOCATION', timeExpr: 'TIME' },
+      dispatchSelectors: ERATW_DISPATCH_SELECTORS,
       requireDispatch: true,
     });
     expect(result.build.buildStatus).toBe('succeeded');
@@ -201,8 +203,8 @@ describe('M3 Dispatch ERB · 同函数名合并', () => {
     expect(result.dispatchErb).toHaveLength(1);
     const erb = result.dispatchErb[0]?.erb ?? '';
     expect(erb).toContain('@M_KOJO_ENCOUNTER_K12');
-    expect(erb).toContain('IF LOCATION == "神社"');
-    expect(erb).toContain('IF TIME == "夜晚"');
+    expect(erb).toContain('IF NAME_FROM_PLACE(CFLAG:MASTER:現在位置) == "神社"');
+    expect(erb).toContain('IF TIME:2 == 6');
     expect(erb).toContain('CALL M_KOJO_ENCOUNTER_K12__D1');
     expect(erb).toContain('@M_KOJO_ENCOUNTER_K12__D1');
     expect(erb).toContain('RETURN 0');
@@ -223,5 +225,31 @@ describe('M3 Dispatch ERB · 同函数名合并', () => {
     expect(result.theaterErb).toHaveLength(2);
     expect(result.dispatchErb).toEqual([]);
     expect(result.dispatchComplete).toBe(false);
+  });
+});
+
+describe('M3 Dispatch Selectors · eraTW 真实语料', () => {
+  it('地点/时辰 selector 与七个时辰带来自语料取证', () => {
+    expect(ERATW_DISPATCH_SELECTORS.locationExpr).toBe('NAME_FROM_PLACE(CFLAG:MASTER:現在位置)');
+    expect(ERATW_DISPATCH_SELECTORS.timeExpr).toBe('TIME:2');
+    expect(ERATW_TIME_BAND_VALUES['夜']).toBe('6');
+    expect(ERATW_TIME_BAND_VALUES['深夜']).toBe('7');
+    expect(ERATW_TIME_BAND_VALUES['夜晚']).toBeUndefined();
+  });
+
+  it('未登记时辰名 fail-closed，不猜 TIME:2 数值', () => {
+    const unknownNight = fileInput(
+      'D:/proj/14-unknown-night.kojo2',
+      source('【剧场：初见｜学校｜夜晚】', '未知夜'),
+      '12',
+    );
+    const result = compile([SHRINE_12, unknownNight], {
+      dispatchSelectors: ERATW_DISPATCH_SELECTORS,
+      requireDispatch: true,
+    });
+    expect(result.build.buildStatus).toBe('failed');
+    expect(result.dispatchErb).toEqual([]);
+    expect(result.theaterErb).toEqual([]);
+    expect(result.dispatchBackendDiagnostics.some((diagnostic) => diagnostic.message.includes('未登记的时辰名'))).toBe(true);
   });
 });

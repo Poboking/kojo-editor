@@ -32,3 +32,9 @@ M2 `ResolvedTheater` 增加只读 `location` / `time`，由 linker 从 `ProjectT
 - selector 从 backend 实例 deps 上提到 `ProjectCompileInput.dispatchSelectors`，Host 成为唯一来源。
 - `compileKojo2Project` 提供同一入口；`requireDispatch` 继续控制是否阻断构建。
 - 没有证据的 eraTW selector 不写入默认值；缺失时 fail-closed。
+
+## 第四阶段扩展：真实语料 selector
+
+- 以 `eraTW4.981-261017-EAGLOV3` 取证：地点 `NAME_FROM_PLACE(CFLAG:MASTER:現在位置)`，时辰 `TIME:2`。
+- `DIM.ERH:182` 的七个时辰带成为 adapter 的显式 `ERATW_TIME_BAND_VALUES`；未登记名字 fail-closed。
+- Host 直接注入 `ERATW_DISPATCH_SELECTORS`；不再使用测试占位表达式。

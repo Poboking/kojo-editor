@@ -83,10 +83,13 @@ export const ERATW_GAME_ADAPTER: GameAdapter = freezeAdapter({
 /* ---------- E4：`KojoEmitBackend` 实现（additive；不改变上面的数据面） ---------- */
 export {
   createEratwEmitBackend,
+  ERATW_DISPATCH_SELECTORS,
+  ERATW_TIME_BAND_VALUES,
   eratwLoweringProfile,
   type EratwCompileExpression,
   type EratwCompileTarget,
   type EratwEmitDeps,
+  type EratwDispatchSelectors,
 } from './backend.js';
 
 /* ---------- profile 覆盖（K2-ADAPTER-PROFILE；additive：纯函数 + 写死映射表） ---------- */
@@ -125,4 +128,3 @@ export {
   type PoolDispatchCaseFact,
   type PoolDispatchPlanFact,
 } from './pool-emit.js';
-
