@@ -60,7 +60,15 @@ export function untitledDraftFileName(path: string): string {
 }
 
 /**
- * 草稿落盘后仍然脏的那句人话（竞态窗口：写盘途中又打了字）。
+ * 草稿落成的那句人话（「另存为」这个词对草稿不成立：它原来没有落点，无从"另"存）。
+ * 与 `file-save-as.ts` 的另存成功句同一口径——说清落点、说清编辑转到哪里继续。
+ */
+export function untitledSavedMessage(path: string, to: string): string {
+  return `${tabName(path)} 已落成 ${to}——这一格从此是盘上的文件，编辑转到新路径继续。`;
+}
+
+/**
+ * 草稿落盘途中又有新输入的那句人话（竞态窗口）。
  * 与保存链 `kept-dirty` 同一口径——**没落成就不许报"已保存"**。
  */
 export function untitledKeptDirtyMessage(path: string): string {

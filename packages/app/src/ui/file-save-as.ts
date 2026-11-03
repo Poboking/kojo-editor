@@ -16,6 +16,13 @@
  * 本批**没有新增第四条域外写通道**（铁律 6 只约束"写到域外"），同时保住铁律 5 的
  * 「游戏目录整体只读」——用户就算在对话框里把落点选进游戏根，这里也写不进去。
  *
+ * ## 未落盘草稿也走这条腿（KW-16B2，2026-11-03）
+ *
+ * `untitled:N` 那一格的「保存」= 给它一个落点，于是复用本流：对话框标题与预填名按草稿
+ * 说话（`saveAsDialogTitle` / `saveAsFileName`），落点判定与写盘**一字不加不减**
+ * （`judgeSaveAs` 的写域闸、取消零写入、竞态守卫全同），成功后转档收尾让标签从
+ * `untitled:N` 换成真路径。取消 / 域外 ⇒ 内容原样留在这一格里，照实出声。
+ *
  * ## 可测性（硬要求）
  *
  * 「判定」是纯函数 `judgeSaveAs`（同路径 / 域外 / 已有活 buffer / 覆盖确认 / 正常 proceed
@@ -32,6 +39,11 @@
  */
 import { errorText, pathKey, type FileEncoding } from '@kojo/plugin-api';
 import { writeDomainSaveBlockedMessage } from './write-domain';
+// 未落盘草稿（KW-16B2）：草稿的"保存"就是"给它一个落点"，所以复用本文件的另存为腿。
+// 本文件与 `untitled-draft.ts` 都在懒边（`App.tsx` 经 `await import('./file-save-as')` 拉入），
+// 故这里可以静态引它——开机图一枚字节都不吃。
+import { isUntitledPath } from './tabs-ops';
+import { untitledDraftFileName, untitledSavedMessage, untitledKeptDirtyMessage, UNTITLED_NO_DIALOG_MESSAGE } from './untitled-draft';
 
 /** 域外拒绝的那句人话（铁律 5/6：另存为没有域外通道，出路只有『导出』或加根） */
 export const SAVE_AS_OUT_OF_DOMAIN_MESSAGE =
@@ -170,16 +182,23 @@ export interface SaveAsFlowDeps {
 }
 
 export type SaveAsFlowResult =
-  | { kind: 'saved-as'; target: string }
+  /** `keptDirty: true` 只在"写窗口内又有新输入"时出现（缺省即干净，`toEqual` 口径不变） */
+  | { kind: 'saved-as'; target: string; keptDirty?: boolean }
   | { kind: 'saved-current' }
   | { kind: 'cancelled' }
   | { kind: 'rejected'; reason: string }
   | { kind: 'failed'; message: string };
 
-/** 一句人话把对话框标题与预填名造好（预填 = 当前文件名，与 VS Code 同形） */
+/** 一句人话把对话框标题与预填名造好（预填 = 当前文件名；草稿没有文件名，给中文名 + .txt） */
 export function saveAsFileName(path: string): string {
+  if (isUntitledPath(path)) return untitledDraftFileName(path);
   const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
   return i >= 0 ? path.slice(i + 1) : path;
+}
+
+/** 对话框标题：草稿那一格说"保存草稿"，不说"另存为"（它原来没有落点，无从"另"存） */
+export function saveAsDialogTitle(path: string): string {
+  return isUntitledPath(path) ? '保存未命名草稿' : '另存为';
 }
 
 /**
@@ -194,10 +213,15 @@ export async function runSaveAsFlow(deps: SaveAsFlowDeps): Promise<SaveAsFlowRes
   }
   let candidate: string | null;
   try {
-    candidate = await deps.pick({ title: '另存为', defaultFileName: saveAsFileName(deps.currentPath) });
+    candidate = await deps.pick({ title: saveAsDialogTitle(deps.currentPath), defaultFileName: saveAsFileName(deps.currentPath) });
   } catch (e: unknown) {
     const msg = errorText(e);
-    deps.notify('error', `另存为的落点对话框没有打开：${msg}`);
+    deps.notify(
+      'error',
+      isUntitledPath(deps.currentPath)
+        ? `${UNTITLED_NO_DIALOG_MESSAGE}（${msg}）`
+        : `另存为的落点对话框没有打开：${msg}`,
+    );
     return { kind: 'failed', message: msg };
   }
   // 判定要的四份事实全部现读（对话框开着的那段时间里盘与标签都可能变）。
@@ -280,11 +304,12 @@ async function finishWrite(
   const after = deps.readSource(from);
   const clean = after !== undefined && after.version === source.version;
   await deps.onTransferred(from, to, clean);
-  deps.notify(
-    'info',
-    clean
-      ? `已另存为 ${to}——编辑已转到新路径继续，原文件一个字节未动。`
-      : `已另存为 ${to}，但落盘窗口内又有新输入——文件仍标记未保存。`,
-  );
-  return { kind: 'saved-as', target: to };
+  // 草稿那一格没有"原文件"可对照，那句话得换（「已另存为」会把它说成一次改名）
+  const draft = isUntitledPath(from);
+  if (clean) {
+    deps.notify('info', draft ? untitledSavedMessage(from, to) : `已另存为 ${to}——编辑已转到新路径继续，原文件一个字节未动。`);
+  } else {
+    deps.notify('info', draft ? untitledKeptDirtyMessage(from) : `已另存为 ${to}，但落盘窗口内又有新输入——文件仍标记未保存。`);
+  }
+  return clean ? { kind: 'saved-as', target: to } : { kind: 'saved-as', target: to, keptDirty: true };
 }
