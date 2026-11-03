@@ -116,5 +116,5 @@ ENDIF
   - time parent：`夜晚`→`夜`、`清晨`→`早朝`、`傍晚`→`夕`、`凌晨`→`深夜`、`上午`→`正午前`、`中午`→`昼`、`下午`→`昼下がり`；
   - time range：`白天` 2–4、`晚上` 5–6、`夜间` 6–7、`全天` 1–7。
 - `runtimeProtocol.metadata.matchPolicyId` 指向策略 id，Host 可审计。
-- `kojo2RuntimeSelectionProblems` 把 `ambiguous` / `no-match` / `not-linked` 映射为宿主可见 error。
+- `resolveKojo2RuntimeSelection` 一次返回 selection + problems；`kojo2RuntimeSelectionProblems` 把 `ambiguous` / `no-match` / `not-linked` 映射为宿主可见 error。
 - 未登记策略名字仍 fail-closed；runtime 值与 dispatch 条件由同一展开函数产生。

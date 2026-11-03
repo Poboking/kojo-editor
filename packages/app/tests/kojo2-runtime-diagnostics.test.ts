@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { RuntimeSelection } from "@kojo/kojo-core";
-import { kojo2RuntimeSelectionProblems } from "../src/ui/kojo2-runtime-diagnostics";
+import {
+  kojo2RuntimeSelectionProblems,
+  resolveKojo2RuntimeSelection,
+} from '../src/ui/kojo2-runtime-diagnostics';
 
 describe("kojo2RuntimeSelectionProblems", () => {
   it("selected 不产问题", () => {
@@ -30,5 +33,23 @@ describe("kojo2RuntimeSelectionProblems", () => {
     expect(problems.map((problem) => problem.code)).toEqual(["runtime/ambiguous", "runtime/no-match", "runtime/not-linked"]);
     expect(problems.every((problem) => problem.severity === "error")).toBe(true);
     expect(problems[0]?.candidateTheaterIds).toEqual(["t1", "t2"]);
+  });
+});
+describe('resolveKojo2RuntimeSelection', () => {
+  it('not-linked 同时返回 selection 与可见问题', () => {
+    const result = resolveKojo2RuntimeSelection({
+      linkedProject: {
+        projectId: 'p',
+        provenance: {} as never,
+        groups: [],
+        theaters: [],
+        diagnostics: [],
+      },
+      canonicalId: 'eratw.event.初见',
+      location: '神社',
+      time: '夜',
+    });
+    expect(result.selection.status).toBe('not-linked');
+    expect(result.problems.map((problem) => problem.code)).toEqual(['runtime/not-linked']);
   });
 });
