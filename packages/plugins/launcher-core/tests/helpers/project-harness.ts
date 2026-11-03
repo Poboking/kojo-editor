@@ -198,21 +198,34 @@ export class FakeWorkspaces implements WorkspaceService {
 
   constructor(
     private readonly io: TempIO,
-    private readonly defaultRoot: string,
+    private readonly builtinRoot: string,
     private readonly extraRoots: readonly string[] = [],
   ) {}
 
   rootDir(): string {
-    return this.defaultRoot;
+    return this.builtinRoot;
+  }
+
+  /** 替身不实现「默认落点」设定：恒等于内置根（`customDefaultRoot()` 永远 null） */
+  defaultRoot(): string {
+    return this.builtinRoot;
+  }
+
+  customDefaultRoot(): string | null {
+    return null;
+  }
+
+  async setDefaultRoot(root: string): Promise<void> {
+    throw new Error(`FakeWorkspaces 不支持设定默认落点：${root}`);
   }
 
   roots(): string[] {
-    return [this.defaultRoot, ...this.extraRoots];
+    return [this.builtinRoot, ...this.extraRoots];
   }
 
   /** 与内核同口径：默认根 + 自选根下的作品目录（自选根根身不在其中） */
   projectDirs(): string[] {
-    const out = [this.defaultRoot];
+    const out = [this.builtinRoot];
     for (const dir of this.dirById.values()) {
       if (this.extraRoots.some((r) => isPathUnder(r, dir)) && !out.some((d) => sameDir(d, dir))) {
         out.push(dir);
@@ -246,13 +259,13 @@ export class FakeWorkspaces implements WorkspaceService {
 
   projectDir(projectId: string): string {
     assertSegment(projectId, '项目名');
-    return this.dirById.get(projectId) ?? nodePath.join(this.defaultRoot, projectId);
+    return this.dirById.get(projectId) ?? nodePath.join(this.builtinRoot, projectId);
   }
 
   async create(input: { name: string; meta?: Record<string, unknown>; rootDir?: string }): Promise<WorkspaceProject> {
     const name = input.name.trim();
     if (name.length === 0) throw new Error('项目名不能为空。');
-    let root = this.defaultRoot;
+    let root = this.defaultRoot();
     if (input.rootDir !== undefined) {
       const hit = this.roots().find((candidate) => sameDir(candidate, input.rootDir!));
       if (hit === undefined) throw new Error(`项目位置未获得授权：${input.rootDir}`);

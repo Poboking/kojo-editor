@@ -4,6 +4,7 @@ import type {
   Logger,
   OpJournal,
   PlatformBridge,
+  ScopedStorage,
   TextFile,
   WorkspaceArtifact,
   WorkspaceArtifactInput,
@@ -17,8 +18,10 @@ import { WORKSPACE_MANIFEST_FILE, dirname, isAbsolute, isPathUnder, join } from 
  * 作者工作区服务实现（内核 `kernel.workspaces`）。
  *
  * 布局：`<落点根>/<projectId>/workspace.json` + 制品子目录。
- * 落点根 = 默认根 `<appDataDir>/workspaces`（恒在首位）∪ 用户自选并常驻授权的项目位置根
+ * 落点根 = 内置根 `<appDataDir>/workspaces`（恒在首位）∪ 用户自选并常驻授权的项目位置根
  * （2026-10-14 批；`roots()`）。注册表 = 扫描各根目录读 manifest（免索引文件——索引即目录，崩溃不漂移）。
+ * 默认落点（`create` 不带 `rootDir` 时那一条）= 用户设定的 `defaultRoot()`，没设定就是内置根
+ * （2026-11-03 默认工作区批；设定存内核全局域，名单外一律拒收，失效时落回内置且不清设定）。
  *
  * 安全（2026-10-27 收窄批）：
  * - 常驻可写根 = **默认根 + 已解析的作品目录**（`projectDirs()`）。自选项目位置根的
@@ -42,11 +45,22 @@ export interface WorkspaceServiceDeps {
   log: Logger;
   /** 批操作 journal（2026-10-16 undo 批，additive）：createArtifact 的半成品治理 + 操作历史 */
   journal?: OpJournal | null;
+  /**
+   * 内核全局存储域（2026-11-03 默认工作区批，additive）：`default-root` 那条设定落这里。
+   * 缺席（老测试替身 / 无存储环境）⇒ 设定只在本次会话内存里生效，切换时出声、不假装记住了。
+   */
+  globalStorage?: ScopedStorage | null;
 }
 
 function newId(prefix: string): string {
   return `${prefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/**
+ * 默认落点根设定的存储键（内核全局域 `_global`，与 `recent-projects` 同族；
+ * 2026-11-03 默认工作区批）。值 = 那条绝对路径的 JSON 字符串。
+ */
+const KEY_DEFAULT_ROOT = 'default-workspace-root';
 
 /** 单层目录段校验（拒绝分隔符 / 点段 / 空串 / manifest 占用名） */
 function assertSegment(value: string, what: string): void {
@@ -91,6 +105,14 @@ export class WorkspaceServiceImpl implements WorkspaceService {
    */
   private extraRoots: string[] = [];
   /**
+   * 用户设定的**默认落点根**（2026-11-03 默认工作区批；`null` = 未设定 = 用内置根）。
+   *
+   * 这里存的是"作者要的那一条"，不是"这次能用的那一条"：授权根暂时读不到
+   * （移动硬盘没插）时设定照旧留着，`defaultRoot()` 每次现判有效性并在无效时落回内置根。
+   * 名单外的路径进不来（`setDefaultRoot` 只接受命中 `roots()` 的），所以这条永远不构成扩权。
+   */
+  private savedDefaultRoot: string | null = null;
+  /**
    * `projectId → 项目目录绝对路径`（init（有额外根时）/ `list` / `create` 三处填充）。
    * `projectDir()` 必须是同步的（面板/部署链路到处在用它），而"项目在哪个根下"只能靠
    * 扫盘知道 ⇒ 外部根里的项目**要经一次 `list()` 才能解析**；未命中一律回落默认根。
@@ -99,18 +121,27 @@ export class WorkspaceServiceImpl implements WorkspaceService {
 
   constructor(private readonly deps: WorkspaceServiceDeps) {}
 
-  /** 初始化（createKernel 时调用）：解析默认根 + 读回授权根 → 登记常驻可写根 → 确保默认根存在 */
+  /** 初始化（createKernel 时调用）：解析内置根 + 读回授权根与默认落点设定 → 登记常驻可写根 → 确保内置根存在 */
   async init(): Promise<void> {
     const appData = await this.deps.bridge.appDataDir();
     this.root = join(appData, 'workspaces');
     this.extraRoots = await this.readAuthorizedRoots();
+    this.savedDefaultRoot = await this.readSavedDefaultRoot();
     // 只登记默认根 + 已解析作品目录（此刻还没有 ⇒ 只有默认根）：自选根根身不进写允许域
     this.syncWritableRoots();
     await this.deps.io.ensureDir(this.root);
     this.deps.log.info(
       `Workspace root: ${this.root}` +
-        (this.extraRoots.length > 0 ? `（另有 ${this.extraRoots.length} 个自选项目位置）` : ''),
+        (this.extraRoots.length > 0 ? `（另有 ${this.extraRoots.length} 个自选项目位置）` : '') +
+        (this.savedDefaultRoot !== null ? `；默认落点：${this.savedDefaultRoot}` : ''),
     );
+    // 设定过、但这条根现在不在名单里（撤过授权 / 盘没接入）：不静默，也不清设定——
+    // 本次落回内置根，作者插回磁盘或重新授权就自动沿用回来（见 `savedDefaultRoot` 的注释）。
+    if (this.savedDefaultRoot !== null && this.resolveDefaultRoot() === null) {
+      this.deps.log.warn(
+        `默认工作区当前不可用，本次新建落回内置位置：${this.savedDefaultRoot}`,
+      );
+    }
     // 有外部根 ⇒ 必须先扫一次，否则 projectDir() 把它们的项目全解析回默认根
     // （get/update/remove 会找不到项目）。没有外部根时保持零额外扫描：默认根下
     // `join(root, id)` 就是唯一真相，init 再扫一遍纯属重复面板的那一次 list。
@@ -128,6 +159,113 @@ export class WorkspaceServiceImpl implements WorkspaceService {
 
   rootDir(): string {
     return this.requireRoot();
+  }
+
+  /**
+   * 默认落点根：设定过且那条根仍在名单里 ⇒ 它；否则内置根。
+   * 判定是**每次现算**的（只读内存名单，零 IO），所以撤销授权 / 拔掉移动硬盘之后
+   * 不需要等谁刷新——下一次 `create` 就落回内置根，不会撞成一串"未获得授权"。
+   */
+  defaultRoot(): string {
+    const root = this.requireRoot();
+    return this.resolveDefaultRoot() ?? root;
+  }
+
+  /** 用户设定的那一条（当前不可用也照实返回；`null` = 从未设定） */
+  customDefaultRoot(): string | null {
+    this.requireRoot();
+    return this.savedDefaultRoot;
+  }
+
+  /**
+   * 设定默认落点根。名单外一律拒绝（授权来自目录对话框，不是来自这个参数，铁律 6）；
+   * 选内置根 = 清除设定。先落盘再改内存：写不进去就不留"屏上改了、盘上没改"的两个真相。
+   */
+  async setDefaultRoot(root: string): Promise<void> {
+    const target = typeof root === 'string' ? root.trim() : '';
+    if (target.length === 0) throw new Error('默认位置没有给路径，未做任何改动。');
+    const builtin = this.requireRoot();
+    // 名单要重读：本会话刚经对话框授权的根不在 init 那份里（与 create 同一口径）
+    await this.refreshAuthorizedRoots();
+    const hit = this.roots().find((r) => isSameRoot(r, target));
+    if (hit === undefined) {
+      throw new Error(
+        `这个位置不能设为默认：${target}（只能在内置位置，或目录对话框里授权过的文件夹之间选）`,
+      );
+    }
+    const clearing = isSameRoot(hit, builtin);
+    try {
+      if (clearing) await this.deleteSavedDefaultRoot();
+      else await this.writeSavedDefaultRoot(hit);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `默认位置没能保存，仍沿用原来的设定：${detail}`,
+      );
+    }
+    this.savedDefaultRoot = clearing ? null : hit;
+    this.deps.log.info(
+      clearing
+        ? `默认工作区已清除，新建落回内置位置：${builtin}`
+        : `默认工作区已设定：${hit}`,
+    );
+  }
+
+  /** 设定的那条根当前是否仍在名单里（命中则返回名单里的规范写法，未命中 null） */
+  private resolveDefaultRoot(): string | null {
+    const saved = this.savedDefaultRoot;
+    if (saved === null) return null;
+    const root = this.requireRoot();
+    if (isSameRoot(saved, root)) return root;
+    return this.extraRoots.find((r) => isSameRoot(r, saved)) ?? null;
+  }
+
+  /**
+   * 读回落盘的默认设定（`init` 用）。形状不对 / 相对路径 / 读不动 ⇒ 出声并按"未设定"处理：
+   * 一条坏设定不该让工作区服务整体不可用，也不该被当成合法路径送进 `roots()` 比对。
+   * 当前不可用**不是**这里判的（盘可能只是没插），那条留给 `resolveDefaultRoot()`。
+   */
+  private async readSavedDefaultRoot(): Promise<string | null> {
+    const storage = this.deps.globalStorage;
+    if (storage === undefined || storage === null) return null;
+    let raw: unknown;
+    try {
+      raw = await storage.get<unknown>(KEY_DEFAULT_ROOT);
+    } catch (err) {
+      this.deps.log.warn(`读取默认工作区设定失败（本次用内置位置）：${String(err)}`);
+      return null;
+    }
+    if (raw === undefined || raw === null) return null;
+    if (typeof raw !== 'string' || raw.trim().length === 0) {
+      this.deps.log.warn(`忽略无效的默认工作区设定：${String(raw)}`);
+      return null;
+    }
+    const value = raw.trim();
+    if (!isAbsolute(value)) {
+      this.deps.log.warn(`忽略非绝对路径的默认工作区设定：${value}`);
+      return null;
+    }
+    return value;
+  }
+
+  /** 落盘默认设定；无存储域时出声（本次会话有效，下次启动回到内置位置） */
+  private async writeSavedDefaultRoot(root: string): Promise<void> {
+    const storage = this.deps.globalStorage;
+    if (storage === undefined || storage === null) {
+      this.deps.log.warn(`默认工作区没有可写的存储域，本次设定不跨启动保留：${root}`);
+      return;
+    }
+    await storage.set(KEY_DEFAULT_ROOT, root);
+  }
+
+  /** 清除默认设定（见 `writeSavedDefaultRoot` 的同类降级口径：清不掉要出声） */
+  private async deleteSavedDefaultRoot(): Promise<void> {
+    const storage = this.deps.globalStorage;
+    if (storage === undefined || storage === null) {
+      this.deps.log.warn('默认工作区没有可写的存储域，清除只对本次会话生效。');
+      return;
+    }
+    await storage.delete(KEY_DEFAULT_ROOT);
   }
 
   /** 全部落点根：默认根恒在首位 + 对话框授权根（授权序） */
@@ -332,7 +470,9 @@ export class WorkspaceServiceImpl implements WorkspaceService {
   }): Promise<WorkspaceProject> {
     const name = input.name.trim();
     if (name.length === 0) throw new Error('项目名不能为空。');
-    let root = this.requireRoot();
+    // 缺省落点 = 默认落点根（用户设定过就是他的那一条，没设定 = 内置根；2026-11-03 批）。
+    // 老作者没动过设置时这一句与历史逐字一致。
+    let root = this.defaultRoot();
     if (input.rootDir !== undefined) {
       // 落点只能命中**已授权的根**（默认根 / 对话框自选根）。这里刻意不做
       // "路径合法就放行"：授权的唯一来源是平台目录对话框（铁律 6），本层只核对名单。
@@ -591,7 +731,7 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     const defaultRoot = this.requireRoot();
     if (isSameRoot(root, defaultRoot)) {
       throw new Error(
-        `默认工作区不能撤销：${defaultRoot} 就是作者作品的常驻位置（撤销会把里面的作品锁成只读）。`,
+        `内置工作区不能撤销：${defaultRoot} 就是作者作品的常驻位置（撤销会把里面的作品锁成只读）。`,
       );
     }
     // 名单要重读：本会话刚经对话框授权的根不在 init 那份里
@@ -614,6 +754,13 @@ export class WorkspaceServiceImpl implements WorkspaceService {
     this.extraRoots = this.extraRoots.filter((r) => !isSameRoot(r, hit));
     this.syncWritableRoots();
     this.deps.log.info(`项目位置授权已撤销：${hit}`);
+    // 撤掉的这条正是默认落点 ⇒ 出声说清"新建接下来落在哪"（设定本身留着，
+    // 重新授权同一条根就自动沿用回来；见 `savedDefaultRoot`）
+    if (this.savedDefaultRoot !== null && isSameRoot(this.savedDefaultRoot, hit)) {
+      this.deps.log.info(
+        `默认落点随之落回内置位置：${defaultRoot}（重新授权这条文件夹后会自动沿用回来）`,
+      );
+    }
   }
 
   async createArtifact(projectId: string, input: WorkspaceArtifactInput): Promise<WorkspaceArtifact> {

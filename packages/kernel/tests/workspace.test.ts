@@ -578,8 +578,8 @@ describe('WorkspaceService · 多根落点（自选项目位置）', () => {
     const rWs = new WorkspaceServiceImpl({ bridge, io: rIo, log: noopLog });
     await rWs.init();
 
-    // 默认根不可撤销（它就是作品的常驻位置）
-    await expect(rWs.revokeRoot(rWs.rootDir())).rejects.toThrow(/默认工作区不能撤销/);
+    // 内置根不可撤销（它就是作品的常驻位置）
+    await expect(rWs.revokeRoot(rWs.rootDir())).rejects.toThrow(/内置工作区不能撤销/);
     expect(revoked).toEqual([]);
 
     const p = await rWs.create({ name: '还没搬走的作品', rootDir: extraRoot });

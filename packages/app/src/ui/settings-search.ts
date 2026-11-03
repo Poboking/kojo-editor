@@ -184,6 +184,12 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'general.sealed', section: 'general', sectionLabel: '通用', label: '显示已封存功能', keywords: ['封存 sealed 实验'], key: 'general.sealed' },
   { id: 'general.layout', section: 'general', sectionLabel: '通用', label: '重置布局', keywords: ['布局 侧栏 面板 分屏'], key: 'general.layout' },
 
+  // ---- 工作区（2026-11-03 默认工作区批）----
+  // 两行都没有 localStorage 真源（默认落点住在内核的 `_global` 存储，授权名单住平台侧），
+  // 所以**不写 `isModified`**：猜出来的「已修改」会让作者去翻一处其实没动过的设置。
+  { id: 'workspace.defaultRoot', section: 'workspace', sectionLabel: '工作区', label: '默认作品位置', keywords: ['workspace 工作区 落点 新建 作品位置 文件夹 default 撤销 授权 移动硬盘 不可用 失效'], key: 'workspace.defaultRoot' },
+  { id: 'workspace.addLocation', section: 'workspace', sectionLabel: '工作区', label: '选择其他文件夹作为作品位置…', keywords: ['自选 位置 文件夹 授权 目录 对话框 add folder'], key: 'workspace.addLocation' },
+
   // ---- 语言能力 / 快捷键 / 市场 / 关于 ----
   // 锚点真存在（住在 capability-matrix-view.tsx 的语言行上），所以照其他行一样登记 key。
   // 锚点真存在（住在 capability-matrix-view.tsx 的语言行上），所以照其他行一样登记 key。

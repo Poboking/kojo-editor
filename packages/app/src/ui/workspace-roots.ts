@@ -14,7 +14,7 @@
  */
 
 import type { Kernel } from '@kojo/kernel';
-import { isPathUnder, pathKey } from '@kojo/plugin-api';
+import { type GameProject, isPathUnder, pathKey } from '@kojo/plugin-api';
 
 /** 全部工作区根（服务不可用 = 空列表，不抛） */
 export function workspaceRootsOf(kernel: Pick<Kernel, 'workspaces'>): string[] {
@@ -50,6 +50,70 @@ export function workspaceProjectDirsOf(kernel: Pick<Kernel, 'workspaces'>): stri
  */
 export function isUnderAnyRoot(roots: readonly string[], p: string): boolean {
   return roots.some((root) => isPathUnder(root, p));
+}
+
+/**
+ * 「作品位置」清单的行模型（2026-11-03 默认工作区批；纯函数，node 侧直测）。
+ *
+ * 三枚标记各说一件事，设置页那一行才说得清「是哪一条」：
+ * - `isBuiltin`：出厂就有的软件数据目录（不可撤销，选它 = 清除默认设定）；
+ * - `isDefault`：**此刻**新建作品真正落在的那一条（= `defaultRoot()`）；
+ * - `available`：`false` 只有一种来路——作者设定过的默认位置当前不在授权名单里
+ *   （移动硬盘没插 / 授权被撤）。这条必须照列（铁律 4：失效不许静默），
+ *   但它**不是**生效默认，所以点不中、也不给撤销钮。
+ */
+export interface WorkspaceLocationRow {
+  readonly path: string;
+  readonly isBuiltin: boolean;
+  readonly isDefault: boolean;
+  readonly available: boolean;
+}
+
+export function workspaceLocationRows(args: {
+  readonly roots: readonly string[];
+  readonly builtinRoot: string | null;
+  readonly defaultRoot: string | null;
+  readonly customDefaultRoot: string | null;
+}): WorkspaceLocationRow[] {
+  const builtinKey = args.builtinRoot === null ? null : pathKey(args.builtinRoot);
+  const defaultKey = args.defaultRoot === null ? null : pathKey(args.defaultRoot);
+  const rows: WorkspaceLocationRow[] = args.roots.map((path) => ({
+    path,
+    isBuiltin: builtinKey !== null && pathKey(path) === builtinKey,
+    isDefault: defaultKey !== null && pathKey(path) === defaultKey,
+    available: true,
+  }));
+  const saved = args.customDefaultRoot;
+  if (saved !== null && !rows.some((r) => pathKey(r.path) === pathKey(saved))) {
+    rows.push({ path: saved, isBuiltin: false, isDefault: false, available: false });
+  }
+  return rows;
+}
+
+/**
+ * 「作品位置」目录对话框的**禁选根**（2026-11-03 默认工作区批；与向导那条同一判据）。
+ *
+ * 选到游戏目录（或它的上级）当作品位置，等于把整个游戏目录圈进落点名单，所以把当前
+ * 项目的**根目录 / 口上域 / 存档目录**都递过去，由平台侧在**登记之前**做双向包含判定。
+ * 这里只负责「取干净」：非字符串、空串丢掉，按 `pathKey` 去重。
+ * 没有打开项目 ⇒ 空数组 ⇒ 平台行为与历史逐字一致。
+ *
+ * 与向导那一条（`kojo-project-kit` 的 `gameRootsForbiddingLocation`）判据逐字相同；
+ * 之所以不 import 那份：`@kojo/kojo-project-kit` 不在 app 的依赖里（它是 adapter 的共用件），
+ * 而这条防护住在设置页这一侧。两处各一份、由本文件的单测钉住判据。
+ */
+export function locationForbidRoots(project: GameProject | null): string[] {
+  if (project === null) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [project.rootDir, ...project.kojoPaths, project.savDir]) {
+    if (typeof raw !== 'string' || raw.length === 0) continue;
+    const k = pathKey(raw);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(raw);
+  }
+  return out;
 }
 
 /* ------------------------------ 会话级附加根（D1，对标 VSCode Add Folder to Workspace） ------------------------------ */

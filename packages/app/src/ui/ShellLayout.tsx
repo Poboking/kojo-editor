@@ -31,7 +31,7 @@ import {
 import { kojo2AdapterForProject } from '../bootstrap';
 import { setIdentityBandFilled, useIdentityBandSlot } from './identity-band';
 import type { EditorCommandContext, EditorCommandContribution, EditorWorkspaceSymbol, ErbParserService, FileEncoding, MarketService, RecentProject, UIPanelContribution } from '@kojo/plugin-api';
-import {errorText,  MARKET_SERVICE_KEY, pathKey } from '@kojo/plugin-api';
+import {errorText,  MARKET_SERVICE_KEY } from '@kojo/plugin-api';
 import { getVersion } from '@tauri-apps/api/app';
 import { invoke } from '@tauri-apps/api/core';
 import {
@@ -126,7 +126,7 @@ import {
 } from './font-size-pref';
 import { fileWritableArea, WRITABLE_HINTS, writablePillTitle, writablePillTone } from './file-area';
 import { saveBlockedByHostWriteDomain } from './write-domain';
-import { workspaceRootsOf } from './workspace-roots';
+import { locationForbidRoots, workspaceLocationRows, workspaceRootsOf } from './workspace-roots';
 // 状态栏三格（批次十 S1）：语言模式 / 缩进 / 编码的偏好与判据都在各自纯逻辑模块里，
 // 这里只取「当前活动文件那份 model」并把选择落到 model 上。
 import { focusedCtx, openModelAcrossGroups } from './editor-pane-registry';
@@ -1640,28 +1640,37 @@ export function ShellLayout(props: Props): ReactElement {
   const installUpdate = update.install;
 
   /**
-   * 设置页「工作区」一节的数据面（2026-10-27 撤销批）：落点根清单 + 撤销入口。
+   * 设置页「工作区」一节的数据面（2026-10-27 撤销批 / 2026-11-03 默认工作区批）：
+   * 作品位置清单 + 默认落点读写 + 撤销入口。
    *
-   * 数据**现取不缓存**（`roots()` 是同步读内存数组、零 IO）：撤销成功或本会话新授权了
-   * 一个位置，抬一次 `workspaceRootsNonce` 就重取。`isDefault` 按 `rootDir()` 判等
-   * （`pathKey` 折叠分隔符与大小写），默认根那颗不给撤销按钮——内核也会拒，但按钮
-   * 不该先给出一个注定失败的入口。
+   * 数据**现取不缓存**（`roots()` / `defaultRoot()` / `customDefaultRoot()` 都是同步读内存、
+   * 零 IO）：撤销成功、设了默认、或本会话新授权了一个位置，抬一次 `workspaceRootsNonce`
+   * 就重取。行模型（哪条是内置、哪条**此刻**生效、哪条设定过但读不到）由纯函数
+   * `workspaceLocationRows` 算，判等一律走 `pathKey`。
+   *
+   * 「选择其他文件夹」走 `io.chooseWorkspaceRoot`：对话框与登记绑在同一个 Rust 命令里
+   * （铁律 6 的法定形态），所以这里**不拼路径、不校验目录**；`forbidRoots` 把当前项目的
+   * 根 / 口上域 / 存档目录挡在登记之外（与新建向导同一判据，见 `locationForbidRoots`）。
+   * 选定即授权 ⇒ 紧接着把那一条设成默认（作者的意图就是"以后都放这儿"）；取消返回 null ⇒ 不动。
    *
    * 服务不可用（浏览器调试壳）时 `workspaceRootsOf` 吞成空数组 ⇒ 那一节显示人话。
    */
   const [workspaceRootsNonce, setWorkspaceRootsNonce] = useState(0);
   const workspaceRoots = useMemo(() => {
-    let defaultRoot: string | null = null;
-    try {
-      defaultRoot = kernel.workspaces.rootDir();
-    } catch {
-      defaultRoot = null;
-    }
-    const defaultKey = defaultRoot === null ? null : pathKey(defaultRoot);
-    return workspaceRootsOf(kernel).map((p) => ({
-      path: p,
-      isDefault: defaultKey !== null && pathKey(p) === defaultKey,
-    }));
+    const ws = kernel.workspaces;
+    const read = <T,>(f: () => T): T | null => {
+      try {
+        return f();
+      } catch {
+        return null;
+      }
+    };
+    return workspaceLocationRows({
+      roots: workspaceRootsOf(kernel),
+      builtinRoot: read(() => ws.rootDir()),
+      defaultRoot: read(() => ws.defaultRoot()),
+      customDefaultRoot: read(() => ws.customDefaultRoot()),
+    });
   }, [kernel, workspaceRootsNonce]);
   const revokeWorkspaceRoot = useCallback(
     async (root: string): Promise<void> => {
@@ -1670,6 +1679,26 @@ export function ShellLayout(props: Props): ReactElement {
       setWorkspaceRootsNonce((n) => n + 1);
     },
     [kernel],
+  );
+  const setWorkspaceDefaultRoot = useCallback(
+    async (root: string): Promise<void> => {
+      await kernel.workspaces.setDefaultRoot(root);
+      setWorkspaceRootsNonce((n) => n + 1);
+    },
+    [kernel],
+  );
+  const chooseWorkspaceLocation = useCallback(
+    async (): Promise<string | null> => {
+      const picked = await kernel.io.chooseWorkspaceRoot({
+        // 与新建向导那一条逐字同口径（`kojo-project-kit` 的 `LOCATION_DIALOG_TITLE`）：
+        // 两处选的是同一种东西（新建作品的落点），作者不该看到两种说法。
+        title: '选择新建作品的位置…',
+        forbidRoots: locationForbidRoots(commandCtx.project),
+      });
+      if (picked !== null) setWorkspaceRootsNonce((n) => n + 1);
+      return picked;
+    },
+    [kernel, commandCtx.project],
   );
 
   /**
@@ -3626,6 +3655,8 @@ export function ShellLayout(props: Props): ReactElement {
           commands={registry}
           workspaceRoots={workspaceRoots}
           onRevokeWorkspaceRoot={revokeWorkspaceRoot}
+          onSetWorkspaceDefaultRoot={setWorkspaceDefaultRoot}
+          onChooseWorkspaceLocation={chooseWorkspaceLocation}
           zen={layout.zen}
           zenLimitWidth={layout.zenLimitWidth}
           dispatch={dispatch}

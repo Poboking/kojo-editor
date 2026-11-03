@@ -158,16 +158,24 @@ describe('locationLabel / defaultWorkspaceRoot（「项目位置」那行的文�
 
   it('默认根取不到（浏览器开发壳）→ 降级文案，不抛给作者', () => {
     expect(locationLabel(null, null)).toContain('位置暂不可用');
+    const unavailable = () => {
+      throw new Error('Workspace service is unavailable (no platform data directory)');
+    };
     const broken = {
-      rootDir: () => {
-        throw new Error('Workspace service is unavailable (no platform data directory)');
-      },
+      rootDir: unavailable,
+      defaultRoot: unavailable,
     } as unknown as WorkspaceService;
     expect(defaultWorkspaceRoot(broken)).toBeNull();
-    const working = {
-      rootDir: () => '/appdata/workspaces',
-    } as unknown as WorkspaceService;
-    expect(defaultWorkspaceRoot(working)).toBe('/appdata/workspaces');
+  });
+
+  it('取的是 defaultRoot()（用户设定的那一条），不是恒定的内置根（2026-11-03 默认工作区批）', () => {
+    const service = (defaultRoot: string) =>
+      ({
+        rootDir: () => '/appdata/workspaces',
+        defaultRoot: () => defaultRoot,
+      }) as unknown as WorkspaceService;
+    expect(defaultWorkspaceRoot(service('/appdata/workspaces'))).toBe('/appdata/workspaces');
+    expect(defaultWorkspaceRoot(service('D:\\我的作品库'))).toBe('D:\\我的作品库');
   });
 });
 

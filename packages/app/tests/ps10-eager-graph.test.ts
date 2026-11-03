@@ -1542,10 +1542,25 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     TargetRegistry 装载期校验（D7/D8 参数规则、segment 默认值、eventCatalog 源参数对拍）
     //     与 eraTW 九事件描述符；Project IR / Linker / Host 编译入口均在懒边或测试面。
     //     ⇒ KB 闸 **3,532 → 3,536**；文件闸 196 不动。
+    //   - **默认工作区（设置页「作品位置」可设默认落点，2026-11-03，本车）**：读数
+    //     **196 文件 / 3,549 KB · 3,634,105 B**（= M2 那格 3,621,272 + 同日 `f67c2f1a` 进图的
+    //     `ui/App.tsx` **+24** + 本批 **+12,809**；零新进图文件，文件闸不动）。逐枚归因
+    //     （当前树 `statSync` vs `git cat-file -s origin/dev:…`，**四枚求和 = 本批总差逐字节相等**）：
+    //     `kernel/src/workspace.ts` **+7,305**（落点解析 `resolveDefaultRoot`
+    //     零 IO / 失效回落内置根那一条 warn / 全局作用域持久化读写 + 口径注释）、
+    //     `plugin-api/src/workspace.ts` **+2,355**（三枚 additive 契约与「设定只命中 `roots()`、
+    //     不构成扩权」那段）、`ui/workspace-roots.ts` **+3,037**（行模型 `workspaceLocationRows`
+    //     + 目录对话框禁选根 `locationForbidRoots`）、`kernel/src/kernel.ts` **+112**（把全局
+    //     作用域存储接进工作区服务）。
+    //     不计入的懒边同批字节（都在 `import('./ShellLayout')` / 设置浮层之下，走图实测不在图里）：
+    //     `ui/SettingsPanel.tsx` +7,936、`ui/ShellLayout.tsx` +1,602、`ui/settings-search.ts` +805、
+    //     `ui/settings-workspace.css` +4,147（`.css` 本就不进主线程图）、
+    //     `kojo-project-kit/src/new-project-wizard.ts` +351。
+    //     ⇒ KB 闸 **3,536 → 3,549**。红沿 3,634,567 B，机械余量 **462 B**。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤196 文件 / ≤3,536 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤196 文件 / ≤3,549 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_536);
+    expect(totalKb).toBeLessThanOrEqual(3_549);
     expect(files.length).toBeLessThanOrEqual(196);
   });
 

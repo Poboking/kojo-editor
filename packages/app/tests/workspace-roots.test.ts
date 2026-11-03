@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Kernel } from '@kojo/kernel';
+import type { GameProject } from '@kojo/plugin-api';
 import {
   isUnderAnyRoot,
+  locationForbidRoots,
   planAddExtraRoot,
   planRemoveExtraRoot,
+  workspaceLocationRows,
   workspaceProjectDirsOf,
   workspaceRootsOf,
 } from '../src/ui/workspace-roots';
@@ -164,5 +167,87 @@ describe('planRemoveExtraRoot · 从工作区移除文件夹', () => {
     expect(plan.roots).toEqual(['D:/作品']);
     expect(plan.removed).toBe(false);
     expect(plan.note).toContain('不在工作区里');
+  });
+});
+
+/* ------------------------------ 2026-11-03 默认工作区批：设置页那一列的行模型 ------------------------------ */
+
+describe('workspaceLocationRows · 「作品位置」行模型', () => {
+  const BUILTIN = 'C:/appdata/workspaces';
+  const EXTRA = 'D:/我的作品库';
+
+  it('内置那条挂 isBuiltin、生效默认那条挂 isDefault（两枚标记互不混用）', () => {
+    const rows = workspaceLocationRows({
+      roots: [BUILTIN, EXTRA],
+      builtinRoot: BUILTIN,
+      defaultRoot: EXTRA,
+      customDefaultRoot: EXTRA,
+    });
+    expect(rows.map((r) => r.path)).toEqual([BUILTIN, EXTRA]);
+    expect(rows[0]).toEqual({ path: BUILTIN, isBuiltin: true, isDefault: false, available: true });
+    expect(rows[1]).toEqual({ path: EXTRA, isBuiltin: false, isDefault: true, available: true });
+  });
+
+  it('判等走 pathKey：同一条根的两种写法不会既算内置又算默认不中', () => {
+    const rows = workspaceLocationRows({
+      roots: ['d:\\作品\\'],
+      builtinRoot: 'D:/作品',
+      defaultRoot: 'D:\\作品',
+      customDefaultRoot: null,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.isBuiltin).toBe(true);
+    expect(rows[0]!.isDefault).toBe(true);
+  });
+
+  it('设定过但现在不在名单里 ⇒ 追加一条 available:false 的存根，且**不**顶掉生效默认', () => {
+    const gone = 'E:/移动硬盘的作品库';
+    const rows = workspaceLocationRows({
+      roots: [BUILTIN],
+      builtinRoot: BUILTIN,
+      defaultRoot: BUILTIN, // 内核已落回内置
+      customDefaultRoot: gone, // 但设定仍留着
+    });
+    expect(rows.map((r) => [r.path, r.isDefault, r.available])).toEqual([
+      [BUILTIN, true, true],
+      [gone, false, false],
+    ]);
+    // 反证：那条存根不该被当成"已授权的自选位置"（撤无可撤）
+    expect(rows[1]!.isBuiltin).toBe(false);
+  });
+
+  it('从没设定过（customDefaultRoot=null）⇒ 不多出行；读不到内置根也不炸（值全为 false）', () => {
+    expect(
+      workspaceLocationRows({ roots: [BUILTIN], builtinRoot: BUILTIN, defaultRoot: BUILTIN, customDefaultRoot: null }),
+    ).toHaveLength(1);
+    const broken = workspaceLocationRows({
+      roots: [],
+      builtinRoot: null,
+      defaultRoot: null,
+      customDefaultRoot: null,
+    });
+    expect(broken).toEqual([]);
+  });
+});
+
+describe('locationForbidRoots · 对话框的禁选根', () => {
+  it('项目根 / 口上域 / 存档目录都递过去，重复的只留一条、空串丢掉', () => {
+    const project = {
+      rootDir: 'D:/DSH/erato',
+      kojoPaths: ['D:/DSH/erato/koujyo', 'd:\\DSH\\erato\\koujyo\\', ''],
+      savDir: 'D:/DSH/erato/sav',
+    } as unknown as GameProject;
+    expect(locationForbidRoots(project)).toEqual([
+      'D:/DSH/erato',
+      'D:/DSH/erato/koujyo',
+      'D:/DSH/erato/sav',
+    ]);
+  });
+
+  it('没有存档目录 / 没有打开项目 ⇒ 空数组（平台行为与历史逐字一致）', () => {
+    expect(
+      locationForbidRoots({ rootDir: 'D:/DSH/erato', kojoPaths: [] } as unknown as GameProject),
+    ).toEqual(['D:/DSH/erato']);
+    expect(locationForbidRoots(null)).toEqual([]);
   });
 });

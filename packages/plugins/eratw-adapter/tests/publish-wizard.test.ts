@@ -33,6 +33,11 @@ interface FakeCtx {
 function fakeWorkspaces(): WorkspaceService {
   return {
     rootDir: () => '/appdata/workspaces',
+    defaultRoot: () => '/appdata/workspaces',
+    customDefaultRoot: () => null,
+    setDefaultRoot: async () => {
+      throw new Error('not used');
+    },
     roots: () => ['/appdata/workspaces'],
     projectDirs: () => ['/appdata/workspaces'],
     revokeRoot: async () => {},

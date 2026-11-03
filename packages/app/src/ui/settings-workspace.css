@@ -1,0 +1,133 @@
+/**
+ * 设置页「工作区」一节的样式（2026-11-03 默认工作区批）。
+ *
+ * 由 `SettingsPanel.tsx` 组件级引入（照 `settings-appearance.css` / `settings-search-kit.css`
+ * 先例）：这些行只在设置浮层里出现，不该进常驻首屏样式链。
+ *
+ * 只吃 token，不写死颜色 / 字号；单选点本体归 `ui-kit.css`（`.kit-radio*`），这里只管
+ * 「一行一个位置」的行面、徽标与失效行的读感。选中行的读法与 Kojo 2.0 档位卡一致
+ * （accent 描边 + accent-dim 底），作者在两处长得一样的东西就是同一个意思：**当前生效的那一条**。
+ */
+
+.settings-ws {
+  gap: var(--space-2);
+}
+
+/* 组首说明：比行内 hint 略重一档（它是这一节的总纲，不是某一行的注解） */
+.settings-ws-lead {
+  padding: 0 var(--space-3);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+.settings-ws-lead b {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+.settings-ws-roots {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* 一位置一行：左列单选点 + 路径 + 徽标 + 说明，右列撤销那组钮。
+   失败行挂在整行之下，所以给它 `1 / -1`（见下面的 `.settings-hint.is-err`）。 */
+.settings-ws-root {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-raised);
+  transition:
+    border-color var(--dur-1) var(--ease-out),
+    background-color var(--dur-1) var(--ease-out);
+}
+.settings-ws-root:has(.kit-radio-input:not(:disabled)):hover {
+  border-color: var(--border-strong);
+}
+.settings-ws-root:focus-within {
+  border-color: var(--border-strong);
+}
+.settings-ws-root[data-ws-default='1'] {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+/* 失效那条（设定过但现在读不到）：虚线 + 不填充——它不是候选，只是一张"你选过这里"的存根。
+   绝不套用 `[data-ws-default='1']` 的强调，否则读起来像"作品正落在这里"。 */
+.settings-ws-root[data-ws-available='0'] {
+  border-style: dashed;
+  background: none;
+}
+
+.settings-ws-root .kit-radio {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  width: 100%;
+}
+.settings-ws-root .kit-radio-text {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0);
+  min-width: 0;
+}
+
+/* 标题行：路径 + 徽标允许换行（长盘符路径不该把徽标挤出可视区），徽标自己永不折 */
+.settings-ws-root-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+  font-size: var(--fs-2);
+  color: var(--fg);
+}
+.settings-ws-root-path {
+  font-family: var(--font-mono);
+  font-size: var(--fs-1);
+  /* Windows 长路径没有空格可折：不 `anywhere` 就会撑破两列栅格 */
+  overflow-wrap: anywhere;
+}
+.settings-ws-root[data-ws-available='0'] .settings-ws-root-path {
+  color: var(--fg-dim);
+}
+
+.settings-ws-badge {
+  flex: none;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 16px;
+  white-space: nowrap;
+}
+.settings-ws-badge.is-on {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+.settings-ws-badge.is-off {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+/* 写入进行中的那一枚：不抢色（成功那一拍它和「默认」会同时换人），只把边框压淡，
+   让作者的视线仍停在整行的路径上。 */
+.settings-ws-badge.is-busy {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.settings-ws-ops {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+/* 行下的说明与失败行（`.settings-hint` / `.is-err`）都是整行内容，跨满两列——
+   不显式给格位的话会被自动排进第 2 列，长错误文案挤成一竖条。 */
+.settings-ws-root > .settings-hint {
+  grid-column: 1 / -1;
+}

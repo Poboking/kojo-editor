@@ -120,12 +120,17 @@ import { isFailureNote, isPrimaryButton, useMenuNote } from './context-menu-page
 import { registerSettingsMenuBridge } from './settings-menu';
 // 语言能力矩阵的只读视图（批次十 S15）：现读 monaco/language-capabilities.ts，零 props、样式全内联。
 import { CapabilityMatrixSection } from './capability-matrix-view';
+// 「作品位置」清单的行模型（2026-11-03 默认工作区批）：只取类型，行模型的算法住在
+// `workspace-roots.ts` 由壳层调用（本文件是纯呈现面，不认识内核）。
+import type { WorkspaceLocationRow } from './workspace-roots';
 import '../settings-search.css';
 // 检索井换 ui-kit `KitSearchField` 后的接线切片（1026 C1-b）：只补井在 searchbar 行的占宽腿。
 import './settings-search-kit.css';
 // 外观页主题预览卡的样式（2026-10 批）：照 settings-search.css / welcome.css 先例组件级引入，
 // 不往常驻首屏样式链里塞——预览卡只在设置页出现，样式也只在设置页挂载时到达。
 import './settings-appearance.css';
+// 「作品位置」一节的行面（2026-11-03 默认工作区批）：同样只在设置页挂载时到达。
+import './settings-workspace.css';
 // 右键菜单回执那一行的排版（1023 覆盖面批）：与欢迎页 / 快捷键页共用同一份新样式表
 import './context-menu-pages.css';
 
@@ -280,18 +285,31 @@ export interface SettingsPanelProps {
   /** 清空顶部那一条框（快捷键节空态的退路按钮用；缺省不渲染那颗钮） */
   onClearSearch?: () => void;
 
-  /* ---- 工作区带（2026-10-27 撤销批） ---- */
+  /* ---- 工作区带（2026-10-27 撤销批 / 2026-11-03 默认工作区批） ---- */
   /**
-   * 工作区落点根清单（默认根恒在首位 + 每个自选项目位置根）。
-   * 壳层从 `workspaces.roots()` 现取——本组件不自己问内核（它是懒加载的纯呈现面）。
+   * 作品位置清单（内置根恒在首位 + 每个经目录对话框授权的自选根 +
+   * 一条「设定过但当前读不到」的失效行）。行模型由壳层调 `workspaceLocationRows` 现算，
+   * 本组件不自己问内核（它是懒加载的纯呈现面）。
    * 缺席 / 空数组 = 工作区服务不可用（浏览器开发壳）：那一节给一句人话，不伪造数据。
    */
-  workspaceRoots?: readonly { readonly path: string; readonly isDefault: boolean }[];
+  workspaceRoots?: readonly WorkspaceLocationRow[];
   /**
    * 撤销一个自选根（壳层转给 `workspaces.revokeRoot`）。失败原因由本组件原样上屏
-   * （默认根不可撤销、根里还有作品……都是内核给的现成人话）。
+   * （内置位置不可撤销、根里还有作品……都是内核给的现成人话）。
    */
   onRevokeWorkspaceRoot?: (root: string) => Promise<void>;
+  /**
+   * 把某一条位置设为默认落点（壳层转给 `workspaces.setDefaultRoot`）。
+   * 只能命中清单里已有的那几条——扩大授权仍只有目录对话框一条通道（铁律 6），
+   * 内核拒收名单外路径，拒因原样上屏。选内置那一条 = 清除设定。
+   */
+  onSetWorkspaceDefaultRoot?: (root: string) => Promise<void>;
+  /**
+   * 「选择其他文件夹…」：壳层转给 `io.chooseWorkspaceRoot`（对话框与登记绑在同一个
+   * Rust 命令内）。返回选中的绝对路径，**取消返回 null**；本组件拿到非 null 才接着
+   * 把它设为默认落点。平台不支持 / 被禁选根挡下 ⇒ 抛错，原因上屏。
+   */
+  onChooseWorkspaceLocation?: () => Promise<string | null>;
 }
 
 /**
@@ -482,6 +500,8 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     onClearSearch,
     workspaceRoots,
     onRevokeWorkspaceRoot,
+    onSetWorkspaceDefaultRoot,
+    onChooseWorkspaceLocation,
   } = props;
 
   return [
@@ -1022,7 +1042,12 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
       // 又比 trash 更像"存放的地方"而不是"删除"
       icon: 'archive',
       render: () => (
-        <WorkspaceRootsSection roots={workspaceRoots} onRevoke={onRevokeWorkspaceRoot} />
+        <WorkspaceRootsSection
+          roots={workspaceRoots}
+          onRevoke={onRevokeWorkspaceRoot}
+          onSetDefault={onSetWorkspaceDefaultRoot}
+          onChooseLocation={onChooseWorkspaceLocation}
+        />
       ),
     },
     {
@@ -1523,32 +1548,50 @@ function FindPrefRow(): ReactElement {
 }
 
 /**
- * 「工作区」一节：落点根清单 + 撤销自选根（2026-10-27 撤销批）。
+ * 「工作区」一节：作品位置清单 + 默认落点单选 + 撤销自选根
+ * （2026-10-27 撤销批 / 2026-11-03 默认工作区批）。
  *
  * 为什么要有这一节：自选项目位置是**常驻**授权（跟应用走，不随项目关闭收回），
  * 收窄之后常驻可写根只到作品目录，但"某个自选根还挂在清单上"这件事本身必须看得见、
  * 撤得掉——否则作者把游戏目录误选成项目位置后，没有任何 UI 能把那笔授权退回去。
+ * 2026-11-03 起这一节还回答「新建的作品默认落在哪」：**只在清单里挑一条**当默认，
+ * 不在这里扩权（扩大授权仍是目录对话框那一条通道，铁律 6）。
  *
  * 形态是刻意的**最小可用**：
- * - 默认根照列（标注「默认 · 不可撤销」），让作者知道自己的作品默认住在哪；
+ * - 一列单选点 = 默认落点（内置那条恒在首位）；点内置那条 = 清除设定；
+ * - 「选择其他文件夹…」走 `io.chooseWorkspaceRoot`：对话框与登记绑在同一个 Rust 命令里，
+ *     选定即授权、并直接把那一条设成默认（作者的意图就是"以后都放这儿"）；
  * - 每个自选根一颗「撤销」，点了先变成「确认撤销 / 取消」两步（不可逆动作不设一键；
  *     本页没有通用确认弹窗，就地把按钮换成两枚是最小代价的两步确认）；
- * - 失败原因（根里还有作品 / 默认根 / 平台不支持）由内核给的中文原文**原样上屏**，
- *     错误挂在该行下面，不弹窗、不静默。
+ * - 设定过但现在读不到的位置**照列**（徽标「当前不可用」+ 单选点禁用 + 一句落点说明），
+ *     失效不静默（铁律 4），但绝不假装它还是默认；
+ * - 失败原因（根里还有作品 / 内置位置 / 名单外路径 / 平台不支持）由内核与平台给的中文
+ *     原文**原样上屏**，错误挂在对应行下面，不弹窗、不静默。
  *
  * 服务不可用（浏览器调试壳，`roots()` 抛）时壳层传空数组/缺席 ⇒ 这一节给一句人话，
  * 不伪造任何根。
  */
+const WS_DEFAULT_GROUP_NAME = 'workspace-default-root';
+
+/** 组尾「选择其他文件夹…」那一条的回执（取消不给回执：什么都没变就是答案） */
+const WS_PICK_ROW_KEY = '__pick__';
+
 function WorkspaceRootsSection(args: {
-  readonly roots?: readonly { readonly path: string; readonly isDefault: boolean }[];
+  readonly roots?: readonly WorkspaceLocationRow[];
   readonly onRevoke?: (root: string) => Promise<void>;
+  readonly onSetDefault?: (root: string) => Promise<void>;
+  readonly onChooseLocation?: () => Promise<string | null>;
 }): ReactElement {
-  const { roots, onRevoke } = args;
+  const { roots, onRevoke, onSetDefault, onChooseLocation } = args;
   /** 正在二次确认的那一行（null = 没有待确认的撤销） */
   const [confirming, setConfirming] = useState<string | null>(null);
   /** 正在撤销的那一行（按钮转圈即禁用，避免连点重复调平台命令） */
   const [busy, setBusy] = useState<string | null>(null);
-  /** 上一次撤销的失败原因（挂着对应行；成功或再点一次即清） */
+  /** 正在写入默认设定的那一行（同一时刻整组单选点都锁住，防连点写两笔） */
+  const [savingDefault, setSavingDefault] = useState<string | null>(null);
+  /** 目录对话框开着（按钮转圈；对话框是平台侧模态，这里只挡重复点击） */
+  const [picking, setPicking] = useState(false);
+  /** 上一次操作的失败原因（`root` 为 `WS_PICK_ROW_KEY` 时挂在组尾那一条下面） */
   const [failure, setFailure] = useState<{ readonly root: string; readonly message: string } | null>(
     null,
   );
@@ -1556,12 +1599,12 @@ function WorkspaceRootsSection(args: {
   if (roots === undefined || roots.length === 0) {
     return (
       <div className="settings-group">
-        <div role="heading" aria-level={4} className="settings-group-title">项目位置</div>
+        <div role="heading" aria-level={4} className="settings-group-title">作品位置</div>
         <div className="settings-row static">
           <span>
             暂时读不到工作区位置
             <span className="settings-hint">
-              当前环境没有工作区服务（例如浏览器调试壳）。桌面版里这里会列出默认位置和你自选的项目位置。
+              当前环境没有工作区服务（例如浏览器调试壳）。桌面版里这里会列出软件自带的位置、你自选过的作品位置，并把其中一枚标成默认。
             </span>
           </span>
         </div>
@@ -1585,68 +1628,171 @@ function WorkspaceRootsSection(args: {
     );
   };
 
+  /** 设为默认落点（内核只接受命中清单的那几条；拒因原文上屏） */
+  const setDefault = (root: string): void => {
+    if (onSetDefault === undefined) return;
+    setSavingDefault(root);
+    setFailure(null);
+    void onSetDefault(root).then(
+      () => setSavingDefault(null),
+      (e: unknown) => {
+        setSavingDefault(null);
+        setFailure({ root, message: e instanceof Error ? e.message : String(e) });
+      },
+    );
+  };
+
+  /** 「选择其他文件夹…」：选定即授权，紧接着把那一条设成默认；取消 = 什么都不变 */
+  const pickLocation = (): void => {
+    if (onChooseLocation === undefined) return;
+    setPicking(true);
+    setFailure(null);
+    void onChooseLocation().then(
+      async (picked) => {
+        setPicking(false);
+        if (picked === null) return;
+        if (onSetDefault === undefined) return;
+        try {
+          await onSetDefault(picked);
+        } catch (e: unknown) {
+          setFailure({
+            root: WS_PICK_ROW_KEY,
+            message: `位置已经授权，但没能设成默认：${e instanceof Error ? e.message : String(e)}`,
+          });
+        }
+      },
+      (e: unknown) => {
+        setPicking(false);
+        setFailure({ root: WS_PICK_ROW_KEY, message: e instanceof Error ? e.message : String(e) });
+      },
+    );
+  };
+
+  const hintFor = (row: WorkspaceLocationRow): string => {
+    if (!row.available) {
+      return '这个位置现在读不到（移动硬盘没插上，或授权已撤销）。新建的作品暂时落在上面标着「默认」的那一条；重新授权同一个文件夹后，这里会自动沿用回来，不用重设一遍。';
+    }
+    if (row.isBuiltin) {
+      return '软件自带的数据位置，一直在清单首位，不能撤销。选它就是把默认落点清回出厂状态。';
+    }
+    // 自选行分两种读法：此刻**就是**落点的那一条要说清"撤掉它之后新建的作品去哪儿"，
+    // 否则作者只能按下去试一次才知道（内核那侧的口径见 `revokeRoot` / `defaultRoot`）。
+    if (row.isDefault) {
+      return '你在目录对话框里自选并授权的位置，也是现在新建作品的落点。里面还有作品时撤销会被拦下；真的撤掉后，新建的作品回到软件自带的位置——这条设定保留，重新授权同一个文件夹就自动沿用回来。';
+    }
+    return '你在目录对话框里自选并授权的位置。选中它，以后新建的作品都放这儿；撤销后这里不再是作品落点（里面的作品会先拦下撤销，不会变成只读）。';
+  };
+
   return (
-    <div className="settings-group">
-      <div role="heading" aria-level={4} className="settings-group-title">项目位置</div>
-      {roots.map((root) => {
-        const pending = confirming === root.path;
-        const working = busy === root.path;
-        return (
-          <div className="settings-row static" key={root.path} data-workspace-root={root.path}>
-            {root.isDefault ? (
-              <span>
-                {root.path}
-                <span className="settings-hint">
-                  默认 · 不可撤销（作品默认就住在这个位置）
+    <div className="settings-group settings-ws">
+      <div role="heading" aria-level={4} className="settings-group-title">作品位置</div>
+      <div className="settings-ws-lead" id="settings-ws-lead">
+        新建的作品默认落在下面<b>选中</b>的那一条。自选的文件夹只是落点：真正可写的是里面建出来的作品目录，不是这个文件夹本身。
+      </div>
+      <div
+        className="settings-ws-roots"
+        role="radiogroup"
+        aria-label="默认作品位置"
+        aria-describedby="settings-ws-lead"
+        data-settings-key="workspace.defaultRoot"
+      >
+        {roots.map((row) => {
+          const pending = confirming === row.path;
+          const working = busy === row.path;
+          const saving = savingDefault === row.path;
+          const rowFailure = failure !== null && failure.root === row.path ? failure.message : null;
+          return (
+            <div
+              className="settings-ws-root"
+              key={row.path}
+              data-workspace-root={row.path}
+              data-ws-default={row.isDefault ? '1' : '0'}
+              data-ws-available={row.available ? '1' : '0'}
+            >
+              <KitRadio
+                name={WS_DEFAULT_GROUP_NAME}
+                value={row.path}
+                checked={row.isDefault}
+                disabled={!row.available || onSetDefault === undefined || savingDefault !== null}
+                label={`把默认作品位置设为 ${row.path}`}
+                onChange={(on) => {
+                  if (on && !row.isDefault) setDefault(row.path);
+                }}
+              >
+                <span className="settings-ws-root-title">
+                  <span className="settings-ws-root-path">{row.path}</span>
+                  {row.isBuiltin ? <span className="settings-ws-badge">内置</span> : null}
+                  {row.isDefault ? <span className="settings-ws-badge is-on">默认</span> : null}
+                  {!row.available ? (
+                    <span className="settings-ws-badge is-off">当前不可用</span>
+                  ) : null}
+                  {saving ? <span className="settings-ws-badge is-busy">设定中…</span> : null}
                 </span>
-              </span>
-            ) : (
-              <>
-                {pending ? (
-                  <>
-                    <button
-                      className="primary small"
-                      onClick={() => revoke(root.path)}
-                      disabled={working || onRevoke === undefined}
-                    >
-                      {working ? '撤销中…' : '确认撤销'}
-                    </button>
+                <span className="settings-hint">{hintFor(row)}</span>
+              </KitRadio>
+              {row.available && !row.isBuiltin ? (
+                <span className="settings-ws-ops">
+                  {pending ? (
+                    <>
+                      <button
+                        className="primary small"
+                        onClick={() => revoke(row.path)}
+                        disabled={working || onRevoke === undefined}
+                      >
+                        {working ? '撤销中…' : '确认撤销'}
+                      </button>
+                      <button
+                        className="ghost small"
+                        onClick={() => setConfirming(null)}
+                        disabled={working}
+                      >
+                        取消
+                      </button>
+                    </>
+                  ) : (
                     <button
                       className="ghost small"
-                      onClick={() => setConfirming(null)}
-                      disabled={working}
+                      onClick={() => {
+                        setFailure(null);
+                        setConfirming(row.path);
+                      }}
+                      disabled={onRevoke === undefined}
                     >
-                      取消
+                      撤销
                     </button>
-                  </>
-                ) : (
-                  <button
-                    className="ghost small"
-                    onClick={() => {
-                      setFailure(null);
-                      setConfirming(root.path);
-                    }}
-                    disabled={onRevoke === undefined}
-                  >
-                    撤销
-                  </button>
-                )}
-                <span>
-                  {root.path}
-                  <span className="settings-hint">
-                    自选位置：撤销后这里不再是可写位置（里面的作品会先拦下撤销，不会变成只读）
-                  </span>
+                  )}
                 </span>
-              </>
-            )}
-            {failure !== null && failure.root === root.path ? (
-              <span className="settings-hint is-err" role="alert">
-                {failure.message}
-              </span>
-            ) : null}
-          </div>
-        );
-      })}
+              ) : null}
+              {rowFailure !== null ? (
+                <span className="settings-hint is-err" role="alert">
+                  {rowFailure}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="settings-row static" data-settings-key="workspace.addLocation">
+        <span>
+          想放到别的文件夹
+          <span className="settings-hint">
+            弹出系统目录对话框：选定即授权这个文件夹成为作品落点，并直接把它设为默认位置。取消则什么都不变。
+          </span>
+          {failure !== null && failure.root === WS_PICK_ROW_KEY ? (
+            <span className="settings-hint is-err" role="alert">
+              {failure.message}
+            </span>
+          ) : null}
+        </span>
+        <button
+          className="ghost small"
+          onClick={pickLocation}
+          disabled={onChooseLocation === undefined || picking}
+        >
+          {picking ? '等待选择…' : '选择其他文件夹作为作品位置…'}
+        </button>
+      </div>
     </div>
   );
 }

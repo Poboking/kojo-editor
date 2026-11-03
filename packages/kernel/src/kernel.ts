@@ -175,8 +175,14 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
 
   // 作者工作区：初始化失败（无平台数据目录）不连累内核启动——服务降级为
   // 「调用时抛带原因错误」，面板自解释呈现。journal 直注入（同包内核服务，
-  // 不过服务键——服务键是给插件的通道）
-  const workspaces = new WorkspaceServiceImpl({ bridge: opts.platform, io, log: kernelLog, journal: ops });
+  // 不过服务键——服务键是给插件的通道）；默认落点设定的存储与 recent-projects 同域
+  const workspaces = new WorkspaceServiceImpl({
+    bridge: opts.platform,
+    io,
+    log: kernelLog,
+    journal: ops,
+    globalStorage: storage.global(),
+  });
   try {
     await workspaces.init();
   } catch (err) {

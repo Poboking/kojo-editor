@@ -99,6 +99,9 @@ function wizardDeps(langDocs: readonly KojoLangDocChoice[]): NewKojoProjectWizar
   return {
     workspaces: {
       rootDir: () => '/appdata/workspaces',
+      // 默认落点（2026-11-03 批）：这副替身没设定过，就是内置根
+      defaultRoot: () => '/appdata/workspaces',
+      customDefaultRoot: () => null,
       roots: () => [],
       projects: async () => [],
       current: () => null,
