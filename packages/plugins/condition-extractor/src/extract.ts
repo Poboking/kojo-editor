@@ -290,16 +290,13 @@ function sliceInlineComment(s: string): string {
 }
 
 /**
- * 赋值语句识别：`LOCAL(:n)? = RHS` / `ARG(:n)? = RHS`（`== != <= >= <>` 不匹配；
- * ARG/ARGS 系 v0.2 第七批扩的参数槽赋值，内联解释器按顺序执行消费）。
- * 复合与自增族（KW-33 1103 补全）：`+= -= *= /= %= &= |= ^= '=` `<<= >>=` 与 `A++` / `A--` / `++A`，
- * 记号表与 `kojo-sugar/native-display/statement.ts` 同源。
- * **只有裸 `=` 产出具体值**，其余一律 opaque（旧值不可知 → 之后读取降级 unknown）。
- * 逐族枚数与不收的族（动词写值 / 非字面下标 / 行首 `@`）见 `tests/assignments.test.ts`。
- * 自增简写无右值 ⇒ 行内注释须在匹配前切（引号感知，与旧 RHS 同一条判据）。
+ * 赋值识别：`LOCAL(:n)? = RHS`（`== != <= >= <>` 不匹配）。
+ * KW-33b 1103：复合（`&= |= ^= <<= >>=`）与自增（`A++`/`A--`/`++A`）也收，只有裸 `=` 产出具体值，
+ * 余皆 opaque；记号表同 sugar 的 statement.ts。`LOCAL' = "…"`（字符串槽）**不收**——契约 `name`
+ * 无素书维，收它＝字符串写当数值读＝假命中。枚数与不收诸族理由＝tests/assignments.test.ts 头注。
  */
 const ASSIGN_RE =
-  /^(?:(\+\+|--)\s*)?(LOCAL|LOCALS|RESULT|RESULTS|ARG|ARGS)(?::(\d+))?\s*(?:(\+\+|--)|('?(?:<<|>>|[+\-*/%&|^])?=)(?!=)\s*(.*))?\s*$/i;
+  /^(?:(\+\+|--)\s*)?(LOCALS?|RESULTS?|ARGS?)(?::(\d+))?\s*(?:(\+\+|--)|((?:<<|>>|[+\-*/%&|^])?=)(?!=)\s*(.*))?$/i;
 
 /** 从函数体原始行收集本地量赋值（结构事实；RHS 无法解析 → opaque，绝不抛） */
 export function collectAssignments(
@@ -327,22 +324,21 @@ export function collectAssignments(
     if (trimmed.length === 0 || trimmed.startsWith(';')) continue;
     if (trimmed.startsWith('@') || trimmed.startsWith('#') || trimmed.startsWith('$')) continue;
 
-    // 行内注释先切：自增简写没有右值，`; 注释` 只能在匹配前处理，否则整行匹配不上
+    // 自增没有右值 ⇒ 注释须在匹配前切
     const m = ASSIGN_RE.exec(sliceInlineComment(trimmed).trim());
     if (!m) continue;
     const name = m[2]!.toUpperCase();
     if (!ASSIGNABLE_LOCALS.has(name)) continue;
     const index = m[3] ? Number(m[3]) : 0;
-    // 组 5 = 赋值运算符；组 4 / 组 1 = 后置 / 前置自增自减（三者互斥，全缺位 ⇒ 整行只是个裸引用，不是写值）
+    // 组 5 赋值符，组 4/1 后置/前置自增；全缺位＝裸引用，不是写值
     const op = m[5] ?? m[4] ?? m[1];
-    if (op === undefined) continue;
     const rhs = (m[6] ?? '').trim();
-    if (m[5] !== undefined && rhs.length === 0) continue; // `LOCAL +=`（右值空）不是写值
+    if (!op || (m[5] !== undefined && !rhs)) continue;
 
     out.push({
       name: name as FunctionAssignment['name'],
       index,
-      expr: op === '=' ? parseExpression(rhs) : { kind: 'opaque', text: rhs.length > 0 ? `${op} ${rhs}` : op },
+      expr: op === '=' ? parseExpression(rhs) : { kind: 'opaque', text: rhs ? `${op} ${rhs}` : op },
       text: rhs,
       line: i,
       context: contextOf(i),
