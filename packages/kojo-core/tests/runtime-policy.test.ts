@@ -21,7 +21,7 @@ describe("runtime match policy", () => {
   it("地点别名双向、父级继承", () => {
     expect(expandRuntimeTokens("神社", POLICY.locationAliases, POLICY.locationParents)).toEqual(["博麗神社", "神社"]);
     expect(runtimeLocationMatches(POLICY, "博麗神社", { raw: "神社" })).toBe(true);
-    expect(runtimeLocationMatches(POLICY, "紅魔館", { raw: "大図書館" })).toBe(true);
+    expect(runtimeLocationMatches(POLICY, "紅魔館", { raw: "大図書館", tags: ["紅魔館"] })).toBe(true);
   });
 
   it("时间别名、继承、数值与区间", () => {

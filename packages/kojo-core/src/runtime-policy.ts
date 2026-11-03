@@ -96,23 +96,30 @@ function collectTimeRanges(policy: RuntimeMatchPolicy | null, tokens: readonly s
   return ranges;
 }
 
-function queryTokens(policy: RuntimeMatchPolicy | null, domain: "location" | "time", query: RuntimeDomainQuery): Set<string> {
+function queryTokens(
+  policy: RuntimeMatchPolicy | null,
+  domain: "location" | "time",
+  query: RuntimeDomainQuery,
+  includeParents: boolean,
+): Set<string> {
   const tokens = new Set<string>();
-  const expand = domain === "location"
-    ? (raw: string) => runtimeLocationTokens(policy, raw)
-    : (raw: string) => runtimeTimeTokens(policy, raw);
+  const expand = (raw: string): readonly string[] => {
+    if (domain === "time" || includeParents) {
+      return domain === "location" ? runtimeLocationTokens(policy, raw) : runtimeTimeTokens(policy, raw);
+    }
+    return expandRuntimeTokens(raw, policy?.locationAliases, undefined);
+  };
   if (query.raw !== null) for (const token of expand(query.raw)) tokens.add(token);
   for (const tag of query.tags ?? []) for (const token of expand(tag)) tokens.add(token);
   return tokens;
 }
-
 export function runtimeLocationMatches(
   policy: RuntimeMatchPolicy | null,
   theaterRaw: string,
   query: RuntimeDomainQuery,
 ): boolean {
   const theater = new Set(runtimeLocationTokens(policy, theaterRaw));
-  const runtime = queryTokens(policy, "location", query);
+  const runtime = queryTokens(policy, "location", query, false);
   for (const token of runtime) if (theater.has(token)) return true;
   return false;
 }
@@ -123,7 +130,7 @@ export function runtimeTimeMatches(
   query: RuntimeDomainQuery,
 ): boolean {
   const theaterTokens = runtimeTimeTokens(policy, theaterRaw);
-  const runtime = queryTokens(policy, "time", query);
+  const runtime = queryTokens(policy, "time", query, true);
   for (const token of runtime) if (theaterTokens.includes(token)) return true;
   const numeric = query.value ?? null;
   if (numeric === null) return false;

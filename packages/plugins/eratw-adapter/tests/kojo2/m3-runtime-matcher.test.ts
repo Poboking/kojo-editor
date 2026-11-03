@@ -279,7 +279,7 @@ describe('M3 RuntimeMatchPolicy · 别名/区间/继承', () => {
       ...ERATW_RUNTIME_MATCH_POLICY,
       locationParents: { 大図書館: ['紅魔館'] },
     };
-    expect(runtimeLocationMatches(withParent, '紅魔館', { raw: '大図書館' })).toBe(true);
+    expect(runtimeLocationMatches(withParent, '紅魔館', { raw: '大図書館', tags: ['紅魔館'] })).toBe(true);
   });
 
   it('时间别名/父级继承/数值区间参与匹配', () => {
