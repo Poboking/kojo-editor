@@ -214,12 +214,23 @@ export function createFunctionOverlay(opts: CreateOverlayOptions): OverlayReader
 
   /** ARG/ARGS 槽位解析（注入的调用上下文；裸名 ≡ 0 号槽） */
   const resolveArg = (name: string, indices: readonly string[], text: string): ReplayValue => {
+    // KW-38 1103：这一枚码的三处发点说的是**三种不同的事实**（真语料分布：846 / 12 / 0），
+    // 白话批的口径是「为什么判不出 + 该怎么办」，所以逐处补上那一格的出口——槽位号是从
+    // `name` 与 `indices` 当场算出来的事实，填哪一格照它说就不会指错。判定口径一字未动。
     let slot: number | null = null;
     if (indices.length === 0) slot = 0; // 裸 ARG ≡ ARG:0（1D 裸引用 = 0 号下标，引擎语义）
     else if (indices.length === 1 && /^-?\d+$/.test(indices[0]!)) slot = Number(indices[0]);
     if (slot === null || slot < 0) {
-      return { kind: 'unknown', unknown: { code: 'call-context', message: `调用参数槽位无法解析：${text}` } };
+      return {
+        kind: 'unknown',
+        unknown: {
+          code: 'call-context',
+          message: `这一格要按下标取调用参数，但下标不是槽号：${text}（本编辑器只认写死的整数槽，${name}:0、${name}:1 这一样；负数与算出来的下标对不上任何一槽）` +
+            '⇒ 判不出。想知道某一处会怎样，就把这一句的下标写成明确的整数槽，或顺着调用它的地方自己判。',
+        },
+      };
     }
+    const slotKey = `${name}:${slot}`;
     if (!callContext) {
       // KW-28 1103：旧文案只说"未提供"，读起来像"谁忘了给"——实际是**这一格的值取决于
       // 本次调用的实参**，而回放既没有调用栈（存档只有状态）也无从知道是哪一处调用进来
@@ -228,7 +239,8 @@ export function createFunctionOverlay(opts: CreateOverlayOptions): OverlayReader
         kind: 'unknown',
         unknown: {
           code: 'call-context',
-          message: `ARG/ARGS 为调用参数，未提供调用上下文：${text}（这一格的值由本次调用的实参决定；存档里只有状态、没有调用栈，静态也无从确定是哪一处调用带进来的值 ⇒ 不猜）`,
+          message: `ARG/ARGS 为调用参数，未提供调用上下文：${text}（这一格的值由本次调用的实参决定；存档里只有状态、没有调用栈，静态也无从确定是哪一处调用带进来的值 ⇒ 不猜）。` +
+            `想按某个场景看结果，就在面板的「场景参数」里给 ${slotKey} 填一个你假设的值——填了就是照这个假设算，不填就一直是判不出。`,
         },
       };
     }
@@ -239,7 +251,8 @@ export function createFunctionOverlay(opts: CreateOverlayOptions): OverlayReader
         kind: 'unknown',
         unknown: {
           code: 'call-context',
-          message: `调用上下文未覆盖该槽位：${text}（注入的实参只填了部分槽位；没填的这一格仍取决于本次调用 ⇒ 不猜，也不借用相邻槽位的值）`,
+          message: `调用上下文未覆盖该槽位：${text}（注入的实参只填了部分槽位；没填的这一格仍取决于本次调用 ⇒ 不猜，也不借用相邻槽位的值）。` +
+            `面板的「场景参数」里 ${slotKey} 这一格现在空着 ⇒ 填它才有解；空着的含义就是"这个参数我不知道"。`,
         },
       };
     }

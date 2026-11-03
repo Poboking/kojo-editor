@@ -35,6 +35,7 @@ import {
   varShapeFromArchiveType,
   type VarModel,
 } from './var-model';
+import { unknownNameMessage } from './missing-var-facts';
 
 /** 具名索引字典查询（来自 game adapter `variableSchema`；缺省时具名索引不可求值） */
 export type SchemaLookup = (name: string, index?: number | string) => VariableInfo | undefined;
@@ -238,7 +239,19 @@ class StateView implements ReplayStateView {
     // 已知名在函数开头就返回 model；快照缺块的默认值语义由
     // readCharaVar/readGlobalVar 的缺块路径处理）
     // ⚠ `#DIM CONST` 具名常量的收口在 read() 的本返回值消费处（需要零下标信息）。
-    return unknownValue('missing-var', `快照中未找到变量：${name}`);
+    // KW-38 1103：这一处是 C 档底座句（真语料 81 枚**全部**出自这里，KW-34 实测）。
+    // 只报"这两本帐逐字翻过、名字表在不在位"这些**本发点拿得到的事实**；
+    // A 档（函数头参数别名）与 B 档（本函数正文里的 #DIM 声明）由引擎侧上妆 pass
+    // 按函数形状替换文案（`missing-var-facts.annotateMissingVar`），机器码与判定都不动。
+    return unknownValue(
+      'missing-var',
+      unknownNameMessage({
+        name,
+        topCount: this.topIndex.size,
+        charaCount: this.charaIndex.get(this.regNo)?.size ?? 0,
+        dictionary: this.lookup ? 'consulted' : 'absent',
+      }),
+    );
   }
 
   /**
@@ -317,15 +330,29 @@ class StateView implements ReplayStateView {
   /** 读角色块变量（不存在 → 已知名 0/''；越界 → unknown；稀疏缺省 → 0/''） */
   private readBlockVar(charaNo: number, key: string, indices: readonly number[], kind: 'int' | 'str'): ReplayValue {
     const blockVars = this.charaIndex.get(charaNo);
+    // KW-38：这处发点说的是"整块人都不在这张档里"，与未知名发点（这一格没落盘）是两回事，
+    // 文案分开写；真语料 0 枚，形状仍须说得出口（起手句与 C 档不同 ⇒ 上妆 pass 不会碰它）。
     if (!blockVars) {
-      return unknownValue('missing-var', `角色注册号 ${charaNo} 不在快照中（${key}）`);
+      return unknownValue(
+        'missing-var',
+        `整个角色都不在这张档里：第 ${charaNo} 号角色没有块（本档共 ${this.archive.chars?.length ?? 0} 个角色块），` +
+          `它要的 ${key} 自然读不到——缺的不是这一格，是这一整块人。` +
+          '⇒ 换一张有它的存档、或把这一句指的角色号改对，才有解；这里不拿 0 或别的角色的格凑。',
+      );
     }
     const v = blockVars.get(key);
     if (!v) {
       if (isKnownCharaVariable(key)) {
         return kind === 'str' ? { kind: 'value', value: '' } : { kind: 'value', value: 0 };
       }
-      return unknownValue('missing-var', `角色块中无变量：${key}`);
+      // KW-38：内置角色变量缺格走上格的 0/空串（引擎语义），走到这里说明它**不是**内置名，
+      // 那句"缺格按 0"的保证对它不成立 ⇒ 把"没默认值"的原因说成事实。
+      return unknownValue(
+        'missing-var',
+        `第 ${charaNo} 号角色的块里没有逐字叫 ${key} 的格，而它也不在引擎内置的角色变量清单里` +
+          '（内置名缺格会按 0 或空串处理，这份保证不含自开的名字），存档的全局变量区里也没有它 ' +
+          '⇒ 这一格判不出，不默认 0、不拿别的角色的同名格顶上。',
+      );
     }
     return this.readArchiveVar(v, indices, kind);
   }
@@ -365,7 +392,15 @@ class StateView implements ReplayStateView {
       if (isKnownGlobalVariable(key)) {
         return kind === 'str' ? { kind: 'value', value: '' } : { kind: 'value', value: 0 };
       }
-      return unknownValue('missing-var', `顶层变量区中无变量：${key}`);
+      // KW-38：能走到这里说明这个名字是**引擎内置清单**里的全局量（自开的名字在前一步就落进
+      // 未知名发点了）。内置量一般恒在档里，所以这一处的事实是"这张帐的口径不含它"——
+      // 与"作者自开的量根本不落盘"是两回事，不许共用一句话。
+      return unknownValue(
+        'missing-var',
+        `引擎的内置变量清单里有 ${key}（不是作者自开的名字），但这份存档的全局变量区里没有它的格 ` +
+          `（本档全局区共 ${this.topIndex.size} 格）。内置量一般恒在档里 ⇒ 多半是这张档的版本或口径不含它；` +
+          '⇒ 判不出这一格，不默认 0。',
+      );
     }
     return this.readArchiveVar(v, indices, kind);
   }

@@ -38,6 +38,7 @@ import { buildBranchOutcomes } from './branches';
 import { InlineManager } from './inline';
 import { createFunctionOverlay, type OverlayPosition, type OverlayReader } from './locals';
 import { judgePredicateWithLoops } from './loop-range';
+import { annotateMissingVar, hasUnknownNameSite } from './missing-var-facts';
 import { createStateView, type SchemaLookup } from './state-view';
 import { buildTranscript } from './transcript';
 
@@ -297,6 +298,28 @@ export class StateReplayEngine implements StateReplayService {
     return lines;
   }
 
+  /**
+   * `missing-var` 的**文案分档上妆**（KW-38 1103；判定零改动）。
+   *
+   * 底座句出自 `state-view` 的未知名发点（它只知道自己翻过存档的两本帐），而"这一格其实是
+   * 函数头参数表里的别名 / 本函数正文里的 `#DIM` 声明"要按**函数形状**才说得出——那一行文本
+   * 归本引擎管（`detail.startLine` / `endLine`）。闸门与红线：
+   * - 本函数没有未知名点位 ⇒ **不取行文本**（真语料 81/11,685 谓词，热路径零额外读盘）；
+   * - 取不到行文本 ⇒ 保持底座句 + 一条 warn（照实说"看不出更细的原因"，绝不妨碍判定）；
+   * - 上妆只替换 `unknown.message` 的字符串，`kind` / `code` / 谓词条数 / 分支可达性一概不碰
+   *   （逐码改前＝改后由 `packages/kernel/tests/integration-plugins.test.ts` 的打印自证）。
+   */
+  private async withMissingVarCause(replay: FunctionReplay, detail: FunctionPredicates): Promise<FunctionReplay> {
+    if (!hasUnknownNameSite(replay)) return replay;
+    try {
+      const lines = await this.getLines(detail.filePath);
+      return annotateMissingVar(replay, { lines, startLine: detail.startLine, endLine: detail.endLine });
+    } catch (err) {
+      this.deps.log.warn(`missing-var 文案分档取函数行文本失败（保持底座句）：${detail.filePath} — ${String(err)}`);
+      return replay;
+    }
+  }
+
   async replayFunction(
     view: ReplayStateView,
     functionName: string,
@@ -327,9 +350,14 @@ export class StateReplayEngine implements StateReplayService {
         this.deps.log.warn(`loop window lines unavailable for ${detail.filePath}: ${String(err)}`);
       }
     }
-    const replay = replayPredicates(detail, read, overlay ?? undefined, resolveCall, loopBodyLines);
+    const replay = await this.withMissingVarCause(
+      replayPredicates(detail, read, overlay ?? undefined, resolveCall, loopBodyLines),
+      detail,
+    );
     // 台词推演（v0.3 口上调试统一批；additive）：有显示行资料且行文本可得时才附——
     // 读文件失败等意外只降级（无 transcript），不影响谓词 / 分支结果。
+    // ⚠ 必须在文案分档**之后**建：台词区的"判不出原因"直接引用谓词 / 分支那批 unknown 对象，
+    // 先上妆才能让屏上两处读到同一句话。
     if (detail.displays && detail.displays.length > 0) {
       try {
         const lines = await this.getLines(detail.filePath);
