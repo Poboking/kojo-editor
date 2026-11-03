@@ -77,6 +77,28 @@ const NUMERIC_SEG = /^-?\d+$/;
 /** 角色参数位可解析的引擎指针名（值为注册号） */
 const CHARA_POINTERS = new Set(['TARGET', 'ASSI', 'MASTER', 'PLAYER']);
 
+/**
+ * `#DIM CONST` 具名常量探测的**载族**（KW-34 判性批）。
+ *
+ * 引擎侧具名常量**不属于任何族**：`族头:名字` 后面写标识符时走"索引位=表达式求值"这条
+ * 普通路（`VariableEvaluator.cs:215` 只把字面串索引交给 CSV 名称表），同一个常量写在
+ * 任何族后面换算出同一个编号——adapter 的 `SchemaLookup` 对这条事实有显式登记：
+ * 名称表查无 → `.ERH` 自定名表兜底，且**只有**这条兜底带 `source: 'const'`
+ * （`eratw-adapter/src/variable-schema.ts` 的 lookup 注释 ⇒ 契约 `VariableSource` 第三值）。
+ * 但 `lookup(名)` 无索引时只对**存在名表的族**应答（族表都没有 → undefined 提前返回），
+ * 裸常量引用（`TIMEFACTOR_无加速` 这种没有族头的）因此需要一个载族来问出编号。
+ * 载族选引擎语言层的 `FLAG`（与 `var-model` 的内置全局同族词汇，零游戏名词）。
+ *
+ * 三条红线（逐枚判性 83 枚的结论固化）：
+ * 1. **只认 `source === 'const'`**——名称表命中（`'primary'`/`'append'`）的编号是
+ *    "某族的槽位号"，不是"名字=编号"的全局常量，拿来当裸引用的值就是假命中；
+ * 2. **只答零下标引用**——`CONST:1` 这类带索引形态引擎不保证（自定名表只收整数标量
+ *    声明），保持 `missing-var`；
+ * 3. **载族无名表 ⇒ 无从探测**——返回 undefined、照旧 `missing-var`（跨方言优雅降级），
+ *    绝不为此放宽成"猜一个族"。
+ */
+const CONST_PROBE_CARRIER = 'FLAG';
+
 class StateView implements ReplayStateView {
   readonly characterNo: number;
   readonly archivePath: string;
@@ -152,7 +174,21 @@ class StateView implements ReplayStateView {
 
     // ---- 变量模型：内置清单优先，数据驱动兜底 ----
     const model = this.resolveModel(name);
-    if (isUnknownModel(model)) return model;
+    if (isUnknownModel(model)) {
+      // KW-34 收口（F4 族）：未知名里唯一"静态本可得值"的一类是 `#DIM CONST` 具名整数
+      // 常量——编号与载族无关（见 `CONST_PROBE_CARRIER` 注释），字典答 `source:'const'`
+      // 才收；其余（会话级全局 / 形参别名 / 函数体内局部 DIM）快照里根本没有这一格，
+      // 保持 missing-var，**不折叠大小写、不默认 0、不猜**。
+      if (
+        model.kind === 'unknown' &&
+        model.unknown.code === 'missing-var' &&
+        ref.indices.length === 0
+      ) {
+        const erhConst = this.probeErhConst(name);
+        if (erhConst !== null) return { kind: 'value', value: erhConst };
+      }
+      return model;
+    }
 
     // ---- 参数归化 + 寻址 ----
     const segs = ref.indices;
@@ -201,7 +237,19 @@ class StateView implements ReplayStateView {
     // 分支不可达——builtinVarModel 与 isKnown*Variable 检查同一批集合，
     // 已知名在函数开头就返回 model；快照缺块的默认值语义由
     // readCharaVar/readGlobalVar 的缺块路径处理）
+    // ⚠ `#DIM CONST` 具名常量的收口在 read() 的本返回值消费处（需要零下标信息）。
     return unknownValue('missing-var', `快照中未找到变量：${name}`);
+  }
+
+  /**
+   * 具名常量探测（KW-34 F4 收口；三条红线的执行体，语义见 `CONST_PROBE_CARRIER`）。
+   * 命中当且仅当：字典应答 `source:'const'` **且** 带整数编号——其余一律 null。
+   */
+  private probeErhConst(name: string): number | null {
+    if (!this.lookup) return null;
+    const info = this.lookup(CONST_PROBE_CARRIER, name);
+    if (info?.source !== 'const') return null;
+    return typeof info.resolvedIndex === 'number' && Number.isSafeInteger(info.resolvedIndex) ? info.resolvedIndex : null;
   }
 
   // ------------------------------------------------------------------
