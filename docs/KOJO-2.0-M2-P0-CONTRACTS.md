@@ -83,6 +83,9 @@
       registrationStatus: TargetRegistrationStatus;
       status: 'supported' | 'unsupported' | 'unknown' | 'needs-context' | 'invalid-context';
       rawTarget: string;
+      /** M3 additive: parser location/time facts carried through; M2 does not match on them. */
+      location: KojoTheaterLocation;
+      time: KojoTheaterTime;
       canonicalId: CanonicalTargetId | null;
       descriptor: TargetDescriptor | null;
       functionName: FunctionNameResolution;
@@ -340,6 +343,9 @@
       ordinal: number;
       origin: 'theater' | 'legacy-machine';
       rawTarget: string;
+      /** M3 additive: parser location/time facts carried through; M2 does not match on them. */
+      location: KojoTheaterLocation;
+      time: KojoTheaterTime;
       canonicalId: CanonicalTargetId | null;
       resolution: TargetResolution;
       sourceArgs: FunctionNameSourceArgs;

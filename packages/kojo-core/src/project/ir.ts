@@ -12,7 +12,7 @@
  * `buildProjectIR` 只产出未解析的源事实，`ProjectTheaterIR.targetResolution` 初始为 null。
  */
 import type { Capability, SourceMapPolicy } from '../adapter.js';
-import type { KojoFile, KojoSpan, KojoTheater } from '../ast.js';
+import type { KojoFile, KojoSpan, KojoTheater, KojoTheaterLocation, KojoTheaterTime } from '../ast.js';
 import type { KojoDiagnostic } from '../diagnostics.js';
 import type { TheaterLoweringUnit, TheaterUnitsStatus } from '../lower/theater-unit.js';
 import type { SourceMapData } from '../source-map-data.js';
@@ -152,6 +152,10 @@ export interface ResolvedTheater {
   readonly ordinal: number;
   readonly origin: 'theater' | 'legacy-machine';
   readonly rawTarget: string;
+  /** M3 additive: parser location fact carried through so matcher needs no re-parse. */
+  readonly location: KojoTheaterLocation;
+  /** M3 additive: parser time fact carried through so matcher needs no re-parse. */
+  readonly time: KojoTheaterTime;
   readonly canonicalId: string | null;
   readonly resolution: TargetResolution;
   readonly sourceArgs: FunctionNameSourceArgs;

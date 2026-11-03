@@ -16,3 +16,4 @@ export * from './ir.js';
 export * from './target-registry.js';
 export * from './linker.js';
 export * from './compile-project.js';
+export * from './runtime-matcher.js';

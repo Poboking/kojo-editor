@@ -184,7 +184,13 @@ const CONTRACT_TYPES = [
   'RandStyle',
   'RegistryId',
   'ResolvedTheater',
+  'RuntimeMatchCandidate',
   'RuntimeProtocolDescriptor',
+  'RuntimeSelection',
+  'RuntimeSelectionDiagnostic',
+  'RuntimeSelectionDiagnosticCode',
+  'RuntimeSelectionRequest',
+  'RuntimeSelectionStatus',
   'SourceMapData',
   'SourceMapLineData',
   'SourceMapPolicy',
@@ -240,7 +246,7 @@ const STRUCTURE_VALUES = [
 ] as const;
 
 describe('@kojo/kojo-sdk 导出面', () => {
-  it('contracts.ts 的类型面 = 清单（157 枚；多/少一枚都红）', () => {
+  it('contracts.ts 的类型面 = 清单（163 枚；多/少一枚都红）', () => {
     expect(exportedNames('contracts.ts', 'type')).toEqual([...CONTRACT_TYPES]);
   });
 

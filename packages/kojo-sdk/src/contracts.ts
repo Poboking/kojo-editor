@@ -199,6 +199,17 @@ export type {
   MonacoComponentPaletteSide,
 } from '@kojo/plugin-api';
 
+/* ---------- 游戏侧：M3 Runtime Matcher 契约（`@kojo/kojo-core`） ---------- */
+
+export type {
+  /** 运行时选择结果：selected / no-match / ambiguous / not-linked */
+  RuntimeSelectionStatus,
+  RuntimeSelectionRequest,
+  RuntimeMatchCandidate,
+  RuntimeSelectionDiagnosticCode,
+  RuntimeSelectionDiagnostic,
+  RuntimeSelection,
+} from '@kojo/kojo-core';
 /* ---------- 编辑器侧：`ui.editor.languageService`（`@kojo/plugin-api`） ---------- */
 
 export type {

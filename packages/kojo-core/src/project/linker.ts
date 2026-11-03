@@ -184,6 +184,8 @@ function resolvedTheaterOf(theater: ProjectTheaterIR, path: string): ResolvedThe
     ordinal: theater.ordinal,
     origin: theater.origin,
     rawTarget: theater.theater.target.raw,
+    location: theater.theater.location,
+    time: theater.theater.time,
     canonicalId: resolution.canonicalId,
     resolution,
     sourceArgs: theater.sourceArgs,
