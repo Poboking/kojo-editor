@@ -26,3 +26,9 @@ M2 `ResolvedTheater` 增加只读 `location` / `time`，由 linker 从 `ProjectT
 - `DispatchTargetPlan` 按 `canonicalId + functionName` 拆分，避免跨角色合并。
 - eraTW selector 由 Host 显式注入；缺失时 fail-closed。
 - `requireDispatch` 控制最终 dispatch 是否为构建必需；缺省保持 M2 兼容。
+
+## 第三阶段扩展：Host selector 注入
+
+- selector 从 backend 实例 deps 上提到 `ProjectCompileInput.dispatchSelectors`，Host 成为唯一来源。
+- `compileKojo2Project` 提供同一入口；`requireDispatch` 继续控制是否阻断构建。
+- 没有证据的 eraTW selector 不写入默认值；缺失时 fail-closed。

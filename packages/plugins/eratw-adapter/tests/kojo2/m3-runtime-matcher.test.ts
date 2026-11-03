@@ -59,10 +59,8 @@ function compile(files: readonly ProjectCompileFileInput[], options: CompileOpti
     files,
     registry: ERATW_TARGET_REGISTRY,
     adapter: ERATW_GAME_ADAPTER,
-    backend: createEratwEmitBackend({
-      compileExpression: (expr) => expr.text,
-      ...(options.dispatchSelectors === undefined ? {} : { dispatchSelectors: options.dispatchSelectors }),
-    }),
+    backend: createEratwEmitBackend({ compileExpression: (expr) => expr.text }),
+    ...(options.dispatchSelectors === undefined ? {} : { dispatchSelectors: options.dispatchSelectors }),
     ...(options.requireDispatch === undefined ? {} : { requireDispatch: options.requireDispatch }),
   });
 }

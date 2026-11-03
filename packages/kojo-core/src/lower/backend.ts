@@ -448,7 +448,13 @@ export interface DispatchRenderBranch {
   readonly span: KojoSpan;
 }
 
+export interface DispatchSelectors {
+  readonly locationExpr: string;
+  readonly timeExpr: string;
+}
+
 export interface DispatchRenderRequest {
+  readonly selectors: DispatchSelectors | null;
   readonly canonicalId: string;
   /** 已解析的主事件函数名（不带 @）；adapter 由它派生唯一 branch 函数名。 */
   readonly functionName: string;

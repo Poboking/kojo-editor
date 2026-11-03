@@ -20,6 +20,7 @@ import {
   type TargetRegistry,
   type GameAdapter,
   type KojoEmitBackend,
+  type DispatchSelectors,
 } from '@kojo/kojo-core';
 import type { GameProject } from '@kojo/plugin-api';
 import { kojo2FunctionNameContextForFile, type Kojo2FamilySegmentResolver } from './kojo2-file-context';
@@ -47,6 +48,10 @@ export interface Kojo2CompileProjectInput {
    * Host 注入）；缺席时旧 API 逐字不变。
    */
   readonly contextOf?: Kojo2FunctionNameContextResolver;
+  /** M3 Host 注入的运行时 selector；缺省 = 没事实，adapter 必须 fail-closed。 */
+  readonly dispatchSelectors?: DispatchSelectors;
+  /** M3 是否要求最终 dispatch ERB 必须成功。 */
+  readonly requireDispatch?: boolean;
   /** 测试 / 已解析复用口；缺省 core `parseSource`。 */
   readonly parse?: (text: string) => KojoFile;
 }
@@ -80,5 +85,7 @@ export function compileKojo2Project(input: Kojo2CompileProjectInput): ProjectCom
     registry: input.registry,
     adapter: input.adapter,
     backend: input.backend,
+    ...(input.dispatchSelectors === undefined ? {} : { dispatchSelectors: input.dispatchSelectors }),
+    ...(input.requireDispatch === undefined ? {} : { requireDispatch: input.requireDispatch }),
   });
 }

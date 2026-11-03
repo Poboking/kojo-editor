@@ -809,7 +809,7 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
               .map((_arg: string, index: number) => (index === 0 ? 'ARG' : `ARG:${index}`))
               .join(', ')})`;
       const argsText = request.args.length === 0 ? '' : ` ${request.args.join(' ')}`;
-      const selectors = deps.dispatchSelectors;
+      const selectors = request.selectors ?? deps.dispatchSelectors;
       const lines: string[] = [
         `;kojo2: M3 dispatch ${request.canonicalId}${argsText}`,
         `@${request.functionName}${params}`,

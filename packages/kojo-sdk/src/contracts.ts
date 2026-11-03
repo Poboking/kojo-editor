@@ -219,6 +219,7 @@ export type {
   ProjectDispatchPlan,
   DispatchRenderBranch,
   DispatchRenderRequest,
+  DispatchSelectors,
 } from '@kojo/kojo-core';
 /* ---------- 编辑器侧：`ui.editor.languageService`（`@kojo/plugin-api`） ---------- */
 

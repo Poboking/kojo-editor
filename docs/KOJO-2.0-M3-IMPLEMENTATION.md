@@ -60,3 +60,11 @@ const result = selectRuntimeTheater({
 - `requireDispatch?: boolean`：缺省 false 保持 M2 后端兼容；true 时 dispatch 渲染失败令 build failed，且不发布 theaterErb / dispatchErb 半成品。
 - eraTW `renderDispatch` 由 Host 显式注入 `dispatchSelectors: { locationExpr, timeExpr }`；缺 selector 且存在 exact/named 分支即 fail-closed，不猜引擎变量名。
 - 同一 canonical target 按 **functionName** 拆分 dispatch target，避免不同角色/家族函数被错误合并。
+
+## Host selector 注入（第四阶段）
+
+- `ProjectCompileInput.dispatchSelectors?: DispatchSelectors`：Host 统一注入 `locationExpr` / `timeExpr`。
+- `compileKojo2Project` 同样接受 `dispatchSelectors` / `requireDispatch` 并原样转给 core。
+- `DispatchRenderRequest.selectors` 是 Host 事实；adapter 只能消费，不得自己补默认变量名。
+- 旧 `createEratwEmitBackend({ dispatchSelectors })` 仅保留为兼容回退；新调用应走项目编译输入。
+- 真实 eraTW selector 仍未被仓内证据证明；生产调用必须先显式配置，缺失时 M3 dispatch 保持 fail-closed。

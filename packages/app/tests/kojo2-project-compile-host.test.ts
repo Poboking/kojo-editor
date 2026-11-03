@@ -111,3 +111,50 @@ describe('Host compileKojo2Project', () => {
     expect(result.complete).toBe(true);
   });
 });
+describe('Host compileKojo2Project · M3 dispatch', () => {
+  const DOCS = [
+    { path: 'D:/p/kojo/12/a.kojo2', text: '【剧场：初见｜神社】\n# 视角 灵梦\n> 甲\n' },
+    { path: 'D:/p/kojo/12/b.kojo2', text: '【剧场：初见｜学校】\n# 视角 灵梦\n> 乙\n' },
+  ] as const;
+
+  it('dispatchSelectors + requireDispatch 走 Host 统一注入并产出最终 dispatch ERB', () => {
+    const result = compileKojo2Project({
+      projectId: 'p-dispatch',
+      provenance: PROVENANCE,
+      project: null,
+      documents: DOCS,
+      adapter: ERATW_GAME_ADAPTER,
+      backend: backend(),
+      registry: ERATW_TARGET_REGISTRY,
+      contextOf: () => ({ charNo: '12', familySegment: '' }),
+      dispatchSelectors: { locationExpr: 'LOCATION', timeExpr: 'TIME' },
+      requireDispatch: true,
+    });
+
+    expect(result.build.buildStatus).toBe('succeeded');
+    expect(result.dispatchComplete).toBe(true);
+    expect(result.dispatchErb).toHaveLength(1);
+    expect(result.dispatchErb[0]?.erb).toContain('IF LOCATION == "神社"');
+    expect(result.dispatchErb[0]?.erb).toContain('CALL M_KOJO_ENCOUNTER_K12__D1');
+  });
+
+  it('requireDispatch=true 但缺 selector：fail-closed，不发布 theaterErb / dispatchErb', () => {
+    const result = compileKojo2Project({
+      projectId: 'p-dispatch-missing',
+      provenance: PROVENANCE,
+      project: null,
+      documents: DOCS,
+      adapter: ERATW_GAME_ADAPTER,
+      backend: backend(),
+      registry: ERATW_TARGET_REGISTRY,
+      contextOf: () => ({ charNo: '12', familySegment: '' }),
+      requireDispatch: true,
+    });
+
+    expect(result.build.buildStatus).toBe('failed');
+    expect(result.dispatchComplete).toBe(false);
+    expect(result.dispatchErb).toEqual([]);
+    expect(result.theaterErb).toEqual([]);
+    expect(result.dispatchBackendDiagnostics.length).toBeGreaterThan(0);
+  });
+});
