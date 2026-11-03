@@ -98,7 +98,11 @@ export interface KojoDebugApi {
     setValue(text: string): boolean;
     /** 在光标处插入文本（走 executeEdits，进撤销栈——与真人打字同路） */
     type(text: string): boolean;
-    setCursor(line: number, column: number): boolean;
+    /**
+     * 定光标（1 基）：位置 `(line, column)` 或对象 `{line|lineNumber, column}` 两种形态同义
+     * （KW-36 P0）；脏值 / 没有焦点编辑器 ⇒ `false`（**不抛**）。落点真相读 `info().cursor`。
+     */
+    setCursor(line: number | DebugCursorInput, column?: number): boolean;
     markers(): Promise<{ resource: string; severity: number; message: string; line: number }[]>;
     /** 编辑器动作表（`getSupportedActions()`）：`enabled` 是 `isSupported()` 的实测值 */
     actions(): DebugEditorAction[];
@@ -203,6 +207,50 @@ export interface EditorInfo {
   readonly value: string;
   readonly cursor: { readonly line: number; readonly column: number };
   readonly selection: string | null;
+}
+
+/**
+ * `editor.setCursor()` 接受的**对象**形态（KW-36 P0，2026-11-03）。
+ *
+ * 为什么两种形态都收（而不是只收位置参数）：这一族同类的读位置 API（`hoverAt(line, col)` /
+ * `setSelection(...)` / `definitionAt(line, col)`）交回与接受的都是**1 基的 line/column**，
+ * 而 Monaco 自己的 `IPosition` 叫 `lineNumber` —— 组长照 Monaco 的形状传 `{lineNumber, column}`
+ * 是被这两套名字夹出来的必然手滑（KW-14 验收实拍：页内求值抛错，光标没动，却没人报错）。
+ * 位置形态 `(line, column)` 与既有消费方（`tools/readme-gif.mjs` 的 `cursor` 步骤）**逐字不变**。
+ */
+export interface DebugCursorInput {
+  readonly line?: number;
+  /** Monaco `IPosition` 的写法，与 `line` 同义（两者都在时 `line` 优先） */
+  readonly lineNumber?: number;
+  readonly column?: number;
+}
+
+/**
+ * `setCursor` 的入参归一（KW-36 P0，**纯函数、可单测、绝不抛**）。
+ *
+ * 判据：行列必须是 **>=1 的整数**（与语义族 `parseLineColumn` 同一档，0 基不是"第一格"）；
+ * `column` 缺席落 1（行首）；脏值（NaN / Infinity / 字符串 / 数组 / 负数）⇒ `null`＝没这个目标，
+ * 调用方如实回 `false`，**不许**把脏值喂进 `setPosition` 让 Monaco 静默夹到别处
+ * ——"看起来动了、实际停在隔壁"是这一族最难查的假绿。
+ */
+export function normalizeCursorTarget(
+  lineArg: number | DebugCursorInput | null | undefined,
+  columnArg?: number,
+): { readonly line: number; readonly column: number } | null {
+  const asPositiveInt = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isInteger(v) && v >= 1 ? v : null;
+  let rawLine: unknown = lineArg;
+  let rawColumn: unknown = columnArg;
+  if (lineArg !== null && typeof lineArg === 'object') {
+    const o = lineArg as DebugCursorInput;
+    rawLine = o.line !== undefined ? o.line : o.lineNumber;
+    rawColumn = o.column;
+  }
+  const line = asPositiveInt(rawLine);
+  if (line === null) return null;
+  const column = rawColumn === undefined ? 1 : asPositiveInt(rawColumn);
+  if (column === null) return null;
+  return { line, column };
 }
 
 /* ------------------------- 语言面读数（1029 批，只读） ------------------------- */
@@ -2064,9 +2112,17 @@ export function installDebug(): KojoDebugApi {
         return true;
       },
       setCursor(line, column) {
+        // KW-36 P0：入参先过归一（两种形态、脏值即 false），**绝不**把没归一的值喂进 setPosition
+        const target = normalizeCursorTarget(line as number | DebugCursorInput, column as number | undefined);
+        if (target === null) return false;
         const ed = focusedCtx()?.editorRef.current;
         if (!ed) return false;
-        ed.setPosition({ lineNumber: line, column });
+        try {
+          ed.setPosition({ lineNumber: target.line, column: target.column });
+        } catch {
+          // Monaco 对越界位置自己会夹／抛（版本相关）：抛了就如实 false，不假装光标过去了
+          return false;
+        }
         return true;
       },
       async markers() {
