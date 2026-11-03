@@ -181,6 +181,12 @@ export interface FunctionAssignment {
   line: number;
   /** 分支上下文路径（外→内） */
   context: string[];
+  /**
+   * 源文为**素书写法** `X '= …`（additive，KW-35 1103）：只记拼写来源，**不改目标槽**
+   * （`X '= v` 与 `X = v` 写同一格，取证见 `tests/assignments.test.ts` 头注）。
+   * 缺省（undefined）= 老数据 / 未发布该维的抽取器 ⇒ 消费方按「非素书」处理，旧行为逐字不变。
+   */
+  prime?: true;
 }
 
 /**
@@ -311,7 +317,8 @@ export interface FunctionPredicates {
   /**
    * 本地量赋值语句序列（v0.2 第六批；按行序）——回放的数据流资料。
    * 只收录目标为 LOCAL/LOCALS/RESULT/RESULTS/ARG/ARGS 的直线赋值（含 `+=` 等
-   * 复合赋值 → 记为 opaque 载体的"失效点"，防误报旧值）。
+   * 复合赋值 → 记为 opaque 载体的"失效点"，防误报旧值；含字符串槽的素书写法 `X '= …`，
+   * 目标槽不变、以 `prime` 记档——KW-35 1103）。
    */
   assignments: FunctionAssignment[];
   /**

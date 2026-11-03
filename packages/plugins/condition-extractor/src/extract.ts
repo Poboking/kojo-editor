@@ -271,6 +271,9 @@ function isContextPrefix(prefix: readonly string[], path: readonly string[]): bo
 /** 可赋值目标（Emuera 语言级局部量 + 参数槽族；剔除循环量 COUNT 与 LOCALSS） */
 const ASSIGNABLE_LOCALS = new Set(['LOCAL', 'LOCALS', 'RESULT', 'RESULTS', 'ARG', 'ARGS']);
 
+/** 字符串槽名（素书 `'= 只可能落在这三名上，取证见 tests/assignments.test.ts 头注；KW-35 1103） */
+const STRING_SLOT_NAMES = new Set(['LOCALS', 'RESULTS', 'ARGS']);
+
 /** 引号外截断行内注释（与 scanner sliceExpression 同逻辑；插件间禁 import，就地实现） */
 function sliceInlineComment(s: string): string {
   let inStr = false;
@@ -292,11 +295,13 @@ function sliceInlineComment(s: string): string {
 /**
  * 赋值识别：`LOCAL(:n)? = RHS`（`== != <= >= <>` 不匹配）。
  * KW-33b 1103：复合（`&= |= ^= <<= >>=`）与自增（`A++`/`A--`/`++A`）也收，只有裸 `=` 产出具体值，
- * 余皆 opaque；记号表同 sugar 的 statement.ts。`LOCAL' = "…"`（字符串槽）**不收**——契约 `name`
- * 无素书维，收它＝字符串写当数值读＝假命中。枚数与不收诸族理由＝tests/assignments.test.ts 头注。
+ * 余皆 opaque；记号表同 sugar 的 statement.ts。
+ * KW-35 1103：字符串槽的**素书写法** `LOCALS ' = "…"` 也收（同一份存储的另一种拼写，目标槽不变，
+ * 以契约的 `prime` 位记档）；数值名带素书（`LOCAL '=`）与 `'+=` / `'++` 一律不收（盘上 0 枚＋语义未定）。
+ * 枚数与不收诸族理由＝tests/assignments.test.ts 头注。
  */
 const ASSIGN_RE =
-  /^(?:(\+\+|--)\s*)?(LOCALS?|RESULTS?|ARGS?)(?::(\d+))?\s*(?:(\+\+|--)|((?:<<|>>|[+\-*/%&|^])?=)(?!=)\s*(.*))?$/i;
+  /^(?:(\+\+|--)\s*)?(LOCALS?|RESULTS?|ARGS?)(?::(\d+))?(?:\s*('))?\s*(?:(\+\+|--)|((?:<<|>>|[+\-*/%&|^])?=)(?!=)\s*(.*))?$/i;
 
 /** 从函数体原始行收集本地量赋值（结构事实；RHS 无法解析 → opaque，绝不抛） */
 export function collectAssignments(
@@ -329,11 +334,14 @@ export function collectAssignments(
     if (!m) continue;
     const name = m[2]!.toUpperCase();
     if (!ASSIGNABLE_LOCALS.has(name)) continue;
+    const prime = m[4] !== undefined; // 素书写法 `X ' = …`（组 4），目标槽不变
     const index = m[3] ? Number(m[3]) : 0;
-    // 组 5 赋值符，组 4/1 后置/前置自增；全缺位＝裸引用，不是写值
-    const op = m[5] ?? m[4] ?? m[1];
-    const rhs = (m[6] ?? '').trim();
-    if (!op || (m[5] !== undefined && !rhs)) continue;
+    // 组 6 赋值符，组 5/1 后置/前置自增；全缺位＝裸引用，不是写值
+    const op = m[6] ?? m[5] ?? m[1];
+    const rhs = (m[7] ?? '').trim();
+    if (!op || (m[6] !== undefined && !rhs)) continue;
+    // 素书只认「字符串槽名 + 裸 `=`」；数值名带素书语义未定（盘上 0 枚）、`'+=` / `'++` 不在记号表 ⇒ 不收
+    if (prime && (op !== '=' || !STRING_SLOT_NAMES.has(name))) continue;
 
     out.push({
       name: name as FunctionAssignment['name'],
@@ -342,6 +350,7 @@ export function collectAssignments(
       text: rhs,
       line: i,
       context: contextOf(i),
+      ...(prime ? { prime: true as const } : {}),
     });
   }
   return out;
