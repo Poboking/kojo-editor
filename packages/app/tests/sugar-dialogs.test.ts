@@ -145,3 +145,38 @@ describe('全站模态对话框', () => {
     }
   });
 });
+
+describe('写权限确认：当前文件覆盖不到时先说实话（用户反馈：批了仍只读）', () => {
+  const project = {
+    adapterId: 'eratw',
+    writablePaths: ['C:/game/kojo/ERB/口上', 'C:/game/kojo/sav'],
+  } as never;
+
+  const render = (activeFile?: string): string =>
+    renderToString(createElement(WritableApprovalDialog, { project, activeFile, onDecide: noop }));
+
+  it('打开的文件落在批准目录里 ⇒ 不出现"覆盖不到"的警告（正常批准流程）', () => {
+    const html = render('C:/game/kojo/ERB/口上/個人口上/M_KOJO_K1.ERB');
+    expect(html).not.toContain('不在上面这些目录里');
+  });
+
+  it('打开的文件落在批准目录外 ⇒ 警告里原样写出这份文件，作者知道批准救不了它', () => {
+    const html = render('C:/game/kojo/ERB/KOJO_MESSAGE.ERB');
+    expect(html).toContain('不在上面这些目录里');
+    expect(html).toContain('<code>C:/game/kojo/ERB/KOJO_MESSAGE.ERB</code>');
+    expect(html).toContain('批准之后它仍然只能只读浏览');
+  });
+
+  it('按任意一条批准目录判定（不是只看第一条）', () => {
+    expect(render('C:/game/kojo/sav/old.kojo')).not.toContain('不在上面这些目录里');
+  });
+
+  it('Windows 语义：大小写与分隔符混写仍算覆盖得到（别误报吓作者）', () => {
+    expect(render('c:\\game\\KOJO\\erb\\口上\\a.ERB')).not.toContain('不在上面这些目录里');
+  });
+
+  it('没有打开文件 / 没传 activeFile ⇒ 不画这条警告（不凭空吓人）', () => {
+    expect(render()).not.toContain('不在上面这些目录里');
+    expect(render('')).not.toContain('不在上面这些目录里');
+  });
+});

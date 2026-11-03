@@ -66,15 +66,37 @@ export function isInWorkspaceFile(kernel: Pick<Kernel, 'workspaces'>, filePath: 
 export type WritablePillTone = 'ok' | 'ro';
 
 /**
- * 胶囊该显示哪一档：**区域优先，区域答不出才回落到项目级授权状态**。
+ * 胶囊要吃的两份事实（命名成对象而不是两个位置相邻的布尔：谁是谁不许靠顺序猜）。
+ *
+ * 只吃区域已经答不全了（2026-11-03 用户反馈批）：口上区里的 ERB 在写权限批准之后
+ * 是可以落盘的，旧口径却按"区域是 game-erb"一路染成只读——作者点徽章、批权限、
+ * 徽章纹丝不动，读作"点了允许写入却没生效"。区域回答"这是哪一区的文件"，
+ * 回答不了"这一份此刻能不能写"，后者只有文件自己的可写态答得准。
+ */
+export interface WritablePillFacts {
+  /** 项目级可写态（TS 批准记录 ∧ 宿主写域事实）——**只在没有打开文件时**才答得上话 */
+  readonly projectWritable: boolean;
+  /**
+   * 当前打开文件此刻能不能落盘（`kernel.io.isWritable` ∧ 宿主写域未挡这份文件）；
+   * `null` = 没有活动文件 ⇒ 退回项目级口径。
+   */
+  readonly fileWritable: boolean | null;
+}
+
+/**
+ * 胶囊该显示哪一档：**有活动文件就问这份文件，没有才回落到项目级授权状态**。
+ *
+ * 工作区恒绿（创作权威区，与项目授权无关）；其余区域按文件的实际可写态上色——
+ * 批准之后覆盖到的文件立刻翻绿，覆盖不到的文件照旧琥珀（那句"为什么覆盖不到"
+ * 由 {@link writablePillTitle} 说清，点徽章也不再重开一张救不了它的授权框）。
  *
  * 口上区那颗始终可点（点击 = 重新批准写权限），工作区那颗只是说明（本就恒可写，
  * 点了没有授权动作可做）——这一层差别留在渲染处，不在这里用布尔冒充两个语义。
  */
-export function writablePillTone(area: FileWritableArea, projectWritable: boolean): WritablePillTone {
+export function writablePillTone(area: FileWritableArea, facts: WritablePillFacts): WritablePillTone {
   if (area === 'workspace') return 'ok';
-  if (area === 'game-erb') return 'ro';
-  return projectWritable ? 'ok' : 'ro';
+  if (facts.fileWritable !== null) return facts.fileWritable ? 'ok' : 'ro';
+  return facts.projectWritable ? 'ok' : 'ro';
 }
 
 /**
@@ -90,18 +112,30 @@ export const WRITABLE_HINTS = {
   /** 轴一 · 游戏目录里的原生文件：默认只读 + 出路（胶囊那颗也是这一句） */
   gameErb:
     '口上区（游戏目录）里的原生文件：默认只读——直接改它等于改别人装好的游戏内容。开始输入时编辑器会询问你是否破例；点击这里可重新批准写权限。',
+  /** 口上区文件已获写权限：保存这一轴已经通了，剩下的只是"这一份要不要破例编辑"（轴二） */
+  gameErbWritable:
+    '这个文件所在的目录已获写权限，可以保存。游戏目录里的原生文件仍受编辑保护，开始输入时编辑器会询问你是否为这一份破例。',
+  /** 项目已批准、但这份文件不在任何批准目录之下：再点也不会变可写——把实话说出来，别让作者空转 */
+  fileOutOfScope:
+    '这份文件所在的目录不在本项目的可写目录里——再批准一次也覆盖不到它，它只能只读浏览。',
   /** 区域答不出时回落的项目级授权读数（两档） */
   projectWritable: '写权限已批准',
   projectReadOnly: '只读：写权限未批准，点击重新授权',
 } as const;
 
 /**
- * 胶囊那句说明（纯函数，口径与 `writablePillTone` 同一条：区域优先、回落项目级）。
+ * 胶囊那句说明（纯函数，口径与 `writablePillTone` 同一条：有文件看文件、没文件看项目）。
  *
  * `ShellLayout` 只负责把这枚文案挂到 `title` 上，判定与文案都不再住在组件里。
  */
-export function writablePillTitle(area: FileWritableArea, projectWritable: boolean): string {
+export function writablePillTitle(area: FileWritableArea, facts: WritablePillFacts): string {
   if (area === 'workspace') return WRITABLE_HINTS.workspace;
-  if (area === 'game-erb') return WRITABLE_HINTS.gameErb;
-  return projectWritable ? WRITABLE_HINTS.projectWritable : WRITABLE_HINTS.projectReadOnly;
+  if (facts.fileWritable === null) {
+    return facts.projectWritable ? WRITABLE_HINTS.projectWritable : WRITABLE_HINTS.projectReadOnly;
+  }
+  if (facts.fileWritable) {
+    return area === 'game-erb' ? WRITABLE_HINTS.gameErbWritable : WRITABLE_HINTS.projectWritable;
+  }
+  if (area === 'game-erb' && !facts.projectWritable) return WRITABLE_HINTS.gameErb;
+  return facts.projectWritable ? WRITABLE_HINTS.fileOutOfScope : WRITABLE_HINTS.projectReadOnly;
 }

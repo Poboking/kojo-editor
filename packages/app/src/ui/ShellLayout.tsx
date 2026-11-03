@@ -124,7 +124,8 @@ import {
   useFontSizePref,
   useFontZoomPref,
 } from './font-size-pref';
-import { fileWritableArea, writablePillTitle, writablePillTone } from './file-area';
+import { fileWritableArea, WRITABLE_HINTS, writablePillTitle, writablePillTone } from './file-area';
+import { saveBlockedByHostWriteDomain } from './write-domain';
 import { workspaceRootsOf } from './workspace-roots';
 // 状态栏三格（批次十 S1）：语言模式 / 缩进 / 编码的偏好与判据都在各自纯逻辑模块里，
 // 这里只取「当前活动文件那份 model」并把选择落到 model 上。
@@ -1021,10 +1022,11 @@ interface Props {
   /** 编辑器区内容（只读横幅 + 编辑器/空态） */
   children: ReactNode;
   /**
-   * 写权限状态（P0 项目级授权口径）。
+   * 写权限状态（项目级授权口径）。
    *
-   * 状态栏那颗胶囊现在**先看当前打开文件落在哪一区**（工作项目区 / 口上区），
-   * 区域答不出的时候（没有打开文件、或区域外的非 ERB）才回落到这个布尔。
+   * 状态栏那颗胶囊**有活动文件时先问这份文件此刻能不能写**（`kernel.io.isWritable`，
+   * 与保存闸同一份事实；批准覆盖到的口上区文件批准后立刻翻绿），没有活动文件才回落到
+   * 这个布尔。区域仍参与判定：工作区恒绿、口上区未获权限时给出破例入口。
    */
   writable: boolean;
   /** 当前活动文件（状态栏可写胶囊的区域依据；判定与编辑器共用 `file-area.ts` 一把尺子） */
@@ -3360,10 +3362,34 @@ export function ShellLayout(props: Props): ReactElement {
   // `workspaceProjectDirsOf(kernel)`（内核那侧现拼一份目录数组），路径没换答案就不会换，
   // 不该跟着壳层的每一次重渲重算一遍。
   const writableArea = useMemo(() => fileWritableArea(kernel, activeFile ?? null), [kernel, activeFile]);
-  const writablePill = writablePillTone(writableArea, writable);
+  /**
+   * 这份文件此刻能不能落盘（2026-11-03 用户反馈批）：与保存闸同一份事实——
+   * `kernel.io.isWritable`（批准记录） ∧ 宿主写域没挡它。旧胶囊只看区域，
+   * 口上区一律染只读：批准覆盖到的文件在批准后仍是「只读」，作者读作"允许写入没生效"。
+   */
+  const fileWritable = useMemo(() => {
+    if (!activeFile) return null;
+    if (saveBlockedByHostWriteDomain(activeFile)) return false;
+    return kernel.io.isWritable(activeFile);
+  }, [kernel, activeFile]);
+  const writableFacts = { projectWritable: writable, fileWritable };
+  const writablePill = writablePillTone(writableArea, writableFacts);
   // 文案住在 `file-area.ts`（KW16 标签色轨批）：标签的悬停说明问的是同一件事，
   // 句子必须在两处只有一份——这里只负责把它挂到 `title` 上，屏上那三个字一个字没动。
-  const pillTitle = writablePillTitle(writableArea, writable);
+  const pillTitle = writablePillTitle(writableArea, writableFacts);
+  /**
+   * 只读胶囊的点击（授权入口）：项目已批准、但这份文件不在任何批准目录之下时，
+   * 再弹一次批准框也救不了它——旧行为就是让作者在这里空转（点→批→仍只读）。
+   * 这一格改成把原因说出来（铁律 4：按钮按下去必须有话说，且不能说假话）；
+   * 其余情况照旧走项目级重授权。
+   */
+  const onWritablePillClick = (): void => {
+    if (fileWritable === false && writable) {
+      notify({ kind: 'info', message: WRITABLE_HINTS.fileOutOfScope });
+      return;
+    }
+    onReauth();
+  };
 
   /**
    * 状态栏**次组**（项目级约定计数 `.sb-diag`）的展开态（视觉批十一 R5 · 密度分主次）。
@@ -3419,7 +3445,7 @@ export function ShellLayout(props: Props): ReactElement {
           </span>
         ) : (
           // 只读态加锁形图标（C-1a）：琥珀色 + 文字之外再多一档形状线索；命中区 ≥24px 由 CSS 保证
-          <button className="sb-writable ro" data-status-cell="" title={pillTitle} onClick={onReauth}>
+          <button className="sb-writable ro" data-status-cell="" title={pillTitle} onClick={onWritablePillClick}>
             <LockIcon /> 只读
           </button>
         )}

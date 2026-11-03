@@ -1,9 +1,15 @@
 import type { ReactElement } from 'react';
-import type { GameProject } from '@kojo/plugin-api';
+import { isPathUnder, type GameProject } from '@kojo/plugin-api';
 import { useModalEscape } from './modal-stack';
 
 interface Props {
   project: GameProject;
+  /**
+   * 当前打开的文件（可选）：对话框要能回答"这次批准覆盖得到它吗"。
+   * 覆盖不到时先在框里说清——否则作者按下「允许写入」后徽章仍是只读，
+   * 读作"点了允许写入却没生效"（用户反馈：只读徽章 → 批权限 → 仍是只读）。
+   */
+  activeFile?: string | null;
   onDecide: (allow: boolean) => void;
 }
 
@@ -16,8 +22,11 @@ interface Props {
  * Esc = 只读浏览（HK-2）：授权是"给出去就收不回来"的动作，键盘不该替作者按下它。
  * 之后想给，状态栏那枚「只读」徽章就是重授权入口（§5.39）。
  */
-export function WritableApprovalDialog({ project, onDecide }: Props): ReactElement {
+export function WritableApprovalDialog({ project, activeFile, onDecide }: Props): ReactElement {
   useModalEscape(() => onDecide(false));
+  const activeCovered = activeFile
+    ? project.writablePaths.some((p) => isPathUnder(p, activeFile))
+    : null;
   return (
     <div className="modal-mask">
       <div className="modal" role="dialog" aria-modal="true" aria-label="写权限确认">
@@ -32,6 +41,13 @@ export function WritableApprovalDialog({ project, onDecide }: Props): ReactEleme
             </li>
           ))}
         </ul>
+        {activeCovered === false ? (
+          // 覆盖不到的文件批准也不会变可写：把这句话放在按钮上方，别让作者批完才发现。
+          <p>
+            <b>注意：</b>你正打开的文件 <code>{activeFile}</code> 不在上面这些目录里，
+            批准之后它仍然只能只读浏览。
+          </p>
+        ) : null}
         <p className="dim">
           游戏目录的其余部分保持只读。写入前会自动备份到应用数据目录（保留最近 20 版），
           并采用原子写防止中断损坏。该批准按项目目录记忆，下次自动生效。

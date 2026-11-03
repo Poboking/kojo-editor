@@ -15,6 +15,8 @@ import {
   fileWritableArea,
   fileWritableAreaOf,
   isInWorkspaceFile,
+  WRITABLE_HINTS,
+  writablePillTitle,
   writablePillTone,
 } from '../src/ui/file-area';
 
@@ -108,33 +110,90 @@ describe('fileWritableArea / isInWorkspaceFile · 与 kernel 接线', () => {
   });
 });
 
-describe('writablePillTone · 状态栏胶囊三态', () => {
+describe('writablePillTone · 状态栏胶囊（有文件看文件、没文件看项目）', () => {
   it('工作项目区 → 绿胶囊「可写」，且**不被项目级授权状态误伤**（反向自证：项目未批准也照绿）', () => {
-    expect(writablePillTone('workspace', false)).toBe('ok');
-    expect(writablePillTone('workspace', true)).toBe('ok');
-    // 反向自证：翻区域就翻档
-    expect(writablePillTone('game-erb', true)).toBe('ro');
+    expect(writablePillTone('workspace', { projectWritable: false, fileWritable: false })).toBe('ok');
+    expect(writablePillTone('workspace', { projectWritable: true, fileWritable: null })).toBe('ok');
+    // 反向自证：同一份可写态翻到口上区就翻档
+    expect(writablePillTone('game-erb', { projectWritable: false, fileWritable: false })).toBe('ro');
   });
 
-  it('口上区（游戏目录 ERB）→ 黄胶囊「只读」，且项目级已批准也不改口（反向自证：区域翻了就变绿）', () => {
-    expect(writablePillTone('game-erb', true)).toBe('ro');
-    expect(writablePillTone('game-erb', false)).toBe('ro');
-    expect(writablePillTone('workspace', true)).toBe('ok');
+  it('★ 用户反馈回归：口上区文件写权限批准后（文件可写）→ 绿胶囊，不再卡在「只读」', () => {
+    // 现场：点「只读」徽章 → 允许写入 → 文件已落在批准目录里、内核写闸放行，
+    // 旧口径仍因区域是 game-erb 一路染只读 ⇒ 作者读作"允许写入没生效"。
+    expect(writablePillTone('game-erb', { projectWritable: true, fileWritable: true })).toBe('ok');
+    // 反向自证：同区域的另一份（目录覆盖不到）仍如实显示只读
+    expect(writablePillTone('game-erb', { projectWritable: true, fileWritable: false })).toBe('ro');
   });
 
-  it('区域答不出（没有打开文件）→ 回落到既有的项目级口径，两向都跟', () => {
-    expect(writablePillTone('other', true)).toBe('ok');
-    expect(writablePillTone('other', false)).toBe('ro');
-    // 反向自证：一旦有区域，项目级这一档就说了不算
-    expect(writablePillTone('workspace', false)).toBe('ok');
+  it('口上区未获权限（文件不可写）→ 黄胶囊「只读」，两档项目态都跟', () => {
+    expect(writablePillTone('game-erb', { projectWritable: false, fileWritable: false })).toBe('ro');
+    expect(writablePillTone('game-erb', { projectWritable: true, fileWritable: false })).toBe('ro');
   });
 
-  it('端到端三态：路径决定区域、区域决定胶囊（各态都带一次翻输入的自证）', () => {
-    const pillFor = (p: string | null, projectWritable: boolean): string =>
-      writablePillTone(fileWritableArea(kernel, p), projectWritable);
-    expect(pillFor(`${DEFAULT_ROOT}/p1/a.kojo`, false)).toBe('ok');
-    expect(pillFor('C:/Game/demo/ERB/a.ERB', true)).toBe('ro');
-    expect(pillFor(null, true)).toBe('ok');
-    expect(pillFor(null, false)).toBe('ro');
+  it('没有打开文件（fileWritable=null）→ 回落到既有的项目级口径，两向都跟', () => {
+    expect(writablePillTone('other', { projectWritable: true, fileWritable: null })).toBe('ok');
+    expect(writablePillTone('other', { projectWritable: false, fileWritable: null })).toBe('ro');
+    // 反向自证：一旦有文件，项目级这一档就说了不算
+    expect(writablePillTone('other', { projectWritable: true, fileWritable: false })).toBe('ro');
+  });
+
+  it('区域外的非 ERB 文件：按文件本身的可写态上色（不被项目级授权糊过去）', () => {
+    expect(writablePillTone('other', { projectWritable: false, fileWritable: true })).toBe('ok');
+    expect(writablePillTone('other', { projectWritable: false, fileWritable: false })).toBe('ro');
+  });
+
+  it('端到端三态：路径决定区域、文件可写态决定胶囊（各态都带一次翻输入的自证）', () => {
+    const pillFor = (p: string | null, projectWritable: boolean, fileWritable: boolean | null): string =>
+      writablePillTone(fileWritableArea(kernel, p), { projectWritable, fileWritable });
+    expect(pillFor(`${DEFAULT_ROOT}/p1/a.kojo`, false, true)).toBe('ok');
+    expect(pillFor('C:/Game/demo/ERB/a.ERB', true, true)).toBe('ok');
+    expect(pillFor('C:/Game/demo/ERB/a.ERB', true, false)).toBe('ro');
+    expect(pillFor(null, true, null)).toBe('ok');
+    expect(pillFor(null, false, null)).toBe('ro');
+  });
+});
+
+describe('writablePillTitle · 悬停说明与胶囊同一份事实', () => {
+  it('工作区取恒可写那一句（与标签色轨共用）', () => {
+    expect(writablePillTitle('workspace', { projectWritable: false, fileWritable: false })).toBe(
+      WRITABLE_HINTS.workspace,
+    );
+  });
+
+  it('没有打开文件：两档项目级读数', () => {
+    expect(writablePillTitle('other', { projectWritable: true, fileWritable: null })).toBe(
+      WRITABLE_HINTS.projectWritable,
+    );
+    expect(writablePillTitle('other', { projectWritable: false, fileWritable: null })).toBe(
+      WRITABLE_HINTS.projectReadOnly,
+    );
+  });
+
+  it('口上区已可写：说清「保存已通、编辑仍受保护」（别把绿胶囊读成随便改）', () => {
+    const title = writablePillTitle('game-erb', { projectWritable: true, fileWritable: true });
+    expect(title).toBe(WRITABLE_HINTS.gameErbWritable);
+    expect(title).toContain('可以保存');
+    expect(title).toContain('仍受编辑保护');
+  });
+
+  it('口上区不可写：项目还没批 ⇒ 默认只读 + 重授权出路；项目已批 ⇒ 如实说"覆盖不到"', () => {
+    expect(writablePillTitle('game-erb', { projectWritable: false, fileWritable: false })).toBe(
+      WRITABLE_HINTS.gameErb,
+    );
+    const outOfScope = writablePillTitle('game-erb', { projectWritable: true, fileWritable: false });
+    expect(outOfScope).toBe(WRITABLE_HINTS.fileOutOfScope);
+    expect(outOfScope).toContain('覆盖不到');
+    // 这两句不许混用：一句给"再批一次有用"，一句给"再批也没用"
+    expect(outOfScope).not.toBe(WRITABLE_HINTS.gameErb);
+  });
+
+  it('区域外的文件与口上区同一条口径（覆盖不到就说覆盖不到）', () => {
+    expect(writablePillTitle('other', { projectWritable: true, fileWritable: false })).toBe(
+      WRITABLE_HINTS.fileOutOfScope,
+    );
+    expect(writablePillTitle('other', { projectWritable: false, fileWritable: false })).toBe(
+      WRITABLE_HINTS.projectReadOnly,
+    );
   });
 });

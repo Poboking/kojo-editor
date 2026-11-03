@@ -65,6 +65,17 @@ describe('只读指示去重：状态栏那颗是唯一的胶囊', () => {
     expect(shell).toContain("writablePill === 'ok'");
   });
 
+  it('★ 用户反馈回归：胶囊吃文件级可写态；项目已批但文件覆盖不到时只解释、不重开授权框', () => {
+    // 现场：点「只读」→ 允许写入 → 文件在批准目录外，旧实现重开同一张框（批完仍只读）。
+    expect(shell).toContain('kernel.io.isWritable(activeFile)');
+    expect(shell).toContain('saveBlockedByHostWriteDomain(activeFile)');
+    expect(shell).toContain('writablePillTone(writableArea, writableFacts)');
+    expect(shell).toContain('const onWritablePillClick = ()');
+    expect(shell).toContain('fileWritable === false && writable');
+    expect(shell).toContain('WRITABLE_HINTS.fileOutOfScope');
+    expect(shell).toMatch(/onClick={onWritablePillClick}/);
+  });
+
   it('活动文件路径由 ProjectView 一路传进壳层（区域真源在文件所在处，不在胶囊里猜）', () => {
     expect(projectView).toContain('activeFile={activeFile}');
   });

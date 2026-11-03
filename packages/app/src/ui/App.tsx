@@ -3115,7 +3115,7 @@ export function App(): ReactElement {
         ) : null}
         {pendingApproval ? (
           <Suspense fallback={<div className="modal-mask" data-lazy-mount="approval" />}>
-            <LazyWritableApprovalDialog project={pendingApproval} onDecide={decideApproval} />
+            <LazyWritableApprovalDialog project={pendingApproval} activeFile={activeFile} onDecide={decideApproval} />
           </Suspense>
         ) : null}
         {pendingClose ? (
