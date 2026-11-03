@@ -91,7 +91,10 @@ import {
   killProcessesMarked,
   memorySourceLabel,
   MEMORY_TIGHT_MB,
+  openFileViaSearchSurface,
+  pickQuickOpenRow,
   portOpen,
+  quickOpenTermFor,
   resolveHostHeap,
   sessionDir,
   sessionKey,
@@ -320,12 +323,27 @@ export function clampOpenTimeout(value) {
  * 旧实现却只轮询「写权限弹窗 / 文件树」⇒ 一直等到 60s 超时才报「写权限审批 / 文件树」，
  * 用户看到的是"超时"而不是"不接受这个目录"。
  *
+ * **KW-36 P2（2026-11-03）改的是另一半**：慢盘（真实 eraTW 盘）上应用**正在开**的那十几秒里，
+ * DOM 快照仍是欢迎页那套（`.welcome` 在场 ⇒ `phase==='welcome'`、`.file-tree` 还没挂），
+ * 于是旧的「超过 1.5s 还停在 welcome＝回流」按**固定 settle** 判死了一次成功打开
+ * （现场：CLI 报 `[FAIL] …又回到了欢迎页`，随后 `state().phase` 就是 `project`）。
+ * 现在这一路的裁决只认 **state**：
+ * - `opening === true`（`.welcome-open[disabled]`＝应用自己说"这一趟还在开"，`canOpen = kernelReady && !opening`）⇒ 不是失败；
+ * - `projectOpened === true`（`state().project` 有根）⇒ 不是失败；
+ * - 两条都不成立且仍 welcome 超过宽限 ⇒ 才是回流，报错带**屏上原样文案**。
+ *
  * 口径：**只在明确有错时**返回 `{reason}`，正常中间态（opening / 弹窗在场 / 树已出）一律 null。
  * 入参（全部可选，缺字段按"没有信号"处理）：
  * - `errorNotices`：`.notice.error`（或 `[data-kind="error"]`）的可见原文 —— 无条件算失败；
- * - `notices`：`state().notices.items` —— 命中失败关键词才算（打开/失败/不支持/不是）；
+ * - `notices`：`state().notices.items`（**只有 `.notice` 这一族**）—— 命中失败关键词才算（打开/失败/不支持/不是）；
+ * - `toasts`：点完之后**新出现**的 `.toast`（KW-23 起与 `notices` 分族，别混：`.notice` 是常驻卡片、
+ *    `.toast` 是通知中心那一片）—— 同样只按关键词判，不无条件算失败；
  * - `phase` / `hasTree` / `modal`：页面相位 / 文件树是否在场 / 写权限弹窗是否在场；
+ * - `opening` / `projectOpened`：上面那两枚 state 裁决位；
  * - `revertedMs`：点完「打开项目」至今的毫秒数 —— 超宽限仍停在 welcome 且无树＝回流。
+ *
+ * 返回的 `{reason, family}`：`family` 说清这句原文是**哪一族**给的（`notice` / `toast` / `welcome`），
+ * 缺省按 `notice`（既有调用方只读 `reason`，形态 additive）。
  */
 export function classifyOpenFailure(snapshot) {
   // 欢迎页回流判定的宽限：点完「打开项目」超过这个时长还停在 welcome 且没有树＝应用把这次打开退回来了。
@@ -334,20 +352,28 @@ export function classifyOpenFailure(snapshot) {
   const s = snapshot ?? {};
   if (s.hasTree === true) return null; // 树已出＝这一趟开了，正常
   if (s.modal === true) return null; // 写权限弹窗＝应用接受了目录，正常中间态
+  if (s.opening === true) return null; // KW-36 P2：应用自己说"正在打开"＝慢盘的正常中间态
+  if (s.projectOpened === true) return null; // KW-36 P2：state 已有工程根＝这一趟成了
   const norm = (t) => String(t ?? '').replace(/\s+/g, ' ').trim();
+  const KEYWORDS = ['打开', '失败', '不支持', '不是'];
   const errorNotices = Array.isArray(s.errorNotices) ? s.errorNotices : [];
   const explicit = errorNotices.map(norm).find((t) => t !== '');
-  if (explicit !== undefined) return { reason: explicit };
+  if (explicit !== undefined) return { reason: explicit, family: 'notice' };
   const notices = Array.isArray(s.notices) ? s.notices : [];
-  const KEYWORDS = ['打开', '失败', '不支持', '不是'];
   for (const raw of notices) {
     const t = norm(raw);
     if (t === '') continue;
-    if (KEYWORDS.some((k) => t.includes(k))) return { reason: t };
+    if (KEYWORDS.some((k) => t.includes(k))) return { reason: t, family: 'notice' };
+  }
+  const toasts = Array.isArray(s.toasts) ? s.toasts : [];
+  for (const raw of toasts) {
+    const t = norm(raw);
+    if (t === '') continue;
+    if (KEYWORDS.some((k) => t.includes(k))) return { reason: t, family: 'toast' };
   }
   const revertedMs = Number(s.revertedMs ?? 0);
   if (String(s.phase ?? '') === 'welcome' && Number.isFinite(revertedMs) && revertedMs >= REVERT_GRACE_MS) {
-    return { reason: '点开之后又回到了欢迎页：应用没有接受这个目录' };
+    return { reason: '点开之后又回到了欢迎页：应用没有接受这个目录', family: 'welcome' };
   }
   return null;
 }
@@ -359,6 +385,29 @@ function openRejectedError(abs, reason) {
   );
   err.kojoOpenRejected = true;
   return err;
+}
+
+/**
+ * 真失败时**屏上原样文案**的取法（KW-36 P2，纯函数，不碰 CDP）。
+ *
+ * `.notice` 与 `.toast` 是**两族**（`dom-snapshot.ts` 的 KW-23 判性：`.notice` 是欢迎页/项目
+ * 的常驻卡片，`.toast` 是通知中心那一片），各带各的标签进错误行——混成一族就分不清
+ * "应用说了这句"与"上一趟后台留了这句"。
+ * 优先级与旧口径同序：本次新 toast > 回流时屏上最后一条 error toast > 错误通知原文。
+ */
+export function saidOnScreen(snapshot, reverted) {
+  const s = snapshot ?? {};
+  const first = (a) => (Array.isArray(a) && a.length > 0 ? String(a[0]).trim() : '');
+  const last = (a) => (Array.isArray(a) && a.length > 0 ? String(a[a.length - 1]).trim() : '');
+  const fresh = first(s.freshToasts);
+  if (fresh !== '') return `toast「${fresh}」`;
+  if (reverted === true) {
+    const errToast = last(s.errorToasts);
+    if (errToast !== '') return `toast「${errToast}」`;
+  }
+  const errNotice = first(s.errorNotices);
+  if (errNotice !== '') return `notice「${errNotice}」`;
+  return undefined;
 }
 
 /**
@@ -1163,9 +1212,14 @@ async function cmdOpenProject(args, dir, flags) {
       const budgetMs = clampOpenTimeout(args?.timeout);
       const clickedAt = Date.now();
       let modal = '';
-      while (Date.now() - clickedAt < budgetMs) {
-        const probe = await cdp
-          .evalJs(`(() => {
+      // KW-36 P2：这一拍读到的**最后一张屏**——真失败时把原样文案带出来，不凭记忆复述
+      let lastProbe = null;
+      // 4a) 一拍读齐全部信号：`state` 是裁决位，DOM 只是它的影子。
+      //     `.welcome-open[disabled]` 是**应用自己说"这一趟还在开"**的结构锚
+      //     （`WelcomeView` 的 `canOpen = kernelReady && !opening`）：慢盘的真实 eraTW 盘上
+      //     「还在 opening」能挂十几秒，而 DOM 快照那一路只有 welcome/project/unknown 三档
+      //     （`.welcome` 没卸 ⇒ phase 恒 'welcome'），旧判据把这十几秒读成了「回到欢迎页」＝假红。
+      const probeExpr = `(() => {
             const d = document;
             const seen = new Set(${preToastJson});
             const errNotices = [...d.querySelectorAll('.notice.error, .notice[data-kind="error"]')]
@@ -1181,6 +1235,7 @@ async function cmdOpenProject(args, dir, flags) {
               .filter((t) => t !== '');
             const st = typeof __kojoDebug !== 'undefined' && __kojoDebug.state ? __kojoDebug.state() : null;
             const modalEl = d.querySelector('.modal[aria-label="写权限确认"]');
+            const openBtn = d.querySelector('.welcome-open');
             return {
               hasTree: !!d.querySelector('.file-tree'),
               hasModal: !!modalEl,
@@ -1189,9 +1244,14 @@ async function cmdOpenProject(args, dir, flags) {
               errorNotices: errNotices,
               freshToasts,
               errorToasts,
+              opening: !!openBtn && openBtn.disabled === true,
+              projectOpened: !!(st && st.project),
             };
-          })()`)
-          .catch(() => null);
+          })()`;
+      const readProbe = async () => await cdp.evalJs(probeExpr).catch(() => null);
+      while (Date.now() - clickedAt < budgetMs) {
+        const probe = await readProbe();
+        if (probe) lastProbe = probe;
         if (probe?.hasTree) {
           modal = 'tree';
           break;
@@ -1204,25 +1264,42 @@ async function cmdOpenProject(args, dir, flags) {
           const elapsed = Date.now() - clickedAt;
           const verdict = classifyOpenFailure({
             ...probe,
-            // 新 toast 走"关键词"那条口径（不无条件算失败：与本命令无关的后台报错不该判死一次正常打开）
-            notices: [...(probe.notices ?? []), ...(probe.freshToasts ?? [])],
+            // `.notice` 与 `.toast` **分族**交进判据（KW-23 的口径：合成一族就是把与本命令无关的
+            // 后台提示变成假失败）；两族都仍只按关键词算，不无条件判死
+            notices: probe.notices ?? [],
+            toasts: probe.freshToasts ?? [],
             modal: false,
             revertedMs: elapsed,
           });
           if (verdict) {
-            // 文案要带**应用的原文**：新 toast 优先；退回欢迎页时即便 toast 文案与上一次逐字相同
-            // （底片去重把它当成旧的那条）也把屏上最后一条 toast 原文带出来——那是应用真说的那句话
-            const reverted = String(probe.phase ?? '') === 'welcome' && elapsed >= 1500;
-            const said =
-              (probe.freshToasts ?? [])[0] ?? (reverted ? (probe.errorToasts ?? []).slice(-1)[0] : undefined);
+            // KW-36 P2：**判死之前以 state 复拍**。verdict 吃的是 250ms 前那一拍的影子，
+            // 慢盘上「还在开」与「真回流」的差别就是一拍；复拍说根已就位/树在场/还在 opening ⇒ 继续等。
+            const confirm = await readProbe();
+            if (confirm?.hasTree) {
+              modal = 'tree';
+              break;
+            }
+            if (confirm?.hasModal) {
+              modal = 'yes';
+              break;
+            }
+            if (confirm && (confirm.projectOpened === true || confirm.opening === true)) continue;
+            const shot = confirm ?? probe;
+            // 文案带**应用的原文**并说清出自哪一族：新 toast 优先；退回欢迎页时即便 toast 文案
+            // 与上一次逐字相同（底片去重把它当成旧的那条）也把屏上最后一条 error toast 原文带出来
+            const reverted = String(shot.phase ?? '') === 'welcome' && elapsed >= 1500;
+            const said = saidOnScreen(shot, reverted);
             throw openRejectedError(abs, said || verdict.reason);
           }
         }
         await sleep(250);
       }
       if (modal === '') {
+        const stuck = lastProbe
+          ? `（最后一拍 state：phase=${lastProbe.phase} · 正在打开=${lastProbe.opening} · 工程根=${lastProbe.projectOpened}）`
+          : '';
         throw new Error(
-          `open-project 第 4 步 ${budgetMs}ms 内既没等到写权限审批弹窗、也没等到文件树，且没有可读的失败信号` +
+          `open-project 第 4 步 ${budgetMs}ms 内既没等到写权限审批弹窗、也没等到文件树，且没有可读的失败信号${stuck}` +
             `（目录：${abs}）——放预算：--timeout <ms>（夹 [3000, 300000]）；先 node tools/debug-cli.mjs dom 看屏上停在哪`,
         );
       }
@@ -1260,6 +1337,45 @@ async function cmdOpenProject(args, dir, flags) {
   });
 }
 
+/**
+ * 「快速打开」那张面的驱动腿（KW-36 P1）：四个动作全部走**真 UI**——
+ * 命令面板开面板 · `Input.insertText`（与 `cmdType` 的 text 模式同一枚 CDP 原语）·
+ * 读 `.picker-item` 候选 · 真实点击那一行。
+ *
+ * 点击那一行之后落进的是应用自己的 `Picker.pick → onPick → onOpenFile(key)`
+ * （`packages/app/src/ui/Palette.tsx`），与在文件树里点一行**同一条打开腿**：
+ * 这里只是换了个入口位置点同一下，没有新造第二条通道，也不碰只读闸/写允许域。
+ */
+function quickOpenSurface(cdp) {
+  return {
+    async openPalette() {
+      await cdp.evalJs(`__kojoDebug.commands.run('workbench.quickOpen')`);
+      await waitFor(cdp, `!!document.querySelector('.picker .picker-input')`, {
+        timeoutMs: 10000,
+        label: '快速打开面板',
+      });
+      await cdpClick(cdp, '.picker-input');
+    },
+    async setQuery(term) {
+      await cdp.send('Input.insertText', { text: String(term ?? '') });
+    },
+    async readRows() {
+      return await cdp.evalJs(`[...document.querySelectorAll('.picker-item')].map((el) => ({
+        idx: Number(el.getAttribute('data-idx')),
+        primary: (el.querySelector('.picker-primary')?.textContent || '').trim(),
+        dir: (el.querySelector('.picker-secondary')?.getAttribute('title') || '').trim(),
+      }))`);
+    },
+    async pickRow(idx) {
+      await cdpClick(cdp, `.picker-item[data-idx="${idx}"]`);
+    },
+    /** 失败收尾：点遮罩关面板（真人路径＝onMouseDown → onClose），不给下一次调用留半截面 */
+    async close() {
+      await cdpClick(cdp, '.picker-backdrop').catch(() => {});
+    },
+  };
+}
+
 async function cmdOpenFile(args, frag) {
   if (!frag) die('open-file 需要路径片段（文件树行的路径包含它即命中）', 2);
   await withCdp(async (s, cdp) => {
@@ -1276,12 +1392,30 @@ async function cmdOpenFile(args, frag) {
       hit.click();
       return hit.getAttribute('title') || hit.textContent;
     })()`);
+    // 记下树这一腿点到了哪一行（失败文案要带它，"点了 A 却还是 B"才分得开）
+    let clickedRow = found;
     if (!found) {
-      die(
-        expand === 'no-rows' || expand === 'timeout'
-          ? `文件树里没有路径含「${frag}」的行（折叠行已点到头仍未命中：可能不在任何已挂载的组里——树是虚拟化的，先用 dom 看树）`
-          : `文件树里没有路径含「${frag}」的行（先用 dom 看树）`,
-        1,
+      // KW-36 P1：树这一腿**够不到未挂载的深层组**（虚拟化 ⇒ 视口外整组只挂一条等高占位，
+      // 可点的折叠行只有当前挂着的那些；`expand` 交回 no-rows/timeout 就是点到头了）。
+      // 换**应用自己的另一个入口**：命令面板的 `workbench.quickOpen`——它的候选来自全量
+      // 文件清单（`rankFiles` 按 base/path 排），与挂载无关，而选中行落的还是那条 onOpenFile。
+      const surface = quickOpenSurface(cdp);
+      const via = await openFileViaSearchSurface(surface, frag);
+      if (!via.opened) {
+        await surface.close();
+        const why =
+          via.reason === 'no-palette'
+            ? `「快速打开」面板没开起来（workbench.quickOpen 未登记 / .picker-input 不在场）`
+            : `面板开了、词打了（${via.term}）、候选 ${via.rows} 行里没有路径含「${frag}」的那一行`;
+        die(
+          `文件树与「快速打开」两条入口都不命中「${frag}」：树=${expand}（折叠行已点到头仍未命中：树是虚拟化的，` +
+            `未挂载的组不在 DOM 里）· ${why}——先 dom 看树 / commands 查 quickOpen 是否在注册表，或把片段给全（相对路径）`,
+          1,
+        );
+      }
+      clickedRow = `${via.picked.dir}/${via.picked.primary}`;
+      console.log(
+        `[warn] 文件树未挂载这一组（expand=${expand}）⇒ 走「快速打开」入口：词=${via.term} · 候选 ${via.rows} 行 · 点到 ${clickedRow}`,
       );
     }
     await waitFor(cdp, `!!document.querySelector('.monaco-editor')`, { timeoutMs: 30000, label: 'Monaco 挂载' });
@@ -1302,8 +1436,8 @@ async function cmdOpenFile(args, frag) {
       await sleep(200);
     }
     die(
-      `[FAIL] 点了文件树里含「${frag}」的行，但 10s 内编辑器没切过去——实际 path：${actual ?? 'null（没有焦点编辑器）'}；` +
-        `点到的树行：${found}`,
+      `[FAIL] 点了含「${frag}」的那一行，但 10s 内编辑器没切过去——实际 path：${actual ?? 'null（没有焦点编辑器）'}；` +
+        `点到的行：${clickedRow}`,
       1,
     );
   });

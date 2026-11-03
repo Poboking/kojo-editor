@@ -617,3 +617,100 @@ export async function expandCollapsedUntilMatch(cdp, frag, { maxRounds = 40, int
   }
   return (await cdp.evalJs(hitExpr)) ? 'found' : 'timeout';
 }
+
+/* ================= KW-36 P1（2026-11-03）：够得到"未挂载树组"的可达通道 =================
+ *
+ * 病根（真实 eraTW 盘实拍）：`open-file <片段>` 只有**文件树**一条腿，而树是虚拟化的——
+ * 视口外的整组只挂一条等高占位（`file-tree-virtual.ts` 的 `isCulledSlice`），
+ * `expandCollapsedUntilMatch` 能点的 `aria-expanded="false"` 行**只有当前挂着的那些**；
+ * 目标在从未挂载的深层组里（例：`ERB/口上・メッセージ関連/个人口上/049 Satori [さとり]/…`）
+ * 时，它把已挂载的折叠行点到头就交回 `no-rows`，CLI 报「折叠行已点到头仍未命中（树是虚拟化的）」。
+ * 仓内旧绕法（往 `.tree-filter` 写关键词）也不通：那颗框滤的是**角色目录名**
+ * （`FileTree.tsx` 的 placeholder「过滤 N 个角色目录…」），打文件名一个都不剩。
+ *
+ * 正解不是新造第二条打开通道，而是换**应用自己的另一个入口**：命令面板的
+ * `workbench.quickOpen`（Ctrl+P）——它的候选来自 `quickOpenFiles`（**全量文件清单**，
+ * 与挂载无关，`palette-search.ts::rankFiles` 按 base/path 两档排），选中行的 `onPick`
+ * 落到 `onOpenFile(key)`（`Palette.tsx::QuickOpen`），与点文件树那一行**同一条腿**。
+ * 所以这条路只是"换个地方点同一下"，写域/只读闸/标签逻辑零绕开。
+ */
+
+/**
+ * 快速打开面板该打的那个**搜索词**（纯函数）。
+ *
+ * 面板按 base/path 模糊排（`rankFiles`），带目录的长片段当词也能中，但**末段**最稳
+ * （片段可能是 `A/B/C.ERB` 这种跨分隔符的串，而 `primary` 只有文件名）。
+ */
+export function quickOpenTermFor(frag) {
+  const s = String(frag ?? '').replace(/\\/g, '/');
+  const segs = s.split('/').filter((x) => x !== '');
+  const last = segs.length > 0 ? segs[segs.length - 1] : s;
+  return last.trim();
+}
+
+/**
+ * 从面板行里挑出**目标那一行**（纯函数、可单测）。
+ *
+ * 入参 `rows` 是调用方从 DOM 读回的形态 `{ idx, primary, dir }`（`idx` = `data-idx`，
+ * `dir` = `.picker-secondary` 的 title）。判据是「`dir/primary` 折成的相对路径含 frag」——
+ * frag 可以是完整相对路径，也可以只是文件名；多个命中时**逐字相等 > 路径最短 > 行序靠前**
+ * （最短=最贴近的那个，与"片段别给成会命中多份的短串"这条老口径同向）。
+ * 挑错不是灾难：调用方随后仍用 `editor.info().path` 对拍，红得起来。
+ */
+export function pickQuickOpenRow(rows, frag) {
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+  const needle = String(frag ?? '')
+    .replace(/\\/g, '/')
+    .toLowerCase()
+    .replace(/\/+$/, '')
+    .trim();
+  if (needle === '') return null;
+  const cand = [];
+  for (const r of rows) {
+    const primary = String(r?.primary ?? '').trim();
+    if (primary === '') continue;
+    const idx = Number(r?.idx);
+    if (!Number.isInteger(idx) || idx < 0) continue;
+    const dirRaw = String(r?.dir ?? '')
+      .replace(/\\/g, '/')
+      .replace(/^\/+|\/+$/g, '')
+      .trim();
+    const full = (dirRaw === '' ? primary.toLowerCase() : `${dirRaw.toLowerCase()}/${primary.toLowerCase()}`);
+    if (full.includes(needle)) cand.push({ idx, primary, dir: dirRaw, full, exact: full === needle });
+  }
+  if (cand.length === 0) return null;
+  cand.sort((a, b) => (b.exact ? 1 : 0) - (a.exact ? 1 : 0) || a.full.length - b.full.length || a.idx - b.idx);
+  return cand[0];
+}
+
+/**
+ * 走「快速打开」那条腿把文件点开（消费方注入 `surface`，判据留在上面两枚纯函数里）。
+ *
+ * `surface` 四枚动作（真机上由 debug-cli 用 CDP 接；单测里注一个假面板即可跑）：
+ * - `openPalette()`：打开面板（命令面板同一条路：`__kojoDebug.commands.run('workbench.quickOpen')`）
+ * - `setQuery(term)`：把词打进 `.picker-input`（真输入，React 受控框自己结算）
+ * - `readRows()`：读回当前候选 `[{idx, primary, dir}]`
+ * - `pickRow(idx)`：**真实点击**那一行（`.picker-item[data-idx=i]` ⇒ `onPick` ⇒ `onOpenFile`）
+ *
+ * 返回 `{ opened, term, rows, reason }`：`opened` 是"真的点下去了一行"，
+ * **不是**"文件打开了"——打开没打开仍由调用方按 `editor.info().path` 对拍裁决。
+ * 一行都没挑到 ⇒ `{opened:false, reason:'no-hit'|'no-palette'}`，调用方如实报错。
+ */
+export async function openFileViaSearchSurface(surface, frag, { rounds = 10, intervalMs = 300 } = {}) {
+  const term = quickOpenTermFor(frag);
+  const openedPalette = await surface.openPalette().then(() => true).catch(() => false);
+  if (!openedPalette) return { opened: false, term, rows: 0, reason: 'no-palette' };
+  await surface.setQuery(term);
+  let seen = 0;
+  for (let i = 0; i < rounds; i++) {
+    const rows = (await surface.readRows().catch(() => [])) ?? [];
+    seen = rows.length;
+    const hit = pickQuickOpenRow(rows, frag);
+    if (hit) {
+      await surface.pickRow(hit.idx);
+      return { opened: true, term, rows: seen, picked: hit };
+    }
+    await sleep(intervalMs);
+  }
+  return { opened: false, term, rows: seen, reason: 'no-hit' };
+}

@@ -51,6 +51,7 @@ import {
   killProcessesMarked,
   memorySourceLabel,
   MEMORY_TIGHT_MB,
+  openFileViaSearchSurface,
   portOpen,
   resolveMemoryBudget,
   sleep,
@@ -1326,7 +1327,153 @@ seg('legs-probes', ['session', 'editor'], async (c) => {
   );
 });
 
-/* ------------------------------ main ------------------------------ */
+/* ============ kw36：调试宿三格驱动通道的真机自证（KW-36，2026-11-03） ============
+ * 这三格是组长的验收通道（KW-14 的真机取证正卡在这里），判据一律**读回真相**，不判"没抛错"：
+ *
+ * ① **P0 setCursor**：位置形态与 `{lineNumber, column}` 对象形态必须**都落进那一格**——
+ *    自证读数是 `editor.info().cursor`（不是返回值本身）；脏值（0 基 / 小数 / 字符串 / 空对象）
+ *    一律 `false`，不许把脏值捅进 Monaco 换来一次"看起来动了、实际停在隔壁"。
+ * ② **P1 快速打开那条腿**：`open-file` 的第二入口。候选来自**全量清单**（与树的挂载无关），
+ *    点行落的是应用自己的 `onPick ⇒ onOpenFile`——判据＝点完 `editor.info().path` 逐字变成那一行。
+ *    这一条同时钉住"不是新造第二条通道"：除了点那一行，什么也没干。
+ * ③ **P1 的失败面**：两条入口都不命中时必须**如实红**，且文案带两腿各自的读数
+ *    （闸不会红了去猜"是不是树空了"）。
+ * ④ **P2 的裁决位**：`open-project` 现在以 state 裁决（`opening`＝`.welcome-open[disabled]`、
+ *    `projectOpened`＝`state().project`）。这一条在欢迎相位取一次常态读数：`disabled===false`
+ *    （内核已装配、不在 opening）——慢盘的假红就红在把"还在开"读成了"回到欢迎页"，
+ *    这枚锚读不到，判据就没有裁决位可用。
+ *
+ * 段依赖 `editor`（①② 要焦点编辑器）与 `session`（③ 要 CLI 子进程）；④ 收尾时把项目关掉
+ * 回到欢迎相位（本段声明在最末尾，后面没有别的段）。
+ * ============================================================================== */
+seg('kw36', ['session', 'editor'], async (c) => {
+  const { cdp, runCli, waitForExpr } = c;
+
+  /* ---------- ① P0：两种形状 + readback 真相 ---------- */
+  const p0 = await cdp.evalJs(`(() => {
+    const ed = __kojoDebug.editor;
+    const read = () => {
+      const i = ed.info();
+      return i ? { line: i.cursor.line, column: i.cursor.column, lineCount: i.lineCount } : null;
+    };
+    const base = read();
+    if (!base) return { noEditor: true };
+    // 目标行/列按当前文档算：行取第 2 行（不足就回到第 1 行），列取第 2 格——越界时 Monaco
+    // 会静默夹到别处，那种"返回值仍是 true"的读数才是本真要抓的假绿
+    const lineA = Math.min(2, base.lineCount);
+    const lineB = Math.min(3, base.lineCount);
+    const positional = ed.setCursor(lineA, 2);
+    const readBackA = read();
+    const objectForm = ed.setCursor({ lineNumber: lineB, column: 5 });
+    const readBackB = read();
+    const dirty = {
+      emptyObject: ed.setCursor({}),
+      zeroLine: ed.setCursor(0, 1),
+      fractional: ed.setCursor(1.5, 1),
+      stringLine: ed.setCursor('2', 1),
+      zeroColumn: ed.setCursor(lineA, 0),
+    };
+    return { lineA, lineB, positional, readBackA, objectForm, readBackB, dirty };
+  })()`);
+  const p0ok =
+    p0?.noEditor !== true &&
+    p0.positional === true &&
+    p0.readBackA?.line === p0.lineA &&
+    p0.readBackA?.column === 2 &&
+    p0.objectForm === true &&
+    p0.readBackB?.line === p0.lineB &&
+    p0.readBackB?.column === 5 &&
+    Object.values(p0.dirty ?? {}).every((v) => v === false);
+  check(
+    'setCursor 位置/对象两种形状都落进那一格（info().cursor 读回真相；脏值一律 false）',
+    p0ok,
+    JSON.stringify(p0).slice(0, 320),
+  );
+
+  /* ---------- ② P1：快速打开那一行＝应用的 onOpenFile 腿 ---------- */
+  const beforePath = await cdp.evalJs('(__kojoDebug.editor.info() ?? {}).path ?? null');
+  const viaPalette = await openFileViaSearchSurface(
+    {
+      async openPalette() {
+        await cdp.evalJs(`__kojoDebug.commands.run('workbench.quickOpen')`);
+        await waitFor(cdp, `!!document.querySelector('.picker .picker-input')`, {
+          timeoutMs: 15000,
+          label: '快速打开面板',
+        });
+        await cdpClick(cdp, '.picker-input');
+      },
+      async setQuery(term) {
+        await cdp.send('Input.insertText', { text: String(term ?? '') });
+      },
+      async readRows() {
+        return await cdp.evalJs(`[...document.querySelectorAll('.picker-item')].map((el) => ({
+          idx: Number(el.getAttribute('data-idx')),
+          primary: (el.querySelector('.picker-primary')?.textContent || '').trim(),
+          dir: (el.querySelector('.picker-secondary')?.getAttribute('title') || '').trim(),
+        }))`);
+      },
+      async pickRow(idx) {
+        await cdpClick(cdp, `.picker-item[data-idx="${idx}"]`);
+      },
+      async close() {
+        await cdpClick(cdp, '.picker-backdrop').catch(() => {});
+      },
+    },
+    'M_KOJO_K1.ERB',
+    { rounds: 12, intervalMs: 400 },
+  );
+  let afterPath = beforePath;
+  try {
+    afterPath = (await waitForExpr(
+      `(() => { const i = __kojoDebug.editor.info(); return i && i.path && i.path.includes('M_KOJO_K1.ERB') ? i.path : null; })()`,
+      { timeoutMs: 20000, label: '面板那一下真的把文件打开了' },
+    )).value;
+  } catch {
+    afterPath = null;
+  }
+  check(
+    'workbench.quickOpen 那条腿点一行 = 真把文件打开（editor.info().path 逐字对拍）',
+    viaPalette.opened === true && typeof afterPath === 'string' && afterPath.includes('M_KOJO_K1.ERB'),
+    `picked=${JSON.stringify(viaPalette.picked ?? null).slice(0, 200)} · 打开前=${String(beforePath)} · 打开后=${String(afterPath)}`,
+  );
+
+  /* ---------- ③ P1 失败面：两条入口都不命中要如实红，并带两腿读数 ---------- */
+  const missRes = await runCli(['open-file', 'M_KOJO_K404_这条夹具里不存在.ERB'], 120000);
+  const missText = `${missRes.out}${missRes.err}`;
+  check(
+    'open-file 不存在的片段：exit 1 且文案带「树点到头 + 面板候选数」两腿读数',
+    missRes.code === 1 &&
+      missText.includes('折叠行已点到头仍未命中') &&
+      missText.includes('两条入口都不命中'),
+    `exit=${missRes.code} · ${missRes.tail}`,
+  );
+
+  /* ---------- ④ P2 的裁决位：欢迎相位的 .welcome-open 常态读数 ---------- */
+  const closeBack = await runCli(['close-project'], 90000);
+  const anchor = await cdp
+    .evalJs(`(() => {
+      const btn = document.querySelector('.welcome-open');
+      const st = __kojoDebug.state();
+      return {
+        phase: String(st.phase ?? ''),
+        hasButton: !!btn,
+        // 这两枚就是 cmdOpenProject 第 4 步新读的裁决位（读不到＝判据没有 state 可依）
+        opening: !!btn && btn.disabled === true,
+        projectOpened: !!(st && st.project),
+      };
+    })()`)
+    .catch((err) => ({ evalError: String(err?.message ?? err) }));
+  check(
+    'open-project 的 state 裁决位在页面上读得到（欢迎相位：锚在场、disabled=false、无根）',
+    closeBack.code === 0 &&
+      anchor?.hasButton === true &&
+      anchor?.phase === 'welcome' &&
+      anchor?.opening === false &&
+      anchor?.projectOpened === false,
+    `close-project exit=${closeBack.code} · ${JSON.stringify(anchor)}`,
+  );
+});
+
 
 async function main() {
   let plan;
