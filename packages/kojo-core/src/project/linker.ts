@@ -4,7 +4,8 @@
  * 边界：
  * - 只消费 Project IR + TargetRegistry；不读盘、不生成 ERB；
  * - 不做 location/time matcher、specificity、唯一选择或最终 dispatch（M3）；
- * - exact duplicate 只按 Contracts D2 的五字段逐字比较，不引入地点/时间别名或区间语义；
+ * - exact duplicate 按 Contracts D2 的五字段 + engineFunctionName 逐字比较，不引入地点/时间
+ *   别名或区间语义；不同函数名（多角色 / 多家族）同组不是重复，是合法的多定义；
  * - 输出确定性排序，但 ProjectIR.files / ProjectIR.theaters 的源事实顺序保留。
  */
 import type { KojoSpan } from '../ast.js';
@@ -27,6 +28,14 @@ export interface ExactTheaterKey {
   readonly locationRaw: string;
   readonly timeKind: 'unrestricted' | 'named';
   readonly timeRaw: string;
+  /**
+   * P1-4：引擎函数名身份也进键。
+   *
+   * 同一 canonical target 下，不同角色/家族的函数名（如 `M_KOJO_ENCOUNTER_K12` /
+   * `M_KOJO_ENCOUNTER_K13`）是不同实现，不构成 exact duplicate；只有函数名也相同才是
+   * 真正的重复定义。null = 解析未给出函数名（non-supported 不进键，正常不会走到这里）。
+   */
+  readonly engineFunctionName: string | null;
 }
 
 export interface TheaterDuplicateFact {
@@ -136,7 +145,12 @@ export function resolveProjectTargets(projectIR: ProjectIR, registry: TargetRegi
   };
 }
 
-/** D2：exact duplicate 五字段，逐字来自 canonicalId 与 parser 既有 location/time。 */
+/**
+ * D2 + P1-4：exact duplicate 唯一键。
+ *
+ * 五字段（canonicalId + parser 既有 location/time）来自既有事实，`engineFunctionName`
+ * 来自 `resolution.functionName.name`（adapter 声明、core 求值的函数名身份）。
+ */
 export function exactTheaterKeyOf(theater: ProjectTheaterIR): ExactTheaterKey | null {
   const resolution = theater.targetResolution;
   if (resolution === null || resolution.canonicalId === null) return null;
@@ -147,6 +161,7 @@ export function exactTheaterKeyOf(theater: ProjectTheaterIR): ExactTheaterKey | 
     locationRaw: theater.theater.location.raw,
     timeKind: theater.theater.time.kind,
     timeRaw: theater.theater.time.raw,
+    engineFunctionName: resolution.functionName.name,
   };
 }
 
@@ -157,6 +172,7 @@ function exactKeyText(key: ExactTheaterKey): string {
     key.locationRaw,
     key.timeKind,
     key.timeRaw,
+    key.engineFunctionName,
   ].join('\u0000');
 }
 
@@ -175,7 +191,11 @@ function compareTheaters(a: ProjectTheaterIR, b: ProjectTheaterIR): number {
   );
 }
 
-function resolvedTheaterOf(theater: ProjectTheaterIR, path: string): ResolvedTheater | null {
+function resolvedTheaterOf(
+  theater: ProjectTheaterIR,
+  path: string,
+  duplicate: boolean,
+): ResolvedTheater | null {
   const resolution = theater.targetResolution;
   if (resolution === null) return null;
   return {
@@ -192,6 +212,7 @@ function resolvedTheaterOf(theater: ProjectTheaterIR, path: string): ResolvedThe
     engineFunctionName: resolution.functionName,
     callSignature: resolution.descriptor?.callSignature ?? null,
     sourceSpan: theater.theater.target.span,
+    duplicate,
   };
 }
 
@@ -207,7 +228,8 @@ function duplicateDiagnosticsOf(
       severity: 'error',
       message:
         `exact duplicate：目标 ${fact.key.canonicalTargetId} 在相同地点/时间键上出现 ` +
-        `${fact.related.length + 1} 次。`,
+        `${fact.related.length + 1} 次。` +
+        `（engineFunctionName=${fact.key.engineFunctionName ?? 'null'}）`,
       primary: locationOf(fact.primary, primaryPath, sourceSpanOf(fact.primary), 'conflict'),
       related: fact.related.map((theater) =>
         locationOf(theater, pathById.get(theater.fileId) ?? '', sourceSpanOf(theater), 'conflict'),
@@ -226,12 +248,8 @@ export function linkProject(projectIR: ProjectIR, registry: TargetRegistry): Pro
   const resolvedIR = resolveProjectTargets(projectIR, registry);
   const pathById = new Map(resolvedIR.files.map((file) => [file.fileId, file.path]));
 
-  const resolvedTheaters: ResolvedTheater[] = [];
-  for (const theater of [...resolvedIR.theaters].sort(compareTheaters)) {
-    const resolved = resolvedTheaterOf(theater, pathById.get(theater.fileId) ?? '');
-    if (resolved !== null) resolvedTheaters.push(resolved);
-  }
-
+  // P1-4 收尾：先算 duplicate 事实（按 canonical + 五字段 + engineFunctionName），
+  // 再把「是否重复」标到每个 ResolvedTheater 上；K12 重复不影响 K13 的状态。
   const duplicateBuckets = new Map<string, ProjectTheaterIR[]>();
   for (const theater of resolvedIR.theaters) {
     const key = exactTheaterKeyOf(theater);
@@ -243,7 +261,6 @@ export function linkProject(projectIR: ProjectIR, registry: TargetRegistry): Pro
   }
 
   const duplicateFacts: TheaterDuplicateFact[] = [];
-  const duplicateCanonicalIds = new Set<string>();
   for (const bucket of duplicateBuckets.values()) {
     if (bucket.length < 2) continue;
     const sorted = [...bucket].sort(compareTheaters);
@@ -253,9 +270,24 @@ export function linkProject(projectIR: ProjectIR, registry: TargetRegistry): Pro
     const key = exactTheaterKeyOf(primary);
     if (key === null) continue;
     duplicateFacts.push({ key, primary, related });
-    duplicateCanonicalIds.add(key.canonicalTargetId);
   }
   duplicateFacts.sort((a, b) => compareText(exactKeyText(a.key), exactKeyText(b.key)));
+
+  const duplicateTheaterIds = new Set<string>();
+  for (const fact of duplicateFacts) {
+    duplicateTheaterIds.add(fact.primary.theaterId);
+    for (const theater of fact.related) duplicateTheaterIds.add(theater.theaterId);
+  }
+
+  const resolvedTheaters: ResolvedTheater[] = [];
+  for (const theater of [...resolvedIR.theaters].sort(compareTheaters)) {
+    const resolved = resolvedTheaterOf(
+      theater,
+      pathById.get(theater.fileId) ?? '',
+      duplicateTheaterIds.has(theater.theaterId),
+    );
+    if (resolved !== null) resolvedTheaters.push(resolved);
+  }
 
   const groupMap = new Map<string, ResolvedTheater[]>();
   for (const theater of resolvedTheaters) {
@@ -268,17 +300,23 @@ export function linkProject(projectIR: ProjectIR, registry: TargetRegistry): Pro
   }
   const groups: LinkedTheaterGroup[] = [...groupMap.entries()]
     .sort((a, b) => compareText(a[0], b[0]))
-    .map(([canonicalId, theaters]) => ({
-      canonicalId,
-      theaters,
-      duplicate: duplicateCanonicalIds.has(canonicalId),
-    }));
+    .map(([canonicalId, theaters]) => {
+      const duplicateFunctionNames = [
+        ...new Set(
+          theaters
+            .filter((theater) => theater.duplicate)
+            .map((theater) => theater.engineFunctionName.name)
+            .filter((name): name is string => name !== null && name.length > 0),
+        ),
+      ].sort(compareText);
+      return {
+        canonicalId,
+        theaters,
+        duplicate: duplicateFunctionNames.length > 0,
+        duplicateFunctionNames,
+      };
+    });
 
-  const duplicateTheaterIds = new Set<string>();
-  for (const fact of duplicateFacts) {
-    duplicateTheaterIds.add(fact.primary.theaterId);
-    for (const theater of fact.related) duplicateTheaterIds.add(theater.theaterId);
-  }
   const groupedTheaterIds = new Set<string>();
   for (const group of groups) {
     for (const theater of group.theaters) groupedTheaterIds.add(theater.theaterId);

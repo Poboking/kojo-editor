@@ -1649,9 +1649,14 @@ describe('B5B-SINK-5：余 5 枚宿主事实——一枚都沉不动（障碍逐
       rel: 'ui/kojo2-project-analysis.ts',
       monacoFree: true,
       hostImports: ['./file-tree-ops', './kojo2-open', './problem-store', './kojo2-storage-registry'],
+      // Editor Integration 批（2026-11-03）新增 3 个消费者（Service 契约/实现、Host 工作流）——
+      // ③「多消费者」只会更成立，不改变「不能沉」的判定；这里逐字更新以防消费者清单悄悄漂移。
       consumers: [
         'ui/kojo2-project-compile.ts',
         'ui/kojo2-project-scan-adapter.ts',
+        'ui/kojo2-project-service-contract.ts',
+        'ui/kojo2-project-service.ts',
+        'ui/kojo2-project-workflow.ts',
         'ui/project-diagnostics.ts',
         'ui/project-scan-schedule.ts',
       ],

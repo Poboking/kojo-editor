@@ -604,6 +604,8 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
 
   return Object.freeze({
     id: 'eratw',
+    /** P1-3：项目级构建与 provenance.backendVersion 校验的后端实现版本。 */
+    version: '1',
     profile,
 
     /** 行尾提示：`(心形)` 是 adapter 声明过的演出；其余一律导演批注（不打印） */

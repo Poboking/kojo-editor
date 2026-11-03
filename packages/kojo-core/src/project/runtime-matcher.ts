@@ -5,7 +5,9 @@
  * - 输入是 M2 `LinkedProject` + 运行时已规范化的 canonical target / location / time；
  * - 只做原始字面匹配与特异性比较，不做地点/时间别名、区间、继承或文本猜测；
  * - 不生成最终 dispatch ERB，不回写 canonical target / registry 版本 / exact duplicate 键；
- * - 不拿文件枚举顺序或源文件顺序当运行时优先级。
+ * - 不拿文件枚举顺序或源文件顺序当运行时优先级；
+ * - P1-4：Host 可点名 `engineFunctionName` 缩小到某个角色/家族的实现；不点名时保持原
+ *   行为（同组同条件多候选 → ambiguous，不按顺序决胜）。
  *
  * 匹配规则（ADR-0012）：
  * - location.kind = unrestricted：任意运行时地点都匹配；
@@ -49,6 +51,13 @@ export interface RuntimeSelectionRequest {
   readonly timeValue?: number | null;
   /** 可选覆盖；缺省读 LinkedProject.runtimeMatchPolicy。 */
   readonly runtimeMatchPolicy?: RuntimeMatchPolicy | null;
+  /**
+   * 可选：点名要选择的引擎函数名（如 `M_KOJO_ENCOUNTER_K12`）。
+   *
+   * 提供时只保留 `theater.engineFunctionName.name` 逐字相等的候选；缺省 = 维持原行为
+   * （跨角色同条件多候选为 ambiguous，不猜测）。
+   */
+  readonly engineFunctionName?: string;
 }
 
 export interface RuntimeMatchCandidate {
@@ -60,6 +69,8 @@ export interface RuntimeMatchCandidate {
   readonly timeKind: 'unrestricted' | 'named';
   readonly timeRaw: string;
   readonly specificity: number;
+  /** P1-4：候选自己的函数名身份，随候选带出供 Host 诊断 / 调度关联。 */
+  readonly engineFunctionName: string | null;
   readonly sourceSpan: KojoSpan;
 }
 
@@ -116,8 +127,14 @@ function candidateOf(theater: ResolvedTheater): RuntimeMatchCandidate {
     timeKind: theater.time.kind,
     timeRaw: theater.time.raw,
     specificity: LOCATION_SCORE[theater.location.kind] + TIME_SCORE[theater.time.kind],
+    engineFunctionName: theater.engineFunctionName.name,
     sourceSpan: theater.sourceSpan,
   };
+}
+
+function functionNameMatches(theater: ResolvedTheater, request: RuntimeSelectionRequest): boolean {
+  if (request.engineFunctionName === undefined) return true;
+  return theater.engineFunctionName.name === request.engineFunctionName;
 }
 
 function diagnostic(
@@ -167,27 +184,57 @@ export function selectRuntimeTheater(request: RuntimeSelectionRequest): RuntimeS
       ),
     ]);
   }
-  if (group.duplicate) {
+  // P1-4 收尾：重复隔离是**函数级**的。K12 有 exact duplicate 时只拒绝 K12；
+  // K13 仍按自己的候选正常参与匹配/唯一选择（不再因为 group.duplicate 整组拒选）。
+  const duplicateFunctionNames = group.duplicateFunctionNames ?? [];
+  const requestedFunctionName = request.engineFunctionName;
+  if (requestedFunctionName !== undefined && duplicateFunctionNames.includes(requestedFunctionName)) {
+    const duplicateIds = group.theaters
+      .filter(
+        (theater) =>
+          theater.duplicate && theater.engineFunctionName.name === requestedFunctionName,
+      )
+      .map((theater) => theater.theaterId);
     return emptySelection('not-linked', request.canonicalId, [], [
       diagnostic(
         'runtime/duplicate-group',
-        `canonical target ${request.canonicalId} 的候选组被标记为 exact duplicate，拒绝从失败链接结果选择。`,
+        `canonical target ${request.canonicalId} 的函数 ${requestedFunctionName} 存在 exact duplicate 定义，拒绝从失败链接结果选择。`,
         request.canonicalId,
-        group.theaters.map((theater) => theater.theaterId),
+        duplicateIds,
       ),
     ]);
   }
 
   const policy = request.runtimeMatchPolicy ?? request.linkedProject.runtimeMatchPolicy ?? null;
-  const matched = group.theaters
+  const matchesQuery = (theater: ResolvedTheater): boolean =>
+    locationMatches(policy, theater, request) && timeMatches(policy, theater, request);
+  const eligible = group.theaters.filter((theater) => !theater.duplicate);
+  const matched = eligible
     .filter((theater) => theater.resolution.status === 'supported')
     .filter((theater) => theater.engineFunctionName.kind === 'resolved')
-    .filter((theater) => locationMatches(policy, theater, request))
-    .filter((theater) => timeMatches(policy, theater, request))
+    .filter((theater) => functionNameMatches(theater, request))
+    .filter(matchesQuery)
     .map(candidateOf)
     .sort(compareCandidates);
 
   if (matched.length === 0) {
+    // 命中的只有被阻断的重复定义：给 duplicate 诊断，而不是泛化成 no-match。
+    const duplicateHit = group.theaters.some(
+      (theater) => theater.duplicate && functionNameMatches(theater, request) && matchesQuery(theater),
+    );
+    if (duplicateHit) {
+      const duplicateIds = group.theaters
+        .filter((theater) => theater.duplicate && functionNameMatches(theater, request) && matchesQuery(theater))
+        .map((theater) => theater.theaterId);
+      return emptySelection('not-linked', request.canonicalId, [], [
+        diagnostic(
+          'runtime/duplicate-group',
+          `canonical target ${request.canonicalId} 的匹配候选只有 exact duplicate 定义，拒绝从失败链接结果选择。`,
+          request.canonicalId,
+          duplicateIds,
+        ),
+      ]);
+    }
     return emptySelection('no-match', request.canonicalId, [], [
       diagnostic(
         'runtime/no-match',

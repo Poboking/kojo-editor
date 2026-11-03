@@ -300,3 +300,81 @@ describe('M3 RuntimeMatchPolicy · 别名/区间/继承', () => {
     expect(conditions.time).toContainEqual({ kind: 'time-range', min: 2, max: 4 });
   });
 });
+
+describe('P1-1 · Matcher 与 Dispatch 对歧义场景给出一致结果', () => {
+  const HAKUREI_12 = fileInput(
+    'D:/proj/21-hakurei.kojo2',
+    source('【剧场：初见｜博麗神社】', '博麗'),
+    '12',
+  );
+
+  it('别名重叠候选：matcher ambiguous，dispatch plan 阻断且不产出 ERB', () => {
+    const linked = compile([SHRINE_12, HAKUREI_12]).build.linkedProject;
+    if (linked === null) throw new Error('expected LinkedProject');
+    const selection = selectRuntimeTheater({
+      linkedProject: linked,
+      canonicalId: 'eratw.event.初见',
+      location: '神社',
+      time: null,
+    });
+    expect(selection.status).toBe('ambiguous');
+
+    // requireDispatch 打开：歧义必须阻断构建，且不发布任何半成品。
+    const strict = compile([SHRINE_12, HAKUREI_12], {
+      dispatchSelectors: ERATW_DISPATCH_SELECTORS,
+      requireDispatch: true,
+    });
+    expect(strict.build.buildStatus).toBe('failed');
+    expect(strict.dispatchErb).toEqual([]);
+    expect(strict.theaterErb).toEqual([]);
+    expect(strict.dispatchDiagnostics.some((entry) => entry.code === 'dispatch/ambiguous-branches')).toBe(true);
+  });
+
+  it('未要求 dispatch 时：构建仍 succeeded，但该 target 不产出 ERB 且诊断可见', () => {
+    const result = compile([SHRINE_12, HAKUREI_12], {
+      dispatchSelectors: ERATW_DISPATCH_SELECTORS,
+    });
+    expect(result.build.buildStatus).toBe('succeeded');
+    expect(result.dispatchErb).toEqual([]);
+    expect(result.dispatchComplete).toBe(false);
+    const ambiguous = result.dispatchDiagnostics.find((entry) => entry.code === 'dispatch/ambiguous-branches');
+    expect(ambiguous?.severity).toBe('error');
+    expect(result.theaterErb).toHaveLength(2);
+  });
+});
+
+describe('P1-2 · Legacy 与 M3 Dispatch 边界', () => {
+  const legacyCommand = (): ProjectCompileFileInput =>
+    fileInput(
+      'D:/proj/22-legacy-command.kojo2',
+      '# 机 指令 310\n# 视角 灵梦\n> 旧正文\n',
+      '12',
+    );
+
+  it('legacy-only 项目 + requireDispatch：不再静默失败，只给 warning，legacy 由 M1 负责', () => {
+    const result = compile([legacyCommand()], {
+      dispatchSelectors: ERATW_DISPATCH_SELECTORS,
+      requireDispatch: true,
+    });
+    expect(result.build.buildStatus).toBe('succeeded');
+    expect(result.theaterErb).toEqual([]);
+    expect(result.dispatchErb).toEqual([]);
+    const skipped = result.dispatchDiagnostics.find((entry) => entry.code === 'dispatch/legacy-machine-skipped');
+    expect(skipped?.severity).toBe('warning');
+    expect(result.dispatchBackendDiagnostics).toEqual([]);
+  });
+
+  it('混合项目（显式初见 + legacy 指令）：legacy 不拖空显式 target 的 dispatch 产物', () => {
+    const result = compile([SHRINE_12, legacyCommand()], {
+      dispatchSelectors: ERATW_DISPATCH_SELECTORS,
+      requireDispatch: true,
+    });
+    expect(result.build.buildStatus).toBe('succeeded');
+    expect(result.dispatchErb).toHaveLength(1);
+    expect(result.dispatchErb[0]?.functionName).toBe('M_KOJO_ENCOUNTER_K12');
+    expect(result.dispatchErb[0]?.erb).toContain('@M_KOJO_ENCOUNTER_K12');
+    expect(result.dispatchComplete).toBe(true);
+    expect(result.dispatchDiagnostics.some((entry) => entry.code === 'dispatch/legacy-machine-skipped')).toBe(true);
+    expect(result.dispatchBackendDiagnostics).toEqual([]);
+  });
+});

@@ -1557,10 +1557,15 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     `ui/settings-workspace.css` +4,147（`.css` 本就不进主线程图）、
     //     `kojo-project-kit/src/new-project-wizard.ts` +351。
     //     ⇒ KB 闸 **3,536 → 3,549**。红沿 3,634,567 B，机械余量 **462 B**。
+    //   - **Editor Integration（2026-11-03 收尾车，rebase 默认工作区批后）**：读数
+    //     **196 文件 / 3,553 KB · 3,638,268 B**（= 上一格 3,634,105 + **4,163 B**；零新进图文件）。
+    //     新增字节只来自已在图中的两枚文件：`ui/App.tsx` 的工作流挂载段（动态 `import()`，
+    //     工作流/Service/问题映射全在懒 chunk）与 `bootstrap.ts` 的 2.0 编译事实登记面
+    //     （复用既有 eraTW 常驻 import，不新增插件文件）。⇒ KB 闸 **3,549 → 3,553**。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤196 文件 / ≤3,549 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤196 文件 / ≤3,553 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_549);
+    expect(totalKb).toBeLessThanOrEqual(3_553);
     expect(files.length).toBeLessThanOrEqual(196);
   });
 

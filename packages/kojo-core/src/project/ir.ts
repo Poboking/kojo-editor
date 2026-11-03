@@ -163,12 +163,26 @@ export interface ResolvedTheater {
   readonly engineFunctionName: import('./target-registry.js').FunctionNameResolution;
   readonly callSignature: import('./target-registry.js').CallSignature | null;
   readonly sourceSpan: KojoSpan;
+  /**
+   * P1-4 收尾（多角色重复隔离）：本 Theater 是否是 exact duplicate 的重复项。
+   *
+   * 重复是**按函数名 + 五字段键**判的；同 canonical 下 K12 重复不影响 K13。
+   * Matcher 必须过滤 duplicate 候选、dispatch plan 必须只阻断重复的那个 functionName。
+   */
+  readonly duplicate: boolean;
 }
 
 export interface LinkedTheaterGroup {
   readonly canonicalId: string;
   readonly theaters: readonly ResolvedTheater[];
+  /** 组内是否存在任一 duplicate（兼容视图；不得再拿它阻断整组）。 */
   readonly duplicate: boolean;
+  /**
+   * 有重复定义的引擎函数名（K12 重复 → ['M_KOJO_ENCOUNTER_K12']）。
+   *
+   * Matcher / Dispatch Plan 按这份名单做**函数级**隔离：K13 不被 K12 污染。
+   */
+  readonly duplicateFunctionNames: readonly string[];
 }
 
 export interface LinkedProject {

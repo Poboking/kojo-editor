@@ -44,3 +44,11 @@ M2 `ResolvedTheater` 增加只读 `location` / `time`，由 linker 从 `ProjectT
 - adapter 声明 `ERATW_RUNTIME_MATCH_POLICY`，registry 携带；matcher 与 dispatch plan 共用别名/继承/区间展开。
 - `runtimeProtocol.metadata.matchPolicyId` 指向策略 id。
 - Host 通过 `kojo2RuntimeSelectionProblems` 暴露 Ambiguous / NoMatch / NotLinked。
+
+## 第六阶段扩展：P1 修复（2026-11-03）
+
+> 阶段号说明：实施记录把 RuntimeMatchPolicy 记为第六阶段、本 ADR 记为第五阶段；本轮 P1 修复按实施记录记作第七阶段，历史小节不做改写。
+
+- **Matcher/Dispatch 歧义一致（P1-1）**：`buildProjectDispatchPlan` 按 `canonicalId + functionName` 分组后，在同一 specificity 内检测 policy 展开后的条件重叠（location 集合相交 ∧ time 集合相交）；命中即把该 target 标 `status='blocked'` 并产 error 级 `dispatch/ambiguous-branches`，渲染器只接收 ready target，不得按 fileId / 文件顺序静默决胜。不同 specificity 的重叠不阻断：matcher 取唯一最高分，dispatch 按 specificity 降序 first-match，两者一致。
+- **Legacy 与 dispatch 边界（P1-2）**：legacy-machine 分支不进入 dispatch target（其 ERB 由 M1 单文件路径负责），plan 只产 warning `dispatch/legacy-machine-skipped`；不拖空其它 target 的 `dispatchErb`；legacy-only 项目 + `requireDispatch` 不再静默失败。所有渲染失败路径（缺 lowering unit / backend 无 `renderDispatch` / `EmitFailure`）必须显式诊断，单个 target 失败只跳过自身。
+- **多角色（P1-4）**：`ProjectDispatchErb` additive 携带 `functionName`（同 canonical 多角色产多份）；`RuntimeSelectionRequest.engineFunctionName?` 与 `RuntimeMatchCandidate.engineFunctionName` 让 Host 按角色/函数身份唯一选择，不传时跨角色同条件仍按 ambiguous 处理（matcher 语义不变）。

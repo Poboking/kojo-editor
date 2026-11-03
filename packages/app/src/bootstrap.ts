@@ -7,7 +7,7 @@ import type {
   LauncherService,
 } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
-import { createEratwAdapterPlugin, createEratwEmitBackend, ERATW, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adapter'; // audit-allow: 组合根的 eraTW 常驻静态装载点（PS-10 口径，欢迎页就要它）
+import { createEratwAdapterPlugin, createEratwEmitBackend, ERATW, ERATW_CAPABILITY, ERATW_DISPATCH_SELECTORS, ERATW_GAME_ADAPTER, ERATW_SOURCE_MAP, ERATW_TARGET_REGISTRY } from '@kojo/plugin-eratw-adapter'; // audit-allow: 组合根的 eraTW 常驻静态装载点（PS-10 口径，欢迎页就要它）
 import { projectEventArgs, type MigrateEventArgs } from '@kojo/kojo-core';
 import type {
   EmitFailure,
@@ -16,6 +16,7 @@ import type {
   KojoExprText,
 } from '@kojo/kojo-core';
 import type { AdapterManifestEntry } from './adapter-manifest';
+import type { Kojo2CompileBundle } from './ui/kojo2-project-service-contract';
 import { version as APP_VERSION } from '../package.json';
 import { tauriBridge } from './bridge/tauri-bridge';
 import { computeTasks } from './compute-tasks';
@@ -280,6 +281,49 @@ registerKojo2Backend(ERATW.gameId, (deps) =>
     ...(deps.charNo !== undefined && deps.charNo.length > 0 ? { charNo: deps.charNo } : {}),
   }),
 );
+
+/* ============================== 2.0 项目编译事实（Editor Integration） ============================== */
+
+/**
+ * 按游戏登记「项目编译所需的一整套事实」：adapter / registry / backend 工厂 / dispatch
+ * selector / capability / sourceMapPolicy / gameFingerprint。
+ *
+ * 分层理由与 {@link kojo2Backends} 同源：UI 与 Application Service 只按当前项目**现取**，
+ * 不静态 import 任何插件、也不猜默认方言；查不到 = 该游戏没有 2.0 编译面（明确降级）。
+ * 新增游戏 = 在组合根登记一条，不改 Service/UI。
+ */
+const kojo2CompileBundles = new Map<string, Kojo2CompileBundle>();
+
+/** 登记一枚游戏的 2.0 编译事实（重复登记以最后一次为准）。 */
+export function registerKojo2CompileBundle(bundle: Kojo2CompileBundle): void {
+  kojo2CompileBundles.set(bundle.adapterId, bundle);
+}
+
+/** 按当前项目取 2.0 编译事实：没项目 / 无 adapterId / 该游戏未登记 ⇒ null。 */
+export function kojo2CompileBundleForProject(
+  project: { readonly adapterId?: string } | null,
+): Kojo2CompileBundle | null {
+  const id = project?.adapterId;
+  if (id === undefined || id === null) return null;
+  return kojo2CompileBundles.get(id) ?? null;
+}
+
+// eraTW：常驻编译事实（与上方 backend 登记同一把键；事实必须同源）。
+registerKojo2CompileBundle({
+  adapterId: ERATW_GAME_ADAPTER.id,
+  adapter: ERATW_GAME_ADAPTER,
+  registry: ERATW_TARGET_REGISTRY,
+  gameFingerprint: ERATW_GAME_ADAPTER.gameFingerprint,
+  createBackend: (deps) =>
+    createEratwEmitBackend({
+      compileExpression: deps.compileExpression,
+      ...(deps.charNo !== undefined && deps.charNo.length > 0 ? { charNo: deps.charNo } : {}),
+      ...(deps.familySegment !== undefined ? { familySegment: deps.familySegment } : {}),
+    }),
+  dispatchSelectors: ERATW_DISPATCH_SELECTORS,
+  capability: ERATW_CAPABILITY,
+  sourceMapPolicy: ERATW_SOURCE_MAP,
+});
 
 /**
  * 应用引导：装配内核 + 插件清单。

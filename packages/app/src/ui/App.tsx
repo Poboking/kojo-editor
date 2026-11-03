@@ -1014,6 +1014,54 @@ export function App(): ReactElement {
   const notifyRef = useRef(notify);
   notifyRef.current = notify;
 
+  /* --------- Kojo 2.0 项目工作流（Editor Integration）：UI 只装命令，九步流程在 Service --------- */
+
+  /**
+   * 装配点（唯一一处）：**动态 import** 懒装载 `kojo2-project-workflow`，由它自己按项目
+   * 生命周期创建 Application Service、订阅 project/file 事件、把构建/调度/组装诊断上
+   * 问题面板，并返回 3 条命令（构建 / 预览调度计划 / 发布）。
+   *
+   * App 只做三件事：给内核 + 额外根 + 通知端口、把命令塞进命令表、卸载时 dispose。
+   * 项目切换/关闭由工作流内部按事件处理（不在 React 依赖里重建）；kernel 变了才重挂。
+   */
+  const [kojo2ProjectCommands, setKojo2ProjectCommands] = useState<readonly ShellCommandSpec[]>([]);
+  useEffect(() => {
+    if (!kernel) {
+      setKojo2ProjectCommands([]);
+      return;
+    }
+    let cancelled = false;
+    let handle: { readonly commands: readonly ShellCommandSpec[]; dispose(): void } | null = null;
+    void import('./kojo2-project-workflow')
+      .then(({ mountKojo2ProjectWorkflow }) => {
+        if (cancelled) return;
+        handle = mountKojo2ProjectWorkflow({
+          kernel,
+          extraRoots: () => extraRootsRef.current,
+          notify: (notice) => notifyRef.current(notice),
+        });
+        if (cancelled) {
+          handle.dispose();
+          handle = null;
+          return;
+        }
+        setKojo2ProjectCommands(handle.commands);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        notifyRef.current({
+          kind: 'error',
+          message: `Kojo 2.0 项目工作流装载失败：${error instanceof Error ? error.message : String(error)}`,
+        });
+      });
+    return () => {
+      cancelled = true;
+      handle?.dispose();
+      handle = null;
+      setKojo2ProjectCommands([]);
+    };
+  }, [kernel]);
+
   /**
    * Kojo 2.0 槽位账本（K2-STORAGE-SERVICE）：项目打开 / 关闭的**唯一**接线点。
    *
@@ -1245,6 +1293,8 @@ export function App(): ReactElement {
     () => [
       ...migrateCommands,
       ...storageCommands,
+      // Editor Integration：Kojo 2.0 项目构建 / 调度计划预览 / 发布（工作流懒装载）。
+      ...kojo2ProjectCommands,
       // LAU-3b：旧 `.kojo` → `.kojo1` 改名（只改名、不改内容；只读域由内核闸拒绝）。
       // 常驻在项目视图的命令表里：它不是"开关开才有"的功能，任何档位都可能需要把旧文件
       // 预先标成封存形态。
@@ -1264,7 +1314,7 @@ export function App(): ReactElement {
         run: () => setLauncherOpen(true),
       },
     ],
-    [migrateCommands, storageCommands, openLegacyRename],
+    [migrateCommands, storageCommands, kojo2ProjectCommands, openLegacyRename],
   );
 
   // 结构解析叠层（默认开；只有显式 `off` 才算关，见 `monaco/tree-sitter-pref.ts`）的回落必须可见（铁律 4）：wasm / worker / 解析任何一路不通

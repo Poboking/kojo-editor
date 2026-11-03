@@ -51,6 +51,22 @@ M2 必须先建立项目事实层和唯一 Target 解析层，否则跨文件重
 - unknown 或 unsupported target 不参与 exact duplicate 检查；它们先各自产生 target 诊断。
 - exact duplicate 的 ProjectDiagnostic 必须同时携带 primary 与 related 文件位置，并 error 级阻断项目构建。
 
+#### D2 修订（2026-11-03 P1-4）
+
+- 唯一键增加 `engineFunctionName`（取自 `TargetResolution.functionName.name`），即 D2 原五字段 + 函数名共六字段；D5 中「同一五字段键」按本修订一并理解。
+- 支持多角色项目：同一 canonical target、同 location/time 下，不同引擎函数名（不同角色 / 家族）是各自合法的定义，**不判 exact duplicate**，仍形成同一 target 的候选组。
+- 只有 canonicalTargetId + location.kind/raw + time.kind/raw + engineFunctionName 全部相同才是 exact duplicate；origin 仍不进键，不 trim、不做别名/区间语义的口径不变。
+- 实现落点：`ExactTheaterKey.engineFunctionName`、`linker.ts` 的重复键与诊断；M3 Runtime Matcher 增加可选 `engineFunctionName` 请求字段与候选带出，未点名时维持跨角色 ambiguous（不按顺序决胜）。
+- 多角色重复隔离（2026-11-03 收尾，additive）：`ResolvedTheater` 增加 `duplicate` 标记，`LinkedTheaterGroup` 增加 `duplicateFunctionNames`；`group.duplicate` 保留为聚合兼容视图。Matcher / Dispatch Plan 必须按函数名隔离——K12 的重复只阻断 K12，K13 仍可独立匹配并生成 dispatch target；不得再用 canonical 级 `group.duplicate` 拒绝整个候选组。
+
+### P1-3 版本校验落地（2026-11-03）
+
+- 新增 `validateProjectProvenanceVersions(projectIR, { registry, backend })`（`packages/kojo-core/src/project/version-check.ts`，由 `project/index.ts` 导出）；`compileProject` 在链接前调用。
+- 四轴逐字校验：`adapterId` / `adapterVersion` 对 `TargetRegistry.adapterId` / `adapterVersion`；`backendId` / `backendVersion` 对 `backend.id` / `backend.version`。
+- 缺失即 fail-closed：provenance 任一轴为空串或 null → `version-mismatch` error；backend 未声明版本（`KojoEmitBackend.version?` 可选）同样阻断，不静默放过。
+- 诊断 `kind = version-mismatch`、`code = core/project/version-mismatch`，并入 Project IR 诊断，使 `buildStatus = failed` 且不发布任何产物。
+- `targetRegistryId` / `targetRegistryVersion` 的比对仍由 linker 负责，既有 version-mismatch 口径不变。
+
 ### D3 Host 注入函数名上下文
 
 - charNo、familySegment 由 Host 注入，作为文件级 Project IR 事实，放入 ProjectFileIR.functionNameContext；segments 不在 FunctionNameContext，它由 Adapter 通过 TargetDescriptor.parameterRules/segmentDefaults 声明（见 D7、D8）。

@@ -6,6 +6,7 @@ import type {
   KojoTheaterTime,
   LinkedProject,
   ResolvedTheater,
+  RuntimeMatchPolicy,
   SourceMapPolicy,
 } from '../src/index.js';
 import { buildProjectDispatchPlan, dispatchTargetPlanOf, selectRuntimeTheater } from '../src/index.js';
@@ -42,6 +43,7 @@ interface TheaterOptions {
   readonly ordinal?: number;
   readonly location: KojoTheaterLocation;
   readonly time: KojoTheaterTime;
+  readonly duplicate?: boolean;
 }
 
 function theater(options: TheaterOptions): ResolvedTheater {
@@ -68,6 +70,7 @@ function theater(options: TheaterOptions): ResolvedTheater {
     engineFunctionName: { kind: 'resolved', name: 'M_KOJO_ENCOUNTER_K12', requiredContext: [], reason: null },
     callSignature: null,
     sourceSpan: SPAN,
+    duplicate: options.duplicate ?? false,
   };
 }
 
@@ -87,7 +90,14 @@ function linked(theaters: readonly ResolvedTheater[], duplicate = false): Linked
       sourceMapPolicy: SOURCE_MAP,
       capability: CAPABILITY,
     },
-    groups: [{ canonicalId: 'target.初见', theaters, duplicate }],
+    groups: [
+      {
+        canonicalId: 'target.初见',
+        theaters,
+        duplicate,
+        duplicateFunctionNames: duplicate ? ['M_KOJO_ENCOUNTER_K12'] : [],
+      },
+    ],
     theaters,
     diagnostics: [],
   };
@@ -144,7 +154,12 @@ describe('M3 Runtime Matcher · location/time 选择', () => {
   });
 
   it('duplicate group / 未链接 target 都拒绝选择', () => {
-    const duplicated = theater({ fileId: 'file:dup', location: location('unrestricted', ''), time: time('unrestricted', '') });
+    const duplicated = theater({
+      fileId: 'file:dup',
+      location: location('unrestricted', ''),
+      time: time('unrestricted', ''),
+      duplicate: true,
+    });
     const duplicateResult = selectRuntimeTheater({
       linkedProject: linked([duplicated], true),
       canonicalId: 'target.初见',
@@ -197,10 +212,12 @@ describe('M3 Dispatch Plan · 候选组 → 确定性分支计划', () => {
   });
 
   it('duplicate 组阻断计划，并点名全部候选', () => {
-    const a = theater({ fileId: 'file:a', location: location('unrestricted', ''), time: time('unrestricted', '') });
-    const b = theater({ fileId: 'file:b', location: location('unrestricted', ''), time: time('unrestricted', '') });
+    const a = theater({ fileId: 'file:a', location: location('unrestricted', ''), time: time('unrestricted', ''), duplicate: true });
+    const b = theater({ fileId: 'file:b', location: location('unrestricted', ''), time: time('unrestricted', ''), duplicate: true });
     const plan = buildProjectDispatchPlan(linked([a, b], true));
     expect(plan.status).toBe('blocked');
+    expect(plan.targets[0]?.status).toBe('blocked');
+    expect(plan.targets[0]?.duplicate).toBe(true);
     expect(plan.diagnostics[0]?.code).toBe('dispatch/duplicate-group');
     expect(plan.diagnostics[0]?.candidateTheaterIds).toEqual([a.theaterId, b.theaterId]);
   });
@@ -210,5 +227,97 @@ describe('M3 Dispatch Plan · 候选组 → 确定性分支计划', () => {
     const plan = buildProjectDispatchPlan(linked([one]));
     expect(dispatchTargetPlanOf(plan, 'target.初见')?.branches).toHaveLength(1);
     expect(dispatchTargetPlanOf(plan, 'target.不存在')).toBeNull();
+  });
+});
+describe('M3 Dispatch Plan · P1-1 歧义与 matcher 一致 / P1-2 legacy 边界', () => {
+  const ALIAS_POLICY: RuntimeMatchPolicy = {
+    id: 'test.alias',
+    locationAliases: { 博麗神社: ['神社'] },
+  };
+
+  it('别名展开后同特异性分支条件重叠：plan 阻断，matcher 同样 ambiguous（不会静默按 fileId 决胜）', () => {
+    const shrine = theater({ fileId: 'file:01', location: location('exact', '神社'), time: time('unrestricted', '') });
+    const hakurei = theater({ fileId: 'file:02', location: location('exact', '博麗神社'), time: time('unrestricted', '') });
+    const project = linked([shrine, hakurei]);
+    // 运行时选择：两条分支都命中 → 同特异性 → ambiguous
+    const selection = selectRuntimeTheater({
+      linkedProject: project,
+      canonicalId: 'target.初见',
+      location: '神社',
+      time: null,
+      runtimeMatchPolicy: ALIAS_POLICY,
+    });
+    expect(selection.status).toBe('ambiguous');
+    // 计划：不得让渲染器拿到可以按顺序决胜的 target
+    const plan = buildProjectDispatchPlan(project, ALIAS_POLICY);
+    expect(plan.status).toBe('blocked');
+    expect(plan.targets[0]?.status).toBe('blocked');
+    const ambiguous = plan.diagnostics.find((entry) => entry.code === 'dispatch/ambiguous-branches');
+    expect(ambiguous?.severity).toBe('error');
+    expect(ambiguous?.candidateTheaterIds).toEqual([shrine.theaterId, hakurei.theaterId]);
+  });
+
+  it('同特异性但 location 不相交：plan 保持 ready（不误报）', () => {
+    const shrine = theater({ fileId: 'file:01', location: location('exact', '神社'), time: time('unrestricted', '') });
+    const school = theater({ fileId: 'file:02', location: location('exact', '学校'), time: time('unrestricted', '') });
+    const plan = buildProjectDispatchPlan(linked([shrine, school]), ALIAS_POLICY);
+    expect(plan.status).toBe('ready');
+    expect(plan.targets[0]?.status).toBe('ready');
+    expect(plan.diagnostics).toEqual([]);
+  });
+
+  it('不同特异性重叠不阻断：matcher 唯一最高，dispatch 的降序渲染与之一致', () => {
+    const exact = theater({ fileId: 'file:exact', location: location('exact', '神社'), time: time('unrestricted', '') });
+    const wildcard = theater({ fileId: 'file:wildcard', location: location('unrestricted', ''), time: time('unrestricted', '') });
+    const project = linked([wildcard, exact]);
+    expect(
+      selectRuntimeTheater({ linkedProject: project, canonicalId: 'target.初见', location: '神社', time: null }).status,
+    ).toBe('selected');
+    const plan = buildProjectDispatchPlan(project);
+    expect(plan.status).toBe('ready');
+    expect(plan.targets[0]?.status).toBe('ready');
+  });
+
+  it('时间条件重叠（白天 vs 全天）同样阻断', () => {
+    const day = theater({ fileId: 'file:day', location: location('unrestricted', ''), time: time('named', '白天') });
+    const allDay = theater({ fileId: 'file:all', location: location('unrestricted', ''), time: time('named', '全天') });
+    const policy: RuntimeMatchPolicy = {
+      id: 'test.time',
+      timeRanges: { 白天: [{ min: 2, max: 4 }], 全天: [{ min: 1, max: 7 }] },
+    };
+    const plan = buildProjectDispatchPlan(linked([day, allDay]), policy);
+    expect(plan.status).toBe('blocked');
+    expect(plan.targets[0]?.status).toBe('blocked');
+    expect(plan.diagnostics.some((entry) => entry.code === 'dispatch/ambiguous-branches')).toBe(true);
+  });
+
+  it('legacy-machine 分支不进 dispatch target，只给 warning；显式 Theater 产物不被拖空', () => {
+    const explicit = theater({ fileId: 'file:explicit', location: location('exact', '神社'), time: time('unrestricted', '') });
+    const legacy = { ...theater({ fileId: 'file:legacy', location: location('unrestricted', ''), time: time('unrestricted', '') }), origin: 'legacy-machine' as const };
+    const plan = buildProjectDispatchPlan(linked([explicit, legacy]));
+    expect(plan.status).toBe('ready');
+    expect(plan.targets).toHaveLength(1);
+    expect(plan.targets[0]?.branches.map((branch) => branch.origin)).toEqual(['theater']);
+    const skipped = plan.diagnostics.find((entry) => entry.code === 'dispatch/legacy-machine-skipped');
+    expect(skipped?.severity).toBe('warning');
+    expect(skipped?.candidateTheaterIds).toEqual([legacy.theaterId]);
+  });
+
+  it('legacy-only 组：plan ready + 0 target + warning（不再产生失败，也不产生 no-supported 误报）', () => {
+    const legacy = { ...theater({ fileId: 'file:legacy', location: location('unrestricted', ''), time: time('unrestricted', '') }), origin: 'legacy-machine' as const };
+    const plan = buildProjectDispatchPlan(linked([legacy]));
+    expect(plan.status).toBe('ready');
+    expect(plan.targets).toEqual([]);
+    expect(plan.diagnostics.map((entry) => entry.code)).toEqual(['dispatch/legacy-machine-skipped']);
+  });
+
+  it('歧义诊断与目标顺序无关（输入置换结果逐条相同）', () => {
+    const a = theater({ fileId: 'file:01', location: location('exact', '神社'), time: time('unrestricted', '') });
+    const b = theater({ fileId: 'file:02', location: location('exact', '博麗神社'), time: time('unrestricted', '') });
+    const forward = buildProjectDispatchPlan(linked([a, b]), ALIAS_POLICY);
+    const backward = buildProjectDispatchPlan(linked([b, a]), ALIAS_POLICY);
+    expect(backward.status).toBe(forward.status);
+    expect(backward.targets).toEqual(forward.targets);
+    expect(backward.diagnostics).toEqual(forward.diagnostics);
   });
 });

@@ -1,6 +1,6 @@
-# Kojo 2.0 M3 实施记录（第一阶段）
+# Kojo 2.0 M3 实施记录（第一~七阶段）
 
-> 状态：Runtime Matcher 纯选择核心已落地；最终 dispatch ERB、地点/时间别名与区间尚未实现。
+> 状态：M3 全部阶段已落地——Runtime Matcher、Dispatch Plan、最终 dispatch ERB、Host selector、真实 selector、RuntimeMatchPolicy，以及 P1 修复（matcher/dispatch 歧义一致、legacy 边界、多角色身份）。
 
 ## 已实现
 
@@ -25,7 +25,7 @@ const result = selectRuntimeTheater({
 });
 ```
 
-## 边界
+## 边界（第一阶段时点；后续阶段已扩展）
 
 - 不生成最终 dispatch ERB。
 - 不做地点/时间别名、trim、大小写折叠、区间、继承或 raw 文本猜测。
@@ -34,8 +34,12 @@ const result = selectRuntimeTheater({
 
 ## 测试
 
-- `packages/kojo-core/tests/runtime-matcher.test.ts`：纯选择矩阵。
-- `packages/plugins/eratw-adapter/tests/kojo2/m3-runtime-matcher.test.ts`：与 `compileProject` 的端到端接缝。
+- `packages/kojo-core/tests/runtime-matcher.test.ts`：纯选择矩阵 + dispatch plan 的歧义/legacy 边界。
+- `packages/plugins/eratw-adapter/tests/kojo2/m3-runtime-matcher.test.ts`：与 `compileProject` 的端到端接缝 + P1-1/P1-2 回归。
+- `packages/kojo-core/tests/multi-role.test.ts` / `packages/plugins/eratw-adapter/tests/kojo2/multi-role.test.ts`：多角色（P1-4）。
+- `packages/kojo-core/tests/version-check.test.ts`：Adapter/Backend 版本轴（P1-3）。
+- `packages/kojo-core/tests/duplicate-isolation.test.ts` / `packages/plugins/eratw-adapter/tests/kojo2/duplicate-isolation.test.ts`：多角色重复隔离（K12 红 / K13 绿）。
+- `packages/kojo-core/tests/erb-assembly.test.ts` / `packages/plugins/eratw-adapter/tests/kojo2/erb-assembly.test.ts`：最终产物组装（dispatch 进 / theaterErb 不进 / legacy 显式传入）。
 
 ## Dispatch Plan（第二阶段）
 
@@ -46,11 +50,54 @@ const result = selectRuntimeTheater({
 - `dispatchTargetPlanOf(plan, canonicalId)`：按目标取计划。
 - 本阶段仍不生成 ERB；adapter 运行时变量与最终 dispatch 渲染属于下一批。
 
-## 当前未实现
+## 当前边界（P1 修复后）
 
-- 最终 dispatch ERB 与 adapter 专用运行时变量绑定。
-- 地点/时间别名、区间、继承。
-- `runtimeProtocol.metadata` 的专用匹配策略。
+- **legacy-machine**：不参与 M3 dispatch（其 ERB 由 M1 单文件路径负责，字节不变），plan 只给 warning `dispatch/legacy-machine-skipped`；matcher 仍可返回 legacy 选择结果，Host 需按 origin 走 M1 产物。
+- **多角色**：同 canonical 不同 `engineFunctionName` 合法共存；matcher 需 Host 传 `engineFunctionName` 才能唯一选择，否则跨角色同条件按 ambiguous；dispatch 按 functionName 拆 target，`ProjectDispatchErb.functionName` 标识产物。
+- 地点/时间别名、区间、继承由 `RuntimeMatchPolicy` 统一展开；未登记时辰名在 dispatch 侧 fail-closed。
+- core 不写 ERB 关键字；最终字节归 adapter `renderDispatch`。
+
+## 第七阶段：P1-1 / P1-2 一致性修复（2026-11-03）
+
+### P1-1 Matcher 与 Dispatch 歧义一致
+
+- `buildProjectDispatchPlan` 对同一 `canonicalId + functionName` 的分支按 specificity 分组；同组内任意两条经 policy 展开后 location 集合相交且 time 集合相交 ⇒ 该 target `status='blocked'`，产 error 级 `dispatch/ambiguous-branches`（携带 candidateTheaterIds、functionName、specificity）。
+- 渲染端只接收 `status==='ready'` 的 target，因此不会按 fileId / 文件顺序静默决胜。`requireDispatch=true` 时 build failed 且不发布 theaterErb / dispatchErb 半成品；false 时其余 target 正常产出，该 target 无产物且诊断在 `dispatchDiagnostics` 可见。
+- 不同 specificity 的条件重叠不阻断：matcher 取唯一最高分、dispatch 按 specificity 降序 first-match，两侧一致。
+- 覆盖时间维度：`白天` 2–4 与 `全天` 1–7 区间重叠、`夜`/`夜晚` 展开后同条件等都会触发阻断。
+
+### P1-2 Legacy 与 dispatch 边界
+
+- `buildProjectDispatchPlan` 排除 `origin==='legacy-machine'` 的分支，只产 warning `dispatch/legacy-machine-skipped`；legacy 的 ERB 仍归 M1 单文件路径。
+- 混合项目中 legacy 不会清空显式 target 的 `dispatchErb`；legacy-only 项目 + `requireDispatch=true` 不再静默 failed（没有可分派 target 即无 M3 dispatch 要求）。
+- 渲染失败路径（缺 lowering unit / backend 无 `renderDispatch` / `EmitFailure`）都有显式诊断；单个 target 失败只跳过自身，不影响其它 target。
+
+### P1-4 多角色身份（与 M2 D2 修订配套）
+
+- `ProjectDispatchErb` 增加 `functionName`：同 canonical 多角色产出多份（K12/K13 各自可寻址）。
+- `RuntimeSelectionRequest.engineFunctionName?` + `RuntimeMatchCandidate.engineFunctionName`：Host 有角色/函数身份时唯一选择；不传时行为不变（跨角色同条件 ambiguous）。
+
+## 第八阶段：多角色重复隔离、产物组装与 Legacy 边界（2026-11-03 收尾）
+
+### 多角色重复隔离（函数级，不再整组污染）
+
+- additive：`ResolvedTheater.duplicate: boolean`（该 Theater 是否 exact duplicate 重复项）；`LinkedTheaterGroup.duplicateFunctionNames: readonly string[]`（有重复定义的引擎函数名；`group.duplicate` 保留为聚合兼容视图）。
+- Matcher：候选过滤掉 duplicate；点名 `engineFunctionName` 时若该函数在 `duplicateFunctionNames` 中 → `not-linked` + `runtime/duplicate-group`（只拒绝该函数）；不点名时 K13 等合法函数正常参与唯一/ambiguous 选择；只有重复定义命中时给 duplicate 诊断而非 no-match。
+- Dispatch plan：duplicate 只阻断**同 functionName** 的 target（`dispatch/duplicate-group` 携带 functionName）；K12 target blocked、K13 target ready；plan.status 仍因 error 为 blocked。
+- `ProjectCompileResult.dispatchPlan` additive：构建失败时也可读（编辑器诊断视图）；`ProjectCompileInput.emitDiagnosticArtifacts?: boolean`（缺省 false）：构建失败时仍为 ready target 产出**诊断用** dispatchErb（不可发布，assembly 会判 incomplete）。
+- 回归：`packages/kojo-core/tests/duplicate-isolation.test.ts`、`packages/plugins/eratw-adapter/tests/kojo2/duplicate-isolation.test.ts`。
+
+### 最终产物组装（权威规则见 `docs/KOJO-2.0-ARTIFACT-ASSEMBLY.md`）
+
+- 实现：`packages/kojo-core/src/project/erb-assembly.ts` 的 `planProjectErbAssembly(result)` / `assembleProjectErb({ result, legacyErb })`。
+- `dispatchErb` = 最终运行时调度产物；`theaterErb` = 单 Theater 预览/兼容视图，**不进入最终组装**（直接拼接会重复定义运行时函数）。
+- legacy-machine 的 ERB 由 M1 单文件路径产出，Host 必须显式传入 `legacyErb`；缺一条即 `assembly/legacy-missing`。
+- 组装 `status==='complete'` 才可发布：build failed / plan error / dispatch 缺 target / legacy 缺失或未知 / 同一运行时函数重复 → `incomplete` + 诊断。
+
+### Legacy 边界
+
+- legacy-machine 不进入 M3 dispatch（plan warning `dispatch/legacy-machine-skipped`），其字节归 M1 单文件路径；matcher 仍可返回 legacy 选择结果，Host 应按 origin 走 M1 产物。
+- 组装接口把「M1 供 legacy 文件 / M3 供显式 Theater」两条产物线合并；跳过 legacy ≠ 项目完整（assembly 判据兜底）。
 
 ## Dispatch ERB（第三阶段）
 

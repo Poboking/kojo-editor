@@ -55,6 +55,13 @@ export interface Kojo2CompileProjectInput {
   readonly requireDispatch?: boolean;
   /** M3 显式覆盖 registry 的 runtimeMatchPolicy。 */
   readonly runtimeMatchPolicy?: RuntimeMatchPolicy | null;
+  /**
+   * 构建失败时是否仍产出**诊断用** dispatchErb 预览（缺省 false）。
+   *
+   * 编辑器在多角色项目里「K12 重复、K13 合法」时可用它展示 K13 调度产物；
+   * 产物不可发布（buildStatus 仍 failed，assembly 会 incomplete）。
+   */
+  readonly emitDiagnosticArtifacts?: boolean;
   /** 测试 / 已解析复用口；缺省 core `parseSource`。 */
   readonly parse?: (text: string) => KojoFile;
 }
@@ -91,5 +98,8 @@ export function compileKojo2Project(input: Kojo2CompileProjectInput): ProjectCom
     ...(input.dispatchSelectors === undefined ? {} : { dispatchSelectors: input.dispatchSelectors }),
     ...(input.requireDispatch === undefined ? {} : { requireDispatch: input.requireDispatch }),
     ...(input.runtimeMatchPolicy === undefined ? {} : { runtimeMatchPolicy: input.runtimeMatchPolicy }),
+    ...(input.emitDiagnosticArtifacts === undefined
+      ? {}
+      : { emitDiagnosticArtifacts: input.emitDiagnosticArtifacts }),
   });
 }

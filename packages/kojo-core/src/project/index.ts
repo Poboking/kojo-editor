@@ -14,7 +14,10 @@ export * from './weave-layers.js';
 export * from './identity.js';
 export * from './ir.js';
 export * from './target-registry.js';
+/* P1-3：Adapter / Backend 版本轴校验（M2-P0 Contracts §1.3） */
+export * from './version-check.js';
 export * from './linker.js';
 export * from './compile-project.js';
 export * from './runtime-matcher.js';
 export * from './dispatch-plan.js';
+export * from './erb-assembly.js';

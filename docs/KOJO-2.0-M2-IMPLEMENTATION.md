@@ -226,7 +226,7 @@ Host 入口负责：一次 `parseSource`、`pathKey` + `stableHash` 身份、`ch
 - `unsupported` / `unsupported`：Adapter 明确声明无落点，产生 `target-unsupported`。
 - `unresolved`（Registry 描述缺规则/缺默认）：产生 `registry-binding`，不是文件上下文问题。
 
-版本核对：`linkProject` 目前硬校验 `provenance.targetRegistryId` + `targetRegistryVersion` 与传入 Registry 是否一致；不一致产生 `version-mismatch`，所有 Theater 保持 `targetResolution = null` 且 `linkStatus = 'version-mismatch'`，不做静默回落。`adapterVersion` / `backendVersion` 作为 provenance 事实保留，尚未做跨包版本硬校验（见已知限制）。
+版本核对：`linkProject` 硬校验 `provenance.targetRegistryId` + `targetRegistryVersion` 与传入 Registry 是否一致；不一致产生 `version-mismatch`，所有 Theater 保持 `targetResolution = null` 且 `linkStatus = 'version-mismatch'`，不做静默回落。`compileProject` 在链接前调用 `validateProjectProvenanceVersions`，再校验 `adapterId` / `adapterVersion` / `backendId` / `backendVersion` 四轴；任一缺失或不匹配（含 backend 未声明 `version`）都产生 `version-mismatch` 并使构建失败。
 
 ## 7. Host 接线：`contextOf` 与函数名上下文
 
@@ -278,15 +278,17 @@ const result = compileKojo2Project({
 
 - `LinkedProject.groups` 是静态候选组，不是运行时选择结果；每个 group 只保留 `TargetResolution.status = supported` 且函数名已解析的 Theater。
 - unknown / unsupported / needs-context / invalid-context Theater 不进入 groups，但仍保留在 `linkedProject.theaters` 与诊断中；`ProjectTheaterIR.linkStatus` 保留对应状态，不会被覆盖成 `grouped`。
-- exact duplicate 键恰好五字段：
+- exact duplicate 键恰好六字段：
   1. `canonicalTargetId`
   2. `location.kind`
   3. `location.raw`
   4. `time.kind`
   5. `time.raw`
-- 五字段逐字比较：不 trim、不折叠大小写、不做地点/时间别名、不做区间/包含语义。
-- 同 `canonicalId` 但 location/time 不同：只形成同一 target 的候选组，不报 duplicate；M2 不选择。
-- exact duplicate 产生 `duplicate-theater` error，`primary` / `related` 指认全部重复 Theater；origin 只用于诊断标注，不是键的一部分。
+  6. `engineFunctionName`（`TargetResolution.functionName.name`）
+- 六个字段逐字比较：不 trim、不折叠大小写、不做地点/时间别名、不做区间/包含语义。
+- 同 `canonicalId` 但 location/time 不同，或 location/time 相同但函数名不同（多角色 / 多家族）：都只形成同一 target 的候选组，不报 duplicate；M2 不选择。
+- exact duplicate 产生 `duplicate-theater` error，`primary` / `related` 指认全部重复 Theater，消息追加点名 `engineFunctionName`；origin 只用于诊断标注，不是键的一部分。
+- 多角色重复隔离（P1-4 收尾，additive）：`ResolvedTheater.duplicate` 标出重复项，`LinkedTheaterGroup.duplicateFunctionNames` 给出有重复定义的函数名；Matcher / Dispatch Plan 按函数名隔离（K12 重复只阻断 K12，K13 仍可独立匹配/生成 target），不得用 canonical 级 `group.duplicate` 拒绝整组。
 - legacy-machine 与显式 Theater 都参与目标解析和重复检查。
 - `@织` 不进入 groups；继续由既有 `@织` 层分析处理。
 - groups 按 canonicalId 排序；theaters 按 canonicalId、fileId、source span 排序。Project IR 的 files/theaters 源顺序保持不变。
@@ -297,9 +299,10 @@ const result = compileKojo2Project({
 
 1. 对显式 Theater 文件调用 `compileKojoFile(..., { theaterUnitsOnly: true })` 收集 `TheaterLoweringUnit`；
 2. 构造 Project IR；
-3. `linkProject` 做目标解析/分组/重复检查；
-4. `buildProjectBuildResult` 判定整体状态；
-5. 仅当构建 `succeeded` 时，用 Backend 为每个已解析且有 unit 的 Theater 生成单 Theater ERB。
+3. `validateProjectProvenanceVersions` 校验 Adapter / Backend 版本轴（P1-3，失配即 failed 且无产物）；
+4. `linkProject` 做目标解析/分组/重复检查；
+5. `buildProjectBuildResult` 判定整体状态；
+6. 仅当构建 `succeeded` 时，用 Backend 为每个已解析且有 unit 的 Theater 生成单 Theater ERB。
 
 结果字段：
 
@@ -365,7 +368,7 @@ M3 的输入是 `LinkedProject` 与 `TargetDescriptor.runtimeProtocol`；M3 不�
 2. **显式 Theater 的 `指令` 缺 `i`**：`KojoTheaterTarget` 只有 raw，没有 typed args；M2 不从 raw target 猜参数，因此显式 Theater `指令` 在需要 `{i}` 时为 `needs-context`。legacy `# 机 指令 310` 可从 `args[0]` 取得 `i`。
 3. **没有最终 dispatch ERB**：`theaterErb` 只是每个 Theater 的单 Theater ERB；M3 才做 location/time matcher、specificity、唯一选择和 dispatch 产物。
 4. **Registry 装载校验是调用方责任**：`compileProject` 不重复校验 Registry；自定义 Registry 必须先 `assertValidTargetRegistry`。
-5. **版本核对范围**：当前 linker 只硬校验 `targetRegistryId` / `targetRegistryVersion`；`adapterVersion` / `backendVersion` 尚未做跨包硬校验。
+5. **版本核对范围**：`linkProject` 只硬校验 `targetRegistryId` / `targetRegistryVersion`；`compileProject` 在链接前用 `validateProjectProvenanceVersions` 校验 `adapterId` / `adapterVersion` / `backendId` / `backendVersion`，缺失或不匹配（含 backend 未声明 `version`）一律 fail-closed。
 6. **无持久化项目缓存/版本治理**：M2 只有 provenance 事实与内存级编译结果，没有全项目缓存持久化。
 
 ## 14. 验证

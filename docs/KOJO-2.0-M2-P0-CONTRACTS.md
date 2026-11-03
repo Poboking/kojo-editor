@@ -11,7 +11,7 @@
 | 编号 | 决策 | 本契约落点 |
 |---|---|---|
 | D1 | TargetRegistry 首版覆盖 eventCatalog 九个事件；初见、指令 supported，其余七个 unsupported；区分登记状态与编译支持状态 | TargetRegistry、TargetDescriptor、TargetResolution |
-| D2 | exact duplicate 使用 canonicalTargetId 加 parser 既有 location.kind/raw 加 time.kind/raw；不引入地点别名或时间区间语义 | ExactTheaterKey、DuplicateKey |
+| D2 | exact duplicate 使用 canonicalTargetId 加 parser 既有 location.kind/raw 加 time.kind/raw 加 engineFunctionName；不引入地点别名或时间区间语义 | ExactTheaterKey、DuplicateKey |
 | D3 | charNo、familySegment 由 Host 注入为文件级 Project IR 事实；segments 由 Adapter 显式规则/默认声明；缺失必需上下文明确诊断，不静默默认 | FunctionNameContext、ProjectFileIR、FunctionNameResolution |
 | D4 | SourceMapData 必须是可序列化纯数据投影；运行时 SourceMap 不改 | SourceMapData、ProjectTheaterIR |
 | D5 | legacy-machine 纳入项目级目标解析和跨文件重复检查；保留 origin；M1 legacy 单文件输出不变 | ProjectTheaterIR、ResolvedTheater、LinkedProject |
@@ -46,7 +46,7 @@
 
 1. ProjectFileId 由项目层生成，必须在同一项目构建内稳定；具体字符串格式由实现决定，但内容 hash 不得与显示路径混为同一身份。
 2. TheaterId 由项目层生成并在项目内稳定指认 Theater；具体字符串格式由实现决定；ordinal 只用于身份，不是运行时排序。
-3. adapterVersion、targetRegistryVersion、backendVersion 缺失或不匹配不得静默回落；产生版本诊断并阻断构建。
+3. adapterVersion、targetRegistryVersion、backendVersion 缺失或不匹配不得静默回落；产生版本诊断并阻断构建。**P1-3 已实现**：`validateProjectProvenanceVersions` 校验 adapterId/adapterVersion/backendId/backendVersion 四轴（逐字相等），backend 未声明 `version` 同样阻断；`compileProject` 在链接前调用。
 4. gameFingerprint 与 adapterVersion 是不同轴：前者描述游戏输入，后者描述 adapter 契约。
 5. provenance 进入项目缓存键；任一字段变化使 Project IR 与 LinkedProject 失效。
 
@@ -248,6 +248,7 @@
       locationRaw: string;
       timeKind: 'unrestricted' | 'named';
       timeRaw: string;
+      engineFunctionName: string | null;
     }
 
     interface TheaterDuplicateFact {
@@ -258,13 +259,14 @@
 
 职责与不变量：
 
-1. ExactTheaterKey 的五个字段必须逐字来自 TargetResolution.canonicalId 与 parser 既有 KojoTheater.location/time；不得追加地点别名、继承、时间别名或区间关系。
+1. ExactTheaterKey 的字段必须逐字来自 TargetResolution.canonicalId、parser 既有 KojoTheater.location/time 与 TargetResolution.functionName.name；不得追加地点别名、继承、时间别名或区间关系。
 2. locationRaw 与 timeRaw 不做 trim、大小写折叠、默认补全或别名替换。
 3. 省略字段与显式不限是否同键，完全由 parser 既有 raw 决定；M2 不增加第二套归一化。
-4. 只有五个字段全部相同的 Theater 才是 exact duplicate；同 canonicalTargetId 但 location/time 不同只形成同一 target 的候选组。
+4. 只有 canonicalTargetId + location.kind/raw + time.kind/raw + engineFunctionName 全部相同的 Theater 才是 exact duplicate；同 canonicalTargetId 但 location/time 不同，或 location/time 相同但函数名不同（多角色 / 多家族），都只形成同一 target 的候选组，不是重复错误。
 5. exact duplicate 检查覆盖显式 Theater 与 legacy-machine Theater；origin 只用于诊断标注，不是键的一部分。
 6. unknown 或 unsupported target 不进入 ExactTheaterKey 检查；先各自产生 target 诊断。
 7. exact duplicate 产生 error 级 ProjectDiagnostic，kind 为 duplicate-theater；primary 与 related 必须指认全部重复 Theater。
+8. engineFunctionName 为 null 表示解析未给出函数名（supported 目标的键恒为已解析的函数名）；它参与逐字比较，不做别名或大小写折叠。
 
 ## 6. SourceMapData 边界
 
@@ -357,7 +359,10 @@
     interface LinkedTheaterGroup {
       canonicalId: CanonicalTargetId;
       theaters: readonly ResolvedTheater[];
+      /** 聚合兼容视图：组内是否存在任一 duplicate；不得用它拒绝整组。 */
       duplicate: boolean;
+      /** 有 exact duplicate 定义的引擎函数名（K12 重复 → ['M_KOJO_ENCOUNTER_K12']）。 */
+      duplicateFunctionNames: readonly string[];
     }
 
     interface LinkedProject {
@@ -378,6 +383,8 @@
 6. @织 不进入 groups；继续由 analyzeWeaveLayers 处理。
 7. 排序键为 canonicalId、fileId、span；不得以文件枚举顺序或源文件顺序表达运行时优先级。
 8. M3 才消费 gates 与 runtimeProtocol 做 location/time matcher、specificity、唯一选择、Ambiguous/NoMatch 和最终 dispatch。
+9. `ResolvedTheater.duplicate` 标记该 Theater 是否为 exact duplicate 重复项；`duplicateFunctionNames` 是函数级汇总。重复隔离必须按函数名做：K12 重复只阻断 K12，K13 仍可独立匹配/生成 dispatch target；不得再用 canonical 级 `group.duplicate` 拒绝整个候选组。
+10. 构建失败时 `LinkedProject` / dispatch plan 仍可作为诊断视图读取（不构成可发布结果）。
 
 ## 9. 项目构建结果
 
@@ -450,12 +457,13 @@ M3 的输入是 LinkedProject 与 TargetDescriptor.runtimeProtocol；M3 不得�
 | 指令 target | registrationStatus registered，compileSupport supported，函数名与签名非 null |
 | 训练、读档、商店、购买、训练结束、回合末、指令结束 | registrationStatus registered，compileSupport unsupported，functionName 与 callSignature 为 null，target-unsupported error |
 | 不在 eventCatalog 或 registry 的名字 | registrationStatus unregistered，status unknown，target-unknown error |
-| 两个文件同 canonical target 同 parser location.kind/raw 和 time.kind/raw | exact duplicate error，primary/related 指向两文件 |
+| 两个文件同 canonical target 同 parser location.kind/raw、time.kind/raw 且同 engineFunctionName | exact duplicate error，primary/related 指向两文件 |
+| 同 canonical target 同 location/time 但 engineFunctionName 不同（多角色） | 不是 duplicate，同一候选 group 内多候选；matcher 未点名函数名时 ambiguous，点名后唯一 selected |
 | 同 canonical target 不同 location/time | 只形成一个候选 group，不报 duplicate；M2 不选择 |
 | 缺 charNo 且模板需要 n | function-name-context-missing error，requiredContext 含 charNo |
 | 缺 Adapter segment default 且模板需要段 | registry-binding error，不得取 adapter 首键 |
 | adapterVersion 或 targetRegistryVersion 不匹配 | version-mismatch error，构建 failed |
-| legacy-machine 与显式 Theater 同五字段键 | duplicate-theater error，origin 保留 |
+| legacy-machine 与显式 Theater 同键（含 engineFunctionName） | duplicate-theater error，origin 保留 |
 | 单文件解析失败，其他文件正常 | ProjectIR.analysisStatus partial，其他文件 IR 与诊断保留，buildStatus failed |
 | 所有文件解析成功但 target unsupported | analysisStatus complete，buildStatus failed，无部分产物 |
 | M1 单文件 golden | ERB 逐字节不变 |

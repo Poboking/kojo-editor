@@ -499,6 +499,13 @@ export type SingleTheaterBridgeResult =
 /** adapter 注入的唯一实现面 */
 export interface KojoEmitBackend {
   readonly id: string;
+  /**
+   * 后端实现版本（P1-3）：项目构建时与 `provenance.backendVersion` 逐字校验。
+   *
+   * M1 单文件路径不读取它；项目路径缺失或不匹配一律产生 version-mismatch 并阻断构建
+   * （M2-P0 Contracts §1.3）。旧实现可以暂时不声明，但会被项目路径 fail-closed。
+   */
+  readonly version?: string;
   readonly profile: KojoLoweringProfile;
   /** 行尾提示判定（`心形` 是否 HPH_PRINT 是 adapter 的知识，不是 core 的） */
   hintSupport(hint: string): HintSupport;
