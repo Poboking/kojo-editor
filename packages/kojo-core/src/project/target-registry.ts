@@ -11,6 +11,7 @@
  */
 import type { EventCatalog } from '../adapter.js';
 import type { KojoSpan } from '../ast.js';
+import { validateRuntimeMatchPolicy, type RuntimeMatchPolicy } from '../runtime-policy.js';
 import type { ProjectDiagnostic, ProjectLocation } from './ir.js';
 
 export type TargetRegistrationStatus = 'registered' | 'unregistered';
@@ -92,6 +93,8 @@ export interface TargetRegistry {
   readonly version: string;
   readonly adapterId: string;
   readonly adapterVersion: string;
+  /** M3 additive：adapter 声明的运行时匹配策略；缺省 = 无策略。 */
+  readonly runtimeMatchPolicy?: RuntimeMatchPolicy | null;
   readonly targets: readonly TargetDescriptor[];
 }
 
@@ -365,6 +368,9 @@ export function validateTargetRegistry(
   };
 
   if (registry.targets.length === 0) push(null, 'TargetRegistry 不能为空');
+  if (registry.runtimeMatchPolicy !== undefined && registry.runtimeMatchPolicy !== null) {
+    for (const issue of validateRuntimeMatchPolicy(registry.runtimeMatchPolicy)) push(null, issue);
+  }
 
   const canonicalIds = new Set<string>();
   const surfaces = new Map<string, string | null>();

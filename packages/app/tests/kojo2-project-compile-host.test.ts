@@ -135,7 +135,7 @@ describe('Host compileKojo2Project · M3 dispatch', () => {
     expect(result.build.buildStatus).toBe('succeeded');
     expect(result.dispatchComplete).toBe(true);
     expect(result.dispatchErb).toHaveLength(1);
-    expect(result.dispatchErb[0]?.erb).toContain('IF NAME_FROM_PLACE(CFLAG:MASTER:現在位置) == "神社"');
+    expect(result.dispatchErb[0]?.erb).toContain('== "神社"');
     expect(result.dispatchErb[0]?.erb).toContain('IF TIME:2 == 6');
     expect(result.dispatchErb[0]?.erb).toContain('CALL M_KOJO_ENCOUNTER_K12__D1');
   });

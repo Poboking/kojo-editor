@@ -84,7 +84,6 @@ export const ERATW_GAME_ADAPTER: GameAdapter = freezeAdapter({
 export {
   createEratwEmitBackend,
   ERATW_DISPATCH_SELECTORS,
-  ERATW_TIME_BAND_VALUES,
   eratwLoweringProfile,
   type EratwCompileExpression,
   type EratwCompileTarget,

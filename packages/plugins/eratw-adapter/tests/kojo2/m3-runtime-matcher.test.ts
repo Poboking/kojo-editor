@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  runtimeBranchConditions,
+  runtimeLocationMatches,
+  runtimeTimeMatches,
   compileProject,
   createProjectFileIdentity,
   parseSource,
@@ -16,6 +19,7 @@ import {
   createEratwEmitBackend,
   ERATW_CAPABILITY,
   ERATW_DISPATCH_SELECTORS,
+  ERATW_RUNTIME_MATCH_POLICY,
   ERATW_TIME_BAND_VALUES,
   ERATW_GAME_ADAPTER,
   ERATW_SOURCE_MAP,
@@ -84,7 +88,7 @@ const SHRINE_12 = fileInput('D:/proj/11-shrine.kojo2', source('【剧场：初�
 const SCHOOL_12 = fileInput('D:/proj/12-school.kojo2', source('【剧场：初见｜学校】', '学校'), '12');
 const SCHOOL_NIGHT_12 = fileInput(
   'D:/proj/13-school-night.kojo2',
-  source('【剧场：初见｜学校｜夜】', '夜校'),
+  source('【剧场：初见｜学校｜夜晚】', '夜校'),
   '12',
 );
 
@@ -203,11 +207,25 @@ describe('M3 Dispatch ERB · 同函数名合并', () => {
     expect(result.dispatchErb).toHaveLength(1);
     const erb = result.dispatchErb[0]?.erb ?? '';
     expect(erb).toContain('@M_KOJO_ENCOUNTER_K12');
-    expect(erb).toContain('IF NAME_FROM_PLACE(CFLAG:MASTER:現在位置) == "神社"');
+    expect(erb).toContain('== "神社"');
+    expect(erb).toContain('== "博麗神社"');
     expect(erb).toContain('IF TIME:2 == 6');
     expect(erb).toContain('CALL M_KOJO_ENCOUNTER_K12__D1');
     expect(erb).toContain('@M_KOJO_ENCOUNTER_K12__D1');
     expect(erb).toContain('RETURN 0');
+  });
+  it('时间区间条件进入 dispatch ERB', () => {
+    const day = fileInput(
+      'D:/proj/15-day.kojo2',
+      source('【剧场：初见｜神社｜白天】', '白天'),
+      '12',
+    );
+    const result = compile([SHRINE_12, day], {
+      dispatchSelectors: ERATW_DISPATCH_SELECTORS,
+      requireDispatch: true,
+    });
+    expect(result.build.buildStatus).toBe('succeeded');
+    expect(result.dispatchErb[0]?.erb).toContain('(TIME:2 >= 2 && TIME:2 <= 4)');
   });
 
   it('缺 dispatch selector：requireDispatch=true 时 fail-closed，无半成品', () => {
@@ -232,15 +250,15 @@ describe('M3 Dispatch Selectors · eraTW 真实语料', () => {
   it('地点/时辰 selector 与七个时辰带来自语料取证', () => {
     expect(ERATW_DISPATCH_SELECTORS.locationExpr).toBe('NAME_FROM_PLACE(CFLAG:MASTER:現在位置)');
     expect(ERATW_DISPATCH_SELECTORS.timeExpr).toBe('TIME:2');
-    expect(ERATW_TIME_BAND_VALUES['夜']).toBe('6');
-    expect(ERATW_TIME_BAND_VALUES['深夜']).toBe('7');
+    expect(ERATW_TIME_BAND_VALUES['夜']).toBe(6);
+    expect(ERATW_TIME_BAND_VALUES['深夜']).toBe(7);
     expect(ERATW_TIME_BAND_VALUES['夜晚']).toBeUndefined();
   });
 
   it('未登记时辰名 fail-closed，不猜 TIME:2 数值', () => {
     const unknownNight = fileInput(
-      'D:/proj/14-unknown-night.kojo2',
-      source('【剧场：初见｜学校｜夜晚】', '未知夜'),
+      'D:/proj/14-unknown-time.kojo2',
+      source('【剧场：初见｜学校｜黄昏】', '未知夜'),
       '12',
     );
     const result = compile([SHRINE_12, unknownNight], {
@@ -251,5 +269,34 @@ describe('M3 Dispatch Selectors · eraTW 真实语料', () => {
     expect(result.dispatchErb).toEqual([]);
     expect(result.theaterErb).toEqual([]);
     expect(result.dispatchBackendDiagnostics.some((diagnostic) => diagnostic.message.includes('未登记的时辰名'))).toBe(true);
+  });
+});
+
+describe('M3 RuntimeMatchPolicy · 别名/区间/继承', () => {
+  it('地点别名与父级继承参与匹配', () => {
+    expect(runtimeLocationMatches(ERATW_RUNTIME_MATCH_POLICY, '博麗神社', { raw: '神社' })).toBe(true);
+    const withParent = {
+      ...ERATW_RUNTIME_MATCH_POLICY,
+      locationParents: { 大図書館: ['紅魔館'] },
+    };
+    expect(runtimeLocationMatches(withParent, '紅魔館', { raw: '大図書館' })).toBe(true);
+  });
+
+  it('时间别名/父级继承/数值区间参与匹配', () => {
+    expect(runtimeTimeMatches(ERATW_RUNTIME_MATCH_POLICY, '夜', { raw: '夜晚' })).toBe(true);
+    expect(runtimeTimeMatches(ERATW_RUNTIME_MATCH_POLICY, '白天', { raw: null, value: 3 })).toBe(true);
+    expect(runtimeTimeMatches(ERATW_RUNTIME_MATCH_POLICY, '晚上', { raw: null, value: 5 })).toBe(true);
+    expect(runtimeTimeMatches(ERATW_RUNTIME_MATCH_POLICY, '夜', { raw: null, value: 7 })).toBe(false);
+  });
+
+  it('dispatch 条件与 matcher 共用同一套展开', () => {
+    const conditions = runtimeBranchConditions(
+      ERATW_RUNTIME_MATCH_POLICY,
+      { kind: 'exact', raw: '神社' },
+      { kind: 'named', raw: '白天' },
+    );
+    expect(conditions.location).toContainEqual({ kind: 'location-equals', value: '博麗神社' });
+    expect(conditions.location).toContainEqual({ kind: 'location-equals', value: '神社' });
+    expect(conditions.time).toContainEqual({ kind: 'time-range', min: 2, max: 4 });
   });
 });

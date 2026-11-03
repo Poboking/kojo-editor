@@ -15,6 +15,7 @@ import type { KojoSpan } from '../ast.js';
 import { compileKojoFile } from '../compile.js';
 import type { KojoDiagnostic } from '../diagnostics.js';
 import type { DispatchRenderRequest, DispatchSelectors, KojoEmitBackend } from '../lower/backend.js';
+import type { RuntimeMatchPolicy } from '../runtime-policy.js';
 import { isEmitFailure } from '../lower/backend.js';
 import type { ProjectBuildProvenance, ProjectBuildResult, ProjectFileInput } from './ir.js';
 import { buildProjectBuildResult, buildProjectIR } from './ir.js';
@@ -36,6 +37,8 @@ export interface ProjectCompileInput {
   readonly backend: KojoEmitBackend;
   /** M3：Host 注入的运行时 selector；缺省 = 没有事实（adapter 必须 fail-closed）。 */
   readonly dispatchSelectors?: DispatchSelectors;
+  /** M3：显式覆盖 registry 的 runtimeMatchPolicy；缺省读 registry。 */
+  readonly runtimeMatchPolicy?: RuntimeMatchPolicy | null;
   /** M3：要求最终 dispatch ERB 必须成功；缺省 false 保持 M2 后端兼容。 */
   readonly requireDispatch?: boolean;
 }
@@ -212,7 +215,10 @@ export function compileProject(input: ProjectCompileInput): ProjectCompileResult
     });
   }
 
-  const dispatchPlan = buildProjectDispatchPlan(linkedProject);
+  const dispatchPlan = buildProjectDispatchPlan(
+    linkedProject,
+    input.runtimeMatchPolicy ?? linkedProject.runtimeMatchPolicy ?? null,
+  );
   const dispatchErb: ProjectDispatchErb[] = [];
   const dispatchBackendDiagnostics: KojoDiagnostic[] = [];
   let dispatchFailed = false;
@@ -233,6 +239,7 @@ export function compileProject(input: ProjectCompileInput): ProjectCompileResult
           timeKind: branch.timeKind,
           timeRaw: branch.timeRaw,
           specificity: branch.specificity,
+          conditions: branch.conditions,
           body: sourceTheater.unit.body,
           slots: sourceTheater.unit.slots,
           span: branch.sourceSpan,

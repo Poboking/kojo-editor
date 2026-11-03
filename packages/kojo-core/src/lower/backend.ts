@@ -32,6 +32,7 @@ import type {
   KojoWeaveModifier,
 } from '../ast.js';
 import type { KojoDiagnostic } from '../diagnostics.js';
+import type { RuntimeBranchConditions } from '../runtime-policy.js';
 import type { ForeachLoopPlan, ForeachSlotRole } from './expand/foreach.js';
 import type { OptionsEtbPlan } from './expand/options.js';
 /* 等值分派的结构请求（K2-DISPATCH-WIRING）：**type-only**——契约文件只登记形状，
@@ -443,6 +444,7 @@ export interface DispatchRenderBranch {
   readonly timeKind: 'unrestricted' | 'named';
   readonly timeRaw: string;
   readonly specificity: number;
+  readonly conditions: RuntimeBranchConditions;
   readonly body: readonly string[];
   readonly slots: readonly KojoHiddenSlot[];
   readonly span: KojoSpan;

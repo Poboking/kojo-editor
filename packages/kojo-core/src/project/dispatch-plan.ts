@@ -11,6 +11,11 @@ import type { KojoSpan } from '../ast.js';
 import type { LinkedProject, ResolvedTheater } from './ir.js';
 import type { ProjectFileId, TheaterId } from './identity.js';
 import { compareNullableSpan, compareText } from './ordering.js';
+import {
+  runtimeBranchConditions,
+  type RuntimeBranchConditions,
+  type RuntimeMatchPolicy,
+} from '../runtime-policy.js';
 
 export type DispatchPlanStatus = 'ready' | 'blocked';
 
@@ -29,6 +34,8 @@ export interface DispatchBranch {
   readonly timeKind: 'unrestricted' | 'named';
   readonly timeRaw: string;
   readonly specificity: number;
+  /** M3：由 runtimeMatchPolicy 展开的 OR 条件组；renderer 直接用。 */
+  readonly conditions: RuntimeBranchConditions;
   readonly sourceSpan: KojoSpan;
 }
 
@@ -58,7 +65,7 @@ export interface ProjectDispatchPlan {
 const LOCATION_SCORE = { unrestricted: 0, exact: 2 } as const;
 const TIME_SCORE = { unrestricted: 0, named: 1 } as const;
 
-function branchOf(theater: ResolvedTheater): DispatchBranch | null {
+function branchOf(policy: RuntimeMatchPolicy | null, theater: ResolvedTheater): DispatchBranch | null {
   if (theater.resolution.status !== 'supported') return null;
   if (theater.engineFunctionName.kind !== 'resolved') return null;
   const name = theater.engineFunctionName.name;
@@ -74,6 +81,7 @@ function branchOf(theater: ResolvedTheater): DispatchBranch | null {
     timeKind: theater.time.kind,
     timeRaw: theater.time.raw,
     specificity: LOCATION_SCORE[theater.location.kind] + TIME_SCORE[theater.time.kind],
+    conditions: runtimeBranchConditions(policy, theater.location, theater.time),
     sourceSpan: theater.sourceSpan,
   };
 }
@@ -102,13 +110,16 @@ function diagnostic(
  * `targets` 按 canonicalId 排序；每个 target 的 branches 按 specificity 降序，
  * 再按 fileId/span/theaterId 稳定排序。该排序是计划枚举顺序，不是运行时优先级。
  */
-export function buildProjectDispatchPlan(linkedProject: LinkedProject): ProjectDispatchPlan {
+export function buildProjectDispatchPlan(
+  linkedProject: LinkedProject,
+  policy: RuntimeMatchPolicy | null = linkedProject.runtimeMatchPolicy ?? null,
+): ProjectDispatchPlan {
   const targets: DispatchTargetPlan[] = [];
   const diagnostics: DispatchPlanDiagnostic[] = [];
 
   for (const group of linkedProject.groups) {
     const allBranches = group.theaters
-      .map(branchOf)
+      .map((theater) => branchOf(policy, theater))
       .filter((branch): branch is DispatchBranch => branch !== null);
     const byFunction = new Map<string, DispatchBranch[]>();
     for (const branch of allBranches) {

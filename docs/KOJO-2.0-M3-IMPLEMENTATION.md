@@ -79,7 +79,7 @@ const result = selectRuntimeTheater({
 - 时间：`TIME:2` 是时辰带；`ERB/DIM.ERH:182` 明确 1=早朝(4-6)、2=正午前(6-12)、3=昼(12-15)、
   4=昼下がり(15-18)、5=夕(18-20)、6=夜(20-23)、7=深夜(23-4)。
 - adapter 导出：`ERATW_DISPATCH_SELECTORS` 与 `ERATW_TIME_BAND_VALUES`。
-- 时辰名只按上述七个有依据的名字映射；例如 `夜` → `TIME:2 == 6`。未登记名字（如 `夜晚`）fail-closed，不猜数值。
+- 七个 canonical 时辰带仍只认 `DIM.ERH:182`；`夜晚` 等别名由 RuntimeMatchPolicy 的父子表映射到 `夜`，未登记名字（如 `黄昏`）fail-closed。
 
 Host 用法：
 
@@ -103,3 +103,18 @@ IF NAME_FROM_PLACE(CFLAG:MASTER:現在位置) == "神社"
     ENDIF
 ENDIF
 ```
+
+## RuntimeMatchPolicy 收口（第六阶段）
+
+- core 新增纯数据 `RuntimeMatchPolicy`：location/time 的 aliases、parents、timeValues、timeRanges。
+- `TargetRegistry.runtimeMatchPolicy` 由 adapter 声明；linker 原样带到 `LinkedProject`；
+  `selectRuntimeTheater` 与 `buildProjectDispatchPlan` 读同一份策略。
+- `DispatchBranch.conditions` 由 policy 统一展开：location OR 等值、time OR `==` / 闭区间；
+  最终 dispatch ERB 直接消费该条件组，不再由 adapter 二次猜别名。
+- eraTW `ERATW_RUNTIME_MATCH_POLICY`：
+  - location alias：`博麗神社`/`神社`、`紅魔館`/`红魔馆`、`人間の里`/`人里`、`魔法の森`/`魔法森林`；
+  - time parent：`夜晚`→`夜`、`清晨`→`早朝`、`傍晚`→`夕`、`凌晨`→`深夜`、`上午`→`正午前`、`中午`→`昼`、`下午`→`昼下がり`；
+  - time range：`白天` 2–4、`晚上` 5–6、`夜间` 6–7、`全天` 1–7。
+- `runtimeProtocol.metadata.matchPolicyId` 指向策略 id，Host 可审计。
+- `kojo2RuntimeSelectionProblems` 把 `ambiguous` / `no-match` / `not-linked` 映射为宿主可见 error。
+- 未登记策略名字仍 fail-closed；runtime 值与 dispatch 条件由同一展开函数产生。

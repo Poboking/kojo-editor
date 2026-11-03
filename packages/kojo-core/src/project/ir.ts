@@ -20,6 +20,7 @@ import { toSourceMapData } from '../source-map-data.js';
 import type { ProjectFileId, ProjectFileIdentity, TheaterId } from './identity.js';
 import { projectFileId, projectTheaterId } from './identity.js';
 import type { TargetResolution } from './target-registry.js';
+import type { RuntimeMatchPolicy } from '../runtime-policy.js';
 import { compareNullableSpan, compareText, sortDiagnostics } from './ordering.js';
 
 export type CanonicalTargetId = string;
@@ -173,6 +174,8 @@ export interface LinkedTheaterGroup {
 export interface LinkedProject {
   readonly projectId: string;
   readonly provenance: ProjectBuildProvenance;
+  /** M3 additive：registry 携带的运行时匹配策略；缺省 = 无策略。 */
+  readonly runtimeMatchPolicy?: RuntimeMatchPolicy | null;
   readonly groups: readonly LinkedTheaterGroup[];
   readonly theaters: readonly ResolvedTheater[];
   readonly diagnostics: readonly ProjectDiagnostic[];

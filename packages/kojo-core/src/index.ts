@@ -42,6 +42,8 @@ export * from './fixture-adapter.js';
 export * from './dialect-resolver.js';
 /* 项目级：冲突/Layer/接管 + 存储期分配 */
 export * from './project/index.js';
+/* M3 runtime policy：adapter 可声明、matcher/dispatch 共用 */
+export * from './runtime-policy.js';
 /* 表达式 AST（K2-EXPR-AST）：ExprText 的结构化解析/打印/对拍，供语义服务与类型检查 */
 export * from './expr/index.js';
 /* 语义检查（K2-SEMA-TYPES）：类型格 + 声明/赋值/数组/函数/能力检查（只读 adapter 契约） */

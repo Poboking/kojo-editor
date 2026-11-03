@@ -17,6 +17,7 @@ import type {
   TargetDescriptor,
   TargetRegistry,
 } from '../../../../kojo-core/src/project/target-registry.js';
+import type { RuntimeMatchPolicy } from '../../../../kojo-core/src/runtime-policy.js';
 import { assertValidTargetRegistry } from '../../../../kojo-core/src/project/target-registry.js';
 import { createEratwFaceTable } from '../face-templates.js';
 import { ERATW_EVENT_CATALOG } from './event-catalog.js';
@@ -120,7 +121,7 @@ function supportedDescriptor(
     runtimeProtocol: Object.freeze({
       protocolId: 'eratw.kojo.machine',
       version: '1',
-      metadata: Object.freeze({ event: event.event, engine: event.engine }),
+      metadata: Object.freeze({ event: event.event, engine: event.engine, matchPolicyId: ERATW_RUNTIME_MATCH_POLICY_ID }),
     }),
     parameterRules: Object.freeze([...parameterRules]),
     segmentDefaults: Object.freeze({ ...segmentDefaults }),
@@ -154,6 +155,18 @@ if (ENCOUNTER === undefined || COMMAND === undefined) {
 
 const UNSUPPORTED_REASON = 'M2 首版只支持「初见」「指令」；该事件尚未接入 TargetRegistry 编译落点。';
 
+export const ERATW_TIME_BAND_VALUES: Readonly<Record<string, number>> = Object.freeze({
+  早朝: 1,
+  正午前: 2,
+  昼: 3,
+  昼下がり: 4,
+  夕: 5,
+  夜: 6,
+  深夜: 7,
+});
+
+const ERATW_RUNTIME_MATCH_POLICY_ID = 'eratw.runtime.match.v1';
+
 const TARGETS: readonly TargetDescriptor[] = Object.freeze([
   supportedDescriptor(
     '初见',
@@ -178,11 +191,42 @@ const TARGETS: readonly TargetDescriptor[] = Object.freeze([
   unsupportedDescriptor('指令结束', UNSUPPORTED_REASON),
 ]);
 
+export const ERATW_RUNTIME_MATCH_POLICY: RuntimeMatchPolicy = Object.freeze({
+  id: ERATW_RUNTIME_MATCH_POLICY_ID,
+  locationAliases: Object.freeze({
+    '博麗神社': Object.freeze(['神社']),
+    '紅魔館': Object.freeze(['红魔馆']),
+    '人間の里': Object.freeze(['人里']),
+    '魔法の森': Object.freeze(['魔法森林']),
+  }),
+  timeParents: Object.freeze({
+    夜晚: Object.freeze(['夜']),
+    清晨: Object.freeze(['早朝']),
+    傍晚: Object.freeze(['夕']),
+    凌晨: Object.freeze(['深夜']),
+    上午: Object.freeze(['正午前']),
+    中午: Object.freeze(['昼']),
+    下午: Object.freeze(['昼下がり']),
+  }),
+  timeValues: Object.freeze(
+    Object.fromEntries(
+      Object.entries(ERATW_TIME_BAND_VALUES).map(([name, value]) => [name, Object.freeze([value])] as const),
+    ),
+  ) as Readonly<Record<string, readonly number[]>>,
+  timeRanges: Object.freeze({
+    白天: Object.freeze([{ min: 2, max: 4 }]),
+    晚上: Object.freeze([{ min: 5, max: 6 }]),
+    夜间: Object.freeze([{ min: 6, max: 7 }]),
+    全天: Object.freeze([{ min: 1, max: 7 }]),
+  }),
+});
+
 export const ERATW_TARGET_REGISTRY: TargetRegistry = Object.freeze({
   registryId: 'eratw.target-registry',
   version: '1',
   adapterId: 'eratw',
   adapterVersion: '2.0.0',
+  runtimeMatchPolicy: ERATW_RUNTIME_MATCH_POLICY,
   targets: TARGETS,
 });
 

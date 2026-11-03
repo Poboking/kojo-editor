@@ -205,8 +205,13 @@ export type {
 export type {
   /** 运行时选择结果：selected / no-match / ambiguous / not-linked */
   RuntimeSelectionStatus,
+  RuntimeTimeRange,
   RuntimeSelectionRequest,
+  RuntimeBranchConditions,
+  RuntimeCondition,
+  RuntimeDomainQuery,
   RuntimeMatchCandidate,
+  RuntimeMatchPolicy,
   RuntimeSelectionDiagnosticCode,
   RuntimeSelectionDiagnostic,
   RuntimeSelection,

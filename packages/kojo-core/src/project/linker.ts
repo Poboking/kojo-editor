@@ -302,6 +302,7 @@ export function linkProject(projectIR: ProjectIR, registry: TargetRegistry): Pro
     linkedProject: {
       projectId: resolvedIR.projectId,
       provenance: resolvedIR.provenance,
+      runtimeMatchPolicy: registry.runtimeMatchPolicy ?? null,
       groups,
       theaters: resolvedTheaters,
       diagnostics,

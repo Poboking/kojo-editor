@@ -109,21 +109,6 @@ export const ERATW_DISPATCH_SELECTORS: EratwDispatchSelectors = Object.freeze({
   timeExpr: 'TIME:2',
 });
 
-/** DIM.ERH:182 的七个时辰带；只登记有声明依据的名字。 */
-export const ERATW_TIME_BAND_VALUES: Readonly<Record<string, string>> = Object.freeze({
-  早朝: '1',
-  正午前: '2',
-  昼: '3',
-  昼下がり: '4',
-  夕: '5',
-  夜: '6',
-  深夜: '7',
-});
-
-function eratwTimeBandValue(raw: string): string | null {
-  return ERATW_TIME_BAND_VALUES[raw] ?? null;
-}
-
 export interface EratwEmitDeps {
   /** M3 dispatch ERB 的运行时 selector；缺省时含 exact/named 分支会 fail-closed。 */
   readonly dispatchSelectors?: EratwDispatchSelectors;
@@ -837,29 +822,53 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
       ];
 
       for (const [index, branch] of request.branches.entries()) {
-        const conditions: string[] = [];
+        const locationConditions: string[] = [];
         if (branch.locationKind === 'exact') {
           if (selectors === undefined) {
             return fail('M3 dispatch 含 exact location 分支，但 Host 没有注入 locationExpr。', branch.span);
           }
-          const literal = dispatchLiteral(branch.locationRaw, branch.span);
-          if (isEmitFailure(literal)) return literal;
-          conditions.push(`${selectors.locationExpr} == ${literal}`);
+          for (const condition of branch.conditions.location) {
+            if (condition.kind !== 'location-equals') {
+              return fail('M3 dispatch 收到未知 location 条件。', branch.span);
+            }
+            const literal = dispatchLiteral(condition.value, branch.span);
+            if (isEmitFailure(literal)) return literal;
+            locationConditions.push(`${selectors.locationExpr} == ${literal}`);
+          }
+          if (locationConditions.length === 0) {
+            return fail('M3 dispatch exact location 分支没有任何匹配条件。', branch.span);
+          }
         }
+        const timeConditions: string[] = [];
         if (branch.timeKind === 'named') {
           if (selectors === undefined) {
             return fail('M3 dispatch 含 named time 分支，但 Host 没有注入 timeExpr。', branch.span);
           }
-          const timeValue = eratwTimeBandValue(branch.timeRaw);
-          if (timeValue === null) {
-            return fail(`M3 dispatch 未登记的时辰名「${branch.timeRaw}」：拒绝猜 TIME:2 数值。`, branch.span);
+          for (const condition of branch.conditions.time) {
+            if (condition.kind === 'time-equals') {
+              timeConditions.push(`${selectors.timeExpr} == ${condition.value}`);
+            } else if (condition.kind === 'time-range') {
+              timeConditions.push(`(${selectors.timeExpr} >= ${condition.min} && ${selectors.timeExpr} <= ${condition.max})`);
+            } else if (condition.kind === 'time-raw') {
+              return fail(`M3 dispatch 未登记的时辰名「${condition.value}」：拒绝猜 TIME:2 数值。`, branch.span);
+            } else {
+              return fail('M3 dispatch 收到未知 time 条件。', branch.span);
+            }
           }
-          conditions.push(`${selectors.timeExpr} == ${timeValue}`);
+          if (timeConditions.length === 0) {
+            return fail('M3 dispatch named time 分支没有任何匹配条件。', branch.span);
+          }
         }
         const branchName = `${request.functionName}__D${index + 1}`;
         let depth = 0;
-        for (const condition of conditions) {
-          lines.push(`${INDENT.repeat(depth)}IF ${condition}`);
+        if (locationConditions.length > 0) {
+          const expression = locationConditions.length === 1 ? locationConditions[0] : `(${locationConditions.join(' || ')})`;
+          lines.push(`${INDENT.repeat(depth)}IF ${expression}`);
+          depth += 1;
+        }
+        if (timeConditions.length > 0) {
+          const expression = timeConditions.length === 1 ? timeConditions[0] : `(${timeConditions.join(' || ')})`;
+          lines.push(`${INDENT.repeat(depth)}IF ${expression}`);
           depth += 1;
         }
         lines.push(`${INDENT.repeat(depth)}CALL ${branchName}${params}`);

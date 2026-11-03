@@ -22,6 +22,11 @@ import type { KojoSpan } from '../ast.js';
 import type { LinkedProject, ResolvedTheater } from './ir.js';
 import type { ProjectFileId, TheaterId } from './identity.js';
 import { compareNullableSpan, compareText } from './ordering.js';
+import {
+  runtimeLocationMatches,
+  runtimeTimeMatches,
+  type RuntimeMatchPolicy,
+} from '../runtime-policy.js';
 
 export type RuntimeSelectionStatus = 'selected' | 'no-match' | 'ambiguous' | 'not-linked';
 
@@ -36,6 +41,14 @@ export interface RuntimeSelectionRequest {
   readonly canonicalId: string;
   readonly location: string | null;
   readonly time: string | null;
+  /** 可选：Host 提供的地点层级/别名 tags。 */
+  readonly locationTags?: readonly string[];
+  /** 可选：Host 提供的时间别名 tags。 */
+  readonly timeTags?: readonly string[];
+  /** 可选：运行时时辰数值（eraTW: TIME:2）。 */
+  readonly timeValue?: number | null;
+  /** 可选覆盖；缺省读 LinkedProject.runtimeMatchPolicy。 */
+  readonly runtimeMatchPolicy?: RuntimeMatchPolicy | null;
 }
 
 export interface RuntimeMatchCandidate {
@@ -68,14 +81,29 @@ export interface RuntimeSelection {
 const LOCATION_SCORE = { unrestricted: 0, exact: 2 } as const;
 const TIME_SCORE = { unrestricted: 0, named: 1 } as const;
 
-function locationMatches(theater: ResolvedTheater, location: string | null): boolean {
+function locationMatches(
+  policy: RuntimeMatchPolicy | null,
+  theater: ResolvedTheater,
+  request: RuntimeSelectionRequest,
+): boolean {
   if (theater.location.kind === 'unrestricted') return true;
-  return location !== null && location === theater.location.raw;
+  return runtimeLocationMatches(policy, theater.location.raw, {
+    raw: request.location,
+    tags: request.locationTags,
+  });
 }
 
-function timeMatches(theater: ResolvedTheater, time: string | null): boolean {
+function timeMatches(
+  policy: RuntimeMatchPolicy | null,
+  theater: ResolvedTheater,
+  request: RuntimeSelectionRequest,
+): boolean {
   if (theater.time.kind === 'unrestricted') return true;
-  return time !== null && time === theater.time.raw;
+  return runtimeTimeMatches(policy, theater.time.raw, {
+    raw: request.time,
+    tags: request.timeTags,
+    value: request.timeValue,
+  });
 }
 
 function candidateOf(theater: ResolvedTheater): RuntimeMatchCandidate {
@@ -150,11 +178,12 @@ export function selectRuntimeTheater(request: RuntimeSelectionRequest): RuntimeS
     ]);
   }
 
+  const policy = request.runtimeMatchPolicy ?? request.linkedProject.runtimeMatchPolicy ?? null;
   const matched = group.theaters
     .filter((theater) => theater.resolution.status === 'supported')
     .filter((theater) => theater.engineFunctionName.kind === 'resolved')
-    .filter((theater) => locationMatches(theater, request.location))
-    .filter((theater) => timeMatches(theater, request.time))
+    .filter((theater) => locationMatches(policy, theater, request))
+    .filter((theater) => timeMatches(policy, theater, request))
     .map(candidateOf)
     .sort(compareCandidates);
 

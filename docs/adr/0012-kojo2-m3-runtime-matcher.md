@@ -38,3 +38,9 @@ M2 `ResolvedTheater` 增加只读 `location` / `time`，由 linker 从 `ProjectT
 - 以 `eraTW4.981-261017-EAGLOV3` 取证：地点 `NAME_FROM_PLACE(CFLAG:MASTER:現在位置)`，时辰 `TIME:2`。
 - `DIM.ERH:182` 的七个时辰带成为 adapter 的显式 `ERATW_TIME_BAND_VALUES`；未登记名字 fail-closed。
 - Host 直接注入 `ERATW_DISPATCH_SELECTORS`；不再使用测试占位表达式。
+
+## 第五阶段扩展：RuntimeMatchPolicy
+
+- adapter 声明 `ERATW_RUNTIME_MATCH_POLICY`，registry 携带；matcher 与 dispatch plan 共用别名/继承/区间展开。
+- `runtimeProtocol.metadata.matchPolicyId` 指向策略 id。
+- Host 通过 `kojo2RuntimeSelectionProblems` 暴露 Ambiguous / NoMatch / NotLinked。

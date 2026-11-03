@@ -3,6 +3,7 @@ import {
   ERATW_EVENT_CATALOG,
 } from '../../src/kojo2/event-catalog.js';
 import {
+  ERATW_RUNTIME_MATCH_POLICY,
   ERATW_TARGET_REGISTRY,
 } from '../../src/kojo2/target-registry.js';
 import {
@@ -55,6 +56,7 @@ describe('eraTW TargetRegistry', () => {
       } else {
         expect(target.functionName).not.toBeNull();
         expect(target.callSignature).not.toBeNull();
+        expect(target.runtimeProtocol?.metadata.matchPolicyId).toBe(ERATW_RUNTIME_MATCH_POLICY.id);
         expect(target.runtimeProtocol).not.toBeNull();
       }
     }
