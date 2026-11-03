@@ -374,7 +374,7 @@ export interface GroupsSnapshot {
   groups: GroupsSnapshotGroup[];
 }
 
-/** 组态 ⇒ 快照（纯拷贝，调用方负责落盘）；未落盘草稿不进快照——重开时它是空的，记下来就是句假话 */
+/** 组态 ⇒ 快照（纯拷贝）；草稿不进快照——重开时它是空的，记下来就是句假话（KW-16B） */
 export function serializeGroups(state: EditorGroupsState): GroupsSnapshot {
   return {
     orientation: state.orientation,

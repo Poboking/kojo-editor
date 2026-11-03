@@ -57,6 +57,9 @@ import { resolveDocumentDialect } from './dialect-binding';
 import type { KojoXmlService } from '@kojo/plugin-api';
 import type { ActiveFileSymbolSource } from './palette-search';
 import type { BatchCloseMode, OpenFileOptions } from './tabs-ops';
+import type { SaveAsFlowResult } from './file-save-as';
+// 未落盘草稿（KW-16B）：新建入口与标签键序号都在懒面这一侧，开机图一枚字节都不吃
+import { NEW_UNTITLED_DRAFT_COMMAND, nextUntitledPath } from './untitled-draft';
 import { TAB_DRAG_MIME, decodeTabDragPayload, type TabMenuGroupRef } from './tabs-ops';
 import { alignSplitSizes, splitFlexOf, splitSizesFromWidths, type EditorGroupState, type GroupsOrientation } from './editor-groups';
 
@@ -168,8 +171,9 @@ interface Props {
   onRequestCloseTab: (path: string) => void;
   /** 全部保存（Ctrl+Shift+S 壳层命令落地处） */
   onSaveAll: () => Promise<boolean>;
-  /** 真另存为（1028 批；命令面板 `workbench.saveAs` 的同一条落地处，宿主 App.saveAs） */
-  onSaveAs: () => Promise<void>;
+  /** 真另存为（1028 批；命令面板 `workbench.saveAs` 的同一条落地处，宿主 App.saveAs）。
+   * 返回值是流的结果（未落盘草稿那条腿要据此判"落成没有"，KW-16B）。 */
+  onSaveAs: () => Promise<SaveAsFlowResult | undefined>;
   /** 编辑器脏状态上抛（按路径；宿主维护 dirtyPaths） */
   onDirtyChange?: (path: string, dirty: boolean) => void;
   /** 编辑器动作句柄注册（按组；宿主"保存并关闭 / 全部保存"流程跨组归集） */
@@ -532,6 +536,34 @@ export function ProjectView({
   }, []);
   const stableReauth = useCallback(() => onReauthRef.current(), []);
 
+  /* ---- 未落盘草稿（KW-16B）：两条恒定身份接线（PS-6 同上，EditorPane/TabBar 的 memo 前提） ---- */
+  const onSaveAsRef = useRef(onSaveAs);
+  onSaveAsRef.current = onSaveAs;
+  const onOpenFileRef = useRef(onOpenFile);
+  onOpenFileRef.current = onOpenFile;
+  /**
+   * 「新建未命名草稿」：序号按**全部组当下开着的**草稿现算（`nextUntitledPath` 不看焦点组——
+   * 分屏两组各有一枚 `untitled:1` 就是两格同名标签，作者看不出谁是谁）；组表读下面那枚
+   * 既有的 `groupsRef`（本回调只在点击时跑，那时它早已初始化——同 `onReauthRef` 那条纪律）。
+   * 打开走宿主既有那条 `onOpenFile`（永久打开，不是预览：预览会被下一次单击顶掉，
+   * 而草稿正是"先写着"的那一格，顶掉等于丢内容）。
+   */
+  const stableNewDraft = useCallback(() => {
+    const opened = groupsRef.current.flatMap((g) => [...g.tabs]);
+    onOpenFileRef.current(nextUntitledPath(opened));
+  }, []);
+  /**
+   * 草稿的落点通道（递给 `EditorPane.onSaveDraft`）：保存 = 请宿主把这份 buffer 转档到
+   * 系统对话框选定的真路径——**就是另存为那条腿**（对话框只交回路径 + 内核写域双闸 +
+   * 成功后七处登记随迁）。落成与否看流的结果，不看"没抛错"：取消也是正常回程，
+   * 报成已保存就是撒谎（关标签那条「保存并关闭」链读这一枚布尔）。
+   */
+  const stableSaveDraft = useCallback(async (): Promise<boolean> => {
+    // `undefined` = 宿主那条流提前收步（没有活动文件），一律按"没落成"报
+    const result = await onSaveAsRef.current();
+    return result !== undefined && (result.kind === 'saved-as' || result.kind === 'saved-current');
+  }, []);
+
   /**
    * 「只看」范围的**接线**（W7 NAV-SCOPE）：选择器住在搜索面板（它的状态在检索 store 里），
    * 而这条范围现在要喂**四条**通道——全文检索（面板自己收窄检索根）、函数树（插件，经总线）、
@@ -649,6 +681,16 @@ export function ProjectView({
         run: () => {
           void onSaveAs();
         },
+      },
+      // 新建未命名草稿（KW-16B）：内存里的空白一格，落盘才命名——刻意**不**灰掉、
+      // 也刻意**不带缺省键**（`Ctrl+N` 已给「新建口上文件」那条向导；登记与理由见
+      // `keybinding-specs-commands.ts`，键位在键位页可自配）。
+      {
+        id: NEW_UNTITLED_DRAFT_COMMAND,
+        title: '新建未命名草稿',
+        category: '工作台',
+        keybinding: effectiveKeybindingOf(NEW_UNTITLED_DRAFT_COMMAND),
+        run: () => stableNewDraft(),
       },
       // 一键修复（E3 · 批量快速修复批）：把**当前这一份文件**里每一条"只有唯一改法"
       // 的问题一次补好。与「全部保存」同形（壳层只发意图，落地与结果播报全在宿主
@@ -899,7 +941,7 @@ export function ProjectView({
     // kbVersion 是真实依赖：改键覆盖 → 版本号自增 → 命令表带新键位重建。
     // groups 也是：三条 MM-9 命令（splitEditorDown / setGroupsColumn / setGroupsRow）
     // 的 run 闭包读它判组数，依赖漏了就是过期读数。
-    [onRequestCloseTab, onSaveAll, onSaveAs, onSplitEditor, onSplitEditorDown, onSetGroupsOrientation, onFocusGroupOrdinal, onCycleActiveGroup, onResizeActiveGroup, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, groups, kernel, notify, kbVersion, extraShellCommands],
+    [onRequestCloseTab, onSaveAll, onSaveAs, stableNewDraft, onSplitEditor, onSplitEditorDown, onSetGroupsOrientation, onFocusGroupOrdinal, onCycleActiveGroup, onResizeActiveGroup, onCloseGroup, onNavBack, onNavForward, onReopenClosedTab, groups, kernel, notify, kbVersion, extraShellCommands],
   );
 
   // 内建文件树的**稳定组件身份**（用户反馈修复：打开文件会重建内联箭头组件 →
@@ -1572,6 +1614,7 @@ export function ProjectView({
             onDirtyChange={stableDirtyChange}
             registerActions={registerActions ? cb.register : undefined}
             onReauth={stableReauth}
+            onSaveDraft={stableSaveDraft}
             onStatusInfo={cb.onStatusInfo}
             onFocused={focused ? undefined : cb.onFocused}
           />
@@ -1592,6 +1635,11 @@ export function ProjectView({
                 新建口上文件 <span className="hint">Ctrl+N</span>
               </button>
             ) : null}
+            {/* 未落盘草稿（KW-16B）：与「新建口上文件」并列而不替换它——那条要先选项目/包/名，
+                这一条什么都不问，先写下再说。 */}
+            <button className="ghost small" onClick={stableNewDraft}>
+              未命名草稿
+            </button>
             <button className="ghost small" onClick={() => workbench?.openPalette()}>
               命令面板 <span className="hint">Ctrl+Shift+P</span>
             </button>
@@ -1602,7 +1650,7 @@ export function ProjectView({
         </div>
       );
     },
-    [kernel, reveal, stableDirtyChange, registerActions, stableReauth, callbacksFor, workbench, fileCount, fnCount],
+    [kernel, reveal, stableDirtyChange, registerActions, stableReauth, stableSaveDraft, callbacksFor, workbench, fileCount, fnCount],
   );
 
   return (
@@ -1694,6 +1742,7 @@ export function ProjectView({
                       otherGroups={otherGroupsByGroup.get(g.id) ?? []}
                       onMoveTabToGroup={tabCb.onMoveTabToGroup}
                       rails={tabRails}
+                      onNewDraftClick={stableNewDraft}
                       onSaveAllClick={handleSaveAllClick}
                       hasDirty={dirtyPaths.size > 0}
                     />

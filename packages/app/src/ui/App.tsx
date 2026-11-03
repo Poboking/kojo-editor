@@ -2498,7 +2498,7 @@ export function App(): ReactElement {
    * `kernel.io`（`isWritable` 预检 + 写域双闸），域外目标诚实拒绝并指向『导出』——本批
    * 没有新增第四条域外写通道，游戏根照样整体只读。
    */
-  const saveAs = useCallback(async (): Promise<void> => {
+  const saveAs = useCallback(async () => {
     const path = activeFileRef.current;
     if (!path) {
       notify({ kind: 'info', message: '没有活动文件，另存为无处落脚。' });
@@ -2591,7 +2591,8 @@ export function App(): ReactElement {
       });
       return { kind: 'failed' as const, message: errorText(err) };
     });
-    void result; // 结果的人话已在流里上屏（成功 / 取消 / 拒绝 / 失败各说各话）
+    // 人话已在流里上屏；结果给草稿那条腿判「落成没有」（KW-16B）
+    return result;
   }, [kernel, notify]);
 
   /* -------------- 文件树编辑的标签收尾（B1；状态单源在此——树侧只发意图） -------------- */

@@ -114,6 +114,8 @@ import { isInWorkspaceFile } from './file-area';
 // 表达式收进 `editor-editability.ts`（同一把尺子，两处消费：这里 + 标签栏色轨）。
 // 搬家不改语义——解锁集合的真源仍是本组件那一只 ref，模块只是经它读、经它判。
 import { canEditNow, notifyEditabilityChange } from './editor-editability';
+// 未落盘草稿（KW-16B）：`untitled:N` 不是路径——不读盘、不写盘，落点只在首次保存那拍交给宿主的另存为腿。
+import { isUntitledPath } from './tabs-ops';
 // C1 反向下行批：光标位点广播的载荷构造 + 连续相同载荷去重（纯逻辑，单测在 app/tests）
 import { createCursorBroadcaster, cursorMovedPayload } from './cursor-broadcast';
 // 问题汇总：refreshMarkers 逐文件整份发布两层波浪线（erb-parser / condition-extractor）到 problem-store
@@ -332,6 +334,14 @@ interface Props {
   registerActions?: (actions: EditorPaneActions | null) => void;
   /** 重授权入口（通知 action「去授权」落地处） */
   onReauth: () => void;
+  /**
+   * 未落盘草稿的**落点通道**（KW-16B）：这一格的「保存」= 请宿主把 buffer 转档到
+   * 系统对话框选定的真路径（复用 1028 那条已审的另存为腿：对话框只交回路径，
+   * 落盘仍过内核写域双闸，成功后七处登记随迁——本组件不认识落点）。
+   * 回 `true` = 已落成（这一格已换到真路径上继续编辑）；`false` = 取消或没落成，
+   * **一个字节都没写**，内容仍留在这一格里。缺省（宿主没接）⇒ 如实拒绝，不静默。
+   */
+  onSaveDraft?: (path: string) => Promise<boolean>;
   /** 编辑器状态上抛（状态栏右区显示编码/EOL/行数 + A9 选区/光标读数；卸载或无文件时 null；autosavedAt 走同一条链路，A6 状态栏轻指示） */
   onStatusInfo?: (info: { encoding: string; eol: string; lines: number; autosavedAt?: number | null; sel?: string; eolSwitchable?: boolean } | null) => void;
   /** 编辑器获得焦点（SPLIT-1：宿主据此把焦点组切到本组） */
@@ -400,6 +410,7 @@ export function EditorPane({
   onDirtyChange,
   registerActions,
   onReauth,
+  onSaveDraft,
   onStatusInfo,
   onFocused,
 }: Props): ReactElement {
@@ -426,6 +437,8 @@ export function EditorPane({
   const openPathsRef = useRef<readonly string[]>(openPaths);
   /** 重授权入口 ref（同上：Monaco 回调与保存句柄只注册一次，须读最新值） */
   const onReauthRef = useRef<() => void>(onReauth);
+  /** 草稿落点通道 ref（同上纪律：保存句柄注册一次，必须读最新的注入） */
+  const onSaveDraftRef = useRef<Props['onSaveDraft']>(onSaveDraft);
   /** 焦点上抛 ref（SPLIT-1：编辑器聚焦 ⇒ 宿主把焦点组切到本组） */
   const onFocusedRef = useRef<(() => void) | undefined>(onFocused);
   /**
@@ -1133,9 +1146,10 @@ export function EditorPane({
   // 重授权/脏上报 ref 同步（同上；写权限判定已改为按文件 kernel.io.isWritable）
   useEffect(() => {
     onReauthRef.current = onReauth;
+    onSaveDraftRef.current = onSaveDraft;
     onDirtyChangeRef.current = onDirtyChange;
     onStatusInfoRef.current = onStatusInfo;
-  }, [onReauth, onDirtyChange, onStatusInfo]);
+  }, [onReauth, onSaveDraft, onDirtyChange, onStatusInfo]);
   // 保存告警镜像（A6 护栏读它：定时器闭包拿不到 state 最新值）
   useEffect(() => {
     pendingChoiceRef.current = pendingChoice;
@@ -1678,6 +1692,17 @@ export function EditorPane({
         path,
         async () => {
           const isActive = filePathRef.current === path;
+          /* 未落盘草稿（KW-16B）：这一格还没有落点，"保存"就是"给它一个落点"——交回宿主那条
+             已审的另存为腿（系统对话框选位置 + 内核写域双闸 + 成功后转档随迁）。**基线不在这里立**：
+             clean/kept-dirty 由那条流的竞态守卫判（与 1028 同口径），这里只把结果折成一档回执。
+             取消 / 域外拒绝 / 没有对话框 ⇒ failed：内容一个字节都没少，仍在这一格里，且照实出声。 */
+          if (isUntitledPath(path)) {
+            const ok = (await onSaveDraftRef.current?.(path)) === true;
+            if (ok) return { path, status: 'saved' };
+            const message = '草稿没有落成：落点没有选好（取消、域外或这台机器没有系统对话框）——一个字节都没写，内容还在这一格里。';
+            if (!quiet) notify({ kind: 'info', message });
+            return { path, status: 'failed', message };
+          }
           // SAVE-BUTTON-IO-SEAM（出路②）前置拦截：宿主准入门拒过的目录里 TS 批准记录照旧在
           // 册（`kernel.io.isWritable` 为真），但**按下去必然失败**——这条判定吃宿主那份事实，
           // 与工具条按钮的置灰（`saveBlockedByHostWriteDomain` 同一个函数）同生同灭。
@@ -1922,6 +1947,11 @@ export function EditorPane({
     async (path: string): Promise<void> => {
       const entry = entriesRef.current.get(path);
       if (!entry) return; // 该文件未打开 → 与编辑器无关
+      // 未落盘草稿（KW-16B）没有"盘上那一份"可加载：说清楚，不拿一次读盘失败去冒充答案
+      if (isUntitledPath(path)) {
+        notify({ kind: 'info', message: '这是未落盘草稿，盘上还没有它——「重新加载」无处可读。要留下它请按 Ctrl+S 选落点。' });
+        return;
+      }
       const forced = forceReloadPathsRef.current.delete(path);
       let text: string;
       let diskEol: 'CRLF' | 'LF' = 'LF';
@@ -2407,13 +2437,15 @@ export function EditorPane({
           // 基线钉 0 由**池在建 model 的那一刻**落在记录上（fromRecovery），不依赖闭包里的
           // `recovered` 撑过 await。
           const recovered = peekRecoveredContent(filePath);
-          const pooled = await editorModelPool.acquire(
-            kernel,
-            filePath,
-            recovered
-              ? { text: recovered.text, encoding: recovered.encoding, eol: recovered.eol }
-              : undefined,
-          );
+          // 未落盘草稿（KW-16B）：盘上没有它 ⇒ 读盘这条路压根不走，以空正文建 model。
+          // 基线由池钉 0（`fromRecovery` 那条既有语义）⇒ 一生出来就是"未保存"，
+          // 三条退出确认链因此都点名它——这正是草稿要的"不静默"。
+          const injected = recovered
+            ? { text: recovered.text, encoding: recovered.encoding, eol: recovered.eol }
+            : isUntitledPath(filePath)
+              ? { text: '', encoding: 'utf-8', eol: 'LF' }
+              : undefined;
+          const pooled = await editorModelPool.acquire(kernel, filePath, injected);
           stopRead();
           if (cancelled) {
             // 引用计数对称回收：这次 acquire 不提交就必须 release（refcount-leak 修复——
@@ -3206,10 +3238,10 @@ export function EditorPane({
               SAVE-BUTTON-IO-SEAM（出路②）在此口径上**追加**宿主那一半：TS 批准记录在册但
               宿主准入门拒过的目录里，按钮渲染但置灰、悬停指回常驻错误条的那颗出路按钮
               （`save-button.tsx`；按下去必然失败的动作不再按得动）。 */}
-          {kernel.io.isWritable(filePath) ? (
+          {(isUntitledPath(filePath) || kernel.io.isWritable(filePath)) ? (
             <SaveButton
               dirty={dirty}
-              hostBlocked={saveBlockedByHostWriteDomain(filePath)}
+              hostBlocked={isUntitledPath(filePath) ? false : saveBlockedByHostWriteDomain(filePath)}
               onSave={() => void save()}
             />
           ) : null}

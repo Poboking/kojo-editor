@@ -674,7 +674,7 @@ function runnableCommandItem(
 
 /* ------------------------------ 渲染辅助 ------------------------------ */
 
-/** 未落盘草稿（KW-16B）的标签键前缀：`untitled:N` 不是路径（判据与不变量见 `untitled-draft.ts`） */
+/** 未落盘草稿（KW-16B）的标签键前缀：`untitled:N` 不是路径（不变量见 `untitled-draft.ts`） */
 export const UNTITLED_PREFIX = 'untitled:';
 
 export function isUntitledPath(path: string): boolean {

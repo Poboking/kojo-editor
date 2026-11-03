@@ -112,6 +112,11 @@ export interface TabBarProps {
    * 语义色（游戏目录里未解锁的只读件）。缺省（测试 / 无宿主）⇒ 与改动前逐字同形。
    */
   rails?: ReadonlyMap<string, TabRail> | null;
+  /**
+   * 「新建未命名草稿」（KW-16B）：标签栏右端那颗，与「全部保存」同一族显性入口。
+   * 缺省（测试 / 无宿主）⇒ 整颗不渲染——没有落地面就不摆一颗点了没反应的按钮。
+   */
+  onNewDraftClick?: () => void;
 }
 
 /* ------------------------- 右键面：按组桥接（多实例安全） ------------------------- */
@@ -370,6 +375,7 @@ export const TabBar = memo(function TabBar({
   onTogglePin,
   onBatchCloseTab,
   onSaveAllClick,
+  onNewDraftClick,
   hasDirty,
   previewPath = null,
   groupId = 'tabs',
@@ -743,6 +749,16 @@ export const TabBar = memo(function TabBar({
           恒在（无脏时弱化不消失，按下去由宿主给一句人话，铁律 4）。
           图标走专用 `save-all`（软盘），不借 `archive`——那枚 14px 下与 `trash` 同形，
           屏上被读成"删除"。`title` 只给悬停，读屏要的是无障碍名，两者都给。 */}
+      {onNewDraftClick ? (
+        <button
+          className="tab-new-draft"
+          title="新建未命名草稿（内容只在内存里，落盘才命名）"
+          aria-label="新建未命名草稿"
+          onClick={onNewDraftClick}
+        >
+          草稿
+        </button>
+      ) : null}
       <button
         className={`tab-save-all${hasDirty ? '' : ' idle'}`}
         title="全部保存（Ctrl+Shift+S）"

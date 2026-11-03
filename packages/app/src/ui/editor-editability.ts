@@ -28,6 +28,7 @@
  * | `author` | 落在作者工作区根内（轴一恒可写） | 主色 |
  * | `unlocked` | 工作区外且此刻可编辑（轴二破例 / 直连开门） | 警示（琥珀族） |
  * | `derived` | 屏上是 `.kojo` 预览挂的**派生** model，不是盘上那一份 | 中性 |
+ * | `untitled` | 未落盘草稿（`untitled:N`）：压根不在任何目录里，两道轴都问不到它 | 信息 |
  * | `read-only` | 其余（游戏目录、未解锁） | **不给色**——"没有额外颜色"本身就是"没有特权"的信号 |
  *
  * `canEdit` / `inWorkspace` 两枚字段是搬家口径的锚：档位**只由它们派生**，`read-only` 档
@@ -52,12 +53,13 @@ import { isDirectMode } from './direct-mode';
 import { fileWritableAreaOf, WRITABLE_HINTS } from './file-area';
 import { livePanes } from './editor-pane-registry';
 import { workspaceProjectDirsOf } from './workspace-roots';
+import { isUntitledPath } from './tabs-ops';
 
 /** 本模块接线所认的内核切片（`io` 管写允许域、`workspaces` 管常驻可写根） */
 type EditabilityKernel = Pick<Kernel, 'io' | 'workspaces'>;
 
 /** 可写性语义档位（标签色轨的输入；`read-only` 刻意不给色） */
-export type EditorEditabilityGrade = 'author' | 'unlocked' | 'derived' | 'read-only';
+export type EditorEditabilityGrade = 'author' | 'unlocked' | 'derived' | 'untitled' | 'read-only';
 
 /** 会给色的三档（`read-only` 不在其内） */
 export type EditorRailGrade = Exclude<EditorEditabilityGrade, 'read-only'>;
@@ -92,6 +94,10 @@ export interface Editability {
  * 短路顺序与改前一致（先问解锁集合、再问直连），`writable` 的调用次数因此与改前逐字相同。
  */
 export function editabilityOf(axes: EditabilityAxes): Editability {
+  // 未落盘草稿（KW-16B）：它**不在任何目录里**——两道轴都问不到它，所以在这一层就地回答。
+  // `canEdit: true` 只说"这一格能动笔"（内存 model，写允许域管不着它），**不扩权**：
+  // 真落盘那一刻仍由 `file-save-as` 那条腿过 `kernel.io.isWritable` 双闸，游戏根照样写不进去。
+  if (isUntitledPath(axes.path)) return { canEdit: true, inWorkspace: false, grade: 'untitled' };
   const inWorkspace = fileWritableAreaOf(axes.path, axes.workspaceRoots) === 'workspace';
   const canEdit = axes.unlockedPaths.has(axes.path) || (axes.directMode && axes.writable(axes.path));
   const grade: EditorEditabilityGrade =
@@ -148,6 +154,7 @@ const RAIL_HINTS: Record<EditorRailGrade, string> = {
   author: WRITABLE_HINTS.workspace,
   unlocked: `${WRITABLE_HINTS.gameErb}本会话已为这一份破例解锁——你现在改的就是游戏库里的东西。`,
   derived: '这一格挂的是 .kojo 预览的派生只读面，不是盘上那一份文件本身；在它上面改不到磁盘。',
+  untitled: '未落盘草稿：内容只在内存里，盘上还没有它。首次保存会弹系统对话框让你定落点与文件名（仍受写允许域约束，游戏目录写不进去）。',
 };
 
 /** 档位 → class（`read-only` 不进这张表：没有额外颜色就是它的颜色） */
@@ -155,6 +162,7 @@ export const RAIL_CLASS: Record<EditorRailGrade, string> = {
   author: 'rail-author',
   unlocked: 'rail-unlocked',
   derived: 'rail-derived',
+  untitled: 'rail-untitled',
 };
 
 /**

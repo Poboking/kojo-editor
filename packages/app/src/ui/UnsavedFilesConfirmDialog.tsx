@@ -1,5 +1,8 @@
 import type { ReactElement } from 'react';
 import { useModalEscape } from './modal-stack';
+// 名字单源在 `tabs-ops.tabName`（KW-16B）：未落盘草稿没有"末段"可取，
+// 关闭确认框拿同一把尺子才报得出「未命名草稿 1」，而不是一个像 bug 的 `untitled:1`。
+import { tabName } from './tabs-ops';
 
 interface Props {
   /** 全项目当前脏的文件路径集合（来自 App 的 dirtyPaths） */
@@ -23,7 +26,7 @@ interface Props {
  */
 export function UnsavedFilesConfirmDialog({ paths, context = 'close', onDecide }: Props): ReactElement {
   useModalEscape(() => onDecide('cancel'));
-  const entries = [...paths].map((p) => ({ path: p, name: p.split(/[\\/]/).pop() ?? p }));
+  const entries = [...paths].map((p) => ({ path: p, name: tabName(p) }));
   const verb = context === 'switch' ? '切换项目' : '关闭项目';
   return (
     <div className="modal-mask">

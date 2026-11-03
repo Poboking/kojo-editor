@@ -887,6 +887,10 @@ textarea {
 }
 /* 「全部保存」显性入口（C3；Ctrl+Shift+S 的命令面板之外的那只手）：
    恒在——无脏标签弱化（.idle）但不消失，按下去由宿主回一句人话 */
+/* 「新建未命名草稿」那颗（KW-16B）与「全部保存」同一槽位族、同一几何——
+   两颗都是"标签条右端的动作"，分开写两套规则必然漂一套。文字按钮比图标宽，
+   所以只有宽度与字号是自己的。 */
+.editor-tabs-bar .tab-new-draft,
 .editor-tabs-bar .tab-save-all {
   flex: none;
   width: 36px;
@@ -902,6 +906,15 @@ textarea {
     background-color var(--dur-1) var(--ease-out),
     color var(--dur-1) var(--ease-out),
     opacity var(--dur-1) var(--ease-out);
+}
+.editor-tabs-bar .tab-new-draft {
+  width: auto;
+  padding: 0 10px;
+  font-size: var(--fs-0);
+}
+.editor-tabs-bar .tab-new-draft:hover {
+  background: var(--hover);
+  color: var(--fg);
 }
 .editor-tabs-bar .tab-save-all:hover {
   background: var(--hover);
@@ -993,10 +1006,12 @@ textarea {
     - 伪元素不进布局 ⇒ 解锁 / 挂预览的那一刻只翻色、不抖动。
    `position: relative` 的承托位由 `tabs-bar.css` 那条 `.editor-tabs-bar .editor-tab` 供
    （(0,2,0) 稳压本档单类，注入顺序无关）。
-   第四档——游戏目录里未解锁的只读件——**一条规则都不给**：没有额外颜色就是它的颜色。 */
+   第五档——游戏目录里未解锁的只读件——**一条规则都不给**：没有额外颜色就是它的颜色。
+   （2026-11-03 KW-16B 在"三档"之后插进了 `untitled` 一档，故只读件是第五档。） */
 .editor-tab.rail-author::before,
 .editor-tab.rail-unlocked::before,
-.editor-tab.rail-derived::before {
+.editor-tab.rail-derived::before,
+.editor-tab.rail-untitled::before {
   content: '';
   position: absolute;
   left: 0;
@@ -1013,6 +1028,11 @@ textarea {
 }
 .editor-tab.rail-derived::before {
   background: var(--tab-rail-derived);
+}
+/* 未落盘草稿（KW-16B）：第四档给色，因为它要说的不是"有没有特权"，而是
+   "这一格还没有盘上落点"——没有色就等于和只读件同一张脸，那一档才是沉默的。 */
+.editor-tab.rail-untitled::before {
+  background: var(--tab-rail-untitled);
 }
 /* 关闭按钮平时隐去（活动标签除外），悬停浮出——标签条更安静 */
 .editor-tab .tab-close {

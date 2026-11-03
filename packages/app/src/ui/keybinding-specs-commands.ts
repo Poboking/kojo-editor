@@ -119,6 +119,9 @@ const GROUP_AND_PROJECT_SPECS: readonly KeybindingSpec[] = [
   // 本条只吃命令面板与键位页（都在懒 chunk）；不吃右键菜单那面（那面只查开机静态基础表，
   // 本批没给另存为挂菜单项——入口是命令面板，键位页可自绑）。
   { id: 'workbench.saveAs', title: '另存为…', category: '工作台', rebindable: true },
+  // 未落盘草稿（KW-16B）：**刻意不带缺省键**——`Ctrl+N` 已给「新建口上文件」那条向导
+  // （它要先选项目/包/名，这一格什么都不问）；作者想占哪枚键自己来键位页改。
+  { id: 'workbench.newUntitledDraft', title: '新建未命名草稿', category: '工作台', rebindable: true, note: '空白一格先写着，落盘才命名：Ctrl+S 由系统对话框定落点与文件名（仍受写允许域约束，游戏目录写不进去）' },
 ];
 
 /**

@@ -44,6 +44,7 @@
   --tab-rail-author: var(--accent);
   --tab-rail-unlocked: var(--warning);
   --tab-rail-derived: var(--border-strong);
+  --tab-rail-untitled: var(--info);
   --fg: #d7dce2;
   /* 次要文字档（视觉批十二 · BOARD `VIS-CONTRAST`）：原值 `#8b949e` 压在 `--bg-3` 上只有
      **4.27:1**——而计数徽标（`.kp-count` / ui-kit `.kit-count`）正是这枚芯片底，11px 正文级
