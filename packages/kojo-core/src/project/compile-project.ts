@@ -14,11 +14,13 @@ import type { GameAdapter } from '../adapter.js';
 import type { KojoSpan } from '../ast.js';
 import { compileKojoFile } from '../compile.js';
 import type { KojoDiagnostic } from '../diagnostics.js';
-import type { KojoEmitBackend } from '../lower/backend.js';
+import type { DispatchRenderRequest, KojoEmitBackend } from '../lower/backend.js';
 import { isEmitFailure } from '../lower/backend.js';
 import type { ProjectBuildProvenance, ProjectBuildResult, ProjectFileInput } from './ir.js';
 import { buildProjectBuildResult, buildProjectIR } from './ir.js';
 import { linkProject } from './linker.js';
+import { buildProjectDispatchPlan } from './dispatch-plan.js';
+import type { DispatchPlanDiagnostic } from './dispatch-plan.js';
 import type { TargetRegistry } from './target-registry.js';
 
 export interface ProjectCompileFileInput extends ProjectFileInput {
@@ -32,10 +34,17 @@ export interface ProjectCompileInput {
   readonly registry: TargetRegistry;
   readonly adapter: GameAdapter;
   readonly backend: KojoEmitBackend;
+  /** M3：要求最终 dispatch ERB 必须成功；缺省 false 保持 M2 后端兼容。 */
+  readonly requireDispatch?: boolean;
 }
 
 export interface ProjectTheaterErb {
   readonly theaterId: string;
+  readonly erb: string;
+}
+
+export interface ProjectDispatchErb {
+  readonly canonicalId: string;
   readonly erb: string;
 }
 
@@ -45,8 +54,16 @@ export interface ProjectCompileResult {
   readonly theaterErb: readonly ProjectTheaterErb[];
   /** Backend 生成失败时保留的可见诊断；项目构建失败时 build.buildStatus 已反映。 */
   readonly backendDiagnostics: readonly KojoDiagnostic[];
+  /** M3 最终 dispatch ERB（每个 canonical target 一份）；backend 不支持时为空。 */
+  readonly dispatchErb: readonly ProjectDispatchErb[];
+  /** Dispatch plan 级阻断诊断（duplicate / 无 supported 分支）。 */
+  readonly dispatchDiagnostics: readonly DispatchPlanDiagnostic[];
+  /** Dispatch 渲染器返回的引擎诊断。 */
+  readonly dispatchBackendDiagnostics: readonly KojoDiagnostic[];
   /** 所有应产出的 Theater 都成功产出，且项目构建 succeeded。 */
   readonly complete: boolean;
+  /** 所有 canonical target 都成功渲染最终 dispatch ERB。 */
+  readonly dispatchComplete: boolean;
 }
 
 function loweringInputOf(
@@ -121,7 +138,16 @@ export function compileProject(input: ProjectCompileInput): ProjectCompileResult
   const build = buildProjectBuildResult(resolvedIR, linkedProject);
 
   if (build.buildStatus !== 'succeeded') {
-    return { build, theaterErb: [], backendDiagnostics: [], complete: false };
+    return {
+      build,
+      theaterErb: [],
+      backendDiagnostics: [],
+      dispatchErb: [],
+      dispatchDiagnostics: [],
+      dispatchBackendDiagnostics: [],
+      complete: false,
+      dispatchComplete: false,
+    };
   }
 
   const theaterById = new Map(resolvedIR.theaters.map((theater) => [theater.theaterId, theater]));
@@ -184,14 +210,88 @@ export function compileProject(input: ProjectCompileInput): ProjectCompileResult
     });
   }
 
+  const dispatchPlan = buildProjectDispatchPlan(linkedProject);
+  const dispatchErb: ProjectDispatchErb[] = [];
+  const dispatchBackendDiagnostics: KojoDiagnostic[] = [];
+  let dispatchFailed = false;
+  if (dispatchPlan.status === 'ready' && input.backend.renderDispatch !== undefined) {
+    const renderDispatch = input.backend.renderDispatch;
+    for (const target of dispatchPlan.targets) {
+      const branches: DispatchRenderRequest['branches'][number][] = [];
+      for (const branch of target.branches) {
+        const sourceTheater = theaterById.get(branch.theaterId);
+        if (sourceTheater === undefined || sourceTheater.unit === null) {
+          dispatchFailed = true;
+          continue;
+        }
+        branches.push({
+          theaterId: branch.theaterId,
+          locationKind: branch.locationKind,
+          locationRaw: branch.locationRaw,
+          timeKind: branch.timeKind,
+          timeRaw: branch.timeRaw,
+          specificity: branch.specificity,
+          body: sourceTheater.unit.body,
+          slots: sourceTheater.unit.slots,
+          span: branch.sourceSpan,
+        });
+      }
+      const first = target.branches[0];
+      const firstSource = first === undefined ? undefined : theaterById.get(first.theaterId);
+      const descriptor = firstSource?.targetResolution?.descriptor ?? null;
+      if (first === undefined || firstSource === undefined || descriptor === null || branches.length !== target.branches.length) {
+        dispatchFailed = true;
+        continue;
+      }
+      const args: readonly string[] = firstSource.sourceArgs.index === null ? [] : [firstSource.sourceArgs.index];
+      const rendered = renderDispatch({
+        canonicalId: target.canonicalId,
+        functionName: target.functionName,
+        event: descriptor.eventBinding,
+        args,
+        branches,
+        span: first.sourceSpan,
+      });
+      if (isEmitFailure(rendered)) {
+        dispatchFailed = true;
+        dispatchBackendDiagnostics.push(...rendered.diagnostics);
+        if (!rendered.diagnostics.some((diagnostic) => diagnostic.severity === 'error')) {
+          dispatchBackendDiagnostics.push(
+            backendFailureDiagnostic(
+              input.backend.id,
+              `dispatch:${target.canonicalId}`,
+              first.sourceSpan,
+              'backend.renderDispatch 返回 EmitFailure 但没有给 error 级诊断。',
+            ),
+          );
+        }
+        continue;
+      }
+      const lines = linesOf(rendered);
+      dispatchErb.push({
+        canonicalId: target.canonicalId,
+        erb: lines.length === 0 ? '' : `${lines.join('\n')}\n`,
+      });
+    }
+  }
+  const dispatchComplete =
+    dispatchPlan.status === 'ready' &&
+    input.backend.renderDispatch !== undefined &&
+    !dispatchFailed &&
+    dispatchErb.length === dispatchPlan.targets.length;
   const backendFailed =
     backendRejected || backendDiagnostics.some((diagnostic) => diagnostic.severity === 'error');
-  const finalBuild: ProjectBuildResult = backendFailed ? { ...build, buildStatus: 'failed' } : build;
+  const failed = backendFailed || (input.requireDispatch === true && dispatchFailed);
+  const finalBuild: ProjectBuildResult = failed ? { ...build, buildStatus: 'failed' } : build;
   const complete = finalBuild.buildStatus === 'succeeded' && theaterErb.length === expected;
   return {
     build: finalBuild,
-    theaterErb: backendFailed ? [] : theaterErb,
+    theaterErb: failed ? [] : theaterErb,
     backendDiagnostics,
+    dispatchErb: dispatchFailed ? [] : dispatchErb,
+    dispatchDiagnostics: dispatchPlan.diagnostics,
+    dispatchBackendDiagnostics,
     complete,
+    dispatchComplete,
   };
 }

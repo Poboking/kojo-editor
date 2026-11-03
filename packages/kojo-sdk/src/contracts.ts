@@ -172,6 +172,7 @@ export type {
   ProjectCompileFileInput,
   ProjectCompileInput,
   ProjectCompileResult,
+  ProjectDispatchErb,
   ProjectTheaterErb,
 } from '@kojo/kojo-core';
 
@@ -216,6 +217,8 @@ export type {
   DispatchPlanDiagnosticCode,
   DispatchPlanDiagnostic,
   ProjectDispatchPlan,
+  DispatchRenderBranch,
+  DispatchRenderRequest,
 } from '@kojo/kojo-core';
 /* ---------- 编辑器侧：`ui.editor.languageService`（`@kojo/plugin-api`） ---------- */
 

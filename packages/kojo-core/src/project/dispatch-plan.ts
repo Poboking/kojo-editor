@@ -33,7 +33,10 @@ export interface DispatchBranch {
 }
 
 export interface DispatchTargetPlan {
+  /** canonicalId + functionName；同一 canonical target 可按角色/家族函数名拆成多个计划。 */
+  readonly dispatchKey: string;
   readonly canonicalId: string;
+  readonly functionName: string;
   readonly duplicate: boolean;
   readonly branches: readonly DispatchBranch[];
 }
@@ -104,15 +107,24 @@ export function buildProjectDispatchPlan(linkedProject: LinkedProject): ProjectD
   const diagnostics: DispatchPlanDiagnostic[] = [];
 
   for (const group of linkedProject.groups) {
-    const branches = group.theaters
+    const allBranches = group.theaters
       .map(branchOf)
-      .filter((branch): branch is DispatchBranch => branch !== null)
-      .sort(compareBranches);
-    targets.push({
-      canonicalId: group.canonicalId,
-      duplicate: group.duplicate,
-      branches,
-    });
+      .filter((branch): branch is DispatchBranch => branch !== null);
+    const byFunction = new Map<string, DispatchBranch[]>();
+    for (const branch of allBranches) {
+      const bucket = byFunction.get(branch.functionName);
+      if (bucket === undefined) byFunction.set(branch.functionName, [branch]);
+      else bucket.push(branch);
+    }
+    for (const [functionName, branches] of byFunction) {
+      targets.push({
+        dispatchKey: group.canonicalId + '\u0000' + functionName,
+        canonicalId: group.canonicalId,
+        functionName,
+        duplicate: group.duplicate,
+        branches: branches.sort(compareBranches),
+      });
+    }
     if (group.duplicate) {
       diagnostics.push(
         diagnostic(
@@ -122,7 +134,7 @@ export function buildProjectDispatchPlan(linkedProject: LinkedProject): ProjectD
           group.theaters.map((theater) => theater.theaterId),
         ),
       );
-    } else if (branches.length === 0) {
+    } else if (allBranches.length === 0) {
       diagnostics.push(
         diagnostic(
           'dispatch/no-supported-theater',
@@ -134,7 +146,7 @@ export function buildProjectDispatchPlan(linkedProject: LinkedProject): ProjectD
     }
   }
 
-  targets.sort((a, b) => compareText(a.canonicalId, b.canonicalId));
+  targets.sort((a, b) => compareText(a.dispatchKey, b.dispatchKey));
   return {
     projectId: linkedProject.projectId,
     status: diagnostics.length === 0 ? 'ready' : 'blocked',
@@ -143,10 +155,17 @@ export function buildProjectDispatchPlan(linkedProject: LinkedProject): ProjectD
   };
 }
 
-/** 按 canonical target 取计划；没有该 target 返回 null。 */
+/** 按 canonical target + 可选 functionName 取计划；多个同 canonical 计划且未点名函数名时不猜。 */
 export function dispatchTargetPlanOf(
   plan: ProjectDispatchPlan,
   canonicalId: string,
+  functionName?: string,
 ): DispatchTargetPlan | null {
-  return plan.targets.find((target) => target.canonicalId === canonicalId) ?? null;
+  const matches = plan.targets.filter(
+    (target) =>
+      target.canonicalId === canonicalId &&
+      (functionName === undefined || target.functionName === functionName),
+  );
+  const only = matches[0];
+  return matches.length === 1 && only !== undefined ? only : null;
 }

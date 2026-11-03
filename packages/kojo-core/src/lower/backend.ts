@@ -429,6 +429,34 @@ export interface ResolvedMachineFunctionName {
   readonly kind: 'resolved' | 'needs-context' | 'invalid-context' | 'unresolved' | 'unsupported';
   readonly name: string | null;
 }
+/**
+ * M3 dispatch 渲染：把一个 canonical target 的全部 branch 合成最终事件函数。
+ *
+ * `body` / `slots` 来自已降糖的 TheaterLoweringUnit；adapter 只负责落成引擎产物，
+ * 不得改写 body 顺序、不得猜 runtime selector。`locationExpr` / `timeExpr` 由 Host/Adapter
+ * 显式注入，缺省时 adapter 必须 fail-closed。
+ */
+export interface DispatchRenderBranch {
+  readonly theaterId: string;
+  readonly locationKind: 'unrestricted' | 'exact';
+  readonly locationRaw: string;
+  readonly timeKind: 'unrestricted' | 'named';
+  readonly timeRaw: string;
+  readonly specificity: number;
+  readonly body: readonly string[];
+  readonly slots: readonly KojoHiddenSlot[];
+  readonly span: KojoSpan;
+}
+
+export interface DispatchRenderRequest {
+  readonly canonicalId: string;
+  /** 已解析的主事件函数名（不带 @）；adapter 由它派生唯一 branch 函数名。 */
+  readonly functionName: string;
+  readonly event: string;
+  readonly args: readonly string[];
+  readonly branches: readonly DispatchRenderBranch[];
+  readonly span: KojoSpan;
+}
 export interface MachineWrapRequest {
   readonly machine: KojoMachineDecl;
   /** 已降糖的正文行（无 wrapper；core 不缩进） */
@@ -478,6 +506,8 @@ export interface KojoEmitBackend {
    * 每个文件最多一个 `# 机`，调用一次；`@织` 不走这个钩子（它有自己的 weaveHeader/weaveFooter）。
    */
   readonly wrapMachine?: (request: MachineWrapRequest) => EmitResult;
+  /** M3：把一个 canonical target 的 branches 合成为最终 dispatch ERB。缺省 = 不支持。 */
+  readonly renderDispatch?: (request: DispatchRenderRequest) => EmitResult;
   /**
    * M1 临时单剧场桥（可选，仅新语法单剧场且 location/time 均 unrestricted 时调用）。
    *

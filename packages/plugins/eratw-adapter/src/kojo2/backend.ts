@@ -52,6 +52,7 @@ import type {
   AssignEmitRequest,
   BlankEmitRequest,
   CallEmitRequest,
+  DispatchRenderRequest,
   EmitFailure,
   EmitResult,
   ExprCallEmitRequest,
@@ -95,7 +96,16 @@ export type EratwCompileExpression = (expr: KojoExprText) => string | EmitFailur
 /** 赋值左值编译端口；缺省 = 原样使用 `target.text`（宿主可注入别名/域符号展开） */
 export type EratwCompileTarget = (target: KojoAssignTarget) => string | EmitFailure;
 
+export interface EratwDispatchSelectors {
+  /** 运行时地点表达式（由 Host/Adapter 显式注入；不猜引擎变量名） */
+  readonly locationExpr: string;
+  /** 运行时时间表达式（由 Host/Adapter 显式注入；不猜引擎变量名） */
+  readonly timeExpr: string;
+}
+
 export interface EratwEmitDeps {
+  /** M3 dispatch ERB 的运行时 selector；缺省时含 exact/named 分支会 fail-closed。 */
+  readonly dispatchSelectors?: EratwDispatchSelectors;
   /** **必填**：2.0 表达式源切片 → ERB 表达式（宿主注入 v1 expression 管线） */
   readonly compileExpression: EratwCompileExpression;
   /** 可选的赋值左值编译（缺省原样透传） */
@@ -256,6 +266,11 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
   /** 一段 body 用到的槽声明（放函数头 `@…` 行之后、`#PRI/#LATER/#ONLY` 之后） */
   function slotDeclarations(slots: readonly KojoHiddenSlot[]): readonly string[] {
     return slots.map(slotDeclaration);
+  }
+  /** M3 dispatch selector 字面量：唯一编码器；失败即 fail-closed。 */
+  function dispatchLiteral(value: string, span: KojoSpan): string | EmitFailure {
+    const encoded = encodeEngineLiteral(value, { form: 'plain', span });
+    return encoded.ok ? encoded.literal : { diagnostics: encoded.diagnostics };
   }
 
   /* ---------- 文本三正交 ---------- */
@@ -776,6 +791,74 @@ export function createEratwEmitBackend(deps: EratwEmitDeps): KojoEmitBackend {
       return lines;
     },
 
+    /**
+     * M3：把一个 canonical target 的候选 branches 合成最终 dispatch ERB。
+     *
+     * 主函数按 specificity 顺序发 `IF selector == raw`，命中即 `CALL` 唯一 branch 函数并
+     * `RETURN RESULT`；branch 函数承载各自已降糖 body。`dispatchSelectors` 必须由 Host/Adapter
+     * 显式提供；含 exact/named 分支而 selector 缺失时 fail-closed，不猜引擎变量名。
+     */
+    renderDispatch(request: DispatchRenderRequest): EmitResult {
+      if (request.branches.length === 0) {
+        return fail('M3 dispatch 没有可渲染 branch：拒绝生成空分派函数。', request.span);
+      }
+      const params: string =
+        request.args.length === 0
+          ? ''
+          : `(${request.args
+              .map((_arg: string, index: number) => (index === 0 ? 'ARG' : `ARG:${index}`))
+              .join(', ')})`;
+      const argsText = request.args.length === 0 ? '' : ` ${request.args.join(' ')}`;
+      const selectors = deps.dispatchSelectors;
+      const lines: string[] = [
+        `;kojo2: M3 dispatch ${request.canonicalId}${argsText}`,
+        `@${request.functionName}${params}`,
+      ];
+
+      for (const [index, branch] of request.branches.entries()) {
+        const conditions: string[] = [];
+        if (branch.locationKind === 'exact') {
+          if (selectors === undefined) {
+            return fail('M3 dispatch 含 exact location 分支，但 Host 没有注入 locationExpr。', branch.span);
+          }
+          const literal = dispatchLiteral(branch.locationRaw, branch.span);
+          if (isEmitFailure(literal)) return literal;
+          conditions.push(`${selectors.locationExpr} == ${literal}`);
+        }
+        if (branch.timeKind === 'named') {
+          if (selectors === undefined) {
+            return fail('M3 dispatch 含 named time 分支，但 Host 没有注入 timeExpr。', branch.span);
+          }
+          const literal = dispatchLiteral(branch.timeRaw, branch.span);
+          if (isEmitFailure(literal)) return literal;
+          conditions.push(`${selectors.timeExpr} == ${literal}`);
+        }
+        const branchName = `${request.functionName}__D${index + 1}`;
+        let depth = 0;
+        for (const condition of conditions) {
+          lines.push(`${INDENT.repeat(depth)}IF ${condition}`);
+          depth += 1;
+        }
+        lines.push(`${INDENT.repeat(depth)}CALL ${branchName}${params}`);
+        lines.push(`${INDENT.repeat(depth)}RETURN RESULT`);
+        for (let close = depth - 1; close >= 0; close -= 1) {
+          lines.push(`${INDENT.repeat(close)}ENDIF`);
+        }
+      }
+      lines.push('RETURN 0');
+
+      for (const [index, branch] of request.branches.entries()) {
+        const branchName = `${request.functionName}__D${index + 1}`;
+        lines.push('', `@${branchName}${params}`);
+        lines.push(...slotDeclarations(branch.slots));
+        lines.push('LOCAL = 1');
+        lines.push('IF LOCAL');
+        for (const line of branch.body) lines.push(line.length === 0 ? '' : `${INDENT}${line}`);
+        lines.push('ENDIF');
+        lines.push('RETURN 1');
+      }
+      return lines;
+    },
     /**
      * M1 临时单剧场桥：**只**把 allowlist 里的 `初见` 映射成既有 `# 机` 声明。
      *

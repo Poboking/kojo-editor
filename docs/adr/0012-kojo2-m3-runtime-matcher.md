@@ -19,3 +19,10 @@
 
 M2 `ResolvedTheater` 增加只读 `location` / `time`，由 linker 从 `ProjectTheaterIR.theater` 原样复制。
 这是 M3 读取 parser facts 所需的最小 additive 变更；M2 匹配语义与 exact duplicate 键不变。
+
+## 第二阶段扩展（2026-11-03）
+
+- 新增可选 `renderDispatch` 端口；core 只给结构请求，不写 ERB 关键字。
+- `DispatchTargetPlan` 按 `canonicalId + functionName` 拆分，避免跨角色合并。
+- eraTW selector 由 Host 显式注入；缺失时 fail-closed。
+- `requireDispatch` 控制最终 dispatch 是否为构建必需；缺省保持 M2 兼容。

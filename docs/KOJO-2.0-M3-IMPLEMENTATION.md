@@ -51,3 +51,12 @@ const result = selectRuntimeTheater({
 - 最终 dispatch ERB 与 adapter 专用运行时变量绑定。
 - 地点/时间别名、区间、继承。
 - `runtimeProtocol.metadata` 的专用匹配策略。
+
+## Dispatch ERB（第三阶段）
+
+- core `KojoEmitBackend` additive `renderDispatch?(request: DispatchRenderRequest)`。
+- `DispatchRenderRequest` 携带 canonicalId、已解析主函数名、事件绑定、实参、按 specificity 排序的 branches；每个 branch 带已降糖 body/slots 与 location/time facts。
+- `compileProject` 新增 `dispatchErb` / `dispatchDiagnostics` / `dispatchBackendDiagnostics` / `dispatchComplete`。
+- `requireDispatch?: boolean`：缺省 false 保持 M2 后端兼容；true 时 dispatch 渲染失败令 build failed，且不发布 theaterErb / dispatchErb 半成品。
+- eraTW `renderDispatch` 由 Host 显式注入 `dispatchSelectors: { locationExpr, timeExpr }`；缺 selector 且存在 exact/named 分支即 fail-closed，不猜引擎变量名。
+- 同一 canonical target 按 **functionName** 拆分 dispatch target，避免不同角色/家族函数被错误合并。

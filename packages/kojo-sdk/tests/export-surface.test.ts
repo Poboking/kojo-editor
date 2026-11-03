@@ -69,6 +69,8 @@ const CONTRACT_TYPES = [
   'DispatchPlanDiagnostic',
   'DispatchPlanDiagnosticCode',
   'DispatchPlanStatus',
+  'DispatchRenderBranch',
+  'DispatchRenderRequest',
   'DispatchTargetPlan',
   'DomainSymbols',
   'DomainVariableSymbol',
@@ -172,6 +174,7 @@ const CONTRACT_TYPES = [
   'ProjectCompileResult',
   'ProjectDiagnostic',
   'ProjectDiagnosticKind',
+  'ProjectDispatchErb',
   'ProjectDispatchPlan',
   'ProjectFileIR',
   'ProjectFileId',
@@ -252,7 +255,7 @@ const STRUCTURE_VALUES = [
 ] as const;
 
 describe('@kojo/kojo-sdk 导出面', () => {
-  it('contracts.ts 的类型面 = 清单（169 枚；多/少一枚都红）', () => {
+  it('contracts.ts 的类型面 = 清单（172 枚；多/少一枚都红）', () => {
     expect(exportedNames('contracts.ts', 'type')).toEqual([...CONTRACT_TYPES]);
   });
 
