@@ -281,6 +281,10 @@ export default defineConfig({
       // `/eol` 一起吃掉（落回 index.ts 的桶 ⇒ 裸 node 消费方解析失败）。
       '@kojo/plugin-api/eol': r('../plugin-api/src/eol.ts'),
       '@kojo/plugin-api': r('../plugin-api/src/index.ts'),
+      // 路 B 新包：MCP 能力面 registry（`exports` 指向 .ts 源）。`host-bridge.ts` 只在首条
+      // `mcp://request` 到达时 `import('@kojo/mcp-host')`，dev / build 都经本 alias 直指源，
+      // 与其余工作区包同口径：既不依赖 node_modules 落点，也不触发 pnpm 改 pnpm-lock.yaml。
+      '@kojo/mcp-host': r('../mcp-host/src/index.ts'),
       // 语言面库的叶子**必须排在桶之前**：alias 的匹配口径是
       // 「等于 find」或「以 `find + /` 开头」，桶若在前会把 `/constants` 也吃掉。
       '@kojo/kojo-lang/constants': r('../kojo-lang/src/constants.ts'),

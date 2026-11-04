@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
+import { lazy, Suspense, useRef, useState, useEffect, useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactElement } from 'react';
 import { useSyncExternalStore } from 'react';
 import { MARKET_DEFAULT_INDEX_URL } from '@kojo/plugin-api';
 import type { LayoutAction } from './layout';
@@ -325,7 +325,8 @@ export type SettingsSectionId =
   | 'capabilities'
   | 'market'
   | 'about'
-  | 'keybindings';
+  | 'keybindings'
+  | 'ai';
 
 /**
  * 一节 = 导航栏一项 + 右面板内容。`render` 无参：它闭包捕获 `SETTINGS_SECTIONS` 的 props 形参，
@@ -450,6 +451,11 @@ function UpdateSection({
  *
  * 数组顺序 = 导航栏自上而下的顺序。
  */
+/** AI 接入节走动态边：三件面板不进 ps10 开机图（闸顶格 196 文件），fallback 可见（铁律 4）。 */
+const AiAccessSectionLazy = lazy(() =>
+  import('../mcp/settings-ai').then((m) => ({ default: m.AiAccessSection })),
+);
+
 export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[] = (props) => {
   const {
     commands,
@@ -504,7 +510,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     onChooseWorkspaceLocation,
   } = props;
 
-  return [
+  const sections: SettingsSection[] = [
     {
       id: 'general',
       label: '通用',
@@ -1218,6 +1224,21 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
       ),
     },
   ];
+
+  // 只在桌面壳追加：浏览器调试壳没有 mcp_* 命令；测试环境仍返回既有 8 节（既有断言保持绿）。
+  if (isTauri()) {
+    sections.push({
+      id: 'ai',
+      label: 'AI 接入',
+      icon: 'wand',
+      render: () => (
+        <Suspense fallback={<p className="settings-hint" role="status">正在装载 AI 接入面板…</p>}>
+          <AiAccessSectionLazy />
+        </Suspense>
+      ),
+    });
+  }
+  return sections;
 };
 
 /**

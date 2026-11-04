@@ -5,34 +5,39 @@
  * 分派六种 method → 经 `mcp_respond` 回帧。Rust 侧只做线协议与授权闸门，能力语义全在
  * `@kojo/mcp-host`（路 B，零游戏名词）；本桥是**纯分派器**，不认游戏/能力知识、不改产品路径语义。
  *
- * 开机图纪律（ps10 闸 196 文件 / 3,553 KB）：`createMcpCapabilityRegistry` **必须动态 import**，
- * 且只在**首条 `mcp://request` 到达时**才装载——产品未启用 MCP 时该包零字节进图。
- * bootstrap.ts 只加一处 `void import('./mcp/host-bridge')` 登记（同 debug-registry 形态），
- * 本模块自身不静态 import 任何运行时依赖（Tauri API 也走动态 import）。
+ * 开机图纪律（ps10 闸 196 文件 / 3,553 KB）：`@kojo/mcp-host` 与 `./wiring` 都**只在首条
+ * `mcp://request` 到达时动态 import**（由 `defaultRegistryFactory` 一并装载）——产品未启用
+ * MCP 时两者零字节进图。bootstrap.ts 只保留一处 `void import('./mcp/host-bridge')` 登记
+ * （同 debug-registry 形态），本模块顶层**只**用 `import type` 取冻结契约类型（纯类型、编译期
+ * 擦除、零运行时边），不静态 import 任何运行时依赖（Tauri API 也走动态 import）。
  *
  * 三件套：取消（AbortSignal / 关闭流语义）、超时（默认 30s，可配）、返回体积上限。
  * 超时 / 超限 / 参数错 / 内部错一律回**显式 error 帧**（铁律 4：不静默）；主动取消不回帧
  * （客户端已断流）。`mcp_respond` 回帧失败也要出声，不假装送达。
  *
- * 集成接线（主 agent）：路 B 的 `@kojo/mcp-host` 到位后，需在 app 的 tsconfig.paths 与
- * vite.config.ts 的 resolve.alias 补该包别名，并通过 `registerMcpHostBridge({ deps })` 注入
- * `createMcpCapabilityRegistry` 所需的 deps（本路不可改 tsconfig / vite.config / package.json）。
+ * deps 装配：未注入 `options.deps`（生产默认）时，由 `defaultRegistryFactory` 在首条请求时
+ * 动态 `import('./wiring')` 调 `createMcpHostDeps()` 组装真实 `McpHostDeps`；注入了 deps
+ * （单测 seam / 显式装配）时直接用它，不碰 wiring。`./wiring` 不静态拉 Monaco / kernel 运行时。
  */
 
 /* ------------------------------------------------------------------ *
- * 契约 v1 的**本地结构投影**（不静态 import @kojo/mcp-host：
- * 该包由路 B 提供、本工作树尚未到位；静态/类型 import 会触发 TS2307 且把包拖进开机图）。
- * 字段名与冻结契约逐字一致；集成到位后可换成 `import type` 而不改任何调用点。
+ * 冻结契约 v1 的类型：全部走 `import type`（纯类型、编译期擦除、零运行时边）。
+ * 真源是 `@kojo/mcp-host`；本桥不再维护本地结构投影（消灭 @ts-ignore 的那份临时物）。
  * ------------------------------------------------------------------ */
-export type McpTier = 'read' | 'edit' | 'privileged';
+import type {
+  McpHostDeps,
+  McpCapabilityRegistry,
+  McpSessionScope,
+} from '@kojo/mcp-host';
 
-export interface McpSessionScope {
-  readonly sessionId: string;
-  readonly clientId: string;
-  readonly tier: McpTier;
-  readonly approvedRoots: readonly string[];
-  readonly approvedTools: readonly string[];
-}
+// 从本桥再导出一份契约类型：既保住既有 `from './mcp/host-bridge'` 的调用点，
+// 又让类型只有一处真源（`export type` 同样擦除，不进开机静态图）。
+export type {
+  McpHostDeps,
+  McpCapabilityRegistry,
+  McpSessionScope,
+  McpTier,
+} from '@kojo/mcp-host';
 
 export type McpMethod =
   | 'tools/list'
@@ -57,16 +62,6 @@ export interface McpRespondArgs {
   readonly error?: { readonly code: string; readonly message: string };
 }
 
-/** `McpCapabilityRegistry` 的最小投影：六种 method 恰好一一对应。 */
-export interface McpCapabilityRegistry {
-  listTools(scope: McpSessionScope): readonly unknown[];
-  listResources(): readonly unknown[];
-  listPrompts(): readonly unknown[];
-  callTool(name: string, args: Record<string, unknown>, scope: McpSessionScope): Promise<unknown>;
-  readResource(uri: string, scope: McpSessionScope): Promise<unknown>;
-  getPrompt(name: string, args: Record<string, unknown>, scope: McpSessionScope): Promise<unknown>;
-}
-
 /* ------------------------------------------------------------------ *
  * 注入 seam（无 Tauri / 无路 B 包也能对拍）
  * ------------------------------------------------------------------ */
@@ -78,15 +73,15 @@ export interface McpBridgeTransport {
 }
 
 export type McpRegistryFactory = (
-  deps: unknown,
+  deps: McpHostDeps | undefined,
 ) => McpCapabilityRegistry | Promise<McpCapabilityRegistry>;
 
 export interface McpHostBridgeOptions {
   transport?: McpBridgeTransport;
-  /** 注入时用假注册表，绕开 `@kojo/mcp-host` 动态 import（测试 / 未到位前）。 */
+  /** 注入时用假注册表，绕开 `@kojo/mcp-host` 动态 import（测试 seam）。 */
   registryFactory?: McpRegistryFactory;
-  /** `createMcpCapabilityRegistry(deps)` 的 deps；形状由路 B 定，集成时注入。 */
-  deps?: unknown;
+  /** `createMcpCapabilityRegistry(deps)` 的 deps；不注入时由 `./wiring` 在首条请求时组装。 */
+  deps?: McpHostDeps;
   /** 请求超时（毫秒），默认 30_000。 */
   timeoutMs?: number;
   /** 返回体积上限（UTF-8 字节），默认 4 MiB。 */
@@ -108,18 +103,25 @@ const defaultTransport: McpBridgeTransport = {
   },
 };
 
-/** 默认 registry 工厂：`createMcpCapabilityRegistry` 在此**动态 import**，绝不在模块顶层拉起。 */
-async function defaultRegistryFactory(deps: unknown): Promise<McpCapabilityRegistry> {
-  // @ts-ignore —— @kojo/mcp-host 由路 B 提供；集成时主 agent 补 tsconfig / vite alias（本路不可改）。
-  const mod = (await import('@kojo/mcp-host')) as {
-    createMcpCapabilityRegistry(deps: unknown): McpCapabilityRegistry;
-  };
-  return mod.createMcpCapabilityRegistry(deps);
+/**
+ * 默认 registry 工厂（`createMcpCapabilityRegistry` 在此**动态 import**，绝不在模块顶层拉起）：
+ * - 首条请求到达才把 `@kojo/mcp-host` 与 `./wiring` 一起动态装载 ⇒ 两者都不进 bootstrap
+ *   开机静态图（ps10 闸）；`./wiring` 也不静态拖 Monaco / kernel 运行时。
+ * - 注入了 deps（单测 seam / 显式装配）就直接用，不碰 wiring；未注入时用 wiring
+ *   `createMcpHostDeps()` 组装真实 McpHostDeps（接不到真源的腿由 registry 显式报 NOT_WIRED /
+ *   RESOURCE_UNAVAILABLE，不静默、不伪造读数）。
+ */
+async function defaultRegistryFactory(deps: McpHostDeps | undefined): Promise<McpCapabilityRegistry> {
+  const hostPromise = import('@kojo/mcp-host');
+  const wiringPromise = deps === undefined ? import('./wiring') : Promise.resolve(null);
+  const [host, wiring] = await Promise.all([hostPromise, wiringPromise]);
+  const realDeps: McpHostDeps = deps ?? wiring?.createMcpHostDeps() ?? {};
+  return host.createMcpCapabilityRegistry(realDeps);
 }
 
 let transport: McpBridgeTransport = defaultTransport;
 let registryFactory: McpRegistryFactory | null = null;
-let registryDeps: unknown = {};
+let registryDeps: McpHostDeps | undefined;
 let timeoutMs = DEFAULT_TIMEOUT_MS;
 let maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES;
 let registryPromise: Promise<McpCapabilityRegistry> | null = null;
