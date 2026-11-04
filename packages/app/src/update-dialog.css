@@ -291,6 +291,32 @@
   min-height: 1.8em;
 }
 
+/* 行内富文本（UPD-F）：changelog 非 URL 文本段的两种最常用行内标记。
+   strong 只强调不换色：字重 600 + 正文色 --fg，说明行里不引入第五种花色；
+   code 配方整份照抄效果库 `.u-chip`（styles-project.css 末条）——行内代码芯片是已收口的
+   家族配方（--radius-xs 的定义点注释就写着"行内代码芯片"），tutorial-surface.css 同款理由
+   在这里重抄一份：弹窗可能先于 styles-project 进 bundle，不能依赖那张表在场。
+   chip 底缺省 --surface-overlay，压在 --surface-sunken 井面上自然浮起半档；em 记账跟正文
+   字号缩放。等宽栈吃 --font-mono（全局 `code` 元素那格的同一份，不造第二份）。 */
+.update-dialog-note-line strong {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.update-dialog-note-line code {
+  font-family: var(--font-mono);
+  background: var(--chip-bg, var(--surface-overlay));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  padding: 0.06em 0.34em;
+  font-size: 0.9em;
+  color: var(--chip-fg, var(--fg));
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
 .update-dialog-notes-empty {
   margin: 0;
   padding: var(--space-4) var(--space-3);

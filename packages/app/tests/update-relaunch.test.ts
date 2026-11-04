@@ -8,7 +8,8 @@
  *    （'updater_relaunch' 与 Rust 侧同源）、静默（invoke reject 绝不上抛）；
  * 2. **静态接线闸**：ShellLayout 真把 `onRestart={appRelaunch}` 挂上了、lib.rs 真把
  *    命令注册进 invoke_handler 了、Rust 命令文件真在——口径照 `update-wiring.test.ts`，
- *    静态读源码，不起壳。
+ *    静态读源码，不起壳。UPD-F（2026-11-05）补第四处：欢迎页 `App.tsx` 的
+ *    `<LazyUpdateFlowHost>` 也挂上了 onRestart（动态边回调形态，开机图零增长）。
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -74,7 +75,10 @@ describe('静态接线闸：prop 真挂上、命令真注册（口径照 update-
     // 挂载点必须是 UpdateDialog 渲染处：onRestart 紧跟 UpdateDialog 的属性串里
     const dialogAt = shellLayout.indexOf('<UpdateDialog');
     expect(dialogAt).toBeGreaterThan(-1);
-    const restartAt = shellLayout.indexOf('onRestart={appRelaunch}');
+    // 从 UpdateDialog 挂载点**往后**找 onRestart：UPD-D（2026-11-05）给设置页也挂了同一
+    // 字面量（SettingsPanel props，位于模态之前），改前"全文首个"的找法会先命中设置页
+    // 那处 ⇒ 本闸在 UPD-D 落地后假红（UPD-F 批修复，判据意图不变：模态自己的属性串里有它）。
+    const restartAt = shellLayout.indexOf('onRestart={appRelaunch}', dialogAt);
     expect(restartAt).toBeGreaterThan(dialogAt);
     expect(shellLayout.slice(dialogAt, restartAt)).not.toContain('/>');
   });
@@ -102,5 +106,24 @@ describe('静态接线闸：prop 真挂上、命令真注册（口径照 update-
     expect(source).toContain('#[tauri::command]');
     expect(source).toContain('pub fn updater_relaunch(app: tauri::AppHandle)');
     expect(source).toContain('app.restart()');
+  });
+
+  it('欢迎页的 <LazyUpdateFlowHost> 也挂上 onRestart（动态边回调：开机图零增长，UPD-F）', () => {
+    const appTsx = read('ui/App.tsx');
+    const hostAt = appTsx.indexOf('<LazyUpdateFlowHost');
+    expect(hostAt, 'App.tsx 里没有 <LazyUpdateFlowHost 的 JSX 挂载').toBeGreaterThan(-1);
+    // 形态必须是**动态边回调**（ps10 闸字节敏感、App.tsx 在图内）：update-relaunch 已被
+    // ShellLayout 静态引入，这里动态引用同一枚 chunk ⇒ 开机图零增长。改回静态 import
+    // 'appRelaunch' 或 './update-flow' 都会动开机图（后者另有 update-wiring.test.ts 的红线）。
+    const dynamicEdge = "void import('./update-relaunch').then((m) => m.appRelaunch())";
+    const restartAt = appTsx.indexOf(dynamicEdge, hostAt);
+    expect(
+      restartAt,
+      '欢迎页 onRestart 没走动态边回调（形态：void import(./update-relaunch).then(m => m.appRelaunch())）',
+    ).toBeGreaterThan(hostAt);
+    // 回调长在挂载点自己的属性串里：hostAt 与回调之间不许先自闭合，且确实挂在 onRestart prop 上
+    const attrs = appTsx.slice(hostAt, restartAt);
+    expect(attrs, '动态边没长在 <LazyUpdateFlowHost 的属性串里（中途自闭合了）').not.toContain('/>');
+    expect(attrs, '动态边必须挂在 onRestart prop 上').toContain('onRestart={');
   });
 });

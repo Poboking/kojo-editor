@@ -174,6 +174,74 @@ describe('UpdateDialog：downloading / done / failed', () => {
 });
 
 /**
+ * UPD-F（2026-11-05）行内富文本微渲染的判据。每条钉 **DOM 结构**（renderToStaticMarkup
+ * 的逐字节片段），不钉快照——结构就是契约：`<strong>` / `<code>` 只在闭合标记处出现、
+ * 未闭合原样成文、URL 段永远先于富文本（先 linkify 后富文本）。
+ */
+describe('changelog 行内富文本（UPD-F）', () => {
+  const noteLine = (line: string): string =>
+    html({ kind: 'found', version: '0.5.0', notes: line }).match(
+      /<p class="update-dialog-note-line">[\s\S]*?<\/p>/,
+    )?.[0] ?? '';
+
+  it('加粗：`**甲**` → <strong>，两侧普通文本各自成 span（不整行裹进强调）', () => {
+    expect(noteLine('- 支持 **增量解析**')).toBe(
+      '<p class="update-dialog-note-line"><span>- 支持 </span><strong>增量解析</strong></p>',
+    );
+  });
+
+  it('代码：`` `savDir` `` → <code>，前后文不变', () => {
+    expect(noteLine('- 改 `savDir` 后生效')).toBe(
+      '<p class="update-dialog-note-line"><span>- 改 </span><code>savDir</code><span> 后生效</span></p>',
+    );
+  });
+
+  it('混排按出现顺序切；谁先出现谁先赢（代码里的星号、加粗里的反引号都是普通文本）', () => {
+    expect(noteLine('**甲** 与 `乙`')).toBe(
+      '<p class="update-dialog-note-line"><strong>甲</strong><span> 与 </span><code>乙</code></p>',
+    );
+    // 反引号先出现：一对代码整段成 <code>，内容里的 `**` 不再解释（不嵌套）
+    expect(noteLine('`a**b` c')).toBe(
+      '<p class="update-dialog-note-line"><code>a**b</code><span> c</span></p>',
+    );
+    // 星号先出现：一对加粗整段成 <strong>，内容里的反引号原样保留
+    expect(noteLine('**a`b**')).toBe(
+      '<p class="update-dialog-note-line"><strong>a`b</strong></p>',
+    );
+  });
+
+  it('未闭合按原文渲染：`**只有一边` / `****` / 半对反引号都不产生 <strong>/<code>', () => {
+    expect(noteLine('**只有一边')).toBe(
+      '<p class="update-dialog-note-line"><span>**只有一边</span></p>',
+    );
+    expect(noteLine('****')).toBe('<p class="update-dialog-note-line"><span>****</span></p>');
+    expect(noteLine('未闭合 `代码')).toBe(
+      '<p class="update-dialog-note-line"><span>未闭合 `代码</span></p>',
+    );
+  });
+
+  it('URL 优先级最高：链接两侧的星号按普通文本、URL 永远是纯 <a>（先 linkify 后富文本）', () => {
+    const out = noteLine('**看 https://x 后续**');
+    expect(out).toBe(
+      '<p class="update-dialog-note-line"><span>**看 </span>' +
+        '<a class="update-dialog-note-link" href="https://x" target="_blank" rel="noopener noreferrer">https://x</a>' +
+        '<span> 后续**</span></p>',
+    );
+    expect(out).not.toContain('<strong>');
+    // 反向面：URL 撞上代码标记也是 URL 赢——反引号不在 URL 字符集里，被切出去按普通文本
+    const codeMangled = noteLine('看 `https://x`');
+    expect(codeMangled).toContain('<a class="update-dialog-note-link" href="https://x"');
+    expect(codeMangled).not.toContain('<code>');
+  });
+
+  it('转义不支持（明说的取舍）：`\\*\\*` 里没有连续星号，整段按原文成文', () => {
+    expect(noteLine('\\*\\*不是标记\\*\\*')).toBe(
+      '<p class="update-dialog-note-line"><span>\\*\\*不是标记\\*\\*</span></p>',
+    );
+  });
+});
+
+/**
  * UPD-C UI 打磨批（2026-11-05）的 CSS 判据。node 池量不到屏上像素，但「用没用对 token、
  * 配方对不对」可以静态钉死（读 CSS 的口径同 `shell-notice-density.test.ts`）；每条判据
  * 头上挂着它的对比度/几何算术（sRGB 合成算法同 `theme-contrast.test.ts`），谁要改值先改算式。
@@ -239,5 +307,34 @@ describe('更新面 CSS 打磨判据（UPD-C）', () => {
     // 不然不定态读起来像"卡在半道"
     expect(from, 'from 收得太小 ⇒ 光带没扫到左端就读不出"在进行"').toBeLessThanOrEqual(-50);
     expect(0.38 * to, 'to 的带左缘不够靠右 ⇒ 光带扫不到轨道右端').toBeGreaterThanOrEqual(80);
+  });
+});
+
+/**
+ * UPD-F 的 CSS 判据（读法同上）：strong 只强调不换色，code 走效果库 `.u-chip` 同一条
+ * 芯片配方 + 全局 `code` 元素的同一份等宽栈——弹窗先于 styles-project 进 bundle，
+ * 配方整份照抄是刻意的，这里钉住「抄的是这一份」不走样。
+ */
+describe('changelog 行内富文本 CSS 判据（UPD-F）', () => {
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  const dialogCss = read('../src/update-dialog.css');
+
+  it('strong：600 + 正文色（强调靠字重，不引入第五种花色）', () => {
+    const block = /(^|\n)\.update-dialog-note-line strong \{([^}]*)\}/.exec(dialogCss)?.[2] ?? '';
+    expect(block, 'strong 字重丢了').toContain('font-weight: 600');
+    expect(block, 'strong 字色必须吃 --fg').toContain('color: var(--fg)');
+  });
+
+  it('code：等宽栈与全局 code 元素同源（--font-mono），芯片配方与 .u-chip 同一条', () => {
+    const block = /(^|\n)\.update-dialog-note-line code \{([^}]*)\}/.exec(dialogCss)?.[2] ?? '';
+    expect(block, '等宽栈要吃 --font-mono（全局 code 元素那一份，别造第二份）').toContain(
+      'font-family: var(--font-mono)',
+    );
+    expect(block, '芯片底与 .u-chip 同配方（chip-bg 缺省落 --surface-overlay）').toContain(
+      'background: var(--chip-bg, var(--surface-overlay))',
+    );
+    expect(block, '芯片圆角走 --radius-xs（定义点注释就写着"行内代码芯片"）').toContain(
+      'border-radius: var(--radius-xs)',
+    );
   });
 });

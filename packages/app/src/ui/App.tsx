@@ -3121,7 +3121,13 @@ export function App(): ReactElement {
             进项目时这张树卸载、由 ShellLayout 里同款 hook 接手；两处各查一次，
             「同一版几天不再打扰」落在 localStorage 的免打扰偏好上，不会重复举卡。 */}
         <Suspense fallback={null}>
-          <LazyUpdateFlowHost />
+          {/* onRestart 走动态边回调（UPD-F）：update-relaunch 已被 ShellLayout 静态引入，
+              这里动态引用同一枚 chunk ⇒ 开机图零增长（ps10 闸字节敏感，App.tsx 在图内）。 */}
+          <LazyUpdateFlowHost
+            onRestart={() => {
+              void import('./update-relaunch').then((m) => m.appRelaunch());
+            }}
+          />
         </Suspense>
       </>
     );

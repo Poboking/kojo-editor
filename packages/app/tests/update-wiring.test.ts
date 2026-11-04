@@ -46,8 +46,10 @@ describe('更新流程只有一处真源（内联那套必须拆干净）', () =
 
 describe('欢迎页也收得到更新（缺陷①：不开项目的作者过去永远收不到）', () => {
   it('App 的无项目分支挂更新宿主，且走动态边（开机图不吃 updater 插件）', () => {
-    const host = app.indexOf('<LazyUpdateFlowHost />');
-    expect(host, 'App.tsx 里没有 <LazyUpdateFlowHost />').toBeGreaterThan(-1);
+    // 前缀匹配（UPD-F 批改形）：欢迎页宿主长出了 onRestart prop（「立即重启」接线），
+    // 不再是自闭合 `<LazyUpdateFlowHost />`——判据意图不变：宿主仍挂在 App 的无项目分支。
+    const host = app.indexOf('<LazyUpdateFlowHost');
+    expect(host, 'App.tsx 里没有 <LazyUpdateFlowHost 的 JSX 挂载').toBeGreaterThan(-1);
     expect(app).toContain("lazy(() => import('./update-flow')");
     expect(app, '更新宿主被静态 import ⇒ 会进开机图').not.toMatch(/^import .*from '.\/update-flow';$/m);
     const welcome = app.indexOf('<WelcomeOverlayHost kernel={kernel} />');

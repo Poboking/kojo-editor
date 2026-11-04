@@ -18,6 +18,10 @@
  * - **完成态给「立即重启」**：宿主提供 `onRestart` 时它是主行动（关=稍后重启）；没有就不画
  *   （当前宿主尚无重启命令，接线登记在批次报告，不在这里假按钮）。
  *
+ * UPD-F（2026-11-05）增补：changelog 的**非 URL 文本段**支持两种最常用的行内标记——
+ * `**加粗**` → `<strong>`、`` `代码` `` → `<code>`（`renderInlineRich`）。URL 段优先级
+ * 最高：先 linkify 后富文本，所以 `**看 https://x**` 里 URL 仍是纯链接、两侧星号按普通文本处理。
+ *
  * 关闭语义（刻意选择"busy 也允许关"）：
  * - `downloadAndInstall` 一旦发出就**不可取消**，关面板不会中断安装；
  * - 把作者锁在一个全屏模态里等下载是坏体验（VSCode 的更新通知从不阻塞编辑器）；
@@ -26,6 +30,7 @@
  */
 
 import {
+  Fragment,
   useEffect,
   useId,
   useRef,
@@ -76,7 +81,72 @@ export interface UpdateDialogProps {
 const FOCUSABLE =
   'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
-/** 一行说明 → 段数组 → React 节点（URL 段画成外链锚点，其余原样成文） */
+/**
+ * 非 URL 文本段的行内富文本微渲染（UPD-F）：`**加粗**` → `<strong>`、`` `代码` `` → `<code>`。
+ *
+ * 纪律（每条都对着测试钉）：
+ * - **单遍扫描、先到先得**：从左到右走，同段混排按出现顺序切——`` `a**b` `` 里星号进代码、
+ *   `**a`b**` 里反引号进加粗；标记内容**整段当纯文本**，不再向里解释（不嵌套、不递归）；
+ * - **未闭合 / 空内容按原文渲染**：`**只有一边` 原样出，`****` 与两个空反引号也是纯文本；
+ * - **转义不支持（明说的取舍）**：`\*\*` 里没有连续两个星号，天然按原文走，不另设转义语法。
+ *
+ * 返回节点全部带 key（keyPrefix 区分同一行里不同的文本段，避免与 URL 段的序号键撞车）。
+ */
+function renderInlineRich(text: string, keyPrefix: string): ReactElement[] {
+  const nodes: ReactElement[] = [];
+  /** 攒着的普通文本：遇到标记或收尾时一次性落成一个 span，不逐字符开节点 */
+  let plain = '';
+  const flush = (): void => {
+    if (plain !== '') {
+      nodes.push(<span key={`${keyPrefix}t${nodes.length}`}>{plain}</span>);
+      plain = '';
+    }
+  };
+  let i = 0;
+  while (i < text.length) {
+    const bold = text.indexOf('**', i);
+    const code = text.indexOf('`', i);
+    if (bold === -1 && code === -1) {
+      plain += text.slice(i);
+      break;
+    }
+    if (bold !== -1 && (code === -1 || bold < code)) {
+      const close = text.indexOf('**', bold + 2);
+      if (close > bold + 2) {
+        // 先把本标记之前攒到的普通文本落盘（它属于上一个节点），再落 strong
+        plain += text.slice(i, bold);
+        flush();
+        nodes.push(<strong key={`${keyPrefix}b${nodes.length}`}>{text.slice(bold + 2, close)}</strong>);
+        i = close + 2;
+      } else {
+        // 未闭合（或 `****` 这类空内容）：这对星号按普通文本，跳过它们继续扫
+        plain += text.slice(i, bold + 2);
+        i = bold + 2;
+      }
+      continue;
+    }
+    const close = text.indexOf('`', code + 1);
+    if (close > code + 1) {
+      plain += text.slice(i, code);
+      flush();
+      nodes.push(<code key={`${keyPrefix}c${nodes.length}`}>{text.slice(code + 1, close)}</code>);
+      i = close + 1;
+    } else {
+      plain += text.slice(i, code + 1);
+      i = code + 1;
+    }
+  }
+  flush();
+  return nodes;
+}
+
+/**
+ * 一行说明 → 段数组 → React 节点（URL 段画成外链锚点，其余原样成文）。
+ *
+ * 顺序纪律：**先 linkify 后富文本**——URL 段优先级最高（`linkifyUpdateNoteLine` 先把 URL
+ * 从行里切走），富文本只作用于 URL 之外的纯文本段，所以 `**看 https://x**` 里 URL 仍是
+ * 纯链接、两侧星号按普通文本处理；代码标记里也不会长出链接。
+ */
 function renderNoteLine(line: string, key: number): ReactElement {
   const segments: readonly UpdateNoteSegment[] = linkifyUpdateNoteLine(line);
   return (
@@ -86,7 +156,7 @@ function renderNoteLine(line: string, key: number): ReactElement {
       ) : (
         segments.map((seg, i) =>
           seg.url === undefined ? (
-            <span key={i}>{seg.text}</span>
+            <Fragment key={i}>{renderInlineRich(seg.text, `s${i}`)}</Fragment>
           ) : (
             // 原生 <a target="_blank">＝壳层既有外链形态（WebView2 交给系统默认浏览器），
             // rel=noopener 切断新页面对本窗口的反向引用
