@@ -810,3 +810,39 @@ export function updateNoticeCardTitle(phase: UpdateDialogPhase): string {
   }
 }
 
+/* ============================================================================
+ * 批次 UPD-E（2026-11-05 · 应用常开的定时重查）· 纯判据。
+ *
+ * 改前检查时机只有两条：「挂载后 3 秒一次 + 手动 checkNow」——应用一开一整天的作者，
+ * 期间发布了新版完全无感（除非重启）。本节补第三条触发线：**定时重查**（每 4 小时）。
+ * 判据住这里（零 React、零宿主 API），`setInterval` 的接线在 `update-flow.tsx`，
+ * 与 UPD-A 四件同款分层；行为面测试在 `update-flow-robust.test.ts` 的 UPD-E 节。
+ * ========================================================================== */
+
+/**
+ * 定时重查的间隔：4 小时。取值考虑：应用常开一整天至少自查 2–3 次；又不能密到
+ * 拿私仓 404 当心跳打（检查失败是常态路径，「绝不打扰」这条产品红线也包括不打网络）。
+ */
+export const UPDATE_RECHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * 定时重查到点时，当前状态机该不该真发起检查（UPD-E 的**状态闸**，唯一判据）。
+ *
+ * 只放行三态：
+ * - `idle`：还没查过（自动检查被挂载去重跳过、或静默窗没到）——到点重查顶上；
+ * - `latest`：上一轮结论「已最新」——常开 4 小时后这句话可能已经过期；
+ * - `failed(stage='check')`：上一轮检查失败（私仓端点 404 是常态）——到点默默重试，
+ *   失败态照旧可见、绝不弹窗。
+ *
+ * 其余一律不放行：
+ * - `found` / `downloading`：有更新正摆在作者眼前，重查毫无意义还添乱——`performCheck`
+ *   会先 `releaseFound()`，会把正在下载的那条 Update 宿主资源直接关掉；
+ * - `done`：装完了，重查要么查到同一版、要么白打一轮网络；
+ * - `failed(install)`：失败态挂着 release 供「重试」复用，重查会把这条失败态顶掉；
+ * - `checking`：检查已在途，重入只会作废在途结果、白打一轮网络。
+ */
+export function shouldFirePeriodicRecheck(phase: UpdatePhase): boolean {
+  if (phase.kind === 'failed') return phase.stage === 'check';
+  return phase.kind === 'idle' || phase.kind === 'latest';
+}
+

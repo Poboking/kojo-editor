@@ -13,9 +13,11 @@ import {
   raceWithTimeout,
   reasonFromUpdateError,
   reduceUpdatePhase,
+  shouldFirePeriodicRecheck,
   shouldSkipAutoCheck,
   UPDATE_CHECK_TIMEOUT_MS,
   UPDATE_CHECK_TIMEOUT_REASON,
+  UPDATE_RECHECK_INTERVAL_MS,
   type AutoCheckOutcome,
   type AutoCheckRecord,
   type UpdateAction,
@@ -62,6 +64,20 @@ import { UpdateNoticeCard, useUpdateNotice } from './UpdateNoticeCard';
  * 5. **装完也还资源**：install 成功过去只把 foundRef 置 null、`Update` 宿主资源没还——
  *    现在成功也走一次 `releaseFound()`（Windows 上进程通常已被安装器带走，这步给
  *    "装完进程还在"的平台兜底；失败路径有意保留资源供重试复用）。
+ *
+ * ## 本批（UPD-E · 2026-11-05）改的是什么
+ *
+ * 一件功能 + 一处注释对账：
+ * 1. **定时重查**：改前检查时机只有「挂载后 3 秒一次 + 手动 checkNow」，应用一开一整天
+ *    的作者，期间发布了新版完全无感（除非重启）。现在常开期间每 4 小时
+ *    （`UPDATE_RECHECK_INTERVAL_MS`）静默重查一次。到点**先过状态闸**
+ *    （`shouldFirePeriodicRecheck`：只有 idle / latest / failed(check) 放行——有更新在眼前
+ *    或安装链进行中时重查毫无意义还添乱），再 `performCheck('auto')`；**不受挂载去重
+ *    （`shouldSkipAutoCheck`）拦**——那是「同一时刻多处挂载」的会话去重（5 分钟 TTL），
+ *    4 小时的重查是新的决策点，两条判据各管各的窗口（详见 effect 上的注释）。
+ *    失败照旧只落状态：私仓端点 404 是常态，重查绝不弹窗；
+ * 2. **注释对账**：`UseUpdateFlowOptions.onRestart` 的注释还写着「当前仓没有对应 Rust
+ *    命令」——UPD-B 已落 `updater_relaunch` 且 ShellLayout / App 两处都接了，改成现状。
  */
 
 export const AUTO_UPDATE_CHECK_DELAY_MS = 3000;
@@ -87,7 +103,8 @@ export interface UseUpdateFlowOptions {
   readonly enableAutoCheck?: boolean;
   /**
    * 安装完成后的「立即重启」通道（宿主有 relaunch 命令时传入）。
-   * 当前仓没有对应 Rust 命令 ⇒ 缺省不画按钮，登记在批次报告的待接线里。
+   * 真实命令已接线（UPD-B 落 `updater_relaunch`，ShellLayout / App 两处都传 `appRelaunch`）；
+   * 缺省不画按钮只是非 Tauri 宿主（浏览器 dev / node 测试）的保护。
    */
   readonly onRestart?: () => void;
 }
@@ -235,6 +252,27 @@ export function useUpdateFlow(options?: UseUpdateFlowOptions): UpdateFlow {
       void performCheck('auto');
     }, autoCheckDelayMs);
     return () => window.clearTimeout(timer);
+  }, [enableAutoCheck, autoCheckDelayMs, performCheck]);
+
+  /**
+   * 定时重查（UPD-E）：应用常开期间每 4 小时静默重查一次——一开一整天的作者，期间发布
+   * 的新版不该等到重启才看见。挂载条件与静默检查同门（自动检查开着 + Tauri 宿主 +
+   * 非纯手动宿主），但到点**只过状态闸**、不过挂载去重——两条判据的分工：
+   * - `shouldSkipAutoCheck`（挂载去重）：管的是「**同一时刻多处挂载**」——欢迎页与
+   *   ShellLayout 几秒内先后挂载，别每处都打一遍网络，5 分钟 TTL；
+   * - `shouldFirePeriodicRecheck`（状态闸）：管的是「**这个状态重查有没有意义**」——
+   *   有更新在眼前（found）/ 下载安装链进行中 / 检查在途时重查只会添乱。
+   *   4 小时的到点是新的决策点：即便 3 分 59 秒前刚手动查过（记录 fresh），常开作者
+   *   的「已最新」也可能在下一刻过期——去重窗本来就拦不住也不该拦这条线，且 5 分钟
+   *   TTL 对 4 小时的间隔必然早已过期，两者无互相干扰。
+   */
+  useEffect(() => {
+    if (!enableAutoCheck || !isTauri() || autoCheckDelayMs <= 0) return;
+    const timer = window.setInterval(() => {
+      if (!shouldFirePeriodicRecheck(phaseRef.current)) return;
+      void performCheck('auto');
+    }, UPDATE_RECHECK_INTERVAL_MS);
+    return () => window.clearInterval(timer);
   }, [enableAutoCheck, autoCheckDelayMs, performCheck]);
 
   // 卸载时把没在安装的那条 Update 还给宿主；下载中不关，免得把安装打断

@@ -13,14 +13,20 @@
  *
  * 模块级状态注意：会话去重的入账记录住在 `update-flow.tsx` 模块级、**跨用例共享**，
  * 只能用时间洗掉 ⇒ 每条用例开头（beforeEach）先越过 2× 去重窗，再谈各自的时间线。
+ *
+ * UPD-E（2026-11-05）补**定时重查**（4h interval）的行为面：到点过状态闸
+ * （`shouldFirePeriodicRecheck`，纯判据的五态穷尽表在 `update-check.test.ts`）再发检查、
+ * 不受挂载去重拦、卸载清干净 / StrictMode 双挂双清、纯手动宿主不挂。注意 UPD-E 起
+ * 默认挂载的用例会**多挂一枚 4h interval**——数 `vi.getTimerCount()` 的既有断言随之 +1。
  */
-import { act, createElement } from 'react';
+import { StrictMode, act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AUTO_CHECK_DEDUP_MS,
   UPDATE_CHECK_TIMEOUT_MS,
   UPDATE_CHECK_TIMEOUT_REASON,
+  UPDATE_RECHECK_INTERVAL_MS,
   isUpdateBusy,
 } from '../src/ui/update-check';
 import { useUpdateFlow, type UpdateFlow, type UseUpdateFlowOptions } from '../src/ui/update-flow';
@@ -111,10 +117,13 @@ async function fireAutoCheck(): Promise<void> {
 }
 
 /**
- * 每条用例的假时钟纪元（整体单调前移 1 小时）。模块级去重记录跨用例共享，而假时钟
+ * 每条用例的假时钟纪元（整体单调前移 24 小时）。模块级去重记录跨用例共享，而假时钟
  * **每条用例都从真实时刻重新起算**：上一条用例入账的 `at` 常常领先下一条的 `now`
  * （差值是负的 ⇒ `now - at < TTL` 反而判成「窗口内」误跳过）。把每条用例钉在自己的
  * 纪元上，上一条留下的任何入账必然已过期——判据是纯时间算术，顺序无关。
+ * UPD-E 起单条用例内部会推进最多 12h（4h tick 重查链），纪元步长必须**大于单条用例
+ * 的最大推进量**——1 小时的旧步长会让上一条 tick 入账的记录落在下一条时钟的未来，
+ * 级联毒化后面所有用例（2026-11-05 实测 6 连挂的病根）。
  */
 let testEpochMs = 0;
 
@@ -123,7 +132,7 @@ beforeEach(() => {
   document.body.appendChild(container);
   window.localStorage.clear();
   vi.useFakeTimers();
-  testEpochMs += 3_600_000;
+  testEpochMs += 86_400_000;
   vi.setSystemTime(testEpochMs);
   checkMock.mockReset();
   invokeMock.mockReset();
@@ -178,9 +187,10 @@ describe('检查看门狗（UPD-A 第 1 件）', () => {
     checkMock.mockImplementation(() => blackHole());
     await mountFlow();
     await fireAutoCheck();
-    expect(vi.getTimerCount()).toBe(1); // 只剩看门狗（静默窗定时器已响）
+    // UPD-E 起默认挂载还多挂一枚 4h interval：看门狗 + interval = 2
+    expect(vi.getTimerCount()).toBe(2);
     await unmountFlow();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(0); // interval 也被卸载清理收走
   });
 });
 
@@ -411,5 +421,225 @@ describe('下载进度节流与终态冲刷（UPD-A 第 3 件）+ 装完还资�
     expect(flow.phase).toMatchObject({ kind: 'done' });
     expect(vi.getTimerCount()).toBe(0);
     expect(update.close).toHaveBeenCalledTimes(1); // 第二次成功：归还资源
+  });
+});
+
+describe('定时重查（UPD-E）：4h interval 的接线行为', () => {
+  it('4h 到点且 latest 态 ⇒ 真的发起检查（挂载去重的 5 分钟 TTL 早已过期，两条判据无互相干扰）', async () => {
+    checkMock.mockResolvedValue(null);
+    await mountFlow();
+    await fireAutoCheck();
+    expect(checkMock).toHaveBeenCalledTimes(1);
+    expect(flow.phase).toEqual({ kind: 'latest' }); // auto → latest，此刻入账（at=T0+5s）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    // tick 到点：入账记录已 4 小时陈旧（5 分钟 TTL 必然过期）——真发起，不被任何判据拦
+    expect(checkMock).toHaveBeenCalledTimes(2);
+    expect(flow.phase).toEqual({ kind: 'latest' });
+  });
+
+  it('tick 前 1 分钟刚入账的 fresh 记录也拦不住重查（不受挂载去重拦的直接钉子）', async () => {
+    checkMock.mockResolvedValue(null);
+    // 静默窗特意压到 tick 前 1 分钟：auto 检查恰在 tick 前 60s 落 latest 并入账（fresh）。
+    // 若重查也走挂载去重（5 分钟 TTL），这一查必被拦——现在必须照查，才钉得住
+    // 「4 小时的到点是新的决策点，shouldSkipAutoCheck 根本不在这条线上」。
+    await mountFlow({ autoCheckDelayMs: UPDATE_RECHECK_INTERVAL_MS - 60_000 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS - 60_000);
+    });
+    expect(checkMock).toHaveBeenCalledTimes(1);
+    expect(flow.phase).toEqual({ kind: 'latest' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000); // tick 到点：记录仅 1 分钟新
+    });
+    expect(checkMock).toHaveBeenCalledTimes(2); // fresh 记录没拦住 ⇒ 重查不走挂载去重
+    expect(flow.phase).toEqual({ kind: 'latest' });
+  });
+
+  it('found 态到点不发起：close 未被调、状态机原地（重查会作废眼前的更新）', async () => {
+    const update = makeUpdate();
+    checkMock.mockResolvedValue(update);
+    await mountFlow();
+    await fireAutoCheck();
+    expect(flow.phase).toMatchObject({ kind: 'found', version: '0.2.0' });
+    expect(checkMock).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    expect(checkMock).toHaveBeenCalledTimes(1); // 没打网络
+    expect(flow.phase).toMatchObject({ kind: 'found', version: '0.2.0' }); // 状态机原地
+    expect(update.close).not.toHaveBeenCalled(); // 重查若发起会先 releaseFound() 关掉这条资源
+  });
+
+  it('downloading 态到点不发起：下载不被打断（重查会把在装的 Update 资源关掉）', async () => {
+    const update = makeUpdate();
+    const d = deferred<void>();
+    update.downloadAndInstall = vi.fn(() => d.promise);
+    checkMock.mockResolvedValue(update);
+    await mountFlow();
+    await fireAutoCheck();
+    expect(flow.phase).toMatchObject({ kind: 'found' });
+    let installPromise: Promise<void> | undefined;
+    act(() => {
+      installPromise = flow.install();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(flow.phase).toMatchObject({ kind: 'downloading' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    expect(checkMock).toHaveBeenCalledTimes(1); // 没打网络
+    expect(update.downloadAndInstall).toHaveBeenCalledTimes(1); // 下载没被重查打断
+    d.resolve(undefined);
+    await act(async () => {
+      await installPromise;
+    });
+    expect(flow.phase).toMatchObject({ kind: 'done' });
+  });
+
+  it('checking 态到点不发起：在途检查不被作废重打（tick 落在 20s 看门狗窗内）', async () => {
+    checkMock.mockImplementation(() => blackHole());
+    // 静默窗压到 tick 前 10s：tick 到点时检查在途（看门狗还有 10s 才响）。
+    // 推进拆三段：act 在段间冲刷渲染，phaseRef 才跟得上 'checking'（单次 advance 里
+    // 两个定时器回调之间 React 不重渲，闸会读到旧态——生产里触发点相隔数秒，无此窗）。
+    await mountFlow({ autoCheckDelayMs: UPDATE_RECHECK_INTERVAL_MS - 10_000 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS - 5_000); // 静默检查发起
+    });
+    expect(flow.phase).toEqual({ kind: 'checking' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000); // 跨过 tick（4h），看门狗（4h+10s）还没响
+    });
+    expect(checkMock).toHaveBeenCalledTimes(1); // tick 被状态闸拦下，没有重入
+    expect(flow.phase).toEqual({ kind: 'checking' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000); // 看门狗到点
+    });
+    expect(flow.phase).toEqual({ kind: 'failed', stage: 'check', reason: UPDATE_CHECK_TIMEOUT_REASON });
+  });
+
+  it('done 态到点不发起：装完了不再空转打网络', async () => {
+    const update = makeUpdate();
+    checkMock.mockResolvedValue(update);
+    await mountFlow();
+    await fireAutoCheck();
+    await act(async () => {
+      await flow.install();
+    });
+    expect(flow.phase).toMatchObject({ kind: 'done' });
+    expect(checkMock).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    expect(checkMock).toHaveBeenCalledTimes(1);
+    expect(flow.phase).toMatchObject({ kind: 'done' });
+  });
+
+  it('failed(install) 态到点不发起：失败态挂着 release 供重试，重查不顶掉它', async () => {
+    const update = makeUpdate();
+    update.downloadAndInstall = vi.fn(() => Promise.reject(new Error('断')));
+    checkMock.mockResolvedValue(update);
+    await mountFlow();
+    await fireAutoCheck();
+    await act(async () => {
+      await flow.install();
+    });
+    expect(flow.phase).toEqual({
+      kind: 'failed',
+      stage: 'install',
+      reason: '断',
+      release: { version: '0.2.0', currentVersion: '0.1.0' },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    expect(checkMock).toHaveBeenCalledTimes(1);
+    expect(flow.phase).toMatchObject({ kind: 'failed', stage: 'install' }); // 原地，可重试
+  });
+
+  it('failed(check) 态到点放行：上一轮失败的到点默默重试（私仓 404 是常态，照旧不弹窗）', async () => {
+    checkMock.mockRejectedValueOnce(new Error('HTTP 404')).mockResolvedValueOnce(null);
+    await mountFlow();
+    await fireAutoCheck();
+    expect(flow.phase).toEqual({ kind: 'failed', stage: 'check', reason: 'HTTP 404' });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    expect(checkMock).toHaveBeenCalledTimes(2); // 重查真发起了
+    expect(flow.phase).toEqual({ kind: 'latest' }); // 这次通了，落回 latest
+  });
+
+  it('卸载后 interval 清干净：绝不发起、无残留定时器；重挂是新周期不双发', async () => {
+    checkMock.mockResolvedValue(null);
+    await mountFlow();
+    await fireAutoCheck();
+    expect(checkMock).toHaveBeenCalledTimes(1);
+    await unmountFlow();
+    expect(vi.getTimerCount()).toBe(0); // interval 被卸载清理收走，不是只清静默窗定时器
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS * 2);
+    });
+    expect(checkMock).toHaveBeenCalledTimes(1); // 卸载后到点也绝不发起
+    await mountFlow();
+    await fireAutoCheck(); // 首轮入账早已过期（8 小时前），照查
+    expect(checkMock).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    // 新实例的 4h 周期恰一查。若旧 interval 泄漏（8h 推进时就会多打一轮），这里会是 4
+    expect(checkMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('StrictMode 双挂双清：effect 跑两遍只挂一枚 interval，到点恰一查、卸载全收', async () => {
+    checkMock.mockResolvedValue(null);
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        createElement(StrictMode, null, createElement(Probe, { options: DEDUP_OPTIONS, sink: (f) => { flow = f; } })),
+      );
+    });
+    await fireAutoCheck();
+    expect(checkMock).toHaveBeenCalledTimes(1); // autoFiredRef + cleanup 重排：静默检查恰一次
+    expect(vi.getTimerCount()).toBe(1); // 双挂后只剩 interval：静默窗定时器已响、看门狗已随结果拆掉
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    expect(checkMock).toHaveBeenCalledTimes(2); // 到点恰一查——若 interval 挂了两枚这里会是 3
+    expect(flow.phase).toEqual({ kind: 'latest' });
+    await unmountFlow();
+    expect(vi.getTimerCount()).toBe(0); // 双清干净
+  });
+
+  it('纯手动宿主不挂 interval：autoCheckDelayMs<=0 与 enableAutoCheck=false 到点零动作', async () => {
+    checkMock.mockResolvedValue(null);
+    await mountFlow({ autoCheckDelayMs: 0 });
+    expect(vi.getTimerCount()).toBe(0); // 静默检查与 interval 都不挂
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    expect(checkMock).not.toHaveBeenCalled();
+    await unmountFlow();
+
+    await mountFlow({ enableAutoCheck: false });
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(UPDATE_RECHECK_INTERVAL_MS);
+    });
+    expect(checkMock).not.toHaveBeenCalled();
+  });
+
+  it('手动 checkNow 不受 interval 存在影响：任何时刻照常立即查', async () => {
+    checkMock.mockResolvedValue(null);
+    // 静默窗压到 tick 之后：这段推进里没有自动检查，checkNow 的这一次是真·手动
+    await mountFlow({ autoCheckDelayMs: UPDATE_RECHECK_INTERVAL_MS + 60_000 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000); // 挂到 2h，interval 未到点
+      await flow.checkNow();
+    });
+    expect(checkMock).toHaveBeenCalledTimes(1); // 手动立即查，不等 interval
+    expect(flow.phase).toEqual({ kind: 'latest' });
   });
 });

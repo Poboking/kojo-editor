@@ -13,6 +13,7 @@ import {
   raceWithTimeout,
   reasonFromUpdateError,
   reduceUpdatePhase,
+  shouldFirePeriodicRecheck,
   shouldSkipAutoCheck,
   updateDialogPhase,
   updateDialogTitle,
@@ -27,6 +28,7 @@ import {
   UPDATE_NOTE_LINE_LIMIT,
   UPDATE_NOTES_EMPTY,
   UPDATE_REASON_MAX_CHARS,
+  UPDATE_RECHECK_INTERVAL_MS,
   UPDATE_SUBJECT,
   type AutoCheckRecord,
   type UpdateDialogPhase,
@@ -55,6 +57,10 @@ import {
  * 「累计 + 定时冲刷」（`createProgressFlusher`，可注入假定时器）、失败病因透传
  * （`reasonFromUpdateError`）。hook 一侧的接线（真 mount + 假时钟）在
  * `update-flow-robust.test.ts`。
+ *
+ * UPD-E（2026-11-05）再增定时重查的纯判据：`shouldFirePeriodicRecheck` 的**全态穷尽表**
+ * （`UpdatePhase` 八种形态逐一过闸，比任务面的「五态」更严——任务面没点名的 `checking`
+ * 也在表里钉死）+ 间隔常量。hook 一侧（真到点发不发起）在 `update-flow-robust.test.ts`。
  */
 
 const IDLE: UpdatePhase = { kind: 'idle' };
@@ -586,6 +592,35 @@ describe('shouldSkipAutoCheck：会话级自动检查去重判据（UPD-A）', (
   it('found 绝不入账 ⇒ 也绝不触发跳过（编辑器侧还要举卡，防御位）', () => {
     const t = 1_000_000;
     expect(shouldSkipAutoCheck({ outcome: 'found', at: t - 1 }, t)).toBe(false);
+  });
+});
+
+describe('shouldFirePeriodicRecheck：定时重查的状态闸（UPD-E）', () => {
+  /**
+   * 全态穷尽表：`UpdatePhase` 的八种形态逐一过闸，一态不许漏。
+   * 放行三态 = idle / latest / failed(check)；拦下五态 = checking / found / downloading /
+   * done / failed(install)（任务面说的「五态」按 kind 数，`failed` 按 stage 拆成两种、
+   * 加上没点名的 `checking` 一共八种）。穷尽靠这张表钉住：状态机将来加新态，
+   * 改判据的人必须先回答它在表里该是 true 还是 false。
+   */
+  it('全态穷尽表：idle / latest / failed(check) 放行，其余一律拦下', () => {
+    const table: ReadonlyArray<[UpdatePhase, boolean]> = [
+      [{ kind: 'idle' }, true],
+      [{ kind: 'checking' }, false], // 检查已在途：重入只会作废在途结果、白打一轮网络
+      [{ kind: 'latest' }, true],
+      [{ kind: 'found', version: '0.2.0' }, false],
+      [{ kind: 'downloading', received: 0, total: null, version: '0.2.0' }, false],
+      [{ kind: 'done', version: '0.2.0' }, false],
+      [{ kind: 'failed', stage: 'check' }, true],
+      [{ kind: 'failed', stage: 'install', release: { version: '0.2.0' } }, false],
+    ];
+    for (const [phase, expected] of table) {
+      expect(shouldFirePeriodicRecheck(phase), `phase=${JSON.stringify(phase)}`).toBe(expected);
+    }
+  });
+
+  it('间隔常量恰是 4 小时（改值必须是有意为之）', () => {
+    expect(UPDATE_RECHECK_INTERVAL_MS).toBe(4 * 60 * 60 * 1000);
   });
 });
 
