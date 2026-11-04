@@ -167,25 +167,27 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
 
     /**
      * 上次改的那一档（口上调试 UI 打磨批）：副侧栏同一时刻只挂一块面板，
-     * 切去「看这段会怎样」再切回来，本面板是重新挂载的——不记档位就要重选一次。
+     * 切去「状态回放」再切回来，本面板是重新挂载的——不记档位就要重选一次。
      * 存在**本插件自己的域**里（内核按 pluginId 隔离，不跨域读别人的记录）。
      * 还原等到扫描结果到位、且这一档真在清单里才落：删掉的档不会被还原成一个坏选择。
      */
-    const storedPathRef = useRef<string | null>(null);
+    // 存成 state 而不是 ref：读取是异步的，ref 改完不触发渲染 ⇒ 还原 effect 只在
+    // `path / rows` 自己变化时才跑，赶上扫描已结束就永远不还原（真机实测：切回来
+    // 档位仍是"选择档位…"）。state 一到，还原那条 effect 必然重跑一次。
+    const [storedPath, setStoredPath] = useState<string | null>(null);
     useEffect(() => {
       void ctx.storage
         .get<string>('last-archive')
         .then((v) => {
-          if (typeof v === 'string' && v !== '') storedPathRef.current = v;
+          if (typeof v === 'string' && v !== '') setStoredPath(v);
         })
         .catch(() => undefined);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
     useEffect(() => {
-      const want = storedPathRef.current;
-      if (want === null || path !== null) return;
-      if (rows.some((r) => r.path === want)) setPath(want);
-    }, [path, rows]);
+      if (storedPath === null || path !== null) return;
+      if (rows.some((r) => r.path === storedPath)) setPath(storedPath);
+    }, [storedPath, path, rows]);
     useEffect(() => {
       if (path === null) return;
       void ctx.storage.set('last-archive', path).catch(() => undefined);
@@ -422,7 +424,7 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       createElement(
         'div',
         { className: 'dbg-head-row' },
-        createElement('span', { className: 'dbg-head-title' }, '改这个状态'),
+        createElement('span', { className: 'dbg-head-title' }, '状态注入器'),
         createElement(
           'button',
           {
@@ -431,7 +433,7 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
             title: '拿这份存档去看这一段会说什么（回放面板）',
             onClick: () => ctx.bus.emit('ui.panel.reveal', { id: 'state-replay', source: 'snapshot-injector' }),
           },
-          '看台词 →',
+          '状态回放 →',
         ),
       ),
       createElement(

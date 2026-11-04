@@ -32,9 +32,9 @@ describe('口上调试 · 两面板互相给路', () => {
     expect(src).toContain("ctx.bus.emit('ui.panel.reveal', { id: 'state-replay'");
   });
 
-  it('两面板标题成对（说动作，不说实现名）', () => {
-    expect(read(REPLAY)).toContain("title: '看这段会怎样'");
-    expect(read('packages/plugins/ui-snapshot-injector/src/index.ts')).toContain("title: '改这个状态'");
+  it('两面板各报本职标题（工具名，不是代称）', () => {
+    expect(read(REPLAY)).toContain("title: '状态回放'");
+    expect(read('packages/plugins/ui-snapshot-injector/src/index.ts')).toContain("title: '状态注入器'");
   });
 });
 
@@ -70,5 +70,23 @@ describe('口上调试 · 写盘视觉同族', () => {
 
   it('写入动作吸底（滚到哪儿都能看见"这一下会写盘"）', () => {
     expect(read(PENDING)).toContain('dbg-action-bar');
+  });
+});
+
+describe('口上调试 · 记住上次那一档', () => {
+  it('注入面板的档位还原走 state，不走 ref', () => {
+    // 判据来历：写成 ref 时读取是异步的，ref 改完不触发渲染 ⇒ 还原 effect 只在
+    // path/rows 自己变化时才跑；赶上扫描先结束就永远不还原（真机实测过：切回面板
+    // 档位仍是"选择档位…"）。这条钉的就是"读到的值必须能叫醒渲染"。
+    const src = read(INJECTOR);
+    expect(src).toContain("useState<string | null>(null)");
+    expect(src).toContain('setStoredPath');
+    expect(src).not.toContain('storedPathRef');
+  });
+
+  it('回放面板的存档/角色/函数名也落盘并还原', () => {
+    const src = read(REPLAY);
+    expect(src).toContain("get<{ archivePath?: unknown; charaNo?: unknown; fnQuery?: unknown }>");
+    expect(src).toContain('set(LAST_DEBUG_TARGET_KEY');
   });
 });

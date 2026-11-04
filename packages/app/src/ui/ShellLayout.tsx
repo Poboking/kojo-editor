@@ -1922,8 +1922,8 @@ export function ShellLayout(props: Props): ReactElement {
       // 这里给一条直达命令（activate 同时置 visible:true），命令面板可搜「状态注入」。
       // 口上调试 UI 打磨批：两个面板同一族命名（说动作不说实现）。回放此前**没有命令入口**，
       // 只能靠副侧栏标签或编辑器右键——作者在命令面板里搜"调试"什么都搜不到。
-      { id: 'workbench.stateReplay', title: '打开调试：看这段会怎样', category: '工作台', run: () => dispatch({ type: 'activate', container: 'aux', key: 'state-replay' }) },
-      { id: 'workbench.snapshotInjector', title: '打开调试：改这个状态', category: '工作台', run: () => dispatch({ type: 'activate', container: 'aux', key: 'snapshot-injector' }) },
+      { id: 'workbench.stateReplay', title: '打开状态回放', category: '工作台', run: () => dispatch({ type: 'activate', container: 'aux', key: 'state-replay' }) },
+      { id: 'workbench.snapshotInjector', title: '打开状态注入器', category: '工作台', run: () => dispatch({ type: 'activate', container: 'aux', key: 'snapshot-injector' }) },
       // 文字缩放（A1）：走 font-size-pref 的档位真源，Monaco 原生 fontZoom contrib
       // 装载但未自带键位（standalone 无 workbench 绑定），键位由这张命令表给出
       // （缺省值登记在键位注册表，可查可改）。

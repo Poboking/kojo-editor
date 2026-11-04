@@ -96,7 +96,7 @@ const SCENES_STORAGE_KEY = 'replay-scenes';
 /**
  * 上次在调的那一段（口上调试 UI 打磨批）。
  *
- * 为什么必须存：副侧栏同一时刻只挂一块面板——切到「改这个状态」再切回来，
+ * 为什么必须存：副侧栏同一时刻只挂一块面板——切到「状态注入器」再切回来，
  * 回放面板是**重新挂载**的，`archivePath / charaNo / fnQuery` 三个 state 全部归零，
  * 连刚判完的结果也没了。作者的体感就是"两块功能，来回一趟白干"。
  * 存在本插件自己的域里（不跨域读别人的），切回来至少还原到"上次看的那一段"。
@@ -177,7 +177,7 @@ export function createUiStateReplayPlugin(): Plugin {
         const [writeNote, setWriteNote] = useState<string | null>(null);
         /**
          * 分区折叠（口上调试 UI 打磨批）：面板只有 ~300px 宽，一屏能读的东西是有限的。
-         * 首屏只留"看哪一段"里真正每天要动的三件（存档 / 角色 / 函数 + 判定），
+         * 首屏只留「回放目标」里真正每天要动的三件（存档 / 角色 / 函数 + 判定），
          * 场景参数与场景预设默认收起——它们改了才需要展开，收起时在标题上给一行摘要，
          * 不让人怀疑"我上次改的参数是不是没了"。
          */
@@ -792,7 +792,7 @@ export function createUiStateReplayPlugin(): Plugin {
           setPreviewError(null);
           setWriteArmed(false);
           if (!view || !result) {
-            setPreviewError('先判定一次，再谈「改了会怎样」。');
+            setPreviewError('请先执行判定，再进行改动预演。');
             return;
           }
           if (!selectedField) {
@@ -988,8 +988,8 @@ export function createUiStateReplayPlugin(): Plugin {
             createElement(
               'div',
               { className: 'dbg-empty' },
-              createElement('div', { className: 'dbg-empty-title' }, '打开一个游戏项目就能调试口上'),
-              createElement('div', { className: 'dbg-empty-note' }, '回放要一份存档 + 一个角色才能算，两样都由项目提供。'),
+              createElement('div', { className: 'dbg-empty-title' }, '未打开项目'),
+              createElement('div', { className: 'dbg-empty-note' }, '回放需要存档与角色表，两者都由项目提供。'),
             ),
           );
         }
@@ -1007,7 +1007,7 @@ export function createUiStateReplayPlugin(): Plugin {
           createElement(
             'div',
             { className: 'dbg-head-row' },
-            createElement('span', { className: 'dbg-head-title' }, '看这段会怎样'),
+            createElement('span', { className: 'dbg-head-title' }, '状态回放'),
             createElement(
               'button',
               {
@@ -1016,13 +1016,13 @@ export function createUiStateReplayPlugin(): Plugin {
                 title: '带着这份存档去改数值（状态注入面板）',
                 onClick: () => ctx.bus.emit('ui.panel.reveal', { id: 'snapshot-injector', source: PANEL_ID }),
               },
-              '改状态 →',
+              '状态注入 →',
             ),
           ),
           createElement(
             'div',
             { className: 'dbg-head-sub' },
-            '按当前存档推算：条件走不走、消息窗会说什么。',
+            '按当前存档判定条件分支，并推演消息窗输出。',
           ),
         );
 
@@ -1089,7 +1089,7 @@ export function createUiStateReplayPlugin(): Plugin {
           createElement(
             'div',
             { className: 'dbg-sec-head' },
-            createElement('span', { className: 'dbg-sec-title' }, '看哪一段'),
+            createElement('span', { className: 'dbg-sec-title' }, '回放目标'),
           ),
           createElement(
             'div',
@@ -1110,12 +1110,12 @@ export function createUiStateReplayPlugin(): Plugin {
           createElement('div', { className: 'dbg-row dbg-row-fn' }, fnInput, callSlots ? null : contextInput, replayBtn),
           viewStatus,
           // 扫完了、一个存档都没有：下拉里只有「选择存档（0）」，不解释就成了死路。
-          // （档位从项目 sav 目录来；作者此时该做的事是"先存一档"或"去改这个状态面板重扫"）
+          // （档位从项目 sav 目录来；此时该做的两件事：先在游戏内存档，或去「状态注入器」重扫）
           activation.archivesReady && activation.archives.length === 0
             ? createElement(
                 'div',
                 { className: 'dbg-note' },
-                '这个项目里没找到存档：先在游戏里存一档，再到「改这个状态」面板点「重新扫描」。',
+                '项目内未找到存档：请先在游戏内存档，再到「状态注入器」面板点「重新扫描」。',
               )
             : null,
           sceneSection,
@@ -1125,7 +1125,7 @@ export function createUiStateReplayPlugin(): Plugin {
         /**
          * 预演与判定拆成**两段**：它们是两件不同的事——预演是"换个数值会怎样"，
          * 判定是"现在到底走哪一条"。此前挤在同一段标题下，作者读到的是
-         * 「改了会怎样 … 共 0 谓词」，分不清哪半是基线、哪半是假设。
+         * 「改动预演 … 共 0 谓词」，分不清哪半是基线、哪半是假设。
          * 引擎不支持覆写预演时（旧版本）预演段整段不出现，判定段照常。
          */
         const previewSection =
@@ -1136,7 +1136,7 @@ export function createUiStateReplayPlugin(): Plugin {
                 createElement(
                   'div',
                   { className: 'dbg-sec-head' },
-                  createElement('span', { className: 'dbg-sec-title' }, '改了会怎样'),
+                  createElement('span', { className: 'dbg-sec-title' }, '改动预演'),
                   resultBody !== null
                     ? createElement('span', { className: 'dbg-sec-note' }, '存档不动 · 下一段是现状')
                     : null,
@@ -1175,11 +1175,11 @@ export function createUiStateReplayPlugin(): Plugin {
             ? createElement(
                 'div',
                 { className: 'dbg-empty' },
-                createElement('div', { className: 'dbg-empty-title' }, '还没算过'),
+                createElement('div', { className: 'dbg-empty-title' }, '尚未判定'),
                 createElement(
                   'div',
                   { className: 'dbg-empty-note' },
-                  '选好存档和角色，再挑一段（输函数名、用中文搜、或从上面点一个）——这里会告诉你那段里每个条件走不走。',
+                  '选定存档、角色与函数后执行判定：这里逐条给出条件是否成立，以及消息窗里会打印什么。',
                 ),
               )
             : null,
@@ -1188,9 +1188,9 @@ export function createUiStateReplayPlugin(): Plugin {
 
       ctx.slots.register('ui.panel', {
         id: PANEL_ID,
-        // 口上调试 UI 打磨批：标题说"要做什么"，不说内部功能名（回放 / 注入是两套实现，
-        // 作者脑子里只有一件事：这句话会不会说、怎么说）。与注入面板的「改这个状态」成对。
-        title: '看这段会怎样',
+        // 口上调试 UI 打磨批：与注入面板（`状态注入器`）同一套外壳、互为跳转，
+        // 但标题各报本职——工具名就是一个词，作者按词找面板，不需要再翻译一层。
+        title: '状态回放',
         icon: 'history',
         order: 60,
         // UI 重设计批 P1：按需验证工具 → 副侧栏，默认不激活（定稿 §四）
