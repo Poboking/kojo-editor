@@ -133,6 +133,19 @@
   color: var(--fg);
 }
 
+/* 按下与键盘落点（UPD-C 打磨批）：改前这枚钮只有 hover——按下时全局 `button:active`
+   (0,2,1) 输给自己这条 hover (0,3,0)，"点到了"没有任何反馈（与右下卡关闭钮同款缺陷，
+   美学批 1027 在那边补过，模态这边漏了）。配方与 `.update-notice-card-close` /
+   `.toast-close` 同族：按下吃 `--active`，焦点环走 outline:none + `--shadow-focus`
+   柔光环（28px 图标钮贴在 overflow:hidden 的面板里，硬 outline 会被裁边）。 */
+.update-dialog .update-dialog-close:active:not(:disabled) {
+  background: var(--active);
+}
+.update-dialog .update-dialog-close:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+
 .update-dialog-body {
   display: flex;
   flex-direction: column;
@@ -222,14 +235,19 @@
   background: var(--success);
 }
 
-/* 抬头里的「破坏性更新」警示牌：小胶囊，不抢标题字号 */
+/* 抬头里的「破坏性更新」警示牌：小胶囊，不抢标题字号。
+   字吃 `--danger-text`（文字档）：`--danger` 压 10% danger 洗色 dark 只有 4.03:1（fs-0
+   小字破 4.5）。洗色同步 10% → 8%：改前最差的 synthwave84（danger-text 与 --danger 同值）
+   只有 4.43，8% 洗色下六档全过——dark 4.86 / light 4.93 / 最低档 4.56（sRGB 合成，
+   2026-11-05 UPD-C 批）。描边是"写在底上的线"不是字，留 `--danger` 语义档
+   （压校准面 ≥ 3.0 的非文字判据）。 */
 .update-dialog-severity-tag {
   margin-left: var(--space-2);
   padding: 2px 8px;
   border: 1px solid var(--danger);
   border-radius: var(--radius-pill);
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger-text);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
   font-size: var(--fs-0);
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -237,10 +255,16 @@
   white-space: nowrap;
 }
 
-/* changelog 行内外链：跟随 accent，悬停下划线；长 URL 允许任意位置断行 */
+/* changelog 行内外链：字吃 `--accent-text`（文字档）——`--accent` 压玻璃校准面 dark 只有
+   4.41:1，文字档 6.08 / light 6.51（sRGB 合成读数，2026-11-05 UPD-C 批）。
+   常态就带下划线：链色与相邻正文（--fg）的差最多 2.50:1，够不上 WCAG 1.4.1「色-only
+   区分」的 3:1 豁免线（六档主题没有任何一枚 accent 系 token 能到），下划线是唯一可靠线索。
+   静息用 55% 洗色弱化、悬停/焦点升全色：`text-decoration` 简写会把 text-decoration-color
+   复位成 currentColor，所以下面那条 hover 规则原样留着就是"升格"。长 URL 允许任意位置断行。 */
 .update-dialog-note-link {
-  color: var(--accent);
-  text-decoration: none;
+  color: var(--accent-text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
   overflow-wrap: anywhere;
 }
 

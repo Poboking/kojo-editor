@@ -12,6 +12,8 @@
  * - 免打扰只拦「作者能拒绝这一版」的两态（found / failed），下载中与已装好不许被拦——
  *   否则点过「稍后」的同一版一旦开下起来，屏上就再没有任何进度落点（本批要修的死角）。
  */
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -178,6 +180,25 @@ describe('UpdateNoticeCard 渲染面（四态）', () => {
     expect(out).toContain('可重试');
     expect(out).toContain('>重试<');
     expect(out).toContain('>稍后<');
+  });
+});
+
+/**
+ * UPD-C UI 打磨批（2026-11-05）的 CSS 判据（读 CSS 的口径同 `shell-notice-density.test.ts`）。
+ * 徽标那格的算术：`--accent` 压 12% accent 洗色（洗色再压玻璃校准面）dark 只有 **3.74:1**，
+ * fs-0 小字破 4.5；`--accent-text` 是 5.16 / light 5.48（sRGB 合成，算法同 `theme-contrast.test.ts`）。
+ */
+describe('版本徽标字色（UPD-C）', () => {
+  const cardCss = readFileSync(fileURLToPath(new URL('../src/update-notice-card.css', import.meta.url)), 'utf8');
+
+  it('徽标字吃 --accent-text；洗色与描边保持 --accent 语义档（非文字按 3.0 判，4.41 过）', () => {
+    const block = /(^|\n)\.update-notice-card-badge \{([^}]*)\}/.exec(cardCss)?.[2] ?? '';
+    expect(
+      block,
+      '徽标字色退回 --accent ⇒ dark 压 12% 洗色只有 3.74:1，fs-0 的版本号破 4.5 线',
+    ).toContain('color: var(--accent-text)');
+    expect(block).toContain('border: 1px solid var(--accent)');
+    expect(block).toContain('color-mix(in srgb, var(--accent) 12%');
   });
 });
 

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -168,5 +170,74 @@ describe('UpdateDialog：downloading / done / failed', () => {
     expect(out).toContain('可重试');
     expect(out).toContain('>重试<');
     expect(out).toContain('role="alert"');
+  });
+});
+
+/**
+ * UPD-C UI 打磨批（2026-11-05）的 CSS 判据。node 池量不到屏上像素，但「用没用对 token、
+ * 配方对不对」可以静态钉死（读 CSS 的口径同 `shell-notice-density.test.ts`）；每条判据
+ * 头上挂着它的对比度/几何算术（sRGB 合成算法同 `theme-contrast.test.ts`），谁要改值先改算式。
+ */
+describe('更新面 CSS 打磨判据（UPD-C）', () => {
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+  const dialogCss = read('../src/update-dialog.css');
+  const progressCss = read('../src/update-progress.css');
+
+  it('changelog 外链：字吃文字档 --accent-text、常态带下划线（色-only 区分不够 3:1）', () => {
+    const block = /(^|\n)\.update-dialog-note-link \{([^}]*)\}/.exec(dialogCss)?.[2] ?? '';
+    expect(
+      block,
+      '外链字色退回 --accent ⇒ 压玻璃校准面 dark 只有 4.41:1（正文破线）；文字档是 6.08 / light 6.51',
+    ).toContain('color: var(--accent-text)');
+    expect(
+      block,
+      '外链常态没有下划线 ⇒ 链色与相邻正文（--fg）的差最多 2.50:1 < 3.0，WCAG 1.4.1 的非颜色线索就没了',
+    ).toContain('text-decoration: underline');
+    // 悬停/焦点那条要还在（简写把 text-decoration-color 复位成 currentColor = 洗色升全色）
+    expect(dialogCss).toContain('.update-dialog-note-link:hover');
+    expect(dialogCss).toContain('.update-dialog-note-link:focus-visible');
+  });
+
+  it('破坏性警示牌：字吃 --danger-text、洗色 8%、描边保持 --danger（字换文字档、线留语义档）', () => {
+    const block = /(^|\n)\.update-dialog-severity-tag \{([^}]*)\}/.exec(dialogCss)?.[2] ?? '';
+    expect(
+      block,
+      '警示牌字色退回 --danger ⇒ 压 10% danger 洗色 dark 只有 4.03:1（fs-0 小字破 4.5）；文字档 + 8% 洗色下六档最低 4.56',
+    ).toContain('color: var(--danger-text)');
+    expect(
+      block,
+      '洗色涨回 10% ⇒ synthwave84（danger-text 与 --danger 同值档）跌回 4.43 破 4.5；8% 是六档全过的上限档',
+    ).toContain('color-mix(in srgb, var(--danger) 8%');
+    expect(block, '描边是"写在底上的线"不是字，语义档 --danger 不许顺手换掉（非文字判 3.0，4.58 过）').toContain(
+      'border: 1px solid var(--danger)',
+    );
+  });
+
+  it('模态关闭钮三态齐：hover 之外还有按下与焦点环（改前按下输给自己的 hover 规则）', () => {
+    expect(
+      dialogCss,
+      '关闭钮缺按下态：全局 button:active (0,2,1) 输给这条 hover (0,3,0)，"点到了"没有反馈',
+    ).toMatch(/\.update-dialog \.update-dialog-close:active:not\(:disabled\) \{[^}]*background:\s*var\(--active\)/);
+    expect(
+      dialogCss,
+      '关闭钮缺焦点环：键盘 Tab 到它只借全局硬 outline，与卡关闭钮/枚 toast-close 的柔光环配方脱族',
+    ).toMatch(/\.update-dialog \.update-dialog-close:focus-visible \{[^}]*box-shadow:\s*var\(--shadow-focus\)/);
+  });
+
+  it('不定态光带行程两端不出轨：38% 定宽下 from/to 都留一段在轨内（停成空轨 = 状态被吞）', () => {
+    const kf = /@keyframes update-progress-indeterminate \{([\s\S]*?)\n\}/.exec(progressCss)?.[1] ?? '';
+    const from = Number(/from \{[^}]*translateX\((-?[\d.]+)%\)/.exec(kf)?.[1]);
+    const to = Number(/to \{[^}]*translateX\((-?[\d.]+)%\)/.exec(kf)?.[1]);
+    expect(Number.isFinite(from) && Number.isFinite(to), 'keyframes update-progress-indeterminate 不在了').toBe(true);
+    // 位移 % 以光带自身宽（轨道的 38%）为基准：带左缘 = 0.38×p，右缘 = 0.38×p + 38。
+    // 端点要求「左缘 < 100 且右缘 > 0」＝至少一角仍在轨内——ease-in-out 在端点速度归零，
+    // 整条带停在轨道外就会给出每周期两段的空轨窗口（改前 -110%/300% 正是这一幕）。
+    const visibleAt = (p: number): boolean => 0.38 * p < 100 && 0.38 * p + 38 > 0;
+    expect(visibleAt(from), `from ${from}%：整条带已滑出轨道 ⇒ 每周期开头有空轨窗口`).toBe(true);
+    expect(visibleAt(to), `to ${to}%：整条带已滑出轨道 ⇒ 每周期结尾有空轨窗口`).toBe(true);
+    // 反向红线：行程也不许收得太小——光带要真能扫过全轨（to 的左缘 ≥ 80%），
+    // 不然不定态读起来像"卡在半道"
+    expect(from, 'from 收得太小 ⇒ 光带没扫到左端就读不出"在进行"').toBeLessThanOrEqual(-50);
+    expect(0.38 * to, 'to 的带左缘不够靠右 ⇒ 光带扫不到轨道右端').toBeGreaterThanOrEqual(80);
   });
 });

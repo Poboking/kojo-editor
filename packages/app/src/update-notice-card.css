@@ -99,14 +99,17 @@ body:has(.update-notice-card) .notification-center {
   overflow-wrap: anywhere;
 }
 
-/* 版本徽标：pill + accent 洗色，一眼锁定「哪一版」 */
+/* 版本徽标：pill + accent 洗色，一眼锁定「哪一版」。
+   字吃 `--accent-text`（文字档）：`--accent` 压 12% accent 洗色 dark 只有 3.74:1，
+   fs-0 小字破 4.5；文字档 5.16 / light 5.48（sRGB 合成，2026-11-05 UPD-C 批）。
+   洗色与描边不动——非文字按 3.0 判，accent 描边压校准面 4.41 / 5.42 都过。 */
 .update-notice-card-badge {
   flex: none;
   padding: 1px 8px;
   border: 1px solid var(--accent);
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent);
+  color: var(--accent-text);
   font-family: var(--font-meta);
   font-size: var(--fs-0);
   font-variant-numeric: tabular-nums;

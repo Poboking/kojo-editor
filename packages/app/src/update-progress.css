@@ -144,11 +144,17 @@
 }
 
 @keyframes update-progress-indeterminate {
+  /* 行程 -70% → 235%（UPD-C 打磨批改前是 -110% → 300%）：位移 % 以光带自身宽
+     （= 轨道 38%）为基准，改前两端整条带都滑出轨道——再叠 ease-in-out 在端点速度归零，
+     每个周期有两段「整轨全空」的窗口，正卡在本文件头那条自家纪律上
+     （「进度条停成空白等于把状态吞掉」）。现在 -70% ⇒ 带右缘 11.4% 仍在轨内、
+     235% ⇒ 带左缘 89.3% 仍在轨内，全程至少约 1/10 轨道有带可见，扫程依旧覆盖全轨。
+     算术钉在 `update-dialog.test.ts`。降动效两分支钉的是静态 38% 光带，与行程无关。 */
   from {
-    transform: translateX(-110%);
+    transform: translateX(-70%);
   }
   to {
-    transform: translateX(300%);
+    transform: translateX(235%);
   }
 }
 
