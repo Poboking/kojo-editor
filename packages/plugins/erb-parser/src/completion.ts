@@ -837,6 +837,15 @@ export function isLineHeadContext(line: string, column: number): boolean {
 const MAX_ASSEMBLED_CANDIDATES = 1000;
 /** 单源名字命中上限（与宿主装配核 `MAX_NAME_CANDIDATES` 同值） */
 const MAX_NAME_CANDIDATES = 1000;
+
+/**
+ * 跨文件悬停最多列几处落点。
+ *
+ * 同名常量散在多份 `DIM.ERH`（每个 mod 各带一份）时，`dimDeclarationSitesOf` 会给出
+ * 十几到几十处；提示框列全了会把正文挤没，也没有"选一处"的能力。取 6 = 两屏内可读，
+ * 余下的折成一行指路（F12 的落点列表才是全量面）。
+ */
+const CROSS_FILE_HOVER_SITES = 6;
 // 文档词源的那一批数字（行数闸 / 候选上限 / 索引上限 / 词长 / 纯数字规则）**不在这里**：
 // 搬判据那批（LAU-4 第三批）曾把宿主 `document-words.ts` 的同名同值抄了整整一份，
 // 1103 KW-25 收成契约层单源 `DOCUMENT_WORD_SOURCE`（两条生产路共读，读数与理由也住那里）。
@@ -2277,13 +2286,17 @@ function resolveErbDimHover(
     const sites = dimDeclarationSitesOf(index, token);
     if (sites.length === 0) return undefined;
     const first = sites[0]!;
+    // 同名常量散在多份 `.ERH` 是常态（每个 mod 各带一份 `DIM.ERH`）：列前几处够定位，
+    // 全量交给 F12 的落点列表——提示框不是选择器，几十行会把正文挤没。
+    const shown = sites.slice(0, CROSS_FILE_HOVER_SITES);
+    const lines = shown.map((site) => `声明于 \`${site.filePath}:${site.line}\``);
+    if (sites.length > shown.length) lines.push(`另有 ${sites.length - shown.length} 处同名声明（F12 看全部）`);
     return {
       name: first.name,
       kind: `#${first.directive} 声明`,
       startColumn: span.start + 1,
       endColumn: span.end + 1,
-      // 同名常量散在多份 `.ERH` 是常态：都列出来，不替作者挑一处。
-      lines: sites.map((site) => `声明于 \`${site.filePath}:${site.line}\``),
+      lines,
       source: { filePath: first.filePath, line: first.line },
     };
   }

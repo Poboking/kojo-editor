@@ -101,6 +101,21 @@ describe('悬停 · 跨文件声明', () => {
     expect(hit?.lines?.some((l) => l.includes('初值') || l.includes('本文件'))).toBe(false);
   });
 
+  it('落点很多时只列前几处，余下折成一行指路（提示框不是选择器）', () => {
+    const many = Array.from({ length: 9 }, (_, i) =>
+      file(`C:/game/ERB/mod${i + 1}/DIM.ERH`, [dim('KOJO_ACTIVE_NAME', 'DIMS', i + 1)], 12),
+    );
+    const index = makeIndex([...many, file(ERB, [], 3)]);
+    const hit = resolveErbHoverAt('  PRINTL KOJO_ACTIVE_NAME', 10, { erbIndex: () => index }, ERB);
+    expect(hit?.lines).toHaveLength(7);
+    expect(hit?.lines?.slice(0, 6)).toEqual(
+      many.slice(0, 6).map((f) => `声明于 \`${f.path}:${f.dims[0]!.line}\``),
+    );
+    expect(hit?.lines?.[6]).toBe('另有 3 处同名声明（F12 看全部）');
+    // 落点仍是第一处：折叠不改"去哪一行"的默认答案
+    expect(hit?.source).toEqual({ filePath: many[0]!.path, line: 1 });
+  });
+
   it('本文件就有声明时走原路（声明原文 / 初值照旧，落点是本文件）', () => {
     const text = ['#DIMS KOJO_ACTIVE_NAME = "小明"', '  PRINTL KOJO_ACTIVE_NAME'].join('\n');
     const index = makeIndex([file(ERB, [dim('KOJO_ACTIVE_NAME', 'DIMS', 1)], 2)]);

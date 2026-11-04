@@ -32,12 +32,11 @@
 import type { ErbIndex } from '@kojo/plugin-api';
 
 /**
- * 一条 `#DIM` 声明在**项目里**的事实。
+ * 一条 `#DIM` 声明在**项目里**的事实（也是导航腿说的"落点"——同一个形状，同一批对象）。
  *
- * `column` 刻意不在这一层：索引里的 `ErbDim` 只有 `name` / `directive` / `line`，
- * 没有列事实。跨文件落点给"那一行"是能保证的，凭空算一个列号会让光标停在名字中间
- * ——不伪造比好看重要。文件内的精确列由 `symbols.ts` 的 `resolveErbDimDefinition`
- * 给（它手上有文本）。
+ * `column` 恒 1 不是占位：索引里的 `ErbDim` 只有 `name` / `directive` / `line`，没有列事实。
+ * 跨文件落点给"那一行"是能保证的，凭空算一个列号会让光标停在名字中间——不伪造比好看重要。
+ * 文件内的精确列由 `symbols.ts` 的 `resolveErbDimDefinition` 给（它手上有文本）。
  */
 export interface ErbDimEntry {
   /** 声明名（**原名**，不归一——诊断视图要按原样回给作者） */
@@ -47,17 +46,20 @@ export interface ErbDimEntry {
   readonly filePath: string;
   /** 1 基行号 */
   readonly line: number;
+  /**
+   * 恒 1。放在条目这一层而不是另开一份"落点"对象，是因为两者**形状本就相同**：
+   * 15 万条声明量级下，多一份平行对象就是多一整个世代的堆；导航与诊断共用同一批条目。
+   */
+  readonly column: 1;
 }
 
-/** 一条声明在项目里的落点（导航目标；`column` 恒 1，理由见 {@link ErbDimEntry}） */
-export interface ErbDimDeclarationSite {
-  readonly name: string;
-  readonly filePath: string;
-  readonly line: number;
-  /** 恒 1（索引无列事实） */
-  readonly column: number;
-  readonly directive: string;
-}
+/**
+ * 一条声明在项目里的落点 = 一条条目本身（别名，非新形状）。
+ *
+ * 消费方按名字读，不需要知道"条目"与"落点"在实现上是同一个对象——保留这个名字是
+ * 为了让导航腿的语义（去哪里）与诊断腿（叫什么）在调用点仍然读得出来。
+ */
+export type ErbDimDeclarationSite = ErbDimEntry;
 
 /** 字符串型声明指令——`undefined-name` 靠它整行跳过字符串赋值（口径自 `projectDeclaredNames` 原样搬来） */
 const STRING_DIRECTIVES: ReadonlySet<string> = new Set(['DIMS', 'DIMSTR', 'DIMCHAR']);
@@ -83,7 +85,7 @@ export function projectDimEntries(index: ErbIndex): readonly ErbDimEntry[] {
   const out: ErbDimEntry[] = [];
   for (const [filePath, file] of index.files) {
     for (const dim of file.dims) {
-      out.push({ name: dim.name, directive: dim.directive, filePath, line: dim.line });
+      out.push({ name: dim.name, directive: dim.directive, filePath, line: dim.line, column: 1 });
     }
   }
 
@@ -117,13 +119,8 @@ export function projectDimDeclarations(
       bucket = [];
       out.set(key, bucket);
     }
-    bucket.push({
-      name: entry.name,
-      filePath: entry.filePath,
-      line: entry.line,
-      column: 1,
-      directive: entry.directive,
-    });
+    // 直接复用条目本体（同一批对象，不另造一份落点）：15 万条量级下这是整个世代的堆。
+    bucket.push(entry);
   }
 
   SITES_CACHE.set(index, out);
