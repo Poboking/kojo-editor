@@ -2091,6 +2091,7 @@ dependencies = [
  "futures-util",
  "indexmap 1.9.3",
  "notify",
+ "rand",
  "regex",
  "reqwest",
  "rfd",

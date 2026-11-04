@@ -44,6 +44,11 @@ mod updater_proxy;
 /// 这里只多一行模块登记 + `setup` 里的 `manage`，不往本文件塞业务。
 mod launcher;
 
+/// MCP 宿主（路 C）：本机 Streamable HTTP 端点 + 第四张会话授权表 + 审计。
+/// ADR-0003 的已拍板例外：这里承载线协议与会话授权，但零游戏语义 / 零业务逻辑——
+/// 工具能力仍全在 WebView 内核与插件。命令面见 `mcp`，实现见 `mcp::server` 等。
+mod mcp;
+
 /* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
 //
 // JS 层 kernel io 的 writablePaths 白名单是第一道闸；本层是第二道闸：
@@ -4264,6 +4269,7 @@ pub fn run() {
         .manage(WriteDomainState::default())
         .manage(WatchState::default())
         .manage(SearchState::default())
+        .manage(mcp::McpState::default())
         .on_window_event(|window, event| {
             use tauri::Emitter;
             use tauri::Manager;
@@ -4288,6 +4294,13 @@ pub fn run() {
                 }
                 if let Some(payload) = map_drag_drop(ev.clone()) {
                     let _ = window.emit(DRAG_DROP_EVENT, payload);
+                }
+            }
+            if let tauri::WindowEvent::Destroyed = event {
+                // MCP 发现文件 / 后台 HTTP 线程随窗口退出一并清理（幂等）。
+                let mcp_state = window.state::<mcp::McpState>();
+                if let Err(err) = mcp::cleanup_on_exit(mcp_state.inner()) {
+                    eprintln!("[mcp] 退出清理失败：{err}");
                 }
             }
         })
@@ -4422,7 +4435,15 @@ pub fn run() {
             shell::show_in_folder,
             shell::open_url_external,
             diagnostics::append_frontend_log,
-            updater_proxy::updater_env_proxy
+            updater_proxy::updater_env_proxy,
+            mcp::mcp_start,
+            mcp::mcp_stop,
+            mcp::mcp_status,
+            mcp::mcp_respond,
+            mcp::mcp_approve,
+            mcp::mcp_revoke,
+            mcp::mcp_scope_query,
+            mcp::mcp_audit_query
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
