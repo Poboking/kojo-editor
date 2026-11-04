@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "kojo-editor": {
+      "command": "node",
+      "args": ["tools/kojo-mcp.mjs"],
+      "cwd": ".",
+      "env": {}
+    }
+  },
+  "_notes": [
+    "DeepSeek Harness 通用 MCP server 配置。前置：编辑器「设置 › AI 接入」开启 MCP 服务，见 docs/mcp/README.md。",
+    "cwd 为相对占位：请在 kojo-editor 仓库根目录启动客户端以解析 tools/kojo-mcp.mjs；勿写死本机绝对路径。",
+    "token 绝不写入本文件：shim 运行时从发现文件读取。",
+    "Windows 发现文件：%APPDATA%/dev.kojo.editor/mcp-endpoint.json；macOS：~/Library/Application Support/dev.kojo.editor/mcp-endpoint.json；Linux：~/.local/share/dev.kojo.editor/mcp-endpoint.json。",
+    "macOS / Linux 按需在 env 注入 KOJO_MCP_ENDPOINT_FILE（绝对路径占位，不含密钥）；CI / 端口转发由外层进程注入 KOJO_MCP_ENDPOINT + KOJO_MCP_TOKEN，勿落盘。"
+  ]
+}

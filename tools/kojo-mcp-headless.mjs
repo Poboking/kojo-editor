@@ -4,7 +4,8 @@
  *
  * 定位（ADR-0003 边界）：这个脚本只由**外部 AI 客户端 spawn**、走 stdio JSON-RPC，
  * 不打包 Node 运行时、不拉起 WebView / Monaco / Tauri / Rust 命令面。它只跑
- * **kernel IO + 语言/校验层**：项目信息、文件树、全工程检索、通用诊断。
+ * **kernel IO + 语言/校验层**：命令清单、项目信息、文件树、全工程检索、诊断、当前文档、读文件。
+ * 只读面与 `@kojo/mcp-host` 同形（路 B 第三波），写侧默认关闭。
  *
  * 零外部 npm 依赖：只 import `node:*`。为什么不在本文件 import 仓库的 `NodeBridge`：
  * 那是 TypeScript 且依赖 iconv-lite / @kojo/plugin-api，headless 由外部客户端用系统 Node
@@ -14,7 +15,8 @@
  * 的真源仍在 Rust 宿主，本原型只在显式授权下提供最小、可拒绝的写入口。
  *
  * 安全面（fail loud，绝不静默）：
- * - **只读开箱可用**：`project.info` / `fs.tree` / `search.all` / `diagnostics.read` 默认在 tools/list。
+ * - **只读开箱可用**：`commands.list` / `project.info` / `fs.tree` / `search.all` /
+ *   `diagnostics.read` / `document.active` / `fs.readFile` 七条默认在 tools/list。
  * - **写能力默认关闭**：`fs.write` / `fs.remove` / `fs.rename` 默认**不进** tools/list；
  *   开启必须显式传 `--allow-write <已批准根>`（可多次）。域外路径一律显式拒绝。
  * - **客户端未授权显式报错**：写调用须先 `initialize`（且带 `clientInfo.name`）；
@@ -96,6 +98,43 @@ export const HEADLESS_READ_TOOL_SPECS = Object.freeze([
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
+  {
+    name: 'commands.list',
+    description: 'Read-only list of the tools this server exposes (name / description / inputSchema / annotations). Use it to discover exact tool names and argument schemas before calling them; never invent a tool name. The result carries an explicit truncated flag. Never mutates files.',
+    inputSchema: {
+      type: 'object',
+      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned tool descriptors (default 100).' } },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'document.active',
+    description: 'Read the "active document" as a read-only projection. This headless server has no GUI editor: it reads a project-root-relative file (relPath, default README.md) and returns its text with an explicit truncated flag, plus cursor:null and a note stating a GUI cursor does not apply. Never mutates files; out-of-domain / absolute / ".." paths are refused by schema plus a second domain check.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPath: RELATIVE_PATH_SCHEMA,
+        maxChars: { type: 'integer', minimum: 1, maximum: 200_000, description: 'Cap on returned characters (default 24000).' },
+      },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'fs.readFile',
+    description: 'Read the text of one project-root-relative file (read-only). relPath is required and must be project-root-relative (schema rejects absolute paths, drive letters and ".."; a second domain check refuses any resolved out-of-root target). Content is capped by maxChars with an explicit truncated flag. Never mutates files.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPath: RELATIVE_PATH_SCHEMA,
+        maxChars: { type: 'integer', minimum: 1, maximum: 200_000, description: 'Cap on returned characters (default 24000).' },
+      },
+      required: ['relPath'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
 ]);
 
 /** 写三条腿（默认关闭，需 --allow-write 且逐项域校验）。 */
@@ -139,6 +178,8 @@ export const HEADLESS_RESOURCE_SPECS = Object.freeze([
   { uri: 'kojo://headless/project', name: '项目信息', description: '只读项目信息（带截断标记）', mimeType: 'application/json' },
   { uri: 'kojo://headless/file-tree', name: '文件树', description: '只读文件树（带截断标记）', mimeType: 'application/json' },
   { uri: 'kojo://headless/diagnostics', name: '诊断', description: '只读语言/校验诊断（带截断标记）', mimeType: 'application/json' },
+  { uri: 'kojo://headless/commands', name: '命令清单', description: '只读工具清单（带截断标记）', mimeType: 'application/json' },
+  { uri: 'kojo://headless/active-document', name: '当前文档', description: '只读当前文档投影（带截断标记 / cursor 不适用标注）', mimeType: 'application/json' },
 ]);
 
 /** resource 文本上限（字符）；超限必须显式 truncated 标记。 */
@@ -388,6 +429,32 @@ export function createNodeKernel(opts = {}) {
       return { items, total: items.length, truncated: items.length >= maxResults };
     },
 
+    /**
+     * 读项目内单个文件（只读）：relPath 必须落在项目根内（校验层 pattern 已拒绝绝对路径 /
+     * 盘符 / ".."，这里再按 root 复核域），内容按 maxChars 截断并显式 truncated 标记；
+     * 读不到 / 域外一律显式 available:false + reason（不静默、不伪造空串）。
+     */
+    async readTextFile(args = {}) {
+      const rel = String(args.relPath ?? 'README.md');
+      const cap = Number.isInteger(args.maxChars) ? args.maxChars : HEADLESS_RESOURCE_TEXT_LIMIT;
+      const target = pm.resolve(root, rel);
+      if (!isPathWithin(root, target, pm)) {
+        return { path: rel, available: false, reason: `域外路径被拒：${rel} 解析后不在项目根内（不静默）` };
+      }
+      const text = await readText(target);
+      if (text === null) {
+        return { path: rel, available: false, reason: `文档 ${rel} 不可读或缺席（显式标注，不静默）` };
+      }
+      const truncated = text.length > cap;
+      return {
+        path: rel,
+        available: true,
+        text: truncated ? text.slice(0, cap) : text,
+        textLength: text.length,
+        truncated,
+      };
+    },
+
     /* 写腿：只在显式授权 + 域内被调用；本原型不复制 Rust 侧写侧真相，仅提供最小、可拒绝的入口。 */
     async writeFile(target, content) {
       await fs.mkdir(pm.dirname(target), { recursive: true }).catch(() => {});
@@ -483,6 +550,17 @@ export function createHeadlessServer(opts = {}) {
         return kernel.searchAll(args);
       case 'diagnostics.read':
         return kernel.diagnostics(args);
+      case 'commands.list': {
+        const maxResults = Number.isInteger(args.maxResults) ? args.maxResults : 100;
+        const all = toolsList();
+        return { commands: all.slice(0, maxResults), total: all.length, truncated: all.length > maxResults };
+      }
+      case 'fs.readFile':
+        return kernel.readTextFile({ relPath: args.relPath, maxChars: args.maxChars });
+      case 'document.active': {
+        const base = await kernel.readTextFile({ relPath: args.relPath ?? 'README.md', maxChars: args.maxChars });
+        return { ...base, cursor: null, cursorNote: 'headless 无 GUI 编辑器光标：cursor 不适用（显式标注，不静默）' };
+      }
       case 'fs.write':
         return kernel.writeFile(targetOf(args.relPath), args.content);
       case 'fs.remove':
@@ -537,7 +615,11 @@ export function createHeadlessServer(opts = {}) {
     try {
       if (uri === 'kojo://headless/project') data = await kernel.projectInfo({});
       else if (uri === 'kojo://headless/file-tree') data = await kernel.fileTree({});
-      else data = await kernel.diagnostics({});
+      else if (uri === 'kojo://headless/diagnostics') data = await kernel.diagnostics({});
+      else if (uri === 'kojo://headless/commands') {
+        const all = toolsList();
+        data = { commands: all, total: all.length, truncated: false };
+      } else data = await kernel.readTextFile({ relPath: 'README.md' }); // kojo://headless/active-document
     } catch (err) {
       return fail(id, -32000, `Resource ${uri} unavailable: ${err instanceof Error ? err.message : String(err)}`, { code: 'RESOURCE_UNAVAILABLE' });
     }

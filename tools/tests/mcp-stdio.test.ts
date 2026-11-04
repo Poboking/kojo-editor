@@ -24,7 +24,10 @@ import {
   classifyFailure,
   classifyStatus,
   createHttpPoster,
+  isNotificationFrame,
   parseEndpoint,
+  parseEndpointOverride,
+  resolveEndpoint,
   resolveEndpointFile,
   responseFrames,
   runShim,
@@ -253,5 +256,72 @@ describe('kojo-mcp · 真实传输与进程契约', () => {
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * ④ 第三波：生产可用性（环境变量覆盖 / notification / 不泄漏 token）
+ * ------------------------------------------------------------------ */
+describe('kojo-mcp · 生产可用性（第三波）', () => {
+  it('parseEndpointOverride：host:port / URL / 非法值判红，userinfo 丢弃', () => {
+    expect(parseEndpointOverride('127.0.0.1:54321')).toEqual({ host: '127.0.0.1', port: 54321, path: '/mcp' });
+    expect(parseEndpointOverride('localhost:9000/custom')).toEqual({ host: 'localhost', port: 9000, path: '/custom' });
+    expect(parseEndpointOverride('http://127.0.0.1:7777/mcp')).toEqual({ host: '127.0.0.1', port: 7777, path: '/mcp' });
+    expect(parseEndpointOverride('http://user:p@127.0.0.1:7001/mcp')).toEqual({ host: '127.0.0.1', port: 7001, path: '/mcp' });
+    expect(() => parseEndpointOverride('')).toThrow(ShimError);
+    expect(() => parseEndpointOverride('127.0.0.1')).toThrow(/端口/);
+    expect(() => parseEndpointOverride('127.0.0.1:70000')).toThrow(/端口/);
+  });
+
+  it('resolveEndpoint：两变量齐备跳过发现文件、单变量覆盖、缺省只读文件', async () => {
+    const base = JSON.stringify({ port: 54321, token: 'tok-file' });
+    let readCalled = false;
+    const both = await resolveEndpoint(
+      { KOJO_MCP_ENDPOINT: '127.0.0.1:6001', KOJO_MCP_TOKEN: 'tok-env' },
+      async () => {
+        readCalled = true;
+        throw new Error('不应读发现文件');
+      },
+    );
+    expect(both).toEqual({ host: '127.0.0.1', port: 6001, path: '/mcp', token: 'tok-env' });
+    expect(readCalled).toBe(false);
+
+    const onlyEndpoint = await resolveEndpoint(
+      { APPDATA: '/some/appdata', KOJO_MCP_ENDPOINT: '127.0.0.1:6002' },
+      async () => base,
+    );
+    expect(onlyEndpoint).toMatchObject({ port: 6002, token: 'tok-file' });
+    const onlyToken = await resolveEndpoint({ APPDATA: '/some/appdata', KOJO_MCP_TOKEN: 'tok-new' }, async () => base);
+    expect(onlyToken).toMatchObject({ port: 54321, token: 'tok-new' });
+    const fallback = await resolveEndpoint({ APPDATA: '/some/appdata' }, async () => base);
+    expect(fallback).toEqual({ port: 54321, token: 'tok-file', host: HOST, path: '/mcp' });
+  });
+
+  it('token 绝不出现在 stdout / stderr / 失败提示里', async () => {
+    const h = harness({
+      readFile: async () => JSON.stringify({ port: 54321, token: 'SUPERSECRET-do-not-leak' }),
+      post: async () => ({ status: 401, body: '' }),
+    });
+    expect(await runShim(h.io)).toBe(4);
+    expect(h.out).toEqual([]);
+    expect([...h.out, ...h.err].join('\n')).not.toContain('SUPERSECRET-do-not-leak');
+    expect(h.err.join('\n')).toContain('轮换 token');
+  });
+
+  it('三类失败：发现(2) / 连接(3) / 鉴权(4) 都 stderr 可执行提示 + stdout 空', async () => {
+    const miss = harness({ readFile: async () => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }); } });
+    expect(await runShim(miss.io)).toBe(2);
+    expect(miss.err.join('\n')).toContain('端点文件');
+    expect(miss.out).toEqual([]);
+
+    const conn = harness({ post: async () => { throw Object.assign(new Error('x'), { code: 'ECONNREFUSED' }); } });
+    expect(await runShim(conn.io)).toBe(3);
+    expect(conn.err.join('\n')).toContain('未启用 MCP 服务');
+    expect(conn.out).toEqual([]);
+
+    const auth = harness({ post: async () => ({ status: 401, body: '' }) });
+    expect(await runShim(auth.io)).toBe(4);
+    expect(auth.err.join('\n')).toContain('轮换 token');
+    expect(auth.out).toEqual([]);
   });
 });

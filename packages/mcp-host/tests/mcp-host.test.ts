@@ -443,3 +443,56 @@ describe('能力盘点对拍：源码结构锚形态保持一致', () => {
     expect(src).toContain('export const MCP_PROMPT_SKELETON_SPECS');
   });
 });
+
+/* ============ 第三波：能力面真正够用（12 枚有真源只读工具 + 覆盖登记） ============ */
+describe('第三波：能力面真正够用（12 枚只读工具 + 覆盖登记）', () => {
+  const src3 = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+  const NEW_READ_TOOLS = [
+    'commands.list', 'document.active', 'fs.readFile', 'fs.stat',
+    'io.listDir', 'io.workspaceRoots', 'editor.info', 'editor.selfCheck',
+    'lang.foldingRanges', 'lang.highlightsAt', 'lang.signatureAt', 'lang.markers',
+  ];
+
+  it('12 枚只读工具全部登记、tier=read + readOnlyHint、description 面向模型', () => {
+    const names = SUPPLEMENTAL_TOOL_SPECS.map((s) => s.name);
+    for (const n of NEW_READ_TOOLS) expect(names).toContain(n);
+    for (const n of NEW_READ_TOOLS) {
+      const s = SUPPLEMENTAL_TOOL_SPECS.find((x) => x.name === n)!;
+      expect(s.tier).toBe('read');
+      expect(s.annotations?.readOnlyHint).toBe(true);
+      expect(s.description.length).toBeGreaterThanOrEqual(60);
+      expect(s.inputSchema['type']).toBe('object');
+    }
+  });
+
+  it('read 会话列得 12 枚新工具；三组工具清单的 tier 分组齐全', () => {
+    const reg = createMcpCapabilityRegistry({});
+    const listed = reg.listTools(readScope).map((t) => t.name);
+    for (const n of NEW_READ_TOOLS) expect(listed).toContain(n);
+    const all = [...SEMANTIC_TOOL_SPECS, ...KERNEL_IO_TOOL_SPECS, ...SUPPLEMENTAL_TOOL_SPECS];
+    const count = (t: string) => all.filter((s) => s.tier === t).length;
+    expect(count('read')).toBeGreaterThan(0);
+    expect(count('edit')).toBeGreaterThan(0);
+    expect(count('privileged')).toBeGreaterThan(0);
+  });
+
+  it('新工具执行走 runSupplemental；未接线 ⇒ NOT_WIRED（不返回空串假实现）', async () => {
+    const bare = createMcpCapabilityRegistry({});
+    expect(await failureOf(bare.callTool('commands.list', {}, readScope))).toMatchObject({ code: 'NOT_WIRED' });
+    expect(await failureOf(bare.callTool('fs.readFile', { relPath: 'a.txt' }, readScope))).toMatchObject({ code: 'NOT_WIRED' });
+    const wired = createMcpCapabilityRegistry({ runSupplemental: (name, args) => ({ name, args }) });
+    expect(await wired.callTool('io.listDir', { relPath: 'src' }, readScope)).toMatchObject({ name: 'io.listDir' });
+  });
+
+  it('覆盖登记锚存在：MCP_TOOL_GAP_MAP / MCP_DEFERRED_GAP_NOTES（含显式原因）', () => {
+    expect(src3).toContain('export const MCP_TOOL_GAP_MAP');
+    expect(src3).toContain('export const MCP_DEFERRED_GAP_NOTES');
+    expect(src3).toContain('绝不挂空串假实现'); // 无真源缺口显式标注
+  });
+
+  it('危险工具仍 privileged、默认不进 tools/list（第三波未放宽）', () => {
+    const reg = createMcpCapabilityRegistry({});
+    const readNames = reg.listTools(readScope).map((t) => t.name);
+    for (const n of ['fileTree.remove', 'fileTree.rename']) expect(readNames).not.toContain(n);
+  });
+});

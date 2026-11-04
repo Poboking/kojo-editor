@@ -206,7 +206,7 @@ describe('createNodeKernel：只读四条腿用注入内存 fs 真跑（不碰�
 /* ============================ headless server：只读默认 ============================ */
 
 describe('headless server：只读开箱可用、写工具默认不进 tools/list', () => {
-  it('initialize 标注 readOnly；tools/list 只列 4 条只读腿', async () => {
+  it('initialize 标注 readOnly；tools/list 只列 7 条只读腿', async () => {
     const server = createHeadlessServer({ kernel: fakeKernel(), projectRoot, approvedRoots: [], writeEnabled: false });
     expect(server.readOnly).toBe(true);
     const initRes = await server.handle(INIT);
@@ -327,5 +327,147 @@ describe('headless server：notification / resources / 未知方法', () => {
     expect(res.result.contents[0].truncated).toBe(false);
     const missing = await server.handle({ jsonrpc: '2.0', id: 11, method: 'resources/read', params: { uri: 'kojo://headless/nope' } });
     expect(missing.error.data.code).toBe('UNKNOWN_RESOURCE');
+  });
+});
+
+/* ============================ 第三波：只读面 7 条 + 新资源 + 读文件腿 ============================ */
+
+describe('headless server：只读面扩到 7 条（与 @kojo/mcp-host 只读面同形）', () => {
+  it('HEADLESS_READ_TOOL_SPECS 恰好 7 条，全带 readOnlyHint，命名齐全', () => {
+    expect(HEADLESS_READ_TOOL_SPECS).toHaveLength(7);
+    for (const s of HEADLESS_READ_TOOL_SPECS) expect(s.annotations?.readOnlyHint).toBe(true);
+    const names = HEADLESS_READ_TOOL_SPECS.map((s) => s.name);
+    for (const n of [
+      'commands.list', 'project.info', 'fs.tree', 'search.all',
+      'diagnostics.read', 'document.active', 'fs.readFile',
+    ]) {
+      expect(names).toContain(n);
+    }
+  });
+
+  it('tools/list 默认恰好 7 条只读、写工具一条不列', async () => {
+    const server = createHeadlessServer({ kernel: fakeKernel(), projectRoot, approvedRoots: [], writeEnabled: false });
+    const list = await server.handle({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+    const names = list.result.tools.map((t) => t.name);
+    expect(names).toHaveLength(7);
+    for (const w of HEADLESS_WRITE_TOOL_SPECS) expect(names).not.toContain(w.name);
+  });
+
+  it('commands.list 返回清单 + total + truncated；maxResults 截断标记显式', async () => {
+    const server = createHeadlessServer({ kernel: fakeKernel(), projectRoot, approvedRoots: [], writeEnabled: false });
+    const all = await server.handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'commands.list', arguments: {} } });
+    const d = JSON.parse(all.result.content[0].text);
+    expect(d.commands.length).toBeGreaterThan(0);
+    expect(d.total).toBe(d.commands.length);
+    expect(d.truncated).toBe(false);
+    const capped = await server.handle({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'commands.list', arguments: { maxResults: 2 } } });
+    const cd = JSON.parse(capped.result.content[0].text);
+    expect(cd.truncated).toBe(true);
+    expect(cd.commands).toHaveLength(2);
+  });
+});
+
+describe('headless server：新增 resources（commands / active-document）', () => {
+  it('resources/list 含 kojo://headless/commands 与 kojo://headless/active-document', async () => {
+    const server = createHeadlessServer({ kernel: fakeKernel(), projectRoot, approvedRoots: [], writeEnabled: false });
+    const res = await server.handle({ jsonrpc: '2.0', id: 5, method: 'resources/list', params: {} });
+    const uris = res.result.resources.map((r) => r.uri);
+    expect(uris).toContain('kojo://headless/commands');
+    expect(uris).toContain('kojo://headless/active-document');
+  });
+
+  it('resources/read kojo://headless/commands 带 truncated 标记', async () => {
+    const server = createHeadlessServer({ kernel: fakeKernel(), projectRoot, approvedRoots: [], writeEnabled: false });
+    const res = await server.handle({ jsonrpc: '2.0', id: 6, method: 'resources/read', params: { uri: 'kojo://headless/commands' } });
+    expect(res.result.contents[0].uri).toBe('kojo://headless/commands');
+    expect(res.result.contents[0].truncated).toBe(false);
+  });
+});
+
+describe('headless server：fs.readFile / document.active 读文件（截断 / 逃逸 / 缺席不静默）', () => {
+  function readKernel() {
+    const files: Record<string, string> = {
+      [path.join(projectRoot, 'README.md')]: '# demo\nhello',
+      [path.join(projectRoot, 'big.txt')]: 'z'.repeat(500),
+    };
+    const memFs = {
+      async readFile(p: string) {
+        if (!(p in files)) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return files[p];
+      },
+      async readdir() { return []; },
+      async mkdir() {},
+      async writeFile(p: string, data: string) { files[p] = data; },
+      async rm() {},
+      async rename() {},
+      async stat(p: string) { return { size: (files[p] ?? '').length, mtimeMs: 0, isDirectory: () => false }; },
+    };
+    return createNodeKernel({ fs: memFs, path, projectRoot });
+  }
+
+  const serverWith = () => createHeadlessServer({ kernel: readKernel(), projectRoot, approvedRoots: [], writeEnabled: false });
+
+  it('fs.readFile 读项目根内文件：available + text + truncated 标记', async () => {
+    const server = serverWith();
+    const res = await server.handle({
+      jsonrpc: '2.0', id: 7, method: 'tools/call',
+      params: { name: 'fs.readFile', arguments: { relPath: 'README.md' } },
+    });
+    const d = JSON.parse(res.result.content[0].text);
+    expect(d.available).toBe(true);
+    expect(d.text).toContain('hello');
+    expect(d.truncated).toBe(false);
+  });
+
+  it('fs.readFile 截断：maxChars=10 ⇒ truncated:true 且 text 被裁、textLength 保留', async () => {
+    const server = serverWith();
+    const res = await server.handle({
+      jsonrpc: '2.0', id: 8, method: 'tools/call',
+      params: { name: 'fs.readFile', arguments: { relPath: 'big.txt', maxChars: 10 } },
+    });
+    const d = JSON.parse(res.result.content[0].text);
+    expect(d.truncated).toBe(true);
+    expect(d.text).toHaveLength(10);
+    expect(d.textLength).toBe(500);
+  });
+
+  it('经 server 的逃逸 / 绝对路径 ⇒ INVALID_ARGS（结构化，不静默）', async () => {
+    const server = serverWith();
+    for (const relPath of ['../escape.txt', '/abs.txt', 'C:/x']) {
+      const res = await server.handle({
+        jsonrpc: '2.0', id: 9, method: 'tools/call',
+        params: { name: 'fs.readFile', arguments: { relPath } },
+      });
+      expect(res.error.data.code).toBe('INVALID_ARGS');
+    }
+  });
+
+  it('kernel.readTextFile 第二层域复核：域外显式 available:false + reason（不静默）', async () => {
+    const out = await readKernel().readTextFile({ relPath: '../escape.txt' });
+    expect(out.available).toBe(false);
+    expect(String(out.reason).length).toBeGreaterThan(0);
+  });
+
+  it('文档缺席：available:false + 显式 reason（不挂空串）', async () => {
+    const server = serverWith();
+    const res = await server.handle({
+      jsonrpc: '2.0', id: 10, method: 'tools/call',
+      params: { name: 'fs.readFile', arguments: { relPath: 'nope.txt' } },
+    });
+    const d = JSON.parse(res.result.content[0].text);
+    expect(d.available).toBe(false);
+    expect(String(d.reason)).toContain('不可读或缺席');
+  });
+
+  it('document.active 带 cursor:null + 不适用标注（headless 无 GUI 光标，显式不静默）', async () => {
+    const server = serverWith();
+    const res = await server.handle({
+      jsonrpc: '2.0', id: 11, method: 'tools/call',
+      params: { name: 'document.active', arguments: {} },
+    });
+    const d = JSON.parse(res.result.content[0].text);
+    expect(d.available).toBe(true);
+    expect(d.cursor).toBeNull();
+    expect(String(d.cursorNote)).toContain('不适用');
   });
 });

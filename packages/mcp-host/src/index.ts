@@ -1,5 +1,5 @@
 /**
- * @kojo/mcp-host —— 面向模型的能力面（冻结契约 v1；第二波：能力覆盖补齐 + 可读性 + 槽骨架）。
+ * @kojo/mcp-host —— 面向模型的能力面（冻结契约 v1；第三波：能力面真正够用 + 覆盖登记）。
  *
  * 这一层只做三件事：**定义契约类型**、**把三路能力来源装配成工具/资源/提示清单**、
  * **按会话授权把守调用**。它不监听 Tauri 事件、不 import app/bridge/kernel/其它插件，
@@ -16,6 +16,14 @@
  *   活动文档做**可读性投影**；文本一律有截断上限 + 显式 `truncated` 标记（fail loud，不静默）。
  * - prompts：只提供**零游戏名词的领域工作流骨架 + 槽消费逻辑**；游戏相关知识只能由
  *   `mcp.prompt` 槽（`*-adapter` 贡献）注入，骨架绝不硬编码、也不编造领域知识。
+ *
+ * 第三波（路 B「能力面真正够用」+「外部客户端接入」）新增，纪律：
+ * - 把「有真源可接」的只读缺口（Rust IO 原语 / 语义读数面 / 已有 resource 数据面）补成
+ *   具名工具，全部走 `runSupplemental` 钩子；**没有真源的缺口宁可留在缺口清单并显式标注**
+ *   （`MCP_DEFERRED_GAP_NOTES`），绝不造一个返回空串的假实现。
+ * - `MCP_TOOL_GAP_MAP` 逐条登记「工具 → 真源缺口」，供盘点脚本做覆盖对拍；交叉校验 tool/gap
+ *   真实存在，对不上就如实降级，不假绿。
+ * - resources 文本一律有截断上限 + 显式 `truncated` 标记；prompts 骨架保持零游戏名词。
  *
  * 只依赖 `@kojo/plugin-api`（workspace 声明；本模块不引用其运行时，保持零耦合、
  * 便于注入假实现单测）。
@@ -504,6 +512,210 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
+
+  /* ---- 第三波（路 B 能力面真正够用）：把「有真源可接」的只读缺口补成具名工具 ----
+   * 全部走 runSupplemental 钩子（宿主注入真源）；宿主未接线 ⇒ NOT_WIRED 可见，
+   * 绝不返回空串兜底。真源：Rust IO 原语 / 语义读数面 / 已有 resource 数据面。
+   * 每条 description 面向模型，写清用途 / 入参 / 返回 / 只读 / 截断 / 路径约束。
+   */
+  {
+    name: 'commands.list',
+    description:
+      'List the commands registered in the command palette (id / title / description / tier). Read-only. Use `maxResults` to cap the list; the result carries an explicit `truncated` flag — if true, narrow the query rather than assuming completeness. Same data source as the kojo://project/commands resource. Discover real ids here before calling any command; never invent a command id.',
+    inputSchema: {
+      type: 'object',
+      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned commands (default 200).' } },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'document.active',
+    description:
+      'Read the active document text and cursor position as a read-only projection. The body is capped by `maxChars` and carries an explicit `truncated` flag; a `truncated:true` result must be narrowed, never assumed complete. Same data source as the kojo://project/active-document resource. Read-first: do not infer any text beyond what is returned.',
+    inputSchema: {
+      type: 'object',
+      properties: { maxChars: { type: 'integer', minimum: 1, maximum: 100_000, description: 'Cap on returned document characters (default 8000).' } },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'fs.readFile',
+    description:
+      'Read the text content of one file inside the authorized project root (read-only). `relPath` MUST be a project-root-relative path — the schema rejects absolute paths, drive letters and ".." traversal, and the execution layer re-checks it against approvedRoots. Content is capped by `maxChars` with an explicit `truncated` flag. Backed by the Rust read_file_bytes primitive. Never writes to disk.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPath: RELATIVE_PATH_SCHEMA,
+        maxChars: { type: 'integer', minimum: 1, maximum: 200_000, description: 'Cap on returned characters (default 24000).' },
+      },
+      required: ['relPath'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'fs.stat',
+    description:
+      'Query metadata (existence, kind, size, modification time) for one path inside the authorized project root (read-only). `relPath` is project-root-relative and domain-checked against approvedRoots; out-of-domain targets are refused. Backed by the Rust stat_file / path_exists primitives. Never writes to disk and never follows a path outside the approved roots.',
+    inputSchema: {
+      type: 'object',
+      properties: { relPath: RELATIVE_PATH_SCHEMA },
+      required: ['relPath'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'io.listDir',
+    description:
+      'List the direct children of one directory inside the authorized project root (read-only). `relPath` is optional (defaults to the project root) and must be project-root-relative; `maxEntries` / `maxDepth` bound the result, which carries an explicit `truncated` flag. Backed by the Rust list_dir / walk_dir primitives. Use it to confirm a relative path exists before any write. Never writes to disk.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPath: RELATIVE_PATH_SCHEMA,
+        maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: 'Cap on returned entries (default 500).' },
+        maxDepth: { type: 'integer', minimum: 0, maximum: 16, description: 'Recursion depth cap (default 1).' },
+      },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'io.workspaceRoots',
+    description:
+      'List the workspace roots registered for the current session (read-only). Backed by the Rust workspace_roots primitive. `maxResults` caps the list with an explicit `truncated` flag. Use this to learn the legitimate domain for subsequent relative paths; it never grants write access outside approvedRoots and never mutates state.',
+    inputSchema: {
+      type: 'object',
+      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned roots (default 50).' } },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'editor.info',
+    description:
+      'Read editor/runtime metadata (read-only): which surface is active, document counts, and capability flags. Backed by the semantic `info` read. `section` narrows the projection; the result carries an explicit `truncated` flag. A read-only information surface — it never changes editor state and never invents values that the source did not report.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        section: { type: 'string', enum: ['all', 'editor', 'document'], description: 'Which metadata section to project (default all).' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned fields (default 200).' },
+      },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'editor.selfCheck',
+    description:
+      'Run a read-only self-check of the language/validation layer and return its findings (rule / message / severity). Backed by the semantic `selfCheck` read. `maxResults` caps the list with an explicit `truncated` flag. It is a diagnostic projection, never a fix and never a write; do not treat it as an authorization to edit.',
+    inputSchema: {
+      type: 'object',
+      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned findings (default 200).' } },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'lang.foldingRanges',
+    description:
+      'Return folding ranges for the active document (read-only). Backed by the semantic `foldingRanges` read. `lineFrom` / `lineTo` restrict the window and `maxRanges` caps the result with an explicit `truncated` flag. A structural projection only — it never edits the document and never applies any domain rule.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lineFrom: { type: 'integer', minimum: 0, description: '0-based first line of the window.' },
+        lineTo: { type: 'integer', minimum: 0, description: '0-based last line of the window.' },
+        maxRanges: { type: 'integer', minimum: 1, maximum: 2000, description: 'Cap on returned ranges (default 500).' },
+      },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'lang.highlightsAt',
+    description:
+      'Return document highlights for the symbol at a 1-based line/column (read-only). Backed by the semantic `highlightsAt` read. Returns the matched ranges without mutating the document. Use the read-only result to understand symbol usage before proposing any edit; never apply a change from this call.',
+    inputSchema: POS_SCHEMA,
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'lang.signatureAt',
+    description:
+      'Return signature help at a 1-based line/column (read-only). Backed by the semantic `signatureAt` read. Returns candidate signatures / active parameter without mutating the document. Domain wording, if any, comes only through mcp.prompt slots; this tool reports the raw language-service output.',
+    inputSchema: POS_SCHEMA,
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'lang.markers',
+    description:
+      'Return the current marker set for the active document (read-only). Backed by the semantic `markers` read. `maxResults` caps the list with an explicit `truncated` flag. This is a read-only problem/decoration projection — it never clears or edits a marker and never fabricates a finding.',
+    inputSchema: {
+      type: 'object',
+      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned markers (default 200).' } },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+];
+
+/**
+ * 工具 → 真源缺口登记（供 `tools/mcp-inventory.mjs` 静态解析做覆盖对拍；不参与运行时）。
+ * 每项一行纯字面量：`tool` 是工具名，`gap` 是盘点缺口清单里的名字，`source` 指明缺口所在真源。
+ * `source:'tool-surface'` 的工具是为「与 headless 只读面同形」登记的能力，不对应具体缺口。
+ * 盘点脚本会交叉校验：tool 必须在 *_TOOL_SPECS 清单里、gap 必须在真实缺口里——
+ * 对不上就如实降级为「未覆盖」，绝不假绿（铁律 4：不静默、不伪造读数）。
+ */
+export const MCP_TOOL_GAP_MAP: readonly {
+  readonly tool: string;
+  readonly gap: string;
+  readonly source: 'rust' | 'debug' | 'tool-surface';
+}[] = [
+  { tool: 'semantic.definitionAt', gap: 'definitionAt', source: 'debug' },
+  { tool: 'semantic.referencesAt', gap: 'referencesAt', source: 'debug' },
+  { tool: 'semantic.diagnostics', gap: 'diagnostics', source: 'debug' },
+  { tool: 'semantic.hoverAt', gap: 'hoverAt', source: 'debug' },
+  { tool: 'semantic.suggestAt', gap: 'suggestAt', source: 'debug' },
+  { tool: 'semantic.documentSymbols', gap: 'documentSymbols', source: 'debug' },
+  { tool: 'semantic.tokens', gap: 'tokens', source: 'debug' },
+  { tool: 'semantic.codeActionsAt', gap: 'codeActionsAt', source: 'debug' },
+  { tool: 'fs.tree', gap: 'walk_dir', source: 'rust' },
+  { tool: 'search.all', gap: 'search_text', source: 'rust' },
+  { tool: 'workspace.searchAll', gap: 'search_text', source: 'rust' },
+  { tool: 'problems.diagnostics', gap: 'diagnostics', source: 'debug' },
+  { tool: 'fileTree.create', gap: 'create_file_exclusive', source: 'rust' },
+  { tool: 'fileTree.update', gap: 'write_file_bytes', source: 'rust' },
+  { tool: 'fileTree.remove', gap: 'remove_file', source: 'rust' },
+  { tool: 'fileTree.rename', gap: 'rename_path', source: 'rust' },
+  { tool: 'commands.list', gap: 'commands', source: 'tool-surface' },
+  { tool: 'document.active', gap: 'active-document', source: 'tool-surface' },
+  { tool: 'fs.readFile', gap: 'read_file_bytes', source: 'rust' },
+  { tool: 'fs.stat', gap: 'stat_file', source: 'rust' },
+  { tool: 'io.listDir', gap: 'list_dir', source: 'rust' },
+  { tool: 'io.workspaceRoots', gap: 'workspace_roots', source: 'rust' },
+  { tool: 'editor.info', gap: 'info', source: 'debug' },
+  { tool: 'editor.selfCheck', gap: 'selfCheck', source: 'debug' },
+  { tool: 'lang.foldingRanges', gap: 'foldingRanges', source: 'debug' },
+  { tool: 'lang.highlightsAt', gap: 'highlightsAt', source: 'debug' },
+  { tool: 'lang.signatureAt', gap: 'signatureAt', source: 'debug' },
+  { tool: 'lang.markers', gap: 'markers', source: 'debug' },
+];
+
+/**
+ * 刻意不补成工具的缺口类别（显式标注，铁律 4：不静默）。
+ * 这些缺口没有「模型可安全调用的数据面」，或属危险 / 写 / UI 动作，故留在盘点缺口清单里，
+ * 绝不造一个返回空串的假实现。盘点脚本会把这些类别连同每条剩余缺口的原因一起输出。
+ */
+export const MCP_DEFERRED_GAP_NOTES: readonly { readonly scope: string; readonly reason: string }[] = [
+  { scope: 'launcher_* / market_* / open_url_external / export_file / remove_* / rename_path', reason: '危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准，annotations 不可信。' },
+  { scope: 'mcp_* 会话控制 / 审计', reason: '宿主线协议与第四张表内建命令，不作为模型可调用工具。' },
+  { scope: 'choose_* / pick_* / show_in_folder 等原生对话框', reason: '面向人的 UI 交互，无模型可调用的数据面。' },
+  { scope: 'format / revealLine / setCursor / setSelection / setValue', reason: '编辑器写/光标副作用，首期不面向只读模型面。' },
+  { scope: 'ui.* 槽贡献（面板 / 装饰 / 语言服务注册）', reason: '纯 UI / 注册贡献，无独立数据面；领域知识只经 mcp.prompt 槽注入。' },
+  { scope: '其余未登记只读原语', reason: '真源存在但本波未登记为具名工具：保留在缺口清单，宿主后续按需补，绝不挂空串假实现。' },
 ];
 
 /** 内置 8 项 resource（≥6 的硬要求；新增「当前文档与光标」，其余保持第一波 URI）。 */

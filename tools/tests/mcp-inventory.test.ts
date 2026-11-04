@@ -241,3 +241,70 @@ describe('mcp-inventory · 四处真源对拍', () => {
     expect(inv.gapCount).toBeGreaterThan(0);
   });
 });
+
+/* ============ 第三波：按 tier 分组的覆盖率统计 ============ */
+describe('mcp-inventory · 第三波 tier 覆盖率（不破坏既有结构断言）', () => {
+  it('真树 coverage：tools 按 read/edit/privileged 分组、剩余缺口带原因、交叉校验通过', async () => {
+    const { code, stdout } = await runInventory(['--root', REPO_ROOT, '--print']);
+    expect(code).toBe(0);
+    const inv = JSON.parse(stdout) as {
+      sources: { mcpHost: string };
+      missingSources: string[];
+      coverage: {
+        tools: { total: number; read: number; edit: number; privileged: number; names: string[] };
+        totalGaps: number;
+        wiredGaps: number;
+        deferredGaps: number;
+        orphanedWires: string[];
+        byReason: Record<string, number>;
+        deferredNotes: { scope: string; reason: string }[];
+        deferred: { source: string; gap: string; reason: string }[];
+      };
+      markdown: string;
+    };
+    expect(inv.sources.mcpHost).toContain('mcp-host');
+    expect(inv.missingSources).toEqual([]); // best-effort 参考源不进 missingSources
+    const cov = inv.coverage;
+    expect(cov.tools.total).toBeGreaterThan(0);
+    expect(cov.tools.read).toBeGreaterThan(0);
+    expect(cov.tools.edit).toBeGreaterThan(0);
+    expect(cov.tools.privileged).toBeGreaterThan(0);
+    expect(cov.tools.read + cov.tools.edit + cov.tools.privileged).toBe(cov.tools.total);
+    expect(cov.tools.names).toHaveLength(cov.tools.total);
+    // 第三波新增的只读工具确实被静态解析进覆盖率
+    for (const n of ['commands.list', 'fs.readFile', 'document.active', 'lang.markers']) {
+      expect(cov.tools.names).toContain(n);
+    }
+    expect(cov.wiredGaps).toBeGreaterThan(0);
+    expect(cov.wiredGaps + cov.deferredGaps).toBe(cov.totalGaps);
+    expect(Object.keys(cov.byReason).length).toBeGreaterThan(0);
+    for (const d of cov.deferred) {
+      expect(d.source.length).toBeGreaterThan(0);
+      expect(d.gap.length).toBeGreaterThan(0);
+      expect(d.reason.length).toBeGreaterThan(0); // 每条剩余缺口都有显式原因
+    }
+    expect(cov.deferredNotes.length).toBeGreaterThan(0);
+    for (const n of cov.deferredNotes) expect(n.reason.length).toBeGreaterThan(0);
+    expect(cov.orphanedWires).toEqual([]); // 覆盖声明与真实工具/缺口对拍通过（不假绿）
+    expect(inv.markdown).toContain('能力覆盖（按 tier');
+    expect(inv.markdown).toContain('tools 总数');
+    expect(inv.markdown).toContain('无真源缺口类别（显式标注');
+  });
+
+  it('迷你树：参考源缺席时 tools 总数如实为 0，不进 missingSources、不造假绿', async () => {
+    const tmp = await fixtureRoot();
+    try {
+      const { code, stdout } = await runInventory(['--root', tmp, '--print']);
+      expect(code).toBe(0);
+      const inv = JSON.parse(stdout) as {
+        missingSources: string[];
+        coverage: { tools: { total: number }; deferredGaps: number };
+      };
+      expect(inv.missingSources).toEqual([]);
+      expect(inv.coverage.tools.total).toBe(0);
+      expect(inv.coverage.deferredGaps).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});

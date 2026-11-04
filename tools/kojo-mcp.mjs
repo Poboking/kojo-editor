@@ -1,5 +1,5 @@
 /**
- * kojo-mcp —— MCP stdio shim（P0 契约 · 路 A，ADR-0013 决策 2）。
+ * kojo-mcp —— MCP stdio shim（P0 契约 · 路 A，ADR-0013 决策 2；路 B 第三波：生产可用性）。
  *
  * **零依赖**：只用 Node 内置模块（node:http / node:fs / node:path / node:readline / node:url）。
  * 本进程**只转发帧，不跑内核**：stdin 每行一条 JSON-RPC → 回环 `POST /mcp`
@@ -7,16 +7,24 @@
  * 不读写项目文件、不新增外部 npm 依赖、**不自动拉起编辑器**、不打包 Node sidecar——
  * 因此不违反 ADR-0003「拒打包 Node sidecar」。
  *
- * 端点来自 `%APPDATA%/dev.kojo.editor/mcp-endpoint.json`（`{port, token}`，由 Rust `mcp_start` 写入）。
+ * 端点默认来自 `%APPDATA%/dev.kojo.editor/mcp-endpoint.json`（`{port, token}`，由 Rust `mcp_start` 写入）。
+ * **环境变量覆盖（CI / 本地端口转发场景）**：`KOJO_MCP_ENDPOINT`（`host:port` 或 URL）覆盖地址、
+ * `KOJO_MCP_TOKEN` 覆盖 token；两者齐备时**完全跳过发现文件**。默认（无这些变量）仍只读发现文件，
+ * 绝不猜默认端口、不回落空 token。`KOJO_MCP_ENDPOINT_FILE` 是端点文件路径覆盖（夹具用）。
+ *
  * 发现文件缺失 / 编辑器未启用 / 连接失败 / token 失效，一律 **stderr 给可执行提示 + exit 非 0**，
  * **绝不静默兜底**（不猜默认端口、不回落空 token、不吞错误、不假装成功）。
+ * **绝不把 token 打到 stdout / stderr / 任何日志**：所有提示只描述失败类型与处置，不含 token 值。
+ *
+ * JSON-RPC notification（无 id / `notifications/*`）：**转发后不等待、不伪造响应、不挂住 stdio**——
+ * 发起 POST 即继续主循环，绝不 await 其响应、绝不往 stdout 写合成响应帧；其连接失败只在 stderr
+ * 提示且不终止后续帧。普通请求仍逐帧等待响应并一一转发。
  *
  * 可注入 seam（`runShim` 的 `post` / `lines` / `readFile` / `writeOut` / `writeErr` / `env`）
- * 供 `tools/tests/mcp-stdio.test.ts` 对拍；`KOJO_MCP_ENDPOINT_FILE` 是端点文件路径的
- * 环境变量覆盖（夹具用；生产仍以 %APPDATA% 为准）。
+ * 供 `tools/tests/mcp-stdio.test.ts` 对拍。
  *
  * 用法：外部 AI 按 stdio 拉起本脚本（`node tools/kojo-mcp.mjs`），换行分隔 JSON-RPC。
- * 退出码：0 = 正常（stdin 关闭）；2 = 端点文件/参数；3 = 连接失败；4 = HTTP 非 2xx / 鉴权失败。
+ * 退出码：0 = 正常（stdin 关闭）；2 = 端点文件/参数/发现；3 = 连接失败；4 = HTTP 非 2xx / 鉴权失败。
  */
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
@@ -52,6 +60,66 @@ export function resolveEndpointFile(env = process.env) {
   return path.join(appData, ENDPOINT_REL);
 }
 
+/**
+ * 解析 `KOJO_MCP_ENDPOINT`：`host:port` / `host:port/path` / `http://host:port[/path]`。
+ * 只取 host / port / path，忽略其它 URL 组成（query / userinfo 一律丢弃，绝不回显输入值——
+ * 防止误把嵌在地址里的密钥打到日志）。默认 host 为 127.0.0.1（仅回环基线）；跨机接入
+ * 须自行保证链路可信（ADR-0013「后续演进」）。任何非法值都抛 ShimError(2)，绝不猜端口。
+ */
+export function parseEndpointOverride(value) {
+  const s = typeof value === 'string' ? value.trim() : '';
+  if (s === '') {
+    throw new ShimError('KOJO_MCP_ENDPOINT 为空。请给出 host:port（如 127.0.0.1:54321）或 http://127.0.0.1:54321/mcp。', 2);
+  }
+  let host = DEFAULT_HOST;
+  let port;
+  let urlPath = MCP_PATH;
+  if (/^https?:\/\//i.test(s)) {
+    let u;
+    try {
+      u = new URL(s);
+    } catch {
+      throw new ShimError('KOJO_MCP_ENDPOINT 不是合法 URL。请给出 host:port 或 http://host:port/mcp；含密钥的地址不会被回显。', 2);
+    }
+    host = u.hostname || DEFAULT_HOST;
+    port = u.port === '' ? undefined : Number(u.port);
+    urlPath = u.pathname && u.pathname !== '/' ? u.pathname : MCP_PATH;
+  } else {
+    const slash = s.indexOf('/');
+    const authority = slash >= 0 ? s.slice(0, slash) : s;
+    if (slash >= 0) urlPath = s.slice(slash) || MCP_PATH;
+    const m = /^([^:]+):(\d+)$/.exec(authority);
+    if (!m) {
+      throw new ShimError('KOJO_MCP_ENDPOINT 需带端口。请给出 host:port（如 127.0.0.1:54321）或完整 URL；含密钥的地址不会被回显。', 2);
+    }
+    host = m[1] || DEFAULT_HOST;
+    port = Number(m[2]);
+  }
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new ShimError(`KOJO_MCP_ENDPOINT 端口非法，须为 1..65535。`, 2);
+  }
+  if (/\s/.test(host)) {
+    throw new ShimError('KOJO_MCP_ENDPOINT 的 host 含空白字符，已拒绝。', 2);
+  }
+  return { host, port, path: urlPath || MCP_PATH };
+}
+
+/**
+ * 是否 JSON-RPC notification：无 id / id 为 null / method 以 `notifications/` 开头。
+ * 解析失败（坏帧）按普通帧处理（转发给服务端去判 parse error，shim 不伪造响应）。
+ */
+export function isNotificationFrame(line) {
+  let msg;
+  try {
+    msg = JSON.parse(line);
+  } catch {
+    return false;
+  }
+  if (msg === null || typeof msg !== 'object') return false;
+  if (msg.id === undefined || msg.id === null) return true;
+  return typeof msg.method === 'string' && msg.method.startsWith('notifications/');
+}
+
 /** 解析 `{port, token}`；缺字段 / 非法值都判红（绝不回落默认端口或空 token）。 */
 export function parseEndpoint(text, file) {
   let data;
@@ -78,6 +146,41 @@ export function parseEndpoint(text, file) {
     );
   }
   return { port, token, host: DEFAULT_HOST, path: MCP_PATH };
+}
+
+/**
+ * 端点解析（环境变量覆盖 + 发现文件兜底）。
+ * - `KOJO_MCP_ENDPOINT` + `KOJO_MCP_TOKEN` 齐备 ⇒ 完全跳过发现文件（CI / 端口转发场景）。
+ * - 否则以发现文件为基；单给其一则覆盖对应字段（地址 / token）。
+ * - 缺省（无任何 KOJO_MCP_* 覆盖）⇒ 只读发现文件，与第一波行为逐字一致。
+ * 缺 token / 缺文件 / 非法覆盖一律 ShimError(2)；提示只描述失败类型，绝不含 token 值。
+ */
+export async function resolveEndpoint(env = process.env, readFile = (f) => fs.readFile(f, 'utf8')) {
+  const endpointEnv = typeof env.KOJO_MCP_ENDPOINT === 'string' ? env.KOJO_MCP_ENDPOINT.trim() : '';
+  const tokenEnv = typeof env.KOJO_MCP_TOKEN === 'string' ? env.KOJO_MCP_TOKEN.trim() : '';
+  const override = endpointEnv !== '' ? parseEndpointOverride(endpointEnv) : null;
+  const tokenOverride = tokenEnv !== '' ? tokenEnv : null;
+
+  if (override && tokenOverride) {
+    return { ...override, token: tokenOverride };
+  }
+
+  const file = resolveEndpointFile(env);
+  let text;
+  try {
+    text = await readFile(file);
+  } catch (err) {
+    throw new ShimError(
+      `读取 MCP 端点文件失败：${file}（${err?.code ?? String(err)}）。编辑器可能未启用 MCP 服务；请在「设置 › AI 接入」开启服务，开启后该文件由编辑器写入；CI/转发场景可用 KOJO_MCP_ENDPOINT + KOJO_MCP_TOKEN 覆盖。`,
+      2,
+    );
+  }
+  const base = parseEndpoint(text, file);
+  return {
+    ...base,
+    ...(override ? { host: override.host, port: override.port, path: override.path } : {}),
+    ...(tokenOverride ? { token: tokenOverride } : {}),
+  };
 }
 
 /**
@@ -194,7 +297,9 @@ export function responseFrames(res) {
 
 /**
  * 主循环。所有 IO 可注入，便于无网络、无 Tauri 的对拍测试。
- * 返回退出码（0 / 2 / 3 / 4）；失败只写 stderr + 回码，**不写任何 stdout 帧**（不静默兜底）。
+ * 返回退出码（0 / 2 / 3 / 4）；发现/连接/鉴权失败只写 stderr + 回码，
+ * **不写任何 stdout 帧、不伪造响应**（不静默兜底）。
+ * notification 只转发、不等待响应、不回帧、不挂住后续请求。
  */
 export async function runShim(io = {}) {
   const {
@@ -209,17 +314,8 @@ export async function runShim(io = {}) {
 
   let endpoint;
   try {
-    const file = resolveEndpointFile(env);
-    let text;
-    try {
-      text = await readFile(file);
-    } catch (err) {
-      throw new ShimError(
-        `读取 MCP 端点文件失败：${file}（${err?.code ?? String(err)}）。编辑器可能未启用 MCP 服务；请在「设置 › AI 接入」开启服务，开启后该文件由编辑器写入。`,
-        2,
-      );
-    }
-    endpoint = parseEndpoint(text, file);
+    // 端点解析统一走 resolveEndpoint：环境变量覆盖优先、缺省只读发现文件（CI / 转发场景可跳过文件）。
+    endpoint = await resolveEndpoint(env, readFile);
   } catch (err) {
     const e = err instanceof ShimError ? err : new ShimError(String(err), 2);
     writeErr(`[kojo-mcp] ${e.hint}`);
@@ -231,6 +327,24 @@ export async function runShim(io = {}) {
     for await (const raw of source) {
       const line = String(raw).trim();
       if (line === '') continue;
+
+      // JSON-RPC notification（无 id / notifications/*）：转发后**不等待、不伪造响应、不挂住 stdio**。
+      // 只发起 POST；绝不 await 其响应、绝不往 stdout 写合成响应帧；失败仅 stderr 提示且不终止后续帧。
+      if (isNotificationFrame(line)) {
+        try {
+          const pending = poster(line, endpoint);
+          void Promise.resolve(pending).catch((err) => {
+            const e = classifyFailure(err, endpoint);
+            writeErr(`[kojo-mcp] 通知帧转发失败（已转发、不等待响应、不影响后续帧）：${e.hint}`);
+          });
+        } catch (err) {
+          const e = classifyFailure(err, endpoint);
+          writeErr(`[kojo-mcp] 通知帧转发失败（已转发、不等待响应、不影响后续帧）：${e.hint}`);
+        }
+        continue;
+      }
+
+      // 普通请求：等待响应、逐帧转发；失败显式 stderr + exit 非 0（不静默兜底）。
       let res;
       try {
         res = await poster(line, endpoint);

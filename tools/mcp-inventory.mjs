@@ -14,6 +14,12 @@
  *
  * 产出：命令数 / Rust 命令数 / 语义读数数 / **未登记成命令的缺口清单**
  * （Rust 命令、调试读数、非 `editor.command` 的槽贡献，凡名字不在命令注册表里即列为缺口）。
+ * 第三波（路 B）：另加一处 **best-effort 参考源** `packages/mcp-host/src/index.ts`，解析
+ * `*_TOOL_SPECS` 得**按 tier 分组的工具覆盖率**（tools 总数 / read / edit / privileged），
+ * 并用 `MCP_TOOL_GAP_MAP` 交叉校验「工具 → 真源缺口」的覆盖关系、`MCP_DEFERRED_GAP_NOTES`
+ * 显式标注无真源的缺口类别，最终给出**剩余缺口与逐条原因**。声明对不上真实工具/缺口
+ * 一律降级为「未覆盖」并列出 `orphanedWires`（铁律 4：不静默、不假绿、不伪造读数）。
+ * 该参考源缺席时统计为空、不判红、**不进 `missingSources`**（四处真源口径逐字不变）。
  *
  * 解析方式均为**源码形状正则**（不 import、不执行、不启动内核）：与 `audit-decoupling.mjs`
  * 同一族纪律。缺文件不崩、不猜——`missingSources` 如实列出，该源读数为 0。
@@ -37,6 +43,8 @@ const SOURCES = Object.freeze({
   debug: 'packages/app/src/debug/install-debug.ts',
   pluginsDir: 'packages/plugins',
   uiDir: 'packages/app/src/ui',
+  // best-effort 参考源（第三波）：能力面工具清单 / tier 分组 / 覆盖登记；缺席不进 missingSources。
+  host: 'packages/mcp-host/src/index.ts',
 });
 
 /** 只列的源码文件（跳过构建产物 / 依赖 / 测试夹具），按相对路径稳定排序。 */
@@ -166,6 +174,81 @@ function slotContributionsFromPlugins(texts) {
   return out;
 }
 
+/* ---------------- 5. mcp-host 能力面参考源（best-effort，按源码锚解析） ---------------- */
+
+/**
+ * 取三个 *_TOOL_SPECS 数组块：块内 `name:'…'` 得工具名，块内 `tier:'read|edit|privileged'`
+ * 字面量得 tier 分组计数。只统计工具规格块，不碰 resource / prompt 清单（那里也有 name）。
+ * 文件/块缺席 ⇒ 空清单，绝不猜、绝不假绿。
+ */
+function parseHostCatalog(text) {
+  const names = [];
+  const byTier = { read: 0, edit: 0, privileged: 0 };
+  if (!text) return { names, byTier };
+  const blocks = [
+    ...text.matchAll(/export const (?:SEMANTIC|KERNEL_IO|SUPPLEMENTAL)_TOOL_SPECS[^=]*=\s*\[([\s\S]*?)\n\];/g),
+  ].map((m) => m[1]);
+  for (const block of blocks) {
+    for (const m of block.matchAll(/\bname:\s*'([^']+)'/g)) names.push(m[1]);
+    for (const m of block.matchAll(/\btier:\s*'(read|edit|privileged)'/g)) byTier[m[1]]++;
+  }
+  return { names, byTier };
+}
+
+/** 逐行解析 MCP_TOOL_GAP_MAP 的 `{ tool:'…', gap:'…', source:'…' }` 字面量。 */
+function parseWiredMap(text) {
+  if (!text) return [];
+  const m = /export const MCP_TOOL_GAP_MAP[^=]*=\s*\[([\s\S]*?)\n\];/.exec(text);
+  if (!m) return [];
+  return [...m[1].matchAll(/\{\s*tool:\s*'([^']+)',\s*gap:\s*'([^']+)',\s*source:\s*'(rust|debug|tool-surface)'\s*\}/g)]
+    .map((x) => ({ tool: x[1], gap: x[2], source: x[3] }));
+}
+
+/** 逐行解析 MCP_DEFERRED_GAP_NOTES 的 `{ scope:'…', reason:'…' }` 字面量。 */
+function parseDeferredNotes(text) {
+  if (!text) return [];
+  const m = /export const MCP_DEFERRED_GAP_NOTES[^=]*=\s*\[([\s\S]*?)\n\];/.exec(text);
+  if (!m) return [];
+  return [...m[1].matchAll(/\{\s*scope:\s*'([^']*)',\s*reason:\s*'([^']*)'\s*\}/g)]
+    .map((x) => ({ scope: x[1], reason: x[2] }));
+}
+
+/** 剩余缺口的显式原因（按类别生成，不逐条编造；诚实标注「有真源但本波未接线」）。 */
+function deferredReason(source, gap) {
+  if (source === 'rust') {
+    if (/^(launcher_|market_|open_url_external$|export_file$|remove_|rename_path$)/.test(gap)) {
+      return '危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准。';
+    }
+    if (/^mcp_/.test(gap)) return 'MCP 会话控制 / 审计内建命令：由宿主线协议与第四张表管理，不作为模型工具。';
+    if (/^(choose_|pick_|show_in_folder$|append_|clear_write_domain$|confirm_write_domain$|register_write_domain$|revoke_workspace_root$|ensure_dir$|create_|copy_file$|write_|start_watch$|stop_watch$|cancel_search$|updater_env_proxy$)/.test(gap)) {
+      return '写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露。';
+    }
+    return '只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现）。';
+  }
+  if (source === 'debug') {
+    if (/^(format|revealLine|setCursor|setSelection|setValue)$/.test(gap)) {
+      return '编辑器写 / 光标副作用：首期不面向只读模型面。';
+    }
+    return '语义读数：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补）。';
+  }
+  return '纯 UI / 注册槽贡献：无独立数据面可暴露；领域知识只经 mcp.prompt 槽注入。';
+}
+
+/** Markdown 抽样：剩余缺口按原因分组，每类最多列 3 条（全量在 JSON coverage.deferred）。 */
+function deferredSample(cov) {
+  const grouped = new Map();
+  for (const d of cov.deferred) {
+    if (!grouped.has(d.reason)) grouped.set(d.reason, []);
+    grouped.get(d.reason).push(d);
+  }
+  const out = [];
+  for (const [reason, items] of grouped) {
+    out.push(`  - ${reason} （${items.length} 条）`);
+    for (const it of items.slice(0, 3)) out.push(`    - \`${it.source}:${it.gap}\``);
+  }
+  return out.length ? out : ['  - （无）'];
+}
+
 /* ---------------- 盘点装配 ---------------- */
 
 export async function buildInventory(root) {
@@ -219,6 +302,56 @@ export async function buildInventory(root) {
   };
   const gapCount = gaps.rust.length + gaps.debug.length + gaps.plugins.length;
 
+  /* ---- 第三波：best-effort 参考源（缺席不进 missingSources）→ tier 覆盖率 + 剩余缺口原因 ---- */
+  const hostText = await readText(abs(SOURCES.host));
+  const hostCatalog = parseHostCatalog(hostText ?? '');
+  const wiredMap = parseWiredMap(hostText ?? '');
+  const deferredNotes = parseDeferredNotes(hostText ?? '');
+
+  const gapSets = { rust: new Set(gaps.rust), debug: new Set(gaps.debug) };
+  const wiredGapSet = new Set();
+  const orphanedWires = [];
+  for (const w of wiredMap) {
+    if (w.source === 'tool-surface') {
+      if (!hostCatalog.names.includes(w.tool)) {
+        orphanedWires.push({ ...w, why: '声明的工具未在 *_TOOL_SPECS 清单里（不计覆盖，不假绿）' });
+      }
+      continue;
+    }
+    const toolOk = hostCatalog.names.includes(w.tool);
+    const gapOk = (gapSets[w.source] ?? new Set()).has(w.gap);
+    if (!toolOk || !gapOk) {
+      orphanedWires.push({ ...w, why: `交叉校验失败（tool=${toolOk}, gap=${gapOk}）：不计覆盖，不假绿` });
+      continue;
+    }
+    wiredGapSet.add(`${w.source}:${w.gap}`);
+  }
+  const deferred = [];
+  for (const [source, arr] of [['rust', gaps.rust], ['debug', gaps.debug], ['plugins', gaps.plugins]]) {
+    for (const gap of arr) {
+      if (wiredGapSet.has(`${source}:${gap}`)) continue;
+      deferred.push({ source, gap, reason: deferredReason(source, gap) });
+    }
+  }
+  const byReason = {};
+  for (const d of deferred) byReason[d.reason] = (byReason[d.reason] ?? 0) + 1;
+  const coverage = {
+    tools: {
+      total: hostCatalog.names.length,
+      read: hostCatalog.byTier.read,
+      edit: hostCatalog.byTier.edit,
+      privileged: hostCatalog.byTier.privileged,
+      names: hostCatalog.names,
+    },
+    totalGaps: gapCount,
+    wiredGaps: wiredGapSet.size,
+    deferredGaps: deferred.length,
+    orphanedWires,
+    byReason,
+    deferredNotes,
+    deferred,
+  };
+
   const inventory = {
     schemaVersion: SCHEMA_VERSION,
     sources: {
@@ -226,6 +359,7 @@ export async function buildInventory(root) {
       rust: SOURCES.rust,
       debug: SOURCES.debug,
       plugins: `${SOURCES.pluginsDir}/*`,
+      mcpHost: SOURCES.host,
     },
     missingSources,
     registryConstruction: construction,
@@ -241,6 +375,7 @@ export async function buildInventory(root) {
     slotContributions,
     gaps,
     gapCount,
+    coverage,
   };
   inventory.markdown = markdownDraft(inventory);
   return inventory;
@@ -250,6 +385,10 @@ export async function buildInventory(root) {
 function markdownDraft(inv) {
   const sample = (arr) => arr.slice(0, 10).map((x) => `  - \`${x}\``).join('\n') || '  - （无）';
   const tail = (arr) => (arr.length > 10 ? `\n  - … 另有 ${arr.length - 10} 条（见 JSON 全量）` : '');
+  const cov = inv.coverage ?? {
+    tools: { total: 0, read: 0, edit: 0, privileged: 0 },
+    totalGaps: 0, wiredGaps: 0, deferredGaps: 0, orphanedWires: [], deferredNotes: [], deferred: [],
+  };
   const lines = [
     '# MCP 能力盘点草案（ADR-0013 · P0）',
     '',
@@ -276,6 +415,28 @@ function markdownDraft(inv) {
     '',
     `### 非 editor.command 槽贡献（${inv.gaps.plugins.length}）`,
     sample(inv.gaps.plugins) + tail(inv.gaps.plugins),
+    '',
+    '## 能力覆盖（按 tier · 第三波）',
+    '',
+    '| tier | 工具数 |',
+    '| --- | --- |',
+    `| read | ${cov.tools.read} |`,
+    `| edit | ${cov.tools.edit} |`,
+    `| privileged | ${cov.tools.privileged} |`,
+    `| **tools 总数** | **${cov.tools.total}** |`,
+    '',
+    `已由具名工具覆盖的缺口：${cov.wiredGaps} / ${cov.totalGaps}；剩余缺口：${cov.deferredGaps}（逐条原因见 JSON \`coverage.deferred\`）。`,
+    cov.orphanedWires.length > 0
+      ? `覆盖声明交叉校验失败（不假绿）：${cov.orphanedWires.length} 条，见 JSON \`coverage.orphanedWires\`。`
+      : '覆盖声明全部与真实工具 / 缺口对拍通过。',
+    '',
+    '### 剩余缺口原因（抽样，每类最多 3 条）',
+    ...deferredSample(cov),
+    '',
+    '### 无真源缺口类别（显式标注，绝不造假实现返回空串）',
+    ...(cov.deferredNotes.length
+      ? cov.deferredNotes.map((n) => `  - \`${n.scope}\` — ${n.reason}`)
+      : ['  - （参考源缺席，无登记）']),
     '',
     '> 草案用途：为 `tools` / `resources` / `prompts` 分级（read / edit / privileged）挑候选；',
     '> 分级与批准判据见 ADR-0013，危险工具默认不进 `tools/list`。',

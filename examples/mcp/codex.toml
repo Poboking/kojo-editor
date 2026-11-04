@@ -1,0 +1,16 @@
+# kojo-editor MCP · Codex CLI 配置片段
+#
+# 用法：把本段并入 ~/.codex/config.toml 的顶层（或作为独立 include 片段）。
+# 前置：在编辑器「设置 › AI 接入」开启 MCP 服务（见 docs/mcp/README.md）。
+#
+# cwd 说明：Codex 以「启动 codex 的 shell 的当前目录」作为 command 的工作目录。
+#   请在 kojo-editor 仓库根目录启动 codex，使相对路径 tools/kojo-mcp.mjs 可解析；
+#   不要写死本机绝对路径。若必须从别处启动，请由外层 shell 设置
+#   KOJO_MCP_ENDPOINT_FILE 指向发现文件（macOS / Linux 必需，见 docs/mcp/README.md §2.1），
+#   或在 CI / 端口转发场景注入 KOJO_MCP_ENDPOINT + KOJO_MCP_TOKEN。
+#
+# 安全：token 绝不写入本文件 —— shim 运行时从发现文件读取；本文件不含任何密钥。
+
+[mcp_servers.kojo-editor]
+command = "node"
+args = ["tools/kojo-mcp.mjs"]
