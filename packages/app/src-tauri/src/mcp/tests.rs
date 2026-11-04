@@ -170,6 +170,9 @@ fn privileged_detection_matches_contract() {
         "export_file",
         "remove_file",
         "rename_path",
+        // 工具面真实存在的两个破坏性工具（命名空间带点），按精确名判 privileged。
+        "fileTree.remove",
+        "fileTree.rename",
     ] {
         assert!(is_privileged_tool(name), "{name}");
     }
@@ -2280,6 +2283,33 @@ fn e2e_token_rotation_invalidates_old_token_live() {
         "发现文件应记录轮换后的 token"
     );
     assert_eq!(parsed["port"], json!(s.port));
+}
+
+#[test]
+fn stop_then_start_rotates_token_for_ui_rotate() {
+    // UI 的「轮换 token」= stop + start（`start` 对同一运行时幂等，二次 start 不换 token）。
+    // 本用例钉住这条路径：新运行时首次签发必须换发新 token 并重写发现文件。
+    let s = TestServer::start();
+    let first_token = s.token.clone();
+    server::stop(&s.state).unwrap();
+    let started =
+        server::start(Arc::new(DeadBridge), s.dir.path().to_path_buf(), &s.state).unwrap();
+    assert_ne!(
+        started.token, first_token,
+        "stop 后再 start 必须换发新 token（UI 轮换依赖这条）"
+    );
+    assert_eq!(started.token.len(), 64);
+    let text = std::fs::read_to_string(scope::endpoint_path(s.dir.path())).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(parsed["token"], json!(started.token));
+    assert_eq!(parsed["port"], json!(started.port));
+    // 新 token 在真 listener 上放行。
+    let r = mcp_post(
+        started.port,
+        &started.token,
+        r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+    );
+    assert_eq!(r.status, 200);
 }
 
 #[test]

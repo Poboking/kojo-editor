@@ -150,7 +150,8 @@ impl McpBridge for TauriBridge {
 
 pub struct McpShared {
     pub bridge: Arc<dyn McpBridge>,
-    /// 可轮换：stop / 退出 / 凭据吊销时由 `rotate_token_parts` 换发，旧 token 立即失效。
+    /// 可轮换：令牌随运行时生命周期存活——`stop` / 退出即随运行时一起作废，下一次
+    /// `start` 由 `rotate_token_parts` 铸新 token 并重写发现文件；旧 token 立即失效。
     pub token: Mutex<String>,
     pub pending: Mutex<HashMap<String, Pending>>,
     pub seq: AtomicU64,
@@ -308,7 +309,11 @@ pub fn start(
     let handle = std::thread::Builder::new()
         .name("kojo-mcp-http".to_string())
         .spawn(move || run_accept_loop(listener, shared_for_thread))
-        .map_err(|e| McpError::new(codes::INTERNAL, format!("启动 HTTP 线程失败：{e}")))?;
+        .map_err(|e| {
+            // 线程没起来 ⇒ 端点不存在：别把「发现文件指向死端口」留在盘上。
+            remove_discovery(&app_data_dir);
+            McpError::new(codes::INTERNAL, format!("启动 HTTP 线程失败：{e}"))
+        })?;
     *guard = Some(McpRuntime {
         port,
         token: token.clone(),

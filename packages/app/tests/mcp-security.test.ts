@@ -9,6 +9,12 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  KERNEL_IO_TOOL_SPECS,
+  SEMANTIC_TOOL_SPECS,
+  SUPPLEMENTAL_TOOL_SPECS,
+} from '@kojo/mcp-host';
+import {
+  APPROVABLE_PRIVILEGED_TOOLS,
   buildApprovalBatch,
   classifyToolTier,
   isSafeRelativePath,
@@ -33,6 +39,9 @@ describe('危险工具分级与一次批量审批', () => {
       'export_file',
       'remove_file',
       'rename_path',
+      // 工具面真实存在的破坏性工具（命名空间带点）也必须是 privileged。
+      'fileTree.remove',
+      'fileTree.rename',
     ]) {
       expect(classifyToolTier(name)).toBe('privileged');
     }
@@ -64,6 +73,35 @@ describe('危险工具分级与一次批量审批', () => {
       'a/../b',
     ]);
     expect(batch.approvedRoots).toEqual(['docs']);
+  });
+});
+
+describe('审批面板与工具面真源同步（防漂移）', () => {
+  /**
+   * 第四张表按 `tools/list` 的工具名精确授权：面板列出的可批准项必须与
+   * `@kojo/mcp-host` 工具目录里的 privileged 项逐项一致，否则会出现
+   * 「批了名字却批不动工具」的静默失效（本次复查修掉的正是这一类）。
+   */
+  it('可批准项 == 工具目录里 tier=privileged 的工具名', () => {
+    const privilegedInCatalog = [
+      ...SEMANTIC_TOOL_SPECS,
+      ...KERNEL_IO_TOOL_SPECS,
+      ...SUPPLEMENTAL_TOOL_SPECS,
+    ]
+      .filter((t) => t.tier === 'privileged')
+      .map((t) => t.name)
+      .sort();
+    expect(privilegedInCatalog).toEqual([...APPROVABLE_PRIVILEGED_TOOLS].sort());
+  });
+
+  it('可批准项能原样通过批量审批的形状闸（不被 regex 静默剔除）', () => {
+    const batch = buildApprovalBatch(
+      'client-1',
+      'privileged',
+      APPROVABLE_PRIVILEGED_TOOLS.map((name) => ({ name, tier: 'privileged', reason: 'fixture' })),
+      [],
+    );
+    expect(batch.approvedTools).toEqual([...APPROVABLE_PRIVILEGED_TOOLS]);
   });
 });
 

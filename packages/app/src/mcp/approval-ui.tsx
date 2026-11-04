@@ -12,13 +12,30 @@ import { KitCheck } from '../ui-kit/kit-check';
 
 export type McpTier = 'read' | 'edit' | 'privileged';
 
-/** 与 Rust `mcp/protocol.rs` 的危险工具判据镜像（双保险的展示侧）。 */
+/**
+ * 与 Rust `mcp/protocol.rs` 的危险工具判据镜像（双保险的展示侧）。
+ *
+ * **工具面名字 vs 命令名**：第四张表按 `tools/list` 里的工具名精确授权
+ * （registry `tierAllowed` 只认 `tool.name`，Rust `approved_privileged_tool` 也只认
+ * 精确同名），所以可批准项必须是工具面名字。`open_url_external` / `export_file` /
+ * `rename_path` 是 Rust 命令名口径的同类危险动作（旧判据也在用），一并保留在分级里；
+ * `fileTree.remove` / `fileTree.rename` 是当前工具面**真实存在**的两个 privileged 工具。
+ */
 export const PRIVILEGED_TOOL_PREFIXES: readonly string[] = ['launcher_', 'market_', 'remove_'];
 export const PRIVILEGED_TOOL_NAMES: readonly string[] = [
   'open_url_external',
   'export_file',
   'rename_path',
+  'fileTree.remove',
+  'fileTree.rename',
 ];
+
+/**
+ * 审批面板列出的可批准项：只列工具面真实存在的 privileged 工具。
+ * 漂移闸：`mcp-security.test.ts` 会拿 `@kojo/mcp-host` 的工具目录逐项比对，
+ * 工具面新增/删除 privileged 工具而这里没跟上时测试直接红。
+ */
+export const APPROVABLE_PRIVILEGED_TOOLS: readonly string[] = ['fileTree.remove', 'fileTree.rename'];
 
 export function classifyToolTier(name: string): McpTier {
   if (

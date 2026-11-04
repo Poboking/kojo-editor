@@ -12,15 +12,17 @@
  * 因此逐客户端列表由可选 `clients` prop 注入（来自第四张授权表，路 C）；未注入时如实
  * 显示计数 + 一句「明细由授权表提供」，不编造列表。
  *
- * token 只在 `mcp_start` 的返回值里出现（状态命令不回传明文）。轮换＝再调一次
- * `mcp_start(true)` 让 Rust 铸一枚新 token（路径由路 C 实现）；轮换会使已授权客户端
- * 失效，界面显式提示，不静默换掉。
+ * token 只在 `mcp_start` 的返回值里出现（状态命令不回传明文）。`mcp_start` 对同一运行时
+ * **幂等**（二次调用原样返回既有三元组），所以轮换不能靠「再 start 一次」：轮换＝先
+ * `mcp_stop` 收回 listener / 发现文件，再 `mcp_start(true)` 起一个新运行时——新运行时的
+ * 首次签发必铸新 token（端口也可能变），旧 token 立即失效。轮换会使已连接客户端失效，
+ * 界面显式提示，不静默换掉。
  */
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import { invoke } from '../bridge/invoke';
 import {
+  APPROVABLE_PRIVILEGED_TOOLS,
   ApprovalUi,
-  PRIVILEGED_TOOL_NAMES,
   type ApprovalBatch,
   type ApprovalItem,
 } from './approval-ui';
@@ -155,13 +157,22 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
     setRotateArmed(false);
     setPhase('busy');
     try {
-      // 轮换＝再要一枚新 token；Rust mcp_start 每次铸新 token（路 C）
+      // `mcp_start` 幂等（同一运行时返回旧 token）⇒ 轮换必须停一次再起：
+      // stop 收回 listener 与发现文件，start 新起运行时首次签发必铸新 token。
+      await invoke<void>('mcp_stop');
+      if (!mounted.current) return;
+      setToken(null);
       const r = await invoke<McpStartResult>('mcp_start', { enabled: true });
       if (!mounted.current) return;
       setToken(r.token);
       setShowToken(false);
       await refresh();
-      if (mounted.current) setDetail('token 已轮换：已授权客户端需重新授权后重连。');
+      if (mounted.current) {
+        setDetail(
+          'token 已轮换（端点已重启并换发）：旧 token 立即失效，客户端需用新 token 重连；' +
+            '已批准的工具授权按 clientId 保留。',
+        );
+      }
     } catch (err) {
       fail('轮换 token', err);
     }
@@ -340,12 +351,13 @@ export function scopeStateToApproval(state: McpScopeState | null): {
 } {
   const sessions = activeSessions(state);
   const clientId = sessions[0]?.clientId ?? '';
-  // 可批准的特权工具来自安全判据真源（approval-ui 的 PRIVILEGED_TOOL_NAMES），
+  // 可批准的特权工具来自安全判据真源（approval-ui 的 APPROVABLE_PRIVILEGED_TOOLS），
+  // 且必须是**工具面名字**：第四张表按 `tools/list` 的工具名精确授权，填命令名等于没批。
   // 不是伪造的「待批准请求」读数；勾选后由 mcp_approve 写入第四张表。
-  const pending: ApprovalItem[] = PRIVILEGED_TOOL_NAMES.map((name) => ({
+  const pending: ApprovalItem[] = APPROVABLE_PRIVILEGED_TOOLS.map((name) => ({
     name,
     tier: 'privileged',
-    reason: '特权工具，默认不进 tools/list，需逐会话显式批准',
+    reason: '特权工具，默认不进 tools/list，需逐会话显式批准（按工具名精确授权）',
   }));
   const roots = [...new Set(sessions.flatMap((s) => s.approvedRoots ?? []))];
   return { clientId, pending, roots };

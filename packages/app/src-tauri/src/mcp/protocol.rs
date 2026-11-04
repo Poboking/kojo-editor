@@ -964,7 +964,17 @@ pub fn validate_kojo_uri(raw: &str) -> Result<(), McpError> {
 
 /// 危险工具（路 B 标 `tier:'privileged'`）：Rust 侧默认不进 tools/list，
 /// 且必须显式出现在 `scope.approvedTools` 才放行（双保险）。
-pub const PRIVILEGED_EXACT: &[&str] = &["open_url_external", "export_file", "rename_path"];
+///
+/// 前三个是 Rust 命令名口径的破坏性动作；后两个是工具面（`tools/list`）里真实存在的
+/// 破坏性工具——第四张表与 registry 都按工具名精确授权，两套名字必须都在判据里，
+/// 否则「按名字形状推断」会漏掉 `fileTree.*`（命名空间带点）。
+pub const PRIVILEGED_EXACT: &[&str] = &[
+    "open_url_external",
+    "export_file",
+    "rename_path",
+    "fileTree.remove",
+    "fileTree.rename",
+];
 
 pub fn is_market_tool(name: &str) -> bool {
     name.starts_with("market_")
