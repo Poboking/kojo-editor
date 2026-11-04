@@ -131,8 +131,25 @@ pub struct Pending {
     pub started: Instant,
 }
 
+/// WebView 桥抽象：六种能力方法经此转发（生产 = Tauri 事件；端点级测试可注入桩，
+/// 免构造 Tauri 运行时即可起真实 listener）。
+pub trait McpBridge: Send + Sync + 'static {
+    fn emit_request(&self, payload: McpRequestPayload) -> Result<(), String>;
+}
+
+/// 生产桥：`"mcp://request"` Tauri 事件（WebView 侧 host-bridge 收，回 `mcp_respond`）。
+pub struct TauriBridge(pub AppHandle);
+
+impl McpBridge for TauriBridge {
+    fn emit_request(&self, payload: McpRequestPayload) -> Result<(), String> {
+        self.0
+            .emit(MCP_REQUEST_EVENT, payload)
+            .map_err(|e| e.to_string())
+    }
+}
+
 pub struct McpShared {
-    pub app: AppHandle,
+    pub bridge: Arc<dyn McpBridge>,
     /// 可轮换：stop / 退出 / 凭据吊销时由 `rotate_token_parts` 换发，旧 token 立即失效。
     pub token: Mutex<String>,
     pub pending: Mutex<HashMap<String, Pending>>,
@@ -242,7 +259,7 @@ pub fn rotate_token_parts(
 }
 
 pub fn start(
-    app: AppHandle,
+    bridge: Arc<dyn McpBridge>,
     app_data_dir: PathBuf,
     state: &McpState,
 ) -> Result<McpStartResult, McpError> {
@@ -263,7 +280,7 @@ pub fn start(
         .port();
     let endpoint = format!("http://127.0.0.1:{port}/mcp");
     let shared = Arc::new(McpShared {
-        app,
+        bridge,
         token: Mutex::new(String::new()),
         pending: Mutex::new(HashMap::new()),
         seq: AtomicU64::new(0),
@@ -642,7 +659,8 @@ pub fn check_rate(rate: &Mutex<RateState>, limits: &Limits) -> Result<(), McpErr
     Ok(())
 }
 
-fn run_accept_loop(listener: TcpListener, shared: Arc<McpShared>) {
+/// Accept 循环（`pub(crate)` 供端点级测试直接驱动真实 listener；行为与生产一致）。
+pub(crate) fn run_accept_loop(listener: TcpListener, shared: Arc<McpShared>) {
     // nonblocking + 短轮询：stop() 不需要额外唤醒连接即可让循环退出。
     let _ = listener.set_nonblocking(true);
     while !shared.shutdown.load(Ordering::SeqCst) {
@@ -967,7 +985,7 @@ fn handle_webview(
         params: env.params.clone(),
         scope: scope.clone(),
     };
-    if let Err(e) = ctx.shared.app.emit(MCP_REQUEST_EVENT, payload) {
+    if let Err(e) = ctx.shared.bridge.emit_request(payload) {
         if let Ok(mut pending) = ctx.shared.pending.lock() {
             pending.remove(&internal_id);
         }

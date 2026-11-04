@@ -1,19 +1,23 @@
-//! 路 C 的 Rust 判据（纯函数 + 临时目录落盘；不启动线程 / 不碰真 Tauri 运行时）。
+//! 路 C 的 Rust 判据（纯函数 + 临时目录落盘 + 真实 TCP/HTTP 端到端）。
 //!
 //! 覆盖：线协议编解码、路径闸门、危险工具过滤、无状态协商、第四张表读写与
-//! 最小权限、审计摘要不落全文、Origin/Bearer/限流三闸、发现文件生命周期。
+//! 最小权限、审计摘要不落全文、Origin/Bearer/限流三闸、发现文件生命周期；
+//! 端到端节用 `server.rs` 的真实 listener 在 127.0.0.1 起端口，`std::net::TcpStream`
+//! 发裸 HTTP 打全协议面（WebView 桥注入桩，回填走生产 `deliver` 路径）。
 
 use super::audit::{self, AuditEntry, AuditOutcome};
 use super::protocol::*;
 use super::scope::{self, SessionGrant};
-use super::server::{self, EndpointFile, HttpHead, Limits, RateState};
+use super::server::{self, EndpointFile, HttpHead, Limits, McpBridge, McpShared, RateState};
 use serde_json::json;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::io::{Read as _, Write as _};
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
-use std::time::Instant;
+use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 static SEQ: AtomicUsize = AtomicUsize::new(0);
 
@@ -1511,4 +1515,864 @@ fn origin_loopback_ipv6_and_localhost_variants() {
     let remote: SocketAddr = ([10, 0, 0, 1], 1).into();
     let good = head_with("Bearer tok", Some("http://127.0.0.1"));
     assert!(server::authenticate(&good, "tok", remote).is_err());
+}
+/* ==================================================================== *
+ * 真实 TCP/HTTP 端到端：server.rs 的真实 listener + TcpStream 裸 HTTP。
+ * WebView 桥注入桩（免 Tauri 运行时），回填走生产 `deliver`（mcp_respond）路径。
+ * ==================================================================== */
+
+/// 测试桥：记录 emit 载荷（六方法转 WebView 的证据）；回填经 `server::deliver`。
+struct RecordingBridge {
+    tx: Mutex<std::sync::mpsc::Sender<McpRequestPayload>>,
+}
+
+impl McpBridge for RecordingBridge {
+    fn emit_request(&self, payload: McpRequestPayload) -> Result<(), String> {
+        self.tx
+            .lock()
+            .unwrap()
+            .send(payload)
+            .map_err(|e| format!("桥接收端已关闭：{e}"))
+    }
+}
+
+/// 测试桥：WebView 永远不可用（显式 `E_BRIDGE_UNAVAILABLE` 路径，验证不静默）。
+struct DeadBridge;
+
+impl McpBridge for DeadBridge {
+    fn emit_request(&self, _payload: McpRequestPayload) -> Result<(), String> {
+        Err("WebView 未运行".to_string())
+    }
+}
+
+struct TestServer {
+    state: server::McpState,
+    dir: TempDir,
+    rx: Receiver<McpRequestPayload>,
+    port: u16,
+    token: String,
+    shared: Arc<McpShared>,
+}
+
+impl TestServer {
+    /// RecordingBridge 桥：emit 记 channel，供断言与 deliver 回填。
+    fn start() -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let bridge: Arc<dyn McpBridge> = Arc::new(RecordingBridge { tx: Mutex::new(tx) });
+        Self::spawn(bridge, rx)
+    }
+    /// DeadBridge 桥：emit 恒失败。
+    fn start_dead_bridge() -> Self {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        Self::spawn(Arc::new(DeadBridge), rx)
+    }
+    fn spawn(bridge: Arc<dyn McpBridge>, rx: Receiver<McpRequestPayload>) -> Self {
+        let dir = TempDir::new();
+        let state = server::McpState::default();
+        let started = server::start(bridge, dir.path().to_path_buf(), &state).unwrap();
+        let shared = Arc::clone(&state.runtime.lock().unwrap().as_ref().unwrap().shared);
+        Self {
+            state,
+            dir,
+            rx,
+            port: started.port,
+            token: started.token,
+            shared,
+        }
+    }
+    /// 等下一个转 WebView 的载荷（emit 的证据）。
+    fn next_payload(&self) -> McpRequestPayload {
+        self.rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("等待桥载荷超时")
+    }
+}
+
+impl Drop for TestServer {
+    fn drop(&mut self) {
+        let _ = server::stop(&self.state);
+    }
+}
+
+struct HttpResp {
+    status: u16,
+    headers: HashMap<String, String>,
+    body: String,
+}
+
+/// 裸 HTTP：手写请求行 + 头 + 体；读到 EOF（服务器 Connection: close）后解析
+/// 状态码 / 头（键小写）/ 体。动态端口由 server.rs bind :0 分配（测试间隔离）。
+fn send_request(
+    port: u16,
+    method: &str,
+    target: &str,
+    headers: &[(&str, &str)],
+    body: Option<&str>,
+) -> HttpResp {
+    let mut req = format!("{method} {target} HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+    for (key, value) in headers {
+        req.push_str(&format!("{key}: {value}\r\n"));
+    }
+    let body = body.unwrap_or("");
+    req.push_str(&format!("Content-Length: {}\r\n", body.len()));
+    req.push_str("Connection: close\r\n\r\n");
+    req.push_str(body);
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .set_write_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    stream.write_all(req.as_bytes()).unwrap();
+    stream.flush().unwrap();
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).unwrap();
+    parse_http_response(&buf)
+}
+
+fn parse_http_response(buf: &[u8]) -> HttpResp {
+    let text = String::from_utf8_lossy(buf);
+    let (head, body) = text
+        .split_once("\r\n\r\n")
+        .expect("HTTP 响应缺 \\r\\n\\r\\n 分隔");
+    let mut lines = head.split("\r\n");
+    let status_line = lines.next().unwrap_or("");
+    let status: u16 = status_line
+        .split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .expect("HTTP 状态行缺状态码");
+    let mut headers = HashMap::new();
+    for line in lines {
+        if let Some((k, v)) = line.split_once(':') {
+            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+        }
+    }
+    HttpResp {
+        status,
+        headers,
+        body: body.to_string(),
+    }
+}
+
+/// 合法三件套（Bearer + 回环 Origin + Accept: application/json）的默认 POST。
+fn mcp_post(port: u16, token: &str, body: &str) -> HttpResp {
+    let auth = format!("Bearer {token}");
+    send_request(
+        port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+            ("Content-Type", "application/json"),
+        ],
+        Some(body),
+    )
+}
+
+/// 带 `X-Mcp-Client-Id` 的 POST（第四张表按 clientId 签发 scope）。
+fn mcp_post_as(port: u16, token: &str, client_id: &str, body: &str) -> HttpResp {
+    let auth = format!("Bearer {token}");
+    send_request(
+        port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("X-Mcp-Client-Id", client_id),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+        ],
+        Some(body),
+    )
+}
+
+fn rpc_json(r: &HttpResp) -> serde_json::Value {
+    serde_json::from_str(&r.body).expect("响应体应为 JSON")
+}
+
+/// 结构化错误码（`error.data.code`）——宿主自定义码的证据字段。
+fn rpc_error_code(r: &HttpResp) -> String {
+    let v = rpc_json(r);
+    v["error"]["data"]["code"]
+        .as_str()
+        .expect("错误帧应带 data.code")
+        .to_string()
+}
+
+/// WebView 侧能力全集（tools/list 的桥回填靶；tier 过滤由 Rust 侧复核）。
+fn webview_tools() -> serde_json::Value {
+    json!({
+        "tools": [
+            {"name": "read_file", "description": "read"},
+            {"name": "write_bytes", "description": "write"},
+            {"name": "export_file", "description": "export"},
+            {"name": "market_fetch_text", "description": "market"}
+        ]
+    })
+}
+
+/// 刷第四张表内存镜像（审批命令写穿后的同步语义）。
+fn reload_scope_mirror(s: &TestServer) {
+    *s.shared.scope_state.lock().unwrap() = scope::load(s.dir.path()).unwrap();
+}
+
+#[test]
+fn e2e_bearer_rejects_missing_wrong_and_non_bearer() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    // 缺 Authorization → 403。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 403);
+    assert_eq!(rpc_error_code(&r), "E_UNAUTHORIZED");
+    // 错 token → 403。
+    let r = mcp_post(s.port, "not-the-real-token", body);
+    assert_eq!(r.status, 403);
+    assert_eq!(rpc_error_code(&r), "E_UNAUTHORIZED");
+    // 非 Bearer 形态（Basic）→ 403。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", "Basic dXNlcjpwd2Q="),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 403);
+    assert_eq!(rpc_error_code(&r), "E_UNAUTHORIZED");
+    // 现状行为：错误响应不带 WWW-Authenticate；token 字面量绝不进响应体。
+    assert!(!r.headers.contains_key("www-authenticate"));
+    assert!(!r.body.contains(&s.token), "错误响应体泄漏 token");
+}
+
+#[test]
+fn e2e_origin_rejects_and_gate_order() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    let auth = format!("Bearer {}", s.token);
+    // 好 token + 缺 Origin → 403。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Accept", "application/json"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 403);
+    assert_eq!(rpc_error_code(&r), "E_FORBIDDEN_ORIGIN");
+    // 好 token + 伪造 Origin → 403。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://evil.example"),
+            ("Accept", "application/json"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 403);
+    assert_eq!(rpc_error_code(&r), "E_FORBIDDEN_ORIGIN");
+    // https 回环也被拒（只放行 http 回环）。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "https://127.0.0.1"),
+            ("Accept", "application/json"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 403);
+    assert_eq!(rpc_error_code(&r), "E_FORBIDDEN_ORIGIN");
+    // 闸序（以 server.rs authenticate 实现为准）：Bearer 在 Origin 之前——
+    // 坏 token + 缺 Origin 报的是 Bearer 闸（E_UNAUTHORIZED）。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", "Bearer wrong"),
+            ("Accept", "application/json"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 403);
+    assert_eq!(rpc_error_code(&r), "E_UNAUTHORIZED");
+}
+
+#[test]
+fn e2e_initialize_shape_over_real_tcp() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"harness"}}}"#;
+    let r = mcp_post(s.port, &s.token, body);
+    assert_eq!(r.status, 200);
+    assert_eq!(r.headers.get("content-type").unwrap(), "application/json");
+    assert_eq!(
+        r.headers.get("mcp-protocol-version").unwrap(),
+        PROTOCOL_VERSION
+    );
+    let v = rpc_json(&r);
+    assert_eq!(v["jsonrpc"], json!("2.0"));
+    assert_eq!(v["id"], json!(1));
+    let result = &v["result"];
+    // 旧握手版本按请求回显。
+    assert_eq!(result["protocolVersion"], json!("2024-11-05"));
+    assert!(result["capabilities"]["tools"].is_object());
+    assert!(result["capabilities"]["resources"].is_object());
+    assert!(result["capabilities"]["prompts"].is_object());
+    assert_eq!(result["serverInfo"]["name"], json!(SERVER_NAME));
+    assert_eq!(result["serverInfo"]["version"], json!(SERVER_VERSION));
+    assert_eq!(
+        result["_meta"]["io.modelcontextprotocol/protocolVersion"],
+        json!("2024-11-05")
+    );
+    // 无状态：响应里不编造任何会话状态。
+    let text = serde_json::to_string(&v).unwrap().to_ascii_lowercase();
+    assert!(!text.contains("sessionid"));
+    assert!(!text.contains("mcp-session-id"));
+}
+
+#[test]
+fn e2e_tools_list_tier_filter_and_scope_promotion() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+    let token2 = s.token.clone();
+
+    // 第一轮：未审批 ⇒ 最小权限（read、无批准）→ WebView 全集里只回 read_file。
+    let req = r#"{"jsonrpc":"2.0","id":7,"method":"tools/list","params":{}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post_as(port, &token, "harness-1", &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/list");
+    assert_eq!(payload.id, "mcp-1");
+    assert_eq!(payload.scope.client_id, "harness-1");
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(webview_tools()),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    let names: Vec<&str> = v["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["read_file"]);
+
+    // scope 提升：第四张表精确批准 export_file + privileged tier → 刷镜像 → 可见。
+    scope::approve(
+        s.dir.path(),
+        "harness-1",
+        McpTier::Privileged,
+        vec![],
+        vec!["export_file".to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+
+    let req2 = r#"{"jsonrpc":"2.0","id":8,"method":"tools/list","params":{}}"#.to_string();
+    let worker2 = std::thread::spawn(move || mcp_post_as(port, &token2, "harness-1", &req2));
+    let payload2 = s.next_payload();
+    assert_eq!(payload2.id, "mcp-2");
+    assert_eq!(payload2.scope.tier, McpTier::Privileged);
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload2.id.clone(),
+            ok: true,
+            result: Some(webview_tools()),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r2 = worker2.join().unwrap();
+    let v2 = rpc_json(&r2);
+    let names2: Vec<&str> = v2["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(names2.contains(&"read_file"));
+    assert!(names2.contains(&"write_bytes"));
+    assert!(names2.contains(&"export_file"));
+    // market 恒 fail-closed，即便 tier=privileged 也不可见。
+    assert!(!names2.contains(&"market_fetch_text"));
+
+    // 过滤审计：两轮的 filtered 记录，market 名下记 market_fail_closed。
+    let rows = audit::query(s.dir.path(), 200, None).unwrap();
+    let filtered: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Filtered)
+        .collect();
+    assert!(filtered.len() >= 4);
+    let market = filtered
+        .iter()
+        .find(|e| e.tool == "market_fetch_text")
+        .unwrap();
+    assert_eq!(market.note.as_deref(), Some("market_fail_closed"));
+    let export = filtered.iter().find(|e| e.tool == "export_file").unwrap();
+    assert_eq!(export.note.as_deref(), Some("privileged_not_approved"));
+}
+
+#[test]
+fn e2e_tools_call_unapproved_privileged_denied_with_audit() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"export_file","arguments":{}}}"#;
+    let r = mcp_post(s.port, &s.token, body);
+    // JSON-RPC 错误帧走 HTTP 200；拒绝是显式的（E_TOOL_NOT_APPROVED）。
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    assert_eq!(v["id"], json!(3));
+    assert_eq!(v["error"]["code"], json!(-32000));
+    assert_eq!(v["error"]["data"]["code"], json!("E_TOOL_NOT_APPROVED"));
+    assert!(!v["error"]["message"].as_str().unwrap().is_empty());
+    // 审计：denied 可查，参数只落摘要（键名/类型/长度）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].tool, "export_file");
+    assert_eq!(denied[0].note.as_deref(), Some("E_TOOL_NOT_APPROVED"));
+    assert_eq!(denied[0].client_id, "loopback-client");
+    assert!(denied[0].args_digest.contains("name:str("));
+    // 闸门 2 在 emit 之前拦截：桥从未被调。
+    assert!(s.rx.try_recv().is_err());
+}
+
+#[test]
+fn e2e_notification_yields_202_no_frame() {
+    let s = TestServer::start();
+    // 单独 notification → HTTP 202 + 空体（无 JSON-RPC 响应帧）。
+    let r = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+    );
+    assert_eq!(r.status, 202);
+    assert_eq!(r.headers.get("content-length").unwrap(), "0");
+    assert!(r.body.is_empty());
+    // 能力方法无 id（JSON-RPC 通知）→ 同样无帧，且不触发桥。
+    let r = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","method":"tools/list","params":{}}"#,
+    );
+    assert_eq!(r.status, 202);
+    assert!(r.body.is_empty());
+    // id=null 的 ping 也按通知。
+    let r = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":null,"method":"ping"}"#,
+    );
+    assert_eq!(r.status, 202);
+    assert!(r.body.is_empty());
+    assert!(s.rx.try_recv().is_err());
+}
+
+#[test]
+fn e2e_batch_answers_only_id_bearing() {
+    let s = TestServer::start();
+    // 混合 batch：只回非 notification 项，顺序与请求一致。
+    let body = r#"[
+        {"jsonrpc":"2.0","id":1,"method":"ping"},
+        {"jsonrpc":"2.0","method":"notifications/initialized"},
+        {"jsonrpc":"2.0","id":"b","method":"initialize","params":{"protocolVersion":"2025-03-26"}},
+        {"jsonrpc":"2.0","method":"notifications/progress"}
+    ]"#;
+    let r = mcp_post(s.port, &s.token, body);
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    let arr = v.as_array().expect("batch 响应是数组");
+    assert_eq!(arr.len(), 2);
+    assert_eq!(arr[0]["id"], json!(1));
+    assert_eq!(arr[0]["result"], json!({}));
+    assert_eq!(arr[1]["id"], json!("b"));
+    assert_eq!(arr[1]["result"]["protocolVersion"], json!("2025-03-26"));
+    // 全通知 batch → 202 无响应体。
+    let r = mcp_post(
+        s.port,
+        &s.token,
+        r#"[{"jsonrpc":"2.0","method":"notifications/initialized"},{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"1"}}]"#,
+    );
+    assert_eq!(r.status, 202);
+    assert!(r.body.is_empty());
+}
+
+#[test]
+fn e2e_unknown_method_and_invalid_params() {
+    let s = TestServer::start();
+    // 未知方法 → -32601 显式帧。
+    let r = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":9,"method":"fs/write_anywhere","params":{}}"#,
+    );
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    assert_eq!(v["error"]["code"], json!(-32601));
+    assert_eq!(v["error"]["data"]["code"], json!("E_METHOD_NOT_FOUND"));
+    // tools/call 缺 name → -32602（闸门 1）。
+    let r = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{}}"#,
+    );
+    let v = rpc_json(&r);
+    assert_eq!(v["error"]["code"], json!(-32602));
+    assert_eq!(v["error"]["data"]["code"], json!("E_INVALID_PARAMS"));
+    // resources/read 缺 uri → -32602。
+    let r = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":11,"method":"resources/read","params":{}}"#,
+    );
+    let v = rpc_json(&r);
+    assert_eq!(v["error"]["data"]["code"], json!("E_INVALID_PARAMS"));
+    // 参数闸命中也留 denied 审计。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    assert!(rows.iter().any(
+        |e| e.outcome == AuditOutcome::Denied && e.note.as_deref() == Some("E_INVALID_PARAMS")
+    ));
+}
+
+#[test]
+fn e2e_unsupported_protocol_version_rejected() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    let auth = format!("Bearer {}", s.token);
+    // 未知版本头 → 400 + 结构化错误。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+            ("MCP-Protocol-Version", "1999-01-01"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 400);
+    assert_eq!(rpc_error_code(&r), "E_UNSUPPORTED_PROTOCOL_VERSION");
+    // 空值也 fail closed。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+            ("MCP-Protocol-Version", ""),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 400);
+    // 支持的版本（现行 + 旧握手）放行，ping 回空 result。
+    for v in [PROTOCOL_VERSION, "2025-06-18"] {
+        let r = send_request(
+            s.port,
+            "POST",
+            "/mcp",
+            &[
+                ("Authorization", auth.as_str()),
+                ("Origin", "http://127.0.0.1"),
+                ("Accept", "application/json"),
+                ("MCP-Protocol-Version", v),
+            ],
+            Some(body),
+        );
+        assert_eq!(r.status, 200, "{v}");
+        assert_eq!(rpc_json(&r)["result"], json!({}));
+    }
+}
+
+#[test]
+fn e2e_accept_negotiation_and_sse_frame() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":5,"method":"initialize","params":{"protocolVersion":"2026-07-28"}}"#;
+    let auth = format!("Bearer {}", s.token);
+    // 缺 Accept：现状放行，按普通 JSON 应答（negotiate_accept(None) = Json）。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 200);
+    assert_eq!(r.headers.get("content-type").unwrap(), "application/json");
+    // 只声明不支持的类型 → 400 显式报错。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "text/plain"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 400);
+    assert_eq!(rpc_error_code(&r), "E_INVALID_REQUEST");
+    // application/json → 普通 JSON。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 200);
+    assert_eq!(r.headers.get("content-type").unwrap(), "application/json");
+    // SSE：请求级单帧 `event: message` + `data:` JSON（现状行为：单条 message 后关闭）。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "text/event-stream"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 200);
+    assert_eq!(r.headers.get("content-type").unwrap(), "text/event-stream");
+    assert!(r.body.starts_with("event: message\ndata: "));
+    assert!(r.body.ends_with("\n\n"));
+    let data = r
+        .body
+        .strip_prefix("event: message\ndata: ")
+        .unwrap()
+        .trim_end();
+    let v: serde_json::Value = serde_json::from_str(data).expect("SSE data 行应为完整 JSON");
+    assert_eq!(v["id"], json!(5));
+    assert_eq!(v["result"]["protocolVersion"], json!("2026-07-28"));
+    // 两者都声明时优先 SSE。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json, text/event-stream"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.headers.get("content-type").unwrap(), "text/event-stream");
+}
+
+#[test]
+fn e2e_discovery_file_lifecycle_start_stop() {
+    let s = TestServer::start();
+    let path = scope::endpoint_path(s.dir.path());
+    assert!(path.exists());
+    let text = std::fs::read_to_string(&path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        parsed.as_object().unwrap().len(),
+        3,
+        "只含 {{port,token,endpoint}}"
+    );
+    assert_eq!(parsed["port"], json!(s.port));
+    assert_eq!(
+        parsed["endpoint"],
+        json!(format!("http://127.0.0.1:{}/mcp", s.port))
+    );
+    assert!(
+        parsed["token"] == json!(s.token),
+        "发现文件记录签发的 token"
+    );
+    // start 幂等：同 state 二次调用返回同一三元组。
+    let again = server::start(Arc::new(DeadBridge), s.dir.path().to_path_buf(), &s.state).unwrap();
+    assert_eq!(again.port, s.port);
+    assert!(again.token == s.token, "二次 start 返回同一 token");
+    // stop 清理，不留暂存残渣；stop 幂等。
+    server::stop(&s.state).unwrap();
+    assert!(!path.exists());
+    let leftovers: Vec<_> = std::fs::read_dir(s.dir.path())
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "发现文件写不留暂存残渣");
+    server::stop(&s.state).unwrap();
+    // stop 后端口关闭：连接被拒。
+    assert!(TcpStream::connect(("127.0.0.1", s.port)).is_err());
+}
+
+#[test]
+fn e2e_token_rotation_invalidates_old_token_live() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    // 轮换前旧 token 放行。
+    let r = mcp_post(s.port, &s.token, body);
+    assert_eq!(r.status, 200);
+    // 轮换（生产语义：凭据吊销 / 重载第四张表 / 重写发现文件）。
+    let next = server::rotate_token_parts(
+        &s.shared.token,
+        &s.shared.pending,
+        &s.shared.scope_state,
+        s.dir.path(),
+        s.port,
+        &format!("http://127.0.0.1:{}/mcp", s.port),
+    )
+    .unwrap();
+    assert!(next != s.token, "轮换必须换发新 token");
+    assert_eq!(next.len(), 64);
+    // 旧 token 立即失效，新 token 放行。
+    let r = mcp_post(s.port, &s.token, body);
+    assert_eq!(r.status, 403);
+    assert_eq!(rpc_error_code(&r), "E_UNAUTHORIZED");
+    let r = mcp_post(s.port, &next, body);
+    assert_eq!(r.status, 200);
+    // 发现文件同步重写为新凭据（断言不打印 token 本体）。
+    let text = std::fs::read_to_string(scope::endpoint_path(s.dir.path())).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        parsed["token"] == json!(next),
+        "发现文件应记录轮换后的 token"
+    );
+    assert_eq!(parsed["port"], json!(s.port));
+}
+
+#[test]
+fn e2e_bridge_unavailable_is_loud() {
+    let s = TestServer::start_dead_bridge();
+    let r = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"docs/a.txt"}}}"#,
+    );
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    // 桥不可用是显式结构化错误，不静默冒充成功。
+    assert_eq!(v["error"]["data"]["code"], json!("E_BRIDGE_UNAVAILABLE"));
+    // 显式失败也留审计（denied + note 带错误码）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    assert!(rows
+        .iter()
+        .any(|e| e.outcome == AuditOutcome::Denied
+            && e.note.as_deref() == Some("E_BRIDGE_UNAVAILABLE")));
+}
+
+#[test]
+fn e2e_unknown_endpoint_and_get_rejected() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+    let auth = format!("Bearer {}", s.token);
+    // 非单端点路径 → 400。
+    let r = send_request(
+        s.port,
+        "POST",
+        "/other",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+        ],
+        Some(body),
+    );
+    assert_eq!(r.status, 400);
+    assert_eq!(rpc_error_code(&r), "E_INVALID_REQUEST");
+    // GET /mcp → 400（单端点只接受 POST）。
+    let r = send_request(
+        s.port,
+        "GET",
+        "/mcp",
+        &[
+            ("Authorization", auth.as_str()),
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+        ],
+        None,
+    );
+    assert_eq!(r.status, 400);
+    assert_eq!(rpc_error_code(&r), "E_INVALID_REQUEST");
+}
+
+#[test]
+fn e2e_tools_call_ok_via_bridge_with_audit() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+    let req = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"docs/a.txt"}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.scope.client_id, "loopback-client");
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(json!({"content": "file-bytes"})),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    assert_eq!(v["result"]["content"], json!("file-bytes"));
+    // 请求级协商 _meta 附在 result 上（无状态按请求协商）。
+    assert_eq!(
+        v["result"]["_meta"]["io.modelcontextprotocol/stateless"],
+        json!(true)
+    );
+    // 成功 call 也留一条 ok 审计。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let ok: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Ok)
+        .collect();
+    assert_eq!(ok.len(), 1);
+    assert_eq!(ok[0].tool, "read_file");
 }

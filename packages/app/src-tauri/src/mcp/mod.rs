@@ -50,7 +50,12 @@ pub fn mcp_start(
         .path()
         .app_data_dir()
         .map_err(|e| format!("E_INTERNAL: app_data_dir: {e}"))?;
-    server::start(app, dir, state.inner()).map_err(cmd_err)
+    server::start(
+        std::sync::Arc::new(server::TauriBridge(app)),
+        dir,
+        state.inner(),
+    )
+    .map_err(cmd_err)
 }
 
 #[tauri::command]
