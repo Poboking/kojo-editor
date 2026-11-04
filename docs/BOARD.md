@@ -22,7 +22,6 @@
 |PERF-R6|快照链：关窗 / 关项目等 `storage.set` 落地|两条退出路径共用屏障；等不完也放行且明说；常态关闭不多等|余项：**真壳关窗取证**未跑 · 2026-10-31（强杀仍丢整轮）|
 |PERF-R7C|冷开 `read+parse` 的 decode + EOL 分项|已量清约 1.0s（19%），不是 2.35s（43%）；**裁决不做**（理论收益 `index_ms` −10%，代价跨 5 插件）|已裁决 · 勿重复认领 · 2026-10-31|
 
-|MCP-INT|MCP 批次集成收尾：ps10 体积闸台账（现读数 196 文件 / 3,554 KB · 3,638,818 B，超闸 550 B，**零新进图文件**；归因 bootstrap.ts +440 / plugin-api index +28 / slots +32 / commands +13）+ `pnpm-lock.yaml` 补 `@kojo/mcp-host` workspace importer 条目 + 全量测试复跑 + `docs/STATE.md` 落账|ps10-eager-graph 恢复绿（按台账流程逐字节记账抬 KB 闸，文件闸 196 与成员断言**不许放宽**）；`pnpm install --frozen-lockfile` 过；全量 unit 0 failed（launcher_probe 2 红为既有）|**认领：codearts 2026-11-04（主 agent 接手）** · 归因明细 `docs/mcp/POOL-HANDOFF.md` §4 · 2026-11-04|
 
 > 已交付 / 已收口行（K2-D0、K2-CONTRACT、SDK-B5a、多游戏适配 P0/P1、编辑器对标 A–E、PS 系列、LAU-FACE-ORDER、LAU-B11、DIAG-GATE-1033、LAU-DUALLEG）已删，回执在 git 提交信息。
 > MCP 批次已交付四波（2026-11-04，回执在各提交信息）：`c5c5591d` Rust endpoint+第四张授权表+审计 · `35e31ef0` 只读能力覆盖+Codex/DeepSeek Harness 样例 · `928d9ca8` Rust 协议一致性硬化 · `cad0fd11` WebView 端到端链路+设置页「AI 接入」节（另有三波前置 `704a9158`/`a31a360d`/`f08045b3`）。
