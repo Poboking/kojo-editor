@@ -198,3 +198,148 @@ interface McpSessionScope {
 - 客户端一直挂住不返回：检查是否在发 `notifications/*` 后错误地等响应——shim 对 notification 不回帧（§3.3）。
 - 「tools/list 里没有写工具」：会话 `tier=read` 或写工具未获第四张表批准（§6），这是预期行为。
 - 想看当前能力面与缺口：`node tools/mcp-inventory.mjs --print`（含按 tier 的覆盖率与剩余缺口原因）。
+## 10. 协议一致性自检（B3 · `tools/mcp-conformance.mjs`）
+
+### 10.1 怎么跑
+
+```bash
+node tools/mcp-conformance.mjs --self-test   # 全量对拍：全过 exit 0，任一失败 exit 1 + stderr 可执行提示
+node tools/mcp-conformance.mjs --json        # 同上，另附结果 JSON
+node node_modules/vitest/vitest.mjs run tools/tests/mcp-conformance.test.ts   # vitest 通道
+```
+
+零外部 npm 依赖（只用 `node:http` / `node:crypto` 等内置模块），**无需 GUI / Tauri / 运行中的编辑器**：
+harness 起一个回环 mock MCP endpoint（`http.createServer` 只 bind `127.0.0.1` + 动态端口），
+`spawn('node', ['tools/kojo-mcp.mjs'])` 驱动**真实 stdio shim** 逐条对拍，stdout 打 PASS/FAIL 表。
+
+### 10.2 PASS/FAIL 表怎么读
+
+| 前缀 | 通道 | 钉什么 |
+| --- | --- | --- |
+| `H01..H31` | `direct-http`：node:http 直打 mock endpoint | mock 协议面语义（协议形状 / 闸门 / 错误帧 / 协商） |
+| `S01..S15` | `stdio-shim`：真 shim 进程逐行喂帧 | 端到端转发语义（透传 / 不挂住 / 坏帧终结） |
+| `X01` | 卫生检查 | token 不泄漏（stdout / stderr / 日志 / 请求摘要四个泄漏面全扫） |
+
+- `PASS :: detail` 的 detail 给关键读数（如 `text 1000/2000 字符 + truncated=true`）；
+- 任一 `FAIL` → 进程 exit 1，stderr 逐条给「期望 vs 实际」+ 可执行提示；`--self-test` 也把整表打在 stdout；
+- token 由运行时随机生成（`mck_<hex>`），**不进 stdout / stderr / 对拍表 / 日志**——mock 的请求记录只记
+  `hasAuth/authOk` 布尔，不记 token 值；每行输出渲染前过 scrub，命中 token 字面量即判 FAIL 并遮蔽。
+
+### 10.3 覆盖了什么
+
+**方法面**（mock 靶全部实现并逐条对拍）：`initialize`（兼容旧握手三连）/ `ping` / `tools/list` /
+`tools/call` / `resources/list` / `resources/read` / `prompts/list` / `prompts/get` / batch（数组帧）/ notification（无 id 帧）。
+
+**闸门面**（三道闸缺一不可，mock 自身同规格示范）：
+
+| 对拍点 | 用例 |
+| --- | --- |
+| 仅回环 `127.0.0.1` + 动态端口 | 结构断言（vitest ③组） |
+| Bearer：缺 → 401、错 → 401 + `WWW-Authenticate` | H23/H24 |
+| Origin 白名单：缺 → 403、伪造 → 403（闸序在 Bearer 之前） | H25/H26 |
+| 单端点 `POST /mcp`：其它路径 404、GET 405（无状态不供 GET 服务器流） | H27/H28 |
+| 非法 JSON → 400 + `-32700` | H29 |
+| Accept 协商：纯 JSON → 单帧；含 `text/event-stream` → SSE | H30/H31/H18 |
+
+**授权面**（tier 过滤 + 第四张表语义）：read 会话不见 edit/privileged（H04/S03，**privileged 默认缺席**
+在端到端通道复钉）；edit 会话加 edit 仍无 privileged（H05）；privileged 会话全量可见（H06）；
+tier 不匹配 `tools/call` → `-32000 TIER_DENIED`（拒绝可见，不静默过滤，H11）；`approvedTools`
+未命中 → `-32000 TOOL_NOT_APPROVED`（H12），命中后可执行（H13）。
+
+**错误帧面**：未知 method `-32601`（H22/S13）；参数错 `-32602`（未知工具 / 缺 name，H08/H09/S 系透传）；
+结构化错误 `{code, message, data}`（`MOCK_FAILURE` 带 `retryable:false`，H10/S12）；错误帧是 200 应答，
+shim 不吞、主循环不死（S14）。
+
+**SSE 面**：单请求 SSE（H18/H31）、batch SSE 多 `data:` 帧逐帧合法 JSON（H21）、真 shim 吃 SSE 应答
+逐帧转发到 stdout（S11——mock 对 SSE Accept 的请求恒以 `text/event-stream` 应答，stdio 通道全程走 SSE）。
+
+**batch / notification 面**：混合 batch 只回非 notification 项（H19）；纯 notification batch → 202 空体（H20）；
+notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行 shim 按 notification 语义转发、不等待（S06）；
+坏 JSON 行 → shim 显式终结 exit 4 + stderr 提示（S15，不静默红线）。
+
+**资源面**：大资源 text 截到上限 + 显式 `truncated:true`（H15/S08）；未知 URI `-32002 UNKNOWN_RESOURCE`（H16/S09）。
+
+### 10.4 mock 的定位与卫生
+
+- **协议对拍靶，不是能力真源**：所有工具名带 `mock.` 前缀、资源 URI 用 `mock://` scheme、
+  `serverInfo` 自报 `kojo-mcp-mock-endpoint`、无执行体的工具显式 `MOCK_NO_EXECUTOR` 拒绝——
+  绝不空串冒充成功、不伪装真能力清单；
+- mock 零 fs import（结构上不可能写任何项目文件）；请求记录不含 token 值；
+- 资源文本上限 1000 字符（`RES_TEXT_LIMIT`），超限截断并显式 `truncated`。
+
+### 10.5 当前能力面读数与剩余缺口（真值自 `node tools/mcp-inventory.mjs --print`）
+
+- 能力面：命令 **60** / Rust 命令 **88** / 语义读数 **23** / 槽贡献 **102**（命令类 4）；
+  tools **33**（read 28 / edit 3 / privileged 2）；resources **8**；prompts **3**；
+- 缺口：`totalGaps=179` / `wiredGaps=24` / **`deferredGaps=155`**，逐条带原因，
+  按七类归因（合计 155，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
+
+| 原因类 | 条数 |
+| --- | --- |
+| 纯 UI / 注册槽贡献：无独立数据面可暴露；领域知识只经 `mcp.prompt` 槽注入 | 68 |
+| 危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准 | 46 |
+| 写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露 | 18 |
+| MCP 会话控制 / 审计内建命令：由宿主线协议与第四张表管理，不作为模型工具 | 8 |
+| 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 6 |
+| 编辑器写 / 光标副作用：首期不面向只读模型面 | 5 |
+| 语义读数：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补） | 4 |
+
+### 10.6 本 harness 不覆盖什么（如实边界）
+
+- **mock ≠ Rust 真端点**：token 轮换作旧、审计轮转、第四张表落盘与发现文件生命周期、
+  `MCP-Protocol-Version` 头校验等 Rust 侧行为由路 C3 的真实 TCP/HTTP 集成测试覆盖；
+- **mock 不接能力真源**：semantic 8 腿 / kernelIo 3 腿 / 8 个 resource 真读数 / `runSupplemental`
+  的接线与路径闸，由路 A3 接满真源，本 harness 只钉协议形状与转发；
+- **SSE 服务器流（GET /mcp）显式不支持**（405）：这是无状态单端点形态的边界（见 §11），
+  不是缺陷；`capabilities.resources.subscribe=false` 同理。
+
+## 11. P5 演进边界（sampling / elicitation / resources-subscribe / progress）
+
+以下四项本期**只描述方向，不实现、不排期、不动契约**（与 ADR-0013「后续演进」节同口径）。
+它们的共同前置是「有状态会话或反向通道」——与 P0 冻结的「无状态、按请求协商能力、单端点 POST /mcp」
+形态相斥，任何一项落地都属独立信任模型变更，须单独拍板。
+
+### 11.1 sampling（服务端反向请求模型补全）
+
+- **为何不做**：sampling 要求服务端能向客户端发 JSON-RPC **请求**并等待回包（server→client 回路），
+  本期只有 client→server 单向请求；且「模型自主决策的每次调用都可能让另一个模型回答」，
+  授权必须逐次、可见——与铁律 4 叠加后是新授权面，不是纯协议问题。
+- **前置条件**：会话层（SSE 服务器流或会话 id 维持反压通道）；sampling 授权进第四张表
+  （逐会话、逐次批准，`mcp_approvals.json` 扩字段）；审计留痕（谁在何时让哪个模型答了什么）。
+- **未来接入点**：`@kojo/mcp-host` capabilities 增 `sampling: {}`；Rust `mcp/*` 帧型扩
+  server→client request/response；stdio shim 增反向帧转发（notification 之外的 server-initiated 帧）。
+
+### 11.2 elicitation（服务端向客户端收集结构化输入）
+
+- **为何不做**：同 sampling 需要 server→client 反向请求；elicitation 的表单/确认 UI 属「面向人的
+  授权交互」，要在设置页新增渲染与应答流，涉及 UI 面（`settings-ai.tsx`）与审计面的协同扩展。
+- **前置条件**：设置页 elicitation 表单（schema 驱动渲染 + 显式提交）；会话层；审计记录
+  （elicitation 的展示与提交都要留痕，不静默）。
+- **未来接入点**：capabilities 增 `elicitation: {}`；`mcp://request` 事件族扩 elicitation 帧；
+  `SettingsAi` 增应答面板；shim 反向帧转发与 sampling 共用同一条通道。
+
+### 11.3 resources/subscribe（资源变更推送）
+
+- **为何不做**：本仓资源是**按请求现算**（`readResourceData` 每次求值），没有变更事件总线；
+  subscribe 需要 `listChanged` / `resources/updated` 通知 + GET /mcp 服务器流 + 订阅状态管理，
+  三者都与「无状态单端点」形态冲突。
+- **前置条件**：内核资源真源给出失效信号（编辑器内已有事件面可挂）；会话层记录订阅关系并随
+  撤销（`revokedAt`）一并清理。
+- **未来接入点**：协议面已钉死闸门——`capabilities.resources.subscribe=false`（harness H01/S01
+  已把该断言钉进对拍表）；开启时 Rust 侧开 GET /mcp 服务器流 + WebView 桥订阅事件 + shim 增通知转发。
+
+### 11.4 progress（长任务进度通知）
+
+- **为何不做**：progress notification 需要 `progressToken` 把通知与在途请求关联，并要求存在
+  「长任务」本体；本仓能力面全是短只读调用，唯一长任务族（索引 / 校验 / 导出）尚未建模成任务资源
+  （ADR-0013「Tasks over MCP」明确只描述不实现）。
+- **前置条件**：任务资源模型（任务 id / 可查询 / 可取消，`kojo://tasks/*`）；`notifications/progress`
+  帧协议与客户端展示契约；超时 / 取消与既有三件套（AbortSignal / 30s / 体积上限）打通。
+- **未来接入点**：`tools/call` 的 `_meta.progressToken` 透传 → 桥分发任务进度 → shim 转发
+  `notifications/progress`；任务本身以 resource 形态暴露，复用 tier 与第四张表授权。
+
+### 11.5 跨机 TLS（前瞻，不属于 P5 四项）
+
+若将来要跨机器接入，回环 + Bearer + Origin 三道闸需整体升级为 mTLS + 显式主机白名单 + 证书轮换
+（ADR-0013「后续演进」）；这是独立的信任模型变更，不得由「仅回环」配置平滑过渡。本 harness 的
+三道闸对拍（H23–H26）届时是对拍的**下限基线**。
