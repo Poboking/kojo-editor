@@ -1562,11 +1562,37 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     新增字节只来自已在图中的两枚文件：`ui/App.tsx` 的工作流挂载段（动态 `import()`，
     //     工作流/Service/问题映射全在懒 chunk）与 `bootstrap.ts` 的 2.0 编译事实登记面
     //     （复用既有 eraTW 常驻 import，不新增插件文件）。⇒ KB 闸 **3,549 → 3,553**。
+    //   - **ERH 支持补齐（2026-11-04，本批）**：读数 **197 文件 / 3,567 KB · 3,652,860 B**
+    //     （对照本批基线 `928d9ca8` 的 3,638,818 B，**+14,042 B**）。这是本批唯一一处进图
+    //     增量，且**新增 1 枚进图文件**：`erb-parser` 是两枚常驻插件之一（`EAGER_PLUGINS`），
+    //     该包整个在图里，而 `.ERH` 跨文件声明事实的地基就住在包内。
+    //     · 逐枚归因（当前树 `statSync` vs `git cat-file -s 928d9ca8:…`，**求和 = 总差逐字节
+    //       相等**）：`plugins/erb-parser/src/dim-index.ts` **+7,593**（新文件进图；项目级
+    //       `#DIM` 事实的**唯一**遍历点，三条投影 `projectDimEntries` / `projectDimDeclarations`
+    //       / `projectDeclaredNames` 全从这一份索引出，替掉此前 `symbols.ts` 与 `offload.ts`
+    //       各走一遍的两条路）、`symbols.ts` **+2,310**（`#DIM` 导航腿接索引，裸名判据改成
+    //       与词法器同一把尺）、`scanner.ts` **+1,620**（`isErbDimNameChar` 收口到词法层，
+    //       数组维度 / 二维尺寸 / 行注释不再并进名字）、`completion.ts` **+1,285**（候选改吃
+    //       全项目声明 + 折名前缀索引）、`offload.ts` **−1,074**（`projectDeclaredNames`
+    //       连同它那枚 WeakMap 搬走）、`snapshot.ts` **+832**（`SNAPSHOT_VERSION` 15 → 16，
+    //       `SALVAGEABLE_VERSIONS` 撤 v15——第 7 位 `name` 的语义变了，旧快照不许再洗）、
+    //       `plugin-api/src/erb.ts` **+549**（`ErbDim.name` 契约注写明是裸名）、
+    //       `erb-parser/src/index.ts` **+389**（新出口）、`declarations.ts` **+353**、
+    //       `plugin.ts` **+185**（定义腿多传一枚 `index`）。
+    //     · 形态：**没有把字节挪出图的选项**——补全 / 悬停 / F12 三条腿都在常驻注册面上，
+    //       `dim-index` 是纯函数模块，挂懒边只换来一次无谓的异步竞态。判据面因此如实上调：
+    //       ⇒ 文件闸 **196 → 197**、KB 闸 **3,553 → 3,567**（红沿 3,653,120 B，机械余量
+    //       **260 B**）。⚠ 下一步只剩 260 B，下一枚进图字节仍须先出图。
+    //     · 顺手清旧账：台账上一格写 3,638,268 B，而本批基线实测 **3,638,818 B**（**+550 B**
+    //       在台账之后、本批之前，两段都量过）：`704a9158` **3,638,378 B**（+110，台账算术
+    //       之外的零头）、再到 `928d9ca8` **+440**（唯一一枚 `app/src/bootstrap.ts`，出自
+    //       `a31a360d` 的前端桥接线；`928d9ca8` 与其父同读数 ⇒ 不是最后那笔端点硬化带的）。
+    //       这两笔本批不吃，但一并记在这儿，免得下一个人拿 3,638,268 当基线又差 550。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤196 文件 / ≤3,553 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤197 文件 / ≤3,567 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_553);
-    expect(files.length).toBeLessThanOrEqual(196);
+    expect(totalKb).toBeLessThanOrEqual(3_567);
+    expect(files.length).toBeLessThanOrEqual(197);
   });
 
   /**
