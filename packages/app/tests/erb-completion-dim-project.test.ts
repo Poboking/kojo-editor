@@ -174,3 +174,58 @@ describe('全项目名录喂给补全供方', () => {
     expect(items[0]?.label).toBe('PROJECT_VAR_149999');
   });
 });
+
+describe('对拍：旧（全量线性扫）vs 新（折叠序前缀索引）', () => {
+  /**
+   * 1,000 条 + 几枚大小写/非 ASCII 特例。名录规模压在千条以内是为了让"前缀命中"始终
+   * 远小于装配上限——上限一旦介入，新旧两条路的截断口径就不同了，对拍会变成测上限。
+   */
+  const dims: string[] = [];
+  for (let i = 0; i < 1000; i++) dims.push(`変数_${String(i)}`);
+  dims.push('ABC_1', 'abc_1', 'ABC_2', 'Z_9', 'ｱｲｳ');
+
+  /** 改前 `declaredCandidates` 的循环原样搬来当参照（只造候选，不做 merge） */
+  function oldPath(prefix: string): readonly string[] {
+    const needle = prefix.toUpperCase();
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const name of dims) {
+      if (name.length === 0) continue;
+      const upper = name.toUpperCase();
+      if (seen.has(upper)) continue;
+      seen.add(upper);
+      if (needle.length > 0 && !upper.startsWith(needle)) continue;
+      out.push(name);
+    }
+    return out;
+  }
+
+  /** 供方输出里只留声明名那一路（`detail` 是这条腿独有的字面） */
+  function newPath(prefix: string): readonly string[] {
+    const text = `  ${prefix}`;
+    const result = provideErbCompletion({
+      kind: 'completion',
+      languageId: 'kojo-erb',
+      path: 'C:/game/ERB/MAIN.ERB',
+      version: 1,
+      project: null,
+      text: `${text}\n`,
+      line: 1,
+      column: text.length + 1,
+      facts: { dimNames: dims },
+    });
+    const items = result?.kind === 'completion' ? result.items : [];
+    return items.filter((i) => i.detail === '#DIM 声明').map((i) => i.label);
+  }
+
+  for (const prefix of ['変', '変数_9', '変数_99', 'ABC', 'abc', 'ABC_1', 'Z_', 'ｱ']) {
+    it(`前缀「${prefix}」：两条路的候选集合逐条相等`, () => {
+      const want = [...oldPath(prefix)].sort();
+      const got = [...newPath(prefix)].sort();
+      expect(got).toEqual(want);
+      expect(got.length).toBeGreaterThan(0);
+      // 大小写不同的同名（ABC_1 / abc_1）只出一个，且是名录里先出现的那一个
+      if (prefix.toUpperCase() === 'ABC_1') expect(got).toEqual(['ABC_1']);
+    });
+  }
+});
