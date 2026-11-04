@@ -79,7 +79,7 @@ import { ERB_CONTROL_STATEMENTS, classifyControlFlow, parseDimDeclaration } from
 import { ERB_DECLARATION_DIRECTIVES, ERB_STATEMENT_DIRECTIVES } from './instructions';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { dimDeclarationOf, isErbDimNameChar, normalizePathKey } from './symbols';
-import { bareDimNameOf } from './dim-index';
+import { bareDimNameOf, dimDeclarationSitesOf } from './dim-index';
 
 /* ============================== 词法地基 ============================== */
 
@@ -2260,7 +2260,23 @@ function resolveErbDimHover(
   }
 
   const dims = (file.dims ?? []).filter((d) => bareDimNameOf(d.name).toUpperCase() === want);
-  if (dims.length === 0) return undefined;
+  if (dims.length === 0) {
+    // 跨文件：`.ERB` 里引用的名字常常声明在 `.ERH`——引擎把两者一起预载（同一编译单元，
+    // 全语料 0 处 `#INCLUDE`）。但索引只给"文件 + 行"，手上**没有那一行原文** ⇒ 只报
+    // 落点，不编初值 / 类型；措辞也不写"本文件"（那会是假话）。
+    const sites = dimDeclarationSitesOf(index, token);
+    if (sites.length === 0) return undefined;
+    const first = sites[0]!;
+    return {
+      name: bareDimNameOf(first.name),
+      kind: `#${first.directive} 声明`,
+      startColumn: span.start + 1,
+      endColumn: span.end + 1,
+      // 同名常量散在多份 `.ERH` 是常态：都列出来，不替作者挑一处。
+      lines: sites.map((site) => `声明于 \`${site.filePath}:${site.line}\``),
+      source: { filePath: first.filePath, line: first.line },
+    };
+  }
   const dim = nearestDimOf(dims, file.functions ?? [], useLine);
   const dimName = bareDimNameOf(dim.name);
   const lines: string[] = [`声明于 \`${file.path}:${dim.line}\``];

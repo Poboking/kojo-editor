@@ -33,6 +33,7 @@ import {
 } from '@kojo/plugin-api';
 import { parseDimDeclaration, parseErbText, parseLabelDefinition } from './scanner';
 import { codeViewOf, erbReferenceLocationsAt, functionNameTokenAt, referencesOf, visibleCodeLines } from './references';
+import { dimDeclarationSitesOf } from './dim-index';
 
 /**
  * 位置 → 符号（B0，2026-10-15 语言服务批）。
@@ -478,12 +479,29 @@ export function dimDeclarationsOf(text: string): { line: number; dim: ErbDimDecl
   return out;
 }
 
-/** 光标处变量名 → 本文件同名声明的落点；注释 / 字符串不算变量位置，跨文件不猜 */
+/**
+ * 光标处变量名 → 声明落点：**本文件**逐行精确定位，本文件没有时才查**项目索引**。
+ *
+ * 为什么要有跨文件这一腿：`.ERH` 不是"被 include 的头文件"——引擎把 `.erb` / `.erh` 一起
+ * 预载（8 盘语料 0 处 `#INCLUDE`），`#DIM` 写在 `DIM.ERH`、用在上百份 `.ERB` 里是常态。
+ * 只吃当前文件文本时，作者在 `.ERB` 的引用上按 F12 得到"没有定义"。
+ *
+ * 两腿的分工（**不合并成一条**，因为手上的事实不同）：
+ * - 本文件命中：现有逻辑逐字不变（列精确到名字首列、带 `span`）；
+ * - 跨文件命中：落点来自 `dimDeclarationSitesOf` 的索引事实，**列恒 1、不给 `span`**——
+ *   索引只有行没有列，编一个列号会让光标停在名字中间（`dim-index.ts` 头注同一条纪律）；
+ * - 本文件命中时**不再追加**跨文件落点：同名声明就在眼前，把别处的同名常量一起塞进
+ *   F12 列表会让"我去哪一行"变成一道选择题。
+ *
+ * `index` 缺省（`undefined` / `null`）⇒ 与加这一腿之前**逐字等价**：老调用方零感知，
+ * 也不因为"没传索引"而少答本文件那一腿。
+ */
 export function resolveErbDimDefinition(
   text: string,
   line: number,
   column: number,
   filePath: string | null,
+  index?: ErbIndex | null,
 ): EditorSymbolLocation[] {
   if (!filePath || !isErbDefinitionPath(filePath)) return [];
   if (!Number.isFinite(line) || !Number.isFinite(column)) return [];
@@ -502,7 +520,18 @@ export function resolveErbDimDefinition(
       span: { columnStart: dim.nameStart + 1, columnEnd: dim.nameStart + 1 + dim.name.length },
     });
   }
-  return out;
+  if (out.length > 0) return out;
+  // `index === undefined` 就是"这次没给索引"（老调用方 / 投影面腿），走旧结论。
+  if (index === undefined || index === null) return out;
+  // 只带 `byName` 的合成索引（只关心函数腿的调用方、测试桩）没有 `files`：跨文件声明
+  // 需要那份事实，缺席即弃权——不让一次越界读把整条 F12 打成空答案。
+  if ((index as Partial<ErbIndex>).files === undefined) return out;
+  // 跨文件落点：全给（同名常量散在多份 `.ERH` 是常态），列恒 1、不给 `span`。
+  return dimDeclarationSitesOf(index, token.text).map((site) => ({
+    filePath: site.filePath,
+    line: site.line,
+    column: site.column,
+  }));
 }
 
 /** 落点投影只要标签出现的这五格（作用域其余字段与投影无关） */

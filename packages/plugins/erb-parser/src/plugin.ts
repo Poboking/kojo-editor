@@ -236,8 +236,9 @@ export function provideErbDefinition(
     // 序① 标签：作用域在解析器（`labelScopeAt`）、落点投影在语言面库。
     const scope = labelScopeAt(request.text, request.path, request.line, request.column);
     const labels = scope === null ? [] : labelDefinitionLocations(scope);
-    // 序② 声明：`#DIM` 族纯判据（库包）。
-    const dims = resolveErbDimDefinition(request.text, request.line, request.column, request.path);
+    // 序② 声明：`#DIM` 族纯判据（库包）。带上 `index` 才有**跨文件**那一腿——`.ERB` 里
+    // 用到的常量通常声明在 `.ERH`（同一编译单元，0 处 `#INCLUDE`）。
+    const dims = resolveErbDimDefinition(request.text, request.line, request.column, request.path, index);
     const local = mergeSymbolLocations(labels, dims);
     if (index === null) return { kind, locations: local };
     // 序③ 函数索引：沿用 `definitionTargetsAt`（标签入口命中时它自己会让位，不会把
