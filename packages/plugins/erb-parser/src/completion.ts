@@ -79,6 +79,7 @@ import { ERB_CONTROL_STATEMENTS, classifyControlFlow, parseDimDeclaration } from
 import { ERB_DECLARATION_DIRECTIVES, ERB_STATEMENT_DIRECTIVES } from './instructions';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { dimDeclarationOf, isErbDimNameChar, normalizePathKey } from './symbols';
+import { bareDimNameOf } from './dim-index';
 
 /* ============================== 词法地基 ============================== */
 
@@ -2092,11 +2093,6 @@ function resolveErbFunctionHover(
     lines,
     source: { filePath: def.filePath, line: def.startLine },
   };
-}
-
-/** 索引里的声明名可能带数组后缀；悬停按**裸名**匹配与显示（`[10]` 是规模，不是名字） */
-function bareDimNameOf(name: string): string {
-  return name.replace(/\[[^\]]*\]$/, '');
 }
 
 /** 索引里的一份文件（只取悬停用得到的字段） */

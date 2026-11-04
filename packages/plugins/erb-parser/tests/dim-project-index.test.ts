@@ -12,7 +12,7 @@
 import { describe, expect, it } from 'vitest';
 import { functionLookupOf } from '@kojo/plugin-api';
 import type { ErbDim, ErbFile, ErbIndex } from '@kojo/plugin-api';
-import { dimDeclarationSitesOf, projectDeclaredNames, projectDimDeclarations, projectDimEntries } from '../src/dim-index';
+import { bareDimNameOf, dimDeclarationSitesOf, projectDeclaredNames, projectDimDeclarations, projectDimEntries } from '../src/dim-index';
 
 const ERH = 'C:/game/ERB/DIM.ERH';
 const ERB = 'C:/game/ERB/口上・メッセージ関連/KOJO.ERB';
@@ -94,6 +94,35 @@ describe('projectDimDeclarations · 归一与过滤', () => {
   it('没有 dims 的文件不制造空桶', () => {
     const index = makeIndex([file('C:/game/ERB/EMPTY.ERB', [])]);
     expect(projectDimDeclarations(index).size).toBe(0);
+  });
+});
+
+describe('数组型声明 · 键按裸名归一', () => {
+  it('`#DIM 配列[10]` 用裸名 `配列` 查得到（光标读到的是裸名）', () => {
+    const index = makeIndex([file(ERH, [dim('配列[10]', 'DIM', 12)])]);
+    expect(dimDeclarationSitesOf(index, '配列').map((s) => s.line)).toEqual([12]);
+    expect(dimDeclarationSitesOf(index, '配列[10]')).toEqual([]);
+  });
+
+  it('落点里仍带原名（作者要看的是盘上那一行写了什么）', () => {
+    const index = makeIndex([file(ERH, [dim('配列[10]', 'DIM', 12)])]);
+    expect(dimDeclarationSitesOf(index, '配列')[0]?.name).toBe('配列[10]');
+  });
+
+  it('裸名归一不影响诊断视图：dims 仍是原名', () => {
+    const index = makeIndex([file(ERH, [dim('配列[10]', 'DIM', 12)])]);
+    expect(projectDeclaredNames(index).dims).toEqual(['配列[10]']);
+  });
+
+  it('只有数组后缀的病态声明（`[10]`）不制造空键', () => {
+    const index = makeIndex([file(ERH, [dim('[10]', 'DIM', 1)])]);
+    expect(projectDimDeclarations(index).size).toBe(0);
+  });
+
+  it('bareDimNameOf 只剥尾部一段，中间方括号不动', () => {
+    expect(bareDimNameOf('配列[10]')).toBe('配列');
+    expect(bareDimNameOf('名字[1][2]')).toBe('名字[1]');
+    expect(bareDimNameOf('无后缀')).toBe('无后缀');
   });
 });
 
