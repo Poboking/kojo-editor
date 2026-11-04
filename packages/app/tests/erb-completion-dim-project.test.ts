@@ -3,16 +3,17 @@
  *
  * Emuera 预载 `ERB/` 下全部 `.erb` / `.erh`（`Preload.cs`），语料里 0 处 `#INCLUDE`
  * ⇒ `.ERH` 与 `.ERB` 是同一个编译单元的两片：`DIM.ERH` 里声明的名字在任何 `.ERB` 里都可见。
- * 事实侧因此要交**全项目**的声明名（当前文件的名字排前），而不是只交当前文件那几条——
- * 后者会让"正文里写 `DIM.ERH` 声明过的变量"一条候选都弹不出来。
+ * 事实侧因此要交**全项目**的声明名，而不是只交当前文件那几条——后者会让"正文里写
+ * `DIM.ERH` 声明过的变量"一条候选都弹不出来。
  *
  * 这里只测装配件 `dimNamesFor`（纯函数，不碰内核 / Monaco）：`erbCompletionFactsOf` 需要
- * `ITextModel` 与内核登记簿，那是 `erb-completion.test.ts` 那一层的活。五条判据：
+ * `ITextModel` 与内核登记簿，那是 `erb-completion.test.ts` 那一层的活。六条判据：
  * 1. `.ERH` 里的声明出现在 `.ERB` 的名字表里；
- * 2. 当前文件自己的名字排在最前；
- * 3. 大小写不敏感去重（同名常量散在多份 `DIM.ERH` 里是常态）；
- * 4. 三态：索引缺席 / 路径不在索引里 ⇒ `undefined`（回退缓冲区），索引确无声明 ⇒ `[]`；
- * 5. 缓存按索引对象失效：同一索引下重复取是同一个数组引用，索引重建后新名字立刻可见。
+ * 2. 名录按索引遍历顺序交出（**不按当前文件重排**：候选最终按 `sortText` 排序，插入序不参与）；
+ * 3. 同一索引下**不同文件共享同一个数组**（按文件派生副本会在堆里按"打开过的文件数"堆名录）；
+ * 4. 大小写不敏感去重（同名常量散在多份 `DIM.ERH` 里是常态）；
+ * 5. 三态：索引缺席 / 路径不在索引里 ⇒ `undefined`（回退缓冲区），索引确无声明 ⇒ `[]`；
+ * 6. 缓存按索引对象失效：同一索引下重复取是同一个数组引用，索引重建后新名字立刻可见。
  *
  * 末尾一条**规模用例**：15 万条合成声明量一次首建与命中，读数打进 stdout（回执要用）。
  */
@@ -55,11 +56,15 @@ describe('dimNamesFor：全项目 #DIM 名', () => {
     expect(names).toContain('MOD_FLAG');
   });
 
-  it('当前文件自己的名字排在最前', () => {
-    const names = dimNamesFor(index, erb)!;
-    expect(names[0]).toBe('本文件变量');
-    // 其余名字仍按索引遍历顺序排（`files` 插入序 × 文件内声明序）
-    expect(names.slice(1)).toEqual(['好感度', '警戒', 'MOD_FLAG']);
+  it('名录按索引遍历顺序交出（`files` 插入序 × 文件内声明序），不按当前文件重排', () => {
+    expect(dimNamesFor(index, erb)!.slice(0, 4)).toEqual(['好感度', '警戒', '本文件变量', 'MOD_FLAG']);
+  });
+
+  it('同一索引下**不同文件**共享同一个数组（不按文件派生副本）', () => {
+    // 这条是内存判据：按文件合并出来的每份都是十几万条，下游折叠序索引还会为每份再排
+    // 一份副本 ⇒ 堆按"打开过的文件数"线性增长。共享一份就没有这个面。
+    expect(dimNamesFor(index, erb)).toBe(dimNamesFor(index, erh));
+    expect(dimNamesFor(index, erh)).toBe(dimNamesFor(index, modErh));
   });
 
   it('按大写归一去重：同名常量散在多份 ERH 里只出一个（首见者原形）', () => {
@@ -108,7 +113,7 @@ describe('dimNamesFor：15 万条规模', () => {
     return index;
   };
 
-  it('首建与命中读数（回执用），首建仍是一次线性扫描', () => {
+  it('首建与命中读数（回执用），首建是一次线性扫描 + 一次归一去重', () => {
     const t0 = performance.now();
     const first = dimNamesFor(build(), target)!;
     const coldMs = performance.now() - t0;
@@ -119,8 +124,8 @@ describe('dimNamesFor：15 万条规模', () => {
     const baseMs = performance.now() - t1;
 
     const t2 = performance.now();
-    const merged = dimNamesFor(warm, target)!;
-    const mergeMs = performance.now() - t2;
+    const built = dimNamesFor(warm, target)!;
+    const dedupeMs = performance.now() - t2;
 
     const t3 = performance.now();
     const again = dimNamesFor(warm, target)!;
@@ -128,18 +133,18 @@ describe('dimNamesFor：15 万条规模', () => {
 
     console.log(
       `[dimNamesFor] 声明 ${String(FILES * PER_FILE)} 条 / 去重后 ${String(first.length)} 条：` +
-        `冷启 ${coldMs.toFixed(1)}ms（其中基础名录 ${baseMs.toFixed(1)}ms + 本格去重合并 ` +
-        `${mergeMs.toFixed(1)}ms）/ 命中 ${hitMs.toFixed(3)}ms`,
+        `冷启 ${coldMs.toFixed(1)}ms（其中基础名录 ${baseMs.toFixed(1)}ms + 本格去重 ` +
+        `${dedupeMs.toFixed(1)}ms）/ 命中 ${hitMs.toFixed(3)}ms`,
     );
 
     expect(first.length).toBe(270 * FILES + 1); // 去重后 + 当前文件独占那一条
-    expect(first[0]).toBe('PROJECT_VAR_0_0'); // 当前文件的名字仍在前
-    expect(first[1]).toBe('OWN_ONLY');
-    expect(merged).toEqual(first);
-    expect(again).toBe(merged); // 第二轮零成本（同一索引下同一文件复用同一个数组）
+    expect(first[0]).toBe('PROJECT_VAR_0_0');
+    expect(first).toContain('OWN_ONLY');
+    expect(built).toEqual(first);
+    expect(again).toBe(built); // 第二轮零成本（同一索引共享同一个数组）
     // 读数只用于回执：这里不断言墙钟阈值——本仓把"带墙钟断言的用例"划进串行计时池
     // （`tools/perf-suite.mjs` 的源码谓词），那样它就进不了 `erb-completion` 这一组功能用例。
-    expect([coldMs, baseMs, mergeMs, hitMs].every((v) => Number.isFinite(v) && v >= 0)).toBe(true);
+    expect([coldMs, baseMs, dedupeMs, hitMs].every((v) => Number.isFinite(v) && v >= 0)).toBe(true);
   });
 });
 

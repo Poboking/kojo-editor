@@ -153,29 +153,24 @@ function functionNamesOf(kernel: Kernel): readonly string[] {
 }
 
 /**
- * 全项目 `#DIM` 名去重件（按索引对象缓存）。
+ * 全项目 `#DIM` 名去重件（按索引对象缓存，**每个索引只有一份**）。
  *
  * 八盘语料 15 万条声明，同名常量散在多份 `DIM.ERH` 里 ⇒ 原始名单重复极多。每轮补全都把
  * 15 万个名字哈希一遍是每击键的开销，所以这一遍只做一次。失效判据取**索引对象本身**
  * （与 `dim-index.ts` 的 WeakMap 同一把尺子）：索引重建即新对象，不会出现"名录比索引旧"。
  *
- * `keys` 是名字的大写归一（下游 `declaredCandidates` 就按这一口径判重）预先算好，合并阶段
- * 就不必再对 15 万个名字逐个 `toUpperCase()`。
+ * ⚠ **不再按"当前文件"合并一份**（2026-11-04 复审撤掉）：合并数组每份都是十几万条，而
+ * 下游 `foldedNameIndex` 会为**每个新数组**排一份折叠序副本 ⇒ 堆里按"打开过的文件数"堆
+ * 副本（4,000 份 `.ERB` 量级＝GB 级），换来的"当前文件排前"对显示顺序**毫无作用**：
+ * 候选最终按 `sortText`（`4_`/`5_` + 名字）排序，插入序不参与。所以这里只交共享的这一份。
  */
-const PROJECT_DIM_NAMES = new WeakMap<
-  ErbIndex,
-  { readonly names: readonly string[]; readonly keys: readonly string[] }
->();
+const PROJECT_DIM_NAMES = new WeakMap<ErbIndex, readonly string[]>();
 
-function projectDimNames(index: ErbIndex): {
-  readonly names: readonly string[];
-  readonly keys: readonly string[];
-} {
+function projectDimNames(index: ErbIndex): readonly string[] {
   const hit = PROJECT_DIM_NAMES.get(index);
   if (hit !== undefined) return hit;
 
   const names: string[] = [];
-  const keys: string[] = [];
   const seen = new Set<string>();
   // 遍历点只有 `dim-index.ts` 一处（`projectDeclaredNames`），这里只做去重
   for (const name of projectDeclaredNames(index).dims) {
@@ -184,66 +179,24 @@ function projectDimNames(index: ErbIndex): {
     if (seen.has(key)) continue;
     seen.add(key);
     names.push(name);
-    keys.push(key);
   }
 
-  const built = { names, keys };
-  PROJECT_DIM_NAMES.set(index, built);
-  return built;
+  PROJECT_DIM_NAMES.set(index, names);
+  return names;
 }
 
 /**
- * 合并结果按（索引, 文件）两级缓存：合并要遍历全项目名录，同一份索引下的同一份文件只做一次。
- * 外层键是索引对象、内层键是 `ErbFile` 身份——两者都随索引重建换新，两层都不需要版本号。
- */
-const MERGED_DIM_NAMES = new WeakMap<ErbIndex, WeakMap<ErbFile, readonly string[]>>();
-
-/**
- * `dimNames` 事实格：**当前文件的名字在前** ∪ 全项目声明名（大小写不敏感去重）。
- *
- * 当前文件排前不是审美：同名候选几十上百条时，作者最先要的多半是"我刚在这份文件顶上声明过
- * 的那几个"，项目名录的字典序对他没有帮助。
+ * `dimNames` 事实格：全项目声明名（大小写不敏感去重，按索引共享同一份数组）。
  *
  * 三态沿用既有口径：`index === null`（未索引）或 `file === null`（路径不在索引里）⇒
  * `undefined`，插件回退当前缓冲区；索引能作答但一个名字都没有 ⇒ `[]`（零候选，不回退）。
+ *
+ * `file` 只用来判"这份文件在不在索引里"——名字是**项目级**事实，与具体文件无关
+ * （`.ERH` 与 `.ERB` 是同一个编译单元）。
  */
 export function dimNamesFor(index: ErbIndex | null, file: ErbFile | null): readonly string[] | undefined {
   if (index === null || file === null) return undefined;
-  const project = projectDimNames(index);
-
-  let perFile = MERGED_DIM_NAMES.get(index);
-  if (perFile === undefined) {
-    perFile = new WeakMap<ErbFile, readonly string[]>();
-    MERGED_DIM_NAMES.set(index, perFile);
-  }
-  const cached = perFile.get(file);
-  if (cached !== undefined) return cached;
-
-  /** 当前文件自己的声明名（按大写归一去重，保持文件内声明顺序） */
-  const own: string[] = [];
-  const ownKeys = new Set<string>();
-  for (const dim of file.dims) {
-    if (dim.name.length === 0) continue;
-    const key = dim.name.toUpperCase();
-    if (ownKeys.has(key)) continue;
-    ownKeys.add(key);
-    own.push(dim.name);
-  }
-
-  let names: readonly string[];
-  if (own.length === 0) {
-    // 正文 `.ERB` 多半自己一条声明都没有 ⇒ 项目名录原样交出，零拷贝
-    names = project.names;
-  } else {
-    const merged: string[] = own.slice();
-    for (let i = 0; i < project.names.length; i++) {
-      if (!ownKeys.has(project.keys[i]!)) merged.push(project.names[i]!);
-    }
-    names = merged;
-  }
-
-  perFile.set(file, names);
-  return names;
+  return projectDimNames(index);
 }
 
 /**
