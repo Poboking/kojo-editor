@@ -2142,38 +2142,37 @@ export function ShellLayout(props: Props): ReactElement {
   }, []);
 
   /**
-   * MCP 真源登记（路 A 端到端集成，ADR-0013）：把「命令面板注册表 + 当前编辑器上下文」
-   * 交给 `../mcp/wiring` 的注入 seam，供 `host-bridge` 首条 `mcp://request` 到达时装配
-   * 真实 `McpHostDeps`。此前 `registerMcpWiringSources()` 没有生产调用点 ⇒ 宿主首条请求
-   * 拿到空 deps ⇒ 所有工具 NOT_WIRED；这里补上唯一的生产登记点。
+   * MCP 真源登记（路 A 端到端集成，ADR-0013；A3 批接满真源腿）：把「命令面板注册表 +
+   * 编辑器上下文 + 内核实例」交给 `../mcp/real-sources` 的组装器，供 `host-bridge`
+   * 首条 `mcp://request` 到达时装配真实 `McpHostDeps`。
    *
-   * 纪律：
-   * - **动态 import 是刻意的**（与上面 debug-registry 同形态）：`../mcp/wiring` 只在登记时
-   *   装载，绝不给 bootstrap 开机静态图加边（`@kojo/mcp-host` / `./wiring` / Monaco /
-   *   kernel 零新增静态边；它们本就只在首条请求时由 host-bridge 动态装载）；
-   * - 依赖 `[registry, commandCtx]`：注册表换代 / 项目开合时重登（动态 import 有模块缓存，
-   *   重登极轻），真源始终是当前值；`.then` 里读 `*.current` 取当拍最新，不用过期快照；
-   * - 只登记**够得着的真源**：命令投影（`wiring.projectCommands` 把 registry 投成
-   *   `McpCommandSource[]`）+ `EditorCommandContext`。语义 8 腿 / kernel IO 3 腿 /
-   *   resource 数据源 / runSupplemental / promptSlots 目前都没有在「不改大量无关文件、
-   *   不新增开机静态边」前提下可接的真源 ⇒ 一律**缺席**，由 `@kojo/mcp-host` registry
-   *   显式报 NOT_WIRED / RESOURCE_UNAVAILABLE（铁律 4：不静默、不伪造读数、不造空实现）。
-   * - 不在 cleanup 里 `registerMcpWiringSources(null)`：那会在两拍重登之间制造「空 deps」
-   *   窗口，恰好把本波要修的 NOT_WIRED 又引回来；只用 cancelled 拦掉过期的异步登记。
+   * A3 批纪律：
+   * - **动态 import 是刻意的**（与上面 debug-registry 同形态）：`../mcp/real-sources`
+   *   只在本登记点装载，绝不给 bootstrap 开机静态图加边（Monaco / kernel / bridge /
+   *   `@kojo/mcp-host` 零新增静态边；它们本就只在首条请求时由 host-bridge 动态装载）；
+   * - 依赖 `[registry, commandCtx, kernel]`：注册表换代 / 项目开合 / 内核重建时重登
+   *   （动态 import 有模块缓存，重登极轻），真源始终是当拍最新——`.then` 里只传
+   *   **读 ref 的 getter**（`registryRef` / `commandCtxRef`），不用过期快照；
+   * - 真源腿在 `real-sources.ts` 内逐腿组装：命令投影 + 语义 8 腿（判据腿 / provider
+   *   纯读直调）+ kernel IO 3 腿 + 8 项 resource 数据源 + runSupplemental 只读腿 +
+   *   `mcp.prompt` 槽贡献。写类与危险动作不开放执行（由组装器显式 NOT_WIRED）；
+   * - 不在 cleanup 里清空登记：那会在两拍重登之间制造「空 deps」窗口；只用
+   *   cancelled 拦掉过期的异步登记。
    */
   useEffect(() => {
     let cancelled = false;
-    void import('../mcp/wiring').then((m) => {
+    void import('../mcp/real-sources').then((m) => {
       if (cancelled) return;
-      m.registerMcpWiringSources({
-        commands: registryRef.current,
-        commandContext: commandCtxRef.current,
+      void m.installRealMcpSources({
+        getCommands: () => registryRef.current,
+        getCommandContext: () => commandCtxRef.current,
+        getKernel: () => kernel,
       });
     });
     return () => {
       cancelled = true;
     };
-  }, [registry, commandCtx]);
+  }, [registry, commandCtx, kernel]);
 
   /* -------------------- D2：工作区符号（Ctrl+T）的宿主接线 -------------------- */
 

@@ -242,4 +242,20 @@ describe('装配结果接进真 @kojo/mcp-host registry', () => {
       reg.readResource('kojo://project/commands', scope),
     ).rejects.toMatchObject({ code: 'RESOURCE_UNAVAILABLE' });
   });
+
+  it('promptSlots 显式空数组 ⇒ 三个零游戏名词骨架并入 prompts；槽缺席渲染成显式占位（不编造领域知识）', async () => {
+    registerMcpWiringSources({ promptSlots: [] });
+    const reg = createMcpCapabilityRegistry(createMcpHostDeps());
+    const prompts = reg.listPrompts();
+    expect(prompts.map((p) => p.name)).toEqual([
+      'workflow.triage-diagnostics', 'workflow.author-review', 'workflow.safe-refactor',
+    ]);
+    // 槽没贡献 ⇒ 渲染成显式可读占位（fail loud），骨架绝不硬编码领域知识
+    const rendered = (await reg.getPrompt('workflow.triage-diagnostics', {}, scope)) as {
+      messages: { content: { text: string } }[];
+    };
+    const text = rendered.messages[0]!.content.text;
+    expect(text).toContain('[领域槽未注入: domain_context');
+    expect(text).toContain('[领域槽未注入: domain_rules');
+  });
 });
