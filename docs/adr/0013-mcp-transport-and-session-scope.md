@@ -57,7 +57,7 @@
 | 线协议 | **JSON-RPC 2.0** | 六 method：`tools/list` `tools/call` `resources/list` `resources/read` `prompts/list` `prompts/get` |
 | 握手兼容 | **兼容旧版 `initialize` 握手** | 老客户端先发 `initialize` 再 `notifications/initialized`；服务端按 2026-07-28 的无状态口径应答，不要求建立持久会话；`initialize` 不授予任何超出 `scope` 的权力 |
 | 桥契约 | Tauri 事件 `mcp://request` + 命令 `mcp_start` / `mcp_stop` / `mcp_status` / `mcp_respond` | Rust 线协议把请求投递进 WebView，WebView 桥分派后经 `mcp_respond` 回帧；Rust 不认识能力语义、不跑内核 |
-| 开机图纪律 | `createMcpCapabilityRegistry` **动态 import** | ps10 闸 197 文件 / 3,567 KB（2026-11-04 ERH 批读数）；产品未启用 MCP 时该包**零字节进图**。WebView 桥只在首条 `mcp://request` 到达时才装载注册表 |
+| 开机图纪律 | `createMcpCapabilityRegistry` **动态 import** | ps10 闸 197 文件 / 3,568 KB（2026-11-04 ERH 批读数）；产品未启用 MCP 时该包**零字节进图**。WebView 桥只在首条 `mcp://request` 到达时才装载注册表 |
 
 **握手与分派边界**：Rust 侧只做"帧进 / 帧出 + 闸门"，**能力清单、分级、批准判定全在 `@kojo/mcp-host`（路 B，零游戏名词、只依赖 `@kojo/plugin-api`）** 与 WebView 桥（路 A）里；Rust 侧不写任何游戏/能力知识（ADR-0003 在 Rust 侧同样是硬约束）。
 
