@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import process from 'node:process';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   appUpdateRelation,
+  createProgressFlusher,
   downloadPercent,
   downloadProgressText,
   formatBytes,
@@ -8,16 +10,25 @@ import {
   isUpdateBusy,
   normalizeUpdateDate,
   normalizeUpdateNotes,
+  raceWithTimeout,
+  reasonFromUpdateError,
   reduceUpdatePhase,
+  shouldSkipAutoCheck,
   updateDialogPhase,
   updateDialogTitle,
   updateFailureNote,
   updateNoteLines,
   updateStatus,
   visibleUpdateNoteLines,
+  AUTO_CHECK_DEDUP_MS,
+  PROGRESS_FLUSH_INTERVAL_MS,
+  UPDATE_CHECK_TIMEOUT_MS,
+  UPDATE_CHECK_TIMEOUT_REASON,
   UPDATE_NOTE_LINE_LIMIT,
   UPDATE_NOTES_EMPTY,
+  UPDATE_REASON_MAX_CHARS,
   UPDATE_SUBJECT,
+  type AutoCheckRecord,
   type UpdateDialogPhase,
   type UpdatePhase,
 } from '../src/ui/update-check';
@@ -38,6 +49,12 @@ import {
  * 用户反馈第 1 条新增第五条：found 带上 `currentVersion` / `notes` / `date`，并一路带到
  * downloading / done / failed(install)（弹窗换态不丢版本，失败重试有据可依）；弹窗判据、
  * 说明按行拆 / 超长截显示、日期格式化也在这里钉住（UpdateDialog 只消费，不再算一遍）。
+ *
+ * UPD-A（2026-11-05）再增四个纯助手的单面：检查看门狗竞速（`raceWithTimeout`，含
+ * unhandledRejection 探针）、会话级自动检查去重判据（`shouldSkipAutoCheck`）、下载进度
+ * 「累计 + 定时冲刷」（`createProgressFlusher`，可注入假定时器）、失败病因透传
+ * （`reasonFromUpdateError`）。hook 一侧的接线（真 mount + 假时钟）在
+ * `update-flow-robust.test.ts`。
  */
 
 const IDLE: UpdatePhase = { kind: 'idle' };
@@ -461,5 +478,239 @@ describe('updateStatus：常驻状态行', () => {
       text: '正在下载安装…',
       tone: 'dim',
     });
+  });
+});
+
+/* ============================================================================
+ * UPD-A（2026-11-05）· 四个纯助手的单面。hook 一侧的接线在 update-flow-robust.test.ts。
+ * ========================================================================== */
+
+describe('raceWithTimeout：检查看门狗的竞速（UPD-A）', () => {
+  /** unhandledRejection 探针：输掉竞速的 promise 没人接 ⇒ 这个数组必须保持为空 */
+  let unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+
+  /** 挂起/放行一枚 promise 的柄 */
+  function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
+    let resolve!: (v: T) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  beforeEach(() => {
+    unhandled = [];
+    process.on('unhandledRejection', onUnhandled);
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    // 先让晚到的兑现/拒绝有机会传播（假时钟未还时 flush 微任务），再卸探针
+    await vi.advanceTimersByTimeAsync(0);
+    process.off('unhandledRejection', onUnhandled);
+    vi.useRealTimers();
+    expect(unhandled, '不得出现 unhandledRejection').toEqual([]);
+  });
+
+  it('常量与病因口径：20s / 固定文案（文案从常量推导，两处不许各漂各的）', () => {
+    expect(UPDATE_CHECK_TIMEOUT_MS).toBe(20_000);
+    expect(UPDATE_CHECK_TIMEOUT_REASON).toBe('检查超时（20 秒无响应）');
+  });
+
+  it('真结果先到：竞速交回真值（非 timeout），看门狗定时器就地拆掉', async () => {
+    const raced = raceWithTimeout(Promise.resolve('真值'), UPDATE_CHECK_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await raced).toBe('真值');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('看门狗先赢：20s 无响应交回 timeout；晚到的真结果兑现不炸 unhandledRejection', async () => {
+    const d = deferred<string>();
+    const raced = raceWithTimeout(d.promise, UPDATE_CHECK_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_TIMEOUT_MS);
+    expect(await raced).toBe('timeout');
+    // 晚到的真值：竞速早已落定，它进黑洞（flow 侧的尾巴负责还资源）——但绝不能没人接
+    d.resolve('晚到的真值');
+    await vi.advanceTimersByTimeAsync(1);
+  });
+
+  it('晚到的真结果拒绝：同样不炸 unhandledRejection（输掉的 promise 必须挂 catch）', async () => {
+    const d = deferred<string>();
+    const raced = raceWithTimeout(d.promise, UPDATE_CHECK_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_TIMEOUT_MS);
+    expect(await raced).toBe('timeout');
+    d.reject(new Error('晚到的失败'));
+    await vi.advanceTimersByTimeAsync(1);
+  });
+
+  it('真 promise 先拒绝：竞速照常拒绝（performCheck 的外层 catch 靠这条路接住检查失败）', async () => {
+    const raced = raceWithTimeout<string>(Promise.reject(new Error('HTTP 404')), UPDATE_CHECK_TIMEOUT_MS);
+    await expect(raced).rejects.toThrow('HTTP 404');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cancel（卸载清理路径）：只拆定时器不打扰真 promise——过了 20s 不落假超时，真结果仍能交回', async () => {
+    const d = deferred<string>();
+    let cancel: (() => void) | undefined;
+    const raced = raceWithTimeout(d.promise, UPDATE_CHECK_TIMEOUT_MS, (c) => {
+      cancel = c;
+    });
+    expect(cancel).toBeTypeOf('function');
+    cancel?.();
+    await vi.advanceTimersByTimeAsync(UPDATE_CHECK_TIMEOUT_MS + 1);
+    expect(vi.getTimerCount()).toBe(0);
+    d.resolve('真结果');
+    expect(await raced).toBe('真结果');
+  });
+});
+
+describe('shouldSkipAutoCheck：会话级自动检查去重判据（UPD-A）', () => {
+  it('null 不跳（本会话还没查过）；窗口内 latest/failed 都跳', () => {
+    const t = 1_000_000;
+    expect(shouldSkipAutoCheck(null, t)).toBe(false);
+    expect(shouldSkipAutoCheck({ outcome: 'latest', at: t - 1 } satisfies AutoCheckRecord, t)).toBe(true);
+    expect(shouldSkipAutoCheck({ outcome: 'failed', at: t - AUTO_CHECK_DEDUP_MS + 1 }, t)).toBe(true);
+  });
+
+  it('恰好等于 TTL 不跳（「5 分钟内」的字面义：严格小于才跳），过期更不跳', () => {
+    const t = 1_000_000;
+    expect(shouldSkipAutoCheck({ outcome: 'latest', at: t - AUTO_CHECK_DEDUP_MS }, t)).toBe(false);
+    expect(shouldSkipAutoCheck({ outcome: 'failed', at: t - AUTO_CHECK_DEDUP_MS - 1 }, t)).toBe(false);
+  });
+
+  it('found 绝不入账 ⇒ 也绝不触发跳过（编辑器侧还要举卡，防御位）', () => {
+    const t = 1_000_000;
+    expect(shouldSkipAutoCheck({ outcome: 'found', at: t - 1 }, t)).toBe(false);
+  });
+});
+
+describe('createProgressFlusher：下载进度「累计 + 定时冲刷」（UPD-A）', () => {
+  /** 单槽假时钟：冲刷器同一时刻至多挂一枚定时器，单槽足够 */
+  function fakeClock(intervalMs: number = PROGRESS_FLUSH_INTERVAL_MS) {
+    const flushes: number[] = [];
+    let armed: (() => void) | null = null;
+    return {
+      flushes,
+      get armed() {
+        return armed !== null;
+      },
+      fire(): void {
+        const fn = armed;
+        armed = null;
+        fn?.();
+      },
+      setTimer: (fn: () => void, ms: number) => {
+        expect(ms).toBe(intervalMs);
+        armed = fn;
+        return 1; // 句柄类型是 unknown：假时钟自造的编号即可
+      },
+      clearTimer: (): void => {
+        armed = null;
+      },
+    };
+  }
+
+  it('150ms 内 N 枚分片只冲一次，冲的是全量欠账（不是每枚一冲）', () => {
+    const clock = fakeClock();
+    const flusher = createProgressFlusher((d) => clock.flushes.push(d), clock);
+    flusher.add(300);
+    flusher.add(300);
+    flusher.add(400);
+    expect(clock.flushes).toEqual([]); // 窗口未到：只累计
+    expect(clock.armed).toBe(true); // 恰一枚定时器
+    clock.fire();
+    expect(clock.flushes).toEqual([1000]); // 一次、全量
+    expect(clock.armed).toBe(false); // 冲完定时器就地拆
+  });
+
+  it('非正分片是 no-op：不开窗、不冲刷（与状态机同口径）', () => {
+    const clock = fakeClock();
+    const flusher = createProgressFlusher((d) => clock.flushes.push(d), clock);
+    flusher.add(0);
+    flusher.add(-5);
+    expect(clock.armed).toBe(false);
+    flusher.flush();
+    expect(clock.flushes).toEqual([]);
+  });
+
+  it('flush()：窗口没到也立刻冲掉欠账并拆定时器（终态前最终冲刷）；无欠账时 no-op 不重复冲', () => {
+    const clock = fakeClock();
+    const flusher = createProgressFlusher((d) => clock.flushes.push(d), clock);
+    flusher.add(128);
+    flusher.flush();
+    expect(clock.flushes).toEqual([128]);
+    expect(clock.armed).toBe(false);
+    flusher.flush();
+    expect(clock.flushes).toEqual([128]);
+  });
+
+  it('冲完再进分片：新窗重开（每窗恰好一次）', () => {
+    const clock = fakeClock();
+    const flusher = createProgressFlusher((d) => clock.flushes.push(d), clock);
+    flusher.add(10);
+    clock.fire();
+    flusher.add(20);
+    expect(clock.armed).toBe(true);
+    clock.fire();
+    expect(clock.flushes).toEqual([10, 20]);
+  });
+
+  it('默认接线：不注入定时器时走全局 setTimeout，间隔恰是 150ms', () => {
+    vi.useFakeTimers();
+    try {
+      const flushes: number[] = [];
+      const flusher = createProgressFlusher((d) => flushes.push(d));
+      flusher.add(64);
+      vi.advanceTimersByTime(PROGRESS_FLUSH_INTERVAL_MS - 1);
+      expect(flushes).toEqual([]);
+      vi.advanceTimersByTime(1);
+      expect(flushes).toEqual([64]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('reasonFromUpdateError：失败病因透传（UPD-A）', () => {
+  it('Error 且 message 非空：原样可读（正常 Error）', () => {
+    expect(reasonFromUpdateError(new Error('HTTP 404: endpoint missing'))).toBe('HTTP 404: endpoint missing');
+  });
+
+  it('折叠所有空白为单空格（换行变空格防粘连），控制字符去掉', () => {
+    expect(reasonFromUpdateError(new Error('a\n\r  b\t\tc'))).toBe('a b c');
+    expect(reasonFromUpdateError(new Error('HTTP 404\nendpoint missing'))).toBe('HTTP 404 endpoint missing');
+    expect(reasonFromUpdateError(new Error('x\u0000y\u007Fz'))).toBe('xyz');
+  });
+
+  it('message 洗完为空（空串 / 全空白）→ undefined（回落常态话术，不出一句空病因）', () => {
+    expect(reasonFromUpdateError(new Error(''))).toBeUndefined();
+    expect(reasonFromUpdateError(new Error(' \n\t '))).toBeUndefined();
+  });
+
+  it('非 Error 一律 undefined（Tauri 偶发抛串/对象——回落常态话术）', () => {
+    expect(reasonFromUpdateError('HTTP 404')).toBeUndefined();
+    expect(reasonFromUpdateError({ message: 'x' })).toBeUndefined();
+    expect(reasonFromUpdateError(42)).toBeUndefined();
+    expect(reasonFromUpdateError(null)).toBeUndefined();
+    expect(reasonFromUpdateError(undefined)).toBeUndefined();
+  });
+
+  it('超长截 300 字符；恰 300 不截', () => {
+    expect(reasonFromUpdateError(new Error('x'.repeat(UPDATE_REASON_MAX_CHARS)))).toBe(
+      'x'.repeat(UPDATE_REASON_MAX_CHARS),
+    );
+    const long = reasonFromUpdateError(new Error(`前缀：${'长'.repeat(400)}`));
+    expect(long).toHaveLength(UPDATE_REASON_MAX_CHARS);
+    expect(long?.startsWith('前缀：')).toBe(true);
+  });
+
+  it('Error 子类也认（判据不看 name）', () => {
+    class WeirdError extends Error {}
+    expect(reasonFromUpdateError(new WeirdError('代理挂了'))).toBe('代理挂了');
   });
 });

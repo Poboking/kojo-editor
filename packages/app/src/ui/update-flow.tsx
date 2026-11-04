@@ -9,7 +9,15 @@ import { check, type Update } from '@tauri-apps/plugin-updater';
 import { invoke } from '@tauri-apps/api/core';
 import { isTauri } from '../bridge/invoke';
 import {
+  createProgressFlusher,
+  raceWithTimeout,
+  reasonFromUpdateError,
   reduceUpdatePhase,
+  shouldSkipAutoCheck,
+  UPDATE_CHECK_TIMEOUT_MS,
+  UPDATE_CHECK_TIMEOUT_REASON,
+  type AutoCheckOutcome,
+  type AutoCheckRecord,
   type UpdateAction,
   type UpdateDialogPhase,
   type UpdatePhase,
@@ -33,9 +41,44 @@ import { UpdateNoticeCard, useUpdateNotice } from './UpdateNoticeCard';
  * - 并发检查以后发起者为准（seq），落败的那次连同 `Update` 宿主资源一起作废；
  * - 卸载/换查时释放没在安装的 `Update` 资源；下载中不打断；
  * - 检查失败（私仓端点 404 是常态）只落状态，绝不弹窗。
+ *
+ * ## 本批（UPD-A · 2026-11-05）改的是什么
+ *
+ * 四件健壮性/性能，纯判据都在 `update-check.ts` 那一节（测试各就各位）：
+ * 1. **检查看门狗**：黑洞代理会把 `check()` 挂死 ⇒ 设置页永远「正在检查更新…」且 busy
+ *    禁两颗按钮。现在 20s（`UPDATE_CHECK_TIMEOUT_MS`）没回就按 checkFailed 落态、病因固定
+ *    「检查超时」；看门狗赢下竞速后，真 check() 无论何时落定都只能**作废并归还资源**
+ *    （`checkPromise` 的尾巴），晚到的真值再也进不了状态机；卸载清理把还没响的看门狗
+ *    定时器一并清掉；
+ * 2. **会话级自动检查去重**：欢迎页与 ShellLayout 两处挂载各查一次 ⇒ 一次会话至少两次
+ *    网络检查。模块级 `lastAutoCheck` 入账 latest / failed(check)（**found 绝不入账**——
+ *    编辑器侧还要举卡），5 分钟内后续挂载的自动检查直接跳过；手动 checkNow 永不跳过；
+ * 3. **下载进度节流**：Progress 分片改为**累计 + 定时冲刷**（`createProgressFlusher`，
+ *    150ms 一批），Started 的 total 仍立即上屏；Finished / 正常返回 / 失败前都做**最终
+ *    冲刷**，`received` 终值精确；每次 install 新建一枚，重试路径不带上一轮欠账；
+ * 4. **失败病因透传**：`performCheck` / `install` 的 catch 过去把错误吞成哑巴态，现在
+ *    `reasonFromUpdateError` 读得出 Error.message 就带给 checkFailed / installFailed，
+ *    读不出仍回落那句常态话术；
+ * 5. **装完也还资源**：install 成功过去只把 foundRef 置 null、`Update` 宿主资源没还——
+ *    现在成功也走一次 `releaseFound()`（Windows 上进程通常已被安装器带走，这步给
+ *    "装完进程还在"的平台兜底；失败路径有意保留资源供重试复用）。
  */
 
 export const AUTO_UPDATE_CHECK_DELAY_MS = 3000;
+
+/**
+ * 会话级自动检查去重的**入账记录**（UPD-A；模块级 ⇒ 欢迎页与 ShellLayout 两次挂载共享
+ * 同一份，这正是去重的意义所在）。判据在 `update-check.ts` 的 `shouldSkipAutoCheck`。
+ */
+let lastAutoCheck: AutoCheckRecord | null = null;
+
+/**
+ * 自动检查落 latest / failed(check) 时入账。参数类型挡住 `'found'`：**found 绝不入账**——
+ * 编辑器侧还要举卡，「上一处查到过」不能让下一处挂载跳过真查。
+ */
+function noteAutoCheckOutcome(outcome: Exclude<AutoCheckOutcome, 'found'>): void {
+  lastAutoCheck = { outcome, at: Date.now() };
+}
 
 export interface UseUpdateFlowOptions {
   /** 静默检查延迟（默认 3s，与 ShellLayout 现值同源）；<=0 = 不跑自动检查 */
@@ -83,6 +126,8 @@ export function useUpdateFlow(options?: UseUpdateFlowOptions): UpdateFlow {
   const autoFiredRef = useRef(false);
   /** 组件还活着：关页面时仍在路上的 check() 回来要还资源，而不是往已卸载的树里塞状态 */
   const aliveRef = useRef(true);
+  /** 当前检查的看门狗取消柄（raceWithTimeout 注入）：卸载清理里把还没响的定时器一并清掉 */
+  const watchdogCancelRef = useRef<(() => void) | null>(null);
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
 
@@ -109,12 +154,33 @@ export function useUpdateFlow(options?: UseUpdateFlowOptions): UpdateFlow {
       try {
         // 更新检查跟随环境代理：Rust 侧读标准环境变量，取不到（含非 Tauri）= 不传参。
         const envProxy = await invoke<string | null>('updater_env_proxy').catch(() => null);
-        const found = await check(envProxy === null ? undefined : { proxy: envProxy });
+        // 看门狗（UPD-A）：黑洞代理会把 check() 挂死到永不返回 ⇒ 设置页永远「正在检查更新…」
+        // 且 busy 禁两颗按钮。20s 没回就按 checkFailed 落态；真结果晚到的处置见 timeout 分支。
+        const checkPromise = check(envProxy === null ? undefined : { proxy: envProxy });
+        const found = await raceWithTimeout(checkPromise, UPDATE_CHECK_TIMEOUT_MS, (cancel) => {
+          watchdogCancelRef.current = cancel;
+        });
+        watchdogCancelRef.current = null;
+        if (found === 'timeout') {
+          // 看门狗赢了：真 check() 无论何时落定都**只能作废并归还资源**（seq 守卫的看门狗
+          // 延伸——超时已落态，作者得重查），晚到的真值绝不进状态机。尾巴先把处置挂上，
+          // 再走 alive/seq 守卫：此刻已 stale / 已卸载的情形同样要还资源。
+          void checkPromise
+            .then((late) => {
+              if (late !== null) void late.close().catch(() => {});
+            })
+            .catch(() => {});
+          if (!aliveRef.current || seq !== checkSeqRef.current) return;
+          if (origin === 'auto') noteAutoCheckOutcome('failed');
+          setPhase((p) => reduceUpdatePhase(p, { type: 'checkFailed', reason: UPDATE_CHECK_TIMEOUT_REASON }));
+          return;
+        }
         if (!aliveRef.current || seq !== checkSeqRef.current) {
           if (found !== null) void found.close().catch(() => {});
           return;
         }
         if (found === null) {
+          if (origin === 'auto') noteAutoCheckOutcome('latest');
           setPhase((p) => reduceUpdatePhase(p, { type: 'checkLatest' }));
           return;
         }
@@ -127,8 +193,14 @@ export function useUpdateFlow(options?: UseUpdateFlowOptions): UpdateFlow {
           ...(found.date === undefined ? {} : { date: found.date }),
         };
         // 先用「检查中」试算：只有真落到 found 才保留 Update 资源；latest/读不出都当场还掉。
-        if (reduceUpdatePhase({ kind: 'checking' }, action).kind !== 'found') {
+        const probe = reduceUpdatePhase({ kind: 'checking' }, action);
+        if (probe.kind !== 'found') {
           void found.close().catch(() => {});
+          if (origin === 'auto') {
+            // 落 latest（同版/更高版）或 failed(check)（版本读不出）都入账；
+            // found 不入账——编辑器侧还要举卡（这个分支到不了 found）。
+            noteAutoCheckOutcome(probe.kind === 'latest' ? 'latest' : 'failed');
+          }
           setPhase((p) => reduceUpdatePhase(p, action));
           return;
         }
@@ -137,11 +209,13 @@ export function useUpdateFlow(options?: UseUpdateFlowOptions): UpdateFlow {
         // 手动检查是明确意图：发现就直接打开详情模态（免打扰只拦「卡」，拦不住作者自己）。
         // 自动检查只落状态——卡/模态的取舍全在 useUpdateNotice 的判据里。
         if (origin === 'manual') openDialog();
-      } catch {
-        // 私仓未发布 release：端点 404 是常态路径——可见、可重试，绝不抛未捕获异常
+      } catch (e) {
+        // 私仓未发布 release：端点 404 是常态路径——可见、可重试，绝不抛未捕获异常。
+        // 病因透传（UPD-A）：读得出 Error.message 就带给状态机，读不出回落常态话术。
         if (!aliveRef.current || seq !== checkSeqRef.current) return;
         releaseFound();
-        setPhase((p) => reduceUpdatePhase(p, { type: 'checkFailed' }));
+        if (origin === 'auto') noteAutoCheckOutcome('failed');
+        setPhase((p) => reduceUpdatePhase(p, { type: 'checkFailed', reason: reasonFromUpdateError(e) }));
       }
     },
     [releaseFound, openDialog],
@@ -154,6 +228,10 @@ export function useUpdateFlow(options?: UseUpdateFlowOptions): UpdateFlow {
     const timer = window.setTimeout(() => {
       autoFiredRef.current = true;
       if (phaseRef.current.kind !== 'idle') return;
+      // 会话级去重（UPD-A）：本会话刚查过（latest/failed 且 < 5 分钟）就不再打网络——
+      // 欢迎页与编辑器两处挂载各查一次的老毛病从这里收口。只拦自动检查：
+      // 手动 checkNow 是明确意图，永不跳过。
+      if (shouldSkipAutoCheck(lastAutoCheck, Date.now())) return;
       void performCheck('auto');
     }, autoCheckDelayMs);
     return () => window.clearTimeout(timer);
@@ -164,6 +242,10 @@ export function useUpdateFlow(options?: UseUpdateFlowOptions): UpdateFlow {
     aliveRef.current = true;
     return () => {
       aliveRef.current = false;
+      // 看门狗定时器一并清掉（UPD-A）：卸载后不再有 20s 后的假超时。
+      // 真结果晚到由 alive/seq 守卫（与 timeout 分支的尾巴）处置，这里只管定时器。
+      watchdogCancelRef.current?.();
+      watchdogCancelRef.current = null;
       const found = foundRef.current;
       foundRef.current = null;
       if (found !== null && !installingRef.current) {
@@ -178,27 +260,39 @@ export function useUpdateFlow(options?: UseUpdateFlowOptions): UpdateFlow {
     openDialog(); // 从设置页/卡片点安装，也把进度抬进模态
     installingRef.current = true;
     setPhase((p) => reduceUpdatePhase(p, { type: 'installStart', total: null }));
+    // 进度节流（UPD-A）：Progress 分片先累计、每 150ms 统一冲一次 setPhase（大文件下载
+    // 时每分片一渲染太密）。每次安装新建一枚——重试路径不带上一轮的欠账。
+    const flusher = createProgressFlusher((delta) => {
+      setPhase((p) => reduceUpdatePhase(p, { type: 'installProgress', chunk: delta }));
+    });
     try {
       await found.downloadAndInstall((event) => {
         if (event.event === 'Started') {
+          // 总量立即上屏（不节流）：进度条要有分母才算得准
           setPhase((p) =>
             reduceUpdatePhase(p, { type: 'installStart', total: event.data.contentLength ?? null }),
           );
         } else if (event.event === 'Progress') {
-          setPhase((p) => reduceUpdatePhase(p, { type: 'installProgress', chunk: event.data.chunkLength }));
+          flusher.add(event.data.chunkLength);
         } else if (event.event === 'Finished') {
+          flusher.flush(); // 终态迁移前的最终冲刷：received 终值精确
           setPhase((p) => reduceUpdatePhase(p, { type: 'installDone' }));
         }
       });
+      flusher.flush(); // 正常返回也补一次最终冲刷（Finished 事件缺席时进度不缺最后一截）
       setPhase((p) => reduceUpdatePhase(p, { type: 'installDone' }));
-      foundRef.current = null;
-    } catch {
-      // 下载/安装中断（断网、磁盘、取消）：失败态可见可重试；保留资源供重试复用
-      setPhase((p) => reduceUpdatePhase(p, { type: 'installFailed' }));
+      // 成功也把 Update 宿主资源还掉（与 releaseFound 同语义，UPD-A）：Windows 上进程通常
+      // 已被安装器带走，这一步给「装完进程还在」的平台兜底；失败路径有意保留资源供重试复用。
+      releaseFound();
+    } catch (e) {
+      flusher.flush(); // 失败也是终态：先把欠账冲掉再落失败态，received 不缺最后一截
+      // 下载/安装中断（断网、磁盘、取消）：失败态可见可重试；保留资源供重试复用。
+      // 病因透传（UPD-A）：读得出就带，读不出回落那句常态话术。
+      setPhase((p) => reduceUpdatePhase(p, { type: 'installFailed', reason: reasonFromUpdateError(e) }));
     } finally {
       installingRef.current = false;
     }
-  }, [openDialog]);
+  }, [openDialog, releaseFound]);
 
   const checkNow = useCallback(() => performCheck('manual'), [performCheck]);
 

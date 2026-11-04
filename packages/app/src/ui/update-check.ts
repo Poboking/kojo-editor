@@ -616,6 +616,180 @@ export function updateReleaseVersion(phase: UpdateDialogPhase): string {
   return updateReleaseOf(phase).version;
 }
 
+/* ============================================================================
+ * 批次 UPD-A（2026-11-05 · 更新检查/下载流的健壮性与性能）· 纯助手。
+ *
+ * 四件全部零 React、零宿主 API，`update-flow.tsx` 是唯一消费方：
+ * 1. `raceWithTimeout` + `UPDATE_CHECK_TIMEOUT_MS`：check() 的**看门狗**——黑洞代理会
+ *    把 check() 挂死到永不返回，设置页从此永远「正在检查更新…」且 busy 禁两颗按钮；
+ * 2. `shouldSkipAutoCheck` + `AUTO_CHECK_DEDUP_MS`：会话级自动检查去重的**判据**。
+ *    入账记录本身住在 `update-flow.tsx` 模块级（欢迎页与 ShellLayout 两次挂载共享同一份），
+ *    这里只放纯判据；
+ * 3. `createProgressFlusher`：下载 Progress 分片的「累计 + 定时冲刷」——过去每枚分片一次
+ *    setPhase，大文件下载时 React 重渲染偏多；
+ * 4. `reasonFromUpdateError`：失败**病因透传**——catch 里过去把错误吞成哑巴态，
+ *    只剩那句常态话术，真实病因（HTTP 码、代理名）到不了作者眼前。
+ * ========================================================================== */
+
+/** 自动检查看门狗：check() 超过这么久没回就按检查失败落态（黑洞代理会挂死到永不返回） */
+export const UPDATE_CHECK_TIMEOUT_MS = 20_000;
+
+/** 看门狗超时的固定病因（秒数从常量推导：改超时时这句话不许各漂各的） */
+export const UPDATE_CHECK_TIMEOUT_REASON = `检查超时（${Math.round(UPDATE_CHECK_TIMEOUT_MS / 1000)} 秒无响应）`;
+
+/**
+ * 看门狗竞速：`promise` 与一枚 `ms` 定时器赛跑，先落定的那个说了算。
+ *
+ * - 输掉竞速的**真 promise 必须挂 catch**（`promise.catch(() => {})`）：定时器先赢、
+ *   真 promise 晚到才被拒绝时，已经没有任何 awaiter 在等它——不挂就炸成
+ *   unhandledrejection。这条是本助手的一半存在意义；
+ * - 竞速自身落定（任一方赢）时定时器就地拆掉（`finally`）：赢家是真 promise 时
+ *   不留一枚空转 20s 的定时器；
+ * - `arm`（可选）把**取消柄**交给调用方：`update-flow` 的卸载清理用它把还在路上的
+ *   看门狗定时器一并清掉。取消只拆定时器、不打扰真 promise——晚到的真结果由
+ *   调用方的序号守卫作废（竞速值已经是 `'timeout'`，真值再也进不了状态机）。
+ */
+export function raceWithTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  arm?: (cancel: () => void) => void,
+): Promise<T | 'timeout'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), ms);
+  });
+  // 输掉的那一个也必须有人接：晚到的兑现/拒绝都不许变成 unhandledrejection
+  promise.catch(() => {});
+  const stop = (): void => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  arm?.(stop);
+  return Promise.race([promise, timeout]).finally(stop);
+}
+
+/**
+ * 一次自动检查的会话级结论。**found 有意不在入账集里**：编辑器侧还要举卡，
+ * 「上一处挂载查到过」绝不能让下一处挂载跳过真查。
+ */
+export type AutoCheckOutcome = 'latest' | 'failed' | 'found';
+
+/** 会话级自动检查的入账记录（`at` = Date.now() 口径的落定时刻） */
+export interface AutoCheckRecord {
+  readonly outcome: AutoCheckOutcome;
+  readonly at: number;
+}
+
+/** 自动检查去重窗口：窗口内已有 latest/failed 结论的，同会话后续挂载不再打网络 */
+export const AUTO_CHECK_DEDUP_MS = 5 * 60_000;
+
+/**
+ * 这一次自动检查该不该跳过（UPD-A 会话去重的唯一判据）。
+ *
+ * - 没有记录（本会话还没查过）→ 不跳；
+ * - 记录是 found → 不跳（防御位：入账方根本不该把 found 记进来）；
+ * - 距上次落定**严格小于** TTL 才跳：恰好等于 TTL（`now - at === AUTO_CHECK_DEDUP_MS`）
+ *   已经过期，照查——「5 分钟内」的字面义。
+ */
+export function shouldSkipAutoCheck(record: AutoCheckRecord | null, now: number): boolean {
+  if (record === null) return false;
+  if (record.outcome === 'found') return false;
+  return now - record.at < AUTO_CHECK_DEDUP_MS;
+}
+
+/** Progress 分片的冲刷间隔：实测大文件下每分片一次 setPhase 太密，150ms 一批足够顺滑 */
+export const PROGRESS_FLUSH_INTERVAL_MS = 150;
+
+/** 冲刷器的注入口（默认全局 setTimeout/clearTimeout；假时钟测试注入假件） */
+export interface ProgressFlusherOptions {
+  /** 冲刷间隔（默认 150ms） */
+  readonly intervalMs?: number;
+  /**
+   * 定时器（默认全局 setTimeout）。句柄类型刻意取 `unknown`：注入面不需要关心句柄的
+   * 具体形状，而 `ReturnType<typeof setTimeout>` 在 DOM 与 @types/node 下一个是 number
+   * 一个是 Timeout——测试文件 import 了 node 模块后两种视图会撞车。
+   */
+  readonly setTimer?: (fn: () => void, ms: number) => unknown;
+  readonly clearTimer?: (handle: unknown) => void;
+}
+
+/** Progress 分片的「累计 + 定时冲刷」器（零 React；`update-flow` 的 install 每次新建一枚） */
+export interface UpdateProgressFlusher {
+  /** Progress 分片入账：只累计；第一枚分片开一个冲刷窗，窗口到期由定时器统一冲一次 */
+  add(chunk: number): void;
+  /** 立即冲掉未落账的累计（终态迁移前必须调）；没有欠账时是 no-op */
+  flush(): void;
+}
+
+/**
+ * 建一枚进度冲刷器。三条纪律（`update-flow` 的终态迁移依赖它们）：
+ *
+ * 1. **Started 的 total 不经这里**——总量立即上屏（进度条要有分母），冲刷器只管分片；
+ * 2. **Finished / installDone / installFailed 前调用方必须 `flush()`**：`received` 的
+ *    终值精确靠这一下，窗口没到也得冲；
+ * 3. **累计增量 ≤0 不冲刷**：空转的终态冲刷不产生多余的 setPhase。
+ */
+export function createProgressFlusher(
+  flush: (delta: number) => void,
+  options?: ProgressFlusherOptions,
+): UpdateProgressFlusher {
+  const intervalMs = options?.intervalMs ?? PROGRESS_FLUSH_INTERVAL_MS;
+  const setTimer = options?.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms));
+  const clearTimer =
+    options?.clearTimer ?? ((handle: unknown) => clearTimeout(handle as Parameters<typeof clearTimeout>[0]));
+  let pending = 0;
+  let handle: unknown = null;
+
+  const doFlush = (): void => {
+    if (handle !== null) {
+      clearTimer(handle);
+      handle = null;
+    }
+    const delta = pending;
+    pending = 0;
+    if (delta > 0) flush(delta);
+  };
+
+  return {
+    add(chunk) {
+      if (!(chunk > 0)) return; // 非正分片与状态机同口径：no-op
+      pending += chunk;
+      if (handle === null) {
+        // 窗口内只挂一枚定时器：150ms 内 N 枚分片只冲一次，冲的是全量欠账
+        handle = setTimer(doFlush, intervalMs);
+      }
+    },
+    flush: doFlush,
+  };
+}
+
+/** 病因透传的上限：超长错误串只取前 300 字符，状态行不因一条日志膨胀 */
+export const UPDATE_REASON_MAX_CHARS = 300;
+
+/**
+ * 抓到的异常 → 一句可显示的病因（UPD-A 病因透传）。
+ *
+ * 只认 **Error 实例且 message 洗完非空**：折叠所有空白为单空格、去掉控制字符
+ * （Tauri IPC 的错误串常带换行/缩进，原样上屏会把状态行挤断）、截 300 字符。
+ * 取不到回 undefined——调用方回落 `UPDATE_FAILURE_REASON` 那句常态话术，
+ * 失败态永远不是哑巴态。
+ */
+export function reasonFromUpdateError(e: unknown): string | undefined {
+  if (!(e instanceof Error)) return undefined;
+  // 顺序不能反：先折叠（\t \n \r 都是空白 ⇒ 各折成一个空格，防 "404\nendpoint" 粘成
+  // 一坨），再去残余控制字符（折叠后剩 C0 非空白类 + DEL + C1）。
+  const cleaned = e.message
+    .replace(/\s+/gu, ' ')
+    .replace(/[\u0000-\u001F\u007F-\u009F]/gu, '')
+    .trim();
+  if (cleaned === '') return undefined;
+  return cleaned.length > UPDATE_REASON_MAX_CHARS
+    ? cleaned.slice(0, UPDATE_REASON_MAX_CHARS)
+    : cleaned;
+}
+
 /**
  * 右下卡的短标题：只说「现在走到哪一步」，版本号交给徽标那一格。
  *
