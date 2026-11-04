@@ -21,7 +21,12 @@
 |LAUNCH-P0-RESIDUE|P0 真壳验收余项：~10 MB fixture 复制进度 / 二次 `start` 报 `LAUNCHER_INSTANCE_BUSY` / 信任框后启动与篡改报 `TRUST_CHANGED` / 退出杀树 + 下次 `app-exit` / shared 实例夹具播种|全部在真壳（`debug-cli shell`）取证；⑤ 无人值守 ⇒ 宿主侧命令取证|待派|
 |PERF-R6|快照链：关窗 / 关项目等 `storage.set` 落地|两条退出路径共用屏障；等不完也放行且明说；常态关闭不多等|余项：**真壳关窗取证**未跑 · 2026-10-31（强杀仍丢整轮）|
 |PERF-R7C|冷开 `read+parse` 的 decode + EOL 分项|已量清约 1.0s（19%），不是 2.35s（43%）；**裁决不做**（理论收益 `index_ms` −10%，代价跨 5 插件）|已裁决 · 勿重复认领 · 2026-10-31|
+|MCP-A3|MCP 真源腿接满：semantic 8 腿 / kernelIo 3 腿 / 8 个 `kojo://project/*` resource / runSupplemental 只读腿 / promptSlots（消灭 NOT_WIRED，只接真源、不造假实现）|接线点 `ShellLayout.tsx` `registerMcpWiringSources` 唯一生产调用点已就位；判据＝定向 vitest 全绿（mcp-wiring 14 例 + mcp-real-sources 新建）· 双 typecheck · audit ✅31 · 开机图 MCP 模块 0 命中且字节增量入台账 · 回执逐条写明「已接 / 仍 NOT_WIRED 及缺什么」|**待开工** · 分支 `b/mcpa/1104-real-sources`（工作树 `D:/DSH/kojo-mcp-pool-a`，尖 `cad0fd11`，干净）· 完整任务书 `docs/mcp/POOL-HANDOFF.md` §3.1 · 2026-11-04|
+|MCP-B3|MCP 端到端协议一致性 harness：新建零依赖回环 mock endpoint + 真实 stdio shim 对拍（initialize / tier 过滤 / batch / notification / 错误帧 / Bearer / Origin / SSE）|harness `--self-test` exit 0 且 token 不进日志（文件名与命令以 `docs/mcp/POOL-HANDOFF.md` §3.2 为准）；vitest 新用例绿；`docs/mcp/README.md` 补「协议一致性自检」与「P5 演进边界」|**待开工** · 分支 `b/mcpb/1104-conformance`（工作树 `D:/DSH/kojo-mcp-pool-b`，尖 `cad0fd11`，干净）· 2026-11-04|
+|MCP-C3|Rust 真实 TCP/HTTP 端点集成测试：起真 listener + 裸 `TcpStream` 打全协议面（Bearer/Origin/initialize/tools-list 过滤/batch/notification/SSE/token 轮换/审计 denied）|`cargo test --lib mcp::tests` 全绿且例数上涨（现 60）；rustfmt --check 绿；全量 cargo 仅既有 launcher_probe 2 红；不改 lib.rs / Cargo.*|**待开工** · 分支 `b/mcpc/1104-http-e2e`（工作树 `D:/DSH/kojo-mcp-pool-c`，尖 `cad0fd11`，干净）· 任务书 §3.3 · 2026-11-04|
+|MCP-INT|MCP 批次集成收尾：ps10 体积闸台账（现读数 196 文件 / 3,554 KB · 3,638,818 B，超闸 550 B，**零新进图文件**；归因 bootstrap.ts +440 / plugin-api index +28 / slots +32 / commands +13）+ `pnpm-lock.yaml` 补 `@kojo/mcp-host` workspace importer 条目 + 全量测试复跑 + `docs/STATE.md` 落账|ps10-eager-graph 恢复绿（按台账流程逐字节记账抬 KB 闸，文件闸 196 与成员断言**不许放宽**）；`pnpm install --frozen-lockfile` 过；全量 unit 0 failed（launcher_probe 2 红为既有）|**待开工**（主 agent 或接手者）· 归因明细 `docs/mcp/POOL-HANDOFF.md` §4 · 2026-11-04|
 
 > 已交付 / 已收口行（K2-D0、K2-CONTRACT、SDK-B5a、多游戏适配 P0/P1、编辑器对标 A–E、PS 系列、LAU-FACE-ORDER、LAU-B11、DIAG-GATE-1033、LAU-DUALLEG）已删，回执在 git 提交信息。
+> MCP 批次已交付四波（2026-11-04，回执在各提交信息）：`c5c5591d` Rust endpoint+第四张授权表+审计 · `35e31ef0` 只读能力覆盖+Codex/DeepSeek Harness 样例 · `928d9ca8` Rust 协议一致性硬化 · `cad0fd11` WebView 端到端链路+设置页「AI 接入」节（另有三波前置 `704a9158`/`a31a360d`/`f08045b3`）。
 
-认领：mcp-pool 2026-11-04
+认领：mcp-pool 2026-11-04（三路轮流池；2026-11-04 22:17 起 agent 派发额度 429，约 2026-11-05 13:03 UTC+8 恢复；恢复前接手者可按 `docs/mcp/POOL-HANDOFF.md` 单线程顺序做）
