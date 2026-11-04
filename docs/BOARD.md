@@ -29,4 +29,3 @@
 
 认领：codearts 2026-11-04（接手 mcp-pool 三路轮流池 + INT；额度未恢复，单线程顺序做 A3→B3→C3→INT，完成一路验收推送一路）
 认领：mcp-pool 2026-11-04（三路轮流池；2026-11-04 22:17 起 agent 派发额度 429，约 2026-11-05 13:03 UTC+8 恢复；恢复前接手者可按 `docs/mcp/POOL-HANDOFF.md` 单线程顺序做）
-认领：upd-pool 2026-11-05（**自动更新完善六车三路并发池**：UPD-A 更新流健壮性（检查看门狗/会话去重/进度节流/病因透传）· UPD-B 立即重启接线（Rust `updater_relaunch` + ShellLayout）· UPD-C UI 打磨+发标链路守卫 · UPD-D 定时重查+上次检查时间 · UPD-E a11y 通报深化 · UPD-F 频道/工作流守卫收尾；工作树 `C:/tmp/kojo-upd-{a,b,c}`，分支 `b/upd/1105-*`；并发额度只容两路时按 A→B→C 排队补发；一路完结由组长验收过 dev 窄门并补发下一路；本行在 UPD-F 落地时删）
