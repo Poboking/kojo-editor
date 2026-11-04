@@ -180,11 +180,13 @@ import {
   resetEndpoint,
   type MarketSourceView,
 } from './market-source';
-import { updateStatus } from './update-check';
+import { updateStatus, type UpdatePhase } from './update-check';
 import { UpdateDialog } from './UpdateDialog';
 import { UpdateNoticeCard } from './UpdateNoticeCard';
 import { useUpdateFlow } from './update-flow';
 import { appRelaunch } from './update-relaunch';
+// 上次检查记录（UPD-D）：壳层只在检查收尾时往会话真源里记一笔，读数由设置页自订阅
+import { recordUpdateCheck } from './update-last-check';
 import { isTauri } from '../bridge/invoke';
 import { revealFailureText, revealInExplorer } from './reveal-explorer';
 import { modalDepth, closeTopModal } from './modal-stack';
@@ -1639,6 +1641,22 @@ export function ShellLayout(props: Props): ReactElement {
   const updateStatusLine = updateStatus(updatePhase);
   const runUpdateCheck = update.checkNow;
   const installUpdate = update.install;
+
+  /**
+   * 上次检查的登记（UPD-D）：只在 `checking` 迁出到三种**检查**收尾态时往会话真源记一笔，
+   * 设置页更新区靠它显示「上次检查 HH:mm」。downloading / done 不记——那是安装段不是检查，
+   * 把"装完"记成"查过"会让时间戳语义说谎；idle 是初始态无从记起。
+   * prev 只存上一拍 phase：effect 双跑（StrictMode）时 prev 已前移，天然幂等。
+   */
+  const prevUpdatePhaseRef = useRef<UpdatePhase>(updatePhase);
+  useEffect(() => {
+    const prev = prevUpdatePhaseRef.current;
+    prevUpdatePhaseRef.current = updatePhase;
+    if (prev.kind !== 'checking') return;
+    if (updatePhase.kind === 'latest') recordUpdateCheck('latest');
+    else if (updatePhase.kind === 'found') recordUpdateCheck('found');
+    else if (updatePhase.kind === 'failed' && updatePhase.stage === 'check') recordUpdateCheck('failed');
+  }, [updatePhase]);
 
   /**
    * 设置页「工作区」一节的数据面（2026-10-27 撤销批 / 2026-11-03 默认工作区批）：
@@ -3738,6 +3756,7 @@ export function ShellLayout(props: Props): ReactElement {
           runUpdateCheck={runUpdateCheck}
           installUpdate={installUpdate}
           openUpdateDialog={update.openDialog}
+          onRestart={appRelaunch}
         />
       ) : null}
       {/* 更新的两层呈现（用户反馈第 1 条 · UI 打磨批）：

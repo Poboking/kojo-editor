@@ -57,7 +57,15 @@ import {
   type MarketSourceView,
 } from './market-source';
 import { isUpdateBusy, formatUpdateDate, type UpdatePhase, type UpdateStatusTone } from './update-check';
-import { UPDATE_DISMISS_HINT } from './update-dismiss-pref';
+import {
+  clearUpdateDismissal,
+  isUpdateDismissalActive,
+  UPDATE_DISMISS_HINT,
+  UPDATE_NOTICE_QUIET_DAYS,
+  useUpdateDismissal,
+} from './update-dismiss-pref';
+// 上次检查读数（UPD-D）：会话级真源自带 hook，设置页自订阅；ShellLayout 只管往里记
+import { formatUpdateLastCheck, useLastUpdateCheck } from './update-last-check';
 import { UpdateProgress } from './UpdateProgress';
 import { isTauri } from '../bridge/invoke';
 import { Icon, type IconName } from './icons';
@@ -275,6 +283,12 @@ export interface SettingsPanelProps {
   installUpdate: () => Promise<void>;
   /** 「看更新内容」：抬详情模态（与右下卡同一个出口，设置页不自己抄一份说明） */
   openUpdateDialog: () => void;
+  /**
+   * 「立即重启」（UPD-D）：装完后的真通道，与详情模态 `UpdateDialog.onRestart` 同一个
+   * `appRelaunch`。**缺席就不画那颗钮**（同 UpdateDialog 的纪律：按钮必须真能重启，不许演）；
+   * 没通道时 done 态维持状态机的「手动重启」话术。
+   */
+  onRestart?: () => void;
 
   /* ---- 快捷键页双框合一（批次十一 L09）---- */
   /**
@@ -367,18 +381,26 @@ interface UpdateSectionProps {
   runUpdateCheck: () => Promise<void>;
   installUpdate: () => Promise<void>;
   openUpdateDialog: () => void;
+  /** 装完后的「立即重启」真通道（UPD-D）；缺席不画按钮、done 话术维持状态机原句 */
+  onRestart?: () => void;
 }
 
 /**
  * 设置页的更新读数 + 出口（原先长在 about 节的 JSX 里，本批抽成这一节自己的组件，
- * 因为下面三条口径都需要先算一个局部量）。
+ * 因为下面几条口径都需要先算一个局部量）。
  *
  * 1. **不抄第二份流程**：进度条吃三张面共用的 `UpdateProgress` 基元；「看更新内容」抬的是
  *    与右下卡同一个详情模态（`openUpdateDialog`），这里不重排一份 changelog；
  * 2. **下载中只留一处读数**：`updateStatus` 那句「已下载 X / Y（p%）」与进度基元自带的那行
  *    字面相同，同屏画两遍就成了回声——该态让位给条；
  * 3. **桌面版之外不演**：浏览器调试壳里 `check()` 必然抛，与其让作者读到一句
- *    「编辑器更新没有检查成功，可重试：网络没通」，不如把按钮禁掉并说明这是壳的限制。
+ *    「编辑器更新没有检查成功，可重试：网络没通」，不如把按钮禁掉并说明这是壳的限制；
+ * 4. **done 态给真出口（UPD-D）**：宿主传了 `onRestart`（= `appRelaunch`）才画「立即重启」，
+ *    同时那句「重启应用后生效」换成「点旁边那颗就行」的语义；没通道就不画、不改口——
+ *    与 `UpdateDialog` 同一纪律：按钮必须真能重启，不许演；
+ * 5. **两条会话级旁注（UPD-D）**：「上次检查 HH:mm」自 `update-last-check` 的会话真源
+ *    （启动清零，见其文件头为什么不落盘）；「恢复提醒」只在确有**有效**免打扰记录时出现，
+ *    点了就 `clearUpdateDismissal()`，下一轮自动提醒恢复——都是读数是礼遇，不添常驻噪音。
  */
 function UpdateSection({
   appVersion,
@@ -387,9 +409,23 @@ function UpdateSection({
   runUpdateCheck,
   installUpdate,
   openUpdateDialog,
+  onRestart,
 }: UpdateSectionProps): ReactElement {
   const desktopShell = isTauri();
   const foundDate = updatePhase.kind === 'found' ? formatUpdateDate(updatePhase.date) : null;
+  // done 态（UPD-D）：有重启通道才把话术从「请手动重启」换成「这颗钮就是出口」。
+  // 状态机原句（update-check.ts）是「没通道」形态的唯一来源，这里只在有通道时覆盖呈现。
+  const statusLine =
+    updatePhase.kind === 'done' && onRestart !== undefined && updateStatusLine !== null
+      ? { text: '更新已就位，重启编辑器即生效', tone: 'ok' as const }
+      : updateStatusLine;
+  // 上次检查（UPD-D）：本会话还没查过 ⇒ null 整条不画；文案三档粒度在纯函数里钉死
+  const lastCheck = useLastUpdateCheck();
+  const lastCheckHint = lastCheck !== null ? formatUpdateLastCheck(lastCheck.at, Date.now()) : null;
+  // 免打扰恢复入口（UPD-D）：记录非空且**判龄仍活**才给行——过期记录自己就失效了，
+  // 不需要一个"已过期"的入口占地方（同 dismiss-pref 的口径：读取时判龄，不做事后清理）。
+  const dismissal = useUpdateDismissal();
+  const dismissalLive = dismissal !== null && isUpdateDismissalActive(dismissal, appVersion ?? '');
   return (
     <div className="settings-group">
       <div role="heading" aria-level={4} className="settings-group-title">更新</div>
@@ -403,16 +439,34 @@ function UpdateSection({
         </button>
         <span>
           当前版本 {appVersion !== null ? `v${appVersion}` : '未知'}
-          {updateStatusLine !== null && updatePhase.kind !== 'downloading' ? (
-            <span className={hintClassFor(updateStatusLine.tone)} role="status">
-              {updateStatusLine.text}
+          {statusLine !== null && updatePhase.kind !== 'downloading' ? (
+            <span className={hintClassFor(statusLine.tone)} role="status">
+              {statusLine.text}
             </span>
           ) : null}
+          {lastCheckHint !== null ? <span className="settings-hint">{lastCheckHint}</span> : null}
           {!desktopShell ? (
             <span className="settings-hint">这里只在桌面版生效：浏览器里的调试壳没有更新通道</span>
           ) : null}
         </span>
+        {updatePhase.kind === 'done' && onRestart !== undefined ? (
+          <button className="primary small" onClick={onRestart}>
+            立即重启
+          </button>
+        ) : null}
       </div>
+
+      {/* 免打扰恢复（UPD-D）：行随记录存在而存在，点完即消失（清记录 → 订阅推新值 → 重渲） */}
+      {dismissalLive && dismissal !== null ? (
+        <div className="settings-row static">
+          <span>
+            {`已对 v${dismissal.version} 开启免打扰（${UPDATE_NOTICE_QUIET_DAYS} 天内不再自动提醒）`}
+          </span>
+          <button className="ghost small" onClick={() => clearUpdateDismissal()}>
+            恢复提醒
+          </button>
+        </div>
+      ) : null}
 
       {updatePhase.kind === 'downloading' ? (
         <div className="settings-row static">
@@ -502,6 +556,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
     runUpdateCheck,
     installUpdate,
     openUpdateDialog,
+    onRestart,
     searchQuery = '',
     onClearSearch,
     workspaceRoots,
@@ -1167,6 +1222,7 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
             runUpdateCheck={runUpdateCheck}
             installUpdate={installUpdate}
             openUpdateDialog={openUpdateDialog}
+            onRestart={onRestart}
           />
 
           {/* 关于（REL-2）：开发者联系卡 + 意见反馈。外链用原生 <a target="_blank">——
