@@ -184,6 +184,7 @@ import { updateStatus } from './update-check';
 import { UpdateDialog } from './UpdateDialog';
 import { UpdateNoticeCard } from './UpdateNoticeCard';
 import { useUpdateFlow } from './update-flow';
+import { appRelaunch } from './update-relaunch';
 import { isTauri } from '../bridge/invoke';
 import { revealFailureText, revealInExplorer } from './reveal-explorer';
 import { modalDepth, closeTopModal } from './modal-stack';
@@ -3757,6 +3758,7 @@ export function ShellLayout(props: Props): ReactElement {
           onClose={update.closeDialog}
           onInstall={installUpdate}
           forced={update.forced}
+          onRestart={appRelaunch}
         />
       ) : null}
     </>

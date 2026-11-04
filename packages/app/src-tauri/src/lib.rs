@@ -39,6 +39,10 @@ mod diagnostics;
 /// `check({ proxy })`；独立成文件，照 `market` / `shell` 同形态。
 mod updater_proxy;
 
+/// 更新完成后的立即重启（UPD-B）：`done` 态「立即重启」按钮的落点命令，一行 `app.restart()`。
+/// 独立成文件，照 `market` / `shell` / `updater_proxy` 同形态。
+mod updater_relaunch;
+
 /// 启动器的**宿主特权面**（L3a）：实例注册表 / 进程托管（Job Object）/ 可执行信任 /
 /// 日志会话。命令面见 `launcher::commands`，落盘与路径判据见 `launcher::paths`。
 /// 这里只多一行模块登记 + `setup` 里的 `manage`，不往本文件塞业务。
@@ -4436,6 +4440,7 @@ pub fn run() {
             shell::open_url_external,
             diagnostics::append_frontend_log,
             updater_proxy::updater_env_proxy,
+            updater_relaunch::updater_relaunch,
             mcp::mcp_start,
             mcp::mcp_stop,
             mcp::mcp_status,
