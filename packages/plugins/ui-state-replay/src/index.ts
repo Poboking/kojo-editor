@@ -93,6 +93,15 @@ const PANEL_ID = 'state-replay';
  * 不与其他插件共用域（内核按 pluginId 隔离）。
  */
 const SCENES_STORAGE_KEY = 'replay-scenes';
+/**
+ * 上次在调的那一段（口上调试 UI 打磨批）。
+ *
+ * 为什么必须存：副侧栏同一时刻只挂一块面板——切到「改这个状态」再切回来，
+ * 回放面板是**重新挂载**的，`archivePath / charaNo / fnQuery` 三个 state 全部归零，
+ * 连刚判完的结果也没了。作者的体感就是"两块功能，来回一趟白干"。
+ * 存在本插件自己的域里（不跨域读别人的），切回来至少还原到"上次看的那一段"。
+ */
+const LAST_DEBUG_TARGET_KEY = 'last-debug-target';
 
 /** 结果区容器用到的**最小** DOM 形状（见下方滚动处的说明：本包 root typecheck 无 DOM lib） */
 interface ScrollHost {
@@ -166,6 +175,14 @@ export function createUiStateReplayPlugin(): Plugin {
         const [previewError, setPreviewError] = useState<string | null>(null);
         const [writeArmed, setWriteArmed] = useState(false);
         const [writeNote, setWriteNote] = useState<string | null>(null);
+        /**
+         * 分区折叠（口上调试 UI 打磨批）：面板只有 ~300px 宽，一屏能读的东西是有限的。
+         * 首屏只留"看哪一段"里真正每天要动的三件（存档 / 角色 / 函数 + 判定），
+         * 场景参数与场景预设默认收起——它们改了才需要展开，收起时在标题上给一行摘要，
+         * 不让人怀疑"我上次改的参数是不是没了"。
+         */
+        const [showSlots, setShowSlots] = useState(false);
+        const [showScenes, setShowScenes] = useState(false);
 
         /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；算式在契约层 `sugar-panels`） */
         const growPreds = useCallback((total: number): void => {
@@ -213,8 +230,44 @@ export function createUiStateReplayPlugin(): Plugin {
           };
         }, []);
 
-        const persistScenes = (next: ReplayScene[]): void => {
-          setScenes(next);
+        /**
+         * 上次在调的那一段：挂载时还原、变化时落盘。
+         * 还原只在"用户还没自己选过"时生效（函数式更新判空），慢回包不会顶掉新选择；
+         * 落盘在还原回包之后才开始（`uiRestoredRef`），否则首帧的空值会先把记录盖掉。
+         */
+        const uiRestoredRef = useRef(false);
+        useEffect(() => {
+          void ctx.storage
+            .get<{ archivePath?: unknown; charaNo?: unknown; fnQuery?: unknown }>(LAST_DEBUG_TARGET_KEY)
+            .then((v) => {
+              if (!v || typeof v !== 'object') return;
+              if (typeof v.archivePath === 'string' && v.archivePath !== '') {
+                const p = v.archivePath;
+                setArchivePath((prev) => (prev === '' ? p : prev));
+              }
+              if (typeof v.charaNo === 'number') {
+                const n = v.charaNo;
+                setCharaNo((prev) => (prev === null ? n : prev));
+              }
+              if (typeof v.fnQuery === 'string' && v.fnQuery !== '') {
+                const q = v.fnQuery;
+                setFnQuery((prev) => (prev === '' ? q : prev));
+              }
+            })
+            .catch((err: unknown) => ctx.log.warn(`Replay panel target restore failed: ${String(err)}`))
+            .finally(() => {
+              uiRestoredRef.current = true;
+            });
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, []);
+        useEffect(() => {
+          if (!uiRestoredRef.current) return;
+          void ctx.storage
+            .set(LAST_DEBUG_TARGET_KEY, { archivePath, charaNo, fnQuery })
+            .catch((err: unknown) => ctx.log.warn(`Replay panel target persist failed: ${String(err)}`));
+        }, [archivePath, charaNo, fnQuery]);
+
+        const persistScenes = (next: ReplayScene[]): void => {          setScenes(next);
           void ctx.storage.set(SCENES_STORAGE_KEY, next).catch((err: unknown) => {
             ctx.log.warn(`Replay panel scene persist failed: ${String(err)}`);
             setSceneMsg('场景写入本地存储失败（本次会话仍可用）');
@@ -271,6 +324,23 @@ export function createUiStateReplayPlugin(): Plugin {
           return () => {
             activation.mounted.delete(mountTokenRef.current);
           };
+        }, []);
+
+        /**
+         * 存档联动（口上调试 UI 打磨批）：「作者现在在看哪一档」只该有一份事实。
+         * 回放与注入面板各扫同一条 sav 目录，但此前各选各的——在回放里挑好档，
+         * 切过去改数值时要再挑一遍，这正是"两块功能"的观感来源之一。
+         *
+         * 通道复用既有的 `kojo.snapshotSelected`（归档浏览器与注入面板早已在这条通道上，
+         * 零新增契约）：本面板**也广播**（仅在作者显式选档时）、**也跟随**。
+         * 跟随只在路径真的不同时 setState ⇒ 自己发的那一条回到自己身上也不会多算一轮。
+         */
+        useEffect(() => {
+          const un = ctx.bus.on('kojo.snapshotSelected', (p) => {
+            setArchivePath((prev) => (prev === p.path ? prev : p.path));
+          });
+          return un;
+          // eslint-disable-next-line react-hooks/exhaustive-deps
         }, []);
 
         // 经 ref 调用最新的 runReplay（M5 修复：deps 不含 view 时旧闭包
@@ -459,7 +529,19 @@ export function createUiStateReplayPlugin(): Plugin {
           {
             className: 'rp-select',
             value: archivePath,
-            onChange: (e: { target: { value: string } }) => setArchivePath(e.target.value),
+            onChange: (e: { target: { value: string } }) => {
+              const next = e.target.value;
+              setArchivePath(next);
+              // 广播给同一条通道上的注入面板 / 归档浏览器（同一份"当前档"，见上面的联动 effect）
+              const entry = activation.archives.find((a) => a.path === next);
+              if (entry) {
+                ctx.bus.emit('kojo.snapshotSelected', {
+                  path: entry.path,
+                  fileName: entry.fileName,
+                  source: 'ui-state-replay',
+                });
+              }
+            },
           },
           createElement(
             'option',
@@ -502,7 +584,7 @@ export function createUiStateReplayPlugin(): Plugin {
         const fnInput = createElement('input', {
           className: 'rp-fn-input',
           type: 'text',
-          placeholder: '挑一段来看：函数名，或用中文搜（如「好感」）',
+          placeholder: '函数名，或中文（好感）',
           value: fnQuery,
           onChange: (e: { target: { value: string } }) => setFnQuery(e.target.value),
           onKeyDown: (e: { key: string }) => {
@@ -893,7 +975,6 @@ export function createUiStateReplayPlugin(): Plugin {
 
         const replayErrorEl =
           replayError !== null ? createElement('div', { className: 'rp-error' }, replayError) : null;
-        const contextHintEl = contextHint !== null ? createElement('div', { className: 'rp-hint dim' }, contextHint) : null;
 
         // 空白处右键（1023 批）：重新回放（按 busy / 无结果给出禁用原因）
         const panelMenu = (e: PluginContextMenuAnchor): void => {
@@ -904,33 +985,202 @@ export function createUiStateReplayPlugin(): Plugin {
           return createElement(
             'div',
             { className: 'panel-state-replay', onContextMenu: panelMenu },
-            createElement('div', { className: 'rp-empty dim' }, '打开项目后可回放（快照 × 角色 × 函数）'),
+            createElement(
+              'div',
+              { className: 'dbg-empty' },
+              createElement('div', { className: 'dbg-empty-title' }, '打开一个游戏项目就能调试口上'),
+              createElement('div', { className: 'dbg-empty-note' }, '回放要一份存档 + 一个角色才能算，两样都由项目提供。'),
+            ),
           );
         }
+
+        /* --------------------------- 分区渲染（口上调试 UI 打磨批） --------------------------- */
+
+        /**
+         * 顶部一体化标题：两个调试面板共用同一套头（左标题、右跳转）。
+         * 跳转走 `ui.panel.reveal`（契约事件，宿主负责把目标面板拉到前台），
+         * 面板之间零直接依赖——这也正是"改状态"能和"看结果"分开注册却像一件事的原因。
+         */
+        const panelHead = createElement(
+          'div',
+          { className: 'dbg-head' },
+          createElement(
+            'div',
+            { className: 'dbg-head-row' },
+            createElement('span', { className: 'dbg-head-title' }, '看这段会怎样'),
+            createElement(
+              'button',
+              {
+                className: 'dbg-jump',
+                type: 'button',
+                title: '带着这份存档去改数值（状态注入面板）',
+                onClick: () => ctx.bus.emit('ui.panel.reveal', { id: 'snapshot-injector', source: PANEL_ID }),
+              },
+              '改状态 →',
+            ),
+          ),
+          createElement(
+            'div',
+            { className: 'dbg-head-sub' },
+            '按当前存档推算：条件走不走、消息窗会说什么。',
+          ),
+        );
+
+        /**
+         * 提示带：错误独占一行，其余提示按"最新一条"呈现。
+         * 旧实现把 5 条灰字提示平铺在结果上方，四条同时出现时作者一条都不读。
+         */
+        const statusNotes: string[] = [];
+        if (replayError === null) {
+          if (pendingNote !== null) statusNotes.push(pendingNote);
+          if (injectNote !== null) statusNotes.push(injectNote);
+          if (menuNote !== '') statusNotes.push(menuNote);
+          if (contextHint !== null) statusNotes.push(contextHint);
+        }
+        const notesBand =
+          replayErrorEl !== null || statusNotes.length > 0
+            ? createElement(
+                'div',
+                { className: 'dbg-notes' },
+                replayErrorEl,
+                ...statusNotes.slice(0, 2).map((t, i) => createElement('div', { key: `n${i}`, className: 'dbg-note' }, t)),
+              )
+            : null;
+
+        /** 场景参数摘要（收起时也要能看出"有没有动过、几个是假设"） */        const slotSummary = (() => {
+          if (!callSlots || callSlots.length === 0) return null;
+          let assumed = 0;
+          for (const s of callSlots) {
+            if (classifySlotValue(s.kind, slotTexts[slotKey(s.kind, s.index)] ?? '', slotEdited[slotKey(s.kind, s.index)] === true) === 'assumption') assumed += 1;
+          }
+          return `${callSlots.length} 项${assumed > 0 ? ` · ${assumed} 个假设` : ' · 都改过'}`;
+        })();
+
+        /**
+         * 「场景」折叠区：槽位参数 + 命名场景。
+         * 这两件事都只在"要精确控制一次判定"时才动，默认收起；收起时标题带上摘要。
+         */
+        const sceneSection =
+          callSlots !== null || scenes.length > 0
+            ? createElement(
+                'div',
+                { className: 'dbg-fold' },
+                createElement(
+                  'button',
+                  {
+                    className: `dbg-fold-head ${showScenes ? 'open' : ''}`,
+                    type: 'button',
+                    'aria-expanded': showScenes ? 'true' : 'false',
+                    onClick: () => setShowScenes((v) => !v),
+                  },
+                  createElement('span', { className: 'dbg-fold-caret' }, showScenes ? '▾' : '▸'),
+                  createElement('span', { className: 'dbg-fold-title' }, '场景参数'),
+                  createElement('span', { className: 'dbg-fold-note' }, slotSummary ?? '按协议槽位给这一次调用传参'),
+                  scenes.length > 0 ? createElement('span', { className: 'dbg-fold-badge' }, `${scenes.length} 个场景`) : null,
+                ),
+                showScenes ? createElement('div', { className: 'dbg-fold-body' }, slotInputs, sceneBar, sceneMsgEl) : null,
+              )
+            : null;
+
+        /** 选择区：存档 / 角色 / 函数（首屏唯一必读的一块） */
+        const pickSection = createElement(
+          'section',
+          { className: 'dbg-sec' },
+          createElement(
+            'div',
+            { className: 'dbg-sec-head' },
+            createElement('span', { className: 'dbg-sec-title' }, '看哪一段'),
+          ),
+          createElement(
+            'div',
+            { className: 'dbg-fields' },
+            createElement(
+              'label',
+              { className: 'dbg-field' },
+              createElement('span', { className: 'dbg-field-label' }, '存档'),
+              archiveSelect,
+            ),
+            createElement(
+              'label',
+              { className: 'dbg-field' },
+              createElement('span', { className: 'dbg-field-label' }, '角色'),
+              charaSelect,
+            ),
+          ),
+          createElement('div', { className: 'dbg-row dbg-row-fn' }, fnInput, callSlots ? null : contextInput, replayBtn),
+          viewStatus,
+          // 扫完了、一个存档都没有：下拉里只有「选择存档（0）」，不解释就成了死路。
+          // （档位从项目 sav 目录来；作者此时该做的事是"先存一档"或"去改这个状态面板重扫"）
+          activation.archivesReady && activation.archives.length === 0
+            ? createElement(
+                'div',
+                { className: 'dbg-note' },
+                '这个项目里没找到存档：先在游戏里存一档，再到「改这个状态」面板点「重新扫描」。',
+              )
+            : null,
+          sceneSection,
+          suggestList,
+        );
+
+        /**
+         * 预演与判定拆成**两段**：它们是两件不同的事——预演是"换个数值会怎样"，
+         * 判定是"现在到底走哪一条"。此前挤在同一段标题下，作者读到的是
+         * 「改了会怎样 … 共 0 谓词」，分不清哪半是基线、哪半是假设。
+         * 引擎不支持覆写预演时（旧版本）预演段整段不出现，判定段照常。
+         */
+        const previewSection =
+          previewBox !== null
+            ? createElement(
+                'section',
+                { className: 'dbg-sec dbg-sec-flat' },
+                createElement(
+                  'div',
+                  { className: 'dbg-sec-head' },
+                  createElement('span', { className: 'dbg-sec-title' }, '改了会怎样'),
+                  resultBody !== null
+                    ? createElement('span', { className: 'dbg-sec-note' }, '存档不动 · 下一段是现状')
+                    : null,
+                ),
+                previewBox,
+              )
+            : null;
+
+        const resultSection =
+          resultBody !== null
+            ? createElement(
+                'section',
+                { className: 'dbg-sec dbg-sec-flat' },
+                createElement(
+                  'div',
+                  { className: 'dbg-sec-head' },
+                  createElement('span', { className: 'dbg-sec-title' }, '判定结果'),
+                  // 判的是哪一段：改过函数名但没重判时，这里能让作者看出"结果还是上一段的"
+                  result !== null
+                    ? createElement('span', { className: 'dbg-sec-note' }, result.normalizedName)
+                    : null,
+                ),
+                resultBody,
+              )
+            : null;
 
         return createElement(
           'div',
           { className: 'panel-state-replay', onContextMenu: panelMenu },
-          createElement('div', { className: 'rp-toolbar' }, archiveSelect, charaSelect),
-          viewStatus,
-          createElement('div', { className: 'rp-toolbar' }, fnInput, callSlots ? null : contextInput, replayBtn),
-          sceneBar,
-          sceneMsgEl,
-          slotInputs,
-          contextHintEl,
-          suggestList,
-          pendingNote !== null ? createElement('div', { className: 'rp-hint dim' }, pendingNote) : null,
-          replayErrorEl,
-          menuNote === '' ? null : createElement('div', { className: 'rp-hint dim' }, menuNote),
-          injectNote !== null ? createElement('div', { className: 'rp-hint dim rp-inject-note' }, injectNote) : null,
-          // 注入预演区放在结果之上：改数值 → 立刻读到"这次改动会怎样"，再往下看完整判定
-          previewBox,
-          resultBody,
-          result === null && !replayError
+          panelHead,
+          notesBand,
+          pickSection,
+          previewSection,
+          resultSection,
+          result === null && replayError === null
             ? createElement(
                 'div',
-                { className: 'rp-empty dim' },
-                '选好存档和角色，再挑一段（输函数名、用中文搜、或直接从下面的角色段落里点一个）——这里会告诉你那段里每个条件走不走。',
+                { className: 'dbg-empty' },
+                createElement('div', { className: 'dbg-empty-title' }, '还没算过'),
+                createElement(
+                  'div',
+                  { className: 'dbg-empty-note' },
+                  '选好存档和角色，再挑一段（输函数名、用中文搜、或从上面点一个）——这里会告诉你那段里每个条件走不走。',
+                ),
               )
             : null,
         );
@@ -938,7 +1188,9 @@ export function createUiStateReplayPlugin(): Plugin {
 
       ctx.slots.register('ui.panel', {
         id: PANEL_ID,
-        title: '状态回放',
+        // 口上调试 UI 打磨批：标题说"要做什么"，不说内部功能名（回放 / 注入是两套实现，
+        // 作者脑子里只有一件事：这句话会不会说、怎么说）。与注入面板的「改这个状态」成对。
+        title: '看这段会怎样',
         icon: 'history',
         order: 60,
         // UI 重设计批 P1：按需验证工具 → 副侧栏，默认不激活（定稿 §四）

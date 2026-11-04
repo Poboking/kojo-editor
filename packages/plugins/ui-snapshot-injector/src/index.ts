@@ -53,7 +53,8 @@ export function createUiSnapshotInjectorPlugin(): Plugin {
 
       ctx.slots.register('ui.panel', {
         id: 'snapshot-injector',
-        title: '状态注入器',
+        // 与回放面板的「看这段会怎样」成对：标题说动作，不说实现（口上调试 UI 打磨批）
+        title: '改这个状态',
         icon: 'snapshot',
         order: 71,
         // UI 重设计批 P1：低频+危险（写档）→ 副侧栏，默认不激活（定稿 §四）

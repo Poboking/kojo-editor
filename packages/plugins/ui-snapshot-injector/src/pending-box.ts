@@ -56,13 +56,16 @@ export function renderPendingBox(props: PendingBoxProps): ReturnType<typeof crea
         }, '×'));
     }),
     diffs.length === 0 ? createElement('div', { className: 'dim inj-hint' }, '在上方「常用」卡直接填新值，或在左侧选变量编辑；改动先进入清单，确认后才写盘') : null,
-    createElement('div', { className: 'inj-inject-row' },
+    // 写入是**危险动作**（改的是作者的真实存档），视觉口径与回放面板的"写入存档"逐字同族：
+    // danger 描边 + 二击确认。此前这里走 primary，而回放面板那枚走 danger——同一件事两种皮肤。
+    createElement('div', { className: 'inj-inject-row dbg-action-bar' },
       createElement('button', {
-        className: 'primary',
+        className: 'danger',
         disabled: diffs.length === 0 || injecting,
         onClick: runInject,
       }, injecting ? '写入中…' : armed ? '确认写入存档？' : `写入存档（${diffs.length} 条）`),
-      armed ? createElement('button', { className: 'ghost small', onClick: () => setArmed(false) }, '取消') : null),
+      armed ? createElement('button', { className: 'ghost small', onClick: () => setArmed(false) }, '取消') : null,
+      armed ? createElement('span', { className: 'dbg-action-warn' }, '会改真实存档，写前自动备份') : null),
     result
       ? createElement('div', { className: 'inj-result' },
           ic('check', 12, '✓'),

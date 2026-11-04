@@ -89,6 +89,14 @@ function makePanel(source: SnapshotSourceService) {
   const ctx = {
     log: { debug() {}, info() {}, warn() {}, error() {} },
     bus: { on: () => () => {} },
+    // 口上调试 UI 打磨批：面板会把自己"上次改的那一档"落进本插件存储域
+    // （切走再切回不必重选），桩补上最小域，别让缺件把 effect 打崩。
+    storage: {
+      get: async () => undefined,
+      set: async () => undefined,
+      delete: async () => undefined,
+      keys: async () => [],
+    },
   } as unknown as PluginContext;
   const project = {
     current: () => ({ adapterId: 'eratw', savDir: '/g/sav', rootDir: '/g' }),
@@ -260,6 +268,13 @@ describe('状态注入面板：常用卡与中文搜索', () => {
     const ctx = {
       log: { debug() {}, info() {}, warn() {}, error() {} },
       bus: { on: () => () => {} },
+      // 同上：面板会读/写自己的"上次改的那一档"
+      storage: {
+        get: async () => undefined,
+        set: async () => undefined,
+        delete: async () => undefined,
+        keys: async () => [],
+      },
     } as unknown as PluginContext;
     const project = {
       current: () => ({ adapterId: 'eratw', savDir: '/g/sav', rootDir: '/g' }),

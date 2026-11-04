@@ -55,7 +55,9 @@ export function renderToolbar(props: ToolbarProps): ReactNode {
     : null;
 
   return createElement('div', { className: 'inj-toolbar' },
-    createElement('span', { className: 'dim' }, '改写存档变量（写前自动备份 · 写后校验）'),
+    // 口上调试 UI 打磨批：这一行退成"档位"字段行（原来那句「改写存档变量（写前自动备份…）」
+    // 与面板头副标题重复，窄面板里挤掉的是下拉本身的宽度）
+    createElement('span', { className: 'dbg-field-label' }, '存档'),
     sel,
     rescan,
   );

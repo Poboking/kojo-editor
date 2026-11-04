@@ -8,7 +8,7 @@
  * `editor-box`、`pending-box`；纯逻辑（目录 / diff / overrides / 窗口）在 `panel-logic.ts`。
  */
 
-import { createElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { Fragment, createElement, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import type {
   GameAdapter,
   PluginContext,
@@ -165,8 +165,33 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
       setArmed(false);
     }, [scanDir]);
 
-    /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */
-    const ic = (name: string, size: number, fallback: string): ReactNode =>
+    /**
+     * 上次改的那一档（口上调试 UI 打磨批）：副侧栏同一时刻只挂一块面板，
+     * 切去「看这段会怎样」再切回来，本面板是重新挂载的——不记档位就要重选一次。
+     * 存在**本插件自己的域**里（内核按 pluginId 隔离，不跨域读别人的记录）。
+     * 还原等到扫描结果到位、且这一档真在清单里才落：删掉的档不会被还原成一个坏选择。
+     */
+    const storedPathRef = useRef<string | null>(null);
+    useEffect(() => {
+      void ctx.storage
+        .get<string>('last-archive')
+        .then((v) => {
+          if (typeof v === 'string' && v !== '') storedPathRef.current = v;
+        })
+        .catch(() => undefined);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    useEffect(() => {
+      const want = storedPathRef.current;
+      if (want === null || path !== null) return;
+      if (rows.some((r) => r.path === want)) setPath(want);
+    }, [path, rows]);
+    useEffect(() => {
+      if (path === null) return;
+      void ctx.storage.set('last-archive', path).catch(() => undefined);
+    }, [path]);
+
+    /** 图标桥（E6 图标统一）：宿主经 props.renderIcon 注入；缺省回退纯文本字形（绝不空白） */    const ic = (name: string, size: number, fallback: string): ReactNode =>
       (props.renderIcon?.(name, size) as ReactNode | undefined) ?? fallback;
 
     // 归档浏览器选中档 → 预填（UI 插件间零直接依赖，走内核事件）
@@ -383,7 +408,45 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
 
     /* ------------------------------ 渲染 ------------------------------ */
 
-    const head = renderToolbar({ path, rows, setPath, scanning, onRescan: rescan });
+    /**
+     * 面板头（口上调试 UI 打磨批）：与回放面板同一套 `.dbg-head`，右上一枚跳转。
+     *
+     * 为什么要有这枚跳转：作者的真实动作是"改一个数值 → 看这句话会不会出现"。
+     * 两个面板按职责分开注册（写档是危险动作，回放是只读），但动作是一条——
+     * 这里给过去的路，`debug.snapshotInjected` 再把结果送回来（写完整份存档会
+     * 广播，回放面板对同档自动重算）。
+     */
+    const dbgHead = createElement(
+      'div',
+      { className: 'dbg-head' },
+      createElement(
+        'div',
+        { className: 'dbg-head-row' },
+        createElement('span', { className: 'dbg-head-title' }, '改这个状态'),
+        createElement(
+          'button',
+          {
+            className: 'dbg-jump',
+            type: 'button',
+            title: '拿这份存档去看这一段会说什么（回放面板）',
+            onClick: () => ctx.bus.emit('ui.panel.reveal', { id: 'state-replay', source: 'snapshot-injector' }),
+          },
+          '看台词 →',
+        ),
+      ),
+      createElement(
+        'div',
+        { className: 'dbg-head-sub' },
+        '改完先进清单，确认后才写盘。',
+      ),
+    );
+
+    const head = createElement(
+      Fragment,
+      null,
+      dbgHead,
+      renderToolbar({ path, rows, setPath, scanning, onRescan: rescan }),
+    );
 
     const phaseBox = renderPhaseBox({
       head,
@@ -523,9 +586,7 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
      */
     const quickBox = quickRows.length > 0
       ? createElement('div', { className: 'inj-quick' },
-          createElement('div', { className: 'inj-quick-head' },
-            quickTitle,
-            createElement('span', { className: 'dim inj-quick-note' }, '改完点「加入清单」，再点下方「写入存档」')),
+          createElement('div', { className: 'inj-quick-head' }, quickTitle),
           ...quickRows.map((row) => {
             const draft = quickDrafts[row.field.id] ?? '';
             return createElement('div', { className: 'inj-quick-row', key: row.field.id },
@@ -557,9 +618,15 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
         openInjectPanelMenu(props, event, { path, scanning }, menuHost),
     },
       head,
+      /**
+       * 「常用」提到两栏之上（口上调试 UI 打磨批）：副侧栏只有 ~300px，两栏一换行就变成
+       * 上下堆叠——而 DOM 顺序是"变量表在前、常用在后"，窄面板里新手第一眼看到的成了
+       * 一整串 CFLAG/TFLAG。常用卡是"改什么"的快捷答案，理应横跨整宽排在最前。
+       */
+      quickBox,
       createElement('div', { className: 'inj-body' },
         createElement('div', { className: 'inj-left' }, filterInput, scopeSel, varList),
-        createElement('div', { className: 'inj-right' }, quickBox, editor, pendingBox)),
+        createElement('div', { className: 'inj-right' }, editor, pendingBox)),
       editError ? createElement('div', { className: 'inj-error' }, editError) : null,
     );
   }
