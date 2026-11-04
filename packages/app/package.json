@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@kojo/kernel": "workspace:*",
+    "@kojo/mcp-host": "workspace:*",
     "@kojo/erb-lang": "workspace:*",
     "@kojo/kojo-core": "workspace:*",
     "@kojo/kojo-lang": "workspace:*",

@@ -1,0 +1,13 @@
+{
+  "name": "@kojo/mcp-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Model-facing capability registry for the kojo-editor MCP server. Contracts + pure assembly only; never imports the kernel, other plugins, or any UI/bridge module.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  }
+}

@@ -24,6 +24,7 @@
     "verify": "node tools/verify.mjs"
   },
   "devDependencies": {
+    "@kojo/mcp-host": "workspace:*",
     "@types/node": "^22.18.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

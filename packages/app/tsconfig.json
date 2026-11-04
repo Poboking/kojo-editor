@@ -20,6 +20,7 @@
     "paths": {
       "@kojo/plugin-api/*": ["../plugin-api/src/*.ts"],
       "@kojo/plugin-api": ["../plugin-api/src/index.ts"],
+      "@kojo/mcp-host": ["../mcp-host/src/index.ts"],
       "@kojo/kojo-core": ["../kojo-core/src/index.ts"],
       "@kojo/kojo-lang": ["../kojo-lang/src/index.ts"],
       "@kojo/erb-lang": ["../erb-lang/src/index.ts"],

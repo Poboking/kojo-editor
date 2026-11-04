@@ -13,6 +13,8 @@ export const config = defineConfig({
       // 契约层零依赖叶子：**排在桶之前**（alias 口径是「等于 find」或「以 find + / 开头」）
       '@kojo/plugin-api/eol': r('./packages/plugin-api/src/eol.ts'),
       '@kojo/plugin-api': r('./packages/plugin-api/src/index.ts'),
+      // 路 B 新包：能力面 registry（零外部依赖，tests 经本 alias 解析到源）
+      '@kojo/mcp-host': r('./packages/mcp-host/src/index.ts'),
       // LAU-D4 车②：表层↔原生双向映射表的读表面**只走这条懒边**（包 `exports` 新叶，
       // 不进 `src/index.ts` 桶——PS-10 预算顶格，见 `kojo-core/src/surface-map.ts` 头注）。
       // 叶子必须排在桶之前（alias 口径是「等于 find」或「以 find + / 开头」）。

@@ -19,6 +19,7 @@
     "paths": {
       "@kojo/plugin-api/*": ["./packages/plugin-api/src/*.ts"],
       "@kojo/plugin-api": ["./packages/plugin-api/src/index.ts"],
+      "@kojo/mcp-host": ["./packages/mcp-host/src/index.ts"],
       "@kojo/kojo-project-kit": ["./packages/kojo-project-kit/src/index.ts"],
       "@kojo/kojo-core/surface-map": ["./packages/kojo-core/src/surface-map.ts"],
       "@kojo/kojo-core": ["./packages/kojo-core/src/index.ts"],
@@ -88,6 +89,8 @@
     "packages/kojo-conformance/tests/**/*.ts",
     "packages/plugin-api/src/**/*.ts",
     "packages/plugin-api/tests/**/*.ts",
+    "packages/mcp-host/src/**/*.ts",
+    "packages/mcp-host/tests/**/*.ts",
     "packages/kernel/src/**/*.ts",
     "packages/kernel/tests/**/*.ts",
     "packages/plugins/*/src/**/*.ts",

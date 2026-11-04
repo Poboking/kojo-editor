@@ -394,7 +394,7 @@ export interface EditorCommandContribution extends ContributionBase {
   readonly keybinding?: string;
   /** 返回 false 时命令在命令面板中禁用 */
   readonly when?: (ctx: EditorCommandContext) => boolean;
-  run(ctx: EditorCommandContext): void | Promise<void>;
+  run(ctx: EditorCommandContext, args?: Record<string, unknown>): void | Promise<void>;
 }
 
 /**

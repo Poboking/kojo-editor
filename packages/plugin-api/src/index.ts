@@ -342,6 +342,7 @@ export type {
 
 export { WellKnownCommands } from './slots';
 export type { WellKnownCommandId } from './slots';
+export type * from './mcp';
 
 /* ---- 插件面板右键菜单契约（1023 右键覆盖面 WP5.1 独占追加区块；勿在他处重排） ---- */
 export { copyTextToClipboard, hasCjkLabel, requestPluginMenu } from './context-menu';

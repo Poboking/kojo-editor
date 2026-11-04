@@ -113,14 +113,7 @@ function formatSingleChord(binding: string): string {
   return [...mods, key].join('+');
 }
 
-/**
- * keybinding 的人读展示（命令面板右侧 hint / 键位页芯片）。
- *
- * **空格分隔 = 和弦序列**（如 Monaco 折叠族的 `ctrl+k ctrl+0`）：逐段各自格式化再以空格相连，
- * 展示成「Ctrl+K Ctrl+0」。不含空格时走单段，与改动前逐字相同（既有单键展示一字未动）。
- * 为什么必须有这条：拆前 `parseKeybinding` 只认单和弦，把 `ctrl+k ctrl+0` 整串当主键解析会
- * 丢掉前半段——键位页会画出一条读不出意思的芯片。
- */
+/** keybinding 的人读展示；空格分隔 = 和弦序列，逐段各自格式化再以空格相连（单键展示与改动前逐字相同）。 */
 export function formatKeybinding(binding: string): string {
   if (binding.includes(' ') || binding.includes('\t')) {
     return binding
@@ -139,7 +132,10 @@ export interface CommandEntry {
   readonly category?: string;
   readonly keybinding?: string;
   readonly when?: (ctx: EditorCommandContext) => boolean;
-  run(ctx: EditorCommandContext): void | Promise<void>;
+  readonly description?: string;
+  readonly argsSchema?: Record<string, unknown>;
+  readonly tier?: 'read' | 'edit' | 'privileged';
+  run(ctx: EditorCommandContext, args?: Record<string, unknown>): void | Promise<void>;
 }
 
 /** 壳层内建命令（合法容器语义：显隐/禅/重置——零业务词，定稿 §五-3） */
@@ -172,7 +168,12 @@ export function buildCommandRegistry(
   }
   /** 槽贡献与内核动作形状同构，共用一条合并腿；后写覆盖（顺序即优先级） */
   const mergeContribution = (c: EditorCommandContribution): void => {
-    const entry: CommandEntry = { id: c.id, title: c.title, run: (ctx) => c.run(ctx) };
+    const entry: CommandEntry = {
+      id: c.id, title: c.title, run: (ctx, args) => c.run(ctx, args),
+      ...(c.description !== undefined ? { description: c.description } : {}),
+      ...(c.argsSchema !== undefined ? { argsSchema: c.argsSchema } : {}),
+      ...(c.tier !== undefined ? { tier: c.tier } : {}),
+    };
     if (c.category !== undefined) (entry as { category?: string }).category = c.category;
     if (c.keybinding !== undefined) (entry as { keybinding?: string }).keybinding = c.keybinding;
     if (c.when !== undefined) (entry as { when?: typeof c.when }).when = c.when;
