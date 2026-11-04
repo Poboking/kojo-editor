@@ -12,7 +12,9 @@
 import { describe, expect, it } from 'vitest';
 import { functionLookupOf } from '@kojo/plugin-api';
 import type { ErbDim, ErbFile, ErbIndex } from '@kojo/plugin-api';
-import { bareDimNameOf, dimDeclarationSitesOf, projectDeclaredNames, projectDimDeclarations, projectDimEntries } from '../src/dim-index';
+import { dimDeclarationSitesOf, projectDeclaredNames, projectDimDeclarations, projectDimEntries } from '../src/dim-index';
+import { dimDeclarationOf } from '../src/symbols';
+import { parseDimDeclaration } from '../src/scanner';
 
 const ERH = 'C:/game/ERB/DIM.ERH';
 const ERB = 'C:/game/ERB/口上・メッセージ関連/KOJO.ERB';
@@ -97,32 +99,36 @@ describe('projectDimDeclarations · 归一与过滤', () => {
   });
 });
 
-describe('数组型声明 · 键按裸名归一', () => {
-  it('`#DIM 配列[10]` 用裸名 `配列` 查得到（光标读到的是裸名）', () => {
-    const index = makeIndex([file(ERH, [dim('配列[10]', 'DIM', 12)])]);
+describe('数组型 / 二维尺寸 · 切名在扫描器里就剥干净', () => {
+  it('`#DIM 配列[10]` 的声明名是 `配列`（数组规模不是名字的一部分）', () => {
+    expect(parseDimDeclaration('#DIM 配列[10]')).toEqual({ directive: 'DIM', name: '配列' });
+  });
+
+  it('`#DIM MAP:10:20` 的声明名是 `MAP`（二维尺寸不是名字的一部分）', () => {
+    expect(parseDimDeclaration('#DIM MAP:10:20')).toEqual({ directive: 'DIM', name: 'MAP' });
+  });
+
+  it('`#DIM X;备注` 的声明名是 `X`（分号后是注释）', () => {
+    expect(parseDimDeclaration('#DIM X;备注')).toEqual({ directive: 'DIM', name: 'X' });
+  });
+
+  it('修饰词与后缀并存时只留名字：`#DIM CONST SAVEDATA 配列[3]` → `配列`', () => {
+    expect(parseDimDeclaration('#DIM CONST SAVEDATA 配列[3]')).toEqual({ directive: 'DIM', name: '配列' });
+  });
+
+  it('`dimDeclarationOf` 的 nameStart 落在名字首字符（冒号形态不再整段吞）', () => {
+    expect(dimDeclarationOf('#DIM MAP:10:20')).toEqual({ directive: 'DIM', name: 'MAP', nameStart: 5 });
+    expect(dimDeclarationOf('#DIM 配列[10]')).toEqual({ directive: 'DIM', name: '配列', nameStart: 5 });
+  });
+
+  it('切名后的名字进落点表即可按光标 token 命中', () => {
+    const index = makeIndex([file(ERH, [dim('配列', 'DIM', 12)])]);
     expect(dimDeclarationSitesOf(index, '配列').map((s) => s.line)).toEqual([12]);
-    expect(dimDeclarationSitesOf(index, '配列[10]')).toEqual([]);
   });
 
-  it('落点里仍带原名（作者要看的是盘上那一行写了什么）', () => {
-    const index = makeIndex([file(ERH, [dim('配列[10]', 'DIM', 12)])]);
-    expect(dimDeclarationSitesOf(index, '配列')[0]?.name).toBe('配列[10]');
-  });
-
-  it('裸名归一不影响诊断视图：dims 仍是原名', () => {
-    const index = makeIndex([file(ERH, [dim('配列[10]', 'DIM', 12)])]);
-    expect(projectDeclaredNames(index).dims).toEqual(['配列[10]']);
-  });
-
-  it('只有数组后缀的病态声明（`[10]`）不制造空键', () => {
-    const index = makeIndex([file(ERH, [dim('[10]', 'DIM', 1)])]);
+  it('只有后缀的病态声明（`[10]`）不进名录——切名后为空', () => {
+    const index = makeIndex([file(ERH, [dim('', 'DIM', 1)])]);
     expect(projectDimDeclarations(index).size).toBe(0);
-  });
-
-  it('bareDimNameOf 只剥尾部一段，中间方括号不动', () => {
-    expect(bareDimNameOf('配列[10]')).toBe('配列');
-    expect(bareDimNameOf('名字[1][2]')).toBe('名字[1]');
-    expect(bareDimNameOf('无后缀')).toBe('无后缀');
   });
 });
 

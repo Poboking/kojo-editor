@@ -62,22 +62,6 @@ export interface ErbDimDeclarationSite {
 /** 字符串型声明指令——`undefined-name` 靠它整行跳过字符串赋值（口径自 `projectDeclaredNames` 原样搬来） */
 const STRING_DIRECTIVES: ReadonlySet<string> = new Set(['DIMS', 'DIMSTR', 'DIMCHAR']);
 
-/**
- * 声明名 → 裸名：去掉尾部的数组后缀（`#DIM 配列[10]` → `配列`）。
- *
- * 这是**索引名这一层**的归一，全仓只此一份（原住 `completion.ts`，2026-11-04 移来）。
- * 为什么必须归在一处：落点表的键与光标算出来的记号必须是同一把尺子——光标处读到的是
- * `配列`（`isErbDimNameChar` 不含 `[`），而声明名带着 `[10]`；两边各归一一次就会出现
- * "声明有、跳不过去"（实测：`#DIM 配列[10]` 在 `.ERH` 里，`.ERB` 里 `配列 = 1` 按 F12 空跳）。
- *
- * 与 `undefined-name.ts` 的 `declaredBaseName` 不是同一件事：那个吃的是**行原文**
- * （还要剥 `;` 行注释尾巴、trim），只服务"已知名集合"的比对；这里吃的是解析器
- * 交出来的纯名字，没有注释可剥。两处都不许再各写第三个版本。
- */
-export function bareDimNameOf(name: string): string {
-  return name.replace(/\[[^\]]*\]$/, '');
-}
-
 /** 全项目声明条目（按索引对象缓存；纯读，不碰盘） */
 const ENTRIES_CACHE = new WeakMap<ErbIndex, readonly ErbDimEntry[]>();
 /** 名字（大写归一）→ 落点列表（第二个视图，单独缓存避免每次聚合） */
@@ -125,11 +109,9 @@ export function projectDimDeclarations(
     // 空名字是解析残渣（`#DIM` 后面什么都没有那种病态行），不进名录——否则空串会成为
     // 一个"什么都能匹配到"的键。
     if (entry.name.length === 0) continue;
-    // 键用**裸名**：光标读到的是 `配列`，声明名可能写着 `配列[10]`（理由见 `bareDimNameOf`）。
-    // 归一后仍为空（`[10]` 前面什么都没有那种病态行）同样跳过。
-    const bare = bareDimNameOf(entry.name);
-    if (bare.length === 0) continue;
-    const key = bare.toUpperCase();
+    // 键直接用声明名：数组维度（`配列[10]`）与二维尺寸（`MAP:10:20`）在扫描器切名时
+    // 就已剥掉，索引里的名字与光标取到的记号是同一把尺子（见 `parseDimDeclaration`）。
+    const key = entry.name.toUpperCase();
     let bucket = out.get(key);
     if (bucket === undefined) {
       bucket = [];

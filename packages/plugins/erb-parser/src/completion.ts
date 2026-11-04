@@ -79,7 +79,7 @@ import { ERB_CONTROL_STATEMENTS, classifyControlFlow, parseDimDeclaration } from
 import { ERB_DECLARATION_DIRECTIVES, ERB_STATEMENT_DIRECTIVES } from './instructions';
 import { ENGINE_VARIABLE_FAMILIES } from '@kojo/kojo-vocab/engine';
 import { dimDeclarationOf, isErbDimNameChar, normalizePathKey } from './symbols';
-import { bareDimNameOf, dimDeclarationSitesOf } from './dim-index';
+import { dimDeclarationSitesOf } from './dim-index';
 
 /* ============================== 词法地基 ============================== */
 
@@ -2184,8 +2184,8 @@ function declarationTextOf(line: string | undefined, name: string): string | und
     return undefined;
   }
   if (parsed === null) return undefined;
-  const bare = parsed.name.replace(/\[[^\]]*\]$/, '');
-  if (bare.toUpperCase() !== name.toUpperCase()) return undefined;
+  // `parsed.name` 已是裸名（扫描器切名时剥掉数组维度 / 二维尺寸），这里不再二次剥后缀
+  if (parsed.name.toUpperCase() !== name.toUpperCase()) return undefined;
   return trimmed.length > 200 ? `${trimmed.slice(0, 199)}…` : trimmed;
 }
 
@@ -2269,7 +2269,7 @@ function resolveErbDimHover(
     }
   }
 
-  const dims = (file.dims ?? []).filter((d) => bareDimNameOf(d.name).toUpperCase() === want);
+  const dims = (file.dims ?? []).filter((d) => d.name.toUpperCase() === want);
   if (dims.length === 0) {
     // 跨文件：`.ERB` 里引用的名字常常声明在 `.ERH`——引擎把两者一起预载（同一编译单元，
     // 全语料 0 处 `#INCLUDE`）。但索引只给"文件 + 行"，手上**没有那一行原文** ⇒ 只报
@@ -2278,7 +2278,7 @@ function resolveErbDimHover(
     if (sites.length === 0) return undefined;
     const first = sites[0]!;
     return {
-      name: bareDimNameOf(first.name),
+      name: first.name,
       kind: `#${first.directive} 声明`,
       startColumn: span.start + 1,
       endColumn: span.end + 1,
@@ -2288,7 +2288,7 @@ function resolveErbDimHover(
     };
   }
   const dim = nearestDimOf(dims, file.functions ?? [], useLine);
-  const dimName = bareDimNameOf(dim.name);
+  const dimName = dim.name;
   const lines: string[] = [`声明于 \`${file.path}:${dim.line}\``];
   // 值 / 类型「若可判」：只在**源文件**那一行读（读不到 / 不同名 ⇒ 只给落点，不编值）
   const raw = declarationTextOf(readSourceRow(surface.readSourceLine, dim.line), dimName);

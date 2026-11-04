@@ -31,7 +31,7 @@ import {
   pathInScope,
   symbolTokenAt,
 } from '@kojo/plugin-api';
-import { parseDimDeclaration, parseErbText, parseLabelDefinition } from './scanner';
+import { isErbDimNameChar, parseDimDeclaration, parseErbText, parseLabelDefinition } from './scanner';
 import { codeViewOf, erbReferenceLocationsAt, functionNameTokenAt, referencesOf, visibleCodeLines } from './references';
 import { dimDeclarationSitesOf } from './dim-index';
 
@@ -425,10 +425,12 @@ export interface ErbDimDeclaration {
   readonly nameStart: number;
 }
 
-/** 名字字符：非空白、非运算符 / 分隔符（中文与全角字母都合法，绝不用 `\w`） */
-export function isErbDimNameChar(ch: string | undefined): boolean {
-  return ch !== undefined && !/[\s,;:()[\]{}=+\-*/<>%!&|'"`]/.test(ch);
-}
+/**
+ * 名字字符集**已迁到 `scanner.ts`**（2026-11-04 ERH 批）：切名与取词必须同一把尺子，
+ * 而 `parseDimDeclaration` 住在扫描器里、又不能反向 import 本文件。这里只原样再导出，
+ * 对外形态（`@kojo/plugin-erb-parser` 的 `isErbDimNameChar`）不变。
+ */
+export { isErbDimNameChar };
 
 /** 归一变行后切行（1 基行号 = 下标 + 1；与解析器同规则） */
 const linesOf = (text: string): string[] => splitEolLines(text);
@@ -445,7 +447,9 @@ export function dimDeclarationOf(line: string): ErbDimDeclaration | null {
   while (i < trimmed.length) {
     while (i < trimmed.length && /\s/.test(trimmed[i]!)) i++;
     const start = i;
-    while (i < trimmed.length && !/[\s,=[\]]/.test(trimmed[i]!)) i++;
+    // 词的右边界与切名同一份字符集（此前写的是 `[\s,=[\]]`，冒号形态 `#DIM MAP:10:20`
+    // 会整段被当成一个词、`nameStart` 落在 `M` 上但取出的名字带尾巴）
+    while (i < trimmed.length && isErbDimNameChar(trimmed[i])) i++;
     if (start === i) break;
     if (!DIM_MODIFIERS.has(trimmed.slice(start, i).toUpperCase())) {
       nameStart = start;
@@ -453,7 +457,8 @@ export function dimDeclarationOf(line: string): ErbDimDeclaration | null {
     }
   }
   if (nameStart < 0) return null;
-  const name = parsed.name.replace(/\[[^\]]*\]$/, '');
+  // `parsed.name` 已经是裸名（数组维度与二维尺寸在扫描器里就被切掉），这里不再剥一次
+  const name = parsed.name;
   if (name.length === 0 || !trimmed.startsWith(name, nameStart)) return null;
   return { directive: parsed.directive, name, nameStart: indent + nameStart };
 }

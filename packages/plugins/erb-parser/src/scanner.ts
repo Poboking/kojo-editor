@@ -254,9 +254,37 @@ export function parseDimDeclaration(trimmed: string): { directive: string; name:
   // 全部是 `MAX_CARD_PL` / `LIST_MAX_SORT` / `MAX_COLUMN_GROUP` 这类**尺寸常量名**（`#DIMS SORT_TARGET, LIST_MAX_SORT`），
   // 其余 245 条是表达式或 `=` 初值串（`#DIMS 賭け = "丁", "半"`）。
   // ⇒ "逗号声明多变量"在本盘拿不到任何一例，按它拆会把尺寸/初值收进名录 = 造 1,774 条假名字。
-  const name = rest.split(/[\s,=]/)[0] ?? '';
+  //
+  // 名字的右边界 = **第一个不是名字字符的位置**（2026-11-04 ERH 批）：
+  // 此前按 `[\s,=]` 切，于是 `#DIM 配列[10]` 收成 `配列[10]`、`#DIM MAP:10:20` 收成
+  // `MAP:10:20`——而光标取词用的是 `isErbDimNameChar`（不含 `[` / `:`），读到的是 `配列` / `MAP`
+  // ⇒ 声明侧与引用侧两把尺子，索引里存着一条永远匹配不上的名字。数组维度与二维尺寸
+  // 都是**规模**，不是名字的一部分。切名规则现在与取词规则**同一份字符集**，只此一处。
+  const name = dimNameHeadOf(rest);
   if (name.length === 0) return null;
   return { directive: m[1]!.toUpperCase(), name };
+}
+
+/**
+ * 声明名允许的字符（**词法层唯一一份**，原住 `symbols.ts`）。
+ *
+ * 排除集合：空白、`,` `;` `:`（分隔符 / 注释 / 成员与尺寸语法）、`(` `)` `[` `]` `{` `}`
+ * （结构与维度）、`=` 与算术 / 比较 / 逻辑运算符、引号与反引号。
+ * **不得用 `\w`**：真语料 21% 的声明名含 CJK，全角字母与 `・` 也合法。
+ *
+ * 为什么放在扫描器而不是符号层：`parseDimDeclaration` 切名要用它，而扫描器不能反向
+ * import 符号层（`symbols.ts` 已经 import 本文件，反过来就是模块环）。符号层改为
+ * 从这里再导出，对外形态不变。
+ */
+export function isErbDimNameChar(ch: string | undefined): boolean {
+  return ch !== undefined && !/[\s,;:()[\]{}=+\-*/<>%!&|'"`]/.test(ch);
+}
+
+/** 从 rest 头部切出名字（到第一个非名字字符为止）；空串 = 这行没有名字 */
+function dimNameHeadOf(rest: string): string {
+  let i = 0;
+  while (i < rest.length && isErbDimNameChar(rest[i])) i++;
+  return rest.slice(0, i);
 }
 
 /** 解析 ERB 文本（纯函数，测试友好） */

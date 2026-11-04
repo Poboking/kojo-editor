@@ -84,8 +84,9 @@ describe('#DIM 悬停 · 声明处与值/类型（源面）', () => {
       indexOf([
         { name: '好感度', directive: 'DIM', line: 1 },
         { name: '名前', directive: 'DIMS', line: 3 },
-        // scanner 原样存数组后缀（`#DIM 配列[10]` → `配列[10]`）：悬停必须按裸名匹配
-        { name: '配列[10]', directive: 'DIM', line: 5 },
+        // scanner 切名时已剥掉数组维度（`#DIM 配列[10]` → `配列`）：索引里存的就是裸名，
+        // 与光标 token 同一把尺子（2026-11-04 ERH 批，此前存的是 `配列[10]`）
+        { name: '配列', directive: 'DIM', line: 5 },
       ]),
   };
   const readLine = (n: number) => SOURCE[n - 1];
@@ -107,7 +108,7 @@ describe('#DIM 悬停 · 声明处与值/类型（源面）', () => {
     expect(hit?.lines).toContain('初值：`"小明"`');
   });
 
-  it('数组声明：索引名带后缀也按裸名命中；原文带规模，没有 `=` 就不编初值', () => {
+  it('数组声明：索引里存裸名（切名在扫描器）；原文带规模，没有 `=` 就不编初值', () => {
     const hit = at('配|列[0] = 1', tables, { line: 6, readSourceLine: readLine });
     expect(hit?.name).toBe('配列');
     expect(hit?.lines).toContain('声明：`#DIM 配列[10]`');

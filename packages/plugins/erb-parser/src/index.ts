@@ -148,7 +148,6 @@ export {
 // 项目级 `#DIM` 声明事实（ERH 批，2026-11-04）：全项目**唯一**的 `files[].dims` 遍历点
 // 与它的两个视图。跨文件导航 / 补全 / 诊断一律从这里取——不许各自再扫一遍 `index.files`。
 export {
-  bareDimNameOf,
   dimDeclarationSitesOf,
   projectDeclaredNames,
   projectDimDeclarations,

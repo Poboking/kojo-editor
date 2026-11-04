@@ -41,7 +41,7 @@ import { splitEolLines } from '@kojo/plugin-api/eol';
 import type { ErbStructureIssue } from '@kojo/plugin-api';
 import { builtinSignatureOf } from './builtins';
 import { isInstructionName } from './instructions';
-import { erbCodeBodyOf } from './scanner';
+import { erbCodeBodyOf, isErbDimNameChar } from './scanner';
 import { parseFunctionDefinition } from './scanner';
 
 /**
@@ -172,10 +172,14 @@ export function parseDimLine(rawLine: string): DimLine | null {
     rest = rest.slice(m[0].length);
   }
 
-  const nameMatch = /^([^\s,:=\[]+)/.exec(rest);
-  if (!nameMatch) return null;
-  const name = nameMatch[1]!;
-  rest = rest.slice(name.length);
+  // 切名与扫描器同一份字符集（`isErbDimNameChar`）：诊断判的"这个名字"必须与索引里
+  // 存的名字、光标取到的记号是同一个词——三处各写一个正则，就会在 `A+B` / 全角标点这类
+  // 边界上给出三个答案。
+  let nameEnd = 0;
+  while (nameEnd < rest.length && isErbDimNameChar(rest[nameEnd])) nameEnd++;
+  const name = rest.slice(0, nameEnd);
+  if (name.length === 0) return null;
+  rest = rest.slice(nameEnd);
 
   const dims: string[] = [];
   while (rest.startsWith(':')) {

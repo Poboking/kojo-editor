@@ -176,8 +176,17 @@ import { detachString } from './scanner';
  * **迁移是免费的**：v14 的函数元组就地摊平、32 位候选哈希就地截高 16 位即可，
  * **不重读一个文件、不重扫一次 refs** ——所以 v14 进 `SALVAGEABLE_VERSIONS`
  * （`fnsAreTuples: true` / `candidateBits: 32`）。真语料实测迁移这一趟 **≈ 300 ms**（3,971 文件、0 条被丢）。
+ *
+ * **v15 → v16**（ERH 批，2026-11-04）：**名字口径变了，v15 不可 salvage**。
+ * `#DIM 配列[10]` / `#DIM MAP:10:20` / `#DIM X;备注` 此前被整段收成名字（`配列[10]` /
+ * `MAP:10:20` / `X;备注`），而光标取词用的是 `isErbDimNameChar`（不含 `[` / `:` / `;`）
+ * ⇒ 声明侧与引用侧两把尺子，索引里存着一条永远匹配不上的名字（F12 空跳、补全把
+ * `配列[10]` 当变量名插进正文）。切名收进 `parseDimDeclaration` 之后，第 7 位（声明）
+ * 里存的名字**语义不同了**——旧快照若就地复用，热启动后拿到的是带尾巴的假名字，
+ * 正是这条修复要消灭的东西。所以 v15 **不进** `SALVAGEABLE_VERSIONS`，整盘重扫一次
+ * （只在升级后首次；真语料 3,971 文件约 1 分钟）。
  */
-export const SNAPSHOT_VERSION = 15;
+export const SNAPSHOT_VERSION = 16;
 
 /**
  * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
@@ -236,7 +245,7 @@ const SALVAGEABLE_VERSIONS: ReadonlyMap<
     readonly candidateBits: 16 | 32;
   }
 > = new Map([
-  [15, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: false, candidateBits: 16 }],
+  [16, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: false, candidateBits: 16 }],
   [14, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: true, candidateBits: 32 }],
   [13, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: true, fnsAreTuples: true, candidateBits: 32 }],
   [12, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: true, runsAreTuples: true, fnsAreTuples: true, candidateBits: 32 }],
