@@ -370,6 +370,11 @@ export async function bootstrapKernel(): Promise<Kernel> {
   // 经登记簿拿到这枚实例；未选入调试模式时登记簿无人读，零开销。
   // **动态 import 是刻意的**：开机图闸（ps10-eager-graph）文件余量只剩 1，登记簿不许吃它。
   void import('./debug/debug-registry').then((m) => m.registerDebugKernel(kernel));
+  // MCP 桥登记（P0 契约 · 路 A，ADR-0013）：照 debug-registry 的**动态 import** 形态，
+  // 开机静态图零新增文件；本模块自身不静态拉起任何运行时依赖。`@kojo/mcp-host` 与
+  // `createMcpCapabilityRegistry` 只在首条 `mcp://request` 到达时由桥懒装载 ⇒
+  // 产品未启用 MCP 时该包零字节进图。
+  void import('./mcp/host-bridge').then((m) => m.registerMcpHostBridge());
   return kernel;
 }
 

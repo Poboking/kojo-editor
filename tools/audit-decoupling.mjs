@@ -89,6 +89,10 @@ const NEUTRAL_DIRS = [
   // Kojo 2.0 语言核心与一致性套件：语言级词汇可，游戏事实必须经 GameAdapter 注入。2026-10-21 K2 批收编。
   'packages/kojo-core/src',
   'packages/kojo-conformance/src',
+  // MCP 宿主前端桥（路 A）与能力注册表包（路 B）：只认契约字段，零游戏名词。
+  // 2026-11-04 P0 契约批收编（ADR-0013）；该目录当前可缺（其它两路并行），walk() 自动跳过。
+  'packages/app/src/mcp',
+  'packages/mcp-host/src',
 ];
 
 /** 组合根豁免：app 的 bootstrap/UI 可以引用具体插件（那是宿主的接线职责） */
