@@ -4,6 +4,7 @@
  * 全部 deps 注入假实现，不碰内核/bridge/Monaco。覆盖：tools/list × 命令注册表对拍、
  * inputSchema 校验、越权拒绝、privileged 标注、resources/prompts 形状、结构化错误。
  */
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   createMcpCapabilityRegistry,
@@ -15,8 +16,19 @@ import {
   SEMANTIC_TOOL_SPECS,
   KERNEL_IO_TOOL_SPECS,
   SUPPLEMENTAL_TOOL_SPECS,
+  MCP_PROMPT_SKELETON_SPECS,
+  RESOURCE_TEXT_LIMIT,
+  truncateResourceText,
+  slimActiveDocument,
+  slimCommandList,
+  slimPluginStatus,
+  slimValidationFailures,
+  renderSkeleton,
+  createSkeletonPrompts,
+  collectPromptSlotFragments,
   type McpCommandSource,
   type McpPrompt,
+  type McpPromptSlotFragment,
   type McpSessionScope,
 } from '@kojo/mcp-host';
 
@@ -210,5 +222,224 @@ describe('prompts 形状', () => {
   it('缺必填参数 / 未知提示 ⇒ 结构化失败', async () => {
     expect(await failureOf(reg.getPrompt('review', {}, readScope))).toMatchObject({ code: 'MISSING_PROMPT_ARGUMENT' });
     expect(await failureOf(reg.getPrompt('nope', {}, readScope))).toMatchObject({ code: 'UNKNOWN_PROMPT' });
+  });
+});
+
+/* ============ 第二波：能力覆盖补齐 / resources 截断 / prompts 槽骨架 ============ */
+
+describe('P1-9 能力覆盖补齐（工具清单 + 面向模型 description + 严格 schema）', () => {
+  const names = SUPPLEMENTAL_TOOL_SPECS.map((s) => s.name);
+  const EXPECTED = [
+    'workspace.searchAll', // 全工程检索
+    'problems.quickFix', // 问题面板 quickfix
+    'problems.diagnostics', // 问题面板诊断
+    'fileTree.create', // 文件树增
+    'fileTree.update', // 文件树改
+    'fileTree.remove', // 文件树删
+    'fileTree.rename', // 文件树改名
+    'diff.compare', // diff 视图
+    'state.replay', // 状态回放
+    'preview.document', // 2.0 预览
+  ];
+
+  it('六类补齐功能逐项在清单（10 枚工具、无重名）', () => {
+    for (const n of EXPECTED) expect(names).toContain(n);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('每个工具有面向模型 description（非中文短标题）+ 严格 inputSchema', () => {
+    for (const s of SUPPLEMENTAL_TOOL_SPECS) {
+      expect(s.description.length).toBeGreaterThanOrEqual(60);
+      expect(s.inputSchema['type']).toBe('object');
+      const props = s.inputSchema['properties'];
+      const declared = props !== null && typeof props === 'object' && Object.keys(props as object).length > 0;
+      const required = Array.isArray(s.inputSchema['required']) && (s.inputSchema['required'] as unknown[]).length > 0;
+      expect(declared || required).toBe(true); // 不是空 {type:'object'} 兜底
+    }
+  });
+
+  it('只读项全带 readOnlyHint；危险项 privileged + destructiveHint', () => {
+    for (const s of SUPPLEMENTAL_TOOL_SPECS) {
+      if (s.tier === 'read') expect(s.annotations?.readOnlyHint).toBe(true);
+    }
+    for (const n of ['fileTree.remove', 'fileTree.rename']) {
+      const s = SUPPLEMENTAL_TOOL_SPECS.find((x) => x.name === n)!;
+      expect(s.tier).toBe('privileged');
+      expect(s.annotations?.destructiveHint).toBe(true);
+    }
+  });
+
+  it('补齐项在 tools/list：edit 会话列非 privileged 项，privileged 需逐项批准', () => {
+    const reg = createMcpCapabilityRegistry({});
+    const editNames = reg.listTools(editScope).map((t) => t.name);
+    for (const n of EXPECTED.filter((n) => !['fileTree.remove', 'fileTree.rename'].includes(n))) {
+      expect(editNames).toContain(n);
+    }
+    const readNames = reg.listTools(readScope).map((t) => t.name);
+    expect(readNames).not.toContain('fileTree.remove');
+    expect(readNames).not.toContain('fileTree.rename');
+    const approved = reg.listTools({ ...privScope, approvedTools: ['fileTree.remove', 'fileTree.rename'] }).map((t) => t.name);
+    for (const n of ['fileTree.remove', 'fileTree.rename']) expect(approved).toContain(n);
+  });
+});
+
+describe('严格 inputSchema：相对路径约束（不给 MCP 任意目标路径）', () => {
+  const relSchema = (
+    SUPPLEMENTAL_TOOL_SPECS.find((s) => s.name === 'fileTree.create')!.inputSchema['properties'] as Record<string, unknown>
+  )['relPath'] as Record<string, unknown>;
+
+  it('pattern 生效：域内相对路径通过，绝对路径 / 盘符 / .. 逃逸被拒', () => {
+    expect(validateAgainstSchema(relSchema, 'src/a.txt').valid).toBe(true);
+    expect(validateAgainstSchema(relSchema, '/etc/passwd').valid).toBe(false);
+    expect(validateAgainstSchema(relSchema, 'C:/x').valid).toBe(false);
+    expect(validateAgainstSchema(relSchema, '../x').valid).toBe(false);
+    expect(validateAgainstSchema(relSchema, 'a/../b').valid).toBe(false);
+    expect(validateAgainstSchema(relSchema, '').valid).toBe(false); // minLength
+  });
+
+  it('callTool 对域外路径 / 缺必填入参 ⇒ INVALID_ARGS（结构化，不静默）', async () => {
+    const reg = createMcpCapabilityRegistry({ runSupplemental: (name, args) => ({ name, args }) });
+    expect(await failureOf(reg.callTool('fileTree.create', { relPath: '../evil', kind: 'file' }, editScope))).toMatchObject({ code: 'INVALID_ARGS' });
+    expect(await failureOf(reg.callTool('workspace.searchAll', {}, editScope))).toMatchObject({ code: 'INVALID_ARGS' });
+    expect(await reg.callTool('workspace.searchAll', { query: 'x' }, editScope)).toMatchObject({ name: 'workspace.searchAll' });
+  });
+
+  it('新校验器：pattern / minLength / maxLength 真正生效', () => {
+    expect(validateAgainstSchema({ type: 'string', pattern: '^a+$' }, 'aaa').valid).toBe(true);
+    expect(validateAgainstSchema({ type: 'string', pattern: '^a+$' }, 'aab').valid).toBe(false);
+    expect(validateAgainstSchema({ type: 'string', minLength: 3 }, 'ab').valid).toBe(false);
+    expect(validateAgainstSchema({ type: 'string', maxLength: 2 }, 'abc').valid).toBe(false);
+  });
+});
+
+describe('resources：当前文档+光标 / 命令清单 / 插件 inactive+missing[] / failedRules 的截断标记', () => {
+  it('内置清单新增 active-document，且仍 ≥6', () => {
+    expect(MCP_RESOURCE_SPECS.map((s) => s.uri)).toContain('kojo://project/active-document');
+    expect(MCP_RESOURCE_SPECS.length).toBeGreaterThanOrEqual(6);
+    expect(RESOURCE_TEXT_LIMIT).toBeGreaterThan(0);
+  });
+
+  it('truncateResourceText：超上限显式 truncated:true + preview + hint；未超原样', () => {
+    const long = truncateResourceText('x'.repeat(100), 10);
+    expect(long.truncated).toBe(true);
+    const env = JSON.parse(long.text) as { truncated: boolean; cap: number; preview: string; hint: string };
+    expect(env.truncated).toBe(true);
+    expect(env.cap).toBe(10);
+    expect(env.preview).toHaveLength(10);
+    expect(env.hint.length).toBeGreaterThan(0);
+    expect(truncateResourceText('abc', 10)).toEqual({ text: 'abc', truncated: false });
+  });
+
+  it('投影函数：正文 / 列表 / 插件 / failedRules 都带 truncated 标记与可读性', () => {
+    const doc = slimActiveDocument({ path: 'a.kojo', text: 'x'.repeat(9000), cursor: { line: 3, column: 2 } });
+    expect(doc['truncated']).toBe(true);
+    expect(doc['textLength']).toBe(9000);
+    expect((doc['text'] as string).length).toBeLessThan(9000);
+    expect((doc['cursor'] as { line: number }).line).toBe(3);
+
+    const cmds = slimCommandList(Array.from({ length: 300 }, (_, i) => ({ id: `c${i}`, title: `T${i}` })));
+    expect(cmds['truncated']).toBe(true);
+    expect((cmds['commands'] as unknown[]).length).toBeLessThan(300);
+
+    const plugins = slimPluginStatus({ active: [], inactive: [{ id: 'p', missing: ['dep'] }], missing: [] });
+    expect(plugins['truncated']).toBe(false);
+    const inactive = plugins['inactive'] as { missing: string[] }[];
+    expect(inactive[0]!.missing).toEqual(['dep']); // inactive 项含 missing[]
+    expect(plugins['missing'] as unknown[]).toEqual([]);
+    expect(slimPluginStatus({})['warnings']).toBeDefined(); // 缺字段 ⇒ fail loud
+
+    const vf = slimValidationFailures({ report: { failedRules: [{ rule: 'r1', message: 'm' }] } });
+    expect((vf['failedRules'] as { rule: string }[])[0]!.rule).toBe('r1');
+    expect(slimValidationFailures({})['warnings']).toBeDefined(); // report.failedRules 缺席不静默
+  });
+
+  it('registry.readResource 走投影 + 总闸：超长数据输出显式 truncated 标记', async () => {
+    const reg = createMcpCapabilityRegistry({ readResourceData: () => ({ blob: 'z'.repeat(RESOURCE_TEXT_LIMIT + 500) }) });
+    const out = (await reg.readResource('kojo://project/snapshot', readScope)) as { contents: { text: string }[] };
+    expect((JSON.parse(out.contents[0]!.text) as { truncated: boolean }).truncated).toBe(true);
+  });
+
+  it('active-document 走正文投影：超长正文标 truncated 且保留光标', async () => {
+    const reg = createMcpCapabilityRegistry({ readResourceData: () => ({ path: 'a.kojo', text: 'y'.repeat(RESOURCE_TEXT_LIMIT + 500), cursor: { line: 2, column: 4 } }) });
+    const out = (await reg.readResource('kojo://project/active-document', readScope)) as { contents: { text: string }[] };
+    const parsed = JSON.parse(out.contents[0]!.text) as { truncated: boolean; cursor: { line: number } };
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.cursor.line).toBe(2);
+  });
+});
+
+describe('prompts：零游戏名词骨架 + mcp.prompt 槽消费（不编造领域知识）', () => {
+  it('≥2 个领域工作流骨架，模板只认通用 domain_* 槽、不含硬编码领域事实', () => {
+    expect(MCP_PROMPT_SKELETON_SPECS.length).toBeGreaterThanOrEqual(2);
+    for (const s of MCP_PROMPT_SKELETON_SPECS) {
+      expect(s.slots.length).toBeGreaterThan(0);
+      for (const slot of s.slots) expect(slot.startsWith('domain_')).toBe(true);
+      expect(s.template).toContain('{{slot:');
+      expect(s.template.length).toBeGreaterThan(80);
+    }
+  });
+
+  it('缺槽 ⇒ 显式「领域槽未注入」标记（fail loud）；参数槽正常替换', () => {
+    const spec = MCP_PROMPT_SKELETON_SPECS[0]!;
+    const out = renderSkeleton(spec, { focus: 'DIAG' }, []);
+    expect(out.messages[0]!.content.text).toContain('DIAG');
+    expect(out.messages[0]!.content.text).toContain('领域槽未注入');
+    expect(out.messages[0]!.content.text).not.toContain('{{slot:');
+  });
+
+  it('collectPromptSlotFragments 把槽贡献 render 出的文本收集成片段', async () => {
+    const frags = await collectPromptSlotFragments([
+      { name: 'domain_context', render: () => ({ messages: [{ content: { text: '<<DOMAIN>>' } }] }) },
+    ]);
+    expect(frags[0]).toMatchObject({ name: 'domain_context', text: '<<DOMAIN>>' });
+    const built = createSkeletonPrompts(frags);
+    expect(built).toHaveLength(MCP_PROMPT_SKELETON_SPECS.length);
+    const rendered = await built[0]!.render({ focus: 'X' }, readScope);
+    expect(rendered.messages[0]!.content.text).toContain('<<DOMAIN>>');
+  });
+
+  it('registry：promptSlots 缺省时行为不变；显式提供（含空数组）才并入骨架', async () => {
+    const p: McpPrompt = { name: 'custom', description: 'x', render: async () => ({ messages: [{ role: 'user', content: { type: 'text', text: 'c' } }] }) };
+    expect(createMcpCapabilityRegistry({ prompts: [p] }).listPrompts()).toHaveLength(1);
+    const reg = createMcpCapabilityRegistry({ promptSlots: [] });
+    expect(reg.listPrompts().length).toBe(MCP_PROMPT_SKELETON_SPECS.length);
+    const out = (await reg.getPrompt('workflow.triage-diagnostics', { focus: 'X' }, readScope)) as { messages: { content: { text: string } }[] };
+    expect(out.messages[0]!.content.text).toContain('领域槽未注入'); // 空片段 ⇒ 不静默
+  });
+
+  it('注入片段后骨架消费该片段（游戏知识只走槽）', async () => {
+    const fragments: McpPromptSlotFragment[] = [{ name: 'domain_context', text: '<<ADAPTER_KNOWLEDGE>>', source: 'x-adapter' }];
+    const reg = createMcpCapabilityRegistry({ promptSlots: fragments });
+    const out = (await reg.getPrompt('workflow.triage-diagnostics', { focus: 'X' }, readScope)) as { messages: { content: { text: string } }[] };
+    expect(out.messages[0]!.content.text).toContain('<<ADAPTER_KNOWLEDGE>>');
+    expect(out.messages[0]!.content.text).toContain('X');
+  });
+});
+
+/* ============ 能力盘点对拍：与第一波逐字同形的源码结构锚 ============
+ * 路 A 的 tools/mcp-inventory.mjs 若按源码结构锚解析，本文件保持同样的
+ * 导出常量名 + {name,description,inputSchema,tier,annotations} 字段形态即可被识别。
+ * 脚本本身未落地（路 A 未合并），本护栏只做静态自证，不改那个脚本。
+ */
+describe('能力盘点对拍：源码结构锚形态保持一致', () => {
+  const src = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8');
+
+  it('三组 *_TOOL_SPECS 导出锚仍在，逐项字段同形', () => {
+    for (const anchor of ['SEMANTIC_TOOL_SPECS', 'KERNEL_IO_TOOL_SPECS', 'SUPPLEMENTAL_TOOL_SPECS']) {
+      expect(src).toContain(`export const ${anchor}`);
+    }
+    for (const group of [SEMANTIC_TOOL_SPECS, KERNEL_IO_TOOL_SPECS, SUPPLEMENTAL_TOOL_SPECS]) {
+      for (const s of group) {
+        expect(typeof s.name).toBe('string');
+        expect(typeof s.description).toBe('string');
+        expect(typeof s.inputSchema).toBe('object');
+        expect(['read', 'edit', 'privileged']).toContain(s.tier);
+      }
+    }
+  });
+
+  it('MCP_RESOURCE_SPECS / MCP_PROMPT_SKELETON_SPECS 导出锚存在', () => {
+    expect(src).toContain('export const MCP_RESOURCE_SPECS');
+    expect(src).toContain('export const MCP_PROMPT_SKELETON_SPECS');
   });
 });
