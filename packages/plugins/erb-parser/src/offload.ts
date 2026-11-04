@@ -34,6 +34,7 @@ import { ERB_ENGINE_RESERVED_IDENTIFIERS, ERB_ENGINE_STRING_IDENTIFIERS, isErbDi
 import type { ArityCatalog } from './arity';
 import { agreedParamsOf, arityParamsOf, collectArityDiagnostics } from './arity';
 import { BUILTIN_FUNCTION_NAMES, collectBuiltinArgDiagnostics } from './builtins';
+import { projectDeclaredNames } from './dim-index';
 import { parseErbText, scanControlFlow } from './scanner';
 import { collectUndefinedNameDiagnostics, type UndefinedNameDiagnosticsInput } from './undefined-name';
 import { checkStructure } from './structure';
@@ -503,31 +504,6 @@ export interface ErbSemanticDiagnosticsOptions {
 export interface ErbSemanticDiagnosticsResult {
   readonly decorations: LineDecoration[];
   readonly failedRules: readonly ErbDiagnosticsRuleFailure[];
-}
-
-/** 工程级声明名（#DIM 族）按索引对象缓存；索引重建即换键，天然失效 */
-const projectNamesCache = new WeakMap<ErbIndex, { dims: string[]; strings: string[] }>();
-
-/**
- * 从项目索引汇总声明名：`dims` 供"已声明"判定，`strings` 供字符串型赋值整行跳过。
- *
- * 跨文件声明是 Emuera 的常态（`DIM.ERH` 集中声明），只看当前文件会成片误报。
- * 缓存按索引对象（`ErbIndex` 每次重建都是新对象）而不是按路径，避免"文件改了还拿旧名录"。
- */
-export function projectDeclaredNames(index: ErbIndex): { dims: string[]; strings: string[] } {
-  const cached = projectNamesCache.get(index);
-  if (cached !== undefined) return cached;
-  const dims: string[] = [];
-  const strings: string[] = [];
-  for (const file of index.files.values()) {
-    for (const dim of file.dims) {
-      dims.push(dim.name);
-      if (dim.directive === 'DIMS' || dim.directive === 'DIMSTR' || dim.directive === 'DIMCHAR') strings.push(dim.name);
-    }
-  }
-  const names = { dims, strings };
-  projectNamesCache.set(index, names);
-  return names;
 }
 
 const SEVERITY_ORDER: Record<LineDecoration['severity'], number> = { error: 0, warning: 1, info: 2 };

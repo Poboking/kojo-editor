@@ -47,7 +47,6 @@ export {
   ERB_DIAGNOSTICS_RULE_FAILED,
   UNDEFINED_NAME_DIAGNOSTICS_ENABLED,
   collectErbSemanticDiagnostics,
-  projectDeclaredNames,
   type ErbDiagnosticsRuleFailure,
   type ErbSemanticDiagnosticsOptions,
   type ErbSemanticDiagnosticsResult,
@@ -145,6 +144,17 @@ export {
   resolveErbDimDefinition,
   type ErbDimDeclaration,
 } from './symbols';
+
+// 项目级 `#DIM` 声明事实（ERH 批，2026-11-04）：全项目**唯一**的 `files[].dims` 遍历点
+// 与它的两个视图。跨文件导航 / 补全 / 诊断一律从这里取——不许各自再扫一遍 `index.files`。
+export {
+  dimDeclarationSitesOf,
+  projectDeclaredNames,
+  projectDimDeclarations,
+  projectDimEntries,
+  type ErbDimDeclarationSite,
+  type ErbDimEntry,
+} from './dim-index';
 
 // 调用层级判据（LAU-4 调用层级腿，2026-10-31；纯函数 + 槽供方形状，宿主只翻面板形状）。
 // 与改名判据同住 `symbols.ts`：整包进首屏，另开文件只多一份模块壳（ps10 记账）。

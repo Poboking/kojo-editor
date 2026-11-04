@@ -81,10 +81,10 @@ import { collectBuiltinArgDiagnostics } from './builtins';
 import { collectUndefinedNameDiagnostics, type UndefinedNameDiagnosticsInput } from './undefined-name';
 import {
   collectErbSemanticDiagnostics,
-  projectDeclaredNames,
   type ErbSemanticDiagnosticsOptions,
   type ErbSemanticDiagnosticsResult,
 } from './offload';
+import { projectDeclaredNames } from './dim-index';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
