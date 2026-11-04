@@ -11,6 +11,9 @@ importers:
 
   .:
     devDependencies:
+      '@kojo/mcp-host':
+        specifier: workspace:*
+        version: link:packages/mcp-host
       '@types/node':
         specifier: ^22.18.0
         version: 22.20.5
@@ -62,6 +65,9 @@ importers:
       '@kojo/kojo-vocab':
         specifier: workspace:*
         version: link:../kojo-vocab
+      '@kojo/mcp-host':
+        specifier: workspace:*
+        version: link:../mcp-host
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../plugin-api
@@ -299,6 +305,12 @@ importers:
       '@kojo/kojo-core':
         specifier: workspace:*
         version: link:../kojo-core
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../plugin-api
+
+  packages/mcp-host:
+    dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../plugin-api
