@@ -1311,8 +1311,14 @@ export interface EditorCompletionFacts {
   /** 「文档词补全」开关（宿主设置页偏好）；缺席 / `false` = 该路零候选 */
   readonly wordBasedSuggestions?: boolean;
   /**
-   * 当前文件的 `#DIM*` 声明名（已去重、保序）。
-   * `undefined` = 索引此刻对该文件没有意见 ⇒ 供方回退当前缓冲区（数组含 `[]` 才不回退）。
+   * `#DIM*` 声明名（**全项目**，已按大小写归一去重、保序）。
+   *
+   * 口径：Emuera 把 `.erb` / `.erh` 一起预载（八盘语料 0 处 `#INCLUDE`），`DIM.ERH` 里声明
+   * 的名字在任何 `.ERB` 里都可见 ⇒ 交的是**项目级**名录，不是当前文件那几条；只交当前文件
+   * 会让"在正文里写头文件声明过的变量"一条候选都弹不出来。
+   *
+   * `undefined` = 索引此刻没有意见（未索引 / 该文件不在索引里）⇒ 供方回退当前缓冲区
+   * （数组含 `[]` 才不回退）。
    */
   readonly dimNames?: readonly string[];
   /**
