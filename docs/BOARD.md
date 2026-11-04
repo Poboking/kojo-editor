@@ -22,7 +22,6 @@
 |PERF-R6|快照链：关窗 / 关项目等 `storage.set` 落地|两条退出路径共用屏障；等不完也放行且明说；常态关闭不多等|余项：**真壳关窗取证**未跑 · 2026-10-31（强杀仍丢整轮）|
 |PERF-R7C|冷开 `read+parse` 的 decode + EOL 分项|已量清约 1.0s（19%），不是 2.35s（43%）；**裁决不做**（理论收益 `index_ms` −10%，代价跨 5 插件）|已裁决 · 勿重复认领 · 2026-10-31|
 
-|MCP-C3|Rust 真实 TCP/HTTP 端点集成测试：起真 listener + 裸 `TcpStream` 打全协议面（Bearer/Origin/initialize/tools-list 过滤/batch/notification/SSE/token 轮换/审计 denied）|`cargo test --lib mcp::tests` 全绿且例数上涨（现 60）；rustfmt --check 绿；全量 cargo 仅既有 launcher_probe 2 红；不改 lib.rs / Cargo.*|**认领：codearts 2026-11-04** · 分支 `b/mcpc/1104-http-e2e`（工作树 `D:/DSH/kojo-mcp-pool-c`，尖 `cad0fd11`，干净）· 任务书 §3.3 · 2026-11-04|
 |MCP-INT|MCP 批次集成收尾：ps10 体积闸台账（现读数 196 文件 / 3,554 KB · 3,638,818 B，超闸 550 B，**零新进图文件**；归因 bootstrap.ts +440 / plugin-api index +28 / slots +32 / commands +13）+ `pnpm-lock.yaml` 补 `@kojo/mcp-host` workspace importer 条目 + 全量测试复跑 + `docs/STATE.md` 落账|ps10-eager-graph 恢复绿（按台账流程逐字节记账抬 KB 闸，文件闸 196 与成员断言**不许放宽**）；`pnpm install --frozen-lockfile` 过；全量 unit 0 failed（launcher_probe 2 红为既有）|**认领：codearts 2026-11-04（主 agent 接手）** · 归因明细 `docs/mcp/POOL-HANDOFF.md` §4 · 2026-11-04|
 
 > 已交付 / 已收口行（K2-D0、K2-CONTRACT、SDK-B5a、多游戏适配 P0/P1、编辑器对标 A–E、PS 系列、LAU-FACE-ORDER、LAU-B11、DIAG-GATE-1033、LAU-DUALLEG）已删，回执在 git 提交信息。
