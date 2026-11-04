@@ -1633,7 +1633,13 @@ function labelCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
   }));
 }
 
-/** `#DIM` 声明名候选：索引有意见（数组，含 `[]`）就以它为准，`undefined` 才回退当前缓冲区 */
+/**
+ * `#DIM` 声明名候选：索引有意见（数组，含 `[]`）就以它为准，`undefined` 才回退当前缓冲区。
+ *
+ * 名录自 2026-11-04 起是**全项目**的（`DIM.ERH` 与 `.ERB` 同一个编译单元），十几万条的
+ * 全量线性扫 + 每命中造一枚 item 就是每击键几十到几百毫秒（15 万条实测 280ms）。故与
+ * 函数名那条腿同一做法：折叠序名字表上二分找前缀下界 + 连续前扫，`O(log n + 命中数)`。
+ */
 function declaredCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
   const slot = erbDeclaredNameSlot(ctx.line, ctx.column);
   if (slot === null) return [];
@@ -1641,23 +1647,27 @@ function declaredCandidates(ctx: ErbCompletionContext): EditorCompletionItem[] {
   const dims = ctx.facts.dimNames ?? dimNamesOfBuffer(ctx.text);
   if (dims.length === 0) return [];
 
+  const names = foldedNameIndex(dims);
   const needle = slot.prefix.toUpperCase();
+  const from = lowerBound(names, needle);
+  const range = { line: ctx.range.line, startColumn: slot.start + 1, endColumn: slot.end + 1 };
   const items: EditorCompletionItem[] = [];
   const seen = new Set<string>();
-  for (const name of dims) {
-    if (name.length === 0) continue;
+  // 前缀命中在折叠序里必然连续 ⇒ 首个失配即可收工，不必看完整张名录
+  for (let i = from; i < names.length && items.length < MAX_NAME_CANDIDATES; i++) {
+    const name = names[i]!;
+    if (!startsWithFold(name, needle)) break;
     const upper = name.toUpperCase();
     if (seen.has(upper)) continue;
     seen.add(upper);
-    if (needle.length > 0 && !upper.startsWith(needle)) continue;
     const exact = needle.length > 0 && upper === needle;
     items.push({
       label: name,
       kind: 'variable',
       insertText: name,
       filterText: name,
-      detail: '#DIM 声明（本文件）',
-      range: { line: ctx.range.line, startColumn: slot.start + 1, endColumn: slot.end + 1 },
+      detail: '#DIM 声明',
+      range,
       sortText: `${exact ? '4' : '5'}_${name}`,
     });
   }

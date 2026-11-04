@@ -1,6 +1,7 @@
 import type * as Monaco from './entry';
 import type { EditorCompletionFacts, ErbFile, ErbIndex, GameAdapter } from '@kojo/plugin-api';
 import { activeGameAdapter } from '@kojo/plugin-api';
+import { projectDeclaredNames } from '@kojo/plugin-erb-parser';
 import { SYSTEM_FUNCTION_REVERSE } from '@kojo/kojo-vocab/system-functions';
 import { makeLookup } from '@kojo/kojo-vocab/engine';
 import { ERB_DIRECTIVES, mergeDirectiveWords } from './erb-language';
@@ -34,9 +35,14 @@ import type { Kernel } from '@kojo/kernel';
  *   Monarch 高亮同一个 `mergeDirectiveWords`（大小写不敏感去重，先见者胜）；
  * - `systemFunctionAliases`：糖层中文别名反查表（`SYSTEM_FUNCTION_REVERSE`，查不到就空）；
  * - `wordBasedSuggestions`：设置页偏好（每轮现取，翻开关下一个候选轮即生效）；
- * - `dimNames` / `labelNames` / `functionNames`：解析器索引派生件（`#DIM` 名 / 光标行所属
- *   函数的 `$` 标签名 / 项目全部函数名）。**`undefined` 与 `[]` 严格分家**：前者 = 未索引
- *   ⇒ 插件回退当前缓冲区；后者 = 已索引确无该项 ⇒ 零候选。
+ * - `dimNames` / `labelNames` / `functionNames`：解析器索引派生件（**全项目** `#DIM` 名 /
+ *   光标行所属函数的 `$` 标签名 / 项目全部函数名）。**`undefined` 与 `[]` 严格分家**：前者 =
+ *   未索引 ⇒ 插件回退当前缓冲区；后者 = 已索引确无该项 ⇒ 零候选。
+ *
+ * `dimNames` 的口径是**项目级**：Emuera 预载 `ERB/` 下全部 `.erb` / `.erh`（`Preload.cs`），
+ * 语料里 0 处 `#INCLUDE` ⇒ `.ERH` 与 `.ERB` 是同一个编译单元的两片，`DIM.ERH` 里声明的名字
+ * 在任何 `.ERB` 里都可见。只交当前文件的名字，会让"在正文里写 `DIM.ERH` 声明的那个变量"
+ * 这条最常见的用法一条候选都弹不出来。
  *
  * 全程 try/catch：索引在途 / 解析器缺席 / 表求值抛错 ⇒ 该格不带（**退化可见**：依赖它的
  * 那一路零候选），绝不把异常送进补全 seam。
@@ -147,6 +153,100 @@ function functionNamesOf(kernel: Kernel): readonly string[] {
 }
 
 /**
+ * 全项目 `#DIM` 名去重件（按索引对象缓存）。
+ *
+ * 八盘语料 15 万条声明，同名常量散在多份 `DIM.ERH` 里 ⇒ 原始名单重复极多。每轮补全都把
+ * 15 万个名字哈希一遍是每击键的开销，所以这一遍只做一次。失效判据取**索引对象本身**
+ * （与 `dim-index.ts` 的 WeakMap 同一把尺子）：索引重建即新对象，不会出现"名录比索引旧"。
+ *
+ * `keys` 是名字的大写归一（下游 `declaredCandidates` 就按这一口径判重）预先算好，合并阶段
+ * 就不必再对 15 万个名字逐个 `toUpperCase()`。
+ */
+const PROJECT_DIM_NAMES = new WeakMap<
+  ErbIndex,
+  { readonly names: readonly string[]; readonly keys: readonly string[] }
+>();
+
+function projectDimNames(index: ErbIndex): {
+  readonly names: readonly string[];
+  readonly keys: readonly string[];
+} {
+  const hit = PROJECT_DIM_NAMES.get(index);
+  if (hit !== undefined) return hit;
+
+  const names: string[] = [];
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  // 遍历点只有 `dim-index.ts` 一处（`projectDeclaredNames`），这里只做去重
+  for (const name of projectDeclaredNames(index).dims) {
+    if (name.length === 0) continue; // 空名是解析残渣，与 `dim-index.ts` 同一口径
+    const key = name.toUpperCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(name);
+    keys.push(key);
+  }
+
+  const built = { names, keys };
+  PROJECT_DIM_NAMES.set(index, built);
+  return built;
+}
+
+/**
+ * 合并结果按（索引, 文件）两级缓存：合并要遍历全项目名录，同一份索引下的同一份文件只做一次。
+ * 外层键是索引对象、内层键是 `ErbFile` 身份——两者都随索引重建换新，两层都不需要版本号。
+ */
+const MERGED_DIM_NAMES = new WeakMap<ErbIndex, WeakMap<ErbFile, readonly string[]>>();
+
+/**
+ * `dimNames` 事实格：**当前文件的名字在前** ∪ 全项目声明名（大小写不敏感去重）。
+ *
+ * 当前文件排前不是审美：同名候选几十上百条时，作者最先要的多半是"我刚在这份文件顶上声明过
+ * 的那几个"，项目名录的字典序对他没有帮助。
+ *
+ * 三态沿用既有口径：`index === null`（未索引）或 `file === null`（路径不在索引里）⇒
+ * `undefined`，插件回退当前缓冲区；索引能作答但一个名字都没有 ⇒ `[]`（零候选，不回退）。
+ */
+export function dimNamesFor(index: ErbIndex | null, file: ErbFile | null): readonly string[] | undefined {
+  if (index === null || file === null) return undefined;
+  const project = projectDimNames(index);
+
+  let perFile = MERGED_DIM_NAMES.get(index);
+  if (perFile === undefined) {
+    perFile = new WeakMap<ErbFile, readonly string[]>();
+    MERGED_DIM_NAMES.set(index, perFile);
+  }
+  const cached = perFile.get(file);
+  if (cached !== undefined) return cached;
+
+  /** 当前文件自己的声明名（按大写归一去重，保持文件内声明顺序） */
+  const own: string[] = [];
+  const ownKeys = new Set<string>();
+  for (const dim of file.dims) {
+    if (dim.name.length === 0) continue;
+    const key = dim.name.toUpperCase();
+    if (ownKeys.has(key)) continue;
+    ownKeys.add(key);
+    own.push(dim.name);
+  }
+
+  let names: readonly string[];
+  if (own.length === 0) {
+    // 正文 `.ERB` 多半自己一条声明都没有 ⇒ 项目名录原样交出，零拷贝
+    names = project.names;
+  } else {
+    const merged: string[] = own.slice();
+    for (let i = 0; i < project.names.length; i++) {
+      if (!ownKeys.has(project.keys[i]!)) merged.push(project.names[i]!);
+    }
+    names = merged;
+  }
+
+  perFile.set(file, names);
+  return names;
+}
+
+/**
  * 当前 model 的补全**事实袋**（共享槽腿在 `descriptor.completionFacts` 打了点子的语言上
  * 每轮现取；本模块不判语言 id——那一格是 descriptor 的事）。
  *
@@ -191,7 +291,8 @@ export function erbCompletionFactsOf(
   let labelNames: readonly string[] | undefined;
   try {
     if (file !== null) {
-      dimNames = [...new Set(file.dims.map((d) => d.name))];
+      // 项目名录（`.ERH` 与 `.ERB` 是同一个编译单元的两片）+ 当前文件的名字排在前
+      dimNames = dimNamesFor(index, file);
       const fn = file.functions.find((f) => f.startLine <= line && line <= f.endLine);
       labelNames =
         fn === undefined
