@@ -1943,6 +1943,9 @@ export function ShellLayout(props: Props): ReactElement {
       // 只能靠副侧栏标签或编辑器右键——作者在命令面板里搜"调试"什么都搜不到。
       { id: 'workbench.stateReplay', title: '打开状态回放', category: '工作台', run: () => dispatch({ type: 'activate', container: 'aux', key: 'state-replay' }) },
       { id: 'workbench.snapshotInjector', title: '打开状态注入器', category: '工作台', run: () => dispatch({ type: 'activate', container: 'aux', key: 'snapshot-injector' }) },
+      // 数值看板（2026-11-05）：变量字典 / 项目符号 / 指令速查的可翻查面板（aux）。
+      // 与上两条同形态：面板 defaultActive=false ⇒ 需要一条直达命令（activate 同时置 visible）。
+      { id: 'workbench.valueLooker', title: '打开数值看板', category: '工作台', run: () => dispatch({ type: 'activate', container: 'aux', key: 'value-looker' }) },
       // 文字缩放（A1）：走 font-size-pref 的档位真源，Monaco 原生 fontZoom contrib
       // 装载但未自带键位（standalone 无 workbench 绑定），键位由这张命令表给出
       // （缺省值登记在键位注册表，可查可改）。

@@ -1,0 +1,19 @@
+{
+  "name": "@kojo/plugin-ui-value-looker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Value looker panel (ui.panel contribution, aux): browse the active game's variable dictionary (family x index x name x description x bits), the project symbol index (functions / #DIM incl .ERH), and reverse usage lookup — all read-only, zero game nouns (dictionary knowledge flows in via the game.adapter slot).",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@kojo/plugin-api": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react": "^19.3.0"
+  }
+}

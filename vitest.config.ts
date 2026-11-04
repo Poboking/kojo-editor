@@ -148,6 +148,7 @@ export const config = defineConfig({
       '@kojo/plugin-ui-state-replay': r('./packages/plugins/ui-state-replay/src/index.ts'),
       '@kojo/plugin-ui-kojo-navigator': r('./packages/plugins/ui-kojo-navigator/src/index.ts'),
       '@kojo/plugin-ui-archive-browser': r('./packages/plugins/ui-archive-browser/src/index.ts'),
+      '@kojo/plugin-ui-value-looker': r('./packages/plugins/ui-value-looker/src/index.ts'),
       '@kojo/plugin-ui-snapshot-injector': r('./packages/plugins/ui-snapshot-injector/src/index.ts'),
       '@kojo/plugin-ui-sugar-lift': r('./packages/plugins/ui-sugar-lift/src/index.ts'),
       '@kojo/plugin-ui-sugar-preview': r('./packages/plugins/ui-sugar-preview/src/index.ts'),

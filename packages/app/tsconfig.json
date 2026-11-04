@@ -56,6 +56,7 @@
       "@kojo/plugin-ui-state-replay": ["../plugins/ui-state-replay/src/index.ts"],
       "@kojo/plugin-ui-kojo-navigator": ["../plugins/ui-kojo-navigator/src/index.ts"],
       "@kojo/plugin-ui-archive-browser": ["../plugins/ui-archive-browser/src/index.ts"],
+      "@kojo/plugin-ui-value-looker": ["../plugins/ui-value-looker/src/index.ts"],
       "@kojo/plugin-ui-snapshot-injector": ["../plugins/ui-snapshot-injector/src/index.ts"],
       "@kojo/plugin-ui-sugar-lift": ["../plugins/ui-sugar-lift/src/index.ts"],
       "@kojo/plugin-ui-sugar-preview": ["../plugins/ui-sugar-preview/src/index.ts"],

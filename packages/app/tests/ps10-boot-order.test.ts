@@ -167,6 +167,9 @@ describe('PS-10 次序契约（注册早于开项目 / 标记早于预取）', (
       // 内联补全（幽灵文本）本地候选源（2026-10-27 IC-B 批）。同样末位追加：它只往槽
       // `completion.source` 挂一家供方，`tryInject` 取 `erb.parser` 的名录，缺席时整家
       // 走 `failed` 出声（不静默），次序与"谁赢"无关——槽内先后由各贡献自己的 `order` 定。
+      // 数值看板（2026-11-05）：变量字典 / 项目符号 / 指令速查面板。同样末位追加：
+      // 它只 require 既有服务，面板缺席时不影响任何其它贡献，次序不参与判定。
+      'createUiValueLookerPlugin',
       'createInlineCompletionLocalPlugin',
     ];
     // 工厂调用可能包在条件装配里（LAU-3b：kojo1 插件族 `...(x === null ? [] : [x.create…()])`），

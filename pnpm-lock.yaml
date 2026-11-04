@@ -164,6 +164,9 @@ importers:
       '@kojo/plugin-ui-sugar-preview':
         specifier: workspace:*
         version: link:../plugins/ui-sugar-preview
+      '@kojo/plugin-ui-value-looker':
+        specifier: workspace:*
+        version: link:../plugins/ui-value-looker
       '@tauri-apps/api':
         specifier: ^2.12.2
         version: 2.12.2
@@ -634,6 +637,16 @@ importers:
         version: 19.3.0
 
   packages/plugins/ui-sugar-preview:
+    dependencies:
+      '@kojo/plugin-api':
+        specifier: workspace:*
+        version: link:../../plugin-api
+    devDependencies:
+      react:
+        specifier: ^19.3.0
+        version: 19.3.0
+
+  packages/plugins/ui-value-looker:
     dependencies:
       '@kojo/plugin-api':
         specifier: workspace:*

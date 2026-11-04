@@ -418,6 +418,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     market,
     uiMarket,
     uiKojoXml,
+    uiValueLooker,
     inlineCompletionLocal,
     // LAU4-ERB-A：ERB 语言面的供方插件（同符号高亮 / 结构化扩选）。
     erbLang,
@@ -441,6 +442,7 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     import('@kojo/plugin-kojo-market'),
     import('@kojo/plugin-ui-market'),
     import('@kojo/plugin-ui-kojo-xml'),
+    import('@kojo/plugin-ui-value-looker'),
     import('@kojo/plugin-inline-completion-local'),
     // LAU4-ERB-A：ERB 语言面供方（判据在 @kojo/erb-lang）。
     import('@kojo/plugin-erb-lang'),
@@ -506,6 +508,9 @@ async function loadProjectPlugins(): Promise<Plugin[]> {
     // 口上 XML 面板（2026-10-24）：消费 `kojo.xml` 服务（由 XML 形态的 adapter 提供）。
     // 服务缺席（ERB 口上形态的工程）⇒ 面板显式降级，不静默空白。
     uiKojoXml.createUiKojoXmlPlugin(),
+    // 数值看板（2026-11-05）：变量字典 / 项目符号 / 指令速查的可翻查面板；
+    // 一切名字与标签运行时经 game.adapter 槽流入，本插件零游戏名词。
+    uiValueLooker.createUiValueLookerPlugin(),
     // 内联补全（幽灵文本）本地候选源（IC-B 批，2026-10-27）：往槽 `completion.source`
     // 注册第一家供方。判据只有"这一格的名字前缀在项目名录里**恰好**命中一条"，
     // 名录现读 `erb.parser` 的索引（不在这里建第二份）。排在末尾是刻意的：

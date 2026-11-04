@@ -10701,3 +10701,580 @@ button.resume-session {
   background: none;
   padding: 0;
 }
+
+/* ============================ 数值看板面板（vl-*，2026-11-05） ============================
+   aux 副侧栏的可翻查看板：变量字典（族 × 编号 × 名 × 中文说明）/ 项目符号（函数 + #DIM，
+   按口上包分域）/ 指令速查。取色一律 token（五套主题同名覆写即生效），零游戏名词。 */
+
+.panel-value-looker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  font-size: var(--fs-1);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- 面板头：标题 + 版本徽章 + 副句 + 词典警示 + 操作回执 ---- */
+.vl-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+.vl-head-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.vl-head-title {
+  font-size: var(--fs-2);
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.vl-head-note {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vl-dict-warn {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  background: var(--hint-well);
+  border: 1px solid var(--hint-edge);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+}
+.vl-notice {
+  font-size: var(--fs-0);
+  color: var(--accent-text, var(--accent));
+  background: var(--hint-well);
+  border: 1px solid var(--hint-edge);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- 通用小徽章（版本 / 来源层 / 声明指令） ---- */
+.vl-badge {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font-size: var(--fs-0);
+  line-height: 1.5;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle, var(--border));
+  background: var(--wash-neutral);
+  color: var(--fg-dim);
+}
+.vl-badge-version {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent-text, var(--accent));
+}
+.vl-src-append {
+  background: var(--wash-warn);
+  color: var(--fg);
+}
+.vl-src-const {
+  background: var(--violet-wash);
+  color: var(--fg);
+}
+.vl-dim-directive {
+  font-family: var(--font-mono);
+}
+
+/* ---- 页签条（segmented + accent 下划轨） ---- */
+.vl-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+.vl-tab {
+  appearance: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.vl-tab:hover {
+  background: var(--hover-bg);
+  color: var(--fg);
+}
+.vl-tab.is-active {
+  color: var(--fg);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+.vl-tab-count {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  margin-left: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 正文区：三页共用（工具条固定、列表滚动） ---- */
+.vl-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.vl-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-bottom: var(--space-2);
+}
+
+/* ---- 控件基座：输入 / 下拉（与 .rp-* 同一条配方：底 --input-bg，焦点环 --shadow-focus） ---- */
+.vl-input,
+.vl-select {
+  background-color: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg);
+  font-size: var(--fs-1);
+  padding: var(--space-1) var(--space-2);
+  box-shadow: var(--well-edge);
+  min-width: 0;
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.vl-input::placeholder {
+  color: var(--fg-dim);
+}
+.vl-input:focus-visible,
+.vl-select:focus-visible {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.vl-input-grow {
+  flex: 1 1 140px;
+}
+.vl-select {
+  flex: none;
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 22px;
+  cursor: pointer;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--fg-dim) 50%),
+    linear-gradient(135deg, var(--fg-dim) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) calc(50% + 1px),
+    calc(100% - 10px) calc(50% + 1px);
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+}
+.vl-select option {
+  background-color: var(--surface-overlay, var(--bg-2));
+  color: var(--fg);
+}
+
+/* ---- 工具条（符号 / 指令页）：窄栏可换行 ---- */
+.vl-toolbar {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  flex: none;
+}
+.vl-seg {
+  display: inline-flex;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.vl-seg-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+  transition: background-color var(--dur-1) var(--ease-out), color var(--dur-1) var(--ease-out);
+}
+.vl-seg-btn + .vl-seg-btn {
+  border-left: 1px solid var(--border-subtle, var(--border));
+}
+.vl-seg-btn:hover {
+  background: var(--hover-bg);
+  color: var(--fg);
+}
+.vl-seg-btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-text, var(--accent));
+  font-weight: 600;
+}
+
+/* ---- 变量字典页：族栏 + 条目列 ---- */
+.vl-vars {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: var(--space-2);
+}
+.vl-fams {
+  flex: none;
+  width: 108px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.vl-search {
+  flex: none;
+}
+.vl-search-slim .vl-input {
+  padding: 2px var(--space-1);
+  font-size: var(--fs-0);
+}
+.vl-entries {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+/* ---- 行基元：族 / 条目 / 符号 / 指令 / 使用点（同一条 hover + 选中配方） ---- */
+.vl-fam,
+.vl-entry,
+.vl-sym,
+.vl-instr,
+.vl-usage-row {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+  font-size: var(--fs-1);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.vl-fam:hover,
+.vl-entry:hover,
+.vl-sym:hover,
+.vl-instr:hover,
+.vl-usage-row:hover {
+  background: var(--hover-bg);
+}
+.vl-fam.is-active,
+.vl-entry.is-active {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* 族行：id（mono）+ 显示名（计数进 aria/title，不占行宽） */
+.vl-fam {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  border-left: 2px solid transparent;
+}
+.vl-fam.is-active {
+  box-shadow: none;
+  border-left-color: var(--accent);
+}
+.vl-fam-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vl-fam.is-active .vl-fam-id {
+  color: var(--accent-text, var(--accent));
+}
+.vl-fam-label {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vl-fam-count {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+/* 条目行：编号牌 + 名字 + 中文说明 + 来源徽章 */
+.vl-entry-idx {
+  flex: none;
+  min-width: 2.4em;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: var(--radius-xs);
+  padding: 0 4px;
+  align-self: center;
+}
+.vl-entry-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.vl-entry-name {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vl-entry-desc {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 详情卡：选中条目的引用片段 + 反查使用点 ---- */
+.vl-detail {
+  flex: none;
+  max-height: 46%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-1);
+  padding: var(--space-2);
+}
+.vl-detail-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.vl-detail-key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-1);
+  font-weight: 600;
+  color: var(--accent-text, var(--accent));
+}
+.vl-detail-desc {
+  font-size: var(--fs-1);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vl-snips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.vl-snip {
+  appearance: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-2);
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+.vl-snip:hover {
+  border-color: var(--accent-dim);
+  background: var(--hover-bg);
+}
+.vl-snip-label {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+.vl-snip-text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg);
+}
+
+/* 反查使用点 */
+.vl-usage {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.vl-usage-head {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+.vl-usage-row {
+  padding: 2px var(--space-1);
+  font-size: var(--fs-0);
+}
+.vl-usage-fn {
+  font-family: var(--font-mono);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.vl-usage-line {
+  flex: none;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+}
+.vl-usage-key {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+.vl-usage-count {
+  flex: none;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  background: var(--wash-neutral);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-1);
+}
+
+/* ---- 符号行：名（mono）+ 形参 / 注释摘要 + 行号 ---- */
+.vl-sym-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.vl-sym-name {
+  font-family: var(--font-mono);
+  font-size: var(--fs-1);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vl-sym.is-library .vl-sym-name {
+  color: var(--fg-dim);
+}
+.vl-sym-params {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+}
+.vl-sym-doc {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vl-sym-loc {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+}
+
+/* ---- 指令行：编号牌 + 中文名 ---- */
+.vl-instr-no {
+  flex: none;
+  min-width: 3em;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-dim);
+}
+.vl-instr-name {
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 空态与「显示更多」 ---- */
+.vl-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: var(--space-4) var(--space-2);
+  margin: auto;
+  color: var(--fg-dim);
+}
+.vl-empty-text {
+  font-size: var(--fs-1);
+}
+.vl-empty-sub {
+  font-size: var(--fs-0);
+  max-width: 30em;
+}
+.vl-more {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--accent-text, var(--accent));
+  font-size: var(--fs-0);
+  padding: var(--space-1);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-1) var(--ease-out);
+}
+.vl-more:hover {
+  background: var(--hover-bg);
+}
+
+.vl-usage-building {
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  padding: var(--space-1) 0 0;
+}

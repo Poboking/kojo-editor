@@ -51,6 +51,7 @@
     "@kojo/plugin-ui-sugar-editor": "workspace:*",
     "@kojo/plugin-ui-sugar-lift": "workspace:*",
     "@kojo/plugin-ui-sugar-preview": "workspace:*",
+    "@kojo/plugin-ui-value-looker": "workspace:*",
     "@tauri-apps/api": "^2.12.2",
     "@tauri-apps/plugin-updater": "^2.13.3",
     "monaco-editor": "0.57.0",
