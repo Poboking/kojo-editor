@@ -6,6 +6,8 @@
  */
 import { useMemo, useState } from 'react';
 
+import { KitSelect, type KitSelectOption } from '../ui-kit/kit-select';
+
 export type AuditOutcome = 'ok' | 'error' | 'filtered' | 'denied' | 'timeout' | 'cancelled';
 
 export interface AuditEntryView {
@@ -41,6 +43,16 @@ export function filterAuditEntries(
     .slice(-cap);
 }
 
+const OUTCOME_OPTIONS: readonly KitSelectOption[] = [
+  { value: 'all', label: '全部' },
+  { value: 'ok', label: 'ok' },
+  { value: 'error', label: 'error' },
+  { value: 'filtered', label: 'filtered' },
+  { value: 'denied', label: 'denied' },
+  { value: 'timeout', label: 'timeout' },
+  { value: 'cancelled', label: 'cancelled' },
+];
+
 export interface AuditPanelProps {
   entries: readonly AuditEntryView[];
 }
@@ -56,18 +68,12 @@ export function AuditPanel({ entries }: AuditPanelProps) {
     <section aria-label="MCP 审计">
       <label>
         结果
-        <select
+        <KitSelect
           value={outcome}
-          onChange={(e) => setOutcome(e.currentTarget.value as AuditOutcome | 'all')}
-        >
-          <option value="all">全部</option>
-          <option value="ok">ok</option>
-          <option value="error">error</option>
-          <option value="filtered">filtered</option>
-          <option value="denied">denied</option>
-          <option value="timeout">timeout</option>
-          <option value="cancelled">cancelled</option>
-        </select>
+          onChange={(value) => setOutcome(value as AuditOutcome | 'all')}
+          options={OUTCOME_OPTIONS}
+          ariaLabel="按结果过滤审计条目"
+        />
       </label>
       <label>
         客户端

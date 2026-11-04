@@ -821,6 +821,20 @@ export const MIRROR_GAP_COMMANDS = Object.freeze({
   // 旧 base64 读通道：页面侧已全走 read_file_bytes_raw 的二进制帧
   read_file_bytes: '旧 base64 读通道，页面侧已改走 read_file_bytes_raw 的二进制帧，镜像只实现 raw 一支',
 
+  // MCP 端点（ADR-0013）：整块是桌面壳独占能力——端点必须 bind 127.0.0.1 并由 Rust 侧持有
+  // 第四张授权表 / 审计 / 发现文件；web 调试宿既不启端点，也不该伪造「已授权」的会话面。
+  mcp_start: '起 MCP 端点要桌面壳内 bind 127.0.0.1 + 第四张授权表 + 发现文件落盘，web 模式没有这套运行时',
+  mcp_stop: '停 MCP 端点要收回桌面壳持有的 listener 与待决请求，web 模式没有端点运行时',
+  mcp_status: '端点状态（端口 / 待决数 / 凭据）只存在于桌面壳的端点运行时',
+  mcp_respond: '回填一次待决 MCP 请求要端点持有的 pending 表，web 模式没有端点',
+  mcp_approve: '批准 MCP 工具授权要原子写第四张表 mcp_approvals.json，web 模式没有那份授权表',
+  mcp_revoke: '吊销 MCP 工具授权同上，第四张表只由桌面壳持有',
+  mcp_scope_query: '查 MCP 会话授权作用域要端点侧的 scope 状态，web 模式没有',
+  mcp_audit_query: '读 mcp_audit.jsonl 审计要桌面壳 app_data 下的审计文件，web 模式没有那份落盘',
+
+  // 更新完成后的「立即重启」：要重新拉起宿主进程本身，web 调试宿没有可重启的壳
+  updater_relaunch: '重启桌面壳进程（先走退出屏障再拉新实例），web 调试宿是浏览器 + Node，没有可重启的壳',
+
   // 启动器 · 原生对话框 / 真实盘布局（launcher 根目录与实例元数据只存在于桌面壳）
   launcher_pick_source_root: '要弹系统目录对话框选游戏源根，web 模式没有原生目录选择器',
   launcher_pick_write_root: '要按实例根布局与 root_id 挑写入根，依赖桌面壳持有的实例目录结构',

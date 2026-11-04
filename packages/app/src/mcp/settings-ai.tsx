@@ -25,6 +25,7 @@ import {
   type ApprovalItem,
 } from './approval-ui';
 import { AuditPanel, type AuditEntryView } from './audit-panel';
+import { Switch } from '../ui/Switch';
 
 export type McpClientTier = 'read' | 'edit' | 'privileged';
 
@@ -186,11 +187,11 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
 
       <div className="settings-ai-row">
         <label className="settings-ai-toggle">
-          <input
-            type="checkbox"
+          <Switch
             checked={enabled}
             disabled={phase === 'busy' || phase === 'loading'}
-            onChange={(e) => void (e.target.checked ? start() : stop())}
+            onChange={(next) => void (next ? start() : stop())}
+            label="启用 MCP 服务"
           />
           <span>启用 MCP 服务</span>
         </label>

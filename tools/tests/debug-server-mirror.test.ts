@@ -40,6 +40,38 @@ const MIRROR_GAPS: Record<string, string> = {
     'Rust 侧只剩 smoke 探针拿它当"两条通道逐字节对照"的参照物。镜像只实现 raw 一支。' +
     '参数形状：{ path } → base64 string。',
 
+  // ---- MCP 端点（ADR-0013）：整块是桌面壳独占能力，web 调试宿不启端点、不伪造授权面 ----
+  mcp_start:
+    '起 MCP 端点：Rust 侧 bind 127.0.0.1 动态端口 + Bearer/Origin 三闸 + 原子写第四张授权表' +
+    '（mcp_approvals.json）+ 发现文件落盘，并在 WebView 桥（mcp://request 事件）上等回填。' +
+    'web 调试宿是浏览器 + Node，没有这套端点运行时，也不该伪造"已授权"的会话面。参数：{ }。',
+  mcp_stop:
+    '停端点要收回桌面壳持有的 listener、待决请求与发现文件；web 模式没有端点运行时。参数：{ }。',
+  mcp_status:
+    '查端点状态（running / port / 待决数 / 凭据轮换代次）读的是端点运行时内存，web 模式没有。' +
+    '参数：{ }。',
+  mcp_respond:
+    '回填一次待决 MCP 请求（{ id, ok, result?, error? }）要端点持有的 pending 表与请求级 scope；' +
+    'web 模式没有端点，回填无处可去。',
+  mcp_approve:
+    '批准 MCP 工具授权要按 tier 精确落第四张表（mcp_approvals.json，原子写 + 轮换语义），' +
+    '这份授权表只存在于桌面壳；web 模式伪造一份就等于把"谁批准过"变成假话。' +
+    '参数：{ client_id, tools }。',
+  mcp_revoke:
+    '吊销 MCP 工具授权同样只动第四张表（并按需轮换凭据）；web 模式没有那份表。' +
+    '参数：{ client_id, tools? }。',
+  mcp_scope_query:
+    '查某个 MCP 会话的授权作用域要端点侧的 scope 状态（tier / approvedTools / 目录白名单），' +
+    '这些状态随端点生命周期存在，web 模式没有。参数：{ client_id }。',
+  mcp_audit_query:
+    '读 mcp_audit.jsonl 审计条目要桌面壳 app_data 下的审计文件（端点独占追加，客户端只读）；' +
+    'web 模式既无端点也无该落盘。参数：{ limit?, since? }。',
+
+  // ---- 更新器（UPD 批）：重启壳进程是桌面壳能力 ----
+  updater_relaunch:
+    '更新完成后的「立即重启」要重新拉起宿主进程本身（退出屏障 → 新实例）；web 调试宿是' +
+    '浏览器 + Node 服务，没有可重启的壳，只能由用户手动刷新页面。参数：{ }。',
+
   // ---- 启动器（游戏进程 + 实例落盘）：整块是桌面壳独占能力 ----
   launcher_pick_source_root:
     '弹系统目录对话框选游戏源根：依赖 Tauri 原生对话框 + HostState 的根布局登记；' +

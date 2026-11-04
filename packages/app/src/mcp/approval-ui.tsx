@@ -8,6 +8,8 @@
  */
 import { useMemo, useState } from 'react';
 
+import { KitCheck } from '../ui-kit/kit-check';
+
 export type McpTier = 'read' | 'edit' | 'privileged';
 
 /** 与 Rust `mcp/protocol.rs` 的危险工具判据镜像（双保险的展示侧）。 */
@@ -153,14 +155,13 @@ export function ApprovalUi({
       <ul>
         {pending.map((item) => (
           <li key={item.name}>
-            <label>
-              <input
-                type="checkbox"
-                checked={selected.has(item.name)}
-                onChange={(e) => toggle(item.name, e.currentTarget.checked)}
-              />
+            <KitCheck
+              checked={selected.has(item.name)}
+              onChange={(checked) => toggle(item.name, checked)}
+              label={`批准 ${item.name}`}
+            >
               {item.name}（{item.tier}）— {item.reason}
-            </label>
+            </KitCheck>
           </li>
         ))}
       </ul>

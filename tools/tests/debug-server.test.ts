@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { createDebugServer, SUPPORTED_COMMANDS } from '../debug-server.mjs';
+import { createDebugServer, MIRROR_GAP_COMMANDS, SUPPORTED_COMMANDS } from '../debug-server.mjs';
 import { decodeReadFilesFrame } from '../../packages/app/src/bridge/read-files-frame';
 
 let server: Awaited<ReturnType<typeof createDebugServer>>;
@@ -145,7 +145,12 @@ describe('调试宿 · 基础面', () => {
       }
     };
     await walk(appSrcRoot);
-    const missing = [...used].filter((c) => !SUPPORTED_COMMANDS.includes(c));
+    // 缺口集合里的命令也算"认识"：宿主对它们回 501 + 逐条原因（桌面壳独占能力，
+    // 见 MIRROR_GAP_COMMANDS）。本判据只抓**调试宿根本不知道名字**的命令——
+    // 那种在 web 模式里会被当成拼写错误排查，正是这道闸存在的理由。
+    const missing = [...used].filter(
+      (c) => !SUPPORTED_COMMANDS.includes(c) && !(c in MIRROR_GAP_COMMANDS),
+    );
     expect(missing, `页面用到而调试宿没实现的命令：${missing.join('、')}`).toEqual([]);
     expect(SUPPORTED_COMMANDS.length).toBeGreaterThan(30);
   });
