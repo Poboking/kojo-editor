@@ -74,8 +74,8 @@ describe('resolveNewItemPath · 拒绝（不静默改名）', () => {
 });
 
 describe('菜单与预览', () => {
-  it('菜单六项、顺序即口径（糖优先，因为它是默认源）', () => {
-    expect(NEW_ITEM_MENU.map((m) => m.kind)).toEqual(['kojo', 'erb', 'erm', 'txt', 'md', 'folder']);
+  it('菜单七项、顺序即口径（糖优先，因为它是默认源；.ERH 紧跟两种正文之后）', () => {
+    expect(NEW_ITEM_MENU.map((m) => m.kind)).toEqual(['kojo', 'erb', 'erm', 'erh', 'txt', 'md', 'folder']);
     for (const m of NEW_ITEM_MENU) expect(m.hint.length).toBeGreaterThan(0);
   });
 
