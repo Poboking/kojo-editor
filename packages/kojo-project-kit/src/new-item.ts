@@ -11,17 +11,17 @@
  *
  * ## 扩展名的态度
  *
- * 作者从菜单里已经选了类型（`.kojo` / `.erb` / `.erm` / `.txt` / `.md`），所以：
+ * 作者从菜单里已经选了类型（`.kojo` / `.erb` / `.erm` / `.erh` / `.txt` / `.md`），所以：
  * - 没写扩展名 → 按所选类型补上；
  * - 写的就是所选类型 → 原样；
  * - 写的是**别的**扩展名（选 `.kojo` 却打 `事件.ERB`）→ 拒绝。
  *   不静默产出 `事件.ERB.kojo`，也不偷偷改判成 `.ERB`——两者都不是他点的那个菜单项。
  */
 
-import { ERB_BODY_EXTENSIONS, join, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
+import { ERB_BODY_EXTENSIONS, ERB_DECLARATION_EXTENSIONS, join, KOJO_SOURCE_EXTENSION } from '@kojo/plugin-api';
 
 /** 可新建的类型（菜单顺序即此顺序） */
-export type NewItemKind = 'folder' | 'kojo' | 'erb' | 'erm' | 'txt' | 'md';
+export type NewItemKind = 'folder' | 'kojo' | 'erb' | 'erm' | 'erh' | 'txt' | 'md';
 
 /** 文件档（`folder` 之外）；扩展名表只覆盖这几档 */
 type FileKind = Exclude<NewItemKind, 'folder'>;
@@ -29,14 +29,15 @@ type FileKind = Exclude<NewItemKind, 'folder'>;
 /**
  * 每档文件对应的扩展名（含点）。
  *
- * `kojo` 与两种 ERB 正文档**一律取契约单源**（`KOJO_SOURCE_EXTENSION` /
- * `ERB_BODY_EXTENSIONS`），本模块不手抄这两种形态；`.txt` / `.md` 不是游戏编译的
+ * `kojo` 与两种 ERB 正文档、ERB 声明档**一律取契约单源**（`KOJO_SOURCE_EXTENSION` /
+ * `ERB_BODY_EXTENSIONS` / `ERB_DECLARATION_EXTENSIONS`），本模块不手抄这几种形态；`.txt` / `.md` 不是游戏编译的
  * 契约词汇（引擎不认），是新建面板自己的产物，故落点在本模块。
  */
 const FILE_EXTENSIONS: Record<FileKind, string> = {
   kojo: KOJO_SOURCE_EXTENSION,
   erb: erbBodyExtension(0),
   erm: erbBodyExtension(1),
+  erh: erbDeclarationExtension(0),
   txt: '.txt',
   md: '.md',
 };
@@ -45,6 +46,18 @@ const FILE_EXTENSIONS: Record<FileKind, string> = {
 function erbBodyExtension(index: number): string {
   const ext = ERB_BODY_EXTENSIONS[index];
   if (ext === undefined) throw new Error(`ERB 正文扩展名清单缺少第 ${index + 1} 项：无法给新建条目定扩展名。`);
+  return ext;
+}
+
+/**
+ * 取 ERB **声明**扩展名清单的第 n 项；清单短了直接报错。
+ *
+ * 与 {@link erbBodyExtension} 同样不吞错：声明档是"整份只有 `#DIM`/`#DIMS`/`#DEFINE`"的
+ * 独立形态，扩展名若被悄悄写成别的东西，建出来的文件引擎不会预载——那是最难查的一类空转。
+ */
+function erbDeclarationExtension(index: number): string {
+  const ext = ERB_DECLARATION_EXTENSIONS[index];
+  if (ext === undefined) throw new Error(`ERB 声明扩展名清单缺少第 ${index + 1} 项：无法给新建条目定扩展名。`);
   return ext;
 }
 
@@ -71,6 +84,11 @@ export const NEW_ITEM_MENU: readonly { kind: NewItemKind; label: string; hint: s
     hint: `部分引擎的正文用 ${FILE_EXTENSIONS.erm} 扩展名：只写原生语法，不经转译`,
   },
   {
+    kind: 'erh',
+    label: `新建 ERB 声明文件（${FILE_EXTENSIONS.erh.toUpperCase()}）`,
+    hint: '只放 #DIM / #DIMS / #DEFINE；写成普通语句会让引擎中止整轮头文件加载',
+  },
+  {
     kind: 'txt',
     label: `新建文本文件（${FILE_EXTENSIONS.txt}）`,
     hint: '说明、备忘、搬运记录等附加文件',
@@ -86,7 +104,7 @@ export const NEW_ITEM_MENU: readonly { kind: NewItemKind; label: string; hint: s
 /**
  * 已知的文件扩展名（判"写的是别的类型"用）。
  *
- * `.kojo` / `.erb` / `.erm` 经 {@link FILE_EXTENSIONS} 从契约单源导出；
+ * `.kojo` / `.erb` / `.erm` / `.erh` 经 {@link FILE_EXTENSIONS} 从契约单源导出；
  * `.json` / `.csv` 是工作区里常见但本菜单不产出的类型，仍算"你写的是别的类型"。
  */
 const KNOWN_EXTS: readonly string[] = [
