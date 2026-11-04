@@ -149,4 +149,41 @@ describe('Rust 侧冻结安全判据（静态核对）', () => {
     expect(libSrc).toContain('fn ensure_write_allowed(');
     expect(libSrc).toContain('rfd::AsyncFileDialog');
   });
+
+  it('路 C 硬化批：协议一致性 / 纵深防御 / 审计轮转落点均在位', () => {
+    const protocolSrc = read('src-tauri/src/mcp/protocol.rs');
+    for (const marker of [
+      'classify_envelope',
+      'check_protocol_version',
+      'negotiate_accept',
+      'check_tool_call_permission',
+      'host_required_tier',
+      'has_encoded_traversal',
+      'UNSUPPORTED_PROTOCOL_VERSION',
+      'TOOL_NOT_APPROVED',
+    ]) {
+      expect(protocolSrc).toContain(marker);
+    }
+    const serverSrc = read('src-tauri/src/mcp/server.rs');
+    for (const marker of [
+      'rotate_token_parts',
+      'session_id_from_head',
+      'response_head',
+      'MCP-Protocol-Version',
+      'pub token: Mutex<String>',
+    ]) {
+      expect(serverSrc).toContain(marker);
+    }
+    const auditSrc = read('src-tauri/src/mcp/audit.rs');
+    for (const marker of [
+      'MAX_AUDIT_LINE_BYTES',
+      'rotate_if_needed',
+      'AUDIT_ROTATED_FILE',
+      'from_utf8_lossy',
+    ]) {
+      expect(auditSrc).toContain(marker);
+    }
+    const scopeSrc = read('src-tauri/src/mcp/scope.rs');
+    expect(scopeSrc).toContain('std::fs::rename');
+  });
 });

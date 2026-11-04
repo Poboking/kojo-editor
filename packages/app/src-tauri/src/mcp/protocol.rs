@@ -30,6 +30,9 @@ pub const SERVER_VERSION: &str = "0.1.0";
 pub const MAX_UNTRUSTED_CHARS: usize = 64 * 1024;
 /// 工具描述上限（annotations 不可信）。
 pub const MAX_DESCRIPTION_CHARS: usize = 2 * 1024;
+/// 项目内相对路径整体上限（字节）；单组件再按 Windows 语义 255 收紧。
+pub const MAX_PATH_CHARS: usize = 512;
+pub const MAX_PATH_COMPONENT_CHARS: usize = 255;
 
 /* ============================ 会话 scope ============================ */
 
@@ -114,6 +117,8 @@ pub mod codes {
     pub const PATH_SCHEME: &str = "E_PATH_SCHEME";
     pub const TOOL_FAIL_CLOSED: &str = "E_TOOL_FAIL_CLOSED";
     pub const TOOL_NOT_APPROVED: &str = "E_TOOL_NOT_APPROVED";
+    /// `MCP-Protocol-Version` 头声明了宿主不支持的版本（显式结构化错误，不静默回退）。
+    pub const UNSUPPORTED_PROTOCOL_VERSION: &str = "E_UNSUPPORTED_PROTOCOL_VERSION";
     pub const BRIDGE_UNAVAILABLE: &str = "E_BRIDGE_UNAVAILABLE";
     pub const INTERNAL: &str = "E_INTERNAL";
 }
@@ -320,6 +325,47 @@ pub fn is_notification(envelope: &RequestEnvelope) -> bool {
     envelope.id.is_none() || envelope.id.as_ref().is_some_and(Value::is_null)
 }
 
+/// 单个 envelope 的纯函数分派结果（端点级验证可直接调用，无需真实 AppHandle）。
+pub enum LocalOutcome {
+    /// 本地即可作答（initialize / ping / method-not-found）。
+    Respond(JsonRpcResponse),
+    /// 通知：绝不产生响应帧（含 `notifications/*` 与任何无 id 的 JSON-RPC 通知）。
+    NoResponse,
+    /// 六种能力方法：需转 WebView（由 `server::handle_envelope` 接管）。
+    NeedsBridge(WebMethod),
+}
+
+/// 逐条分派：通知一律无响应；`initialize` 回合法握手；`ping` 回**空** result；
+/// 未知方法回显式 `method not found`；六种能力方法交给 WebView。
+/// 批量请求里因此天然「只回有 id 的那些」——`decode_request` 不丢条目，本函数
+/// 只让真正要响应的条目生成帧。
+pub fn classify_envelope(env: &RequestEnvelope) -> LocalOutcome {
+    // 通知优先：无论 method 是 `notifications/*` 还是 capabilities 方法，无 id ⇒ 无帧。
+    if is_notification(env) {
+        return LocalOutcome::NoResponse;
+    }
+    let neg = negotiate(&env.params);
+    let id = env.id.clone().unwrap_or(Value::Null);
+    match route(&env.method) {
+        // MCP 规范：ping 的 result 必须是空对象；不带 `_meta`，不编造会话状态。
+        Route::Ping => LocalOutcome::Respond(JsonRpcResponse::ok(id, json!({}))),
+        Route::Initialize => {
+            let mut resp = JsonRpcResponse::ok(id, initialize_result(&neg, &env.params));
+            if let Some(result) = resp.result.as_mut() {
+                attach_negotiation_meta(result, &neg);
+            }
+            LocalOutcome::Respond(resp)
+        }
+        // `notifications/*` 即使带了 id 也按通知处理，绝不回帧。
+        Route::Notification => LocalOutcome::NoResponse,
+        Route::Unknown => LocalOutcome::Respond(JsonRpcResponse::err(
+            id,
+            &McpError::new(codes::METHOD_NOT_FOUND, format!("未知方法 {}", env.method)),
+        )),
+        Route::Webview(m) => LocalOutcome::NeedsBridge(m),
+    }
+}
+
 /* ==================== 按请求协商能力（2026-07-28 无状态） ==================== */
 
 pub fn server_capabilities() -> Value {
@@ -357,9 +403,7 @@ pub fn negotiate(params: &Value) -> Negotiation {
     };
     let client_capabilities = params
         .get("capabilities")
-        .or_else(|| {
-            params.pointer("/_meta/io.modelcontextprotocol~1capabilities")
-        })
+        .or_else(|| params.pointer("/_meta/io.modelcontextprotocol~1capabilities"))
         .cloned()
         .unwrap_or_else(|| json!({}));
     Negotiation {
@@ -367,6 +411,68 @@ pub fn negotiate(params: &Value) -> Negotiation {
         client_capabilities,
         server_capabilities: server_capabilities(),
     }
+}
+
+/// 支持的协议版本：现行版 + 旧握手版（`initialize` 请求体按这些版本回显）。
+pub fn is_supported_protocol_version(v: &str) -> bool {
+    v == PROTOCOL_VERSION || LEGACY_VERSIONS.contains(&v)
+}
+
+/// 请求头 `MCP-Protocol-Version`：**有就校验**，未知版本显式结构化错误。
+/// 不带头（旧客户端）按无状态服务放行；带空值也判非法（fail closed）。
+pub fn check_protocol_version(raw: Option<&str>) -> Result<(), McpError> {
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    let v = raw.trim();
+    if is_supported_protocol_version(v) {
+        return Ok(());
+    }
+    Err(McpError::new(
+        codes::UNSUPPORTED_PROTOCOL_VERSION,
+        format!(
+            "不支持的 MCP-Protocol-Version：{v}（支持 {PROTOCOL_VERSION} 及旧版 {}）",
+            LEGACY_VERSIONS.join(", ")
+        ),
+    ))
+}
+
+/// 单端点 `POST /mcp` 的 Accept 协商结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcceptKind {
+    Json,
+    Sse,
+}
+
+/// MCP Streamable HTTP：客户端必须能接受 `application/json` 或 `text/event-stream`。
+/// 两者都声明时优先 SSE（请求级流）；只声明 JSON / `*/*` 回普通 JSON；
+/// 两者都不声明 ⇒ 显式 `invalid request`，不静默选一种。
+pub fn negotiate_accept(accept: Option<&str>) -> Result<AcceptKind, McpError> {
+    let Some(raw) = accept else {
+        return Ok(AcceptKind::Json);
+    };
+    let lower = raw.to_ascii_lowercase();
+    let mut has_json = false;
+    let mut has_sse = false;
+    for part in lower.split(',') {
+        let media = part.split(';').next().unwrap_or("").trim();
+        match media {
+            "application/json" | "*/*" | "application/*" => has_json = true,
+            "text/event-stream" => has_sse = true,
+            _ => {}
+        }
+    }
+    if !has_json && !has_sse {
+        return Err(McpError::new(
+            codes::INVALID_REQUEST,
+            format!("Accept 必须包含 application/json 或 text/event-stream：{raw}"),
+        ));
+    }
+    Ok(if has_sse {
+        AcceptKind::Sse
+    } else {
+        AcceptKind::Json
+    })
 }
 
 pub fn meta_for(neg: &Negotiation) -> Value {
@@ -420,8 +526,38 @@ pub fn initialize_result(neg: &Negotiation, params: &Value) -> Value {
 
 /* ============================ 路径闸门 ============================ */
 
+/// 键名归一化：只保留 ASCII 字母数字并小写。`output.path` / `Output-Dir` /
+/// `DEST_PATH` / `save As` 这类混入标点、大小写、camelCase 的形态全部收敛，
+/// 堵住「换个写法就绕过落点键判据」的整类绕过。
 fn normalize_key(key: &str) -> String {
-    key.to_lowercase().replace(['_', '-'], "")
+    key.to_ascii_lowercase()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect()
+}
+
+/// 把键名切成词：按非字母数字与 camelCase 边界分词后小写。
+/// 例 `outputPath` → ["output","path"]，`Output-Dir` → ["output","dir"]，
+/// `saveAs` → ["save","as"]，`timeout` → ["timeout"]（不会误命中 "to"）。
+fn key_tokens(key: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    for c in key.chars() {
+        if c.is_ascii_alphanumeric() {
+            if c.is_ascii_uppercase() && !cur.is_empty() {
+                tokens.push(cur.to_ascii_lowercase());
+                cur.clear();
+            }
+            cur.extend(c.to_lowercase());
+        } else if !cur.is_empty() {
+            tokens.push(cur.to_ascii_lowercase());
+            cur.clear();
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur.to_ascii_lowercase());
+    }
+    tokens
 }
 
 /// 路径型参数键（归一化后比较）。命中即按「项目内相对路径或 `kojo://` URI」校验。
@@ -440,29 +576,139 @@ const PATH_KEYS: &[&str] = &[
     "resource",
     "resourceuri",
     "projectpath",
+    "relpath",
+    "relativepath",
+    "pathname",
+    "subpath",
+    "dirpath",
+    "folderpath",
+    "resourcepath",
+    "fileuri",
+    "srcpath",
+    "rootpath",
+    "basepath",
+    "locationpath",
+    "workspaceroot",
+    "projectroot",
 ];
 
-/// 落点型参数键：MCP 工具**不得**接受任意目标路径（法定通道是 export_file 的
-/// 「对话框与写盘绑在同一 Rust 命令」）。命中即显式报错，不静默剥离。
+/// 落点型参数键（归一化后）：MCP 工具**不得**接受任意目标路径（法定通道是
+/// export_file 的「对话框与写盘绑在同一 Rust 命令」）。命中即显式报错，不静默剥离。
 const FORBIDDEN_TARGET_KEYS: &[&str] = &[
     "targetpath",
+    "targetdir",
+    "targetfile",
+    "targetfolder",
+    "targetname",
     "destinationpath",
+    "destinationdir",
+    "destinationfile",
+    "destinationfolder",
     "destination",
+    "destpath",
+    "destdir",
+    "destfile",
+    "destfolder",
+    "dest",
+    "dst",
+    "dstpath",
+    "dstfile",
+    "dstdir",
     "outputpath",
+    "outputdir",
+    "outputfile",
+    "outputfilename",
+    "outputfolder",
+    "output",
+    "outpath",
+    "outfile",
+    "outfilename",
     "savepath",
+    "savedir",
+    "savefile",
+    "savefilename",
+    "savefolder",
+    "saveas",
+    "savedestination",
     "writepath",
+    "writedir",
+    "writefile",
+    "writefilename",
+    "writefolder",
     "writeto",
+    "writedestination",
     "absolutepath",
     "exportpath",
-    "output",
-    "outputdir",
-    "targetdir",
+    "exportdir",
+    "exportto",
+    "exportfile",
+    "exportfilename",
     "landingpath",
+    "landingdir",
+    "landingfile",
+    "landing",
+    "landingzip",
+    "zippath",
+    "newpath",
+    "newfile",
+    "newfilename",
+    "moveto",
+    "copyto",
+    "downloadpath",
+    "downloadto",
+    "artifactpath",
+    "artifactdir",
 ];
 
-/// 校验六方法的 params：禁止落点参数 + 路径型参数越界显式报错。
+/// 固定黑名单之外的「落点语义」判据：键名同时含一个落点动词与一个位置名词才命中，
+/// 覆盖未知别名（`dropFolder` / `moveTo` / `saveAs` …），又不误伤 `timeout`、
+/// `content`、`writeContent`、`newText` 这类合法参数。
+fn is_forbidden_target_key(key: &str) -> bool {
+    let nk = normalize_key(key);
+    if FORBIDDEN_TARGET_KEYS.contains(&nk.as_str()) {
+        return true;
+    }
+    const LANDING: &[&str] = &[
+        "dest",
+        "destination",
+        "output",
+        "save",
+        "write",
+        "export",
+        "target",
+        "landing",
+        "drop",
+        "dst",
+        "artifact",
+        "download",
+        "new",
+        "move",
+        "copy",
+    ];
+    const WHERE: &[&str] = &[
+        "path", "dir", "file", "folder", "to", "as", "name", "location", "into",
+    ];
+    let tokens = key_tokens(key);
+    tokens.iter().any(|t| LANDING.contains(&t.as_str()))
+        && tokens.iter().any(|t| WHERE.contains(&t.as_str()))
+}
+
+/// 全局编码形状扫描：任何字符串参数只要含 URL 编码的点 / 分隔符 / 百分号 / NUL
+/// （含双重编码 `%252e` 里的 `%25`），一律拒。宿主从不解码参数，先把整类形状掐断。
+const ENCODED_TRAVERSAL_TOKENS: &[&str] = &["%2e", "%2f", "%5c", "%25", "%00"];
+
+fn has_encoded_traversal(s: &str) -> bool {
+    let lower = s.to_ascii_lowercase();
+    ENCODED_TRAVERSAL_TOKENS
+        .iter()
+        .any(|token| lower.contains(token))
+}
+
+/// 校验六方法的 params：三层闸门——落点键黑名单（含未知别名/混淆写法）、
+/// 全局编码形状、路径型参数越界。越界一律显式报错，绝不静默剥离。
 pub fn validate_params(method: WebMethod, params: &Value) -> Result<(), McpError> {
     scan_forbidden_targets(params)?;
+    scan_encoded_targets(params)?;
     scan_path_values(params)?;
     match method {
         WebMethod::ResourcesRead => {
@@ -488,12 +734,10 @@ fn scan_forbidden_targets(v: &Value) -> Result<(), McpError> {
     match v {
         Value::Object(map) => {
             for (key, child) in map {
-                if FORBIDDEN_TARGET_KEYS.contains(&normalize_key(key).as_str()) {
+                if is_forbidden_target_key(key) {
                     return Err(McpError::new(
                         codes::PATH_TARGET_FORBIDDEN,
-                        format!(
-                            "MCP 工具不接受目标落点参数 {key}（写盘落点只由宿主对话框决定）"
-                        ),
+                        format!("MCP 工具不接受目标落点参数 {key}（写盘落点只由宿主对话框决定）"),
                     ));
                 }
                 scan_forbidden_targets(child)?;
@@ -503,6 +747,28 @@ fn scan_forbidden_targets(v: &Value) -> Result<(), McpError> {
         Value::Array(items) => {
             for item in items {
                 scan_forbidden_targets(item)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn scan_encoded_targets(v: &Value) -> Result<(), McpError> {
+    match v {
+        Value::String(s) if has_encoded_traversal(s) => Err(McpError::new(
+            codes::PATH_ESCAPE,
+            "参数含 URL 编码 / 双重编码的路径形状（宿主不解码，一律拒）",
+        )),
+        Value::Object(map) => {
+            for child in map.values() {
+                scan_encoded_targets(child)?;
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for item in items {
+                scan_encoded_targets(item)?;
             }
             Ok(())
         }
@@ -554,37 +820,72 @@ fn validate_path_value(key: &str, raw: &str) -> Result<(), McpError> {
     validate_relative_path(raw)
 }
 
-/// 项目内相对路径判据：拒空 / 过长 / 控制字符 / 绝对路径 / 盘符 / UNC / `..` /
-/// `.` / 尾点尾空格 / 设备保留名。越界一律显式报错（fail loud）。
+/// 双向控制 / 零宽格式字符（Trojan-source 类）：不属于 `char::is_control()` 的 Cc，
+/// 但同样能把 `..` / 分隔符伪装成肉眼不可见形态，一并 fail closed。
+fn has_invisible_format_char(s: &str) -> bool {
+    s.chars().any(|c| {
+        matches!(c,
+            '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2069}'
+                | '\u{FEFF}'
+                | '\u{00AD}')
+    })
+}
+
+/// 项目内相对路径判据（MCP 参数值绝不用于任意目标落点）：
+/// 拒空 / 过长 / 控制字符与不可见字符 / 百分号编码（含双重编码）/ 盘符 /
+/// UNC / 反斜杠与混斜杠 / `~` 展开 / `.` 与 `..` 段 / 尾点尾空格 / 设备保留名。
+/// 越界一律显式报错（fail loud），消息里回显的 raw 先按不可信输入净化。
 pub fn validate_relative_path(raw: &str) -> Result<(), McpError> {
     let bad = |why: &str| -> Result<(), McpError> {
         Err(McpError::new(
             codes::PATH_ESCAPE,
-            format!("路径越界（{why}）：{raw}"),
+            format!("路径越界（{why}）：{}", sanitize_string(raw, 128)),
         ))
     };
     if raw.is_empty() {
         return bad("空路径");
     }
-    if raw.len() > 512 {
+    if raw.len() > MAX_PATH_CHARS {
         return bad("过长");
     }
-    if raw.bytes().any(|b| b == 0 || (b < 0x20 && b != b'\t')) {
-        return bad("含控制字符或 NUL");
+    if raw.chars().any(char::is_control) {
+        return bad("含 NUL / 控制字符（含 C1、DEL、制表换行）");
     }
-    if raw.starts_with('/') || raw.starts_with('\\') || raw.starts_with('~') {
-        return bad("绝对路径或 UNC 前缀");
+    if has_invisible_format_char(raw) {
+        return bad("含双向 / 零宽不可见字符");
+    }
+    // 任何百分号都拒：宿主不解码，URL 编码 `%2e%2e` / `%5c` 与双重编码 `%252e`
+    // 整类形状在这里一次性掐断，避免下游按不同解码口径二次解释。
+    if raw.contains('%') {
+        return bad("含百分号编码（URL 编码 / 双重编码）");
     }
     if raw.contains(':') {
         return bad("盘符 / scheme / ADS 冒号");
     }
-    let normalized = raw.replace('\\', "/");
-    for comp in normalized.split('/') {
-        if comp.is_empty() || comp == "." || comp == ".." {
-            return bad("空 / 点 / 上跳组件");
+    if raw.contains('~') {
+        return bad("家目录展开前缀");
+    }
+    // 反斜杠一律拒：WebView 侧按字面量处理，`\\` 与正反斜杠混用都不放行。
+    if raw.contains('\\') {
+        return bad("反斜杠分隔 / 正反斜杠混用");
+    }
+    if raw.starts_with('/') {
+        return bad("绝对路径或 UNC 前缀");
+    }
+    for comp in raw.split('/') {
+        if comp.is_empty() {
+            return bad("空组件（双斜杠或尾斜杠）");
+        }
+        if comp.chars().count() > MAX_PATH_COMPONENT_CHARS {
+            return bad("组件过长（Windows 255）");
+        }
+        if comp == "." || comp == ".." {
+            return bad("点 / 上跳组件");
         }
         if comp.ends_with('.') || comp.ends_with(' ') {
-            return bad("尾点或尾空格");
+            return bad("尾点或尾空格（Windows 语义）");
         }
         if is_device_name(comp) {
             return bad("设备保留名");
@@ -595,28 +896,37 @@ pub fn validate_relative_path(raw: &str) -> Result<(), McpError> {
 
 fn is_device_name(comp: &str) -> bool {
     let stem = comp.split('.').next().unwrap_or("").to_ascii_uppercase();
-    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
-        || (stem.len() == 4
-            && (stem.starts_with("COM") || stem.starts_with("LPT"))
-            && stem.as_bytes()[3].is_ascii_digit())
+    matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || (stem.len() == 4
+        && (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.as_bytes()[3].is_ascii_digit())
 }
 
-/// `kojo://` 资源 URI：拒绝对路径形态 / `..` / 控制字符；query/fragment 只做长度约束。
+/// `kojo://` 资源 URI：与相对路径同口径收紧（绝对形态 / `..` / 控制字符 /
+/// 百分号编码 / 反斜杠 / 尾点尾空格 / 设备名）；query/fragment 只做长度约束。
 pub fn validate_kojo_uri(raw: &str) -> Result<(), McpError> {
     let rest = raw
         .strip_prefix("kojo://")
         .ok_or_else(|| McpError::new(codes::PATH_SCHEME, "不是 kojo:// 资源 URI"))?;
-    if rest.is_empty() || rest.len() > 512 {
-        return Err(McpError::new(codes::PATH_ESCAPE, "kojo:// 资源路径为空或过长"));
-    }
-    if rest.starts_with('/') || rest.starts_with('\\') {
+    if rest.is_empty() || rest.len() > MAX_PATH_CHARS {
         return Err(McpError::new(
             codes::PATH_ESCAPE,
-            "kojo:// 不接受绝对形态",
+            "kojo:// 资源路径为空或过长",
         ));
     }
-    if rest.bytes().any(|b| b == 0 || b < 0x20) {
+    if rest.starts_with('/') || rest.starts_with('\\') {
+        return Err(McpError::new(codes::PATH_ESCAPE, "kojo:// 不接受绝对形态"));
+    }
+    if rest.chars().any(char::is_control) || has_invisible_format_char(rest) {
         return Err(McpError::new(codes::PATH_ESCAPE, "kojo:// 含控制字符"));
+    }
+    if rest.contains('%') {
+        return Err(McpError::new(
+            codes::PATH_ESCAPE,
+            "kojo:// 不接受百分号编码",
+        ));
     }
     if rest.contains('\\') {
         return Err(McpError::new(
@@ -624,9 +934,23 @@ pub fn validate_kojo_uri(raw: &str) -> Result<(), McpError> {
             "kojo:// 不接受反斜杠分隔",
         ));
     }
+    if rest.contains('~') {
+        return Err(McpError::new(
+            codes::PATH_ESCAPE,
+            "kojo:// 不接受家目录展开",
+        ));
+    }
     let path = rest.split(['?', '#']).next().unwrap_or(rest);
-    for comp in path.replace('\\', "/").split('/') {
-        if comp.is_empty() || comp == "." || comp == ".." || comp.contains(':') {
+    for comp in path.split('/') {
+        if comp.is_empty()
+            || comp == "."
+            || comp == ".."
+            || comp.contains(':')
+            || comp.chars().count() > MAX_PATH_COMPONENT_CHARS
+            || comp.ends_with('.')
+            || comp.ends_with(' ')
+            || is_device_name(comp)
+        {
             return Err(McpError::new(
                 codes::PATH_ESCAPE,
                 "kojo:// 资源路径含非法组件",
@@ -653,6 +977,48 @@ pub fn is_privileged_tool(name: &str) -> bool {
         || is_launcher_tool(name)
         || PRIVILEGED_EXACT.contains(&name)
         || name.starts_with("remove_")
+}
+
+/// 宿主侧按工具名形状推断所需 tier（**不读 WebView 的 annotations**：annotations
+/// 不可信）。只认线协议字面的动词前缀，零游戏语义；未知名字一律按 read 放行。
+pub const EDIT_TOOL_PREFIXES: &[&str] = &[
+    "write_",
+    "edit_",
+    "apply_",
+    "insert_",
+    "delete_",
+    "create_",
+    "save_",
+    "set_",
+    "replace_",
+    "format_",
+    "patch_",
+    "update_",
+    "append_",
+    "clear_",
+    "toggle_",
+    "move_",
+    "copy_",
+    "duplicate_",
+];
+
+pub fn host_required_tier(name: &str) -> McpTier {
+    if is_privileged_tool(name) {
+        return McpTier::Privileged;
+    }
+    let lower = name.to_ascii_lowercase();
+    if EDIT_TOOL_PREFIXES.iter().any(|p| lower.starts_with(p)) {
+        return McpTier::Edit;
+    }
+    McpTier::Read
+}
+
+fn tier_rank(t: McpTier) -> u8 {
+    match t {
+        McpTier::Read => 0,
+        McpTier::Edit => 1,
+        McpTier::Privileged => 2,
+    }
 }
 
 /// `market_*` 保持 fail-closed：名字形状合法也不放行。
@@ -689,14 +1055,38 @@ pub fn approved_tool(name: &str, scope: &McpSessionScope) -> bool {
         .any(|p| pattern_matches(p, name))
 }
 
+/// privileged 工具要求**精确名字**授权：通配 `*` / `launcher_*` 不构成显式批准
+/// （冻结契约③：危险工具默认不进 tools/list，宿主显式授权）。
+pub fn approved_privileged_tool(name: &str, scope: &McpSessionScope) -> bool {
+    scope.approved_tools.iter().any(|p| p == name)
+}
+
+/// `tools/call` 的会话闸门（纯函数，端点级可测）：market fail-closed；
+/// privileged 未获精确授权 ⇒ 显式 `E_TOOL_NOT_APPROVED`。
+/// 闸门命中处由 `server::handle_webview` 写一条 `AuditOutcome::Denied` 审计。
+pub fn check_tool_call_permission(name: &str, scope: &McpSessionScope) -> Result<(), McpError> {
+    validate_tool_name(name)?;
+    if is_privileged_tool(name) && !approved_privileged_tool(name, scope) {
+        return Err(McpError::new(
+            codes::TOOL_NOT_APPROVED,
+            format!("危险工具未获会话授权：{name}"),
+        ));
+    }
+    Ok(())
+}
+
 pub struct FilterOutcome {
     pub result: Value,
     /// 被剔除的工具名（供审计记 `filtered`）。
     pub filtered: Vec<String>,
 }
 
-/// 危险工具在 Rust 侧再过滤一道（任务 6）：即使 WebView 误返回 privileged 工具，
-/// 未出现在 `scope.approvedTools` 的一律剔除；`market_*` 无条件剔除（fail-closed）。
+/// 危险工具在 Rust 侧再过滤一道（纵深）：按**会话 tier + approvedTools** 双维度过滤。
+/// - `market_*` 无条件剔除（fail-closed）；
+/// - privileged 工具必须精确出现在 `scope.approvedTools`，否则一律不返回；
+/// - 非 privileged 工具若宿主推断所需 tier 高于会话 tier 且未显式批准，也剔除
+///   （read 会话拿不到 `write_*` / `edit_*` 这类编辑工具）；
+/// - annotations 不可信，tier 只由宿主按工具名形状推断。
 /// 同时把工具描述按不可信输入净化（限体积 + 去控制字符）。
 pub fn filter_tools_list(result: &Value, scope: &McpSessionScope) -> FilterOutcome {
     let mut filtered = Vec::new();
@@ -710,7 +1100,9 @@ pub fn filter_tools_list(result: &Value, scope: &McpSessionScope) -> FilterOutco
     for tool in tools {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
         let drop = is_market_tool(name)
-            || (is_privileged_tool(name) && !approved_tool(name, scope));
+            || (is_privileged_tool(name) && !approved_privileged_tool(name, scope))
+            || (!approved_tool(name, scope)
+                && tier_rank(host_required_tier(name)) > tier_rank(scope.tier));
         if drop {
             filtered.push(name.to_string());
             continue;

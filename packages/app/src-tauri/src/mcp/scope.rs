@@ -18,6 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::protocol::{
     codes, is_market_tool, validate_relative_path, McpError, McpSessionScope, McpTier,
@@ -71,9 +72,8 @@ pub fn load(app_data_dir: &Path) -> Result<McpScopeState, McpError> {
     let path = scope_path(app_data_dir);
     match std::fs::read_to_string(&path) {
         Ok(text) => {
-            let state: McpScopeState = serde_json::from_str(&text).map_err(|e| {
-                McpError::new(codes::INTERNAL, format!("第四张表损坏：{e}"))
-            })?;
+            let state: McpScopeState = serde_json::from_str(&text)
+                .map_err(|e| McpError::new(codes::INTERNAL, format!("第四张表损坏：{e}")))?;
             if state.version != SCOPE_VERSION {
                 return Err(McpError::new(
                     codes::INTERNAL,
@@ -90,17 +90,27 @@ pub fn load(app_data_dir: &Path) -> Result<McpScopeState, McpError> {
     }
 }
 
-/// 原子写（tmp + rename）；写入串行由 `McpShared::scope_state` 的 Mutex 保证。
+/// 原子写（唯一 tmp + rename）：`rename` 在同一卷上原子替换，读方永远看不到半截 JSON。
+/// 暂存名带进程号 + 序号，避免并发审批互相覆盖同一个 tmp；失败路径清理暂存，不留残渣。
 pub fn save(app_data_dir: &Path, state: &McpScopeState) -> Result<(), McpError> {
     std::fs::create_dir_all(app_data_dir)
         .map_err(|e| McpError::new(codes::INTERNAL, format!("建应用数据目录失败：{e}")))?;
     let text = serde_json::to_string_pretty(state)
         .map_err(|e| McpError::new(codes::INTERNAL, format!("序列化第四张表失败：{e}")))?;
-    let tmp = app_data_dir.join(format!(".{SCOPE_FILE}.tmp"));
-    std::fs::write(&tmp, text)
-        .map_err(|e| McpError::new(codes::INTERNAL, format!("写第四张表暂存失败：{e}")))?;
-    std::fs::rename(&tmp, scope_path(app_data_dir))
-        .map_err(|e| McpError::new(codes::INTERNAL, format!("落第四张表失败：{e}")))?;
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+    let tmp = app_data_dir.join(format!(
+        ".{SCOPE_FILE}.{}-{}.tmp",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&tmp, text).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        McpError::new(codes::INTERNAL, format!("写第四张表暂存失败：{e}"))
+    })?;
+    std::fs::rename(&tmp, scope_path(app_data_dir)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        McpError::new(codes::INTERNAL, format!("落第四张表失败：{e}"))
+    })?;
     Ok(())
 }
 
@@ -111,10 +121,7 @@ pub fn validate_client_id(raw: &str) -> Result<(), McpError> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':'))
     {
-        return Err(McpError::new(
-            codes::INVALID_PARAMS,
-            "clientId 形状非法",
-        ));
+        return Err(McpError::new(codes::INVALID_PARAMS, "clientId 形状非法"));
     }
     Ok(())
 }
@@ -127,10 +134,7 @@ fn validate_tool_pattern(pattern: &str) -> Result<(), McpError> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'*'))
     {
-        return Err(McpError::new(
-            codes::INVALID_PARAMS,
-            "工具授权项形状非法",
-        ));
+        return Err(McpError::new(codes::INVALID_PARAMS, "工具授权项形状非法"));
     }
     if pattern.trim_end_matches('*').starts_with("market") {
         return Err(McpError::new(

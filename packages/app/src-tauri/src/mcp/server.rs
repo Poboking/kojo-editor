@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -31,11 +31,11 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use super::audit::{self, AuditEntry, AuditOutcome};
 use super::protocol::{
-    approved_tool, attach_negotiation_meta, codes, decode_request, filter_tools_list,
-    initialize_result, is_market_tool, is_notification, is_privileged_tool, negotiate, route,
-    sanitize_string, sanitize_untrusted, validate_params, JsonRpcResponse, McpError,
-    McpRequestPayload, McpRespondArgs, McpSessionScope, McpTier, RequestEnvelope, Route, WebMethod,
-    MCP_REQUEST_EVENT, PROTOCOL_VERSION,
+    attach_negotiation_meta, check_protocol_version, check_tool_call_permission, classify_envelope,
+    codes, decode_request, filter_tools_list, is_market_tool, negotiate, negotiate_accept,
+    sanitize_string, sanitize_untrusted, validate_params, AcceptKind, JsonRpcResponse,
+    LocalOutcome, McpError, McpRequestPayload, McpRespondArgs, McpSessionScope, McpTier,
+    RequestEnvelope, WebMethod, MCP_REQUEST_EVENT, PROTOCOL_VERSION,
 };
 use super::scope;
 
@@ -133,7 +133,8 @@ pub struct Pending {
 
 pub struct McpShared {
     pub app: AppHandle,
-    pub token: String,
+    /// 可轮换：stop / 退出 / 凭据吊销时由 `rotate_token_parts` 换发，旧 token 立即失效。
+    pub token: Mutex<String>,
     pub pending: Mutex<HashMap<String, Pending>>,
     pub seq: AtomicU64,
     pub clients: AtomicUsize,
@@ -202,6 +203,44 @@ pub fn remove_discovery(app_data_dir: &Path) {
     }
 }
 
+/// 轮换 token（也用于 `start` 的首次签发）：换发新凭据、取消全部在途请求（旧会话
+/// 作废）、从盘上重载第四张表（内存里未落盘的旧授权失效）、重写发现文件。
+/// 不依赖 `AppHandle`，便于端点级单测直接喂临时目录。
+pub fn rotate_token_parts(
+    token: &Mutex<String>,
+    pending: &Mutex<HashMap<String, Pending>>,
+    scope_mirror: &Mutex<scope::McpScopeState>,
+    app_data_dir: &Path,
+    port: u16,
+    endpoint: &str,
+) -> Result<String, McpError> {
+    // 先复验第四张表：损坏 / 版本不符直接显式报错，不在半轮换态继续服务。
+    let fresh = scope::load(app_data_dir)?;
+    let next = generate_token();
+    *token.lock().map_err(|_| lock_err())? = next.clone();
+    if let Ok(mut pending) = pending.lock() {
+        for (_id, p) in pending.drain() {
+            let _ = p.tx.send(BridgeReply {
+                ok: false,
+                result: None,
+                error: Some(McpError::new(codes::CANCELLED, "token 已轮换，旧会话作废")),
+            });
+        }
+    }
+    if let Ok(mut mirror) = scope_mirror.lock() {
+        *mirror = fresh;
+    }
+    write_discovery(
+        app_data_dir,
+        &EndpointFile {
+            port,
+            token: next.clone(),
+            endpoint: endpoint.to_string(),
+        },
+    )?;
+    Ok(next)
+}
+
 pub fn start(
     app: AppHandle,
     app_data_dir: PathBuf,
@@ -222,17 +261,15 @@ pub fn start(
         .local_addr()
         .map_err(|e| McpError::new(codes::INTERNAL, format!("取本地端口失败：{e}")))?
         .port();
-    let token = generate_token();
     let endpoint = format!("http://127.0.0.1:{port}/mcp");
-    let scope_state = scope::load(&app_data_dir)?;
     let shared = Arc::new(McpShared {
         app,
-        token: token.clone(),
+        token: Mutex::new(String::new()),
         pending: Mutex::new(HashMap::new()),
         seq: AtomicU64::new(0),
         clients: AtomicUsize::new(0),
         shutdown: Arc::new(AtomicBool::new(false)),
-        scope_state: Mutex::new(scope_state),
+        scope_state: Mutex::new(scope::McpScopeState::default()),
         app_data_dir: app_data_dir.clone(),
         limits: Limits::default(),
         rate: Mutex::new(RateState {
@@ -240,13 +277,15 @@ pub fn start(
             count: 0,
         }),
     });
-    write_discovery(
+    // 首次签发 = 一次 token 轮换：新 token 生效、第四张表从盘上重载、发现文件写
+    // {port,token,endpoint}。轮换后旧 token / 旧会话 / 未落盘的旧授权一律失效。
+    let token = rotate_token_parts(
+        &shared.token,
+        &shared.pending,
+        &shared.scope_state,
         &app_data_dir,
-        &EndpointFile {
-            port,
-            token: token.clone(),
-            endpoint: endpoint.clone(),
-        },
+        port,
+        &endpoint,
     )?;
     let shared_for_thread = Arc::clone(&shared);
     let handle = std::thread::Builder::new()
@@ -318,9 +357,8 @@ pub fn deliver(state: &McpState, args: McpRespondArgs) -> Result<(), McpError> {
         let guard = state.runtime.lock().map_err(|_| lock_err())?;
         guard.as_ref().map(|rt| Arc::clone(&rt.shared))
     };
-    let shared = shared.ok_or_else(|| {
-        McpError::new(codes::BRIDGE_UNAVAILABLE, "MCP 服务未启动")
-    })?;
+    let shared =
+        shared.ok_or_else(|| McpError::new(codes::BRIDGE_UNAVAILABLE, "MCP 服务未启动"))?;
     let pending = shared
         .pending
         .lock()
@@ -332,13 +370,12 @@ pub fn deliver(state: &McpState, args: McpRespondArgs) -> Result<(), McpError> {
             format!("未知或已过期的请求 id：{}", args.id),
         )
     })?;
-    p.tx
-        .send(BridgeReply {
-            ok: args.ok,
-            result: args.result,
-            error: args.error,
-        })
-        .map_err(|_| McpError::new(codes::BRIDGE_UNAVAILABLE, "等待方已离开"))?;
+    p.tx.send(BridgeReply {
+        ok: args.ok,
+        result: args.result,
+        error: args.error,
+    })
+    .map_err(|_| McpError::new(codes::BRIDGE_UNAVAILABLE, "等待方已离开"))?;
     Ok(())
 }
 
@@ -354,7 +391,13 @@ pub fn approve_session(
         .map_err(|e| McpError::new(codes::INTERNAL, format!("app_data_dir：{e}")))?;
     let tier = McpTier::parse(&args.tier)
         .ok_or_else(|| McpError::new(codes::INVALID_PARAMS, "tier 非法"))?;
-    let new_state = scope::approve(&dir, &args.client_id, tier, args.approved_roots, args.approved_tools)?;
+    let new_state = scope::approve(
+        &dir,
+        &args.client_id,
+        tier,
+        args.approved_roots,
+        args.approved_tools,
+    )?;
     if let Ok(guard) = state.runtime.lock() {
         if let Some(rt) = guard.as_ref() {
             if let Ok(mut mirror) = rt.shared.scope_state.lock() {
@@ -393,10 +436,7 @@ pub fn scope_query(app: &AppHandle) -> Result<scope::McpScopeState, McpError> {
     scope::load(&dir)
 }
 
-pub fn audit_query(
-    app: &AppHandle,
-    args: AuditQueryArgs,
-) -> Result<Vec<AuditEntry>, McpError> {
+pub fn audit_query(app: &AppHandle, args: AuditQueryArgs) -> Result<Vec<AuditEntry>, McpError> {
     let dir = app
         .path()
         .app_data_dir()
@@ -509,28 +549,66 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Origin 白名单：只放行 http://127.0.0.1[:port] / localhost[:port] / [::1][:port]。
+/// Origin 白名单：只放行 http 回环 `127.0.0.1` / `localhost`（含大小写与单个尾点）
+/// / IPv6 回环 `::1`（含展开写法）。userinfo、非数字端口、IPv4-mapped 形态、
+/// 十进制/十六进制 IP 变体、DNS 后缀伪装一律拒（三缺一不可里的 Origin 闸）。
+/// 注意：这只校验请求头；服务端**只 bind 127.0.0.1**，不因此放宽。
 pub fn check_origin(origin: Option<&str>) -> Result<(), McpError> {
-    let raw = origin.ok_or_else(|| {
-        McpError::new(codes::FORBIDDEN_ORIGIN, "缺少 Origin 头（三缺一不可）")
-    })?;
-    let rest = raw.strip_prefix("http://").ok_or_else(|| {
-        McpError::new(codes::FORBIDDEN_ORIGIN, "Origin 只放行 http 回环")
-    })?;
-    let host = rest.split('/').next().unwrap_or("").split('?').next().unwrap_or("");
-    let host_only = if host.starts_with('[') {
-        host.trim_start_matches('[').split(']').next().unwrap_or("")
-    } else {
-        host.split(':').next().unwrap_or("")
-    };
-    if matches!(host_only, "127.0.0.1" | "localhost" | "::1") {
-        Ok(())
-    } else {
+    let deny = |why: &str| -> Result<(), McpError> {
         Err(McpError::new(
             codes::FORBIDDEN_ORIGIN,
-            format!("Origin 不在白名单：{raw}"),
+            format!("Origin 不在白名单（{why}）：{}", origin.unwrap_or("")),
         ))
+    };
+    let raw = origin
+        .ok_or_else(|| McpError::new(codes::FORBIDDEN_ORIGIN, "缺少 Origin 头（三缺一不可）"))?;
+    let rest = raw
+        .strip_prefix("http://")
+        .ok_or_else(|| McpError::new(codes::FORBIDDEN_ORIGIN, "Origin 只放行 http 回环"))?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return deny("authority 为空");
     }
+    // `http://127.0.0.1:port@evil.example` 之类 userinfo 伪装必须拒。
+    if authority.contains('@') {
+        return deny("不接受 userinfo");
+    }
+    let (host, port) = if authority.starts_with('[') {
+        let end = authority
+            .find(']')
+            .ok_or_else(|| McpError::new(codes::FORBIDDEN_ORIGIN, "IPv6 Origin 缺右括号"))?;
+        let host = &authority[1..end];
+        let tail = &authority[end + 1..];
+        let port = if tail.is_empty() {
+            None
+        } else {
+            Some(tail.strip_prefix(':').ok_or_else(|| {
+                McpError::new(codes::FORBIDDEN_ORIGIN, "IPv6 Origin 端口形状非法")
+            })?)
+        };
+        (host.to_string(), port)
+    } else {
+        let mut it = authority.splitn(2, ':');
+        let h = it.next().unwrap_or("").to_ascii_lowercase();
+        (h, it.next())
+    };
+    if let Some(p) = port {
+        if p.is_empty() || p.len() > 5 || !p.bytes().all(|b| b.is_ascii_digit()) {
+            return deny("端口非数字或过长");
+        }
+    }
+    let lower = host.to_ascii_lowercase();
+    if lower == "127.0.0.1" || lower == "localhost" || lower == "localhost." {
+        return Ok(());
+    }
+    // 回环 IPv6 变体：只认 std 判定为 loopback 的地址（`::1` / 展开写法），
+    // IPv4-mapped `::ffff:127.0.0.1` 不在此列。
+    if let Ok(ip) = lower.parse::<Ipv6Addr>() {
+        if ip.is_loopback() {
+            return Ok(());
+        }
+    }
+    deny("非回环主机")
 }
 
 /// 三缺一不可：回环 + Bearer token + Origin 白名单。
@@ -647,7 +725,8 @@ fn process_head(
     peer: SocketAddr,
     shared: &Arc<McpShared>,
 ) -> Result<(u16, &'static str, Vec<u8>), McpError> {
-    authenticate(head, &shared.token, peer)?;
+    let token = shared.token.lock().map_err(|_| lock_err())?.clone();
+    authenticate(head, &token, peer)?;
     if head.method != "POST" {
         return Err(McpError::new(
             codes::INVALID_REQUEST,
@@ -657,6 +736,10 @@ fn process_head(
     if head.target.split('?').next().unwrap_or("") != "/mcp" {
         return Err(McpError::new(codes::INVALID_REQUEST, "未知端点"));
     }
+    // 请求头一致性：`MCP-Protocol-Version` 有就校验（未知版本显式结构化错误），
+    // Accept 在 application/json / text/event-stream 之间正确协商。
+    check_protocol_version(head.headers.get("mcp-protocol-version").map(String::as_str))?;
+    let accept = negotiate_accept(head.headers.get("accept").map(String::as_str))?;
     check_rate(&shared.rate, &shared.limits)?;
     let envelopes = decode_request(&head.body)?;
     let first = envelopes
@@ -694,12 +777,7 @@ fn process_head(
         let small = serde_json::to_vec(&resp).unwrap_or_default();
         return Ok((200, "application/json", small));
     }
-    let sse = head
-        .headers
-        .get("accept")
-        .map(|s| s.contains("text/event-stream"))
-        .unwrap_or(false);
-    if sse {
+    if accept == AcceptKind::Sse {
         // 请求级 SSE：单条 `message` 事件后关闭（Connection: close）。
         let text = String::from_utf8_lossy(&body);
         let frame = format!("event: message\ndata: {text}\n\n");
@@ -707,6 +785,18 @@ fn process_head(
     } else {
         Ok((200, "application/json", body))
     }
+}
+
+/// 旧客户端可能带 `Mcp-Session-Id`：无状态服务**安全地接受/忽略**，只把它当作
+/// 审计标签（长度/控制字符受限），绝不据此建立或恢复任何会话状态；授权只看
+/// 第四张表（按 clientId 签发）。响应里不编造 `Mcp-Session-Id`、不造 sessionId 字段。
+pub fn session_id_from_head(head: &HttpHead) -> String {
+    head.headers
+        .get("mcp-session-id")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && s.len() <= 64 && !s.bytes().any(|b| b.is_ascii_control()))
+        .map(str::to_string)
+        .unwrap_or_else(|| "stateless".to_string())
 }
 
 fn client_identity(head: &HttpHead, first: &RequestEnvelope) -> (String, String) {
@@ -732,51 +822,31 @@ fn client_identity(head: &HttpHead, first: &RequestEnvelope) -> (String, String)
         .find(|s| !s.is_empty() && scope::validate_client_id(s).is_ok())
         .map(str::to_string)
         .unwrap_or_else(|| "loopback-client".to_string());
-    let session_id = head
-        .headers
-        .get("mcp-session-id")
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty() && s.len() <= 64)
-        .map(str::to_string)
-        .unwrap_or_else(|| "stateless".to_string());
+    let session_id = session_id_from_head(head);
     (client_id, session_id)
 }
 
 fn handle_envelope(env: RequestEnvelope, ctx: &ConnCtx) -> Option<JsonRpcResponse> {
-    let neg = negotiate(&env.params);
-    let id = env.id.clone().unwrap_or(Value::Null);
-    let notification = is_notification(&env);
-    let mut response = match route(&env.method) {
-        Route::Initialize => Some(JsonRpcResponse::ok(
-            id.clone(),
-            initialize_result(&neg, &env.params),
-        )),
-        Route::Ping => Some(JsonRpcResponse::ok(id.clone(), json!({}))),
-        Route::Notification => {
+    match classify_envelope(&env) {
+        LocalOutcome::Respond(resp) => Some(resp),
+        LocalOutcome::NoResponse => {
+            // 通知无帧；但 `notifications/cancelled` 仍需反查并取消在途请求。
             if env.method == "notifications/cancelled" {
                 cancel_pending(&env.params, ctx);
             }
             None
         }
-        Route::Unknown => Some(JsonRpcResponse::err(
-            id.clone(),
-            &McpError::new(
-                codes::METHOD_NOT_FOUND,
-                format!("未知方法 {}", env.method),
-            ),
-        )),
-        Route::Webview(method) => Some(handle_webview(method, &env, ctx, id.clone())),
-    };
-    if !notification {
-        if let Some(resp) = response.as_mut() {
+        LocalOutcome::NeedsBridge(method) => {
+            let neg = negotiate(&env.params);
+            let id = env.id.clone().unwrap_or(Value::Null);
+            let mut resp = handle_webview(method, &env, ctx, id);
+            // 无状态按请求协商：六种能力方法的 result 都带当次请求的 `_meta`
+            // （ping 已在 classify_envelope 里按规范回空 result，不在此附 _meta）。
             if let Some(result) = resp.result.as_mut() {
-                // 无状态按请求协商：每个响应都带当次请求的 `_meta`。
                 attach_negotiation_meta(result, &neg);
             }
+            Some(resp)
         }
-        response
-    } else {
-        None
     }
 }
 
@@ -857,22 +927,10 @@ fn handle_webview(
         .and_then(Value::as_str)
         .map(str::to_string);
     // 闸门 2：tools/call 的危险工具（Rust 侧双保险，与 tools/list 过滤同源）。
+    // 未获精确授权的 privileged 工具显式拒绝，并写一条审计 denied。
     if method == WebMethod::ToolsCall {
         if let Some(name) = tool_name.as_deref() {
-            let denial = if is_market_tool(name) {
-                Some(McpError::new(
-                    codes::TOOL_FAIL_CLOSED,
-                    "market_* 保持 fail-closed，不开放给 MCP",
-                ))
-            } else if is_privileged_tool(name) && !approved_tool(name, &scope) {
-                Some(McpError::new(
-                    codes::TOOL_NOT_APPROVED,
-                    format!("危险工具未获会话授权：{name}"),
-                ))
-            } else {
-                None
-            };
-            if let Some(e) = denial {
+            if let Err(e) = check_tool_call_permission(name, &scope) {
                 record(
                     ctx,
                     name,
@@ -886,10 +944,7 @@ fn handle_webview(
         }
     }
     // 注册内部 request id 路由表 → 发事件 → 等 mcp_respond。
-    let internal_id = format!(
-        "mcp-{}",
-        ctx.shared.seq.fetch_add(1, Ordering::SeqCst) + 1
-    );
+    let internal_id = format!("mcp-{}", ctx.shared.seq.fetch_add(1, Ordering::SeqCst) + 1);
     let (tx, rx) = mpsc::channel();
     {
         let Ok(mut pending) = ctx.shared.pending.lock() else {
@@ -989,10 +1044,7 @@ fn finalize_reply(
         .map_err(|e| McpError::new(codes::INTERNAL, format!("应答序列化失败：{e}")))?
         .len();
     if raw_len > ctx.shared.limits.max_response_bytes {
-        return Err(McpError::new(
-            codes::RESPONSE_TOO_LARGE,
-            "返回体积超限",
-        ));
+        return Err(McpError::new(codes::RESPONSE_TOO_LARGE, "返回体积超限"));
     }
     let mut result = sanitize_untrusted(&raw);
     if method == WebMethod::ToolsList {
@@ -1069,12 +1121,9 @@ fn record(
 
 /* ============================ 响应写出 ============================ */
 
-fn write_http(
-    stream: &mut TcpStream,
-    status: u16,
-    content_type: &str,
-    body: &[u8],
-) -> std::io::Result<()> {
+/// 纯函数：构造响应头。无状态服务**不编造会话状态**——绝不写 `Mcp-Session-Id`、
+/// 不写 `Set-Cookie`；只回显服务端当前 `MCP-Protocol-Version` 与禁缓存/nosniff。
+pub fn response_head(status: u16, content_type: &str, body_len: usize) -> String {
     let reason = match status {
         200 => "OK",
         202 => "Accepted",
@@ -1085,20 +1134,24 @@ fn write_http(
         500 => "Internal Server Error",
         _ => "OK",
     };
-    let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nMCP-Protocol-Version: {PROTOCOL_VERSION}\r\n\r\n",
-        body.len()
-    );
+    format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {body_len}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nMCP-Protocol-Version: {PROTOCOL_VERSION}\r\n\r\n"
+    )
+}
+
+fn write_http(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
+    let head = response_head(status, content_type, body.len());
     stream.write_all(head.as_bytes())?;
     stream.write_all(body)?;
     stream.flush()
 }
 
-fn write_error_http(
-    stream: &mut TcpStream,
-    status: u16,
-    e: &McpError,
-) -> std::io::Result<()> {
+fn write_error_http(stream: &mut TcpStream, status: u16, e: &McpError) -> std::io::Result<()> {
     // 错误消息可能回显客户端提供的 Origin / 路径，按不可信输入净化后再回。
     let mut safe = e.clone();
     safe.message = sanitize_string(&safe.message, 512);

@@ -18,9 +18,7 @@ mod tests;
 pub use server::McpState;
 
 use protocol::{McpError, McpRespondArgs};
-use server::{
-    ApproveArgs, AuditQueryArgs, McpStartResult, McpStatus, RevokeArgs,
-};
+use server::{ApproveArgs, AuditQueryArgs, McpStartResult, McpStatus, RevokeArgs};
 use tauri::{AppHandle, Manager};
 
 fn cmd_err(e: McpError) -> String {
@@ -67,10 +65,7 @@ pub fn mcp_status(state: tauri::State<'_, McpState>) -> McpStatus {
 
 /// `mcp_respond(args)`：路 A 的 host-bridge 收到 `"mcp://request"` 后按 id 回填。
 #[tauri::command]
-pub fn mcp_respond(
-    state: tauri::State<'_, McpState>,
-    args: McpRespondArgs,
-) -> Result<(), String> {
+pub fn mcp_respond(state: tauri::State<'_, McpState>, args: McpRespondArgs) -> Result<(), String> {
     server::deliver(state.inner(), args).map_err(cmd_err)
 }
 

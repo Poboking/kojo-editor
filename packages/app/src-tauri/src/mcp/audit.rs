@@ -8,6 +8,8 @@
 //! ok/error、落盘路径；`filtered` / `denied` / `timeout` / `cancelled` 也各留一条。
 //! 参数只记**摘要**（键名 / 类型 / 长度），不落全文——工具描述与文件内容按不可信
 //! 输入处理（MCP 2026-07-28：annotations 不可信），同时压住日志体积。
+//! 纵深：单行体积上限（字段截断 + 超限显式报错）、主文件超限轮转 `.1`、
+//! 损坏行（含非法 UTF-8）容错跳过；MCP 侧没有任何写入/删除/改写审计的入口。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -18,7 +20,12 @@ use std::path::{Path, PathBuf};
 use super::protocol::{codes, truncate_chars, McpError};
 
 pub const AUDIT_FILE: &str = "mcp_audit.jsonl";
+pub const AUDIT_ROTATED_FILE: &str = "mcp_audit.jsonl.1";
 pub const MAX_AUDIT_QUERY: usize = 200;
+/// 单行体积上限（字节）：每个字符串字段先截断，序列化后仍超限则显式报错，不静默写半行。
+pub const MAX_AUDIT_LINE_BYTES: usize = 4096;
+/// 主文件体积上限：超过即轮转成 `.1`（旧 `.1` 覆盖），防止审计无限膨胀。
+pub const MAX_AUDIT_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -109,11 +116,62 @@ pub fn digest_args(args: &Value) -> String {
     truncate_chars(&parts.join(","), 1024)
 }
 
+/// 体积上限（字段级）：每个字符串字段先按上限截断，保证单行不超 MAX_AUDIT_LINE_BYTES。
+fn bounded_entry(entry: &AuditEntry) -> AuditEntry {
+    AuditEntry {
+        ts: truncate_chars(&entry.ts, 64),
+        client_id: truncate_chars(&entry.client_id, 128),
+        session_id: truncate_chars(&entry.session_id, 128),
+        tool: truncate_chars(&entry.tool, 128),
+        args_digest: truncate_chars(&entry.args_digest, 1024),
+        outcome: entry.outcome,
+        landed_path: entry.landed_path.as_deref().map(|p| truncate_chars(p, 256)),
+        note: entry.note.as_deref().map(|n| truncate_chars(n, 512)),
+    }
+}
+
+/// 轮转：主文件超过 max_bytes 时改名为 `.1`（覆盖旧 `.1`），下一次 append 重建主文件。
+pub fn rotate_if_needed(app_data_dir: &Path, max_bytes: u64) -> Result<bool, McpError> {
+    let path = audit_path(app_data_dir);
+    let len = match std::fs::metadata(&path) {
+        Ok(m) => m.len(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => {
+            return Err(McpError::new(
+                codes::INTERNAL,
+                format!("读审计日志元数据失败：{e}"),
+            ))
+        }
+    };
+    if len <= max_bytes {
+        return Ok(false);
+    }
+    let rotated = app_data_dir.join(AUDIT_ROTATED_FILE);
+    if rotated.exists() {
+        std::fs::remove_file(&rotated)
+            .map_err(|e| McpError::new(codes::INTERNAL, format!("删除旧轮转文件失败：{e}")))?;
+    }
+    std::fs::rename(&path, &rotated)
+        .map_err(|e| McpError::new(codes::INTERNAL, format!("轮转审计日志失败：{e}")))?;
+    Ok(true)
+}
+
 pub fn append(app_data_dir: &Path, entry: &AuditEntry) -> Result<(), McpError> {
     std::fs::create_dir_all(app_data_dir)
         .map_err(|e| McpError::new(codes::INTERNAL, format!("建审计目录失败：{e}")))?;
-    let line = serde_json::to_string(entry)
+    rotate_if_needed(app_data_dir, MAX_AUDIT_FILE_BYTES)?;
+    let line = serde_json::to_string(&bounded_entry(entry))
         .map_err(|e| McpError::new(codes::INTERNAL, format!("序列化审计条目失败：{e}")))?;
+    if line.len() > MAX_AUDIT_LINE_BYTES {
+        return Err(McpError::new(
+            codes::INTERNAL,
+            format!(
+                "审计条目体积超限：{} > {}",
+                line.len(),
+                MAX_AUDIT_LINE_BYTES
+            ),
+        ));
+    }
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -124,7 +182,8 @@ pub fn append(app_data_dir: &Path, entry: &AuditEntry) -> Result<(), McpError> {
     Ok(())
 }
 
-/// 查最近 N 条（可按 clientId 过滤）；损坏行出声后跳过，不静默当成功。
+/// 查最近 N 条（可按 clientId 过滤）；损坏行（截断 JSON / 类型不符 / 非法 UTF-8 /
+/// 空行）出声后跳过，不静默当成功，也不因单行坏掉让整次查询失败。
 pub fn query(
     app_data_dir: &Path,
     limit: usize,
@@ -136,21 +195,35 @@ pub fn query(
     }
     let file = std::fs::File::open(&path)
         .map_err(|e| McpError::new(codes::INTERNAL, format!("读审计日志失败：{e}")))?;
+    let mut reader = BufReader::new(file);
     let mut all = Vec::new();
-    for (i, line) in BufReader::new(file).lines().enumerate() {
-        let line = line.map_err(|e| {
-            McpError::new(codes::INTERNAL, format!("读审计行失败：{e}"))
-        })?;
-        if line.trim().is_empty() {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut line_no = 0usize;
+    loop {
+        buf.clear();
+        let n = reader
+            .read_until(b'\n', &mut buf)
+            .map_err(|e| McpError::new(codes::INTERNAL, format!("读审计行失败：{e}")))?;
+        if n == 0 {
+            break;
+        }
+        line_no += 1;
+        while buf.last() == Some(&b'\n') || buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+        // from_utf8_lossy：非法字节不致命，整行按损坏跳过。
+        let text = String::from_utf8_lossy(&buf);
+        let line = text.trim();
+        if line.is_empty() {
             continue;
         }
-        match serde_json::from_str::<AuditEntry>(&line) {
+        match serde_json::from_str::<AuditEntry>(line) {
             Ok(entry) => {
                 if client_id.map_or(true, |cid| entry.client_id == cid) {
                     all.push(entry);
                 }
             }
-            Err(e) => eprintln!("[mcp-audit] 第 {} 行损坏，跳过：{}", i + 1, e),
+            Err(e) => eprintln!("[mcp-audit] 第 {} 行损坏，跳过：{}", line_no, e),
         }
     }
     let cap = limit.clamp(1, MAX_AUDIT_QUERY);
