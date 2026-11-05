@@ -43,7 +43,8 @@ function interfaceBody(src: string, name: string): string {
 
 describe('跨文件定义 · 契约与宿主接线', () => {
   it('契约 `EditorDefinitionRequest` 带 projectFiles / projectFilesComplete（additive 两格）', () => {
-    const slots = read('packages/plugin-api/src/slots.ts');
+    // 契约的类型面（2026-11-06 起住 `slots-types.ts`；`slots.ts` 只剩运行期三表）
+    const slots = read('packages/plugin-api/src/slots-types.ts');
     const request = interfaceBody(slots, 'EditorDefinitionRequest');
     expect(request).toMatch(/readonly projectFiles\?: readonly EditorProjectFile\[\];/);
     expect(request).toMatch(/readonly projectFilesComplete\?: boolean;/);

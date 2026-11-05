@@ -20,7 +20,7 @@
  *   `docs/SYNTAX-SUGAR-SURFACE-SPEC.md`（§3–§5）；该文档尚未收进的两项以实现为准：
  *   指令中文名查表（HK-11②：`eratw-adapter/src/instruction-table.ts`，数据源 =
  *   当前项目 `CSV/Train.csv`，查不到 fail-closed 报「未命名指令」）与自定指令块头
- *   加两个可选钩子（HK-12：`plugin-api/src/sugar.ts` 的 `CustomCommandBlock`、
+ *   加两个可选钩子（HK-12：`plugin-api/src/sugar-types.ts` 的 `CustomCommandBlock`、
  *   `kojo-sugar/src/codegen.ts`，编号段 270–299 见 `face-templates.ts`）；
  * - 口上教程的事实句出自 `docs/USER-GUIDE.md`（§3/§4/§5/§6/§7/§8/§10/§11/§12/§13）
  *   与 `scaffold.ts` 的 `CORE_FACES`（八个核心面）；查不到出处的事实宁缺勿编；

@@ -34,12 +34,17 @@ import type {
   EditorFormattingRequest,
   EditorHoverResult,
   EditorLanguageRange,
-} from '../src/slots';
+} from '../src/slots-types';
 
-const SLOTS_SRC = readFileSync(
-  fileURLToPath(new URL('../src/slots.ts', import.meta.url)),
-  'utf8',
-);
+/**
+ * 槽位契约的**类型面**全文（2026-11-06 契约字节闸治理批：纯类型从 `slots.ts` 搬到
+ * `slots-types.ts`，`slots.ts` 只剩三张运行期表）。两枚拼起来才是"契约面"——
+ * 下面这些判据钉的是**契约里有没有**，不是"住在哪个文件"。
+ */
+const SLOTS_SRC =
+  readFileSync(fileURLToPath(new URL('../src/slots.ts', import.meta.url)), 'utf8') +
+  '\n' +
+  readFileSync(fileURLToPath(new URL('../src/slots-types.ts', import.meta.url)), 'utf8');
 
 /** 桶（`src/index.ts`）：新类型只进 slots 不进桶 = 外部消费方 import 不到 */
 const BARREL_SRC = readFileSync(

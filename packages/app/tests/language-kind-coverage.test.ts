@@ -112,11 +112,12 @@ function pluginSuppliesContribution(pkg: string, contributionId: string): boolea
 
 /* ============================== 表一：契约判别成员全集（从源码解析） ============================== */
 
-const SLOTS_TS = read(path.join(REPO_ROOT, 'packages', 'plugin-api', 'src', 'slots.ts'));
+/* 契约的**类型面**（2026-11-06 起纯类型住 `slots-types.ts`，`slots.ts` 只剩三张运行期表） */
+const SLOTS_TS = read(path.join(REPO_ROOT, 'packages', 'plugin-api', 'src', 'slots-types.ts'));
 
 function contractKinds(): string[] {
   const union = /export type EditorLanguageServiceRequest =([\s\S]*?);/.exec(SLOTS_TS);
-  if (union === null) throw new Error('[kind-coverage] slots.ts 里找不到 EditorLanguageServiceRequest 联合');
+  if (union === null) throw new Error('[kind-coverage] slots-types.ts 里找不到 EditorLanguageServiceRequest 联合');
   const memberNames = [...(union[1] ?? '').matchAll(/\|\s*(Editor[A-Za-z0-9]+Request)/g)].map((m) => m[1] as string);
   const kinds = memberNames.map((name) => {
     const body = new RegExp(`export interface ${name}[\\s\\S]*?\\n}`).exec(SLOTS_TS);

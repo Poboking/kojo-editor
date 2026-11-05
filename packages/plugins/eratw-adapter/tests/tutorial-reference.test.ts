@@ -152,7 +152,7 @@ describe('全表 ↔ 实现真表（表漂移即红）', () => {
 
   it('提示码闭集：源码里声明的每一条码都在表里', () => {
     const src = readFileSync(
-      fileURLToPath(new URL('../../../plugin-api/src/sugar.ts', import.meta.url)),
+      fileURLToPath(new URL('../../../plugin-api/src/sugar-types.ts', import.meta.url)),
       'utf8',
     );
     const block = /export type SugarDiagnosticCode =([\s\S]*?);/.exec(src);

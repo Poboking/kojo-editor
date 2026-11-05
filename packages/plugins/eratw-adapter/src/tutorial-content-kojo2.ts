@@ -42,7 +42,7 @@
  *   不报错），但 2.0 的表达式端口在宿主里还是恒等透传
  *   （`app/src/ui/kojo2-problem-wiring.ts:88-97`），且 `.kojo` 的保存没接产物落盘
  *   （保存接管只认 `.kojo1`：`plugin-ui-sugar-editor/src/index.ts:252-258` 的
- *   `matches: isKojoFile`，`plugin-api/src/sugar.ts:1214` 那枚扩展名就是 `.kojo1`）
+ *   `matches: isKojoFile`，`plugin-api/src/sugar-types.ts:1214` 那枚扩展名就是 `.kojo1`）
  *   ⇒ 存储期三个词照教（写法与语义都是现行的），但**不许诺产物**，第①节与第⑬节各说一次
  *   「2.0 文件今天保存的是源文件，产物只在底部「编译预览」那一格里看」；
  * - `//` 注释进产物（§4.13「产物里转成 `;` 注释」）：注释行不进 AST（`parser.ts:295,536`

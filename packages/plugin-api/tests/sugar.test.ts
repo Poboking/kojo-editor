@@ -50,7 +50,7 @@ import type {
   TextLine,
   TimingBlock,
   WhenExpr,
-} from '../src/sugar';
+} from '../src/sugar-types';
 
 /* ------------------------------ 构造工具 ------------------------------ */
 

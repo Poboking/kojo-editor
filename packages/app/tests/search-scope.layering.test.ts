@@ -69,7 +69,8 @@ describe('检索范围的分层边界', () => {
   });
 
   it('宿主拿到的是泛型事实（label/roots），契约里没有"角色"这个字', () => {
-    const slot = readFileSync(path.join(ROOT, 'packages/plugin-api/src/slots.ts'), 'utf8');
+    // 契约的类型面（2026-11-06 起住 `slots-types.ts`；`slots.ts` 只剩运行期三表）
+    const slot = readFileSync(path.join(ROOT, 'packages/plugin-api/src/slots-types.ts'), 'utf8');
     const block = slot.slice(slot.indexOf('export interface SearchScopeOption'));
     expect(block).not.toMatch(/chara|角色|家族/i);
   });

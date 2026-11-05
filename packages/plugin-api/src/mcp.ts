@@ -10,7 +10,7 @@
  * TypeScript 模块增强挂到 `SlotMap` 上——增强是纯类型操作、运行时无痕，不给开机图
  * 常驻契约面增加多余的 import 边。
  */
-import type { ContributionBase } from './slots';
+import type { ContributionBase } from './slots-types';
 
 /** 能力分级（与 `@kojo/mcp-host` 的 `McpTier` 同形结构类型，互不 import）。 */
 export type McpTier = 'read' | 'edit' | 'privileged';
@@ -53,9 +53,11 @@ export interface McpToolContribution extends ContributionBase {
   run(args: Record<string, unknown>): Promise<unknown> | unknown;
 }
 
-declare module './slots' {
+declare module './slots-types' {
   // 三个 additive 字段挂这里（纯类型增强、运行时无痕）：不给开机图常驻契约面
-  // 多留字节；run 的 `args?` 单签名留在 slots.ts 本体，避免合并出重载。
+  // 多留字节；run 的 `args?` 单签名留在 `EditorCommandContribution` 本体，避免合并出重载。
+  // 增强目标必须是 `./slots-types`（类型面已从 `slots.ts` 搬出；挂 `./slots` 会在
+  // 那个模块上新造一份 `SlotMap`，真实的槽名联合收不到这两枚 ⇒ 静默丢槽）。
   interface EditorCommandContribution {
     readonly argsSchema?: Record<string, unknown>;
     readonly description?: string;

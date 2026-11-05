@@ -13,7 +13,7 @@
  * 架构铁律：本文件零游戏名词（只有标识符与中文短名，游戏侧语义一律留在适配器）。
  */
 
-import type { SugarDiagnosticCode } from './sugar';
+import type { SugarDiagnosticCode } from './sugar-types';
 
 /** 一条诊断码的显示信息（`detail` 可选：作者想知道"这是什么事"时给一句话） */
 export interface DiagnosticLabel {
@@ -24,7 +24,7 @@ export interface DiagnosticLabel {
 }
 
 /**
- * `SugarDiagnosticCode` 闭集的**运行期枚举**（与 `sugar.ts` 的类型逐一对账）。
+ * `SugarDiagnosticCode` 闭集的**运行期枚举**（与 `sugar-types.ts` 的类型逐一对账）。
  *
  * 类型联合本身在运行期不存在，而全覆盖闸必须能遍历每一条码 ⇒ 这里补一份同集的数组。
  * 两者的同步由 `tests/diagnostic-copy.test.ts` 用双向赋值检查钉死（漏一条 ⇒ typecheck 红），

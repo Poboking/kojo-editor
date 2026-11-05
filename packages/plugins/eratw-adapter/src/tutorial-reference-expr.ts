@@ -16,7 +16,7 @@
  * - 标识符字符集 `kojo-sugar/src/identifier-chars.ts:11-29`；
  * - 别名/常量 `lexer.ts:597-610, 725-803`、`parser.ts:179-238, 333-448`、
  *   `expression.ts:134-212, 978-1018`、`codegen.ts:329-332`、`service.ts:199-256`；
- * - 诊断码闭集 `plugin-api/src/sugar.ts:1217-1320`（36 码逐条码齐；`timing-duplicate`、
+ * - 诊断码闭集 `plugin-api/src/sugar-types.ts:1217-1320`（36 码逐条码齐；`timing-duplicate`、
  *   `timing-empty-body`、`unclosed-block`、`raw-block-inline` 全 src 无发射点，表内如实标注；
  *   `internal` 发射点 `service.ts:398, 421`）。
  *

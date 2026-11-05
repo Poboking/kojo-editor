@@ -19,8 +19,9 @@ const repoRoot = path.resolve(fileURLToPath(new URL(import.meta.url)), '../../..
 
 /** 从契约源码里现算机器码联合（`export type ReplayUnknownCode = | 'a' // … | 'b';`） */
 function contractUnknownCodes(): string[] {
+  // 契约的类型面（2026-11-05 契约字节闸治理：纯类型从 `replay.ts` 搬到 `replay-types.ts`）
   const src = readFileSync(
-    path.join(repoRoot, 'packages/plugin-api/src/replay.ts'),
+    path.join(repoRoot, 'packages/plugin-api/src/replay-types.ts'),
     'utf8',
   );
   // 声明以分号收尾（`| 'other';`）；注释里没有分号，非贪婪切到第一枚即整段

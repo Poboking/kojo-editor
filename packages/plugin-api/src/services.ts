@@ -93,7 +93,7 @@ export const WellKnownServices = {
   /**
    * 语法糖转译服务（v0.3 批 S1）：表层语法（`.kojo`）→ 原生 ERB 产物
    * + 行级源映射 + 诊断。**纯函数语义**（不读不写文件）；转译产物的写盘
-   * 由消费方按内核双闸承担（S3 批）。契约 `plugin-api/sugar.ts`，
+   * 由消费方按内核双闸承担（S3 批）。契约 `plugin-api/sugar-types.ts`，
    * 实现插件 `kojo-sugar`（S2 批建）。
    */
   SugarTranspile: 'sugar.transpile',
@@ -103,7 +103,7 @@ export const WellKnownServices = {
    * 回放消息块」三向映射。只读、纯数据层（无 UI）；归档缺失 / 回放服务
    * 缺席时**结构化降级**（`archive: null`），不抛错、不静默。
    * 事件纪律：只消费 `file.changed`，**绝不发射**（S3 已落其 payload 契约）。
-   * 契约 `plugin-api/sugar.ts`，实现插件 `kojo-sugar`（S4 批建）。
+   * 契约 `plugin-api/sugar-types.ts`，实现插件 `kojo-sugar`（S4 批建）。
    */
   SugarPreview: 'sugar.preview',
   /**
@@ -112,7 +112,7 @@ export const WellKnownServices = {
    * 每个候选都经「生成糖片段 → 复用 `sugar.transpile` → 与原文本区间逐字节比对」
    * 自证（round-trip）；**不一致者一律不入结果**（宁可漏报不可错报）。
    * 纯函数、不写盘、不发事件；不产候选的情形显式记入 `skipped`（不静默）。
-   * 契约 `plugin-api/sugar.ts`，实现插件 `kojo-sugar`（S5 批建）。
+   * 契约 `plugin-api/sugar-types.ts`，实现插件 `kojo-sugar`（S5 批建）。
    */
   SugarLift: 'sugar.lift',
   /**
@@ -125,7 +125,7 @@ export const WellKnownServices = {
    * `file.changed`。
    *
    * **能力面 = 服务键面**：写能力必须显式可审计，不得藏在只读服务里。
-   * 契约 `plugin-api/sugar.ts`，实现插件 `kojo-sugar`（S5-UI 批建）。
+   * 契约 `plugin-api/sugar-types.ts`，实现插件 `kojo-sugar`（S5-UI 批建）。
    */
   SugarLiftApply: 'sugar.liftApply',
   /**

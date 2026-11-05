@@ -19,7 +19,7 @@ import type { Logger } from './base';
 import type { ErbFile, ErbIndex } from './erb';
 import type { GameProject } from './game';
 import type { ConventionPolicy } from './adapter-contract';
-import type { SugarEdit } from './sugar';
+import type { SugarEdit } from './sugar-types';
 
 /** 问题严重度。产品原则：宁可漏报不可误报（见 RESEARCH.md §7）。 */
 export type ConventionSeverity = 'error' | 'warning' | 'info';
@@ -29,7 +29,7 @@ export type ConventionSeverity = 'error' | 'warning' | 'info';
  *
  * ## 坐标尺子（全仓一把，写死在这里）
  * - `line`：**1 基**行号；
- * - `column`：**0 基列**（源内，与 `sugar.ts` 的 `Loc.column` 逐字同尺）；省略 = 整行诊断；
+ * - `column`：**0 基列**（源内，与 `sugar-types.ts` 的 `Loc.column` 逐字同尺）；省略 = 整行诊断；
  * - `edits`：**就是糖侧那条 `SugarEdit`**（`{ loc: Loc; end?: Loc; newText; description? }`，
  *   同样 1 基行 / 0 基列、`end` 不含端点）——约定问题的修法与降糖/回写的修法是**同一个类型**，
  *   于是面板、折叠层、落地三条通道只有一把尺子，不可能各发明一种 edit 形状。

@@ -1,6 +1,6 @@
 import type { Logger } from './base';
 import type { EventBus } from './events';
-import type { SlotRegistrar } from './slots';
+import type { SlotRegistrar } from './slots-types';
 import type { ScopedStorage } from './storage';
 
 /**

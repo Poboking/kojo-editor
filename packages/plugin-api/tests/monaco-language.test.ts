@@ -22,7 +22,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, expectTypeOf, it } from 'vitest';
-import type { EditorLanguageServiceContribution } from '../src/slots';
+import type { EditorLanguageServiceContribution } from '../src/slots-types';
 import type {
   MonacoLanguageContribution,
   MonacoLanguageSurface,
@@ -35,7 +35,11 @@ const SRC = readFileSync(
   fileURLToPath(new URL('../src/monaco-language.ts', import.meta.url)),
   'utf8',
 );
-const SLOTS_SRC = readFileSync(fileURLToPath(new URL('../src/slots.ts', import.meta.url)), 'utf8');
+/** 槽位契约的类型面全文（2026-11-06 批：纯类型住 `slots-types.ts`，`slots.ts` 只剩运行期三表） */
+const SLOTS_SRC =
+  readFileSync(fileURLToPath(new URL('../src/slots.ts', import.meta.url)), 'utf8') +
+  '\n' +
+  readFileSync(fileURLToPath(new URL('../src/slots-types.ts', import.meta.url)), 'utf8');
 const INDEX_SRC = readFileSync(fileURLToPath(new URL('../src/index.ts', import.meta.url)), 'utf8');
 
 /** 剥掉注释后的正文（值导出与依赖两类判据只看正文；判据理由同 IC 批那把闸） */
@@ -187,7 +191,7 @@ describe('本叶子零值导出（开机图纪律，同 IC 批）', () => {
     expect(stmt![1], '桶里对这一枚叶子只许 `export type`').toBe('type ');
   });
 
-  it('`slots.ts` 用 `import type` 引它（值 import 会留下静态边）', () => {
+  it('契约类型面用 `import type` 引它（值 import 会留下静态边）', () => {
     expect(SLOTS_SRC).toMatch(
       /^import type \{ MonacoLanguageContribution \} from '\.\/monaco-language';$/m,
     );

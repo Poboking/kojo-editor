@@ -158,14 +158,6 @@ const SCENES_STORAGE_KEY = 'replay-scenes';
 const LAST_DEBUG_TARGET_KEY = 'last-debug-target';
 
 /**
- * 多文件缓冲文本选项（2026-11-05 边界批；引擎 additive，**不进 plugin-api 契约**——
- * 开机图字节闸只剩 22 B）。形如 `readonly { filePath; text }[]`，与引擎本地声明结构同形，
- * 靠结构化类型对上；`ReplayFunctionOptions & MultiFileOverrides` 交叉类型 + 变量中转
- * 绕开 excess property 检查（**不改契约**）。
- */
-type MultiFileOverrides = { textOverrides?: readonly { filePath: string; text: string }[] };
-
-/**
  * 整档体检的**预算**（2026-11-05 边界批 · 车道 S4）。
  *
  * 为什么要预算：一档全角色 × 每角色全部段落，在真语料上可能是十万级回放——
@@ -752,7 +744,7 @@ export function createUiStateReplayPlugin(): Plugin {
         const replayOptionsFor = (
           choice: ReplayTextChoice,
           callContext?: ReplayCallContext,
-        ): ReplayFunctionOptions & MultiFileOverrides => {
+        ): ReplayFunctionOptions & ReplayFunctionOptions => {
           const textOverrides = overridesForPanel(bufferedDocsRef.current);
           return {
             ...(callContext !== undefined ? { callContext } : {}),
@@ -1197,7 +1189,7 @@ export function createUiStateReplayPlugin(): Plugin {
               const choice = textChoiceFor(name);
               const v = await viewFor(no);
               // 多文件缓冲文本（2026-11-05 边界批）：整档体检与单段判定同一张表
-              const opts: ReplayFunctionOptions & MultiFileOverrides = replayOptionsFor(choice);
+              const opts: ReplayFunctionOptions & ReplayFunctionOptions = replayOptionsFor(choice);
               return replay.replayFunctionWithOverrides!(v, name, {}, opts);
             },
             perCharCap: ARCHIVE_SCAN_PER_CHAR_CAP,
@@ -1836,7 +1828,7 @@ export function createUiStateReplayPlugin(): Plugin {
               // 预演却读盘的话，同屏会出现"预演说会变、判定说没变"的割裂。
               const previewText = judgeTextRef.current ?? textChoiceFor(result.normalizedName);
               // 多文件缓冲文本（2026-11-05 边界批）：预演与判定同一张表、同一份正文
-              const previewOpts: ReplayFunctionOptions & MultiFileOverrides = replayOptionsFor(
+              const previewOpts: ReplayFunctionOptions & ReplayFunctionOptions = replayOptionsFor(
                 previewText,
                 cc.callContext,
               );

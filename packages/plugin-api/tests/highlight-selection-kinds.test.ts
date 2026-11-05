@@ -25,10 +25,11 @@ import type {
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const SLOTS_SRC = readFileSync(
-  fileURLToPath(new URL('../src/slots.ts', import.meta.url)),
-  'utf8',
-);
+/** 槽位契约的类型面全文（2026-11-06 批：纯类型住 `slots-types.ts`，`slots.ts` 只剩运行期三表） */
+const SLOTS_SRC =
+  readFileSync(fileURLToPath(new URL('../src/slots.ts', import.meta.url)), 'utf8') +
+  '\n' +
+  readFileSync(fileURLToPath(new URL('../src/slots-types.ts', import.meta.url)), 'utf8');
 
 /** 取某个联合（`export type X = …;`）里的成员名，按源码顺序 */
 function unionMembers(name: string): string[] {

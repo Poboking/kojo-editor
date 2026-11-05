@@ -228,7 +228,7 @@ export function toIssueLines(text: string): string[] {
  * 一处列级修法 → 宿主的**整行替换**语义（`EditorTextEdit` 只有行区间，没有列）。
  *
  * ## 尺子（全仓一把，换算只在这几行）
- * `edit.loc` / `edit.end` **就是契约里的 `Loc`**（`plugin-api/src/sugar.ts:85-90`）：
+ * `edit.loc` / `edit.end` **就是契约里的 `Loc`**（`plugin-api/src/sugar-types.ts:85-90`）：
  * **行 1 基、列 0 基、`end` 不含**——`ConventionIssue.edits` 与糖侧回写共用同一个形状，
  * 于是这里拿列**零换算**（`String.slice` 天生吃 0 基下标）。唯一需要 `+1` 的是
  * {@link conventionIssueDecoration} 里的 `issue.column → startColumn`（marker 那一头是 1 基）。
@@ -237,7 +237,7 @@ export function toIssueLines(text: string): string[] {
  *
  * 做法：把 `newText` 按列缝回它所在的那几行（首行保留起点之前的部分、末行保留终点之后的
  * 部分）——整行重写时**不吞掉作者写在这一行的别的东西**。
- * **`end` 省略 = 整行替换 `loc.line`**（契约 `sugar.ts:103` 写死的口径，`loc.column` 此时不参与）：
+ * **`end` 省略 = 整行替换 `loc.line`**（契约 `sugar-types.ts:103` 写死的口径，`loc.column` 此时不参与）：
  * 一键修法里"搬标记 / 注释掉无效赋值"这类改法天生吃整行，缝列反而会保住不该保的东西。
  * 缺 `loc`（契约要求、运行时兜底）⇒ 退回替换该条 issue 的 `line`。
  *

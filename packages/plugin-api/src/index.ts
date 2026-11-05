@@ -218,13 +218,14 @@ export type {
   ReplayOutcome,
   ReplayStateView,
   ReplayUnknown,
+  ReplayTextOverride,
   ReplayUnknownCode,
   ReplayUnknownReducibility,
   ReplayValue,
   StateReplayService,
   TranscriptLine,
   TranscriptVisibility,
-} from './replay';
+} from './replay-types';
 
 export type {
   ArchiveArrayCell,
@@ -338,10 +339,10 @@ export type {
   UIPanelContribution,
   UIPanelProps,
   IconSizeTier,
-} from './slots';
+} from './slots-types';
 
 export { WellKnownCommands } from './slots';
-export type { WellKnownCommandId } from './slots';
+export type { WellKnownCommandId } from './slots-types';
 export type * from './mcp';
 
 /* ---- 插件面板右键菜单契约（1023 右键覆盖面 WP5.1 独占追加区块；勿在他处重排） ---- */
@@ -614,7 +615,7 @@ export type {
   WhenBranch,
   WhenCaseValue,
   WhenExpr,
-} from './sugar';
+} from './sugar-types';
 
 export {
   projectFingerprintOf,
@@ -671,7 +672,7 @@ export {
 } from './zip';
 
 /* ---- S6 列级源映射（1015 独占追加区块；勿在他处重排） ---- */
-export type { SugarColumnRun } from './sugar';
+export type { SugarColumnRun } from './sugar-types';
 
 /* ---- 数值增减族表（1016 独占追加区块；勿在他处重排） ---- */
 // 2026-10-19（AM-1 P5）：`KojoMutatorSpec` 由单接口改为 **call / assign 二形态判别联合**
@@ -690,7 +691,7 @@ export type {
 export type { KojoCounterTable } from './game';
 
 /* ---- C3 领域限定检索（1016 独占追加区块；勿在他处重排） ---- */
-export type { SearchScopeContribution, SearchScopeOption } from './slots';
+export type { SearchScopeContribution, SearchScopeOption } from './slots-types';
 
 /* ---- 语义着色判别成员（1016 独占追加区块；勿在他处重排） ---- */
 export { EDITOR_SEMANTIC_TOKEN_TYPES, EDITOR_SEMANTIC_TOKEN_MODIFIERS } from './slots';
@@ -701,14 +702,14 @@ export type {
   EditorSemanticTokenResult,
   EditorSemanticTokenSpan,
   EditorSemanticTokenType,
-} from './slots';
+} from './slots-types';
 export type {
   EditorInlayHint,
   EditorInlayHintKind,
   EditorLineWindow,
   EditorInlayHintRequest,
   EditorInlayHintResult,
-} from './slots';
+} from './slots-types';
 export {
   DOCUMENT_WORD_SOURCE,
   MODEL_TOKEN_CLASS,
@@ -734,7 +735,7 @@ export type {
   EditorSignature,
   EditorSignatureHelpRequest,
   EditorSignatureHelpResult,
-} from './slots';
+} from './slots-types';
 
 /* ---- W7 NAV-SCOPE 独占追加区块（勿在他处重排）：行→归属 / 范围归属 / 候选排序与预算 ---- */
 export {
@@ -853,7 +854,7 @@ export type {
 } from './sugar-panels';
 
 /* ---- 编译闸收口：糖编辑类型走 barrel（additive，勿在他处重排） ---- */
-export type { SugarEdit } from './sugar';
+export type { SugarEdit } from './sugar-types';
 
 /* ---- 内容判等核（W17 DIFF-EQ 独占追加区块；勿在他处重排） ---- */
 export { compareContent, linesEqualOf, splitContentLines } from './content-equality';
@@ -902,7 +903,7 @@ export type {
 } from './scaffold';
 
 /* ---- LAU-D1 方言上下文（krosama 1025 独占追加区块；勿在他处重排） ---- */
-export type { DialectCarrierKind, DialectContext } from './slots';
+export type { DialectCarrierKind, DialectContext } from './slots-types';
 
 /* ---- 启动器契约（2026-10-26 启动器落地批 L1 独占追加区块；勿在他处重排） ----
  * **必须 `export type`，不许 `export *`、不许任何值导出**：`launcher.ts` 是几十 KB 的
@@ -1107,7 +1108,7 @@ export type {
   EditorSelectionChain,
   EditorSelectionRangeRequest,
   EditorSelectionRangeResult,
-} from './slots';
+} from './slots-types';
 
 /* ---- LAU-4 改名腿独占追加区块（勿在他处重排）：改名求值 kind ---- */
 export type {
@@ -1115,7 +1116,7 @@ export type {
   EditorRenameTarget,
   EditorRenameTargetRequest,
   EditorRenameTargetResult,
-} from './slots';
+} from './slots-types';
 
 /* ---- LAU-4 调用层级腿独占追加区块（勿在他处重排）：调用层级 kind ---- */
 export type {
@@ -1124,7 +1125,7 @@ export type {
   EditorCallHierarchyResult,
   EditorCallHierarchySite,
   EditorCallHierarchySymbol,
-} from './slots';
+} from './slots-types';
 
 /* ---- ERB-PARITY G3 独占追加区块（勿在他处重排）：跳到实现 kind ---- */
-export type { EditorImplementationRequest, EditorImplementationResult } from './slots';
+export type { EditorImplementationRequest, EditorImplementationResult } from './slots-types';

@@ -1642,10 +1642,24 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       `plugin.ts` **+964**（代际门三处短路）。测试文件 +15,802 B 不进图。
     //     · 形态不变，仍是常驻判据面。⇒ KB 闸 **3,615 → 3,624**（红沿 3,712,000 B，
     //       机械余量 **996 B**——按读数贴闸，下一枚进图字节**必须先出图**）。文件闸 197 不动。
+    //   - **契约字节闸治理批（2026-11-05，本批；三路瘦身 + 契约提升）**：读数
+    //     **197 文件 / 3,395 KB · 3,476,568 B**（对照本批起点 3,711,466 B，**−234,898 B**；文件数仍 197
+    //     顶格）。三笔逐项（各自车道隔离 A/B，文件数均不变 ⇒ 类型文件确实被擦除、不在图里）：
+    //     · `plugin-api/src/slots.ts` **116,458 → 1,774 B**（−114,684；112 条类型声明搬进
+    //       `slots-types.ts`，图内只剩 3 张 `as const` 表；桶 11 个类型块改指 types、2 个值导出留原文件）；
+    //     · `plugin-api/src/sugar.ts` **119,398 → 13,694 B**（−105,704；93 条声明搬进 `sugar-types.ts`，
+    //       图内只剩 28 个运行时导出）；
+    //     · `plugin-api/src/replay.ts` **18,226 → 3,262 B**（−14,964；类型搬进 `replay-types.ts`，图内只留
+    //       `IRREDUCIBLE_PSEUDO` 与两个纯函数；`export type * from "./replay-types"` 保持旧导入路径可用）。
+    //     ⇒ **闸下调 3,624 → 3,400 KB**（红沿 3,482,112 B，机械余量 ≈5.5 KB）；文件闸 197 不动。
+    //     口径教训：类型文件必须**不被任何图内文件值 import**（只有 `import type` / `export type` 才擦除）；
+    //     源码扫描型测试（读 `slots.ts` / `sugar.ts` / `replay.ts` 原文找闭集的那批）必须跟着改指
+    //     `*-types.ts`，否则**静默变空断言 / 假绿**；`mcp.ts` 的 `declare module` 挂点也要跟着改
+    //     （那一处 tsc 抓不到：挂错会在 `./slots` 上新造一份 `SlotMap`，让 `mcp.*` 静默掉出 `SlotName`）。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤197 文件 / ≤3,624 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤197 文件 / ≤3,400 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_624);
+    expect(totalKb).toBeLessThanOrEqual(3_400);
     expect(files.length).toBeLessThanOrEqual(197);
   });
 

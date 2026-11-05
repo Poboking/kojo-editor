@@ -50,6 +50,7 @@ import type {
   ReplayCallContextResolver,
   ReplayFunctionOptions,
   ReplayStateView,
+  ReplayTextOverride,
   SnapshotArchive,
   StateReplayService,
 } from '@kojo/plugin-api';
@@ -87,19 +88,6 @@ const OVERRIDE_LINES_MEMO_MAX = 4;
 /** 跨函数写传播每次回放最多查几个被调函数（防巨型函数体拖住面板） */
 const CALL_PROPAGATION_BUDGET = 30;
 
-/**
- * 多文件缓冲文本（**本地声明，不进 plugin-api 契约**：开机图字节闸只剩 22 B；
- * 引擎与面板各自声明结构相同的本地类型，靠结构化类型对上，`as` 透传不产生契约面）。
- */
-export interface ReplayTextOverrideSource {
-  readonly filePath: string;
-  readonly text: string;
-}
-
-/** `replayFunction` 的**本地**扩展选项（`textOverrides` 不进契约，见上） */
-type ReplayOptionsWithOverrides = ReplayFunctionOptions & {
-  readonly textOverrides?: readonly ReplayTextOverrideSource[];
-};
 
 /**
  * 有效 override 文本：先按**文件身份**查多文件表（`pathKey` 判等），再退回"被判函数那一份"
@@ -107,7 +95,7 @@ type ReplayOptionsWithOverrides = ReplayFunctionOptions & {
  */
 function effectiveOverrideText(
   filePath: string,
-  options?: ReplayOptionsWithOverrides,
+  options?: ReplayFunctionOptions,
   judgedPath?: string,
 ): string | undefined {
   const list = options?.textOverrides;
@@ -126,7 +114,7 @@ function effectiveOverrideText(
  * 身份比较因此是 O(1)/项（同字符串对象）；这也是"传播缓存何时清空"的判据。
  */
 function overridesOf(
-  options?: ReplayOptionsWithOverrides,
+  options?: ReplayFunctionOptions,
   judgedPath?: string,
 ): readonly { readonly filePath: string; readonly text: string }[] {
   const out: { filePath: string; text: string }[] = [];
@@ -419,7 +407,7 @@ export class StateReplayEngine implements StateReplayService {
    */
   private async linesOf(
     filePath: string,
-    options?: ReplayFunctionOptions & { readonly textOverrides?: readonly ReplayTextOverrideSource[] },
+    options?: ReplayFunctionOptions & { readonly textOverrides?: readonly ReplayTextOverride[] },
     judgedPath?: string,
   ): Promise<string[]> {
     const text = effectiveOverrideText(filePath, options, judgedPath);
@@ -456,7 +444,7 @@ export class StateReplayEngine implements StateReplayService {
    */
   private async propagateCallWrites(
     writes: readonly ReplayWrite[],
-    options?: ReplayFunctionOptions & { readonly textOverrides?: readonly ReplayTextOverrideSource[] },
+    options?: ReplayFunctionOptions & { readonly textOverrides?: readonly ReplayTextOverride[] },
     judgedPath?: string,
   ): Promise<readonly ReplayWrite[]> {
     const targets = writes.filter((w) => w.kind === 'call' && typeof w.target === 'string' && w.target !== '');
@@ -534,7 +522,7 @@ export class StateReplayEngine implements StateReplayService {
     // 多文件批：被判函数那份也可能只出现在 `textOverrides` 里（面板对"正开着的文件"统一
     // 走那张表）。先拿磁盘明细只为确认**被判函数属于哪个文件**，再按该文件的有效文本重取，
     // 保证"明细行号空间"与"取行文本"来自同一份正文（评审 P0 的同一判据）。
-    const opts = options as ReplayOptionsWithOverrides | undefined;
+    const opts = options as ReplayFunctionOptions | undefined;
     let detail = await this.deps.functionPredicates(functionName, options?.textOverride);
     if (!detail) return null;
     const topText = effectiveOverrideText(detail.filePath, opts, detail.filePath);

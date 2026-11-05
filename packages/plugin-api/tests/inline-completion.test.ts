@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { WellKnownServices } from '../src/services';
 import type { RevealRange } from '../src/events';
-import type { EditorCompletionItemKind } from '../src/slots';
+import type { EditorCompletionItemKind } from '../src/slots-types';
 import type {
   InlineCompletionCandidate,
   InlineCompletionOutcome,
@@ -36,7 +36,11 @@ const SRC = readFileSync(
   fileURLToPath(new URL('../src/inline-completion.ts', import.meta.url)),
   'utf8',
 );
-const SLOTS_SRC = readFileSync(fileURLToPath(new URL('../src/slots.ts', import.meta.url)), 'utf8');
+/** 槽位契约的类型面（2026-11-06 批：纯类型住 `slots-types.ts`，`slots.ts` 只剩运行期三表） */
+const SLOTS_SRC =
+  readFileSync(fileURLToPath(new URL('../src/slots.ts', import.meta.url)), 'utf8') +
+  '\n' +
+  readFileSync(fileURLToPath(new URL('../src/slots-types.ts', import.meta.url)), 'utf8');
 
 /**
  * 剥掉注释之后的契约正文（**值导出与掏空两类判据只看正文**）。

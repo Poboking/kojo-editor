@@ -19,7 +19,7 @@ import type { Unsubscribe } from './base';
 import type { AnyEventMap, EventBus } from './events';
 import { pathKey } from './paths';
 import { KOJO_V1_SOURCE_EXTENSIONS } from './sugar';
-import type { SugarDiagnostic, SugarSeverity } from './sugar';
+import type { SugarDiagnostic, SugarSeverity } from './sugar-types';
 
 /* ============================== 文件判定 ============================== */
 

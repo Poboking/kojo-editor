@@ -149,9 +149,9 @@ export interface InlineCompletionRequest {
 /**
  * 候选的中性类别 —— **与 `EditorCompletionItemKind` 同一张词表**（宿主按它挑图标与
  * 排序档，零语言知识）。两张表各写一份必然出现"弹窗认识的档幽灵文本不认"，
- * 故从 `slots.ts` 直接复用，不新造。
+ * 故从 `slots-types.ts` 直接复用，不新造。
  */
-export type InlineCompletionItemKind = import('./slots').EditorCompletionItemKind;
+export type InlineCompletionItemKind = import('./slots-types').EditorCompletionItemKind;
 
 /**
  * 一条幽灵文本候选。
