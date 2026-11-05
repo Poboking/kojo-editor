@@ -192,8 +192,20 @@ import { detachString } from './scanner';
  * 缺位 = **这一份没扫过变量提及** = 保守侧，构建轮重扫该文件（与 v10 缺候选位同款，
  * 只付一次；此后逐轮热）。为什么不能补空数组：空数组 = "扫过、确实没有"，与"没扫过"
  * 是两件事——把后者写成前者，作者会看到一份静默缺边的查找引用。
+ *
+ * **v17 → v18**（2026-11-05 收口批）：**条目形态一字未动**（仍是 12 位），变的是
+ * `refs` / `dimRefs` 两条流水**里装的键**——`normalizedUpper` 从"只折 `[a-zａ-ｚ]`"
+ * 收口成"严格等于 `toUpperCase()`"，含 `α` / `я` / 增平面小写的名字从此多出引用点。
+ * 旧盘那份流水答不上这一批要答的问题，而**结构、定义、候选三样完全无关**。
+ * ⇒ v17 / v16 仍按准入纪律 1/2/3 留在 `SALVAGEABLE_VERSIONS`，信封多带一枚
+ * `sourceVersion`（**盘上**版本，不是当前版本）；构建轮见 `< REFS_FOLD_VERSION` 就把
+ * **两条引用腿整树重扫一遍**（与 v10 缺候选位同款保守侧，只付一次；重扫后条目盖上
+ * 当前名录摘要，下一轮纯热）。绝不把旧流水补成空数组，也绝不靠"语料里没有这类名字"放行。
  */
-export const SNAPSHOT_VERSION = 17;
+export const SNAPSHOT_VERSION = 18;
+
+/** 引用流水归一化器的收口版本：盘上版本小于它的，`refs` / `dimRefs` 一律重扫 */
+export const REFS_FOLD_VERSION = 18;
 
 /**
  * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
@@ -252,6 +264,7 @@ const SALVAGEABLE_VERSIONS: ReadonlyMap<
     readonly candidateBits: 16 | 32;
   }
 > = new Map([
+  [18, { arity: 12, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: false, candidateBits: 16 }],
   [17, { arity: 12, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: false, candidateBits: 16 }],
   [16, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: false, candidateBits: 16 }],
   [14, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: true, candidateBits: 32 }],
@@ -317,6 +330,15 @@ export interface SnapshotEntry {
 /** 索引快照（按项目根一份） */
 export interface IndexSnapshot {
   readonly version: number;
+  /**
+   * **盘上**快照版本（`coerceSnapshot` 填当前版本；`salvageSnapshot` 填那个旧键的版本）。
+   *
+   * 为什么不能拿 `version` 代替：salvage 会把 `version` 改写成当前版本（换代后要按新键
+   * 落盘），于是"这份 refs 是哪个归一器扫出来的"这个事实就丢了。v18 起引用流水的
+   * 归一化判据随版本走（`REFS_FOLD_VERSION`），构建轮按这个数决定是否整树重扫两条
+   * 引用腿。缺席（手工构造 / 更老的搬运路径）⇒ 保守侧重扫，不许当成当前版本。
+   */
+  readonly sourceVersion?: number;
   /** 快照所属项目根（加载时不匹配即弃用——换盘符/移动项目不复用） */
   readonly rootDir: string;
   readonly savedAt: number;
@@ -1576,6 +1598,9 @@ export function salvageSnapshot(
   if (salvaged === null) return null;
   return {
     version: SNAPSHOT_VERSION,
+    // 盘上版本（已由 SALVAGEABLE_VERSIONS 准入，必是表内那个数）：换代后按新键落盘，
+    // 但"这两条引用流水是哪个归一器扫的"必须用原值判，不能跟着 version 一起改写。
+    sourceVersion: r.version as number,
     rootDir: opts.rootDir,
     savedAt: r.savedAt,
     entries: salvaged.entries,
@@ -1854,6 +1879,7 @@ export function coerceSnapshot(raw: unknown, rootDir: string): IndexSnapshot | n
   // 信封名录摘要：只认数（旧盘没这一位 = 未知 ⇒ 调用方走逐条目巡检，不猜）
   return {
     version: SNAPSHOT_VERSION,
+    sourceVersion: SNAPSHOT_VERSION,
     rootDir,
     savedAt: r.savedAt,
     entries,

@@ -479,7 +479,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(segOf(seeded.fs.log, mark2)).toEqual({ passes: 0, files: 0 });
   });
 
-  it('v11 → v12 迁移（MEM-6）：候选位只换编码 ⇒ **一个文件都不重扫**（与 v10 的保守侧重扫正相反）', async () => {
+  it('v11 → v12 迁移（MEM-6）：候选位只换编码 ⇒ 形态不额外加钱（v18 代际门只付一次固定重扫）', async () => {
     const files = new Map<string, FakeFile>([
       [P1, { text: SRC1, mtimeMs: 100 }],
       [P2, { text: SRC2, mtimeMs: 200 }],
@@ -516,11 +516,12 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(r.salvaged).toBe(2); // 结构逐字认识 ⇒ 全部续用
     expect(r.skipped).toBe(0);
     expect(r.reused).toBe(2);
-    // ★ 与上面 v10 用例的**唯一差别**：v10 缺位 ⇒ 候选未知 ⇒ 保守侧重扫（provenance=2）；
-    // v11 只换了编码 ⇒ 就地哈希即可 ⇒ 零重扫。这条差异是"免费迁移"这个说法的判据。
-    expect(r.provenance).toBe(0);
-    expect(r.refsRescan).toBe(2); // v17：旧盘缺第 12 位 ⇒ 变量提及腿重扫一遍（结构照旧复用）
-    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 }); // 只为变量提及腿读一遍正文
+    // v18 代际门：任何 v<18 的盘，两条引用腿都要整树重扫一次（旧 `normalizedUpper`
+    // 遇到非拉丁小写会静默缺边）。**形态差异本身不加钱**：v11 的候选串就地哈希，
+    // 每份正文只读一遍；只付这一趟固定的代际重扫，下一轮起纯热（见末尾 v17→v18 对照）。
+    expect(r.provenance).toBe(2);
+    expect(r.refsRescan).toBe(2);
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 }); // 每份正文只读一遍
     // 迁移把记号串**就地哈希**，成员语义逐条不变（不是"随便造了个非空数组"）
     const snap = second.service.snapshotForDebug?.() as { entries: Record<string, { candidateHashes?: Uint16Array }> } | null;
     expect(snap).not.toBeNull();
@@ -538,7 +539,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(savedP1[10]).not.toContain('\n'); // 记号串是 `\n` 连接的，base64 不可能含它
   });
 
-  it('v12 → v13 迁移（MEM-7）：引用流水只换存放形态 ⇒ **一个文件都不重扫**，且逐条同值', async () => {
+  it('v12 → v13 迁移（MEM-7）：引用流水只换存放形态 ⇒ 形态不额外加钱，且逐条同值', async () => {
     const files = new Map<string, FakeFile>([
       [P1, { text: SRC1, mtimeMs: 100 }],
       [P2, { text: SRC2, mtimeMs: 200 }],
@@ -573,10 +574,11 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(r.salvaged).toBe(2); // 结构逐字认识 ⇒ 全部续用
     expect(r.skipped).toBe(0);
     expect(r.reused).toBe(2);
-    // ★ 与 v10 用例正相反：v12 只是换了存放形态 ⇒ 就地摊平即可 ⇒ 零重扫、零读盘
-    expect(r.provenance).toBe(0);
-    expect(r.refsRescan).toBe(2); // v17：旧盘缺第 12 位 ⇒ 变量提及腿重扫一遍（结构照旧复用）
-    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 }); // 只为变量提及腿读一遍正文
+    // v12 只换存放形态 ⇒ 就地摊平，形态本身零重扫；v18 代际门让所有旧盘付一次
+    // 固定的两条引用腿重扫（provenance=2 / refsRescan=2），每份正文仍只读一遍。
+    expect(r.provenance).toBe(2);
+    expect(r.refsRescan).toBe(2);
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 }); // 每份正文只读一遍
     // 迁移把四元组**就地摊平**，逐条逐字段不变（不是"随便造了个非空数组"）
     const snap = second.service.snapshotForDebug?.() as
       | { entries: Record<string, { refs?: readonly (string | number)[] }> }
@@ -598,7 +600,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect((savedP1[7] as unknown[]).every((x) => Array.isArray(x))).toBe(false);
   });
 
-  it('v14 → v15 迁移（MEM-15）：函数元组摊平 + 候选哈希截 16 位 ⇒ **一个文件都不重扫**，且逐条同值', async () => {
+  it('v14 → v15 迁移（MEM-15）：函数元组摊平 + 候选哈希截 16 位 ⇒ 形态不额外加钱，逐条同值', async () => {
     const files = new Map<string, FakeFile>([
       [P1, { text: SRC1, mtimeMs: 100 }],
       [P2, { text: SRC2, mtimeMs: 200 }],
@@ -631,10 +633,11 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(r.salvaged).toBe(2); // 结构逐字认识 ⇒ 全部续用
     expect(r.skipped).toBe(0);
     expect(r.reused).toBe(2);
-    // 两处都只换存放形态 ⇒ 零重扫、零读盘（与 v10 的保守侧重扫正相反）
-    expect(r.provenance).toBe(0);
-    expect(r.refsRescan).toBe(2); // v17：旧盘缺第 12 位 ⇒ 变量提及腿重扫一遍（结构照旧复用）
-    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 }); // 只为变量提及腿读一遍正文
+    // 两处都只换存放形态 ⇒ 形态本身零重扫、零读盘；v18 代际门让所有旧盘付一次
+    // 固定的两条引用腿重扫（与 v10 的候选未知同量级），下一轮起纯热。
+    expect(r.provenance).toBe(2);
+    expect(r.refsRescan).toBe(2);
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 }); // 每份正文只读一遍
     // 迁移逐条同值：函数流水的 7 格还原成 `ErbFunction` 后与全量重建逐字段相同
     // （docComment / nameColumn / params 都在这条里；`dumpIndex` 只比名字与行）
     const hot = second.service.currentIndex()!;
@@ -648,6 +651,63 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(Array.isArray(savedP1[5])).toBe(true);
     expect((savedP1[5] as unknown[]).every((x) => Array.isArray(x))).toBe(false);
     expect(decodeCandidateHashes(savedP1[10] as string)!.constructor).toBe(Uint16Array);
+  });
+
+  it('v17 → v18 代际门：结构 / 定义 / 候选全复用，只把两条引用腿整树重扫一次；下一轮纯热', async () => {
+    const files = new Map<string, FakeFile>([
+      [P1, { text: SRC1, mtimeMs: 100 }],
+      [P2, { text: SRC2, mtimeMs: 200 }],
+    ]);
+    const seeded = await seed(files);
+    // v17 与 v18 的条目形态**逐字相同**（都是 12 位），差别只在信封版本与存储键——
+    // 这正是真实的旧盘，不需要伪造任何旧形态。变的不是形态而是流水里装的键：
+    // 旧 `normalizedUpper` 只折拉丁小写，含非拉丁小写的名字会静默缺边。
+    const cur = diskOf(seeded.map, v7key);
+    const v17key = snapshotKeyFor(ROOT, 17);
+    seeded.map.delete(v7key);
+    seeded.map.set(v17key, JSON.stringify({ ...cur, version: 17 }));
+
+    const logs: string[] = [];
+    const second = activate(seeded.fs.io, seeded.storage, logs);
+    openProject(second.bus);
+    await second.waitIndexed();
+    const r = readBreakdown(logs);
+    expect(r.salvaged).toBe(2); // 结构逐条认识 ⇒ 一条不丢、不重读解析
+    expect(r.skipped).toBe(0);
+    expect(r.reused).toBe(2);
+    expect(r.provenance).toBe(2); // 函数引用腿整树重扫
+    expect(r.refsRescan).toBe(2); // 变量引用腿整树重扫（同一趟正文，不读两遍）
+
+    // 正确性：与全量重建逐字相同；`dimReferences` 单列出来比（dumpIndex 的比的是函数腿）
+    const dimOf = (idx: ErbIndex): string =>
+      JSON.stringify(
+        [...(idx.dimReferences?.byName.entries() ?? [])].map(([n, list]) => [
+          n,
+          list.map((x) => [x.filePath, x.line, x.column, x.kind]),
+        ]),
+      );
+    const cold = await rebuildFromScratch(files);
+    expect(dumpIndex(second.service.currentIndex()!)).toBe(dumpIndex(cold.idx));
+    expect(dimOf(second.service.currentIndex()!)).toBe(dimOf(cold.idx));
+
+    // 自愈：按当前键 / 当前版本落盘，旧键被 prune
+    await waitFor(
+      () => seeded.map.has(v7key) && diskOf(seeded.map, v7key).version === SNAPSHOT_VERSION,
+    );
+    expect(seeded.map.has(v17key)).toBe(false);
+
+    // 第二轮：代际门不再咬人 ⇒ 纯热（零重扫、零读盘）
+    const mark = seeded.fs.log.length;
+    const thirdLogs: string[] = [];
+    const third = activate(seeded.fs.io, seeded.storage, thirdLogs);
+    openProject(third.bus);
+    await third.waitIndexed();
+    const r3 = readBreakdown(thirdLogs);
+    expect(r3.salvaged).toBe(0);
+    expect(r3.reused).toBe(2);
+    expect(r3.provenance).toBe(0);
+    expect(r3.refsRescan).toBe(0);
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 0, files: 0 });
   });
 
   it('触发面「单条目损坏」：坏 1 条只丢 1 条，其余照旧复用（改前是整份弃用、全树重读）', async () => {

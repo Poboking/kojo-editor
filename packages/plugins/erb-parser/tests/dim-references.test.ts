@@ -5,18 +5,18 @@
  * `.ERH`）上 ⇒ 答项目级；光标在**函数体内**的局部声明上 ⇒ 仍只答本文件（`#DIM` 在函数体
  * 里是调用栈局部，真语料 67.7% 的声明是这种，跨函数同名互不相干）。
  *
- * 本文件钉八件事（每条都能单独变红）：
+ * 本文件钉十件事（每条都能单独变红）：
  * 1. **建表**：全局声明名进 `index.dimReferences`，局部声明名**不进**（进了就会串味）；
  * 2. **切段尺子**：`BETA（系列）` 这类含全角括号的真名字能整段匹配（函数记号尺会劈开它）；
  * 3. **项目级作答**：`.ERH` 的声明行上按 Shift+F12 ⇒ 跨文件全部落点；
  * 4. **遮蔽在查询时判**：`@SUB` 里也 `#DIM` 了同名变量 ⇒ 那个函数体里的同名记号**不算**
  *    全局变量的引用（建索引时剔会把结论冻进快照，改回来还得靠重扫）；
- * 5. **局部不吃项目腿**：光标在局部声明上 ⇒ 只有本文件（不把别处同名全局变量算进来）；
+ * 5. **局部不吃项目腿**：光标在局部声明 / 局部提及上 ⇒ 只有本文件；
  * 6. **降级**：`index` 缺席 / `dimReferences` 未建 ⇒ 与加这一腿之前逐字等价（只看本文件）；
- * 7. **大小写**：形状门两端折叠，区间与 `normalizedUpper` 的 `[a-zａ-ｚ]` 逐字相同
- *    （`kojo_name`、`ｋｏｊｏ` 都得认，否则两条腿一起假阴）；
- * 8. **长度维**：`ß` 这类"大写会改长度"的码元不许过门——门按原文长度取键、名录里存
- *    大写名，两边对不上；那一段整个绕过门，交给名录裁决。
+ * 7. **大小写**：形状门两端与名录同一把折叠尺（`kojo_name`、`ｋｏｊｏ`、`αλφα` 都认）；
+ * 8. **长度维**：`ß` 这类"大写会改长度"的码元不许过门；
+ * 9. **提及位置可命中**：光标落在可见代码里的变量使用上，同样答项目级 / 本文件；
+ * 10. **不误报**：字符串内容、注释散文、成员访问、非 `#DIM` 记号一律取不到词 ⇒ 整腿弃权。
  */
 import { describe, expect, it } from 'vitest';
 import type {
@@ -30,7 +30,7 @@ import type {
 } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
 import { dimReferencesOf } from '../src/references';
-import { erbReferencesAt } from '../src/symbols';
+import { erbDimReferencesAt, erbReferencesAt } from '../src/symbols';
 import { makeComputeStub } from './support';
 
 const ROOT = 'D:/proj/dimrefs';
@@ -258,6 +258,31 @@ describe('大小写 · 形状门必须折大小写，否则假阴', () => {
     const { index } = await buildIndex(new Map([[ERH, { text: full, mtimeMs: 1 }]]));
     expect(at(dimReferencesOf(index, 'ＫＯＪＯ'))).toEqual(['DIM:2:1', 'DIM:4:10']);
   });
+
+  it('非拉丁小写（希腊）也折：名录用裸 `toUpperCase`，提及侧不许只折拉丁', async () => {
+    // 改之前 `normalizedUpper` 只认 `[a-zａ-ｚ]`：`αλφα` 原样回表，`has('ΑΛΦΑ')` 否掉；
+    // 形状门两端也只折那两段区间 ⇒ 两条腿一起哑。现在两者同读 `CASE_FOLD_CLASS`。
+    const erh = ['; 全局声明', '#DIM ΑΛΦΑ'].join('\n');
+    const a = ['@MAIN', '  PRINTL αλφα'].join('\n');
+    const { index } = await buildIndex(
+      new Map([
+        [ERH, { text: erh, mtimeMs: 1 }],
+        [A, { text: a, mtimeMs: 2 }],
+      ]),
+    );
+    expect(at(dimReferencesOf(index, 'ΑΛΦΑ'))).toEqual(['A:2:10', 'DIM:2:1']);
+  });
+
+  it('函数腿同一把尺：`@ΑΛΦΑ` 的定义被 `CALL αλφα` 提到也收得进 refs', async () => {
+    // 归一器住在 references.ts，函数腿与变量腿共用同一枚 `normalizedUpper`；
+    // 这条钉的是"没有在变量腿另造一把更强的尺子"（那会让两条腿分家）。
+    const a = ['@ΑΛΦΑ', '  RETURN', '@MAIN', '  CALL αλφα'].join('\n');
+    const { index } = await buildIndex(new Map([[A, { text: a, mtimeMs: 1 }]]));
+    // 只数"表里有这个键"是不够的：`@ΑΛΦΑ` 的定义行自己就会建出这个键。
+    // 要钉的是第 4 行 `CALL αλφα` 那处提及也被归一到同一枚键上。
+    const refs = index.references!.bySymbol.get('ΑΛΦΑ') ?? [];
+    expect(refs.some((r) => r.line === 4)).toBe(true);
+  });
 });
 
 describe('长度维 · 大写会改长度的码元（`ß` → `SS`）', () => {
@@ -277,9 +302,9 @@ describe('长度维 · 大写会改长度的码元（`ß` → `SS`）', () => {
     expect(at(dimReferencesOf(index, 'STRASSE'))).toEqual(['A:2:10', 'A:3:7', 'DIM:2:1']);
     // 声明行上按 Shift+F12 走同一条腿（`#DIM straße` 的名字从第 6 列起）
     expect(at(erbReferencesAt(index, erh, ERH, 2, 6))).toEqual(['A:2:10', 'A:3:7', 'DIM:2:1']);
-    // 反向恒真：**提及上不答**是刻意口径（见 `erbDimReferencesAt` 头注：任意变量位置上
-    // 按键会把字符串里的同名散文一起卷进来，误报比少答更坏）
-    expect(erbReferencesAt(index, a, A, 2, 10)).toEqual([]);
+    // 提及位置同样作答：光标落在第 2 行 `straße` 上（第 10 列），`dimNameRunAt` 取词
+    // ⇒ 归一到 `STRASSE` ⇒ 项目级落点（含 `ß` 的原文也认得）
+    expect(at(erbReferencesAt(index, a, A, 2, 10))).toEqual(['A:2:10', 'A:3:7', 'DIM:2:1']);
   });
 });
 
@@ -306,6 +331,60 @@ describe('查找引用 · 全局声明 ⇒ 项目级', () => {
   it('全角名字同一条腿作答（`BETA（系列）` 在 `.ERH` 声明、两处 `.ERB` 使用）', async () => {
     const { index } = await buildIndex(files());
     expect(at(erbReferencesAt(index, ERH_TEXT, ERH, 3, 6))).toEqual(['A:3:7', 'A:9:7', 'DIM:3:1']);
+  });
+});
+
+describe('查找引用 · 提及位置（收口批：不再整条弃权）', () => {
+  it('全局变量的提及上按 Shift+F12：与声明行同一份项目级答案', async () => {
+    const { index } = await buildIndex(files());
+    // B.ERB 第 2 行 `PRINTFORML KOJO_NAME` 的名字首列 = 14
+    expect(at(erbReferencesAt(index, B_TEXT, B, 2, 14))).toEqual(['A:2:10', 'B:2:14', 'DIM:2:1']);
+    // A.ERB 第 2 行同一枚全局名：`@SUB` 里那处局部提及仍被遮蔽剔掉
+    expect(at(erbReferencesAt(index, A_TEXT, A, 2, 10))).toEqual(['A:2:10', 'B:2:14', 'DIM:2:1']);
+  });
+
+  it('全角名字的提及同一条腿（`BETA（系列）` 第 3 行第 7 列）', async () => {
+    const { index } = await buildIndex(files());
+    expect(at(erbReferencesAt(index, A_TEXT, A, 3, 7))).toEqual(['A:3:7', 'A:9:7', 'DIM:3:1']);
+  });
+
+  it('被局部声明遮蔽的提及 ⇒ 退回本文件腿，不把全局落点算进来', async () => {
+    const { index } = await buildIndex(files());
+    // A.ERB 第 8 行在 `@SUB` 体内，那里局部 `#DIM KOJO_NAME`
+    const out = erbReferencesAt(index, A_TEXT, A, 8, 10);
+    expect(at(out)).toEqual(['A:2:10', 'A:7:8', 'A:8:10']);
+    expect(out.every((l) => l.filePath === A)).toBe(true);
+  });
+
+  it('没有索引时，提及位置仍答本文件（A 里有同名局部声明可证它是变量）', () => {
+    expect(at(erbDimReferencesAt(A_TEXT, 2, 10, A))).toEqual(['A:2:10', 'A:7:8', 'A:8:10']);
+  });
+
+  it('字符串内容 / 行内注释 / 整行注释里的同名散文一律取不到词', async () => {
+    const { index } = await buildIndex(files());
+    const text = [
+      '@MAIN',
+      '  PRINTL "KOJO_NAME 是散文"',
+      '  X = 1 ; KOJO_NAME 也是散文',
+      '; KOJO_NAME 整行注释',
+    ].join('\n');
+    // 取词走 `codeViewOf`：串体与行内 `;` 之后都被刷白，整行注释根本不进可见行
+    expect(erbDimReferencesAt(text, 2, 11, A, index)).toEqual([]);
+    expect(erbDimReferencesAt(text, 3, 11, A, index)).toEqual([]);
+    expect(erbDimReferencesAt(text, 4, 3, A, index)).toEqual([]);
+  });
+
+  it('成员访问 `FLAG:KOJO_NAME` 的成员名不算变量引用', async () => {
+    const { index } = await buildIndex(files());
+    const text = ['@MAIN', '  X = FLAG:KOJO_NAME'].join('\n');
+    // `  X = FLAG:` 共 11 个字符 ⇒ `KOJO_NAME` 从第 12 列起
+    expect(erbDimReferencesAt(text, 2, 12, A, index)).toEqual([]);
+  });
+
+  it('普通记号（不是 `#DIM` 名）整腿弃权，把光标让给函数腿', async () => {
+    const { index } = await buildIndex(files());
+    const text = ['@MAIN', '  PRINTL NOT_A_DIM'].join('\n');
+    expect(erbDimReferencesAt(text, 2, 10, A, index)).toEqual([]);
   });
 });
 

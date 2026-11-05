@@ -93,6 +93,7 @@ import {
   projectDeclaredNames,
 } from './dim-index';
 import {
+  REFS_FOLD_VERSION,
   SNAPSHOT_VERSION,
   aggregateIndex,
   attachRefs,
@@ -904,6 +905,17 @@ export function createErbParserPlugin(): Plugin {
          *   整段关掉，退回 PS-3 的全量溯源重扫；
          * - 摘要失配 + 候选命中差集 ⇒ 嫌疑坐实，重扫。
          */
+        /**
+         * 引用流水的**归一化器代际门**（v18 / `REFS_FOLD_VERSION`）。
+         *
+         * `snapshot.sourceVersion` 是**盘上**版本：当前键加载 = 18，salvage = 17 / 16 / …
+         * v17 及更早的 `refs` / `dimRefs` 是"只折拉丁小写"的 `normalizedUpper` 扫出来的，
+         * 含 `α` / `я` / 增平面小写的名字会静默缺边——复用它们等于把本批修的漏答留在盘上。
+         * 但**结构、定义、候选三样与归一器无关**，照旧 salvage；只把两条引用腿整树重扫
+         * 一次（与 v10 缺候选位同款保守侧），重扫后条目盖上当前名录摘要，下一轮纯热。
+         * 缺席 `sourceVersion` ⇒ 保守侧重扫，不许当成当前版本。
+         */
+        const refsFoldExact = snapshot === null || (snapshot.sourceVersion ?? 0) >= REFS_FOLD_VERSION;
         const provenanceToScan: string[] = [];
         const provenanceClean: string[] = [];
         let changed: ReadonlySet<string> | null = null;
@@ -928,13 +940,13 @@ export function createErbParserPlugin(): Plugin {
           for (const path of diff.reusable) {
             const e = snapshot.entries[path];
             if (e === undefined) continue;
-            if (refsAreReusable(e, namesFp)) {
+            if (refsFoldExact && refsAreReusable(e, namesFp)) {
               // refs 溯源相符：refs 必然正确。候选未知（v10 迁移）仍要扫一遍收候选——
               // 否则它永远答不了下一轮的免扫判据（每轮都白付重扫）
               if (e.candidateHashes === undefined) provenanceToScan.push(path);
               continue;
             }
-            if (changedHashes !== null && refsProvableUnchanged(e, changedHashes)) provenanceClean.push(path);
+            if (refsFoldExact && changedHashes !== null && refsProvableUnchanged(e, changedHashes)) provenanceClean.push(path);
             else provenanceToScan.push(path);
           }
         }
@@ -957,7 +969,7 @@ export function createErbParserPlugin(): Plugin {
          * 存量提及流水却少边——信封摘要就是为这一刻准备的（与 `namesFp` 同一条纪律）。
          * 判不符 ⇒ 整批 `dimRefs` 判作废，本轮对**全部可复用文件**重扫一遍（只付一次）。
          */
-        const dimRefsTrusted = snapshot !== null && snapshot.dimNamesFp === dimNamesFp;
+        const dimRefsTrusted = refsFoldExact && snapshot !== null && snapshot.dimNamesFp === dimNamesFp;
         const dimRescan: string[] = [];
         for (const path of diff.reusable) {
           if (dimRefsTrusted && snapshot!.entries[path]?.dimRefs !== undefined) continue;

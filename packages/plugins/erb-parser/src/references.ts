@@ -14,7 +14,7 @@ import type {
 import { isErbDialectPath, MODEL_TOKEN_CLASS, unicodeTokenAt } from '@kojo/plugin-api';
 import { splitEolLines } from '@kojo/plugin-api/eol';
 import type { ErbDimEntry } from './dim-index';
-import { detachString, erbCodePrefixLength, forEachDimNameRun } from './scanner';
+import { CASE_FOLD_CLASS, CASE_FOLD_CODE, detachString, erbCodePrefixLength, forEachDimNameRun } from './scanner';
 
 /**
  * 反向引用索引（H2 批，2026-10-15）：**谁提到了这个名字**。
@@ -217,12 +217,13 @@ function colonPrefixed(code: string, start: number): boolean {
  * {@link colonAdjacent} 刻意分开（理由见那一枚的注）。
  */
 function scanDimRuns(code: string, line: number, dims: DimNameScan): void {
-  forEachDimNameRun(code, (start, end, exact) => {
+  forEachDimNameRun(code, (start, end, exact, needsFold) => {
     // `exact === false`：这一段含"大写改长度"的码元，键的长度维与名录对不上 ⇒ 门不许用，
     // 直接耗一次 `toUpperCase` 让 `has` 裁决（宁可慢一趟，不许假阴）。
     if (exact && !dims.shapes.has(dimNameShapeKey(code, start, end))) return;
     if (colonPrefixed(code, start)) return;
-    const upper = normalizedUpper(code.slice(start, end));
+    // 切段那一趟已经逐码元算过 `needsFold`，归一入口收下它就不再扫第二遍。
+    const upper = normalizedUpper(code.slice(start, end), needsFold);
     if (!dims.has(upper)) return;
     dims.emit(upper, line, start + 1);
   });
@@ -298,24 +299,23 @@ function tokenCharLen(s: string, i: number, code: number): 0 | 1 | 2 {
   return bmpTokenChar(s, i, code);
 }
 
-/** `normalizedUpper` 的判据范围（ASCII 小写 + 全角小写；与它的正则逐字符同区间） */
-function hasLowerCodeUnit(code: number): boolean {
-  return (code >= 0x61 && code <= 0x7a) || (code >= 0xff41 && code <= 0xff5a);
-}
-
 /**
  * 逐记号遍历（`scanFileRefs` / `scanUndefinedCallTargets` 共用，单一真源）：
- * 对每段连续记号回调 `(start, end, hasLower)`（UTF-16 半开区间，与旧 `TOKEN_RE.exec` 的
+ * 对每段连续记号回调 `(start, end, needsFold)`（UTF-16 半开区间，与旧 `TOKEN_RE.exec` 的
  * `m.index` / `m.index + m[0].length` 同位）；回调返回 `false` 中止遍历
  * （对应旧循环的 `break`）。
  *
- * W7-G：`hasLower` 是遍历时**顺带**记下的"这段记号含不含 `[a-zａ-ｚ]`"——它正好是
- * `normalizedUpper` 里那条正则的同一判据（区间见 `hasLowerCodeUnit`），于是调用方
- * 能省掉"无小写就整段 toUpperCase"的那一遍全文扫描。判据仍只有 `normalizedUpper`
- * 一条（`hasLower === false` 时它的结果按定义就是原串；`true` 时仍交给它算），
- * 等长/逐条等价由差分用例钉死。
+ * W7-G：`needsFold` 是遍历时**顺带**记下的"这段记号里有没有码元会被大写化改动"，
+ * 判据与 `normalizedUpper` 是同一张表（`CASE_FOLD_CLASS`），于是调用方能省掉
+ * "无需折叠就整段 toUpperCase"的那一遍全文扫描。判据仍只有 `normalizedUpper` 一条
+ * （`needsFold === false` 时它的结果按定义就是原串；`true` 时仍交给它算）。
+ *
+ * 2026-11-05 收口：这里原来只认 `[a-zａ-ｚ]`，对 `α` / `я` / 增平面小写一律答 false，
+ * 而名录键是裸 `toUpperCase()` ⇒ 那些名字的引用点静默消失。现在**判据不放宽、也不收紧，
+ * 而是换成同一张折叠表**：名录与提及永远同判。高代理保守答 true（孤立码元问大小写
+ * 没有意义，交整串 `toUpperCase()` 裁决）。
  */
-function forEachToken(s: string, visit: (start: number, end: number, hasLower: boolean) => boolean | void): void {
+function forEachToken(s: string, visit: (start: number, end: number, needsFold: boolean) => boolean | void): void {
   const n = s.length;
   let i = 0;
   while (i < n) {
@@ -326,16 +326,16 @@ function forEachToken(s: string, visit: (start: number, end: number, hasLower: b
       continue;
     }
     const start = i;
-    let hasLower = hasLowerCodeUnit(startCode);
+    let needsFold = (startCode >= 0xd800 && startCode <= 0xdbff) || CASE_FOLD_CLASS[startCode] !== 1;
     i += len;
     while (i < n) {
       const code = s.charCodeAt(i);
       const next = tokenCharLen(s, i, code);
       if (next === 0) break;
-      if (!hasLower && hasLowerCodeUnit(code)) hasLower = true;
+      if (!needsFold && ((code >= 0xd800 && code <= 0xdbff) || CASE_FOLD_CLASS[code] !== 1)) needsFold = true;
       i += next;
     }
-    if (visit(start, i, hasLower) === false) return;
+    if (visit(start, i, needsFold) === false) return;
   }
 }
 
@@ -656,9 +656,29 @@ export function visibleCodeLineList(lines: readonly string[]): VisibleCodeLine[]
   return [...visibleCodeLinesOf(lines)];
 }
 
-/** 归一化快路径：无小写拉丁（半/全角）就不分配 toUpperCase 副本（412 万行的热路径）。 */
-export function normalizedUpper(run: string): string {
-  return /[a-zａ-ｚ]/.test(run) ? run.toUpperCase() : run;
+/**
+ * 归一化快路径：无需大写化就不分配 `toUpperCase` 副本（412 万行的热路径）。
+ *
+ * **语义严格等于 `run.toUpperCase()`**——判据读 `CASE_FOLD_CLASS`（表本身由
+ * `toUpperCase` 填出），不是手写的 Unicode 区间。旧实现只折 `[a-zａ-ｚ]`：名录键用裸
+ * `toUpperCase()`，提及侧却放过了 `α` / `я` / 增平面小写，于是这些名字的引用点
+ * 静默消失（PITFALLS 334 的第三处假阴）。现在两条腿共用同一张表，函数腿与变量腿
+ * 同时收口。
+ *
+ * `needsFold` 由**遍历那一趟**顺带算出（`forEachToken` / `forEachDimNameRun`，读同一张表）：
+ * 传了就直接用，不再把这一段的码元重扫一遍。真语料 913 万段上，这一枚可选参数就是
+ * "归一化保持单一入口"与"refs 段多付 10%"之间的分界。不传（arity / builtins / inlay-hints
+ * 这类查询期调用）⇒ 自己扫表，结果逐字相同。
+ */
+export function normalizedUpper(run: string, needsFold?: boolean): string {
+  if (needsFold === true) return run.toUpperCase();
+  if (needsFold === false) return run;
+  const n = run.length;
+  for (let i = 0; i < n; i++) {
+    const code = run.charCodeAt(i);
+    if ((code >= 0xd800 && code <= 0xdbff) || CASE_FOLD_CLASS[code] !== 1) return run.toUpperCase();
+  }
+  return run;
 }
 
 /**
@@ -709,27 +729,20 @@ export interface DimNameScan {
  * 对**码元**取键（`charCodeAt`）：代理对的名字两端各取到配对的那一半，与声明的名字
  * 用同一把尺子，故拼接结果一致。
  *
- * 两端各折一次大小写：`#DIM KOJO_NAME` 与代码里的 `kojo_name` 是同一个变量
- * （`normalizedUpper` 认这两段大小写），门若按原样比就会把后者整段否掉——那是**假阴**，
- * 而这一关的契约是"只许放过、不许误杀"。折叠区间与 `normalizedUpper` 的 `[a-zａ-ｚ]`
- * 逐字相同，两边因此永远同判。
+ * 两端折叠直接读 `CASE_FOLD_CODE`，即与 `normalizedUpper` / `needsFold` / `exact` **同一张
+ * 折叠表**：名录里的名字是归一化大写，代码里的提及可能是 `kojo_name`、`α`、`straße`，
+ * 门按原样比就会整段否掉——那是**假阴**，而这一关的契约是"只许放过、不许误杀"。
+ * 表由 `toUpperCase` 本身填出，所以不存在"折叠区间写漏一段"这种可能（旧实现内联了
+ * `[a-z]` / `[ａ-ｚ]` 两段区间，是 PITFALLS 334 的成因）。
  *
  * **长度维只在"大写不改长度"时成立**：`ß` → `SS`、连字 `ﬀ` → `FF` 会让名录里的大写名
- * 比原文长（BMP 里共 102 枚这类码元），键的长度就对不上。这一格不靠注释自律——切段那一趟
- * 已经知道段里有没有这种码元（`forEachDimNameRun` 的 `exact`），有就**整个绕过这道门**，
+ * 比原文长，键的长度就对不上。这一格不靠注释自律——切段那一趟已经知道段里有没有
+ * 这种码元（`forEachDimNameRun` 的 `exact`，同样读那张表的 `3` 类），有就**整个绕过这道门**，
  * 交给 `has` 裁决。所以本键的契约是：**只对 `exact === true` 的段用**。
- *
- * **折叠内联、不抽小函数**：这一枚每行调两次、真语料 913 万段，热点里少一次真调用总是更稳
- * （V8 内不内联小函数不由我们决定）。区间写法因此在这里重复两遍，**改动时必须两处一起改**，
- * 并回去核 `normalizedUpper` 的正则。
  */
 export function dimNameShapeKey(code: string, from: number, to: number): number {
-  let first = code.charCodeAt(from);
-  let last = code.charCodeAt(to - 1);
-  if (first >= 0x61 && first <= 0x7a) first -= 0x20;
-  else if (first >= 0xff41 && first <= 0xff5a) first -= 0x20;
-  if (last >= 0x61 && last <= 0x7a) last -= 0x20;
-  else if (last >= 0xff41 && last <= 0xff5a) last -= 0x20;
+  const first = CASE_FOLD_CODE[code.charCodeAt(from)]!;
+  const last = CASE_FOLD_CODE[code.charCodeAt(to - 1)]!;
   return first * 4294967296 + last * 65536 + (to - from);
 }
 
@@ -763,6 +776,40 @@ export function scanDimRefs(
   };
   for (const { line, codeView } of visibleCodeLines(text, window)) scanDimRuns(codeView(), line, sink);
   return out;
+}
+
+/**
+ * 光标列（0 基）→ 所在**变量名字段**（`erbDimReferencesAt` 在**提及**位置的取词判据）。
+ *
+ * 与 `scanDimRefs` / `scanFileNames` 共用同一条 `visibleCodeLines`（整行屏蔽与
+ * `[SKIPSTART]`）、同一份 `codeView()`（字符串与行内 `;` 刷白）、同一把
+ * `forEachDimNameRun` 变量切段尺、同一条 `colonPrefixed` 成员访问退让、同一枚
+ * `normalizedUpper`。所以"索引里记着的提及"与"光标取到的词"永远同形：
+ * 注释里的同名散文、字符串内容、成员名一律取不到词。
+ *
+ * 这条正面解决了 2026-11-05 首版把提及位置**整条弃权**的顾虑——当时担心"任意变量
+ * 位置上按键会把同名散文卷进来"，而可见代码视图本来就刷白了那些位置。少答不是判据，
+ * 看得见才答才是。贴着段尾后一格也算落在词上（与声明行 `nameStart + len` 同款）。
+ */
+export function dimNameRunAt(
+  text: string,
+  line: number,
+  col0: number,
+): { name: string; start: number; length: number } | null {
+  const at = Math.trunc(line);
+  if (!Number.isFinite(col0) || col0 < 0 || at < 1) return null;
+  let hit: { name: string; start: number; length: number } | null = null;
+  for (const { line: atLine, isDefinition, codeView } of visibleCodeLines(text, { from: at, to: at })) {
+    if (atLine !== at || isDefinition) continue;
+    const code = codeView();
+    forEachDimNameRun(code, (start, end, _exact, needsFold) => {
+      if (col0 < start || col0 > end) return;
+      if (colonPrefixed(code, start)) return;
+      const raw = code.slice(start, end);
+      hit = { name: normalizedUpper(raw, needsFold), start, length: end - start };
+    });
+  }
+  return hit;
 }
 
 export interface FileNameScanOptions {
@@ -821,13 +868,12 @@ export function scanFileNames(text: string, options: FileNameScanOptions): FileR
     // `楽譜最大数（シリーズ毎）` 这类真名字）。挂在同一趟行遍历上，省掉第二趟
     // `visibleCodeLines` 与又一次 `codeView()`。
     if (dims !== undefined) scanDimRuns(code, line, dims);
-    forEachToken(code, (start, end, hasLower) => {
+    forEachToken(code, (start, end, needsFold) => {
       const inSlot = !slotTaken && start >= keywordEnd;
       if (inSlot) slotTaken = true; // 槽位记号无论命不命中名字都被消耗
       const run = code.slice(start, end);
-      // 无小写 ⇒ `normalizedUpper` 按定义返回原串（省掉一次 toUpperCase 全文扫描）；
-      // 有小写仍交给 `normalizedUpper` 算，归一判据不在本函数里复述。
-      const upper = hasLower ? normalizedUpper(run) : run;
+      // 归一入口只有一个：`needsFold` 是遍历时按同一张表顺带算出的，不在这里复述判据。
+      const upper = normalizedUpper(run, needsFold);
 
       // 变量成员访问整体不算函数引用：`CFLAG:ALPHA` 两段都是变量世界（基名紧邻冒号，
       // 如 `ALPHA:CFLAG` 的 ALPHA，即便撞上函数名也不算提及）。判据单源 `colonAdjacent`。
@@ -887,14 +933,14 @@ export function scanUndefinedCallTargets(text: string, hasName: (upper: string) 
   for (const { line, raw, isCallLine, keywordEnd, codeView } of visibleCodeLines(text)) {
     if (!isCallLine) continue;
     const code = codeView();
-    forEachToken(code, (start, end, hasLower) => {
+    forEachToken(code, (start, end, needsFold) => {
       if (start < keywordEnd) return; // 关键字自身
       // 槽位 = 关键字后的第一个记号；与关键字之间只许空白 ⇒ 裸标识符
       if (!/^[\t \u3000]*$/.test(raw.slice(keywordEnd, start))) return false;
       const run = code.slice(start, end);
       // 成员访问占槽：整槽不算函数名，也不向后顺延（判据单源 `colonAdjacent`）
       if (colonAdjacent(code, start, end)) return false;
-      const upper = hasLower ? normalizedUpper(run) : run;
+      const upper = normalizedUpper(run, needsFold);
       if (!hasName(upper)) out.push({ line, column: start + 1, name: run });
       return false; // 一行至多一个名字槽
     });

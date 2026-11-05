@@ -6,6 +6,8 @@
  * - 同文件中文名定义命中**列位置**、修饰形（CONST / SAVEDATA / GLOBAL）、数组后缀；
  * - 注释 / 字符串内的同名记号 ⇒ 空数组（非变量位置，不猜）；
  * - 引用列表 = 声明行 + 声明行之外的 2 处（字符串 / 注释不计）；
+ * - 收口批（2026-11-05）：**提及位置同样可查**——取词（`dimNameRunAt`）与索引扫描同源，
+ *   声明名与代码里的使用处给同一份列表；字符串 / 注释 / 成员名仍取不到词；
  * - 路径归一（`String.raw` 的 Windows 反斜杠 vs 正斜杠大写）在合并去重时生效；
  * - provider 接线：F12 返回 `LocationLink`、Shift+F12 返回 `Location[]`，桩 model 无路径 ⇒ fail-open
  *   （LAU-DUALLEG 车 3 之后 ERB 的 `references` 由槽腿应答，宿主这一侧的接线判据就是落点通道
@@ -117,11 +119,27 @@ describe('#DIM 查找引用 · 只在本文件', () => {
     expect(out[0]!.span).toEqual({ columnStart: 8, columnEnd: 11 });
   });
 
-  it('光标不在声明名上 ⇒ 空数组（任意变量位置不猜引用）', () => {
-    expect(resolveErbDimReferences(TEXT, 7, 3, PATH)).toEqual([]); // 正文里的同名引用
+  it('光标在代码里的使用处 ⇒ 与声明行同一份引用列表（收口批：提及位置不再弃权）', () => {
+    // 2026-11-05 之前这条断言的是"任意变量位置不猜引用"；当时的顾虑是会把同名散文卷进来，
+    // 而 `codeViewOf` 本来就刷白了字符串与行内注释。现在取词走 `dimNameRunAt`（与索引扫描
+    // 共用可见代码视图 / 变量切段尺 / 成员访问退让），少答不再是防误报的手段。
+    const expected = { lines: [3, 7, 8], columns: [8, 3, 6], kinds: ['definition', 'mention', 'mention'] };
+    for (const [line, column] of [[7, 3], [8, 6]] as const) {
+      const out = resolveErbDimReferences(TEXT, line, column, PATH);
+      expect(out.map((l) => l.line)).toEqual(expected.lines);
+      expect(out.map((l) => l.column)).toEqual(expected.columns);
+      expect(out.map((l) => l.kind)).toEqual(expected.kinds);
+    }
+  });
+
+  it('仍取不到词的五个位置：关键字 / 越界 / 无路径 / 成员名 / 散文与注释', () => {
     expect(resolveErbDimReferences(TEXT, 3, 2, PATH)).toEqual([]); // `#DIM` 关键字上
-    expect(resolveErbDimReferences(TEXT, 999, 8, PATH)).toEqual([]);
-    expect(resolveErbDimReferences(TEXT, 3, 8, null)).toEqual([]);
+    expect(resolveErbDimReferences(TEXT, 999, 8, PATH)).toEqual([]); // 越界行
+    expect(resolveErbDimReferences(TEXT, 3, 8, null)).toEqual([]); // 路径缺席
+    expect(resolveErbDimReferences(TEXT, 9, 11, PATH)).toEqual([]); // PRINTL "好感度"
+    expect(resolveErbDimReferences(TEXT, 10, 5, PATH)).toEqual([]); // ; 好感度 只在注释里
+    const member = ['  #DIM 好感度', '  FLAG:好感度 = 1'].join('\n');
+    expect(resolveErbDimReferences(member, 2, 8, PATH)).toEqual([]); // `FLAG:` 的成员名
   });
 
   it('成员访问（`FLAG:好感度`）不算变量引用', () => {

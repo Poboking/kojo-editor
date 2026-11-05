@@ -1628,10 +1628,24 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       （`scanDimRuns` 用旗子 + 键注写清长度维的前提），求和 **+1,590**，与读数
     //       **3,699,859 → 3,701,449 B** 逐字节相等。⇒ KB 闸 **3,613 → 3,615**（红沿
     //       3,702,784 B，机械余量 **1,335 B**）。文件闸 197 仍不动。
+    //     · **收口批（2026-11-05，同日）**：三处被写成"留给下一批"的口径一次做完——
+    //       ① 归一化器从"只折 `[a-zａ-ｚ]`"收口成严格等于 `toUpperCase()`（函数腿同受益），
+    //       ② 提及位置也能按 Shift+F12（`dimNameRunAt` 与索引扫描同源），
+    //       ③ 快照 v17 → v18 代际门 + 真语料迁移读数。读数 **197 文件 / 3,624 KB · 3,711,004 B**
+    //       （对照上一批终树 **3,701,449 B**，本批 **+9,555 B**，零新进图文件）。
+    //     · 逐枚归因（当前树 `statSync` vs `git cat-file -s 04e5975b:…`，**五枚求和 = 总差
+    //       逐字节相等**）：`references.ts` **+2,788**（`CASE_FOLD_*` 消费、`dimNameRunAt`、
+    //       `normalizedUpper` 可选 flag、形状门读表）、`snapshot.ts` **+2,128**（v18 头注、
+    //       `REFS_FOLD_VERSION`、`sourceVersion` 两处装配、准入表 `[18]`）、
+    //       `symbols.ts` **+1,850**（两条入口判据 + 提及取词 + 名录闸）、
+    //       `scanner.ts` **+1,825**（预填表 + `DIM_NAME_CLASS` 四值 + `needsFold`）、
+    //       `plugin.ts` **+964**（代际门三处短路）。测试文件 +15,802 B 不进图。
+    //     · 形态不变，仍是常驻判据面。⇒ KB 闸 **3,615 → 3,624**（红沿 3,712,000 B，
+    //       机械余量 **996 B**——按读数贴闸，下一枚进图字节**必须先出图**）。文件闸 197 不动。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤197 文件 / ≤3,615 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤197 文件 / ≤3,624 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_615);
+    expect(totalKb).toBeLessThanOrEqual(3_624);
     expect(files.length).toBeLessThanOrEqual(197);
   });
 

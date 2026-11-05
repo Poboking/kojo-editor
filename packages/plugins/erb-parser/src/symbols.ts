@@ -33,6 +33,7 @@ import {
 import { isErbDimNameChar, parseDimDeclaration, parseErbText, parseLabelDefinition } from './scanner';
 import {
   codeViewOf,
+  dimNameRunAt,
   dimReferencesOf,
   erbReferenceLocationsAt,
   dimNameShapesOf,
@@ -661,38 +662,46 @@ function shadowedDimMentionAt(index: ErbIndex, filePath: string, line: number, n
 }
 
 /**
- * 光标所在的**全局**声明 → 项目级出现点全集；返回 `null` = "这一腿不答"（调用方退回本文件）。
+ * 光标所在的**全局**变量 → 项目级出现点全集；返回 `null` = "这一腿不答"（调用方退回本文件）。
  *
- * 三条弃权条件，都落在 `null`：
- * 1. 没有索引 / 没有 `dimReferences`（未建、或增量更新后待修复）——降级为 2026-11-05 之前的
- *    "只看本文件"，而不是给一个空答案；
- * 2. 名字不在表里（局部声明天然不在——表只收全局名）；
- * 3. 光标那一行**不是**这张表记着的声明点（作者刚加的 `#DIM` 还没进索引 / 光标在别处声明）。
+ * 两条入口，判据不同但都不引入第二套作用域口径：
+ * - `definition`：光标在 `#DIM` 声明行的名字上 ⇒ 要求**这一行正是索引记着的全局声明点**。
+ *   函数体内的局部 `#DIM` 不进表；同名全局变量存在时也不能把它的落点算到局部变量头上。
+ * - `mention`：光标在可见代码里的变量提及上 ⇒ 要求这一处**没被同文件函数内的局部声明
+ *   遮蔽**（`shadowedDimMentionAt`）；遮蔽了就说明光标指的是局部变量，退回本文件腿。
  *
- * 第 3 条是这一腿唯一需要的"作用域判定"，而它**不引入第二套判据**：全局与否正是索引自己
- * 记下的事实（`dim-index.ts` 从 `files[].functions` 派生，函数体内的声明根本不进表）。
- * 若改用"向下扫最近的 `@` 行"之类文本判据，就多出一份可能和索引打架的作用域口径——
- * 一旦打架，表现是"引用面板列出别处的同名变量"或"只列本文件"，两种都难复现。
+ * 两条共同弃权（都落 `null`）：没有索引 / 没有 `dimReferences`（未建、或增量更新后待修复）
+ * ⇒ 降级为 2026-11-05 之前的"只看本文件"，而不是给一个空答案；名字不在表里（局部声明
+ * 天然不在——表只收全局名）⇒ 同上。
+ *
+ * 全局与否正是索引自己记下的事实（`dim-index.ts` 从 `files[].functions` 派生，函数体内的
+ * 声明根本不进表）。若改用"向下扫最近的 `@` 行"之类文本判据，就多出一份可能和索引打架
+ * 的作用域口径——一旦打架，表现是"引用面板列出别处的同名变量"或"只列本文件"，两种都难复现。
  */
 function projectDimReferencesAt(
   index: ErbIndex | null | undefined,
   filePath: string,
   line: number,
   name: string,
+  entry: 'definition' | 'mention',
 ): EditorSymbolLocation[] | null {
   if (index === null || index === undefined) return null;
   const refs = dimReferencesOf(index, name);
   if (refs.length === 0) return null;
   const atLine = Math.trunc(line);
-  const key = normalizePathKey(filePath);
-  let declaredHere = false;
-  for (const ref of refs) {
-    if (ref.kind !== 'definition' || ref.line !== atLine) continue;
-    if (normalizePathKey(ref.filePath) !== key) continue;
-    declaredHere = true;
-    break;
+  if (entry === 'definition') {
+    const key = normalizePathKey(filePath);
+    let declaredHere = false;
+    for (const ref of refs) {
+      if (ref.kind !== 'definition' || ref.line !== atLine) continue;
+      if (normalizePathKey(ref.filePath) !== key) continue;
+      declaredHere = true;
+      break;
+    }
+    if (!declaredHere) return null;
+  } else if (shadowedDimMentionAt(index, filePath, atLine, name)) {
+    return null;
   }
-  if (!declaredHere) return null;
 
   const out: EditorSymbolLocation[] = [];
   for (const ref of refs) {
@@ -715,19 +724,26 @@ function projectDimReferencesAt(
 }
 
 /**
- * `#DIM` 声明名上的查找引用（Shift+F12）。
+ * `#DIM` 声明族名字上的查找引用（Shift+F12）——**声明行与提及位置都可命中**。
  *
- * 命中前提（严格）：光标必须落在**声明行**的名字上——这是唯一可证明的入口（任意变量位置上
- * 按 Shift+F12 会把同名散文 / 成员名一起卷进来，误报比少答更坏）。声明行自身算
- * `definition`，其余同记号出现算 `mention`；成员访问（`FLAG:名字`）不算变量引用。
- * 大小写按 `toUpperCase()` 归一（与 `dimDeclarationsOf` 同一把尺子），全角字符原样参与比较。
+ * 取词只有两处、且不各写一份判据：
+ * - 声明行：解析器的 `dimDeclarationOf`（列精确到名字首列）；
+ * - 其余位置：`dimNameRunAt`（`references.ts`，与索引扫描共用同一条可见代码视图与
+ *   变量切段尺）。字符串内容、注释、`[SKIPSTART]` 区、成员访问（`FLAG:名字`）一律
+ *   取不到词 ⇒ 不误报。首版把提及位置整条弃权是基于"会卷进同名散文"的顾虑，
+ *   而 `codeViewOf` 本来就刷白了那些位置——少答不是判据，看得见才答才是。
+ *
+ * 只答"确实是 `#DIM` 声明过的名字"：本文件声明（含函数内局部）或项目全局表里有，
+ * 否则整腿弃权，把光标让给函数腿——这是不把普通关键字 / 函数名卷进来的那道闸。
+ * 大小写按 `toUpperCase()` 归一（与 `dimDeclarationsOf`、`normalizedUpper` 同一把尺子）。
  *
  * **两条腿**（2026-11-05 项目级索引批）：
- * - 光标那一行是**全局**声明（文件顶层 / `.ERH`）且索引里建好了 `dimReferences` ⇒ 答项目级
- *   （跨文件全部落点，按 {@link projectDimReferencesAt} 的判据）；
- * - 否则（局部声明 / 没索引 / 索引还没建好）⇒ 本文件逐行，**与加这一腿之前逐字等价**。
+ * - 全局声明 / 未被遮蔽的全局提及，且索引里建好了 `dimReferences` ⇒ 答项目级
+ *   （跨文件全部落点，按 {@link projectDimReferencesAt} 的两条入口判据）；
+ * - 否则（局部声明 / 局部提及 / 没索引 / 索引还没建好）⇒ 本文件逐行，
+ *   **与加这一腿之前逐字等价**。
  *
- * 为什么局部声明不跨文件：`#DIM` 在函数体内是调用栈局部的（真语料 67.7% 的声明都是这种），
+ * 为什么局部变量不跨文件：`#DIM` 在函数体内是调用栈局部的（真语料 67.7% 的声明都是这种），
  * 跨函数同名互不相干——把它当项目级名字，A 函数的局部变量就会被算到 B 头上。
  *
  * `index` 是可选参数（与 `resolveErbDimDefinition` 同形）：不传 ⇒ 老行为，老调用方零感知。
@@ -741,15 +757,33 @@ export function erbDimReferencesAt(
 ): EditorSymbolLocation[] {
   if (!filePath || !isErbDefinitionPath(filePath)) return [];
   if (!Number.isFinite(line) || !Number.isFinite(column)) return [];
-  const lineText = linesOf(text)[Math.trunc(line) - 1];
+  const atLine = Math.trunc(line);
+  const lineText = linesOf(text)[atLine - 1];
   if (lineText === undefined) return [];
-  const decl = dimDeclarationOf(lineText);
-  if (!decl) return [];
   const col0 = Math.trunc(column) - 1;
+
+  // ① 取词：声明行走解析器口径；其余走可见代码视图里的变量段（与索引同一把尺）
+  const decl = dimDeclarationOf(lineText);
+  let want: string;
+  let entry: 'definition' | 'mention';
   // Monaco 的光标是"字符之间"：名字末尾那一列（nameStart + len）也算落在名字上
-  if (col0 < decl.nameStart || col0 > decl.nameStart + decl.name.length) return [];
-  const want = decl.name.toUpperCase();
-  const project = projectDimReferencesAt(index, filePath, line, want);
+  if (decl !== null && col0 >= decl.nameStart && col0 <= decl.nameStart + decl.name.length) {
+    want = decl.name.toUpperCase();
+    entry = 'definition';
+  } else {
+    const run = dimNameRunAt(text, atLine, col0);
+    if (run === null) return [];
+    want = run.name;
+    entry = 'mention';
+  }
+
+  // ② 只有 #DIM 声明过的名字才归变量腿（本文件含局部 / 项目全局表），否则让给函数腿
+  const declaredHere = dimDeclarationsOf(text).some(({ dim }) => dim.name.toUpperCase() === want);
+  const inProject = index !== null && index !== undefined && dimReferencesOf(index, want).length > 0;
+  if (!declaredHere && !inProject) return [];
+
+  // ③ 项目级优先；弃权则退回本文件腿（与 2026-11-05 之前逐字等价）
+  const project = projectDimReferencesAt(index, filePath, atLine, want, entry);
   if (project !== null) return project;
   const out: EditorSymbolLocation[] = [];
   const seen = new Set<string>();

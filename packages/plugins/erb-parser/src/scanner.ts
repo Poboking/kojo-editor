@@ -318,31 +318,55 @@ export function isErbDimNameChar(ch: string | undefined): boolean {
 }
 
 /**
- * 码元 → 名字字符分类的**备忘表**（`0` = 未算，`1` = 名字字符，`2` = 分隔，
- * `3` = 名字字符但**大写会改长度**）。
+ * 码元 → `toUpperCase` 折叠的**预计算表**（BMP 全表，模块加载时一次算好）：
+ * `CASE_FOLD_CLASS[code]` = `1` 不变 / `2` 等长改变 / `3` 改长度；
+ * `CASE_FOLD_CODE[code]` = 折叠后的码元（`2` 类是大写码元，其余是原码元）。
  *
- * 与 `references.ts` 的 `BMP_TOKEN_CLASS`（W7-G）是同一个成例、同一条纪律：
- * **表是 {@link isErbDimNameCode} 的备忘，不是第二判据**——填表那一格调的就是它。
- * `3` 那一位不参与切段判据，只回答"这一段能不能过形状门"：`ß` → `SS`、连字
- * `ﬀ` → `FF` 这类映射会改长度（BMP 里共 102 枚），而形状键的长度维取的是**原文**
- * 长度，与名录里那张大写名对不上 ⇒ 那一段的键不许当判据（见 `forEachDimNameRun`）。
+ * **归一化判据的唯一真源**：名录键来自裸 `toUpperCase()`，提及侧为省一次全文大写化
+ * 走快路径。四条消费路径——`normalizedUpper`、`forEachToken` 的 `needsFold`、
+ * `dimNameShapeKey` 的两端、`forEachDimNameRun` 的 `exact`——全读这一张表，
+ * "名录一把尺、提及另一把尺"的静默漏答因此不可能发生（PITFALLS 334）。
+ * 表由 `String.prototype.toUpperCase` 本身填出，不手写任何 Unicode 区间。
  *
- * 为什么需要：项目级变量引用要按名字字符切**每一行可见代码**（真语料 339 万行）。
- * 真语料 366,032 行实测，逐码元函数调用（`Number.isFinite` + 两段分支）**256 ms**，
- * 直接读表 **119 ms**（−53.5%）——那点判据开销乘上千万级码元就是可观测的量级。
- * 全 BMP 一张 `Uint8Array` = 64 KB，一次性常驻（同一个进程里同一码元只问判据一遍）。
+ * 为什么预填而不是惰性：真语料 913 万段，每段的两端与每个码元都要问一次；
+ * 惰性填表（每码元一次函数调用 + `cls === 0` 分支）实测把 refs 段拖慢约两成
+ * （同一时段 A/B）。65536 次 `toUpperCase` 只在进程起来时付一次，之后全是纯表查。
+ * 两张表是**只读数据面**，唯一写入点就是下面这个立即执行的填充循环。
+ */
+export const CASE_FOLD_CLASS = new Uint8Array(0x10000);
+export const CASE_FOLD_CODE = new Uint16Array(0x10000);
+for (let code = 0; code < 0x10000; code++) {
+  const ch = String.fromCharCode(code);
+  const upper = ch.toUpperCase();
+  const cls = upper === ch ? 1 : upper.length === 1 ? 2 : 3;
+  CASE_FOLD_CLASS[code] = cls;
+  CASE_FOLD_CODE[code] = cls === 2 ? upper.charCodeAt(0) : code;
+}
+
+/**
+ * 码元 → **名字字符 ∨ 大写折叠**的合并备忘表：`0` 未算 / `1` 名字字符且大写不变 /
+ * `2` 分隔 / `3` 名字字符但大写改长度 / `4` 名字字符且等长大写折叠。
+ *
+ * 与 `references.ts` 的 `BMP_TOKEN_CLASS`（W7-G）同一个成例：`1`/`2` 是
+ * {@link isErbDimNameCode} 的备忘（填表那一格调的就是它），`3`/`4` 这一位读
+ * {@link CASE_FOLD_CLASS}——两处都是备忘，没有第二判据。合并成一张表是为了
+ * `forEachDimNameRun` **每码元只查一次**就能同时得到"要不要切段""形状门能不能用"
+ * "要不要 toUpperCase"三件事（真语料 339 万行 / 913 万段）。
+ *
+ * `3` 不参与切段，只回答"这一段能不能过形状门"（长度维取原文、名录里存大写名，
+ * 见 `forEachDimNameRun`）。为什么需要表：真语料 366,032 行实测，逐码元函数调用
+ * **256 ms**，直接读表 **119 ms**（−53.5%）；全 BMP 一张 `Uint8Array` = 64 KB 常驻。
  */
 const DIM_NAME_CLASS = new Uint8Array(0x10000);
 
 /** 填表并作答（冷码元走这里；热码元由调用方直接读 {@link DIM_NAME_CLASS}） */
-function dimNameClassAt(code: number): 1 | 2 | 3 {
+function dimNameClassAt(code: number): 1 | 2 | 3 | 4 {
   if (!isErbDimNameCode(code)) {
     DIM_NAME_CLASS[code] = 2;
     return 2;
   }
-  // 单码元的 `toUpperCase` 会不会变长：JS 的默认全量大小写映射里，变长只来自
-  // **单个字符**的展开（`ß`→`SS`、连字、`ŉ`、`ΐ`），没有"整串才有"的情形。
-  const cls = String.fromCharCode(code).toUpperCase().length > 1 ? 3 : 1;
+  const fold = CASE_FOLD_CLASS[code];
+  const cls = fold === 3 ? 3 : fold === 2 ? 4 : 1;
   DIM_NAME_CLASS[code] = cls;
   return cls;
 }
@@ -364,8 +388,16 @@ function dimNameClassAt(code: number): 1 | 2 | 3 {
  * 这枚旗子是**判据的一部分**（不是优化开关）：漏报 `false` 会让形状门静默否掉
  * 一个真名字（真语料 4,831 份文件里这类码元只在 1 份乱码补丁里出现 7 次，
  * 声明行 0 次——但它是合法输入，不许靠"语料里没有"成立）。
+ *
+ * `needsFold` = 这段要不要过 `toUpperCase`：同样在这一趟里顺带累加，读的是**同一张
+ * `CASE_FOLD_CLASS` 表**。`normalizedUpper` 收下它就不再扫第二遍——真语料 913 万段，
+ * 省下的正是"每个码元再问一次"的那 10% 量级。高代理保守答 true（孤立码元问大小写
+ * 没有意义，交整串 `toUpperCase()` 裁决）。
  */
-export function forEachDimNameRun(code: string, visit: (start: number, end: number, exact: boolean) => void): void {
+export function forEachDimNameRun(
+  code: string,
+  visit: (start: number, end: number, exact: boolean, needsFold: boolean) => void,
+): void {
   const n = code.length;
   let i = 0;
   while (i < n) {
@@ -378,6 +410,7 @@ export function forEachDimNameRun(code: string, visit: (start: number, end: numb
     }
     const start = i;
     let exact = cls !== 3;
+    let needsFold = cls !== 1 || (c0 >= 0xd800 && c0 <= 0xdbff);
     i++;
     while (i < n) {
       const c = code.charCodeAt(i);
@@ -385,9 +418,10 @@ export function forEachDimNameRun(code: string, visit: (start: number, end: numb
       if (next === 0) next = dimNameClassAt(c);
       if (next === 2) break;
       if (next === 3) exact = false;
+      if (next !== 1 || (c >= 0xd800 && c <= 0xdbff)) needsFold = true;
       i++;
     }
-    visit(start, i, exact);
+    visit(start, i, exact, needsFold);
   }
 }
 
