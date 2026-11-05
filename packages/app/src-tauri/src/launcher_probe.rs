@@ -615,6 +615,12 @@ fn fixture_env_dump(dir: &Path) {
     let mut body = String::new();
     let all: BTreeMap<String, String> = std::env::vars().collect();
     body.push_str(&format!("COUNT={}\n", all.len()));
+    // 诊断位：把变量名全列出。`env_clear()` / 手拼 env 块之后 Windows 仍会补若干系统项，
+    // 只报 COUNT 看不出多出来的是谁（Q5/Q5b 在不同宿主上 COUNT 会漂）。
+    body.push_str(&format!(
+        "NAMES={}\n",
+        all.keys().cloned().collect::<Vec<_>>().join(",")
+    ));
     for key in ["HTTP_PROXY", "PATH", "KOJO_PROBE_CUSTOM", "SystemRoot"] {
         let (present, value) = match all.get(key) {
             Some(v) => ("present", v.clone()),
@@ -1932,8 +1938,8 @@ fn q5_env_whitelist_and_suspended_combo() {
         "对照组必须能看见宿主设的 HTTP_PROXY: {}",
         env_field(&inherited, "HTTP_PROXY")
     );
-    // 白名单档：只剩 4 个（3 个显式 + KOJO_PROBE_DIR 也算显式；ROLE 亦显式）
-    assert_eq!(cleared_count, 4, "env_clear 后应恰有 4 个变量: {cleared}");
+    // 白名单档：只允许四枚显式变量（+ 宿主运行时在创建层强注的旁带项，见 assert_cleared_env_keys）
+    assert_cleared_env_keys(&cleared, "Q5 白名单档");
     assert!(
         env_field(&cleared, "HTTP_PROXY").starts_with("absent"),
         "env_clear 后 HTTP_PROXY 必须不可见: {}",
@@ -1961,6 +1967,57 @@ fn env_count(dump: &str) -> usize {
         .find_map(|l| l.strip_prefix("COUNT="))
         .and_then(|v| v.parse().ok())
         .unwrap_or(0)
+}
+
+/// 从 `fixture_env_dump` 的 `NAMES=` 行取回**全部**变量名（变量名不含逗号 / 换行，无需反转义）。
+fn env_names(dump: &str) -> Vec<&str> {
+    dump.lines()
+        .find_map(|l| l.strip_prefix("NAMES="))
+        .map(|v| v.split(',').filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default()
+}
+
+/**
+ * Q5 / Q5b 共用判据：`env_clear()`（或 `RawChild::create` 手拼 env 块）之后，子进程只看得见
+ * 四枚白名单变量 **加上宿主运行时在 CreateProcessW 层强注的旁带项**。
+ *
+ * CI 裸 runner 上后者一个都没有 ⇒ 恰好 4 枚；WorkBuddy 的 LSBOX 沙箱会在**进程创建层**
+ * 强注四枚 IPC / 共享内存变量（既不是继承，也不是 `env_clear` 漏挡——手拼裸 env 块同样
+ * 8 枚，两条路都试过）。这不是产品缺陷，但本机 `--release` 闸门会因此红两项。
+ *
+ * 判据**不放宽成 `≤ N`**：白名单与宿主注入项都逐项点名，多出任何一枚未知变量立刻红，
+ * 逼着来人归因，而不是把「宿主环境没漏进来」这条安全结论悄悄稀释掉。
+ * 核心语义断言（`HTTP_PROXY` / `SystemRoot` absent、`PATH` 原样）仍留在各自测试里。
+ */
+fn assert_cleared_env_keys(dump: &str, label: &str) {
+    const WHITELIST: &[&str] = &["PATH", "KOJO_PROBE_CUSTOM", ROLE_ENV, DIR_ENV];
+    const HOST_INJECTED: &[&str] = &[
+        "LSBOX_AUDIT_SHMEM",
+        "LSBOX_SHMEM_NAME",
+        "SANDBOX_IPC_TRACE_PARENT",
+        "SANDBOX_IPC_TRACE_SESSION",
+    ];
+    let names = env_names(dump);
+    for key in WHITELIST {
+        assert!(
+            names.contains(key),
+            "{label}: 白名单变量 {key} 缺席: {dump}"
+        );
+    }
+    let unknown: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|n| !WHITELIST.contains(n) && !HOST_INJECTED.contains(n))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "{label}: env_clear 之后仍漏进未知宿主变量 {unknown:?}: {dump}"
+    );
+    assert_eq!(
+        env_count(dump),
+        names.len(),
+        "{label}: COUNT 与 NAMES 行数不一致: {dump}"
+    );
 }
 
 fn env_field(dump: &str, key: &str) -> String {
@@ -2000,7 +2057,7 @@ fn q5b_env_block_built_by_hand() {
     );
     assert!(saw, "手拼 env 块的子进程必须落盘");
     assert_eq!(code, Some(0), "子进程退出码必须是 0");
-    assert_eq!(env_count(&dump), 4, "手拼 env 块应恰有 4 个变量: {dump}");
+    assert_cleared_env_keys(&dump, "Q5b 手拼 env 块");
     assert!(env_field(&dump, "HTTP_PROXY").starts_with("absent"));
     assert!(env_field(&dump, "PATH").starts_with("present\tC:\\\\Windows\\\\System32"));
 }

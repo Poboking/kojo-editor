@@ -23,6 +23,15 @@ import {
   type PackUpdateCheck,
 } from '@kojo/plugin-api';
 
+/**
+ * 码元序比较——库内统一口径（见 `app/src/ui/commands.ts::byCodePoint` 与
+ * `app/src/ui/file-tree-model.ts` 头注）：**不用 `localeCompare`**。
+ * 中文顺序会随宿主 ICU / 区域设置漂：开发机 zh-CN 按拼音排、CI 的 en-US 退回码点排，
+ * 同一份市场清单在两台机器上排出两种顺序，键盘行导航与 `rows[0]` 断言必有一边红。
+ * 本文件在 ui-* 插件层，不跨包依赖 app 层（解耦审计 A–D），就地同口径实现一份。
+ */
+const byCodePoint = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+
 /** 种类的人读名（`kojo-pack` → 口上包） */
 export const KIND_LABEL: Record<PackKind, string> = {
   'kojo-pack': '口上包',
@@ -613,7 +622,7 @@ export function buildGroups(
           action: rowAction(appOk, update),
         };
       })
-      .sort((a, b) => a.entry.name.localeCompare(b.entry.name) || a.entry.id.localeCompare(b.entry.id));
+      .sort((a, b) => byCodePoint(a.entry.name, b.entry.name) || byCodePoint(a.entry.id, b.entry.id));
     if (rows.length > 0) out.push({ kind, label: KIND_LABEL[kind], rows });
   }
   return out;
@@ -634,15 +643,15 @@ export interface InstalledRow {
   readonly canImport: boolean;
 }
 
-/** 已安装列表（按种类顺序 + 包名；`containerSha256` 缺省即"本机文件夹装的"） */
+/** 已安装列表（按种类顺序 + 包名码元序；`containerSha256` 缺省即"本机文件夹装的"） */
 export function buildInstalledRows(list: readonly InstalledPack[]): InstalledRow[] {
   const order = new Map<string, number>(MARKET_PACK_KINDS.map((k, i) => [k, i]));
   return [...list]
     .sort(
       (a, b) =>
         (order.get(a.kind) ?? 99) - (order.get(b.kind) ?? 99) ||
-        a.name.localeCompare(b.name) ||
-        a.version.localeCompare(b.version),
+        byCodePoint(a.name, b.name) ||
+        byCodePoint(a.version, b.version),
     )
     .map((rec) => ({
       rec,

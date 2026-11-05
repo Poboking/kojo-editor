@@ -210,7 +210,10 @@ describe('索引分组与过滤', () => {
   it('按契约的种类顺序分组，组内按包名排；空组不占位', () => {
     const gs = buildGroups(packs, '0.4.0-beta.1', '', []);
     expect(kindsOf(gs)).toEqual(['kojo-pack', 'dict-pack', 'template-pack']);
-    expect(gs[0]!.rows.map((r) => r.entry.name)).toEqual(['乙包', '甲包'].sort((a, b) => a.localeCompare(b)));
+    // 组内按包名**码元序**：库内统一口径，不用 localeCompare（中文顺序随宿主 ICU 漂）。
+    expect(gs[0]!.rows.map((r) => r.entry.name)).toEqual(
+      ['乙包', '甲包'].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    );
     expect(gs[0]!.label).toBe('口上包');
   });
 
@@ -438,6 +441,16 @@ describe('已装列表', () => {
     expect(rows[0]!.sourceLabel).toBe('本机文件夹');
     expect(rows[1]!.sourceLabel).toBe('压缩包');
     expect(rows.map((r) => r.kindLabel)).toEqual(['口上包', '字典包']);
+  });
+
+  it('中文包名按码元序钉死：同一份清单在 zh-CN 开发机与 en-US CI 上必须同序', () => {
+    const names = ['演示口上包', '乙包', '甲包'];
+    const rows = buildInstalledRows(names.map((name, i) => rec({ id: `p${i}.pack`, name })));
+    // 旧实现用 `localeCompare` 默认区域：zh-CN 按拼音排成 甲→演示→乙，
+    // en-US 退回码点排成 乙→演示→甲 ⇒ CI 的 `rows[0]` 断言稳定红。判据只认码元序。
+    expect(rows.map((r) => r.rec.name)).toEqual(
+      [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+    );
   });
 
   it('空列表 ⇒ 空数组（由面板给一句"本机还没有装好的包"）', () => {

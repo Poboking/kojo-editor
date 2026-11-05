@@ -32,8 +32,19 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      # tree-sitter-cli 的 postinstall 要从 GitHub Releases 下载二进制，偶发 504
+      # （2026-11-05 dev CI 实测一次：status 504 / x-github-edge-region: iad）。
+      # pnpm install 幂等 ⇒ 失败后最多重试两轮，不让一次边缘节点超时判整辆 CI 红。
       - name: Install dependencies
-        run: pnpm install
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            pnpm install
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "pnpm install failed (attempt $attempt/3), retrying in 10s..."
+            Start-Sleep -Seconds 10
+          }
+          exit 1
 
       # 无游戏目录 → 真实工程集成冒烟/金样本自动跳过（describe.skipIf）
       # 两池必须分开跑：功能用例吃满并行池，墙钟计时用例挤进同一池会互相饿死（CI 随机红的根因）。

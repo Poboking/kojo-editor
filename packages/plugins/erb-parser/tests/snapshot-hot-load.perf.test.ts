@@ -151,11 +151,12 @@ function decodeEntriesEager(raw: Record<string, unknown>): Record<string, Snapsh
   const interner = createNameInterner();
   for (const [path, value] of Object.entries(raw)) {
     const t = value as unknown[];
-    // v7 起条目是 10 位（第 10 位 = refs 名录摘要）、v11 起 11 位（第 11 位 = 候选记号集）；
-    // before 参照实现只认到第 9 位为止的字段，多出来的溯源/候选位一律忽略——否则 A/B 里混进
-    // "元组 arity 差异"，量到的就不是"急 vs 懒"
+    // v7 起 10 位（refs 名录摘要）、v11 起 11 位（候选记号集）、v17 起 **12 位**
+    // （`dimRefs` 全局变量提及流水；`SNAPSHOT_VERSION` 18 即此形状）。before 参照实现只认到
+    // 第 9 位为止的字段，多出来的溯源/候选/变量提及位一律忽略——否则 A/B 里混进
+    // "元组 arity 差异"，量到的就不是"急 vs 懒"，而是整条基准直接死在 `return null`。
     if (
-      (t.length !== 9 && t.length !== 10 && t.length !== 11) ||
+      (t.length !== 9 && t.length !== 10 && t.length !== 11 && t.length !== 12) ||
       (t[0] !== null && typeof t[0] !== 'number') ||
       (t[1] !== null && typeof t[1] !== 'number') ||
       typeof t[2] !== 'number' ||

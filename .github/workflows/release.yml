@@ -40,8 +40,18 @@ jobs:
           workspaces: |
             packages/app/src-tauri -> target
 
+      # 同 ci.yml：tree-sitter-cli 的 postinstall 偶发 504，发版这一步更要扛住
+      # （tag 已经推出去，装依赖失败会让整个 release 空跑）。pnpm install 幂等，重试两轮。
       - name: install frontend dependencies
-        run: pnpm install --frozen-lockfile
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            pnpm install --frozen-lockfile
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "pnpm install failed (attempt $attempt/3), retrying in 10s..."
+            Start-Sleep -Seconds 10
+          }
+          exit 1
 
       # K2-RELEASE-AUTOMATION（设计稿 §16.10 R9.5–R9.7）：发布前的**机器面快速闸**——
       # 三处 version 逐字一致（root package.json / packages/app/package.json /
@@ -66,34 +76,36 @@ jobs:
           tagName: v__VERSION__
           releaseName: "kojo-editor v__VERSION__"
           releaseBody: |
-            era 口上作者的结构感知编辑器。**v0.4.2 正式版**——v0.4.1 之后的第一个稳定版，进入稳定自动更新通道。
+            era 口上作者的结构感知编辑器。**v0.4.3-beta.1 预发布版**——自 v0.4.2 正式版以来的功能预览，欢迎试用与回报；预发布版**不进入稳定版自动更新通道**。
 
             ## 下载与安装
             - **Windows 10/11（x64）安装版**：下载本页的 `*_x64-setup.exe`，双击安装。
             - **绿色版**：下载本页的 `*_x64-portable.zip`，解压即用，不写注册表、不建开始菜单。
             - `SHA256SUMS.txt` 附安装包与绿色版的校验值。
-            - 已装 v0.4.1 的用户可在「设置 → 更新」里直接升级；两个 beta 的改动全部包含在本版内。
+            - 本版为预发布：`releases/latest` 仍指向 **v0.4.2**，稳定版自动更新不会收到本 beta；试用请手动下载本页版本，已装 v0.4.2 的用户不受影响。
 
-            ## 本版重点（v0.4.1 → v0.4.2）
-            - **Kojo 2.0 成为默认档**——`.kojo` 默认按 2.0 解析，旧表层语法封存为 `.kojo1`（设置页切到「双轨」或「只认 v1」仍可继续用）。配「`.kojo` → `.kojo1` 交接工具」与逐文件迁移向导，可撤销；迁不动的条目会明确拦下而不是硬改。
-            - **启动器（新的顶层模式）**——实例库：一个游戏目录 = 一个实例（可隔离存档与内容），新建向导三步走完，复制进度、信任确认、四类启动错误各给「为什么 + 下一步」。实例详情分「概览 / 内容包 / 存档 / 游戏插件」四屏；游戏插件安装先展示文件清单与风险、先备份、可回滚；另有任务中心与日志。编辑器与启动器共用同一套只读约束：不在游戏目录里改口上以外的文件。
-            - **语言面统一**——补全 / 悬停 / 查找引用 / 跳转定义 / 重命名 / 签名帮助 / 折叠 / 代码操作 / 行上注解 / 语义着色全部改成「判据住插件、宿主只做装配与翻译」。ERB 与 2.0 现在走同一条腿，不再各答一套；新增语言能力也不再往宿主塞分支。
-            - **编辑体验**——文件树支持会话剪贴板（复制 / 剪切 / 粘贴，冲突有问句、脏文件有闸）、树内拖拽搬运、批量删除逐条点名 + 一键撤销回原位、行虚拟化与「在此文件夹中搜索」；编辑器组支持跨组拖拽、`Ctrl+1..4` 聚焦、分隔条键盘调整，布局与比例完整落盘、切项目不再丢；命令面板新增 Search Everywhere（双击 Shift 呼出）。
-            - **性能与内存**——真语料冷开「进项目到能用」比修复前快约 7×（让位 / 索引可用 / Monaco 挂载三段各从 ~26–28s 降到秒级）；内存分多批压过，冷建稳态 −47.3%、热载稳态累计约 −45%（每批同语料 A/B，读数在仓库 `docs/STATE.md`）；kojo2 结构层并入单 worker 池，折叠与语义诊断改批量派发。
-            - **市场与项目**——发布向导支持普通 ZIP 口上包导入（旧 zip 自动补信息、同链上传），成功即生成市场审核单；口上项目工作区的部署 / 导出 / 许可条款收进共享实现。
-            - **外观与教程**——浮层 / 按钮 / 边缘 / 右键菜单收成三档美学资产；主题预览卡与跟随系统；新增《Kojo 2.0 语言教程》与「语法全表」2.0 附录（锚点表、`@` 家族、声明表、等待与空行表、旧写法 → 2.0 逐行对照）。
+            ## 本版重点（v0.4.2 → v0.4.3-beta.1）
+            - **AI 接入（MCP，默认关闭）**——新增本地 MCP 服务：只监听 127.0.0.1 动态端口，Bearer token + Origin 双闸，独立的第四张授权表（read / edit / privileged 三级 + 会话审批 + 审计 + token 轮换 / 撤销）。冻结契约 v1 提供 33 个以只读为主的 tools、8 个 `kojo://project/*` 资源与 3 个 prompt 骨架；设置页「AI 接入」可开关、授权、查审计，附 Codex / DeepSeek Harness / 通用三份客户端样例。未启用时零字节进开机图。
+            - **MCP 真壳端到端取证**——真桌面壳 + 真实 stdio shim 跑通 12/12，并修掉两处分层测试抓不到的接缝缺陷：SSE 应答的 `event:` 行污染 stdout、三个 list 回裸数组导致规范形状不符且 Rust 侧 tier / 特权二次过滤整条跳过。**写类与危险工具仍显式 `NOT_WIRED`**，绝不挂空串假实现。
+            - **自动更新完善**——应用常开 4 小时定时重查、更新完成接「立即重启」真通道、检查看门狗 / 会话去重 / 进度节流 / 病因透传、changelog 行内富文本与发标链路静态守卫。
+            - **项目级变量引用**——`Shift+F12` 可在 `#DIM` 全局变量上查整个工程（变量腿自成一趟切段）；补上归一化真源、提及位置、旧盘重扫与非等长折叠的形状门修复。
+            - **数值看板（右侧侧拉）**——写口上时随手翻查变量字典、项目符号、指令速查与反查引用；真机取证 21 族 / 3,931 名、指令表 222 条、符号页 117,123 函数。
+            - **字体档位与调试宿**——设置页新增 30 款开源字体的行内折叠选择器；快速打开文件兜底、打开项目的状态裁决修掉慢盘假 FAIL。
+            - **稳定与验证面**——市场面板中文排序改码元序（消掉英文 CI runner 上的稳定红）、快照热载计时量具跟上 v18 元组、启动器 env 探针改成逐项点名的允许集；发版闸门产物上界按 190 提交的功能增量逐笔归因重钉。
 
             ## 已知事项
+            - **预发布版**：功能面广且含默认关闭的实验能力，边界问题欢迎提 Issue；长期写作请照常留备份。
+            - **MCP 的边界**：写类与危险工具（`fileTree.*` / `problems.quickFix` / `diff.compare` / `state.replay` / `preview.document`）按 ADR-0013 刻意不接线；sampling / elicitation / resources-subscribe / progress 四项 P5 能力只写了方向、未实现；不含跨机 TLS，stdio shim 需本机桌面壳在跑。
             - Kojo 2.0 仍在切流期：跨档切换后语言面与配色需重载窗口才完整生效（设置页会如实提示，不会静默）；一键迁移对真实语料的迁移率约 27%，其余条目维持拦下。
             - 首次进项目若派生快照未命中，仍会有一次十几秒的全量扫描（已归因；稳态 2–3 秒）。
+            - 只提供 **Windows x64**（NSIS 安装包 + 绿色版），安装包**未做代码签名**，SmartScreen 可能提示；绿色版依赖系统 WebView2（Windows 11 自带，Windows 10 可能需 Evergreen 运行时）。
             - 启动器只管理**用户自备**的游戏目录，不分发游戏本体；游戏插件会改盘上文件，安装前请看清清单与备份提示。
             - 仓库与安装包**不包含任何游戏内容**——首次启动选择本机已安装的游戏目录，只读浏览始终可用。
-            - 绿色版依赖系统 WebView2（Windows 11 自带；Windows 10 可能需安装 Evergreen 运行时）。
             - 遇到问题欢迎[提交 Issue](https://github.com/Poboking/kojo-editor/issues)。
 
             开发者：[Poboking](https://github.com/Poboking) ｜ 许可证：[GPL-3.0-or-later](https://github.com/Poboking/kojo-editor/blob/main/LICENSE)
           releaseDraft: false
-          # 预发布判定：标签名含 '-'（如 v0.4.2-beta.2）即 prerelease，
+          # 预发布判定：标签名含 '-'（如 v0.4.3-beta.1）即 prerelease，
           # 避免 beta 抢占 releases/latest 的稳定自动更新通道；正式版（如 v0.4.2）仍为稳定发布。
           prerelease: ${{ contains(github.ref_name, '-') }}
           includeUpdaterJson: true

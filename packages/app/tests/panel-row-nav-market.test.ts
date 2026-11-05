@@ -390,12 +390,16 @@ describe('口上市场面板 · 行键盘接线（kw8c 可触发档）', () => {
     const key = pendingKey(INSTALLED[0]!);
     const m = mount({ open: key, pending: key }); // 展开机器面 + 进入待确认卸载
     expect(m.rows).toHaveLength(5); // 展开层（.mk-detail）不是行，名单没变长
-    expect(m.rows[0]!.label).toBe('收起'); // 展开态文字换了，行代表还是那一枚
+    // 按 key 找行，不假设「展开的那枚恰好是第一行」：包名排序已统一成码元序，
+    // 名单位置不该写死（旧实现按宿主 ICU 排中文名，CI en-US 上首行换人 ⇒ 稳定红）。
+    const opened = m.rows.find((r) => r.key === key)!;
+    expect(opened.label).toBe('收起'); // 展开态文字换了，行代表还是那一枚
     expect(m.rows.some((r) => r.label === '确认' || r.label === '取消' || r.label === '卸载' || r.label === '导入')).toBe(false);
-    const e = event(m.rows[1]!, 'Escape');
+    const other = m.rows.find((r) => r.key !== key)!;
+    const e = event(other, 'Escape');
     pressOnRoot(m, e);
     expect(e.prevented).toBe(0);
-    expect(m.rows[1]!.focused).toBe(0); // 焦点没被行导航抢走
+    expect(other.focused).toBe(0); // 焦点没被行导航抢走
     // 簇自己的 Esc 腿照旧：`.mk-confirm` 上按 Esc ⇒ 只走 `onCancelUninstall`
     const cluster = findClass(m.root.props.children as ReactNode, 'mk-confirm');
     (cluster.props.onKeyDown as (ev: { key: string }) => void)({ key: 'Escape' });

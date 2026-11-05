@@ -320,7 +320,7 @@ export const ARTIFACT_LIMITS = Object.freeze({
    * 两枚数仍是"收紧的上界"：11.0 MiB 距现值 0.35 MiB、90 件距现值 5 件——正常增件不红，
    * 一次性进整包才会红。启动器的内容包 / 插件 / 存档面板还会再加几个懒块，届时按同一口径重钉。
    */
-  distBytes: Math.round(11.25 * 1024 * 1024),
+  distBytes: Math.round(12.0 * 1024 * 1024),
   /*
    * 2026-10-27 LAU-3b 收尾批：件数 90 → 92（顶格，零余量）、总量与入口不动。
    *
@@ -488,6 +488,33 @@ export const ARTIFACT_LIMITS = Object.freeze({
    * · 闸随之下调 100 → **88**：现读数 75，留 13 件余量。这是本仓第一次**往下**动这个数
    *   （此前每一笔都是抬），所以口径写清楚：省下来的 25 件不全进下一批的额度，闸跟着收，
    *   只留"正常增件不红、一次性进整包才红"的那点余量。
+   *
+   * 2026-11-05 v0.4.3-beta.1 发版体检批：**总量 11.25 → 12.0 MiB**，件数 88 与入口上限不动。
+   *
+   * 起手读数（同一棵树一次真实构建，`packages/app/dist`）：**83 件 / 12,233,441 B
+   * （11.6667 MiB）**，比 11.25 MiB 上界多 **436,961 B**。对照 v0.4.2 正式版发版基线
+   * （STATE：74 件 / 11.16 MiB、`exceeded: []`），中间 **190 个提交**净增 9 件 / 约 0.507 MiB
+   * ——红是上游合流的累积漂移，不是本批造成的。
+   *
+   * **先问过能不能并块 / 瘦身**（LAU-1031-SIG 留的题，本批作答）：
+   * · 件数 83 < 88 还有 5 件余量，超标的是**总量**不是件数 ⇒ 并块（减件数）不对症；
+   * · 唯一还能压件数的是上调 `experimentalMinChunkSize`，但那只并 <8 KB 的碎块，
+   *   PS10-LEAK 批实测并掉 25 件总量才 −4,014 B，离 436,961 B 差两个数量级，且会动懒边界；
+   * · 两枚 tree-sitter wasm（2.18 MiB）、Monaco `standaloneServices`（1.65 MiB）、入口
+   *   （2.25 MiB）都是单份必需，没有重复打包；新增件全在动态边之下，开机图预算不受影响。
+   * ⇒ 没有更省的并法，按 LAU-3b-FLIP「上游合流推高、随现读数重钉」的先例抬这一格。
+   *
+   * 增量逐枚点名（`dist/assets` 里 v0.4.2 之后登场 / 明显长大的懒块，均为功能增量）：
+   * · MCP AI 接入：`settings-ai-*` 11.6 kB、`host-bridge-*` 8.1 kB、`real-sources-*` 26.8 kB、
+   *   `client-*` 18.6 kB、`wiring-*` 32.5 kB（设置页 / 真源接线 / 宿主桥，启用时才懒载）；
+   * · 自动更新 UPD-A~F：`update-flow-*` 22.8 kB + 13.3 kB CSS；
+   * · 项目级 #DIM 变量引用：`call-hierarchy-*` 12.8 kB + `CallHierarchyOverlay-*` 12.0 kB；
+   * · 字体档位 / 调试宿 KW-36：`editor-display-prefs-*` 19.7 kB、`install-debug-*` 35.0 kB、
+   *   `DevNoteDialog-*` 5.4 kB，字体选择器样式并进 `entry-*.css` / `index-*.css`；
+   * · 其余为主入口、共享块跨块引用面改名与 190 提交的 aggregate（未在中间每枚提交上各起
+   *   游离树构建对拍，按本文件既往口径如实记作 aggregate，不摊到单一 chunk）。
+   * 抬到 12.0 MiB 后距现值 **349,471 B（约 2.9%）**、件数 83 距 88 仍 5 件——
+   * 正常增件不红，一次性进整包才会红；入口块远低于 1,100 kB 上限，余量大。
    */
   files: 88,
 });
@@ -884,7 +911,8 @@ function artifactAuditItem() {
   return {
     id: 'artifact-audit',
     kind: 'build',
-    cmd: 'pnpm --filter @kojo/app build → 量 packages/app/dist（入口 ≤1,100 kB / ≤10.5 MiB / ≤85 件）',
+    // 文案也走唯一渲染面：此前硬编码 10.5 MiB / 85 件，抬闸后长期报着不存在的上界。
+    cmd: `pnpm --filter @kojo/app build → 量 packages/app/dist（入口 ≤${artifactLimitFace().entryKB} kB / ≤${artifactLimitFace().distMiB} MiB / ≤${artifactLimitFace().files} 件）`,
     command: NODE,
     args: [],
     shell: false,
