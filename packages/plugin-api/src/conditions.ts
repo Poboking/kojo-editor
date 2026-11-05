@@ -346,8 +346,9 @@ export interface ConditionExtractorService {
   /**
    * 按需解析单函数的谓词明细（含控制流骨架）。
    * 函数不存在 / 无索引 / 读文件失败时返回 null（显式，不伪造空结果）。
+   * @param textOverride 该文件缓冲区文本（additive）：给了不读盘。
    */
-  functionPredicates(normalizedName: string): Promise<FunctionPredicates | null>;
+  functionPredicates(normalizedName: string, textOverride?: string): Promise<FunctionPredicates | null>;
   /**
    * **离线抽取**（additive，2026-10-19 性能批）：对调用方提供的任意 `ErbIndex`
    * （例如工作区口上包索引——`erb-parser` 的 `buildIndex([workspaceArtifactRoot])` 产物）

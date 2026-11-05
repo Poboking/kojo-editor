@@ -22,6 +22,7 @@
 
 import type { ConditionExpr, VariableRef } from './conditions';
 import type { ArchiveOverrides } from './snapshot';
+import type { ReplayWrite } from './replay-writes';
 
 /** 未知原因分类（UI 分组统计 / 提示文案用） */
 export type ReplayUnknownCode =
@@ -139,6 +140,8 @@ export interface FunctionReplay {
    * （行文本不可得 / 抽取侧无显示行资料）；消费方须按缺省降级隐藏该区。
    */
   transcript?: TranscriptLine[];
+  /** 未建模的状态写（additive）：回放不执行的写点行；缺省 = 未提供。 */
+  unmodeledWrites?: readonly ReplayWrite[];
 }
 
 /**
@@ -329,6 +332,8 @@ export interface ReplayFunctionOptions {
    * （经适配器协议）。全部不可得 → ARG/ARGS 引用一律 unknown('call-context')。
    */
   callContextResolver?: ReplayCallContextResolver;
+  /** 该函数所在文件的**编辑器缓冲区文本**（additive）：给了解析与取行都用它，缺省读盘。 */
+  textOverride?: string;
 }
 
 /**
