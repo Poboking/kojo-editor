@@ -123,6 +123,10 @@ export function createConditionExtractorPlugin(): Plugin {
         // 走并行通道（无通道自动内联）：按需明细的骨架扫描（PS-11 前主循环也走它；
         // 现在全量抽取整链已并入 condition.extractFile 任务，这里只剩明细路径）
         scanControlFlow: (text: string): Promise<ControlFlowStatement[]> => parser.scanControlFlowOffloaded(text),
+        // 缓冲区文本（textOverride）分支要按 @NAME 在**缓冲区自己的行号空间**里重定位
+        // 函数（评审 P0：磁盘索引的 startLine/endLine 切缓冲区会整体错位）；用
+        // erb.parser 的纯文本解析，与索引扫描同源，不另抄一份函数名词法。
+        parseText: (text: string, path?: string) => parser.parseText(text, path),
         getSchemaLookup: schemaLookup,
         snapshot: snapshotPort,
         compute,

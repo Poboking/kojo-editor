@@ -34,12 +34,23 @@
  * 候选值来自谓词 AST（`argSlotCandidates`），调用上下文组装是 `panel-logic` 里的纯函数
  * （`assembleCallContext`）；档案清单跟随 `snapshot.source` 的缓存与订阅（面板自带
  * 「重新扫描」）；切项目归零；结果过期与 INLINE 未计入统计都显式提示。
+ *
+ * 2026-11-05「状态回放彻底可用」面板批（六件事）：
+ *   ① 判定文本优先级 = 编辑器**缓冲文本**（同文件且有未保存编辑）→ 磁盘；裁决是纯函数
+ *      `preview.chooseReplayText`，结果区标出这一次用的是哪份（`textSourceLabel`）；
+ *      正文只进 ref（逐键不重渲），未保存编辑再变会让「用缓冲文本判的」结果显式过期；
+ *   ② 结果区列出**未建模写**行号（引擎 `unmodeledWrites`；前 5 条 + 省略，可点回源）；
+ *   ③ 本角色**全段落体检**（批量编排 `batch.ts` / 展示 `batch-panel.ts`；与主判定同口径）；
+ *   ④ 槽位候选并上**具名常量**的真实值（`const-candidates.ts`，经 `query` 注入的 IO 读盘）；
+ *   ⑤ 谓词列表**筛选**（`predicate-filter.ts`；只筛渲染，统计与窗口语义不变）；
+ *   ⑥ 可发现性：Ctrl+Alt+S 那条键与「有未保存编辑按缓冲文本判」写进常驻提示 / 空态。
  */
 
 import { createElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ArchiveOverrides,
   ConditionExtractorService,
+  FileIO,
   FunctionPredicates,
   FunctionReplay,
   KojoCallSlot,
@@ -56,7 +67,7 @@ import type {
   StateReplayService,
   UIPanelProps,
 } from '@kojo/plugin-api';
-import { KernelServices, WellKnownServices, activeGameAdapter, growWindow, shortPath } from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices, activeGameAdapter, growWindow, pathKey, shortPath } from '@kojo/plugin-api';
 import type { AssumedSlot, LocateRequest, ReplayScene, SlotInput, SlotOrigin } from './panel-logic';
 import {
   DEFAULT_SCENE_ID,
@@ -80,12 +91,26 @@ import {
   predicateValues,
   replayDiffSummary,
   sanitizeScenes,
+  sameSourcePath,
   sceneSuggestionName,
   slotKey,
   slotPlaceholder,
   suggestFunctionsSmart,
 } from './panel-logic';
-import { ASSUME_STYLE, DebugPreviewPanel, renderReplayPreview, type EmitReveal } from './preview';
+import {
+  ASSUME_STYLE,
+  DebugPreviewPanel,
+  chooseReplayText,
+  mergeSlotCandidates,
+  renderReplayPreview,
+  type BufferedDoc,
+  type EmitReveal,
+  type ReplayTextChoice,
+} from './preview';
+import { parseConstDeclarations, resolveConstCandidates } from './const-candidates';
+import { countPredicates, type PredicateFilter } from './predicate-filter';
+import { BATCH_DEFAULT_CAP, runBatchReplay, type BatchSummary } from './batch';
+import { BatchPanel } from './batch-panel';
 import { createReplayActivation } from './activation';
 import { createSceneActions } from './scene-actions';
 import {
@@ -145,6 +170,11 @@ export function createUiStateReplayPlugin(): Plugin {
       WellKnownServices.ConditionExtractor,
       KernelServices.Project,
       KernelServices.Slots,
+      // 常量候选（2026-11-05 常量候选批）：候选值要读「待判定函数所在文件」的文本，
+      // 才能把 `#DIM CONST X = "…"` / `#DEFINE X 42` 声明的值也挂上候选
+      // （`CASE OPR_战斗前` 这类「槽 == 具名常量」的分派）。
+      // 只读（`io.readText`），不写盘；读失败静默降级（候选少几个，判定照常）。
+      KernelServices.IO,
     ],
     activate(ctx) {
       const replay = ctx.inject<StateReplayService>(WellKnownServices.StateReplay);
@@ -153,6 +183,7 @@ export function createUiStateReplayPlugin(): Plugin {
       const extractor = ctx.inject<ConditionExtractorService>(WellKnownServices.ConditionExtractor);
       const project = ctx.inject<ProjectService>(KernelServices.Project);
       const slots = ctx.inject<SlotRegistry>(KernelServices.Slots);
+      const io = ctx.inject<FileIO>(KernelServices.IO);
 
       // ---- 激活层（协议查询 / 存档清单 / 待处理回放意图）：状态见 ./activation.ts ----
       const activation = createReplayActivation(ctx, { project, snapshots, slots, panelId: PANEL_ID });
@@ -219,6 +250,53 @@ export function createUiStateReplayPlugin(): Plugin {
         const [fnDetail, setFnDetail] = useState<FunctionPredicates | null>(null);
         /** P5：源码已变，屏上的结果是上一次的（新结果落地即清） */
         const [resultStale, setResultStale] = useState(false);
+        /**
+         * 本次判定用的是哪份文本（缓冲文本批，2026-11-05）。
+         * 与结果同批快照：之后作者继续打字 / 保存，都不该改写"刚才那一次判的是什么"。
+         */
+        const [resultTextSource, setResultTextSource] = useState<ReplayTextChoice | null>(null);
+        /** D8（2026-11-05）：判定用的那份文本快照——预演复用同一份，避免「判定 v1 / 预演 v2」 */
+        const judgeTextRef = useRef<ReplayTextChoice | null>(null);
+        /**
+         * 编辑器缓冲真相（`editor.documentChanged` 的最新一条）。
+         *
+         * 为什么用 ref 装正文：这是**大文本**，每键一 setState 会把整棵结果树重渲一遍；
+         * 正文只在一个时刻被消费（按下「判定」组装 `textOverride`），读 ref 就够。
+         * 另配一个 `bufferTick` 只在**可观察面**变化时（文件换了 / dirty 翻了）自增，
+         * 让"编辑器里有未保存编辑"那句提示能自己变——纯文本变化不触发渲染。
+         */
+        const bufferedDocsRef = useRef<Map<string, BufferedDoc>>(new Map());
+        /** 最近一条广播（只服务"编辑器里有未保存编辑"那句提示；判定本身按文件查表） */
+        const latestBufferedRef = useRef<BufferedDoc | null>(null);
+        const [, setBufferTick] = useState(0);
+        /**
+         * 条件索引代际（D1 2026-11-05）：冷启动时作者可能先打了函数名、索引随后才就绪——
+         * 首次 `functionPredicates` 拿到 null 后若不再重试，面板就永远没有槽位/候选（按了没反应）。
+         * `condIndex` 声明在组件更后面（直接进 deps 会 TDZ），所以用这条计数器当依赖。
+         */
+        const [indexTick, setIndexTick] = useState(0);
+        /** 按文件取缓冲真相（键 = pathKey；本轮上限 4 份，切标签再切回来还在） */
+        const bufferedFor = useCallback((path: string | null | undefined): BufferedDoc | null => {
+          if (typeof path !== 'string' || path.length === 0) return null;
+          return bufferedDocsRef.current.get(pathKey(path)) ?? null;
+        }, []);
+        const rememberBuffered = useCallback((doc: BufferedDoc): void => {
+          const key = pathKey(doc.filePath);
+          const map = bufferedDocsRef.current;
+          map.delete(key);
+          map.set(key, doc);
+          while (map.size > 4) {
+            const oldest = map.keys().next().value;
+            if (oldest === undefined) break;
+            map.delete(oldest);
+          }
+          latestBufferedRef.current = doc;
+        }, []);
+        /**
+         * 函数名 → 所在文件（本次会话内记住；`fnDetail` / 回放结果都是同一份事实的来路）。
+         * 用途：第二次判定同一段时，即使明细还没回来，也知道该不该用缓冲文本。
+         */
+        const fnPathRef = useRef<Map<string, string>>(new Map());
         /** P4：上次目标（清单/角色表就绪后校验再应用；跨工程不建视图） */
         const [restoreTarget, setRestoreTarget] = useState<RestoreTarget | null>(null);
         const [restoreLoaded, setRestoreLoaded] = useState(false);
@@ -261,23 +339,32 @@ export function createUiStateReplayPlugin(): Plugin {
             return;
           }
           let cancelled = false;
-          void extractor
-            .functionPredicates(fnNameUpper)
-            .then((d) => {
+          /** 明细取盘上那份只为拿 `filePath`；若编辑器里开的就是这份文件，再按缓冲文本重取一次 */
+          const fetchWithBuffer = async (): Promise<void> => {
+            const diskDetail = await extractor.functionPredicates(fnNameUpper);
+            if (cancelled) return;
+            if (diskDetail !== null) fnPathRef.current.set(diskDetail.normalizedName, diskDetail.filePath);
+            const buffered = bufferedFor(diskDetail?.filePath);
+            if (diskDetail !== null && buffered !== null && sameSourcePath(diskDetail.filePath, buffered.filePath)) {
+              // 作者眼前是未保存/缓冲文本：槽位并集与常量候选都要按同一份文本算，
+              // 否则"能填的槽位/候选"和"判定用的文本"来自两个版本。
+              const bufferedDetail = await extractor.functionPredicates(fnNameUpper, buffered.text);
               if (cancelled) return;
-              // 函数不存在 / 无索引 / 读文件失败 → null：引用集保持空（回放时另有显式文案），不抛错
-              setFnDetail(d);
-            })
-            .catch((err: unknown) => {
-              if (cancelled) return;
-              ctx.log.warn(`Replay panel function detail failed: ${String(err)}`);
-              setFnDetail(null);
-            });
+              setFnDetail(bufferedDetail ?? diskDetail);
+              return;
+            }
+            setFnDetail(diskDetail);
+          };
+          void fetchWithBuffer().catch((err: unknown) => {
+            if (cancelled) return;
+            ctx.log.warn(`Replay panel function detail failed: ${String(err)}`);
+            setFnDetail(null);
+          });
           return () => {
             cancelled = true;
           };
           // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [fnNameUpper, projectKey]);
+        }, [fnNameUpper, projectKey, indexTick]);
 
         /** 函数体引用的槽（明细变化才重扫；谓词可能有几百条，逐帧扫不划算） */
         const detailRefs = useMemo(() => {
@@ -293,8 +380,60 @@ export function createUiStateReplayPlugin(): Plugin {
         /** 渲染与组装共用的输入并集（模板在前、引用独有槽补后；同 kind+index 去重） */
         const slotInputs: SlotInput[] = mergeSlotInputs(templateSlots, detailRefs);
         const slotSignature = slotInputs.map((s) => `${s.kind}${s.index}`).join('|');
-        /** P3：候选值（键 = slotKey；只在明细到货后才有） */
-        const slotCandidates = useMemo(() => argSlotCandidates(fnDetail?.predicates ?? []), [fnDetail]);
+        /**
+         * P4 常量候选（2026-11-05）：`CASE OPR_战斗前` 这类「槽 == 具名常量」比较里，
+         * 候选值应该是一行顶部 `#DIM CONST OPR_战斗前 = "战斗前"` 的真实值，而不是空。
+         *
+         * 文本来源**优先用编辑器缓冲文本**（若开着的正是这份文件）：常量声明作者可能
+         * 刚改过，用磁盘那份就会给出旧候选；拿不到缓冲才退回读盘。
+         * 只有存在 ARG/ARGS 槽时才去取（没槽的函数读来也没用，省一次 IO）；
+         * 读失败 / 解析不出常量 → 静默降级为空（候选少几个，判定照常，不打扰作者）。
+         */
+        const [constCandidates, setConstCandidates] = useState<Map<string, string[]> | null>(null);
+        useEffect(() => {
+          const d = fnDetail;
+          if (d === null || slotInputs.length === 0) {
+            setConstCandidates(null);
+            return;
+          }
+          let cancelled = false;
+          const buffered = bufferedFor(d.filePath);
+          const textOfFile =
+            buffered !== null && sameSourcePath(d.filePath, buffered.filePath)
+              ? Promise.resolve(buffered.text)
+              : io.readText(d.filePath).then((f) => f.text);
+          void textOfFile
+            .then((text) => {
+              if (cancelled) return;
+              const consts = parseConstDeclarations(text);
+              setConstCandidates(consts.size === 0 ? null : resolveConstCandidates(d.predicates, consts));
+            })
+            .catch((err: unknown) => {
+              if (cancelled) return;
+              // 读盘失败只影响候选，不影响判定——降级但不吵人（排障留在日志里）
+              ctx.log.warn(`Replay panel const candidates skipped: ${String(err)}`);
+              setConstCandidates(null);
+            });
+          return () => {
+            cancelled = true;
+          };
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [fnDetail, slotSignature]);
+        /**
+         * P3：候选值（键 = slotKey）——**两路并集**：谓词里的字面量（`argSlotCandidates`）
+         * + 具名常量的真实值（`resolveConstCandidates`），槽内去重、base 在前。
+         */
+        const slotCandidates = useMemo(
+          () => mergeSlotCandidates(argSlotCandidates(fnDetail?.predicates ?? []), constCandidates),
+          [fnDetail, constCandidates],
+        );
+        /**
+         * 谓词筛选（2026-11-05 筛选批）：只影响**渲染**（统计 / 分支 / 台词区仍按全量算），
+         * 窗口作用于筛后列表。状态放在这里，筛选行由预览层画（它才握着谓词数组）。
+         */
+        const [predFilter, setPredFilter] = useState<PredicateFilter>({ kind: 'all', query: '' });
+        /** 筛选行的档位计数（全量谓词现算；`availableFilters` 在预览层按计数挑档位） */
+        const predCounts = useMemo(() => countPredicates(result?.predicates ?? []), [result]);
 
         // 槽位初始化（P7）：函数名 + 并集槽签名任一变化 → 清空输入、手改标记清零。
         // 依赖里必须有**函数名本身**：两个函数槽签名相同时，旧函数的实参不能被当成
@@ -423,6 +562,7 @@ export function createUiStateReplayPlugin(): Plugin {
             setResultAssumed([]);
             setResultLocate(null);
             setResultStale(false);
+            setResultTextSource(null);
             setContextText('');
             setSlotTexts({});
             setSlotEdited({});
@@ -450,6 +590,7 @@ export function createUiStateReplayPlugin(): Plugin {
           setResult(null);
           setResultAssumed([]);
           setResultLocate(null);
+          setResultTextSource(null);
           if (!archivePath || charaNo === null) {
             return;
           }
@@ -522,6 +663,30 @@ export function createUiStateReplayPlugin(): Plugin {
           // eslint-disable-next-line react-hooks/exhaustive-deps
         }, [tick, view]);
 
+        /**
+         * 待判定函数所在文件（缓冲文本口径的输入，缓冲文本批 2026-11-05）。
+         *
+         * 三条来路，按新鲜度排：当前明细（刚查的）→ 屏上结果（上次判的）→ 会话记忆
+         * （`fnPathRef`，明细/结果到达时顺手记下）。都没有 → null = 不知道，按磁盘判。
+         * 为什么不拿"编辑器当前文件"顶替：那是**猜**——判的是另一份文件时，
+         * 把手上这份缓冲文本塞进去，解析出来的会是另一个函数（静默错答案比不知道更坏）。
+         */
+        /** D5（2026-11-05）：条件索引里的 filePath 兜底（批量体检里绝大多数名字没有明细/结果记忆） */
+        const condPathRef = useRef<(name: string) => string | undefined>(() => undefined);
+        const functionPath = (name: string): string | null =>
+          (fnDetail !== null && fnDetail.normalizedName === name ? fnDetail.filePath : undefined) ??
+          (result !== null && result.normalizedName === name ? result.filePath : undefined) ??
+          fnPathRef.current.get(name) ??
+          condPathRef.current(name) ??
+          null;
+
+        /** 本次判定该用哪份文本（纯函数在 `preview.chooseReplayText`；这里只喂事实） */
+        const textChoiceFor = (name: string): ReplayTextChoice =>
+          (() => {
+            const path = functionPath(name);
+            return chooseReplayText(path, bufferedFor(path));
+          })();
+
         const runReplay = (nameOverride?: string, locate: LocateRequest | null = null): void => {
           // 2026-10-16 busy 同门：按钮 disabled 只拦鼠标，Enter 直调绕过拦截——
           // 并发回放结果乱序覆盖。统一在函数入口同门拦截（ref 口径，防同 tick 双击）。
@@ -545,10 +710,16 @@ export function createUiStateReplayPlugin(): Plugin {
           // 假设值快照（C9 / P1）：与本结果同批——留空且开了「按 0 试算」的数值槽
           // 记入"基于假设"标注（改了槽不影响已出结果的可信度标注）
           const assumedAtRun = collectAssumedSlots(slotInputs, slotTexts, slotEdited, assumeDefaults);
+          // 文本来源快照（缓冲文本批）：同文件 + 有未保存编辑 → 交 `textOverride`，
+          // 引擎与取行都用缓冲文本，判定与作者眼前看到的字一致
+          const textChoice = textChoiceFor(name);
           replayBusyRef.current = true;
           setReplayBusy(true);
           void replay
-            .replayFunction(view, name, { callContext: assembled.callContext })
+            .replayFunction(view, name, {
+              callContext: assembled.callContext,
+              ...(textChoice.textOverride !== undefined ? { textOverride: textChoice.textOverride } : {}),
+            })
             .then((r) => {
               if (r === null) {
                 setReplayError(`这一段没有登记到可判定的条件（名字：${name}）——多半是这段里根本没有条件语句，或者它没进条件索引。`);
@@ -556,12 +727,16 @@ export function createUiStateReplayPlugin(): Plugin {
                 setResultAssumed([]);
                 setResultLocate(null);
                 setResultStale(false);
+                setResultTextSource(null);
                 return;
               }
+              fnPathRef.current.set(r.normalizedName, r.filePath);
               setResult(r);
               setResultAssumed(assumedAtRun);
               setResultLocate(locate);
               setResultStale(false); // P5：新结果落地 → 过期标记清掉
+              setResultTextSource(textChoice); // 结果区口径标记（磁盘 / 缓冲）
+              judgeTextRef.current = textChoice; // D8：预演复用「判定那一刻」的文本快照
               setPredWindow(undefined); // 新一批谓词 = 新窗口（每次回放从初始窗口看起）
             })
             .catch((err: unknown) => {
@@ -607,8 +782,37 @@ export function createUiStateReplayPlugin(): Plugin {
         useEffect(
           () =>
             ctx.bus.on('kojo.functionChanged', () => {
+              setIndexTick((n) => n + 1); // 索引代际：让明细 effect 重取（冷启动竞态，D1）
               if (hasResultRef.current) setResultStale(true);
             }),
+          [],
+        );
+
+        /**
+         * 编辑器缓冲真相（缓冲文本批，2026-11-05）：宿主每次改动都广播当前文件全文。
+         *
+         * **只进 ref、不进 state**：正文是整份文件，逐键 setState 会把结果树重渲一遍。
+         * 真正需要重渲的只有「可观察面」——文件换了 / 未保存标记翻了（`bufferTick`）；
+         * 纯文本变化由 ref 承载，「判定」按下那一刻才读（那里拿到的一定是最新全文）。
+         *
+         * 另外，**用缓冲文本判出来的结果**会跟着正文继续变化而过期（与 P5 同口径：
+         * 屏上的结论必须对得上它读的那份字）；用磁盘文本判的不受影响。
+         */
+        const resultBufferPathRef = useRef<string | null>(null);
+        resultBufferPathRef.current =
+          result !== null && resultTextSource !== null && resultTextSource.source === 'buffer' ? result.filePath : null;
+        useEffect(
+          () =>
+            ctx.bus.on('editor.documentChanged', (ev) => {
+              const prev = bufferedFor(ev.filePath);
+              rememberBuffered({ filePath: ev.filePath, text: ev.text, dirty: ev.dirty });
+              if (prev === null || prev.dirty !== ev.dirty || !sameSourcePath(prev.filePath, ev.filePath)) {
+                setBufferTick((n) => n + 1);
+              }
+              const judgedPath = resultBufferPathRef.current;
+              if (judgedPath !== null && sameSourcePath(judgedPath, ev.filePath)) setResultStale(true);
+            }),
+          // eslint-disable-next-line react-hooks/exhaustive-deps
           [],
         );
 
@@ -651,6 +855,8 @@ export function createUiStateReplayPlugin(): Plugin {
         // 对齐注入面板的可发现性：搜索词同时匹配条件变量的**中文标签**（与注入面板同一
         // 份 variableSchema 词典）——搜「好感」就能找到判好感的那些段。
         const condIndex = extractor.currentIndex();
+        // D5：把条件索引的 filePath 供给 unctionPath（批量体检时没有明细记忆也能走缓冲文本口径）
+        condPathRef.current = (name) => condIndex?.byFunction.get(name)?.filePath;
         const deferredFnQuery = useDeferredValue(fnQuery);
         const suggestions = useMemo(() => {
           if (!condIndex) return [];
@@ -664,6 +870,126 @@ export function createUiStateReplayPlugin(): Plugin {
           if (!condIndex || charaNo === null || deferredFnQuery.trim().length > 0) return [];
           return browseCharaFunctions(condIndex.byFunction.keys(), charaNo, SUGGEST_LIMIT);
         }, [condIndex, charaNo, deferredFnQuery]);
+
+        /* ------------------- 批量体检（2026-11-05：本角色全段落一次过） -------------------
+         *
+         * 单函数判定回答「这一段走不走」；作者真正要问的常常是「这个档、我这个角色，
+         * 哪些段落我判不出来」。编排在 `./batch.ts`（串行 + 可取消 + cap），展示在
+         * `./batch-panel.ts`，这里只做**接线**：
+         * - 名字集合 = 条件索引里命中本角色（`_K{charaNo}_`）的函数（与「角色浏览」
+         *   同一把尺 `browseCharaFunctions`，不另抄一份正则）；
+         * - 每段回放与主判定**同口径**（同一份 callContext + 同一份文本来源选择）；
+         * - 点结果行的函数名 → 回填 + 直接判定（`runReplay(name)`，不是"填完等你再点"）。
+         */
+        const [batchSummary, setBatchSummary] = useState<BatchSummary | null>(null);
+        const [batchBusy, setBatchBusy] = useState(false);
+        const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
+        const [batchError, setBatchError] = useState<string | null>(null);
+        /** 取消旗标（ref 口径：编排层每段开始前读一次；批量回放不因面板重渲丢状态） */
+        const batchCancelRef = useRef(false);
+        /** D8：面板卸载 = 没人看结果了，在途批量立刻收尾（不许跑完 1,500 段再丢） */
+        useEffect(() => () => { batchCancelRef.current = true; }, []);
+        /** 本角色的全部段落名（按索引顺序；cap 截断由 `runBatchReplay` 报 `remaining`） */
+        const batchNames = useMemo(() => {
+          if (!condIndex || charaNo === null) return [];
+          return browseCharaFunctions(condIndex.byFunction.keys(), charaNo, Number.MAX_SAFE_INTEGER);
+        }, [condIndex, charaNo]);
+
+        // 换档 / 换角色 = 换了一次体检的对象：在途那批作废，屏上的汇总也清掉（不拿旧结论冒充）
+        useEffect(() => {
+          batchCancelRef.current = true;
+          setBatchSummary(null);
+          setBatchProgress(null);
+          setBatchError(null);
+          setBatchBusy(false);
+        }, [archivePath, charaNo]);
+
+        const runBatch = (): void => {
+          if (batchBusy) return;
+          if (view === null) {
+            setBatchError('先选好存档和角色——体检是在某一档上逐段回放。');
+            return;
+          }
+          if (batchNames.length === 0) {
+            setBatchError(
+              charaNo === null
+                ? '先选一个角色：体检按角色圈定段落。'
+                : `条件索引里没有命中 _K${charaNo}_ 的段落（这个角色也许还没有口上）。`,
+            );
+            return;
+          }
+          const assembled = assembleContext();
+          if (assembled.error !== null) {
+            setBatchError(assembled.error);
+            return;
+          }
+          const v = view;
+          const cc = assembled.callContext;
+          batchCancelRef.current = false;
+          setBatchBusy(true);
+          setBatchError(null);
+          setBatchSummary(null);
+          setBatchProgress({ done: 0, total: Math.min(batchNames.length, BATCH_DEFAULT_CAP) });
+          void runBatchReplay({
+            names: batchNames,
+            cap: BATCH_DEFAULT_CAP,
+            isCancelled: () => batchCancelRef.current,
+            // D8（2026-11-05）：上限 1,500 段时逐段 setState 会把整棵结果树重渲 1,500 次。
+            // 节流到"每 20 段或每 200ms，且首尾必发"，进度条照样走、渲染次数砍两个数量级。
+            onProgress: (() => {
+              let lastAt = 0;
+              let lastDone = -1;
+              return (done: number, total: number) => {
+                const now = Date.now();
+                if (done !== total && done - lastDone < 20 && now - lastAt < 200) return;
+                lastAt = now;
+                lastDone = done;
+                setBatchProgress({ done, total });
+              };
+            })(),
+            replay: (name) => {
+              // 与主判定同口径：文本来源也走同一条裁决（同文件 + 有未保存编辑 → 缓冲文本）
+              const textChoice = textChoiceFor(name);
+              return replay.replayFunction(v, name, {
+                callContext: cc,
+                ...(textChoice.textOverride !== undefined ? { textOverride: textChoice.textOverride } : {}),
+              });
+            },
+          })
+            .then((s) => {
+              setBatchSummary(s);
+            })
+            .catch((err: unknown) => {
+              setBatchError(err instanceof Error ? err.message : String(err));
+            })
+            .finally(() => {
+              setBatchBusy(false);
+            });
+        };
+
+        /** 批量体检区（段头 / 进度 / 取消 / 汇总 / 最该看的段落；组件在 `./batch-panel.ts`） */
+        const batchSection =
+          charaNo === null
+            ? null
+            : createElement(BatchPanel, {
+                busy: batchBusy,
+                progress: batchProgress,
+                summary: batchSummary,
+                error: batchError,
+                canRun: view !== null && batchNames.length > 0 && !replayBusy,
+                runLabel: '本角色全段落体检',
+                runHint: `逐段回放 K${charaNo} 的全部段落（单次上限 ${BATCH_DEFAULT_CAP} 段），汇总完全判定 / 部分 / 全未知`,
+                emptyNote: `点上面的按钮：会逐段回放 K${charaNo} 的全部段落（条件索引里命中 _K${charaNo}_ 的 ${batchNames.length} 段），汇总哪些完全判定、哪些判不出。`,
+                onRun: runBatch,
+                onCancel: () => {
+                  batchCancelRef.current = true;
+                },
+                onPickFunction: (name: string) => {
+                  setFnQuery(name);
+                  runReplay(name);
+                },
+              });
+
 
         // ---- 选档/选角色 ----
         const archiveSelect = createElement(
@@ -892,6 +1218,25 @@ export function createUiStateReplayPlugin(): Plugin {
           { className: 'ghost small', disabled: replayBusy || !view, onClick: () => runReplay(), title: '对照这份存档，看这段里每个条件走不走' },
           replayBusy ? '判定中…' : '判定',
         );
+        /**
+         * 「本角色全段落体检」（2026-11-05）：选好角色后最常问的那句是「我的段落哪些判不出」——
+         * 按钮就放在函数名旁边（单段判定的入口旁边，同一件事的两个粒度）。
+         */
+        const batchBtn =
+          charaNo === null
+            ? null
+            : createElement(
+                'button',
+                {
+                  className: 'ghost small',
+                  type: 'button',
+                  style: { flex: '0 0 auto' },
+                  disabled: batchBusy || replayBusy || view === null || batchNames.length === 0,
+                  onClick: runBatch,
+                  title: `本角色（K${charaNo}）全段落体检：逐段回放 ${batchNames.length} 段，汇总完全判定 / 部分 / 全未知（单次上限 ${BATCH_DEFAULT_CAP} 段）`,
+                },
+                batchBusy ? '体检中…' : '本角色全段落体检',
+              );
         /** 建议列表行：函数名 + 中文命中提示（靠标签命中的给作者看「为什么它冒出来」） */
         const suggestRows = suggestions.map((s) =>
           createElement(
@@ -1016,7 +1361,13 @@ export function createUiStateReplayPlugin(): Plugin {
             .then((archive) => {
               const ov = overridesForField(archive, selectedField, view.characterNo, parsePreviewValue(raw));
               if (!ov) throw new Error(`存档里没有「${selectedField.label}」这个变量（${selectedField.family}），改不了。`);
-              return replay.replayFunctionWithOverrides!(view, result.normalizedName, ov, { callContext: cc.callContext });
+                            // 预演与正式判定必须同一份文本（2026-11-05 口径）：正式判定可能用缓冲文本，
+              // 预演却读盘的话，同屏会出现"预演说会变、判定说没变"的割裂。
+              const previewText = judgeTextRef.current ?? textChoiceFor(result.normalizedName);
+              return replay.replayFunctionWithOverrides!(view, result.normalizedName, ov, {
+                callContext: cc.callContext,
+                ...(previewText.textOverride !== undefined ? { textOverride: previewText.textOverride } : {}),
+              });
             })
             .then((r) => {
               setPreview(r);
@@ -1118,10 +1469,13 @@ export function createUiStateReplayPlugin(): Plugin {
               analysis,
               onPredicateMenu,
               glossOf,
+              textSource: resultTextSource,
+              // 谓词筛选（筛选只影响渲染；统计/窗口语义不动——窗口按筛后条数走，见预览层）
+              predicateFilter: { filter: predFilter, counts: predCounts, onChange: setPredFilter },
             }),
           );
           // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [result, analysis, notice, predWindow, trWindow, props.renderIcon, emitReveal, growPreds, growTranscript, glossOf]);
+        }, [result, analysis, notice, predWindow, trWindow, props.renderIcon, emitReveal, growPreds, growTranscript, glossOf, resultTextSource, predFilter, predCounts]);
 
         // ---- 注入预演的差异呈现（diff 纯函数在 panel-logic；这里只渲染） ----
         const diff = useMemo(() => (result && preview ? diffReplays(result, preview) : null), [result, preview]);
@@ -1379,14 +1733,31 @@ export function createUiStateReplayPlugin(): Plugin {
               charaSelect,
             ),
           ),
-          createElement('div', { className: 'dbg-row dbg-row-fn' }, fnInput, slotInputs.length > 0 ? null : contextInput, replayBtn),
+          createElement(
+            'div',
+            { className: 'dbg-row dbg-row-fn' },
+            fnInput,
+            slotInputs.length > 0 ? null : contextInput,
+            replayBtn,
+            batchBtn,
+          ),
           viewStatus,
-          // P5 常驻口径提示：判定读的是磁盘上的文件（未保存的编辑不算数）
+          // 常驻口径（2026-11-05 缓冲文本批）：判定优先用编辑器里的**未保存文本**，
+          // 没有未保存编辑（或判的是另一份文件）才读磁盘；结果区会标出这次用哪份。
+          // 旧文案是"未保存的编辑不算数"，引擎支持 override 之后那句话就变成假话了。
           createElement(
             'div',
             { className: 'dim rp-hint' },
-            '判定读的是磁盘上的文件：未保存的编辑不算数，先保存再判定。',
+            '有未保存编辑时按编辑器缓冲文本判定（结果区会标出用哪份文本）；没有未保存编辑就按磁盘文件。',
           ),
+          // 编辑器里这份文件脏没脏：让"我现在改的字会被算进去"这件事在按判定之前就看得见
+          latestBufferedRef.current !== null && latestBufferedRef.current.dirty
+            ? createElement(
+                'div',
+                { className: 'dim rp-hint rp-buffer-note' },
+                `编辑器里「${shortPath(latestBufferedRef.current.filePath)}」有未保存的编辑：按下判定会直接用这份缓冲文本。`,
+              )
+            : null,
           // 求值边界的常驻口径（A3 2026-11-05）：这套回放按**函数入口时刻的存档**求值，
           // 函数体内对游戏变量的写（`CFLAG +=` / `SETBIT` / `INPUT` 之后的值等）不建模。
           // 不写这一句，作者会把"入口值是 480、但函数里先加了 10"的结论当成错答案。
@@ -1394,6 +1765,13 @@ export function createUiStateReplayPlugin(): Plugin {
             'div',
             { className: 'dim rp-hint' },
             '按函数入口时刻的存档求值：函数体内对游戏变量的写入（CFLAG += / SETBIT / INPUT 等）不建模。',
+          ),
+          // 可发现性（2026-11-05）：从编辑器里"跳到命中状态"那条键是这套面板最省事的路，
+          // 但没人会去猜快捷键——写在常驻位置，作者第一次打开就知道。
+          createElement(
+            'div',
+            { className: 'dim rp-hint' },
+            '把光标放到那一行按 Ctrl+Alt+S 可直接跳到这里并自动判定。',
           ),
           // 扫完了、一个存档都没有：下拉里只有「选择存档（0）」，不解释就成了死路。
           // P4：出路是本面板自己的「重新扫描」（旧文案把人指去状态注入器——那条路不通知这边）。
@@ -1473,6 +1851,7 @@ export function createUiStateReplayPlugin(): Plugin {
           previewSection,
           staleNote,
           resultSection,
+          // 「尚未判定」空态紧跟在结果位（没结果时它就是结果位）
           result === null && replayError === null
             ? createElement(
                 'div',
@@ -1483,8 +1862,17 @@ export function createUiStateReplayPlugin(): Plugin {
                   { className: 'dbg-empty-note' },
                   '选定存档、角色与函数后执行判定：这里逐条给出条件是否成立，以及消息窗里会打印什么。',
                 ),
+                // 可发现性（2026-11-05）：最省事的那条路（从编辑器跳进来）写进空态——
+                // 空态正是"我还不知道该怎么用这块面板"的那一屏。
+                createElement(
+                  'div',
+                  { className: 'dbg-empty-note dim' },
+                  '也可以把光标放到那一行按 Ctrl+Alt+S：直接跳到这里并自动判定。',
+                ),
               )
             : null,
+          // 体检区放在最后：结果才是主事件；入口按钮在函数名旁边（见 batchBtn）
+          batchSection,
         );
       }
 

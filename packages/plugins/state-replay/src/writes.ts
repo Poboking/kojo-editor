@@ -1,0 +1,234 @@
+/**
+ * 未建模状态写检测（2026-11-05 状态回放可用性批；游戏无关；本插件私有）。
+ *
+ * ## 解决的问题
+ *
+ * 回放按**函数入口时刻的存档**求值，不执行函数体——`CFLAG:2 += 10` / `SETBIT` /
+ * `INPUT` 之后的 `RESULT` 都不会被算进去，于是"入口值判出来的结论"可能和真实运行
+ * **不同形**，而 UI 上看不出这层近似。本模块把**能证明的写点行**交给回放面，
+ * 由面板给结论打「近似」标记（契约 `FunctionReplay.unmodeledWrites`）。
+ *
+ * ## 判据（宁少勿错：只报能证明的）
+ *
+ * 逐行（只扫 `[startLine, endLine]`，与 `hasLabelAfter` / `loop-range.ts` 的窗口扫描同口径）：
+ *
+ * 1. 行文本先 `erbCodeBodyOf(trim())` 剥 `;!;` / `;#;` 代码前缀（与 `loop-range.ts`
+ *    **同一份判据**，不另抄），再去行内 `;` 注释（引号外的 `;` 起注释）。
+ * 2. 跳过：空行 / `;` 注释 / `@` `#` `$` 非体行 / `[SKIPSTART]`…`[SKIPEND]` 区间
+ *    （引擎不执行区内的行，写不发生）。
+ * 3. **赋值形**：行首（允许 `SIF <条件> ` 前缀，画法与 `loop-range.ts` 的
+ *    `SLOT_WRITE_RE` 同源）是 `名字(:下标)?` + 赋值符（`=` 及 `+= -= *= /= %= |= &= ^=
+ *    <<= >>=`；`==` / `<=` / `>=` / `!=` **不算**）。带撇目标（`TFLAG' = 1` /
+ *    `CFLAG:2' = "x"`——引擎的字符串维度写法，真语料 923 条量级）与不带撇一样按名字
+ *    归一后判族。目标族属于**语言局部量族**（`LOCAL/LOCALS/RESULT/RESULTS` ＝
+ *    `locals.ts` 的直线数据流；`ARG/ARGS` ＝ E2 起的调用上下文 + 直线赋值）时不报——
+ *    那些写**已被建模**，不算"未建模"；带撇的本地量写法（`LOCAL' = "…"`）按同一族规则
+ *    一并放过（字符串维不在本层数据流里，但"宁少勿错"：不把它单列成未建模写）。
+ * 4. **引擎写指令**：行首（首词）命中下面 `WRITE_INSTRUCTIONS` 短表时也报。
+ * 5. 同一行只报一次；顺序 = 行序；`text` = 剥前缀 + 去行内注释后的行正文（给作者定位，
+ *    不做二次解析）。
+ *
+ * ## 为什么是"短表 + 行首动词"，而不是"动词白名单/黑名单"
+ *
+ * 判据只认**引擎语言层**的动词词汇（跨游戏一致）：读类指令（`PRINT` 族 / `GETBIT` /
+ * 各种表达式调用）**只读不写**，写进"未建模写"只会制造噪音；写类指令则一定是状态副作用。
+ * 表刻意短而明确——宁可漏报（漏报的代价是"少一个近似标记"，误报的代价是"作者不再信任
+ * 这个标记"）。
+ *
+ * ## 不检测（已知边界，如实记录）
+ *
+ * - 行内 `CALL` / `CALLFORM` 等**间接写**：被调函数体内写什么，本层不做跨函数传播；
+ * - `GOTO` / `JUMP` 跳转后的写：直线扫描照报（它确实会执行），但跳转的**可达性**不建模；
+ * - 写在函数区间外（被 `CALL` 的上文/下文函数）——不属本函数体；
+ * - `DUMPRAND` / `INITRAND`（RANDDATA 状态）与 `SWAPVAR` 一类未列入短表的指令：
+ *   宁少勿错，未收；
+ * - `#DIM` 用户变量的**声明行**不是写（`#DIM` 行按判据 1 跳过）；
+ * - `[SKIPSTART]` 跨函数头（起始于 `startLine` 之前）——本检测只按请求区间起算，
+ *   `#FUNCTION` 头不会落在 SKIP 区（抽取侧本就不发布 SKIP 区内的函数）。
+ */
+
+import type { FunctionReplay } from '@kojo/plugin-api';
+import { erbCodeBodyOf } from '@kojo/plugin-api';
+import { LOCAL_FAMILY_SLOTS } from './locals';
+
+/**
+ * 契约 `FunctionReplay['unmodeledWrites']`（`ReplayWrite` 未从 `@kojo/plugin-api`
+ * 的桶导出——那是 PS-10 字节闸的纪律：契约只放类型、插件侧取型不引值）。
+ */
+export type ReplayWrites = NonNullable<FunctionReplay['unmodeledWrites']>;
+
+/** 单个写点（与契约 `ReplayWrite` 结构同形：行号 1 基 + 去注释行正文） */
+export type ReplayWrite = ReplayWrites[number];
+
+/**
+ * **已建模**的语言局部量族：这些目标的直线赋值由 `locals.ts` 的数据流（`LOCAL` 族）
+ * 与调用上下文 + `ARG` 直写（E2）建模，写进去的值回放看得见 ⇒ 不算"未建模写"。
+ *
+ * 四族从 `LOCAL_FAMILY_SLOTS` 取（"哪些名字算本地量"在本插件里只许那一份），
+ * `ARG/ARGS` 是同一数据流层在 E2 起纳入的族，这里按名字补齐。
+ */
+const MODELED_LOCAL_FAMILIES = new Set([...LOCAL_FAMILY_SLOTS, 'ARG', 'ARGS']);
+
+/**
+ * 赋值形（行首；`SIF` 前缀可选）。与 `loop-range.ts` 的 `SLOT_WRITE_RE` 同画法，
+ * 只是目标名不限于本地量族、下标段放宽到任意表达式（动态下标写也是**确定会发生
+ * 的写**，落点未知不影响"这是一次未建模写"这个事实）。
+ *
+ * 名字尾允许**任意个撇号**（`TFLAG' = 1` / `CFLAG:2' = "x"`：引擎把带撇目标当字符串
+ * 维度，`condition-extractor/src/extract.ts` 的注释同源；对"这是一次状态写"这个事实
+ * 无影响）；判族前把撇号去掉（见 `detectUnmodeledWrites`）。
+ *
+ * 赋值符全长枚举（长符在前）；`(?!=)` 把 `==` 挡在门外——`<=` / `>=` / `!=`
+ * 根本不在枚举里，天然不中。
+ */
+const ASSIGN_RE =
+  /^(?:SIF\s+\S.*?\s)?([A-Z_][A-Z0-9_]*'*)(?::([^=\s]+))?\s*(<<=|>>=|\+=|-=|\*=|\/=|%=|\|=|&=|\^=|=)(?!=)/i;
+
+/** 行首动词（引擎写指令表的取词口；`\b` 保证 `INPUT` 不吞掉 `INPUTS` 一类的长名——两者都在表里） */
+const LEADING_VERB_RE = /^([A-Z_][A-Z0-9_]*)\b/i;
+
+/**
+/**
+ * **引擎状态写指令**短表（引擎语言词汇，零游戏知识；2026-11-05 按真语料 + 仓库自带
+ * 指令表 `erb-parser/src/instructions.ts` 校正：上一版三条名字是**猜的假名**，真语料
+ * 0 命中；这里每一条都必须在引擎指令表里存在）。逐组说明"为什么算写"：
+ *
+ * - 位操作：`SETBIT` / `CLEARBIT` / `INVERTBIT` —— 给目标变量置位；
+ * - 输入族：`INPUT` / `INPUTS` / `INPUTANY` / `INPUTMOUSEKEY` / `ONEINPUT` /
+ *   `BINPUT` / `BINPUTS` / `TINPUT` / `TINPUTS` / `TONEINPUT` / `TONEINPUTS` ——
+ *   玩家输入写进 `RESULT` / `RESULT:1…` 与系统输入状态（回放不跑输入循环）；
+ * - 角色列表族：`ADDCHARA` / `DELCHARA` / `ADDCOPYCHARA` / `SWAPCHARA` /
+ *   `SORTCHARA` / `ADDVOIDCHARA` / `RESETDATA` / `RESETGLOBAL` —— 改角色列表 /
+ *   角色槽 / 全部变量（`CHARANUM`、`TARGET` 一类随之而变）；
+ * - 时间：`TIMES` —— 推进游戏时间（改 `DAY` / `TIME` 一族）；
+ * - 存档 / 全局：`SAVEDATA` / `SAVEGLOBAL` / `LOADDATA` / `LOADGLOBAL` /
+ *   `RANDOMIZE` —— 改存档与全局运行时状态（`LOAD*` 之后后面的读全换了一份状态）；
+ * - 数组/变量写族（真语料高频：`VARSET` 2,350 行、`EQUIP` 191 行…）：
+ *   `VARSET` / `CVARSET` / `VARSIZE` / `ARRAYCOPY` / `ARRAYSHIFT` / `ARRAYREMOVE` /
+ *   `ARRAYSORT` / `SWAP` / `EQUIP` / `UNEQUIP` / `DT_CELL_SET` / `DT_ROW_ADD` /
+ *   `MAP_SET` / `RESET_STAIN` —— 直接改变量 / 数组 / 装备 / 数据表。
+ *
+ * **不收录**读类指令（`PRINT` 族 / `PRINTFORM` / `GETBIT` 等）：只读状态或只产生显示，
+ * 不构成本模块要报告的"回放没算进去的写"。
+ *
+ * 校正记录（防回潮）：上一版的 `RESETGLOBALDATA` / `SAVEGLOBALDATA` /
+ * `LOADGLOBALDATA` 在 3,818 份真实 ERB 里 **0 命中**，引擎真名分别是
+ * `RESETGLOBAL` / `SAVEGLOBAL` / `LOADGLOBAL`；`INPUTSN` 同样不是引擎词
+ * （真名 `TINPUT` / `BINPUT` 一族）。测试用 `@kojo/plugin-erb-parser` 的
+ * `ERB_INSTRUCTION_NAMES` 钉住"短表 ⊆ 引擎指令表"。
+ */
+export const WRITE_INSTRUCTIONS: ReadonlySet<string> = new Set([
+  // 位操作
+  'SETBIT',
+  'CLEARBIT',
+  'INVERTBIT',
+  // 输入族
+  'INPUT',
+  'INPUTS',
+  'INPUTANY',
+  'INPUTMOUSEKEY',
+  'ONEINPUT',
+  'BINPUT',
+  'BINPUTS',
+  'TINPUT',
+  'TINPUTS',
+  'TONEINPUT',
+  'TONEINPUTS',
+  // 角色列表 / 角色槽 / 变量重置
+  'ADDCHARA',
+  'DELCHARA',
+  'ADDCOPYCHARA',
+  'SWAPCHARA',
+  'SORTCHARA',
+  'ADDVOIDCHARA',
+  'RESETDATA',
+  'RESETGLOBAL',
+  // 时间推进
+  'TIMES',
+  // 存档 / 全局
+  'SAVEDATA',
+  'SAVEGLOBAL',
+  'LOADDATA',
+  'LOADGLOBAL',
+  'RANDOMIZE',
+  // 变量 / 数组 / 装备 / 数据表写
+  'VARSET',
+  'CVARSET',
+  'VARSIZE',
+  'ARRAYCOPY',
+  'ARRAYSHIFT',
+  'ARRAYREMOVE',
+  'ARRAYSORT',
+  'SWAP',
+  'EQUIP',
+  'UNEQUIP',
+  'DT_CELL_SET',
+  'DT_ROW_ADD',
+  'MAP_SET',
+  'RESET_STAIN',
+]);
+/**
+ * 去掉行内注释（引号外的 `;` 起注释；引号内保留）。
+ *
+ * 只需要 `"` 一种字符串定界：ERB 的字符串字面量只有双引号（`'''` 是 kojo 风格的
+ * 转译写法，不进 ERB 正文）。注释只影响 `text`（给作者定位）与判据尾部，不影响写点判定。
+ */
+function stripInlineComment(code: string): string {
+  let quoted = false;
+  for (let i = 0; i < code.length; i++) {
+    const ch = code[i]!;
+    if (ch === '"') quoted = !quoted;
+    else if (ch === ';' && !quoted) return code.slice(0, i);
+  }
+  return code;
+}
+
+/**
+ * 函数体 `[startLine, endLine]`（1 基、闭区间）内的未建模写点，按行序返回。
+ *
+ * 纯函数：只读 `lines`，不碰磁盘 / 缓存。`lines` 是整份文件的行数组（0 基取用），
+ * 与 `transcript.ts` / `loop-range.ts` 的取行口径一致。
+ */
+export function detectUnmodeledWrites(
+  lines: readonly string[],
+  startLine: number,
+  endLine: number,
+): ReplayWrites {
+  const out: ReplayWrite[] = [];
+  if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || startLine > endLine) return out;
+  const last = Math.min(endLine, lines.length);
+  /** SKIP 区状态（区间内起算；区间前开的 SKIP 见文件头"已知边界"） */
+  let inSkip = false;
+  for (let ln = Math.max(1, startLine); ln <= last; ln++) {
+    // 与 loop-range.ts 同口径：先 trim，再剥 `;!;` / `;#;` 代码前缀
+    const body = erbCodeBodyOf((lines[ln - 1] ?? '').trim());
+    if (inSkip) {
+      if (body === '[SKIPEND]') inSkip = false;
+      continue;
+    }
+    if (body === '[SKIPSTART]') {
+      inSkip = true;
+      continue;
+    }
+    if (body.length === 0) continue;
+    const head = body.charAt(0);
+    // 注释 / 函数头 / 指令 / 标签：都不是体行（与 loop-range.ts 的窗口白名单同一族判据）
+    if (head === ';' || head === '@' || head === '#' || head === '$') continue;
+    const code = stripInlineComment(body).trim();
+    if (code.length === 0) continue;
+
+    const assign = ASSIGN_RE.exec(code);
+    if (assign) {
+      // 同一行只报一次：赋值形已定性，不再看指令表（两者不会同时成立）。
+      // 带撇目标（`TFLAG'` / `CFLAG:2'`：引擎的字符串维度）判族前去掉撇号——
+      // "写的是哪个变量族"与"值是什么类型"是两条轴，本模块只关心前者。
+      const target = assign[1]!.replace(/'/g, '').toUpperCase();
+      if (!MODELED_LOCAL_FAMILIES.has(target)) out.push({ line: ln, text: code });
+      continue;
+    }
+
+    const verb = LEADING_VERB_RE.exec(code);
+    if (verb && WRITE_INSTRUCTIONS.has(verb[1]!.toUpperCase())) out.push({ line: ln, text: code });
+  }
+  return out;
+}

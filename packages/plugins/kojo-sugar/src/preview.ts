@@ -18,13 +18,27 @@
  * `foldMessageBlocks` 用产物行号，`FunctionReplay.branches[].headLine` /
  * `PredicateReplay.line` 也必须是**同一份产物文本的绝对行号**。
  *
- * 生产路径（`sugar.preview` 服务）里，`state.replay` 是**从磁盘读函数体**的，
- * 其行号天然是该 `.erb` 文件的行号；而预览跑的是**未落盘**的内存产物。
- * 因此装配方（未来把预览接上真实"保存后 .erb"的批次）必须保证：
- * 要么让回放器读的就是这份产物的落盘副本，要么让 `state.replay` 的明细
- * 提供方按产物坐标返回。S4 只做数据层与折叠逻辑，不替这一层做决定——
- * 故在契约与测试里**显式固化该前提**（测试 `predProviderFrom` 演示了
- * 切段行号 → 产物绝对行号的还原）。
+ * 生产路径（`sugar.preview` 服务）里，`state.replay` 经 `condition.extractor`
+ * 的**磁盘索引**取函数体（`engine.ts` 的 `index.byName.defsOf()` + `ref.startLine`），
+ * 其行号天然是**磁盘上那份 `.erb`** 的行号；而预览跑的是**未落盘**的内存产物
+ * （UI 喂的是编辑器 live buffer，读盘只是首开窗口期的兜底）。`sourceMap` 只提供
+ * 「产物行 ↔ 糖源行」，**没有**「磁盘旧版本行 ↔ 本次产物行」这层映射——磁盘那份是
+ * 上一次落盘的旧版本，两个坐标系的对应关系在结构上不可得。
+ *
+ * 所以本模块**不假设**回放器给的是产物坐标，而是逐产物函数**验证**
+ * （`replayAnchorsToProduct`）：起点行相同 + 每一处行引用都落在该产物函数区间内 +
+ * 产物文本在该行确实是它声称的那类语句（`IF` / `ELSEIF` / `ELSE` / `SELECTCASE` /
+ * `CASE` / `CASEELSE` / `SIF`）。验证不过 ⇒ 该函数的 `archive.functions[].replay`
+ * 置 `null`（没有**可对照**的回放结果，warn 显式记录），其消息块折成 `unknown`
+ * ——**绝不**当成"无覆盖链 ⇒ 可达"。面板据此决定要不要显示可达徽章
+ * （见 `ui-sugar-preview` 的 `archiveStatus`：全不可对照时显式说"只对原代码有效"）。
+ *
+ * **真映射通道（2026-11-05 已接通）**：本文件把本次产物文本当
+ * `ReplayFunctionOptions.textOverride` 交给回放器；抽取器的 override 分支按行首
+ * `@名字` 在给定文本里重定位函数（不再借磁盘索引区间），所以回放明细的行号就是
+ * **产物坐标**。路径有两处必须同时成立：①装配方把产物文本传下来（本文件负责）；
+ * ②抽取器实现 override 重定位（`condition-extractor`，2026-11-05 批）。任一不成立
+ * 时，下面的 `replayAnchorsToProduct` 会把对不上的明细丢成"不可对照"，绝不冒充可达。
  */
 
 import type {
@@ -207,6 +221,92 @@ function foldProductLines(lines: readonly string[]): {
   return { blocks, structuralLines };
 }
 
+/* ============================== 坐标可对照性（诚实降级判据） ============================== */
+
+/**
+ * 语句种类 → 产物行首关键字（验证"这一行确实是它声称的那条语句"）。
+ *
+ * 只认**行首**：产物缩进用 `\t` / 空格，故匹配前 `trimStart`。`ELSE` / `CASE`
+ * 的判据带 `(\s|$)` 尾界，避免把 `ELSEIF` 当 `ELSE`、把 `CASEELSE` 当 `CASE`
+ * （与 `STRUCTURAL_PREFIXES` 的有序匹配同一条经验）。
+ */
+const LINE_KEYWORD = {
+  IF: /^IF(\s|$)/,
+  ELSEIF: /^ELSEIF(\s|$)/,
+  ELSE: /^ELSE(\s|$)/,
+  CASE: /^CASE(\s|$)/,
+  CASEELSE: /^CASEELSE(\s|$)/,
+  SELECTCASE: /^SELECTCASE(\s|$)/,
+  SIF: /^SIF(\s|$)/,
+  ENDIF: /^ENDIF(\s|$)/,
+  ENDSELECT: /^ENDSELECT(\s|$)/,
+} as const;
+
+/**
+ * 回放明细的行号能否**锚定到本次产物**（坐标同源判据）。
+ *
+ * 判据（三者全中才算同源）：
+ * 1. 回放器给出的函数起点行 == 产物扫描到的 `@名字` 行——起点头错位就整体错位；
+ * 2. 明细引用的**每一行**（谓词行 / 链头 / 链成员 / 闭合行 / 命中行）都落在该
+ *    产物函数的 `[fromLine, toLine]` 内；
+ * 3. 产物文本在每一处引用上确实是它声称的那类语句。**行号落在区间里 ≠ 指着同一条
+ *    语句**：磁盘旧版本的行号完全可能碰巧落在区间内的文本行上，只查区间会把
+ *    "文本行"当成 `IF` 链头，于是块与链随机错配（本批要修的就是这个）。
+ *
+ * 不满足任一条 ⇒ 回放明细属于另一个坐标系（磁盘旧版本 / 回放器读的不是这份产物），
+ * **不许**折进可达性。纯几何 + 文本判定，不做任何条件求值（求值是回放器的职责）。
+ *
+ * 已知边界（**故意不猜**）：同一行上的条件**文本**改了但语句种类与位置没变（如
+ * `IF TFLAG:193 == 1` → `== 2`），本判据看不出——那需要回放侧按产物文本解析
+ * （`ReplayFunctionOptions.textOverride`）才能根治；此时宁可保留旧结论也不做
+ * 字符串启发式（多行 `{…}` 条件会把"拼接原文"误判成"文本不符"，误杀比漏放更糟）。
+ */
+export function replayAnchorsToProduct(
+  replay: FunctionReplay,
+  fn: { fromLine: number; toLine: number },
+  productLines: readonly string[],
+): boolean {
+  if (replay.startLine !== fn.fromLine) return false;
+
+  /** 行号在产物函数区间内时给该行原文；否则 null（越界 = 不同源） */
+  const lineAt = (line: number): string | null => {
+    if (!Number.isInteger(line) || line < fn.fromLine || line > fn.toLine) return null;
+    return productLines[line - 1] ?? null;
+  };
+  const matches = (line: number, keyword: RegExp): boolean => {
+    const text = lineAt(line);
+    return text !== null && keyword.test(text.trimStart());
+  };
+
+  for (const p of replay.predicates) {
+    if (!matches(p.line, LINE_KEYWORD[p.kind])) return false;
+  }
+  for (const chain of replay.branches) {
+    if (!matches(chain.headLine, chain.kind === 'if-chain' ? LINE_KEYWORD.IF : LINE_KEYWORD.SELECTCASE)) {
+      return false;
+    }
+    if (
+      chain.endLine !== undefined &&
+      !matches(chain.endLine, chain.kind === 'if-chain' ? LINE_KEYWORD.ENDIF : LINE_KEYWORD.ENDSELECT)
+    ) {
+      return false;
+    }
+    if (chain.takenLine !== null && lineAt(chain.takenLine) === null) return false;
+    for (const m of chain.members) {
+      if (!matches(m.line, LINE_KEYWORD[m.kind])) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * 「该块没有可锚定的回放结果」的显式原因（`ReplayUnknown.code = 'other'`）。
+ *
+ * 面板侧同一句判性文案住 `ui-sugar-preview/src/panel-logic.ts` 的 `archiveStatus`
+ * （跨插件禁 import，故两处各写一遍；改文案时两处一起改）。
+ */
+const NO_ANCHOR_MESSAGE = '糖视图与磁盘行号不可对照：该块没有可锚定的回放结果（存档态判定只对原代码有效）';
+
 /* ============================== 回放折叠 ============================== */
 
 /**
@@ -320,7 +420,8 @@ function memberOwningLine(chain: BranchChainOutcome, line: number): number | nul
  * 2. **产物侧建索引**：函数块（`scanProductFunctions`）+ 消息块（`foldMessageBlocks`）；
  * 3. **源映射反查**：由 `sourceMap` 的 `generatedLine → sourceLine` 建反向表，
  *    得每条糖源行的产物行列表；纯生成行（`sourceLine: null`）不计入任何糖行；
- * 4. **回放**（可选）：按产物函数名逐函数回放 → 分支链按行区间贴到块上；
+ * 4. **回放**（可选）：按产物函数名逐函数回放 → **逐函数验证坐标同源**
+ *    （`replayAnchorsToProduct`）→ 只有可锚定的分支链才按行区间贴到块上；
  * 5. **组装**：糖源行 × 产物行 × 消息块。
  *
  * 转译诊断 `error` 时**仍然返回结果**（含空产物），由调用方按
@@ -359,11 +460,18 @@ export async function preview(deps: PreviewDeps, request: SugarPreviewRequest): 
   // 结构行清单（供 UI 过滤/折叠）——与消息块同遍产出，口径不变（末尾空尾行不算）
   const structuralLines = folded.structuralLines;
 
-  // --- 4. 回放（可选；结构化降级） ---
-  const archiveOutcome = await resolveArchive(deps, request, transpile, productFns);
+  // --- 4. 回放（可选；结构化降级 + 坐标可对照性验证） ---
+  const archiveOutcome = await resolveArchive(deps, request, transpile, productFns, productLines);
 
   // --- 5. 组装三向映射 ---
-  const lines = buildLines(source, bySource, rawBlocks, archiveOutcome.functions, sourceLineOfGenerated);
+  const lines = buildLines(
+    source,
+    bySource,
+    rawBlocks,
+    archiveOutcome.functions,
+    sourceLineOfGenerated,
+    archiveOutcome.archive !== null,
+  );
 
   const result: SugarPreviewResult = {
     transpile,
@@ -377,17 +485,24 @@ export async function preview(deps: PreviewDeps, request: SugarPreviewRequest): 
 /** 回放解析结果（archive 为 null 时 reason 说明原因） */
 interface ArchiveOutcome {
   archive: SugarPreviewArchive | null;
-  /** 函数名 → 回放结果（archive 为 null 时为空表） */
+  /**
+   * 函数名 → 回放结果（archive 为 null 时为空表）。
+   *
+   * `replay` 只保留**锚定到本次产物**的结果（`replayAnchorsToProduct`）：
+   * 回放器按磁盘旧版本出行号时，条目仍在表里（面板据此知道"有这个函数"），
+   * 但 `replay` 为 null——没有可对照的回放结果（不看这一条就会把无链演成"全部可达"）。
+   */
   functions: Map<string, SugarPreviewFunctionReplay>;
   reason?: SugarPreviewDegradeReason;
 }
 
-/** 回放侧：解析角色 → 建视图 → 逐产物函数回放；任何失败 → 结构化降级 */
+/** 回放侧：解析角色 → 建视图 → 逐产物函数回放 → 坐标可对照性验证；任何失败 → 结构化降级 */
 async function resolveArchive(
   deps: PreviewDeps,
   request: SugarPreviewRequest,
   transpile: SugarTranspileResult,
   productFns: readonly ProductFunction[],
+  productLines: readonly string[],
 ): Promise<ArchiveOutcome> {
   const empty: ArchiveOutcome = { archive: null, functions: new Map() };
 
@@ -417,16 +532,30 @@ async function resolveArchive(
   const functions = new Map<string, SugarPreviewFunctionReplay>();
   const names = productFns.map((f) => f.name);
   try {
-    const replayOpts = request.callContext ? { callContext: request.callContext } : {};
+    // `textOverride: transpile.erb`：让回放器**按本次产物文本**解析（抽取器的 override
+    // 分支已按行首 `@NAME` 在给定文本里重定位函数、坐标即产物坐标，见 2026-11-05 批）——
+    // 这是「产物坐标回放」的真映射通道；拿不到产物文本时退回磁盘语义。
+    // 无论哪条路，下面仍逐函数做 `replayAnchorsToProduct` 验证：坐标对不上照样丢弃。
+    const replayOpts = {
+      ...(request.callContext ? { callContext: request.callContext } : {}),
+      textOverride: transpile.erb,
+    };
     const results = await deps.replay.replayFunctions(view, names, replayOpts);
     for (let i = 0; i < productFns.length; i++) {
       const fn = productFns[i]!;
       const replay: FunctionReplay | null = results[i] ?? null;
+      const anchored = replay !== null && replayAnchorsToProduct(replay, fn, productLines);
+      if (replay !== null && !anchored) {
+        // 内核铁律：不静默。落在另一个坐标系的明细一律丢弃（否则块与链随机错配）。
+        deps.log?.warn?.(
+          `[sugar.preview] 回放行号与产物不可对照，按无回放处理：${fn.name}（回放起点 L${replay.startLine} / 产物起点 L${fn.fromLine}）`,
+        );
+      }
       functions.set(fn.name, {
         functionName: fn.name,
         fromLine: fn.fromLine,
         toLine: fn.toLine,
-        replay,
+        replay: anchored ? replay : null,
       });
     }
   } catch (err) {
@@ -465,13 +594,24 @@ function resolveCharacterNo(request: SugarPreviewRequest, transpile: SugarTransp
   return Number.isFinite(n) ? n : null;
 }
 
-/** 组装三向映射（糖源行主键） */
+/**
+ * 组装三向映射（糖源行主键）。
+ *
+ * `hasArchive`：本次请求是否真的拿到了存档（`archive !== null`）。它决定"没有可对照
+ * 回放结果"的块该怎么表达：
+ * - 无存档（`false`）：折法维持旧语义（无覆盖链 → `reachable`），面板用
+ *   `withReachability=false` 不显示徽章——"没有状态"是合法输入；
+ * - **有存档但该块没有可锚定结果**（`true` 且 `replay === null`）：折成 `unknown`
+ *   + 显式原因。若照旧折 `reachable`，"存档已接入但没有任何链"就会被演成
+ *   **全部块可达**（本批要修的假象）。
+ */
 function buildLines(
   source: string,
   bySource: Map<number, number[]>,
   rawBlocks: readonly { fromLine: number; toLine: number; text: string }[],
   functions: Map<string, SugarPreviewFunctionReplay>,
   sourceLineOfGenerated: (generatedLine: number) => number | null,
+  hasArchive: boolean,
 ): SugarPreviewLine[] {
   const srcLines = source.split('\n');
   // 源末尾若有换行，split 会产生一个空尾元素——那不是真实的"行"
@@ -504,6 +644,27 @@ function buildLines(
     if (owners.size === 0) continue;
     const fn = functionOf(blk.fromLine);
     const replay = fn?.replay ?? null;
+
+    // 有存档但这个块没有**可锚定**的回放结果（函数不在磁盘索引 / 明细落在另一个
+    // 坐标系 / 回放器没给）→ 不可判定。绝不落进 fold 的"无覆盖链 ⇒ reachable"。
+    if (hasArchive && replay === null) {
+      const block: SugarPreviewMessageBlock = {
+        fromLine: blk.fromLine,
+        toLine: blk.toLine,
+        text: blk.text,
+        branches: [],
+        reachability: 'unknown',
+        unknown: { code: 'other', message: NO_ANCHOR_MESSAGE },
+      };
+      if (fn) block.functionName = fn.functionName;
+      for (const s of owners) {
+        const list = blocksBySource.get(s);
+        if (list) list.push(block);
+        else blocksBySource.set(s, [block]);
+      }
+      continue;
+    }
+
     const fnBranches = replay?.branches ?? [];
     // 信封链（`IF LOCAL` 等转译器骨架守卫）不参与可达性折叠，但仍列出
     const authorChains = fnBranches.filter((c) => !isEnvelopeChain(c, sourceLineOfGenerated));

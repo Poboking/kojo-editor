@@ -2620,6 +2620,26 @@ export function EditorPane({
     return () => disposable.dispose();
   }, []);
 
+  /**
+   * 失焦补发（状态回放可用性批，2026-11-05）：面板 / 菜单 / 命令的动作按钮都在**编辑器
+   * 外面**，而防抖窗口（`DOCUMENT_BROADCAST_DEBOUNCE_MS`）内刚敲的字还没广播出去——
+   * 用户敲完就点「判定」，面板手里是上一拍文本（dirty 也可能是上一拍的 false，于是它连
+   * textOverride 都不传，引擎读盘拿到改前那份）。blur 严格早于 click 处理，所以离开
+   * 编辑器这一拍补一条，面板的点击处理看到的就是当时的缓冲真相。
+   *
+   * 用 `refresh`（去重）而不是 `flush`：点一下外面就是一次失焦，文本没变时一个字节都不发，
+   * 吃全文的面板不会被白重算一遍。糖视图挂着时由广播器的抑制谓词拦掉（派生文本不是真相）。
+   */
+  useEffect(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    const disposable = ed.onDidBlurEditorText(() => {
+      const path = filePathRef.current;
+      if (path !== '') documentBroadcaster.refresh(path, () => readDocumentTruth(path));
+    });
+    return () => disposable.dispose();
+  }, [documentBroadcaster, readDocumentTruth]);
+
   const decideUnlock = useCallback(
     (allow: boolean) => {
       const path = unlockAsk;

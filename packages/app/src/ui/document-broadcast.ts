@@ -20,6 +20,11 @@
  * - **抑制**：`suppressed()` 为真（糖视图挂的是 derived 只读 model）时丢弃在途排程
  *   且不发——派生文本不是文件真相（行号对不上），发了就是把面板带沟里。谓词在
  *   **落地时刻**求值：排程后、落地前用户可能刚切进糖视图。
+ * - **失焦补发**（状态回放可用性批）：`refresh` = 去重版的立即广播，接在编辑器
+ *   `onDidBlurEditorText` 上。理由不是"离开编辑器要广播"，而是**面板的动作按钮都在
+ *   编辑器外面**：窗口内刚敲的字还没落地，用户已经点过去了，面板拿上一拍文本判定就是
+ *   "未保存编辑不算数"的原样复现。blur 严格早于 click 处理，所以这一拍补发之后，
+ *   面板的点击处理看到的一定是当时的缓冲真相。
  */
 
 import { pathKey } from '@kojo/plugin-api';
@@ -49,6 +54,17 @@ export interface DocumentBroadcaster {
   schedule(path: string, read: DocumentTruthReader): void;
   /** 立即广播一条（切文件 / 加载完成 / 外部重载 / 抑制解除后补发）；在途排程作废 */
   flush(path: string, read: DocumentTruthReader): void;
+  /**
+   * 立即广播一条，**但真相没变就什么都不发**（去重版的 `flush`）。
+   *
+   * 唯一用途是"用户离开编辑器那一拍"（失焦：点面板 / 开菜单 / 切窗口）——面板的动作
+   * 按钮全在编辑器外面，而防抖窗口内刚敲的字还没广播出去，不补这一发，面板就会拿着
+   * 上一拍文本去判定（见文件头"失焦补发"）。与 `flush` 的分工只有一条：**去重**。
+   * 失焦比切文件频繁得多（点一下外面就是一次），空转广播会让吃全文的面板整篇重算；
+   * 而"文本没变"时补发本来就一无所获（消费方已拿着同一份文本）。
+   * 语义与 `flush` 逐字相同：在途排程作废、抑制期不发、`read()` 为 null 整次作废。
+   */
+  refresh(path: string, read: DocumentTruthReader): void;
   /**
    * 遗忘一条路径的去重台账（S2-3，标签关闭时调）。
    * 台账存的是**整份文本**，关标签后不清就是一整个面板寿命的常驻内存；
@@ -194,6 +210,11 @@ export function createDocumentBroadcaster(opts: DocumentBroadcasterOptions): Doc
       // 在途排程作废：它携带的是旧闭包/旧路径的读取入口，立即广播以本次为准
       cancelPending();
       tryEmit(path, read, false);
+    },
+    refresh(path: string, read: DocumentTruthReader): void {
+      // 在途排程同样作废：这一拍现取的就是最新真相，让定时器再发一条只是重复
+      cancelPending();
+      tryEmit(path, read, true);
     },
     forget(path: string): void {
       const key = pathKey(path);

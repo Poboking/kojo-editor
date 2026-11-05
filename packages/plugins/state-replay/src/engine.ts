@@ -15,6 +15,20 @@
  * KW-15D 1103：放宽到体内任意行——窗口（循环头→使用点）每行都被证明写不到循环量
  * 槽位才试算（白名单与三条判性见 `loop-range.ts` 文件头）；行文本经 `getLines`
  * 同一份缓存供给，读不到 = 回落第一条行档。
+ *
+ * 2026-11-05 本批（两条伤信任的边界）：
+ * - **未建模写事实**（`writes.ts`）：函数体内对游戏状态的写（`CFLAG:2 += 10` /
+ *   `SETBIT` / `INPUT`）回放不执行，结论可能和真实运行不同形。`replayFunction`
+ *   **总是**尽可能给出写点行（`FunctionReplay.unmodeledWrites`），面板据此给结论打
+ *   「近似」标记。字段口径（本引擎写死，消费方照此呈现，详见 `replayFunction`）：
+ *   **`[]` = 算过、未检出已知写点（白名单内零命中，不等于"真没写"）；缺省 = 不知道**（行文本不可得 ⇒ 本批不做"猜无写"）。
+ * - **缓冲区文本回放**（`ReplayFunctionOptions.textOverride`）：未保存的编辑也照回放——
+ *   明细分派给抽取器时透传（抽取器在**缓冲区自己的行号空间**里按 `@NAME` 重定位函数，
+ *   不读盘；评审 P0），台词推演与循环窗口取行也优先用 override 切行。override
+ *   **不进 lineCache**（那份缓存描述磁盘正文，混入缓冲区会让下一次无 override 的回放
+ *   读到旧编辑）；内联求值要读的正文仍走磁盘（见 `replayFunction` 内的边界注释）。
+ *   **口径**：override 只作用于"本函数所在文件"这一个函数窗口，面板文案不许把它说成
+ *   "整份缓冲区都能回放"。
  */
 
 import { splitEolLines } from '@kojo/plugin-api/eol';
@@ -39,6 +53,7 @@ import { createFunctionOverlay, mergeCallContext, type OverlayPosition, type Ove
 import { judgePredicateWithLoops } from './loop-range';
 import { createStateView, type SchemaLookup } from './state-view';
 import { buildTranscript } from './transcript';
+import { detectUnmodeledWrites } from './writes';
 
 /**
  * 函数体行文本缓存上限（2026-10-18 性能批）。
@@ -71,8 +86,9 @@ export interface StateReplayEngineDeps {
   log: Logger;
   /** 解析档案（`snapshot.source.parse`） */
   parseArchive(path: string): Promise<SnapshotArchive>;
-  /** 谓词明细（`condition.extractor.functionPredicates`） */
-  functionPredicates(normalizedName: string): Promise<FunctionPredicates | null>;
+  /** 谓词明细（`condition.extractor.functionPredicates`）；第二个形参 additive：
+   *  该文件**缓冲区文本**（未保存编辑），给了解析不读盘。 */
+  functionPredicates(normalizedName: string, textOverride?: string): Promise<FunctionPredicates | null>;
   /** 具名索引字典（当前适配器的 `variableSchema`） */
   getSchemaLookup(): SchemaLookup | undefined;
   /** 读文件原文（v0.2 第七批：内联求值需要函数体行文本；走 kernel.io） */
@@ -296,12 +312,27 @@ export class StateReplayEngine implements StateReplayService {
     return lines;
   }
 
+  /**
+   * 函数体行文本：**缓冲区文本优先**（按 EOL 切行，返回临时数组、绝不入缓存），
+   * 没有 override 才走 `getLines`（同一份 lineCache / 读盘）。
+   *
+   * 为什么不把 override 塞进 lineCache：那份缓存按**文件路径**记账、描述磁盘正文。
+   * 把缓冲区塞进去，下一次不带 override 的回放（同一路径）就会读到旧编辑——
+   * 这正是本批要消灭的"看不出来的不一致"，不能在新通道里再造一份。
+   */
+  private async linesOf(filePath: string, textOverride?: string): Promise<string[]> {
+    if (textOverride !== undefined) return splitEolLines(textOverride);
+    return this.getLines(filePath);
+  }
+
   async replayFunction(
     view: ReplayStateView,
     functionName: string,
     options?: ReplayFunctionOptions,
   ): Promise<FunctionReplay | null> {
-    const detail = await this.deps.functionPredicates(functionName);
+    // 缓冲区文本透传给抽取器（additive）：给了就按这一份解析（不读盘），
+    // 明细里的行号 / 区间仍按索引（行号按 override 文本）。
+    const detail = await this.deps.functionPredicates(functionName, options?.textOverride);
     if (!detail) return null;
     const read: ValueReader = (ref) => view.read(ref);
     // 调用上下文：显式注入与适配器推导的「确定事实」（HK-20）**逐槽合并**（E1 2026-11-05）——
@@ -319,22 +350,46 @@ export class StateReplayEngine implements StateReplayService {
     await this.inline.preanalyze(detail);
     const resolveCall: CallResolver = (name, args, callerCtx) =>
       this.inline.resolveCall(name, args, callerCtx, 0);
-    // 循环量窗口档（KW-15D）：有已发布循环才取行文本（同一 lineCache，命中即零 IPC）；
-    // 读盘失败照旧降级——拿不到行 = 只走第一条行档，绝不猜窗口干净。
-    let loopBodyLines: readonly string[] | undefined;
-    if (detail.loopCounters && detail.loopCounters.length > 0) {
-      try {
-        loopBodyLines = await this.getLines(detail.filePath);
-      } catch (err) {
-        this.deps.log.warn(`loop window lines unavailable for ${detail.filePath}: ${String(err)}`);
-      }
+    /**
+     * 函数体行文本（**取一次，三种用途共用**）：①未建模写检测（面板要的近似标记，
+     * 总是尽可能提供）；②循环量窗口档（仅已发布循环）；③台词推演（仅有显示行）。
+     * 取行优先用缓冲区文本（`options.textOverride`：未保存的编辑也照回放），否则走
+     * lineCache / 读盘。读盘失败照旧 `log.warn` 降级（三种用途各自隐藏），绝不抛错。
+     *
+     * **行号空间**：`detail` 的行号 / 区间与 `lines` 必须来自**同一份正文**（评审 P0）——
+     * 抽取器物化 override 时会在缓冲区里按 `@NAME` 重定位函数，`detail.startLine` 就是
+     * 缓冲区坐标；本层三种用途一律按 `detail.startLine/endLine` 切 `lines`，不再碰
+     * 磁盘索引区间。
+     *
+     * **边界**：override 只作用于**本函数所在文件**的明细与取行；内联解释器（
+     * `InlineManager`）要读的正文仍走磁盘——它的分析缓存按函数名定格、正文通道按
+     * 文件路径记账，把缓冲区混进去会让同一次回放里两个来源拼在一起（也污染下一次
+     * 无 override 的回放）。这是本批刻意不做的部分，如实记在文件头与本注释；
+     * 面板文案不该承诺"缓冲区里内联被调体也按缓冲区算"。
+     */
+    let lines: readonly string[] | undefined;
+    try {
+      lines = await this.linesOf(detail.filePath, options?.textOverride);
+    } catch (err) {
+      this.deps.log.warn(`function body lines unavailable for ${detail.filePath}: ${String(err)}`);
     }
-    const replay = replayPredicates(detail, read, overlay ?? undefined, resolveCall, loopBodyLines);
-    // 台词推演（v0.3 口上调试统一批；additive）：有显示行资料且行文本可得时才附——
-    // 读文件失败等意外只降级（无 transcript），不影响谓词 / 分支结果。
-    if (detail.displays && detail.displays.length > 0) {
+    // 循环量窗口档（KW-15D）：有已发布循环才用行文本；拿不到行 = 只走第一条行档，
+    // 绝不猜窗口干净。
+    const loopBodyLines = lines && detail.loopCounters && detail.loopCounters.length > 0 ? lines : undefined;
+    const evaluated = replayPredicates(detail, read, overlay ?? undefined, resolveCall, loopBodyLines);
+    /**
+     * `unmodeledWrites` 的口径（本引擎实现选择，契约只给可选字段）：
+     * - **`[]`** = 算过、函数体内**未检出已知写点**（`writes.ts` 的白名单判据跑完了；白名单外/间接写仍可能漏 ⇒ 消费方不许把它说成"结论可信"）；
+     * - **字段缺省（undefined）= 不知道**：行文本不可得（读盘失败 / 无 override 且读不到），
+     *   本批**不做"猜无写"**——消费方必须按"近似未评估"呈现，不许当零写点。
+     * 因此这里只有在真的拿到行文本时才挂这个字段（含空数组）。
+     */
+    const replay: FunctionReplay = lines
+      ? { ...evaluated, unmodeledWrites: detectUnmodeledWrites(lines, detail.startLine, detail.endLine) }
+      : evaluated;
+    // 台词推演（v0.3 口上调试统一批；additive）：有显示行资料且行文本可得时才附。
+    if (detail.displays && detail.displays.length > 0 && lines) {
       try {
-        const lines = await this.getLines(detail.filePath);
         const transcript = buildTranscript({
           detail,
           lines,

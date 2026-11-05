@@ -17,6 +17,7 @@ import type {
   ConditionExpr,
   ConditionIndex,
   ControlFlowStatement,
+  ErbFile,
   ErbIndex,
   FunctionConditions,
   FunctionPredicates,
@@ -118,6 +119,20 @@ export interface ConditionEngineDeps {
    * （`functionPredicates`：读单文件 → 扫 → 逐条解析）这条交互路径在用。
    */
   scanControlFlow(text: string): Promise<ControlFlowStatement[]>;
+  /**
+   * 纯文本解析（erb.parser 服务 `parseText`；可选但 **`textOverride` 必需**）。
+   *
+   * 为什么缓冲区分支非要它：override 文本与磁盘索引是**两个行号空间**——作者在函数前
+   * 插/删几行（未保存）时，索引里的 `startLine/endLine` 会整体错位，拿它切缓冲区就会
+   * 把整段谓词切到区间外（评审 P0 实锤：`predicates: [] + confidence: 'exact'`，
+   * 比报错更坏）。所以必须在 override 文本里按行首 `@NAME` 重新定位函数，且用与
+   * `erb-parser/scanner.ts::parseFunctionDefinition` **同源**的解析（插件间禁 import
+   * ⇒ 走 erb.parser 服务，不另抄一份函数名判据）。
+   *
+   * 缺省（旧装配）：缓冲区分支**显式返回 null**（不退回磁盘区间——那正是 P0），
+   * 并 warn 一条。磁盘分支不受影响。
+   */
+  parseText?(text: string, path?: string): ErbFile;
   /** 当前适配器的变量语义查询（无适配器 / 无 schema 时 undefined） */
   getSchemaLookup(): SchemaLookup | undefined;
   /**
@@ -202,6 +217,21 @@ export class ConditionEngine implements ConditionExtractorService {
   private readonly fileTextCache: TextFifoCache;
   private readonly textCacheMaxFiles: number;
   private readonly textCacheMaxChars: number;
+  /**
+   * **override 路径的单条目解析记忆**（2026-11-05 P0 收尾；只服务缓冲区文本）。
+   *
+   * 为什么需要：糖预览一次按**产物函数逐个**回放（N 个函数），同一份 150 KB 产物文本
+   * 若每个函数都 `parseText` 一遍就是 N 次全文解析——每次击键跑一轮预览，击键路径会被
+   * 打穿。这里只留**上一份**（`text === memo.text` 直接复用那棵树）：一次性全文比较的
+   * 成本远低于重新解析。
+   *
+   * 为什么只留一条、不按文件名做多条目表：多条目会把整份产物文本（连同解析产物）常驻，
+   * 内存涨得莫名其妙；真实访问模式是"同一份文本连续问 N 个函数"，一条就够。
+   *
+   * **磁盘分支完全不用它**：`detailCache` / `fileTextCache` 的语义一字不动（缓存的是
+   * 盘上现状）；这一格只记得"上一次给进来的是哪份缓冲区"。
+   */
+  private overrideParseMemo: { text: string; path: string | undefined; file: ErbFile } | null = null;
 
   constructor(private readonly deps: ConditionEngineDeps) {
     this.detailCacheMax = deps.detailCacheCaps?.maxDetails ?? DETAIL_CACHE_MAX;
@@ -253,9 +283,41 @@ export class ConditionEngine implements ConditionExtractorService {
    * 按需解析单函数谓词明细（读文件 → 控制流扫描 → 逐条解析）。
    * 不入全量索引（49 万谓词常驻内存不划算）；结果缓存至下一次索引重建，
    * 期间超出上限按 FIFO 逐出（逐出只意味着"下次重算"，不改产出）。
+   *
+   * `textOverride`（additive）：该函数所在文件的**缓冲区文本**（未保存编辑）。
+   * 给了就走**临时分支**——按这份文本扫描 / 抽取，**不读盘、不写任何缓存**
+   * （`fileTextCache` 按文件路径记账、`detailCache` 按函数名记账，两者描述的都只是
+   * 盘上现状；混用会让本次读到旧盘文本、或让下一次无 override 的调用读到缓冲区
+   * 内容）。
+   *
+   * **行号空间（评审 P0，2026-11-05）**：缓冲区的行号是**缓冲区自己的**，不是磁盘
+   * 索引那套。作者在函数前插/删行（未保存）时，拿索引的 `startLine/endLine` 切缓冲区
+   * 会把整段谓词切成空集（`predicates: [] + confidence: 'exact'`，比报错更坏）。所以
+   * override 分支先 `locateInText` 按行首 `@NAME` 把函数**重新定位到缓冲区坐标**，
+   * 找得到才抽（谓词 / 赋值 / returns / displays 的行号天然就是缓冲区坐标）；
+   * **找不到同名函数 → null**（显式，不伪造空结果）。
+   *
+   * **边界**：override 只作用于**本函数所在文件**；明细里引用的其它文件（内联求值
+   * 读的函数体、跨文件跳转）仍按各自路径读盘——本服务只被要求回答"这个函数在
+   * 这份缓冲区下长什么样"。
    */
-  async functionPredicates(normalizedName: string): Promise<FunctionPredicates | null> {
+  async functionPredicates(normalizedName: string, textOverride?: string): Promise<FunctionPredicates | null> {
     const key = normalizedName.toUpperCase();
+
+    // 缓冲区文本：临时分支，不读也不写任何缓存（键里没有"来源"这一维，缓存无法
+    // 表达"盘上"与"缓冲区"两份正文）。
+    if (textOverride !== undefined) {
+      const index = this.deps.getIndex();
+      if (!index) return null;
+      const ref = index.byName.defsOf(key)[0];
+      if (!ref) return null;
+      // 缓冲区坐标重定位（见方法头 P0 注）；定位不到 ⇒ 显式 null。
+      // 传 ref.filePath 只为方言判据（`.ERH` 等）与 scanner 保持一致，不参与行号。
+      const span = this.locateInText(textOverride, key, ref.filePath);
+      if (!span) return null;
+      return this.extractDetail(key, { filePath: ref.filePath, startLine: span.startLine, endLine: span.endLine }, textOverride);
+    }
+
     const cached = this.detailCache.get(key);
     if (cached) {
       this.detailCache.delete(key); // 命中=重新入队尾
@@ -279,23 +341,8 @@ export class ConditionEngine implements ConditionExtractorService {
       }
       this.fileTextCache.set(ref.filePath, text);
     }
-    let stmts: ControlFlowStatement[];
-    try {
-      stmts = await this.deps.scanControlFlow(text);
-    } catch (err) {
-      this.deps.log.warn(`Predicate detail scan failed: ${ref.filePath} — ${String(err)}`);
-      return null;
-    }
-
-    // 函数区间切片（骨架按行升序；与全量抽取同一边界语义 [startLine, endLine]）
-    const slice = stmts.filter((s) => s.line >= ref.startLine && s.line <= ref.endLine);
-    // 明细视图同时收集本地量赋值 + 分支上下文（回放数据流资料；聚合路径不收集）
-    const sourceLines = splitEolLines(text);
-    const detail = extractFunctionPredicates(
-      { normalizedName: key, filePath: ref.filePath, startLine: ref.startLine },
-      slice,
-      { endLine: ref.endLine, lines: sourceLines },
-    );
+    const detail = await this.extractDetail(key, ref, text);
+    if (!detail) return null;
     this.detailCache.set(key, detail);
     while (this.detailCache.size > this.detailCacheMax) {
       const oldest = this.detailCache.keys().next().value;
@@ -303,6 +350,86 @@ export class ConditionEngine implements ConditionExtractorService {
       this.detailCache.delete(oldest); // 超尺从队首削（正文那条尺子由 TextFifoCache 自己收口）
     }
     return detail;
+  }
+
+  /**
+   * 在**一份正文**里按行首 `@NAME` 定位函数区间（返回该正文自己的行号空间）。
+   *
+   * 用 `deps.parseText`（erb.parser 的 `parseText`，与索引 scanner **同源**）——插件
+   * 之间禁止交叉 import（解耦审计 C），所以"什么算函数名 / 函数在哪几行"这条判据只能
+   * 经服务取，不在这里另抄一份 `@NAME` 词法。
+   *
+   * **解析记忆**：命中 `overrideParseMemo`（同一份文本 + 同一个 path）就直接复用它那棵
+   * `ErbFile`，不再 `parseText`——糖预览按 N 个产物函数逐个回放的场景由此从 N 次全文
+   * 解析降到 1 次（见该字段注释）。只比对**上一份**：不同文本 = 重新解析并替换记忆。
+   *
+   * 返回 null 的三种情形都是**显式**语义（宁可报"函数不存在"，绝不拿错行号切出一份
+   * 看似完整的空明细）：无 parseText 依赖（旧装配，warn 一条）；解析抛错（warn）；
+   * 正文里没有同名函数（改名 / 删除 / 未保存到缓冲区之外）。
+   */
+  private locateInText(
+    text: string,
+    normalizedName: string,
+    filePath?: string,
+  ): { startLine: number; endLine: number } | null {
+    const parseText = this.deps.parseText;
+    if (!parseText) {
+      this.deps.log.warn(
+        'Predicate detail textOverride given but erb.parser parseText is unavailable; ' +
+          'refusing to slice buffer text with disk-index line range',
+      );
+      return null;
+    }
+    const memo = this.overrideParseMemo;
+    let file: ErbFile;
+    if (memo && memo.text === text && memo.path === filePath) {
+      file = memo.file; // 同一份缓冲区：复用上一棵解析树（N 个函数只解析一次）
+    } else {
+      try {
+        file = parseText(text, filePath);
+      } catch (err) {
+        this.deps.log.warn(`Predicate detail buffer parse failed: ${String(err)}`);
+        // 解析失败不缓存（下一次可能修好；也不留半截状态）
+        this.overrideParseMemo = null;
+        return null;
+      }
+      // 只留一条（上一份）：多条目表会把整份产物文本常驻，内存涨得莫名其妙
+      this.overrideParseMemo = { text, path: filePath, file };
+    }
+    const hit = file.functions.find((fn) => fn.normalizedName.toUpperCase() === normalizedName);
+    if (!hit) return null;
+    return { startLine: hit.startLine, endLine: hit.endLine };
+  }
+
+  /**
+   * 从一份正文抽单函数明细（盘上正文 / 缓冲区正文**共用这一条出口**，两条路不可能
+   * 给出两种抽取口径）。
+   *
+   * `range` 是**该正文自己的行号空间**：磁盘分支用索引 `ref.startLine/endLine`；缓冲区
+   * 分支用 `locateInText` 在缓冲区里重定位出的区间（评审 P0：两者不可混用）。
+   */
+  private async extractDetail(
+    key: string,
+    range: { filePath: string; startLine: number; endLine: number },
+    text: string,
+  ): Promise<FunctionPredicates | null> {
+    let stmts: ControlFlowStatement[];
+    try {
+      stmts = await this.deps.scanControlFlow(text);
+    } catch (err) {
+      this.deps.log.warn(`Predicate detail scan failed: ${range.filePath} — ${String(err)}`);
+      return null;
+    }
+
+    // 函数区间切片（骨架按行升序；与全量抽取同一边界语义 [startLine, endLine]）
+    const slice = stmts.filter((s) => s.line >= range.startLine && s.line <= range.endLine);
+    // 明细视图同时收集本地量赋值 + 分支上下文（回放数据流资料；聚合路径不收集）
+    const sourceLines = splitEolLines(text);
+    return extractFunctionPredicates(
+      { normalizedName: key, filePath: range.filePath, startLine: range.startLine },
+      slice,
+      { endLine: range.endLine, lines: sourceLines },
+    );
   }
 
   subscribe(cb: (index: ConditionIndex | null) => void): () => void {
@@ -322,6 +449,7 @@ export class ConditionEngine implements ConditionExtractorService {
     this.last = null;
     this.detailCache.clear();
     this.fileTextCache.clear();
+    this.overrideParseMemo = null; // 缓冲区解析记忆也随项目清（别常驻上一份正文）
     this.notify();
   }
 
@@ -584,6 +712,7 @@ export class ConditionEngine implements ConditionExtractorService {
     this.last = result;
     this.detailCache.clear(); // 索引重建 → 行号/定义可能变化，明细缓存失效
     this.fileTextCache.clear();
+    this.overrideParseMemo = null; // 缓冲区解析树不跨索引重建（行号空间描述的是旧缓冲区）
     this.notify();
     this.deps.log.info(
       `Condition index: ${result.stats.functions} functions scanned, ${result.stats.predicates} predicates ` +

@@ -16,11 +16,13 @@
 import { describe, expect, it } from 'vitest';
 import type {
   ArchiveMeta,
+  FunctionReplay,
   PreviewReachability,
   SnapshotArchiveEntry,
   SnapshotScanResult,
   SugarDiagnostic,
   SugarPreviewArchive,
+  SugarPreviewFunctionReplay,
   SugarPreviewLine,
   SugarPreviewMessageBlock,
   SugarPreviewResult,
@@ -477,11 +479,32 @@ describe('S4-UI / 存档选择（buildArchiveOptions / formatSize）', () => {
 });
 
 describe('S4-UI / 存档接入状态（archiveStatus）', () => {
-  const archive = (no: number, name: string | null): SugarPreviewArchive => ({
+  /** 最小回放结果（无谓词 = total 0，仍是一条**可对照**的合法结果） */
+  const replayOk = (name = 'F'): FunctionReplay => ({
+    normalizedName: name,
+    filePath: '/proj/x.ERB',
+    startLine: 1,
+    predicates: [],
+    branches: [],
+    stats: { total: 0, hit: 0, miss: 0, unknown: 0 },
+    confidence: 'exact',
+  });
+  /** 产物函数条目（product 坐标）；`replay=null` = 数据层判定"没有可对照的结果" */
+  const fnReplay = (name: string, replay: FunctionReplay | null): SugarPreviewFunctionReplay => ({
+    functionName: name,
+    fromLine: 1,
+    toLine: 10,
+    replay,
+  });
+  const archive = (
+    no: number,
+    name: string | null,
+    functions: SugarPreviewFunctionReplay[] = [],
+  ): SugarPreviewArchive => ({
     archivePath: '/save/a.sav',
     characterNo: no,
     characterName: name,
-    functions: [],
+    functions,
   });
 
   it('未接入 → connected=false + 短标签 `未接` + 提示非空', () => {
@@ -491,8 +514,8 @@ describe('S4-UI / 存档接入状态（archiveStatus）', () => {
     expect(st.hint.length).toBeGreaterThan(0);
   });
 
-  it('已接入 → connected=true + 角色名与编号；提示为空', () => {
-    const st = archiveStatus({ ...mkResult([]), archive: archive(12, '露米娅') });
+  it('已接入且有可对照结果 → connected=true + 角色名与编号；提示为空', () => {
+    const st = archiveStatus({ ...mkResult([]), archive: archive(12, '露米娅', [fnReplay('F', replayOk())]) });
     expect(st.connected).toBe(true);
     expect(st.who).toContain('露米娅');
     expect(st.who).toContain('#12');
@@ -500,8 +523,36 @@ describe('S4-UI / 存档接入状态（archiveStatus）', () => {
   });
 
   it('角色名不可读 → 只显示编号（不写 `null`）', () => {
-    const st = archiveStatus({ ...mkResult([]), archive: archive(7, null) });
+    const st = archiveStatus({ ...mkResult([]), archive: archive(7, null, [fnReplay('F', replayOk())]) });
     expect(st.who).toBe('#7');
+  });
+
+  /* --- 2026-11-05 存档态诚实降级：存档 ≠ 可达性可用 --- */
+
+  it('存档读到了但没有任何可对照的回放结果 → connected=false + 显式「不可对照」提示', () => {
+    const st = archiveStatus({ ...mkResult([]), archive: archive(12, '露米娅', [fnReplay('F', null)]) });
+    expect(st.connected).toBe(false);
+    // 角色号仍如实显示（存档确实读到了）——降级的是可达性判定，不是整条存档信息
+    expect(st.who).toContain('#12');
+    expect(st.hint).toContain('糖视图与磁盘行号不可对照');
+    expect(st.hint).toContain('存档态判定只对原代码有效');
+  });
+
+  it('archive 存在但 functions 为空（回放一条都没拿到）→ 同样不算接入', () => {
+    const st = archiveStatus({ ...mkResult([]), archive: archive(12, '露米娅') });
+    expect(st.connected).toBe(false);
+    expect(st.hint).toContain('不可对照');
+  });
+
+  it('部分函数可对照 → connected=true，但提示点名不可对照的那部分', () => {
+    const st = archiveStatus({
+      ...mkResult([]),
+      archive: archive(12, null, [fnReplay('A', replayOk('A')), fnReplay('B', null), fnReplay('C', null)]),
+    });
+    expect(st.connected).toBe(true);
+    expect(st.hint).toContain('部分');
+    expect(st.hint).toContain('2/3');
+    expect(st.hint).toContain('只对原代码有效');
   });
 });
 
@@ -530,6 +581,33 @@ describe('S4-UI / 可达性门控（未接入存档时不报可达）', () => {
     expect(summarize(res, SRC, false).blocks).toBe(0);
     expect(summarize(res, SRC, false).unreachableBlocks).toBe(0);
     expect(summarize(res, SRC, false).unknownBlocks).toBe(0);
+  });
+
+  /**
+   * 回归（2026-11-05 存档态诚实降级批）：`archive` 非 null 曾经直接把 `connected`
+   * 判成 true，而回放按磁盘旧版本读函数时 `replay` 全是 null ⇒ 每个块都"无覆盖链"
+   * ⇒ 面板把全部块演成**可达**。现在门控看的是"有没有**可对照**的回放结果"。
+   */
+  it('有存档但不可对照 → 与未接入同档：一律无色，绝不演成全可达', () => {
+    const withArchive: SugarPreviewResult = {
+      ...res,
+      archive: {
+        archivePath: '/save/a.sav',
+        characterNo: 12,
+        characterName: '露米娅',
+        // 数据层判定"磁盘行号不可对照"后，replay 一律为 null（见 kojo-sugar 的预览测试）
+        functions: [{ functionName: 'F', fromLine: 1, toLine: 10, replay: null }],
+      },
+    };
+    const st = archiveStatus(withArchive);
+    expect(st.connected).toBe(false);
+    expect(st.hint).toContain('不可对照');
+
+    const rows = buildPreviewRows(withArchive, SRC, st.connected);
+    expect(rows[2]!.reach).toEqual(ZERO_REACH);
+    expect(rows[2]!.reachClass).toBe('none');
+    expect(rows[2]!.reachLabel).toBe('');
+    expect(summarize(withArchive, SRC, st.connected).blocks).toBe(0);
   });
 });
 

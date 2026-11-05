@@ -31,7 +31,15 @@ import {
   shortPath,
 } from '@kojo/plugin-api';
 import type { AssumedSlot, LocateNotice, ReplayAnalysis, ReplayDiff } from './panel-logic';
-import { analyzeReplay, predWindowSize, replaySummarySentence, trWindowSize } from './panel-logic';
+import { analyzeReplay, predWindowSize, replaySummarySentence, sameSourcePath, trWindowSize } from './panel-logic';
+import {
+  PREDICATE_FILTER_LABEL,
+  availableFilters,
+  filterPredicates,
+  type PredicateCounts,
+  type PredicateFilter,
+  type PredicateFilterKind,
+} from './predicate-filter';
 /** 置信度徽章样式 */
 const CONFIDENCE_BADGE: Record<FunctionReplay['confidence'], { label: string; className: string }> = {
   exact: { label: '确定', className: 'rp-badge conf-exact' },
@@ -53,6 +61,161 @@ const BRANCH_MARK: Record<BranchChainOutcome['outcome'], { mark: string; classNa
 export type EmitReveal = (filePath: string, line: number, source?: string) => void;
 /** 假设值标记的内联样式（插件内自持，不改 app 样式表；虚线 = 与手输确定值视觉可区分） */
 export const ASSUME_STYLE = { color: 'var(--amber, #d19a66)', borderColor: 'var(--amber, #d19a66)', borderStyle: 'dashed' } as const;
+/** 筛选档位选中态（不新增 class：app 样式表里没有本面板的 class，内联最稳） */
+const FILTER_ACTIVE_STYLE = { fontWeight: 600, color: 'var(--fg, inherit)', borderColor: 'var(--accent, #61afef)' } as const;
+
+/* ---------------- 判定口径：编辑器缓冲文本 / 未建模写（纯函数，可单测） ----------------
+ *
+ * 2026-11-05「状态回放彻底可用」批：判定不再只能读**磁盘**文件——宿主广播
+ * `editor.documentChanged` 给出编辑器缓冲的最新文本，同一份未保存的编辑可以直接判。
+ *
+ * 口径收在这里成一个纯函数（不在面板壳层里散着三个 if）：
+ * - 判定目标文件与缓冲文件**不一定是同一份**（`nb.info().filePath` / `result.filePath`
+ *   各拿各的字符串，分隔符与大小写不保证一致 → 判等走 `sameSourcePath`，与定位同款）；
+ * - `dirty === false` 时不传 override（省一次解析；两份文本此时逐字相同）；
+ * - 拿不准（没有缓冲 / 不是同一份 / 目标是空的）→ 一律退回磁盘文本，**不猜**。
+ *
+ * 结果区必须把这次用的是哪份文本说出来（`textSourceLabel`）——"为什么我改的字没生效"
+ * 与"我明明没保存怎么判的是新文本"是同一枚硬币的两面，不标就是撒谎。
+ */
+
+/** 编辑器缓冲文本的一条真相（宿主 `editor.documentChanged` 载荷的子集，够用即取） */
+export interface BufferedDoc {
+  filePath: string;
+  text: string;
+  dirty: boolean;
+}
+
+/** 本次判定用的文本来源 */
+export type ReplayTextSource = 'buffer' | 'disk';
+
+/** 文本来源裁决结果（`source` 决定结果区那句口径标记） */
+export interface ReplayTextChoice {
+  /** 交给引擎的 `textOverride`（仅 `source === 'buffer'` 时有值） */
+  textOverride?: string;
+  source: ReplayTextSource;
+  /**
+   * 裁决理由（不静默）：
+   * - `buffer-dirty`：同文件、且广播说缓冲与盘不同步（有未保存编辑）→ 用缓冲文本；
+   * - `buffer-clean`：同文件、手里有缓冲文本但广播的 `dirty` 是 false → **照样用缓冲文本**；
+   * - `other-file`：缓冲文本属于别的文件 → 只认磁盘；
+   * - `no-buffer`：还没收到任何缓冲广播（或不知道该判哪个文件）。
+   *
+   * 为什么 `dirty=false` 也照样传（2026-11-05 口径修正，评审 + 宿主取证共同结论）：
+   * 宿主的 `dirty` 是"上一次广播那一刻"的快照——**保存后文本没变不会重播**，300ms
+   * 防抖窗口内刚敲的字也还没广播。拿一个可能滞后的 `dirty=false` 去跳过 `textOverride`，
+   * 就会让引擎读**旧盘**，等于"未保存编辑不算数"原样复现。缓冲文本与盘相同传过去也无害；
+   * 所以判据只认**文件身份**，不拿脏标记当门。
+   */
+  reason: 'buffer-dirty' | 'buffer-clean' | 'other-file' | 'no-buffer';
+}
+
+/**
+ * 选这次判定用哪份文本。`targetPath` = 待判定函数所在文件（不知道就传 null）。
+ * `opts.ignoreDirty = false` 可退回旧口径（同文件但 `dirty=false` 时用磁盘）——只给
+ * 对拍 / 调试用；生产一律走"同文件就用缓冲"。
+ */
+export function chooseReplayText(
+  targetPath: string | null | undefined,
+  buffered: BufferedDoc | null | undefined,
+  opts: { ignoreDirty?: boolean } = {},
+): ReplayTextChoice {
+  if (!buffered) return { source: 'disk', reason: 'no-buffer' };
+  if (typeof targetPath !== 'string' || targetPath.length === 0) return { source: 'disk', reason: 'no-buffer' };
+  if (!sameSourcePath(targetPath, buffered.filePath)) return { source: 'disk', reason: 'other-file' };
+  if (!buffered.dirty && opts.ignoreDirty === false) return { source: 'disk', reason: 'buffer-clean' };
+  return {
+    textOverride: buffered.text,
+    source: 'buffer',
+    reason: buffered.dirty ? 'buffer-dirty' : 'buffer-clean',
+  };
+}
+
+/** 结果区那句口径标记（措辞在此钉死，测试直接钉这张表） */
+export function textSourceLabel(choice: ReplayTextChoice): string {
+  if (choice.source === 'buffer') {
+    return choice.reason === 'buffer-dirty'
+      ? '本次判定用的是编辑器里的未保存文本（不是磁盘上的那一份）'
+      : '本次判定用的是编辑器缓冲区文本（与磁盘当前一致）';
+  }
+  if (choice.reason === 'other-file') return '本次判定用的是磁盘文本（被判的那份文件不是编辑器里正在编辑的这一份）';
+  return '本次判定用的是磁盘文本';
+}
+
+/** 未建模写摘要一次列几行（多的折成 `…`，数字另报） */
+export const UNMODELED_WRITE_LIMIT = 5;
+
+/** 未建模写摘要（见 `summarizeUnmodeledWrites`） */
+export interface UnmodeledWritesSummary {
+  /** 写点总数 */
+  total: number;
+  /** 前 `limit` 条（行号 + 原文，行序即引擎给的顺序） */
+  shown: { line: number; text: string }[];
+  /** 没列出来的条数（0 = 全列了） */
+  more: number;
+  /** 提示语前半句（行号按钮跟在它后面渲染） */
+  head: string;
+}
+
+/**
+ * 未建模写摘要（纯函数）：`undefined` / 空数组 → null（旧引擎整体不渲染，零改动）。
+ *
+ * 为什么只列前 5 行：这一段可能写着几十处 `CFLAG +=`，全铺出来会把谓词列表顶出屏外；
+ * 面板要回答的是"这结论是近似的、差在哪几行"，不是把写点清单搬进结果区。
+ */
+export function summarizeUnmodeledWrites(
+  writes: readonly { line: number; text: string }[] | undefined | null,
+  limit = UNMODELED_WRITE_LIMIT,
+): UnmodeledWritesSummary | null {
+  if (!writes || writes.length === 0) return null;
+  const cap = Number.isFinite(limit) && limit >= 0 ? Math.floor(limit) : UNMODELED_WRITE_LIMIT;
+  return {
+    total: writes.length,
+    shown: writes.slice(0, cap).map((w) => ({ line: w.line, text: w.text })),
+    more: Math.max(0, writes.length - cap),
+    head: `本段有 ${writes.length} 处状态写未建模（回放按入口值判）：`,
+  };
+}
+
+/* -------------------- 槽位候选的两路合并（纯函数） -------------------- */
+
+/**
+ * 候选值并集（P4 常量候选批，2026-11-05）。
+ *
+ * 两路来源口径不同、都要留：
+ * - `base` = 谓词 AST 里**字面量**比较出来的值（`panel-logic.argSlotCandidates`）；
+ * - `extra` = 「槽 == 具名常量」那一路解析出的**真实值**（`const-candidates.resolveConstCandidates`）。
+ *
+ * 合并规则：按槽取并集，`base` 在前（原有行为逐字不变）、`extra` 只补新值，
+ * 槽内去重。**不再截断**——两路各自已有 20 条上限（`MAX_SLOT_CANDIDATES` /
+ * `MAX_CONST_CANDIDATES`），在这里再截一次等于悄悄丢掉作者最想要的那一条。
+ * 空值（空串）不当候选（槽里""与"没填"不可区分）。
+ */
+export function mergeSlotCandidates(
+  base: ReadonlyMap<string, readonly string[]>,
+  extra: ReadonlyMap<string, readonly string[]> | null | undefined,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const put = (key: string, values: readonly string[]): void => {
+    let list = out.get(key);
+    if (!list) {
+      list = [];
+      out.set(key, list);
+    }
+    const seen = new Set(list);
+    for (const v of values) {
+      if (v.length === 0) continue;
+      if (seen.has(v)) continue;
+      seen.add(v);
+      list.push(v);
+    }
+  };
+  for (const [key, values] of base) put(key, values);
+  if (extra) for (const [key, values] of extra) put(key, values);
+  // 两路都没给出值的槽不留空壳（渲染端按"有候选才挂 datalist"判）
+  for (const [key, list] of [...out]) if (list.length === 0) out.delete(key);
+  return out;
+}
 
 /* ------------------------------ 谓词窗口 ------------------------------ */
 
@@ -522,6 +685,21 @@ export function renderReplayPreview(opts: {
    * 给了就直接用；没给（如单测与别的调用方）就地算——呈现结果逐字相同。
    */
   analysis?: ReplayAnalysis | null;
+  /**
+   * 本次判定用的是哪份文本（可选；缓冲文本批）。
+   * 缺省 = 不标（单测 / 别的调用方零改动）；面板一律给（口径必须写在脸上）。
+   */
+  textSource?: ReplayTextChoice | null;
+  /**
+   * 谓词筛选（可选；2026-11-05 筛选批）。只影响**渲染**：统计 / 分支 / 台词区一律
+   * 仍按全量结果算，窗口（`predLimit`）作用于**筛后**列表。
+   * 缺省 = 不画筛选行、直接渲染全量（旧调用方与 SSR 判据零改动）。
+   */
+  predicateFilter?: {
+    readonly filter: PredicateFilter;
+    readonly counts: PredicateCounts;
+    onChange(next: PredicateFilter): void;
+  } | null;
 }): ReturnType<typeof createElement> {
   const { result, assumedSlots, emitReveal, renderIcon, notice, predLimit, onGrowPreds } = opts;
   const conf = CONFIDENCE_BADGE[result.confidence];
@@ -593,12 +771,113 @@ export function renderReplayPreview(opts: {
         })
       : null;
 
+  /**
+   * 文本口径标记（缓冲文本批）：改过没保存的字到底算不算数，结果区自己说。
+   * 缺省不渲染（单测 / 别的调用方零改动）。
+   */
+  const textSourceNote =
+    opts.textSource === undefined || opts.textSource === null
+      ? null
+      : createElement(
+          'div',
+          { className: 'rp-hint dim rp-text-source' },
+          textSourceLabel(opts.textSource),
+        );
+
+  /**
+   * 未建模写标记（2026-11-05）：这一段里对游戏变量的写（`CFLAG +=` / `SETBIT` / `INPUT`…）
+   * 回放**不执行**，结论按入口值算 ⇒ 结果只是近似。写点行由引擎交回，面板逐行可点回源，
+   * 行数多时只列前 5 条（`summarizeUnmodeledWrites`）。
+   */
+  const unmodeled = summarizeUnmodeledWrites(result.unmodeledWrites);
+  /** D6（2026-11-05）：引擎把 undefined 定义成「不知道有没有写」（没拿到正文），`[]` 才是「算过、未检出」。
+   * 两者都渲染成「没有写点」就是在替引擎撒谎 ⇒ undefined 单独给一句「未评估」。 */
+  const unmodeledUnknown = result.unmodeledWrites === undefined;
+  const unmodeledSection = unmodeledUnknown
+    ? createElement(
+        'div',
+        { className: 'rp-hint rp-unmodeled', role: 'note' },
+        '未评估状态写（这次没拿到函数体行文本）：结论按入口值算，可能近似。',
+      )
+    : unmodeled
+    ? createElement(
+        'div',
+        { className: 'rp-hint rp-unmodeled', role: 'note' },
+        createElement('span', null, unmodeled.head),
+        ...unmodeled.shown.map((w, i) =>
+          createElement(
+            'button',
+            {
+              key: `w${w.line}:${i}`,
+              className: 'ghost small rp-unmodeled-line',
+              type: 'button',
+              title: `${result.filePath}:${w.line}\n${w.text}`,
+              onClick: () => emitReveal(result.filePath, w.line, result.normalizedName),
+            },
+            `第 ${w.line} 行`,
+          ),
+        ),
+        unmodeled.more > 0 ? createElement('span', { className: 'dim' }, `…（另有 ${unmodeled.more} 处）`) : null,
+      )
+    : null;
+
+  /**
+   * 谓词筛选行（2026-11-05）：真语料单函数能到 3,732 条，没有收窄手段就只能一路滚。
+   * 档位按钮 + 一个搜索框，**只筛屏幕上的行**——统计徽章、分支、台词推演一律仍按全量算，
+   * 窗口（`predLimit`）作用于筛后列表（"显示更多"按筛后条数走）。
+   */
+  const pf = opts.predicateFilter ?? null;
+  const filteredPredicates = pf === null ? result.predicates : filterPredicates(result.predicates, pf.filter);
+  // assumed 与 predicates 按下标对齐（`analysis.impact.affected`）；筛后要重新对齐——
+  // `filterPredicates` 原样返回同一批对象（不复制），所以按对象身份搬即可。
+  const assumedByIdentity = new Map<PredicateReplay, boolean>();
+  result.predicates.forEach((p, i) => assumedByIdentity.set(p, impact.affected[i] === true));
+  const filteredAssumed = filteredPredicates.map((p) => assumedByIdentity.get(p) === true);
+  const filterBar =
+    pf === null
+      ? null
+      : createElement(
+          'div',
+          { className: 'dbg-row rp-filter', style: { flexWrap: 'wrap', alignItems: 'baseline', gap: '4px' } },
+          createElement('span', { className: 'dim' }, '筛选'),
+          ...availableFilters(pf.counts).map((kind: PredicateFilterKind) =>
+            createElement(
+              'button',
+              {
+                key: kind,
+                type: 'button',
+                className: 'ghost small',
+                style: kind === pf.filter.kind ? FILTER_ACTIVE_STYLE : undefined,
+                title: `${PREDICATE_FILTER_LABEL[kind]} ${pf.counts[kind]} 条（只筛屏幕上的行，不改上面的统计）`,
+                onClick: () => pf.onChange({ ...pf.filter, kind }),
+              },
+              `${PREDICATE_FILTER_LABEL[kind]} ${pf.counts[kind]}`,
+            ),
+          ),
+          createElement('input', {
+            className: 'rp-context-input',
+            style: { flex: '1 1 80px', minWidth: 0 },
+            type: 'text',
+            value: pf.filter.query,
+            placeholder: '搜原文 / 行号',
+            title: '按原文、未知原因或行号收窄列表（不区分大小写；不改统计）',
+            onChange: (e: { target: { value: string } }) => pf.onChange({ ...pf.filter, query: e.target.value }),
+          }),
+          filteredPredicates.length !== result.predicates.length
+            ? createElement('span', { className: 'dim' }, `筛出 ${filteredPredicates.length}/${result.predicates.length}`)
+            : null,
+        );
+
   return createElement(
     'div',
     { className: 'rp-result' },
     noticeBanner,
     // 白话摘要（白话批）：徽章行数字之前先给一句结论（措辞对齐 describeReading）
     createElement('div', { className: 'rp-plain dim' }, replaySummarySentence(result)),
+    // 口径：这次判的是编辑器里的未保存文本还是磁盘文本（缓冲文本批）
+    textSourceNote,
+    // 近似边界：这一段有未建模的状态写（引擎给了才渲染）
+    unmodeledSection,
     createElement(
       'div',
       { className: 'rp-summary' },
@@ -628,11 +907,12 @@ export function renderReplayPreview(opts: {
           ),
         )
       : null,
+    filterBar,
     createElement(PredicateList, {
-      predicates: result.predicates,
+      predicates: filteredPredicates,
       filePath: result.filePath,
       normalizedName: result.normalizedName,
-      assumed: impact.affected,
+      assumed: filteredAssumed,
       atLine,
       limit: predLimit,
       onGrow: onGrowPreds,

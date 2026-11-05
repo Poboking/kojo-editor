@@ -16,9 +16,12 @@
  * 的 `panel-logic.ts` 逐字各抄一份**（诊断窗口甚至一边 80 一边 60），现已上收
  * `@kojo/plugin-api/sugar-panels`（唯一实现）；本文件保留原有导出名做薄转发。
  *
- * 边界（S4 数据层已知边界，见 `kojo-sugar/src/preview.ts` 头注）：三向映射里
- * 「产物行 ↔ 消息块」的坐标同源性由装配方保证；本模块只消费其输出，
- * **不替它做坐标判断**，故无回放数据时 `messageBlocks` 为空数组是合法输入。
+ * 坐标判性（2026-11-05 存档态诚实降级批）：数据层会把回放明细**逐函数验证**是否与
+ * 本次产物同坐标（`kojo-sugar/src/preview.ts` 的 `replayAnchorsToProduct`）；不可对照
+ * 时该函数 `archive.functions[].replay = null`、相关块折 `unknown`。本模块的
+ * `archiveStatus` 据此给出 `connected`——**只有**「存档读到了 + 至少一个函数给出可对照
+ * 的回放结果」才允许显示可达徽章；否则面板显式提示「糖视图与磁盘行号不可对照：
+ * 存档态判定只对原代码有效」，绝不把"没有链"演成"全部可达"。
  */
 
 import type {
@@ -332,20 +335,53 @@ export function buildArchiveOptions(scan: SnapshotScanResult | null): ArchiveOpt
 
 /** 存档接入状态（三向映射是否真的可用） */
 export interface ArchiveStatus {
-  /** 是否接入了回放（`SugarPreviewResult.archive !== null`） */
+  /**
+   * 存档态判定是否**可用**：存档读到了，且至少一个产物函数给出了与本预览同坐标的
+   * 回放结果（`archive.functions[].replay !== null`）。false 时面板不许显示可达徽章
+   * ——没有可对照的链不等于"无条件可达"。
+   */
   connected: boolean;
   /** 短标签（徽章用；未接入 = `未接`） */
   who: string;
-  /** 未接入时的说明（否则空串） */
+  /** 不可用 / 部分不可用时的说明（否则空串） */
   hint: string;
 }
 
+/**
+ * 存档接入状态 —— 可达性徽章的门控判据。
+ *
+ * 三种情形（缺一不可地诚实）：
+ * 1. 无存档 → `connected=false`、`who='未接'`、提示"未接入"；
+ * 2. 存档读到了但**没有任何可对照的回放结果**（产物函数不在磁盘索引 / 回放器按磁盘
+ *    旧版本出行号 → 数据层已把 replay 置 null）→ `connected=false` + 显式
+ *    「糖视图与磁盘行号不可对照：存档态判定只对原代码有效」。这是本批修的核心：
+ *    旧实现只看 `archive !== null`，于是"回放=null 但存档=有"被演成**全部块可达**；
+ * 3. 至少一个函数可对照 → `connected=true`。部分函数不可对照时仍提示（那些块
+ *    在数据层折成 `unknown`，不会冒充可达）。
+ */
 export function archiveStatus(result: SugarPreviewResult | null): ArchiveStatus {
   const a = result?.archive;
   if (!a) {
     return { connected: false, who: '未接', hint: '未接入存档回放——可达性不可判定（下方不显示可达徽章）' };
   }
   const who = a.characterName ? `${a.characterName} #${a.characterNo}` : `#${a.characterNo}`;
+  const usable = a.functions.filter((f) => f.replay !== null).length;
+  if (usable === 0) {
+    // 存档本身没问题（角色都定位到了），缺的是"与本次产物同坐标"的回放明细。
+    return {
+      connected: false,
+      who,
+      hint: '糖视图与磁盘行号不可对照：存档态判定只对原代码有效（下方不显示可达徽章）',
+    };
+  }
+  if (usable < a.functions.length) {
+    const off = a.functions.length - usable;
+    return {
+      connected: true,
+      who,
+      hint: `部分函数与磁盘行号不可对照（${off}/${a.functions.length}）：这些块只标「未知」，存档态判定只对原代码有效`,
+    };
+  }
   return { connected: true, who, hint: '' };
 }
 

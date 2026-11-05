@@ -46,6 +46,13 @@ import {
   upsertSceneByName,
 } from '../src/panel-logic';
 import type { ReplayScene, SceneSlotValue } from '../src/panel-logic';
+import {
+  UNMODELED_WRITE_LIMIT,
+  chooseReplayText,
+  mergeSlotCandidates,
+  summarizeUnmodeledWrites,
+  textSourceLabel,
+} from '../src/preview';
 
 describe('parseCallContextText', () => {
   it('数值槽（逗号/空格分隔；缺省槽位保持 undefined）', () => {
@@ -1054,5 +1061,137 @@ describe('predicateValues（B3：谓词行显示变量实际取值）', () => {
     const out = predicateValues(expr, read);
     expect(out).toBe('CFLAG:2=480 · CFLAG:3=120 · TALENT:恋慕=1');
     expect(out!.split(' · ')).toHaveLength(3);
+  });
+});
+
+/* ================================================================== *
+ * 缓冲文本口径 + 未建模写摘要 + 候选两路合并（2026-11-05 面板集成批）
+ *
+ * 纯函数住在 `../src/preview`（面板的呈现层，写域内）：
+ * - `chooseReplayText`：这次判定用编辑器缓冲还是磁盘文本；
+ * - `textSourceLabel`：结果区那句口径标记（措辞在这里钉死）；
+ * - `summarizeUnmodeledWrites`：未建模写「前 5 + 省略」（行号可点回源）；
+ * - `mergeSlotCandidates`：字面量候选 ∪ 具名常量候选。
+ * ================================================================== */
+
+describe('chooseReplayText · 同文件才传 override', () => {
+  const buffered = { filePath: 'D:\\game\\kojo\\a.erb', text: '#DIM CONST X = 1\nIF CFLAG:2 >= 10', dirty: true };
+
+  it('同一个文件 + 有未保存编辑 → 传缓冲文本', () => {
+    const r = chooseReplayText('D:\\game\\kojo\\a.erb', buffered);
+    expect(r.source).toBe('buffer');
+    expect(r.reason).toBe('buffer-dirty');
+    expect(r.textOverride).toBe(buffered.text);
+  });
+
+  it('路径口径归一到同一份（分隔符 / 大小写不同也算同文件）', () => {
+    expect(chooseReplayText('d:/game/kojo/A.ERB', buffered).textOverride).toBe(buffered.text);
+  });
+
+  it('异文件 → 不传（拿别的文件的文本判这一段 = 静默错答案）', () => {
+    const r = chooseReplayText('D:\\game\\kojo\\b.erb', buffered);
+    expect(r.source).toBe('disk');
+    expect(r.reason).toBe('other-file');
+    expect(r.textOverride).toBeUndefined();
+  });
+
+  it('同文件即使 `dirty=false` 也照样传缓冲文本（脏标记会滞后：保存不重播 / 防抖窗口）', () => {
+    const r = chooseReplayText('D:\\game\\kojo\\a.erb', { ...buffered, dirty: false });
+    expect(r).toMatchObject({ source: 'buffer', reason: 'buffer-clean' });
+    expect(r.textOverride).toBe(buffered.text);
+  });
+
+  it('显式退回旧口径（`ignoreDirty: false`）才在 clean 时用磁盘——只给对拍 / 调试', () => {
+    const r = chooseReplayText('D:\\game\\kojo\\a.erb', { ...buffered, dirty: false }, { ignoreDirty: false });
+    expect(r).toMatchObject({ source: 'disk', reason: 'buffer-clean' });
+    expect(r.textOverride).toBeUndefined();
+  });
+
+  it('没有缓冲广播 / 不知道目标文件 → 磁盘文本（不猜）', () => {
+    expect(chooseReplayText('D:\\game\\kojo\\a.erb', null)).toMatchObject({ source: 'disk', reason: 'no-buffer' });
+    expect(chooseReplayText(null, buffered)).toMatchObject({ source: 'disk', reason: 'no-buffer' });
+    expect(chooseReplayText('', buffered)).toMatchObject({ source: 'disk', reason: 'no-buffer' });
+  });
+});
+
+describe('textSourceLabel · 结果区口径标记', () => {
+  it('缓冲文本分两档措辞（未保存 / 与磁盘一致），磁盘文本给出降级原因', () => {
+    expect(textSourceLabel({ source: 'buffer', reason: 'buffer-dirty' })).toContain('编辑器里的未保存文本');
+    expect(textSourceLabel({ source: 'buffer', reason: 'buffer-clean' })).toContain('编辑器缓冲区文本');
+    expect(textSourceLabel({ source: 'buffer', reason: 'buffer-clean' })).toContain('与磁盘当前一致');
+    expect(textSourceLabel({ source: 'disk', reason: 'other-file' })).toContain('不是编辑器里正在编辑的这一份');
+    expect(textSourceLabel({ source: 'disk', reason: 'no-buffer' })).toContain('磁盘文本');
+  });
+});
+
+describe('summarizeUnmodeledWrites · 前 5 + 省略', () => {
+  const w = (line: number, text = `CFLAG:${line} += 1`) => ({ line, text });
+
+  it('缺省 / 空数组 → null（旧引擎整个区都不渲染）', () => {
+    expect(summarizeUnmodeledWrites(undefined)).toBeNull();
+    expect(summarizeUnmodeledWrites(null)).toBeNull();
+    expect(summarizeUnmodeledWrites([])).toBeNull();
+  });
+
+  it('不超过 5 条全列，次数进提示语（行号顺序 = 引擎给的顺序）', () => {
+    const s = summarizeUnmodeledWrites([w(12), w(18), w(24)]);
+    expect(s).not.toBeNull();
+    expect(s!.total).toBe(3);
+    expect(s!.shown.map((x) => x.line)).toEqual([12, 18, 24]);
+    expect(s!.more).toBe(0);
+    expect(s!.head).toBe('本段有 3 处状态写未建模（回放按入口值判）：');
+  });
+
+  it('超过 5 条只列前 5 + 记下省略数（默认上限）', () => {
+    const s = summarizeUnmodeledWrites([1, 2, 3, 4, 5, 6, 7, 8].map((n) => w(n)));
+    expect(s!.total).toBe(8);
+    expect(s!.shown).toHaveLength(UNMODELED_WRITE_LIMIT);
+    expect(s!.shown.map((x) => x.line)).toEqual([1, 2, 3, 4, 5]);
+    expect(s!.more).toBe(3);
+    expect(s!.head).toContain('有 8 处');
+  });
+
+  it('自定义上限（0 = 一行不列，但仍报总数）', () => {
+    const s = summarizeUnmodeledWrites([w(3), w(4)], 0);
+    expect(s!.shown).toEqual([]);
+    expect(s!.more).toBe(2);
+    expect(summarizeUnmodeledWrites([w(3)], 99)!.more).toBe(0);
+  });
+
+  it('原文原样带出（点击回源时的悬停文本）', () => {
+    const s = summarizeUnmodeledWrites([w(7, 'SETBIT CFLAG:2, 4')]);
+    expect(s!.shown[0]).toEqual({ line: 7, text: 'SETBIT CFLAG:2, 4' });
+  });
+});
+
+describe('mergeSlotCandidates · 字面量 ∪ 具名常量', () => {
+  it('base 在前、extra 只补新值（槽内去重），不截断', () => {
+    const base = new Map<string, string[]>([['str:0', ['战斗前', '战斗后']]]);
+    const extra = new Map<string, string[]>([
+      ['str:0', ['战斗后', '休息']],
+      ['int:1', ['3']],
+    ]);
+    const merged = mergeSlotCandidates(base, extra);
+    expect(merged.get('str:0')).toEqual(['战斗前', '战斗后', '休息']);
+    expect(merged.get('int:1')).toEqual(['3']);
+  });
+
+  it('extra 为空 / null → 与 base 逐字同值（旧行为零变化）', () => {
+    const base = new Map<string, string[]>([['int:0', ['36']]]);
+    expect(mergeSlotCandidates(base, null).get('int:0')).toEqual(['36']);
+    expect(mergeSlotCandidates(base, new Map()).get('int:0')).toEqual(['36']);
+  });
+
+  it('空串候选不产出、空槽不留壳', () => {
+    const merged = mergeSlotCandidates(new Map([['str:2', []]]), new Map([['str:2', ['']]]));
+    expect(merged.has('str:2')).toBe(false);
+  });
+
+  it('不改入参（两路 Map 原样）', () => {
+    const base = new Map<string, string[]>([['int:0', ['1']]]);
+    const extra = new Map<string, string[]>([['int:0', ['2']]]);
+    mergeSlotCandidates(base, extra);
+    expect(base.get('int:0')).toEqual(['1']);
+    expect(extra.get('int:0')).toEqual(['2']);
   });
 });

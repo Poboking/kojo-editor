@@ -812,6 +812,7 @@ export {
   isEnvelopeChain,
   isStructuralLine,
   preview,
+  replayAnchorsToProduct,
   scanProductFunctions,
   sourceLinesOf,
   type PreviewDeps,

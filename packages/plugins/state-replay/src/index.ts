@@ -70,7 +70,9 @@ export function createStateReplayPlugin(): Plugin {
       const engine = new StateReplayEngine({
         log: ctx.log,
         parseArchive: (path: string) => snapshot.parse(path),
-        functionPredicates: (name: string) => extractor.functionPredicates(name),
+        // 第二个形参透传：缓冲区文本（未保存编辑）按 override 解析，不读盘（additive）
+        functionPredicates: (name: string, textOverride?: string) =>
+          extractor.functionPredicates(name, textOverride),
         getSchemaLookup: schemaLookup,
         readFileText: async (path: string) => (await io.readText(path)).text,
         getCallContextResolver: callContextResolver,
@@ -86,6 +88,7 @@ export function createStateReplayPlugin(): Plugin {
 }
 
 export { StateReplayEngine, replayPredicates, type StateReplayEngineDeps } from './engine';
+export { WRITE_INSTRUCTIONS, detectUnmodeledWrites, type ReplayWrite, type ReplayWrites } from './writes';
 export { createStateView, ReplayViewError, type CreateStateViewOptions, type SchemaLookup } from './state-view';
 export { judgeCondition, evaluateExpr, type ValueReader, type EvalContext, type CallResolver } from './evaluate';
 export { InlineManager, analyzeInlineBody, MAX_INLINE_DEPTH, type AnalyzedFunction, type InlineBody } from './inline';

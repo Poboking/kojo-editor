@@ -39,6 +39,7 @@ import {
   foldMessageBlocks,
   isEnvelopeChain,
   isStructuralLine,
+  replayAnchorsToProduct,
   scanProductFunctions,
 } from '../src/preview';
 import type { DictionaryLookup } from '../src/types';
@@ -271,10 +272,11 @@ function makeArchive(tflag193: number): SnapshotArchive {
  * 产物谓词提供者 —— 模拟"该内存产物已被索引"。
  *
  * **坐标契约**：`FunctionPredicates.predicates[].line` 必须是**产物 ERB 的
- * 绝对行号**（预览的三向映射以产物行为共同坐标系）。生产路径里
- * `state.replay` 从磁盘读函数体、行号天然是文件行号；预览跑的是**未落盘**
- * 的内存产物，故装配方须保证喂给回放器的明细与产物同坐标（见 `preview.ts`
- * 头注"坐标契约"）。本测试用偏移量把切段行号还原成产物绝对行号。
+ * 绝对行号**（预览的三向映射以产物行为共同坐标系）。生产路径里 `state.replay`
+ * 经磁盘索引读函数体、行号天然是磁盘那份 `.erb` 的行号——预览**不假设**两者同源，
+ * 而是逐函数验证（`replayAnchorsToProduct`，见 `preview.ts` 头注「坐标契约」）；
+ * 本提供者给出的正是"回放侧真按产物坐标返回"的形态（未来 `textOverride` 落地的
+ * 目标形态），用偏移量把切段行号还原成产物绝对行号。
  */
 function predProviderFrom(source: string) {
   const res = createSugarTranspileService({ dictionary: stubDict, faceTable: stubFaceTable() }).transpile(source);
@@ -582,6 +584,218 @@ describe('信封链（转译器骨架守卫）不参与可达性折叠', () => {
   });
 });
 
+/* ============================== 坐标可对照性（存档态诚实降级） ============================== */
+
+/**
+ * 2026-11-05 判性（写死，防回退）：生产路径的 `state.replay` 经 `condition.extractor`
+ * 的**磁盘索引**读函数体，出行号是磁盘那份 `.erb` 的行号；预览跑的是**未落盘**的
+ * 内存产物（`sourceMap` 只给「产物行 ↔ 糖源行」，没有「磁盘旧版本行 ↔ 产物行」）。
+ * 于是预览逐函数验证坐标同源性（`replayAnchorsToProduct`）：验证不过就**不许**把
+ * 磁盘链折进产物块的可达性——否则"没有链"会被演成"全部块可达"。
+ *
+ * 用手写产物精确钉住三种情形：
+ * 1. 回放全是 null（产物函数不在磁盘索引 / 文件还没落过盘）→ 存档虽在，块一律 `unknown`；
+ * 2. 磁盘坐标（起点错位、或行号碰巧落在区间内的**文本行**上）→ 明细丢弃，块一律 `unknown`；
+ * 3. 真产物坐标 → 命中块正确（`reachable` / `unreachable` 分得开）。
+ */
+
+/** 手写产物：一个函数、两条 IF 链（一条是信封 `IF LOCAL`，一条是作者分支） */
+const PRODUCT_ERB = [
+  '@M_KOJO_MESSAGE_COM_K12_310_1', // 1
+  'IF LOCAL', // 2
+  'LOCAL = 1', // 3
+  'ENDIF', // 4
+  'IF TFLAG:193 == 1', // 5
+  '\tPRINTFORMW 「甲」', // 6
+  'ELSE', // 7
+  '\tPRINTFORMW 「乙」', // 8
+  'ENDIF', // 9
+  'RETURN 1', // 10
+].join('\n');
+
+/** 源文本（10 行，与产物行号一一对应；预览只按行数建骨架） */
+const PRODUCT_SOURCE = Array.from({ length: 10 }, (_, i) => `源行${i + 1}`).join('\n');
+
+/** 恒等源映射：产物行 n ↔ 源行 n（只为让消息块有归属行） */
+const IDENTITY_MAP = Array.from({ length: 10 }, (_, i) => ({ generatedLine: i + 1, sourceLine: i + 1 }));
+
+const FAKE_VIEW: ReplayStateView = {
+  characterNo: 12,
+  characterName: '露米娅',
+  archivePath: '/save/a.sav',
+  read: () => ({ kind: 'unknown', unknown: { code: 'other', message: '' } }),
+};
+
+/** 真实产物坐标的回放明细（若回放侧真按产物文本解析，就该长这样） */
+function productCoordinateReplay(): FunctionReplay {
+  return {
+    normalizedName: 'M_KOJO_MESSAGE_COM_K12_310_1',
+    filePath: '/proj/x.ERB',
+    startLine: 1,
+    predicates: [
+      { kind: 'IF', text: 'LOCAL', line: 2, expr: { kind: 'opaque', text: 'LOCAL' }, outcome: { kind: 'true' } },
+      {
+        kind: 'IF',
+        text: 'TFLAG:193 == 1',
+        line: 5,
+        expr: { kind: 'opaque', text: 'TFLAG:193 == 1' },
+        outcome: { kind: 'true' },
+      },
+    ],
+    branches: [
+      {
+        kind: 'if-chain',
+        headLine: 2,
+        depth: 0,
+        members: [{ line: 2, kind: 'IF', text: 'LOCAL' }],
+        takenLine: 2,
+        outcome: 'taken',
+        endLine: 4,
+      },
+      {
+        kind: 'if-chain',
+        headLine: 5,
+        depth: 0,
+        members: [
+          { line: 5, kind: 'IF', text: 'TFLAG:193 == 1' },
+          { line: 7, kind: 'ELSE', text: '' },
+        ],
+        takenLine: 5,
+        outcome: 'taken',
+        endLine: 9,
+      },
+    ],
+    stats: { total: 2, hit: 2, miss: 0, unknown: 0 },
+    confidence: 'exact',
+  };
+}
+
+/** 预览服务：手写产物（不跑真转译器，坐标完全可控）+ 指定回放结果 */
+function syntheticPreview(replays: readonly (FunctionReplay | null)[], warns: string[] = []) {
+  const replay: StateReplayService = {
+    createView: async () => FAKE_VIEW,
+    replayFunction: async () => replays[0] ?? null,
+    replayFunctions: async () => [...replays],
+  };
+  return createSugarPreviewService({
+    transpile: () => ({
+      erb: PRODUCT_ERB,
+      sourceMap: IDENTITY_MAP,
+      diagnostics: [],
+      charNo: '12',
+    }),
+    replay,
+    log: { debug: () => {}, info: () => {}, warn: (m: string) => warns.push(m), error: () => {} },
+  });
+}
+
+describe('坐标可对照性 · replayAnchorsToProduct（纯判据）', () => {
+  const lines = PRODUCT_ERB.split('\n');
+  const fn = { fromLine: 1, toLine: 10 };
+
+  it('起点行相同、行引用都落在对应语句上 → 同源', () => {
+    expect(replayAnchorsToProduct(productCoordinateReplay(), fn, lines)).toBe(true);
+  });
+
+  it('起点行不同（磁盘旧版本的函数块位置）→ 不同源', () => {
+    expect(replayAnchorsToProduct({ ...productCoordinateReplay(), startLine: 7 }, fn, lines)).toBe(false);
+  });
+
+  it('行号落在区间内但指着**文本行** → 不同源（只查区间就会错配）', () => {
+    const base = productCoordinateReplay();
+    const crossed: FunctionReplay = {
+      ...base,
+      // 第 6 行是 `PRINTFORMW 「甲」`，不是 IF；只查 [fromLine,toLine] 会放行
+      branches: [{ ...base.branches[0]!, headLine: 6, members: [{ line: 6, kind: 'IF', text: 'LOCAL' }] }],
+    };
+    expect(replayAnchorsToProduct(crossed, fn, lines)).toBe(false);
+  });
+
+  it('行引用越出产物函数区间 → 不同源', () => {
+    const base = productCoordinateReplay();
+    const outOfRange: FunctionReplay = { ...base, predicates: [{ ...base.predicates[1]!, line: 11 }] };
+    expect(replayAnchorsToProduct(outOfRange, fn, lines)).toBe(false);
+  });
+
+  it('SELECTCASE 链头必须指着 SELECTCASE（CASE 行不算链头）', () => {
+    const base = productCoordinateReplay();
+    const wrongHead: FunctionReplay = {
+      ...base,
+      branches: [
+        {
+          kind: 'select-chain',
+          headLine: 7, // `ELSE` 行
+          depth: 0,
+          members: [{ line: 7, kind: 'CASE', text: '1' }],
+          takenLine: 7,
+          outcome: 'taken',
+          endLine: 9,
+        },
+      ],
+    };
+    expect(replayAnchorsToProduct(wrongHead, fn, lines)).toBe(false);
+  });
+});
+
+describe('坐标可对照性 · 生产形态降级（存档在、回放不可对照）', () => {
+  it('回放全 null（产物函数不在磁盘索引）→ 块一律 unknown，绝不当成可达', async () => {
+    const res = await syntheticPreview([null]).preview({ source: PRODUCT_SOURCE, archivePath: '/save/a.sav' });
+    // 存档确实读到了（角色信息可用）——降级的是可达性判定
+    expect(res.archive).not.toBeNull();
+    expect(res.archive!.characterNo).toBe(12);
+    expect(res.archive!.functions).toHaveLength(1);
+    expect(res.archive!.functions[0]!.replay).toBeNull();
+
+    const blocks = res.lines.flatMap((l) => l.messageBlocks);
+    expect(blocks.map((b) => b.text)).toEqual(['\tPRINTFORMW 「甲」', '\tPRINTFORMW 「乙」']);
+    for (const b of blocks) {
+      expect(b.reachability).toBe('unknown'); // 不是 reachable
+      expect(b.unknown?.code).toBe('other');
+      expect(b.unknown?.message).toContain('不可对照');
+    }
+  });
+
+  it('磁盘坐标（起点错位）→ 明细丢弃并 warn，块一律 unknown', async () => {
+    const warns: string[] = [];
+    const disk = { ...productCoordinateReplay(), startLine: 7 };
+    const res = await syntheticPreview([disk], warns).preview({
+      source: PRODUCT_SOURCE,
+      archivePath: '/save/a.sav',
+    });
+    expect(res.archive!.functions[0]!.replay).toBeNull();
+    expect(warns.some((m) => m.includes('不可对照') && m.includes('M_KOJO_MESSAGE_COM_K12_310_1'))).toBe(true);
+    for (const b of res.lines.flatMap((l) => l.messageBlocks)) expect(b.reachability).toBe('unknown');
+  });
+
+  it('起点行碰巧相同但链头指着文本行 → 仍丢弃（行号落在区间里 ≠ 指着同一条语句）', async () => {
+    const base = productCoordinateReplay();
+    const crossed: FunctionReplay = {
+      ...base,
+      branches: [
+        { ...base.branches[0]!, headLine: 6, members: [{ line: 6, kind: 'IF', text: 'LOCAL' }] },
+        base.branches[1]!,
+      ],
+    };
+    const res = await syntheticPreview([crossed]).preview({ source: PRODUCT_SOURCE, archivePath: '/save/a.sav' });
+    expect(res.archive!.functions[0]!.replay).toBeNull();
+    for (const b of res.lines.flatMap((l) => l.messageBlocks)) expect(b.reachability).toBe('unknown');
+  });
+
+  it('真产物坐标 → 命中块正确（甲可达 / 乙不可达），且 archive 保留回放明细', async () => {
+    const res = await syntheticPreview([productCoordinateReplay()]).preview({
+      source: PRODUCT_SOURCE,
+      archivePath: '/save/a.sav',
+    });
+    expect(res.archive!.functions[0]!.replay).not.toBeNull();
+    expect(res.archive!.functions[0]!.replay!.startLine).toBe(1);
+
+    const blkA = findBlock(res, '「甲」')!;
+    expect(blkA.reachability).toBe('reachable');
+    const blkB = findBlock(res, '「乙」')!;
+    expect(blkB.reachability).toBe('unreachable');
+  });
+});
+
 /* ============================== 辅助 ============================== */
 
 function findBlock(
@@ -645,5 +859,32 @@ describe('S4 装配：服务键与服务集合', () => {
     })) as { archive: unknown; lines: unknown[] };
     expect(out.archive).toBeNull();
     expect(out.lines.length).toBeGreaterThan(0);
+  });
+});
+
+describe('产物文本回放通道（textOverride，2026-11-05 批）', () => {
+  it('预览把本次产物文本当 textOverride 交给回放器（真映射通道）', async () => {
+    let seenOpts: unknown = null;
+    const replay: StateReplayService = {
+      createView: async () => FAKE_VIEW,
+      replayFunction: async () => null,
+      replayFunctions: async (_view, _names, opts) => {
+        seenOpts = opts ?? null;
+        return [];
+      },
+    };
+    const svc = createSugarPreviewService({
+      transpile: () => ({
+        erb: PRODUCT_ERB,
+        sourceMap: IDENTITY_MAP,
+        diagnostics: [],
+        charNo: '12',
+      }),
+      replay,
+      log: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+    });
+    await svc.preview({ source: readKojo('spec-6.1-lumia-310.kojo'), archivePath: 'D:/fake/x.sav' });
+    expect(seenOpts).not.toBeNull();
+    expect((seenOpts as { textOverride?: string }).textOverride).toBe(PRODUCT_ERB);
   });
 });
