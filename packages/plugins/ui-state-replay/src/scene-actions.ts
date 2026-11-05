@@ -82,13 +82,15 @@ export function createSceneActions(deps: SceneActionDeps): SceneActions {
         setSlotEdited(app.edited); // 场景覆盖的槽 → manual（作者假设，非引擎事实）
         const parts: string[] = [
           selectedScene.id === DEFAULT_SCENE_ID
-            // 两种槽位的默认各有含义（与 `defaultSlotText` 同口径）：数值槽填 0 是假设，
-            // 文字槽留空 = 未提供。别合并成一句"全 0"，那会把"未提供"说成"已给值"。
-            ? '已应用默认场景（数值槽填 0＝假设、文字槽留空＝未提供；假设不是引擎事实）'
+            // 2026-11-05 P1 口径：默认场景 = 清空全部槽位（空 = 未提供 = 未知）。
+            // 「默认场景」与「按默认场景 0 试算」是两件事：后者要作者显式勾开关，
+            // 勾上之后数值槽按 0 当假设、文字槽仍留空 = 未提供（两族默认仍各自说清，
+            // 别合并成一句"全 0"— app 侧的文案钉住的就是这半句，语义没变）。
+            ? '已应用默认场景（清空全部槽位＝都按未知；要按 0 试算请勾「按默认场景 0 试算」：数值槽填 0＝假设、文字槽留空＝未提供）'
             : `已应用「${selectedScene.name}」（${app.applied.length} 槽；场景值按作者假设对待，非引擎事实）`,
         ];
         if (app.dropped.length > 0) parts.push(`${app.dropped.length} 个场景槽位不在当前函数签名内，已忽略`);
-        if (app.reset.length > 0) parts.push(`${app.reset.length} 个已填槽位被重置为默认`);
+        if (app.reset.length > 0) parts.push(`${app.reset.length} 个已填槽位被清回空`);
         setSceneMsg(parts.join(' · '));
         return;
       }

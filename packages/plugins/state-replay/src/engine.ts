@@ -26,7 +26,6 @@ import type {
   FunctionReplay,
   Logger,
   PredicateReplay,
-  ReplayCallContext,
   ReplayCallContextResolver,
   ReplayFunctionOptions,
   ReplayStateView,
@@ -36,7 +35,7 @@ import type {
 import { type CallResolver, type EvalContext, type ValueReader } from './evaluate';
 import { buildBranchOutcomes } from './branches';
 import { InlineManager } from './inline';
-import { createFunctionOverlay, type OverlayPosition, type OverlayReader } from './locals';
+import { createFunctionOverlay, mergeCallContext, type OverlayPosition, type OverlayReader } from './locals';
 import { judgePredicateWithLoops } from './loop-range';
 import { createStateView, type SchemaLookup } from './state-view';
 import { buildTranscript } from './transcript';
@@ -305,13 +304,16 @@ export class StateReplayEngine implements StateReplayService {
     const detail = await this.deps.functionPredicates(functionName);
     if (!detail) return null;
     const read: ValueReader = (ref) => view.read(ref);
-    // 调用上下文：显式注入优先；否则经推导器补「确定事实」（HK-20）——
-    // 场景输入仍 unknown，只有引擎转发链未设置槽 / 发言者槽等确定值才被填。
-    let callContext: ReplayCallContext | undefined = options?.callContext;
-    if (!callContext) {
-      const resolver = options?.callContextResolver ?? this.deps.getCallContextResolver?.();
-      callContext = resolver?.(functionName, view.characterNo);
-    }
+    // 调用上下文：显式注入与适配器推导的「确定事实」（HK-20）**逐槽合并**（E1 2026-11-05）——
+    // 两者描述同一份调用实参的不同槽位：显式非 undefined 胜出（面板手填 + 预填 0 的假设值
+    // 都是"这一格的值"），undefined / 缺位由推导器补（如路由确定的「发言者槽 = 回放角色号」）。
+    // 此前"显式整体取代推导器"会让面板只注入几格时丢掉全部推导事实（HK-20 缺陷）；
+    // 场景输入仍 unknown，只有确定值才被填。推导器口径不变：调用方覆写优先于引擎内置。
+    const resolver = options?.callContextResolver ?? this.deps.getCallContextResolver?.();
+    const callContext = mergeCallContext(
+      options?.callContext,
+      resolver?.(functionName, view.characterNo),
+    );
     const overlay = createFunctionOverlay({ detail, callContext, baseRead: read });
     // 内联预热（异步阶段结束 → 执行期同步缓存命中）
     await this.inline.preanalyze(detail);

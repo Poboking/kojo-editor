@@ -156,7 +156,7 @@ export function PredicateList(props: PredicateListProps): ReactElement {
                 {
                   className: 'rp-badge assume',
                   style: ASSUME_STYLE,
-                  title: '该谓词读取了默认场景的假设参数（未手改的预填 0）——结论建立在假设之上',
+                  title: '该谓词读取了「按默认场景 0 试算」补的假设值——结论建立在假设之上',
                 },
                 '基于假设',
               )
@@ -549,7 +549,7 @@ export function renderReplayPreview(opts: {
           {
             className: 'rp-badge assume',
             style: ASSUME_STYLE,
-            title: '命中判定用到了默认场景的假设参数（未被手改的预填 0，未必等于引擎真实默认）——请核对场景参数',
+            title: '命中判定用到了「按默认场景 0 试算」补的假设值（作者没填、面板按 0 试算）——请核对场景参数',
           },
           `本结果含 ${impact.consumed.length} 个假设参数`,
         )
@@ -665,9 +665,12 @@ export const UNKNOWN_HINT: Record<ReplayUnknownCode, string> = {
   'local-range': '循环变量有好几种可能的取值，这几种判出来的结果不一样',
   // KW-28 判性：这一族不是"谁忘了给参数"，而是**本次调用的实参根本不在存档里**
   // （真语料 K49 × save03 实测 858 枚 / 131 个函数，同一路由键的转发实参在各调用点取值不同）。
-  // 旧短句只说"没告诉它"，作者会去找一个并不存在的"告诉"入口；白话批的口径是「为什么 + 该怎么办」，
-  // 所以这里补上那半句——面板里那格可以手填（填了就是作者给的场景值，引擎仍不猜）。
-  'call-context': '这一格要看它是被谁、带着什么调进来的，存档里没有；知道场景就在「场景参数」里填这一格',
+  // 2026-11-05 P6：旧文案叫作者"在场景参数里填这一格"，但常常根本没有那一格
+  // （槽位输入只按路由模板渲染，模板不转发的 ARGS 压根没有输入框）。并集输入
+  // （`mergeSlotInputs`）落地后这一格一定在；文案同时给两条可执行出路：
+  // 手动填值，或勾「按默认场景 0 试算」。
+  'call-context':
+    '这一格由本次调用的实参决定，存档里没有 —— 在「场景参数」里给 ARG/ARGS 那一格填值就能判；数值槽也可以勾「按默认场景 0 试算」',
   'dynamic-index': '下标是算出来的，看不出指哪一格',
   'named-index': '下标名字认不出来',
   'missing-var': '存档里没有这个变量',

@@ -19,6 +19,37 @@
  *   反向推断（"上一行是 SIF 就守这一行"）**刻意不做**：那在引擎里不成立，
  *   会把会显示的行误报成不显示。
  *
+ * 已知近似（刻意不建模）：循环体内多次执行；`GOTO` / `JUMP` 的跳转目标（只做
+ * 保守闸，见下）。
+ *
+ * ## 早退（2026-11-05 E4）
+ *
+ * 可见性还要建模 `RETURN` / `RETURNF` 的**早退截断**：显示行之前若有必然执行的
+ * 返回语句，本行执行不到 ⇒ `hidden`（此前只看分支链 + 同行 SIF，会把 RETURN 之后
+ * 的 PRINT 误报成会显示）。
+ *
+ * 候选早退行 = `detail.startLine` 之后、本显示行之前、代码正文（`erbCodeBodyOf`
+ * 剥 `;!;` / `;#;` 前缀，口径同 `loop-range.ts`）以 `RETURN` / `RETURNF` 开头的行；
+ * **跳过 `SIF …` 前缀行**（`SIF cond RETURN` 是条件早退，不构成必然）。`[SKIPSTART]`
+ * 区内不执行的行不算。
+ *
+ * 路径判据复用**已有分支链**（`buildBranchOutcomes` 的 `members` / 成员区间）：
+ * - 早退行在某条链的成员 M 体内、而本行**不在同一成员体内**（在别的成员或链外）
+ *   ⇒ 早退不在本行路径上，不算；
+ * - 其余（早退在链外，或与本行同一成员）⇒ 算**必然早退**（同一成员时：本成员被
+ *   选中则早退先执行，未被选中则本行也不执行——两种情形本行都执行不到，`hidden`
+ *   在两种走向下都成立）。
+ *
+ * 保守闸：
+ * - 早退行之后、本函数结束前（`detail.endLine`）存在 `$` 标签行 ⇒ 不宣称早退
+ *   （`GOTO` 可以跳到标签之后，本行可能因此仍被执行；跳转来源不建模）；
+ * - 早退行位于**循环体**内（配对完整的 `FOR/NEXT`、`WHILE/WEND`、`REPEAT/REND`、
+ *   `DO/LOOP`）⇒ 不宣称早退：循环块不在分支链几何里，而"循环一次都没执行"时
+ *   体内的 RETURN 根本不执行（`FOR LOCAL,0,0` 这类空区间足够真实）⇒ 不构成必然。
+ *   `TRY` 块的 RETURN 照常执行（TRY 只捕获错误），不在此列。
+ *
+ * 早退判断能盖过 `shown` / `maybe`，但**不把 `hidden` 改回**。
+ *
  * ## 文本求值
  *
  * 插值切片**只用抽取侧的 `start/end` 偏移**（切片判据单一真源在
@@ -31,6 +62,7 @@
 import type {
   BranchChainOutcome,
   ConditionExpr,
+  ControlFlowStatement,
   FunctionDisplayLine,
   FunctionPredicates,
   PredicateReplay,
@@ -39,6 +71,7 @@ import type {
   TranscriptVisibility,
   VariableRef,
 } from '@kojo/plugin-api';
+import { erbCodeBodyOf } from '@kojo/plugin-api';
 import { evaluateExpr, type CallResolver, type EvalContext, type ValueReader } from './evaluate';
 import type { OverlayReader } from './locals';
 
@@ -149,6 +182,141 @@ function visibilityFromChains(
   return vis;
 }
 
+/**
+ * `RETURN` / `RETURNF` 代码行（词界护栏：`RETURN_X` 这种变量名不算）。
+ * `RETURN` 裸形与 `RETURNF 表达式` 都是函数返回（本插件只关心"执行到这里就结束"；
+ * `RETURN` 后多写的参数在引擎里也是返回）。
+ */
+const RETURN_LINE_RE = /^RETURNF?\b/i;
+/** `SIF …` 前缀行（同行守卫；`SIF cond RETURN` 是条件早退，不构成必然） */
+const SIF_LINE_RE = /^SIF\b/i;
+
+/**
+ * 函数体内（`startLine` 之后）以 `RETURN` / `RETURNF` 开头的代码行（升序）。
+ * 只做"这行是不是返回语句"的形状判断；能不能宣称早退由 `earlyExitOnPath` 再判。
+ */
+function returnLines(
+  lines: readonly string[],
+  startLine: number,
+  endLine: number,
+): number[] {
+  const out: number[] = [];
+  let inSkip = false;
+  const last = Math.min(endLine, lines.length);
+  for (let ln = startLine + 1; ln <= last; ln++) {
+    const body = erbCodeBodyOf((lines[ln - 1] ?? '').trim()).trim();
+    if (inSkip) {
+      if (body === '[SKIPEND]') inSkip = false;
+      continue;
+    }
+    if (body === '[SKIPSTART]') {
+      inSkip = true;
+      continue;
+    }
+    if (
+      body.length === 0 ||
+      body.startsWith(';') ||
+      body.startsWith('@') ||
+      body.startsWith('#') ||
+      body.startsWith('$')
+    ) {
+      continue;
+    }
+    if (SIF_LINE_RE.test(body)) continue;
+    if (RETURN_LINE_RE.test(body)) out.push(ln);
+  }
+  return out;
+}
+
+/**
+ * 早退行之后到函数结束前有没有 `$` 标签行（保守闸：`GOTO` 可跳到标签之后，
+ * 早退就可能被跳过；跳转来源不建模 ⇒ 见到标签就不宣称）。
+ */
+function hasLabelAfter(lines: readonly string[], fromLine: number, endLine: number): boolean {
+  const last = Math.min(endLine, lines.length);
+  for (let ln = fromLine + 1; ln <= last; ln++) {
+    if (erbCodeBodyOf((lines[ln - 1] ?? '').trim()).trim().startsWith('$')) return true;
+  }
+  return false;
+}
+
+/** 循环块开语句 → 闭语句（配对判据与 scanner 的配对表同源；`TRY` 不算） */
+const LOOP_BLOCK_CLOSES: Readonly<Record<string, string>> = {
+  FOR: 'NEXT',
+  WHILE: 'WEND',
+  REPEAT: 'REND',
+  DO: 'LOOP',
+};
+
+/**
+ * 该行是否在一条**配对完整**的循环体内（E4 保守闸）。
+ *
+ * 循环块不在 `branches` 的分支链几何里；"循环一次都没执行"（空区间 / 条件不满足）
+ * 时体内的 RETURN 根本不执行 ⇒ 不能拿它宣称本行执行不到。
+ */
+function insideLoopBody(stmts: readonly ControlFlowStatement[], line: number): boolean {
+  for (let i = 0; i < stmts.length; i++) {
+    const open = stmts[i]!;
+    const closeKind = LOOP_BLOCK_CLOSES[open.kind.toUpperCase()];
+    if (!closeKind) continue;
+    if (open.line >= line) continue; // 循环头在本行之后
+    const close = stmts.slice(i + 1).find(
+      (t) => t.kind.toUpperCase() === closeKind && t.depth === open.depth,
+    );
+    if (close && line < close.line) return true;
+  }
+  return false;
+}
+
+/**
+ * 早退行与本显示行是否在同一条执行路径上（E4 路径判据）。
+ *
+ * 逐链检查：早退行在链成员 M 体内、而本行不在同一成员体内 → 早退不在本行路径上
+ * （本行可能走别的分支或链外，早退根本没执行）。全部链都通过（或早退在链外）→
+ * 算必然早退。
+ */
+function earlyExitOnPath(
+  exitLine: number,
+  displayLine: number,
+  chains: readonly BranchChainOutcome[],
+): boolean {
+  for (const chain of chains) {
+    const atExit = memberAt(chain, exitLine);
+    if (!atExit) continue; // 早退在链外：对所有显示行都是"前面的必然语句"
+    const atDisplay = memberAt(chain, displayLine);
+    if (!atDisplay || atDisplay.idx !== atExit.idx) return false; // 别支 / 链外 → 不在本行路径上
+  }
+  return true;
+}
+
+/** 本显示行之前最近一条"必然早退"行（无 → null） */
+function earlyExitBefore(
+  displayLine: number,
+  candidates: readonly number[],
+  chains: readonly BranchChainOutcome[],
+): number | null {
+  let found: number | null = null;
+  for (const line of candidates) {
+    if (line >= displayLine) break; // 候选升序；越过显示点即止
+    if (!earlyExitOnPath(line, displayLine, chains)) continue;
+    found = line;
+  }
+  return found;
+}
+
+/**
+ * 早退覆盖：命中 → hidden（盖过 shown / maybe），**不把已有的 hidden 改回**
+ * （分支链已判不执行的行，原因保留更具体的"分支走了别处"）。
+ */
+function applyEarlyExit(vis: Visibility, exitLine: number | null): Visibility {
+  if (exitLine === null || vis.visibility === 'hidden') return vis;
+  return {
+    visibility: 'hidden',
+    reason: guardUnknown(`第 ${exitLine} 行已经 RETURN（本段到那里就结束），这一行执行不到`),
+    guardLine: exitLine,
+  };
+}
+
 /** SIF 同行守卫细化（`shown` 才继续；hidden/maybe 已定型） */
 function refineBySif(vis: Visibility, dl: FunctionDisplayLine, sifByLine: Map<number, PredicateReplay>): Visibility {
   if (vis.visibility !== 'shown') return vis;
@@ -242,7 +410,7 @@ function evaluateText(dl: FunctionDisplayLine, ctxOf: (at: { line: number; conte
 /** 台词推演构建入参（引擎装配；测试可注入合成实现） */
 export interface BuildTranscriptOptions {
   detail: FunctionPredicates;
-  /** 函数体所在文件全部行（1 基取行；保留给后续「跳过 SIF 停用区」类判据） */
+  /** 函数体所在文件全部行（1 基取行）——E4 早退判据用它扫 `RETURN` / `RETURNF` / `$` 标签 */
   lines: readonly string[];
   /** 谓词求值结果（SIF 同行守卫取其判定；即 `replayPredicates` 的产物） */
   predicates: readonly PredicateReplay[];
@@ -271,6 +439,14 @@ export function buildTranscript(opts: BuildTranscriptOptions): TranscriptLine[] 
   }
   // 包络链按链头行升序 = 外→内（branches 产物已按 headLine 排序；防御性再排一次）
   const chains = [...opts.branches].sort((a, b) => a.headLine - b.headLine);
+  // 早退候选（E4）：函数体内的 RETURN/RETURNF 行；带 `$` 标签后缀 / 位于循环体内的
+  // 候选直接剔除（保守闸，判据见文件头）。行文本缺失（旧调用方传空数组）→ 无候选，
+  // 逐字旧行为。
+  const earlyCandidates = returnLines(opts.lines, opts.detail.startLine, opts.detail.endLine).filter(
+    (ln) =>
+      !hasLabelAfter(opts.lines, ln, opts.detail.endLine) &&
+      !insideLoopBody(opts.detail.statements, ln),
+  );
   // 谓词求值结果按行归并（unknown 链的"本支明确为假"判据要按行取；CASE 同行多值）
   const predsByLine = new Map<number, PredicateReplay[]>();
   for (const p of opts.predicates) {
@@ -282,7 +458,11 @@ export function buildTranscript(opts: BuildTranscriptOptions): TranscriptLine[] 
   const out: TranscriptLine[] = [];
   for (const dl of displays) {
     const chainVis = visibilityFromChains(dl.line, chains, predsByLine);
-    const vis = refineBySif(chainVis, dl, sifByLine);
+    // 早退最后压轴：盖过 shown / maybe，hidden 不改回（E4，判据见文件头）
+    const vis = applyEarlyExit(
+      refineBySif(chainVis, dl, sifByLine),
+      earlyExitBefore(dl.line, earlyCandidates, chains),
+    );
     if (vis.visibility === 'hidden') {
       out.push({ line: dl.line, verb: dl.verb, visibility: 'hidden', payload: dl.payload, text: '', unresolved: 0, reason: vis.reason, guardLine: vis.guardLine });
       continue;

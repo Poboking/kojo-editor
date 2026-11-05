@@ -25,15 +25,22 @@
  *   - **面板壳层**（本文件 `ReplayPanel`）：`ui.panel` 的选档 / 选角 / 选函数 /
  *     场景参数输入 / 错误提示等交互骨架。
  *
- * C9（v1.0 收口，信任闭环）：协议槽位预填的 0 是**默认场景假设值**，非确定值——
- * 未手改的槽在 UI 标注「假设」（虚线样式），依赖它的谓词结果标「基于假设」，
- * 分支折叠区汇总"本结果含 N 个假设参数"。空值 = 未提供（unknown）语义不变。
+ * C9（v1.0 收口，信任闭环；2026-11-05 P1 口径修正）：槽位**默认留空**——空 = 这一格
+ * 不知道（引擎判 unknown），面板不再替作者预填 0。作者显式打开「按默认场景 0 试算」
+ * 后，留空的数值槽才按 0 注入并标「假设」（虚线样式），依赖它的谓词结果标「基于假设」，
+ * 分支折叠区汇总"本结果含 N 个假设参数"。
+ *
+ * 2026-11-05 面板可用性批（P1–P9）：输入框 = 路由模板槽 ∪ 函数体引用槽（`mergeSlotInputs`），
+ * 候选值来自谓词 AST（`argSlotCandidates`），调用上下文组装是 `panel-logic` 里的纯函数
+ * （`assembleCallContext`）；档案清单跟随 `snapshot.source` 的缓存与订阅（面板自带
+ * 「重新扫描」）；切项目归零；结果过期与 INLINE 未计入统计都显式提示。
  */
 
 import { createElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ArchiveOverrides,
   ConditionExtractorService,
+  FunctionPredicates,
   FunctionReplay,
   KojoCallSlot,
   PredicateReplay,
@@ -50,28 +57,33 @@ import type {
   UIPanelProps,
 } from '@kojo/plugin-api';
 import { KernelServices, WellKnownServices, activeGameAdapter, growWindow, shortPath } from '@kojo/plugin-api';
-import type { AssumedSlot, LocateRequest, ReplayScene, SlotOrigin } from './panel-logic';
+import type { AssumedSlot, LocateRequest, ReplayScene, SlotInput, SlotOrigin } from './panel-logic';
 import {
   DEFAULT_SCENE_ID,
   PRED_WINDOW,
   TR_WINDOW,
   analyzeReplay,
+  argSlotCandidates,
+  assembleCallContext,
   browseCharaFunctions,
   classifySlotValue,
   collectAssumedSlots,
   defaultScene,
   defaultSlotText,
   diffReplays,
+  exprArgSlots,
   locateNoticeFor,
+  mergeSlotInputs,
   overridesForField,
   parseCallContextText,
   predicateGloss,
+  predicateValues,
   replayDiffSummary,
   sanitizeScenes,
   sceneSuggestionName,
   slotKey,
+  slotPlaceholder,
   suggestFunctionsSmart,
-  toCallContext,
 } from './panel-logic';
 import { ASSUME_STYLE, DebugPreviewPanel, renderReplayPreview, type EmitReveal } from './preview';
 import { createReplayActivation } from './activation';
@@ -107,6 +119,20 @@ const LAST_DEBUG_TARGET_KEY = 'last-debug-target';
 interface ScrollHost {
   querySelector(selectors: string): { scrollIntoView(options?: unknown): void } | null;
 }
+
+/**
+ * 上次回放目标（P4，2026-11-05）：从本插件存储域还原，**校验过才应用**——
+ * 存档必须仍在当前项目的档案清单里、角色必须在当前角色表里，否则丢弃
+ * （旧实现无条件 set 回去，换工程后会拿旧工程存档建视图）。
+ */
+interface RestoreTarget {
+  archivePath?: string;
+  charaNo?: number;
+  fnQuery?: string;
+}
+
+/** datalist id 自增序号（同一页面可能挂多份面板实例；id 必须唯一） */
+let datalistSeq = 0;
 
 export function createUiStateReplayPlugin(): Plugin {
   return {
@@ -144,7 +170,7 @@ export function createUiStateReplayPlugin(): Plugin {
         const [contextText, setContextText] = useState('');
         /** 协议槽位输入（key = slotKey(kind,index)；值 = 用户文本；int 缺省 '0'、str 缺省 ''） */
         const [slotTexts, setSlotTexts] = useState<Record<string, string>>({});
-        /** 协议槽位是否被作者手改过（未改的预填 0 = 假设值，审阅 C9） */
+        /** 协议槽位是否被作者手改过（P1：留空 + 开着「按 0 试算」且没改过 = 假设值，审阅 C9） */
         const [slotEdited, setSlotEdited] = useState<Record<string, boolean>>({});
         /** 场景预设（用户自建；内置默认场景不入存储） */
         const [scenes, setScenes] = useState<ReplayScene[]>([]);
@@ -183,6 +209,19 @@ export function createUiStateReplayPlugin(): Plugin {
          */
         const [showSlots, setShowSlots] = useState(false);
         const [showScenes, setShowScenes] = useState(false);
+        /**
+         * P1 开关（2026-11-05）：把留空的数值槽按 0 试算（标为假设值）。
+         * 默认 **false**——面板不再替作者断言参数是 0（旧行为会把"确定的假"
+         * 注入给引擎，而 API 路径同一谓词是 unknown）。
+         */
+        const [assumeDefaults, setAssumeDefaults] = useState(false);
+        /** P2/P3/P8：当前函数的谓词明细（引用槽并集 / 候选值 / INLINE 计数都从这一份来） */
+        const [fnDetail, setFnDetail] = useState<FunctionPredicates | null>(null);
+        /** P5：源码已变，屏上的结果是上一次的（新结果落地即清） */
+        const [resultStale, setResultStale] = useState(false);
+        /** P4：上次目标（清单/角色表就绪后校验再应用；跨工程不建视图） */
+        const [restoreTarget, setRestoreTarget] = useState<RestoreTarget | null>(null);
+        const [restoreLoaded, setRestoreLoaded] = useState(false);
 
         /** 触底 / 点击「显示更多」→ 按 STEP 追加（单调不减、步长有界；算式在契约层 `sugar-panels`） */
         const growPreds = useCallback((total: number): void => {
@@ -198,20 +237,75 @@ export function createUiStateReplayPlugin(): Plugin {
         const resultWrapRef = useRef<HTMLDivElement | null>(null);
         /** 本实例的挂载凭据（激活层用它判断"有没有人在听"） */
         const mountTokenRef = useRef<object>({});
+        /** 本实例的 datalist id 前缀（同页多实例时 id 不能撞） */
+        const datalistIdRef = useRef('');
+        if (datalistIdRef.current === '') datalistIdRef.current = `rpdl-${++datalistSeq}`;
 
-        // 协议槽位（函数名变化时重置输入为默认场景值：int=0 / str=''）
+        /**
+         * 槽位输入并集（P2）：路由模板槽 ∪ 函数体实际引用的槽。
+         *
+         * 函数名一变（≥2 字符）就异步取明细，用 `exprArgSlots` 扫函数体引用了哪些
+         * ARG/ARGS 槽；模板没转发的槽（典型 `ARGS`）也补上输入框——旧实现只按模板
+         * 渲染，那种槽根本没有输入框，作者永远填不进那一格。
+         */
         const protocol = activation.currentProtocol();
-        const callSlots: readonly KojoCallSlot[] | null =
-          fnQuery.trim().length >= 2 ? (protocol?.slotsFor(fnQuery.trim().toUpperCase()) ?? null) : null;
-        const slotsKey = callSlots ? callSlots.map((s) => `${s.kind}${s.index}`).join('|') : '';
+        const fnNameUpper = fnQuery.trim().length >= 2 ? fnQuery.trim().toUpperCase() : '';
+        const templateSlots: readonly KojoCallSlot[] =
+          fnNameUpper === '' ? [] : (protocol?.slotsFor(fnNameUpper) ?? []);
+        /** 项目身份（切工程后同名函数的明细必须重取：条件索引整个换了） */
+        const projectKey = project.current()?.rootDir ?? '';
+
         useEffect(() => {
-          if (!callSlots) return;
-          const init: Record<string, string> = {};
-          for (const s of callSlots) init[slotKey(s.kind, s.index)] = defaultSlotText(s.kind);
-          setSlotTexts(init);
-          setSlotEdited({}); // 换函数 → 手改标记清零（预填 0 重新回到"假设值"）
+          if (fnNameUpper === '') {
+            setFnDetail(null);
+            return;
+          }
+          let cancelled = false;
+          void extractor
+            .functionPredicates(fnNameUpper)
+            .then((d) => {
+              if (cancelled) return;
+              // 函数不存在 / 无索引 / 读文件失败 → null：引用集保持空（回放时另有显式文案），不抛错
+              setFnDetail(d);
+            })
+            .catch((err: unknown) => {
+              if (cancelled) return;
+              ctx.log.warn(`Replay panel function detail failed: ${String(err)}`);
+              setFnDetail(null);
+            });
+          return () => {
+            cancelled = true;
+          };
           // eslint-disable-next-line react-hooks/exhaustive-deps
-        }, [slotsKey]);
+        }, [fnNameUpper, projectKey]);
+
+        /** 函数体引用的槽（明细变化才重扫；谓词可能有几百条，逐帧扫不划算） */
+        const detailRefs = useMemo(() => {
+          const ints = new Set<number>();
+          const strs = new Set<number>();
+          for (const p of fnDetail?.predicates ?? []) {
+            const r = exprArgSlots(p.expr);
+            for (const i of r.ints) ints.add(i);
+            for (const i of r.strs) strs.add(i);
+          }
+          return { ints: [...ints].sort((a, b) => a - b), strs: [...strs].sort((a, b) => a - b) };
+        }, [fnDetail]);
+        /** 渲染与组装共用的输入并集（模板在前、引用独有槽补后；同 kind+index 去重） */
+        const slotInputs: SlotInput[] = mergeSlotInputs(templateSlots, detailRefs);
+        const slotSignature = slotInputs.map((s) => `${s.kind}${s.index}`).join('|');
+        /** P3：候选值（键 = slotKey；只在明细到货后才有） */
+        const slotCandidates = useMemo(() => argSlotCandidates(fnDetail?.predicates ?? []), [fnDetail]);
+
+        // 槽位初始化（P7）：函数名 + 并集槽签名任一变化 → 清空输入、手改标记清零。
+        // 依赖里必须有**函数名本身**：两个函数槽签名相同时，旧函数的实参不能被当成
+        // 本函数的 manual 输入（`slotEdited` 清零也挡不住值还在）。
+        useEffect(() => {
+          const init: Record<string, string> = {};
+          for (const s of slotInputs) init[slotKey(s.kind, s.index)] = defaultSlotText(s.kind);
+          setSlotTexts(init);
+          setSlotEdited({});
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [fnNameUpper, slotSignature]);
 
         // ---- 场景预设：挂载时从存储域加载（域 = 本插件 id，内核按 pluginId 隔离） ----
         useEffect(() => {
@@ -231,41 +325,34 @@ export function createUiStateReplayPlugin(): Plugin {
         }, []);
 
         /**
-         * 上次在调的那一段：挂载时还原、变化时落盘。
+         * 上次在调的那一段：挂载时读存储、**校验后**还原、变化时落盘。
+         *
+         * P4（2026-11-05）：旧实现把存储里的 `archivePath` / `charaNo` 无条件 set 回去。
+         * 换工程后那个路径往往已经不属于当前项目，面板会拿旧工程存档建视图（旧结果
+         * 还会继续显示）。现在先只把目标记下来，等档案清单 / 角色表就绪后再校验：
+         * 存档必须仍在 `activation.archives` 里、角色必须在当前 `charaIndex` 里，
+         * 不在就丢弃。
+         *
          * 还原只在"用户还没自己选过"时生效（函数式更新判空），慢回包不会顶掉新选择；
-         * 落盘在还原回包之后才开始（`uiRestoredRef`），否则首帧的空值会先把记录盖掉。
+         * 落盘在还原判定之后才开始（`uiRestoredRef`），否则首帧的空值会先把记录盖掉。
          */
         const uiRestoredRef = useRef(false);
+        const restoreAppliedRef = useRef(false);
         useEffect(() => {
           void ctx.storage
             .get<{ archivePath?: unknown; charaNo?: unknown; fnQuery?: unknown }>(LAST_DEBUG_TARGET_KEY)
             .then((v) => {
               if (!v || typeof v !== 'object') return;
-              if (typeof v.archivePath === 'string' && v.archivePath !== '') {
-                const p = v.archivePath;
-                setArchivePath((prev) => (prev === '' ? p : prev));
-              }
-              if (typeof v.charaNo === 'number') {
-                const n = v.charaNo;
-                setCharaNo((prev) => (prev === null ? n : prev));
-              }
-              if (typeof v.fnQuery === 'string' && v.fnQuery !== '') {
-                const q = v.fnQuery;
-                setFnQuery((prev) => (prev === '' ? q : prev));
-              }
+              const target: RestoreTarget = {};
+              if (typeof v.archivePath === 'string' && v.archivePath !== '') target.archivePath = v.archivePath;
+              if (typeof v.charaNo === 'number') target.charaNo = v.charaNo;
+              if (typeof v.fnQuery === 'string' && v.fnQuery !== '') target.fnQuery = v.fnQuery;
+              setRestoreTarget(Object.keys(target).length > 0 ? target : null);
             })
             .catch((err: unknown) => ctx.log.warn(`Replay panel target restore failed: ${String(err)}`))
-            .finally(() => {
-              uiRestoredRef.current = true;
-            });
+            .finally(() => setRestoreLoaded(true));
           // eslint-disable-next-line react-hooks/exhaustive-deps
         }, []);
-        useEffect(() => {
-          if (!uiRestoredRef.current) return;
-          void ctx.storage
-            .set(LAST_DEBUG_TARGET_KEY, { archivePath, charaNo, fnQuery })
-            .catch((err: unknown) => ctx.log.warn(`Replay panel target persist failed: ${String(err)}`));
-        }, [archivePath, charaNo, fnQuery]);
 
         const persistScenes = (next: ReplayScene[]): void => {          setScenes(next);
           void ctx.storage.set(SCENES_STORAGE_KEY, next).catch((err: unknown) => {
@@ -285,6 +372,74 @@ export function createUiStateReplayPlugin(): Plugin {
         // 角色列表（project.charaIndex；项目切换由 force 刷新驱动重读）
         const projectNow = project.current();
         const charaEntries = [...(projectNow?.charaIndex.entries() ?? [])].sort((a, b) => a[0] - b[0]);
+        const charaKey = charaEntries.map(([no]) => no).join(',');
+        const archivesKey = activation.archives.map((a) => a.path).join('|');
+
+        // ---- 上次目标：清单/角色表就绪后校验再应用（P4） ----
+        useEffect(() => {
+          if (!restoreLoaded || restoreAppliedRef.current) return;
+          const target = restoreTarget;
+          // 清单还没就绪且确实有存档要还原 → 等它（扫描失败会变成就绪 + 显式错误，不会永远等）
+          if (target?.archivePath !== undefined && !activation.archivesReady) return;
+          if (target) {
+            if (target.archivePath !== undefined && activation.archives.some((a) => a.path === target.archivePath)) {
+              const p = target.archivePath;
+              setArchivePath((prev) => (prev === '' ? p : prev));
+            }
+            if (target.charaNo !== undefined && charaEntries.some(([no]) => no === target.charaNo)) {
+              const n = target.charaNo;
+              setCharaNo((prev) => (prev === null ? n : prev));
+            }
+            if (target.fnQuery !== undefined) {
+              const q = target.fnQuery;
+              setFnQuery((prev) => (prev === '' ? q : prev));
+            }
+          }
+          restoreAppliedRef.current = true;
+          uiRestoredRef.current = true;
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [restoreLoaded, restoreTarget, activation.archivesReady, archivesKey, charaKey]);
+        // ---- 上次目标落盘（还原判定之后才开始，避免首帧空值盖掉记录） ----
+        useEffect(() => {
+          if (!uiRestoredRef.current) return;
+          void ctx.storage
+            .set(LAST_DEBUG_TARGET_KEY, { archivePath, charaNo, fnQuery })
+            .catch((err: unknown) => ctx.log.warn(`Replay panel target persist failed: ${String(err)}`));
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [archivePath, charaNo, fnQuery]);
+
+        /**
+         * 切项目归零（P4）：面板此前**不响应项目事件**——换工程后旧存档的视图、
+         * 旧结果、旧场景输入全留着继续用。project.opened / project.closed 来了
+         * 就清空"属于某个工程"的一切 state（函数名留着手打，它不绑定工程）。
+         */
+        useEffect(() => {
+          const resetForProject = (): void => {
+            setArchivePath('');
+            setCharaNo(null);
+            setView(null);
+            setViewError(null);
+            setResult(null);
+            setResultAssumed([]);
+            setResultLocate(null);
+            setResultStale(false);
+            setContextText('');
+            setSlotTexts({});
+            setSlotEdited({});
+            setFnDetail(null);
+            setPreview(null);
+            setPreviewError(null);
+            setPendingNote(null);
+            setInjectNote(null);
+          };
+          const offOpen = ctx.bus.on('project.opened', resetForProject);
+          const offClose = ctx.bus.on('project.closed', resetForProject);
+          return () => {
+            offOpen();
+            offClose();
+          };
+          // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, []);
 
         // ---- 换档/换角色 → 重建视图（代际保护） ----
         useEffect(() => {
@@ -382,13 +537,14 @@ export function createUiStateReplayPlugin(): Plugin {
             setReplayError('先在这块面板里选好存档和角色——没有存档，就谈不上"这行走不走"。');
             return;
           }
-          const assembled = assembleCallContext();
+          const assembled = assembleContext();
           if (assembled.error !== null) {
             setReplayError(assembled.error);
             return;
           }
-          // 假设值快照（C9）：与本结果同批——未手改的预填 0 记入"基于假设"标注
-          const assumedAtRun = callSlots ? collectAssumedSlots(callSlots, slotTexts, slotEdited) : [];
+          // 假设值快照（C9 / P1）：与本结果同批——留空且开了「按 0 试算」的数值槽
+          // 记入"基于假设"标注（改了槽不影响已出结果的可信度标注）
+          const assumedAtRun = collectAssumedSlots(slotInputs, slotTexts, slotEdited, assumeDefaults);
           replayBusyRef.current = true;
           setReplayBusy(true);
           void replay
@@ -399,11 +555,13 @@ export function createUiStateReplayPlugin(): Plugin {
                 setResult(null);
                 setResultAssumed([]);
                 setResultLocate(null);
+                setResultStale(false);
                 return;
               }
               setResult(r);
               setResultAssumed(assumedAtRun);
               setResultLocate(locate);
+              setResultStale(false); // P5：新结果落地 → 过期标记清掉
               setPredWindow(undefined); // 新一批谓词 = 新窗口（每次回放从初始窗口看起）
             })
             .catch((err: unknown) => {
@@ -418,43 +576,13 @@ export function createUiStateReplayPlugin(): Plugin {
         runReplayRef.current = runReplay;
 
         /**
-         * 调用上下文组装（口上调试统一批从 runReplay 提出）：预演与正式回放
-         * 必须用**同一份**场景输入，否则"预演说要变、写入后没变"——两个动作
-         * 两个判据正是要消灭的割裂。
+         * 调用上下文组装（P1：**已抽成 `panel-logic.assembleCallContext` 纯函数**）。
+         * 这里只做接线：输入并集 + 输入文本 + 手改标记 + 「按 0 试算」开关。
+         * 预演与正式回放必须用**同一份**场景输入，否则"预演说要变、写入后没变"
+         * ——两个动作两个判据正是要消灭的割裂。
          */
-        const assembleCallContext = (): { callContext?: ReplayCallContext; error: string | null } => {
-          if (callSlots) {
-            const ints: (number | undefined)[] = [];
-            const strs: (string | undefined)[] = [];
-            for (const s of callSlots) {
-              const raw = slotTexts[slotKey(s.kind, s.index)] ?? '';
-              if (raw.trim() === '') continue; // 空 = 未提供该槽（unknown，不猜测）
-              if (s.kind === 'int') {
-                if (!/^-?\d+$/.test(raw.trim())) {
-                  return { callContext: undefined, error: `场景参数 ${s.index}（${s.label}）必须是整数：「${raw}」` };
-                }
-                while (ints.length <= s.index) ints.push(undefined);
-                ints[s.index] = Number(raw.trim());
-              } else {
-                while (strs.length <= s.index) strs.push(undefined);
-                strs[s.index] = raw;
-              }
-            }
-            if (ints.some((v) => v !== undefined) || strs.some((v) => v !== undefined)) {
-              return {
-                callContext: {
-                  ...(ints.some((v) => v !== undefined) ? { ints } : {}),
-                  ...(strs.some((v) => v !== undefined) ? { strs } : {}),
-                },
-                error: null,
-              };
-            }
-            return { callContext: undefined, error: null };
-          }
-          const parsed = parseCallContextText(contextText);
-          if (!parsed.ok) return { callContext: undefined, error: `调用上下文无法解析：${parsed.detail}` };
-          return { callContext: toCallContext(parsed), error: null };
-        };
+        const assembleContext = (): { callContext?: ReplayCallContext; error: string | null } =>
+          assembleCallContext({ slotInputs, slotTexts, slotEdited, assumeDefaults, contextText });
 
         // ---- 注入热闭环（口上调试统一批）：同一份存档被注入面板写盘后自动重算 ----
         // 订阅在挂载期；同档才重算（作者选的档是唯一事实），异档不打扰。
@@ -471,16 +599,30 @@ export function createUiStateReplayPlugin(): Plugin {
           [],
         );
 
+        // ---- P5 结果过期（2026-11-05）：判定读的是**磁盘上的文件** ----
+        // 源码索引重建（保存后触发）→ 屏上的结果就不再对应当前文本，必须显式告知。
+        // 用 ref 读"当前有没有结果"，订阅只挂一次（身份恒定，不因结果变化重订阅）。
+        const hasResultRef = useRef(false);
+        hasResultRef.current = result !== null;
+        useEffect(
+          () =>
+            ctx.bus.on('kojo.functionChanged', () => {
+              if (hasResultRef.current) setResultStale(true);
+            }),
+          [],
+        );
+
         /* ------------------- 场景预设（命名保存 / 一键应用 / 删除） ------------------- */
 
         const allScenes: ReplayScene[] = [defaultScene(), ...scenes];
         const selectedScene = allScenes.find((s) => s.id === selectedSceneId) ?? allScenes[0]!;
         /** 建议名：协议可用时由槽位 label 拼接；协议不可用 → 空串（降级纯手填） */
-        const sceneSuggestion = callSlots && callSlots.length > 0 ? sceneSuggestionName(callSlots, slotTexts) : '';
+        const sceneSuggestion = slotInputs.length > 0 ? sceneSuggestionName(slotInputs, slotTexts) : '';
 
         /** 场景三个动作（应用 / 保存 / 删除）的具体过程见 ./scene-actions.ts */
         const sceneActions = createSceneActions({
-          callSlots,
+          // 并集输入（P2）：场景能命中的槽位跟着输入框走，模板不转发的引用槽也能存进场景
+          callSlots: slotInputs.length > 0 ? slotInputs : null,
           slotTexts,
           contextText,
           scenes,
@@ -568,6 +710,22 @@ export function createUiStateReplayPlugin(): Plugin {
             createElement('option', { key: no, value: String(no) }, `K${no} ${info.name}`),
           ),
         );
+        /**
+         * 「重新扫描」按钮（P4）：面板自己的出路。
+         * 旧空态文案让人"去状态注入器重扫"——那边扫完也不通知本面板，是条死路；
+         * 这里就地能重扫（并跟 `snapshot.source` 的订阅一起，两个面板的清单口径同源）。
+         */
+        const rescanBtn = createElement(
+          'button',
+          {
+            className: 'ghost small',
+            type: 'button',
+            disabled: activation.scanning || !activation.archivesReady,
+            onClick: () => activation.rescan(),
+            title: '重新扫描项目存档目录（在游戏内存档后点这个）',
+          },
+          activation.scanning ? '扫描中…' : '重新扫描',
+        );
 
         // ---- 视图状态行 ----
         let viewStatus: ReturnType<typeof createElement> | null = null;
@@ -591,49 +749,77 @@ export function createUiStateReplayPlugin(): Plugin {
             if (e.key === 'Enter') runReplay();
           },
         });
-        // 协议槽输入区（有协议 → 替代裸文本框；空值 = 未提供该槽）
-        // 槽位来源三态（C9）：未手改的预填 0 = "假设值"——虚线 + 「假设」前缀标记，
-        // 与手输确定值在视觉上可区分（不伪装成确定命中）。
-        const slotInputs =
-          callSlots && callSlots.length > 0
+        /**
+         * 槽位输入区（P1/P2/P3，2026-11-05）：
+         * - **并集**（P2）：`slotInputs` = 路由模板槽 ∪ 函数体引用的槽——模板不转发的
+         *   `ARGS` 也有输入框了；并集为空才退回裸上下文文本框（由调用处判）。
+         * - **默认空**（P1）：值恒空（留空 = 这一格不知道）。占位符只说明含义；
+         *   勾了「按默认场景 0 试算」后数值槽占位符写「0（假设）」，并在组装时按 0 注入。
+         * - **假设值**（C9）：来源三态由 `classifySlotValue` 判（空 + 开关 + 未手改），
+         *   虚线 + 「假设」徽章，与作者手填的值视觉可区分（不伪装成确定命中）。
+         * - **候选值**（P3）：明细里扫到的「槽 == 字面量」值挂 `datalist`，点了就填。
+         */
+        const slotDatalists: ReturnType<typeof createElement>[] = [];
+        const slotInputsEl =
+          slotInputs.length > 0
             ? createElement(
                 'div',
                 { className: 'rp-slots' },
                 createElement('span', { className: 'dim rp-slots-head' }, '场景参数'),
-                ...callSlots.map((s) => {
+                ...slotInputs.map((s) => {
                   const k = slotKey(s.kind, s.index);
-                  const origin: SlotOrigin = classifySlotValue(s.kind, slotTexts[k] ?? '', slotEdited[k] === true);
+                  const origin: SlotOrigin = classifySlotValue(s.kind, slotTexts[k] ?? '', slotEdited[k] === true, assumeDefaults);
                   const isAssume = origin === 'assumption';
+                  const candidates = slotCandidates.get(k);
+                  const listId =
+                    candidates && candidates.length > 0 ? `${datalistIdRef.current}-${s.kind}-${s.index}` : undefined;
+                  if (listId !== undefined && candidates) {
+                    slotDatalists.push(
+                      createElement(
+                        'datalist',
+                        { key: `dl-${k}`, id: listId },
+                        ...candidates.map((c) => createElement('option', { key: c, value: c })),
+                      ),
+                    );
+                  }
+                  const idxText = `${s.kind === 'str' ? 'ARGS' : 'ARG'}:${s.index}`;
                   return createElement(
                     'label',
-                    { key: k, className: 'rp-slot', title: isAssume ? `${s.label}（默认场景假设值）` : s.label },
+                    { key: k, className: 'rp-slot', title: isAssume ? `${s.label}（按默认场景 0 试算的假设值）` : s.label },
                     isAssume
                       ? createElement(
                           'span',
                           {
                             className: 'rp-badge assume',
                             style: ASSUME_STYLE,
-                            title: '默认场景假设值（未手改的预填 0，未必等于引擎真实默认）',
+                            title: '按默认场景 0 试算的假设值（不是引擎事实，也不等于作者给的值）',
                           },
                           '假设',
                         )
                       : null,
-                    createElement('span', { className: 'dim rp-slot-idx' }, s.label ? `${s.label} · ${s.kind === 'str' ? 'ARGS' : 'ARG'}:${s.index}` : `${s.kind === 'str' ? 'ARGS' : 'ARG'}:${s.index}`),
+                    createElement('span', { className: 'dim rp-slot-idx' }, s.label ? `${s.label} · ${idxText}` : idxText),
                     createElement('input', {
                       className: 'rp-slot-input',
                       style: isAssume ? ASSUME_STYLE : undefined,
                       type: 'text',
                       value: slotTexts[k] ?? '',
-                      placeholder: s.kind === 'int' ? '0' : '',
+                      placeholder: slotPlaceholder(s.kind, assumeDefaults),
+                      title: candidates && candidates.length > 0 ? `这个槽在函数里比过的值：${candidates.join(' / ')}「点输入框可选」` : s.label,
+                      ...(listId !== undefined ? { list: listId } : {}),
                       onChange: (e: { target: { value: string } }) => {
                         const v = e.target.value;
                         setSlotTexts((prev) => ({ ...prev, [k]: v }));
-                        setSlotEdited((prev) => ({ ...prev, [k]: true })); // 手改 → 确定值
+                        setSlotEdited((prev) => ({ ...prev, [k]: true })); // 手改 → 作者给的场景值
                       },
                     }),
                   );
                 }),
-                createElement('span', { className: 'dim rp-slot-hint' }, '留空 = 不知道这个参数（判不出会标出来）· 没改过的 0 只是假设'),
+                ...slotDatalists,
+                createElement(
+                  'span',
+                  { className: 'dim rp-slot-hint' },
+                  '留空 = 这一格不知道（面板会推导已知事实，其余标未知）；填值 = 场景假设',
+                ),
               )
             : null;
         // ---- 场景预设工具栏（下拉切换 + 一键应用 / 保存 / 删除） ----
@@ -696,7 +882,7 @@ export function createUiStateReplayPlugin(): Plugin {
         const contextInput = createElement('input', {
           className: 'rp-context-input',
           type: 'text',
-          placeholder: callSlots ? '' : '调用上下文（可空；如 0=36, 1=15）',
+          placeholder: slotInputs.length > 0 ? '' : '调用上下文（可空；如 0=36, 1=15）',
           value: contextText,
           onChange: (e: { target: { value: string } }) => setContextText(e.target.value),
           title: 'ARG/ARGS 槽位赋值（场景输入）；未提供的槽位按未知处理，不猜测',
@@ -776,7 +962,22 @@ export function createUiStateReplayPlugin(): Plugin {
          */
         const adapterNow = activeGameAdapter(slots.query('game.adapter'), projectNow?.adapterId);
         const schema = adapterNow?.variableSchema;
-        const glossOf = useCallback((p: PredicateReplay) => predicateGloss(p.expr, schema), [schema]);
+        // 谓词行标注 = 中文变量名（白话批）+ **变量实际取值**（B3 2026-11-05）：
+        // 旧面板只说"假"，作者答不出"为什么假"；这里把本行引用的存档变量值一并列上
+        // （`好感度 · CFLAG:2=480`）。读不出值的引用不列（未知原因由引擎行自己说）。
+        const valueHintOf = useCallback(
+          (p: PredicateReplay) => (view ? predicateValues(p.expr, (ref) => view.read(ref)) : null),
+          [view],
+        );
+        const glossOf = useCallback(
+          (p: PredicateReplay) => {
+            const parts = [predicateGloss(p.expr, schema), valueHintOf(p)].filter(
+              (s): s is string => typeof s === 'string' && s.length > 0,
+            );
+            return parts.length > 0 ? parts.join(' · ') : null;
+          },
+          [schema, valueHintOf],
+        );
 
         /* ------------------- 注入预演（口上调试统一批；带着目的改数值） ------------------- */
 
@@ -804,7 +1005,7 @@ export function createUiStateReplayPlugin(): Plugin {
             setPreviewError('先填新值。');
             return;
           }
-          const cc = assembleCallContext();
+          const cc = assembleContext();
           if (cc.error !== null) {
             setPreviewError(cc.error);
             return;
@@ -1047,21 +1248,43 @@ export function createUiStateReplayPlugin(): Plugin {
               )
             : null;
 
-        /** 场景参数摘要（收起时也要能看出"有没有动过、几个是假设"） */        const slotSummary = (() => {
-          if (!callSlots || callSlots.length === 0) return null;
+        /** 场景参数摘要（收起时也要能看出"几个是假设、留空的按未知"） */
+        const slotSummary = (() => {
+          if (slotInputs.length === 0) return null;
           let assumed = 0;
-          for (const s of callSlots) {
-            if (classifySlotValue(s.kind, slotTexts[slotKey(s.kind, s.index)] ?? '', slotEdited[slotKey(s.kind, s.index)] === true) === 'assumption') assumed += 1;
+          for (const s of slotInputs) {
+            const k = slotKey(s.kind, s.index);
+            if (classifySlotValue(s.kind, slotTexts[k] ?? '', slotEdited[k] === true, assumeDefaults) === 'assumption') {
+              assumed += 1;
+            }
           }
-          return `${callSlots.length} 项${assumed > 0 ? ` · ${assumed} 个假设` : ' · 都改过'}`;
+          return `${slotInputs.length} 项${assumed > 0 ? ` · ${assumed} 个假设` : ' · 留空按未知'}`;
         })();
+        /** P1：开关只在真有可能被补 0（存在数值槽）时才显示，避免在纯字符串槽上制造噪音 */
+        const hasIntSlot = slotInputs.some((s) => s.kind === 'int');
+        const assumeToggle = createElement(
+          'label',
+          {
+            className: 'rp-slot',
+            style: { cursor: 'pointer' },
+            title:
+              '勾上后，留空的数值槽按 0 写进调用上下文并标为假设值（这是面板的试算假设，不是引擎事实）；' +
+              '显式 0 会盖过引擎推导出的确定槽值——连推导出的确定值也一起按 0 试算',
+          },
+          createElement('input', {
+            type: 'checkbox',
+            checked: assumeDefaults,
+            onChange: (e: { target: { checked: boolean } }) => setAssumeDefaults(e.target.checked),
+          }),
+          createElement('span', { className: 'dim' }, '按默认场景 0 试算（把留空的数值槽当 0，标为假设）'),
+        );
 
         /**
-         * 「场景」折叠区：槽位参数 + 命名场景。
-         * 这两件事都只在"要精确控制一次判定"时才动，默认收起；收起时标题带上摘要。
+         * 「场景」折叠区：槽位参数 + 假设开关 + 命名场景。
+         * 这三件事都只在"要精确控制一次判定"时才动，默认收起；收起时标题带上摘要。
          */
         const sceneSection =
-          callSlots !== null || scenes.length > 0
+          slotInputs.length > 0 || scenes.length > 0
             ? createElement(
                 'div',
                 { className: 'dbg-fold' },
@@ -1075,10 +1298,51 @@ export function createUiStateReplayPlugin(): Plugin {
                   },
                   createElement('span', { className: 'dbg-fold-caret' }, showScenes ? '▾' : '▸'),
                   createElement('span', { className: 'dbg-fold-title' }, '场景参数'),
-                  createElement('span', { className: 'dbg-fold-note' }, slotSummary ?? '按协议槽位给这一次调用传参'),
+                  createElement('span', { className: 'dbg-fold-note' }, slotSummary ?? '命名场景 / 调用上下文文本'),
                   scenes.length > 0 ? createElement('span', { className: 'dbg-fold-badge' }, `${scenes.length} 个场景`) : null,
                 ),
-                showScenes ? createElement('div', { className: 'dbg-fold-body' }, slotInputs, sceneBar, sceneMsgEl) : null,
+                showScenes
+                  ? createElement(
+                      'div',
+                      { className: 'dbg-fold-body' },
+                      slotInputsEl,
+                      hasIntSlot ? assumeToggle : null,
+                      sceneBar,
+                      sceneMsgEl,
+                    )
+                  : null,
+              )
+            : null;
+
+        /**
+         * P6：结果里"调用上下文没给"的未知汇总（复用 `analysis.unknowns`，不新造统计口径）。
+         * P8：行内三元谓词（`kind==='INLINE'`）被引擎剔出 stats / confidence，
+         * 面板照常显示「确定」徽章就是撒谎——这里单独报一句"另有 N 条没计入"。
+         * 两个数字都只在结果存在时才有意义。
+         */
+        const ctxUnknownCount = analysis?.unknowns.find((u) => u.code === 'call-context')?.count ?? 0;
+        const inlineCount =
+          result !== null && fnDetail !== null && fnDetail.normalizedName === result.normalizedName
+            ? fnDetail.predicates.filter((p) => p.kind === 'INLINE').length
+            : 0;
+        const resultFacts =
+          ctxUnknownCount > 0 || inlineCount > 0
+            ? createElement(
+                'div',
+                {
+                  className: 'rp-hint dim',
+                  style: { display: 'flex', flexDirection: 'column', gap: 'var(--space-0)' },
+                },
+                ctxUnknownCount > 0
+                  ? createElement(
+                      'div',
+                      null,
+                      `${ctxUnknownCount} 条判不出是因为「调用上下文」没给：在下面「场景参数」里给 ARG/ARGS 那一格填值就能判；数值槽也可以勾「按默认场景 0 试算」。`,
+                    )
+                  : null,
+                inlineCount > 0
+                  ? createElement('div', null, `另有 ${inlineCount} 条行内三元条件未参与统计（它们不在分支链里）`)
+                  : null,
               )
             : null;
 
@@ -1095,10 +1359,18 @@ export function createUiStateReplayPlugin(): Plugin {
             'div',
             { className: 'dbg-fields' },
             createElement(
-              'label',
+              // 用 div 而不是 label：这一行里嵌了「重新扫描」按钮，label 会把按钮点击
+              // 转发给第一个可标量控件（select），在部分环境里表现为"点重扫却弹出下拉"。
+              'div',
               { className: 'dbg-field' },
               createElement('span', { className: 'dbg-field-label' }, '存档'),
-              archiveSelect,
+              // P4：下拉旁边就地给「重新扫描」（空态文案不再指向别的面板）
+              createElement(
+                'div',
+                { className: 'dbg-row', style: { flex: '1 1 auto', minWidth: 0 } },
+                archiveSelect,
+                rescanBtn,
+              ),
             ),
             createElement(
               'label',
@@ -1107,16 +1379,33 @@ export function createUiStateReplayPlugin(): Plugin {
               charaSelect,
             ),
           ),
-          createElement('div', { className: 'dbg-row dbg-row-fn' }, fnInput, callSlots ? null : contextInput, replayBtn),
+          createElement('div', { className: 'dbg-row dbg-row-fn' }, fnInput, slotInputs.length > 0 ? null : contextInput, replayBtn),
           viewStatus,
+          // P5 常驻口径提示：判定读的是磁盘上的文件（未保存的编辑不算数）
+          createElement(
+            'div',
+            { className: 'dim rp-hint' },
+            '判定读的是磁盘上的文件：未保存的编辑不算数，先保存再判定。',
+          ),
+          // 求值边界的常驻口径（A3 2026-11-05）：这套回放按**函数入口时刻的存档**求值，
+          // 函数体内对游戏变量的写（`CFLAG +=` / `SETBIT` / `INPUT` 之后的值等）不建模。
+          // 不写这一句，作者会把"入口值是 480、但函数里先加了 10"的结论当成错答案。
+          createElement(
+            'div',
+            { className: 'dim rp-hint' },
+            '按函数入口时刻的存档求值：函数体内对游戏变量的写入（CFLAG += / SETBIT / INPUT 等）不建模。',
+          ),
           // 扫完了、一个存档都没有：下拉里只有「选择存档（0）」，不解释就成了死路。
-          // （档位从项目 sav 目录来；此时该做的两件事：先在游戏内存档，或去「状态注入器」重扫）
+          // P4：出路是本面板自己的「重新扫描」（旧文案把人指去状态注入器——那条路不通知这边）。
           activation.archivesReady && activation.archives.length === 0
             ? createElement(
                 'div',
                 { className: 'dbg-note' },
-                '项目内未找到存档：请先在游戏内存档，再到「状态注入器」面板点「重新扫描」。',
+                '项目内未找到存档：先在游戏内存档，再点上面的「重新扫描」。',
               )
+            : null,
+          activation.archivesError !== null
+            ? createElement('div', { className: 'dbg-note rp-error' }, `扫描存档失败：${activation.archivesError}`)
             : null,
           sceneSection,
           suggestList,
@@ -1159,7 +1448,19 @@ export function createUiStateReplayPlugin(): Plugin {
                     ? createElement('span', { className: 'dbg-sec-note' }, result.normalizedName)
                     : null,
                 ),
+                // P6 / P8：结果区的诚实提示（调用上下文未知汇总 + INLINE 未计入统计）
+                resultFacts,
                 resultBody,
+              )
+            : null;
+
+        /** P5：源码变过 → 结果是上一次的（放在结果段正上方，紧挨着它说的那张结果） */
+        const staleNote =
+          resultStale && result !== null
+            ? createElement(
+                'div',
+                { className: 'dbg-note', style: { color: 'var(--warning)' } },
+                '源码已变，下面的结果是上一次的 —— 再按一次「判定」',
               )
             : null;
 
@@ -1170,6 +1471,7 @@ export function createUiStateReplayPlugin(): Plugin {
           notesBand,
           pickSection,
           previewSection,
+          staleNote,
           resultSection,
           result === null && replayError === null
             ? createElement(

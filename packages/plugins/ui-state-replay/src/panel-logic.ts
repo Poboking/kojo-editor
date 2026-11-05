@@ -5,9 +5,13 @@
  *   `ReplayCallContext`——ARG/ARGS 是场景输入，编辑器不猜测；
  * - `groupUnknowns`：未知原因分组统计（面板分组渲染用）；
  * - `suggestFunctions`：函数名提示（按前缀/子串过滤条件索引中的函数名）；
- * - **假设值链路**（v1.0 收口 C9）：协议槽的"默认场景预填 0"是**假设值**而非
- *   确定值——`classifySlotValue`/`collectAssumedSlots` 判定来源，
+ * - **假设值链路**（v1.0 收口 C9；2026-11-05 P1 口径修正）：协议槽**默认留空**
+ *   （空 = 这一格不知道），只有作者显式打开「按默认场景 0 试算」时，留空的数值槽
+ *   才按 0 注入并记作假设——`classifySlotValue`/`collectAssumedSlots` 判定来源，
  *   `summarizeAssumptions` 统计其对谓词结果的影响（"基于假设"标注 + 假设计数）；
+ * - **槽位输入并集与候选**（2026-11-05 P2/P3，面板可用性批）：`mergeSlotInputs`
+ *   把路由模板槽与函数体实际引用的槽并起来（模板不转发的 ARGS 也得有输入框），
+ *   `argSlotCandidates` 从谓词 AST 里扫"槽 == 字面量"的比较给输入框做候选值；
  * - **场景预设**（v1.0 收口线一）：`ReplayScene` 把手填的调用上下文槽位命名保存 /
  *   复用——`sanitizeScenes` 容错反序列化，`captureSceneSlots` 采集当前输入，
  *   `applyScene` 应用到函数签名（冲突显式上报），`sceneSuggestionName` 由协议槽
@@ -27,13 +31,17 @@ import type {
   BranchChainOutcome,
   ConditionExpr,
   FunctionConditions,
+  FunctionPredicate,
   FunctionReplay,
+  KojoCallSlot,
   PredicateReplay,
   QuickEditField,
   ReplayCallContext,
   ReplayUnknownCode,
+  ReplayValue,
   SnapshotArchive,
   TranscriptLine,
+  VariableRef,
   VariableSchema,
 } from '@kojo/plugin-api';
 import { nextWindow, pathKey, type RenderWindow } from '@kojo/plugin-api';
@@ -318,6 +326,71 @@ export function predicateGloss(expr: ConditionExpr, schema: VariableSchema | und
   return labels.length > 0 ? labels.join('、') : null;
 }
 
+/** 一条谓词行最多列几个变量取值（再多的行读起来没有重点，也没必要） */
+export const MAX_VALUE_HINTS = 4;
+
+/**
+ * 语言级局部量族（结果来自本函数的数据流 / 引擎动词，**不是存档值**）。
+ * 这些族的静态取值已经在回放结论里体现，再标一遍「LOCAL:0=?」只会糊住真正有用的
+ * 游戏变量取值（如「好感度 CFLAG:2=480」）⇒ 本投影跳过它们。
+ */
+const NON_SNAPSHOT_FAMILIES = new Set(['LOCAL', 'LOCALS', 'RESULT', 'RESULTS', '__LINE__']);
+
+/**
+ * 谓词行的**变量实际取值**（B3 2026-11-05，纯投影：`read` 由调用方给视图读取器）。
+ *
+ * 为什么要有：旧面板只给「真 / 假 / 判不出」，作者看不到「为什么是假」——判
+ * `CFLAG:2 >= 500` 为假，第一反应是去别的面板再选一次档查「好感度到底多少」。
+ * 这里把本行引用到的**存档变量**的值一并列出来（`好感度 CFLAG:2=480`），
+ * 一行读完就知道因果；读不出值（未知槽 / 动态索引）的引用**不列**——那些引用
+ * 的未知原因由引擎的 `unknown` 行自己说，别在这里重复噪音。
+ *
+ * 判据边界：只列 `kind==='value'` 的引用，去重（同名同下标只列一次），按出现序
+ * 最多 {@link MAX_VALUE_HINTS} 格；一个都列不出 → `null`（行上不出现空括号）。
+ */
+export function predicateValues(
+  expr: ConditionExpr,
+  read: (ref: VariableRef) => ReplayValue,
+): string | null {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const walk = (e: ConditionExpr): void => {
+    if (out.length >= MAX_VALUE_HINTS) return;
+    switch (e.kind) {
+      case 'ref': {
+        const name = e.name.toUpperCase();
+        if (NON_SNAPSHOT_FAMILIES.has(name)) return;
+        const text = e.indices.length === 0 ? name : `${name}:${e.indices.join(':')}`;
+        if (seen.has(text)) return;
+        seen.add(text);
+        const v = read({ name: e.name, indices: e.indices, text });
+        if (v.kind !== 'value') return; // 未知引用不在这里重复噪音
+        out.push(`${text}=${String(v.value)}`);
+        return;
+      }
+      case 'call':
+        for (const a of e.args) walk(a);
+        return;
+      case 'unary':
+        walk(e.operand);
+        return;
+      case 'binary':
+        walk(e.left);
+        walk(e.right);
+        return;
+      case 'ternary':
+        walk(e.cond);
+        walk(e.then);
+        walk(e.else);
+        return;
+      default:
+        return; // literal / nameValue / opaque 不含变量引用
+    }
+  };
+  walk(expr);
+  return out.length > 0 ? out.join(' · ') : null;
+}
+
 /**
  * 一趟回放的**只读统计**（未知原因分组 + 假设影响）。
  *
@@ -345,26 +418,53 @@ export function slotKey(kind: 'int' | 'str', index: number): string {
   return `${kind}:${index}`;
 }
 
-/** 协议槽位的"默认场景"预填值（int → '0'；str → '' = 未提供） */
-export function defaultSlotText(kind: 'int' | 'str'): string {
-  return kind === 'int' ? '0' : '';
+/**
+ * 协议槽位的"空"输入（P1：默认**不再**预填 0）。
+ *
+ * 2026-11-05 口径修正（面板可用性批）：此前 int 槽预填 `'0'` 并且真的注进引擎——
+ * 于是"函数名一变，面板就替作者断言参数是 0"，引擎按 0 判出**确定的假**
+ * （如 `ARG:1 >= 36`），而 API 路径同一谓词是 unknown；顺带让"未覆盖该槽位"
+ * 文案大面积出现。默认值现在一律空：空 = 这一格不知道（引擎判 unknown），
+ * 要按 0 试算得由作者显式勾「按默认场景 0 试算」（见 `classifySlotValue` 第 4 参）。
+ */
+export function defaultSlotText(_kind: 'int' | 'str'): string {
+  return '';
+}
+
+/**
+ * 槽位输入框占位符（P1）：值恒空，占位符只负责说明"留空"意味着什么。
+ * `assumeDefaults=true` 时数值槽显示「0（假设）」——面板会把它当 0 写进调用
+ * 上下文并标成假设值，但输入框本身仍是空的（作者没填过就不许显示成填过）。
+ */
+export function slotPlaceholder(kind: 'int' | 'str', assumeDefaults: boolean): string {
+  if (kind === 'str') return '';
+  return assumeDefaults ? '0（假设）' : '';
 }
 
 /** 协议槽位赋值的来源三态 */
 export type SlotOrigin = 'manual' | 'assumption' | 'unset';
 
 /**
- * 判定单个协议槽位赋值的来源（审阅 C9）：
+ * 判定单个协议槽位赋值的来源（审阅 C9；2026-11-05 P1 新语义）：
  * - `unset`：空值——未提供该槽，求值走 `unknown('call-context')`，语义不变；
- * - `assumption`：**未手改且等于预填默认**（int 的 `'0'`）——"默认场景假设值"：
- *   未改动的 0 并不必然等于引擎真实默认，UI 必须标注，不得伪装成确定命中；
- * - `manual`：作者手输（含把预填 0 显式改写、以及 str 槽填写）。
+ * - `assumption`：**空值 + 作者显式开了「按默认场景 0 试算」+ 这一格没被手改过**
+ *   （仅数值槽）——面板把 0 写进调用上下文，但那是假设，UI 必须标注；
+ * - `manual`：作者真填了值（含显式写 0）——场景假设，但作者已明确给出。
+ *
+ * 与旧口径的差别（写清理由，防"怎么又变回去了"）：旧的是"未手改的预填 0 =
+ * 假设"，可那个 0 是**面板自己塞的**，不是作者的意图；现在空就是空，只有
+ * 显式开关才允许补 0。
  */
-export function classifySlotValue(kind: 'int' | 'str', raw: string, edited: boolean): SlotOrigin {
+export function classifySlotValue(
+  kind: 'int' | 'str',
+  raw: string,
+  edited: boolean,
+  assumeDefaults = false,
+): SlotOrigin {
   const t = raw.trim();
-  if (t.length === 0) return 'unset';
-  if (!edited && t === defaultSlotText(kind)) return 'assumption';
-  return 'manual';
+  if (t.length > 0) return 'manual'; // 填了值 = 作者明确给出的场景假设（含把 0 显式写下）
+  if (kind === 'int' && assumeDefaults && !edited) return 'assumption';
+  return 'unset';
 }
 
 /** 假设值槽位（kind + index） */
@@ -373,19 +473,227 @@ export interface AssumedSlot {
   index: number;
 }
 
-/** 收集本次回放的"假设值"槽位（未手改的预填默认；str 预填空 = unset，不算假设） */
+/**
+ * 收集本次回放的"假设值"槽位（P1：只有 assumeDefaults 打开时，留空且未手改的
+ * 数值槽才是假设；str 恒空 = unset，永不计假设）。
+ */
 export function collectAssumedSlots(
   slots: readonly { index: number; kind: 'int' | 'str' }[],
   texts: Readonly<Record<string, string>>,
   edited: Readonly<Record<string, boolean>>,
+  assumeDefaults = false,
 ): AssumedSlot[] {
   const out: AssumedSlot[] = [];
   for (const s of slots) {
     const k = slotKey(s.kind, s.index);
-    if (classifySlotValue(s.kind, texts[k] ?? '', edited[k] === true) === 'assumption') {
+    if (classifySlotValue(s.kind, texts[k] ?? '', edited[k] === true, assumeDefaults) === 'assumption') {
       out.push({ kind: s.kind, index: s.index });
     }
   }
+  return out;
+}
+
+/* --------------- 调用上下文组装（P1；从面板组件抽出的纯函数，可单测） --------------- */
+
+/** 面板一个槽位输入框的描述（路由模板槽 ∪ 函数体引用槽的并集元素） */
+export interface SlotInput {
+  readonly kind: 'int' | 'str';
+  readonly index: number;
+  /** 展示用含义：模板槽用模板 label；引用独有槽用 {@link REF_SLOT_LABEL} */
+  readonly label: string;
+  /** true = 来自路由模板（label 用模板的）；false = 函数体引用了但模板不转发 */
+  readonly fromTemplate: boolean;
+}
+
+/** 引用独有槽的 label（模板根本没声明这一格，别假装它有含义） */
+export const REF_SLOT_LABEL = '函数内引用（模板不转发）';
+
+/**
+ * 槽位输入并集（P2）：路由模板槽在前（保持模板顺序、label 用模板的），
+ * 函数体实际引用而模板没转发的槽补在后面——先 int 槽按槽号升序，再 str 槽升序；
+ * 同 kind+index 去重。
+ *
+ * 为什么需要它：函数体里引用了模板不转发的槽（典型 `ARGS`）时，旧面板只按模板
+ * 渲染 ⇒ 没有输入框，作者永远填不进那一格；`callSlots` 为空数组时更连裸文本框
+ * 都藏掉了。
+ */
+export function mergeSlotInputs(
+  template: readonly KojoCallSlot[],
+  refs: { readonly ints: readonly number[]; readonly strs: readonly number[] },
+): SlotInput[] {
+  const out: SlotInput[] = [];
+  const seen = new Set<string>();
+  for (const s of template) {
+    const k = slotKey(s.kind, s.index);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ kind: s.kind, index: s.index, label: s.label, fromTemplate: true });
+  }
+  for (const kind of ['int', 'str'] as const) {
+    const indices = [...refs[kind === 'int' ? 'ints' : 'strs']].sort((a, b) => a - b);
+    for (const index of indices) {
+      const k = slotKey(kind, index);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ kind, index, label: REF_SLOT_LABEL, fromTemplate: false });
+    }
+  }
+  return out;
+}
+
+/** `assembleCallContext` 的输入（全部来自面板 state，函数本身零副作用） */
+export interface AssembleCallContextInput {
+  /** 槽位输入并集；**空数组 = 走裸调用上下文文本框**（协议不可用 / 函数体没引用槽） */
+  readonly slotInputs: readonly SlotInput[];
+  readonly slotTexts: Readonly<Record<string, string>>;
+  readonly slotEdited: Readonly<Record<string, boolean>>;
+  /** 面板开关：把留空的数值槽按 0 写入并标为假设（默认 false = 不猜） */
+  readonly assumeDefaults: boolean;
+  /** 裸上下文文本（仅 `slotInputs` 为空时消费） */
+  readonly contextText: string;
+}
+
+export interface AssembleCallContextResult {
+  /** 无任何已给值 → undefined（让引擎走调用上下文推导器 / unknown） */
+  callContext?: ReplayCallContext;
+  /** 非 null = 输入有误（面板直接呈现，不发起回放） */
+  error: string | null;
+}
+
+/**
+ * 调用上下文组装（P1：从面板组件提出来的纯函数——预演与正式回放必须用同一份
+ * 场景输入，且这条语义要能被单测钉住，所以不许内联在组件里）。
+ *
+ * 语义（三条，逐条可测）：
+ * 1. 只把**作者真填了的**槽写进 callContext（空 = 这一格不知道）；
+ * 2. `assumeDefaults=true` 时，留空且未手改的**数值槽**按 0 写入（假设值链路）；
+ * 3. 一个槽都没有（且没开 assumeDefaults）→ `callContext: undefined`。
+ */
+export function assembleCallContext(input: AssembleCallContextInput): AssembleCallContextResult {
+  const { slotInputs, slotTexts, slotEdited, assumeDefaults, contextText } = input;
+  if (slotInputs.length === 0) {
+    const parsed = parseCallContextText(contextText);
+    if (!parsed.ok) return { callContext: undefined, error: `调用上下文无法解析：${parsed.detail}` };
+    return { callContext: toCallContext(parsed), error: null };
+  }
+  const ints: (number | undefined)[] = [];
+  const strs: (string | undefined)[] = [];
+  for (const s of slotInputs) {
+    const k = slotKey(s.kind, s.index);
+    const raw = slotTexts[k] ?? '';
+    if (raw.trim() === '') {
+      // 留空：不猜；只有显式 assumeDefaults + 数值槽 + 作者没动过这一格 → 按 0 假设
+      if (s.kind === 'int' && assumeDefaults && slotEdited[k] !== true) {
+        while (ints.length <= s.index) ints.push(undefined);
+        ints[s.index] = 0;
+      }
+      continue;
+    }
+    if (s.kind === 'int') {
+      const t = raw.trim();
+      if (!/^-?\d+$/.test(t)) {
+        const name = s.label.trim() === '' ? `${s.index}` : `${s.index}（${s.label}）`;
+        return { callContext: undefined, error: `场景参数 ${name} 必须是整数：「${raw}」` };
+      }
+      while (ints.length <= s.index) ints.push(undefined);
+      ints[s.index] = Number(t);
+    } else {
+      while (strs.length <= s.index) strs.push(undefined);
+      strs[s.index] = raw;
+    }
+  }
+  const hasInts = ints.some((v) => v !== undefined);
+  const hasStrs = strs.some((v) => v !== undefined);
+  if (!hasInts && !hasStrs) return { callContext: undefined, error: null };
+  return {
+    callContext: {
+      ...(hasInts ? { ints } : {}),
+      ...(hasStrs ? { strs } : {}),
+    },
+    error: null,
+  };
+}
+
+/* -------------------- 槽位候选值（P3：从谓词 AST 里捡字面量） -------------------- */
+
+/** 参与候选的比较运算符（与契约 `ConditionComparison.op` 同表） */
+const CANDIDATE_OPS = new Set(['==', '!=', '<', '<=', '>', '>=']);
+/** 每个槽位的候选上限（datalist 不刷屏；顺序靠前的更有可能是作者想试的值） */
+export const MAX_SLOT_CANDIDATES = 20;
+
+/** `ARG`/`ARGS` 槽引用 → { kind, index }；非槽引用 / 动态下标 → null（不猜） */
+function argSlotRef(expr: ConditionExpr): { kind: 'int' | 'str'; index: number } | null {
+  if (expr.kind !== 'ref') return null;
+  const name = expr.name.toUpperCase();
+  if (name !== 'ARG' && name !== 'ARGS') return null;
+  const rawIdx = expr.indices[0];
+  const idx = rawIdx === undefined ? 0 : /^\d+$/.test(rawIdx) ? Number(rawIdx) : null;
+  if (idx === null) return null;
+  return { kind: name === 'ARG' ? 'int' : 'str', index: idx };
+}
+
+/**
+ * 从单函数谓词明细里抽槽位候选值（P3）：递归找「一侧是 ARG/ARGS 槽引用、
+ * 另一侧是字面量」的比较（`==`/`!=`/`<`/`<=`/`>`/`>=`），把字面量的展示值
+ * （字符串已去引号、数字原样）按**首次出现序**去重收集，每槽上限 20。
+ *
+ * 递归范围（与 `exprArgSlots` 同口径）：binary 两侧、ternary 三段、call 参数、
+ * unary 操作数。CASE 展开形（`subject == 值`）天然是 binary，无需特判。
+ * 键 = `slotKey(kind, index)`；无候选的槽不出现在 Map 里（UI 就不挂 datalist）。
+ */
+export function argSlotCandidates(predicates: readonly FunctionPredicate[]): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const seen = new Map<string, Set<string>>();
+  const add = (kind: 'int' | 'str', index: number, text: string): void => {
+    if (text.length === 0) return;
+    const k = slotKey(kind, index);
+    let list = out.get(k);
+    if (!list) {
+      list = [];
+      out.set(k, list);
+      seen.set(k, new Set());
+    }
+    if (list.length >= MAX_SLOT_CANDIDATES) return;
+    const dedupe = seen.get(k)!;
+    if (dedupe.has(text)) return;
+    dedupe.add(text);
+    list.push(text);
+  };
+  const literalText = (expr: ConditionExpr): string | null => {
+    if (expr.kind !== 'literal') return null;
+    return typeof expr.value === 'number' ? String(expr.value) : expr.value;
+  };
+  const walk = (expr: ConditionExpr): void => {
+    switch (expr.kind) {
+      case 'binary': {
+        if (CANDIDATE_OPS.has(expr.op)) {
+          const leftSlot = argSlotRef(expr.left);
+          const rightLit = literalText(expr.right);
+          if (leftSlot && rightLit !== null) add(leftSlot.kind, leftSlot.index, rightLit);
+          const rightSlot = argSlotRef(expr.right);
+          const leftLit = literalText(expr.left);
+          if (rightSlot && leftLit !== null) add(rightSlot.kind, rightSlot.index, leftLit);
+        }
+        walk(expr.left);
+        walk(expr.right);
+        return;
+      }
+      case 'ternary':
+        walk(expr.cond);
+        walk(expr.then);
+        walk(expr.else);
+        return;
+      case 'call':
+        for (const a of expr.args) walk(a);
+        return;
+      case 'unary':
+        walk(expr.operand);
+        return;
+      default:
+        return; // literal / ref / nameValue / opaque：没有更深的比较
+    }
+  };
+  for (const p of predicates) walk(p.expr);
   return out;
 }
 
@@ -471,7 +779,7 @@ export interface ReplayScene {
   slots: Record<string, SceneSlotValue>;
 }
 
-/** 内置默认场景 id（不可删除、不持久化；应用 = 全部槽位回到默认：int `0` 假设 / str 空 未提供） */
+/** 内置默认场景 id（不可删除、不持久化；应用 = 全部槽位清空 = 都按未知） */
 export const DEFAULT_SCENE_ID = '__default__';
 /** 场景数量上限（防御损坏 / 膨胀的存储数据） */
 export const MAX_SCENES = 50;
@@ -480,9 +788,9 @@ export const MAX_SCENE_NAME = 60;
 
 const SLOT_KEY_RE = /^(int|str):(\d{1,3})$/;
 
-/** 内置默认场景（全 0 / 全部 assumption）——不作为用户场景持久化 */
+/** 内置默认场景（全空 / 全部未知）——不作为用户场景持久化 */
 export function defaultScene(): ReplayScene {
-  return { id: DEFAULT_SCENE_ID, name: '默认场景（全 0，全部假设）', slots: {} };
+  return { id: DEFAULT_SCENE_ID, name: '默认场景（清空，未填的按未知）', slots: {} };
 }
 
 /**
@@ -546,14 +854,15 @@ export interface SceneApplication {
   applied: string[];
   /** 场景提供但当前签名没有的槽位键（协议不同 → 忽略，显式上报） */
   dropped: string[];
-  /** 签名单内有、场景未覆盖、且此前已填 → 被重置为默认的槽位键 */
+  /** 签名单内有、场景未覆盖、且此前已填 → 被清回空的槽位键 */
   reset: string[];
 }
 
 /**
  * 把场景应用到某个函数签名（协议槽位表）：
  * - 场景覆盖的槽 → 取场景值 + `edited=true`（来源 **manual**：作者假设，非引擎事实）；
- * - 签名内未被场景覆盖的槽 → 回到默认（int `0` = 假设 / str 空 = 未提供），此前已填的记入 `reset`；
+ * - 签名内未被场景覆盖的槽 → 回到**空**（未提供；是否按 0 试算由面板的
+ *   `assumeDefaults` 开关决定，见 P1），此前已填的记入 `reset`；
  * - 场景里签名没有的槽（如换到别的家族函数）→ 丢弃并记入 `dropped`。
  */
 export function applyScene(

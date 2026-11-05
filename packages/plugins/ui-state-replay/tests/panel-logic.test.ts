@@ -7,13 +7,17 @@
  * 以及场景预设（v1.0 收口线一：序列化容错 / 采集 / 应用与合并冲突 / 建议名 / 槽位↔文本）。
  */
 import { describe, expect, it } from 'vitest';
-import type { ConditionExpr, FunctionReplay } from '@kojo/plugin-api';
+import type { ConditionExpr, FunctionPredicate, FunctionReplay, KojoCallSlot, ReplayValue, VariableRef } from '@kojo/plugin-api';
 import {
   DEFAULT_SCENE_ID,
   MAX_SCENES,
+  MAX_SLOT_CANDIDATES,
   PRED_WINDOW_INITIAL,
   PRED_WINDOW_STEP,
+  REF_SLOT_LABEL,
   TR_WINDOW,
+  argSlotCandidates,
+  assembleCallContext,
   nextTrWindow,
   trWindowSize,
   applyScene,
@@ -25,6 +29,7 @@ import {
   defaultSlotText,
   exprArgSlots,
   groupUnknowns,
+  mergeSlotInputs,
   newSceneId,
   nextPredWindow,
   parseCallContextText,
@@ -34,6 +39,7 @@ import {
   sceneSlotsToContextText,
   sceneSuggestionName,
   slotKey,
+  slotPlaceholder,
   suggestFunctions,
   summarizeAssumptions,
   toCallContext,
@@ -159,53 +165,355 @@ describe('slotKey / defaultSlotText / classifySlotValue', () => {
     expect(slotKey('int', 0)).not.toBe(slotKey('str', 0));
   });
 
-  it('默认场景预填值：int=0；str=空（未提供，非假设）', () => {
-    expect(defaultSlotText('int')).toBe('0');
+  it('P1 口径：默认值一律空（面板不再替作者预填注入 0）', () => {
+    // 口径变化（2026-11-05）：旧断言是 int='0'。那个 0 会被 `assembleCallContext`
+    // 真的注给引擎 ⇒ 引擎按 0 判出"确定的假"，而 API 路径同谓词是 unknown。
+    expect(defaultSlotText('int')).toBe('');
     expect(defaultSlotText('str')).toBe('');
   });
 
-  it('来源三态：未手改的预填 0 = 假设；手输 = 确定；空 = 未提供', () => {
-    expect(classifySlotValue('int', '0', false)).toBe('assumption');
-    expect(classifySlotValue('int', ' 0 ', false)).toBe('assumption'); // 容忍空白
-    expect(classifySlotValue('int', '0', true)).toBe('manual'); // 把预填 0 显式改写 → 确定值
+  it('slotPlaceholder：值恒空，只在 assumeDefaults 时提示「0（假设）」', () => {
+    expect(slotPlaceholder('int', false)).toBe('');
+    expect(slotPlaceholder('int', true)).toBe('0（假设）');
+    expect(slotPlaceholder('str', true)).toBe('');
+  });
+
+  it('来源三态（P1）：填了 = manual；空 + 显式按 0 试算 + 未手改 = assumption；空 = unset', () => {
     expect(classifySlotValue('int', '36', false)).toBe('manual');
-    expect(classifySlotValue('int', '', false)).toBe('unset');
-    expect(classifySlotValue('int', '   ', true)).toBe('unset'); // 清空 = 未提供（unknown 语义不变）
-    expect(classifySlotValue('str', '', false)).toBe('unset'); // str 预填空不是假设
+    expect(classifySlotValue('int', '0', true)).toBe('manual'); // 作者显式写 0 是确定值
+    expect(classifySlotValue('int', '', false)).toBe('unset'); // 默认关闭试算 → 不猜
+    // 只有"空 + 开关 + 未手改"才是假设
+    expect(classifySlotValue('int', '', false, true)).toBe('assumption');
+    expect(classifySlotValue('int', '   ', false, true)).toBe('assumption'); // 容忍空白
+    expect(classifySlotValue('int', '', true, true)).toBe('unset'); // 手改后又清空 = 作者说"不知道"
+    expect(classifySlotValue('str', '', false, true)).toBe('unset'); // 字符串槽永不按 0 补
     expect(classifySlotValue('str', '约会', false)).toBe('manual');
   });
 });
 
-describe('collectAssumedSlots（全默认 / 全手输 / 混合）', () => {
+describe('collectAssumedSlots（P1：只有显式开「按 0 试算」才可能有假设）', () => {
   const slots = [
     { kind: 'int' as const, index: 0 },
     { kind: 'int' as const, index: 1 },
     { kind: 'str' as const, index: 0 },
   ];
 
-  it('全默认（全部未手改）→ 全部 int 槽计入假设；str 预填空不算', () => {
-    const texts = { 'int:0': '0', 'int:1': '0', 'str:0': '' };
-    expect(collectAssumedSlots(slots, texts, {})).toEqual([
+  it('全留空 + 开关打开 → 全部数值槽计入假设；str 槽不算', () => {
+    const texts = { 'int:0': '', 'int:1': '', 'str:0': '' };
+    expect(collectAssumedSlots(slots, texts, {}, true)).toEqual([
       { kind: 'int', index: 0 },
       { kind: 'int', index: 1 },
     ]);
   });
 
-  it('全手输 → 无假设', () => {
+  it('全留空 + 开关关闭 → 无假设（旧口径下这里会报两个假设）', () => {
+    expect(collectAssumedSlots(slots, { 'int:0': '', 'int:1': '', 'str:0': '' }, {})).toEqual([]);
+  });
+
+  it('全手输 → 无假设（开关开着也不算：作者给了确定值）', () => {
     const texts = { 'int:0': '36', 'int:1': '15', 'str:0': '约会' };
     const edited = { 'int:0': true, 'int:1': true, 'str:0': true };
-    expect(collectAssumedSlots(slots, texts, edited)).toEqual([]);
+    expect(collectAssumedSlots(slots, texts, edited, true)).toEqual([]);
   });
 
-  it('混合 → 只计未手改的预填 0', () => {
-    const texts = { 'int:0': '36', 'int:1': '0', 'str:0': '' };
+  it('混合 → 只计留空且未手改的数值槽', () => {
+    const texts = { 'int:0': '36', 'int:1': '', 'str:0': '' };
     const edited = { 'int:0': true };
-    expect(collectAssumedSlots(slots, texts, edited)).toEqual([{ kind: 'int', index: 1 }]);
+    expect(collectAssumedSlots(slots, texts, edited, true)).toEqual([{ kind: 'int', index: 1 }]);
   });
 
-  it('清空槽 = 未提供（不计假设）', () => {
-    const texts = { 'int:0': '', 'int:1': '0', 'str:0': '' };
-    expect(collectAssumedSlots(slots, texts, {})).toEqual([{ kind: 'int', index: 1 }]);
+  it('手改后又清空 → 作者明确说"不知道"，不算假设', () => {
+    const texts = { 'int:0': '', 'int:1': '', 'str:0': '' };
+    expect(collectAssumedSlots(slots, texts, { 'int:0': true }, true)).toEqual([{ kind: 'int', index: 1 }]);
+  });
+});
+
+/* ------------------ 槽位输入并集（P2） / 调用上下文组装（P1） ------------------ */
+
+describe('mergeSlotInputs（路由模板槽 ∪ 函数体引用槽）', () => {
+  const template: KojoCallSlot[] = [
+    { kind: 'str', index: 0, label: '对话对象' },
+    { kind: 'int', index: 0, label: '事件子参数' },
+  ];
+
+  it('模板槽在前（label 用模板的），引用独有的槽补在后面', () => {
+    const merged = mergeSlotInputs(template, { ints: [3], strs: [1] });
+    expect(merged).toEqual([
+      { kind: 'str', index: 0, label: '对话对象', fromTemplate: true },
+      { kind: 'int', index: 0, label: '事件子参数', fromTemplate: true },
+      { kind: 'int', index: 3, label: REF_SLOT_LABEL, fromTemplate: false },
+      { kind: 'str', index: 1, label: REF_SLOT_LABEL, fromTemplate: false },
+    ]);
+  });
+
+  it('同 kind+index 去重：模板已转发的槽不重复出现（模板 label 保留）', () => {
+    const merged = mergeSlotInputs(template, { ints: [0, 0, 3], strs: [0] });
+    expect(merged.map((s) => `${s.kind}:${s.index}`)).toEqual(['str:0', 'int:0', 'int:3']);
+    expect(merged.find((s) => s.kind === 'int' && s.index === 0)?.label).toBe('事件子参数');
+  });
+
+  it('引用独有槽按 kind 分组、槽号升序（int 先，str 后）——渲染顺序稳定，不随 AST 扫描序漂', () => {
+    const merged = mergeSlotInputs([], { ints: [5, 1, 3], strs: [2, 0] });
+    expect(merged.map((s) => `${s.kind}:${s.index}`)).toEqual(['int:1', 'int:3', 'int:5', 'str:0', 'str:2']);
+  });
+
+  it('并集为空（模板空 + 无引用）→ 空数组（面板据此渲染裸上下文文本框）', () => {
+    expect(mergeSlotInputs([], { ints: [], strs: [] })).toEqual([]);
+    expect(mergeSlotInputs([], { ints: [], strs: [] })).toHaveLength(0);
+  });
+
+  it('int / str 同号槽互不吞（ARG:1 与 ARGS:1 是两格）', () => {
+    const merged = mergeSlotInputs([], { ints: [1], strs: [1] });
+    expect(merged).toHaveLength(2);
+    expect(merged.every((s) => s.index === 1)).toBe(true);
+  });
+});
+
+describe('assembleCallContext（P1：不再偷注 0）', () => {
+  const inputs = [
+    { kind: 'int' as const, index: 0, label: '事件子参数', fromTemplate: true },
+    { kind: 'int' as const, index: 1, label: '日期偏移', fromTemplate: true },
+    { kind: 'str' as const, index: 0, label: '对话对象', fromTemplate: true },
+  ];
+  const base = { slotInputs: inputs, slotEdited: {}, contextText: '' };
+
+  it('全留空 + assumeDefaults 关闭 → callContext: undefined（让引擎走推导器 / 判 unknown）', () => {
+    const r = assembleCallContext({ ...base, slotTexts: {}, assumeDefaults: false });
+    expect(r.error).toBeNull();
+    expect(r.callContext).toBeUndefined();
+  });
+
+  it('全留空 + assumeDefaults 打开 → 数值槽按 0 写入，str 槽不进 strs', () => {
+    const r = assembleCallContext({ ...base, slotTexts: {}, assumeDefaults: true });
+    expect(r.error).toBeNull();
+    expect(r.callContext).toEqual({ ints: [0, 0] });
+    expect(r.callContext?.strs).toBeUndefined();
+  });
+
+  it('手填值 → manual 写进 callContext（假设开关不再影响已填槽）', () => {
+    const r = assembleCallContext({
+      ...base,
+      slotTexts: { 'int:0': '36', 'str:0': '觉' },
+      slotEdited: { 'int:0': true, 'str:0': true },
+      assumeDefaults: true,
+    });
+    expect(r.error).toBeNull();
+    expect(r.callContext).toEqual({ ints: [36, 0], strs: ['觉'] }); // int:1 留空 → 假设 0
+  });
+
+  it('手改后又清空 + assumeDefaults 打开 → 不补 0（作者明确说不知道）', () => {
+    const r = assembleCallContext({
+      ...base,
+      slotTexts: { 'int:0': '', 'int:1': '' },
+      slotEdited: { 'int:0': true },
+      assumeDefaults: true,
+    });
+    expect(r.error).toBeNull();
+    expect(r.callContext).toEqual({ ints: [undefined, 0] });
+  });
+
+  it('str 槽空 → 不进 strs（只有 int 槽有值时就只给 ints）', () => {
+    const r = assembleCallContext({
+      ...base,
+      slotTexts: { 'int:0': '7' },
+      slotEdited: { 'int:0': true },
+      assumeDefaults: false,
+    });
+    expect(r.callContext).toEqual({ ints: [7] });
+  });
+
+  it('E1 对接口径：assumeDefaults 关时只填部分槽 → 没填的位置是空洞（undefined），不当成 0', () => {
+    // 引擎 `mergeCallContext`（state-replay locals.ts）逐槽合并：显式非 undefined 胜、
+    // 洞由推导器补。所以这里绝不能把没填的格子填成 0 —— 那会盖掉"发言者槽 = 角色号"
+    // 这类推导确定值。空洞是"未提供"，不是"值 0"。
+    const r = assembleCallContext({
+      ...base,
+      slotTexts: { 'int:1': '7' },
+      slotEdited: { 'int:1': true },
+      assumeDefaults: false,
+    });
+    expect(r.callContext).toEqual({ ints: [undefined, 7] });
+    expect(r.callContext?.ints?.[0]).toBeUndefined(); // 0 不等于 undefined（0 是真实实参）
+    expect(r.callContext?.strs).toBeUndefined(); // 一个 str 槽都没填 → 整个 strs 省略
+  });
+
+  it('非整数数值槽 → 显式错误（不发起回放，不静默）', () => {
+    const r = assembleCallContext({
+      ...base,
+      slotTexts: { 'int:0': 'abc' },
+      slotEdited: { 'int:0': true },
+      assumeDefaults: false,
+    });
+    expect(r.callContext).toBeUndefined();
+    expect(r.error).toContain('必须是整数');
+    expect(r.error).toContain('事件子参数');
+  });
+
+  it('并集为空 → 退回裸上下文文本（解析结果原样转 callContext）', () => {
+    const r = assembleCallContext({
+      slotInputs: [],
+      slotTexts: {},
+      slotEdited: {},
+      assumeDefaults: false,
+      contextText: '0=36, 1="觉"',
+    });
+    expect(r.error).toBeNull();
+    expect(r.callContext).toEqual({ ints: [36], strs: [undefined, '觉'] });
+  });
+
+  it('并集为空 + 空文本 → undefined；非法文本 → 显式错误', () => {
+    const empty = assembleCallContext({
+      slotInputs: [],
+      slotTexts: {},
+      slotEdited: {},
+      assumeDefaults: false,
+      contextText: '',
+    });
+    expect(empty).toEqual({ callContext: undefined, error: null });
+    const bad = assembleCallContext({
+      slotInputs: [],
+      slotTexts: {},
+      slotEdited: {},
+      assumeDefaults: false,
+      contextText: 'nonsense',
+    });
+    expect(bad.callContext).toBeUndefined();
+    expect(bad.error).toContain('无法解析');
+  });
+});
+
+/* ------------------------- 槽位候选值（P3） ------------------------- */
+
+/** 造一条谓词明细（只关心 expr / kind，其余字段给最小值） */
+function pred(expr: ConditionExpr, kind: FunctionPredicate['kind'] = 'IF'): FunctionPredicate {
+  return { kind, text: '(test)', expr, line: 1, depth: 0 };
+}
+
+describe('argSlotCandidates（从谓词 AST 里捡候选值）', () => {
+  it('数值比较：ARG == 字面量 收集数字；两侧都认（字面量在左也行）', () => {
+    const preds = [
+      pred({
+        kind: 'binary',
+        op: '==',
+        left: { kind: 'ref', name: 'ARG', indices: ['0'], text: 'ARG:0' },
+        right: { kind: 'literal', value: 36, text: '36' },
+      }),
+      pred({
+        kind: 'binary',
+        op: '>=',
+        left: { kind: 'literal', value: 12, text: '12' },
+        right: { kind: 'ref', name: 'ARG', indices: ['0'], text: 'ARG:0' },
+      }),
+    ];
+    const cands = argSlotCandidates(preds);
+    expect(cands.get('int:0')).toEqual(['36', '12']);
+  });
+
+  it('字符串比较：字面量取解码后的值（去引号）', () => {
+    const preds = [
+      pred({
+        kind: 'binary',
+        op: '!=',
+        left: { kind: 'ref', name: 'ARGS', indices: ['1'], text: 'ARGS:1' },
+        right: { kind: 'literal', value: '约会', text: '"约会"' },
+      }),
+    ];
+    expect(argSlotCandidates(preds).get('str:1')).toEqual(['约会']);
+  });
+
+  it('CASE 展开形（subject == 值）天然是 binary → 逐个收集', () => {
+    const preds = [
+      pred({
+        kind: 'binary',
+        op: '==',
+        left: { kind: 'ref', name: 'ARG', indices: [], text: 'ARG' }, // 裸 ARG ≡ ARG:0
+        right: { kind: 'literal', value: 1, text: '1' },
+      }, 'CASE'),
+      pred({
+        kind: 'binary',
+        op: '==',
+        left: { kind: 'ref', name: 'ARG', indices: [], text: 'ARG' },
+        right: { kind: 'literal', value: 2, text: '2' },
+      }, 'CASE'),
+    ];
+    expect(argSlotCandidates(preds).get('int:0')).toEqual(['1', '2']);
+  });
+
+  it('递归进 ternary / call 参数 / unary（&& 连接的两条都算）', () => {
+    const preds = [
+      pred({
+        kind: 'binary',
+        op: '&&',
+        left: {
+          kind: 'ternary',
+          cond: {
+            kind: 'binary',
+            op: '<',
+            left: { kind: 'ref', name: 'ARG', indices: ['2'], text: 'ARG:2' },
+            right: { kind: 'literal', value: 5, text: '5' },
+          },
+          then: { kind: 'literal', value: 1, text: '1' },
+          else: { kind: 'literal', value: 0, text: '0' },
+        },
+        right: {
+          kind: 'unary',
+          op: '!',
+          operand: {
+            kind: 'call',
+            name: 'GETBIT',
+            args: [
+              {
+                kind: 'binary',
+                op: '==',
+                left: { kind: 'ref', name: 'ARGS', indices: ['0'], text: 'ARGS:0' },
+                right: { kind: 'literal', value: '觉', text: '"觉"' },
+              },
+            ],
+          },
+        },
+      }),
+    ];
+    const cands = argSlotCandidates(preds);
+    expect(cands.get('int:2')).toEqual(['5']);
+    expect(cands.get('str:0')).toEqual(['觉']);
+  });
+
+  it('去重按首次出现序；每槽上限 MAX_SLOT_CANDIDATES', () => {
+    const dup = [
+      pred({ kind: 'binary', op: '==', left: { kind: 'ref', name: 'ARG', indices: ['0'], text: 'ARG:0' }, right: { kind: 'literal', value: 3, text: '3' } }),
+      pred({ kind: 'binary', op: '==', left: { kind: 'ref', name: 'ARG', indices: ['0'], text: 'ARG:0' }, right: { kind: 'literal', value: 3, text: '3' } }),
+      pred({ kind: 'binary', op: '==', left: { kind: 'ref', name: 'ARG', indices: ['0'], text: 'ARG:0' }, right: { kind: 'literal', value: 4, text: '4' } }),
+    ];
+    expect(argSlotCandidates(dup).get('int:0')).toEqual(['3', '4']);
+
+    const many = Array.from({ length: MAX_SLOT_CANDIDATES + 5 }, (_, i) =>
+      pred({ kind: 'binary', op: '==', left: { kind: 'ref', name: 'ARG', indices: ['1'], text: 'ARG:1' }, right: { kind: 'literal', value: i, text: String(i) } }),
+    );
+    expect(argSlotCandidates(many).get('int:1')).toHaveLength(MAX_SLOT_CANDIDATES);
+  });
+
+  it('无候选：非比较运算 / 槽对槽 / 动态下标 / opaque 都不猜', () => {
+    const preds = [
+      pred({ kind: 'binary', op: '+', left: { kind: 'ref', name: 'ARG', indices: ['0'], text: 'ARG:0' }, right: { kind: 'literal', value: 1, text: '1' } }),
+      // 槽 vs 槽：都不是字面量
+      pred({
+        kind: 'binary',
+        op: '==',
+        left: { kind: 'ref', name: 'ARG', indices: ['0'], text: 'ARG:0' },
+        right: { kind: 'ref', name: 'CFLAG', indices: ['2'], text: 'CFLAG:2' },
+      }),
+      // 动态下标：无法静态归因
+      pred({
+        kind: 'binary',
+        op: '==',
+        left: { kind: 'ref', name: 'ARG', indices: ['ARG:0'], text: 'ARG:ARG:0' },
+        right: { kind: 'literal', value: 9, text: '9' },
+      }),
+      pred({ kind: 'opaque', text: '???' }),
+    ];
+    const cands = argSlotCandidates(preds);
+    expect(cands.size).toBe(0);
+    expect(argSlotCandidates([]).size).toBe(0);
   });
 });
 
@@ -346,28 +654,28 @@ describe('applyScene（应用与合并冲突）', () => {
   ];
   const scene: ReplayScene = { id: 'scene-a', name: '约会', slots: { 'int:0': man('36'), 'str:0': man('觉') } };
 
-  it('场景覆盖的槽 → manual（edited=true）；未覆盖 → 默认（assumption / unset）', () => {
+  it('场景覆盖的槽 → manual（edited=true）；未覆盖 → 空（unset，P1 不再预填 0）', () => {
     const app = applyScene(scene, slots);
-    expect(app.texts).toEqual({ 'int:0': '36', 'int:1': '0', 'str:0': '觉' });
+    expect(app.texts).toEqual({ 'int:0': '36', 'int:1': '', 'str:0': '觉' });
     expect(app.edited).toEqual({ 'int:0': true, 'int:1': false, 'str:0': true });
     expect(app.applied).toEqual(['int:0', 'str:0']);
     expect(app.dropped).toEqual([]);
     expect(app.reset).toEqual([]);
   });
 
-  it('场景里签名没有的槽 → dropped；已填却未覆盖 → reset', () => {
+  it('场景里签名没有的槽 → dropped；已填却未覆盖 → reset（清回空）', () => {
     const narrow = [{ kind: 'int' as const, index: 0 }];
     const app = applyScene(scene, narrow, { 'int:0': '1' });
     expect(app.dropped).toEqual(['str:0']); // 场景的 str:0 不在签名内（协议/家族不同）
     expect(app.texts).toEqual({ 'int:0': '36' });
     const app2 = applyScene({ id: 'x', name: 'x', slots: {} }, slots, { 'int:1': '7', 'str:0': '' });
     expect(app2.reset).toEqual(['int:1']);
-    expect(app2.texts).toEqual({ 'int:0': '0', 'int:1': '0', 'str:0': '' });
+    expect(app2.texts).toEqual({ 'int:0': '', 'int:1': '', 'str:0': '' });
   });
 
-  it('内置默认场景（无槽）→ 全部回到默认', () => {
+  it('内置默认场景（无槽）→ 全部清回空', () => {
     const app = applyScene(defaultScene(), slots, { 'int:0': '9' });
-    expect(app.texts).toEqual({ 'int:0': '0', 'int:1': '0', 'str:0': '' });
+    expect(app.texts).toEqual({ 'int:0': '', 'int:1': '', 'str:0': '' });
     expect(app.edited).toEqual({ 'int:0': false, 'int:1': false, 'str:0': false });
     expect(app.applied).toEqual([]);
     expect(app.reset).toEqual(['int:0']);
@@ -380,7 +688,7 @@ describe('applyScene（应用与合并冲突）', () => {
     ];
     const s: ReplayScene = { id: 'x', name: 'x', slots: { 'str:0': man('约会') } };
     const app = applyScene(s, sameIdx);
-    expect(app.texts).toEqual({ 'str:0': '约会', 'int:0': '0' });
+    expect(app.texts).toEqual({ 'str:0': '约会', 'int:0': '' });
     expect(app.applied).toEqual(['str:0']);
   });
 });
@@ -479,7 +787,7 @@ describe('谓词渲染窗口（触底增窗）', () => {
 /* ==================== 白话批（2026-11-02）：可发现性 + 中文标注 ==================== */
 
 import type { ConditionIndex, VariableSchema } from '@kojo/plugin-api';
-import { browseCharaFunctions, predicateGloss, replaySummarySentence, suggestFunctionsSmart } from '../src/panel-logic';
+import { browseCharaFunctions, predicateGloss, predicateValues, replaySummarySentence, suggestFunctionsSmart } from '../src/panel-logic';
 
 /** 构造最小 ConditionIndex（只填 suggestFunctionsSmart 读的字段；第二项 = 依赖数组） */
 function mkIndex(entries: [string, { key: string; labels?: string[] }[]][]): ConditionIndex {
@@ -664,5 +972,87 @@ describe('台词推演区的渲染窗口（2026-11-02 美化批）', () => {
     expect(nextTrWindow(a, 500)).toBeGreaterThan(a);
     expect(nextTrWindow(499, 500)).toBe(500);
     expect(nextTrWindow(500, 500)).toBe(500);
+  });
+});
+
+describe('predicateValues（B3：谓词行显示变量实际取值）', () => {
+  const ref = (name: string, indices: string[] = []): ConditionExpr => ({
+    kind: 'ref',
+    name,
+    indices,
+    text: indices.length ? `${name}:${indices.join(':')}` : name,
+  });
+  const value = (v: number | string): ReplayValue => ({ kind: 'value', value: v });
+  const unknown = (): ReplayValue => ({
+    kind: 'unknown',
+    unknown: { code: 'missing-var', message: 'no' },
+  });
+  /** 视图读取器桩：CFLAG:2 = 480、CFLAG:3 = 120、TALENT:恋慕 = 1，其余 unknown */
+  const read = (r: VariableRef): ReplayValue => {
+    const key = r.indices.length === 0 ? r.name.toUpperCase() : `${r.name.toUpperCase()}:${r.indices.join(':')}`;
+    if (key === 'CFLAG:2') return value(480);
+    if (key === 'CFLAG:3') return value(120);
+    if (key === 'TALENT:恋慕') return value(1);
+    return unknown();
+  };
+
+  it('二元两侧的存档变量都列出来（`为什么是假`的答案就在行上）', () => {
+    const expr: ConditionExpr = {
+      kind: 'binary',
+      op: '&&',
+      left: { kind: 'binary', op: '>=', left: ref('CFLAG', ['2']), right: { kind: 'literal', value: 500, text: '500' } },
+      right: { kind: 'binary', op: '<', left: ref('CFLAG', ['3']), right: { kind: 'literal', value: 200, text: '200' } },
+    };
+    expect(predicateValues(expr, read)).toBe('CFLAG:2=480 · CFLAG:3=120');
+  });
+
+  it('读不出值的引用不列（未知原因由引擎行自己说，不在这里重复噪音）', () => {
+    const expr: ConditionExpr = {
+      kind: 'binary',
+      op: '&&',
+      left: ref('CFLAG', ['2']),
+      right: ref('CFLAG', ['9']),
+    };
+    expect(predicateValues(expr, read)).toBe('CFLAG:2=480');
+    const allUnknown: ConditionExpr = { kind: 'binary', op: '&&', left: ref('MONEY'), right: ref('DAY') };
+    expect(predicateValues(allUnknown, read)).toBeNull();
+  });
+
+  it('语言级局部量族跳过（本地量/结果寄存器不是存档值）', () => {
+    const expr: ConditionExpr = {
+      kind: 'binary',
+      op: '&&',
+      left: ref('LOCAL', ['0']),
+      right: ref('RESULT'),
+    };
+    expect(predicateValues(expr, read)).toBeNull();
+    const mixed: ConditionExpr = {
+      kind: 'binary',
+      op: '&&',
+      left: ref('LOCAL', ['0']),
+      right: ref('CFLAG', ['2']),
+    };
+    expect(predicateValues(mixed, read)).toBe('CFLAG:2=480');
+  });
+
+  it('同名同下标去重（递归进 ternary / call 参数），取值字符串原样', () => {
+    const expr: ConditionExpr = {
+      kind: 'ternary',
+      cond: ref('CFLAG', ['2']),
+      then: ref('CFLAG', ['2']),
+      else: { kind: 'call', name: 'MAX', args: [ref('TALENT', ['恋慕']), ref('CFLAG', ['2'])] },
+    };
+    expect(predicateValues(expr, read)).toBe('CFLAG:2=480 · TALENT:恋慕=1');
+  });
+
+  it('最多列 MAX_VALUE_HINTS 格（顺序 = 出现序）', () => {
+    const expr: ConditionExpr = {
+      kind: 'call',
+      name: 'MAX',
+      args: [ref('CFLAG', ['2']), ref('CFLAG', ['3']), ref('TALENT', ['恋慕']), ref('MONEY'), ref('DAY')],
+    };
+    const out = predicateValues(expr, read);
+    expect(out).toBe('CFLAG:2=480 · CFLAG:3=120 · TALENT:恋慕=1');
+    expect(out!.split(' · ')).toHaveLength(3);
   });
 });
