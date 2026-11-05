@@ -27,13 +27,22 @@ import {
   candidateRank,
   enclosingAt,
   enclosingChainAt,
-  erbCodeBodyOf,
   pathInScope,
   symbolTokenAt,
 } from '@kojo/plugin-api';
 import { isErbDimNameChar, parseDimDeclaration, parseErbText, parseLabelDefinition } from './scanner';
-import { codeViewOf, erbReferenceLocationsAt, functionNameTokenAt, referencesOf, visibleCodeLines } from './references';
-import { dimDeclarationSitesOf } from './dim-index';
+import {
+  codeViewOf,
+  dimReferencesOf,
+  erbReferenceLocationsAt,
+  dimNameShapesOf,
+  forEachDimRef,
+  functionNameTokenAt,
+  referencesOf,
+  scanDimRefs,
+  visibleCodeLines,
+} from './references';
+import { dimDeclarationSitesOf, localDimShadowSpansOf } from './dim-index';
 
 /**
  * 位置 → 符号（B0，2026-10-15 语言服务批）。
@@ -609,42 +618,126 @@ export function mergeNavigationLegs(
 /* ============================== 查找引用判据（LAU-4 引用腿） ============================== */
 
 /**
- * 引用扫描的可见代码行（注释 / 指令行 / 定义行 / `#` / `$` / `@` 行一概不进）。
- * 判据逐字搬自宿主 `monaco/erb-dim-navigation.ts`（2026-10-31 LAU-4：宿主不再有 ERB 判据）。
+ * 本文件里某个变量名的提及点（**缓冲区本地腿**）。
+ *
+ * 判据不再住在这里：2026-11-05 起与项目级索引腿共用 `references.ts` 的
+ * {@link scanDimRuns}（可见行 `visibleCodeLines` + 变量名字符集 `isErbDimNameChar` +
+ * 成员访问退让）。此前这里自带一份 `dimCodeLinesOf` + 手写切段，而索引腿用的是函数
+ * 记号尺（`MODEL_TOKEN_CLASS`）——两把尺子在 `楽譜最大数（シリーズ毎）` 这类真名字上
+ * 不一致，表现就是"索引建好与没建好，同一处按 Shift+F12 给出不同答案"。
  */
-function* dimCodeLinesOf(text: string): Generator<{ line: number; view: string }> {
-  const lines = linesOf(text);
-  let inSkipBlock = false;
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i]!;
-    // 代码前缀（`;!;` / `;#;`）之后是真代码（判据单源 `plugin-api`），不算注释行
-    const trimmed = erbCodeBodyOf(raw.trim());
-    if (inSkipBlock) {
-      if (trimmed === '[SKIPEND]') inSkipBlock = false;
-      continue;
-    }
-    if (trimmed === '[SKIPSTART]') {
-      inSkipBlock = true;
-      continue;
-    }
-    if (trimmed.length === 0 || /^[;#$@]/.test(trimmed)) continue;
-    yield { line: i + 1, view: codeViewOf(raw) };
-  }
+function localDimMentionsOf(
+  text: string,
+  want: string,
+): { line: number; start: number; length: number }[] {
+  const out: { line: number; start: number; length: number }[] = [];
+  const runs = scanDimRefs(text, (normalized) => normalized === want, dimNameShapesOf([want]));
+  forEachDimRef(runs, (name, atLine, column) => {
+    out.push({ line: atLine, start: column - 1, length: name.length });
+  });
+  return out;
 }
 
 /**
- * `#DIM` 声明名上的查找引用（Shift+F12）：**只在本文件**内列出现点。
+ * 一处项目级变量提及是否被**同文件函数内的局部声明遮蔽**（`@F` 里 `#DIM CFLAG` ⇒
+ * `@F` 体内的 `CFLAG` 是那个局部变量，不是全局那个）。
+ *
+ * 为什么在**查询时**判而不是建索引时剔：遮蔽是当前文件事实，作者随时会加一行 `#DIM`；
+ * 建索引时剔会把"这行不算引用"冻进快照，改回来还得靠重扫（`dim-index.ts` 的
+ * `localDimShadowSpansOf` 头注同一条理由）。判据本身也只有一处——那张区间表。
+ *
+ * 用 `ref.filePath` 直接查 `index.files`：那串路径就是 `ErbFile.path` 的同一枚实例
+ * （`buildDimReferenceIndex` 逐字复用），不需要归一化比较。
+ */
+function shadowedDimMentionAt(index: ErbIndex, filePath: string, line: number, name: string): boolean {
+  const files: Map<string, ErbFile> | undefined = index.files;
+  const file = files === undefined ? undefined : files.get(filePath);
+  if (file === undefined) return false;
+  for (const span of localDimShadowSpansOf(file)) {
+    if (line < span.from || line > span.to) continue;
+    return span.names.has(name);
+  }
+  return false;
+}
+
+/**
+ * 光标所在的**全局**声明 → 项目级出现点全集；返回 `null` = "这一腿不答"（调用方退回本文件）。
+ *
+ * 三条弃权条件，都落在 `null`：
+ * 1. 没有索引 / 没有 `dimReferences`（未建、或增量更新后待修复）——降级为 2026-11-05 之前的
+ *    "只看本文件"，而不是给一个空答案；
+ * 2. 名字不在表里（局部声明天然不在——表只收全局名）；
+ * 3. 光标那一行**不是**这张表记着的声明点（作者刚加的 `#DIM` 还没进索引 / 光标在别处声明）。
+ *
+ * 第 3 条是这一腿唯一需要的"作用域判定"，而它**不引入第二套判据**：全局与否正是索引自己
+ * 记下的事实（`dim-index.ts` 从 `files[].functions` 派生，函数体内的声明根本不进表）。
+ * 若改用"向下扫最近的 `@` 行"之类文本判据，就多出一份可能和索引打架的作用域口径——
+ * 一旦打架，表现是"引用面板列出别处的同名变量"或"只列本文件"，两种都难复现。
+ */
+function projectDimReferencesAt(
+  index: ErbIndex | null | undefined,
+  filePath: string,
+  line: number,
+  name: string,
+): EditorSymbolLocation[] | null {
+  if (index === null || index === undefined) return null;
+  const refs = dimReferencesOf(index, name);
+  if (refs.length === 0) return null;
+  const atLine = Math.trunc(line);
+  const key = normalizePathKey(filePath);
+  let declaredHere = false;
+  for (const ref of refs) {
+    if (ref.kind !== 'definition' || ref.line !== atLine) continue;
+    if (normalizePathKey(ref.filePath) !== key) continue;
+    declaredHere = true;
+    break;
+  }
+  if (!declaredHere) return null;
+
+  const out: EditorSymbolLocation[] = [];
+  for (const ref of refs) {
+    if (ref.kind === 'mention' && shadowedDimMentionAt(index, ref.filePath, ref.line, name)) continue;
+    // 声明点不给 `span`：契约里它根本没有 `endColumn`（索引只有行，没有列事实）。
+    // 与 `resolveErbDimDefinition` 的跨文件腿同一条诚实口径。
+    out.push(
+      ref.kind === 'definition'
+        ? { filePath: ref.filePath, line: ref.line, column: ref.column, kind: 'definition' }
+        : {
+            filePath: ref.filePath,
+            line: ref.line,
+            column: ref.column,
+            span: { columnStart: ref.column, columnEnd: ref.endColumn },
+            kind: 'mention',
+          },
+    );
+  }
+  return out;
+}
+
+/**
+ * `#DIM` 声明名上的查找引用（Shift+F12）。
  *
  * 命中前提（严格）：光标必须落在**声明行**的名字上——这是唯一可证明的入口（任意变量位置上
  * 按 Shift+F12 会把同名散文 / 成员名一起卷进来，误报比少答更坏）。声明行自身算
  * `definition`，其余同记号出现算 `mention`；成员访问（`FLAG:名字`）不算变量引用。
  * 大小写按 `toUpperCase()` 归一（与 `dimDeclarationsOf` 同一把尺子），全角字符原样参与比较。
+ *
+ * **两条腿**（2026-11-05 项目级索引批）：
+ * - 光标那一行是**全局**声明（文件顶层 / `.ERH`）且索引里建好了 `dimReferences` ⇒ 答项目级
+ *   （跨文件全部落点，按 {@link projectDimReferencesAt} 的判据）；
+ * - 否则（局部声明 / 没索引 / 索引还没建好）⇒ 本文件逐行，**与加这一腿之前逐字等价**。
+ *
+ * 为什么局部声明不跨文件：`#DIM` 在函数体内是调用栈局部的（真语料 67.7% 的声明都是这种），
+ * 跨函数同名互不相干——把它当项目级名字，A 函数的局部变量就会被算到 B 头上。
+ *
+ * `index` 是可选参数（与 `resolveErbDimDefinition` 同形）：不传 ⇒ 老行为，老调用方零感知。
  */
 export function erbDimReferencesAt(
   text: string,
   line: number,
   column: number,
   filePath: string | null,
+  index?: ErbIndex | null,
 ): EditorSymbolLocation[] {
   if (!filePath || !isErbDefinitionPath(filePath)) return [];
   if (!Number.isFinite(line) || !Number.isFinite(column)) return [];
@@ -656,6 +749,8 @@ export function erbDimReferencesAt(
   // Monaco 的光标是"字符之间"：名字末尾那一列（nameStart + len）也算落在名字上
   if (col0 < decl.nameStart || col0 > decl.nameStart + decl.name.length) return [];
   const want = decl.name.toUpperCase();
+  const project = projectDimReferencesAt(index, filePath, line, want);
+  if (project !== null) return project;
   const out: EditorSymbolLocation[] = [];
   const seen = new Set<string>();
   const push = (atLine: number, start: number, length: number, kind: 'definition' | 'mention'): void => {
@@ -673,20 +768,8 @@ export function erbDimReferencesAt(
   for (const { line: atLine, dim } of dimDeclarationsOf(text)) {
     if (dim.name.toUpperCase() === want) push(atLine, dim.nameStart, dim.name.length, 'definition');
   }
-  for (const { line: atLine, view } of dimCodeLinesOf(text)) {
-    let i = 0;
-    while (i < view.length) {
-      if (!isErbDimNameChar(view[i])) {
-        i++;
-        continue;
-      }
-      const start = i;
-      while (i < view.length && isErbDimNameChar(view[i])) i++;
-      if (view.slice(start, i).toUpperCase() !== want) continue;
-      const prev = start > 0 ? view[start - 1] : '';
-      if (prev === ':' || prev === '：') continue;
-      push(atLine, start, i - start, 'mention');
-    }
+  for (const mention of localDimMentionsOf(text, want)) {
+    push(mention.line, mention.start, mention.length, 'mention');
   }
   out.sort((a, b) => a.line - b.line || (a.column ?? 0) - (b.column ?? 0));
   return out;
@@ -722,7 +805,7 @@ export function erbReferencesAt(
       ? labelScopeAt(text, path, line, column)
       : null;
   const labels = labelScope === null ? [] : labelReferenceLocations(labelScope);
-  const dims = erbDimReferencesAt(text, line, column, path);
+  const dims = erbDimReferencesAt(text, line, column, path, index);
   const slot = index === null ? [] : erbReferenceLocationsAt(index, text, line, column);
   return mergeNavigationLegs(labels, dims, slot);
 }

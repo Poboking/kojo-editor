@@ -43,6 +43,14 @@ const V12 = 12;
 /** 上一代（v14：函数元组是"一函数一枚 7 元组"、候选哈希 32 位） */
 const V14 = 14;
 
+/**
+ * 条目元组的**当前位数**（v17 起 12 位：第 12 位 = 变量提及流水 `dimRefs`）。
+ *
+ * 写死而不用 `CURRENT_ARITY`：这些断言要钉的正是"落盘条目是完整当前形态"，
+ * 拿同一个常量去比就变成恒真（编码漏一格也照绿）。抬位数时只改这一处。
+ */
+const ARITY = 12;
+
 const ROOT = 'D:/proj/eratw';
 const KOJO = `${ROOT}/ERB`;
 const P1 = `${KOJO}/M_KOJO_K1.ERB`;
@@ -373,7 +381,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 4, files: 2 });
 
     // 自愈闭环：重读写回当前键 + 旧键被 prune 收走 ⇒ 下一轮是纯热开，不会再付一次读旧键
-    await waitFor(() => diskOf(seeded.map, v7key).version === SNAPSHOT_VERSION && diskOf(seeded.map, v7key).entries[P1]!.length === 11);
+    await waitFor(() => diskOf(seeded.map, v7key).version === SNAPSHOT_VERSION && diskOf(seeded.map, v7key).entries[P1]!.length === ARITY);
     expect(seeded.map.has(legacyKey)).toBe(false);
 
     // 判据③：与同一份盘的全量重建六项逐字相同
@@ -397,7 +405,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     const first = activate(seeded.fs.io, seeded.storage, firstLogs);
     openProject(first.bus);
     await first.waitIndexed();
-    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === 11);
+    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === ARITY);
     // 第一轮对上一代盘是全量重建（口径外代 fail-closed）：新扫的 refs 恒带溯源 ⇒ 补正计数为 0
     expect(readBreakdown(firstLogs).provenance).toBe(0);
 
@@ -450,7 +458,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 });
 
     // 落盘的条目已是 11 位且候选集记账（'' 也是事实），溯源摘要随新扫记账
-    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === 11);
+    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === ARITY);
     const savedP2 = diskOf(seeded.map, v7key).entries[P2]!;
     expect(typeof savedP2[10]).toBe('string');
 
@@ -492,7 +500,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
       copy[7] = refsAsTuples(t[7]); // v11 的盘上形态：引用流水是四元组数组
       copy[5] = fnsAsTuples(t[5], true); // 函数是 7 元组、形参是二元组
       copy[10] = (tokensOf[p] ?? []).join('\n');
-      v11entries[p] = copy;
+      v11entries[p] = copy.slice(0, 11); // v17 之前盘上只有 11 位（第 12 位 = 变量提及流水）
     }
     seeded.map.delete(v7key);
     seeded.map.set(
@@ -511,9 +519,8 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     // ★ 与上面 v10 用例的**唯一差别**：v10 缺位 ⇒ 候选未知 ⇒ 保守侧重扫（provenance=2）；
     // v11 只换了编码 ⇒ 就地哈希即可 ⇒ 零重扫。这条差异是"免费迁移"这个说法的判据。
     expect(r.provenance).toBe(0);
-    expect(r.refsRescan).toBe(0);
-    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 0, files: 0 }); // 一次读盘都不付
-
+    expect(r.refsRescan).toBe(2); // v17：旧盘缺第 12 位 ⇒ 变量提及腿重扫一遍（结构照旧复用）
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 }); // 只为变量提及腿读一遍正文
     // 迁移把记号串**就地哈希**，成员语义逐条不变（不是"随便造了个非空数组"）
     const snap = second.service.snapshotForDebug?.() as { entries: Record<string, { candidateHashes?: Uint16Array }> } | null;
     expect(snap).not.toBeNull();
@@ -525,7 +532,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(dumpIndex(second.service.currentIndex()!)).toBe(dumpIndex(cold.idx));
 
     // 落盘已是 v12（新键），第 11 位是 base64（**不是**记号串）
-    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === 11);
+    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === ARITY);
     const savedP1 = diskOf(seeded.map, v7key).entries[P1]!;
     expect(typeof savedP1[10]).toBe('string');
     expect(savedP1[10]).not.toContain('\n'); // 记号串是 `\n` 连接的，base64 不可能含它
@@ -550,7 +557,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
       // v12 的候选位是 32 位哈希的 base64（v15 起是 16 位）——旧字宽是**版本的一部分**，
       // 不写回的话版本表会按 32 位去解 16 位的串 ⇒ 字节数不是 4 的倍数 ⇒ 整条判损坏。
       copy[10] = encodeHashes32(Array.from(decodeCandidateHashes(t[10] as string)!).map((v) => v << 16));
-      v12entries[p] = copy;
+      v12entries[p] = copy.slice(0, 11); // v17 之前盘上只有 11 位（第 12 位 = 变量提及流水）
     }
     seeded.map.delete(v7key);
     seeded.map.set(
@@ -568,9 +575,8 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(r.reused).toBe(2);
     // ★ 与 v10 用例正相反：v12 只是换了存放形态 ⇒ 就地摊平即可 ⇒ 零重扫、零读盘
     expect(r.provenance).toBe(0);
-    expect(r.refsRescan).toBe(0);
-    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 0, files: 0 });
-
+    expect(r.refsRescan).toBe(2); // v17：旧盘缺第 12 位 ⇒ 变量提及腿重扫一遍（结构照旧复用）
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 }); // 只为变量提及腿读一遍正文
     // 迁移把四元组**就地摊平**，逐条逐字段不变（不是"随便造了个非空数组"）
     const snap = second.service.snapshotForDebug?.() as
       | { entries: Record<string, { refs?: readonly (string | number)[] }> }
@@ -586,7 +592,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(dumpIndex(second.service.currentIndex()!)).toBe(dumpIndex(cold.idx));
 
     // 落盘已是 v13（新键），第 8 位是扁平流水（**不再**是四元组数组）
-    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === 11);
+    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === ARITY);
     const savedP1 = diskOf(seeded.map, v7key).entries[P1]!;
     expect(Array.isArray(savedP1[7])).toBe(true);
     expect((savedP1[7] as unknown[]).every((x) => Array.isArray(x))).toBe(false);
@@ -609,7 +615,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
       copy[5] = fnsAsTuples(t[5], false);
       const words16 = Array.from(decodeCandidateHashes(t[10] as string)!);
       copy[10] = encodeHashes32(words16.map((v) => v << 16));
-      v14entries[p] = copy;
+      v14entries[p] = copy.slice(0, 11); // v17 之前盘上只有 11 位（第 12 位 = 变量提及流水）
     }
     seeded.map.delete(v7key);
     seeded.map.set(
@@ -627,9 +633,8 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(r.reused).toBe(2);
     // 两处都只换存放形态 ⇒ 零重扫、零读盘（与 v10 的保守侧重扫正相反）
     expect(r.provenance).toBe(0);
-    expect(r.refsRescan).toBe(0);
-    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 0, files: 0 });
-
+    expect(r.refsRescan).toBe(2); // v17：旧盘缺第 12 位 ⇒ 变量提及腿重扫一遍（结构照旧复用）
+    expect(segOf(seeded.fs.log, mark)).toEqual({ passes: 2, files: 2 }); // 只为变量提及腿读一遍正文
     // 迁移逐条同值：函数流水的 7 格还原成 `ErbFunction` 后与全量重建逐字段相同
     // （docComment / nameColumn / params 都在这条里；`dumpIndex` 只比名字与行）
     const hot = second.service.currentIndex()!;
@@ -638,7 +643,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     expect(dumpIndex(hot)).toBe(dumpIndex(cold.idx));
 
     // 落盘已是 v15（新键）：函数位是扁平流水（**不再**是元组数组）、候选位是 16 位哈希的 base64
-    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === 11);
+    await waitFor(() => diskOf(seeded.map, v7key).entries[P1]!.length === ARITY);
     const savedP1 = diskOf(seeded.map, v7key).entries[P1]!;
     expect(Array.isArray(savedP1[5])).toBe(true);
     expect((savedP1[5] as unknown[]).every((x) => Array.isArray(x))).toBe(false);
@@ -889,7 +894,7 @@ describe('PERF-12a 作废后分段复用（受控作废复现 + 等价对拍）'
     const second = activate(seeded.fs.io, seeded.storage, logs);
     openProject(second.bus);
     await second.waitIndexed();
-    await waitFor(() => diskOf(seeded.map, v7key).entries[P2]!.length === 11 && diskOf(seeded.map, v7key).entries[P2]![9] !== null);
+    await waitFor(() => diskOf(seeded.map, v7key).entries[P2]!.length === ARITY && diskOf(seeded.map, v7key).entries[P2]![9] !== null);
 
     const saved = diskOf(seeded.map, v7key);
     const expectFp = nameSetDigest(second.service.currentIndex()!.byName.keys());
@@ -946,10 +951,10 @@ describe('PERF-12a salvage 判据（纯函数）', () => {
     const raw: Record<string, unknown> = JSON.parse(JSON.stringify(good));
     raw['/a.ERB'] = (raw['/a.ERB'] as unknown[]).slice(0, 5); // 元数不符
     raw['/bad.ERB'] = { not: 'a tuple' };
-    const out = salvageEntries(raw, 11)!;
+    const out = salvageEntries(raw, ARITY)!;
     expect(out.skipped).toBe(2);
     expect(Object.keys(out.entries)).toEqual([]);
-    const onlyGood = salvageEntries(JSON.parse(JSON.stringify(good)), 11)!;
+    const onlyGood = salvageEntries(JSON.parse(JSON.stringify(good)), ARITY)!;
     expect(onlyGood.skipped).toBe(0);
     expect(onlyGood.entries['/a.ERB']).toBeDefined();
 
@@ -959,7 +964,7 @@ describe('PERF-12a salvage 判据（纯函数）', () => {
     expect(refsAreReusable(legacy.entries['/a.ERB']!, nameSetDigest([]))).toBe(false);
     // 元组对象仍是盘上那一个（落盘快路径不被 salvage 打断）
     const parsed = JSON.parse(JSON.stringify(good)) as Record<string, unknown[]>;
-    expect(salvageEntries(parsed, 11)!.entries['/a.ERB']).toBeDefined();
+    expect(salvageEntries(parsed, ARITY)!.entries['/a.ERB']).toBeDefined();
   });
 
   it('salvageSnapshot：版本表外 / 项目根不符 / savedAt 坏 ⇒ null；knownPaths 负责把条目键归位', () => {

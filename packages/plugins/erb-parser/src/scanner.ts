@@ -266,18 +266,112 @@ export function parseDimDeclaration(trimmed: string): { directive: string; name:
 }
 
 /**
+ * 名字字符的**码位实现**（字符集唯一一份，`isErbDimNameChar` 只是它的字符串外壳）。
+ *
+ * 为什么要码位表：项目级变量引用要把**每一行可见代码**按名字字符切段（真语料 339 万行），
+ * 逐字符跑 `/[\s,…]/` 正则是 2026-10-20 PS-3 批刚消掉的那类开销（5,000 行 25.7 ms）。
+ * 排除集除空白外全是 ASCII，表查一次就够；空白里的非 ASCII 部分见
+ * {@link isNonAsciiSpace}——它必须与 JS `\s` **逐码位等价**，否则真语料里的全角空格
+ * （`\u3000`）会被算进名字，切出的段永远匹配不上声明名。
+ */
+const DIM_NAME_DELIMITED = new Uint8Array(128);
+for (const ch of ',;:()[]{}<>+-*/%=!&|\'"`') DIM_NAME_DELIMITED[ch.charCodeAt(0)] = 1;
+for (const ch of ' \t\n\v\f\r') DIM_NAME_DELIMITED[ch.charCodeAt(0)] = 1;
+
+/**
+ * JS `\s` 里**非 ASCII** 的那部分（UA-1，与 `isErbDimNameChar` 原正则的 `\s` 逐码位等价）。
+ *
+ * 这份清单不是抄来的：`REGEXP_SPACE_SWEEP` 用例把 0x0000–0x303F 全量与更高位样本逐个
+ * 拿去与 `/\s/` 对拍，一处不等就红（否则"名字到哪儿结束"会随空白表悄悄漂移）。
+ */
+function isNonAsciiSpace(code: number): boolean {
+  if (code === 0x00a0 || code === 0x1680 || code === 0xfeff) return true;
+  if (code >= 0x2000 && code <= 0x200a) return true;
+  return code === 0x2028 || code === 0x2029 || code === 0x202f || code === 0x205f || code === 0x3000;
+}
+
+/** 码位 → 是否算名字字符（**唯一判据**；`isErbDimNameChar` 与引用扫描共用这一份） */
+export function isErbDimNameCode(code: number): boolean {
+  // `NaN` = 空串上的 `charCodeAt(0)`。它不是字符，也就不是名字字符（旧实现在这一格上
+  // 会因"正则不匹配空串"答 `true`，那是实现副作用，不是口径）。
+  if (!Number.isFinite(code)) return false;
+  if (code < 128) return DIM_NAME_DELIMITED[code] === 0;
+  return !isNonAsciiSpace(code);
+}
+
+/**
  * 声明名允许的字符（**词法层唯一一份**，原住 `symbols.ts`）。
  *
  * 排除集合：空白、`,` `;` `:`（分隔符 / 注释 / 成员与尺寸语法）、`(` `)` `[` `]` `{` `}`
  * （结构与维度）、`=` 与算术 / 比较 / 逻辑运算符、引号与反引号。
- * **不得用 `\w`**：真语料 21% 的声明名含 CJK，全角字母与 `・` 也合法。
+ * **不得用 `\w`**：真语料 21% 的声明名含 CJK，全角字母与 `・` 也合法——更极端的还有
+ * `楽譜最大数（シリーズ毎）` / `継続率_５０％` 这类（真语料全局声明 3.2% 含排除集之外的
+ * 全角符号），引擎眼里它们就是完整的一个名字，所以**函数记号尺**（`MODEL_TOKEN_CLASS`，
+ * 只认 `\p{L}\p{N}_`）不能拿来切变量名——那会把这类名字从中间劈开。
  *
  * 为什么放在扫描器而不是符号层：`parseDimDeclaration` 切名要用它，而扫描器不能反向
  * import 符号层（`symbols.ts` 已经 import 本文件，反过来就是模块环）。符号层改为
  * 从这里再导出，对外形态不变。
  */
 export function isErbDimNameChar(ch: string | undefined): boolean {
-  return ch !== undefined && !/[\s,;:()[\]{}=+\-*/<>%!&|'"`]/.test(ch);
+  return ch !== undefined && isErbDimNameCode(ch.charCodeAt(0));
+}
+
+/**
+ * 码元 → 名字字符分类的**备忘表**（`0` = 未算，`1` = 名字字符，`2` = 分隔）。
+ *
+ * 与 `references.ts` 的 `BMP_TOKEN_CLASS`（W7-G）是同一个成例、同一条纪律：
+ * **表是 {@link isErbDimNameCode} 的备忘，不是第二判据**——填表那一格调的就是它，
+ * 字符集仍然只有 `DIM_NAME_DELIMITED` 与 `isNonAsciiSpace` 两处。
+ *
+ * 为什么需要：项目级变量引用要按名字字符切**每一行可见代码**（真语料 339 万行）。
+ * 真语料 366,032 行实测，逐码元函数调用（`Number.isFinite` + 两段分支）**256 ms**，
+ * 直接读表 **119 ms**（−53.5%）——那点判据开销乘上千万级码元就是可观测的量级。
+ * 全 BMP 一张 `Uint8Array` = 64 KB，一次性常驻（同一个进程里同一码元只问判据一遍）。
+ */
+const DIM_NAME_CLASS = new Uint8Array(0x10000);
+
+/** 填表并作答（冷码元走这里；热码元由调用方直接读 {@link DIM_NAME_CLASS}） */
+function dimNameClassAt(code: number): 1 | 2 {
+  const nameChar = isErbDimNameCode(code);
+  DIM_NAME_CLASS[code] = nameChar ? 1 : 2;
+  return nameChar ? 1 : 2;
+}
+
+/**
+ * 逐**名字段**遍历一行文本（UTF-16 半开区间），尺子与声明侧切名同为
+ * {@link isErbDimNameChar}——即"排除集之外全算名字字符"。
+ *
+ * 为什么要有一趟自己的切段（2026-11-05，项目级 `#DIM` 引用批）：函数名的记号尺
+ * （`MODEL_TOKEN_CLASS`，只认字母、数字、下划线）切不动 `楽譜最大数（シリーズ毎）` /
+ * `継続率_５０％` 这类真名字（真语料全局声明 3.2% 是这种，且它们真的在代码里被使用）。
+ * 两支尺子回答两个问题，不许合并；但**同一趟遍历**只走一遍码元（见 `scanFileNames`）。
+ *
+ * 代理对在这里按两个码元分别判（`isErbDimNameCode` 的口径就是码元）：增平面字符
+ * 既不是分隔也不是空白 ⇒ 两格都算名字字符，与 `isErbDimNameChar` 逐字符切名的结果同形。
+ */
+export function forEachDimNameRun(code: string, visit: (start: number, end: number) => void): void {
+  const n = code.length;
+  let i = 0;
+  while (i < n) {
+    const c0 = code.charCodeAt(i);
+    let cls = DIM_NAME_CLASS[c0]!;
+    if (cls === 0) cls = dimNameClassAt(c0);
+    if (cls === 2) {
+      i++;
+      continue;
+    }
+    const start = i;
+    i++;
+    while (i < n) {
+      const c = code.charCodeAt(i);
+      let next = DIM_NAME_CLASS[c]!;
+      if (next === 0) next = dimNameClassAt(c);
+      if (next === 2) break;
+      i++;
+    }
+    visit(start, i);
+  }
 }
 
 /** 从 rest 头部切出名字（到第一个非名字字符为止）；空串 = 这行没有名字 */

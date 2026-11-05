@@ -145,11 +145,11 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
 
   it('旧形态条目（函数元组只有 5/6 位）走 v14 salvage ⇒ 缺位哨兵 0，不抛、不补 1', () => {
     const v8Shape: Record<string, unknown[]> = {
-      '/a.ERB': [1000, 20, 20, 2, 0, [['FOO', 1, 2, [], 0], ['BAR', 2, 2, [], 0, ';注']], [], [], [], null, null],
+      '/a.ERB': [1000, 20, 20, 2, 0, [['FOO', 1, 2, [], 0], ['BAR', 2, 2, [], 0, ';注']], [], [], [], null, null, null],
     };
     // 当前形态只认扁平流水（v15）："一函数一枚元组"是 v14 旧盘，**只能**走 salvage 摊平
     expect(decodeEntries(v8Shape)).toBeNull();
-    const salvaged = salvageEntries(v8Shape, 11, undefined, false, false, false, true, 32)!;
+    const salvaged = salvageEntries(v8Shape, 12, undefined, false, false, false, true, 32)!;
     const fns = salvaged.entries['/a.ERB']!.file.functions;
     expect(fns.map((f) => f.name)).toEqual(['FOO', 'BAR']);
     for (const fn of fns) {
@@ -170,13 +170,13 @@ describe('erb-parser · 名字列的快照面（函数元组第 7 位）', () =>
   it('坏列值（负数 / 小数 / 非数）⇒ 整条判过期；0 是"没有这个事实"的哨兵，不判坏', () => {
     for (const bad of [-1, 1.5, '2', null]) {
       const payload: Record<string, unknown[]> = {
-        '/a.ERB': [1000, 20, 20, 1, 0, ['FOO', 1, 1, [], 0, null, bad], [], [], [], null, ''],
+        '/a.ERB': [1000, 20, 20, 1, 0, ['FOO', 1, 1, [], 0, null, bad], [], [], [], null, '', null],
       };
       expect(decodeEntries(payload), `坏值 ${String(bad)}`).toBeNull();
     }
     // 0 = v15 的缺位哨兵（v14 的 5/6 位元组摊平后也是它）：读回来是"没有列这个事实"，不是坏值
     const sentinel: Record<string, unknown[]> = {
-      '/a.ERB': [1000, 20, 20, 1, 0, ['FOO', 1, 1, [], 0, null, 0], [], [], [], null, ''],
+      '/a.ERB': [1000, 20, 20, 1, 0, ['FOO', 1, 1, [], 0, null, 0], [], [], [], null, '', null],
     };
     const decoded = decodeEntries(sentinel);
     expect(decoded).not.toBeNull();
@@ -351,6 +351,7 @@ describe('erb-parser · erb-definition 装配（列腿端到端）', () => {
       [],
       null,
       null, // 候选未知（v10 迁移态）：refs 溯源与候选都判可疑 ⇒ refs 重扫，结构照常复用
+      null, // v17：变量提及流水未知 ⇒ 只重扫变量腿
     ];
     const payload = JSON.stringify({ version: SNAPSHOT_VERSION, rootDir: ROOT, savedAt: 1, entries: { [A]: legacyEntry } });
     const h = activate({ [A]: TEXT_A, [B]: TEXT_B }, (key) => (key === snapshotKeyFor(ROOT) ? payload : undefined));

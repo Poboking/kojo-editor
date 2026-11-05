@@ -149,9 +149,14 @@ export {
 // 与它的两个视图。跨文件导航 / 补全 / 诊断一律从这里取——不许各自再扫一遍 `index.files`。
 export {
   dimDeclarationSitesOf,
+  dimEntriesOfFiles,
+  globalDimNamesOf,
+  globalDimNamesOfFiles,
+  localDimShadowSpansOf,
   projectDeclaredNames,
   projectDimDeclarations,
   projectDimEntries,
+  type DimShadowSpan,
   type ErbDimDeclarationSite,
   type ErbDimEntry,
 } from './dim-index';

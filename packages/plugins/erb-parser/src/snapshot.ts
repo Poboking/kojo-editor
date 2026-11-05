@@ -31,8 +31,8 @@
  */
 import type { ErbDim, ErbFile, ErbFunction, ErbFunctionLookup, ErbLabel, ErbParam, FileStat } from '@kojo/plugin-api';
 import { buildFunctionLookup } from '@kojo/plugin-api';
-import type { FileRefs } from './references';
-import { REF_STRIDE } from './references';
+import type { FileDimRefs, FileRefs } from './references';
+import { DIM_REF_STRIDE, REF_STRIDE } from './references';
 import { detachString } from './scanner';
 
 /**
@@ -185,8 +185,15 @@ import { detachString } from './scanner';
  * 里存的名字**语义不同了**——旧快照若就地复用，热启动后拿到的是带尾巴的假名字，
  * 正是这条修复要消灭的东西。所以 v15 **不进** `SALVAGEABLE_VERSIONS`，整盘重扫一次
  * （只在升级后首次；真语料 3,971 文件约 1 分钟）。
+ *
+ * **v16 → v17**（2026-11-05 项目级变量引用批）：**条目追加第 12 位 `dimRefs`**
+ * （每文件一枚扁平流水，步长 `DIM_REF_STRIDE`：全局 `#DIM` 名的提及点）。前 11 位一字未动
+ * ⇒ 按准入纪律 1/2/3，v16 进 `SALVAGEABLE_VERSIONS`（`arity: 11` → 归一补 null）：
+ * 缺位 = **这一份没扫过变量提及** = 保守侧，构建轮重扫该文件（与 v10 缺候选位同款，
+ * 只付一次；此后逐轮热）。为什么不能补空数组：空数组 = "扫过、确实没有"，与"没扫过"
+ * 是两件事——把后者写成前者，作者会看到一份静默缺边的查找引用。
  */
-export const SNAPSHOT_VERSION = 16;
+export const SNAPSHOT_VERSION = 17;
 
 /**
  * **可以逐条目 salvage 的盘上版本** → 该版本条目元组与当前版本的字段对应关系。
@@ -245,6 +252,7 @@ const SALVAGEABLE_VERSIONS: ReadonlyMap<
     readonly candidateBits: 16 | 32;
   }
 > = new Map([
+  [17, { arity: 12, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: false, candidateBits: 16 }],
   [16, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: false, candidateBits: 16 }],
   [14, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: false, fnsAreTuples: true, candidateBits: 32 }],
   [13, { arity: 11, hasRefsFp: true, hasCandidates: true, candidatesAreTokens: false, refsAreTuples: false, runsAreTuples: true, fnsAreTuples: true, candidateBits: 32 }],
@@ -294,6 +302,16 @@ export interface SnapshotEntry {
    * （32.0 MB → 6.5 MB → 3.25 MB，判据不退化）。
    */
   readonly candidateHashes?: Uint16Array;
+  /**
+   * 该文件的**变量提及流水**（v17，2026-11-05）：全局 `#DIM` 名的可见提及点，
+   * 扁平步长 `DIM_REF_STRIDE`。**空数组 = 扫过、确实没有**；键缺席（v16 迁移条目）
+   * = 没扫过 ⇒ 构建轮重扫该文件（保守侧，不猜空）。
+   *
+   * 为什么与 `refs` 分开：两张名字表不同（函数名 vs 全局变量名），失效条件也不同——
+   * 变量表只随全局 `#DIM` 声明变（真语料 12,020 个名字），函数表随 11 万个 `@` 名变。
+   * 合成一条流水就得给每一格加"哪个世界"的旗标，`refs` 的消费者全要跟着改。
+   */
+  readonly dimRefs?: FileDimRefs;
 }
 
 /** 索引快照（按项目根一份） */
@@ -310,6 +328,16 @@ export interface IndexSnapshot {
    * 连逐条目巡检都不用走。缺失/为 null（旧盘形态或某条补扫失败）⇒ 逐条目巡检兜底。
    */
   readonly namesFp?: number | null;
+  /**
+   * 信封级**变量名录摘要**（v17）：全局 `#DIM` 名集的摘要，**仅当每条条目都带 `dimRefs`**
+   * 才写入（与 `namesFp` 同一条"验证过才写"纪律）。
+   *
+   * 为什么需要它：变量表只随全局 `#DIM` 声明变（真语料 12,020 个名字），而条目复用判据看的是
+   * 文件 mtime ——在别处新增一个全局声明时，没改过的文件 mtime 不变，存量 `dimRefs` 却少边。
+   * 信封摘要不等 ⇒ 整批 `dimRefs` 判作废（本轮全树重扫变量提及，只付一次）。
+   * 缺失 / null（v16 迁移条目、或某条没扫过）⇒ 同样判作废。
+   */
+  readonly dimNamesFp?: number | null;
 }
 
 /**
@@ -564,6 +592,8 @@ type EntryTuple = [
   LabelRun,
   number | null,
   string | Uint16Array | Uint32Array | null,
+  /** v17 起：变量提及流水（步长 3）；null = 这一份没扫过（v16 迁移条目，保守侧重扫） */
+  FileDimRefs | null,
 ];
 
 const FLAG_EXPRESSION = 1;
@@ -814,11 +844,13 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       raw[1] === e.size &&
       raw[2] === e.textLength &&
       raw[7] === (e.refs as unknown) &&
-      raw.length === 11 &&
+      raw.length === 12 &&
       raw[9] === (e.refsNamesFp ?? null) &&
       // 候选位：内存形态是 `Uint16Array`，与元组第 11 位**是同一枚**（decode 时零拷贝别名）
       // ⇒ 身份比较即可，不必重新编码一遍再比字符串
       raw[10] === (e.candidateHashes ?? null) &&
+      // 变量提及位（v17）：同一份扁平流水的身份比较（decode 时零拷贝别名）
+      raw[11] === (e.dimRefs ?? null) &&
       // functions/dims 仍是 accessor = 惰性外壳未被消费方动过 ⇒ 元组即真相
       Object.getOwnPropertyDescriptor(e.file, 'functions')?.get !== undefined &&
       Object.getOwnPropertyDescriptor(e.file, 'dims')?.get !== undefined
@@ -853,19 +885,30 @@ export function encodeEntries(entries: Readonly<Record<string, SnapshotEntry>>):
       // 候选集：键缺席（v10 迁移条目没补扫过）= 未知 = 盘上 null，**不猜空串**。
       // v12 起盘上是哈希集的 base64（空集 = `''`，仍是"已知没有"；v15 起是 16 位哈希的 base64）
       e.candidateHashes === undefined ? null : encodeCandidateHashes(e.candidateHashes),
+      // 变量提及：键缺席（v16 及更早）= 没扫过 = null（保守侧重扫，见 `SNAPSHOT_VERSION` v16→v17）
+      e.dimRefs ?? null,
     ];
   }
   return out;
 }
 
-/** 当前版本条目元组的元数（v11 起 = 11；第 10 位 = refs 名录摘要、第 11 位 = 候选哈希集） */
-const CURRENT_ARITY = 11;
+/** 当前版本条目元组的元数（v17 起 = 12；第 10 位 = refs 名录摘要、第 11 位 = 候选哈希集、第 12 位 = 变量提及） */
+const CURRENT_ARITY = 12;
 
 function isRefTuple(t: unknown): t is RefTuple {
   return (
     Array.isArray(t) && t.length === 4 && typeof t[0] === 'string' && typeof t[1] === 'number' &&
     typeof t[2] === 'number' && (t[3] === 0 || t[3] === 1 || t[3] === 2)
   );
+}
+
+/** 变量提及流水（扁平，步长 `DIM_REF_STRIDE`）逐格校验：`[名字(串), 行(数), 列(数)]` */
+function isDimRefRun(run: unknown): run is FileDimRefs {
+  if (!Array.isArray(run) || run.length % DIM_REF_STRIDE !== 0) return false;
+  for (let i = 0; i < run.length; i += DIM_REF_STRIDE) {
+    if (typeof run[i] !== 'string' || typeof run[i + 1] !== 'number' || typeof run[i + 2] !== 'number') return false;
+  }
+  return true;
 }
 
 /**
@@ -1131,6 +1174,8 @@ function validateEntryTuple(
   ) {
     return null;
   }
+  // 第 12 位（变量提及）：v17 起才有；v16 迁移条目归一时补 null = 没扫过（保守侧重扫，不猜空）。
+  if (arity === CURRENT_ARITY && t[11] !== null && !isDimRefRun(t[11])) return null;
   const fns = t[5] as unknown[];
   const dims = t[6] as unknown[];
   const refs = t[7] as unknown[];
@@ -1283,6 +1328,11 @@ function internEntryStrings(tuple: EntryTuple, interner: NameInterner): void {
   for (let i = 0; i < refs.length; i += REF_STRIDE) refs[i] = interner.intern(refs[i] as string);
   const labels = tuple[8];
   for (let i = 0; i < labels.length; i += LABEL_STRIDE) labels[i] = interner.intern(labels[i] as string);
+  // 变量提及（v17）：同一条纪律——名字格换实例，布局不动（null = v16 迁移条目，没扫过）
+  const dimRefs = tuple[11];
+  if (Array.isArray(dimRefs)) {
+    for (let i = 0; i < dimRefs.length; i += DIM_REF_STRIDE) dimRefs[i] = interner.intern(dimRefs[i] as string);
+  }
 }
 
 /**
@@ -1327,6 +1377,7 @@ function entryFromTuple(path: string, tuple: EntryTuple, interner?: NameInterner
   if (interner !== undefined) internEntryStrings(tuple, interner);
   const refsNamesFp = tuple[9];
   const candidateHashes = tuple[10];
+  const dimRefs = tuple[11];
   return {
     mtimeMs: tuple[0],
     size: tuple[1],
@@ -1339,6 +1390,8 @@ function entryFromTuple(path: string, tuple: EntryTuple, interner?: NameInterner
     // 候选集：空数组也是已知事实（已知没有候选），**键照留**——只有 null（v10 迁移未知）才缺键。
     // 零拷贝：与元组第 11 位是**同一枚** `Uint16Array`（`encodeEntries` 的快路径靠这个身份判据）
     ...(candidateHashes instanceof Uint16Array ? { candidateHashes } : {}),
+    // 变量提及：空流水也是已知事实（扫过、确实没有），**键照留**；null（v16 迁移）才缺键
+    ...(Array.isArray(dimRefs) ? { dimRefs: dimRefs as FileDimRefs } : {}),
   };
 }
 
@@ -1529,6 +1582,8 @@ export function salvageSnapshot(
     // 信封名录摘要原样带上（只认数；旧盘没这一位 ⇒ 逐条目巡检）。不变量"信封命中 ⇒ 全体条目
     // 相符"由**写侧**（`verifiedNamesDigest`）保证，salvage 只搬运条目与信封，不新造摘要。
     ...(typeof r.namesFp === 'number' ? { namesFp: r.namesFp } : {}),
+    // 变量名录摘要同理：v16 盘上没有这一位 ⇒ 不带 ⇒ 构建轮判"整批 dimRefs 不可信"
+    ...(typeof r.dimNamesFp === 'number' ? { dimNamesFp: r.dimNamesFp } : {}),
     skipped: salvaged.skipped,
     legacy: !shape.hasRefsFp,
     key: opts.key,
@@ -1681,6 +1736,21 @@ export function verifiedNamesDigest(entries: Readonly<Record<string, SnapshotEnt
   return currentDigest;
 }
 
+/**
+ * 变量名录信封判据（v17，与 {@link verifiedNamesDigest} 同一条纪律）：
+ * **每条条目都带 `dimRefs`** 才认这份摘要——缺一条就是"这一份没扫过"，
+ * 写进信封会让下一轮误以为整批可信（正是 v4 那类静默缺边）。
+ */
+export function verifiedDimNamesDigest(
+  entries: Readonly<Record<string, SnapshotEntry>>,
+  currentDigest: number,
+): number | null {
+  for (const path in entries) {
+    if (entries[path]!.dimRefs === undefined) return null;
+  }
+  return currentDigest;
+}
+
 /** 纯计数（不物化 2,325 条键数组；只服务读数行与 dirty 判据） */
 export function countEntries(entries: Readonly<Record<string, SnapshotEntry>>): number {
   let n = 0;
@@ -1788,6 +1858,7 @@ export function coerceSnapshot(raw: unknown, rootDir: string): IndexSnapshot | n
     savedAt: r.savedAt,
     entries,
     ...(typeof r.namesFp === 'number' ? { namesFp: r.namesFp } : {}),
+    ...(typeof r.dimNamesFp === 'number' ? { dimNamesFp: r.dimNamesFp } : {}),
   };
 }
 
@@ -1943,18 +2014,22 @@ export function attachRefs(
   refsByPath: ReadonlyMap<string, FileRefs>,
   refsNamesFp?: number,
   candidatesByPath?: ReadonlyMap<string, string>,
+  dimRefsByPath?: ReadonlyMap<string, FileDimRefs>,
 ): Record<string, SnapshotEntry> {
   const out: Record<string, SnapshotEntry> = {};
   for (const [path, e] of Object.entries(entries)) {
     const refs = refsByPath.get(path);
-    if (refs === undefined) {
+    const dimRefs = dimRefsByPath?.get(path);
+    if (refs === undefined && dimRefs === undefined) {
       out[path] = e;
       continue;
     }
     const candidates = candidatesByPath?.get(path);
     out[path] = {
       ...e,
-      refs,
+      ...(refs === undefined ? {} : { refs }),
+      // 变量提及与 refs 各自独立挂接：热轮里两批可能只重扫了一边
+      ...(dimRefs === undefined ? {} : { dimRefs }),
       ...(refsNamesFp === undefined ? {} : { refsNamesFp }),
       // 候选集在这里**就地哈希**（v12）：上游（`scanFileRefs` / `erb.scanRefs`）产出的仍是
       // `'\n'` 连接串——worker 边界那一段一个字都不用改，转换只发生在挂接这一处。

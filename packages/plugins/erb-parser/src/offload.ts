@@ -39,7 +39,14 @@ import { parseErbText, scanControlFlow } from './scanner';
 import { collectUndefinedNameDiagnostics, type UndefinedNameDiagnosticsInput } from './undefined-name';
 import { checkStructure } from './structure';
 import { structureDiagnostic } from './structure-fix';
-import { scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
+import {
+  dimNameShapesOf,
+  scanFileNames,
+  splitErbLines,
+  visibleCodeLineList,
+  type FileDimRefs,
+  type FileRefs,
+} from './references';
 
 /** 任务 kind：纯解析一个 ERB 文件 */
 export const PARSE_FILE_TASK = 'erb.parseFile';
@@ -115,6 +122,11 @@ export interface ScanRefsPayload {
   namesCount: number;
   /** 归一化名录，`\\n` 连接 */
   namesJoined: string;
+  /** 全局变量名（`#DIM` 族）摘要（v17；与函数名录分开——两张表失效条件不同） */
+  dimNamesFp: number;
+  dimNamesCount: number;
+  /** 归一化全局变量名，`\\n` 连接（空表合法：项目里一个全局声明都没有） */
+  dimNamesJoined: string;
   /** 待扫正文（与调用方给的路径数组同序；空串是"读失败位"，由调用方就地剔掉，不进本载荷） */
   texts: string[];
 }
@@ -133,42 +145,67 @@ export interface ScanRefsFileResult {
   refs: FileRefs;
   /** 该文件的候选记号集，`\\n` 连接（归一化大写；顺序 = 扫描序，无语义） */
   candidates: string;
+  /** 该文件的变量提及流水（v17，步长 `DIM_REF_STRIDE`；空数组 = 扫过、确实没有） */
+  dimRefs: FileDimRefs;
 }
 
 /** 名录 Set 的跨请求缓存（单槽一份；指纹变了自然作废） */
 let refsNameCache: { fp: number; set: ReadonlySet<string> } | null = null;
+/** 变量名录 Set 的跨请求缓存（v17；与函数名录分开，两者清单不同、失效条件也不同） */
+let dimNameCache: { fp: number; set: ReadonlySet<string>; shapes: ReadonlySet<number> } | null = null;
+
+function nameSetOf(fp: number, count: number, joined: string): ReadonlySet<string> {
+  // 空名录是合法输入（这一轮项目里一个函数都没有）；`''.split('\n')` 会得 `['']`，
+  // 所以条数自证要在**空表**上单独判，不能拿 split 的结果去比。
+  const parts = count === 0 ? [] : joined.split(NAME_JOIN);
+  if (parts.length !== count) {
+    throw new Error(`refs name set unusable: split produced ${parts.length} entries for namesCount ${count}`);
+  }
+  return new Set(parts);
+}
 
 function refsNameSetOf(payload: ScanRefsPayload): ReadonlySet<string> {
   if (refsNameCache !== null && refsNameCache.fp === payload.namesFp) return refsNameCache.set;
-  // 空名录是合法输入（这一轮项目里一个函数都没有）；`''.split('\n')` 会得 `['']`，
-  // 所以条数自证要在**空表**上单独判，不能拿 split 的结果去比。
-  const parts = payload.namesCount === 0 ? [] : payload.namesJoined.split(NAME_JOIN);
-  if (parts.length !== payload.namesCount) {
-    throw new Error(
-      `refs name set unusable: split produced ${parts.length} entries for namesCount ${payload.namesCount}`,
-    );
-  }
-  const set = new Set(parts);
+  const set = nameSetOf(payload.namesFp, payload.namesCount, payload.namesJoined);
   refsNameCache = { fp: payload.namesFp, set };
   return set;
+}
+
+function dimNameSetOf(payload: ScanRefsPayload): { set: ReadonlySet<string>; shapes: ReadonlySet<number> } {
+  if (dimNameCache !== null && dimNameCache.fp === payload.dimNamesFp) return dimNameCache;
+  const set = nameSetOf(payload.dimNamesFp, payload.dimNamesCount, payload.dimNamesJoined);
+  // 形状键集**必须与名录同一份**（`DimNameScan.shapes` 的契约）：现拼而不是再传一份载荷。
+  dimNameCache = { fp: payload.dimNamesFp, set, shapes: dimNameShapesOf(set) };
+  return dimNameCache;
 }
 
 /**
  * 批量引用扫描（**纯函数**，两侧共用同一份 ⇒ 有 worker / 无 worker 同产出）。
  *
- * `hasName` 由名录 Set 现拼，谓词与主线程侧 `byName.has(upper)` 逐位同判据；
- * 扫描本体是 `references.ts:scanFileRefs`，本函数不掺任何判据（等价对拍见
- * `tests/refs-offload-equiv.test.ts`）。候选收集走同一个 `scanFileRefs` 的可选
- * 收集位（REFS-PROVENANCE）：与 refs 同一遍扫描产出，**refs 判据一字未动**。
+ * `hasName` / `dims.has` 由两张名录 Set 现拼，谓词与主线程侧 `byName.has(upper)` /
+ * `globalDimNames.has(upper)` 逐位同判据；扫描本体是 `references.ts:scanFileNames`，
+ * 本函数不掺任何判据（等价对拍见 `tests/refs-offload-equiv.test.ts`）。
  */
 export function scanRefsBatch(payload: ScanRefsPayload): ScanRefsFileResult[] {
   const names = refsNameSetOf(payload);
+  const dimNames = dimNameSetOf(payload);
   return payload.texts.map((text) => {
     const candidates = new Set<string>();
-    const refs = scanFileRefs(text, (upper: string) => names.has(upper), (u: string) => {
-      candidates.add(u);
+    const dimRefs: (string | number)[] = [];
+    const refs = scanFileNames(text, {
+      hasName: (upper: string) => names.has(upper),
+      collect: (u: string) => {
+        candidates.add(u);
+      },
+      dims: {
+        has: (upper: string) => dimNames.set.has(upper),
+        shapes: dimNames.shapes,
+        emit: (name: string, line: number, column: number) => {
+          dimRefs.push(name, line, column);
+        },
+      },
     });
-    return { refs, candidates: [...candidates].join(NAME_JOIN) };
+    return { refs, candidates: [...candidates].join(NAME_JOIN), dimRefs };
   });
 }
 
@@ -178,17 +215,34 @@ export function refsNameCacheState(): { fp: number; size: number } | null {
 }
 
 /** 载荷的名录三位（每轮构建算一次、逐块复用同一枚串，不逐块重连） */
-export type ScanRefsNamesPart = Pick<ScanRefsPayload, 'namesFp' | 'namesCount' | 'namesJoined'>;
+export type ScanRefsNamesPart = Pick<
+  ScanRefsPayload,
+  'namesFp' | 'namesCount' | 'namesJoined' | 'dimNamesFp' | 'dimNamesCount' | 'dimNamesJoined'
+>;
 
 /**
- * 名录三位组装（**连接符与条数只在这一处定形**，宿主与 worker 不许各写一遍）。
+ * 名录组装（**连接符与条数只在这一处定形**，宿主与 worker 不许各写一遍）。
  *
- * `names` 传索引的 `byName.keys()`；调用方按轮缓存返回值再逐块 `{ ...names, texts }` ——
- * 99,030 名 `join` 一次约 5ms，逐块重连会把这条税又交回主线程（实测见交付读数）。
+ * `names` 传索引的 `byName.keys()`、`dimNames` 传全局 `#DIM` 名集；调用方按轮缓存返回值
+ * 再逐块 `{ ...names, texts }` —— 99,030 名 `join` 一次约 5ms，逐块重连会把这条税
+ * 又交回主线程（实测见交付读数）。
  */
-export function scanRefsNamesOf(namesFp: number, names: Iterable<string>): ScanRefsNamesPart {
+export function scanRefsNamesOf(
+  namesFp: number,
+  names: Iterable<string>,
+  dimNamesFp: number,
+  dimNames: Iterable<string>,
+): ScanRefsNamesPart {
   const parts = [...names];
-  return { namesFp, namesCount: parts.length, namesJoined: parts.join(NAME_JOIN) };
+  const dimParts = [...dimNames];
+  return {
+    namesFp,
+    namesCount: parts.length,
+    namesJoined: parts.join(NAME_JOIN),
+    dimNamesFp,
+    dimNamesCount: dimParts.length,
+    dimNamesJoined: dimParts.join(NAME_JOIN),
+  };
 }
 
 /**

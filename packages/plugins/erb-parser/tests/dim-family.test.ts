@@ -21,7 +21,7 @@
  *   "这个文件里别的功能也声明了它"。要收得先给契约加作用域（跨包动作，另单）。
  */
 import { describe, expect, it } from 'vitest';
-import { parseDimDeclaration, parseErbText } from '../src/scanner';
+import { isErbDimNameChar, parseDimDeclaration, parseErbText } from '../src/scanner';
 import { SNAPSHOT_VERSION, coerceSnapshot, salvageSnapshot, snapshotKeyCandidatesFor, snapshotKeyFor } from '../src/snapshot';
 
 describe('erb-parser · #DIM 族成员', () => {
@@ -108,9 +108,10 @@ describe('erb-parser · #DIM 族的索引面与快照面', () => {
     // 上一代盘上形态：`#DIM DYNAMIC CNT` 被记成 name=`DYNAMIC`（本批判为假事实的 2,866 行之一）。
     // 它的**元组结构与当前版本逐字相符**——结构校验挡不住陈旧值，只有版本判据挡得住。
     const legacyEntries: Record<string, unknown[]> = {
-      // 11 位＝当前形态（第 11 位候选集 `null`＝未知，仍是结构合法的当前条目）；
+      // 12 位＝当前形态（第 11 位候选集 `null`＝未知、第 12 位变量提及流水 `null`＝未扫：
+      // 两处缺的都是"不知道"，结构上仍是合法的当前条目）
       // 第 7 位是 v14 的**扁平**声明流水（`[名, 指令, 行]` 逐条排，步长 `DIM_STRIDE`）
-      '/a.ERB': [1000, 12, 12, 1, 0, [], ['DYNAMIC', 'DIM', 1], [], [], null, null],
+      '/a.ERB': [1000, 12, 12, 1, 0, [], ['DYNAMIC', 'DIM', 1], [], [], null, null, null],
     };
     const currentShape = { version: SNAPSHOT_VERSION, rootDir: 'D:/p', savedAt: 1, entries: legacyEntries };
     // ① 结构本身是合法的当前形态 ⇒ 证明"拒它"靠的绝不是结构（假名条目照样能过结构校验）
@@ -122,5 +123,36 @@ describe('erb-parser · #DIM 族的索引面与快照面', () => {
     expect(salvageSnapshot({ ...currentShape, version: 9 }, { rootDir: 'D:/p', key: snapshotKeyFor('D:/p', 9) })).toBeNull();
     expect(coerceSnapshot({ ...currentShape, version: 9 }, 'D:/p')).toBeNull();
     expect(snapshotKeyCandidatesFor('D:/p')).toContain(snapshotKeyFor('D:/p'));
+  });
+});
+
+/* ============================ 名字字符集：码位实现与原正则逐码位等价 ============================ */
+
+/**
+ * 2026-11-05 项目级变量引用批把 `isErbDimNameChar` 从逐字符跑正则改成码位表
+ * （变量腿要对真语料 339 万行逐行切段，正则那条路实测 5.6 s，表查 1.2 s）。
+ * 字符集仍是**同一份**：排除集只有 ASCII 一项需要查表，非 ASCII 只剩 JS `\s`
+ * 里的那 15 个空白码位。下面把两者逐码位对拍——一处不等就说明名字到哪儿结束
+ * 悄悄改了，那会让声明名与提及永远匹配不上。
+ */
+describe('isErbDimNameChar · 码位实现与 `\s` 正则逐码位等价', () => {
+  const REF = /[\s,;:()[\]{}=+\-*/<>%!&|'"`]/;
+
+  it('BMP 前 0x303F 全量（含全部 ASCII 与常见全角区）+ 增补平面样本', () => {
+    const mismatched: string[] = [];
+    for (let c = 0; c <= 0x303f; c++) {
+      const ch = String.fromCharCode(c);
+      if (isErbDimNameChar(ch) !== !REF.test(ch)) mismatched.push(`U+${c.toString(16).padStart(4, '0')}`);
+    }
+    for (const ch of ['\uFEFF', '\uFF5E', '\u3000', '\uD800', '\uDFFF']) {
+      if (isErbDimNameChar(ch) !== !REF.test(ch)) mismatched.push(JSON.stringify(ch));
+    }
+    expect(mismatched).toEqual([]);
+  });
+
+  it('`undefined` / 空串不是字符（行尾之后不算名字）', () => {
+    expect(isErbDimNameChar(undefined)).toBe(false);
+    // 空串不是「一个字符」，所以不参与上面的正则对拍：那不是字符集问题
+    expect(isErbDimNameChar('')).toBe(false);
   });
 });

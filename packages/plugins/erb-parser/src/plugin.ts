@@ -9,6 +9,7 @@ import type {
   ErbFile,
   ErbFunctionRef,
   ErbIndex,
+  ErbDimReferenceIndex,
   ErbIndexFileFailure,
   ErbIndexState,
   ErbParserService,
@@ -66,7 +67,7 @@ import { checkStructure, erbDocumentSymbols } from './structure';
 import { buildStructureFixes } from './structure-fix';
 import { provideErbCompletion, provideErbHover, type ErbHoverAdapterFacts } from './completion';
 import { erbFoldingRanges } from './folding';
-import { buildReferenceIndex, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileRefs, splitErbLines, visibleCodeLineList, type FileRefs } from './references';
+import { buildDimReferenceIndex, buildReferenceIndex, dimNameShapesOf, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileNames, scanFileRefs, splitErbLines, visibleCodeLineList, type FileDimRefs, type FileRefs } from './references';
 import { definitionTargetsAt, erbReferencesAt, functionAt, labelDefinitionLocations, labelLenses, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition, usageLenses, workspaceSymbolsInIndex } from './symbols';
 import {
   callHierarchySymbolOf,
@@ -84,7 +85,13 @@ import {
   type ErbSemanticDiagnosticsOptions,
   type ErbSemanticDiagnosticsResult,
 } from './offload';
-import { projectDeclaredNames } from './dim-index';
+import {
+  dimDeclarationSitesOf,
+  dimEntriesOfFiles,
+  globalDimNamesOfEntries,
+  localDimShadowSpansOf,
+  projectDeclaredNames,
+} from './dim-index';
 import {
   SNAPSHOT_VERSION,
   aggregateIndex,
@@ -105,6 +112,7 @@ import {
   snapshotKeyCandidatesFor,
   snapshotKeyFor,
   snapshotStats,
+  verifiedDimNamesDigest,
   verifiedNamesDigest,
   type IndexSnapshot,
   type SalvagedSnapshot,
@@ -830,6 +838,18 @@ export function createErbParserPlugin(): Plugin {
         const aggMs = Date.now() - aggStartedAt;
         /** 当前名录摘要（refs 溯源判据，见 `snapshot.nameSetDigest`）；随新扫出的 refs 一起落盘 */
         const namesFp = nameSetDigest(byName.keys());
+        /**
+         * 变量（`#DIM` 族）的项目级引用：声明条目与**全局名字表**一次算好。
+         *
+         * 全局表只装"文件顶层 / `.ERH` 里声明的名字"——真语料 67.7% 的声明是函数内局部，
+         * 它们跨不出函数，收进项目表只会在跨文件查找引用里串味（读数见 `dim-index.ts`）。
+         * 摘要进信封（`dimNamesFp`）：变量表变了而文件 mtime 没变时，存量提及流水要判作废。
+         */
+        const dimEntries = dimEntriesOfFiles(files);
+        const globalDimNames = globalDimNamesOfEntries(dimEntries);
+        // 形状键集与名录**同一份**（`DimNameScan.shapes` 的契约）：切段时先拿它挡掉九成段。
+        const globalDimShapes = dimNameShapesOf(globalDimNames);
+        const dimNamesFp = nameSetDigest(globalDimNames);
 
         // 让路点 ②：聚合（79,841 个函数 52ms）+ 名录摘要（10ms）到此为止——后面是落盘序列化
         // 与 `kojo.functionChanged` 的同步级联（家族名索引 167ms + 条件矩阵 42ms）。
@@ -863,6 +883,8 @@ export function createErbParserPlugin(): Plugin {
         const refsByPath = new Map<string, FileRefs>();
         /** 本次重扫各文件的候选记号集（'\n' 连接；与 refsByPath 逐路径同锁步，见 dispatchRefsChunk） */
         const candidatesByPath = new Map<string, string>();
+        /** 本次重扫各文件的变量提及流水（v17；与 refsByPath 同锁步） */
+        const dimRefsByPath = new Map<string, FileDimRefs>();
         const freshToScan = diff.stale.filter((path) => fresh.has(path));
         /**
          * 溯源巡检（REFS-PROVENANCE，2026-10-22）——**逐文件可证免扫**：
@@ -927,7 +949,24 @@ export function createErbParserPlugin(): Plugin {
           }
           snapshot = { ...snapshot, entries: stampedEntries };
         }
-        const refsToScan = provenanceToScan.length > 0 ? [...freshToScan, ...provenanceToScan] : freshToScan;
+        /**
+         * 变量提及的复用判据（v17）：信封摘要相符**且**该条目确实带 `dimRefs`。
+         *
+         * 为什么不能只看 mtime：变量表只随**全局** `#DIM` 声明变（真语料 12,020 个名字），
+         * 而新增一个全局声明只会让**那一份文件**过期；别处没改过的文件 mtime 不变，
+         * 存量提及流水却少边——信封摘要就是为这一刻准备的（与 `namesFp` 同一条纪律）。
+         * 判不符 ⇒ 整批 `dimRefs` 判作废，本轮对**全部可复用文件**重扫一遍（只付一次）。
+         */
+        const dimRefsTrusted = snapshot !== null && snapshot.dimNamesFp === dimNamesFp;
+        const dimRescan: string[] = [];
+        for (const path of diff.reusable) {
+          if (dimRefsTrusted && snapshot!.entries[path]?.dimRefs !== undefined) continue;
+          dimRescan.push(path);
+        }
+        const refsToScan =
+          dimRescan.length > 0 || provenanceToScan.length > 0
+            ? [...new Set([...freshToScan, ...provenanceToScan, ...dimRescan])]
+            : freshToScan;
         /* ---------------- REFS-WORKER（2026-10-21）：引用段整块进并行通道 ----------------
          * 扫描本体仍是 `references.ts:scanFileRefs`，**判据一个字没动**：这里只是把
          * `hasName` 那枚闭包换成"名录数据"（`erb.scanRefs` 的 worker 侧用同一份 `byName`
@@ -964,12 +1003,24 @@ export function createErbParserPlugin(): Plugin {
           const scanInline = (): void => {
             for (let i = 0; i < paths.length; i++) {
               const candidates = new Set<string>();
+              const dimRefs: (string | number)[] = [];
               refsByPath.set(
                 paths[i]!,
-                scanFileRefs(bodies[i]!, hasName, (upper) => {
-                  candidates.add(upper);
+                scanFileNames(bodies[i]!, {
+                  hasName,
+                  collect: (upper) => {
+                    candidates.add(upper);
+                  },
+                  dims: {
+                    has: (upper) => globalDimNames.has(upper),
+                    shapes: globalDimShapes,
+                    emit: (name, line, column) => {
+                      dimRefs.push(name, line, column);
+                    },
+                  },
                 }),
               );
+              dimRefsByPath.set(paths[i]!, dimRefs);
               // 记号判据是 \p{L}\p{N}_ ⇒ 候选不含连接符（真语料 3971 文件 / 170 万候选 sepSafe 实测）
               candidatesByPath.set(paths[i]!, [...candidates].join('\n'));
             }
@@ -980,7 +1031,7 @@ export function createErbParserPlugin(): Plugin {
             scanInline();
             return;
           }
-          refsNamesPart ??= scanRefsNamesOf(namesFp, byName.keys());
+          refsNamesPart ??= scanRefsNamesOf(namesFp, byName.keys(), dimNamesFp, globalDimNames);
           refsOffloadStat.offload++;
           refsOffloadStat.files += paths.length;
           const task = compute
@@ -998,14 +1049,20 @@ export function createErbParserPlugin(): Plugin {
                   scanInline();
                   return;
                 }
-                // 形状逐条自证（REFS-PROVENANCE）：产出是 {refs, candidates} 对；不符 = 通道产出不可信
-                // ⇒ 原样退回内联老路径（宁慢不错、不静默，纪律同条数自证）
+                // 形状逐条自证（REFS-PROVENANCE / v17）：产出是 {refs, candidates, dimRefs} 三元组；
+                // 不符 = 通道产出不可信 ⇒ 原样退回内联老路径（宁慢不错、不静默，纪律同条数自证）
                 for (let i = 0; i < got.length; i++) {
-                  const item = got[i] as { refs?: unknown; candidates?: unknown } | null;
-                  if (item === null || typeof item !== 'object' || !Array.isArray(item.refs) || typeof item.candidates !== 'string') {
+                  const item = got[i] as { refs?: unknown; candidates?: unknown; dimRefs?: unknown } | null;
+                  if (
+                    item === null ||
+                    typeof item !== 'object' ||
+                    !Array.isArray(item.refs) ||
+                    typeof item.candidates !== 'string' ||
+                    !Array.isArray(item.dimRefs)
+                  ) {
                     refsOffloadStat.fallback++;
                     ctx.log.warn(
-                      `Refs offload returned a malformed item at ${i} (expected {refs, candidates}); scanned inline`,
+                      `Refs offload returned a malformed item at ${i} (expected {refs, candidates, dimRefs}); scanned inline`,
                     );
                     scanInline();
                     return;
@@ -1015,6 +1072,7 @@ export function createErbParserPlugin(): Plugin {
                   const item = got[i] as ScanRefsFileResult;
                   refsByPath.set(paths[i]!, item.refs);
                   candidatesByPath.set(paths[i]!, item.candidates);
+                  dimRefsByPath.set(paths[i]!, item.dimRefs);
                 }
               },
               (err: unknown) => {
@@ -1064,10 +1122,41 @@ export function createErbParserPlugin(): Plugin {
           return referencesBuilt;
         };
 
+        /**
+         * 变量引用的惰性聚合（v17）：与 `referencesBuild` 同形同纪律——复用条目的
+         * `dimRefs` 就地汇入（零拷贝），首次读 `index.dimReferences` 才建表。
+         *
+         * 声明侧来自 `dimEntries`（`dim-index.ts` 的**那一份**遍历，含作用域派生），
+         * 不在这里再走一遍 `files[].dims`。
+         */
+        let dimReferencesBuilt: ErbDimReferenceIndex | null = null;
+        const dimReferencesBuild = (): ErbDimReferenceIndex => {
+          if (dimReferencesBuilt !== null) return dimReferencesBuilt;
+          const t0 = Date.now();
+          let fromSnapshot = 0;
+          for (const path of diff.reusable) {
+            if (dimRefsByPath.has(path)) continue;
+            const reused = snapshot?.entries[path];
+            if (reused?.dimRefs !== undefined) {
+              dimRefsByPath.set(path, reused.dimRefs);
+              fromSnapshot++;
+            }
+          }
+          dimReferencesBuilt = buildDimReferenceIndex(ordered, dimRefsByPath, dimEntries);
+          let sites = 0;
+          for (const list of dimReferencesBuilt.byName.values()) sites += list.length;
+          ctx.log.info(
+            `Index dim references built on demand (${sites} sites, ${Date.now() - t0}ms; ` +
+              `names ${globalDimNames.size}, snapshot ${fromSnapshot})`,
+          );
+          return dimReferencesBuilt;
+        };
+
         const makeIndex = (): ErbIndex => {
           const idx: ErbIndex = { files, byName, fingerprint, fileMtimes, fileSizes };
-          // references 惰性装配（enumerable 保持"索引里有这一项"的既有观感）
+          // references / dimReferences 惰性装配（enumerable 保持"索引里有这一项"的既有观感）
           Object.defineProperty(idx, 'references', { get: referencesBuild, enumerable: true, configurable: true });
+          Object.defineProperty(idx, 'dimReferences', { get: dimReferencesBuild, enumerable: true, configurable: true });
           return idx;
         };
 
@@ -1113,9 +1202,17 @@ export function createErbParserPlugin(): Plugin {
             // 挂上新流水的条目同时记下**当前名录摘要**：下一轮"正文没变、名录变了"就靠它对号入座。
             // REFS-PROVENANCE：候选集随同一批挂接（每个重扫路径都有，空集 = ''，键照写）——
             // 下一轮的逐文件免扫判据（refsProvableUnchanged）吃的正是这一位。
-            const entries = attachRefs(mergeEntries(snapshot, allFiles, fresh), refsByPath, namesFp, candidatesByPath);
+            const entries = attachRefs(
+              mergeEntries(snapshot, allFiles, fresh),
+              refsByPath,
+              namesFp,
+              candidatesByPath,
+              dimRefsByPath,
+            );
             // 信封摘要（PS-3）：全体条目都记了当前账才写数，否则写 null（下轮退回逐条目巡检）
             const envelopeFp = verifiedNamesDigest(entries, namesFp);
+            // 变量名录信封（v17）：每一条都带 dimRefs 才写；缺一条就写 null ⇒ 下轮整批重扫
+            const envelopeDimFp = verifiedDimNamesDigest(entries, dimNamesFp);
             const entryCount = countEntries(entries);
             const saveStartedAt = Date.now();
             void storage
@@ -1124,6 +1221,7 @@ export function createErbParserPlugin(): Plugin {
                 rootDir: currentRoot,
                 savedAt: Date.now(),
                 namesFp: envelopeFp,
+                dimNamesFp: envelopeDimFp,
                 // 盘上用 v7 紧凑元组（剥可派生字段 + 位置化 + refs 名录摘要位），加载时由 decodeEntries 还原
                 entries: encodeEntries(entries),
               })
@@ -1399,6 +1497,19 @@ export function createErbParserPlugin(): Plugin {
       function attachStaleReferences(target: ErbIndex): void {
         let requested = false;
         Object.defineProperty(target, 'references', {
+          enumerable: true,
+          configurable: true,
+          get: () => {
+            if (!requested) {
+              requested = true;
+              requestReferencesRepair();
+            }
+            return undefined;
+          },
+        });
+        // 变量引用同一刻失效、同一条修复路径（v17）：新增/删除一个全局 `#DIM` 会让别的文件
+        // 多边或少边，增量只重扫了变过的文件——与 refs 完全同款，不给两份保守口径。
+        Object.defineProperty(target, 'dimReferences', {
           enumerable: true,
           configurable: true,
           get: () => {

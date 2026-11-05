@@ -1,6 +1,8 @@
 import type {
   EditorDecoratePayload,
   EditorSymbolLocation,
+  ErbDimReference,
+  ErbDimReferenceIndex,
   ErbFile,
   ErbIndex,
   ErbReference,
@@ -11,7 +13,8 @@ import type {
 } from '@kojo/plugin-api';
 import { isErbDialectPath, MODEL_TOKEN_CLASS, unicodeTokenAt } from '@kojo/plugin-api';
 import { splitEolLines } from '@kojo/plugin-api/eol';
-import { detachString, erbCodePrefixLength } from './scanner';
+import type { ErbDimEntry } from './dim-index';
+import { detachString, erbCodePrefixLength, forEachDimNameRun } from './scanner';
 
 /**
  * 反向引用索引（H2 批，2026-10-15）：**谁提到了这个名字**。
@@ -177,6 +180,50 @@ function colonAdjacent(code: string, start: number, end: number): boolean {
   const before = start > 0 ? code.charCodeAt(start - 1) : -1;
   const after = end < code.length ? code.charCodeAt(end) : -1;
   return before === COLON_HALF || before === COLON_FULL || after === COLON_HALF || after === COLON_FULL;
+}
+
+/**
+ * 「这一段记号是不是**变量成员名**」的判据：只有**前置**冒号算成员（`CFLAG:ALPHA` 里的
+ * `ALPHA`）；`CFLAG` 本身是变量，仍算一次变量提及。
+ *
+ * 为什么与 {@link colonAdjacent} 分开而不是复用它：两者回答的问题不同——函数那侧
+ * **基名与成员名都不算函数**（`CFLAG` 是变量不是函数），变量这侧**基名算变量**。
+ * 合并成一个函数就得给调用方加分支，那才是真的第二判据。口径与 `symbols.ts` 的
+ * `erbDimReferencesAt` 逐字一致（那里只判 `prev`）。
+ */
+function colonPrefixed(code: string, start: number): boolean {
+  if (start === 0) return false;
+  const before = code.charCodeAt(start - 1);
+  return before === COLON_HALF || before === COLON_FULL;
+}
+
+/**
+ * 一行代码里的**变量提及**（`#DIM` 族名的出现点）——单行、单趟、码位备忘表直走。
+ *
+ * 为什么不能复用 {@link forEachToken} 的记号段：函数名的记号尺是契约的
+ * `MODEL_TOKEN_CLASS`（只认字母、数字、下划线），而变量名的字符集是
+ * `isErbDimNameChar`（排除集之外全算）。两者在真语料上**不等价**——
+ * `楽譜最大数（シリーズ毎）`、`継続率_５０％` 这类名字含全角括号 / 百分号，
+ * 记号尺会把它们从中间劈开，劈开之后永远匹配不上声明名（真语料全局声明 3.2%
+ * 是这种，且它们**真的在代码里被使用**）。所以变量腿有自己的一趟切段，
+ * 与声明侧切名（`parseDimDeclaration`）同一把尺子——**切段本身住在 `scanner.ts`**
+ * （`forEachDimNameRun`），字符集与它的备忘表都在那一处。
+ *
+ * 代价与门：形状键（首码位 · 尾码位 · 长度）先查一次数值 Set，不过就不切 `slice`、
+ * 不做 `toUpperCase`——真语料 913 万段实测：只看首码位放行 60.6%，
+ * 加上尾码位与长度只剩 10.3%。
+ *
+ * 成员访问（`FLAG:名前`）不算变量引用：判据 {@link colonPrefixed}，与函数腿的
+ * {@link colonAdjacent} 刻意分开（理由见那一枚的注）。
+ */
+function scanDimRuns(code: string, line: number, dims: DimNameScan): void {
+  forEachDimNameRun(code, (start, end) => {
+    if (!dims.shapes.has(dimNameShapeKey(code, start, end))) return;
+    if (colonPrefixed(code, start)) return;
+    const upper = normalizedUpper(code.slice(start, end));
+    if (!dims.has(upper)) return;
+    dims.emit(upper, line, start + 1);
+  });
 }
 
 /**
@@ -632,12 +679,119 @@ export function normalizedUpper(run: string): string {
  * 未动，跨行的 `[SKIPSTART]` 状态由 {@link visibleCodeLines} 从第 1 行算到窗口起点。
  * 不传 = 整篇，与旧行为逐字节相同。
  */
-export function scanFileRefs(
+/** 变量引用腿的扫描参数（2026-11-05 项目级变量引用批） */
+export interface DimNameScan {
+  /** 这个名字是不是项目里的**全局** `#DIM` 声明名（局部名不进项目索引，见 `dim-index.ts`） */
+  readonly has: (normalizedName: string) => boolean;
+  /**
+   * 名录里所有名字的**形状键**（{@link dimNameShapeKey}，由 {@link dimNameShapesOf} 派生）。
+   *
+   * 不是可选的加速开关：切段是线性直走，没有它就得为每一段（真语料 913 万段）
+   * `slice` + `toUpperCase` 再查表——那正是本批 A/B 读到的 **+3.7 s**（refs 段 5.2 s → 8.9 s）。
+   * 要求调用方给，是因为它必须与 `has` **同一份名录**——分开构造就会出现
+   * "形状放行、`has` 说不认识"的静默漏答。
+   */
+  readonly shapes: ReadonlySet<number>;
+  /** 命中一处提及（1 基行列，列指向名字首字符） */
+  readonly emit: (normalizedName: string, line: number, column: number) => void;
+}
+
+/**
+ * 名字的**形状键**：首码位 · 尾码位 · 长度（三段互不重叠地拼进一个安全整数）。
+ *
+ * 为什么是三段而不是只取首码位：真语料 913 万段实测通过率 60.6% → **10.3%**
+ * （只加长度是 40.4%，再加尾码位才够）。为什么允许拼成数：`first < 2^16`、
+ * `last < 2^16`、`len < 2^16` ⇒ 键 < 2^48，全在 `Number.MAX_SAFE_INTEGER` 内，
+ * **不会碰撞**——所以这一关是"放行/否掉"的精确判据，不是近似布隆。
+ *
+ * 对**码元**取键（`charCodeAt`）：代理对的名字两端各取到配对的那一半，与声明的名字
+ * 用同一把尺子，故拼接结果一致。
+ *
+ * 两端各折一次大小写：`#DIM KOJO_NAME` 与代码里的 `kojo_name` 是同一个变量
+ * （`normalizedUpper` 认这两段大小写），门若按原样比就会把后者整段否掉——那是**假阴**，
+ * 而这一关的契约是"只许放过、不许误杀"。折叠区间与 `normalizedUpper` 的 `[a-zａ-ｚ]`
+ * 逐字相同，两边因此永远同判。
+ *
+ * **折叠内联、不抽小函数**：这一枚每行调两次、真语料 913 万段，热点里少一次真调用总是更稳
+ * （V8 内不内联小函数不由我们决定）。区间写法因此在这里重复两遍，**改动时必须两处一起改**，
+ * 并回去核 `normalizedUpper` 的正则。
+ */
+export function dimNameShapeKey(code: string, from: number, to: number): number {
+  let first = code.charCodeAt(from);
+  let last = code.charCodeAt(to - 1);
+  if (first >= 0x61 && first <= 0x7a) first -= 0x20;
+  else if (first >= 0xff41 && first <= 0xff5a) first -= 0x20;
+  if (last >= 0x61 && last <= 0x7a) last -= 0x20;
+  else if (last >= 0xff41 && last <= 0xff5a) last -= 0x20;
+  return first * 4294967296 + last * 65536 + (to - from);
+}
+
+/** 名录 → 形状键集（{@link DimNameScan.shapes} 的唯一构造点；空名跳过，与名录口径一致） */
+export function dimNameShapesOf(names: Iterable<string>): ReadonlySet<number> {
+  const out = new Set<number>();
+  for (const name of names) {
+    if (name.length > 0) out.add(dimNameShapeKey(name, 0, name.length));
+  }
+  return out;
+}
+
+/**
+ * 单文件文本 → 变量提及流水（**缓冲区本地腿**的入口，`symbols.ts` 的
+ * `erbDimReferencesAt` 用它；索引构建那条腿走 {@link scanFileNames} 的同一条
+ * {@link scanDimRuns}，两条腿的切段判据只有一份）。
+ *
+ * `window` 语义与 {@link scanFileNames} 相同（不传 = 整篇）。
+ */
+/**
+ * 单文件文本 → 变量提及流水（**缓冲区本地腿**的入口，`symbols.ts` 的
+ * `erbDimReferencesAt` 用它；索引构建那条腿走 {@link scanFileNames} 的同一条
+ * {@link scanDimRuns}，两条腿的切段判据只有一份）。
+ *
+ * `window` 语义与 {@link scanFileNames} 相同（不传 = 整篇）。
+ */
+export function scanDimRefs(
   text: string,
-  hasName: (normalizedName: string) => boolean,
-  collect?: (normalizedName: string) => void,
+  has: (normalizedName: string) => boolean,
+  shapes: ReadonlySet<number>,
   window?: VisibleLineWindow,
-): FileRefs {
+): FileDimRefs {
+  const out: (string | number)[] = [];
+  const sink: DimNameScan = {
+    has,
+    shapes,
+    emit: (name, line, column) => void out.push(name, line, column),
+  };
+  for (const { line, codeView } of visibleCodeLines(text, window)) scanDimRuns(codeView(), line, sink);
+  return out;
+}
+
+export interface FileNameScanOptions {
+  readonly hasName: (normalizedName: string) => boolean;
+  readonly collect?: (normalizedName: string) => void;
+  readonly window?: VisibleLineWindow;
+  /** 缺席 = 只扫函数引用（既有行为，逐字节不变） */
+  readonly dims?: DimNameScan;
+}
+
+/**
+ * 一趟记号遍历，两个名字表（2026-11-05）。
+ *
+ * 函数引用与变量提及回答的是同一个问题——"这一段可见代码里，哪些记号是某个名字的一次出现"，
+ * 区别只在**名字表**与**归类规则**。分成两趟就是把 412 万行再走一遍（真语料实测 refs 段
+ * 7.3 s，第二趟同阶），所以两条腿共用同一趟遍历、同一条 `visibleCodeLines` 可见性判据、
+ * 同一枚 `forEachToken` 记号尺子。
+ *
+ * `dims` 缺席时产出与老 `scanFileRefs` **逐字节相同**（`refs-eq` 对拍钉死）。
+ */
+export function scanFileNames(text: string, options: FileNameScanOptions): FileRefs {
+  const { hasName, collect, window } = options;
+  /**
+   * 空名录 ⇒ 干脆不切段（**不是**判据分叉，是同一判据的零开销特例）：`shapes` 与名录
+   * 同一份（`DimNameScan.shapes` 的契约），空集就说明这一段代码里没有任何一个名字可能命中，
+   * 切出来的每一段都会被那道门挡掉。没声明过全局 `#DIM` 的项目（纯 kojo2、或变量全是
+   * 函数内局部）因此一个码元都不多走。
+   */
+  const dims = options.dims !== undefined && options.dims.shapes.size > 0 ? options.dims : undefined;
   const out: (string | number)[] = [];
   for (const { line, raw, isDefinition, isCallLine, keywordEnd, codeView } of visibleCodeLines(text, window)) {
     if (isDefinition) {
@@ -663,16 +817,21 @@ export function scanFileRefs(
     let slotTaken = !isCallLine; // 非调用行没有槽位概念，全部走 mention
 
     const code = codeView();
+    // 变量腿：**自己的切段**（`isErbDimNameChar`，见 `scanDimRuns` 的注——记号尺切不动
+    // `楽譜最大数（シリーズ毎）` 这类真名字）。挂在同一趟行遍历上，省掉第二趟
+    // `visibleCodeLines` 与又一次 `codeView()`。
+    if (dims !== undefined) scanDimRuns(code, line, dims);
     forEachToken(code, (start, end, hasLower) => {
       const inSlot = !slotTaken && start >= keywordEnd;
       if (inSlot) slotTaken = true; // 槽位记号无论命不命中名字都被消耗
-      // 变量成员访问整体不算函数引用：`CFLAG:ALPHA` 两段都是变量世界（基名紧邻冒号，
-      // 如 `ALPHA:CFLAG` 的 ALPHA，即便撞上函数名也不算提及）。判据单源 `colonAdjacent`。
-      if (colonAdjacent(code, start, end)) return;
       const run = code.slice(start, end);
       // 无小写 ⇒ `normalizedUpper` 按定义返回原串（省掉一次 toUpperCase 全文扫描）；
       // 有小写仍交给 `normalizedUpper` 算，归一判据不在本函数里复述。
       const upper = hasLower ? normalizedUpper(run) : run;
+
+      // 变量成员访问整体不算函数引用：`CFLAG:ALPHA` 两段都是变量世界（基名紧邻冒号，
+      // 如 `ALPHA:CFLAG` 的 ALPHA，即便撞上函数名也不算提及）。判据单源 `colonAdjacent`。
+      if (colonAdjacent(code, start, end)) return;
       if (collect !== undefined) collect(upper);
       if (!hasName(upper)) return;
       out.push(detachString(upper), line, start + 1, inSlot ? KIND_CALL : KIND_MENTION);
@@ -683,6 +842,19 @@ export function scanFileRefs(
   // 旧数组随即可回收；每文件一次、合计一次元素搬运，构建期代价在毫秒以下。
   // 注意别改成 `out.length = out.length`：那不会缩容量，一分钱都省不下。
   return out.length === 0 ? out : out.slice();
+}
+
+/**
+ * 扫描单文件文本的全部**函数**引用流水（本函数是 {@link scanFileNames} 的薄壳：
+ * 老签名逐字保留，`dims` 缺席 ⇒ 产出与 2026-11-04 之前完全一致）。
+ */
+export function scanFileRefs(
+  text: string,
+  hasName: (normalizedName: string) => boolean,
+  collect?: (normalizedName: string) => void,
+  window?: VisibleLineWindow,
+): FileRefs {
+  return scanFileNames(text, { hasName, collect, window });
 }
 
 /* ---------------- 未定义 CALL 目标（T3，2026-10-16 语言服务批） ---------------- */
@@ -787,6 +959,113 @@ export function buildReferenceIndex(
 /** 查询：谁引用了 `name`（原样/大写均可；无索引 / 无名 ⇒ 空数组。**纯函数，不读盘**） */
 export function referencesOf(index: ErbIndex, name: string): ErbReference[] {
   const hit = index.references?.bySymbol.get(name.toUpperCase());
+  return hit === undefined ? [] : hit.slice();
+}
+
+/* ---------------- 变量（`#DIM` 族）的项目级引用（2026-11-05） ---------------- */
+
+/** 单文件变量引用流水的步长：`[名字, 行, 列, 名字, …]` */
+export const DIM_REF_STRIDE = 3;
+
+/** 单文件变量提及流水（按行、列升序；构建序确定 ⇒ 聚合序确定） */
+export type FileDimRefs = readonly (string | number)[];
+
+/** 按变量提及逐条遍历扁平流水（**步长布局的唯一出处**） */
+export function forEachDimRef(
+  run: FileDimRefs,
+  visit: (name: string, line: number, column: number) => void,
+): void {
+  for (let i = 0; i < run.length; i += DIM_REF_STRIDE) {
+    visit(run[i] as string, run[i + 1] as number, run[i + 2] as number);
+  }
+}
+
+/**
+ * 把「每文件提及流水」拼成项目级索引（**纯函数**）。
+ *
+ * 声明点从 `entries` 里取（`dim-index.ts` 的全局声明条目）——它们不在可见代码行里
+ * （`#` 行被可见性判据挡住），所以不能指望扫描流水带出来。两路按 `(行, 列)` 归并，
+ * 保证同一份输入无论扫描顺序如何都是同一条排序（确定性纪律同 {@link buildReferenceIndex}）。
+ *
+ * 列口径：**声明点只有行**。索引里没有列事实（`ErbDim` 只有名字/指令/行），凭空算一个
+ * "名字在第几列"要重新解析那一行——那是第二个真源；宁可导航落到行首，不伪造列。
+ * 契约因此在声明分支上**没有** `endColumn`（见 `ErbDimDefinitionReference` 的注）：
+ * 给 `1 + 名字长度` 会让照着画高亮的消费方把 `#DI` 三个字符涂上色。
+ */
+export function buildDimReferenceIndex(
+  files: Iterable<ErbFile>,
+  dimRefsByPath: ReadonlyMap<string, FileDimRefs>,
+  entries: readonly ErbDimEntry[],
+): ErbDimReferenceIndex {
+  const defsByPath = new Map<string, ErbDimEntry[]>();
+  for (const entry of entries) {
+    if (entry.functionStartLine !== undefined || entry.name.length === 0) continue;
+    let list = defsByPath.get(entry.filePath);
+    if (list === undefined) {
+      list = [];
+      defsByPath.set(entry.filePath, list);
+    }
+    list.push(entry);
+  }
+
+  const byName = new Map<string, ErbDimReference[]>();
+  const push = (name: string, ref: ErbDimReference): void => {
+    let list = byName.get(name);
+    if (list === undefined) {
+      list = [];
+      byName.set(name, list);
+    }
+    list.push(ref);
+  };
+
+  for (const file of files) {
+    const filePath = file.path;
+    const defs = defsByPath.get(filePath);
+    const refs = dimRefsByPath.get(filePath);
+    let di = 0;
+    let ri = 0;
+    // 两路都是升序（声明按行、提及按行列）⇒ 一次归并，不排序
+    for (;;) {
+      const def = defs !== undefined && di < defs.length ? defs[di] : undefined;
+      let mention: { name: string; line: number; column: number } | undefined;
+      if (refs !== undefined && ri < refs.length) {
+        mention = {
+          name: refs[ri] as string,
+          line: refs[ri + 1] as number,
+          column: refs[ri + 2] as number,
+        };
+      }
+      if (def === undefined && mention === undefined) break;
+      // 同行不必再比分列：声明行是 `#` 行，`visibleCodeLines` 本来就不产出它 ⇒ 同一个
+      // `(文件, 行)` 上不可能既有声明又有提及。真出现（构造的索引）也按"声明在前"定序。
+      const defFirst = mention === undefined || (def !== undefined && def.line <= mention.line);
+      if (defFirst) {
+        push(def!.name.toUpperCase(), {
+          filePath,
+          line: def!.line,
+          column: 1,
+          kind: 'definition',
+        });
+        di++;
+      } else {
+        push(mention!.name, {
+          filePath,
+          line: mention!.line,
+          column: mention!.column,
+          endColumn: mention!.column + mention!.name.length,
+          kind: 'mention',
+        });
+        ri += DIM_REF_STRIDE;
+      }
+    }
+  }
+
+  return { byName };
+}
+
+/** 查询：项目里 `name` 的全局出现点（原样/大写均可；无索引 / 无名 ⇒ 空数组。纯函数，不读盘） */
+export function dimReferencesOf(index: ErbIndex, name: string): ErbDimReference[] {
+  const hit = index.dimReferences?.byName.get(name.toUpperCase());
   return hit === undefined ? [] : hit.slice();
 }
 

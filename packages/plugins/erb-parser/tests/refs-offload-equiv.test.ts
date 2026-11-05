@@ -34,9 +34,9 @@ import type {
 } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
 import { SCAN_REFS_TASK, scanRefsBatch, scanRefsNamesOf, refsNameCacheState, type ScanRefsFileResult, type ScanRefsPayload } from '../src/offload';
-import { buildReferenceIndex, erbReferenceLocationsAt, scanFileRefs, type FileRefs } from '../src/references';
+import { buildReferenceIndex, erbReferenceLocationsAt, scanFileRefs, visibleCodeLines, type FileRefs } from '../src/references';
 import { nameSetDigest } from '../src/snapshot';
-import { parseErbText } from '../src/scanner';
+import { isErbDimNameChar, parseErbText } from '../src/scanner';
 import { flatRefs, makeComputeStub } from './support';
 
 /* ============================== 对抗性随机文本（固定种子；本文件自带一份生成器） ============================== */
@@ -59,6 +59,8 @@ const PIECES = [
   '#DIM ALPHA[3]', '#FUNCTION', '$ALPHA', '$ 标签', '[SKIPSTART]', '[SKIPEND]',
   '\t', ' ', '　', '\r', ',', ':', '：', '𝐀', '𝐚', '\uD835', '\uDC00', '\uD800', '😀', 'αβ',
   'M_KOJO_無個性_関数', 'x\uD835y', 'a😀b', '𝐀:FLAG', 'FLAG:𝐀', 'ＣＦＬＡＧ', 'ｃｆｌａｇ', '',
+  // 全角标点组成的真名字（真语料全局声明 3.2% 是这种）：记号尺切不开，变量腿必须切开
+  'ＢＥＴＡ（系列）', '継続率_５０％', 'Ａ『注』', 'ＢＥＴＡ（系列）:FLAG', 'FLAG:ＢＥＴＡ（系列）',
 ] as const;
 
 function randomText(r: () => number): string {
@@ -87,6 +89,23 @@ const DICT = [
   '😀',
 ];
 
+/**
+ * 变量名录（v17）：函数名录里的名字 + 三个**全角标点名字**。
+ *
+ * 后三个是这一批的关键用例——`ＢＥＴＡ（系列）` / `継続率_５０％` / `Ａ『注』` 用函数记号尺
+ * （`\p{L}\p{N}_`）切会从中间劈开，只有按 `isErbDimNameChar` 切段才拼得回完整名字。
+ */
+const DIM_DICT = [
+  'ALPHA',
+  'ＢＥＴＡ',
+  'FLAG',
+  '無個性',
+  'ＢＥＴＡ（系列）',
+  '継続率_５０％',
+  'Ａ『注』',
+  '𝐀',
+];
+
 /** 逐条目序列化（对拍用：元组形态原样进 JSON，不做任何归一） */
 const encode = (refs: readonly ScanRefsFileResult[]): string => JSON.stringify(refs);
 
@@ -94,38 +113,82 @@ const encode = (refs: readonly ScanRefsFileResult[]): string => JSON.stringify(r
  * 对照面（REFS-PROVENANCE 起 scanRefsBatch 交回 {refs, candidates} 对）：
  * refs 用老谓词直扫，候选集用同一个 `scanFileRefs` 的收集位收——
  * 这正是"收集是 additive、refs 判据一字未动"的两面。
+ *
+ * 变量腿（v17）另有一份**朴素实现**：按 `isErbDimNameChar`（声明侧那把尺子）逐行走段，
+ * 不看首码位门（门只是提速，产出必须一致——这正是本对拍的一条断言）。
  */
-const expectOf = (text: string, names: ReadonlySet<string>): ScanRefsFileResult => {
+const expectOf = (
+  text: string,
+  names: ReadonlySet<string>,
+  dimNames: ReadonlySet<string> = new Set<string>(),
+): ScanRefsFileResult => {
   const candidates = new Set<string>();
   const refs = scanFileRefs(text, (u) => names.has(u), (u) => {
     candidates.add(u);
   });
-  return { refs, candidates: [...candidates].join('\n') };
+  return { refs, candidates: [...candidates].join('\n'), dimRefs: naiveDimRefs(text, dimNames) };
 };
 
-function payloadOf(names: readonly string[], texts: string[]): ScanRefsPayload {
-  const part = scanRefsNamesOf(nameSetDigest(names), names);
+/** 变量提及的朴素版（与本包生产实现**不共享流程**，只共享可见行与字符集两处单源判据） */
+function naiveDimRefs(text: string, dimNames: ReadonlySet<string>): (string | number)[] {
+  const out: (string | number)[] = [];
+  for (const { line, codeView } of visibleCodeLines(text)) {
+    const code = codeView();
+    let i = 0;
+    while (i < code.length) {
+      if (!isErbDimNameChar(code[i])) {
+        i++;
+        continue;
+      }
+      const start = i;
+      while (i < code.length && isErbDimNameChar(code[i])) i++;
+      const upper = code.slice(start, i).toUpperCase();
+      if (!dimNames.has(upper)) continue;
+      const prev = start > 0 ? code[start - 1]! : '';
+      if (prev === ':' || prev === '：') continue;
+      out.push(upper, line, start + 1);
+    }
+  }
+  return out;
+}
+
+function payloadOf(names: readonly string[], texts: string[], dimNames: readonly string[] = []): ScanRefsPayload {
+  const part = scanRefsNamesOf(nameSetDigest(names), names, nameSetDigest(dimNames), dimNames);
   return { ...part, texts };
 }
 
 describe('scanRefsBatch · 与主线程内联路径逐条目全等', () => {
-  it('600 份对抗性随机文本 × 3 组名录：冷缓存轮与热缓存轮都等于直接扫', () => {
+  it('600 份对抗性随机文本 × 3 组函数名录 × 3 组变量名录：冷缓存轮与热缓存轮都等于直接扫', () => {
     const r = rng(20261021);
     const texts = Array.from({ length: 600 }, () => randomText(r));
     const dicts: readonly string[][] = [DICT, DICT.slice(0, 3), []];
+    const dimDicts: readonly string[][] = [DIM_DICT, DIM_DICT.slice(0, 2), []];
     for (const names of dicts) {
       const set = new Set(names);
-      const want = texts.map((t) => expectOf(t, set));
-      const payload = payloadOf(names, texts);
-      // 冷轮：指纹是新的 ⇒ worker 侧走"建 Set"那一条
-      const cold = scanRefsBatch({ ...payload, namesFp: nameSetDigest(names) + 1_000_003 });
-      // 热轮：同指纹再来一遍 ⇒ 命中缓存
-      const warm = scanRefsBatch(payload);
-      const again = scanRefsBatch(payload);
-      expect(encode(cold)).toBe(encode(want));
-      expect(encode(warm)).toBe(encode(want));
-      expect(encode(again)).toBe(encode(want));
+      for (const dimNames of dimDicts) {
+        const want = texts.map((t) => expectOf(t, set, new Set(dimNames)));
+        const payload = payloadOf(names, texts, dimNames);
+        // 冷轮：指纹是新的 ⇒ worker 侧走"建 Set"那一条
+        const cold = scanRefsBatch({ ...payload, namesFp: nameSetDigest(names) + 1_000_003 });
+        // 热轮：同指纹再来一遍 ⇒ 命中缓存
+        const warm = scanRefsBatch(payload);
+        const again = scanRefsBatch(payload);
+        expect(encode(cold)).toBe(encode(want));
+        expect(encode(warm)).toBe(encode(want));
+        expect(encode(again)).toBe(encode(want));
+      }
     }
+  });
+
+  it('变量腿真的切得开全角名字（反恒真：三组名录里变量流水非空）', () => {
+    const text = 'PRINTFORML ＢＥＴＡ（系列）\n継続率_５０％ += 1\nFLAG:ＢＥＴＡ（系列） = 0\n';
+    const batch = scanRefsBatch(payloadOf([], [text], DIM_DICT));
+    expect(batch[0]!.dimRefs).toEqual([
+      'ＢＥＴＡ（系列）', 1, 12,
+      '継続率_５０％', 2, 1,
+      // `FLAG:ＢＥＴＡ（系列）` 里 `ＢＥＴＡ（系列）` 是成员名：前置冒号 ⇒ 不算变量提及
+      'FLAG', 3, 1,
+    ]);
   });
 
   it('名录缓存按指纹换 Set：fp 变了必须重建，产出随新名录走', () => {
@@ -150,7 +213,7 @@ describe('scanRefsBatch · 与主线程内联路径逐条目全等', () => {
     expect(() => scanRefsBatch(poisoned)).toThrow(/name set unusable/);
     // 反恒真：同一份 texts 在合规名录下是能扫出东西的（抛的是自证失败，不是"空结果"）
     expect(encode(scanRefsBatch(payloadOf(['ALPHA'], ['CALL ALPHA\n'])))).toBe(
-      encode([{ refs: flatRefs([['ALPHA', 1, 6, 1]]), candidates: 'CALL\nALPHA' }]),
+      encode([{ refs: flatRefs([['ALPHA', 1, 6, 1]]), candidates: 'CALL\nALPHA', dimRefs: [] }]),
     );
   });
 });

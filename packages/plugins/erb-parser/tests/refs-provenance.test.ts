@@ -266,12 +266,12 @@ describe('REFS-PROVENANCE：名录变更只重扫受影响文件', () => {
     // 等异步落盘收口（候选位必须已在盘上）
     await waitFor(() => {
       const raw = JSON.parse(map.get(key)!) as { namesFp: unknown; entries: Record<string, unknown[]> };
-      return typeof raw.namesFp === 'number' && Object.values(raw.entries).every((t) => t.length >= 11);
+      return typeof raw.namesFp === 'number' && Object.values(raw.entries).every((t) => t.length >= 12);
     });
     const saved = JSON.parse(map.get(key)!) as { namesFp: unknown; entries: Record<string, unknown[]> };
     expect(typeof saved.namesFp).toBe('number'); // 免扫条目补了账 ⇒ 信封命中
     for (const t of Object.values(saved.entries)) {
-      expect(t.length).toBe(11); // 第 11 位 = 候选记号位（v12 起是哈希集的 base64；'' = 已知空）
+      expect(t.length).toBe(12); // 第 11 位 = 候选记号位（v12 起是哈希集的 base64；'' = 已知空），第 12 位 = 变量提及流水
       expect(typeof t[10]).toBe('string');
       expect(t[10] as string).not.toContain('\n'); // base64 不可能含连接符（v11 的记号串才会）
     }

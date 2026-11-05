@@ -29,7 +29,7 @@
  * 首建一次是线性扫描；之后每次 F12 / 补全只是查表。
  */
 
-import type { ErbIndex } from '@kojo/plugin-api';
+import type { ErbFile, ErbIndex } from '@kojo/plugin-api';
 
 /**
  * 一条 `#DIM` 声明在**项目里**的事实（也是导航腿说的"落点"——同一个形状，同一批对象）。
@@ -51,6 +51,15 @@ export interface ErbDimEntry {
    * 15 万条声明量级下，多一份平行对象就是多一整个世代的堆；导航与诊断共用同一批条目。
    */
   readonly column: 1;
+  /**
+   * 所属函数的 `@` 行（1 基）；**缺席 = 全局声明**（文件顶层 / `.ERH` / `.ERD`）。
+   *
+   * 这一位**不从解析器另存一份**：`ErbFile.functions[].startLine / endLine` 已经把
+   * "某一行属于哪个函数"写全了，作用域是它的纯派生（引擎眼里函数体内 `#DIM` 是调用栈
+   * 局部，跨函数同名互不相干）。多存一份就是第二个真源——一处漏更新，项目级引用就会把
+   * A 函数的局部变量算到 B 头上。真语料 67.7% 的声明是局部（40,852 条里 27,655 条）。
+   */
+  readonly functionStartLine?: number;
 }
 
 /**
@@ -81,16 +90,126 @@ const NAMES_CACHE = new WeakMap<ErbIndex, { dims: string[]; strings: string[] }>
 export function projectDimEntries(index: ErbIndex): readonly ErbDimEntry[] {
   const hit = ENTRIES_CACHE.get(index);
   if (hit !== undefined) return hit;
-
-  const out: ErbDimEntry[] = [];
-  for (const [filePath, file] of index.files) {
-    for (const dim of file.dims) {
-      out.push({ name: dim.name, directive: dim.directive, filePath, line: dim.line, column: 1 });
-    }
-  }
-
+  const out = dimEntriesOfFiles(index.files);
   ENTRIES_CACHE.set(index, out);
   return out;
+}
+
+/**
+ * 全项目 `#DIM` 声明条目（**底层那一份**；`index.files` 的遍历只住在这里）。
+ *
+ * 与 {@link projectDimEntries} 的关系：那一枚是"按索引对象缓存"的入口，这一枚是纯函数，
+ * 供**建索引阶段**用（那时 `ErbIndex` 还没组装出来，只有 `files`）。两条入口、一次遍历实现
+ * ——加新消费方时从这两枚取，别自己再写一遍 `for (const file of index.files)`。
+ *
+ * 作用域在这一层派生：`file.functions` 已按 `startLine` 升序（解析器逐行推入），声明也按行
+ * 升序 ⇒ 一个游标推到底，命中后再用 `endLine` 复核（函数体之外的行不属于它）。
+ */
+export function dimEntriesOfFiles(files: Iterable<readonly [string, ErbFile]>): ErbDimEntry[] {
+  const out: ErbDimEntry[] = [];
+  for (const [filePath, file] of files) {
+    const fns = file.functions;
+    let j = -1;
+    for (const dim of file.dims) {
+      while (j + 1 < fns.length && fns[j + 1]!.startLine <= dim.line) j++;
+      const fn = j >= 0 ? fns[j] : undefined;
+      const inFn = fn !== undefined && dim.line <= fn.endLine ? fn.startLine : undefined;
+      if (inFn === undefined) {
+        out.push({ name: dim.name, directive: dim.directive, filePath, line: dim.line, column: 1 });
+      } else {
+        out.push({
+          name: dim.name,
+          directive: dim.directive,
+          filePath,
+          line: dim.line,
+          column: 1,
+          functionStartLine: inFn,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * 全局声明名（大写归一）→ 是否在项目里。**项目级变量引用的名字表**：局部声明天然不可能
+ * 跨文件被引用，进这张表只会制造假边（真语料 12,020 个全局名字 vs 27,655 条局部声明）。
+ */
+const GLOBAL_NAMES_CACHE = new WeakMap<ErbIndex, ReadonlySet<string>>();
+
+export function globalDimNamesOf(index: ErbIndex): ReadonlySet<string> {
+  const hit = GLOBAL_NAMES_CACHE.get(index);
+  if (hit !== undefined) return hit;
+  const set = globalDimNamesOfEntries(projectDimEntries(index));
+  GLOBAL_NAMES_CACHE.set(index, set);
+  return set;
+}
+
+/** 建索引阶段用（`ErbIndex` 尚未组装）：与 {@link globalDimNamesOf} 同一份派生 */
+export function globalDimNamesOfFiles(files: Iterable<readonly [string, ErbFile]>): ReadonlySet<string> {
+  return globalDimNamesOfEntries(dimEntriesOfFiles(files));
+}
+
+/** 已经有条目表时用它（避免为了拿名字再多走一遍 `dimEntriesOfFiles`） */
+export function globalDimNamesOfEntries(entries: readonly ErbDimEntry[]): ReadonlySet<string> {
+  const set = new Set<string>();
+  for (const entry of entries) {
+    if (entry.functionStartLine !== undefined) continue;
+    if (entry.name.length === 0) continue;
+    set.add(entry.name.toUpperCase());
+  }
+  return set;
+}
+
+/** 一处函数内局部声明造成的**遮蔽区间**：这个函数体里，这些名字指的是局部变量 */
+export interface DimShadowSpan {
+  /** 函数 `@` 行（1 基，含） */
+  readonly from: number;
+  /** 函数体结束行（1 基，含；`ErbFunction.endLine`） */
+  readonly to: number;
+  /** 该函数内局部声明的名字（大写归一） */
+  readonly names: ReadonlySet<string>;
+}
+
+/**
+ * 单文件的遮蔽区间表（按 `ErbFile` 对象缓存：索引重建 ⇒ 新对象 ⇒ 天然失效）。
+ *
+ * 消费方是**项目级变量引用**：`CFLAG` 在全局声明过、又在 `@F` 里 `#DIM CFLAG` 过，
+ * 那么 `@F` 体内的 `CFLAG` 就是那个局部变量——索引里记着它，查询时靠这张表剔掉。
+ * 为什么不建索引时就剔：遮蔽是**当前**文件事实，作者随时会加一行 `#DIM`；建时剔会把
+ * "这行不算引用"冻进快照，改回来还得靠重扫。查询时判，永远读的是最新结构。
+ */
+const SHADOW_CACHE = new WeakMap<ErbFile, readonly DimShadowSpan[]>();
+
+export function localDimShadowSpansOf(file: ErbFile): readonly DimShadowSpan[] {
+  const hit = SHADOW_CACHE.get(file);
+  if (hit !== undefined) return hit;
+
+  /**
+   * 作用域**不在这里再判一遍**：走 {@link dimEntriesOfFiles} 同一个派生
+   * （`functionStartLine` 缺席 = 全局）。同一件事实写两处游标，一处改了另一处不知道，
+   * 表现就是"项目级引用里剔掉的点和全局名录里收的点对不上"。
+   */
+  const byFn = new Map<number, Set<string>>();
+  for (const entry of dimEntriesOfFiles([[file.path, file]])) {
+    if (entry.functionStartLine === undefined || entry.name.length === 0) continue;
+    let names = byFn.get(entry.functionStartLine);
+    if (names === undefined) {
+      names = new Set<string>();
+      byFn.set(entry.functionStartLine, names);
+    }
+    names.add(entry.name.toUpperCase());
+  }
+
+  const spans: DimShadowSpan[] = [];
+  if (byFn.size > 0) {
+    for (const fn of file.functions) {
+      const names = byFn.get(fn.startLine);
+      if (names !== undefined) spans.push({ from: fn.startLine, to: fn.endLine, names });
+    }
+  }
+  SHADOW_CACHE.set(file, spans);
+  return spans;
 }
 
 /**
