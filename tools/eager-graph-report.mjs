@@ -10,7 +10,7 @@
  *   - 已出图（`import type` 擦除）的提示：类型文件不该出现在榜单里
  *
  * 用法：
- *   node tools/eager-graph-report.mjs            # 默认入口 main.tsx、闸 197 文件 / 3,624 KB
+ *   node tools/eager-graph-report.mjs            # 默认入口 main.tsx、闸 197 文件 / 3,400 KB
  *   node tools/eager-graph-report.mjs --top 25   # 多看几枚
  *
  * 口径与 ps10 **必须**同源（同两枚正则、同 `import type` 擦除判据）；ps10 改了这里也要改，
@@ -25,7 +25,7 @@ const args = process.argv.slice(2);
 const topArg = args.indexOf('--top');
 const TOP = topArg >= 0 ? Number(args[topArg + 1]) || 20 : 20;
 const GATE_FILES = 197;
-const GATE_KB = 3_624;
+const GATE_KB = 3_400; // 2026-11-05 契约字节闸治理批下调（原 3,624，瘦身后余量 ≈5.5 KB）
 const ENTRY = 'packages/app/src/main.tsx';
 
 const read = (abs) => readFileSync(abs, 'utf8');

@@ -85,8 +85,11 @@ const LINE_CACHE_MAX_CHARS = 4 * 1024 * 1024;
 const VIEW_CACHE_MAX = 4;
 /** override 切行记忆最多留几份（面板同时开着的缓冲文件上限 4） */
 const OVERRIDE_LINES_MEMO_MAX = 4;
-/** 跨函数写传播每次回放最多查几个被调函数（防巨型函数体拖住面板） */
+/** 跨函数写传播每次回放最多查几个被调函数（两层合计；防巨型函数体拖住面板） */
 const CALL_PROPAGATION_BUDGET = 30;
+
+/** 跨函数写传播最多几层（第一层价值最大；两层覆盖"包装函数 → 真正写状态的函数"） */
+const CALL_PROPAGATION_MAX_DEPTH = 2;
 
 
 /**
@@ -433,64 +436,96 @@ export class StateReplayEngine implements StateReplayService {
   }
 
   /**
-   * 跨函数写传播（**只做一层**，2026-11-05 边界批）：
+   * 跨函数写传播（**最多两层**，2026-11-05 边界批 / 边界批 3）：
    * 静态可解析的 `CALL TARGET(...)` 行 → 查 TARGET 的明细与行文本（override 优先），
-   * 用同一套写判据数出被调段里**可证明的写点**（assign / instruction；不再往下递归），
-   * 填进 `calleeWrites`。动态目标 / 查不到 / 超预算 → 不填（= 不可知，不是 0）。
+   * 用同一套写判据数出被调段里**可证明的写点**（assign / instruction），填进 `calleeWrites`。
+   * 第二层只在第一层结果里还有静态 `CALL` 时继续（`A → B → C` 的 C 有写也算"被调段可证有写"），
+   * 用 `visited` 防环、`budget` 封顶。动态目标 / 查不到 / 超预算 → 不填（= 不可知，不是 0）。
    *
-   * 为什么只做一层：跨函数传播每深一层，误报面与耗时都翻倍，而"这一行调用会不会写"
-   * 对作者的价值在**第一层**就已经兑现（看到"被调段有 3 处写"就够了）。预算 30 个
-   * 被调函数/次，防一个巨型函数体把面板拖住。
+   * 为什么封两层：一层漏掉"包装函数 → 真正写状态的函数"这种常见两层形态；三层以上收益
+   * 递减、而每个被调函数都要一次明细 + 取行 + 扫描，巨型函数体里会把面板拖住。预算是
+   * **跨两层合计** 30 个被调函数/次，缓存按目标名（+磁盘/缓冲模式）存最终计数。
    */
   private async propagateCallWrites(
     writes: readonly ReplayWrite[],
-    options?: ReplayFunctionOptions & { readonly textOverrides?: readonly ReplayTextOverride[] },
+    options?: ReplayFunctionOptions,
     judgedPath?: string,
   ): Promise<readonly ReplayWrite[]> {
-    const targets = writes.filter((w) => w.kind === 'call' && typeof w.target === 'string' && w.target !== '');
-    if (targets.length === 0) return writes;
-    const overrides = overridesOf(options, judgedPath);
-    this.syncOverrideIdentity(overrides);
-    const overrideMap = new Map(overrides.map((o) => [pathKey(o.filePath), o.text] as const));
+    if (!writes.some((w) => w.kind === 'call' && typeof w.target === 'string' && w.target !== '')) return writes;
+    const budget = { left: CALL_PROPAGATION_BUDGET };
+    const perReplayVisited = new Set<string>();
     const out: ReplayWrite[] = [];
-    let budget = CALL_PROPAGATION_BUDGET;
     for (const w of writes) {
       if (w.kind !== 'call' || typeof w.target !== 'string' || w.target === '') {
         out.push(w);
         continue;
       }
-      const target = w.target;
-      const diskDetail = await this.deps.functionPredicates(target);
-      if (diskDetail === null || budget <= 0) {
-        out.push(w);
-        continue;
-      }
-      budget -= 1;
-      const bufText = overrideMap.get(pathKey(diskDetail.filePath));
-      const cacheKey = `${target.toUpperCase()}\u0000${bufText === undefined ? 'disk' : 'buf'}`;
-      const cached = this.callWriteCache.get(cacheKey);
-      if (cached !== undefined) {
-        out.push(cached === null ? w : { ...w, calleeWrites: cached });
-        continue;
-      }
-      let count: number | null = null;
-      try {
-        const detail = bufText === undefined ? diskDetail : await this.deps.functionPredicates(target, bufText);
-        if (detail !== null) {
-          const calleeLines = await this.linesOf(detail.filePath, options, judgedPath);
-          count = detectUnmodeledWrites(calleeLines, detail.startLine, detail.endLine).filter(
-            (x) => x.kind !== 'call' && x.kind !== 'jump',
-          ).length;
-        }
-      } catch {
-        count = null; // 查不到 = 不可知（不填字段），绝不猜 0
-      }
-      this.callWriteCache.set(cacheKey, count);
+      const count = await this.calleeWriteCount(w.target, options, judgedPath, budget, perReplayVisited, 0);
       out.push(count === null ? w : { ...w, calleeWrites: count });
     }
     return out;
   }
 
+  /**
+   * 一个被调函数（含其一层嵌套调用）里可证明的写点数；`null` = 查不到 / 超预算（不可知）。
+   * 缓存键带"是否走缓冲正文"，因为同一函数在两份正文下写点数可能不同。
+   */
+  private async calleeWriteCount(
+    target: string,
+    options: ReplayFunctionOptions | undefined,
+    judgedPath: string | undefined,
+    budget: { left: number },
+    visited: Set<string>,
+    depth: number,
+  ): Promise<number | null> {
+    const key = target.toUpperCase();
+    if (visited.has(key)) return null; // 环：这一支放弃（不可知），不假装 0
+    if (budget.left <= 0) return null;
+    // 明细查询本身也可能抛（索引抖动 / 读盘失败）：按「查不到」处理，绝不让传播把回放带崩
+    let diskDetail: FunctionPredicates | null;
+    try {
+      diskDetail = await this.deps.functionPredicates(target);
+    } catch {
+      return null;
+    }
+    if (diskDetail === null) return null;
+    budget.left -= 1;
+    visited.add(key);
+    try {
+      const bufText = effectiveOverrideText(diskDetail.filePath, options, judgedPath);
+      const cacheKey = `${key}\u0000${bufText === undefined ? 'disk' : 'buf'}`;
+      const cached = this.callWriteCache.get(cacheKey);
+      if (cached !== undefined) return cached;
+      let count: number | null = null;
+      try {
+        const detail = bufText === undefined ? diskDetail : await this.deps.functionPredicates(target, bufText);
+        if (detail !== null) {
+          const calleeLines = await this.linesOf(detail.filePath, options, judgedPath);
+          const detected = detectUnmodeledWrites(calleeLines, detail.startLine, detail.endLine);
+          let direct = 0;
+          for (const x of detected) {
+            if (x.kind !== 'call' && x.kind !== 'jump') direct += 1;
+          }
+          let nested = 0;
+          if (depth < CALL_PROPAGATION_MAX_DEPTH - 1) {
+            for (const x of detected) {
+              if (x.kind !== 'call' || typeof x.target !== 'string' || x.target === '') continue;
+              const sub = await this.calleeWriteCount(x.target, options, judgedPath, budget, visited, depth + 1);
+              if (sub !== null) nested += sub;
+            }
+          }
+          count = direct + nested;
+        }
+      } catch {
+        count = null; // 查不到 = 不可知（不填字段），绝不猜 0
+      }
+      // 只有"算得出来"的结果才进缓存：超预算/环的 null 是**本次预算**的产物，不是函数属性
+      if (count !== null) this.callWriteCache.set(cacheKey, count);
+      return count;
+    } finally {
+      visited.delete(key);
+    }
+  }
   /** override 集合身份变了 ⇒ 清传播缓存（旧正文算出来的写点数不能再用） */
   private syncOverrideIdentity(identity: readonly { readonly filePath: string; readonly text: string }[]): void {
     const prev = this.overrideIdentity;
