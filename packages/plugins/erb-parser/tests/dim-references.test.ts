@@ -5,14 +5,18 @@
  * `.ERH`）上 ⇒ 答项目级；光标在**函数体内**的局部声明上 ⇒ 仍只答本文件（`#DIM` 在函数体
  * 里是调用栈局部，真语料 67.7% 的声明是这种，跨函数同名互不相干）。
  *
- * 本文件钉六件事（每条都能单独变红）：
+ * 本文件钉八件事（每条都能单独变红）：
  * 1. **建表**：全局声明名进 `index.dimReferences`，局部声明名**不进**（进了就会串味）；
  * 2. **切段尺子**：`BETA（系列）` 这类含全角括号的真名字能整段匹配（函数记号尺会劈开它）；
  * 3. **项目级作答**：`.ERH` 的声明行上按 Shift+F12 ⇒ 跨文件全部落点；
  * 4. **遮蔽在查询时判**：`@SUB` 里也 `#DIM` 了同名变量 ⇒ 那个函数体里的同名记号**不算**
  *    全局变量的引用（建索引时剔会把结论冻进快照，改回来还得靠重扫）；
  * 5. **局部不吃项目腿**：光标在局部声明上 ⇒ 只有本文件（不把别处同名全局变量算进来）；
- * 6. **降级**：`index` 缺席 / `dimReferences` 未建 ⇒ 与加这一腿之前逐字等价（只看本文件）。
+ * 6. **降级**：`index` 缺席 / `dimReferences` 未建 ⇒ 与加这一腿之前逐字等价（只看本文件）；
+ * 7. **大小写**：形状门两端折叠，区间与 `normalizedUpper` 的 `[a-zａ-ｚ]` 逐字相同
+ *    （`kojo_name`、`ｋｏｊｏ` 都得认，否则两条腿一起假阴）；
+ * 8. **长度维**：`ß` 这类"大写会改长度"的码元不许过门——门按原文长度取键、名录里存
+ *    大写名，两边对不上；那一段整个绕过门，交给名录裁决。
  */
 import { describe, expect, it } from 'vitest';
 import type {
@@ -253,6 +257,29 @@ describe('大小写 · 形状门必须折大小写，否则假阴', () => {
     const full = ['; 全局声明', '#DIMS ＫＯＪＯ', '@M', '  PRINTL ｋｏｊｏ'].join('\n');
     const { index } = await buildIndex(new Map([[ERH, { text: full, mtimeMs: 1 }]]));
     expect(at(dimReferencesOf(index, 'ＫＯＪＯ'))).toEqual(['DIM:2:1', 'DIM:4:10']);
+  });
+});
+
+describe('长度维 · 大写会改长度的码元（`ß` → `SS`）', () => {
+  it('声明名含 `ß` 时，代码里再写一次 `ß` 也认得（键的长度维在这一段上不成立 ⇒ 绕过门）', async () => {
+    // `straße` 原文 6 个码元，归一化后是 `STRASSE`（7 个）⇒ 形状键的长度与名录对不上。
+    // 加这枚 `exact` 旗子之前：那一处提及被门静默否掉，查找引用只回 `STRASSE` 那一处
+    // 与声明点（看起来"只用了两次"，实际三处）。
+    const erh = ['; 全局声明', '#DIM straße'].join('\n');
+    const a = ['@MAIN', '  PRINTL straße', '  X = STRASSE'].join('\n');
+    const { index } = await buildIndex(
+      new Map([
+        [ERH, { text: erh, mtimeMs: 1 }],
+        [A, { text: a, mtimeMs: 2 }],
+      ]),
+    );
+    // 两种写法（原文 `ß` / 展开后的 `SS`）归一到同一个名字，都得进表
+    expect(at(dimReferencesOf(index, 'STRASSE'))).toEqual(['A:2:10', 'A:3:7', 'DIM:2:1']);
+    // 声明行上按 Shift+F12 走同一条腿（`#DIM straße` 的名字从第 6 列起）
+    expect(at(erbReferencesAt(index, erh, ERH, 2, 6))).toEqual(['A:2:10', 'A:3:7', 'DIM:2:1']);
+    // 反向恒真：**提及上不答**是刻意口径（见 `erbDimReferencesAt` 头注：任意变量位置上
+    // 按键会把字符串里的同名散文一起卷进来，误报比少答更坏）
+    expect(erbReferencesAt(index, a, A, 2, 10)).toEqual([]);
   });
 });
 

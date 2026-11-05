@@ -318,11 +318,14 @@ export function isErbDimNameChar(ch: string | undefined): boolean {
 }
 
 /**
- * 码元 → 名字字符分类的**备忘表**（`0` = 未算，`1` = 名字字符，`2` = 分隔）。
+ * 码元 → 名字字符分类的**备忘表**（`0` = 未算，`1` = 名字字符，`2` = 分隔，
+ * `3` = 名字字符但**大写会改长度**）。
  *
  * 与 `references.ts` 的 `BMP_TOKEN_CLASS`（W7-G）是同一个成例、同一条纪律：
- * **表是 {@link isErbDimNameCode} 的备忘，不是第二判据**——填表那一格调的就是它，
- * 字符集仍然只有 `DIM_NAME_DELIMITED` 与 `isNonAsciiSpace` 两处。
+ * **表是 {@link isErbDimNameCode} 的备忘，不是第二判据**——填表那一格调的就是它。
+ * `3` 那一位不参与切段判据，只回答"这一段能不能过形状门"：`ß` → `SS`、连字
+ * `ﬀ` → `FF` 这类映射会改长度（BMP 里共 102 枚），而形状键的长度维取的是**原文**
+ * 长度，与名录里那张大写名对不上 ⇒ 那一段的键不许当判据（见 `forEachDimNameRun`）。
  *
  * 为什么需要：项目级变量引用要按名字字符切**每一行可见代码**（真语料 339 万行）。
  * 真语料 366,032 行实测，逐码元函数调用（`Number.isFinite` + 两段分支）**256 ms**，
@@ -332,10 +335,16 @@ export function isErbDimNameChar(ch: string | undefined): boolean {
 const DIM_NAME_CLASS = new Uint8Array(0x10000);
 
 /** 填表并作答（冷码元走这里；热码元由调用方直接读 {@link DIM_NAME_CLASS}） */
-function dimNameClassAt(code: number): 1 | 2 {
-  const nameChar = isErbDimNameCode(code);
-  DIM_NAME_CLASS[code] = nameChar ? 1 : 2;
-  return nameChar ? 1 : 2;
+function dimNameClassAt(code: number): 1 | 2 | 3 {
+  if (!isErbDimNameCode(code)) {
+    DIM_NAME_CLASS[code] = 2;
+    return 2;
+  }
+  // 单码元的 `toUpperCase` 会不会变长：JS 的默认全量大小写映射里，变长只来自
+  // **单个字符**的展开（`ß`→`SS`、连字、`ŉ`、`ΐ`），没有"整串才有"的情形。
+  const cls = String.fromCharCode(code).toUpperCase().length > 1 ? 3 : 1;
+  DIM_NAME_CLASS[code] = cls;
+  return cls;
 }
 
 /**
@@ -349,8 +358,14 @@ function dimNameClassAt(code: number): 1 | 2 {
  *
  * 代理对在这里按两个码元分别判（`isErbDimNameCode` 的口径就是码元）：增平面字符
  * 既不是分隔也不是空白 ⇒ 两格都算名字字符，与 `isErbDimNameChar` 逐字符切名的结果同形。
+ *
+ * `exact` = 这一段的名字形状键**能不能当判据**：段里出现 `3` 类码元（`ß` 这种大写会
+ * 改长度的）就是 `false`——键的长度维取原文长度，而名录里存的是大写名，两者对不上。
+ * 这枚旗子是**判据的一部分**（不是优化开关）：漏报 `false` 会让形状门静默否掉
+ * 一个真名字（真语料 4,831 份文件里这类码元只在 1 份乱码补丁里出现 7 次，
+ * 声明行 0 次——但它是合法输入，不许靠"语料里没有"成立）。
  */
-export function forEachDimNameRun(code: string, visit: (start: number, end: number) => void): void {
+export function forEachDimNameRun(code: string, visit: (start: number, end: number, exact: boolean) => void): void {
   const n = code.length;
   let i = 0;
   while (i < n) {
@@ -362,15 +377,17 @@ export function forEachDimNameRun(code: string, visit: (start: number, end: numb
       continue;
     }
     const start = i;
+    let exact = cls !== 3;
     i++;
     while (i < n) {
       const c = code.charCodeAt(i);
       let next = DIM_NAME_CLASS[c]!;
       if (next === 0) next = dimNameClassAt(c);
       if (next === 2) break;
+      if (next === 3) exact = false;
       i++;
     }
-    visit(start, i);
+    visit(start, i, exact);
   }
 }
 

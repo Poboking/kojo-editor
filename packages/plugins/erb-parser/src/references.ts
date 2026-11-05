@@ -217,8 +217,10 @@ function colonPrefixed(code: string, start: number): boolean {
  * {@link colonAdjacent} 刻意分开（理由见那一枚的注）。
  */
 function scanDimRuns(code: string, line: number, dims: DimNameScan): void {
-  forEachDimNameRun(code, (start, end) => {
-    if (!dims.shapes.has(dimNameShapeKey(code, start, end))) return;
+  forEachDimNameRun(code, (start, end, exact) => {
+    // `exact === false`：这一段含"大写改长度"的码元，键的长度维与名录对不上 ⇒ 门不许用，
+    // 直接耗一次 `toUpperCase` 让 `has` 裁决（宁可慢一趟，不许假阴）。
+    if (exact && !dims.shapes.has(dimNameShapeKey(code, start, end))) return;
     if (colonPrefixed(code, start)) return;
     const upper = normalizedUpper(code.slice(start, end));
     if (!dims.has(upper)) return;
@@ -712,6 +714,11 @@ export interface DimNameScan {
  * 而这一关的契约是"只许放过、不许误杀"。折叠区间与 `normalizedUpper` 的 `[a-zａ-ｚ]`
  * 逐字相同，两边因此永远同判。
  *
+ * **长度维只在"大写不改长度"时成立**：`ß` → `SS`、连字 `ﬀ` → `FF` 会让名录里的大写名
+ * 比原文长（BMP 里共 102 枚这类码元），键的长度就对不上。这一格不靠注释自律——切段那一趟
+ * 已经知道段里有没有这种码元（`forEachDimNameRun` 的 `exact`），有就**整个绕过这道门**，
+ * 交给 `has` 裁决。所以本键的契约是：**只对 `exact === true` 的段用**。
+ *
  * **折叠内联、不抽小函数**：这一枚每行调两次、真语料 913 万段，热点里少一次真调用总是更稳
  * （V8 内不内联小函数不由我们决定）。区间写法因此在这里重复两遍，**改动时必须两处一起改**，
  * 并回去核 `normalizedUpper` 的正则。
@@ -735,13 +742,6 @@ export function dimNameShapesOf(names: Iterable<string>): ReadonlySet<number> {
   return out;
 }
 
-/**
- * 单文件文本 → 变量提及流水（**缓冲区本地腿**的入口，`symbols.ts` 的
- * `erbDimReferencesAt` 用它；索引构建那条腿走 {@link scanFileNames} 的同一条
- * {@link scanDimRuns}，两条腿的切段判据只有一份）。
- *
- * `window` 语义与 {@link scanFileNames} 相同（不传 = 整篇）。
- */
 /**
  * 单文件文本 → 变量提及流水（**缓冲区本地腿**的入口，`symbols.ts` 的
  * `erbDimReferencesAt` 用它；索引构建那条腿走 {@link scanFileNames} 的同一条
