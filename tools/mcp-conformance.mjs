@@ -377,7 +377,7 @@ export function createMockEndpoint(opts = {}) {
   /** 响应形态按 Accept 协商：JSON 单帧对象 / SSE 逐 data 事件。 */
   function respondFrames(res, record, wantsSSE, frames) {
     if (wantsSSE) {
-      const body = frames.map((f) => `data: ${JSON.stringify(f)}\n\n`).join('');
+      const body = frames.map((f) => `event: message\ndata: ${JSON.stringify(f)}\n\n`).join('');
       record.status = 200;
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', 'content-length': Buffer.byteLength(body) });
       return res.end(body);

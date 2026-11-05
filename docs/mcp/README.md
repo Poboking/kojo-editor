@@ -31,24 +31,27 @@ kojo-editor 把编辑器能力以 MCP 暴露给本机 AI 客户端。客户端**
 
 ## 2. 发现文件位置与 token 轮换
 
-### 2.1 `%APPDATA%` 在各操作系统的对应路径
+### 2.1 各平台的默认发现文件位置
 
-shim 默认读取 `%APPDATA%/dev.kojo.editor/mcp-endpoint.json`。`%APPDATA%` 是 **Windows 专有**
-环境变量；其它平台由 Tauri `app_data_dir()`（应用标识 `dev.kojo.editor`）落到等价位置：
+shim 按**当前平台**自动定位 Tauri `app_data_dir()`（应用标识 `dev.kojo.editor`）下的
+`mcp-endpoint.json`，与 Rust `mcp_start` 写入的位置一致，**无需手动指定**：
 
-| 操作系统 | `%APPDATA%` / `app_data_dir()` 对应目录 | 发现文件完整路径 |
+| 操作系统 | 判定依据 | 发现文件完整路径 |
 | --- | --- | --- |
-| Windows | `C:\Users\<用户>\AppData\Roaming`（即 `%APPDATA%`） | `C:\Users\<用户>\AppData\Roaming\dev.kojo.editor\mcp-endpoint.json` |
-| macOS | `~/Library/Application Support`（`app_data_dir()`） | `~/Library/Application Support/dev.kojo.editor/mcp-endpoint.json` |
-| Linux | `$XDG_DATA_HOME`，缺省 `~/.local/share`（`app_data_dir()`） | `~/.local/share/dev.kojo.editor/mcp-endpoint.json` |
+| Windows | `process.env.APPDATA` | `%APPDATA%\dev.kojo.editor\mcp-endpoint.json` |
+| macOS | `~/Library/Application Support` | `~/Library/Application Support/dev.kojo.editor/mcp-endpoint.json` |
+| Linux | `$XDG_DATA_HOME`（须为绝对路径，相对值按 XDG 规范忽略），缺省 `~/.local/share` | `~/.local/share/dev.kojo.editor/mcp-endpoint.json` |
 
 第四张授权表 `mcp_approvals.json` 与审计日志同样落在上述目录。
 
-> **跨平台注意**：shim 的 `resolveEndpointFile` 只认 Windows 的 `process.env.APPDATA`。
-> 在 macOS / Linux 上请用下面任一方式显式指向，否则 shim 会以「找不到 %APPDATA%」显式失败（exit 2）：
+> **定制 / 兜底**：只有改过 `app_data_dir()` 落点、跑在未知平台、或 CI / 端口转发时，
+> 才需要显式指定：
 >
 > - `KOJO_MCP_ENDPOINT_FILE=/abs/path/to/mcp-endpoint.json`（指向上表对应路径）；
-> - 或 `KOJO_MCP_ENDPOINT` + `KOJO_MCP_TOKEN` 成对覆盖（见 §3.2）。
+> - 或 `KOJO_MCP_ENDPOINT` + `KOJO_MCP_TOKEN` 成对覆盖（见 §3.2，此时完全跳过发现文件）。
+>
+> 未知平台、Windows 缺 `%APPDATA%`、主目录无法确定时 shim 一律 **stderr 给可执行提示 + exit 2**，
+> 绝不猜路径、不回落空 token。
 
 ### 2.2 token 轮换
 
@@ -83,7 +86,7 @@ node tools/kojo-mcp.mjs
 | --- | --- |
 | `KOJO_MCP_ENDPOINT` | 覆盖地址：`host:port` / `host:port/path` / `http(s)://host:port[/path]`；端口须 1..65535，默认 path `/mcp` |
 | `KOJO_MCP_TOKEN` | 覆盖 token（运行时密钥，勿提交、勿写进配置示例） |
-| `KOJO_MCP_ENDPOINT_FILE` | 覆盖发现文件绝对路径（夹具 / macOS / Linux 用） |
+| `KOJO_MCP_ENDPOINT_FILE` | 覆盖发现文件绝对路径（夹具 / 定制 `app_data_dir` 落点 / 未知平台用） |
 
 - `KOJO_MCP_ENDPOINT` + `KOJO_MCP_TOKEN` **齐备** ⇒ 完全跳过发现文件。
 - 只给其一 ⇒ 在发现文件基线上覆盖对应字段。
@@ -172,7 +175,7 @@ interface McpSessionScope {
 
 | 现象 | shim 退出码 | stderr 提示要点 | 处置 |
 | --- | --- | --- | --- |
-| 发现文件缺失 / `%APPDATA%` 找不到 / JSON 坏 / 缺 port·token | `2` | 「端点文件…编辑器可能未启用 MCP 服务」/「找不到 %APPDATA%」 | 「设置 › AI 接入」开启服务；macOS/Linux 用 `KOJO_MCP_ENDPOINT_FILE` 指定；CI 用 `KOJO_MCP_ENDPOINT`+`KOJO_MCP_TOKEN` |
+| 发现文件缺失 / `%APPDATA%` 找不到 / 主目录或平台落点无法确定 / JSON 坏 / 缺 port·token | `2` | 「端点文件…编辑器可能未启用 MCP 服务」/「找不到 %APPDATA%」/「平台 … 没有已知的落点」 | 「设置 › AI 接入」开启服务；定制落点或未知平台用 `KOJO_MCP_ENDPOINT_FILE` 指定；CI 用 `KOJO_MCP_ENDPOINT`+`KOJO_MCP_TOKEN` |
 | 编辑器未启用 / 端点失效（ECONNREFUSED 族） | `3` | 「无法连接 MCP 服务…未启用 MCP 服务」 | 开启服务并确认状态；端口是动态的，确认端点文件是最新一次启动写入的 |
 | 连接层其它失败（超时 / 重置） | `3` | 「MCP 请求失败」 | 查服务状态与端点文件 |
 | Bearer token 失效 / 被拒（401/403） | `4` | 「拒绝 Bearer token…轮换 token」 | 设置页轮换 token 后重启 shim |
@@ -252,6 +255,8 @@ shim 不吞、主循环不死（S14）。
 
 **SSE 面**：单请求 SSE（H18/H31）、batch SSE 多 `data:` 帧逐帧合法 JSON（H21）、真 shim 吃 SSE 应答
 逐帧转发到 stdout（S11——mock 对 SSE Accept 的请求恒以 `text/event-stream` 应答，stdio 通道全程走 SSE）。
+mock 按**真 Rust 端点形态**发 `event: message` 元数据行，钉住 shim 只转发 `data:` 行、
+绝不把元数据当 JSON-RPC 帧写进 stdout（真壳取证发现的污染路径）。
 
 **batch / notification 面**：混合 batch 只回非 notification 项（H19）；纯 notification batch → 202 空体（H20）；
 notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行 shim 按 notification 语义转发、不等待（S06）；
@@ -269,10 +274,12 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 
 ### 10.5 当前能力面读数与剩余缺口（真值自 `node tools/mcp-inventory.mjs --print`）
 
-- 能力面：命令 **60** / Rust 命令 **88** / 语义读数 **23** / 槽贡献 **102**（命令类 4）；
+> 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-05 按当前树复核）。
+
+- 能力面：命令 **61** / Rust 命令 **89** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
   tools **33**（read 28 / edit 3 / privileged 2）；resources **8**；prompts **3**；
-- 缺口：`totalGaps=179` / `wiredGaps=24` / **`deferredGaps=155`**，逐条带原因，
-  按七类归因（合计 155，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
+- 缺口：`totalGaps=180` / `wiredGaps=24` / **`deferredGaps=156`**，逐条带原因，
+  按七类归因（合计 156，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
 
 | 原因类 | 条数 |
 | --- | --- |
@@ -280,7 +287,7 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 | 危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准 | 46 |
 | 写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露 | 18 |
 | MCP 会话控制 / 审计内建命令：由宿主线协议与第四张表管理，不作为模型工具 | 8 |
-| 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 6 |
+| 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 7 |
 | 编辑器写 / 光标副作用：首期不面向只读模型面 | 5 |
 | 语义读数：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补） | 4 |
 
@@ -288,6 +295,9 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 
 - **mock ≠ Rust 真端点**：token 轮换作旧、审计轮转、第四张表落盘与发现文件生命周期、
   `MCP-Protocol-Version` 头校验等 Rust 侧行为由路 C3 的真实 TCP/HTTP 集成测试覆盖；
+- **线协议形状归一不接 mock**：WebView 注册表按冻结契约 v1 回裸数组 / 裸结果对象，
+  由 Rust `finalize_reply` 在二次过滤前补成 `{tools}` / `{resources}` / `{prompts}` / `content`
+  规范形状（`mcp::tests` 两例钉住，真壳端到端取证复核）；mock 本身已是规范形状，不接生产桥；
 - **mock 不接能力真源**：semantic 8 腿 / kernelIo 3 腿 / 8 个 resource 真读数 / `runSupplemental`
   的接线与路径闸，由路 A3 接满真源，本 harness 只钉协议形状与转发；
 - **SSE 服务器流（GET /mcp）显式不支持**（405）：这是无状态单端点形态的边界（见 §11），

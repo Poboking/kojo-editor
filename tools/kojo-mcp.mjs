@@ -7,7 +7,9 @@
  * 不读写项目文件、不新增外部 npm 依赖、**不自动拉起编辑器**、不打包 Node sidecar——
  * 因此不违反 ADR-0003「拒打包 Node sidecar」。
  *
- * 端点默认来自 `%APPDATA%/dev.kojo.editor/mcp-endpoint.json`（`{port, token}`，由 Rust `mcp_start` 写入）。
+ * 端点默认来自 Tauri `app_data_dir()` 下的 `dev.kojo.editor/mcp-endpoint.json`
+ * （`{port, token}`，由 Rust `mcp_start` 写入）：Windows 走 `%APPDATA%`，macOS 走
+ * `~/Library/Application Support`，Linux 走 `$XDG_DATA_HOME`（缺省 `~/.local/share`）。
  * **环境变量覆盖（CI / 本地端口转发场景）**：`KOJO_MCP_ENDPOINT`（`host:port` 或 URL）覆盖地址、
  * `KOJO_MCP_TOKEN` 覆盖 token；两者齐备时**完全跳过发现文件**。默认（无这些变量）仍只读发现文件，
  * 绝不猜默认端口、不回落空 token。`KOJO_MCP_ENDPOINT_FILE` 是端点文件路径覆盖（夹具用）。
@@ -28,6 +30,7 @@
  */
 import { promises as fs } from 'node:fs';
 import http from 'node:http';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import readline from 'node:readline';
 import { pathToFileURL } from 'node:url';
@@ -46,18 +49,60 @@ export class ShimError extends Error {
   }
 }
 
-/** 端点文件路径：%APPDATA%/dev.kojo.editor/mcp-endpoint.json；KOJO_MCP_ENDPOINT_FILE 为夹具覆盖。 */
-export function resolveEndpointFile(env = process.env) {
+/**
+ * 端点文件路径：按 Tauri `app_data_dir()` 的三平台口径自动定位，与 Rust `mcp_start`
+ * 写入的位置一致；`KOJO_MCP_ENDPOINT_FILE` 仍是最高优先级的夹具 / 定制覆盖。
+ *
+ * - win32：`%APPDATA%`（缺 ⇒ 显式失败，不猜路径、不回落）
+ * - darwin：`~/Library/Application Support`
+ * - linux：`$XDG_DATA_HOME`（须为绝对路径；相对值按 XDG 规范忽略）→ 缺省 `~/.local/share`
+ * - 其它平台：无已知落点 ⇒ 显式失败，要求用 `KOJO_MCP_ENDPOINT_FILE` 指定
+ *
+ * `platform` / `homeDir` 可注入，便于在 Windows 上单测 macOS / Linux 分支（零外部依赖）。
+ */
+export function resolveEndpointFile(
+  env = process.env,
+  platform = process.platform,
+  homeDir = () => os.homedir(),
+) {
   const override = env.KOJO_MCP_ENDPOINT_FILE;
   if (typeof override === 'string' && override.trim() !== '') return path.resolve(override);
-  const appData = env.APPDATA;
-  if (typeof appData !== 'string' || appData.trim() === '') {
+
+  if (platform === 'win32') {
+    const appData = env.APPDATA;
+    if (typeof appData !== 'string' || appData.trim() === '') {
+      throw new ShimError(
+        '找不到 %APPDATA%：无法确定 MCP 端点文件位置。请在 Windows 桌面壳中运行，或用 KOJO_MCP_ENDPOINT_FILE 显式指定端点文件。',
+        2,
+      );
+    }
+    return path.join(appData, ENDPOINT_REL);
+  }
+
+  let base;
+  if (platform === 'darwin') {
+    base = path.join('Library', 'Application Support');
+  } else if (platform === 'linux') {
+    const xdg = env.XDG_DATA_HOME;
+    if (typeof xdg === 'string' && xdg.trim() !== '' && path.isAbsolute(xdg)) {
+      return path.join(xdg, ENDPOINT_REL);
+    }
+    base = path.join('.local', 'share');
+  } else {
     throw new ShimError(
-      '找不到 %APPDATA%：无法确定 MCP 端点文件位置。请在 Windows 桌面壳中运行，或用 KOJO_MCP_ENDPOINT_FILE 显式指定端点文件。',
+      `平台 ${platform} 没有已知的 app_data_dir() 落点：请用 KOJO_MCP_ENDPOINT_FILE 显式指定端点文件，或用 KOJO_MCP_ENDPOINT + KOJO_MCP_TOKEN 成对覆盖。`,
       2,
     );
   }
-  return path.join(appData, ENDPOINT_REL);
+
+  const home = typeof homeDir === 'function' ? homeDir() : homeDir;
+  if (typeof home !== 'string' || home.trim() === '') {
+    throw new ShimError(
+      '无法确定用户主目录：请用 KOJO_MCP_ENDPOINT_FILE 显式指定端点文件，或用 KOJO_MCP_ENDPOINT + KOJO_MCP_TOKEN 成对覆盖。',
+      2,
+    );
+  }
+  return path.join(home, base, ENDPOINT_REL);
 }
 
 /**
@@ -285,9 +330,22 @@ export function responseFrames(res) {
     }
   }
   const frames = [];
+  // SSE 的 `event:` / `id:` / `retry:` / `:` 注释行是**传输元数据，不是 JSON-RPC 帧**。
+  // 真 Rust 端点发的是 `event: message\ndata: {...}\n\n`：旧实现把 `event: message`
+  // 原样写进 stdout，每个请求污染一行非 JSON 文本（真壳端到端取证才暴露出来，
+  // 早期 mock 只发 data: 行所以协议对拍抓不到）。SSE 通道只认 data: 行。
+  const isSse = /text\/event-stream/i.test(res.contentType ?? '');
   for (const raw of body.split(/\r?\n/)) {
     const t = raw.trim();
     if (t === '') continue;
+    if (isSse) {
+      if (!t.startsWith('data:')) continue;
+      const frame = t.slice(5).trim();
+      if (frame === '' || frame === '[DONE]') continue;
+      frames.push(frame);
+      continue;
+    }
+    // 非 SSE（含 NDJSON 逐行帧）保持原有转发口径，不回退。
     const frame = t.startsWith('data:') ? t.slice(5).trim() : t;
     if (frame === '' || frame === '[DONE]') continue;
     frames.push(frame);

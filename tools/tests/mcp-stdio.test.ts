@@ -51,6 +51,30 @@ describe('kojo-mcp · 纯函数', () => {
     expect(() => resolveEndpointFile({})).toThrow(ShimError);
   });
 
+  it('resolveEndpointFile 按平台自动定位 Tauri app_data_dir（macOS / Linux / 未知平台）', () => {
+    const rel = path.join('dev.kojo.editor', 'mcp-endpoint.json');
+    const mac = resolveEndpointFile({}, 'darwin', '/Users/x');
+    expect(mac).toBe(path.join('/Users/x', 'Library', 'Application Support', rel));
+    expect(resolveEndpointFile({}, 'linux', '/home/x')).toBe(path.join('/home/x', '.local', 'share', rel));
+    expect(resolveEndpointFile({ XDG_DATA_HOME: '/xdg/data' }, 'linux', '/home/x')).toBe(
+      path.join('/xdg/data', rel),
+    );
+    expect(resolveEndpointFile({ XDG_DATA_HOME: 'relative/data' }, 'linux', '/home/x')).toBe(
+      path.join('/home/x', '.local', 'share', rel),
+    );
+    // 覆盖优先级最高：即便在别的平台也不读默认落点。
+    expect(resolveEndpointFile({ KOJO_MCP_ENDPOINT_FILE: 'D:/tmp/e.json' }, 'darwin', '/Users/x')).toBe(
+      path.resolve('D:/tmp/e.json'),
+    );
+    // 未知平台 / 主目录缺失 / Windows 缺 APPDATA：一律显式失败，绝不猜路径。
+    expect(() => resolveEndpointFile({}, 'freebsd', '/home/x')).toThrow(ShimError);
+    expect(() => resolveEndpointFile({}, 'darwin', '')).toThrow(ShimError);
+    expect(() => resolveEndpointFile({}, 'win32', '/unused')).toThrow(ShimError);
+    expect(resolveEndpointFile({ APPDATA: 'C:/Users/x/AppData/Roaming' }, 'win32', '/unused')).toBe(
+      path.join('C:/Users/x/AppData/Roaming', rel),
+    );
+  });
+
   it('parseEndpoint 只认合法 {port,token}，缺项/非法值判红（不回落默认值）', () => {
     expect(parseEndpoint(readOk(), 'e.json')).toEqual({
       port: 54321,
@@ -103,6 +127,22 @@ describe('kojo-mcp · 纯函数', () => {
       }),
     ).toEqual(['{"id":1}', '{"id":2}']);
     expect(responseFrames({ status: 202, contentType: '', body: '' })).toEqual([]);
+  });
+
+  it('responseFrames：SSE 元数据行不进 stdout（真端点 event: message 回归护栏）', () => {
+    // 真 Rust 端点形态：event: message\ndata: {...}\n\n；旧实现会把 event: 行当帧转发，
+    // 每个请求污染一行非 JSON 文本，严格 stdio 客户端解析失败。
+    expect(
+      responseFrames({
+        status: 200,
+        contentType: 'text/event-stream; charset=utf-8',
+        body: 'event: message\nid: 7\nretry: 1000\n: keepalive\ndata: {"jsonrpc":"2.0","id":7,"result":{}}\n\ndata: [DONE]\n',
+      }),
+    ).toEqual(['{"jsonrpc":"2.0","id":7,"result":{}}']);
+    // 非 SSE 的 NDJSON 逐行转发口径不回退。
+    expect(
+      responseFrames({ status: 200, contentType: 'application/x-ndjson', body: '{"id":1}\n{"id":2}\n' }),
+    ).toEqual(['{"id":1}', '{"id":2}']);
   });
 });
 

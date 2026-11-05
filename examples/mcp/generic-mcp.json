@@ -11,6 +11,6 @@
     "在 kojo-editor 仓库根目录启动客户端以解析相对路径 tools/kojo-mcp.mjs；勿写死本机绝对路径。",
     "前置：编辑器「设置 › AI 接入」开启 MCP 服务，详见 docs/mcp/README.md。",
     "token 绝不写入本文件：shim 运行时从发现文件 %APPDATA%/dev.kojo.editor/mcp-endpoint.json 读取。",
-    "macOS / Linux：按需在 env 注入 KOJO_MCP_ENDPOINT_FILE（绝对路径占位，不含密钥）。"
+    "macOS / Linux：shim 按平台自动定位发现文件；仅定制落点或未知平台才在 env 注入 KOJO_MCP_ENDPOINT_FILE（绝对路径占位，不含密钥）。"
   ]
 }

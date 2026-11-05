@@ -2,6 +2,16 @@
 /**
  * kojo-mcp-headless —— 无 GUI 的 **stdio MCP server 原型**（P5 / 路 B 第二波）。
  *
+ * 注意：本文件是 2026-11-04 的**早期原型，不是生产接入链路**，别配给外部 AI 客户端：
+ * - 正式入口是 `tools/kojo-mcp.mjs`（stdio shim → 编辑器内 Rust HTTP 端点），
+ *   `examples/mcp/*` 三份客户端样例全部指向它，没有任何一份指向本文件；
+ * - 本原型自报 `PROTOCOL_VERSION='2024-11-05'`，与主链路 ADR-0013 冻结的 MCP
+ *   2026-07-28 不同；也不共享第四张授权表、Bearer / Origin 三道闸，拿不到 WebView
+ *   内的语义真源。两者能力面只是「形状对齐」，不是同一套协议与授权模型；
+ * - `--allow-write` 的写侧是原型能力，不属于 ADR-0013 的授权模型，生产禁用；
+ * - 保留本文件只为无 GUI 只读批处理原型与既有测试，是否演进见 ADR-0013「后续演进」，
+ *   正式使用与排障一律看 `docs/mcp/README.md`。
+ *
  * 定位（ADR-0003 边界）：这个脚本只由**外部 AI 客户端 spawn**、走 stdio JSON-RPC，
  * 不打包 Node 运行时、不拉起 WebView / Monaco / Tauri / Rust 命令面。它只跑
  * **kernel IO + 语言/校验层**：命令清单、项目信息、文件树、全工程检索、诊断、当前文档、读文件。

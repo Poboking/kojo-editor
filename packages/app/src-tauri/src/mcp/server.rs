@@ -1036,6 +1036,48 @@ fn handle_webview(
     }
 }
 
+/// WebView 注册表（冻结契约 v1）把三个 list 方法返回成**裸数组**、tools/call 返回
+/// **裸结果对象**；Rust 是线协议层（ADR-0013），在这里补成 MCP 2026-07-28 规范形状。
+///
+/// 必须在 `filter_tools_list` **之前**调用：后者只认 `result["tools"]`，裸数组会让
+/// tier / approvedTools 的二次过滤整条被跳过——真壳端到端取证发现的静默失效。
+/// `resources/read` / `prompts/get` 的 registry 已回 `{contents}` / `{messages}`，不动。
+pub(crate) fn normalize_webview_result(method: WebMethod, result: &mut Value) {
+    match method {
+        WebMethod::ToolsList | WebMethod::ResourcesList | WebMethod::PromptsList => {
+            if !result.is_array() {
+                return; // 已是对象形状（或异常形态）：不编造、不静默改写
+            }
+            let key = match method {
+                WebMethod::ToolsList => "tools",
+                WebMethod::ResourcesList => "resources",
+                _ => "prompts",
+            };
+            let mut obj = serde_json::Map::new();
+            obj.insert(key.to_string(), result.take());
+            *result = Value::Object(obj);
+        }
+        WebMethod::ToolsCall => {
+            if result.get("content").is_some() {
+                return;
+            }
+            // 文本 content 取整个结构化结果的 JSON 文本；原字段（含审计用的 path）全部保留。
+            let text = serde_json::to_string(result).unwrap_or_else(|_| "{}".to_string());
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "content".to_string(),
+                    json!([{ "type": "text", "text": text }]),
+                );
+                obj.insert("isError".to_string(), json!(false));
+            } else {
+                *result =
+                    json!({ "content": [{ "type": "text", "text": text }], "isError": false });
+            }
+        }
+        WebMethod::ResourcesRead | WebMethod::PromptsGet => {}
+    }
+}
+
 fn finalize_reply(
     method: WebMethod,
     scope: &McpSessionScope,
@@ -1070,6 +1112,8 @@ fn finalize_reply(
         return Err(McpError::new(codes::RESPONSE_TOO_LARGE, "返回体积超限"));
     }
     let mut result = sanitize_untrusted(&raw);
+    // 线协议形状归一必须早于二次过滤：裸数组会让 filter_tools_list 静默跳过。
+    normalize_webview_result(method, &mut result);
     if method == WebMethod::ToolsList {
         let outcome = filter_tools_list(&result, scope);
         result = outcome.result;

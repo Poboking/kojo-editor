@@ -9,7 +9,7 @@ use super::audit::{self, AuditEntry, AuditOutcome};
 use super::protocol::*;
 use super::scope::{self, SessionGrant};
 use super::server::{self, EndpointFile, HttpHead, Limits, McpBridge, McpShared, RateState};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpStream};
@@ -2405,4 +2405,87 @@ fn e2e_tools_call_ok_via_bridge_with_audit() {
         .collect();
     assert_eq!(ok.len(), 1);
     assert_eq!(ok[0].tool, "read_file");
+}
+
+/* ---------------- 线协议形状归一（真壳端到端取证发现的静默失效） ---------------- */
+
+#[test]
+fn normalize_bare_list_arrays_before_secondary_filtering() {
+    // 真 WebView registry 回的是裸数组；旧线协议直接透传 ⇒ 客户端拿不到 result.tools，
+    // 且 filter_tools_list 因取不到 result["tools"] 整条跳过（纵深安全闸门失效）。
+    let mut tools = json!([
+        { "name": "project.info", "tier": "read" },
+        { "name": "fileTree.remove", "tier": "privileged" }
+    ]);
+    server::normalize_webview_result(WebMethod::ToolsList, &mut tools);
+    assert_eq!(
+        tools
+            .get("tools")
+            .and_then(Value::as_array)
+            .map(|a| a.len()),
+        Some(2)
+    );
+
+    let read_scope = empty_scope(Vec::new());
+    let out = filter_tools_list(&tools, &read_scope);
+    assert!(names_of(&out.result).contains(&"project.info"));
+    assert!(
+        !names_of(&out.result).contains(&"fileTree.remove"),
+        "未批准特权工具必须被二次过滤摘掉"
+    );
+    assert_eq!(out.filtered, vec!["fileTree.remove".to_string()]);
+
+    let mut resources = json!([{ "uri": "kojo://project/snapshot" }]);
+    server::normalize_webview_result(WebMethod::ResourcesList, &mut resources);
+    assert_eq!(
+        resources
+            .get("resources")
+            .and_then(Value::as_array)
+            .map(|a| a.len()),
+        Some(1)
+    );
+
+    let mut prompts = json!([{ "name": "workflow.triage-diagnostics" }]);
+    server::normalize_webview_result(WebMethod::PromptsList, &mut prompts);
+    assert_eq!(
+        prompts
+            .get("prompts")
+            .and_then(Value::as_array)
+            .map(|a| a.len()),
+        Some(1)
+    );
+
+    // 已合规的对象形状不重复包装、不静默改写。
+    let mut already = json!({ "tools": [{ "name": "project.info" }] });
+    server::normalize_webview_result(WebMethod::ToolsList, &mut already);
+    assert_eq!(
+        already
+            .get("tools")
+            .and_then(Value::as_array)
+            .map(|a| a.len()),
+        Some(1)
+    );
+}
+
+#[test]
+fn normalize_tools_call_adds_content_without_losing_audit_fields() {
+    let mut result = json!({ "rootDir": "D:/proj", "path": "ERB/A.ERB" });
+    server::normalize_webview_result(WebMethod::ToolsCall, &mut result);
+    assert_eq!(result.get("isError"), Some(&json!(false)));
+    let content = result.get("content").and_then(Value::as_array).unwrap();
+    assert_eq!(content[0]["type"], json!("text"));
+    assert!(content[0]["text"].as_str().unwrap().contains("rootDir"));
+    // finalize_reply 的审计靠 result["path"] 记落盘点，包装不能吃掉它。
+    assert_eq!(
+        result.get("path").and_then(Value::as_str),
+        Some("ERB/A.ERB")
+    );
+    assert_eq!(
+        result.get("rootDir").and_then(Value::as_str),
+        Some("D:/proj")
+    );
+
+    let mut already = json!({ "content": [{ "type": "text", "text": "ok" }] });
+    server::normalize_webview_result(WebMethod::ToolsCall, &mut already);
+    assert!(already.get("isError").is_none(), "已合规形状不该重复包装");
 }
