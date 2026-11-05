@@ -1201,6 +1201,33 @@ export function createSkeletonPrompts(fragments: readonly McpPromptSlotFragment[
  * 8. 装配 helper
  * ------------------------------------------------------------------ */
 
+/**
+ * 命令面板 id → 面向模型的 `tier`。**一律 `privileged`（fail-closed）**：
+ *
+ * - 命令面板注册的是「面向人的 UI 动作」（写盘 / 另存为 / 原生对话框 / 启动器 /
+ *   编辑器写 / 光标与布局副作用），没有独立数据面；ADR-0013 决策 1 与盘点脚本的
+ *   deferred 归因都把这一类归为「首期不默认暴露」。
+ * - `isDangerousTool` 只认 `launcher_` / `export_file` / `remove_` 等**下划线**形状，
+ *   认不出 `workbench.saveAll` / `launcher.openInstances` 这类点号 id；若沿用
+ *   `commandToTool` 的缺省 `'edit'`，`tier=edit` 会话就能看见并执行这些动作，
+ *   绕过「危险工具默认缺席、逐工具逐会话批准」。
+ * - 因此宿主不替用户判断「哪条 UI 动作安全」，统一归 privileged：不进 `tools/list`，
+ *   `tools/call` 须在 `scope.approvedTools` 里精确命中。命令作者自报的 `tier` 只许收紧、
+ *   不许放宽（与 Rust 侧「annotations 不可信、tier 由宿主裁决」同口径）。
+ * - 零游戏名词：只按 id 形状判据，不认领域语义；`declared` 的收紧分支为将来
+ *   按显式白名单放开个别纯只读动作留扩展点，当前 inferred 已是最高档。
+ *
+ * 本函数供宿主（app 侧生产真源登记）调用；`commandToTool` 的缺省行为保持不变。
+ */
+const TIER_RANK: Readonly<Record<McpTier, number>> = { read: 0, edit: 1, privileged: 2 };
+
+export function classifyCommandTier(id: string, declared?: McpTier): McpTier {
+  const inferred: McpTier = 'privileged';
+  if (isDangerousTool(id)) return inferred; // 冻结危险名单是显式红线，不接受任何放宽
+  if (declared === undefined) return inferred;
+  return TIER_RANK[declared] > TIER_RANK[inferred] ? declared : inferred;
+}
+
 /** 命令 → 工具：name=id、description=description??title、inputSchema=argsSchema??{}、tier 缺省 'edit'；危险名强制 privileged。 */
 export function commandToTool(cmd: McpCommandSource): McpTool {
   const tier: McpTier = isDangerousTool(cmd.id) ? 'privileged' : (cmd.tier ?? 'edit');

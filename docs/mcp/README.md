@@ -122,6 +122,9 @@ node tools/kojo-mcp.mjs
 能力注册表唯一真源 `packages/mcp-host/src/index.ts`（冻结契约 v1）。按 `node tools/mcp-inventory.mjs --print`
 盘点：`tools` 共 **33** 个，按 tier 分组 `read 28 / edit 3 / privileged 2`（详见 §6 授权模型）。
 这些是**规范定义**的计数；`tools/list` 还会按会话 `tier` 与第四张表进一步过滤，危险工具默认缺席。
+另外，生产真源会把命令面板命令投影成同名工具（`commands.list` 读数与工具 `tier` 同源），但它们
+**一律按 `privileged` fail-closed**，默认不出现在 `tools/list`、也不接受 `edit` 会话调用（§6）；
+上面的 33 个具名工具计数不含这部分。
 
 ### 5.1 tools（按 tier，面向模型）
 
@@ -164,12 +167,20 @@ interface McpSessionScope {
 - `listTools(scope)` 按会话 `tier` 过滤：`read` 会话看不到 `edit` / `privileged` 工具。
 - **危险工具默认不可见**：`launcher_*` / `market_*` / `open_url_external` / `export_file` / `remove_*` / `rename_path`
   一律 `privileged`，默认不进 `tools/list`；`annotations` 不可信，须宿主显式授权。
+- **命令面板动作不是模型工具**：`workbench.*` / `layout.*` / `bookmarks.*` / `launcher.*` /
+  `editor.action.*` / `editor.fontZoom*` 是面向人的 UI 动作，没有独立数据面。生产真源用
+  `classifyCommandTier` 把它们一律判 `privileged`，命令自报的 `tier` 只许收紧、不许放宽；
+  必须在 `approvedTools` 里**精确列名**才会出现在 `tools/list`，`tools/call` 同样要精确批准。
+  Rust 端点（`src-tauri/src/mcp/protocol.rs`）按同名前缀做第二道分级，不采信 WebView 回帧的
+  `annotations` / `tier`；`editor.info` / `editor.selfCheck` 等具名只读工具不在前缀内，不受影响。
 - **第四张表独立**：MCP 会话授权只用 `mcp_approvals.json`，**不继承**三张既有写授权表
   （内核 `writablePaths` / Rust `ensure_write_allowed` / launcher `approvals.json`）。
 - `export_file` 是「系统对话框 + 写盘绑在同一 Rust 命令」的唯一法定绕开通道，
   禁止复用 debug-server 自动落 `sandbox/exports` 的应答。
 - 失败一律显式 `{ code, message }`：`NOT_WIRED` / `RESOURCE_UNAVAILABLE` / `INVALID_ARGS` /
-  `OUT_OF_DOMAIN` / `WRITE_DISABLED` 等，绝不吞错、不静默兜底。
+  `PERMISSION_DENIED` / `OUT_OF_DOMAIN` / `WRITE_DISABLED` 等，绝不吞错、不静默兜底。
+  WebView 桥把结构化的 `code` 原样写进 `mcp_respond` 的 error 帧，最终落在 JSON-RPC
+  `error.data.code`，**不再降级成 `mcp/internal`**；普通异常或形状不合法的脏码仍回落到 `mcp/internal`。
 
 ## 7. 三类失败排障（+ token 失效）
 
@@ -192,6 +203,9 @@ interface McpSessionScope {
 - **第四张表不继承三张表**：`mcp_approvals.json` 独立授权，按会话 `clientId` 管理 `approvedRoots` / `approvedTools`。
 - **不给 MCP 暴露任意目标路径参数**：写类只收项目根内相对路径 + `approvedRoots` 复核。
 - **危险工具默认缺席**：`privileged` 工具不进 `tools/list`，`annotations` 不可信。
+- **宿主二次分级**：Rust 端点不采信 WebView 回帧的 `annotations` / `tier`，按工具名形状独立推断
+  所需 tier，在 `tools/list` 与 `tools/call` 各拦一次；即便 WebView 注册表被替换或出错，
+  命令面板命名空间仍按 `privileged` 处理（§6）。
 - **零游戏名词**：`@kojo/mcp-host` 不 import kernel/app/bridge/其它插件；领域知识只经 `mcp.prompt` 槽注入。
 - **shim 零依赖**：只用 Node 内置模块，不新增 npm 依赖、不读写项目文件、不打包 sidecar。
 

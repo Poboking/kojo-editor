@@ -180,6 +180,124 @@ fn privileged_detection_matches_contract() {
     assert!(!is_privileged_tool("read_file"));
 }
 
+/// 命令面板动作（点号命名空间）在宿主侧同样是 privileged：WebView 主闸之外
+/// 的第二道纵深。修复前 `host_required_tier("workbench.saveAll")` 判 Read，
+/// `filter_tools_list` / `check_tool_call_permission` 两道闸都会整条跳过。
+#[test]
+fn command_panel_actions_are_privileged_in_host_gate() {
+    for name in [
+        "workbench.saveAll",
+        "workbench.saveAs",
+        "workbench.openProjectFolder",
+        "workbench.checkUpdates",
+        "launcher.openInstances",
+        "editor.action.formatDocument",
+        "editor.action.replace",
+        "editor.fontZoomIn",
+        "layout.toggleSidebar",
+        "bookmarks.toggle",
+    ] {
+        assert!(is_command_panel_tool(name), "{name}");
+        assert!(is_privileged_tool(name), "{name}");
+        assert_eq!(host_required_tier(name), McpTier::Privileged, "{name}");
+        assert!(
+            check_tool_call_permission(name, &empty_scope(Vec::new())).is_err(),
+            "{name} 未获精确批准却放行了"
+        );
+    }
+    // 冻结契约 v1 的具名工具面（与 `tools/mcp-inventory.mjs --print` 的
+    // coverage.tools.names 对拍）：一个都不能被命令面板前缀误伤。新增具名工具时同步补表。
+    const NAMED_TOOLS: &[&str] = &[
+        "semantic.definitionAt",
+        "semantic.referencesAt",
+        "semantic.diagnostics",
+        "semantic.hoverAt",
+        "semantic.suggestAt",
+        "semantic.documentSymbols",
+        "semantic.tokens",
+        "semantic.codeActionsAt",
+        "project.info",
+        "fs.tree",
+        "search.all",
+        "workspace.searchAll",
+        "problems.quickFix",
+        "problems.diagnostics",
+        "fileTree.create",
+        "fileTree.update",
+        "fileTree.remove",
+        "fileTree.rename",
+        "diff.compare",
+        "state.replay",
+        "preview.document",
+        "commands.list",
+        "document.active",
+        "fs.readFile",
+        "fs.stat",
+        "io.listDir",
+        "io.workspaceRoots",
+        "editor.info",
+        "editor.selfCheck",
+        "lang.foldingRanges",
+        "lang.highlightsAt",
+        "lang.signatureAt",
+        "lang.markers",
+    ];
+    for &name in NAMED_TOOLS {
+        assert!(!is_command_panel_tool(name), "{name} 被误判成命令面板动作");
+        // 只有冻结危险名单里的两个精确名可以是 privileged，其余一律不得被抬级。
+        let dangerous = matches!(name, "fileTree.remove" | "fileTree.rename");
+        assert_eq!(
+            is_privileged_tool(name),
+            dangerous,
+            "{name} 的宿主分级偏离冻结契约"
+        );
+    }
+    // 只读具名工具仍能在 read 会话通过 tools/call 闸门。
+    for name in [
+        "editor.info",
+        "editor.selfCheck",
+        "project.info",
+        "fs.readFile",
+        "semantic.definitionAt",
+        "io.listDir",
+        "lang.markers",
+        "commands.list",
+    ] {
+        assert_eq!(host_required_tier(name), McpTier::Read, "{name}");
+        assert!(
+            check_tool_call_permission(name, &empty_scope(Vec::new())).is_ok(),
+            "{name}"
+        );
+    }
+
+    // tools/list 二次过滤：tier=privileged 也不等于放行，须精确批准。
+    let result = json!({"tools":[
+        {"name":"editor.info"},
+        {"name":"workbench.saveAll"},
+        {"name":"launcher.openInstances"}
+    ]});
+    let denied = filter_tools_list(
+        &result,
+        &McpSessionScope {
+            tier: McpTier::Privileged,
+            ..empty_scope(Vec::new())
+        },
+    );
+    assert_eq!(names_of(&denied.result), vec!["editor.info"]);
+    assert_eq!(denied.filtered.len(), 2);
+
+    let approved = filter_tools_list(
+        &result,
+        &McpSessionScope {
+            tier: McpTier::Privileged,
+            ..empty_scope(vec!["workbench.saveAll".to_string()])
+        },
+    );
+    let names = names_of(&approved.result);
+    assert!(names.contains(&"workbench.saveAll"));
+    assert!(!names.contains(&"launcher.openInstances"));
+}
+
 #[test]
 fn approved_tool_matches_exact_or_prefix() {
     let scope = empty_scope(vec!["export_file".to_string(), "read_*".to_string()]);

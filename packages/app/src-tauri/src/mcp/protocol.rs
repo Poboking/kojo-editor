@@ -976,6 +976,26 @@ pub const PRIVILEGED_EXACT: &[&str] = &[
     "fileTree.rename",
 ];
 
+/// 命令面板动作命名空间（点号形态）：写盘 / 另存为 / 原生对话框 / 启动器 /
+/// 编辑器写 / 光标与布局副作用，全是面向人的 UI 动作，没有独立数据面。
+///
+/// 与 WebView 侧 `@kojo/mcp-host::classifyCommandTier` 同口径，构成**纵深第二道闸**：
+/// 即便 WebView 的注册表被替换或出错，宿主仍按名字形状把这些动作判 privileged，
+/// 不读 WebView 回帧里的 `annotations` / `tier`（不可信输入）。
+/// 前缀刻意收窄到面板命令，`editor.info` / `editor.selfCheck` 等只读具名工具不受影响。
+pub const COMMAND_PANEL_PREFIXES: &[&str] = &[
+    "workbench.",
+    "layout.",
+    "bookmarks.",
+    "launcher.",
+    "editor.action.",
+    "editor.fontZoom",
+];
+
+pub fn is_command_panel_tool(name: &str) -> bool {
+    COMMAND_PANEL_PREFIXES.iter().any(|p| name.starts_with(p))
+}
+
 pub fn is_market_tool(name: &str) -> bool {
     name.starts_with("market_")
 }
@@ -985,6 +1005,7 @@ pub fn is_launcher_tool(name: &str) -> bool {
 pub fn is_privileged_tool(name: &str) -> bool {
     is_market_tool(name)
         || is_launcher_tool(name)
+        || is_command_panel_tool(name)
         || PRIVILEGED_EXACT.contains(&name)
         || name.starts_with("remove_")
 }

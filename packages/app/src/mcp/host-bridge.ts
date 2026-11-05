@@ -167,6 +167,29 @@ function asRecord(v: unknown): Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
 }
 
+/**
+ * 结构化失败（`McpFailure` 及任何 `{code,message}` 形状）**原样保留 code**。
+ *
+ * registry 抛 `NOT_WIRED` / `PERMISSION_DENIED` / `INVALID_ARGS` / `RESOURCE_UNAVAILABLE`
+ * 时，若一律包成 `mcp/internal`，客户端 `error.data.code` 只能看到 internal——
+ * ADR-0013 §6 与铁律 4 要求的「失败显式 {code,message}」在桥这一层被抹掉了。
+ * 这里按形状识别（不静态 import `@kojo/mcp-host`，保住开机图零运行时边），
+ * `code` 过白名单正则才采信：WebView 回帧属不可信输入，脏码 / 控制字符 /
+ * 超长串一律回落 `mcp/internal`，不让它进审计与 JSON-RPC 错误帧。
+ */
+const STRUCTURED_CODE_RE = /^[A-Za-z0-9_][A-Za-z0-9_./-]{0,63}$/;
+
+function bridgeErrorOf(err: unknown): BridgeError {
+  if (err instanceof BridgeError) return err;
+  if (err !== null && typeof err === 'object') {
+    const { code, message } = err as { code?: unknown; message?: unknown };
+    if (typeof code === 'string' && STRUCTURED_CODE_RE.test(code) && typeof message === 'string') {
+      return new BridgeError(code, message);
+    }
+  }
+  return new BridgeError('mcp/internal', String(err));
+}
+
 /** 让「等待注册表结果」这一拍可被 AbortSignal 打断（契约方法本身不收 signal）。 */
 function raceAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -276,7 +299,7 @@ async function handleRequest(event: McpRequestEvent): Promise<void> {
       if (timedOut) await respondError(id, 'mcp/timeout', `MCP 请求超时（${timeoutMs}ms）`);
       return;
     }
-    const e = err instanceof BridgeError ? err : new BridgeError('mcp/internal', String(err));
+    const e = bridgeErrorOf(err);
     await respondError(id, e.code, e.message);
   } finally {
     clearTimeout(timer);

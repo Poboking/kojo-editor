@@ -29,7 +29,7 @@
  * - promptSlots 只从 `mcp.prompt` 槽收集 adapter 贡献（骨架绝不硬编码领域知识）；
  *   无贡献 ⇒ 显式空数组（骨架并入的开关按契约保留）。
  */
-import { McpFailure, collectPromptSlotFragments } from '@kojo/mcp-host';
+import { McpFailure, classifyCommandTier, collectPromptSlotFragments } from '@kojo/mcp-host';
 import type {
   McpHostDeps,
   McpPromptSlotContributionLike,
@@ -1169,6 +1169,20 @@ function buildReadResourceData(
 }
 
 /**
+ * 生产登记前给命令面板动作落 MCP 分级（P0 安全收口）。
+ *
+ * `buildCommandRegistry` 的 61 条命令是面向人的 UI 动作；原样投影进 `McpHostDeps.commands`
+ * 会被 `commandToTool` 按缺省 `'edit'` 暴露给 edit 会话并**带真实 EditorCommandContext 执行**
+ * （写盘 / 另存为 / 原生对话框 / 启动器 / 编辑器写全在后门里）。这里只补 `tier` 字段，
+ * 由 `@kojo/mcp-host` 的 `classifyCommandTier` 统一裁决为 privileged（fail-closed）；
+ * 其余字段与 `run` 原样透传，源数组零副作用。`commands.list` / `kojo://project/commands`
+ * 读数也走同一份分级，避免出现「读数说 read、工具说 privileged」两副面孔。
+ */
+export function projectCommandsForMcp(commands: readonly CommandEntry[]): CommandEntry[] {
+  return commands.map((c) => ({ ...c, tier: classifyCommandTier(c.id, c.tier) }));
+}
+
+/**
  * 组装生产真源 `McpWiringSources`（不登记——登记走 `installRealMcpSources`）。
  * 全部真源给到才接；这里组装出的每一腿都指向生产真源，接不到的运行期状态
  * 由腿自身显式抛 `NOT_WIRED` / `RESOURCE_UNAVAILABLE`。
@@ -1181,9 +1195,12 @@ export async function buildRealMcpSources(
   const kernel = (host.getKernel() ?? null) as unknown as McpKernelLike | null;
   bindEventRing(kernel);
 
+  // 命令读数与工具分级同源：同一份 fail-closed 投影，读到的 tier 就是工具的 tier。
+  const mcpCommands = (): CommandEntry[] => projectCommandsForMcp(host.getCommands());
+
   const ioDeps: McpIoDeps = {
     getKernel: () => kernel,
-    getCommands: host.getCommands,
+    getCommands: mcpCommands,
     invoke: injection?.invoke ?? (await import('../bridge/invoke')).invoke,
     searchInFiles:
       injection?.searchInFiles ??
@@ -1202,7 +1219,7 @@ export async function buildRealMcpSources(
   const ioSupplemental = createRunSupplemental(ioDeps);
 
   return {
-    commands: host.getCommands(),
+    commands: mcpCommands(),
     commandContext: host.getCommandContext(),
     semantic: buildSemanticReaders(semanticDeps),
     kernelIo: createKernelIo(ioDeps),

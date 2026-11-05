@@ -291,6 +291,79 @@ describe('host-bridge：默认工厂 / 六种分派 / 取消超时体积', () =>
     off();
   });
 
+  it.each([
+    ['NOT_WIRED', '能力未接线'],
+    ['PERMISSION_DENIED', '特权工具未批准'],
+    ['INVALID_ARGS', '入参不合法'],
+    ['RESOURCE_UNAVAILABLE', '资源不可用'],
+  ] as const)(
+    '⑤b registry 结构化失败 %s ⇒ error.code 原样透传（不降级成 mcp/internal）',
+    async (code, message) => {
+      const { registry } = makeRegistry({
+        callTool: () => {
+          throw Object.assign(new Error(message), { code });
+        },
+      });
+      const hz = createHarness();
+      const off = registerMcpHostBridge({
+        transport: hz.transport,
+        registryFactory: () => registry,
+        ...BASE_OPTIONS,
+      });
+      await hz.ready;
+      hz.emit(evt('structured', 'tools/call', { name: 'x' }));
+      await hz.waitFor(1);
+      expect(hz.frames[0]!.ok).toBe(false);
+      expect(hz.frames[0]!.error?.code).toBe(code);
+      expect(hz.frames[0]!.error?.message).toBe(message);
+      off();
+    },
+  );
+
+  it('⑤b resources/read 的结构化失败同样原样透传（六种分派共用一条 catch）', async () => {
+    const { registry } = makeRegistry({
+      readResource: () => {
+        throw Object.assign(new Error('数据源缺席'), { code: 'RESOURCE_UNAVAILABLE' });
+      },
+    });
+    const hz = createHarness();
+    const off = registerMcpHostBridge({
+      transport: hz.transport,
+      registryFactory: () => registry,
+      ...BASE_OPTIONS,
+    });
+    await hz.ready;
+    hz.emit(evt('structured-r', 'resources/read', { uri: 'kojo://project/snapshot' }));
+    await hz.waitFor(1);
+    expect(hz.frames[0]!.error?.code).toBe('RESOURCE_UNAVAILABLE');
+    off();
+  });
+
+  it('⑤b 普通 Error / 不可信 code 形状 ⇒ 回落 mcp/internal（脏码不进审计）', async () => {
+    const { registry } = makeRegistry({
+      callTool: (name: string) => {
+        throw Object.assign(new Error(name === 'dirty' ? 'dirty' : 'plain'), {
+          ...(name === 'dirty' ? { code: 'BAD CODE\n注入' } : {}),
+        });
+      },
+    });
+    const hz = createHarness();
+    const off = registerMcpHostBridge({
+      transport: hz.transport,
+      registryFactory: () => registry,
+      ...BASE_OPTIONS,
+    });
+    await hz.ready;
+    hz.emit(evt('plain', 'tools/call', { name: 'plain' }));
+    hz.emit(evt('dirty', 'tools/call', { name: 'dirty' }));
+    await hz.waitFor(2);
+    const byId = new Map(hz.frames.map((f) => [f.id, f]));
+    expect(byId.get('plain')!.error?.code).toBe('mcp/internal');
+    expect(byId.get('dirty')!.error?.code).toBe('mcp/internal');
+    expect(byId.get('dirty')!.error?.message).not.toContain('BAD CODE');
+    off();
+  });
+
   it('⑤ 超时 ⇒ 显式 mcp/timeout error 帧（不静默、不挂死）', async () => {
     const { registry } = makeRegistry({
       listTools: () => new Promise<never>(() => {}),
