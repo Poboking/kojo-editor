@@ -106,9 +106,9 @@ node tools/debug-cli.mjs stop
 | `serve` | 拉调试宿 + vite + 浏览器 | `--headless`（无窗）/ `--no-browser` / `--record`（console 落盘）/ `--fresh`（清沙盒）/ `--sandbox/--readonly/--port/--vite-port/--cdp-port/--browser` |
 | `shell` | 拉真壳（tauri dev）带 CDP | `--isolate`（多壳并发换身份）/ `--no-debug-api`（pristine boot，验启动相位本身） |
 | `status` / `stop` / `url` | 会话健康 / 收会话 / 完整编辑器 URL | `status` 首行是会话标识（核对是不是自己的树）；打印的 URL 里 token 已脱敏，取完整值用 `url` |
-| `open-project <目录> [--writable] [--timeout <ms>]` | 真实点击链路开项目 | 不是工程根 ⇒ **当场 exit 1** 并给应用原文；`--timeout` 只改第 4 步预算（默认 60000，夹 [3000,300000]）；`--writable` 只对 web 模式有效 |
+| `open-project <目录> [--writable] [--timeout <ms>]` | 真实点击链路开项目 | 不是工程根 ⇒ **当场 exit 1** 并给应用原文；判死前以 state 复拍（`opening`＝`.welcome-open[disabled]`、`projectOpened`＝`state().project` 任一为真就继续等），慢盘不再假 FAIL；`--timeout` 只改第 4 步预算（默认 60000，夹 [3000,300000]）；`--writable` 只对 web 模式有效 |
 | `close-project` | 关项目回欢迎相位 | 已在欢迎页幂等直过；等 `phase==='welcome'` 20s，有未保存改动会卡住 |
-| `open-file <路径片段>` | 点文件树开文件 | 结束条件＝`editor.info().path` 含该片段（10s）；片段别给会命中多份的短串 |
+| `open-file <路径片段>` | 点文件树开文件（树是虚拟化、点到头未命中时自动走 `workbench.quickOpen` 全量清单兑底，同一条 onOpenFile 腿） | 结束条件＝`editor.info().path` 含该片段（10s）；片段别给会命中多份的短串；两条入口都不命中时 exit 1 且带两腿读数 |
 | `commands [过滤]` / `run <id> [--settle ms]` | 列命令 / 跑命令 | 命令面板注册表＝所有功能的入口；`--settle` 缺省 300ms |
 | `wait "<js>" [--timeout ms]` / `assert "<js>"` | 等条件 / 一次断言 | `wait` 每 200ms 求值，缺省 30s；`assert` 一次求值，falsy ⇒ exit 1 并把结果打成 JSON |
 | `state` / `dom` / `events [n]` | 一屏读数 / DOM 快照 / 事件旁听 | 全 JSON，可直接断言 |
