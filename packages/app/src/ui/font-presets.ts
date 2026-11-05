@@ -20,12 +20,22 @@ import { CODE_FONT_STACK, isUsableCodeFontStack } from './code-font';
 
 export interface FontPreset {
   readonly id: string;
-  /** 作者面叫法（设置页 radio 文案） */
+  /** 作者面叫法（设置页卡片标题） */
   readonly label: string;
   /** 完整 CSS 栈；`custom` 档恒为空串（真值在偏好里） */
   readonly stack: string;
-  /** 一句话理由（设置页 hint 文案） */
+  /** 一句话理由（设置页卡片说明 / 悬停 title） */
   readonly note: string;
+  /** 主打字体家族名（卡片副标题、搜索索引、"缺装时该装哪张"用） */
+  readonly family: string;
+  /**
+   * 开源许可证短名（`OFL 1.1` / `Apache 2.0` / `MIT` / `UFL 1.0` / `开源`）。
+   * 系统自带档、跟随档与自定义档恒为空串——不把闭源系统字体假装成开源。
+   * 卡片只展示主打面的许可证；栈尾的 Consolas / 雅黑 / SimHei 是系统兜底，不参与这一格。
+   */
+  readonly license: string;
+  /** 卡片筛选标签；chip 全集由两张表的 `tags` 现算，不另抄一张分类表 */
+  readonly tags: readonly string[];
 }
 
 /** 代码档自定义的登记 id（`custom` = 吃 `fontFamily` 那条自由文本，语义与旧版逐字相同） */
@@ -44,65 +54,233 @@ export const UI_FONT_SYSTEM_STACK =
 export const UI_FONT_CSS_TOKEN = '--font-ui';
 export const UI_FONT_CSS_LINE = `${UI_FONT_CSS_TOKEN}: ${UI_FONT_SYSTEM_STACK};`;
 
-/** 代码字体档位（含自定义共六档） */
+/**
+ * 代码字体档位（含自定义共二十档）。
+ *
+ * 2026-11-05 开源字体扩展批：新增 14 张**有据可查的开源面**（主打面许可证写在 `license`），
+ * 与既有 5 档一起构成可选面。三条硬口径一条没松：拉丁头 → CJK 尾 → 末位 `monospace`，
+ * 栈尾的 Consolas / 雅黑 / SimHei 只是系统兜底，不参与"这一档是不是开源"的判断。
+ *
+ * 口径说明（避免误会）：本仓**不打包字体文件**，档位只是 CSS 家族名清单——装着就生效，
+ * 没装自动落到栈后面那张面，设置页的可用性徽章会把这件事逐张标出来。开源许可证是给作者
+ * 的"可以放心自行安装"凭据，不是"应用内自带"的承诺。
+ */
 export const CODE_FONT_PRESETS: readonly FontPreset[] = [
   {
     id: 'default',
     label: '均衡（内置）',
     stack: CODE_FONT_STACK,
     note: 'Cascadia 系打头、Era Mono SC 收尾的现缺省栈，缺哪张跳哪张',
+    family: 'Cascadia Code',
+    license: '',
+    tags: ['内置', '等宽', '中文'],
   },
   {
     id: 'sarasa',
     label: '更纱黑体等宽',
     stack: "'Cascadia Code', 'Cascadia Mono', Consolas, 'Sarasa Term SC', 'Microsoft YaHei', SimHei, monospace",
     note: 'Cascadia + Sarasa Term SC：更纱严格 2:1 全角，网格最稳',
+    family: 'Sarasa Term SC',
+    license: 'OFL 1.1',
+    tags: ['中文', '等宽'],
   },
   {
     id: 'jbmono-noto',
     label: 'JetBrains + 思源等宽',
     stack: "'JetBrains Mono', Consolas, 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
     note: 'JetBrains Mono 打头、Noto Sans Mono CJK SC 收尾（两张都免安装费）',
+    family: 'JetBrains Mono',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '等宽', '中文'],
   },
   {
     id: 'lxgw',
     label: '霞鹜等宽',
     stack: "'Cascadia Mono', Consolas, 'LXGW Console Mono', 'LXGW WenKai Mono', 'Microsoft YaHei', SimHei, monospace",
     note: '拉丁头喂 Cascadia/Consolas，霞鹜两名单收（Console Mono / WenKai Mono 都认）管汉字，口上作者常装',
+    family: 'LXGW Console Mono',
+    license: 'OFL 1.1',
+    tags: ['中文', '等宽'],
   },
   {
     id: 'system',
     label: '系统零安装',
     stack: "Consolas, 'Microsoft YaHei UI', 'Microsoft YaHei', SimHei, monospace",
     note: 'Consolas + 雅黑 + SimHei：Windows 必装组合，一台新机器也不缺字',
+    family: 'Consolas',
+    license: '',
+    tags: ['系统', '等宽'],
+  },
+  {
+    id: 'fira-noto',
+    label: 'Fira Code',
+    stack: "'Fira Code', Consolas, 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: 'Mozilla 系的 Fira Code：字宽偏松、零与 O 区分最狠；连字恒关时看的就是它的字形骨架',
+    family: 'Fira Code',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'source-code-sarasa',
+    label: 'Source Code Pro',
+    stack: "'Source Code Pro', Consolas, 'Sarasa Mono SC', 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: 'Adobe 的 Source Code Pro 配更纱黑体 Mono：字面偏大，高分屏小字号也不糊',
+    family: 'Source Code Pro',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'ibmplex-noto',
+    label: 'IBM Plex Mono',
+    stack: "'IBM Plex Mono', Consolas, 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: 'IBM Plex Mono：带一点人文味的工业等宽，斜体与正文同族，注释读感好',
+    family: 'IBM Plex Mono',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'hack-noto',
+    label: 'Hack',
+    stack: "'Hack', Consolas, 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: 'Hack（DejaVu 血统）：字形偏方正、标点开口大，密集 ERB 指令里不易看串行',
+    family: 'Hack',
+    license: 'MIT',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'iosevka-sarasa',
+    label: 'Iosevka',
+    stack: "'Iosevka Term', 'Iosevka', Consolas, 'Sarasa Term SC', 'Noto Sans Mono CJK SC', SimHei, monospace",
+    note: 'Iosevka：可自定字宽的超窄等宽，一屏塞得下更多列；中文交给更纱 Term',
+    family: 'Iosevka Term',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'inconsolata-noto',
+    label: 'Inconsolata',
+    stack: "'Inconsolata', Consolas, 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: 'Inconsolata：人文等宽，圆润的括号与引号在台词串里最不刺眼',
+    family: 'Inconsolata',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'roboto-mono-noto',
+    label: 'Roboto Mono',
+    stack: "'Roboto Mono', Consolas, 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: 'Roboto Mono：与 Android / Material 同一套字面， numerals 等宽且非常好认',
+    family: 'Roboto Mono',
+    license: 'Apache 2.0',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'ubuntu-mono-noto',
+    label: 'Ubuntu Mono',
+    stack: "'Ubuntu Mono', Consolas, 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: 'Ubuntu Mono：Ubuntu 字体家族的等宽面，笔画带轻微手写味',
+    family: 'Ubuntu Mono',
+    license: 'UFL 1.0',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'dejavu-noto',
+    label: 'DejaVu Sans Mono',
+    stack: "'DejaVu Sans Mono', Consolas, 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: 'DejaVu Sans Mono：Linux 桌面常年自带，覆盖符号最全的一张老牌等宽',
+    family: 'DejaVu Sans Mono',
+    license: '开源',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'victor-mono-sarasa',
+    label: 'Victor Mono',
+    stack: "'Victor Mono', Consolas, 'Sarasa Mono SC', 'Noto Sans Mono CJK SC', SimHei, monospace",
+    note: 'Victor Mono：半斜体的意大利体独一份，写惯了斜体注释的人一眼就认得',
+    family: 'Victor Mono',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'space-mono-noto',
+    label: 'Space Mono',
+    stack: "'Space Mono', Consolas, 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: 'Space Mono：Google Fonts 上的复古终端面，转角夸张、辨识度极高',
+    family: 'Space Mono',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '等宽', '中文'],
+  },
+  {
+    id: 'lxgw-wenkai-mono',
+    label: '霞鹜文楷等宽',
+    stack: "'LXGW WenKai Mono', 'LXGW WenKai', 'Noto Sans Mono CJK SC', 'Microsoft YaHei', SimHei, monospace",
+    note: '纯中文档：楷体字面配等宽网格，长台词读起来像排版过的书页',
+    family: 'LXGW WenKai Mono',
+    license: 'OFL 1.1',
+    tags: ['中文', '等宽', '楷体'],
+  },
+  {
+    id: 'noto-mono-cjk',
+    label: '思源等宽',
+    stack: "'Noto Sans Mono CJK SC', 'Source Han Mono SC', 'Sarasa Mono SC', SimHei, monospace",
+    note: '纯中文档：Adobe/Google 的思源等宽（Noto Sans Mono CJK / Source Han Mono 两名都认）',
+    family: 'Noto Sans Mono CJK SC',
+    license: 'OFL 1.1',
+    tags: ['中文', '等宽'],
+  },
+  {
+    id: 'sarasa-fixed',
+    label: '更纱黑体 Fixed',
+    stack: "'Sarasa Fixed SC', 'Sarasa Mono SC', 'Sarasa Term SC', 'Noto Sans Mono CJK SC', SimHei, monospace",
+    note: '纯中文档：更纱黑体的 Fixed / Mono / Term 三张面全认，2:1 全角最严的那一家',
+    family: 'Sarasa Fixed SC',
+    license: 'OFL 1.1',
+    tags: ['中文', '等宽'],
   },
   {
     id: CUSTOM_CODE_FONT_PRESET_ID,
     label: '自定义',
     stack: '',
     note: '手打字体名（旧口径原样保留，非空时说了算）',
+    family: '',
+    license: '',
+    tags: ['自定义'],
   },
 ];
 
-/** 界面字体档位（含自定义共五档） */
+/**
+ * 界面字体档位（含自定义共十七档）。
+ * 与代码档同一条口径：`license` 只写主打面的许可证，栈尾雅黑 / Segoe 是系统兜底；
+ * 除 `mono` 档（吃代码栈，末位 `monospace`）外一律以 `sans-serif` 收尾——
+ * `font-presets.test.ts` 的末位泛型闸一条没松。
+ */
 export const UI_FONT_PRESETS: readonly FontPreset[] = [
   {
     id: 'system',
     label: '系统（现状）',
     stack: UI_FONT_SYSTEM_STACK,
     note: 'Segoe UI + 雅黑 UI：本来的样子，选它 = 一位都不覆写',
+    family: 'Segoe UI',
+    license: '',
+    tags: ['系统'],
   },
   {
     id: 'source-han',
     label: '思源黑体',
     stack: "'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei UI', sans-serif",
     note: 'Noto Sans SC / 思源黑体优先，中文界面字重更整',
+    family: 'Noto Sans SC',
+    license: 'OFL 1.1',
+    tags: ['中文', '黑体'],
   },
   {
     id: 'pingfang',
     label: '苹方',
     stack: "'PingFang SC', 'Segoe UI', 'Microsoft YaHei UI', sans-serif",
     note: 'PingFang SC 打头（Mac 味），Windows 上自动落到 Segoe/雅黑',
+    family: 'PingFang SC',
+    license: '',
+    tags: ['系统'],
   },
   {
     id: 'mono',
@@ -110,17 +288,153 @@ export const UI_FONT_PRESETS: readonly FontPreset[] = [
     // 表内值是缺省代码栈的代表；生效时 `resolveUiFontStack` 现取所选代码栈
     stack: CODE_FONT_STACK,
     note: '界面文字跟随所选代码字体，全等宽控选这档',
+    family: '',
+    license: '',
+    tags: ['随代码', '等宽'],
+  },
+  {
+    id: 'noto-sans',
+    label: 'Noto Sans + 思源黑体',
+    stack: "'Noto Sans', 'Noto Sans SC', 'Source Han Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: '拉丁与中文同族：Noto Sans 配 Noto Sans SC，整套界面的字重与字宽最齐',
+    family: 'Noto Sans',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '中文', '黑体'],
+  },
+  {
+    id: 'sarasa-gothic',
+    label: '更纱黑体',
+    stack: "'Sarasa Gothic SC', 'Sarasa UI SC', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: '更纱黑体的界面面（Gothic / UI）：与等宽档同一套字面，编辑器与外壳能对上',
+    family: 'Sarasa Gothic SC',
+    license: 'OFL 1.1',
+    tags: ['中文', '黑体', '等宽'],
+  },
+  {
+    id: 'lxgw-wenkai-ui',
+    label: '霞鹜文楷',
+    stack: "'LXGW WenKai', 'LXGW WenKai Screen', 'LXGW WenKai Mono', 'Microsoft YaHei UI', sans-serif",
+    note: '楷体书卷气最足的一档；Screen 版为小字号屏显优化过',
+    family: 'LXGW WenKai',
+    license: 'OFL 1.1',
+    tags: ['中文', '楷体'],
+  },
+  {
+    id: 'source-han-serif',
+    label: '思源宋体',
+    stack: "'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', SimSun, 'Microsoft YaHei UI', sans-serif",
+    note: '衬线档：Noto Serif SC / 思源宋体，长段说明文字的横细竖粗更好读',
+    family: 'Noto Serif SC',
+    license: 'OFL 1.1',
+    tags: ['中文', '衬线'],
+  },
+  {
+    id: 'wqy-microhei',
+    label: '文泉驿微米黑',
+    stack: "'WenQuanYi Micro Hei', 'WenQuanYi Zen Hei', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: 'Linux 中文桌面的老牌开源黑体，字重轻、小字号不糊',
+    family: 'WenQuanYi Micro Hei',
+    license: '开源',
+    tags: ['中文', '黑体'],
+  },
+  {
+    id: 'glow-sans',
+    label: '未来荧黑',
+    stack: "'Glow Sans SC', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: '未来荧黑（Glow Sans）：几何味更重的现代黑体，标题与卡片名很有辨识度',
+    family: 'Glow Sans SC',
+    license: 'OFL 1.1',
+    tags: ['中文', '黑体'],
+  },
+  {
+    id: 'smiley-sans',
+    label: '得意黑',
+    stack: "'Smiley Sans', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: '得意黑：斜切笔画的开源标题体，做界面大标题很出挑（正文仍落到思源黑体）',
+    family: 'Smiley Sans',
+    license: 'OFL 1.1',
+    tags: ['中文', '标题'],
+  },
+  {
+    id: 'inter-noto',
+    label: 'Inter + 思源黑体',
+    stack: "'Inter', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: 'Inter 是专为 UI 屏显设计的拉丁面，数字与大写标签最清楚',
+    family: 'Inter',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '中文', '黑体'],
+  },
+  {
+    id: 'ibmplex-sans-noto',
+    label: 'IBM Plex Sans',
+    stack: "'IBM Plex Sans', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: 'IBM Plex Sans：与 Plex Mono 同族，编辑器和外壳想要一套气质时选它',
+    family: 'IBM Plex Sans',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '中文', '黑体'],
+  },
+  {
+    id: 'roboto-noto',
+    label: 'Roboto + 思源黑体',
+    stack: "'Roboto', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: 'Roboto：Android 的老牌界面面，中性、紧凑、久看不累',
+    family: 'Roboto',
+    license: 'Apache 2.0',
+    tags: ['拉丁', '中文', '黑体'],
+  },
+  {
+    id: 'fira-sans-noto',
+    label: 'Fira Sans',
+    stack: "'Fira Sans', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: 'Fira Sans：与 Fira Code 同族，代码用 Fira Code 时外壳跟着它最搭',
+    family: 'Fira Sans',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '中文', '黑体'],
+  },
+  {
+    id: 'open-sans-noto',
+    label: 'Open Sans',
+    stack: "'Open Sans', 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif",
+    note: 'Open Sans：Google 早期的开源界面面，字面开阔、低分屏也清楚',
+    family: 'Open Sans',
+    license: 'OFL 1.1',
+    tags: ['拉丁', '中文', '黑体'],
   },
   {
     id: CUSTOM_UI_FONT_PRESET_ID,
     label: '自定义',
     stack: '',
     note: '手打界面字体名（自动补 sans-serif 兜底）',
+    family: '',
+    license: '',
+    tags: ['自定义'],
   },
 ];
 
 export const CODE_FONT_PRESET_IDS: readonly string[] = CODE_FONT_PRESETS.map((p) => p.id);
 export const UI_FONT_PRESET_IDS: readonly string[] = UI_FONT_PRESETS.map((p) => p.id);
+
+/** 两张表里带开源许可证的档（设置页「开源 N 款」计数与判据同源，不另抄名单） */
+export function openSourceFontPresets(): readonly FontPreset[] {
+  return [...CODE_FONT_PRESETS, ...UI_FONT_PRESETS].filter((p) => p.license !== '');
+}
+
+/**
+ * 标签展示次序（只排常用几类）。UI 收束批之后清单是行式的、不再画筛选 chip；
+ * 这两个导出留作标签词表 / 派生工具（检索、分组扩展与判据用）。口径不变：表里没有的标签
+ * 不列，表里新加而这里没排的追加在后面，不会静默消失。
+ */
+export const FONT_FILTER_TAGS: readonly string[] = [
+  '等宽', '中文', '拉丁', '黑体', '楷体', '衬线', '标题', '系统', '内置', '随代码', '自定义',
+];
+
+/** 一组档位的标签全集（按上面的次序排好；要不要在最前补「全部」由调用方决定） */
+export function fontFilterTagsFor(presets: readonly FontPreset[]): string[] {
+  const present = new Set(presets.flatMap((p) => [...p.tags]));
+  const ordered = FONT_FILTER_TAGS.filter((t) => present.has(t));
+  const rest = [...present].filter((t) => !FONT_FILTER_TAGS.includes(t)).sort();
+  return [...ordered, ...rest];
+}
 
 /** 解析所需的最小偏好面（避免与 `editor-display-prefs.ts` 成循环依赖） */
 export interface CodeFontPrefs {

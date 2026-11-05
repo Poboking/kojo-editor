@@ -1,0 +1,363 @@
+/* ============================================================================
+   设置页 → 字体档位选择器（2026-11-05 开源字体扩展批 + 同日 UI 收束批）
+   ----------------------------------------------------------------------------
+   `SettingsPanel.tsx` 组件级 import：只随设置浮层的懒 chunk 到达，不进常驻首屏链
+   （照 settings-appearance / settings-workspace 先例）。
+
+   收束批的形态口径：上一版在设置行里塞了「字样纸 + 检索 + 筛选 chip + 两列卡片网格 +
+   徽章 + 独立自定义井」，看着像嵌了一个字体商店。这一版退回成**一个普通设置控件**：
+   - 收起时只有一行凹井，描边 / 圆角 / 顶缘高光跟 `.settings-stepper`、`KitSelect` 同款；
+   - 展开时清单接在**同一个井**的下面（顶边合缝、下圆角收口），单列行式、发丝线分行，
+     没有卡片描边、没有阴影、没有彩色胶囊、没有工具栏，也不自带搜索（全局设置检索负责定位）；
+   - 说明文字退回设置页自己的 `.settings-hint`，井外说话。
+
+   三条纪律：
+   ① **只吃 token**：底色 / 描边 / 文字 / 焦点环 / 圆角 / 间距 / 字号一律 var(--…)；
+      预览字样是用户选的字体栈（内联 style），不属于本文件的配色面。
+   ② **按容器宽度折列**，不按窗口：设置浮层比窗口窄得多，`@media` 不会在面板真正挤的时候
+      触发；容器 < 460px 时当前值行与清单行各自折成两段。
+   ③ **零常驻动画**：hover 换色与箭头翻转的补间只放在 prefers-reduced-motion: no-preference，
+      且应用内 `:root[data-motion='reduced']` 一并压平；减弱档下只剩即时换色。
+   ============================================================================ */
+
+.font-picker {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+}
+
+/* ---- 当前值：一行凹井。与设置页其它控件共用一门描边语言 ----
+   顶缘高光（--edge-raise）+ 中档描边（--border）+ 中件圆角（--radius-md）；
+   展开时下圆角收平、清单接上去，两者合成一个井而不是上下两块。 */
+.font-picker .font-picker-current {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  box-shadow: var(--edge-raise);
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+/* hover 用设置行同一档底色（.settings-row:hover），不另调一档"控件专用"的淡底 */
+.font-picker .font-picker-current:hover {
+  border-color: var(--border-strong);
+  background: var(--hover);
+}
+.font-picker .font-picker-current:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus);
+}
+.font-picker[data-open='1'] .font-picker-current {
+  border-color: var(--border-strong);
+  border-bottom-color: var(--border-subtle);
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+  box-shadow: none;
+}
+
+/* 预览字样才是这一行的主角：16px、生效栈、单行不折；档位名与读数退到右侧两行细字 */
+.font-picker-current-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--fs-4);
+  /* 应用口径「连字恒关」：预览也关掉，否则 Cascadia 那几档会把 != -> 糊成 ≠ →，
+     跟实际编辑器里的字面不一致，比字就没意义了 */
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.font-picker-current-side {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0;
+  max-width: 48%;
+  min-width: 0;
+}
+.font-picker-current-name {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--fs-1);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.font-picker-current-sub {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.font-picker-chevron {
+  flex: none;
+  display: flex;
+  align-items: center;
+  color: var(--fg-dim);
+}
+.font-picker[data-open='1'] .font-picker-chevron {
+  color: var(--accent-text);
+  transform: rotate(180deg);
+}
+
+/* ---- 展开清单：接在井的下半截，单列行式、发丝线分行，不自带边框块 ----
+   `flex: none` 是 2026-11-05 那次卡片塌缩在新结构下的对应护栏：带 max-height 的
+   flex column 默认允许子项收缩，不钉死就会把 20 行压进 320px 再整片溢出。 */
+.font-picker-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  border: 1px solid var(--border-strong);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--surface-sunken);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: var(--scroll-thumb) transparent;
+}
+.font-picker .font-picker-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: none;
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg);
+  font-size: var(--fs-2);
+  cursor: pointer;
+}
+.font-picker .font-picker-option:last-child {
+  border-bottom: 0;
+}
+.font-picker .font-picker-option.kit-radio:hover {
+  background: var(--hover);
+}
+/* 选中态：左侧 2px accent 短竖条 + 极淡底，复用 `.settings-row.nested` 的从属线语法，
+   不给整行套一圈描边——那正是"卡片"观感的来源 */
+.font-picker .font-picker-option:has(.kit-radio-input:checked) {
+  background: var(--accent-dim);
+}
+.font-picker .font-picker-option:has(.kit-radio-input:checked)::before {
+  content: '';
+  position: absolute;
+  top: var(--space-1);
+  bottom: var(--space-1);
+  left: 0;
+  width: 2px;
+  border-radius: var(--radius-xs);
+  background: var(--accent-strong);
+  pointer-events: none;
+}
+.font-picker .font-picker-option:has(.kit-radio-input:checked) .font-picker-option-name {
+  color: var(--accent-text);
+}
+/* 内发光不吃布局宽，也不会被清单的滚动框裁掉 */
+.font-picker .font-picker-option:has(.kit-radio-input:focus-visible) {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* ui-kit 的隐藏 input / 圆点照旧承载单选语义；文本槽改成一整行 flex，预览在左、元信息在右 */
+.font-picker .font-picker-option .kit-radio-text {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--fg);
+}
+.font-picker-option-sample {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--fs-3);
+  font-variant-ligatures: none;
+  font-feature-settings: 'liga' 0, 'calt' 0;
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 右侧元信息钉成定宽列：20 行的档位名 / 家族名左边界在同一条轴上，
+   预览字样占的是剩下的整段——读起来是"一列字样 + 两列注记"，不是一堆右对齐的碎字 */
+.font-picker-option-meta {
+  flex: 0 0 168px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  min-width: 0;
+}
+.font-picker-option-name {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--fs-1);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.font-picker-option-sub {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-0);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 行尾状态：一枚细点 + 短字，长解释在 title。不再是带框的彩色胶囊徽章 */
+.font-picker-option-state {
+  flex: 0 0 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  min-width: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  white-space: nowrap;
+}
+.font-picker-option-state::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.6;
+}
+.font-picker-option-state[data-tone='ok'] {
+  color: var(--success);
+}
+.font-picker-option-state[data-tone='missing'] {
+  color: var(--warning);
+}
+.font-picker-option-state[data-tone='none'] {
+  display: none;
+}
+
+/* ---- 自定义：清单的最后一行，一枚虚线空心点对齐上面的单选圆点 ---- */
+.font-picker .font-picker-custom {
+  gap: var(--space-2);
+  padding-block: var(--space-2);
+  cursor: default;
+}
+.font-picker .font-picker-custom:hover {
+  background: transparent;
+}
+.font-picker .font-picker-custom::before {
+  content: '';
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 50%;
+}
+.font-picker-custom-label {
+  flex: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  white-space: nowrap;
+}
+.font-picker .font-picker-custom .settings-font-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 井外的说明：沿用设置页自己的 hint，只给回落/判定不了换一档文字色，不另造回执块 */
+.font-picker > .settings-hint {
+  margin-top: var(--space-2);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+.font-picker > .font-picker-notice {
+  color: var(--warning);
+}
+
+/* 容器窄（设置浮层被拉窄）时，当前值行与清单行各自折成两段，预览字样仍占满一行 */
+@container (max-width: 460px) {
+  .font-picker .font-picker-current {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+  }
+  .font-picker-current-preview {
+    flex: 1 1 100%;
+  }
+  .font-picker-current-side {
+    align-items: flex-start;
+    max-width: none;
+  }
+  .font-picker-chevron {
+    margin-left: auto;
+  }
+  .font-picker .font-picker-option .kit-radio-text {
+    flex-wrap: wrap;
+    /* 折成两段后仍留一丝行距：0 行距会让字样与下面的家族名贴成一片，读起来像叠字 */
+    gap: var(--space-1) var(--space-2);
+  }
+  .font-picker-option-sample {
+    flex: 1 1 100%;
+  }
+  /* 第二段把「档位名 / 家族·许可证」收成横向一行；状态点脱离换行流、绝对钉在行尾，
+     否则名字一长就会把状态挤到第三行，20 行出现 54.9 / 75.4 两种高度来回跳 */
+  .font-picker-option-meta {
+    flex: 1 1 100%;
+    flex-direction: row;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
+    padding-right: 56px;
+  }
+  .font-picker-option-name {
+    flex: none;
+    max-width: 50%;
+  }
+  .font-picker-option-sub {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .font-picker-option-state {
+    position: absolute;
+    right: var(--space-3);
+    bottom: var(--space-2);
+    flex: none;
+    min-width: 0;
+  }
+}
+
+/* 动效只在"没要求减弱"且应用内没压平时出现；减弱档下 hover 仍即时换色，只是不补间 */
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-motion='reduced']) .font-picker .font-picker-current,
+  :root:not([data-motion='reduced']) .font-picker .font-picker-option,
+  :root:not([data-motion='reduced']) .font-picker-chevron {
+    transition:
+      border-color var(--dur-1) var(--ease-out),
+      background-color var(--dur-1) var(--ease-out),
+      box-shadow var(--dur-1) var(--ease-out),
+      color var(--dur-1) var(--ease-out),
+      transform var(--dur-1) var(--ease-out);
+  }
+}

@@ -139,6 +139,9 @@ import './settings-search-kit.css';
 import './settings-appearance.css';
 // 「作品位置」一节的行面（2026-11-03 默认工作区批）：同样只在设置页挂载时到达。
 import './settings-workspace.css';
+// 字体档位选择器（2026-11-05 开源字体扩展批 + 同日 UI 收束批）：一行凹井 + 行内展开的
+// 单列清单，样式只在设置页挂载时到达，不进常驻首屏样式链。
+import './settings-font.css';
 // 右键菜单回执那一行的排版（1023 覆盖面批）：与欢迎页 / 快捷键页共用同一份新样式表
 import './context-menu-pages.css';
 
@@ -2419,7 +2422,7 @@ function EditorDisplayRows(): ReactElement {
           </span>
         </span>
       </label>
-      {/* `stacked`：控件块（档位列表 + 预览 + 输入框）自己就是整行内容，没有右轴控件列。
+      {/* `stacked`：字体选择器展开后自己就是整行内容，没有右轴控件列。
           不许退回两列栅格——标签 span 固定占 1/1，控件 div 无格位会被自动塞进第 2 列。 */}
       <div className="settings-row static stacked" data-settings-key="editor.fontFamily">
         <span>
@@ -2447,7 +2450,7 @@ function EditorDisplayRows(): ReactElement {
           onClearCustom={() => saveEditorDisplayPrefs({ fontFamily: '', codeFontPreset: 'default' })}
           canClearCustom={pref.fontFamily !== EDITOR_DISPLAY_PREF_DEFAULT.fontFamily || pref.codeFontPreset !== 'default'}
           placeholder="选「自定义」时填一个字体名（如 Consolas）"
-          note="档位来自 font-presets.ts 的表（每张栈都保证末位等宽兜底）；自定义文本非空时说了算（旧口径原样）；末尾自动补等宽兜底，本机没装的字体自动落到栈后面的面。只改显示、不动文件"
+          note="本仓不打包字体文件：档位只是开源字体的家族名清单，本机装了就生效、没装自动落到栈后面的面（展开清单里逐档标着）；许可证是「可放心自行安装」的凭据，不是「应用内自带」。自定义文本非空时说了算（旧口径原样）。只改显示、不动文件"
         />
       </div>
       {modifiedCount > 0 ? (
@@ -2465,23 +2468,28 @@ function EditorDisplayRows(): ReactElement {
 }
 
 /* ==========================================================================================
- * 字体档位控件（视觉批十二 L20）：「编程字体」与「界面字体」两行同款形态——
- * 档位 radio 列表 + 所见即所得预览（全角 + 中日汉字 + 易连字符号串）+ 本机可用性标注 +
- * 自定义输入框。真源全在 `font-presets.ts`（表 / 解析 / 判定），本页只排版并调
- * `saveEditorDisplayPrefs`。
+ * 字体档位控件（视觉批十二 L20；2026-11-05 开源字体扩展批 + 同日 UI 收束批）。
+ * 「编程字体」与「界面字体」两行同款形态，真源全在 `font-presets.ts`（表 / 解析 / 判定），
+ * 本页只排版并调 `saveEditorDisplayPrefs`。
+ *
+ * **形态口径（收束批）**：上一版把 20+ 档做成「字样纸 + 检索 + 筛选 chip + 两列卡片网格 +
+ * 徽章 + 独立自定义井」，等于在设置行里塞了一个自带版式的字体商店，跟设置页其它行割裂。
+ * 这一版退回成**一个普通设置控件**：与 `KitSelect` / `.settings-stepper` 同款的一行凹井
+ * （当前生效字样 + 档位名 + 折叠箭头），点开才在**同一个井里**展开单列行式清单——发丝线
+ * 分行、左侧 accent 竖条标选中、无卡片描边 / 无阴影 / 无彩色胶囊 / 无工具栏。收起时只占一行，
+ * 与上下设置项同一节奏；全局设置检索（settings-search.ts）负责定位，控件内不再自带搜索。
  *
  * 可见性口径（铁律 4：不许静默）：
  * - radio 上勾的是 **resolve 出的生效档**，不是原始存值——老用户存过非空自定义文本 ⇒
  *   勾显在「自定义」（那是兼容红线：文本赢档位，不许把自定义吃掉）；
- * - 存的档位 id 不在表里 ⇒ 勾显在回落档并明说"回落了"；
- * - 每个档位的成员逐个 `document.fonts.check`，缺装的标出来并说清落到哪张兜底；
- *   判定 API 拿不到 ⇒ 整行显示"判定不了"，不假装"都装了"。
+ * - 存的档位 id 不在表里 ⇒ 勾显在回落档，并在控件下方用一行 hint 明说"回落了"；
+ * - 行尾按**主打面**逐档标"已装 / 缺装 / 检测中 / 判定不了"（细字 + 一枚小点，不再用徽章），
+ *   缺哪几张写在 title 里；判定 API 拿不到 ⇒ 明说"判定不了"，不假装"都装了"；
+ * - 清单每行预览按**各自那条栈**渲染，井里的大字样按**生效栈**渲染——都是真正所见即所得。
  *
  * 点非自定义档会连旧自定义文本一起清掉（`fontFamily: ''`）：文本优先于档位，
  * 留着它这档就永远不生效——显式点选是用户意志，这不是"吃掉自定义"，是替换自定义。
- *
- * `// ui-kit-candidate:` 竖向 radio 组（radiogroup + 逐档说明行 + 可用性角标）目前用内联
- * flex 布局在设置页本地搭——若后续别处也要"带注解的单选列表"，应升为 ui-kit 原语。
+ * 点完即收起清单（普通下拉的读法），设置页立刻回到原来的高度。
  * ========================================================================================== */
 
 interface FontPresetControlArgs {
@@ -2609,77 +2617,179 @@ function warmFontPresence(presets: readonly FontPreset[]): void {
   onIdle(step); // 首片落在面板刚打开后的空闲时段，不跟首帧抢
 }
 
+/** 行尾状态：主打面装没装（整条栈里系统兜底缺谁都不影响这一档"能用"，所以看的是 family）。
+ *  收束批把胶囊徽章换成「一枚细点 + 短标签」，长解释全放 title——信息不丢，视觉不抢字样。 */
+type FontOptionTone = 'ok' | 'missing' | 'pending' | 'unknown' | 'none';
+
+interface FontOptionStatus {
+  readonly tone: FontOptionTone;
+  readonly label: string;
+  readonly detail: string;
+}
+
+/** 纯缓存读，渲染期不量任何字宽；判定不了 / 还没量到都不许说成"已装" */
+function fontOptionStatus(p: FontPreset, stack: string, checker: FontPresenceChecker | null): FontOptionStatus {
+  if (p.family === '') {
+    return { tone: 'none', label: '', detail: p.note };
+  }
+  if (checker === null) {
+    return {
+      tone: 'unknown',
+      label: '判定不了',
+      detail: '此环境量不到字体宽度，缺装与否判定不了（选择本身照常生效）',
+    };
+  }
+  const installed = fontPresenceCache.get(p.family);
+  if (installed === undefined) {
+    return { tone: 'pending', label: '检测中', detail: `正在量 ${p.family} 的字宽` };
+  }
+  const missing = missingFamiliesOf(stack);
+  if (!installed) {
+    return {
+      tone: 'missing',
+      label: '缺装',
+      detail: `本机没装 ${p.family}，选它会自动落到栈后面的面${missing.length > 1 ? `（这条栈共缺 ${missing.length} 张：${missing.join('、')}）` : ''}`,
+    };
+  }
+  if (missing.length > 0) {
+    return {
+      tone: 'ok',
+      label: '已装',
+      detail: `栈里另有 ${missing.length} 张未装：${missing.join('、')}；会自动落到后面的面`,
+    };
+  }
+  return { tone: 'ok', label: '已装', detail: '这条栈里每一张面都在本机' };
+}
+
 function FontPresetControl(a: FontPresetControlArgs): ReactElement {
-  // 订阅缓存版本：预热每推进一片就重渲染一次，缺装标注随之点亮（渲染期本身不量任何字宽）
-  useSyncExternalStore(subscribePresence, presenceVersionNow, presenceVersionNow);
-  const missingOf = (stack: string): string[] => missingFamiliesOf(stack);
+  // 订阅缓存版本：预热每推进一片就重渲染一次，行尾的缺装标注与「已装」读数随之点亮
+  const version = useSyncExternalStore(subscribePresence, presenceVersionNow, presenceVersionNow);
+  // 收起时只占一行；展开的清单住在**同一个井里**，不是另一个面板
+  const [open, setOpen] = useState(false);
+  const effective = a.presets.find((p) => p.id === a.resolved.presetId);
+  const openCount = a.presets.filter((p) => p.license !== '').length;
+  const installedCount = useMemo(
+    () => a.presets.filter((p) => p.family !== '' && fontPresenceCache.get(p.family) === true).length,
+    // version 进依赖：预热每点亮一片，井上的读数跟着走
+    [a.presets, version],
+  );
+
   const fellBackNotice =
     a.resolved.fellBack && a.resolved.requestedPresetId !== a.resolved.presetId
       ? a.presets.some((p) => p.id === a.resolved.requestedPresetId)
         ? a.resolved.presetId === a.customId
-          ? `自定义文本当前生效，覆盖了所选的「${a.resolved.requestedPresetId}」档——这是旧口径的兼容红线（文本赢）；点上面任一档会连文本一起换掉`
+          ? `自定义文本当前生效，覆盖了所选的「${a.resolved.requestedPresetId}」档——这是旧口径的兼容红线（文本赢）；展开清单另选一档会连文本一起换掉`
           : `存的字体档位「${a.resolved.requestedPresetId}」取不到栈，当前生效的是「${a.resolved.presetId}」档——重新选一档即可覆盖`
         : `存的字体档位「${a.resolved.requestedPresetId}」不在列表里，当前生效的是「${a.resolved.presetId}」档——重新选一档即可覆盖`
       : null;
+
+  /** 每行自己的预览栈：自定义 / 跟随档没有表内栈，用草稿或当前生效栈顶上 */
+  const previewStackOf = (p: FontPreset): string =>
+    p.stack !== '' ? p.stack : a.customDraft.trim() !== '' ? a.customDraft : a.resolved.stack;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
-      <span
-        role="radiogroup"
-        aria-label={a.ariaLabel}
-        style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}
+    <div className="font-picker" data-open={open ? '1' : '0'}>
+      {/* 当前值：一行凹井，与 KitSelect / .settings-stepper 同一门控件语言。
+          大字预览按生效栈渲染，是这一行真正的主角，档位名退到右侧细字。 */}
+      <button
+        type="button"
+        className="font-picker-current"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
       >
-        {a.presets.map((p) => {
-          const missing = missingOf(p.stack);
-          return (
-            <KitRadio
-              key={p.id}
-              name={a.group}
-              value={p.id}
-              checked={a.resolved.presetId === p.id}
-              onChange={() => a.onPick(p.id)}
-              label={p.label}
-            >
-              <span title={p.note}>
-                {p.label}
-                {missing.length > 0 ? (
-                  <em className="settings-hint">（本机缺装：{missing.join('、')}，自动落到栈后面的面）</em>
-                ) : null}
-              </span>
-            </KitRadio>
-          );
-        })}
-      </span>
-      {fellBackNotice !== null ? <span className="settings-hint">{fellBackNotice}</span> : null}
-      {a.checker === null ? (
-        <span className="settings-hint">此环境量不到字体宽度，缺装与否判定不了（选择本身照常生效）</span>
+        <span
+          className="font-picker-current-preview"
+          style={{ fontFamily: a.resolved.stack }}
+          data-font-preview={a.group}
+        >
+          {FONT_PREVIEW_SAMPLE}
+        </span>
+        <span className="font-picker-current-side">
+          <span className="font-picker-current-name">{effective?.label ?? a.resolved.presetId}</span>
+          <span className="font-picker-current-sub">
+            {a.presets.length} 款 · 开源 {openCount}
+            {a.checker !== null ? ` · 已装 ${installedCount}` : ''}
+          </span>
+        </span>
+        <span className="font-picker-chevron" aria-hidden="true">
+          <Icon name="chevron-down" size="sm" />
+        </span>
+      </button>
+
+      {open ? (
+        <div className="font-picker-list" role="radiogroup" aria-label={a.ariaLabel}>
+          {a.presets.map((p) => {
+            const stack = previewStackOf(p);
+            const status = fontOptionStatus(p, stack, a.checker);
+            return (
+              <KitRadio
+                key={p.id}
+                className="font-picker-option"
+                name={a.group}
+                value={p.id}
+                checked={a.resolved.presetId === p.id}
+                onChange={() => {
+                  a.onPick(p.id);
+                  setOpen(false); // 点完即收起：普通下拉的读法，设置页立刻回到原来的高度
+                }}
+                label={p.label}
+              >
+                {/* 每行按自己的栈渲染：一眼比得出全角、汉字与 != -> :: 的形状差异 */}
+                <span className="font-picker-option-sample" style={{ fontFamily: stack }}>
+                  {FONT_PREVIEW_SAMPLE}
+                </span>
+                <span className="font-picker-option-meta">
+                  <span className="font-picker-option-name">{p.label}</span>
+                  <span className="font-picker-option-sub">
+                    {p.family !== '' ? p.family : '按偏好里的栈'} · {p.license !== '' ? p.license : '内置'}
+                  </span>
+                </span>
+                <span className="font-picker-option-state" data-tone={status.tone} title={status.detail}>
+                  {status.label}
+                </span>
+              </KitRadio>
+            );
+          })}
+
+          {/* 自定义仍是旧口径那条自由文本，作为清单最后一行——不另起一个带框的井 */}
+          <div className="font-picker-option font-picker-custom">
+            <span className="font-picker-custom-label" title="手填家族名；非空时它赢过档位（旧口径原样保留）">
+              自定义
+            </span>
+            <input
+              type="text"
+              className="settings-font-input"
+              value={a.customDraft}
+              placeholder={a.placeholder}
+              aria-label={`${a.ariaLabel}自定义字体栈`}
+              onChange={(e) => a.onCustomDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  a.onApplyCustom();
+                }
+              }}
+            />
+            {/* 房规（沿用旧行）：没改动 ⇒ 按钮不可点；坏值由清洗层回落，不静默假装生效 */}
+            <button className="ghost small" disabled={!a.customDirty} onClick={a.onApplyCustom}>
+              应用
+            </button>
+            <button className="ghost small" disabled={!a.canClearCustom} onClick={a.onClearCustom}>
+              用回内置
+            </button>
+          </div>
+        </div>
       ) : null}
-      {/* 所见即所得：这一行用**当前生效栈**渲染，全角 + 中日汉字 + 常被连字糊掉的符号串都在 */}
-      <div style={{ fontFamily: a.resolved.stack }} data-font-preview={a.group}>
-        {FONT_PREVIEW_SAMPLE}
-      </div>
-      <span style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-        <input
-          type="text"
-          className="settings-font-input"
-          value={a.customDraft}
-          placeholder={a.placeholder}
-          aria-label={a.ariaLabel}
-          onChange={(e) => a.onCustomDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              a.onApplyCustom();
-            }
-          }}
-        />
-        {/* 房规（沿用旧行）：没改动 ⇒ 按钮不可点；坏值由清洗层回落，不静默假装生效 */}
-        <button className="ghost small" disabled={!a.customDirty} onClick={a.onApplyCustom}>
-          应用
-        </button>
-        <button className="ghost small" disabled={!a.canClearCustom} onClick={a.onClearCustom}>
-          用回内置
-        </button>
-      </span>
+
+      {/* 回落 / 判定不了都不静默，但用设置页自己的 hint 说话，不另造一块带底色的回执条 */}
+      {fellBackNotice !== null ? (
+        <span className="settings-hint font-picker-notice">{fellBackNotice}</span>
+      ) : null}
+      {a.checker === null ? (
+        <span className="settings-hint font-picker-notice">
+          此环境量不到字体宽度，缺装与否判定不了（选择本身照常生效）
+        </span>
+      ) : null}
       <span className="settings-hint">{a.note}</span>
     </div>
   );
@@ -2727,7 +2837,7 @@ function FontPresetControl(a: FontPresetControlArgs): ReactElement {
         onClearCustom={() => saveEditorDisplayPrefs({ uiFontPreset: 'system', uiFontFamily: '' })}
         canClearCustom={pref.uiFontPreset !== 'system' || pref.uiFontFamily !== ''}
         placeholder="选「自定义」时填界面字体名（如 Microsoft YaHei）"
-        note="外壳文字（标签页 / 侧栏 / 设置页）用哪张面；「等宽」档跟随上面的编程字体。选系统（现状）就是本来的样子。只改显示、不动文件"
+        note="外壳文字（标签页 / 侧栏 / 设置页）用哪张面；「等宽」档跟随上面的编程字体，选系统（现状）就是本来的样子。开源档同样需要本机安装，没装会自动落到雅黑 / Segoe。只改显示、不动文件"
       />
     </div>
   );
