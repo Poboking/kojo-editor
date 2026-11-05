@@ -7,8 +7,9 @@
 
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-263146?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d6?style=flat-square)
-![Stack](https://img.shields.io/badge/Tauri_2_·_React_19_·_Monaco-24C8DB?style=flat-square)
+![Built with](https://img.shields.io/badge/Tauri_2_·_React_19_·_Monaco-24C8DB?style=flat-square)
 ![Latest Release](https://img.shields.io/github/v/release/Poboking/kojo-editor?style=flat-square)
+![Downloads](https://img.shields.io/github/downloads/Poboking/kojo-editor/total?style=flat-square)
 ![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg)
 
 **era 系ゲームの口上スクリプト（`.ERB` / `.kojo`）用エディタ。**  
