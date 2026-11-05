@@ -7,7 +7,8 @@
 
 ![License](https://img.shields.io/badge/license-GPL--3.0--or--later-263146?style=flat-square)
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d6?style=flat-square)
-![Release](https://img.shields.io/github/v/release/Poboking/kojo-editor?style=flat-square)
+![Stack](https://img.shields.io/badge/Tauri_2_·_React_19_·_Monaco-24C8DB?style=flat-square)
+![Latest Release](https://img.shields.io/github/v/release/Poboking/kojo-editor?style=flat-square)
 ![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg)
 
 **era 系游戏口上脚本（`.ERB` / `.kojo`）编辑器。**  
