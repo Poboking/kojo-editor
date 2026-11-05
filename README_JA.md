@@ -22,64 +22,18 @@
   <br><sub>呼び出し側に光标を置いて <code>F12</code> —— <b>別のファイル</b>の中の定義へ飛ぶ</sub>
 </div>
 
-## できること
+## 亮点
 
-- **構造で探す**：キャラ → 一族 → 面 → 関数のツリーをたどるだけ。`M_KOJO_K12_MESSAGE_COM_310` のような全名を覚えなくて済みます。
-- **他人の `.ERB` が読める**：`IF` / `PRINTFORMW` がその場で「もし …：」と台詞行に表示されます。**表示だけ**で、ファイルは 1 バイトも変わりません。
-- **いつもの IDE 動作**：定義へ移動、参照の検索、一括改名（ファイル横断）、ホバーで作者コメント、引数ヒント、シンボルへ移動。
-- **ミスはその場で**：関数名の打ち間違い、一族の不足、分岐の兜底漏れを行に波線で示し、クリックで飛びます。
-- **自分の作品は別管理**：自分の口上プロジェクトに書き、「エクスポート」で zip 配布、「デプロイ」でゲームディレクトリへ。
-- **ゲームを起動して試さなくていい**：状態リプレイが今のセーブデータで「この台詞が出るか」を答え、状態インジェクタで必要な状態に作れます。
-
-## デモ
-
-<table>
-  <tr>
-    <td width="46%" align="center"><img src="docs/assets/erb-references.gif" width="420" alt="参照の検索"></td>
-    <td valign="middle"><b>参照の検索</b> <code>Shift+F12</code><br>1 人の口上を変える前に、呼び出し側がどのファイルにあるか確認できます。</td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td valign="middle"><b>補完</b> <code>Ctrl+Space</code> / 入力即表示<br>台詞・コメント・文字列の内側では出ません。候補が意味を持つ位置だけに出ます。</td>
-    <td width="46%" align="center"><img src="docs/assets/erb-completion.gif" width="420" alt="補完"></td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td width="46%" align="center"><img src="docs/assets/editor-folding.gif" width="420" alt="たたみ"></td>
-    <td valign="middle"><b>たたみ</b><br>関数本体・ブロック単位で畳めます。数万行の口上は、畳めて初めて読めます。</td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td valign="middle"><b>コマンドパレット</b> <code>Ctrl+Shift+P</code><br>画面でできることはここで検索できます。キーの割当もここから。</td>
-    <td width="46%" align="center"><img src="docs/assets/editor-palette.gif" width="420" alt="コマンドパレット"></td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td width="46%" align="center"><img src="docs/assets/editor-search.gif" width="420" alt="プロジェクト全体検索"></td>
-    <td valign="middle"><b>プロジェクト全体検索</b><br>台詞の一節や断片しか覚えていないときに。ヒットはファイル別にまとまります。</td>
-  </tr>
-</table>
-
-## 画面
-
-<table>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/app-editor.jpg" width="480" alt="メイン画面"><br><sub><b>メイン画面</b></sub></td>
-    <td width="50%" align="center"><img src="docs/assets/app-condition-matrix.jpg" width="480" alt="条件マトリクス"><br><sub><b>条件マトリクス</b> —— 色付きのマスから該当する口上へ</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/app-syntax-reference.jpg" width="480" alt="文法全表"><br><sub><b>文法全表</b> —— 書き方・コンパイル結果・エラー文</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/app-market.jpg" width="480" alt="口上マーケット"><br><sub><b>口上マーケット</b> —— 他の作者のパッケージを導入</sub></td>
-  </tr>
-</table>
+- **構造で探すので全名を覚えなくていい**。キャラ → 一族 → 面 → 関数のツリーをたどるだけ。`M_KOJO_K12_MESSAGE_COM_310` のような名前はツールに組み立てさせます。関数にマウスを乗せると、作者が関数の上に書いたコメントブロックが浮かび、大文字の関数名だけ眺めるよりずっと読めます。
+- **他人の `.ERB` が読める**。ゲームディレクトリのファイルを開くと `IF` / `PRINTFORMW` がその場で「もし …：」と台詞行に表示され、`ENDIF` はインデントで表現します。**表示だけ**でファイルは 1 バイトも変わらず、`Ctrl+Alt+T` でいつでも元に戻せます。
+- **いつもの IDE 動作、それもファイル横断で**。定義へ移動 `F12`、その場で速覧 `Alt+F12`、実装へ `Ctrl+F12`、参照の検索 `Shift+F12`（peek でヒットをファイル別に件数表示）、一括改名 `F2`（呼び出し側も一緒に）、ホバーでコメントと仮引数、シグネチャヒント、`Ctrl+Shift+O` でシンボルへ、同一シンボル強調とスマート選択。
+- **ミスは入力中に出る。ゲームで「効いてない」を確認しなくていい**。関数名の打ち間違い、一族の不足、兜底漏れの分岐、怪しい条件を行に波線で示し、クリックで飛びます。ステータスバーに件数常駐、`Ctrl+Shift+M` で問題パネル、`Alt+F8` で 1 件ずつ。
+- **エンコーディングと改行をバイト単位で保持**。宣言されたエンコーディング（Shift-JIS / GBK / UTF-8 / UTF-16）で読み、元の改行と BOM の形のまま書き戻します。1 行の編集がファイル全体の並べ替えにならず、Shift-JIS が黙って UTF-8 になることもありません。
+- **ゲームディレクトリは既定で読み取り専用**。実際の最初のキー入力で確認が出ます。解除はそのファイル・そのセッション限りで、再起動すると保護に戻ります。自分の作品は独立した口上プロジェクト（ワークスペース）にあり、常に書けるので許可に邪魔されません。
+- **自分の作品は別管理、出来たらワンクリックでゲームへ**。新規プロジェクトは 8 枚の面ファイルと中国語 README を用意し、ライセンスは LTOL / CC BY-NC / MIT / BSD-2 / ISC / 生成なしから選べます。**エクスポート**は配布用 zip、**デプロイ**は書き先に先に画面を示してから確定。宛先が既にある場合は上書きせずエラー、転訳が失敗したらまとめて拒否し、欠けた半成品パッケージは渡しません。
+- **ゲームを起動して試さなくていい**。状態リプレイは今のセーブデータで「この台詞が出るか・どの分岐へ進むか」を答え、状態インジェクタは変数を目標値にして**テスト用セーブ**に書き込みます（二次確認・自動バックアップ・書き戻し後の照合つき）。
+- **「この台詞はいつ出る？」に表で答える**。条件マトリクスは状態キー × 時機面を広げ、色付きのマスをクリックすると該当する口上関数へ飛びます。
+- **探せる・変えられる・増やせる**。コマンドパレットに 100+ 画面のできることが揃い、キー割当も変更可能。内建の `.kojo` チュートリアルと文法全表は、書き方・コンパイル結果・エラー文を逐語で対照できます。口上マーケットはレジストリを取得して他の作者のパッケージを導入でき、ファイルごとに sha256 を照合します。
 
 ## ダウンロードとインストール
 
@@ -136,6 +90,35 @@ Node.js 22・pnpm 11.22.0・Rust stable（MSVC）が必要。環境マトリク�
 歓迎します。着手前に [AGENTS.md](AGENTS.md)（不変条件と協力の規律）をお読みください。落とし穴集は
 [docs/PITFALLS.md](docs/PITFALLS.md)。ゲームを 1 本増やすには [docs/DIALECT-AUTHORING.md](docs/DIALECT-AUTHORING.md)。
 PR を出す前に Issue で一言いただけると、無駄な作業を防げます。
+
+## スクリーンショットとデモ
+
+アニメーションはすべて実際の画面から録ったもので、1 コマンドで作り直せます
+（手順は [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §8）。デモデータはすべて合成サンプルです。
+静止画は 2026-10-20 の画面で、パネルの配置は批次で動くので実物をもって正としてください。
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/erb-references.gif" width="420" alt="参照の検索"><br><sub><b>参照の検索</b> <code>Shift+F12</code> —— 変える前に呼び出し側の散り方を確認</sub></td>
+    <td width="50%" align="center"><img src="docs/assets/erb-completion.gif" width="420" alt="補完"><br><sub><b>補完</b> —— 台詞・コメント・文字列では出ない</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/editor-folding.gif" width="420" alt="たたみ"><br><sub><b>たたみ</b> —— 関数本体とブロック単位で畳む</sub></td>
+    <td width="50%" align="center"><img src="docs/assets/editor-palette.gif" width="420" alt="コマンドパレット"><br><sub><b>コマンドパレット</b> <code>Ctrl+Shift+P</code> —— コマンド検索とキー割当</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/editor-search.gif" width="420" alt="プロジェクト全体検索"><br><sub><b>プロジェクト全体検索</b> —— 台詞の一節しか覚えていないときに</sub></td>
+    <td width="50%" align="center"><img src="docs/assets/app-editor.jpg" width="420" alt="メイン画面"><br><sub><b>メイン画面</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/app-condition-matrix.jpg" width="420" alt="条件マトリクス"><br><sub><b>条件マトリクス</b> —— 色付きのマスから該当する口上へ</sub></td>
+    <td width="50%" align="center"><img src="docs/assets/app-syntax-reference.jpg" width="420" alt="文法全表"><br><sub><b>文法全表</b> —— 書き方・コンパイル結果・エラー文</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/app-market.jpg" width="420" alt="口上マーケット"><br><sub><b>口上マーケット</b> —— 他の作者のパッケージを導入（図は合成デモパッケージ）</sub></td>
+    <td></td>
+  </tr>
+</table>
 
 ## ライセンス
 

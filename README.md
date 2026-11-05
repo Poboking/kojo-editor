@@ -22,64 +22,18 @@
   <br><sub>光标停在调用处按 <code>F12</code>，跳进<b>另一份文件</b>里的定义</sub>
 </div>
 
-## 功能
+## 亮点
 
-- **按结构找口上**：角色 → 家族 → 面 → 函数一棵树逛完，不必记 `M_KOJO_K12_MESSAGE_COM_310` 这种全名。
-- **看得懂别人的 `.ERB`**：把 `IF` / `PRINTFORMW` 就地显示成「如果 …：」和一行行台词。**只改显示，文件一个字节都不动**。
-- **IDE 的动作都有**：跳转定义、查引用、改名（跨文件一起改）、悬停看作者注释、参数提示、按符号跳转。
-- **写错当场说**：函数名拼错、家族不完整、分支漏了兜底，红线标在行上，点一条跳过去。
-- **自己的作品单独管**：写在你自己的口上项目里，一键**导出** zip 发给别人，或**部署**进游戏目录。
-- **改完不用开游戏反复试**：状态回放按现有存档算给你「这句会不会说」；状态注入器把变量改成目标状态再验。
-
-## 演示
-
-<table>
-  <tr>
-    <td width="46%" align="center"><img src="docs/assets/erb-references.gif" width="420" alt="查找引用"></td>
-    <td valign="middle"><b>查找引用</b> <code>Shift+F12</code><br>改一个角色之前，先看清调用点散在哪几份文件里。</td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td valign="middle"><b>补全</b> <code>Ctrl+Space</code> / 输入即弹<br>台词、注释、字符串里不弹——只在你真需要候选的位置出现。</td>
-    <td width="46%" align="center"><img src="docs/assets/erb-completion.gif" width="420" alt="补全"></td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td width="46%" align="center"><img src="docs/assets/editor-folding.gif" width="420" alt="折叠"></td>
-    <td valign="middle"><b>折叠</b><br>按函数体和区块收起来。一份上万行的口上，能折叠才读得下去。</td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td valign="middle"><b>命令面板</b> <code>Ctrl+Shift+P</code><br>界面上能做的事这里都搜得到，键位也能在这儿改。</td>
-    <td width="46%" align="center"><img src="docs/assets/editor-palette.gif" width="420" alt="命令面板"></td>
-  </tr>
-</table>
-
-<table>
-  <tr>
-    <td width="46%" align="center"><img src="docs/assets/editor-search.gif" width="420" alt="全工程检索"></td>
-    <td valign="middle"><b>全工程检索</b><br>只记得一句台词或一个片段时用它，命中按文件分组。</td>
-  </tr>
-</table>
-
-## 界面
-
-<table>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/app-editor.jpg" width="480" alt="主界面"><br><sub><b>主界面</b></sub></td>
-    <td width="50%" align="center"><img src="docs/assets/app-condition-matrix.jpg" width="480" alt="条件矩阵"><br><sub><b>条件矩阵</b> —— 点已填色的格子跳到对应口上</sub></td>
-  </tr>
-  <tr>
-    <td width="50%" align="center"><img src="docs/assets/app-syntax-reference.jpg" width="480" alt="语法全表"><br><sub><b>语法全表</b> —— 怎么写、编译成什么、写错提示什么</sub></td>
-    <td width="50%" align="center"><img src="docs/assets/app-market.jpg" width="480" alt="口上市场"><br><sub><b>口上市场</b> —— 安装别人发布的口上包</sub></td>
-  </tr>
-</table>
+- **按结构找口上，不用记全名**。角色 → 家族 → 面 → 函数一棵树逛完，`M_KOJO_K12_MESSAGE_COM_310` 这种名字交给工具去拼。鼠标停在函数上会浮出作者写在函数上方的注释块，比只看大写函数名好认得多。
+- **看得懂别人的 `.ERB`**。打开游戏目录里的文件，`IF` / `PRINTFORMW` 就地显示成「如果 …：」和一行行台词，缩进代替 `ENDIF`。**只改显示，文件一个字节都不动**，随时 `Ctrl+Alt+T` 切回原样。
+- **IDE 该有的动作都有，而且是跨文件的**。跳转定义 `F12`、速览 `Alt+F12`、跳到实现 `Ctrl+F12`、查找引用 `Shift+F12`（peek 浮窗按文件分组给命中数）、改名 `F2`（调用点一起改）、悬停看注释与形参表、参数提示、`Ctrl+Shift+O` 按符号跳转、同符号高亮与智能扩选。
+- **写错当场说，不等到游戏里才发现没生效**。函数名拼错、家族不完整、分支漏了兜底、条件写法可疑，红线标在行上，点一条就跳过去；状态栏常驻计数，`Ctrl+Shift+M` 打开问题面板，`Alt+F8` 逐条走。
+- **编码与换行逐字节保持**。按声明编码读取（Shift-JIS / GBK / UTF-8 / UTF-16），写回保持原文件的换行风格与 BOM 形态——改一行不会把整份文件重排，也不会把 Shift-JIS 变成 UTF-8。
+- **游戏目录默认只读**。第一次真键入才弹确认，解锁只在这份文件、这次会话有效，重启回到只读；你自己的作品住在独立的口上项目工作区里，始终可写，不受授权影响。
+- **自己的作品单独管，写完一键进游戏**。新建项目给你 8 个核心面起手文件与一份中文 README，许可协议可以选 LTOL / CC BY-NC / MIT / BSD-2 / ISC 或不生成。**导出**给你可发布的 zip，**部署**先把落点亮给你确认再写；目标已存在直接报错不覆盖，转译失败整批拒绝，不给你缺文件的半成品包。
+- **改完不用开游戏反复试**。状态回放按现有存档算给你「这句会不会说、走哪个分支」；状态注入器把变量改成目标状态写进**测试档**，带二次确认、自动备份、回读验证。
+- **想知道「这句什么时候会说」**。条件矩阵把状态键 × 时机面摊成一张表，点已填色的格子直接跳到对应口上函数。
+- **能查、能改键、能扩展**。命令面板 100+ 条命令，界面能做的事这里都搜得到，键位也能改；内置 `.kojo` 语言教程与语法全表（怎么写、编译成什么、写错提示什么，逐条对照）；口上市场可拉取注册表安装别人发布的包，逐文件校验 sha256。
 
 ## 下载与安装
 
@@ -136,6 +90,34 @@ pnpm --filter @kojo/app tauri build    # 产出安装包
 欢迎。动手前请先读 [AGENTS.md](AGENTS.md)（铁律与协作纪律），改动前扫一眼
 [docs/PITFALLS.md](docs/PITFALLS.md)。想加一款新游戏，看 [docs/DIALECT-AUTHORING.md](docs/DIALECT-AUTHORING.md)。
 提 PR 之前先开一个 Issue 说一声，避免白做。
+
+## 截图与演示
+
+动图都从真界面录制，一条命令可重录（方法见 [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) §8）；
+演示数据全为合成样本。静止截图摄于 2026-10-20 的界面，面板归位随批次会调整，以应用内实际为准。
+
+<table>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/erb-references.gif" width="420" alt="查找引用"><br><sub><b>查找引用</b> <code>Shift+F12</code> —— 改之前先看调用点散在哪几份文件</sub></td>
+    <td width="50%" align="center"><img src="docs/assets/erb-completion.gif" width="420" alt="补全"><br><sub><b>补全</b> —— 台词、注释、字符串里不弹</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/editor-folding.gif" width="420" alt="折叠"><br><sub><b>折叠</b> —— 按函数体与区块收起来</sub></td>
+    <td width="50%" align="center"><img src="docs/assets/editor-palette.gif" width="420" alt="命令面板"><br><sub><b>命令面板</b> <code>Ctrl+Shift+P</code> —— 搜命令、改键位</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/editor-search.gif" width="420" alt="全工程检索"><br><sub><b>全工程检索</b> —— 只记得一句台词时用它</sub></td>
+    <td width="50%" align="center"><img src="docs/assets/app-editor.jpg" width="420" alt="主界面"><br><sub><b>主界面</b></sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/app-condition-matrix.jpg" width="420" alt="条件矩阵"><br><sub><b>条件矩阵</b> —— 点已填色的格子跳到对应口上</sub></td>
+    <td width="50%" align="center"><img src="docs/assets/app-syntax-reference.jpg" width="420" alt="语法全表"><br><sub><b>语法全表</b> —— 怎么写、编译成什么、写错提示什么</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" align="center"><img src="docs/assets/app-market.jpg" width="420" alt="口上市场"><br><sub><b>口上市场</b> —— 安装别人发布的口上包（图示为合成演示包）</sub></td>
+    <td></td>
+  </tr>
+</table>
 
 ## 许可证
 
