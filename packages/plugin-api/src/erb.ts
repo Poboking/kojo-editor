@@ -267,6 +267,18 @@ export interface ErbIndex {
    */
   readonly references?: ErbReferenceIndex;
   /**
+   * **变量**的项目级引用索引（归一化名 → 全局出现点；**additive 可选**，2026-11-05）。
+   *
+   * 与 {@link references} 的分工：那一张收的是**函数名**（`CALL` 族与裸提及），这一张收的是
+   * `#DIM` 族声明的**全局名**（函数体内的局部声明不进——它们跨不出函数，见
+   * {@link ErbDimReferenceIndex}）。两张表的名字域可以重叠（真语料里 `ADD_VICTIM`
+   * 既是函数也是全局变量），查询按各自的光标入口分流，不互相排除。
+   *
+   * 缺省 = 提供方未建（消费方降级为"只看本文件"，即 2026-11-05 之前的既有行为）。
+   * 增量更新后按反向引用的同一条保守纪律失效（新定义会让别的文件多边）。
+   */
+  readonly dimReferences?: ErbDimReferenceIndex;
+  /**
    * **范围戳**（W7 NAV-SCOPE，additive 可选）：这份索引（或这份**派生视图**）是在
    * 哪个"只看"范围下成立的。
    *
@@ -553,6 +565,68 @@ export interface ErbReference {
 export interface ErbReferenceIndex {
   /** 归一化函数名 → 该名的定义点与引用点全集（构建序 → 行 → 列，确定排序） */
   bySymbol: ReadonlyMap<string, readonly ErbReference[]>;
+}
+
+/* ---------------- 变量（`#DIM` 族）的项目级引用（2026-11-05，全部 additive） ---------------- */
+
+/**
+ * 一处变量名出现。
+ *
+ * 与 {@link ErbReference} 分开而不是复用：两者字段同形，但**值域不同**——变量只有
+ * `definition` / `mention` 两种（`call` 是函数调用语法位，变量没有）。
+ *
+ * 为什么是**判别联合**而不是一枚带可选字段的平表：声明点与提及点的列事实**不一样多**。
+ * 提及点在可见代码行里，`#DIM NAME` 的 `NAME` 起止列索引**没有**（`ErbDim` 只有名字/指令/行，
+ * 见 `ErbIndex.dimReferences` 的注）——给个 `1 + 名字长度` 的假跨度，任何照着它画高亮的
+ * 消费方都会把 `#DI` 三个字符涂上色。缺席比编造好，所以 `definition` 分支干脆没有 `endColumn`，
+ * 由类型系统替调用方记住这件事（`symbols.ts` 的查询腿对声明点一律不给 `span`）。
+ *
+ * `kind` 在末尾：`definition` 与 `mention` 的差别只在 `endColumn` 一处，写在前面的字段
+ * 两种分支逐字相同，审的时候一眼能看出"少的只是列事实"。
+ */
+export type ErbDimReference = ErbDimDefinitionReference | ErbDimMentionReference;
+
+/** 变量名的**全局声明点**（`#DIM` 族行自身；函数体内的局部声明不进这张表） */
+export interface ErbDimDefinitionReference {
+  /** 出现所在文件（方言文件绝对路径） */
+  filePath: string;
+  /** 行号（1 基） */
+  line: number;
+  /** 起始列：**恒 1**（索引无列事实；落点是"这一行"，不是"这一行的某个字符"） */
+  column: number;
+  kind: 'definition';
+}
+
+/** 变量名在可见代码里的**一次提及** */
+export interface ErbDimMentionReference {
+  /** 出现所在文件（方言文件绝对路径） */
+  filePath: string;
+  /** 行号（1 基） */
+  line: number;
+  /** 起始列（1 基） */
+  column: number;
+  /** 结束列（不含端点 = `column` + 名字长度） */
+  endColumn: number;
+  /**
+   * `mention`：可见代码里整串等于该名字的记号（注释 / 字符串内容 / `[SKIPSTART]` 段不算；
+   * 紧邻半/全角冒号的成员名不算——`CFLAG:ALPHA` 里 `ALPHA` 是成员，`CFLAG` 仍是变量提及）。
+   */
+  kind: 'mention';
+}
+
+/**
+ * 项目级变量引用索引（**只收全局声明名**）。
+ *
+ * 为什么只收全局：`#DIM` 在函数体内是**调用栈局部**的（真语料 67.7% 的声明都是这种），
+ * 跨函数同名互不相干；把局部名字收进来，项目级查找引用就会把 A 函数的变量算到 B 头上。
+ * 局部变量的引用由文件内那条腿答（`erbDimReferencesAt` 的本地分支）。
+ *
+ * 声明点与提及点**同表**：find-references 要把"定义在哪、谁在用"一起给出（rename 也靠它）。
+ * 排序 = 构建序（文件遍历序）→ 行 → 列，与 {@link ErbReferenceIndex} 同一条确定性纪律。
+ */
+export interface ErbDimReferenceIndex {
+  /** 归一化变量名（大写）→ 该名在项目内的全局出现点全集 */
+  readonly byName: ReadonlyMap<string, readonly ErbDimReference[]>;
 }
 
 /* ---------------- 索引状态事实（IDX-STATE 2026-10-19，全部 additive） ---------------- */
