@@ -10,9 +10,25 @@
  * 对外，`import type` 会被擦除，所以不把文件拽进开机图（PS-10 字节闸）。
  * 判据（哪些行算未建模写）住插件侧（`state-replay`），契约只描述事实形状。
  */
+/**
+ * 一条写点事实的**类别**（2026-11-05 边界批；additive）：
+ * - `assign`：变量族赋值（`CFLAG:2 += 1` / `TFLAG' = 1` …）——写点确定，值算不出；
+ * - `instruction`：引擎写指令（`SETBIT` / `INPUT` / `VARSET` / `EQUIP` …）；
+ * - `call`：函数调用行（`CALL` / `CALLFORM` / `TRYCALL*`）——**被调段可能写状态**，
+ *   本层不展开（跨函数传播不在近似回放的射程内）；`text` 是调用行原文；
+ * - `jump`：`GOTO` / `JUMP` ——**可达性未建模**（跳转后的写点/早退是否执行，
+ *   静态判不出）；只在"该函数里确实有需要判可达性的写/返回"时才报，避免刷屏。
+ *
+ * 消费方按类别分桶呈现（确定写点 vs 不确定面），不要把 `call` / `jump` 说成
+ * "这行写了状态"。
+ */
+export type ReplayWriteKind = 'assign' | 'instruction' | 'call' | 'jump';
+
 export interface ReplayWrite {
   /** 写点行（1 基，与 `PredicateReplay.line` 同坐标系） */
   line: number;
   /** 该行原文（去行内注释；给作者定位用，不做二次解析） */
   text: string;
+  /** 类别（缺省 = `assign`，旧数据兼容） */
+  kind?: ReplayWriteKind;
 }

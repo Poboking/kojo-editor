@@ -24,8 +24,18 @@
  *    `locals.ts` 的直线数据流；`ARG/ARGS` ＝ E2 起的调用上下文 + 直线赋值）时不报——
  *    那些写**已被建模**，不算"未建模"；带撇的本地量写法（`LOCAL' = "…"`）按同一族规则
  *    一并放过（字符串维不在本层数据流里，但"宁少勿错"：不把它单列成未建模写）。
- * 4. **引擎写指令**：行首（首词）命中下面 `WRITE_INSTRUCTIONS` 短表时也报。
- * 5. 同一行只报一次；顺序 = 行序；`text` = 剥前缀 + 去行内注释后的行正文（给作者定位，
+ * 4. **引擎写指令**：行首（首词）命中下面 `WRITE_INSTRUCTIONS` 短表时也报
+ *    （`kind:'instruction'`；赋值形恒为 `kind:'assign'`）。
+ * 5. **调用族**（2026-11-05 边界批）：行首动词命中 `CALL_INSTRUCTIONS`（`CALL*` / `TRYCALL*` /
+ *    `TRYCCALL*`，名字逐条来自引擎指令表 `erb-parser/src/instructions.ts`，测试用那张表钉住 ⊆）⇒
+ *    `kind:'call'`。理由：被调段可能写状态；本层**不展开、不解析实参**（跨函数传播不在
+ *    近似回放的射程内，展开会把单函数检测变成整图遍历——性能红线）。
+ * 6. **跳转族**（同批）：行首动词命中 `JUMP_INSTRUCTIONS`（`GOTO` / `GOTOFORM` / `JUMP` /
+ *    `JUMPFORM` 的平跳形）⇒ 候选 `kind:'jump'`，**防刷屏**：只有本函数区间内该跳转行
+ *    **之后**还存在至少一条 `assign` / `instruction` / `call` 写点（即可达性会影响近似
+ *    结论）时才报；否则丢弃（纯前向跳转后没有写 = 不影响结论，报了只是噪音）。
+ *    实现是两遍扫（先收写点、再决定 jump 是否入列），仍是 O(行数)。
+ * 7. 同一行只报一次；顺序 = 行序；`text` = 剥前缀 + 去行内注释后的行正文（给作者定位，
  *    不做二次解析）。
  *
  * ## 为什么是"短表 + 行首动词"，而不是"动词白名单/黑名单"
@@ -37,8 +47,12 @@
  *
  * ## 不检测（已知边界，如实记录）
  *
- * - 行内 `CALL` / `CALLFORM` 等**间接写**：被调函数体内写什么，本层不做跨函数传播；
- * - `GOTO` / `JUMP` 跳转后的写：直线扫描照报（它确实会执行），但跳转的**可达性**不建模；
+ * - 行内 `CALL` / `CALLFORM` 等**间接写**：只报调用行本身（`kind:'call'`，不确定面），
+ *   被调函数体内写什么，本层不做跨函数传播；
+ * - `GOTO` / `JUMP` 跳转后的写：直线扫描照报（它确实会执行），跳转的**可达性**不建模；
+ *   跳转行本身只在"该行之后还有写点"时才报（`kind:'jump'`，判据见 6）；
+ * - `TRYGOTO*` / `TRYJUMP*`（条件跳转）未收：它们叠了"跳不跳得成"另一层不确定性，
+ *   本批只放开平跳形，宁少勿错；
  * - 写在函数区间外（被 `CALL` 的上文/下文函数）——不属本函数体；
  * - `DUMPRAND` / `INITRAND`（RANDDATA 状态）与 `SWAPVAR` 一类未列入短表的指令：
  *   宁少勿错，未收；
@@ -59,6 +73,12 @@ export type ReplayWrites = NonNullable<FunctionReplay['unmodeledWrites']>;
 
 /** 单个写点（与契约 `ReplayWrite` 结构同形：行号 1 基 + 去注释行正文） */
 export type ReplayWrite = ReplayWrites[number];
+
+/**
+ * 写点类别（契约 `ReplayWrite.kind` 的插件侧取型；面板按类别分桶用）。
+ * 契约侧 `kind?` 缺省 = `assign`（旧数据兼容），本插件**总是**写显式类别。
+ */
+export type ReplayWriteKind = NonNullable<ReplayWrite['kind']>;
 
 /**
  * **已建模**的语言局部量族：这些目标的直线赋值由 `locals.ts` 的数据流（`LOCAL` 族）
@@ -115,7 +135,8 @@ const LEADING_VERB_RE = /^([A-Z_][A-Z0-9_]*)\b/i;
  * `LOADGLOBALDATA` 在 3,818 份真实 ERB 里 **0 命中**，引擎真名分别是
  * `RESETGLOBAL` / `SAVEGLOBAL` / `LOADGLOBAL`；`INPUTSN` 同样不是引擎词
  * （真名 `TINPUT` / `BINPUT` 一族）。测试用 `@kojo/plugin-erb-parser` 的
- * `ERB_INSTRUCTION_NAMES` 钉住"短表 ⊆ 引擎指令表"。
+ * `ERB_INSTRUCTION_NAMES` ∪ `ERB_STATEMENT_DIRECTIVES` 钉住"短表 ⊆ 引擎词表"
+ * （`EQUIP` / `MAP_SET` 一族在引擎侧是内建语句，只出现在语句提示表）。
  */
 export const WRITE_INSTRUCTIONS: ReadonlySet<string> = new Set([
   // 位操作
@@ -167,6 +188,49 @@ export const WRITE_INSTRUCTIONS: ReadonlySet<string> = new Set([
   'MAP_SET',
   'RESET_STAIN',
 ]);
+
+/**
+ * **调用族**（`kind:'call'`；2026-11-05 边界批）。
+ *
+ * 取词判据是**机械的**：引擎指令表里所有以 `CALL` / `TRYCALL` / `TRYCCALL` 起首的动词
+ * （`erb-parser/src/instructions.ts` 的 `ERB_INSTRUCTION_NAMES`，2026-11-05 grep 确认；
+ * 引擎表是唯一真源，本表**不许**手写猜测名）。被调段可能写状态，本层不展开、不解析实参。
+ *
+ * 为什么整族都收：`CALLF` / `TRYCALLF` 一类是同一语义的变体，漏一个就漏一类；
+ * 而它们**确实**是调用，标成"不确定面"不是误报（面板按类别分桶呈现）。
+ * `CALLL` / `CALLFORML` 只出现在语句提示词表、不在引擎指令全集里（未注册），
+ * 故不在本表——`writes-kinds.test.ts` 用引擎表钉住这条等式。
+ */
+export const CALL_INSTRUCTIONS: ReadonlySet<string> = new Set([
+  'CALL',
+  'CALLEVENT',
+  'CALLF',
+  'CALLFORM',
+  'CALLFORMF',
+  'CALLSHARP',
+  'CALLTRAIN',
+  'TRYCALL',
+  'TRYCALLF',
+  'TRYCALLFORM',
+  'TRYCALLFORMF',
+  'TRYCALLLIST',
+  'TRYCCALL',
+  'TRYCCALLFORM',
+]);
+
+/**
+ * **跳转族**（`kind:'jump'`；2026-11-05 边界批）——只收平跳形，名字同样逐条对引擎表。
+ *
+ * `TRYGOTO*` / `TRYJUMP*` 是**条件**跳转（跳不跳得成还叠一层不确定性），本批不收：
+ * 跳转行只在"后面还有写点"时才报，先把最常用、语义最直的两条（`GOTO` / `JUMP`）及其
+ * `FORM` 变体落地，宁少勿错。
+ */
+export const JUMP_INSTRUCTIONS: ReadonlySet<string> = new Set([
+  'GOTO',
+  'GOTOFORM',
+  'JUMP',
+  'JUMPFORM',
+]);
 /**
  * 去掉行内注释（引号外的 `;` 起注释；引号内保留）。
  *
@@ -197,6 +261,10 @@ export function detectUnmodeledWrites(
   const out: ReplayWrite[] = [];
   if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || startLine > endLine) return out;
   const last = Math.min(endLine, lines.length);
+  /** 跳转候选（先收着；防刷屏判据要等整段扫完才知道后面有没有写点） */
+  const jumps: ReplayWrite[] = [];
+  /** 最后一条 `assign` / `instruction` / `call` 写点行（0 = 还没有；jump 不算写点） */
+  let lastWriteLine = 0;
   /** SKIP 区状态（区间内起算；区间前开的 SKIP 见文件头"已知边界"） */
   let inSkip = false;
   for (let ln = Math.max(1, startLine); ln <= last; ln++) {
@@ -223,12 +291,38 @@ export function detectUnmodeledWrites(
       // 带撇目标（`TFLAG'` / `CFLAG:2'`：引擎的字符串维度）判族前去掉撇号——
       // "写的是哪个变量族"与"值是什么类型"是两条轴，本模块只关心前者。
       const target = assign[1]!.replace(/'/g, '').toUpperCase();
-      if (!MODELED_LOCAL_FAMILIES.has(target)) out.push({ line: ln, text: code });
+      if (!MODELED_LOCAL_FAMILIES.has(target)) {
+        out.push({ line: ln, text: code, kind: 'assign' });
+        lastWriteLine = ln;
+      }
       continue;
     }
 
     const verb = LEADING_VERB_RE.exec(code);
-    if (verb && WRITE_INSTRUCTIONS.has(verb[1]!.toUpperCase())) out.push({ line: ln, text: code });
+    if (!verb) continue;
+    const upper = verb[1]!.toUpperCase();
+    // 调用族：被调段可能写状态（不展开、不解析实参——性能红线）
+    if (CALL_INSTRUCTIONS.has(upper)) {
+      out.push({ line: ln, text: code, kind: 'call' });
+      lastWriteLine = ln;
+      continue;
+    }
+    // 跳转族：先记候选，扫完再按"后面还有没有写点"决定入列（防刷屏）
+    if (JUMP_INSTRUCTIONS.has(upper)) {
+      jumps.push({ line: ln, text: code, kind: 'jump' });
+      continue;
+    }
+    // 引擎写指令
+    if (WRITE_INSTRUCTIONS.has(upper)) {
+      out.push({ line: ln, text: code, kind: 'instruction' });
+      lastWriteLine = ln;
+    }
+  }
+  // 防刷屏判据：只有"该跳转行之后还有写点"（可达性会影响近似结论）才报。
+  // 纯前向跳转后没有写 = 不影响结论，报了只是噪音。仍是 O(行数)：一次过滤 + 一次合并排序。
+  if (jumps.length > 0) {
+    for (const jump of jumps) if (jump.line < lastWriteLine) out.push(jump);
+    out.sort((a, b) => a.line - b.line);
   }
   return out;
 }

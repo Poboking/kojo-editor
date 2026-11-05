@@ -136,7 +136,7 @@ export function textSourceLabel(choice: ReplayTextChoice): string {
   if (choice.source === 'buffer') {
     return choice.reason === 'buffer-dirty'
       ? '本次判定用的是编辑器里的未保存文本（不是磁盘上的那一份）'
-      : '本次判定用的是编辑器缓冲区文本（与磁盘当前一致）';
+      : '本次判定用的是编辑器缓冲区文本（编辑器里正开着的这一份）';
   }
   if (choice.reason === 'other-file') return '本次判定用的是磁盘文本（被判的那份文件不是编辑器里正在编辑的这一份）';
   return '本次判定用的是磁盘文本';
@@ -145,36 +145,121 @@ export function textSourceLabel(choice: ReplayTextChoice): string {
 /** 未建模写摘要一次列几行（多的折成 `…`，数字另报） */
 export const UNMODELED_WRITE_LIMIT = 5;
 
+/**
+ * 写点类别（契约 `ReplayWrite.kind`，2026-11-05 边界批 additive）。
+ *
+ * 类型从 `FunctionReplay['unmodeledWrites']` 取——**不从桶里 import `ReplayWrite`**：
+ * 那条 import 会把契约文件的类型面拽进开机图（PS-10 字节闸），而这里只需要"那个
+ * 可选字段的联合类型"。
+ */
+export type UnmodeledWriteKind = NonNullable<FunctionReplay['unmodeledWrites']>[number]['kind'];
+
+/** 一条写点事实（结构上兼容契约 `ReplayWrite`；`kind` 缺省 = 旧数据 = 确定写点） */
+export interface UnmodeledWriteLike {
+  readonly line: number;
+  readonly text: string;
+  readonly kind?: UnmodeledWriteKind;
+}
+
+/** 摘要里"确定写点"的那一条（行号 + 原文） */
+export interface UnmodeledConcreteWrite {
+  readonly line: number;
+  readonly text: string;
+}
+
 /** 未建模写摘要（见 `summarizeUnmodeledWrites`） */
 export interface UnmodeledWritesSummary {
-  /** 写点总数 */
+  /** 写点总数（**全部类别**，含 call / jump；与 `concrete.length` 不一定相等） */
   total: number;
-  /** 前 `limit` 条（行号 + 原文，行序即引擎给的顺序） */
-  shown: { line: number; text: string }[];
-  /** 没列出来的条数（0 = 全列了） */
+  /** 前 `limit` 条**确定写点**（行号 + 原文，行序即引擎给的顺序；call/jump 不逐行铺） */
+  shown: UnmodeledConcreteWrite[];
+  /** 没列出来的**确定写点**条数（0 = 全列了） */
   more: number;
-  /** 提示语前半句（行号按钮跟在它后面渲染） */
+  /** 提示语（分层的整句；行号按钮跟在它后面渲染） */
   head: string;
+  /** 确定写点（kind 为 assign / instruction / 缺省）——全部，不截断 */
+  concrete: UnmodeledConcreteWrite[];
+  /** 调用行（`kind === 'call'`）条数——被调段是否写状态本层不展开 */
+  calls: number;
+  /** 跳转行（`kind === 'jump'`）条数——跳转后的写 / 早退是否执行本层不建模 */
+  jumps: number;
+  /** 调用行示例行号（最多 3 条，给 title 用；不逐行铺） */
+  callLines: number[];
+  /** 跳转行示例行号（最多 3 条，同上） */
+  jumpLines: number[];
 }
+
+/** call / jump 示例行号最多留几条（title 里够定位就行，铺多了等于刷屏） */
+export const UNMODELED_SAMPLE_LINES = 3;
 
 /**
  * 未建模写摘要（纯函数）：`undefined` / 空数组 → null（旧引擎整体不渲染，零改动）。
  *
- * 为什么只列前 5 行：这一段可能写着几十处 `CFLAG +=`，全铺出来会把谓词列表顶出屏外；
- * 面板要回答的是"这结论是近似的、差在哪几行"，不是把写点清单搬进结果区。
+ * **分桶**（2026-11-05 边界批）：契约给写点加了 `kind`，两类事实的可信度不同——
+ * - `assign` / `instruction`（以及旧数据的缺省）：**确定写点**，回放不执行，逐行可点回源；
+ * - `call` / `jump`：**不确定面**，只报计数（被调段与跳转后的写/早退是否执行，静态判不出）。
+ *   逐行铺开等于把"可能没发生的事"伪装成一排可点的写点，所以只给数量 + 前 3 条示例行号。
+ *
+ * 为什么确定写点也只列前 5 行：这一段可能写着几十处 `CFLAG +=`，全铺出来会把谓词列表
+ * 顶出屏外；面板要回答的是"这结论是近似的、差在哪几行"，不是把写点清单搬进结果区。
+ *
+ * 兼容口径：`total` 仍是**全部**写点条数；`shown` / `more` 只算确定写点（能点回源的
+ * 那批）。`undefined`（没拿到行文本）与 `[]`（算过、零写点）都返回 null，但前者的
+ * "未评估"那句话由 {@link unmodeledUnknownNote} 单独给——两者不能混成一句。
  */
 export function summarizeUnmodeledWrites(
-  writes: readonly { line: number; text: string }[] | undefined | null,
+  writes: readonly UnmodeledWriteLike[] | undefined | null,
   limit = UNMODELED_WRITE_LIMIT,
 ): UnmodeledWritesSummary | null {
   if (!writes || writes.length === 0) return null;
   const cap = Number.isFinite(limit) && limit >= 0 ? Math.floor(limit) : UNMODELED_WRITE_LIMIT;
+  const concrete: UnmodeledConcreteWrite[] = [];
+  const callLines: number[] = [];
+  const jumpLines: number[] = [];
+  let calls = 0;
+  let jumps = 0;
+  for (const w of writes) {
+    // 运行时脏数据（kind 不在联合里）按"确定写点"处理：宁可多列一行可点的，也不丢事实
+    if (w.kind === 'call') {
+      calls += 1;
+      if (callLines.length < UNMODELED_SAMPLE_LINES) callLines.push(w.line);
+    } else if (w.kind === 'jump') {
+      jumps += 1;
+      if (jumpLines.length < UNMODELED_SAMPLE_LINES) jumpLines.push(w.line);
+    } else {
+      concrete.push({ line: w.line, text: w.text });
+    }
+  }
+  const extra: string[] = [];
+  if (calls > 0) extra.push(`${calls} 处调用`);
+  if (jumps > 0) extra.push(`${jumps} 处跳转`);
+  const base = `本段有 ${concrete.length} 处状态写未建模（回放按入口值判）`;
   return {
     total: writes.length,
-    shown: writes.slice(0, cap).map((w) => ({ line: w.line, text: w.text })),
-    more: Math.max(0, writes.length - cap),
-    head: `本段有 ${writes.length} 处状态写未建模（回放按入口值判）：`,
+    shown: concrete.slice(0, cap),
+    more: Math.max(0, concrete.length - cap),
+    head:
+      extra.length > 0
+        ? `${base}；另有 ${extra.join('、')}：被调段与跳转后的写/早退不展开。`
+        : `${base}：`,
+    concrete,
+    calls,
+    jumps,
+    callLines,
+    jumpLines,
   };
+}
+
+/** `undefined`（引擎没拿到函数体行文本）时结果区那句话——与"零写点"必须分开说 */
+export const UNMODELED_UNKNOWN_NOTE = '未评估状态写（这次没拿到函数体行文本）：结论按入口值算，可能近似。';
+
+/**
+ * 「未评估」裁决（纯函数）：**只有 `undefined`** 才走那句话。
+ * `[]`（算过、零写点）/ 有值 / null → null（由摘要或整段不渲染负责）。
+ * 旧实现把这个判断内联在渲染里，测试只能隔着组件看；抽出来才能把口径钉住。
+ */
+export function unmodeledUnknownNote(writes: readonly UnmodeledWriteLike[] | undefined | null): string | null {
+  return writes === undefined ? UNMODELED_UNKNOWN_NOTE : null;
 }
 
 /* -------------------- 槽位候选的两路合并（纯函数） -------------------- */
@@ -785,25 +870,44 @@ export function renderReplayPreview(opts: {
         );
 
   /**
-   * 未建模写标记（2026-11-05）：这一段里对游戏变量的写（`CFLAG +=` / `SETBIT` / `INPUT`…）
-   * 回放**不执行**，结论按入口值算 ⇒ 结果只是近似。写点行由引擎交回，面板逐行可点回源，
-   * 行数多时只列前 5 条（`summarizeUnmodeledWrites`）。
+   * 未建模写标记（2026-11-05；2026-11-05 边界批分桶）：这一段里对游戏变量的写
+   * （`CFLAG +=` / `SETBIT` / `INPUT`…）回放**不执行**，结论按入口值算 ⇒ 结果只是近似。
+   *
+   * 呈现分两层（不把"可能没发生"伪装成"写了"）：
+   * - **确定写点**（assign / instruction / 旧数据缺省）逐行可点回源，行数多时只列前 5 条；
+   * - **调用 / 跳转**只给计数，不逐行铺（被调段与跳转后的写/早退静态判不出）；
+   *   前 3 条示例行号进 title，悬停即可定位，不占屏。
    */
   const unmodeled = summarizeUnmodeledWrites(result.unmodeledWrites);
   /** D6（2026-11-05）：引擎把 undefined 定义成「不知道有没有写」（没拿到正文），`[]` 才是「算过、未检出」。
    * 两者都渲染成「没有写点」就是在替引擎撒谎 ⇒ undefined 单独给一句「未评估」。 */
-  const unmodeledUnknown = result.unmodeledWrites === undefined;
-  const unmodeledSection = unmodeledUnknown
+  const unmodeledUnknown = unmodeledUnknownNote(result.unmodeledWrites);
+  /** call/jump 的悬停示例（只有计数，示例行号放 title） */
+  const unmodeledExamples =
+    unmodeled !== null && (unmodeled.calls > 0 || unmodeled.jumps > 0)
+      ? [
+          unmodeled.calls > 0
+            ? `调用 ${unmodeled.calls} 处${unmodeled.callLines.length > 0 ? `（示例：第 ${unmodeled.callLines.join('、')} 行）` : ''}`
+            : null,
+          unmodeled.jumps > 0
+            ? `跳转 ${unmodeled.jumps} 处${unmodeled.jumpLines.length > 0 ? `（示例：第 ${unmodeled.jumpLines.join('、')} 行）` : ''}`
+            : null,
+          '被调段与跳转后的写/早退不展开（静态判不出是否执行）',
+        ]
+          .filter((s): s is string => s !== null)
+          .join('\n')
+      : null;
+  const unmodeledSection = unmodeledUnknown !== null
     ? createElement(
         'div',
         { className: 'rp-hint rp-unmodeled', role: 'note' },
-        '未评估状态写（这次没拿到函数体行文本）：结论按入口值算，可能近似。',
+        unmodeledUnknown,
       )
     : unmodeled
     ? createElement(
         'div',
         { className: 'rp-hint rp-unmodeled', role: 'note' },
-        createElement('span', null, unmodeled.head),
+        createElement('span', unmodeledExamples === null ? null : { title: unmodeledExamples }, unmodeled.head),
         ...unmodeled.shown.map((w, i) =>
           createElement(
             'button',
@@ -817,7 +921,9 @@ export function renderReplayPreview(opts: {
             `第 ${w.line} 行`,
           ),
         ),
-        unmodeled.more > 0 ? createElement('span', { className: 'dim' }, `…（另有 ${unmodeled.more} 处）`) : null,
+        unmodeled.more > 0
+          ? createElement('span', { className: 'dim' }, `…（还有 ${unmodeled.more} 处确定写点未列）`)
+          : null,
       )
     : null;
 

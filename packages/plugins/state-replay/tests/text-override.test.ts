@@ -238,9 +238,10 @@ describe('textOverride：引擎 → 抽取器 → 取行', () => {
     expect(h.calls[0]).toEqual({ name: 'FN_A', textOverride: buffer });
     // 台词推演的取行来自 buffer（若走了 lineCache，会是磁盘台词）
     expect(r.transcript?.[0]?.text).toBe('缓冲台词');
-    // 已知边界：内联预热仍读盘（`engine.ts` 的边界注释）——但入缓存的必须是**磁盘正文**；
-    // 若把 override 塞进 lineCache，这里的字符数会等于 buffer 的字数。
-    expect(h.engine.cacheStats().chars).toBe(charsOf(DISK_A));
+    // 缓冲文本回放（2026-11-05 边界批起）：内联预热也吃缓冲正文 ⇒ 这次回放**不该把盘上正文
+    // 烤进 lineCache**；正向判据 = 缓存里若真有正文，只能是磁盘那份，绝不能等于 buffer。
+    expect(h.engine.cacheStats().chars).not.toBe(charsOf(buffer));
+    expect([0, charsOf(DISK_A)]).toContain(h.engine.cacheStats().chars);
   });
 
   it('台词推演 / 谓词 / 写点都来自 override 文本（改一行正文能反映到推演）', async () => {
@@ -249,7 +250,7 @@ describe('textOverride：引擎 → 抽取器 → 取行', () => {
     const r = (await h.engine.replayFunction(view, 'FN_A', { textOverride: BUFFER_A }))!;
     expect(r.predicates[0]!.outcome).toEqual({ kind: 'true' }); // CFLAG:2=800 >= 500
     expect(r.transcript?.[0]?.text).toBe('缓冲台词');
-    expect(r.unmodeledWrites).toEqual([{ line: 5, text: 'CFLAG:2 += 20' }]);
+    expect(r.unmodeledWrites).toEqual([{ line: 5, text: 'CFLAG:2 += 20', kind: 'assign' }]);
   });
 
   it('P0 插行场景：缓冲区插 5 行 ⇒ startLine / 谓词行 / 写点行都跟缓冲区走', async () => {
@@ -260,7 +261,7 @@ describe('textOverride：引擎 → 抽取器 → 取行', () => {
     const fromDisk = (await h.engine.replayFunction(view, 'FN_A'))!;
     expect(fromDisk.startLine).toBe(1);
     expect(fromDisk.predicates[0]!.line).toBe(9);
-    expect(fromDisk.unmodeledWrites).toEqual([{ line: 11, text: 'CFLAG:2 += 10' }]);
+    expect(fromDisk.unmodeledWrites).toEqual([{ line: 11, text: 'CFLAG:2 += 10', kind: 'assign' }]);
 
     // 有 override：缓冲区坐标（函数 6..17、谓词 14、写点 16）——
     // 旧实现拿磁盘索引区间切缓冲区，会得到 predicates: [] + confidence: 'exact'（P0）
@@ -269,7 +270,7 @@ describe('textOverride：引擎 → 抽取器 → 取行', () => {
     expect(fromBuffer.predicates).toHaveLength(1);
     expect(fromBuffer.predicates[0]!.line).toBe(14);
     expect(fromBuffer.predicates[0]!.outcome).toEqual({ kind: 'true' }); // 800 >= 500
-    expect(fromBuffer.unmodeledWrites).toEqual([{ line: 16, text: 'CFLAG:2 += 20' }]);
+    expect(fromBuffer.unmodeledWrites).toEqual([{ line: 16, text: 'CFLAG:2 += 20', kind: 'assign' }]);
   });
 
   it('override 不污染下一次无 override 的回放（拿回磁盘正文）', async () => {
@@ -285,7 +286,7 @@ describe('textOverride：引擎 → 抽取器 → 取行', () => {
     expect(h.reads()).toBeGreaterThanOrEqual(1); // 磁盘正文确实被取过（内联预热 / 取行）
     expect(fromDisk.predicates[0]!.outcome).toEqual({ kind: 'false' }); // 800 >= 900
     expect(fromDisk.transcript?.[0]?.text).toBe('磁盘台词');
-    expect(fromDisk.unmodeledWrites).toEqual([{ line: 5, text: 'CFLAG:2 += 10' }]);
+    expect(fromDisk.unmodeledWrites).toEqual([{ line: 5, text: 'CFLAG:2 += 10', kind: 'assign' }]);
     expect(h.engine.cacheStats().files).toBe(1); // 磁盘正文在缓存里（只有一份，按文件路径）
   });
 

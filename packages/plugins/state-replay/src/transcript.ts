@@ -48,6 +48,21 @@
  *   体内的 RETURN 根本不执行（`FOR LOCAL,0,0` 这类空区间足够真实）⇒ 不构成必然。
  *   `TRY` 块的 RETURN 照常执行（TRY 只捕获错误），不在此列。
  *
+ * ## 空区间循环里的 RETURN（2026-11-05 边界批 E5）
+ *
+ * 上面那条循环闸只放开**可证明**的一种形状（其余一律维持保守）：
+ * - RETURN 的最近一层循环是 `FOR`，且区间字面量可证明非空（`lo < hi`——引擎 `FOR v,lo,hi`
+ *   的终值不取，`lo === hi` 一轮都不跑；`lo/hi` 用抽取侧 `FunctionLoopCounter` 的端点闭区间，
+ *   与 `loop-range.ts` 同一份事实，不另造解析器）；
+ * - RETURN 是该 `FOR` 体的**第一条可执行行**（`firstBodyLine`：注释 / `[SKIPSTART]` 区内的
+ *   行抽取侧已跳过）⇒ 第一轮就执行，必然早退；
+ * - 该 `FOR` 头**本身不在任何循环体内**（外层 `WHILE` / 嵌套 `FOR` 可能 0 次迭代或提前
+ *   `BREAK`，内层头根本到不了）⇒ 本批只放开"顶层非空 FOR + 首行 RETURN"这一种。
+ * 命中后仍要过 `$` 标签闸（跳转可跳过早退）。
+ * 区间含变量 / 区间空（`lo === hi`）/ RETURN 不在首行 / 体内有 `BREAK` 在它之前 /
+ * `WHILE` `REPEAT` `DO` / 显式写了步进的 `FOR`（步进方向会让 `lo < hi` 失去"非空"含义）
+ * ⇒ 一律维持旧保守。
+ *
  * 早退判断能盖过 `shown` / `maybe`，但**不把 `hidden` 改回**。
  *
  * ## 文本求值
@@ -64,6 +79,7 @@ import type {
   ConditionExpr,
   ControlFlowStatement,
   FunctionDisplayLine,
+  FunctionLoopCounter,
   FunctionPredicates,
   PredicateReplay,
   ReplayUnknown,
@@ -269,6 +285,50 @@ function insideLoopBody(stmts: readonly ControlFlowStatement[], line: number): b
 }
 
 /**
+ * `FOR` 头是否**显式写了步进**（第 4 个参数；逗号在括号外的计数）。
+ *
+ * 抽取侧的 `FunctionLoopCounter` 只发布端点闭区间、**不带步进**，而显式负步进 + 升序端点
+ * （`FOR I,0,3,-1`）会让 `lo < hi` 失去"非空"含义 ⇒ 见到显式步进就不宣称（宁少勿错）。
+ * 头部语句缺失（合成 detail）⇒ 当作无步进：真实数据里 `statements` 恒有该行。
+ */
+function forHasExplicitStep(stmts: readonly ControlFlowStatement[], openLine: number): boolean {
+  const head = stmts.find((t) => t.kind.toUpperCase() === 'FOR' && t.line === openLine);
+  if (!head) return false;
+  let depth = 0;
+  let commas = 0;
+  for (const ch of head.expression) {
+    if (ch === '(') depth++;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    else if (ch === ',' && depth === 0) commas++;
+  }
+  return commas >= 3;
+}
+
+/**
+ * E5（2026-11-05 空区间循环批）：该 RETURN 是否**可证明在第一轮循环就执行**。
+ *
+ * 只放开一种形状（其余一律维持 E4 保守，判据见文件头 §空区间循环里的 RETURN）：
+ * 最近一层循环是非空 `FOR`（`lo < hi`，终值不取）+ RETURN 是该体第一条可执行行
+ * （`firstBodyLine`，注释 / SKIP 区已被抽取侧跳过）+ 该 `FOR` 头不在任何循环体内。
+ */
+function returnInNonEmptyForFirstBody(detail: FunctionPredicates, line: number): boolean {
+  const counters = detail.loopCounters;
+  if (!counters || counters.length === 0) return false;
+  // 最近一层循环 = 包住该行且 openLine 最大的那枚（`loopCounters` 只发布 FOR）
+  let inner: FunctionLoopCounter | null = null;
+  for (const c of counters) {
+    if (c.openLine >= line || line >= c.closeLine) continue;
+    if (!inner || c.openLine > inner.openLine) inner = c;
+  }
+  if (!inner) return false;
+  if (!(inner.lo < inner.hi)) return false; // 区间空（lo === hi）：一轮都不跑
+  if (inner.firstBodyLine !== line) return false; // 不是体内第一条可执行行
+  if (forHasExplicitStep(detail.statements, inner.openLine)) return false; // 步进方向判不准
+  // 外层还有循环（WHILE / 嵌套 FOR）⇒ 内层头可能到不了；本批不放开嵌套形状
+  return !insideLoopBody(detail.statements, inner.openLine);
+}
+
+/**
  * 早退行与本显示行是否在同一条执行路径上（E4 路径判据）。
  *
  * 逐链检查：早退行在链成员 M 体内、而本行不在同一成员体内 → 早退不在本行路径上
@@ -440,12 +500,13 @@ export function buildTranscript(opts: BuildTranscriptOptions): TranscriptLine[] 
   // 包络链按链头行升序 = 外→内（branches 产物已按 headLine 排序；防御性再排一次）
   const chains = [...opts.branches].sort((a, b) => a.headLine - b.headLine);
   // 早退候选（E4）：函数体内的 RETURN/RETURNF 行；带 `$` 标签后缀 / 位于循环体内的
-  // 候选直接剔除（保守闸，判据见文件头）。行文本缺失（旧调用方传空数组）→ 无候选，
-  // 逐字旧行为。
+  // 候选直接剔除（保守闸，判据见文件头）。E5 只放开"顶层非空 FOR + 体内首行 RETURN"
+  // 这一种可证明形状。行文本缺失（旧调用方传空数组）→ 无候选，逐字旧行为。
   const earlyCandidates = returnLines(opts.lines, opts.detail.startLine, opts.detail.endLine).filter(
     (ln) =>
       !hasLabelAfter(opts.lines, ln, opts.detail.endLine) &&
-      !insideLoopBody(opts.detail.statements, ln),
+      (!insideLoopBody(opts.detail.statements, ln) ||
+        returnInNonEmptyForFirstBody(opts.detail, ln)),
   );
   // 谓词求值结果按行归并（unknown 链的"本支明确为假"判据要按行取；CASE 同行多值）
   const predsByLine = new Map<number, PredicateReplay[]>();

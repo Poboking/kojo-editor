@@ -23,6 +23,14 @@
  *   f. 换一个函数 → 槽位输入被重置（全空）；
  *   g. 结果区/选择区存在缓冲文本口径提示（「有未保存编辑时按编辑器缓冲文本判定」）；未建模写口径在场；
  *      有 INLINE / call-context 计数时，对应提示必须在场；
+ *   i. 整档体检（本档全部角色，边界批 S4）：入口按钮 + title 写明预算；真跑完出摘要
+ *      （已扫 > 0 角色、含「全未知」计数）；摘要可展开成角色行 + 「全局最该看」并**点了就判**；
+ *      再点一次能在 busy 期取消（摘要带「已取消」）；
+ *   j. 未建模写分桶（边界批）：语料里挑「行首 CALL + 状态写」/「平跳后还有写」的真函数，
+ *      判定后结果区必须出现「另有 N 处调用 / 跳转」，且 call / jump 行**不铺成逐行按钮**；
+ *   k. 未保存文本口径：真改 Monaco 缓冲（真语料是只读项目 ⇒ `executeEdits` 被 Monaco 静默吞掉，
+ *      退回任务书给的备用口径 `setValue`；不保存）→ 判定 → 结果区标出「编辑器里的未保存文本」
+ *      → `setValue` 还原（正文逐字回原文，全程不写盘）；
  *   h. 截图落到 `.arts/`（不入库；`--out` 可改），打印读数摘要。
  *
  * 真语料是**只读**打开的（规范 §5：游戏目录整体只读）：调试宿 `--readonly` 登记读根，
@@ -82,6 +90,11 @@ const FN_ARGS = 'M_KOJO_MESSAGE_NK_COM_K49_SUIKA';
 const FN_INT_ARG = 'M_KOJO_ORTHODOX_SPEVENT_K49_2';
 /** 打开的口上文件（快速打开那条腿的搜索词；也是「打开一份口上文件」的验收对象）。 */
 const KOJO_FILE_FRAG = 'M_KOJO_K49_310_其它事件.ERB';
+/**
+ * 缓冲文本探针（k1）用的口上文件：选一份**有活函数**的（`其它事件` 整篇在 SKIPSTART 里，
+ * 抽取侧不发布那区里的函数，拿它测不出缓冲文本腿）。搜索词仍是「快速打开」那条腿。
+ */
+const BUFFER_FILE_FRAG = 'M_KOJO_K49_310_会话.ERB';
 /** 角色：K49 古明地觉。 */
 const CHARA_NO = 49;
 
@@ -90,6 +103,18 @@ const OPEN_PROJECT_MS = 300000;
 const VIEW_MS = 180000;
 const JUDGE_MS = 300000;
 const PANEL_MS = 60000;
+/**
+ * 整档体检（本档全部角色）：168 角色 × 每角色 20 段、全档 2,000 段封顶的**真回放**。
+ * 真机 60–120s 起（段落大的话更久），给足 5 分钟——超时就是"跑不完"，不拿假绿兜底。
+ */
+const ARCHIVE_SCAN_MS = 300000;
+/** 取消后的收尾预算：每段开始前读旗标，当前段跑完才停（大段落可能要几十秒）。 */
+const ARCHIVE_SCAN_CANCEL_MS = 120000;
+/**
+ * 「整档体检」按钮要等条件索引就绪（全语料抽取：4,072 ERB / 近 50 万谓词，真机几十秒起）。
+ * 给 7 分钟；等不到就是这颗入口在真语料上不可达（读数照报，不静默跳过）。
+ */
+const ARCHIVE_INDEX_MS = 420000;
 
 /* ------------------------------ 命令行参数 ------------------------------ */
 
@@ -359,6 +384,101 @@ async function readPanel(cdp) {
   );
 }
 
+/**
+ * 「整档体检」区读数（2026-11-05 边界批 · 车道 S4）。
+ *
+ * 为什么不并进 `readPanel`：这一段**只在跑过（或正在跑）体检后才存在**，还自带角色行 /
+ * 全局最该看行 / 取消按钮三套骨架。把它混进主读数，会让"面板骨架不认识"的失败面变大；
+ * 而这一段恰恰就是"跑得出来 / 跑不出来"的判据本身，单独一条读数更好排障。
+ *
+ * 角色行与「全局最该看」按钮都靠**文案/title 判据**认（没有专属 class）：
+ * - 角色行：按钮文本 `K<号> <名字>`；
+ * - 最该看：title = 「切到 K<号> 并判定「<函数名>」」（面板自己写的那句，见 index.ts）。
+ */
+async function readArchiveScan(cdp) {
+  return await cdp.evalJs(
+    `(() => {
+      const panel = document.querySelector('.panel-state-replay');
+      if (!panel) return { present: false };
+      const txt = (el) => (el ? (el.textContent || '').trim() : '');
+      const sec = [...panel.querySelectorAll('.dbg-sec')].find((s) => txt(s.querySelector('.dbg-sec-title')) === '整档体检');
+      if (!sec) return { present: false };
+      const all = [...sec.querySelectorAll('button')];
+      const row = (b) => ({
+        text: txt(b),
+        title: b.getAttribute('title') || '',
+        disabled: b.disabled === true,
+      });
+      const charButtons = all.filter((b) => /^K\\d+\\s/.test(txt(b))).map(row);
+      const worstButtons = all
+        .filter((b) => {
+          const t = b.getAttribute('title') || '';
+          return t.startsWith('切到 K') && t.includes('并判定');
+        })
+        .map((b) => ({
+          ...row(b),
+          charaNo: Number((b.getAttribute('title') || '').replace(/^切到 K(\\d+)[\\s\\S]*$/, '$1')),
+        }));
+      const expand = all.find((b) => /展开明细|收起明细/.test(txt(b)));
+      return {
+        present: true,
+        note: txt(sec.querySelector('.dbg-sec-note')),
+        notes: [...sec.querySelectorAll('.dbg-note')].map((e) => txt(e)),
+        buttons: all.map(row),
+        charButtons,
+        worstButtons,
+        expanded: expand ? /收起/.test(txt(expand)) : null,
+        sectionText: sec.innerText.slice(0, 1200),
+      };
+    })()`,
+    45000,
+  );
+}
+
+/**
+ * 结果区「未建模写」分桶读数（`.rp-unmodeled`；边界批把 call / jump 从逐行按钮里分出去）。
+ *
+ * 一次拿全三层：**head**（整句文案，含「另有 N 处调用、M 处跳转」）、**headTitle**
+ * （悬停里那 3 条示例行号）、**buttons**（只该是「确定写点」的行号按钮）。
+ */
+async function readUnmodeled(cdp) {
+  return await cdp.evalJs(
+    `(() => {
+      const panel = document.querySelector('.panel-state-replay');
+      if (!panel) return { present: false };
+      const txt = (el) => (el ? (el.textContent || '').trim() : '');
+      const res = [...panel.querySelectorAll('.dbg-sec')].find((s) => txt(s.querySelector('.dbg-sec-title')) === '判定结果');
+      if (!res) return { present: false, reason: 'no-result-section' };
+      const note = txt(res.querySelector('.dbg-sec-note'));
+      const un = res.querySelector('.rp-unmodeled');
+      if (!un) return { present: false, resultNote: note, reason: 'no-unmodeled-section' };
+      const headEl = un.firstElementChild;
+      const lineOf = (b) => {
+        const fromText = /第\\s*(\\d+)\\s*行/.exec(txt(b));
+        if (fromText) return Number(fromText[1]);
+        const fromTitle = /:(\\d+)\\r?\\n/.exec(b.getAttribute('title') || '');
+        return fromTitle ? Number(fromTitle[1]) : null;
+      };
+      const buttons = [...un.querySelectorAll('.rp-unmodeled-line')].map((b) => ({
+        line: lineOf(b),
+        text: txt(b),
+        title: b.getAttribute('title') || '',
+      }));
+      const tail = un.lastElementChild && un.lastElementChild !== headEl ? un.lastElementChild : null;
+      return {
+        present: true,
+        resultNote: note,
+        head: txt(headEl),
+        headTitle: headEl ? headEl.getAttribute('title') || '' : '',
+        buttons,
+        more: txt(tail),
+        fullText: un.innerText,
+      };
+    })()`,
+    45000,
+  );
+}
+
 /* ------------------------------ 取证 ------------------------------ */
 
 async function forensics(cdp, label, outDir) {
@@ -483,6 +603,69 @@ async function waitSlotsCleared(cdp, { timeoutMs = 60000 } = {}) {
   return last;
 }
 
+/**
+ * 按页内表达式找元素并真点（CDP 鼠标，不是 `el.click()`）。
+ *
+ * `expr` 求值为 Element 或 null。两段式：先滚进视口（布局会变），隔一拍再取**滚动之后**
+ * 的中心——一次性取中心会点到旧位置（面板在副侧栏，整档体检那块常在滚动容器下方）。
+ * 禁用态如实返回 `disabled`（不点空处冒充成功）。
+ */
+async function clickMatch(cdp, expr) {
+  const found = await cdp.evalJs(`(() => {
+    const el = (${expr});
+    if (!el) return { ok: false, reason: 'no-element' };
+    if (el.disabled === true) return { ok: false, reason: 'disabled', text: (el.textContent || '').trim().slice(0, 80) };
+    el.scrollIntoView({ block: 'center' });
+    return { ok: true, text: (el.textContent || '').trim().slice(0, 80) };
+  })()`);
+  if (!found?.ok) return found ?? { ok: false, reason: 'no-element' };
+  await sleep(220);
+  const rect = await cdp.evalJs(`(() => {
+    const el = (${expr});
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, h: r.height };
+  })()`);
+  if (!rect || !(rect.w >= 2 && rect.h >= 2)) return { ok: false, reason: 'no-rect', text: found.text };
+  await cdpClick(cdp, { x: rect.x, y: rect.y });
+  return { ok: true, text: found.text, x: rect.x, y: rect.y };
+}
+
+/**
+ * 等「判定结果」段的 note（= 归一化函数名）变成 wantFn。
+ *
+ * 与 `clickJudgeAndWaitFor` 的分工：那条负责**按按钮**并发起一次判定（判据是"本轮才
+ * 可能出现的东西"）；本条只负责**等结果落地**——整档体检里的「全局最该看」是面板自己
+ * 切角色 + 判定的（没有可点的「判定」按钮），只能等。顺带盯 `.rp-error` 快速失败。
+ */
+async function waitJudgeNote(cdp, wantFn, { timeoutMs = JUDGE_MS, label = '判定结果' } = {}) {
+  const t0 = Date.now();
+  let last = null;
+  while (Date.now() - t0 < timeoutMs) {
+    await sleep(400);
+    last = await cdp.evalJs(`(() => {
+      const p = document.querySelector('.panel-state-replay');
+      if (!p) return { present: false };
+      const txt = (el) => (el ? (el.textContent || '').trim() : '');
+      const res = [...p.querySelectorAll('.dbg-sec')].find((s) => txt(s.querySelector('.dbg-sec-title')) === '判定结果');
+      const btn = p.querySelector('.dbg-row-fn button');
+      return {
+        present: true,
+        busy: !!btn && /判定中/.test(txt(btn)),
+        error: txt(p.querySelector('.rp-error')),
+        note: res ? txt(res.querySelector('.dbg-sec-note')) : null,
+      };
+    })()`);
+    if (last?.note && last.note.toUpperCase() === String(wantFn).toUpperCase()) {
+      return { ok: true, note: last.note, elapsedMs: Date.now() - t0 };
+    }
+    if (last?.error && !last.busy && Date.now() - t0 > 3000) {
+      return { ok: false, reason: 'panel-error', error: last.error, last, elapsedMs: Date.now() - t0 };
+    }
+  }
+  return { ok: false, reason: `timeout(${label})`, last, elapsedMs: Date.now() - t0 };
+}
+
 /* ------------------------------ 引导 ------------------------------ */
 
 /**
@@ -576,6 +759,268 @@ async function openFile(cdp, frag) {
     await sleep(250);
   }
   throw new Error(`点了「${frag}」那一行，30s 内编辑器没切过去——实际 path：${actual ?? 'null'}`);
+}
+
+/* ------------------------------ 语料里挑写点样本（j 组） ------------------------------ */
+
+/**
+ * 与 `packages/plugins/state-replay/src/writes.ts` **同源的判据**（这里是镜像，不是 import：
+ * 本工具是 .mjs，不能吃 TS）。镜像只用来**挑样本**——"哪些行真算写点 / 真算调用"这句话
+ * 的最终解释权在面板与引擎，屏上读数一律以面板输出为准（断言里对拍的就是那一边）。
+ *
+ * 挑样本的两条口径与任务书一致：
+ * - j1：函数体里有**行首调用族**（CALL / TRYCALL…），也有**状态写**（CFLAG/TFLAG/SETBIT/VARSET…）；
+ * - j2：有平跳（GOTO/JUMP 的平跳形），且**跳转行之后还有写**（否则引擎按防刷屏判据不报跳转）。
+ */
+const SCAN_CALL_VERBS = new Set([
+  'CALL',
+  'CALLEVENT',
+  'CALLF',
+  'CALLFORM',
+  'CALLFORMF',
+  'CALLSHARP',
+  'CALLTRAIN',
+  'TRYCALL',
+  'TRYCALLF',
+  'TRYCALLFORM',
+  'TRYCALLFORMF',
+  'TRYCALLLIST',
+  'TRYCCALL',
+  'TRYCCALLFORM',
+]);
+const SCAN_WRITE_VERBS = new Set([
+  'SETBIT',
+  'CLEARBIT',
+  'INVERTBIT',
+  'INPUT',
+  'INPUTS',
+  'INPUTANY',
+  'INPUTMOUSEKEY',
+  'ONEINPUT',
+  'BINPUT',
+  'BINPUTS',
+  'TINPUT',
+  'TINPUTS',
+  'TONEINPUT',
+  'TONEINPUTS',
+  'ADDCHARA',
+  'DELCHARA',
+  'ADDCOPYCHARA',
+  'SWAPCHARA',
+  'SORTCHARA',
+  'ADDVOIDCHARA',
+  'RESETDATA',
+  'RESETGLOBAL',
+  'TIMES',
+  'SAVEDATA',
+  'SAVEGLOBAL',
+  'LOADDATA',
+  'LOADGLOBAL',
+  'RANDOMIZE',
+  'VARSET',
+  'CVARSET',
+  'VARSIZE',
+  'ARRAYCOPY',
+  'ARRAYSHIFT',
+  'ARRAYREMOVE',
+  'ARRAYSORT',
+  'SWAP',
+  'EQUIP',
+  'UNEQUIP',
+  'DT_CELL_SET',
+  'DT_ROW_ADD',
+  'MAP_SET',
+  'RESET_STAIN',
+]);
+const SCAN_JUMP_VERBS = new Set(['GOTO', 'GOTOFORM', 'JUMP', 'JUMPFORM']);
+/** 这些目标族的直线赋值**已被建模**（locals.ts / 调用上下文），不算未建模写 */
+const SCAN_MODELED_TARGETS = new Set(['LOCAL', 'LOCALS', 'RESULT', 'RESULTS', 'ARG', 'ARGS']);
+const SCAN_ASSIGN_RE =
+  /^(?:SIF\s+\S.*?\s)?([A-Z_][A-Z0-9_]*'*)(?::([^=\s]+))?\s*(<<=|>>=|\+=|-=|\*=|\/=|%=|\|=|&=|\^=|=)(?!=)/i;
+const SCAN_VERB_RE = /^([A-Z_][A-Z0-9_]*)\b/i;
+
+/** 剥 `;!;` / `;#;` 代码前缀（与 `erbCodeBodyOf` 同口径；只为挑样本） */
+function scanErbBody(raw) {
+  let t = String(raw).trim();
+  for (const p of [';!;', ';#;']) if (t.startsWith(p)) t = t.slice(p.length).trim();
+  return t;
+}
+
+/** 去行内注释（引号外的 `;` 起注释；ERB 只有双引号字符串） */
+function scanStripComment(code) {
+  let quoted = false;
+  for (let i = 0; i < code.length; i += 1) {
+    const ch = code[i];
+    if (ch === '"') quoted = !quoted;
+    else if (ch === ';' && !quoted) return code.slice(0, i);
+  }
+  return code;
+}
+
+/**
+ * 扫语料（`<corpus>/ERB/**\/*.erb`）挑 j1 / j2 的候选口上函数。
+ *
+ * 全量扫（本机 4,000 份 ≈ 7s）：不提前退出，`scanned` 才是 N/A 报告里那个"扫了多少份"
+ * 的可信数字（j2 候选天然稀少，扫一半就说"没有"是假读数）。
+ * 候选里只留 `M_KOJO_*`（口上函数，确定在条件索引里）；按"有条件的、体量小的"排序，
+ * 判定更快、结果也更有意义；同分按名字定序，保证复跑取同一个样本。
+ */
+async function scanCorpusWriteSamples(corpus, { cap = 400 } = {}) {
+  const files = [];
+  const walk = async (dir) => {
+    for (const e of await fsp.readdir(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) await walk(p);
+      else if (/\.erb$/i.test(e.name)) files.push(p);
+    }
+  };
+  await walk(path.join(corpus, 'ERB'));
+  const j1 = [];
+  const j2 = [];
+  let scanned = 0;
+  for (const file of files) {
+    scanned += 1;
+    let text;
+    try {
+      text = await fsp.readFile(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const lines = text.split(/\r?\n/);
+    let cur = null;
+    const flush = () => {
+      if (cur === null) return;
+      const { name, start, end, calls, jumps, writes, conds } = cur;
+      if (!/^M_KOJO_/i.test(name)) return;
+      const base = { name, file, start, bodyLines: end - start + 1, conds };
+      if (calls.length > 0 && writes.length > 0 && j1.length < cap) {
+        j1.push({ ...base, callLines: calls.slice(), jumpLines: jumps.slice(), concreteCount: writes.length });
+      }
+      if (jumps.length > 0) {
+        const jumpLines = jumps.filter((j) => writes.some((w) => w > j));
+        if (jumpLines.length > 0 && j2.length < cap) {
+          j2.push({ ...base, jumpLine: jumpLines[0], jumpLines, callLines: calls.slice(), concreteCount: writes.length });
+        }
+      }
+    };
+    let inSkip = false;
+    for (let i = 0; i < lines.length; i += 1) {
+      const raw = lines[i];
+      if (/^@/.test(raw)) {
+        flush();
+        cur = {
+          name: raw.slice(1).split(/[(\s,]/)[0].trim(),
+          start: i + 1,
+          end: i + 1,
+          calls: [],
+          jumps: [],
+          writes: [],
+          conds: 0,
+        };
+        inSkip = false;
+        continue;
+      }
+      if (cur === null) continue;
+      cur.end = i + 1;
+      const body = scanErbBody(raw);
+      if (inSkip) {
+        if (body === '[SKIPEND]') inSkip = false;
+        continue;
+      }
+      if (body === '[SKIPSTART]') {
+        inSkip = true;
+        continue;
+      }
+      if (body === '') continue;
+      const head = body.charAt(0);
+      if (head === ';' || head === '#' || head === '$') continue;
+      const code = scanStripComment(body).trim();
+      if (code === '') continue;
+      if (/^(IF|ELSEIF|SIF|SELECTCASE)\b/i.test(code)) cur.conds += 1;
+      const assign = SCAN_ASSIGN_RE.exec(code);
+      if (assign) {
+        const target = assign[1].replace(/'/g, '').toUpperCase();
+        if (!SCAN_MODELED_TARGETS.has(target)) cur.writes.push(i + 1);
+        continue;
+      }
+      const verb = SCAN_VERB_RE.exec(code);
+      if (!verb) continue;
+      const upper = verb[1].toUpperCase();
+      if (SCAN_CALL_VERBS.has(upper)) {
+        cur.calls.push(i + 1);
+        continue;
+      }
+      if (SCAN_JUMP_VERBS.has(upper)) {
+        cur.jumps.push(i + 1);
+        continue;
+      }
+      if (SCAN_WRITE_VERBS.has(upper)) cur.writes.push(i + 1);
+    }
+    flush();
+  }
+  const order = (a, b) => (b.conds > 0 ? 1 : 0) - (a.conds > 0 ? 1 : 0) || a.bodyLines - b.bodyLines || (a.name < b.name ? -1 : 1);
+  j1.sort(order);
+  j2.sort(order);
+  return { scanned, j1, j2 };
+}
+
+/** 从悬停 title 里抠「调用 3 处（示例：第 12、15 行）」的示例行号（面板自己的读数） */
+function sampleLinesFromTitle(title, verb) {
+  const m = new RegExp(`${verb}\\s*\\d+\\s*处(?:（示例：第\\s*([\\d、]+)\\s*行）)?`).exec(String(title ?? ''));
+  if (!m || m[1] === undefined) return [];
+  return m[1]
+    .split('、')
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n));
+}
+
+/**
+ * 依次试候选函数，直到结果区出现目标分桶（head 里有「另有 … 处调用/跳转」）。
+ *
+ * 为什么要换样本：语料里"含 CALL + 状态写"的函数很多，但**能不能被判出来**还取决于
+ * 它有没有可判定的条件（没有就是面板那句"没有登记到可判定的条件"）。等的时候只等
+ * 结果 note（快），分桶文案另外读——否则一个没有未建模写段的函数会把预算耗满。
+ */
+async function judgeWriteSample(cdp, candidates, { verb, label, maxTries = 4 }) {
+  const attempts = [];
+  const wantHead = new RegExp(`另有[^。]*\\d+\\s*处${verb}`);
+  for (const cand of candidates.slice(0, maxTries)) {
+    await cdp.evalJs(`__rpSmoke.setInput('.rp-fn-input', ${JSON.stringify(cand.name)})`);
+    await sleep(400);
+    const judged = await clickJudgeAndWaitFor(cdp, resultNoteIs(cand.name), { label: `${label} ${cand.name}` });
+    const un = await readUnmodeled(cdp);
+    attempts.push({
+      name: cand.name,
+      ok: judged.ok,
+      reason: judged.ok ? '' : judged.reason,
+      error: judged.error ?? '',
+      head: un.present ? un.head : '(结果区没有未建模写段)',
+    });
+    if (judged.ok && un.present && wantHead.test(un.head)) return { candidate: cand, judge: judged, un, attempts };
+  }
+  return { candidate: null, attempts, un: await readUnmodeled(cdp) };
+}
+
+/** 从 ERB 正文取**活的**函数名（跳过 `[SKIPSTART]`…`[SKIPEND]`：抽取侧不发布那区里的函数） */
+function liveKojoFunctions(text) {
+  const out = [];
+  let inSkip = false;
+  for (const raw of String(text).split(/\r?\n/)) {
+    const body = scanErbBody(raw);
+    if (body === '[SKIPSTART]') {
+      inSkip = true;
+      continue;
+    }
+    if (body === '[SKIPEND]') {
+      inSkip = false;
+      continue;
+    }
+    if (inSkip) continue;
+    if (!raw.startsWith('@')) continue;
+    const name = raw.slice(1).split(/[(\s,]/)[0].trim();
+    if (/^M_KOJO_[A-Z0-9_]+$/i.test(name)) out.push(name);
+  }
+  return out;
 }
 
 /* ------------------------------ 主流程 ------------------------------ */
@@ -1031,6 +1476,550 @@ async function main() {
       judgeG.ok ? `谓词 ${snap.preds.length} 条 · 置信度徽章=${JSON.stringify(snap.resultBadges.slice(0, 6))}` : `${judgeG.reason} · ${judgeG.error ?? ''}`,
     );
 
+    /* ================= i. 整档体检（本档全部角色，2026-11-05 边界批 · 车道 S4） ================= */
+    // 判据全是屏上事实：`.dbg-row-fn` 里有一颗「整档体检（本档全部角色）」按钮（title 写明
+    // 预算）；点下去能真跑完并出摘要；摘要展开后角色行 / 全局最该看可点（点了真切角色并判定）；
+    // 再点一次能在 busy 期取消（已扫部分照常汇总，摘要带「已取消」）。
+    const ARCHIVE_BTN_TEXT = '整档体检（本档全部角色）';
+    const fnRow = await cdp.evalJs(
+      `(() => {
+        const row = document.querySelector('.panel-state-replay .dbg-row-fn');
+        if (!row) return { present: false };
+        const txt = (el) => (el ? (el.textContent || '').trim() : '');
+        return {
+          present: true,
+          buttons: [...row.querySelectorAll('button')].map((b) => ({
+            text: txt(b),
+            title: b.getAttribute('title') || '',
+            disabled: b.disabled === true,
+          })),
+        };
+      })()`,
+    );
+    const archiveBtn = (fnRow?.buttons ?? []).find((b) => b.text.includes(ARCHIVE_BTN_TEXT)) ?? null;
+    check(
+      'i1 整档体检入口在场（按钮文案 + title 写明预算，含「每角色」与「封顶」）',
+      !!archiveBtn && archiveBtn.title.includes('每角色') && archiveBtn.title.includes('封顶'),
+      archiveBtn
+        ? `文案=${JSON.stringify(archiveBtn.text)} · disabled=${archiveBtn.disabled} · title=${JSON.stringify(archiveBtn.title)}`
+        : `没有这颗按钮；.dbg-row-fn 现有=${JSON.stringify((fnRow?.buttons ?? []).map((b) => b.text))}`,
+    );
+
+    /** 整档体检区的定位表达式（没有专属 class，按段标题认；与 readArchiveScan 同一判据） */
+    const scanSectionExpr = `(() => {
+      const p = document.querySelector('.panel-state-replay');
+      if (!p) return null;
+      const txt = (el) => (el ? (el.textContent || '').trim() : '');
+      return [...p.querySelectorAll('.dbg-sec')].find((s) => txt(s.querySelector('.dbg-sec-title')) === '整档体检') ?? null;
+    })()`;
+    const scanButtonExpr = (want) => `(() => {
+      const sec = ${scanSectionExpr};
+      if (!sec) return null;
+      const w = ${JSON.stringify(want)};
+      return [...sec.querySelectorAll('button')].find((b) => (b.textContent || '').trim().includes(w)) ?? null;
+    })()`;
+    /** 摘要行（常驻）：`已扫 A/B 角色 · N 段 · 完全 x / 部分 y / 全未知 z · 耗时 t ms[ · 已取消]` */
+    const scanNoteExpr = `(() => {
+      const sec = ${scanSectionExpr};
+      if (!sec) return '';
+      const el = sec.querySelector('.dbg-sec-note');
+      return el ? (el.textContent || '').trim() : '';
+    })()`;
+    /** 整档体检自己的红字（报错时摘要行只会说「上次整档体检失败」，原因在这里） */
+    const scanErrorExpr = `(() => {
+      const sec = ${scanSectionExpr};
+      if (!sec) return '';
+      const el = sec.querySelector('.rp-error');
+      return el ? (el.textContent || '').trim() : '';
+    })()`;
+    const archiveBtnExpr = `(() => {
+      const row = document.querySelector('.panel-state-replay .dbg-row-fn');
+      if (!row) return null;
+      return [...row.querySelectorAll('button')].find((b) => (b.textContent || '').trim().includes(${JSON.stringify(ARCHIVE_BTN_TEXT)})) ?? null;
+    })()`;
+
+    /**
+     * 等按钮**可用**再点：它被 `condIndex === null` 灰着，而条件索引是**全语料抽取**
+     * （本机 4,072 ERB / 近 50 万谓词），真机上要几十秒起。这不是本次要测的东西，
+     * 但"灰着多久"本身是读数，所以计时上报。
+     *
+     * 为什么要顺手制造一次无害重渲：面板只读 `extractor.currentIndex()`、**没有**订阅
+     * 索引更新（`ConditionExtractorService.subscribe` 在场但没人用）；索引建完不会自己
+     * 叫醒 React。折/展「场景参数」是一次无害 state 变更，能把最新的 `currentIndex()`
+     * 带进下一帧——否则这颗按钮可能一直灰到别的动作碰巧触发重渲。
+     */
+    const readyT0 = Date.now();
+    let archiveReady = false;
+    let nudges = 0;
+    while (Date.now() - readyT0 < ARCHIVE_INDEX_MS) {
+      const st = await cdp.evalJs(`(() => {
+        const row = document.querySelector('.panel-state-replay .dbg-row-fn');
+        if (!row) return { present: false };
+        const b = [...row.querySelectorAll('button')].find((x) => (x.textContent || '').trim().includes(${JSON.stringify(ARCHIVE_BTN_TEXT)}));
+        return { present: !!b, disabled: b ? b.disabled === true : null };
+      })()`);
+      if (st?.present && st.disabled === false) {
+        archiveReady = true;
+        break;
+      }
+      nudges += 1;
+      await cdp
+        .evalJs(`(() => { const h = document.querySelector('.panel-state-replay .dbg-fold-head'); if (h) h.click(); return true; })()`)
+        .catch(() => {});
+      await sleep(2000);
+    }
+    const archiveReadyMs = Date.now() - readyT0;
+    if (archiveReady) {
+      note(`i2 前置：整档体检按钮等了 ${(archiveReadyMs / 1000).toFixed(1)}s 才可用（条件索引＝全语料抽取；期间强制重渲 ${nudges} 次）`);
+    } else {
+      check(
+        'i2 整档体检能跑完并出摘要（已扫 > 0 角色 · 含「全未知」计数）',
+        false,
+        `${(ARCHIVE_INDEX_MS / 1000).toFixed(0)}s 内按钮一直 disabled（condIndex 未就绪 / 索引没建完）——整档体检这颗入口在真语料上不可达`,
+      );
+    }
+
+    const scanT0 = Date.now();
+    const scanClick = archiveReady ? await clickMatch(cdp, archiveBtnExpr) : { ok: false, reason: 'disabled' };
+    /**
+     * 边等边采样进度行（1s 一拍，只记变化）：整档体检的耗时是这条链上最大的未知数，
+     * 超时时必须能说清"卡在哪、推进了多少"——只报一句 timeout 是没用的读数。
+     */
+    const scanSamples = [];
+    let scanNote = { ok: false, error: 'not-started' };
+    let scanLastDone = 0;
+    let scanTotal = 0;
+    if (scanClick.ok) {
+      let last = '';
+      while (Date.now() - scanT0 < ARCHIVE_SCAN_MS) {
+        await sleep(1000);
+        const n = String((await cdp.evalJs(scanNoteExpr).catch(() => '')) ?? '');
+        if (n !== last) {
+          scanSamples.push({ t: Date.now() - scanT0, note: n });
+          last = n;
+        }
+        const p = /已扫\s*(\d+)\/(\d+)\s*段/.exec(n);
+        if (p) {
+          scanLastDone = Number(p[1]);
+          scanTotal = Number(p[2]);
+        }
+        if (/已扫\s*\d+\/\d+\s*角色/.test(n)) {
+          scanNote = { ok: true, note: n };
+          break;
+        }
+      }
+      if (!scanNote.ok) scanNote = { ok: false, error: `等待超时（${ARCHIVE_SCAN_MS}ms）：整档体检摘要`, last };
+    } else {
+      scanNote = { ok: false, error: scanClick.reason ?? 'click-failed' };
+    }
+    const scanWallMs = Date.now() - scanT0;
+    const scanTimeline = (() => {
+      const keep = scanSamples.filter((s, i) => i < 3 || i === scanSamples.length - 1 || /已扫\s*\d+\/(\d+)\s*段/.test(s.note));
+      return keep.slice(0, 10).map((s) => `${(s.t / 1000).toFixed(0)}s:${s.note.replace(/^体检中… ?/, '')}`);
+    })();
+    if (scanTimeline.length > 0) console.log(`[smoke] 整档体检进度时间线：${scanTimeline.join(' | ')}`);
+    const scanM = scanNote.ok ? /已扫\s*(\d+)\/(\d+)\s*角色/.exec(scanNote.note) : null;
+    const scanUnknownM = scanNote.ok ? /全未知\s*(\d+)/.exec(scanNote.note) : null;
+    const scanSelfMs = scanNote.ok ? /耗时\s*(\d+)\s*ms/.exec(scanNote.note) : null;
+    if (archiveReady) {
+      if (!scanNote.ok) await forensics(cdp, 'i2-整档体检没出摘要', outDir);
+      check(
+        'i2 整档体检能跑完并出摘要（已扫 > 0 角色 · 含「全未知」计数）',
+        scanNote.ok && !!scanM && Number(scanM[1]) > 0 && !!scanUnknownM,
+        scanNote.ok
+          ? `摘要=${JSON.stringify(scanNote.note)} · 已扫=${scanM?.[1] ?? '?'}/${scanM?.[2] ?? '?'} 角色 · 全未知=${scanUnknownM?.[1] ?? '?'} · 面板自报耗时=${scanSelfMs?.[1] ?? '?'} ms · 墙钟=${scanWallMs} ms（含点击/渲染）· 索引就绪等待=${(archiveReadyMs / 1000).toFixed(1)}s`
+          : `没出摘要：${scanNote.error ?? '未知'} · 进度停在 ${scanLastDone}/${scanTotal} 段（${scanWallMs}ms）· 时间线=${JSON.stringify(scanTimeline)} · 点击=${JSON.stringify(scanClick)} · 段内红字=${JSON.stringify(await cdp.evalJs(scanErrorExpr))}`,
+      );
+      // 超时别把整档留在后台烧 CPU（后面 j/k 还要判）：点「取消」收尾，读数另记。
+      if (!scanNote.ok) {
+        // 卡在 25 段（= 第一个让出点）时要分清两件事：**这一段本身卡住**，还是
+        // `archive-scan.yieldToEventLoop` 的 MessageChannel 让出没回来。页面里现测 A/B：
+        // A = 面板同款（`addEventListener('message')`，**不调** `port1.start()`）；
+        // B = 同款 + 显式 `start()`。按 HTML 规范 `addEventListener` 不会自动 start，
+        // A 永远收不到消息——这把"卡在让出点"与"卡在某一段"一次分开。
+        const mcProbe = await cdp
+          .evalJs(
+            `new Promise((resolve) => {
+              const out = {};
+              const seen = new Set();
+              const done = (k, v) => { if (seen.has(k)) return; seen.add(k); out[k] = v; if (seen.size === 2) resolve(out); };
+              try {
+                const a = new MessageChannel();
+                a.port1.addEventListener('message', () => { try { a.port1.close(); } catch {} done('noStart', 'delivered'); });
+                a.port2.postMessage(0);
+                setTimeout(() => done('noStart', 'timeout(1200ms)'), 1200);
+              } catch (e) { done('noStart', 'error:' + String(e)); }
+              try {
+                const b = new MessageChannel();
+                b.port1.addEventListener('message', () => { try { b.port1.close(); } catch {} done('withStart', 'delivered'); });
+                b.port1.start();
+                b.port2.postMessage(0);
+                setTimeout(() => done('withStart', 'timeout(1200ms)'), 1200);
+              } catch (e) { done('withStart', 'error:' + String(e)); }
+            })`,
+            5000,
+          )
+          .catch((e) => `eval-failed:${String(e?.message ?? e)}`);
+        const cancelClick = await clickMatch(cdp, scanButtonExpr('取消'));
+        const stopped = cancelClick.ok
+          ? await waitFor(cdp, `(() => { const n = ${scanNoteExpr}; return /已取消/.test(n) ? n : ''; })()`, {
+              timeoutMs: 90000,
+              intervalMs: 500,
+              label: 'i2 超时后取消整档体检',
+            }).catch(() => null)
+          : null;
+        note(
+          `i2 旁证：超时后点「取消」${cancelClick.ok ? '成功' : `失败（${cancelClick.reason}）`}` +
+            (stopped ? `，收尾摘要=${JSON.stringify(String(stopped))}` : '，90s 内没等到「已取消」（取消只在段间生效：在途段不返回就永远轮不到它）') +
+            ` · 页面内 MessageChannel A/B（A=不调 start() / B=调 start()）=${JSON.stringify(mcProbe)}`,
+        );
+      }
+    }
+
+    // ---- i3：展开明细 → 角色行 / 全局最该看在场 → 点第一条最该看 ----
+    let scan = await readArchiveScan(cdp);
+    if (scan.present && scan.expanded !== true) {
+      const expandClick = await clickMatch(cdp, scanButtonExpr('展开明细'));
+      if (!expandClick.ok) note(`i3 展开明细没点动：${JSON.stringify(expandClick)}`);
+      await sleep(400);
+      scan = await readArchiveScan(cdp);
+    }
+    const charRows = scan.present ? scan.charButtons : [];
+    const worstRows = scan.present ? scan.worstButtons : [];
+    const rowsOk = scan.present === true && charRows.length > 0 && worstRows.length > 0;
+    if (rowsOk) {
+      check(
+        'i3a 整档结果可展开（≥1 行角色 + ≥1 条「全局最该看」段落按钮）',
+        true,
+        `角色行 ${charRows.length} 条（例：${JSON.stringify(charRows[0]?.text)}）· 最该看 ${worstRows.length} 条（例：${JSON.stringify(worstRows[0]?.text)} → K${worstRows[0]?.charaNo}）· 展开=${scan.expanded}`,
+      );
+    } else if (!scan.present) {
+      note('i3 N/A：屏上没有「整档体检」段（i2 没跑出摘要，明细无从展开）');
+    } else {
+      note(
+        `i3 N/A：展开后没有可点的角色行 / 最该看段落（角色行 ${charRows.length} · 最该看 ${worstRows.length} · 摘要=${JSON.stringify(scan.note)}；` +
+          `摘要停在「体检中…/已取消」说明整档没跑完——见 i2 的进度读数，不是"本档没有段落"）`,
+      );
+    }
+
+    if (rowsOk) {
+      const prevSnap = await readPanel(cdp);
+      const targetFn = worstRows[0].text;
+      const worstExpr = `(() => {
+        const sec = ${scanSectionExpr};
+        if (!sec) return null;
+        const all = [...sec.querySelectorAll('button')].filter((b) => {
+          const t = b.getAttribute('title') || '';
+          return t.startsWith('切到 K') && t.includes('并判定');
+        });
+        return all[0] ?? null;
+      })()`;
+      const worstClick = await clickMatch(cdp, worstExpr);
+      const i3Judge = worstClick.ok
+        ? await waitJudgeNote(cdp, targetFn, { label: '整档「全局最该看」点击后的判定' })
+        : { ok: false, reason: worstClick.reason ?? 'click-failed' };
+      const afterSnap = await readPanel(cdp);
+      if (!i3Judge.ok) await forensics(cdp, 'i3-最该看点击后没出判定', outDir);
+      check(
+        'i3b 点「全局最该看」→ 出判定结果且函数名一致（dbg-sec-note 对拍）',
+        i3Judge.ok && String(i3Judge.note ?? '').toUpperCase() === targetFn.toUpperCase(),
+        i3Judge.ok
+          ? `点击=${targetFn}（K${worstRows[0].charaNo}）· 结果 note=${i3Judge.note} · 等结果 ${i3Judge.elapsedMs}ms · 角色 ${prevSnap.charaValue}→${afterSnap.charaValue} · 谓词 ${afterSnap.preds.length} 条`
+          : `等不到「${targetFn}」：${i3Judge.reason} · ${i3Judge.error ?? ''} · 当前 note=${JSON.stringify(i3Judge.last?.note ?? null)}`,
+      );
+    }
+
+    // ---- i4：再点一次 → busy → 取消 → 摘要带「已取消」 ----
+    let i4 = { state: 'red', detail: '' };
+    // 先确保上一轮真收尾了（i2 超时那轮会先点「取消」；忙态下按钮文案是「整档体检中…」）
+    const i4Back = await waitFor(
+      cdp,
+      `(() => { const b = ${archiveBtnExpr}; return b && b.disabled === false ? 'ok' : ''; })()`,
+      { timeoutMs: 120000, intervalMs: 500, label: '整档体检按钮（可再点一次）' },
+    )
+      .then(() => true)
+      .catch(() => false);
+    const rescanClick = i4Back ? await clickMatch(cdp, archiveBtnExpr) : { ok: false, reason: 'button-not-ready' };
+    if (!archiveReady) {
+      i4 = { state: 'na', detail: '整档体检入口一直灰着（条件索引未就绪，见 i2），取消窗口无从测起' };
+    } else if (!rescanClick.ok) {
+      i4 = { state: 'red', detail: `再点整档体检没点动：${rescanClick.reason ?? '?'}` };
+    } else {
+      const busyNote = await waitFor(cdp, `(() => { const n = ${scanNoteExpr}; return /体检中/.test(n) ? n : ''; })()`, {
+        timeoutMs: 30000,
+        intervalMs: 200,
+        label: '整档体检 busy',
+      }).catch(() => null);
+      if (!busyNote) {
+        const nowNote = String((await cdp.evalJs(scanNoteExpr)) ?? '');
+        i4 = /已扫\s*\d+\/\d+\s*角色/.test(nowNote)
+          ? { state: 'na', detail: `再点后没看到 busy 就出了摘要（${JSON.stringify(nowNote)}）——整档跑得太快，取消窗口测不到` }
+          : { state: 'red', detail: `30s 内没看到 busy 态（摘要行=${JSON.stringify(nowNote)} · 段内红字=${JSON.stringify(await cdp.evalJs(scanErrorExpr))}）` };
+      } else {
+        // 先等它真扫了几段再取消：首段前取消也成立，但证据弱（扫了个寂寞）
+        await waitFor(
+          cdp,
+          `(() => { const n = ${scanNoteExpr}; const m = /已扫\\s*(\\d+)\\//.exec(n); return m && Number(m[1]) > 0 ? n : ''; })()`,
+          { timeoutMs: 90000, intervalMs: 300, label: '整档体检进度（先扫几段）' },
+        ).catch(() => null);
+        const cancelClick = await clickMatch(cdp, scanButtonExpr('取消'));
+        if (!cancelClick.ok) {
+          i4 = { state: 'red', detail: `busy 期点不到「取消」：${cancelClick.reason ?? '?'}（现有按钮=${JSON.stringify((scan.buttons ?? []).map((b) => b.text))}）` };
+        } else {
+          const t1 = Date.now();
+          let cancelledNote = '';
+          let finishedNote = '';
+          while (Date.now() - t1 < ARCHIVE_SCAN_CANCEL_MS) {
+            await sleep(400);
+            const s = await cdp.evalJs(
+              `(() => {
+                const sec = ${scanSectionExpr};
+                if (!sec) return { note: '', notes: [] };
+                return {
+                  note: ((sec.querySelector('.dbg-sec-note') || {}).textContent || '').trim(),
+                  notes: [...sec.querySelectorAll('.dbg-note')].map((e) => (e.textContent || '').trim()),
+                };
+              })()`,
+            );
+            const joined = [s?.note ?? '', ...(s?.notes ?? [])].join(' | ');
+            if (/已取消/.test(joined)) {
+              cancelledNote = joined;
+              break;
+            }
+            if (/已扫\s*\d+\/\d+\s*角色/.test(s?.note ?? '')) {
+              finishedNote = s.note;
+              break;
+            }
+          }
+          if (cancelledNote !== '') {
+            i4 = { state: 'ok', detail: `busy 期间点了「取消」→ ${cancelledNote} · 收尾 ${Date.now() - t1} ms` };
+          } else if (finishedNote !== '') {
+            i4 = { state: 'na', detail: `点「取消」前整档已经跑完（${JSON.stringify(finishedNote)}）——太快，记 N/A` };
+          } else {
+            i4 = { state: 'red', detail: `点「取消」后 ${ARCHIVE_SCAN_CANCEL_MS}ms 内既没「已取消」也没新摘要（最后 note=${JSON.stringify(await cdp.evalJs(scanNoteExpr))}）` };
+          }
+        }
+      }
+    }
+    if (i4.state === 'na') note(`i4 N/A：${i4.detail}`);
+    else check('i4 整档体检可取消（busy 期取消 → 摘要含「已取消」）', i4.state === 'ok', i4.detail);
+
+    /* ================= j. 未建模写分桶：调用 / 跳转只报计数，不逐行铺按钮 ================= */
+    let samples = null;
+    try {
+      samples = await scanCorpusWriteSamples(corpus);
+      console.log(`[smoke] 语料扫描：${samples.scanned} 份 ERB · j1 候选 ${samples.j1.length} 个 · j2 候选 ${samples.j2.length} 个`);
+    } catch (err) {
+      note(`j 组 N/A：语料扫描失败（${String(err?.message ?? err)}）`);
+    }
+
+    if (samples !== null && samples.j1.length === 0) {
+      note(`j1 N/A：扫了 ${samples.scanned} 份 ERB，没有「行首调用族 + 状态写」的口上函数`);
+    } else if (samples !== null) {
+      const pick = await judgeWriteSample(cdp, samples.j1, { verb: '调用', label: 'j1' });
+      if (pick.candidate === null) {
+        await forensics(cdp, 'j1-写点分桶', outDir);
+        check(
+          'j1 写点分桶文案（结果区出现「另有 N 处调用」）',
+          false,
+          `试了 ${pick.attempts.length} 个候选都没出目标文案：${JSON.stringify(pick.attempts).slice(0, 700)}`,
+        );
+      } else {
+        const { candidate, un } = pick;
+        const callCount = Number((/(\d+)\s*处调用/.exec(un.head) ?? [])[1] ?? 0);
+        const concreteCount = Number((/本段有\s*(\d+)\s*处状态写未建模/.exec(un.head) ?? [])[1] ?? -1);
+        check(
+          'j1 写点分桶文案（结果区出现「另有 N 处调用」）',
+          callCount > 0 && un.head.includes('另有'),
+          `函数=${candidate.name} · 文件=${path.relative(corpus, candidate.file)}:${candidate.start} · 确定写点=${concreteCount} · 调用 ${callCount} 处 · head=${JSON.stringify(un.head)}`,
+        );
+        const panelCallLines = sampleLinesFromTitle(un.headTitle, '调用');
+        const buttonLines = un.buttons.map((b) => b.line).filter((n) => Number.isFinite(n));
+        const leakPanel = buttonLines.filter((n) => panelCallLines.includes(n));
+        const leakCorpus = buttonLines.filter((n) => candidate.callLines.includes(n));
+        check(
+          'j1′ call 行不铺成逐行按钮（.rp-unmodeled-line ≤ 确定写点，且不含调用行）',
+          un.present && un.buttons.length <= concreteCount && leakPanel.length === 0 && leakCorpus.length === 0,
+          `按钮 ${un.buttons.length} 个（上限=确定写点 ${concreteCount}）· 按钮行=${JSON.stringify(buttonLines)} · 面板 title 里的调用示例行=${JSON.stringify(panelCallLines)} · 语料扫描调用行=${JSON.stringify(candidate.callLines)} · 泄漏=${JSON.stringify([...new Set([...leakPanel, ...leakCorpus])])}`,
+        );
+        note(`j1 样本取自扫过的 ${samples.scanned} 份 ERB（j1 候选共 ${samples.j1.length} 个）`);
+      }
+    }
+
+    if (samples !== null && samples.j2.length === 0) {
+      note(`j2 N/A：扫了 ${samples.scanned} 份 ERB，没有「平跳之后还有写点」的口上函数（跳转不报是引擎的防刷屏口径）`);
+    } else if (samples !== null) {
+      const pick2 = await judgeWriteSample(cdp, samples.j2, { verb: '跳转', label: 'j2' });
+      if (pick2.candidate === null) {
+        await forensics(cdp, 'j2-跳转分类', outDir);
+        check(
+          'j2 跳转分类（head 含「N 处跳转」计数）',
+          false,
+          `试了 ${pick2.attempts.length} 个候选都没出目标文案：${JSON.stringify(pick2.attempts).slice(0, 700)}`,
+        );
+      } else {
+        const { candidate, un } = pick2;
+        const jumpCount = Number((/(\d+)\s*处跳转/.exec(un.head) ?? [])[1] ?? 0);
+        const concreteCount = Number((/本段有\s*(\d+)\s*处状态写未建模/.exec(un.head) ?? [])[1] ?? -1);
+        const jumpLines = sampleLinesFromTitle(un.headTitle, '跳转');
+        const buttonLines = un.buttons.map((b) => b.line).filter((n) => Number.isFinite(n));
+        const leak = buttonLines.filter((n) => jumpLines.includes(n) || candidate.jumpLines.includes(n));
+        check(
+          'j2 跳转分类（head 含「N 处跳转」计数）',
+          jumpCount > 0 && un.head.includes('另有'),
+          `函数=${candidate.name} · 文件=${path.relative(corpus, candidate.file)}:${candidate.start}（GOTO 第 ${candidate.jumpLine} 行，其后还有写）· 确定写点=${concreteCount} · 跳转 ${jumpCount} 处 · head=${JSON.stringify(un.head)}` +
+            ` · 逐行按钮=${JSON.stringify(buttonLines)}（跳转示例行=${JSON.stringify(jumpLines)}，泄漏=${JSON.stringify(leak)}）`,
+        );
+        note(`j2 样本取自扫过的 ${samples.scanned} 份 ERB（j2 候选共 ${samples.j2.length} 个）`);
+      }
+    }
+
+    /* ================= k. 未保存文本口径（编辑器缓冲 → 判定；做不成记 N/A） ================= */
+    let kSetup = null;
+    try {
+      const openedBuf = await openFile(cdp, BUFFER_FILE_FRAG);
+      const bufferPath = String(openedBuf.path);
+      const srcText = await fsp.readFile(bufferPath, 'utf8');
+      const fnList = liveKojoFunctions(srcText);
+      // `openFile` 只钉住「activeFileChanged 已发生 / 路径对上了」，模型可能还在换页：
+      // 必须等**正文真的换过来**再读 `before`。否则读到上一份模型（run5 实测：读到的
+      // 长度 11215 ≠ 本文件 3562），后续 setValue 会把别人的正文写进这份文件，
+      // 判定报「没有登记到可判定的条件」——这是读数竞态，不是产品行为。
+      const fnMarker = fnList[0] ?? '';
+      const modelReady =
+        fnMarker === ''
+          ? true
+          : await waitFor(
+              cdp,
+              `(() => {
+                const i = __kojoDebug.editor.info();
+                if (!i || typeof i.value !== 'string' || i.value.length === 0) return '';
+                return i.value.includes(${JSON.stringify(fnMarker)}) ? 'ok' : '';
+              })()`,
+              { timeoutMs: 30000, intervalMs: 250, label: '编辑器正文已切到探针文件' },
+            )
+              .then(() => true)
+              .catch(() => false);
+      if (!modelReady) {
+        note(`k1 N/A：30s 内编辑器正文没切到 ${path.basename(bufferPath)}（模型还在换页 / 被别的标签占着）`);
+      } else if (fnList.length === 0) {
+        note(`k1 N/A：${path.basename(bufferPath)} 里没有活的口上函数（整篇在 [SKIPSTART] 区，抽取侧不发布）`);
+      } else {
+        const before = await cdp.evalJs('__kojoDebug.editor.info()');
+        if (!before || typeof before.value !== 'string' || before.value.length === 0) {
+          note('k1 N/A：editor.info() 拿不到当前文件正文（Monaco 没挂 / 文件没切过去）');
+        } else {
+          // 先热一次判定：`runReplay` 成功后会把「函数 → 所在文件」记进 fnPathRef。
+          // 紧接着改缓冲再判，面板才**知道**这段在哪份文件里 —— 缓冲文本那条腿才走得通
+          // （否则 textChoiceFor 拿不到路径，会如实退回磁盘文本：那是正确行为，测不到口径句）。
+          let warmFn = null;
+          const warmTried = [];
+          for (const name of fnList.slice(0, 3)) {
+            await cdp.evalJs(`__rpSmoke.setInput('.rp-fn-input', ${JSON.stringify(name)})`);
+            await sleep(500);
+            const r = await clickJudgeAndWaitFor(cdp, resultNoteIs(name), { label: `k1 预热判定 ${name}`, timeoutMs: 120000 });
+            warmTried.push(`${name}:${r.ok ? 'ok' : r.reason}`);
+            if (r.ok) {
+              warmFn = name;
+              break;
+            }
+          }
+          if (warmFn === null) {
+            note(`k1 N/A：这份文件里的函数都判不出结果（没有可判定的条件）——缓冲文本口径测不到；试过=${JSON.stringify(warmTried)}`);
+          } else {
+            kSetup = { bufferPath, before, warmFn };
+          }
+        }
+      }
+    } catch (err) {
+      note(`k1 N/A：准备缓冲文本探针失败（${String(err?.message ?? err)}）`);
+    }
+
+    if (kSetup !== null) {
+      const { before, warmFn, bufferPath } = kSetup;
+      const eol = before.eol === 'crlf' ? '\r\n' : '\n';
+      const probeLine = '; replay-panel-smoke k1：未保存文本探针（不保存、不写盘）';
+      const probeText = `${before.value}${eol}${probeLine}`;
+      // 先走"像真人打字"（executeEdits）。**只读项目下 Monaco 会静默丢弃这次编辑**
+      // （编辑器 option readOnly ⇒ executeEdits 直接 return false，而
+      //  `__kojoDebug.editor.type()` 仍旧返回 true——调试 API 那边的诚实性缺口），
+      // 丢不动就按任务书给的备用口径直接改 model（setValue）：缓冲真的变了、真的没保存，
+      // 面板照样吃缓冲文本。两条都不写盘。
+      const typed = await cdp.evalJs(`(() => {
+        const cursorOk = __kojoDebug.editor.setCursor(1, 1);
+        const ok = __kojoDebug.editor.type(${JSON.stringify(probeLine + eol)});
+        const now = __kojoDebug.editor.info();
+        return { cursorOk, ok, length: now ? now.value.length : -1 };
+      })()`);
+      const wantTypedLen = before.value.length + probeLine.length + eol.length;
+      let editOk = typed?.length === wantTypedLen;
+      let editVia = 'executeEdits（像真人打字）';
+      let readOnlyHint = '';
+      if (!editOk) {
+        readOnlyHint = `executeEdits 报 ${JSON.stringify(typed?.ok)} 但正文长度没变——只读项目下被 Monaco 静默丢弃`;
+        const setv = await cdp.evalJs(`(() => {
+          const ok = __kojoDebug.editor.setValue(${JSON.stringify(probeText)});
+          const now = __kojoDebug.editor.info();
+          return { ok, length: now ? now.value.length : -1 };
+        })()`);
+        editOk = setv?.ok === true && setv?.length === probeText.length;
+        editVia = 'setValue（只读项目下 executeEdits 被吞）';
+      }
+      check(
+        'k1′ 编辑器缓冲已改（未保存）',
+        editOk,
+        `方式=${editVia} · 长度 ${typed?.length}/${wantTypedLen}（原 ${before.value.length}）· 文件=${path.basename(bufferPath)}` +
+          (readOnlyHint ? ` · ${readOnlyHint}` : ''),
+      );
+      const dirtyHint = await waitFor(
+        cdp,
+        `(() => {
+          const p = document.querySelector('.panel-state-replay');
+          const el = p ? p.querySelector('.rp-buffer-note') : null;
+          return el ? (el.textContent || '').trim() : '';
+        })()`,
+        { timeoutMs: 20000, intervalMs: 250, label: '未保存编辑提示' },
+      ).catch(() => null);
+      check(
+        'k1″ 判定前屏上已标明「编辑器里有未保存的编辑」',
+        !!dirtyHint,
+        dirtyHint ? JSON.stringify(dirtyHint) : '等不到 .rp-buffer-note（缓冲区广播没落到面板）',
+      );
+
+      const bufCond = `(() => {
+        const res = [...document.querySelectorAll('.panel-state-replay .dbg-sec')].find((s) => ((s.querySelector('.dbg-sec-title') || {}).textContent || '').trim() === '判定结果');
+        if (!res) return false;
+        const note = ((res.querySelector('.dbg-sec-note') || {}).textContent || '').trim();
+        if (note.toUpperCase() !== ${JSON.stringify(warmFn.toUpperCase())}) return false;
+        const src = res.querySelector('.rp-text-source');
+        return !!src && (src.textContent || '').includes('编辑器里的未保存文本');
+      })()`;
+      const judged = await clickJudgeAndWaitFor(cdp, bufCond, { label: '缓冲文本判定' });
+      const after = await readPanel(cdp);
+      if (!judged.ok) await forensics(cdp, 'k1-未保存文本口径', outDir);
+      const labelLine = (/本次判定用的是[^\n]*/.exec(after.resultText) ?? ['(结果区没读到口径句)'])[0];
+      check(
+        'k1 结果区标出「编辑器里的未保存文本」',
+        judged.ok && /编辑器里的未保存文本/.test(after.resultText),
+        judged.ok
+          ? `函数=${warmFn} · ${judged.elapsedMs}ms · 口径句=${JSON.stringify(labelLine)}`
+          : `等不到口径句：${judged.reason} · ${judged.error ?? ''} · 结果区首段=${JSON.stringify(after.resultText.slice(0, 180))}`,
+      );
+
+      // 还原：直接 setValue 回原文（不保存）。setValue 不进撤销栈、脏标记会留在 true
+      // （版本号与基线不同），但**正文与磁盘逐字相同**；语料只读 + 自动保存默认关 ⇒ 不写盘。
+      const restored = await cdp.evalJs(`(() => {
+        const ok = __kojoDebug.editor.setValue(${JSON.stringify(before.value)});
+        const i = __kojoDebug.editor.info();
+        return { ok, length: i ? i.value.length : -1 };
+      })()`);
+      check(
+        'k1‴ 探针已还原（不保存、不写盘）',
+        restored?.ok === true && restored?.length === before.value.length,
+        `还原方式=setValue（不保存）· 长度=${restored?.length}/${before.value.length} · 语料只读，全程未写盘`,
+      );
+    }
+
     /* ================= h. 截图 + 读数摘要 ================= */
     const shot = await cdp.screenshot(false);
     const shotPath = path.join(outDir, 'replay-panel-final.png');
@@ -1061,6 +2050,10 @@ async function main() {
     );
     console.log(
       `  槽位=${lastSnap.slotRows.map((r) => `${r.label}=${JSON.stringify(r.value)}`).join(' / ') || '—'} · datalist=${JSON.stringify(lastSnap.datalists)}`,
+    );
+    console.log(`  整档体检=${JSON.stringify(scanNote?.ok ? scanNote.note : (scanNote?.error ?? '未跑'))}`);
+    console.log(
+      `  语料扫描=${samples ? `${samples.scanned} 份（j1 候选 ${samples.j1.length} / j2 候选 ${samples.j2.length}）` : '未扫'} · 缓冲探针=${kSetup ? kSetup.warmFn : 'N/A'}`,
     );
     console.log(`  截图=${shotPath}`);
     console.log(`  截图=${shotPath2}`);

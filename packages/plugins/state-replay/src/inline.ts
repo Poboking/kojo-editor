@@ -22,8 +22,24 @@
  * - 函数不在口上索引域 / 明细不可得；无 `#FUNCTION` 头；`#FUNCTIONS`（字符串函数）；
  * - `#DIM` 局部声明（用户局部变量未建模）；SELECTCASE / 循环 / GOTO 标签；
  * - CALL / PRINT 等副作用语句；复合赋值（`+=`）；嵌套调用超出深度界。
+ *
+ * 2026-11-05 缓冲区文本批（状态回放边界；本插件私有）：内联求值也要吃**编辑器缓冲区正文**。
+ * `engine.replayFunction` 每次回放先 `beginReplay({ filePath, text })` 领一个**本次回放独占**
+ * 的 `InlineScope`，随后 `preanalyze` / `resolveCall`（含递归内联）全链路只传这个句柄：
+ * - **文本身份比较每个回放至多一次**（`beginReplay` 里 `text !== last.text`，150 KB 正文
+ *   不在每次函数查找时重比）；命中上一次的作用域就复用它的桶，文本一变就整体丢弃旧桶
+ *   （常驻 ≤ 一份缓冲区文本的被调函数集合）。
+ * - **两支缓存互不写入**：磁盘命名空间 `cache`/`inFlight` 语义一字未动；override 结果只进
+ *   scope 自己的桶，`resolveCall` 也只按传入的 scope 查——两个并发回放各持各的句柄，
+ *   不会串味（实例字段只留"上一次来源"用于复用/清空，**不存"当前 override"**）。
+ * - **同文件判等走 `pathKey`**（plugin-api 口径，折叠大小写/分隔符）：override 只作用于
+ *   缓冲区那份文件；跨文件被调函数照旧读盘。磁盘明细先取只为拿 `filePath` 与"在不在
+ *   口上索引域"，缓冲区分支再用 `functionPredicates(key, text)` 拿**缓冲坐标**明细，
+ *   行数组按 `splitEolLines`（engine 同一份实现）切。
  */
 
+import { pathKey } from '@kojo/plugin-api';
+import { splitEolLines } from '@kojo/plugin-api/eol';
 import type {
   ConditionExpr,
   FunctionPredicates,
@@ -312,11 +328,60 @@ function slotKey(name: string, index: number): string {
 }
 
 export interface InlineManagerDeps {
-  /** 谓词明细（condition.extractor；null = 函数不在口上索引域） */
-  functionPredicates(normalizedName: string): Promise<FunctionPredicates | null>;
+  /** 谓词明细（condition.extractor；null = 函数不在口上索引域）。
+   *  第二个形参 additive：该文件的**缓冲区文本**（未保存编辑），给了解析不读盘。 */
+  functionPredicates(normalizedName: string, textOverride?: string): Promise<FunctionPredicates | null>;
   /** 读文件 → 全部行（engine 注入，内部带文本缓存） */
   readFileLines(filePath: string): Promise<string[]>;
   log: { warn(msg: string): void };
+}
+
+/** override 来源：一次 replay 的缓冲区正文（文件路径 + 未保存文本） */
+export interface InlineOverrideSource {
+  readonly filePath: string;
+  readonly text: string;
+}
+
+/**
+ * 一次 replay 独占的 override 作用域（`beginReplay` 产出；调用链只传引用，不传正文）。
+ *
+ * 为什么不把缓存挂在实例上、按"当前文本"查找：`InlineManager` 是 engine 级单例，两个
+ * 并发回放（A 看缓冲区 X、B 看缓冲区 Y）会在"谁最后改写了实例字段"上互相踩。这里的
+ * 缓存随句柄走：A 只会读自己的 `cache`，B 清不掉 A 的桶，A 也不会把结果写进 B 的桶。
+ *
+ * 常驻内存：管理器只留**最后一次** `beginReplay` 的作用域（同文本复用）；文本一变，
+ * 新句柄取代旧句柄，旧桶连同其中的 analyze 结果一起可回收。
+ */
+export interface InlineScope {
+  readonly filePath: string;
+  /** `pathKey(filePath)`（plugin-api 口径：折叠大小写 / 分隔符） */
+  readonly pathKey: string;
+  readonly text: string;
+  /** 本作用域的 analyze 桶（函数名大写 → 结果；null 也在册，避免反复查空） */
+  readonly cache: Map<string, AnalyzedFunction | null>;
+  /** 在途解析合并（同一次 replay 内同一个函数只解析一次） */
+  readonly inFlight: Map<string, Promise<AnalyzedFunction | null>>;
+}
+
+/**
+ * 行文本提示：engine 本次回放**已经切好**的正文（缓冲区或磁盘），只对 `pathKey` 指向的
+ * 文件生效。给它是为了同文件 N 个被调函数不必各自再 `splitEolLines` 一遍 150 KB。
+ */
+export interface InlineLinesHint {
+  readonly pathKey: string;
+  readonly lines: readonly string[];
+}
+
+/** 内联缓存读数（面板 / 测试用来证明"两个命名空间确实分开、文本变化确实清空"） */
+export interface InlineCacheStats {
+  /** 磁盘命名空间的条目数（按函数名，跨 replay 复用） */
+  readonly disk: number;
+  /** override 命名空间的条目数（只属于最后一次 `beginReplay` 的作用域） */
+  readonly override: number;
+  /** override 来源文件（null = 还没见过任何缓冲区来源） */
+  readonly overridePath: string | null;
+  /** override 作用域代数：文本/路径每次变化 +1（旧桶已丢弃，条目数不随代数涨） */
+  readonly generation: number;
 }
 
 /**
@@ -327,46 +392,149 @@ export interface InlineManagerDeps {
  * 执行期缓存必命中（miss = 竞态，log warn 并回落 unknown('call')）。
  */
 export class InlineManager {
+  /** **磁盘命名空间**（语义与本批之前一字不动：按函数名定格、跨 replay 复用） */
   private readonly cache = new Map<string, AnalyzedFunction | null>();
   private readonly inFlight = new Map<string, Promise<AnalyzedFunction | null>>();
+  /** 上一次 override 来源的作用域（文本 / 路径判等命中即复用；变了就整体丢弃） */
+  private lastScope: InlineScope | null = null;
+  /** override 作用域代数（仅诊断：证明"文本变化 = 新桶 + 旧桶丢弃"） */
+  private generation = 0;
+  /** 磁盘命名空间的桶视图（只包引用：`reset()` 清的是同一批 Map，不换对象） */
+  private readonly diskBucket = { cache: this.cache, inFlight: this.inFlight };
 
   constructor(private readonly deps: InlineManagerDeps) {}
 
-  /** 项目切换 / 索引重建时清空（函数体可能已变） */
+  /** 项目切换 / 索引重建时清空（函数体可能已变）：两桶一起清 */
   reset(): void {
     this.cache.clear();
     this.inFlight.clear();
+    this.lastScope = null;
   }
 
-  /** analyze 单函数（缓存共享；与在途解析合并） */
-  private async ensureAnalyzed(name: string): Promise<AnalyzedFunction | null> {
-    const key = name.toUpperCase();
-    const hit = this.cache.get(key);
+  /**
+   * 领取本次 replay 的 override 作用域（**每次回放只调一次**，也是全链路唯一做文本身份
+   * 比较的地方）：与上一次来源同文件（`pathKey` 口径）且同文本 ⇒ 复用它的桶；否则新建
+   * 一个空桶（旧桶就此丢弃，等于"文本变化即清空"）。无 override ⇒ null（走磁盘命名空间）。
+   */
+  beginReplay(override?: InlineOverrideSource | null): InlineScope | null {
+    if (!override) return null;
+    const key = pathKey(override.filePath);
+    const last = this.lastScope;
+    if (last !== null && last.pathKey === key && last.text === override.text) return last;
+    const scope: InlineScope = {
+      filePath: override.filePath,
+      pathKey: key,
+      text: override.text,
+      cache: new Map(),
+      inFlight: new Map(),
+    };
+    this.lastScope = scope;
+    this.generation++;
+    return scope;
+  }
+
+  /** 缓存读数（测试 / 面板自证用；不是回放语义的一部分） */
+  cacheStats(): InlineCacheStats {
+    return {
+      disk: this.cache.size,
+      override: this.lastScope?.cache.size ?? 0,
+      overridePath: this.lastScope?.filePath ?? null,
+      generation: this.generation,
+    };
+  }
+
+  /** 当前 replay 的 analyze 桶与在途表（scope = null → 磁盘命名空间） */
+  private bucketOf(scope: InlineScope | null): {
+    cache: Map<string, AnalyzedFunction | null>;
+    inFlight: Map<string, Promise<AnalyzedFunction | null>>;
+  } {
+    return scope ?? this.diskBucket;
+  }
+
+  /** 记一条 reject 日志（两桶共用口径） */
+  private logReject(key: string, analyzed: AnalyzedFunction): void {
+    if (analyzed.kind === 'reject') {
+      this.deps.log.warn(`Inline reject: ${key} — ${analyzed.reason}`);
+    }
+  }
+
+  /**
+   * 直接种入函数自身（engine 已经把**同一份正文**的明细与行切好了）：省掉
+   * `functionPredicates(key)` + `functionPredicates(key, text)` 两次重取与一次重复 analyze。
+   * 桶里已有（上一次同文本 replay 分析过）就直接用，不覆盖。
+   */
+  private seed(
+    key: string,
+    detail: FunctionPredicates,
+    lines: readonly string[],
+    scope: InlineScope | null,
+  ): AnalyzedFunction | null {
+    const { cache } = this.bucketOf(scope);
+    const hit = cache.get(key);
     if (hit !== undefined) return hit;
-    const pending = this.inFlight.get(key);
+    const analyzed = analyzeInlineBody(detail, lines);
+    this.logReject(key, analyzed);
+    cache.set(key, analyzed);
+    return analyzed;
+  }
+
+  /**
+   * analyze 单函数（缓存共享；与在途解析合并）。
+   *
+   * 取文本逻辑（2026-11-05 缓冲文本批）：
+   * 1. 先 `functionPredicates(key)` 拿磁盘明细——只为 `filePath` 与"在不在口上索引域"；
+   * 2. 本次 replay 有 override 且 `pathKey(detail.filePath)` 等于来源文件 ⇒ 再
+   *    `functionPredicates(key, scope.text)` 拿**缓冲坐标**明细，行数组按 `splitEolLines`
+   *    切（`hint` 命中时复用 engine 已切好的那份，不再重切）；
+   * 3. 否则照旧走磁盘：`readFileLines(detail.filePath)`。
+   *
+   * 结果只写进**本次 replay 所属的桶**（scope 非空 → override 桶），磁盘桶绝不被
+   * override 结果写入，反之亦然。
+   */
+  private async ensureAnalyzed(
+    name: string,
+    scope: InlineScope | null,
+    hint?: InlineLinesHint,
+  ): Promise<AnalyzedFunction | null> {
+    const key = name.toUpperCase();
+    const { cache, inFlight } = this.bucketOf(scope);
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const pending = inFlight.get(key);
     if (pending) return pending;
 
     const task = (async (): Promise<AnalyzedFunction | null> => {
       const detail = await this.deps.functionPredicates(key);
       if (!detail) return null; // 不在口上索引域（引擎内置 / 游戏侧函数）
-      let lines: string[];
+      // ---- 缓冲区分支：同一份文件才吃 override（跨文件仍读盘） ----
+      if (scope !== null && pathKey(detail.filePath) === scope.pathKey) {
+        const bufferDetail = await this.deps.functionPredicates(key, scope.text);
+        if (!bufferDetail) return null; // 缓冲区里找不到同名函数（改名 / 删掉 / 不在口上域）
+        const lines = hint !== undefined && hint.pathKey === scope.pathKey ? hint.lines : splitEolLines(scope.text);
+        const analyzed = analyzeInlineBody(bufferDetail, lines);
+        this.logReject(key, analyzed);
+        return analyzed;
+      }
+      // ---- 磁盘分支（原语义） ----
+      let lines: readonly string[];
       try {
-        lines = await this.deps.readFileLines(detail.filePath);
+        lines =
+          hint !== undefined && hint.pathKey === pathKey(detail.filePath)
+            ? hint.lines
+            : await this.deps.readFileLines(detail.filePath);
       } catch (err) {
         this.deps.log.warn(`Inline analyze read failed: ${detail.filePath} — ${String(err)}`);
         return null;
       }
       const analyzed = analyzeInlineBody(detail, lines);
-      if (analyzed.kind === 'reject') {
-        this.deps.log.warn(`Inline reject: ${key} — ${analyzed.reason}`);
-      }
+      this.logReject(key, analyzed);
       return analyzed;
     })();
 
-    this.inFlight.set(key, task);
+    inFlight.set(key, task);
     const result = await task;
-    this.inFlight.delete(key);
-    this.cache.set(key, result);
+    inFlight.delete(key);
+    cache.set(key, result);
     return result;
   }
 
@@ -375,8 +543,15 @@ export class InlineManager {
    * 嵌套引用均依赖），再从 detail 的全部 AST（谓词 / 赋值 / 返回）出发，BFS
    * 收集用户函数调用并逐个 analyze；内联体内的嵌套调用随 analyze 结果继续
    * 展开（visited 防环；执行期深度界另有兜底）。完成后 resolveCall 同步缓存必命中。
+   *
+   * `scope`：本次 replay 的 override 句柄（null = 磁盘回放）；`hint`：engine 已切好的
+   * 正文（同文件被调函数共用，省掉 N 次全文切行）。两者都沿递归全链路透传。
    */
-  async preanalyze(detail: FunctionPredicates): Promise<void> {
+  async preanalyze(
+    detail: FunctionPredicates,
+    scope: InlineScope | null = null,
+    hint?: InlineLinesHint,
+  ): Promise<void> {
     const visited = new Set<string>();
     const queue: string[] = [];
 
@@ -413,10 +588,14 @@ export class InlineManager {
       }
     };
 
-    // 自身先入缓存（自递归 / 被嵌套调用引用时命中）
+    // 自身先入缓存（自递归 / 被嵌套调用引用时命中）：engine 已经把同一份正文的明细 +
+    // 行切好了 ⇒ 直接种入，不再让抽取器重算一遍（N 个函数逐个回放时的两份重复解析）。
     const selfKey = detail.normalizedName.toUpperCase();
     visited.add(selfKey);
-    const self = await this.ensureAnalyzed(selfKey);
+    const self =
+      hint !== undefined && hint.pathKey === pathKey(detail.filePath)
+        ? this.seed(selfKey, detail, hint.lines, scope)
+        : await this.ensureAnalyzed(selfKey, scope, hint);
     if (self && self.kind === 'ok') collectFromBody(self);
 
     for (const p of detail.predicates) collectFromExpr(p.expr);
@@ -427,7 +606,7 @@ export class InlineManager {
       const key = queue.pop()!;
       if (visited.has(key)) continue;
       visited.add(key);
-      const analyzed = await this.ensureAnalyzed(key);
+      const analyzed = await this.ensureAnalyzed(key, scope, hint);
       if (analyzed && analyzed.kind === 'ok') collectFromBody(analyzed);
     }
   }
@@ -436,21 +615,23 @@ export class InlineManager {
    * 同步内联调用（preanalyze 后缓存必命中；miss → null → unknown('call')）。
    * @param callerCtx 调用方上下文（实参求值通道：外层 read / overlay / 递归内联）
    * @param depth 当前内联深度
+   * @param scope 本次 replay 的 override 句柄（null / 缺省 = 磁盘命名空间）
    */
   resolveCall(
     name: string,
     args: readonly ConditionExpr[],
     callerCtx: EvalContext,
     depth: number,
+    scope: InlineScope | null = null,
   ): ReplayValue | null {
     if (depth > MAX_INLINE_DEPTH) return null;
     const key = name.toUpperCase();
-    const analyzed = this.cache.get(key);
+    const analyzed = this.bucketOf(scope).cache.get(key);
     if (analyzed === undefined || analyzed === null || analyzed.kind === 'reject') return null;
     if (analyzed.ops.length === 0) {
       return unknownValue('call', `函数体为空，无法内联：${name}()`);
     }
-    return this.runBody(name, analyzed, args, callerCtx, depth);
+    return this.runBody(name, analyzed, args, callerCtx, depth, scope);
   }
 
   /** 执行一个内联函数体（绑定 → PC 解释） */
@@ -460,6 +641,7 @@ export class InlineManager {
     args: readonly ConditionExpr[],
     callerCtx: EvalContext,
     depth: number,
+    scope: InlineScope | null,
   ): ReplayValue | null {
     const env: InlineEnv = new Map();
 
@@ -500,7 +682,7 @@ export class InlineManager {
     const readInline = (ref: VariableRef): ReplayValue => readWithEnv(ref, env, callerCtx.read, name);
     const ctx: EvalContext = {
       read: readInline,
-      resolveCall: (n, a) => this.resolveCall(n, a, ctx, depth + 1), // 自引用闭包 = 递归内联
+      resolveCall: (n, a) => this.resolveCall(n, a, ctx, depth + 1, scope), // 自引用闭包 = 递归内联
     };
     // ---- PC 解释 ----
     // pendingEval：标记"pc 到达 elseif 时是条件假跳转到达（需求值）还是分支体

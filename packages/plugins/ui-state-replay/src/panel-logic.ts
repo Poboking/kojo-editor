@@ -1468,6 +1468,53 @@ export function overrideValueForField(
   return null; // map / xml / datatable：不在快改射程内
 }
 
+/* ==================== 批量体检的进度节流（D8 2026-11-05；整档体检复用） ==================== */
+
+/** 进度节流的参数（缺省 = 面板既有口径：每 20 段或 200ms，首末必发） */
+export interface ProgressThrottleOptions {
+  /** 至少每多少个"段"发一次（缺省 20） */
+  readonly step?: number;
+  /** 或至少每多少毫秒发一次（缺省 200） */
+  readonly intervalMs?: number;
+  /** 时钟注入（单测用；缺省 `Date.now`） */
+  readonly now?: () => number;
+}
+
+/**
+ * 进度节流器（纯函数工厂）：返回 `(done, total) => 是否该发`。
+ *
+ * 为什么要有：批量体检上限 1,500 段、整档体检 2,000 段，逐段 `setState` 会把整棵
+ * 结果树重渲上千次（实测口径见 D8）。节流成"每 `step` 段或每 `intervalMs` 毫秒，
+ * 且**首末必发**"——进度照样走，渲染次数砍两个数量级，末次一定落地（不会停在 97%）。
+ *
+ * 语义（逐条可测）：
+ * - 第一次调用必发（进度条立刻出现，不等 20 段）；
+ * - `done === total` 必发（收尾不丢）；
+ * - 其余按 `done - 上次 >= step` **或** `now - 上次 >= intervalMs` 放行；
+ * - 时钟/步长非法（NaN / ≤0）时退回缺省，不抛错。
+ */
+export function createProgressThrottle(
+  opts: ProgressThrottleOptions = {},
+): (done: number, total: number) => boolean {
+  const step = Number.isFinite(opts.step) && (opts.step ?? 0) >= 1 ? Math.floor(opts.step!) : 20;
+  const interval =
+    Number.isFinite(opts.intervalMs) && (opts.intervalMs ?? 0) >= 0 ? Math.floor(opts.intervalMs!) : 200;
+  const now = opts.now ?? Date.now;
+  let lastAt = 0;
+  let lastDone = -1;
+  let first = true;
+  return (done: number, total: number): boolean => {
+    const at = now();
+    if (first || done === total || done - lastDone >= step || at - lastAt >= interval) {
+      first = false;
+      lastAt = at;
+      lastDone = done;
+      return true;
+    }
+    return false;
+  };
+}
+
 /** 组装单字段覆盖集（找不到变量 / 角色块 → null，调用方显式报错） */
 export function overridesForField(
   archive: SnapshotArchive,

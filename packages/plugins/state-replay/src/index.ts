@@ -88,7 +88,15 @@ export function createStateReplayPlugin(): Plugin {
 }
 
 export { StateReplayEngine, replayPredicates, type StateReplayEngineDeps } from './engine';
-export { WRITE_INSTRUCTIONS, detectUnmodeledWrites, type ReplayWrite, type ReplayWrites } from './writes';
+export {
+  WRITE_INSTRUCTIONS,
+  CALL_INSTRUCTIONS,
+  JUMP_INSTRUCTIONS,
+  detectUnmodeledWrites,
+  type ReplayWrite,
+  type ReplayWriteKind,
+  type ReplayWrites,
+} from './writes';
 export { createStateView, ReplayViewError, type CreateStateViewOptions, type SchemaLookup } from './state-view';
 export { judgeCondition, evaluateExpr, type ValueReader, type EvalContext, type CallResolver } from './evaluate';
 export { InlineManager, analyzeInlineBody, MAX_INLINE_DEPTH, type AnalyzedFunction, type InlineBody } from './inline';

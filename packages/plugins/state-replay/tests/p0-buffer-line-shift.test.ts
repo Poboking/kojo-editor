@@ -201,7 +201,7 @@ describe('P0 端到端：缓冲区插行后回放行号跟缓冲区走（真实�
     expect(fromBuffer.predicates[0]!.line).toBe(14);
     expect(fromBuffer.predicates[0]!.outcome).toEqual({ kind: 'true' }); // 800 >= 500
     expect(fromBuffer.confidence).toBe('exact');
-    expect(fromBuffer.unmodeledWrites).toEqual([{ line: 16, text: 'CFLAG:2 += 20' }]);
+    expect(fromBuffer.unmodeledWrites).toEqual([{ line: 16, text: 'CFLAG:2 += 20', kind: 'assign' }]);
   });
 
   it('同一函数无 override：仍是盘上坐标（1 / 9 / 11），缓冲区没污染磁盘语义', async () => {
@@ -214,6 +214,6 @@ describe('P0 端到端：缓冲区插行后回放行号跟缓冲区走（真实�
     expect(fromDisk.startLine).toBe(1);
     expect(fromDisk.predicates[0]!.line).toBe(9);
     expect(fromDisk.predicates[0]!.outcome).toEqual({ kind: 'false' }); // 800 >= 900
-    expect(fromDisk.unmodeledWrites).toEqual([{ line: 11, text: 'CFLAG:2 += 10' }]);
+    expect(fromDisk.unmodeledWrites).toEqual([{ line: 11, text: 'CFLAG:2 += 10', kind: 'assign' }]);
   });
 });

@@ -26,13 +26,20 @@
  *   明细分派给抽取器时透传（抽取器在**缓冲区自己的行号空间**里按 `@NAME` 重定位函数，
  *   不读盘；评审 P0），台词推演与循环窗口取行也优先用 override 切行。override
  *   **不进 lineCache**（那份缓存描述磁盘正文，混入缓冲区会让下一次无 override 的回放
- *   读到旧编辑）；内联求值要读的正文仍走磁盘（见 `replayFunction` 内的边界注释）。
+ *   读到旧编辑）；内联求值按**来源分桶**吃同一份缓冲区（见下条）。
+ * - **内联解释器吃缓冲区文本**（`inline.ts` 的 `InlineScope`）：每次 `replayFunction` 先
+ *   `beginReplay({ filePath, text })` 领一个本次回放独占的句柄，`preanalyze` 与
+ *   `resolveCall`（含递归内联）全链路只传这个句柄。同文件被调函数按**缓冲坐标**明细
+ *   与缓冲区正文 analyze；跨文件仍读盘。磁盘命名空间（`InlineManager` 的 `cache`）与
+ *   override 命名空间互不写入：两个并发回放各持各的桶，谁也不会读到对方的正文。
+ *   文本身份比较每个回放至多两次（复用/清空判据 + 切行记忆各一次），**不是每次函数
+ *   查找都比 150 KB**；同一份缓冲正文只 `splitEolLines` 一次（`overrideLinesMemo`）。
  *   **口径**：override 只作用于"本函数所在文件"这一个函数窗口，面板文案不许把它说成
  *   "整份缓冲区都能回放"。
  */
 
 import { splitEolLines } from '@kojo/plugin-api/eol';
-import { applyArchiveOverrides } from '@kojo/plugin-api';
+import { applyArchiveOverrides, pathKey } from '@kojo/plugin-api';
 import type {
   ArchiveOverrides,
   FunctionPredicate,
@@ -48,7 +55,7 @@ import type {
 } from '@kojo/plugin-api';
 import { type CallResolver, type EvalContext, type ValueReader } from './evaluate';
 import { buildBranchOutcomes } from './branches';
-import { InlineManager } from './inline';
+import { InlineManager, type InlineCacheStats, type InlineScope } from './inline';
 import { createFunctionOverlay, mergeCallContext, type OverlayPosition, type OverlayReader } from './locals';
 import { judgePredicateWithLoops } from './loop-range';
 import { createStateView, type SchemaLookup } from './state-view';
@@ -190,13 +197,18 @@ export class StateReplayEngine implements StateReplayService {
   /** 回放视图记忆（key = 档路径 + 角色号；失效判据＝archive 对象身份） */
   private readonly viewCache = new Map<string, ViewEntry>();
   private readonly viewCacheMax: number;
+  /**
+   * 缓冲区切行记忆（**只留上一份正文**；`linesOf` 的 override 分支用，见该方法注释）。
+   * 不按文件路径记账、也绝不被无 override 的回放读到 ⇒ 缓冲区正文不会污染磁盘语义。
+   */
+  private overrideLinesMemo: { readonly text: string; readonly lines: string[] } | null = null;
 
   constructor(private readonly deps: StateReplayEngineDeps) {
     this.lineCacheMaxFiles = deps.lineCacheCaps?.maxFiles ?? LINE_CACHE_MAX_FILES;
     this.lineCacheMaxChars = deps.lineCacheCaps?.maxChars ?? LINE_CACHE_MAX_CHARS;
     this.viewCacheMax = deps.viewCacheMax ?? VIEW_CACHE_MAX;
     this.inline = new InlineManager({
-      functionPredicates: (name) => deps.functionPredicates(name),
+      functionPredicates: (name, text) => deps.functionPredicates(name, text),
       readFileLines: async (path) => {
         const hit = this.lineCache.get(path);
         if (hit) {
@@ -230,6 +242,15 @@ export class StateReplayEngine implements StateReplayService {
     };
   }
 
+  /**
+   * 内联缓存读数（诊断用，不是回放语义）：磁盘桶 / override 桶分开报，外加 override
+   * 作用域代数——测试据此证明"文本变化 = 新桶（代数 +1）+ 旧桶丢弃，条目数不随代数涨"，
+   * 也就是"磁盘缓存零污染"与"override 常驻有界"两条各有一把尺。
+   */
+  inlineCacheStats(): InlineCacheStats {
+    return this.inline.cacheStats();
+  }
+
   /** 入缓存（FIFO：超尺从队首削；与 `kernel/src/io.ts` 的文本缓存同形状；尺子＝行字符总数） */
   private putLines(path: string, lines: string[]): void {
     const sum = (ls: string[]): number => ls.reduce((n, s) => n + s.length, 0);
@@ -258,6 +279,7 @@ export class StateReplayEngine implements StateReplayService {
     this.lineCache.clear();
     this.lineCacheChars = 0;
     this.viewCache.clear();
+    this.overrideLinesMemo = null;
   }
 
   /**
@@ -313,15 +335,28 @@ export class StateReplayEngine implements StateReplayService {
   }
 
   /**
-   * 函数体行文本：**缓冲区文本优先**（按 EOL 切行，返回临时数组、绝不入缓存），
+   * 函数体行文本：**缓冲区文本优先**（按 EOL 切行，返回临时数组、绝不入 `lineCache`），
    * 没有 override 才走 `getLines`（同一份 lineCache / 读盘）。
    *
    * 为什么不把 override 塞进 lineCache：那份缓存按**文件路径**记账、描述磁盘正文。
    * 把缓冲区塞进去，下一次不带 override 的回放（同一路径）就会读到旧编辑——
    * 这正是本批要消灭的"看不出来的不一致"，不能在新通道里再造一份。
+   *
+   * **缓冲区切行记忆**（`overrideLinesMemo`，只留上一份正文，内联 override 批）：
+   * 同一份缓冲区连续回放 N 个函数时，166 KB 正文不必被 `splitEolLines` 切 N 遍
+   * （实测 20 个真实函数：带 override 每轮 13.9 ms → 3.7 ms，与磁盘回放 3.5 ms 同量级）。
+   * 判据是**文本身份比较**（同一字符串对象 O(1)；内容相同的另一份 = 一次逐字比较，
+   * 仍比重新切分 + 分配 N 个行串便宜得多），与抽取器的 `overrideParseMemo` 同一形态。
+   * 它只服务 override 回放：无 override 的 `getLines` 永远不读它，`resetCaches` 清掉。
    */
   private async linesOf(filePath: string, textOverride?: string): Promise<string[]> {
-    if (textOverride !== undefined) return splitEolLines(textOverride);
+    if (textOverride !== undefined) {
+      const memo = this.overrideLinesMemo;
+      if (memo !== null && memo.text === textOverride) return memo.lines;
+      const lines = splitEolLines(textOverride);
+      this.overrideLinesMemo = { text: textOverride, lines };
+      return lines;
+    }
     return this.getLines(filePath);
   }
 
@@ -346,26 +381,22 @@ export class StateReplayEngine implements StateReplayService {
       resolver?.(functionName, view.characterNo),
     );
     const overlay = createFunctionOverlay({ detail, callContext, baseRead: read });
-    // 内联预热（异步阶段结束 → 执行期同步缓存命中）
-    await this.inline.preanalyze(detail);
-    const resolveCall: CallResolver = (name, args, callerCtx) =>
-      this.inline.resolveCall(name, args, callerCtx, 0);
     /**
-     * 函数体行文本（**取一次，三种用途共用**）：①未建模写检测（面板要的近似标记，
-     * 总是尽可能提供）；②循环量窗口档（仅已发布循环）；③台词推演（仅有显示行）。
+     * 函数体行文本（**取一次，四种用途共用**）：①未建模写检测（面板要的近似标记，
+     * 总是尽可能提供）；②循环量窗口档（仅已发布循环）；③台词推演（仅有显示行）；
+     * ④内联解释器的同文件被调函数（行文本提示，省掉 N 次全文切行）。
      * 取行优先用缓冲区文本（`options.textOverride`：未保存的编辑也照回放），否则走
-     * lineCache / 读盘。读盘失败照旧 `log.warn` 降级（三种用途各自隐藏），绝不抛错。
+     * lineCache / 读盘。读盘失败照旧 `log.warn` 降级（四种用途各自隐藏），绝不抛错。
      *
      * **行号空间**：`detail` 的行号 / 区间与 `lines` 必须来自**同一份正文**（评审 P0）——
      * 抽取器物化 override 时会在缓冲区里按 `@NAME` 重定位函数，`detail.startLine` 就是
-     * 缓冲区坐标；本层三种用途一律按 `detail.startLine/endLine` 切 `lines`，不再碰
+     * 缓冲区坐标；本层四种用途一律按 `detail.startLine/endLine` 切 `lines`，不再碰
      * 磁盘索引区间。
      *
-     * **边界**：override 只作用于**本函数所在文件**的明细与取行；内联解释器（
-     * `InlineManager`）要读的正文仍走磁盘——它的分析缓存按函数名定格、正文通道按
-     * 文件路径记账，把缓冲区混进去会让同一次回放里两个来源拼在一起（也污染下一次
-     * 无 override 的回放）。这是本批刻意不做的部分，如实记在文件头与本注释；
-     * 面板文案不该承诺"缓冲区里内联被调体也按缓冲区算"。
+     * **内联边界（本批已落地）**：override 通过 `InlineScope` 传参，只作用于**本函数
+     * 所在文件**的同文件被调函数（跨文件仍读盘）。作用域是**本次调用私有**的：句柄被
+     * `resolveCall` 闭包捕获，两个并发回放（不同缓冲区文本）各持各的桶，不会串味；
+     * 实例字段只记"上一次来源"用于复用/清空，**不存"当前 override"**。
      */
     let lines: readonly string[] | undefined;
     try {
@@ -373,6 +404,23 @@ export class StateReplayEngine implements StateReplayService {
     } catch (err) {
       this.deps.log.warn(`function body lines unavailable for ${detail.filePath}: ${String(err)}`);
     }
+    /**
+     * 本次回放的 override 作用域：**每个 replay 只在这里做一次文本身份比较**
+     * （`beginReplay` 里 `text !== last.text`；不是每次函数查找都比 150 KB）。
+     * 文本/路径没变 ⇒ 复用上一次的桶（跨 replay 命中）；变了 ⇒ 新桶、旧桶丢弃。
+     */
+    const scope: InlineScope | null =
+      options?.textOverride === undefined
+        ? null
+        : this.inline.beginReplay({ filePath: detail.filePath, text: options.textOverride });
+    // 内联预热（异步阶段结束 → 执行期同步缓存命中）：override 作用域与行文本全链路透传
+    await this.inline.preanalyze(
+      detail,
+      scope,
+      lines === undefined ? undefined : { pathKey: pathKey(detail.filePath), lines },
+    );
+    const resolveCall: CallResolver = (name, args, callerCtx) =>
+      this.inline.resolveCall(name, args, callerCtx, 0, scope);
     // 循环量窗口档（KW-15D）：有已发布循环才用行文本；拿不到行 = 只走第一条行档，
     // 绝不猜窗口干净。
     const loopBodyLines = lines && detail.loopCounters && detail.loopCounters.length > 0 ? lines : undefined;

@@ -25,6 +25,7 @@ import {
   classifySlotValue,
   collectAssumedSlots,
   contextTextToSceneSlots,
+  createProgressThrottle,
   defaultScene,
   defaultSlotText,
   exprArgSlots,
@@ -52,6 +53,7 @@ import {
   mergeSlotCandidates,
   summarizeUnmodeledWrites,
   textSourceLabel,
+  unmodeledUnknownNote,
 } from '../src/preview';
 
 describe('parseCallContextText', () => {
@@ -1118,7 +1120,7 @@ describe('textSourceLabel · 结果区口径标记', () => {
   it('缓冲文本分两档措辞（未保存 / 与磁盘一致），磁盘文本给出降级原因', () => {
     expect(textSourceLabel({ source: 'buffer', reason: 'buffer-dirty' })).toContain('编辑器里的未保存文本');
     expect(textSourceLabel({ source: 'buffer', reason: 'buffer-clean' })).toContain('编辑器缓冲区文本');
-    expect(textSourceLabel({ source: 'buffer', reason: 'buffer-clean' })).toContain('与磁盘当前一致');
+    expect(textSourceLabel({ source: 'buffer', reason: 'buffer-clean' })).toContain('编辑器里正开着的这一份');
     expect(textSourceLabel({ source: 'disk', reason: 'other-file' })).toContain('不是编辑器里正在编辑的这一份');
     expect(textSourceLabel({ source: 'disk', reason: 'no-buffer' })).toContain('磁盘文本');
   });
@@ -1164,8 +1166,7 @@ describe('summarizeUnmodeledWrites · 前 5 + 省略', () => {
   });
 });
 
-describe('mergeSlotCandidates · 字面量 ∪ 具名常量', () => {
-  it('base 在前、extra 只补新值（槽内去重），不截断', () => {
+describe('mergeSlotCandidates · 字面量 ∪ 具名常量', () => {  it('base 在前、extra 只补新值（槽内去重），不截断', () => {
     const base = new Map<string, string[]>([['str:0', ['战斗前', '战斗后']]]);
     const extra = new Map<string, string[]>([
       ['str:0', ['战斗后', '休息']],
@@ -1193,5 +1194,156 @@ describe('mergeSlotCandidates · 字面量 ∪ 具名常量', () => {
     mergeSlotCandidates(base, extra);
     expect(base.get('int:0')).toEqual(['1']);
     expect(extra.get('int:0')).toEqual(['2']);
+  });
+});
+
+/* ================================================================== *
+ * 写点分类呈现（2026-11-05 边界批 · 车道 S4）
+ *
+ * 契约给 `ReplayWrite` 加了可选 `kind`（assign / instruction / call / jump）。
+ * 分桶口径：确定写点（assign / instruction / 缺省）逐行可点回源；call / jump
+ * 只给计数（被调段与跳转后的写/早退静态判不出），示例行号进 title 不占屏。
+ * 兼容：旧数据没有 kind 一律归确定写点；`undefined` 仍是「未评估」、空数组仍 null。
+ * ================================================================== */
+
+describe('summarizeUnmodeledWrites · 写点分桶（kind）', () => {
+  type Kind = 'assign' | 'instruction' | 'call' | 'jump';
+  const w = (line: number, kind?: Kind, text = `CFLAG:${line} += 1`) => ({
+    line,
+    text,
+    ...(kind === undefined ? {} : { kind }),
+  });
+
+  it('分桶：assign / instruction / 缺省 → concrete；call / jump 只计数', () => {
+    const s = summarizeUnmodeledWrites([
+      w(3, 'assign'),
+      w(4, 'instruction', 'SETBIT CFLAG:2, 4'),
+      w(5),
+      w(6, 'call', 'CALL FOO'),
+      w(7, 'jump', 'GOTO BAR'),
+      w(8, 'call', 'TRYCALL BAZ'),
+    ])!;
+    expect(s.total).toBe(6); // total 仍是全部写点（含 call/jump）
+    expect(s.concrete.map((x) => x.line)).toEqual([3, 4, 5]);
+    expect(s.calls).toBe(2);
+    expect(s.jumps).toBe(1);
+    expect(s.shown.map((x) => x.line)).toEqual([3, 4, 5]);
+    expect(s.more).toBe(0);
+    // 原文原样带出（点击回源时的悬停文本）
+    expect(s.concrete[1]).toEqual({ line: 4, text: 'SETBIT CFLAG:2, 4' });
+  });
+
+  it('旧数据无 kind → 全部归 concrete（旧引擎零改动）', () => {
+    const s = summarizeUnmodeledWrites([
+      { line: 10, text: 'CFLAG:1 += 1' },
+      { line: 11, text: 'TFLAG:2 = 1' },
+    ])!;
+    expect(s.concrete).toHaveLength(2);
+    expect(s.calls).toBe(0);
+    expect(s.jumps).toBe(0);
+    expect(s.callLines).toEqual([]);
+    expect(s.jumpLines).toEqual([]);
+    expect(s.head).toBe('本段有 2 处状态写未建模（回放按入口值判）：');
+  });
+
+  it('call / jump 文案：有才出现，且明说「被调段与跳转后的写/早退不展开」', () => {
+    const onlyConcrete = summarizeUnmodeledWrites([w(1)])!;
+    expect(onlyConcrete.head).not.toContain('处调用');
+    expect(onlyConcrete.head).not.toContain('处跳转');
+
+    const withCall = summarizeUnmodeledWrites([w(1), w(2, 'call')])!;
+    expect(withCall.head).toContain('另有 1 处调用');
+    expect(withCall.head).toContain('被调段与跳转后的写/早退不展开');
+    expect(withCall.head).not.toContain('处跳转');
+
+    const withJump = summarizeUnmodeledWrites([w(1), w(2, 'jump')])!;
+    expect(withJump.head).toContain('另有 1 处跳转');
+    expect(withJump.head).not.toContain('处调用');
+
+    const both = summarizeUnmodeledWrites([w(1), w(2, 'call'), w(3, 'jump'), w(4, 'jump')])!;
+    expect(both.head).toContain('另有 1 处调用、2 处跳转');
+    expect(both.head).toContain('本段有 1 处状态写未建模');
+  });
+
+  it('只有 call/jump：确定写点为 0，但总数照报；示例行号最多 3 条', () => {
+    const s = summarizeUnmodeledWrites([
+      w(5, 'call'),
+      w(6, 'call'),
+      w(7, 'call'),
+      w(8, 'call'),
+      w(9, 'jump'),
+    ])!;
+    expect(s.concrete).toEqual([]);
+    expect(s.shown).toEqual([]);
+    expect(s.more).toBe(0);
+    expect(s.total).toBe(5);
+    expect(s.calls).toBe(4);
+    expect(s.jumps).toBe(1);
+    expect(s.callLines).toEqual([5, 6, 7]); // 前 3 条示例，不逐行铺
+    expect(s.jumpLines).toEqual([9]);
+    expect(s.head).toContain('本段有 0 处状态写未建模');
+    expect(s.head).toContain('另有 4 处调用、1 处跳转');
+  });
+
+  it('call/jump 不占 shown：省略数只按确定写点算', () => {
+    const writes = [w(1, 'call'), ...Array.from({ length: 8 }, (_, i) => w(10 + i))];
+    const s = summarizeUnmodeledWrites(writes, 5)!;
+    expect(s.shown.map((x) => x.line)).toEqual([10, 11, 12, 13, 14]);
+    expect(s.more).toBe(3);
+    expect(s.concrete).toHaveLength(8);
+  });
+
+  it('undefined 仍是「未评估」那句；空数组 / null 不冒充「未评估」也不给摘要', () => {
+    expect(unmodeledUnknownNote(undefined)).toContain('未评估');
+    expect(unmodeledUnknownNote(undefined)).toContain('没拿到函数体行文本');
+    expect(unmodeledUnknownNote([])).toBeNull();
+    expect(unmodeledUnknownNote(null)).toBeNull();
+    expect(unmodeledUnknownNote([{ line: 1, text: 'CFLAG:1 += 1' }])).toBeNull();
+    expect(summarizeUnmodeledWrites(undefined)).toBeNull();
+    expect(summarizeUnmodeledWrites(null)).toBeNull();
+    expect(summarizeUnmodeledWrites([])).toBeNull();
+  });
+});
+
+/* ================================================================== *
+ * 进度节流（D8；整档体检复用）：每 20 段或 200ms，首末必发。
+ * 1000 段级体检逐段 setState 会重渲整棵结果树 —— 这里把次数钉住。
+ * ================================================================== */
+
+describe('createProgressThrottle · 每 20 段或 200ms，首末必发', () => {
+  it('1000 段、时钟不动 → 只发 51 次（不是 1000 次），末次一定落地', () => {
+    const emitted: number[] = [];
+    const emit = createProgressThrottle({ now: () => 0 });
+    for (let done = 1; done <= 1000; done += 1) if (emit(done, 1000)) emitted.push(done);
+    expect(emitted).toHaveLength(51);
+    expect(emitted[0]).toBe(1); // 首必发
+    expect(emitted).toContain(21);
+    expect(emitted).toContain(981);
+    expect(emitted[emitted.length - 1]).toBe(1000); // 末必发（1000 不在 20 的步长上）
+  });
+
+  it('慢回放（每段 20ms）：时间闸先放行，次数约等于「时长/200ms + 步长兜底」', () => {
+    let clock = 0;
+    const emitted: number[] = [];
+    const emit = createProgressThrottle({ now: () => clock });
+    for (let done = 1; done <= 1000; done += 1) {
+      clock += 20; // 每段 20ms ⇒ 200ms 只能跑 10 段，时间闸生效
+      if (emit(done, 1000)) emitted.push(done);
+    }
+    // 每 10 段一次 ≈ 100 次，加上首末；远小于 1000
+    expect(emitted.length).toBeGreaterThanOrEqual(100);
+    expect(emitted.length).toBeLessThanOrEqual(102);
+    expect(emitted[emitted.length - 1]).toBe(1000);
+  });
+
+  it('非法参数退回缺省（不抛错）；自定义步长可收紧', () => {
+    const emit = createProgressThrottle({ step: Number.NaN, intervalMs: Number.NaN, now: () => 0 });
+    const hits: number[] = [];
+    for (let done = 1; done <= 100; done += 1) if (emit(done, 100)) hits.push(done);
+    expect(hits).toEqual([1, 21, 41, 61, 81, 100]);
+    const tight = createProgressThrottle({ step: 5, now: () => 0 });
+    const hits2: number[] = [];
+    for (let done = 1; done <= 30; done += 1) if (tight(done, 30)) hits2.push(done);
+    expect(hits2).toEqual([1, 6, 11, 16, 21, 26, 30]);
   });
 });

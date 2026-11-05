@@ -44,6 +44,11 @@
  *   ④ 槽位候选并上**具名常量**的真实值（`const-candidates.ts`，经 `query` 注入的 IO 读盘）；
  *   ⑤ 谓词列表**筛选**（`predicate-filter.ts`；只筛渲染，统计与窗口语义不变）；
  *   ⑥ 可发现性：Ctrl+Alt+S 那条键与「有未保存编辑按缓冲文本判」写进常驻提示 / 空态。
+ *
+ * 2026-11-05 边界批（车道 S4）：⑦ **整档体检**——「本角色全段落体检」旁边再加一档
+ * 粒度：本档全部角色各扫前 20 段（全档 2,000 段封顶、可取消），按判不出占比给出
+ * 最该看的角色与段落；编排在 `./archive-scan.ts`（S3），本文件只接线与呈现。
+ * ⑧ 未建模写**分桶呈现**：确定写点逐行可点，call/jump 只给计数（见 `./preview.ts`）。
  */
 
 import { createElement, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
@@ -79,6 +84,7 @@ import {
   browseCharaFunctions,
   classifySlotValue,
   collectAssumedSlots,
+  createProgressThrottle,
   defaultScene,
   defaultSlotText,
   diffReplays,
@@ -109,8 +115,17 @@ import {
 } from './preview';
 import { parseConstDeclarations, resolveConstCandidates } from './const-candidates';
 import { countPredicates, type PredicateFilter } from './predicate-filter';
-import { BATCH_DEFAULT_CAP, runBatchReplay, type BatchSummary } from './batch';
+import { BATCH_DEFAULT_CAP, compareBatchRows, runBatchReplay, type BatchRow, type BatchSummary } from './batch';
 import { BatchPanel } from './batch-panel';
+import {
+  ARCHIVE_SCAN_DEFAULT_DEADLINE_MS,
+  ARCHIVE_SCAN_DEFAULT_PER_CHAR_CAP,
+  ARCHIVE_SCAN_DEFAULT_TOTAL_CAP,
+  compareArchiveScanRows,
+  runArchiveScan,
+  type ArchiveScanRow,
+  type ArchiveScanSummary,
+} from './archive-scan';
 import { createReplayActivation } from './activation';
 import { createSceneActions } from './scene-actions';
 import {
@@ -139,6 +154,35 @@ const SCENES_STORAGE_KEY = 'replay-scenes';
  * 存在本插件自己的域里（不跨域读别人的），切回来至少还原到"上次看的那一段"。
  */
 const LAST_DEBUG_TARGET_KEY = 'last-debug-target';
+
+/**
+ * 整档体检的**预算**（2026-11-05 边界批 · 车道 S4）。
+ *
+ * 为什么要预算：一档全角色 × 每角色全部段落，在真语料上可能是十万级回放——
+ * 那不是"体检"，是把编辑器钉死。默认每角色只扫前 20 段、全档最多 2,000 段，
+ * 并允许中途取消；数字写进按钮 title，作者按之前就知道会跑多久。
+ *
+ * 数值本身住 `./archive-scan.ts`（S3 的缺省常量），这里**不抄第二份**。
+ */
+const ARCHIVE_SCAN_PER_CHAR_CAP = ARCHIVE_SCAN_DEFAULT_PER_CHAR_CAP;
+const ARCHIVE_SCAN_TOTAL_CAP = ARCHIVE_SCAN_DEFAULT_TOTAL_CAP;
+/** 整档体检展开后最多列多少个角色（按判不出占比降序；防刷屏） */
+const ARCHIVE_SCAN_CHAR_ROWS = 30;
+/** 整档体检展开后最多列多少条「全局最该看的段落」（与单角色体检同额） */
+const ARCHIVE_SCAN_WORST_ROWS = 30;
+
+/** 整档体检里一条「全局最该看」：段落行本身不带角色号，由所属角色行带下来 */
+interface ScanWorstEntry {
+  readonly charaNo: number;
+  readonly row: BatchRow;
+}
+
+/** 置信度徽章（与 `preview` / `batch-panel` 同款 class，不新造视觉） */
+const SCAN_CONFIDENCE_BADGE: Record<BatchRow['confidence'], { readonly label: string; readonly className: string }> = {
+  exact: { label: '确定', className: 'rp-badge conf-exact' },
+  partial: { label: '部分未知', className: 'rp-badge conf-partial' },
+  unknown: { label: '无法判定', className: 'rp-badge conf-unknown' },
+};
 
 /** 结果区容器用到的**最小** DOM 形状（见下方滚动处的说明：本包 root typecheck 无 DOM lib） */
 interface ScrollHost {
@@ -855,6 +899,21 @@ export function createUiStateReplayPlugin(): Plugin {
         // 对齐注入面板的可发现性：搜索词同时匹配条件变量的**中文标签**（与注入面板同一
         // 份 variableSchema 词典）——搜「好感」就能找到判好感的那些段。
         const condIndex = extractor.currentIndex();
+        /**
+         * 条件索引未就绪时轻轮询（每 600ms 逼一次渲染，最多 120s）：
+         * 全语料抽取要十几秒，不轮询的话按钮会一直灰着、作者以为功能坏了
+         * （真机冒烟实测：不轮询时按钮 17s 后才靠别的状态变化偶然亮）。
+         */
+        useEffect(() => {
+          if (condIndex !== null) return;
+          let ticks = 0;
+          const timer = setInterval(() => {
+            ticks += 1;
+            setIndexTick((v) => v + 1);
+            if (ticks >= 200) clearInterval(timer);
+          }, 600);
+          return () => clearInterval(timer);
+        }, [condIndex]);
         // D5：把条件索引的 filePath 供给 unctionPath（批量体检时没有明细记忆也能走缓冲文本口径）
         condPathRef.current = (name) => condIndex?.byFunction.get(name)?.filePath;
         const deferredFnQuery = useDeferredValue(fnQuery);
@@ -936,15 +995,11 @@ export function createUiStateReplayPlugin(): Plugin {
             isCancelled: () => batchCancelRef.current,
             // D8（2026-11-05）：上限 1,500 段时逐段 setState 会把整棵结果树重渲 1,500 次。
             // 节流到"每 20 段或每 200ms，且首尾必发"，进度条照样走、渲染次数砍两个数量级。
+            // 整档体检复用同一把尺（`createProgressThrottle`，口径与单测都只有一份）。
             onProgress: (() => {
-              let lastAt = 0;
-              let lastDone = -1;
+              const emit = createProgressThrottle();
               return (done: number, total: number) => {
-                const now = Date.now();
-                if (done !== total && done - lastDone < 20 && now - lastAt < 200) return;
-                lastAt = now;
-                lastDone = done;
-                setBatchProgress({ done, total });
+                if (emit(done, total)) setBatchProgress({ done, total });
               };
             })(),
             replay: (name) => {
@@ -989,6 +1044,373 @@ export function createUiStateReplayPlugin(): Plugin {
                   runReplay(name);
                 },
               });
+
+        /* ------------------- 整档体检（2026-11-05 边界批 · 车道 S4） -------------------
+         *
+         * 「本角色全段落体检」回答"我这个角色哪些段判不出"；换角色之前，作者还想知道
+         * "这一档里**最该先修谁的段**"。这一档粒度是全档：逐角色建视图（角色归属由
+         * `view.characterNo` 保证，**不复用**当前角色的视图——拿 K1 的视图回放 K2 的段
+         * 就是静默错答案），每角色取条件索引里命中 `_K{n}_` 的段落（与「角色浏览」同一把
+         * 尺 `browseCharaFunctions`），按预算扫完。
+         *
+         * 编排在 `./archive-scan.ts`（S3，接口冻结）：串行 + 每角色 20 段 / 全档 2,000 段
+         * 封顶 + 可取消；本文件只做接线、进度节流、呈现。取消走 ref 旗标（与批量体检同款），
+         * 面板卸载即置位（D8：没人看结果了就不该跑完 2,000 段再丢）。
+         */
+        const [archiveScanSummary, setArchiveScanSummary] = useState<ArchiveScanSummary | null>(null);
+        const [archiveScanBusy, setArchiveScanBusy] = useState(false);
+        const [archiveScanProgress, setArchiveScanProgress] = useState<{
+          done: number;
+          total: number;
+          charaNo: number;
+        } | null>(null);
+        const [archiveScanError, setArchiveScanError] = useState<string | null>(null);
+        /** 明细默认收起：摘要行常驻，展开才铺角色行与「全局最该看」 */
+        const [showArchiveScan, setShowArchiveScan] = useState(false);
+        const archiveScanCancelRef = useRef(false);
+        /** 代际：换档 / 卸载后在途结果作废（不拿 A 档的汇总冒充 B 档） */
+        const archiveScanGenRef = useRef(0);
+        /** 点了「全局最该看」的某段：切角色是异步的，等该角色的视图就绪后再判定 */
+        const [pendingScanPick, setPendingScanPick] = useState<{ charaNo: number; name: string } | null>(null);
+        /** D8：面板卸载 = 没人看结果了，在途整档体检立刻收尾 */
+        useEffect(
+          () => () => {
+            archiveScanCancelRef.current = true;
+            archiveScanGenRef.current += 1;
+          },
+          [],
+        );
+        /**
+         * 换档 / 换工程 = 换了一份体检对象：在途作废、屏上汇总清掉。
+         * 换角色**不清**：整档结果与当前选中的角色无关（点角色行只是切过去看）。
+         */
+        useEffect(() => {
+          archiveScanCancelRef.current = true;
+          archiveScanGenRef.current += 1;
+          setArchiveScanSummary(null);
+          setArchiveScanProgress(null);
+          setArchiveScanError(null);
+          setArchiveScanBusy(false);
+          setPendingScanPick(null);
+        }, [archivePath, projectKey]);
+        /**
+         * 「全局最该看」点击 → 切角色 + 设函数名 + 跑判定。
+         * 切角色会触发视图重建（异步）；在旧视图上直接回放 = 拿 K1 的状态判 K2 的段。
+         * 所以这里只登记意图，等 `view.characterNo` 真的对上再 `runReplay`。
+         */
+        useEffect(() => {
+          const pick = pendingScanPick;
+          if (pick === null) return;
+          if (view !== null && view.characterNo === pick.charaNo) {
+            // 上一次判定还在飞：`runReplay` 的同门会静默丢弃这次点击 ⇒ 等它落地再来
+            // （`replayBusy` 在依赖里，结束时会重新进这个 effect）
+            if (replayBusy) return;
+            setPendingScanPick(null);
+            runReplayRef.current?.(pick.name);
+            return;
+          }
+          // 视图建不起来（角色不在该档 / 解析失败）：别让意图永远挂着
+          if (viewError !== null && charaNo === pick.charaNo) setPendingScanPick(null);
+        }, [view, viewError, charaNo, pendingScanPick, replayBusy]);
+
+        /** 正在扫的函数名（进度行显示；慢/卡时作者能定位是哪一段） */
+        const archiveScanNameRef = useRef('');
+        const runArchiveScanAll = (): void => {
+          if (archiveScanBusy) return;
+          if (archivePath === '') {
+            setArchiveScanError('先选一份存档——整档体检是在某一档上把全部角色扫一遍。');
+            return;
+          }
+          if (charaEntries.length === 0) {
+            setArchiveScanError('当前项目的角色表是空的：没有可扫的角色。');
+            return;
+          }
+          const idx = condIndex;
+          if (idx === null) {
+            setArchiveScanError('条件索引还没就绪：稍等一下再点（索引建好后按钮会自己可用）。');
+            return;
+          }
+          if (typeof replay.replayFunctionWithOverrides !== 'function') {
+            setArchiveScanError('当前引擎不支持「带覆盖选项的单函数回放」，整档体检跑不了（面板其余功能不受影响）。');
+            return;
+          }
+          // 每个角色各自建视图（promise 缓存：同一角色的 20 段只解析一次存档）。
+          // 无槽位注入（空 = 这一格不知道）；角色号由视图的 `characterNo` 决定，
+          // 引擎的调用上下文推导器就是读它（state-replay engine.ts 的 `resolver(name, view.characterNo)`）。
+          const views = new Map<number, Promise<ReplayStateView>>();
+          const viewFor = (no: number): Promise<ReplayStateView> => {
+            let p = views.get(no);
+            if (p === undefined) {
+              p = replay.createView(archivePath, no);
+              views.set(no, p);
+            }
+            return p;
+          };
+          // 段落名：与「角色浏览」同一把尺（browseCharaFunctions），按角色缓存一次索引扫描
+          const namesCache = new Map<number, readonly string[]>();
+          const namesFor = (no: number): readonly string[] => {
+            let hit = namesCache.get(no);
+            if (hit === undefined) {
+              hit = browseCharaFunctions(idx.byFunction.keys(), no, Number.MAX_SAFE_INTEGER);
+              namesCache.set(no, hit);
+            }
+            return hit;
+          };
+          const gen = ++archiveScanGenRef.current;
+          archiveScanCancelRef.current = false;
+          setArchiveScanBusy(true);
+          setArchiveScanError(null);
+          setArchiveScanSummary(null);
+          setArchiveScanProgress({ done: 0, total: 0, charaNo: -1 });
+          setShowArchiveScan(false);
+          void runArchiveScan({
+            characters: charaEntries.map(([no, info]) => ({ charaNo: no, name: info.name })),
+            namesFor,
+            // 与单段判定同口径：判的就是编辑器里开着的那份文件时，整档体检也吃缓冲文本
+            // （否则会出现「单段按缓冲判、整档按盘判」的同屏两口径）。
+            replayFor: async (no, name) => {
+              archiveScanNameRef.current = name;
+              const choice = textChoiceFor(name);
+              const v = await viewFor(no);
+              return replay.replayFunctionWithOverrides!(
+                v,
+                name,
+                {},
+                choice.textOverride !== undefined ? { textOverride: choice.textOverride } : {},
+              );
+            },
+            perCharCap: ARCHIVE_SCAN_PER_CHAR_CAP,
+            totalCap: ARCHIVE_SCAN_TOTAL_CAP,
+            shouldCancel: () => archiveScanCancelRef.current,
+            // 进度节流（与 D8 同一把尺：每 20 段或 200ms，首末必发）：
+            // 2,000 段逐段 setState 会把整棵结果树重渲 2,000 次
+            onProgress: (() => {
+              const emit = createProgressThrottle();
+              return (done: number, total: number, no: number) => {
+                if (emit(done, total)) setArchiveScanProgress({ done, total, charaNo: no });
+              };
+            })(),
+          })
+            .then((s) => {
+              if (gen !== archiveScanGenRef.current) return; // 换档 / 卸载后的旧结果：丢
+              setArchiveScanSummary(s);
+            })
+            .catch((err: unknown) => {
+              if (gen !== archiveScanGenRef.current) return;
+              setArchiveScanError(err instanceof Error ? err.message : String(err));
+            })
+            .finally(() => {
+              if (gen !== archiveScanGenRef.current) return;
+              setArchiveScanBusy(false);
+              setArchiveScanProgress(null);
+            });
+        };
+
+        /** 摘要行（常驻；展开与否都看得见"扫了多少、判不出多少、耗时"） */
+        const archiveScanLine = (() => {
+          if (archiveScanBusy) {
+            const p = archiveScanProgress;
+            if (p === null || p.total <= 0) return '体检中…（准备角色视图）';
+            const cur = archiveScanNameRef.current;
+            return (
+              `体检中… 已扫 ${p.done}/${p.total} 段${p.charaNo >= 0 ? `（K${p.charaNo}）` : ''}` +
+              (cur !== '' ? ` · 当前 ${cur}` : '')
+            );
+          }
+          const s = archiveScanSummary;
+          if (s === null) return archiveScanError !== null ? '上次整档体检失败' : '尚未体检';
+          const chars = s.scannedChars + s.skippedChars;
+          let exact = 0;
+          let partial = 0;
+          let unknown = 0;
+          for (const r of s.rows) {
+            exact += r.exact;
+            partial += r.partial;
+            unknown += r.unknown;
+          }
+          return (
+            `已扫 ${s.scannedChars}/${chars} 角色 · ${s.replayedFunctions} 段 · ` +
+            `完全 ${exact} / 部分 ${partial} / 全未知 ${unknown} · 耗时 ${s.elapsedMs} ms` +
+            (s.stoppedReason === 'cancelled' ? ' · 已取消' : '') +
+            (s.stoppedReason === 'deadline' ? ' · 已达时间上限（已扫部分保留）' : '') +
+            (s.timedOut > 0 ? ` ·  段超时按未知记` : '')
+          );
+        })();
+
+        /** 整档体检区（结果区上方；默认收起，摘要行常驻） */
+        const archiveScanSection = (() => {
+          const s = archiveScanSummary;
+          if (s === null && !archiveScanBusy && archiveScanError === null) return null;
+          const charRows: ArchiveScanRow[] =
+            s === null ? [] : [...s.rows].sort(compareArchiveScanRows).slice(0, ARCHIVE_SCAN_CHAR_ROWS);
+          // 全局最该看：每角色的 worst 已是 BatchRow（名字 + 三值计数），摊平后按同一把尺
+          // `compareBatchRows` 再排一次，取前 30；charNo 由所属角色行带下来（BatchRow 里没有）
+          const worst: ScanWorstEntry[] =
+            s === null ? [] : s.rows.flatMap((r) => r.worst.map((row) => ({ charaNo: r.charaNo, row })));
+          worst.sort((a, b) => compareBatchRows(a.row, b.row));
+          const worstRows = worst.slice(0, ARCHIVE_SCAN_WORST_ROWS);
+          return createElement(
+            'section',
+            { className: 'dbg-sec' },
+            createElement(
+              'div',
+              { className: 'dbg-sec-head' },
+              createElement('span', { className: 'dbg-sec-title' }, '整档体检'),
+              createElement(
+                'span',
+                {
+                  className: 'dbg-sec-note',
+                  ...(s !== null && s.skippedChars > 0
+                    ? { title: `${s.skippedChars} 个角色被跳过（没有可扫的段落 / 视图建不起来）` }
+                    : {}),
+                },
+                archiveScanLine,
+              ),
+            ),
+            createElement(
+              'div',
+              { className: 'dbg-row', style: { alignItems: 'center', gap: '8px', flexWrap: 'wrap' } },
+              createElement(
+                'button',
+                {
+                  className: 'ghost small',
+                  type: 'button',
+                  disabled: s === null,
+                  'aria-expanded': showArchiveScan ? 'true' : 'false',
+                  onClick: () => setShowArchiveScan((v) => !v),
+                  title: s === null ? '跑完一次整档体检后可以展开明细' : '展开 / 收起角色行与全局最该看的段落',
+                },
+                showArchiveScan ? '收起明细' : `展开明细（${charRows.length} 个角色）`,
+              ),
+              archiveScanBusy
+                ? createElement(
+                    'button',
+                    {
+                      className: 'ghost small',
+                      type: 'button',
+                      title: '停止本次整档体检；已扫部分会保留并照常汇总',
+                      onClick: () => {
+                        archiveScanCancelRef.current = true;
+                      },
+                    },
+                    '取消',
+                  )
+                : null,
+              archiveScanBusy
+                ? createElement('span', { className: 'dim rp-hint' }, '逐角色扫段落中…（可随时取消，已扫部分保留）')
+                : null,
+            ),
+            archiveScanError !== null ? createElement('div', { className: 'rp-error' }, archiveScanError) : null,
+            s !== null && s.cancelled
+              ? createElement('div', { className: 'dbg-note' }, '已取消：下面是已扫描部分的汇总。')
+              : null,
+            showArchiveScan && s !== null
+              ? createElement(
+                  'div',
+                  { style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+                  charRows.length > 0
+                    ? createElement(
+                        'div',
+                        null,
+                        createElement(
+                          'div',
+                          { className: 'rp-section-title' },
+                          `角色（按判不出占比，前 ${charRows.length} 个）`,
+                        ),
+                        createElement(
+                          'div',
+                          { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+                          ...charRows.map((r) =>
+                            createElement(
+                              'div',
+                              {
+                                key: `c${r.charaNo}`,
+                                className: 'dbg-row',
+                                style: { display: 'flex', alignItems: 'baseline', gap: '6px', flexWrap: 'wrap' },
+                              },
+                              createElement(
+                                'button',
+                                {
+                                  className: 'ghost small',
+                                  type: 'button',
+                                  style: { textAlign: 'left' },
+                                  title:
+                                    `切到 K${r.charaNo}（只切角色、不自动判定）；` +
+                                    `在册 ${r.functionCount} 段，实际回放 ${r.total} 段` +
+                                    (r.missing !== undefined && r.missing > 0 ? `，回放不了 ${r.missing} 段` : ''),
+                                  onClick: () => {
+                                    setCharaNo(r.charaNo);
+                                    // 清掉屏上属于上一个角色的结果；不自动跑，作者自己按判定
+                                    setResult(null);
+                                    setResultAssumed([]);
+                                    setResultLocate(null);
+                                    setResultTextSource(null);
+                                  },
+                                },
+                                `K${r.charaNo} ${r.name}`,
+                              ),
+                              createElement('span', { className: 'dim' }, `${r.total} 段`),
+                              createElement('span', { className: 'rp-count hit' }, `完全 ${r.exact}`),
+                              createElement('span', { className: 'dim' }, `部分 ${r.partial}`),
+                              createElement('span', { className: 'rp-count unk' }, `全未知 ${r.unknown}`),
+                              r.missing !== undefined && r.missing > 0
+                                ? createElement('span', { className: 'dim' }, `回放不了 ${r.missing}`)
+                                : null,
+                            ),
+                          ),
+                        ),
+                      )
+                    : createElement('div', { className: 'dbg-note' }, '这轮没有可展示的角色行。'),
+                  worstRows.length > 0
+                    ? createElement(
+                        'div',
+                        null,
+                        createElement('div', { className: 'rp-section-title' }, '全局最该看的段落'),
+                        createElement(
+                          'div',
+                          { style: { display: 'flex', flexDirection: 'column', gap: '4px' } },
+                          ...worstRows.map(({ charaNo, row }, i) => {
+                            const badge = SCAN_CONFIDENCE_BADGE[row.confidence];
+                            return createElement(
+                              'div',
+                              {
+                                key: `w${charaNo}:${row.name}:${i}`,
+                                className: 'dbg-row',
+                                style: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' },
+                              },
+                              createElement('span', { className: 'dim' }, `K${charaNo}`),
+                              createElement(
+                                'button',
+                                {
+                                  className: 'ghost small',
+                                  type: 'button',
+                                  style: { textAlign: 'left' },
+                                  title: `切到 K${charaNo} 并判定「${row.name}」`,
+                                  onClick: () => {
+                                    setFnQuery(row.name);
+                                    // 切角色是异步的：意图先挂起，视图就绪后由 effect 兑现
+                                    setPendingScanPick({ charaNo, name: row.name });
+                                    setCharaNo(charaNo);
+                                  },
+                                },
+                                row.name,
+                              ),
+                              createElement('span', { className: badge.className }, badge.label),
+                              createElement(
+                                'span',
+                                { className: 'dim' },
+                                row.total > 0 ? `未知 ${row.unknown}/${row.total}` : '无谓词',
+                              ),
+                            );
+                          }),
+                        ),
+                      )
+                    : null,
+                )
+              : null,
+          );
+        })();
+
 
 
         // ---- 选档/选角色 ----
@@ -1231,12 +1653,40 @@ export function createUiStateReplayPlugin(): Plugin {
                   className: 'ghost small',
                   type: 'button',
                   style: { flex: '0 0 auto' },
-                  disabled: batchBusy || replayBusy || view === null || batchNames.length === 0,
+                  disabled: batchBusy || archiveScanBusy || replayBusy || view === null || batchNames.length === 0,
                   onClick: runBatch,
                   title: `本角色（K${charaNo}）全段落体检：逐段回放 ${batchNames.length} 段，汇总完全判定 / 部分 / 全未知（单次上限 ${BATCH_DEFAULT_CAP} 段）`,
                 },
                 batchBusy ? '体检中…' : '本角色全段落体检',
               );
+        /**
+         * 「整档体检（本档全部角色）」（2026-11-05 边界批 · 车道 S4）：与上一颗按钮
+         * **同一件事的另一个粒度**——角色体检回答"我这个角色哪些段判不出"，整档体检回答
+         * "这一档里最该先修谁的段"。预算写进 title（每角色 20 段 / 全档 2,000 段、可取消），
+         * 按下之前作者就知道会跑多久。不依赖当前角色视图（每个角色各自建视图），
+         * 所以没选角色也能跑；只要求选了存档、角色表非空、条件索引就绪。
+         */
+        const archiveScanBtn = createElement(
+          'button',
+          {
+            className: 'ghost small',
+            type: 'button',
+            style: { flex: '0 0 auto' },
+            disabled:
+              archiveScanBusy ||
+              batchBusy ||
+              replayBusy ||
+              archivePath === '' ||
+              charaEntries.length === 0 ||
+              condIndex === null,
+            onClick: runArchiveScanAll,
+            title:
+              `整档体检（本档全部角色）：逐角色扫一遍，默认每角色 ${ARCHIVE_SCAN_PER_CHAR_CAP} 段 / ` +
+              `全档 ${ARCHIVE_SCAN_TOTAL_CAP.toLocaleString()} 段封顶，可中途取消；` +
+              `点结果里的角色切角色、点段落切角色并判定`,
+          },
+          archiveScanBusy ? '整档体检中…' : condIndex === null ? '整档体检（索引建中…）' : '整档体检（本档全部角色）',
+        );
         /** 建议列表行：函数名 + 中文命中提示（靠标签命中的给作者看「为什么它冒出来」） */
         const suggestRows = suggestions.map((s) =>
           createElement(
@@ -1735,11 +2185,13 @@ export function createUiStateReplayPlugin(): Plugin {
           ),
           createElement(
             'div',
-            { className: 'dbg-row dbg-row-fn' },
+            // 面板只有 ~300px 宽：两颗体检按钮 + 函数名输入挤一行会横向溢出，允许换行
+            { className: 'dbg-row dbg-row-fn', style: { flexWrap: 'wrap' } },
             fnInput,
             slotInputs.length > 0 ? null : contextInput,
             replayBtn,
             batchBtn,
+            archiveScanBtn,
           ),
           viewStatus,
           // 常驻口径（2026-11-05 缓冲文本批）：判定优先用编辑器里的**未保存文本**，
@@ -1849,6 +2301,8 @@ export function createUiStateReplayPlugin(): Plugin {
           notesBand,
           pickSection,
           previewSection,
+          // 整档体检区（2026-11-05 边界批）：收在结果区上方，默认收起、摘要行常驻
+          archiveScanSection,
           staleNote,
           resultSection,
           // 「尚未判定」空态紧跟在结果位（没结果时它就是结果位）
