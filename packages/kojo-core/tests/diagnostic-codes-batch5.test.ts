@@ -104,6 +104,13 @@ const LAUD4_SURFACE_CODES: readonly CoreDiagnosticCode[] = [
 ];
 
 /**
+ * 语言设计重构 W1（`docs/KOJO-2.0-LANGUAGE-REDESIGN.md`）additive 的一枚：
+ * 叙事区裸行现在是旁白，但"看起来是语句"的裸行（赋值 / 调用形态）仍必须报错，
+ * 不能静默变成正文。与旧 `core/narrative/bare-narration`（旧语义：裸旁白一律错）分工不同。
+ */
+const LANG_W1_CODES: readonly CoreDiagnosticCode[] = ['core/narrative/bare-expression'];
+
+/**
  * batch-4 收工时的全表（`git show <batch-4>/diagnostics.ts`）。
  *
  * **这是"闭集只增不改"的锁**：既有码逐条仍须在场；本批相对它的差集必须**恰为**
@@ -191,11 +198,11 @@ describe('码表 · 闭集只增（S5.6）', () => {
     expect(missing, `既有码被删/改名：${missing.join(' / ')}`).toEqual([]);
   });
 
-  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚 + 2026-10-26 批一条 + LAU-6 一枚 + 原生花括号一枚 + LAU-D4 车② 三枚（多一条/少一条都要过审）', () => {
+  it('本批相对基线的差集恰为 batch-5 四条 + batch-7 一条 + LAU-D1 六枚 + 2026-10-26 批一条 + LAU-6 一枚 + 原生花括号一枚 + LAU-D4 车② 三枚 + 语言重构 W1 一枚（多一条/少一条都要过审）', () => {
     const baseline = new Set(BATCH4_BASELINE);
     const added = declared.filter((code) => !baseline.has(code));
     expect(added.sort()).toEqual(
-      [...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES, ...LAU6_CODES, ...NATIVE_BRACE_CODES, ...LAUD4_SURFACE_CODES, ...M1_THEATER_CODES].sort(),
+      [...BATCH5_CODES, ...BATCH7_CODES, ...LAUD1_CODES, ...ODD_END_CODES, ...LAU6_CODES, ...NATIVE_BRACE_CODES, ...LAUD4_SURFACE_CODES, ...M1_THEATER_CODES, ...LANG_W1_CODES].sort(),
     );
   });
 

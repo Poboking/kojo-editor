@@ -101,6 +101,7 @@ import {
   KOJO_RESERVED_PREFIX,
   KOJO_STORAGE_WORDS,
   KOJO_STRING_TYPE,
+  KOJO_TYPE_WORD_ALIAS,
   KOJO_TABLE_ARROWS,
   KOJO_TABLE_DEFAULT,
   KOJO_TABLE_SUBJECT,
@@ -1037,12 +1038,14 @@ interface ParsedType {
 }
 
 function parseTypeToken(st: ParserState, token: KojoCallArg): ParsedType | null {
-  const text = token.text;
+  // W2 正典类型词 `数` / `文字`；旧 `整数` / `字符串` 继续兼容。
+  const text = KOJO_TYPE_WORD_ALIAS.get(token.text) ?? token.text;
   if (text === KOJO_INT_TYPE) return { valueType: 'int' };
   if (text === KOJO_STRING_TYPE) return { valueType: 'string' };
   const open = text.indexOf('[');
   if (open > 0 && text.charCodeAt(text.length - 1) === 93) {
-    const base = text.slice(0, open);
+    const baseRaw = text.slice(0, open);
+    const base = KOJO_TYPE_WORD_ALIAS.get(baseRaw) ?? baseRaw;
     const inner = text.slice(open + 1, text.length - 1);
     const valueType: KojoValueType | null =
       base === KOJO_INT_TYPE ? 'int' : base === KOJO_STRING_TYPE ? 'string' : null;
@@ -1080,7 +1083,7 @@ function parseTypeToken(st: ParserState, token: KojoCallArg): ParsedType | null 
   reportSpan(
     st,
     'core/decl/unknown-type',
-    `未知类型 \`${text}\`：2.0 只有 整数 / 字符串 / 整数[N] / 字符串[N]（§3.4.2）。`,
+    `未知类型 \`${text}\`：2.0 只有 数 / 文字 / 数[N] / 文字[N]（旧写法 整数 / 字符串 兼容，§3.4.2）。`,
     spanOfToken(st, token),
   );
   return null;
@@ -1235,6 +1238,46 @@ function parseSetDecl(st: ParserState, header: KojoDeclRecord): void {
   }
   registerDeclarationName(st, name, spanOfToken(st, tokens[0]!), '设');
   const span = spanOfLine(st, header);
+  // W2 新正典：`【定】` = 编译期常量、`【设】` = 运行期变量；旧 `# 设`（surface 未填）保持自动推断。
+  if (header.surface === 'fixed') {
+    if (!sawInit) {
+      reportSpan(st, 'core/decl/bad-initializer', '`【定】` 是编译期常量，必须写初值（§3.4.3）。', span);
+      return;
+    }
+    if (sawStorage) {
+      reportSpan(st, 'core/decl/bad-initializer', '`【定】` 是编译期常量，不能声明存储期（§3.4.3）。', span);
+      return;
+    }
+    if (parsedType.arraySize !== undefined) {
+      reportSpan(st, 'core/decl/bad-initializer', '`【定】` 只能是标量常量，不能是数组（§3.4.3）。', span);
+      return;
+    }
+    if (init !== undefined) {
+      const decl: KojoConstDecl = {
+        kind: 'const',
+        name,
+        valueType: parsedType.valueType,
+        value: init,
+        span,
+      };
+      st.decls.push(decl);
+    }
+    return;
+  }
+  if (header.surface === 'set') {
+    // `【设】` 明确是变量：即使初值是字面量、没写存储期，也不得静默变成编译期常量。
+    const decl: KojoVarDecl = {
+      kind: 'var',
+      name,
+      valueType: parsedType.valueType,
+      arraySize: parsedType.arraySize,
+      init,
+      storage,
+      span,
+    };
+    st.decls.push(decl);
+    return;
+  }
   if (!sawStorage && sawInit && parsedType.arraySize === undefined) {
     // 编译期常量形态：初值解析失败（init === undefined）时诊断已报，不得建出变形 const。
     if (init !== undefined) {
@@ -1279,7 +1322,7 @@ function parseTableDecl(st: ParserState, header: KojoDeclRecord): void {
     if (token.text === KOJO_TABLE_SUBJECT) {
       subjectFound = true;
       const rawStart = token.offset + token.text.length;
-      subject = makeExpr(st, st.source.slice(rawStart, header.contentEnd), rawStart);
+      subject = makeExpr(st, st.source.slice(rawStart, header.restEnd ?? header.contentEnd), rawStart);
       break;
     }
   }
@@ -2134,7 +2177,7 @@ function toTextParts(st: ParserState, segments: readonly KojoTextSegment[]): Koj
   return parts;
 }
 
-/** 叙事区裸行：一律 error（裸旁白 / 裸台词 / 叙事区原生行） */
+/** 叙事区裸行：W1 正典起，裸行 = 旁白；语句形态仍按"叙事区裸表达式"报错。 */
 function buildNarrativeBareText(st: ParserState, line: KojoLexLine): KojoNarrativeNode | null {
   if (line.kind !== 'text') return null;
   const text = line.text;
@@ -2165,13 +2208,27 @@ function buildNarrativeBareText(st: ParserState, line: KojoLexLine): KojoNarrati
     );
     return null;
   }
-  reportSpan(
-    st,
-    'core/narrative/bare-narration',
-    '这行像旁白又像表达式：旁白写 `> …`，台词写 `角色：「…」`；原生 ERB 放进 `@原生`（§4.6 / §4.10）。',
-    spanOfLine(st, line),
-  );
-  return null;
+  // W1 正典：叙事区裸行 = 旁白。语句形态仍报"叙事区裸表达式"，不把代码静默当正文。
+  if (findTopLevelAssignOp(text) !== null) {
+    reportSpan(
+      st,
+      'core/narrative/bare-expression',
+      '叙事区不写裸表达式：旁白直接写正文；状态更新放进 `算：` 块（§4.2）。',
+      spanOfLine(st, line),
+    );
+    return null;
+  }
+  if (/^[\p{L}_][\p{L}\p{N}_]*[ \t]*\(/u.test(text)) {
+    reportSpan(
+      st,
+      'core/narrative/bare-expression',
+      '叙事区不写裸调用：调用写 `演：名字(...)`（§2.3）。',
+      spanOfLine(st, line),
+    );
+    return null;
+  }
+  if (!validateTextRecord(st, line)) return null;
+  return buildTextLine(st, line, { kind: 'narration' });
 }
 
 /** 调度区裸行：按 §4.4 顺序判赋值 / 调用 / 报错 */
@@ -2645,8 +2702,10 @@ function parseNativeBlock(st: ParserState, line: KojoLexLine, ctx: CtxBase): Koj
   }
   // `@原生{ … }`：块头以 `{` 收尾，块体以同缩进的单独一行 `}` 收口（§8.5 新典）。
   // 裸 `@原生` 缩进围栏为旧写法，继续容忍（去缩进收口），只在新写法上要求收口 `}`。
+  // W3 方寸形态 `【原生】…【/原生】`：块体 raw 行不要求缩进，收口行由 lexer 标 close。
+  const canonicalNative = line.kind === 'dispatch' && line.nativeForm === 'canonical';
   const headerRest = line.kind === 'dispatch' ? line.rest : '';
-  const braced = headerRest.trim() === '{';
+  const braced = !canonicalNative && headerRest.trim() === '{';
   if (headerRest.length > 0 && !braced) {
     reportSpan(
       st,
@@ -2690,6 +2749,14 @@ function parseNativeBlock(st: ParserState, line: KojoLexLine, ctx: CtxBase): Koj
       spanOfLine(st, line),
     );
   }
+  if (canonicalNative && !closed) {
+    reportSpan(
+      st,
+      'core/native/unclosed',
+      '`【原生】` 缺收口：块体之后写一行独立的 `【/原生】`（§8.6）。',
+      spanOfLine(st, line),
+    );
+  }
   let baseIndent = Number.POSITIVE_INFINITY;
   const included: KojoNativeRecord[] = [];
   for (let i = 0; i < records.length; i++) {
@@ -2698,7 +2765,7 @@ function parseNativeBlock(st: ParserState, line: KojoLexLine, ctx: CtxBase): Koj
       included.push(child);
       continue;
     }
-    if (child.indent < headerIndent + 4) {
+    if (!canonicalNative && child.indent < headerIndent + 4) {
       reportSpan(
         st,
         'core/native/indent',
@@ -2720,9 +2787,16 @@ function parseNativeBlock(st: ParserState, line: KojoLexLine, ctx: CtxBase): Koj
   if (!hasContent) {
     reportSpan(st, 'core/native/empty', '`@原生` 是空块：逃生舱不能什么都不放（§8.5）。', blockSpan(st, line));
   }
-  // 尾部空行只是块与下一行之间的分隔：不进块体（块体内空行照原文保留）
-  while (included.length > 0 && included[included.length - 1]!.blank) included.pop();
-  const base = baseIndent === Number.POSITIVE_INFINITY ? 0 : baseIndent;
+  // 尾部空行只是块与下一行之间的分隔：不进块体（块体内空行照原文保留）；
+  // 方寸原生块的空行是块体内容（收口行由 lexer 明确给出），不剥。
+  if (!canonicalNative) {
+    while (included.length > 0 && included[included.length - 1]!.blank) included.pop();
+  }
+  const base = canonicalNative
+    ? 0
+    : baseIndent === Number.POSITIVE_INFINITY
+      ? 0
+      : baseIndent;
   const lines: string[] = [];
   const lineColumns: number[] = [];
   for (let i = 0; i < included.length; i++) {

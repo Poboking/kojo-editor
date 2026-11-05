@@ -1,14 +1,24 @@
 import {
+  KOJO2_ACTION_SURFACE_WORDS,
+  KOJO2_CANONICAL_CALL_WORD,
+  KOJO2_CANONICAL_ELSE_IF_WORD,
+  KOJO2_CANONICAL_ELSE_WORD,
+  KOJO2_CANONICAL_IF_WORD,
+  KOJO2_COMMENT_MARK,
   KOJO2_DECL_WORDS,
   KOJO2_DISPATCH_WORDS,
   KOJO2_DOMAIN_SYMBOLS,
+  KOJO2_HEADER_CLOSE,
+  KOJO2_HEADER_OPEN,
+  KOJO2_HEADER_WORDS,
   KOJO2_INDENT_WIDTH,
+  KOJO2_LOOP_CONTROL_CANONICAL_WORDS,
   KOJO2_NATIVE_FENCE_WORD,
   KOJO2_OPERATOR_WORDS,
   KOJO2_RESERVED_WORDS,
   KOJO2_TABLE_DEFAULT_WORD,
   KOJO2_TEMPLATE_SLOT,
-  KOJO2_TYPE_WORDS,
+  KOJO2_TYPE_SURFACE_WORDS,
   KOJO2_WAIT_CONTINUE,
   escapeRegExp,
 } from './lexicon';
@@ -157,6 +167,67 @@ const NATIVE_HEADER = new RegExp(
   `^(\\s*)@${escapeRegExp(KOJO2_NATIVE_FENCE_WORD)}(?:\\{)?[ \\t\\u3000]*$`,
 );
 
+/* ============================== 新正典表面（W1/W2） ============================== */
+
+/**
+ * 方寸声明 `【…】`（W1 正典）：行首 `【` 之后的第一枚词按 {@link KOJO2_HEADER_WORDS} 判档，
+ * 其余内容退回根态继续走行内词法（`【设 名 数 = 500】` 的 `数` 仍按类型词着色）。
+ *
+ * 为什么不用独立状态：词之后就是普通行内表达式，起一个状态只为把它弹回来不划算；
+ * `【` / `】` 两枚括号各自一条规则，中间内容天然由根态规则接管。
+ */
+const HEADER_LINE = new RegExp(
+  `^(\\s*${escapeRegExp(KOJO2_HEADER_OPEN)})([^\\s${escapeRegExp(KOJO2_HEADER_CLOSE)}]+)`,
+);
+const HEADER_ONLY_OPEN = new RegExp(`^\\s*${escapeRegExp(KOJO2_HEADER_OPEN)}`);
+/**
+ * 方寸收口 `】`：**不加 `^`**——方寸行里 `】` 出现在行中（`【幕 清晨】` 的收口），
+ * 行首锚定的规则在根态的 pos>0 处根本不会被试。它只在根态生效，台词 / 旁白 / 围栏体不经过这里。
+ */
+const HEADER_CLOSE_TOKEN = new RegExp(escapeRegExp(KOJO2_HEADER_CLOSE));
+
+/**
+ * 条件链（W1 正典）：`若 条件：` / `再若 条件：` / `否则：`。
+ *
+ * 只染**条件词本身**（后面的表达式照常走行内词法：数字 / 运算符 / 标识符各归各档）。
+ * 两个前瞻缺一不可：① 词后必须是空白（否则「若你愿意」是旁白）；② 本行必须以收口全角冒号
+ * 结尾（否则「若你愿意，就留下来吧。」这类正文会被误染成条件头）。
+ */
+const CONDITION_IF_LINE = new RegExp(
+  `^\\s*(?:${escapeRegExp(KOJO2_CANONICAL_ELSE_IF_WORD)}|${escapeRegExp(KOJO2_CANONICAL_IF_WORD)})(?=[ \\t\\u3000])(?=[^\\n]*：\\s*$)`,
+);
+const CONDITION_ELSE_LINE = new RegExp(
+  `^\\s*${escapeRegExp(KOJO2_CANONICAL_ELSE_WORD)}(?=：\\s*$)`,
+);
+
+/** 冒号动作块头（W1 正典）：`算：` / `色：…` / `循环：…` …（词与全角冒号之间**不许**空白）。 */
+const COLON_ACTION_LINE = new RegExp(
+  `^(\\s*)(${KOJO2_ACTION_SURFACE_WORDS.map(escapeRegExp).join('|')})(：)`,
+);
+
+/** 调用族（W1 正典）：`演：名字(args)` —— 名字与旧 `! ` 调用同档（被调名要能一眼看见）。 */
+const CALL_LINE = new RegExp(
+  `^(\\s*)(${escapeRegExp(KOJO2_CANONICAL_CALL_WORD)})(：)([^\\s(（,，:：]*)`,
+);
+
+/**
+ * 循环控制（W2 正典 `下一轮` / `跳出循环` + W1 兼容 `断` / `续`）：独立成行时是调度词。
+ * `断` / `续` 取自 core 调度词表尾两位（位序契约见 `tokens.ts`），不写字形。
+ */
+const LOOP_CONTROL_LINE = new RegExp(
+  `^\\s*(?:${[
+    ...KOJO2_LOOP_CONTROL_CANONICAL_WORDS,
+    KOJO2_DISPATCH_WORDS[13] ?? '',
+    KOJO2_DISPATCH_WORDS[14] ?? '',
+  ]
+    .filter((word) => word.length > 0)
+    .map(escapeRegExp)
+    .join('|')})[ \\t\\u3000]*$`,
+);
+
+/** 整行 `※` 注释（W1 正典；`//` 继续兼容，见下一条规则）。 */
+const COMMENT_MARK_LINE = new RegExp(`^\\s*${escapeRegExp(KOJO2_COMMENT_MARK)}.*$`);
+
 /** 行尾 `续`（必须前接空白；字形从词表单源派生，本文件不写这个字）。 */
 const CONTINUATION_TAIL = new RegExp(
   `[ \\t\\u3000]+${escapeRegExp(KOJO2_WAIT_CONTINUE)}[ \\t\\u3000]*$`,
@@ -254,13 +325,31 @@ const NARRATION_STATE: Rule[] = [
   [/\{/, KOJO2_TOKEN.interp],
 ];
 
-/** 根状态：先按行首形状分派（五锚点 / 台词 / 表行 / 注释），其余走行内表达式词法。 */
+/** 根状态：先按行首形状分派（新正典表面 / 五锚点 / 台词 / 表行 / 注释），其余走行内表达式词法。 */
 function buildRoot(): Rule[] {
   const rules: Rule[] = [
     // ---- 整行注释（2.0 只认整行 `//`，行尾注释是 ERB 的事）----
     [/^\s*\/\/.*$/, KOJO2_TOKEN.comment],
+    // ---- 整行 `※` 注释（W1 正典；`//` 兼容）----
+    [COMMENT_MARK_LINE, KOJO2_TOKEN.comment],
     // ---- `@原生` 围栏头：缩进阶梯 → nativeN 状态 ----
     [NATIVE_HEADER, { cases: nativeHeaderCases() }],
+    // ---- 新正典：方寸声明 `【…】`（优先级高于旧锚点；其余内容由根态继续着色）----
+    [
+      HEADER_LINE,
+      [KOJO2_TOKEN.anchor, { cases: { '@headerWords': KOJO2_TOKEN.declaration, '@default': '' } }],
+    ],
+    [HEADER_ONLY_OPEN, KOJO2_TOKEN.anchor],
+    [HEADER_CLOSE_TOKEN, KOJO2_TOKEN.anchor],
+    // ---- 新正典：条件族 `若/再若 …：` / `否则：` ----
+    [CONDITION_IF_LINE, KOJO2_TOKEN.anchor],
+    [CONDITION_ELSE_LINE, KOJO2_TOKEN.anchor],
+    // ---- 新正典：冒号动作族 `算：` / `色：…` / `循环：…` … ----
+    [COLON_ACTION_LINE, ['', KOJO2_TOKEN.declaration, KOJO2_TOKEN.delimiter]],
+    // ---- 新正典：调用族 `演：名字(args)`（被调名与旧 `! ` 调用同档）----
+    [CALL_LINE, ['', KOJO2_TOKEN.declaration, KOJO2_TOKEN.delimiter, KOJO2_TOKEN.declaration]],
+    // ---- 新正典：独立成行的循环控制（`下一轮` / `跳出循环` / 兼容 `断` / `续`）----
+    [LOOP_CONTROL_LINE, KOJO2_TOKEN.declaration],
     // ---- 五锚点 ----
     [DECL_LINE, [KOJO2_TOKEN.anchor, { cases: { '@declWords': KOJO2_TOKEN.declaration, '@default': '' } }]],
     [DISPATCH_LINE, [KOJO2_TOKEN.anchor, { cases: { '@dispatchWords': KOJO2_TOKEN.declaration, '@default': '' } }]],
@@ -293,6 +382,7 @@ function buildRoot(): Rule[] {
     // ---- 中文词形：运算符 / **类型词** / 保留词 / 域符号各一档，其余是名字（不上色）----
     // 类型词必须排在 `@keywords` 之前：`整数` / `字符串` 同时也在保留词表里（core 的
     // `KOJO2_RESERVED_WORDS` 逐项拼出来就含它们），cases 卫兵取先命中的一档，反序就永远不出类型档。
+    // `typeWords` 由 `KOJO2_TYPE_SURFACE_WORDS` 铺开（正典 `数`/`文字` 在前、兼容词在后）。
     [
       /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]+/,
       {
@@ -334,9 +424,11 @@ export const KOJO2_MONARCH = {
     // 档位/状态用到的词表属性（`@declWords` 等 cases 通过它取；全部来自词表单源）
     declWords: KOJO2_DECL_WORDS,
     dispatchWords: KOJO2_DISPATCH_WORDS,
+    // 方寸声明族（`【幕 …】` / `【挂 …】` / `【定 …】` / `【函 …】`；W1 正典）
+    headerWords: KOJO2_HEADER_WORDS,
     keywords: KOJO2_RESERVED_WORDS,
-    // 类型词单独一档（2026-10-27 第三色批）；词表原样转发自 core `KOJO_TYPE_WORDS`，零抄本
-    typeWords: KOJO2_TYPE_WORDS,
+    // 类型词单独一档（2026-10-27 第三色批）；W2 起正典 `数`/`文字` 在前、兼容词在后
+    typeWords: KOJO2_TYPE_SURFACE_WORDS,
     domainSymbols: KOJO2_DOMAIN_SYMBOLS,
     operators: KOJO2_OPERATOR_WORDS,
   },

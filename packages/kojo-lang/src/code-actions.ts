@@ -97,7 +97,7 @@ import {
   splitSpaces,
   splitTopLevelArgs,
 } from '@kojo/kojo-core';
-import { KOJO2_DECL_WORDS } from './lexicon';
+import { KOJO2_DECL_WORDS, KOJO2_DISPATCH_WORDS } from './lexicon';
 
 /* ============================== 公共形状 ============================== */
 
@@ -429,10 +429,6 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** 2.0 的**块头**形态（缩进修正用：判断上一行是否"在等一个缩进体"） */
-const BLOCK_HEAD_RE =
-  /^(?:\?(?:\s|$)|#\s+(?:表|池|模)(?:\s|$)|@(?:算|随机|着色|组|循|巡|复|函|织|原生)(?:\s|$)|选项\s*：?\s*$)/u;
-
 /**
  * 2.0 的**块声明**词（有缩进体的 `# 对照表` / `# 池` / `# 模`；§3.2）。
  *
@@ -443,6 +439,25 @@ const BLOCK_DECL_WORDS: ReadonlySet<string> = new Set(
   [KOJO2_DECL_WORDS[5], KOJO2_DECL_WORDS[6], KOJO2_DECL_WORDS[7]].filter(
     (word): word is string => word !== undefined,
   ),
+);
+
+/**
+ * 2.0 的**块头**形态（缩进修正用：判断上一行是否"在等一个缩进体"）。
+ *
+ * ⚠ 2026-11 修：这里原来手写 `(?:表|池|模)` ⇒ `# 对照表` 永远不命中（`表` 只是它的尾字），
+ * 缩进修正把 `# 对照表` 当成"体外的行"，块体被判到上一级。改成从 core 词表**派生**：
+ * `KOJO_DECL_WORDS` 位序一变这里跟着变，不再有第二份手抄。
+ *
+ * `@` 侧只列**真开体**的调度词（算 / 着色 / 随机 / 组 / 循 / 复 / 巡 / 函 / 织 / 原生）：
+ * `@颜绘` / `@标` / `@跳` / `@返` / `@断` / `@续` 是单行指令，收进正则会把"没有体"当块头。
+ */
+const BLOCK_HEAD_DISPATCH_WORDS: readonly string[] = [0, 1, 3, 4, 5, 6, 7, 8, 9, 15]
+  .map((index) => KOJO2_DISPATCH_WORDS[index])
+  .filter((word): word is string => word !== undefined && word.length > 0);
+
+const BLOCK_HEAD_RE = new RegExp(
+  `^(?:\\?(?:\\s|$)|#\\s+(?:${[...BLOCK_DECL_WORDS].map(escapeRegExp).join('|')})(?:\\s|$)|@(?:${BLOCK_HEAD_DISPATCH_WORDS.map(escapeRegExp).join('|')})(?:\\s|$)|选项\\s*：?\\s*$)`,
+  'u',
 );
 
 /**
@@ -541,18 +556,32 @@ function textLineCandidates(diag: KojoDiagnostic, ctx: BuildCtx): Kojo2CodeActio
   // 玩家代词开头的裸行：§12.1 的目标是「你：「…」」，而 core 迁移器对它的答案是"旁白"（那会
   // 把玩家台词改成旁白）⇒ 宁可不动（见模块尾「已知缺口」），不手写第二条映射。
   if (KOJO2_PLAYER_PREFIXES.some((prefix) => body.startsWith(prefix))) return [];
+  // 裸引号补说话人：直接重写成 `说话人：「正文」`。不要把它再交给"整行迁移"——
+  // 迁移器拿到的是带 `「」` 的整行，会再包一层引号（`我：「「…」」`）。
+  if (diag.code === 'core/narrative/bare-quote') {
+    const quoted = /^「([\s\S]*)」$/u.exec(body) ?? /^｢([\s\S]*)｣$/u.exec(body);
+    if (quoted === null) return [];
+    const speaker = ctx.speaker ?? '我';
+    const next = `${speaker}：「${quoted[1]}」`;
+    if (next === body) return [];
+    return [
+      makeFact(
+        'migrate',
+        `补说话人 \`${speaker}\`：${preview(next)}`,
+        [replaceLines(ctx.doc, line, line, [`${indent}${next}`])],
+        [diag],
+        diag.code as CoreDiagnosticCode,
+      ),
+    ];
+  }
   const migrated = migrateKojoSourceSemantic(snippetOf([body]), speakerOptions(ctx.speaker));
   if (!migrated.ok) return [];
   const out = outputLines(migrated.code);
   if (out.length !== 1) return [];
   const next = out[0]!;
   if (next === body) return [];
-  const isQuote = diag.code === 'core/narrative/bare-quote';
-  if (isQuote && !next.includes('：「')) return [];
-  if (!isQuote && !next.startsWith('>')) return [];
-  const title = isQuote
-    ? `补说话人 \`${ctx.speaker ?? '我'}\`：${preview(next)}`
-    : `补旁白锚点 \`>\`：${preview(next)}`;
+  if (!next.startsWith('>')) return [];
+  const title = `补旁白锚点 \`>\`：${preview(next)}`;
   return [
     makeFact(
       'migrate',

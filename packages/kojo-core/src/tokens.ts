@@ -67,6 +67,59 @@ export const KOJO_DISPATCH_WORDS = [
 export type KojoDispatchWord = (typeof KOJO_DISPATCH_WORDS)[number];
 export const KOJO_DISPATCH_WORD_SET: ReadonlySet<string> = new Set<string>(KOJO_DISPATCH_WORDS);
 
+/* ==================== 语言重构 W1：新正典表面词表（表面层唯一真源） ==================== */
+
+/**
+ * 方寸声明族（`docs/KOJO-2.0-LANGUAGE-REDESIGN.md` §2.2）：
+ * 整行 `【词 …】` 是文件级声明；`【剧场：…】` 是既有的 Theater 头，优先截走。
+ *
+ * 归一化口径：新表面在 lexer 层映射成既有 decl/dispatch 词，parser/lower/AST 不感知。
+ * `挂` → `机`：新作者语法；`# 机` 的既定兼容语义不变。
+ */
+export const KOJO_HEADER_OPEN = '【';
+export const KOJO_HEADER_CLOSE = '】';
+export const KOJO_HEADER_DECL_ALIAS: ReadonlyMap<string, string> = new Map<string, string>([
+  ['挂', '机'],
+  ['定', '设'],
+]);
+/** `【函 …】` / `【织 …】` 在既有词法层是 dispatch 词（声明体仍由 parser 顶层处理）。 */
+export const KOJO_HEADER_DISPATCH_WORDS: ReadonlySet<string> = new Set<string>(['函', '织']);
+
+/**
+ * 冒号动作族（§2.3）：`算：` / `色：…` / `颜绘：…` / `择一：` / `组：` / `循环：…` /
+ * `重复：…` / `遍历：…` / `标：…` / `跳：…`；值 = 既有 dispatch 词（parser 零改动）。
+ */
+export const KOJO_ACTION_WORD_ALIAS: ReadonlyMap<string, string> = new Map<string, string>([
+  ['算', '算'],
+  ['色', '着色'],
+  ['颜绘', '颜绘'],
+  ['择一', '随机'],
+  ['组', '组'],
+  ['循环', '循'],
+  ['重复', '复'],
+  ['遍历', '巡'],
+  ['标', '标'],
+  ['跳', '跳'],
+  ['返回', '返'],
+]);
+
+/** 条件族（§2.3）：`若 条件：` / `再若 条件：` / `否则：`。 */
+export const KOJO_CANONICAL_IF_WORD = '若';
+export const KOJO_CANONICAL_ELSE_IF_WORD = '再若';
+export const KOJO_CANONICAL_ELSE_WORD = '否则';
+/** 调用族（§2.3）：`演：名字(args)`（池/模板/函数统一入口）。 */
+export const KOJO_CANONICAL_CALL_WORD = '演';
+/** 整行注释记号（§2.4）：`※ …`；`//` 继续兼容。 */
+export const KOJO_COMMENT_MARK = '※';
+
+/**
+ * W3 原生块正典（`docs/KOJO-2.0-LANGUAGE-REDESIGN.md` §8.6）：`【原生】` … `【/原生】`。
+ * 块体 raw 行直到独立收口行，不要求缩进、不解析任何 2.0 语法；旧 `@原生{}` 兼容。
+ */
+export const KOJO_NATIVE_HEADER = '【原生】';
+export const KOJO_NATIVE_CLOSE = '【/原生】';
+
+
 /** `@织` 修饰词（§8.6：固定集合，是保留词，事件名不能与修饰词同名） */
 export const KOJO_WEAVE_MODIFIERS = ['之前', '之后', '接管'] as const;
 export type KojoWeaveModifierWord = (typeof KOJO_WEAVE_MODIFIERS)[number];
@@ -75,6 +128,14 @@ export type KojoWeaveModifierWord = (typeof KOJO_WEAVE_MODIFIERS)[number];
 export const KOJO_INT_TYPE = '整数';
 export const KOJO_STRING_TYPE = '字符串';
 export const KOJO_TYPE_WORDS = [KOJO_INT_TYPE, KOJO_STRING_TYPE] as const;
+/**
+ * 语言重构 W2：类型自然化别名（`docs/KOJO-2.0-LANGUAGE-REDESIGN.md` §8.3）。
+ * 正典 `数` / `文字`；旧 `整数` / `字符串` 继续兼容；AST 只存 canonical 值类型。
+ */
+export const KOJO_TYPE_WORD_ALIAS: ReadonlyMap<string, string> = new Map<string, string>([
+  ['数', KOJO_INT_TYPE],
+  ['文字', KOJO_STRING_TYPE],
+]);
 
 /** 存储期词（§3.4.4）；顺序即默认值优先级 */
 export const KOJO_STORAGE_WORDS = ['场景', '存档', '会话'] as const;
@@ -257,8 +318,20 @@ export interface KojoDeclRecord extends KojoLineBase {
   readonly rest: string;
   /** `rest` 首字符的 0 基偏移 */
   readonly restOffset: number;
+  /**
+   * `rest` 在源码里的结束偏移（`】` 之前）；旧 `#` 行不填 = `contentEnd`。
+   * 方寸声明需要它：表判别式等"从 rest 起点切到行尾"的消费方不能把 `】` 切进表达式。
+   */
+  readonly restEnd?: number;
   /** 词是否在 2.0 声明词表内 */
   readonly known: boolean;
+  /**
+   * 语言重构 W2：新正典声明表面（`【定 …】` / `【设 …】`）。
+   *
+   * 旧 `# 设` 不填（保持自动推断：字面量初值 + 无存储期 ⇒ 编译期常量）；
+   * 新表面把"常量/变量"二义拆成两个字，parser 按此强制语义。
+   */
+  readonly surface?: 'fixed' | 'set';
 }
 
 /** `@` 调度行的词法切分；词义与位置约束由 parser 判 */
@@ -270,6 +343,10 @@ export interface KojoDispatchRecord extends KojoLineBase {
   readonly rest: string;
   /** `rest` 首字符的 0 基偏移 */
   readonly restOffset: number;
+  /** `rest` 在源码里的结束偏移（`】` 之前）；旧 `@` 行不填 = `contentEnd`。 */
+  readonly restEnd?: number;
+  /** 语言重构 W3：方寸原生块头（`【原生】`）标记；parser 据此不要求缩进、按 `【/原生】` 收口。 */
+  readonly nativeForm?: 'canonical';
   /** 词是否在 2.0 调度词表内 */
   readonly known: boolean;
 }

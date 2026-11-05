@@ -20,7 +20,7 @@ import {
 } from '@kojo/kojo-core';
 import { coreDiagnosticsOf, provideCodeActions } from '../src/code-actions';
 
-const NARRATION = '# 机 开场\n\n她点了点头。\n';
+const NARRATION = '# 机 开场\n# 视角 灵梦\n「她點了點頭。」\n';
 
 function diagnosticsOf(source: string): readonly KojoDiagnostic[] {
   return compileKojoSource({
@@ -67,7 +67,7 @@ describe('①语言分派：只有 2.0 文件作答', () => {
     for (const path of ['D:/p/a.kojo', 'D:/p/a.KOJO', 'D:/p/a.kojo2', 'D:/p/a.KOJO2']) {
       const actions = provideCodeActions(fileOf(NARRATION, { path }));
       expect(actions, path).toHaveLength(1);
-      expect(actions[0]!.title).toContain('补旁白锚点');
+      expect(actions[0]!.title).toContain('补说话人');
     }
   });
 
@@ -123,18 +123,17 @@ describe('③形状搬运：契约动作的每一格', () => {
     const actions = provideCodeActions(fileOf(NARRATION));
     expect(actions).toHaveLength(1);
     const action = actions[0]!;
-    expect(action.title).toBe('补旁白锚点 `>`：> 她点了点头。');
+    expect(action.title).toBe('补说话人 `我`：我：「她點了點頭。」');
     expect(action.kind).toBe('quickfix');
-    expect(action.edits).toEqual([{ fromLine: 3, toLine: 3, newText: '> 她点了点头。' }]);
+    expect(action.edits).toEqual([{ fromLine: 3, toLine: 3, newText: '我：「她點了點頭。」' }]);
     expect(action.diagnostics).toHaveLength(1);
     expect(action.diagnostics![0]).toEqual({
       line: 3,
       severity: 'error',
-      message:
-        '这行像旁白又像表达式：旁白写 `> …`，台词写 `角色：「…」`；原生 ERB 放进 `@原生`（§4.6 / §4.10）。',
+      message: '2.0 裸引号不是台词：写 `角色：「…」`；只有 `# 池`（和 `选项` 的按钮标签）是局部例外（§4.10）。',
       startColumn: 1,
-      endColumn: 7,
-      code: 'core/narrative/bare-narration',
+      endColumn: 9,
+      code: 'core/narrative/bare-quote',
     });
     expect(() => action.run({ project: null })).not.toThrow();
   });

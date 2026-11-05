@@ -62,6 +62,9 @@ import {
   type KojoValueType,
 } from '@kojo/kojo-core';
 import {
+  KOJO2_CANONICAL_CALL_WORD,
+} from './lexicon';
+import {
   kojo2DeclarationNamed,
   kojo2DocumentOf,
   kojo2IsCodeSurface,
@@ -326,13 +329,17 @@ function hasClosingParen(text: string, openCol: number): boolean {
 
 /**
  * 左括号之前的被调名（行内最后一段名字字符）：`! 函名(` / `@函 函名(` / `# 模 模名(` /
- * 表达式位裸调用 `函名(` 都归一到同一枚名字。括号前没有名字（`(1, 2)(`）⇒ `null`。
+ * 表达式位裸调用 `函名(` 都归一到同一枚名字；W1 正典 `演：函名(` 先剥掉调用词前缀。
+ * 括号前没有名字（`(1, 2)(`）⇒ `null`。
  */
 const CALLEE_TOKEN_RE = /([^\s(),;\[\]{}"'!@#]+)$/u;
 
 function calleeBefore(text: string, openCol: number): string | null {
   const match = CALLEE_TOKEN_RE.exec(text.slice(0, openCol));
-  const name = match?.[1]?.trim() ?? '';
+  const raw = match?.[1]?.trim() ?? '';
+  // `演：名字(`：`演：` 是调用词，不是被调名的一部分（W1 正典统一入口）。
+  const performHead = `${KOJO2_CANONICAL_CALL_WORD}：`;
+  const name = raw.startsWith(performHead) ? raw.slice(performHead.length) : raw;
   return name.length > 0 ? name : null;
 }
 

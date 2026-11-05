@@ -208,7 +208,7 @@ function requestActions(
   return [...list.actions];
 }
 
-const NARRATION = '# 机 开场\n\n她点了点头。\n';
+const NARRATION = '# 机 开场\n# 视角 灵梦\n「她點了點頭。」\n';
 
 /* ============================== 1. 注册纪律 ============================== */
 
@@ -303,7 +303,7 @@ describe('②取数面：语言门 / 零波浪线 / 抛错隔离', () => {
     install(fake, { codeActionSlot: () => [throwing, kojo2Contribution()] });
     const actions = requestActions(fake, fakeModel(NARRATION), NARRATION, 3);
     expect(actions).toHaveLength(1);
-    expect(actions[0]!.title).toContain('补旁白锚点');
+    expect(actions[0]!.title).toContain('补说话人');
   });
 
   it('路径取不到（无归属实例且 uri 无路径）⇒ 不问槽、空动作', () => {
@@ -336,13 +336,13 @@ describe('③翻译面：command 而非 edit、关联诊断、唯一解 preferre
     const actions = requestActions(fake, fakeModel(NARRATION), NARRATION, 3);
     expect(actions).toHaveLength(1);
     const action = actions[0]!;
-    expect(action.title).toBe('补旁白锚点 `>`：> 她点了点头。');
+    expect(action.title).toBe('补说话人 `我`：我：「她點了點頭。」');
     expect(action.kind).toBe('quickfix');
     expect(action.command?.id).toBe(SLOT_CODE_ACTION_COMMAND);
     expect(action.edit).toBeUndefined(); // 落地必须走宿主那条带停点的通道
     expect(action.isPreferred).toBe(true);
     expect(action.diagnostics).toHaveLength(1);
-    expect(action.diagnostics![0]!.code).toBe('core/narrative/bare-narration');
+    expect(action.diagnostics![0]!.code).toBe('core/narrative/bare-quote');
     expect(action.diagnostics![0]!.startLineNumber).toBe(3);
   });
 
@@ -386,7 +386,7 @@ describe('③翻译面：command 而非 edit、关联诊断、唯一解 preferre
     const actions = requestActions(fake, fakeModel(NARRATION), NARRATION, 3);
     const marker = actions[0]!.diagnostics![0]!;
     expect(marker.endLineNumber).toBe(3);
-    expect(marker.endColumn).toBe(7);
+    expect(marker.endColumn).toBe(9);
   });
 });
 
@@ -405,7 +405,7 @@ describe('④落地面：同一批 EditorTextEdit / run 型动作 / 停点复用
     const actions = requestActions(fake, fakeModel(NARRATION), NARRATION, 3);
     fake.runCommand(actions[0]!.command!.id, actions[0]!.command!.arguments![0]);
     expect(applied).toHaveLength(1);
-    expect(applied[0]!.edits).toEqual([{ fromLine: 3, toLine: 3, newText: '> 她点了点头。' }]);
+    expect(applied[0]!.edits).toEqual([{ fromLine: 3, toLine: 3, newText: '我：「她點了點頭。」' }]);
   });
 
   it('没有 `edits` 的动作退回契约旧语义（`run` 发意图）', () => {
@@ -464,9 +464,9 @@ describe('④落地面：同一批 EditorTextEdit / run 型动作 / 停点复用
         model.pushStackElement();
       },
     } as unknown as Parameters<typeof applyTextEdits>[0];
-    expect(applyTextEdits(editor, [{ fromLine: 3, toLine: 3, newText: '> 她点了点头。' }])).toBe(true);
+    expect(applyTextEdits(editor, [{ fromLine: 3, toLine: 3, newText: '我：「她點了點頭。」' }])).toBe(true);
     expect(calls).toEqual(['stop', 'edit', 'stop']);
-    expect(model.getValue()).toBe('# 机 开场\n\n> 她点了点头。\n');
+    expect(model.getValue()).toBe('# 机 开场\n# 视角 灵梦\n我：「她點了點頭。」\n');
     model.dispose();
   });
 });

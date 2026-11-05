@@ -1,14 +1,25 @@
 import {
+  KOJO_ACTION_WORD_ALIAS,
   KOJO_BLANK_LINE,
   KOJO_BLANK_WAIT,
+  KOJO_CANONICAL_CALL_WORD,
+  KOJO_CANONICAL_ELSE_IF_WORD,
+  KOJO_CANONICAL_ELSE_WORD,
+  KOJO_CANONICAL_IF_WORD,
+  KOJO_COMMENT_MARK,
   KOJO_DECL_WORDS,
   KOJO_DISPATCH_WORDS,
   KOJO_DOMAIN_SYMBOL_NAMES,
+  KOJO_HEADER_CLOSE,
+  KOJO_HEADER_DECL_ALIAS,
+  KOJO_HEADER_DISPATCH_WORDS,
+  KOJO_HEADER_OPEN,
   KOJO_INDENT_WIDTH,
   KOJO_STORAGE_WORDS,
   KOJO_TABLE_DEFAULT,
   KOJO_TABLE_SUBJECT,
   KOJO_TEMPLATE_SLOT,
+  KOJO_TYPE_WORD_ALIAS,
   KOJO_TYPE_WORDS,
   KOJO_WAIT_CONTINUE,
   KOJO_WEAVE_MODIFIERS,
@@ -117,6 +128,94 @@ export const KOJO2_OPERATOR_WORDS: readonly string[] = [
  * 的那一枚并与本常量逐字相等（core 换词/改语义 ⇒ 测试红，不静默漂移）。
  */
 export const KOJO2_NATIVE_FENCE_WORD = '原生';
+
+/* ============================== 新正典表面（W1/W2） ============================== */
+
+/**
+ * 新正典表面词形：**全部从 core `tokens.ts` 转发**（W1/W2 词表已上提为公开常量），
+ * 本文件不新增任何中文字形。改动点见 `docs/KOJO-2.0-LANGUAGE-REDESIGN.md` §2。
+ *
+ * - {@link KOJO2_HEADER_OPEN} / {@link KOJO2_HEADER_CLOSE}：方寸声明 `【…】` 的收口；
+ * - {@link KOJO2_HEADER_DECL_ALIAS}：方寸声明里的**别名词**（`挂`→`机`、`定`→`设`）；
+ * - {@link KOJO2_HEADER_DISPATCH_WORDS}：在既有词法层是 dispatch 词的方寸词（`函` / `织`）；
+ * - {@link KOJO2_ACTION_WORD_ALIAS}：冒号动作词 → 既有调度词（表面别名表）；
+ * - {@link KOJO2_CANONICAL_IF_WORD} / `..._ELSE_IF_WORD` / `..._ELSE_WORD`：条件族；
+ * - {@link KOJO2_CANONICAL_CALL_WORD}：`演：` 调用族；
+ * - {@link KOJO2_COMMENT_MARK}：整行 `※` 注释记号；
+ * - {@link KOJO2_TYPE_WORD_ALIAS}：类型词正典 `数` / `文字` → 既有 `整数` / `字符串`。
+ */
+export const KOJO2_HEADER_OPEN: string = KOJO_HEADER_OPEN;
+export const KOJO2_HEADER_CLOSE: string = KOJO_HEADER_CLOSE;
+export const KOJO2_HEADER_DECL_ALIAS: ReadonlyMap<string, string> = KOJO_HEADER_DECL_ALIAS;
+export const KOJO2_HEADER_DISPATCH_WORDS: ReadonlySet<string> = KOJO_HEADER_DISPATCH_WORDS;
+export const KOJO2_ACTION_WORD_ALIAS: ReadonlyMap<string, string> = KOJO_ACTION_WORD_ALIAS;
+export const KOJO2_CANONICAL_IF_WORD: string = KOJO_CANONICAL_IF_WORD;
+export const KOJO2_CANONICAL_ELSE_IF_WORD: string = KOJO_CANONICAL_ELSE_IF_WORD;
+export const KOJO2_CANONICAL_ELSE_WORD: string = KOJO_CANONICAL_ELSE_WORD;
+export const KOJO2_CANONICAL_CALL_WORD: string = KOJO_CANONICAL_CALL_WORD;
+export const KOJO2_COMMENT_MARK: string = KOJO_COMMENT_MARK;
+export const KOJO2_TYPE_WORD_ALIAS: ReadonlyMap<string, string> = KOJO_TYPE_WORD_ALIAS;
+
+/**
+ * 方寸声明可用的**全部词形**（声明词 ∪ 别名词 ∪ dispatch 词）：`【` 之后第一枚词按它判档。
+ * 派生而非手抄——core 加声明词 / 加别名 ⇒ 高亮 / 补全自动跟上。
+ */
+export const KOJO2_HEADER_WORDS: readonly string[] = Object.freeze(
+  Array.from(
+    new Set<string>([
+      ...KOJO2_DECL_WORDS,
+      ...KOJO2_HEADER_DECL_ALIAS.keys(),
+      ...KOJO2_HEADER_DISPATCH_WORDS,
+    ]),
+  ),
+);
+
+/**
+ * 类型词**表面全家**：正典 `数` / `文字` 在前，兼容 `整数` / `字符串` 在后。
+ *
+ * 排序即作者面口径（补全面板先新后旧）；`@kojo/kojo-core` 的 `KOJO_TYPE_WORDS` 仍是
+ * AST 值类型 ↔ 词形的唯一真源，本常量只是"作者可能写的字面"的投影。
+ */
+export const KOJO2_TYPE_SURFACE_WORDS: readonly string[] = Object.freeze([
+  ...KOJO2_TYPE_WORD_ALIAS.keys(),
+  ...KOJO2_TYPE_WORDS,
+]);
+
+/**
+ * W2 循环控制**正典**词形（`下一轮` / `跳出循环`；`断` / `续` 继续兼容）。
+ *
+ * core 词法层目前用字面量比较（尚未把这枚词形单独命名导出）⇒ 这里按任务书允许的方式
+ * 自持一次"表面别名"，并注明出处；core 补导出后本行改为转发（词形同源，不改语义）。
+ */
+export const KOJO2_CANONICAL_NEXT_ROUND_WORD = '下一轮';
+export const KOJO2_CANONICAL_BREAK_LOOP_WORD = '跳出循环';
+export const KOJO2_LOOP_CONTROL_CANONICAL_WORDS: readonly string[] = Object.freeze([
+  KOJO2_CANONICAL_NEXT_ROUND_WORD,
+  KOJO2_CANONICAL_BREAK_LOOP_WORD,
+]);
+
+/** 冒号动作族的表面词（`算` / `色` / …；从别名表派生，正典顺序 = core 表序）。 */
+export const KOJO2_ACTION_SURFACE_WORDS: readonly string[] = Object.freeze([
+  ...KOJO2_ACTION_WORD_ALIAS.keys(),
+]);
+
+/** 方寸声明词 → 旧写法词（`挂`→`机`、`定`→`设`；其余原样）：hover / 补全讲"旧写法（兼容）"用。 */
+export function kojo2HeaderCompatWord(word: string): string {
+  return KOJO2_HEADER_DECL_ALIAS.get(word) ?? word;
+}
+
+/** 旧声明词 → 方寸正典词（`机`→`挂`、`设`→`定`；反查不到回原词）：补全模板用。 */
+export function kojo2CanonicalHeaderWord(word: string): string {
+  for (const [surface, mapped] of KOJO2_HEADER_DECL_ALIAS) {
+    if (mapped === word) return surface;
+  }
+  return word;
+}
+
+/** 冒号动作词 → 旧 `@` 调度词（`算`→`算`、`色`→`着色`…）：hover 讲兼容形用。 */
+export function kojo2ActionCompatWord(word: string): string | undefined {
+  return KOJO2_ACTION_WORD_ALIAS.get(word);
+}
 
 /** 正则元字符转义（词形 → Monarch 正则；不假定词形只含字词字符）。 */
 export function escapeRegExp(text: string): string {

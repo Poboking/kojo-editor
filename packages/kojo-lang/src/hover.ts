@@ -32,6 +32,20 @@ import { insideInterpolation } from './interpolation';
 import { findEvent, type EventSpec, type GameAdapter } from '@kojo/kojo-core';
 import { kojo2EventSiteAt, kojo2EventSitesOf, type Kojo2EventSite } from './event-sites';
 import {
+  KOJO2_ACTION_WORD_ALIAS,
+  KOJO2_CANONICAL_CALL_WORD,
+  KOJO2_CANONICAL_ELSE_IF_WORD,
+  KOJO2_CANONICAL_ELSE_WORD,
+  KOJO2_CANONICAL_IF_WORD,
+  KOJO2_DECL_WORDS,
+  KOJO2_DISPATCH_WORDS,
+  KOJO2_HEADER_CLOSE,
+  KOJO2_HEADER_DISPATCH_WORDS,
+  KOJO2_HEADER_OPEN,
+  KOJO2_LOOP_CONTROL_CANONICAL_WORDS,
+  kojo2HeaderCompatWord,
+} from './lexicon';
+import {
   KOJO2_DECL_WORD_BY_KIND,
   kojo2DeclarationAt,
   kojo2DeclarationHeaderAt,
@@ -287,11 +301,224 @@ function eventHoverAt(
   };
 }
 
+/* ============================== 新正典表面词悬停（W1/W2） ============================== */
+
+/** 行内空白（与 completion 的 `BLANK_CLASS_STR` 同一字符集；这里只切表面词，不解析表达式）。 */
+const SURFACE_BLANK_RE = /[ \t\u3000]/;
+
+/**
+ * 方寸声明词的**职责一句话**（键从 core 声明词位序派生，值不是词形、不构成第二份词表）。
+ * `设` 位同时承载变量 / 编译期常量（旧写法合并词），细描述在 {@link surfaceWordFactAt} 里按
+ * 表面词（`定` / `设`）分别给。
+ */
+const DECL_WORD_MEANINGS: readonly (readonly [string, string])[] = [
+  [KOJO2_DECL_WORDS[0] ?? '', '场景头'],
+  [KOJO2_DECL_WORDS[1] ?? '', '视角（代词表）'],
+  [KOJO2_DECL_WORDS[2] ?? '', '事件头'],
+  [KOJO2_DECL_WORDS[3] ?? '', '变量 / 编译期常量声明'],
+  [KOJO2_DECL_WORDS[5] ?? '', '对照表'],
+  [KOJO2_DECL_WORDS[6] ?? '', '条件台词池'],
+  [KOJO2_DECL_WORDS[7] ?? '', '编译期模板'],
+  [KOJO2_DECL_WORDS[8] ?? '', '方言断言'],
+];
+
+/** 冒号动作族 → 职责一句话；顺序 = core 别名表序（算 / 色 / 颜绘 / 择一 / 组 / 循环 / 重复 / 遍历 / 标 / 跳）。 */
+const ACTION_MEANINGS: readonly string[] = [
+  '状态更新块',
+  '演出着色块',
+  '单行演出指令',
+  '等概率择一（不是概率分布）',
+  '择一候选组',
+  '条件循环',
+  '固定次数循环',
+  '遍历集合',
+  '标签',
+  '跳转',
+];
+
+/** 冒号动作的表面词（`KOJO2_ACTION_WORD_ALIAS` 的键序，与 {@link ACTION_MEANINGS} 逐位对应）。 */
+const ACTION_SURFACE_WORDS: readonly string[] = [...KOJO2_ACTION_WORD_ALIAS.keys()];
+
+/** 一个表面词的悬停事实：作者写的字面 + 一句话职责 + 旧写法片段 + 屏上区间。 */
+interface CanonicalWordFact {
+  readonly word: string;
+  readonly kind: string;
+  readonly summary: string;
+  /** 旧写法片段（含锚点，如 `@算` / `# 机 …` / `? 条件`） */
+  readonly compat: string;
+  /** 词在物理行里的 1 基首列 */
+  readonly startColumn: number;
+  /** 词尾后一位（1 基、半开） */
+  readonly endColumn: number;
+}
+
+/** 方寸声明词（已归一）的职责；`定/设` 按表面词分述。 */
+function headerWordSummary(surfaceWord: string, normalized: string): string | undefined {
+  if (KOJO2_HEADER_DISPATCH_WORDS.has(normalized)) {
+    return normalized === KOJO2_DISPATCH_WORDS[8]
+      ? '运行期函数声明（`演：` 可调）'
+      : '事件监听声明（可带 之前 / 之后 / 接管 修饰词）';
+  }
+  if (normalized === (KOJO2_DECL_WORDS[2] ?? '')) {
+    return surfaceWord === normalized
+      ? '事件头'
+      : '事件头（新作者语法；`机` 只作旧文件兼容）';
+  }
+  if (normalized === (KOJO2_DECL_WORDS[3] ?? '')) {
+    return surfaceWord === normalized
+      ? '运行期变量（可赋值；存储期 场景/存档/会话）'
+      : '编译期常量（必须有初值、不能写存储期、不可赋值）';
+  }
+  const found = DECL_WORD_MEANINGS.find(([word]) => word === normalized);
+  return found?.[1];
+}
+
+/**
+ * 光标处的**新正典表面词**（W1/W2）：方寸声明词 / 条件词 / 冒号动作词 / `演` / 循环控制词。
+ *
+ * 只认"作者实际写的那个字面"——core 词法层已把新表面归一化成旧记录，故这里从**行文本**取
+ * 表面词与列区间；旧写法（`#` / `@` / `?` / `!`）一律不命中（交给既有声明悬停）。
+ */
+function canonicalWordFactAt(
+  document: Kojo2Document,
+  lineNumber: number,
+  col0: number,
+): CanonicalWordFact | undefined {
+  const record = document.lines[lineNumber - 1];
+  if (record === undefined) return undefined;
+  const text = record.text;
+  // 内容首字符的 0 基列（缩进已由词法层切掉）
+  const base = record.contentOffset - record.lineOffset;
+  const at = col0 - base;
+  if (at < 0 || at > text.length) return undefined;
+  const inWord = (index: number, length: number): boolean =>
+    at >= index && at < index + length;
+  const range = (index: number, length: number): { readonly startColumn: number; readonly endColumn: number } => {
+    const startColumn = base + index + 1;
+    return { startColumn, endColumn: startColumn + length };
+  };
+
+  // ① 方寸声明 `【词 …】`
+  if (text.startsWith(KOJO2_HEADER_OPEN)) {
+    let i = KOJO2_HEADER_OPEN.length;
+    while (i < text.length && SURFACE_BLANK_RE.test(text[i]!)) i++;
+    let end = i;
+    while (
+      end < text.length &&
+      !SURFACE_BLANK_RE.test(text[end]!) &&
+      text[end] !== KOJO2_HEADER_CLOSE
+    ) {
+      end++;
+    }
+    const surfaceWord = text.slice(i, end);
+    if (surfaceWord.length === 0 || !inWord(i, end - i)) return undefined;
+    const normalized = kojo2HeaderCompatWord(surfaceWord);
+    const summary = headerWordSummary(surfaceWord, normalized);
+    if (summary === undefined) return undefined; // `【剧场：…】` 等非声明的方寸行
+    return {
+      word: surfaceWord,
+      kind: '方寸声明',
+      summary,
+      compat: `# ${normalized} …`,
+      ...range(i, end - i),
+    };
+  }
+
+  // ② 条件族：`否则：` / `若 条件：` / `再若 条件：`（必须是 core 已判成 condition 的行）
+  if (record.kind === 'condition') {
+    if (text.startsWith(`${KOJO2_CANONICAL_ELSE_WORD}：`)) {
+      if (inWord(0, KOJO2_CANONICAL_ELSE_WORD.length)) {
+        return {
+          word: KOJO2_CANONICAL_ELSE_WORD,
+          kind: '条件',
+          summary: '条件链默认分支（必须是最后一条）',
+          compat: '? 否',
+          ...range(0, KOJO2_CANONICAL_ELSE_WORD.length),
+        };
+      }
+    }
+    for (const [word, summary] of [
+      [KOJO2_CANONICAL_IF_WORD, '条件链头'],
+      [KOJO2_CANONICAL_ELSE_IF_WORD, '条件链中段'],
+    ] as const) {
+      if (!text.startsWith(word)) continue;
+      if (!SURFACE_BLANK_RE.test(text[word.length] ?? '')) continue;
+      if (!inWord(0, word.length)) continue;
+      return { word, kind: '条件', summary, compat: '? 条件', ...range(0, word.length) };
+    }
+    return undefined;
+  }
+
+  // ③ 调用族：`演：名字(args)`
+  if (record.kind === 'trigger' && text.startsWith(`${KOJO2_CANONICAL_CALL_WORD}：`)) {
+    if (!inWord(0, KOJO2_CANONICAL_CALL_WORD.length)) return undefined;
+    return {
+      word: KOJO2_CANONICAL_CALL_WORD,
+      kind: '调用',
+      summary: '调用池 / 模板 / 函数（`演：名字(实参)`）',
+      compat: '! 名字',
+      ...range(0, KOJO2_CANONICAL_CALL_WORD.length),
+    };
+  }
+
+  // ④ 冒号动作族：`算：` / `色：…` / `循环：…` …（旧 `@算` 行文本以 `@` 开头，不会命中）
+  if (record.kind === 'dispatch') {
+    const colon = text.indexOf('：');
+    if (colon > 0) {
+      const surfaceWord = text.slice(0, colon);
+      const index = ACTION_SURFACE_WORDS.indexOf(surfaceWord);
+      if (index >= 0 && inWord(0, surfaceWord.length)) {
+        const mapped = KOJO2_ACTION_WORD_ALIAS.get(surfaceWord) ?? surfaceWord;
+        return {
+          word: surfaceWord,
+          kind: '调度',
+          summary: ACTION_MEANINGS[index] ?? '冒号动作',
+          compat: `@${mapped}`,
+          ...range(0, surfaceWord.length),
+        };
+      }
+    }
+    // ⑤ 独立成行的循环控制（W2 正典 / W1 兼容）
+    const trimmed = text.trim();
+    const canonicalLoop = KOJO2_LOOP_CONTROL_CANONICAL_WORDS.indexOf(trimmed);
+    const compatBreak = KOJO2_DISPATCH_WORDS[13] ?? '';
+    const compatContinue = KOJO2_DISPATCH_WORDS[14] ?? '';
+    const loopSummaries: Readonly<Record<string, string>> = {
+      [KOJO2_LOOP_CONTROL_CANONICAL_WORDS[0] ?? '']: '循环里跳到下一轮（continue）',
+      [KOJO2_LOOP_CONTROL_CANONICAL_WORDS[1] ?? '']: '跳出循环（break）',
+      [compatBreak]: '跳出循环（兼容形；正典写 `跳出循环`）',
+      [compatContinue]: '跳到下一轮（兼容形；正典写 `下一轮`）',
+    };
+    const summary = loopSummaries[trimmed];
+    if (summary !== undefined) {
+      const index = text.indexOf(trimmed);
+      if (inWord(index, trimmed.length)) {
+        // 正典词讲兼容锚点（`下一轮`⇒`@续`、`跳出循环`⇒`@断`）；兼容形讲自己那枚锚点。
+        const compat =
+          canonicalLoop === 0
+            ? `@${compatContinue}`
+            : canonicalLoop === 1
+              ? `@${compatBreak}`
+              : `@${trimmed}`;
+        return {
+          word: trimmed,
+          kind: '循环控制',
+          summary,
+          compat,
+          ...range(index, trimmed.length),
+        };
+      }
+    }
+  }
+
+  return undefined;
+}
+
 /**
  * 光标处的悬停事实（**纯函数**）。
  *
- * 解析顺序：位置门 → 事件挂点（`# 机` / `@织`，**要 adapter**）→ 声明名字段（声明处）→
- * 名字段反查（引用处）。
+ * 解析顺序：新正典表面词 → 位置门 → 事件挂点（`# 机` / `@织`，**要 adapter**）→ 声明名字段
+ * （声明处）→ 名字段反查（引用处）。
  * 引用处只认代码面（声明 / 调度 / 触发 / 条件 / 调度区裸行）；台词正文与原生体在位置门已退让。
  */
 export function kojo2HoverAt(
@@ -308,6 +535,24 @@ export function kojo2HoverAt(
   // 台词的**正文**不悬停；`{…}` 插值里是表达式，照常给事实。
   const interpolated = insideInterpolation(text, col0);
   if (kojo2IsTextSurface(record) && !interpolated) return undefined;
+
+  // 新正典表面词（`【…】` / `若…：` / `算：` / `演：` / `下一轮`）：先于声明与事件挂点，
+  // 作者停在"新写的那个词"上要能读到一句话职责与旧写法对照。
+  const canonicalWord = canonicalWordFactAt(document, query.line, col0);
+  if (canonicalWord !== undefined) {
+    return {
+      name: canonicalWord.word,
+      kind: canonicalWord.kind,
+      startColumn: canonicalWord.startColumn,
+      endColumn: canonicalWord.endColumn,
+      lines: [canonicalWord.summary, `旧写法（兼容）：\`${canonicalWord.compat}\``],
+      declaration: {
+        line: query.line,
+        column: canonicalWord.startColumn,
+        endColumn: canonicalWord.endColumn,
+      },
+    };
+  }
 
   // 事件挂点：名字不是声明、事实也不在本文件里（方言的 `eventCatalog`），先认这一格。
   const event = eventHoverAt(document, text, query.line, col0, options.adapter);

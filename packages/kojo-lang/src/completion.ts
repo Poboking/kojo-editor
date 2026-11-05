@@ -67,6 +67,7 @@ import {
   KOJO_FACE_OBJECT_WORDS,
   KOJO_STORAGE_WORDS,
   KOJO_TYPE_WORDS,
+  KOJO_WEAVE_MODIFIERS,
   eventNames,
   projectEventArgs,
   type GameAdapter,
@@ -86,10 +87,22 @@ import {
   type Kojo2Query,
 } from './declarations';
 import {
+  KOJO2_ACTION_SURFACE_WORDS,
+  KOJO2_CANONICAL_CALL_WORD,
+  KOJO2_CANONICAL_ELSE_IF_WORD,
+  KOJO2_CANONICAL_ELSE_WORD,
+  KOJO2_CANONICAL_IF_WORD,
   KOJO2_DISPATCH_WORDS,
+  KOJO2_HEADER_CLOSE,
+  KOJO2_HEADER_OPEN,
+  KOJO2_HEADER_WORDS,
   KOJO2_INDENT_WIDTH,
+  KOJO2_LOOP_CONTROL_CANONICAL_WORDS,
   KOJO2_NATIVE_FENCE_WORD,
   KOJO2_TEMPLATE_SLOT,
+  KOJO2_TYPE_SURFACE_WORDS,
+  KOJO2_TYPE_WORD_ALIAS,
+  kojo2CanonicalHeaderWord,
 } from './lexicon';
 
 /* ============================== 空白判据（单源；宿主 v1 侧 re-export 这四枚） ============================== */
@@ -123,7 +136,8 @@ export function isAllBlank(text: string): boolean {
 export const KOJO2_ANCHOR_CHARS = ['#', '@', '>', '?', '!'] as const;
 
 /**
- * 补全触发字符：五锚点 + `{`（`{…}` 是表达式位，与 v1 `.kojo` 的糖位触发同一产品口径）。
+ * 补全触发字符：五锚点 + `{`（`{…}` 是表达式位，与 v1 `.kojo` 的糖位触发同一产品口径）
+ * + `【`（W1 方寸声明，`【` 之后第一枚词是声明词位）。
  * 其余位置靠 `quickSuggestions` 与手动触发——纯模型自己会按前缀裁剪，触发多了不产生噪声候选。
  */
 export const KOJO2_COMPLETION_TRIGGER_CHARS: readonly string[] = Object.freeze([
@@ -135,6 +149,8 @@ export const KOJO2_COMPLETION_TRIGGER_CHARS: readonly string[] = Object.freeze([
   '{',
   // `(`：行尾表演提示组 `(心形)` 的提示名位（K2-COMPLETE-ARGS-FACE）。
   '(',
+  // `【`：方寸声明的方寸词位（W1 正典；`【` / `【设` / `【挂 ` 都在这一门里）。
+  '【',
 ]);
 
 /** adapter 事件目录的**名字投影**（顺序 = `eventCatalog.events` 表序；零手抄）。 */
@@ -152,6 +168,8 @@ const WEAVE_WORD = KOJO2_DISPATCH_WORDS[9] ?? '';
 /** `# 设` / `# 设` 的词形（声明词表同一枚真源）。 */
 const VARIABLE_WORD = KOJO2_DECL_WORD_BY_KIND.variable;
 const CONSTANT_WORD = KOJO2_DECL_WORD_BY_KIND.constant;
+/** 方寸 `【定 …】` 的正典词（= 编译期常量；从声明别名词表反查，不写字形）。 */
+const FIXED_HEADER_WORD = kojo2CanonicalHeaderWord(VARIABLE_WORD);
 
 /**
  * 候选的语义类别（消费方据此挑图标档位，宿主再映射 Monaco `CompletionItemKind`）。
@@ -512,17 +530,26 @@ interface DeclTailSlot {
  * 名字位（作者自己的名字）不补；`=` 之后的初值位不补（初值只允许字面量，§3.4.3）。
  * 合并后类型位之后一律给存储期位：无初值 = 运行期变量；带初值补了存储期也成立
  * （编译期常量形态仅在"有初值且无存储期"时成立，见 parser `parseSetDecl`）。
+ *
+ * W1/W2：同一条判据同时服务旧 `# 设 …` 与新方寸 `【设 …】` / `【定 …】`——`定` 是编译期常量，
+ * 没有存储期位（`isConstant = true` 时类型位之后不再给存储期候选）。
  */
 function declTailSlotAt(before: string): DeclTailSlot | null {
   const head = headPartsOf(before);
   if (head === null || head.anchor !== '#') return null;
   if (head.word !== VARIABLE_WORD && head.word !== CONSTANT_WORD) return null;
   if (head.tail.length === 0 || !isBlank(head.tail[0]!)) return null;
-  const rest = stripLeadingBlanks(head.tail);
+  return setDeclTailSlot(stripLeadingBlanks(head.tail), false);
+}
+
+/** `设 / 定` 声明的尾槽扫描（`# 设` 与 `【设 …】 / 【定 …】` 共用这一份）。 */
+function setDeclTailSlot(rest: string, isConstant: boolean): DeclTailSlot | null {
   if (rest.length === 0) return null; // 名字位
   const scan = scanSlot(rest);
   if (scan.index === 0) return null; // 名字位（正在写名字）
   if (scan.index === 1) return { slot: 'type', prefix: scan.prefix };
+  // 编译期常量（`【定 …】` / 无存储期形态）没有存储期位：类型之后只剩初值 / 收口，不补。
+  if (isConstant) return null;
   const eqIndex = scan.tokens.findIndex((token) => token.startsWith('='));
   if (eqIndex >= 0) {
     if (scan.index <= eqIndex) return null; // 正在写 `=` 本身 / 其前
@@ -532,15 +559,79 @@ function declTailSlotAt(before: string): DeclTailSlot | null {
   return { slot: 'storage', prefix: scan.prefix };
 }
 
-/** 类型词候选（`整数` / `字符串`；core 词表转发）。 */
-function valueTypeCandidates(prefix: string): Kojo2CompletionCandidate[] {
-  return withPrefix(KOJO_TYPE_WORDS, prefix).map((word) => ({
+/** 方寸 `【设 …】 / 【定 …】` 的尾槽（类型词 / 存储期）；`【挂 / 【幕` 一律不补。 */
+function headerDeclTailSlotAt(before: string): DeclTailSlot | null {
+  const trimmed = before.replace(/^[ \t\u3000]*/, '');
+  if (!trimmed.startsWith(KOJO2_HEADER_OPEN)) return null;
+  const inner = trimmed.slice(KOJO2_HEADER_OPEN.length);
+  if (inner.includes(KOJO2_HEADER_CLOSE)) return null; // 已收口，光标不在声明里
+  const wordEnd = inner.search(/[ \t\u3000]/);
+  if (wordEnd < 0) return null; // 还在写方寸词（上一条门负责）
+  const word = inner.slice(0, wordEnd);
+  const rest = stripLeadingBlanks(inner.slice(wordEnd));
+  if (word === VARIABLE_WORD) return setDeclTailSlot(rest, false);
+  if (word === FIXED_HEADER_WORD) return setDeclTailSlot(rest, true);
+  return null;
+}
+
+/** `【 之后正在写的方寸词（`【` / `【设` / `【挂 ` 三种都算；词后已有空白 ⇒ 不是这个词的位）。 */
+function headerWordSlotPrefix(before: string): string | null {
+  const trimmed = before.replace(/^[ \t\u3000]*/, '');
+  if (!trimmed.startsWith(KOJO2_HEADER_OPEN)) return null;
+  const rest = trimmed.slice(KOJO2_HEADER_OPEN.length);
+  if (rest.includes(KOJO2_HEADER_CLOSE)) return null; // 已收口
+  if (rest.length === 0) return '';
+  return /^[^ \t\u3000]*$/.test(rest) ? rest : null;
+}
+
+/** 方寸声明词候选（`【` 之后的第一枚词；`挂 / 定` 正典词与旧声明词同表铺开）。 */
+function headerWordCandidates(prefix: string): Kojo2CompletionCandidate[] {
+  return withPrefix(KOJO2_HEADER_WORDS, prefix).map((word) => ({
     label: word,
     insertText: word,
-    kind: 'valueType' as const,
-    detail: '类型词',
-    sortText: `5_valueType_${word}`,
+    kind: 'declarationWord' as const,
+    detail: '方寸声明词',
+    sortText: `1_${word}`,
   }));
+}
+
+/** `【挂 …】` 的方寸词（= `# 机` 的新作者语法）；从声明别名词表反查，不写字形。 */
+const MACHINE_HEADER_WORD = kojo2CanonicalHeaderWord(KOJO2_MACHINE_WORD);
+/** `【织 …】` 的方寸词（= `@织`；调度词表位序取词）。 */
+const WEAVE_HEADER_WORD = kojo2CanonicalHeaderWord(KOJO2_DISPATCH_WORDS[9] ?? '');
+
+/**
+ * 方寸行里"方寸词之后"的剩余文本（含前导空白口径的处理）；不是该方寸词 / 已收口 ⇒ `null`。
+ * `【挂 / 【织` 的事件位与 `# 机` / `@织` 共用同一份事件名单，所以这里只切形状。
+ */
+function headerRestAfterWord(before: string, headerWord: string): string | null {
+  const trimmed = before.replace(/^[ \t\u3000]*/, '');
+  if (!trimmed.startsWith(KOJO2_HEADER_OPEN)) return null;
+  const inner = trimmed.slice(KOJO2_HEADER_OPEN.length);
+  if (inner.includes(KOJO2_HEADER_CLOSE)) return null; // 已收口
+  const wordEnd = inner.search(/[ \t\u3000]/);
+  if (wordEnd < 0) return null; // 还在写方寸词（上一条门负责）
+  if (inner.slice(0, wordEnd) !== headerWord) return null;
+  return stripLeadingBlanks(inner.slice(wordEnd));
+}
+
+/**
+ * 类型词候选（正典 `数` / `文字` 在前，兼容 `整数` / `字符串` 在后；W2 类型自然化）。
+ *
+ * 词形来自 `KOJO2_TYPE_SURFACE_WORDS`（core 的 `KOJO_TYPE_WORD_ALIAS` 键 + `KOJO_TYPE_WORDS`），
+ * 兼容词在面板里标一次"旧写法（兼容）"——作者第一眼看到正典词，旧文件仍能补全。
+ */
+function valueTypeCandidates(prefix: string): Kojo2CompletionCandidate[] {
+  return withPrefix(KOJO2_TYPE_SURFACE_WORDS, prefix).map((word) => {
+    const canonical = KOJO2_TYPE_WORD_ALIAS.has(word);
+    return {
+      label: word,
+      insertText: word,
+      kind: 'valueType' as const,
+      detail: canonical ? '类型词（正典）' : '旧写法（兼容）：类型词',
+      sortText: `${canonical ? '5' : '6'}_valueType_${word}`,
+    };
+  });
 }
 
 /** 存储期候选（`场景` / `存档` / `会话`；core 词表转发，顺序即默认值优先级）。 */
@@ -803,6 +894,85 @@ function triggerSlotPrefix(before: string): string | null {
   return /[ \t\u3000(（,，:：]/.test(tail) ? null : tail;
 }
 
+/** `演：<被调名前缀>` 的名字位（W1 正典调用；与旧 `! 名字` 同一份声明候选）。 */
+function performSlotPrefix(before: string): string | null {
+  const trimmed = before.replace(/^[ \t\u3000]*/, '');
+  const head = `${KOJO2_CANONICAL_CALL_WORD}：`;
+  if (!trimmed.startsWith(head)) return null;
+  const tail = trimmed.slice(head.length).replace(/^[ \t\u3000]+/, '');
+  return /[ \t\u3000(（,，:：]/.test(tail) ? null : tail;
+}
+
+/**
+ * 行首新正典**块头词**的已输入前缀（`算` / `若` / `演` / `下一轮` …）。
+ *
+ * 只认"行首 + 纯前缀、无空白 / 冒号 / 括号"：一旦作者写了参数（出现空白 / 全角冒号），
+ * 后半句就是表达式位，交回既有兜底门。返回 `null` = 不是新正典词位（让往下走）。
+ */
+function canonicalHeadSlotPrefix(before: string): string | null {
+  const trimmed = before.replace(/^[ \t\u3000]*/, '');
+  if (trimmed.length === 0) return null; // 空行：旧锚点 + snippets 的地盘
+  if (/[ \t\u3000：:（(]/.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
+ * 行首新正典块头候选：冒号动作（`算：` / `色：` …）、条件族（`若 ` / `再若 ` / `否则：`）、
+ * 调用族（`演：`）、循环控制（`下一轮` / `跳出循环`）。前缀过滤后为空 ⇒ 交回兜底表达式位。
+ */
+function canonicalHeadCandidates(prefix: string): Kojo2CompletionCandidate[] {
+  const heads: Kojo2CompletionCandidate[] = [];
+  for (const word of KOJO2_ACTION_SURFACE_WORDS) {
+    if (!word.startsWith(prefix)) continue;
+    heads.push({
+      label: `${word}：`,
+      insertText: `${word}：`,
+      kind: 'declarationWord',
+      detail: '冒号动作（新正典；旧写法 `@…`）',
+      sortText: `1_${word}`,
+    });
+  }
+  for (const word of [KOJO2_CANONICAL_IF_WORD, KOJO2_CANONICAL_ELSE_IF_WORD]) {
+    if (!word.startsWith(prefix)) continue;
+    heads.push({
+      label: `${word} `,
+      insertText: `${word} `,
+      kind: 'anchor',
+      detail: '条件分支头（新正典；旧写法 `? 条件`）',
+      sortText: `1_${word}`,
+    });
+  }
+  if (KOJO2_CANONICAL_ELSE_WORD.startsWith(prefix)) {
+    heads.push({
+      label: `${KOJO2_CANONICAL_ELSE_WORD}：`,
+      insertText: `${KOJO2_CANONICAL_ELSE_WORD}：`,
+      kind: 'anchor',
+      detail: '条件链默认分支（新正典；旧写法 `? 否`）',
+      sortText: `1_${KOJO2_CANONICAL_ELSE_WORD}`,
+    });
+  }
+  if (KOJO2_CANONICAL_CALL_WORD.startsWith(prefix)) {
+    heads.push({
+      label: `${KOJO2_CANONICAL_CALL_WORD}：`,
+      insertText: `${KOJO2_CANONICAL_CALL_WORD}：`,
+      kind: 'declarationWord',
+      detail: '调用池 / 模板 / 函数（新正典；旧写法 `! 名字`）',
+      sortText: `1_${KOJO2_CANONICAL_CALL_WORD}`,
+    });
+  }
+  for (const word of KOJO2_LOOP_CONTROL_CANONICAL_WORDS) {
+    if (!word.startsWith(prefix)) continue;
+    heads.push({
+      label: word,
+      insertText: word,
+      kind: 'declarationWord',
+      detail: '循环控制（新正典；旧写法 `@断` / `@续`）',
+      sortText: `1_${word}`,
+    });
+  }
+  return heads;
+}
+
 /** `@原生` 栏头（`@原生` 整行）；栏头本身也不给补全。 */
 function isNativeHeader(record: Kojo2Document['lines'][number] | undefined): boolean {
   return (
@@ -857,6 +1027,62 @@ export function kojo2CompletionAt(
       ...anchorCandidates(),
       ...templateSlotCandidates(document, query.line, before),
     ];
+  }
+
+  // 方寸声明 `【<词>`：W1 正典词位（`挂` / `定` / `设` / `幕` … 与旧声明词同表）
+  const headerPrefix = headerWordSlotPrefix(before);
+  if (headerPrefix !== null) return headerWordCandidates(headerPrefix);
+
+  // `【设 …】 / 【定 …】`：类型词 / 存储期（与 `# 设` 共用同一份尾槽判据；`定` 无存储期位）
+  const headerTail = headerDeclTailSlotAt(before);
+  if (headerTail !== null) {
+    return headerTail.slot === 'type'
+      ? valueTypeCandidates(headerTail.prefix)
+      : storagePeriodCandidates(headerTail.prefix);
+  }
+
+  // `【挂 <事件…>】`：事件位 / 参数位（与旧 `# 机` 同一份事件名单与参数投影）
+  const machineRest = headerRestAfterWord(before, MACHINE_HEADER_WORD);
+  if (machineRest !== null) {
+    const scan = scanSlot(machineRest);
+    // `index === 0` = 正在写第一枚词（事件名位，含"还没写"）；之后都按实参槽走。
+    if (scan.index === 0) return eventCandidates(scan.prefix, options);
+    const event = scan.tokens[0];
+    if (event === undefined) return eventCandidates(scan.prefix, options);
+    return eventArgumentCandidates(
+      { event, slot: scan.index - 1, prefix: scan.prefix },
+      options,
+    );
+  }
+
+  // `【织 <事件> [之前|之后|接管]】`：事件位 / 修饰词位（与旧 `@织` 同一份事件名单）
+  const weaveRest = headerRestAfterWord(before, WEAVE_HEADER_WORD);
+  if (weaveRest !== null) {
+    if (!/[ \t\u3000]/.test(weaveRest)) return eventCandidates(weaveRest, options);
+    const scan = scanSlot(weaveRest);
+    if (scan.tokens.length === 1 && scan.index === 1) {
+      return withPrefix(KOJO_WEAVE_MODIFIERS, scan.prefix).map((word) => ({
+        label: word,
+        insertText: word,
+        kind: 'declarationWord' as const,
+        detail: '织入修饰词',
+        sortText: `1_${word}`,
+      }));
+    }
+  }
+
+  // `演：<池 / 模 / 函>`：名字位（W1 正典调用；与旧 `! 名字` 同一份声明候选）
+  const performPrefix = performSlotPrefix(before);
+  if (performPrefix !== null) {
+    return declarationCandidates(document, ['pool', 'template', 'function'], performPrefix, true);
+  }
+
+  // 行首新正典块头词（`算：` / `若 ` / `否则：` / `演：` / `下一轮`）：前缀命中才出货，
+  // 零命中交回下面的兜底表达式位（作者可能只是在写一个普通名字）。
+  const canonicalPrefix = canonicalHeadSlotPrefix(before);
+  if (canonicalPrefix !== null) {
+    const heads = canonicalHeadCandidates(canonicalPrefix);
+    if (heads.length > 0) return heads;
   }
 
   // `# 机 <事件>`：事件名（必须先于通用声明词位）

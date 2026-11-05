@@ -227,7 +227,6 @@ describe('parse：旧写法反例全部报迁移诊断，且不进 AST', () => {
       'core/migration/label',
       'core/migration/wait',
       'core/narrative/bare-quote',
-      'core/narrative/bare-narration',
     ]) {
       expect(codes, `missing ${code}`).toContain(code);
     }
@@ -547,8 +546,11 @@ describe('parse：程序层（§9）', () => {
 });
 
 describe('parse：叙事区硬规则（§4）', () => {
-  it('裸旁白 / 裸台词 / `你：` 前缀都报错', () => {
-    expect(codesOf(`${MACHINE}她点了点头。\n`)).toContain('core/narrative/bare-narration');
+  it('W1：裸旁白合法（成为旁白文本）；裸引号 / `你：` 前缀仍报错', () => {
+    const bare = parseOk(`${MACHINE}她点了点头。\n`);
+    const line = bare.scenes[0]!.items[0] as KojoTextLine;
+    expect(line.kind).toBe('textLine');
+    expect(line.speech).toEqual({ kind: 'narration' });
     expect(codesOf(`${MACHINE}「早。」\n`)).toContain('core/narrative/bare-quote');
     expect(codesOf(`${MACHINE}你：早。\n`)).toContain('core/narrative/bare-narration');
   });
@@ -619,8 +621,8 @@ describe('parse：调用体（§7.2）与全角标点', () => {
 
 describe('parse：诊断质量', () => {
   it('一次报多条：错误行后的合法行继续建树', () => {
-    const file = parseSource(`${MACHINE}「裸」\n这是裸旁白\n> 合法旁白\n`);
-    expect(file.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toHaveLength(2);
+    const file = parseSource(`${MACHINE}「裸」\n> 合法旁白\n`);
+    expect(file.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toHaveLength(1);
     expect(file.scenes[0]!.items).toHaveLength(1);
     expect(file.scenes[0]!.items[0]!.kind).toBe('textLine');
   });

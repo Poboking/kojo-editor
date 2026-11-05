@@ -121,6 +121,7 @@ const CORE_DIAGNOSTIC_CODE_LIST = [
   /* 叙事与等待 */
   'core/narrative/bare-quote',
   'core/narrative/bare-narration',
+  'core/narrative/bare-expression',
   'core/narrative/unknown-speaker',
   'core/narrative/bad-hint',
   'core/wait/no-profile',

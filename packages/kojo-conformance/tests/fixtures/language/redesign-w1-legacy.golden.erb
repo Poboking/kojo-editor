@@ -1,0 +1,78 @@
+MACHINE 开场
+;SLOT __kojo_table_心情 table int
+;SLOT __kojo_table_心情__value table string
+;SLOT __kojo_rand_60 random int
+;SLOT __kojo_foreach_74_i foreach int
+;SLOT __kojo_foreach_74_e foreach int
+TELL: 晨光透过鸟居，斑驳地洒在石阶上。 /WAIT
+SAY 灵梦: {你}今天来得挺早嘛。 /WAIT ;(微笑)
+IF {外部计数 >= 亲近线}
+SAY 灵梦: 其实……{我}一直在等你。 /WAIT ;HINT 心形
+ELSEIF {外部计数 >= 100}
+SAY 灵梦: 早上好，今天天气不错呢。 /WAIT
+ELSE
+SAY 灵梦: ……早。 /WAIT
+ENDIF
+SET __kojo_table_心情 = {外部计数}
+IF {__kojo_table_心情 >= 0 && __kojo_table_心情 <= 99}
+SET __kojo_table_心情__value = {"疏远"}
+ELSEIF {__kojo_table_心情 >= 100 && __kojo_table_心情 <= 499}
+SET __kojo_table_心情__value = {"平常"}
+ELSEIF {__kojo_table_心情 >= 500}
+SET __kojo_table_心情__value = {"亲近"}
+ELSE
+SET __kojo_table_心情__value = {"未知"}
+ENDIF
+SET 心情快照 = {__kojo_table_心情__value}
+SET 队列[0] = {加一(1)}
+SET 余韵 = {队列.长度}
+COLOR.ENTER {0xFF8080}
+SAY 灵梦: 这行是红色。 COLOR 0xFF8080 /WAIT
+TELL: 她的耳朵也红了。 COLOR 0xFF8080 /WAIT
+COLOR.EXIT
+FACE me 笑顔
+RANDOM group-text 2
+SAY 灵梦: ……呼。 /WAIT
+SAY 灵梦: 再、再摸摸嘛。 /WAIT
+TELL: 她把脸别了过去。 /WAIT
+RANDOM.END
+WHILE {余韵 < 2}
+SET 余韵 = {加一(余韵)}
+CONTINUE
+BREAK
+WEND
+REPEAT {2}
+TELL: 重复第{余韵}次。 /WAIT
+REND
+FOREACH|array|队列
+BIND|值|__kojo_foreach_74_e
+BIND|下标|__kojo_foreach_74_i
+TELL: 第{__kojo_foreach_74_i + 1}位：{__kojo_foreach_74_e}。 /WAIT
+FOREACH.END
+IF {外部计数 < 100}
+SAY 灵梦: ……早。 /WAIT
+ELSEIF {外部计数 < 500}
+SAY 灵梦: 早上好，今天天气不错呢。 /WAIT
+ELSE
+SAY 灵梦: 亲爱的，早安~ /WAIT ;(拥抱)
+TELL: 她把脸埋进你的肩膀。 /WAIT
+ENDIF
+TELL: （她红着脸，因为被夸奖而不知所措） /WAIT
+SAY 灵梦: 才、才没有很开心呢！ /WAIT
+TELL: （随后匆匆跑开了） /WAIT
+LABEL 主菜单
+TELL: 请选择你的行动： /WAIT
+IF {余韵 == 1}
+GOTO 战斗
+ELSE
+GOTO 主菜单
+ENDIF
+LABEL 战斗
+TELL: 你拔出了武器…… /WAIT
+; 逃生舱：底层 ERB 代码
+CALL HPH_PRINT "w"
+TELL: 散场。 /WAIT
+MACHINE.END
+WEAVE 开场 pri
+TELL: 她提前把茶沏好了。 /WAIT
+WEAVE.END

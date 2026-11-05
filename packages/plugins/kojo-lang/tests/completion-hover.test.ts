@@ -103,16 +103,13 @@ describe('completion 供方：语言过滤与三态', () => {
     expect(provideCompletion(completionRequest(17, 6))).toEqual({ kind: 'completion', items: [] });
   });
 
-  it('行首空轮 ⇒ 五锚点 + 五条块级 snippet（`kind: \'snippet\'`，追加在纯函数候选之后）', () => {
+  it('行首空轮 ⇒ 五锚点 + 17 条块级 snippet（新正典 12 + 兼容旧写法 5，追加在纯函数候选之后）', () => {
     const items = provideCompletion(completionRequest(16, 1))!.items;
-    expect(items.map((item) => item.label)).toEqual([
-      '#', '@', '>', '?', '!',
-      '? 链（条件 + 否）',
-      expect.any(String), expect.any(String), expect.any(String), expect.any(String),
-    ]);
+    expect(items).toHaveLength(22);
+    expect(items.slice(0, 5).map((item) => item.label)).toEqual(['#', '@', '>', '?', '!']);
     expect(items.slice(0, 5).every((item) => item.kind === 'operator')).toBe(true);
     expect(items.slice(5).every((item) => item.kind === 'snippet')).toBe(true);
-    expect(items[5]!.sortText).toMatch(/^9_snippet/);
+    expect(items[5]!.sortText).toMatch(/^8_snippet/);
     expect(items[5]!.insertText).toContain('${1:');
     // 图标与插入语义是两件事（契约 insertTextFormat）：块级骨架才声明 snippet 插入
     expect(items.slice(5).every((item) => item.insertTextFormat === 'snippet')).toBe(true);
@@ -274,7 +271,7 @@ describe('completion 供方：adapter 纪律（经 plugin.ts 接线，请求时�
       const noProject = completion.provide(completionRequest(18, 4));
       expect(itemsOf(noProject).map((item) => item.label)).toEqual(['招呼']);
       const anchors = completion.provide(completionRequest(16, 1));
-      expect(itemsOf(anchors)).toHaveLength(10);
+      expect(itemsOf(anchors)).toHaveLength(22);
     } finally {
       unregister();
     }

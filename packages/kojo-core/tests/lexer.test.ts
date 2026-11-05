@@ -362,7 +362,6 @@ describe('lex：旧写法判别（§12.1 全表）', () => {
   const cases: readonly (readonly [string, string])[] = [
     ['如果 恋慕 >= 500：', 'if'],
     ['否则如果 恋慕 >= 100：', 'elif'],
-    ['否则：', 'else'],
     ['当 心情：', 'when'],
     ['是 0：', 'is'],
     ['分支：', 'branch'],
@@ -382,7 +381,6 @@ describe('lex：旧写法判别（§12.1 全表）', () => {
     ['心形：', 'heart'],
     ['着色 0xFF8080：', 'color-block'],
     ['随机：', 'random-block'],
-    ['组：', 'group-block'],
     ['数据表：', 'data-table'],
     ['数据表结束', 'data-table'],
     ['角色：灵梦', 'head-decl'],
@@ -401,6 +399,24 @@ describe('lex：旧写法判别（§12.1 全表）', () => {
 
   it('`选项：` 不是旧语法：单独 kinds=options', () => {
     expect(firstLine('选项：').kind).toBe('options');
+  });
+
+  it('W1 新正典表面优先：否则：→ condition、组：→ dispatch、若/演/方寸声明', () => {
+    const otherwise = firstLine('否则：');
+    expect(otherwise.kind).toBe('condition');
+    if (otherwise.kind === 'condition') expect(otherwise.isDefault).toBe(true);
+
+    const group = firstLine('组：');
+    expect(group.kind).toBe('dispatch');
+    if (group.kind === 'dispatch') expect(group.word).toBe('组');
+
+    const header = firstLine('【幕 清晨】');
+    expect(header.kind).toBe('decl');
+    if (header.kind === 'decl') expect(header.word).toBe('幕');
+
+    const perform = firstLine('演：早安');
+    expect(perform.kind).toBe('trigger');
+    if (perform.kind === 'trigger') expect(perform.name).toBe('早安');
   });
 
   it('普通正文里出现这些词不算旧写法（词边界）', () => {

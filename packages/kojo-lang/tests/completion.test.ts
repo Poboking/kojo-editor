@@ -24,6 +24,7 @@ import {
   KOJO_TABLE_DEFAULT,
   KOJO_TABLE_SUBJECT,
   KOJO_TYPE_WORDS,
+  KOJO_WEAVE_MODIFIERS,
   eventNames,
   parseSource,
   projectEventArgs,
@@ -33,6 +34,7 @@ import { ERATW_EVENT_CATALOG, ERATW_GAME_ADAPTER } from '@kojo/plugin-eratw-adap
 import { ERAFL_GAME_ADAPTER } from '@kojo/plugin-erafl-adapter';
 import {
   KOJO2_ANCHOR_CHARS,
+  KOJO2_COMPLETION_TRIGGER_CHARS,
   kojo2CompletionAt,
   kojo2EventNamesOf,
   type Kojo2CompletionCandidate,
@@ -44,7 +46,19 @@ import {
   KOJO2_MACHINE_WORD,
   type Kojo2Query,
 } from '@kojo/kojo-lang';
-import { KOJO2_DISPATCH_WORDS } from '../src/lexicon';
+import {
+  KOJO2_ACTION_WORD_ALIAS,
+  KOJO2_CANONICAL_CALL_WORD,
+  KOJO2_CANONICAL_ELSE_IF_WORD,
+  KOJO2_CANONICAL_ELSE_WORD,
+  KOJO2_CANONICAL_IF_WORD,
+  KOJO2_DISPATCH_WORDS,
+  KOJO2_HEADER_DECL_ALIAS,
+  KOJO2_HEADER_OPEN,
+  KOJO2_HEADER_WORDS,
+  KOJO2_LOOP_CONTROL_CANONICAL_WORDS,
+  KOJO2_TYPE_SURFACE_WORDS,
+} from '../src/lexicon';
 
 const FIXTURE = readFileSync(
   path.join(import.meta.dirname, 'fixtures', 'kojo2', 'completion.kojo2'),
@@ -226,7 +240,8 @@ const FACE_TEMPLATES = {
 /** 行尾表演提示名（宿主按 adapter `hintSupport` 投影的假事实）。 */
 const HINT_NAMES = ['心形', '别过头'];
 
-const SORTED_TYPES = [...KOJO_TYPE_WORDS];
+/** 类型词候选全集（W2：正典 `数`/`文字` 在前、兼容 `整数`/`字符串` 在后）。 */
+const SORTED_TYPES = [...KOJO2_TYPE_SURFACE_WORDS];
 const SORTED_STORAGE = [...KOJO_STORAGE_WORDS];
 
 describe('`# 机 <事件>` 参数位：注入才有候选，未注入零候选', () => {
@@ -647,7 +662,111 @@ describe('新候选位的位置门：台词 / `@原生` / 注释 / 旧写法不�
   });
 });
 
-/* ============================== 块级 snippets（宿主翻译层数据） ============================== */
+/* ============================== 新正典表面（W1/W2） ============================== */
+
+describe('W1/W2 新正典表面补全：方寸声明 / 冒号动作 / 演调用 / 循环控制', () => {
+  it('`【` 之后给方寸声明词（含 `挂` / `定` / `设`；旧声明词同表）', () => {
+    const candidates = kojo2CompletionAt(queryAt(`${BASE}${KOJO2_HEADER_OPEN}|`));
+    expect(labelsOf(candidates)).toEqual([...KOJO2_HEADER_WORDS]);
+    for (const candidate of candidates) expect(candidate.detail).toBe('方寸声明词');
+    // 别名表里的正典词确实在列（`挂` / `定` 都在 core 别名词表里）
+    expect(labelsOf(candidates)).toEqual(expect.arrayContaining([...KOJO2_HEADER_DECL_ALIAS.keys()]));
+  });
+
+  it('方寸词按前缀裁剪（`【挂|` ⇒ 只剩 `挂`）', () => {
+    const [surface] = [...KOJO2_HEADER_DECL_ALIAS.keys()];
+    expect(surface).toBeDefined();
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}${KOJO2_HEADER_OPEN}${surface}|`)))).toEqual([
+      surface,
+    ]);
+  });
+
+  it('`【设 名 ` 之后给类型词：正典 `数`/`文字` 在前、兼容词在后', () => {
+    const candidates = kojo2CompletionAt(queryAt(`${BASE}${KOJO2_HEADER_OPEN}设 状态 |`));
+    expect(labelsOf(candidates)).toEqual(SORTED_TYPES);
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(
+      candidates.map(() => 'valueType'),
+    );
+    expect(candidates[0]?.detail).toBe('类型词（正典）');
+    expect(candidates.at(-1)?.detail).toBe('旧写法（兼容）：类型词');
+  });
+
+  it('`【定 名 ` 之后同样给类型词（编译期常量声明）', () => {
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}${KOJO2_HEADER_OPEN}定 阈值 |`)))).toEqual(
+      SORTED_TYPES,
+    );
+  });
+
+  it('`【设 … 类型 ` 之后给存储期；`【定 …】` 没有存储期位（常量不能写存储期）', () => {
+    expect(
+      labelsOf(kojo2CompletionAt(queryAt(`${BASE}${KOJO2_HEADER_OPEN}设 状态 数 |`))),
+    ).toEqual(SORTED_STORAGE);
+    expect(
+      kojo2CompletionAt(queryAt(`${BASE}${KOJO2_HEADER_OPEN}定 阈值 数 = 5 |`)),
+    ).toEqual([]);
+  });
+
+  it('`演：` 之后给池 / 模 / 函的名字（与旧 `! ` 调用同一份声明候选）', () => {
+    const source = `${BASE}【池 问候】\n    若 条件：\n        「早。」\n    否则：\n        「嗨。」\n${KOJO2_CANONICAL_CALL_WORD}：问|`;
+    const candidates = kojo2CompletionAt(queryAt(source));
+    expect(labelsOf(candidates)).toEqual(['问候']);
+    expect(candidates[0]?.kind).toBe('declaration');
+  });
+
+  it('行首新正典块头：`算` ⇒ `算：`；`若` ⇒ `若 `；`再` ⇒ `再若 `；`否` ⇒ `否则：`；`演` ⇒ `演：`', () => {
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}算|`)))).toContain(`${KOJO2_ACTION_WORD_ALIAS.keys().next().value as string}：`);
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}若|`)))).toContain(`${KOJO2_CANONICAL_IF_WORD} `);
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}再|`)))).toContain(
+      `${KOJO2_CANONICAL_ELSE_IF_WORD} `,
+    );
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}否|`)))).toContain(
+      `${KOJO2_CANONICAL_ELSE_WORD}：`,
+    );
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}演|`)))).toContain(
+      `${KOJO2_CANONICAL_CALL_WORD}：`,
+    );
+  });
+
+  it('循环控制正典词进候选（`下一` ⇒ `下一轮`；`跳出` ⇒ `跳出循环`）', () => {
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}下一|`)))).toContain(
+      KOJO2_LOOP_CONTROL_CANONICAL_WORDS[0],
+    );
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}跳出|`)))).toContain(
+      KOJO2_LOOP_CONTROL_CANONICAL_WORDS[1],
+    );
+  });
+
+  it('零命中不抢兜底：普通名字前缀照旧走表达式位（候选不含冒号模板）', () => {
+    const candidates = kojo2CompletionAt(queryAt(`${BASE}状态|`));
+    expect(labelsOf(candidates).some((label) => label.endsWith('：'))).toBe(false);
+  });
+
+  it('`【` 是补全触发字符（宿主据此在方寸词位自动弹面板）', () => {
+    expect(KOJO2_COMPLETION_TRIGGER_CHARS).toContain(KOJO2_HEADER_OPEN);
+  });
+
+  it('`【挂 ` 之后给事件名单（与 `# 机` 同一份注入事实，不猜内置事件）', () => {
+    const events = ['指令', '初见'];
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}【挂 |`), { events }))).toEqual(events);
+    expect(kojo2CompletionAt(queryAt(`${BASE}【挂 |`), {})).toEqual([]);
+  });
+
+  it('`【挂 指令 ` 之后给事件参数（注入才有候选）', () => {
+    expect(
+      labelsOf(kojo2CompletionAt(queryAt(`${BASE}【挂 指令 |`), { eventArgs: EVENT_ARGS })),
+    ).toEqual(['编号']);
+  });
+
+  it('`【织 ` 之后给事件名单；事件后给织入修饰词（之前 / 之后 / 接管）', () => {
+    expect(
+      labelsOf(kojo2CompletionAt(queryAt(`${BASE}【织 |`), { events: ['回合末'] })),
+    ).toEqual(['回合末']);
+    expect(labelsOf(kojo2CompletionAt(queryAt(`${BASE}【织 回合末 |`)))).toEqual([
+      ...KOJO_WEAVE_MODIFIERS,
+    ]);
+  });
+});
+
 
 /** snippet 正文里的 tab stop 编号（`${n:…}` 的 n；`$0` 单独由收尾断言管）。 */
 function placeholderNumbers(insertText: string): number[] {
@@ -660,10 +779,40 @@ function literalOf(insertText: string): string {
 }
 
 describe('块级 snippets 数据完整性（纯数据，宿主按 kind:snippet 追加）', () => {
-  it('五副骨架：id 唯一、kind 全是 snippet', () => {
-    expect(kojo2CompletionSnippets).toHaveLength(5);
-    expect(new Set(kojo2CompletionSnippets.map((snippet) => snippet.id)).size).toBe(5);
+  it('新正典 + 旧写法骨架：id 唯一、kind 全是 snippet', () => {
+    // W1：新正典 12 条在前（方寸声明 / 若-否则 / 算： / 演： / 池 / 对照表 / 循环）+ 旧写法 5 条保留。
+    expect(kojo2CompletionSnippets).toHaveLength(17);
+    expect(new Set(kojo2CompletionSnippets.map((snippet) => snippet.id)).size).toBe(17);
     for (const snippet of kojo2CompletionSnippets) expect(snippet.kind).toBe('snippet');
+  });
+
+  it('新正典条目在前、旧写法在后并逐条标「旧写法（兼容）」', () => {
+    const canonical = kojo2CompletionSnippets.filter((snippet) => !snippet.id.startsWith('chain-') && !snippet.id.startsWith('table-two-columns') && !snippet.id.startsWith('pool-branches') && !snippet.id.startsWith('foreach-tour') && !snippet.id.startsWith('machine-header'));
+    const legacyIds = ['chain-question', 'table-two-columns', 'pool-branches', 'foreach-tour', 'machine-header'];
+    const legacy = kojo2CompletionSnippets.filter((snippet) => legacyIds.includes(snippet.id));
+    // 数组序 = 面板序：前 12 条全是新正典，后 5 条是旧写法
+    expect(kojo2CompletionSnippets.slice(0, canonical.length).every((snippet) => !legacyIds.includes(snippet.id))).toBe(true);
+    expect(kojo2CompletionSnippets.slice(canonical.length)).toEqual(legacy);
+    for (const snippet of legacy) {
+      expect(snippet.detail.startsWith('旧写法（兼容）：')).toBe(true);
+      expect(snippet.sortText.startsWith('9_snippet_l')).toBe(true);
+    }
+    for (const snippet of canonical) expect(snippet.sortText.startsWith('8_snippet_c')).toBe(true);
+  });
+
+  it('新正典模板覆盖任务书点名的五副（`【幕 …】` / `若…：` / `算：` / `【函 …】` / `演：`）', () => {
+    const texts = kojo2CompletionSnippets
+      .filter((snippet) => snippet.sortText.startsWith('8_snippet_c'))
+      .map((snippet) => snippet.insertText);
+    expect(texts.some((text) => text.startsWith(`【${KOJO2_DECL_WORD_BY_KIND.scene} `))).toBe(true);
+    expect(texts.some((text) => text.startsWith('若 '))).toBe(true);
+    expect(texts.some((text) => text.startsWith('算：'))).toBe(true);
+    expect(texts.some((text) => text.startsWith(`【${KOJO2_DISPATCH_WORDS[8]}`))).toBe(true);
+    expect(texts.some((text) => text.startsWith('演：'))).toBe(true);
+    // W2 教法：方寸里用正典词 `挂` / `定` / `设`（不是 `机`）
+    expect(texts.some((text) => text.includes(`【挂 `))).toBe(true);
+    expect(texts.some((text) => text.includes(`【定 `))).toBe(true);
+    expect(texts.some((text) => text.includes(`【设 `))).toBe(true);
   });
 
   it('每副骨架都以 $0 收尾，且 tab stop 编号从 1 连续', () => {
@@ -682,7 +831,7 @@ describe('块级 snippets 数据完整性（纯数据，宿主按 kind:snippet �
     }
   });
 
-  it('触发形态逐条对得上（`?` 链 / `# 对照表` / `# 池` / `@巡` / `# 机`）', () => {
+  it('旧写法触发形态逐条对得上（`?` 链 / `# 对照表` / `# 池` / `@巡` / `# 机`）', () => {
     const byId = (id: string) => {
       const found = kojo2CompletionSnippets.find((snippet) => snippet.id === id);
       if (found === undefined) throw new Error(`缺少 snippet ${id}`);
@@ -720,13 +869,13 @@ describe('块级 snippets 数据完整性（纯数据，宿主按 kind:snippet �
   });
 
   it('位置门：行首才给 snippets，行中零条', () => {
-    expect(kojo2SnippetCandidatesAt(queryAt(`${BASE}|`))).toHaveLength(5);
+    expect(kojo2SnippetCandidatesAt(queryAt(`${BASE}|`))).toHaveLength(17);
     expect(kojo2SnippetCandidatesAt(queryAt(`${BASE}# |`))).toEqual([]);
     expect(kojo2SnippetCandidatesAt(queryAt(`${BASE}> 旁白 |`))).toEqual([]);
   });
 
   it('全角空格缩进也算行首（与位置层同一份空白口径）', () => {
-    expect(kojo2SnippetCandidatesAt(queryAt(`${BASE}\u3000|`))).toHaveLength(5);
+    expect(kojo2SnippetCandidatesAt(queryAt(`${BASE}\u3000|`))).toHaveLength(17);
   });
 
   it('骨架正文里的缩进是四级（模板体 / 分支体按语言惯例）', () => {

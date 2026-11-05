@@ -2,7 +2,7 @@
  * `@kojo/kojo-lang/code-actions` 的闸（B3j，2026-10-30：一键迁移判据从宿主搬进包）。
  *
  * 覆盖：
- * 1. **每类动作正例**：裸旁白 / 裸引号 / 心形（行 + 块）/ 着色 / 随机 / 分支→`# 池` /
+ * 1. **每类动作正例**：裸旁白（W1 后正典化 ⇒ 零动作）/ 裸引号 / 心形（行 + 块）/ 着色 / 随机 / 分支→`# 池` /
  *    当→`# 对照表` / 初回→`@原生` / 补 `否`（表）/ 补 `? 否`（池）/ 补 `[插槽]` / 修缩进 /
  *    语义三条（补 `# 设` / 改声明类型 / 补占位实参）；
  * 2. **应用后 parse 零 error**（表 / 池 / 模板三条另判"目标码在全链编译里消失"）；
@@ -96,28 +96,12 @@ function expectCleanApply(fact: Kojo2CodeActionFact, source: string): string {
 
 /* ============================== 1. 每类动作正例 ============================== */
 
-describe('①裸旁白：补 `>`', () => {
+describe('①裸旁白：W1 正典起裸行 = 旁白 ⇒ 「补 `>`」迁移动作退场', () => {
   const SOURCE = '# 机 开场\n\n她点了点头。\n';
 
-  it('产出一条 migrate 动作，编辑逐字等于 `> 她点了点头。`，应用后 parse 干净', () => {
-    const facts = factsOf(SOURCE, 3);
-    expect(facts).toHaveLength(1);
-    const fact = facts[0]!;
-    expect(fact.kind).toBe('migrate');
-    expect(KOJO2_CODE_ACTION_KIND_LABELS[fact.kind]).toBe('迁移');
-    expect(fact.code).toBe('core/narrative/bare-narration');
-    expect(fact.edits).toHaveLength(1);
-    expect(fact.edit.range).toEqual({ startLine: 3, startColumn: 1, endLine: 3, endColumn: 7 });
-    expect(fact.edit.newText).toBe('> 她点了点头。');
-    expect(expectParseCleanAfter(fact, SOURCE)).toBe('# 机 开场\n\n> 她点了点头。\n');
-  });
-
-  it('缩进体里的裸旁白保持原缩进（不把旁白搬到顶层）', () => {
-    const source = '# 机 开场\n\n? 数值 == 1\n    她点了点头。\n? 否\n    > b\n';
-    const facts = factsOf(source, 4);
-    expect(facts).toHaveLength(1);
-    expect(facts[0]!.edit.newText).toBe('    > 她点了点头。');
-    expect(expectParseCleanAfter(facts[0]!, source)).toContain('\n    > 她点了点头。\n');
+  it('普通裸行不再报 `core/narrative/bare-narration`（core W1 正典）⇒ 零动作', () => {
+    // 这是 W1 的行为变化：裸行是正典旁白，没有诊断就没有可修的改写。
+    expect(factsOf(SOURCE, 3)).toEqual([]);
   });
 
   it('光标行不沾诊断行 ⇒ 零动作（`Ctrl+.` 落在别处不该冒出一条改写）', () => {
@@ -445,10 +429,12 @@ describe('⑩不可解析就不产', () => {
 
 describe('⑪诊断关联 / 码筛选 / 空 span', () => {
   const SOURCE = '# 机 开场\n\n她点了点头。\n';
+  // W1 正典后仍会报诊断、且能产动作的相邻场景：裸引号补说话人。
+  const QUOTE_SOURCE = '# 机 开场\n# 视角 我\n\n「……早。」\n';
 
   it('`fact.diagnostics` 是**同一批对象引用**（宿主据此画关联高亮）', () => {
-    const diagnostics = diagnosticsOf(SOURCE);
-    const facts = kojo2CodeActionFacts({ source: SOURCE, diagnostics, line: 3 });
+    const diagnostics = diagnosticsOf(QUOTE_SOURCE);
+    const facts = kojo2CodeActionFacts({ source: QUOTE_SOURCE, diagnostics, line: 4 });
     expect(facts[0]!.diagnostics).toHaveLength(1);
     expect(facts[0]!.diagnostics[0]).toBe(diagnostics[0]);
   });
@@ -474,11 +460,11 @@ describe('⑪诊断关联 / 码筛选 / 空 span', () => {
   });
 
   it('同一条诊断传两遍 ⇒ 只出一条动作（去重键 = 类别 + 编辑内容）', () => {
-    const diagnostics = diagnosticsOf(SOURCE);
+    const diagnostics = diagnosticsOf(QUOTE_SOURCE);
     const facts = kojo2CodeActionFacts({
-      source: SOURCE,
+      source: QUOTE_SOURCE,
       diagnostics: [diagnostics[0]!, diagnostics[0]!],
-      line: 3,
+      line: 4,
     });
     expect(facts).toHaveLength(1);
   });
@@ -731,11 +717,41 @@ describe('⑮显式不产：readonly-target / index-out-of-range / bad-index', (
   });
 });
 
+/* ============================== 4b. 块头正则（`# 对照表`） ============================== */
+
+describe('⑰缩进修正的块头判据：`# 对照表` 也是块头（原正则写成 `表`，永不命中）', () => {
+  it('`# 对照表` 之后的体行缩进半级错位 ⇒ 首选候选是块体一级（4 空格）', () => {
+    // 6 空格 = 一级半（core 报 `core/lex/indent`）。上一行是 `# 对照表` 块头 ⇒ 正解是 +4。
+    const source = '# 机 开场\n\n# 对照表 心情 依据 数值\n      0..99 -> 疏远\n';
+    const diagnostics = diagnosticsOf(source);
+    const target = diagnostics.find((diagnostic) => diagnostic.code === 'core/lex/indent');
+    expect(target, JSON.stringify(diagnostics.map((diagnostic) => diagnostic.code))).toBeDefined();
+    const line = target!.span!.start.line;
+    const facts = kojo2CodeActionFacts({ source, diagnostics, line });
+    expect(facts.length).toBeGreaterThan(0);
+    expect(facts[0]!.title).toBe(`缩进改为 4 空格（第 ${line} 行）`);
+    expect(facts[0]!.edit.newText.startsWith('    0..99')).toBe(true);
+    // 落盘后目标码消失（不是把行改成另一个非法缩进）
+    expect(expectCleanApply(facts[0]!, source)).toContain('\n    0..99 -> 疏远\n');
+  });
+
+  it('`# 池` / `# 模` 同类块头进入同一条判据（不是只修 `# 对照表` 一格）', () => {
+    for (const header of ['# 池 问候', '# 模 娇羞()']) {
+      const source = `# 机 开场\n\n${header}\n      若 1 < 100：\n        「早。」\n`;
+      const diagnostics = diagnosticsOf(source);
+      const target = diagnostics.find((diagnostic) => diagnostic.code === 'core/lex/indent');
+      if (target === undefined) continue; // `# 池` 体允许 `?` 链，形状不合时跳过（判据本身已由上一条钉住）
+      const facts = kojo2CodeActionFacts({ source, diagnostics, line: target.span!.start.line });
+      if (facts.length === 0) continue;
+      expect(facts[0]!.title, header).toContain('4 空格');
+    }
+  });
+});
+
 /* ============================== 5. 应用后 parse 零 error（总闸） ============================== */
 
 describe('⑯逐类动作：应用后 core parse 零 error', () => {
   const CASES: readonly { readonly name: string; readonly source: string; readonly line: number }[] = [
-    { name: '裸旁白', source: '# 机 开场\n\n她点了点头。\n', line: 3 },
     { name: '裸引号', source: '# 机 开场\n# 视角 我\n\n「……早。」\n', line: 4 },
     { name: '心形行', source: '# 机 开场\n\n心形 微笑\n', line: 3 },
     { name: '心形块', source: '# 机 开场\n\n心形：\n    我：「早。」\n', line: 3 },
@@ -798,31 +814,12 @@ const GOLDEN: readonly {
   readonly facts: readonly unknown[];
 }[] = [
   {
-    name: "裸旁白",
+    // W1 正典（2026-11）：普通裸行 = 旁白，core 不再报 `core/narrative/bare-narration`
+    // ⇒ 「补 `>`」迁移动作退场，本行期望动作集为空（金表保留这条以记录**行为变化**）。
+    name: "裸旁白（W1 后零动作）",
     source: "# 机 开场\n\n她点了点头。\n",
     line: 3,
-    facts: [
-        {
-          "kind": "migrate",
-          "title": "补旁白锚点 `>`：> 她点了点头。",
-          "code": "core/narrative/bare-narration",
-          "span": {
-            "startLine": 3,
-            "endLine": 3
-          },
-          "edits": [
-            {
-              "range": {
-                "startLine": 3,
-                "startColumn": 1,
-                "endLine": 3,
-                "endColumn": 7
-              },
-              "newText": "> 她点了点头。"
-            }
-          ]
-        }
-      ],
+    facts: [],
   },
   {
     name: "裸引号",

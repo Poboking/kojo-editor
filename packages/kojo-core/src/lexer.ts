@@ -14,11 +14,23 @@ import type { KojoAssignOp, KojoSpan, KojoWaitMode } from './ast.js';
 import { createDiagnosticSink, severityOf, type CoreDiagnosticCode } from './diagnostics.js';
 import { createPositionIndex, type PositionIndex } from './positions.js';
 import {
+  KOJO_ACTION_WORD_ALIAS,
   KOJO_BLANK_LINE,
   KOJO_BLANK_WAIT,
+  KOJO_CANONICAL_CALL_WORD,
+  KOJO_CANONICAL_ELSE_IF_WORD,
+  KOJO_CANONICAL_ELSE_WORD,
+  KOJO_CANONICAL_IF_WORD,
+  KOJO_COMMENT_MARK,
   KOJO_DECL_WORD_SET,
   KOJO_DISPATCH_WORD_SET,
+  KOJO_HEADER_CLOSE,
+  KOJO_HEADER_DECL_ALIAS,
+  KOJO_HEADER_DISPATCH_WORDS,
+  KOJO_HEADER_OPEN,
   KOJO_INDENT_WIDTH,
+  KOJO_NATIVE_CLOSE,
+  KOJO_NATIVE_HEADER,
   KOJO_TABLE_DEFAULT,
   KOJO_THEATER_CLOSE,
   KOJO_THEATER_ERROR_PREFIX,
@@ -95,6 +107,13 @@ const C_COLON_FW = 0xff1a;
  * 词法特判与围栏开启（{@link classifyAll}）共用这一枚，避免两处字面量各写各的。
  */
 const NATIVE_DISPATCH_WORD = '原生';
+const C_HEADER_OPEN = 0x3010; // 【
+const C_COMMENT_MARK = 0x203b; // ※
+
+/** 全角冒号（W1 正典）；半角冒号留给旧写法/表达式，不在这里认。 */
+const C_COLON_FULL = 0xff1a;
+
+
 const C_OPEN_PAREN_FW = 0xff08;
 const C_CLOSE_PAREN_FW = 0xff09;
 const C_CONTINUE = 0x7eed;
@@ -491,15 +510,26 @@ function classifyAll(
   report: LexReporter,
 ): KojoLexLine[] {
   const lines: KojoLexLine[] = [];
-  let fenceIndent: number | null = null;
+  let fence: { readonly indent: number; readonly mode: 'classic' | 'canonical' } | null = null;
   for (let idx = 0; idx < physical.length; idx++) {
     const p = physical[idx]!;
     if (p.blank) {
-      lines.push(fenceIndent !== null ? nativeRecord(p) : blankRecord(p));
+      lines.push(fence !== null ? nativeRecord(p) : blankRecord(p));
       continue;
     }
-    if (fenceIndent !== null) {
-      if (p.indentWidth > fenceIndent) {
+    if (fence !== null && fence.mode === 'canonical') {
+      // `【原生】…【/原生】`：块体 raw 行原样收，直到独立收口行；不要求缩进。
+      const trimmed = p.text.slice(p.indentChars).trim();
+      if (trimmed === KOJO_NATIVE_CLOSE) {
+        lines.push({ ...nativeRecord(p), close: true });
+        fence = null;
+        continue;
+      }
+      lines.push(nativeRecord(p));
+      continue;
+    }
+    if (fence !== null) {
+      if (p.indentWidth > fence.indent) {
         lines.push(nativeRecord(p));
         continue;
       }
@@ -508,15 +538,39 @@ function classifyAll(
       const trimmed = p.text.slice(p.indentChars).trim();
       if (trimmed === '}') {
         lines.push({ ...nativeRecord(p), close: true });
-        fenceIndent = null;
+        fence = null;
         continue;
       }
-      fenceIndent = null;
+      fence = null;
+    }
+    // W3：方寸原生块头先于普通行分类；归一化成 `@原生{` 的 dispatch 记录（parser 零改动）。
+    const trimmedContent = p.text.slice(p.indentChars).trim();
+    if (trimmedContent === KOJO_NATIVE_HEADER) {
+      const cs = p.offset + p.indentChars;
+      const ce = trimEndOffset(source, cs, p.offset + p.text.length);
+      lines.push({
+        kind: 'dispatch',
+        number: p.number,
+        lineOffset: p.offset,
+        contentOffset: cs,
+        contentEnd: ce,
+        indent: p.indentWidth,
+        tabs: p.tabs,
+        text: trimmedContent,
+        invalid: false,
+        word: NATIVE_DISPATCH_WORD,
+        rest: '',
+        restOffset: ce,
+        nativeForm: 'canonical',
+        known: true,
+      });
+      fence = { indent: p.indentWidth, mode: 'canonical' };
+      continue;
     }
     const record = classifyLine(source, p, report);
     lines.push(record);
     if (record.kind === 'dispatch' && record.known && record.word === NATIVE_DISPATCH_WORD) {
-      fenceIndent = p.indentWidth;
+      fence = { indent: p.indentWidth, mode: 'classic' };
     }
   }
   return lines;
@@ -586,6 +640,265 @@ function baseOf(ctx: LineCtx): {
   };
 }
 
+/**
+ * 方寸声明 `【…】`：W1 新正典的文件级声明族。
+ *
+ * 只接受"整行恰为 `【…】`"形态（`】` 后不允许尾随内容）；`【剧场：…】` 在更前面已截走。
+ * 返回 null = 本行不是方寸声明，交回既有五锚点分类。
+ */
+function classifyHeader(ctx: LineCtx): KojoLexLine | null {
+  const { content, cs, ce, report } = ctx;
+  if (content.charCodeAt(0) !== C_HEADER_OPEN) return null;
+
+  const close = content.indexOf(KOJO_HEADER_CLOSE, 1);
+  let invalid = ctx.invalid;
+  if (close < 0) {
+    report('core/lex/anchor', '方寸声明缺收口 `】`（形如 `【幕 神社清晨】`）。', cs, ce);
+    return { kind: 'unknown', ...baseOf(ctx), invalid: true, reason: 'header-unclosed' };
+  }
+  if (content.slice(close + 1).trim().length > 0) {
+    report('core/lex/anchor', '方寸声明 `】` 后不能有内容（整行只写一条声明）。', cs + close + 1, ce);
+    invalid = true;
+  }
+
+  const inner = content.slice(1, close);
+  const innerStart = cs + 1;
+  let k = 0;
+  while (k < inner.length && isSpaceCode(inner.charCodeAt(k))) k++;
+  const wordEnd = scanWordEnd(inner, k);
+  const rawWord = inner.slice(k, wordEnd);
+  if (rawWord.length === 0) {
+    report('core/lex/anchor', '方寸声明缺词（形如 `【幕 神社清晨】` / `【设 名 整数 = 0】`）。', cs, ce);
+    return { kind: 'unknown', ...baseOf(ctx), invalid: true, reason: 'header-empty' };
+  }
+  let r = wordEnd;
+  while (r < inner.length && isSpaceCode(inner.charCodeAt(r))) r++;
+  const rest = inner.slice(r).trimEnd();
+  const restOffset = innerStart + r;
+  const restEnd = cs + close;
+  const word = KOJO_HEADER_DECL_ALIAS.get(rawWord) ?? rawWord;
+  const surface: 'fixed' | 'set' | undefined =
+    rawWord === '定' ? 'fixed' : word === '设' ? 'set' : undefined;
+
+  if (KOJO_HEADER_DISPATCH_WORDS.has(word)) {
+    return {
+      kind: 'dispatch',
+      ...baseOf(ctx),
+      invalid,
+      word,
+      rest,
+      restOffset,
+      restEnd,
+      known: KOJO_DISPATCH_WORD_SET.has(word),
+    };
+  }
+  return {
+    kind: 'decl',
+    ...baseOf(ctx),
+    invalid,
+    word,
+    rest,
+    restOffset,
+    restEnd,
+    known: KOJO_DECL_WORD_SET.has(word),
+    ...(surface !== undefined ? { surface } : {}),
+  };
+}
+
+/** 由 `演：` / 旧 `!` 共用的触发行构造（名字 + 可选实参）。 */
+function triggerFromRest(
+  ctx: LineCtx,
+  rest: string,
+  restOffset: number,
+  invalidIn: boolean,
+): KojoTriggerRecord {
+  const { content, cs, ce, report } = ctx;
+  let invalid = ctx.invalid || invalidIn;
+  let k = 0;
+  let nameEnd = k;
+  while (nameEnd < rest.length) {
+    const c = rest.charCodeAt(nameEnd);
+    if (isSpaceCode(c) || c === C_OPEN_PAREN) break;
+    nameEnd++;
+  }
+  const name = rest.slice(k, nameEnd);
+  const nameOffset = restOffset + k;
+  let args: readonly KojoCallArg[] = [];
+  let hasParens = false;
+  let j = nameEnd;
+  while (j < rest.length && isSpaceCode(rest.charCodeAt(j))) j++;
+  if (j < rest.length && rest.charCodeAt(j) === C_OPEN_PAREN) {
+    hasParens = true;
+    const close = matchParenEnd(rest, j);
+    if (close < 0) {
+      report('core/lex/anchor', '实参括号未闭合：缺 `)`。', restOffset + j, ce);
+      invalid = true;
+    } else {
+      args = splitTopLevelArgs(rest.slice(j + 1, close), restOffset + j + 1);
+      if (rest.slice(close + 1).trim().length > 0) {
+        report('core/lex/anchor', '实参括号 `)` 后不能有内容。', restOffset + close + 1, ce);
+        invalid = true;
+      }
+    }
+  }
+  return {
+    kind: 'trigger',
+    ...baseOf(ctx),
+    invalid,
+    name,
+    nameOffset,
+    args,
+    hasParens,
+  };
+}
+
+/** 判断冒号后的内容像不像正文（句读标点 = 正文，不是表达式/参数）。 */
+function looksLikeProse(text: string): boolean {
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    // 。！？；，、：… 的正文句读：出现即按正文处理，避免行首保留词静默吃稿子。
+    if (c === 0x3002 || c === 0xff01 || c === 0xff1f || c === 0xff1b || c === 0xff0c || c === 0x3001 || c === 0x2026) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * W1 冒号动作族：`算：` / `色：…` / `择一：` / `组：` / `循环：…` / `重复：…` /
+ * `遍历：…` / `标：…` / `跳：…` / `演：名字(实参)`，以及条件族 `若/再若/否则`。
+ *
+ * 颜色等参数仍放在冒号后；块体由既有 parser 的缩进块逻辑接管。返回 null = 不是新表面，
+ * 交回既有五锚点分类（旧 `@` / `?` / `!` 写法继续走原路径）。
+ *
+ * **防误吃正文**（迁移盘点实证）：行首保留词只在"后面确实像表达式/参数"时才认；
+ * 出现中文句读（`。！？；，、…`）一律按正文返回 null，避免 `循环：日子一天天过去。`
+ * 被静默编译成 WHILE、`否则：我们走吧。` 整行消失。块头词（算/组/择一）不允许行内内容，
+ * 非空即报错（不是静默变正文）。
+ */
+function classifyCanonicalAction(ctx: LineCtx): KojoLexLine | null {
+  const { content, cs, ce, report } = ctx;
+
+  // 独立成行的循环控制词：W1 兼容 `断` / `续`；W2 正典 `跳出循环` / `下一轮`。
+  if (content === '断' || content === '续') {
+    return {
+      kind: 'dispatch',
+      ...baseOf(ctx),
+      invalid: ctx.invalid,
+      word: content,
+      rest: '',
+      restOffset: ce,
+      known: true,
+    };
+  }
+  // W3：函数返回正典 `返回`（无值）/ `返回：表达式`；旧 `@返` 继续兼容。
+  if (content === '返回') {
+    return {
+      kind: 'dispatch',
+      ...baseOf(ctx),
+      invalid: ctx.invalid,
+      word: '返',
+      rest: '',
+      restOffset: ce,
+      known: true,
+    };
+  }
+  if (content === '跳出循环' || content === '下一轮') {
+    return {
+      kind: 'dispatch',
+      ...baseOf(ctx),
+      invalid: ctx.invalid,
+      word: content === '跳出循环' ? '断' : '续',
+      rest: '',
+      restOffset: ce,
+      known: true,
+    };
+  }
+
+  // 调用：`演：名字(...)`（池/模板/函数统一入口）
+  if (content.startsWith(`${KOJO_CANONICAL_CALL_WORD}：`)) {
+    let k = 2;
+    while (k < content.length && isSpaceCode(content.charCodeAt(k))) k++;
+    if (k >= content.length) {
+      report('core/lex/anchor', '`演：` 后面缺被调名字（池 / 模板 / 函数）。', cs, ce);
+      return { kind: 'unknown', ...baseOf(ctx), invalid: true, reason: 'bare-perform' };
+    }
+    // `演：她笑了。` 更像正文；带句读的内容不认成调用。
+    if (looksLikeProse(content.slice(k))) return null;
+    return triggerFromRest(ctx, content.slice(k), cs + k, ctx.invalid);
+  }
+
+  // 条件族：否则： / 若 条件： / 再若 条件：
+  if (content.startsWith(`${KOJO_CANONICAL_ELSE_WORD}：`)) {
+    const restAfter = content.slice(KOJO_CANONICAL_ELSE_WORD.length + 1).trim();
+    if (restAfter.length > 0) return null; // `否则：正文` 更像正文，不吞整行
+    return {
+      kind: 'condition',
+      ...baseOf(ctx),
+      invalid: ctx.invalid,
+      isDefault: true,
+      test: '',
+      testOffset: ce,
+    };
+  }
+  const ifLen = content.startsWith(KOJO_CANONICAL_ELSE_IF_WORD)
+    ? KOJO_CANONICAL_ELSE_IF_WORD.length
+    : content.startsWith(KOJO_CANONICAL_IF_WORD)
+      ? KOJO_CANONICAL_IF_WORD.length
+      : 0;
+  if (ifLen > 0 && content.length > ifLen && isSpaceCode(content.charCodeAt(ifLen))) {
+    let k = ifLen;
+    while (k < content.length && isSpaceCode(content.charCodeAt(k))) k++;
+    const colon = content.lastIndexOf('：');
+    // 没有收口全角冒号的 `若…` 更像正文（例如「若你愿意……」），不在这里硬认。
+    if (colon > k) {
+      let testEnd = colon;
+      while (testEnd > k && isSpaceCode(content.charCodeAt(testEnd - 1))) testEnd--;
+      const test = content.slice(k, testEnd);
+      if (test.length > 0 && !looksLikeProse(test)) {
+        return {
+          kind: 'condition',
+          ...baseOf(ctx),
+          invalid: ctx.invalid,
+          isDefault: false,
+          test,
+          testOffset: cs + k,
+        };
+      }
+    }
+  }
+
+  // 冒号动作块：词必须精确等于某个动作别名（避免把正文里的「心情：不错」认成指令）
+  const colon = content.indexOf('：');
+  if (colon > 0) {
+    const word = content.slice(0, colon);
+    const mapped = KOJO_ACTION_WORD_ALIAS.get(word);
+    if (mapped !== undefined) {
+      let k = colon + 1;
+      while (k < content.length && isSpaceCode(content.charCodeAt(k))) k++;
+      const rest = content.slice(k).trimEnd();
+      // 块头词不允许行内内容：`算：今天……` 这类给出显式诊断，不静默；
+      // 带参数/条件的动作若内容像正文（含句读），交回正文路径。
+      if ((mapped === '算' || mapped === '组' || mapped === '随机') && rest.length > 0) {
+        report('core/lex/anchor', `\`${word}：\` 是块头，不接行内内容：要写的内容放下一行缩进块。`, cs, ce);
+        return { kind: 'unknown', ...baseOf(ctx), invalid: true, reason: 'action-inline' };
+      }
+      if (rest.length > 0 && looksLikeProse(rest)) return null;
+      return {
+        kind: 'dispatch',
+        ...baseOf(ctx),
+        invalid: ctx.invalid,
+        word: mapped,
+        rest,
+        restOffset: cs + k,
+        known: true,
+      };
+    }
+  }
+
+  return null;
+}
+
 function classifyLine(source: string, p: KojoPhysicalLine, report: LexReporter): KojoLexLine {
   const cs = p.offset + p.indentChars;
   const ce = trimEndOffset(source, cs, p.offset + p.text.length);
@@ -633,7 +946,19 @@ function classifyLine(source: string, p: KojoPhysicalLine, report: LexReporter):
   if (content.startsWith(KOJO_THEATER_ERROR_PREFIX)) {
     return classifyTheater(ctx, 'halfwidth', KOJO_THEATER_ERROR_PREFIX.length);
   }
+  // W1 新正典表面：方寸声明 / 冒号动作 / 若-否则条件 / 演调用，先于五锚点归一化。
+  const canonical = classifyHeader(ctx) ?? classifyCanonicalAction(ctx);
+  if (canonical !== null) return canonical;
   const c0 = content.charCodeAt(0);
+  // 整行注释：`※ …` 为 W1 正典；`//` 继续在物理行预处理里走旧路径。
+  if (c0 === C_COMMENT_MARK) {
+    return {
+      kind: 'comment',
+      ...baseOf(ctx),
+      invalid: ctx.invalid,
+      comment: content.slice(1),
+    };
+  }
   switch (c0) {
     case C_HASH:
       return classifyDecl(ctx);
@@ -905,7 +1230,8 @@ function classifyEscaped(ctx: LineCtx): KojoLexLine {
   let invalid = ctx.invalid;
   const escaped = content.charAt(1);
   const bodyStart = cs + 1; // 去掉行首 `\`，正文从被还原的字符开始
-  const tail = parseTail(ctx, bodyStart, ce);
+  // `\续` 要输出字面「续」而不是等待标记：被还原的首字符是 `续` 时不做行尾等待识别。
+  const tail = parseTail(ctx, bodyStart, ce, escaped !== KOJO_WAIT_CONTINUE);
   if (tail.invalid) invalid = true;
   const parts: KojoTextSegment[] = [];
   let scanFrom = bodyStart;
@@ -1214,7 +1540,7 @@ interface Tail {
   readonly bodyEnd: number;
 }
 
-function parseTail(ctx: LineCtx, start: number, end: number): Tail {
+function parseTail(ctx: LineCtx, start: number, end: number, allowWait = true): Tail {
   const { source, report } = ctx;
   let invalid = false;
   let e = trimEndOffset(source, start, end);
@@ -1222,7 +1548,7 @@ function parseTail(ctx: LineCtx, start: number, end: number): Tail {
   let legacyWait: string | null = null;
 
   // 行尾 `续`：必须前接空白或整行只有它（否则是正文的一部分）
-  if (e > start && source.charCodeAt(e - 1) === C_CONTINUE) {
+  if (allowWait && e > start && source.charCodeAt(e - 1) === C_CONTINUE) {
     if (e - 1 === start || isSpaceCode(source.charCodeAt(e - 2))) {
       wait = 'continue';
       e = trimEndOffset(source, start, e - 1);
