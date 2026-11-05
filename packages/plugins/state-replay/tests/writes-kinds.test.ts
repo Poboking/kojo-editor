@@ -9,8 +9,10 @@
  * 2. **名字不猜**：`CALL_INSTRUCTIONS` / `JUMP_INSTRUCTIONS` 逐条对引擎指令表
  *    （`@kojo/plugin-erb-parser` 的 `ERB_INSTRUCTION_NAMES`）；调用族 = 表里所有
  *    `CALL*` / `TRYCALL*` 动词（机械等式，防手写漂移）。
- * 3. **jump 防刷屏**：只有跳转行**之后**还有 `assign` / `instruction` / `call` 写点时才报；
- *    后面没写点（纯前向跳转）不报。被"已建模"放过的本地量赋值不算写点。
+ * 3. **jump 只留给动态跳转**（2026-11-06 可达性批收紧）：静态字面量标签的 `GOTO` / `JUMP`
+ *    已由 `reachability.ts` 建模 ⇒ **不再报** `jump`（跳过的死区间里的写也不报）；
+ *    只有动态跳转（目标算不出来 / 标签不存在）且其后仍有可达写点时才报。
+ *    被"已建模"放过的本地量赋值不算写点。
  */
 import { describe, expect, it } from 'vitest';
 import { ERB_INSTRUCTION_NAMES, ERB_STATEMENT_DIRECTIVES } from '@kojo/plugin-erb-parser';
@@ -93,20 +95,26 @@ describe('写点类别 · call（调用族，不展开）', () => {
   });
 });
 
-describe('写点类别 · jump（平跳形 + 防刷屏）', () => {
+describe('写点类别 · jump（动态跳转 + 防刷屏）', () => {
   it('跳转名字逐条对引擎表（只收平跳形，TRY* 条件跳转不在本表）', () => {
     expect([...JUMP_INSTRUCTIONS].sort()).toEqual(['GOTO', 'GOTOFORM', 'JUMP', 'JUMPFORM']);
     for (const n of JUMP_INSTRUCTIONS) expect(ERB_INSTRUCTION_NAMES).toContain(n);
   });
 
-  it('跳转行之后还有写点 → 报 jump（可达性会影响结论）', () => {
+  it('静态跳转不再报 jump：可达性已建模，被跳过的写不报、标签之后的写照报', () => {
     const lines = linesOf(
       '@FN()',
       'GOTO SKIP_ALL',
       'CFLAG:2 = 1',
       '$SKIP_ALL',
-      'PRINTL 甲',
+      'CFLAG:3 = 2',
     );
+    const writes = detectUnmodeledWrites(lines, 1, lines.length);
+    expect(writes.map((w) => [w.line, w.kind])).toEqual([[5, 'assign']]);
+  });
+
+  it('动态跳转 + 后面还有写点 → 报 jump（可达性目标不可知）', () => {
+    const lines = linesOf('@FN()', 'GOTO %LOCAL%', 'CFLAG:2 = 1');
     const writes = detectUnmodeledWrites(lines, 1, lines.length);
     expect(writes.map((w) => [w.line, w.kind])).toEqual([
       [2, 'jump'],
@@ -131,29 +139,30 @@ describe('写点类别 · jump（平跳形 + 防刷屏）', () => {
     expect(detectUnmodeledWrites(lines, 1, lines.length)).toEqual([]);
   });
 
-  it('多个跳转各按"自己之后有没有写点"判；结果按行序合并', () => {
+  it('多个静态跳转：都不报 jump，跳过的写点不报，结果只剩可达写点', () => {
     const lines = linesOf(
-      'GOTO A', // 1：后面有写点（5）⇒ 报
-      '$A',
-      'CALL FOO', // 3：call 写点
-      'JUMP B', // 4：后面有写点（6）⇒ 报
-      'SETBIT CFLAG:2, 1', // 5：写点
-      'JUMP C', // 6：后面没有写点 ⇒ 不报
-      '$B',
-      '$C',
+      'GOTO A', // 1：跳 2，静态 ⇒ 不报
+      '$A', // 2
+      'CALL FOO', // 3：可达写点
+      'JUMP B', // 4：跳 7，静态 ⇒ 不报
+      'SETBIT CFLAG:2, 1', // 5：跳过 ⇒ 不可达
+      'JUMP C', // 6：跳过 ⇒ 不可达
+      '$B', // 7
+      '$C', // 8
     );
     const writes = detectUnmodeledWrites(lines, 1, lines.length);
-    expect(writes.map((w) => [w.line, w.kind])).toEqual([
-      [1, 'jump'],
-      [3, 'call'],
-      [4, 'jump'],
-      [5, 'instruction'],
-    ]);
+    expect(writes.map((w) => [w.line, w.kind])).toEqual([[3, 'call']]);
   });
 
-  it('函数区间外（endLine 之后）的写点不算数：jump 仍按本区间判', () => {
-    const lines = linesOf('GOTO END', '$END', 'PRINTL 甲', 'CFLAG:2 = 1');
-    expect(detectUnmodeledWrites(lines, 1, 3)).toEqual([]);
-    expect(detectUnmodeledWrites(lines, 1, 4).map((w) => w.kind)).toEqual(['jump', 'assign']);
+  it('跳转目标在窗口外 ⇒ 按动态保守（窗口内全可达）；窗口外写点不报', () => {
+    const lines = linesOf('GOTO OUT', 'CFLAG:1 = 1', 'CFLAG:2 = 2', '$OUT');
+    // 标签在 4（窗口外）⇒ 动态 ⇒ 窗口内全可达
+    expect(detectUnmodeledWrites(lines, 1, 3).map((w) => [w.line, w.kind])).toEqual([
+      [1, 'jump'],
+      [2, 'assign'],
+      [3, 'assign'],
+    ]);
+    // 标签进窗口 ⇒ 静态 ⇒ 1 只连 4，2 / 3 不可达 ⇒ 一条都不报
+    expect(detectUnmodeledWrites(lines, 1, 4)).toEqual([]);
   });
 });

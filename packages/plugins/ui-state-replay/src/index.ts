@@ -65,6 +65,7 @@ import type {
   ProjectService,
   QuickEditField,
   ReplayCallContext,
+  ReplayFunctionOptions,
   ReplayStateView,
   SlotRegistry,
   SnapshotSourceService,
@@ -92,6 +93,7 @@ import {
   locateNoticeFor,
   mergeSlotInputs,
   overridesForField,
+  overridesForPanel,
   parseCallContextText,
   predicateGloss,
   predicateValues,
@@ -154,6 +156,14 @@ const SCENES_STORAGE_KEY = 'replay-scenes';
  * 存在本插件自己的域里（不跨域读别人的），切回来至少还原到"上次看的那一段"。
  */
 const LAST_DEBUG_TARGET_KEY = 'last-debug-target';
+
+/**
+ * 多文件缓冲文本选项（2026-11-05 边界批；引擎 additive，**不进 plugin-api 契约**——
+ * 开机图字节闸只剩 22 B）。形如 `readonly { filePath; text }[]`，与引擎本地声明结构同形，
+ * 靠结构化类型对上；`ReplayFunctionOptions & MultiFileOverrides` 交叉类型 + 变量中转
+ * 绕开 excess property 检查（**不改契约**）。
+ */
+type MultiFileOverrides = { textOverrides?: readonly { filePath: string; text: string }[] };
 
 /**
  * 整档体检的**预算**（2026-11-05 边界批 · 车道 S4）。
@@ -731,6 +741,26 @@ export function createUiStateReplayPlugin(): Plugin {
             return chooseReplayText(path, bufferedFor(path));
           })();
 
+        /**
+         * 组装回放选项（2026-11-05 边界批 · 多文件缓冲文本）。
+         *
+         * 主文件仍走 `textOverride`（旧口径逐字不变）；**另外**把面板里开着且有缓冲文本
+         * 的文件整张表交给引擎的 `textOverrides`——被调段在别的未保存文件里时，跨函数写
+         * 传播（`calleeWrites`）也按作者眼前那份字算。两者允许重复，引擎按路径取。
+         * 表由纯函数 `panel-logic.overridesForPanel` 折（去重 / 上限 4 / 顺序稳定）。
+         */
+        const replayOptionsFor = (
+          choice: ReplayTextChoice,
+          callContext?: ReplayCallContext,
+        ): ReplayFunctionOptions & MultiFileOverrides => {
+          const textOverrides = overridesForPanel(bufferedDocsRef.current);
+          return {
+            ...(callContext !== undefined ? { callContext } : {}),
+            ...(choice.textOverride !== undefined ? { textOverride: choice.textOverride } : {}),
+            ...(textOverrides.length > 0 ? { textOverrides } : {}),
+          };
+        };
+
         const runReplay = (nameOverride?: string, locate: LocateRequest | null = null): void => {
           // 2026-10-16 busy 同门：按钮 disabled 只拦鼠标，Enter 直调绕过拦截——
           // 并发回放结果乱序覆盖。统一在函数入口同门拦截（ref 口径，防同 tick 双击）。
@@ -760,10 +790,7 @@ export function createUiStateReplayPlugin(): Plugin {
           replayBusyRef.current = true;
           setReplayBusy(true);
           void replay
-            .replayFunction(view, name, {
-              callContext: assembled.callContext,
-              ...(textChoice.textOverride !== undefined ? { textOverride: textChoice.textOverride } : {}),
-            })
+            .replayFunction(view, name, replayOptionsFor(textChoice, assembled.callContext))
             .then((r) => {
               if (r === null) {
                 setReplayError(`这一段没有登记到可判定的条件（名字：${name}）——多半是这段里根本没有条件语句，或者它没进条件索引。`);
@@ -1005,10 +1032,7 @@ export function createUiStateReplayPlugin(): Plugin {
             replay: (name) => {
               // 与主判定同口径：文本来源也走同一条裁决（同文件 + 有未保存编辑 → 缓冲文本）
               const textChoice = textChoiceFor(name);
-              return replay.replayFunction(v, name, {
-                callContext: cc,
-                ...(textChoice.textOverride !== undefined ? { textOverride: textChoice.textOverride } : {}),
-              });
+              return replay.replayFunction(v, name, replayOptionsFor(textChoice, cc));
             },
           })
             .then((s) => {
@@ -1172,12 +1196,9 @@ export function createUiStateReplayPlugin(): Plugin {
               archiveScanNameRef.current = name;
               const choice = textChoiceFor(name);
               const v = await viewFor(no);
-              return replay.replayFunctionWithOverrides!(
-                v,
-                name,
-                {},
-                choice.textOverride !== undefined ? { textOverride: choice.textOverride } : {},
-              );
+              // 多文件缓冲文本（2026-11-05 边界批）：整档体检与单段判定同一张表
+              const opts: ReplayFunctionOptions & MultiFileOverrides = replayOptionsFor(choice);
+              return replay.replayFunctionWithOverrides!(v, name, {}, opts);
             },
             perCharCap: ARCHIVE_SCAN_PER_CHAR_CAP,
             totalCap: ARCHIVE_SCAN_TOTAL_CAP,
@@ -1814,10 +1835,12 @@ export function createUiStateReplayPlugin(): Plugin {
                             // 预演与正式判定必须同一份文本（2026-11-05 口径）：正式判定可能用缓冲文本，
               // 预演却读盘的话，同屏会出现"预演说会变、判定说没变"的割裂。
               const previewText = judgeTextRef.current ?? textChoiceFor(result.normalizedName);
-              return replay.replayFunctionWithOverrides!(view, result.normalizedName, ov, {
-                callContext: cc.callContext,
-                ...(previewText.textOverride !== undefined ? { textOverride: previewText.textOverride } : {}),
-              });
+              // 多文件缓冲文本（2026-11-05 边界批）：预演与判定同一张表、同一份正文
+              const previewOpts: ReplayFunctionOptions & MultiFileOverrides = replayOptionsFor(
+                previewText,
+                cc.callContext,
+              );
+              return replay.replayFunctionWithOverrides!(view, result.normalizedName, ov, previewOpts);
             })
             .then((r) => {
               setPreview(r);
@@ -2200,7 +2223,7 @@ export function createUiStateReplayPlugin(): Plugin {
           createElement(
             'div',
             { className: 'dim rp-hint' },
-            '有未保存编辑时按编辑器缓冲文本判定（结果区会标出用哪份文本）；没有未保存编辑就按磁盘文件。',
+            '有未保存编辑时按编辑器缓冲文本判定（结果区会标出用哪份文本）；没有未保存编辑就按磁盘文件。同文件与其它开着未保存的文件里的被调段，都按编辑器文本算；没开着的文件读磁盘。',
           ),
           // 编辑器里这份文件脏没脏：让"我现在改的字会被算进去"这件事在按判定之前就看得见
           latestBufferedRef.current !== null && latestBufferedRef.current.dirty

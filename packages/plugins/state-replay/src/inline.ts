@@ -36,6 +36,20 @@
  *   缓冲区那份文件；跨文件被调函数照旧读盘。磁盘明细先取只为拿 `filePath` 与"在不在
  *   口上索引域"，缓冲区分支再用 `functionPredicates(key, text)` 拿**缓冲坐标**明细，
  *   行数组按 `splitEolLines`（engine 同一份实现）切。
+ *
+ * 2026-11-06 多文件缓冲文本批（状态回放边界批 2；本插件私有）：作者可能同时开着 ≤4 份
+ * 文件，被调函数所在文件也可能未保存。`beginReplay` 入参扩成
+ * `{ filePath, text } | { overrides: readonly { filePath, text }[] }`（单文件形态 =
+ * 一条，旧调用方零改动）：
+ * - **集合身份**＝每项 `pathKey + text` 的列表（顺序无关）；逐项 `===` 比文本（不哈希、不拼大
+ *   字符串，150 KB × 4 份也不产生临时串）。集合内容不变 ⇒ 复用同一作用域（桶不重建）；
+ *   任一项路径/文本变 ⇒ 新作用域、generation+1。每个 replay 只做这一次比较。
+ * - **桶按文件分开**（`InlineScope.buckets`，键 = `pathKey`）：同一份缓冲正文里 N 个被调
+ *   函数只切一次行（`bucket.lines`）并各 analyze 一次；**没变的文件沿用旧桶**——集合里
+ *   只有一个文件改文本时，另一文件的被调函数不再重解析。
+ * - `ensureAnalyzed` 仍先 `functionPredicates(key)` 拿 `filePath`（定位文件 + 在不在口上
+ *   索引域），命中 `scope.overrides` 才用 `functionPredicates(key, text)` + 该文件的行；
+ *   否则读盘。磁盘 `cache`/`inFlight` 一字未动，override 结果只进作用域自己的桶。
  */
 
 import { pathKey } from '@kojo/plugin-api';
@@ -343,24 +357,67 @@ export interface InlineOverrideSource {
 }
 
 /**
+ * `beginReplay` 的入参（**向后兼容**）：
+ * - 单文件（旧调用方）：`{ filePath, text }` —— 等价于只有一条的 `overrides`；
+ * - 多文件（面板同时开着的 ≤4 份缓冲）：`{ overrides: readonly InlineOverrideSource[] }`。
+ */
+export type InlineReplaySource =
+  | { readonly filePath: string; readonly text: string }
+  | { readonly overrides: readonly InlineOverrideSource[] };
+
+/**
+ * 归一化后的一条 override（路径已按 plugin-api 的 `pathKey` 折叠）。
+ * 集合身份就是这些项的列表（逐项 `pathKey` + `text` 判等；换顺序不算变）。
+ */
+interface NormalizedOverride {
+  readonly key: string;
+  readonly filePath: string;
+  readonly text: string;
+}
+
+/** analyze 桶（磁盘命名空间或某个 override 文件各有一份） */
+interface CacheBucket {
+  /** 函数名大写 → 结果（null 也在册，避免反复查空） */
+  readonly cache: Map<string, AnalyzedFunction | null>;
+  /** 在途解析合并（同一个函数只解析一次） */
+  readonly inFlight: Map<string, Promise<AnalyzedFunction | null>>;
+}
+
+/** 按文件分开的桶：`pathKey` 相同的被调函数共用一份桶 / 一份行数组 */
+export interface InlineFileBucket extends CacheBucket {
+  /** `pathKey(filePath)`（plugin-api 口径：折叠大小写 / 分隔符） */
+  readonly pathKey: string;
+  readonly filePath: string;
+  /** 该桶对应的缓冲正文（null = 本 replay 里这个文件走磁盘） */
+  readonly text: string | null;
+  /** 该文件的正文行（懒切；override 桶里 N 个被调函数共用，hint 命中时直接收下 engine 切好的那份） */
+  lines: readonly string[] | null;
+}
+
+/**
  * 一次 replay 独占的 override 作用域（`beginReplay` 产出；调用链只传引用，不传正文）。
  *
  * 为什么不把缓存挂在实例上、按"当前文本"查找：`InlineManager` 是 engine 级单例，两个
  * 并发回放（A 看缓冲区 X、B 看缓冲区 Y）会在"谁最后改写了实例字段"上互相踩。这里的
- * 缓存随句柄走：A 只会读自己的 `cache`，B 清不掉 A 的桶，A 也不会把结果写进 B 的桶。
+ * 缓存随句柄走：A 只会读自己的桶，B 清不掉 A 的桶，A 也不会把结果写进 B 的桶。
  *
- * 常驻内存：管理器只留**最后一次** `beginReplay` 的作用域（同文本复用）；文本一变，
- * 新句柄取代旧句柄，旧桶连同其中的 analyze 结果一起可回收。
+ * 常驻内存：管理器只留**最后一次** `beginReplay` 的作用域（集合身份不变即复用）；集合
+ * 一变，新句柄取代旧句柄。**文本没变的文件**沿用旧桶（`buckets` 里直接搬引用），只有
+ * 变了的文件重建 —— 旧桶里其余文件的 analyze 结果不会陪葬。
  */
 export interface InlineScope {
+  /** 首个 override 的文件路径（向后兼容视图；单文件形态就是它自己） */
   readonly filePath: string;
   /** `pathKey(filePath)`（plugin-api 口径：折叠大小写 / 分隔符） */
   readonly pathKey: string;
+  /** 首个 override 的正文（向后兼容视图） */
   readonly text: string;
-  /** 本作用域的 analyze 桶（函数名大写 → 结果；null 也在册，避免反复查空） */
-  readonly cache: Map<string, AnalyzedFunction | null>;
-  /** 在途解析合并（同一次 replay 内同一个函数只解析一次） */
-  readonly inFlight: Map<string, Promise<AnalyzedFunction | null>>;
+  /** 本次 replay 的 override 集合：`pathKey` → 缓冲正文（顺序 = 来源顺序） */
+  readonly overrides: ReadonlyMap<string, string>;
+  /** `pathKey` → 该文件的桶（含本 replay 触到的磁盘文件桶） */
+  readonly buckets: Map<string, InlineFileBucket>;
+  /** 函数名大写 → 所属文件的桶（执行期 `resolveCall` 的 O(1) 入口） */
+  readonly nameIndex: Map<string, InlineFileBucket>;
 }
 
 /**
@@ -376,12 +433,65 @@ export interface InlineLinesHint {
 export interface InlineCacheStats {
   /** 磁盘命名空间的条目数（按函数名，跨 replay 复用） */
   readonly disk: number;
-  /** override 命名空间的条目数（只属于最后一次 `beginReplay` 的作用域） */
+  /** override 命名空间的条目数（最后一次 `beginReplay` 作用域内**所有文件桶之和**） */
   readonly override: number;
-  /** override 来源文件（null = 还没见过任何缓冲区来源） */
+  /** override 来源文件的**首项**（多文件时只看第一个；null = 还没见过任何缓冲区来源） */
   readonly overridePath: string | null;
-  /** override 作用域代数：文本/路径每次变化 +1（旧桶已丢弃，条目数不随代数涨） */
+  /** override 作用域代数：集合身份每变一次 +1（旧桶已丢弃/部分移交，条目数不随代数涨） */
   readonly generation: number;
+}
+
+/** 单文件桶的读数（多文件取证：哪个文件吃缓冲、哪个文件读盘、各有多少条） */
+export interface InlineOverrideFileStat {
+  readonly pathKey: string;
+  readonly filePath: string;
+  /** true = 本次 replay 有该文件的缓冲正文；false = 这个桶装的是本次 replay 的磁盘结果 */
+  readonly overridden: boolean;
+  /** 桶内条目数（函数名，含 null 的"查过但不在口上域"） */
+  readonly entries: number;
+}
+
+/**
+ * 入参归一：`pathKey → { filePath, text }`（**路径折叠用 plugin-api 的 `pathKey`**，不自己写
+ * 归一）。重复 `pathKey` 后见胜出、保留首次出现的位序（位序只影响诊断读数，不进身份）。
+ */
+function normalizeReplaySource(source: InlineReplaySource): NormalizedOverride[] {
+  const list: readonly InlineOverrideSource[] = 'overrides' in source ? source.overrides : [source];
+  const byKey = new Map<string, { filePath: string; text: string }>();
+  for (const item of list) {
+    // Map.set 对已有键只换值、不动位序 ⇒ 重复项 = 后见胜出，位序按首次出现
+    byKey.set(pathKey(item.filePath), { filePath: item.filePath, text: item.text });
+  }
+  return [...byKey.entries()].map(([key, v]) => ({ key, filePath: v.filePath, text: v.text }));
+}
+
+/**
+ * 集合身份比较：**逐项** `pathKey + text`（文本用 `===` 比引用/内容同一批字符串），
+ * 顺序不参与身份（面板换顺序不该重建桶）。n ≤ 4 ⇒ 最坏 16 次键比较，零分配；
+ * 不哈希、不拼 key 串（那会把 150 KB 正文再读一遍 / 分配一份等长临时串）。
+ */
+function sameOverrideSet(prev: ReadonlyMap<string, string>, entries: readonly NormalizedOverride[]): boolean {
+  if (prev.size !== entries.length) return false;
+  for (const [key, text] of prev) {
+    let matched = false;
+    for (const entry of entries) {
+      if (entry.key !== key) continue;
+      matched = entry.text === text;
+      break;
+    }
+    if (!matched) return false;
+  }
+  return true;
+}
+
+/** 建一个按文件的空桶（`text = null` = 本 replay 里这个文件走磁盘） */
+function createFileBucket(pathKeyValue: string, filePath: string, text: string | null): InlineFileBucket {
+  return { pathKey: pathKeyValue, filePath, text, cache: new Map(), inFlight: new Map(), lines: null };
+}
+
+/** 桶类型判别：磁盘命名空间的桶没有文件身份（scope 里的桶都有） */
+function isFileBucket(bucket: CacheBucket): bucket is InlineFileBucket {
+  return 'filePath' in bucket;
 }
 
 /**
@@ -395,38 +505,71 @@ export class InlineManager {
   /** **磁盘命名空间**（语义与本批之前一字不动：按函数名定格、跨 replay 复用） */
   private readonly cache = new Map<string, AnalyzedFunction | null>();
   private readonly inFlight = new Map<string, Promise<AnalyzedFunction | null>>();
-  /** 上一次 override 来源的作用域（文本 / 路径判等命中即复用；变了就整体丢弃） */
+  /** 上一次 override 集合的作用域（集合身份命中即复用；变了就建新作用域） */
   private lastScope: InlineScope | null = null;
-  /** override 作用域代数（仅诊断：证明"文本变化 = 新桶 + 旧桶丢弃"） */
+  /** override 作用域代数（仅诊断：证明"集合变化 = 新桶 + generation+1"） */
   private generation = 0;
   /** 磁盘命名空间的桶视图（只包引用：`reset()` 清的是同一批 Map，不换对象） */
-  private readonly diskBucket = { cache: this.cache, inFlight: this.inFlight };
+  private readonly diskBucket: CacheBucket = { cache: this.cache, inFlight: this.inFlight };
 
   constructor(private readonly deps: InlineManagerDeps) {}
 
-  /** 项目切换 / 索引重建时清空（函数体可能已变）：两桶一起清 */
+  /**
+   * 项目切换 / 索引重建时清空（函数体可能已变）：**两桶一起清**。
+   * 旧作用域句柄（并发回放手里那个）里的桶也一并清空 —— `reset()` 之后不许再命中
+   * 旧索引下算出来的结果；句柄对象本身还在，但桶是空的。
+   */
   reset(): void {
     this.cache.clear();
     this.inFlight.clear();
+    if (this.lastScope !== null) {
+      for (const bucket of this.lastScope.buckets.values()) {
+        bucket.cache.clear();
+        bucket.inFlight.clear();
+      }
+      this.lastScope.nameIndex.clear();
+    }
     this.lastScope = null;
   }
 
   /**
-   * 领取本次 replay 的 override 作用域（**每次回放只调一次**，也是全链路唯一做文本身份
-   * 比较的地方）：与上一次来源同文件（`pathKey` 口径）且同文本 ⇒ 复用它的桶；否则新建
-   * 一个空桶（旧桶就此丢弃，等于"文本变化即清空"）。无 override ⇒ null（走磁盘命名空间）。
+   * 领取本次 replay 的 override 作用域（**每次回放只调一次**，也是全链路唯一做集合身份
+   * 比较的地方）：
+   * - 入参归一成 `pathKey → 正文`（单文件形态 = 一条）；
+   * - 与上一次集合**逐项**比（`pathKey` + 文本 `===`，换顺序不算变）⇒ 内容不变就复用同一作用域，
+   *   桶不重建；
+   * - 任一项变化 ⇒ 新作用域、generation+1；**文本没变的文件沿用旧桶**（只重建变了的那份）；
+   * - 无 override / 空集合 ⇒ null（走磁盘命名空间）。
+   *
+   * 为什么逐项比 `===` 而不是哈希 / 拼串：集合至多 4 项、文本是同一批字符串引用
+   * （150 KB 正文不在每次回放里被再读一遍），逐项比较最坏 4×4 次键比较 + 4 次指针比较，
+   * 比"算哈希（要把 600 KB 读一遍）"或"拼 key（要分配 600 KB 临时串）"都快且零分配。
    */
-  beginReplay(override?: InlineOverrideSource | null): InlineScope | null {
-    if (!override) return null;
-    const key = pathKey(override.filePath);
+  beginReplay(source?: InlineReplaySource | null): InlineScope | null {
+    if (!source) return null;
+    const entries = normalizeReplaySource(source);
+    if (entries.length === 0) return null;
     const last = this.lastScope;
-    if (last !== null && last.pathKey === key && last.text === override.text) return last;
+    if (last !== null && sameOverrideSet(last.overrides, entries)) return last;
+
+    // 新作用域：每个 override 文件一个桶；**文本没变的文件搬旧桶**（不重解析）
+    const buckets = new Map<string, InlineFileBucket>();
+    const nameIndex = new Map<string, InlineFileBucket>();
+    for (const entry of entries) {
+      const reusable =
+        last !== null && last.overrides.get(entry.key) === entry.text ? last.buckets.get(entry.key) : undefined;
+      const bucket = reusable ?? createFileBucket(entry.key, entry.filePath, entry.text);
+      buckets.set(entry.key, bucket);
+      for (const name of bucket.cache.keys()) nameIndex.set(name, bucket);
+    }
+    const first = entries[0]!;
     const scope: InlineScope = {
-      filePath: override.filePath,
-      pathKey: key,
-      text: override.text,
-      cache: new Map(),
-      inFlight: new Map(),
+      filePath: first.filePath,
+      pathKey: first.key,
+      text: first.text,
+      overrides: new Map(entries.map((e) => [e.key, e.text] as const)),
+      buckets,
+      nameIndex,
     };
     this.lastScope = scope;
     this.generation++;
@@ -435,20 +578,65 @@ export class InlineManager {
 
   /** 缓存读数（测试 / 面板自证用；不是回放语义的一部分） */
   cacheStats(): InlineCacheStats {
+    let override = 0;
+    if (this.lastScope !== null) {
+      for (const bucket of this.lastScope.buckets.values()) override += bucket.cache.size;
+    }
     return {
       disk: this.cache.size,
-      override: this.lastScope?.cache.size ?? 0,
+      override,
       overridePath: this.lastScope?.filePath ?? null,
       generation: this.generation,
     };
   }
 
-  /** 当前 replay 的 analyze 桶与在途表（scope = null → 磁盘命名空间） */
-  private bucketOf(scope: InlineScope | null): {
-    cache: Map<string, AnalyzedFunction | null>;
-    inFlight: Map<string, Promise<AnalyzedFunction | null>>;
-  } {
-    return scope ?? this.diskBucket;
+  /** 作用域内按文件分桶的读数（多文件取证：谁吃缓冲、谁读盘、各多少条） */
+  overrideFileStats(): InlineOverrideFileStat[] {
+    if (this.lastScope === null) return [];
+    const out: InlineOverrideFileStat[] = [];
+    for (const bucket of this.lastScope.buckets.values()) {
+      out.push({
+        pathKey: bucket.pathKey,
+        filePath: bucket.filePath,
+        overridden: bucket.text !== null,
+        entries: bucket.cache.size,
+      });
+    }
+    return out;
+  }
+
+  /** 函数名已在本作用域里解析过 → 找出它在哪个文件的桶（同时补 nameIndex） */
+  private findBucket(scope: InlineScope, name: string): InlineFileBucket | undefined {
+    for (const bucket of scope.buckets.values()) {
+      if (bucket.cache.has(name)) {
+        scope.nameIndex.set(name, bucket);
+        return bucket;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * 取（或懒建）某个文件的桶：override 集合里列了的文件在 `beginReplay` 就已建好
+   * （可能复用了旧桶）；本 replay 里第一次触到的磁盘文件按需建一个空桶。
+   * 桶只属于**本次 replay 的命名空间**（不写磁盘 `cache`/`inFlight`）。
+   */
+  private bucketForFile(scope: InlineScope, filePath: string): InlineFileBucket {
+    const key = pathKey(filePath);
+    const existing = scope.buckets.get(key);
+    if (existing !== undefined) return existing;
+    const bucket = createFileBucket(key, filePath, scope.overrides.get(key) ?? null);
+    scope.buckets.set(key, bucket);
+    return bucket;
+  }
+
+  /** 文件行数组：hint 命中复用 engine 切好的那份；否则整份正文只切一次（桶里记住） */
+  private overrideLinesOf(bucket: InlineFileBucket, hint?: InlineLinesHint): readonly string[] {
+    if (bucket.lines === null) {
+      bucket.lines =
+        hint !== undefined && hint.pathKey === bucket.pathKey ? hint.lines : splitEolLines(bucket.text ?? '');
+    }
+    return bucket.lines;
   }
 
   /** 记一条 reject 日志（两桶共用口径） */
@@ -461,7 +649,9 @@ export class InlineManager {
   /**
    * 直接种入函数自身（engine 已经把**同一份正文**的明细与行切好了）：省掉
    * `functionPredicates(key)` + `functionPredicates(key, text)` 两次重取与一次重复 analyze。
-   * 桶里已有（上一次同文本 replay 分析过）就直接用，不覆盖。
+   * 桶里已有（上一次同文本 replay 分析过 / 同一份正文里别的函数先种过）就直接用，不覆盖。
+   * 落桶按 `detail.filePath` 选文件：override 文件进它的桶（行数组顺手记住），其余进
+   * 本 replay 的磁盘文件桶。
    */
   private seed(
     key: string,
@@ -469,27 +659,34 @@ export class InlineManager {
     lines: readonly string[],
     scope: InlineScope | null,
   ): AnalyzedFunction | null {
-    const { cache } = this.bucketOf(scope);
-    const hit = cache.get(key);
+    const bucket: CacheBucket =
+      scope === null ? this.diskBucket : this.bucketForFile(scope, detail.filePath);
+    const hit = bucket.cache.get(key);
     if (hit !== undefined) return hit;
     const analyzed = analyzeInlineBody(detail, lines);
     this.logReject(key, analyzed);
-    cache.set(key, analyzed);
+    bucket.cache.set(key, analyzed);
+    if (scope !== null && isFileBucket(bucket)) {
+      scope.nameIndex.set(key, bucket);
+      // engine 切好的行 = 该 override 文件的正文行：同文件其余被调函数直接复用，不再重切
+      if (bucket.text !== null && bucket.lines === null) bucket.lines = lines;
+    }
     return analyzed;
   }
 
   /**
-   * analyze 单函数（缓存共享；与在途解析合并）。
+   * analyze 单函数（按文件分桶；与在途解析合并）。
    *
-   * 取文本逻辑（2026-11-05 缓冲文本批）：
+   * 取文本逻辑（2026-11-06 多文件批）：
    * 1. 先 `functionPredicates(key)` 拿磁盘明细——只为 `filePath` 与"在不在口上索引域"；
-   * 2. 本次 replay 有 override 且 `pathKey(detail.filePath)` 等于来源文件 ⇒ 再
-   *    `functionPredicates(key, scope.text)` 拿**缓冲坐标**明细，行数组按 `splitEolLines`
-   *    切（`hint` 命中时复用 engine 已切好的那份，不再重切）；
+   * 2. 该 `filePath` 在**本次 replay 的 override 集合**里 ⇒ `functionPredicates(key, text)`
+   *    拿**缓冲坐标**明细，行数组用该文件桶里的那份（hint 命中 = engine 已切好，直接收下；
+   *    否则整份正文只 `splitEolLines` 一次）；
    * 3. 否则照旧走磁盘：`readFileLines(detail.filePath)`。
    *
-   * 结果只写进**本次 replay 所属的桶**（scope 非空 → override 桶），磁盘桶绝不被
-   * override 结果写入，反之亦然。
+   * 结果只写进**本次 replay 所属的文件桶**（scope 非空），磁盘 `cache`/`inFlight` 绝不被
+   * override 结果写入，反之亦然。同一份正文里 N 个被调函数各 analyze 一次、行切一次；
+   * 不同文件各自独立（一个文件改文本不牵动另一个文件已解析的桶）。
    */
   private async ensureAnalyzed(
     name: string,
@@ -497,25 +694,43 @@ export class InlineManager {
     hint?: InlineLinesHint,
   ): Promise<AnalyzedFunction | null> {
     const key = name.toUpperCase();
-    const { cache, inFlight } = this.bucketOf(scope);
-    const hit = cache.get(key);
+    if (scope === null) return this.analyzeIn(this.diskBucket, key, hint);
+    // 本 replay 见过这个函数（含复用旧桶搬进来的名字）→ 桶已知，直接查
+    const known = scope.nameIndex.get(key) ?? this.findBucket(scope, key);
+    if (known !== undefined) return this.analyzeIn(known, key, hint);
+    // 首次见到：磁盘明细只为定位文件（在不在口上域 + 命中哪份 override）
+    const diskDetail = await this.deps.functionPredicates(key);
+    if (!diskDetail) return null; // 不在口上索引域（引擎内置 / 游戏侧函数）
+    const bucket = this.bucketForFile(scope, diskDetail.filePath);
+    scope.nameIndex.set(key, bucket);
+    return this.analyzeIn(bucket, key, hint, diskDetail);
+  }
+
+  /** analyze 一个函数并写进指定桶（cache 命中 → 在途合并 → 实算；三层口径一致） */
+  private async analyzeIn(
+    bucket: CacheBucket,
+    key: string,
+    hint?: InlineLinesHint,
+    prefetchedDiskDetail?: FunctionPredicates,
+  ): Promise<AnalyzedFunction | null> {
+    const hit = bucket.cache.get(key);
     if (hit !== undefined) return hit;
-    const pending = inFlight.get(key);
+    const pending = bucket.inFlight.get(key);
     if (pending) return pending;
 
     const task = (async (): Promise<AnalyzedFunction | null> => {
-      const detail = await this.deps.functionPredicates(key);
-      if (!detail) return null; // 不在口上索引域（引擎内置 / 游戏侧函数）
-      // ---- 缓冲区分支：同一份文件才吃 override（跨文件仍读盘） ----
-      if (scope !== null && pathKey(detail.filePath) === scope.pathKey) {
-        const bufferDetail = await this.deps.functionPredicates(key, scope.text);
+      const fileBucket = isFileBucket(bucket) && bucket.text !== null ? bucket : null;
+      // ---- 缓冲区分支：本文件有 override 正文 ⇒ 明细与行都取这一份 ----
+      if (fileBucket !== null) {
+        const bufferDetail = await this.deps.functionPredicates(key, fileBucket.text!);
         if (!bufferDetail) return null; // 缓冲区里找不到同名函数（改名 / 删掉 / 不在口上域）
-        const lines = hint !== undefined && hint.pathKey === scope.pathKey ? hint.lines : splitEolLines(scope.text);
-        const analyzed = analyzeInlineBody(bufferDetail, lines);
+        const analyzed = analyzeInlineBody(bufferDetail, this.overrideLinesOf(fileBucket, hint));
         this.logReject(key, analyzed);
         return analyzed;
       }
       // ---- 磁盘分支（原语义） ----
+      const detail = prefetchedDiskDetail ?? (await this.deps.functionPredicates(key));
+      if (!detail) return null;
       let lines: readonly string[];
       try {
         lines =
@@ -531,10 +746,10 @@ export class InlineManager {
       return analyzed;
     })();
 
-    inFlight.set(key, task);
+    bucket.inFlight.set(key, task);
     const result = await task;
-    inFlight.delete(key);
-    cache.set(key, result);
+    bucket.inFlight.delete(key);
+    bucket.cache.set(key, result);
     return result;
   }
 
@@ -626,7 +841,10 @@ export class InlineManager {
   ): ReplayValue | null {
     if (depth > MAX_INLINE_DEPTH) return null;
     const key = name.toUpperCase();
-    const analyzed = this.bucketOf(scope).cache.get(key);
+    // 按文件的桶：preanalyze 已把函数名 → 桶登记在 nameIndex；并发窗口里漏登记的
+    // 名字扫一遍 ≤4 个桶补上（不重解析，只是指针查找）。
+    const bucket = scope === null ? this.diskBucket : (scope.nameIndex.get(key) ?? this.findBucket(scope, key));
+    const analyzed = bucket?.cache.get(key);
     if (analyzed === undefined || analyzed === null || analyzed.kind === 'reject') return null;
     if (analyzed.ops.length === 0) {
       return unknownValue('call', `函数体为空，无法内联：${name}()`);

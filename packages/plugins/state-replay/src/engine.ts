@@ -60,7 +60,7 @@ import { createFunctionOverlay, mergeCallContext, type OverlayPosition, type Ove
 import { judgePredicateWithLoops } from './loop-range';
 import { createStateView, type SchemaLookup } from './state-view';
 import { buildTranscript } from './transcript';
-import { detectUnmodeledWrites } from './writes';
+import { detectUnmodeledWrites, type ReplayWrite } from './writes';
 
 /**
  * 函数体行文本缓存上限（2026-10-18 性能批）。
@@ -82,6 +82,62 @@ const LINE_CACHE_MAX_CHARS = 4 * 1024 * 1024;
  * 判据因此就是"archive 对象身份相等"——重解析（mtime/size 变了）即作废，不需要第二把尺。
  */
 const VIEW_CACHE_MAX = 4;
+/** override 切行记忆最多留几份（面板同时开着的缓冲文件上限 4） */
+const OVERRIDE_LINES_MEMO_MAX = 4;
+/** 跨函数写传播每次回放最多查几个被调函数（防巨型函数体拖住面板） */
+const CALL_PROPAGATION_BUDGET = 30;
+
+/**
+ * 多文件缓冲文本（**本地声明，不进 plugin-api 契约**：开机图字节闸只剩 22 B；
+ * 引擎与面板各自声明结构相同的本地类型，靠结构化类型对上，`as` 透传不产生契约面）。
+ */
+export interface ReplayTextOverrideSource {
+  readonly filePath: string;
+  readonly text: string;
+}
+
+/** `replayFunction` 的**本地**扩展选项（`textOverrides` 不进契约，见上） */
+type ReplayOptionsWithOverrides = ReplayFunctionOptions & {
+  readonly textOverrides?: readonly ReplayTextOverrideSource[];
+};
+
+/**
+ * 有效 override 文本：先按**文件身份**查多文件表（`pathKey` 判等），再退回"被判函数那一份"
+ * 的单文件旧口径。没列出、也不是被判函数的文件 → `undefined` = 读盘。
+ */
+function effectiveOverrideText(
+  filePath: string,
+  options?: ReplayOptionsWithOverrides,
+  judgedPath?: string,
+): string | undefined {
+  const list = options?.textOverrides;
+  if (list !== undefined && list.length > 0) {
+    const key = pathKey(filePath);
+    for (const o of list) if (pathKey(o.filePath) === key) return o.text;
+  }
+  if (options?.textOverride !== undefined) {
+    if (judgedPath === undefined || pathKey(judgedPath) === pathKey(filePath)) return options.textOverride;
+  }
+  return undefined;
+}
+
+/**
+ * 本次回放的 override 集合（含被判函数那一份）。只存**引用**（`text` 不复制），
+ * 身份比较因此是 O(1)/项（同字符串对象）；这也是"传播缓存何时清空"的判据。
+ */
+function overridesOf(
+  options?: ReplayOptionsWithOverrides,
+  judgedPath?: string,
+): readonly { readonly filePath: string; readonly text: string }[] {
+  const out: { filePath: string; text: string }[] = [];
+  const list = options?.textOverrides;
+  if (list !== undefined) for (const o of list) out.push({ filePath: o.filePath, text: o.text });
+  if (options?.textOverride !== undefined && judgedPath !== undefined) {
+    const key = pathKey(judgedPath);
+    if (!out.some((o) => pathKey(o.filePath) === key)) out.push({ filePath: judgedPath, text: options.textOverride });
+  }
+  return out;
+}
 
 /** 视图记忆条目：archive 身份就是失效判据 */
 interface ViewEntry {
@@ -198,10 +254,18 @@ export class StateReplayEngine implements StateReplayService {
   private readonly viewCache = new Map<string, ViewEntry>();
   private readonly viewCacheMax: number;
   /**
-   * 缓冲区切行记忆（**只留上一份正文**；`linesOf` 的 override 分支用，见该方法注释）。
-   * 不按文件路径记账、也绝不被无 override 的回放读到 ⇒ 缓冲区正文不会污染磁盘语义。
+   * 缓冲区切行记忆（**按文件路径分桶，最多 4 份**；`linesOf` 的 override 分支用）。
+   * 不按"磁盘正文"记账、也绝不被无 override 的回放读到 ⇒ 缓冲区正文不会污染磁盘语义。
+   * 判据是**文本身份比较**（同字符串对象 O(1)；内容相同的另一份 = 一次逐字比较）。
    */
-  private overrideLinesMemo: { readonly text: string; readonly lines: string[] } | null = null;
+  private readonly overrideLinesMemo = new Map<string, { readonly text: string; readonly lines: string[] }>();
+  /** 上一批 override 集合的文本身份（用于判定"要不要清调用传播缓存"；只存引用，不复制正文） */
+  private overrideIdentity: readonly { readonly filePath: string; readonly text: string }[] = [];
+  /**
+   * 跨函数写传播缓存：`target\u0000disk|buf` → 被调段可证明写点数（`null` = 查不到）。
+   * 只在 override 集合身份不变期间有效（集合一变就整表清空，宁重算不误用旧正文）。
+   */
+  private readonly callWriteCache = new Map<string, number | null>();
 
   constructor(private readonly deps: StateReplayEngineDeps) {
     this.lineCacheMaxFiles = deps.lineCacheCaps?.maxFiles ?? LINE_CACHE_MAX_FILES;
@@ -279,7 +343,9 @@ export class StateReplayEngine implements StateReplayService {
     this.lineCache.clear();
     this.lineCacheChars = 0;
     this.viewCache.clear();
-    this.overrideLinesMemo = null;
+    this.overrideLinesMemo.clear();
+    this.overrideIdentity = [];
+    this.callWriteCache.clear();
   }
 
   /**
@@ -342,22 +408,119 @@ export class StateReplayEngine implements StateReplayService {
    * 把缓冲区塞进去，下一次不带 override 的回放（同一路径）就会读到旧编辑——
    * 这正是本批要消灭的"看不出来的不一致"，不能在新通道里再造一份。
    *
-   * **缓冲区切行记忆**（`overrideLinesMemo`，只留上一份正文，内联 override 批）：
-   * 同一份缓冲区连续回放 N 个函数时，166 KB 正文不必被 `splitEolLines` 切 N 遍
-   * （实测 20 个真实函数：带 override 每轮 13.9 ms → 3.7 ms，与磁盘回放 3.5 ms 同量级）。
-   * 判据是**文本身份比较**（同一字符串对象 O(1)；内容相同的另一份 = 一次逐字比较，
-   * 仍比重新切分 + 分配 N 个行串便宜得多），与抽取器的 `overrideParseMemo` 同一形态。
-   * 它只服务 override 回放：无 override 的 `getLines` 永远不读它，`resetCaches` 清掉。
+   * **缓冲区切行记忆**（`overrideLinesMemo`，按文件分桶、最多 4 份）：同一份缓冲区连续
+   * 回放 N 个函数时，166 KB 正文不必被 `splitEolLines` 切 N 遍（实测 20 个真实函数：
+   * 带 override 每轮 13.9 ms → 3.7 ms，与磁盘回放 3.5 ms 同量级）。多文件批起按
+   * `pathKey` 分桶：两个文件的缓冲正文各切一次，互不挤占。
+   *
+   * **多文件 override**（`textOverrides`，不进 plugin-api 契约——开机图字节闸只剩 22 B）：
+   * 形如 `readonly { filePath; text }[]`。命中判据只认**文件身份**（`pathKey` 判等），
+   * 不猜"这份文本是哪个文件"；没列出的文件一律读盘，读盘结果也不受污染。
    */
-  private async linesOf(filePath: string, textOverride?: string): Promise<string[]> {
-    if (textOverride !== undefined) {
-      const memo = this.overrideLinesMemo;
-      if (memo !== null && memo.text === textOverride) return memo.lines;
-      const lines = splitEolLines(textOverride);
-      this.overrideLinesMemo = { text: textOverride, lines };
+  private async linesOf(
+    filePath: string,
+    options?: ReplayFunctionOptions & { readonly textOverrides?: readonly ReplayTextOverrideSource[] },
+    judgedPath?: string,
+  ): Promise<string[]> {
+    const text = effectiveOverrideText(filePath, options, judgedPath);
+    if (text !== undefined) {
+      const key = pathKey(filePath);
+      const memo = this.overrideLinesMemo.get(key);
+      if (memo !== undefined && memo.text === text) {
+        this.overrideLinesMemo.delete(key);
+        this.overrideLinesMemo.set(key, memo);
+        return memo.lines;
+      }
+      const lines = splitEolLines(text);
+      this.overrideLinesMemo.delete(key);
+      this.overrideLinesMemo.set(key, { text, lines });
+      while (this.overrideLinesMemo.size > OVERRIDE_LINES_MEMO_MAX) {
+        const oldest = this.overrideLinesMemo.keys().next().value;
+        if (oldest === undefined) break;
+        this.overrideLinesMemo.delete(oldest);
+      }
       return lines;
     }
     return this.getLines(filePath);
+  }
+
+  /**
+   * 跨函数写传播（**只做一层**，2026-11-05 边界批）：
+   * 静态可解析的 `CALL TARGET(...)` 行 → 查 TARGET 的明细与行文本（override 优先），
+   * 用同一套写判据数出被调段里**可证明的写点**（assign / instruction；不再往下递归），
+   * 填进 `calleeWrites`。动态目标 / 查不到 / 超预算 → 不填（= 不可知，不是 0）。
+   *
+   * 为什么只做一层：跨函数传播每深一层，误报面与耗时都翻倍，而"这一行调用会不会写"
+   * 对作者的价值在**第一层**就已经兑现（看到"被调段有 3 处写"就够了）。预算 30 个
+   * 被调函数/次，防一个巨型函数体把面板拖住。
+   */
+  private async propagateCallWrites(
+    writes: readonly ReplayWrite[],
+    options?: ReplayFunctionOptions & { readonly textOverrides?: readonly ReplayTextOverrideSource[] },
+    judgedPath?: string,
+  ): Promise<readonly ReplayWrite[]> {
+    const targets = writes.filter((w) => w.kind === 'call' && typeof w.target === 'string' && w.target !== '');
+    if (targets.length === 0) return writes;
+    const overrides = overridesOf(options, judgedPath);
+    this.syncOverrideIdentity(overrides);
+    const overrideMap = new Map(overrides.map((o) => [pathKey(o.filePath), o.text] as const));
+    const out: ReplayWrite[] = [];
+    let budget = CALL_PROPAGATION_BUDGET;
+    for (const w of writes) {
+      if (w.kind !== 'call' || typeof w.target !== 'string' || w.target === '') {
+        out.push(w);
+        continue;
+      }
+      const target = w.target;
+      const diskDetail = await this.deps.functionPredicates(target);
+      if (diskDetail === null || budget <= 0) {
+        out.push(w);
+        continue;
+      }
+      budget -= 1;
+      const bufText = overrideMap.get(pathKey(diskDetail.filePath));
+      const cacheKey = `${target.toUpperCase()}\u0000${bufText === undefined ? 'disk' : 'buf'}`;
+      const cached = this.callWriteCache.get(cacheKey);
+      if (cached !== undefined) {
+        out.push(cached === null ? w : { ...w, calleeWrites: cached });
+        continue;
+      }
+      let count: number | null = null;
+      try {
+        const detail = bufText === undefined ? diskDetail : await this.deps.functionPredicates(target, bufText);
+        if (detail !== null) {
+          const calleeLines = await this.linesOf(detail.filePath, options, judgedPath);
+          count = detectUnmodeledWrites(calleeLines, detail.startLine, detail.endLine).filter(
+            (x) => x.kind !== 'call' && x.kind !== 'jump',
+          ).length;
+        }
+      } catch {
+        count = null; // 查不到 = 不可知（不填字段），绝不猜 0
+      }
+      this.callWriteCache.set(cacheKey, count);
+      out.push(count === null ? w : { ...w, calleeWrites: count });
+    }
+    return out;
+  }
+
+  /** override 集合身份变了 ⇒ 清传播缓存（旧正文算出来的写点数不能再用） */
+  private syncOverrideIdentity(identity: readonly { readonly filePath: string; readonly text: string }[]): void {
+    const prev = this.overrideIdentity;
+    let same = prev.length === identity.length;
+    if (same) {
+      for (let i = 0; i < identity.length; i += 1) {
+        const a = prev[i]!;
+        const b = identity[i]!;
+        if (a.filePath !== b.filePath || a.text !== b.text) {
+          same = false;
+          break;
+        }
+      }
+    }
+    if (!same) {
+      this.overrideIdentity = identity;
+      this.callWriteCache.clear();
+    }
   }
 
   async replayFunction(
@@ -367,8 +530,18 @@ export class StateReplayEngine implements StateReplayService {
   ): Promise<FunctionReplay | null> {
     // 缓冲区文本透传给抽取器（additive）：给了就按这一份解析（不读盘），
     // 明细里的行号 / 区间仍按索引（行号按 override 文本）。
-    const detail = await this.deps.functionPredicates(functionName, options?.textOverride);
+    //
+    // 多文件批：被判函数那份也可能只出现在 `textOverrides` 里（面板对"正开着的文件"统一
+    // 走那张表）。先拿磁盘明细只为确认**被判函数属于哪个文件**，再按该文件的有效文本重取，
+    // 保证"明细行号空间"与"取行文本"来自同一份正文（评审 P0 的同一判据）。
+    const opts = options as ReplayOptionsWithOverrides | undefined;
+    let detail = await this.deps.functionPredicates(functionName, options?.textOverride);
     if (!detail) return null;
+    const topText = effectiveOverrideText(detail.filePath, opts, detail.filePath);
+    if (topText !== undefined && topText !== options?.textOverride) {
+      const withBuffer = await this.deps.functionPredicates(functionName, topText);
+      if (withBuffer !== null) detail = withBuffer;
+    }
     const read: ValueReader = (ref) => view.read(ref);
     // 调用上下文：显式注入与适配器推导的「确定事实」（HK-20）**逐槽合并**（E1 2026-11-05）——
     // 两者描述同一份调用实参的不同槽位：显式非 undefined 胜出（面板手填 + 预填 0 的假设值
@@ -400,19 +573,21 @@ export class StateReplayEngine implements StateReplayService {
      */
     let lines: readonly string[] | undefined;
     try {
-      lines = await this.linesOf(detail.filePath, options?.textOverride);
+      lines = await this.linesOf(detail.filePath, opts, detail.filePath);
     } catch (err) {
       this.deps.log.warn(`function body lines unavailable for ${detail.filePath}: ${String(err)}`);
     }
     /**
      * 本次回放的 override 作用域：**每个 replay 只在这里做一次文本身份比较**
-     * （`beginReplay` 里 `text !== last.text`；不是每次函数查找都比 150 KB）。
-     * 文本/路径没变 ⇒ 复用上一次的桶（跨 replay 命中）；变了 ⇒ 新桶、旧桶丢弃。
+     * （`beginReplay` 里逐项 `pathKey + text`；不是每次函数查找都比 150 KB）。
+     * 集合内容没变 ⇒ 复用上一次的桶（跨 replay 命中）；某文件文本变了 ⇒ 只重建该文件桶。
+     *
+     * 多文件批起：作用域吃**整个 override 集合**（被判函数那份 + 其它开着未保存的文件），
+     * 这样内联展开到别的文件里的被调函数时也能按编辑器文本算（`ensureAnalyzed` 按文件分桶）。
      */
+    const inlineOverrides = overridesOf(opts, detail.filePath);
     const scope: InlineScope | null =
-      options?.textOverride === undefined
-        ? null
-        : this.inline.beginReplay({ filePath: detail.filePath, text: options.textOverride });
+      inlineOverrides.length === 0 ? null : this.inline.beginReplay({ overrides: inlineOverrides });
     // 内联预热（异步阶段结束 → 执行期同步缓存命中）：override 作用域与行文本全链路透传
     await this.inline.preanalyze(
       detail,
@@ -433,7 +608,15 @@ export class StateReplayEngine implements StateReplayService {
      * 因此这里只有在真的拿到行文本时才挂这个字段（含空数组）。
      */
     const replay: FunctionReplay = lines
-      ? { ...evaluated, unmodeledWrites: detectUnmodeledWrites(lines, detail.startLine, detail.endLine) }
+      ? {
+          ...evaluated,
+          // 先跑本段写检测，再做**一层跨函数传播**（静态可解析的 CALL → 被调段可证明写点数）
+          unmodeledWrites: await this.propagateCallWrites(
+            detectUnmodeledWrites(lines, detail.startLine, detail.endLine),
+            opts,
+            detail.filePath,
+          ),
+        }
       : evaluated;
     // 台词推演（v0.3 口上调试统一批；additive）：有显示行资料且行文本可得时才附。
     if (detail.displays && detail.displays.length > 0 && lines) {

@@ -14,6 +14,10 @@
  * - `bus.recent(n) / on(name, cb)`：内核事件总线的旁听（环形缓冲 + 订阅）；
  * - `editor.*`：焦点编辑器的读数与受控写（经 editor-pane-registry 的登记簿，
  *   不碰 EditorPane 源码）：info / setValue / type / setCursor / markers；
+ *   **写类一律执行后回读核对**（ED-HONESTY 批，2026-11-06）：`setValue` / `type` 只有在
+ *   `model.getValue()` 前后**真的变了**时才回 `true`——只读项目下 Monaco 会静默吞掉
+ *   `executeEdits`（返回 false 而正文不动），旧实现照样回 true，等于让调试 API 撒谎；
+ *   判据是纯函数 `editApplied`，只读事实另从 `info().readOnly` 读；
  * - `editor` 的**语言面读数**（1029 批，只读、绝不抛）：`actions()`（编辑器动作表）、
  *   `hoverAt()`（走真 hover provider 链读屏上文本）、`suggestAt()`（真补全弹窗候选）、
  *   `tokens()`（词法 token）、`foldingRanges()`（折叠区间）、`format()`（格式化前后长度）、
@@ -94,9 +98,19 @@ export interface KojoDebugApi {
     on(name: string, cb: (payload: unknown) => void): () => void;
   };
   editor: {
+    /** 焦点编辑器读数（`null`＝没有焦点编辑器）。`readOnly` 是编辑类 API 的 false 语义来源之一 */
     info(): EditorInfo | null;
+    /**
+     * 整篇替换正文：**执行后回读核对**（`editApplied`），值真变了才 `true`。
+     * `false` 的可能原因：没有焦点编辑器 / Monaco 抛错或拒收 / 值没变（含与当前值逐字相同）。
+     * 只读项目下 `model.setValue` 实测仍会改正文 ⇒ 那时如实 `true`；要判"该不该改"读 `info().readOnly`。
+     */
     setValue(text: string): boolean;
-    /** 在光标处插入文本（走 executeEdits，进撤销栈——与真人打字同路） */
+    /**
+     * 在光标处插入文本（走 executeEdits，进撤销栈——与真人打字同路）：**执行后回读核对**，
+     * 值真变了才 `true`。`false` 的可能原因：**只读**（Monaco 在 readOnly 下让 executeEdits
+     * 直接回 false）/ 没有焦点编辑器 / Monaco 拒绝编辑 / 值没变（空串插入也算）。
+     */
     type(text: string): boolean;
     /**
      * 定光标（1 基）：位置 `(line, column)` 或对象 `{line|lineNumber, column}` 两种形态同义
@@ -207,6 +221,15 @@ export interface EditorInfo {
   readonly value: string;
   readonly cursor: { readonly line: number; readonly column: number };
   readonly selection: string | null;
+  /**
+   * 编辑器当前是否只读（`getRawOptions().readOnly`，即 EditorPane 给 Monaco 的那一个门）。
+   *
+   * 为什么值得单列一格（ED-HONESTY 批）：编辑类 API 的 `false` 有好几种原因，而**只读**是
+   * 最常见也最容易被误读成"API 坏了"的那一种——只读时 `type` 必然 `false`（Monaco 吞掉
+   * `executeEdits`），`setValue` 却可能仍改正文（它走 model 层）。要判"这次能不能改"读这一位，
+   * 别猜返回值；要判"到底改没改"看返回值（它已经是核对过的）。读不到 ⇒ `false`（不编造只读）。
+   */
+  readonly readOnly: boolean;
 }
 
 /**
@@ -251,6 +274,141 @@ export function normalizeCursorTarget(
   const column = rawColumn === undefined ? 1 : asPositiveInt(rawColumn);
   if (column === null) return null;
   return { line, column };
+}
+
+/* ------------------ 编辑动作的"执行后核对"（ED-HONESTY 批，2026-11-06） ------------------ */
+
+/**
+ * 「这次编辑到底落到正文没有」的唯一判据（纯函数、可单测、绝不抛）。
+ *
+ * 为什么需要它（真机实拍，本批开场）：只读项目下 `__kojoDebug.editor.type('x')` **返回 true
+ * 而正文长度不变**——Monaco 在 `readOnly` 时让 `executeEdits` 直接 `return false`，而调试面
+ * 原先根本不看返回值。调试 API 是 agent 的"眼睛"：返回值一撒谎，取证结论就整体失效
+ * （本批的真机烟测正是被它误导过一次）。
+ *
+ * 判据刻意只认"**值真的变了**"：
+ * - 两个值都必须是字符串（model 缺席 / `getValue()` 拿不到时传进来的 null 一律 `false`）；
+ * - `before === after` ⇒ `false`——被 Monaco 拒收、空串插入、写入被别处弹回都落在这一格；
+ * - 编辑器自报的 ok（`executeEdits` 的返回值）只当**附加**条件，见 {@link applyTypedEdit}：
+ *   它说 true 不等于值变了，说 false 就已经足够判失败。
+ */
+export function editApplied(before: unknown, after: unknown): boolean {
+  return typeof before === 'string' && typeof after === 'string' && before !== after;
+}
+
+/** `type()` / `setValue()` 需要的 model 最小结构面（真 `ITextModel` 与单测假件都满足） */
+export interface DebugEditModelLike {
+  getValue(): string;
+  setValue(text: string): void;
+}
+
+/** 光标位置的最小结构面（Monaco `Position` 的 `lineNumber` / `column`，1 基） */
+export interface DebugEditPositionLike {
+  readonly lineNumber: number;
+  readonly column: number;
+}
+
+/** 一次插入编辑的形状（`IIdentifiedSingleEditOperation` 的子集，够本面用） */
+export interface DebugInsertEdit {
+  readonly range: {
+    readonly startLineNumber: number;
+    readonly startColumn: number;
+    readonly endLineNumber: number;
+    readonly endColumn: number;
+  };
+  readonly text: string;
+  readonly forceMoveMarkers: boolean;
+}
+
+/** `type()` 需要的 editor 最小结构面（注入式：真 Monaco 与单测假件走同一条腿） */
+export interface DebugEditEditorLike {
+  getModel(): DebugEditModelLike | null;
+  getPosition(): DebugEditPositionLike | null;
+  executeEdits(source: string, edits: DebugInsertEdit[]): boolean;
+}
+
+/**
+ * `type(text)` 的实现腿（注入式，单测喂假件即可跑）：在光标处 `executeEdits` → **回读核对**。
+ *
+ * 返回 `false` 的四种原因，一一对应（也就是契约上写的那几条）：
+ * 1. **没有焦点编辑器**：`ed` 缺席 / `getModel()` 为 null / `getPosition()` 为 null；
+ * 2. **只读**：Monaco 的 `executeEdits` 在 `readOnly` 时直接回 `false`（本函数据此 false，
+ *    不靠调用方自己判 `info().readOnly`——返回值本身就是取证结论）；
+ * 3. **Monaco 拒绝编辑**：`executeEdits` 返回非 true，或直接抛错（版本差异都收进这一格）；
+ * 4. **值没变**：`before === after`（空串插入 / 与原文同形 / 被别处弹回）。
+ *
+ * 判据是"**返回值 ∧ 值真变了**"的合取：只看 `executeEdits` 的布尔会被"报 true 但没落"骗到
+ * （就是本批修的那个假绿），只看值变了又会把"Monaco 明明拒收却因别的通道改了正文"算成功。
+ */
+export function applyTypedEdit(ed: DebugEditEditorLike | null | undefined, text: string): boolean {
+  const model = ed?.getModel();
+  const pos = ed?.getPosition();
+  if (!ed || !model || !pos) return false;
+  const before = model.getValue();
+  let accepted = false;
+  try {
+    // executeEdits 进 undo 栈（setValue 不进）——「像真人一样改」用它
+    accepted =
+      ed.executeEdits('kojo-debug', [
+        {
+          range: {
+            startLineNumber: pos.lineNumber,
+            startColumn: pos.column,
+            endLineNumber: pos.lineNumber,
+            endColumn: pos.column,
+          },
+          text,
+          forceMoveMarkers: true,
+        },
+      ]) === true;
+  } catch {
+    return false;
+  }
+  return accepted && editApplied(before, model.getValue());
+}
+
+/**
+ * `setValue(text)` 的实现腿（注入式）：整篇替换后**回读核对**。
+ *
+ * 与 {@link applyTypedEdit} 的差别是**通道**不同，不是判据不同（同一条 `editApplied`）：
+ * `setValue` 走 model 层，而 Monaco 的 `readOnly` 是 **editor option**（拦的是编辑器命令与
+ * `executeEdits`）⇒ 只读项目下实测 `model.setValue` 仍会改正文，那时本条如实 `true`（值真的变了；
+ * 要不要在只读里改，读 `info().readOnly` 由调用方自己决定）。某版本若抛错 / 被拒 ⇒ `false`。
+ *
+ * 另一条同族边界：`text` 与当前值**逐字相同** ⇒ 值没变 ⇒ `false`——这不算失败，是"没有可核对
+ * 的变化"，调用方要判"本来就一样"请自己先比（本面不拿 true 冒充"我改了"）。
+ */
+export function applySetValue(model: DebugEditModelLike | null | undefined, text: string): boolean {
+  if (!model) return false;
+  const before = model.getValue();
+  try {
+    model.setValue(text);
+  } catch {
+    return false;
+  }
+  return editApplied(before, model.getValue());
+}
+
+/**
+ * 编辑器当前是否只读（`info().readOnly` 的取数腿）。
+ *
+ * 读**公开面** `getRawOptions()`（其 `IEditorOptions.readOnly`）：本模块只 `import type` Monaco，
+ * 拿不到 `monaco.editor.EditorOption.readOnly` 这个枚举值（那是运行时有值 import，等于把整个
+ * Monaco 拖进"只在 ?kojo-debug=1 才装载"的懒面）。`updateOptions` 会把设置并进 raw options，
+ * 而 EditorPane 给 Monaco 的 `readOnly` 正是唯一可写态真源（`sourceReadOnlyGate` 同一个表达式）
+ * ⇒ 读它不会拿到影子值。
+ *
+ * 读不到（老版本没有这个方法 / 假件）⇒ `false`：宁可少报一个只读提示，也不编造只读。
+ */
+export function editorReadOnly(
+  ed: { getRawOptions?: () => { readOnly?: boolean } | undefined } | null | undefined,
+): boolean {
+  if (!ed || typeof ed.getRawOptions !== 'function') return false;
+  try {
+    return ed.getRawOptions()?.readOnly === true;
+  } catch {
+    return false;
+  }
 }
 
 /* ------------------------- 语言面读数（1029 批，只读） ------------------------- */
@@ -2084,32 +2242,18 @@ export function installDebug(): KojoDebugApi {
           value: model?.getValue() ?? '',
           cursor: { line: pos?.lineNumber ?? 1, column: pos?.column ?? 1 },
           selection: sel && !sel.isEmpty() ? ((model?.getValueInRange(sel) ?? null) as string | null) : null,
+          // 只读读数（ED-HONESTY 批）：编辑类 API 的 false 到底为什么，先看这一位
+          readOnly: editorReadOnly(ed),
         };
       },
       setValue(text) {
-        const model = focusedCtx()?.editorRef.current?.getModel();
-        if (!model) return false;
-        model.setValue(text);
-        return true;
+        // 执行后回读核对：整篇替换"报成功但值没变"与只读项目下改不动，都在这是 false
+        return applySetValue(focusedCtx()?.editorRef.current?.getModel() ?? null, text);
       },
       type(text) {
-        const ed = focusedCtx()?.editorRef.current;
-        const pos = ed?.getPosition();
-        if (!ed || !pos) return false;
-        // executeEdits 进 undo 栈（setValue 不进）——「像真人一样改」用它
-        ed.executeEdits('kojo-debug', [
-          {
-            range: {
-              startLineNumber: pos.lineNumber,
-              startColumn: pos.column,
-              endLineNumber: pos.lineNumber,
-              endColumn: pos.column,
-            },
-            text,
-            forceMoveMarkers: true,
-          },
-        ]);
-        return true;
+        // 执行后回读核对（ED-HONESTY 批）：只读时 Monaco 的 executeEdits 直接回 false，
+        // 旧实现在这里硬回 true——那正是本批修掉的假绿。判据见 `applyTypedEdit`。
+        return applyTypedEdit(focusedCtx()?.editorRef.current ?? null, text);
       },
       setCursor(line, column) {
         // KW-36 P0：入参先过归一（两种形态、脏值即 false），**绝不**把没归一的值喂进 setPosition

@@ -30,13 +30,25 @@
  *    `TRYCCALL*`，名字逐条来自引擎指令表 `erb-parser/src/instructions.ts`，测试用那张表钉住 ⊆）⇒
  *    `kind:'call'`。理由：被调段可能写状态；本层**不展开、不解析实参**（跨函数传播不在
  *    近似回放的射程内，展开会把单函数检测变成整图遍历——性能红线）。
- * 6. **跳转族**（同批）：行首动词命中 `JUMP_INSTRUCTIONS`（`GOTO` / `GOTOFORM` / `JUMP` /
- *    `JUMPFORM` 的平跳形）⇒ 候选 `kind:'jump'`，**防刷屏**：只有本函数区间内该跳转行
- *    **之后**还存在至少一条 `assign` / `instruction` / `call` 写点（即可达性会影响近似
- *    结论）时才报；否则丢弃（纯前向跳转后没有写 = 不影响结论，报了只是噪音）。
- *    实现是两遍扫（先收写点、再决定 jump 是否入列），仍是 O(行数)。
- * 7. 同一行只报一次；顺序 = 行序；`text` = 剥前缀 + 去行内注释后的行正文（给作者定位，
+ * 6. **跳转族**（同批；2026-11-06 可达性批收紧）：行首动词命中 `JUMP_INSTRUCTIONS`
+ *    （`GOTO` / `GOTOFORM` / `JUMP` / `JUMPFORM` 的平跳形）⇒ **必须问可达性**
+ *    （`reachability.ts` 的 `analyzeReachability`）：
+ *    - 静态字面量标签的跳转（`resolvedJumps`）⇒ 可达性已建模，**不再报**（以前那枚
+ *      "不确定面"是噪音）；
+ *    - 动态跳转（`dynamicJumps`：目标算不出来 / 标签不存在）⇒ 该行之后按可达，
+ *      且**只有该行之后还有可达写点**时才报 `kind:'jump'`（防刷屏判据不变）。
+ * 7. **可达性过滤**（2026-11-06）：可达性一旦参与，**不可达行上的写点一律不报**
+ *    （assign / instruction / call / jump 同理——不可达 = 写不发生；静态 `GOTO` 跳过的
+ *    死区间不再刷屏）。动态跳转之后一律按可达（目标不可知 ⇒ 不许把真写点藏起来）。
+ *
+ *    **性能口径**：可达性不是无条件先跑，而是**触发式**——直线扫描顺手记住"有没有跳转 /
+ *    有没有中途 `RETURN`"（都是已有动词判定里的两条 `Set.has`，零额外分配）；两者都没有时
+ *    直线结果就是真值，直接返回（真语料绝大多数函数走这条）。只有会改变结论的窗口才追加
+ *    一次 `analyzeReachability`（一次标签扫描 + 一次 BFS，仍 O(行数)，不重复解析写点）。
+ *    这样 602 行 / 390 写点 ×1000 次的读数与改造前同量级（见批次回执）。
+ * 8. 同一行只报一次；顺序 = 行序；`text` = 剥前缀 + 去行内注释后的行正文（给作者定位，
  *    不做二次解析）。
+ * 9. `kind:'call'` 的条目带 `target`（`extractCallTarget` 抽的静态被调名；动态调用不填）。
  *
  * ## 为什么是"短表 + 行首动词"，而不是"动词白名单/黑名单"
  *
@@ -48,11 +60,11 @@
  * ## 不检测（已知边界，如实记录）
  *
  * - 行内 `CALL` / `CALLFORM` 等**间接写**：只报调用行本身（`kind:'call'`，不确定面），
- *   被调函数体内写什么，本层不做跨函数传播；
- * - `GOTO` / `JUMP` 跳转后的写：直线扫描照报（它确实会执行），跳转的**可达性**不建模；
- *   跳转行本身只在"该行之后还有写点"时才报（`kind:'jump'`，判据见 6）；
- * - `TRYGOTO*` / `TRYJUMP*`（条件跳转）未收：它们叠了"跳不跳得成"另一层不确定性，
- *   本批只放开平跳形，宁少勿错；
+ *   被调函数体内写什么，本层不做跨函数传播（单层传播由引擎填 `calleeWrites`）；
+ * - `TRYGOTO*` / `TRYJUMP*`（条件跳转）不改变可达性（两条边都可能），也不报 `jump`；
+ * - 循环语义（`BREAK` / `CONTINUE` 之后的可达性、循环体重复执行）不建模：它们仍落下一行；
+ * - **条件块内的静态跳转 / RETURN 按直线流处理**（不建 IF/ENDIF 边）——见下方
+ *   `analyzeReachability` 的取舍说明；本批只把"无条件的直线控制流"当成可证明的；
  * - 写在函数区间外（被 `CALL` 的上文/下文函数）——不属本函数体；
  * - `DUMPRAND` / `INITRAND`（RANDDATA 状态）与 `SWAPVAR` 一类未列入短表的指令：
  *   宁少勿错，未收；
@@ -64,6 +76,9 @@
 import type { FunctionReplay } from '@kojo/plugin-api';
 import { erbCodeBodyOf } from '@kojo/plugin-api';
 import { LOCAL_FAMILY_SLOTS } from './locals';
+import { analyzeReachability, JUMP_INSTRUCTIONS, RETURN_STOP_INSTRUCTIONS } from './reachability';
+
+export { JUMP_INSTRUCTIONS };
 
 /**
  * 契约 `FunctionReplay['unmodeledWrites']`（`ReplayWrite` 未从 `@kojo/plugin-api`
@@ -219,18 +234,12 @@ export const CALL_INSTRUCTIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * **跳转族**（`kind:'jump'`；2026-11-05 边界批）——只收平跳形，名字同样逐条对引擎表。
+ * **跳转族**（`kind:'jump'`；2026-11-05 边界批落地，2026-11-06 可达性批收紧）。
  *
- * `TRYGOTO*` / `TRYJUMP*` 是**条件**跳转（跳不跳得成还叠一层不确定性），本批不收：
- * 跳转行只在"后面还有写点"时才报，先把最常用、语义最直的两条（`GOTO` / `JUMP`）及其
- * `FORM` 变体落地，宁少勿错。
+ * 词表已移到 `reachability.ts`（谁建模跳转、谁持有跳转词表 = 一份）；这里原样再导出，
+ * 既有消费方（测试 / 面板）不用改 import 面。`TRYGOTO*` / `TRYJUMP*` 是条件跳转，
+ * 不在本表（见 `reachability.ts` 的 `CONDITIONAL_JUMP_INSTRUCTIONS`）。
  */
-export const JUMP_INSTRUCTIONS: ReadonlySet<string> = new Set([
-  'GOTO',
-  'GOTOFORM',
-  'JUMP',
-  'JUMPFORM',
-]);
 /**
  * 去掉行内注释（引号外的 `;` 起注释；引号内保留）。
  *
@@ -248,26 +257,137 @@ function stripInlineComment(code: string): string {
 }
 
 /**
+ * **静态调用目标**抽取：`CALL NAME(...)` / `CALL NAME` / `TRYCALL NAME, ...` ⇒ `NAME`
+ * （大写归一；`$` 前缀与 `()` 尾巴都不进名字）。动态目标一律 `null`：
+ *
+ * - `CALLFORM*` / `TRYCALLFORM*`（名字是表达式算出来的）；
+ * - `CALLF*` / `CALLEVENT` / `CALLSHARP` / `CALLTRAIN` / `TRYCALLLIST` / `TRYCCALL*`
+ *   （不是"静名字 + 实参表"的直调形，本层不猜——宁少勿错）；
+ * - 目标不是裸名字、或名字后面跟着看不懂的尾巴（`CALL K1_%X%` 一类）。
+ *
+ * 纯函数、零 IO：只读 `code`（先 `trim`、剥 `;!;` / `;#;` 前缀与行内 `;` 注释）。
+ * 引擎用它给 `kind:'call'` 的条目填 `target`，再做一层被调段写点计数（`calleeWrites`）。
+ */
+export function extractCallTarget(code: string): string | null {
+  return callTargetOf(stripInlineComment(erbCodeBodyOf(code.trim())).trim());
+}
+
+/**
+ * 调用目标抽取的**热路径**形态（`code` 已 trim / 剥前缀 / 去注释）。
+ *
+ * 只认 `CALL` / `TRYCALL` 两个静名字直调动词：其后必须**至少一个空白**（挡住
+ * `CALLFORM` / `CALLF` 这类长名），目标整段是 Unicode 名字（字母/数字/下划线），
+ * 末尾只许 `(` / `,` / `;` / 行尾。
+ *
+ * 实现是**免分配游标**（真语料 18,233 条调用行，正则版本在整档体检里是可见开销）：
+ * ASCII 名字走字符扫描，遇到非 ASCII（CJK 名字）才退回 `CALL_TARGET_RE`——语义只有
+ * 那一份判据（正则），快路只是它的等价展开。
+ */
+function callTargetOf(code: string): string | null {
+  const c0 = code.charCodeAt(0);
+  let i: number;
+  if (c0 === 67 || c0 === 99) {
+    if (!matchesKeywordAt(code, 'CALL')) return null;
+    i = 4;
+  } else if (c0 === 84 || c0 === 116) {
+    if (!matchesKeywordAt(code, 'TRYCALL')) return null;
+    i = 7;
+  } else {
+    return null;
+  }
+  if (i >= code.length) return null;
+  let c = code.charCodeAt(i);
+  if (c !== 32 && c !== 9 && c !== 0x3000) return null; // 动词后必须至少一个空白
+  while (i < code.length) {
+    c = code.charCodeAt(i);
+    if (c !== 32 && c !== 9 && c !== 0x3000) break;
+    i++;
+  }
+  if (code.charCodeAt(i) === 36) i++; // `$` 前缀不进名字
+  const start = i;
+  while (i < code.length) {
+    c = code.charCodeAt(i);
+    if (isAsciiNameCode(c)) {
+      i++;
+      continue;
+    }
+    if (c >= 128) return callTargetByRegex(code); // 非 ASCII 名字（CJK 等）：交回唯一判据
+    break;
+  }
+  if (i === start) return null;
+  let j = i;
+  while (j < code.length) {
+    const d = code.charCodeAt(j);
+    if (d !== 32 && d !== 9 && d !== 0x3000) break;
+    j++;
+  }
+  // 尾巴只许 `(` / `,` / `;` / 行尾（`CALL FOO BAR` / `CALL K1_%X%` 一律不认）
+  if (j < code.length) {
+    const d = code.charCodeAt(j);
+    if (d !== 40 && d !== 44 && d !== 59) return null;
+  }
+  return code.slice(start, i).toUpperCase();
+}
+
+/** 正则版（非 ASCII 名字的兜底；`CALL_TARGET_RE` 是唯一判据形态） */
+function callTargetByRegex(code: string): string | null {
+  const m = CALL_TARGET_RE.exec(code);
+  return m === null ? null : m[1]!.toUpperCase();
+}
+
+/** `code` 从 0 起是否以 ASCII 关键字 `kw`（大写）起首（大小写不敏感；不检查其后边界） */
+function matchesKeywordAt(code: string, kw: string): boolean {
+  if (code.length < kw.length) return false;
+  for (let i = 0; i < kw.length; i++) {
+    const c = code.charCodeAt(i);
+    const upper = c >= 97 && c <= 122 ? c - 32 : c;
+    if (upper !== kw.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+/** `[A-Za-z0-9_]`（快路的名字字符集；非 ASCII 交给正则兜底） */
+function isAsciiNameCode(c: number): boolean {
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c === 95;
+}
+
+/** 静态直调形（`CALL` / `TRYCALL` + 空白 + 裸名字 + 干净尾巴；大小写不敏感） */
+const CALL_TARGET_RE =
+  /^(?:CALL|TRYCALL)[ \t\u3000]+\$?([\p{L}\p{N}_]+)(?=[ \t\u3000]*(?:\(|,|;|$))/iu;
+
+/**
  * 函数体 `[startLine, endLine]`（1 基、闭区间）内的未建模写点，按行序返回。
  *
  * 纯函数：只读 `lines`，不碰磁盘 / 缓存。`lines` 是整份文件的行数组（0 基取用），
  * 与 `transcript.ts` / `loop-range.ts` 的取行口径一致。
+ *
+ * **两段式**（2026-11-06 可达性批；性能红线）：
+ * 1. 一次直线扫描收写点（与旧实现逐字同一条路），顺手记两枚触发位——"有跳转" /
+ *    "有中途 `RETURN`"；
+ * 2. 两枚都没置位 ⇒ 直线结果就是真值，直接返回（真语料绝大多数函数走这条，零额外开销）；
+ *    否则**追加一次** `analyzeReachability`（一次标签扫描 + 一次 BFS，O(区间行数)），
+ *    用它滤掉不可达写点、并决定动态跳转要不要报 `kind:'jump'`。
+ *
+ * 不重复解析写点：可达性那趟只认标签 / 跳转 / 块结构，不跑赋值与调用判据。
  */
 export function detectUnmodeledWrites(
   lines: readonly string[],
   startLine: number,
   endLine: number,
 ): ReplayWrites {
-  const out: ReplayWrite[] = [];
-  if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || startLine > endLine) return out;
+  if (!Number.isFinite(startLine) || !Number.isFinite(endLine) || startLine > endLine) return [];
+  const first = Math.max(1, startLine);
   const last = Math.min(endLine, lines.length);
-  /** 跳转候选（先收着；防刷屏判据要等整段扫完才知道后面有没有写点） */
+  if (last < first) return [];
+  /** 直线扫描的写点（可达性过滤前） */
+  let out: ReplayWrite[] = [];
+  /** 跳转候选（静态/动态都先收着；是否入列由可达性读数的 `dynamicJumps` 决定） */
   const jumps: ReplayWrite[] = [];
-  /** 最后一条 `assign` / `instruction` / `call` 写点行（0 = 还没有；jump 不算写点） */
-  let lastWriteLine = 0;
+  /** 第一条"非末行"的 `RETURN` 族行（触发位：真终止与否交给可达性判，块内返回不终止） */
+  let midReturnLine = 0;
   /** SKIP 区状态（区间内起算；区间前开的 SKIP 见文件头"已知边界"） */
   let inSkip = false;
-  for (let ln = Math.max(1, startLine); ln <= last; ln++) {
+  for (let ln = first; ln <= last; ln++) {
     // 与 loop-range.ts 同口径：先 trim，再剥 `;!;` / `;#;` 代码前缀
     const body = erbCodeBodyOf((lines[ln - 1] ?? '').trim());
     if (inSkip) {
@@ -291,10 +411,7 @@ export function detectUnmodeledWrites(
       // 带撇目标（`TFLAG'` / `CFLAG:2'`：引擎的字符串维度）判族前去掉撇号——
       // "写的是哪个变量族"与"值是什么类型"是两条轴，本模块只关心前者。
       const target = assign[1]!.replace(/'/g, '').toUpperCase();
-      if (!MODELED_LOCAL_FAMILIES.has(target)) {
-        out.push({ line: ln, text: code, kind: 'assign' });
-        lastWriteLine = ln;
-      }
+      if (!MODELED_LOCAL_FAMILIES.has(target)) out.push({ line: ln, text: code, kind: 'assign' });
       continue;
     }
 
@@ -303,26 +420,56 @@ export function detectUnmodeledWrites(
     const upper = verb[1]!.toUpperCase();
     // 调用族：被调段可能写状态（不展开、不解析实参——性能红线）
     if (CALL_INSTRUCTIONS.has(upper)) {
-      out.push({ line: ln, text: code, kind: 'call' });
-      lastWriteLine = ln;
+      const callTarget = callTargetOf(code);
+      out.push(
+        callTarget === null
+          ? { line: ln, text: code, kind: 'call' }
+          : { line: ln, text: code, kind: 'call', target: callTarget },
+      );
       continue;
     }
-    // 跳转族：先记候选，扫完再按"后面还有没有写点"决定入列（防刷屏）
+    // 跳转族：静态/动态先一视同仁收着；静态跳转的"可达性已建模"由读数判
     if (JUMP_INSTRUCTIONS.has(upper)) {
       jumps.push({ line: ln, text: code, kind: 'jump' });
       continue;
     }
-    // 引擎写指令
-    if (WRITE_INSTRUCTIONS.has(upper)) {
-      out.push({ line: ln, text: code, kind: 'instruction' });
-      lastWriteLine = ln;
+    // 触发位：窗口内**不是末行**的 `RETURN` 族才可能让后面的写不可达
+    if (ln < last && RETURN_STOP_INSTRUCTIONS.has(upper)) {
+      if (midReturnLine === 0) midReturnLine = ln;
+      continue;
     }
+    // 引擎写指令
+    if (WRITE_INSTRUCTIONS.has(upper)) out.push({ line: ln, text: code, kind: 'instruction' });
   }
-  // 防刷屏判据：只有"该跳转行之后还有写点"（可达性会影响近似结论）才报。
-  // 纯前向跳转后没有写 = 不影响结论，报了只是噪音。仍是 O(行数)：一次过滤 + 一次合并排序。
-  if (jumps.length > 0) {
-    for (const jump of jumps) if (jump.line < lastWriteLine) out.push(jump);
-    out.sort((a, b) => a.line - b.line);
+  // 快路：**没有写点会被可达性改变**时就别跑分析（常见情形：函数末尾 RETURN、
+  // 循环尾部的 GOTO —— 它们都在最后一条写点之后，抹不掉任何写、也不会报 jump）。
+  let lastWrite = 0;
+  for (const w of out) if (w.line > lastWrite) lastWrite = w.line;
+  const returnBeforeWrite = midReturnLine !== 0 && midReturnLine < lastWrite;
+  const jumpBeforeWrite = jumps.length > 0 && jumps[0]!.line < lastWrite;
+  if (!returnBeforeWrite && !jumpBeforeWrite) return out;
+
+  const reach = analyzeReachability(lines, startLine, endLine);
+  const reachable = reach.reachable;
+  /** 整段可达 ⇒ 逐行 `.has()` 全可以省掉（`size` O(1)，读数集合只含窗口内行） */
+  const allReachable = reachable.size === last - first + 1;
+  if (!allReachable) out = out.filter((w) => reachable.has(w.line));
+  if (jumps.length === 0) return out;
+
+  // `jump` 只留给**动态**跳转、且该行可达、且其后还有可达写点（防刷屏判据不变）
+  const dynamicJumps = reach.dynamicJumps.length === 0 ? null : new Set(reach.dynamicJumps);
+  if (dynamicJumps !== null) {
+    lastWrite = 0;
+    for (const w of out) if (w.line > lastWrite) lastWrite = w.line;
+    let merged = false;
+    for (const jump of jumps) {
+      if (!dynamicJumps.has(jump.line)) continue;
+      if (!allReachable && !reachable.has(jump.line)) continue;
+      if (jump.line >= lastWrite) continue;
+      out.push(jump);
+      merged = true;
+    }
+    if (merged) out.sort((a, b) => a.line - b.line);
   }
   return out;
 }

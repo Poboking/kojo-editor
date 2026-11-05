@@ -12,6 +12,7 @@ import {
   DEFAULT_SCENE_ID,
   MAX_SCENES,
   MAX_SLOT_CANDIDATES,
+  PANEL_TEXT_OVERRIDES_MAX,
   PRED_WINDOW_INITIAL,
   PRED_WINDOW_STEP,
   REF_SLOT_LABEL,
@@ -33,6 +34,7 @@ import {
   mergeSlotInputs,
   newSceneId,
   nextPredWindow,
+  overridesForPanel,
   parseCallContextText,
   predWindowSize,
   removeScene,
@@ -1261,7 +1263,9 @@ describe('summarizeUnmodeledWrites · 写点分桶（kind）', () => {
     expect(withJump.head).not.toContain('处调用');
 
     const both = summarizeUnmodeledWrites([w(1), w(2, 'call'), w(3, 'jump'), w(4, 'jump')])!;
-    expect(both.head).toContain('另有 1 处调用、2 处跳转');
+    // 旧数据（call 无 target / calleeWrites）落 unknown 桶 ⇒ 调用那句带括号，跳转跟在顿号后
+    expect(both.head).toContain('另有 1 处调用（目标动态 / 查不到被调段，写不可知）');
+    expect(both.head).toContain('、2 处跳转');
     expect(both.head).toContain('本段有 1 处状态写未建模');
   });
 
@@ -1282,7 +1286,7 @@ describe('summarizeUnmodeledWrites · 写点分桶（kind）', () => {
     expect(s.callLines).toEqual([5, 6, 7]); // 前 3 条示例，不逐行铺
     expect(s.jumpLines).toEqual([9]);
     expect(s.head).toContain('本段有 0 处状态写未建模');
-    expect(s.head).toContain('另有 4 处调用、1 处跳转');
+    expect(s.head).toContain('另有 4 处调用（目标动态 / 查不到被调段，写不可知）、1 处跳转');
   });
 
   it('call/jump 不占 shown：省略数只按确定写点算', () => {
@@ -1302,6 +1306,168 @@ describe('summarizeUnmodeledWrites · 写点分桶（kind）', () => {
     expect(summarizeUnmodeledWrites(undefined)).toBeNull();
     expect(summarizeUnmodeledWrites(null)).toBeNull();
     expect(summarizeUnmodeledWrites([])).toBeNull();
+  });
+});
+
+/* ================================================================== *
+ * 调用桶三态（2026-11-05 边界批 · 车道 P）
+ *
+ * 引擎本批做一层跨函数传播：静态可解析的 CALL 行带 `target`，查得到被调段时带
+ * `calleeWrites`（`0` = 查过没写；缺省 = 查不到 ⇒ 不可知，**不是 0**）。
+ * 头部三态（proven / unknown / clean）逐字钉住；旧数据一律归 unknown。
+ * ================================================================== */
+
+describe('summarizeUnmodeledWrites · 调用桶（target / calleeWrites）', () => {
+  /** 一条调用行：不给 calleeWrites = 没查到（不可知）；给 0 = 查过没写 */
+  const call = (line: number, target?: string, calleeWrites?: number) => ({
+    line,
+    text: `CALL F${line}`,
+    kind: 'call' as const,
+    ...(target === undefined ? {} : { target }),
+    ...(calleeWrites === undefined ? {} : { calleeWrites }),
+  });
+  const assign = (line: number) => ({ line, text: `CFLAG:${line} += 1`, kind: 'assign' as const });
+  const jump = (line: number) => ({ line, text: `GOTO L${line}`, kind: 'jump' as const });
+
+  it('三桶计数：proven（>0）/ unknown（动态或没查到）/ clean（===0）', () => {
+    const s = summarizeUnmodeledWrites([
+      call(1, 'FOO', 3), // proven
+      call(2, 'BAR', 1), // proven
+      call(3, 'BAZ'), // unknown：有 target 但没查到
+      call(4), // unknown：动态目标（无 target）
+      call(5, 'QUX', 0), // clean
+    ])!;
+    expect(s.calls).toBe(5);
+    expect(s.callsProven).toBe(2);
+    expect(s.callsUnknown).toBe(2);
+    expect(s.callsClean).toBe(1);
+    expect(s.concrete).toEqual([]); // 调用不冒充确定写点
+    expect(s.total).toBe(5);
+  });
+
+  it('只 proven：「另有 M 处调用，其中 K 处被调段可证有写」', () => {
+    const s = summarizeUnmodeledWrites([assign(1), call(2, 'FOO', 2), call(3, 'BAR', 4)])!;
+    expect(s.head).toContain('另有 2 处调用，其中 2 处被调段可证有写');
+    expect(s.head).toContain('本段有 1 处状态写未建模（回放按入口值判）');
+  });
+
+  it('有 unknown 无 proven：「另有 M 处调用（目标动态 / 查不到被调段，写不可知）」', () => {
+    const s = summarizeUnmodeledWrites([call(1, 'FOO'), call(2, 'BAR')])!;
+    expect(s.callsUnknown).toBe(2);
+    expect(s.head).toContain('另有 2 处调用（目标动态 / 查不到被调段，写不可知）');
+  });
+
+  it('只 clean：「另有 M 处调用（被调段未检出已知写）」', () => {
+    const s = summarizeUnmodeledWrites([call(1, 'FOO', 0)])!;
+    expect(s.callsClean).toBe(1);
+    expect(s.head).toContain('另有 1 处调用（被调段未检出已知写）');
+    expect(s.head).not.toContain('写不可知');
+  });
+
+  it('组合按 proven → unknown → clean 顺序、顿号连（与输入顺序无关）', () => {
+    const s = summarizeUnmodeledWrites([
+      call(1, 'CLEAN', 0), // 故意乱序给：呈现顺序由桶决定，不由输入顺序决定
+      call(2, 'CLEAN2', 0), // clean
+      call(3, 'UNK'), // unknown
+      call(4, 'PROV', 5), // proven
+    ])!;
+    const iProven = s.head.indexOf('1 处被调段可证有写');
+    const iUnknown = s.head.indexOf('1 处写不可知（目标动态 / 查不到被调段）');
+    const iClean = s.head.indexOf('2 处被调段未检出已知写');
+    expect(iProven).toBeGreaterThan(-1);
+    expect(iProven).toBeLessThan(iUnknown);
+    expect(iUnknown).toBeLessThan(iClean);
+    expect(s.head).toContain(
+      '另有 4 处调用：1 处被调段可证有写、1 处写不可知（目标动态 / 查不到被调段）、2 处被调段未检出已知写',
+    );
+  });
+
+  it('旧数据（无 target / calleeWrites）归 unknown；target 有但 calleeWrites 缺省也归 unknown', () => {
+    const legacy = summarizeUnmodeledWrites([
+      { line: 1, text: 'CALL FOO', kind: 'call' as const },
+      { line: 2, text: 'CALL BAR', kind: 'call' as const, target: 'BAR' }, // 查不到被调段
+    ])!;
+    expect(legacy.callsUnknown).toBe(2);
+    expect(legacy.callsProven).toBe(0);
+    expect(legacy.callsClean).toBe(0);
+    expect(legacy.head).toContain('另有 2 处调用（目标动态 / 查不到被调段，写不可知）');
+  });
+
+  it('确定写点按钮数不因 call / jump 变多（shown / more 只算 concrete）', () => {
+    const writes = [
+      ...[1, 2, 3, 4, 5, 6, 7, 8].map(assign),
+      call(20, 'P', 1),
+      call(21, 'U'),
+      call(22, 'C', 0),
+      jump(30),
+      jump(31),
+    ];
+    const s = summarizeUnmodeledWrites(writes, 5)!;
+    expect(s.concrete).toHaveLength(8);
+    expect(s.shown).toHaveLength(5); // 只铺确定写点
+    expect(s.more).toBe(3);
+    expect(s.total).toBe(13); // 总数仍含 call/jump
+    expect(s.callLines).toEqual([20, 21, 22]);
+    expect(s.jumpLines).toEqual([30, 31]);
+  });
+
+  it('proven 与跳转并存：调用桶在跳转前，跳转文案不变', () => {
+    const s = summarizeUnmodeledWrites([call(1, 'FOO', 2), jump(9)])!;
+    expect(s.head).toContain('另有 1 处调用，其中 1 处被调段可证有写、1 处跳转');
+    expect(s.head).toContain('被调段与跳转后的写/早退不展开');
+  });
+});
+
+describe('overridesForPanel · 开着的缓冲文件折成多文件表', () => {
+  const doc = (filePath: string, text: string) => ({ filePath, text });
+  const mapOf = (...docs: { filePath: string; text: string }[]) =>
+    new Map(docs.map((d, i) => [`k${i}`, d] as const));
+
+  it('空 map → []（调用方据此不传 textOverrides）', () => {
+    expect(overridesForPanel(new Map())).toEqual([]);
+  });
+
+  it('按 pathKey 去重：两个身份只留一条，正文留后到的那份，路径拼写留首次出现的', () => {
+    const out = overridesForPanel(
+      mapOf(doc('D:\\game\\kojo\\a.erb', 'old'), doc('d:/game/kojo/A.ERB', 'new')),
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual({ filePath: 'D:\\game\\kojo\\a.erb', text: 'new' });
+  });
+
+  it('最近一条在前（Map 末尾 = 最近一次广播），其余按路径排', () => {
+    const out = overridesForPanel(
+      mapOf(doc('D:\\g\\x.erb', 'x'), doc('D:\\g\\y.erb', 'y'), doc('D:\\g\\z.erb', 'z')),
+    );
+    expect(out.map((o) => o.filePath)).toEqual(['D:\\g\\z.erb', 'D:\\g\\x.erb', 'D:\\g\\y.erb']);
+  });
+
+  it('顺序稳定：同样输入两次，数组逐项相同（引擎按顺序比身份，抖动会白清缓存）', () => {
+    const m = mapOf(doc('D:\\g\\b.erb', 'b'), doc('D:\\g\\a.erb', 'a'), doc('D:\\g\\c.erb', 'c'));
+    const first = overridesForPanel(m);
+    const second = overridesForPanel(m);
+    expect(second).toEqual(first);
+    expect(second.map((o) => o.filePath)).toEqual(['D:\\g\\c.erb', 'D:\\g\\a.erb', 'D:\\g\\b.erb']);
+  });
+
+  it('上限 4 份：最近一条 + 按路径最靠前的 3 份，多的丢掉', () => {
+    const out = overridesForPanel(
+      mapOf(
+        doc('D:\\g\\a.erb', 'a'),
+        doc('D:\\g\\b.erb', 'b'),
+        doc('D:\\g\\c.erb', 'c'),
+        doc('D:\\g\\d.erb', 'd'),
+        doc('D:\\g\\e.erb', 'e'),
+        doc('D:\\g\\f.erb', 'f'), // 最近
+      ),
+    );
+    expect(out).toHaveLength(PANEL_TEXT_OVERRIDES_MAX);
+    expect(out.map((o) => o.filePath)).toEqual(['D:\\g\\f.erb', 'D:\\g\\a.erb', 'D:\\g\\b.erb', 'D:\\g\\c.erb']);
+  });
+
+  it('空 filePath 的条目跳过（交出去也按路径对不上，只会让引擎白查）', () => {
+    const out = overridesForPanel(mapOf(doc('', 'x'), doc('D:\\g\\a.erb', 'a')));
+    expect(out).toEqual([{ filePath: 'D:\\g\\a.erb', text: 'a' }]);
   });
 });
 

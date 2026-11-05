@@ -20,6 +20,9 @@
  * - **跳到命中状态**（G1，2026-10-16）：`readLineAt` 把"作者正看着的那一行"
  *   折成一句走/不走的结论（八态穷尽，判不出绝不并入不走），`describeReading`
  *   出作者面的那句话。判定权仍在引擎（只投影 `FunctionReplay`，不重算条件）。
+ * - **多文件缓冲文本**（2026-11-05 边界批）：`overridesForPanel` 把面板里**开着且
+ *   有缓冲文本**的文件折成引擎的多文件 override 表（去重 / 上限 4 / 顺序稳定）——
+ *   被调段在另一个未保存文件里时，跨函数写传播才按作者眼前那份字算。
  *
  * 全部函数为纯函数：输入 → 输出，无副作用、无 React、无服务依赖。
  */
@@ -1056,6 +1059,44 @@ export interface LineReading {
 /** 来源文件是否是同一份文本（宿主与索引各拿各的路径字符串，分隔符/大小写不保证一致） */
 export function sameSourcePath(a: string, b: string): boolean {
   return pathKey(a) === pathKey(b);
+}
+
+/** 面板交给引擎的多文件缓冲文本上限（与引擎的缓冲区切行记忆同量级：同时开着 4 份足够） */
+export const PANEL_TEXT_OVERRIDES_MAX = 4;
+
+/**
+ * 面板的缓冲文本表 → 引擎的多文件 override 表（2026-11-05 边界批；additive，**不进契约**）。
+ *
+ * 为什么需要：被调段可能在**另一个开着未保存的文件**里。只传主文件的 `textOverride` 时，
+ * 引擎要么拿到旧盘上的被调段、要么查不到（`calleeWrites` 缺省 ⇒ 一律"写不可知"）；
+ * 把开着的缓冲文件一并交过去，跨函数传播才能按作者眼前的文本算。
+ *
+ * 口径（逐条可测）：
+ * - **只取有缓冲文本的文件**：map 里没有的（没开 / 已关）不出现在表里 ⇒ 引擎读盘；
+ * - 按 `pathKey` 去重：同一份文件的两个身份（分隔符 / 大小写）只留一条，**后到的正文胜**
+ *   （后到 = 最近一次广播，旧正文不能盖新正文）；
+ * - 顺序稳定：**最近一条在前**（`rememberBuffered` 用 delete+set 把刚广播的那条挪到
+ *   Map 末尾，所以末尾 = 最近），其余按路径排——同样的输入每次交出逐字相同的数组
+ *   （引擎的传播缓存按顺序比身份，顺序抖动会让缓存白清）；
+ * - 上限 4 份：超出部分丢掉（离最近那条最远的路径），不刷屏也不拖慢引擎；
+ * - 空 map → `[]`（调用方据此决定"不传这个选项"）。
+ */
+export function overridesForPanel(
+  buffered: ReadonlyMap<string, { filePath: string; text: string }>,
+): readonly { filePath: string; text: string }[] {
+  // 同一 pathKey 的多个身份：先入者定位置与路径拼写，后入者只更新正文（最近广播的那份为准）
+  const ordered = new Map<string, { filePath: string; text: string }>();
+  for (const doc of buffered.values()) {
+    if (typeof doc?.filePath !== 'string' || doc.filePath.length === 0) continue;
+    const key = pathKey(doc.filePath);
+    ordered.set(key, { filePath: ordered.get(key)?.filePath ?? doc.filePath, text: doc.text });
+  }
+  if (ordered.size === 0) return [];
+  const keys = [...ordered.keys()];
+  // 末尾 = 最近一次广播（见 `rememberBuffered` 的 delete+set）；其余按路径排，保证顺序稳定
+  const newest = keys[keys.length - 1]!;
+  const rest = keys.slice(0, -1).sort();
+  return [newest, ...rest].slice(0, PANEL_TEXT_OVERRIDES_MAX).map((k) => ordered.get(k)!);
 }
 
 /**

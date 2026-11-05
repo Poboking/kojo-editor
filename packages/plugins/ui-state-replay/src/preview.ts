@@ -159,6 +159,13 @@ export interface UnmodeledWriteLike {
   readonly line: number;
   readonly text: string;
   readonly kind?: UnmodeledWriteKind;
+  /** 仅 `kind === 'call'`：静态可解析的被调函数名（缺省 = 目标动态 = 写不可知） */
+  readonly target?: string;
+  /**
+   * 仅 `kind === 'call'` 且 `target` 可解析：被调段里**可证明的写点数**。
+   * 缺省 = 没查到（不可知，**不是 0**）；`0` = 查过、被调段没有已知写。
+   */
+  readonly calleeWrites?: number;
 }
 
 /** 摘要里"确定写点"的那一条（行号 + 原文） */
@@ -181,6 +188,18 @@ export interface UnmodeledWritesSummary {
   concrete: UnmodeledConcreteWrite[];
   /** 调用行（`kind === 'call'`）条数——被调段是否写状态本层不展开 */
   calls: number;
+  /**
+   * 调用桶：被调段**可证有写**的调用数（`calleeWrites > 0`）。
+   * 2026-11-05 边界批的跨函数传播（一层）给出的**确定**事实。
+   */
+  callsProven: number;
+  /**
+   * 调用桶：**写不可知**的调用数——`target` 缺失（动态目标）或 `calleeWrites` 缺省
+   * （没查到被调段）。旧数据（无 `target` / `calleeWrites`）一律落这里。
+   */
+  callsUnknown: number;
+  /** 调用桶：查过被调段、**没有检出已知写**的调用数（`calleeWrites === 0`） */
+  callsClean: number;
   /** 跳转行（`kind === 'jump'`）条数——跳转后的写 / 早退是否执行本层不建模 */
   jumps: number;
   /** 调用行示例行号（最多 3 条，给 title 用；不逐行铺） */
@@ -200,6 +219,14 @@ export const UNMODELED_SAMPLE_LINES = 3;
  * - `call` / `jump`：**不确定面**，只报计数（被调段与跳转后的写/早退是否执行，静态判不出）。
  *   逐行铺开等于把"可能没发生的事"伪装成一排可点的写点，所以只给数量 + 前 3 条示例行号。
  *
+ * **调用桶**（2026-11-05 边界批的跨函数传播，一层）：引擎能给到 `target` 与
+ * `calleeWrites` 时，把"这行调用会写"与"这行调用可能写"分开说——
+ * - `calleeWrites > 0` → **proven**（被调段可证有写）；
+ * - `calleeWrites === 0` → **clean**（查过、被调段没有已知写）；
+ * - `target` 缺失 / `calleeWrites` 缺省（含全部旧数据）→ **unknown**（写不可知）。
+ * 三桶在 head 里按 proven → unknown → clean 的顺序拼；只有一桶时用整句（见 {@link callBucketClause}），
+ * 跳转那条文案保持原样（引擎本批只报动态跳转）。
+ *
  * 为什么确定写点也只列前 5 行：这一段可能写着几十处 `CFLAG +=`，全铺出来会把谓词列表
  * 顶出屏外；面板要回答的是"这结论是近似的、差在哪几行"，不是把写点清单搬进结果区。
  *
@@ -217,11 +244,22 @@ export function summarizeUnmodeledWrites(
   const callLines: number[] = [];
   const jumpLines: number[] = [];
   let calls = 0;
+  let callsProven = 0;
+  let callsUnknown = 0;
+  let callsClean = 0;
   let jumps = 0;
   for (const w of writes) {
     // 运行时脏数据（kind 不在联合里）按"确定写点"处理：宁可多列一行可点的，也不丢事实
     if (w.kind === 'call') {
       calls += 1;
+      // 桶判据：先看"能不能算"（目标可解析 + 被调段查过），再按写点数分 proven / clean。
+      // `target` 缺失 = 动态目标；`calleeWrites` 缺省 = 没查到（**不是 0**）⇒ 都归 unknown。
+      const target = typeof w.target === 'string' && w.target.length > 0 ? w.target : null;
+      const calleeWrites =
+        typeof w.calleeWrites === 'number' && Number.isFinite(w.calleeWrites) ? w.calleeWrites : null;
+      if (target === null || calleeWrites === null) callsUnknown += 1;
+      else if (calleeWrites > 0) callsProven += 1;
+      else callsClean += 1;
       if (callLines.length < UNMODELED_SAMPLE_LINES) callLines.push(w.line);
     } else if (w.kind === 'jump') {
       jumps += 1;
@@ -231,7 +269,7 @@ export function summarizeUnmodeledWrites(
     }
   }
   const extra: string[] = [];
-  if (calls > 0) extra.push(`${calls} 处调用`);
+  if (calls > 0) extra.push(callBucketClause(calls, callsProven, callsUnknown, callsClean));
   if (jumps > 0) extra.push(`${jumps} 处跳转`);
   const base = `本段有 ${concrete.length} 处状态写未建模（回放按入口值判）`;
   return {
@@ -244,10 +282,36 @@ export function summarizeUnmodeledWrites(
         : `${base}：`,
     concrete,
     calls,
+    callsProven,
+    callsUnknown,
+    callsClean,
     jumps,
     callLines,
     jumpLines,
   };
+}
+
+/**
+ * 调用桶的 head 片段（纯函数）：只有一桶时给完整句（旧数据的「N 处调用」被
+ * unknown 那句取代——旧数据本来就属于"写不可知"），多桶时按 proven → unknown → clean
+ * 的顺序用顿号连。片段前由调用方加「另有 」，后接「：…」。
+ *
+ * 单桶三态（与需求逐字对齐）：
+ * - proven：`M 处调用，其中 K 处被调段可证有写`
+ * - unknown：`M 处调用（目标动态 / 查不到被调段，写不可知）`
+ * - clean：`M 处调用（被调段未检出已知写）`
+ */
+function callBucketClause(calls: number, proven: number, unknown: number, clean: number): string {
+  if (proven > 0 && unknown === 0 && clean === 0) return `${calls} 处调用，其中 ${proven} 处被调段可证有写`;
+  if (proven === 0 && unknown > 0 && clean === 0) return `${calls} 处调用（目标动态 / 查不到被调段，写不可知）`;
+  if (proven === 0 && unknown === 0 && clean > 0) return `${calls} 处调用（被调段未检出已知写）`;
+  const parts: string[] = [];
+  if (proven > 0) parts.push(`${proven} 处被调段可证有写`);
+  if (unknown > 0) parts.push(`${unknown} 处写不可知（目标动态 / 查不到被调段）`);
+  if (clean > 0) parts.push(`${clean} 处被调段未检出已知写`);
+  // 理论上 calls ≥ 三桶之和、桶全零只可能来自运行时脏数据：退回旧文案，不编造桶
+  if (parts.length === 0) return `${calls} 处调用`;
+  return `${calls} 处调用：${parts.join('、')}`;
 }
 
 /** `undefined`（引擎没拿到函数体行文本）时结果区那句话——与"零写点"必须分开说 */
@@ -882,12 +946,23 @@ export function renderReplayPreview(opts: {
   /** D6（2026-11-05）：引擎把 undefined 定义成「不知道有没有写」（没拿到正文），`[]` 才是「算过、未检出」。
    * 两者都渲染成「没有写点」就是在替引擎撒谎 ⇒ undefined 单独给一句「未评估」。 */
   const unmodeledUnknown = unmodeledUnknownNote(result.unmodeledWrites);
+  /** 调用桶细目（悬停 title 用：proven / unknown / clean 各几处，不占屏） */
+  const unmodeledCallBuckets =
+    unmodeled === null
+      ? []
+      : [
+          unmodeled.callsProven > 0 ? `被调段可证有写 ${unmodeled.callsProven} 处` : null,
+          unmodeled.callsUnknown > 0 ? `写不可知 ${unmodeled.callsUnknown} 处` : null,
+          unmodeled.callsClean > 0 ? `被调段未检出写 ${unmodeled.callsClean} 处` : null,
+        ].filter((s): s is string => s !== null);
   /** call/jump 的悬停示例（只有计数，示例行号放 title） */
   const unmodeledExamples =
     unmodeled !== null && (unmodeled.calls > 0 || unmodeled.jumps > 0)
       ? [
           unmodeled.calls > 0
-            ? `调用 ${unmodeled.calls} 处${unmodeled.callLines.length > 0 ? `（示例：第 ${unmodeled.callLines.join('、')} 行）` : ''}`
+            ? `调用 ${unmodeled.calls} 处${
+                unmodeledCallBuckets.length > 0 ? `（${unmodeledCallBuckets.join(' · ')}）` : ''
+              }${unmodeled.callLines.length > 0 ? `（示例：第 ${unmodeled.callLines.join('、')} 行）` : ''}`
             : null,
           unmodeled.jumps > 0
             ? `跳转 ${unmodeled.jumps} 处${unmodeled.jumpLines.length > 0 ? `（示例：第 ${unmodeled.jumpLines.join('、')} 行）` : ''}`

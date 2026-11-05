@@ -877,6 +877,8 @@ async function scanCorpusWriteSamples(corpus, { cap = 400 } = {}) {
   await walk(path.join(corpus, 'ERB'));
   const j1 = [];
   const j2 = [];
+  const j2Static = [];
+  const allFns = [];
   let scanned = 0;
   for (const file of files) {
     scanned += 1;
@@ -890,18 +892,21 @@ async function scanCorpusWriteSamples(corpus, { cap = 400 } = {}) {
     let cur = null;
     const flush = () => {
       if (cur === null) return;
-      const { name, start, end, calls, jumps, writes, conds } = cur;
+      const { name, start, end, calls, jumps, jumpKinds, callTargets, writes, conds } = cur;
       if (!/^M_KOJO_/i.test(name)) return;
       const base = { name, file, start, bodyLines: end - start + 1, conds };
       if (calls.length > 0 && writes.length > 0 && j1.length < cap) {
         j1.push({ ...base, callLines: calls.slice(), jumpLines: jumps.slice(), concreteCount: writes.length });
       }
-      if (jumps.length > 0) {
-        const jumpLines = jumps.filter((j) => writes.some((w) => w > j));
-        if (jumpLines.length > 0 && j2.length < cap) {
-          j2.push({ ...base, jumpLine: jumpLines[0], jumpLines, callLines: calls.slice(), concreteCount: writes.length });
-        }
+      // j2：只有**动态**跳转才是引擎会报的那一族（静态跳转已建模可达性，不再报）
+      const dynJumps = jumps.filter((j, i) => jumpKinds[i] === "dynamic" && writes.some((w) => w > j));
+      const statJumps = jumps.filter((j, i) => jumpKinds[i] === "static" && writes.some((w) => w > j));
+      if (dynJumps.length > 0 && j2.length < cap) {
+        j2.push({ ...base, jumpLine: dynJumps[0], jumpLines: dynJumps, kind: "dynamic", callLines: calls.slice(), concreteCount: writes.length });
+      } else if (statJumps.length > 0 && j2Static.length < cap) {
+        j2Static.push({ ...base, jumpLine: statJumps[0], jumpLines: statJumps, kind: "static", callLines: calls.slice(), concreteCount: writes.length });
       }
+      allFns.push({ name: name.toUpperCase(), writes: writes.length, callTargets: callTargets.slice() });
     };
     let inSkip = false;
     for (let i = 0; i < lines.length; i += 1) {
@@ -914,6 +919,8 @@ async function scanCorpusWriteSamples(corpus, { cap = 400 } = {}) {
           end: i + 1,
           calls: [],
           jumps: [],
+          jumpKinds: [],
+          callTargets: [],
           writes: [],
           conds: 0,
         };
@@ -948,20 +955,40 @@ async function scanCorpusWriteSamples(corpus, { cap = 400 } = {}) {
       const upper = verb[1].toUpperCase();
       if (SCAN_CALL_VERBS.has(upper)) {
         cur.calls.push(i + 1);
+        const t = /^(?:TRY)?CALL\s+([A-Za-z_][A-Za-z0-9_]*)/i.exec(code);
+        if (t) cur.callTargets.push({ line: i + 1, target: t[1].toUpperCase() });
         continue;
       }
       if (SCAN_JUMP_VERBS.has(upper)) {
         cur.jumps.push(i + 1);
+        // 静态 = 目标就是一个裸标签（可带 $）；其余（表达式 / 变量 / 空）都算动态。
+        const rest = code.slice(verb[0].length).trim().replace(/,$/, "");
+        cur.jumpKinds.push(/^\$?[A-Za-z_][A-Za-z0-9_]*$/.test(rest) ? 'static' : 'dynamic');
         continue;
       }
       if (SCAN_WRITE_VERBS.has(upper)) cur.writes.push(i + 1);
     }
     flush();
   }
+  // j3（调用传播）：被调段**可证明有写**的口上函数——静态 CALL 目标能对上语料里另一个
+  // 有写点的 M_KOJO 函数。引擎只做一层传播，这里按同一层判据挑样本。
+  const writesByName = new Map();
+  for (const f of allFns) if (f.writes > 0 && !writesByName.has(f.name)) writesByName.set(f.name, f.writes);
+  const j3 = [];
+  for (const f of allFns) {
+    for (const t of f.callTargets) {
+      const w = writesByName.get(t.target);
+      if (w !== undefined && j3.length < cap) {
+        j3.push({ name: f.name, target: t.target, calleeWrites: w, callLine: t.line });
+        break;
+      }
+    }
+  }
   const order = (a, b) => (b.conds > 0 ? 1 : 0) - (a.conds > 0 ? 1 : 0) || a.bodyLines - b.bodyLines || (a.name < b.name ? -1 : 1);
   j1.sort(order);
   j2.sort(order);
-  return { scanned, j1, j2 };
+  j2Static.sort(order);
+  return { scanned, j1, j2, j2Static, j3 };
 }
 
 /** 从悬停 title 里抠「调用 3 处（示例：第 12、15 行）」的示例行号（面板自己的读数） */
@@ -1496,10 +1523,12 @@ async function main() {
         };
       })()`,
     );
-    const archiveBtn = (fnRow?.buttons ?? []).find((b) => b.text.includes(ARCHIVE_BTN_TEXT)) ?? null;
+    // 索引建中时文案会变成「整档体检（索引建中…）」——这是产品行为（让作者知道为什么灰着），
+    // 所以按前缀认，不按整串认；title 里的预算词仍然必须齐。
+    const archiveBtn = (fnRow?.buttons ?? []).find((b) => b.text.startsWith('整档体检')) ?? null;
     check(
       'i1 整档体检入口在场（按钮文案 + title 写明预算，含「每角色」与「封顶」）',
-      !!archiveBtn && archiveBtn.title.includes('每角色') && archiveBtn.title.includes('封顶'),
+      !!archiveBtn && archiveBtn.text.includes('整档体检') && archiveBtn.title.includes('每角色') && archiveBtn.title.includes('封顶'),
       archiveBtn
         ? `文案=${JSON.stringify(archiveBtn.text)} · disabled=${archiveBtn.disabled} · title=${JSON.stringify(archiveBtn.title)}`
         : `没有这颗按钮；.dbg-row-fn 现有=${JSON.stringify((fnRow?.buttons ?? []).map((b) => b.text))}`,
@@ -1847,7 +1876,7 @@ async function main() {
     }
 
     if (samples !== null && samples.j2.length === 0) {
-      note(`j2 N/A：扫了 ${samples.scanned} 份 ERB，没有「平跳之后还有写点」的口上函数（跳转不报是引擎的防刷屏口径）`);
+      note(`j2 N/A：扫了 ${samples.scanned} 份 ERB，没有「动态平跳之后还有写点」的口上函数（静态跳转已建模可达性、不再报 jump）`);
     } else if (samples !== null) {
       const pick2 = await judgeWriteSample(cdp, samples.j2, { verb: '跳转', label: 'j2' });
       if (pick2.candidate === null) {
@@ -1873,6 +1902,79 @@ async function main() {
         note(`j2 样本取自扫过的 ${samples.scanned} 份 ERB（j2 候选共 ${samples.j2.length} 个）`);
       }
     }
+
+    // j2 的**负向**正读数：静态跳转（目标就是裸标签）在新语义下不再报「跳转」——
+    // 这是"可达性已建模"的可观察证据，比"没样本就 N/A"更有价值。
+    if (samples !== null && samples.j2.length === 0 && samples.j2Static.length > 0) {
+      const pickStatic = await judgeWriteSample(cdp, samples.j2Static, { verb: '调用', label: 'j2static' });
+      if (pickStatic.candidate === null) {
+        note(`j2s N/A：静态跳转样本判不出可读的未建模写段（尝试 ${pickStatic.attempts.length} 个）`);
+      } else {
+        const { candidate, un } = pickStatic;
+        const jumpCount = Number((/(\d+)\s*处跳转/.exec(un.head) ?? [])[1] ?? 0);
+        check(
+          'j2s 静态跳转不再报「跳转」（可达性已建模的可观察证据）',
+          jumpCount === 0 && !un.head.includes('处跳转'),
+          `函数=${candidate.name} · 静态跳转第 ${candidate.jumpLine} 行（其后有写）· head=${JSON.stringify(un.head)}`,
+        );
+      }
+    }
+
+    // j3（调用传播，2026-11-05 边界批）：静态 CALL 的目标段**可证明有写**时，面板必须说
+    // 「被调段可证有写」而不是笼统的「另有 N 处调用」。样本由语料扫描给出（目标名能在
+    // 语料里对上另一个有写点的 M_KOJO 函数）。
+    if (samples !== null && samples.j3.length === 0) {
+      note(`j3 N/A：扫了 ${samples.scanned} 份 ERB，没有「静态 CALL 目标段可证有写」的口上函数`);
+    } else if (samples !== null) {
+      let picked = null;
+      const attempts3 = [];
+      for (const cand of samples.j3.slice(0, 4)) {
+        await cdp.evalJs(`__rpSmoke.setInput('.rp-fn-input', ${JSON.stringify(cand.name)})`);
+        await sleep(400);
+        const judged = await clickJudgeAndWaitFor(cdp, resultNoteIs(cand.name), { label: `j3 ${cand.name}` });
+        const un = await readUnmodeled(cdp);
+        attempts3.push({ name: cand.name, target: cand.target, ok: judged.ok, head: un.present ? un.head : '(无写段)' });
+        if (judged.ok && un.present && un.head.includes('被调段可证有写')) {
+          picked = { cand, un };
+          break;
+        }
+      }
+      if (picked === null) {
+        await forensics(cdp, 'j3-调用传播', outDir);
+        check(
+          'j3 调用传播（head 含「被调段可证有写」）',
+          false,
+          `试了 ${attempts3.length} 个候选都没出目标文案：${JSON.stringify(attempts3).slice(0, 700)}`,
+        );
+      } else {
+        check(
+          'j3 调用传播（head 含「被调段可证有写」）',
+          true,
+          `函数=${picked.cand.name} · CALL 目标=${picked.cand.target}（目标段 ${picked.cand.calleeWrites} 处写）· head=${JSON.stringify(picked.un.head)}`,
+        );
+        note(`j3 样本取自扫过的 ${samples.scanned} 份 ERB（j3 候选共 ${samples.j3.length} 个）`);
+      }
+    }
+
+    /* ================= l. 调试 API 诚实性（只读项目下 type() 不许撒谎） ================= */
+    const honesty = await cdp.evalJs(`(() => {
+      const api = window.__kojoDebug;
+      if (!api || !api.editor) return { present: false };
+      const before = api.editor.info();
+      const typed = api.editor.type('x');
+      const after = api.editor.info();
+      return {
+        present: true,
+        readOnly: before ? before.readOnly === true : null,
+        typed: typed === true,
+        changed: !!(before && after) && before.value !== after.value,
+      };
+    })()`).catch(() => ({ present: false }));
+    check(
+      'l1 只读项目下 editor.type() 如实回 false（info().readOnly=true 同屏可见）',
+      honesty.present === true && honesty.readOnly === true && honesty.typed === false && honesty.changed === false,
+      JSON.stringify(honesty),
+    );
 
     /* ================= k. 未保存文本口径（编辑器缓冲 → 判定；做不成记 N/A） ================= */
     let kSetup = null;

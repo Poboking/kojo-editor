@@ -31,4 +31,15 @@ export interface ReplayWrite {
   text: string;
   /** 类别（缺省 = `assign`，旧数据兼容） */
   kind?: ReplayWriteKind;
+  /**
+   * 仅 `kind === 'call'`：**静态可解析**的被调函数名（`CALL FOO(...)` 的 `FOO`）。
+   * 动态调用（`CALLFORM` / 实参拼出来的目标）没有这个字段 ⇒ 目标不可知。
+   */
+  target?: string;
+  /**
+   * 仅 `kind === 'call'` 且 `target` 可解析时：**被调段里可证明的写点数**（引擎做一层
+   * 跨函数传播，深度/预算有界）。缺省 = 没查/查不到（不可当成 0）；`0` = 查过、被调段
+   * 没有可证明的写。消费方据此把"这行调用会写状态"与"这行调用可能写"分开说。
+   */
+  calleeWrites?: number;
 }
