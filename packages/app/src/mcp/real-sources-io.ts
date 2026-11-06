@@ -80,6 +80,10 @@ import {
   fsFreshnessPayload,
   type FsFreshnessTracker,
 } from './fs-freshness';
+// B2 批（LaneT，2026-11-06）：结构化批读面 `fs.readMany` 的执行腿（真源 = 内核 io.readTexts）。
+// 路径闸 / 项目上下文 / 失效标注器由本模块注入——该模块只 `import type` 本文件的形状，
+// 不反向 import 运行时（零循环依赖）；改动集中在独立新模块，减少对本热点文件的编辑面。
+import { createBatchReadLeg, type BatchTextFile } from './batch-read-leg';
 
 /* ------------------------------- 窄结构类型 ------------------------------- */
 
@@ -138,6 +142,13 @@ export interface McpKernelLike {
     readonly removeFile?: (path: string) => Promise<void>;
     readonly removeDir?: (path: string) => Promise<void>;
     readonly rename?: (from: string, to: string) => Promise<void>;
+    /**
+     * FileIO 契约的**批量读**原语（`fs.readMany` 用；B2 批 LaneT 2026-11-06，additive）。
+     * 语义（契约真源 `@kojo/plugin-api` io.ts）：与 readText 同一条编码/BOM/EOL 管线、
+     * 每批一次 IPC、逐文件失败不抛整批 ⇒ 失败位 `null`、可命中会话文本缓存、
+     * 返回数组与入参一一对应（含重复路径）。测试假件 / 精简桥可缺席 ⇒ 该腿显式 NOT_WIRED。
+     */
+    readonly readTexts?: (paths: readonly string[]) => Promise<readonly (BatchTextFile | null)[]>;
   };
   readonly plugins: { readonly list: () => unknown[] };
   readonly services: { readonly tryGet: <T = unknown>(key: string) => T | undefined };
@@ -1323,6 +1334,19 @@ export function createRunSupplemental(deps: McpIoDeps): (
   const tasksCancel = async (args: Record<string, unknown>, scope: McpSessionScope): Promise<unknown> =>
     requireTaskLegs('tasks.cancel').cancel(args ?? {}, scope);
 
+  // B2 批（LaneT，2026-11-06）：结构化批读面 `fs.readMany`（只读，真源 = 内核 io.readTexts 的
+  // 批量原语；逐条路径闸与 fs.readFile / fs.statFiles 同一个 resolveWithinRoot，超限整批
+  // INVALID_ARGS，失败位显式带原因）。实现见 batch-read-leg.ts；此处只做注入与分派。
+  const readMany = createBatchReadLeg({
+    getKernel: deps.getKernel,
+    invoke: deps.invoke,
+    requireProject,
+    resolveWithinRoot,
+    toRelativePath,
+    fsFreshness: (abs, rel, scope) => fsFreshnessField(deps, abs, rel, scope),
+    pageChars: { defaultChars: MCP_PAGE_TEXT_DEFAULT_CHARS, maxChars: MCP_PAGE_TEXT_MAX_CHARS },
+  });
+
   const ioTools = new Map<string, (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown> | unknown>([
     ['commands.list', commandsList],
     ['fs.readFile', readFile],
@@ -1334,6 +1358,8 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['codec.encodeString', encodeString],
     ['fs.pathExists', pathExists],
     ['fs.statFiles', statFiles],
+    // B2 批（LaneT）：结构化批读（一次调用读多文件）；只读，不触任何写命令 / 索引重建。
+    ['fs.readMany', readMany],
     ['fileTree.create', fileTreeCreate],
     ['fileTree.update', fileTreeUpdate],
     ['fileTree.remove', fileTreeRemove],

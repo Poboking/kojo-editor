@@ -242,6 +242,8 @@ const ANNOTATED_TOOLS = [
   'fs.readFile',
   'fs.stat',
   'fs.statFiles（逐项）',
+  // B2 批（LaneT，2026-11-06）：结构化批读面按同族口径**逐项**标注（成功位与失败位都带）。
+  'fs.readMany（逐项）',
   'io.listDir',
   'projectFileTree / kojo://project/file-tree',
   'workspace.searchAll / io.searchAll',
