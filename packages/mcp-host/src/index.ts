@@ -748,6 +748,41 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
+
+  /* ---- 第五波（LaneH，2026-11-06）：Wave4 #4 判性落地 ----
+   * 判性落地：editor.openDocument / editor.revealPosition 两枚 edit 档工具刻意不登记，
+   * 证据逐条如下；只读 editor.cursor 单独记账。
+   * 按铁律 4「缺席=NOT_WIRED、截断=truncated 可见、真源不存在=不登记（绝不挂空串假实现）」：
+   * 这两枚名字不进 SUPPLEMENTAL_TOOL_SPECS、不进 MCP_TOOL_GAP_MAP、不进真源腿表，
+   * 只作为显式缺口留在 MCP_DEFERRED_GAP_NOTES 的 Wave4 #4 条目；runSupplemental 仍保留
+   * 前置兜底，对任何误调抛可见 NOT_WIRED（绝不假成功）。
+   * 判性结论（逐条证据见 commit 回执）：宿主没有可从 MCP 注入面安全复用、且能诚实回报
+   * 执行结果的「打开项目内文件 / 把光标定位到行列」真源——
+   *   · editor.revealLocation（App.tsx:1379）是唯一真实的打开+定位通道，但它是
+   *     fire-and-forget 事件：无 ack / 无落地确认；落地走 React setState 异步重渲染；
+   *     routeOpenPath（App.tsx:1750）只过 .kojo2 入口闸、不校验路径是否在项目根内；
+   *     订阅者只在 App 组件挂载（GUI 运行时）存在。发射后回报「已打开」= 推断 / 假成功，
+   *     回报「已发射意图（未确认）」= 把无确认副作用包装成具名工具 —— 都不诚实。
+   *   · EditorCommandContext（slots-types.ts:399）只读投影，无 open / reveal 句柄；
+   *     McpRealSourceHost（real-sources.ts:1008）只有三个只读 getter；
+   *     CommandEntry.run（commands.ts:138 / ProjectView.tsx:790）忽略 args、返回 void、
+   *     gotoLine 经 editor.action.request 触发 Monaco 交互式输入框；
+   *     editor-pane-registry 全是纯读登记簿（openModelAcrossGroups 只查已开 model 不打开）；
+   *     file-tree-ops + 内核 io.readText(read_file_bytes) 是读内容通道，不打开 GUI 文档。
+   * 不写盘、不开放任意目标路径；写盘仍只经第四张表 approvedRoots × 内核 writablePaths 双闸。
+   * editor.cursor 是分开记账的只读读数加法（真源 = 焦点编辑器 getPosition），不冒充写工具。
+   * 本注释刻意不写规格字面量，避免干扰盘点脚本对规格块的正则解析。
+   */
+  // 与上面缺口判性分开记账：这是安全的只读读数加法（真源 = 焦点编辑器 getPosition，
+  // 与 document.active / editor.info 同源），不是打开 / 定位写工具，绝不拿来冒充写能力。
+  {
+    name: 'editor.cursor',
+    description:
+      'Read the caret position of the active editor (read-only). Returns {path, language, line, column, lineCount} for the focused document; the 1-based cursor comes from the focused editor, not the model. No arguments, no side effects: never moves the caret and never opens a file. Backed by the same read-only workspace source as document.active / editor.info. When no editor is focused the call fails with a visible NOT_WIRED (never a fabricated {line:1,column:1}). This is a READ tool, deliberately separate from the editor.openDocument / editor.revealPosition NOT_WIRED gap.',
+    inputSchema: { type: 'object', properties: {} },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
 ];
 
 /**
@@ -818,6 +853,7 @@ export const MCP_DEFERRED_GAP_NOTES: readonly { readonly scope: string; readonly
   { scope: 'ui.* 槽贡献（面板 / 装饰 / 语言服务注册）', reason: '纯 UI / 注册贡献，无独立数据面；领域知识只经 mcp.prompt 槽注入。' },
   { scope: '其余未登记只读原语', reason: '真源存在但本波未登记为具名工具：保留在缺口清单，宿主后续按需补，绝不挂空串假实现。' },
   { scope: 'LaneF 第四波刻意不登记的 5 条 cheap-read', reason: 'read_file_bytes_raw / read_files_raw：ipc::Response 二进制帧（前端拿 ArrayBuffer / 自定义帧），是开项目热路径性能通道，无面向模型的结构化只读数据面，且 read_files_raw 收任意 paths 数组，不登记以免暴露任意目标路径参数（项目根内文本读已由 fs.readFile 覆盖）；updater_relaunch=app.restart() 重启动作、debug.type=applyTypedEdit 编辑器输入动作，均非只读；debug.actions 真源 focusedCtx().editorRef.current.getSupportedActions() 对 MCP 注入面不可达，绝不挂空数组假实现。' },
+  { scope: 'Wave4 #4 · editor.openDocument / editor.revealPosition（LaneH 判性，显式 NOT_WIRED 判据）', reason: '宿主无可从 MCP 注入面安全复用、且能诚实回报结果的打开文档 / 定位光标真源。逐条不可复用：editor.revealLocation（App.tsx:1379）是 fire-and-forget 事件，无 ack / 无落地确认 / 落地走 React setState 异步重渲染 / routeOpenPath 不校验项目根域 / 订阅者只在 GUI 挂载时存在，发射后回报已打开即假成功；EditorCommandContext（slots-types.ts:399）只读投影无句柄；McpRealSourceHost（real-sources.ts:1008）仅三个只读 getter；CommandEntry.run（commands.ts:138 / ProjectView.tsx:790）忽略 args 且返回 void，gotoLine 经 editor.action.request 触发 Monaco 交互输入框；editor-pane-registry 全为纯读登记簿，openModelAcrossGroups 只查已开 model 而不打开；file-tree-ops 与内核 io.readText(read_file_bytes) 只读文件内容，不打开 GUI 文档也不定位光标。两枚 edit 档工具按铁律刻意不登记（真源不存在 ⇒ 不登记 + 显式缺口，绝不挂空串假实现），既不进工具清单也不进覆盖登记；runSupplemental 前置兜底仍对任何误调抛可见 NOT_WIRED，绝不 emit 无确认事件冒充成功；写盘仍只经第四张表 approvedRoots × 内核 writablePaths 双闸。只读 editor.cursor 是分开记账的加法，绝不冒充写工具。' },
 ];
 
 /** 内置 8 项 resource（≥6 的硬要求；新增「当前文档与光标」，其余保持第一波 URI）。 */

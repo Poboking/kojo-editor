@@ -3,7 +3,7 @@
  *
  * 覆盖：semantic 8 腿（definitionAt / referencesAt / diagnostics / hoverAt / suggestAt /
  * documentSymbols / tokens / codeActionsAt —— 全部只读，绝不 apply codeAction）、
- * runSupplemental 的 UI 腿（document.active / editor.info / editor.selfCheck /
+ * runSupplemental 的 UI 腿（document.active / editor.info / editor.cursor / editor.selfCheck /
  * problems.diagnostics / lang.foldingRanges / lang.highlightsAt / lang.signatureAt /
  * lang.markers）、resource 数据源的 diagnostics / active-document 两个 URI、
  * `mcp.prompt` 槽贡献收集、内核事件环形缓冲。
@@ -20,6 +20,12 @@
  * - codeActionsAt 只投影「有哪些动作」，绝不调 command、绝不碰 edit 内容。
  * - 失败显式 `{code,message}`；无活动编辑器 / 无项目 / 判据腿未装配一律
  *   `NOT_WIRED` / `RESOURCE_UNAVAILABLE` 可见，不吞错、不伪造读数、不空串冒充成功。
+ * - 第五波（LaneH / Wave4 #4）：editor.openDocument / editor.revealPosition 两枚 edit 档工具
+ *   经判性确认「宿主没有可从 MCP 注入面安全复用、能诚实回报结果的打开 / 定位通道」，
+ *   按铁律刻意不登记（真源不存在 ⇒ 不登记）：不进工具清单 / 不进真源腿表；
+ *   `buildRealMcpSources` 的 runSupplemental 分发仍保留前置兜底，对误调显式抛 NOT_WIRED，
+ *   绝不 emit fire-and-forget 的 `editor.revealLocation` 冒充打开成功；只读 editor.cursor
+ *   是分开记账的加法（纯读焦点编辑器光标），绝不冒充写工具。
  * - promptSlots 只从 `mcp.prompt` 槽收集 adapter 贡献（骨架绝不硬编码领域知识）；
  *   无贡献 ⇒ 显式空数组（骨架并入的开关按契约保留）。
  */
@@ -747,6 +753,22 @@ export function buildUiSupplemental(
     return { editor, document };
   };
 
+  /**
+   * 只读读数加法（LaneH / Wave4 #4）：焦点编辑器光标。
+   * 与打开 / 定位缺口判性**分开记账**——这是纯读（getPosition 已在 productionGetWorkspace
+   * 取好），不打开文件、不移动光标、不发事件；没有活动编辑器由 requireWorkspace 显式 NOT_WIRED。
+   */
+  const editorCursor: McpReaderFn = async () => {
+    const ws = await requireWorkspaceOf();
+    return {
+      path: toRelativeLocationPath(ws.model.uri.toString(), ws.rootDir),
+      language: ws.model.getLanguageId(),
+      line: ws.cursor.line,
+      column: ws.cursor.column,
+      lineCount: ws.model.getLineCount(),
+    };
+  };
+
   const editorSelfCheck: McpReaderFn = async (args) => {
     const maxResults = clampInt(args['maxResults'], 200, 1, 500);
     return selfCheckFindings(kernel, maxResults);
@@ -917,6 +939,7 @@ export function buildUiSupplemental(
   return new Map<string, McpReaderFn>([
     ['document.active', documentActive],
     ['editor.info', editorInfo],
+    ['editor.cursor', editorCursor],
     ['editor.selfCheck', editorSelfCheck],
     ['problems.diagnostics', problemsDiagnostics],
     ['lang.foldingRanges', foldingRanges],
@@ -1185,6 +1208,23 @@ export async function buildRealMcpSources(
     kernelIo: createKernelIo(ioDeps),
     readResourceData: buildReadResourceData(createIoResourceData(ioDeps, recentEvents, countEvents), semanticDeps),
     runSupplemental: (name, args, scope) => {
+      // LaneH / Wave4 #4 判性落地（逐条证据见 mcp-host/src/index.ts 第五波注释与 commit 回执）：
+      // 宿主没有可从 MCP 注入面安全复用、且能诚实回报结果的「打开文档 / 定位光标」真源。
+      // 这两枚 edit 档工具按铁律刻意不登记（真源不存在 ⇒ 不登记 + 显式缺口）：不进
+      // SUPPLEMENTAL_TOOL_SPECS / MCP_TOOL_GAP_MAP / buildUiSupplemental / ioTools 腿表。
+      // 这里保留前置防御性显式失败：万一有人绕过 registry 直调，调用必得带判性理由的
+      // 可见 NOT_WIRED，绝不 emit 一个 fire-and-forget 的 editor.revealLocation 冒充打开成功。
+      if (name === 'editor.openDocument' || name === 'editor.revealPosition') {
+        throw new McpFailure(
+          'NOT_WIRED',
+          `工具 ${name} 未接线（Wave4 #4 判性）：宿主没有可从 MCP 注入面安全复用的打开 / 定位通道。` +
+            'editor.revealLocation 是 fire-and-forget 事件（无 ack / 无落地确认 / 落地走 React setState ' +
+            '异步重渲染 / routeOpenPath 不校验项目根域 / 订阅者只在 GUI 挂载时存在），发射后无法诚实回报执行结果；' +
+            'EditorCommandContext / McpRealSourceHost / CommandEntry.run / editor-pane-registry / io.readText ' +
+            '全为只读或 void 通道。刻意不接真源腿：调用必得可见 NOT_WIRED，' +
+            '绝不返回空串 / 假成功 / 静默成功。只读的活动文档 / 光标读数请用 document.active / editor.info / editor.cursor。',
+        );
+      }
       const ui = uiSupplemental.get(name);
       if (ui) return ui(args ?? {}, scope);
       return ioSupplemental(name, args ?? {}, scope);
