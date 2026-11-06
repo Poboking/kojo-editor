@@ -80,17 +80,56 @@ type McpWiringModule = typeof import('./wiring');
 
 export type McpRegistryFactory = (
   deps: McpHostDeps | undefined,
-  /** B20：生产分支把「装配这一份注册表所依据的 wiring 登记」回填这里，供分派前失效比对；自定义工厂可忽略。 */
+  /** B20：生产分支把「装配这一份注册表所依据的 wiring 登记」的**浅快照**回填这里，供分派前失效比对；自定义工厂可忽略。 */
   basis?: McpRegistryBasis,
 ) => McpCapabilityRegistry | Promise<McpCapabilityRegistry>;
 
 /**
- * 装配基准（B20）：注册表是**按哪一份真源登记**装出来的。
+ * 装配基准（B20 立，B23 改判据）：注册表是**按哪一份 wiring 真源**装出来的。
  * `wiring === null` ＝ 这一份不是从 wiring 装的（注入了 deps / 用了自定义工厂）⇒ 不参与换代重取。
+ *
+ * B23：比对物从「登记对象 identity」换成**装配期浅快照**（`McpRegistryBasis.snapshot`）。
+ * 只登记对象身份的话，任何人拿着已登记的 `McpWiringSources` 原地改写字段而不再调
+ * `registerMcpWiringSources`，memo 就看不出换代、继续吃旧腿（B20 回执自留口子，
+ * 先红用例＝ `mcp-host-bridge-memo.test.ts` ⑦）。快照只取 `createMcpHostDeps` **实际读取**
+ * 的字段、逐位 `Object.is` 比函数/对象引用；未被读取的键不参与换代（防「无关键抖动 ⇒
+ * 每条请求都重装配」的变相轮询）。
  */
 export interface McpRegistryBasis {
   wiring: McpWiringModule | null;
-  sources: McpWiringSources | null;
+  /** 装配那一拍的逐字段浅快照；`null` ＝ 当拍没有登记（缺席）。仅当 `wiring !== null` 有判读意义。 */
+  snapshot: McpWiringSnapshot | null;
+}
+
+/** 换代判据的字段集＝ `McpWiringSources` 全部字段（也即 `createMcpHostDeps` 读取的全部字段）。 */
+const WIRING_SOURCE_FIELDS: readonly (keyof McpWiringSources)[] = [
+  'commands',
+  'commandContext',
+  'semantic',
+  'semanticService',
+  'kernelIo',
+  'readResourceData',
+  'resources',
+  'prompts',
+  'runSupplemental',
+  'promptSlots',
+];
+
+/** 浅快照形状：按 `WIRING_SOURCE_FIELDS` 顺序取字段值；`null` ＝ 未登记。 */
+type McpWiringSnapshot = readonly unknown[] | null;
+
+function snapshotMcpWiringSources(sources: McpWiringSources | null): McpWiringSnapshot {
+  if (sources === null) return null;
+  return WIRING_SOURCE_FIELDS.map((field) => sources[field]);
+}
+
+/** 逐位 `Object.is` 比对两份浅快照；`null`（缺席）与在场快照互不相等 ⇒ 缺席/注销照旧显式可见。 */
+function sameMcpWiringSnapshot(a: McpWiringSnapshot, b: McpWiringSnapshot): boolean {
+  if (a === null || b === null) return a === b;
+  for (let i = 0; i < a.length; i += 1) {
+    if (!Object.is(a[i], b[i])) return false;
+  }
+  return true;
 }
 
 interface RegistryMemo {
@@ -135,6 +174,7 @@ const defaultTransport: McpBridgeTransport = {
  *   RESOURCE_UNAVAILABLE，不静默、不伪造读数）。
  * - B20：走 wiring 那一支时，把**装配所依据的那一份登记**（连同 wiring 句柄）回填进
  *   `basis`，作为 `ensureFreshRegistry()` 的换代比对基准（注入 deps 不回填 ⇒ 保持旧行为）。
+ *   B23 起回填的是**逐字段浅快照**而非对象引用——原地改写字段的换代同样看得见。
  */
 async function defaultRegistryFactory(
   deps: McpHostDeps | undefined,
@@ -147,7 +187,7 @@ async function defaultRegistryFactory(
   const sources = wiring.getMcpWiringSources();
   if (basis !== undefined) {
     basis.wiring = wiring;
-    basis.sources = sources;
+    basis.snapshot = snapshotMcpWiringSources(sources);
   }
   return host.createMcpCapabilityRegistry(wiring.createMcpHostDeps(sources));
 }
@@ -174,8 +214,9 @@ const inFlight = new Map<string, AbortController>();
  * （它顺手清了 memo）——这正是取证脚本「等 91.7 s／31 趟不出帧、re-arm 立刻出帧」的真相。
  *
  * 修法＝**失效重取**，不是重试掩盖：
- * - 装配注册表时把「依据的那一份 wiring 真源登记」连同 wiring 句柄一起记进 `McpRegistryBasis`；
- *   每条请求分派前做一次**同步**身份比对，当拍登记 ≠ 装配时那份 ⇒ 作废 memo、按当拍真源重装配
+ * - 装配注册表时把「依据的那一份 wiring 真源登记」的**逐字段浅快照**连同 wiring 句柄一起
+ *   记进 `McpRegistryBasis`（B20 记的是对象 identity；B23 换成快照——原地改字段不再漏网）；
+ *   每条请求分派前做一次**同步**快照比对，当拍真源 ≠ 装配时那份 ⇒ 作废 memo、按当拍真源重装配
  *   （一条请求最多装配两次＝有界，不会退化成轮询）。零定时器、零轮询、零 sleep、零自动重试；
  *   真源没换代时行为与改前逐字一致（比对只是读一个模块级变量），换代后的那一条请求多付一次
  *   注册表重装配（同步 CPU，计在它自己的 timeoutMs 账内，且仍只回一帧）。
@@ -187,7 +228,7 @@ let memo: RegistryMemo | null = null;
 
 /** 装配一份新注册表；基准由工厂在装配那一拍回填，故 `basis` 走引用（promise 落定后才可判读）。 */
 function buildRegistryMemo(): RegistryMemo {
-  const basis: McpRegistryBasis = { wiring: null, sources: null };
+  const basis: McpRegistryBasis = { wiring: null, snapshot: null };
   const promise = Promise.resolve()
     .then(() => (registryFactory ?? defaultRegistryFactory)(registryDeps, basis))
     .catch((err: unknown) => {
@@ -205,8 +246,11 @@ function buildRegistryMemo(): RegistryMemo {
 async function ensureFreshRegistry(): Promise<McpCapabilityRegistry> {
   let current = memo ?? (memo = buildRegistryMemo());
   const registry = await current.promise;
-  const { wiring, sources } = current.basis;
-  if (wiring !== null && wiring.getMcpWiringSources() !== sources) {
+  const { wiring, snapshot } = current.basis;
+  if (
+    wiring !== null &&
+    !sameMcpWiringSnapshot(snapshot, snapshotMcpWiringSources(wiring.getMcpWiringSources()))
+  ) {
     memo = null;
     current = memo ?? (memo = buildRegistryMemo());
     return current.promise;
