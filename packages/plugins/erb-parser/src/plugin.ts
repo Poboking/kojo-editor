@@ -77,7 +77,7 @@ import {
   refsViewOf,
   type RefsLiveState,
   type RescanOutcome,
-} from './refs-live';
+} from './incremental';
 import { definitionTargetsAt, erbReferencesAt, functionAt, labelDefinitionLocations, labelLenses, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition, usageLenses, workspaceSymbolsInIndex } from './symbols';
 import {
   callHierarchySymbolOf,
@@ -417,7 +417,7 @@ export function createErbParserPlugin(): Plugin {
        */
       let retainedSnapshot: IndexSnapshot | null = null;
       /**
-       * 反向引用边的**常驻增量态**（MCP-PERF-S2，2026-11-06；判据与数据面见 `./refs-live.ts`）。
+       * 反向引用边的**常驻增量态**（MCP-PERF-S2，2026-11-06；判据与数据面见 `./refs-live 节`）。
        *
        * 跨整扫/增量轮存活：整扫轮 `prewarmRefsLive` 铺流出账全集（重扫产出 + 快照条目
        * 零拷贝回退），增量轮 `applyRefsLiveDelta` 局部重建受影响名字的组。物化（bySymbol
@@ -1347,7 +1347,7 @@ export function createErbParserPlugin(): Plugin {
       /**
        * 增量把**变量引用**（`dimReferences`，dim 腿）标成"不可用"（见
        * {@link attachIncrementalReferenceViews}）：置位后**下一次读 `index.dimReferences`**
-       * 才把整扫排上——函数引用（`references`）已由 `refs-live.ts` 增量接管，不再走这条路；
+       * 才把整扫排上——函数引用（`references`）已由 `refs-live 节` 增量接管，不再走这条路；
        * dim 腿本批不动（MCP-PERF-S2 刻意取舍：`#DIM` 对称差的巡检判据与函数腿不同源）。
        */
       let referencesRepairPending = false;
@@ -1439,7 +1439,7 @@ export function createErbParserPlugin(): Plugin {
        * removed 按前缀移除（目录删改名的正确形态）。读 / 解析失败、形状不符 ⇒ **回退整扫**
        * （`rebuildNow`，既有通道，含快照复用与代际语义），绝不交一份半新半旧的索引。
        *
-       * 反向引用（`references`）由 `refs-live.ts` 增量接管（MCP-PERF-S2）：当场重扫受染
+       * 反向引用（`references`）由 `refs-live 节` 增量接管（MCP-PERF-S2）：当场重扫受染
        * 文件（变过的文件文本已在手上；受染未变文件按候选哈希巡检重扫，读盘个位数），
        * 受影响名字的组局部重建，索引版本号 +1；判不了的文件进显式 stale 面（可见、
        * 不答空、不静默排整树重扫）。变量引用（dim 腿）本批不动：保持现状 undefined
@@ -1598,7 +1598,7 @@ export function createErbParserPlugin(): Plugin {
       /**
        * 给增量索引挂上 `references` / `dimReferences` 的读数口（MCP-PERF-S2 改造）。
        *
-       * `references`：**活视图**（`refs-live.ts`）——增量轮已当场重扫受染文件、局部重建了
+       * `references`：**活视图**（`refs-live 节`）——增量轮已当场重扫受染文件、局部重建了
        * 受影响名字的组，这里直接交 `refsViewOf`；判不了的名字随 `staleNames` 可见交出。
        * 为什么用 getter 而不是直接放字段：物化（bySymbol 对象图）仍走 PERF-7 的
        * "首次消费才建"，getter 是那个时机。
@@ -1711,7 +1711,7 @@ export function createErbParserPlugin(): Plugin {
         functionAt: (path: string, line: number) => (index ? functionAt(index, path, line) : undefined),
 
         // 符号 → 引用点（H2）：只读 `index.references`，未构建 → 空数组。
-        // MCP-PERF-S2：增量更新后反向引用是**活视图**（refs-live.ts 当场重扫受染文件、
+        // MCP-PERF-S2：增量更新后反向引用是**活视图**（refs-live 节 当场重扫受染文件、
         // 局部重建受影响名字的组）——保存后立即可查，判不了的名字随 staleNames 可见。
         referencesTo: (name: string) => {
           if (index === null) return [];

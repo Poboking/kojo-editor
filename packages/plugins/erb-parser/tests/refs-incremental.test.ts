@@ -1,7 +1,7 @@
 /**
  * 反向边增量数据面的**对拍**（MCP-PERF-S2，2026-11-06）。
  *
- * 钉的是 `refs-live.ts` 头注那条**语义红线**：无论多少轮增量（改流水 / 换名录 / 增删文件），
+ * 钉的是 `refs-live 节` 头注那条**语义红线**：无论多少轮增量（改流水 / 换名录 / 增删文件），
  * 常驻态就地重建出的 `bySymbol` 与"对同一份流出账全集冷跑 `buildReferenceIndex`"**逐位一致**
  * ——组内序 = 文件序（`orderToPath` 升序序号，退场留洞、替换保座、新增追加）→ 行 → 列。
  * 判据本体不在这里（那在 `references.ts` 的落表口径），这里钉的是**增量维护不漂移**：
@@ -21,7 +21,7 @@ import {
   refsViewOf,
   type RefsLiveState,
   type RescanOutcome,
-} from '../src/refs-live';
+} from '../src/incremental';
 import { buildReferenceIndex } from '../src/references';
 import { candidateHash } from '../src/snapshot';
 

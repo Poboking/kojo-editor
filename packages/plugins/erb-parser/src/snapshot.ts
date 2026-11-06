@@ -1977,7 +1977,7 @@ export function changedNamesBetween(oldNames: ReadonlySet<string>, newNames: Rea
  * 候选哈希集与「变掉的名字哈希集」**有没有交集**（免疫判据的核心循环，MCP-PERF-S2 拆出）。
  *
  * 为什么拆：同一条证明链有两个消费形态——快照条目（{@link refsProvableUnchanged}）与
- * 增量轮的常驻流出账（`refs-live.ts` 的溯源巡检）。核心循环各写一遍就是第二判据
+ * 增量轮的常驻流出账（`refs-live 节` 的溯源巡检）。核心循环各写一遍就是第二判据
  * （漂移的表现：一边把一切判成"可证不变"⇒ 少扫、不报错），收口到这一处。
  * 方向是**遍历文件侧、查名录侧**——反过来（遍历 11 万个 changed、逐文件二分）
  * 在"大范围改名"时会退化到十亿级比较。

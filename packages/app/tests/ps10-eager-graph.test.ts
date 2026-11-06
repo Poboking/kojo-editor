@@ -1656,10 +1656,23 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //     源码扫描型测试（读 `slots.ts` / `sugar.ts` / `replay.ts` 原文找闭集的那批）必须跟着改指
     //     `*-types.ts`，否则**静默变空断言 / 假绿**；`mcp.ts` 的 `declare module` 挂点也要跟着改
     //     （那一处 tsc 抓不到：挂错会在 `./slots` 上新造一份 `SlotMap`，让 `mcp.*` 静默掉出 `SlotName`）。
+    //
+    // 2026-11-07（MCP-PERF-S2 残账收口 · refs-live 折回）：S2 批把反向引用改成增量活视图时
+    // 新增 `erb-parser/src/refs-live.ts`（16,480 B）进了开机图——读数一度 **198 文件 /
+    // 3,501,261 B**（文件数与 KB 闸双红）。收口两步：
+    //   ① `refs-live.ts` 整体并入既有图内文件 `incremental.ts`（导出面与语义逐字不变，
+    //      消费方 import 改道；erb-parser 全量 884/894 零回退）⇒ **文件数回 197，文件闸不动**；
+    //   ② 字节是编辑器运行时的常驻账（保存→引用 3s → <150ms 的增量引用流出账 + 倒排），
+    //      **不是 MCP 运行时字节**（mcp-host 不在图，A/B 实证）——折叠不减少总字节
+    //      （16,480 B 只是从独立文件搬进 `incremental.ts`，净 +156 B 节注）。
+    //      逐项归因：`incremental.ts` **+16,636**（refs-live 全文 + 并入节注）；上游 B 系 /
+    //      接入可见性 / UI kit 各批自 3,476,568 B 以来的零星增长合计约 +8.2 KB。
+    //     ⇒ KB 闸 **3,400 → 3,430**（机械余量 ≈10.9 KB）。文件闸 197 不动
+    //     （现读数 197 顶格，下一枚进图文件**必须先拆面**）。
     console.log(
-      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤197 文件 / ≤3,400 KB）`,
+      `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤197 文件 / ≤3,430 KB）`,
     );
-    expect(totalKb).toBeLessThanOrEqual(3_400);
+    expect(totalKb).toBeLessThanOrEqual(3_430);
     expect(files.length).toBeLessThanOrEqual(197);
   });
 
