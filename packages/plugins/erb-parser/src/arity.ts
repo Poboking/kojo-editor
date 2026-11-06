@@ -318,25 +318,36 @@ function hasVariableSlot(params: readonly ErbParam[]): boolean {
 }
 
 /**
- * 引擎装载期会**合成**默认值的形参名家族：`ARG` / `ARGS` / `ARGF`（含任意下标形）。
+ * 引擎装载期会**合成**默认值的形参槽。
  *
- * 出处（行号会漂，判据不会）：`Script/Loader/ErbLoader.cs` 解析函数定义的形参表时，
- * 槽位没有显式 `= 值` 也会走 `if (canDef) def = new SingleLongTerm(0)`（float→0.0、
- * string→""），而 `canDef` 恰好就是「ARG 家族或私有变量」。于是
- * `Process.CalledFunction.ConvertArg` 里那句 `term = func.Def[i]` 对 ARG 家族**永不为 null**，
- * 紧随其后的 `CanNotOmitArgWithMessage`（受 `CompatiFuncArgOptional` 支配，eraTW 的
- * `emuera.config` 明写 `ALLOW ARGUMENTS OMISSION FOR USER FUNCTIONS:NO`）就只剩
- * 「非 ARG 家族、又确实不是私有的槽」这一条可达路径——真语料 45,079 处「少给」全部落在
- * ARG 家族那一侧（`arity.corpus.test.ts` 的 `missing-tolerated` 计数钉住这条事实）。
+ * 出处（`Script/Loader/ErbLoader.cs` 形参表解析；行号会漂，判据不会）：
+ * 1. 每个形参槽先算 `canDef = (code == ARG|ARGS|ARGF) || Identifier.IsPrivate`；
+ * 2. 槽位**没写** `= 值` 时走 `if (canDef) def = new SingleLongTerm(0)`
+ *    （float→0.0、string→""）——**只要 canDef 成立，作者不写默认值引擎替他写**；
+ * 3. `canDef` 之前还有两道硬门：裸名（`VariableNoArgTerm`）形参若不是私有变量直接
+ *    加载失败（`ArgHasNotSubscript`），非常量下标同理（`ArgSubscriptOnlyConst`）。
+ *    ⇒ 一个**能加载成功**的函数里，"裸名"形参必然落在第 2 条里（ARG 家族或私有变量）。
  *
- * 换句话说：**作者写的 `@FUNC(ARG, ARG:1)` 里没有一个槽是"必需"的**，少给就是少给，
- * 引擎按 0 / "" 补上继续跑。只有名字不是 ARG 家族的槽才可能真的报错。
+ * 结论：`Process.CalledFunction.ConvertArg` 的 `func.Def[i]` 只对
+ * **「带下标、且基础名不是 ARG 家族」的槽**（= 把全局数组元素当形参用）才是 null，
+ * 省略那种槽才吃得到 `CanNotOmitArgWithMessage`
+ * （`CompatiFuncArgOptional`：eraTW 的 `emuera.config:61` 明写
+ * `ALLOW ARGUMENTS OMISSION FOR USER FUNCTIONS:NO`，兜不住这一档）。
+ *
+ * 语料对拍（`arity.corpus.test.ts`）把三档分布钉住：老判据在 4,258 文件上判出的
+ * 45,079 处「少给」全部落在引擎会补默认值的槽上（`ARG:1` / `精液量` / `L_STYLE` 这一类），
+ * 一处都不是可证那一档 ⇒ 「少给必需」这一腿今天只能按可证形状判。
  */
 const IMPLICIT_DEFAULT_NAME = /^(?:ARG|ARGS|ARGF)\b/i;
 
-/** 该槽在引擎里能否被省略（显式默认值，或 ARG 家族的合成默认值） */
+/** 形参名里是否带下标（`NAME:3` / `NAME：3`）——裸名走引擎合成默认值那条路 */
+const HAS_SUBSCRIPT = /[:：]/;
+
+/** 该槽在引擎里能否被省略（显式 `=` / 裸名 / ARG 家族的下标形） */
 function omissibleSlot(param: ErbParam): boolean {
-  return param.hasDefault || IMPLICIT_DEFAULT_NAME.test(param.name);
+  if (param.hasDefault) return true;
+  if (!HAS_SUBSCRIPT.test(param.name)) return true;
+  return IMPLICIT_DEFAULT_NAME.test(param.name);
 }
 
 /** 必填下界：**最后一个引擎不会补默认值的形参**序号 + 1（默认值可写在中间，不能只数个数） */
