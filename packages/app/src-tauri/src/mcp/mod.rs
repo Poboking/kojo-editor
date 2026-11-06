@@ -1,13 +1,15 @@
 //! MCP 宿主模块（路 C：Rust endpoint / 会话授权 / 审计）。
 //!
 //! 目录分派：`protocol`（线协议与安全闸门）/ `scope`（第四张授权表）/
-//! `audit`（审计日志）/ `server`（本机 HTTP 端点）/ `mod.rs`（Tauri 命令面）。
+//! `audit`（审计日志）/ `latency`（逐请求耗时台账）/ `server`（本机 HTTP 端点）/
+//! `mod.rs`（Tauri 命令面）。
 //!
 //! 冻结契约的四个命令 `mcp_start` / `mcp_stop` / `mcp_status` / `mcp_respond`
 //! 名称与形状逐字不改；额外四个辅助命令供 WebView 侧的审批 / 审计面板使用
 //! （MCP 客户端只能经 `POST /mcp` 调六种方法，够不到这些命令）。
 
 mod audit;
+mod latency;
 mod protocol;
 mod scope;
 mod server;
@@ -105,4 +107,14 @@ pub fn mcp_audit_query(
     args: AuditQueryArgs,
 ) -> Result<Vec<audit::AuditEntry>, String> {
     server::audit_query(&app, args).map_err(cmd_err)
+}
+
+/// 逐请求耗时台账 + 在途预算读数（B5 吞吐批）：真源＝`Pending.started` → 应答落账。
+///
+/// 与 `mcp_audit_query` 同一纵深——只由宿主侧（设置面板 / 调试壳 `invoke`）读，
+/// MCP 客户端在 `POST /mcp` 协议里没有任何读写台账的入口。服务未启动时显式报错，
+/// 不回空台账冒充「零延迟」（不静默）。
+#[tauri::command]
+pub fn mcp_latency_query(state: tauri::State<'_, McpState>) -> Result<serde_json::Value, String> {
+    server::latency_query(state.inner()).map_err(cmd_err)
 }

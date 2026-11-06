@@ -30,12 +30,13 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::audit::{self, AuditEntry, AuditOutcome};
+use super::latency::{self, Ledger};
 use super::protocol::{
     attach_negotiation_meta, check_protocol_version, check_tool_call_permission, classify_envelope,
     codes, decode_request, filter_tools_list, is_market_tool, negotiate, negotiate_accept,
-    sanitize_string, sanitize_untrusted, validate_params, AcceptKind, JsonRpcResponse,
+    sanitize_string, sanitize_untrusted_inplace, validate_params, AcceptKind, JsonRpcResponse,
     LocalOutcome, McpError, McpRequestPayload, McpRespondArgs, McpSessionScope, McpTier,
-    RequestEnvelope, WebMethod, MCP_REQUEST_EVENT, PROTOCOL_VERSION,
+    Negotiation, RequestEnvelope, WebMethod, MCP_REQUEST_EVENT, PROTOCOL_VERSION,
 };
 use super::scope;
 
@@ -95,6 +96,14 @@ pub struct Limits {
     pub request_timeout: Duration,
     pub max_calls_per_minute: u32,
     pub max_concurrent: usize,
+    /// 跨连接共享的**在途 WebView 调用**预算（B5 batch 并发批新增）。
+    ///
+    /// 默认值与 `max_concurrent` 同数（8）：改的是**计数口径**而不是额度——
+    /// 旧行为「8 条连接 × 每连接 1 枚在途」= 最坏 8 枚在途；新行为「任意来源合起来
+    /// 最多 8 枚在途」。并发派发因此**不可能**比改前给 WebView 更大压力。
+    pub max_inflight_calls: usize,
+    /// 单次耗时台账每键保留的样本数（读数窗口；不改变任何判定）。
+    pub latency_window: usize,
 }
 
 impl Default for Limits {
@@ -106,13 +115,39 @@ impl Default for Limits {
             request_timeout: Duration::from_secs(30),
             max_calls_per_minute: 120,
             max_concurrent: 8,
+            max_inflight_calls: 8,
+            latency_window: crate::mcp::latency::SAMPLE_WINDOW,
         }
     }
 }
 
+/// 单会话速率桶（60s 滚动窗，语义与全局窗逐字一致）。
 pub struct RateState {
     pub window_start: Instant,
     pub count: u32,
+}
+
+/// 速率闸治理器（B5 吞吐批：全局单计数器 → 按会话计量）。
+/// - 每个 `clientId|sessionId` 一个 60s 窗、预算 `max_calls_per_minute`；
+/// - 另有一条全局 60s 窗聚合计数，硬顶**就是 `max_calls_per_minute` 本身**——
+///   端点每分钟接受的总量与改前（全局单计数器）逐字同值，本批不放宽；
+/// - 会话桶只决定「谁先被拒」（公平），不决定「一共接受多少」（总量）；
+/// - 全局窗到期即清空全部会话桶，故**在跟踪的会话数天然被全局预算界住**（每个新会话
+///   至少消耗 1 个全局名额 ⇒ 会话桶数 ≤ 全局预算），无需额外上限，也不吃内存。
+pub struct RateGovernor {
+    pub window_start: Instant,
+    pub total: u32,
+    pub sessions: HashMap<String, RateState>,
+}
+
+impl Default for RateGovernor {
+    fn default() -> Self {
+        Self {
+            window_start: Instant::now(),
+            total: 0,
+            sessions: HashMap::new(),
+        }
+    }
 }
 
 pub struct BridgeReply {
@@ -127,8 +162,162 @@ pub struct Pending {
     pub rpc_id: Value,
     pub method: String,
     pub tool_name: Option<String>,
-    #[allow(dead_code)]
+    /// 派发起点：应答落账 / 超时 / 取消 / token 轮换都在此处算 `elapsed`，
+    /// 进耗时台账与审计行（B5 起是真源读数，不再 `dead_code`）。
     pub started: Instant,
+    /// 在途预算凭据：`Pending` 一出路由表（应答到达 / 超时 / 取消 / 停服）即释放，
+    /// 于是「在途」的口径就是「WebView 尚未回帧」，不会晚释放、也不会漏释放。
+    pub slot: Slot,
+}
+
+/* ============================ 在途预算（有界 semaphore） ============================ */
+
+/// 跨连接共享的在途 WebView 调用预算。
+///
+/// 为什么需要第二道闸：`max_concurrent` 按**连接数**计数，一条连接一次只压一枚
+/// 请求；batch 并发派发后，单条 HTTP 请求就能把 N 枚调用同时打进 WebView，
+/// 连接闸看不见这件事。预算默认与 `max_concurrent` 同数（见 `Limits` 注释），
+/// 所以改的是口径不是额度：**并发不会带来比改前更大的 WebView 压力**。
+///
+/// 超预算不静默排队：`acquire` 只在**该条信封自己的 `request_timeout` 死线**内等位，
+/// 等不到 ⇒ 调用方拿到 `None`，必须回一条显式 `E_CALL_BUDGET_EXCEEDED`（可见拒绝、
+/// 不丢帧）；等待与拒绝各自计数，随 `mcp_latency_query` 出账。
+pub struct CallBudget {
+    in_flight: AtomicUsize,
+    max: usize,
+    /// 唤醒协议：释放侧先在 `in_flight` 减一，再在锁内抬世代号并 `notify_all`。
+    /// 等待侧「持锁读世代 → try_acquire → wait_timeout」，两者交错不会丢唤醒；
+    /// 另有 `BUDGET_POLL` 兜底，锁中毒退化成短轮询时也不会永久卡住。
+    generation: Mutex<u64>,
+    cond: std::sync::Condvar,
+    waits: AtomicU64,
+    rejections: AtomicU64,
+    peak: AtomicUsize,
+}
+
+/// 锁通知丢失的兜底轮询间隔（只在 `notify_all` 万一没赶上时用）。
+const BUDGET_POLL: Duration = Duration::from_millis(50);
+
+impl CallBudget {
+    pub fn new(max: usize) -> Self {
+        Self {
+            in_flight: AtomicUsize::new(0),
+            max: max.max(1),
+            generation: Mutex::new(0),
+            cond: std::sync::Condvar::new(),
+            waits: AtomicU64::new(0),
+            rejections: AtomicU64::new(0),
+            peak: AtomicUsize::new(0),
+        }
+    }
+
+    /// 有空位就取，没有立即回 `None`（不阻塞）。`Arc` 形态：凭据要能独立归还。
+    pub fn try_acquire(self: &Arc<Self>) -> Option<Slot> {
+        let cur = self.in_flight.load(Ordering::SeqCst);
+        if cur >= self.max {
+            return None;
+        }
+        match self
+            .in_flight
+            .compare_exchange(cur, cur + 1, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            Ok(_) => {
+                self.peak.fetch_max(cur + 1, Ordering::SeqCst);
+                Some(Slot {
+                    budget: Some(Arc::clone(self)),
+                })
+            }
+            Err(_) => None,
+        }
+    }
+
+    /// 等到空位或死线到期；到期 ⇒ `None`（调用方必须显式拒绝该条，不许静默吞帧）。
+    pub fn acquire(self: &Arc<Self>, deadline: Instant) -> Option<Slot> {
+        if let Some(s) = self.try_acquire() {
+            return Some(s);
+        }
+        self.waits.fetch_add(1, Ordering::SeqCst);
+        loop {
+            let now = Instant::now();
+            if now >= deadline {
+                self.rejections.fetch_add(1, Ordering::SeqCst);
+                return None;
+            }
+            // 先取锁再 try_acquire：释放侧的「减一 → 抬世代 → notify」与本侧交错时，
+            // 要么 try_acquire 直接成功，要么 notify 落在 wait_timeout 之后被收到。
+            let observed = match self.generation.lock() {
+                Ok(g) => *g,
+                Err(_) => {
+                    std::thread::sleep(BUDGET_POLL);
+                    if let Some(s) = self.try_acquire() {
+                        return Some(s);
+                    }
+                    continue;
+                }
+            };
+            if let Some(s) = self.try_acquire() {
+                return Some(s);
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let wait_for = if remaining > BUDGET_POLL {
+                BUDGET_POLL
+            } else {
+                remaining
+            };
+            if remaining.is_zero() {
+                self.rejections.fetch_add(1, Ordering::SeqCst);
+                return None;
+            }
+            if let Ok(guard) = self.generation.lock() {
+                let _ = self
+                    .cond
+                    .wait_timeout_while(guard, wait_for, |g| *g == observed);
+            }
+        }
+    }
+
+    fn release(&self) {
+        let cur = self.in_flight.load(Ordering::SeqCst);
+        if cur == 0 {
+            return; // 不该发生（Drop 与 Pending 一对一）；真发生了也不许减成负数下溢
+        }
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        if let Ok(mut g) = self.generation.lock() {
+            *g = g.wrapping_add(1);
+            self.cond.notify_all();
+        }
+    }
+
+    pub fn snapshot(&self) -> Value {
+        json!({
+            "max": self.max,
+            "inFlight": self.in_flight.load(Ordering::SeqCst),
+            "peak": self.peak.load(Ordering::SeqCst),
+            "waits": self.waits.load(Ordering::SeqCst),
+            "rejections": self.rejections.load(Ordering::SeqCst),
+        })
+    }
+}
+
+/// `CallBudget` 的凭据：`Drop` 即归还一个空位。持有者 = `Pending`（在途期间）。
+pub struct Slot {
+    budget: Option<Arc<CallBudget>>,
+}
+
+impl Slot {
+    /// 显式归还空位（幂等）：应答到达时由 `deliver_shared` 调用，让「释放点」写在
+    /// 代码里而不是只靠隐式 `Drop`；超时 / 取消 / 停服路径仍由 `Drop` 兜底。
+    pub fn release(&mut self) {
+        if let Some(b) = self.budget.take() {
+            b.release();
+        }
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 /// WebView 桥抽象：六种能力方法经此转发（生产 = Tauri 事件；端点级测试可注入桩，
@@ -161,7 +350,11 @@ pub struct McpShared {
     pub scope_state: Mutex<scope::McpScopeState>,
     pub app_data_dir: PathBuf,
     pub limits: Limits,
-    pub rate: Mutex<RateState>,
+    pub rate: Mutex<RateGovernor>,
+    /// 跨连接共享的在途 WebView 调用预算（`Limits::max_inflight_calls`）。
+    pub budget: Arc<CallBudget>,
+    /// 逐请求耗时台账（真源 = `Pending.started`）。
+    pub latency: Mutex<Ledger>,
 }
 
 pub struct McpRuntime {
@@ -264,6 +457,17 @@ pub fn start(
     app_data_dir: PathBuf,
     state: &McpState,
 ) -> Result<McpStartResult, McpError> {
+    start_with(bridge, app_data_dir, state, Limits::default())
+}
+
+/// `Limits` 可注入的同一条启动路径（端点级测试用它把超时/预算调小，
+/// 走的仍是真实 listener + 真实派发循环；生产只经 `start` 用默认值）。
+pub fn start_with(
+    bridge: Arc<dyn McpBridge>,
+    app_data_dir: PathBuf,
+    state: &McpState,
+    limits: Limits,
+) -> Result<McpStartResult, McpError> {
     let mut guard = state.runtime.lock().map_err(|_| lock_err())?;
     if let Some(rt) = guard.as_ref() {
         return Ok(McpStartResult {
@@ -280,6 +484,8 @@ pub fn start(
         .map_err(|e| McpError::new(codes::INTERNAL, format!("取本地端口失败：{e}")))?
         .port();
     let endpoint = format!("http://127.0.0.1:{port}/mcp");
+    let budget_max = limits.max_inflight_calls;
+    let latency_window = limits.latency_window;
     let shared = Arc::new(McpShared {
         bridge,
         token: Mutex::new(String::new()),
@@ -289,11 +495,10 @@ pub fn start(
         shutdown: Arc::new(AtomicBool::new(false)),
         scope_state: Mutex::new(scope::McpScopeState::default()),
         app_data_dir: app_data_dir.clone(),
-        limits: Limits::default(),
-        rate: Mutex::new(RateState {
-            window_start: Instant::now(),
-            count: 0,
-        }),
+        limits,
+        rate: Mutex::new(RateGovernor::default()),
+        budget: Arc::new(CallBudget::new(budget_max)),
+        latency: Mutex::new(Ledger::with_window(latency_window)),
     });
     // 首次签发 = 一次 token 轮换：新 token 生效、第四张表从盘上重载、发现文件写
     // {port,token,endpoint}。轮换后旧 token / 旧会话 / 未落盘的旧授权一律失效。
@@ -334,6 +539,9 @@ pub fn stop(state: &McpState) -> Result<(), McpError> {
         return Ok(());
     };
     rt.shared.shutdown.store(true, Ordering::SeqCst);
+    // 循环现在阻塞在 accept 上（B5 收口批：不再 50ms 轮询），所以必须自己敲门把它
+    // 顶回来，否则下面的 `join` 会永远等不到退出。
+    wake_accept(rt.port);
     if let Some(handle) = rt.handle.take() {
         let _ = handle.join();
     }
@@ -381,17 +589,26 @@ pub fn deliver(state: &McpState, args: McpRespondArgs) -> Result<(), McpError> {
     };
     let shared =
         shared.ok_or_else(|| McpError::new(codes::BRIDGE_UNAVAILABLE, "MCP 服务未启动"))?;
+    deliver_shared(&shared, args)
+}
+
+/// `deliver` 的免 `McpState` 形态：走**同一把**台账与**同一条** slot 归还路径。
+/// 端点级测试的自动应答桥（`WebView` 桩）经此回填，因此量到的就是生产派发循环本身。
+pub fn deliver_shared(shared: &Arc<McpShared>, args: McpRespondArgs) -> Result<(), McpError> {
     let pending = shared
         .pending
         .lock()
         .map_err(|_| lock_err())?
         .remove(&args.id);
-    let p = pending.ok_or_else(|| {
+    let mut p = pending.ok_or_else(|| {
         McpError::new(
             codes::INVALID_REQUEST,
             format!("未知或已过期的请求 id：{}", args.id),
         )
     })?;
+    // 应答到达即归还在途凭据：显式取用 `Pending.slot`（释放点写在代码里，
+    // 与「回帧＝不再在途」同一口径），超时 / 取消 / 停服路径由该字段的 `Drop` 兜底。
+    p.slot.release();
     p.tx.send(BridgeReply {
         ok: args.ok,
         result: args.result,
@@ -399,6 +616,40 @@ pub fn deliver(state: &McpState, args: McpRespondArgs) -> Result<(), McpError> {
     })
     .map_err(|_| McpError::new(codes::BRIDGE_UNAVAILABLE, "等待方已离开"))?;
     Ok(())
+}
+
+/// 耗时台账 + 在途预算读数（`mcp_latency_query`）：只读、只由宿主侧调用，
+/// MCP 客户端在协议里够不到这条命令（与审计查询同一纵深）。
+pub fn latency_query(state: &McpState) -> Result<Value, McpError> {
+    let guard = state.runtime.lock().map_err(|_| lock_err())?;
+    let Some(rt) = guard.as_ref() else {
+        return Err(McpError::new(
+            codes::BRIDGE_UNAVAILABLE,
+            "MCP 服务未启动（台账随运行时存活，启动后才有读数）",
+        ));
+    };
+    Ok(latency_snapshot(&rt.shared))
+}
+
+/// 台账快照的可复用形态（端点级测试直接读 `Arc<McpShared>` 也走这里，口径唯一）。
+pub fn latency_snapshot(shared: &Arc<McpShared>) -> Value {
+    let ledger = match shared.latency.lock() {
+        Ok(l) => l.to_json(),
+        Err(_) => json!({ "error": "耗时台账锁污染" }),
+    };
+    let pending = shared.pending.lock().map(|p| p.len()).unwrap_or_default();
+    json!({
+        "limits": {
+            "requestTimeoutMs": shared.limits.request_timeout.as_millis() as u64,
+            "maxCallsPerMinute": shared.limits.max_calls_per_minute,
+            "maxConcurrentConnections": shared.limits.max_concurrent,
+            "maxInflightCalls": shared.limits.max_inflight_calls,
+        },
+        "budget": shared.budget.snapshot(),
+        "pendingNow": pending,
+        "clientsNow": shared.clients.load(Ordering::SeqCst),
+        "latency": ledger,
+    })
 }
 
 /// 一次批量审批（WebView 侧调用，MCP 客户端无此入口）：写第四张表 + 刷新内存镜像。
@@ -651,23 +902,91 @@ pub fn authenticate(head: &HttpHead, token: &str, peer: SocketAddr) -> Result<()
     check_origin(head.headers.get("origin").map(String::as_str))
 }
 
-pub fn check_rate(rate: &Mutex<RateState>, limits: &Limits) -> Result<(), McpError> {
-    let mut r = rate.lock().map_err(|_| lock_err())?;
-    if r.window_start.elapsed() >= Duration::from_secs(60) {
-        r.window_start = Instant::now();
-        r.count = 0;
+/// 速率闸会话键：**只取请求头**（`X-Mcp-Client-Id` + `Mcp-Session-Id`），在 decode 请求体
+/// 之前即可算出——保住"先拒后再解析"的 DoS 顺序。两者皆缺时归一个共享兜底键（匿名流量
+/// 仍共账、仍受全局预算约束，绝不因"没有会话头"而绕过速率闸）。
+pub fn rate_session_key(head: &HttpHead) -> String {
+    let client = head
+        .headers
+        .get("x-mcp-client-id")
+        .map(|s| s.trim())
+        .unwrap_or("");
+    let session = session_id_from_head(head);
+    format!(
+        "{}\u{1f}{}",
+        if client.is_empty() { "" } else { client },
+        session
+    )
+}
+
+/// 审计用的客户端标签（**不落任何凭据值**）：只取 `X-Mcp-Client-Id` 头，缺省与
+/// `client_identity` 的兜底名同字（`loopback-client`），并过一遍 `validate_client_id`
+/// 的长度/控制字符口径，超长或非法一律退成兜底名——审计行不许被客户端塞任意文本。
+fn header_client_id(head: &HttpHead) -> String {
+    let raw = head
+        .headers
+        .get("x-mcp-client-id")
+        .map(|s| s.trim())
+        .unwrap_or("");
+    if !raw.is_empty() && scope::validate_client_id(raw).is_ok() {
+        raw.to_string()
+    } else {
+        "loopback-client".to_string()
     }
-    if r.count >= limits.max_calls_per_minute {
-        return Err(McpError::new(codes::RATE_LIMITED, "速率超限"));
+}
+
+/// 按会话速率闸（B5 吞吐批，替换旧全局单计数器）。返回 Ok 已把该会话与全局各计 1。
+/// 命中显式 `E_RATE_LIMITED`（不静默丢帧）。60s 窗语义保持：会话窗与全局窗各自独立归零。
+pub fn check_rate(
+    gov: &Mutex<RateGovernor>,
+    limits: &Limits,
+    session_key: &str,
+) -> Result<(), McpError> {
+    let mut g = gov.lock().map_err(|_| lock_err())?;
+    // 全局窗：到期即整体清零（连会话桶一起回收，故被跟踪会话数天然受全局预算界住）。
+    if g.window_start.elapsed() >= Duration::from_secs(60) {
+        g.window_start = Instant::now();
+        g.total = 0;
+        g.sessions.clear();
     }
-    r.count += 1;
+    // 全局硬顶＝`max_calls_per_minute` 本身：**端点每分钟接受的总量与改前逐字同值**。
+    // （工作树里曾写成 `max_concurrent × max_calls_per_minute`＝960/分，那是在没有实测
+    // 依据的情况下把端点总量闸放宽 8 倍，本批按红线收回；会话级桶只改「谁被拒」，
+    // 不改「一共接受多少」。真要抬全局顶，得单独立批带证据。）
+    let global_budget = limits.max_calls_per_minute;
+    if g.total >= global_budget {
+        return Err(McpError::new(codes::RATE_LIMITED, "端点总速率超限"));
+    }
+    // 会话窗：独立 60s 滚动，预算＝max_calls_per_minute。
+    let now = Instant::now();
+    let entry = g
+        .sessions
+        .entry(session_key.to_string())
+        .or_insert(RateState {
+            window_start: now,
+            count: 0,
+        });
+    if entry.window_start.elapsed() >= Duration::from_secs(60) {
+        entry.window_start = now;
+        entry.count = 0;
+    }
+    if entry.count >= limits.max_calls_per_minute {
+        return Err(McpError::new(codes::RATE_LIMITED, "会话速率超限"));
+    }
+    entry.count += 1;
+    g.total += 1;
     Ok(())
 }
 
 /// Accept 循环（`pub(crate)` 供端点级测试直接驱动真实 listener；行为与生产一致）。
 pub(crate) fn run_accept_loop(listener: TcpListener, shared: Arc<McpShared>) {
-    // nonblocking + 短轮询：stop() 不需要额外唤醒连接即可让循环退出。
-    let _ = listener.set_nonblocking(true);
+    // **阻塞式 accept**（B5 收口批实测修复）：旧形态是「nonblocking + 50ms 轮询」，
+    // 于是每一条**新连接**都要等下一个轮询 tick 才被接住——实测单条 `tools/call`
+    // p50 = 50.5ms，而同笔在端点台账里自报只有 ~3ms ⇒ 那 47ms 全花在 accept 之前；
+    // 它按连接数交、不按请求数交（batch 20 条只交一次），正是本期最大的那堵墙。
+    // 退出不再靠轮询：`stop` 先置 `shutdown` 再自连一次（`wake_accept`）把阻塞中的
+    // accept 顶回来，循环顶部复核标志后退出。空连接在 `handle_connection` 读到 EOF
+    // 即返回，不留悬挂线程。真错误（非 WouldBlock）才退避 50ms，避免刷循环。
     while !shared.shutdown.load(Ordering::SeqCst) {
         match listener.accept() {
             Ok((stream, peer)) => {
@@ -679,10 +998,10 @@ pub(crate) fn run_accept_loop(listener: TcpListener, shared: Arc<McpShared>) {
                     eprintln!("[mcp] 连接线程创建失败：{e}");
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(Duration::from_millis(50));
-            }
             Err(e) => {
+                if shared.shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
                 eprintln!("[mcp] accept 失败：{e}");
                 std::thread::sleep(Duration::from_millis(50));
             }
@@ -690,15 +1009,32 @@ pub(crate) fn run_accept_loop(listener: TcpListener, shared: Arc<McpShared>) {
     }
 }
 
+/// 唤醒阻塞在 `accept` 上的循环线程：连上即断（`stop` 已置 `shutdown`，那一侧
+/// accept 返回后立刻在循环顶部退出）。连不上也不算事故——那只会是循环已经自己退出。
+fn wake_accept(port: u16) {
+    let _ = std::net::TcpStream::connect(("127.0.0.1", port));
+}
+
 struct ConnCtx<'a> {
     shared: &'a Arc<McpShared>,
     client_id: &'a str,
     session_id: &'a str,
+    /// 连接起点（含请求头读取）：`http#方法` 键的墙钟真源，与 `bridge#` 键的差
+    /// 就是「端点自身开销」（解析 + 台账 + 派发循环 + 序列化）。
+    conn_started: Instant,
+    /// 本条连接的速率闸会话键（`rate_session_key`，只取请求头）：batch 里第 2 条起
+    /// 逐条另计时用的就是同一个键——同一连接的配额账只有一本，不许因 batch 而分账。
+    rate_key: String,
 }
 
 fn handle_connection(mut stream: TcpStream, peer: SocketAddr, shared: Arc<McpShared>) {
+    let conn_started = Instant::now();
     let _ = stream.set_read_timeout(Some(shared.limits.request_timeout));
     let _ = stream.set_write_timeout(Some(shared.limits.request_timeout));
+    // 关掉 Nagle：本端点是「一问一答 + 立即关闭」的小报文形状，Nagle 只会让响应段
+    // 等对端的延迟确认。**注意这不是那 47ms 的来源**——大头在 accept 轮询，见
+    // `run_accept_loop`；这一格与 `write_http` 的合并写出只体现在并发吞吐段（见该函数注释）。
+    let _ = stream.set_nodelay(true);
     if !peer.ip().is_loopback() {
         let _ = write_error_http(
             &mut stream,
@@ -725,7 +1061,7 @@ fn handle_connection(mut stream: TcpStream, peer: SocketAddr, shared: Arc<McpSha
             return;
         }
     };
-    match process_head(&head, peer, &shared) {
+    match process_head(&head, peer, &shared, conn_started) {
         Ok((status, content_type, body)) => {
             let _ = write_http(&mut stream, status, content_type, &body);
         }
@@ -747,6 +1083,7 @@ fn process_head(
     head: &HttpHead,
     peer: SocketAddr,
     shared: &Arc<McpShared>,
+    conn_started: Instant,
 ) -> Result<(u16, &'static str, Vec<u8>), McpError> {
     let token = shared.token.lock().map_err(|_| lock_err())?.clone();
     authenticate(head, &token, peer)?;
@@ -763,7 +1100,30 @@ fn process_head(
     // Accept 在 application/json / text/event-stream 之间正确协商。
     check_protocol_version(head.headers.get("mcp-protocol-version").map(String::as_str))?;
     let accept = negotiate_accept(head.headers.get("accept").map(String::as_str))?;
-    check_rate(&shared.rate, &shared.limits)?;
+    // 速率闸：按会话计量（B5 吞吐批）。命中显式 E_RATE_LIMITED 且留一条 denied 审计——
+    // 绝不静默丢帧。身份只取请求头（decode 之前），保住"先拒后解析"的 DoS 顺序。
+    let rate_key = rate_session_key(head);
+    if let Err(e) = check_rate(&shared.rate, &shared.limits, &rate_key) {
+        let client = header_client_id(head);
+        let session = session_id_from_head(head);
+        let ctx = ConnCtx {
+            shared,
+            client_id: &client,
+            session_id: &session,
+            conn_started,
+            rate_key: rate_key.clone(),
+        };
+        record(
+            &ctx,
+            "__rate_limit__",
+            &Value::Null,
+            AuditOutcome::Denied,
+            Some(e.code.clone()),
+            None,
+            None,
+        );
+        return Err(e);
+    }
     let envelopes = decode_request(&head.body)?;
     let first = envelopes
         .first()
@@ -773,13 +1133,10 @@ fn process_head(
         shared,
         client_id: &client_id,
         session_id: &session_id,
+        conn_started,
+        rate_key,
     };
-    let mut responses: Vec<JsonRpcResponse> = Vec::new();
-    for env in envelopes {
-        if let Some(resp) = handle_envelope(env, &ctx) {
-            responses.push(resp);
-        }
-    }
+    let responses = run_envelopes(envelopes, &ctx);
     if responses.is_empty() {
         // JSON-RPC 通知不回响应体。
         return Ok((202, "application/json", Vec::new()));
@@ -849,27 +1206,356 @@ fn client_identity(head: &HttpHead, first: &RequestEnvelope) -> (String, String)
     (client_id, session_id)
 }
 
-fn handle_envelope(env: RequestEnvelope, ctx: &ConnCtx) -> Option<JsonRpcResponse> {
-    match classify_envelope(&env) {
-        LocalOutcome::Respond(resp) => Some(resp),
+/// batch 派发的一条出口：本地即可定案，或已进 WebView 在途等回帧。
+enum Dispatched {
+    /// 本地判定 / 闸门即定案（通知 ⇒ `None`，不回帧）。
+    Done(Option<JsonRpcResponse>),
+    /// 已 `emit_request`，凭 `rx` 等 `mcp_respond` 落账。
+    InFlight(PendingCall),
+}
+
+/// 在途调用的收帧凭据。
+///
+/// 在途预算凭据挂在 `Pending.slot` 上（不在这里）：回帧一到、`deliver` 把台账条目
+/// 摘走的那一刻就释放，所以预算口径严格等于「WebView 尚未回帧的调用数」。
+struct PendingCall {
+    /// 在请求数组里的下标：收帧后按原位写回，保证响应数组与请求数组同序。
+    index: usize,
+    id: Value,
+    method: WebMethod,
+    params: Value,
+    scope: McpSessionScope,
+    neg: Negotiation,
+    tool_name: Option<String>,
+    internal_id: String,
+    rx: mpsc::Receiver<BridgeReply>,
+    /// 派发起点（与 `Pending.started` 同源）：收帧时算 `elapsedMs` 真读数。
+    started: Instant,
+    /// 本条的应答死线 = 派发时刻 + `Limits::request_timeout`（改前串行时每条各享
+    /// 一份 30 s；并发派发后仍然逐条独立计时，不因排队友的队而延长）。
+    deadline: Instant,
+}
+
+/// JSON-RPC batch 的派发 / 收帧循环（B5 吞吐批）。
+///
+/// 改前：`for env in envelopes { handle_envelope(env) }` **串行**——batch 里 N 条就是
+/// N 趟 WebView 往返依次排队，一次 HTTP 的墙钟 = N × 单条往返。
+/// 改后：先把全部信封**并发派发**（跨连接在途预算 `CallBudget` 约束，取不到位就在本条
+/// 死线内有界等位），再按请求顺序收帧。
+///
+/// 逐条判定不许上移也不许跳过：tier / 第四张表 / `approvedRoots` / 参数闸仍在**每条**
+/// 派发里跑；某条被拒不牵连其余条目，拒绝逐条可见（审计 + RPC 错误帧）。
+///
+/// 配额口径（本批**收紧**）：第 1 条信封的配额仍在 `process_head` 计（与改前逐字一致，
+/// 非法帧也照样记账），第 2 条起**另计一格**——改前「一次 HTTP 的 batch 只扣 1 次
+/// `max_calls_per_minute`」对并发派发而言是偏松的账，现在 N 条真调用就是 N 格。
+fn run_envelopes(envelopes: Vec<RequestEnvelope>, ctx: &ConnCtx) -> Vec<JsonRpcResponse> {
+    let total = envelopes.len();
+    let mut out: Vec<Option<JsonRpcResponse>> = (0..total).map(|_| None).collect();
+    let mut inflight: Vec<PendingCall> = Vec::new();
+    for i in 0..total {
+        let id = envelopes[i].id.clone().unwrap_or(Value::Null);
+        if i > 0 {
+            if let Err(e) = check_rate(&ctx.shared.rate, &ctx.shared.limits, &ctx.rate_key) {
+                record(
+                    ctx,
+                    envelopes[i].method.as_str(),
+                    &Value::Null,
+                    AuditOutcome::Denied,
+                    Some(e.code.clone()),
+                    None,
+                    None,
+                );
+                out[i] = Some(JsonRpcResponse::err(id, &e));
+                continue;
+            }
+        }
+        match dispatch_envelope(&envelopes[i], ctx, i) {
+            Dispatched::Done(resp) => out[i] = resp,
+            Dispatched::InFlight(call) => inflight.push(call),
+        }
+    }
+    // 收帧：按派发顺序（= 请求顺序）逐条等自己的死线，响应数组与请求数组同序。
+    for call in inflight {
+        let index = call.index;
+        out[index] = Some(collect_call(call, ctx));
+    }
+    out.into_iter().flatten().collect()
+}
+
+fn dispatch_envelope(env: &RequestEnvelope, ctx: &ConnCtx, index: usize) -> Dispatched {
+    match classify_envelope(env) {
+        LocalOutcome::Respond(resp) => {
+            record_http(ctx, &env.method);
+            Dispatched::Done(Some(resp))
+        }
         LocalOutcome::NoResponse => {
             // 通知无帧；但 `notifications/cancelled` 仍需反查并取消在途请求。
             if env.method == "notifications/cancelled" {
                 cancel_pending(&env.params, ctx);
             }
-            None
+            Dispatched::Done(None)
         }
-        LocalOutcome::NeedsBridge(method) => {
-            let neg = negotiate(&env.params);
-            let id = env.id.clone().unwrap_or(Value::Null);
-            let mut resp = handle_webview(method, &env, ctx, id);
-            // 无状态按请求协商：六种能力方法的 result 都带当次请求的 `_meta`
-            // （ping 已在 classify_envelope 里按规范回空 result，不在此附 _meta）。
-            if let Some(result) = resp.result.as_mut() {
-                attach_negotiation_meta(result, &neg);
+        LocalOutcome::NeedsBridge(method) => dispatch_webview(method, env, ctx, index),
+    }
+}
+
+/// 转 WebView 的一条：闸门（scope / 参数 / tier / 工具批准 / 在途预算）逐条判定后派发。
+/// 到 `emit_request` 为止**不阻塞等帧**（那是 `collect_call` 的事）。
+fn dispatch_webview(
+    method: WebMethod,
+    env: &RequestEnvelope,
+    ctx: &ConnCtx,
+    index: usize,
+) -> Dispatched {
+    let id = env.id.clone().unwrap_or(Value::Null);
+    let neg = negotiate(&env.params);
+    let scope = match current_scope(ctx) {
+        Ok(s) => s,
+        Err(e) => {
+            record_http(ctx, &env.method);
+            return Dispatched::Done(Some(JsonRpcResponse::err(id, &e)));
+        }
+    };
+    // 闸门 1：参数（路径越界 / 落点参数 / 形状）显式报错。
+    if let Err(e) = validate_params(method, &env.params) {
+        record(
+            ctx,
+            method.as_str(),
+            &env.params,
+            AuditOutcome::Denied,
+            Some(e.code.clone()),
+            None,
+            None,
+        );
+        record_http(ctx, &env.method);
+        return Dispatched::Done(Some(JsonRpcResponse::err(id, &e)));
+    }
+    let tool_name = env
+        .params
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    // 闸门 2：tools/call 的危险工具（Rust 侧双保险，与 tools/list 过滤同源）。
+    // 未获精确授权的 privileged 工具显式拒绝，并写一条审计 denied。
+    if method == WebMethod::ToolsCall {
+        if let Some(name) = tool_name.as_deref() {
+            if let Err(e) = check_tool_call_permission(name, &scope) {
+                record(
+                    ctx,
+                    name,
+                    &env.params,
+                    AuditOutcome::Denied,
+                    Some(e.code.clone()),
+                    None,
+                    None,
+                );
+                record_http(ctx, &env.method);
+                return Dispatched::Done(Some(JsonRpcResponse::err(id, &e)));
             }
-            Some(resp)
         }
+    }
+    // 闸门 3：跨连接共享的在途 WebView 调用预算（batch 并发派发的第二道闸）。
+    // 取位只等到**本条自己的** `request_timeout` 死线；等不到 ⇒ 显式
+    // `E_CALL_BUDGET_EXCEEDED`（可见拒绝，不丢帧、不无界排队、不进 WebView）。
+    let wait_started = Instant::now();
+    let deadline = wait_started + ctx.shared.limits.request_timeout;
+    let Some(slot) = ctx.shared.budget.acquire(deadline) else {
+        let err = McpError::new(
+            codes::CALL_BUDGET_EXCEEDED,
+            format!(
+                "在途 WebView 调用预算已满（上限 {}），本条在 {} 内未取到位：改走更小批次的 batch 或稍后重试",
+                ctx.shared.limits.max_inflight_calls,
+                humantime(ctx.shared.limits.request_timeout)
+            ),
+        );
+        record(
+            ctx,
+            tool_name.as_deref().unwrap_or(method.as_str()),
+            &env.params,
+            AuditOutcome::Denied,
+            Some(err.code.clone()),
+            None,
+            Some(wait_started.elapsed().as_millis() as u64),
+        );
+        record_http(ctx, &env.method);
+        return Dispatched::Done(Some(JsonRpcResponse::err(id, &err)));
+    };
+    // 注册内部 request id 路由表 → 发事件（等帧在 `collect_call`）。
+    let internal_id = format!("mcp-{}", ctx.shared.seq.fetch_add(1, Ordering::SeqCst) + 1);
+    let (tx, rx) = mpsc::channel();
+    let started = Instant::now();
+    {
+        let Ok(mut pending) = ctx.shared.pending.lock() else {
+            // slot 在这里随作用域结束自动归还（不落台账 = 不在途）。
+            record_http(ctx, &env.method);
+            return Dispatched::Done(Some(JsonRpcResponse::err(id, &lock_err())));
+        };
+        pending.insert(
+            internal_id.clone(),
+            Pending {
+                tx,
+                rpc_id: id.clone(),
+                method: method.as_str().to_string(),
+                tool_name: tool_name.clone(),
+                started,
+                slot,
+            },
+        );
+    }
+    let payload = McpRequestPayload {
+        id: internal_id.clone(),
+        method: method.as_str().to_string(),
+        params: env.params.clone(),
+        scope: scope.clone(),
+    };
+    if let Err(e) = ctx.shared.bridge.emit_request(payload) {
+        // 先摘台账：slot 随条目一起归还（口径与「回帧即释放」一致）。
+        if let Ok(mut pending) = ctx.shared.pending.lock() {
+            pending.remove(&internal_id);
+        }
+        let err = McpError::new(
+            codes::BRIDGE_UNAVAILABLE,
+            format!("WebView 事件发送失败：{e}"),
+        );
+        record(
+            ctx,
+            tool_name.as_deref().unwrap_or(method.as_str()),
+            &env.params,
+            AuditOutcome::Denied,
+            Some(err.code.clone()),
+            None,
+            Some(started.elapsed().as_millis() as u64),
+        );
+        record_http(ctx, &env.method);
+        return Dispatched::Done(Some(JsonRpcResponse::err(id, &err)));
+    }
+    Dispatched::InFlight(PendingCall {
+        index,
+        id,
+        method,
+        params: env.params.clone(),
+        scope,
+        neg,
+        tool_name,
+        internal_id,
+        rx,
+        started,
+        deadline,
+    })
+}
+
+/// 收一帧：等 WebView 回帧 → 耗时落账（台账 + 审计 + `_meta.elapsedMs`）→ 归一化过滤。
+fn collect_call(call: PendingCall, ctx: &ConnCtx) -> JsonRpcResponse {
+    let PendingCall {
+        id,
+        method,
+        params,
+        scope,
+        neg,
+        tool_name,
+        internal_id,
+        rx,
+        started,
+        deadline,
+        ..
+    } = call;
+    let label = tool_name.as_deref().unwrap_or(method.as_str());
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let reply = match rx.recv_timeout(remaining) {
+        Ok(r) => r,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            if let Ok(mut pending) = ctx.shared.pending.lock() {
+                pending.remove(&internal_id);
+            }
+            let elapsed_ms = started.elapsed().as_millis() as u64;
+            record_latency(ctx, method, tool_name.as_deref(), started.elapsed());
+            let err = McpError::new(codes::TIMEOUT, "等待 WebView 应答超时");
+            record(
+                ctx,
+                label,
+                &params,
+                AuditOutcome::Timeout,
+                None,
+                None,
+                Some(elapsed_ms),
+            );
+            record_http(ctx, method.as_str());
+            return JsonRpcResponse::err(id, &err);
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            record_latency(ctx, method, tool_name.as_deref(), started.elapsed());
+            let err = McpError::new(codes::BRIDGE_UNAVAILABLE, "应答通道已断开");
+            record_http(ctx, method.as_str());
+            return JsonRpcResponse::err(id, &err);
+        }
+    };
+    let elapsed = started.elapsed();
+    let elapsed_ms = elapsed.as_millis() as u64;
+    record_latency(ctx, method, tool_name.as_deref(), elapsed);
+    let mut resp = match finalize_reply(method, &scope, &params, reply, ctx, Some(elapsed_ms)) {
+        Ok(result) => JsonRpcResponse::ok(id, result),
+        Err(e) => JsonRpcResponse::err(id, &e),
+    };
+    // 无状态按请求协商：六种能力方法的 result 都带当次请求的 `_meta`
+    // （ping 已在 classify_envelope 里按规范回空 result，不在此附 _meta）。
+    // 同一 `_meta` 里再带 `elapsedMs`＝宿主侧这枚调用的真读数（Pending.started → 回帧），
+    // 客户端据此知道慢在哪一段；错误帧是 RPC 层形状，不塞 result 字段。
+    if let Some(result) = resp.result.as_mut() {
+        attach_negotiation_meta(result, &neg);
+        attach_elapsed_meta(result, elapsed_ms);
+    }
+    record_http(ctx, method.as_str());
+    resp
+}
+
+/// `Duration` 的人类可读短形（只用于错误文案，不参与判定）。
+fn humantime(d: Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 1 {
+        format!("{secs} 秒")
+    } else {
+        format!("{} 毫秒", d.as_millis())
+    }
+}
+
+/// 耗时真读数入账：`方法#工具`（WebView 往返）；键构造口径集中在 `latency::LatencyKey`。
+fn record_latency(ctx: &ConnCtx, method: WebMethod, tool: Option<&str>, elapsed: Duration) {
+    let key = latency::LatencyKey::Bridge {
+        method: method.as_str(),
+        tool,
+    }
+    .as_str();
+    if let Ok(mut ledger) = ctx.shared.latency.lock() {
+        ledger.record(&key, elapsed);
+    }
+}
+
+/// 整条 HTTP 请求（从连接起到该条定案）的墙钟：与 `bridge#` 的差就是端点自身开销。
+fn record_http(ctx: &ConnCtx, method: &str) {
+    let key = latency::LatencyKey::Http { method }.as_str();
+    let elapsed = ctx.conn_started.elapsed();
+    if let Ok(mut ledger) = ctx.shared.latency.lock() {
+        ledger.record(&key, elapsed);
+    }
+}
+
+/// `_meta.elapsedMs`：宿主侧真读数（不是客户端估算）。只挂 object 形态 result。
+fn attach_elapsed_meta(result: &mut Value, elapsed_ms: u64) {
+    if !result.is_object() {
+        return;
+    }
+    let Some(obj) = result.as_object_mut() else {
+        return;
+    };
+    let meta = obj
+        .entry("_meta")
+        .or_insert_with(|| Value::Object(serde_json::Map::new()));
+    if !meta.is_object() {
+        *meta = Value::Object(serde_json::Map::new());
+    }
+    if let Some(m) = meta.as_object_mut() {
+        m.insert("elapsedMs".to_string(), json!(elapsed_ms));
     }
 }
 
@@ -906,6 +1592,10 @@ fn cancel_pending(params: &Value, ctx: &ConnCtx) {
         key.and_then(|k| pending.remove(&k))
     };
     if let Some(p) = removed {
+        // 取消也走「摘台账 ⇒ slot 随条目 drop」：在途预算立刻归还。
+        let elapsed = p.started.elapsed();
+        let elapsed_ms = elapsed.as_millis() as u64;
+        let tool = p.tool_name.clone().unwrap_or_else(|| p.method.clone());
         let _ = p.tx.send(BridgeReply {
             ok: false,
             result: None,
@@ -913,126 +1603,13 @@ fn cancel_pending(params: &Value, ctx: &ConnCtx) {
         });
         record(
             ctx,
-            p.tool_name.as_deref().unwrap_or(&p.method),
+            &tool,
             &Value::Null,
             AuditOutcome::Cancelled,
             None,
             None,
+            Some(elapsed_ms),
         );
-    }
-}
-
-fn handle_webview(
-    method: WebMethod,
-    env: &RequestEnvelope,
-    ctx: &ConnCtx,
-    id: Value,
-) -> JsonRpcResponse {
-    let scope = match current_scope(ctx) {
-        Ok(s) => s,
-        Err(e) => return JsonRpcResponse::err(id, &e),
-    };
-    // 闸门 1：参数（路径越界 / 落点参数 / 形状）显式报错。
-    if let Err(e) = validate_params(method, &env.params) {
-        record(
-            ctx,
-            method.as_str(),
-            &env.params,
-            AuditOutcome::Denied,
-            Some(e.code.clone()),
-            None,
-        );
-        return JsonRpcResponse::err(id, &e);
-    }
-    let tool_name = env
-        .params
-        .get("name")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    // 闸门 2：tools/call 的危险工具（Rust 侧双保险，与 tools/list 过滤同源）。
-    // 未获精确授权的 privileged 工具显式拒绝，并写一条审计 denied。
-    if method == WebMethod::ToolsCall {
-        if let Some(name) = tool_name.as_deref() {
-            if let Err(e) = check_tool_call_permission(name, &scope) {
-                record(
-                    ctx,
-                    name,
-                    &env.params,
-                    AuditOutcome::Denied,
-                    Some(e.code.clone()),
-                    None,
-                );
-                return JsonRpcResponse::err(id, &e);
-            }
-        }
-    }
-    // 注册内部 request id 路由表 → 发事件 → 等 mcp_respond。
-    let internal_id = format!("mcp-{}", ctx.shared.seq.fetch_add(1, Ordering::SeqCst) + 1);
-    let (tx, rx) = mpsc::channel();
-    {
-        let Ok(mut pending) = ctx.shared.pending.lock() else {
-            return JsonRpcResponse::err(id, &lock_err());
-        };
-        pending.insert(
-            internal_id.clone(),
-            Pending {
-                tx,
-                rpc_id: id.clone(),
-                method: method.as_str().to_string(),
-                tool_name: tool_name.clone(),
-                started: Instant::now(),
-            },
-        );
-    }
-    let payload = McpRequestPayload {
-        id: internal_id.clone(),
-        method: method.as_str().to_string(),
-        params: env.params.clone(),
-        scope: scope.clone(),
-    };
-    if let Err(e) = ctx.shared.bridge.emit_request(payload) {
-        if let Ok(mut pending) = ctx.shared.pending.lock() {
-            pending.remove(&internal_id);
-        }
-        let err = McpError::new(
-            codes::BRIDGE_UNAVAILABLE,
-            format!("WebView 事件发送失败：{e}"),
-        );
-        record(
-            ctx,
-            tool_name.as_deref().unwrap_or(method.as_str()),
-            &env.params,
-            AuditOutcome::Denied,
-            Some(err.code.clone()),
-            None,
-        );
-        return JsonRpcResponse::err(id, &err);
-    }
-    let reply = match rx.recv_timeout(ctx.shared.limits.request_timeout) {
-        Ok(r) => r,
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            if let Ok(mut pending) = ctx.shared.pending.lock() {
-                pending.remove(&internal_id);
-            }
-            let err = McpError::new(codes::TIMEOUT, "等待 WebView 应答超时");
-            record(
-                ctx,
-                tool_name.as_deref().unwrap_or(method.as_str()),
-                &env.params,
-                AuditOutcome::Timeout,
-                None,
-                None,
-            );
-            return JsonRpcResponse::err(id, &err);
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            let err = McpError::new(codes::BRIDGE_UNAVAILABLE, "应答通道已断开");
-            return JsonRpcResponse::err(id, &err);
-        }
-    };
-    match finalize_reply(method, &scope, &env.params, reply, ctx) {
-        Ok(result) => JsonRpcResponse::ok(id, result),
-        Err(e) => JsonRpcResponse::err(id, &e),
     }
 }
 
@@ -1078,12 +1655,27 @@ pub(crate) fn normalize_webview_result(method: WebMethod, result: &mut Value) {
     }
 }
 
+/// 只数不存的 `io::Write`：`serde_json::to_writer` 走它，序列化输出被丢弃、只累加字节数。
+/// 用于「净化前 raw 体积」的体积闸——与 `to_vec(&raw).len()` 逐字节同长，但不分配整包 Vec。
+struct CountingWrite(usize);
+
+impl std::io::Write for CountingWrite {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn finalize_reply(
     method: WebMethod,
     scope: &McpSessionScope,
     params: &Value,
     reply: BridgeReply,
     ctx: &ConnCtx,
+    elapsed_ms: Option<u64>,
 ) -> Result<Value, McpError> {
     if !reply.ok {
         let mut e = reply
@@ -1101,17 +1693,23 @@ fn finalize_reply(
             AuditOutcome::Error,
             Some(e.code.clone()),
             None,
+            elapsed_ms,
         );
         return Err(e);
     }
-    let raw = reply.result.unwrap_or_else(|| json!({}));
-    let raw_len = serde_json::to_vec(&raw)
-        .map_err(|e| McpError::new(codes::INTERNAL, format!("应答序列化失败：{e}")))?
-        .len();
-    if raw_len > ctx.shared.limits.max_response_bytes {
+    let mut raw = reply.result.unwrap_or_else(|| json!({}));
+    // 体积闸判据＝**净化前** raw 的序列化字节数（1MiB，口径不许变宽）。用计数写出器只累加
+    // serde 将要吐出的字节数，不再为此分配一份当场丢弃的整包 Vec（B5 吞吐批削分配）。
+    // `to_writer` 的输出与 `to_vec` 逐字节同长，故闸值语义零漂移。
+    let mut counter = CountingWrite(0usize);
+    serde_json::to_writer(&mut counter, &raw)
+        .map_err(|e| McpError::new(codes::INTERNAL, format!("应答序列化失败：{e}")))?;
+    if counter.0 > ctx.shared.limits.max_response_bytes {
         return Err(McpError::new(codes::RESPONSE_TOO_LARGE, "返回体积超限"));
     }
-    let mut result = sanitize_untrusted(&raw);
+    // 就地净化：不再新建整树（与 `sanitize_untrusted` 由构造保证逐字节等价）。
+    sanitize_untrusted_inplace(&mut raw);
+    let mut result = raw;
     // 线协议形状归一必须早于二次过滤：裸数组会让 filter_tools_list 静默跳过。
     normalize_webview_result(method, &mut result);
     if method == WebMethod::ToolsList {
@@ -1130,6 +1728,7 @@ fn finalize_reply(
                 AuditOutcome::Filtered,
                 Some(reason.to_string()),
                 None,
+                elapsed_ms,
             );
         }
     }
@@ -1149,12 +1748,16 @@ fn finalize_reply(
             AuditOutcome::Ok,
             None,
             landed,
+            elapsed_ms,
         );
     }
     Ok(result)
 }
 
 /// 审计落盘失败出声但不阻断主流程（磁盘满不该把请求放大成整体故障）。
+///
+/// `elapsed_ms`＝宿主侧 `Pending.started` 起的真读数（毫秒）；拿不到真源就传 `None`，
+/// 该字段整格缺席（`skip_serializing_if`），绝不写估算值冒充实测。
 fn record(
     ctx: &ConnCtx,
     tool: &str,
@@ -1162,6 +1765,7 @@ fn record(
     outcome: AuditOutcome,
     note: Option<String>,
     landed_path: Option<String>,
+    elapsed_ms: Option<u64>,
 ) {
     let mut final_note = note;
     if landed_path.is_some() {
@@ -1179,6 +1783,7 @@ fn record(
         args_digest: audit::digest_args(args),
         outcome,
         landed_path,
+        elapsed_ms,
         note: final_note,
     };
     if let Err(e) = audit::append(&ctx.shared.app_data_dir, &entry) {
@@ -1213,8 +1818,16 @@ fn write_http(
     body: &[u8],
 ) -> std::io::Result<()> {
     let head = response_head(status, content_type, body.len());
-    stream.write_all(head.as_bytes())?;
-    stream.write_all(body)?;
+    // **一次写出**（B5 收口批实测修复）：头与体分两次 `write_all` 会切成两个 TCP 段。
+    // 读数出处（`b5_endpoint_self_cost_probe`，本机回环、假 bridge、`--test-threads=1`）：
+    // 单条 p50 两次写出 3.38ms vs 一次写出 3.19 / 3.39 / 3.70ms（同量级，n=1/3）；
+    // 并发 8 连接 × 12 条吞吐 两次写出 ≈110 次/秒（n=1）vs 一次写出 ≈1411 / 1554 / 1618
+    // 次/秒（n=3）。⇒ 收益全在并发段，单条不敏感。
+    // 形状、字节、`Connection: close` 语义逐字不变，只改写出次数。
+    let mut out = Vec::with_capacity(head.len() + body.len());
+    out.extend_from_slice(head.as_bytes());
+    out.extend_from_slice(body);
+    stream.write_all(&out)?;
     stream.flush()
 }
 

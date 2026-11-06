@@ -4448,7 +4448,8 @@ pub fn run() {
             mcp::mcp_approve,
             mcp::mcp_revoke,
             mcp::mcp_scope_query,
-            mcp::mcp_audit_query
+            mcp::mcp_audit_query,
+            mcp::mcp_latency_query
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

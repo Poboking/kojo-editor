@@ -65,6 +65,10 @@ pub struct AuditEntry {
     /// 写盘落点：只由宿主侧写入；若取自 WebView 应答则 `note` 标明来源。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub landed_path: Option<String>,
+    /// 宿主侧真读数：`Pending.started` → 应答落账（毫秒）。缺真源就不写这一格
+    /// （不拿估算冒充实测）；旧审计行没有该字段，读出按 `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -126,6 +130,7 @@ fn bounded_entry(entry: &AuditEntry) -> AuditEntry {
         args_digest: truncate_chars(&entry.args_digest, 1024),
         outcome: entry.outcome,
         landed_path: entry.landed_path.as_deref().map(|p| truncate_chars(p, 256)),
+        elapsed_ms: entry.elapsed_ms,
         note: entry.note.as_deref().map(|n| truncate_chars(n, 512)),
     }
 }

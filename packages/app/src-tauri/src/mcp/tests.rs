@@ -8,7 +8,7 @@
 use super::audit::{self, AuditEntry, AuditOutcome};
 use super::protocol::*;
 use super::scope::{self, SessionGrant};
-use super::server::{self, EndpointFile, HttpHead, Limits, McpBridge, McpShared, RateState};
+use super::server::{self, EndpointFile, HttpHead, Limits, McpBridge, McpShared, RateGovernor};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{Read as _, Write as _};
@@ -506,6 +506,8 @@ fn sample_entry(outcome: AuditOutcome, tool: &str) -> AuditEntry {
         args_digest: "name:str(4)".to_string(),
         outcome,
         landed_path: None,
+        // 无真源 ⇒ 该格缺席（`skip_serializing_if`），不写估算值冒充实测。
+        elapsed_ms: None,
         note: None,
     }
 }
@@ -609,18 +611,26 @@ fn bearer_and_origin_three_gates() {
 
 #[test]
 fn rate_limit_window() {
+    // B5 起速率闸按会话计量：同一会话键两格放行、第三格显式 E_RATE_LIMITED。
     let limits = Limits {
         max_calls_per_minute: 2,
         ..Limits::default()
     };
-    let rate = Mutex::new(RateState {
-        window_start: Instant::now(),
-        count: 0,
-    });
-    assert!(server::check_rate(&rate, &limits).is_ok());
-    assert!(server::check_rate(&rate, &limits).is_ok());
+    let rate = Mutex::new(RateGovernor::default());
+    assert!(server::check_rate(&rate, &limits, "sess-a").is_ok());
+    assert!(server::check_rate(&rate, &limits, "sess-a").is_ok());
     assert_eq!(
-        server::check_rate(&rate, &limits).unwrap_err().code,
+        server::check_rate(&rate, &limits, "sess-a")
+            .unwrap_err()
+            .code,
+        codes::RATE_LIMITED
+    );
+    // 全局硬顶＝`max_calls_per_minute` 本身：换一条会话键**也**必须被拒
+    // （端点每分钟接受的总量与旧全局单计数器逐字同值，不许因按会话计量而放大）。
+    assert_eq!(
+        server::check_rate(&rate, &limits, "sess-b")
+            .unwrap_err()
+            .code,
         codes::RATE_LIMITED
     );
 }
@@ -1388,7 +1398,10 @@ fn tools_call_denies_tier_mismatch_from_read_session() {
             .unwrap_or_else(|| panic!("长任务面档位漏判：{name} 在 read 会话被闸门放行（Ok）"));
         assert_eq!(e.code, "E_TIER_DENIED", "{name}");
         assert!(e.message.contains(name), "{name} 拒绝必须可见（带工具名）");
-        assert!(e.message.contains("edit"), "{name} 拒绝理由必须点明所需档位");
+        assert!(
+            e.message.contains("edit"),
+            "{name} 拒绝理由必须点明所需档位"
+        );
     }
     assert_eq!(host_required_tier("tasks.status"), McpTier::Read);
     assert!(check_tool_call_permission("tasks.status", &read).is_ok());
@@ -1412,7 +1425,11 @@ fn tools_call_denies_tier_mismatch_from_read_session() {
                 .collect()
         })
         .unwrap_or_default();
-    assert_eq!(kept, vec!["tasks.status"], "read 会话的 tools/list 漏滤任务写面");
+    assert_eq!(
+        kept,
+        vec!["tasks.status"],
+        "read 会话的 tools/list 漏滤任务写面"
+    );
     assert_eq!(listing.filtered, vec!["tasks.start", "tasks.cancel"]);
     // edit 会话（正确 tier）三枚照列照调。
     let edit_tasks = McpSessionScope {
@@ -1420,7 +1437,10 @@ fn tools_call_denies_tier_mismatch_from_read_session() {
         ..empty_scope(Vec::new())
     };
     for name in ["tasks.start", "tasks.status", "tasks.cancel"] {
-        assert!(check_tool_call_permission(name, &edit_tasks).is_ok(), "{name}");
+        assert!(
+            check_tool_call_permission(name, &edit_tasks).is_ok(),
+            "{name}"
+        );
     }
     // 只读工具不受新闸影响。
     assert!(check_tool_call_permission("read_file", &read).is_ok());
@@ -1465,7 +1485,10 @@ fn dot_namespaced_edit_tools_are_gated_as_edit_at_host_gate() {
         ..empty_scope(Vec::new())
     };
     for name in EDIT_NAMES {
-        assert!(check_tool_call_permission(name, &edit).is_ok(), "{name} edit 会话应放行");
+        assert!(
+            check_tool_call_permission(name, &edit).is_ok(),
+            "{name} edit 会话应放行"
+        );
         assert!(
             check_tool_call_permission(name, &priv_scope).is_ok(),
             "{name} privileged 会话应放行"
@@ -1577,6 +1600,9 @@ fn token_rotation_invalidates_old_token_session_and_discovery() {
     let pending = Mutex::new(HashMap::new());
     let mirror = Mutex::new(scope::McpScopeState::default());
     let (tx, rx) = std::sync::mpsc::channel();
+    // B5 起台账项持有在途预算凭据：轮换 drain 时凭据必须随条目一起归还。
+    let budget = Arc::new(server::CallBudget::new(1));
+    let slot = budget.try_acquire().expect("测试预算取位");
     pending.lock().unwrap().insert(
         "mcp-1".to_string(),
         server::Pending {
@@ -1585,7 +1611,13 @@ fn token_rotation_invalidates_old_token_session_and_discovery() {
             method: "tools/call".to_string(),
             tool_name: Some("export_file".to_string()),
             started: Instant::now(),
+            slot,
         },
+    );
+    assert_eq!(
+        budget.snapshot()["inFlight"].as_u64(),
+        Some(1),
+        "取位后在途 1"
     );
     server::write_discovery(
         d.path(),
@@ -2322,14 +2354,21 @@ fn e2e_tasks_write_face_denied_for_read_session_with_zero_bridge_calls() {
         assert_eq!(r.status, 200);
         let v = rpc_json(&r);
         assert_eq!(v["id"], json!(id), "{name}：拒绝也要回同一条请求 id");
-        assert_eq!(v["error"]["code"], json!(-32000), "{name}：必须显式 RPC 错误");
+        assert_eq!(
+            v["error"]["code"],
+            json!(-32000),
+            "{name}：必须显式 RPC 错误"
+        );
         assert_eq!(
             v["error"]["data"]["code"],
             json!("E_TIER_DENIED"),
             "{name}：写/取消档任务工具在 read 会话必须显式拒"
         );
         let msg = v["error"]["message"].as_str().unwrap_or("");
-        assert!(msg.contains(name) && msg.contains("edit"), "{name} 拒绝理由：{msg}");
+        assert!(
+            msg.contains(name) && msg.contains("edit"),
+            "{name} 拒绝理由：{msg}"
+        );
     }
     // 两条各写一条 Denied 审计（note＝原始码，拒绝可见不静默）。
     let rows = audit::query(s.dir.path(), 50, None).unwrap();
@@ -2373,7 +2412,9 @@ fn e2e_tasks_write_face_denied_for_read_session_with_zero_bridge_calls() {
 
     // `kojo://tasks` 是新增条目：URI 闸同尺放行（无 `..` / 无绝对形态），read 会话可读。
     validate_kojo_uri("kojo://tasks").expect("kojo://tasks 必须过 URI 闸（新条目与老条目同尺）");
-    let read_req = r#"{"jsonrpc":"2.0","id":54,"method":"resources/read","params":{"uri":"kojo://tasks"}}"#.to_string();
+    let read_req =
+        r#"{"jsonrpc":"2.0","id":54,"method":"resources/read","params":{"uri":"kojo://tasks"}}"#
+            .to_string();
     let port2 = s.port;
     let token2 = s.token.clone();
     let reader = std::thread::spawn(move || mcp_post(port2, &token2, &read_req));
@@ -2393,7 +2434,14 @@ fn e2e_tasks_write_face_denied_for_read_session_with_zero_bridge_calls() {
     assert!(v2["error"].is_null(), "read 会话读 kojo://tasks 被拒：{v2}");
 
     // 正确 tier（edit 会话）⇒ 两枚写/取消面照旧走桥（收口没把能力面焊死）。
-    scope::approve(s.dir.path(), "loopback-client", McpTier::Edit, vec![], vec![]).unwrap();
+    scope::approve(
+        s.dir.path(),
+        "loopback-client",
+        McpTier::Edit,
+        vec![],
+        vec![],
+    )
+    .unwrap();
     reload_scope_mirror(&s);
     let start_req = r#"{"jsonrpc":"2.0","id":55,"method":"tools/call","params":{"name":"tasks.start","arguments":{"kind":"search","query":"abc"}}}"#.to_string();
     let port3 = s.port;
@@ -3401,7 +3449,10 @@ fn editor_write_tools_are_gated_as_edit_at_host_gate() {
         assert_eq!(e.code, "E_TIER_DENIED", "{name}");
         assert!(e.message.contains(name), "{name} 拒绝必须可见（带工具名）");
         // edit / privileged 会话放行（privileged 覆盖 edit 档）。
-        assert!(check_tool_call_permission(name, &edit).is_ok(), "{name} edit 会话应放行");
+        assert!(
+            check_tool_call_permission(name, &edit).is_ok(),
+            "{name} edit 会话应放行"
+        );
         assert!(
             check_tool_call_permission(name, &priv_scope).is_ok(),
             "{name} privileged 会话应放行"
@@ -3684,7 +3735,11 @@ fn launcher_named_tools_keep_privileged_tier_and_exact_approval_only() {
 /// ⑤ 精确名批准后同一调用照旧走桥成功（批准语义零放宽，收口没把能力面焊死）。
 #[test]
 fn e2e_launcher_tools_require_exact_approval_with_zero_bridge_calls() {
-    const PROBED: [&str; 3] = ["launcher_instance_list", "launcher_save_list", "launcher_start"];
+    const PROBED: [&str; 3] = [
+        "launcher_instance_list",
+        "launcher_save_list",
+        "launcher_start",
+    ];
     const REGISTERED: [&str; 6] = [
         "launcher_instance_list",
         "launcher_save_list",
@@ -3812,4 +3867,974 @@ fn e2e_launcher_tools_require_exact_approval_with_zero_bridge_calls() {
         "精确名批准后仍被拒 ⇒ 批准语义被本批误伤：{v}"
     );
     assert_eq!(v["result"]["total"], json!(0));
+}
+
+/* ==================================================================== *
+ * B5 吞吐与延迟批：耗时台账真读数 + batch 并发派发 + 在途预算 + 逐条配额。
+ *
+ * 这一节的夹具是 **WebView 替身**（`B5Bridge`）：`emit_request` 立即返回，回帧由
+ * 后台线程按可控延时经**生产** `deliver_shared` 落账。于是量到的是端点自身的
+ * 派发循环 / 台账 / HTTP 形状（真壳里 WebView 往返那一格另说，不许拿这里冒充实测）。
+ * `Hold` 模式永不回帧，用来逼出「在途预算耗尽」与「超时」两条显式拒绝路径。
+ * ==================================================================== */
+
+/// 回帧形态：按延时回帧（echo 形状）/ 按延时回一整套 `tools/list` 表 / 永不回帧
+/// （只由 `request_timeout` 收尾）。
+#[derive(Clone, Copy)]
+enum B5Mode {
+    Reply(Duration),
+    /// 回帧体＝`webview_tools()` 的能力全集（收口批新增：钉「端点不往 tools/list
+    /// 里多塞任何名字」这条纵深，台账/审计查询命令不许从协议面漏进来）。
+    Tools(Duration),
+    Hold,
+}
+
+/// WebView 替身：统计「派发到 WebView 的调用数」与「同时在途峰值」。
+/// 峰值就是「并发派发真的发生了」的直接证据（串行恒为 1）。
+struct B5Bridge {
+    mode: B5Mode,
+    slot: Arc<Mutex<Option<Arc<McpShared>>>>,
+    calls: Arc<AtomicUsize>,
+    inflight: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+}
+
+impl McpBridge for B5Bridge {
+    fn emit_request(&self, payload: McpRequestPayload) -> Result<(), String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let now = self.inflight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+        let shared = self
+            .slot
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or("B5 夹具：台账尚未接线")?;
+        let inflight = Arc::clone(&self.inflight);
+        let (id, method) = (payload.id.clone(), payload.method.clone());
+        let (delay, is_tool_table) = match self.mode {
+            B5Mode::Reply(d) => (d, false),
+            B5Mode::Tools(d) => (d, true),
+            B5Mode::Hold => {
+                // Hold：不回帧，等在途凭据随超时从台账摘走时归还。
+                return Ok(());
+            }
+        };
+        let result = if is_tool_table {
+            webview_tools()
+        } else {
+            json!({ "content": method, "echo": true })
+        };
+        std::thread::spawn(move || {
+            std::thread::sleep(delay);
+            let _ = server::deliver_shared(
+                &shared,
+                McpRespondArgs {
+                    id,
+                    ok: true,
+                    result: Some(result),
+                    error: None,
+                },
+            );
+            inflight.fetch_sub(1, Ordering::SeqCst);
+        });
+        Ok(())
+    }
+}
+
+/// B5 端到端夹具：`Limits` 可注入的同一条生产启动路径（真实 listener）。
+struct B5Server {
+    state: server::McpState,
+    dir: TempDir,
+    port: u16,
+    token: String,
+    shared: Arc<McpShared>,
+    calls: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+    inflight: Arc<AtomicUsize>,
+}
+
+impl B5Server {
+    fn start(mode: B5Mode, limits: Limits) -> Self {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let inflight = Arc::new(AtomicUsize::new(0));
+        let slot: Arc<Mutex<Option<Arc<McpShared>>>> = Arc::new(Mutex::new(None));
+        let bridge: Arc<dyn McpBridge> = Arc::new(B5Bridge {
+            mode,
+            slot: Arc::clone(&slot),
+            calls: Arc::clone(&calls),
+            inflight: Arc::clone(&inflight),
+            peak: Arc::clone(&peak),
+        });
+        let dir = TempDir::new();
+        let state = server::McpState::default();
+        let started = server::start_with(bridge, dir.path().to_path_buf(), &state, limits).unwrap();
+        let shared = Arc::clone(&state.runtime.lock().unwrap().as_ref().unwrap().shared);
+        // 接线：桥的后台回帧线程要经**生产** `deliver_shared` 落账。
+        *slot.lock().unwrap() = Some(Arc::clone(&shared));
+        Self {
+            state,
+            dir,
+            port: started.port,
+            token: started.token,
+            shared,
+            calls,
+            peak,
+            inflight,
+        }
+    }
+    fn snapshot(&self) -> Value {
+        server::latency_snapshot(&self.shared)
+    }
+    fn ledger_entry<'a>(&'a self, snap: &'a Value, needle: &str) -> Value {
+        snap["latency"]["keys"]
+            .as_array()
+            .expect("台账快照带 keys 数组")
+            .iter()
+            .find(|k| k["key"].as_str().unwrap_or("").contains(needle))
+            .cloned()
+            .unwrap_or_else(|| panic!("台账缺键 {needle}：{snap}"))
+    }
+    fn b5_limits(timeout_ms: u64, budget: usize, per_minute: u32) -> Limits {
+        Limits {
+            request_timeout: Duration::from_millis(timeout_ms),
+            max_inflight_calls: budget,
+            max_calls_per_minute: per_minute,
+            ..Limits::default()
+        }
+    }
+}
+
+impl Drop for B5Server {
+    fn drop(&mut self) {
+        let _ = server::stop(&self.state);
+    }
+}
+
+/// 造 JSON-RPC batch 体：`tools/call` × n 条（id 从 1 递增）。
+fn b5_batch_body(ids: &[u64], tool: &str) -> String {
+    let items: Vec<String> = ids
+        .iter()
+        .map(|id| {
+            format!(
+                r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{tool}","arguments":{{"path":"docs/a.txt"}}}}}}"#
+            )
+        })
+        .collect();
+    format!("[{}]", items.join(","))
+}
+
+/// 纯函数判据：分位数（最近秩）+ 窗口滚动出声 + 锁不静默。
+#[test]
+fn b5_latency_percentile_and_window_are_exactly_defined() {
+    use super::latency::Ledger;
+    let mut l = Ledger::new();
+    assert_eq!(super::latency::percentile(&Default::default(), 95), 0);
+    for i in 1..=100u64 {
+        l.record("tools/call#t", Duration::from_millis(i));
+    }
+    let stats = l.stats();
+    assert_eq!(stats.len(), 1, "同键聚合");
+    let s = &stats[0];
+    assert_eq!(s.seen, 100);
+    assert_eq!(s.dropped, 0);
+    assert_eq!(s.p50_ms, 50, "最近秩：p50 = 第 50 个");
+    assert_eq!(s.p95_ms, 95);
+    assert_eq!(s.p99_ms, 99);
+    assert_eq!(s.max_ms, 100);
+    assert_eq!(s.avg_ms, 50, "均值＝全历史累计/累计次数");
+    // 窗口滚动：多出的样本丢弃但**计数出声**，max/seen 仍按全历史。
+    let mut small = Ledger::with_window(4);
+    for i in [10u64, 20, 30, 40, 50] {
+        small.record("k", Duration::from_millis(i));
+    }
+    let w = &small.stats()[0];
+    assert_eq!(w.seen, 5, "seen 是全历史次数");
+    assert_eq!(w.samples, 4, "窗口只留最近 4 个");
+    assert_eq!(w.dropped, 1, "丢弃数必须与 seen 对账，不静默");
+    assert_eq!(w.max_ms, 50, "max 是全历史读数，不因窗口滚动而缩");
+    // 键数上限：溢出并入可见溢出键，绝不静默丢样本。
+    let mut many = Ledger::with_window(4);
+    for k in 0..(super::latency::MAX_KEYS + 40) {
+        many.record(&format!("k{k}"), Duration::from_millis(1));
+    }
+    let json = many.to_json();
+    assert!(json["overflowKeys"].as_u64().unwrap_or(0) >= 40);
+    assert!(json["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["key"] == json!(super::latency::OVERFLOW_KEY)));
+}
+
+/// 真读数出账：`Pending.started` 的耗时同时进台账、审计行与 `tools/call` 的
+/// `_meta.elapsedMs`；三个口径必须互相对得上（同一次调用不许各说一套）。
+#[test]
+fn b5_latency_readout_reaches_ledger_audit_and_meta_together() {
+    let s = B5Server::start(
+        B5Mode::Reply(Duration::from_millis(30)),
+        B5Server::b5_limits(5_000, 8, 120),
+    );
+    let body = r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"docs/a.txt"}}}"#;
+    let r = mcp_post(s.port, &s.token, body);
+    let v = rpc_json(&r);
+    let elapsed = v["result"]["_meta"]["elapsedMs"]
+        .as_u64()
+        .expect("tools/call 的 result._meta 必须带 elapsedMs 真读数");
+    assert!(
+        elapsed >= 25,
+        "elapsedMs 是实测回帧耗时（夹具延时 30ms），不得是常数：{elapsed}"
+    );
+
+    let snap = s.snapshot();
+    let bridge = s.ledger_entry(&snap, "tools/call#read_file");
+    assert_eq!(bridge["seen"].as_u64(), Some(1), "一调用一样本");
+    // `LatencyStat` 走 camelCase 出账（p50Ms / p95Ms / maxMs / avgMs）。
+    assert_eq!(
+        bridge["p50Ms"].as_u64(),
+        Some(elapsed),
+        "p50 就是这一笔的真读数"
+    );
+    assert_eq!(bridge["maxMs"].as_u64(), Some(elapsed));
+    assert_eq!(bridge["dropped"].as_u64(), Some(0));
+    // 端点自身开销的单列读数：`http#方法` 键（连接起点 → 该条定案）。
+    let http = s.ledger_entry(&snap, "http#tools/call");
+    assert_eq!(http["seen"].as_u64(), Some(1));
+    assert!(
+        http["maxMs"].as_u64().unwrap_or(0) >= elapsed,
+        "端点墙钟不可能短于 WebView 往返：{http}"
+    );
+    // 预算出账带现场值（缺席=没接线，不许挂空值）。
+    assert_eq!(snap["budget"]["max"].as_u64(), Some(8));
+    assert_eq!(snap["budget"]["rejections"].as_u64(), Some(0));
+    assert_eq!(snap["limits"]["maxCallsPerMinute"].as_u64(), Some(120));
+
+    // 审计行的 elapsedMs 与 `_meta` 同源。
+    let rows = audit::query(s.dir.path(), 10, None).unwrap();
+    let ok = rows
+        .iter()
+        .find(|e| e.outcome == AuditOutcome::Ok && e.tool == "read_file")
+        .expect("一笔 ok 审计");
+    assert_eq!(ok.elapsed_ms, Some(elapsed), "审计与 _meta 必须同读数");
+}
+
+/// 并发派发本身（实测判据）：batch 20 条 × 夹具回帧 30ms，串行要 600ms；
+/// 并发 + 在途预算 8 时应在数倍之内完成，且**同时在途峰值**必须真的 >1（串行恒 1）。
+#[test]
+fn b5_batch_is_dispatched_concurrently_within_inflight_budget() {
+    let s = B5Server::start(
+        B5Mode::Reply(Duration::from_millis(30)),
+        B5Server::b5_limits(5_000, 8, 1200),
+    );
+    let ids: Vec<u64> = (1..=20).collect();
+    let started = Instant::now();
+    let r = mcp_post(s.port, &s.token, &b5_batch_body(&ids, "read_file"));
+    let wall = started.elapsed();
+    assert_eq!(r.status, 200);
+    let arr = rpc_json(&r).as_array().cloned().expect("batch 响应是数组");
+    assert_eq!(arr.len(), 20, "每条都有响应帧");
+    for (i, item) in arr.iter().enumerate() {
+        assert_eq!(item["id"], json!(i as u64 + 1), "响应顺序＝请求顺序");
+        assert!(item["result"].is_object(), "第 {i} 条应成功：{item}");
+    }
+    assert_eq!(s.calls.load(Ordering::SeqCst), 20, "20 条全部进 WebView");
+    let peak = s.peak.load(Ordering::SeqCst);
+    assert!(peak >= 2, "并发派发没发生（同时在途峰值 {peak}＝串行）");
+    assert!(peak <= 8, "在途峰值 {peak} 突破预算 8 ⇒ 第二道闸失效");
+    assert!(
+        wall < Duration::from_millis(400),
+        "batch 20 条墙钟 {}ms：串行下限是 20×30ms，未体现并发",
+        wall.as_millis()
+    );
+    let snap = s.snapshot();
+    assert_eq!(
+        snap["budget"]["rejections"].as_u64(),
+        Some(0),
+        "没超预算不该拒绝"
+    );
+    assert_eq!(
+        snap["budget"]["peak"].as_u64(),
+        Some(peak as u64),
+        "台账峰值与桥侧对账"
+    );
+    assert_eq!(
+        snap["budget"]["inFlight"].as_u64(),
+        Some(0),
+        "收尾后在途归零"
+    );
+    assert_eq!(s.inflight.load(Ordering::SeqCst), 0);
+    // 台账：20 样同键聚合（窗口 512 ⇒ 无丢弃）。
+    let bridge = s.ledger_entry(&snap, "tools/call#read_file");
+    assert_eq!(bridge["seen"].as_u64(), Some(20));
+    assert_eq!(bridge["dropped"].as_u64(), Some(0));
+}
+
+/// 在途预算耗尽＝显式拒绝（不静默排队、不丢帧、不进 WebView）。
+/// 夹具 `Hold` 永不回帧：预算 2 ⇒ 只有 2 条进 WebView 并各走 `E_TIMEOUT`，
+/// 其余 4 条取不到位 ⇒ 各自一条 `E_CALL_BUDGET_EXCEEDED` + 一条 denied 审计。
+#[test]
+fn b5_inflight_overrun_is_rejected_explicitly_with_zero_extra_bridge_calls() {
+    let s = B5Server::start(B5Mode::Hold, B5Server::b5_limits(400, 2, 1200));
+    let ids: Vec<u64> = (1..=6).collect();
+    let r = mcp_post(s.port, &s.token, &b5_batch_body(&ids, "read_file"));
+    assert_eq!(r.status, 200);
+    let arr = rpc_json(&r).as_array().cloned().expect("batch 响应是数组");
+    assert_eq!(arr.len(), 6, "六条都得有帧——预算耗尽也不许丢帧");
+    let code = |v: &Value| {
+        v["error"]["data"]["code"]
+            .as_str()
+            .unwrap_or("")
+            .to_string()
+    };
+    let timed_out: Vec<u64> = arr
+        .iter()
+        .filter(|v| code(v) == codes::TIMEOUT)
+        .map(|v| v["id"].as_u64().unwrap_or(0))
+        .collect();
+    let rejected: Vec<u64> = arr
+        .iter()
+        .filter(|v| code(v) == codes::CALL_BUDGET_EXCEEDED)
+        .map(|v| v["id"].as_u64().unwrap_or(0))
+        .collect();
+    assert_eq!(timed_out.len(), 2, "恰好预算那么多条进了 WebView：{arr:?}");
+    assert_eq!(
+        rejected.len(),
+        4,
+        "其余 4 条显式 E_CALL_BUDGET_EXCEEDED：{arr:?}"
+    );
+    assert_eq!(s.calls.load(Ordering::SeqCst), 2, "超预算的 4 条零桥调用");
+    let snap = s.snapshot();
+    assert_eq!(snap["budget"]["rejections"].as_u64(), Some(4));
+    assert_eq!(
+        snap["budget"]["inFlight"].as_u64(),
+        Some(0),
+        "超时后凭据必归还"
+    );
+    // 两条口径不同的拒绝各留审计：超时＝timeout，超预算＝denied（note 原始码）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|e| e.outcome == AuditOutcome::Timeout)
+            .count(),
+        2
+    );
+    let overrun: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| {
+            e.outcome == AuditOutcome::Denied
+                && e.note.as_deref() == Some(codes::CALL_BUDGET_EXCEEDED)
+        })
+        .collect();
+    assert_eq!(overrun.len(), 4, "超预算逐条 denied 审计");
+    for e in &overrun {
+        assert!(e.elapsed_ms.is_some(), "等位耗时也要出账：{e:?}");
+    }
+}
+
+/// 并发不许把逐条判定上移：read 会话的 batch 里，edit 档工具仍在**本条**派发时被
+/// `E_TIER_DENIED` 拒（桥零调用），同批的只读工具照旧走桥成功。
+#[test]
+fn b5_batch_keeps_per_envelope_tier_gate_with_zero_bridge_calls_for_denied() {
+    let s = B5Server::start(
+        B5Mode::Reply(Duration::from_millis(0)),
+        B5Server::b5_limits(5_000, 8, 120),
+    );
+    let body = r#"[
+        {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tasks.status","arguments":{"taskId":"tsk-1"}}},
+        {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tasks.start","arguments":{"kind":"search","query":"abc","taskId":"tsk-1"}}}
+    ]"#;
+    let r = mcp_post(s.port, &s.token, body);
+    let arr = rpc_json(&r).as_array().cloned().expect("batch 响应是数组");
+    assert!(arr[0]["result"].is_object(), "只读面照旧走桥：{}", arr[0]);
+    assert_eq!(
+        arr[1]["error"]["data"]["code"],
+        json!("E_TIER_DENIED"),
+        "read 会话里的 edit 档任务写面必须显式拒"
+    );
+    assert_eq!(s.calls.load(Ordering::SeqCst), 1, "被拒的那条零桥调用");
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    assert!(rows.iter().any(|e| e.outcome == AuditOutcome::Denied
+        && e.tool == "tasks.start"
+        && e.note.as_deref() == Some("E_TIER_DENIED")));
+}
+
+/// 配额口径（本批**收紧**）：batch 第 2 条起逐条另计一格。
+/// `max_calls_per_minute=3` 时一次 batch 5 条 ⇒ 前 3 条走桥、后 2 条显式
+/// `E_RATE_LIMITED`；单条请求照旧命中 HTTP 429（与改前逐字同形）。
+#[test]
+fn b5_batch_charges_rate_quota_per_envelope_not_per_request() {
+    let s = B5Server::start(
+        B5Mode::Reply(Duration::from_millis(0)),
+        B5Server::b5_limits(5_000, 8, 3),
+    );
+    let ids: Vec<u64> = (1..=5).collect();
+    let r = mcp_post(s.port, &s.token, &b5_batch_body(&ids, "read_file"));
+    let arr = rpc_json(&r).as_array().cloned().expect("batch 响应是数组");
+    assert_eq!(arr.len(), 5);
+    let limited: Vec<u64> = arr
+        .iter()
+        .filter(|v| v["error"]["data"]["code"] == json!("E_RATE_LIMITED"))
+        .map(|v| v["id"].as_u64().unwrap_or(0))
+        .collect();
+    assert_eq!(limited.len(), 2, "5 条只给 3 格配额：{arr:?}");
+    assert_eq!(s.calls.load(Ordering::SeqCst), 3, "配额外的条目零桥调用");
+    // 配额已尽：单条请求仍是 HTTP 429（改前语义逐字保持）。
+    let after = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"docs/a.txt"}}}"#,
+    );
+    assert_eq!(after.status, 429, "端点总量闸没因按会话计量而放宽");
+    // 换一条会话键也仍被全局顶拒住（全局硬顶＝max_calls_per_minute 本身）。
+    let other = mcp_post_as(
+        s.port,
+        &s.token,
+        "another-client",
+        r#"{"jsonrpc":"2.0","id":100,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"docs/a.txt"}}}"#,
+    );
+    assert_eq!(other.status, 429);
+}
+
+/// 审计单行体积闸（`MAX_AUDIT_LINE_BYTES`）不许被 elapsedMs 撑破：
+/// 并发批次跑完后逐行复核长度与字段。
+#[test]
+fn b5_audit_lines_with_elapsed_stay_under_line_size_cap() {
+    let s = B5Server::start(
+        B5Mode::Reply(Duration::from_millis(1)),
+        B5Server::b5_limits(5_000, 4, 1200),
+    );
+    let ids: Vec<u64> = (1..=8).collect();
+    let r = mcp_post(s.port, &s.token, &b5_batch_body(&ids, "read_file"));
+    assert_eq!(r.status, 200);
+    let text = std::fs::read_to_string(super::audit::audit_path(s.dir.path())).unwrap();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert!(lines.len() >= 8, "八笔调用至少八行审计：{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .all(|l| l.chars().count() <= super::audit::MAX_AUDIT_LINE_BYTES),
+        "单行体积闸被撑破"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains("\"elapsedMs\"")),
+        "elapsedMs 必须真进审计行：{}",
+        lines.join("\n")
+    );
+    assert_eq!(s.snapshot()["budget"]["inFlight"].as_u64(), Some(0));
+}
+
+/// 缺真源就不出该格：`_meta.elapsedMs` 与审计 `elapsedMs` 只在**有实测**时出现。
+/// 本地即定案的帧（ping / initialize）不进 WebView，也就没有 WebView 往返读数。
+#[test]
+fn b5_no_bridge_call_means_no_elapsed_reading() {
+    let s = B5Server::start(
+        B5Mode::Reply(Duration::from_millis(0)),
+        B5Server::b5_limits(5_000, 8, 120),
+    );
+    let r = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+    );
+    let v = rpc_json(&r);
+    assert_eq!(v["result"], json!({}), "ping 按规范回空 result");
+    assert_eq!(s.calls.load(Ordering::SeqCst), 0);
+    // 端点墙钟仍然出账（这一格是端点自身开销，与 WebView 无关）。
+    let snap = s.snapshot();
+    let http = s.ledger_entry(&snap, "http#ping");
+    assert_eq!(http["seen"].as_u64(), Some(1));
+    assert_eq!(
+        snap["latency"]["keys"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|k| k["key"].as_str().unwrap_or("") == "ping")
+            .count(),
+        0,
+        "没走桥的调用不许伪造 bridge# 读数"
+    );
+}
+
+/* ==================================================================== *
+ * B5 收口批（LaneU 2026-11-07）：把半成品里三处「声称」变成用例，再加一张
+ * 端点自身开销的实测探针。
+ *   ①`sanitize_untrusted_inplace` 与整树版逐字节等价——用**独立 oracle** 对拍；
+ *   ②线字节序（顶层键字母序）是对外契约——用精确字节钉住，顺带反证
+ *     「`to_value→to_vec` 合并成一次 `to_vec(&JsonRpcResponse)`」会改线字节；
+ *   ③`mcp_latency_query` 与 `mcp_audit_query` 同一纵深——协议面六法够不到台账；
+ *   ④`Limits` 既有五格一字未动 + 两枚新格有界。
+ * ==================================================================== */
+
+/// 参考实现＝`git show origin/dev:packages/app/src-tauri/src/mcp/protocol.rs` 里
+/// `sanitize_untrusted`（整树版）的**逐字抄录**，只把该模块私有的 `normalize_key`
+/// 就地展开（口径不变：只留 ASCII 字母数字并小写）。它是独立 oracle，不复用被测代码。
+fn sanitize_untrusted_reference(v: &Value) -> Value {
+    fn normalize_key_ref(key: &str) -> String {
+        key.to_ascii_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect()
+    }
+    match v {
+        Value::String(s) => Value::String(sanitize_string(s, MAX_UNTRUSTED_CHARS)),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(sanitize_untrusted_reference).collect())
+        }
+        Value::Object(map) => {
+            let mut out: serde_json::Map<String, Value> = serde_json::Map::new();
+            for (key, child) in map {
+                let nk = normalize_key_ref(key);
+                let cap = if nk == "description" {
+                    MAX_DESCRIPTION_CHARS
+                } else {
+                    MAX_UNTRUSTED_CHARS
+                };
+                let cleaned = match sanitize_untrusted_reference(child) {
+                    Value::String(s) => Value::String(truncate_chars(&s, cap)),
+                    other => other,
+                };
+                out.insert(key.clone(), cleaned);
+            }
+            Value::Object(out)
+        }
+        other => other.clone(),
+    }
+}
+
+/// ①就地净化 == 整树净化（逐字节）。覆盖：控制字符、两级二次截断、`description`
+/// 键（含大小写 / 标点变形与「normalize 后同键」的双写）、深层嵌套、非字符串子节点、
+/// 多字节字符边界、空容器、顶层标量 / 数组。
+#[test]
+fn b5_sanitize_inplace_is_byte_identical_to_whole_tree_reference() {
+    let long = "x".repeat(MAX_UNTRUSTED_CHARS + 7);
+    let desc = "y".repeat(MAX_DESCRIPTION_CHARS + 5);
+    let cjk = "日本語".repeat(MAX_DESCRIPTION_CHARS);
+    let corpus: Vec<Value> = vec![
+        json!(null),
+        json!(42),
+        json!(true),
+        json!("plain string"),
+        Value::String(long.clone()),
+        json!("a\u{1}b\u{7}c\u{7f}d"),
+        json!("\u{1}\u{2}\u{3}"),
+        json!([]),
+        json!({}),
+        json!({ "description": desc.clone() }),
+        json!({ "Description": desc.clone() }),
+        json!({ "descrip tion": desc.clone() }),
+        // 同一 normalize_key 结果的两个不同原键：两张表都得各自收紧，不许合并 / 丢键。
+        json!({ "description": desc.clone(), "Descrip-tion": long.clone() }),
+        json!({ "nested": { "deeper": { "description": desc.clone() } } }),
+        json!({ "description": { "inner": desc.clone() } }),
+        json!({ "list": [long.clone(), desc.clone(), 1, null, [desc.clone()], { "description": desc.clone() }] }),
+        json!({ "cjk": cjk.clone(), "s": "émoji 🎉 边界" }),
+        json!([{ "description": desc.clone() }, long.clone(), "id"]),
+        json!({ "keep": { "a": [1, 2, { "b": null }] }, "description": desc.clone() }),
+    ];
+    for item in corpus {
+        let before = serde_json::to_vec(&item).unwrap();
+        let reference = serde_json::to_vec(&sanitize_untrusted_reference(&item)).unwrap();
+        // 现整树版（= 克隆 + 就地）
+        let via_wrapper = serde_json::to_vec(&sanitize_untrusted(&item)).unwrap();
+        // 热路径就地版
+        let mut inplace = item.clone();
+        sanitize_untrusted_inplace(&mut inplace);
+        let via_inplace = serde_json::to_vec(&inplace).unwrap();
+        assert_eq!(
+            reference, via_wrapper,
+            "整树版与参考实现不再逐字节等价：{before:?}"
+        );
+        assert_eq!(
+            reference, via_inplace,
+            "就地版与整树版不再逐字节等价：{before:?}"
+        );
+        // 就地版必须只改字符串「值」：键集与键序不变（结构不许被重写）。
+        let ref_keys: Vec<String> = serde_json::to_value(&sanitize_untrusted_reference(&item))
+            .unwrap()
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        let inplace_keys: Vec<String> = inplace
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+        assert_eq!(ref_keys, inplace_keys, "对象键集/键序被就地版改动");
+        // 参考路径不得改写输入（输入与 `before` 对拍）。
+        assert_eq!(serde_json::to_vec(&item).unwrap(), before);
+    }
+}
+
+/// ②线字节序（对外契约）：`process_head` 走 `to_value → to_vec`，顶层键因此是
+/// **字母序**（serde_json 的 `Map` = BTreeMap）。合并成一次 `to_vec(&JsonRpcResponse)`
+/// 会按**声明序**（`jsonrpc` 在前）输出＝改线字节。这里用精确字节钉住，并反证合并的后果。
+#[test]
+fn b5_response_wire_bytes_keep_alphabetical_top_level_key_order() {
+    let s = B5Server::start(
+        B5Mode::Reply(Duration::from_millis(0)),
+        B5Server::b5_limits(5_000, 8, 120),
+    );
+    // 单条 ok 帧（ping 本地定案，形状完全确定）。
+    let ok = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+    );
+    assert_eq!(ok.status, 200);
+    assert_eq!(
+        ok.body, r#"{"id":1,"jsonrpc":"2.0","result":{}}"#,
+        "线字节必须是字母序 id < jsonrpc < result"
+    );
+    // 反证：直接序列化结构体＝声明序，与上面的线字节不同（这就是不许合并的原因）。
+    let merged = serde_json::to_vec(&JsonRpcResponse::ok(json!(1), json!({}))).unwrap();
+    assert_eq!(
+        String::from_utf8(merged.clone()).unwrap(),
+        r#"{"jsonrpc":"2.0","id":1,"result":{}}"#
+    );
+    assert_ne!(merged.as_slice(), ok.body.as_bytes());
+    // 错误帧：error < id < jsonrpc，且 error 内部 code < data < message（同样是 BTreeMap 序）。
+    let err = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":9,"method":"fs/write_anywhere","params":{}}"#,
+    );
+    assert_eq!(rpc_error_code(&err), "E_METHOD_NOT_FOUND");
+    assert!(
+        err.body
+            .starts_with(r#"{"error":{"code":-32601,"data":{"code":"E_METHOD_NOT_FOUND""#),
+        "错误帧顶层与嵌套键序被改动：{}",
+        err.body
+    );
+    assert!(
+        err.body.ends_with(r#"},"id":9,"jsonrpc":"2.0"}"#),
+        "错误帧尾序被改动：{}",
+        err.body
+    );
+    // batch 帧：数组逐元素同序，元素顺序＝请求顺序。
+    let batch = mcp_post(
+        s.port,
+        &s.token,
+        r#"[{"jsonrpc":"2.0","id":2,"method":"ping"},{"jsonrpc":"2.0","id":1,"method":"ping"}]"#,
+    );
+    assert_eq!(
+        batch.body,
+        r#"[{"id":2,"jsonrpc":"2.0","result":{}},{"id":1,"jsonrpc":"2.0","result":{}}]"#
+    );
+    // 有界 keep-alive 未采纳 ⇒ 每帧恒 `Connection: close`（改这条必须带实测依据）。
+    assert_eq!(
+        ok.headers.get("connection").map(String::as_str),
+        Some("close"),
+        "Connection 头形状变了：{:?}",
+        ok.headers
+    );
+}
+
+/// ③台账读口的纵深：`mcp_latency_query` 只由宿主侧（`invoke`）经 `&McpState` 读，
+/// MCP 协议面的六法里没有任何一条能读到台账，Rust 也不为宿主命令名开本地入口；
+/// 服务未启动时显式报错，不返空台账冒充「零延迟」。
+#[test]
+fn b5_latency_readout_is_host_only_and_loud_when_service_absent() {
+    // 未启动＝显式报错（不静默回空数组 / 空台账）。
+    let e = server::latency_query(&server::McpState::default()).unwrap_err();
+    assert_eq!(e.code, codes::BRIDGE_UNAVAILABLE);
+    assert!(
+        e.message.contains("服务未启动"),
+        "未启动的读数必须自带理由：{}",
+        e.message
+    );
+    let s = B5Server::start(
+        B5Mode::Tools(Duration::from_millis(0)),
+        B5Server::b5_limits(5_000, 8, 120),
+    );
+    // 协议面全枚举：够得到台账的路径一条也没有（六法之外全是显式 METHOD_NOT_FOUND）。
+    assert_eq!(
+        WEB_METHOD_NAMES,
+        &[
+            "tools/list",
+            "tools/call",
+            "resources/list",
+            "resources/read",
+            "prompts/list",
+            "prompts/get"
+        ]
+    );
+    for name in ["mcp_latency_query", "latency_query", "mcp_audit_query"] {
+        let before = s.calls.load(Ordering::SeqCst);
+        let r = mcp_post(
+            s.port,
+            &s.token,
+            &format!(
+                r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{name}","arguments":{{}}}}}}"#
+            ),
+        );
+        assert_eq!(r.status, 200);
+        // 端点把它当**普通工具名**转给 WebView（tier / 批准闸照判），Rust 侧没有本地入口，
+        // 响应里也只有这一笔自己的真读数，绝没有台账快照那几格。
+        assert_eq!(
+            s.calls.load(Ordering::SeqCst),
+            before + 1,
+            "{name} 必须走桥（由 WebView 判定未知工具），不得被端点短路"
+        );
+        for forbidden in [
+            "overflowKeys",
+            "maxInflightCalls",
+            "pendingNow",
+            "p95Ms",
+            "maxCallsPerMinute",
+        ] {
+            assert!(
+                !r.body.contains(forbidden),
+                "协议面读到了台账快照的 {forbidden}：{}",
+                r.body
+            );
+        }
+    }
+    assert_eq!(s.calls.load(Ordering::SeqCst), 3, "三枚猜名全部只是转桥");
+    // tools/list：端点不往 WebView 回填的表里多塞任何名字（台账 / 审计命令不在其中）。
+    let list = mcp_post(
+        s.port,
+        &s.token,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#,
+    );
+    let names: Vec<String> = rpc_json(&list)["result"]["tools"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        !names.is_empty(),
+        "tools/list 应有回填的工具表：{}",
+        list.body
+    );
+    for forbidden in ["latency", "audit", "mcp_latency_query", "mcp_audit_query"] {
+        assert!(
+            names.iter().all(|n| !n.contains(forbidden)),
+            "协议面工具表多出 {forbidden}：{names:?}"
+        );
+    }
+    // 台账确实只在宿主侧累积（上面几笔走桥的调用进了 bridge# 键，但没有一条读口）。
+    let snap = s.snapshot();
+    assert!(
+        serde_json::to_string(&snap)
+            .unwrap()
+            .contains("tools/call#mcp_latency_query"),
+        "走桥的调用照常出账（读数与协议面入口是两件事）：{snap}"
+    );
+}
+
+/// ④闸值冻结：既有五格数值一字未动；两枚新格各有依据且有界。
+#[test]
+fn b5_limits_defaults_are_frozen_and_inflight_budget_is_bounded() {
+    let d = Limits::default();
+    assert_eq!(d.max_header_bytes, 16 * 1024);
+    assert_eq!(d.max_body_bytes, 1024 * 1024);
+    assert_eq!(d.max_response_bytes, 1024 * 1024);
+    assert_eq!(d.request_timeout, Duration::from_secs(30));
+    assert_eq!(d.max_calls_per_minute, 120);
+    assert_eq!(d.max_concurrent, 8);
+    // 新格 1：在途预算＝连接闸同数 ⇒ 改的是口径不是额度（并发绝不给 WebView 更大压力）。
+    assert_eq!(d.max_inflight_calls, 8);
+    assert_eq!(d.max_inflight_calls, d.max_concurrent);
+    // 新格 2：台账窗口＝`latency::SAMPLE_WINDOW`（纯读数窗口，不参与任何判定）。
+    assert_eq!(d.latency_window, super::latency::SAMPLE_WINDOW);
+    assert_eq!(d.latency_window, 512);
+    // 预算真的有界：取满即拒（`try_acquire`），归还得能再取。
+    let b = Arc::new(server::CallBudget::new(2));
+    let a = b.try_acquire().expect("第 1 格");
+    let c = b.try_acquire().expect("第 2 格");
+    assert!(b.try_acquire().is_none(), "第 3 格必须取不到");
+    // 取满后、死线已过 ⇒ 等位不做无谓等待，直接显式 None 并计数（不静默排队）。
+    assert!(
+        b.acquire(Instant::now()).is_none(),
+        "已过死线还取到位＝没尊重 deadline"
+    );
+    assert_eq!(b.snapshot()["rejections"].as_u64(), Some(1));
+    assert_eq!(b.snapshot()["waits"].as_u64(), Some(1));
+    assert_eq!(b.snapshot()["peak"].as_u64(), Some(2));
+    drop(a);
+    drop(c);
+    assert!(b.try_acquire().is_some(), "归还后必须重新可取");
+    assert_eq!(
+        b.snapshot()["inFlight"].as_u64(),
+        Some(0),
+        "凭据 Drop 即归还"
+    );
+    // 死线之内有位 ⇒ 等到并取到（等位不是拒绝，只是排队到有位）。
+    let held = b.try_acquire().expect("占用 1 格");
+    let waiter = {
+        let b2 = Arc::clone(&b);
+        std::thread::spawn(move || {
+            b2.acquire(Instant::now() + Duration::from_secs(2))
+                .is_some()
+        })
+    };
+    std::thread::sleep(Duration::from_millis(80));
+    drop(held);
+    assert!(waiter.join().unwrap(), "死线内等到空位必须取到");
+}
+
+/// ⑤实测探针（表一：端点自身开销，CI 可跑；可控假 bridge）。
+/// 读数经 stdout 出账：`cargo test --lib mcp::tests::b5_endpoint_self_cost_probe -- --nocapture`。
+/// 这里**不拿它冒充真壳端到端**——假 bridge 的往返是夹具延时，真壳那一格另测。
+#[test]
+fn b5_endpoint_self_cost_probe_reports_p50_p95_and_batch_vs_serial() {
+    fn pct(v: &[u64], p: u64) -> u64 {
+        super::latency::percentile(&std::collections::VecDeque::from(v.to_vec()), p)
+    }
+    let single_body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"docs/a.txt"}}}"#;
+    let ids20: Vec<u64> = (1..=20).collect();
+
+    // ---- A 组：回帧延时 0 ⇒ 墙钟几乎全是端点自身（HTTP 解析 + 闸门 + 台账 + 派发 + 序列化）
+    let a = B5Server::start(
+        B5Mode::Reply(Duration::from_millis(0)),
+        B5Server::b5_limits(5_000, 8, 200_000),
+    );
+    for _ in 0..10 {
+        assert_eq!(mcp_post(a.port, &a.token, single_body).status, 200);
+    }
+    let mut micros: Vec<u64> = Vec::with_capacity(100);
+    let mut fail = 0usize;
+    for _ in 0..100 {
+        let t = Instant::now();
+        let r = mcp_post(a.port, &a.token, single_body);
+        micros.push(t.elapsed().as_micros() as u64);
+        if r.status != 200 || rpc_json(&r).get("error").map(Value::is_null) == Some(false) {
+            fail += 1;
+        }
+    }
+    assert_eq!(fail, 0, "探针期间出现非 200 / 错误帧");
+    let batch_warms: Vec<u64> = (0..3)
+        .map(|_| {
+            let t = Instant::now();
+            let r = mcp_post(a.port, &a.token, &b5_batch_body(&ids20, "read_file"));
+            assert_eq!(r.status, 200);
+            assert_eq!(rpc_json(&r).as_array().map(Vec::len), Some(20));
+            t.elapsed().as_micros() as u64
+        })
+        .collect();
+    let serial_warms: Vec<u64> = (0..3)
+        .map(|_| {
+            let t = Instant::now();
+            for _ in 0..20 {
+                assert_eq!(mcp_post(a.port, &a.token, single_body).status, 200);
+            }
+            t.elapsed().as_micros() as u64
+        })
+        .collect();
+
+    // ---- B 组：回帧延时 20ms（真壳量级）⇒ batch 并发派发 vs 改前串行的等价墙钟
+    let b = B5Server::start(
+        B5Mode::Reply(Duration::from_millis(20)),
+        B5Server::b5_limits(5_000, 8, 200_000),
+    );
+    let batch_hot: Vec<u64> = (0..3)
+        .map(|_| {
+            let t = Instant::now();
+            let r = mcp_post(b.port, &b.token, &b5_batch_body(&ids20, "read_file"));
+            assert_eq!(r.status, 200);
+            assert_eq!(rpc_json(&r).as_array().map(Vec::len), Some(20));
+            t.elapsed().as_micros() as u64
+        })
+        .collect();
+    let serial_hot: Vec<u64> = (0..3)
+        .map(|_| {
+            let t = Instant::now();
+            for _ in 0..20 {
+                assert_eq!(mcp_post(b.port, &b.token, single_body).status, 200);
+            }
+            t.elapsed().as_micros() as u64
+        })
+        .collect();
+    // 改前 batch 20 条＝同一连接内 20 趟**首尾相接**的往返（`for env in envelopes` 串行），
+    // 墙钟等价于「20 条单发串行」那一格，故二者之比就是本批的收益。
+    assert!(
+        pct(&sorted(&batch_hot), 50) * 2 < pct(&sorted(&serial_hot), 50),
+        "batch 并发派发没体现收益：batch {batch_hot:?}µs vs 串行 {serial_hot:?}µs"
+    );
+
+    // ---- C 组：8 连接 × 12 条并发吞吐（max_concurrent 的连接闸就在这一格）
+    let (port, token) = (a.port, a.token.clone());
+    let t0 = Instant::now();
+    let workers: Vec<_> = (0..8)
+        .map(|_| {
+            let token = token.clone();
+            std::thread::spawn(move || {
+                let mut n = 0usize;
+                for _ in 0..12 {
+                    if mcp_post(port, &token, single_body).status == 200 {
+                        n += 1;
+                    }
+                }
+                n
+            })
+        })
+        .collect();
+    let done: usize = workers.into_iter().map(|w| w.join().unwrap()).sum();
+    let span = t0.elapsed();
+    assert_eq!(
+        done, 96,
+        "并发 8×12 必须全部成帧（连接闸 / 预算没把它们吃掉）"
+    );
+    let per_sec = done as f64 / span.as_secs_f64();
+
+    let snap = a.snapshot();
+    println!("================ B5 表一：端点自身开销（假 bridge，CI 可跑） ================");
+    println!(
+        "单条 tools/call（回帧延时 0，n=100，预热 10 后）: p50={}µs p95={}µs p99={}µs max={}µs",
+        pct(&micros, 50),
+        pct(&micros, 95),
+        pct(&micros, 99),
+        microsin_max(&micros)
+    );
+    println!(
+        "batch 20 条（同组）: min={}µs med={}µs max={}µs ｜ 20 条单发串行（改前等价）: min={}µs med={}µs max={}µs",
+        batch_warms.iter().min().unwrap(),
+        pct(&sorted(&batch_warms), 50),
+        batch_warms.iter().max().unwrap(),
+        serial_warms.iter().min().unwrap(),
+        pct(&sorted(&serial_warms), 50),
+        serial_warms.iter().max().unwrap()
+    );
+    println!("---- 回帧延时 20ms（真壳量级）----");
+    println!(
+        "batch 20 条并发: min={}µs med={}µs max={}µs ｜ 20 条串行: min={}µs med={}µs max={}µs ｜ 收益={:.1}×",
+        batch_hot.iter().min().unwrap(),
+        pct(&sorted(&batch_hot), 50),
+        batch_hot.iter().max().unwrap(),
+        serial_hot.iter().min().unwrap(),
+        pct(&sorted(&serial_hot), 50),
+        serial_hot.iter().max().unwrap(),
+        pct(&sorted(&serial_hot), 50) as f64 / pct(&sorted(&batch_hot), 50) as f64
+    );
+    println!(
+        "并发吞吐 8 连接 × 12 条 = {} 条 / {}ms ⇒ {:.1} 次每秒",
+        done,
+        span.as_millis(),
+        per_sec
+    );
+    println!(
+        "端点台账对账：http#tools/call p50={}ms p95={}ms max={}ms seen={} ｜ tools/call#read_file p50={}ms p95={}ms seen={}",
+        snap["latency"]["keys"].as_array().unwrap().iter().find(|k| k["key"]=="http#tools/call").unwrap()["p50Ms"].as_u64().unwrap(),
+        snap["latency"]["keys"].as_array().unwrap().iter().find(|k| k["key"]=="http#tools/call").unwrap()["p95Ms"].as_u64().unwrap(),
+        snap["latency"]["keys"].as_array().unwrap().iter().find(|k| k["key"]=="http#tools/call").unwrap()["maxMs"].as_u64().unwrap(),
+        snap["latency"]["keys"].as_array().unwrap().iter().find(|k| k["key"]=="http#tools/call").unwrap()["seen"].as_u64().unwrap(),
+        snap["latency"]["keys"].as_array().unwrap().iter().find(|k| k["key"]=="tools/call#read_file").unwrap()["p50Ms"].as_u64().unwrap(),
+        snap["latency"]["keys"].as_array().unwrap().iter().find(|k| k["key"]=="tools/call#read_file").unwrap()["p95Ms"].as_u64().unwrap(),
+        snap["latency"]["keys"].as_array().unwrap().iter().find(|k| k["key"]=="tools/call#read_file").unwrap()["seen"].as_u64().unwrap(),
+    );
+    println!("预算现场：{}", snap["budget"]);
+    println!("==============================================================================");
+    assert!(per_sec > 20.0, "并发吞吐低到说明探针没跑通：{per_sec}");
+}
+
+/// 探针打印辅助（只服务读数，不参与判定）。
+fn microsin_max(v: &[u64]) -> u64 {
+    *v.iter().max().unwrap()
+}
+fn sorted(v: &[u64]) -> Vec<u64> {
+    let mut x = v.to_vec();
+    x.sort_unstable();
+    x
 }

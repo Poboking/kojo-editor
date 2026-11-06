@@ -14,7 +14,7 @@
 //!   去控制字符 + 限体积，Rust 不据其内容做任何决策。
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 /// 冻结契约：发给 WebView 的事件名（路 A 的 host-bridge 收，回 `mcp_respond`）。
 pub const MCP_REQUEST_EVENT: &str = "mcp://request";
@@ -122,6 +122,10 @@ pub mod codes {
     pub const TIER_DENIED: &str = "E_TIER_DENIED";
     /// `MCP-Protocol-Version` 头声明了宿主不支持的版本（显式结构化错误，不静默回退）。
     pub const UNSUPPORTED_PROTOCOL_VERSION: &str = "E_UNSUPPORTED_PROTOCOL_VERSION";
+    /// 跨连接共享的**在途 WebView 调用预算**已满（`Limits::max_inflight_calls`）：
+    /// batch 并发派发时取不到位的一条按本条死线显式拒绝（可见拒绝，不丢帧、
+    /// 不无界排队、不进 WebView）。与 `E_RATE_LIMITED`（每分钟配额）是两张不同的账。
+    pub const CALL_BUDGET_EXCEEDED: &str = "E_CALL_BUDGET_EXCEEDED";
     pub const BRIDGE_UNAVAILABLE: &str = "E_BRIDGE_UNAVAILABLE";
     pub const INTERNAL: &str = "E_INTERNAL";
 }
@@ -1161,9 +1165,7 @@ pub fn check_tool_call_permission(name: &str, scope: &McpSessionScope) -> Result
     }
     // 批准语义零放宽：显式列进 approvedTools（精确或 `前缀*` 通配）的工具，
     // 低 tier 会话照旧放行——与 filter_tools_list 的 approved_tool 短路一致。
-    if !approved_tool(name, scope)
-        && tier_rank(host_required_tier(name)) > tier_rank(scope.tier)
-    {
+    if !approved_tool(name, scope) && tier_rank(host_required_tier(name)) > tier_rank(scope.tier) {
         return Err(McpError::new(
             codes::TIER_DENIED,
             format!(
@@ -1231,31 +1233,45 @@ fn sanitize_tool_descriptor(tool: &Value) -> Value {
     v
 }
 
-/// 不可信输入净化：去控制字符、单串限长、`description` 再收紧。
+/// 不可信输入净化（**就地版**，B5 吞吐批）：逐节点原地改写字符串，不新建整树。
+/// 语义与整树版逐字节等价——对象分支只改字符串**值**、键集与键序保持不变（BTreeMap
+/// 恒按序、preserve_order 下按插入序，两者都与原序一致），非字符串子节点原样保留。
 /// Rust 不据净化后的内容做任何决策——它只作为 JSON 值转发给 MCP 客户端。
-pub fn sanitize_untrusted(v: &Value) -> Value {
+pub fn sanitize_untrusted_inplace(v: &mut Value) {
     match v {
-        Value::String(s) => Value::String(sanitize_string(s, MAX_UNTRUSTED_CHARS)),
-        Value::Array(items) => Value::Array(items.iter().map(sanitize_untrusted).collect()),
+        Value::String(s) => *s = sanitize_string(s, MAX_UNTRUSTED_CHARS),
+        Value::Array(items) => {
+            for item in items.iter_mut() {
+                sanitize_untrusted_inplace(item);
+            }
+        }
         Value::Object(map) => {
-            let mut out: Map<String, Value> = Map::new();
-            for (key, child) in map {
+            for (key, child) in map.iter_mut() {
+                // 先递归净化子节点（字符串子节点在此被 sanitize_string(…, 64Ki)）。
+                sanitize_untrusted_inplace(child);
+                // description 键再按 2Ki 收紧；其余键维持 64Ki（与整树版同款二次截断）。
                 let nk = normalize_key(key);
                 let cap = if nk == "description" {
                     MAX_DESCRIPTION_CHARS
                 } else {
                     MAX_UNTRUSTED_CHARS
                 };
-                let cleaned = match sanitize_untrusted(child) {
-                    Value::String(s) => Value::String(truncate_chars(&s, cap)),
-                    other => other,
-                };
-                out.insert(key.clone(), cleaned);
+                if let Value::String(s) = child {
+                    *s = truncate_chars(s, cap);
+                }
             }
-            Value::Object(out)
         }
-        other => other.clone(),
+        _ => {}
     }
+}
+
+/// 不可信输入净化（整树版）：以「克隆 + 就地净化」实现，与 `sanitize_untrusted_inplace`
+/// 由构造保证逐字节等价（B5 吞吐批把热路径改用就地版，此处保留给只读净化调用点如
+/// `filter_tools_list`）。
+pub fn sanitize_untrusted(v: &Value) -> Value {
+    let mut out = v.clone();
+    sanitize_untrusted_inplace(&mut out);
+    out
 }
 
 pub fn sanitize_string(s: &str, cap: usize) -> String {
