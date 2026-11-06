@@ -28,6 +28,7 @@
  *
  * 用法：
  *   node tools/mcp-list-payload-evidence.mjs static [--top 10] [--out <json>]
+ *   node tools/mcp-list-payload-evidence.mjs dedup  [--out <json>]   # 逐字重复账（B22：哪些字符串被几枚面各抄一份）
  *   node tools/mcp-list-payload-evidence.mjs shell  [--n 24] [--rearm] [--out <json>]
  *   node tools/mcp-list-payload-evidence.mjs compare [--n 24]      # shell 的 tools/list vs 同壳单条 tools/call
  * 退出码：0 全绿；2 参数 / 通道不对（没起真壳、mode 不是 shell、注册表装不起来）；
@@ -63,7 +64,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const next = () => argv[++i];
-    if (a === 'static' || a === 'shell' || a === 'compare') out.cmd = a;
+    if (a === 'static' || a === 'shell' || a === 'compare' || a === 'dedup') out.cmd = a;
     else if (a === '--top') out.top = Number(next());
     else if (a === '--n') out.n = Number(next());
     else if (a === '--call-n') out.callN = Number(next());
@@ -444,6 +445,184 @@ async function faceStatic(args) {
           : [{ unavailable: true, note: 'paginateByCursor 没导出 ⇒ 该投影未取到' }],
     };
     return report;
+  } finally {
+    await dispose();
+  }
+}
+
+/* ======================================================================
+ * A2 面：逐字重复账（B22 去重车道）——同一份注册表真源，只换算「哪些字符串被抄了几份」
+ * ===================================================================== */
+
+/** 句子切分：英文句末标点后接空白；中文 `。` 后可能紧跟下一句（无空白），故 `\s*`。 */
+function splitSentences(text) {
+  return String(text)
+    .split(/(?<=[.!?。])\s*/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 40);
+}
+
+/** 收集一棵 schema 树里**所有** `description` 字符串值（含逐属性描述、嵌套对象里的描述）。 */
+function collectSchemaDescriptions(node, acc) {
+  if (Array.isArray(node)) {
+    for (const item of node) collectSchemaDescriptions(item, acc);
+    return acc;
+  }
+  if (node && typeof node === 'object') {
+    for (const [k, v] of Object.entries(node)) {
+      if (k === 'description' && typeof v === 'string') acc.push(v);
+      else collectSchemaDescriptions(v, acc);
+    }
+  }
+  return acc;
+}
+
+/** 通用重复账：一组字符串 ⇒ 按整串相等分组，occurrences ≥ minOcc 的进账。
+ *  `dupBytes`＝只留一份、其余全算抄写成本（bytes × (occurrences − 1)）。 */
+function duplicationTally(entries, minOcc = 3) {
+  const groups = new Map();
+  for (const { text, tool, slot } of entries) {
+    if (typeof text !== 'string' || text.length < 40) continue;
+    const g = groups.get(text) ?? { occurrences: 0, tools: new Set(), chars: text.length, slots: [] };
+    g.occurrences += 1;
+    g.tools.add(tool);
+    g.slots.push(slot);
+    groups.set(text, g);
+  }
+  const list = [...groups.entries()]
+    .filter(([, g]) => g.occurrences >= minOcc)
+    .map(([text, g]) => ({
+      chars: g.chars,
+      bytes: utf8Bytes(text),
+      occurrences: g.occurrences,
+      faces: g.tools.size,
+      totalBytes: utf8Bytes(text) * g.occurrences,
+      dupBytes: utf8Bytes(text) * (g.occurrences - 1),
+      faceList: [...g.tools].slice(0, 6),
+      head: text.slice(0, 120),
+    }))
+    .sort((a, b) => b.dupBytes - a.dupBytes);
+  return {
+    groups: list.length,
+    occurrencesInDuplicateGroups: list.reduce((a, x) => a + x.occurrences, 0),
+    totalBytesInDuplicateGroups: list.reduce((a, x) => a + x.totalBytes, 0),
+    wasteBytesIfKeepOneCopy: list.reduce((a, x) => a + x.dupBytes, 0),
+    entries: list,
+  };
+}
+
+async function faceDedup(args) {
+  const { mod, dispose } = await loadRegistry();
+  try {
+    const reg = mod.createMcpCapabilityRegistry({});
+    const specAll = [
+      ...mod.SEMANTIC_TOOL_SPECS.map((s) => ({ ...s, source: 'SEMANTIC' })),
+      ...mod.KERNEL_IO_TOOL_SPECS.map((s) => ({ ...s, source: 'KERNEL_IO' })),
+      ...mod.SUPPLEMENTAL_TOOL_SPECS.map((s) => ({ ...s, source: 'SUPPLEMENTAL' })),
+    ];
+    const allNames = specAll.map((s) => s.name);
+    const full = reg.listTools(scopeOf('privileged', allNames));
+    const breakdown = full.map(toolByteBreakdown);
+    const sum = (key) => breakdown.reduce((a, t) => a + t[key], 0);
+
+    /* ① 逐面 description 的句子级重复（跨面抄写）。 */
+    const sentenceEntries = [];
+    for (const t of full) {
+      for (const s of splitSentences(t.description ?? '')) {
+        sentenceEntries.push({ text: s, tool: t.name, slot: 'description' });
+      }
+    }
+    const sentences = duplicationTally(sentenceEntries, 3);
+
+    /* ② inputSchema 里逐属性 description 的整串重复（同面七个别名各抄一份也算）。 */
+    const schemaEntries = [];
+    for (const t of full) {
+      const acc = collectSchemaDescriptions(t.inputSchema ?? {}, []);
+      acc.forEach((d, i) => schemaEntries.push({ text: d, tool: t.name, slot: `inputSchema#${i}` }));
+    }
+    const schemaDescriptions = duplicationTally(schemaEntries, 3);
+    const schemaDescBytesAll = schemaEntries.reduce((a, e) => a + utf8Bytes(e.text), 0);
+
+    /* ③ 导出常量：以真值逐面核对（描述里算子串出现，schema 里算整串相等——避开 JSON 转义假阴）。 */
+    const exportedConstants = [];
+    for (const [k, v] of Object.entries(mod)) {
+      if (typeof v !== 'string' || v.length < 80) continue;
+      let inDescriptions = 0;
+      let inSchema = 0;
+      const faces = new Set();
+      for (const t of full) {
+        const d = splitCount(t.description ?? '', v);
+        const s = collectSchemaDescriptions(t.inputSchema ?? {}, []).filter((x) => x === v).length;
+        if (d + s > 0) {
+          inDescriptions += d;
+          inSchema += s;
+          faces.add(t.name);
+        }
+      }
+      const occ = inDescriptions + inSchema;
+      if (occ < 2) continue;
+      exportedConstants.push({
+        name: k,
+        chars: v.length,
+        bytes: utf8Bytes(v),
+        occurrences: occ,
+        inDescriptions,
+        inSchema,
+        faces: faces.size,
+        totalBytes: utf8Bytes(v) * occ,
+        dupBytes: utf8Bytes(v) * (occ - 1),
+        head: v.slice(0, 120),
+      });
+    }
+    exportedConstants.sort((a, b) => b.dupBytes - a.dupBytes);
+
+    /* ④ 族级重复账：一族的描述字节里有多少落在"跨面抄写"的句子上。 */
+    const sentenceOcc = new Map();
+    for (const e of sentenceEntries) sentenceOcc.set(e.text, (sentenceOcc.get(e.text) ?? 0) + 1);
+    const familyDup = {};
+    for (const t of full) {
+      const fam = t.name.split(/[._]/)[0] || '(空)';
+      const g = (familyDup[fam] ??= { tools: 0, descriptionBytes: 0, sentenceDupBytes: 0 });
+      g.tools += 1;
+      g.descriptionBytes += t.description ? utf8Bytes(t.description) : 0;
+      for (const s of splitSentences(t.description ?? '')) {
+        if ((sentenceOcc.get(s) ?? 0) >= 3) g.sentenceDupBytes += utf8Bytes(s);
+      }
+    }
+
+    return {
+      channel: 'dedup（注册表真源经 vite ssrLoadModule 装载；只换算逐字重复，零生产改动）',
+      registrySource: 'packages/mcp-host/src/index.ts',
+      specTotal: specAll.length,
+      faceTotals: {
+        toolCount: full.length,
+        frameBytes: utf8Bytes({ jsonrpc: '2.0', id: 'evidence', result: { tools: full.map(wireTool) } }),
+        toolsArrayBytes: sum('bytes'),
+        descriptionBytes: sum('descriptionBytes'),
+        inputSchemaBytes: sum('inputSchemaBytes'),
+        schemaDescriptionStringBytes: schemaDescBytesAll,
+        schemaDescriptionStringCount: schemaEntries.length,
+      },
+      minOccurrence: 3,
+      descriptionSentences: sentences,
+      schemaDescriptions: { ...schemaDescriptions, note: '整串相等口径：同一枚面里七个页大小别名各抄一份也计入 occurrences。' },
+      exportedConstants,
+      familyDup: Object.entries(familyDup)
+        .map(([family, g]) => ({ family, ...g, pctOfDescriptions: Number(((g.sentenceDupBytes / Math.max(1, g.descriptionBytes)) * 100).toFixed(1)) }))
+        .sort((a, b) => b.sentenceDupBytes - a.sentenceDupBytes),
+      combined: {
+        descriptionSideWasteBytes: sentences.wasteBytesIfKeepOneCopy,
+        schemaSideWasteBytes: schemaDescriptions.wasteBytesIfKeepOneCopy,
+        totalWasteBytesIfKeepOneCopy: sentences.wasteBytesIfKeepOneCopy + schemaDescriptions.wasteBytesIfKeepOneCopy,
+        pctOfFullFrame: Number(
+          (
+            ((sentences.wasteBytesIfKeepOneCopy + schemaDescriptions.wasteBytesIfKeepOneCopy) /
+              utf8Bytes({ jsonrpc: '2.0', id: 'evidence', result: { tools: full.map(wireTool) } })) *
+            100
+          ).toFixed(1),
+        ),
+      },
+    };
   } finally {
     await dispose();
   }
@@ -976,12 +1155,26 @@ async function main() {
   let report;
   if (args.cmd === 'static') {
     report = { mode: args.cmd, repo: REPO, generatedAt: new Date().toISOString(), static: await faceStatic(args) };
+  } else if (args.cmd === 'dedup') {
+    report = { mode: args.cmd, repo: REPO, generatedAt: new Date().toISOString(), dedup: await faceDedup(args) };
   } else {
     report = { mode: args.cmd, repo: REPO, generatedAt: new Date().toISOString(), shell: await faceShell(args, { withCall: args.cmd === 'compare' }) };
   }
   fs.mkdirSync(path.dirname(outFile), { recursive: true });
   fs.writeFileSync(outFile, JSON.stringify(report, null, 2), 'utf-8');
   console.log(`[ok] 读数落盘：${outFile}`);
+  if (report.dedup) {
+    const d = report.dedup;
+    console.log(
+      `[dedup] 全量帧 ${d.faceTotals.frameBytes} B｜描述 ${d.faceTotals.descriptionBytes} B｜inputSchema ${d.faceTotals.inputSchemaBytes} B` +
+        `｜描述侧抄写 ${d.descriptionSentences.wasteBytesIfKeepOneCopy} B（${d.descriptionSentences.groups} 组）` +
+        `｜schema 侧抄写 ${d.schemaDescriptions.wasteBytesIfKeepOneCopy} B（${d.schemaDescriptions.groups} 组）` +
+        `｜合计可省 ${d.combined.totalWasteBytesIfKeepOneCopy} B＝${d.combined.pctOfFullFrame}%`,
+    );
+    for (const e of d.exportedConstants.slice(0, args.top)) {
+      console.log(`  - ${e.name}: ${e.chars} 字符 × ${e.occurrences} 处（${e.faces} 枚面）＝${e.totalBytes} B，重复部分 ${e.dupBytes} B`);
+    }
+  }
   const failed = report.shell?.scenarios?.toolsList?.fail ?? 0;
   process.exit(failed > 0 ? 4 : 0);
 }
