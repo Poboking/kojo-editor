@@ -6,9 +6,13 @@
  * Streamable HTTP（单端点 `POST /mcp`）实现 MCP 协议面，然后 `spawn('node', ['tools/kojo-mcp.mjs'])`
  * 驱动**真实 stdio shim** 逐条对拍，输出 PASS/FAIL 表。
  *
- * 两条对拍通道：
+ * 两条对拍通道 + 一组写工具靶：
  *  - `direct-http`（H01..H31）：node:http 直打 mock endpoint，钉协议语义（initialize 形状 /
  *    tier 过滤 / batch / 错误帧 / Bearer / Origin / SSE / Accept 协商 / 单端点 POST）。
+ *  - `write-target`（W01..W07）：直打 mock 的写工具对拍靶 `mock.write`（tier edit）与
+ *    `mock.privilegedWrite`（tier privileged），钉**写面授权语义**——写靶即使 edit 档也须
+ *    第四张表逐工具批准（annotations 不可信）；privileged 默认不进 tools/list、猜名直调显式拒绝；
+ *    批准命中才执行且 mock 只把 payload 记进内存（绝不写盘）；大响应截断 + 显式 truncated 标记。
  *  - `stdio-shim`（S01..S15）：真 shim 进程逐行喂 JSON-RPC，钉端到端转发语义（privileged 默认
  *    不可见 / notification 与 batch 不挂住 stdio / SSE 逐帧转发 / 坏帧显式终结 exit 4）。
  *
@@ -46,6 +50,12 @@ export const PROTOCOL_VERSION = '2026-07-28';
 /** mock 资源文本上限（字符）；超限截断并显式 truncated。 */
 export const RES_TEXT_LIMIT = 1000;
 
+/**
+ * mock 写工具响应文本上限（字符）：write-target（mock.write / mock.privilegedWrite）的
+ * content[0].text 超限截断并在 structuredContent.truncated 显式标记（与资源截断同纪律）。
+ */
+export const TOOL_TEXT_LIMIT = 1000;
+
 /* ------------------------------------------------------------------ *
  * mock 靶面：工具 / 资源 / prompt 清单（全部带 mock 前缀，协议靶，非能力真源）
  * ------------------------------------------------------------------ */
@@ -77,6 +87,31 @@ export const MOCK_TOOLS = Object.freeze([
     description: 'mock edit probe (conformance target only; writes nothing)',
     inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
     tier: 'edit',
+    annotations: { readOnlyHint: false, destructiveHint: true },
+  },
+  {
+    name: 'mock.write',
+    description:
+      'mock write probe (conformance target only; records the payload in memory only, never touches disk). Models the write-face authorization semantics: requires explicit per-tool approval (approvedTools) even at edit tier — annotations are not trusted.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string' }, content: { type: 'string' } },
+      required: ['path', 'content'],
+    },
+    tier: 'edit',
+    requiresApproval: true,
+    annotations: { readOnlyHint: false },
+  },
+  {
+    name: 'mock.privilegedWrite',
+    description:
+      'mock privileged write probe (conformance target only; records the payload in memory only, never touches disk). Dangerous by tier: absent from tools/list by default, direct calls by guessed name are explicitly refused, execution requires an approvedTools hit.',
+    inputSchema: {
+      type: 'object',
+      properties: { path: { type: 'string' }, content: { type: 'string' } },
+      required: ['path', 'content'],
+    },
+    tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: true },
   },
   {
@@ -125,13 +160,15 @@ function errorFrame(id, code, message, data) {
  * 起 mock MCP endpoint。
  * @param {{ sessions?: Map<string, {tier: string, approvedTools: string[]}> | object, resTextLimit?: number }} opts
  *   sessions：token → 会话 scope（tier + approvedTools），语义同 McpSessionScope（冻结契约 v1）。
- * @returns mock 实例：port / url / origin / requests / notifCount / batchCount / listen() / close()。
+ * @returns mock 实例：port / url / origin / requests / writes / notifCount / batchCount / listen() / close()。
  *   requests：请求摘要（method/url/origin/accept/hasAuth/authOk/batch/…），**绝不含 token 值**。
+ *   writes：写靶（mock.write / mock.privilegedWrite）的 payload 记录（内存 only，不写盘、不进日志）。
  */
 export function createMockEndpoint(opts = {}) {
   const sessions = opts.sessions instanceof Map ? opts.sessions : new Map(Object.entries(opts.sessions ?? {}));
   const resTextLimit = opts.resTextLimit ?? RES_TEXT_LIMIT;
   const requests = [];
+  const writes = [];
   let notifCount = 0;
   let batchCount = 0;
 
@@ -292,9 +329,10 @@ export function createMockEndpoint(opts = {}) {
         sessionTier: session.tier,
       });
     }
-    // 第四张表闸：privileged 工具须 approvedTools 命中（annotations 不可信，宿主显式授权）
-    if (spec.tier === 'privileged' && !session.approvedTools.includes(name)) {
-      return errorFrame(id, -32000, `危险工具 ${name} 未获第四张表批准（approvedTools 未命中）`, {
+    // 第四张表闸：privileged 一律须 approvedTools 命中；写靶（requiresApproval，如 mock.write）
+    // 即使 edit 档也须逐工具批准——annotations 不可信，写面授权以显式授权表为准（W 系对拍点）。
+    if ((spec.tier === 'privileged' || spec.requiresApproval === true) && !session.approvedTools.includes(name)) {
+      return errorFrame(id, -32000, `工具 ${name} 未获第四张表批准（approvedTools 未命中）`, {
         code: 'TOOL_NOT_APPROVED',
         tool: name,
       });
@@ -315,6 +353,33 @@ export function createMockEndpoint(opts = {}) {
     }
     if (name === 'mock.edit.tool') {
       return okFrame(id, { content: [{ type: 'text', text: 'edit probe executed (mock canned reply; writes nothing)' }] });
+    }
+    // 写靶执行体（mock.write / mock.privilegedWrite）：payload 只记内存 writes，绝不写盘；
+    // 响应文本超 TOOL_TEXT_LIMIT 截断 + structuredContent.truncated 显式标记（截断只裁响应，
+    // 记录仍完整——大响应不丢账）。detail 字符串只含长度/布尔，绝不回显 payload 值（token 纪律）。
+    if (name === 'mock.write' || name === 'mock.privilegedWrite') {
+      const args = params?.arguments ?? {};
+      const payloadPath = typeof args.path === 'string' ? args.path : null;
+      const payloadContent = typeof args.content === 'string' ? args.content : null;
+      const text =
+        `write probe executed (mock; payload recorded in memory only, nothing on disk): ` +
+        `path=${payloadPath ?? ''} content=${payloadContent ?? ''}`;
+      const truncated = text.length > TOOL_TEXT_LIMIT;
+      writes.push({
+        tool: name,
+        payload: { path: payloadPath, content: payloadContent },
+        truncated,
+        at: Date.now(),
+      });
+      return okFrame(id, {
+        content: [{ type: 'text', text: truncated ? text.slice(0, TOOL_TEXT_LIMIT) : text }],
+        structuredContent: {
+          tool: name,
+          path: payloadPath,
+          contentLength: payloadContent === null ? null : payloadContent.length,
+          truncated,
+        },
+      });
     }
     if (name === 'mock.priv.tool') {
       return okFrame(id, { content: [{ type: 'text', text: 'privileged probe executed (approved via 4th table; mock writes nothing)' }] });
@@ -401,6 +466,7 @@ export function createMockEndpoint(opts = {}) {
       return `http://${HOST}:${server.address().port}`;
     },
     requests,
+    writes,
     get notifCount() {
       return notifCount;
     },
@@ -423,20 +489,22 @@ export function createMockEndpoint(opts = {}) {
   };
 }
 
-/** 造会话表：语义同 McpSessionScope（tier + approvedTools）。 */
+/** 造会话表：语义同 McpSessionScope（tier + approvedTools）。writeApproved / privWriteApproved 是写靶（W 系）的批准会话。 */
 export function buildSessions(tokens) {
   return new Map([
     [tokens.read, { tier: 'read', approvedTools: [] }],
     [tokens.edit, { tier: 'edit', approvedTools: [] }],
     [tokens.priv, { tier: 'privileged', approvedTools: [] }],
     [tokens.approved, { tier: 'privileged', approvedTools: ['mock.priv.tool'] }],
+    [tokens.writeApproved, { tier: 'edit', approvedTools: ['mock.write'] }],
+    [tokens.privWriteApproved, { tier: 'privileged', approvedTools: ['mock.privilegedWrite'] }],
   ]);
 }
 
-/** 运行时生成 4 个 token（self-test 用；绝不落盘、不进日志）。 */
+/** 运行时生成 6 个 token（self-test 用；绝不落盘、不进日志）。 */
 export function generateTokens() {
   const gen = () => `mck_${randomBytes(12).toString('hex')}`;
-  return { read: gen(), edit: gen(), priv: gen(), approved: gen() };
+  return { read: gen(), edit: gen(), priv: gen(), approved: gen(), writeApproved: gen(), privWriteApproved: gen() };
 }
 
 /* ------------------------------------------------------------------ *
@@ -1080,6 +1148,187 @@ const DIRECT_CASES = [
 ];
 
 /* ------------------------------------------------------------------ *
+ * 对拍用例：写工具靶（W01..W07，direct-http 直打）
+ *
+ * mock.write（tier edit + requiresApproval）与 mock.privilegedWrite（tier privileged）钉
+ * 「写面授权语义」：写靶即使 edit 档也须第四张表逐工具批准（annotations 不可信）；privileged
+ * 默认不进 tools/list、猜名直调显式拒绝；批准命中才执行且 mock 只把 payload 记进内存
+ * writes（绝不写盘）；大响应截到 TOOL_TEXT_LIMIT + structuredContent.truncated 显式标记。
+ * detail 只写长度/布尔等摘要，绝不回显 payload 值（token / 内容卫生同 scrub 纪律）。
+ * ------------------------------------------------------------------ */
+
+const WRITE_CASES = [
+  {
+    id: 'W01',
+    group: 'write-target',
+    title: 'tools/list：edit 会话见 mock.write；privileged 写靶默认缺席；read 会话两者都不可见',
+    async run(ctx) {
+      const read = parseFrame(
+        await ctx.direct({ token: ctx.tokens.read, body: JSON.stringify({ jsonrpc: '2.0', id: 301, method: 'tools/list' }) }),
+        301,
+      );
+      const readNames = read.result.tools.map((t) => t.name);
+      assert(!readNames.includes('mock.write'), 'read 会话不得见 mock.write');
+      assert(!readNames.includes('mock.privilegedWrite'), 'read 会话不得见 mock.privilegedWrite');
+      const edit = parseFrame(
+        await ctx.direct({ token: ctx.tokens.edit, body: JSON.stringify({ jsonrpc: '2.0', id: 302, method: 'tools/list' }) }),
+        302,
+      );
+      const editNames = edit.result.tools.map((t) => t.name);
+      assert(editNames.includes('mock.write'), 'edit 会话应见写靶 mock.write');
+      assert(!editNames.includes('mock.privilegedWrite'), 'privileged 写靶默认不进 tools/list（annotations 不可信）');
+      return `read 可见 ${readNames.length} / edit 可见 ${editNames.length}，privileged 写靶缺席`;
+    },
+  },
+  {
+    id: 'W02',
+    group: 'write-target',
+    title: 'edit 会话调 mock.write 未批准 → -32000 TOOL_NOT_APPROVED（写靶 edit 档也要逐工具批准）',
+    async run(ctx) {
+      const before = ctx.mock.writes.length;
+      const res = await ctx.direct({
+        token: ctx.tokens.edit,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 303,
+          method: 'tools/call',
+          params: { name: 'mock.write', arguments: { path: 'notes/a.txt', content: 'unapproved' } },
+        }),
+      });
+      const f = parseFrame(res, 303);
+      assertEq(f.error.code, -32000, 'error.code');
+      assertEq(f.error.data.code, 'TOOL_NOT_APPROVED', 'error.data.code');
+      assertEq(f.error.data.tool, 'mock.write', 'error.data.tool');
+      assertEq(ctx.mock.writes.length, before, '拒绝路径不得新增 payload 记录（未批准不执行）');
+      return 'tier 匹配但 approvedTools 未命中 → 显式拒绝且不记录';
+    },
+  },
+  {
+    id: 'W03',
+    group: 'write-target',
+    title: 'mock.write approvedTools 命中 → 执行；payload 逐字记进 mock.writes；小响应 truncated=false',
+    async run(ctx) {
+      const res = await ctx.direct({
+        token: ctx.tokens.writeApproved,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 304,
+          method: 'tools/call',
+          params: { name: 'mock.write', arguments: { path: 'notes/b.txt', content: 'hello-write-payload' } },
+        }),
+      });
+      const f = parseFrame(res, 304);
+      assert(typeof f.result.content[0].text === 'string' && f.result.content[0].text.length > 0, '执行应回非空文本');
+      assertEq(f.result.structuredContent.truncated, false, '小响应不截断');
+      assertEq(f.result.structuredContent.contentLength, 'hello-write-payload'.length, 'structuredContent.contentLength');
+      const rec = ctx.mock.writes.at(-1);
+      assert(rec && rec.tool === 'mock.write', 'mock.writes 应新增 mock.write 记录');
+      assertEq(rec.payload.path, 'notes/b.txt', '记录 payload.path 逐字对拍');
+      assertEq(rec.payload.content, 'hello-write-payload', '记录 payload.content 逐字对拍');
+      assertEq(rec.truncated, false, '记录 truncated 标记');
+      return `payload 逐字命中（path + content ${rec.payload.content.length} 字符），内存 only 不写盘`;
+    },
+  },
+  {
+    id: 'W04',
+    group: 'write-target',
+    title: 'mock.write 大 payload → 响应 text 截到 TOOL_TEXT_LIMIT + truncated=true；记录仍完整（截断不丢账）',
+    async run(ctx) {
+      const big = 'MOCKW.'.repeat(340); // 2040 字符 > TOOL_TEXT_LIMIT
+      const res = await ctx.direct({
+        token: ctx.tokens.writeApproved,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 305,
+          method: 'tools/call',
+          params: { name: 'mock.write', arguments: { path: 'notes/big.txt', content: big } },
+        }),
+      });
+      const f = parseFrame(res, 305);
+      assertEq(f.result.content[0].text.length, TOOL_TEXT_LIMIT, '截断后响应 text 长度');
+      assertEq(f.result.structuredContent.truncated, true, 'structuredContent.truncated 标记');
+      const rec = ctx.mock.writes.at(-1);
+      assert(rec && rec.tool === 'mock.write', 'mock.writes 应新增记录');
+      assertEq(rec.payload.content, big, '记录 payload 完整（截断只裁响应，不裁记录）');
+      assertEq(rec.truncated, true, '记录 truncated 标记');
+      return `响应 text ${TOOL_TEXT_LIMIT}/${big.length} 字符 + truncated=true；记录 ${rec.payload.content.length} 字符完整`;
+    },
+  },
+  {
+    id: 'W05',
+    group: 'write-target',
+    title: 'mock.privilegedWrite：privileged 会话才见；read/edit 猜名直调 → -32000 TIER_DENIED',
+    async run(ctx) {
+      const before = ctx.mock.writes.length;
+      for (const [label, token] of [['read', ctx.tokens.read], ['edit', ctx.tokens.edit]]) {
+        const res = await ctx.direct({
+          token,
+          body: JSON.stringify({ jsonrpc: '2.0', id: 306, method: 'tools/call', params: { name: 'mock.privilegedWrite' } }),
+        });
+        const f = parseFrame(res, 306);
+        assertEq(f.error.code, -32000, `${label} 会话 error.code`);
+        assertEq(f.error.data.code, 'TIER_DENIED', `${label} 会话 error.data.code`);
+        assertEq(f.error.data.requiredTier, 'privileged', `${label} 会话 requiredTier`);
+      }
+      const priv = parseFrame(
+        await ctx.direct({ token: ctx.tokens.priv, body: JSON.stringify({ jsonrpc: '2.0', id: 307, method: 'tools/list' }) }),
+        307,
+      );
+      assert(priv.result.tools.some((t) => t.name === 'mock.privilegedWrite'), 'privileged 会话应见 mock.privilegedWrite');
+      assertEq(ctx.mock.writes.length, before, 'TIER_DENIED 路径不得新增 payload 记录');
+      return 'read/edit 猜名直调显式拒绝（拒绝可见，不静默过滤）';
+    },
+  },
+  {
+    id: 'W06',
+    group: 'write-target',
+    title: 'privileged 会话调 mock.privilegedWrite 未批准 → -32000 TOOL_NOT_APPROVED',
+    async run(ctx) {
+      const before = ctx.mock.writes.length;
+      const res = await ctx.direct({
+        token: ctx.tokens.priv,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 308,
+          method: 'tools/call',
+          params: { name: 'mock.privilegedWrite', arguments: { path: 'notes/c.txt', content: 'unapproved' } },
+        }),
+      });
+      const f = parseFrame(res, 308);
+      assertEq(f.error.code, -32000, 'error.code');
+      assertEq(f.error.data.code, 'TOOL_NOT_APPROVED', 'error.data.code');
+      assertEq(f.error.data.tool, 'mock.privilegedWrite', 'error.data.tool');
+      assertEq(ctx.mock.writes.length, before, '拒绝路径不得新增 payload 记录');
+      return 'tier 匹配但 approvedTools 未命中 → 显式拒绝';
+    },
+  },
+  {
+    id: 'W07',
+    group: 'write-target',
+    title: 'mock.privilegedWrite 批准命中 → 执行 + payload 记录；destructiveHint 只是提示，授权以 approvedTools 为准',
+    async run(ctx) {
+      const res = await ctx.direct({
+        token: ctx.tokens.privWriteApproved,
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 309,
+          method: 'tools/call',
+          params: { name: 'mock.privilegedWrite', arguments: { path: 'notes/d.txt', content: 'approved-privileged-write' } },
+        }),
+      });
+      const f = parseFrame(res, 309);
+      assert(typeof f.result.content[0].text === 'string' && f.result.content[0].text.length > 0, '执行应回非空文本');
+      assertEq(f.result.structuredContent.truncated, false, '小响应不截断');
+      const rec = ctx.mock.writes.at(-1);
+      assert(rec && rec.tool === 'mock.privilegedWrite', 'mock.writes 应新增 mock.privilegedWrite 记录');
+      assertEq(rec.payload.path, 'notes/d.txt', '记录 payload.path 逐字对拍');
+      assertEq(rec.payload.content, 'approved-privileged-write', '记录 payload.content 逐字对拍');
+      return 'annotations.destructiveHint 不参与判定；approvedTools 命中才执行';
+    },
+  },
+];
+
+/* ------------------------------------------------------------------ *
  * 对拍用例：stdio-shim（S01..S15，真 shim 进程）
  * ------------------------------------------------------------------ */
 
@@ -1329,6 +1578,9 @@ export async function runConformance(opts = {}) {
   // direct 通道（H01..H31）：mock 协议面
   const ctxDirect = { tokens, mock, direct: (o) => httpRequest({ port: mock.port, ...o }), shim: null };
   for (const c of DIRECT_CASES) await runCase(c, ctxDirect);
+
+  // write-target 通道（W01..W07）：写工具授权语义（同样直打 mock，复用 ctxDirect）
+  for (const c of WRITE_CASES) await runCase(c, ctxDirect);
 
   // stdio 通道（S01..S15）：真 shim 进程
   const shim = createShimSession({ port: mock.port, token: tokens.read });

@@ -27,7 +27,23 @@
  * 用法：
  *   node tools/mcp-inventory.mjs --print
  *   node tools/mcp-inventory.mjs --print --markdown
+ *   node tools/mcp-inventory.mjs --json                   # 机器可读摘要（稳定 schema，见下）
  *   node tools/mcp-inventory.mjs --root <dir> --print     # 对拍夹具（见 tools/tests/mcp-inventory.test.ts）
+ *
+ * 输出格式优先级：`--markdown`（人类草案）> `--json`（机器摘要）> `--print` / 缺省（全量 JSON）。
+ *
+ * `--json` 机器摘要（自身 schemaVersion 从 1 起，与全量 JSON 的 SCHEMA_VERSION 独立演进）：
+ *   { schemaVersion, generatedBy, counts, gaps[], writeLegs }
+ *   - counts：命令 / Rust 命令 / 语义读数 / 槽贡献 / tools 按 tier / 缺口三计数 / 缺源数；
+ *   - gaps：**全量缺口数组**（含已接线），每条 `{ source, name, tool, wired, reasonClass,
+ *     wiringCost, suggestedPriority }`——wired 条目 tool=覆盖该缺口的具名工具、reasonClass='wired'、
+ *     suggestedPriority=null；
+ *   - writeLegs：写腿状态段（见下）。
+ *
+ * 写腿状态段（writeLegs）：registry（*_TOOL_SPECS）里 tier 非 read 的具名工具逐条判读
+ * `{ tool, tier, gap, gapRegistered, wired, evidence }`——wired 判定读两处**真源腿表**
+ * （real-sources-io.ts 的 ioTools ∪ real-sources.ts 的 buildUiSupplemental），缺口登记读
+ * MCP_TOOL_GAP_MAP，**不硬编码、不猜**；腿源缺席时如实标注（sourcesMissing）。
  *
  * 退出码：0 = 完成（盘点草案不是质量闸，缺源不判红）；2 = 参数错。
  */
@@ -35,7 +51,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SOURCES = Object.freeze({
   commands: 'packages/app/src/ui/commands.ts',
@@ -45,6 +61,10 @@ const SOURCES = Object.freeze({
   uiDir: 'packages/app/src/ui',
   // best-effort 参考源（第三波）：能力面工具清单 / tier 分组 / 覆盖登记；缺席不进 missingSources。
   host: 'packages/mcp-host/src/index.ts',
+  // 写腿真源腿表（写腿状态段判 wired 用）：宿主注入执行体的两处腿表；缺席不进 missingSources，
+  // 但在 writeLegs.sourcesMissing 如实列出（不猜、不假绿）。
+  ioLegs: 'packages/app/src/mcp/real-sources-io.ts',
+  uiLegs: 'packages/app/src/mcp/real-sources.ts',
 });
 
 /** 只列的源码文件（跳过构建产物 / 依赖 / 测试夹具），按相对路径稳定排序。 */
@@ -178,21 +198,29 @@ function slotContributionsFromPlugins(texts) {
 
 /**
  * 取三个 *_TOOL_SPECS 数组块：块内 `name:'…'` 得工具名，块内 `tier:'read|edit|privileged'`
- * 字面量得 tier 分组计数。只统计工具规格块，不碰 resource / prompt 清单（那里也有 name）。
+ * 字面量得 tier 分组计数；并按「name 在前、tier 随后」的源码顺序把每个工具名配到它的 tier
+ * （写腿状态段需要逐工具 tier，不只分组计数）。只统计工具规格块，不碰 resource / prompt 清单。
  * 文件/块缺席 ⇒ 空清单，绝不猜、绝不假绿。
  */
 function parseHostCatalog(text) {
   const names = [];
   const byTier = { read: 0, edit: 0, privileged: 0 };
-  if (!text) return { names, byTier };
+  const tiers = {};
+  if (!text) return { names, byTier, tiers };
   const blocks = [
     ...text.matchAll(/export const (?:SEMANTIC|KERNEL_IO|SUPPLEMENTAL)_TOOL_SPECS[^=]*=\s*\[([\s\S]*?)\n\];/g),
   ].map((m) => m[1]);
   for (const block of blocks) {
     for (const m of block.matchAll(/\bname:\s*'([^']+)'/g)) names.push(m[1]);
     for (const m of block.matchAll(/\btier:\s*'(read|edit|privileged)'/g)) byTier[m[1]]++;
+    // name → tier 配对：规格对象里 tier 字面量总在其 name 之后（三组规格逐条核对过的形状）。
+    let last = null;
+    for (const m of block.matchAll(/\b(?:name|tier):\s*'([^']+)'/g)) {
+      if (m[0].startsWith('name')) last = m[1];
+      else if (last !== null && !(last in tiers)) tiers[last] = m[1];
+    }
   }
-  return { names, byTier };
+  return { names, byTier, tiers };
 }
 
 /** 逐行解析 MCP_TOOL_GAP_MAP 的 `{ tool:'…', gap:'…', source:'…' }` 字面量。 */
@@ -211,6 +239,82 @@ function parseDeferredNotes(text) {
   if (!m) return [];
   return [...m[1].matchAll(/\{\s*scope:\s*'([^']*)',\s*reason:\s*'([^']*)'\s*\}/g)]
     .map((x) => ({ scope: x[1], reason: x[2] }));
+}
+
+/**
+ * 解析「真源腿表」：源文件里 `new Map<string, …>([ ['工具名', 标识符], … ])` 形状的腿表
+ * （real-sources-io.ts 的 ioTools、real-sources.ts 的 buildUiSupplemental 返回值）。
+ * 类型参数里可能含 `=>` / 嵌套 `<>`，故从 `new Map<string,` 惰性吞到第一个 `([` 再取条目。
+ * 条目形状 = `['含点工具名', 标识符]`；返回腿表里出现过的工具名（去重前保持源码序）。
+ */
+function parseLegMaps(text) {
+  if (!text) return [];
+  const out = [];
+  for (const m of text.matchAll(/new Map<string,[\s\S]*?\(\s*\[([\s\S]*?)\]\s*\)/g)) {
+    for (const e of m[1].matchAll(/\[\s*'([^']+)'\s*,\s*[A-Za-z_$][\w$]*\s*\]/g)) out.push(e[1]);
+  }
+  return out;
+}
+
+/** wired 缺口在机器摘要里的 reasonClass 常量（与 unwired 的原因文本互斥）。 */
+const WIRED_REASON_CLASS = 'wired';
+
+/* ---------------- 接线成本启发式（机器摘要 wiringCost / suggestedPriority） ----------------
+ *
+ * 四类成本 + unknown（保守），判据全部来自「缺口名 + 所在真源 + 既有 deferredReason 归因」，
+ * 不读运行时、不猜实现状态；**宁可 unknown 也不乱猜**：
+ *
+ *  - 'cheap-read'：真源已在、只差登记。deferredReason 的「只读原语」「语义读数」两类：
+ *    Rust 命令 / debug 读数面已存在，补一条 *_TOOL_SPECS 登记即可——第三波 12 具具名工具与
+ *    真源腿表（ioTools）都验证过这条路最便宜。分类**继承既有归因**，不另设只读判据。
+ *  - 'needs-write-domain'：要写域授权链。文件系统写原语（append_ / create_ / copy_file /
+ *    write_ / ensure_dir 各前缀族）与编辑器缓冲/视口写副作用（format/revealLine/setCursor/
+ *    setSelection/setValue）都是「写」语义：
+ *    开放前须先有 tier>=edit + approvedRoots/写许可域 这条授权链（铁律 5/6），执行体还须显式接线。
+ *    编辑器视口类（revealLine 等）严格说偏 UI 状态，但与缓冲写同属编辑器副作用家族，统一按写面
+ *    保守归类、不拆家。
+ *  - 'needs-UI'：要人机交互面。原生对话框族（choose_ / pick_ / show_in_folder）与写域管理命令
+ *    （register/confirm/clear_write_domain、revoke_workspace_root）依铁律 6「对话框即授权」
+ *    必须有人工确认面才能开放；plugins 纯 UI/注册槽贡献没有独立数据面，同归此类。
+ *  - 'needs-protocol'：要会话/反向通道。mcp_* 会话控制/审计内建（宿主线协议与第四张表管理，
+ *    不作为模型工具）与危险档缺口（launcher_ / market_ / open_url_external / export_file /
+ *    remove_ 各前缀族：默认不进 tools/list，须第四张表逐会话批准）——开放前置是会话级授权协议面
+ *    （P5 演进边界，ADR-0013 §11 本期不做）。
+ *  - 'unknown'：以上判据都不命中（当前树为 start_watch/stop_watch/cancel_search/updater_env_proxy
+ *    这类生命周期/环境原语）——保守 unknown，绝不乱猜。
+ *
+ * suggestedPriority（建议序，非承诺；wired ⇒ null）：
+ *  - P1 = cheap-read（真源已在、只差登记：最便宜，host 可按需即补）；
+ *  - P2 = needs-write-domain（写域授权链语义已冻结、接线在途——fileTree.create/update 正由并行路接线）；
+ *  - P3 = needs-UI 与 unknown（须产品拍板或判据不足：不进快车道，也不垫底）；
+ *  - P4 = needs-protocol（P5 演进边界，本期不做）。
+ */
+function wiringCostFor(source, gap, reason) {
+  if (reason === WIRED_REASON_CLASS) return { cost: 'wired', priority: null };
+  if (source === 'plugins') return { cost: 'needs-UI', priority: 'P3' };
+  if (source === 'rust') {
+    // 与 deferredReason 同序同则：危险档 → mcp 内建 → 写/UI 混合桶（再细分）→ 只读原语兜底。
+    if (/^(launcher_|market_|open_url_external$|export_file$|remove_|rename_path$)/.test(gap)) {
+      return { cost: 'needs-protocol', priority: 'P4' };
+    }
+    if (/^mcp_/.test(gap)) return { cost: 'needs-protocol', priority: 'P4' };
+    if (/^(choose_|pick_|show_in_folder$|clear_write_domain$|confirm_write_domain$|register_write_domain$|revoke_workspace_root$)/.test(gap)) {
+      return { cost: 'needs-UI', priority: 'P3' };
+    }
+    if (/^(append_|create_|copy_file$|write_|ensure_dir$)/.test(gap)) {
+      return { cost: 'needs-write-domain', priority: 'P2' };
+    }
+    if (reason.startsWith('写 / 授权 / 原生 UI 交互')) return { cost: 'unknown', priority: 'P3' };
+    if (reason.startsWith('只读原语')) return { cost: 'cheap-read', priority: 'P1' };
+    return { cost: 'unknown', priority: 'P3' };
+  }
+  if (source === 'debug') {
+    if (/^(format|revealLine|setCursor|setSelection|setValue)$/.test(gap)) {
+      return { cost: 'needs-write-domain', priority: 'P2' };
+    }
+    return { cost: 'cheap-read', priority: 'P1' };
+  }
+  return { cost: 'unknown', priority: 'P3' };
 }
 
 /** 剩余缺口的显式原因（按类别生成，不逐条编造；诚实标注「有真源但本波未接线」）。 */
@@ -247,6 +351,63 @@ function deferredSample(cov) {
     for (const it of items.slice(0, 3)) out.push(`    - \`${it.source}:${it.gap}\``);
   }
   return out.length ? out : ['  - （无）'];
+}
+
+/** Markdown 写腿状态段（edit/privileged 执行体接线，数据全读真源，不硬编码）。 */
+function writeLegsMarkdown(wl) {
+  if (!wl) return [];
+  const head = [
+    '## 写腿状态（edit/privileged 执行体接线 · 真源腿表判读）',
+    '',
+    '| 工具 | tier | 缺口登记 | 执行体 |',
+    '| --- | --- | --- | --- |',
+  ];
+  if (wl.legs.length === 0) {
+    return [...head, ...(wl.sourcesMissing.length > 0 ? [`（registry 缺席：${wl.sourcesMissing.join('、')}，无 edit/privileged 具名工具可判读）`] : ['（无 edit/privileged 具名工具）'])];
+  }
+  const rows = wl.legs.map((l) =>
+    `| \`${l.tool}\` | ${l.tier ?? '?'} | ${l.gapRegistered ? `\`${l.gap}\`` : '—'} | ${l.wired ? 'wired' : 'NOT_WIRED'} |`,
+  );
+  return [
+    ...head,
+    ...rows,
+    '',
+    `写腿读数：wired ${wl.wiredCount} / NOT_WIRED ${wl.notWiredCount}。`,
+    `判读真源 = real-sources-io.ts \`ioTools\` ∪ real-sources.ts \`buildUiSupplemental\` 腿表；` +
+      (wl.sourcesMissing.length > 0 ? `缺席源：${wl.sourcesMissing.join('、')}（如实列出，不猜）。` : '两处腿源齐全。'),
+  ];
+}
+
+/**
+ * 机器可读摘要（`--json`）：稳定 schema（自身 schemaVersion 从 1 起，独立于全量 JSON 的
+ * SCHEMA_VERSION 演进）。counts + 全量 gaps 数组（每条 source/name/tool/wired/reasonClass/
+ * wiringCost/suggestedPriority）+ 写腿状态段。字段语义见文件头注释与 wiringCostFor 的判据注释。
+ */
+function machineSummary(inv) {
+  const cov = inv.coverage;
+  return {
+    schemaVersion: 1,
+    generatedBy: 'tools/mcp-inventory.mjs',
+    counts: {
+      commands: inv.commandCount,
+      rustCommands: inv.rustCommandCount,
+      semanticReads: inv.semanticReadCount,
+      slotContributions: inv.slotContributionCount,
+      tools: {
+        total: cov.tools.total,
+        read: cov.tools.read,
+        edit: cov.tools.edit,
+        privileged: cov.tools.privileged,
+      },
+      totalGaps: cov.totalGaps,
+      wiredGaps: cov.wiredGaps,
+      deferredGaps: cov.deferredGaps,
+      orphanedWires: cov.orphanedWires.length,
+      missingSources: inv.missingSources.length,
+    },
+    gaps: inv.gapEntries,
+    writeLegs: inv.writeLegs,
+  };
 }
 
 /* ---------------- 盘点装配 ---------------- */
@@ -311,6 +472,8 @@ export async function buildInventory(root) {
   const gapSets = { rust: new Set(gaps.rust), debug: new Set(gaps.debug) };
   const wiredGapSet = new Set();
   const orphanedWires = [];
+  /** 缺口 → 覆盖它的具名工具（仅通过交叉校验的 wire；同缺口多工具时按字母序）。 */
+  const gapToTools = new Map();
   for (const w of wiredMap) {
     if (w.source === 'tool-surface') {
       if (!hostCatalog.names.includes(w.tool)) {
@@ -325,16 +488,93 @@ export async function buildInventory(root) {
       continue;
     }
     wiredGapSet.add(`${w.source}:${w.gap}`);
+    const key = `${w.source}:${w.gap}`;
+    if (!gapToTools.has(key)) gapToTools.set(key, []);
+    if (!gapToTools.get(key).includes(w.tool)) gapToTools.get(key).push(w.tool);
   }
+  for (const arr of gapToTools.values()) arr.sort();
+
+  /* ---- 全量缺口逐条展开（含已接线）：机器摘要 gaps 数组的真源 ---- */
+  const gapEntries = [];
   const deferred = [];
   for (const [source, arr] of [['rust', gaps.rust], ['debug', gaps.debug], ['plugins', gaps.plugins]]) {
     for (const gap of arr) {
-      if (wiredGapSet.has(`${source}:${gap}`)) continue;
-      deferred.push({ source, gap, reason: deferredReason(source, gap) });
+      if (wiredGapSet.has(`${source}:${gap}`)) {
+        gapEntries.push({
+          source,
+          name: gap,
+          tool: gapToTools.get(`${source}:${gap}`)?.[0] ?? null,
+          wired: true,
+          reasonClass: WIRED_REASON_CLASS,
+          wiringCost: 'wired',
+          suggestedPriority: null,
+        });
+        continue;
+      }
+      const reason = deferredReason(source, gap);
+      deferred.push({ source, gap, reason });
+      const { cost, priority } = wiringCostFor(source, gap, reason);
+      gapEntries.push({
+        source,
+        name: gap,
+        tool: null,
+        wired: false,
+        reasonClass: reason,
+        wiringCost: cost,
+        suggestedPriority: priority,
+      });
     }
   }
   const byReason = {};
   for (const d of deferred) byReason[d.reason] = (byReason[d.reason] ?? 0) + 1;
+
+  /* ---- 写腿状态段：registry 非 read 档工具 × 真源腿表判 wired × gap map 登记 ---- */
+  const ioLegsText = await readText(abs(SOURCES.ioLegs));
+  const uiLegsText = await readText(abs(SOURCES.uiLegs));
+  const sourcesMissing = [];
+  if (ioLegsText === null) sourcesMissing.push(SOURCES.ioLegs);
+  if (uiLegsText === null) sourcesMissing.push(SOURCES.uiLegs);
+  const legWhere = new Map();
+  for (const [label, text] of [
+    ['real-sources-io.ts', ioLegsText],
+    ['real-sources.ts', uiLegsText],
+  ]) {
+    for (const n of parseLegMaps(text ?? '')) {
+      if (!legWhere.has(n)) legWhere.set(n, []);
+      if (!legWhere.get(n).includes(label)) legWhere.get(n).push(label);
+    }
+  }
+  const gapRegisteredByTool = new Map();
+  for (const w of wiredMap) if (!gapRegisteredByTool.has(w.tool)) gapRegisteredByTool.set(w.tool, w.gap);
+  const writeLegsList = hostCatalog.names
+    .filter((n) => (hostCatalog.tiers[n] ?? 'read') !== 'read')
+    .sort()
+    .map((tool) => {
+      const where = legWhere.get(tool) ?? [];
+      const wired = where.length > 0;
+      const gap = gapRegisteredByTool.get(tool) ?? null;
+      const evidence = wired
+        ? `wired: 真源腿表命中（${where.join(' + ')}）`
+        : sourcesMissing.length > 0
+          ? `NOT_WIRED（真源腿文件缺席，无法复核：${sourcesMissing.join('、')}；不猜）`
+          : `NOT_WIRED: 未命中 ioTools / buildUiSupplemental 真源腿表（宿主执行体未注入，调用将显式 NOT_WIRED，不静默）`;
+      return {
+        tool,
+        tier: hostCatalog.tiers[tool] ?? null,
+        gap,
+        gapRegistered: gap !== null,
+        wired,
+        evidence,
+      };
+    });
+  const writeLegs = {
+    sources: { registry: SOURCES.host, ioLegs: SOURCES.ioLegs, uiLegs: SOURCES.uiLegs },
+    sourcesMissing,
+    legs: writeLegsList,
+    wiredCount: writeLegsList.filter((l) => l.wired).length,
+    notWiredCount: writeLegsList.filter((l) => !l.wired).length,
+  };
+
   const coverage = {
     tools: {
       total: hostCatalog.names.length,
@@ -376,6 +616,8 @@ export async function buildInventory(root) {
     gaps,
     gapCount,
     coverage,
+    gapEntries,
+    writeLegs,
   };
   inventory.markdown = markdownDraft(inventory);
   return inventory;
@@ -430,6 +672,8 @@ function markdownDraft(inv) {
       ? `覆盖声明交叉校验失败（不假绿）：${cov.orphanedWires.length} 条，见 JSON \`coverage.orphanedWires\`。`
       : '覆盖声明全部与真实工具 / 缺口对拍通过。',
     '',
+    ...writeLegsMarkdown(inv.writeLegs),
+    '',
     '### 剩余缺口原因（抽样，每类最多 3 条）',
     ...deferredSample(cov),
     '',
@@ -456,10 +700,16 @@ async function main() {
   }
   const root = rootIdx >= 0 ? path.resolve(argv[rootIdx + 1]) : path.resolve(import.meta.dirname, '..');
   const wantMarkdown = argv.includes('--markdown');
-  const wantPrint = argv.includes('--print') || wantMarkdown || argv.length === 0;
+  const wantMachine = argv.includes('--json');
+  const wantPrint = argv.includes('--print') || wantMarkdown || wantMachine || argv.length === 0;
   if (!wantPrint) return;
   const inv = await buildInventory(root);
-  const out = wantMarkdown ? inv.markdown : `${JSON.stringify(inv, null, 2)}\n`;
+  // 格式优先级（见文件头）：--markdown（人类草案）> --json（机器摘要）> --print / 缺省（全量 JSON）。
+  const out = wantMarkdown
+    ? inv.markdown
+    : wantMachine
+      ? `${JSON.stringify(machineSummary(inv), null, 2)}\n`
+      : `${JSON.stringify(inv, null, 2)}\n`;
   process.stdout.write(out);
   process.exitCode = 0;
 }

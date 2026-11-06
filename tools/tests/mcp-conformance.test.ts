@@ -1,12 +1,17 @@
 /**
  * `tools/mcp-conformance.mjs`（MCP 端到端协议一致性 harness，路 B3）的用例。
  *
- * 两组覆盖：
+ * 两组覆盖 + 一组写工具靶：
  *  ① direct 通道：起共享 mock endpoint，用 node:http 直打——initialize 形状 / tier 过滤
  *     （privileged 默认不在 tools/list）/ batch 中 notification 无响应 / 错误帧
  *     （-32601 / -32602 / 结构化）/ Bearer 拒绝 / Origin 拒绝 / SSE 可选 / Accept 协商 / 单端点。
+ *  ①b 写工具靶：mock.write（tier edit + requiresApproval）/ mock.privilegedWrite（tier privileged）——
+ *     写靶即使 edit 档也须逐工具批准（-32000 TOOL_NOT_APPROVED）；批准命中才执行且 payload
+ *     只记内存 ep.writes（逐字对拍，绝不写盘）；privileged 写靶默认不进 tools/list、猜名直调
+ *     TIER_DENIED；大响应截到 TOOL_TEXT_LIMIT + truncated 显式标记（记录不裁）。
  *  ② 端到端通道：跑一次 `runConformance()`（spawn 真实 `tools/kojo-mcp.mjs`），断言
- *     notification 不挂住 stdio、SSE 逐帧转发、坏帧显式终结、token 不泄漏、全表 0 FAIL。
+ *     notification 不挂住 stdio、SSE 逐帧转发、坏帧显式终结、token 不泄漏、全表 0 FAIL
+ *     （31 direct + 7 write-target + 15 stdio + 1 hygiene = 54 条，W01..W07 全 PASS）。
  *
  * 红线对拍：mock 三道闸缺一不可（仅回环 + Bearer + Origin 白名单）；token 不进
  * stdout / stderr / 日志 / 请求摘要。
@@ -21,6 +26,7 @@ import {
   parseSseFrames,
   PROTOCOL_VERSION,
   runConformance,
+  TOOL_TEXT_LIMIT,
 } from '../mcp-conformance.mjs';
 
 const TEST_TOKENS = {
@@ -28,6 +34,8 @@ const TEST_TOKENS = {
   edit: 'tok-conf-edit-bbbb',
   priv: 'tok-conf-priv-cccc',
   approved: 'tok-conf-approved-dddd',
+  writeApproved: 'tok-conf-write-eeee',
+  privWriteApproved: 'tok-conf-privw-ffff',
 };
 
 let ep: ReturnType<typeof createMockEndpoint>;
@@ -78,7 +86,7 @@ describe('mcp-conformance · direct 通道（mock endpoint 协议面）', () => 
     expect(editNames).not.toContain('mock.priv.tool');
 
     const priv = JSON.parse((await direct({ token: TEST_TOKENS.priv, body: rpc(4, 'tools/list') })).body);
-    expect(priv.result.tools).toHaveLength(5);
+    expect(priv.result.tools).toHaveLength(7); // 5 探针 + mock.write + mock.privilegedWrite
   });
 
   it('batch 中 notification 无响应：混合 batch 只回 2 帧；纯 notification batch → 202 空体', async () => {
@@ -226,6 +234,114 @@ describe('mcp-conformance · direct 通道（mock endpoint 协议面）', () => 
 });
 
 /* ------------------------------------------------------------------ *
+ * ①b 写工具靶：mock.write（tier edit + requiresApproval）/ mock.privilegedWrite（tier privileged）
+ * ------------------------------------------------------------------ */
+describe('mcp-conformance · 写工具靶（mock.write / mock.privilegedWrite）', () => {
+  it('tools/list：edit 会话见 mock.write；privileged 写靶默认缺席；read 会话两者都不可见', async () => {
+    const read = JSON.parse((await direct({ token: TEST_TOKENS.read, body: rpc(31, 'tools/list') })).body);
+    const readNames = read.result.tools.map((t: { name: string }) => t.name);
+    expect(readNames).not.toContain('mock.write');
+    expect(readNames).not.toContain('mock.privilegedWrite');
+
+    const edit = JSON.parse((await direct({ token: TEST_TOKENS.edit, body: rpc(32, 'tools/list') })).body);
+    const editNames = edit.result.tools.map((t: { name: string }) => t.name);
+    expect(editNames).toContain('mock.write');
+    expect(editNames).not.toContain('mock.privilegedWrite'); // privileged 默认不进 tools/list
+
+    const priv = JSON.parse((await direct({ token: TEST_TOKENS.priv, body: rpc(33, 'tools/list') })).body);
+    const privNames = priv.result.tools.map((t: { name: string }) => t.name);
+    expect(privNames).toContain('mock.privilegedWrite');
+  });
+
+  it('mock.write 未批准 → -32000 TOOL_NOT_APPROVED，且不记录 payload', async () => {
+    const before = ep.writes.length;
+    const res = JSON.parse(
+      (
+        await direct({
+          token: TEST_TOKENS.edit,
+          body: rpc(34, 'tools/call', { name: 'mock.write', arguments: { path: 'notes/a.txt', content: 'unapproved' } }),
+        })
+      ).body,
+    );
+    expect(res.error.code).toBe(-32000);
+    expect(res.error.data.code).toBe('TOOL_NOT_APPROVED');
+    expect(res.error.data.tool).toBe('mock.write');
+    expect(ep.writes.length).toBe(before); // 未批准不执行
+  });
+
+  it('mock.write 批准后执行：payload 逐字记进 ep.writes；小响应 truncated=false', async () => {
+    const res = JSON.parse(
+      (
+        await direct({
+          token: TEST_TOKENS.writeApproved,
+          body: rpc(35, 'tools/call', { name: 'mock.write', arguments: { path: 'notes/b.txt', content: 'hello-vitest' } }),
+        })
+      ).body,
+    );
+    expect(res.result.structuredContent.truncated).toBe(false);
+    expect(res.result.structuredContent.contentLength).toBe('hello-vitest'.length);
+    const rec = ep.writes.at(-1) as { tool: string; payload: { path: string; content: string }; truncated: boolean };
+    expect(rec.tool).toBe('mock.write');
+    expect(rec.payload.path).toBe('notes/b.txt');
+    expect(rec.payload.content).toBe('hello-vitest');
+    expect(rec.truncated).toBe(false);
+  });
+
+  it('mock.write 大 payload：响应 text 截到 TOOL_TEXT_LIMIT + truncated=true；记录仍完整', async () => {
+    const big = 'MOCKVITEST.'.repeat(300); // 3300 字符 > TOOL_TEXT_LIMIT
+    const res = JSON.parse(
+      (
+        await direct({
+          token: TEST_TOKENS.writeApproved,
+          body: rpc(36, 'tools/call', { name: 'mock.write', arguments: { path: 'notes/big.txt', content: big } }),
+        })
+      ).body,
+    );
+    expect(res.result.content[0].text).toHaveLength(TOOL_TEXT_LIMIT);
+    expect(res.result.structuredContent.truncated).toBe(true);
+    const rec = ep.writes.at(-1) as { tool: string; payload: { content: string }; truncated: boolean };
+    expect(rec.payload.content).toBe(big); // 截断只裁响应，记录完整
+    expect(rec.truncated).toBe(true);
+  });
+
+  it('mock.privilegedWrite：read/edit 猜名直调 TIER_DENIED；未批准 TOOL_NOT_APPROVED；批准后执行 + 记录', async () => {
+    const before = ep.writes.length;
+    const tierRead = JSON.parse((await direct({ token: TEST_TOKENS.read, body: rpc(37, 'tools/call', { name: 'mock.privilegedWrite' }) })).body);
+    expect(tierRead.error.data.code).toBe('TIER_DENIED');
+    const tierEdit = JSON.parse((await direct({ token: TEST_TOKENS.edit, body: rpc(38, 'tools/call', { name: 'mock.privilegedWrite' }) })).body);
+    expect(tierEdit.error.data.code).toBe('TIER_DENIED');
+    expect(tierEdit.error.data.requiredTier).toBe('privileged');
+
+    const notApproved = JSON.parse((await direct({ token: TEST_TOKENS.priv, body: rpc(39, 'tools/call', { name: 'mock.privilegedWrite' }) })).body);
+    expect(notApproved.error.data.code).toBe('TOOL_NOT_APPROVED');
+    expect(ep.writes.length).toBe(before);
+
+    const ok = JSON.parse(
+      (
+        await direct({
+          token: TEST_TOKENS.privWriteApproved,
+          body: rpc(40, 'tools/call', { name: 'mock.privilegedWrite', arguments: { path: 'notes/c.txt', content: 'approved-write' } }),
+        })
+      ).body,
+    );
+    expect(ok.result.structuredContent.tool).toBe('mock.privilegedWrite');
+    const rec = ep.writes.at(-1) as { tool: string; payload: { path: string; content: string } };
+    expect(rec.tool).toBe('mock.privilegedWrite');
+    expect(rec.payload.path).toBe('notes/c.txt');
+    expect(rec.payload.content).toBe('approved-write');
+  });
+
+  it('卫生：写靶 payload 只进内存 ep.writes，请求摘要与泄漏面不含 payload 值', async () => {
+    expect(ep.writes.length).toBeGreaterThan(0);
+    // 请求摘要保持「只有布尔/元数据」形状：不含 authorization 键，也不含写靶 payload 字面量
+    expect(JSON.stringify(ep.requests)).not.toContain('hello-vitest');
+    for (const req of ep.requests) {
+      expect(Object.keys(req).some((k) => k.toLowerCase().includes('authorization'))).toBe(false);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ *
  * ② 端到端通道：runConformance（spawn 真实 stdio shim，一次跑全表）
  * ------------------------------------------------------------------ */
 describe('mcp-conformance · 端到端通道（真实 stdio shim）', () => {
@@ -236,10 +352,18 @@ describe('mcp-conformance · 端到端通道（真实 stdio shim）', () => {
     r = await runConformance({ tokens: TEST_TOKENS });
   }, 30_000);
 
-  it('全表 0 FAIL（31 direct + 15 stdio + 1 hygiene = 47 条）', () => {
-    expect(r.rows).toHaveLength(47);
+  it('全表 0 FAIL（31 direct + 7 write-target + 15 stdio + 1 hygiene = 54 条）', () => {
+    expect(r.rows).toHaveLength(54);
     expect(r.failed).toBe(0);
     expect(r.tokenLeak).toBe(false);
+  });
+
+  it('写工具靶 W01..W07 全 PASS（写面授权语义进入对拍表）', () => {
+    for (let i = 1; i <= 7; i++) {
+      const row = rowOf(`W0${i}`);
+      expect(row, `W0${i} 应存在于对拍表`).toBeTruthy();
+      expect(row?.pass, `W0${i} 应 PASS：${row?.detail ?? ''}`).toBe(true);
+    }
   });
 
   it('notification 不挂住 stdio：S02/S05/S06 转发计数正确、ping 未被挂住', () => {

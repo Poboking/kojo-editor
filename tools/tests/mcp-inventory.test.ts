@@ -157,7 +157,7 @@ describe('mcp-inventory · 四处真源对拍', () => {
         gapCount: number;
         markdown: string;
       };
-      expect(inv.schemaVersion).toBe(1);
+      expect(inv.schemaVersion).toBe(2);
       expect(inv.missingSources).toEqual([]);
       expect(inv.registryConstruction).toEqual({
         buildCommandRegistry: true,
@@ -303,6 +303,148 @@ describe('mcp-inventory · 第三波 tier 覆盖率（不破坏既有结构断�
       expect(inv.missingSources).toEqual([]);
       expect(inv.coverage.tools.total).toBe(0);
       expect(inv.coverage.deferredGaps).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+/* ============ 第四波：--json 机器摘要 / 接线成本分类 / 写腿状态段 ============ */
+describe('mcp-inventory · --json 机器摘要（稳定 schema）', () => {
+  interface MachineGap {
+    source: string;
+    name: string;
+    tool: string | null;
+    wired: boolean;
+    reasonClass: string;
+    wiringCost: string;
+    suggestedPriority: string | null;
+  }
+  interface MachineSummary {
+    schemaVersion: number;
+    generatedBy: string;
+    counts: {
+      commands: number;
+      rustCommands: number;
+      semanticReads: number;
+      slotContributions: number;
+      tools: { total: number; read: number; edit: number; privileged: number };
+      totalGaps: number;
+      wiredGaps: number;
+      deferredGaps: number;
+      orphanedWires: number;
+      missingSources: number;
+    };
+    gaps: MachineGap[];
+    writeLegs: {
+      sources: { registry: string; ioLegs: string; uiLegs: string };
+      sourcesMissing: string[];
+      legs: { tool: string; tier: string | null; gap: string | null; gapRegistered: boolean; wired: boolean; evidence: string }[];
+      wiredCount: number;
+      notWiredCount: number;
+    };
+  }
+
+  it('真树 --json：可 parse、counts 与 gaps 数组联动、分类/优先级枚举合法', async () => {
+    const { code, stdout } = await runInventory(['--root', REPO_ROOT, '--json']);
+    expect(code).toBe(0);
+    const m = JSON.parse(stdout) as MachineSummary;
+    expect(m.schemaVersion).toBe(1); // 机器摘要自身版本，独立于全量 JSON 的 SCHEMA_VERSION
+    expect(m.generatedBy).toContain('mcp-inventory');
+    // counts 自洽
+    expect(m.counts.tools.total).toBe(m.counts.tools.read + m.counts.tools.edit + m.counts.tools.privileged);
+    expect(m.counts.wiredGaps + m.counts.deferredGaps).toBe(m.counts.totalGaps);
+    expect(m.counts.totalGaps).toBeGreaterThan(0);
+    // gaps 数组 = 全量缺口，wired 计数与 counts 联动
+    expect(m.gaps).toHaveLength(m.counts.totalGaps);
+    expect(m.gaps.filter((g) => g.wired)).toHaveLength(m.counts.wiredGaps);
+    expect(m.gaps.filter((g) => !g.wired)).toHaveLength(m.counts.deferredGaps);
+    // 每条字段形状与枚举合法
+    const COSTS = ['cheap-read', 'needs-write-domain', 'needs-UI', 'needs-protocol', 'unknown', 'wired'];
+    const PRIOS = ['P1', 'P2', 'P3', 'P4'];
+    for (const g of m.gaps) {
+      expect(['rust', 'debug', 'plugins']).toContain(g.source);
+      expect(g.name.length).toBeGreaterThan(0);
+      expect(COSTS).toContain(g.wiringCost);
+      if (g.wired) {
+        expect(g.reasonClass).toBe('wired');
+        expect(g.suggestedPriority).toBeNull();
+        expect(g.tool).not.toBeNull(); // 已接线缺口必带覆盖工具名
+      } else {
+        expect(g.reasonClass.length).toBeGreaterThan(0);
+        expect(PRIOS).toContain(g.suggestedPriority);
+        expect(g.tool).toBeNull();
+      }
+    }
+    // 已登记缺口带覆盖工具（与 MCP_TOOL_GAP_MAP 联动；LaneA 接线与否不影响该登记）
+    const create = m.gaps.find((g) => g.name === 'create_file_exclusive') as MachineGap;
+    expect(create).toBeTruthy();
+    expect(create.wired).toBe(true);
+    expect(create.tool).toBe('fileTree.create');
+  });
+
+  it('真树写腿状态段：候选=registry 非 read 档、wired 与真源腿表联动、缺口登记对拍 gap map', async () => {
+    const { code, stdout } = await runInventory(['--root', REPO_ROOT, '--print']);
+    expect(code).toBe(0);
+    const inv = JSON.parse(stdout) as { writeLegs: MachineSummary['writeLegs']; markdown: string };
+    const wl = inv.writeLegs;
+    expect(wl.sourcesMissing).toEqual([]); // 真树两处腿源齐全
+    expect(wl.legs.length).toBeGreaterThan(0);
+    const names = wl.legs.map((l) => l.tool);
+    for (const t of ['fileTree.create', 'fileTree.update', 'fileTree.remove', 'fileTree.rename', 'problems.quickFix']) {
+      expect(names).toContain(t);
+    }
+    for (const l of wl.legs) {
+      expect(['edit', 'privileged']).toContain(l.tier); // 候选集 = registry 非 read 档
+      expect(typeof l.wired).toBe('boolean');
+      expect(l.gapRegistered).toBe(typeof l.gap === 'string');
+      expect(l.evidence.length).toBeGreaterThan(0);
+    }
+    expect(wl.wiredCount + wl.notWiredCount).toBe(wl.legs.length);
+    // 联动真源（不复制解析逻辑）：wired 布尔 === 腿表条目字面量 `['工具名',` 在真源文件中出现
+    const ioSrc = await fs.readFile(path.join(REPO_ROOT, 'packages', 'app', 'src', 'mcp', 'real-sources-io.ts'), 'utf8');
+    const uiSrc = await fs.readFile(path.join(REPO_ROOT, 'packages', 'app', 'src', 'mcp', 'real-sources.ts'), 'utf8');
+    for (const l of wl.legs) {
+      const needle = new RegExp(`\\['${l.tool.replace(/\./g, '\\.')}',`);
+      const inLegs = needle.test(ioSrc) || needle.test(uiSrc);
+      expect(l.wired, `写腿 ${l.tool} 的 wired 应与真源腿表联动`).toBe(inLegs);
+    }
+    // gap map 联动：fileTree.create → create_file_exclusive（packages/mcp-host/src/index.ts 登记）
+    const create = wl.legs.find((l) => l.tool === 'fileTree.create');
+    expect(create?.gapRegistered).toBe(true);
+    expect(create?.gap).toBe('create_file_exclusive');
+    // markdown 人类草案同步携带写腿状态段
+    expect(inv.markdown).toContain('写腿状态');
+    expect(inv.markdown).toContain('NOT_WIRED');
+  });
+
+  it('迷你树 --json：无参考源时 counts 归零、五条缺口逐条分类对拍、全 unwired（不假绿）', async () => {
+    const tmp = await fixtureRoot();
+    try {
+      const { code, stdout } = await runInventory(['--root', tmp, '--json']);
+      expect(code).toBe(0);
+      const m = JSON.parse(stdout) as MachineSummary;
+      expect(m.counts.totalGaps).toBe(5);
+      expect(m.counts.wiredGaps).toBe(0);
+      expect(m.counts.tools.total).toBe(0);
+      expect(m.writeLegs.legs).toEqual([]); // registry 缺席 ⇒ 无候选
+      expect(m.writeLegs.sourcesMissing.length).toBe(2); // 两处腿源缺席如实列出
+      expect(m.writeLegs.wiredCount).toBe(0);
+      // 分类判据逐条对拍（判定表见 mcp-inventory.mjs wiringCostFor 注释）
+      const byName = new Map(m.gaps.map((g) => [g.name, g]));
+      expect(byName.get('launcher_start')?.wiringCost).toBe('needs-protocol');
+      expect(byName.get('launcher_start')?.suggestedPriority).toBe('P4');
+      expect(byName.get('read_file_bytes')?.wiringCost).toBe('cheap-read');
+      expect(byName.get('read_file_bytes')?.suggestedPriority).toBe('P1');
+      expect(byName.get('definitionAt')?.wiringCost).toBe('cheap-read');
+      expect(byName.get('info')?.wiringCost).toBe('cheap-read');
+      expect(byName.get('ui.panel:probe.panel')?.wiringCost).toBe('needs-UI');
+      expect(byName.get('ui.panel:probe.panel')?.suggestedPriority).toBe('P3');
+      for (const g of m.gaps) {
+        expect(g.wired).toBe(false); // 无 gap map ⇒ 全部未接线，绝不假绿
+        expect(g.tool).toBeNull();
+        expect(g.reasonClass).not.toBe('wired');
+      }
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
