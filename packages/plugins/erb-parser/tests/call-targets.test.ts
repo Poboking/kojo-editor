@@ -8,7 +8,13 @@
 import { describe, expect, it } from 'vitest';
 import type { ErbParserService, FileIO, PluginContext, Unsubscribe } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
-import { UNDEFINED_CALL_CODE, erbReferenceDecorations, scanUndefinedCallTargets } from '../src/references';
+import {
+  UNDEFINED_CALL_CODE,
+  UNDEFINED_TRY_CALL_CODE,
+  erbReferenceDecorations,
+  scanUndefinedCallTargets,
+  tryCallTargetDecorations,
+} from '../src/references';
 import { makeComputeStub } from './support';
 
 const dict = (names: readonly string[]) => {
@@ -21,11 +27,32 @@ describe('scanUndefinedCallTargets · 正例（未收录的裸名字要报）', 
     expect(scanUndefinedCallTargets('CALL NOPE\n', dict([]))).toEqual([{ line: 1, column: 6, name: 'NOPE' }]);
   });
 
-  it('调用族全表都算（与 scanFileRefs 同一张 CALL_FAMILY 表）', () => {
-    for (const kw of ['CALL', 'TRYCALL', 'TRYCCALL', 'TRYCALLLIST', 'TRYCCALLLIST']) {
-      expect(scanUndefinedCallTargets(`${kw} F\n`, dict([])), kw).toEqual([
-        { line: 1, column: kw.length + 2, name: 'F' },
+  it('非 TRY 直系族照报（`CALL_FAMILY` 里引擎没置 IS_TRY 的只有 CALL）', () => {
+    expect(scanUndefinedCallTargets('CALL F\n', dict([]))).toEqual([{ line: 1, column: 6, name: 'F' }]);
+  });
+
+  it('TRY 系直系族目标缺失**不报**（引擎允许；Instraction.Child.cs 的 `!func.Function.IsTry()`）', () => {
+    for (const kw of ['TRYCALL', 'TRYCCALL', 'TRYCALLLIST', 'TRYCCALLLIST']) {
+      expect(scanUndefinedCallTargets(`${kw} F\n`, dict([])), kw).toEqual([]);
+    }
+  });
+
+  it('TRY 档信息层：`includeTry` 显式开才出条目，带 isTry 旗（默认档零膨胀）', () => {
+    for (const kw of ['TRYCALL', 'TRYCCALL', 'TRYCALLLIST', 'TRYCCALLLIST']) {
+      expect(scanUndefinedCallTargets(`${kw} F\n`, dict([]), { includeTry: true }), kw).toEqual([
+        { line: 1, column: kw.length + 2, name: 'F', isTry: true },
       ]);
+    }
+    // 非 TRY 那一档不受 includeTry 影响，也不带 isTry
+    expect(scanUndefinedCallTargets('CALL F\n', dict([]), { includeTry: true })).toEqual([
+      { line: 1, column: 6, name: 'F' },
+    ]);
+  });
+
+  it('CALL_FAMILY 全表都进槽位判据（同一个名字槽尺子；TRY 档由上面两条分别钉）', () => {
+    for (const kw of ['CALL', 'TRYCALL', 'TRYCCALL', 'TRYCALLLIST', 'TRYCCALLLIST']) {
+      expect(scanUndefinedCallTargets(`${kw} F\n`, dict(['F']), { includeTry: true }), kw).toEqual([]);
+      expect(scanUndefinedCallTargets(`${kw} F\n`, dict([]), { includeTry: true }), kw).toHaveLength(1);
     }
   });
 
@@ -72,6 +99,28 @@ describe('scanUndefinedCallTargets · 反例（fail-open，一条都不许多报
     expect(scanUndefinedCallTargets('CALL FLAG:NOPE\n', dict([]))).toEqual([]);
   });
 
+  /* D03 批②·子名与"尺子比引擎窄"两档 fail-open
+   * 引擎读名字：ArgumentBuilder.cs 的 SP_CALL_ArgumentBuilder ⇒
+   *   ReadString(st, StrEndWith.LeftParenthesis_Bracket_Comma_Semicolon) + Trim([' ', '\t'])
+   *   随后 `if (cur == '[') subNames = …`；ErbLoader.cs:644 `//TODO:subNames 結局実装しないかも`，
+   *   SubNames 全仓唯一实消费 = ErbLoader.cs:1534 的 TRYGOTOLIST 拒用检查。
+   * ⇒ 名字只在 `(` / `[` / `,` / `;` / 行尾断开；我们的记号尺按字母数字下划线切，窄于引擎。 */
+  it('子名形态不判：`CALL NOPE[SUB]` / `CALL NOPE[[莉莉白]]` 零产出（名字后的 […] 不是"名字不存在"的证据）', () => {
+    expect(scanUndefinedCallTargets('CALL NOPE[SUB]\nCALL NOPE[[莉莉白]]\n', dict([]))).toEqual([]);
+    // TRY 形信息层同样不判（同一道门，不是 TRY 档专属）
+    expect(scanUndefinedCallTargets('TRYCALL NOPE[[莉莉白]]\n', dict([]), { includeTry: true })).toEqual([]);
+  });
+
+  it('记号尺比引擎窄时不判：全角 ％ / ＆ / － / 全角空白 续接的名字不作静态目标判定', () => {
+    // 语料实例：`@MESSAGE_COM61背面立位＆時間停止＆抜かず` 在盘上真实存在，旧尺只拿到前半截
+    expect(scanUndefinedCallTargets('CALL 背面立位＆時間停止＆抜かず\n', dict([]))).toEqual([]);
+    expect(scanUndefinedCallTargets('CALL NOPE%NEXT\n', dict([]))).toEqual([]);
+    expect(scanUndefinedCallTargets('CALL NOPE　ARG\n', dict([]))).toEqual([]);
+    // 反证同尺度：引擎会在此断开的那几种（`(` / `,` / `;`）照报，判据没被放宽成"什么都不报"
+    expect(scanUndefinedCallTargets('CALL NOPE(1)\n', dict([]))).toEqual([{ line: 1, column: 6, name: 'NOPE' }]);
+    expect(scanUndefinedCallTargets('CALL NOPE, 1\n', dict([]))).toEqual([{ line: 1, column: 6, name: 'NOPE' }]);
+  });
+
   it('字符串内容 / 行内注释尾巴 / [SKIPSTART] 区 / $ 标签行不报', () => {
     const text = 'PRINT "CALL NOPE"\nCALL ALPHA ; CALL NOPE\n[SKIPSTART]\nCALL NOPE\n[SKIPEND]\n$NOPE\n';
     expect(scanUndefinedCallTargets(text, dict(['ALPHA']))).toEqual([]);
@@ -99,6 +148,28 @@ describe('erbReferenceDecorations · 装饰成形', () => {
   it('非方言（`.kojo` 归糖线管）与空文本零装饰', () => {
     expect(erbReferenceDecorations({ path: '/a.kojo', text: 'CALL NOPE\n' }, dict([]))).toEqual([]);
     expect(erbReferenceDecorations({ path: '/a.ERB', text: '' }, dict([]))).toEqual([]);
+  });
+
+  it('TRY 系一整个 TRYCALL→CALL 的反证对：warning 面只留确凿缺陷（D03 批②）', () => {
+    expect(erbReferenceDecorations({ path: '/a.ERB', text: 'CALL NOPE\n' }, dict([]))).toHaveLength(1);
+    expect(erbReferenceDecorations({ path: '/a.ERB', text: 'TRYCALL NOPE\n' }, dict([]))).toEqual([]);
+    expect(erbReferenceDecorations({ path: '/a.ERB', text: 'TRYCALLSET NOPE\n' }, dict([]))).toEqual([]); // 词表外的关键字：那行根本不调用任何东西
+  });
+
+  it('信息层另码另档：`tryCallTargetDecorations` 出 info + erb.call-try-missing（默认不接 UI）', () => {
+    const decos = tryCallTargetDecorations({ path: '/a.ERB', text: 'TRYCALL NOPE\nCALL NOPE\n' }, dict([]));
+    expect(decos).toEqual([
+      {
+        line: 1,
+        severity: 'info',
+        message: expect.stringContaining('NOPE'),
+        startColumn: 9,
+        endColumn: 13,
+        code: UNDEFINED_TRY_CALL_CODE,
+      },
+    ]);
+    expect(UNDEFINED_TRY_CALL_CODE).not.toBe(UNDEFINED_CALL_CODE);
+    expect(tryCallTargetDecorations({ path: '/a.kojo', text: 'TRYCALL NOPE\n' }, dict([]))).toEqual([]);
   });
 });
 

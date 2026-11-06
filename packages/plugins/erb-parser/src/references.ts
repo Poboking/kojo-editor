@@ -43,6 +43,23 @@ import { CASE_FOLD_CLASS, CASE_FOLD_CODE, detachString, erbCodePrefixLength, for
 /** 行首直系调用关键字（参数位就是**函数名**的那些；FORM / GOTO / JUMP 系不在内，理由见头注） */
 const CALL_FAMILY: ReadonlySet<string> = new Set(['CALL', 'TRYCALL', 'TRYCCALL', 'TRYCALLLIST', 'TRYCCALLLIST']);
 
+/**
+ * `CALL_FAMILY` 里引擎**置了 `IS_TRY`** 的那几枚（`FunctionIdentifier.cs` 的注册行）：
+ * - `TRYCALL` = `new CALL_Instruction(false, false, true, false)`（第三实参 `isTry` ⇒ `flag |= IS_TRY`）
+ * - `TRYCCALL` = `new CALL_Instruction(false, false, true, true)`（`IS_TRY | IS_TRYC`）
+ * - `TRYCALLLIST` = `addFunction(..., EXTENDED | FLOW_CONTROL | PARTIAL | IS_TRY)`
+ * - `TRYCCALLLIST` **引擎根本没有这个词**（`BuiltInFunctionCode` 里没有），是 `CALL_FAMILY` 的
+ *   历史遗留成员；名字是 TRY 形，按 TRY 档处理（fail-open 方向，见 `scanUndefinedCallTargets`）。
+ *
+ * 为什么要这张第二档表：引擎按名调用那一步的判据是
+ * `Instraction.Child.cs` 的 `if ((call == null) && (!func.Function.IsTry())) FunctionoNotFoundName = …`
+ * —— **TRY 系调用找不到函数是引擎允许的行为**（作者就是拿它当可选钩子用的：装了 MOD 才存在、
+ * 没装就什么也不做），`GOTO`/`JUMP` 标签那两条（同文件 :3904 / :3936）同款。
+ * 于是 TRY 系的目标缺失**不是缺陷**，静态层不许报（D03 批②：基线语料 23 条里 21 条正是这一档）。
+ * 反过来，非 TRY 的 `CALL X` 目标缺失照旧是确凿缺陷 ⇒ 照报，warning 档不变、不稀释。
+ */
+const TRY_CALL_FAMILY: ReadonlySet<string> = new Set(['TRYCALL', 'TRYCCALL', 'TRYCALLLIST', 'TRYCCALLLIST']);
+
 /** 引用种类旗标（盘上/内存共用的三值；`KIND_BY_FLAG` 是它到契约字符串的映射） */
 export const KIND_DEFINITION = 0;
 export const KIND_CALL = 1;
@@ -906,7 +923,11 @@ export function scanFileRefs(
 
 /* ---------------- 未定义 CALL 目标（T3，2026-10-16 语言服务批） ---------------- */
 
-/** CALL 名字槽里一处**未收录**的裸标识符（波浪线装饰的数据面） */
+/**
+ * 名字槽扫出的**一处**未收录裸标识符（波浪线装饰的数据面）。
+ * `isTry` 只在该行是 TRY 系直系调用时出现（additive；默认档下不会出现任何带 `isTry` 的条目——
+ * TRY 档整条不报，见 {@link scanUndefinedCallTargets}）。
+ */
 export interface UndefinedCallTarget {
   /** 1 基行号 */
   readonly line: number;
@@ -914,6 +935,54 @@ export interface UndefinedCallTarget {
   readonly column: number;
   /** 原样记号 */
   readonly name: string;
+  /** TRY 系目标缺失（引擎允许的行为；仅 `includeTry` 档下产出） */
+  readonly isTry?: true;
+}
+
+/** TRY 档之外还要拿到 TRY 条目的调用方（信息层）显式开这个；默认关 ⇒ 现有 warning 面零膨胀 */
+export interface CallTargetScanOptions {
+  readonly includeTry?: boolean;
+}
+
+/**
+ * 引擎读函数名那一步的**分隔符全集**——判据出处：`ArgumentBuilder.cs` 的
+ * `SP_CALL_ArgumentBuilder.CreateArgument`：
+ * `LexicalAnalyzer.ReadString(st, StrEndWith.LeftParenthesis_Bracket_Comma_Semicolon)`
+ * 再 `str.Trim([' ', '\t'])`。⇒ 引擎眼里的名字只在 `(` / `[` / `,` / `;` / 行尾断开，
+ * 其余任何字符（含全角 `＆` `％` `－`、含全角空白）都**还是名字的一部分**。
+ */
+function engineNameEndsHere(code: string, end: number): boolean {
+  if (end >= code.length) return true; // EOL
+  const c = code.charCodeAt(end);
+  return c === 9 /* \t */ || c === 32 /*   */ || c === 40 /* ( */ || c === 44 /* , */ || c === 59 /* ; */;
+}
+
+/**
+ * 名字槽**收尾处**能不能当"这就是引擎要查的那个名字"来判（三档，全 fail-open）：
+ * 1. `[` 开头 = **子名（subNames）形态** ⇒ 不判。引擎读法：`ReadString` 停在 `[`，随后
+ *    `if (cur == '[') subNames = …`，而 `ErbLoader.cs:644` 挂着 `//TODO:subNames 結局実装しないかも`、
+ *    全仓 `SubNames` 的**唯一实消费**是 `ErbLoader.cs:1534` 的 TRYGOTOLIST 拒用检查
+ *    ⇒ 名字后面的 `[[…]]` / `[…]` 既不是"这个名字不存在"的证据，也不是能静态展平的东西
+ *    （语料实例：`TRYCALL M_KOJO_COLOR_K[[莉莉白]]`，括号里是作者当打印记号用的中文色名）。
+ * 2. 收尾处不是引擎分隔符 ⇒ 我们的**记号尺比引擎窄**（`forEachToken` 只认字母/数字/下划线），
+ *    拿切剩的前缀去查名录必然假报（语料实例：`CALL @MESSAGE_COM61背面立位＆時間停止＆抜かず`
+ *    形态，`…＆…` 全名在盘上真实存在，尺子把 `＆` 切成界 ⇒ 假"未定义"）⇒ 不判。
+ * 3. 其余（`(` / `,` / `;` / 行尾 / ASCII 空白）⇒ 引擎也会在此收尾，可以判。
+ */
+function slotIsJudgeable(code: string, end: number): boolean {
+  if (end < code.length && code.charCodeAt(end) === 91 /* [ */) return false;
+  return engineNameEndsHere(code, end);
+}
+
+/** 调用关键字原词（大写归一）；`keywordEnd` 是关键字**之后**的行内偏移，倒着走 ASCII 标识符段 */
+function callKeywordOf(raw: string, keywordEnd: number): string {
+  let s = keywordEnd;
+  while (s > 0) {
+    const c = raw.charCodeAt(s - 1);
+    if ((c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95) s--;
+    else break;
+  }
+  return raw.slice(s, keywordEnd).toUpperCase();
 }
 
 /**
@@ -927,26 +996,67 @@ export interface UndefinedCallTarget {
  * - 成员访问占槽（`CALL FLAG:X`——变量世界，与 `scanFileRefs` 同判据不向后顺延）；
  * - `CALLFORM` 全族（不在 `CALL_FAMILY` 表里）、字符串 / 注释 / `[SKIPSTART]` 区、
  *   `$` 标签行（`visibleCodeLines` 屏蔽面）；
- * - 名字在名录里的（那不是"未定义"）。
+ * - 名字在名录里的（那不是"未定义"）；
+ * - **TRY 系直系调用的目标缺失**（引擎允许；`TRY_CALL_FAMILY` 的出处在那张表上）；
+ * - 槽位收尾处不是引擎 `ReadString` 的分隔符（子名 `[…]` / 记号尺比引擎窄，
+ *   `slotIsJudgeable` 逐条带引擎出处）。
  */
-export function scanUndefinedCallTargets(text: string, hasName: (upper: string) => boolean): UndefinedCallTarget[] {
+export function scanUndefinedCallTargets(
+  text: string,
+  hasName: (upper: string) => boolean,
+  options?: CallTargetScanOptions,
+): UndefinedCallTarget[] {
   const out: UndefinedCallTarget[] = [];
+  const includeTry = options?.includeTry === true;
   for (const { line, raw, isCallLine, keywordEnd, codeView } of visibleCodeLines(text)) {
     if (!isCallLine) continue;
+    // TRY 系目标缺失是**引擎允许的行为**（`Instraction.Child.cs` 的 `!func.Function.IsTry()` 那道门）
+    // ⇒ 默认整条不报；`includeTry` 只给信息层（`erb.call-try-missing` / `info` 档）用，默认不上屏。
+    const isTry = TRY_CALL_FAMILY.has(callKeywordOf(raw, keywordEnd));
+    if (isTry && !includeTry) continue;
     const code = codeView();
     forEachToken(code, (start, end, needsFold) => {
       if (start < keywordEnd) return; // 关键字自身
       // 槽位 = 关键字后的第一个记号；与关键字之间只许空白 ⇒ 裸标识符
       if (!/^[\t \u3000]*$/.test(raw.slice(keywordEnd, start))) return false;
-      const run = code.slice(start, end);
       // 成员访问占槽：整槽不算函数名，也不向后顺延（判据单源 `colonAdjacent`）
       if (colonAdjacent(code, start, end)) return false;
-      const upper = normalizedUpper(run, needsFold);
-      if (!hasName(upper)) out.push({ line, column: start + 1, name: run });
+      // 子名形态 / 记号尺比引擎窄 ⇒ 这一槽**不是**引擎要查的那个名字 ⇒ 不判（见 `slotIsJudgeable`）
+      if (!slotIsJudgeable(code, end)) return false;
+      const upper = normalizedUpper(code.slice(start, end), needsFold);
+      if (!hasName(upper)) out.push({ line, column: start + 1, name: code.slice(start, end), ...(isTry ? { isTry: true } : {}) });
       return false; // 一行至多一个名字槽
     });
   }
   return out;
+}
+
+/** TRY 系目标缺失的**信息档**诊断码（与 `erb.call-undefined` 分码：那一档才是确凿缺陷） */
+export const UNDEFINED_TRY_CALL_CODE = 'erb.call-try-missing';
+
+/**
+ * TRY 系"可选钩子找不到函数"的信息层装饰（D03 批②的第二问：这层信息要不要留？）。
+ *
+ * 与 `erbReferenceDecorations` **不同码、不同档**：severity 恒为 `info`、消息说清"引擎允许"，
+ * 且**默认不接进任何 UI**（`plugin.ts` 只挂 `erbReferenceDecorations`，本函数是给后续车道
+ * 显式开的一扇门；开了也不会稀释 warning 面，因为它带的是另一枚码）。
+ * 索引缺席 ⇒ 一条不报（同 fail-open 纪律）。
+ */
+export function tryCallTargetDecorations(
+  { path, text }: EditorDecoratePayload,
+  hasName: (upper: string) => boolean,
+): LineDecoration[] {
+  if (!isErbDialectPath(path) || text.length === 0) return [];
+  return scanUndefinedCallTargets(text, hasName, { includeTry: true })
+    .filter((t) => t.isTry === true)
+    .map((t) => ({
+      line: t.line,
+      severity: 'info' as const,
+      message: `可选钩子「${t.name}」在项目索引里没有对应函数：TRY 系调用找不到函数是引擎允许的（不算缺陷）`,
+      startColumn: t.column,
+      endColumn: t.column + t.name.length,
+      code: UNDEFINED_TRY_CALL_CODE,
+    }));
 }
 
 /** 诊断码（问题面板 / 工具提示分组；与糖线 `sugar.*`、表达式线 `erb.expr-*` 同族命名） */
