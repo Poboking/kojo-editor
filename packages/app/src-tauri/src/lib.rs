@@ -2854,7 +2854,35 @@ struct SearchOptionsDto {
     max_results: Option<usize>,
     /// 并行度（缺省 8；上限 32 防"给我 512 线程"这类输入）
     threads: Option<usize>,
+    /// **逐段续取凭据**（B18 批，additive）：对**每一个**候选文件先丢掉前 N 条命中，
+    /// 再按原有三闸（`SEARCH_PER_FILE_CAP` / `max_results` / `SEARCH_HARD_CAP`）收口。
+    /// 缺省 `None`（与 `Some(0)` 逐字同产出）⇒ 旧调用方的请求体与语义一字不变。
+    ///
+    /// 为什么要它：`SEARCH_PER_FILE_CAP`(500) 是「一个巨型文件不许吃掉全部结果」的闸，
+    /// B16 实测**分片修不掉**这一堵（一片只剩一个文件就再无出路）。这一位不是把闸抬宽，
+    /// 而是给同一把闸加一个**可读回的起点**：每次调用每个文件仍然最多只回 500 条，
+    /// 只是这 500 条可以从文件的第 N+1 条命中起算（判据见 `search_tests.rs` 的 `resume_*` 七条）。
+    ///
+    /// 三条边界（都不可协商）：
+    /// 1. 单位是「该文件内的命中条数」，**不是字节 / 行号**——同一文件内命中天然全序
+    ///    （行号升序、同行按列），跨文件不共享这把尺（多文件片里逐文件各丢 N 条，
+    ///    回显给的是**和**；MCP 腿因此只在「一片只剩一个文件」时才用它）；
+    /// 2. 请求值超过 `SEARCH_RESUME_SKIP_MAX` ⇒ **夹到上限**，回显跟着夹到实际值
+    ///    ⇒ 调用方一眼看出「没按我说的续」，绝不静默按别的深度继续；
+    /// 3. 续取必须**配回显**（`SearchResultDto::resume_applied_matches`）：没有回显的续取
+    ///    与「旧宿主把同一批前 N 条反复端上桌」无法区分，那比不续更危险。
+    resume_after_matches: Option<usize>,
 }
+
+/// 续取凭据的资源闸：`skip` 的绝对上限。
+///
+/// 实现把「跳过」做成「在同一条扫描腿上多带一个起点」，代价是扫描仍在**顺序**推进
+/// （不重扫文件），但为拿到第 `skip+1..skip+cap` 条必须先把前 `skip` 条**认出来**再丢弃。
+/// 夹死这个数 ⇒ 单文件的临时向量 ≤ `skip + 500` 条 DTO（几 MB 量级），
+/// 恶意/失手的入参（`usize::MAX`）不会退化成「把整篇命中物化进内存」。
+/// 实际消费方（MCP 分片腿）最深只到 8,000 条（游标进制 8192 所限），这一闸在它之上 ⇒
+/// 正常链路永远不触发夹紧；触发了也会因回显小于请求值而被调用方判出。
+const SEARCH_RESUME_SKIP_MAX: usize = 50_000;
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
@@ -2914,6 +2942,14 @@ struct SearchResultDto {
     files_scanned: u32,
     skipped: SearchSkippedDto,
     elapsed_ms: u64,
+    /// 本次调用因续取凭据（`options.resumeAfterMatches`）**实际丢掉**的命中条数（逐文件求和）。
+    ///
+    /// 这是续取通道的对账位，不是装饰：调用方请求丢 N 条，只有回显等于 N 才说明
+    /// 「这一页真的从第 N+1 条起」。三种不等各有各的含义，都必须能被判出来——
+    /// 旧宿主不实现这个键（TS 侧读到 `undefined`）、请求深度超过文件命中总数（回显＝文件总条数）、
+    /// 请求值被 `SEARCH_RESUME_SKIP_MAX` 夹住（回显＝夹后的和）。
+    /// 缺省不带凭据时恒为 0 ⇒ 旧面的账一个字没多。
+    resume_applied_matches: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -3422,11 +3458,38 @@ fn scan_hits(
 }
 
 enum FileOutcome {
-    Hits(Vec<SearchMatchDto>, bool),
-    Miss,
+    /// `(命中页, 该文件在此页之后还有命中, 本次因续取凭据实际丢掉的条数)`
+    Hits(Vec<SearchMatchDto>, bool, usize),
+    /// `(因续取凭据丢掉的条数)` —— 一条不剩也可能是「跳完了正好见底」，那一笔账不能丢
+    Miss(usize),
     Binary,
     TooLarge,
     Unreadable,
+}
+
+/// 带续取起点的扫描分流。
+///
+/// `skip == 0` 时**逐字走 `scan_hits`**（旧路径，零额外分配、零行为变化）。
+/// `skip > 0` 时在同一条扫描腿上把窗口往前挪 `skip` 条、只留后面那 `cap` 条：
+/// - `cap` 仍是调用方算好的 `SEARCH_PER_FILE_CAP.min(remaining)` ⇒ **每文件每页的返回条数
+///   上限一格没放宽**，多出来的那段只存在于内存里的临时向量，且不重扫文件、不重复解码；
+/// - `clipped`（该页之后还有命中）沿用扫描腿自己的判据 ⇒「触墙」与「续到了」不混淆；
+/// - `applied` 是**实际**丢掉的条数（文件不够跳就是文件的全部条数），原样回给调用方对账。
+fn scan_hits_after(
+    text: &str,
+    matcher: &SearchMatcher,
+    cap: usize,
+    skip: usize,
+    literal_single_pass: bool,
+) -> (Vec<SearchMatchDto>, bool, usize) {
+    if skip == 0 {
+        let (hits, clipped) = scan_hits(text, matcher, cap, literal_single_pass);
+        return (hits, clipped, 0);
+    }
+    let (all, clipped) = scan_hits(text, matcher, cap.saturating_add(skip), literal_single_pass);
+    let applied = all.len().min(skip);
+    let hits: Vec<SearchMatchDto> = all.into_iter().skip(applied).collect();
+    (hits, clipped, applied)
 }
 
 /// 检索单个文件。
