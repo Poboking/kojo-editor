@@ -154,6 +154,9 @@ export const TOOL_FAMILY_LABELS: Readonly<Record<ToolFamily, string>> = {
  * 键集与 `APPROVABLE_PRIVILEGED_TOOLS` 一一对应（mcp-write-domain 判据钉住漂移）。
  */
 export const TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  // B24（LaneAK 2026-11-07）：命令面板执行面，与 APPROVABLE_PRIVILEGED_TOOLS 同批登记；
+  // 键集一一对应由 mcp-write-domain-approval ⑦ 钉住，描述对着 commands.run 规格真源写。
+  'commands.run': '按精确 id 执行命令并回读事实',
   'fileTree.remove': '删除文件树中的文件或目录',
   'fileTree.rename': '重命名或移动文件树条目',
   launcher_instance_list: '列出已注册的启动器实例',

@@ -333,11 +333,13 @@ describe('② 批准：scope 投影 / camelCase args / 真发给 runner / 徽标
     const approveCall = calls.find((c) => c.cmd === 'mcp_approve');
     expect(approveCall, '应下发 mcp_approve').toBeDefined();
     const sent = (approveCall!.args as { args: ApprovalBatch }).args;
-    expect(sent.approvedTools).toContain('fileTree.remove');
+    // 这里勾的是第一个 checkbox ⇒ 对应名单第一项。B24 把 commands.run 置于表头，
+    // 夹具改读真源而非硬编名字（口径不变：仍须真把被勾选的那一枚下发）。
+    expect(sent.approvedTools).toContain(APPROVABLE_PRIVILEGED_TOOLS[0]!);
     expect(sent.clientId).toBe('c1');
 
     // 批准后：scope 刷新 ⇒ 清单与「已批准」徽标翻转（不刷 scope 则仍是「（无）」，红）
-    expect(hz.find('[data-testid="mcp-approved-tools"]')!.textContent).toContain('fileTree.remove');
+    expect(hz.find('[data-testid="mcp-approved-tools"]')!.textContent).toContain(APPROVABLE_PRIVILEGED_TOOLS[0]!);
     expect(hz.findAll('[data-approved="true"]').length).toBeGreaterThan(0);
     expect(hz.text()).toContain('已批准');
   });

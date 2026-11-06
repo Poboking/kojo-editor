@@ -9,7 +9,7 @@
  *   ④ scopeStateToApproval 把第四张表 approvedRootIds 投影出来（批准落没落地看得见）；
  *   ⑤ workspaceRootIdCandidates 由只读真源算出稳定枚举标识（label 只展示，绝不作为落点）；
  *   ⑥ ApprovalUi 列出候选根、勾选后批次带精确列名、已批准徽标可见翻转；
- *   ⑦ toolFamily / TOOL_DESCRIPTIONS：29 枚可批准工具族归属正确、描述表与名单一一对应
+ *   ⑦ toolFamily / TOOL_DESCRIPTIONS：30 枚可批准工具族归属正确、描述表与名单一一对应（B24 批 +1 枚 commands.run）
  *      （漂移闸：工具面增删而描述表没跟上 ⇒ 红）；
  *   ⑧ 分组形状：li[data-tool] DOM 顺序与 APPROVABLE_PRIVILEGED_TOOLS 逐字同序、
  *      首个 checkbox 仍是工具项、组级勾选只动本族（mcp-free-access 的「全选」锚不破）；
@@ -311,15 +311,16 @@ describe('⑧ 分组形状：锚点不破、组级勾选只动本族', () => {
     expect(items.map((li) => li.getAttribute('data-tool'))).toEqual([...APPROVABLE_PRIVILEGED_TOOLS]);
     expect(
       hz.findAll('input[type="checkbox"]')[0]!.closest('li')!.getAttribute('data-tool'),
-    ).toBe('fileTree.remove');
-    // 三族组头齐备，族序与名单同序
+    ).toBe(APPROVABLE_PRIVILEGED_TOOLS[0]!);
+    // 四族组头齐备，族序与名单同序（B24 的 commands.run 归 other 族且置于名单表头）
     expect(hz.findAll('section[data-family]').map((s) => s.getAttribute('data-family'))).toEqual([
+      'other',
       'fileTree',
       'launcherRead',
       'launcherWrite',
     ]);
     // 全局「全选（N）」保留（mcp-free-access 的锚：首个含「全选」的按钮必须全量勾选）
-    expect(hz.text()).toContain('全选（29）');
+    expect(hz.text()).toContain(`全选（${APPROVABLE_PRIVILEGED_TOOLS.length}）`);
     // 组级按钮措辞避开「全选」字样
     expect(hz.findAll('button').filter((b) => (b.textContent ?? '').includes('全选'))).toHaveLength(1);
   });

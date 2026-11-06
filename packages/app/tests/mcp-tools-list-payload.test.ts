@@ -8,8 +8,10 @@
  * 零假注入、零 GUI、零 Tauri、零 HTTP。
  *
  * 九条判据：
- *  1. **可见面形状**：77 枚具名面（read 37 / edit 11 / privileged 29）、缺省会话（未批准）
- *     只出 read 面 37 枚 —— 与 `docs/STATE.md` 的能力面读数同源；枚数一动这里就红。
+ *  1. **可见面形状**：83 枚具名面（read 40 / edit 13 / privileged 30）、缺省会话（未批准）
+ *     只出 read 面 40 枚 —— 与 `docs/STATE.md` 的能力面读数同源；枚数一动这里就红。
+ *     B24（LaneAK 2026-11-07）+1 枚 privileged：`commands.run`；合并到 97e9104b（S9-S21、
+ *     S15 指针化已落）后按现取实测重钉 ① 枚数、② 帧带底数与 ⑧ 两档上界，对账见 ⑧。
  *  2. **体积带（漂移护栏）**：全量面一帧的 JSON 字节数必须落在**本批实拍带**里，另外还有一条
  *     **记账下界**（B22 约 −3.5%）：上界＝挡住「新面把描述无限写长」，下界＝挡住
  *     「瘦身不记账、反向把内容删丢」。带子仍留 ±10%：加一枚工具不至于红，连加一屏长描述一定会红。
@@ -114,13 +116,17 @@ function schemaDescHits(t: McpTool, needle: string): string[] {
 /** B21 实拍（2026-11-06，LaneAF，去重前）：只留着核对 Δ，判据已按 B22 重钉。 */
 const B21_FULL_FRAME_BYTES = 218_897;
 /** B22 实拍（2026-11-06，LaneAI，去掉逐字重复后）＝量具 `static` 的 frameBytes。
- *  底数重钉（2026-11-07，组长合并点实测）：168,894 → 171,000——S8 additive 入参批（帧 185,281，
- *  带内）与 S10 `semantic.batchAt` 面（其基帧 185,326）合并后全量帧实拍 **187,557**，超出旧带顶
- *  185,783（+1,774＝两批诚实契约之和）；新带顶 188,100，机械余量 543 B。
- *  S15 底数再钉（2026-11-07，LaneY）：171,000 → 170,000——ADR-0003 共用形状说明指针化后
- *  全量帧实拍 **186,299**（−1,258＝17 处 × (202 JSON 字节 − 128 指针)）；只许下调：带顶
- *  188,100 → 187,000，机械余量 701 B；下界 163,000 不动。 */
-const B22_FULL_FRAME_BYTES = 170_000;
+ *  底数重钉其一（2026-11-07，组长 S8×S10 合并点实测）：168,894 → 171,000——合并帧实拍
+ *  187,557 超旧带顶 185,783（+1,774＝两批诚实契约之和）。
+ *  S15 底数再钉（2026-11-07，LaneY）：171,000 → 170,000——指针化后帧实拍 186,299（−1,258），
+ *  只许下调：带顶 188,100 → 187,000。
+ *  B24 底数按例重钉（2026-11-07，组长合并点现取实测）：170,000 → 172,000——B24 新增具名面
+ *  `commands.run` 后全量帧实拍 **188,356**（判据口径；static 量具 188,361，两通道包装差 5 B），
+ *  超 187,000 共 1,356 B；帧增量 +2,057 与该面 wireBytes 2,056 B ＋ 1 个 JSON 逗号精确对账
+ *  （desc +1,187 / schema +711 亦逐项对上，见 ⑧）。按 S10/S15 先例处置；BAND 0.1 与记账
+ *  下界 163,000 一字不动，新带顶 189,200，机械余量 844 B。
+ *  ⚠ 连续第三次按例重钉：下一批再增面之前**必须先做去重瘦身**，不许再抬底数或抬 BAND 过闸。 */
+const B22_FULL_FRAME_BYTES = 172_000;
 /** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。 */
 const B22_ACCOUNTED_FLOOR = 163_000;
 const BAND = 0.1;
@@ -128,15 +134,15 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const RUST_MAX_DESCRIPTION_CHARS = 2048;
 
 describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场算，非估算）', () => {
-  it('① 可见面枚数与 STATE 能力面读数同源：82＝read 40 / edit 13 / privileged 29（MCP-PERF-S10 批 +1 枚 read：semantic.batchAt 批量腿）', () => {
-    expect(fullFace).toHaveLength(82);
+  it('① 可见面枚数与 STATE 能力面读数同源：83＝read 40 / edit 13 / privileged 30（S10 +1 枚 read：semantic.batchAt ＋ B24 +1 枚 privileged：commands.run）', () => {
+    expect(fullFace).toHaveLength(83);
     expect(readFace).toHaveLength(40);
     expect(editFace).toHaveLength(53); // read + edit；privileged 未点名批准 ⇒ 不上帧
     const byTier = fullFace.reduce<Record<string, number>>((a, t) => {
       a[t.tier] = (a[t.tier] ?? 0) + 1;
       return a;
     }, {});
-    expect(byTier).toEqual({ read: 40, edit: 13, privileged: 29 });
+    expect(byTier).toEqual({ read: 40, edit: 13, privileged: 30 });
     // 缺省会话（未批准任何 privileged）只出 read 面——默认可见面不是全量面。
     expect(registry.listTools(scope('read'))).toHaveLength(40);
   });
@@ -328,8 +334,16 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     // desc 档本批零变化）：schema 实拍 110,571 → **109,313**（−1,258）/ frame 实拍 187,557 →
     // **186,299** ⇒ 只许下调：schema 111,000 → 109,700、desc 67,500 → 66,500（按现取收紧，
     // 实拍 66,122 未动）；frame 带底数 171,000 → 170,000（新带顶 187,000，机械余量 701 B）。
-    expect(descBytes).toBeLessThanOrEqual(66_500); // B21 实拍 64,851；S4 62,507；S6 64,433；S8 基 64,912；S10 基 65,643；S15 基 66,122
-    expect(schemaBytes).toBeLessThanOrEqual(109_700); // B21 143,762；S4 105,841；S6 107,873；S8 基 109,621；S10 基 108,823；S15 基 109,313
+    // B24（LaneAK 2026-11-07）+1 枚 privileged 面（commands.run），合并到 97e9104b 后现取实测：
+    // desc **67,309** / schema **110,024** / launcher 73,706 / frame **188,356**（判据口径）。
+    // 逐项对账：desc 66,122 ＋ 1,187（该面 description 1,187 B）＝ 67,309；
+    //           schema 109,313 ＋ 711（该面 inputSchema 711 B）＝ 110,024；
+    //           frame 186,299 ＋ 2,057（该面 wire 2,056 B ＋ 1 个 JSON 逗号）＝ 188,356；
+    //           launcher 73,706 与 S6 起各批持平 ⇒ 增量全部来自这一枚新面，别处没有膨胀。
+    // 按现取实测重钉：desc 66,500 → 68,000（余量 691 B）、schema 109,700 → 111,000（余量 976 B）；
+    // launcher 75,000、2048 描述闸、BAND 0.1、记账下界 163,000 一字不动；帧带底数见 ② 上方注释。
+    expect(descBytes).toBeLessThanOrEqual(68_000); // B21 64,851；S4 62,507；S6 64,433；S8 64,912；S10 66,122；S15 66,122；B24 合并实拍 67,309
+    expect(schemaBytes).toBeLessThanOrEqual(111_000); // B21 143,762；S4 105,841；S6 107,873；S8 109,621；S10 110,571；S15 109,313；B24 合并实拍 110,024
     expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；S4 实拍 73,706
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });
