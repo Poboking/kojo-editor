@@ -119,6 +119,8 @@ export interface McpLanguageFeaturesLike {
   readonly hoverProvider?: FeatureRegistryLike;
   readonly completionProvider?: FeatureRegistryLike;
   readonly foldingRangeProvider?: FeatureRegistryLike;
+  readonly codeLensProvider?: FeatureRegistryLike;
+  readonly selectionRangeProvider?: FeatureRegistryLike;
 }
 
 export interface McpSemanticDeps {
@@ -472,18 +474,36 @@ function suggestItemsOf(raw: unknown, cap: number): { readonly items: Record<str
   return { items, total: suggestions.length };
 }
 
-function flattenSymbols(raw: unknown, depth = 0, out: Record<string, unknown>[] = []): Record<string, unknown>[] {
-  if (!Array.isArray(raw) || depth > SYMBOL_DEPTH_LIMIT) return out;
-  for (const item of raw) {
-    if (out.length >= SYMBOL_LIMIT) break;
-    if (!item || typeof item !== 'object') continue;
-    const s = item as Record<string, unknown>;
-    if (typeof s['name'] !== 'string' || s['name'] === '') continue;
-    out.push({ name: s['name'], kind: typeof s['kind'] === 'number' ? s['kind'] : 0, depth });
-    flattenSymbols(s['children'], depth + 1, out);
-    if (out.length >= SYMBOL_LIMIT) break;
-  }
-  return out;
+/**
+ * 文档符号树压平：SlimPage 式账目（铁律 4：截断=truncated 可见）。
+ * - `total` = 截断前真实合法符号数：不受 SYMBOL_LIMIT 封顶影响，脏条目（无 name / 非对象）整条不算符号，
+ *   不把被截掉的部分洗成「总数就这么少」；
+ * - `truncated` = 没全呈现（SYMBOL_LIMIT 封顶 ⇒ total > items.length），显式可见；
+ * - SYMBOL_DEPTH_LIMIT 是防病态树的深度防御（原本就整棵超深子树不展开），不是数据封顶口径。
+ * 旧消费方只取 items/total：两个旧字段保留（additive），新增 truncated 供新消费方判「没全」。
+ */
+function flattenSymbols(raw: unknown): {
+  readonly items: Record<string, unknown>[];
+  readonly total: number;
+  readonly truncated: boolean;
+} {
+  const items: Record<string, unknown>[] = [];
+  let total = 0;
+  const walk = (nodes: unknown, depth: number): void => {
+    if (!Array.isArray(nodes) || depth > SYMBOL_DEPTH_LIMIT) return;
+    for (const item of nodes) {
+      if (!item || typeof item !== 'object') continue;
+      const s = item as Record<string, unknown>;
+      if (typeof s['name'] !== 'string' || s['name'] === '') continue;
+      total += 1;
+      if (items.length < SYMBOL_LIMIT) {
+        items.push({ name: s['name'], kind: typeof s['kind'] === 'number' ? s['kind'] : 0, depth });
+      }
+      walk(s['children'], depth + 1);
+    }
+  };
+  walk(raw, 0);
+  return { items, total, truncated: total > items.length };
 }
 
 function codeActionsOf(raw: unknown[], cap: number): { readonly items: Record<string, unknown>[]; readonly total: number } {
@@ -550,10 +570,10 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
     const legs = requireLegs(deps);
     const position = new ws.monaco.Position(pos.line, pos.column);
     const locations = legs.definition(ws.model, position);
-    return {
-      items: slimLegLocations(locations ?? [], ws.rootDir, DEFINITION_LIMIT),
-      total: (locations ?? []).length,
-    };
+    const items = slimLegLocations(locations ?? [], ws.rootDir, DEFINITION_LIMIT);
+    const total = (locations ?? []).length;
+    // 判性：total 原本就是真实数（无造假），但 DEFINITION_LIMIT 封顶 / 脏落点丢弃没有标记 ⇒ 补 truncated。
+    return { items, total, truncated: total > items.length };
   };
 
   const referencesAt: McpReaderFn = async (args) => {
@@ -566,7 +586,9 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
     const all = read === null ? [] : read.locations;
     const kept = includeDeclaration ? all : all.filter((l) => l.kind !== 'definition');
     const items = slimLegLocations(kept, ws.rootDir, REFERENCE_LIMIT);
-    return { items, total: items.length };
+    // total = 封顶前 kept 的真实数量（includeDeclaration 过滤之后、slim 投影之前）；
+    // 脏落点被整条丢弃 + REFERENCE_LIMIT 封顶，都算「没全呈现」⇒ truncated 显式可见，不伪造计数。
+    return { items, total: kept.length, truncated: kept.length > items.length };
   };
 
   const diagnostics: McpReaderFn = async () => {
@@ -603,7 +625,8 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
       (token) => [ws.model, position, { triggerKind: 1 }, token],
     );
     const { items, total } = suggestItemsOf(raw[raw.length - 1] ?? null, SUGGEST_LIMIT);
-    return { items, count: items.length, total, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
+    // 判性：total 原本就是真实 suggestions 数（无造假），但 SUGGEST_LIMIT 封顶 / 脏候选丢弃没有标记 ⇒ 补 truncated。
+    return { items, count: items.length, total, truncated: total > items.length, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
   };
 
   const documentSymbols: McpReaderFn = async () => {
@@ -615,8 +638,8 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
       ws,
       (token) => [ws.model, token],
     );
-    const items = flattenSymbols(raw);
-    return { items, total: items.length, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
+    const { items, total, truncated } = flattenSymbols(raw);
+    return { items, total, truncated, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
   };
 
   const tokens: McpReaderFn = async (args) => {
@@ -653,7 +676,8 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
       (token) => [ws.model, range, { triggerKind: 1, only: undefined }, token],
     );
     const { items, total } = codeActionsOf(raw, CODE_ACTION_LIMIT);
-    return { items, total, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
+    // 判性：total 原本就是真实 actions 数（无造假），但 CODE_ACTION_LIMIT 封顶 / 脏动作丢弃没有标记 ⇒ 补 truncated。
+    return { items, total, truncated: total > items.length, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
   };
 
   return { definitionAt, referencesAt, diagnostics, hoverAt, suggestAt, documentSymbols, tokens, codeActionsAt };
@@ -816,6 +840,80 @@ export function buildUiSupplemental(
     return { items, total, truncated };
   };
 
+  /* ---- 第四波（LaneF）：debug 面让位三腿里另两枚只读 provider 读数 ----
+   * 与 highlightsAt / foldingRanges 同一 collectFromProviders 通道（ILanguageFeaturesService 真源），
+   * 只读投影原始 provider 结果：不做 resolveCodeLens、不做 UI 合并/排序，明说未解析 / 保留供方原序。 */
+  const lensesAt: McpReaderFn = async (args) => {
+    const ws = await requireWorkspaceOf();
+    const service = (await unwrapGetter<McpLanguageFeaturesLike>(deps.getFeaturesService())) ?? {};
+    const { raw, stats } = await collectFromProviders(
+      service.codeLensProvider,
+      'provideCodeLenses',
+      ws,
+      (token) => [ws.model, token],
+    );
+    const maxResults = clampInt(args['maxResults'], 30, 1, 200);
+    const line = toPositiveInt(args['line']);
+    // provider 返回 CodeLensList{lenses:[...]} 或裸 CodeLens[]：两种都摊成 lens 对象；无可用 range 的整条丢。
+    const flat: unknown[] = [];
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') continue;
+      const o = item as Record<string, unknown>;
+      if (Array.isArray(o['lenses'])) flat.push(...(o['lenses'] as unknown[]));
+      else if ('range' in o) flat.push(o);
+    }
+    const projected: Record<string, unknown>[] = [];
+    for (const lens of flat) {
+      if (!lens || typeof lens !== 'object') continue;
+      const l = lens as Record<string, unknown>;
+      const range = readRangeFull(l['range']);
+      if (range === null) continue;
+      const command = l['command'] && typeof l['command'] === 'object' ? (l['command'] as Record<string, unknown>) : null;
+      projected.push({
+        ...range,
+        title: command ? asString(command['title']) : '',
+        commandId: command ? asString(command['id']) : '',
+        resolved: command !== null, // MCP 不调 resolveCodeLens：没 command 就是没解出，绝不编造
+      });
+    }
+    const kept = line === null ? projected : projected.filter((p) => line >= (p['line'] as number) && line <= (p['endLine'] as number));
+    const items = kept.slice(0, maxResults);
+    return { items, total: kept.length, truncated: kept.length > items.length, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
+  };
+
+  const selectionRangesAt: McpReaderFn = async (args) => {
+    const ws = await requireWorkspaceOf();
+    const pos = targetOf(ws, args['line'], args['column']);
+    const service = (await unwrapGetter<McpLanguageFeaturesLike>(deps.getFeaturesService())) ?? {};
+    const position = new ws.monaco.Position(pos.line, pos.column);
+    const { raw, stats } = await collectFromProviders(
+      service.selectionRangeProvider,
+      'provideSelectionRanges',
+      ws,
+      (token) => [ws.model, [position], token],
+    );
+    const maxChains = clampInt(args['maxChains'], 8, 1, 200);
+    // provideSelectionRanges 回 SelectionRange[][]（外层=逐位置）；pushProviderResults 摊一层后
+    // raw 的元素是一条链（SelectionRange[]）。兼容 provider 直接给裸对象（单档链）。
+    const chains: Record<string, unknown>[][] = [];
+    const pushChain = (src: unknown): void => {
+      const steps = Array.isArray(src) ? src : [src];
+      const ranges: Record<string, unknown>[] = [];
+      for (const step of steps) {
+        if (!step || typeof step !== 'object') continue;
+        const range = readRangeFull((step as Record<string, unknown>)['range']);
+        if (range === null) continue;
+        ranges.push({ ...range });
+      }
+      if (ranges.length > 0) chains.push(ranges);
+    };
+    for (const item of raw) {
+      if (Array.isArray(item) || (item && typeof item === 'object')) pushChain(item);
+    }
+    const items = chains.slice(0, maxChains).map((ranges) => ({ ranges }));
+    return { items, total: chains.length, truncated: chains.length > items.length, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
+  };
+
   return new Map<string, McpReaderFn>([
     ['document.active', documentActive],
     ['editor.info', editorInfo],
@@ -825,6 +923,8 @@ export function buildUiSupplemental(
     ['lang.highlightsAt', highlightsAt],
     ['lang.signatureAt', signatureAt],
     ['lang.markers', langMarkers],
+    ['lang.lensesAt', lensesAt],
+    ['lang.selectionRangesAt', selectionRangesAt],
   ]);
 }
 

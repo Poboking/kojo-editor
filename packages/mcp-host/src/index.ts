@@ -661,6 +661,93 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
+
+  /* ---- 第四波（LaneF，2026-11-06）：11 条 cheap-read 逐条判性后登记 6 枚只读具名工具 ----
+   * 全部按只读档登记并带 readOnlyHint:true，走 runSupplemental 钩子（宿主注入真源）；缺真源 ⇒ NOT_WIRED 可见。
+   * 另 5 条刻意不登记（理由见 MCP_DEFERRED_GAP_NOTES 与 commit 回执）：
+   *   read_file_bytes_raw / read_files_raw（ipc::Response 二进制帧，无模型可调用的结构化数据面）、
+   *   updater_relaunch / debug.type（非只读动作）、debug.actions（真源对 MCP 注入面不可达）。
+   */
+  {
+    name: 'app.dataDir',
+    description:
+      'Read the application data directory path as a plain string (read-only, no arguments). Backed by the Rust app_data_dir primitive. Informational only: it does NOT grant read/write access outside approvedRoots, does not list or touch any file, and must never be used as a write target. Single path string, no truncation.',
+    inputSchema: { type: 'object', properties: {} },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'codec.encodeString',
+    description:
+      'Encode a text string into bytes with a named character encoding and return the result as base64 (read-only, pure conversion, no IO). `encoding` is a fixed whitelist (utf-8, utf-8-bom, shift_jis, gbk, gb18030, big5, utf-16le, utf-16be); unsupported characters produce a visible error, never a silent replacement. Backed by the Rust encode_string primitive. Returns {encoding, charLength, base64}. Never writes a file; persisting bytes is a separate authorized edit tool.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', maxLength: 1_000_000, description: 'Text to encode.' },
+        encoding: { type: 'string', enum: ['utf-8', 'utf-8-bom', 'shift_jis', 'gbk', 'gb18030', 'big5', 'utf-16le', 'utf-16be'], description: 'Target encoding (fixed whitelist).' },
+      },
+      required: ['text', 'encoding'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'fs.pathExists',
+    description:
+      'Check whether one path exists inside the authorized project root (read-only). `relPath` MUST be a project-root-relative path — the schema rejects absolute paths, drive letters and ".." traversal, and the execution layer resolves it against approvedRoots and refuses any out-of-domain target. Backed by the Rust path_exists primitive. Returns {path, exists} with the real filesystem answer; never writes to disk.',
+    inputSchema: {
+      type: 'object',
+      properties: { relPath: RELATIVE_PATH_SCHEMA },
+      required: ['relPath'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'fs.statFiles',
+    description:
+      'Batch-query metadata (existence, size, modification time) for several paths inside the authorized project root (read-only). `relPaths` is an array of project-root-relative paths; EACH is schema-checked and resolved against approvedRoots, and any out-of-domain target is refused. `maxResults` caps the returned items with an explicit `truncated` flag; input order is preserved. Backed by the Rust stat_files primitive — a missing file yields exists:false with null size/mtimeMs (never a fabricated zero). Read-only; never writes to disk.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPaths: { type: 'array', items: RELATIVE_PATH_SCHEMA, minItems: 1, maxItems: 200, description: 'Project-root-relative paths (each domain-checked).' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned stat items (default 200).' },
+      },
+      required: ['relPaths'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'lang.lensesAt',
+    description:
+      'Return code lenses for the active document (read-only). Backed by the codeLensProvider registry through the same read-only provider collection used by lang.highlightsAt / lang.foldingRanges. `provideCodeLenses` is a whole-document call; an optional 1-based `line` filters to lenses whose range covers that line. Results are raw provider output: each item reports its range and, when the provider already supplied a command, its title/commandId; MCP does NOT call resolveCodeLens, so an item with no command is reported with resolved:false, never fabricated. `maxResults` caps the list with an explicit `truncated` flag; `providers`/`answered` keep the three-state account. Never applies a command or edits the document.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        line: { type: 'integer', minimum: 1, description: 'Optional 1-based line filter.' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned lenses (default 30).' },
+      },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'lang.selectionRangesAt',
+    description:
+      'Return selection-range (smart-expand) chains for a 1-based line/column (read-only). Backed by the selectionRangeProvider registry through the same read-only provider collection used by lang.highlightsAt. Each chain is reported in the provider-supplied order (near to far) as a list of ranges; MCP does NOT do the UI merge/sort/dedup post-processing. `maxChains` caps the list with an explicit `truncated` flag; `providers`/`answered` keep the three-state account. A projection only — never changes the selection or edits the document.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        line: { type: 'integer', minimum: 1 },
+        column: { type: 'integer', minimum: 1 },
+        maxChains: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned chains (default 8).' },
+      },
+      required: ['line', 'column'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
 ];
 
 /**
@@ -708,6 +795,14 @@ export const MCP_TOOL_GAP_MAP: readonly {
   { tool: 'lang.highlightsAt', gap: 'highlightsAt', source: 'debug' },
   { tool: 'lang.signatureAt', gap: 'signatureAt', source: 'debug' },
   { tool: 'lang.markers', gap: 'markers', source: 'debug' },
+  // 第四波（LaneF，2026-11-06）：11 条 cheap-read 逐条判性后登记 6 枚只读具名工具。
+  // debug 类 gap 名不带 debug. 前缀（盘点脚本 gapSets.debug 口径）；另 5 条刻意不登记，见回执。
+  { tool: 'app.dataDir', gap: 'app_data_dir', source: 'rust' },
+  { tool: 'codec.encodeString', gap: 'encode_string', source: 'rust' },
+  { tool: 'fs.pathExists', gap: 'path_exists', source: 'rust' },
+  { tool: 'fs.statFiles', gap: 'stat_files', source: 'rust' },
+  { tool: 'lang.lensesAt', gap: 'lensesAt', source: 'debug' },
+  { tool: 'lang.selectionRangesAt', gap: 'selectionRangesAt', source: 'debug' },
 ];
 
 /**
@@ -722,6 +817,7 @@ export const MCP_DEFERRED_GAP_NOTES: readonly { readonly scope: string; readonly
   { scope: 'format / revealLine / setCursor / setSelection / setValue', reason: '编辑器写/光标副作用，首期不面向只读模型面。' },
   { scope: 'ui.* 槽贡献（面板 / 装饰 / 语言服务注册）', reason: '纯 UI / 注册贡献，无独立数据面；领域知识只经 mcp.prompt 槽注入。' },
   { scope: '其余未登记只读原语', reason: '真源存在但本波未登记为具名工具：保留在缺口清单，宿主后续按需补，绝不挂空串假实现。' },
+  { scope: 'LaneF 第四波刻意不登记的 5 条 cheap-read', reason: 'read_file_bytes_raw / read_files_raw：ipc::Response 二进制帧（前端拿 ArrayBuffer / 自定义帧），是开项目热路径性能通道，无面向模型的结构化只读数据面，且 read_files_raw 收任意 paths 数组，不登记以免暴露任意目标路径参数（项目根内文本读已由 fs.readFile 覆盖）；updater_relaunch=app.restart() 重启动作、debug.type=applyTypedEdit 编辑器输入动作，均非只读；debug.actions 真源 focusedCtx().editorRef.current.getSupportedActions() 对 MCP 注入面不可达，绝不挂空数组假实现。' },
 ];
 
 /** 内置 8 项 resource（≥6 的硬要求；新增「当前文档与光标」，其余保持第一波 URI）。 */

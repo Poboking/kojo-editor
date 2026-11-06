@@ -698,6 +698,88 @@ export function createRunSupplemental(deps: McpIoDeps): (
     return { path: relPath, updated: true, textLength: content.length, refreshed: emitFileChanged(kernel, 'change', abs) };
   };
 
+  /* ---- 第四波（LaneF）：4 枚 Rust 只读真源腿，全部经既有 invoke seam + 域内路径闸 ---- */
+  const ENCODE_STRING_ENCODINGS: readonly string[] = [
+    'utf-8', 'utf-8-bom', 'shift_jis', 'gbk', 'gb18030', 'big5', 'utf-16le', 'utf-16be',
+  ];
+
+  const appDataDir = async (): Promise<unknown> => {
+    const dir = await deps.invoke('app_data_dir');
+    if (typeof dir !== 'string' || dir === '') {
+      throw new McpFailure('TOOL_EXECUTION_FAILED', 'app_data_dir 未返回路径字符串（不静默、不编造）');
+    }
+    return { path: dir };
+  };
+
+  const encodeString = async (args: Record<string, unknown>): Promise<unknown> => {
+    const text = args['text'];
+    if (typeof text !== 'string') {
+      throw new McpFailure('INVALID_ARGS', 'codec.encodeString 的 text 须为字符串');
+    }
+    const encoding = asString(args['encoding']);
+    if (!ENCODE_STRING_ENCODINGS.includes(encoding)) {
+      throw new McpFailure('INVALID_ARGS', `codec.encodeString 的 encoding 不在白名单：${sanitizeEcho(encoding)}`);
+    }
+    const base64 = await deps.invoke('encode_string', { text, encoding });
+    if (typeof base64 !== 'string') {
+      throw new McpFailure('TOOL_EXECUTION_FAILED', 'encode_string 未返回 base64 字符串（不静默、不编造）');
+    }
+    return { encoding, charLength: text.length, base64 };
+  };
+
+  const pathExists = async (args: Record<string, unknown>): Promise<unknown> => {
+    const kernel = deps.getKernel();
+    const project = requireProject(kernel);
+    const rootDir = asString(project['rootDir']);
+    if (rootDir === '') {
+      throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：pathExists 无域基准根（不静默）');
+    }
+    const abs = resolveWithinRoot(rootDir, asString(args['relPath'])); // 路径闸 + 域内解析（fail-closed）
+    const exists = await deps.invoke('path_exists', { path: abs });
+    if (typeof exists !== 'boolean') {
+      throw new McpFailure('TOOL_EXECUTION_FAILED', 'path_exists 未返回布尔值（不静默、不伪造）');
+    }
+    return { path: toRelativePath(abs, rootDir), exists };
+  };
+
+  const statFiles = async (args: Record<string, unknown>): Promise<unknown> => {
+    const kernel = deps.getKernel();
+    const project = requireProject(kernel);
+    const rootDir = asString(project['rootDir']);
+    if (rootDir === '') {
+      throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：statFiles 无域基准根（不静默）');
+    }
+    const relPaths = args['relPaths'];
+    if (!Array.isArray(relPaths) || relPaths.length === 0) {
+      throw new McpFailure('INVALID_ARGS', 'fs.statFiles 的 relPaths 须为非空数组');
+    }
+    const maxResults = clampInt(args['maxResults'], 200, 1, 200);
+    // 逐项过路径闸 + 域内解析：任何一个越界整批拒绝（fail-closed，绝不把域外路径送到 Rust）。
+    const absPaths: string[] = [];
+    for (const rel of relPaths) {
+      if (typeof rel !== 'string' || rel === '') {
+        throw new McpFailure('INVALID_ARGS', 'fs.statFiles.relPaths 的每一项须为非空字符串');
+      }
+      absPaths.push(resolveWithinRoot(rootDir, rel));
+    }
+    const kept = absPaths.slice(0, maxResults);
+    const raw = await deps.invoke('stat_files', { paths: kept });
+    const items: Record<string, unknown>[] = [];
+    if (Array.isArray(raw)) {
+      for (const entry of raw) {
+        if (!entry || typeof entry !== 'object') continue;
+        const e = entry as Record<string, unknown>;
+        items.push({
+          path: toRelativePath(asString(e['path']), rootDir),
+          exists: e['exists'] === true,
+          size: typeof e['size'] === 'number' ? e['size'] : null,
+          mtimeMs: typeof e['mtimeMs'] === 'number' ? e['mtimeMs'] : null,
+        });
+      }
+    }
+    return { items, total: relPaths.length, truncated: relPaths.length > items.length };
+  };
+
   const ioTools = new Map<string, (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown> | unknown>([
     ['commands.list', commandsList],
     ['fs.readFile', readFile],
@@ -705,6 +787,10 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['io.listDir', listDir],
     ['io.workspaceRoots', workspaceRoots],
     ['workspace.searchAll', workspaceSearchAll],
+    ['app.dataDir', appDataDir],
+    ['codec.encodeString', encodeString],
+    ['fs.pathExists', pathExists],
+    ['fs.statFiles', statFiles],
     ['fileTree.create', fileTreeCreate],
     ['fileTree.update', fileTreeUpdate],
   ]);

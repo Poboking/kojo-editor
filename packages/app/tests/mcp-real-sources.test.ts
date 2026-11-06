@@ -11,7 +11,7 @@
  * - 写类与危险动作保持 NOT_WIRED，不擅自开放执行。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { McpFailure, createMcpCapabilityRegistry, type McpSessionScope } from '@kojo/mcp-host';
+import { McpFailure, createMcpCapabilityRegistry, MCP_TOOL_GAP_MAP, SUPPLEMENTAL_TOOL_SPECS, type McpSessionScope } from '@kojo/mcp-host';
 import type { CommandEntry } from '../src/ui/commands';
 import {
   assertMcpWriteDomain,
@@ -900,6 +900,349 @@ describe('语义 8 腿（判据腿优先 + provider 纯读直调）', () => {
     await expect(readers.diagnostics!({}, scope)).rejects.toMatchObject({ code: 'NOT_WIRED' });
     await expect(readers.documentSymbols!({}, scope)).rejects.toMatchObject({ code: 'NOT_WIRED' });
   });
+});
+
+/* ----------------------- 任务 A：截断账目（SlimPage） ----------------------- */
+/**
+ * 铁律 4：total 是截断前真实条目数，绝不是被 cap 洗过的 items.length；
+ * 脏条目整条丢弃 / 封顶都靠 truncated 显式解释；旧字段 items/total/count/providers/answered additive 全留。
+ * cap 口径（real-sources.ts）：SYMBOL_LIMIT=200 / REFERENCE_LIMIT=50 / DEFINITION_LIMIT=20 /
+ * SUGGEST_LIMIT=50 / CODE_ACTION_LIMIT=30。
+ */
+describe('任务 A：截断账目（total 真实 / truncated 可见 / additive 兼容）', () => {
+  const manySymbolNodes = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `S${i}`, kind: 1 }));
+  const manyLegLocations = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ filePath: 'D:/proj/c.kojo', line: i + 1 }));
+
+  it('documentSymbols：超过 SYMBOL_LIMIT → total 是截断前真实总数、truncated:true、items 恰为 cap', async () => {
+    const service = registryWith({
+      documentSymbolProvider: [{ provideDocumentSymbols: () => manySymbolNodes(201) }],
+    });
+    const readers = buildSemanticReaders(fakeDeps({ getFeaturesService: () => service }));
+    const out = (await readers.documentSymbols!({}, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(201); // 真实总数，不是被 cap 洗过的 200
+    expect((out['items'] as unknown[]).length).toBe(200); // SYMBOL_LIMIT 封顶
+    expect(out['truncated']).toBe(true);
+  });
+
+  it('documentSymbols：未超 cap（父子树 2 个）→ total===items.length、truncated:false', async () => {
+    const service = registryWith({
+      documentSymbolProvider: [{ provideDocumentSymbols: () => [{ name: 'F', kind: 1, children: [{ name: 'C', kind: 2 }] }] }],
+    });
+    const readers = buildSemanticReaders(fakeDeps({ getFeaturesService: () => service }));
+    const out = (await readers.documentSymbols!({}, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(2);
+    expect((out['items'] as unknown[]).length).toBe(2);
+    expect(out['truncated']).toBe(false);
+  });
+
+  it('documentSymbols：脏符号（无 name / 空名 / name 非字符串 / 非对象）不污染 total，旧字段仍在', async () => {
+    const dirty: unknown[] = [
+      { name: 'good', kind: 1 },
+      {}, // 缺 name
+      { name: '' }, // 空名
+      { name: 5 }, // name 非字符串
+      null,
+      42,
+      'str',
+      { name: 'alsoGood', kind: 2 },
+    ];
+    const service = registryWith({
+      documentSymbolProvider: [{ provideDocumentSymbols: () => dirty }],
+    });
+    const readers = buildSemanticReaders(fakeDeps({ getFeaturesService: () => service }));
+    const out = (await readers.documentSymbols!({}, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(2); // 只有 good / alsoGood 算符号
+    expect((out['items'] as Record<string, unknown>[]).map((i) => i['name'])).toEqual(['good', 'alsoGood']);
+    expect(out['truncated']).toBe(false);
+    // additive：旧消费方依赖的字段一个不少
+    expect(out).toHaveProperty('items');
+    expect(out).toHaveProperty('total');
+    expect(out).toHaveProperty('providers');
+    expect(out).toHaveProperty('answered');
+  });
+
+  it('referencesAt：超过 REFERENCE_LIMIT → total=kept 真实数、truncated:true、items 恰为 cap', async () => {
+    const readers = buildSemanticReaders(fakeDeps({
+      getLegs: () => fakeLegs({ references: () => ({ path: 'c.kojo', locations: manyLegLocations(51) }) }),
+    }));
+    const out = (await readers.referencesAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(51);
+    expect((out['items'] as unknown[]).length).toBe(50);
+    expect(out['truncated']).toBe(true);
+  });
+
+  it('referencesAt：未超 cap（默认 fakeLegs 2 个）→ total===items.length、truncated:false', async () => {
+    const readers = buildSemanticReaders(fakeDeps());
+    const out = (await readers.referencesAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(2);
+    expect((out['items'] as unknown[]).length).toBe(2);
+    expect(out['truncated']).toBe(false);
+  });
+
+  it('referencesAt：脏落点被 slim 整条丢弃也算「没全」→ total 是 kept 真实数、truncated:true、不伪造计数', async () => {
+    // 脏落点放前面：空路径 / 非正行 → slimLegLocations 整条丢弃；后 50 个合法恰好填满 cap。
+    const dirty = [
+      { filePath: '', line: 1 },
+      { filePath: 'D:/proj/c.kojo', line: 0 },
+      ...manyLegLocations(50),
+    ];
+    const readers = buildSemanticReaders(fakeDeps({
+      getLegs: () => fakeLegs({ references: () => ({ path: 'c.kojo', locations: dirty }) }),
+    }));
+    const out = (await readers.referencesAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(52); // kept 的真实数量（含 2 个脏落点），不是 items.length=50
+    expect((out['items'] as unknown[]).length).toBe(50);
+    expect(out['truncated']).toBe(true); // 丢弃 + 封顶统一由 truncated 解释
+  });
+
+  it('definitionAt：超过 DEFINITION_LIMIT → total 真实、truncated:true（顺带核查的同形缺口）', async () => {
+    const locs = Array.from({ length: 21 }, (_, i) => ({ filePath: 'D:/proj/b.kojo', line: i + 1, column: 1 }));
+    const readers = buildSemanticReaders(fakeDeps({
+      getLegs: () => fakeLegs({ definition: () => locs }),
+    }));
+    const out = (await readers.definitionAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(21);
+    expect((out['items'] as unknown[]).length).toBe(20);
+    expect(out['truncated']).toBe(true);
+  });
+
+  it('suggestAt：超过 SUGGEST_LIMIT → total 真实、count 为 cap、truncated:true、旧字段仍在（顺带核查）', async () => {
+    const service = registryWith({
+      completionProvider: [{ provideCompletionItems: () => ({
+        suggestions: Array.from({ length: 51 }, (_, i) => ({ label: `s${i}`, kind: 5 })),
+      }) }],
+    });
+    const readers = buildSemanticReaders(fakeDeps({ getFeaturesService: () => service }));
+    const out = (await readers.suggestAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(51);
+    expect(out['count']).toBe(50);
+    expect((out['items'] as unknown[]).length).toBe(50);
+    expect(out['truncated']).toBe(true);
+    expect(out).toHaveProperty('items');
+    expect(out).toHaveProperty('providers');
+    expect(out).toHaveProperty('answered');
+  });
+
+  it('codeActionsAt：超过 CODE_ACTION_LIMIT → total 真实、truncated:true（顺带核查的同形缺口）', async () => {
+    const provider = {
+      provideCodeActions: () => ({ actions: Array.from({ length: 31 }, (_, i) => ({ title: `a${i}`, kind: 'quickfix' })) }),
+    };
+    const readers = buildSemanticReaders(fakeDeps({ getFeaturesService: () => registryWith({ codeActionProvider: [provider] }) }));
+    const out = (await readers.codeActionsAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(31);
+    expect((out['items'] as unknown[]).length).toBe(30);
+    expect(out['truncated']).toBe(true);
+  });
+
+  it('未超 cap 的其余腿 truncated:false（definitionAt / suggestAt / codeActionsAt 基线）', async () => {
+    const service = registryWith({
+      completionProvider: [{ provideCompletionItems: () => ({ suggestions: [{ label: 'foo' }] }) }],
+      codeActionProvider: [{ provideCodeActions: () => ({ actions: [{ title: 'fix' }] }) }],
+    });
+    const readers = buildSemanticReaders(fakeDeps({ getFeaturesService: () => service }));
+    const def = (await readers.definitionAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    const sug = (await readers.suggestAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    const act = (await readers.codeActionsAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    expect(def['truncated']).toBe(false);
+    expect(sug['truncated']).toBe(false);
+    expect(act['truncated']).toBe(false);
+  });
+});
+
+/* ----------------------- 任务 B：第四波 6 枚只读具名工具 ----------------------- */
+/**
+ * 三件齐落的对拍：ToolSpec(tier:read+readOnlyHint) / MCP_TOOL_GAP_MAP / 真源执行腿（IO + UI）。
+ * 逐条钉：真读数形状、截断账目、路径逃逸拒绝（域内解析 + invoke 不触达）、三态账，
+ * 以及刻意不登记的 5 条经 runSupplemental 显式 NOT_WIRED（绝不挂空实现）。
+ */
+describe('任务 B：第四波 6 枚只读具名工具（真读数 / 截断 / 路径闸 / NOT_WIRED）', () => {
+  const NEW_TOOLS = [
+    'app.dataDir', 'codec.encodeString', 'fs.pathExists', 'fs.statFiles', 'lang.lensesAt', 'lang.selectionRangesAt',
+  ] as const;
+
+  it('三件齐落之一：6 枚工具均 tier:read + readOnlyHint，且 GAP_MAP 逐条字面量映射', () => {
+    for (const n of NEW_TOOLS) {
+      const spec = SUPPLEMENTAL_TOOL_SPECS.find((s) => s.name === n);
+      expect(spec).toBeDefined();
+      expect(spec!.tier).toBe('read');
+      expect(spec!.annotations?.readOnlyHint).toBe(true);
+    }
+    const mapped = new Set(MCP_TOOL_GAP_MAP.map((m) => m.tool));
+    for (const n of NEW_TOOLS) expect(mapped.has(n)).toBe(true);
+  });
+
+  it('app.dataDir：透传 Rust app_data_dir 路径字符串（只读、无入参）', async () => {
+    const { kernel } = fakeKernel();
+    const invoke: McpInvokeLike = vi.fn(async (cmd: string) => (cmd === 'app_data_dir' ? 'C:/Users/x/AppData/Roaming/kojo' : null));
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke }));
+    const out = (await sup('app.dataDir', {}, scope)) as Record<string, unknown>;
+    expect(out).toEqual({ path: 'C:/Users/x/AppData/Roaming/kojo' });
+    expect(invoke).toHaveBeenCalledWith('app_data_dir');
+  });
+
+  it('app.dataDir：真源缺席（空返回）⇒ TOOL_EXECUTION_FAILED，不编造路径', async () => {
+    const { kernel } = fakeKernel();
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke: async () => null }));
+    await expect(sup('app.dataDir', {}, scope)).rejects.toMatchObject({ code: 'TOOL_EXECUTION_FAILED' });
+  });
+
+  it('codec.encodeString：白名单内透传 base64 + charLength，参数原样交给 Rust', async () => {
+    const { kernel } = fakeKernel();
+    const invoke: McpInvokeLike = vi.fn(async (cmd: string) => (cmd === 'encode_string' ? 'YWFh' : null));
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke }));
+    const out = (await sup('codec.encodeString', { text: 'aa', encoding: 'utf-8' }, scope)) as Record<string, unknown>;
+    expect(out).toEqual({ encoding: 'utf-8', charLength: 2, base64: 'YWFh' });
+    expect(invoke).toHaveBeenCalledWith('encode_string', { text: 'aa', encoding: 'utf-8' });
+  });
+
+  it('codec.encodeString：白名单外 ⇒ INVALID_ARGS，invoke 绝不触达', async () => {
+    const { kernel } = fakeKernel();
+    const invoke = vi.fn(async () => 'x');
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke }));
+    await expect(sup('codec.encodeString', { text: 'x', encoding: 'rot13' }, scope)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('fs.pathExists：域内解析 + 真布尔读数（不伪造）', async () => {
+    const { kernel } = fakeKernel();
+    const invoke: McpInvokeLike = vi.fn(async (cmd: string) => (cmd === 'path_exists' ? true : null));
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke }));
+    const out = (await sup('fs.pathExists', { relPath: 'a.txt' }, scope)) as Record<string, unknown>;
+    expect(out).toEqual({ path: 'a.txt', exists: true });
+    expect(invoke).toHaveBeenCalledWith('path_exists', { path: 'D:/proj/a.txt' });
+  });
+
+  it('fs.pathExists：路径逃逸（.. / 盘符）⇒ INVALID_ARGS，invoke 绝不触达', async () => {
+    const { kernel } = fakeKernel();
+    const invoke = vi.fn(async () => true);
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke }));
+    await expect(sup('fs.pathExists', { relPath: '../secret.txt' }, scope)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    await expect(sup('fs.pathExists', { relPath: 'C:/boot.ini' }, scope)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('fs.statFiles：批量真读数（不存在 ⇒ exists:false + null，不编造 0）+ 逐项域内解析', async () => {
+    const { kernel } = fakeKernel();
+    const invoke: McpInvokeLike = vi.fn(async (cmd: string) => (cmd === 'stat_files'
+      ? [
+          { path: 'D:/proj/a.txt', exists: true, size: 42, mtimeMs: 7 },
+          { path: 'D:/proj/nope.txt', exists: false, size: null, mtimeMs: null },
+        ]
+      : null));
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke }));
+    const out = (await sup('fs.statFiles', { relPaths: ['a.txt', 'nope.txt'] }, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(2);
+    expect(out['truncated']).toBe(false);
+    expect(out['items']).toEqual([
+      { path: 'a.txt', exists: true, size: 42, mtimeMs: 7 },
+      { path: 'nope.txt', exists: false, size: null, mtimeMs: null },
+    ]);
+    expect(invoke).toHaveBeenCalledWith('stat_files', { paths: ['D:/proj/a.txt', 'D:/proj/nope.txt'] });
+  });
+
+  it('fs.statFiles：超过 maxResults ⇒ total 是真实入参数、truncated:true、只把前 cap 项送去 Rust', async () => {
+    const { kernel } = fakeKernel();
+    const invoke: McpInvokeLike = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd !== 'stat_files') return null;
+      const paths = (args?.['paths'] as string[]) ?? [];
+      return paths.map((p, i) => ({ path: p, exists: true, size: i, mtimeMs: null }));
+    });
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke }));
+    const out = (await sup('fs.statFiles', { relPaths: ['a.txt', 'b.txt', 'c.txt', 'd.txt', 'e.txt'], maxResults: 2 }, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(5);
+    expect(out['truncated']).toBe(true);
+    expect((out['items'] as unknown[]).length).toBe(2);
+    expect(invoke).toHaveBeenCalledWith('stat_files', { paths: ['D:/proj/a.txt', 'D:/proj/b.txt'] });
+  });
+
+  it('fs.statFiles：数组内任一路径逃逸 ⇒ 整批 INVALID_ARGS，invoke 绝不触达', async () => {
+    const { kernel } = fakeKernel();
+    const invoke = vi.fn(async () => []);
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke }));
+    await expect(sup('fs.statFiles', { relPaths: ['ok.txt', '../escape.txt'] }, scope)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it('fs.statFiles：relPaths 非数组 / 空 ⇒ INVALID_ARGS（不静默）', async () => {
+    const { kernel } = fakeKernel();
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    await expect(sup('fs.statFiles', { relPaths: [] }, scope)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    await expect(sup('fs.statFiles', {}, scope)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+  });
+
+  it('lang.lensesAt：CodeLensList / 裸 CodeLens 摊平投影 + 未解析标注 + 三态账', async () => {
+    const service = registryWith({
+      codeLensProvider: [
+        { provideCodeLenses: () => ({
+          lenses: [
+            { range: { startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 5 }, command: { title: 'Run', id: 'run' } },
+            { range: { startLineNumber: 5, startColumn: 1, endLineNumber: 5, endColumn: 3 } },
+          ],
+        }) },
+      ],
+    });
+    const ui = buildUiSupplemental(fakeDeps({ getFeaturesService: () => service }), null);
+    const out = (await ui.get('lang.lensesAt')!({}, scope)) as Record<string, unknown>;
+    expect(out['providers']).toBe(1);
+    expect(out['answered']).toBe(1);
+    expect(out['total']).toBe(2);
+    expect(out['truncated']).toBe(false);
+    expect(out['items']).toEqual([
+      { line: 2, column: 1, endLine: 2, endColumn: 5, title: 'Run', commandId: 'run', resolved: true },
+      { line: 5, column: 1, endLine: 5, endColumn: 3, title: '', commandId: '', resolved: false },
+    ]);
+  });
+
+  it('lang.lensesAt：line 过滤 + maxResults 截断账目（total 是过滤后真实数）', async () => {
+    const mk = (ln: number) => ({ range: { startLineNumber: ln, startColumn: 1, endLineNumber: ln, endColumn: 2 } });
+    const service = registryWith({
+      codeLensProvider: [{ provideCodeLenses: () => ({ lenses: [mk(1), mk(2), mk(2), mk(3)] }) }],
+    });
+    const ui = buildUiSupplemental(fakeDeps({ getFeaturesService: () => service }), null);
+    const out = (await ui.get('lang.lensesAt')!({ line: 2, maxResults: 1 }, scope)) as Record<string, unknown>;
+    expect(out['total']).toBe(2); // line=2 命中 2 条（过滤后真实数）
+    expect(out['truncated']).toBe(true); // maxResults=1 封顶
+    expect((out['items'] as unknown[]).length).toBe(1);
+  });
+
+  it('lang.selectionRangesAt：链按供方原序（近→远）投影 + 三态账 + 截断字段', async () => {
+    const service = registryWith({
+      selectionRangeProvider: [{ provideSelectionRanges: () => [[
+        { range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 5 } },
+        { range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 10 } },
+      ]] }],
+    });
+    const ui = buildUiSupplemental(fakeDeps({ getFeaturesService: () => service }), null);
+    const out = (await ui.get('lang.selectionRangesAt')!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    expect(out['providers']).toBe(1);
+    expect(out['answered']).toBe(1);
+    expect(out['total']).toBe(1);
+    expect(out['truncated']).toBe(false);
+    expect(out['items']).toEqual([{ ranges: [
+      { line: 1, column: 1, endLine: 1, endColumn: 5 },
+      { line: 1, column: 1, endLine: 1, endColumn: 10 },
+    ] }]);
+  });
+
+  it('lang.selectionRangesAt：无 provider ⇒ 三态诚实（providers:null / answered:0 / items 空），不冒充结果', async () => {
+    const ui = buildUiSupplemental(fakeDeps({ getFeaturesService: () => registryWith({}) }), null);
+    const out = (await ui.get('lang.selectionRangesAt')!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
+    expect(out['providers']).toBeNull();
+    expect(out['answered']).toBe(0);
+    expect(out['items']).toEqual([]);
+    expect(out['total']).toBe(0);
+    expect(out['truncated']).toBe(false);
+  });
+
+  it.each(['read_file_bytes_raw', 'read_files_raw', 'updater_relaunch', 'debug.type', 'debug.actions'])(
+    '刻意不登记：%s 经 runSupplemental ⇒ 显式 NOT_WIRED（不擅自开放二进制帧 / 动作通道）',
+    async (name) => {
+      const { kernel } = fakeKernel();
+      const sup = createRunSupplemental(fakeIoDeps(kernel));
+      await expect(sup(name, {}, scope)).rejects.toMatchObject({ code: 'NOT_WIRED' });
+    },
+  );
 });
 
 /* ------------------------------- resource 数据源 ------------------------------- */
