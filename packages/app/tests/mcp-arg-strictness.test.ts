@@ -92,6 +92,9 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   'semantic.diagnostics': SHARED_LIST, // pagedMarkerReading(markers, args)
   'semantic.documentSymbols': SHARED_LIST, // paginateByCursor(flat.items, …, args)
   'semantic.tokens': ['lineFrom', 'lineTo'], // toPositiveInt(args.lineFrom / args.lineTo)
+  // MCP-PERF-S4（LaneK，2026-11-07）：全项目函数清单（erb.parser byName 索引；直连索引服务，
+  // 无编辑器依赖）——paginateByCursor 走共用闸 ⇒ 整条别名序列 + cursor（腿不读裸 offset）。
+  'semantic.projectSymbols': SHARED_LIST,
 
   /* ---- kernel IO 3 腿（real-sources-io.ts createKernelIo）---- */
   'project.info': [], // 真零参
@@ -119,6 +122,9 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   'commands.list': SHARED_LIST, // paginateByCursor(all, keyOf, args)
   'document.active': SHARED_TEXT, // paginateText(text, args)
   'fs.readFile': ['relPath', ...SHARED_TEXT], // resolveWithinRoot(args.relPath) + paginateText(args)
+  // MCP-PERF-S4（LaneK，2026-11-07）：行区间读——腿读 relPath（resolveWithinRoot）+ 可选 rootId
+  // （resolveWriteRoot 三道拦截）+ startLine/endLine（1 基闭区间；不走共用分页闸 ⇒ 无游标别名）。
+  'fs.readRange': ['relPath', 'rootId', 'startLine', 'endLine'],
   'fs.stat': ['relPath'],
   'io.listDir': ['relPath', ...SHARED_LIST], // relPath + paginateByCursor(args)
   'io.workspaceRoots': SHARED_LIST,
@@ -284,7 +290,7 @@ describe('B11 判据 2 · 面声明的 properties ⊇ 执行腿实际取用的�
 
   it('游标声明逐面同源：每枚分页面的 cursor 形状就是 B1 钉下的那一份（pattern 未被改写）', () => {
     const paged = HOST_SPECS.filter((s) => Object.keys(propsOf(s.name)).includes('cursor'));
-    expect(paged.length).toBe(25); // 24 枚待做 + fs.readMany（B2 出厂即严格）
+    expect(paged.length).toBe(26); // 24 枚待做 + fs.readMany（B2 出厂即严格）+ semantic.projectSymbols（MCP-PERF-S4）
     for (const spec of paged) {
       expect(propsOf(spec.name)['cursor'], `${spec.name} 的 cursor 形状必须与契约面同源`).toEqual(
         PAGE_CURSOR_SCHEMA_PROPS['cursor'],

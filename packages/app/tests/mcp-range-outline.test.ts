@@ -62,8 +62,7 @@ interface FakeParserService {
 }
 
 function fakeKernel(opts: {
-  readonly rootDir?: string;
-  readonly invoke?: McpInvokeLike;
+  readonly rootDir?: string | null;
   readonly parser?: FakeParserService;
 }): McpKernelLike {
   return {
@@ -146,13 +145,13 @@ describe('MCP-PERF-S4 ① 两枚新面进注册表（起手红：面不在册）
 
 describe('MCP-PERF-S4 ② fs.readRange 腿（1 基行区间；越界夹取 + truncated 可见）', () => {
   const run = async (args: Record<string, unknown>, over: Partial<McpIoDeps> = {}): Promise<unknown> => {
-    const kernel = fakeKernel({
-      invoke: (over.invoke as McpInvokeLike | undefined) ?? (async () => 'alpha\nbeta\ngamma'),
-    });
-    return createRunSupplemental({ ...fakeIoDeps(kernel), ...over })(name(args), args, scope);
-    function name(_a: Record<string, unknown>): string {
-      return 'fs.readRange';
-    }
+    const kernel = fakeKernel({});
+    const deps: McpIoDeps = {
+      ...fakeIoDeps(kernel),
+      invoke: (async () => 'alpha\nbeta\ngamma') as McpInvokeLike,
+      ...over,
+    };
+    return createRunSupplemental(deps)('fs.readRange', args, scope);
   };
 
   it('happy path：2..3 行 → 恰两行 {line,text}，totalLines=3，truncated:false，走 read_file_bytes 同一条通道', async () => {
@@ -166,7 +165,7 @@ describe('MCP-PERF-S4 ② fs.readRange 腿（1 基行区间；越界夹取 + tru
         },
       },
     )) as Record<string, unknown>;
-    expect(calls).toEqual([{ cmd: 'read_file_bytes', args: { path: 'D:\\proj\\a.erb' } }]);
+    expect(calls).toEqual([{ cmd: 'read_file_bytes', args: { path: 'D:/proj/a.erb' } }]);
     expect(out['lines']).toEqual([
       { line: 2, text: 'beta' },
       { line: 3, text: 'gamma' },
@@ -180,12 +179,6 @@ describe('MCP-PERF-S4 ② fs.readRange 腿（1 基行区间；越界夹取 + tru
   });
 
   it('CRLF 同口径：\\r\\n 不留尾 \\r，与 Monaco 行号一致', async () => {
-    const out = (await run({
-      relPath: 'a.erb',
-      startLine: 1,
-      endLine: 2,
-    })) as Record<string, unknown>;
-    void out;
     const out2 = (await run(
       { relPath: 'a.erb', startLine: 1, endLine: 2 },
       { invoke: async () => 'one\r\ntwo\r\nthree' },
@@ -258,9 +251,6 @@ describe('MCP-PERF-S4 ② fs.readRange 腿（1 基行区间；越界夹取 + tru
   });
 
   it('项目未打开 ⇒ RESOURCE_UNAVAILABLE（不静默、不空串冒充）', async () => {
-    const kernel = fakeKernel({ rootDir: '', invoke: async () => 'x' });
-    const err = createRunSupplemental(fakeIoDeps(kernel))('fs.readRange', { relPath: 'a.erb', startLine: 1, endLine: 1 }, scope).catch((e) => e);
-    void err;
     const out = await createRunSupplemental(fakeIoDeps(fakeKernel({ rootDir: null })))(
       'fs.readRange',
       { relPath: 'a.erb', startLine: 1, endLine: 1 },

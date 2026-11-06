@@ -5686,3 +5686,137 @@ fn apply_changeset_is_registered_multiroot_write_leg_and_edit_tier() {
         "未批准根必须逐枚拒绝（绝不退回项目根）"
     );
 }
+
+/* ==================================================================== *
+ * MCP-PERF-S4 批（LaneK，2026-11-07）：范围读 + 结构读两枚 read 面
+ *
+ * TRAE 性能分析 P1：「范围读/结构读：read_range（行区间）＋outline（函数列表）必须先有，
+ * 否则 agent 只能整文件读 5 万行」。端点级回归钉三件事：
+ *   ① 两枚都是 `命名空间.动词` 点号形态 ⇒ 宿主按**默认 read** 放行（不点名即 read 是
+ *      既有口径；本批不进 EDIT_TOOLS_EXACT / PRIVILEGED_EXACT，read 会话零批准可调）；
+ *   ② 端到端：read 会话直调两枚都放行到桥，审计 Ok 精确点名、零 Denied（未批准语义
+ *      零变化——本批不给任何既有面新增拦截）；
+ *   ③ `fs.readRange` 收可选 rootId（选域基准根，与写腿同一条三道拦截）⇒ 必须进
+ *      MULTIROOT 端点复核表（防旁路闸对它生效：形状 / PATH_TARGET_FORBIDDEN /
+ *      第四张表精确列名，默认拒绝一字不变）；不在表内的读面带 rootId 照旧被拒。
+ * ==================================================================== */
+
+#[test]
+fn perf_s4_read_range_and_project_symbols_are_read_tier() {
+    assert_eq!(host_required_tier("fs.readRange"), McpTier::Read);
+    assert_eq!(host_required_tier("semantic.projectSymbols"), McpTier::Read);
+    assert!(
+        !EDIT_TOOLS_EXACT.contains(&"fs.readRange"),
+        "fs.readRange 是纯读面，进 EDIT 表＝误升档"
+    );
+    assert!(
+        !EDIT_TOOLS_EXACT.contains(&"semantic.projectSymbols"),
+        "semantic.projectSymbols 是纯读面，进 EDIT 表＝误升档"
+    );
+    assert!(
+        MULTIROOT_WRITE_TOOLS.contains(&"fs.readRange"),
+        "fs.readRange 收可选 rootId ⇒ 必须在端点复核表内，否则防旁路闸对它失效"
+    );
+    // read 会话（零批准）直调两枚：纯函数闸放行（默认拒绝只对 edit/privileged 生效）。
+    let scope = empty_scope(Vec::new());
+    assert!(check_tool_call_permission("fs.readRange", &scope).is_ok());
+    assert!(check_tool_call_permission("semantic.projectSymbols", &scope).is_ok());
+
+    // rootId 防旁路闸照旧：不在表内的读面带 rootId ⇒ INVALID_PARAMS；
+    // fs.readRange 的 rootId 走路径形态拒绝（绝不把 rootId 当任意落点入口）。
+    let p = tool_call("semantic.projectSymbols", json!({"rootId": ROOT_A}));
+    assert_eq!(
+        check_root_id_param(WebMethod::ToolsCall, &p, &scope)
+            .unwrap_err()
+            .code,
+        codes::INVALID_PARAMS
+    );
+    let p = tool_call(
+        "fs.readRange",
+        json!({"relPath": "a.erb", "startLine": 1, "endLine": 2, "rootId": "D:/evil"}),
+    );
+    assert_eq!(
+        check_root_id_param(WebMethod::ToolsCall, &p, &scope)
+            .unwrap_err()
+            .code,
+        codes::PATH_TARGET_FORBIDDEN
+    );
+    // 第四张表批准后 fs.readRange 的合法 rootId 放行（与五枚写腿逐字同尺）。
+    let scope2 = McpSessionScope {
+        tier: McpTier::Read,
+        approved_root_ids: vec![ROOT_A.to_string()],
+        ..empty_scope(Vec::new())
+    };
+    let p = tool_call(
+        "fs.readRange",
+        json!({"relPath": "a.erb", "startLine": 1, "endLine": 2, "rootId": ROOT_A}),
+    );
+    assert!(
+        check_root_id_param(WebMethod::ToolsCall, &p, &scope2).is_ok(),
+        "批准后的合法 rootId 必须放行（读腿与写腿同尺，不另立口径）"
+    );
+}
+
+#[test]
+fn e2e_read_session_calls_read_range_and_project_symbols_via_bridge() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+
+    // ① read 会话零批准直调 fs.readRange：放行到桥（read 档面不新增任何拦截）。
+    let req = r#"{"jsonrpc":"2.0","id":91,"method":"tools/call","params":{"name":"fs.readRange","arguments":{"relPath":"k/a.erb","startLine":2,"endLine":3}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    assert_eq!(payload.params["name"], json!("fs.readRange"));
+    assert_eq!(payload.params["arguments"]["startLine"], json!(2));
+    assert_eq!(payload.params["arguments"]["endLine"], json!(3));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(json!({"content": [{"type": "text", "text": "rows"}]})),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert!(
+        rpc_json(&r)["error"].is_null(),
+        "read 会话调 read 面不许被端点拦"
+    );
+
+    // ② semantic.projectSymbols 同尺：零参调用照常转发。
+    let token2 = s.token.clone();
+    let req2 = r#"{"jsonrpc":"2.0","id":92,"method":"tools/call","params":{"name":"semantic.projectSymbols","arguments":{}}}"#.to_string();
+    let worker2 = std::thread::spawn(move || mcp_post(port, &token2, &req2));
+    let payload2 = s.next_payload();
+    assert_eq!(payload2.scope.tier, McpTier::Read);
+    assert_eq!(payload2.params["name"], json!("semantic.projectSymbols"));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload2.id,
+            ok: true,
+            result: Some(json!({"content": [{"type": "text", "text": "symbols"}]})),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r2 = worker2.join().unwrap();
+    assert!(rpc_json(&r2)["error"].is_null());
+
+    // ③ 审计：两条 Ok 精确点名；本用例零 Denied（未批准语义零变化——两枚 read 面不新拦）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    assert!(rows
+        .iter()
+        .any(|e| e.outcome == AuditOutcome::Ok && e.tool == "fs.readRange"));
+    assert!(rows
+        .iter()
+        .any(|e| e.outcome == AuditOutcome::Ok && e.tool == "semantic.projectSymbols"));
+    assert!(
+        !rows.iter().any(|e| e.outcome == AuditOutcome::Denied),
+        "read 面调用不该产生 Denied 审计"
+    );
+}

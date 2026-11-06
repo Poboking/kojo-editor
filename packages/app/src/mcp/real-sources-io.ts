@@ -244,6 +244,27 @@ export interface McpTaskLegs {
   readonly list: (scope: McpSessionScope) => Promise<unknown>;
 }
 
+/**
+ * `semantic.projectSymbols` 消费的 erb-parser 索引服务**最窄结构投影**
+ * （MCP-PERF-S4，LaneK 2026-11-07）。真源 = `kernel.services.tryGet('erb.parser')`
+ * （与 ui/editor-global-providers.ts 的宿主软取同一条键）；本投影**零插件 import**
+ * ——按结构认（铁律纪律：接口隔离 + 不给 ps10 开机静态图加边），字段缺席逐个判。
+ * `byName.forEachDef` 是 ErbFunctionLookup 的逐定义回调（不建组数组，10 万级名录全量
+ * 遍历的首选口径）。
+ */
+export interface ErbParserServiceLike {
+  readonly currentIndex?: () => unknown;
+  readonly ensureIndex?: () => Promise<unknown>;
+  readonly indexState?: () => unknown;
+}
+
+/** `ErbParserServiceLike.currentIndex()` 产出的索引最窄投影：只用 byName 一条腿。 */
+export interface ErbIndexLike {
+  readonly byName?: {
+    readonly forEachDef?: (cb: (ref: Record<string, unknown>, normalizedName: string) => void) => void;
+  };
+}
+
 /** 宿主真源的窄投影（与 `McpWiringSources` 的 commands 同源）。 */
 export interface McpIoDeps {
   readonly getKernel: () => McpKernelLike | null;
@@ -622,6 +643,17 @@ function fsFreshnessNoBasePayload(target: string, granularity: 'file' | 'listing
 export const MCP_PAGE_TEXT_MAX_CHARS = 65_000;
 /** 文本面单页默认长度（＝旧 `fs.readFile` 的默认 maxChars，零参调用行为逐字不变）。 */
 export const MCP_PAGE_TEXT_DEFAULT_CHARS = 24_000;
+
+/**
+ * 行区间面单批行数硬上限（MCP-PERF-S4，`fs.readRange`）：窗再大也只给 2000 行，
+ * 截尾如实 truncated + hasMore（不是报错）。2000 行 × 行宽与 24_000 字符的文本默认页
+ * 同一量级，宿主不可信串闸内绰绰有余；续取＝startLine 接着上一窗的 endLine+1，无需游标。
+ */
+export const MCP_READ_RANGE_MAX_LINES = 2_000;
+/** 全项目函数清单单页默认条数（与语义列举面 SYMBOL_LIMIT=200 同尺，不放宽既有列举档）。 */
+export const MCP_PROJECT_SYMBOLS_DEFAULT_LIMIT = 200;
+/** 全项目函数清单单页上限（10 万级名录按 1000 条/页 ≈ 十几帧翻完，单页体积仍在响应闸下）。 */
+export const MCP_PROJECT_SYMBOLS_MAX_LIMIT = 1_000;
 
 export function clampInt(v: unknown, fallback: number, min: number, max: number): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : fallback;
@@ -1009,6 +1041,158 @@ export function createRunSupplemental(deps: McpIoDeps): (
       // 之后盘上是否又被动过（真源 = 监视回执 + file.changed 短账，判不了即 null + 理由）。
       // B13：读时复核版——自写回声窗内命中时本次读数即定档（复核做不了仍如实 null）。
       fsFreshness: await fsFreshnessField(deps, abs, rel, scope),
+    };
+  };
+
+  /* ---- MCP-PERF-S4（LaneK，2026-11-07）：fs.readRange 腿（行区间读）----
+   * TRAE 性能分析 P1「范围读必须先有，否则 agent 只能整文件读 5 万行」。判据：
+   *  - 行号 1 基、闭区间，与 Monaco position 同口径；行切分 CRLF/LF/CR（行尾换行
+   *    ⇒ 末行空串，与编辑器行数一致）；行号→内容走 fs.readFile 同一条 read_file_bytes。
+   *  - 路径闸与 fs.readFile 同一条 resolveWithinRoot；可选 rootId 与写腿同一条
+   *    resolveWriteRoot 三道拦截（缺席 ⇒ 项目根零额外 IPC）。
+   *  - 越界与 start>end 照 paginateText 既有语义：越界夹取进 [1, totalLines] 且夹取
+   *    经 truncated + requested 可见；start>end INVALID_ARGS 点名双字段。单批 2000 行
+   *    硬上限（超限夹取截尾，不是报错）——不发明新账。
+   */
+  const readRange = async (
+    args: Record<string, unknown>,
+    scope: McpSessionScope | null | undefined,
+  ): Promise<unknown> => {
+    // 可选 rootId：与写腿同一条三道拦截（形状 / 第四张表精确列名 / workspace_roots 反查）；
+    // 缺席原路返回项目根，一次 IPC 都不多发。relPath 永远相对「选出来的那颗根」解析。
+    const { rootDir, rootId } = await resolveWriteRoot(args, scope as McpSessionScope);
+    const abs = resolveWithinRoot(rootDir, asString(args['relPath']));
+    const rel = toRelativePath(abs, rootDir);
+    const text = await deps.invoke('read_file_bytes', { path: abs });
+    if (typeof text !== 'string') {
+      throw new McpFailure('TOOL_EXECUTION_FAILED', 'read_file_bytes 未返回文本（不静默）');
+    }
+    const startRaw = args['startLine'];
+    const endRaw = args['endLine'];
+    const isLineNo = (v: unknown): v is number =>
+      typeof v === 'number' && Number.isInteger(v) && v >= 1;
+    if (!isLineNo(startRaw) || !isLineNo(endRaw)) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `fs.readRange 的 startLine / endLine 须为 1 基整数（与 Monaco position 同口径，0 基被拒）：` +
+          `startLine=${sanitizeEcho(String(startRaw))}, endLine=${sanitizeEcho(String(endRaw))}`,
+      );
+    }
+    if (startRaw > endRaw) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `fs.readRange 的 startLine (${startRaw}) 大于 endLine (${endRaw})：区间为空。` +
+          '两界都是 1 基闭区间行号；越界交由夹取处理（truncated 可见），方向反了才报错。',
+      );
+    }
+    // 行切分与编辑器同口径：CRLF / LF / CR 都算一次换行；行尾换行 ⇒ 末行空串
+    // （'' 也切出 1 行——空文件在编辑器里就是 1 行，不编造 0 行）。
+    const lines = text.split(/\r\n|\r|\n/);
+    const totalLines = lines.length;
+    const requested = { startLine: startRaw, endLine: endRaw };
+    // 越界夹取（paginateText 裸窗口语义）：夹进 [1, totalLines]，夹取经 truncated + requested 可见。
+    const start = Math.min(Math.max(1, startRaw), totalLines);
+    const endWanted = Math.min(Math.max(1, endRaw), totalLines);
+    // 单批行数硬上限：窗再大也只给 2000 行（响应体积闸留死余量），截尾如实 truncated + hasMore。
+    const end = Math.min(endWanted, start + MCP_READ_RANGE_MAX_LINES - 1);
+    const rows: Record<string, unknown>[] = [];
+    for (let line = start; line <= end; line += 1) {
+      rows.push({ line, text: lines[line - 1] ?? '' });
+    }
+    const truncated = startRaw !== start || endRaw !== end;
+    return {
+      path: rel,
+      ...(rootId !== null ? { rootId } : {}), // 诚实标明本次读的是哪个域基准根
+      lines: rows,
+      startLine: start,
+      endLine: end,
+      requested, // 夹取可见：原始请求原样回显（铁律 4：少给了就说少给了）
+      totalLines,
+      lineCount: rows.length,
+      truncated,
+      hasMore: end < totalLines,
+      maxLinesPerCall: MCP_READ_RANGE_MAX_LINES,
+      fsFreshness: await fsFreshnessField(deps, abs, rel, scope),
+    };
+  };
+
+  /* ---- MCP-PERF-S4（LaneK，2026-11-07）：semantic.projectSymbols 腿（全项目函数清单）----
+   * 走 erb-parser 既有 byName 索引（ErbFunctionLookup.forEachDef，逐定义回调不建组数组），
+   * paginateByCursor 分页。侦察结论：semantic.documentSymbols 的腿依赖 requireWorkspace +
+   * documentSymbolProvider（打开的编辑器）⇒ 抬不成 project 范围；本面直连
+   * kernel.services.tryGet('erb.parser')（currentIndex()/ensureIndex()，与宿主
+   * editor-global-providers 的软取同一条键）——结构类型投影，零插件 import，
+   * 不给开机静态图加边（ps10 纪律）。服务缺席 ⇒ NOT_WIRED 点名；服务在而索引未就绪
+   * ⇒ RESOURCE_UNAVAILABLE，绝不冒充空清单。
+   */
+  const projectSymbols = async (args: Record<string, unknown>): Promise<unknown> => {
+    const kernel = deps.getKernel();
+    const project = requireProject(kernel);
+    const rootDir = asString(project['rootDir']);
+    if (rootDir === '') {
+      throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：函数清单无域基准根（不静默）');
+    }
+    const parser = (kernel ?? (undefined as unknown as McpKernelLike)).services.tryGet<ErbParserServiceLike>('erb.parser');
+    if (!parser || typeof parser.currentIndex !== 'function') {
+      throw new McpFailure(
+        'NOT_WIRED',
+        'semantic.projectSymbols 未接线：内核里没有 erb.parser 索引服务（插件未装配 / 未启用）——不静默、不伪造空清单',
+      );
+    }
+    let index = (parser.currentIndex() ?? null) as ErbIndexLike | null;
+    if (!index && typeof parser.ensureIndex === 'function') {
+      // 索引还没产出（刚开项目 / 首次调用）：跟宿主 use-project-session 同一条 ensureIndex
+      // 语义——在途构建直接共享，没起跑才起跑。取不到仍显式失败，不空表冒充。
+      index = ((await parser.ensureIndex()) ?? null) as ErbIndexLike | null;
+    }
+    if (!index || typeof index.byName?.forEachDef !== 'function') {
+      throw new McpFailure(
+        'RESOURCE_UNAVAILABLE',
+        'ERB 索引未就绪（无项目打开或构建尚未产出索引）——不伪造空清单，请稍后重试',
+      );
+    }
+    const state = typeof parser.indexState === 'function' ? parser.indexState() : null;
+    const items: Record<string, unknown>[] = [];
+    index.byName.forEachDef((ref) => {
+      const filePath = typeof ref['filePath'] === 'string' ? ref['filePath'] : '';
+      const name = typeof ref['name'] === 'string' ? ref['name'] : '';
+      const startLine = typeof ref['startLine'] === 'number' ? ref['startLine'] : 0;
+      if (filePath === '' || name === '' || !(startLine >= 1)) return; // 脏行丢弃（total 含脏行账在 paginate 外）
+      items.push({
+        name,
+        path: toRelativePath(filePath, rootDir),
+        startLine,
+        endLine: typeof ref['endLine'] === 'number' ? ref['endLine'] : startLine,
+        ...(typeof ref['nameColumn'] === 'number' ? { nameColumn: ref['nameColumn'] } : {}),
+      });
+    });
+    const p = paginateByCursor(
+      items,
+      (it, i) => `${String(it['path'])}|${String(it['name'])}|${String(it['startLine'])}|#${i}`,
+      args,
+      { defaultLimit: MCP_PROJECT_SYMBOLS_DEFAULT_LIMIT, maxLimit: MCP_PROJECT_SYMBOLS_MAX_LIMIT },
+    );
+    const s = (state ?? {}) as Record<string, unknown>;
+    return {
+      items: p.page,
+      total: p.total,
+      truncated: p.truncated,
+      offset: p.offset,
+      limit: p.limit,
+      hasMore: p.hasMore,
+      nextCursor: p.nextCursor,
+      fingerprint: p.fingerprint,
+      ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
+      // 索引事实（additive）：覆盖形状与规模由提供方陈述，缺席如实 null（不编造读数）。
+      index:
+        typeof s['phase'] === 'string'
+          ? {
+              phase: s['phase'],
+              coverage: s['coverage'] ?? null,
+              filesScanned: typeof s['filesScanned'] === 'number' ? s['filesScanned'] : null,
+              functions: typeof s['functions'] === 'number' ? s['functions'] : null,
+            }
+          : null,
     };
   };
 
@@ -1876,6 +2060,9 @@ export function createRunSupplemental(deps: McpIoDeps): (
   const ioTools = new Map<string, (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown> | unknown>([
     ['commands.list', commandsList],
     ['fs.readFile', readFile],
+    // MCP-PERF-S4 批（LaneK，2026-11-07）：行区间读（1 基、Monaco 同口径；越界夹取 + truncated
+    // 可见，start>end INVALID_ARGS 点名；路径闸同 fs.readFile，可选 rootId 同写腿三道拦截）。
+    ['fs.readRange', readRange],
     ['fs.stat', statFile],
     ['io.listDir', listDir],
     ['io.workspaceRoots', workspaceRoots],
@@ -1940,6 +2127,9 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['launcher_project_hash', launcherProjectHash],
     ['launcher_start', launcherStart],
     ['launcher_stop', launcherStop],
+    // MCP-PERF-S4 批（LaneK，2026-11-07）：全项目函数清单（直连 erb.parser 的 byName 索引，
+    // 无编辑器依赖；paginateByCursor 分页；服务缺席 NOT_WIRED、索引未就绪 RESOURCE_UNAVAILABLE）。
+    ['semantic.projectSymbols', projectSymbols],
   ]);
 
   return async (name, args, scope) => {

@@ -2059,6 +2059,64 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
   },
+
+  /* ---- MCP-PERF-S4（LaneK，2026-11-07）：范围读（行区间）----
+   * TRAE 性能分析 P1：「范围读/结构读：read_range（行区间）＋outline（函数列表）必须先有，
+   * 否则 agent 只能整文件读 5 万行」。本面＝fs.readFile 的行号投影：1 基行号与 Monaco
+   * position 同口径；行号→内容走 fs.readFile 同一条读取通道；路径闸同一条 resolveWithinRoot
+   * （根内相对路径），可选 rootId 与写腿同一条 resolveWriteRoot 三道拦截（缺席 ⇒ 项目根
+   * 零额外 IPC；给了 ⇒ 形状 + 第四张表精确列名 + workspace_roots 反查，默认拒绝一字不变）。
+   * 越界与 start>end 的账照 paginateText 既有语义：越界夹取 + truncated 可见、start>end
+   * INVALID_ARGS 点名——不发明新账。零写、零新授权面。
+   */
+  {
+    name: 'fs.readRange',
+    description:
+      'Read a LINE RANGE of one file inside the authorized project root (read-only) - the line-addressed projection of fs.readFile for large files: read a 50,000-line file window by window instead of whole. ' +
+      '`relPath` MUST be a project-root-relative path (same gate as fs.readFile: the schema rejects absolute paths, drive letters and ".." traversal, and the execution layer re-checks the resolution); optional `rootId` selects one explicitly approved persistent workspace root instead of the project root (enumerate via io.workspaceRoots; human approval required; omit to stay on the project root). ' +
+      '`startLine` / `endLine` are 1-BASED and INCLUSIVE, matching Monaco positions (line 1 is the first line). Lines split on CRLF/LF/CR, so a trailing newline yields a final empty line exactly like the editor. The reply lists {line, text} pairs plus the account: `totalLines` is the FULL line count of the file, `lineCount` the returned rows, `hasMore` whether lines remain after `endLine` (continue with startLine = returned endLine + 1 - no cursor needed), and `requested` echoes the raw bounds so clamping is visible. ' +
+      'Out-of-range bounds are clamped into [1, totalLines] and the clamp is VISIBLE via truncated + requested (window semantics, never silent); `startLine > endLine` is rejected with INVALID_ARGS naming both fields. One call returns at most 2000 lines (hard batch cap; a larger window is cut at the cap with truncated:true, not an error). ' +
+      'Never writes to disk. For character-precise windows or cursors use fs.readFile.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPath: RELATIVE_PATH_SCHEMA,
+        rootId: ROOT_ID_SCHEMA,
+        startLine: { type: 'integer', minimum: 1, description: '1-based first line of the window (Monaco position line; 0-based values are rejected).' },
+        endLine: { type: 'integer', minimum: 1, description: '1-based LAST line of the window, inclusive. Clamped down to the file end; a window larger than the batch cap is cut at the cap.' },
+      },
+      required: ['relPath', 'startLine', 'endLine'],
+      additionalProperties: false,
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+
+  /* ---- MCP-PERF-S4（LaneK，2026-11-07）：结构读（全项目函数清单）----
+   * 走 erb-parser 既有 byName 索引（99,975 函数单扫 3.88ms 的那份），paginateByCursor 分页，
+   * 无编辑器依赖。侦察结论（本批现取）：semantic.documentSymbols 的腿依赖 requireWorkspace
+   * （打开的编辑器 + documentSymbolProvider 注册表）⇒ 抬不成 project 范围，本面直连
+   * kernel.services.tryGet('erb.parser') 的 currentIndex()/ensureIndex()（与宿主
+   * editor-global-providers 的软取同一条键，零插件 import）。它没有对应的 rust/debug
+   * 缺口名 ⇒ 按 editor.openDocument 先例不进 MCP_TOOL_GAP_MAP（硬造会被盘点判
+   * orphanedWires 假绿），判性记在这里。零写：索引由宿主建、本面只读。
+   */
+  {
+    name: 'semantic.projectSymbols',
+    description:
+      'List EVERY function definition in the open project from the ERB index (read-only, no editor needed) - the project-wide counterpart of semantic.documentSymbols, which needs an open editor and only answers for the active document. ' +
+      'Each item is {name, path (project-root-relative), startLine, endLine} plus `nameColumn` when the index has it; read the body with fs.readRange on that path. ' +
+      'Paged with `limit` + `cursor` (page size ONE knob, see the inputSchema `limit` description); the completeness account {total, offset, limit, truncated, hasMore, nextCursor, fingerprint} rides on every page, pass nextCursor back verbatim, and a snapshot change mid-paging restarts at page 0 as changedDuringPaging instead of splicing. Zero-arg call = first page. ' +
+      '`index` repeats the provider\'s own state facts {phase, coverage, filesScanned, functions} so a degraded or still-scanning index is visible instead of silent - do not treat a `partial` coverage list as the whole project. ' +
+      'The surface never mutates anything: the index is built once by the host and only read here.',
+    inputSchema: {
+      type: 'object',
+      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      additionalProperties: false,
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
 ];
 
 /**

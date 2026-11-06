@@ -95,17 +95,17 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const RUST_MAX_DESCRIPTION_CHARS = 2048;
 
 describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场算，非估算）', () => {
-  it('① 可见面枚数与 STATE 能力面读数同源：78＝read 37 / edit 12 / privileged 29（MCP-PERF-S3 批 +1 枚 fileTree.applyChangeset）', () => {
-    expect(fullFace).toHaveLength(78);
-    expect(readFace).toHaveLength(37);
-    expect(editFace).toHaveLength(49); // read + edit；privileged 未点名批准 ⇒ 不上帧
+  it('① 可见面枚数与 STATE 能力面读数同源：80＝read 39 / edit 12 / privileged 29（MCP-PERF-S4 批 +2 枚 read：fs.readRange / semantic.projectSymbols）', () => {
+    expect(fullFace).toHaveLength(80);
+    expect(readFace).toHaveLength(39);
+    expect(editFace).toHaveLength(51); // read + edit；privileged 未点名批准 ⇒ 不上帧
     const byTier = fullFace.reduce<Record<string, number>>((a, t) => {
       a[t.tier] = (a[t.tier] ?? 0) + 1;
       return a;
     }, {});
-    expect(byTier).toEqual({ read: 37, edit: 12, privileged: 29 });
+    expect(byTier).toEqual({ read: 39, edit: 12, privileged: 29 });
     // 缺省会话（未批准任何 privileged）只出 read 面——默认可见面不是全量面。
-    expect(registry.listTools(scope('read'))).toHaveLength(37);
+    expect(registry.listTools(scope('read'))).toHaveLength(39);
   });
 
   it('② 全量帧落在 B22 实拍带内（±10% 上界护栏）且不低于 B22 记账下界', () => {
@@ -278,8 +278,9 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
       return acc;
     };
     const relPathHosts = fullFace.flatMap((t) => schemaDescHits(t, 'ADR-0003'));
-    // B22 实拍 15 处；MCP-PERF-S3 批 +1（fileTree.applyChangeset 携带同一条共用形状说明）。
-    expect(relPathHosts.length).toBe(16);
+    // B22 实拍 15 处；MCP-PERF-S3 批 +1（fileTree.applyChangeset）；MCP-PERF-S4 批 +1
+    // （fs.readRange 的 relPath 与 fs.readFile 同一条 RELATIVE_PATH_SCHEMA 共用形状说明）。
+    expect(relPathHosts.length).toBe(17);
     for (const d of relPathHosts) {
       for (const token of ['Project-root-relative', 'absolute', 'drive-letter', '".."', 'approvedRoots', 'ADR-0003']) {
         expect(d, `相对路径说明丢了 ${token}`).toContain(token);
@@ -295,9 +296,13 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
   });
 
   it('⑧ 分档读数上界（与 B22 回执同源）：红了就知道是哪一档变了', () => {
-    expect(descBytes).toBeLessThanOrEqual(60_000); // B21 实拍 64,851
-    expect(schemaBytes).toBeLessThanOrEqual(105_000); // B21 实拍 143,762
-    expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323
+    // MCP-PERF-S4（LaneK 2026-11-07）+2 枚 read 面（fs.readRange / semantic.projectSymbols）重钉：
+    // desc 60,000 → 63,000（实拍 62,507，+2,507＝两枚面的诚实描述）；schema 105,000 → 106,500
+    // （实拍 105,841，+841＝readRange 的 relPath/rootId/行界入参 + projectSymbols 的共用分页腿）；
+    // launcher / 帧带不动（frame 实拍 178,973，仍在 B22 带 ±10% 内）。
+    expect(descBytes).toBeLessThanOrEqual(63_000); // B21 实拍 64,851；MCP-PERF-S4 实拍 62,507
+    expect(schemaBytes).toBeLessThanOrEqual(106_500); // B21 实拍 143,762；MCP-PERF-S4 实拍 105,841
+    expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；MCP-PERF-S4 实拍 73,706
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });
 });
