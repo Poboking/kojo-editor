@@ -661,6 +661,7 @@ export function SettingsAi({
                       type="button"
                       className="small"
                       disabled={revokeDisabled}
+                      title="撤销会话授权（mcp_revoke）"
                       onClick={() => onRevoke(c.clientId)}
                     >
                       撤销

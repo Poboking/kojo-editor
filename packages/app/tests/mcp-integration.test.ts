@@ -653,9 +653,12 @@ describe('⑦ AiAccessSection：4 个命令名 / 投影 / 失败不静默', () =
     expect(calls.some((c) => c.cmd === 'mcp_scope_query')).toBe(true);
     expect(calls.some((c) => c.cmd === 'mcp_audit_query')).toBe(true);
 
-    // 撤销按钮：点击 ⇒ mcp_revoke（clientId 来自第四张表投影）
+    // 撤销按钮：点击 ⇒ mcp_revoke（clientId 来自第四张表投影）。
+    // UI-14（2026-11-07）把撤销做进已授权会话列表行、文案改人话「撤销」
+    // （mcp_revoke 命令名收进 title）。本判据认 title 里的命令名而非按钮字面量：
+    // 全页唯一含 mcp_revoke 的 title，不会误命中未来其它「撤销」类按钮（Lane A/C 共识）。
     const buttons = [...container.querySelectorAll('button')];
-    const revokeBtn = buttons.find((b) => (b.textContent ?? '').includes('mcp_revoke'));
+    const revokeBtn = buttons.find((b) => (b.getAttribute('title') ?? '').includes('mcp_revoke'));
     expect(revokeBtn, '应有撤销会话按钮').toBeDefined();
     await act(async () => {
       revokeBtn!.click();
