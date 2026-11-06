@@ -280,6 +280,11 @@ const BOM_EMIT_SITES: ReadonlyArray<{ readonly file: string; readonly count: num
     why: 'encode_string_of 的 utf-8-bom 分支（workspace-source 那一行的字节产生处）',
   },
   {
+    file: 'packages/app/src-tauri/src/search_index.rs',
+    count: 1,
+    why: '读侧判 BOM 字节表（MCP-PERF-S1 trigram 指纹）：`bytes.starts_with(&UTF8_BOM)` 判 utf8_no_bom，BOM 会让行偏移表的"字节偏移≠文本偏移"故带 BOM 文件不建表、不可宽筛；不产出字节（S1 预存红销账 2026-11-07 对表，读数：全仓扫描 23 处 == 表 23 条）',
+  },
+  {
     file: 'packages/kernel/src/encoding.ts',
     count: 1,
     why: 'withUtf16Bom：UTF-16 写回补 BOM（与三条 UTF-8 路无关，但同样是"会产生 BOM"的点）',
