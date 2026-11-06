@@ -38,7 +38,7 @@ describe('collectUndefinedNameDiagnostics · 真阳性', () => {
       {
         line: 1,
         severity: 'warning',
-        message: '未定义的名称「UNDEFINED_VAR」：不在已知声明（#DIM / 局部 / 内置 / 引擎全局）中。',
+        message: '未定义的名称「UNDEFINED_VAR」：这里没有它的声明（#DIM 声明与局部声明都不含它）——改成已有的名字，或先把它声明出来。',
         startColumn: 4,
         endColumn: 17,
         code: ERB_UNDEFINED_NAME,
@@ -91,7 +91,7 @@ describe('collectUndefinedNameDiagnostics · 真阳性', () => {
       {
         line: 4,
         severity: 'warning',
-        message: '未定义的名称「P1」：不在已知声明（#DIM / 局部 / 内置 / 引擎全局）中。',
+        message: '未定义的名称「P1」：这里没有它的声明（#DIM 声明与局部声明都不含它）——改成已有的名字，或先把它声明出来。',
         startColumn: 4,
         endColumn: 6,
         code: ERB_UNDEFINED_NAME,

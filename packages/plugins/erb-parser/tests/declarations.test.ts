@@ -56,15 +56,15 @@ describe('dimLineViolations · 六条硬规则', () => {
   };
 
   it('名字撞引擎指令名 ⇒ error（引擎侧是致命档，整个文件加载失败）', () => {
-    expect(check('#DIM PRINT')[0]).toContain('引擎内建指令名');
-    expect(check('#DIM INPUT, 3')[0]).toContain('引擎内建指令名');
+    expect(check('#DIM PRINT')[0]).toContain('已经是指令名');
+    expect(check('#DIM INPUT, 3')[0]).toContain('已经是指令名');
     expect(check('#DIM REF PRINT')).toHaveLength(1); // 修饰词先剥掉，判的是变量名
-    expect(check('#DIMS VARSET, 3')[0]).toContain('引擎内建指令名');
+    expect(check('#DIMS VARSET, 3')[0]).toContain('已经是指令名');
   });
 
   it('名字撞内建式中函数名（exmeth）同样致命', () => {
-    expect(check('#DIM MAX')[0]).toContain('引擎内建式中函数名');
-    expect(check('#DIMS STRLENS')[0]).toContain('引擎内建式中函数名');
+    expect(check('#DIM MAX')[0]).toContain('已经是内建式中函数名');
+    expect(check('#DIMS STRLENS')[0]).toContain('已经是内建式中函数名');
   });
 
   it('引擎里被配置门控的 `VARS` / `VARI` 不算指令（eraSQC / eraSQN 真这么写且能加载）', () => {
@@ -86,7 +86,7 @@ describe('dimLineViolations · 六条硬规则', () => {
 
   it('维数超过 3 维', () => {
     expect(check('#DIM X:1:2:3')).toEqual([]);
-    expect(check('#DIM X:1:2:3:4')[0]).toContain('最多 3 维');
+    expect(check('#DIM X:1:2:3:4')[0]).toContain('最多只能 3 维');
   });
 
   it('CONST 必须有初值', () => {
