@@ -1054,12 +1054,28 @@ pub const EDIT_TOOL_PREFIXES: &[&str] = &[
 /// - 只读读数面（`tasks.status` 与 `kojo://tasks`）刻意**不进本表**：纯读、按会话过滤，
 ///   判 read 是对的，不必加表。
 /// privileged 名单不受影响（冻结契约：具名面只有 remove/rename 是 privileged）。
+///
+/// B3 批（LaneO 2026-11-06）追加 `editor.*` 五枚——**同一型洞的第二批，理由逐字相同**：
+/// `editor.setValue` / `editor.type` / `editor.setCursor` / `editor.setSelection` /
+/// `editor.revealLine` 都是 `命名空间.动词` 点号形态，既不命中 `EDIT_TOOL_PREFIXES`
+/// （表里是 `set_` `format_` 这类**下划线**动词前缀，`editor.setCursor` 以 `editor.` 开头，
+/// `starts_with` 不成立），也不在 `PRIVILEGED_EXACT` ⇒ 不点名则 `host_required_tier()`
+/// 落到末尾 `McpTier::Read`，**read 会话零批准即可改正文 / 挪光标**。
+/// 前五枚中 `editor.type` 的 "type" 也不是表内前缀（表里没有 `type_`），同样必须点名。
+/// 五枚在 WebView 契约（`SUPPLEMENTAL_TOOL_SPECS`）里即 `tier: 'edit'`，本表只是把端点侧
+/// 判定与契约对齐；`editor.format` 本批未接线（异步 provider 通道），故**不登记**——
+/// 缺席的工具名不提前点名，保持「未登记 ⇒ 不接线」的口径。
 pub const EDIT_TOOLS_EXACT: &[&str] = &[
     "fileTree.create",
     "fileTree.update",
     "problems.quickFix",
     "tasks.start",
     "tasks.cancel",
+    "editor.setValue",
+    "editor.type",
+    "editor.setCursor",
+    "editor.setSelection",
+    "editor.revealLine",
 ];
 
 pub fn is_edit_tool(name: &str) -> bool {

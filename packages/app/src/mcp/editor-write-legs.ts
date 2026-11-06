@@ -24,7 +24,9 @@
  * 诚实回报（铁律 4）：每次成功都回 `{applied:true, dirty:<模型脏态>, saved:false}`——
  * **本腿只改 Monaco 模型，磁盘一个字节都没动**（落盘仍是 `fileTree.update` + 第四张表
  * `approvedRoots` × 内核 `writablePaths` 双闸那条唯一法定通道；铁律 5/6/7：**零新增写盘通道**）。
- * 脏态读不到（假件 / 老版本没有 `isDirty`）⇒ `dirty:null` + `dirtyReason`，不编造 `false`。
+ * 脏态读数走 pane 的**写后反查** `readDirty`（生产 = `EditorPane.tsx` 的 `computeDirty` 同一个
+ * 表达式：`model.getAlternativeVersionId() !== editorModelPool.baseline(path)`；monaco 0.57 的
+ * `ITextModel` 没有 `isDirty`，全仓 grep 实证）；两条路都拿不到 ⇒ `dirty:null` + `dirtyReason`，不编造。
  * 回读核对失败 ⇒ 显式 `[E_EDITOR_APPLY_UNVERIFIED]`，不冒充成功。
  *
  * 档位：五枚全 `edit`。内容写自不必说；光标与视口副作用也按 edit 收口——它们改的是**用户
@@ -54,6 +56,19 @@ export interface EditorWritePaneHandle {
   readonly sugarModel: unknown;
   /** pane 当前文件路径（只作回报读数；读不到 ⇒ null，不拿来当判据）。 */
   readonly path: string | null;
+  /**
+   * **写后**脏态反查（可选 seam，生产由 `productionResolveEditorPane` 给）。
+   *
+   * 为什么要有这一位：monaco-editor 0.57 的 `ITextModel` **没有** `isDirty()`（全仓 grep 实证，
+   * 只有 GPU renderer 的 `dirtyTracker.isDirty`，与文档脏态无关）⇒ 光读 model 永远拿不到脏态。
+   * 本仓的脏判定唯一真源在 `EditorPane.tsx` 的 `computeDirty`：
+   * `entry.model.getAlternativeVersionId() !== editorModelPool.baseline(path)`（BUG-4 的 O(1) 口径，
+   * 基线随池走）。生产反查就复用**这同一个表达式**，不另立第二份脏账（复制 ref＝影子，
+   * 见 `ui/editor-pane-registry.ts` 模块头两条不许动的语义）。
+   * 返回 `null` = 无从判定（池里没有这条路径 / 基线未立），回报如实 `dirty:null` + 理由，
+   * 绝不编造 `false`（铁律 4）。测试假件可缺席 ⇒ 退化读 `model.isDirty`。
+   */
+  readonly readDirty?: () => boolean | null;
 }
 
 export type EditorWritePaneResolver = (
@@ -92,15 +107,15 @@ function modelOf(editor: unknown): DebugEditModelLike | null {
   return model && typeof model === 'object' ? (model as DebugEditModelLike) : null;
 }
 
-function lineCountOf(model: DebugEditModelLike): number | null {
-  const fn = (model as unknown as { getLineCount?: () => unknown }).getLineCount;
+function lineCountOf(model: DebugEditModelLike | null): number | null {
+  const fn = (model as unknown as { getLineCount?: () => unknown } | null)?.getLineCount;
   if (typeof fn !== 'function') return null;
   const n = fn.call(model);
   return typeof n === 'number' && Number.isFinite(n) && n >= 1 ? Math.floor(n) : null;
 }
 
-function maxColumnOf(model: DebugEditModelLike, line: number): number | null {
-  const fn = (model as unknown as { getLineMaxColumn?: (l: number) => unknown }).getLineMaxColumn;
+function maxColumnOf(model: DebugEditModelLike | null, line: number): number | null {
+  const fn = (model as unknown as { getLineMaxColumn?: (l: number) => unknown } | null)?.getLineMaxColumn;
   if (typeof fn !== 'function') return null;
   const n = fn.call(model, line);
   return typeof n === 'number' && Number.isFinite(n) && n >= 1 ? Math.floor(n) : null;
@@ -130,11 +145,38 @@ function rangeOf(editor: unknown): EditorRange | null {
   };
 }
 
-/** 模型脏态（回报读数）：读不到 ⇒ `null` + 如实理由，绝不编造「不脏」。 */
-function dirtyOf(model: DebugEditModelLike | null): { dirty: boolean | null; dirtyReason?: string } {
+/**
+ * 模型脏态（回报读数）：先走 pane 的**写后**反查（生产 = `computeDirty` 同一表达式），
+ * 缺席才退化读 `model.isDirty`（0.57 真 Monaco 没有这一位 ⇒ 继续往下），
+ * 两条都拿不到 ⇒ `null` + 如实理由，绝不编造「不脏」。
+ */
+function dirtyOf(
+  model: DebugEditModelLike | null,
+  readDirty?: () => boolean | null,
+): { dirty: boolean | null; dirtyReason?: string } {
+  if (readDirty) {
+    try {
+      const v = readDirty();
+      if (v === null || v === undefined) {
+        return {
+          dirty: null,
+          dirtyReason: '脏态反查无从判定（模型池里没有这条路径 / 保存基线未立）：不编造脏态',
+        };
+      }
+      return { dirty: v === true };
+    } catch (err: unknown) {
+      return { dirty: null, dirtyReason: `脏态反查抛错：${err instanceof Error ? err.message : String(err)}` };
+    }
+  }
   if (!model) return { dirty: null, dirtyReason: '编辑器当前没有 model，脏态无从可取' };
   const fn = (model as unknown as { isDirty?: () => unknown }).isDirty;
-  if (typeof fn !== 'function') return { dirty: null, dirtyReason: '当前 model 未提供 isDirty 读数，不编造脏态' };
+  if (typeof fn !== 'function') {
+    return {
+      dirty: null,
+      dirtyReason:
+        '当前 model 未提供 isDirty 读数、pane 也没挂脏态反查（monaco 0.57 的 ITextModel 无 isDirty）：不编造脏态',
+    };
+  }
   try {
     const v = fn.call(model);
     if (typeof v === 'boolean') return { dirty: v };
@@ -237,9 +279,11 @@ function successReport(input: {
   model: DebugEditModelLike | null;
   readOnly: boolean;
   undo: string;
+  /** pane 的写后脏态反查（生产真源）；缺席 ⇒ 退化读 model.isDirty。 */
+  readDirty?: () => boolean | null;
   extra?: Record<string, unknown>;
 }): Record<string, unknown> {
-  const { dirty, dirtyReason } = dirtyOf(input.model);
+  const { dirty, dirtyReason } = dirtyOf(input.model, input.readDirty);
   return {
     applied: true,
     tool: input.tool,
@@ -264,34 +308,72 @@ interface EditorWritePaneCtxLike {
   editorRef: { current: unknown };
   sugarModelRef: { current: unknown };
   filePathRef: { current: string };
+  /** 本实例的标签池（`path → { model }`）——脏态基线比较的就是这条 model。 */
+  entriesRef: { current: Map<string, { model?: { getAlternativeVersionId?: () => number } }> };
 }
 
-let livePanesPromise: Promise<Map<string, EditorWritePaneCtxLike> | null> | null = null;
+interface EditorModelPoolLike {
+  baseline: (path: string) => number | undefined;
+}
 
-function loadLivePanes(): Promise<Map<string, EditorWritePaneCtxLike> | null> {
-  livePanesPromise ??= (async () => {
+interface EditorWriteRuntime {
+  panes: Map<string, EditorWritePaneCtxLike> | null;
+  pool: EditorModelPoolLike | null;
+}
+
+let runtimePromise: Promise<EditorWriteRuntime> | null = null;
+
+/** ui/* 运行时（登记簿 + 模型池）只在执行时动态 import（ps10 纪律，与 quick-fix.ts 同款）。 */
+function loadEditorWriteRuntime(): Promise<EditorWriteRuntime> {
+  runtimePromise ??= (async () => {
     try {
-      const mod = await import('../ui/editor-pane-registry');
-      return mod.livePanes as unknown as Map<string, EditorWritePaneCtxLike>;
+      const [registry, poolInstance] = await Promise.all([
+        import('../ui/editor-pane-registry'),
+        import('../ui/editor-model-pool-instance'),
+      ]);
+      return {
+        panes: registry.livePanes as unknown as Map<string, EditorWritePaneCtxLike>,
+        pool: poolInstance.editorModelPool as unknown as EditorModelPoolLike,
+      };
     } catch {
-      return null;
+      return { panes: null, pool: null };
     }
   })();
-  return livePanesPromise;
+  return runtimePromise;
 }
 
-/** 生产 pane 反查：`livePanes`（模块级登记簿）按 id 取那一份**同一 ref 壳**里的编辑器。 */
+/**
+ * 生产 pane 反查：`livePanes`（模块级登记簿）按 id 取那一份**同一 ref 壳**里的编辑器。
+ * 脏态反查复用 `EditorPane.tsx` 的 `computeDirty` **同一个表达式**
+ * （`entry.model.getAlternativeVersionId() !== editorModelPool.baseline(path)`，BUG-4 口径）——
+ * 不另立第二份脏账，也不读 monaco 没有的 `isDirty`。
+ */
 export async function productionResolveEditorPane(paneId: string): Promise<EditorWritePaneHandle | null> {
-  const panes = await loadLivePanes();
+  const runtime = await loadEditorWriteRuntime();
+  const panes = runtime.panes;
   if (!panes) return null;
   const ctx = panes.get(paneId);
   if (!ctx) return null;
   const editor = ctx.editorRef.current;
   if (!editor) return null;
+  const path = typeof ctx.filePathRef?.current === 'string' && ctx.filePathRef.current !== ''
+    ? ctx.filePathRef.current
+    : null;
+  const pool = runtime.pool;
+  const readDirty = (): boolean | null => {
+    if (!pool || path === null) return null;
+    const baseline = pool.baseline(path);
+    if (baseline === undefined) return null;
+    const pooled = ctx.entriesRef?.current?.get(path)?.model;
+    const version = pooled?.getAlternativeVersionId;
+    if (!pooled || typeof version !== 'function') return null;
+    return version.call(pooled) !== baseline;
+  };
   return {
     editor,
     sugarModel: ctx.sugarModelRef?.current ?? null,
-    path: typeof ctx.filePathRef?.current === 'string' && ctx.filePathRef.current !== '' ? ctx.filePathRef.current : null,
+    path,
+    readDirty,
   };
 }
 
@@ -356,6 +438,7 @@ export function createEditorSetValueLeg(deps: McpEditorWriteDeps = {}): McpReade
       path: handle.path,
       model,
       readOnly,
+      readDirty: handle.readDirty,
       undo: 'model.setValue 不进撤销栈（与调试面同一判据，见 install-debug.ts applyTypedEdit 注释）：要「可一步退回」的改法用 editor.type。',
       extra: {
         charLengthBefore: lengthBefore,
@@ -405,6 +488,7 @@ export function createEditorTypeLeg(deps: McpEditorWriteDeps = {}): McpReaderFn 
       path: handle.path,
       model,
       readOnly,
+      readDirty: handle.readDirty,
       undo: '单次 executeEdits（前后停点 = 一个撤销步，Ctrl+Z 一次退回）；本腿不落盘。',
       extra: {
         insertedChars: text.length,
@@ -473,6 +557,7 @@ export function createEditorSetCursorLeg(deps: McpEditorWriteDeps = {}): McpRead
       path: handle.path,
       model: model ?? null,
       readOnly,
+      readDirty: handle.readDirty,
       undo: '光标移动不是文档编辑：不进撤销栈、不改正文；本腿不落盘。',
       extra: {
         requested,
@@ -555,6 +640,7 @@ export function createEditorSetSelectionLeg(deps: McpEditorWriteDeps = {}): McpR
       path: handle.path,
       model,
       readOnly,
+      readDirty: handle.readDirty,
       undo: '选区是编辑器状态，不是文档编辑：不进撤销栈、不改正文；本腿不落盘。',
       extra: {
         requested,
@@ -630,6 +716,7 @@ export function createEditorRevealLineLeg(deps: McpEditorWriteDeps = {}): McpRea
       path: handle.path,
       model,
       readOnly,
+      readDirty: handle.readDirty,
       undo: '视口滚动不是文档编辑：不进撤销栈、不改正文；本腿不落盘。',
       extra: {
         requestedLine: line,

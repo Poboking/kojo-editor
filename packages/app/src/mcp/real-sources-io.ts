@@ -61,6 +61,10 @@ import type {
 } from '@kojo/mcp-host';
 import type { CommandEntry } from '../ui/commands';
 import { createQuickFixApplyLeg, type QuickFixPaneResolver } from './quick-fix';
+// B3 批（LaneO，2026-11-06）：编辑器写 / 光标副作用五枚具名工具的执行腿。
+// 真源 = debug/install-debug.ts 已实现并测过的同一批腿；与调试面唯一差别是 MCP 面**没有
+// 「当前聚焦」语义**，一律按 paneId 显式反查（见 editor-write-legs.ts 模块头判性）。
+import { createEditorWriteLegs, type EditorWritePaneResolver } from './editor-write-legs';
 import {
   fsFreshnessAbsentPayload,
   fsFreshnessPayload,
@@ -168,6 +172,12 @@ export interface McpIoDeps {
   readonly searchInFiles: (request: McpSearchRequestLike) => Promise<McpSearchResultLike>;
   /** `problems.quickFix` 的 pane 反查 seam（缺席 ⇒ 生产动态 import 解析，见 quick-fix.ts）。 */
   readonly getQuickFixPane?: QuickFixPaneResolver;
+  /**
+   * `editor.*` 五枚（setValue / type / setCursor / setSelection / revealLine）的 pane 反查 seam
+   * （B3 批，LaneO 2026-11-06）。缺席 ⇒ 生产动态 import `livePanes` 解析（见 editor-write-legs.ts）。
+   * 本面**不设「当前聚焦编辑器」兜底**：paneId 不在册即显式 `NOT_WIRED`（铁律 4：不静默迁移到别的 pane）。
+   */
+  readonly getEditorPane?: EditorWritePaneResolver;
   /**
    * 外部写盘失效判定器（Wave4 余项 ③；生产由 `real-sources.ts` 绑定内核后给到，
    * 测试可注入或缺席）。缺席 ⇒ 只读应答仍附 `fsFreshness`，值如实为
@@ -630,6 +640,9 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
  * 写命令绕开内核写允许域），前面叠第四张表 approvedRoots 复核（见模块头注释），绝不新建旁路
  * 写通道。`problems.quickFix` 与暂无真源的（diff.compare / state.replay / preview.document）由
  * default 分支显式报 `NOT_WIRED`——不擅自开放执行、不造假实现。
+ * B3 批（LaneO 2026-11-06）另登记 `editor.*` 五枚：它们改的是 **Monaco 模型 / 编辑器状态**，
+ * 不经 `kernel.io`、不碰磁盘，因此不落入上面这条「写腿一律走编辑器既有写通道」的闸——
+ * 落盘仍只有 `fileTree.update` 双闸与 `exportFile` 对话框两条法定路（铁律 5/6/7 零新增写盘通道）。
  */
 export function createRunSupplemental(deps: McpIoDeps): (
   name: string,
@@ -1120,6 +1133,15 @@ export function createRunSupplemental(deps: McpIoDeps): (
 
   // Wave4 余项①：quickFix 受控 apply 腿（稳定 actionId 台账 + 模型内一次撤销步，见 quick-fix.ts）。
   const quickFixApply = createQuickFixApplyLeg(deps);
+  // B3 批（LaneO）：编辑器写 / 光标副作用五枚（editor.setValue / type / setCursor /
+  // setSelection / revealLine）。五枚都**只改 Monaco 模型**：回包恒定 `saved:false`，
+  // 磁盘一个字节不动——本批零新增写盘通道（铁律 5/6/7），落盘仍是 fileTree.update
+  // 双闸（第四张表 approvedRoots × 内核 writablePaths）/ exportFile 对话框那两条法定路。
+  const editorWriteLegs = createEditorWriteLegs(deps);
+  // 解构成裸标识符：腿表条目形状是 `['工具名', 标识符]`，tools/mcp-inventory.mjs 的
+  // parseLegMaps 按这个锚判 wired（成员表达式不命中 ⇒ 会把已接线的腿算成 NOT_WIRED 假红）。
+  const { editorSetValue, editorType, editorSetCursor, editorSetSelection, editorRevealLine } =
+    editorWriteLegs;
 
   /* ---------------- 长任务面腿（Wave4 余项⑤：只登记「进度 + 取消 + 可查询状态」三件套齐备的族） ----------------
    * 真源在 `real-sources-tasks.ts`（表 + 投影 + 有界性都在那一层）；本模块只做分派与缺席兜底。
@@ -1167,6 +1189,14 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['tasks.start', tasksStart],
     ['tasks.status', tasksStatus],
     ['tasks.cancel', tasksCancel],
+    // B3 批（LaneO）：编辑器写 / 光标副作用五枚，按 paneId 显式反查实例（无焦点兜底）；
+    // 内容写两枚（setValue / type）在只读实例显式 PERMISSION_DENIED，回读核对失败显式报错，
+    // 成功回报必带 dirty 真读数 + saved:false（磁盘没动这件事每次都说，不是可选字段）。
+    ['editor.setValue', editorSetValue],
+    ['editor.type', editorType],
+    ['editor.setCursor', editorSetCursor],
+    ['editor.setSelection', editorSetSelection],
+    ['editor.revealLine', editorRevealLine],
   ]);
 
   return async (name, args, scope) => {

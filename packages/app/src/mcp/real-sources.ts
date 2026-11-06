@@ -48,6 +48,9 @@ import { KERNEL_EVENT_NAMES } from '@kojo/plugin-api';
 import type { EditorCommandContext, EditorSymbolLocation } from '@kojo/plugin-api';
 import type { CommandEntry } from '../ui/commands';
 import { recordQuickFixTickets, type QuickFixPaneResolver } from './quick-fix';
+// B3 批（LaneO）：编辑器写 / 光标副作用五枚的 pane 反查 seam 类型（生产解析在
+// editor-write-legs.ts 内部动态 import livePanes，本文件不静态拉 ui/*）。
+import type { EditorWritePaneResolver } from './editor-write-legs';
 import { registerMcpWiringSources, type McpWiringSources } from './wiring';
 import { bindFsFreshness, getFsFreshnessTracker } from './fs-freshness';
 import type { FsFreshnessTracker } from './fs-freshness';
@@ -1086,6 +1089,13 @@ export interface McpRealSourceInjection {
   /** `problems.quickFix` 的 pane 反查 seam（缺省 = 动态 import livePanes + applyTextEdits 的生产解析）。 */
   readonly getQuickFixPane?: QuickFixPaneResolver;
   /**
+   * `editor.*` 五枚（setValue / type / setCursor / setSelection / revealLine）的 pane 反查 seam
+   * （B3 批，LaneO 2026-11-06）。缺省 = `editor-write-legs.ts` 内部的生产解析
+   * （`productionResolveEditorPane`，动态 import `livePanes`）；测试注入假 pane/editor/model。
+   * 与 `getQuickFixPane` 同一形态：本文件不另设「当前聚焦」兜底。
+   */
+  readonly getEditorPane?: EditorWritePaneResolver;
+  /**
    * 外部写盘失效判定器（Wave4 余项 ③）：缺省用 `bindFsFreshness(kernel)` 绑上的生产判定器；
    * 测试可注入假账本。**给 null 也算显式选择**：只读应答仍附 `fsFreshness`，值如实为
    * `{available:false, stale:null, staleReason}`（缺席可见，不是缺字段）。
@@ -1282,6 +1292,7 @@ export async function buildRealMcpSources(
       injection?.searchInFiles ??
       (await import('../bridge/search')).searchInFiles as unknown as McpIoDeps['searchInFiles'],
     getQuickFixPane: injection?.getQuickFixPane,
+    getEditorPane: injection?.getEditorPane,
     fsFreshness: injection?.fsFreshness ?? (() => getFsFreshnessTracker()),
     // 长任务面（Wave4 余项⑤）：表与投影在 real-sources-tasks.ts，这里只把三条真源腿给它。
     tasks: createMcpTaskLegs({

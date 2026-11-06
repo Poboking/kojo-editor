@@ -3364,3 +3364,208 @@ fn e2e_stop_cancels_inflight_request_loudly() {
     .unwrap_err();
     assert_eq!(late.code, codes::BRIDGE_UNAVAILABLE);
 }
+
+/// B3 批（LaneO 2026-11-06）：`editor.*` 五枚在宿主闸门同判 Edit（与 `dot_namespaced_edit_tools_are_gated_as_edit_at_host_gate`
+/// 同型，那张表钉的是 quickFix + fileTree 三枚，这张只钉新增五枚、零改动别人的行）。
+/// 为什么要点名：`editor.setValue` / `editor.type` / `editor.setCursor` / `editor.setSelection`
+/// / `editor.revealLine` 全是 `命名空间.动词` 形态——`EDIT_TOOL_PREFIXES` 表里是 `set_` `edit_`
+/// 这类**下划线**前缀，`starts_with` 对 `editor.setCursor` 不成立，`PRIVILEGED_EXACT` 也不含它们
+/// ⇒ 修复前 `host_required_tier` 落末尾判 Read，**read 会话零批准即可改正文 / 挪光标**。
+/// 钉：逐枚显式 `E_TIER_DENIED`（带工具名）；edit / privileged 会话放行；批准语义零放宽
+/// （精确名与 `editor.*` 通配各自短路放行）；不抬成 privileged（危险面口径不动）。
+#[test]
+fn editor_write_tools_are_gated_as_edit_at_host_gate() {
+    const EDITOR_TOOLS: [&str; 5] = [
+        "editor.setValue",
+        "editor.type",
+        "editor.setCursor",
+        "editor.setSelection",
+        "editor.revealLine",
+    ];
+    let read = empty_scope(Vec::new());
+    let edit = McpSessionScope {
+        tier: McpTier::Edit,
+        ..empty_scope(Vec::new())
+    };
+    let priv_scope = McpSessionScope {
+        tier: McpTier::Privileged,
+        ..empty_scope(Vec::new())
+    };
+    for name in EDITOR_TOOLS {
+        assert!(is_edit_tool(name), "{name} 未进具名 Edit 表");
+        assert_eq!(host_required_tier(name), McpTier::Edit, "{name}");
+        assert!(!is_privileged_tool(name), "{name} 不得被抬成 privileged");
+        let e = check_tool_call_permission(name, &read)
+            .err()
+            .unwrap_or_else(|| panic!("后门复现：{name} 在 read 会话被端点放行（Ok）"));
+        assert_eq!(e.code, "E_TIER_DENIED", "{name}");
+        assert!(e.message.contains(name), "{name} 拒绝必须可见（带工具名）");
+        // edit / privileged 会话放行（privileged 覆盖 edit 档）。
+        assert!(check_tool_call_permission(name, &edit).is_ok(), "{name} edit 会话应放行");
+        assert!(
+            check_tool_call_permission(name, &priv_scope).is_ok(),
+            "{name} privileged 会话应放行"
+        );
+    }
+    // 批准语义零放宽：精确名与 `前缀*` 通配命中各自照旧短路放行（与 write_* 同源）。
+    let exact = empty_scope(vec!["editor.setValue".to_string()]);
+    assert!(check_tool_call_permission("editor.setValue", &exact).is_ok());
+    let wildcard = empty_scope(vec!["editor.*".to_string()]);
+    for name in EDITOR_TOOLS {
+        assert!(
+            check_tool_call_permission(name, &wildcard).is_ok(),
+            "{name} 通配批准后应放行"
+        );
+    }
+    // tools/list 第二道闸：read 会话看不见这五枚（与 tools/call 同源判定）。
+    let tools: Vec<_> = EDITOR_TOOLS.iter().map(|n| json!({ "name": n })).collect();
+    let result = json!({ "tools": tools });
+    let filtered = filter_tools_list(&result, &read);
+    assert!(names_of(&filtered.result).is_empty());
+    for name in EDITOR_TOOLS {
+        assert!(
+            filtered.filtered.iter().any(|f| f == name),
+            "{name} 应从 read 会话 tools/list 剔除"
+        );
+    }
+}
+
+/// B3 批（LaneO 2026-11-06）**端点级**回归：read 会话猜名直调 `editor.*` 五枚
+/// （改正文 / 挪光标 / 滚视口）——收口前五枚既不命中下划线动词前缀表也不在 privileged 表，
+/// `host_required_tier` 判 Read，真实 TCP 端点会把调用转给 WebView（只有 tools/list 摘得掉它）
+/// ⇒ read 会话零批准即可动作者正在编辑的文档。点名进 `EDIT_TOOLS_EXACT` 后钉四件事：
+/// ① 五枚**各自**显式 `-32000 / E_TIER_DENIED`，且 message 带工具名（拒绝可见）；
+/// ② 每次拒各写一条 Denied 审计（5 条，note 即原始码，不静默）；
+/// ③ 拒绝发生在 emit **之前** ⇒ 桥零调用（`s.rx.try_recv()` 恒空，WebView 从没收到这五枚）；
+/// ④ 批准语义零放宽：第四张表把精确名列进 approvedTools 后同一调用照旧走桥成功，
+///    `editor.*` 通配命中同样放行（收口不得误伤已批准工具）。
+#[test]
+fn e2e_tools_call_denies_editor_write_tools_from_read_session() {
+    const EDITOR_TOOLS: [&str; 5] = [
+        "editor.setValue",
+        "editor.type",
+        "editor.setCursor",
+        "editor.setSelection",
+        "editor.revealLine",
+    ];
+    let s = TestServer::start();
+    for (i, name) in EDITOR_TOOLS.iter().enumerate() {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{{"name":"{}","arguments":{{"paneId":"p1"}}}}}}"#,
+            700 + i,
+            name
+        );
+        let r = mcp_post(s.port, &s.token, &body);
+        assert_eq!(r.status, 200, "{name} 必须是 JSON-RPC 错误帧而非传输层失败");
+        let v = rpc_json(&r);
+        assert_eq!(v["id"], json!(700 + i), "{name}");
+        assert_eq!(v["error"]["code"], json!(-32000), "{name}");
+        assert_eq!(
+            v["error"]["data"]["code"],
+            json!("E_TIER_DENIED"),
+            "{name} 未按 Edit 档拒"
+        );
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(name),
+            "{name} 拒绝消息必须带上被拒的工具名"
+        );
+    }
+    // ② 闸门命中处逐条写 Denied 审计：五枚 = 五条，一条都不能少（缺席可见）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(
+        denied.len(),
+        EDITOR_TOOLS.len(),
+        "denied 审计条数应与被拒工具数逐一对应"
+    );
+    for name in EDITOR_TOOLS {
+        assert!(
+            denied
+                .iter()
+                .any(|e| e.tool == name && e.note.as_deref() == Some("E_TIER_DENIED")),
+            "{name} 缺一条 E_TIER_DENIED 审计"
+        );
+    }
+    // ③ 拒绝在 emit 之前：桥从未被调 ⇒ 只读会话一个字节都改不到、光标一步都挪不动。
+    assert!(
+        s.rx.try_recv().is_err(),
+        "read 会话直调 editor.* 仍被转给 WebView ⇒ 后门复现"
+    );
+
+    // ④ 批准语义零放宽（精确名）：显式列入后同一调用照旧走桥并成功。
+    scope::approve(
+        s.dir.path(),
+        "loopback-client",
+        McpTier::Read,
+        vec![],
+        vec!["editor.setValue".to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let port = s.port;
+    let token = s.token.clone();
+    let req = r#"{"jsonrpc":"2.0","id":801,"method":"tools/call","params":{"name":"editor.setValue","arguments":{"paneId":"p1","text":"x"}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    assert_eq!(payload.params["name"], json!("editor.setValue"));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(json!({ "applied": true, "saved": false })),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r2 = worker.join().unwrap();
+    let v2 = rpc_json(&r2);
+    assert!(
+        v2["error"].is_null(),
+        "精确名批准后仍被拒 ⇒ 收口误伤批准语义"
+    );
+    assert_eq!(v2["result"]["applied"], json!(true));
+    assert_eq!(v2["result"]["saved"], json!(false));
+
+    // ④ 批准语义零放宽（`前缀*` 通配）：editor.* 覆盖另一枚 editor.setCursor。
+    scope::approve(
+        s.dir.path(),
+        "loopback-client",
+        McpTier::Read,
+        vec![],
+        vec!["editor.*".to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let port = s.port;
+    let token = s.token.clone();
+    let req = r#"{"jsonrpc":"2.0","id":802,"method":"tools/call","params":{"name":"editor.setCursor","arguments":{"paneId":"p1","line":3}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.params["name"], json!("editor.setCursor"));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(json!({ "applied": true })),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r3 = worker.join().unwrap();
+    let v3 = rpc_json(&r3);
+    assert!(
+        v3["error"].is_null(),
+        "editor.* 通配批准后仍被拒 ⇒ 通配命中判定被收口改动"
+    );
+    assert_eq!(v3["result"]["applied"], json!(true));
+}
