@@ -1124,12 +1124,16 @@ describe('任务 B：第四波 6 枚只读具名工具（真读数 / 截断 / �
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it('fs.pathExists：域内解析 + 真布尔读数（不伪造）', async () => {
+  it('fs.pathExists：域内解析 + 真布尔读数（不伪造）；S11 起应答附 fsFreshness（无判定器 ⇒ available:false，字段不消失）', async () => {
     const { kernel } = fakeKernel();
     const invoke: McpInvokeLike = vi.fn(async (cmd: string) => (cmd === 'path_exists' ? true : null));
     const sup = createRunSupplemental(fakeIoDeps(kernel, { invoke }));
     const out = (await sup('fs.pathExists', { relPath: 'a.txt' }, scope)) as Record<string, unknown>;
-    expect(out).toEqual({ path: 'a.txt', exists: true });
+    expect(out).toEqual({
+      path: 'a.txt',
+      exists: true,
+      fsFreshness: expect.objectContaining({ available: false, stale: null, granularity: 'file', target: 'a.txt' }),
+    });
     expect(invoke).toHaveBeenCalledWith('path_exists', { path: 'D:/proj/a.txt' });
   });
 

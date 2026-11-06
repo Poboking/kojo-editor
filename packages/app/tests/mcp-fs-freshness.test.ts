@@ -1088,7 +1088,8 @@ describe('⑩ S11 覆盖收口：fs.pathExists / semantic.projectSymbols 补腿 
     expect(rep.annotatedTools).toContain('fs.pathExists');
     expect(rep.annotatedTools).toContain('semantic.projectSymbols（根级 listing）');
     const targets = rep.notAnnotated.map((n) => n.target).join('\n');
-    expect(targets).toContain('semantic.batchAt');
+    expect(targets).toContain('semantic.*');
+    expect(targets).toContain('batchAt');
     for (const n of rep.notAnnotated) expect(n.reason).not.toBe('');
     tracker.dispose();
   });

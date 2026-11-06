@@ -474,6 +474,11 @@ const ANNOTATED_TOOLS = [
   'fs.statFiles（逐项）',
   // B2 批（LaneT，2026-11-06）：结构化批读面按同族口径**逐项**标注（成功位与失败位都带）。
   'fs.readMany（逐项）',
+  // S11 收口（2026-11-07）：S4 落的行区间读面 B13 起就带字段，名单漏名——补名（行为零变化）。
+  'fs.readRange',
+  // S11 收口：两枚缺覆盖盘读面补腿（此前应答零 fsFreshness）。
+  'fs.pathExists',
+  'semantic.projectSymbols（根级 listing）',
   'io.listDir',
   'projectFileTree / kojo://project/file-tree',
   'workspace.searchAll / io.searchAll',
@@ -490,6 +495,16 @@ const NOT_ANNOTATED = [
   {
     target: 'kojo://project/active-document',
     reason: '@kojo/mcp-host 的 slimActiveDocument 固定字段投影会丢掉新增字段；要看活动文档是否过期请配 fs.stat / fs.readFile 的 fsFreshness',
+  },
+  {
+    // S11 盘点裁定（2026-11-07）：semantic 模型读面整类不标注——batchAt 与单枚面同一条
+    // model+判据腿，零盘读；把模型读记成盘基线会污染 fs.readFile / fs.stat 的判定。
+    target:
+      'semantic.* 模型读面（definitionAt / referencesAt / batchAt / diagnostics / hoverAt / ' +
+      'suggestAt / documentSymbols / tokens / codeActionsAt）及 lang.* 六枚 / problems.diagnostics',
+    reason:
+      '读的是编辑器模型与判据腿内存视图，不是盘上那份；盘-缓冲差由编辑器自己说，本账不冒充盘态判定' +
+      '（S11 盘点裁定 semantic.batchAt 同属此类：与单枚面同一条 model+判据腿、零盘读）',
   },
   {
     target: 'notifications/resources/updated 推送',

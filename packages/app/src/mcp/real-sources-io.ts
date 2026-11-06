@@ -1255,7 +1255,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
    * 不给开机静态图加边（ps10 纪律）。服务缺席 ⇒ NOT_WIRED 点名；服务在而索引未就绪
    * ⇒ RESOURCE_UNAVAILABLE，绝不冒充空清单。
    */
-  const projectSymbols = async (args: Record<string, unknown>): Promise<unknown> => {
+  const projectSymbols = async (args: Record<string, unknown>, scope: McpSessionScope): Promise<unknown> => {
     const kernel = deps.getKernel();
     const project = requireProject(kernel);
     const rootDir = asString(project['rootDir']);
@@ -1333,6 +1333,10 @@ export function createRunSupplemental(deps: McpIoDeps): (
               functions: typeof s['functions'] === 'number' ? s['functions'] : null,
             }
           : null,
+      // S11 覆盖收口：这份清单是全项目盘扫描产物（erb.parser 索引）的投影 ⇒ 与 fs.tree 同尺
+      // 补根级 listing 标注（「自你上一次读清单以来，根下动过几处」）；窗内自写回声命中才复核，
+      // 多候补并进恰 1 趟 statFiles、0 次单 stat；窗外 / 无命中 / 判不了 stale:null + 理由如实。
+      fsFreshness: await fsFreshnessListing(deps, rootDir, '.', scope),
     };
   };
 
@@ -2362,7 +2366,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
     return { encoding, charLength: text.length, base64 };
   };
 
-  const pathExists = async (args: Record<string, unknown>): Promise<unknown> => {
+  const pathExists = async (args: Record<string, unknown>, scope: McpSessionScope): Promise<unknown> => {
     const kernel = deps.getKernel();
     const project = requireProject(kernel);
     const rootDir = asString(project['rootDir']);
@@ -2370,11 +2374,18 @@ export function createRunSupplemental(deps: McpIoDeps): (
       throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：pathExists 无域基准根（不静默）');
     }
     const abs = resolveWithinRoot(rootDir, asString(args['relPath'])); // 路径闸 + 域内解析（fail-closed）
+    const rel = toRelativePath(abs, rootDir);
     const exists = await deps.invoke('path_exists', { path: abs });
     if (typeof exists !== 'boolean') {
       throw new McpFailure('TOOL_EXECUTION_FAILED', 'path_exists 未返回布尔值（不静默、不伪造）');
     }
-    return { path: toRelativePath(abs, rootDir), exists };
+    return {
+      path: rel,
+      exists,
+      // S11 覆盖收口：盘读面（path_exists）与 fs.stat 同尺补 file 档标注——单路径 ≤1 趟 stat
+      // 复核（窗内自写回声命中才发；窗外 / 无命中 / 判不了 stale:null + staleReason 分档如实）。
+      fsFreshness: await fsFreshnessField(deps, abs, rel, scope),
+    };
   };
 
   const statFiles = async (
