@@ -412,6 +412,36 @@ async function faceStatic(args) {
         headroomBytes: 1024 * 1024 - faceReport.full_all_approved.frameBytes,
         note: '体积闸只报读数与余量，本批不动闸。',
       },
+      /* 候选 (b) 的**投影成本**：直接走 B1 的 `paginateByCursor` 真码路（不是另写一份分页算术），
+         页大小取几个候选档，逐档给「每页帧字节 / 页数 / 全部页加起来的总字节 / 信封净增字节」。
+         这条不是实测端点读数，是**用真游标码路算的投影**，字段名里写明 projected。 */
+      paginationProjected:
+        typeof mod.paginateByCursor === 'function'
+          ? [10, 20, 25, 40].map((limit) => {
+              const wire = faces.full_all_approved.map(wireTool);
+              let cursor = undefined;
+              const pages = [];
+              for (let guard = 0; guard < 200; guard += 1) {
+                const args = cursor === undefined ? { limit } : { limit, cursor };
+                const p = mod.paginateByCursor(wire, (it) => it.name, args, { defaultLimit: limit, maxLimit: limit });
+                const frame = { jsonrpc: '2.0', id: 'e', result: { tools: p.page, nextCursor: p.nextCursor, total: p.total, offset: p.offset, limit: p.limit, hasMore: p.hasMore, truncated: p.truncated, fingerprint: p.fingerprint } };
+                pages.push({ bytes: utf8Bytes(frame), tools: p.page.length });
+                if (!p.hasMore || !p.nextCursor) break;
+                cursor = p.nextCursor;
+              }
+              const totalBytes = pages.reduce((a, x) => a + x.bytes, 0);
+              return {
+                pageLimit: limit,
+                pages: pages.length,
+                bytesPerPageFirst: pages[0]?.bytes ?? null,
+                bytesPerPageMax: Math.max(...pages.map((x) => x.bytes)),
+                totalBytesAcrossAllPages: totalBytes,
+                fullFaceFrameBytes: faceReport.full_all_approved.frameBytes,
+                netExtraBytesVsOneFrame: totalBytes - faceReport.full_all_approved.frameBytes,
+                roundTripsNeeded: pages.length,
+              };
+            })
+          : [{ unavailable: true, note: 'paginateByCursor 没导出 ⇒ 该投影未取到' }],
     };
     return report;
   } finally {
