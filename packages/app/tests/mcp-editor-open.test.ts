@@ -1,17 +1,19 @@
 /**
- * Wave4 #4（LaneH）：editor.openDocument / editor.revealPosition 判性后不登记 + editor.cursor 只读加法。
+ * Wave4 #4（LaneH）+ B10 收口（LaneV，2026-11-06）：`editor.openDocument` **已登记**为具名 edit 工具，
+ * `editor.revealPosition` **仍不登记**；`editor.cursor` 是只读读数加法。
  *
  * 纯单测 / 假注入：不启 GUI、不起 Tauri、不起 HTTP，workspace / host / injection 全给假实现。
  *
- * 判性结论：宿主没有可从 MCP 注入面安全复用、且能诚实回报结果的「打开文档 / 定位光标」真源。
- * 按铁律 4「真源不存在=不登记（绝不挂空串假实现）」，本测试钉住三件事，每件都能红：
- *  ① 不登记：两枚名字在 SUPPLEMENTAL_TOOL_SPECS / registry.listTools（三档会话）里都不存在、
- *     registry.callTool 直调一律 UNKNOWN_TOOL；buildUiSupplemental 腿表也不含两枚、
- *     MCP_TOOL_GAP_MAP 无硬造映射、MCP_DEFERRED_GAP_NOTES 有 Wave4 #4 显式缺口条目；
- *  ② 无假成功：runSupplemental 前置兜底对两枚名字仍抛带判性理由的可见 NOT_WIRED，
- *     绝不静默成功 / 不返回空串 / 不返回假 {opened:true} / {moved:true}；
- *  ③ 只读加法：editor.cursor 仍 read 档 + readOnlyHint:true、read 会话可见，
- *     真读返回焦点编辑器光标、无活动编辑器显式 NOT_WIRED。
+ * 判性怎么变的（逐条）：LaneH 当年那四条证据一条都没被推翻（`editor.revealLocation` 至今是
+ * fire-and-forget 事件），B10 改判的是**观察件**——`livePanes` 登记簿已可在执行时动态反查，
+ * 「这条 path 有没有真上屏」变成读得回来的事实 ⇒ openDocument 登记（行为与反假绿用例在
+ * `mcp-editor-open-document.test.ts`，那边钉回执读数、超时账与路径闸）。本文件只钉**登记面本身**：
+ *  ① 登记 / 不登记的名单：SUPPLEMENTAL_TOOL_SPECS 与三档 registry.listTools 的形状；
+ *  ② 仍不登记的那一枚：registry.callTool 到不了腿（UNKNOWN_TOOL），误调 runSupplemental 必得
+ *     带判性理由的可见 NOT_WIRED；已登记那一枚**不再走兜底**（改由腿自己显式拒缺位真源）；
+ *  ③ 台账同步：Wave4 #4 条目只剩 revealPosition，openDocument 的转登记判性另立一条；
+ *     MCP_TOOL_GAP_MAP 不硬造映射（四处真源里没有「打开 GUI 文档」这一条缺口名）；
+ *  ④ 只读加法：editor.cursor 仍 read 档 + readOnlyHint:true，read 会话可见，无活动编辑器显式 NOT_WIRED。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -32,7 +34,10 @@ import {
   type McpSemanticWorkspace,
 } from '../src/mcp/real-sources';
 
-const OPEN_TOOLS = ['editor.openDocument', 'editor.revealPosition'] as const;
+/** B10 批收口后**仍不登记**的那一枚（定位组合面）。 */
+const UNREGISTERED = ['editor.revealPosition'] as const;
+/** B10 批已登记为具名 edit 工具的那一枚（行为面见 mcp-editor-open-document.test.ts）。 */
+const REGISTERED_IN_B10 = ['editor.openDocument'] as const;
 
 const readScope: McpSessionScope = {
   sessionId: 's1', clientId: 'c1', tier: 'read', approvedRoots: ['/proj'], approvedTools: [],
@@ -103,69 +108,114 @@ function argsFor(name: string): Record<string, unknown> {
   return name === 'editor.openDocument' ? { relPath: 'src/a.txt' } : { line: 3, column: 5 };
 }
 
-describe('Wave4 #4 · 不登记判据（真源不存在 ⇒ 不登记，绝不挂空串假实现）', () => {
-  it('SUPPLEMENTAL_TOOL_SPECS 不含两枚 edit 档工具；editor.cursor 仍是 read 档 + readOnlyHint:true', () => {
-    for (const name of OPEN_TOOLS) {
+describe('B10 收口 · 登记面（openDocument 已登记，revealPosition 仍不登记）', () => {
+  it('SUPPLEMENTAL_TOOL_SPECS 不含 revealPosition；openDocument 已在册且是 edit 档（不抬 privileged）', () => {
+    for (const name of UNREGISTERED) {
       expect(SUPPLEMENTAL_TOOL_SPECS.some((s) => s.name === name)).toBe(false);
+    }
+    for (const name of REGISTERED_IN_B10) {
+      const spec = SUPPLEMENTAL_TOOL_SPECS.find((s) => s.name === name);
+      expect(spec, `${name} 应已登记为具名工具`).toBeDefined();
+      expect(spec!.tier).toBe('edit');
+      // 不收绝对路径：入参形状里只有项目根内相对路径那一条闸 + 有界窗，没有别的落点参数
+      const props = spec!.inputSchema['properties'] as Record<string, Record<string, unknown>>;
+      expect(Object.keys(props).sort()).toEqual(['deadlineMs', 'relPath']);
+      expect(spec!.inputSchema['required']).toEqual(['relPath']);
+      expect(spec!.inputSchema['additionalProperties']).toBe(false);
+      expect(props['relPath']!.pattern, 'relPath 必须带拒绝对路径 / .. 的 pattern').toContain('?!');
+      // description 必须自己把「读回来才算成功」讲给模型听（不是「发射了意图」那种半截话）
+      expect(spec!.description).toContain('opened:true is answered ONLY after reading the pane registry back');
+      expect(spec!.description).toContain('FAILS loudly');
     }
     const cursor = SUPPLEMENTAL_TOOL_SPECS.find((s) => s.name === 'editor.cursor');
     expect(cursor).toBeDefined();
     expect(cursor!.tier).toBe('read');
     expect(cursor!.annotations).toMatchObject({ readOnlyHint: true });
-    // 只读加法与缺口分开记账：description 面向模型写明纯读、绝不冒充写能力
+    // 只读加法与写面分开记账：description 面向模型写明纯读、绝不冒充写能力
     expect(cursor!.description).toContain('read-only');
     expect(cursor!.description).toContain('never moves the caret');
   });
 
-  it('三档会话的 registry.listTools 都不见两枚；editor.cursor 在 read 会话可见', () => {
+  it('read 会话两枚都看不见；edit 会话只见 openDocument（edit 档）、始终看不见 revealPosition', () => {
     const reg = createMcpCapabilityRegistry({});
     for (const scope of [readScope, editScope, privScope]) {
       const names = reg.listTools(scope).map((t) => t.name);
-      for (const name of OPEN_TOOLS) expect(names).not.toContain(name);
+      for (const name of UNREGISTERED) expect(names).not.toContain(name);
     }
     const readNames = reg.listTools(readScope).map((t) => t.name);
+    for (const name of REGISTERED_IN_B10) expect(readNames, 'edit 档不进 read 会话').not.toContain(name);
     expect(readNames).toContain('editor.cursor');
     expect(reg.listTools(readScope).every((t) => t.tier === 'read')).toBe(true);
+    const editNames = reg.listTools(editScope).map((t) => t.name);
+    for (const name of REGISTERED_IN_B10) expect(editNames).toContain(name);
     expect(reg.listTools(privScope).map((t) => t.name)).not.toContain('fileTree.remove'); // privileged 需逐工具批准
   });
 
-  it('registry.callTool 直调两枚一律 UNKNOWN_TOOL（不登记 ⇒ 连 schema 闸 / 执行腿都到不了，不假成功）', async () => {
+  it('revealPosition 直调仍 UNKNOWN_TOOL（不登记 ⇒ 连 schema 闸 / 执行腿都到不了）；openDocument 已到得了腿', async () => {
     const reg = createMcpCapabilityRegistry({});
-    for (const name of OPEN_TOOLS) {
+    for (const name of UNREGISTERED) {
       await expect(reg.callTool(name, argsFor(name), editScope)).rejects.toMatchObject({ code: 'UNKNOWN_TOOL' });
+    }
+    // 已登记 ⇒ 不再是 UNKNOWN_TOOL；这里 registry 没注入 runSupplemental，故按缺席显式 NOT_WIRED（不假成功）
+    for (const name of REGISTERED_IN_B10) {
+      await expect(reg.callTool(name, argsFor(name), editScope)).rejects.toMatchObject({ code: 'NOT_WIRED' });
     }
   });
 });
 
-describe('Wave4 #4 · 无假成功与缺口台账', () => {
-  it('MCP_DEFERRED_GAP_NOTES 有 Wave4 #4 不登记 + 显式缺口条目；MCP_TOOL_GAP_MAP 无硬造映射', () => {
-    const note = MCP_DEFERRED_GAP_NOTES.find((n) => n.scope.includes('Wave4 #4'));
-    expect(note).toBeDefined();
-    expect(note!.reason).toContain('editor.revealLocation');
-    expect(note!.reason).toContain('NOT_WIRED');
-    expect(note!.reason).toContain('fire-and-forget');
-    expect(note!.reason).toContain('不登记'); // 铁律：真源不存在 ⇒ 不登记，不许退回「登记但 NOT_WIRED」
-    // 没有对应的真实缺口 ⇒ 不硬造 tool→gap 映射（硬造会被盘点判 orphanedWires / 假绿）
-    for (const name of [...OPEN_TOOLS, 'editor.cursor']) {
+describe('B10 收口 · 无假成功与缺口台账', () => {
+  it('台账两条各归各位：revealPosition 仍「不登记」，openDocument 有 B10 转登记判性条目', () => {
+    const gapNote = MCP_DEFERRED_GAP_NOTES.find((n) => n.scope.includes('Wave4 #4'));
+    expect(gapNote).toBeDefined();
+    expect(gapNote!.scope).toContain('editor.revealPosition');
+    expect(gapNote!.reason).toContain('editor.revealLocation');
+    expect(gapNote!.reason).toContain('NOT_WIRED');
+    expect(gapNote!.reason).toContain('fire-and-forget');
+    expect(gapNote!.reason).toContain('不登记'); // 铁律：没有诚实数据面 ⇒ 不登记，不许退回「登记但 NOT_WIRED」
+    expect(gapNote!.reason).toContain('editor.revealLine'); // 覆盖它的两枚要点名
+    expect(gapNote!.reason).toContain('editor.setCursor');
+    const b10 = MCP_DEFERRED_GAP_NOTES.find((n) => n.scope.includes('B10 批判性变更'));
+    expect(b10, 'openDocument 的转登记判性必须写在台账里（不留陈旧断言）').toBeDefined();
+    expect(b10!.scope).toContain('editor.openDocument');
+    expect(b10!.reason).toContain('livePanes');
+    expect(b10!.reason).toContain('resolveWithinRoot');
+    // 四处真源里没有「打开 GUI 文档」这条缺口名 ⇒ 不硬造 tool→gap 映射（硬造会被盘点判 orphanedWires 假绿）
+    for (const name of [...UNREGISTERED, ...REGISTERED_IN_B10, 'editor.cursor']) {
       expect(MCP_TOOL_GAP_MAP.some((w) => w.tool === name)).toBe(false);
     }
   });
 
-  it('runSupplemental 直调两枚仍抛带判性理由的可见 NOT_WIRED（防御性显式失败，不假成功）', async () => {
+  it('runSupplemental 兜底只管 revealPosition（带判性理由的可见 NOT_WIRED）；openDocument 改由腿自己显式拒', async () => {
     const sources = await buildRealMcpSources(host, injection);
     expect(sources.runSupplemental).toBeDefined();
-    for (const name of OPEN_TOOLS) {
+    for (const name of UNREGISTERED) {
       const err = await mustFailNotWired(async () =>
         sources.runSupplemental!(name, argsFor(name), editScope),
       );
       expect(err.message).toContain('Wave4 #4');
       expect(err.message).toContain('fire-and-forget');
+      expect(err.message).toContain('editor.revealLine');
+    }
+    // 兜底语句已撤：这一枚现在落到真源腿，缺位的是内核 / 项目（不是「没有通道」这句旧判性）
+    for (const name of REGISTERED_IN_B10) {
+      let code = '';
+      let message = '';
+      try {
+        await sources.runSupplemental!(name, argsFor(name), editScope);
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpFailure);
+        code = (err as McpFailure).code;
+        message = (err as McpFailure).message;
+      }
+      expect(code, '假 host 没有内核 ⇒ 必须由腿显式拒，绝不静默成功').toBe('RESOURCE_UNAVAILABLE');
+      expect(message).not.toContain('Wave4 #4');
+      expect(message).not.toContain('fire-and-forget');
     }
   });
 
-  it('无真执行腿：buildUiSupplemental 腿表不含两个写工具名（只读 editor.cursor 在表内）', () => {
+  it('buildUiSupplemental 腿表不含这两枚写工具名（openDocument 在 ioTools，只读 editor.cursor 在 UI 腿表）', () => {
     const legs = buildUiSupplemental(fakeDeps(fakeWorkspace()), null);
-    for (const name of OPEN_TOOLS) expect(legs.has(name)).toBe(false);
+    for (const name of [...UNREGISTERED, ...REGISTERED_IN_B10]) expect(legs.has(name)).toBe(false);
     expect(legs.has('editor.cursor')).toBe(true);
   });
 });
