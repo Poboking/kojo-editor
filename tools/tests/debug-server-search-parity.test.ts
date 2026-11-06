@@ -373,6 +373,7 @@ describe('MCP-PERF-S21 · 分诊账本机可造因（Rust 判据引文对拍）'
       await fs.rm(junctionTarget, { recursive: true, force: true }).catch(() => {});
     }
   }, 30000);
+});
 /* ------------------------------- MCP-PERF-S20 · 镜像逐段续取 ------------------------------- */
 
 /** 与 Rust 引擎同尺的三把尺（B18 判据形态逐字照搬，别在这里另立数目） */
