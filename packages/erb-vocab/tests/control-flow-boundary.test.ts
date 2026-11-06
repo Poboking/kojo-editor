@@ -120,6 +120,8 @@ describe('共享事实黄金对拍（库与插件"逐字不变"的兜底）', ()
       'ERB_CONTROL_STATEMENTS',
       'classifyControlFlow',
       'closerNameForPair',
+      // D03b 收口批新增：配对类别 → 开块全集的反查（消费方据此派生名单，不再手抄）
+      'openKindsForPair',
     ]);
   });
 
