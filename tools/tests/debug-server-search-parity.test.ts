@@ -11,12 +11,23 @@
  * filesScanned。预览 / start / end 不进账：镜像预览窗是 200 字符 ±80、Rust 是 240 单元
  * 居中——已知的表现层分叉（呈现口径，非命中口径）。遗留族编码（shift_jis/gbk/big5）
  * 不进账：镜像 decoderFor 只认 BOM 与 utf-8，遗留族解码是镜像的已知缺口。
+ *
+ * MCP-PERF-S18（S8 三腿的镜像侧收口）：
+ * - `deadlineMs`（S8 腿1）：宽时限 case 进矩阵（不许动命中账）+ 软时限账 partial/partialReason
+ *   的 wire 形态在此单测收口（到点形状时变 ⇒ 不进手工真值）。Rust 侧 harness 只吃四枚固定
+ *   options ⇒ 矩阵新键被 serde 忽略、按旧口径跑同真值；镜像侧 S18 起真认这个键。
+ * - `preview:"none"`（S8 腿2）：镜像收口投影剥每条命中 preview 字段（与 MCP 腿
+ *   stripPreviewFields 同尺：浅剥一格，line/column/start/end 原样保留）；行列真值照旧进矩阵，
+ *   键缺席断言在本文件。
+ * - `semantic.projectSymbols`（S8 腿3）：镜像命令面**没有**语义/符号投影命令（该脸读的是
+ *   WebView 侧 erb.parser 内核服务，宿命令面不承载）⇒ query 过滤在镜像侧无从发生——
+ *   如实标注的边界由专例钉死（将来镜像真投影了该脸，那条会红并逼出「同尺过滤」的补齐）。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { createDebugServer } from '../debug-server.mjs';
+import { createDebugServer, SUPPORTED_COMMANDS } from '../debug-server.mjs';
 
 interface ParityFile {
   name: string;
@@ -28,7 +39,16 @@ interface ParityFile {
 interface ParityCase {
   name: string;
   query: string;
-  options: { isRegex: boolean; caseSensitive: boolean; wholeWord: boolean; extensions: string[] };
+  options: {
+    isRegex: boolean;
+    caseSensitive: boolean;
+    wholeWord: boolean;
+    extensions: string[];
+    /** S8 腿1（MCP-PERF-S18 镜像侧收口）：毫秒软时限；Rust harness 忽略此键。 */
+    deadlineMs?: number;
+    /** S8 腿2：命中载荷模式；"none" ⇒ 镜像收口投影剥 preview 字段。Rust harness 忽略此键。 */
+    preview?: 'full' | 'none';
+  };
   expect: {
     files: { path: string; hits: [number, number][] }[];
     totalMatches: number;
@@ -101,12 +121,14 @@ describe('MCP-PERF-S1 · Rust ↔ Node 镜像检索对拍', () => {
           options: c.options,
         },
       })) as {
-        files: { path: string; matches: { line: number; column: number }[] }[];
+        files: { path: string; matches: { line: number; column: number; preview?: string; start?: number; end?: number }[] }[];
         totalMatches: number;
         filesScanned: number;
         skipped: { binary: number };
         truncated: boolean;
         cancelled: boolean;
+        partial?: boolean;
+        partialReason?: string | null;
       };
       expect(res.truncated, '对拍夹具不许触墙').toBe(false);
       expect(res.cancelled, '对拍夹具不许取消').toBe(false);
@@ -119,6 +141,69 @@ describe('MCP-PERF-S1 · Rust ↔ Node 镜像检索对拍', () => {
       }));
       const want = c.expect.files.map((f) => ({ path: f.path, hits: f.hits }));
       expect(got, `[${c.name}] 命中账与合同不同`).toEqual(want);
+      // MCP-PERF-S18 腿1：宽时限不许动命中账（上面已断），软时限账还必须如实到场——
+      // wire 形态与 Rust SearchResultDto 同形（partial 恒在；未到点 partialReason 恒 null）。
+      // 镜像没实现 deadlineMs 时此键缺席 ⇒ 当场红（先红判据）。
+      if (typeof c.options.deadlineMs === 'number') {
+        expect(res.partial, `[${c.name}] 宽时限内软时限账 partial 应为 false（镜像 S18 起认 deadlineMs）`).toBe(false);
+        expect(res.partialReason, `[${c.name}] 未到点 partialReason 应为 null`).toBeNull();
+      }
+      // MCP-PERF-S18 腿2：preview:"none" ⇒ 收口投影剥 preview 字段（与 MCP 腿 stripPreviewFields
+      // 同尺：浅剥一格，line/column/start/end 原样保留）。镜像不认这个键时命中仍带 preview ⇒ 当场红。
+      if (c.options.preview === 'none') {
+        for (const f of res.files) {
+          for (const m of f.matches) {
+            expect('preview' in m, `[${c.name}] none 模式命中仍带 preview 键`).toBe(false);
+            expect(typeof m.start, `[${c.name}] none 模式不许连 start 一起剥`).toBe('number');
+            expect(typeof m.end, `[${c.name}] none 模式不许连 end 一起剥`).toBe('number');
+          }
+        }
+      }
     });
   }
+});
+
+describe('MCP-PERF-S18 · 镜像软时限到点账（到点形状时变 ⇒ 不进矩阵手工真值，在此收口）', () => {
+  it('deadlineMs:0 ⇒ 一批都不领：files [] / filesScanned 0 / partial:true + partialReason:"deadline"', async () => {
+    // Rust 同尺（lib.rs）：到点**且**还有没扫到的文件才算 partial——0ms 恒在第一批领取前到点，
+    // 夹具树 5 文件全没扫 ⇒ partial 必真。命中集时变不假，但「零领取」是确定性的。
+    const res = (await invoke('search_text', {
+      request: {
+        searchId: 1,
+        roots: [tree],
+        query: 'needl',
+        options: { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [], deadlineMs: 0 },
+      },
+    })) as { files: unknown[]; totalMatches: number; filesScanned: number; partial?: boolean; partialReason?: string | null };
+    expect(res.partial, '0ms 软时限必须判到点（镜像没实现 ⇒ 此键缺席当场红）').toBe(true);
+    expect(res.partialReason).toBe('deadline');
+    expect(res.files).toEqual([]);
+    expect(res.filesScanned).toBe(0);
+    expect(res.totalMatches).toBe(0);
+  });
+
+  it('deadlineMs 缺省 ⇒ partial:false / partialReason:null 恒在（wire 形态与 Rust DTO 同形；旧行为零漂移锚）', async () => {
+    const res = (await invoke('search_text', {
+      request: {
+        searchId: 1,
+        roots: [tree],
+        query: 'needl',
+        options: { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [] },
+      },
+    })) as { totalMatches: number; partial?: boolean; partialReason?: string | null };
+    expect(res.totalMatches).toBe(4); // 旧行为没被本批改动碰歪
+    expect(res.partial, '无时限应答的 partial 恒 false').toBe(false);
+    expect(res.partialReason).toBeNull();
+  });
+});
+
+describe('MCP-PERF-S18 · semantic.projectSymbols 的镜像边界（如实标注，非缺陷）', () => {
+  it('镜像命令面没有语义/符号投影命令 ⇒ S8 腿3 的 query 过滤在镜像侧无从发生', () => {
+    // 该脸读的是 WebView 侧 erb.parser 内核服务（real-sources-io 的 services.tryGet），
+    // 宿命令面（generate_handler! ↔ 镜像命令表）不承载任何符号/语义命令 ⇒ 没有「镜像投影」
+    // 可言，query 过滤天然不适用于镜像。这条钉死边界：将来镜像若真投影了符号脸，
+    // 此处当场红，逼出「与 MCP 腿同尺过滤」的补齐——不许静默长出一张没过滤的符号脸。
+    const symbolish = SUPPORTED_COMMANDS.filter((n) => /symbol|semantic|outline|projectSymbols/i.test(n));
+    expect(symbolish, '镜像命令面不该有符号/语义命令（有了就必须同批补 query 过滤）').toEqual([]);
+  });
 });
