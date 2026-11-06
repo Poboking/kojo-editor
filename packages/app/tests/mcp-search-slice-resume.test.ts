@@ -19,6 +19,7 @@ import { McpFailure, type McpSessionScope } from '@kojo/mcp-host';
 import {
   createKernelIo,
   createRunSupplemental,
+  toRelativePath,
   type McpIoDeps,
   type McpKernelLike,
   type McpSearchRequestLike,
@@ -64,13 +65,21 @@ function makeTree(over: Partial<typeof TREE> = {}): FakeTree {
   return { dirs, files };
 }
 
-/** 解析式真值：`path|line|preview`（与 `pageSearchHits` / 本腿 keyOf 同尺）。 */
+/**
+ * 解析式真值：`path|line|preview`（与 `pageSearchHits` / 本腿 keyOf 同尺）。
+ * - `path` 半边必须走**同一条投影腿** `toRelativePath`（旧面 `search.all` / `workspace.searchAll`
+ *   的 hits.path 口径就是它，反斜杠在投影时归一为正斜杠；本腿 `projectHits` 逐字复用同一枚），
+ *   否则这条判据比的是「夹具里的分隔符写法」而不是「命中集本身」——两边都会变成 6,000 但成员全错位；
+ * - `preview` 半边是**引擎回的行内容**（夹具用绝对路径原样切的 rel），不参与投影，逐字保持反斜杠，
+ *   与假引擎 `fakeSearch` 那一侧同尺。
+ */
 function expectedKeys(tree: FakeTree): Set<string> {
   const out = new Set<string>();
   for (const [path, hits] of tree.files) {
     if (isHiddenEntryName(path)) continue;
     const rel = path.slice(ROOT.length + 1);
-    for (let k = 0; k < Math.min(hits, PER_FILE_CAP); k += 1) out.add(`${rel}|${k + 1}|hit ${rel}-l${k}`);
+    const projected = toRelativePath(path, ROOT);
+    for (let k = 0; k < Math.min(hits, PER_FILE_CAP); k += 1) out.add(`${projected}|${k + 1}|hit ${rel}-l${k}`);
   }
   return out;
 }
@@ -317,6 +326,30 @@ describe('B16 判据 2 · 分片续取把 5,000 条以上的命中集完整枚�
     expect(sum).toBeGreaterThan(0);
   });
 
+  it('knownTotal 只在**单片计划**转 true；多片走完仍 false + 理由点名累加器（别片 total 相加不是本腿能说的话）', async () => {
+    // 单片：一个深度 1 目录、不触墙 ⇒ 全项目总量真的已知
+    const one = harness(makeTree({ dirs: 1, files: 2, hits: 10 }));
+    const first = await one.call('workspace.searchAll', { query: 'hit', resumeBySlice: true, limit: 200 });
+    expect(first['planSlices']).toBe(1);
+    expect(first['walkComplete']).toBe(true);
+    expect(first['knownTotal']).toBe(true);
+    expect(first['totalScope']).toBe('project');
+    expect(first['knownTotalReason']).toBeUndefined();
+
+    // 多片：同一个尺子换成 2 个目录 ⇒ 走完只交代「无重无漏」，不交代总量
+    const h = harness(makeTree({ dirs: 2, files: 2, hits: 10 }));
+    const { pages, last } = await walkAll(h.call);
+    expect(last['planSlices']).toBe(2);
+    expect(last['walkComplete']).toBe(true);
+    expect(last['knownTotal']).toBe(false);
+    expect(last['totalScope']).toBe('slice');
+    expect(String(last['knownTotalReason'])).toContain('累加器');
+    // 真总量交给客户端：逐页 sliceTotal 相加即真值（40＝2 目录 × 2 文件 × 10 条）
+    const sum = pages.reduce((acc, p) => acc + Number(p['sliceTotal']), 0);
+    expect(sum).toBe(40);
+    expect(new Set(pages.map((p) => p['sliceIndex'])).size).toBe(2);
+  });
+
   it('search.all（kernelIo 那枚具名工具）同样能分片续取', async () => {
     const h = harness(makeTree());
     let args: Record<string, unknown> = { query: 'hit', resumeBySlice: true, limit: 200 };
@@ -529,6 +562,37 @@ describe('B16 建划 · 无重无漏的四条实测约束', () => {
     expect(slices.length).toBe(2);
     expect((slices[0] as { roots: readonly string[] }).roots.length).toBe(MCP_SEARCH_SLICE_MAX_GROUP_FILES);
     expect((slices[1] as { roots: readonly string[] }).roots.length).toBe(5);
+  });
+
+  it('深树的分组键是**深度 1 目录本身**（不是文件自己）⇒ 分片数＝顶层子目录数，绝不暴涨', async () => {
+    // 3 个深度 1 目录 × 各自一层子目录 × 4 文件 + 根上 1 枚散文件：
+    // 分组键若错成文件自己 ⇒ 12 条单文件片 + 1 散文件片（本批第一轮就是挂在这儿的形状）。
+    const tree = makeTree({ dirs: 0, files: 0, hits: 0 });
+    for (let d = 0; d < 3; d += 1) {
+      tree.dirs.add(`${ROOT}\\d${d}`);
+      tree.dirs.add(`${ROOT}\\d${d}\\sub`);
+      for (let f = 0; f < 4; f += 1) tree.files.set(`${ROOT}\\d${d}\\sub\\f${f}.erb`, 1);
+    }
+    tree.files.set(`${ROOT}\\loose.erb`, 1);
+    const kernel = harness(tree).deps.getKernel() as McpKernelLike;
+    const { slices, inventory } = await buildSlicePlan(kernel, [ROOT]);
+    expect(inventory.length).toBe(13);
+    expect(slices.length).toBe(4); // 3 条深度 1 目录片 + 1 条散文件片
+    const dirRoots = slices.filter((s) => s.kind === 'dir').map((s) => s.roots[0]);
+    expect([...dirRoots].sort()).toEqual([`${ROOT}\\d0`, `${ROOT}\\d1`, `${ROOT}\\d2`]);
+    // 每个可见文件恰好落在一条片里（分片覆盖 = 清单，不重不漏）
+    const covered = (p: string): number =>
+      slices.reduce(
+        (acc, s) => acc + (s.kind === 'files' ? (s.roots.includes(p) ? 1 : 0) : isWithinDir(p, s.roots[0] as string) ? 1 : 0),
+        0,
+      );
+    for (const f of inventory) expect(covered(f)).toBe(1);
+    // 深树端到端同样拼得完整（13 条命中：目录片是递归扫的）
+    const h = harness(tree);
+    const { keys, last } = await walkAll(h.call);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys.length).toBe(13);
+    expect(last['walkComplete']).toBe(true);
   });
 
   it('建划走的是整棵树一趟枚举（清单进游标指纹）⇒ 硬上限常量本批一个没动（当尺子钉住）', () => {
