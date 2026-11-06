@@ -49,10 +49,12 @@
 (funclist_block open: (tryjumplist_line) @indent.begin)
 (try_block open: (tryccall_line) @indent.begin)
 (try_block open: (tryccallform_line) @indent.begin)
+(try_block open: (tryccallstr_line) @indent.begin)
 (try_block open: (trycgoto_line) @indent.begin)
 (try_block open: (trycgotoform_line) @indent.begin)
 (try_block open: (trycjump_line) @indent.begin)
 (try_block open: (trycjumpform_line) @indent.begin)
+(try_block open: (trycjumpstr_line) @indent.begin)
 (while_block open: (while_line) @indent.begin)
 
 ; ── 分支（兄弟行回到父层 ⇒ 既 begin 又 end） ────────────────────────────

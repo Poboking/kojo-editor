@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Language, Parser, Query } from 'web-tree-sitter';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -243,5 +243,66 @@ describe('ERB 查询 · 真 wasm 编译与捕获', () => {
       ]),
     );
     expect(config.surroundingPairs).toEqual(expect.arrayContaining([{ open: '"', close: '"' }]));
+  });
+});
+
+/* ======================================================================== */
+/* ② 真语料：TRYCCALLSTR 在**真 wasm** 里真的成块                            */
+/* ======================================================================== */
+
+/**
+ * 上面两枚覆盖闸只查查询表**写了没有**（`toContain` 字符串判断）。这里补的是另一半：
+ * `TRY_CATCH_OPEN` 从 6 枚补到 8 枚之后，新增的 `TRYCCALLSTR` 必须
+ * ① 被重建后的 wasm/parser 认成 `tryccallstr_line` 并落进 `try_block`（旧 wasm 里这行
+ *    只会是 `statement_line` ⇒ 本用例红），② 被 indents / highlights 两张表捕到
+ *    （删掉查询表里新加的那一行 ⇒ 本用例红）。
+ * 判据出处：真语料 `ERB/SHOP関連/TEST.ERB:13-17`（`TRYCCALLSTR RESULTS` / `PRINTW …` /
+ * `CATCH` / `PRINTW …` / `ENDCATCH`）——引擎 `FunctionIdentifier.cs` 里
+ * `funcMatch[X]="CATCH"` 共 8 行的其中一枚。
+ * 语料不在盘 ⇒ 整组 SKIP，不假绿（与其余语料闸同纪律）。
+ */
+const CORPUS_ROOT = process.env.KOJO_SMOKE_PROJECT ?? process.env.KOJO_CORPUS_DIR;
+const TRYCCALLSTR_CORPUS_FILE = join('ERB', 'SHOP関連', 'TEST.ERB');
+
+describe.skipIf(!CORPUS_ROOT)('ERB 查询 · 真语料 TRYCCALLSTR 走真 wasm 成块', () => {
+  const corpusText = (): string => {
+    const abs = join(CORPUS_ROOT as string, TRYCCALLSTR_CORPUS_FILE);
+    expect(existsSync(abs), `语料文件不在位：${abs}`).toBe(true);
+    return readFileSync(abs, 'utf8');
+  };
+
+  /** 树里所有 `try_block` 的开块字段节点名（节点引用不出树，当场抄成纯数据） */
+  function tryBlockOpens(text: string): string[] {
+    const parser = new Parser();
+    parser.setLanguage(language);
+    const tree = parser.parse(text);
+    if (tree === null) throw new Error('ERB 解析器没有产出语法树');
+    const opens: string[] = [];
+    const walk = (node: typeof tree.rootNode): void => {
+      if (node.type === 'try_block') opens.push(node.childForFieldName('open')?.type ?? '(缺 open)');
+      for (const child of node.namedChildren) walk(child);
+    };
+    try {
+      walk(tree.rootNode);
+    } finally {
+      tree.delete();
+      parser.delete();
+    }
+    return opens;
+  }
+
+  it('真 wasm 把 TRYCCALLSTR 解成 try_block 的开块行（不是兜底语句行）', () => {
+    const opens = tryBlockOpens(corpusText());
+    expect(opens, 'try_block 的开块节点里没有 tryccallstr_line ⇒ wasm/parser 是旧的').toContain('tryccallstr_line');
+    console.log(`[erb-ts-facets] 真语料 try_block 开块：${opens.join(',')}`);
+  });
+
+  it('同一段真语料被 indents.scm / highlights.scm 的 indent.begin / keyword.control 捕到', () => {
+    const text = corpusText();
+    const indents = capturesOf('indents', text).filter((c) => c.node.type === 'tryccallstr_line');
+    expect(indents.map((c) => c.name)).toContain('indent.begin');
+    const highlights = capturesOf('highlights', text).filter((c) => c.node.type === 'tryccallstr_line');
+    expect(highlights.map((c) => c.name)).toContain('keyword.control');
+    console.log(`[erb-ts-facets] 真语料 tryccallstr_line 捕获：indents=${indents.length} highlights=${highlights.length}`);
   });
 });

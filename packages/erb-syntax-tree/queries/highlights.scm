@@ -103,10 +103,12 @@
 (trycalllist_line) @keyword.control
 (tryccall_line) @keyword.control
 (tryccallform_line) @keyword.control
+(tryccallstr_line) @keyword.control
 (trycgoto_line) @keyword.control
 (trycgotoform_line) @keyword.control
 (trycjump_line) @keyword.control
 (trycjumpform_line) @keyword.control
+(trycjumpstr_line) @keyword.control
 (trygotolist_line) @keyword.control
 (tryjumplist_line) @keyword.control
 (wend_line) @keyword.control
