@@ -358,7 +358,7 @@ describe('② 批准：scope 投影 / camelCase args / 真发给 runner / 徽标
     expect(hz.findAll('.mcp-approve-badge')).toHaveLength(0);
   });
 
-  it('逐工具批准：两枚特权工具各自可选中 → mcp_approve 真发两枚 args → data-tool 徽标/清单逐项翻转', async () => {
+  it('逐工具批准：可批准名单里每一枚特权工具各自可选中 → mcp_approve 真发全量 args → data-tool 徽标/清单逐项翻转', async () => {
     let state: McpScopeState = {
       version: 1,
       sessions: [
@@ -383,12 +383,13 @@ describe('② 批准：scope 投影 / camelCase args / 真发给 runner / 徽标
     const hz = await mount(h(AiAccessSection, { runner, pollMs: 0 }));
 
     const approvalSection = hz.find('section[aria-label="MCP 会话授权"]')!;
-    // 逐工具可见性：每个待批准项带 data-tool（= 工具面名字），两枚都在。
+    // 逐工具可见性：每个待批准项带 data-tool（= 工具面名字），与可批准名单**逐字同序**
+    // （B4 批把启动器族列进同一张表 ⇒ 枚数会随名单涨，这里读真源不硬编；口径不变：一枚都不许漏）。
     const items = [...approvalSection.querySelectorAll('li[data-tool]')];
     expect(items.map((li) => li.getAttribute('data-tool'))).toEqual([
-      'fileTree.remove', 'fileTree.rename',
+      ...APPROVABLE_PRIVILEGED_TOOLS,
     ]);
-    // 逐项勾选：每个 li 内各有一个独立 checkbox，两个都点。
+    // 逐项勾选：每个 li 内各有一个独立 checkbox，全部点。
     for (const li of items) {
       const box = li.querySelector('input[type="checkbox"]');
       expect(box, `应有 ${li.getAttribute('data-tool')} 的复选框`).not.toBeNull();
@@ -399,22 +400,21 @@ describe('② 批准：scope 投影 / camelCase args / 真发给 runner / 徽标
     )!;
     await hz.click(approveBtn);
 
-    // 真发 args：一次批准把两枚工具名都写进 approvedTools（camelCase、逐工具精确）。
+    // 真发 args：一次批准把名单里每一枚工具名都写进 approvedTools（camelCase、逐工具精确）。
     const approveCall = calls.find((c) => c.cmd === 'mcp_approve');
     expect(approveCall, '应下发 mcp_approve').toBeDefined();
     const sent = (approveCall!.args as { args: ApprovalBatch }).args;
-    expect(sent.approvedTools).toEqual(['fileTree.remove', 'fileTree.rename']);
+    expect(sent.approvedTools).toEqual([...APPROVABLE_PRIVILEGED_TOOLS]);
     expect(sent.clientId).toBe('c1');
     expect(sent.approvedRoots).toContain('docs');
     expect(Object.keys(sent).sort()).toEqual(
       ['approvedRoots', 'approvedTools', 'clientId', 'tier'].sort(),
     );
 
-    // 批准后翻转：清单含两枚 + 两枚各自「已批准」徽标按 data-tool 可见（不刷 scope 必红）。
+    // 批准后翻转：清单含每一枚 + 每一枚各自「已批准」徽标按 data-tool 可见（不刷 scope 必红）。
     const list = hz.find('[data-testid="mcp-approved-tools"]')!.textContent ?? '';
-    expect(list).toContain('fileTree.remove');
-    expect(list).toContain('fileTree.rename');
-    for (const name of ['fileTree.remove', 'fileTree.rename']) {
+    for (const name of APPROVABLE_PRIVILEGED_TOOLS) {
+      expect(list).toContain(name);
       const li = approvalSection.querySelector(`li[data-tool="${name}"]`)!;
       expect(li.querySelector(`.mcp-approve-badge[data-tool="${name}"]`), `${name} 应有已批准徽标`).not.toBeNull();
     }
