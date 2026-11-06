@@ -67,12 +67,14 @@ import {
   McpFailure,
   assertCursorShape,
   decodePageCursor,
+  decideCommandRunGate,
   encodePageCursor,
   pageFingerprint,
   pageParamsFor,
   paginateByCursor,
   paginateText,
   truncateResourceText,
+  validateAgainstSchema,
 } from '@kojo/mcp-host';
 import type {
 
@@ -316,9 +318,59 @@ export interface McpIoDeps {
    * （铁律 4），也绝不从 MCP 面拿任何落点决定权（铁律 6/7：第三张表只在宿主复验）。
    */
   readonly getLauncher?: () => McpLauncherHostLike | null;
+  /**
+   * `commands.run` 的执行面（B24 批，LaneAK 2026-11-07）：命令表本体 + wiring 那条真源 run
+   * + 可观察事实读数。缺席 ⇒ 显式 `NOT_WIRED`（本面**不自己凑一份命令表**，也不伪造上下文：
+   * 铁律 4）。生产由 `real-sources.ts` 用 `host.getCommands()` / `host.getCommandContext()`
+   * 与事件环 / 登记簿装一份给它；测试注入假件（判据要看的是「闸在调用之前」，不是假件的形状）。
+   */
+  readonly commandRun?: McpCommandRunAccess;
+}
+
+/* ------------------------------- commands.run 的注入面（B24） ------------------------------- */
+
+/** 一条命令跑完前后各读一次的**可观察事实**（全部是读回来的，本腿不写任何一位）。 */
+export interface McpCommandRunFacts {
+  /** 事件环计数（有界环：到顶后不再增长，故只当粗账，真凭据是下面的时间戳）。 */
+  readonly eventCount: number;
+  /** 环里最后一条事件的时间戳；环空 ⇒ null（没有基线就如实说没有）。 */
+  readonly lastEventT: number | null;
+  /** 环尾若干条（有界；`commands.run` 用它摊「这次跑动期间旁听到什么」）。 */
+  readonly eventTail: readonly { readonly t: number; readonly name: string; readonly payload?: unknown }[];
+  /** 活动文档读数（路径 / 语言 / 行数 / 版本）；没有活动编辑器 ⇒ null + 理由。 */
+  readonly document: Record<string, unknown> | null;
+  readonly documentReason?: string;
+  /** 各实例的脏态读数（与 `EditorPane.computeDirty` 同一表达式的读回）；读不到 ⇒ null + 理由。 */
+  readonly dirtyPanes:
+    | readonly { readonly paneId: string; readonly path: string | null; readonly dirty: boolean | null }[]
+    | null;
+  readonly dirtyReason?: string;
+}
+
+/**
+ * `commands.run` 需要的三件真源 + 一件观察件（B24）。
+ *
+ * 为什么这一枚面要**注入**：命令注册表住在 `ShellLayout` 的 `useMemo` 里，没有生产级全局
+ * accessor（`wiring.ts` 模块头同一条纪律）；而这一腿既不能自己复制一份命令表（会漂出第二
+ * 副面孔），也不能自己拼 `EditorCommandContext`（伪造上下文＝铁律 4 的反面）。
+ * 于是 `execute` 必须由装配点给——生产给的就是 `projectCommands(...)` 投影出的那条 `run`，
+ * 缺 `EditorCommandContext` 时它自己抛结构化 `NOT_WIRED`，本腿原样透出。
+ */
+export interface McpCommandRunAccess {
+  /** 命令表本体（**作者自报的 tier 原样**，未经 `classifyCommandTier` 的 fail-closed 改写）。 */
+  entries(): readonly CommandEntry[];
+  /** 派发一条命令（同一命令表里的 `run`，经 wiring 的投影闭包捕获上下文；`scope` 原样透传）。 */
+  execute(id: string, args: Record<string, unknown>, scope: McpSessionScope): unknown;
+  /** 这一枚命令在当前上下文的启用状态（`when` 求值）；上下文缺席 ⇒ null（不猜）。 */
+  enabled(id: string): boolean | null;
+  /** 可观察事实读数（每跑一次前后各读一次）。 */
+  facts(): McpCommandRunFacts | Promise<McpCommandRunFacts>;
 }
 
 /* ------------------------------- 路径闸（与 Rust 同尺） ------------------------------- */
+
+/** `commands.run` 的 commandId 长度上界（B24）：注册表 id 是短标识符，超长＝把标题当 id 发。 */
+const COMMAND_RUN_ID_MAX = 128;
 
 const MAX_PATH_CHARS = 512;
 const MAX_COMPONENT_CHARS = 255;
@@ -1126,6 +1178,135 @@ export function createRunSupplemental(deps: McpIoDeps): (
       nextCursor: p.nextCursor,
       fingerprint: p.fingerprint,
       ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
+    };
+  };
+
+  /**
+   * `commands.run`（B24，LaneAK 2026-11-07）：命令面板的**执行面**——把 `wiring.ts`
+   * `projectCommands` 那条已经是真源的 `run` 接出去，并在这里按顺序过五道闸，全部**拒在调用之前**：
+   *
+   *  1. `commandId` 形状（必填 / 长度 / 控制字符）⇒ `INVALID_ARGS`；
+   *  2. 注入面在场（`deps.commandRun` 缺席 ⇒ `NOT_WIRED`；本腿不自己凑命令表、不自己拼上下文）；
+   *  3. 命令命中（找不到 ⇒ `RESOURCE_UNAVAILABLE` + 交代查了几条、指回 `commands.list`）；
+   *  4. 命令自带的 `argsSchema`（有则按它校验，失败点名**是哪枚命令**要求的）⇒ `INVALID_ARGS`；
+   *  5. 两道安全闸＝`decideCommandRunGate`（效果分类台账 + 逐命令档位，档位真源＝命令表自身，
+   *     `tier` 缺席按 privileged）⇒ `PERMISSION_DENIED`。
+   *
+   * 跑完之后**回读事实**（不是「跑完了」）：命中 / 启用 / 事件旁听 / 活动文档读数 / 各实例脏态。
+   * 面板动作对人负责、没有 ack，故 `run` 返回 void 时如实 `fireAndForget:true`，绝不 `confirmed:true`
+   * 冒充成功（铁律 4；口径与 `commandToTool` 那份诚实回执同尺）。
+   */
+  const commandsRun: McpReaderFn = async (args, scope) => {
+    const a = args ?? {};
+    const rawId = a['commandId'];
+    if (typeof rawId !== 'string' || rawId === '') {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `commands.run 的 commandId 必须是非空字符串（收到 ${typeof rawId === 'string' ? '空串' : String(rawId)}）：先用 commands.list 拿真实 id，别猜。`,
+      );
+    }
+    if (rawId.length > COMMAND_RUN_ID_MAX) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `commands.run 的 commandId 超过 ${COMMAND_RUN_ID_MAX} 字符（实收 ${rawId.length}）：命令 id 是注册表里的短标识符，这里多半是把标题或说明当 id 发了。`,
+      );
+    }
+    if (/[\x00-\x1f\x7f]/.test(rawId)) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        'commands.run 的 commandId 含控制字符 ⇒ 显式拒收（不进判定、不派发）。',
+      );
+    }
+    const access = deps.commandRun;
+    if (!access) {
+      throw new McpFailure(
+        'NOT_WIRED',
+        'commands.run 未接线：宿主没有把命令表与 run 通路交给这一腿（不静默、不自己凑一份命令表、不伪造 EditorCommandContext）',
+      );
+    }
+    const rawArgs = a['args'];
+    if (rawArgs !== undefined && (rawArgs === null || typeof rawArgs !== 'object' || Array.isArray(rawArgs))) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `commands.run 的 args 必须是对象（收到 ${Array.isArray(rawArgs) ? '数组' : typeof rawArgs}）：命令自身的入参原样放在这一格里。`,
+      );
+    }
+    const entries = access.entries();
+    const cmd = entries.find((c) => c.id === rawId);
+    if (!cmd) {
+      throw new McpFailure(
+        'RESOURCE_UNAVAILABLE',
+        `命令表里没有 ${rawId}：现场查过 ${entries.length} 条注册表命令（真源＝buildCommandRegistry 的合并结果，` +
+          '与 commands.list / kojo://project/commands 同一份）。先调 commands.list 枚举行（可分页），' +
+          '拿它回包里逐字的 id 再来——本面不做前缀 / 模糊 / 通配解析。',
+      );
+    }
+    const callArgs = (rawArgs ?? {}) as Record<string, unknown>;
+    if (cmd.argsSchema !== undefined) {
+      const check = validateAgainstSchema(cmd.argsSchema as Record<string, unknown>, callArgs);
+      if (!check.valid) {
+        throw new McpFailure(
+          'INVALID_ARGS',
+          `命令 ${rawId} 自报的 argsSchema 校验未过：${check.errors.join('；')}` +
+            (check.omittedErrors > 0 ? `；另有 ${check.omittedErrors} 条违规项未逐条列出` : '') +
+            `（这一份形状是被点名的命令 ${rawId} 要求的，不是 commands.run 自己的口径）。`,
+        );
+      }
+    }
+    const gate = decideCommandRunGate({ commandId: rawId, declaredTier: cmd.tier, scope });
+    if (!gate.allowed) {
+      throw new McpFailure(gate.code ?? 'PERMISSION_DENIED', gate.reason);
+    }
+    const enabled = access.enabled(rawId);
+    const before = await access.facts();
+    const returned = await access.execute(rawId, callArgs, scope);
+    const after = await access.facts();
+    const baseline = before.lastEventT;
+    const eventsObserved =
+      baseline === null ? [] : after.eventTail.filter((e) => typeof e.t === 'number' && e.t > baseline);
+    const documentChanged =
+      JSON.stringify(before.document ?? null) !== JSON.stringify(after.document ?? null);
+    const dirtyChanged =
+      JSON.stringify(before.dirtyPanes ?? null) !== JSON.stringify(after.dirtyPanes ?? null);
+    return {
+      commandId: rawId,
+      matched: true,
+      title: cmd.title,
+      ...(cmd.description !== undefined ? { description: cmd.description } : {}),
+      ...(cmd.category !== undefined ? { category: cmd.category } : {}),
+      // 两道闸的读数原样摊出来（模型要看得见「为什么这一枚能跑」）。
+      declaredTier: cmd.tier ?? null,
+      requiredTier: gate.requiredTier,
+      tierAbsentFailClosed: cmd.tier === undefined,
+      effectClass: gate.effectClass,
+      gate: {
+        sessionTier: scope.tier,
+        toolApproved: scope.approvedTools.includes('commands.run'),
+        commandApproved: scope.approvedTools.includes(rawId),
+        gateReason: gate.reason,
+      },
+      enabled,
+      ...(enabled === null
+        ? { enabledReason: '启用状态求不到：宿主未给出 EditorCommandContext 或该命令没有 when（不猜）。' }
+        : {}),
+      ran: true,
+      // 面板动作面向人、无 ack：返回 void ⇒ 只能说「派发了」，不能说「确认了」。
+      fireAndForget: returned === undefined,
+      ...(returned !== undefined ? { returned } : {}),
+      facts: {
+        before,
+        after,
+        documentChanged,
+        dirtyChanged,
+        eventsObserved,
+        eventCountDelta: after.eventCount - before.eventCount,
+        // 有界环到顶时「计数差」会归零，故时间戳才是凭据；这一格如实说明凭据可不可靠。
+        eventsObservedReliable: baseline !== null,
+      },
+      note:
+        '以上每一项都是读回来的事实，不是执行成功的断言：命令面板动作对人负责、没有 ack，' +
+        '回执里的 fireAndForget 就是这个区别的正面读数。要核副作用请看 facts 的文档 / 脏态 / 事件三段；' +
+        '落盘与否仍以 fsFreshness 与只读读数为准（本面从不新建写通道，域外写的唯一法定通道是 exportFile）。',
     };
   };
 
@@ -2550,6 +2731,8 @@ export function createRunSupplemental(deps: McpIoDeps): (
 
   const ioTools = new Map<string, (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown> | unknown>([
     ['commands.list', commandsList],
+    // B24（LaneAK）：命令面板的执行面——与清单面同一份命令表真源，五道闸全在派发之前。
+    ['commands.run', commandsRun],
     ['fs.readFile', readFile],
     // MCP-PERF-S4 批（LaneK，2026-11-07）：行区间读（1 基、Monaco 同口径；越界夹取 + truncated
     // 可见，start>end INVALID_ARGS 点名；路径闸同 fs.readFile，可选 rootId 同写腿三道拦截）。

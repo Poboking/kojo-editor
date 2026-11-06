@@ -256,7 +256,9 @@ describe('B24 判据 ① · 逐命令档位判定（纯函数 + 端到端两条�
 
   it('端到端：无 tier 命令在只读 / Edit 会话都跑不动，批准精确 id 后能跑', async () => {
     const calls: string[] = [];
-    const access = accessOf([entry({ id: VIEW_ID, run: () => void calls.push(VIEW_ID) })]) as AccessWithSpy;
+    const access = accessOf([entry({ id: VIEW_ID })], {
+      execute: (id) => void calls.push(id),
+    }) as AccessFixture;
     const sup = createRunSupplemental(ioDeps({ commandRun: access }));
 
     for (const s of [scope('read', [TOOL]), scope('edit', [TOOL]), scope('privileged', [TOOL])]) {
@@ -482,12 +484,14 @@ describe('B24 判据 ④ · 回执是事实，不是「跑完了」', () => {
     expect(isMcpFailure(err)).toBe(true);
     expect((err as McpFailure).code).toBe('RESOURCE_UNAVAILABLE');
     expect((err as McpFailure).message).toContain('layout.nope');
-    expect((err as McpFailure).message, '要交代查了几条 / 指回 commands.list').toMatch(/1|commands\.list/);
+    expect((err as McpFailure).message, '要交代查了几条 / 指回 commands.list').toContain('commands.list');
+    expect((err as McpFailure).message).toContain('现场查过 1 条');
     expect(access.runSpy).not.toHaveBeenCalled();
   });
 
   it('上下文缺席 ⇒ NOT_WIRED（走 wiring 那条真源 run，不伪造 ctx）', async () => {
-    const cmd = entry({ id: VIEW_ID, tier: 'read', run: () => undefined });
+    let ran = false;
+    const cmd = entry({ id: VIEW_ID, tier: 'read', run: () => void (ran = true) });
     const host = {
       getCommands: () => [cmd],
       // 生产宿主一定会给 ctx；这里刻意给 undefined，验腿不自己编一份。
@@ -496,16 +500,15 @@ describe('B24 判据 ④ · 回执是事实，不是「跑完了」', () => {
     } as unknown as McpRealSourceHost;
     const sources = await buildRealMcpSources(host, { invoke: async () => null, searchInFiles: NO_SEARCH });
     const sup = sources.runSupplemental!;
-    const err = await sup!(TOOL, { commandId: VIEW_ID }, scope('privileged', [TOOL, VIEW_ID])).then(
+    const err = await Promise.resolve(sup(TOOL, { commandId: VIEW_ID }, scope('privileged', [TOOL, VIEW_ID]))).then(
       () => null,
       (e: unknown) => e,
     );
     expect(err, '上下文缺席却静默成功＝后门').not.toBeNull();
     expect(isMcpFailure(err)).toBe(true);
     expect((err as McpFailure).code).toBe('NOT_WIRED');
-    let ran = false;
-    cmd.run = () => void (ran = true);
-    expect(ran).toBe(false);
+    expect((err as McpFailure).message).toContain(VIEW_ID);
+    expect(ran, '上下文缺席时命令本体竟被跑了 ⇒ 伪造了执行').toBe(false);
   });
 
   it('有上下文时腿走的正是 projectCommands 那条 run（同一真源，不另起执行通路）', async () => {

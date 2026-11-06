@@ -128,6 +128,9 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   'state.replay': [],
   'preview.document': [],
   'commands.list': SHARED_LIST, // paginateByCursor(all, keyOf, args)
+  // B24：命令执行面的腿逐字取用 `args['commandId']` / `args['args']`（不整只交给任何函数，
+  // 也不吃分页键——它不是分页面，故 `DECLARED_BUT_NOT_CONSUMED` 里零残项）。
+  'commands.run': ['commandId', 'args'],
   'document.active': SHARED_TEXT, // paginateText(text, args)
   'fs.readFile': ['relPath', ...SHARED_TEXT], // resolveWithinRoot(args.relPath) + paginateText(args)
   // MCP-PERF-S4（LaneK，2026-11-07）：行区间读——腿读 relPath（resolveWithinRoot）+ 可选 rootId

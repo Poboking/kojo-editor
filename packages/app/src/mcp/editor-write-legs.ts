@@ -377,6 +377,51 @@ export async function productionResolveEditorPane(paneId: string): Promise<Edito
   };
 }
 
+/**
+ * 「各实例此刻脏不脏」的只读快照（B24，LaneAK 2026-11-07）——`commands.run` 回读事实用。
+ *
+ * 三条纪律：
+ * - **零写入**：只读登记簿与模型池，不动任何一位；
+ * - **同一把尺**：脏态逐条走 `productionResolveEditorPane(paneId).readDirty`，也就是
+ *   `EditorPane.tsx` 的 `computeDirty` 那一个表达式（BUG-4 口径），不在这里再抄一份基线比较；
+ * - **有界**：最多 `limit` 个实例，超出如实标 `truncated`；登记簿整张读不到 ⇒ `panes:null` +
+ *   理由（铁律 4：缺席可见，绝不空数组冒充「都不脏」）。
+ */
+export async function productionEditorDirtySnapshot(
+  limit: number,
+): Promise<{
+  panes: readonly { paneId: string; path: string | null; dirty: boolean | null }[] | null;
+  truncated: boolean;
+  reason: string | null;
+}> {
+  const runtime = await loadEditorWriteRuntime();
+  const panes = runtime.panes;
+  if (!panes) {
+    return {
+      panes: null,
+      truncated: false,
+      reason: '编辑器登记簿装载失败或不在场（GUI 未挂载）：脏态无从可取，不编造「都不脏」',
+    };
+  }
+  const ids = [...panes.keys()];
+  const take = ids.slice(0, Math.max(0, Math.floor(limit)));
+  const out: { paneId: string; path: string | null; dirty: boolean | null }[] = [];
+  for (const paneId of take) {
+    const handle = await productionResolveEditorPane(paneId);
+    if (!handle) continue;
+    const dirty = handle.readDirty ? handle.readDirty() : null;
+    out.push({ paneId, path: handle.path, dirty });
+  }
+  return {
+    panes: out,
+    truncated: ids.length > take.length,
+    reason:
+      out.length === 0
+        ? `登记簿里 ${ids.length} 个实例没有一个能解析出编辑器句柄（未开文件 / 已关标签）：脏态无从可取`
+        : null,
+  };
+}
+
 /* ------------------------------- 五枚执行腿 ------------------------------- */
 
 async function resolveHandle(

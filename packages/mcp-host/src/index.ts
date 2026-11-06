@@ -1157,6 +1157,43 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     annotations: { readOnlyHint: true },
   },
   {
+    // B24（LaneAK 2026-11-07）：命令面板的**执行面**。清单面 `commands.list` 早就存在，
+    // 但今天没有任何一具面能让模型跑一条命令——这一枚把 `wiring.ts::projectCommands`
+    // 那条已经是真源的 `run` 接出去，并在这里（契约侧）配齐两道独立的安全闸：
+    //  ① 档位判定按**被点名那枚命令**自报的 `CommandEntry.tier` 走，`tier` 缺席一律按
+    //     `privileged` 处理（「未标注就当只读放行」＝后门，判据 ① 逐条钉住）；
+    //  ② 效果分类台账（`classifyCommandEffect`）非「纯 UI / 只读」且未被逐条点名放行 ⇒
+    //     默认拒，且拒在调用之前（零副作用）。
+    // 工具自身登记 privileged 并同批进 `APPROVABLE_PRIVILEGED_TOOLS` ＋ Rust
+    // `PRIVILEGED_EXACT`：在册新名不进档位真源表＝池级红线。它**不是**第四张表的旁路：
+    // 写盘类命令照旧只能经 `exportFile` 那一条法定通道，这一枚默认连写盘类都不派发。
+    name: 'commands.run',
+    description:
+      'Dispatch ONE command-palette entry by exact id, then read back observable facts. Execution twin of `commands.list` (same registry source) — discover the real id there first; no fuzzy, prefix or wildcard resolution. Two INDEPENDENT gates run before anything is dispatched: (1) the entry\'s OWN declared tier decides the session requirement and a MISSING tier is treated as `privileged`, i.e. it must appear verbatim in this session\'s approvedTools (nothing is ever "unannotated ⇒ assume read-only"); (2) an effect-class ledger rejects every entry not provably pure view/UI state (write / dialog / network / lifecycle / unclassified) unless individually released by exact id — rejections happen BEFORE the call, so a rejected command has zero side effects. Native dialogs are rejected on principle: the model cannot obtain evidence a human pressed OK. Out-of-domain writes keep their single legal channel (`exportFile`, dialog bound to the write in one host command); this surface opens no arbitrary target path and never bypasses the fourth table. `commandId` is required; optional `args` is validated against that entry\'s OWN argsSchema when it declares one (the failure then names which command required it). The response is facts, not a success flag: `{commandId, matched, enabled, declaredTier, requiredTier, effectClass, ran, fireAndForget, facts:{before,after,documentChanged,eventsObserved}, gate}`. Palette actions are fire-and-forget (no ack), so a void run reports `fireAndForget:true` and never `confirmed:true`; unknown id fails `RESOURCE_UNAVAILABLE`, a missing editor command context fails `NOT_WIRED` (never fabricated), a shape violation fails `INVALID_ARGS`. Every dispatch and rejection carries a host audit line naming the command id (read through the existing host audit query; no new MCP protocol surface).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        commandId: {
+          type: 'string',
+          minLength: 1,
+          maxLength: 128,
+          pattern: '^[A-Za-z0-9_.\\-]+$',
+          description:
+            'Exact command id as listed by commands.list (case- and punctuation-sensitive). Wildcards, prefixes and fuzzy names are NOT resolved: an id that is not in the registry fails RESOURCE_UNAVAILABLE.',
+        },
+        args: {
+          type: 'object',
+          description:
+            'Optional argument object handed to the entry as-is. When that entry declares its own argsSchema, this object is validated against it and the failure names the command that required it; the surface itself declares no further argument names, so an unknown top-level key is rejected.',
+        },
+      },
+      required: ['commandId'],
+      additionalProperties: false,
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
+  {
     name: 'document.active',
     description:
       'Read the active document text and cursor position as a read-only projection. Same data source as the kojo://project/active-document resource, but this surface pages: `offset` (0-based character offset) + `length` (alias `maxChars`) address a sub-range, and `cursor` from the previous response resumes exactly where it ended — `textLength` is the FULL length, so concatenating pages reproduces the buffer character-for-character. Page size: default 8000, max 65000 characters (the host sanitizer cuts any untrusted string at 65536, so pages are kept under that gate rather than reported-then-trimmed). `limit` / `length` / `maxChars` are ONE knob (`limit` is the real name; the other two are this surface\'s historical synonyms, still honored) — an undeclared argument name is now rejected loudly rather than silently defaulting. ' +
@@ -2271,6 +2308,9 @@ export const MCP_TOOL_GAP_MAP: readonly {
   { tool: 'fileTree.remove', gap: 'remove_file', source: 'rust' },
   { tool: 'fileTree.rename', gap: 'rename_path', source: 'rust' },
   { tool: 'commands.list', gap: 'commands', source: 'tool-surface' },
+  // B24：执行面与清单面同源（同一个命令注册表），故共用 `commands` 这一枚缺口名——
+  // 盘点脚本按「缺口被 ≥1 枚具名工具覆盖」计 wired，重复登记不会把 wiredGaps 抬成 2。
+  { tool: 'commands.run', gap: 'commands', source: 'tool-surface' },
   { tool: 'document.active', gap: 'active-document', source: 'tool-surface' },
   { tool: 'fs.readFile', gap: 'read_file_bytes', source: 'rust' },
   { tool: 'fs.stat', gap: 'stat_file', source: 'rust' },
@@ -2987,6 +3027,249 @@ export function classifyCommandTier(id: string, declared?: McpTier): McpTier {
   if (isDangerousTool(id)) return inferred; // 冻结危险名单是显式红线，不接受任何放宽
   if (declared === undefined) return inferred;
   return TIER_RANK[declared] > TIER_RANK[inferred] ? declared : inferred;
+}
+
+/* ---------------------- B24：命令执行面（commands.run）的两道闸 ---------------------- */
+
+/**
+ * 命令的**效果类别**（B24，LaneAK 2026-11-07）。
+ *
+ * 为什么要有这一张表：命令面板是这个仓里一切功能的统一可编程入口，但它的条目**面向人**——
+ * 人会在写盘前看到确认框、会在联网后看到结果。模型没有那双眼。所以「能不能点名跑一条命令」
+ * 不能只问档位（档位问的是「谁批准」），还必须问「跑下去会发生什么、事后拿不拿得到证据」。
+ *
+ * 判据只有 **id 形状**（零游戏名词，与 `classifyCommandTier` / Rust `COMMAND_PANEL_PREFIXES`
+ * 同口径）：
+ * - `ui-state` 纯视图 / 标签 / 面板 / 布局状态——**必须正面证明**才给这一档；
+ * - `write` 写盘 / 改正文 / 持久化用户状态；
+ * - `dialog` 原生对话框（模型拿不到「有人点了确定」的证据；对话框即授权是 `exportFile`
+ *   那条法定通道的形态，不在这一枚面里复现）；
+ * - `external` 原生外壳 / 外部程序（浏览器之外，零可核验回执）；
+ * - `network` 联网（`market_*` 一族与检查更新）；
+ * - `lifecycle` 应用 / 工作区生命周期（换项目、退出、启动器实例）；
+ * - `unclassified` 台账分不出来 ⇒ **与危险同级处理**（fail-closed：宁可拒一条真能跑的，
+ *   也不放行一条说不清的）。
+ */
+export type McpCommandEffectClass =
+  | 'ui-state'
+  | 'write'
+  | 'dialog'
+  | 'external'
+  | 'network'
+  | 'lifecycle'
+  | 'unclassified';
+
+interface CommandEffectRule {
+  readonly effectClass: McpCommandEffectClass;
+  readonly test: RegExp;
+  readonly rationale: string;
+}
+
+/**
+ * 台账规则表：**顺序即优先级**。前六支是「命中即归危险类」，先于放行面判；
+ * 后三支是「正面证明是纯视图」，都不命中才落 `unclassified`。
+ *
+ * 逐条依据（只按形状判据，不抄命令清单；每一支都对着真命令表现场枚举核过——
+ * 读数见 `packages/app/tests/mcp-commands-run.test.ts` 判据 ③ 的 B24_LEDGER 输出）：
+ * - `lifecycle`：换掉整个工作区上下文（开 / 关项目、重启）与启动器实例族——B4 批已把
+ *   `launcher_*` 整族判 privileged，这里是同一条尺的点号形态；
+ * - `external`：开的是操作系统里的程序（资源管理器 / 项目目录 / 外链），MCP 侧既没有落点
+ *   也没有回执；
+ * - `network`：`market_*` 与检查更新，结果取决于外部服务；
+ * - `dialog`：另存为 / 旧版重命名 / 挑选目录这类要走原生对话框的动作（默认拒的理由见类型注释）；
+ * - `write`：动词表覆盖写盘、改正文与持久化用户状态三类（书签这类要落盘的「视图状态」
+ *   照此归 write，宁可多拒——见批次回执「诚实剩余」）；
+ * - `ui-state` 三支：壳层容器（`layout.` 整族＝React 视图状态，零 IO）、编辑器的字号缩放
+ *   与三个纯导航内建动作、工作台里动词可正面证明的视图 / 标签 / 面板 / 布局动作。
+ */
+const COMMAND_EFFECT_RULES: readonly CommandEffectRule[] = [
+  {
+    effectClass: 'lifecycle',
+    test: /(^|[._])(restart|relaunch|reload|quit|exit|shutdown|closeProject|openProject([._]|$)|openRecentProjects)/i,
+    rationale: '应用 / 工作区生命周期：换掉的是整个会话的上下文，不是视图',
+  },
+  {
+    effectClass: 'lifecycle',
+    test: /^launcher[._]/i,
+    rationale: '启动器族：实例生命周期入口（与 B4 批 launcher_* 整族 privileged 同尺）',
+  },
+  {
+    effectClass: 'external',
+    test: /(osExplorer|openProjectFolder|openUrl|openExternal|revealIn|showFileIn|launch[A-Za-z]*$)/i,
+    rationale: '原生外壳 / 外部程序：落点在浏览器之外，MCP 面既拿不到落点也拿不到回执',
+  },
+  {
+    effectClass: 'network',
+    test: /(^|[._])(market|fetch|download|sync|checkUpdates|update([A-Za-z]*|([._]|$)))/i,
+    rationale: '联网动作：结果取决于外部服务，不在本仓可核验的面里',
+  },
+  {
+    effectClass: 'dialog',
+    test: /(saveAs|legacyRename|choose|pick[A-Za-z]*|prompt|dialog|confirm|renamePath)/i,
+    rationale:
+      '原生对话框：模型拿不到「有人点了确定」这件事的证据，而「对话框即授权」是 exportFile 的法定形态，不在本面复现',
+  },
+  {
+    effectClass: 'write',
+    test: /(save|export|remove|delete|rename|create|update|apply|install|uninstall|restore|backup|clear|format|replace|write|insert|patch|duplicate|setValue|fixAll|bookmark)/i,
+    rationale: '写盘 / 改正文 / 持久化用户状态：域外写只有一条法定通道 exportFile（铁律 6）',
+  },
+  {
+    effectClass: 'ui-state',
+    test: /^layout\./i,
+    rationale: '壳层容器显隐 / 写作模式 / 布局重置：只改视图状态，零 IO',
+  },
+  {
+    effectClass: 'ui-state',
+    test: /^editor\.(fontZoom(In|Out|Reset)|action\.(gotoLine|find|references))$/i,
+    rationale: '字号缩放与三个纯导航内建动作：改的是渲染 / 视口 / 面板，不动正文',
+  },
+  {
+    effectClass: 'ui-state',
+    test: /^workbench\.(toggle|focus|next|prev|show|hide|split|set|nav|reopen|enlarge|shrink|close(ActiveTab|EditorGroup)|commandPalette|quickOpen|workspaceSymbols|problems|keybindings|search)/i,
+    rationale: '工作台里动词可正面证明的视图 / 标签 / 面板 / 布局动作：零写盘、零对话框、零联网',
+  },
+];
+
+/** 命令 id → 效果类别（未知形状 ⇒ `unclassified`，fail-closed）。 */
+export function classifyCommandEffect(id: string): McpCommandEffectClass {
+  for (const rule of COMMAND_EFFECT_RULES) {
+    if (rule.test.test(id)) return rule.effectClass;
+  }
+  return 'unclassified';
+}
+
+/** 效果类别的人读理由（命中哪一支规则就说哪一支；`unclassified` 说「台账分不出」）。 */
+export function commandEffectRationale(effectClass: McpCommandEffectClass): string {
+  if (effectClass === 'unclassified') {
+    return '分类台账分不出这一枚命令的效果（没有任何一支规则命中）⇒ 按最危险处理，默认拒';
+  }
+  const hit = COMMAND_EFFECT_RULES.find((r) => r.effectClass === effectClass);
+  return hit ? hit.rationale : `效果类别 ${effectClass}`;
+}
+
+/** 台账现场枚举的形状（不手抄命令名：给一堆 id，回来的是逐类成员与计数）。 */
+export interface McpCommandEffectLedger {
+  readonly total: number;
+  readonly counts: Readonly<Record<McpCommandEffectClass, number>>;
+  readonly byClass: Readonly<Record<McpCommandEffectClass, string[]>>;
+}
+
+const COMMAND_EFFECT_CLASSES: readonly McpCommandEffectClass[] = [
+  'ui-state',
+  'write',
+  'dialog',
+  'external',
+  'network',
+  'lifecycle',
+  'unclassified',
+];
+
+/** 对一堆命令 id 现场做分类台账（B24 判据 ③：台账从命令表枚举个数，不抄清单）。 */
+export function commandEffectLedger(ids: readonly string[]): McpCommandEffectLedger {
+  const byClass = Object.fromEntries(
+    COMMAND_EFFECT_CLASSES.map((c) => [c, [] as string[]]),
+  ) as Record<McpCommandEffectClass, string[]>;
+  for (const id of ids) byClass[classifyCommandEffect(id)].push(id);
+  const counts = Object.fromEntries(
+    COMMAND_EFFECT_CLASSES.map((c) => [c, byClass[c].length]),
+  ) as Record<McpCommandEffectClass, number>;
+  return { total: ids.length, counts, byClass };
+}
+
+/**
+ * **逐条点名放行**名单：效果类默认拒的唯一出口。
+ *
+ * 当前＝空集，且这条判据由用例钉住（`expect(COMMAND_RUN_RELEASE_ALLOWLIST).toEqual([])`）。
+ * 往里加一枚名字，必须同批带上「哪一类、为什么这一枚可以给模型、事后拿什么证据」——
+ * 那是一张新的人工判据表，不是一行字符串；本批不做（诚实剩余里已点名）。
+ * 这一枚名单**只解除效果类这一道闸**，档位判定照旧按命令表走。
+ */
+export const COMMAND_RUN_RELEASE_ALLOWLIST: readonly string[] = [];
+
+/** `commands.run` 的档位判定入参（`declaredTier` ＝被点名那枚命令自报的 tier，可缺席）。 */
+export interface McpCommandRunGateInput {
+  readonly commandId: string;
+  readonly declaredTier?: McpTier;
+  readonly scope: McpSessionScope;
+  /** 覆盖缺省放行名单（只用于判据演示；生产一律走 `COMMAND_RUN_RELEASE_ALLOWLIST`）。 */
+  readonly allowlist?: readonly string[];
+}
+
+export interface McpCommandRunGateDecision {
+  readonly allowed: boolean;
+  readonly code?: 'PERMISSION_DENIED';
+  readonly reason: string;
+  readonly effectClass: McpCommandEffectClass;
+  readonly requiredTier: McpTier;
+  readonly blockedBy?: 'effect-class' | 'tier' | 'command-approval';
+}
+
+/**
+ * `commands.run` 的两道闸（纯函数，判据 ①③ 在这里对拍；两道闸**互相独立**，
+ * 谁都不许把谁买通：自报 `read` 买不通效果类，逐条放行也买不通档位判定）。
+ *
+ * 1. 效果类闸：非 `ui-state` 且不在逐条点名放行名单 ⇒ 拒（拒在调用之前 ⇒ 零副作用）。
+ * 2. 档位闸：`requiredTier = declaredTier ?? 'privileged'`——**tier 缺席一律按 privileged**，
+ *    绝不「未标注就当只读放行」；
+ *    - `read` ⇒ 任意会话可跑（工具自身的 privileged 批准仍是前置，那是第一把锁）；
+ *    - `edit` ⇒ 会话 tier 至少 `edit`（与 `tierAllowed` 同一把尺）；
+ *    - `privileged` ⇒ 会话 tier 至少 `privileged` **且**第四张表按精确命令 id 批准
+ *      （通配 `*` / `commands.*` 不构成批准，与 Rust `approved_privileged_tool` 同口径）。
+ */
+export function decideCommandRunGate(input: McpCommandRunGateInput): McpCommandRunGateDecision {
+  const { commandId, scope } = input;
+  const effectClass = classifyCommandEffect(commandId);
+  // 档位真源＝命令表自身；缺席 ⇒ fail-closed 到最高档。
+  const requiredTier: McpTier = input.declaredTier ?? 'privileged';
+  const sessionRank = TIER_RANK[scope.tier];
+
+  if (effectClass !== 'ui-state') {
+    const released = (input.allowlist ?? COMMAND_RUN_RELEASE_ALLOWLIST).includes(commandId);
+    if (!released) {
+      return {
+        allowed: false,
+        code: 'PERMISSION_DENIED',
+        effectClass,
+        requiredTier,
+        blockedBy: 'effect-class',
+        reason:
+          `命令 ${commandId} 的效果分类=${effectClass}，不是「纯 UI / 只读」这一档，` +
+          `也未被逐条点名放行 ⇒ 显式拒绝（拒在调用之前，零副作用）。理由：${commandEffectRationale(effectClass)}。`,
+      };
+    }
+  }
+
+  if (requiredTier === 'privileged' && !scope.approvedTools.includes(commandId)) {
+    return {
+      allowed: false,
+      code: 'PERMISSION_DENIED',
+      effectClass,
+      requiredTier,
+      blockedBy: 'command-approval',
+      reason:
+        `命令 ${commandId} 的档位=${requiredTier}（tier 缺席按 privileged 处理：本面绝不把「未标注」当「只读」放行）` +
+        '⇒ 必须在本会话 approvedTools 里**精确列出这一枚命令 id**（通配与前缀都不算批准）。',
+    };
+  }
+  if (TIER_RANK[requiredTier] > sessionRank) {
+    return {
+      allowed: false,
+      code: 'PERMISSION_DENIED',
+      effectClass,
+      requiredTier,
+      blockedBy: 'tier',
+      reason:
+        `命令 ${commandId} 需要档位 >= ${requiredTier}（tier=${input.declaredTier ?? '缺席⇒privileged'}），` +
+        `会话档位=${scope.tier} ⇒ 显式拒绝（不静默降级、不伪造上下文）。`,
+    };
+  }
+  return {
+    allowed: true,
+    effectClass,
+    requiredTier,
+    reason: `两道闸都过：效果分类=${effectClass}、命令档位=${requiredTier} ≤ 会话档位=${scope.tier}。`,
+  };
 }
 
 /** 命令 → 工具：name=id、description=description??title、inputSchema=argsSchema??{}、tier 缺省 'edit'；危险名强制 privileged。 */

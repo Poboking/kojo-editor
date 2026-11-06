@@ -6123,3 +6123,195 @@ fn patch_lines_is_registered_multiroot_write_leg_and_edit_tier() {
         "未批准根必须逐枚拒绝（绝不退回项目根）"
     );
 }
+
+/* ============================ B24：命令执行面 commands.run ============================ */
+
+/// 档位真源同批：名字进 `PRIVILEGED_EXACT` ⇒ `host_required_tier` 判 privileged。
+/// 不点名它会落 `Read`（点号形态既不命中 `COMMAND_PANEL_PREFIXES` 里的具体命名空间，
+/// 也不命中 `EDIT_TOOL_PREFIXES` 的下划线动词表）＝未批准会话直调的后门。
+#[test]
+fn commands_run_is_gated_as_privileged_at_host_gate() {
+    assert!(
+        PRIVILEGED_EXACT.contains(&COMMAND_RUN_TOOL),
+        "commands.run 没进 Rust 档位真源表＝在册新名没同批进真源"
+    );
+    assert!(is_privileged_tool(COMMAND_RUN_TOOL));
+    assert_eq!(host_required_tier(COMMAND_RUN_TOOL), McpTier::Privileged);
+    // 相邻名字零改动（前缀表没被放宽）：清单面照旧 read、面板动作照旧 privileged。
+    assert_eq!(host_required_tier("commands.list"), McpTier::Read);
+    assert_eq!(host_required_tier("workbench.saveAll"), McpTier::Privileged);
+}
+
+/// 审计附注的纯函数面：只有 commands.run 带账、无参数帧不硬写、脏输入有界可控。
+#[test]
+fn commands_run_audit_note_is_bounded_and_only_for_the_run_surface() {
+    // 非这一枚工具 ⇒ None（其它工具的审计形状一字不变）。
+    assert_eq!(
+        command_run_audit_note("commands.list", &json!({"arguments": {"commandId": "a.b"}})),
+        None
+    );
+    // 参数对象缺席（tools/list 的 Filtered 账 args=Null）⇒ None，不硬写 absent。
+    assert_eq!(command_run_audit_note(COMMAND_RUN_TOOL, &Value::Null), None);
+    // 正常点名。
+    assert_eq!(
+        command_run_audit_note(
+            COMMAND_RUN_TOOL,
+            &json!({"arguments": {"commandId": "workbench.saveAll"}})
+        ),
+        Some("commandId=workbench.saveAll".to_string())
+    );
+    // 有 commandId 键但值不可信（非字符串）⇒ absent 可见，不静默。
+    assert_eq!(
+        command_run_audit_note(COMMAND_RUN_TOOL, &json!({"arguments": {"commandId": 7}})),
+        Some("commandId=<absent>".to_string())
+    );
+    // 控制字符逐个换 `_`（不可信串不原样落盘）。
+    let dirty =
+        command_run_audit_note(COMMAND_RUN_TOOL, &json!({"arguments": {"commandId": "a\tb\u{7}c"}}))
+            .unwrap();
+    assert_eq!(dirty, "commandId=a_b_c".to_string());
+    // 超长 ⇒ 截到闸值并补省略号（有界）。
+    let long = "x".repeat(MAX_COMMAND_ID_CHARS + 40);
+    let note = command_run_audit_note(COMMAND_RUN_TOOL, &json!({"arguments": {"commandId": long}}))
+        .unwrap();
+    let body = note.strip_prefix("commandId=").unwrap();
+    assert_eq!(body.chars().count(), MAX_COMMAND_ID_CHARS + 1, "{body}");
+    assert!(body.ends_with('…'));
+    // `args` 形态（桥内别名）同样认。
+    assert_eq!(
+        command_run_audit_note(
+            COMMAND_RUN_TOOL,
+            &json!({"args": {"commandId": "layout.reset"}})
+        ),
+        Some("commandId=layout.reset".to_string())
+    );
+}
+
+/// 端到端：未批准的会话直调 ⇒ 恰一条 Denied 审计、码 E_TOOL_NOT_APPROVED、审计带被点名的
+/// 命令 id、**桥零调用**（拒在派发之前）。
+#[test]
+fn e2e_tools_call_denies_commands_run_with_command_id_in_audit_and_zero_bridge_calls() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":940,"method":"tools/call","params":{"name":"commands.run","arguments":{"commandId":"layout.toggleSidebar"}}}"#;
+    let r = mcp_post(s.port, &s.token, body);
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    assert_eq!(v["error"]["data"]["code"], json!("E_TOOL_NOT_APPROVED"));
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("commands.run"));
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(denied.len(), 1, "未批准会话直调应恰写一条 Denied 审计");
+    let e = denied[0];
+    assert_eq!(e.tool, "commands.run");
+    let note = e.note.clone().unwrap_or_default();
+    assert!(
+        note.contains("commandId=layout.toggleSidebar"),
+        "拒绝的账必须带被点名的命令 id：{note}"
+    );
+    assert!(
+        note.starts_with("E_TOOL_NOT_APPROVED"),
+        "原始码不许被附注挤掉：{note}"
+    );
+    assert!(
+        s.rx.try_recv().is_err(),
+        "未批准会话的 commands.run 仍被转给 WebView ⇒ 后门复现"
+    );
+}
+
+/// 端到端：工具级批准 ⇒ 帧照旧走桥并成功，成功那一格同样带命令 id（跑也要有账）。
+#[test]
+fn e2e_commands_run_allowed_call_walks_the_bridge_and_audits_the_command_id() {
+    let s = TestServer::start();
+    scope::approve(
+        s.dir.path(),
+        "loopback-client",
+        McpTier::Read,
+        vec![],
+        vec![COMMAND_RUN_TOOL.to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let body = r#"{"jsonrpc":"2.0","id":941,"method":"tools/call","params":{"name":"commands.run","arguments":{"commandId":"layout.toggleSidebar"}}}"#;
+    let port = s.port;
+    let token = s.token.clone();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, body));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.params["name"], json!("commands.run"));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(
+                json!({ "commandId": "layout.toggleSidebar", "ran": true, "fireAndForget": true }),
+            ),
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    let v = rpc_json(&r);
+    assert_eq!(v["result"]["fireAndForget"], json!(true));
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let ok: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Ok)
+        .collect();
+    assert_eq!(ok.len(), 1, "跑成的那一格也要有账");
+    assert!(
+        ok[0]
+            .note
+            .clone()
+            .unwrap_or_default()
+            .contains("commandId=layout.toggleSidebar"),
+        "跑成的账必须点出被跑的命令 id"
+    );
+    // 第四张表批准的是**工具**，不是命令：命令级判定在 WebView 腿里按命令表自报档位走
+    // （tier 缺席按 privileged），端点不替它放宽——通配与前缀在这里同样不算批准。
+    let grant_scope = McpSessionScope {
+        tier: McpTier::Read,
+        ..empty_scope(vec![COMMAND_RUN_TOOL.to_string(), "commands.*".to_string()])
+    };
+    assert!(!approved_privileged_tool("layout.toggleSidebar", &grant_scope));
+    assert!(approved_privileged_tool(COMMAND_RUN_TOOL, &grant_scope));
+}
+
+/// `tools/list` 侧：未批准不上帧；精确批准才上帧（与 privileged 族同一把尺）。
+#[test]
+fn filter_tools_list_hides_commands_run_until_exact_approval() {
+    let frame = json!({"tools":[{"name":"commands.list"},{"name":COMMAND_RUN_TOOL}]});
+    let unapproved = McpSessionScope {
+        tier: McpTier::Privileged,
+        ..empty_scope(Vec::new())
+    };
+    let names = names_of(&filter_tools_list(&frame, &unapproved).result);
+    assert!(names.contains(&"commands.list"));
+    assert!(
+        !names.contains(&"commands.run"),
+        "未批准会话看得见执行面＝后门"
+    );
+
+    let approved = McpSessionScope {
+        tier: McpTier::Privileged,
+        ..empty_scope(vec![COMMAND_RUN_TOOL.to_string()])
+    };
+    let names2 = names_of(&filter_tools_list(&frame, &approved).result);
+    assert!(names2.contains(&"commands.run"));
+
+    // 通配批准不算批准（privileged 只认精确名）。
+    let wildcard = McpSessionScope {
+        tier: McpTier::Privileged,
+        ..empty_scope(vec!["commands.*".to_string()])
+    };
+    let names3 = names_of(&filter_tools_list(&frame, &wildcard).result);
+    assert!(
+        !names3.contains(&"commands.run"),
+        "通配把执行面放行了＝第四张表被绕过"
+    );
+}

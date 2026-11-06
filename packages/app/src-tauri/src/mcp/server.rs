@@ -33,11 +33,11 @@ use super::audit::{self, AuditEntry, AuditOutcome};
 use super::latency::{self, Ledger};
 use super::protocol::{
     attach_negotiation_meta, check_protocol_version, check_root_id_param,
-    check_tool_call_permission, classify_envelope, codes, decode_request, filter_tools_list,
-    is_market_tool, negotiate, negotiate_accept, sanitize_string, sanitize_untrusted_inplace,
-    validate_params, AcceptKind, JsonRpcResponse, LocalOutcome, McpError, McpRequestPayload,
-    McpRespondArgs, McpSessionScope, McpTier, Negotiation, RequestEnvelope, WebMethod,
-    MCP_CLIENT_CONNECTED_EVENT, MCP_REQUEST_EVENT, PROTOCOL_VERSION,
+    check_tool_call_permission, classify_envelope, codes, command_run_audit_note, decode_request,
+    filter_tools_list, is_market_tool, negotiate, negotiate_accept, sanitize_string,
+    sanitize_untrusted_inplace, validate_params, AcceptKind, JsonRpcResponse, LocalOutcome,
+    McpError, McpRequestPayload, McpRespondArgs, McpSessionScope, McpTier, Negotiation,
+    RequestEnvelope, WebMethod, MCP_CLIENT_CONNECTED_EVENT, MCP_REQUEST_EVENT, PROTOCOL_VERSION,
 };
 use super::scope;
 
@@ -1906,6 +1906,16 @@ fn record(
     elapsed_ms: Option<u64>,
 ) {
     let mut final_note = note;
+    // B24：命令执行面（`commands.run`）的每一条账都要看得见**被点名的那枚命令 id**——
+    // 工具名只有一个（`commands.run`），真正的动作在参数里。附注由纯函数从请求帧取，
+    // 非这一枚工具 ⇒ `None`，其它工具的审计形状一字不变。跑（Ok/Error）与拒（Denied）
+    // 都走这里，故「每次跑 / 每次拒各一条可查的账」不需要新增任何入口。
+    if let Some(command_note) = command_run_audit_note(tool, args) {
+        final_note = Some(match final_note {
+            Some(n) => format!("{n}; {command_note}"),
+            None => command_note,
+        });
+    }
     if landed_path.is_some() {
         let tag = "landedPath reported by WebView response (untrusted)";
         final_note = Some(match final_note {

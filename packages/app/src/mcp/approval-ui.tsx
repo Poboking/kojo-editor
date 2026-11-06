@@ -73,6 +73,11 @@ export const PRIVILEGED_TOOL_NAMES: readonly string[] = [
  *    宿主侧的第三张表复验（实例 × rootId 逐根授权）与确认闸 / 信任闸也不因本表存在而放松。
  */
 export const APPROVABLE_PRIVILEGED_TOOLS: readonly string[] = [
+  // B24（LaneAK，2026-11-07）：命令面板的执行面。登记即须可批——它与 Rust
+  // `PRIVILEGED_EXACT` 同批扩容（在册新名没进档位真源表＝池级红线，两边都有用例）。
+  // 批准这一枚**只解除工具级那道锁**：跑哪条命令仍逐条走「效果分类台账 + 命令自报档位」
+  // （tier 缺席按 privileged ⇒ 还要精确列出那一枚命令 id），且非「纯 UI/只读」类默认拒。
+  'commands.run',
   'fileTree.remove',
   'fileTree.rename',
   // ---- B4 批：启动器族只读面（13 枚，零副作用）----

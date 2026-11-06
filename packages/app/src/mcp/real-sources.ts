@@ -51,7 +51,7 @@ import type {
 } from '@kojo/mcp-host';
 import { KERNEL_EVENT_NAMES } from '@kojo/plugin-api';
 import type { EditorCommandContext, EditorSymbolLocation } from '@kojo/plugin-api';
-import type { CommandEntry } from '../ui/commands';
+import { commandEnabled, type CommandEntry } from '../ui/commands';
 import { recordQuickFixTickets, type QuickFixPaneResolver } from './quick-fix';
 // B3 批（LaneO）：编辑器写 / 光标副作用五枚的 pane 反查 seam 类型（生产解析在
 // editor-write-legs.ts 内部动态 import livePanes，本文件不静态拉 ui/*）。
@@ -59,9 +59,7 @@ import type { EditorWritePaneResolver } from './editor-write-legs';
 // B10 批（LaneV）：`editor.openDocument` 的注入面形状（生产腿在 editor-open-legs.ts，
 // 本文件只透传 injection ⇒ io 层，不给开机图加边、也不在这里另立一份判据）。
 import type { McpEditorOpenDeps } from './editor-open-legs';
-import { registerMcpWiringSources, type McpWiringSources } from './wiring';
-import { bindFsFreshness, getFsFreshnessTracker } from './fs-freshness';
-import type { FsFreshnessTracker } from './fs-freshness';
+import { bindFsFreshness, getFsFreshnessTracker } from './fs-freshness';import type { FsFreshnessTracker } from './fs-freshness';
 import { createMcpTaskLegs, type McpTaskSearchProgress, type McpTaskSearchRunner } from './real-sources-tasks';
 import {
   clampInt,
@@ -75,6 +73,8 @@ import {
   requireProject,
   sanitizeEcho,
   truncateChars,
+  type McpCommandRunAccess,
+  type McpCommandRunFacts,
   type McpInvokeLike,
   type McpIoDeps,
   type McpKernelLike,
@@ -82,6 +82,12 @@ import {
   type McpSearchRequestLike,
   type McpSearchResultLike,
 } from './real-sources-io';
+// B24（LaneAK，2026-11-07）：`commands.run` 的三件真源与一件观察件——
+// `projectCommands` 是「命令面板那条 run」的唯一真源（缺 ctx 即 NOT_WIRED，本批不改它），
+// `commandEnabled` 与命令面板同一把 `when` 尺，`productionEditorDirtySnapshot` 与
+// `EditorPane.computeDirty` 同一个脏态表达式（都在 editor-write-legs 内部，动态 import 已就位）。
+import { projectCommands, registerMcpWiringSources, type McpWiringSources } from './wiring';
+import { productionEditorDirtySnapshot } from './editor-write-legs';
 
 /* ------------------------------- 语义面的注入形状 ------------------------------- */
 
@@ -1485,6 +1491,120 @@ export function projectCommandsForMcp(commands: readonly CommandEntry[]): Comman
 }
 
 /**
+ * `commands.run` 的注入面（B24，LaneAK 2026-11-07）——**四件真源，一件都不造**。
+ *
+ * 为什么必须由装配点给：命令注册表住在 `ShellLayout` 的 `useMemo` 里，没有生产级全局
+ * accessor（`wiring.ts` 模块头同一条纪律）；这一枚面要的三件事——命令表本体、派发用的
+ * `EditorCommandContext`、跑完之后可回读的事实——各自的真源分别是 `host.getCommands()`、
+ * `host.getCommandContext()` 与内核事件环 / Monaco 工作区 / 编辑器登记簿。把它们集中到
+ * 这里组装，腿那一侧就只剩「闸 + 回执」，不会漂出第二份判定尺。
+ *
+ * 三条硬纪律：
+ * 1. `entries()` 给的是**未经 fail-closed 改写的原表**（作者自报的 `tier` 原样）。
+ *    `projectCommandsForMcp` 那份把每一枚都判成 privileged，那是「命令逐条成工具」那一面
+ *    的尺；`commands.run` 的档位判定按车道判据必须读**命令表自身**的声明（缺席⇒privileged），
+ *    所以这里不吃改写后的那份，两点不混用、也都在判据里点名。
+ * 2. `execute()` 走 `projectCommands(...)` 投影出来的那条 `run`——同一条真源通路，
+ *    缺 `EditorCommandContext` 时由它自己抛结构化 `NOT_WIRED`，本面不伪造上下文、不空跑。
+ * 3. `enabled()` 走 `commandEnabled`（`when` 求值异常⇒不可用，与面板同一把尺）；
+ *    上下文缺席⇒`null`，不猜。
+ */
+export function createCommandRunAccess(sources: {
+  commands: () => readonly CommandEntry[];
+  context?: EditorCommandContext;
+  facts: () => McpCommandRunFacts | Promise<McpCommandRunFacts>;
+}): McpCommandRunAccess {
+  const find = (id: string): CommandEntry | undefined => sources.commands().find((c) => c.id === id);
+  return {
+    entries: () => sources.commands(),
+    execute: (id, args, scope) => {
+      const cmd = find(id);
+      if (!cmd) {
+        throw new McpFailure(
+          'RESOURCE_UNAVAILABLE',
+          `命令表里没有 ${id}（execute 侧复查）：命令表在两次读之间换代了，重发前先跑 commands.list。`,
+        );
+      }
+      // 真源 run：wiring 的投影闭包里握着 EditorCommandContext，缺席即 NOT_WIRED；
+      // 会话 scope 原样透传（投影那一层不需要它做判定，但契约签名要它，不造空对象）。
+      const [projected] = projectCommands([cmd], sources.context);
+      return projected?.run(args, scope);
+    },
+    enabled: (id) => {
+      const cmd = find(id);
+      if (!cmd) return null;
+      if (!sources.context) {
+        return null;
+      }
+      return commandEnabled(cmd, sources.context);
+    },
+    facts: () => sources.facts(),
+  };
+}
+
+/** `commands.run` 回读的事件条数上界（有界；超出由 `eventTail` 自己说明）。 */
+const COMMAND_RUN_EVENT_TAIL = 8;
+/** `commands.run` 回读的实例数上界（登记簿可能有很多个编辑器；读数体积优先于穷举）。 */
+const COMMAND_RUN_DIRTY_PANES = 16;
+
+/**
+ * 跑前 / 跑后各读一次的**事实**：事件环 + 活动文档读数 + 各实例脏态。
+ * 三段各自独立降级：某一段读不到只让那一段 `null` + 理由，绝不把整份读数编出来（铁律 4）。
+ */
+async function readCommandRunFacts(semanticDeps: McpSemanticDeps): Promise<McpCommandRunFacts> {
+  const tail = recentEvents(COMMAND_RUN_EVENT_TAIL) as readonly {
+    t: number;
+    name: string;
+    payload?: unknown;
+  }[];
+  const last = tail.length > 0 ? tail[tail.length - 1] : null;
+  let document: Record<string, unknown> | null = null;
+  let documentReason: string | undefined = '活动文档读数未取到（装配侧没给到 Monaco 工作区）';
+  let dirtyPanes: McpCommandRunFacts['dirtyPanes'] = null;
+  let dirtyReason: string | undefined = '编辑器登记簿未读（装配侧没给到 pane 运行时）';
+
+  try {
+    const ws = await unwrapGetter<McpSemanticWorkspace>(semanticDeps.getWorkspace());
+    if (ws && ws.model) {
+      const model = ws.model;
+      document = {
+        path: toRelativeLocationPath(model.uri.toString(), ws.rootDir),
+        language: model.getLanguageId(),
+        lineCount: model.getLineCount(),
+        // 版本读数＝正文有没有被动过最省的凭据（真 Monaco 必有；假件缺席即 null）。
+        versionId: typeof model.getVersionId === 'function' ? model.getVersionId() : null,
+        cursor: ws.cursor,
+      };
+      documentReason = undefined;
+    } else {
+      documentReason = '当前没有活动编辑器（未开文件 / Monaco 未到场）：不编造文档读数';
+    }
+  } catch (err: unknown) {
+    documentReason = `活动文档读数抛错：${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  try {
+    const snap = await productionEditorDirtySnapshot(COMMAND_RUN_DIRTY_PANES);
+    dirtyPanes = snap.panes;
+    dirtyReason =
+      snap.reason ?? (snap.truncated ? `实例数超过 ${COMMAND_RUN_DIRTY_PANES} 个，只读前若干条` : undefined);
+  } catch (err: unknown) {
+    dirtyPanes = null;
+    dirtyReason = `脏态快照抛错：${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  return {
+    eventCount: countEvents(),
+    lastEventT: last ? last.t : null,
+    eventTail: tail,
+    document,
+    ...(documentReason !== undefined ? { documentReason } : {}),
+    dirtyPanes,
+    ...(dirtyReason !== undefined ? { dirtyReason } : {}),
+  };
+}
+
+/**
  * 组装生产真源 `McpWiringSources`（不登记——登记走 `installRealMcpSources`）。
  * 全部真源给到才接；这里组装出的每一腿都指向生产真源，接不到的运行期状态
  * 由腿自身显式抛 `NOT_WIRED` / `RESOURCE_UNAVAILABLE`。
@@ -1520,6 +1640,14 @@ export async function buildRealMcpSources(
       getKernel: () => kernel,
       search: injection?.searchInFilesWithProgress ?? productionTaskSearch,
       cancelSearch: injection?.cancelSearch ?? productionCancelSearch,
+    }),
+    // B24：`commands.run` 的三件真源 + 观察件。**吃原表**（`host.getCommands()`，作者自报 tier
+    // 原样），不吃上面那一份 `mcpCommands()` 的 fail-closed 改写——「逐条成工具」那一面才用
+    // 改写版；两把尺各有出处，判据 ① 与既有的 `mcp-command-tier.test.ts` 各自钉住自己那一面。
+    commandRun: createCommandRunAccess({
+      commands: () => host.getCommands(),
+      context: host.getCommandContext(),
+      facts: () => readCommandRunFacts(semanticDeps),
     }),
   };
 

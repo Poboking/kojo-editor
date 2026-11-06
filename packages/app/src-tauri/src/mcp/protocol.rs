@@ -992,6 +992,15 @@ pub const PRIVILEGED_EXACT: &[&str] = &[
     "rename_path",
     "fileTree.remove",
     "fileTree.rename",
+    // B24（LaneAK 2026-11-07）：命令面板的**执行面**。它把命令按 id 点名派发，形态上是
+    // `命名空间.动词` 的点号命名，既不命中 `COMMAND_PANEL_PREFIXES`（表里是 `workbench.`
+    // `layout.` 这些**具体命名空间**，`commands.` 不在其中），也不命中 `EDIT_TOOL_PREFIXES`
+    // 的下划线动词表 ⇒ 不点名则 `host_required_tier()` 落 `Read`，未批准的会话直调即后门。
+    // 与 WebView 侧 `SUPPLEMENTAL_TOOL_SPECS` 的 `tier:'privileged'` 和
+    // `APPROVABLE_PRIVILEGED_TOOLS` **同批**扩容（B19 判据 4 逐面对拍这两处）。
+    // 批准语义照旧：第四张表只认精确名，工具级批准**不**等于命令级批准——被点名的那条
+    // 命令若无 `tier`，腿里仍要它精确出现在 approvedTools（fail-closed，判据 ①）。
+    "commands.run",
 ];
 
 /// 命令面板动作命名空间（点号形态）：写盘 / 另存为 / 原生对话框 / 启动器 /
@@ -1026,6 +1035,45 @@ pub fn is_privileged_tool(name: &str) -> bool {
         || is_command_panel_tool(name)
         || PRIVILEGED_EXACT.contains(&name)
         || name.starts_with("remove_")
+}
+
+/// 命令执行面的名字（B24）：端点侧只在这一枚工具的审计行里附命令 id。
+pub const COMMAND_RUN_TOOL: &str = "commands.run";
+
+/// `commands.run` 的审计附注——把**被点名的那枚命令 id** 逐字带进审计行。
+///
+/// 为什么在端点做、而不是在 WebView 做：第四张表与审计的唯一真源都在宿主
+/// （`mcp_audit_query` 是既有入口，MCP 协议面不为这批开任何新入口），而 WebView 回帧属
+/// **不可信输入**——命令 id 只有从请求帧里读才算「客户端确实点了它」的证据。
+///
+/// 三条边界：
+/// - 非 `commands.run` ⇒ `None`（其它工具的审计形状一字不变）；
+/// - 帧里**根本没有参数对象**（例如 `tools/list` 的 Filtered 账，args＝`Null`）⇒ `None`：
+///   那不是一次点名派发，硬写 `commandId=<absent>` 只会把审计口径搅浑；
+/// - 命令 id 缺席 / 不是字符串 ⇒ 仍出一条 `commandId=<absent>`：这本身就是一次该查的调用；
+/// - 长度与字符：控制字符逐个换 `_`、超 `MAX_COMMAND_ID_CHARS` 截断并补 `…`（与
+///   `digest_args` 同一族卫生口径，不拿原始不可信串直接落盘）。
+pub const MAX_COMMAND_ID_CHARS: usize = 128;
+
+pub fn command_run_audit_note(tool: &str, params: &Value) -> Option<String> {
+    if tool != COMMAND_RUN_TOOL {
+        return None;
+    }
+    let arguments = params.get("arguments").or_else(|| params.get("args"))?;
+    let raw = arguments.get("commandId").and_then(Value::as_str);
+    Some(match raw {
+        Some(s) if !s.is_empty() => {
+            let total = s.chars().count();
+            let cleaned: String = s
+                .chars()
+                .map(|c| if c.is_control() { '_' } else { c })
+                .take(MAX_COMMAND_ID_CHARS)
+                .collect();
+            let clipped = cleaned.chars().count() < total;
+            format!("commandId={cleaned}{}", if clipped { "…" } else { "" })
+        }
+        _ => "commandId=<absent>".to_string(),
+    })
 }
 
 /// 宿主侧按工具名形状推断所需 tier（**不读 WebView 的 annotations**：annotations
