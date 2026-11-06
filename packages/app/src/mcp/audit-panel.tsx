@@ -3,10 +3,20 @@
  *
  * 审计记录由 Rust 宿主独占追加，MCP 客户端没有写入口（面板只经 `mcp_audit_query`
  * 读，不改不删）；`argsDigest` 只含键名/类型/长度，工具描述与文件内容不落全文。
+ *
+ * 列式行与空态分场景（additive，2026-11-06 UI-04/18/29）：
+ *   · 每行改结构化 span（时间 / 工具 / 结果 / 耗时 / 落点），样式走 settings-ai.css 的
+ *     `.mcp-audit-row*`；`argsDigest` / `sessionId` / `clientId` 收进 `title` 悬浮，
+ *     `note` 保持可见文本（铁律 4：拒绝原因不许折叠进 hover 就消失）；
+ *   · 结果列保留 `[denied]` 方括号字面量——mcp-approval-ui 回归钉住行文本，色彩
+ *     chip 化由 `data-outcome` + CSS 完成，字面不动；
+ *   · 空态分两种：一条都没有（还没接入）vs 有条目但筛空了（给「清空筛选」退路）；
+ *   · 客户端过滤框换 `KitSearchField`（UI-04：暗色下不再出现裸白 input）。
  */
 import { useMemo, useState } from 'react';
 
 import { KitEmpty } from '../ui-kit';
+import { KitSearchField } from '../ui-kit/kit-search-field';
 import { KitSelect, type KitSelectOption } from '../ui-kit/kit-select';
 
 export type AuditOutcome = 'ok' | 'error' | 'filtered' | 'denied' | 'timeout' | 'cancelled';
@@ -70,6 +80,11 @@ export function AuditPanel({ entries }: AuditPanelProps) {
     () => filterAuditEntries(entries, outcome, clientId, 200),
     [entries, outcome, clientId],
   );
+  const filtered = rows.length === 0 && entries.length > 0;
+  const resetFilters = () => {
+    setOutcome('all');
+    setClientId('');
+  };
   return (
     <section className="settings-mcp-card settings-mcp-audit" aria-label="MCP 审计">
       <div className="settings-mcp-audit-head">
@@ -86,21 +101,54 @@ export function AuditPanel({ entries }: AuditPanelProps) {
           </label>
           <label>
             客户端
-            <input value={clientId} onChange={(e) => setClientId(e.currentTarget.value)} />
+            <KitSearchField
+              value={clientId}
+              onChange={setClientId}
+              ariaLabel="按 clientId 过滤审计条目"
+              placeholder="按 clientId 过滤"
+            />
           </label>
         </div>
       </div>
       {rows.length === 0 ? (
-        <KitEmpty
-          variant="inline"
-          title="暂无审计条目"
-          hint="客户端首次 tools/call 之后这里会出现逐笔回执（含 sessionId 与实测耗时）。"
-        />
+        filtered ? (
+          <KitEmpty
+            variant="inline"
+            announce
+            title="没有匹配当前筛选的条目"
+            action={{ label: '清空筛选', onClick: resetFilters }}
+          />
+        ) : (
+          <KitEmpty
+            variant="inline"
+            announce
+            title="还没有审计条目"
+            hint="客户端首次 tools/call 后会出现。"
+          />
+        )
       ) : (
         <ul className="settings-mcp-audit-rows" data-testid="mcp-audit-rows">
           {rows.map((row, i) => (
-            <li key={`${row.ts}-${row.tool}-${i}`} data-outcome={row.outcome}>
-              {formatAuditEntry(row)}
+            <li
+              key={`${row.ts}-${row.tool}-${i}`}
+              data-outcome={row.outcome}
+              className="mcp-audit-row"
+              title={[row.clientId, row.argsDigest, row.sessionId]
+                .filter(Boolean)
+                .join(' · ')}
+            >
+              <span className="mcp-audit-row-time">{row.ts}</span>
+              <span className="mcp-audit-row-tool">{row.tool}</span>
+              <span className="mcp-audit-row-outcome">[{row.outcome}]</span>
+              {row.elapsedMs !== undefined && (
+                <span className="mcp-audit-row-elapsed">{row.elapsedMs}ms</span>
+              )}
+              {row.landedPath !== undefined && (
+                <span className="mcp-audit-row-path">→ {row.landedPath}</span>
+              )}
+              {row.note !== undefined && (
+                <span className="mcp-audit-row-note">（{row.note}）</span>
+              )}
             </li>
           ))}
         </ul>

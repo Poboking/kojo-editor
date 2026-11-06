@@ -8,7 +8,15 @@
  *   ③ approveArgs 只在真的勾了根时才 additive 带 approvedRootIds（camelCase、去重、再过形状闸）；
  *   ④ scopeStateToApproval 把第四张表 approvedRootIds 投影出来（批准落没落地看得见）；
  *   ⑤ workspaceRootIdCandidates 由只读真源算出稳定枚举标识（label 只展示，绝不作为落点）；
- *   ⑥ ApprovalUi 列出候选根、勾选后批次带精确列名、已批准徽标可见翻转。
+ *   ⑥ ApprovalUi 列出候选根、勾选后批次带精确列名、已批准徽标可见翻转；
+ *   ⑦ toolFamily / TOOL_DESCRIPTIONS：29 枚可批准工具族归属正确、描述表与名单一一对应
+ *      （漂移闸：工具面增删而描述表没跟上 ⇒ 红）；
+ *   ⑧ 分组形状：li[data-tool] DOM 顺序与 APPROVABLE_PRIVILEGED_TOOLS 逐字同序、
+ *      首个 checkbox 仍是工具项、组级勾选只动本族（mcp-free-access 的「全选」锚不破）；
+ *   ⑨ 无会话锁定（UI-15）：clientId 为空 ⇒ 无清单 / 无全选 / 无 CTA，只留引导；
+ *      空 diff（UI-07）不再渲染空 pre；
+ *   ⑩ 审计面板（UI-04/18/29）：客户端过滤走 kit 检索框、行结构化、两种空态可区分、
+ *      清空筛选恢复全量。
  *
  * 安全边界：rootId 只是枚举标识；批准根 ≠ 放宽 approvedRoots 相对前缀 ≠ 绕过内核写允许域。
  */
@@ -16,12 +24,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { act, createElement as h, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  APPROVABLE_PRIVILEGED_TOOLS,
+  ApprovalUi,
   buildApprovalBatch,
   isSafeRelativePath,
-  ApprovalUi,
+  TOOL_DESCRIPTIONS,
+  toolFamily,
   type ApprovalBatch,
   type ApprovalItem,
 } from '../src/mcp/approval-ui';
+import { AuditPanel, type AuditEntryView } from '../src/mcp/audit-panel';
 import {
   approveArgs,
   scopeStateToApproval,
@@ -58,6 +70,7 @@ async function mount(el: ReactElement): Promise<{
   find: (sel: string) => Element | null;
   findAll: (sel: string) => Element[];
   click: (e: Element) => Promise<void>;
+  type: (input: Element, value: string) => Promise<void>;
 }> {
   const box = document.createElement('div');
   document.body.append(box);
@@ -72,6 +85,15 @@ async function mount(el: ReactElement): Promise<{
     findAll: (sel) => [...box.querySelectorAll(sel)],
     click: async (e) => {
       await act(async () => (e as HTMLElement).click());
+      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    },
+    type: async (input, value) => {
+      await act(async () => {
+        // 走原生 value setter：React 的 value tracker 会把直接赋值判成「没变」而吞掉 onChange。
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+        setter.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
       await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     },
   };
@@ -235,3 +257,247 @@ describe('⑥ ApprovalUi：候选根可见、可勾、批次带精确列名', ()
     expect(hz.find('[data-testid="mcp-root-enumeration-note"]')!.textContent).toContain('IPC boom');
   });
 });
+
+describe('⑦ toolFamily / TOOL_DESCRIPTIONS：族归属与描述表漂移闸', () => {
+  it('29 枚可批准工具族归属正确；点号形态与命令面板动作落 other', () => {
+    for (const name of APPROVABLE_PRIVILEGED_TOOLS) {
+      const expected = name.startsWith('fileTree.')
+        ? 'fileTree'
+        : name.startsWith('launcher_')
+          ? (LAUNCHER_READ_SET.has(name) ? 'launcherRead' : 'launcherWrite')
+          : 'other';
+      expect(toolFamily(name), `${name} 应归 ${expected}`).toBe(expected);
+    }
+    // 非启动器族 / 点号形态不算 launcher_（与 Rust is_launcher_tool 前缀口径同尺）
+    expect(toolFamily('launcher.openInstances')).toBe('other');
+    expect(toolFamily('workbench.saveAll')).toBe('other');
+    expect(toolFamily('read_file')).toBe('other');
+  });
+
+  it('TOOL_DESCRIPTIONS 与可批准名单一一对应，每条 ≤20 字非空（真实功能，不编造）', () => {
+    expect(Object.keys(TOOL_DESCRIPTIONS).sort()).toEqual([...APPROVABLE_PRIVILEGED_TOOLS].sort());
+    for (const [name, desc] of Object.entries(TOOL_DESCRIPTIONS)) {
+      expect(desc.length, `${name} 描述超长`).toBeLessThanOrEqual(20);
+      expect(desc.trim().length).toBeGreaterThan(0);
+    }
+    // 抽查三条关键语义：删除是删除、启动是启动、实例清点是清点（防复制粘贴式描述）
+    expect(TOOL_DESCRIPTIONS['fileTree.remove']).toContain('删除');
+    expect(TOOL_DESCRIPTIONS['launcher_start']).toContain('启动');
+    expect(TOOL_DESCRIPTIONS['launcher_instance_list']).toContain('列出');
+  });
+});
+
+describe('⑧ 分组形状：锚点不破、组级勾选只动本族', () => {
+  const pendingOf = (names: readonly string[]): ApprovalItem[] =>
+    names.map((name) => ({ name, tier: 'privileged' as const, reason: '特权工具' }));
+
+  it('静态全量名单 ⇒ li[data-tool] DOM 顺序与 APPROVABLE_PRIVILEGED_TOOLS 逐字同序，首个 checkbox 仍是工具项', async () => {
+    const hz = await mount(h(ApprovalUi, {
+      clientId: 'c1',
+      pending: pendingOf(APPROVABLE_PRIVILEGED_TOOLS),
+      roots: [],
+      before: '',
+      after: '',
+      onApprove: () => {},
+    }));
+    const items = hz.findAll('li[data-tool]');
+    expect(items.map((li) => li.getAttribute('data-tool'))).toEqual([...APPROVABLE_PRIVILEGED_TOOLS]);
+    expect(
+      hz.findAll('input[type="checkbox"]')[0]!.closest('li')!.getAttribute('data-tool'),
+    ).toBe('fileTree.remove');
+    // 三族组头齐备，族序与名单同序
+    expect(hz.findAll('section[data-family]').map((s) => s.getAttribute('data-family'))).toEqual([
+      'fileTree',
+      'launcherRead',
+      'launcherWrite',
+    ]);
+    // 全局「全选（N）」保留（mcp-free-access 的锚：首个含「全选」的按钮必须全量勾选）
+    expect(hz.text()).toContain('全选（29）');
+    // 组级按钮措辞避开「全选」字样
+    expect(hz.findAll('button').filter((b) => (b.textContent ?? '').includes('全选'))).toHaveLength(1);
+  });
+
+  it('混入运行时候选 ⇒ 按首次出现顺序归族（pending 序不重排）；组内条目保持出现顺序', async () => {
+    const hz = await mount(h(ApprovalUi, {
+      clientId: 'c1',
+      pending: pendingOf(['workbench.saveAll', 'fileTree.remove', 'launcher_start']),
+      roots: [],
+      before: '',
+      after: '',
+      onApprove: () => {},
+    }));
+    expect(hz.findAll('section[data-family]').map((s) => s.getAttribute('data-family'))).toEqual([
+      'other',
+      'fileTree',
+      'launcherWrite',
+    ]);
+    expect(hz.findAll('li[data-tool]').map((li) => li.getAttribute('data-tool'))).toEqual([
+      'workbench.saveAll',
+      'fileTree.remove',
+      'launcher_start',
+    ]);
+  });
+
+  it('勾选本组只选中本族（批量勾选 ≠ 放宽：仍逐项精确列名）；清空本组只清本族', async () => {
+    const batches: ApprovalBatch[] = [];
+    const hz = await mount(h(ApprovalUi, {
+      clientId: 'c1',
+      pending: pendingOf(['fileTree.remove', 'fileTree.rename', 'launcher_start']),
+      roots: [],
+      before: '',
+      after: '',
+      onApprove: (b) => batches.push(b),
+    }));
+    // 启动器写组（1 枚）：勾选本组 ⇒ CTA 计数 1，且只含 launcher_start
+    const writeGroup = hz.find('section[data-family="launcherWrite"]')!;
+    await hz.click(
+      [...writeGroup.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('勾选本组'))!,
+    );
+    expect(hz.text()).toContain('批准所选（1）');
+    const approveBtn = hz.findAll('button').find((b) => (b.textContent ?? '').includes('批准所选'))!;
+    await hz.click(approveBtn);
+    expect(batches.at(-1)!.approvedTools).toEqual(['launcher_start']);
+    // 文件树组（2 枚）：勾选本组 ⇒ 计数 3；清空本组 ⇒ 只清掉这 2 枚，launcher_start 仍选中
+    const fileGroup = hz.find('section[data-family="fileTree"]')!;
+    await hz.click(
+      [...fileGroup.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('勾选本组'))!,
+    );
+    expect(hz.text()).toContain('批准所选（3）');
+    await hz.click(
+      [...fileGroup.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('清空本组'))!,
+    );
+    expect(hz.text()).toContain('批准所选（1）');
+    expect(hz.findAll('input[type="checkbox"]')
+      .filter((b) => (b as HTMLInputElement).checked)
+      .map((b) => b.closest('li')!.getAttribute('data-tool'))).toEqual(['launcher_start']);
+  });
+});
+
+describe('⑨ 无会话锁定与空 diff（UI-15 / UI-07）', () => {
+  it('clientId 为空 ⇒ 无清单 / 无全选 / 无 CTA / 无 checkbox，只留引导与 h3', async () => {
+    const hz = await mount(h(ApprovalUi, {
+      clientId: '',
+      pending: pendingTools(),
+      roots: [],
+      before: '',
+      after: '',
+      onApprove: () => {},
+    }));
+    expect(hz.text()).toContain('一次批量审批'); // h3 保留
+    expect(hz.text()).toContain('完成接入并出现会话后，这里会出现逐项批准清单');
+    expect(hz.findAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(hz.findAll('button').some((b) => (b.textContent ?? '').includes('全选'))).toBe(false);
+    expect(hz.findAll('button').some((b) => (b.textContent ?? '').includes('批准所选'))).toBe(false);
+  });
+
+  it('before / after 都为空 ⇒ 不渲染空 pre，渲染一行空态；有内容 ⇒ pre 照常', async () => {
+    const empty = await mount(h(ApprovalUi, {
+      clientId: 'c1',
+      pending: pendingTools(),
+      roots: [],
+      before: '',
+      after: '',
+      onApprove: () => {},
+    }));
+    expect(empty.find('[data-testid="mcp-diff"]')).toBeNull();
+    expect(empty.text()).toContain('当前没有挂起的写请求');
+
+    const hasDiff = await mount(h(ApprovalUi, {
+      clientId: 'c1',
+      pending: pendingTools(),
+      roots: [],
+      before: 'a',
+      after: 'b',
+      onApprove: () => {},
+    }));
+    expect(hasDiff.find('pre[data-testid="mcp-diff"]')).not.toBeNull();
+    expect(hasDiff.text()).not.toContain('当前没有挂起的写请求');
+  });
+});
+
+/* ------------------------------- ⑩ 审计面板 ------------------------------- */
+
+describe('⑩ AuditPanel：kit 过滤框 / 结构化行 / 空态分场景', () => {
+  const row: AuditEntryView = {
+    ts: '2026-11-06T10:00:00.000Z',
+    clientId: 'c1',
+    tool: 'fileTree.remove',
+    argsDigest: 'relPath:str(9)',
+    outcome: 'denied',
+    landedPath: 'docs/a.txt',
+    note: '特权工具未批准',
+    sessionId: 'sess-7',
+    elapsedMs: 12,
+  };
+
+  it('客户端过滤框走 kit 检索井：带 placeholder 与 aria-label，暗色下不再裸白', async () => {
+    const hz = await mount(h(AuditPanel, { entries: [row] }));
+    const input = hz.find('input[aria-label="按 clientId 过滤审计条目"]') as HTMLInputElement | null;
+    expect(input, '应有按 clientId 过滤的检索框').not.toBeNull();
+    expect(input!.placeholder).toBe('按 clientId 过滤');
+    expect(input!.closest('.kit-search-field')).not.toBeNull();
+  });
+
+  it('行结构化：五列 span + data-outcome 锚不动；note 保持可见、argsDigest/clientId/sessionId 收进 title', async () => {
+    const hz = await mount(h(AuditPanel, { entries: [row] }));
+    const li = hz.find('[data-testid="mcp-audit-rows"] li')!;
+    expect(li.getAttribute('data-outcome')).toBe('denied');
+    expect(li.classList.contains('mcp-audit-row')).toBe(true);
+    for (const part of ['time', 'tool', 'outcome', 'elapsed', 'path']) {
+      expect(li.querySelector(`.mcp-audit-row-${part}`), `缺 mcp-audit-row-${part}`).not.toBeNull();
+    }
+    expect(li.querySelector('.mcp-audit-row-time')!.textContent).toBe(row.ts);
+    expect(li.querySelector('.mcp-audit-row-outcome')!.textContent).toBe('[denied]');
+    expect(li.querySelector('.mcp-audit-row-elapsed')!.textContent).toBe('12ms');
+    expect(li.querySelector('.mcp-audit-row-path')!.textContent).toContain('docs/a.txt');
+    // 铁律 4：拒绝原因保持可见文本（不许只活在 title 里）；悬浮承载参数摘要与会话
+    expect(li.textContent).toContain('特权工具未批准');
+    expect(li.getAttribute('title')).toContain('relPath:str(9)');
+    expect(li.getAttribute('title')).toContain('c1');
+    expect(li.getAttribute('title')).toContain('sess-7');
+  });
+
+  it('两种空态可区分：零条目 vs 筛空；清空筛选恢复全量', async () => {
+    const none = await mount(h(AuditPanel, { entries: [] }));
+    expect(none.text()).toContain('还没有审计条目');
+    expect(none.text()).not.toContain('没有匹配当前筛选的条目');
+
+    const hz = await mount(h(AuditPanel, { entries: [row] }));
+    await hz.type(hz.find('input[aria-label="按 clientId 过滤审计条目"]')!, 'c2');
+    expect(hz.text()).toContain('没有匹配当前筛选的条目');
+    expect(hz.text()).not.toContain('还没有审计条目');
+    expect(hz.find('[data-testid="mcp-audit-rows"]')).toBeNull();
+
+    await hz.click(hz.findAll('button').find((b) => (b.textContent ?? '').trim() === '清空筛选')!);
+    expect(hz.findAll('[data-testid="mcp-audit-rows"] li')).toHaveLength(1);
+    const input = hz.find('input[aria-label="按 clientId 过滤审计条目"]') as HTMLInputElement;
+    expect(input.value).toBe('');
+    expect(hz.text()).not.toContain('没有匹配当前筛选的条目');
+  });
+});
+
+/* ------------------------------- 共享夹具 ------------------------------- */
+
+const LAUNCHER_READ_SET: ReadonlySet<string> = new Set([
+  'launcher_instance_list',
+  'launcher_instance_get',
+  'launcher_content_list',
+  'launcher_content_diagnose',
+  'launcher_process_list',
+  'launcher_process_status',
+  'launcher_task_list',
+  'launcher_save_list',
+  'launcher_save_backups',
+  'launcher_log_sessions',
+  'launcher_log_tail',
+  'launcher_log_read',
+  'launcher_project_hash',
+]);
+
+function pendingTools(): ApprovalItem[] {
+  return APPROVABLE_PRIVILEGED_TOOLS.map((name) => ({
+    name,
+    tier: 'privileged' as const,
+    reason: '特权工具',
+  }));
+}
