@@ -343,14 +343,12 @@ describe('四张面孔一个真相（判据①的自动化拦点）', () => {
 /* ---------------- 工包「缺腿」（2026-10-20）：origin 两簇 ---------------- */
 
 /** 覆盖读数造一条（默认 = 一整轮跑完：12/12、允许根就是那个口上目录） */
-const scanCoverage = (over: Partial<ProjectScanCoverage> = {}): ProjectScanCoverage => ({
-  ...IDLE_SCAN_COVERAGE,
-  status: 'complete',
-  roots: [PKG_DIR],
-  scanned: 12,
-  total: 12,
-  ...over,
-});
+/** 覆盖读数造一条（默认 = 一整轮跑完：12/12、允许根就是那个口上目录；累计与缺口默认跟着本轮自洽） */
+const scanCoverage = (over: Partial<ProjectScanCoverage> = {}): ProjectScanCoverage => {
+  const base: ProjectScanCoverage = { ...IDLE_SCAN_COVERAGE, status: 'complete', roots: [PKG_DIR], scanned: 12, total: 12, ...over };
+  const covered = over.covered ?? base.scanned;
+  return { ...base, covered, remaining: over.remaining ?? Math.max(0, base.total - covered) };
+};
 
 describe('origin 两簇 · 未打开的文件也能上账，且关标签抹不掉项目级结论', () => {
   it('同一文件两簇并存 ⇒ 只出示编辑器那份（同一个问题数两遍就是造假账）', () => {
@@ -421,7 +419,7 @@ describe('PROBLEM_SCOPE · 合并之后的说法必须两头都不冒充', () =>
     setProjectScanProblems(F2, [mk(F2, 1, 'error')]);
     setProjectScanCoverage(scanCoverage({ roots: [PKG_DIR], scanned: 12, total: 12 }));
     expect(PROBLEM_SCOPE.label).toBe('已打开+已扫描');
-    expect(PROBLEM_SCOPE.title).toContain('覆盖 12/12');
+    expect(PROBLEM_SCOPE.title).toContain('已检查 12/12');
     expect(PROBLEM_SCOPE.title).toContain(PKG_DIR);
     expect(PROBLEM_SCOPE.title).not.toContain('不含未打开文件');
   });
@@ -437,8 +435,8 @@ describe('PROBLEM_SCOPE · 合并之后的说法必须两头都不冒充', () =>
     setProjectScanProblems(F2, [mk(F2, 1, 'error')]);
     setProjectScanCoverage(scanCoverage({ scanned: 40, total: 320, capped: true }));
     expect(PROBLEM_SCOPE.label).toBe('部分扫描');
-    expect(PROBLEM_SCOPE.title).toContain('覆盖 40/320');
-    expect(PROBLEM_SCOPE.title).toContain('到批量上限即停');
+    expect(PROBLEM_SCOPE.title).toContain('已检查 40/320');
+    expect(PROBLEM_SCOPE.title).toContain('还差 280 个文件没检查');
     setProjectScanCoverage(scanCoverage({ status: 'cancelled', scanned: 3, total: 320, capped: false }));
     expect(PROBLEM_SCOPE.label).toBe('部分扫描');
     expect(PROBLEM_SCOPE.title).toContain('已取消');

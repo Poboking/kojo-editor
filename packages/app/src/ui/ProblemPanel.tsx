@@ -19,6 +19,7 @@ import {
   summarizeProblems,
   SEVERITY_TINT,
   PROBLEM_SCOPE,
+  scanUnfinishedText,
   type EditorProblem,
 } from './problem-store';
 import { rowNavDecision } from './panel-row-nav';
@@ -316,6 +317,9 @@ export function ProblemPanel({
   // 文件树徽标共用同一次遍历的同一份结果；这里再数一遍就是分叉的起点）
   const summary = summarizeProblems(items);
   const { error, warning, info } = summary.counts;
+
+  /** 扫描缺口那句人话（空串 = 没有还没查的一份 ⇒ 「未发现问题」才是真结论，见 D10 覆盖轮转批） */
+  const scanUnfinished = scanUnfinishedText();
 
   const header =
     items.length === 0
@@ -847,10 +851,19 @@ export function ProblemPanel({
       }}
     >
       {header.kind === 'empty' ? (
-        <div className="conv-empty prob-empty dim">
-          未发现问题
-          <Icon name="check" size={13} className="prob-empty-icon" />
-        </div>
+        // 三态分开说（D10 覆盖轮转批）：「一条问题都没有」在扫描还没查完时**不是**结论，
+        // 只是"查过的那一段里没问题"。这里不猜、不美化，直接把缺口那句话说出来——
+        // 句子住在 `problem-store.scanUnfinishedText()`（tooltip 与面板共用一份，不抄第二遍）。
+        scanUnfinished === '' ? (
+          <div className="conv-empty prob-empty dim">
+            未发现问题
+            <Icon name="check" size={13} className="prob-empty-icon" />
+          </div>
+        ) : (
+          <div className="conv-empty prob-empty dim">
+            {`${scanUnfinished}（${PROBLEM_SCOPE.label === '已扫描' ? '' : `${PROBLEM_SCOPE.label}的`}结果里没有发现问题）`}
+          </div>
+        )
       ) : (
         // 表头 + 工具条合成一块 sticky 头：列表的滚动交回容器（`.container-body`）之后，
         // 过滤条件与三档读数必须常驻，否则"滚下去就找不到那把尺了"。骨架与检索面板 /

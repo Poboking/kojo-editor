@@ -301,6 +301,15 @@ export interface BatchPlanOptions {
   readonly perBatch?: number;
   /** 本轮上限（0 = 不限） */
   readonly maxFiles?: number;
+  /**
+   * **本清扫轮次里已经查过的那些**（ERBDIAG-F / D10）：元素是 `pkey` 归一键，不是原样路径。
+   *
+   * 加它之前，`maxFiles` 截的是"排好序之后的前 400"⇒ 每轮都是同一段前 400，真实语料 4,258
+   * 份里约 91% 的文件**永远不上账**，而面板拿这份残缺结论当项目真相。有了 `exclude`，
+   * 同一份清单的第 N 轮拿到的必然是前面各轮**没拿过**的那一段：预算一格没抬（还是 400），
+   * 只是"办哪 400 份"在推进。不传 = 旧口径逐字不变（纯函数，游标归采集器持有）。
+   */
+  readonly exclude?: ReadonlySet<string>;
 }
 
 export interface ScanBatch {
@@ -316,20 +325,24 @@ export interface ScanBatch {
  * 按 `maxFiles` 截断。
  *
  * 三件事都刻意：① **不用 localeCompare**（CJK 分区域，同一份输入换台机器就换序，
- * 测不出来也复现不了）；② 截断发生在**排好序之后** ⇒ 同一批输入必得同一批子集，
- * 反复"跑到上限就停"也不会每次换一批文件（作者看到的是稳定的那一段，而不是随机的）；
+ * 测不出来也复现不了）；② 截断发生在**排好序之后** ⇒ 同一份输入、同一个 `exclude`
+ * 必得同一段（作者的进度条不会每轮洗牌）；但"截到前 400"本身不再是终点——**下一段由
+ * `exclude` 拿出来**（ERBDIAG-F / D10：每轮预算 400 一格不许抬，抬到能装下整个项目
+ * 冒充"扫得完"是红线，能扫完靠的是轮转不是加预算）；
  * ③ 去重按 `pkey`（Windows 两种写法是同一个文件，读两遍算两遍就是造假账）。
  */
 export function planScanBatches(paths: readonly string[], opts: BatchPlanOptions = {}): ScanBatch[] {
   const perBatch = Math.max(1, Math.floor(opts.perBatch ?? SCAN_BATCH_SIZE));
   const maxFiles = Math.max(0, Math.floor(opts.maxFiles ?? SCAN_MAX_FILES_PER_RUN));
   const keyOf = opts.keyOf ?? parentDir;
+  const exclude = opts.exclude;
   const seen = new Set<string>();
   const byKey = new Map<string, { label: string; paths: string[] }>();
   for (const p of paths) {
     const k = pkey(p);
     if (seen.has(k)) continue;
     seen.add(k);
+    if (exclude !== undefined && exclude.has(k)) continue; // 本清扫轮次已经查过的那一段
     const group = keyOf(p);
     const gk = pkey(group) || '\u0000';
     const slot = byKey.get(gk);
@@ -414,6 +427,17 @@ export interface ProjectScannerDeps {
    * `.kojo` 文件、`enabled()` 为 false、或这个字段缺席时，v1 行为逐字不变。
    */
   readonly kojo2Project?: Kojo2ProjectPassOptions;
+  /**
+   * 覆盖游标的**失效依据**（additive，ERBDIAG-F / D10）：同一个取值才允许沿用"这几份已查过"
+   * 那份账；取值变了 ⇒ 游标整份作废（陈旧游标把换掉的项目当成已经扫过，就是给假真相记账）。
+   *
+   * 缺席 = 不比对（只剩"按当前清单重算"那一层保护）。宿主给的是**装配世代**：每次
+   * `project.opened` 递增 ⇒ 同一 root 的重开也重来一份。
+   *
+   * 文件层面的变化**不该**靠这里清账——那会让活跃的语料永远扫不完：
+   * 增删由每轮按当前清单重算处理，内容改动由宿主的 `invalidateCoverage` 点名销账。
+   */
+  coverageEpoch?(): string | number;
   perBatch?: number;
   maxFiles?: number;
   /**
@@ -456,6 +480,14 @@ export interface ScanOutcome {
   readonly batches: number;
   /** 是否撞到本轮上限（⇒ 覆盖不完整） */
   readonly capped: boolean;
+  /**
+   * 本清扫轮次**累计**查过的份数（去重、按归一键；additive，ERBDIAG-F / D10）。
+   * 与 `scanned` 的分工：`scanned` = 这一轮办了几份，`covered` = 到现在为止项目里
+   * 有几份真被诊断过。两者相加关系不成立（复读的那几份只算一次）。
+   */
+  readonly covered: number;
+  /** 还差几份没查（`0` 才许说"这个项目查完了"；additive） */
+  readonly remaining: number;
   readonly errors: readonly ScanError[];
   /**
    * 增量缓存读数（additive，MCP-PERF-S7，不静默）：本轮多少文件**回缓存条目**
@@ -483,6 +515,8 @@ interface OutcomeDraft {
   discarded: number;
   batches: number;
   capped: boolean;
+  covered: number;
+  remaining: number;
   errors: ScanError[];
   cached: number;
   recomputed: number;
@@ -501,6 +535,8 @@ const idleCoverage = (roots: readonly string[]): ProjectScanCoverage => ({
   capped: false,
   cached: 0,
   recomputed: 0,
+  covered: 0,
+  remaining: 0,
 });
 
 /** 这一文件的 v1 诊断 + 2.0 项目级结论（空的那一侧直接复用原数组，不白复制一次） */
@@ -552,14 +588,37 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
   cancel(): void;
   isRunning(): boolean;
   coverage(): ProjectScanCoverage;
+  /** 点名销账：这一份的"已查过"作废（D10 覆盖轮转批；判据见 `covered` 的头注） */
+  invalidateCoverage(path: string): void;
 } {
   let runId = 0;
   /** 正在跑的那一轮的世代号（0 = 没有轮次在跑；被取代的那一轮自己退场时不许把它踩掉的这格清零） */
   let runningId = 0;
   let last: ProjectScanCoverage = idleCoverage([]);
+  /**
+   * 本清扫轮次的**覆盖游标**（ERBDIAG-F / D10）：真上过账的那些路径的归一键。
+   *
+   * 三条纪律（都是"漏就是漏"的具体形态）：
+   * ① **只在真记账的地方加**——`publish` 走了才领账；读炸的那些也领（"查过了、读不动"是
+   *    一笔已交代的结论，不是漏扫，且不许每轮白重试），但被丢弃的迟到结果不领；
+   * ② **每轮按当前清单重算**——不在清单上的键当场销账（文件删了不许留着"已查过"），
+   *    新增的自然落在游标之外 ⇒ 下一轮就在预算里；
+   * ③ **装配世代一变整份作废**——陈旧游标把换掉的项目冒充成"已经扫完"就是造假账。
+   *
+   * 为什么按路径而不是按偏移：`planScanBatches` 的输出会随清单变，偏移式游标一次增删就错位
+   * （错位的账比没有账更坏）。这里是一份去重键集，语料规模 4,258 条约 0.3MB，一轮一次遍历。
+   */
+  const covered = new Set<string>();
+  let cursorEpoch: string | number | null = null;
+  let cursorSeeded = false;
+  /** 最近一次**整轮**见到的文件数（复核那一轮的清单只有一小截，不许拿它当分母） */
+  let sweepTotal = 0;
+  const remainingOf = (): number => Math.max(0, sweepTotal - covered.size);
 
   const emit = (patch: Partial<ProjectScanCoverage> & { status: ProjectScanStatus }): void => {
-    last = { ...last, ...patch };
+    // 累计覆盖与"还差多少"由游标现算——**所有**写读数的通道都过这一道，
+    // 免得哪一条忘了更新，屏幕拿到一份旧账冒充"项目查完了"
+    last = { ...last, ...patch, covered: covered.size, remaining: remainingOf() };
     deps.onCoverage?.(last);
   };
 
@@ -579,6 +638,8 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
       discarded: 0,
       batches: 0,
       capped: false,
+      covered: 0,
+      remaining: 0,
       errors: [],
       cached: 0,
       recomputed: 0,
@@ -604,7 +665,12 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
     };
     const quit = (status: ProjectScanStatus): ScanOutcome => {
       if (runningId === my) runningId = 0; // 被取代的那一轮退场时不许踩掉新轮的"在跑"读数
-      const final = { ...outcome, status };
+      const final: ScanOutcome = {
+        ...outcome,
+        status,
+        covered: covered.size,
+        remaining: remainingOf(),
+      };
       // **被取代的那一轮不写读数**：新轮正在按自己的进度刷这一格，旧轮拿一堆 0 去覆盖
       // 就是"迟到结果盖新账"本身（取消那一路由 `cancel()` 自己落 cancelled，不靠这里）
       if (!stale()) {
@@ -631,11 +697,43 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
       const queued = deps.extraPaths?.() ?? [];
       const { allowed, rejected } = filterInsideRoots([...listed, ...queued], roots);
       outcome.outOfRoots = rejected.length;
-      const batches = planScanBatches(allowed, { perBatch, maxFiles });
+      /**
+       * 游标维护（ERBDIAG-F / D10，纪律见 `covered` 的头注）：整轮才做重算，
+       * 复核那一轮的清单只有一小截，拿它当分母会把"还差多少"算成 0（那就是假扫完）。
+       */
+      if (!opts.rescanOnly) {
+        const epoch = deps.coverageEpoch === undefined ? null : deps.coverageEpoch();
+        if (!cursorSeeded || epoch !== cursorEpoch) {
+          covered.clear(); // 装配世代变了 ⇒ 整份作废
+          cursorEpoch = epoch;
+          cursorSeeded = true;
+        }
+        const listingKeys = new Set<string>();
+        for (const p of allowed) listingKeys.add(pkey(p));
+        for (const k of [...covered]) if (!listingKeys.has(k)) covered.delete(k); // 增删 ⇒ 重算
+        sweepTotal = listingKeys.size;
+      }
+      /**
+       * 本轮跳过的那些：已查过的减去"待复核点名要重查的"。
+       * 复核队列里的那些是盘上内容可能已经变过的，本轮必须重读（`extraPaths` 那条语义一字不退），
+       * 所以它们凭本轮的记账把账更新一遍，而不是被游标挡在预算之外。
+       */
+      const skip = new Set<string>();
+      if (!opts.rescanOnly) {
+        for (const k of covered) skip.add(k);
+        for (const p of queued) skip.delete(pkey(p));
+      }
+      const batches = planScanBatches(allowed, { perBatch, maxFiles, exclude: skip });
       outcome.total = allowed.length;
       outcome.batches = batches.length;
       const planned = batches.reduce((n, b) => n + b.paths.length, 0);
-      outcome.capped = planned < allowed.length;
+      /**
+       * `capped` 的字面判据（预算）一个字没抬，只是把分母从"清单全量"换成"这轮还该查的量"：
+       * 撞上限且**仍有缺口**才算 capped（清单已查完时那几份复核重读不算"没跑完"）。
+       */
+      outcome.capped = opts.rescanOnly
+        ? planned < allowed.length
+        : planned < Math.max(0, sweepTotal - covered.size);
       if (allowed.length === 0) {
         // 一个都不许读 = 这一轮的结论覆盖面是零，不能伪装成"扫完了、什么都没扫出来"
         return quit(rejected.length > 0 || roots.length === 0 ? 'failed' : 'complete');
@@ -698,6 +796,11 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
        */
       const inFlight: InFlightChunk[] = [];
 
+      /** 这一份真上过账 ⇒ 记进本清扫轮次的游标（判据见 `covered` 的头注：只有记账的地方才领账） */
+      const credit = (path: string): void => {
+        covered.add(pkey(path));
+      };
+
       /** 逐文件上账（原样；`prefetch` 里有就走批量算好的那份；重算结论顺手入缓存） */
       const publishFiles = (files: readonly { path: string; text: string }[], prefetch: ScanPrefetch | undefined): void => {
         for (const file of files) {
@@ -720,6 +823,7 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
           } else {
             deps.publish(file.path, scanned.problems);
             outcome.published++;
+            credit(file.path);
           }
           outcome.scanned++;
         }
@@ -794,6 +898,9 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
             outcome.published++;
             outcome.scanned++;
             outcome.cached++;
+            // 回缓存条目也是一次真 publish ⇒ 照 D10 的口径领账（S7 与 D10 合流点：
+            // 这条路径绕开了 publishFiles 里那枚唯一的 credit，不补则暖缓存下覆盖永不收敛）
+            credit(path);
             continue;
           }
           // 让路点放在**读盘之前**：于是「上一项收尾」与「本项开工」之间必然有一次宏任务
@@ -924,6 +1031,13 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
     },
     coverage(): ProjectScanCoverage {
       return last;
+    },
+    /**
+     * 点名销账（ERBDIAG-F / D10）：盘上内容变了 ⇒ 这一份的"已查过"作废，下一轮的预算里
+     * 必须有它。只销不重扫（重扫归调度那一条腿）；写法不敏感（归一键）。
+     */
+    invalidateCoverage(path: string): void {
+      covered.delete(pkey(path));
     },
   };
 }

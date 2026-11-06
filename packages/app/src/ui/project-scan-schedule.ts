@@ -501,6 +501,10 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
         return out;
       },
       maxFiles: SCAN_MAX_FILES_PER_RUN,
+      // 覆盖游标的失效依据（D10）：装配根 + 打开次数 ⇒ 换根与同根重开都重来一份。
+      // **不**把每次索引重建写进来：那等于每存一次盘就把累计账清空，活跃工程永远扫不完
+      //（文件增删与内容改动各有专门通道，见 invalidateCoverage 与每轮的清单重算）
+      coverageEpoch: () => `${armed ?? ""}#${openProjects}`,
       // 原样透传：装配面缺席 ⇒ 采集器连 `.kojo2` 判据都不调（v1 行为逐字不变）
       ...(kojo2Pass === undefined ? {} : { kojo2Project: kojo2Pass }),
     };
@@ -510,6 +514,8 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
 
   let scanner: ProjectScanRunner | null = null;
   let armed: string | null = null;
+  /** 本装配期内第几次见到「打开」事实（D10 覆盖游标的失效依据；含同一根的重开） */
+  let openProjects = 0;
   /** 上一次整轮的起点（本项目还没跑过时 = 负无穷 ⇒ 间隔算式自然退化成"只等合批窗口"） */
   let lastFullRoundAt = NEVER_ACTIVE_AT;
   let indexRoundDone = false;
@@ -526,7 +532,12 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
     }
     lastFullRoundAt = now();
     indexRoundDone = true;
-    void s.run(); // 在跑 ⇒ 这一句就是"取代"（采集器的世代语义），不排队
+    void s.run().then((out) => {
+      // 世代已换 / 已卸载 ⇒ 这一轮的收尾不碰调度（读数归新那一份写）
+      if (scanner !== s) return;
+      // 预算一格没抬：还差份数就照同一条 60s 间隔再起一轮，游标自己往前挪
+      if (out.remaining > 0 && out.status === 'complete') requestFullRound(false);
+    });
   }
 
   /** 整轮请求的唯一入口：索引首轮只等首帧，其余一律"合批窗口"与"距上一轮满 60s"里取更晚的那个 */
@@ -582,6 +593,7 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
   }
 
   function onProjectAppeared(project: GameProject): void {
+    openProjects++;
     if (armed === project.rootDir && scanner !== null) return;
     armProject(project);
     // 第一轮等索引广播自己（`kojo.functionChanged`）；到点没等到就用退化清单跑，覆盖面照样上屏
@@ -615,6 +627,9 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       } else {
         // 保存 / 外部改动：增量重读这一份（不等 60s 整轮），排队后分拍喂索引
         void refillKojo2File(ev.path);
+        // 盘上内容变了 ⇒ 「这一份查过了」那笔账当场作废（D10）：
+        // 留着旧账 = 整轮的预算永远轮不到它，而屏幕却说"全部检查过了"
+        scanner?.invalidateCoverage(ev.path);
       }
       requestFullRound(false);
     }),

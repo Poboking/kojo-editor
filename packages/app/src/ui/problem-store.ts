@@ -111,17 +111,54 @@ const OPEN_ONLY_SCOPE = {
     '已打开文件的波浪线合并值（各诊断贡献方合并；不含未打开文件与整项目结论 ≠ 项目级约定计数）· 问题面板 (Ctrl+Shift+M)',
 } as const;
 
-/** 扫描那一簇的口径词：`complete` 之外一律不肯说"已扫描" */
+/**
+ * 扫描那一簇的口径词：`complete` 之外一律不肯说"已扫描"。
+ *
+ * 加 `remaining > 0` 这一道闸（D10 覆盖轮转批）：轮转之后"这一轮跑完了"与"这个项目查完了"
+ * 是两件事——一份 4,258 个文件的清单，第 1 轮同样以 `complete` 收工，但还差 3,858 个没查。
+ * 只看 `status` 与 `capped` 就会在那一刻说"已扫描"，那正是这一批要堵死的假真相。
+ */
 function scanPhrase(c: ProjectScanCoverage): string {
   if (c.status === 'running') return '扫描中';
-  if (c.status === 'complete' && !c.capped) return '已扫描';
+  if (c.status === 'complete' && !c.capped && c.remaining <= 0) return '已扫描';
   return '部分扫描';
 }
 
-/** 扫描那一簇的诚实细节：覆盖了几分之几、哪些目录、哪些没算进去 */
+/** 千分位（作者面的读数不带机器分隔风格；口径同 `editor-model-pool` 那几处） */
+const fmtCount = (n: number): string => n.toLocaleString('en-US');
+
+/**
+ * 「扫描还没查完」那一句人话（**一句两出处**：tooltip 与面板空态共用，别再抄第二份）。
+ * 没有缺口 ⇒ 空串——"查完了"从来不靠这句话宣称，它只说还差多少。
+ */
+export function scanUnfinishedText(): string {
+  const c = coverage;
+  if (c.remaining <= 0) return '';
+  return `扫描还没查完，还差 ${fmtCount(c.remaining)} 个文件没检查，剩下的会接着查`;
+}
+
+/**
+ * 扫描那一簇的诚实细节：本轮查了几 / 累计查到第几 / 还差多少 / 哪些目录 / 哪些没算进去。
+ * 文案只说作者看得懂的事实——实现词（上限、游标、批次）一律不上屏（`capped` 除外，
+ * 它是字段名不是话术）。
+ */
 function scanDetail(c: ProjectScanCoverage): string {
   const bits: string[] = [];
-  bits.push(c.total > 0 ? `覆盖 ${c.scanned}/${c.total} 个文件` : `已处理 ${c.scanned} 个文件`);
+  if (c.total > 0) {
+    // 累计数只在"比本轮多"时才单列（一轮就查完的小盘子不必重复报两遍同一个数）
+    bits.push(
+      c.covered > c.scanned
+        ? `本轮已检查 ${fmtCount(c.scanned)}/${fmtCount(c.total)} 个文件 · 累计已检查 ${fmtCount(c.covered)}/${fmtCount(c.total)} 个文件`
+        : `已检查 ${fmtCount(c.scanned)}/${fmtCount(c.total)} 个文件`,
+    );
+  } else {
+    bits.push(`已处理 ${fmtCount(c.scanned)} 个文件`);
+  }
+  if (c.remaining > 0) {
+    bits.push(`扫描还没查完，还差 ${fmtCount(c.remaining)} 个文件没检查，剩下的会接着查`);
+  } else if (c.covered > 0 && c.total > 0) {
+    bits.push(`全部 ${fmtCount(c.covered)} 个文件都检查过了`);
+  }
   bits.push(
     c.roots.length === 0
       ? '目录未声明'
@@ -129,7 +166,6 @@ function scanDetail(c: ProjectScanCoverage): string {
         ? `目录 ${c.roots.join('、')}`
         : `目录 ${c.roots.slice(0, 3).join('、')} 等 ${c.roots.length} 处`,
   );
-  if (c.capped) bits.push(`到批量上限即停（${c.scanned} 个）`);
   if (c.status === 'cancelled') bits.push('已取消');
   if (c.status === 'failed') bits.push('本轮整体失败');
   if (c.skipped > 0) bits.push(`${c.skipped} 个文件读不动已跳过`);
@@ -199,6 +235,18 @@ export interface ProjectScanCoverage {
    */
   readonly cached: number;
   readonly recomputed: number;
+  /**
+   * **累计**已检查的文件数（本清扫轮次去重后的实数；additive，D10 覆盖轮转批）。
+   * `scanned` 说的是这一轮，`covered` 说的是这个项目——只有前者时，"扫到第几份"这件事
+   * 从读数里读不出来（4,258 份每轮 400，面板却只拿得到"本轮 400"那一格）。
+   */
+  readonly covered: number;
+  /**
+   * 还差几份没查（`0` 才允许说"这个项目查过了"；additive）。
+   * 分母取**最近一次整轮的文件数**：复核那一轮的清单只有几份，拿它当分母会当场
+   * 冒充"查完了"——那正是这一批要堵死的假真相。
+   */
+  readonly remaining: number;
 }
 
 export const IDLE_SCAN_COVERAGE: ProjectScanCoverage = {
@@ -213,6 +261,8 @@ export const IDLE_SCAN_COVERAGE: ProjectScanCoverage = {
   capped: false,
   cached: 0,
   recomputed: 0,
+  covered: 0,
+  remaining: 0,
 };
 
 let coverage: ProjectScanCoverage = IDLE_SCAN_COVERAGE;
@@ -429,6 +479,8 @@ const sameCoverage = (a: ProjectScanCoverage, b: ProjectScanCoverage): boolean =
   a.capped === b.capped &&
   a.cached === b.cached &&
   a.recomputed === b.recomputed &&
+  a.covered === b.covered &&
+  a.remaining === b.remaining &&
   a.roots.join('\u0001') === b.roots.join('\u0001');
 
 /** 写入覆盖读数；**逐字段比对后**只在真变了时通知（每批一次的写入不该炸渲染） */
