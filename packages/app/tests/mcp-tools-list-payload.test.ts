@@ -95,15 +95,15 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const RUST_MAX_DESCRIPTION_CHARS = 2048;
 
 describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场算，非估算）', () => {
-  it('① 可见面枚数与 STATE 能力面读数同源：77＝read 37 / edit 11 / privileged 29', () => {
-    expect(fullFace).toHaveLength(77);
+  it('① 可见面枚数与 STATE 能力面读数同源：78＝read 37 / edit 12 / privileged 29（MCP-PERF-S3 批 +1 枚 fileTree.applyChangeset）', () => {
+    expect(fullFace).toHaveLength(78);
     expect(readFace).toHaveLength(37);
-    expect(editFace).toHaveLength(48); // read + edit；privileged 未点名批准 ⇒ 不上帧
+    expect(editFace).toHaveLength(49); // read + edit；privileged 未点名批准 ⇒ 不上帧
     const byTier = fullFace.reduce<Record<string, number>>((a, t) => {
       a[t.tier] = (a[t.tier] ?? 0) + 1;
       return a;
     }, {});
-    expect(byTier).toEqual({ read: 37, edit: 11, privileged: 29 });
+    expect(byTier).toEqual({ read: 37, edit: 12, privileged: 29 });
     // 缺省会话（未批准任何 privileged）只出 read 面——默认可见面不是全量面。
     expect(registry.listTools(scope('read'))).toHaveLength(37);
   });
@@ -278,7 +278,8 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
       return acc;
     };
     const relPathHosts = fullFace.flatMap((t) => schemaDescHits(t, 'ADR-0003'));
-    expect(relPathHosts.length).toBe(15); // B22 实拍 15 处共用形状说明
+    // B22 实拍 15 处；MCP-PERF-S3 批 +1（fileTree.applyChangeset 携带同一条共用形状说明）。
+    expect(relPathHosts.length).toBe(16);
     for (const d of relPathHosts) {
       for (const token of ['Project-root-relative', 'absolute', 'drive-letter', '".."', 'approvedRoots', 'ADR-0003']) {
         expect(d, `相对路径说明丢了 ${token}`).toContain(token);

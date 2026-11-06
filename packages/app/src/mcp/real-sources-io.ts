@@ -195,6 +195,13 @@ export interface McpKernelLike {
      * 返回数组与入参一一对应（含重复路径）。测试假件 / 精简桥可缺席 ⇒ 该腿显式 NOT_WIRED。
      */
     readonly readTexts?: (paths: readonly string[]) => Promise<readonly (BatchTextFile | null)[]>;
+    /**
+     * FileIO 契约的**写前备份**原语（`fileTree.applyChangeset` 用；MCP-PERF-S3 批，additive）。
+     * 语义（契约真源 `@kojo/plugin-api` io.ts）：与 writeText 内部调的是**同一个**备份机制
+     * （`{appDataDir}/backup/{bucket}/{timestamp}.bak`，属主清单 + 版本同桶）；盘上无此文件
+     * ⇒ `null`（如实，不编造路径）。测试假件 / 精简桥可缺席 ⇒ 批量腿显式 NOT_WIRED。
+     */
+    readonly backup?: (path: string) => Promise<string | null>;
   };
   readonly plugins: { readonly list: () => unknown[] };
   readonly services: { readonly tryGet: <T = unknown>(key: string) => T | undefined };
@@ -1399,6 +1406,190 @@ export function createRunSupplemental(deps: McpIoDeps): (
     };
   };
 
+  /* ---------------- fileTree.applyChangeset（MCP-PERF-S3 批，2026-11-06）----------------
+   * 批量变更事务：一次 MCP 往返应用 ≤32 个全文替换（每项语义与 fileTree.update 逐字同尺），
+   * 换来 ① 一份备份清单 ② 一串逐文件 `file.changed`（宿主既有防抖合并成**一轮**失效/诊断）
+   * ③ 一趟批量 stat 读回真实落盘字节数。逐条 applied/refused 可见：refused 不抛整个批次，
+   * 但 schema / 授权级的批次缺陷（超 32 项、批内重复路径、rootId 形状/批准/反查失败）在
+   * **任何写发生之前**整批 INVALID_ARGS / PERMISSION_DENIED——不落半批。写通道零新增：
+   * 落盘仍是内核 `io.writeText`（写闸二 assertWritable 原样生效），备份仍走内核 `io.backup`
+   * 那一份单一真源（先备份拿路径、再 `writeText{backup:false}`，时序与 writeText 内部一致），
+   * rootId 走与四写腿同一条 resolveWriteRoot 三道拦截 + Rust 端点二次复核。
+   */
+  const APPLY_CHANGESET_MAX_ITEMS = 32;
+  const APPLY_CHANGESET_ENCODING_IDS = [
+    'utf-8',
+    'utf-8-bom',
+    'shift_jis',
+    'gbk',
+    'gb18030',
+    'big5',
+    'utf-16le',
+    'utf-16be',
+  ] as const;
+
+  const fileTreeApplyChangeset: McpReaderFn = async (args, scope) => {
+    const input = args ?? {};
+    const raw = input['changes'];
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new McpFailure('INVALID_ARGS', 'fileTree.applyChangeset 的 changes 须为非空数组（每项 {path, content}）');
+    }
+    if (raw.length > APPLY_CHANGESET_MAX_ITEMS) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `fileTree.applyChangeset 单批 ≤${APPLY_CHANGESET_MAX_ITEMS} 项：收到 ${raw.length} 项；拆批重发（整批未执行，盘上零改动）`,
+      );
+    }
+    // 批次级形状预检：每一项的 path / content / encoding / eol 都过闸，坏一项 = 调用方的账，
+    // 整批拒收（绝不"能写的先写"——半批落盘比整批拒绝更难交代）。批内重复路径同理：执行序
+    // 语义歧义（后者覆盖前者？）不猜，点名重复项整批拒。
+    const items: { path: string; content: string; encoding?: string; eol?: string }[] = [];
+    const seen = new Set<string>();
+    raw.forEach((entry, index) => {
+      const label = `changes[${index}]`;
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new McpFailure('INVALID_ARGS', `${label} 须为对象 {path, content}`);
+      }
+      const e = entry as Record<string, unknown>;
+      const rel = asString(e['path']);
+      try {
+        validateRelativePath(rel); // 与 schema 同尺（绝对路径 / 盘符 / .. / 设备名），fail-closed
+      } catch (err) {
+        throw new McpFailure(
+          'INVALID_ARGS',
+          `${label}.path 非项目根内相对路径：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      const content = e['content'];
+      if (typeof content !== 'string') {
+        throw new McpFailure('INVALID_ARGS', `${label}.content 须为字符串（全文替换，不收部分编辑）`);
+      }
+      if (content.length > 1_000_000) {
+        throw new McpFailure('INVALID_ARGS', `${label}.content 超过单文件上限 1_000_000 字符（与 fileTree.update 同尺）`);
+      }
+      const encoding = e['encoding'];
+      if (encoding !== undefined && !(encoding === 'preserve' || (APPLY_CHANGESET_ENCODING_IDS as readonly string[]).includes(String(encoding)))) {
+        throw new McpFailure('INVALID_ARGS', `${label}.encoding 非法：${sanitizeEcho(String(encoding))}（可选 preserve / ${APPLY_CHANGESET_ENCODING_IDS.join(' / ')}）`);
+      }
+      const eol = e['eol'];
+      if (eol !== undefined && eol !== 'preserve' && eol !== 'crlf' && eol !== 'lf') {
+        throw new McpFailure('INVALID_ARGS', `${label}.eol 非法：${sanitizeEcho(String(eol))}（可选 preserve / crlf / lf）`);
+      }
+      if (seen.has(rel)) {
+        throw new McpFailure('INVALID_ARGS', `批内重复 path（执行序语义歧义，不猜）：${sanitizeEcho(rel)} 首见于更早的 changes 项；拆批或合并后重发`);
+      }
+      seen.add(rel);
+      items.push({
+        path: rel,
+        content,
+        ...(encoding !== undefined ? { encoding: String(encoding) } : {}),
+        ...(eol !== undefined ? { eol: String(eol) } : {}),
+      });
+    });
+
+    // 批次级授权：整批一个 rootId（一次三道拦截，绝不逐项重复 IPC；拒绝 ⇒ 盘上零改动）。
+    const { kernel, rootDir, rootId } = await resolveWriteRoot(input, scope);
+    const io = kernel.io;
+    if (typeof io.writeText !== 'function' || typeof io.exists !== 'function' || typeof io.backup !== 'function') {
+      throw new McpFailure(
+        'NOT_WIRED',
+        'fileTree.applyChangeset 未接线：内核实例未提供 writeText / exists / backup 写原语（不静默）',
+      );
+    }
+
+    const tracker = trackerOf(deps);
+    const applied: Record<string, unknown>[] = [];
+    const refused: Record<string, unknown>[] = [];
+    const backups: Record<string, unknown>[] = [];
+    const absByRel = new Map<string, string>();
+
+    for (const it of items) {
+      try {
+        const abs = resolveWriteTarget(rootDir, it.path, scope.approvedRoots); // 路径闸 + 写闸一（第四张表）
+        absByRel.set(it.path, abs);
+        let present: boolean;
+        try {
+          present = await io.exists.call(io, abs);
+        } catch (err) {
+          rethrowWriteGate(err, it.path);
+        }
+        if (!present) {
+          refused.push({
+            path: it.path,
+            code: 'TOOL_EXECUTION_FAILED',
+            message: `目标不存在，update 语义绝不静默改成 create（先 fs.stat 确认，或逐项走 fileTree.create）：${sanitizeEcho(it.path)}`,
+          });
+          continue;
+        }
+        let backupPath: string | null;
+        try {
+          backupPath = await io.backup.call(io, abs); // 写前备份（内核单一真源），路径进清单
+        } catch (err) {
+          rethrowWriteGate(err, it.path);
+        }
+        const opts: Record<string, unknown> = { backup: false }; // 备份已手动落账，避免二次备份
+        if (it.encoding !== undefined) opts['encoding'] = it.encoding;
+        if (it.eol !== undefined) opts['eol'] = it.eol;
+        try {
+          await io.writeText.call(io, abs, it.content, opts); // 写闸二：内核 assertWritable 先于落盘
+        } catch (err) {
+          rethrowWriteGate(err, it.path);
+        }
+        backups.push({ path: it.path, ...(backupPath !== null ? { backupPath } : { backupPath: null }) });
+        applied.push({
+          path: it.path,
+          ...(backupPath !== null ? { backupPath } : {}),
+          refreshed: emitFileChanged(kernel, 'change', abs, { tracker, scope }),
+        });
+      } catch (err) {
+        // 逐条失败可见：refused 带 code + message，批次继续（部分失败语义）。
+        refused.push({
+          path: it.path,
+          code: err instanceof McpFailure ? err.code : 'TOOL_EXECUTION_FAILED',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // 落盘字节数一趟批量 stat 读回（真实读数，不按 content.length 编造——preserve 编码下
+    // 两者本就不等）；stat 失败位如实 null，绝不冒充 0。
+    let sizes = new Map<string, number | null>();
+    if (applied.length > 0) {
+      try {
+        const stats = (await deps.invoke('stat_files', {
+          paths: applied.map((a) => absByRel.get(String(a['path'])) ?? ''),
+        })) as unknown;
+        if (Array.isArray(stats)) {
+          stats.forEach((entry, i) => {
+            const rel = applied[i] !== undefined ? String(applied[i]!['path']) : '';
+            const size = entry && typeof entry === 'object' && typeof (entry as Record<string, unknown>)['size'] === 'number'
+              ? ((entry as Record<string, unknown>)['size'] as number)
+              : null;
+            sizes.set(rel, size);
+          });
+        }
+      } catch {
+        sizes = new Map(); // 读不到就全体 null，不阻塞回执
+      }
+    }
+    for (const a of applied) {
+      a['bytes'] = sizes.get(String(a['path'])) ?? null;
+      a['contentChars'] = items.find((it) => it.path === a['path'])?.content.length ?? null;
+    }
+
+    return {
+      applied,
+      refused,
+      manifest: {
+        backups,
+        takenAtMs: Date.now(),
+        note: '一次批次一份清单：backupPath 来自内核 io.backup 单一真源（写前自动备份桶）；backupPath:null = 备份时盘上已无此文件（竞态，如实标注）。',
+      },
+      totals: { total: items.length, applied: applied.length, refused: refused.length, backups: backups.length },
+      ...(rootId !== null ? { rootId } : {}),
+    };
+  };
+
   /**
    * fileTree.remove：删除项目根内文件 / 目录。先经只读 `stat_file`（`deps.invoke` seam，与
    * fs.stat 腿同口径）判类型：不存在 ⇒ 显式失败（不静默成功）；目录须显式 `recursive:true`
@@ -1697,6 +1888,8 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['fs.readMany', readMany],
     ['fileTree.create', fileTreeCreate],
     ['fileTree.update', fileTreeUpdate],
+    // MCP-PERF-S3 批（2026-11-06）：批量变更事务（≤32 文件 / 一次备份清单 / 逐条 applied/refused）。
+    ['fileTree.applyChangeset', fileTreeApplyChangeset],
     ['fileTree.remove', fileTreeRemove],
     ['fileTree.rename', fileTreeRename],
     // Wave4 余项①：稳定 actionId 台账 + 宿主受控 apply（模型内一次撤销步，不落盘、

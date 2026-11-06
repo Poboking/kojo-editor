@@ -934,6 +934,46 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false },
   },
   {
+    name: 'fileTree.applyChangeset',
+    description:
+      'Apply a BATCH of whole-file replacements inside the authorized project root in ONE round trip (edit tier, mutating; MCP-PERF-S3). `changes` is 1..32 items of {path, content}; every `path` is project-root-relative (same gate as fileTree.update: schema rejects absolute paths, drive letters and ".."; the execution layer additionally resolves against approvedRoots and refuses out-of-domain targets). Semantics per item are EXACTLY fileTree.update: the target must already exist (a missing file is reported per-item as refused, never silently turned into a create), the whole content is replaced, encoding/EOL default to preserve. One call = one MCP round trip + one backup manifest + one burst of per-file refresh events the host already debounce-merges into a single invalidation/diagnostics pass — instead of 20 separate fileTree.update calls each paying its own round trip. The reply itemizes the outcome: `applied` (per-file receipt incl. `bytes` from a post-write batch stat and `backupPath` taken BEFORE the write via the kernel\'s own backup primitive) and `refused` (per-file `code`/`message`; a partial failure never aborts the whole batch, but schema/authorization-level defects — more than 32 items, duplicate paths within the batch, an unknown or unapproved `rootId` — reject the ENTIRE batch before any write happens). Optional `rootId` selects one explicitly approved persistent workspace root for the WHOLE batch (enumerate via io.workspaceRoots; human approval required); per-item roots are deliberately not supported — one batch, one root, no mixed-domain writes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        changes: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 32,
+          items: {
+            type: 'object',
+            properties: {
+              path: RELATIVE_PATH_SCHEMA,
+              content: { type: 'string', maxLength: 1_000_000, description: 'Full replacement text (same cap as fileTree.update).' },
+              encoding: {
+                type: 'string',
+                enum: ['utf-8', 'utf-8-bom', 'shift_jis', 'gbk', 'gb18030', 'big5', 'utf-16le', 'utf-16be', 'preserve'],
+                description: 'Defaults to preserve: keep the encoding probed at read time (identical to fileTree.update).',
+              },
+              eol: {
+                type: 'string',
+                enum: ['crlf', 'lf', 'preserve'],
+                description: 'Defaults to preserve: keep each original line ending (identical to fileTree.update).',
+              },
+            },
+            required: ['path', 'content'],
+            additionalProperties: false,
+          },
+          description: '1..32 whole-file replacements applied in order; a duplicate path within the batch is a batch-level error.',
+        },
+        rootId: ROOT_ID_SCHEMA,
+      },
+      required: ['changes'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { idempotentHint: true },
+  },
+  {
     name: 'diff.compare',
     description:
       'Compute a structured diff between two document versions (working buffer vs last snapshot, or two project-root-relative files). Read-only; never writes. Returns {hunks:[...], truncated}. Use `mode` to select the comparison; `left`/`right` are optional relative paths for file-vs-file.',

@@ -109,6 +109,8 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   // 经 `requireWriteTarget(input, …)` 传到腿里），本表此前漏登 ⇒ 由漂移闸暴露、照实补上。
   'fileTree.create': ['relPath', 'kind', 'content', 'rootId'],
   'fileTree.update': ['relPath', 'content', 'rootId'],
+  // MCP-PERF-S3 批：批量腿取 args.changes（批次级预检）+ args.rootId（resolveWriteRoot 一次）。
+  'fileTree.applyChangeset': ['changes', 'rootId'],
   'fileTree.remove': ['relPath', 'recursive', 'rootId'],
   'fileTree.rename': ['from', 'to', 'rootId'],
   'diff.compare': [], // 无执行腿 ⇒ 显式 NOT_WIRED，一个键都不取用

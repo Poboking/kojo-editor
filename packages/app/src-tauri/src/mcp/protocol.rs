@@ -1089,9 +1089,16 @@ pub const EDIT_TOOL_PREFIXES: &[&str] = &[
 /// 才重判为「可诚实回报」⇒ 工具与档位同批进本表，端点级回归见
 /// `mcp::tests::e2e_tools_call_denies_editor_open_document_from_read_session`。
 /// `editor.revealPosition` 仍不登记（定位面已由 revealLine / setCursor 覆盖），故**不提前点名**。
+///
+/// MCP-PERF-S3 批（LaneI 2026-11-06）追加 `fileTree.applyChangeset`——同一型洞的第四批，
+/// 理由逐字相同：`命名空间.动词` 点号形态，既不命中 `EDIT_TOOL_PREFIXES` 的下划线前缀，
+/// 也不在 `PRIVILEGED_EXACT` ⇒ 不点名则 `host_required_tier()` 落 `McpTier::Read`，
+/// read 会话零批准就能整批改写 ≤32 个文件。WebView 契约（`SUPPLEMENTAL_TOOL_SPECS`）
+/// 即 `tier: 'edit'`，本表把端点侧判定与契约对齐。
 pub const EDIT_TOOLS_EXACT: &[&str] = &[
     "fileTree.create",
     "fileTree.update",
+    "fileTree.applyChangeset",
     "problems.quickFix",
     "tasks.start",
     "tasks.cancel",
@@ -1216,10 +1223,12 @@ pub fn is_root_id_shape(raw: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// 只有这四枚落盘写腿收 `rootId`；其它工具带该参数一律拒绝（防旁路）。
+/// 只有这五枚落盘写腿收 `rootId`（MCP-PERF-S3 批 +`fileTree.applyChangeset`：整批一个根，
+/// 不收逐项根）；其它工具带该参数一律拒绝（防旁路）。
 pub const MULTIROOT_WRITE_TOOLS: &[&str] = &[
     "fileTree.create",
     "fileTree.update",
+    "fileTree.applyChangeset",
     "fileTree.remove",
     "fileTree.rename",
 ];
