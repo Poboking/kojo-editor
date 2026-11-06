@@ -266,59 +266,20 @@ export function parseDimDeclaration(trimmed: string): { directive: string; name:
 }
 
 /**
- * 名字边界判据的**唯一字面真源**：引擎 `Emuera/Runtime/Script/Parser/LexicalAnalyzer.cs`
- * 的 `_searchValues`（逐码位抄录，一字符不许多、不许少）。`ReadSingleIdentifierROS`
- * 就是「读到任一分隔符为止」⇒ **引擎眼里的名字 = 不含下列字符的极大段**。
+ * 引擎名字尺（`ERB_ENGINE_NAME_DELIMITERS` / `isErbEngineNameCode` / `ERB_NAME_RUN_SOURCE`）
+ * ——**判据真源已上提契约层**（D01b，2026-11-06：`packages/plugin-api/src/erb-name-ruler.ts`），
+ * 这里只是**再导出**，对外形态零变化。
  *
- * 这条真源存在的理由（D01，2026-11-20）：未定义名腿此前用记号尺
- * （`MODEL_TOKEN_CLASS` = `\p{L}\p{N}_`）切记号，于是 `P23温泉·更衣间` 在 `·`(U+00B7)
- * 处被劈成两段——`·` **不是**引擎分隔符，引擎读到的是一整枚名字。真语料实测
- * 1,190 条命中里 1,141 条（95.9%）是这个形状。逐字符往黑名单里补 `·` 只会造出
- * 第二判据的复发形态，故这里只留一把尺：**不是分隔符就连成一个名字**。
- *
- * 注意引擎这串里 `.` `~` `?` `#` `$` `@` **是**分隔符、反引号 **不是**；
- * 非 ASCII 只列了全角空格 `\u3000`（半角空格与制表也在内）。与声明侧排除集的逐字符差异
- * 由 `undefined-name.drift.test.ts` 钉死，不许静默漂移。
+ * 上提的理由与两把尺不许合并的口径写在那份叶子的头注里；走 `@kojo/plugin-api/erb-name-ruler`
+ * 子路径（而非根入口）是**裸 node 约束**：本文件被
+ * `packages/erb-syntax-tree/tools/gen-erb-structure.mjs` 动态 import，根入口的无扩展名相对
+ * 导入会让那条链直接崩（与上方 `@kojo/plugin-api/eol` 同一成例、同一理由）。
  */
-export const ERB_ENGINE_NAME_DELIMITERS = ' \t　.+-*/%=!<>|&^~?#)}],:({[$\'"@;';
-
-/** 引擎分隔集的 ASCII 查表位（由上面那一串填出，不另抄） */
-const ENGINE_DELIM_ASCII = new Uint8Array(128);
-/** 引擎分隔集里的非 ASCII 码位（由上面那一串填出；现只有 `\u3000`） */
-const ENGINE_DELIM_EXTRA = new Set<number>();
-for (const ch of ERB_ENGINE_NAME_DELIMITERS) {
-  const code = ch.codePointAt(0)!;
-  if (code < 128) ENGINE_DELIM_ASCII[code] = 1;
-  else ENGINE_DELIM_EXTRA.add(code);
-}
-
-/**
- * 引擎口径的**名字字符**判据（码位；未定义名腿切记号用的就是它）。
- *
- * `NaN` = 空串上的 `charCodeAt(0)`：不是字符，也就不是名字字符。
- */
-export function isErbEngineNameCode(code: number): boolean {
-  if (!Number.isFinite(code)) return false;
-  if (code < 128) return ENGINE_DELIM_ASCII[code] === 0;
-  return !ENGINE_DELIM_EXTRA.has(code);
-}
-
-/** 由同一串真源组装的正则字符类（`u` 旗安全：控制码位与非 ASCII 一律写 `\uXXXX`） */
-function engineNameClassSource(): string {
-  let out = '[^';
-  for (const ch of ERB_ENGINE_NAME_DELIMITERS) {
-    const code = ch.codePointAt(0)!;
-    out += code < 0x20 || code > 0x7e ? `\\u${code.toString(16).padStart(4, '0')}` : /[\\\]^[-]/.test(ch) ? `\\${ch}` : ch;
-  }
-  return `${out}]`;
-}
-
-/**
- * 名字段的**正则形态**（与 {@link isErbEngineNameCode} 同源的另一个出口）：
- * `new RegExp(ERB_NAME_RUN_SOURCE + '+', 'gu')` 切出来的段 = 引擎读到的极大名字段。
- * 需要正则的消费方**只许**引这一枚，再写一遍字符类就是第二判据。
- */
-export const ERB_NAME_RUN_SOURCE = engineNameClassSource();
+export {
+  ERB_ENGINE_NAME_DELIMITERS,
+  ERB_NAME_RUN_SOURCE,
+  isErbEngineNameCode,
+} from '@kojo/plugin-api/erb-name-ruler';
 
 /**
  * 名字字符的**码位实现**（声明侧字符集，`isErbDimNameChar` 只是它的字符串外壳）。

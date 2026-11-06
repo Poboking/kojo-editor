@@ -282,6 +282,8 @@ export default defineConfig({
       '@kojo/plugin-api/eol': r('../plugin-api/src/eol.ts'),
       // 通用自绘下拉叶子（同 /eol：排在桶之前，只由插件按需直引，不进开机图）
       '@kojo/plugin-api/ui-combobox': r('../plugin-api/src/ui-combobox.ts'),
+      // D01b 引擎名字尺叶子（同上，必须排在桶之前）
+      '@kojo/plugin-api/erb-name-ruler': r('../plugin-api/src/erb-name-ruler.ts'),
       '@kojo/plugin-api': r('../plugin-api/src/index.ts'),
       // 路 B 新包：MCP 能力面 registry（`exports` 指向 .ts 源）。`host-bridge.ts` 只在首条
       // `mcp://request` 到达时 `import('@kojo/mcp-host')`，dev / build 都经本 alias 直指源，

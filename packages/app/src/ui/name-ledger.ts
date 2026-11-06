@@ -1,6 +1,6 @@
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndexState, ErbParserService } from '@kojo/plugin-api';
-import { MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
+import { ERB_NAME_RUN_SOURCE } from '@kojo/plugin-api/erb-name-ruler';
 import { kojoReferencesViaSlot, listKojoSourceTexts } from './kojo-source-scan';
 import { nameLedgerIndexCopy } from './index-state-copy';
 import {
@@ -43,8 +43,20 @@ import {
  * 不去翻糖源（一次全项目 walkDir 不该花在一个没有名字可核对的检索词上）。
  */
 
-/** 整串是记号才算一个"名字"（正则检索词 / 带空格的短语不是：那些没有引用口径可谈） */
-const NAME_TOKEN_RE = new RegExp(`^${MODEL_TOKEN_CLASS}+$`, 'u');
+/**
+ * 整串是**一枚引擎名字段**才算一个"名字"（D01b 2026-11-06 换尺：真源 `ERB_NAME_RUN_SOURCE`）。
+ *
+ * 此前这里用记号尺（`MODEL_TOKEN_CLASS` = `[\p{L}\p{N}_]`），于是 `P23温泉·更衣间`
+ * 在 `·`(U+00B7) 处不被承认为一个名字 ⇒ `normalizedNameOf` 直接给 `null`、台账整条腿装哑。
+ * 而台账 `.erb` 侧查的 `referencesTo` 键位（D01 起）就是**引擎那把尺**切出来的极大段——
+ * 一把判"是不是名字"、另一把判"名字在索引里叫什么"，两侧不一致时**检索词先被否掉**，
+ * 引用判据连上场机会都没有。换尺后两把对齐；`·` 之外还捎带修好全角 `％`、`（シリーズ毎）`
+ * 这类"引擎眼里是一个名字"的形状。
+ *
+ * 正则检索词 / 带空格的短语仍被否掉：`.` `?` `*` `+` 与空白**都是**引擎分隔符（逐码位见
+ * `plugin-api/src/erb-name-ruler.ts`），上面这些字符形状**不是**一枚名字段。
+ */
+const NAME_TOKEN_RE = new RegExp(`^${ERB_NAME_RUN_SOURCE}+$`, 'u');
 
 /** 归一化检索词 → 可核对的名字；`null` = 这个词不是一个记号，判据无话可说 */
 function normalizedNameOf(query: string): string | null {

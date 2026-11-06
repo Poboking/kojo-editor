@@ -14,6 +14,8 @@ export const config = defineConfig({
       '@kojo/plugin-api/eol': r('./packages/plugin-api/src/eol.ts'),
       // 通用自绘下拉是叶子：排在桶之前，且只由插件按需直引（不进开机静态图）
       '@kojo/plugin-api/ui-combobox': r('./packages/plugin-api/src/ui-combobox.ts'),
+      // D01b 引擎名字尺：同一条裸 node 约束（erb-parser/scanner.ts 只再导出它，见该叶子头注）
+      '@kojo/plugin-api/erb-name-ruler': r('./packages/plugin-api/src/erb-name-ruler.ts'),
       '@kojo/plugin-api': r('./packages/plugin-api/src/index.ts'),
       // 路 B 新包：能力面 registry（零外部依赖，tests 经本 alias 解析到源）
       '@kojo/mcp-host': r('./packages/mcp-host/src/index.ts'),

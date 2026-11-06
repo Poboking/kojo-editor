@@ -1,5 +1,6 @@
 import type { EditorSymbolLocation, ErbReference, ErbReferenceKind } from '@kojo/plugin-api';
-import { KOJO_SOURCE_EXTENSION, KOJO_V1_SOURCE_EXTENSIONS, MODEL_TOKEN_CLASS, splitModelLines } from '@kojo/plugin-api';
+import { KOJO_SOURCE_EXTENSION, KOJO_V1_SOURCE_EXTENSIONS, splitModelLines } from '@kojo/plugin-api';
+import { ERB_NAME_RUN_SOURCE } from '@kojo/plugin-api/erb-name-ruler';
 import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 
 /**
@@ -31,8 +32,8 @@ import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
  * 纯函数、零 Monaco、零 io 依赖（io 由调用方以最小接口注入），node 单测直接跑。
  * **不抄糖语法**：`.kojo` 源里"哪一处记号真的是这个函数的引用"由糖线探针判
  * （`kojo-sugar/rename.ts`，经 `ui.editor.languageService` 槽消费）；本模块只回答
- * "这一串字符是不是这个名字"——记号字符集用契约层单源 `MODEL_TOKEN_CLASS`，
- * 与反向索引 / 着色落点同一把尺子。
+ * "这一串字符是不是这个名字"——名字段字符集用契约层单源 `ERB_NAME_RUN_SOURCE`（引擎那把尺，
+ * D01b 换尺的理由见下面 `TOKEN_RUN_RE` 那一注），与 `.erb` 反向索引的键位同一把尺子。
  */
 
 /* ============================== 语言轴 ============================== */
@@ -448,8 +449,23 @@ export async function rewriteClosedFile(
 
 /* ============================== 记号位置（单源字符集） ============================== */
 
-/** 记号整串扫描用的正则（`MODEL_TOKEN_CLASS` 单源 ⇒ 与反向索引 / 着色同一把尺子） */
-const TOKEN_RUN_RE = new RegExp(MODEL_TOKEN_CLASS + '+', 'gu');
+/**
+ * 名字段整串扫描用的正则（**引擎那把尺**，D01b 2026-11-06；真源
+ * `packages/plugin-api/src/erb-name-ruler.ts` 的 `ERB_NAME_RUN_SOURCE`）。
+ *
+ * 换尺的理由（这条链上"漏"是数据损坏级）：本函数的消费方拿的 `normalizedName` 一律是
+ * **ERB 函数名**（`monaco/erb-rename.ts::collectKojoLeg` 与 `ui/name-ledger.ts::kojoSide`），
+ * 而 `.erb` 反向索引的键位（D01 起）就是引擎切出的极大段。旧记号尺（`MODEL_TOKEN_CLASS`）
+ * 在 `·`(U+00B7) 处把 `P23温泉·更衣间` 劈成两段 ⇒ 整串相等判据**永远**落空 ⇒
+ * `positions.length === 0` ⇒ 这份"生成它的 `.kojo1` 源"被当成与本动作无关直接跳过 ⇒
+ * 改了 `.erb` 没改糖源 ⇒ 下次保存把改名冲掉（正是本模块头注点名的那种损坏）。
+ *
+ * 代价（如实记）：引擎尺的段**更长**，落在两把尺分歧面的形状（名字后面紧跟 `。`、`、`
+ * 这类"引擎不算分隔符、记号尺算"的字符）会从"命中"变"不命中"。本函数只是**候选定位器**
+ * ——真正的"这一处是不是引用"由糖线探针判读（`kojo-sugar/rename.ts`，经槽消费），
+ * 判读缺席/抛错一律整批拒绝。语料实测量见提交回执（`.kojo1` 源内的两尺分歧命中差）。
+ */
+const TOKEN_RUN_RE = new RegExp(`${ERB_NAME_RUN_SOURCE}+`, 'gu');
 
 /** 归一化快路径（无小写拉丁就不分配副本，与 `erb-parser/references.ts` 同判据） */
 function upperOf(run: string): string {
