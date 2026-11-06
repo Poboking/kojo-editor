@@ -96,10 +96,10 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   /* ---- kernel IO 3 腿（real-sources-io.ts createKernelIo）---- */
   'project.info': [], // 真零参
   'fs.tree': ['maxDepth', ...SHARED_LIST], // clampInt(args.maxDepth) + paginateByCursor(args)
-  'search.all': ['query', ...SHARED_WINDOW], // query + pageParamsFor(args)
+  'search.all': ['query', 'resumeBySlice', ...SHARED_WINDOW], // query + pageParamsFor(args) + B16 分片开关
 
   /* ---- 补齐 / 只读具名工具 ---- */
-  'workspace.searchAll': ['query', 'scope', ...SHARED_WINDOW],
+  'workspace.searchAll': ['query', 'scope', 'resumeBySlice', ...SHARED_WINDOW],
   'problems.quickFix': ['actionId', 'line', 'column'], // quick-fix.ts 三条取用
   // 该面腿先把 maxResults clamp 一遍再注入共用闸 ⇒ 序列里排在 maxResults 之后的四个别名
   // 在这个面上**从不生效**：不生效就不声明，让它们落进「未知入参 ⇒ 显式拒收」。
