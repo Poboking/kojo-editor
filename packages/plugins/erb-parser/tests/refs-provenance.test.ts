@@ -263,9 +263,11 @@ describe('REFS-PROVENANCE：名录变更只重扫受影响文件', () => {
     files.set(pathOf(0), { text: srcOf(0) + '\n@F_NEW\n\tRETURN 1\n', mtimeMs: 999 });
     openProject(inst);
     await inst.waitIndexed();
-    // 等异步落盘收口（候选位必须已在盘上）
+    // 等异步落盘收口（候选位必须已在盘上；S16 起还得是**重扫轮**的新 payload——旧轮 payload 形状相同，靠 F_NEW 分辨）
     await waitFor(() => {
-      const raw = JSON.parse(map.get(key)!) as { namesFp: unknown; entries: Record<string, unknown[]> };
+      const rawTxt = map.get(key) ?? '';
+      if (!rawTxt.includes('F_NEW')) return false;
+      const raw = JSON.parse(rawTxt) as { namesFp: unknown; entries: Record<string, unknown[]> };
       return typeof raw.namesFp === 'number' && Object.values(raw.entries).every((t) => t.length >= 12);
     });
     const saved = JSON.parse(map.get(key)!) as { namesFp: unknown; entries: Record<string, unknown[]> };

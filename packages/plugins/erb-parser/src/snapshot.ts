@@ -2076,3 +2076,47 @@ export function attachRefs(
   }
   return out;
 }
+
+export const SNAPSHOT_SAVE_DEBOUNCE_MS = 300;
+
+type SnapshotSaveMake = () => { value: unknown; entryCount: number };
+
+export function createSnapshotSaver(
+  set: (key: string, value: unknown) => Promise<void>,
+  log: { info: (m: string) => void; warn: (m: string) => void },
+  saved: () => void,
+): { schedule(key: string, make: SnapshotSaveMake): void; dispose(): void } {
+  const pending = new Map<string, SnapshotSaveMake>();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const fail = (err: unknown): void => log.warn(`Index snapshot save failed: ${String(err)}`);
+  const fire = (): void => {
+    timer = null;
+    const batch = [...pending];
+    pending.clear();
+    for (const [key, make] of batch) {
+      const startedAt = Date.now();
+      let made: { value: unknown; entryCount: number };
+      try {
+        made = make();
+      } catch (err) {
+        fail(err);
+        continue;
+      }
+      void set(key, made.value).then(() => {
+        log.info(`Index snapshot saved (${made.entryCount} entries, key ${key}, ${Date.now() - startedAt}ms)`);
+        saved();
+      }, fail);
+    }
+  };
+  return {
+    schedule(key, make) {
+      pending.set(key, make);
+      if (timer === null) timer = setTimeout(fire, SNAPSHOT_SAVE_DEBOUNCE_MS);
+    },
+    dispose() {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      pending.clear();
+    },
+  };
+}

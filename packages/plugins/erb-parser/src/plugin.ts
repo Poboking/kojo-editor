@@ -113,6 +113,7 @@ import {
   changedNamesBetween,
   coerceSnapshot,
   countEntries,
+  createSnapshotSaver,
   diffSnapshot,
   encodeEntries,
   entryNamesOf,
@@ -349,8 +350,9 @@ export function createErbParserPlugin(): Plugin {
       // 注册可搬运任务：本地实现 = 无并行通道（或通道失败）时的回退路径；
       // worker 侧由装配层用**同一份表**（`erbParserTasks`）注册，避免映射漂移。
       for (const [kind, impl] of Object.entries(erbParserTasks)) compute.registerTask(kind, impl as never);
-      /** 本插件命名空间的存储域：索引快照的落点（`{appData}/store/erb-parser/`） */
-      const storage = ctx.storage;
+      /** 本插件命名空间的存储域：索引快照的落点（`{appData}/store/erb-parser/`）；S16 落盘走去抖后台 */
+      const storage = ctx.storage,
+        snapshotSaver = createSnapshotSaver(storage.set.bind(storage), ctx.log, pruneStaleSnapshots);
 
       /**
        * 槽注册表（**软取**，ERB-PARITY G1）——悬停要按当前项目的 adapter 取三张表
@@ -1213,56 +1215,31 @@ export function createErbParserPlugin(): Plugin {
             `${refsOffloadStat.fallback} fallback (files ${refsOffloadStat.files} of ${refsToScan.length}, ` +
             `window ${REFS_WINDOW}, min ${REFS_OFFLOAD_MIN_FILES})`,
         );
-        // 落盘快照（异步，不阻塞广播；失败只告警——它只是缓存，不是数据）
+        // 落盘快照（S16 去抖后台：窗回调才组装/编码/落盘；CRASH 取舍见 tests/snapshot-defer.test.ts）
         const snapshotDirty =
           needsRewrite ||
           fresh.size > 0 ||
           (snapshot !== null && countEntries(snapshot.entries) !== allFiles.length);
         if (useSnapshot && currentRoot && gen === generation) {
-          const key = snapshotKeyFor(currentRoot);
+          const key = snapshotKeyFor(currentRoot),
+            rootAtSave = currentRoot;
           if (snapshotDirty) {
-            // refs 挂在条目上一起落盘：热复用时反向索引不花一次读盘（挂接纯函数，见 snapshot.attachRefs）。
-            // refsByPath 现在只含 stale 文件（PERF-7 惰性聚合）+ 溯源巡检补扫的复用条目（PS-3：
-            // 热轮与 salvage 轮同判据），恰好是需要挂接的那批；未复扫条目自带快照 refs、原样留用。
-            // 挂上新流水的条目同时记下**当前名录摘要**：下一轮"正文没变、名录变了"就靠它对号入座。
-            // REFS-PROVENANCE：候选集随同一批挂接（每个重扫路径都有，空集 = ''，键照写）——
-            // 下一轮的逐文件免扫判据（refsProvableUnchanged）吃的正是这一位。
-            const entries = attachRefs(
-              mergeEntries(snapshot, allFiles, fresh),
-              refsByPath,
-              namesFp,
-              candidatesByPath,
-              dimRefsByPath,
-            );
-            // 信封摘要（PS-3）：全体条目都记了当前账才写数，否则写 null（下轮退回逐条目巡检）
-            const envelopeFp = verifiedNamesDigest(entries, namesFp);
-            // 变量名录信封（v17）：每一条都带 dimRefs 才写；缺一条就写 null ⇒ 下轮整批重扫
-            const envelopeDimFp = verifiedDimNamesDigest(entries, dimNamesFp);
-            const entryCount = countEntries(entries);
-            const saveStartedAt = Date.now();
-            void storage
-              .set(key, {
-                version: SNAPSHOT_VERSION,
-                rootDir: currentRoot,
-                savedAt: Date.now(),
-                namesFp: envelopeFp,
-                dimNamesFp: envelopeDimFp,
-                // 盘上用 v7 紧凑元组（剥可派生字段 + 位置化 + refs 名录摘要位），加载时由 decodeEntries 还原
-                entries: encodeEntries(entries),
-              })
-              .then(() => {
-                ctx.log.info(
-                  `Index snapshot saved (${entryCount} entries, key ${key}, ` +
-                    `${Date.now() - saveStartedAt}ms)`,
-                );
-                pruneStaleSnapshots();
-              })
-              .catch((err: unknown) => {
-                ctx.log.warn(`Index snapshot save failed: ${String(err)}`);
-              });
+            snapshotSaver.schedule(key, () => {
+              const entries = attachRefs(mergeEntries(snapshot, allFiles, fresh), refsByPath, namesFp, candidatesByPath, dimRefsByPath);
+              return {
+                value: {
+                  version: SNAPSHOT_VERSION,
+                  rootDir: rootAtSave,
+                  savedAt: Date.now(),
+                  namesFp: verifiedNamesDigest(entries, namesFp),
+                  dimNamesFp: verifiedDimNamesDigest(entries, dimNamesFp),
+                  entries: encodeEntries(entries),
+                },
+                entryCount: countEntries(entries),
+              };
+            });
           } else {
-            // 没变更也要收口：磁盘上可能躺着本会话未摸过的项目快照或旧版本孤儿
-            pruneStaleSnapshots();
+            pruneStaleSnapshots(); // 没变更也收口（磁盘卫生判据见 pruneStaleSnapshots 文档）
           }
         }
 
@@ -1757,8 +1734,11 @@ export function createErbParserPlugin(): Plugin {
           lastIndexState = idleIndexState();
         }),
       );
-      // 插件卸载：去抖窗口里那批路径不该在卸载后落地（读盘 / 广播都属于本插件）
-      ctx.onDispose(clearPendingFileChanges);
+      // 插件卸载：去抖窗口里那批路径不该在卸载后落地（读盘 / 广播都属于本插件）；S16 待落盘快照同弃（崩溃同语义）
+      ctx.onDispose(() => {
+        clearPendingFileChanges();
+        snapshotSaver.dispose();
+      });
 
       /* ---------------- 扫描根变更的"活读时刻"（IDX-ROOT，2026-10-19） ----------------
 

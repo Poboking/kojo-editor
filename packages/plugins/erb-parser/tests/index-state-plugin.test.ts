@@ -481,6 +481,10 @@ describe('erb-parser · 逐文件失败面：失败 ≠ 没有这个文件（IDX
     openProject(h, '/game', ['/game/kojo']);
     const first = await h.parser().ensureIndex();
     expect(h.state().filesFailed).toBe(0); // 全成功那一轮：零失败、差值也是 0
+    // S16：第二轮要读的快照得先落盘（去抖窗回调；轮询成功日志行 = 已落地）
+    for (let i = 0; i < 400 && !h.logs.some((m) => m.includes('Index snapshot saved')); i++) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
 
     // 第二轮：WS_FILE 读不到，但快照里那份旧解析结果还在 ⇒ 它会补进 index.files。
     // 不重新走"起跑"的话根签名没变、不会重扫（既有判据），故用 project.opened 起新一轮。

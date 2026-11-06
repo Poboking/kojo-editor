@@ -311,8 +311,16 @@ function readBreakdown(logs: readonly string[]): {
 }
 
 async function waitFor(pick: () => boolean, rounds = 400): Promise<void> {
-  for (let i = 0; i < rounds && !pick(); i++) await new Promise((r) => setTimeout(r, 5));
-  expect(pick()).toBe(true);
+  // S16：去抖窗内快照键还没落盘，pick 里的 diskOf 会拿到 undefined——判"不成立"而不是让异常逃出轮询
+  const safe = (): boolean => {
+    try {
+      return pick();
+    } catch {
+      return false;
+    }
+  };
+  for (let i = 0; i < rounds && !safe(); i++) await new Promise((r) => setTimeout(r, 5));
+  expect(safe()).toBe(true);
 }
 
 /** 本轮真读盘的形状（判据②的两条读数）：`passes` = 读盘趟数，`files` = 读到的**不同文件棵数** */

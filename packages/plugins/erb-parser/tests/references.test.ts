@@ -320,7 +320,7 @@ describe('erb-parser · 反向索引装配（冷建/热复用/快照往返）', 
     // 2 文件：解析段每文件一遍（批量 readTexts）；引用重扫走会话缓存（mtime+size 未变 ⇒ 零读盘）
     expect(h.reads.readText).toBe(2);
     expect(parser.referencesTo!('caller')).toHaveLength(1);
-    await settle(); // 等快照异步落盘
+    for (let i = 0; i < 400 && h.store.size === 0; i++) await new Promise((r) => setTimeout(r, 5)); // S16：落盘在去抖窗回调，轮询等它落地
     expect(h.store.size).toBeGreaterThan(0);
 
     h.emit('project.closed', undefined);

@@ -171,6 +171,12 @@ const openProject = (bus: { emit: (t: string, p: unknown) => void }): void => {
   });
 };
 
+/** S16 去抖落盘的轮询等待：快照键落进假存储域（或给定判据成立）为止，5ms × 2s ≥ 窗宽 300ms */
+const waitFor = async (pick: () => boolean, rounds = 400): Promise<void> => {
+  for (let i = 0; i < rounds && !pick(); i++) await new Promise((r) => setTimeout(r, 5));
+  expect(pick()).toBe(true);
+};
+
 /** 索引的确定性序列化（Map 会被 JSON.stringify 吞掉，故手工展开） */
 const indexFingerprint = (idx: NonNullable<ReturnType<ErbParserService['currentIndex']>>): string =>
   JSON.stringify({
@@ -193,6 +199,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     expect(readsOf()).toBe(2); // 全量：每文件正文**只读一遍**（解析段批量读；H2 引用重扫命中会话缓存）
     expect(service.currentIndex()!.files.size).toBe(2);
 
+    await waitFor(() => map.size > 0); // S16：落盘在去抖窗回调里，轮询等它落地
     expect(map.size).toBe(1);
     const raw = JSON.parse([...map.values()][0]!) as { version: number; rootDir: string; entries: Record<string, unknown> };
     expect(raw.rootDir).toBe(ROOT);
@@ -357,7 +364,9 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
       await waitIndexed();
       const line = logs.find((m) => m.includes('index breakdown')) ?? '';
       const m = /reused (\d+)\/(\d+)/.exec(line);
-      return m ? `${m[1]}/${m[2]}` : 'no-breakdown';
+      const reused = m ? `${m[1]}/${m[2]}` : 'no-breakdown';
+      await waitFor(() => map.has(snapshotKeyFor(root))); // S16：下一轮再开前，这一轮的快照（若有排程）必须已在盘上
+      return reused;
     };
 
     const rounds: string[] = [];
@@ -422,6 +431,7 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
       if (!m) throw new Error(`插件未打出 breakdown 读数行：${line}`);
       const reused = Number(m[1]);
       const total = Number(m[2]);
+      await waitFor(() => map.has(snapshotKeyFor(root))); // S16：下一轮再开前，这一轮的快照（若有排程）必须已在盘上
       return { reused, total, reusedAll: reused === total };
     };
 
@@ -549,6 +559,9 @@ describe('索引快照流程（假 io + 真 JSON 往返）', () => {
     openProject(bus);
     await waitIndexed();
 
+    await waitFor(
+      () => map.has(snapshotKeyFor(ROOT)) && !(map.get(snapshotKeyFor(ROOT)) ?? '').includes('BAR_A'), // S16：收尸轮的落盘（P1 独份）在去抖窗后
+    );
     const raw = JSON.parse([...map.values()][0]!) as { entries: Record<string, unknown> };
     expect(Object.keys(raw.entries)).toEqual([P1]);
   });

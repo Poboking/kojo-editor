@@ -26,7 +26,7 @@
  *   300ms：窗内退出 = 下轮重付一次 salvage 巡检，闭环条件（作废不连坐）不破。
  */
 import { describe, expect, it } from 'vitest';
-import type { DirEntry, ErbParserService, FileIO, GameProject, ScopedStorage } from '@kojo/plugin-api';
+import type { DirEntry, ErbParserService, FileIO, FileStat, GameProject, ScopedStorage } from '@kojo/plugin-api';
 import { createErbParserPlugin } from '../src/plugin';
 import { SNAPSHOT_VERSION, snapshotKeyFor } from '../src/snapshot';
 import { makeComputeStub } from './support';
@@ -169,21 +169,22 @@ describe('MCP-PERF-S16 快照保存后台化', () => {
     const responseAt = performance.now();
     // A/B 核心：应答收口那一刻，快照落盘（组装 + 编码 + set 调用）还一笔都没付
     expect(setsOf()).toBe(0);
-    console.log(
-      `[snapshot-defer] 应答墙钟 ${(responseAt - t0).toFixed(1)}ms · set 调用晚于应答 ` +
-        `${(setCallAtOf() - responseAt).toFixed(1)}ms（改前为负：调用点在应答路径上）`,
-    );
     const key = snapshotKeyFor(ROOT);
     await waitFor(() => map.has(key)); // 去抖窗后照常落盘
     expect(setsOf()).toBe(1);
+    console.log(
+      `[snapshot-defer] 应答墙钟 ${(responseAt - t0).toFixed(1)}ms · set 调用晚于应答 ` +
+        `${(setCallAtOf() - responseAt).toFixed(1)}ms（改前 = 负值：调用点在应答路径上）`,
+    );
     const raw = JSON.parse(map.get(key)!) as { version: number; rootDir: string; entries: Record<string, unknown> };
     expect(raw.version).toBe(SNAPSHOT_VERSION);
     expect(raw.rootDir).toBe(ROOT);
     expect(Object.keys(raw.entries).sort()).toEqual([P1, P2]);
 
-    openProject(bus); // 热载零回退：盘上这份照常命中
+    const readsAfterCold = readsOf();
+    openProject(bus); // 热载零回退：盘上这份照常命中（复用 2/2，一次读都不多付）
     await waitIndexed();
-    expect(readsOf()).toBe(2);
+    expect(readsOf()).toBe(readsAfterCold);
     expect(service.currentIndex()!.files.size).toBe(2);
   });
 
