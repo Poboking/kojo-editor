@@ -786,6 +786,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     annotations: { readOnlyHint: true },
   },
 
+
   /* ---- Wave4 余项⑤（LaneL，2026-11-06）：长任务 progress = ADR-0013 P5「Tasks over MCP」 ----
    * 判性落地（逐条证据见 real-sources-tasks.ts 模块头与 commit 回执）：只登记**三件套齐备**的族
    * ——进度有真源、取消有真源、状态可查询。目前两族：
@@ -862,6 +863,99 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     tier: 'edit',
     annotations: { readOnlyHint: false, idempotentHint: true },
   },
+
+  /* ---- B3 批（LaneO，2026-11-06）：编辑器写 / 光标副作用 5 枚具名工具（tier 'edit'）----
+   * 真源 = debug/install-debug.ts 已实现并测过的同一批腿（回读核对 / normalizeCursorTarget /
+   * editorReadOnly），执行体见 app `mcp/editor-write-legs.ts`（ioTools 腿表）。差别只在：MCP 面
+   * 按 paneId 显式反查实例，**没有「当前聚焦」这个语义**；只读实例的内容写两枚显式拒绝。
+   * 五枚都只改 Monaco 模型：`saved:false` 恒定如实回报，磁盘写仍是 fileTree.update +
+   * 第四张表双闸那条唯一法定通道（铁律 5/6/7：本批零新增写盘通道）。
+   */
+  {
+    name: 'editor.setValue',
+    description:
+      'Replace the ENTIRE text of one open document in the editor model (edit tier, mutating). `paneId` is required — this tool has no notion of a "focused" editor, so pass the id reported by document.active / editor.info. Coordinates are irrelevant here: `text` is the whole new content. The call verifies the change by reading the model back: an unchanged or refused write fails with [E_EDITOR_APPLY_UNVERIFIED] instead of reporting success. A read-only editor is refused outright ([E_EDITOR_READ_ONLY], PERMISSION_DENIED). This mutates the in-memory model ONLY — the reply always carries saved:false, disk bytes are untouched; persisting goes through fileTree.update under the approvedRoots x writablePaths double gate. Undo is not recorded for a whole-model setValue; use editor.type for a single undo step.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paneId: { type: 'string', minLength: 1, maxLength: 128, description: 'Editor pane id copied from document.active / editor.info (required, no "focused editor" fallback).' },
+        text: { type: 'string', maxLength: 4_000_000, description: 'Complete new document content (the whole model is replaced).' },
+      },
+      required: ['paneId', 'text'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { idempotentHint: false },
+  },
+  {
+    name: 'editor.type',
+    description:
+      'Insert `text` at the current caret of one open document, the way typing does (edit tier, mutating). `paneId` is required (no "focused editor" semantics on this surface). Runs through Monaco executeEdits, so it is ONE undo step (Ctrl+Z once) and moves the caret. The result is verified by reading the model back: a refused or no-op insertion fails with [E_EDITOR_APPLY_UNVERIFIED] rather than pretending success. A read-only editor is refused outright ([E_EDITOR_READ_ONLY], PERMISSION_DENIED). Model-only: the reply always carries saved:false and the real dirty flag; nothing is written to disk (persisting is fileTree.update under the double gate).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paneId: { type: 'string', minLength: 1, maxLength: 128, description: 'Editor pane id (required).' },
+        text: { type: 'string', minLength: 1, maxLength: 200_000, description: 'Text to insert at the caret (not truncated).' },
+      },
+      required: ['paneId', 'text'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { idempotentHint: false },
+  },
+  {
+    name: 'editor.setCursor',
+    description:
+      'Move the caret of one open editor pane to a 1-based `line` / `column` (edit tier: it changes user-visible editor state, so a read session must not be able to move the caret). `paneId` is required — there is no "focused editor" fallback. Coordinates are validated strictly 1-based positive integers by the same normalizer the debug surface uses; dirty values (0-based, fractional, missing line) fail with INVALID_ARGS instead of silently landing elsewhere. Out-of-document lines are refused, not clamped. The reply reports both `requested` and the read-back `cursor` plus a `clamped` flag, so a clamp by Monaco is visible rather than a false "it moved". Content is untouched: dirty/contentChanged stay honest and saved:false always holds (no disk write).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paneId: { type: 'string', minLength: 1, maxLength: 128, description: 'Editor pane id (required).' },
+        line: { type: 'integer', minimum: 1, description: '1-based target line.' },
+        column: { type: 'integer', minimum: 1, description: '1-based target column (omitted = line start, column 1).' },
+      },
+      required: ['paneId', 'line'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { idempotentHint: true },
+  },
+  {
+    name: 'editor.setSelection',
+    description:
+      'Set the selection range of one open editor pane with 1-based `startLine`/`startColumn`/`endLine`/`endColumn` (edit tier — user-visible editor state, not a read operation). `paneId` is required (no "focused editor" semantics). Dirty or 0-based coordinates fail with INVALID_ARGS; `endLine` must be >= `startLine`; lines beyond the document are refused, while columns beyond the line end are clamped to the line end and reported in the `clamped` flag with the read-back `selection`. Content is not modified (contentChanged:false) and nothing is persisted: the reply always carries saved:false plus the model dirty flag.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paneId: { type: 'string', minLength: 1, maxLength: 128, description: 'Editor pane id (required).' },
+        startLine: { type: 'integer', minimum: 1, description: '1-based selection start line.' },
+        startColumn: { type: 'integer', minimum: 1, description: '1-based selection start column.' },
+        endLine: { type: 'integer', minimum: 1, description: '1-based selection end line (>= startLine).' },
+        endColumn: { type: 'integer', minimum: 1, description: '1-based selection end column (clamped to the line end; the clamp is reported).' },
+      },
+      required: ['paneId', 'startLine', 'startColumn', 'endLine', 'endColumn'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { idempotentHint: true },
+  },
+  {
+    name: 'editor.revealLine',
+    description:
+      'Scroll one open editor pane so a 1-based `line` is visible (edit tier: viewport state the user sees, so it is not exposed to read sessions). `paneId` is required — this surface has no "focused editor". `reveal` selects the alignment: "center", "top" (near top) or "nearest" (default, minimal scrolling); there is no invented "bottom" variant. A line beyond the document is clamped to the last line and the clamp is reported explicitly (requestedLine vs revealedLine). The viewport method failing is reported as an error instead of a silent success. No content change and no disk write: contentChanged:false and saved:false always hold.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        paneId: { type: 'string', minLength: 1, maxLength: 128, description: 'Editor pane id (required).' },
+        line: { type: 'integer', minimum: 1, description: '1-based line to reveal (clamped to the last line; the clamp is reported).' },
+        reveal: { type: 'string', enum: ['center', 'top', 'nearest'], description: 'Alignment variant (default nearest).' },
+      },
+      required: ['paneId', 'line'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { idempotentHint: true },
+  },
 ];
 
 /**
@@ -923,6 +1017,15 @@ export const MCP_TOOL_GAP_MAP: readonly {
   // 剩余缺口里，本批起它由具名工具覆盖（诚实降级 deferred 计数，不是凭空宣布覆盖）。
   { tool: 'tasks.start', gap: 'search_text', source: 'rust' },
   { tool: 'tasks.cancel', gap: 'cancel_search', source: 'rust' },
+  // B3 批（LaneO，2026-11-06）：编辑器写 / 光标副作用五枚登记为具名 edit 工具，真源同调试面
+  // （install-debug.ts 的 applySetValue / applyTypedEdit / normalizeCursorTarget / editorReadOnly），
+  // 执行腿见 app `mcp/editor-write-legs.ts`（ioTools 腿表）。`debug:format` 刻意留在缺口里
+  // （异步 provider 通道 + 长度读数，本期不登记，不挂半截实现）。
+  { tool: 'editor.setValue', gap: 'setValue', source: 'debug' },
+  { tool: 'editor.type', gap: 'type', source: 'debug' },
+  { tool: 'editor.setCursor', gap: 'setCursor', source: 'debug' },
+  { tool: 'editor.setSelection', gap: 'setSelection', source: 'debug' },
+  { tool: 'editor.revealLine', gap: 'revealLine', source: 'debug' },
 ];
 
 /**
@@ -934,7 +1037,7 @@ export const MCP_DEFERRED_GAP_NOTES: readonly { readonly scope: string; readonly
   { scope: 'launcher_* / market_* / open_url_external / export_file / remove_* / rename_path', reason: '危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准，annotations 不可信。' },
   { scope: 'mcp_* 会话控制 / 审计', reason: '宿主线协议与第四张表内建命令，不作为模型可调用工具。' },
   { scope: 'choose_* / pick_* / show_in_folder 等原生对话框', reason: '面向人的 UI 交互，无模型可调用的数据面。' },
-  { scope: 'format / revealLine / setCursor / setSelection / setValue', reason: '编辑器写/光标副作用，首期不面向只读模型面。' },
+  { scope: 'format（编辑器写副作用 · B3 批后仅剩这一条）', reason: '编辑器写/光标副作用一族里 revealLine / setCursor / setSelection / setValue（含 type）已于 B3 批登记为具名 edit 工具（editor.* 五枚，真源 = debug/install-debug.ts 的实现腿）；format 仍留缺口：它是异步 provider 通道（editor.action.formatDocument.run + 前后长度读数），本期刻意不登记半截实现，绝不挂空串假成功。' },
   { scope: 'ui.* 槽贡献（面板 / 装饰 / 语言服务注册）', reason: '纯 UI / 注册贡献，无独立数据面；领域知识只经 mcp.prompt 槽注入。' },
   { scope: '其余未登记只读原语', reason: '真源存在但本波未登记为具名工具：保留在缺口清单，宿主后续按需补，绝不挂空串假实现。' },
   { scope: 'LaneF 第四波刻意不登记的 5 条 cheap-read', reason: 'read_file_bytes_raw / read_files_raw：ipc::Response 二进制帧（前端拿 ArrayBuffer / 自定义帧），是开项目热路径性能通道，无面向模型的结构化只读数据面，且 read_files_raw 收任意 paths 数组，不登记以免暴露任意目标路径参数（项目根内文本读已由 fs.readFile 覆盖）；updater_relaunch=app.restart() 重启动作、debug.type=applyTypedEdit 编辑器输入动作，均非只读；debug.actions 真源 focusedCtx().editorRef.current.getSupportedActions() 对 MCP 注入面不可达，绝不挂空数组假实现。' },
