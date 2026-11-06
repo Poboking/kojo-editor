@@ -17,6 +17,7 @@ export type {
   EventBus,
   FileChangeKind,
   FileChangedEvent,
+  FileChangedBatchEvent,
   FileWatchStateEvent,
   FileWatchStatus,
   KernelEventMap,

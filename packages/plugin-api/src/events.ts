@@ -77,6 +77,26 @@ export interface FileChangedEvent {
   path: string;
 }
 
+/**
+ * 一波变更（`file.changedBatch` 载荷；MCP-PERF-S12，2026-11-07）。
+ *
+ * 内核监视器的**全局批次窗**（一个窗一次）：窗内收齐的变更路径集合一次交给下游，
+ * 替代"逐路径各自 flush 各自触发一轮失效"——agent 批量写 20 个文件不再被拆成
+ * 20 波、20 轮索引更新，而是一窗一失效波（≤2 波/300ms 批量写）。
+ *
+ * 与 `file.changed` 的分工（**additive**，旧消费方零改动）：
+ * - `file.changed` 仍**逐文件**发（事件面零变化；fsFreshness 台账、model 重载决策等
+ *   逐文件语义原样）；
+ * - `file.changedBatch` 是**失效调度**的集合面：下游索引更新（erb-parser 增量轮 /
+ *   整轮扫描）只该听这一条，一个窗口只重算一次。
+ *
+ * `changes` 每路径一条、取窗内**末态类别**（与 `file.changed` 同一条合并纪律），
+ * 顺序 = 窗内首条事件顺序；路径**原样透传**（同 `FileChangedEvent.path`）。
+ */
+export interface FileChangedBatchEvent {
+  readonly changes: readonly FileChangedEvent[];
+}
+
 /** 文件监视的判级结果（`file.watchState` 载荷；由内核监视器产生） */
 export type FileWatchStatus =
   | 'watching'
@@ -111,6 +131,13 @@ export interface FileWatchStateEvent {
 export interface KernelEventMap {
   /** 文件系统变更（由内核 io 监视器产生） */
   'file.changed': FileChangedEvent;
+  /**
+   * 一波变更（MCP-PERF-S12，2026-11-07）：内核监视器全局批次窗的集合面。
+   * 一个窗一次、载荷 = 窗内收齐的变更条目集合；`file.changed` 仍逐文件发，本事件
+   * 只服务"失效调度一次"（下游索引更新听它，不逐事件重算）。**内核专属**：
+   * 失效波由内核监视器垄断发出（同 `file.watchState`——插件伪造波 = 伪造盘面事实）。
+   */
+  'file.changedBatch': FileChangedBatchEvent;
   /**
    * 文件监视器自身的状态（BUG-5，2026-10-13）：监视了哪些根、哪些根没监视上、
    * 监视停摆了。与 `file.changed` 的分工：后者说"某个文件变了"，
@@ -515,8 +542,11 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
 /** 内核/宿主专属事件：插件可 `on`、不可 `emit`（安全语义事件由内核垄断发出）。 */
 const KERNEL_ONLY_EVENT_NAMES = [
   'project.writableApprovalMismatch',
-  // 监视状态 = "自动重载机制是否可信"的保证，与写权限同意度同类（BUG-5）
+  // 监视状态 = "自动重载机制是否可信"的保证，与写权限事件同类（BUG-5）
   'file.watchState',
+  // 失效波（MCP-PERF-S12）：盘面变更的集合事实由内核监视器垄断发出——插件伪造波
+  // 等于伪造一批盘上改动（与 file.watchState 同档）。
+  'file.changedBatch',
   // 「全部修复」= 改作者笔下的内容。批量落地只在宿主编辑器一侧，插件没有 emit 的理由，
   // 而"插件能广播一次批量改写"显然不该成立（与写权限事件同一档）。
   'editor.fixAll.request',

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
+  FileChangedBatchEvent,
   FileChangedEvent,
   FileWatchStateEvent,
   PlatformBridge,
@@ -110,9 +111,12 @@ function makeWatcher(debounceMs?: number) {
   });
   const changes: FileChangedEvent[] = [];
   bus.on('file.changed', (p) => changes.push(p));
+  /** 失效波（MCP-PERF-S12）：全局批次窗的集合回调，一个窗一次 */
+  const waves: FileChangedBatchEvent[] = [];
+  bus.on('file.changedBatch', (p) => waves.push(p));
   const states: FileWatchStateEvent[] = [];
   bus.on('file.watchState', (p) => states.push(p));
-  return { bus, bridge, watcher, changes, states, warns };
+  return { bus, bridge, watcher, changes, waves, states, warns };
 }
 
 beforeEach(() => vi.useFakeTimers());
@@ -207,6 +211,104 @@ describe('FileWatcherServiceImpl · 去抖与合并', () => {
     vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
 
     expect(changes[0]!.path).toBe('C:\\Game\\kojo\\M_KOJO_K12.ERB');
+  });
+});
+
+describe('FileWatcherServiceImpl · 全局批次窗（MCP-PERF-S12：失效调度并波，事件面不动）', () => {
+  /**
+   * 本体判据：agent 批量写 20 个文件（300ms 内）必须收进 ≤2 次失效波
+   * （改前 per-path 去抖把它拆成 20 个独立 flush 时刻 / 20 轮下游索引失效）。
+   * 波 = `file.changedBatch`，一个窗一次、载荷 = 窗内收齐的路径集合。
+   */
+  it('20 文件 300ms 内写入 ⇒ 恰好 2 次失效波，并集 = 全部路径无重复', async () => {
+    const { bridge, watcher, waves } = makeWatcher(200);
+    await watcher.start(['C:/Game/kojo']);
+
+    const paths = Array.from({ length: 20 }, (_, i) => `batch-${i}.erb`);
+    for (let i = 0; i < paths.length; i++) {
+      vi.advanceTimersByTime(15); // t = 0,15,…,285ms：全部落在 300ms 内
+      bridge.fire('change', paths[i]!);
+    }
+    vi.advanceTimersByTime(300); // 推穿两个窗（t=200 与 t=410 各一次）
+
+    expect(waves).toHaveLength(2);
+    const union = waves.flatMap((w) => w.changes.map((c) => c.path));
+    expect(new Set(union).size).toBe(20);
+    expect([...union].sort()).toEqual([...paths].sort());
+    for (const w of waves) {
+      for (const c of w.changes) expect(c.kind).toBe('change');
+    }
+  });
+
+  it('波集合与逐文件事件同窗同源：末态类别、pathKey 去重、首条事件顺序', async () => {
+    const { bridge, watcher, waves, changes } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+
+    // 一次"删除+重建+写入"的保存链 + 另一份文件：窗内两条路径
+    bridge.fire('unlink', 'a.erb');
+    bridge.fire('add', 'a.erb');
+    bridge.fire('change', 'a.erb');
+    bridge.fire('change', 'b.erb');
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+
+    expect(waves).toHaveLength(1);
+    expect(waves[0]!.changes).toEqual([
+      { kind: 'change', path: 'a.erb' }, // 末态即真值（同 file.changed 的合并纪律）
+      { kind: 'change', path: 'b.erb' }, // 顺序 = 窗内首条事件顺序
+    ]);
+    // 事件面零变化：同一集合逐文件各发一条
+    expect(changes).toEqual([
+      { kind: 'change', path: 'a.erb' },
+      { kind: 'change', path: 'b.erb' },
+    ]);
+  });
+
+  it('窗落地后再来的事件起新窗（不是永久并成一波，也不与既有窗合并）', async () => {
+    const { bridge, watcher, waves } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+
+    bridge.fire('change', 'a.erb');
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS); // 波 1 落地
+    expect(waves).toHaveLength(1);
+
+    bridge.fire('change', 'b.erb'); // 新窗
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS); // 波 2 落地
+    expect(waves).toHaveLength(2);
+    expect(waves[1]!.changes).toEqual([{ kind: 'change', path: 'b.erb' }]);
+  });
+
+  it('单文件保存：恰好 1 波且集合就这一条（失效调度与事件面同窗同刻，延迟不劣化）', async () => {
+    const { bridge, watcher, waves, changes } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+
+    bridge.fire('change', 'solo.erb');
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+
+    expect(waves).toHaveLength(1);
+    expect(waves[0]!.changes).toEqual([{ kind: 'change', path: 'solo.erb' }]);
+    expect(changes).toEqual([{ kind: 'change', path: 'solo.erb' }]);
+  });
+
+  it('波内路径原样透传（Windows 反斜杠不归一，与逐文件事件同一条纪律）', async () => {
+    const { bridge, watcher, waves } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+
+    bridge.fire('change', 'C:\\Game\\kojo\\M_KOJO_K12.ERB');
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS);
+
+    expect(waves[0]!.changes[0]!.path).toBe('C:\\Game\\kojo\\M_KOJO_K12.ERB');
+  });
+
+  it('stop() 丢弃未落地的波（与既有 stop 语义同一格）', async () => {
+    const { bridge, watcher, waves, changes } = makeWatcher();
+    await watcher.start(['C:/Game/kojo']);
+
+    bridge.fire('change', 'a.erb'); // 还在窗里
+    watcher.stop();
+    vi.advanceTimersByTime(WATCH_DEBOUNCE_MS * 2);
+
+    expect(waves).toHaveLength(0);
+    expect(changes).toHaveLength(0);
   });
 });
 
