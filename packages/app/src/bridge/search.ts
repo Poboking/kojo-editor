@@ -53,6 +53,12 @@ export interface SearchResult {
   filesScanned: number;
   skipped: SearchSkipped;
   elapsedMs: number;
+  /**
+   * **续取回显**（B18，additive）：本次因 `options.resumeAfterMatches` 实际丢掉的命中条数
+   * （逐文件求和）。不带凭据时恒 0；老宿主 / 调试宿 Node 镜像没这个键 ⇒ 读取侧按
+   * 「这台宿主不认续取凭据」处理，绝不把「没回显」当成「续上了」。
+   */
+  resumeAppliedMatches?: number;
 }
 
 export interface SearchOptions {
@@ -82,6 +88,13 @@ export interface SearchOptions {
    * `compile_exclude_rules`（对拍口径见 `search-query.parseExcludePatterns`）。
    */
   excludeGlobs?: readonly string[];
+  /**
+   * **逐文件续取凭据**（B18，additive）：对**每个**候选文件先丢掉前 N 条命中，再按原有三闸
+   * （单文件 500 / `maxResults` / 单次 5,000）收口。缺省不传 ⇒ 请求体与旧面逐字相同。
+   * 单位是「该文件内的命中条数」，不是字节 / 行号；回显见 `SearchResult.resumeAppliedMatches`。
+   * 现在只有 MCP 分片腿（`resumeBySlice`）用它——界面检索面板不传，行为零变化。
+   */
+  resumeAfterMatches?: number;
 }
 
 export interface SearchRequest {

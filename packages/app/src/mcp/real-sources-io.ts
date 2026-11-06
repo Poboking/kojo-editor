@@ -135,6 +135,11 @@ export interface McpSearchRequestLike {
     readonly wholeWord: boolean;
     readonly extensions: readonly string[];
     readonly maxResults?: number;
+    /**
+     * **逐文件续取凭据**（B18，additive）：先丢掉每个文件的前 N 条命中再按原闸收口。
+     * 缺省不传 ⇒ 请求体与旧面逐字相同；引擎回显见 `McpSearchResultLike.resumeAppliedMatches`。
+     */
+    readonly resumeAfterMatches?: number;
   };
 }
 
@@ -146,6 +151,13 @@ export interface McpSearchResultLike {
   }[];
   readonly totalMatches: number;
   readonly truncated: boolean;
+  /**
+   * **续取回显**（B18）：本次调用因 `options.resumeAfterMatches` **实际丢掉**的命中条数。
+   * 可选：旧宿主 / 调试宿 Node 镜像没有这个键 ⇒ 读取侧按「这台宿主不认凭据」处理
+   * （分片腿据此退回 B16 那堵墙的原话术），绝不把「没回显」当成「续上了」。
+   * 缺省不带凭据时引擎给 0。
+   */
+  readonly resumeAppliedMatches?: number;
   /**
    * 是否被 `cancel_search` 提前收尾（真 `SearchResult` 有这一位；长任务面按它判终态
    * `cancelled`，缺席按 false 处理 ⇒ 可选，既有假件零改动）。
@@ -672,6 +684,13 @@ export function searchRootsOf(
 
 /** 与 Rust `lib.rs` 的 `SEARCH_HARD_CAP` 同尺：引擎一次最多回 5000 条命中（闸，本批不放宽）。 */
 const SEARCH_ENGINE_HARD_CAP = 5000;
+/**
+ * 与 Rust `lib.rs` 的 `SEARCH_PER_FILE_CAP` 同尺：引擎对**单个文件**一次最多回 500 条命中
+ * （B18 的逐段续取把它当段长；这一格闸本批同样一字未动）。
+ * 只在这里出现一次，由注入递给分片腿——TS 侧不许长出第二份抄本（抄本会漂）。
+ */
+const SEARCH_ENGINE_PER_FILE_CAP = 500;
+
 
 /**
  * 检索命中列表的游标分页。
@@ -747,6 +766,7 @@ function createSliceRunner(deps: McpIoDeps) {
     toRelativePath,
     searchWindow,
     engineCap: SEARCH_ENGINE_HARD_CAP,
+    perFileCap: SEARCH_ENGINE_PER_FILE_CAP,
   });
 }
 
