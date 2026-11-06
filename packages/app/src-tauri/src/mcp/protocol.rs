@@ -1095,10 +1095,15 @@ pub const EDIT_TOOL_PREFIXES: &[&str] = &[
 /// 也不在 `PRIVILEGED_EXACT` ⇒ 不点名则 `host_required_tier()` 落 `McpTier::Read`，
 /// read 会话零批准就能整批改写 ≤32 个文件。WebView 契约（`SUPPLEMENTAL_TOOL_SPECS`）
 /// 即 `tier: 'edit'`，本表把端点侧判定与契约对齐。
+///
+/// MCP-PERF-S6 批（LaneN 2026-11-07）追加 `fileTree.patchLines`——同一型洞的第五批，
+/// 理由逐字相同：read 会话零批准就能整批改写单文件 ≤32 hunk；端点级回归见
+/// `mcp::tests::e2e_tools_call_denies_file_tree_patch_lines_from_read_session`。
 pub const EDIT_TOOLS_EXACT: &[&str] = &[
     "fileTree.create",
     "fileTree.update",
     "fileTree.applyChangeset",
+    "fileTree.patchLines",
     "problems.quickFix",
     "tasks.start",
     "tasks.cancel",
@@ -1223,16 +1228,18 @@ pub fn is_root_id_shape(raw: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// 收 `rootId`（选域基准根的枚举标识）的工具表：五枚落盘写腿（MCP-PERF-S3 批
-/// +`fileTree.applyChangeset`：整批一个根，不收逐项根）+ MCP-PERF-S4 批（LaneK
-/// 2026-11-07）的**一枚读腿** `fs.readRange`——行区间读与写腿同一条「选根」语义
-/// （可选 rootId 换域基准根；缺席 ⇒ 项目根零额外 IPC），端点对它的复核与本表其余
+/// 收 `rootId`（选域基准根的枚举标识）的工具表：六枚落盘写腿（MCP-PERF-S3 批
+/// +`fileTree.applyChangeset`：整批一个根，不收逐项根；MCP-PERF-S6 批 LaneN
+/// 2026-11-07 +`fileTree.patchLines`：单文件 patch 级写，整批一个根同尺）+
+/// MCP-PERF-S4 批（LaneK 2026-11-07）的**一枚读腿** `fs.readRange`——行区间读与写腿同一条
+/// 「选根」语义（可选 rootId 换域基准根；缺席 ⇒ 项目根零额外 IPC），端点对它的复核与本表其余
 /// 成员**逐字同尺**：形状闸 + PATH_TARGET_FORBIDDEN + 第四张表精确列名，默认拒绝
 /// 一字不变（授权表零改动，只是新读腿受同一道防旁路闸管）。其它工具带该参数一律拒绝。
 pub const MULTIROOT_WRITE_TOOLS: &[&str] = &[
     "fileTree.create",
     "fileTree.update",
     "fileTree.applyChangeset",
+    "fileTree.patchLines",
     "fileTree.remove",
     "fileTree.rename",
     "fs.readRange",

@@ -974,6 +974,44 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     annotations: { idempotentHint: true },
   },
   {
+    name: 'fileTree.patchLines',
+    description:
+      'Apply a batch of line-level patch hunks to ONE existing file inside the authorized project root in ONE round trip (edit tier, mutating; MCP-PERF-S6) - patch-level write for large files: edit a 50,000-line file by sending only the hunks, not the whole text (whole-file paths remain fileTree.update / fileTree.applyChangeset). ' +
+      '`relPath` is project-root-relative (same gate as fileTree.update: absolute paths, drive letters and ".." are rejected; the execution layer resolves against approvedRoots (ADR-0003)); optional `rootId` selects one explicitly approved persistent workspace root (enumerate via io.workspaceRoots; human approval required). ' +
+      '`hunks` is 1..32 items, each EXACTLY ONE form: (a) LINE RANGE {startLine, endLine, replacement} - 1-based inclusive line numbers matching Monaco positions; lines split on CRLF/LF/CR like fs.readRange (trailing newline = final empty line); the whole-line span is replaced by `replacement` ("" deletes the span; multi-line text expands it). Coordinates refer to the ORIGINAL file: line hunks merge in one top-down pass; overlapping ranges reject the ENTIRE call. (b) ANCHOR {oldText, newText} - `oldText` must occur EXACTLY once; zero/multiple hits refuse that hunk. Line hunks apply first (top-down), then anchors in array order. ' +
+      'Per call: read file -> apply hunks in memory -> ONE backup via the kernel backup primitive -> kernel writeText save path (encoding/EOL preserved, like fileTree.update) -> read back and verify -> ONE file.changed refresh. ' +
+      'Reply: per-hunk `applied`/`refused` receipts, a `diff` summary (lines/chars before-after-delta), `backupPath` taken BEFORE the write, post-write `bytes`. Shape defects (>32 hunks, a hunk mixing both forms, non-1-based lines, startLine > endLine, empty oldText, unapproved `rootId`) reject the ENTIRE call before any write; every hunk refused = zero side effects. Prefer fileTree.update when a whole-file replacement fits the budget.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPath: RELATIVE_PATH_SCHEMA,
+        hunks: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 32,
+          items: {
+            type: 'object',
+            properties: {
+              startLine: { type: 'integer', minimum: 1, description: 'FORM A (line range): 1-based first line of the span (Monaco position line; 0-based values are rejected).' },
+              endLine: { type: 'integer', minimum: 1, description: 'FORM A: 1-based LAST line of the span, inclusive; beyond the file end refuses that hunk (writes never clamp).' },
+              replacement: { type: 'string', maxLength: 1_000_000, description: 'FORM A: new content for the span; "" deletes the span; multi-line text expands it.' },
+              oldText: { type: 'string', minLength: 1, maxLength: 1_000_000, description: 'FORM B (anchor): exact text to find; must occur EXACTLY once (zero/multiple hits refuse the hunk).' },
+              newText: { type: 'string', maxLength: 1_000_000, description: 'FORM B: replacement text; "" deletes the anchor.' },
+            },
+            additionalProperties: false,
+            description: 'EXACTLY ONE form per hunk: A = {startLine, endLine, replacement} or B = {oldText, newText}; mixing forms or missing keys is a batch-level error.',
+          },
+          description: '1..32 patch hunks applied to ONE file; overlapping line ranges are a batch-level error (nothing is written).',
+        },
+        rootId: ROOT_ID_SCHEMA,
+      },
+      required: ['relPath', 'hunks'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { idempotentHint: true },
+  },
+  {
     name: 'diff.compare',
     description:
       'Compute a structured diff between two document versions (working buffer vs last snapshot, or two project-root-relative files). Read-only; never writes. Returns {hunks:[...], truncated}. Use `mode` to select the comparison; `left`/`right` are optional relative paths for file-vs-file.',

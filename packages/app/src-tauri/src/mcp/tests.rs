@@ -5820,3 +5820,225 @@ fn e2e_read_session_calls_read_range_and_project_symbols_via_bridge() {
         "read 面调用不该产生 Denied 审计"
     );
 }
+
+/// MCP-PERF-S6 批（LaneN，2026-11-07）：`fileTree.patchLines` 的**档位真源**判据。
+///
+/// 与 S3 `fileTree.applyChangeset` 三条同型同尺：
+/// ① 点名进 `EDIT_TOOLS_EXACT` 后，read 会话直调 ⇒ E_TIER_DENIED（消息带工具名）；
+/// ② 每条拒绝恰写一条 Denied 审计（note = 原始码），绝不静默；
+/// ③ 拒绝在 emit 之前：桥从未被调 ⇒ read 会话零批准 patch 改写不了任何文件；
+/// ④ 精确名批准语义零放宽：列入 approvedTools 后同一调用照旧走桥并成功，
+///    且成功批次在审计台账记一条 Ok（tool 精确点名 ⇒ 批次可追账）。
+#[test]
+fn e2e_tools_call_denies_file_tree_patch_lines_from_read_session() {
+    const TOOL: &str = "fileTree.patchLines";
+    let s = TestServer::start();
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","id":930,"method":"tools/call","params":{{"name":"{}","arguments":{{"relPath":"docs/a.kojo","hunks":[{{"startLine":1,"endLine":1,"replacement":"x"}}]}}}}}}"#,
+        TOOL
+    );
+    let r = mcp_post(s.port, &s.token, &body);
+    assert_eq!(r.status, 200, "{TOOL} 必须是 JSON-RPC 错误帧而非传输层失败");
+    let v = rpc_json(&r);
+    assert_eq!(v["id"], json!(930));
+    assert_eq!(v["error"]["code"], json!(-32000), "{TOOL}");
+    assert_eq!(
+        v["error"]["data"]["code"],
+        json!("E_TIER_DENIED"),
+        "{TOOL} 未按 Edit 档拒（缺席点名 ⇒ read 会话零批准 patch 级改写）"
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(TOOL),
+        "{TOOL} 拒绝消息必须带上被拒的工具名"
+    );
+    // ② 恰一条 Denied 审计（本用例只发这一枚 ⇒ 恰一条，note 即原始码）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(denied.len(), 1, "read 会话直调应恰写一条 Denied 审计");
+    assert!(
+        denied
+            .iter()
+            .any(|e| e.tool == TOOL && e.note.as_deref() == Some("E_TIER_DENIED")),
+        "{TOOL} 缺一条 E_TIER_DENIED 审计"
+    );
+    // ③ 拒绝在 emit 之前：桥从未被调。
+    assert!(
+        s.rx.try_recv().is_err(),
+        "read 会话直调 fileTree.patchLines 仍被转给 WebView ⇒ 后门复现"
+    );
+
+    // ④ 精确名批准语义零放宽：列入后同一调用照旧走桥并成功，审计台账记批次（一条 Ok）。
+    scope::approve(
+        s.dir.path(),
+        "loopback-client",
+        McpTier::Read,
+        vec![],
+        vec![TOOL.to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let port = s.port;
+    let token = s.token.clone();
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":931,"method":"tools/call","params":{{"name":"{}","arguments":{{"relPath":"docs/a.kojo","hunks":[{{"startLine":1,"endLine":1,"replacement":"x"}}]}}}}}}"#,
+        TOOL
+    );
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.params["name"], json!(TOOL));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(
+                json!({"content": [{"type": "text", "text": "{\"totals\":{\"applied\":1}}"}]}),
+            ),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r2 = worker.join().unwrap();
+    let v2 = rpc_json(&r2);
+    assert!(
+        v2["error"].is_null(),
+        "精确名批准后 fileTree.patchLines 仍被拒 ⇒ 收口误伤批准语义"
+    );
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let ok: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Ok)
+        .collect();
+    assert_eq!(
+        ok.len(),
+        1,
+        "批准后成功批次应恰记一条 Ok 审计（批次可追账）"
+    );
+    assert_eq!(ok[0].tool, TOOL, "Ok 审计必须精确点名批次工具");
+}
+
+/// MCP-PERF-S6 批（LaneN，2026-11-07）：`fileTree.patchLines` 的 **rootId 端点级二次复核**。
+///
+/// 新工具进 `MULTIROOT_WRITE_TOOLS` 后同尺复验（S3 e2e_apply_changeset 同型）：
+/// 整批一个根，未批准根拒绝 / 批准后放行并透传 scope / revoke 回到默认拒绝；
+/// 审计台账全程可追。
+#[test]
+fn e2e_patch_lines_root_id_is_second_checked_at_endpoint() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+    let call = format!(
+        r#"{{"jsonrpc":"2.0","id":82,"method":"tools/call","params":{{"name":"fileTree.patchLines","arguments":{{"relPath":"docs/a.kojo","hunks":[{{"startLine":1,"endLine":1,"replacement":"x"}}],"rootId":"{ROOT_A}"}}}}}}"#
+    );
+
+    // ① 第四张表缺失（最小权限）：端点显式拒绝，桥从未被调。
+    let r = mcp_post_as(port, &token, "harness-pl", &call);
+    assert_eq!(r.status, 200);
+    assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
+    assert!(s.rx.try_recv().is_err());
+
+    // ② 只提 tier + 精确批准工具、但不批准 rootId ⇒ 照旧拒（工具批准不捎带根）。
+    scope::approve(
+        s.dir.path(),
+        "harness-pl",
+        McpTier::Edit,
+        vec!["docs".to_string()],
+        vec!["fileTree.patchLines".to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let r = mcp_post_as(port, &token, "harness-pl", &call);
+    assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
+    assert!(s.rx.try_recv().is_err());
+
+    // ③ 显式批准 rootId ⇒ 放行到桥；发往 WebView 的 scope 带上 approvedRootIds，整批透传。
+    scope::approve_with_root_ids(
+        s.dir.path(),
+        "harness-pl",
+        McpTier::Edit,
+        vec!["docs".to_string()],
+        vec!["fileTree.patchLines".to_string()],
+        vec![ROOT_A.to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let token2 = token.clone();
+    let call2 = call.clone();
+    let worker = std::thread::spawn(move || mcp_post_as(port, &token2, "harness-pl", &call2));
+    let payload = s.next_payload();
+    assert_eq!(payload.scope.approved_root_ids, vec![ROOT_A.to_string()]);
+    assert_eq!(payload.params["arguments"]["rootId"], json!(ROOT_A));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(json!({"content": [{"type": "text", "text": "patch-lines-applied"}]})),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert_eq!(
+        rpc_json(&r)["result"]["content"][0]["text"],
+        json!("patch-lines-applied")
+    );
+    // 审计台账：本用例的一条成功批次可追（Ok + 精确点名）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    assert!(rows
+        .iter()
+        .any(|e| e.outcome == AuditOutcome::Ok && e.tool == "fileTree.patchLines"));
+
+    // ④ revoke ⇒ 同一调用回到默认拒绝，桥零调用。
+    scope::revoke(s.dir.path(), "harness-pl").unwrap();
+    reload_scope_mirror(&s);
+    let r = mcp_post_as(port, &token, "harness-pl", &call);
+    assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
+    assert!(s.rx.try_recv().is_err());
+}
+
+/// MCP-PERF-S6 批：`MULTIROOT_WRITE_TOOLS` / `EDIT_TOOLS_EXACT` 表内自证——
+/// 新写腿在册（缺席 = 表漂移），且 rootId 复核对它放行（批准根）/ 对未批准根拒绝。
+#[test]
+fn patch_lines_is_registered_multiroot_write_leg_and_edit_tier() {
+    assert!(
+        MULTIROOT_WRITE_TOOLS.contains(&"fileTree.patchLines"),
+        "fileTree.patchLines 不在 MULTIROOT_WRITE_TOOLS ⇒ rootId 端点复核对它失效"
+    );
+    assert!(
+        EDIT_TOOLS_EXACT.contains(&"fileTree.patchLines"),
+        "fileTree.patchLines 不在 EDIT_TOOLS_EXACT ⇒ 端点判 read 后门复现"
+    );
+    assert_eq!(host_required_tier("fileTree.patchLines"), McpTier::Edit);
+    let scope = McpSessionScope {
+        tier: McpTier::Edit,
+        approved_root_ids: vec![ROOT_A.to_string()],
+        ..empty_scope(Vec::new())
+    };
+    let p = tool_call(
+        "fileTree.patchLines",
+        json!({"relPath": "docs/a.kojo", "hunks": [{"startLine": 1, "endLine": 1, "replacement": "x"}], "rootId": ROOT_A}),
+    );
+    assert!(
+        check_root_id_param(WebMethod::ToolsCall, &p, &scope).is_ok(),
+        "批准后的合法批次 + rootId 必须放行"
+    );
+    let p = tool_call(
+        "fileTree.patchLines",
+        json!({"relPath": "docs/a.kojo", "hunks": [{"startLine": 1, "endLine": 1, "replacement": "x"}], "rootId": ROOT_B}),
+    );
+    assert_eq!(
+        check_root_id_param(WebMethod::ToolsCall, &p, &scope)
+            .unwrap_err()
+            .code,
+        codes::TOOL_NOT_APPROVED,
+        "未批准根必须逐枚拒绝（绝不退回项目根）"
+    );
+}

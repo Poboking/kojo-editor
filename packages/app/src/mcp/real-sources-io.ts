@@ -1774,6 +1774,324 @@ export function createRunSupplemental(deps: McpIoDeps): (
     };
   };
 
+  /* ---------------- fileTree.patchLines（MCP-PERF-S6 批，2026-11-07）----------------
+   * patch 级写（TRAE P1 原文）：单文件多 hunk（≤32），agent 改 5 万行文件不必上传全文。
+   * 每 hunk 二选一：①1 基行区间 [startLine,endLine] → replacement（行号与 Monaco position
+   * 同口径；CRLF/LF/CR 切分沿用 fs.readRange 的既有实现，行尾换行 ⇒ 末行空串）；
+   * ②锚点替换 oldText → newText（oldText 在当前文本中必须唯一命中）。
+   * 链路照抄 S3 applyChangeset 的成功形态：read 全文（read_file_bytes，与 fs.readRange 同一条
+   * 读取通道）→ 内存应用 hunk → `io.backup` 拿备份路径 → `writeText{backup:false}` →
+   * read_file_bytes 回读验证；一次 MCP 往返 → 一次备份 / 一次 `file.changed`（宿主防抖合并成
+   * 一轮失效/诊断）→ 一次 stat 读回落盘字节 + diff 摘要。
+   * 缺陷分级（半批落盘比整批拒绝更难交代，语义级缺陷才逐条放行）：
+   *  - 批次级（任何写之前整批 INVALID_ARGS / PERMISSION_DENIED）：超 32、hunk 双形混用 / 半形、
+   *    行界非 1 基整数、start>end、行区间重叠（执行序语义歧义不猜）、oldText 空串、
+   *    relPath / rootId 形状与批准、写闸一；
+   *  - 语义级（逐条 refused，批次继续）：行区间越界（写面绝不夹取——fs.readRange 的读窗口
+   *    语义不适用于写）、锚点零命中 / 多命中。全部 refused ⇒ 零副作用（不备份、不写、不发事件）。
+   * 应用序钉死：行区间先（按 startLine 升序单趟合并——坐标一律指**原始文件**，永不漂移），
+   * 锚点后（按提交序，作用于行区间应用后的文本）。写通道零新增：落盘仍是内核 `io.writeText`
+   * （保编码/EOL 的既有保存语义，与 fileTree.update 同尺；写闸二 assertWritable 原样生效），
+   * 备份仍走内核 `io.backup` 单一真源；rootId 走与写腿同一条 resolveWriteRoot 三道拦截 +
+   * Rust 端点二次复核。
+   */
+  const PATCH_LINES_MAX_HUNKS = 32;
+  const PATCH_LINES_TEXT_CAP = 1_000_000; // replacement / newText / oldText 单串上限（与 fileTree.update content 同尺）
+
+  interface PatchLinesHunk {
+    readonly index: number;
+    readonly kind: 'lines' | 'anchor';
+    readonly startLine?: number;
+    readonly endLine?: number;
+    readonly replacement?: string;
+    readonly oldText?: string;
+    readonly newText?: string;
+  }
+
+  const fileTreePatchLines: McpReaderFn = async (args, scope) => {
+    const input = args ?? {};
+    const rawHunks = input['hunks'];
+    if (!Array.isArray(rawHunks) || rawHunks.length === 0) {
+      throw new McpFailure('INVALID_ARGS', 'fileTree.patchLines 的 hunks 须为非空数组（每项是行区间 {startLine, endLine, replacement} 或锚点 {oldText, newText} 二选一）');
+    }
+    if (rawHunks.length > PATCH_LINES_MAX_HUNKS) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `fileTree.patchLines 单批 ≤${PATCH_LINES_MAX_HUNKS} 个 hunk：收到 ${rawHunks.length} 个；拆批重发（整批未执行，盘上零改动）`,
+      );
+    }
+    // 批次级形状预检（先于任何 IPC / 读盘）：每项必须恰为两形之一，坏一项整批拒收。
+    const isLineNo = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 1;
+    const hunks: PatchLinesHunk[] = [];
+    rawHunks.forEach((entry, index) => {
+      const label = `hunks[${index}]`;
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        throw new McpFailure('INVALID_ARGS', `${label} 须为对象：行区间 {startLine, endLine, replacement} 或锚点 {oldText, newText} 二选一`);
+      }
+      const h = entry as Record<string, unknown>;
+      const hasLine = h['startLine'] !== undefined || h['endLine'] !== undefined || h['replacement'] !== undefined;
+      const hasAnchor = h['oldText'] !== undefined || h['newText'] !== undefined;
+      if (hasLine && hasAnchor) {
+        throw new McpFailure('INVALID_ARGS', `${label} 行区间与锚点两形混用（startLine/endLine/replacement 与 oldText/newText 互斥）；拆成两个 hunk 重发`);
+      }
+      if (hasLine) {
+        const startLine = h['startLine'];
+        const endLine = h['endLine'];
+        if (!isLineNo(startLine) || !isLineNo(endLine)) {
+          throw new McpFailure(
+            'INVALID_ARGS',
+            `${label}.startLine / endLine 须为 1 基整数（与 Monaco position 同口径，0 基被拒）：` +
+              `startLine=${sanitizeEcho(String(startLine))}, endLine=${sanitizeEcho(String(endLine))}`,
+          );
+        }
+        if (startLine > endLine) {
+          throw new McpFailure(
+            'INVALID_ARGS',
+            `${label} 的 startLine (${startLine}) 大于 endLine (${endLine})：区间为空。` +
+              'fs.readRange 的读窗口越界是夹取，写面绝不夹取——写错了就是写错了。',
+          );
+        }
+        const replacement = h['replacement'];
+        if (typeof replacement !== 'string') {
+          throw new McpFailure('INVALID_ARGS', `${label}.replacement 须为字符串（替换该行区间的全新文本；空串 = 整段删除）`);
+        }
+        if (replacement.length > PATCH_LINES_TEXT_CAP) {
+          throw new McpFailure('INVALID_ARGS', `${label}.replacement 超过单串上限 ${PATCH_LINES_TEXT_CAP} 字符（与 fileTree.update content 同尺）`);
+        }
+        hunks.push({ index, kind: 'lines', startLine, endLine, replacement });
+        return;
+      }
+      if (hasAnchor) {
+        const oldText = h['oldText'];
+        if (typeof oldText !== 'string' || oldText === '') {
+          throw new McpFailure('INVALID_ARGS', `${label}.oldText 须为非空字符串（空串处处命中 = 永远多命中，不收）`);
+        }
+        if (oldText.length > PATCH_LINES_TEXT_CAP) {
+          throw new McpFailure('INVALID_ARGS', `${label}.oldText 超过单串上限 ${PATCH_LINES_TEXT_CAP} 字符（与 fileTree.update content 同尺）`);
+        }
+        const newText = h['newText'];
+        if (typeof newText !== 'string') {
+          throw new McpFailure('INVALID_ARGS', `${label}.newText 须为字符串（空串 = 删除该锚点文本）`);
+        }
+        if (newText.length > PATCH_LINES_TEXT_CAP) {
+          throw new McpFailure('INVALID_ARGS', `${label}.newText 超过单串上限 ${PATCH_LINES_TEXT_CAP} 字符（与 fileTree.update content 同尺）`);
+        }
+        hunks.push({ index, kind: 'anchor', oldText, newText });
+        return;
+      }
+      throw new McpFailure('INVALID_ARGS', `${label} 两形都不全：行区间要 {startLine, endLine, replacement}，锚点要 {oldText, newText}（缺键拒收，不猜）`);
+    });
+    // 行区间重叠：纯坐标可判（无须读盘）⇒ 批次级拒绝（执行序语义歧义，绝不猜）。锚点无坐标，
+    // 与行区间/彼此的交叠无法预判，应用序已钉死（行区间先、锚点后），结果确定且逐条可见。
+    const lineHunks = hunks
+      .filter((h): h is PatchLinesHunk & { kind: 'lines'; startLine: number; endLine: number; replacement: string } => h.kind === 'lines')
+      .sort((a, b) => a.startLine - b.startLine);
+    for (let i = 1; i < lineHunks.length; i += 1) {
+      const prev = lineHunks[i - 1]!;
+      const cur = lineHunks[i]!;
+      if (cur.startLine <= prev.endLine) {
+        throw new McpFailure(
+          'INVALID_ARGS',
+          `hunk 行区间重叠（hunks[${prev.index}] 的 [${prev.startLine},${prev.endLine}] 与 hunks[${cur.index}] 的 [${cur.startLine},${cur.endLine}]）：` +
+            '执行序语义歧义，写面绝不猜——合并或拆开后重发（整批未执行，盘上零改动）',
+        );
+      }
+    }
+
+    const relPath = asString(input['relPath']);
+    try {
+      validateRelativePath(relPath); // 与 schema 同尺（绝对路径 / 盘符 / .. / 设备名），fail-closed
+    } catch (err) {
+      throw new McpFailure('INVALID_ARGS', `relPath 非项目根内相对路径：${err instanceof Error ? err.message : String(err)}`);
+    }
+    // 批次级授权：整批一个根（一次三道拦截；拒绝 ⇒ 盘上零改动）。
+    const { kernel, rootDir, rootId } = await resolveWriteRoot(input, scope);
+    const io = kernel.io;
+    if (typeof io.writeText !== 'function' || typeof io.exists !== 'function' || typeof io.backup !== 'function') {
+      throw new McpFailure(
+        'NOT_WIRED',
+        'fileTree.patchLines 未接线：内核实例未提供 writeText / exists / backup 写原语（不静默）',
+      );
+    }
+    const abs = resolveWriteTarget(rootDir, relPath, scope.approvedRoots); // 路径闸 + 写闸一（第四张表）
+    let present: boolean;
+    try {
+      present = await io.exists.call(io, abs);
+    } catch (err) {
+      rethrowWriteGate(err, relPath);
+    }
+    if (!present) {
+      throw new McpFailure(
+        'TOOL_EXECUTION_FAILED',
+        `目标不存在，patchLines 不静默改成 create 语义（先 fs.stat 确认，或改用 fileTree.create）：${sanitizeEcho(relPath)}`,
+      );
+    }
+    const textBefore = await deps.invoke('read_file_bytes', { path: abs }); // 与 fs.readRange 同一条读取通道
+    if (typeof textBefore !== 'string') {
+      throw new McpFailure('TOOL_EXECUTION_FAILED', `read_file_bytes 未返回文本（不静默）：${sanitizeEcho(relPath)}`);
+    }
+
+    // 行切分与 fs.readRange / Monaco 同口径：CRLF / LF / CR 都算一次换行；行尾换行 ⇒ 末行空串。
+    const linesBefore = textBefore.split(/\r\n|\r|\n/);
+    const totalLines = linesBefore.length;
+    const applied: Record<string, unknown>[] = [];
+    const refused: Record<string, unknown>[] = [];
+
+    // 第一趟：行区间 hunk 按 startLine 升序**单趟合并**——所有坐标指原始文件，永不漂移。
+    // replacement 切行后原位替换整段（空串 = 整段删除，统一 diff 口径）。
+    const outLines: string[] = [];
+    let cursor = 0; // 已消费到的原始行下标（0 基）
+    const countOccurrences = (hay: string, needle: string): number => {
+      let n = 0;
+      let at = hay.indexOf(needle);
+      while (at !== -1) {
+        n += 1;
+        at = hay.indexOf(needle, at + needle.length);
+      }
+      return n;
+    };
+    for (const h of lineHunks) {
+      const s = h.startLine - 1; // 0 基
+      const e = h.endLine; // 0 基开区间端（不含）
+      if (h.endLine > totalLines) {
+        refused.push({
+          index: h.index,
+          kind: 'lines',
+          startLine: h.startLine,
+          endLine: h.endLine,
+          code: 'INVALID_ARGS',
+          message: `行区间越界：endLine (${h.endLine}) 大于文件总行数 (${totalLines})。写面绝不夹取（fs.readRange 的读窗口语义不适用于写）；先 fs.readRange 看清边界再发。`,
+        });
+        continue;
+      }
+      while (cursor < s) outLines.push(linesBefore[cursor]!), cursor += 1;
+      const spanBefore = linesBefore.slice(s, e);
+      const replacementLines = h.replacement === '' ? [] : h.replacement.split(/\r\n|\r|\n/);
+      outLines.push(...replacementLines);
+      cursor = e;
+      applied.push({
+        index: h.index,
+        kind: 'lines',
+        startLine: h.startLine,
+        endLine: h.endLine,
+        linesRemoved: spanBefore.length,
+        linesAdded: replacementLines.length,
+        charsBefore: spanBefore.join('\n').length,
+        charsAfter: replacementLines.join('\n').length,
+      });
+    }
+    while (cursor < totalLines) outLines.push(linesBefore[cursor]!), cursor += 1;
+    let current = outLines.join('\n');
+
+    // 第二趟：锚点 hunk 按提交序作用于行区间应用后的文本（零命中 / 多命中逐条 refused，不猜）。
+    for (const h of hunks) {
+      if (h.kind !== 'anchor' || h.oldText === undefined || h.newText === undefined) continue;
+      const hits = countOccurrences(current, h.oldText);
+      if (hits === 0) {
+        refused.push({
+          index: h.index,
+          kind: 'anchor',
+          code: 'INVALID_ARGS',
+          message: `锚点零命中：oldText 在当前文本中不存在（多命中/零命中都逐条拒，绝不猜第一处；先 fs.readFile / fs.readRange 核对原文再发）：${sanitizeEcho(h.oldText)}`,
+        });
+        continue;
+      }
+      if (hits > 1) {
+        refused.push({
+          index: h.index,
+          kind: 'anchor',
+          code: 'INVALID_ARGS',
+          message: `锚点多命中：oldText 命中 ${hits} 处（要求恰好唯一命中；扩大上下文再发，或改用行区间）：${sanitizeEcho(h.oldText)}`,
+        });
+        continue;
+      }
+      const at = current.indexOf(h.oldText);
+      current = current.slice(0, at) + h.newText + current.slice(at + h.oldText.length);
+      applied.push({
+        index: h.index,
+        kind: 'anchor',
+        charsBefore: h.oldText.length,
+        charsAfter: h.newText.length,
+        matchOffset: at,
+      });
+    }
+    // 回执按提交序排（与入参 hunks 对位，调用方逐条核对不换算）。
+    applied.sort((a, b) => (a['index'] as number) - (b['index'] as number));
+    refused.sort((a, b) => (a['index'] as number) - (b['index'] as number));
+
+    // 全部 refused ⇒ 零副作用：不备份、不写、不发事件（半点不装作写过了）。
+    const linesAfter = current.split(/\r\n|\r|\n/);
+    if (applied.length === 0) {
+      return {
+        path: relPath,
+        applied,
+        refused,
+        totals: { hunks: hunks.length, applied: 0, refused: refused.length },
+        diff: {
+          linesBefore: totalLines,
+          linesAfter: linesAfter.length,
+          lineDelta: linesAfter.length - totalLines,
+          charsBefore: textBefore.length,
+          charsAfter: current.length,
+          charDelta: current.length - textBefore.length,
+        },
+        written: false,
+        ...(rootId !== null ? { rootId } : {}),
+      };
+    }
+
+    let backupPath: string | null;
+    try {
+      backupPath = await io.backup.call(io, abs); // 写前备份（内核单一真源）
+    } catch (err) {
+      rethrowWriteGate(err, relPath);
+    }
+    try {
+      await io.writeText.call(io, abs, current, { backup: false }); // 写闸二：内核 assertWritable 先于落盘；保编码/EOL 交给内核 preserve
+    } catch (err) {
+      rethrowWriteGate(err, relPath);
+    }
+    // 回读验证：盘上真相与本次拼出的全文逐行比对（EOL 风格交由内核 preserve 的既定语义，
+    // 故按 \n 归一后比对行内容——内容级诚实，风格差异不误报）。
+    const readBack = await deps.invoke('read_file_bytes', { path: abs });
+    if (typeof readBack !== 'string' || readBack.replace(/\r\n?/g, '\n') !== current.replace(/\r\n?/g, '\n')) {
+      throw new McpFailure(
+        'TOOL_EXECUTION_FAILED',
+        `fileTree.patchLines 回读验证失败：写入后从盘上读回的内容与本次 patch 结果不一致（写已发生；先 fs.readRange 核对盘态再决定是否重试）：${sanitizeEcho(relPath)}`,
+      );
+    }
+
+    // 落盘字节数 stat 读回（真实读数，不按 current.length 编造）；读不到如实 null。
+    let bytes: number | null = null;
+    try {
+      const stats = (await deps.invoke('stat_files', { paths: [abs] })) as unknown;
+      const first = Array.isArray(stats) ? (stats[0] as Record<string, unknown> | undefined) : undefined;
+      if (first && typeof first['size'] === 'number') bytes = first['size'] as number;
+    } catch {
+      bytes = null; // 读不到就如实 null，不阻塞回执
+    }
+
+    return {
+      path: relPath,
+      applied,
+      refused,
+      totals: { hunks: hunks.length, applied: applied.length, refused: refused.length },
+      diff: {
+        linesBefore: totalLines,
+        linesAfter: linesAfter.length,
+        lineDelta: linesAfter.length - totalLines,
+        charsBefore: textBefore.length,
+        charsAfter: current.length,
+        charDelta: current.length - textBefore.length,
+      },
+      backupPath, // 来自内核 io.backup 单一真源；null = 备份时盘上已无此文件（竞态，如实标注）
+      bytes,
+      written: true,
+      ...(rootId !== null ? { rootId } : {}),
+      refreshed: emitFileChanged(kernel, 'change', abs, { tracker: trackerOf(deps), scope }),
+    };
+  };
+
   /**
    * fileTree.remove：删除项目根内文件 / 目录。先经只读 `stat_file`（`deps.invoke` seam，与
    * fs.stat 腿同口径）判类型：不存在 ⇒ 显式失败（不静默成功）；目录须显式 `recursive:true`
@@ -2077,6 +2395,9 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['fileTree.update', fileTreeUpdate],
     // MCP-PERF-S3 批（2026-11-06）：批量变更事务（≤32 文件 / 一次备份清单 / 逐条 applied/refused）。
     ['fileTree.applyChangeset', fileTreeApplyChangeset],
+    // MCP-PERF-S6 批（2026-11-07）：patch 级写（单文件 ≤32 hunk，行区间/锚点二选一；
+    // read→应用→io.backup→writeText{backup:false}→回读验证，逐条 applied/refused + diff 摘要）。
+    ['fileTree.patchLines', fileTreePatchLines],
     ['fileTree.remove', fileTreeRemove],
     ['fileTree.rename', fileTreeRename],
     // Wave4 余项①：稳定 actionId 台账 + 宿主受控 apply（模型内一次撤销步，不落盘、
