@@ -915,3 +915,181 @@ describe('⑨ B13 只读腿定档（fs.readFile / fs.stat / io.listDir 走 verdi
     tracker.dispose();
   });
 });
+
+/* ================================================================== *
+ * ⑩ S11 覆盖收口（BOARD 卡 MCP-PERF-S11）：全 82 面（read 40 / edit 13 / privileged 29）
+ *   的 fsFreshness 覆盖矩阵盘点结论——
+ *
+ *   【已带 B13 异步复核入口（10 工具面 + 3 资源；既有面本批零行为变化，只补测试钉）】
+ *     fs.readFile(file) / fs.stat(file) / fs.statFiles(逐项·一趟 verdictsOfRechecked) /
+ *     fs.readMany(逐项·一趟) / fs.readRange(file·S4 已接线，本批只补 annotatedTools 名单+钉) /
+ *     io.listDir(listing) / fs.tree＝projectFileTree+kojo://project/file-tree(listing) /
+ *     search.all(listing·根) / workspace.searchAll(listing·根) /
+ *     kojo://project/snapshot(listing·根) / kojo://project/fs-freshness(本体)
+ *   【缺覆盖 → 本批补腿（2 面）】
+ *     fs.pathExists —— 盘读面（path_exists），应答原本零 fsFreshness ⇒ 补 file 档（单路径 ≤1 趟 stat）
+ *     semantic.projectSymbols —— 全项目盘扫描产物（erb.parser byName 索引）的清单面 ⇒
+ *       补根级 listing 档；窗内多候选恰 1 趟 statFiles、0 次单 stat
+ *   【盘点裁定不补（点名，非「盘上真源」读腿）】
+ *     semantic.batchAt 与单枚面 definitionAt/referencesAt 同一条 model+判据腿（编辑器模型 +
+ *     内存索引，零盘读）；把模型读记成盘基线会污染 fs.readFile / fs.stat 的判定 ⇒ 依
+ *     NOT_ANNOTATED 纪律点名进 report.notAnnotated，盘-缓冲差由编辑器自己说。其余：
+ *     semantic 7 单枚面 / lang.* 六枚 / problems.diagnostics / document.active / editor.info·
+ *     cursor·selfCheck（编辑器态）、commands.list / io.workspaceRoots / project.info（载荷摘要）、
+ *     app.dataDir / codec.encodeString / tasks.status（内核态）、diff.compare / state.replay /
+ *     preview.document（未接线 NOT_WIRED）、launcher 只读 13 枚（privileged·启动器态）。
+ * ================================================================== */
+
+describe('⑩ S11 覆盖收口：fs.pathExists / semantic.projectSymbols 补腿 + fs.readRange 名单收口', () => {
+  const SYM_DEFS = [{ name: 'DRAW_FACE', filePath: 'D:\\proj\\a.erb', startLine: 10, endLine: 20 }];
+  /** 给假内核挂 erb.parser 索引假件（byName.forEachDef 逐定义回调，照 mcp-range-outline 同尺）。 */
+  function symKernel(kernel: McpKernelLike): void {
+    (kernel.services as unknown as { tryGet: (k: string) => unknown }).tryGet = (key: string) =>
+      key === 'erb.parser'
+        ? {
+            currentIndex: () => ({
+              byName: {
+                forEachDef: (cb: (ref: Record<string, unknown>, normalized: string) => void) => {
+                  for (const d of SYM_DEFS) cb(d, String(d['name']).toUpperCase());
+                },
+              },
+            }),
+            indexState: () => ({ phase: 'ready' }),
+          }
+        : undefined;
+  }
+
+  it('fs.pathExists：应答附 fsFreshness（file 档）；判定器缺席字段照样在场（available:false，铁律 4）', async () => {
+    const { kernel } = makeKernel();
+    const tracker = createFsFreshnessTracker(kernel);
+    const sup = createRunSupplemental(fakeIoDeps(kernel, {
+      fsFreshness: () => tracker,
+      invoke: async (cmd) => (cmd === 'path_exists' ? true : null),
+    }));
+    const out = (await sup('fs.pathExists', { relPath: 'a.kojo' }, SCOPE_A)) as Record<string, unknown>;
+    expect(out['exists']).toBe(true);
+    const ff = out['fsFreshness'] as Record<string, unknown>;
+    expect(ff['available']).toBe(true);
+    expect(ff['granularity']).toBe('file');
+    expect(ff['target']).toBe('a.kojo');
+    tracker.dispose();
+    const bare = (await createRunSupplemental(fakeIoDeps(kernel, {
+      invoke: async (cmd) => (cmd === 'path_exists' ? false : null),
+    }))('fs.pathExists', { relPath: 'a.kojo' }, SCOPE_A)) as Record<string, unknown>;
+    const ff2 = bare['fsFreshness'] as Record<string, unknown>;
+    expect(ff2['available']).toBe(false);
+    expect(ff2['stale']).toBeNull();
+    expect(String(ff2['staleReason'])).not.toBe('');
+  });
+
+  it('fs.pathExists（file 档）：窗内自写回声命中 ⇒ 恰 1 趟单路径 stat 定档；窗外首读零探针', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const { kernel } = makeKernel();
+    const stat = vi.fn(async () => ({ exists: true, mtimeMs: T0, size: 10 }));
+    (kernel.io as unknown as Record<string, unknown>)['stat'] = stat;
+    const tracker = createFsFreshnessTracker(kernel);
+    const sup = createRunSupplemental(fakeIoDeps(kernel, {
+      fsFreshness: () => tracker,
+      invoke: async (cmd) => (cmd === 'path_exists' ? true : null),
+    }));
+    const first = (await sup('fs.pathExists', { relPath: 'a.kojo' }, SCOPE_A)) as Record<string, unknown>;
+    expect(((first['fsFreshness'] as Record<string, unknown>)['recheck'] ?? null)).toBeNull();
+    expect(stat).toHaveBeenCalledTimes(0);
+    tracker.noteSelfWrite({ abs: 'D:\\proj\\a.kojo', kind: 'change', scope: SCOPE_A });
+    stat.mockClear();
+    const second = (await sup('fs.pathExists', { relPath: 'a.kojo' }, SCOPE_A)) as Record<string, unknown>;
+    const ff = second['fsFreshness'] as Record<string, unknown>;
+    expect(ff['stale']).toBe(false);
+    expect(ff['recheck']).toMatchObject({ performed: true, basis: 'mtime-recheck', outcome: 'unchanged' });
+    expect(stat).toHaveBeenCalledTimes(1); // 单文件面 ≤1 趟 stat
+    tracker.dispose();
+  });
+
+  it('semantic.projectSymbols：应答附 fsFreshness（根级 listing，tracked）；判定器缺席字段照样在场', async () => {
+    const { kernel } = makeKernel();
+    symKernel(kernel);
+    const tracker = createFsFreshnessTracker(kernel);
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { fsFreshness: () => tracker }));
+    const out = (await sup('semantic.projectSymbols', {}, SCOPE_A)) as Record<string, unknown>;
+    expect(out['total']).toBe(1);
+    const ff = out['fsFreshness'] as Record<string, unknown>;
+    expect(ff['available']).toBe(true);
+    expect(ff['granularity']).toBe('listing');
+    expect(ff['target']).toBe('.');
+    expect(ff['tracked']).toBe(true);
+    tracker.dispose();
+    const bare = (await createRunSupplemental(fakeIoDeps(kernel))('semantic.projectSymbols', {}, SCOPE_A)) as Record<string, unknown>;
+    const ff2 = bare['fsFreshness'] as Record<string, unknown>;
+    expect(ff2['available']).toBe(false);
+    expect(ff2['stale']).toBeNull();
+  });
+
+  it('semantic.projectSymbols（listing 档）：窗内 3 条自写全落根下 ⇒ 恰 1 趟 statFiles、0 次单 stat，本次读数 stale:true', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const { kernel } = makeKernel();
+    symKernel(kernel);
+    const stat = vi.fn(async () => ({ exists: true, mtimeMs: T0, size: 10 }));
+    const statFiles = vi.fn(async (paths: readonly string[]) =>
+      paths.map(() => ({ exists: true, mtimeMs: T0 + 2_000, size: 11 })),
+    );
+    (kernel.io as unknown as Record<string, unknown>)['stat'] = stat;
+    (kernel.io as unknown as Record<string, unknown>)['statFiles'] = statFiles;
+    const tracker = createFsFreshnessTracker(kernel);
+    const sup = createRunSupplemental(fakeIoDeps(kernel, { fsFreshness: () => tracker }));
+    await sup('semantic.projectSymbols', {}, SCOPE_A); // 基线：无窗内记忆 ⇒ 零探针
+    expect(stat).toHaveBeenCalledTimes(0);
+    expect(statFiles).toHaveBeenCalledTimes(0);
+    for (const rel of ['a.erb', 'b.erb', 'c.erb']) {
+      tracker.noteSelfWrite({ abs: `D:\\proj\\${rel}`, kind: 'change', scope: SCOPE_A });
+    }
+    stat.mockClear();
+    statFiles.mockClear();
+    const out = (await sup('semantic.projectSymbols', {}, SCOPE_A)) as Record<string, unknown>;
+    const ff = out['fsFreshness'] as Record<string, unknown>;
+    expect(ff['granularity']).toBe('listing');
+    expect(ff['stale']).toBe(true); // 复核核出的真实外部写已推进改动账
+    expect(ff['recheck']).toMatchObject({ performed: true, outcome: 'changed', trips: 1, batched: true });
+    expect(statFiles).toHaveBeenCalledTimes(1);
+    expect((statFiles.mock.calls[0]![0] as readonly string[]).length).toBe(3);
+    expect(stat).toHaveBeenCalledTimes(0);
+    tracker.dispose();
+  });
+
+  it('fs.readRange（S4 既有接线，本批补钉）：file 档；窗内命中恰 1 趟单路径 stat，窗外首读零探针', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const { kernel } = makeKernel();
+    const stat = vi.fn(async () => ({ exists: true, mtimeMs: T0, size: 10 }));
+    (kernel.io as unknown as Record<string, unknown>)['stat'] = stat;
+    const tracker = createFsFreshnessTracker(kernel);
+    const sup = createRunSupplemental(fakeIoDeps(kernel, {
+      fsFreshness: () => tracker,
+      invoke: async (cmd) => (cmd === 'read_file_bytes' ? 'alpha\nbeta\n' : null),
+    }));
+    const first = (await sup('fs.readRange', { relPath: 'a.kojo', startLine: 1, endLine: 2 }, SCOPE_A)) as Record<string, unknown>;
+    const ff1 = first['fsFreshness'] as Record<string, unknown>;
+    expect(ff1['granularity']).toBe('file');
+    expect(ff1['recheck'] ?? null).toBeNull();
+    expect(stat).toHaveBeenCalledTimes(0);
+    tracker.noteSelfWrite({ abs: 'D:\\proj\\a.kojo', kind: 'change', scope: SCOPE_A });
+    stat.mockClear();
+    const second = (await sup('fs.readRange', { relPath: 'a.kojo', startLine: 1, endLine: 2 }, SCOPE_A)) as Record<string, unknown>;
+    const ff = second['fsFreshness'] as Record<string, unknown>;
+    expect(ff['stale']).toBe(false);
+    expect(ff['recheck']).toMatchObject({ performed: true, basis: 'mtime-recheck', outcome: 'unchanged' });
+    expect(stat).toHaveBeenCalledTimes(1);
+    tracker.dispose();
+  });
+
+  it('账本自述收口：annotatedTools 补 S11 三条；notAnnotated 点名 semantic 模型读面（盘点裁定 batchAt 同类，不冒充盘态判定）', () => {
+    const { kernel } = makeKernel();
+    const tracker = createFsFreshnessTracker(kernel);
+    const rep = tracker.report();
+    expect(rep.annotatedTools).toContain('fs.readRange');
+    expect(rep.annotatedTools).toContain('fs.pathExists');
+    expect(rep.annotatedTools).toContain('semantic.projectSymbols（根级 listing）');
+    const targets = rep.notAnnotated.map((n) => n.target).join('\n');
+    expect(targets).toContain('semantic.batchAt');
+    for (const n of rep.notAnnotated) expect(n.reason).not.toBe('');
+    tracker.dispose();
+  });
+});
