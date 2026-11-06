@@ -146,6 +146,9 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   'editor.setSelection': ['paneId', 'startLine', 'startColumn', 'endLine', 'endColumn'],
   'editor.revealLine': ['paneId', 'line', 'reveal'],
 
+  /* ---- 打开文档一枚（editor-open-legs.ts，B10 落 dev 的新面，本批补登记）---- */
+  'editor.openDocument': ['relPath', 'deadlineMs'], // requireRelPath(args) + deadlineOf(args)，腿只取这两个
+
   /* ---- 启动器族 27 枚（real-sources-launcher.ts）---- */
   'launcher_instance_list': SHARED_LIST,
   'launcher_instance_get': ['instanceId'],
@@ -461,38 +464,38 @@ describe('B11 判据 4 · 旧别名照旧生效 / limit 照旧生效 / 零参调
 
   it('fs.readFile：八个旧别名与 limit 逐字等价（共用闸没被严格化挤掉）', async () => {
     for (const alias of PAGE_SIZE_ARG_ALIASES) {
-      const r = (await readCall('fs.readFile', { relPath: 'a.kojo', [alias]: 700 })) as Record<string, unknown>;
+      const r = (await readCall('fs.readFile', { relPath: 'a.kojo', [alias]: 700 }, scope)) as Record<string, unknown>;
       expect(String(r['text']).length, `别名 ${alias} 改后必须仍然生效`).toBe(700);
       expect(r['limit']).toBe(700);
     }
   });
 
   it('io.listDir：别名逐个生效 + 零参调用＝改前默认页（500 条，一个没放宽）', async () => {
-    const zero = (await listCall('io.listDir', { relPath: '' })) as Record<string, unknown>;
+    const zero = (await listCall('io.listDir', { relPath: '' }, scope)) as Record<string, unknown>;
     expect(zero['limit']).toBe(500);
     expect((zero['entries'] as unknown[]).length).toBe(500);
     for (const alias of PAGE_SIZE_ARG_ALIASES) {
-      const r = (await listCall('io.listDir', { relPath: '', [alias]: 33 })) as Record<string, unknown>;
+      const r = (await listCall('io.listDir', { relPath: '', [alias]: 33 }, scope)) as Record<string, unknown>;
       expect((r['entries'] as unknown[]).length, `别名 ${alias} 在 io.listDir 上必须仍生效`).toBe(33);
     }
   });
 
   it('commands.list：maxResults 别名照旧 + 上限 500 / 默认 200 未动 + total 是真数', async () => {
-    const legacy = (await cmdsCall('commands.list', { maxResults: 40 })) as Record<string, unknown>;
+    const legacy = (await cmdsCall('commands.list', { maxResults: 40 }, scope)) as Record<string, unknown>;
     expect(legacy['limit']).toBe(40);
     expect((legacy['commands'] as unknown[]).length).toBe(40);
-    const big = (await cmdsCall('commands.list', { limit: 5_000_000 })) as Record<string, unknown>;
+    const big = (await cmdsCall('commands.list', { limit: 5_000_000 }, scope)) as Record<string, unknown>;
     expect((big['commands'] as unknown[]).length).toBe(500);
-    const zero = (await cmdsCall('commands.list', {})) as Record<string, unknown>;
+    const zero = (await cmdsCall('commands.list', {}, scope)) as Record<string, unknown>;
     expect(zero['limit']).toBe(200);
     expect(zero['total']).toBe(900);
   });
 
   it('workspace.searchAll / search.all：maxResults 别名与裸 offset 都照旧取用', async () => {
-    const legacy = (await searchCall('workspace.searchAll', { query: 'hit', maxResults: 25 })) as Record<string, unknown>;
+    const legacy = (await searchCall('workspace.searchAll', { query: 'hit', maxResults: 25 }, scope)) as Record<string, unknown>;
     expect(legacy['limit']).toBe(25);
     expect((legacy['hits'] as unknown[]).length).toBe(25);
-    const off = (await searchCall('workspace.searchAll', { query: 'hit', offset: 100, limit: 10 })) as Record<string, unknown>;
+    const off = (await searchCall('workspace.searchAll', { query: 'hit', offset: 100, limit: 10 }, scope)) as Record<string, unknown>;
     expect(off['offset']).toBe(100);
     const kernel = (await kernelIo.searchAll!({ query: 'hit', maxResults: 25 }, scope)) as Record<string, unknown>;
     expect(kernel['limit']).toBe(25);
@@ -511,23 +514,25 @@ describe('B11 判据 4 · 旧别名照旧生效 / limit 照旧生效 / 零参调
     const pattern = String((PAGE_CURSOR_SCHEMA_PROPS['cursor'] as Record<string, unknown>)['pattern']);
     expect(new RegExp(pattern).test('abcd1234:12')).toBe(true);
     expect(propsOf('fs.readFile')['cursor']).toEqual(PAGE_CURSOR_SCHEMA_PROPS['cursor']);
-    await expect(readCall('fs.readFile', { relPath: 'a.kojo', cursor: 'nope' })).rejects.toThrow(/cursor 形状不合法/);
+    await expect(readCall('fs.readFile', { relPath: 'a.kojo', cursor: 'nope' }, scope)).rejects.toThrow(/cursor 形状不合法/);
   });
 
   it('翻页中途改了快照仍显式 changedDuringPaging（本批没把这条静默回去）', async () => {
     let current = text;
     const call = createRunSupplemental(deps({ invoke: async (cmd: string) => (cmd === 'read_file_bytes' ? current : null) }));
-    const first = (await call('fs.readFile', { relPath: 'a.kojo', limit: 4096 })) as Record<string, unknown>;
+    const first = (await call('fs.readFile', { relPath: 'a.kojo', limit: 4096 }, scope)) as Record<string, unknown>;
     expect(first['changedDuringPaging']).toBeUndefined();
     current = `${text}X`;
-    const second = (await call('fs.readFile', { relPath: 'a.kojo', limit: 4096, cursor: String(first['nextCursor']) })) as Record<string, unknown>;
+    const second = (await call('fs.readFile', { relPath: 'a.kojo', limit: 4096, cursor: String(first['nextCursor']) }, scope)) as Record<string, unknown>;
     expect(second['changedDuringPaging']).toBe(true);
     expect(second['offset']).toBe(0);
   });
 
   it('problems.diagnostics 的四个「在册也不生效」别名：显式拒收，不再静默按默认页大小', () => {
     const declared = Object.keys(propsOf('problems.diagnostics'));
-    for (const alias of PAGE_SIZE_NOT_CONSUMED['problems.diagnostics']) {
+    const omitted = PAGE_SIZE_NOT_CONSUMED['problems.diagnostics'] ?? [];
+    expect(omitted).toHaveLength(4); // 例外表就是那四条，不许拿空数组跑绿
+    for (const alias of omitted) {
       expect(declared, `${alias} 在该面不生效，就不该继续挂着`).not.toContain(alias);
     }
     expect(declared).toEqual(expect.arrayContaining(['maxResults', 'limit', 'length', 'maxChars', 'cursor']));
@@ -536,7 +541,7 @@ describe('B11 判据 4 · 旧别名照旧生效 / limit 照旧生效 / 零参调
   it('未接线的面（diff.compare / state.replay / preview.document）仍显式 NOT_WIRED，本批没顺手放行', async () => {
     const call = createRunSupplemental(deps());
     for (const name of ['diff.compare', 'state.replay', 'preview.document']) {
-      await expect(call(name, {})).rejects.toThrow(/未接线/);
+      await expect(call(name, {}, scope)).rejects.toThrow(/未接线/);
     }
   });
 });

@@ -189,6 +189,96 @@ function nearestLegalKey(unknown: string, legal: readonly string[]): string | nu
   return bestScore <= SCHEMA_SUGGEST_MAX_DISTANCE ? best : null;
 }
 
+/**
+ * ---- 指回的第二条腿：值形状证据（B11 判据 3 的 `corridor → cursor` 那一格）----
+ *
+ * 为什么名字这一条腿到不了：`corridor` 与 `cursor` 的归一化 Damerau-Levenshtein 是 **0.500**，
+ * 而 `size → line`、`min → line`、`count → column` 这些**毫不相干**的名字对也是同一个 0.500
+ * ——把 `SCHEMA_SUGGEST_MAX_DISTANCE` 从 0.34 抬到 0.50 救不了 corridor（正好压在边界上），
+ * 却会让三张表一起开始瞎指：现场量过（73 个常见参数词 × 77 枚面），抬到 0.50 后无依据的
+ * 「最接近的合法名」从 188 条涨到 639 条（净多 451 条）。判据红线是
+ * 「够不着的乱名字不瞎猜」，所以阈值一个字不动。
+ *
+ * 换证据说话：调用方**实际传进来的那个值**比键名诚实。未知键的值原样满足了本面一枚
+ * 「窄形状」入参声明的 `pattern`，而这样的入参在本面**只有一个**，才指回它；
+ * 「窄」不靠人肉认定，用一组固定探针串现场量（兜底式 pattern——连普通词都收，例如相对路径
+ * 那一枚只挡盘符 / 绝对 / `..` 上跳——不算证据，见 `SCHEMA_SHAPE_SPECIFICITY_MIN`）。
+ * 零个或两个以上候选收得下 ⇒ 照旧沉默，只把合法清单摊开。
+ */
+const SCHEMA_SHAPE_PROBES = [
+  'limit',
+  'maxChars',
+  'a.kojo',
+  'dir/a.kojo',
+  'D:\\game\\a.kojo',
+  '/srv/a.kojo',
+  '../a.kojo',
+  'D:/x',
+  '8f3c2a1b:42',
+  'hello world',
+  'x'.repeat(80),
+  'search',
+] as const;
+
+/** pattern 至少拒掉这个比例的探针串，才算「窄形状」（有指回价值）；否则视为兜底形状。 */
+const SCHEMA_SHAPE_SPECIFICITY_MIN = 0.5;
+
+/** 编译一次、量一次：`null` ＝非法 pattern 或不是字符串（不参与值证据）。 */
+const shapeSpecificityCache = new Map<string, number | null>();
+
+function patternSpecificity(pattern: unknown): number | null {
+  if (typeof pattern !== 'string') return null;
+  const cached = shapeSpecificityCache.get(pattern);
+  if (cached !== undefined) return cached;
+  let score: number | null = null;
+  try {
+    const re = new RegExp(pattern);
+    let rejected = 0;
+    for (const probe of SCHEMA_SHAPE_PROBES) if (!re.test(probe)) rejected += 1;
+    score = rejected / SCHEMA_SHAPE_PROBES.length;
+  } catch {
+    score = null; // 非法 pattern：不参与证据（与「不认识的关键字不误拒」同口径）
+  }
+  shapeSpecificityCache.set(pattern, score);
+  return score;
+}
+
+/**
+ * 值形状证据：未知键的**值**被本面恰好一枚窄形状入参原样收得下 ⇒ 返回那枚名字；
+ * 收不下 / 不止一枚收得下 / 值不是字符串 ⇒ null（沉默，不猜）。
+ */
+function valueShapeEvidence(
+  properties: Record<string, unknown>,
+  unknownKey: string,
+  unknownValue: unknown,
+): string | null {
+  if (typeof unknownValue !== 'string') return null;
+  const hits: string[] = [];
+  for (const [name, sub] of Object.entries(properties)) {
+    if (name === unknownKey || !isPlainObject(sub)) continue;
+    const specificity = patternSpecificity(sub['pattern']);
+    if (specificity === null || specificity < SCHEMA_SHAPE_SPECIFICITY_MIN) continue; // 没有 pattern / 兜底形状
+    if (validateAgainstSchema(sub, unknownValue).valid) hits.push(name);
+  }
+  return hits.length === 1 ? (hits[0] as string) : null;
+}
+
+/** 指回文案：名字那条腿优先，其次值形状那条腿；都没有 ⇒ 空串（只摊清单）。 */
+function suggestLegalKey(
+  properties: Record<string, unknown> | null,
+  unknownKey: string,
+  unknownValue: unknown,
+  legal: readonly string[],
+): string {
+  const byName = nearestLegalKey(unknownKey, legal);
+  if (byName) return `；最接近的合法名：${byName}`;
+  if (properties) {
+    const byValue = valueShapeEvidence(properties, unknownKey, unknownValue);
+    if (byValue) return `；最接近的合法名：${byValue}（依据不是键名拼写，而是你传的这个值只有它收得下）`;
+  }
+  return '';
+}
+
 export interface SchemaValidation {
   readonly valid: boolean;
   readonly errors: readonly string[];
@@ -294,12 +384,10 @@ export function validateAgainstSchema(schema: Record<string, unknown>, value: un
         const legal = isPlainObject(properties) ? Object.keys(properties) : [];
         for (const key of Object.keys(v)) {
           if (legal.includes(key)) continue;
-          const near = nearestLegalKey(key, legal);
+          const note = suggestLegalKey(isPlainObject(properties) ? properties : null, key, v[key], legal);
           push(
             `${keyLabel(path, key)}: 未知入参 '${key}'（本面不收它，也不会替它猜一个默认值——` +
-              `本面只收这些入参：${legal.length > 0 ? legal.join(' / ') : '（一个入参都不收）'}${
-                near ? `；最接近的合法名：${near}` : ''
-              }）`,
+              `本面只收这些入参：${legal.length > 0 ? legal.join(' / ') : '（一个入参都不收）'}${note}）`,
           );
         }
       }
@@ -1270,6 +1358,10 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         },
         force: { type: 'boolean', description: 'validation kind only: bypass the snapshot cache and re-check every unit.' },
       },
+      // B11 入参严格化：这五枚名字就是 real-sources-tasks.ts 的 `startTask` 唯一取用的入参
+      // （`kind` / `query` / `scope` / `maxResults` / `force`），改前多发的名字会被照收并静默忽略
+      // ——正是本批要消灭的静默；旧名字一个没删，零参调用仍走 `kind:'search'` 的既有缺省。
+      additionalProperties: false,
     },
     tier: 'edit',
     annotations: { readOnlyHint: false, idempotentHint: false },
@@ -1699,6 +1791,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         keepBackups: { type: 'boolean', description: 'Optional; keep backup files when deleteFiles is true (host default false).' },
       },
       required: ['instanceId', 'deleteFiles'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -1715,6 +1808,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         resolutions: { type: 'array', maxItems: 200, items: LAUNCHER_RESOLUTION_SCHEMA, description: 'Per-collision decisions; omit to let the host abort on any unresolved conflict.' },
       },
       required: ['planId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
@@ -1732,6 +1826,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         enabled: { type: 'boolean', description: 'Required explicit target state.' },
       },
       required: ['instanceId', 'packId', 'enabled'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -1748,6 +1843,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         packIds: { type: 'array', minItems: 1, maxItems: 200, items: LAUNCHER_COMPONENT_ID_SCHEMA, description: 'Complete permutation of installed pack ids, in desired load order.' },
       },
       required: ['instanceId', 'packIds'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -1761,6 +1857,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, packId: LAUNCHER_COMPONENT_ID_SCHEMA },
       required: ['instanceId', 'packId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
@@ -1797,7 +1894,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'Request cancellation of one launcher task (mutating, privileged) - the cancel half of the launcher task face, which stays separate from kojo://tasks by design. Cancellation is a request, not an acknowledgement: only cancellable kinds are accepted, rollback is performed by the task itself, and the fact is read back from launcher_task_list. An unknown / already-finished row arrives as the host answer, never as a silent success. `taskId` must come from a task row this host produced. ' +
       LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { taskId: LAUNCHER_COMPONENT_ID_SCHEMA }, required: ['taskId'] },
+    inputSchema: { type: 'object', properties: { taskId: LAUNCHER_COMPONENT_ID_SCHEMA }, required: ['taskId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   },
@@ -1846,6 +1943,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         backupCurrent: { type: 'boolean', description: 'Optional; default true = the host backs up the current saves before restoring.' },
       },
       required: ['instanceId', 'backupId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
@@ -1859,6 +1957,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, backupId: LAUNCHER_COMPONENT_ID_SCHEMA },
       required: ['instanceId', 'backupId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -1875,6 +1974,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         resolutions: { type: 'array', maxItems: 200, items: LAUNCHER_RESOLUTION_SCHEMA, description: 'Per-collision decisions; omit to let the host abort on unresolved conflicts.' },
       },
       required: ['planId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
