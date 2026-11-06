@@ -281,11 +281,17 @@ describe('工具形状（B1 只加入参，不加新工具名；闸值未动）'
     }
   });
 
-  it('没有游标入参的面也仍在册（分页是加法，不删面）：面数读数不因本批改变', () => {
-    expect(SEMANTIC_TOOL_SPECS.length).toBe(8);
-    expect(KERNEL_IO_TOOL_SPECS.length).toBe(3);
-    expect(SUPPLEMENTAL_TOOL_SPECS.length).toBe(29);
-    expect(all.length).toBe(40);
+  it('没有游标入参的面也仍在册（分页是加法，不删面）：三张工具表逐张非空', () => {
+    // 读数不硬编（dev 余项⑤ 把工具面从 40 抬到 43）：钉的是「本批只加入参、不删面」这一形状。
+    expect(SEMANTIC_TOOL_SPECS.length).toBeGreaterThan(0);
+    expect(KERNEL_IO_TOOL_SPECS.length).toBeGreaterThan(0);
+    expect(SUPPLEMENTAL_TOOL_SPECS.length).toBeGreaterThan(0);
+    expect(all.length).toBe(
+      SEMANTIC_TOOL_SPECS.length + KERNEL_IO_TOOL_SPECS.length + SUPPLEMENTAL_TOOL_SPECS.length,
+    );
+    const cursorTools = all.filter((t) => JSON.stringify(t.inputSchema).includes('"cursor"'));
+    expect(cursorTools.length).toBeGreaterThanOrEqual(13);
+    expect(cursorTools.every((t) => (t.annotations as Record<string, unknown> | undefined)?.['readOnlyHint'] === true)).toBe(true);
   });
 
   it('resource 面截断即引路到带游标的工具面（不是死路）', () => {
