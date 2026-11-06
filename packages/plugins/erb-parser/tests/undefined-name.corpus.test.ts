@@ -6,11 +6,11 @@
  *
  * 名字尺（ERBDIAG-A / D01）：本闸门存在的理由就是钉死"未定义名腿切名字的尺子 = 引擎那把"。
  * 引擎真源 `Emuera/Runtime/Script/Parser/LexicalAnalyzer.cs` 的 `_searchValues` ⇒
- * **名字 = 不含引擎分隔符的极大段**。改前实测（eraTW 4.981，4,258 份 / 437 万行）
+ * **名字 = 不含这些字符的极大段**。改前实测（eraTW 4.981，4,258 份 / 4,376,079 行）
  * 未定义名腿报 **1,190** 条，其中 1,141 条（95.9%）的诊断记号紧邻 `·`(U+00B7) 一类
- * **非**引擎分隔符——即"一把正则尺劈开一个名字"造的假红。
+ * **非**引擎分隔符——即"一把正则尺劈开一个名字"造的假红。换尺后同一棵树同一测法 = **49** 条。
  *
- * 闸门的目标值：**剩余 ≤ 60 条**，且剩余命中**逐条归类**（真 latent bug / 引擎容忍），
+ * 闸门的目标值：**剩余 ≤ 60 条**，且剩余命中**逐条归类**（真 latent bug / 引擎内建词表缺项），
  * `未解释 = 0`。任何一条新类别的假红都必须先改判据、不许放宽这里。
  */
 import { readdirSync, statSync, type Dirent } from 'node:fs';
@@ -32,14 +32,27 @@ import { collectUndefinedNameDiagnostics } from '../src/undefined-name';
 const SMOKE = process.env.KOJO_SMOKE_PROJECT;
 
 /** 剩余命中的**台账**：记号（大写归一）→ 定性。台账外的记号 = 未解释 = 闸门红。 */
-type ResidualKind = 'latent-bug' | 'engine-tolerated';
+type ResidualKind = 'latent-bug' | 'engine-builtin-vocab-gap';
+/**
+ * 逐条核实（不是抄来的定性）：
+ * - `COUNT`（14）= 引擎系统变量「繰り返しカウンター」：`VariableDescriptor.cs:109` /
+ *   `VariableCode.cs:41` / `VariableData.cs:183` 三处都登记在册，
+ *   但 `@kojo/plugin-api` 的 `ERB_ENGINE_RESERVED_IDENTIFIERS` 里没有这一枚
+ *   ⇒ **不是名字尺的问题，是词表缺项**（本批不碰别人的词表）。
+ * - `Y`（33）= 同上：`VariableDescriptor.cs:148` / `VariableData.cs:222`（GRAPH 坐标族），
+ *   全语料 0 处 `#DIM Y` ⇒ 只能来自引擎内建。
+ * - `__INT_MAX__`（1）= 引擎伪变量（Int64 最大値，`VariableCode.cs:280` /
+ *   `VariableData.cs:347`），词表同样缺这一枚。
+ * - `B`（1）= **真 latent bug**：`ERB/ステータス計算関連/SOURCE/SOURCE_1.ERB:553`
+ *   `ELSEIF B < 100000000`——上一个分支写的是 `LOCAL:2`，这里读一枚全语料查无声明的 `B`
+ *   （引擎侧 `IdentifierDictionary.cs:643` 到运行期才 `IdentifierNotFoundCodeEE`，
+ *   加载期不拦 ⇒ 作者看不见，正是这条规则该报的形状）。
+ */
 const RESIDUAL_LEDGER: Readonly<Record<string, ResidualKind>> = {
-  // —— 引擎容忍：全语料无 `#DIM` 声明，但引擎侧到**运行期**才 `IdentifierNotFoundCodeEE`
-  //    （`IdentifierDictionary.cs` 的失败路径是运行期，不是加载期）⇒ 加载不报错、
-  //    作者可长期看不见；报出来对作者零行动价值（改不动、也不是本次判据能证的）。
-  COUNT: 'engine-tolerated',
-  Y: 'engine-tolerated',
-  __INT_MAX__: 'engine-tolerated',
+  COUNT: 'engine-builtin-vocab-gap',
+  Y: 'engine-builtin-vocab-gap',
+  __INT_MAX__: 'engine-builtin-vocab-gap',
+  B: 'latent-bug',
 };
 
 function erbFilesUnder(dir: string, out: string[]): void {

@@ -40,7 +40,9 @@
  * - 成员访问与索引链（记号紧邻半/全角冒号，冒号两侧**可隔空白**）；
  * - 通配/展开形（成对 `%NAME%`）、`@` 作用域写法、`￥` 具名索引（`FLAG:￥人気`）；
  * - `[[ … ]]` 双括号文本/字符名字面量；
- * - 名字内符号（`・`/`（）`/`／`/`？`/零宽空格）紧邻的记号——它只是一个更长声明名的一段；
+ * - 记号切分一把尺：**引擎分隔集之外连成的极大段**（`ERB_NAME_RUN_SOURCE`）——
+ *   `・`/`（）`/`／`/`？`/`·`/`％`/零宽空格都在名字**里面**，与声明侧同一枚整名，
+ *   不再需要"邻接白名单"（D01 删掉了那张表）；
  * - 字符串型伪变量（含 `STR`/`ARGS`/`TSTR`/`SAVESTR`/`NICKNAME`）赋值的整行；
  * - 赋值目标以数字开头（Emuera 标识符不许数字开头 ⇒ 那是散文被 `=` 误判）；
  * - CALLFORM 等动态调用行（整行不扫，见上）。
@@ -48,9 +50,9 @@
  * 纯函数：文本 + 已知名集进、诊断数组出；不读盘、不碰工程状态。
  */
 import type { LineDecoration } from '@kojo/plugin-api';
-import { isErbDialectPath, MODEL_TOKEN_CLASS } from '@kojo/plugin-api';
+import { isErbDialectPath } from '@kojo/plugin-api';
 import { splitErbLines, visibleCodeLines, type VisibleCodeLine } from './references';
-import { parseErbText } from './scanner';
+import { ERB_NAME_RUN_SOURCE, parseErbText } from './scanner';
 
 /** 诊断码（问题面板 / 工具提示分组；与同批 `ERB_ARITY_MISMATCH` 同一稳定标识口径） */
 export const ERB_UNDEFINED_NAME = 'ERB_UNDEFINED_NAME' as const;
@@ -189,18 +191,30 @@ const STRING_LANGUAGE_IDENTIFIERS: ReadonlySet<string> = new Set(['LOCALS']);
 /**
  * 赋值形行首：`名字` + 可选索引链（`[..]` / `:..`）+ 赋值运算符。
  *
+ * 名字段用**引擎那把尺**（`ERB_NAME_RUN_SOURCE`，与 {@link TOKEN_RUN} 同一判据）——
+ * 用记号尺会把 `P23温泉·更衣间 = 1` 的行首认成 `P23温泉`，右侧整段落进"索引链"之外，
+ * 于是这条隐式声明登记不上（D01）。
+ *
  * 要求索引链**紧贴名字**（中间只许空白，见 `(?:[\t \u3000]*…)` 的外层），
  * 因此 `MESSAGE A = B` 这类"关键字 + 散文里恰好有等号"的行不会误命中。
  */
 const ASSIGN_LINE_RE = new RegExp(
-  `^[\\t \\u3000]*${MODEL_TOKEN_CLASS}+` +
+  `^[\\t \\u3000]*${ERB_NAME_RUN_SOURCE}+` +
     `(?:[\\t \\u3000]*(?:\\[[^\\]]*\\]|:[^\\s=;,]+))*` +
     `[\\t \\u3000]*(?:\\+|-|\\*|\\/|%|'|&|\\||\\^)?=(?!=)`,
   'u',
 );
 
-/** 记号切分（与 `MODEL_TOKEN_CLASS` 同一把尺：Unicode 字母/数字/下划线） */
-const TOKEN_RUN = new RegExp(`${MODEL_TOKEN_CLASS}+`, 'gu');
+/**
+ * 记号切分：**引擎那把尺**（`ERB_NAME_RUN_SOURCE` = 「不是分隔符就连成一个名字」）。
+ *
+ * 此前这里用 `MODEL_TOKEN_CLASS`（`\p{L}\p{N}_`，与着色同源）切记号，于是声明名
+ * `P23温泉·更衣间` 在使用点被劈成 `P23温泉` + `更衣间` 两段、两段都查无声明——
+ * eraTW 4.981 全量实测 1,190 条命中里 1,141 条（95.9%）就是这个形状
+ * （`·`/`・`/`（）`/`／`/`？`/`％`/零宽空格**都不在**引擎分隔集里）。
+ * 判据收成一处、与引擎逐码位对齐，见 `scanner.ts` 的 `ERB_ENGINE_NAME_DELIMITERS`。
+ */
+const TOKEN_RUN = new RegExp(`${ERB_NAME_RUN_SOURCE}+`, 'gu');
 
 /** 行首语句关键字（只认 ASCII 字母下划线；与 `visibleCodeLines` 的 CALL 判据同形） */
 const LEADING_WORD_RE = /^[A-Za-z_]+/;
@@ -217,8 +231,8 @@ function isDisplayStatement(lead: string | undefined): boolean {
   return lead !== undefined && lead.startsWith('PRINT');
 }
 
-/** 行首名字（含 CJK；用于识别赋值目标） */
-const LEADING_NAME_RE = new RegExp(`^[\\t \\u3000]*(${MODEL_TOKEN_CLASS}+)`, 'u');
+/** 行首名字（引擎名字尺；用于识别赋值目标） */
+const LEADING_NAME_RE = new RegExp(`^[\\t \\u3000]*(${ERB_NAME_RUN_SOURCE}+)`, 'u');
 
 /** `FOR <循环变量>, 起点, 终点`：循环变量是语法声明位（真实语料大量不写 #DIM） */
 const FOR_HEAD_RE = /^[\t \u3000]*FOR[\t \u3000]+([^\s,]+)/i;
@@ -235,7 +249,6 @@ const DOUBLE_QUOTE = 0x22;
 const BACKSLASH = 0x5c;
 const SEMICOLON = 0x3b;
 const PERCENT = 0x25;
-const FULLWIDTH_PERCENT = 0xff05;
 const AT_SIGN = 0x40;
 const OPEN_PAREN = 0x28;
 const OPEN_BRACKET = 0x5b;
@@ -294,28 +307,16 @@ function wildAdjacent(text: string, start: number, end: number): boolean {
 type Range = readonly [start: number, endExclusive: number];
 
 /**
- * 名字内部符号（`・` 等）——记号紧邻它们时，说明它只是**一个更长声明名的一段**。
+ * 名字内部符号那一张表**已删**（D01，2026-11-20）。
  *
- * 语料实证：`#DIM CONST P37夢幻遺跡・一階通路 = 37` 的声明名含 `・`，而记号尺
- * （`MODEL_TOKEN_CLASS`，与着色同源、不许在本层另开一把）会在 `・` 处切开，
- * 于是 `P37夢幻遺跡` / `一階通路` 两段都查不到声明——这类误报在语料里成片出现。
- * ERB 表达式没有 `・` 运算符，故紧邻即"更长名字的一段"是安全判据（宁可漏报）。
+ * 它此前把 `・`(U+30FB) `･` 零宽空格 `（）／？` 逐字符列进"紧邻即放过"的白名单，
+ * 为的是掩盖**记号尺切错了名字**这件事（`MODEL_TOKEN_CLASS` 在 `・` 处下刀，
+ * 于是一枚声明名碎成两段、两段都查无）。引擎的 `ReadSingleIdentifierROS` 只认
+ * {@link ERB_NAME_RUN_SOURCE} 那一串分隔符，上面这些字符**一枚都不在其中**——
+ * 换成引擎那把尺之后，记号本身就是整枚名字，"邻接白名单"连同它的漏报面一起消失。
+ * 保留这张表 = 保留第二判据的复发形态，故整块删除，逐字符差异改由
+ * `undefined-name.drift.test.ts` 与语料闸门 `undefined-name.corpus.test.ts` 钉死。
  */
-const NAME_INTERNAL_SYMBOLS: ReadonlySet<number> = new Set([
-  0x30fb, // ・ 中点
-  0xff65, // ･ 半角中点
-  0x200b, // ​ 零宽空格（语料把 `P235​​舞​的房間` 原样声明成名字）
-  0xff08, // （
-  0xff09, // ）
-  0xff0f, // ／
-  0xff1f, // ？
-]);
-
-function nameInternalAdjacent(text: string, start: number, end: number): boolean {
-  const before = start > 0 ? text.charCodeAt(start - 1) : -1;
-  const after = end < text.length ? text.charCodeAt(end) : -1;
-  return NAME_INTERNAL_SYMBOLS.has(before) || NAME_INTERNAL_SYMBOLS.has(after);
-}
 
 /** 索引名字符串的终止符：空白与表达式运算符（`・～／` 这类名字内符号不算） */
 const INDEX_TERMINATORS: ReadonlySet<number> = new Set([
@@ -669,13 +670,10 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
       const upper = token.toUpperCase();
       if (ERB_LANGUAGE_KEYWORDS.has(upper) || EXPRESSION_STATEMENTS.has(upper)) continue;
       if (colonAdjacent(code, start, end)) continue;
-      if (nameInternalAdjacent(code, start, end)) continue;
       if (wildAdjacent(code, start, end)) continue;
       if (insideRanges(indexRanges, start, end)) continue;
       if (insideRanges(bracketRanges, start, end)) continue;
       if (isCaseLine && HAS_NON_ASCII.test(token)) continue;
-      // 全角 `％` 是名字后缀 / 通配标记（`増加_２０％`），不是取模
-      if (end < code.length && code.charCodeAt(end) === FULLWIDTH_PERCENT) continue;
       if (callAdjacent(code, end)) continue;
       if (scope.has(upper)) continue;
 

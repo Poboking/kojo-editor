@@ -162,7 +162,11 @@ describe('collectUndefinedNameDiagnostics · 假阳性（一条都不许报）',
     expect(collect('IF FLAG:￥人気 >= 300')).toEqual([]);
     expect(collect('IF [[霊夢]] == NAME')).toEqual([]);
     expect(collect('IF TALENT:ARG:幼児／幼児退行')).toEqual([]);
-    expect(collect('IF MONEY < 増加_２０％')).toEqual([]);
+    // D01：`％`(U+FF05) 不是引擎分隔符 ⇒ `増加_２０％` 是**一整枚名字**（语料原样
+    // `#DIM 増加_２０％`，ERB/CASINO/CASINO_SLOT_TYUSEN.ERB:610），不再靠"邻接全角百分号"逐字符放过。
+    expect(collect('#DIM 増加_２０％\nIF MONEY < 増加_２０％')).toEqual([]);
+    // 反证：同一形状没声明过 ⇒ 整枚照报（不是切成 `増加_２０` 半段）
+    expect(collect('IF MONEY < 増加_２１％').map((d) => d.name)).toEqual(['増加_２１％']);
   });
 
   it('CASE 值的无引号文本（含非 ASCII）不猜', () => {
@@ -220,12 +224,20 @@ describe('collectUndefinedNameDiagnostics · 批次十一收窄（每条都有�
     expect(collect('#DIM ARR[10];旧式数组\nIF ARR[0] > 0')).toEqual([]);
   });
 
-  it('名字内符号（`・` `（）` `／` `？` 零宽空格）紧邻的记号只是更长声明名的一段', () => {
+  it('名字里的非分隔符符号（`・` `（）` `／` `？` `·` 零宽空格）连成**一整枚名字**（D01 换尺）', () => {
+    // 这四枚符号都不在引擎 `_searchValues` 里 ⇒ 使用点与声明点是同一枚整名，查得到就不报。
+    // 每条都按**语料原样**声明（左边是盘上的真写法），不再靠"邻接白名单"逐字符放过：
+    // 白名单是记号尺切错名字的补丁，换尺后它掩盖的漏报面一并消失。
     expect(collect('#DIM CONST P37夢幻遺跡・一階通路 = 37\nIF CFLAG:100 == P37夢幻遺跡・一階通路')).toEqual([]);
-    expect(collect('IF ARG == 楽譜最大数（シリーズ毎）')).toEqual([]);
-    expect(collect('IF CHECK_自室にいるか？_K31(1)')).toEqual([]);
-    expect(collect('IF ARG == P235​​舞​的房間')).toEqual([]);
-    expect(collect('IF ARG == Ｖ／Ａ')).toEqual([]);
+    expect(collect('#DIM CONST 楽譜最大数（シリーズ毎） = 50\nIF ARG == 楽譜最大数（シリーズ毎）')).toEqual([]);
+    expect(collect('IF CHECK_自室にいるか？_K31(1)')).toEqual([]); // 调用形：`(` 是引擎分隔符 ⇒ 函数名不报
+    expect(collect('#DIM CONST P235\u200b\u200b舞\u200b的房間 = 235\nIF ARG == P235\u200b\u200b舞\u200b的房間')).toEqual([]);
+    expect(collect('#DIM Ｖ／Ａ\nIF ARG == Ｖ／Ａ')).toEqual([]);
+    expect(collect('#DIM CONST P23温泉·更衣间\t= 23\nIF ARG == P23温泉·更衣间')).toEqual([]);
+    // 反证①：同一形状**没声明** ⇒ 整枚照报（旧尺在这里报的是两段碎名，才是它存在的理由）
+    expect(collect('IF ARG == 楽譜最大数（シリーズ問）').map((d) => d.name)).toEqual(['楽譜最大数（シリーズ問）']);
+    // 反证②：碎成两段的老形状不再出现——报出来的名字含 `（）`，且只有一条
+    expect(collect('IF ARG == Ｖ／Ｂ').map((d) => [d.name, d.startColumn, d.endColumn])).toEqual([['Ｖ／Ｂ', 11, 14]]);
   });
 
   it('冒号两侧可隔空白（Emuera 允许 `TALENT: 恋慕` / `RAND : 5`）', () => {

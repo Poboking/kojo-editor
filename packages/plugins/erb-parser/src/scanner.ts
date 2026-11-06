@@ -266,13 +266,75 @@ export function parseDimDeclaration(trimmed: string): { directive: string; name:
 }
 
 /**
- * 名字字符的**码位实现**（字符集唯一一份，`isErbDimNameChar` 只是它的字符串外壳）。
+ * 名字边界判据的**唯一字面真源**：引擎 `Emuera/Runtime/Script/Parser/LexicalAnalyzer.cs`
+ * 的 `_searchValues`（逐码位抄录，一字符不许多、不许少）。`ReadSingleIdentifierROS`
+ * 就是「读到任一分隔符为止」⇒ **引擎眼里的名字 = 不含下列字符的极大段**。
+ *
+ * 这条真源存在的理由（D01，2026-11-20）：未定义名腿此前用记号尺
+ * （`MODEL_TOKEN_CLASS` = `\p{L}\p{N}_`）切记号，于是 `P23温泉·更衣间` 在 `·`(U+00B7)
+ * 处被劈成两段——`·` **不是**引擎分隔符，引擎读到的是一整枚名字。真语料实测
+ * 1,190 条命中里 1,141 条（95.9%）是这个形状。逐字符往黑名单里补 `·` 只会造出
+ * 第二判据的复发形态，故这里只留一把尺：**不是分隔符就连成一个名字**。
+ *
+ * 注意引擎这串里 `.` `~` `?` `#` `$` `@` **是**分隔符、反引号 **不是**；
+ * 非 ASCII 只列了全角空格 `\u3000`（半角空格与制表也在内）。与声明侧排除集的逐字符差异
+ * 由 `undefined-name.drift.test.ts` 钉死，不许静默漂移。
+ */
+export const ERB_ENGINE_NAME_DELIMITERS = ' \t　.+-*/%=!<>|&^~?#)}],:({[$\'"@;';
+
+/** 引擎分隔集的 ASCII 查表位（由上面那一串填出，不另抄） */
+const ENGINE_DELIM_ASCII = new Uint8Array(128);
+/** 引擎分隔集里的非 ASCII 码位（由上面那一串填出；现只有 `\u3000`） */
+const ENGINE_DELIM_EXTRA = new Set<number>();
+for (const ch of ERB_ENGINE_NAME_DELIMITERS) {
+  const code = ch.codePointAt(0)!;
+  if (code < 128) ENGINE_DELIM_ASCII[code] = 1;
+  else ENGINE_DELIM_EXTRA.add(code);
+}
+
+/**
+ * 引擎口径的**名字字符**判据（码位；未定义名腿切记号用的就是它）。
+ *
+ * `NaN` = 空串上的 `charCodeAt(0)`：不是字符，也就不是名字字符。
+ */
+export function isErbEngineNameCode(code: number): boolean {
+  if (!Number.isFinite(code)) return false;
+  if (code < 128) return ENGINE_DELIM_ASCII[code] === 0;
+  return !ENGINE_DELIM_EXTRA.has(code);
+}
+
+/** 由同一串真源组装的正则字符类（`u` 旗安全：控制码位与非 ASCII 一律写 `\uXXXX`） */
+function engineNameClassSource(): string {
+  let out = '[^';
+  for (const ch of ERB_ENGINE_NAME_DELIMITERS) {
+    const code = ch.codePointAt(0)!;
+    out += code < 0x20 || code > 0x7e ? `\\u${code.toString(16).padStart(4, '0')}` : /[\\\]^[-]/.test(ch) ? `\\${ch}` : ch;
+  }
+  return `${out}]`;
+}
+
+/**
+ * 名字段的**正则形态**（与 {@link isErbEngineNameCode} 同源的另一个出口）：
+ * `new RegExp(ERB_NAME_RUN_SOURCE + '+', 'gu')` 切出来的段 = 引擎读到的极大名字段。
+ * 需要正则的消费方**只许**引这一枚，再写一遍字符类就是第二判据。
+ */
+export const ERB_NAME_RUN_SOURCE = engineNameClassSource();
+
+/**
+ * 名字字符的**码位实现**（声明侧字符集，`isErbDimNameChar` 只是它的字符串外壳）。
  *
  * 为什么要码位表：项目级变量引用要把**每一行可见代码**按名字字符切段（真语料 339 万行），
  * 逐字符跑 `/[\s,…]/` 正则是 2026-10-20 PS-3 批刚消掉的那类开销（5,000 行 25.7 ms）。
  * 排除集除空白外全是 ASCII，表查一次就够；空白里的非 ASCII 部分见
  * {@link isNonAsciiSpace}——它必须与 JS `\s` **逐码位等价**，否则真语料里的全角空格
  * （`\u3000`）会被算进名字，切出的段永远匹配不上声明名。
+ *
+ * **这把尺与引擎那把的逐字符差异**（D01 择 (b)：诊断腿先对齐、声明侧留待后续，
+ * 差异台账与实测量见 `undefined-name.drift.test.ts`）：本排除集**缺** `.` `~` `?` `#` `$` `@`
+ * 六枚引擎分隔符、**多**一枚引擎不算分隔符的反引号，另外把 JS `\s` 的非 ASCII 空白
+ * 全算分隔符（引擎只算 `\u3000`）。eraTW 4.981 全量 38,331 条声明行实测：换成引擎那把，
+ * 唯一名 **18,864 → 18,864、切名不一致 0** ⇒ 本盘零键变化，收口成本在名录/快照面上为零，
+ * 但会掀掉 `dim-family.test.ts` 钉的 `\s` 对拍（另一条车道的判据），故本批不动它。
  */
 const DIM_NAME_DELIMITED = new Uint8Array(128);
 for (const ch of ',;:()[]{}<>+-*/%=!&|\'"`') DIM_NAME_DELIMITED[ch.charCodeAt(0)] = 1;
