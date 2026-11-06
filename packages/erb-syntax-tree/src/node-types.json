@@ -2218,6 +2218,10 @@
             "named": true
           },
           {
+            "type": "tryccallstr_line",
+            "named": true
+          },
+          {
             "type": "trycgoto_line",
             "named": true
           },
@@ -2231,6 +2235,10 @@
           },
           {
             "type": "trycjumpform_line",
+            "named": true
+          },
+          {
+            "type": "trycjumpstr_line",
             "named": true
           }
         ]
@@ -2720,6 +2728,10 @@
     "named": true
   },
   {
+    "type": "tryccallstr_line",
+    "named": true
+  },
+  {
     "type": "trycgoto_line",
     "named": true
   },
@@ -2733,6 +2745,10 @@
   },
   {
     "type": "trycjumpform_line",
+    "named": true
+  },
+  {
+    "type": "trycjumpstr_line",
     "named": true
   },
   {

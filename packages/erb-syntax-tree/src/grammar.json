@@ -2031,6 +2031,10 @@
               },
               {
                 "type": "SYMBOL",
+                "name": "tryccallstr_line"
+              },
+              {
+                "type": "SYMBOL",
                 "name": "trycgoto_line"
               },
               {
@@ -2044,6 +2048,10 @@
               {
                 "type": "SYMBOL",
                 "name": "trycjumpform_line"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "trycjumpstr_line"
               }
             ]
           }
@@ -2597,6 +2605,17 @@
         }
       }
     },
+    "tryccallstr_line": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:[tT][rR][yY][cC][cC][aA][lL][lL][sS][tT][rR][^A-Za-z_\\r\\n][^\\r\\n]*|[tT][rR][yY][cC][cC][aA][lL][lL][sS][tT][rR][ \\t\\u3000]*\\r?\\n)"
+        }
+      }
+    },
     "trycgoto_line": {
       "type": "TOKEN",
       "content": {
@@ -2638,6 +2657,17 @@
         "content": {
           "type": "PATTERN",
           "value": "(?:[tT][rR][yY][cC][jJ][uU][mM][pP][fF][oO][rR][mM][^A-Za-z_\\r\\n][^\\r\\n]*|[tT][rR][yY][cC][jJ][uU][mM][pP][fF][oO][rR][mM][ \\t\\u3000]*\\r?\\n)"
+        }
+      }
+    },
+    "trycjumpstr_line": {
+      "type": "TOKEN",
+      "content": {
+        "type": "PREC",
+        "value": 10,
+        "content": {
+          "type": "PATTERN",
+          "value": "(?:[tT][rR][yY][cC][jJ][uU][mM][pP][sS][tT][rR][^A-Za-z_\\r\\n][^\\r\\n]*|[tT][rR][yY][cC][jJ][uU][mM][pP][sS][tT][rR][ \\t\\u3000]*\\r?\\n)"
         }
       }
     },
