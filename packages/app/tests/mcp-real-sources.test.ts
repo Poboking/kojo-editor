@@ -366,7 +366,16 @@ describe('runSupplemental：只读 IO 腿', () => {
       invoke: async () => null,
     }));
     const absent = (await sup('fs.stat', { relPath: 'nope.txt' }, scope)) as Record<string, unknown>;
-    expect(absent).toEqual({ path: 'nope.txt', exists: false });
+    // Wave4 ③：只读应答一律附 fsFreshness；判定器未装配也**照样给字段**（available:false + 理由，缺席可见）。
+    expect(absent).toEqual({
+      path: 'nope.txt',
+      exists: false,
+      fsFreshness: expect.objectContaining({
+        available: false,
+        stale: null,
+        staleReason: expect.stringContaining('未装配'),
+      }),
+    });
   });
 
   it('fs.stat：存在时投影 size/mtimeMs/isDirectory', async () => {
@@ -1146,8 +1155,21 @@ describe('任务 B：第四波 6 枚只读具名工具（真读数 / 截断 / �
     expect(out['total']).toBe(2);
     expect(out['truncated']).toBe(false);
     expect(out['items']).toEqual([
-      { path: 'a.txt', exists: true, size: 42, mtimeMs: 7 },
-      { path: 'nope.txt', exists: false, size: null, mtimeMs: null },
+      {
+        path: 'a.txt',
+        exists: true,
+        size: 42,
+        mtimeMs: 7,
+        // Wave4 ③：逐项标注（判定器未装配 ⇒ available:false + 理由，字段不缺席）。
+        fsFreshness: expect.objectContaining({ available: false, stale: null, target: 'a.txt' }),
+      },
+      {
+        path: 'nope.txt',
+        exists: false,
+        size: null,
+        mtimeMs: null,
+        fsFreshness: expect.objectContaining({ available: false, stale: null, target: 'nope.txt' }),
+      },
     ]);
     expect(invoke).toHaveBeenCalledWith('stat_files', { paths: ['D:/proj/a.txt', 'D:/proj/nope.txt'] });
   });
@@ -1339,10 +1361,19 @@ describe('事件环形缓冲（bindEventRing）', () => {
   afterEach(() => bindEventRing(null));
 
   it('emit 进缓冲 → resource 通道读数：空缓冲是真读数；环形序还原 + 载荷裁剪', async () => {
-    const handlers = new Map<string, (p: unknown) => void>();
+    // 同名事件现在有多个订阅者（事件环 + Wave4 ③ 失效短账都订 file.changed）：
+    // 假总线按**名单×处理器列表**登记，分发时逐个调用（与真总线同形）。
+    const handlers = new Map<string, Array<(p: unknown) => void>>();
     const kernel: McpKernelLike = {
       ...fakeKernel().kernel,
-      bus: { on: (name: string, cb: (p: unknown) => void) => { handlers.set(name, cb); return () => {}; } },
+      bus: {
+        on: (name: string, cb: (p: unknown) => void) => {
+          handlers.set(name, [...(handlers.get(name) ?? []), cb]);
+          return () => {
+            handlers.set(name, (handlers.get(name) ?? []).filter((h) => h !== cb));
+          };
+        },
+      },
     };
     bindEventRing(kernel);
     expect(handlers.size).toBeGreaterThan(0);
@@ -1350,8 +1381,11 @@ describe('事件环形缓冲（bindEventRing）', () => {
     const before = (await sources.readResourceData!(KOJO_RESOURCE_URIS.events, scope)) as unknown[];
     expect(before).toEqual([]);
     const first = [...handlers.keys()][0]!;
-    handlers.get(first)!('hello');
-    handlers.get(first)!('x'.repeat(500));
+    const dispatch = (payload: unknown): void => {
+      for (const cb of handlers.get(first) ?? []) cb(payload);
+    };
+    dispatch('hello');
+    dispatch('x'.repeat(500));
     const after = (await sources.readResourceData!(KOJO_RESOURCE_URIS.events, scope)) as { name: string; payload: unknown }[];
     expect(after).toHaveLength(2);
     expect(after[0]).toMatchObject({ name: first, payload: 'hello' });

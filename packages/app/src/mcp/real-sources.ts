@@ -44,9 +44,12 @@ import type { EditorCommandContext, EditorSymbolLocation } from '@kojo/plugin-ap
 import type { CommandEntry } from '../ui/commands';
 import { recordQuickFixTickets, type QuickFixPaneResolver } from './quick-fix';
 import { registerMcpWiringSources, type McpWiringSources } from './wiring';
+import { bindFsFreshness, getFsFreshnessTracker } from './fs-freshness';
+import type { FsFreshnessTracker } from './fs-freshness';
 import {
   clampInt,
   createIoResourceData,
+  createFsFreshnessResource,
   createKernelIo,
   createRunSupplemental,
   KOJO_RESOURCE_URIS,
@@ -1069,6 +1072,12 @@ export interface McpRealSourceInjection {
   readonly getFeaturesService?: () => Promise<unknown> | unknown;
   /** `problems.quickFix` 的 pane 反查 seam（缺省 = 动态 import livePanes + applyTextEdits 的生产解析）。 */
   readonly getQuickFixPane?: QuickFixPaneResolver;
+  /**
+   * 外部写盘失效判定器（Wave4 余项 ③）：缺省用 `bindFsFreshness(kernel)` 绑上的生产判定器；
+   * 测试可注入假账本。**给 null 也算显式选择**：只读应答仍附 `fsFreshness`，值如实为
+   * `{available:false, stale:null, staleReason}`（缺席可见，不是缺字段）。
+   */
+  readonly fsFreshness?: () => FsFreshnessTracker | null;
 }
 
 function currentRootDirOf(kernel: McpKernelLike | null): string | null {
@@ -1164,7 +1173,9 @@ function buildReadResourceData(
   ioResources: McpResourceDataReader,
   deps: McpSemanticDeps,
 ): NonNullable<McpHostDeps['readResourceData']> {
-  return async (uri: string): Promise<unknown> => {
+  // `scope` 必须透传：外部写盘失效账按「会话 × 路径」建基线，丢了会话号就等于把所有客户端
+  // 混成一个人（此前的 `null` 占位就是把 IO 面的会话维度抹掉了）。
+  return async (uri: string, scope: McpSessionScope): Promise<unknown> => {
     switch (uri) {
       case KOJO_RESOURCE_URIS.diagnostics: {
         const monaco = (await unwrapGetter<McpSemanticMonaco>(deps.getMonaco())) ?? null;
@@ -1190,7 +1201,7 @@ function buildReadResourceData(
         };
       }
       default:
-        return ioResources(uri, null as unknown as McpSessionScope);
+        return ioResources(uri, scope);
     }
   };
 }
@@ -1221,6 +1232,9 @@ export async function buildRealMcpSources(
   // 真 Kernel 结构在组装点一次性窄化（project/io/plugins/services/slots/bus 五面逐字段核对过）。
   const kernel = (host.getKernel() ?? null) as unknown as McpKernelLike | null;
   bindEventRing(kernel);
+  // Wave4 余项 ③：外部写盘失效短账（订阅既有 file.changed / file.watchState + 读
+  // kernel.fileWatch.state()）。与事件环同一幂等绑定策略：同一内核重复装配不重复订阅。
+  bindFsFreshness(kernel);
 
   // 命令读数与工具分级同源：同一份 fail-closed 投影，读到的 tier 就是工具的 tier。
   const mcpCommands = (): CommandEntry[] => projectCommandsForMcp(host.getCommands());
@@ -1233,6 +1247,7 @@ export async function buildRealMcpSources(
       injection?.searchInFiles ??
       (await import('../bridge/search')).searchInFiles as unknown as McpIoDeps['searchInFiles'],
     getQuickFixPane: injection?.getQuickFixPane,
+    fsFreshness: injection?.fsFreshness ?? (() => getFsFreshnessTracker()),
   };
 
   const semanticDeps: McpSemanticDeps = {
@@ -1252,6 +1267,8 @@ export async function buildRealMcpSources(
     semantic: buildSemanticReaders(semanticDeps),
     kernelIo: createKernelIo(ioDeps),
     readResourceData: buildReadResourceData(createIoResourceData(ioDeps, recentEvents, countEvents), semanticDeps),
+    // 宿主侧追加的第 9 项 resource（经 wiring 的 `resources` 注入口登记，冻结契约表零改动）。
+    resources: [createFsFreshnessResource(ioDeps)],
     runSupplemental: (name, args, scope) => {
       // LaneH / Wave4 #4 判性落地（逐条证据见 mcp-host/src/index.ts 第五波注释与 commit 回执）：
       // 宿主没有可从 MCP 注入面安全复用、且能诚实回报结果的「打开文档 / 定位光标」真源。

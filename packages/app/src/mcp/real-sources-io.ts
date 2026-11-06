@@ -36,16 +36,30 @@
  *   `applyTextEdits`：Monaco **模型内**单次编辑（一个撤销步、可见脏、**不落盘、不触 io、不 invoke**，
  *   铁律 5/6/7 不新建写通道）；稳定 actionId 台账 + 逐闸显式拒绝见 `quick-fix.ts`，
  *   `run` 式意图 / 糖投影仍保持显式 NOT_WIRED（能力没接上的部分不假成功）。
+ * - **Wave4 余项 ③（外部写盘感知 → 失效信号）**：只读腿的应答一律附 `fsFreshness` 字段
+ *   （判定器 / 真源出处 / 监视覆盖 / 有界账读数），真源见 `./fs-freshness`：
+ *   `kernel.fileWatch.state()`（`start_watch` 回执的宿主侧形态）+ 总线 `file.changed` /
+ *   `file.watchState`。本批**只做感知与标注**：写腿的响应形状、双闸与落盘语义零改动，
+ *   只在广播同一调用栈里补一次自写记账（`noteSelfWrite`，用于把「自己刚写的」与「外部改的」
+ *   分开归因）；**绝不新建写通道、绝不因感知需要而放宽写闸**。
+ *   判定缺席一律可见：监视不可用 / 路径不在监视域 / 会话内没有可比基线 / 账已溢出
+ *   ⇒ `stale:null` + `staleReason`，绝不用乐观 `false`、绝不用空串或默认值假装有。
  */
-import { McpFailure } from '@kojo/mcp-host';
+import { McpFailure, truncateResourceText } from '@kojo/mcp-host';
 import type {
 
   McpKernelIo,
   McpReaderFn,
+  McpResource,
   McpSessionScope,
 } from '@kojo/mcp-host';
 import type { CommandEntry } from '../ui/commands';
 import { createQuickFixApplyLeg, type QuickFixPaneResolver } from './quick-fix';
+import {
+  fsFreshnessAbsentPayload,
+  fsFreshnessPayload,
+  type FsFreshnessTracker,
+} from './fs-freshness';
 
 /* ------------------------------- 窄结构类型 ------------------------------- */
 
@@ -108,6 +122,19 @@ export interface McpKernelLike {
     readonly emit?: (name: string, payload: unknown) => void;
   };
   readonly slots: { readonly query: (slot: string) => readonly unknown[] };
+  /**
+   * 文件监视控制器（真 `Kernel.fileWatch: FileWatchController`）。MCP 只读它自己的
+   * `state()`——即 `start_watch` 回执的宿主侧形态（哪些根监视上了、哪些没监视上、为什么）；
+   * **不调 `start` / `stop`**（内核是 `watchDirs` 唯一调用方，监视语义零改动）。
+   * 测试假件可缺席 ⇒ 失效判定降级为「覆盖不可用」并如实标注（不静默）。
+   */
+  readonly fileWatch?: {
+    readonly state: () => {
+      status: string;
+      roots: readonly string[];
+      failures: readonly { root: string; reason: string }[];
+    };
+  };
 }
 
 /** 宿主真源的窄投影（与 `McpWiringSources` 的 commands 同源）。 */
@@ -118,6 +145,12 @@ export interface McpIoDeps {
   readonly searchInFiles: (request: McpSearchRequestLike) => Promise<McpSearchResultLike>;
   /** `problems.quickFix` 的 pane 反查 seam（缺席 ⇒ 生产动态 import 解析，见 quick-fix.ts）。 */
   readonly getQuickFixPane?: QuickFixPaneResolver;
+  /**
+   * 外部写盘失效判定器（Wave4 余项 ③；生产由 `real-sources.ts` 绑定内核后给到，
+   * 测试可注入或缺席）。缺席 ⇒ 只读应答仍附 `fsFreshness`，值如实为
+   * `{available:false, stale:null, staleReason}`（铁律 4：字段不因缺席而消失）。
+   */
+  readonly fsFreshness?: () => FsFreshnessTracker | null;
 }
 
 /* ------------------------------- 路径闸（与 Rust 同尺） ------------------------------- */
@@ -297,8 +330,24 @@ function rethrowWriteGate(err: unknown, relPath: string): never {
  * 写成功后尽力广播内核既有 `file.changed`（宿主刷新既有通道，App.tsx 同款）；缺席/失败如实回报。
  * `kind` 沿用 `@kojo/plugin-api` 的 `FileChangeKind`：新建 / 改名落点用 `'add'`、内容改写用
  * `'change'`、删除 / 改名源用 `'unlink'`（additive 扩 kind，旧 `'add' | 'change'` 调用方零改动）。
+ *
+ * Wave4 余项 ③：广播**之前**先向失效判定器记一笔自写（同一调用栈 ⇒ 归因精确，
+ * 紧随其后的监视回声会被并成同一条事实而不是第二次改动）。**只记账，不改写腿语义**：
+ * `refreshed` 的取值仍只由广播成功与否决定，判定器缺席 / 抛错都不影响落盘与回执形状。
  */
-function emitFileChanged(kernel: McpKernelLike, kind: 'add' | 'change' | 'unlink', absPath: string): boolean {
+function emitFileChanged(
+  kernel: McpKernelLike,
+  kind: 'add' | 'change' | 'unlink',
+  absPath: string,
+  freshness?: { readonly tracker: FsFreshnessTracker | null; readonly scope: McpSessionScope | null | undefined },
+): boolean {
+  if (freshness?.tracker) {
+    try {
+      freshness.tracker.noteSelfWrite({ abs: absPath, kind, scope: freshness.scope });
+    } catch {
+      /* 自写记账失败不改变写结果：判定器自身会在应答里如实标出账未接上 */
+    }
+  }
   const emit = kernel.bus.emit;
   if (typeof emit !== 'function') return false;
   try {
@@ -307,6 +356,76 @@ function emitFileChanged(kernel: McpKernelLike, kind: 'add' | 'change' | 'unlink
   } catch {
     return false;
   }
+}
+
+/* ------------------------------- 失效标注（只读应答附加） ------------------------------- */
+
+function trackerOf(deps: McpIoDeps): FsFreshnessTracker | null {
+  try {
+    return deps.fsFreshness?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 单文件读取的失效标注：判定器在场就给完整判定（并把本次读取进账作为下次基线），
+ * 缺席也**照样给字段**，值为 `stale:null` + 理由——客户端永远能区分「判定器没装」与「没改过」。
+ */
+function fsFreshnessField(
+  deps: McpIoDeps,
+  abs: string,
+  rel: string,
+  scope: McpSessionScope | null | undefined,
+): Record<string, unknown> {
+  if (abs === '') return fsFreshnessNoBasePayload(rel, 'file');
+  const tracker = trackerOf(deps);
+  if (!tracker) return fsFreshnessAbsentPayload(rel, 'file');
+  try {
+    return fsFreshnessPayload(tracker.verdictOf({ abs, rel, scope }));
+  } catch (err) {
+    return {
+      available: false,
+      stale: null,
+      staleReason: `失效判定器调用失败（${err instanceof Error ? err.message : String(err)}）：无法判定，不冒充 false`,
+      target: rel,
+      granularity: 'file',
+    };
+  }
+}
+
+/** 目录 / 检索级标注：覆盖期内该目录下任何路径被动过即 `stale:true`。 */
+function fsFreshnessListing(
+  deps: McpIoDeps,
+  dirAbs: string,
+  dirRel: string,
+  scope: McpSessionScope | null | undefined,
+): Record<string, unknown> {
+  if (dirAbs === '') return fsFreshnessNoBasePayload(dirRel, 'listing');
+  const tracker = trackerOf(deps);
+  if (!tracker) return fsFreshnessAbsentPayload(dirRel, 'listing');
+  try {
+    return fsFreshnessPayload(tracker.listingOf({ dirAbs, dirRel, scope }));
+  } catch (err) {
+    return {
+      available: false,
+      stale: null,
+      staleReason: `失效判定器调用失败（${err instanceof Error ? err.message : String(err)}）：无法判定，不冒充 false`,
+      target: dirRel,
+      granularity: 'listing',
+    };
+  }
+}
+
+/** 无基准根（项目未开 / 载荷缺 rootDir）：判定不可做，如实标注而不是给个 false。 */
+function fsFreshnessNoBasePayload(target: string, granularity: 'file' | 'listing'): Record<string, unknown> {
+  return {
+    available: false,
+    stale: null,
+    staleReason: '没有可判定的绝对路径基准（项目未打开或载荷缺 rootDir）：失效判定无从谈起（不静默）',
+    target,
+    granularity,
+  };
 }
 
 /* ------------------------------- 通用小件 ------------------------------- */
@@ -364,7 +483,7 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
     return projectSummaryOf(project);
   };
 
-  const fileTree: McpReaderFn = async (args) => {
+  const fileTree: McpReaderFn = async (args, scope) => {
     const kernel = deps.getKernel();
     if (!kernel) {
       throw new McpFailure('RESOURCE_UNAVAILABLE', '内核未到场：文件树数据源不可用（不静默）');
@@ -394,10 +513,18 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
         isDirectory: e['isDirectory'] === true,
       });
     }
-    return { root: '.', maxDepth, entries, total: raw.length, truncated: raw.length > entries.length };
+    return {
+      root: '.',
+      maxDepth,
+      entries,
+      total: raw.length,
+      truncated: raw.length > entries.length,
+      // 目录级失效标注（工具 projectFileTree 与 resource kojo://project/file-tree 同源同标注）。
+      fsFreshness: fsFreshnessListing(deps, rootDir, '.', scope),
+    };
   };
 
-  const searchAll: McpReaderFn = async (args) => {
+  const searchAll: McpReaderFn = async (args, scope) => {
     const kernel = deps.getKernel();
     const project = requireProject(kernel);
     const rootDir = asString(project['rootDir']);
@@ -431,6 +558,8 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
       filesScanned: result.filesScanned,
       elapsedMs: result.elapsedMs,
       skipped: result.skipped,
+      // 检索结果是从盘上现算的：这里说「自你上一次从本根检索以来，根下动过几处」。
+      fsFreshness: fsFreshnessListing(deps, rootDir, '.', scope),
     };
   };
 
@@ -467,7 +596,10 @@ export function createRunSupplemental(deps: McpIoDeps): (
     };
   };
 
-  const readFile = async (args: Record<string, unknown>): Promise<unknown> => {
+  const readFile = async (
+    args: Record<string, unknown>,
+    scope: McpSessionScope | null | undefined,
+  ): Promise<unknown> => {
     const kernel = deps.getKernel();
     const project = requireProject(kernel);
     const rootDir = asString(project['rootDir']);
@@ -475,6 +607,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：读文件无域基准根（不静默）');
     }
     const abs = resolveWithinRoot(rootDir, asString(args['relPath']));
+    const rel = toRelativePath(abs, rootDir);
     const maxChars = clampInt(args['maxChars'], 24_000, 1, 200_000);
     const text = await deps.invoke('read_file_bytes', { path: abs });
     if (typeof text !== 'string') {
@@ -482,14 +615,20 @@ export function createRunSupplemental(deps: McpIoDeps): (
     }
     const { text: cut, truncated } = truncateChars(text, maxChars);
     return {
-      path: toRelativePath(abs, rootDir),
+      path: rel,
       text: cut,
       textLength: text.length,
       truncated,
+      // Wave4 ③：本次给的是 `atMs` 这一刻的盘态；`stale` 说的是「你上一次从本宿主读到的那份」
+      // 之后盘上是否又被动过（真源 = 监视回执 + file.changed 短账，判不了即 null + 理由）。
+      fsFreshness: fsFreshnessField(deps, abs, rel, scope),
     };
   };
 
-  const statFile = async (args: Record<string, unknown>): Promise<unknown> => {
+  const statFile = async (
+    args: Record<string, unknown>,
+    scope: McpSessionScope | null | undefined,
+  ): Promise<unknown> => {
     const kernel = deps.getKernel();
     const project = requireProject(kernel);
     const rootDir = asString(project['rootDir']);
@@ -497,20 +636,31 @@ export function createRunSupplemental(deps: McpIoDeps): (
       throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：stat 无域基准根（不静默）');
     }
     const abs = resolveWithinRoot(rootDir, asString(args['relPath']));
+    const rel = toRelativePath(abs, rootDir);
     const stat = await deps.invoke('stat_file', { path: abs });
     // Rust 返回 Option<FileStatDto>：null = 不存在 ⇒ {exists:false} 是真读数（不编造 size=0）。
-    if (!stat || typeof stat !== 'object') return { path: toRelativePath(abs, rootDir), exists: false };
+    if (!stat || typeof stat !== 'object') {
+      return {
+        path: rel,
+        exists: false,
+        fsFreshness: fsFreshnessField(deps, abs, rel, scope),
+      };
+    }
     const s = stat as Record<string, unknown>;
     return {
-      path: toRelativePath(abs, rootDir),
+      path: rel,
       exists: true,
       size: typeof s['size'] === 'number' ? s['size'] : null,
       mtimeMs: typeof s['mtimeMs'] === 'number' ? s['mtimeMs'] : null,
       isDirectory: s['isDirectory'] === true,
+      fsFreshness: fsFreshnessField(deps, abs, rel, scope),
     };
   };
 
-  const listDir = async (args: Record<string, unknown>): Promise<unknown> => {
+  const listDir = async (
+    args: Record<string, unknown>,
+    scope: McpSessionScope | null | undefined,
+  ): Promise<unknown> => {
     const kernel = deps.getKernel();
     const project = requireProject(kernel);
     const rootDir = asString(project['rootDir']);
@@ -536,7 +686,14 @@ export function createRunSupplemental(deps: McpIoDeps): (
       }
     }
     const total = Array.isArray(raw) ? raw.length : 0;
-    return { path: relativeOrDot(abs, rootDir), entries: items, total, truncated: total > items.length };
+    return {
+      path: relativeOrDot(abs, rootDir),
+      entries: items,
+      total,
+      truncated: total > items.length,
+      // 目录级：覆盖期内该目录下任何路径被动过即 stale:true（逐条计数在 entries 账里）。
+      fsFreshness: fsFreshnessListing(deps, abs, relativeOrDot(abs, rootDir), scope),
+    };
   };
 
   const workspaceRoots: McpReaderFn = async (args) => {
@@ -546,7 +703,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
     return { roots: roots.slice(0, maxResults), total: roots.length, truncated: roots.length > maxResults };
   };
 
-  const workspaceSearchAll: McpReaderFn = async (args) => {
+  const workspaceSearchAll: McpReaderFn = async (args, scope) => {
     const kernel = deps.getKernel();
     const project = requireProject(kernel);
     const rootDir = asString(project['rootDir']);
@@ -558,9 +715,9 @@ export function createRunSupplemental(deps: McpIoDeps): (
       throw new McpFailure('INVALID_ARGS', 'workspace.searchAll 的 query 须为非空字符串');
     }
     // scope:'sources' ⇒ 以 adapter 填充的作品域目录为根集合（契约字段投影，不硬编码领域）。
-    const scope = (args ?? {})['scope'];
+    const searchScope = (args ?? {})['scope'];
     let roots: string[] = [rootDir];
-    if (scope === 'sources' && Array.isArray(project['kojoPaths']) && (project['kojoPaths'] as unknown[]).length > 0) {
+    if (searchScope === 'sources' && Array.isArray(project['kojoPaths']) && (project['kojoPaths'] as unknown[]).length > 0) {
       roots = (project['kojoPaths'] as unknown[]).filter((p): p is string => typeof p === 'string' && p !== '');
     }
     const maxResults = clampInt((args ?? {})['maxResults'], 50, 1, 200);
@@ -586,6 +743,16 @@ export function createRunSupplemental(deps: McpIoDeps): (
       filesScanned: result.filesScanned,
       elapsedMs: result.elapsedMs,
       skipped: result.skipped,
+      // 检索结果是从盘上现算的：`fsFreshness` 说「自你上一次检索以来，根下动过几处」。
+      // 多根（scope:'sources'）只对第一根建基线，其余根在 target 里点名——不假装全覆盖。
+      fsFreshness: fsFreshnessListing(
+        deps,
+        roots[0] ?? rootDir,
+        roots.length > 1
+          ? `${roots[0] ?? rootDir}（本次共 ${roots.length} 个根，另 ${roots.length - 1} 个根未单独建基线）`
+          : '.',
+        scope,
+      ),
     };
   };
 
@@ -659,7 +826,12 @@ export function createRunSupplemental(deps: McpIoDeps): (
           `目标已存在，create 绝不覆盖既有条目（先 io.listDir / fs.stat 确认再调用）：${sanitizeEcho(relPath)}`,
         );
       }
-      return { path: relPath, kind: 'directory', created: true, refreshed: emitFileChanged(kernel, 'add', abs) };
+      return {
+        path: relPath,
+        kind: 'directory',
+        created: true,
+        refreshed: emitFileChanged(kernel, 'add', abs, { tracker: trackerOf(deps), scope }),
+      };
     }
     // kind === 'file'：独占创建 + （可选）经既有 writeText 通道写初始内容。
     const createFileExclusive = io.createFileExclusive;
@@ -694,7 +866,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       kind: 'file',
       created: true,
       ...(typeof content === 'string' ? { contentChars: content.length } : {}),
-      refreshed: emitFileChanged(kernel, 'add', abs),
+      refreshed: emitFileChanged(kernel, 'add', abs, { tracker: trackerOf(deps), scope }),
     };
   };
 
@@ -727,7 +899,12 @@ export function createRunSupplemental(deps: McpIoDeps): (
     } catch (err) {
       rethrowWriteGate(err, relPath);
     }
-    return { path: relPath, updated: true, textLength: content.length, refreshed: emitFileChanged(kernel, 'change', abs) };
+    return {
+      path: relPath,
+      updated: true,
+      textLength: content.length,
+      refreshed: emitFileChanged(kernel, 'change', abs, { tracker: trackerOf(deps), scope }),
+    };
   };
 
   /**
@@ -770,7 +947,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       path: relPath,
       removed: true,
       removedKind: isDir ? 'directory' : 'file',
-      refreshed: emitFileChanged(kernel, 'unlink', abs),
+      refreshed: emitFileChanged(kernel, 'unlink', abs, { tracker: trackerOf(deps), scope }),
     };
   };
 
@@ -795,8 +972,9 @@ export function createRunSupplemental(deps: McpIoDeps): (
     } catch (err) {
       rethrowWriteGate(err, `${fromRel} → ${toRel}`);
     }
-    const fromRefreshed = emitFileChanged(kernel, 'unlink', fromAbs);
-    const toRefreshed = emitFileChanged(kernel, 'add', toAbs);
+    const freshness = { tracker: trackerOf(deps), scope };
+    const fromRefreshed = emitFileChanged(kernel, 'unlink', fromAbs, freshness);
+    const toRefreshed = emitFileChanged(kernel, 'add', toAbs, freshness);
     return { from: fromRel, to: toRel, renamed: true, refreshed: fromRefreshed && toRefreshed };
   };
 
@@ -844,7 +1022,10 @@ export function createRunSupplemental(deps: McpIoDeps): (
     return { path: toRelativePath(abs, rootDir), exists };
   };
 
-  const statFiles = async (args: Record<string, unknown>): Promise<unknown> => {
+  const statFiles = async (
+    args: Record<string, unknown>,
+    scope: McpSessionScope | null | undefined,
+  ): Promise<unknown> => {
     const kernel = deps.getKernel();
     const project = requireProject(kernel);
     const rootDir = asString(project['rootDir']);
@@ -868,16 +1049,20 @@ export function createRunSupplemental(deps: McpIoDeps): (
     const raw = await deps.invoke('stat_files', { paths: kept });
     const items: Record<string, unknown>[] = [];
     if (Array.isArray(raw)) {
-      for (const entry of raw) {
-        if (!entry || typeof entry !== 'object') continue;
+      raw.forEach((entry, index) => {
+        if (!entry || typeof entry !== 'object') return;
         const e = entry as Record<string, unknown>;
+        // 逐项失效标注用**请求侧解析出的绝对路径**为准（Rust 未回显 path 时也有基准，不猜）。
+        const abs = asString(e['path']) !== '' ? asString(e['path']) : (kept[index] ?? '');
+        const rel = toRelativePath(abs, rootDir);
         items.push({
-          path: toRelativePath(asString(e['path']), rootDir),
+          path: rel,
           exists: e['exists'] === true,
           size: typeof e['size'] === 'number' ? e['size'] : null,
           mtimeMs: typeof e['mtimeMs'] === 'number' ? e['mtimeMs'] : null,
+          fsFreshness: fsFreshnessField(deps, abs, rel, scope),
         });
-      }
+      });
     }
     return { items, total: relPaths.length, truncated: relPaths.length > items.length };
   };
@@ -939,6 +1124,11 @@ export const KOJO_RESOURCE_URIS = {
   plugins: 'kojo://project/plugins',
   events: 'kojo://project/events',
   activeDocument: 'kojo://project/active-document',
+  /**
+   * Wave4 余项 ③新增：**宿主侧追加**的第 9 项（经 `McpWiringSources.resources` 登记，
+   * 不动 `@kojo/mcp-host` 的冻结契约表）。外部写盘失效账本 + 监视覆盖自述 + 能力面自述。
+   */
+  fsFreshness: 'kojo://project/fs-freshness',
 } as const;
 
 function conventionReport(kernel: McpKernelLike | null): { readonly failedRules: unknown[] } | null {
@@ -977,6 +1167,8 @@ export function createIoResourceData(
           project: projectSummaryOf(project),
           document: null,
           counts: docCounts,
+          // 快照是聚合读数：附项目根级失效事实，让「这份快照是否还代表盘上」可见。
+          fsFreshness: fsFreshnessListing(deps, asString(project['rootDir']), '.', scope),
         };
       }
       case KOJO_RESOURCE_URIS.fileTree:
@@ -1032,5 +1224,45 @@ export function createIoResourceData(
       default:
         throw new McpFailure('RESOURCE_UNAVAILABLE', `resource ${sanitizeEcho(uri)} 没有已接线的真源（不静默）`);
     }
+  };
+}
+
+/* ------------------------------- 追加 resource：外部写盘失效账本 ------------------------------- */
+
+/**
+ * `kojo://project/fs-freshness`（Wave4 余项 ③，宿主侧追加的第 9 项）。
+ *
+ * 走 `McpWiringSources.resources` 登记（`@kojo/mcp-host` 的冻结契约表零改动）：registry 直接调
+ * 本资源的 `read(scope)`，因此**不经过 `slimResourceData`**——新增字段不会被投影丢掉，
+ * 但文本上限仍复用 `truncateResourceText`（24 000 字符 + 结构化 `truncated` envelope，铁律 4）。
+ *
+ * 内容全部来自真源：`kernel.fileWatch.state()`（`start_watch` 回执：哪些根监视上了、
+ * 哪些没监视上、为什么）+ 总线 `file.changed` / `file.watchState` 的有界短账 +
+ * 本宿主写腿的自写记账。能力面自述（`push.subscribe:false` / `listChanged:false` /
+ * `mode:'on-request'`）随读数一起给，客户端才知道「这里没有推送」是判性结论而不是漏接。
+ */
+export function createFsFreshnessResource(deps: McpIoDeps): McpResource {
+  return {
+    uri: KOJO_RESOURCE_URIS.fsFreshness,
+    name: '外部写盘失效账本',
+    description:
+      '文件监视覆盖（含没监视上的根与原因）+ 最近被改动的路径与时刻 + 只读应答里 stale 的判据自述；' +
+      '无协议级推送，失效事实随读取给（on-request）',
+    mimeType: 'application/json',
+    read: async (scope: McpSessionScope) => {
+      const tracker = trackerOf(deps);
+      if (!tracker) {
+        throw new McpFailure(
+          'RESOURCE_UNAVAILABLE',
+          '外部写盘失效账本未装配：宿主未绑定 fs-freshness 判定器（内核未到场或 MCP 真源未登记）' +
+            '——没有账本可读，不返回空账冒充「一切正常」（不静默）',
+        );
+      }
+      const report = tracker.report({ maxEntries: 50 });
+      const sessionView = tracker.sessionView(scope?.sessionId, 20);
+      const payload = { ...report, session: sessionView };
+      const { text } = truncateResourceText(JSON.stringify(payload, null, 2));
+      return { contents: [{ uri: KOJO_RESOURCE_URIS.fsFreshness, text }] };
+    },
   };
 }
