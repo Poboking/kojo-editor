@@ -738,7 +738,9 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
  * 只读 IO 腿 + 写腿（fileTree.create / update / remove / rename）。写腿一律走**编辑器既有
  * 写通道**（内核 `kernel.io` 的 FileIO 写原语；删 / 改名也走此，绝不 `deps.invoke` 直调 Rust
  * 写命令绕开内核写允许域），前面叠第四张表 approvedRoots 复核（见模块头注释），绝不新建旁路
- * 写通道。`problems.quickFix` 与暂无真源的（diff.compare / state.replay / preview.document）由
+ * 写通道。`problems.quickFix` 自 2026-11-06 起已真接线（稳定 actionId 台账 + 宿主受控 apply
+ * 通道，端到端见 `mcp-quickfix-apply.test.ts`）；暂无真源的（diff.compare / state.replay /
+ * preview.document）由
  * default 分支显式报 `NOT_WIRED`——不擅自开放执行、不造假实现。
  * B3 批（LaneO 2026-11-06）另登记 `editor.*` 五枚：它们改的是 **Monaco 模型 / 编辑器状态**，
  * 不经 `kernel.io`、不碰磁盘，因此不落入上面这条「写腿一律走编辑器既有写通道」的闸——

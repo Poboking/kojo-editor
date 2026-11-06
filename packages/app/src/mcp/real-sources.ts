@@ -714,7 +714,7 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
     return { items, count: items.length, total, truncated: total > items.length, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
   };
 
-  const documentSymbols: McpReaderFn = async () => {
+  const documentSymbols: McpReaderFn = async (args) => {
     const ws = await requireWorkspace(deps);
     const service = (await unwrapGetter<McpLanguageFeaturesLike>(deps.getFeaturesService())) ?? {};
     const { raw, stats } = await collectFromProviders(
@@ -910,8 +910,8 @@ export function buildUiSupplemental(
   };
 
   const editorSelfCheck: McpReaderFn = async (args) => {
-    const maxResults = clampInt(args['maxResults'], 200, 1, 500);
-    return selfCheckFindings(kernel, maxResults);
+    // 分页游标批：入参原样交给 selfCheckFindings（页大小由契约面 clamp，旧 maxResults 别名保留）。
+    return selfCheckFindings(kernel, args ?? {});
   };
 
   const problemsDiagnostics: McpReaderFn = async (args) => {

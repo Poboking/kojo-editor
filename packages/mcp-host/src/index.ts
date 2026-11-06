@@ -367,7 +367,7 @@ export const PAGE_CURSOR_SCHEMA_PROPS: Record<string, unknown> = {
 
 /** 分页返回体的完整性账字段说明（供各面 description 复用，口径统一）。 */
 export const PAGE_ACCOUNT_NOTE =
-  'Every page carries the completeness account {total, offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim for the next page. changedDuringPaging:true means the snapshot changed mid-paging, so that page restarts from the head and must not be spliced with earlier pages.';
+  'Every page carries the completeness account {total (spelled `textLength` on text surfaces), offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim for the next page. changedDuringPaging:true means the snapshot changed mid-paging, so that page restarts from the head and must not be spliced with earlier pages.';
 
 /** 语义读数服务 → 8 枚只读工具（tier 'read' + readOnlyHint）。
  *
@@ -1110,7 +1110,8 @@ export const MCP_TOOL_GAP_MAP: readonly {
   // write_file_bytes 经具名工具覆盖，不再是「需宿主接线」的剩余缺口），数据结构形状不变。
   { tool: 'fileTree.create', gap: 'create_file_exclusive', source: 'rust' },
   { tool: 'fileTree.update', gap: 'write_file_bytes', source: 'rust' },
-  // fileTree.remove / fileTree.rename 保持 NOT_WIRED（privileged，需宿主授权面），登记照旧。
+  // fileTree.remove / fileTree.rename 执行体同样已接线（privileged：第四张表 approvedRoots
+  // × 内核写允许域双闸，逐闸拒绝显式报错）——写腿读数 wired 5 / NOT_WIRED 0。
   { tool: 'fileTree.remove', gap: 'remove_file', source: 'rust' },
   { tool: 'fileTree.rename', gap: 'rename_path', source: 'rust' },
   { tool: 'commands.list', gap: 'commands', source: 'tool-surface' },
@@ -1514,7 +1515,14 @@ export function paginateByCursor<T>(
   let changed: true | undefined;
   if (decoded) {
     if (decoded.fingerprint === fingerprint) {
-      offset = Math.min(Math.max(0, decoded.index), items.length);
+      if (decoded.index > items.length) {
+        throw new McpFailure(
+          'INVALID_ARGS',
+          `cursor 下标越界：${decoded.index} > 全集 ${items.length} 条。cursor 必须是上一页 nextCursor 的原样回传，` +
+            '不得自行推算或改写；请省略 cursor 从第 0 页重翻。',
+        );
+      }
+      offset = decoded.index;
     } else {
       changed = true;
       offset = 0;
@@ -1557,7 +1565,14 @@ export function paginateText(
   let changed: true | undefined;
   if (decoded) {
     if (decoded.fingerprint === fingerprint) {
-      offset = Math.min(Math.max(0, decoded.index), text.length);
+      if (decoded.index > text.length) {
+        throw new McpFailure(
+          'INVALID_ARGS',
+          `cursor 下标越界：${decoded.index} > 正文 ${text.length} 字符。cursor 必须是上一页 nextCursor 的原样回传，` +
+            '不得自行推算或改写；请省略 cursor 从第 0 页重翻。',
+        );
+      }
+      offset = decoded.index;
     } else {
       changed = true;
       offset = 0;
