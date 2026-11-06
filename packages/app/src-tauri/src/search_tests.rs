@@ -746,6 +746,72 @@ fn s1_perf_probe_prints_four_readings() {
     //（needle None、byte_prefilter None）＝本批之前的解码+全扫路径，同机同库对拍。
     let no_needle = std::env::var("KOJO_SEARCH_BENCH_NO_NEEDLE").as_deref() == Ok("1");
 
+    // ⓪ walk 地板（MCP-PERF-S9）：`collect_files` 本体单独掐表——检索总耗时里"列出候选"
+    // 这一段的地板，S9 批的压缩对象。先丢一轮焐热 OS 文件缓存（与生产 warm 形态一致），
+    // 再拍 8 轮取中位/p95；判据 <70ms（改前 ~140-150ms@18k 条目）。
+    {
+        let walk_once = || {
+            let t0 = std::time::Instant::now();
+            let mut filtered = 0u32;
+            let mut excluded = 0u32;
+            let mut walk_errors = 0u32;
+            let files = crate::collect_files(
+                &[root.clone()],
+                &extensions,
+                &[],
+                &[],
+                threads,
+                &mut filtered,
+                &mut excluded,
+                &mut walk_errors,
+            );
+            (t0.elapsed().as_millis(), files.len())
+        };
+        let (_, n_cand) = walk_once();
+        let mut samples: Vec<u128> = Vec::new();
+        for _ in 0..8 {
+            samples.push(walk_once().0);
+        }
+        samples.sort();
+        let med = samples[samples.len() / 2];
+        let p95 = samples[(samples.len() * 95 + 99) / 100 - 1];
+        println!(
+            "[S9] ⓪walk 地板（collect_files，warm 8 轮）＝中位 {med}ms p95={p95}ms 全样本={samples:?} 候选={n_cand}"
+        );
+
+        // ⓪' 纯枚举地板（诊断）：裸递归 read_dir 只数条目（单线程）——I/O 与 CPU 的分账
+        // 读数，与 ⓪ 对拍定 S9 手段：枚举贵 ⇒ 目录 mtime 短路；CPU 贵 ⇒ 收字符串/排序。
+        fn raw_walk(dir: &Path, dirs: &mut usize, files: &mut usize) {
+            *dirs += 1;
+            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            for ent in rd.flatten() {
+                let Ok(ft) = ent.file_type() else { continue };
+                if ft.is_dir() {
+                    if !ft.is_symlink() {
+                        raw_walk(&dir.join(ent.file_name()), dirs, files);
+                    }
+                } else if ft.is_file() {
+                    *files += 1;
+                }
+            }
+        }
+        let mut samples: Vec<u128> = Vec::new();
+        let (mut n_dirs, mut n_files) = (0usize, 0usize);
+        for i in 0..6 {
+            let (mut dd, mut ff) = (0usize, 0usize);
+            let t0 = std::time::Instant::now();
+            raw_walk(Path::new(&root), &mut dd, &mut ff);
+            samples.push(t0.elapsed().as_millis());
+            if i == 0 {
+                n_dirs = dd;
+                n_files = ff;
+            }
+        }
+        samples.sort();
+        let med = samples[samples.len() / 2];
+        println!("[S9] ⓪'纯枚举地板（裸 read_dir 单线程，6 轮）＝中位 {med}ms 全样本={samples:?} 目录={n_dirs} 文件={n_files}");
+    }
+
     let req_for = |id: u64, roots: Vec<String>| SearchRequestDto {
         search_id: id,
         roots,
@@ -895,6 +961,39 @@ fn s1_perf_probe_prints_four_readings() {
         );
         assert!(out4.cancelled, "取消必须真的收口成 cancelled（读数才算数）");
     });
+
+    // ⑤ 零命中查询（MCP-PERF-S9）：地板同价判据——零命中与有命中的总耗时都贴着
+    // ⓪ 的 walk 地板（S9 压地板时两条一起降）。ci ASCII ⇒ needle/prefilter 都编不出
+    // ⇒ 无预筛的解码+全扫路径 = 真最坏地板（⑤−⓪＝解码扫描段，S9 不动它）。
+    {
+        let miss_req = SearchRequestDto {
+            search_id: 6,
+            roots: vec![root.clone()],
+            query: "qz9xv-nohit-7f3a".to_string(),
+            options: SearchOptionsDto {
+                is_regex: Some(false),
+                case_sensitive: Some(false),
+                extensions: Some(extensions.clone()),
+                max_results: Some(5000),
+                threads: Some(threads),
+                ..Default::default()
+            },
+        };
+        let out5 = crate::run_search_with_files(
+            &empty_progress,
+            &|_b: &crate::SearchFilesPayload<'_>| {},
+            &cancel,
+            &miss_req,
+            &cache,
+            &index,
+        )
+        .unwrap();
+        println!(
+            "[S9] ⑤零命中查询（warm）＝{}ms 命中={} 扫描={}",
+            out5.elapsed_ms, out5.total_matches, out5.files_scanned
+        );
+        assert_eq!(out5.total_matches, 0, "零命中夹具必须真的零命中");
+    }
 }
 
 /* --------------------- 流式增量（P2-11） --------------------- */
