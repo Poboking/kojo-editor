@@ -27,6 +27,29 @@
  *      法定落点，按既有口径照旧钉在基线里（不另开文件级豁免，免得整文件失守）。
  *   M3(旧token名)        §9-1 同族的 token 命名遗留：`sugar.*` / `kojo2.*` / `keyword.erb*`
  *      只许出现在别名表/词表定义处（LAU-2 之后才成立），先按计数棘轮。
+ *   M4(上屏文案实现词)   D06：作者看得见的诊断文案里不许出现实现词 / 内部术语。
+ *      **上屏链（实测查实，判据就按这条链扫）**：
+ *        ① 生产方（插件）把中文句子写进**字符串/模板字面量**，绑到这几个键或同名变量上：
+ *           `ErbStructureIssue.message`（plugin-api/src/erb.ts:193 契约字段，注释即「给作者看的
+ *           中文一句话」）→ `structure.ts:221/231/247/459-469/506/519`、`declarations.ts:364`、
+ *           `erh.ts:117 push(line, statement, message)`；
+ *           `LineDecoration.message`（装饰通道）→ `arity.ts:444`、`references.ts:1054/1081`、
+ *           `undefined-name.ts:689 message: buildMessage(token, suggestions)`——句子拼在
+ *           `buildMessage` **函数体内**（:703-708），不是字面量在 `message:` 后面，故 M4 除了认
+ *           键名还要认**函数作用域**（名字含 message 的函数里的字面量全部算文案）；
+ *        ② `structure-fix.ts:53 structureDiagnostic()` 把 `issue.message` **逐字段**搬进
+ *           `LineDecoration.message`（Monaco marker / 波浪线悬停）；
+ *        ③ 面板侧 `packages/app/src/ui/ProblemPanel.tsx` 与 `ui-sugar-editor` 的码位取
+ *           `DIAGNOSTIC_LABELS` 中文短名，**正文句子取 `it.message` 本身**
+ *           （`diagnostic-copy.test.ts` 闸 3 钉的就是"码位不许裸 ASCII"，句子仍是插件写的原文）。
+ *      ⇒ 结论：**插件 src 里绑在 message/detail/hint/reason 上、或住在 *message* 函数里的
+ *      字符串字面量，就是作者屏幕上的那句话**；M4 扫这些字面量的**正文**（`${…}` 里的表达式、
+ *      注释一律剔除——那是代码不是文案，`${slot}` 这种插值名不该算命中），并且**只数含中文的
+ *      片段**：零 CJK 的字面量（`reason: 'variable-slot'`、`code: '…-cursor-line'`）是枚举短码，
+ *      走的是码位那条链（`DIAGNOSTIC_LABELS`），不在本条的文案面上。
+ *      扫描目录：packages/plugins/<插件>/src（全部插件；宿主 app/src 的文案面另车道，不在本条）。
+ *      词表只收**实测在文案里出现过**的词（每枚都有出处，见 tools/audit-language-baseline.json
+ *      的 M4 `reasons` 与本批提交信息），凭语感加的词不收。
  *   扫描扩展名：ts / tsx / mts / cts / js / mjs / cjs / rs（.js/.mts/.cjs 曾漏扫）。
  *
  * 豁免口径（2026-10-26 收紧，原「行里出现 audit-allow: 就免责」已被判定过宽）：
@@ -54,7 +77,7 @@
  * 退出码：0 = 相对基线无新增；1 = 有文件超出基线 / 豁免行数上升 / 基线缺失（fail-closed）。
  */
 import { execFile } from 'node:child_process';
-import { promises as fs } from 'node:fs';
+import { promises as fs, readdirSync, statSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
@@ -115,6 +138,197 @@ const LANGUAGE_ID_RE = /\b[A-Z][A-Z0-9_]*_LANGUAGE_ID\b/;
 /** M3：旧 token 名前缀（sugar./kojo2./keyword.erb*） */
 const LEGACY_TOKEN_RE = /\b(?:sugar|kojo2)\.[A-Za-z_][\w.]*|keyword\.erb[\w.]*/;
 
+/**
+ * M4：作者看得见的诊断文案里禁止出现的实现词 / 内部术语。
+ * 每一枚都有"真的走在文案里"的出处（改前实测，逐条记在基线 M4 `reasons` 与本批提交信息里）：
+ *   `Emuera` / `NotImplemented`  declarations.ts:234（"会让 Emuera 加载失败"）、erh.ts:146（"直接抛 NotImplemented"）
+ *   `装配`    launcher-core/src/plugin-manager.ts:546（"当前装配没有存档备份能力"）
+ *   `兜底`    kojo-sugar/src/parser.ts:3058（"块只有兜底、没有任何条件分支"）
+ *   `索引`    erb-parser/src/references.ts:1054 / :1081（"项目索引里没有这个函数名"）
+ *   `slot`    kojo-sugar/src/codegen.ts:1967 的 `${slot}` 属插值表达式 ⇒ 剔除后不算命中，
+ *             这一枚留着是为拦"把槽位代号写进句子"的下一手（如 `槽 slot 3`）。
+ * 其余（descriptor / registry / snapshot / projection / payload / envelope / epoch / provider /
+ * generation / pkey / arity / worker / token / cursor / pipeline / decorator / kernel 与中文黑话
+ * 代际 / 供方 / 上账 / 游标 / 降下来 / 降级 / 缓存 / 会话 / 挂载 / 注入 / 管线 / 回话 / 句柄 /
+ * 词表 / 落点 / 载荷 / 快照 / 描述符 / 注册表 / 投影 / 内核）同族同罪，先入表占位：
+ * 命中即计数，零命中不占基线条目（不会稀释闸值）。
+ */
+const M4_WORDS_EN = [
+  'descriptor', 'registry', 'snapshot', 'projection', 'payload', 'envelope', 'epoch', 'provider',
+  'generation', 'pkey', 'slot', 'arity', 'worker', 'token', 'cursor', 'pipeline', 'decorator',
+  'kernel', 'Emuera', 'NotImplemented',
+];
+const M4_WORDS_CN = [
+  '装配', '代际', '供方', '上账', '游标', '降下来', '兜底', '降级', '索引', '缓存', '会话', '挂载',
+  '注入', '管线', '回话', '句柄', '词表', '落点', '载荷', '快照', '描述符', '注册表', '投影', '内核',
+];
+const M4_RE = new RegExp(
+  `(?:${M4_WORDS_EN.map((w) => `\\b${escapeRegExp(w)}\\b`).join('|')})|${M4_WORDS_CN.map(escapeRegExp).join('|')}`,
+  'i',
+);
+
+/** M4：文案串绑定的键名 / 赋值目标（`message:` `message =` `message +=` `detail:` `hint:` `reason:`） */
+const M4_COPY_KEY_RE = /\b(?:message|detail|hint|reason)\b\s*(?::|\+=|=)\s*$/i;
+/** M4：函数名含 message ⇒ 函数体里的字面量全是文案（`buildMessage` 那一族拼句子的地方） */
+const M4_MESSAGE_FN_RE = /^function\s+([A-Za-z_$][\w$]*)\s*\(/;
+
+/** packages/plugins/<插件>/src——诊断文案的生产侧全在这里（宿主 app/src 属另一车道，不在本条） */
+function pluginSrcDirs() {
+  const base = path.join(ROOT, 'packages', 'plugins');
+  let ents;
+  try {
+    ents = readdirSync(base, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return ents
+    .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+    .map((e) => `packages/plugins/${e.name}/src`)
+    .filter((relDir) => {
+      try {
+        return statSync(path.join(ROOT, relDir)).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+}
+
+/**
+ * 抽出一段源码里**会走上屏的文案片段**：返回 `[{ line, text }]`，
+ * `text` = 该行里属于字面量正文的字符（`${…}` 插值表达式与注释一律剔除，嵌套字面量若住在
+ * 文案里也算文案）。注释里的句子不是上屏句子，所以这里按字符走一遍状态机，
+ * 而不是按行 grep——按行 grep 会把 `${slot}` 与注释一起数进来（假阳性灌满基线）。
+ */
+function copySegmentsOf(src) {
+  const lineStarts = [0];
+  for (let k = 0; k < src.length; k++) if (src[k] === '\n') lineStarts.push(k + 1);
+  const lineOf = (idx) => {
+    let lo = 0;
+    let hi = lineStarts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (lineStarts[mid] <= idx) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
+  const out = [];
+  const frames = [{ type: 'code', depth: 0, isInterp: false, copy: false, msgFn: false }];
+  let i = 0;
+  const emit = (frame) => {
+    for (const [s, e] of frame.segs) {
+      if (e <= s) continue;
+      let pos = s;
+      while (pos < e) {
+        const nl = src.indexOf('\n', pos);
+        const stop = nl === -1 || nl >= e ? e : nl;
+        const text = src.slice(pos, stop);
+        if (text.trim().length > 0) out.push({ line: lineOf(pos), text });
+        if (stop === e) break;
+        pos = stop + 1;
+      }
+    }
+  };
+  while (i < src.length) {
+    const top = frames[frames.length - 1];
+    const c = src[i];
+    if (top.type === 'code') {
+      if (c === '\n') {
+        i++;
+        continue;
+      }
+      if (c === '/' && src[i + 1] === '/') {
+        while (i < src.length && src[i] !== '\n') i++;
+        continue;
+      }
+      if (c === '/' && src[i + 1] === '*') {
+        i += 2;
+        while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
+        i += 2;
+        continue;
+      }
+      if (c === '{') {
+        top.depth++;
+        i++;
+        continue;
+      }
+      if (c === '}') {
+        if (top.depth > 0) top.depth--;
+        else if (top.isInterp) {
+          frames.pop();
+          i++;
+          continue;
+        }
+        i++;
+        continue;
+      }
+      if (c === 'f' && !/[\w$.]/.test(src[i - 1] ?? ' ')) {
+        const m = M4_MESSAGE_FN_RE.exec(src.slice(i, i + 80));
+        if (m && /message/i.test(m[1])) top.msgFn = true;
+      }
+      if (c === '"' || c === "'" || c === '`') {
+        const asCopy =
+          top.copy || top.msgFn || M4_COPY_KEY_RE.test(src.slice(Math.max(0, i - 32), i).trimEnd());
+        frames.push({ type: 'str', q: c, copy: asCopy, start: i + 1, segs: [], tpl: c === '`' });
+        i++;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    // 字面量帧
+    if (c === '\\') {
+      i += 2;
+      continue;
+    }
+    if (top.tpl && c === '$' && src[i + 1] === '{') {
+      top.segs.push([top.start ?? i, i]);
+      top.start = null;
+      frames.push({ type: 'code', depth: 0, isInterp: true, copy: top.copy, msgFn: false });
+      i += 2;
+      continue;
+    }
+    if (c === top.q) {
+      if (top.start !== null) top.segs.push([top.start, i]);
+      if (top.copy) emit(top);
+      frames.pop();
+      i++;
+      continue;
+    }
+    if (!top.tpl && c === '\n') {
+      // 非法/续行字符串：结束该字面量（保守：不让状态机整档失准）
+      if (top.start !== null) top.segs.push([top.start, i]);
+      if (top.copy) emit(top);
+      frames.pop();
+      continue;
+    }
+    if (top.start === null) top.start = i;
+    i++;
+  }
+  return out;
+}
+
+/** M4：上屏的是**中文句子**；零 CJK 的字面量是枚举/短码（`reason: 'variable-slot'`）⇒ 不算文案 */
+const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
+
+/** M4 单文件采集：返回命中行（去重）与豁免行数 */
+function collectM4(src, rawLines) {
+  const segs = copySegmentsOf(src);
+  const hits = new Map();
+  let exempt = 0;
+  for (const seg of segs) {
+    if (!CJK_RE.test(seg.text)) continue;
+    if (!M4_RE.test(seg.text)) continue;
+    const raw = rawLines[seg.line - 1] ?? '';
+    if (licenseOf(raw) !== null) {
+      exempt++;
+      continue;
+    }
+    if (!hits.has(seg.line)) hits.set(seg.line, { line: seg.line, text: seg.text.trim().slice(0, 140) });
+  }
+  return { hitList: [...hits.values()], exempt };
+}
+
 /** 各检查的扫描目录与豁免文件（相对仓库根） */
 const CHECKS = [
   {
@@ -134,6 +348,12 @@ const CHECKS = [
     dirs: ['packages/app/src', 'packages/kojo-sdk/src', 'packages/kojo-lang/src', 'packages/erb-syntax-tree/src'],
     exemptFiles: new Set([MANIFEST_REL]),
     pattern: LEGACY_TOKEN_RE,
+  },
+  {
+    id: 'M4(上屏文案实现词)',
+    dirs: pluginSrcDirs(), // packages/plugins/*/src（插件 src 不存在时该项自动缺席，目录整体缺失 ⇒ 零命中）
+    exemptFiles: new Set(),
+    pattern: 'm4CopyWords', // 特判：先抽文案字面量，再在字面量正文上打词表
   },
 ];
 
@@ -190,6 +410,12 @@ async function collect() {
         if (check.exemptFiles.has(r)) continue;
         const text = await fs.readFile(f, 'utf8');
         const lines = text.split(/\r?\n/);
+        if (check.pattern === 'm4CopyWords') {
+          const { hitList, exempt: m4Exempt } = collectM4(text, lines);
+          if (m4Exempt > 0) exempt[r] = (exempt[r] ?? 0) + m4Exempt;
+          if (hitList.length > 0) perFile[r] = hitList;
+          continue;
+        }
         for (let i = 0; i < lines.length; i++) {
           const line = lines[i];
           // 豁免先判：注释位的 audit-allow（整行或行尾）才算，且理由必须非空
@@ -222,23 +448,32 @@ async function readBaseline() {
   }
 }
 
-function renderBaseline(collected) {
+function renderBaseline(collected, prior) {
   const checks = {};
   for (const [id, { hits: perFile, exempt: exemptPerFile }] of Object.entries(collected)) {
     const files = {};
     for (const [f, hits] of Object.entries(perFile).sort((a, b) => a[0].localeCompare(b[0]))) files[f] = hits.length;
     const exemptFiles = {};
     for (const [f, n] of Object.entries(exemptPerFile).sort((a, b) => a[0].localeCompare(b[0]))) exemptFiles[f] = n;
+    // M4 的"为什么这一条留在这儿"必须逐文件写下来（棘轮可以继承，理由不可以默默继承）：
+    // 重写基线时把仍命中的文件的理由带上、消失的丢掉，新增文件必须人工补一行。
+    const priorReasons = prior?.checks?.[id]?.reasons ?? {};
+    const reasons = {};
+    for (const f of Object.keys(files)) {
+      if (priorReasons[f] !== undefined) reasons[f] = priorReasons[f];
+      else if (Object.keys(priorReasons).length > 0 || id.startsWith('M4')) reasons[f] = '';
+    }
     checks[id] = {
       total: Object.values(files).reduce((s, n) => s + n, 0),
       files,
       // 豁免行（注释位 + 非空理由）单独计数：只许降不许升，想加就先删等量的
       exempt: { total: Object.values(exemptFiles).reduce((s, n) => s + n, 0), files: exemptFiles },
+      ...(Object.keys(reasons).length > 0 ? { reasons } : {}),
     };
   }
   return {
     _readme:
-      'tools/audit-language.mjs 的棘轮基线：每文件只数代码行命中数（files）与被合法豁免的行数（exempt），两者都只拦增长。收敛后跑 `node tools/audit-language.mjs --update-baseline` 重钉。',
+      'tools/audit-language.mjs 的棘轮基线：每文件只数代码行命中数（files）与被合法豁免的行数（exempt），两者都只拦增长。收敛后跑 `node tools/audit-language.mjs --update-baseline` 重钉。M4(上屏文案实现词) 另有 reasons：逐文件写明"本批为什么没改"（撞在飞车道的车道归属），新增命中文件必须补一行理由，空串即视为未交代理由。',
     checks,
   };
 }
@@ -274,7 +509,12 @@ function judge(collected, baseline) {
       if (n > allowed) exemptExceeded.push({ file: f, now: n, allowed });
     }
     const exemptBase = baseline?.checks?.[check.id]?.exempt?.total ?? 0;
-    if (exceeded.length > 0 || exemptExceeded.length > 0) red = true;
+    // M4 的基线条目必须逐条带理由（"钉红=没闸"的那道防线）：理由为空 ⇒ 视同超出基线
+    const baseReasons = baseline?.checks?.[check.id]?.reasons ?? {};
+    const noReason = check.id.startsWith('M4')
+      ? Object.keys(perFile).filter((f) => String(baseReasons[f] ?? '').trim() === '')
+      : [];
+    if (exceeded.length > 0 || exemptExceeded.length > 0 || noReason.length > 0) red = true;
     report.push({
       check: check.id,
       totalNow,
@@ -284,6 +524,7 @@ function judge(collected, baseline) {
       exemptNow,
       exemptBase,
       exemptExceeded,
+      noReason,
     });
   }
   return { red, report };
@@ -294,7 +535,7 @@ function printReport(report, baselineSource) {
   console.log(`基线：${baselineSource}\n`);
   for (const r of report) {
     const exemptLine = `豁免行 ${r.exemptNow} 行 / 基线 ${r.exemptBase} 行`;
-    if (r.exceeded.length === 0 && r.exemptExceeded.length === 0) {
+    if (r.exceeded.length === 0 && r.exemptExceeded.length === 0 && r.noReason.length === 0) {
       console.log(`✅ ${r.check}：代码行命中 ${r.totalNow} 行，未超基线 ${r.baseTotal} 行；${exemptLine}${r.shrunk > 0 ? `（有 ${r.shrunk} 个文件低于基线，可 --update-baseline 重钉）` : ''}`);
     } else {
       if (r.exceeded.length > 0) {
@@ -304,6 +545,8 @@ function printReport(report, baselineSource) {
           for (const h of e.hits.slice(0, 10)) console.log(`       :${h.line}  ${h.text}`);
           if (e.hits.length > 10) console.log(`       …还有 ${e.hits.length - 10} 行`);
         }
+      } else if (r.noReason.length > 0) {
+        console.log(`❌ ${r.check}：基线条目没写理由（钉红必须逐条交代）——${r.noReason.join('、')}`);
       } else {
         console.log(`❌ ${r.check}：豁免行数上升（当前 ${r.exemptNow} 行 / 基线 ${r.exemptBase} 行；${exemptLine}）`);
       }
@@ -396,6 +639,29 @@ async function selftest() {
     'packages/app/src/selftest-allow-noreason.ts': "export const GAME = 'erafl'; // audit-allow:\n",
   });
   cases.push({ name: '注释位 audit-allow 但理由为空 ⇒ 红', want: 1, got: allowNoReason.code, out: allowNoReason.out });
+  // 7) M4 反向对照：实现词进**上屏文案**（message 键 / message 函数体）⇒ 必红
+  const m4 = await run({
+    'packages/plugins/erb-parser/src/selftest-m4.ts': [
+      "export const d = { line: 1, message: `这里写了 descriptor，作者看不懂` };",
+      "function buildMessage(n) {",
+      "  const base = `未定义的名称「${n}」：projection 侧的说法`;",
+      "  return base;",
+      "}",
+      "",
+    ].join('\n'),
+  });
+  cases.push({ name: 'M4 实现词进上屏文案（message 键 + message 函数体）⇒ 红', want: 1, got: m4.code, out: m4.out });
+  // 8) M4 的三条"不该红"：注释位 / 非文案键 / 插值表达式里的标识符
+  const m4Clean = await run({
+    'packages/plugins/erb-parser/src/selftest-m4-clean.ts': [
+      "// 注释里提 descriptor / registry 不是上屏句子",
+      "const slot = 3;",
+      "export const d = { label: `槽位说明里出现 slot 也不算——插值是 ${slot}，不是文案词` };",
+      "export const t = 'registry 这个词在普通常量里，不是诊断文案';",
+      "",
+    ].join('\n'),
+  });
+  cases.push({ name: 'M4 注释 / 非文案键 / ${slot} 插值 ⇒ 绿', want: 0, got: m4Clean.code, out: m4Clean.out });
 
   await fs.rm(tmp, { recursive: true, force: true });
 
@@ -424,7 +690,7 @@ if (SELFTEST) {
 const collected = await collect();
 
 if (UPDATE_BASELINE) {
-  const out = renderBaseline(collected);
+  const out = renderBaseline(collected, await readBaseline());
   await fs.mkdir(path.dirname(BASELINE_FILE), { recursive: true });
   await fs.writeFile(BASELINE_FILE, `${JSON.stringify(out, null, 2)}\n`, 'utf8');
   const totals = Object.entries(out.checks).map(([id, c]) => `${id} ${c.total} 行`).join('；');
@@ -440,5 +706,5 @@ if (!baseline) {
 
 const { red, report } = judge(collected, baseline);
 printReport(report, `${BASELINE_FILE}（棘轮：只拦增长）`);
-console.log(red ? '❌ 语言面审计：存在超出基线的新增命中。' : '✅ 语言面审计：三类检查均未超出基线。');
+console.log(red ? '❌ 语言面审计：存在超出基线的新增命中。' : '✅ 语言面审计：四类检查均未超出基线。');
 process.exit(red ? 1 : 0);
