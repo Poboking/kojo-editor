@@ -1,5 +1,5 @@
 /**
- * **TRY 系九枚 round-trip 对拍（工包 F · 非语料）**：中文写形 → 编译 → 产物行逐字节相同。
+ * **TRY 系开块十一枚 round-trip 对拍（工包 F · 非语料）**：中文写形 → 编译 → 产物行逐字节相同。
  *
  * 本体判据只有一条：`试探 原形 <记号> <原文>` 这一串（= 只读面 `native-display/control.ts`
  * 早已给出的中性显示形）写进 `.kojo`，产物那一行必须与引擎原文**一字不差**。
@@ -7,8 +7,8 @@
  * 比对产物与源记号（比较口径同为「去行首缩进与行尾空白，语句本体逐字节」——
  * 缩进由块层级决定，产物一律 TAB，比缩进只会把"本体对不对"糊掉）。
  *
- * 为什么这九枚走**逐字节透传**而不是九个中文动词：九枚分两个配对档（六枚配 `CATCH`、
- * 三枚配 `ENDFUNC`，见 `sugar-ident.ts`），本包没有引擎侧取证去说某一枚中文该叫什么——
+ * 为什么这批走**逐字节透传**而不是十一个中文动词：开块档分两个配对档（八枚配 `CATCH`、
+ * 三枚配 `ENDFUNC`，见 `sugar-ident.ts` 由真源 `openKindsForPair` 派生），本包没有引擎侧取证去说某一枚中文该叫什么——
  * 猜一个就是把没有的东西写成有。判据与 `#DIM` 族（`DIM_DIRECTIVE_RE` 原生透传）、
  * `数据表 原形 PRINTDATADL`（`parseDataHead` 记号回显）同一轴：**翻类不翻义**，写法与产物同一 token。
  *
@@ -57,19 +57,24 @@ const ECHO_W = primaryWord('inline.engineEcho');
 const PREFIX = `${TRY_W} ${ECHO_W} `;
 
 /**
- * 九枚各自的引擎语法（名单真源 = `sugar-ident` 的 `TRY_CATCH_OPEN` ∪ `TRY_LIST_OPEN`）。
+ * 这十一枚各自的引擎语法（名单真源 = `sugar-ident` 的 `TRY_CATCH_OPEN` ∪ `TRY_LIST_OPEN`）。
  *
  * 载荷一律**数据**：`*` / `$` 前缀、逗号尺寸、引号、算式里的 `=` 与 `<` 都不许被中文化或剥掉
  * ——改一个字符就改档（判据同 `JUMP` / `DATAFORM` / `#DIM`）。
  */
 const NATIVES: readonly string[] = [
-  // 六枚：配 `出错处理`（CATCH … ENDCATCH）
+  // 八枚：配 `出错处理`（CATCH … ENDCATCH）
   'TRYCGOTO *先, LABEL:目标',
   'TRYCJUMP *退路, LABEL:2',
   'TRYCCALL FOO(A, 1)',
   'TRYCGOTOFORM $GO_BACK, TARGET',
   'TRYCJUMPFORM F_NAME(ARG)',
   'TRYCCALLFORM GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)',
+  // 2026-11-06 D03 批新入册的两枚开块词（引擎 funcMatch[..]=CATCH，见 FunctionIdentifier.cs:501-502）：
+  // 名字槽是**裸字符串表达式**（CALLS_Instruction / STR_EXPRESSION，运行时才解标签），非 FORM 模板；
+  // 写形仍逐字节回显——真语料 TEST.ERB:13 即 `TRYCCALLSTR RESULTS`， RESULTS 是承载标签的全局串。
+  'TRYCCALLSTR RESULTS',
+  'TRYCJUMPSTR RESULTS',
   // 三枚：配 `ENDFUNC`
   'TRYCALLLIST F1, F2',
   'TRYGOTOLIST *A, *B',
@@ -109,17 +114,19 @@ describe('工包 F · TRY 系写形的词表与名单（登记 = 承诺写得回
     }
   });
 
-  it('写形认领的记号恰为 sugar-ident 那九枚（一张名单，不多一枚不漏一枚）', () => {
-    const nine = [...new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN])].sort();
-    expect(nine).toHaveLength(9);
-    for (const kind of nine) {
+  it('写形认领的记号恰为 sugar-ident 那十一枚（一张名单，不多一枚不漏一枚）', () => {
+    const openBlock = [...new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN])].sort();
+    expect(openBlock, '真源 TRY_CATCH_OPEN 补到八枚 ⇒ 开块档 8 + 3 = 11').toHaveLength(11);
+    for (const kind of openBlock) {
       const cls = line(`${PREFIX}${kind} FOO(A, 1)`);
       expect(cls.kind, kind).toBe('tryStatement');
       expect(cls.kind === 'tryStatement' ? cls.engine : undefined, kind).toBe(kind);
     }
-    // 引擎**单行语句**那几枚不在九枚内（归原生直通通道，本形不抢、也不许靠前缀扩张）
-    for (const kind of ['TRYCALL', 'TRYCALLFORM', 'TRYJUMP', 'TRYGOTO', 'TRYGOTOFORM']) {
-      expect(nine).not.toContain(kind);
+    // 引擎**单行语句**那几枚不在开块档内（归原生直通通道，本形不抢、也不许靠前缀扩张）。
+    // `TRYCALLSTR` / `TRYJUMPSTR` 是近旁单行词（`isTryCatch=false`）：写形走 `原形` 回显时同样被
+    // `TRY_ECHO_TOKENS`（开块档派生）拒收 ⇒ `controlMalformed`，把"`*STR` 前缀不判档、档位才判档"钉死。
+    for (const kind of ['TRYCALL', 'TRYCALLFORM', 'TRYJUMP', 'TRYGOTO', 'TRYGOTOFORM', 'TRYCALLSTR', 'TRYJUMPSTR']) {
+      expect(openBlock).not.toContain(kind);
       expect(line(`${PREFIX}${kind} FOO`).kind, kind).toBe('controlMalformed');
     }
   });
@@ -127,7 +134,7 @@ describe('工包 F · TRY 系写形的词表与名单（登记 = 承诺写得回
 
 /* --------------------------- 二、round-trip 本体（逐字节） --------------------------- */
 
-describe('工包 F · TRY 系九枚 round-trip：写形编译后逐字节回到引擎原文', () => {
+describe('工包 F · TRY 系开块十一枚 round-trip：写形编译后逐字节回到引擎原文', () => {
   const errorsOf = (source: string): string[] =>
     svc()
       .transpile(source)
@@ -162,9 +169,9 @@ describe('工包 F · TRY 系九枚 round-trip：写形编译后逐字节回到�
   });
 });
 
-/* --------------------------- 三、块形与单行形（九枚各自语法） --------------------------- */
+/* --------------------------- 三、块形与单行形（开块档各自语法） --------------------------- */
 
-describe('工包 F · 块形（TRYC 六枚配 `出错处理`）与单行形（TRY*LIST 三枚）', () => {
+describe('工包 F · 块形（TRYC 八枚配 `出错处理`）与单行形（TRY*LIST 三枚）', () => {
   it('块形：写形头行 + `出错处理：` 块 ⇒ 产物四行逐字节、且顺序是配对顺序', () => {
     const head = 'TRYCCALLFORM M_KOJO_K12_回声';
     const source = `角色: 12\n时机 绝顶：\n\t${PREFIX}${head}\n\t出错处理：\n\t\t「这一段兜住。」\n\t出错处理结束\n`;
@@ -230,7 +237,7 @@ describe('工包 F · 残缺与越界写法不落台词、不产半成品', () =
     });
   }
 
-  it('残缺回执把合法形与九枚名单逐条列给作者（诊断文本零硬编码词形）', () => {
+  it('残缺回执把合法形与开块档名单逐条列给作者（诊断文本零硬编码词形）', () => {
     const cls = line(`${PREFIX}NOPE FOO`);
     const message = cls.kind === 'controlMalformed' ? cls.message : '';
     expect(message).toContain(TRY_W);
@@ -263,7 +270,7 @@ describe('工包 F · 残缺与越界写法不落台词、不产半成品', () =
 /* --------------------------- 五、读 ↔ 写回路闭合（显示形即写形） --------------------------- */
 
 describe('工包 F · 读↔写回路：屏上那一串照抄回去就发得出去', () => {
-  it('十四枚形（九枚 + 五变形）逐枚：显示形去掉词头 == 产物那一行，逐字节', () => {
+  it('十六枚形（开块 11 + 五变形）逐枚：显示形去掉词头 == 产物那一行，逐字节', () => {
     for (const erb of ALL_NATIVES) {
       const shown = renderControlLine({ content: erb, indent: 0 });
       expect(shown, erb).not.toBeNull();
@@ -325,7 +332,7 @@ describe('工包 F · 发版样例真用过写形（覆盖率闸的无语料预�
     .filter((l) => !l.trim().startsWith(';'))
     .filter((l) => new RegExp(`^[ \\t\\u3000]*${TRY_W}[ \\t\\u3000]+${ECHO_W}[ \\t\\u3000]+\\S`).test(l));
 
-  it('发版样例里真写过 `试探 原形 …`（至少一枚九枚记号）', () => {
+  it('发版样例里真写过 `试探 原形 …`（至少一枚开块档记号）', () => {
     expect(usedLines.length, '发版样例没用到 TRY 写形 ⇒ 覆盖率闸会报缺词').toBeGreaterThan(0);
   });
 
