@@ -1069,6 +1069,15 @@ pub const EDIT_TOOL_PREFIXES: &[&str] = &[
 /// 五枚在 WebView 契约（`SUPPLEMENTAL_TOOL_SPECS`）里即 `tier: 'edit'`，本表只是把端点侧
 /// 判定与契约对齐；`editor.format` 本批未接线（异步 provider 通道），故**不登记**——
 /// 缺席的工具名不提前点名，保持「未登记 ⇒ 不接线」的口径。
+///
+/// B10 批（LaneV 2026-11-06）追加 `editor.openDocument`——**同一型洞的第三批，理由逐字相同**：
+/// 它是 `命名空间.动词` 点号形态，既不命中 `EDIT_TOOL_PREFIXES` 的下划线前缀，也不在
+/// `PRIVILEGED_EXACT` ⇒ 不点名则 `host_required_tier()` 落 `McpTier::Read`，read 会话零批准
+/// 就能把作者正在编辑的文件从眼前换走（换走活动文档＝改用户可见的编辑器状态，与 B3 那五枚同档）。
+/// 这一枚在 Wave4 #4 曾判 `NOT_WIRED` 而不登记，B10 批因观察件（`livePanes` 登记簿反查）到位
+/// 才重判为「可诚实回报」⇒ 工具与档位同批进本表，端点级回归见
+/// `mcp::tests::e2e_tools_call_denies_editor_open_document_from_read_session`。
+/// `editor.revealPosition` 仍不登记（定位面已由 revealLine / setCursor 覆盖），故**不提前点名**。
 pub const EDIT_TOOLS_EXACT: &[&str] = &[
     "fileTree.create",
     "fileTree.update",
@@ -1080,6 +1089,7 @@ pub const EDIT_TOOLS_EXACT: &[&str] = &[
     "editor.setCursor",
     "editor.setSelection",
     "editor.revealLine",
+    "editor.openDocument",
 ];
 
 pub fn is_edit_tool(name: &str) -> bool {

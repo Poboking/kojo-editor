@@ -22,12 +22,16 @@
  *   （见 quick-fix.ts：模型内一次撤销步，不落盘）。
  * - 失败显式 `{code,message}`；无活动编辑器 / 无项目 / 判据腿未装配一律
  *   `NOT_WIRED` / `RESOURCE_UNAVAILABLE` 可见，不吞错、不伪造读数、不空串冒充成功。
- * - 第五波（LaneH / Wave4 #4）：editor.openDocument / editor.revealPosition 两枚 edit 档工具
- *   经判性确认「宿主没有可从 MCP 注入面安全复用、能诚实回报结果的打开 / 定位通道」，
- *   按铁律刻意不登记（真源不存在 ⇒ 不登记）：不进工具清单 / 不进真源腿表；
- *   `buildRealMcpSources` 的 runSupplemental 分发仍保留前置兜底，对误调显式抛 NOT_WIRED，
- *   绝不 emit fire-and-forget 的 `editor.revealLocation` 冒充打开成功；只读 editor.cursor
- *   是分开记账的加法（纯读焦点编辑器光标），绝不冒充写工具。
+ * - 第五波（LaneH / Wave4 #4）曾判 `editor.openDocument` / `editor.revealPosition` 两枚「宿主没有
+ *   可诚实回报的打开 / 定位通道」⇒ 刻意不登记。**B10 批（LaneV 2026-11-06）逐条复核后收口其中一枚**：
+ *   `editor.openDocument` 现登记为具名 edit 工具（腿在 `editor-open-legs.ts`）——判性证据一条没被推翻
+ *   （`editor.revealLocation` 仍是 fire-and-forget），变的是**观察件**：B3 之后 MCP 面能在执行时动态
+ *   import `livePanes` 反查登记簿，「这条 path 有没有真上屏」从推断变成读得回来的事实，于是
+ *   「发射 → 有界轮询 → 读数说话」可以诚实回报；读不到即显式失败，绝不 `opened:true` 冒充。
+ *   `editor.revealPosition` **继续不登记**：视口定位与光标定位已分别由 `editor.revealLine` /
+ *   `editor.setCursor` 覆盖（两枚都带读回核对），openDocument 又把 `paneId` 交回调用方 ⇒ 组合面没有
+ *   独立诚实数据面，重复登记只会造出第二条无核对的跳转。runSupplemental 对这一枚仍保留前置兜底
+ *   （误调必得带判性理由的可见 NOT_WIRED）；只读 editor.cursor 仍是分开记账的加法，绝不冒充写工具。
  * - promptSlots 只从 `mcp.prompt` 槽收集 adapter 贡献（骨架绝不硬编码领域知识）；
  *   无贡献 ⇒ 显式空数组（骨架并入的开关按契约保留）。
  * - 第六波余项⑤（长任务 progress · ADR-0013 P5）：长任务表在 `real-sources-tasks.ts`，本模块只做
@@ -51,6 +55,9 @@ import { recordQuickFixTickets, type QuickFixPaneResolver } from './quick-fix';
 // B3 批（LaneO）：编辑器写 / 光标副作用五枚的 pane 反查 seam 类型（生产解析在
 // editor-write-legs.ts 内部动态 import livePanes，本文件不静态拉 ui/*）。
 import type { EditorWritePaneResolver } from './editor-write-legs';
+// B10 批（LaneV）：`editor.openDocument` 的注入面形状（生产腿在 editor-open-legs.ts，
+// 本文件只透传 injection ⇒ io 层，不给开机图加边、也不在这里另立一份判据）。
+import type { McpEditorOpenDeps } from './editor-open-legs';
 import { registerMcpWiringSources, type McpWiringSources } from './wiring';
 import { bindFsFreshness, getFsFreshnessTracker } from './fs-freshness';
 import type { FsFreshnessTracker } from './fs-freshness';
@@ -1196,6 +1203,14 @@ export interface McpRealSourceInjection {
    */
   readonly getEditorPane?: EditorWritePaneResolver;
   /**
+   * `editor.openDocument` 的注入面（B10 批，LaneV 2026-11-06）：只许换**观察件与发射件**
+   * （`observePanes` / `emitIntent` / `sleep` / `now`）。缺省 = `editor-open-legs.ts` 的生产腿
+   * （动态 import `livePanes` + `kernel.bus.emit('editor.revealLocation')`）。
+   * **根读法与路径闸不在这里**（`getRootDir` / `resolveWithinRoot` 由 io 层硬接），
+   * 测试不许从这一格把项目根闸换掉。
+   */
+  readonly editorOpen?: Partial<McpEditorOpenDeps>;
+  /**
    * 外部写盘失效判定器（Wave4 余项 ③）：缺省用 `bindFsFreshness(kernel)` 绑上的生产判定器；
    * 测试可注入假账本。**给 null 也算显式选择**：只读应答仍附 `fsFreshness`，值如实为
    * `{available:false, stale:null, staleReason}`（缺席可见，不是缺字段）。
@@ -1393,6 +1408,8 @@ export async function buildRealMcpSources(
       (await import('../bridge/search')).searchInFiles as unknown as McpIoDeps['searchInFiles'],
     getQuickFixPane: injection?.getQuickFixPane,
     getEditorPane: injection?.getEditorPane,
+    // B10 批：只透传观察件 / 发射件（根读法与路径闸在 io 层硬接，这一格换不了闸）。
+    editorOpen: injection?.editorOpen,
     fsFreshness: injection?.fsFreshness ?? (() => getFsFreshnessTracker()),
     // 长任务面（Wave4 余项⑤）：表与投影在 real-sources-tasks.ts，这里只把三条真源腿给它。
     tasks: createMcpTaskLegs({
@@ -1422,21 +1439,23 @@ export async function buildRealMcpSources(
     // 宿主侧追加的第 9 项 resource（经 wiring 的 `resources` 注入口登记，冻结契约表零改动）。
     resources: [createFsFreshnessResource(ioDeps)],
     runSupplemental: (name, args, scope) => {
-      // LaneH / Wave4 #4 判性落地（逐条证据见 mcp-host/src/index.ts 第五波注释与 commit 回执）：
-      // 宿主没有可从 MCP 注入面安全复用、且能诚实回报结果的「打开文档 / 定位光标」真源。
-      // 这两枚 edit 档工具按铁律刻意不登记（真源不存在 ⇒ 不登记 + 显式缺口）：不进
-      // SUPPLEMENTAL_TOOL_SPECS / MCP_TOOL_GAP_MAP / buildUiSupplemental / ioTools 腿表。
-      // 这里保留前置防御性显式失败：万一有人绕过 registry 直调，调用必得带判性理由的
-      // 可见 NOT_WIRED，绝不 emit 一个 fire-and-forget 的 editor.revealLocation 冒充打开成功。
-      if (name === 'editor.openDocument' || name === 'editor.revealPosition') {
+      // LaneH / Wave4 #4 判性的**收口结果**（逐条证据见 editor-open-legs.ts 模块头与 B10 批回执）：
+      // · `editor.openDocument` 已登记为具名 edit 工具——观察件（livePanes 登记簿反查）到位后，
+      //   「发射宿主既有事件 → 有界轮询读回落地事实」可以诚实回报，执行腿在 ioTools 腿表里；
+      // · `editor.revealPosition` **继续刻意不登记**：视口定位与光标定位已由 `editor.revealLine` /
+      //   `editor.setCursor` 各自覆盖（两枚都有读回核对），openDocument 又把 `paneId` 交回调用方，
+      //   这条「一步同时做两件事」的组合面没有独立诚实数据面 ⇒ 重复登记等于造第二条无核对通道。
+      // 这里保留前置防御性兜底：万一有人绕过 registry 直调，调用必得带判性理由的可见 NOT_WIRED，
+      // 绝不 emit 一个 fire-and-forget 的 editor.revealLocation 冒充定位成功。
+      if (name === 'editor.revealPosition') {
         throw new McpFailure(
           'NOT_WIRED',
-          `工具 ${name} 未接线（Wave4 #4 判性）：宿主没有可从 MCP 注入面安全复用的打开 / 定位通道。` +
-            'editor.revealLocation 是 fire-and-forget 事件（无 ack / 无落地确认 / 落地走 React setState ' +
-            '异步重渲染 / routeOpenPath 不校验项目根域 / 订阅者只在 GUI 挂载时存在），发射后无法诚实回报执行结果；' +
-            'EditorCommandContext / McpRealSourceHost / CommandEntry.run / editor-pane-registry / io.readText ' +
-            '全为只读或 void 通道。刻意不接真源腿：调用必得可见 NOT_WIRED，' +
-            '绝不返回空串 / 假成功 / 静默成功。只读的活动文档 / 光标读数请用 document.active / editor.info / editor.cursor。',
+          `工具 ${name} 未接线（Wave4 #4 判性 · B10 批收口后仍不登记）：定位这一面已由两枚具名工具覆盖并各自带读回核对——` +
+            '视口滚动用 editor.revealLine（回读 revealedLine/clamped），光标位置用 editor.setCursor（回读 cursor/clamped）；' +
+            '两者都按 paneId 显式反查实例，paneId 从 editor.openDocument / document.active / editor.info 拿。' +
+            '再登记一枚"打开并定位"的组合工具只会造出第二条没有核对通道的跳转（editor.revealLocation 至今是 ' +
+            'fire-and-forget 事件：无 ack / 无落地确认 / 落地走 React setState 异步重渲染），按铁律 4 不静默、不假成功。' +
+            '只读的活动文档 / 光标读数请用 document.active / editor.info / editor.cursor。',
         );
       }
       const ui = uiSupplemental.get(name);

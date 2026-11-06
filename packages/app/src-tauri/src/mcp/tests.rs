@@ -3621,6 +3621,157 @@ fn e2e_tools_call_denies_editor_write_tools_from_read_session() {
     assert_eq!(v3["result"]["applied"], json!(true));
 }
 
+/// B10 批（LaneV，2026-11-06）：`editor.openDocument` 的**档位真源同批**判据（端点侧）。
+///
+/// 背景：Wave4 #4 曾把这枚判成 `NOT_WIRED` 而根本不登记 ⇒ 端点侧也就没有它。B10 批因观察件
+/// （`livePanes` 登记簿反查）到位而重判为「可诚实回报」⇒ 工具与档位必须**同批**进
+/// `EDIT_TOOLS_EXACT`，否则 WebView 契约说 edit、端点说 read，read 会话猜个名字就能把作者正在
+/// 编辑的文件从眼前换走（点号形态不命中 `EDIT_TOOL_PREFIXES` 的下划线前缀，也不在
+/// `PRIVILEGED_EXACT` ⇒ 不点名就落末尾 `McpTier::Read`，与 B3 那五枚同型洞）。
+/// 钉：宿主闸门逐枚判 Edit（不抬 privileged，危险面口径不动）；read 会话 `E_TIER_DENIED` 带工具名；
+/// edit / privileged 会话放行；批准语义零放宽（精确名与 `editor.*` 通配各自短路）；
+/// `tools/list` 第二道闸同样对 read 会话摘掉它。
+#[test]
+fn editor_open_document_is_gated_as_edit_at_host_gate() {
+    const TOOL: &str = "editor.openDocument";
+    let read = empty_scope(Vec::new());
+    let edit = McpSessionScope {
+        tier: McpTier::Edit,
+        ..empty_scope(Vec::new())
+    };
+    let priv_scope = McpSessionScope {
+        tier: McpTier::Privileged,
+        ..empty_scope(Vec::new())
+    };
+    assert!(is_edit_tool(TOOL), "{TOOL} 未进具名 Edit 表");
+    assert_eq!(host_required_tier(TOOL), McpTier::Edit, "{TOOL}");
+    assert!(!is_privileged_tool(TOOL), "{TOOL} 不得被抬成 privileged");
+    let e = check_tool_call_permission(TOOL, &read)
+        .err()
+        .unwrap_or_else(|| panic!("后门复现：{TOOL} 在 read 会话被端点放行（Ok）"));
+    assert_eq!(e.code, "E_TIER_DENIED", "{TOOL}");
+    assert!(
+        e.message.contains(TOOL),
+        "{TOOL} 拒绝必须可见（带工具名）"
+    );
+    assert!(
+        check_tool_call_permission(TOOL, &edit).is_ok(),
+        "{TOOL} edit 会话应放行"
+    );
+    assert!(
+        check_tool_call_permission(TOOL, &priv_scope).is_ok(),
+        "{TOOL} privileged 会话应放行"
+    );
+    // 批准语义零放宽：精确名与 `editor.*` 通配各自照旧短路放行。
+    let exact = empty_scope(vec![TOOL.to_string()]);
+    assert!(check_tool_call_permission(TOOL, &exact).is_ok());
+    let wildcard = empty_scope(vec!["editor.*".to_string()]);
+    assert!(
+        check_tool_call_permission(TOOL, &wildcard).is_ok(),
+        "{TOOL} 通配批准后应放行"
+    );
+    // tools/list 第二道闸：read 会话看不见这一枚（与 tools/call 同源判定）。
+    let result = json!({ "tools": [ { "name": TOOL } ] });
+    let filtered = filter_tools_list(&result, &read);
+    assert!(names_of(&filtered.result).is_empty(), "{TOOL} 未从 read 会话摘掉");
+    assert!(filtered.filtered.iter().any(|f| f == TOOL));
+}
+
+/// B10 批（LaneV，2026-11-06）：`editor.openDocument` 的**端点级**回归（与 B3 那枚同型、独立用例）。
+///
+/// read 会话猜名直调真实 TCP 端点，钉四件事：
+/// ① 显式 `-32000` + `data.code = E_TIER_DENIED`，且 message 带工具名（拒绝可见）；
+/// ② 闸门命中处写一条 Denied 审计，note 即原始码（缺席必须逐条可见）；
+/// ③ 拒绝发生在 emit **之前** ⇒ 桥零调用（`s.rx.try_recv()` 恒空：WebView 从没收到这一枚，
+///    连"发射一条无法核对的宿主事件"的机会都没有）；
+/// ④ 批准语义零放宽：第四张表把精确名列进 approvedTools 后，同一调用照旧走桥并成功
+///    （收口不得误伤已批准工具；回执形态按 WebView 腿的 `opened / paneId / active` 读数透传）。
+#[test]
+fn e2e_tools_call_denies_editor_open_document_from_read_session() {
+    const TOOL: &str = "editor.openDocument";
+    let s = TestServer::start();
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","id":910,"method":"tools/call","params":{{"name":"{}","arguments":{{"relPath":"src/a.kojo"}}}}}}"#,
+        TOOL
+    );
+    let r = mcp_post(s.port, &s.token, &body);
+    assert_eq!(r.status, 200, "{TOOL} 必须是 JSON-RPC 错误帧而非传输层失败");
+    let v = rpc_json(&r);
+    assert_eq!(v["id"], json!(910));
+    assert_eq!(v["error"]["code"], json!(-32000), "{TOOL}");
+    assert_eq!(
+        v["error"]["data"]["code"],
+        json!("E_TIER_DENIED"),
+        "{TOOL} 未按 Edit 档拒"
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(TOOL),
+        "{TOOL} 拒绝消息必须带上被拒的工具名"
+    );
+    // ② 一条 Denied 审计（本用例只发这一枚 ⇒ 恰一条，note 即原始码）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(denied.len(), 1, "read 会话直调应恰写一条 Denied 审计");
+    assert!(
+        denied
+            .iter()
+            .any(|e| e.tool == TOOL && e.note.as_deref() == Some("E_TIER_DENIED")),
+        "{TOOL} 缺一条 E_TIER_DENIED 审计"
+    );
+    // ③ 拒绝在 emit 之前：桥从未被调 ⇒ 只读会话一个文档都换不走。
+    assert!(
+        s.rx.try_recv().is_err(),
+        "read 会话直调 editor.openDocument 仍被转给 WebView ⇒ 后门复现"
+    );
+
+    // ④ 批准语义零放宽（精确名）：列入后同一调用照旧走桥并成功。
+    scope::approve(
+        s.dir.path(),
+        "loopback-client",
+        McpTier::Read,
+        vec![],
+        vec![TOOL.to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let port = s.port;
+    let token = s.token.clone();
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":911,"method":"tools/call","params":{{"name":"{}","arguments":{{"relPath":"src/a.kojo"}}}}}}"#,
+        TOOL
+    );
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    assert_eq!(payload.params["name"], json!(TOOL));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(json!({ "opened": true, "paneId": "pane-1", "active": true, "saved": false })),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r2 = worker.join().unwrap();
+    let v2 = rpc_json(&r2);
+    assert!(
+        v2["error"].is_null(),
+        "精确名批准后 editor.openDocument 仍被拒 ⇒ 收口误伤批准语义"
+    );
+    assert_eq!(v2["result"]["opened"], json!(true));
+    assert_eq!(v2["result"]["paneId"], json!("pane-1"));
+    assert_eq!(v2["result"]["saved"], json!(false));
+}
+
 /// B4 批（LaneS，2026-11-06）：启动器族 27 枚具名 `launcher_*` 工具的**档位真源**判据。
 ///
 /// 钉四件事（一条都不许漂）：

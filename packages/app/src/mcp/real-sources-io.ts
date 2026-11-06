@@ -36,6 +36,15 @@
  *   `applyTextEdits`：Monaco **模型内**单次编辑（一个撤销步、可见脏、**不落盘、不触 io、不 invoke**，
  *   铁律 5/6/7 不新建写通道）；稳定 actionId 台账 + 逐闸显式拒绝见 `quick-fix.ts`，
  *   `run` 式意图 / 糖投影仍保持显式 NOT_WIRED（能力没接上的部分不假成功）。
+ * - **打开文档面（B10 批，LaneV 2026-11-06）**：`editor.openDocument` 执行体**只复用**宿主既有事件
+ *   `editor.revealLocation`（App.tsx 通用导航落地点）——MCP 侧不加机制、只加观察：发射后**有界轮询**
+ *   `livePanes` 登记簿（窗与间隔是常量，依据写在 `editor-open-legs.ts` 模块头），读到「实例的活动文件
+ *   就是这条 path + 上屏 model 就是它那一份标签的 model」才回 `opened:true`；读不到一律显式失败并交代
+ *   账目（等了多久 / 几个实例 / 各实例正显示什么 / 为什么判没打开），**绝不 opened:true 冒充**。
+ *   入参只收项目根内相对路径，走的是与 `fs.readFile` **同一条** `resolveWithinRoot`；
+ *   `getRootDir` / 路径闸**不接受注入替换**（测试只能换观察件与发射件，换不了闸）。
+ *   本腿零写盘、零改模型、零改光标：`saved:false` + `contentChanged:false` 恒定如实回报
+ *   （铁律 5/6/7：本批同样零新增写盘通道）。
  * - **Wave4 余项 ③（外部写盘感知 → 失效信号）**：只读腿的应答一律附 `fsFreshness` 字段
  *   （判定器 / 真源出处 / 监视覆盖 / 有界账读数），真源见 `./fs-freshness`：
  *   `kernel.fileWatch.state()`（`start_watch` 回执的宿主侧形态）+ 总线 `file.changed` /
@@ -75,6 +84,15 @@ import { createQuickFixApplyLeg, type QuickFixPaneResolver } from './quick-fix';
 // 真源 = debug/install-debug.ts 已实现并测过的同一批腿；与调试面唯一差别是 MCP 面**没有
 // 「当前聚焦」语义**，一律按 paneId 显式反查（见 editor-write-legs.ts 模块头判性）。
 import { createEditorWriteLegs, type EditorWritePaneResolver } from './editor-write-legs';
+// B10 批（LaneV，2026-11-06）：`editor.openDocument` 的执行腿——发射宿主既有
+// `editor.revealLocation`，再**有界轮询登记簿**把落地读回来（回执只认登记簿读数，读不到即显式失败）。
+// 机制一条没加、观察加一层；实现腿的形状照 editor-write-legs.ts（seam 注入 + 生产动态 import）。
+import {
+  createEditorOpenLegs,
+  productionEmitOpenIntent,
+  productionObserveEditorPanes,
+  type McpEditorOpenDeps,
+} from './editor-open-legs';
 // B4 批（LaneS，2026-11-06）：启动器族 27 枚具名 privileged 工具的执行腿。
 // 真源 = `kernel.launcherHost`（一方法一条 Rust `launcher_*` 命令）；档位与批准语义零改动
 // （`launcher_` 前缀在 Rust `is_launcher_tool()` 与 WebView `PRIVILEGED_TOOL_PREFIXES` 两侧
@@ -162,6 +180,12 @@ export interface McpKernelLike {
     readonly on: (name: string, cb: (payload: unknown) => void) => () => void;
     /** 写成功后广播 `file.changed`（宿主刷新既有通道）；缺席 ⇒ 跳过并在结果里如实标注。 */
     readonly emit?: (name: string, payload: unknown) => void;
+    /**
+     * 当前订阅者数（`editor.openDocument` 的发射前预检用，B10 批 LaneV 2026-11-06，additive）。
+     * 真实现 = 内核 `EventBus.listenerCount`（调试辅助，**不在 `@kojo/plugin-api` 的 EventBus 契约里**）
+     * ⇒ 这里按可选投影：读不到 ⇒ 腿如实 `subscribers:null`，不编造订阅数、也不为它抬契约。
+     */
+    readonly listenerCount?: (name: string) => number;
   };
   readonly slots: { readonly query: (slot: string) => readonly unknown[] };
   /**
@@ -205,6 +229,13 @@ export interface McpIoDeps {
    * 本面**不设「当前聚焦编辑器」兜底**：paneId 不在册即显式 `NOT_WIRED`（铁律 4：不静默迁移到别的 pane）。
    */
   readonly getEditorPane?: EditorWritePaneResolver;
+  /**
+   * `editor.openDocument` 的注入面（B10 批，LaneV 2026-11-06）：只给要换的那几位
+   * （生产缺省 = `productionEmitOpenIntent(kernel.bus)` + `productionObserveEditorPanes` 动态
+   * import `livePanes`）。`getRootDir` / `resolveWithinRoot` **不由注入面给**——根读法与路径闸
+   * 必须与 `fs.readFile` 同一条，测试不许从这里换闸。
+   */
+  readonly editorOpen?: Partial<McpEditorOpenDeps>;
   /**
    * 外部写盘失效判定器（Wave4 余项 ③；生产由 `real-sources.ts` 绑定内核后给到，
    * 测试可注入或缺席）。缺席 ⇒ 只读应答仍附 `fsFreshness`，值如实为
@@ -1322,6 +1353,25 @@ export function createRunSupplemental(deps: McpIoDeps): (
   // parseLegMaps 按这个锚判 wired（成员表达式不命中 ⇒ 会把已接线的腿算成 NOT_WIRED 假红）。
   const { editorSetValue, editorType, editorSetCursor, editorSetSelection, editorRevealLine } =
     editorWriteLegs;
+  /* ---------------- 打开文档腿（B10 批，LaneV 2026-11-06）----------------
+   * 执行体 = 宿主既有事件 `editor.revealLocation`（App.tsx 的通用导航落地点，与转到定义 /
+   * 问题面板 / 大纲同一条路）；MCP 侧**只加观察、不加机制**：发射后有界轮询 `livePanes` 登记簿，
+   * 读到「某实例的活动文件就是这条 path 且上屏 model 就是它那一份标签的 model」才算 opened:true。
+   * 根读法与路径闸**不从注入面给**：`getRootDir` 走 `requireProject`、`resolveWithinRoot` 用本模块
+   * 那一条（与 fs.readFile 逐字同尺）——Wave4 #4 那句「routeOpenPath 不校验项目根域」就在这里补上，
+   * 域外路径当场 INVALID_ARGS，永远到不了宿主事件。 */
+  const openDeps: McpEditorOpenDeps = {
+    getRootDir: () => {
+      const root = rootDirOf(requireProject(deps.getKernel()));
+      return root === '' ? null : root;
+    },
+    resolveWithinRoot,
+    emitIntent: deps.editorOpen?.emitIntent ?? productionEmitOpenIntent(() => deps.getKernel()?.bus ?? null),
+    observePanes: deps.editorOpen?.observePanes ?? productionObserveEditorPanes,
+    sleep: deps.editorOpen?.sleep,
+    now: deps.editorOpen?.now,
+  };
+  const editorOpenDocument = createEditorOpenLegs(openDeps).editorOpenDocument;
   /* ---------------- 启动器族腿（B4 批，LaneS 2026-11-06）----------------
    * 27 枚具名 `launcher_*` 工具的执行体全部转交 `real-sources-launcher.ts`（真源
    * `kernel.launcherHost`，一方法一条 Rust 命令）。这里只做「解构成裸标识符 + 进腿表」，
@@ -1429,6 +1479,10 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['editor.setCursor', editorSetCursor],
     ['editor.setSelection', editorSetSelection],
     ['editor.revealLine', editorRevealLine],
+    // B10 批（LaneV）：打开文档一枚（edit 档）。回执只认登记簿读数：读不到就显式失败并交代账目
+    // （等了多久 / 看到几个实例 / 各实例正显示什么 / 为什么判没打开），绝不 opened:true 冒充。
+    // 本腿不写盘、不改模型、不改光标（`saved:false` + `contentChanged:false` 恒定如实回报）。
+    ['editor.openDocument', editorOpenDocument],
     // B4 批（LaneS）：启动器族 27 枚具名 privileged 工具（真源 kernel.launcherHost，
     // 一方法一条 Rust `launcher_*` 命令）。只读那 13 枚零副作用；生命周期 / 写那 14 枚的
     // 第三张表复验、确认闸、信任闸全在宿主，本面不收任何写落点参数。

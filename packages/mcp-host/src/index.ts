@@ -960,36 +960,37 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     annotations: { readOnlyHint: true },
   },
 
-  /* ---- 第五波（LaneH，2026-11-06）：Wave4 #4 判性落地 ----
-   * 判性落地：editor.openDocument / editor.revealPosition 两枚 edit 档工具刻意不登记，
-   * 证据逐条如下；只读 editor.cursor 单独记账。
-   * 按铁律 4「缺席=NOT_WIRED、截断=truncated 可见、真源不存在=不登记（绝不挂空串假实现）」：
-   * 这两枚名字不进 SUPPLEMENTAL_TOOL_SPECS、不进 MCP_TOOL_GAP_MAP、不进真源腿表，
-   * 只作为显式缺口留在 MCP_DEFERRED_GAP_NOTES 的 Wave4 #4 条目；runSupplemental 仍保留
-   * 前置兜底，对任何误调抛可见 NOT_WIRED（绝不假成功）。
-   * 判性结论（逐条证据见 commit 回执）：宿主没有可从 MCP 注入面安全复用、且能诚实回报
-   * 执行结果的「打开项目内文件 / 把光标定位到行列」真源——
-   *   · editor.revealLocation（App.tsx:1379）是唯一真实的打开+定位通道，但它是
+  /* ---- 第五波（LaneH，2026-11-06）：Wave4 #4 判性落地 →（B10 批 LaneV 同日收口其中一枚）----
+   * Wave4 #4 的判性**在当时成立**，四条证据一条都没被推翻：
+   *   · editor.revealLocation（App.tsx 的通用导航落地点）是唯一真实的「打开 + 定位」通道，而它是
    *     fire-and-forget 事件：无 ack / 无落地确认；落地走 React setState 异步重渲染；
-   *     routeOpenPath（App.tsx:1750）只过 .kojo2 入口闸、不校验路径是否在项目根内；
-   *     订阅者只在 App 组件挂载（GUI 运行时）存在。发射后回报「已打开」= 推断 / 假成功，
-   *     回报「已发射意图（未确认）」= 把无确认副作用包装成具名工具 —— 都不诚实。
-   *   · EditorCommandContext（slots-types.ts:399）只读投影，无 open / reveal 句柄；
-   *     McpRealSourceHost（real-sources.ts:1008）只有三个只读 getter；
-   *     CommandEntry.run（commands.ts:138 / ProjectView.tsx:790）忽略 args、返回 void、
+   *     routeOpenPath 只过 .kojo2 入口闸、不校验路径是否在项目根内；订阅者只在 App 组件挂载时存在；
+   *   · EditorCommandContext（slots-types.ts）只读投影，无 open / reveal 句柄；
+   *     McpRealSourceHost 只有三个只读 getter；CommandEntry.run 忽略 args、返回 void，
    *     gotoLine 经 editor.action.request 触发 Monaco 交互式输入框；
-   *     editor-pane-registry 全是纯读登记簿（openModelAcrossGroups 只查已开 model 不打开）；
-   *     file-tree-ops + 内核 io.readText(read_file_bytes) 是读内容通道，不打开 GUI 文档。
-   * 不写盘、不开放任意目标路径；写盘仍只经第四张表 approvedRoots × 内核 writablePaths 双闸。
+   *     file-tree-ops + 内核 io.readText 是读内容通道，不打开 GUI 文档。
+   * B10 批改判的是**观察件**而不是通道：editor-pane-registry 那张登记簿从 B3 批起已被证明可在执行时
+   * 动态 import 并按 paneId 反查（`editor-write-legs.ts`），于是「这条 path 有没有真上屏」
+   * 变成读得回来的事实 ⇒
+   *   ✔ editor.openDocument：**已登记**为具名 edit 工具（本文件 B10 规格块 + app `editor-open-legs.ts`）。
+   *     形态 = 发射宿主既有事件 → 有界轮询登记簿 → 用读数说话；读不到显式失败，登记簿读不到时在发射前
+   *     NOT_WIRED。Wave4 #4 里「routeOpenPath 不校验项目根域」这一条由 MCP 侧的 resolveWithinRoot
+   *     补上（与 fs.readFile 同尺），宿主事件永远拿不到域外落点。
+   *   ✘ editor.revealPosition：**继续不登记**。视口定位与光标定位已分别由 editor.revealLine /
+   *     editor.setCursor 覆盖且各自带读回核对，paneId 又由 editor.openDocument / document.active 交回；
+   *     这条「一步做两件事」的组合面没有独立诚实数据面，登记它只会造出第二条没有核对的跳转。
+   *     runSupplemental 对这一枚保留前置兜底，误调必得带判性理由的可见 NOT_WIRED。
    * editor.cursor 是分开记账的只读读数加法（真源 = 焦点编辑器 getPosition），不冒充写工具。
+   * 写盘边界不变：打开文档不写盘，落盘仍只经第四张表 approvedRoots × 内核 writablePaths 双闸与
+   * exportFile 对话框（铁律 5/6/7：本批零新增写盘通道）。
    * 本注释刻意不写规格字面量，避免干扰盘点脚本对规格块的正则解析。
    */
-  // 与上面缺口判性分开记账：这是安全的只读读数加法（真源 = 焦点编辑器 getPosition，
+  // 与上面的面分开记账：这是安全的只读读数加法（真源 = 焦点编辑器 getPosition，
   // 与 document.active / editor.info 同源），不是打开 / 定位写工具，绝不拿来冒充写能力。
   {
     name: 'editor.cursor',
     description:
-      'Read the caret position of the active editor (read-only). Returns {path, language, line, column, lineCount} for the focused document; the 1-based cursor comes from the focused editor, not the model. No arguments, no side effects: never moves the caret and never opens a file. Backed by the same read-only workspace source as document.active / editor.info. When no editor is focused the call fails with a visible NOT_WIRED (never a fabricated {line:1,column:1}). This is a READ tool, deliberately separate from the editor.openDocument / editor.revealPosition NOT_WIRED gap.',
+      'Read the caret position of the active editor (read-only). Returns {path, language, line, column, lineCount} for the focused document; the 1-based cursor comes from the focused editor, not the model. No arguments, no side effects: never moves the caret and never opens a file. Backed by the same read-only workspace source as document.active / editor.info. When no editor is focused the call fails with a visible NOT_WIRED (never a fabricated {line:1,column:1}). This is a READ tool, deliberately separate from the editor.openDocument edit tool and from the editor.revealPosition gap that stays unregistered.',
     // 诚实零参契约：显式拒绝任何入参，不用空 {type:'object'} 兜底（见 mcp-host.test.ts 的 schema 闸）。
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     tier: 'read',
@@ -1165,6 +1166,48 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     },
     tier: 'edit',
     annotations: { idempotentHint: true },
+  },
+
+  /* ---- B10 批（LaneV，2026-11-06）：打开文档面收口（Wave4 #4 那条 NOT_WIRED 判性的重判）----
+   * 判性证据一条没被推翻：`editor.revealLocation` 至今仍是 fire-and-forget 事件（无 ack / 无落地
+   * 确认 / 落地走 React setState 异步重渲染 / 订阅者只在 GUI 挂载时存在）。本批**没给它加 ack，
+   * 也没有新造第二条跳转**——变的是观察件：B3 之后 MCP 面能在执行时动态反查 `livePanes` 登记簿，
+   * 于是「发射宿主既有事件 → 有界轮询登记簿 → 把落地事实读回来」可以诚实回报。
+   * 判据（执行腿 `editor-open-legs.ts`）：只有「某实例的活动文件就是这条 path，且上屏 model 就是它那一份
+   * 标签的 model」才回 opened:true；窗内读不到 ⇒ 显式失败，并交代等了多久、看到几个实例、
+   * 每个实例正显示什么、为什么判没打开；登记簿读不到（GUI 未挂载 / 无头宿）⇒ 发射之前就 NOT_WIRED，
+   * 零副作用。入参只收项目根内相对路径，与 fs.readFile 同一条闸（域外路径永远到不了宿主事件）。
+   * 打开文档不写盘、不改模型、不改光标：回包恒 saved:false / persisted:false / contentChanged:false。
+   * 「定位」那一面本批**仍不登记**（见本文件 Wave4 #4 块与台账的 B10 条目）：视口与光标已分别由
+   * editor.revealLine / editor.setCursor 覆盖且都带读回核对，paneId 由本工具与 document.active 交回；
+   * 组合面没有独立诚实数据面 ⇒ 重复登记等于造第二条无核对通道。本注释刻意不写规格字面量。
+   */
+  {
+    name: 'editor.openDocument',
+    description:
+      'Open ONE document of the currently open project in the editor GUI and report what actually landed (edit tier: it changes user-visible editor state - which file is on screen - so a read session must not be able to move the author away from their file). ' +
+      'Input is a project-root-relative path only: the SAME gate as fs.readFile (an absolute path, a drive letter, a ".." segment or any other escape is rejected with INVALID_ARGS before anything reaches the host event bus, so the host never receives an out-of-domain target). ' +
+      "Execution reuses the host's own navigation channel (the editor.revealLocation event that Go-to-definition / the problem panel / the outline already use) - this tool adds NO second open mechanism, only observation. " +
+      "opened:true is answered ONLY after reading the pane registry back: some pane's active file is this path AND the model on screen is that tab's own model (the same check refuses the transient where the path has already switched but the previous model is still displayed). The reply carries the facts read back - paneId, path, active, lineCount, language, modelUri, readOnly, derivedView (a sugar projection on screen: write tools still refuse there), tabCount - plus the observation account (waitedMs, polls, pollIntervalMs, deadlineMs, intent with channel and subscriber count, alreadyOpen when nothing was emitted). " +
+      'When it cannot be verified the call FAILS loudly instead of pretending the open happened: an exhausted window says how long it waited, how many panes it saw and what each pane displays (TOOL_EXECUTION_FAILED); a registry that cannot be read at all - GUI not mounted, headless host, no subscriber for the channel - refuses BEFORE emitting anything with NOT_WIRED; no project open gives RESOURCE_UNAVAILABLE. ' +
+      'Opening changes nothing on disk and no model bytes: contentChanged:false, dirty stays null with the reason, saved:false and persisted:false always hold - persisting remains on the fileTree.update double-gate / exportFile dialog paths. Positioning is deliberately NOT part of this tool: use editor.setCursor / editor.revealLine with the paneId this returns (both read their result back).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPath: RELATIVE_PATH_SCHEMA,
+        deadlineMs: {
+          type: 'integer',
+          minimum: 100,
+          maximum: 10_000,
+          description:
+            'Bounded window to wait for the open to land (default 3000ms; hard cap 10000ms keeps this call inside the endpoint request budget). Outside that range the value is rejected, not clamped. The poll interval is a fixed 25ms.',
+        },
+      },
+      required: ['relPath'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { readOnlyHint: false, idempotentHint: true },
   },
 
   /* ---- B4 批（LaneS，2026-11-06）：启动器族具名工具（tier 'privileged'）----
@@ -1650,6 +1693,11 @@ export const MCP_TOOL_GAP_MAP: readonly {
   { tool: 'editor.setCursor', gap: 'setCursor', source: 'debug' },
   { tool: 'editor.setSelection', gap: 'setSelection', source: 'debug' },
   { tool: 'editor.revealLine', gap: 'revealLine', source: 'debug' },
+  // B10 批（LaneV，2026-11-06）：`editor.openDocument` 已登记为具名 edit 工具（腿表命中 ⇒ 盘点按
+  // writeLegs 记 wired），但它**不进本表**：四处真源里没有一条缺口名对应「打开 GUI 文档」
+  // （Rust 命令族没有 open 原语、debug 面没有开文件读数、宿主那条是总线事件而非命令）。
+  // 硬造一条 tool→gap 只会被交叉校验判 orphanedWires（假绿），故这里如实留空，判性写在
+  // MCP_DEFERRED_GAP_NOTES 的 B10 条目。
   // B2 批（LaneT，2026-11-06）：结构化批读面 fs.readMany 接 kernel.io.readTexts（其实现在
   // Tauri 侧就是那条 read_files_raw 批量二进制帧，但工具输出是 TextFile 投影 + 逐条
   // resolveWithinRoot 的项目根内相对路径 + ≤64 条硬上限），故「无结构化数据面 / 暴露任意目标
@@ -1701,7 +1749,8 @@ export const MCP_DEFERRED_GAP_NOTES: readonly { readonly scope: string; readonly
   { scope: 'ui.* 槽贡献（面板 / 装饰 / 语言服务注册）', reason: '纯 UI / 注册贡献，无独立数据面；领域知识只经 mcp.prompt 槽注入。' },
   { scope: '其余未登记只读原语', reason: '真源存在但本波未登记为具名工具：保留在缺口清单，宿主后续按需补，绝不挂空串假实现。' },
   { scope: 'LaneF 第四波刻意不登记的 5 条 cheap-read（B2 批后余项 4 条：read_files_raw 已被具名工具结构化覆盖）', reason: 'read_files_raw 于 B2 批（LaneT 2026-11-06）由具名只读工具 fs.readMany 结构化覆盖：输出走 kernel.io.readTexts 的 TextFile 投影（不是 ipc::Response 裸字节帧）、逐条 resolveWithinRoot 只收项目根内相对路径（绝对路径 / 盘符 / .. 逃逸整批显式 INVALID_ARGS）、单次硬上限 64 条且超限显式报错不静默截断 ⇒ 原「无面向模型的结构化只读数据面」与「暴露任意目标路径参数」两条理由逐条拆除，该缺口由 deferred 转 wired。read_file_bytes_raw 继续 deferred：单文件 ipc::Response 二进制帧（前端拿 ArrayBuffer / 自定义帧），是开项目热路径的性能通道，没有面向模型的结构化数据面，且其 path 就是任意绝对目标路径参数——项目根内的单文件文本读已由 fs.readFile 覆盖、批量文本读已由 fs.readMany 覆盖，登记它只会把「不暴露任意目标路径参数」这条闸重新打开；updater_relaunch=app.restart() 重启动作、debug.type=applyTypedEdit 编辑器输入动作，均非只读；debug.actions 真源 focusedCtx().editorRef.current.getSupportedActions() 对 MCP 注入面不可达，绝不挂空数组假实现。' },
-  { scope: 'Wave4 #4 · editor.openDocument / editor.revealPosition（LaneH 判性，显式 NOT_WIRED 判据）', reason: '宿主无可从 MCP 注入面安全复用、且能诚实回报结果的打开文档 / 定位光标真源。逐条不可复用：editor.revealLocation（App.tsx:1379）是 fire-and-forget 事件，无 ack / 无落地确认 / 落地走 React setState 异步重渲染 / routeOpenPath 不校验项目根域 / 订阅者只在 GUI 挂载时存在，发射后回报已打开即假成功；EditorCommandContext（slots-types.ts:399）只读投影无句柄；McpRealSourceHost（real-sources.ts:1008）仅三个只读 getter；CommandEntry.run（commands.ts:138 / ProjectView.tsx:790）忽略 args 且返回 void，gotoLine 经 editor.action.request 触发 Monaco 交互输入框；editor-pane-registry 全为纯读登记簿，openModelAcrossGroups 只查已开 model 而不打开；file-tree-ops 与内核 io.readText(read_file_bytes) 只读文件内容，不打开 GUI 文档也不定位光标。两枚 edit 档工具按铁律刻意不登记（真源不存在 ⇒ 不登记 + 显式缺口，绝不挂空串假实现），既不进工具清单也不进覆盖登记；runSupplemental 前置兜底仍对任何误调抛可见 NOT_WIRED，绝不 emit 无确认事件冒充成功；写盘仍只经第四张表 approvedRoots × 内核 writablePaths 双闸。只读 editor.cursor 是分开记账的加法，绝不冒充写工具。' },
+  { scope: 'Wave4 #4 · editor.revealPosition（LaneH 判性 · B10 批 LaneV 复核后仍不登记）', reason: '定位这一面已由两枚具名 edit 工具各自覆盖并带读回核对：editor.revealLine 管视口（回读 revealedLine 与 clamped）、editor.setCursor 管光标（回读 cursor 与 clamped），要操作的实例由 editor.openDocument / document.active / editor.info 交回 paneId。当年 LaneH 的四条证据一条都没被推翻（editor.revealLocation 至今是 fire-and-forget 事件：无 ack / 无落地确认 / 落地走 React setState 异步重渲染 / 订阅者只在 GUI 挂载时存在），变的只是观察件（见下一条），而观察件救不了「一步同时打开并定位」这条组合面：把它登记成工具等于造第二条没有核对通道的跳转。⇒ 按铁律 4 继续不登记，runSupplemental 的前置兜底对误调仍抛带判性理由的可见 NOT_WIRED，绝不返回 moved:true 一类的假成功。' },
+  { scope: 'B10 批判性变更（LaneV 2026-11-06）：editor.openDocument 由 deferred 转为具名 edit 工具（不是抬成 wired 缺口计数——它没有对应的 rust/debug 真源缺口名，故不进 MCP_TOOL_GAP_MAP）', reason: '原判性（宿主无可诚实回报结果的打开通道）在 B3 批之后不再成立，理由逐条：① 观察件到位——editor-write-legs.ts 已证明 MCP 面能在执行时动态 import ui/editor-pane-registry 并按 paneId 反查 livePanes 的 ref 壳（ps10 纪律：登记簿仍是动态边，开机静态图零新增），于是「这条 path 有没有真上屏」从推断变成读得回来的事实；② 执行体没换——仍只发射宿主既有的 editor.revealLocation（App.tsx 通用导航落地点，与转到定义 / 问题面板 / 大纲同一条路），本批零新事件、零新宿主能力、没给事件加 ack；③ 回执形态——发射后有界轮询登记簿（窗缺省 3000ms、上限 10000ms、间隔 25ms，三个常量与依据写在 editor-open-legs.ts 模块头），只有「某实例 filePathRef 命中目标 + 上屏 model 就是那一份标签 model」才回 opened:true，并把 paneId / lineCount / language / modelUri / readOnly / derivedView / waitedMs / polls / intent 全部读回来；④ 读不到就显式失败并交代账目（等了多久、看到几个实例、各实例正显示什么、为什么判没打开），登记簿整张读不到或在发射前查到该事件零订阅者 ⇒ 不发射、直接 NOT_WIRED；⑤ Wave4 #4 里「routeOpenPath 不校验项目根域」这一条由 MCP 侧补上：入参只收项目根内相对路径，走与 fs.readFile 同一条 resolveWithinRoot，绝对路径 / 盘符 / 上跳当场 INVALID_ARGS，宿主事件永远拿不到域外落点（附带红利：目标锚在当前根内，routeOpenPath 的换项目分支构造上不可达）。打开文档不写盘、不改模型、不改光标：contentChanged:false 与 saved:false / persisted:false 恒定如实回报，落盘仍只经第四张表 approvedRoots × 内核 writablePaths 双闸与 exportFile 对话框。档位与 B3 那五枚同尺进 Rust EDIT_TOOLS_EXACT，端点级 read 会话直调逐枚 E_TIER_DENIED 带工具名 + Denied 审计 + 桥零调用。' },
   /* ---- B4 批（LaneS，2026-11-06）：启动器族逐条判性（27 枚已登记，其余一律留账不静默）---- */
   { scope: 'B4 批刻意永不登记：launcher_pick_archive / launcher_pick_source_root / launcher_pick_write_root', reason: '对话框即授权本身（铁律 6/7）：这三条命令的返回值就是授权动作（选中的绝对路径 + 当场写入第三张表的 approvals.json），把它做成模型可调用的工具等于让 AI 替人按下确认键，也等于开放任意目标路径参数。授权入口只有原生目录对话框一条路，JS 侧永不代拿落点决定权。' },
   { scope: 'B4 批刻意永不登记：launcher_trust_executable', reason: '可执行文件信任的授予必须是人的动作：宿主在同一命令内算 sha256 并弹原生确认框（approvedBy 恒为 native-dialog），登记成工具即让 AI 自授信任并绕过 launcher_start 校验链里的那一道闸，属新造权限而非新入口。' },
