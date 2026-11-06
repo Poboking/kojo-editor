@@ -350,6 +350,33 @@ describe('B11 判据 3 · 未知入参 ⇒ INVALID_ARGS（点名未知键 + 合�
     }
   });
 
+  it('指回的第二条腿只认值证据：名字够不着时，值被唯一一枚窄形状收得下才指（否则照旧沉默）', () => {
+    // ① corridor 这一类：键名与任何合法名的归一化距离都够不着阈值，但值本身是游标形状 ⇒ 指回 cursor。
+    const one = validateAgainstSchema(schemaOf('fs.readFile'), { relPath: 'a.kojo', pagingToken: 'abcd1234:1' });
+    expect(one.valid).toBe(false);
+    expect(one.errors.join(' ')).toContain("未知入参 'pagingToken'");
+    expect(one.errors.join(' ')).toContain('最接近的合法名：cursor');
+    // ② 值什么都不是（裸整数）⇒ 一条证据也没有，不许把 size / min 这类名字推到模型眼前。
+    const none = validateAgainstSchema(schemaOf('fs.readFile'), { relPath: 'a.kojo', size: 10 });
+    expect(none.valid).toBe(false);
+    expect(none.errors.join(' ')).not.toContain('最接近的合法名');
+    // ③ 值同时被两枚窄形状收得下 ⇒ 有歧义就不猜，只摊清单。
+    const both = validateAgainstSchema(
+      {
+        type: 'object',
+        properties: {
+          upper: { type: 'string', pattern: '^[A-Z0-9-]+$' },
+          dotted: { type: 'string', pattern: '^[A-Z0-9.-]+$' },
+        },
+        additionalProperties: false,
+      },
+      { weird: 'AB-12' },
+    );
+    expect(both.valid).toBe(false);
+    expect(both.errors.join(' ')).toContain('本面只收这些入参：upper / dotted');
+    expect(both.errors.join(' ')).not.toContain('最接近的合法名');
+  });
+
   it('够不着的乱名字不瞎猜，只把合法清单摊开（不把不相干的名字推到模型眼前）', () => {
     const v = validateAgainstSchema(
       { type: 'object', properties: { limit: { type: 'integer' } }, additionalProperties: false },

@@ -200,28 +200,32 @@ function nearestLegalKey(unknown: string, legal: readonly string[]): string | nu
  * 「够不着的乱名字不瞎猜」，所以阈值一个字不动。
  *
  * 换证据说话：调用方**实际传进来的那个值**比键名诚实。未知键的值原样满足了本面一枚
- * 「窄形状」入参声明的 `pattern`，而这样的入参在本面**只有一个**，才指回它；
- * 「窄」不靠人肉认定，用一组固定探针串现场量（兜底式 pattern——连普通词都收，例如相对路径
- * 那一枚只挡盘符 / 绝对 / `..` 上跳——不算证据，见 `SCHEMA_SHAPE_SPECIFICITY_MIN`）。
+ * 「窄形状」入参声明的 `pattern`，而这样的入参在本面**只有一个**，才指回它。
+ * 「窄」不靠人肉认定：拿一组**普通参数词**去撞该 pattern，拒掉 ≥ `SCHEMA_SHAPE_SPECIFICITY_MIN`
+ * 的才算证据——随便一个英文词都收得下的形状（相对路径只挡盘符 / 绝对 / `..` 上跳、
+ * 实例 id 与组件 id 只挡字符集外的字符）没有鉴别力，指回去就等于把无关名字推到模型眼前。
+ * 现场量过（三张表 77 枚面 × 七种取值 ＝ 539 组）：全表只有游标那一枚
+ * `^[0-9a-f]{8}:\d{1,10}$` 过鉴别力闸，于是这条腿只在「值本身是合法游标」时出声
+ * （25 组全指回 cursor），路径形 / id 形 / 裸整数 / 普通词 / 布尔一组都不出声。
  * 零个或两个以上候选收得下 ⇒ 照旧沉默，只把合法清单摊开。
  */
 const SCHEMA_SHAPE_PROBES = [
   'limit',
-  'maxChars',
-  'a.kojo',
-  'dir/a.kojo',
-  'D:\\game\\a.kojo',
-  '/srv/a.kojo',
-  '../a.kojo',
-  'D:/x',
-  '8f3c2a1b:42',
-  'hello world',
-  'x'.repeat(80),
+  'offset',
+  'size',
+  'count',
+  'min',
+  'max',
+  'name',
+  'path',
+  'text',
+  'query',
   'search',
+  'true',
 ] as const;
 
-/** pattern 至少拒掉这个比例的探针串，才算「窄形状」（有指回价值）；否则视为兜底形状。 */
-const SCHEMA_SHAPE_SPECIFICITY_MIN = 0.5;
+/** 普通词探针至少拒掉这个比例，才算「窄形状」（有指回价值）；否则视为兜底形状，不作证据。 */
+const SCHEMA_SHAPE_SPECIFICITY_MIN = 0.75;
 
 /** 编译一次、量一次：`null` ＝非法 pattern 或不是字符串（不参与值证据）。 */
 const shapeSpecificityCache = new Map<string, number | null>();
