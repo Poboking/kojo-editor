@@ -162,5 +162,5 @@ describe.skipIf(!SMOKE)('ERB 未定义名 · 真实语料精度闸门（名字�
         engineStringNames: ERB_ENGINE_STRING_IDENTIFIERS,
       }).map((d) => d.name),
     ).toEqual(['ERBDIAG_A_NEVER_DECLARED']);
-  }, 600000);
+  }, 1200000); // 空闲机实测 84–232s；多 agent 共机上冲到 600s 仍未跑完 ⇒ 预算翻倍，判据不变
 });
