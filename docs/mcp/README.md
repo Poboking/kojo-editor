@@ -412,9 +412,21 @@ B16 把这堵墙变成**可续取**——但开关是显式的，旧行为逐字
 - **判据侧的一条硬教训**（红过一整批）：解析式真值的 `path` 半边必须与实现走**同一枚投影腿**
   `toRelativePath`——旧面 hits.path 就是它（反斜杠投影时归成正斜杠），判据里自己抄一份
   `path.slice(ROOT.length+1)` 会得到「两边各 6,000 条但成员全错位」这种最难看的红。
-- **仍修不掉的那堵墙**：单文件命中 > `SEARCH_PER_FILE_CAP`（500，`src-tauri/src/lib.rs:2671`）——分片
-  切不到文件内部，`search_tests.rs:2030` 那条结论六把它钉成「分片救不了」；B18 正在给内核加 additive
-  续取凭据。另外：引擎闸下命中集的不可复现只由 Rust `wall_*` 用例承担（MCP 腿全程假注入）。
+- **单文件 `SEARCH_PER_FILE_CAP`(500) 那堵墙**：分片切不到文件内部，B16 只能把它写成「指路 `fs.readFile`」
+  （`search_tests.rs` 的「结论六」）。**B18（dev `b7a6bc55` + `dec22ca1`）用续取凭据越过了它，而不是放宽闸**：
+  引擎新增 `options.resumeAfterMatches`（对**每个文件**丢弃前 N 条命中，每次调用每文件返回仍 ≤500）与回显
+  `resumeAppliedMatches`；腿只在「一片只剩一个文件根」时把片内偏移当作该文件的命中序号，
+  写进既有 B1 游标的下标（`片序号 × 进制 + 片内偏移`）⇒ **零新增 MCP 入参名**，旧调用方请求体逐字不变。
+  三条边界都出声、不静默：① 回显不等于请求值（老宿主不认这个键 / 该文件命中已少于续取起点）⇒ **丢弃该响应**
+  并按墙收口，绝不把重复页端上桌；② 目录片（多文件片）的偏移是若干文件拼接，不许当单文件序号 ⇒ 仍指路
+  `fs.readFile`；③ 游标进制 8192 是硬上界 ⇒ 单文件片至多续到 `16 × 500 = 8,000` 条
+  （`MCP_SEARCH_FILE_RESUME_MAX_SEGMENTS`），越界显式停住并给 reason；另有资源闸 `SEARCH_RESUME_SKIP_MAX=50000`
+  夹住「丢弃前 N 条」的扫描代价。跨段一律 `knownTotal:false` + 理由点名「段间也没有累加器」。
+  判据：腿侧 12 例（含段数上限与旧宿主退回）＋ Rust 侧把**腿的取页算术拿去和真引擎再对一遍**
+  （`resume_pages_under_the_leg_page_math_enumerate_one_dense_file_exactly`：单文件 2,600 条、`limit=200`
+  让段界恰好落在 500 的整倍数上——最容易串位的那一格；断言每文件仍 ≤500、空页绝不带 `truncated`、
+  逐条同序无重无漏、调用次数 ≤64）。**Node 镜像（`tools/debug-server.mjs`，`maxPerFile=200`）没实现这枚凭据**
+  ⇒ 腿判「旧宿主」退回旧墙并标 `honored:false`，这是如实边界不是缺陷。
 
 读数：合并树 MCP 定向 **23 文件 632 passed / 1 skipped**、全量 `cargo test --lib` **432 / 0 / 8**、
 `mcp::tests` 109、conformance 54/0、ps10 197 文件 / 3395 KB、inventory 能力面读数零变化（tools 77）。
