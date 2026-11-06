@@ -36,7 +36,7 @@
  *   本批不把 capabilities 抬成推送；`readResourceData` 的 default 分支改为**透传真 scope**（任务表
  *   按会话隔离，null 顶替会丢上下文）。
  */
-import { McpFailure, classifyCommandTier, collectPromptSlotFragments } from '@kojo/mcp-host';
+import { McpFailure, classifyCommandTier, collectPromptSlotFragments, paginateByCursor, paginateText } from '@kojo/mcp-host';
 import type {
   McpHostDeps,
   McpPromptSlotContributionLike,
@@ -62,6 +62,7 @@ import {
   createKernelIo,
   createRunSupplemental,
   KOJO_RESOURCE_URIS,
+  MCP_PAGE_TEXT_MAX_CHARS,
   normalizeRoot,
   requireProject,
   sanitizeEcho,
@@ -425,6 +426,56 @@ function slimMarkerList(raw: readonly McpMarkerLike[], cap: number): {
   return { items, total: raw.length, truncated: raw.length > items.length };
 }
 
+/**
+ * 分页游标批：单条 marker → 可读投影（脏条目返回 null，由调用方显式记账，不静默丢）。
+ * 投影字段与 `slimMarkerList` 逐字同尺（老消费方零改动）。
+ */
+function projectMarker(m: unknown): Record<string, unknown> | null {
+  if (!m || typeof m !== 'object') return null;
+  const raw = m as McpMarkerLike;
+  const message = asString(raw['message']).replace(/\s+/g, ' ').trim();
+  return {
+    message: message.length > 300 ? `${message.slice(0, 300)}…` : message,
+    line: toPositiveInt(raw['startLineNumber']) ?? 1,
+    column: toPositiveInt(raw['startColumn']) ?? 1,
+    severity: severityName(raw['severity']),
+    ...(raw['source'] !== undefined ? { source: asString(raw['source']) } : {}),
+  };
+}
+
+/** marker 的稳定 key（同一处同文案多条 ⇒ 用出现序号保证唯一，游标定位不歧义）。 */
+function markerKeyOf(item: unknown, index: number): string {
+  const p = projectMarker(item);
+  if (p === null) return `unparsable#${index}`;
+  return `${String(p['message'])}|${String(p['line'])}|${String(p['column'])}|${String(p['severity'])}|${String(p['source'] ?? '')}`;
+}
+
+/**
+ * 诊断 / marker 列举面的分页读数：对**全量** markers 取页再投影。
+ * 单页上限＝该面今天已有的上限（`maxLimit` 由调用点传，本批一律不放宽）。
+ */
+function pagedMarkerReading(
+  markers: readonly McpMarkerLike[],
+  args: Record<string, unknown>,
+  opts: { readonly defaultLimit: number; readonly maxLimit: number },
+): Record<string, unknown> {
+  const p = paginateByCursor(markers, markerKeyOf, args, opts);
+  const items = p.page.map(projectMarker).filter((x): x is Record<string, unknown> => x !== null);
+  const dropped = p.page.length - items.length;
+  return {
+    items,
+    total: p.total,
+    truncated: p.truncated,
+    offset: p.offset,
+    limit: p.limit,
+    hasMore: p.hasMore,
+    nextCursor: p.nextCursor,
+    fingerprint: p.fingerprint,
+    ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
+    ...(dropped > 0 ? { droppedUnparsable: dropped } : {}),
+  };
+}
+
 /* ------------------------------- 语义 8 腿 ------------------------------- */
 
 /** 行列夹取：越界夹而不是拒（「最后一行」是最常猜的位置）；脏值显式 INVALID_ARGS。 */
@@ -505,7 +556,7 @@ function suggestItemsOf(raw: unknown, cap: number): { readonly items: Record<str
  * - SYMBOL_DEPTH_LIMIT 是防病态树的深度防御（原本就整棵超深子树不展开），不是数据封顶口径。
  * 旧消费方只取 items/total：两个旧字段保留（additive），新增 truncated 供新消费方判「没全」。
  */
-function flattenSymbols(raw: unknown): {
+function flattenSymbols(raw: unknown, cap = SYMBOL_LIMIT): {
   readonly items: Record<string, unknown>[];
   readonly total: number;
   readonly truncated: boolean;
@@ -519,7 +570,7 @@ function flattenSymbols(raw: unknown): {
       const s = item as Record<string, unknown>;
       if (typeof s['name'] !== 'string' || s['name'] === '') continue;
       total += 1;
-      if (items.length < SYMBOL_LIMIT) {
+      if (items.length < cap) {
         items.push({ name: s['name'], kind: typeof s['kind'] === 'number' ? s['kind'] : 0, depth });
       }
       walk(s['children'], depth + 1);
@@ -624,10 +675,11 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
     return { items, total: kept.length, truncated: kept.length > items.length };
   };
 
-  const diagnostics: McpReaderFn = async () => {
+  const diagnostics: McpReaderFn = async (args) => {
     const ws = await requireWorkspace(deps);
     const markers = ws.monaco.editor.getModelMarkers({ resource: ws.model.uri });
-    return slimMarkerList(markers, DIAGNOSTIC_LIMIT);
+    // 分页游标批：单页上限＝原有 DIAGNOSTIC_LIMIT（闸不放宽）；零参调用＝第一页＝旧读数。
+    return pagedMarkerReading(markers, args, { defaultLimit: DIAGNOSTIC_LIMIT, maxLimit: DIAGNOSTIC_LIMIT });
   };
 
   const hoverAt: McpReaderFn = async (args) => {
@@ -671,8 +723,29 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
       ws,
       (token) => [ws.model, token],
     );
-    const { items, total, truncated } = flattenSymbols(raw);
-    return { items, total, truncated, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
+    // 分页游标批：先摊**全量**符号（cap 放开＝不是放宽应答闸，只是把全集拿到手），
+    // 再按 limit+cursor 取页；单页上限仍是原 SYMBOL_LIMIT，闸未动。
+    const flat = flattenSymbols(raw, Number.MAX_SAFE_INTEGER);
+    const p = paginateByCursor(
+      flat.items,
+      (it, i) => `${String(it['name'])}|${String(it['kind'])}|${String(it['depth'])}|#${i}`,
+      args,
+      { defaultLimit: SYMBOL_LIMIT, maxLimit: SYMBOL_LIMIT },
+    );
+    return {
+      items: p.page,
+      total: p.total,
+      truncated: p.truncated,
+      offset: p.offset,
+      limit: p.limit,
+      hasMore: p.hasMore,
+      nextCursor: p.nextCursor,
+      fingerprint: p.fingerprint,
+      ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
+      ...(flat.total !== flat.items.length ? { droppedBeyondDepth: flat.total - flat.items.length } : {}),
+      providers: stats.unreachable ? null : stats.asked,
+      answered: stats.answered,
+    };
   };
 
   const tokens: McpReaderFn = async (args) => {
@@ -729,7 +802,7 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
 /* ------------------------------- runSupplemental 的 UI 腿 ------------------------------- */
 
 /** 无项目时的校验层自检：服务缺席 ⇒ NOT_WIRED（写明缺什么，不编造 findings）。 */
-function selfCheckFindings(kernel: McpKernelLike | null, maxResults: number): unknown {
+function selfCheckFindings(kernel: McpKernelLike | null, args: Record<string, unknown>): unknown {
   if (!kernel) {
     throw new McpFailure('RESOURCE_UNAVAILABLE', '内核未到场：校验层自检数据源不可用（不静默）');
   }
@@ -740,15 +813,30 @@ function selfCheckFindings(kernel: McpKernelLike | null, maxResults: number): un
   const report = linter.report();
   // 报告尚未运行与「运行了且零失败」是两件事：note 字段显式分开，不静默。
   if (!report || typeof report !== 'object') {
-    return { items: [], total: 0, truncated: false, note: '校验尚未运行（没有可读的报告；这不是「零失败」）' };
+    return { items: [], total: 0, truncated: false, hasMore: false, nextCursor: null, note: '校验尚未运行（没有可读的报告；这不是「零失败」）' };
   }
   const failed = (report as Record<string, unknown>)['failedRules'];
   const rules = Array.isArray(failed) ? (failed as unknown[]) : [];
-  const items = rules.slice(0, maxResults).map((r) => {
+  // 分页游标批：单页上限＝原有 maxResults 上限 500（闸不放宽），零参调用＝第一页＝旧读数。
+  const p = paginateByCursor(rules, (r, i) => {
+    const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
+    return `${asString(o['ruleId'])}|${asString(o['error'])}|#${i}`;
+  }, args, { defaultLimit: DIAGNOSTIC_LIMIT, maxLimit: 500 });
+  const items = p.page.map((r) => {
     const o = (r && typeof r === 'object' ? r : {}) as Record<string, unknown>;
     return { rule: asString(o['ruleId']), message: asString(o['error']), severity: 'error' };
   });
-  return { items, total: rules.length, truncated: rules.length > items.length };
+  return {
+    items,
+    total: p.total,
+    truncated: p.truncated,
+    offset: p.offset,
+    limit: p.limit,
+    hasMore: p.hasMore,
+    nextCursor: p.nextCursor,
+    fingerprint: p.fingerprint,
+    ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
+  };
 }
 
 export function buildUiSupplemental(
@@ -759,16 +847,31 @@ export function buildUiSupplemental(
 
   const documentActive: McpReaderFn = async (args) => {
     const ws = await requireWorkspaceOf();
-    const maxChars = clampInt(args['maxChars'], 8_000, 1, 100_000);
     const text = ws.model.getValue();
-    const { text: cut, truncated } = truncateChars(text, maxChars);
+    // 分页游标批：单页上限压到宿主不可信串闸以下（65_000 < 64*1024+标记），
+    // 旧 maxChars 允许 100_000 会让「JS 报完整、Rust 再切一刀」的账面变假。
+    const p = paginateText(text, args, {
+      defaultLimit: 8_000,
+      maxLimit: MCP_PAGE_TEXT_MAX_CHARS,
+    });
     return {
       path: toRelativeLocationPath(ws.model.uri.toString(), ws.rootDir),
       language: ws.model.getLanguageId(),
       cursor: ws.cursor,
-      text: cut,
-      textLength: text.length,
-      truncated,
+      text: p.page,
+      textLength: p.total,
+      truncated: p.truncated,
+      offset: p.offset,
+      limit: p.limit,
+      hasMore: p.hasMore,
+      nextCursor: p.nextCursor,
+      fingerprint: p.fingerprint,
+      ...(p.changedDuringPaging === true
+        ? {
+            changedDuringPaging: true,
+            note: '活动文档在两次取页之间被改过：本页是新快照的第 0 页，不可与旧页拼接。',
+          }
+        : {}),
     };
   };
 
@@ -818,8 +921,7 @@ export function buildUiSupplemental(
     }
     const maxResults = clampInt(args['maxResults'], DIAGNOSTIC_LIMIT, 1, 500);
     const markers = monaco.editor.getModelMarkers({});
-    const { items, total, truncated } = slimMarkerList(markers, maxResults);
-    return { items, total, truncated };
+    return pagedMarkerReading(markers, { ...args, maxResults }, { defaultLimit: DIAGNOSTIC_LIMIT, maxLimit: 500 });
   };
 
   const foldingRanges: McpReaderFn = async (args) => {
@@ -893,10 +995,8 @@ export function buildUiSupplemental(
 
   const langMarkers: McpReaderFn = async (args) => {
     const ws = await requireWorkspaceOf();
-    const maxResults = clampInt(args['maxResults'], DIAGNOSTIC_LIMIT, 1, 500);
     const markers = ws.monaco.editor.getModelMarkers({ resource: ws.model.uri });
-    const { items, total, truncated } = slimMarkerList(markers, maxResults);
-    return { items, total, truncated };
+    return pagedMarkerReading(markers, args, { defaultLimit: DIAGNOSTIC_LIMIT, maxLimit: 500 });
   };
 
   /* ---- 第四波（LaneF）：debug 面让位三腿里另两枚只读 provider 读数 ----

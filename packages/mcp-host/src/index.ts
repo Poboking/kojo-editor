@@ -344,23 +344,109 @@ const RELATIVE_PATH_SCHEMA: Record<string, unknown> = {
     'Project-root-relative path only. Absolute paths, drive-letter paths and ".." traversal are rejected by schema; the execution layer additionally resolves against approvedRoots and refuses any out-of-domain target (ADR-0003).',
 };
 
-/** 语义读数服务 → 8 枚只读工具（tier 'read' + readOnlyHint）。 */
+/**
+ * 分页入参的通用 schema 片段（B1 批：**只加可选入参，不加新工具名**）。
+ * 定义必须早于下面几张工具表——表是模块级 const，`export const` 对象若定义在其后会在
+ * 模块初始化时撞 TDZ（ReferenceError），只有函数声明可以后置。
+ */
+export const PAGE_CURSOR_SCHEMA_PROPS: Record<string, unknown> = {
+  limit: {
+    type: 'integer',
+    minimum: 1,
+    description: "Page size for this enumeration (defaults to this surface's existing cap; the cap is never widened).",
+  },
+  cursor: {
+    type: 'string',
+    minLength: 10,
+    maxLength: 32,
+    pattern: '^[0-9a-f]{8}:\\d{1,10}$',
+    description:
+      "Opaque cursor copied verbatim from the previous response's nextCursor. Omit for the first page. If the underlying data changed mid-paging the cursor is rejected-by-flag: the response carries changedDuringPaging:true and restarts from the head, so pages must NOT be spliced with earlier ones.",
+  },
+};
+
+/** 分页返回体的完整性账字段说明（供各面 description 复用，口径统一）。 */
+export const PAGE_ACCOUNT_NOTE =
+  'Every page carries the completeness account {total, offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim for the next page. changedDuringPaging:true means the snapshot changed mid-paging, so that page restarts from the head and must not be spliced with earlier pages.';
+
+/** 语义读数服务 → 8 枚只读工具（tier 'read' + readOnlyHint）。
+ *
+ * 分页游标批（B1）：列举面（diagnostics / documentSymbols）补 **可选** `limit` + `cursor`，
+ * 单页上限取该面今天已有的硬闸（DIAGNOSTIC_LIMIT / SYMBOL_LIMIT＝200），不放宽；
+ * 真·零参面（projectInfo）不再用裸 `{type:'object'}` 兜底，改成严格空对象（拒绝任何入参）。
+ * `semantic.tokens` 原本就有 `lineFrom`/`lineTo` 窗口，本批保持其形状不动（它是本批的形状参照）。
+ */
+const PAGE_PROPS = PAGE_CURSOR_SCHEMA_PROPS;
+
+/** 严格零参入参形状：诚实声明「不收任何入参」，由零参闸逐个登记（见 NO_ARG_TOOLS 测试）。 */
+const STRICT_NO_ARG_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {},
+  additionalProperties: false,
+};
+
 export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
   { name: 'semantic.definitionAt', method: 'definitionAt', description: '转到定义（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
   { name: 'semantic.referencesAt', method: 'referencesAt', description: '查找引用（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
-  { name: 'semantic.diagnostics', method: 'diagnostics', description: '当前文档诊断（只读）', inputSchema: { type: 'object' }, tier: 'read', annotations: { readOnlyHint: true } },
+  {
+    name: 'semantic.diagnostics',
+    method: 'diagnostics',
+    description: `当前文档诊断（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。${PAGE_ACCOUNT_NOTE}`,
+    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
   { name: 'semantic.hoverAt', method: 'hoverAt', description: '悬停信息（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
   { name: 'semantic.suggestAt', method: 'suggestAt', description: '补全候选（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
-  { name: 'semantic.documentSymbols', method: 'documentSymbols', description: '文档符号（只读）', inputSchema: { type: 'object' }, tier: 'read', annotations: { readOnlyHint: true } },
+  {
+    name: 'semantic.documentSymbols',
+    method: 'documentSymbols',
+    description: `文档符号（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。${PAGE_ACCOUNT_NOTE}`,
+    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
   { name: 'semantic.tokens', method: 'tokens', description: '词法 token（只读）', inputSchema: { type: 'object', properties: { lineFrom: { type: 'integer' }, lineTo: { type: 'integer' } } }, tier: 'read', annotations: { readOnlyHint: true } },
   { name: 'semantic.codeActionsAt', method: 'codeActionsAt', description: '可用代码动作（只读，绝不 apply）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
 ];
 
-/** kernel IO → 3 枚只读工具。 */
+/** kernel IO → 3 枚只读工具。`fs.tree` 是本批补游标的列举面；`project.info` 是真零参面。 */
 export const KERNEL_IO_TOOL_SPECS: readonly ToolSpec[] = [
-  { name: 'project.info', method: 'projectInfo', description: '当前项目信息（只读）', inputSchema: { type: 'object' }, tier: 'read', annotations: { readOnlyHint: true } },
-  { name: 'fs.tree', method: 'fileTree', description: '项目文件树（只读）', inputSchema: { type: 'object' }, tier: 'read', annotations: { readOnlyHint: true } },
-  { name: 'search.all', method: 'searchAll', description: '全工程检索（只读）', inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] }, tier: 'read', annotations: { readOnlyHint: true } },
+  {
+    name: 'project.info',
+    method: 'projectInfo',
+    description: '当前项目信息（只读）：一次性摘要，无列举面、不收任何入参（严格空对象）。',
+    inputSchema: STRICT_NO_ARG_SCHEMA,
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'fs.tree',
+    method: 'fileTree',
+    description: `项目文件树（只读）。列举面：单页上限沿用本面已有的 maxEntries 上限（未放宽），零参调用＝第一页、行为与旧版逐字一致。${PAGE_ACCOUNT_NOTE}`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        maxDepth: { type: 'integer', minimum: 0, maximum: 16, description: 'Recursion depth cap (default 6).' },
+        maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: 'Page size (default 500; the pre-existing cap, never widened).' },
+        ...PAGE_PROPS,
+      },
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'search.all',
+    method: 'searchAll',
+    description: `全工程检索（只读）。命中列表按 limit+cursor 分页；引擎自身封顶时显式给 knownTotal:false（不硬编假 total）。${PAGE_ACCOUNT_NOTE}`,
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string' }, ...PAGE_PROPS },
+      required: ['query'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
 ];
 
 /**
@@ -371,13 +457,15 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'workspace.searchAll',
     description:
-      'Search the whole project for a text query and return file/line hits. Read-only: never mutates files. Use `query` for the case-insensitive substring, optional `scope` to restrict to source files, `maxResults` to cap the hit list. Returns {hits:[{path,line,preview}], total, truncated}.',
+      'Search the whole project for a text query and return file/line hits. Read-only: never mutates files. Use `query` for the case-insensitive substring, optional `scope` to restrict to source files, `maxResults`/`limit` to size a page and `cursor` to resume the next one. Returns {hits:[{path,line,preview}], total, truncated} plus the page account. Honesty note: the search engine itself has a hard hit wall (5000); when the engine reports it overflowed, this surface answers `knownTotal:false` and `engineTruncated:true` instead of pretending the union of pages equals the true match count — narrow the query or page the files with fs.readFile. ' +
+      PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', minLength: 1, maxLength: 512, description: 'Substring to find (case-insensitive).' },
         scope: { type: 'string', enum: ['all', 'sources'], description: 'Restrict to source files or search all files (default all).' },
-        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned hits (default 50).' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Page size (default 50; the pre-existing cap, never widened).' },
+        ...PAGE_PROPS,
       },
       required: ['query'],
     },
@@ -403,10 +491,14 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'problems.diagnostics',
     description:
-      'List current problems-panel diagnostics for the active document/project. Read-only. Returns {items:[{message,line,severity,source?}], total, truncated}. Inspect available actions before proposing any problems.quickFix; a `truncated:true` result means you must narrow the query, not assume completeness.',
+      'List current problems-panel diagnostics for the active document/project. Read-only. Returns {items:[{message,line,severity,source?}], total, truncated} plus the page account. This surface pages: `maxResults`/`limit` size a page and `cursor` resumes it, so every finding is enumerable. Inspect available actions before proposing any problems.quickFix; a `truncated:true` result means more pages exist (or that you must narrow the query) — never assume completeness. ' +
+      PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned diagnostics (default 200).' } },
+      properties: {
+        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size (default 200; the pre-existing cap, never widened).' },
+        ...PAGE_PROPS,
+      },
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -430,7 +522,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.update',
     description:
-      'Overwrite the full text content of an existing file inside the authorized project root. `relPath` is project-root-relative (schema + approvedRoots domain check). This REPLACES the whole content; note problems.quickFix is currently NOT_WIRED, so there is no targeted-edit tool yet. Idempotent for identical `content`. Mutates the filesystem. Refuses (WRITE_DISABLED) when the session-approved roots or the kernel write domain do not cover the target.',
+      'Overwrite the full text content of an existing file inside the authorized project root. `relPath` is project-root-relative (schema + approvedRoots domain check). This REPLACES the whole content. For a targeted in-document edit use `problems.quickFix` (wired since 2026-11-06: it applies ONE listed code action inside the editor model as a single undo step, does not write to disk) — this tool is the whole-file path. Idempotent for identical `content`. Mutates the filesystem. Refuses (WRITE_DISABLED) when the session-approved roots or the kernel write domain do not cover the target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -522,10 +614,15 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'commands.list',
     description:
-      'List the commands registered in the command palette (id / title / description / tier). Read-only. Use `maxResults` to cap the list; the result carries an explicit `truncated` flag — if true, narrow the query rather than assuming completeness. Same data source as the kojo://project/commands resource. Discover real ids here before calling any command; never invent a command id.',
+      'List the commands registered in the command palette (id / title / description / tier). Read-only. Same data source as the kojo://project/commands resource, but this surface pages: `maxResults` (or `limit`) sizes a page and `cursor` from the previous response resumes it, so every registered command is enumerable — `total` is the full count and `hasMore`/`nextCursor` say how to get the rest. ' +
+      PAGE_ACCOUNT_NOTE +
+      ' Discover real ids here before calling any command; never invent a command id.',
     inputSchema: {
       type: 'object',
-      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned commands (default 200).' } },
+      properties: {
+        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size (default 200; the pre-existing cap, never widened).' },
+        ...PAGE_PROPS,
+      },
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -533,10 +630,17 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'document.active',
     description:
-      'Read the active document text and cursor position as a read-only projection. The body is capped by `maxChars` and carries an explicit `truncated` flag; a `truncated:true` result must be narrowed, never assumed complete. Same data source as the kojo://project/active-document resource. Read-first: do not infer any text beyond what is returned.',
+      'Read the active document text and cursor position as a read-only projection. Same data source as the kojo://project/active-document resource, but this surface pages: `offset` (0-based character offset) + `length` (alias `maxChars`) address a sub-range, and `cursor` from the previous response resumes exactly where it ended — `textLength` is the FULL length, so concatenating pages reproduces the buffer character-for-character. Page size: default 8000, max 65000 characters (the host sanitizer cuts any untrusted string at 65536, so pages are kept under that gate rather than reported-then-trimmed). ' +
+      PAGE_ACCOUNT_NOTE +
+      ' Read-first: do not infer any text beyond what is returned.',
     inputSchema: {
       type: 'object',
-      properties: { maxChars: { type: 'integer', minimum: 1, maximum: 100_000, description: 'Cap on returned document characters (default 8000).' } },
+      properties: {
+        offset: { type: 'integer', minimum: 0, description: '0-based character offset of the window start (default 0).' },
+        length: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Characters in this page (default 8000, max 65000).' },
+        maxChars: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Legacy alias of `length`; values above 65000 are clamped down to the host gate.' },
+        ...PAGE_PROPS,
+      },
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -544,12 +648,17 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fs.readFile',
     description:
-      'Read the text content of one file inside the authorized project root (read-only). `relPath` MUST be a project-root-relative path — the schema rejects absolute paths, drive letters and ".." traversal, and the execution layer re-checks it against approvedRoots. Content is capped by `maxChars` with an explicit `truncated` flag. Backed by the Rust read_file_bytes primitive. Never writes to disk.',
+      'Read the text content of one file inside the authorized project root (read-only), page by page. `relPath` MUST be a project-root-relative path — the schema rejects absolute paths, drive letters and ".." traversal, and the execution layer re-checks it against approvedRoots. Backed by the Rust read_file_bytes primitive: the whole file is decoded host-side, this tool returns ONE window. Use `offset` (0-based character offset) + `length` (alias `maxChars`, kept for backwards compatibility) to address a sub-range; a plain `cursor` from the previous page is equivalent and self-checking. ' +
+      'Completeness: `textLength` is the FULL character length of the file; `hasMore` says whether characters remain after this page; `nextCursor` resumes exactly where this page ended, so concatenating pages reproduces the file character-for-character. If the file changed between pages the response carries `changedDuringPaging:true` and restarts from offset 0 — do not splice that page with earlier ones. ' +
+      'Page size is gated: default 24000 characters, maximum 65000 characters (`length` is clamped). The 65000 ceiling is not a convenience — the host sanitizer cuts any single untrusted string at 65536 characters, so a larger page would have been silently re-truncated after this tool reported its account. Never writes to disk.',
     inputSchema: {
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_SCHEMA,
-        maxChars: { type: 'integer', minimum: 1, maximum: 200_000, description: 'Cap on returned characters (default 24000).' },
+        offset: { type: 'integer', minimum: 0, description: '0-based character offset of the window start (default 0). Ignored (treated as head-restart) when a cursor is given.' },
+        length: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Characters to return in this page (default 24000, max 65000 — see the host string gate).' },
+        maxChars: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Legacy alias of `length`. Values above 65000 are clamped down to the host gate, not up.' },
+        ...PAGE_PROPS,
       },
       required: ['relPath'],
     },
@@ -571,13 +680,15 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'io.listDir',
     description:
-      'List the direct children of one directory inside the authorized project root (read-only). `relPath` is optional (defaults to the project root) and must be project-root-relative; `maxEntries` / `maxDepth` bound the result, which carries an explicit `truncated` flag. Backed by the Rust list_dir / walk_dir primitives. Use it to confirm a relative path exists before any write. Never writes to disk.',
+      'List the direct children of one directory inside the authorized project root (read-only). `relPath` is optional (defaults to the project root) and must be project-root-relative; `maxEntries` / `limit` size a page and `cursor` resumes the next one, so a large directory is fully enumerable; `maxDepth` bounds recursion and the result carries an explicit `truncated` flag. Backed by the Rust list_dir / walk_dir primitives. Use it to confirm a relative path exists before any write. Never writes to disk. ' +
+      PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_SCHEMA,
-        maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: 'Cap on returned entries (default 500).' },
+        maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: 'Page size (default 500; the pre-existing cap, never widened).' },
         maxDepth: { type: 'integer', minimum: 0, maximum: 16, description: 'Recursion depth cap (default 1).' },
+        ...PAGE_PROPS,
       },
     },
     tier: 'read',
@@ -586,10 +697,13 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'io.workspaceRoots',
     description:
-      'List the workspace roots registered for the current session (read-only). Backed by the Rust workspace_roots primitive. `maxResults` caps the list with an explicit `truncated` flag. Use this to learn the legitimate domain for subsequent relative paths; it never grants write access outside approvedRoots and never mutates state.',
+      'List the workspace roots registered for the current session (read-only). Backed by the Rust workspace_roots primitive. `maxResults`/`limit` size a page and `cursor` resumes it; the list carries `total` + `hasMore` so it is fully enumerable. Use this to learn the legitimate domain for subsequent relative paths; it never grants write access outside approvedRoots and never mutates state.',
     inputSchema: {
       type: 'object',
-      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned roots (default 50).' } },
+      properties: {
+        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Page size (default 50; the pre-existing cap, never widened).' },
+        ...PAGE_PROPS,
+      },
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -611,10 +725,14 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'editor.selfCheck',
     description:
-      'Run a read-only self-check of the language/validation layer and return its findings (rule / message / severity). Backed by the semantic `selfCheck` read. `maxResults` caps the list with an explicit `truncated` flag. It is a diagnostic projection, never a fix and never a write; do not treat it as an authorization to edit.',
+      'Run a read-only self-check of the language/validation layer and return its findings (rule / message / severity). Backed by the semantic `selfCheck` read. `maxResults`/`limit` size a page and `cursor` resumes it, so every finding is enumerable; the result carries an explicit `truncated` flag. It is a diagnostic projection, never a fix and never a write; do not treat it as an authorization to edit. ' +
+      PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned findings (default 200).' } },
+      properties: {
+        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size (default 200; the pre-existing cap, never widened).' },
+        ...PAGE_PROPS,
+      },
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -653,10 +771,14 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'lang.markers',
     description:
-      'Return the current marker set for the active document (read-only). Backed by the semantic `markers` read. `maxResults` caps the list with an explicit `truncated` flag. This is a read-only problem/decoration projection — it never clears or edits a marker and never fabricates a finding.',
+      'Return the current marker set for the active document (read-only). Backed by the semantic `markers` read. `maxResults`/`limit` size a page and `cursor` resumes it, so the full marker set is enumerable; the result carries an explicit `truncated` flag. This is a read-only problem/decoration projection — it never clears or edits a marker and never fabricates a finding. ' +
+      PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned markers (default 200).' } },
+      properties: {
+        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size (default 200; the pre-existing cap, never widened).' },
+        ...PAGE_PROPS,
+      },
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -1099,9 +1221,19 @@ export function truncateResourceText(text: string, cap = RESOURCE_TEXT_LIMIT): {
     cap,
     originalLength: src.length,
     preview: src.slice(0, cap),
-    hint: 'Resource text exceeded the cap and was truncated. Narrow the query / read a specific sub-range; do NOT assume the preview is the complete content.',
+    hint: RESOURCE_TRUNCATION_HINT,
   };
   return { text: JSON.stringify(envelope, null, 2), truncated: true };
+}
+
+/**
+ * 截断时的「去哪拿完整」指针：resources 面按 MCP 协议只有 `uri` 入参、自身无法翻页，
+ * 所以显式把客户端引到**带游标的工具面**（同数据源）。分页取舍写死在这一处，见本批回执。
+ */
+function pagingPointer(truncated: boolean, tool: string, unit = 'items'): Record<string, unknown> {
+  return truncated
+    ? { hasMore: true, pageableVia: 'tool', pageTool: tool, pageUnit: unit, pageHint: `This resource view is capped; call ${tool} with limit+cursor to enumerate all ${unit}.` }
+    : { hasMore: false };
 }
 
 /** 当前文档内容与光标 → 可读投影（正文按上限截断并显式标记）。 */
@@ -1123,6 +1255,7 @@ export function slimActiveDocument(raw: unknown, cap = DOCUMENT_TEXT_CAP): Recor
     text: truncated ? text.slice(0, cap) : text,
     textLength: text.length,
     truncated,
+    ...pagingPointer(truncated, 'document.active', 'characters'),
     ...(warnings.length ? { warnings } : {}),
   };
 }
@@ -1144,7 +1277,7 @@ export function slimCommandList(raw: unknown, cap = RESOURCE_ITEM_LIMIT): Record
       tier: asString(o['tier']),
     };
   });
-  return { commands, total: items.length, truncated };
+  return { commands, total: items.length, truncated, ...pagingPointer(truncated, 'commands.list') };
 }
 
 /** 诊断列表 → 可读投影（条数上限 + truncated）。 */
@@ -1161,7 +1294,7 @@ export function slimDiagnosticList(raw: unknown, cap = RESOURCE_ITEM_LIMIT): Rec
     const o = isPlainObject(it) ? it : {};
     return { message: asString(o['message']), line: asFinite(o['line'], 1), severity: asString(o['severity']), source: asString(o['source']) };
   });
-  return { diagnostics, total: items.length, truncated };
+  return { diagnostics, total: items.length, truncated, ...pagingPointer(truncated, 'problems.diagnostics') };
 }
 
 /** 插件状态 → 可读投影：inactive 必可见、每项含 missing[]；缺字段显式 warnings（不静默）。 */
@@ -1189,6 +1322,14 @@ export function slimPluginStatus(raw: unknown, cap = RESOURCE_ITEM_LIMIT): Recor
     missing: missing.slice(0, cap),
     total: { active: active.length, inactive: inactive.length, missing: missing.length },
     truncated,
+    ...(truncated
+      ? {
+          hasMore: true,
+          pageableVia: 'none',
+          pageNote:
+            'No paginated tool exists for plugin status (this batch adds optional arguments only, no new tool names). Items beyond the cap are NOT enumerable from this surface — say so explicitly rather than assuming the list is complete.',
+        }
+      : { hasMore: false }),
     ...(warnings.length ? { warnings } : {}),
   };
 }
@@ -1219,6 +1360,7 @@ export function slimValidationFailures(raw: unknown, cap = RESOURCE_ITEM_LIMIT):
     failedRules,
     total: rules.length,
     truncated,
+    ...pagingPointer(truncated, 'editor.selfCheck'),
     ...(found ? {} : { warnings: ['report.failedRules 缺席（显式标注，不静默）'] }),
   };
 }
@@ -1240,6 +1382,214 @@ export function slimResourceData(uri: string, data: unknown): unknown {
       return data;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * 6b. 分页游标核心（B1「分页游标批」，2026-11-06）
+ *
+ * 一句话定位：把「截断型」读数面变成「分页型」，让外部 AI **能完整枚举**。
+ *
+ * 游标形状 = `指纹:下标`（列举面下标＝条目序号，文本面下标＝字符偏移）：
+ * - 每次取页都对**当前全量快照**算一个 FNV-1a 指纹（列举面按稳定 key、文本面按正文），
+ *   并把它编进 `nextCursor`；
+ * - 下一页带着该游标进来时先复算指纹：
+ *   ① 指纹相同 ⇒ 快照没变，按下标切是**可自证的**（全页并集 == 全集，无重无漏）；
+ *   ② 指纹不同 ⇒ 翻页期间被并发编辑 / 外部写盘改过，**绝不按旧下标盲切**（那正是漏条 /
+ *     重复的成因）。此处选择「显式出声 + 从新快照头部整页重发」：返回 `changedDuringPaging:true`
+ *     并给出新快照的第 0 页。客户端据此知道「本页不可与旧页拼接」，且无需重启会话就能继续；
+ *     不做静默重排、不做假装连续。
+ * - 游标形态不合法 ⇒ `INVALID_ARGS`（fail loud，不静默当成第一页）。
+ *
+ * 完整性账（每页必带）：`total` + `hasMore` + `nextCursor` + `offset` + `truncated`
+ * （`truncated` 口径不变＝「本次没把全量都呈现」）；取不到全量的面（如引擎自身封顶的检索）
+ * 显式给 `knownTotal:false`，不硬编一个假 total。
+ *
+ * 页大小闸仍是闸：`limit` 一律 clamp 到「该面今天已有的上限」，本批不抬高任何体积闸。
+ * ------------------------------------------------------------------ */
+
+/** 分页入参 `limit` 的通用下限（1 条一页也要能出，否则游标死锁）。 */
+export const PAGE_LIMIT_MIN = 1;
+
+/** FNV-1a 32 位滚动指纹（列举面按 key 序列、文本面按正文；8 位十六进制）。 */
+export function pageFingerprint(parts: readonly string[]): string {
+  let h = (0x811c9dc5 ^ parts.length) >>> 0;
+  for (const part of parts) {
+    for (let i = 0; i < part.length; i += 1) {
+      h = (h ^ part.charCodeAt(i)) >>> 0;
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    h = (h ^ 0x1f) >>> 0;
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
+/** 游标 = `指纹:下标`（下标＝下一页的起点；文本面＝字符偏移）。 */
+export function encodePageCursor(fingerprint: string, index: number): string {
+  return `${fingerprint}:${index}`;
+}
+
+const CURSOR_RE = /^([0-9a-f]{8}):(\d{1,10})$/;
+
+/** 解析游标；形态不合法（含非字符串）返回 null，由调用方决定出声口径。 */
+export function decodePageCursor(cursor: unknown): { readonly fingerprint: string; readonly index: number } | null {
+  if (typeof cursor !== 'string') return null;
+  const m = CURSOR_RE.exec(cursor);
+  if (!m) return null;
+  const index = Number(m[2]);
+  if (!Number.isFinite(index)) return null;
+  return { fingerprint: m[1] as string, index };
+}
+
+/** 分页入参里 `limit` 可复用的旧名（各面历史口径不一，游标是新能力，旧参数零改动）。 */
+const PAGE_SIZE_ARG_ALIASES = ['limit', 'length', 'maxChars', 'maxResults', 'maxEntries', 'maxRanges', 'maxEvents', 'maxLines'] as const;
+
+function clampPositiveInt(v: unknown, fallback: number, min: number, max: number): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : fallback;
+  return Math.min(Math.max(min, n), max);
+}
+
+function pageSizeOf(args: Record<string, unknown>, defaultLimit: number, maxLimit: number): number {
+  for (const alias of PAGE_SIZE_ARG_ALIASES) {
+    const v = args[alias];
+    if (typeof v === 'number' && Number.isFinite(v)) return clampPositiveInt(v, defaultLimit, PAGE_LIMIT_MIN, maxLimit);
+  }
+  return clampPositiveInt(undefined, defaultLimit, PAGE_LIMIT_MIN, maxLimit);
+}
+
+/** 游标给了但形状不对 ⇒ 显式报错（绝不静默退回第一页冒充连续）。导出给 app 侧手写分页腿复用。 */
+export function assertCursorShape(args: Record<string, unknown>): void {
+  const raw = args['cursor'];
+  if (raw === undefined || raw === null) return;
+  if (decodePageCursor(raw) === null) {
+    throw new McpFailure(
+      'INVALID_ARGS',
+      `cursor 形状不合法（期望 \`指纹:下标\`，且必须是上一页 nextCursor 的原样回传）：${String(raw).slice(0, 64)}`,
+    );
+  }
+}
+
+/**
+ * 取页参数（给「先要窗口再取数」的腿用，如检索：引擎的 `maxResults` 取决于 offset+limit）。
+ * 游标优先于裸 `offset`；游标形状不合法显式报错，绝不静默当第一页。
+ */
+export function pageParamsFor(
+  args: Record<string, unknown>,
+  opts: { readonly defaultLimit: number; readonly maxLimit: number },
+): { readonly limit: number; readonly offset: number; readonly hasCursor: boolean } {
+  assertCursorShape(args);
+  const limit = pageSizeOf(args, opts.defaultLimit, opts.maxLimit);
+  const decoded = decodePageCursor(args['cursor']);
+  if (decoded) return { limit, offset: Math.max(0, decoded.index), hasCursor: true };
+  const raw = args['offset'];
+  const offset = typeof raw === 'number' && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+  return { limit, offset, hasCursor: false };
+}
+
+export interface PageEnvelope {
+  readonly offset: number;
+  readonly limit: number;
+  readonly total: number;
+  readonly truncated: boolean;
+  readonly hasMore: boolean;
+  readonly nextCursor: string | null;
+  readonly fingerprint: string;
+  readonly changedDuringPaging?: true;
+}
+
+/**
+ * 列举面分页：`items` 必须是**当前全量**（不是已截断的片段），`keyOf` 给每条的稳定 key。
+ * 返回体自带完整性账；`changedDuringPaging` 出现时 `items` 是新快照的第 0 页。
+ */
+export function paginateByCursor<T>(
+  items: readonly T[],
+  keyOf: (item: T, index: number) => string,
+  args: Record<string, unknown>,
+  opts: { readonly defaultLimit: number; readonly maxLimit: number },
+): { readonly page: readonly T[]; readonly offset: number; readonly limit: number; readonly total: number; readonly truncated: boolean; readonly hasMore: boolean; readonly nextCursor: string | null; readonly fingerprint: string; readonly changedDuringPaging?: true } {
+  assertCursorShape(args);
+  const limit = pageSizeOf(args, opts.defaultLimit, opts.maxLimit);
+  const fingerprint = pageFingerprint(items.map((it, i) => keyOf(it, i)));
+  const decoded = decodePageCursor(args['cursor']);
+  let offset = 0;
+  let changed: true | undefined;
+  if (decoded) {
+    if (decoded.fingerprint === fingerprint) {
+      offset = Math.min(Math.max(0, decoded.index), items.length);
+    } else {
+      changed = true;
+      offset = 0;
+    }
+  }
+  const page = items.slice(offset, offset + limit);
+  const next = offset + page.length;
+  const hasMore = next < items.length;
+  const envelope: PageEnvelope = {
+    offset,
+    limit,
+    total: items.length,
+    truncated: page.length < items.length,
+    hasMore,
+    nextCursor: hasMore ? encodePageCursor(fingerprint, next) : null,
+    fingerprint,
+  };
+  return {
+    page,
+    ...envelope,
+    ...(changed === true ? { changedDuringPaging: true as const } : {}),
+  };
+}
+
+/**
+ * 文本面分页（`fs.readFile` / `document.active`）：游标下标＝字符偏移。
+ * 单页字符上限 `maxLimit` 由调用方按**宿主不可信串闸**给（见 app 侧 `MCP_PAGE_TEXT_MAX`），
+ * 保证 JS 报出去的账不会在 Rust 转发时被再切一刀（否则「逐页拼接==全文」会在边界上假）。
+ */
+export function paginateText(
+  text: string,
+  args: Record<string, unknown>,
+  opts: { readonly defaultLimit: number; readonly maxLimit: number },
+): { readonly page: string; readonly offset: number; readonly limit: number; readonly total: number; readonly truncated: boolean; readonly hasMore: boolean; readonly nextCursor: string | null; readonly fingerprint: string; readonly changedDuringPaging?: true } {
+  assertCursorShape(args);
+  const limit = pageSizeOf(args, opts.defaultLimit, opts.maxLimit);
+  const fingerprint = pageFingerprint([text]);
+  const decoded = decodePageCursor(args['cursor']);
+  let offset = 0;
+  let changed: true | undefined;
+  if (decoded) {
+    if (decoded.fingerprint === fingerprint) {
+      offset = Math.min(Math.max(0, decoded.index), text.length);
+    } else {
+      changed = true;
+      offset = 0;
+    }
+  } else if (args['offset'] !== undefined && args['offset'] !== null) {
+    // 裸 `offset`（无游标）＝调用方自己指定窗口起点：没有快照指纹可比对，因此**不做连续性保证**，
+    // 只做长度夹取；账目里 `cursor` 缺席如实体现（`hasMore`/`nextCursor` 仍自洽，从该偏移往下翻页）。
+    const wanted = Math.floor(Number(args['offset']));
+    offset = Number.isFinite(wanted) ? Math.min(Math.max(0, wanted), text.length) : 0;
+  }
+  const page = text.slice(offset, offset + limit);
+  const next = offset + page.length;
+  const hasMore = next < text.length;
+  return {
+    page,
+    offset,
+    limit,
+    total: text.length,
+    truncated: page.length < text.length,
+    hasMore,
+    nextCursor: hasMore ? encodePageCursor(fingerprint, next) : null,
+    fingerprint,
+    ...(changed === true ? { changedDuringPaging: true as const } : {}),
+  };
+}
+
+/** 截断型 resource 文本的诚实提示：指向**真正存在**的带游标工具面。 */
+export const RESOURCE_TRUNCATION_HINT =
+  'Resource text exceeded the cap and was truncated. This resource surface is uri-only (MCP resources/read takes no arguments), so it cannot page itself: use the paginated tools instead — fs.readFile/document.active with offset+limit (or cursor) for document text, commands.list / fs.tree / io.listDir / problems.diagnostics / semantic.diagnostics / semantic.documentSymbols with limit+cursor for lists, and re-read with a narrower query. Do NOT assume the preview is the complete content.';
+
+/** 分页游标批：文本面单页上限由宿主不可信串闸决定（见 app 侧 `MCP_PAGE_TEXT_MAX`）。 */
+export const HOST_UNTRUSTED_STRING_GATE = 64 * 1024;
 
 /* ------------------------------------------------------------------ *
  * 7. prompts：零游戏名词的领域工作流骨架 + mcp.prompt 槽消费逻辑

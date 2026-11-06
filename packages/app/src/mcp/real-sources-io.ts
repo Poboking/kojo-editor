@@ -51,7 +51,17 @@
  *   没有真任务表就不装出任务来，也不空表冒充「没有在跑的任务」）。`kojo://tasks` 的数据腿必须拿
  *   **真 scope**（表按 sessionId+clientId 隔离）——组装点过去给 `null` 顶替，本批一并修掉。
  */
-import { McpFailure, truncateResourceText } from '@kojo/mcp-host';
+import {
+  McpFailure,
+  assertCursorShape,
+  decodePageCursor,
+  encodePageCursor,
+  pageFingerprint,
+  pageParamsFor,
+  paginateByCursor,
+  paginateText,
+  truncateResourceText,
+} from '@kojo/mcp-host';
 import type {
 
   McpKernelIo,
@@ -465,6 +475,17 @@ function fsFreshnessNoBasePayload(target: string, granularity: 'file' | 'listing
 
 /* ------------------------------- 通用小件 ------------------------------- */
 
+/**
+ * 文本面单页上限（字符）。**这是闸，不是便利**：Rust 转发任何不可信字符串时按
+ * `mcp::protocol::MAX_UNTRUSTED_CHARS = 64 * 1024` 再切一刀（超长直接 `…[truncated]`）。
+ * 旧 `maxChars` 允许到 200_000，意思是「JS 报完完整性账、Rust 再悄悄截」——账面必假。
+ * 把单页压在闸下，JS 说的就是客户端收到的，「逐页拼接 == 全文」才成立。
+ * 65_000 < 65_536 留出的余量覆盖净化器追加的标记长度。
+ */
+export const MCP_PAGE_TEXT_MAX_CHARS = 65_000;
+/** 文本面单页默认长度（＝旧 `fs.readFile` 的默认 maxChars，零参调用行为逐字不变）。 */
+export const MCP_PAGE_TEXT_DEFAULT_CHARS = 24_000;
+
 export function clampInt(v: unknown, fallback: number, min: number, max: number): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : fallback;
   return Math.min(Math.max(min, n), max);
@@ -529,6 +550,67 @@ export function searchRootsOf(
   return [rootDir];
 }
 
+/* ------------------------------- 检索腿分页（引擎封顶口径） ------------------------------- */
+
+/** 与 Rust `lib.rs` 的 `SEARCH_HARD_CAP` 同尺：引擎一次最多回 5000 条命中（闸，本批不放宽）。 */
+const SEARCH_ENGINE_HARD_CAP = 5000;
+
+/**
+ * 检索命中列表的游标分页。
+ *
+ * 与列举面的区别：**全量拿不到**（引擎自己在 5000 条处封顶，且 `totalMatches` 只统计已收到的）。
+ * 因此这里用「**已消费前缀指纹**」而不是全量指纹：游标里带的是「前 offset 条命中的 key 哈希」，
+ * 下次取页时引擎窗口头部若与已消费前缀一致 ⇒ 拼接可自证无重无漏；不一致 ⇒ 显式
+ * `changedDuringPaging` 并从 0 重来。触到引擎硬墙时**绝不假称能续**：
+ * `hasMore:false` + `engineWallReached:true` + `knownTotal:false`，并把「缩小查询 / 改用
+ * fs.readFile 分页」写进 note——这正是「不知道就承认」的口径。
+ */
+function pageSearchHits(
+  allHits: readonly Record<string, unknown>[],
+  args: Record<string, unknown>,
+  limit: number,
+  offset: number,
+  engine: { readonly totalMatches: number; readonly truncated: boolean },
+): Record<string, unknown> {
+  const keyOf = (h: Record<string, unknown>): string => `${String(h['path'] ?? '')}|${String(h['line'] ?? '')}|${String(h['preview'] ?? '')}`;
+  const decoded = decodePageCursor(args['cursor']);
+  let start = offset;
+  let changedDuringPaging = false;
+  if (decoded) {
+    start = Math.min(Math.max(0, decoded.index), allHits.length);
+    changedDuringPaging = pageFingerprint(allHits.slice(0, start).map(keyOf)) !== decoded.fingerprint;
+    if (changedDuringPaging) start = 0;
+  } else {
+    start = Math.min(Math.max(0, start), allHits.length);
+  }
+  const page = allHits.slice(start, start + limit);
+  const next = start + page.length;
+  const engineWallReached = engine.truncated || next >= SEARCH_ENGINE_HARD_CAP;
+  const hasMore = next < allHits.length ? true : !engineWallReached && next < engine.totalMatches;
+  return {
+    hits: page,
+    total: engine.totalMatches,
+    knownTotal: !engine.truncated,
+    truncated: engine.truncated || page.length < allHits.length || next < engine.totalMatches,
+    offset: start,
+    limit,
+    hasMore,
+    nextCursor: hasMore ? encodePageCursor(pageFingerprint(allHits.slice(0, next).map(keyOf)), next) : null,
+    ...(changedDuringPaging ? { changedDuringPaging: true } : {}),
+    ...(engineWallReached
+      ? {
+          engineWallReached: true,
+          note: `检索引擎单次封顶 ${SEARCH_ENGINE_HARD_CAP} 条命中：超出部分无法用本游标续取。请缩小 query / 收窄 scope，或逐文件用 fs.readFile 分页读全文（该面拼接可自证完整）。`,
+        }
+      : {}),
+  };
+}
+
+/** 本腿取多少条引擎命中：`offset + limit`（夹到引擎硬墙，不放宽）。 */
+function searchWindow(offset: number, limit: number): number {
+  return Math.min(SEARCH_ENGINE_HARD_CAP, Math.max(1, offset + limit));
+}
+
 /* ------------------------------- kernelIo 3 腿 ------------------------------- */
 
 let searchSeq = 0;
@@ -561,31 +643,44 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
       throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：文件树无基准根（不静默）');
     }
     const maxDepth = clampInt((args ?? {})['maxDepth'], 6, 0, 16);
-    const cap = clampInt((args ?? {})['maxEntries'], 500, 1, 5000);
     const raw = (await kernel.io.walkDir(rootDir, {
       maxDepth,
       includeFiles: true,
       includeDirs: true,
     })) as unknown[];
-    const entries: Record<string, unknown>[] = [];
+    // 分页游标批：先投影**全量**合法条目，再按 limit+cursor 取页（旧行为是 slice(0,cap)，
+    // 尾部永不可达）。稳定 key＝根内相对路径（walkDir 返回的 path 逐条唯一）。
+    const allEntries: Record<string, unknown>[] = [];
     for (const item of raw) {
-      if (entries.length >= cap) break;
       if (!item || typeof item !== 'object') continue;
       const e = item as Record<string, unknown>;
       const path = asString(e['path']);
       if (path === '') continue;
-      entries.push({
+      allEntries.push({
         path: toRelativePath(path, rootDir),
         name: asString(e['name']),
         isDirectory: e['isDirectory'] === true,
       });
     }
+    const p = paginateByCursor(allEntries, (e) => String(e['path']), args ?? {}, {
+      defaultLimit: 500,
+      maxLimit: 5000,
+    });
     return {
       root: '.',
       maxDepth,
-      entries,
-      total: raw.length,
-      truncated: raw.length > entries.length,
+      entries: p.page,
+      total: p.total,
+      truncated: p.truncated,
+      offset: p.offset,
+      limit: p.limit,
+      hasMore: p.hasMore,
+      nextCursor: p.nextCursor,
+      fingerprint: p.fingerprint,
+      ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
+      ...(raw.length !== allEntries.length
+        ? { sourceCount: raw.length, droppedUnparsable: raw.length - allEntries.length }
+        : {}),
       // 目录级失效标注（工具 projectFileTree 与 resource kojo://project/file-tree 同源同标注）。
       fsFreshness: fsFreshnessListing(deps, rootDir, '.', scope),
     };
@@ -602,25 +697,30 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
     if (typeof query !== 'string' || query.length === 0) {
       throw new McpFailure('INVALID_ARGS', 'searchAll 的 query 须为非空字符串');
     }
-    const maxResults = clampInt((args ?? {})['maxResults'], 50, 1, 200);
+    const page = pageParamsFor(args ?? {}, { defaultLimit: 50, maxLimit: 200 });
     const result = await deps.searchInFiles({
       searchId: nextSearchId(),
       roots: [rootDir],
       query,
-      options: { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [] },
+      options: {
+        isRegex: false,
+        caseSensitive: false,
+        wholeWord: false,
+        extensions: [],
+        maxResults: searchWindow(page.offset, page.limit),
+      },
     });
     const hits: Record<string, unknown>[] = [];
     for (const file of result.files) {
       for (const match of file.matches) {
-        if (hits.length >= maxResults) break;
         hits.push({ path: toRelativePath(file.path, rootDir), line: match.line, preview: match.preview });
       }
-      if (hits.length >= maxResults) break;
     }
     return {
-      hits,
-      total: result.totalMatches,
-      truncated: result.truncated || result.totalMatches > hits.length,
+      ...pageSearchHits(hits, args ?? {}, page.limit, page.offset, {
+        totalMatches: result.totalMatches,
+        truncated: result.truncated,
+      }),
       filesScanned: result.filesScanned,
       elapsedMs: result.elapsedMs,
       skipped: result.skipped,
@@ -650,9 +750,17 @@ export function createRunSupplemental(deps: McpIoDeps): (
   scope: McpSessionScope,
 ) => Promise<unknown> {
   const commandsList: McpReaderFn = (args) => {
-    const maxResults = clampInt((args ?? {})['maxResults'], 200, 1, 500);
+    const a = args ?? {};
     const all = deps.getCommands();
-    const commands = all.slice(0, maxResults).map((c) => ({
+    // 分页游标批：稳定 key＝命令 id（重复 id 用下标兜底，保证 key 唯一 ⇒ 游标定位不歧义）。
+    const seen = new Map<string, number>();
+    const p = paginateByCursor(all, (c, i) => {
+      const base = c.id !== '' ? c.id : `#${i}`;
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      return n === 0 ? base : `${base}#${n}`;
+    }, a, { defaultLimit: 200, maxLimit: 500 });
+    const commands = p.page.map((c) => ({
       id: c.id,
       title: c.title,
       ...(c.description !== undefined ? { description: c.description } : {}),
@@ -660,8 +768,14 @@ export function createRunSupplemental(deps: McpIoDeps): (
     }));
     return {
       commands,
-      total: all.length,
-      truncated: all.length > commands.length,
+      total: p.total,
+      truncated: p.truncated,
+      offset: p.offset,
+      limit: p.limit,
+      hasMore: p.hasMore,
+      nextCursor: p.nextCursor,
+      fingerprint: p.fingerprint,
+      ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
     };
   };
 
@@ -677,17 +791,32 @@ export function createRunSupplemental(deps: McpIoDeps): (
     }
     const abs = resolveWithinRoot(rootDir, asString(args['relPath']));
     const rel = toRelativePath(abs, rootDir);
-    const maxChars = clampInt(args['maxChars'], 24_000, 1, 200_000);
     const text = await deps.invoke('read_file_bytes', { path: abs });
     if (typeof text !== 'string') {
       throw new McpFailure('TOOL_EXECUTION_FAILED', 'read_file_bytes 未返回文本（不静默）');
     }
-    const { text: cut, truncated } = truncateChars(text, maxChars);
+    // 分页游标批：offset/length（+ maxChars 旧别名）→ 窗口；游标自带快照指纹，
+    // 文件在翻页之间被改就显式 changedDuringPaging + 从头部重发，绝不盲切旧偏移。
+    const p = paginateText(text, args, {
+      defaultLimit: MCP_PAGE_TEXT_DEFAULT_CHARS,
+      maxLimit: MCP_PAGE_TEXT_MAX_CHARS,
+    });
     return {
       path: rel,
-      text: cut,
-      textLength: text.length,
-      truncated,
+      text: p.page,
+      textLength: p.total,
+      truncated: p.truncated,
+      offset: p.offset,
+      limit: p.limit,
+      hasMore: p.hasMore,
+      nextCursor: p.nextCursor,
+      fingerprint: p.fingerprint,
+      ...(p.changedDuringPaging === true
+        ? {
+            changedDuringPaging: true,
+            note: '文件在两次取页之间被改过：本页是新快照的第 0 页，不可与旧页拼接（旧行为会静默错位）。',
+          }
+        : {}),
       // Wave4 ③：本次给的是 `atMs` 这一刻的盘态；`stale` 说的是「你上一次从本宿主读到的那份」
       // 之后盘上是否又被动过（真源 = 监视回执 + file.changed 短账，判不了即 null + 理由）。
       fsFreshness: fsFreshnessField(deps, abs, rel, scope),
@@ -739,37 +868,56 @@ export function createRunSupplemental(deps: McpIoDeps): (
     const rel = args['relPath'];
     // relPath 可选：缺省 = 项目根本身（空串合法），给了才过闸。
     const abs = rel === undefined || rel === '' ? rootDir : resolveWithinRoot(rootDir, asString(rel));
-    const maxEntries = clampInt(args['maxEntries'], 500, 1, 5000);
     const raw = await deps.invoke('list_dir', { path: abs });
-    const items: Record<string, unknown>[] = [];
+    const allItems: Record<string, unknown>[] = [];
     if (Array.isArray(raw)) {
       for (const item of raw) {
-        if (items.length >= maxEntries) break;
         if (!item || typeof item !== 'object') continue;
         const e = item as Record<string, unknown>;
-        items.push({
+        allItems.push({
           name: asString(e['name']),
           path: toRelativePath(asString(e['path']), rootDir),
           isDirectory: e['isDirectory'] === true,
         });
       }
     }
-    const total = Array.isArray(raw) ? raw.length : 0;
+    const sourceCount = Array.isArray(raw) ? raw.length : 0;
+    const p = paginateByCursor(allItems, (e) => `${String(e['path'])}|${e['isDirectory'] === true ? 'd' : 'f'}`, args, {
+      defaultLimit: 500,
+      maxLimit: 5000,
+    });
     return {
       path: relativeOrDot(abs, rootDir),
-      entries: items,
-      total,
-      truncated: total > items.length,
+      entries: p.page,
+      total: p.total,
+      truncated: p.truncated,
+      offset: p.offset,
+      limit: p.limit,
+      hasMore: p.hasMore,
+      nextCursor: p.nextCursor,
+      fingerprint: p.fingerprint,
+      ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
+      ...(sourceCount !== allItems.length ? { sourceCount, droppedUnparsable: sourceCount - allItems.length } : {}),
       // 目录级：覆盖期内该目录下任何路径被动过即 stale:true（逐条计数在 entries 账里）。
       fsFreshness: fsFreshnessListing(deps, abs, relativeOrDot(abs, rootDir), scope),
     };
   };
 
   const workspaceRoots: McpReaderFn = async (args) => {
-    const maxResults = clampInt((args ?? {})['maxResults'], 50, 1, 200);
     const raw = await deps.invoke('workspace_roots');
     const roots = Array.isArray(raw) ? raw.filter((r): r is string => typeof r === 'string') : [];
-    return { roots: roots.slice(0, maxResults), total: roots.length, truncated: roots.length > maxResults };
+    const p = paginateByCursor(roots, (r, i) => `${r}#${i}`, args ?? {}, { defaultLimit: 50, maxLimit: 200 });
+    return {
+      roots: p.page,
+      total: p.total,
+      truncated: p.truncated,
+      offset: p.offset,
+      limit: p.limit,
+      hasMore: p.hasMore,
+      nextCursor: p.nextCursor,
+      fingerprint: p.fingerprint,
+      ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
+    };
   };
 
   const workspaceSearchAll: McpReaderFn = async (args, scope) => {
@@ -785,25 +933,30 @@ export function createRunSupplemental(deps: McpIoDeps): (
     }
     // scope:'sources' ⇒ 以 adapter 填充的作品域目录为根集合（契约字段投影，不硬编码领域）。
     const roots = searchRootsOf(project, rootDir, (args ?? {})['scope'] === 'sources');
-    const maxResults = clampInt((args ?? {})['maxResults'], 50, 1, 200);
+    const page = pageParamsFor(args ?? {}, { defaultLimit: 50, maxLimit: 200 });
     const result = await deps.searchInFiles({
       searchId: nextSearchId(),
       roots,
       query,
-      options: { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [] },
+      options: {
+        isRegex: false,
+        caseSensitive: false,
+        wholeWord: false,
+        extensions: [],
+        maxResults: searchWindow(page.offset, page.limit),
+      },
     });
     const hits: Record<string, unknown>[] = [];
     for (const file of result.files) {
       for (const match of file.matches) {
-        if (hits.length >= maxResults) break;
         hits.push({ path: toRelativePath(file.path, rootDir), line: match.line, preview: match.preview });
       }
-      if (hits.length >= maxResults) break;
     }
     return {
-      hits,
-      total: result.totalMatches,
-      truncated: result.truncated || result.totalMatches > hits.length,
+      ...pageSearchHits(hits, args ?? {}, page.limit, page.offset, {
+        totalMatches: result.totalMatches,
+        truncated: result.truncated,
+      }),
       filesScanned: result.filesScanned,
       elapsedMs: result.elapsedMs,
       skipped: result.skipped,
