@@ -467,8 +467,12 @@ function scanTextFast(text, fast, maxPerFile) {
  *   O(最长行) 内存担忧随流式缓冲一起不存在了）；
  * - readFile 后仍复查一次字节数（stat 后文件长大的 TOCTOU 角）：Rust 侧 fs::read 全收照扫、
  *   不复查——镜像保留这道纯内存护栏，属已记录的表现层分叉，确定性输入两侧账恒同。
+ * S20：`skip` = 续取凭据在本文件内要先丢掉的命中条数（0 ⇒ 逐字旧行为）——照 Rust
+ * `scan_hits_after` 的形态在同一趟扫描腿上把窗口挪到 `cap + skip`，丢弃算术在收口侧做
+ * （`applied = min(认出条数, skip)`）：不重扫、不重复解码，每文件每页的**返回**上限仍由
+ * `cap` 说了算，多出的那一段只存在于本趟的临时向量里。
  */
-async function scanFile(file, matcher, maxPerFile, fast) {
+async function scanFile(file, matcher, maxPerFile, fast, skip = 0) {
   let fh;
   try {
     fh = await fs.open(file, 'r');
@@ -490,7 +494,9 @@ async function scanFile(file, matcher, maxPerFile, fast) {
     if (!utf16Bom && hasNul(buf)) return { status: 'binary', entries: [], overflow: false };
     const text = decoderFor(buf).decode(buf);
     if (utf16Bom && text.includes('\u0000')) return { status: 'binary', entries: [], overflow: false };
-    const r = fast ? scanTextFast(text, fast, maxPerFile) : scanWholeText(text, matcher, maxPerFile);
+    const r = fast
+      ? scanTextFast(text, fast, maxPerFile + skip)
+      : scanWholeText(text, matcher, maxPerFile + skip);
     return { status: 'ok', entries: r.entries, overflow: r.overflow };
   } catch {
     return { status: 'unreadable', entries: [], overflow: false };
@@ -649,6 +655,40 @@ function previewModeOf(opts) {
   );
 }
 
+/* ---------------- MCP-PERF-S20（B18 引擎腿的镜像侧收口）逐段续取凭据 ---------------- */
+
+/**
+ * 与 Rust 引擎同尺的两把硬数字（lib.rs `SEARCH_PER_FILE_CAP` / `SEARCH_RESUME_SKIP_MAX`）。
+ * 旧镜像自定的每文件 200 与引擎的 500 不同尺——续取的段算术（段起点 = ⌊偏移/500⌋×500）在
+ * 200 尺上必然串位，「同查询同结果」的对拍合同也早就要求这一格对齐；本批收口到 500。
+ */
+const SEARCH_PER_FILE_CAP = 500;
+
+/** 续取凭据的资源闸：skip 的绝对上限（超限**夹取**、回显给实际值——Rust 同口径，夹紧不静默）。 */
+const SEARCH_RESUME_SKIP_MAX = 50_000;
+
+/**
+ * 腿3（B18 引擎腿的镜像侧）：`resumeAfterMatches` 逐段续取凭据。Rust DTO 是 `Option<usize>`
+ * ⇒ 形状闸 = 非负整数，负数 / 小数 / 非数字显式拒收（serde 同判：整条请求失败）；缺省不带键
+ * ＝ 0（与 `Some(0)` 逐字同产出）。单位是「该文件内的命中条数」——对**每个**候选文件先丢
+ * N 条，再按每文件闸 / maxResults 收口；实际丢弃之和收口进 `resumeAppliedMatches` 回显
+ * （对账位恒在，调用方靠「回显 == 凭据」判「续上了没有」）。
+ */
+function resumeAfterMatchesOf(opts) {
+  const raw = opts?.resumeAfterMatches;
+  if (raw === undefined) return 0;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0) {
+    throw new HostError(
+      `resumeAfterMatches 须为非负整数（该文件内先丢弃的命中条数；收到 ${JSON.stringify(raw)}）`,
+    );
+  }
+  if (raw > SEARCH_RESUME_SKIP_MAX) {
+    console.warn(`[debug-host] 续取凭据 ${raw} 超过资源闸 ${SEARCH_RESUME_SKIP_MAX}，已夹到上限（回显给实际丢弃条数）`);
+    return SEARCH_RESUME_SKIP_MAX;
+  }
+  return raw;
+}
+
 /**
  * `search_text` 的 Node 镜像（口径对齐 `bridge/search.ts` 的 SearchResult）：
  * 列 UTF-16 code unit 与 Monaco 同轴；命中行超长以命中为中心开窗（省略号含在串里）。
@@ -661,6 +701,8 @@ async function searchText(state, request, admitRead) {
   // 那格与 Rust SearchResultDto 同形恒在，见 finalize）。
   const deadlineMs = deadlineMsOf(opts);
   const previewMode = previewModeOf(opts);
+  // S20：逐段续取凭据（可省；缺省 0 = 旧请求体逐字同形、应答只多一个恒 0 的对账位）。
+  const resumeSkip = resumeAfterMatchesOf(opts);
   const deadlineAt = deadlineMs === null ? null : started + deadlineMs;
   let deadlineHit = false;
   const roots = Array.isArray(request?.roots) ? request.roots.map(norm) : [];
@@ -699,9 +741,10 @@ async function searchText(state, request, admitRead) {
     }
   }
   const maxResults = Math.max(1, Number(opts.maxResults ?? 2000));
-  const maxPerFile = 200;
   const files = [];
   let totalMatches = 0;
+  // S20：续取实际丢弃条数（逐文件求和；不带凭据恒 0）——收口进 `resumeAppliedMatches` 对账位
+  let resumeApplied = 0;
   let truncated = false;
   const skipped = { binary: 0, tooLarge: 0, unreadable: 0, filtered: 0, excluded: 0 };
   let filesScanned = 0;
@@ -771,7 +814,10 @@ async function searchText(state, request, admitRead) {
         slice.map(async (file) => {
           if (cancelled()) return null;
           filesScanned += 1;
-          return { path: file, ...(await scanFile(file, matcher, maxPerFile, fast)) };
+          // S20：每文件预算在领取时刻读（与 Rust 主循环同一把尺：remaining = maxResults - 已收口命中；
+          // 批内同值、批界收口后更新——腿只在「一片只剩一个文件」时发凭据，稠密单文件下逐位精确）。
+          const cap = Math.max(0, Math.min(SEARCH_PER_FILE_CAP, maxResults - totalMatches));
+          return { path: file, ...(await scanFile(file, matcher, cap, fast, resumeSkip)) };
         }),
       );
       for (const r of batch) {
@@ -779,14 +825,19 @@ async function searchText(state, request, admitRead) {
         if (r.status === 'binary') skipped.binary += 1;
         else if (r.status === 'too-large') skipped.tooLarge += 1;
         else if (r.status === 'unreadable') skipped.unreadable += 1;
-        if (r.entries.length === 0) continue;
+        // S20：续取账先落——「一条不剩」也可能是「跳完正好见底」，这一笔不许丢
+        // （Rust FileOutcome::Miss(applied) 同口径；回显只统计实际丢掉的，不把请求值原样抄回来）。
+        const applied = Math.min(r.entries.length, resumeSkip);
+        if (applied > 0) resumeApplied += applied;
+        const kept = applied > 0 ? r.entries.slice(applied) : r.entries;
+        if (kept.length === 0) continue;
         if (totalMatches >= maxResults) {
           truncated = true;
           continue;
         }
         const room = maxResults - totalMatches;
-        const take = r.entries.length > room ? r.entries.slice(0, room) : r.entries;
-        if (r.entries.length > room || r.overflow) truncated = true;
+        const take = kept.length > room ? kept.slice(0, room) : kept;
+        if (kept.length > room || r.overflow) truncated = true;
         files.push({ path: r.path, matches: take });
         totalMatches += take.length;
         if (totalMatches >= maxResults) {
@@ -823,6 +874,10 @@ async function searchText(state, request, admitRead) {
       filesScanned,
       skipped,
       elapsedMs: Date.now() - started,
+      // S20 续取对账位（wire 形态与 Rust SearchResultDto 同形恒在；不带凭据恒 0）。
+      // 回显只统计实际丢弃的：旧宿主（键缺席）与「认了但文件没那么长」（回显 < 请求值）
+      // 必须可区分——腿靠「回显 == 凭据」判续上了没有。
+      resumeAppliedMatches: resumeApplied,
       // 软时限账（S1 wire 形态，与 Rust SearchResultDto 同形恒在）：partial=false 时
       // partialReason 恒 null；当前唯一取值 "deadline"。与 truncated（命中上限）/ cancelled
       // （取消）三账分立——"为什么不全"各答各的。

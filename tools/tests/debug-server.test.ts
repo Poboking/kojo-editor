@@ -546,11 +546,16 @@ describe('调试宿 · 检索快路径与逐行语义逐字段对拍（2026-10-2
     }
   });
 
-  it('逐文件命中上限（200）：第 201 次命中只置 overflow/truncated，不写出', async () => {
+  it('逐文件命中上限（500，与 Rust SEARCH_PER_FILE_CAP 同尺）：第 501 次命中只置 overflow/truncated，不写出', async () => {
     const denseDir = path.join(sandbox, 'dense');
     const denseFile = path.join(denseDir, 'dense.ERB');
     await fs.mkdir(denseDir, { recursive: true });
-    await fs.writeFile(denseFile, `${Array.from({ length: 250 }, () => 'HIT').join(' ')}\n`, 'utf-8');
+    // 120 行 × 5 命中 = 600 条（多行夹具：单行 600 命中会撞超长行护栏，混进无关账目）
+    await fs.writeFile(
+      denseFile,
+      `${Array.from({ length: 120 }, () => 'HIT HIT HIT HIT HIT').join('\n')}\n`,
+      'utf-8',
+    );
     const r = await invoke('search_text', {
       request: {
         searchId: 22,
@@ -560,8 +565,8 @@ describe('调试宿 · 检索快路径与逐行语义逐字段对拍（2026-10-2
       },
     });
     const v = r.value as { files: { matches: unknown[] }[]; totalMatches: number; truncated: boolean };
-    expect(v.files[0]!.matches).toHaveLength(200);
-    expect(v.totalMatches).toBe(200);
+    expect(v.files[0]!.matches).toHaveLength(500);
+    expect(v.totalMatches).toBe(500);
     expect(v.truncated).toBe(true);
   });
 
