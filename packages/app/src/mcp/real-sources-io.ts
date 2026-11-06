@@ -44,6 +44,12 @@
  *   分开归因）；**绝不新建写通道、绝不因感知需要而放宽写闸**。
  *   判定缺席一律可见：监视不可用 / 路径不在监视域 / 会话内没有可比基线 / 账已溢出
  *   ⇒ `stale:null` + `staleReason`，绝不用乐观 `false`、绝不用空串或默认值假装有。
+ * - 长任务面（Wave4 余项⑤「长任务 progress」· ADR-0013 P5「Tasks over MCP」）：`tasks.start` /
+ *   `tasks.status` / `tasks.cancel` 三枚具名工具与 `kojo://tasks` resource 都**只分派**给注入的
+ *   `McpTaskLegs`（真源在 `real-sources-tasks.ts`：表、进度投影、有界性、取消语义都在那一层）。
+ *   `deps.tasks` 缺席 ⇒ 工具显式 `NOT_WIRED`、resource 显式 `RESOURCE_UNAVAILABLE`（铁律 4：
+ *   没有真任务表就不装出任务来，也不空表冒充「没有在跑的任务」）。`kojo://tasks` 的数据腿必须拿
+ *   **真 scope**（表按 sessionId+clientId 隔离）——组装点过去给 `null` 顶替，本批一并修掉。
  */
 import { McpFailure, truncateResourceText } from '@kojo/mcp-host';
 import type {
@@ -88,6 +94,11 @@ export interface McpSearchResultLike {
   }[];
   readonly totalMatches: number;
   readonly truncated: boolean;
+  /**
+   * 是否被 `cancel_search` 提前收尾（真 `SearchResult` 有这一位；长任务面按它判终态
+   * `cancelled`，缺席按 false 处理 ⇒ 可选，既有假件零改动）。
+   */
+  readonly cancelled?: boolean;
   readonly filesScanned: number;
   readonly elapsedMs: number;
   readonly skipped: unknown;
@@ -137,6 +148,18 @@ export interface McpKernelLike {
   };
 }
 
+/**
+ * 长任务面（Wave4 余项⑤）的四腿形状（实现见 `real-sources-tasks.ts`，本模块只做分派与兜底）：
+ * `start` / `status` / `cancel` 是工具腿，`list` 是 `kojo://tasks` resource 的数据腿。
+ * 缺席 ⇒ 每一腿显式 `NOT_WIRED` / `RESOURCE_UNAVAILABLE`（铁律 4：不静默、不伪造任务读数）。
+ */
+export interface McpTaskLegs {
+  readonly start: (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown>;
+  readonly status: (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown>;
+  readonly cancel: (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown>;
+  readonly list: (scope: McpSessionScope) => Promise<unknown>;
+}
+
 /** 宿主真源的窄投影（与 `McpWiringSources` 的 commands 同源）。 */
 export interface McpIoDeps {
   readonly getKernel: () => McpKernelLike | null;
@@ -151,6 +174,8 @@ export interface McpIoDeps {
    * `{available:false, stale:null, staleReason}`（铁律 4：字段不因缺席而消失）。
    */
   readonly fsFreshness?: () => FsFreshnessTracker | null;
+  /** 长任务面（`tasks.*` 工具 + `kojo://tasks` 数据腿）；缺席 ⇒ 显式 NOT_WIRED。 */
+  readonly tasks?: McpTaskLegs;
 }
 
 /* ------------------------------- 路径闸（与 Rust 同尺） ------------------------------- */
@@ -472,9 +497,41 @@ function asString(v: unknown, fallback = ''): string {
   return typeof v === 'string' ? v : fallback;
 }
 
+/** 项目载荷 → 基准根字符串（空串 = 没有根；调用方须显式失败，绝不猜基准根）。 */
+export function rootDirOf(project: Record<string, unknown>): string {
+  return asString(project['rootDir']);
+}
+
+/**
+ * 检索根集合：`sourcesOnly` ⇒ 用 adapter 填进契约的作品域目录（`kojoPaths`，字段投影，
+ * 本模块不认识任何领域名词）；否则项目根。非字符串 / 空串逐项剔除（不把脏根送到壳层）。
+ * **可能返回空数组**（给了 sources 但 kojoPaths 形态不合法）：调用方自己判——
+ * 一次性检索按既有语义照发，任务面则显式拒绝（不建没有根可扫的「在跑」任务）。
+ */
+export function searchRootsOf(
+  project: Record<string, unknown>,
+  rootDir: string,
+  sourcesOnly: boolean,
+): string[] {
+  if (sourcesOnly && Array.isArray(project['kojoPaths']) && (project['kojoPaths'] as unknown[]).length > 0) {
+    return (project['kojoPaths'] as unknown[]).filter((p): p is string => typeof p === 'string' && p !== '');
+  }
+  return [rootDir];
+}
+
 /* ------------------------------- kernelIo 3 腿 ------------------------------- */
 
 let searchSeq = 0;
+
+/**
+ * 壳层检索请求的发号器（与 `bridge/search` 的 `searchId` 同一口径）。
+ * 内联检索与长任务面**共用这一条序列**：进度帧与取消都按 `searchId` 认领，
+ * 两条路各自发号会撞号 ⇒ 迟到帧/取消会串到别人的任务上。
+ */
+export function nextSearchId(): number {
+  searchSeq += 1;
+  return searchSeq;
+}
 
 export function createKernelIo(deps: McpIoDeps): McpKernelIo {
   const projectInfo: McpReaderFn = async () => {
@@ -536,9 +593,8 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
       throw new McpFailure('INVALID_ARGS', 'searchAll 的 query 须为非空字符串');
     }
     const maxResults = clampInt((args ?? {})['maxResults'], 50, 1, 200);
-    searchSeq += 1;
     const result = await deps.searchInFiles({
-      searchId: searchSeq,
+      searchId: nextSearchId(),
       roots: [rootDir],
       query,
       options: { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [] },
@@ -715,15 +771,10 @@ export function createRunSupplemental(deps: McpIoDeps): (
       throw new McpFailure('INVALID_ARGS', 'workspace.searchAll 的 query 须为非空字符串');
     }
     // scope:'sources' ⇒ 以 adapter 填充的作品域目录为根集合（契约字段投影，不硬编码领域）。
-    const searchScope = (args ?? {})['scope'];
-    let roots: string[] = [rootDir];
-    if (searchScope === 'sources' && Array.isArray(project['kojoPaths']) && (project['kojoPaths'] as unknown[]).length > 0) {
-      roots = (project['kojoPaths'] as unknown[]).filter((p): p is string => typeof p === 'string' && p !== '');
-    }
+    const roots = searchRootsOf(project, rootDir, (args ?? {})['scope'] === 'sources');
     const maxResults = clampInt((args ?? {})['maxResults'], 50, 1, 200);
-    searchSeq += 1;
     const result = await deps.searchInFiles({
-      searchId: searchSeq,
+      searchId: nextSearchId(),
       roots,
       query,
       options: { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [] },
@@ -1070,6 +1121,31 @@ export function createRunSupplemental(deps: McpIoDeps): (
   // Wave4 余项①：quickFix 受控 apply 腿（稳定 actionId 台账 + 模型内一次撤销步，见 quick-fix.ts）。
   const quickFixApply = createQuickFixApplyLeg(deps);
 
+  /* ---------------- 长任务面腿（Wave4 余项⑤：只登记「进度 + 取消 + 可查询状态」三件套齐备的族） ----------------
+   * 真源在 `real-sources-tasks.ts`（表 + 投影 + 有界性都在那一层）；本模块只做分派与缺席兜底。
+   * 进度契约是**轮询读**：`tasks.status` / `kojo://tasks`，服务端不推送（无状态单请求端点，
+   * capabilities 的 resources.subscribe 保持 false，不因本批抬成 true）。 */
+  function requireTaskLegs(name: string): McpTaskLegs {
+    const legs = deps.tasks;
+    if (!legs) {
+      throw new McpFailure(
+        'NOT_WIRED',
+        `工具 ${name} 未接线：宿主未注入长任务面（real-sources-tasks.ts 的 createMcpTaskLegs）——` +
+          '没有真任务表就不装出任务来（不静默、不伪造进度读数）。',
+      );
+    }
+    return legs;
+  }
+
+  const tasksStart = async (args: Record<string, unknown>, scope: McpSessionScope): Promise<unknown> =>
+    requireTaskLegs('tasks.start').start(args ?? {}, scope);
+
+  const tasksStatus = async (args: Record<string, unknown>, scope: McpSessionScope): Promise<unknown> =>
+    requireTaskLegs('tasks.status').status(args ?? {}, scope);
+
+  const tasksCancel = async (args: Record<string, unknown>, scope: McpSessionScope): Promise<unknown> =>
+    requireTaskLegs('tasks.cancel').cancel(args ?? {}, scope);
+
   const ioTools = new Map<string, (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown> | unknown>([
     ['commands.list', commandsList],
     ['fs.readFile', readFile],
@@ -1088,6 +1164,9 @@ export function createRunSupplemental(deps: McpIoDeps): (
     // Wave4 余项①：稳定 actionId 台账 + 宿主受控 apply（模型内一次撤销步，不落盘、
     // 不新建写通道）；逐闸拒绝显式报错，run 式意图 / 糖投影保持显式 NOT_WIRED。
     ['problems.quickFix', quickFixApply],
+    ['tasks.start', tasksStart],
+    ['tasks.status', tasksStatus],
+    ['tasks.cancel', tasksCancel],
   ]);
 
   return async (name, args, scope) => {
@@ -1114,7 +1193,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
 
 export type McpResourceDataReader = (uri: string, scope: McpSessionScope) => Promise<unknown>;
 
-/** 内置 8 项 resource 的 URI 常量（真源 = `@kojo/mcp-host` 的 MCP_RESOURCE_SPECS）。 */
+/** resource URI 常量（真源 = `@kojo/mcp-host` 的 MCP_RESOURCE_SPECS；Wave4 余项⑤加 `kojo://tasks`）。 */
 export const KOJO_RESOURCE_URIS = {
   snapshot: 'kojo://project/snapshot',
   fileTree: 'kojo://project/file-tree',
@@ -1129,6 +1208,11 @@ export const KOJO_RESOURCE_URIS = {
    * 不动 `@kojo/mcp-host` 的冻结契约表）。外部写盘失效账本 + 监视覆盖自述 + 能力面自述。
    */
   fsFreshness: 'kojo://project/fs-freshness',
+  /**
+   * Wave4 余项 ⑤新增：长任务表。与前 8 项同进 `@kojo/mcp-host` 的 `MCP_RESOURCE_SPECS`
+   * （该表本就随批 additive 追加，非字面冻结），故这里是第 10 项。
+   */
+  tasks: 'kojo://tasks',
 } as const;
 
 function conventionReport(kernel: McpKernelLike | null): { readonly failedRules: unknown[] } | null {
@@ -1220,6 +1304,17 @@ export function createIoResourceData(
           throw new McpFailure('RESOURCE_UNAVAILABLE', '内核未到场：事件环形缓冲未绑定（不静默）');
         }
         return readEvents(500);
+      }
+      case KOJO_RESOURCE_URIS.tasks: {
+        // 长任务表：轮询读的真源（服务端不推送）。按会话过滤 ⇒ 必须用真 scope，不许 null 顶替。
+        const legs = deps.tasks;
+        if (!legs) {
+          throw new McpFailure(
+            'RESOURCE_UNAVAILABLE',
+            'resource kojo://tasks 没有已接线的真源：宿主未注入长任务面（不静默、不空表冒充「没有在跑的任务」）',
+          );
+        }
+        return legs.list(scope);
       }
       default:
         throw new McpFailure('RESOURCE_UNAVAILABLE', `resource ${sanitizeEcho(uri)} 没有已接线的真源（不静默）`);

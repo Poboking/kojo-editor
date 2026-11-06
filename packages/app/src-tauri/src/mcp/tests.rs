@@ -1378,6 +1378,50 @@ fn tools_call_denies_tier_mismatch_from_read_session() {
     assert!(check_tool_call_permission("write_bytes", &approved).is_ok());
     let wildcard = empty_scope(vec!["write_*".to_string()]);
     assert!(check_tool_call_permission("write_bytes", &wildcard).is_ok());
+    // Wave4 余项⑤（长任务面）：点名归类的精确名档位判据。
+    // `tasks.start` / `tasks.cancel` 动的是运行态（起一条真长操作 / 往壳层取消集合写一位），
+    // 不是纯读 ⇒ read 会话必须显式拒；`tasks.status` 与 `kojo://tasks` 是轮询读数面 ⇒ 判 read。
+    for name in ["tasks.start", "tasks.cancel"] {
+        assert_eq!(host_required_tier(name), McpTier::Edit, "{name}");
+        let e = check_tool_call_permission(name, &read)
+            .err()
+            .unwrap_or_else(|| panic!("长任务面档位漏判：{name} 在 read 会话被闸门放行（Ok）"));
+        assert_eq!(e.code, "E_TIER_DENIED", "{name}");
+        assert!(e.message.contains(name), "{name} 拒绝必须可见（带工具名）");
+        assert!(e.message.contains("edit"), "{name} 拒绝理由必须点明所需档位");
+    }
+    assert_eq!(host_required_tier("tasks.status"), McpTier::Read);
+    assert!(check_tool_call_permission("tasks.status", &read).is_ok());
+    // tools/list 同源剔除（与 check 闸同判据，不靠「看不见就当不调」）：
+    // read 会话里两枚写/取消档任务工具被滤掉，只读 status 留下。
+    let listing = filter_tools_list(
+        &json!({"tools": [
+            {"name": "tasks.start", "description": "d"},
+            {"name": "tasks.status", "description": "d"},
+            {"name": "tasks.cancel", "description": "d"}
+        ]}),
+        &read,
+    );
+    let kept: Vec<&str> = listing
+        .result
+        .get("tools")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t.get("name").and_then(Value::as_str))
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(kept, vec!["tasks.status"], "read 会话的 tools/list 漏滤任务写面");
+    assert_eq!(listing.filtered, vec!["tasks.start", "tasks.cancel"]);
+    // edit 会话（正确 tier）三枚照列照调。
+    let edit_tasks = McpSessionScope {
+        tier: McpTier::Edit,
+        ..empty_scope(Vec::new())
+    };
+    for name in ["tasks.start", "tasks.status", "tasks.cancel"] {
+        assert!(check_tool_call_permission(name, &edit_tasks).is_ok(), "{name}");
+    }
     // 只读工具不受新闸影响。
     assert!(check_tool_call_permission("read_file", &read).is_ok());
     // privileged 未批准仍是 E_TOOL_NOT_APPROVED 优先（错误码优先序不变，
@@ -2258,6 +2302,119 @@ fn e2e_tools_call_denies_tier_mismatch_from_read_session() {
     assert_eq!(v2["id"], json!(6));
     assert!(v2["error"].is_null(), "批准后仍被拒 ⇒ 收口误伤批准语义");
     assert_eq!(v2["result"]["content"], json!("written"));
+}
+
+/// Wave4 余项⑤（长任务面 · `kojo://tasks` / `tasks.*`）的端点级回归。
+///
+/// 钉的是**三路对齐里宿主这一路**：新登记的写/取消类工具在 `EDIT_TOOLS_EXACT` 真源表里点名判
+/// edit，于是即便 WebView 注册表被替换或出错，read 会话直调 `tasks.start` / `tasks.cancel`
+/// 仍在 `emit_request` **之前**被显式拒（`E_TIER_DENIED`）+ 写一条 denied 审计 + 桥零调用。
+/// 反向同钉：只读面（`tasks.status` 工具与 `kojo://tasks` resource）判 read，read 会话照旧
+/// 走桥；edit 会话（正确 tier）两枚写/取消面照旧走桥 ⇒ 收口没有把能力面焊死。
+#[test]
+fn e2e_tasks_write_face_denied_for_read_session_with_zero_bridge_calls() {
+    let s = TestServer::start();
+    for (id, name) in [(51u32, "tasks.start"), (52u32, "tasks.cancel")] {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"{name}","arguments":{{"kind":"search","query":"abc","taskId":"tsk-local-1"}}}}}}"#
+        );
+        let r = mcp_post(s.port, &s.token, &body);
+        assert_eq!(r.status, 200);
+        let v = rpc_json(&r);
+        assert_eq!(v["id"], json!(id), "{name}：拒绝也要回同一条请求 id");
+        assert_eq!(v["error"]["code"], json!(-32000), "{name}：必须显式 RPC 错误");
+        assert_eq!(
+            v["error"]["data"]["code"],
+            json!("E_TIER_DENIED"),
+            "{name}：写/取消档任务工具在 read 会话必须显式拒"
+        );
+        let msg = v["error"]["message"].as_str().unwrap_or("");
+        assert!(msg.contains(name) && msg.contains("edit"), "{name} 拒绝理由：{msg}");
+    }
+    // 两条各写一条 Denied 审计（note＝原始码，拒绝可见不静默）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(denied.len(), 2, "两枚任务写面各一条 denied 审计");
+    for e in &denied {
+        assert_eq!(e.note.as_deref(), Some("E_TIER_DENIED"), "{:?}", e.tool);
+    }
+    let denied_names: Vec<&str> = denied.iter().map(|e| e.tool.as_str()).collect();
+    assert!(denied_names.contains(&"tasks.start"));
+    assert!(denied_names.contains(&"tasks.cancel"));
+    // 闸门命中在 emit 之前 ⇒ 桥从未被调。
+    assert!(
+        s.rx.try_recv().is_err(),
+        "read 会话的任务写面被拒后仍转发了 WebView ⇒ 桥非零调用"
+    );
+
+    // 只读面照旧放行：tasks.status 在 read 会话走桥（轮询读是进度契约的真形）。
+    let status_req = r#"{"jsonrpc":"2.0","id":53,"method":"tools/call","params":{"name":"tasks.status","arguments":{"taskId":"tsk-local-1"}}}"#.to_string();
+    let port = s.port;
+    let token = s.token.clone();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &status_req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(json!({"contents": "task"})),
+            error: None,
+        },
+    )
+    .unwrap();
+    let v = rpc_json(&worker.join().unwrap());
+    assert!(v["error"].is_null(), "只读 tasks.status 不该被宿主拒：{v}");
+
+    // `kojo://tasks` 是新增条目：URI 闸同尺放行（无 `..` / 无绝对形态），read 会话可读。
+    validate_kojo_uri("kojo://tasks").expect("kojo://tasks 必须过 URI 闸（新条目与老条目同尺）");
+    let read_req = r#"{"jsonrpc":"2.0","id":54,"method":"resources/read","params":{"uri":"kojo://tasks"}}"#.to_string();
+    let port2 = s.port;
+    let token2 = s.token.clone();
+    let reader = std::thread::spawn(move || mcp_post(port2, &token2, &read_req));
+    let payload2 = s.next_payload();
+    assert_eq!(payload2.method, "resources/read");
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload2.id.clone(),
+            ok: true,
+            result: Some(json!({"contents": [{"uri": "kojo://tasks", "text": "{}"}]})),
+            error: None,
+        },
+    )
+    .unwrap();
+    let v2 = rpc_json(&reader.join().unwrap());
+    assert!(v2["error"].is_null(), "read 会话读 kojo://tasks 被拒：{v2}");
+
+    // 正确 tier（edit 会话）⇒ 两枚写/取消面照旧走桥（收口没把能力面焊死）。
+    scope::approve(s.dir.path(), "loopback-client", McpTier::Edit, vec![], vec![]).unwrap();
+    reload_scope_mirror(&s);
+    let start_req = r#"{"jsonrpc":"2.0","id":55,"method":"tools/call","params":{"name":"tasks.start","arguments":{"kind":"search","query":"abc"}}}"#.to_string();
+    let port3 = s.port;
+    let token3 = s.token.clone();
+    let starter = std::thread::spawn(move || mcp_post(port3, &token3, &start_req));
+    let payload3 = s.next_payload();
+    assert_eq!(payload3.method, "tools/call");
+    assert_eq!(payload3.scope.tier, McpTier::Edit);
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload3.id.clone(),
+            ok: true,
+            result: Some(json!({"taskId": "tsk-local-1", "status": "running"})),
+            error: None,
+        },
+    )
+    .unwrap();
+    let v3 = rpc_json(&starter.join().unwrap());
+    assert!(v3["error"].is_null(), "edit 会话调 tasks.start 被拒：{v3}");
+    assert_eq!(v3["result"]["taskId"], json!("tsk-local-1"));
 }
 
 #[test]

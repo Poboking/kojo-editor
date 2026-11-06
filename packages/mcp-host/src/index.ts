@@ -785,6 +785,83 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
+
+  /* ---- Wave4 余项⑤（LaneL，2026-11-06）：长任务 progress = ADR-0013 P5「Tasks over MCP」 ----
+   * 判性落地（逐条证据见 real-sources-tasks.ts 模块头与 commit 回执）：只登记**三件套齐备**的族
+   * ——进度有真源、取消有真源、状态可查询。目前两族：
+   *   · search —— 进度真源 = 壳层 `kojo:search-progress`（按文件数与时间双条件节流、按 searchId
+   *     认领），取消真源 = `cancel_search`（同一 cancelled 集合，检索线程逐文件读），
+   *     完成态由 `search_text` 返回值收口；
+   *   · validation —— 启动/终态真源 = 内核 `convention.linter` 的 run/report，取消真源 =
+   *     ConventionRunOptions.signal（引擎只在文件单元间隙看这颗闸），**运行中没有逐单元进度回调**
+   *     ⇒ progress 显式 known:false + reason，只有终态那一轮由引擎陈述 incomplete（事后读数）。
+   * 刻意不登记：索引构建（无取消位 + 会改写 GUI 在用的全局索引）、导出（对话框即授权、无进度无取消、
+   * 任务参数绝不允许变成可选落点）；启动器任务表三件套齐全但另有主人与第三张表 ⇒ 本批不并表，
+   * 缺席事实在 kojo://tasks 的 notIncluded[] 里可见（不静默）。
+   * 传输形态纪律：MCP 端点是无状态单请求 HTTP，**进度契约＝轮询读**（tasks.status / kojo://tasks）；
+   * 本批不把 capabilities 的 resources.subscribe 抬成 true，也不伪造 notification。
+   * 落盘边界：两族都不写项目目录（校验快照走内核既有 storage 命名空间），roots 只由项目载荷投影，
+   * 不接受调用方给的绝对路径 ⇒ 不新建任何写通道。
+   * 本注释刻意不写规格字面量，避免干扰盘点脚本对规格块的正则解析。
+   */
+  {
+    name: 'tasks.start',
+    description:
+      'Register one long operation as a queryable, cancellable task instead of a single blocking tools/call. kind "search" runs the same native project-wide search the shell runs (throttled progress frames feed done/total/matchCount); kind "validation" starts one convention-linter round, which has NO live per-unit progress (progress.known:false, done/total stay null - never 0%) and only reports incomplete{unitsDone,unitsTotal} at the end. Returns the task view immediately WITHOUT awaiting it: {taskId, status, progress, cancelRequested}. Poll with tasks.status or read the kojo://tasks resource - this endpoint is request/response, the server never pushes. Bounded by design: at most 2 running tasks per session and 32 table rows with lazy retention; over capacity the call fails visibly with RESOURCE_UNAVAILABLE instead of queueing. Roots come from the open project contract only (no path arguments), and neither kind writes to the project. Export and index building are deliberately NOT registered as tasks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        kind: {
+          type: 'string',
+          enum: ['search', 'validation'],
+          description: 'Which long operation to model as a task (default: search).',
+        },
+        query: { type: 'string', minLength: 1, maxLength: 512, description: 'search kind only: case-insensitive substring to find.' },
+        scope: {
+          type: 'string',
+          enum: ['all', 'sources'],
+          description: 'search kind only: scan the project root (all) or the contract source dirs (sources).',
+        },
+        maxResults: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 500,
+          description: 'search kind only: hit cap handed to the shell (default 200, values are clamped).',
+        },
+        force: { type: 'boolean', description: 'validation kind only: bypass the snapshot cache and re-check every unit.' },
+      },
+    },
+    tier: 'edit',
+    annotations: { readOnlyHint: false, idempotentHint: false },
+  },
+  {
+    name: 'tasks.status',
+    description:
+      'Poll one task started by tasks.start inside THIS session (read-only, zero side effects). Returns {taskId, kind, status, progress{known, phase, done, total, percent, frames, lastFrameAgeMs}, cancelRequested, cancelApplied, result}. progress.done/total are null before the first throttled frame and stay null when the operation has no live progress source (progress.known:false plus the reason) - null means "not reported", NOT 0% and NOT "nothing is happening"; readings between frames keep the last frame with its age. The stored result projection is bounded and carries an explicit truncated flag. An unknown id, a recycled row (retention is 10 minutes; reloading the editor page clears the whole table) or another session\'s task all fail visibly with RESOURCE_UNAVAILABLE - never an empty frame. Poll, do not subscribe: the transport does not push progress.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', minLength: 1, maxLength: 128, description: 'The id returned by tasks.start.' },
+      },
+      required: ['taskId'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'tasks.cancel',
+    description:
+      'Request cancellation of one task in THIS session. Cancellation is a REQUEST, not an acknowledgement: a search task forwards the shell cancel for its own search id (the worker checks the flag between files and reports cancelled in the final result), a validation task sets this run\'s abort signal - and if the round merged with one the GUI already started, this task\'s flag does not apply. Read tasks.status for the fact: status "cancelled" with cancelApplied:true; cancelApplied:false states honestly that it finished first. A task already in a terminal state returns idempotently with alreadyFinished:true (no error, and no claim of having cancelled something); a missing cancel primitive fails visibly with NOT_WIRED instead of pretending success. Never touches files, the write domains or the export dialog.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', minLength: 1, maxLength: 128, description: 'The id returned by tasks.start.' },
+      },
+      required: ['taskId'],
+    },
+    tier: 'edit',
+    annotations: { readOnlyHint: false, idempotentHint: true },
+  },
 ];
 
 /**
@@ -840,6 +917,12 @@ export const MCP_TOOL_GAP_MAP: readonly {
   { tool: 'fs.statFiles', gap: 'stat_files', source: 'rust' },
   { tool: 'lang.lensesAt', gap: 'lensesAt', source: 'debug' },
   { tool: 'lang.selectionRangesAt', gap: 'selectionRangesAt', source: 'debug' },
+  // Wave4 余项⑤（LaneL）：长任务面的两条 Rust 真源。tasks.start 的检索 kind 就是同一条
+  // search_text（进度帧 / 取消都按同一 searchId 认领，缺口早由 search.all 覆盖 ⇒ 不改 wired 计数）；
+  // tasks.cancel 的取消真源是 cancel_search —— 它此前作为「写/授权/UI 之外的生命周期原语」留在
+  // 剩余缺口里，本批起它由具名工具覆盖（诚实降级 deferred 计数，不是凭空宣布覆盖）。
+  { tool: 'tasks.start', gap: 'search_text', source: 'rust' },
+  { tool: 'tasks.cancel', gap: 'cancel_search', source: 'rust' },
 ];
 
 /**
@@ -858,7 +941,7 @@ export const MCP_DEFERRED_GAP_NOTES: readonly { readonly scope: string; readonly
   { scope: 'Wave4 #4 · editor.openDocument / editor.revealPosition（LaneH 判性，显式 NOT_WIRED 判据）', reason: '宿主无可从 MCP 注入面安全复用、且能诚实回报结果的打开文档 / 定位光标真源。逐条不可复用：editor.revealLocation（App.tsx:1379）是 fire-and-forget 事件，无 ack / 无落地确认 / 落地走 React setState 异步重渲染 / routeOpenPath 不校验项目根域 / 订阅者只在 GUI 挂载时存在，发射后回报已打开即假成功；EditorCommandContext（slots-types.ts:399）只读投影无句柄；McpRealSourceHost（real-sources.ts:1008）仅三个只读 getter；CommandEntry.run（commands.ts:138 / ProjectView.tsx:790）忽略 args 且返回 void，gotoLine 经 editor.action.request 触发 Monaco 交互输入框；editor-pane-registry 全为纯读登记簿，openModelAcrossGroups 只查已开 model 而不打开；file-tree-ops 与内核 io.readText(read_file_bytes) 只读文件内容，不打开 GUI 文档也不定位光标。两枚 edit 档工具按铁律刻意不登记（真源不存在 ⇒ 不登记 + 显式缺口，绝不挂空串假实现），既不进工具清单也不进覆盖登记；runSupplemental 前置兜底仍对任何误调抛可见 NOT_WIRED，绝不 emit 无确认事件冒充成功；写盘仍只经第四张表 approvedRoots × 内核 writablePaths 双闸。只读 editor.cursor 是分开记账的加法，绝不冒充写工具。' },
 ];
 
-/** 内置 8 项 resource（≥6 的硬要求；新增「当前文档与光标」，其余保持第一波 URI）。 */
+/** 内置 resource（≥6 的硬要求；「当前文档与光标」是第一波后的加法，Wave4 余项⑤再加 `kojo://tasks`）。 */
 export interface McpResourceSpec {
   readonly uri: string;
   readonly name: string;
@@ -875,6 +958,8 @@ export const MCP_RESOURCE_SPECS: readonly McpResourceSpec[] = [
   { uri: 'kojo://project/plugins', name: '插件状态', description: '插件状态（inactive 必须可见，含 missing[]；投影 + truncated 标记）', mimeType: 'application/json' },
   { uri: 'kojo://project/events', name: '事件环形缓冲', description: '内核事件环形缓冲最近记录', mimeType: 'application/json' },
   { uri: 'kojo://project/active-document', name: '当前文档与光标', description: 'Active document text and cursor position（投影 + 截断上限 + truncated 标记）', mimeType: 'application/json' },
+  // Wave4 余项⑤（LaneL）：长任务表（新条目，与上面 8 条并列，老条目语义零改动）。
+  { uri: 'kojo://tasks', name: '长任务表', description: '本会话长任务清单：状态 / 进度账 / 取消位 / 有界终态投影 + notIncluded[] 缺席任务族逐条原因（轮询面，服务端不推送）', mimeType: 'application/json' },
 ];
 
 /* ------------------------------------------------------------------ *

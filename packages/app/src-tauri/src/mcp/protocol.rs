@@ -1037,15 +1037,30 @@ pub const EDIT_TOOL_PREFIXES: &[&str] = &[
     "duplicate_",
 ];
 
-/// 点号命名空间的**具名 Edit 工具**（Wave4 余项①）：`命名空间.动词` 形态不命中
+/// 点号命名空间的**具名 Edit 工具**（Wave4 余项① + 余项⑤）：`命名空间.动词` 形态不命中
 /// 上表的下划线动词前缀，也不在 `PRIVILEGED_EXACT`，修复前 `host_required_tier` 判
-/// Read——read 会话直调即是后门。点名三枚真写腿：
+/// Read——read 会话直调即是后门。点名逐条：
 /// - `problems.quickFix`：本批接线（模型内 apply，edit 档，WebView `SUPPLEMENTAL_TOOL_SPECS`
 ///   同款分级）；
 /// - `fileTree.create` / `fileTree.update`：**早已接线**的写腿（写腿批），端点侧同样
 ///   一直判 Read——同型既有洞一并堵上，与 WebView 契约的 edit 档对齐。
+/// - `tasks.start`（余项⑤「长任务 progress」· ADR-0013 P5）＝起一条真长操作：检索 kind 会
+///   占用壳层检索线程并把命中读回来，校验 kind 会驱动内核 `convention.linter` 跑一轮（那一轮
+///   经插件既有 storage 命名空间落快照，仍**不写项目目录**，也不新建任何写通道）。它不是纯读：
+///   会改服务端运行态（任务表 + 在途操作），所以 read 会话不许调；它也不出沙箱、不落项目盘，
+///   所以不是 privileged。⇒ **edit**。
+/// - `tasks.cancel`＝叫停一条在途操作：检索 kind 经 `cancel_search` 往壳层的按 searchId
+///   取消集合里写一位，校验 kind 置本轮 AbortSignal。动的是**运行态**而非盘 ⇒ **edit**。
+/// - 只读读数面（`tasks.status` 与 `kojo://tasks`）刻意**不进本表**：纯读、按会话过滤，
+///   判 read 是对的，不必加表。
 /// privileged 名单不受影响（冻结契约：具名面只有 remove/rename 是 privileged）。
-pub const EDIT_TOOLS_EXACT: &[&str] = &["fileTree.create", "fileTree.update", "problems.quickFix"];
+pub const EDIT_TOOLS_EXACT: &[&str] = &[
+    "fileTree.create",
+    "fileTree.update",
+    "problems.quickFix",
+    "tasks.start",
+    "tasks.cancel",
+];
 
 pub fn is_edit_tool(name: &str) -> bool {
     EDIT_TOOLS_EXACT.contains(&name)

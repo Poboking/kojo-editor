@@ -30,6 +30,11 @@
  *   是分开记账的加法（纯读焦点编辑器光标），绝不冒充写工具。
  * - promptSlots 只从 `mcp.prompt` 槽收集 adapter 贡献（骨架绝不硬编码领域知识）；
  *   无贡献 ⇒ 显式空数组（骨架并入的开关按契约保留）。
+ * - 第六波余项⑤（长任务 progress · ADR-0013 P5）：长任务表在 `real-sources-tasks.ts`，本模块只做
+ *   装配与真源腿注入（检索进度腿 + `cancelSearch` 取消腿 + `convention.linter` 服务，全部动态
+ *   import / 经注入 seam，不给开机图加边）。进度是**轮询读**（`tasks.status` / `kojo://tasks`），
+ *   本批不把 capabilities 抬成推送；`readResourceData` 的 default 分支改为**透传真 scope**（任务表
+ *   按会话隔离，null 顶替会丢上下文）。
  */
 import { McpFailure, classifyCommandTier, collectPromptSlotFragments } from '@kojo/mcp-host';
 import type {
@@ -46,6 +51,7 @@ import { recordQuickFixTickets, type QuickFixPaneResolver } from './quick-fix';
 import { registerMcpWiringSources, type McpWiringSources } from './wiring';
 import { bindFsFreshness, getFsFreshnessTracker } from './fs-freshness';
 import type { FsFreshnessTracker } from './fs-freshness';
+import { createMcpTaskLegs, type McpTaskSearchProgress, type McpTaskSearchRunner } from './real-sources-tasks';
 import {
   clampInt,
   createIoResourceData,
@@ -1066,6 +1072,13 @@ export interface McpRealSourceHost {
 export interface McpRealSourceInjection {
   readonly invoke?: McpInvokeLike;
   readonly searchInFiles?: (request: McpSearchRequestLike) => Promise<McpSearchResultLike>;
+  /**
+   * 长任务面的检索腿（同一 `bridge/search` 真源，多一路按 `searchId` 过滤的进度回调）。
+   * 与 `searchInFiles` 分开注入：任务进度要有真源，测试给假件时也不许靠一次性检索冒充。
+   */
+  readonly searchInFilesWithProgress?: McpTaskSearchRunner;
+  /** 检索取消腿（生产 = `bridge/search` 的 `cancelSearch`）；测试给假件记账，缺席 ⇒ 取消 NOT_WIRED。 */
+  readonly cancelSearch?: (searchId: number) => Promise<void>;
   readonly getMonaco?: () => Promise<McpSemanticMonaco | null> | McpSemanticMonaco | null;
   readonly getWorkspace?: () => Promise<McpSemanticWorkspace | null> | McpSemanticWorkspace | null;
   readonly getLegs?: () => Promise<unknown> | unknown;
@@ -1099,6 +1112,26 @@ async function productionGetMonaco(): Promise<unknown | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * 任务面检索腿（生产）：同一条 `bridge/search` 真源，把 `kojo:search-progress` 的节流帧
+ * 交给任务表记账。事件订阅与按 `searchId` 过滤都在壳层封装里（并发检索的迟到帧不许
+ * 覆盖别人的读数），本层只搬运。类型窄化同 `ioDeps.searchInFiles`：契约投影口径。
+ */
+const productionTaskSearch: McpTaskSearchRunner = async (request, onProgress) => {
+  const mod = await import('../bridge/search');
+  const run = mod.searchInFiles as unknown as (
+    req: McpSearchRequestLike,
+    onP: (p: McpTaskSearchProgress) => void,
+  ) => Promise<McpSearchResultLike>;
+  return run(request, onProgress);
+};
+
+/** 任务面取消腿（生产）：`cancel_search` 只置标记，是否真叫停以检索返回值收口。 */
+async function productionCancelSearch(searchId: number): Promise<void> {
+  const mod = await import('../bridge/search');
+  await mod.cancelSearch(searchId);
 }
 
 function productionGetWorkspace(kernel: McpKernelLike | null): () => Promise<McpSemanticWorkspace | null> {
@@ -1173,8 +1206,10 @@ function buildReadResourceData(
   ioResources: McpResourceDataReader,
   deps: McpSemanticDeps,
 ): NonNullable<McpHostDeps['readResourceData']> {
-  // `scope` 必须透传：外部写盘失效账按「会话 × 路径」建基线，丢了会话号就等于把所有客户端
-  // 混成一个人（此前的 `null` 占位就是把 IO 面的会话维度抹掉了）。
+  // scope 必须透传：两条新腿都吃会话维度——外部写盘失效账按「会话 × 路径」建基线，
+  // `kojo://tasks` 的表按 sessionId + clientId 隔离；registry 本来就是
+  // `readResourceData(spec.uri, scope)` 两参调用——过去 default 分支塞 `null` 顶替，
+  // 等于把所有客户端混成一个人（Wave4 余项③ 丢会话号、余项⑤ 顺手修掉，其余 URI 行为逐字不变）。
   return async (uri: string, scope: McpSessionScope): Promise<unknown> => {
     switch (uri) {
       case KOJO_RESOURCE_URIS.diagnostics: {
@@ -1248,6 +1283,12 @@ export async function buildRealMcpSources(
       (await import('../bridge/search')).searchInFiles as unknown as McpIoDeps['searchInFiles'],
     getQuickFixPane: injection?.getQuickFixPane,
     fsFreshness: injection?.fsFreshness ?? (() => getFsFreshnessTracker()),
+    // 长任务面（Wave4 余项⑤）：表与投影在 real-sources-tasks.ts，这里只把三条真源腿给它。
+    tasks: createMcpTaskLegs({
+      getKernel: () => kernel,
+      search: injection?.searchInFilesWithProgress ?? productionTaskSearch,
+      cancelSearch: injection?.cancelSearch ?? productionCancelSearch,
+    }),
   };
 
   const semanticDeps: McpSemanticDeps = {
