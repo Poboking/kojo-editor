@@ -69,8 +69,13 @@ function findEntry(root, name, wantDir) {
   return null;
 }
 
+/** 导出的同名薄封装（`tools/corpus-fingerprint.mjs` 复用，不另写一份大小写不敏感查找）。 */
+export function canonicalDirName(root, name) {
+  return findEntry(root, name, true);
+}
+
 /** 盘上真实路径（Windows 走 realpath 取官方大小写；失败就用原路径）。 */
-function canonical(p) {
+export function canonical(p) {
   try { return fs.realpathSync.native ? fs.realpathSync.native(p) : p; } catch { return p; }
 }
 
