@@ -99,6 +99,31 @@ export interface FileChangedBatchEvent {
   readonly changes: readonly FileChangedEvent[];
 }
 
+/**
+ * 项目驻留档案逐出事实（`project.evicted` 载荷；MCP-PERF-S19，2026-11-07）。
+ *
+ * 多项目驻留（退役项目档案 LRU）超限时，内核按「最旧非当前」丢一份退役项目的
+ * `loadProject` 产物并广播本事件——**内存纪律的可见面**：逐出不再是无声的 GC。
+ *
+ * 取舍（写明）：退役那一拍已经**逐字执行过完整 close 语义**（`project.closed` 广播、
+ * 写允许域收回、文本缓存释放、各插件与宿主按既有契约清缓存 / 停监视），所以逐出
+ * 本身不再有缓存 / 快照 / watcher 要清——它只释放最后一份驻留产物（可安全重建的
+ * 派生数据：重新 open 同目录即可完整重建）。未保存的作者态不在 GameProject 上
+ * （编辑缓冲与快照写入各自有宿主 / io 通道），逐出绝不触碰盘面。
+ */
+export interface ProjectEvictedEvent {
+  /** 被逐项目的根目录（绝对路径，与 `project.closed` 同口径；判等走 `pathKey`） */
+  readonly rootDir: string;
+  /** 打开时的适配器 id（= `GameProject.adapterId`） */
+  readonly adapterId: string;
+  /**
+   * - `lru`：驻留超限，按「最旧非当前」逐出（本事件的常规形态）；
+   * - `superseded`：该目录被重新完整加载（detect→loadProject 全流程），旧驻留档案
+   *   被新加载取代——不是超限，是档案换代，同样出声。
+   */
+  readonly reason: 'lru' | 'superseded';
+}
+
 /** 文件监视的判级结果（`file.watchState` 载荷；由内核监视器产生） */
 export type FileWatchStatus =
   | 'watching'
@@ -149,6 +174,13 @@ export interface KernelEventMap {
   'project.opened': { project: GameProject };
   /** 项目已关闭 */
   'project.closed': { rootDir: string };
+  /**
+   * 项目已从驻留档案逐出（MCP-PERF-S19）：多项目驻留 LRU 的内存纪律事件。
+   * **内核专属**（同 `project.writableApprovalMismatch` 档）：逐出是内核驻留账本的
+   * 独占决定，插件伪造 = 谎报内存事实。当前项目**绝不**出现在本事件里——
+   * 驻留档案只收退役项目，当前项目在结构上进不了档案。
+   */
+  'project.evicted': ProjectEvictedEvent;
   /** 口上函数集合发生变化（解析器完成一次索引重建后） */
   'kojo.functionChanged': { projectRoot: string; files: string[] };
   /** 插件状态迁移（内核保证：任何插件状态变化都会发此事件） */

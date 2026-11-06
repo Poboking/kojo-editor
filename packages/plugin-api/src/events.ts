@@ -61,6 +61,9 @@ const PLUGIN_EMITTABLE_EVENT_NAMES = [
 /** 内核/宿主专属事件：插件可 `on`、不可 `emit`（安全语义事件由内核垄断发出）。 */
 const KERNEL_ONLY_EVENT_NAMES = [
   'project.writableApprovalMismatch',
+  // 驻留档案逐出（MCP-PERF-S19）：逐出是内核驻留账本的独占决定（谁被逐 = 内核 LRU 事实），
+  // 插件伪造 = 谎报内存事实（与写权限事件同档）。
+  'project.evicted',
   // 监视状态 = "自动重载机制是否可信"的保证，与写权限事件同类（BUG-5）
   'file.watchState',
   // 失效波（MCP-PERF-S12）：盘面变更的集合事实由内核监视器垄断发出（与 file.watchState 同档）。
