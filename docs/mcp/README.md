@@ -196,6 +196,8 @@ interface McpSessionScope {
   禁止复用 debug-server 自动落 `sandbox/exports` 的应答。
 - 失败一律显式 `{ code, message }`：`NOT_WIRED` / `RESOURCE_UNAVAILABLE` / `INVALID_ARGS` /
   `PERMISSION_DENIED` / `OUT_OF_DOMAIN` / `WRITE_DISABLED` 等，绝不吞错、不静默兜底。
+  （这一族是 **WebView 宿主层**的码，经桥原样透传；Rust 端点自己的闸门码另有一套带 `E_` 前缀的
+  `codes::*`，如 `E_TIER_DENIED` / `E_TOOL_NOT_APPROVED`，两套别混——见 §10.3。）
   WebView 桥把结构化的 `code` 原样写进 `mcp_respond` 的 error 帧，最终落在 JSON-RPC
   `error.data.code`，**不再降级成 `mcp/internal`**；普通异常或形状不合法的脏码仍回落到 `mcp/internal`。
 
@@ -278,14 +280,18 @@ harness 起一个回环 mock MCP endpoint（`http.createServer` 只 bind `127.0.
 
 **授权面**（tier 过滤 + 第四张表语义）：read 会话不见 edit/privileged（H04/S03，**privileged 默认缺席**
 在端到端通道复钉）；edit 会话加 edit 仍无 privileged（H05）；privileged 会话全量可见（H06）；
-tier 不匹配 `tools/call` → `-32000 TIER_DENIED`（拒绝可见，不静默过滤，H11）；`approvedTools`
+tier 不匹配 `tools/call` → `-32000 E_TIER_DENIED`（拒绝可见，不静默过滤，H11）；`approvedTools`
 未命中 → `-32000 TOOL_NOT_APPROVED`（H12），命中后可执行（H13）。
 
-> **口径差（2026-11-06 落账，未消除）**：`TIER_DENIED` 这个码目前**只存在于 mock 对拍靶**
-> （H11 / W 靶），**真 Rust 端点没有该码**——真实端点对 tier 不匹配走的是 `tools/list` 二次
-> 过滤与 `PERMISSION_DENIED` / `TOOL_NOT_APPROVED` 路径。读 §10.3 的授权面结论时须区分
-> 「mock 对拍靶」与「Rust 端点」两套口径，别把 harness 的码当成端点契约；要统一须单独
-> 改 Rust 错误码并补端点级回归，本批未动。
+> **口径差（2026-11-06 收口，余项⑥＝`b77b248f`）**：`E_TIER_DENIED` 现在**是真 Rust 端点的码**，
+> 不再只存在于 mock 对拍靶——`tools/call` 侧补了 `check_tool_call_permission` 的 tier 纵深闸，判定与
+> `tools/list` 的 `filter_tools_list` 严格同源（`host_required_tier` / `tier_rank` / `approved_tool`），
+> 并有端点级回归（真 TCP 帧 `-32000` + `data.code` + 一条 denied 审计 + 桥零调用）。闸序钉死：
+> privileged 未精确批准先吃 `E_TOOL_NOT_APPROVED`（危险面），tier 不足才吃 `E_TIER_DENIED`（档位面）。
+> **残余未消除的一处**：harness 的批准面字面码仍写作 `TOOL_NOT_APPROVED`（无 `E_` 前缀），端点线契约是
+> `E_TOOL_NOT_APPROVED`；本批只统一了 tier 码，批准码的 `E_` 前缀待单独一批连引用面一起改。
+> 另：`tools/list` 审计对被 tier 剔除的条目，note 标签仍笼统记 `privileged_not_approved`
+> （`FilterOutcome` 只带名字不带原因），要精确到 `tier_filtered` 需扩结构，本批未动。
 
 **错误帧面**：未知 method `-32601`（H22/S13）；参数错 `-32602`（未知工具 / 缺 name，H08/H09/S 系透传）；
 结构化错误 `{code, message, data}`（`MOCK_FAILURE` 带 `retryable:false`，H10/S12）；错误帧是 200 应答，
