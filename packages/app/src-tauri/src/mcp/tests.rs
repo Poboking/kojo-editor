@@ -2489,3 +2489,437 @@ fn normalize_tools_call_adds_content_without_losing_audit_fields() {
     server::normalize_webview_result(WebMethod::ToolsCall, &mut already);
     assert!(already.get("isError").is_none(), "已合规形状不该重复包装");
 }
+
+/* ==================================================================== *
+ * 会话授权生命周期 / 轮换纵深 / 裸数组注册表 —— 端点级回归补钉
+ * ==================================================================== */
+
+/// 带旧 token 的**在途请求**（已过三闸、挂在等桥回填）遇上 token 轮换：请求被显式
+/// 作废（E_CANCELLED 错误帧），路由表条目随轮换清空（迟到 `mcp_respond` 回填被拒），
+/// 审计留 error 痕——旧会话不悬挂、不复活。
+#[test]
+fn e2e_rotation_cancels_inflight_request_with_old_token() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+    let req = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"docs/a.txt"}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    // 轮换：旧 token 立即失效 + 在途请求一并作废。
+    let next = server::rotate_token_parts(
+        &s.shared.token,
+        &s.shared.pending,
+        &s.shared.scope_state,
+        s.dir.path(),
+        s.port,
+        &format!("http://127.0.0.1:{}/mcp", s.port),
+    )
+    .unwrap();
+    assert_ne!(next, s.token);
+    let r = worker.join().unwrap();
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    assert_eq!(v["id"], json!(11));
+    assert_eq!(v["error"]["data"]["code"], json!("E_CANCELLED"));
+    assert!(
+        v["error"]["message"].as_str().unwrap().contains("轮换"),
+        "作废原因必须点名轮换"
+    );
+    // 迟到回填被拒：路由表条目已随轮换清空，不复活旧会话的请求。
+    let late = server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(json!({ "content": "late" })),
+            error: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(late.code, codes::INVALID_REQUEST);
+    // 审计：被作废的在途请求留 error 痕（E_CANCELLED）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    assert!(rows.iter().any(|e| e.outcome == AuditOutcome::Error
+        && e.tool == "read_file"
+        && e.note.as_deref() == Some("E_CANCELLED")));
+}
+
+/// 第四张表损坏 ⇒ 轮换**显式失败、不在半轮换态继续服务**：token 不变、在途请求不
+/// 被误杀（照常回填成功）、发现文件逐字未动、旧 token 仍在岗；修复第四张表后轮换
+/// 恢复：换发新 token、重写发现文件、旧 token 立即失效。
+#[test]
+fn e2e_corrupt_scope_table_fails_rotation_without_killing_inflight() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+    let req = r#"{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"docs/a.txt"}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    // 在途期间盘上第四张表损坏（运行时磁盘损坏形态）。
+    std::fs::write(scope::scope_path(s.dir.path()), "{broken").unwrap();
+    let err = server::rotate_token_parts(
+        &s.shared.token,
+        &s.shared.pending,
+        &s.shared.scope_state,
+        s.dir.path(),
+        s.port,
+        &format!("http://127.0.0.1:{}/mcp", s.port),
+    )
+    .unwrap_err();
+    assert_eq!(err.code, codes::INTERNAL);
+    // 半轮换态不存在：在途请求照常经 deliver 回填成功。
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(json!({ "content": "file-bytes" })),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(rpc_json(&r)["result"]["content"], json!("file-bytes"));
+    // 旧 token 仍在岗；发现文件逐字未动。
+    assert_eq!(
+        mcp_post(
+            s.port,
+            &s.token,
+            r#"{"jsonrpc":"2.0","id":22,"method":"ping"}"#
+        )
+        .status,
+        200
+    );
+    let parsed: EndpointFile =
+        serde_json::from_str(&std::fs::read_to_string(scope::endpoint_path(s.dir.path())).unwrap())
+            .unwrap();
+    assert_eq!(parsed.port, s.port);
+    assert_eq!(parsed.token, s.token);
+    // 修复第四张表 ⇒ 轮换恢复 + 旧 token 立即失效。
+    scope::save(s.dir.path(), &scope::McpScopeState::default()).unwrap();
+    let next = server::rotate_token_parts(
+        &s.shared.token,
+        &s.shared.pending,
+        &s.shared.scope_state,
+        s.dir.path(),
+        s.port,
+        &format!("http://127.0.0.1:{}/mcp", s.port),
+    )
+    .unwrap();
+    assert_ne!(next, s.token);
+    assert_eq!(
+        mcp_post(
+            s.port,
+            &s.token,
+            r#"{"jsonrpc":"2.0","id":23,"method":"ping"}"#
+        )
+        .status,
+        403
+    );
+    assert_eq!(
+        mcp_post(
+            s.port,
+            &next,
+            r#"{"jsonrpc":"2.0","id":24,"method":"ping"}"#
+        )
+        .status,
+        200
+    );
+    let repaired: EndpointFile =
+        serde_json::from_str(&std::fs::read_to_string(scope::endpoint_path(s.dir.path())).unwrap())
+            .unwrap();
+    assert_eq!(repaired.token, next);
+}
+
+/// 第四张表损坏 / 版本不符 ⇒ `start` 整体 fail-closed：端点不起来、**不写发现文件**
+/// （死端口不留在盘上）；修复后 `start` 恢复并可服务。
+#[test]
+fn e2e_start_fails_closed_on_corrupt_scope_table_then_recovers() {
+    let dir = TempDir::new();
+    let state = server::McpState::default();
+    for bad in ["{broken", r#"{"version":999,"sessions":[]}"#] {
+        std::fs::write(scope::scope_path(dir.path()), bad).unwrap();
+        let err =
+            server::start(Arc::new(DeadBridge), dir.path().to_path_buf(), &state).unwrap_err();
+        assert_eq!(err.code, codes::INTERNAL, "{bad}");
+        assert!(
+            !scope::endpoint_path(dir.path()).exists(),
+            "start 失败不得留下指向死端口的发现文件"
+        );
+    }
+    // 修复第四张表 → start 恢复：发现文件与端口/token 一致，ping 可服务。
+    scope::save(dir.path(), &scope::McpScopeState::default()).unwrap();
+    let started = server::start(Arc::new(DeadBridge), dir.path().to_path_buf(), &state).unwrap();
+    let parsed: EndpointFile =
+        serde_json::from_str(&std::fs::read_to_string(scope::endpoint_path(dir.path())).unwrap())
+            .unwrap();
+    assert_eq!(parsed.port, started.port);
+    assert_eq!(parsed.token, started.token);
+    let r = mcp_post(
+        started.port,
+        &started.token,
+        r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#,
+    );
+    assert_eq!(r.status, 200);
+    server::stop(&state).unwrap();
+    assert!(!scope::endpoint_path(dir.path()).exists());
+}
+
+/// 第四张表生命周期端到端：approve 后 privileged `tools/call` 行为翻转（走桥、ok
+/// 审计、scope 载荷带精确批准）；revoke（revokedAt）后**同一 token** 的后续请求被
+/// 拒（E_TOOL_NOT_APPROVED + denied 审计、tools/list 收回）；盘上留痕不物理删。
+#[test]
+fn e2e_approve_flips_tools_call_then_revoke_denies_same_token() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+    let call = r#"{"jsonrpc":"2.0","id":31,"method":"tools/call","params":{"name":"export_file","arguments":{}}}"#.to_string();
+    // 未授权（第四张表缺失 = 最小权限）：privileged call 在闸门 2 显式拒绝，桥未被调。
+    let r = mcp_post_as(port, &token, "harness-lc", &call);
+    assert_eq!(r.status, 200);
+    assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
+    assert!(s.rx.try_recv().is_err());
+
+    // approve：tier=privileged + 精确工具 → 刷镜像 → call 翻转为放行（走桥）。
+    scope::approve(
+        s.dir.path(),
+        "harness-lc",
+        McpTier::Privileged,
+        vec![],
+        vec!["export_file".to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let token2 = s.token.clone();
+    let call2 = call.clone();
+    let worker = std::thread::spawn(move || mcp_post_as(port, &token2, "harness-lc", &call2));
+    let payload = s.next_payload();
+    assert_eq!(payload.scope.tier, McpTier::Privileged);
+    assert!(payload
+        .scope
+        .approved_tools
+        .contains(&"export_file".to_string()));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(json!({ "content": [{ "type": "text", "text": "exported" }] })),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert_eq!(r.status, 200);
+    assert_eq!(
+        rpc_json(&r)["result"]["content"][0]["text"],
+        json!("exported")
+    );
+
+    // revoke：同一 token 的后续 call 显式拒绝，桥未被调。
+    scope::revoke(s.dir.path(), "harness-lc").unwrap();
+    reload_scope_mirror(&s);
+    let r = mcp_post_as(s.port, &s.token, "harness-lc", &call);
+    assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
+    assert!(s.rx.try_recv().is_err());
+    // tools/list 同步收回：export_file 不再出现，filtered 审计留痕。
+    let token3 = s.token.clone();
+    let list = r#"{"jsonrpc":"2.0","id":32,"method":"tools/list","params":{}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post_as(port, &token3, "harness-lc", &list));
+    let payload = s.next_payload();
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(webview_tools()),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    let listing = rpc_json(&r);
+    let names: Vec<&str> = listing["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"export_file"));
+    // 审计两态齐备：denied（revoke 前后各一）+ ok（批准窗口内）+ filtered（收回）。
+    let rows = audit::query(s.dir.path(), 200, Some("harness-lc")).unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|e| e.outcome == AuditOutcome::Denied && e.tool == "export_file")
+            .count(),
+        2
+    );
+    assert!(rows
+        .iter()
+        .any(|e| e.outcome == AuditOutcome::Ok && e.tool == "export_file"));
+    assert!(rows.iter().any(|e| e.outcome == AuditOutcome::Filtered
+        && e.tool == "export_file"
+        && e.note.as_deref() == Some("privileged_not_approved")));
+    // 盘上留痕：该 client 的 grant 全部带 revokedAt（不物理删）。
+    let loaded = scope::load(s.dir.path()).unwrap();
+    let grants: Vec<&SessionGrant> = loaded
+        .sessions
+        .iter()
+        .filter(|g| g.client_id == "harness-lc")
+        .collect();
+    assert_eq!(grants.len(), 1, "approve 追加一条、revoke 留痕不物理删");
+    assert!(grants.iter().all(|g| g.revoked_at.is_some()));
+}
+
+/// 不回落其它三张表（冻结契约③）：同目录就算躺着启动器第三张表 `approvals.json`
+/// 的授权形状（start 之前落盘），第四张表缺失 ⇒ MCP 会话仍按未授权最小权限处理；
+/// 授权只认 `mcp_approvals.json`，任何邻近授权文件都不构成 MCP 授权。
+#[test]
+fn e2e_third_table_file_never_grants_mcp_scope() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let bridge: Arc<dyn McpBridge> = Arc::new(RecordingBridge { tx: Mutex::new(tx) });
+    let dir = TempDir::new();
+    // 启动器第三张表（launcher/paths.rs APPROVALS_FILE）与内核 writablePaths 形状的
+    // 诱饵文件，在 start 之前落盘——钉住 start 与请求路径都不读它们。
+    std::fs::write(
+        dir.path().join("approvals.json"),
+        r#"{"version":1,"approvals":[{"instanceId":"i1","rootId":"game-root","path":"D:/game/root"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("writable-paths.json"),
+        r#"{"writablePaths":["D:/game/root"]}"#,
+    )
+    .unwrap();
+    let state = server::McpState::default();
+    let started = server::start(bridge, dir.path().to_path_buf(), &state).unwrap();
+
+    // tools/list：WebView 全集回上来，read 会话只见 read_file（无任何回落授权）。
+    let port = started.port;
+    let token = started.token.clone();
+    let list = r#"{"jsonrpc":"2.0","id":41,"method":"tools/list","params":{}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &list));
+    let payload = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("等待桥载荷超时");
+    server::deliver(
+        &state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(webview_tools()),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert_eq!(names_of(&rpc_json(&r)["result"]), vec!["read_file"]);
+    // tools/call 特权工具：显式 E_TOOL_NOT_APPROVED（即便第三张表「授了根」）。
+    let r = mcp_post(
+        started.port,
+        &started.token,
+        r#"{"jsonrpc":"2.0","id":42,"method":"tools/call","params":{"name":"export_file","arguments":{}}}"#,
+    );
+    assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
+    // 第四张表始终缺席：缺席本身即最小权限，绝不因邻近文件回落。
+    assert!(!scope::scope_path(dir.path()).exists());
+    server::stop(&state).unwrap();
+}
+
+/// 真壳 WebView registry 返回**裸数组**（含特权 / market 工具）时的端到端纵深：
+/// 线协议先归一成 `{tools:[...]}`，二次过滤照常生效——未批准会话拿不到任何危险
+/// 工具（拒可见不静默），filtered 审计逐个留痕。真壳取证静默失效的端点级回归钉。
+#[test]
+fn e2e_bare_array_registry_filtered_for_unapproved_session() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+    let list = r#"{"jsonrpc":"2.0","id":51,"method":"tools/list","params":{}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &list));
+    let payload = s.next_payload();
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(json!([
+                { "name": "read_file", "description": "read" },
+                { "name": "write_bytes", "description": "write" },
+                { "name": "fileTree.remove", "description": "rm" },
+                { "name": "fileTree.rename", "description": "mv" },
+                { "name": "launcher_start", "description": "launcher" },
+                { "name": "market_fetch_text", "description": "market" }
+            ])),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    // 裸数组已被归一：result.tools 是数组且只剩 read 工具
+    //（旧缺陷形态 = result 本身是裸数组，二次过滤整条被跳过）。
+    let names: Vec<&str> = v["result"]["tools"]
+        .as_array()
+        .expect("result.tools 必须是归一后的数组")
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, vec!["read_file"]);
+    // filtered 审计：market 与特权工具各自留痕。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let filtered: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Filtered)
+        .collect();
+    let market = filtered
+        .iter()
+        .find(|e| e.tool == "market_fetch_text")
+        .unwrap();
+    assert_eq!(market.note.as_deref(), Some("market_fail_closed"));
+    for name in ["fileTree.remove", "fileTree.rename", "launcher_start"] {
+        let e = filtered.iter().find(|e| e.tool == name).unwrap();
+        assert_eq!(e.note.as_deref(), Some("privileged_not_approved"), "{name}");
+    }
+}
+
+/// `stop` 的在途语义：服务停止给所有在途请求显式 CANCELLED（「服务已停止」，区别
+/// 于轮换的「token 已轮换」），发现文件同步清理——桥不悬挂、客户端不空等。
+#[test]
+fn e2e_stop_cancels_inflight_request_loudly() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+    let req = r#"{"jsonrpc":"2.0","id":61,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"docs/a.txt"}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    server::stop(&s.state).unwrap();
+    let r = worker.join().unwrap();
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    assert_eq!(v["error"]["data"]["code"], json!("E_CANCELLED"));
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("服务已停止"),
+        "停止原因必须显式"
+    );
+    // stop 清理发现文件（在途请求形态下复钉生命周期）。
+    assert!(!scope::endpoint_path(s.dir.path()).exists());
+    // 迟到回填被拒：运行时已拆除（与轮换后回填被拒的 INVALID_REQUEST 相区别）。
+    let late = server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(json!({})),
+            error: None,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(late.code, codes::BRIDGE_UNAVAILABLE);
+}
