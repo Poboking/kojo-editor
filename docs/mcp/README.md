@@ -359,7 +359,8 @@ B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**；B10 打开文档
   重跑法＝静默树上 `cargo test --lib mcp::tests::b5_endpoint_self_cost_probe_reports_p50_p95_and_batch_vs_serial -- --nocapture`。
 - 取证时实拍到一条**与 B5 无关但会误导取证者**的现象：干净会话里只读腿先整批回 `NOT_WIRED「宿主未提供数据源」`，
   等 91.7 s／31 趟仍不出帧（改前改后都复现），调用 app 自己的 `registerMcpHostBridge()` 后立刻出帧 ⇒
-  这是注册表 memoize 竞态，不是端点慢；单独立批（见 STATE 在册欠账）。
+  这是注册表 memoize 竞态，不是端点慢；**该批已交付并落地**（B20＝`a714f51d` 换代即失效重取，B23＝`96ec7b20`
+  把判据换成装配期逐字段浅快照，判据、真壳自证与仍看不到的两格见 §5.15）。
 
 ### 5.9 「打开文档」面的诚实收口（B10＝`3b13f7ad`）
 
@@ -513,6 +514,73 @@ B1 只给**数据面**做了分页，`tools/list` 自身体积从没量过——
 - 一格待查（不写成结论）：Rust 侧那条 `maxDescriptionChars＝2048` 对两枚超限面（`launcher_log_tail`
   2,049 字符、`editor.openDocument`）**真实行为是什么**（截断 / 报错 / 照发）尚未定，B22 负责查清并如实
   记录；本批只报「有 2 枚在册超限，若逐条压到闸内只省 176 B」，**不许为此放宽闸值**。
+  —— **已由 B22 定案**（见 §5.14）：行为＝**不报错、照发、截到 2,048 字符并补 `…[truncated]`（静默丢尾）**，
+  且同一把刀**也打在 `inputSchema` 任意一层的 `description`** 上（`protocol.rs:1349-1363`）——本行原本只当它是
+  顶层描述的闸，那是错的；两枚超标面已降进闸内（2,049→1,778 / 2,079→1,989），**闸值一字未动**。
+
+### 5.14 `tools/list` 去重复：口径一枚面只写一份（B22＝dev `2df977e2` + 闸补钉 `2e910186`）
+
+B21 量出的靶子在 schema 侧，不在描述侧——本批照它收口，**只动文字，不动形状**。
+
+- **改前逐字重复账**（现场算，`node tools/mcp-list-payload-evidence.mjs dedup`）：schema 侧 8 组
+  **dup 100,724 B**，其中页大小别名说明 539 字符 × **152 处**（24 枚面）＝81,389 B；描述侧 6 组 dup 22,555 B
+  （严格度尾句 375 × 23、启动器档位注 245 × 27、完整性账句 201 × 23、`changedDuringPaging` 143 × 23）。
+  合计 123,279 B＝全量帧的 **56.3%**。
+- **形态 (c)＋(a) 指针＋(b) 压短**：页大小/严格度的**完整口径每枚面只保一份**，落点＝本面
+  `properties.limit` 的 description（`PAGE_SIZE_CANON_NOTE`，639 字符 × 25 枚）；152 枚别名属性只带 176 字符
+  指针，且**写明落点就在同一个对象里** ⇒ 客户端跳转次数＝0。`PAGE_ACCOUNT_NOTE` 721→480（把复述换成指向本面
+  `limit` 的一句话，完整性账字段一个没删）、`LAUNCHER_TIER_NOTE` 245→215（privileged / 缺省不上帧 / 只认精确名 /
+  宿主自身闸照旧，四个要点齐）。不选 prompts 或 `_meta` 全局一份：那会把必读信息挪出这条记录，换一次跳转。
+- **实测前后**（静态注册表真源，非估）：全量帧 **218,897 → 168,894 B（−22.8%）**、read 会话 **98,412 → 75,412**、
+  edit 会话 115,048 → 91,777、`launcher_*` 族 100,323 → 73,706（45.8% → 43.7%）、`description` 字节 64,851 → 58,342、
+  `inputSchema` 字节 143,762 → 100,268（−30.3%）、距 1 MiB 余量 829,679 → 879,682。
+- **形状零变化的证法**（不是注释声称）：一次性脚本对改前 HEAD 与改后做逐枚 schema 结构指纹对账（只比
+  `type`/`pattern`/`enum`/`minimum`/`maximum`/`minLength`/`maxLength`/`required`/`additionalProperties`，不比文案）
+  ＝77 枚名单不变、`tier`/`annotations` 不变、**0 处形状差异**、`additionalProperties:false` 80 → 80；
+  同批 B19 双向漂移闸与 B11 的 100 例必须一起绿（闸的是「改文字时把入参名或校验顺手改了」这类夹带）。
+- **重钉的体积带**：`168,894 ±10%`（152,005–185,783）**＋记账下界 163,000**（约 −3.5%；再瘦必须先改那格并说明
+  削掉什么），另加分档上界 `description` 60,000 / `inputSchema` 105,000 / `launcher` 75,000，以及「schema 仍是
+  更大头」的口径不倒置闸。
+- **2048 那把刀的两面**：`protocol.rs:32 MAX_DESCRIPTION_CHARS＝2048`，`server.rs:1737 → filter_tools_list →
+  sanitize_tool_descriptor → truncate_chars`＝不报错、照发、截到 2,048 并补 `…[truncated]`；**同一把刀也打在
+  `inputSchema` 任意层 `description`**（`protocol.rs:1349-1363`）——本批落点正在 schema 侧，故补独立闸：
+  352 条 schema 描述最长一枚 ≤1024；两枚超标面降进闸内且闸值未放宽，现 `toolsOverCap＝0`。
+- **诚实剩余**：dedup 后仍读得出 73,353 B 重复（帧的 43.4%），但那些是「每枚面本地必读」的必要副本
+  （limit 完整口径 × 25、别名指针 × 152、完整性尾注 × 23、启动器档位注 × 27），再削只能引入跨面跳转或分帧，
+  而分帧已被 §5.13 的实测否决；4 枚面的中文前缀仍各自复述一遍页大小严格度（约 60–120 字符/枚，≈400 B）；
+  `fs.readMany` 描述 2,005 字符距 2048 只剩 43 字符——**下一批动它必须先瘦身**。真壳一帧实测仍空＝B26 在跑。
+
+### 5.15 三道机械闸：入参漂移、注册表换代、载荷体积（B19 / B20 / B23）
+
+**B19 入参双向漂移闸（dev `7b30924c`）**——它存在的原因是 B11×B16 真撞过一次（`resumeBySlice` 只在腿里、
+没进 schema，严格化一落地合法调用被当场拒收，而两侧测试全绿）。真源＝自研扫描器
+`packages/app/tests/helpers/mcp-leg-arg-scan.ts`（1,817 行：词法 + 括号配对表 + 取用形态 1–8；派生腿表由
+`new Map([['工具名', 标识符]])` 现场解析，覆盖不到的面 `ENTRY_OVERRIDES` 逐枚点名；解析不出 ⇒ `unresolved` 红）。
+判据 12 例分五层：扫描器不许静默（含「面数 ≥ 在册−NOT_WIRED、取用键 > 250」的规模自证，防拿空表跑绿）、
+schema ↔ 腿**双向**、B11 手抄 `CONSUMED` ↔ 扫描逐面相等（表旧了也红）、`tier` ↔ Rust `host_required_tiers` 同源、
+**通路**判据＝声明属性真走 `registry.callTool`（分发 + `validateAgainstSchema`）而非直调校验器。落地当场抓到
+`fileTree.*` 四枚的 `rootId` 手抄漏登（`real-sources-io.ts:1220` 真在读、schema 真已声明、只有表没写）。
+
+**B20 注册表换代（dev `343cec67` 先红 + `a714f51d` 修法）**——B12 取证实拍到只读腿 `NOT_WIRED「宿主未提供数据源」`
+的 memoize 竞态（等 91.7 s／31 趟不出帧，走一次 app 自己的 `registerMcpHostBridge()` 立刻出帧）。定性＝
+`host-bridge.ts` 旧 `registryPromise` 把「装配当时没有真源」永久 memo 住，而真源由 `ShellLayout` 挂载后经
+`bootstrap.ts` 的异步 `void import(...)` 登记、无回执。修法＝**换代即失效重取**：装配那一拍把依据哪一份 wiring
+登记记进 `McpRegistryBasis`，分派前做一次**同步**比对，当拍≠装配 ⇒ 作废 memo 重装配（一请求至多两次＝有界）。
+**零定时器 / 零轮询 / 零 sleep / 零自动重试**；缺席仍显式 `NOT_WIRED` 原话术一字未改（③④⑤ 逐字钉住），注入 deps
+的测试缝不回填 basis ⇒ 行为不变。真壳自证 `arm: attempts=2 · waitedMs=3397`：第一帧仍 `NOT_WIRED`（诚实缺席），
+但不再永久固化。
+
+**B23 换代判据换成逐字段浅快照（dev `797811c0` 先红 + `96ec7b20`）**——B20 比的是「登记对象 identity」，于是留了
+一个真口子：有人拿着已登记的 `McpWiringSources` **原地改写**字段而不再调 `registerMcpWiringSources`，memo 看不出来。
+先红用例全程生产形态、`Object.assign(sources, {kernelIo: …})`、**绝不 register 第二次**（那恰恰是 B20 已能处理的路），
+改前红＝读出旧腿。判据现在＝`WIRING_SOURCE_FIELDS` 恰好十枚（＝`createMcpHostDeps` 实际读取的字段全集）的浅快照逐位
+`Object.is`；**未被读取的键不参与换代**（防「无关键抖动 ⇒ 每请求重装配」的变相轮询）；缺席快照与在场快照互不等 ⇒
+注销/缺席照旧显式。另断两条容易被顺手改掉的：只换 `kernelIo` 时未改写的 `semantic` 腿重装配后**仍持旧闭包印记**
+（判据是逐字段，不是整包），以及帧数＝3＝一请求一帧（重取不产生第二帧）。
+**仍在看不到的两格**（不掩盖）：①对已登记的数组/对象**深地**原地改（`sources.commands.push(...)`、换 `semantic`
+对象内部属性而不换引用）；②装配后同一对象上键被删除再补回旧引用。法定收口路径＝**登记侧收口**
+（`registerMcpWiringSources` 拷贝一份冻结副本登记；生产 `installRealMcpSources` 每次新建对象 ⇒ 零成本），
+届时红路只剩 `Object.getOwnPropertyDescriptor` 级反射。
 
 ## 6. tier 与授权模型
 
