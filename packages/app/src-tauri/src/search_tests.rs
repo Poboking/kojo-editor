@@ -45,6 +45,7 @@ fn request(root: &Path, query: &str) -> SearchRequestDto {
             exclude_globs: None, // WS-10：同款 additive，缺省 None = 不排除（老用例零改动）
             max_results: None,
             threads: Some(1),
+            resume_after_matches: None, // B18：additive 字段，缺省 None = 旧请求体逐字不变
         },
     }
 }

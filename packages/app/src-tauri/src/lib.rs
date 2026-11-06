@@ -3502,12 +3502,17 @@ fn scan_hits_after(
 /// `cache`（打字即搜批）：命中的判据 = **长度 + mtime 与磁盘现状一致**，命中时整段省掉
 /// 「打开 + 读」——那一段是 3.6s 里的主成本（见 `SearchTextCache` 的头注）。
 /// `None` = 这批语料被判"装不下"（越界过一次），退回逐文件读盘的旧行为。
+///
+/// `skip`（B18）= 续取凭据在本文件内要先丢掉的命中条数（`0` ⇒ 逐字旧行为，
+/// 分流见 [`scan_hits_after`]）。第三个回件是**实际**丢掉的条数，原样进
+/// `SearchResultDto::resume_applied_matches` 供调用方对账。
 #[allow(clippy::too_many_arguments)]
 fn scan_file(
     file: &SearchFile,
     matcher: &SearchMatcher,
     prefilter: Option<&BytePrefilter>,
     cap: usize,
+    skip: usize,
     policy: &DecodeProbePolicyDto,
     literal_single_pass: bool,
     cache: Option<&SearchTextCache>,
@@ -3561,7 +3566,7 @@ fn scan_file(
         if let Some(pre) = prefilter {
             let applies = pre.ascii_safe || std::str::from_utf8(bytes).is_ok();
             if applies && !pre.re.is_match(bytes) {
-                return FileOutcome::Miss;
+                return FileOutcome::Miss(0);
             }
         }
     }
@@ -3573,11 +3578,11 @@ fn scan_file(
             return FileOutcome::Unreadable;
         }
     };
-    let (hits, clipped) = scan_hits(&text, matcher, cap, literal_single_pass);
+    let (hits, clipped, applied) = scan_hits_after(&text, matcher, cap, skip, literal_single_pass);
     if hits.is_empty() {
-        FileOutcome::Miss
+        FileOutcome::Miss(applied)
     } else {
-        FileOutcome::Hits(hits, clipped)
+        FileOutcome::Hits(hits, clipped, applied)
     }
 }
 
@@ -4097,6 +4102,17 @@ fn run_search_with_files(
     // 字面量单趟快道的准入（口径与"为什么等价"见 `scan_text_flat`）：正则查询一律走逐行原口径
     let literal_single_pass = !is_regex && !req.query.contains(['\n', '\r']);
     let max_results = o.max_results.unwrap_or(2000).clamp(1, SEARCH_HARD_CAP);
+    // 续取凭据（B18）：夹到资源闸后**逐文件**生效（同一把尺量每个文件）。
+    // 缺省 None / Some(0) ⇒ 0 ⇒ `scan_hits_after` 走 `scan_hits` 原路，旧语义逐字不变。
+    let resume_skip = o.resume_after_matches.unwrap_or(0).min(SEARCH_RESUME_SKIP_MAX);
+    let resume_clamped = o.resume_after_matches.unwrap_or(0) > SEARCH_RESUME_SKIP_MAX;
+    if resume_clamped {
+        // 夹紧不静默：回显会给实际值，但这一句要留在日志里（与"解码失败计入 unreadable"同一口径）
+        eprintln!(
+            "[search] 续取凭据 {} 超过资源闸 {SEARCH_RESUME_SKIP_MAX}，已夹到上限（回显给实际丢弃条数）",
+            o.resume_after_matches.unwrap_or(0)
+        );
+    }
     let threads = o
         .threads
         .unwrap_or(SEARCH_DEFAULT_THREADS)
@@ -4139,6 +4155,8 @@ fn run_search_with_files(
     let next = AtomicUsize::new(0);
     let scanned = AtomicUsize::new(0);
     let hits_total = AtomicU64::new(0);
+    // 续取实际丢弃的条数（逐文件求和；不带凭据时恒 0）——收口进 `resume_applied_matches`
+    let resume_applied = AtomicU64::new(0);
     let overflow = AtomicBool::new(false);
     let cancelled = AtomicBool::new(false);
     let counters = SkipCounters::default();
@@ -4175,12 +4193,16 @@ fn run_search_with_files(
                         &matcher,
                         prefilter.as_ref(),
                         cap,
+                        resume_skip,
                         policy,
                         literal_single_pass,
                         cache_opt,
                         &corpus,
                     ) {
-                        FileOutcome::Hits(hits, clipped) => {
+                        FileOutcome::Hits(hits, clipped, applied) => {
+                            if applied > 0 {
+                                resume_applied.fetch_add(applied as u64, Ordering::Relaxed);
+                            }
                             if clipped {
                                 overflow.store(true, Ordering::Relaxed);
                             }
@@ -4199,7 +4221,12 @@ fn run_search_with_files(
                         FileOutcome::Unreadable => {
                             counters.unreadable.fetch_add(1, Ordering::Relaxed);
                         }
-                        FileOutcome::Miss => {}
+                        // 一页一条不剩也可能是「跳完正好见底」——那一笔续取账不许丢
+                        FileOutcome::Miss(applied) => {
+                            if applied > 0 {
+                                resume_applied.fetch_add(applied as u64, Ordering::Relaxed);
+                            }
+                        }
                     }
                     let done = scanned.fetch_add(1, Ordering::SeqCst) + 1;
                     let due = done % SEARCH_PROGRESS_FILES == 0
@@ -4272,6 +4299,9 @@ fn run_search_with_files(
         files_scanned: scanned.load(Ordering::SeqCst) as u32,
         skipped: counters.to_dto(filtered, excluded, walk_errors),
         elapsed_ms: started.elapsed().as_millis() as u64,
+        // 续取对账位（不带凭据恒 0）。回显**只统计实际丢掉的**，不把请求值原样抄回来——
+        // 「宿主根本不认这个键」（TS 侧 undefined）与「认了但文件没那么长」必须可区分。
+        resume_applied_matches: resume_applied.load(Ordering::Relaxed),
     })
 }
 
