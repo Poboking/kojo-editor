@@ -7,7 +7,8 @@
  * - 路径逃逸逐类拒绝（绝对路径 / 盘符 / UNC / `..` / URL 编码含双重编码 / 设备名 / 尾点尾空格）；
  * - 截断必须显式 truncated，接不到真源必须 NOT_WIRED / RESOURCE_UNAVAILABLE
  *   （铁律 4：不静默、不伪造读数、不空串冒充成功）；
- * - codeActionsAt 只投影「有哪些动作」，绝不 apply；
+ * - codeActionsAt 只投影「有哪些动作」（含宿主签发 actionId），本腿绝不 apply；
+ *   执行走 problems.quickFix 受控通道（端到端见 mcp-quickfix-apply.test.ts）；
  * - 四枚 fileTree 写腿（create/update/remove/rename）接真实写执行，双闸逐条可红；
  *   其余写类与危险动作保持 NOT_WIRED，不擅自开放执行（见 mcp-write-legs.test.ts）。
  */
@@ -434,22 +435,24 @@ describe('runSupplemental：仍 NOT_WIRED 的写类与危险动作', () => {
   const { kernel } = fakeKernel();
   const sup = createRunSupplemental(fakeIoDeps(kernel));
   // fileTree.create / update / remove / rename 四枚写腿已接真实写执行（第四波，见「写腿」
-  // 与 mcp-write-legs.test.ts）；problems.quickFix 仍缺稳定 actionId + 宿主受控 apply 通道，
-  // 其余危险动作仍缺宿主授权面 ⇒ 显式 NOT_WIRED。已接线的名字不许留在缺席清单里。
+  // 与 mcp-write-legs.test.ts）；problems.quickFix 已接线（Wave4 余项①：actionId 台账 +
+  // 模型内受控 apply，见 mcp-quickfix-apply.test.ts）；其余危险动作仍缺宿主授权面 ⇒ 显式 NOT_WIRED。
+  // 已接线的名字不许留在缺席清单里。
   const NOT_WIRED_NAMES = [
-    'problems.quickFix', 'diff.compare', 'state.replay', 'preview.document',
+    'diff.compare', 'state.replay', 'preview.document',
     'remove_path', 'launcher_start', 'market_install', '完全未知',
   ];
   it.each(NOT_WIRED_NAMES)('%s ⇒ 显式 NOT_WIRED（写明缺什么，不造假实现）', async (name) => {
     await expect(sup(name, {}, scope)).rejects.toMatchObject({ code: 'NOT_WIRED' });
   });
 
-  it('problems.quickFix 的 NOT_WIRED 文案写明缺什么（actionId 缺位 + apply 通道缺位）', async () => {
+  it('problems.quickFix 已接线：不在台账的 actionId ⇒ 显式 [E_QUICKFIX_UNLISTED]（不再 NOT_WIRED、不假成功）', async () => {
     const { kernel: k } = fakeKernel();
     const s = createRunSupplemental(fakeIoDeps(k));
-    await expect(s('problems.quickFix', { actionId: 'x', line: 1, column: 1 }, scope)).rejects.toThrow(
-      /actionId.*apply 通道|codeAction-apply/,
-    );
+    await expect(s('problems.quickFix', { actionId: 'x', line: 1, column: 1 }, scope)).rejects.toMatchObject({
+      code: 'TOOL_EXECUTION_FAILED',
+      message: expect.stringContaining('[E_QUICKFIX_UNLISTED]'),
+    });
   });
 });
 
@@ -853,11 +856,18 @@ describe('语义 8 腿（判据腿优先 + provider 纯读直调）', () => {
     expect(over['truncated']).toBe(true);
   });
 
-  it('codeActionsAt：只读投影 hasEdit/isPreferred；绝不 apply（provider 无 apply 腿可触）', async () => {
+  it('codeActionsAt：只读投影 hasEdit/isPreferred + 宿主签发 actionId；本腿绝不 apply', async () => {
     const provider = {
       provideCodeActions: () => ({
         actions: [
-          { title: 'fix it', kind: 'quickfix', isPreferred: true, edit: { edits: [{}] } },
+          {
+            title: 'fix it',
+            kind: 'quickfix',
+            isPreferred: true,
+            edit: { edits: [{}] },
+            // 宿主 provideCodeActionsFor 的真实回包形态：command.arguments[0] = 反查 id
+            command: { id: 'kojo.codeAction.run', title: 'fix it', arguments: ['pane-1:sugar-quickfix#7'] },
+          },
           { title: 'refactor', kind: 'refactor.extract' },
         ],
       }),
@@ -865,7 +875,7 @@ describe('语义 8 腿（判据腿优先 + provider 纯读直调）', () => {
     const readers = buildSemanticReaders(fakeDeps({ getFeaturesService: () => registryWith({ codeActionProvider: [provider] }) }));
     const out = (await readers.codeActionsAt!({ line: 1, column: 1 }, scope)) as Record<string, unknown>;
     expect(out['items']).toEqual([
-      { title: 'fix it', kind: 'quickfix', isPreferred: true, hasEdit: true },
+      { title: 'fix it', kind: 'quickfix', isPreferred: true, hasEdit: true, actionId: 'pane-1:sugar-quickfix#7' },
       { title: 'refactor', kind: 'refactor.extract', isPreferred: false, hasEdit: false },
     ]);
   });

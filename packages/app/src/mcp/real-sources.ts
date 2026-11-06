@@ -17,7 +17,9 @@
  *   打开文件，有副作用，MCP 只读面**不退到它**，判据腿缺席即显式 NOT_WIRED）；
  *   hover / suggest / symbols / folding / highlights / signature / codeActions 走
  *   provider 注册表直调（与真人菜单同源、不改编辑器状态）；诊断走 `getModelMarkers`。
- * - codeActionsAt 只投影「有哪些动作」，绝不调 command、绝不碰 edit 内容。
+ * - codeActionsAt 只投影「有哪些动作」（含宿主签发的稳定 actionId），本腿自身绝不调 command、
+ *   绝不碰 edit 内容；执行动作走**另一枚** edit 档受控通道 `problems.quickFix`
+ *   （见 quick-fix.ts：模型内一次撤销步，不落盘）。
  * - 失败显式 `{code,message}`；无活动编辑器 / 无项目 / 判据腿未装配一律
  *   `NOT_WIRED` / `RESOURCE_UNAVAILABLE` 可见，不吞错、不伪造读数、不空串冒充成功。
  * - 第五波（LaneH / Wave4 #4）：editor.openDocument / editor.revealPosition 两枚 edit 档工具
@@ -40,6 +42,7 @@ import type {
 import { KERNEL_EVENT_NAMES } from '@kojo/plugin-api';
 import type { EditorCommandContext, EditorSymbolLocation } from '@kojo/plugin-api';
 import type { CommandEntry } from '../ui/commands';
+import { recordQuickFixTickets, type QuickFixPaneResolver } from './quick-fix';
 import { registerMcpWiringSources, type McpWiringSources } from './wiring';
 import {
   clampInt,
@@ -80,6 +83,8 @@ export interface McpSemanticModel {
   getLanguageId(): string;
   getEOL(): string;
   getValue(): string;
+  /** 文档版本读数（真 Monaco 必有；假件缺席 ⇒ quickFix 版本闸降级为「不可核验」并显式）。 */
+  getVersionId?(): number;
 }
 
 /** Monaco 模块的最窄投影（真 `monaco-editor/editor/editor.api` 结构满足）。 */
@@ -529,12 +534,22 @@ function codeActionsOf(raw: unknown[], cap: number): { readonly items: Record<st
     const title = asString(a['title']).replace(/\s+/g, ' ').trim();
     if (title === '') continue;
     const edit = a['edit'];
+    // 宿主反查 id：`provideCodeActionsFor` 给每条动作签 `pane-N:贡献id#seq` 并挂进
+    // pendingActionsRef，回包的 `command.arguments[0]` 就是它（Wave4 余项①：投影不再丢弃）。
+    // 只取 id 字符串本身——调 command / 展开 edit 内容仍是 problems.quickFix 的受控通道的事。
+    const command = a['command'];
+    const arg0 =
+      command && typeof command === 'object' && Array.isArray((command as Record<string, unknown>)['arguments'])
+        ? ((command as Record<string, unknown>)['arguments'] as unknown[])[0]
+        : undefined;
+    const actionId = typeof arg0 === 'string' ? arg0 : '';
     // 只读投影：回答「有哪些动作」——绝不调 command、绝不展开 edit 内容。
     items.push({
       title,
       kind: asString(a['kind']),
       isPreferred: a['isPreferred'] === true,
       hasEdit: !!edit && typeof edit === 'object' && Array.isArray((edit as Record<string, unknown>)['edits']) && ((edit as Record<string, unknown>)['edits'] as unknown[]).length > 0,
+      ...(actionId !== '' ? { actionId } : {}),
     });
   }
   return { items, total: actions.length };
@@ -670,7 +685,7 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
     return { items, total: items.length, truncated };
   };
 
-  const codeActionsAt: McpReaderFn = async (args) => {
+  const codeActionsAt: McpReaderFn = async (args, scope) => {
     const ws = await requireWorkspace(deps);
     const pos = targetOf(ws, args['line'], args['column']);
     const service = (await unwrapGetter<McpLanguageFeaturesLike>(deps.getFeaturesService())) ?? {};
@@ -682,6 +697,16 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
       (token) => [ws.model, range, { triggerKind: 1, only: undefined }, token],
     );
     const { items, total } = codeActionsOf(raw, CODE_ACTION_LIMIT);
+    // Wave4 余项①：列出的宿主签发 id 记进有界台账（会话 + 文档版本 + 清单位置），
+    // apply 走 problems.quickFix 受控通道。本读腿自身仍不执行任何动作。
+    recordQuickFixTickets({
+      sessionId: typeof scope?.sessionId === 'string' ? scope.sessionId : '',
+      uri: ws.model.uri.toString(),
+      versionId: typeof ws.model.getVersionId === 'function' ? ws.model.getVersionId() : null,
+      line: pos.line,
+      column: pos.column,
+      items,
+    });
     // 判性：total 原本就是真实 actions 数（无造假），但 CODE_ACTION_LIMIT 封顶 / 脏动作丢弃没有标记 ⇒ 补 truncated。
     return { items, total, truncated: total > items.length, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
   };
@@ -1042,6 +1067,8 @@ export interface McpRealSourceInjection {
   readonly getWorkspace?: () => Promise<McpSemanticWorkspace | null> | McpSemanticWorkspace | null;
   readonly getLegs?: () => Promise<unknown> | unknown;
   readonly getFeaturesService?: () => Promise<unknown> | unknown;
+  /** `problems.quickFix` 的 pane 反查 seam（缺省 = 动态 import livePanes + applyTextEdits 的生产解析）。 */
+  readonly getQuickFixPane?: QuickFixPaneResolver;
 }
 
 function currentRootDirOf(kernel: McpKernelLike | null): string | null {
@@ -1205,6 +1232,7 @@ export async function buildRealMcpSources(
     searchInFiles:
       injection?.searchInFiles ??
       (await import('../bridge/search')).searchInFiles as unknown as McpIoDeps['searchInFiles'],
+    getQuickFixPane: injection?.getQuickFixPane,
   };
 
   const semanticDeps: McpSemanticDeps = {

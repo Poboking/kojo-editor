@@ -1390,6 +1390,66 @@ fn tools_call_denies_tier_mismatch_from_read_session() {
     );
 }
 
+/// Wave4 余项①：点号命名空间的具名 Edit 工具在宿主侧同判 Edit。
+/// 修复前 `problems.quickFix` / `fileTree.create` / `fileTree.update` 既不命中
+/// 下划线动词前缀表也不在 privileged 表，`host_required_tier` 判 Read——read 会话
+/// 猜名直调即是端点后门（后两枚是已接线写腿的既有同型洞，一并堵上）。
+/// 钉死：read 直调 ⇒ 显式 `E_TIER_DENIED`（线契约字面码）；批准短路照旧放行；
+/// edit/privileged 会话放行；`filter_tools_list` 对 read 会话剔除；
+/// privileged 名单不被抬级（冻结契约：具名面只有 remove/rename 危险）。
+#[test]
+fn dot_namespaced_edit_tools_are_gated_as_edit_at_host_gate() {
+    const EDIT_NAMES: &[&str] = &["problems.quickFix", "fileTree.create", "fileTree.update"];
+    let read = empty_scope(Vec::new());
+    for name in EDIT_NAMES {
+        assert!(is_edit_tool(name), "{name} 未进具名 Edit 表");
+        assert_eq!(host_required_tier(name), McpTier::Edit, "{name}");
+        assert!(!is_privileged_tool(name), "{name} 不得被抬成 privileged");
+        let e = check_tool_call_permission(name, &read)
+            .err()
+            .unwrap_or_else(|| panic!("后门复现：{name} 在 read 会话被端点放行（Ok）"));
+        assert_eq!(e.code, "E_TIER_DENIED", "{name}");
+        assert!(e.message.contains(name), "{name} 拒绝必须可见（带工具名）");
+    }
+    // edit 会话放行；privileged 会话覆盖 edit 档。
+    let edit = McpSessionScope {
+        tier: McpTier::Edit,
+        ..empty_scope(Vec::new())
+    };
+    let priv_scope = McpSessionScope {
+        tier: McpTier::Privileged,
+        ..empty_scope(Vec::new())
+    };
+    for name in EDIT_NAMES {
+        assert!(check_tool_call_permission(name, &edit).is_ok(), "{name} edit 会话应放行");
+        assert!(
+            check_tool_call_permission(name, &priv_scope).is_ok(),
+            "{name} privileged 会话应放行"
+        );
+    }
+    // 批准语义零放宽：显式列进 approvedTools（精确或通配）的 read 会话照旧短路放行，
+    // 与 write_* 的批准短路同源（check/filter 两道闸一致）。
+    let exact = empty_scope(vec!["problems.quickFix".to_string()]);
+    assert!(check_tool_call_permission("problems.quickFix", &exact).is_ok());
+    let wildcard = empty_scope(vec!["fileTree.*".to_string()]);
+    assert!(check_tool_call_permission("fileTree.create", &wildcard).is_ok());
+    // tools/list 第二道闸：read 会话看不见这三枚（与 tools/call 同源判定）。
+    let result = json!({"tools":[
+        {"name":"semantic.codeActionsAt"},
+        {"name":"problems.quickFix"},
+        {"name":"fileTree.create"},
+        {"name":"fileTree.update"}
+    ]});
+    let filtered = filter_tools_list(&result, &read);
+    assert_eq!(names_of(&filtered.result), vec!["semantic.codeActionsAt"]);
+    for name in EDIT_NAMES {
+        assert!(
+            filtered.filtered.iter().any(|f| f == name),
+            "{name} 应从 read 会话 tools/list 剔除"
+        );
+    }
+}
+
 #[test]
 fn revoke_falls_back_to_minimum_at_endpoint_gates() {
     let d = TempDir::new();

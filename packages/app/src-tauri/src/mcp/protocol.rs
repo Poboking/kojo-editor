@@ -1014,7 +1014,8 @@ pub fn is_privileged_tool(name: &str) -> bool {
 }
 
 /// 宿主侧按工具名形状推断所需 tier（**不读 WebView 的 annotations**：annotations
-/// 不可信）。只认线协议字面的动词前缀，零游戏语义；未知名字一律按 read 放行。
+/// 不可信）。只认线协议字面的动词前缀与具名 Edit 工具表，零游戏语义；
+/// 未知名字一律按 read 放行。
 pub const EDIT_TOOL_PREFIXES: &[&str] = &[
     "write_",
     "edit_",
@@ -1036,9 +1037,26 @@ pub const EDIT_TOOL_PREFIXES: &[&str] = &[
     "duplicate_",
 ];
 
+/// 点号命名空间的**具名 Edit 工具**（Wave4 余项①）：`命名空间.动词` 形态不命中
+/// 上表的下划线动词前缀，也不在 `PRIVILEGED_EXACT`，修复前 `host_required_tier` 判
+/// Read——read 会话直调即是后门。点名三枚真写腿：
+/// - `problems.quickFix`：本批接线（模型内 apply，edit 档，WebView `SUPPLEMENTAL_TOOL_SPECS`
+///   同款分级）；
+/// - `fileTree.create` / `fileTree.update`：**早已接线**的写腿（写腿批），端点侧同样
+///   一直判 Read——同型既有洞一并堵上，与 WebView 契约的 edit 档对齐。
+/// privileged 名单不受影响（冻结契约：具名面只有 remove/rename 是 privileged）。
+pub const EDIT_TOOLS_EXACT: &[&str] = &["fileTree.create", "fileTree.update", "problems.quickFix"];
+
+pub fn is_edit_tool(name: &str) -> bool {
+    EDIT_TOOLS_EXACT.contains(&name)
+}
+
 pub fn host_required_tier(name: &str) -> McpTier {
     if is_privileged_tool(name) {
         return McpTier::Privileged;
+    }
+    if is_edit_tool(name) {
+        return McpTier::Edit;
     }
     let lower = name.to_ascii_lowercase();
     if EDIT_TOOL_PREFIXES.iter().any(|p| lower.starts_with(p)) {

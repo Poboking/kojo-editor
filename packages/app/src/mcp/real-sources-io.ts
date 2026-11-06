@@ -32,7 +32,10 @@
  *   成功后尽力广播内核既有 `file.changed` 事件喂给宿主刷新（App.tsx 同款通道），缺席如实标注；
  *   删除 / 改名广播沿用 `@kojo/plugin-api` 既有 `FileChangeKind` 的 `'unlink'` / `'add'`（additive，
  *   旧 `'add' | 'change'` 调用方零改动）。
- *   `problems.quickFix` 保持 NOT_WIRED（缺稳定 actionId 与 apply 通道，见其报错文案）。
+ *   `problems.quickFix`（Wave4 余项①，2026-11-06）接的是宿主既有 codeAction 反查表 +
+ *   `applyTextEdits`：Monaco **模型内**单次编辑（一个撤销步、可见脏、**不落盘、不触 io、不 invoke**，
+ *   铁律 5/6/7 不新建写通道）；稳定 actionId 台账 + 逐闸显式拒绝见 `quick-fix.ts`，
+ *   `run` 式意图 / 糖投影仍保持显式 NOT_WIRED（能力没接上的部分不假成功）。
  */
 import { McpFailure } from '@kojo/mcp-host';
 import type {
@@ -42,6 +45,7 @@ import type {
   McpSessionScope,
 } from '@kojo/mcp-host';
 import type { CommandEntry } from '../ui/commands';
+import { createQuickFixApplyLeg, type QuickFixPaneResolver } from './quick-fix';
 
 /* ------------------------------- 窄结构类型 ------------------------------- */
 
@@ -112,6 +116,8 @@ export interface McpIoDeps {
   readonly getCommands: () => readonly CommandEntry[];
   readonly invoke: McpInvokeLike;
   readonly searchInFiles: (request: McpSearchRequestLike) => Promise<McpSearchResultLike>;
+  /** `problems.quickFix` 的 pane 反查 seam（缺席 ⇒ 生产动态 import 解析，见 quick-fix.ts）。 */
+  readonly getQuickFixPane?: QuickFixPaneResolver;
 }
 
 /* ------------------------------- 路径闸（与 Rust 同尺） ------------------------------- */
@@ -876,6 +882,9 @@ export function createRunSupplemental(deps: McpIoDeps): (
     return { items, total: relPaths.length, truncated: relPaths.length > items.length };
   };
 
+  // Wave4 余项①：quickFix 受控 apply 腿（稳定 actionId 台账 + 模型内一次撤销步，见 quick-fix.ts）。
+  const quickFixApply = createQuickFixApplyLeg(deps);
+
   const ioTools = new Map<string, (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown> | unknown>([
     ['commands.list', commandsList],
     ['fs.readFile', readFile],
@@ -891,21 +900,15 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['fileTree.update', fileTreeUpdate],
     ['fileTree.remove', fileTreeRemove],
     ['fileTree.rename', fileTreeRename],
+    // Wave4 余项①：稳定 actionId 台账 + 宿主受控 apply（模型内一次撤销步，不落盘、
+    // 不新建写通道）；逐闸拒绝显式报错，run 式意图 / 糖投影保持显式 NOT_WIRED。
+    ['problems.quickFix', quickFixApply],
   ]);
 
   return async (name, args, scope) => {
     const tool = ioTools.get(name);
     if (tool) return tool(args ?? {}, scope);
     // 仍 NOT_WIRED 的写类 / 危险动作：逐个写明缺什么（不静默、不造假实现）。
-    if (name === 'problems.quickFix') {
-      throw new McpFailure(
-        'NOT_WIRED',
-        '工具 problems.quickFix 未接线：只读清单（semantic.codeActionsAt / problems.diagnostics）' +
-          '不携带稳定 actionId（只投影 title/kind/isPreferred/hasEdit），且宿主没有可从 MCP 面复用的 ' +
-          'codeAction-apply 通道（Monaco quickFix 是交互菜单，动作实例只活在弹出层里）——' +
-          '缺这两样，接了就是假实现；需先给只读清单补稳定 id 并新增受控 apply 通道。',
-      );
-    }
     if (
       name.startsWith('fileTree.') ||
       name.startsWith('remove_') ||
