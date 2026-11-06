@@ -205,6 +205,20 @@ export interface McpKernelLike {
     readonly removeDir?: (path: string) => Promise<void>;
     readonly rename?: (from: string, to: string) => Promise<void>;
     /**
+     * **服务端复制**原语（B25 批 `fs.copyFile` 用，2026-11-07，additive 投影）。
+     * 契约真源 `@kojo/plugin-api` io.ts 的 `copyFile(from, to)`：字节全程不过 JS（Tauri 侧
+     * 就是那条 `copy_file` 命令），**只对 `to` 断言** `assertWritable`（`from` 是读取源，
+     * 读侧本来就不受写允许域约束——照 `rename` 抄成两端断言会误拒整条导入链路），
+     * 平台侧另有第二道闸（Rust `copy_file(.., "copy_dst")`）。缺席 ⇒ 该腿显式 NOT_WIRED。
+     */
+    readonly copyFile?: (from: string, to: string) => Promise<void>;
+    /**
+     * **递归建目录**原语（B25 批 `fs.ensureDir` 用，additive 投影）。契约 `ensureDir(path)`：
+     * 与 `writeBytes` 同闸（先建目录再写文件的链路里，目录创建同样不能越权），
+     * 已存在 ⇒ 幂等成功（**这一格由腿自己回读并报 `alreadyExisted`，不靠静默**）。
+     */
+    readonly ensureDir?: (path: string) => Promise<void>;
+    /**
      * FileIO 契约的**批量读**原语（`fs.readMany` 用；B2 批 LaneT 2026-11-06，additive）。
      * 语义（契约真源 `@kojo/plugin-api` io.ts）：与 readText 同一条编码/BOM/EOL 管线、
      * 每批一次 IPC、逐文件失败不抛整批 ⇒ 失败位 `null`、可命中会话文本缓存、
