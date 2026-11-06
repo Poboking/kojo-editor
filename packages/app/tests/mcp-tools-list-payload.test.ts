@@ -301,8 +301,14 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     // desc 63,000 → 65,000（实拍 64,433，+1,926＝patch 级写两形 hunk 契约的诚实描述 1,926 字符）；
     // schema 106,500 → 108,500（实拍 107,873，+2,032＝hunks 两形 items + relPath/rootId 入参）；
     // launcher / 帧带不动（launcher 实拍 73,706 与 S4 持平；frame 实拍 183,052，仍在 B22 带 ±10% 内）。
-    expect(descBytes).toBeLessThanOrEqual(65_000); // B21 实拍 64,851；S4 实拍 62,507；S6 实拍 64,433
-    expect(schemaBytes).toBeLessThanOrEqual(108_500); // B21 实拍 143,762；S4 实拍 105,841；S6 实拍 107,873
+    // MCP-PERF-S8（LaneR 2026-11-07）纯 additive 入参批重钉（零新面，枚数/档位全不动）：
+    // schema 108,500 → 110,500（实拍 109,621，+1,748＝search.all / workspace.searchAll 的
+    // deadlineMs+preview 两枚入参 ×2 面 + semantic.projectSymbols 的 query 入参——全部落在
+    // properties.description，accounting 字段零删减）；desc 上界 65,000 不动（S8 实拍 64,912，
+    // +479＝三枚面的描述句各添一短句）；launcher 不动（实拍 73,706 与 S4/S6 持平）；
+    // frame 实拍 185,281，仍在 B22 带 ±10% 内（B22 底数 168,894 一字未动）。
+    expect(descBytes).toBeLessThanOrEqual(65_000); // B21 实拍 64,851；S4 62,507；S6 64,433；S8 实拍 64,912
+    expect(schemaBytes).toBeLessThanOrEqual(110_500); // B21 143,762；S4 105,841；S6 107,873；S8 实拍 109,621
     expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；S4 实拍 73,706
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });

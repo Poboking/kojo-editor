@@ -94,15 +94,18 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   'semantic.tokens': ['lineFrom', 'lineTo'], // toPositiveInt(args.lineFrom / args.lineTo)
   // MCP-PERF-S4（LaneK，2026-11-07）：全项目函数清单（erb.parser byName 索引；直连索引服务，
   // 无编辑器依赖）——paginateByCursor 走共用闸 ⇒ 整条别名序列 + cursor（腿不读裸 offset）。
-  'semantic.projectSymbols': SHARED_LIST,
+  // MCP-PERF-S8（LaneR，2026-11-07）：+ query（次序无关子串过滤 needle，腿真取用）。
+  'semantic.projectSymbols': ['query', ...SHARED_LIST],
 
   /* ---- kernel IO 3 腿（real-sources-io.ts createKernelIo）---- */
   'project.info': [], // 真零参
   'fs.tree': ['maxDepth', ...SHARED_LIST], // clampInt(args.maxDepth) + paginateByCursor(args)
-  'search.all': ['query', 'resumeBySlice', ...SHARED_WINDOW], // query + pageParamsFor(args) + B16 分片开关
+  // MCP-PERF-S8（LaneR，2026-11-07）：+ deadlineMs（软时限，腿真带进 search_text 请求）+
+  // preview（full|none，投影层剥 preview 字段）；两者都走 `searchDeadlineMsOf` / `searchPreviewModeOf` 闸。
+  'search.all': ['query', 'resumeBySlice', 'deadlineMs', 'preview', ...SHARED_WINDOW], // query + pageParamsFor(args) + B16 分片开关 + S8 软时限/紧凑载荷
 
   /* ---- 补齐 / 只读具名工具 ---- */
-  'workspace.searchAll': ['query', 'scope', 'resumeBySlice', ...SHARED_WINDOW],
+  'workspace.searchAll': ['query', 'scope', 'resumeBySlice', 'deadlineMs', 'preview', ...SHARED_WINDOW], // S8 同上两枚 additive 入参
   'problems.quickFix': ['actionId', 'line', 'column'], // quick-fix.ts 三条取用
   // 该面腿先把 maxResults clamp 一遍再注入共用闸 ⇒ 序列里排在 maxResults 之后的四个别名
   // 在这个面上**从不生效**：不生效就不声明，让它们落进「未知入参 ⇒ 显式拒收」。

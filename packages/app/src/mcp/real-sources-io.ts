@@ -140,6 +140,12 @@ export interface McpSearchRequestLike {
      * 缺省不传 ⇒ 请求体与旧面逐字相同；引擎回显见 `McpSearchResultLike.resumeAppliedMatches`。
      */
     readonly resumeAfterMatches?: number;
+    /**
+     * 软时限（MCP-PERF-S1 的 Rust DTO / bridge 类型已在；MCP-PERF-S8 起 MCP 面真收这个入参）：
+     * 自检索起点起算的毫秒预算，到点不再领新文件、在手的扫完收口。缺省不传 ⇒ 请求体与
+     * 旧面逐字相同（无时限）。MCP 面闸：正整数 ≤120000（`searchDeadlineMsOf`，越界显式拒收）。
+     */
+    readonly deadlineMs?: number;
   };
 }
 
@@ -163,6 +169,14 @@ export interface McpSearchResultLike {
    * `cancelled`，缺席按 false 处理 ⇒ 可选，既有假件零改动）。
    */
   readonly cancelled?: boolean;
+  /**
+   * 软时限账（MCP-PERF-S1，additive）：结果不完整是因为 `deadlineMs` 到点（与
+   * `truncated`（命中上限）/ `cancelled`（取消）账分立）。可选：旧宿主没这个键 ⇒
+   * 按 false 处理，MCP 应答不带 partial 键（零漂移）。
+   */
+  readonly partial?: boolean;
+  /** `partial` 的原因码：partial=false 恒缺席；当前唯一取值 "deadline"。 */
+  readonly partialReason?: string;
   readonly filesScanned: number;
   readonly elapsedMs: number;
   readonly skipped: unknown;
@@ -814,6 +828,100 @@ function wantsSliceResume(args: Record<string, unknown> | undefined): boolean {
   return args?.['resumeBySlice'] === true;
 }
 
+/* ----------------- MCP-PERF-S8（LaneR，2026-11-07）三腿 additive 入参闸 ----------------- */
+
+/** 两枚检索面 `deadlineMs` 的上限（毫秒；正整数 ≤ 2 分钟，闸值与 BOARD 卡逐字同尺）。 */
+export const MCP_SEARCH_DEADLINE_MS_MAX = 120_000;
+
+/**
+ * 腿1（S8）：软时限入参闸。缺省（undefined）= 无时限 ⇒ 请求体与旧面逐字同形（S1 的
+ * Rust DTO `deadline_ms: Option<u64>` 同义）；其余形状一律显式 INVALID_ARGS——越界
+ * **不夹取**（夹取会把「agent 要的预算」静默换成另一个预算，账面必假），与
+ * `editor.openDocument` 的 `deadlineOf` 同一纪律。
+ */
+function searchDeadlineMsOf(args: Record<string, unknown>, face: string): number | undefined {
+  const raw = args['deadlineMs'];
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > MCP_SEARCH_DEADLINE_MS_MAX) {
+    throw new McpFailure(
+      'INVALID_ARGS',
+      `${face} 的 deadlineMs 须为 1..${MCP_SEARCH_DEADLINE_MS_MAX} 的整数（毫秒软时限；收到 ` +
+        `${JSON.stringify(raw)}）：越界不夹取，脏值不静默回落「无时限」。`,
+    );
+  }
+  return raw;
+}
+
+/**
+ * 腿2（S8）：命中载荷模式。缺省 full = 逐字旧形态；"none" ⇒ 投影层剥 preview 字段
+ * （`stripPreviewFields`），命中账（total/游标/指纹/knownTotal）在剥字段**之前**已按
+ * 全量命中算好 ⇒ 与 full 逐位一致、游标跨模式互认。枚举外脏值显式拒收，不静默当 full。
+ */
+function searchPreviewModeOf(args: Record<string, unknown>, face: string): 'full' | 'none' {
+  const raw = args['preview'];
+  if (raw === undefined) return 'full';
+  if (raw !== 'full' && raw !== 'none') {
+    throw new McpFailure(
+      'INVALID_ARGS',
+      `${face} 的 preview 只收 "full" | "none"（缺省 full；"none" = 投影层剥每条命中的 ` +
+        `preview 字段省 token；收到 ${JSON.stringify(raw)}）：脏值不静默当 full。`,
+    );
+  }
+  return raw;
+}
+
+/** preview:"none" 的投影腿：浅拷贝剥 preview 一格；其余字段（含未来 additive 字段）原样保留。 */
+function stripPreviewFields(hits: readonly Record<string, unknown>[]): Record<string, unknown>[] {
+  return hits.map((h) => {
+    const out = { ...h };
+    delete out['preview'];
+    return out;
+  });
+}
+
+/**
+ * 腿1 的组合闸：`deadlineMs` 与 `resumeBySlice:true` 不同收——分片路每片是一次独立
+ * `search_text` 调用，软时限账（partial/partialReason）只在一次性路收口；静默丢掉时限
+ * 就是铁律 4 那一刀，显式拒收点名二选一。
+ */
+function assertDeadlineNotWithSlice(
+  args: Record<string, unknown>,
+  face: string,
+  deadlineMs: number | undefined,
+): void {
+  if (deadlineMs !== undefined && wantsSliceResume(args)) {
+    throw new McpFailure(
+      'INVALID_ARGS',
+      `${face} 的 deadlineMs 与 resumeBySlice:true 不同收：分片路每片是一次独立 search_text 调用，` +
+        '软时限账（partial/partialReason）只在一次性路收口。二选一：要时限请走一次性窗，要分片续取就别带时限。',
+    );
+  }
+}
+
+/**
+ * 腿3（S8）：`semantic.projectSymbols` 的 query 过滤 needle——**次序无关子串**（照 B11 的
+ * Damerau-Levenshtein 0.34 形态二选一，选子串的理由：ERB 函数名碎片普遍 3..8 字符，
+ * 绝对编辑距离 ≤2 在这个长度段近乎任意匹配、归一化 0.34 又是给长 camelCase 键名手误
+ * 调教的，搬来过滤短符号名＝子串加噪声；子串判性一目了然、零分配、结果 ⊆ 全量且序稳定）。
+ * 空白切 token、预折大写（归一化名就是 byName 键的大写形态）⇒ 逐条 `includes` 零分配。
+ * 空 / 缺席 = [] = 全量零行为变化；脏类型显式拒收。
+ */
+function symbolQueryNeedlesOf(args: Record<string, unknown>): readonly string[] {
+  const raw = args['query'];
+  if (raw === undefined) return [];
+  if (typeof raw !== 'string') {
+    throw new McpFailure(
+      'INVALID_ARGS',
+      `semantic.projectSymbols 的 query 须为字符串（次序无关子串过滤；收到 ${JSON.stringify(raw)}）：` +
+        '脏类型不静默当全量。',
+    );
+  }
+  return raw
+    .split(/\s+/)
+    .filter((t) => t !== '')
+    .map((t) => t.toUpperCase());
+}
+
 /* ------------------------------- kernelIo 3 腿 ------------------------------- */
 
 let searchSeq = 0;
@@ -900,10 +1008,14 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
     if (typeof query !== 'string' || query.length === 0) {
       throw new McpFailure('INVALID_ARGS', 'searchAll 的 query 须为非空字符串');
     }
+    // S8 腿1/腿2：软时限与命中载荷模式（都可省；缺省 = 旧请求体逐字同形、应答零漂移）
+    const deadlineMs = searchDeadlineMsOf(args ?? {}, 'search.all');
+    const previewMode = searchPreviewModeOf(args ?? {}, 'search.all');
+    assertDeadlineNotWithSlice(args ?? {}, 'search.all', deadlineMs);
     const page = pageParamsFor(args ?? {}, { defaultLimit: 50, maxLimit: 200 });
     if (wantsSliceResume(args)) {
       // B16：闸下命中不可续（实测），给了 resumeBySlice 才走分片路；不给 ⇒ 下面旧路逐字不变
-      return createSliceRunner(deps)({
+      const res = await createSliceRunner(deps)({
         args: args ?? {},
         query,
         project,
@@ -915,6 +1027,10 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
         // 与旧路同一枚 await 口径（fsFreshnessListing 是 async：不 await 会把 Promise 塞进返回体）
         fsFreshness: await fsFreshnessListing(deps, rootDir, '.', scope),
       });
+      // S8 腿2：分片路同样在投影层剥 preview——账在 runner 内部按全量命中算好 ⇒ 与 full 逐位一致
+      return previewMode === 'none'
+        ? { ...res, hits: stripPreviewFields((res['hits'] as Record<string, unknown>[]) ?? []) }
+        : res;
     }
     const result = await deps.searchInFiles({
       searchId: nextSearchId(),
@@ -926,6 +1042,8 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
         wholeWord: false,
         extensions: [],
         maxResults: searchWindow(page.offset, page.limit),
+        // S8 腿1：缺省不带键（旧请求体逐字同形）；给了才带（S1 的 Rust DTO / bridge 类型已在）
+        ...(deadlineMs !== undefined ? { deadlineMs } : {}),
       },
     });
     const hits: Record<string, unknown>[] = [];
@@ -934,14 +1052,26 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
         hits.push({ path: toRelativePath(file.path, rootDir), line: match.line, preview: match.preview });
       }
     }
+    const account = pageSearchHits(hits, args ?? {}, page.limit, page.offset, {
+      totalMatches: result.totalMatches,
+      truncated: result.truncated,
+    });
     return {
-      ...pageSearchHits(hits, args ?? {}, page.limit, page.offset, {
-        totalMatches: result.totalMatches,
-        truncated: result.truncated,
-      }),
+      ...account,
+      // S8 腿2："none" ⇒ 投影层剥 preview（账已按全量命中算好，与 full 逐位一致、游标跨模式互认）
+      ...(previewMode === 'none' ? { hits: stripPreviewFields((account['hits'] as Record<string, unknown>[]) ?? []) } : {}),
       filesScanned: result.filesScanned,
       elapsedMs: result.elapsedMs,
       skipped: result.skipped,
+      // S8 腿1：软时限账透传（S1 语义，不重造）。引擎没报 partial ⇒ 应答不带这个键（旧宿主零漂移）。
+      ...(result.partial === true
+        ? {
+            partial: true,
+            ...(typeof result.partialReason === 'string' && result.partialReason !== ''
+              ? { partialReason: result.partialReason }
+              : {}),
+          }
+        : {}),
       // 检索结果是从盘上现算的：这里说「自你上一次从本根检索以来，根下动过几处」。
       fsFreshness: await fsFreshnessListing(deps, rootDir, '.', scope),
     };
@@ -1152,12 +1282,22 @@ export function createRunSupplemental(deps: McpIoDeps): (
       );
     }
     const state = typeof parser.indexState === 'function' ? parser.indexState() : null;
+    // S8 腿3：query 过滤 needle（空 / 缺席 = [] = 全量零行为变化）。走 byName 键过滤
+    // **不重扫**：只是把不匹配的定义不收进页清单，索引遍历与脏行口径原样不动。
+    const needles = symbolQueryNeedlesOf(args ?? {});
     const items: Record<string, unknown>[] = [];
-    index.byName.forEachDef((ref) => {
+    index.byName.forEachDef((ref, normalizedName) => {
       const filePath = typeof ref['filePath'] === 'string' ? ref['filePath'] : '';
       const name = typeof ref['name'] === 'string' ? ref['name'] : '';
       const startLine = typeof ref['startLine'] === 'number' ? ref['startLine'] : 0;
       if (filePath === '' || name === '' || !(startLine >= 1)) return; // 脏行丢弃（total 含脏行账在 paginate 外）
+      // S8 腿3：次序无关子串过滤——对归一化名（byName 键，大写）逐 token includes；
+      // 序 = byName 迭代序 ⇒ 结果 ⊆ 全量且序稳定。分页账（total/游标/指纹）作用在
+      // 过滤后的集合上，不同 query 的页靠指纹互斥（changedDuringPaging 从头重来），不串接。
+      if (needles.length > 0) {
+        const key = typeof normalizedName === 'string' && normalizedName !== '' ? normalizedName : name.toUpperCase();
+        if (!needles.every((n) => key.includes(n))) return;
+      }
       items.push({
         name,
         path: toRelativePath(filePath, rootDir),
@@ -1308,13 +1448,17 @@ export function createRunSupplemental(deps: McpIoDeps): (
     if (typeof query !== 'string' || query.length === 0) {
       throw new McpFailure('INVALID_ARGS', 'workspace.searchAll 的 query 须为非空字符串');
     }
+    // S8 腿1/腿2：软时限与命中载荷模式（都可省；缺省 = 旧请求体逐字同形、应答零漂移）
+    const deadlineMs = searchDeadlineMsOf(args ?? {}, 'workspace.searchAll');
+    const previewMode = searchPreviewModeOf(args ?? {}, 'workspace.searchAll');
+    assertDeadlineNotWithSlice(args ?? {}, 'workspace.searchAll', deadlineMs);
     // scope:'sources' ⇒ 以 adapter 填充的作品域目录为根集合（契约字段投影，不硬编码领域）。
     const roots = searchRootsOf(project, rootDir, (args ?? {})['scope'] === 'sources');
     const page = pageParamsFor(args ?? {}, { defaultLimit: 50, maxLimit: 200 });
     if (wantsSliceResume(args)) {
       // B16：引擎闸下的命中集实测不可续 ⇒ 给了 resumeBySlice 才按互不相交的目录 / 文件分片续取。
       // 不给这个入参 ⇒ 走下面旧路，触墙时那套三件套 + note 逐字不变（旧面零回退）。
-      return createSliceRunner(deps)({
+      const res = await createSliceRunner(deps)({
         args: args ?? {},
         query,
         project,
@@ -1333,6 +1477,10 @@ export function createRunSupplemental(deps: McpIoDeps): (
           scope,
         ),
       });
+      // S8 腿2：分片路同样在投影层剥 preview——账在 runner 内部按全量命中算好 ⇒ 与 full 逐位一致
+      return previewMode === 'none'
+        ? { ...res, hits: stripPreviewFields((res['hits'] as Record<string, unknown>[]) ?? []) }
+        : res;
     }
     const result = await deps.searchInFiles({
       searchId: nextSearchId(),
@@ -1344,6 +1492,8 @@ export function createRunSupplemental(deps: McpIoDeps): (
         wholeWord: false,
         extensions: [],
         maxResults: searchWindow(page.offset, page.limit),
+        // S8 腿1：缺省不带键（旧请求体逐字同形）；给了才带（S1 的 Rust DTO / bridge 类型已在）
+        ...(deadlineMs !== undefined ? { deadlineMs } : {}),
       },
     });
     const hits: Record<string, unknown>[] = [];
@@ -1352,14 +1502,26 @@ export function createRunSupplemental(deps: McpIoDeps): (
         hits.push({ path: toRelativePath(file.path, rootDir), line: match.line, preview: match.preview });
       }
     }
+    const account = pageSearchHits(hits, args ?? {}, page.limit, page.offset, {
+      totalMatches: result.totalMatches,
+      truncated: result.truncated,
+    });
     return {
-      ...pageSearchHits(hits, args ?? {}, page.limit, page.offset, {
-        totalMatches: result.totalMatches,
-        truncated: result.truncated,
-      }),
+      ...account,
+      // S8 腿2："none" ⇒ 投影层剥 preview（账已按全量命中算好，与 full 逐位一致、游标跨模式互认）
+      ...(previewMode === 'none' ? { hits: stripPreviewFields((account['hits'] as Record<string, unknown>[]) ?? []) } : {}),
       filesScanned: result.filesScanned,
       elapsedMs: result.elapsedMs,
       skipped: result.skipped,
+      // S8 腿1：软时限账透传（S1 语义，不重造）。引擎没报 partial ⇒ 应答不带这个键（旧宿主零漂移）。
+      ...(result.partial === true
+        ? {
+            partial: true,
+            ...(typeof result.partialReason === 'string' && result.partialReason !== ''
+              ? { partialReason: result.partialReason }
+              : {}),
+          }
+        : {}),
       // 检索结果是从盘上现算的：`fsFreshness` 说「自你上一次检索以来，根下动过几处」。
       // 多根（scope:'sources'）只对第一根建基线，其余根在 target 里点名——不假装全覆盖。
       fsFreshness: await fsFreshnessListing(
