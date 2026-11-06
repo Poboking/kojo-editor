@@ -2438,7 +2438,56 @@ fn resume_past_the_end_is_an_empty_exhausted_page_not_a_repeat() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 判据 ②的另一半：**逐行扫描与字面量单趟快道在凭据下同产出**（两条扫描路径不许分叉）。
+/// 判据 ②的合缝处：**MCP 腿的取页算术 × 真引擎**（不靠 JS 镜像）。
+/// 腿的算法是「段起点 = ⌊偏移 / 每文件上限⌋ × 每文件上限；窗口 = min(5000, 段内偏移 + limit)；
+/// 一页取 limit 条」。这里用真引擎按这把尺逐页走到穷尽，与解析式真值**逐条同序**比对
+/// （limit=200 ⇒ 一页跨不满一段，段界处的偏移恰好落在 500 的整倍数上——那正是最容易串位的一格）。
+#[test]
+fn resume_pages_under_the_leg_page_math_enumerate_one_dense_file_exactly() {
+    let hits = 2600usize; // 5 段 + 余 100 条，且跨过「段界 == limit 整倍数」那一格
+    let limit = 200usize;
+    let dir = resume_fixture("resume-legmath", hits, false);
+    let file = dir.join("a.erb");
+    let root = dir.clone();
+    let truth = resume_expected_seq(&file, hits);
+
+    let mut pages: Vec<String> = Vec::new();
+    let let mut_offset = 0usize;
+    let mut offset = 0usize;
+    let mut calls = 0usize;
+    let mut last_truncated = true;
+    while calls < 64 {
+        calls += 1;
+        let segment = offset / SEARCH_PER_FILE_CAP;
+        let skip = segment * SEARCH_PER_FILE_CAP;
+        let in_segment = offset - skip;
+        let window = SEARCH_HARD_CAP.min(in_segment + limit);
+        let res = run(&resume_request(
+            &root,
+            "HIT",
+            if skip == 0 { None } else { Some(skip) },
+            Some(window),
+        ));
+        assert!(
+            res.files.iter().all(|f| f.matches.len() <= SEARCH_PER_FILE_CAP),
+            "第 {calls} 次调用：每文件返回仍 ≤ 单文件上限"
+        );
+        let seq = resume_seq(&res);
+        let page: Vec<String> = seq.iter().skip(in_segment).take(limit).cloned().collect();
+        assert!(!(page.is_empty() && res.truncated), "空页还带 truncated ⇒ 腿会翻出「空页 + hasMore:true」");
+        last_truncated = res.truncated;
+        offset += page.len();
+        pages.extend(page);
+        if !last_truncated || calls >= 64 {
+            break;
+        }
+    }
+    assert_eq!(pages.len(), hits, "逐页拼接的条数即真值条数");
+    assert_eq!(pages, truth, "腿的取页算术与真引擎合成后：逐条同序、无重、无漏");
+    assert_eq!(new HashSet::<String>::from_iter(pages.iter().cloned()).len(), hits);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn resume_credential_is_identical_on_both_scan_paths() {
     let dir = resume_fixture("resume-both", RESUME_HITS, false);
