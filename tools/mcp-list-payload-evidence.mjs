@@ -31,6 +31,11 @@
  *   node tools/mcp-list-payload-evidence.mjs dedup  [--out <json>]   # 逐字重复账（B22：哪些字符串被几枚面各抄一份）
  *   node tools/mcp-list-payload-evidence.mjs shell  [--n 24] [--rearm] [--out <json>]
  *   node tools/mcp-list-payload-evidence.mjs compare [--n 24]      # shell 的 tools/list vs 同壳单条 tools/call
+ *   node tools/mcp-list-payload-evidence.mjs wire   [--n 3] [--out <json>] [--no-approve]
+ *     ↑ B26 补的**线协议逐字段账**模式（不改上面任何模式的判据语义）：同一台真壳里抓两帧
+ *       `tools/list` 全帧（缺省只读会话 + 全量批准会话），与 `static` 面**逐格对账**
+ *       （信封 / `_meta` / 逐枚工具字节差 / 序列化漂移），并把 Rust 的 2048 字符闸
+ *       做成**壳内实拍**（帧里最长描述、有无 `…[truncated]`、schema 侧描述同样查）。
  * 退出码：0 全绿；2 参数 / 通道不对（没起真壳、mode 不是 shell、注册表装不起来）；
  *         3 端点起不来 / 语料或项目没就位；4 有失败帧（已取到的读数仍写出）。
  */
@@ -58,13 +63,14 @@ function parseArgs(argv) {
     corpusDir: null,
     out: null,
     allowRearm: false,
+    noApprove: false,
     armWaitMs: 90_000,
     callN: 24,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     const next = () => argv[++i];
-    if (a === 'static' || a === 'shell' || a === 'compare' || a === 'dedup') out.cmd = a;
+    if (a === 'static' || a === 'shell' || a === 'compare' || a === 'dedup' || a === 'wire') out.cmd = a;
     else if (a === '--top') out.top = Number(next());
     else if (a === '--n') out.n = Number(next());
     else if (a === '--call-n') out.callN = Number(next());
@@ -73,6 +79,7 @@ function parseArgs(argv) {
     else if (a === '--out') out.out = next();
     else if (a === '--arm-wait-ms') out.armWaitMs = Number(next());
     else if (a === '--rearm') out.allowRearm = true;
+    else if (a === '--no-approve') out.noApprove = true;
     else if (a === '--help' || a === '-h') {
       console.log(
         '用法：node tools/mcp-list-payload-evidence.mjs <static|shell|compare>' +
@@ -651,13 +658,22 @@ function proveChannel() {
       [
         '--input-type=module',
         '-e',
+        // 注意（B26 实拍修）：这一格原本写的是 `const fs=require('node:fs')`——`--input-type=module`
+        // 底下 **没有 `require`**，内联脚本一进来就 ReferenceError，stdout 空 ⇒ 外层把
+        // `path.join('', 'session.json')` 当会话文件读，报 ENOENT，`shell`/`wire` 两面
+        // 从此永远起不来（B22 那次「真壳未取」的第二条真因，第一条是共享 cargo target 争锁）。
+        // 会话目录仍走 debug-lib 的 `sessionDir`（真源），不自己拼哈希。
         `const {sessionDir}=await import(${JSON.stringify(pathToFileURL(path.join(REPO, 'tools', 'debug-lib.mjs')).href)});
-         const fs=require('node:fs');console.log(JSON.stringify({dir:sessionDir(${JSON.stringify(REPO)}),file:process.env.KOJO_DEBUG_SESSION??null}))`,
+         console.log(JSON.stringify({dir:sessionDir(${JSON.stringify(REPO)}),file:process.env.KOJO_DEBUG_SESSION??null}))`,
       ],
       { cwd: REPO, encoding: 'utf-8', timeout: 30_000 },
     );
+    if (req.status !== 0) {
+      throw new Error(`debug-lib 会话目录解析失败 rc=${req.status}：${String(req.stderr ?? '').slice(0, 200)}`);
+    }
     const j = lastJson(req.stdout ?? '');
-    const file = j?.file ?? path.join(j?.dir ?? '', 'session.json');
+    if (!j?.dir) throw new Error('debug-lib 没回 sessionDir（读数不可信，拒出数）');
+    const file = j.file ?? path.join(j.dir, 'session.json');
     sessFile = file;
     sess = JSON.parse(fs.readFileSync(file, 'utf-8'));
   } catch (err) {
@@ -692,8 +708,9 @@ function proveChannel() {
   };
 }
 
-/** 一帧 POST：每帧一条新连接（端点恒 `Connection: close`，不许偷连复用）。三闸按生产形态带上。 */
-function postFrame(endpoint, token, frame) {
+/** 一帧 POST：每帧一条新连接（端点恒 `Connection: close`，不许偷连复用）。三闸按生产形态带上。
+ *  `extraHeaders`（additive，B26）：只用于点名会话身份（`x-mcp-client-id`），默认不带 ⇒ 老调用点逐字不变。 */
+function postFrame(endpoint, token, frame, extraHeaders = null) {
   return new Promise((resolve) => {
     const body = Buffer.from(JSON.stringify([frame]), 'utf-8');
     const t0 = performance.now();
@@ -709,6 +726,7 @@ function postFrame(endpoint, token, frame) {
           authorization: `Bearer ${token}`,
           origin: `http://${endpoint.host}:${endpoint.port}`,
           'content-length': body.length,
+          ...(extraHeaders ?? {}),
         },
         agent: false,
       },
@@ -727,7 +745,7 @@ function postFrame(endpoint, token, frame) {
             parseError = e.message;
           }
           const parseMs = performance.now() - p0;
-          resolve({ wallMs, parseMs, status: res.statusCode, bodyBytes: raw.length, json, parseError });
+          resolve({ wallMs, parseMs, status: res.statusCode, bodyBytes: raw.length, raw, json, parseError });
         });
       },
     );
@@ -1147,6 +1165,258 @@ async function faceShell(args, { withCall = false }) {
   return report;
 }
 
+/* ======================================================================
+ * C 面：线协议逐字段账（B26 真壳一帧实测）
+ *   同一台真壳里抓两帧 `tools/list` 全帧（缺省只读会话 / 全量批准会话），
+ *   与 `static` 面逐格对账；顺带把 Rust 的 2048 字符闸做成**壳内实拍**。
+ *   口径：一帧都不裁、不估算——所有字节都从**真实 HTTP 响应体**里量。
+ * ===================================================================== */
+
+/** 递归收集一棵 JSON 树里所有 `description` 字符串（线协议侧，与 A 面同款遍历）。 */
+function wireDescriptions(node, acc = []) {
+  if (Array.isArray(node)) {
+    for (const item of node) wireDescriptions(item, acc);
+    return acc;
+  }
+  if (node && typeof node === 'object') {
+    for (const [k, v] of Object.entries(node)) {
+      if (k === 'description' && typeof v === 'string') acc.push(v);
+      else wireDescriptions(v, acc);
+    }
+  }
+  return acc;
+}
+
+/** 逐枚工具的线协议字节账（与 A 面 `toolByteBreakdown` 同字段，但数据源＝**壳里回来的那一帧**）。 */
+function wireToolBytes(tool) {
+  return {
+    name: tool.name,
+    tier: tool.tier,
+    bytes: utf8Bytes(tool),
+    descriptionBytes: tool.description === undefined ? 0 : utf8Bytes(tool.description),
+    inputSchemaBytes: tool.inputSchema === undefined ? 0 : utf8Bytes(tool.inputSchema),
+    wireKeys: Object.keys(tool).sort(),
+    descriptionChars: (tool.description ?? '').length,
+    truncated: typeof tool.description === 'string' && tool.description.includes(TRUNCATION_MARK),
+  };
+}
+
+const TRUNCATION_MARK = '…[truncated]';
+
+/** 一个会话一帧的完整账目。`staticTools`＝同档位的静态面（线协议形状，用于逐格对账）。 */
+function accountWireFace({ label, clientId, rawBodyBytes, parsedFrame, staticFrameBytes, staticTools }) {
+  const tools = parsedFrame.result?.tools ?? [];
+  const wire = tools.map(wireToolBytes);
+  const parsedFrameBytes = utf8Bytes(parsedFrame);
+  const toolsArrayBytes = utf8Bytes(tools);
+  const frameNoMeta = JSON.parse(JSON.stringify(parsedFrame));
+  delete frameNoMeta.result?._meta;
+  const noMetaBytes = utf8Bytes(frameNoMeta);
+  const staticByName = new Map(staticTools.map((t) => [t.name, t]));
+  const diffs = [];
+  for (const w of wire) {
+    const s = staticByName.get(w.name);
+    if (!s) {
+      diffs.push({ name: w.name, why: '壳里出现但静态面没有' });
+      continue;
+    }
+    const sBytes = utf8Bytes(s);
+    const sDescChars = (s.description ?? '').length;
+    if (sBytes !== w.bytes || sDescChars !== w.descriptionChars || Object.keys(s).sort().join(',') !== w.wireKeys.join(',')) {
+      diffs.push({
+        name: w.name,
+        staticBytes: sBytes,
+        wireBytes: w.bytes,
+        deltaBytes: w.bytes - sBytes,
+        staticDescriptionChars: sDescChars,
+        wireDescriptionChars: w.descriptionChars,
+        deltaDescriptionBytes: w.descriptionBytes - utf8Bytes(s.description ?? ''),
+        deltaInputSchemaBytes: w.inputSchemaBytes - utf8Bytes(s.inputSchema ?? {}),
+        truncatedInWire: w.truncated,
+        wireKeys: w.wireKeys.join(','),
+        staticKeys: Object.keys(s).sort().join(','),
+      });
+    }
+  }
+  const descChars = wire.map((w) => ({ name: w.name, chars: w.descriptionChars, bytes: w.descriptionBytes }));
+  const allDescriptions = wireDescriptions(tools);
+  const schemaSideDescriptions = tools.flatMap((t) => wireDescriptions(t.inputSchema ?? null));
+  return {
+    label,
+    clientId,
+    toolCount: tools.length,
+    rawHttpBodyBytes: rawBodyBytes,
+    reparsedFrameBytes: parsedFrameBytes,
+    serializationDriftBytes: rawBodyBytes - parsedFrameBytes,
+    toolsArrayBytes,
+    envelopeBytes: parsedFrameBytes - toolsArrayBytes,
+    metaBytes: parsedFrameBytes - noMetaBytes,
+    metaKeys: Object.keys(parsedFrame.result?._meta ?? {}),
+    staticFrameBytes,
+    deltaWireVsStaticBytes: parsedFrameBytes - staticFrameBytes,
+    perToolDiffCount: diffs.length,
+    perToolDiffs: diffs.slice(0, 20),
+    perToolDiffBytesSum: diffs.reduce((a, d) => a + (d.deltaBytes ?? 0), 0),
+    toolsMissingFromWire: staticTools.filter((s) => !wire.some((w) => w.name === s.name)).map((s) => s.name),
+    descriptionGate: {
+      maxDescriptionChars: descChars.length ? Math.max(...descChars.map((d) => d.chars)) : null,
+      topDescriptions: descChars.sort((a, b) => b.chars - a.chars).slice(0, 5),
+      marginToCapChars: descChars.length ? 2048 - Math.max(...descChars.map((d) => d.chars)) : null,
+      toolsAtOrOverCap: descChars.filter((d) => d.chars >= 2048).length,
+      truncatedDescriptors: wire.filter((w) => w.truncated).map((w) => w.name),
+      descriptionStringCountInFrame: allDescriptions.length,
+      schemaSideDescriptionCount: schemaSideDescriptions.length,
+      schemaSideMaxChars: schemaSideDescriptions.length ? Math.max(...schemaSideDescriptions.map((d) => d.length)) : null,
+      schemaSideTruncatedCount: schemaSideDescriptions.filter((d) => d.includes(TRUNCATION_MARK)).length,
+      note: 'descriptionStringCountInFrame＝整帧里所有名为 description 的字符串（顶层 + inputSchema 各层，同款递归遍历）；schemaSide* 只走 inputSchema 子树。',
+    },
+    wireKeysOfOneTool: wire[0]?.wireKeys ?? null,
+    tierCounts: tools.reduce((a, t) => ({ ...a, [t.tier]: (a[t.tier] ?? 0) + 1 }), {}),
+  };
+}
+
+async function faceWire(args) {
+  const outFileForDumps = args.out ?? path.join(os.tmpdir(), `kojo-tools-list-wire-${Date.now()}.json`);
+  const channel = proveChannel();
+  console.log(
+    `[channel] mode=${channel.mode} · session=${channel.sessionId} · repoRoot=${channel.repoRoot} · cdp=:${channel.cdpPort}`,
+  );
+  const { endpoint, token } = startEndpoint();
+  console.log(`[endpoint] 127.0.0.1:${endpoint.port}${endpoint.path}（token 已取，不外印）`);
+
+  // 静态面对账基准：同一棵树现场装载注册表真源（不是抄来的旧数）。
+  const { mod, dispose } = await loadRegistry();
+  let staticFull;
+  let staticRead;
+  let allNames;
+  let privilegedNames;
+  try {
+    const reg = mod.createMcpCapabilityRegistry({});
+    const specAll = [
+      ...mod.SEMANTIC_TOOL_SPECS,
+      ...mod.KERNEL_IO_TOOL_SPECS,
+      ...mod.SUPPLEMENTAL_TOOL_SPECS,
+    ];
+    allNames = specAll.map((s) => s.name);
+    privilegedNames = specAll.filter((s) => s.tier === 'privileged').map((s) => s.name);
+    const pack = (tools) => ({
+      frameBytes: utf8Bytes({ jsonrpc: '2.0', id: 'wire-1', result: { tools: tools.map(wireTool) } }),
+      tools: tools.map(wireTool),
+    });
+    staticFull = pack(reg.listTools(scopeOf('privileged', allNames)));
+    staticRead = pack(reg.listTools(scopeOf('read')));
+  } finally {
+    await dispose();
+  }
+
+  const report = {
+    channel,
+    endpoint: { host: endpoint.host, port: endpoint.port, path: endpoint.path },
+    registrySpecTotal: allNames.length,
+    staticFrameBytes: { full: staticFull.frameBytes, read: staticRead.frameBytes },
+    startedAt: new Date().toISOString(),
+    sessions: {},
+    approval: null,
+  };
+
+  const grabFrame = async (clientId, frameId, dumpTag = null) => {
+    const frame = { jsonrpc: '2.0', id: frameId, method: 'tools/list', params: {} };
+    const headers = clientId ? { 'x-mcp-client-id': clientId } : null;
+    const r = await postFrame(endpoint, token, frame, headers);
+    const v = judgeList(r);
+    if (!v.ok) throw new Error(`${clientId ?? '(无 clientId)'} 的 tools/list 帧不成形：${v.why}`);
+    // 物证留档（B26）：把**原始响应体**逐字落到报告旁边（同一临时目录），
+    // 字节账才可离线复算；`--out` 指到哪就落哪，仓库里零产物。
+    if (dumpTag) {
+      try {
+        fs.writeFileSync(
+          `${outFileForDumps}.${dumpTag}.raw-frame.json`,
+          Buffer.isBuffer(r.raw) ? r.raw : JSON.stringify(r.json),
+        );
+      } catch {
+        /* 留档失败不影响读数 */
+      }
+    }
+    return r;
+  };
+
+  // 1) 缺省只读会话（未批准 ⇒ Rust 侧 tier=read、approvedTools 空）——预热 1 帧弃样，第 2 帧才留档。
+  {
+    const defaultId = 'laneal-default-1107';
+    await grabFrame(defaultId, 'wire-warm');
+    const r = await grabFrame(defaultId, 'wire-1', 'default');
+    report.sessions.defaultReadSession = accountWireFace({
+      label: '缺省只读会话（未批准，clientId 只在头里点名）',
+      clientId: defaultId,
+      rawBodyBytes: r.bodyBytes,
+      parsedFrame: r.json,
+      staticFrameBytes: staticRead.frameBytes,
+      staticTools: staticRead.tools,
+    });
+    const f = report.sessions.defaultReadSession;
+    console.log(
+      `[wire/default] 枚数=${f.toolCount} 响应体=${f.rawHttpBodyBytes}B 重解析=${f.reparsedFrameBytes}B ` +
+        `静态=${f.staticFrameBytes}B 差=${f.deltaWireVsStaticBytes}B 信封=${f.envelopeBytes}B _meta=${f.metaBytes}B ` +
+        `最长描述=${f.descriptionGate.maxDescriptionChars}字符 截断标记=${f.descriptionGate.truncatedDescriptors.length}枚`,
+    );
+  }
+
+  // 2) 全量批准会话：mcp_approve 只写第四张表（隔离 appDataDir），不碰内核写域、不碰任何闸值。
+  if (!args.noApprove) {
+    const approvedId = 'laneal-approved-1107';
+    const patterns = allNames.filter((n) => !n.startsWith('market'));
+    const ap = runDebugCli(
+      // Rust 命令签名是 `mcp_approve(args: ApproveArgs)`——非结构体入参走顶层，
+      // 因此整包必须再套一层 `{args:…}`（B26 实拍：裸传 ⇒ `invalid args … missing required key args`）。
+      ['invoke', 'mcp_approve', JSON.stringify({ args: { clientId: approvedId, tier: 'privileged', approvedRoots: [], approvedTools: patterns, approvedRootIds: [] } })],
+      { timeoutMs: 120_000 },
+    );
+    const apJson = lastJson(ap.stdout);
+    report.approval = {
+      rc: ap.rc,
+      clientId: approvedId,
+      patternsSent: patterns.length,
+      grantCountInTable: Array.isArray(apJson?.sessions) ? apJson.sessions.length : null,
+      note: '第四张表（mcp_approvals.json，随 --isolate 的 appDataDir 落临时目录）；与内核 writablePaths / exportFile 互不继承。',
+    };
+    if (ap.rc !== 0) {
+      report.sessions.fullApprovedSession = {
+        unavailable: true,
+        why: `mcp_approve rc=${ap.rc}：${String(ap.stdout).slice(0, 240)}`,
+      };
+      console.error(`[FAIL] mcp_approve rc=${ap.rc} ⇒ 全量批准帧未取到`);
+    } else {
+      await grabFrame(approvedId, 'wire-warm-a');
+      const r = await grabFrame(approvedId, 'wire-1', 'approved');
+      const acc = accountWireFace({
+        label: '全量批准会话（tier=privileged + 逐名批准全部工具）',
+        clientId: approvedId,
+        rawBodyBytes: r.bodyBytes,
+        parsedFrame: r.json,
+        staticFrameBytes: staticFull.frameBytes,
+        staticTools: staticFull.tools,
+      });
+      // 逐名批准形状：market_* 不在表内（fail-closed），故静态全量面与壳内全量面的差额里要交代这一格。
+      acc.marketNamesExcludedFromApproval = allNames.filter((n) => n.startsWith('market'));
+      acc.privilegedNameCount = privilegedNames.length;
+      report.sessions.fullApprovedSession = acc;
+      const f = acc;
+      console.log(
+        `[wire/approved] 枚数=${f.toolCount} 响应体=${f.rawHttpBodyBytes}B 重解析=${f.reparsedFrameBytes}B ` +
+          `静态=${f.staticFrameBytes}B 差=${f.deltaWireVsStaticBytes}B 信封=${f.envelopeBytes}B _meta=${f.metaBytes}B ` +
+          `逐枚差=${f.perToolDiffCount}枚（合计 ${f.perToolDiffBytesSum}B） 截断标记=${f.descriptionGate.truncatedDescriptors.length}枚`,
+      );
+    }
+  } else {
+    report.sessions.fullApprovedSession = { unavailable: true, why: '--no-approve 显式跳过' };
+  }
+
+  // 3) 台账里 tools/list 那一格（壳内自报，与客户端墙钟互不冒充）。
+  report.ledger = readLedger();
+  report.finishedAt = new Date().toISOString();
+  return report;
+}
+
 /* ------------------------------ 出数 ------------------------------ */
 
 async function main() {
@@ -1157,6 +1427,8 @@ async function main() {
     report = { mode: args.cmd, repo: REPO, generatedAt: new Date().toISOString(), static: await faceStatic(args) };
   } else if (args.cmd === 'dedup') {
     report = { mode: args.cmd, repo: REPO, generatedAt: new Date().toISOString(), dedup: await faceDedup(args) };
+  } else if (args.cmd === 'wire') {
+    report = { mode: args.cmd, repo: REPO, generatedAt: new Date().toISOString(), wire: await faceWire(args) };
   } else {
     report = { mode: args.cmd, repo: REPO, generatedAt: new Date().toISOString(), shell: await faceShell(args, { withCall: args.cmd === 'compare' }) };
   }
