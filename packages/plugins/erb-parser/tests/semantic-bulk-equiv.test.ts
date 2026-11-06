@@ -31,14 +31,14 @@ const DECLS = [
   '@FUNC_TWO(P, Q)',
   '    GLOBAL_A = P + Q',
   '    RETURN',
-  '@GETTIME()',
+  '@GETTIME(X, Y)',
   '    RETURN 0',
 ].join('\n');
 
 /** 调用面：三条腿各来一条，再加一条"应该被影子函数压住"的内建调用 */
 const CALLER = [
   '@CALLER()',
-  '    CALL FUNC_TWO, 1, 2, 3',
+  '    CALL FUNC_TWO, 1',
   '    IF UNDECLARED_READ == 1',
   '        A = STRLENS("a", "b")',
   '    ENDIF',
@@ -88,8 +88,8 @@ describe('R4b · 批量任务与逐文件就地逐条等价', () => {
     expect(face.some((f) => f.includes('ERB_ARITY_MISMATCH'))).toBe(true);
     expect(face.some((f) => f.includes('ERB_UNDEFINED_NAME'))).toBe(true);
     expect(face.some((f) => f.includes('ERB_BUILTIN_ARGS'))).toBe(true);
-    // 影子函数**让位**而不是消失：`@GETTIME()` 在项目里存在 ⇒ 这一条改按用户函数判
-    // （0 个形参给了 1 个实参 = 实参多给），内建签名那一路整体不判
+    // 影子函数**让位**而不是消失：`@GETTIME(X, Y)` 在项目里存在 ⇒ 这一条改按用户函数判
+    // （给了 1 个实参、缺必需形参 `Y` = 少给必需），内建签名那一路整体不判
     expect(face.some((f) => f.includes('ERB_BUILTIN_ARGS') && f.includes('GETTIME'))).toBe(false);
     expect(face.some((f) => f.includes('ERB_ARITY_MISMATCH') && f.includes('GETTIME'))).toBe(true);
   });

@@ -510,9 +510,6 @@ export const erbParserTasks: ComputeTaskTable = {
    挪一枚出去"）。这一层的唯一消费者就是本文件的任务表与 `plugin.ts` 的贡献，没有第二个
    使用场景值得为它花掉那格额度。 */
 
-/** 实参「多给」的稳定文案标记（`arity.ts` 的三种消息里只这一档是可证错误） */
-const ARITY_EXTRA_ARG_MARKER = '多出的实参';
-
 /** 规则执行失败的可读诊断码（问题面板可定位；不改写既有两码） */
 export const ERB_DIAGNOSTICS_RULE_FAILED = 'ERB_DIAGNOSTICS_RULE_FAILED';
 
@@ -622,11 +619,9 @@ export function collectErbSemanticDiagnostics(
     options.arityCatalog ?? (index === null ? null : (normalizedName: string) => arityParamsOf(index, normalizedName));
   if (catalog !== null) {
     try {
-      for (const d of collectArityDiagnostics({ path: file.path, text: file.text, catalog, visible })) {
-        // 少给（含省略可选）是 Emuera 的合法写法，见接线注①——只留"多给"
-        if (!d.message.includes(ARITY_EXTRA_ARG_MARKER)) continue;
-        decorations.push({ ...d, severity: 'warning' });
-      }
+      // D02 之后这里**没有过滤器**：`arity.ts` 只产出引擎真会失败的那一档
+      // （`arityOutcomeOf` 的 `missing-required`），接线层拿文案子串筛判据的老机制已删。
+      decorations.push(...collectArityDiagnostics({ path: file.path, text: file.text, catalog, visible }));
     } catch (err) {
       failedRules.push({ rule: 'arity', message: String(err) });
     }
@@ -660,7 +655,7 @@ export function collectErbSemanticDiagnostics(
      2. **影子函数让位**：项目里存在同名用户函数时该名字整体不判——用户定义优先，
          猜错边就是满屏假红（`isUserFunction` 由调用点按索引现读，或由批量快照给）；
      3. **独立诊断码**（`ERB_BUILTIN_ARGS` / `ERB_BUILTIN_ARG_TYPE`）：问题面板可按码
-         过滤，也不与用户函数那一路的接线注①（多给降 warning 的抗噪口径）互相污染。 */
+        过滤，也不与用户函数那一路（`arity.ts` 只产 `missing-required`）互相污染。 */
   const isUserFunction =
     options.isUserFunction ?? (index === null ? undefined : (upper: string) => index!.byName.has(upper));
   try {

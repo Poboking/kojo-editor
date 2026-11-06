@@ -39,9 +39,11 @@ const FIXTURE = [
 ].join('\n');
 
 const p = (name: string, hasDefault = false): ErbParam => ({ name, hasDefault });
+// 名字全用 ARG 家族时，D02 之后规则层一条不产（引擎给这些槽合成默认值）⇒ 目录里
+// 故意混进非家族名（`SEED` / `EXTRA` / `A` / `B`），让"少给必需"这一档真的能出诊断。
 const catalog = (name: string) => {
-  if (name === 'FOO') return [p('ARG')];
-  if (name === 'BAR') return [p('ARG'), p('ARG:1')];
+  if (name === 'FOO') return [p('A'), p('B')];
+  if (name === 'BAR') return [p('SEED'), p('EXTRA')];
   if (name === 'QUX') return [p('ARG', true)];
   return null;
 };
@@ -117,9 +119,9 @@ describe('共用扫描产物 · 等价性', () => {
 
   it('预筛只跳过不可能有调用点的行：表达式位与省略形照旧判', () => {
     // 无括号的表达式行、带括号的赋值右侧、字符串里的括号混排
-    const text = ['A = 1', 'B = FOO(1, 2, 3)', 'PRINT "BAR(1)"', 'CALL FOO'].join('\n');
+    const text = ['A = 1', 'B = FOO(1)', 'PRINT "BAR(1)"', 'CALL FOO'].join('\n');
     const out = collectArityDiagnostics({ path: 'A.ERB', text, catalog });
-    // 第 2 行表达式位多给 ⇒ 报；第 4 行 CALL 省略形少给 ⇒ 报；
+    // 第 2 行表达式位少给必需 ⇒ 报；第 4 行 CALL 省略形少给 ⇒ 报；
     // 第 1 行（无 `(` 无 CALL）与第 3 行（括号只在串里）不报
     expect(out.map((d) => d.line).sort((a, b) => a - b)).toEqual([2, 4]);
   });

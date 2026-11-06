@@ -5,16 +5,19 @@ import { normalizedUpper, visibleCodeLines, type VisibleCodeLine } from './refer
 /**
  * ERB 实参个数诊断（批次十 S7；**纯函数**：文本 + 函数目录进、波浪线数据出）。
  *
- * ## 为什么要有
+ * ## 为什么要有（以及为什么只剩一条）
  *
- * 引擎文档（Emuera `function.html`）把两侧规则写得很直白：
- * - 调用侧多给实参 = **错误**（"エラー(引数が多すぎる)"）；
- * - 调用侧少给实参 = 允许省略，但**没有默认值的形参**同样取证不到作者意图
- *   （引擎按 0 / 空串静默兜底，写错位置也照样跑）；
+ * 引擎权威是 `Process.CalledFunction.ConvertArg`（行号会漂），不是文档：
+ * - **多给**：转换循环的上界是 `fixedArgCount`，多余实参**既不报错也不警告**，直接丢弃
+ *   （`Statements/ArgumentBuilder.cs` 里那句 `warn("引数が多すぎます")` 是被注释掉的死码）
+ *   ⇒ 这一档**不产诊断**（D02 翻转：真语料 111 处「多给」全在跑的成品 mod，判据方向本来就反了）；
+ * - **少给**：槽位缺实参时取 `func.Def[i]`，而 `ErbLoader` 对 **ARG 家族形参无条件合成**默认值
+ *   （见 {@link IMPLICIT_DEFAULT_NAME}）⇒ 作者表里绝大多数槽"没有默认值"是**扫描器口径**，
+ *   不是引擎口径；只有名字不是 ARG 家族又没写 `=` 的槽，`Def[i]` 才真的是 null，
+ *   此时 `CompatiFuncArgOptional`（默认 false）那条 `CanNotOmitArgWithMessage` 才会响；
  * - 形参名可以写成**可变下标**（`ARG:X` / `ARG:(ARG:0)`），此时个数不可证。
  *
- * 前三件事里，前两件是作者最容易犯、引擎却只在运行时才"读歪"的错——把它们提前成
- * 波浪线，价值与结构体检同源。
+ * 于是这一层剩下的可证错误只有一条：{@link ArityOutcome} 的 `missing-required`。
  *
  * ## 可证明边界（错标比不标危险）
  *
@@ -314,56 +317,93 @@ function hasVariableSlot(params: readonly ErbParam[]): boolean {
   return false;
 }
 
-/** 必填下界：**最后一个没有默认值的形参**序号 + 1（默认值可写在中间，不能只数个数） */
+/**
+ * 引擎装载期会**合成**默认值的形参名家族：`ARG` / `ARGS` / `ARGF`（含任意下标形）。
+ *
+ * 出处（行号会漂，判据不会）：`Script/Loader/ErbLoader.cs` 解析函数定义的形参表时，
+ * 槽位没有显式 `= 值` 也会走 `if (canDef) def = new SingleLongTerm(0)`（float→0.0、
+ * string→""），而 `canDef` 恰好就是「ARG 家族或私有变量」。于是
+ * `Process.CalledFunction.ConvertArg` 里那句 `term = func.Def[i]` 对 ARG 家族**永不为 null**，
+ * 紧随其后的 `CanNotOmitArgWithMessage`（受 `CompatiFuncArgOptional` 支配，eraTW 的
+ * `emuera.config` 明写 `ALLOW ARGUMENTS OMISSION FOR USER FUNCTIONS:NO`）就只剩
+ * 「非 ARG 家族、又确实不是私有的槽」这一条可达路径——真语料 45,079 处「少给」全部落在
+ * ARG 家族那一侧（`arity.corpus.test.ts` 的 `missing-tolerated` 计数钉住这条事实）。
+ *
+ * 换句话说：**作者写的 `@FUNC(ARG, ARG:1)` 里没有一个槽是"必需"的**，少给就是少给，
+ * 引擎按 0 / "" 补上继续跑。只有名字不是 ARG 家族的槽才可能真的报错。
+ */
+const IMPLICIT_DEFAULT_NAME = /^(?:ARG|ARGS|ARGF)\b/i;
+
+/** 该槽在引擎里能否被省略（显式默认值，或 ARG 家族的合成默认值） */
+function omissibleSlot(param: ErbParam): boolean {
+  return param.hasDefault || IMPLICIT_DEFAULT_NAME.test(param.name);
+}
+
+/** 必填下界：**最后一个引擎不会补默认值的形参**序号 + 1（默认值可写在中间，不能只数个数） */
 function requiredCount(params: readonly ErbParam[]): number {
   let required = 0;
   for (let i = 0; i < params.length; i++) {
-    if (!params[i]!.hasDefault) required = i + 1;
+    if (!omissibleSlot(params[i]!)) required = i + 1;
   }
   return required;
 }
 
-/** 一处调用点 → 一条诊断（正常个数 ⇒ null） */
-function issueOf(site: ErbCallSite, params: readonly ErbParam[]): LineDecoration | null {
-  if (hasVariableSlot(params)) return null;
+/**
+ * 一处调用点对一张形参表的**可证结论**（判据的唯一真源；诊断只是它的一个投影）。
+ *
+ * 分成"结论 + 投影"两件事的理由：引擎对四档的容忍度本来就不同，而**接线层需要什么都能查到、
+ * 但只把可证错误画上波浪线**。此前判据直接把结论烤成文案，接线层（`offload.ts`）只能拿
+ * 子串去筛——那是第二判据，而且是会随措辞漂移的那一份。
+ */
+export type ArityOutcome =
+  | { readonly kind: 'ok' }
+  /** 形参表带可变下标：个数本身由运行期算，不猜 */
+  | { readonly kind: 'unprovable'; readonly reason: 'variable-slot' }
+  /** 多给——引擎 `ConvertArg` 只吃到 `fixedArgCount`，多余实参**静默丢弃**（既不报错也不警告） */
+  | { readonly kind: 'extra'; readonly total: number; readonly given: number }
+  /** 省略的槽全部有默认值（显式 `=` 或 ARG 家族的合成默认值）：引擎合法写法 */
+  | { readonly kind: 'omitted-optional'; readonly total: number; readonly required: number; readonly given: number }
+  /** 少给了**引擎不会补默认值**的必需槽 ⇒ `CanNotOmitArgWithMessage`：本模块唯一可证错误 */
+  | {
+      readonly kind: 'missing-required';
+      readonly total: number;
+      readonly required: number;
+      readonly given: number;
+      readonly paramName: string;
+    };
+
+/** 结论 = 个数与形参表的关系（**纯函数**，不碰文案） */
+export function arityOutcomeOf(site: ErbCallSite, params: readonly ErbParam[]): ArityOutcome {
+  if (hasVariableSlot(params)) return { kind: 'unprovable', reason: 'variable-slot' };
   const total = params.length;
   const required = requiredCount(params);
   const given = site.given;
+  if (given > total) return { kind: 'extra', total, given };
+  if (given < required)
+    return { kind: 'missing-required', total, required, given, paramName: params[required - 1]!.name };
+  if (given < total) return { kind: 'omitted-optional', total, required, given };
+  return { kind: 'ok' };
+}
 
+/**
+ * 结论 → 波浪线：**只有 `missing-required` 有投影**（引擎运行期真会报的那条）。
+ *
+ * `extra` / `omitted-optional` / `ok` / `unprovable` 一律不产——不是"留支待日后打开"，
+ * 而是引擎在这一档根本不会失败，把它烤成诊断就是把作者的正常写法当错。
+ */
+function decorationOf(site: ErbCallSite, outcome: ArityOutcome): LineDecoration | null {
+  if (outcome.kind !== 'missing-required') return null;
   const range =
     site.argFirst >= 0
       ? { startColumn: site.argFirst + 1, endColumn: site.argLast + 1 }
       : { startColumn: site.nameStart + 1, endColumn: site.nameEnd + 1 };
-  const head = `函数「${site.name}」的实参个数不对：期望 ${required > given ? required : total} 个，实际 ${given} 个`;
-
-  if (given > total) {
-    return {
-      line: site.line,
-      severity: 'error',
-      message: `函数「${site.name}」的实参个数不对：期望 ${total} 个，实际 ${given} 个——多出的实参不会传给函数。`,
-      ...range,
-      code: ARITY_MISMATCH_CODE,
-    };
-  }
-  if (given < required) {
-    return {
-      line: site.line,
-      severity: 'error',
-      message: `${head}——第 ${required} 个形参「${params[required - 1]!.name}」没有默认值，实参不能省略。`,
-      ...range,
-      code: ARITY_MISMATCH_CODE,
-    };
-  }
-  if (given < total) {
-    return {
-      line: site.line,
-      severity: 'warning',
-      message: `${head}——省略的是有默认值的形参，补上更清楚。`,
-      ...range,
-      code: ARITY_MISMATCH_CODE,
-    };
-  }
-  return null;
+  return {
+    line: site.line,
+    severity: 'error',
+    message: `函数「${site.name}」的实参个数不对：期望 ${outcome.required} 个，实际 ${outcome.given} 个——第 ${outcome.required} 个形参「${outcome.paramName}」没有默认值，实参不能省略。`,
+    ...range,
+    code: ARITY_MISMATCH_CODE,
+  };
 }
 
 /**
@@ -377,6 +417,9 @@ function issueOf(site: ErbCallSite, params: readonly ErbParam[]): LineDecoration
  * 回查（{@link arityParamsOf}），而**整项目一次成型**的那条路径（R4b 的批量上下文）
  * 预先建了 `startLine → ErbFunction` 的表，逐名回查是 O(1) 而不是每次 `find` 一遍。
  * 判据本身只有这一份——两条路径不可能给出不同的答案。
+ *
+ * `hasDefault` 在这里只是**一致性比较的一个维度**（两边写的 `= 值` 不同就是两张表），
+ * 它不参与"能不能省略"的结论——那一结论由 {@link omissibleSlot} 按引擎口径再判一次。
  */
 export function agreedParamsOf(
   refs: readonly ErbFunctionRef[],
@@ -450,7 +493,7 @@ export function collectArityDiagnostics(input: ArityInput): LineDecoration[] {
     for (const site of erbCallSitesOf(line, code)) {
       const params = input.catalog(normalizedUpper(site.name));
       if (!params) continue;
-      const issue = issueOf(site, params);
+      const issue = decorationOf(site, arityOutcomeOf(site, params));
       if (issue !== null) out.push(issue);
     }
   }

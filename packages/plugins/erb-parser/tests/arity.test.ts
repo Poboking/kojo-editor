@@ -2,8 +2,8 @@
  * ERB 实参个数诊断（`arity.ts`）单测——**纯函数**：文本 + 函数目录进、>= 波浪线数据出。
  *
  * 钉死六类形状（任务要求的最小/最大/可变/未知/零参，另加省略形与安全边界）：
- * (a) 不足（缺必填）→ error；只缺可选 → warning；
- * (b) 超出 → error；
+ * (a) 少给**引擎不补默认值**的槽 → error（唯一可证错误）；
+ * (b) 多给 / 省略有默认值的槽 / ARG 家族槽的少给 ⇒ **一律不产**（引擎全容忍，D02 翻转）；
  * (c) 可变下标形参（`ARG:X`）⇒ 不判；
  * (d) 目录不认识 ⇒ 不报；
  * (e) 零参函数 / 省略形（`CALL FOO`、尾逗号）按 0 个实参算；
@@ -25,7 +25,7 @@ const run = (text: string, table: Record<string, readonly ErbParam[]>, path = 'A
 
 describe('collectArityDiagnostics · 个数判定', () => {
   it('缺必填 → error，range 落在实参区（第 1 个实参）', () => {
-    const out = run('CALL FOO, 1\n', { FOO: [p('ARG'), p('ARG:1')] });
+    const out = run('CALL FOO, 1\n', { FOO: [p('ARG'), p('TOTAL')] });
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({
       line: 1,
@@ -35,45 +35,45 @@ describe('collectArityDiagnostics · 个数判定', () => {
       endColumn: 12,
     });
     expect(out[0]!.message).toContain('期望 2 个，实际 1 个');
+    expect(out[0]!.message).toContain('「TOTAL」没有默认值');
   });
 
-  it('多给 → error，range 覆盖首末实参', () => {
-    const out = run('CALL FOO, 1, 2, 3\n', { FOO: [p('ARG'), p('ARG:1')] });
-    expect(out).toHaveLength(1);
-    expect(out[0]!.severity).toBe('error');
-    expect(out[0]!.message).toContain('期望 2 个，实际 3 个');
-    expect([out[0]!.startColumn, out[0]!.endColumn]).toEqual([11, 18]);
+  it('ARG 家族形参的少给 ⇒ 不产（装载期合成默认值，引擎不报错）', () => {
+    // `@FUNC(ARG, ARG:1)` 调用只给 1 个：`ErbLoader` 给 ARG:1 补 0，`ConvertArg` 取 `Def[i]` 即返回
+    expect(run('CALL FOO, 1\n', { FOO: [p('ARG'), p('ARG:1')] })).toEqual([]);
+    expect(run('CALL FOO\n', { FOO: [p('ARG'), p('ARGS:1'), p('ARGF:2')] })).toEqual([]);
+    // 家族名带初值写法同样不产
+    expect(run('CALL FOO, 1\n', { FOO: [p('ARG'), p('ARG:1', true)] })).toEqual([]);
   });
 
-  it('只缺可选（有默认值）→ warning，仍是同一个诊断码', () => {
-    const out = run('CALL FOO, 1\n', { FOO: [p('ARG'), p('OPT', true)] });
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ severity: 'warning', code: ARITY_MISMATCH_CODE });
-    expect(out[0]!.message).toContain('期望 2 个，实际 1 个');
+  it('多给 ⇒ 不产（引擎 ConvertArg 只循环到 fixedArgCount，多余实参静默丢弃）', () => {
+    expect(run('CALL FOO, 1, 2, 3\n', { FOO: [p('A'), p('B')] })).toEqual([]);
+    expect(run('CALL ZERO, 1\n', { ZERO: [] })).toEqual([]);
+    expect(run('\tTRYCALL FOO, 1, 2\n', { FOO: [p('A')] })).toEqual([]);
+    expect(run('X = FOO(1, 2)\n', { FOO: [p('A')] })).toEqual([]);
   });
 
-  it('全可选且零实参 → warning，range 落函数名', () => {
-    const out = run('CALL FOO\n', { FOO: [p('OPT', true)] });
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatchObject({ severity: 'warning', startColumn: 6, endColumn: 9 });
-    expect(out[0]!.message).toContain('期望 1 个，实际 0 个');
+  it('只缺可选（显式默认值）⇒ 不产（引擎合法写法，此前降 warning 也无必要）', () => {
+    expect(run('CALL FOO, 1\n', { FOO: [p('A'), p('OPT', true)] })).toEqual([]);
+    expect(run('CALL FOO\n', { FOO: [p('OPT', true)] })).toEqual([]);
   });
 
-  it('TRYCALL 与 CALL 同一条判据', () => {
-    const out = run('\tTRYCALL FOO, 1, 2\n', { FOO: [p('A')] });
-    expect(out).toHaveLength(1);
-    expect(out[0]!.severity).toBe('error');
-    expect(out[0]!.message).toContain('期望 1 个，实际 2 个');
+  it('少给必需：CALL / TRYCALL / 表达式三条调用面同判据', () => {
+    const table = { FOO: [p('A'), p('B')] };
+    for (const text of ['CALL FOO, 1\n', 'TRYCALL FOO, 1\n', 'X = FOO(1)\n']) {
+      const out = run(text, table);
+      expect(out, text).toHaveLength(1);
+      expect(out[0]!.severity).toBe('error');
+      expect(out[0]!.message).toContain('期望 2 个，实际 1 个');
+    }
   });
 });
 
 describe('collectArityDiagnostics · 省略形与零参', () => {
-  it('零参函数：无实参不报；带实参报「期望 0 个」', () => {
+  it('零参函数：给多少个实参都不产（多给 = 引擎静默丢弃）', () => {
     expect(run('CALL ZERO\n', { ZERO: [] })).toEqual([]);
-    const out = run('CALL ZERO, 1\n', { ZERO: [] });
-    expect(out).toHaveLength(1);
-    expect(out[0]!.message).toContain('期望 0 个，实际 1 个');
-    expect(out[0]!.startColumn).toBe(12);
+    expect(run('CALL ZERO, 1\n', { ZERO: [] })).toEqual([]);
+    expect(run('CALL ZERO, 1, 2, 3\n', { ZERO: [] })).toEqual([]);
   });
 
   it('`CALL FOO` 与尾逗号都算 0 个实参（末位空槽不是第 N 参）', () => {
@@ -85,11 +85,12 @@ describe('collectArityDiagnostics · 省略形与零参', () => {
     expect(middle[0]!.message).toContain('期望 3 个，实际 2 个');
   });
 
-  it('括号形里的字符串逗号不分隔', () => {
+  it('括号形里的字符串逗号不分隔（数错就会把少给判成多给）', () => {
     expect(run('CALL FOO("a,b", 2)\n', { FOO: [p('A'), p('B')] })).toEqual([]);
-    const out = run('CALL FOO("a,b", 2)\n', { FOO: [p('A')] });
-    expect(out[0]!.message).toContain('期望 1 个，实际 2 个');
-    expect([out[0]!.startColumn, out[0]!.endColumn]).toEqual([10, 18]);
+    const out = run('CALL FOO("a,b")\n', { FOO: [p('A'), p('B')] });
+    expect(out).toHaveLength(1);
+    expect(out[0]!.message).toContain('期望 2 个，实际 1 个');
+    expect([out[0]!.startColumn, out[0]!.endColumn]).toEqual([10, 15]);
   });
 });
 
@@ -124,10 +125,10 @@ describe('collectArityDiagnostics · 不猜的边界', () => {
 
 describe('collectArityDiagnostics · 表达式调用', () => {
   it('表达式调用按实参区报错', () => {
-    const out = run('X = FOO(1, 2)\n', { FOO: [p('A')] });
+    const out = run('X = FOO(1)\n', { FOO: [p('A'), p('B')] });
     expect(out).toHaveLength(1);
-    expect(out[0]!.message).toContain('期望 1 个，实际 2 个');
-    expect([out[0]!.startColumn, out[0]!.endColumn]).toEqual([9, 13]);
+    expect(out[0]!.message).toContain('期望 2 个，实际 1 个');
+    expect([out[0]!.startColumn, out[0]!.endColumn]).toEqual([9, 10]);
   });
 
   it('零实参表达式调用：range 落函数名', () => {
@@ -137,9 +138,9 @@ describe('collectArityDiagnostics · 表达式调用', () => {
   });
 
   it('CALL 括号形只报一条（表达式腿不重复报名字槽）', () => {
-    const out = run('CALL FOO(1, 2)\n', { FOO: [p('A')] });
+    const out = run('CALL FOO(1)\n', { FOO: [p('A'), p('B')] });
     expect(out).toHaveLength(1);
-    expect(out[0]!.message).toContain('期望 1 个，实际 2 个');
+    expect(out[0]!.message).toContain('期望 2 个，实际 1 个');
   });
 
   it('定义行 @FOO(ARG) 不是调用点', () => {
