@@ -550,6 +550,15 @@ export interface ErbSemanticDiagnosticsOptions {
    * 被问，所以过滤掉其余名字**是等价的**，不是近似。
    */
   readonly isUserFunction?: (normalizedName: string) => boolean;
+  /**
+   * 是否把用户函数「少给必需」这一档定罪上屏（additive，D02 2026-11-24）。
+   *
+   * 缺省跟随 `arity.ts` 的 `MISSING_REQUIRED_DIAGNOSABLE_BY_DEFAULT`（= false）：
+   * eraTW 语料该档 473 处命中全部落在"函数体内 `#DIM` 的私有数组当形参"这一不可证形态，
+   * 引擎替作者合成默认值 ⇒ 上屏即假红。判据分档不受此开关影响（`arityOutcomeOf` 照旧）。
+   * 这里只做**结构化转发**，不再有按消息子串筛的老机制。
+   */
+  readonly diagnoseMissingRequired?: boolean;
 }
 
 export interface ErbSemanticDiagnosticsResult {
@@ -621,7 +630,17 @@ export function collectErbSemanticDiagnostics(
     try {
       // D02 之后这里**没有过滤器**：`arity.ts` 只产出引擎真会失败的那一档
       // （`arityOutcomeOf` 的 `missing-required`），接线层拿文案子串筛判据的老机制已删。
-      decorations.push(...collectArityDiagnostics({ path: file.path, text: file.text, catalog, visible }));
+      decorations.push(
+        ...collectArityDiagnostics({
+          path: file.path,
+          text: file.text,
+          catalog,
+          visible,
+          ...(options.diagnoseMissingRequired === undefined
+            ? {}
+            : { diagnoseMissingRequired: options.diagnoseMissingRequired }),
+        }),
+      );
     } catch (err) {
       failedRules.push({ rule: 'arity', message: String(err) });
     }

@@ -83,15 +83,16 @@ const faceOf = (decos: readonly { line: number; startColumn?: number; endColumn?
   decos.map((d) => `${d.line}:${d.startColumn ?? ''}:${d.endColumn ?? ''}:${d.severity}:${d.code ?? ''}:${d.message}`);
 
 describe('R4b · 批量任务与逐文件就地逐条等价', () => {
-  it('三腿都在出（这条用例不是"空对空"）', () => {
+  it('两条腿默认在出，实参腿默认沉默（D02：少给必需的定罪开关关着）', () => {
     const face = faceOf(editorPathOf(INDEX, FILES[0]!));
-    expect(face.some((f) => f.includes('ERB_ARITY_MISMATCH'))).toBe(true);
+    // 实参个数那一档要第三格事实（形参基础名的声明位置）才谈得上定罪 ⇒ 默认 0 条；
+    // 判据本身由 `arity.test.ts` / `arity.corpus.test.ts` 直接开开关覆盖，不在这里假装在出。
+    expect(face.some((f) => f.includes('ERB_ARITY_MISMATCH'))).toBe(false);
     expect(face.some((f) => f.includes('ERB_UNDEFINED_NAME'))).toBe(true);
     expect(face.some((f) => f.includes('ERB_BUILTIN_ARGS'))).toBe(true);
-    // 影子函数**让位**而不是消失：`@GETTIME(X, Y)` 在项目里存在 ⇒ 这一条改按用户函数判
-    // （给了 1 个实参、缺必需形参 `Y` = 少给必需），内建签名那一路整体不判
+    // 影子函数**让位**而不是消失：`@GETTIME(X, Y)` 在项目里存在 ⇒ 内建签名那一路整体不判
+    // （这一条与实参腿开关无关：让位发生在内建腿，用户函数那一腿今天只分类）
     expect(face.some((f) => f.includes('ERB_BUILTIN_ARGS') && f.includes('GETTIME'))).toBe(false);
-    expect(face.some((f) => f.includes('ERB_ARITY_MISMATCH') && f.includes('GETTIME'))).toBe(true);
   });
 
   it('perFile[i] 与 execute 路径逐条相等，顺序也相同（不重排、不丢空）', () => {

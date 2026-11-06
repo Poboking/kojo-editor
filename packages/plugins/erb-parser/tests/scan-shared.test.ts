@@ -39,16 +39,22 @@ const FIXTURE = [
 ].join('\n');
 
 const p = (name: string, hasDefault = false): ErbParam => ({ name, hasDefault });
-// 名字全用 ARG 家族时，D02 之后规则层一条不产（引擎给这些槽合成默认值）⇒ 目录里
-// 故意混进非家族名（`SEED` / `EXTRA` / `A` / `B`），让"少给必需"这一档真的能出诊断。
+// D02 之后的可证形状：只有"带下标 + 基础名不是 ARG/ARGS/ARGF"的槽才算必需
+// （裸名与 ARG 家族槽由引擎合成默认值 ⇒ 少给不报），夹具照这个口径写。
 const catalog = (name: string) => {
-  if (name === 'FOO') return [p('A'), p('B')];
-  if (name === 'BAR') return [p('SEED'), p('EXTRA')];
+  if (name === 'FOO') return [p('G_ARR:1'), p('G_ARR:2')];
+  if (name === 'BAR') return [p('G_ARR:1')];
   if (name === 'QUX') return [p('ARG', true)];
   return null;
 };
 
-const ARITY_INPUT = { path: 'A.ERB', text: FIXTURE, catalog } as const;
+const ARITY_INPUT = {
+  path: 'A.ERB',
+  text: FIXTURE,
+  catalog,
+  // 本文件验的是"扫描形状等价"，不是定罪开关 ⇒ 这里显式打开少给必需的投影
+  diagnoseMissingRequired: true,
+} as const;
 
 describe('共用扫描产物 · 等价性', () => {
   it('摊平的可见行与逐个生成的可见行逐字段相同', () => {
@@ -120,7 +126,7 @@ describe('共用扫描产物 · 等价性', () => {
   it('预筛只跳过不可能有调用点的行：表达式位与省略形照旧判', () => {
     // 无括号的表达式行、带括号的赋值右侧、字符串里的括号混排
     const text = ['A = 1', 'B = FOO(1)', 'PRINT "BAR(1)"', 'CALL FOO'].join('\n');
-    const out = collectArityDiagnostics({ path: 'A.ERB', text, catalog });
+    const out = collectArityDiagnostics({ path: 'A.ERB', text, catalog, diagnoseMissingRequired: true });
     // 第 2 行表达式位少给必需 ⇒ 报；第 4 行 CALL 省略形少给 ⇒ 报；
     // 第 1 行（无 `(` 无 CALL）与第 3 行（括号只在串里）不报
     expect(out.map((d) => d.line).sort((a, b) => a - b)).toEqual([2, 4]);

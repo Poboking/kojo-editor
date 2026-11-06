@@ -17,7 +17,8 @@ import { normalizedUpper, visibleCodeLines, type VisibleCodeLine } from './refer
  *   此时 `CompatiFuncArgOptional`（默认 false）那条 `CanNotOmitArgWithMessage` 才会响；
  * - 形参名可以写成**可变下标**（`ARG:X` / `ARG:(ARG:0)`），此时个数不可证。
  *
- * 于是这一层剩下的可证错误只有一条：{@link ArityOutcome} 的 `missing-required`。
+ * 于是这一层剩下的可证错误只有一条：{@link ArityOutcome} 的 `missing-required`，
+ * 而它今天**只分类、默认不上屏**（缺的那格事实见 {@link MISSING_REQUIRED_DIAGNOSABLE_BY_DEFAULT}）。
  *
  * ## 可证明边界（错标比不标危险）
  *
@@ -65,6 +66,13 @@ export interface ArityInput {
   readonly catalog: ArityCatalog;
   /** 已摊平的可见行（`visibleCodeLineList` 产物）：多消费者共用时传它 */
   readonly visible?: readonly VisibleCodeLine[];
+  /**
+   * 是否把 `missing-required` 这一档定罪上屏（缺省 = {@link MISSING_REQUIRED_DIAGNOSABLE_BY_DEFAULT}，
+   * 即 **false**：eraTW 语料 473 处命中全是"私有数组当形参"这一类不可证形态）。
+   *
+   * 只关"投影"，不关判据：`arityOutcomeOf` 的分档结论与这条开关无关。
+   */
+  readonly diagnoseMissingRequired?: boolean;
 }
 
 /**
@@ -343,12 +351,34 @@ const IMPLICIT_DEFAULT_NAME = /^(?:ARG|ARGS|ARGF)\b/i;
 /** 形参名里是否带下标（`NAME:3` / `NAME：3`）——裸名走引擎合成默认值那条路 */
 const HAS_SUBSCRIPT = /[:：]/;
 
-/** 该槽在引擎里能否被省略（显式 `=` / 裸名 / ARG 家族的下标形） */
+/**
+ * 该槽在引擎里能否被省略（可证的那部分）。
+ *
+ * 显式 `=` ∨ 裸名 ∨ ARG 家族下标形 ⇒ **可证可省**（引擎补默认值）。
+ * 剩下的"带下标且基础名不是 ARG 家族"那一族（`@GetRandMaterial(QYT, PriceRange:0, PriceRange:1)`）
+ * 是唯一还可能是必需槽的形状——但紧邻定义行的 `#DIM PriceRange, 2` 说明它在真实语料里
+ * 是**函数体内声明的私有数组**（`canDef` 成立 ⇒ 装载期照样合成默认值 ⇒ 省略合法）。
+ * "函数体内私有数组"与"真全局数组元素"的差别需要 `ErbParam` 之外的第三格事实
+ * （基础名的声明位置），本层今天拿不到 ⇒ 这一族只分类、默认不定罪：
+ * 见 {@link MISSING_REQUIRED_DIAGNOSABLE_BY_DEFAULT}。
+ */
 function omissibleSlot(param: ErbParam): boolean {
   if (param.hasDefault) return true;
   if (!HAS_SUBSCRIPT.test(param.name)) return true;
   return IMPLICIT_DEFAULT_NAME.test(param.name);
 }
+
+/**
+ * 「少给必需」这一档**默认不上屏**（D02 交付定，2026-11-24 eraTW 实测）。
+ *
+ * 判据本体活着：`arityOutcomeOf` 照样分得出 `missing-required`，`arity.test.ts` 里
+ * 显式开开关直接覆盖那条支路（不是走不到的死支）。关的是"定罪"这一步——
+ * 语料 473 处命中全长在 `@F(X, ARR:0, ARR:1)` + 函数体内 `#DIM ARR, 2` 这种
+ * 私有数组形态上，引擎替作者把默认值补了，上屏就是 473 条假红。
+ * 补齐"基础名声明在函数体内"这一格事实（`scanner.ts` / `snapshot.ts` 的活）之后
+ * 把这个常量抬成 `true`，或调用点显式传 `diagnoseMissingRequired: true` 复核。
+ */
+export const MISSING_REQUIRED_DIAGNOSABLE_BY_DEFAULT = false;
 
 /** 必填下界：**最后一个引擎不会补默认值的形参**序号 + 1（默认值可写在中间，不能只数个数） */
 function requiredCount(params: readonly ErbParam[]): number {
@@ -504,7 +534,10 @@ export function collectArityDiagnostics(input: ArityInput): LineDecoration[] {
     for (const site of erbCallSitesOf(line, code)) {
       const params = input.catalog(normalizedUpper(site.name));
       if (!params) continue;
-      const issue = decorationOf(site, arityOutcomeOf(site, params));
+      const outcome = arityOutcomeOf(site, params);
+      if (outcome.kind === 'missing-required' && !(input.diagnoseMissingRequired ?? MISSING_REQUIRED_DIAGNOSABLE_BY_DEFAULT))
+        continue; // 定罪开关关着（默认）：只分类，不上屏
+      const issue = decorationOf(site, outcome);
       if (issue !== null) out.push(issue);
     }
   }
