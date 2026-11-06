@@ -145,6 +145,28 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     const longest = Math.max(...fullFace.map((t) => (t.description ?? '').length));
     // 最长一枚（B22 实拍 fs.readMany 2,005 字符）留 ≥40 字符余量：撞上 2048 不会报错，只会被换刀。
     expect(longest).toBeLessThanOrEqual(RUST_MAX_DESCRIPTION_CHARS - 40);
+
+    // 同一把刀也打在 **inputSchema 里任意一层的 description 键**上（`sanitize_untrusted_inplace`
+    // 对 normalize 后等于 `description` 的键一律按 2048 收紧，仓内 Rust 用例
+    // `b5_sanitize_inplace_is_byte_identical_to_whole_tree_reference` 把这条钉着）。
+    // B22 的完整口径落点就在 schema 侧（639 字符），所以这里给它单独一条余量闸：
+    // 谁把落点写到 1 KiB 以上，先在静态面红，而不是到真壳里被静默裁掉。
+    const schemaDescLens: number[] = [];
+    const walk = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        for (const item of node) walk(item);
+        return;
+      }
+      if (node && typeof node === 'object') {
+        for (const [k, v] of Object.entries(node)) {
+          if (k === 'description' && typeof v === 'string') schemaDescLens.push(v.length);
+          else walk(v);
+        }
+      }
+    };
+    for (const t of fullFace) walk(t.inputSchema);
+    expect(schemaDescLens.length).toBeGreaterThan(300); // B22 实拍 352 条
+    expect(Math.max(...schemaDescLens)).toBeLessThanOrEqual(1024);
   });
 
   it('⑥ 指针落点：页大小/严格度口径每枚面一份，指针指过去的内容真的存在且完整', () => {
