@@ -162,7 +162,7 @@ describe('④ 反向对照：三态与降级的判据确实住在提供方那一
   });
 
   it('契约把这枚 tag 的归属写死在类型面上（消费方拿到的是 tag，不是原始形状）', () => {
-    const erb = textOf('packages/plugin-api/src/erb.ts');
+    const erb = textOf('packages/plugin-api/src/erb-types.ts'); // S17 批（9d960935）类型面出图后契约类型住 erb-types.ts（图外零字节）
     expect(erb).toMatch(/export type ErbIndexCoverage = 'full' \| 'partial' \| 'none';/);
     expect(erb).toMatch(/indexState\?\(\): ErbIndexState;/);
     expect(erb).toMatch(/export type ErbIndexPhase = 'idle' \| 'scanning' \| 'ready' \| 'nothing-to-scan' \| 'empty' \| 'failed';/);
