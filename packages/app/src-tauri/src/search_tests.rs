@@ -1542,3 +1542,570 @@ fn text_cache_reuses_decoded_bodies_and_invalidates_on_change() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/* ================= B16 · 检索墙（5000 条）分片续取的判性 =================
+ *
+ * 命题：外部 AI 单次检索最多拿到 `SEARCH_HARD_CAP = 5000` 条命中，MCP 面因此说
+ * 「续不了」。本段**只用真引擎 + 确定性自建夹具**量三件事，一个都不许靠推理：
+ * ① 触墙那一拍，引擎到底给了哪 5000 条（这一批选择是不是跨次稳定的）；
+ * ② 按**顶层目录**切成多片（每片一次既有 `search_text` 调用）拼接后，与
+ *   「解析式算出的真值集合」逐条比 `path|line|preview` 是否相等（无重、无漏）；
+ * ③ 拼接所依赖的前提在哪些形状下会破（单文件 500 条上限、重叠根、
+ *   CRLF / 遗留编码 / 二进制在分片下是不是同一份账）。
+ *
+ * 判性成立与否由这几条用例的**断言**给结论；探针（`#[ignore]`）打全部读数。
+ */
+
+/// 分片判性夹具的规模：8 目录 × 25 文件 × 50 命中 ＝ **10,000 条命中**（> 墙的 2 倍），
+/// 且任一目录独占 1,250 条（< 墙、< 单片默认 2,000）。两个前提必须同时在夹具里成立：
+/// 全量必触墙 ⇒ 才测得到墙；分片必不触墙 ⇒ 才谈得上「拼接可自证完整」。
+const WALL_DIRS: usize = 8;
+const WALL_FILES_PER_DIR: usize = 25;
+const WALL_HITS_PER_FILE: usize = 50;
+
+fn wall_request(roots: &[PathBuf], query: &str, max_results: Option<usize>, threads: usize) -> SearchRequestDto {
+    SearchRequestDto {
+        search_id: 1,
+        roots: roots.iter().map(|p| p.to_string_lossy().into_owned()).collect(),
+        query: query.to_string(),
+        options: SearchOptionsDto {
+            max_results,
+            threads: Some(threads),
+            ..Default::default()
+        },
+    }
+}
+
+/// 命中身份 = `path|line|preview`（与 MCP 侧 `pageSearchHits` 的 keyOf 同一口径）。
+fn wall_keys(res: &SearchResultDto) -> HashSet<String> {
+    let mut set = HashSet::new();
+    for f in &res.files {
+        for m in &f.matches {
+            set.insert(format!("{}|{}|{}", f.path, m.line, m.preview));
+        }
+    }
+    set
+}
+
+/// 命中条数（**含重复**：集合会吞掉重复，拼接判据要的是「不多不少」两条，分开量）。
+fn wall_count(res: &SearchResultDto) -> usize {
+    res.files.iter().map(|f| f.matches.len()).sum()
+}
+
+/// 夹具：`<root>/d{i}/f{j}.erb`，每文件 `hits` 行，第 k 行内容 `HIT d{i}-f{j}-l{k}`
+/// （行内容逐条唯一 ⇒ 解析式真值不依赖引擎）。返回「该目录全部命中 key」的算法。
+fn wall_fixture(dirs: usize, files_per_dir: usize, hits_per_file: usize) -> PathBuf {
+    let root = temp_dir("wall");
+    for i in 0..dirs {
+        let d = root.join(format!("d{i}"));
+        std::fs::create_dir_all(&d).unwrap();
+        for j in 0..files_per_dir {
+            let mut body = String::new();
+            for k in 0..hits_per_file {
+                body.push_str(&format!("HIT d{i}-f{j}-l{k}\n"));
+            }
+            std::fs::write(d.join(format!("f{j}.erb")), body).unwrap();
+        }
+    }
+    root
+}
+
+/// 解析式真值：`<root>/d{i}/f{j}.erb` 第 k+1 行必然是 `HIT d{i}-f{j}-l{k}`。
+fn wall_expected_keys(root: &Path, dirs: usize, files_per_dir: usize, hits_per_file: usize) -> HashSet<String> {
+    let mut set = HashSet::new();
+    for i in 0..dirs {
+        for j in 0..files_per_dir {
+            let p = root
+                .join(format!("d{i}"))
+                .join(format!("f{j}.erb"))
+                .to_string_lossy()
+                .into_owned();
+            for k in 0..hits_per_file {
+                set.insert(format!("{p}|{}|HIT d{i}-f{j}-l{k}", k + 1));
+            }
+        }
+    }
+    set
+}
+
+fn wall_subdirs(root: &Path, dirs: usize) -> Vec<PathBuf> {
+    (0..dirs).map(|i| root.join(format!("d{i}"))).collect()
+}
+
+/// 探针：把三组读数全部打出来（`--exact --ignored --nocapture` 单跑）。
+#[test]
+#[ignore]
+fn wall_probe_prints_slice_equivalence_readings() {
+    let root = wall_fixture(WALL_DIRS, WALL_FILES_PER_DIR, WALL_HITS_PER_FILE);
+    let total = WALL_DIRS * WALL_FILES_PER_DIR * WALL_HITS_PER_FILE;
+    let truth = wall_expected_keys(&root, WALL_DIRS, WALL_FILES_PER_DIR, WALL_HITS_PER_FILE);
+    println!("[B16] 夹具命中＝{total}，解析式真值 key 数＝{}", truth.len());
+
+    // ① 触墙那一拍
+    let w1 = run(&wall_request(&[root.clone()], "HIT", Some(5000), 8));
+    let w2 = run(&wall_request(&[root.clone()], "HIT", Some(5000), 8));
+    let w_single_thread = run(&wall_request(&[root.clone()], "HIT", Some(5000), 1));
+    let k1 = wall_keys(&w1);
+    let k2 = wall_keys(&w2);
+    let ks = wall_keys(&w_single_thread);
+    println!(
+        "[B16] 全量@5000 八线程：truncated={} totalMatches={} filesScanned={} 条数={} 集合={} 与真值差={}",
+        w1.truncated,
+        w1.total_matches,
+        w1.files_scanned,
+        wall_count(&w1),
+        k1.len(),
+        truth.symmetric_difference(&k1).count()
+    );
+    println!("[B16] 全量@5000 两次同参复跑 集合差＝{}", k1.symmetric_difference(&k2).count());
+    println!("[B16] 全量@5000 单线程 vs 八线程 集合差＝{}", k1.symmetric_difference(&ks).count());
+    println!("[B16] 全量@5000 单线程 条数={} 集合={} truncated={}", wall_count(&w_single_thread), ks.len(), w_single_thread.truncated);
+    // 同参复跑的稳定性：8 次（八线程）里出现几种不同集合？
+    {
+        let mut sets: Vec<HashSet<String>> = Vec::new();
+        for _ in 0..8 {
+            sets.push(wall_keys(&run(&wall_request(&[root.clone()], "HIT", Some(5000), 8))));
+        }
+        let mut distinct = 0usize;
+        for (i, s) in sets.iter().enumerate() {
+            if !sets[..i].iter().any(|p| p.len() == s.len() && s.symmetric_difference(p).count() == 0) {
+                distinct += 1;
+            }
+        }
+        let sizes: Vec<usize> = sets.iter().map(|s| s.len()).collect();
+        println!("[B16] 同参（八线程@5000）8 次复跑：不同集合数＝{distinct} 逐次条数={sizes:?}");
+    }
+    // 「墙下的 N 条是不是全序前缀」：引擎输出序＝文件按 path 升序、文件内按行号升序
+    // （`out_files.sort_by(path)`）。按这把尺取前 N 条与墙下集合比对。
+    {
+        let mut ordered: Vec<String> = Vec::with_capacity(total);
+        let mut paths: Vec<(String, usize, usize)> = Vec::new();
+        for i in 0..WALL_DIRS {
+            for j in 0..WALL_FILES_PER_DIR {
+                paths.push((
+                    root
+                        .join(format!("d{i}"))
+                        .join(format!("f{j}.erb"))
+                        .to_string_lossy()
+                        .into_owned(),
+                    i,
+                    j,
+                ));
+            }
+        }
+        paths.sort_by(|a, b| a.0.cmp(&b.0));
+        for (p, di, fj) in &paths {
+            for k in 0..WALL_HITS_PER_FILE {
+                ordered.push(format!("{p}|{}|HIT d{di}-f{fj}-l{k}", k + 1));
+            }
+        }
+        let prefix: HashSet<String> = ordered.iter().take(k1.len()).cloned().collect();
+        println!(
+            "[B16] 全序前缀判据：墙下集合 与 「引擎输出序的前 {} 条」差＝{}（0＝恰是前缀，>0＝缺失散布在全序里 ⇒ 游标无从续）",
+            k1.len(),
+            k1.symmetric_difference(&prefix).count()
+        );
+    }
+
+    // ② 按顶层目录分片拼接
+    let mut union: Vec<String> = Vec::new();
+    let mut per_slice: Vec<(String, usize, bool, u32, u64)> = Vec::new();
+    for d in wall_subdirs(&root, WALL_DIRS) {
+        let r = run(&wall_request(&[d.clone()], "HIT", None, 8));
+        let keys = wall_keys(&r);
+        per_slice.push((
+            d.file_name().unwrap().to_string_lossy().into_owned(),
+            keys.len(),
+            r.truncated,
+            r.files_scanned,
+            r.total_matches,
+        ));
+        for f in &r.files {
+            for m in &f.matches {
+                union.push(format!("{}|{}|{}", f.path, m.line, m.preview));
+            }
+        }
+    }
+    let mut dup = union.len();
+    let seen: HashSet<&String> = union.iter().collect();
+    dup -= seen.len();
+    let union_set: HashSet<String> = union.into_iter().collect();
+    println!("[B16] 分片 {} 片：逐片(名字,条数,truncated,filesScanned,totalMatches)＝{:?}", per_slice.len(), per_slice);
+    println!(
+        "[B16] 分片拼接 条数={} 去重后={} 重复={} 与真值对称差={} 缺={} 多={}",
+        per_slice.iter().map(|p| p.1).sum::<usize>(),
+        union_set.len(),
+        dup,
+        union_set.symmetric_difference(&truth).count(),
+        truth.difference(&union_set).count(),
+        union_set.difference(&truth).count()
+    );
+    println!(
+        "[B16] filesScanned 合计＝{}（全量单扫＝{}）",
+        per_slice.iter().map(|p| p.3 as u64).sum::<u64>(),
+        w1.files_scanned
+    );
+
+    // ③ 破坏等价性的形状
+    // ③a 重叠根（项目根 + 其子目录）
+    let overlap = run(&wall_request(
+        &[root.clone(), root.join("d0")],
+        "HIT",
+        Some(5000),
+        8,
+    ));
+    println!(
+        "[B16] 重叠根：条数={} 集合={}（引擎内部是否去重＝看集合与条数是否相等）",
+        wall_count(&overlap),
+        wall_keys(&overlap).len()
+    );
+    // ③b 单文件命中 > SEARCH_PER_FILE_CAP（500）：分片切不动的那堵墙
+    let dense = temp_dir("wall-dense");
+    std::fs::create_dir_all(&dense).unwrap();
+    std::fs::write(dense.join("a.erb"), "HIT\n".repeat(1200)).unwrap();
+    let dres = run(&wall_request(&[dense.clone()], "HIT", Some(5000), 1));
+    println!(
+        "[B16] 单文件 1200 命中：返回={} truncated={} totalMatches={} filesScanned={}",
+        wall_count(&dres),
+        dres.truncated,
+        dres.total_matches,
+        dres.files_scanned
+    );
+    // ③c CRLF / GBK / shift_jis / 二进制 / 无扩展名 混样：全量 vs 逐目录 vs 逐文件
+    let mixed = temp_dir("wall-mixed");
+    std::fs::create_dir_all(mixed.join("sub")).unwrap();
+    std::fs::write(mixed.join("crlf.erb"), "HIT 1\r\nHIT 2\r\n").unwrap();
+    let (gbk, _, _) = encoding_rs::GBK.encode("口上HIT混编\n");
+    std::fs::write(mixed.join("gbk.erb"), &gbk[..]).unwrap();
+    let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("ＨＩＴ混编\n");
+    std::fs::write(mixed.join("sjis.erb"), &sjis[..]).unwrap();
+    std::fs::write(mixed.join("sub").join("deep.erb"), "HIT 深\n").unwrap();
+    std::fs::write(mixed.join("sub").join("note.md"), "HIT 非 erb\n").unwrap();
+    std::fs::write(mixed.join("bin.erb"), [b'\x00', b'\x01', b'H', b'I', b'T', b'\x00'].as_slice()).unwrap();
+    let whole = run(&wall_request(&[mixed.clone()], "HIT", Some(5000), 4));
+    let by_dir = {
+        let a = run(&wall_request(&[mixed.clone()], "HIT", Some(5000), 4));
+        let b = run(&wall_request(&[mixed.join("sub")], "HIT", Some(5000), 4));
+        let mut v = wall_keys(&a);
+        v.extend(wall_keys(&b));
+        v
+    };
+    let by_file = {
+        let mut v: HashSet<String> = HashSet::new();
+        for p in [
+            mixed.join("crlf.erb"),
+            mixed.join("gbk.erb"),
+            mixed.join("sjis.erb"),
+            mixed.join("sub").join("deep.erb"),
+            mixed.join("sub").join("note.md"),
+            mixed.join("bin.erb"),
+        ] {
+            v.extend(wall_keys(&run(&wall_request(&[p], "HIT", Some(5000), 1))));
+        }
+        v
+    };
+    println!(
+        "[B16] 混样：全量={} 逐目录拼接={} 逐文件拼接={} 全量vs逐文件差={} skipped={:?}",
+        wall_keys(&whole).len(),
+        by_dir.len(),
+        by_file.len(),
+        wall_keys(&whole).symmetric_difference(&by_file).count(),
+        (
+            whole.skipped.binary,
+            whole.skipped.too_large,
+            whole.skipped.unreadable,
+            whole.skipped.filtered,
+            whole.skipped.excluded
+        )
+    );
+
+    // ③d 文件根分片（roots 逐条给文件路径）：形状无关性 + 与目录片同一集合
+    let g1: Vec<PathBuf> = (0..13)
+        .map(|j| root.join("d0").join(format!("f{j}.erb")))
+        .collect();
+    let g2: Vec<PathBuf> = (13..WALL_FILES_PER_DIR)
+        .map(|j| root.join("d0").join(format!("f{j}.erb")))
+        .collect();
+    let s1 = run(&wall_request(&g1, "HIT", Some(5000), 8));
+    let s2 = run(&wall_request(&g2, "HIT", Some(5000), 8));
+    let one_dir = wall_keys(&run(&wall_request(&[root.join("d0")], "HIT", Some(5000), 8)));
+    let mut by_files: HashSet<String> = wall_keys(&s1);
+    by_files.extend(wall_keys(&s2));
+    println!(
+        "[B16] 文件根两片（13+12 文件）：条数={}+{} truncated={}+{} 与单目录片差={} filesScanned={}+{}",
+        wall_count(&s1),
+        wall_count(&s2),
+        s1.truncated,
+        s2.truncated,
+        by_files.symmetric_difference(&one_dir).count(),
+        s1.files_scanned,
+        s2.files_scanned
+    );
+
+    // ③e 同一片被两次调用各收一次 ⇒ 跨调用没有去重（分片计划必须两两不相交）
+    let twice = {
+        let a = wall_keys(&run(&wall_request(&g1, "HIT", Some(5000), 8)));
+        let b = wall_keys(&run(&wall_request(&g1, "HIT", Some(5000), 8)));
+        let mut v: Vec<String> = a.into_iter().collect();
+        v.extend(b);
+        v
+    };
+    println!(
+        "[B16] 同一片跑两遍拼接：条数={} 去重后={}（相等＝跨调用没有去重，重复全靠计划不相交来挡）",
+        twice.len(),
+        twice.iter().collect::<HashSet<&String>>().len()
+    );
+
+    // ③f 扁平稠密目录（无子目录可切）：6,000 条命中挤在一个目录里
+    let flat = temp_dir("wall-flat");
+    std::fs::create_dir_all(&flat).unwrap();
+    for j in 0..100 {
+        std::fs::write(
+            flat.join(format!("g{j:03}.erb")),
+            (0..60).map(|k| format!("HIT f{j}-l{k}\n")).collect::<String>(),
+        )
+        .unwrap();
+    }
+    let flat_whole = run(&wall_request(&[flat.clone()], "HIT", Some(5000), 8));
+    let mut flat_union = 0usize;
+    let mut flat_truncated = 0usize;
+    for half in [0..50, 50..100] {
+        let rs: Vec<PathBuf> = half.map(|j| flat.join(format!("g{j:03}.erb"))).collect();
+        let r = run(&wall_request(&rs, "HIT", Some(5000), 8));
+        if r.truncated {
+            flat_truncated += 1;
+        }
+        flat_union += wall_count(&r);
+    }
+    println!(
+        "[B16] 扁平稠密（100 文件 × 60＝6000 条）：整片条数={} truncated={}；对半两片条数={} 触墙片数={}（期望 6000 / 0）",
+        wall_count(&flat_whole),
+        flat_whole.truncated,
+        flat_union,
+        flat_truncated
+    );
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&dense);
+    let _ = std::fs::remove_dir_all(&mixed);
+    let _ = std::fs::remove_dir_all(&flat);
+}
+
+/* ---------------- B16 判性的**断言面**（每条一个可复现结论，全部走真引擎） ---------------- */
+
+/// 结论一：触墙那一拍**必有漏**，且漏的是散布在后段的文件（不是「尾部若干条」）。
+/// 墙是单次调用的闸：`max_results` 夹到 5000，多线程还会**超出** 5000（各线程在
+/// 抢下一条前各自读一次 `remaining` ⇒ 实测 5,350 / 5,420 这类过冲），所以
+/// 「前 5000 条」这个概念在引擎里根本不存在，游标也无从定义。
+#[test]
+fn wall_single_scan_must_lose_hits_and_cannot_describe_a_prefix() {
+    let root = wall_fixture(WALL_DIRS, WALL_FILES_PER_DIR, WALL_HITS_PER_FILE);
+    let truth = wall_expected_keys(&root, WALL_DIRS, WALL_FILES_PER_DIR, WALL_HITS_PER_FILE);
+    let one = run(&wall_request(&[root.clone()], "HIT", Some(5000), 8));
+    let keys = wall_keys(&one);
+    assert!(one.truncated, "10,000 条命中打在 5,000 闸上必须 truncated");
+    assert_eq!(keys.len(), wall_count(&one), "一次调用内部逐条唯一（重复只可能来自跨调用）");
+    assert!(keys.len() < truth.len(), "触墙必漏：拿到 {} < 真值 {}", keys.len(), truth.len());
+    // 漏的必须是子集：墙下的集合不许含任何「真值之外」的条目
+    assert_eq!(keys.difference(&truth).count(), 0, "墙下不许凭空多出命中");
+    assert!(
+        one.total_matches as usize >= keys.len(),
+        "totalMatches 只统计已收到的：{} >= {}",
+        one.total_matches,
+        keys.len()
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 结论二（判性成立的主证）：**按互不相交的目录分片拼接，与解析式真值逐条相等**——
+/// 8 片 × 1,250 条 = 10,000 条，`重复=0 缺=0 多=0`，且**每片都不触墙**（`truncated:false`）。
+/// 「不触墙」是分片能自证完整的**前提**而不是结论：片一旦触墙，这片就得再切。
+#[test]
+fn wall_disjoint_dir_slices_splice_to_exactly_the_true_hit_set() {
+    let root = wall_fixture(WALL_DIRS, WALL_FILES_PER_DIR, WALL_HITS_PER_FILE);
+    let truth = wall_expected_keys(&root, WALL_DIRS, WALL_FILES_PER_DIR, WALL_HITS_PER_FILE);
+    let mut union: Vec<String> = Vec::new();
+    let mut scanned_sum: u64 = 0;
+    for d in wall_subdirs(&root, WALL_DIRS) {
+        // 每片＝一次既有 search_text 调用（max_results 不给 ⇒ 引擎缺省 2,000，比墙还小一档）
+        let r = run(&wall_request(&[d], "HIT", None, 8));
+        assert!(!r.truncated, "单目录 1,250 条 < 缺省 2,000：这一片不许触墙");
+        assert!(!r.cancelled, "没发取消不许报 cancelled");
+        scanned_sum += r.files_scanned as u64;
+        for f in &r.files {
+            for m in &f.matches {
+                union.push(format!("{}|{}|{}", f.path, m.line, m.preview));
+            }
+        }
+    }
+    let set: HashSet<String> = union.iter().cloned().collect();
+    assert_eq!(union.len(), set.len(), "拼接不许有重复（{}/{}）", set.len(), union.len());
+    assert_eq!(set.len(), truth.len(), "拼接条数＝真值条数");
+    assert_eq!(set.symmetric_difference(&truth).count(), 0, "拼接与真值逐条相等");
+    assert_eq!(union.len(), WALL_DIRS * WALL_FILES_PER_DIR * WALL_HITS_PER_FILE);
+    assert_eq!(
+        scanned_sum,
+        (WALL_DIRS * WALL_FILES_PER_DIR) as u64,
+        "filesScanned 逐片相加＝夹具文件数（逐片账目可加，不是各说各话）"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 结论三：**分片形状不影响命中集合**——同一批文件按「13 + 12 个文件根」切，
+/// 与按整个目录切成一片，逐条相等；`roots` 允许给文件路径（`collect_files` 的文件根分支）。
+/// ⇒ 目录切到切不动时还能按**文件**继续切，这是稠密扁平目录唯一的出路（探针实测：
+/// 100 文件 × 60 命中的扁平目录整片触墙 5,420，对半按文件根切两片 = 6,000 条、零触墙）。
+#[test]
+fn wall_slice_shape_does_not_change_the_hit_set_and_file_roots_work() {
+    let root = wall_fixture(WALL_DIRS, WALL_FILES_PER_DIR, WALL_HITS_PER_FILE);
+    let by_dir = wall_keys(&run(&wall_request(&[root.join("d0")], "HIT", Some(5000), 8)));
+    let g1: Vec<PathBuf> = (0..13).map(|j| root.join("d0").join(format!("f{j}.erb"))).collect();
+    let g2: Vec<PathBuf> = (13..WALL_FILES_PER_DIR)
+        .map(|j| root.join("d0").join(format!("f{j}.erb")))
+        .collect();
+    let s1 = run(&wall_request(&g1, "HIT", Some(5000), 8));
+    let s2 = run(&wall_request(&g2, "HIT", Some(5000), 8));
+    assert!(!s1.truncated && !s2.truncated, "文件根两片各 650 / 600 条，都不该触墙");
+    let mut by_files = wall_keys(&s1);
+    by_files.extend(wall_keys(&s2));
+    assert_eq!(by_files.symmetric_difference(&by_dir).count(), 0, "按文件切 == 按目录切");
+    assert_eq!(
+        s1.files_scanned + s2.files_scanned,
+        WALL_FILES_PER_DIR as u32,
+        "filesScanned 按片相加＝这批文件数（逐片账目可加，不是各说各话）"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 结论四：**不触墙的片可复现到顺序**——同一片两次调用，输出的 `path|line|preview`
+/// **序列**逐条相等（收口处 `out_files.sort_by(path)`、文件内按行号升序）。
+/// ⇒ 片内的「已消费前缀指纹」游标（B1 那套）才立得住；触墙的片没有这个保证
+/// （探针实测同参 8 次复跑出现 2 种集合：7 次 5,350、1 次 5,300）。
+#[test]
+fn wall_non_truncated_slice_is_reproducible_in_order() {
+    let root = wall_fixture(WALL_DIRS, WALL_FILES_PER_DIR, WALL_HITS_PER_FILE);
+    let seq = |r: &SearchResultDto| -> Vec<String> {
+        r.files
+            .iter()
+            .flat_map(|f| f.matches.iter().map(move |m| format!("{}|{}|{}", f.path, m.line, m.preview)))
+            .collect()
+    };
+    let a = run(&wall_request(&[root.join("d3")], "HIT", Some(5000), 8));
+    let b = run(&wall_request(&[root.join("d3")], "HIT", Some(5000), 8));
+    assert!(!a.truncated && !b.truncated);
+    assert_eq!(seq(&a), seq(&b), "不触墙的片：两次调用逐条同序（前缀指纹才可用）");
+    assert_eq!(seq(&a).len(), WALL_FILES_PER_DIR * WALL_HITS_PER_FILE);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 结论五：**跨调用没有去重** ⇒ 分片计划必须两两不相交，这是实现侧唯一的硬约束。
+/// 同一片跑两遍直接拼接＝1,300 条里只有 650 个唯一 key（重复整倍出现）。
+/// 另：一次调用**内部**给重叠根（项目根 + 其子目录）时 `collect_files` 会按绝对路径
+/// 小写键去重（实测条数 == 集合大小），但那救不了跨调用——账目必须自己保持不相交。
+#[test]
+fn wall_no_dedup_across_calls_so_slices_must_be_disjoint() {
+    let root = wall_fixture(WALL_DIRS, WALL_FILES_PER_DIR, WALL_HITS_PER_FILE);
+    let g: Vec<PathBuf> = (0..13).map(|j| root.join("d0").join(format!("f{j}.erb"))).collect();
+    let a = wall_keys(&run(&wall_request(&g, "HIT", Some(5000), 8)));
+    let b = wall_keys(&run(&wall_request(&g, "HIT", Some(5000), 8)));
+    let mut spliced: Vec<String> = a.iter().cloned().collect();
+    spliced.extend(b.iter().cloned());
+    let dedup: HashSet<String> = spliced.iter().cloned().collect();
+    assert_eq!(dedup.len() * 2, spliced.len(), "同一片拼两次＝整倍重复（{} 条 / {} 唯一）", spliced.len(), dedup.len());
+
+    // 一次调用内的重叠根：引擎去重（对照用，不是本批可依赖的能力）
+    let overlap = run(&wall_request(
+        &[root.clone(), root.join("d0")],
+        "HIT",
+        Some(5000),
+        8,
+    ));
+    assert_eq!(
+        wall_keys(&overlap).len(),
+        wall_count(&overlap),
+        "一次调用给重叠根时引擎内部按绝对路径去重（条数 == 唯一集合）"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// 结论六：分片**修不掉**的那堵墙——单文件命中 > `SEARCH_PER_FILE_CAP`（500）。
+/// 1,200 条命中挤在一个文件里：即使 `max_results` 给满 5,000、单线程，也只回 500 条
+/// 并报 `truncated:true`。切到「一片只剩一个文件」再切不动了 ⇒ 该面必须显式说
+/// 「这一片仍不完整」并把逐文件 `fs.readFile` 分页指路给客户端，绝不静默当搜完了。
+#[test]
+fn wall_per_file_cap_is_not_fixable_by_slicing() {
+    let dir = temp_dir("wall-perfile");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.erb"), "HIT\n".repeat(1200)).unwrap();
+    let by_dir = run(&wall_request(&[dir.clone()], "HIT", Some(5000), 1));
+    let by_file = run(&wall_request(
+        &[dir.join("a.erb")],
+        "HIT",
+        Some(5000),
+        1,
+    ));
+    assert!(by_dir.truncated && by_file.truncated, "单文件超 500 条必须报 truncated");
+    assert_eq!(wall_count(&by_dir), SEARCH_PER_FILE_CAP, "单文件上限 500 条（分片救不了）");
+    assert_eq!(
+        wall_keys(&by_dir),
+        wall_keys(&by_file),
+        "目录片与文件片在同一个文件上给同一份账（形状无关）"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 结论七：编码 / 换行 / 二进制这些**逐文件**判据在分片下不改变结果——
+/// 全量、逐目录拼接、逐文件拼接三种形状给出同一个集合（CRLF / GBK / shift_jis /
+/// 无扩展名 / 二进制混样），跳过的账目逐片相加即可（探针：`skipped.binary` 合计 1）。
+#[test]
+fn wall_encoding_shapes_are_slice_invariant() {
+    let mixed = temp_dir("wall-mixed-shape");
+    std::fs::create_dir_all(mixed.join("d1")).unwrap();
+    std::fs::create_dir_all(mixed.join("d2")).unwrap();
+    std::fs::write(mixed.join("d1").join("crlf.erb"), "HIT 1\r\nHIT 2\r\n").unwrap();
+    let (gbk, _, _) = encoding_rs::GBK.encode("口上HIT混编\n");
+    std::fs::write(mixed.join("d1").join("gbk.erb"), &gbk[..]).unwrap();
+    let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("ＨＩＴ混编\n");
+    std::fs::write(mixed.join("d2").join("sjis.erb"), &sjis[..]).unwrap();
+    std::fs::write(mixed.join("d2").join("deep.erb"), "HIT 深\n").unwrap();
+    // 根上的散文件：目录切片**接不住**它们（扫根就是递归全量）⇒ 只能并成一条文件根片
+    std::fs::write(mixed.join("loose.md"), "HIT 散一\nHIT 散二\n").unwrap();
+    std::fs::write(mixed.join("bin.erb"), [b'\x00', b'\x01', b'H', b'I', b'T', b'\x00'].as_slice()).unwrap();
+
+    let whole = wall_keys(&run(&wall_request(&[mixed.clone()], "HIT", Some(5000), 4)));
+    // 本批分片计划的形状：每个子目录一片 + 根上散文件合成一条文件根片
+    let mut by_plan = wall_keys(&run(&wall_request(&[mixed.join("d1")], "HIT", Some(5000), 4)));
+    by_plan.extend(wall_keys(&run(&wall_request(
+        &[mixed.join("d2")],
+        "HIT",
+        Some(5000),
+        4,
+    ))));
+    by_plan.extend(wall_keys(&run(&wall_request(
+        &[mixed.join("loose.md"), mixed.join("bin.erb")],
+        "HIT",
+        Some(5000),
+        1,
+    ))));
+    assert_eq!(
+        whole.symmetric_difference(&by_plan).count(),
+        0,
+        "「子目录片 + 根上散文件片」拼接与全量逐条相等（含 CRLF / GBK / shift_jis / md / 二进制）"
+    );
+    assert!(whole.len() >= 6, "混样夹具至少 6 条命中（二进制那条不算）：实际 {}", whole.len());
+
+    // 逐文件形状：与计划形状同一份账（再证一次「形状无关」）
+    let files = [
+        mixed.join("d1").join("crlf.erb"),
+        mixed.join("d1").join("gbk.erb"),
+        mixed.join("d2").join("sjis.erb"),
+        mixed.join("d2").join("deep.erb"),
+        mixed.join("loose.md"),
+        mixed.join("bin.erb"),
+    ];
+    let mut by_file: HashSet<String> = HashSet::new();
+    for f in files {
+        by_file.extend(wall_keys(&run(&wall_request(&[f], "HIT", Some(5000), 1))));
+    }
+    assert_eq!(whole.symmetric_difference(&by_file).count(), 0, "逐文件拼接 == 全量");
+    let _ = std::fs::remove_dir_all(&mixed);
+}
