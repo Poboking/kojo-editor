@@ -404,10 +404,12 @@
       "TRYCALLLIST",
       "TRYCCALL",
       "TRYCCALLFORM",
+      "TRYCCALLSTR",
       "TRYCGOTO",
       "TRYCGOTOFORM",
       "TRYCJUMP",
       "TRYCJUMPFORM",
+      "TRYCJUMPSTR",
       "TRYGOTOLIST",
       "TRYJUMPLIST"
     ]
