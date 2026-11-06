@@ -111,6 +111,40 @@ export interface McpLauncherHostLike {
 /** 腿表条目：`(args, scope) => 回包`（与 `ioTools` 同形，盘点脚本按这张表判 wired）。 */
 export type McpLauncherLeg = (args: Record<string, unknown>, scope: unknown) => Promise<unknown>;
 
+/**
+ * 本批登记的 27 枚具名工具（只读 13 + 生命周期/写 14）。
+ * 这张名单就是腿表的键类型：`noUncheckedIndexedAccess` 下按键取腿不会是 `undefined`，
+ * 而名单外的名字（C 组）在类型层就进不了腿表 ⇒「刻意不登记」有类型闸兜着。
+ */
+export type McpLauncherLegName =
+  | 'launcher_instance_list'
+  | 'launcher_instance_get'
+  | 'launcher_instance_update'
+  | 'launcher_instance_remove'
+  | 'launcher_instance_duplicate'
+  | 'launcher_content_list'
+  | 'launcher_content_diagnose'
+  | 'launcher_content_apply'
+  | 'launcher_content_uninstall'
+  | 'launcher_content_set_enabled'
+  | 'launcher_content_set_order'
+  | 'launcher_process_list'
+  | 'launcher_process_status'
+  | 'launcher_task_list'
+  | 'launcher_task_cancel'
+  | 'launcher_save_list'
+  | 'launcher_save_backups'
+  | 'launcher_save_backup'
+  | 'launcher_save_restore'
+  | 'launcher_save_delete_backup'
+  | 'launcher_save_apply_import'
+  | 'launcher_log_sessions'
+  | 'launcher_log_tail'
+  | 'launcher_log_read'
+  | 'launcher_project_hash'
+  | 'launcher_start'
+  | 'launcher_stop';
+
 export interface McpLauncherDeps {
   readonly getLauncher?: () => McpLauncherHostLike | null;
   readonly getKernel: McpIoDeps['getKernel'];
@@ -273,7 +307,7 @@ function toMcpFailure(label: string, err: unknown): McpFailure {
 
 /* ------------------------------- 腿工厂 ------------------------------- */
 
-export function createLauncherLegs(deps: McpLauncherDeps): Record<string, McpLauncherLeg> {
+export function createLauncherLegs(deps: McpLauncherDeps): Record<McpLauncherLegName, McpLauncherLeg> {
   /** 真源缺席 ⇒ 显式 NOT_WIRED（铁律 4：没有启动器面就不装出实例来）。 */
   function hostOf(label: string): McpLauncherHostLike {
     const injected = deps.getLauncher?.();
@@ -367,10 +401,12 @@ export function createLauncherLegs(deps: McpLauncherDeps): Record<string, McpLau
     const payload = p.page.map((c) => {
       const b64 = asString(c['bytesBase64']);
       const overGate = b64.length > 65_000;
+      // base64 的等号补位决定真实字节数：整组 4 字符 = 3 字节，末尾 1 个 '=' 少 1 字节、2 个少 2 字节。
+      const pad = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0;
       return {
         stream: asString(c['stream']),
         ts: typeof c['ts'] === 'number' ? c['ts'] : null,
-        byteLength: Math.floor((b64.length * 3) / 4),
+        byteLength: Math.max(0, Math.floor(b64.length / 4) * 3 - pad),
         truncated: c['truncated'] === true,
         // 形状照宿主真形：原始块（base64），本层不解码——字符集判定是 launcher-core 的活，
         // 在这里猜 UTF-8/CP932 = 第二份判据。逐页拼接后整串解码才是正确用法。
@@ -381,9 +417,12 @@ export function createLauncherLegs(deps: McpLauncherDeps): Record<string, McpLau
     });
     return {
       session: page['session'] ?? null,
-      truncated: page['truncated'] === true,
+      // 宿主的字节截断读数单独立一个名字：下面 pageAccount 的 `truncated` 说的是「本页没含全部块」，
+      // 两件事不许挤在同一位上（挤在一起 = 宿主说截断却被分页账覆盖成 false，静默失真）。
+      truncatedByBytes: page['truncated'] === true,
       hostTruncatedNote:
-        'truncated 是宿主的读数（因 maxBytes 被截断）；本页的账见 offset/limit/hasMore/nextCursor',
+        'truncatedByBytes 是宿主的读数（该流因 maxBytes 被截，尾部还有字节没给）；' +
+        '本页的账（块级）见 offset/limit/truncated/hasMore/nextCursor，两者不是一回事',
       chunks: payload,
       ...pageAccount(p),
       decodeNote:
@@ -750,7 +789,6 @@ export function createLauncherLegs(deps: McpLauncherDeps): Record<string, McpLau
     const instanceId = requireId(args, 'instanceId', INSTANCE_ID_RE, 'launcher_content_uninstall');
     const packId = requireId(args, 'packId', COMPONENT_ID_RE, 'launcher_content_uninstall');
     const listFn = methodOf(host, 'contentList', 'launcher_content_uninstall（独占清单的判据来源）');
-    const fn = methodOf(host, 'contentUninstall', 'launcher_content_uninstall');
     const listing = expectArray(
       await call('launcher_content_uninstall.contentList', () => listFn.call(host, instanceId)),
       'launcher_content_uninstall.contentList',
@@ -762,6 +800,8 @@ export function createLauncherLegs(deps: McpLauncherDeps): Record<string, McpLau
         `内容包 ${packId} 不在实例 ${instanceId} 的已装清单里（宿主读数）：卸载整批拒绝，不猜包、不空删`,
       );
     }
+    // 卸载方法的存在性判在「包确实装着」之后：包都不在时先给真读数理由，而不是先报命令缺席。
+    const fn = methodOf(host, 'contentUninstall', 'launcher_content_uninstall');
     const others = new Set<string>();
     for (const c of listing) {
       if (c === target || packIdOf(c) === packId) continue;

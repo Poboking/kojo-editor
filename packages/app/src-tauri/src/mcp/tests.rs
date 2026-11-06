@@ -3569,3 +3569,247 @@ fn e2e_tools_call_denies_editor_write_tools_from_read_session() {
     );
     assert_eq!(v3["result"]["applied"], json!(true));
 }
+
+/// B4 批（LaneS，2026-11-06）：启动器族 27 枚具名 `launcher_*` 工具的**档位真源**判据。
+///
+/// 钉四件事（一条都不许漂）：
+/// ① 命名纪律：工具名保持 `launcher_<族>_<动词>` 下划线形态 ⇒ 命中 `is_launcher_tool()` 的
+///    `launcher_` **前缀**判定；点号形态（`launcher.instance.list`）不命中前缀表，会掉进
+///    「未知名字按 read 放行」的后门，本批刻意不用；
+/// ② 档位：`host_required_tier()` 一律 Privileged，且**一律不进** `EDIT_TOOLS_EXACT`
+///    （它们是危险档，不是编辑档）；
+/// ③ 批准语义零改动：第四张表对 privileged 只认**精确名**——`launcher_*` 与 `*` 通配都不构成
+///    批准（与 `fileTree.remove` / `rename_path` 同一判据路径）；精确名列进后 read / edit /
+///    privileged 三种会话一律放行（收口不许误伤已批准工具）；
+/// ④ `market_*` 全族维持 fail-closed（`validate_tool_name` 直接拒），本批零登记、零改动。
+#[test]
+fn launcher_named_tools_keep_privileged_tier_and_exact_approval_only() {
+    const LAUNCHER_TOOLS: [&str; 27] = [
+        "launcher_instance_list",
+        "launcher_instance_get",
+        "launcher_instance_update",
+        "launcher_instance_remove",
+        "launcher_instance_duplicate",
+        "launcher_content_list",
+        "launcher_content_diagnose",
+        "launcher_content_apply",
+        "launcher_content_uninstall",
+        "launcher_content_set_enabled",
+        "launcher_content_set_order",
+        "launcher_process_list",
+        "launcher_process_status",
+        "launcher_task_list",
+        "launcher_task_cancel",
+        "launcher_save_list",
+        "launcher_save_backups",
+        "launcher_save_backup",
+        "launcher_save_restore",
+        "launcher_save_delete_backup",
+        "launcher_save_apply_import",
+        "launcher_log_sessions",
+        "launcher_log_tail",
+        "launcher_log_read",
+        "launcher_project_hash",
+        "launcher_start",
+        "launcher_stop",
+    ];
+    let read = empty_scope(Vec::new());
+    let edit = McpSessionScope {
+        tier: McpTier::Edit,
+        ..empty_scope(Vec::new())
+    };
+    let priv_scope = McpSessionScope {
+        tier: McpTier::Privileged,
+        ..empty_scope(Vec::new())
+    };
+    // 通配永不批准 privileged（冻结契约③）：这条判据本批一字未改。
+    let wildcard = empty_scope(vec!["*".to_string(), "launcher_*".to_string()]);
+    for name in LAUNCHER_TOOLS {
+        assert!(is_launcher_tool(name), "{name} 未命中 launcher_ 前缀判定");
+        assert!(is_privileged_tool(name), "{name} 必须判 privileged");
+        assert_eq!(host_required_tier(name), McpTier::Privileged, "{name}");
+        assert!(
+            !is_edit_tool(name) && !EDIT_TOOLS_EXACT.contains(&name),
+            "{name} 出现在具名 Edit 表 ⇒ 危险档口径被改"
+        );
+        // 未精确批准：read / edit / privileged 三种会话与「通配已批准」会话一律
+        // TOOL_NOT_APPROVED（危险面先于 tier 面，码优先序不许变）。
+        for (label, scope) in [
+            ("read", &read),
+            ("edit", &edit),
+            ("privileged", &priv_scope),
+            ("wildcard", &wildcard),
+        ] {
+            let e = check_tool_call_permission(name, scope)
+                .err()
+                .unwrap_or_else(|| panic!("{name} 在 {label} 会话被放行（后门复现）"));
+            assert_eq!(e.code, codes::TOOL_NOT_APPROVED, "{name} / {label}");
+            assert!(e.message.contains(name), "{name} 拒绝理由必须点名工具");
+        }
+        // 精确名批准 ⇒ 放行（批准语义零放宽），三种会话同判。
+        let approved = empty_scope(vec![name.to_string()]);
+        for scope in [&read, &edit, &priv_scope] {
+            let granted = McpSessionScope {
+                tier: scope.tier,
+                approved_tools: approved.approved_tools.clone(),
+                ..approved.clone()
+            };
+            assert!(
+                check_tool_call_permission(name, &granted).is_ok(),
+                "{name} 在 tier={} 精确批准后仍被拒 ⇒ 收口误伤批准语义",
+                scope.tier.as_str()
+            );
+        }
+    }
+    // market_* 全族继续 fail-closed：名字形状合法也不给过。
+    for name in [
+        "market_device_token",
+        "market_publish",
+        "market_download",
+        "market_extract",
+        "market_fetch_text",
+    ] {
+        let e = validate_tool_name(name).unwrap_err();
+        assert_eq!(e.code, codes::TOOL_FAIL_CLOSED, "{name}");
+    }
+}
+
+/// B4 批**端点级**回归：真实 TCP 端点在 `emit_request` **之前**拒掉未精确批准的 `launcher_*`。
+/// ① 逐枚显式 `-32000 / E_TOOL_NOT_APPROVED`（message 带工具名，拒绝可见不静默）；
+/// ② 每次拒绝各写一条 Denied 审计（note 即原始码，条数与枚数一一对应）；
+/// ③ 桥零调用（`s.rx.try_recv()` 恒空 ⇒ WebView 从未收到这一族，宿主命令一条也没跑，
+///    第三张表复验 / 确认闸 / 信任闸自然也没有被「多一个入口」绕开）；
+/// ④ `tools/list`：未批准的这一族整族不可见（registry 全量报上来也照样二次剔除，
+///    filtered 审计逐条留痕）；
+/// ⑤ 精确名批准后同一调用照旧走桥成功（批准语义零放宽，收口没把能力面焊死）。
+#[test]
+fn e2e_launcher_tools_require_exact_approval_with_zero_bridge_calls() {
+    const PROBED: [&str; 3] = ["launcher_instance_list", "launcher_save_list", "launcher_start"];
+    const REGISTERED: [&str; 6] = [
+        "launcher_instance_list",
+        "launcher_save_list",
+        "launcher_start",
+        "launcher_stop",
+        "launcher_task_list",
+        "launcher_project_hash",
+    ];
+    let s = TestServer::start();
+    for (i, name) in PROBED.iter().enumerate() {
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{{"name":"{}","arguments":{{"instanceId":"inst-1"}}}}}}"#,
+            900 + i,
+            name
+        );
+        let r = mcp_post(s.port, &s.token, &body);
+        assert_eq!(r.status, 200, "{name} 必须是 JSON-RPC 错误帧而非传输层失败");
+        let v = rpc_json(&r);
+        assert_eq!(v["id"], json!(900 + i), "{name}");
+        assert_eq!(v["error"]["code"], json!(-32000), "{name}");
+        assert_eq!(
+            v["error"]["data"]["code"],
+            json!("E_TOOL_NOT_APPROVED"),
+            "{name} 未按危险面拒"
+        );
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains(name),
+            "{name} 拒绝消息必须点名"
+        );
+    }
+    let rows = audit::query(s.dir.path(), 200, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(
+        denied.len(),
+        PROBED.len(),
+        "denied 审计条数应与被拒枚数逐一对应"
+    );
+    for name in PROBED {
+        assert!(
+            denied
+                .iter()
+                .any(|e| e.tool == name && e.note.as_deref() == Some("E_TOOL_NOT_APPROVED")),
+            "{name} 缺一条 E_TOOL_NOT_APPROVED 审计"
+        );
+    }
+    assert!(
+        s.rx.try_recv().is_err(),
+        "read 会话直调 launcher_* 仍被转给 WebView ⇒ 宿主授权闸被多出来的入口绕开"
+    );
+
+    // ④ tools/list 二次过滤：这一族整族缺席，filtered 审计逐条留痕。
+    let port = s.port;
+    let token = s.token.clone();
+    let list = r#"{"jsonrpc":"2.0","id":950,"method":"tools/list","params":{}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &list));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/list");
+    let mut with_read: Vec<Value> = REGISTERED
+        .iter()
+        .map(|n| json!({ "name": n, "description": "launcher face" }))
+        .collect();
+    with_read.insert(0, json!({ "name": "read_file", "description": "read" }));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(json!({ "tools": with_read })),
+            error: None,
+        },
+    )
+    .unwrap();
+    let v = rpc_json(&worker.join().unwrap());
+    assert_eq!(
+        names_of(&v["result"]),
+        vec!["read_file"],
+        "未批准的 launcher_* 不得进 tools/list"
+    );
+    let rows = audit::query(s.dir.path(), 200, None).unwrap();
+    for name in REGISTERED {
+        let e = rows
+            .iter()
+            .find(|x| x.tool == name && x.outcome == AuditOutcome::Filtered)
+            .unwrap_or_else(|| panic!("{name} 缺 filtered 审计（剔除必须可见）"));
+        assert_eq!(e.note.as_deref(), Some("privileged_not_approved"), "{name}");
+    }
+
+    // ⑤ 精确名批准 ⇒ 同一调用照旧走桥并成功（批准语义零放宽）。
+    scope::approve(
+        s.dir.path(),
+        "loopback-client",
+        McpTier::Read,
+        vec![],
+        vec!["launcher_instance_list".to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let port = s.port;
+    let token = s.token.clone();
+    let req = r#"{"jsonrpc":"2.0","id":960,"method":"tools/call","params":{"name":"launcher_instance_list","arguments":{}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.params["name"], json!("launcher_instance_list"));
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(json!({ "instances": [], "total": 0, "hasMore": false })),
+            error: None,
+        },
+    )
+    .unwrap();
+    let v = rpc_json(&worker.join().unwrap());
+    assert!(
+        v["error"].is_null(),
+        "精确名批准后仍被拒 ⇒ 批准语义被本批误伤：{v}"
+    );
+    assert_eq!(v["result"]["total"], json!(0));
+}
