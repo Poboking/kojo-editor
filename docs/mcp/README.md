@@ -314,9 +314,22 @@ B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**；B10 打开文档
   ≈1.4 ms/条，真正的 50 ms 税在 accept 轮询，已改阻塞式 accept + `wake_accept` 唤醒修掉。
   改这条必须带新的实测依据。
 - 数字口径：端点自身单条 p50 **3.19 ms**（改前 50.4 ms）、并发 8×12 **1411-1618 次/秒**（改前 154.5）；
-  真桌面壳单条 `tools/call` p50 6.97 / p95 16.12 ms。**两格显式留空**：真壳「成功数据帧」读数
-  （语料不在盘 ⇒ read 面按 `NOT_WIRED` 报错，往返本身是真的）与真壳「改前」对照（需另一次冷构建）——
-  不拿镜像数或估算冒充壳内 A/B。
+  真桌面壳单条 `tools/call` p50 6.97 / p95 16.12 ms。
+- **B5 当时留的两格已由 B12 取证填上**（量具＝`tools/mcp-shell-latency-evidence.mjs`，同机同语料同脚本，
+  改后 dev `35dec2f0` vs 改前 `fe706db3`＝`d1a43790^` 用 `git worktree add --detach` + 独立
+  `CARGO_TARGET_DIR` 冷构建，`mode=shell` 会话自证）：真壳**单条成功帧** p50 50.12/p95 62.19 ms ⇒
+  p50 **11.50**/p95 **20.54** ms（40/40 成功帧，**4.36×**）；经 stdio shim 那一层 p50 13.08（3.84×）；
+  真壳**20 条单发串行** round 墙钟 ~1013 ms ⇒ **271-318 ms**（3.66×）；真壳 **batch 20** 261.3 ⇒ **128.3 ms**
+  （2.04×，100/100 与 60/60 成帧）；真壳**并发 8×12** 150.8 ⇒ **307.9 次/秒**（2.04×）；壳内台账
+  `mcp_latency_query` 自报 `tools/call#fs.readFile` seen 398 p50 14/p95 55、`dropped` 0 / `overflowKeys` 0、
+  在途预算 peak 8 / waits 87→37 / **rejections 0**、limits 120/8/8/30000。
+  ⇒ **accept 那一堵 50 ms 税在真壳里逐条复现，修掉后壳内净收益 ≈4.4×**；而 batch 的并发收益在真壳里
+  只有 **2.04×**（改前那 3.9× 几乎全是「一条连接只交一次 accept 税」，不是真并发）。
+- **仍空的一格**：假桥（端点自身）那一组数 B12 **未重跑**，表里只能引用 `d1a43790` 自己的读数——
+  重跑法＝静默树上 `cargo test --lib mcp::tests::b5_endpoint_self_cost_probe_reports_p50_p95_and_batch_vs_serial -- --nocapture`。
+- 取证时实拍到一条**与 B5 无关但会误导取证者**的现象：干净会话里只读腿先整批回 `NOT_WIRED「宿主未提供数据源」`，
+  等 91.7 s／31 趟仍不出帧（改前改后都复现），调用 app 自己的 `registerMcpHostBridge()` 后立刻出帧 ⇒
+  这是注册表 memoize 竞态，不是端点慢；单独立批（见 STATE 在册欠账）。
 
 ### 5.9 「打开文档」面的诚实收口（B10＝`3b13f7ad`）
 
