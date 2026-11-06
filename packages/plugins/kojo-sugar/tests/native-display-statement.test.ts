@@ -8,7 +8,7 @@
  * 3. **不猜**——认不出必须 `null`（负自证表），`lookup` 缺席时语言层照常工作
  *    （无工程 / 无 adapter 的预览不瘫痪）。
  *
- * 第四组（TRY 系分档）钉的是**两层的配对**：开块九枚归 ZH-C、单行档归本层，
+ * 第四组（TRY 系分档）钉的是**两层的配对**：开块档（11 枚）归 ZH-C、单行档归本层，
  * 名单同源于 `sugar-ident`，谁也不许认领对方那批（`startsWith('TRY')` 那条捷径要当场显形）。
  *
  * 第五线（2026-10-20）：本表之外还有一档「**数据行**」——左值不是引擎族头、也不是语言层槽位，
@@ -305,23 +305,36 @@ describe('装配点 localiseNativeLine', () => {
 
 /* ==================== TRY 系分档：名单同源 + 两档互不认领 ==================== */
 
-/** 开块九枚（= ZH-C 的 `试探 原形 …` 认领面）；从识别核派生，本文件不抄第二份 */
-const TRY_NINE: readonly string[] = [...new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN])].sort();
+/** 开块档（= ZH-C 的 `试探 原形 …` 认领面）；从识别核派生，本文件不抄第二份。
+ *  D03 批把真源 `TRY_CATCH_OPEN` 从 6 补到 8（`TRYCJUMPSTR`/`TRYCCALLSTR`，引擎 funcMatch
+ *  `=CATCH`），加 `TRY_LIST_OPEN` 三枚 ⇒ 开块档 = **11**，本层派生自动跟随。 */
+const TRY_OPEN_BLOCK: readonly string[] = [...new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN])].sort();
 
-describe('TRY 系分档 · 九枚归 ZH-C / 单行档归本层（互不认领）', () => {
+describe('TRY 系分档 · 开块十一枚归 ZH-C / 单行档归本层（互不认领）', () => {
   it('本层认领的 TRY 记号 === `sugar-ident` 的单行档（动词表与名单零漂移）', () => {
     expect(STATEMENT_TRY_WORDS).toEqual([...TRY_SINGLE_LINE].sort());
     expect(STATEMENT_TRY_WORDS).toContain('TRYGOTO');
     expect(STATEMENT_TRY_WORDS).toContain('TRYGOTOFORM');
   });
 
-  it('两档名单不相交（档位是判据、前缀不是；九枚之数也钉死，防止有人往单行档塞开块词）', () => {
-    expect(TRY_NINE).toHaveLength(9);
-    expect(TRY_NINE.filter((k) => TRY_SINGLE_LINE.has(k))).toEqual([]);
+  /**
+   * 两档互斥：档位是判据、前缀不是。`TRYCJUMPSTR`/`TRYCCALLSTR` 归**开块档**（引擎
+   * `CALLS_Instruction(isJump, isTry, isTryCatch=true)`、`funcMatch[..]=CATCH`，见 FunctionIdentifier.cs:368-369/501-502），
+   * 故在 `TRY_OPEN_BLOCK` 且不在 `TRY_SINGLE_LINE`；近旁单行词 `TRYCALLSTR`/`TRYJUMPSTR`（`isTryCatch=false`）
+   * 两档都不在（本层未认领语句动词 ⇒ 落 tryOther 棘轮桶）。枚数钉死＝11，防止往任一档塞对方词。
+   */
+  it('两档名单不相交（档位是判据、前缀不是；开块十一枚之数也钉死，防止有人往单行档塞开块词）', () => {
+    expect(TRY_OPEN_BLOCK).toHaveLength(11);
+    expect(TRY_OPEN_BLOCK.filter((k) => TRY_SINGLE_LINE.has(k))).toEqual([]);
+    // 新词确在开块档、不在单行档（不是被"排除 *STR"剪回九枚，而是如实按引擎档位归开块）
+    for (const k of ['TRYCCALLSTR', 'TRYCJUMPSTR']) {
+      expect(TRY_OPEN_BLOCK, k).toContain(k);
+      expect(TRY_SINGLE_LINE.has(k), k).toBe(false);
+    }
   });
 
-  it('九枚：本层弃权 ⇒ ZH-C 给中性形（装配层读不到本层的动词语）', () => {
-    for (const kind of TRY_NINE) {
+  it('开块十一枚：本层弃权 ⇒ ZH-C 给中性形（装配层读不到本层的动词语）', () => {
+    for (const kind of TRY_OPEN_BLOCK) {
       const src = `${kind} FOO(A, 1)`;
       expect(render(src, undefined), src).toBeNull();
       expect(renderControlLine({ content: src, indent: 0 }), src).toBe(`试探 原形 ${kind} FOO(A, 1)`);
