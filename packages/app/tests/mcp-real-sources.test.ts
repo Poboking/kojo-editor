@@ -8,7 +8,8 @@
  * - 截断必须显式 truncated，接不到真源必须 NOT_WIRED / RESOURCE_UNAVAILABLE
  *   （铁律 4：不静默、不伪造读数、不空串冒充成功）；
  * - codeActionsAt 只投影「有哪些动作」，绝不 apply；
- * - 写类与危险动作保持 NOT_WIRED，不擅自开放执行。
+ * - 四枚 fileTree 写腿（create/update/remove/rename）接真实写执行，双闸逐条可红；
+ *   其余写类与危险动作保持 NOT_WIRED，不擅自开放执行（见 mcp-write-legs.test.ts）。
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpFailure, createMcpCapabilityRegistry, MCP_TOOL_GAP_MAP, SUPPLEMENTAL_TOOL_SPECS, type McpSessionScope } from '@kojo/mcp-host';
@@ -432,10 +433,10 @@ describe('runSupplemental：只读 IO 腿', () => {
 describe('runSupplemental：仍 NOT_WIRED 的写类与危险动作', () => {
   const { kernel } = fakeKernel();
   const sup = createRunSupplemental(fakeIoDeps(kernel));
-  // fileTree.create / fileTree.update 已接线（见「写腿」describe）；remove/rename/quickFix 仍缺
-  // 宿主授权面 / 稳定 actionId + apply 通道，显式 NOT_WIRED。
+  // fileTree.create / update / remove / rename 四枚写腿已接真实写执行（第四波，见「写腿」
+  // 与 mcp-write-legs.test.ts）；problems.quickFix 仍缺稳定 actionId + 宿主受控 apply 通道，
+  // 其余危险动作仍缺宿主授权面 ⇒ 显式 NOT_WIRED。已接线的名字不许留在缺席清单里。
   const NOT_WIRED_NAMES = [
-    'fileTree.remove', 'fileTree.rename',
     'problems.quickFix', 'diff.compare', 'state.replay', 'preview.document',
     'remove_path', 'launcher_start', 'market_install', '完全未知',
   ];
@@ -452,7 +453,7 @@ describe('runSupplemental：仍 NOT_WIRED 的写类与危险动作', () => {
   });
 });
 
-/* ------------------------------- 写腿（fileTree.create / fileTree.update） ------------------------------- */
+/* ---------------- 写腿（fileTree.create / update / remove / rename 四枚） ---------------- */
 
 describe('第四张表 approvedRoots 复核（写闸一，MCP 侧）', () => {
   it('前缀必须落在分隔符边界（/docs 不吃 /docs2）；大小写不敏感；等于根本身算域内', () => {
@@ -1432,13 +1433,15 @@ describe('buildRealMcpSources / installRealMcpSources（组装 → wiring 登记
     expect(out).toMatchObject({ path: 'a.txt', text: 'hello', truncated: false });
     expect(invoke).toHaveBeenCalledWith('read_file_bytes', { path: 'D:/proj/a.txt' });
     // 写类经 registry 双闸：tier gate 先拦（privileged 未批准 ⇒ PERMISSION_DENIED）；
-    // 即使宿主显式批准，执行层也不开放执行 ⇒ NOT_WIRED（不静默、不擅自写盘）。
+    // 宿主显式批准工具后，写腿已接线 ⇒ 继续撞写闸一（第四张表 approvedRoots 为空 ⇒
+    // WRITE_DISABLED），绝不静默写盘、也绝不退回「NOT_WIRED」冒充未接线。
     await expect(reg.callTool('fileTree.remove', { relPath: 'a.txt' }, scope)).rejects.toMatchObject({
       code: 'PERMISSION_DENIED',
     });
     const approvedScope: McpSessionScope = { ...scope, approvedTools: ['fileTree.remove'] };
     await expect(reg.callTool('fileTree.remove', { relPath: 'a.txt' }, approvedScope)).rejects.toMatchObject({
-      code: 'NOT_WIRED',
+      code: 'WRITE_DISABLED',
+      message: expect.stringContaining('approvedRoots'),
     });
   });
 
