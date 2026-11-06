@@ -86,7 +86,7 @@ interface Overrides {
    * 'unprovable'（开着但判不出）；表里没有这一格 ⇒ 'not-open'（登记簿里没这个落点的 pane）。
    * **整枚 seam 不给**（`dirty` 未定义）⇒ 腿走生产反查（node 测试里动态 import 失败 ⇒ 'unknown'）。
    */
-  readonly dirty?: Record<string, 'dirty' | 'clean' | 'not-open' | 'unprovable'>;
+  readonly dirty?: Record<string, 'dirty' | 'clean' | 'not-open' | 'unprovable' | boolean | null>;
   /** 观察通道整体不可用（生产动态 import 失败的同形读数）⇒ 腿必须标 'unknown' 并放行，不静默当干净。 */
   readonly dirtyUnknown?: boolean;
 }
@@ -128,8 +128,8 @@ function makeHarness(over: Overrides = {}): Harness {
       if (cmd === 'stat_files') {
         if (over.statFilesFn) return over.statFilesFn(((args?.['paths'] as string[]) ?? []).map(String));
         return 'statFiles' in over ? over.statFiles : [
-          { path: String(args?.['paths']?.[0] ?? ''), exists: true, size: 3, mtimeMs: 11 },
-          { path: String(args?.['paths']?.[1] ?? ''), exists: false, size: null, mtimeMs: null },
+        { path: String((args?.['paths'] as string[] | undefined)?.[0] ?? ''), exists: true, size: 3, mtimeMs: 11 },
+        { path: String((args?.['paths'] as string[] | undefined)?.[1] ?? ''), exists: false, size: null, mtimeMs: null },
         ];
       }
       if (cmd === 'stat_file') {
@@ -144,7 +144,7 @@ function makeHarness(over: Overrides = {}): Harness {
       ? {}
       : {
           getBufferDirty: (abs: string) =>
-            abs in over.dirty ? (over.dirty[abs] as 'dirty' | 'clean') : ('not-open' as const),
+            abs in over.dirty! ? (over.dirty![abs] as 'dirty' | 'clean') : ('not-open' as const),
         }),
   };
   return { sup: createRunSupplemental(deps), invokes, emits, deps };
@@ -174,9 +174,9 @@ function rustList(name: string, file: string): string[] {
   return [...src.slice(open + 2, close).matchAll(/"([^"]*)"/g)].map((m) => m[1]!);
 }
 
-/** 与 Rust `key_tokens` + `is_forbidden_target_key` / `path_param_tier` 同尺的现场判据。 */
+/** 与 Rust `key_tokens` 同尺：按非字母数字 + camelCase 边界分词后小写（只按非字母数字切会把 destRelPath 留成整词 ⇒ 反向自证恒假）。 */
 function keyTokens(key: string): string[] {
-  return key.split(/[^A-Za-z0-9]+/).filter((s) => s !== '');
+  return key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(/[^a-z0-9]+/).filter((s) => s !== '');
 }
 
 /* ================================================================== *

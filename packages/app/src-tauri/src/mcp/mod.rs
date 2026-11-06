@@ -2,6 +2,7 @@
 //!
 //! 目录分派：`protocol`（线协议与安全闸门）/ `scope`（第四张授权表）/
 //! `audit`（审计日志）/ `latency`（逐请求耗时台账）/ `server`（本机 HTTP 端点）/
+//! `process`（宿主侧具名写面档位真源表）/ `tools`（端点参数级档位绑定真源表）/
 //! `mod.rs`（Tauri 命令面）。
 //!
 //! 冻结契约的四个命令 `mcp_start` / `mcp_stop` / `mcp_status` / `mcp_respond`
@@ -10,9 +11,11 @@
 
 mod audit;
 mod latency;
+mod process;
 mod protocol;
 mod scope;
 mod server;
+mod tools;
 
 #[cfg(test)]
 mod tests;

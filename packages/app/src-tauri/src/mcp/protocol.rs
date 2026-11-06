@@ -1147,6 +1147,13 @@ pub const EDIT_TOOL_PREFIXES: &[&str] = &[
 /// MCP-PERF-S6 批（LaneN 2026-11-07）追加 `fileTree.patchLines`——同一型洞的第五批，
 /// 理由逐字相同：read 会话零批准就能整批改写单文件 ≤32 hunk；端点级回归见
 /// `mcp::tests::e2e_tools_call_denies_file_tree_patch_lines_from_read_session`。
+///
+/// B25 批（LaneAQ，2026-11-07）追加 fs.copyFile / fs.ensureDir——同一型洞的第六批，
+/// 理由逐字相同：命名空间.动词点号形态，既不命中 EDIT_TOOL_PREFIXES 的下划线前缀
+/// （表里是 copy_ / write_ 这类，fs.copyFile 以 fs. 开头，starts_with 不成立），
+/// 也不在 PRIVILEGED_EXACT ⇒ 不点名则 host_required_tier() 落 McpTier::Read，
+/// read 会话零批准即可复制 / 递归建目录。WebView 契约（SUPPLEMENTAL_TOOL_SPECS）
+/// 即 tier: 'edit'，本表把端点侧判定与契约对齐；只读面 fs.readFileBytes 刻意不进本表。
 pub const EDIT_TOOLS_EXACT: &[&str] = &[
     "fileTree.create",
     "fileTree.update",
@@ -1161,10 +1168,15 @@ pub const EDIT_TOOLS_EXACT: &[&str] = &[
     "editor.setSelection",
     "editor.revealLine",
     "editor.openDocument",
+    "fs.copyFile",
+    "fs.ensureDir",
 ];
 
 pub fn is_edit_tool(name: &str) -> bool {
+    // 双表镜像（B25）：宿主进程侧 `process::host_required_tiers` 与本表同批维护，
+    // 任一表登记即生效——防「只改契约、漏改宿主侧档位真源」形成 read 会话后门。
     EDIT_TOOLS_EXACT.contains(&name)
+        || super::process::host_required_tiers.contains(&name)
 }
 
 pub fn host_required_tier(name: &str) -> McpTier {
@@ -1283,6 +1295,10 @@ pub fn is_root_id_shape(raw: &str) -> bool {
 /// 「选根」语义（可选 rootId 换域基准根；缺席 ⇒ 项目根零额外 IPC），端点对它的复核与本表其余
 /// 成员**逐字同尺**：形状闸 + PATH_TARGET_FORBIDDEN + 第四张表精确列名，默认拒绝
 /// 一字不变（授权表零改动，只是新读腿受同一道防旁路闸管）。其它工具带该参数一律拒绝。
+///
+/// B25 批（LaneAQ，2026-11-07）+`fs.copyFile` / `fs.ensureDir`：两枚新写腿同批进
+/// 端点第四张表，逐根复验才生效；名单**不写死枚数**——枚数随批次演进，口径只认本表。
+/// 只读字节面 fs.readFileBytes 刻意不收 rootId。
 pub const MULTIROOT_WRITE_TOOLS: &[&str] = &[
     "fileTree.create",
     "fileTree.update",
@@ -1291,6 +1307,8 @@ pub const MULTIROOT_WRITE_TOOLS: &[&str] = &[
     "fileTree.remove",
     "fileTree.rename",
     "fs.readRange",
+    "fs.copyFile",
+    "fs.ensureDir",
 ];
 
 /// `tools/call` 的 `rootId` **端点级二次复核**（纯函数，纵深再深一层）：WebView
@@ -1336,7 +1354,9 @@ pub fn check_root_id_param(
     if !MULTIROOT_WRITE_TOOLS.contains(&name) {
         return Err(McpError::new(
             codes::INVALID_PARAMS,
-            format!("rootId 只允许出现在四枚写腿上，工具 {name} 不接受该参数"),
+            format!(
+                "rootId 只允许出现在 MULTIROOT_WRITE_TOOLS 名单内的写腿上（名单不写死枚数，逐根复验才生效），工具 {name} 不接受该参数"
+            ),
         ));
     }
     if !scope

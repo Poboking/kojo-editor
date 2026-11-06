@@ -1236,6 +1236,55 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: 'fs.copyFile',
+    description:
+      'Copy one file to another path inside the authorized project root (edit tier, mutating; B25). Both `srcRelPath` (source) and `relPath` (destination) are project-root-relative and go through the SAME gate as fs.readFile (schema rejects absolute paths, drive letters and ".."; the execution layer re-checks against approvedRoots and the kernel write domain). Backed by the server-side kernel.io.copyFile primitive (Rust copy_file asserts the writable domain on the destination only) — never a second write channel assembled from read+write. Preflight is ONE batch stat_files of [source, destination]; a missing source / a directory source / an identical source-and-destination are refused loudly; an existing destination is refused unless `overwrite:true` is given explicitly (and an open editor buffer with unsaved changes at the destination is refused before any write). The reply carries the post-write stat receipt (exists/size/mtimeMs/isDirectory), a source-size reconciliation, the broadcast kind and a bufferState reading. Optional `rootId` selects one explicitly approved persistent workspace root (enumerate via io.workspaceRoots; human approval required).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        srcRelPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_SCHEMA,
+        overwrite: { type: 'boolean', description: 'Allow replacing an existing destination (default false). An open buffer with unsaved changes is still refused.' },
+        rootId: ROOT_ID_SCHEMA,
+      },
+      required: ['srcRelPath', 'relPath'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { idempotentHint: false },
+  },
+  {
+    name: 'fs.ensureDir',
+    description:
+      'Recursively ensure a directory exists inside the authorized project root (edit tier, mutating; B25). `relPath` is project-root-relative (same gate as fs.readFile). Unlike fileTree.create kind:directory — which is an EXCLUSIVE, non-recursive create that refuses an existing entry — fs.ensureDir is idempotent: an existing directory is reported as alreadyExisted with ZERO write primitives called, while a first creation reports segmentsCreated (the missing path segments) and calls the recursive kernel.io.ensureDir primitive once. A same-named regular file is refused (never deletes anything to make room). Preflight is ONE batch stat_files; the reply carries a post-write isDirectory receipt. Refuses (WRITE_DISABLED) when approvedRoots or the kernel write domain do not cover the target. Optional `rootId` selects one explicitly approved persistent workspace root (enumerate via io.workspaceRoots; human approval required).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPath: RELATIVE_PATH_SCHEMA,
+        rootId: ROOT_ID_SCHEMA,
+      },
+      required: ['relPath'],
+      additionalProperties: false,
+    },
+    tier: 'edit',
+    annotations: { idempotentHint: true },
+  },
+  {
+    name: 'fs.readFileBytes',
+    description:
+      'Read ONE WHOLE SMALL FILE as base64 inside the authorized project root (read-only; B25). `relPath` is project-root-relative (same gate as fs.readFile); this surface does NOT accept rootId, offset, limit, cursor or any paging argument — it is deliberately the root-relative subset of read_file_bytes_raw, NOT the arbitrary-absolute-path ipc::Response binary frame (that half stays deferred). Backed by the Rust read_file_bytes primitive, whose base64 text is byte-for-byte identical to the raw bytes. A hard 48000-byte ceiling keeps the base64 payload (64000 chars) under the host untrusted-string sanitizer gate (65536) so nothing is silently trimmed; an oversized file is refused with INVALID_ARGS and batching guidance instead of being truncated. The reply carries bytesReturned/bytesTotal reconciled against a preflight stat_file, truncated:false, encoding:base64, maxBytes:48000, fsFreshness and via. A missing file / directory / malformed or size-mismatched payload is an explicit failure, never a stat number passed off as read bytes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPath: RELATIVE_PATH_SCHEMA,
+      },
+      required: ['relPath'],
+      additionalProperties: false,
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'fs.stat',
     description:
       'Query metadata (existence, kind, size, modification time) for one path inside the authorized project root (read-only). `relPath` is project-root-relative and domain-checked against approvedRoots; out-of-domain targets are refused. Backed by the Rust stat_file / path_exists primitives. Never writes to disk and never follows a path outside the approved roots.',
@@ -2386,6 +2435,17 @@ export const MCP_TOOL_GAP_MAP: readonly {
   { tool: 'launcher_project_hash', gap: 'launcher_project_hash', source: 'rust' },
   { tool: 'launcher_start', gap: 'launcher_start', source: 'rust' },
   { tool: 'launcher_stop', gap: 'launcher_stop', source: 'rust' },
+  // B25 批（LaneAQ，2026-11-07）：文件族缺口逐枚判性后的四行覆盖声明。
+  // copy_file / ensure_dir ⇒ 具名 edit 工具 fs.copyFile / fs.ensureDir（执行腿走 kernel.io
+  // copyFile / ensureDir 写原语，双闸＝第四张表 approvedRoots × 内核写允许域）；
+  // read_file_bytes_raw ⇒ 只拆「项目根内相对路径」那一子集为 fs.readFileBytes（真源
+  // read_file_bytes 的 base64 文本，任意绝对路径那一半继续 deferred，理由见下方台账）；
+  // create_dir_exclusive ⇒ **只改台账**：能力早由 fileTree.create 的 kind:'directory'
+  // 支路独占非递归覆盖，不另造重复工具（判据 ③ 最后一格守住这条真差异）。
+  { tool: 'fs.copyFile', gap: 'copy_file', source: 'rust' },
+  { tool: 'fs.ensureDir', gap: 'ensure_dir', source: 'rust' },
+  { tool: 'fs.readFileBytes', gap: 'read_file_bytes_raw', source: 'rust' },
+  { tool: 'fileTree.create', gap: 'create_dir_exclusive', source: 'rust' },
 ];
 
 /**
@@ -2413,6 +2473,8 @@ export const MCP_DEFERRED_GAP_NOTES: readonly { readonly scope: string; readonly
   { scope: 'B4 批判性变更（相对批单）：launcher_content_plan / launcher_save_import / launcher_project_extract 不登记', reason: '三条的 archivePath 入参按宿主自己的注释是「用户在原生对话框里选中的输入件」，宿主的 validate_archive_argument 只做形态闸（绝对路径 / 存在 / 是文件 / 非 UNC / 无控制字符），没有「这台机器上哪些包已被人选过」这一层可复验的登记表；而产出该路径的 launcher_pick_archive 属对话框即授权、刻意不登记。两相叠加：登记这三条等于让模型自行指定任意本机文件让宿主读取并解包 ⇒ 新造了一条读侧的任意路径通道，与铁律 6「不得开放任意目标路径参数」相反。故本批把它们留在缺口清单，改由界面侧向导产出的 planId 驱动 launcher_content_apply / launcher_save_apply_import（planId 是一次性句柄，不是路径，过期即显式拒绝）。' },
   { scope: 'B4 批判性变更（相对批单）：launcher_instance_create 不登记', reason: '命令载荷是 {request, profile}，其中 profile 由 adapter 的 probe + buildProfile 编译（那是游戏知识，只能进 *-adapter / launcher-core，MCP 腿零游戏知识），且 request.sourceRoot 是 launcher_pick_source_root 对话框产出的绝对路径（即授权本身）。MCP 面既造不出诚实的 profile，也拿不到合法的 sourceRoot ⇒ 登记即造假或越权，留账不登记；实例的新建走界面，或经 launcher_instance_duplicate 复制既有实例。' },
   { scope: 'B4 批已登记但刻意收窄：launcher_instance_update 不收 executableRelativePath / args / env', reason: '宿主白名单允许这些字段，但「跑什么」属于人的决定（信任只能由原生确认框授予）：具名工具只收 name / notes / tags 三个描述性字段，其余字段在本面被显式拒绝（INVALID_ARGS 说明原因），宿主白名单仍是判据真源。这是收紧，不是放宽，也不影响界面侧既有能力。' },
+  { scope: 'append_frontend_log（B25 判性：继续 deferred）', reason: '面向人的操作，继续 deferred，理由对着 src/diagnostics.rs 的读侧写逐条读：append_frontend_log 是纯 IO 原语，命令不接受路径参数，落点由宿主用 app_data_dir() 定死在 appData 日志目录（frontend-{}.log，经 enforce_size_cap 保尾截断 + 按日轮转），根本不经过内核 writablePaths / assertWritable 这道写允许域第二闸——宿主自己的日志不是用户数据。MCP 面没有可诚实回报的读侧数据面，把它登记成具名工具等于给模型开一条写宿主日志的通道，还会与审计取证设施的语义相冲：日志是审计的落点，不是模型可调用的能力。按铁律 6/7（对话框即授权）与铁律 4（不静默）继续留账，绝不造返回空串的假实现。' },
+  { scope: 'read_file_bytes_raw（B25 判性：只拆根内相对路径子集，任意绝对路径半格继续 deferred）', reason: 'B25 只把 read_file_bytes_raw 的项目根内相对路径那一半拆成具名只读工具 fs.readFileBytes（真源 read_file_bytes 返回 base64 文本，与裸字节逐字节相同；48 000 B 硬闸把 64 000 字符载荷压在宿主 65 536 字符净化闸内）。另一半继续 deferred：单文件 ipc::Response 二进制帧（前端拿 ArrayBuffer / 自定义帧）是开项目热路径的性能通道，没有面向模型的结构化数据面，且其 path 就是任意绝对路径参数，登记它只会把不开放任意绝对路径这条闸重新打开；项目根内的单文件文本读已由 fs.readFile 覆盖、批量文本读已由 fs.readMany 覆盖。理由原样保留，不因本批登记相对路径子集而撤销。' },
 ];
 
 /** 内置 resource（≥6 的硬要求；「当前文档与光标」是第一波后的加法，Wave4 余项⑤再加 `kojo://tasks`）。 */
