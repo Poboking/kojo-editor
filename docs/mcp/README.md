@@ -459,6 +459,31 @@ harness 直接叫腿，B11 的取用对照表是手抄的）。现 `fc516b0a` �
 两个方向漏了都红，外加一条真走注册表校验层的通路用例）＝B19 在跑。写进这里是因为这形态会复发：
 凡「能力做在腿里、schema 里看不见」，严格化落地那天就是功能对客户端不可达那天。
 
+### 5.13 `tools/list` 载荷：实测读数与「不做分页」的裁决（B21＝dev `bccd98d9`）
+
+B1 只给**数据面**做了分页，`tools/list` 自身体积从没量过——而它每一轮对话都要付。
+量具＝`node tools/mcp-list-payload-evidence.mjs <static|shell|compare>`（静态面从注册表真源
+`createMcpCapabilityRegistry({}).listTools(scope)` 现场算，与线协议一一对应；零假注入、零估算），
+读数由 `packages/app/tests/mcp-tools-list-payload.test.ts` 四条判据钉住（可见面形状 / 体积带 /
+线协议键集只许 `{name, description, inputSchema, tier, annotations?}` / 距 1 MiB 的余量）。
+
+- 全量面（77 枚全批准）一帧 **218,897 B**：`inputSchema` **143,762 B＝65.7%**、`description`
+  64,851 B＝29.6%、其余 10,153 B；均枚 2,842 B。
+- **缺省会话（未批准）只出 37 枚 read ⇒ 98,412 B**；`edit` 会话 48 枚 115,048 B。
+  ⇒ 客户端默认付的是那 96 KiB，不是全量帧。
+- **族分布极度不均**：`launcher_*` 27 枚吃掉 **100,323 B＝45.8%**；`fs` 8.7%、`editor` 7.6%、
+  `semantic` 6.3%、`io` 5.7%。B11 严格化（80 处 `additionalProperties:false`）的代价实测只有
+  **2,400 B＝1.1%**——它不是靶子。
+- 真正的浪费是**逐字重复**：`PAGE_ACCOUNT_NOTE`（721 字符）被 **23 枚面**各抄一份＝**16,583 B＝描述字节的
+  25.6%**；另一条最长共享描述后缀 969 字符 × 11 枚＝10,659 B＝16.4%。合计约 **27 KB / 218 KB**。
+- **分页被实测否决**：投影 `limit=10` ⇒ 8 帧、总量 220,154 B（比一帧**多 1,257 B**）；`limit=20/25` ⇒
+  4 帧 +597 B；`limit=40` ⇒ 2 帧 +267 B。分页只多付往返与总量，**不减体积**；而体积闸
+  `maxResponseBytes＝1,048,576` 现余量 **829,679 B**，离撑爆还远 ⇒ 正确杠杆是去重复（B22 在跑），
+  不是给 `tools/list` 加游标。
+- 一格待查（不写成结论）：Rust 侧那条 `maxDescriptionChars＝2048` 对两枚超限面（`launcher_log_tail`
+  2,049 字符、`editor.openDocument`）**真实行为是什么**（截断 / 报错 / 照发）尚未定，B22 负责查清并如实
+  记录；本批只报「有 2 枚在册超限，若逐条压到闸内只省 176 B」，**不许为此放宽闸值**。
+
 ## 6. tier 与授权模型
 
 `McpTier = 'read' | 'edit' | 'privileged'`；会话形状（冻结契约 v1）：
