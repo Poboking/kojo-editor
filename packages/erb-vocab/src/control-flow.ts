@@ -67,7 +67,7 @@ const LEAF_KINDS = new Set(['SIF']);
 /**
  * TRY 系精确三档（funcMatch 全量逐条过；行号取自 Emuera `FunctionIdentifier.cs` 现况，会漂）：
  * - 配 CATCH 的恰为 **8** 个：`funcMatch[X] = "CATCH"` 一共 8 行 —— TRYCGOTO / TRYCJUMP /
- *   TRYCCALL（±FORM）**再加 TRYCJUMPSTR / TRYCCALLSTR**。后两枚是 2026-11-16 D03 批补上的：
+ *   TRYCCALL（±FORM）**再加 TRYCJUMPSTR / TRYCCALLSTR**。后两枚是 2026-11-06 D03 批补上的：
  *   旧表只抄了 6 枚，于是真语料 `ERB/SHOP関連/TEST.ERB:13-17` 那段合法写法
  *   （`TRYCCALLSTR RESULTS` / `PRINTW …` / `CATCH` / `PRINTW …` / `ENDCATCH`）被连环误报两条
  *   （`CATCH 不在它所属的块里` + `ENDCATCH 找不到对应的开块语句`）——一次漏词就是两条假缺陷。
