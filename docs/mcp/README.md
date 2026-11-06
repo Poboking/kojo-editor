@@ -120,7 +120,7 @@ node tools/kojo-mcp.mjs
 ## 5. 暴露的能力概览
 
 能力注册表唯一真源 `packages/mcp-host/src/index.ts`（冻结契约 v1）。按 `node tools/mcp-inventory.mjs --print`
-盘点：`tools` 共 **43** 个，按 tier 分组 `read 36 / edit 5 / privileged 2`（详见 §6 授权模型；2026-11-06 第四/五波只读补齐、余项① / ⑤ 写腿落地后复核）。
+盘点：`tools` 共 **48** 个，按 tier 分组 `read 36 / edit 10 / privileged 2`（详见 §6 授权模型；2026-11-06 第四/五波只读补齐、余项① / ⑤ 与 B3 编辑器写腿落地后复核）。
 这些是**规范定义**的计数；`tools/list` 还会按会话 `tier` 与第四张表进一步过滤，危险工具默认缺席。
 另外，生产真源会把命令面板命令投影成同名工具（`commands.list` 读数与工具 `tier` 同源），但它们
 **一律按 `privileged` fail-closed**，默认不出现在 `tools/list`、也不接受 `edit` 会话调用（§6）；
@@ -131,7 +131,7 @@ node tools/kojo-mcp.mjs
 | tier | 代表工具 | 说明 |
 | --- | --- | --- |
 | `read` | `project.info` `fs.tree` `fs.readFile` `fs.stat` `search.all` `workspace.searchAll` `problems.diagnostics` `document.active` `commands.list` `editor.info` `editor.selfCheck` `io.listDir` `io.workspaceRoots` `semantic.definitionAt` `semantic.referencesAt` `semantic.hoverAt` `semantic.suggestAt` `semantic.documentSymbols` `semantic.tokens` `semantic.codeActionsAt` `semantic.diagnostics` `lang.foldingRanges` `lang.highlightsAt` `lang.signatureAt` `lang.markers` `diff.compare` `state.replay` `preview.document` `app.dataDir` `codec.encodeString` `fs.pathExists` `fs.statFiles` `lang.lensesAt` `lang.selectionRangesAt` `editor.cursor` `tasks.status` | 只读；`readOnlyHint: true` |
-| `edit` | `fileTree.create` `fileTree.update` `problems.quickFix` `tasks.start` `tasks.cancel` | 需会话 `tier >= edit` + `approvedRoots` 复核；`tasks.*` 两枚改的是运行态，不占盘 |
+| `edit` | `fileTree.create` `fileTree.update` `problems.quickFix` `tasks.start` `tasks.cancel` `editor.setValue` `editor.type` `editor.setCursor` `editor.setSelection` `editor.revealLine` | 需会话 `tier >= edit`；只有 `fileTree.*` 触盘写双闸，其余三种形态见 §5.4 |
 | `privileged` | 危险工具 | 默认**不进 `tools/list`**；须宿主经第四张表逐会话批准 |
 
 每个工具都有面向模型的 `description`、严格 `inputSchema`、正确 `tier` + `annotations`；
@@ -155,7 +155,7 @@ node tools/kojo-mcp.mjs
 ### 5.4 写腿状态段（真值自 `node tools/mcp-inventory.mjs --json` 的 `writeLegs`）
 
 2026-11-06 第四波收口时 **wired 4 / NOT_WIRED 1**；余项① 收口（`b8ff59d4`）后 **wired 5 / NOT_WIRED 0**；
-余项⑤ 收口（`784cc077`）后 **wired 7 / NOT_WIRED 0**：
+余项⑤ 收口（`784cc077`）后 **wired 7 / NOT_WIRED 0**；B3 编辑器写腿批（`f3dad97c`）后 **wired 12 / NOT_WIRED 0**：
 
 | 工具 | tier | 状态 | 真源 |
 | --- | --- | --- | --- |
@@ -166,13 +166,43 @@ node tools/kojo-mcp.mjs
 | `problems.quickFix` | `edit` | wired | 宿主 `provideCodeActionsFor` 既有签发 id（`pane-N:贡献id#seq`）+ 有界台账（≤300 条 / 10min TTL）；apply＝Monaco 模型内单次 `executeEdits`（一个撤销步、可见脏、**不落盘**，零 io/invoke/bus）；文档版本前进或换页 ⇒ 旧 id 显式 `E_QUICKFIX_DOC_CHANGED` |
 | `tasks.start` | `edit` | wired | 缺口 `search_text` / `convention.linter.run(opts)`——起一条真长操作，改的是**运行态**（任务表 + 在途请求），两种 kind 都不落项目盘 |
 | `tasks.cancel` | `edit` | wired | 缺口 `cancel_search`（按行内持有的 `searchId` 认领，**不接受调用方传 id**）/ 本轮 `AbortSignal`；取消是**请求**语义，终态才是事实 |
+| `editor.setValue` | `edit` | wired | 缺口 `setValue`（`install-debug.ts` 同一实现腿）：整篇替换 Monaco 模型，**必回读核对**，不过 ⇒ `E_EDITOR_APPLY_UNVERIFIED`；只读实例显式 `PERMISSION_DENIED` + `E_EDITOR_READ_ONLY` |
+| `editor.type` | `edit` | wired | 缺口 `type`：光标处插入，走 `executeEdits` ⇒ **一个撤销步**且移动光标；同上回读核对与只读拒绝 |
+| `editor.setCursor` | `edit` | wired | 缺口 `setCursor`：1-based 行列由调试面同一 `normalizeCursorTarget` 严格校验，脏值（0-based / 小数 / 缺 line）`INVALID_ARGS` 且**零调用**真源 API；夹取如实标 `clamped` |
+| `editor.setSelection` | `edit` | wired | 缺口 `setSelection`：1-based 四点，越界行拒绝、超线尾列夹取并如实回报；正文不动（`contentChanged:false`） |
+| `editor.revealLine` | `edit` | wired | 缺口 `revealLine`：`center` / `top` / `nearest` 三档（不发明 `bottom`），超文末行夹到末行并回报 `requestedLine` vs `revealedLine`；视口方法抛错就报错误，不静默成功 |
 
-四枚**盘写**腿一律叠**双闸**：写闸一第四张表 `approvedRoots` 复核，写闸二内核
-`writablePaths` 写原语；成功后广播 `file.changed`（remove 发 `unlink`、rename 发源 `unlink` + 目标 `add`）。
-`problems.quickFix` 是盘侧面里唯一**不落盘**的那一枚：它只改模型（可撤销、留脏），落盘仍只经上面两闸。
-`tasks.*` 两枚属**运行态**写（不占盘、不触双闸，但同样判 edit ⇒ read 会话直调被端点 `E_TIER_DENIED` 拒）。
+三种形态要分清：**四枚盘写腿**（`fileTree.*`）一律叠**双闸**——写闸一第四张表 `approvedRoots` 复核，写闸二内核 `writablePaths` 写原语；成功后广播 `file.changed`（remove 发 `unlink`、rename 发源 `unlink` + 目标 `add`）。
+**六枚模型侧写**（`problems.quickFix` + `editor.*` 五枚）**不落盘**：只改 Monaco 模型（可撤销、留脏，回执恒带 `saved:false` 与真实 `dirty` 读数——脏值取自 `EditorPane.computeDirty` 同一条表达式 `getAlternativeVersionId() !== editorModelPool.baseline(path)`，monaco 0.57 的 `ITextModel` **没有** `isDirty`，拿不到就 `dirty:null` + 理由，不另立第二份脏账），落盘仍只经上面两闸；`editor.*` 五枚按 `paneId` 显式反查实例，**这一面没有「当前聚焦」语义**（禁用 `focusedCtx()`），pane 不在 ⇒ `NOT_WIRED` + `E_EDITOR_PANE_GONE`，绝不 `applied:true` 冒充。
+**两枚运行态写**（`tasks.*`）不占盘、不触双闸。三类一律判 `edit` ⇒ read 会话直调被端点 `E_TIER_DENIED` 拒（`editor.*` 五枚与 `tasks.*` 两枚同批点名进 Rust `EDIT_TOOLS_EXACT`，端点级回归钉「拒在 emit 之前 ⇒ 桥零调用」+ 逐条 Denied 审计）。
 `privileged` 两枚默认不进 `tools/list`、按工具名精确批准；`exportFile` 对话框仍是唯一域外写法定通道。
 `NOT_WIRED` 一律显式抛错可见，**绝不挂空串假实现**。
+
+### 5.5 分页与游标（B1 批＝`5f8c8df5`）
+
+- **为什么需要**：旧面一旦超界就切一半返回，AI 客户端**无从知道自己少读了什么**。现在超界面改可续读：
+  **13 面**声明 `cursor`（真源＝`packages/mcp-host/src/index.ts` 里展开 `...PAGE_PROPS` 的 13 枚规格：
+  `semantic.diagnostics` / `semantic.documentSymbols` / `fs.tree` / `search.all` / `workspace.searchAll` /
+  `problems.diagnostics` / `commands.list` / `document.active` / `fs.readFile` / `io.listDir` /
+  `io.workspaceRoots` / `editor.selfCheck` / `lang.markers`），全部**只加入参、零新工具名**。
+- **游标里装的是什么**：全量快照的 FNV-1a 指纹（列举面按稳定 key、文本面按正文），检索面按**已消费前缀指纹**
+  （拿不到全量就不假称拿得到）。编解码真源 `packages/mcp-host/src/index.ts` 的
+  `pageFingerprint` / `encodePageCursor` / `decodePageCursor`，两面共用 `paginateByCursor` / `paginateText`。
+- **页间被改怎么办**：指纹对不上 ⇒ `changedDuringPaging:true` + offset 归 0（旧行为是盲切旧偏移＝静默错位）。
+- **越界 / 脏游标**：显式 `INVALID_ARGS`，**不回空页冒充到底**；`decodePageCursor` 对 17 类脏值返 `null`，
+  schema 的 `pattern` 与解码器逐字对拍。
+- **完整性自证**：真语料大文件（>200K 字符）走 `fs.readFile` 游标腿逐页取满，**拼接与一次性读逐字符等值**；
+  语料不在盘的兜底＝30 万字符确定性夹具跑同一条断言（两条都不静默缺席）。
+- **引擎墙**：检索单次封顶 `SEARCH_ENGINE_HARD_CAP = 5000` 条命中，触墙时 `hasMore:false` +
+  `engineWallReached` + `knownTotal:false` + note（请缩 query 或改逐文件 `fs.readFile` 分页），
+  绝不把「页并集」谎称成「真命中总数」。
+- **上限真值未放宽**：`RESOURCE_TEXT_LIMIT 24_000` / `RESOURCE_ITEM_LIMIT 200` / 文档 `8_000`（经
+  `slimActiveDocument` 实测）/ 列举面 `64Ki` / 检索 `5000`，用例逐字断言；`limit` 超上限按面 clamp
+  （`fs.readFile` 65000、`commands.list` 500、`io.listDir` 与 `fs.tree` 5000、`searchAll` 200）。
+- **刻意 deferred（逐面要建模旧别名，不硬套游标）**：`lang.foldingRanges`（≤2000 仍 slice）、`lang.lensesAt`、
+  `lang.selectionRangesAt`、`fs.statFiles`；位置型单点面（`semantic.definitionAt` 等）一页即窗口。
+- **在册欠账**：带参分页面的 `additionalProperties: false` 本批未做（要先逐面声明旧别名，否则严格化会拒掉合法的
+  `maxChars`）——列下一批。
 
 ## 6. tier 与授权模型
 
@@ -328,9 +358,9 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 > 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-06 第四/五波落地后按当前树复核）。
 
 - 能力面：命令 **61** / Rust 命令 **89** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
-  tools **43**（read **36** / edit 5 / privileged 2）；resources **10**；prompts **3**；
-- 缺口：`totalGaps=180` / `wiredGaps=31` / **`deferredGaps=149`**，逐条带原因，
-  按七类归因（合计 149，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
+  tools **48**（read **36** / edit 10 / privileged 2）；resources **10**；prompts **3**；
+- 缺口：`totalGaps=180` / `wiredGaps=36` / **`deferredGaps=144`**，逐条带原因，
+  按七类归因（合计 144，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
 
 | 原因类 | 条数 |
 | --- | --- |
@@ -339,20 +369,23 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 | 写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露 | 17 |
 | MCP 会话控制 / 审计内建命令：由宿主线协议与第四张表管理，不作为模型工具 | 8 |
 | 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 3 |
-| 编辑器写 / 光标副作用：首期不面向只读模型面 | 5 |
-| 语义读数：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补） | 2 |
+| 编辑器写 / 光标副作用：只剩 `format` 一条（异步 provider 通道，B3 批刻意不登记半截实现） | 1 |
+| 语义读数：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补） | 1 |
 
-- **本波读数变化**：`read 28→35`（第四波 6 枚只读具名工具 + 第五波 `editor.cursor`），
-  `wiredGaps 24→30` / `deferredGaps 156→150`；`orphanedWires=0` / `missingSources=0`。
-  余项⑤ 收口（`784cc077`）再 +3 枚具名工具（`tasks.start` / `tasks.status` / `tasks.cancel`），
-  ⇒ tools **43**、resources **10**、`wiredGaps 31` / `deferredGaps 149`（`search_text` 一条缺口转 wired）。
-  写腿状态段见 §5.4（wired 7 / NOT_WIRED 0，`problems.quickFix`＝`b8ff59d4`，`tasks.*`＝`784cc077`）。
+- **读数轨迹**：`read 28→35`（第四波 6 枚只读具名工具 + 第五波 `editor.cursor`）→ 余项① `quickFix`
+  （`b8ff59d4`）→ 余项⑤ `tasks.start` / `tasks.status` / `tasks.cancel`（`784cc077`）⇒ tools **43**、
+  resources **10**、`wiredGaps 31` / `deferredGaps 149`；B3 编辑器写腿（`f3dad97c`）再 +5 枚具名 `edit`
+  工具 ⇒ tools **48**（edit 5→**10**）、`wiredGaps 36` / `deferredGaps 144`；B1 分页游标（`5f8c8df5`）
+  **零新工具名**，只给 13 面加 `limit` / `cursor` 入参与完整性账（见 §5.5）。
+  `orphanedWires=0` / `missingSources=0` 全程为零；写腿状态段见 §5.4（wired 12 / NOT_WIRED 0）。
 - **刻意不登记**（铁律「真源不存在 = 不登记」，留在缺口里）：第四波 11 条 `cheap-read`
-  逐条判性只登记 6 条，余 5 条 = `read_file_bytes_raw` / `read_files_raw`（二进制帧、无结构化
+  逐条判性只登记 6 条，余 4 条 = `read_file_bytes_raw` / `read_files_raw`（二进制帧、无结构化
   数据面，且 `read_files_raw` 会暴露任意目标路径参数）、`updater_relaunch`（重启动作）、
-  `debug.type`（输入动作）、`debug.actions`（注入面不可达）；第五波 Wave4 #4 的
+  `debug.actions`（注入面不可达）——`debug.type` 已于 B3 批由具名工具 `editor.type` 覆盖；
+  第五波 Wave4 #4 的
   `editor.openDocument` / `editor.revealPosition` 判性 = 宿主无可诚实回报结果的通道，
-  **不登记**（只留显式缺口 + 防御性 `NOT_WIRED`，不假实现）。调用一律显式可见，不静默。
+  **不登记**（只留显式缺口 + 防御性 `NOT_WIRED`，不假实现）。`editor.format` 同判（异步 provider
+  通道 + 前后长度读数，登记即假实现，Rust 侧也不提前点名未接线名）。调用一律显式可见，不静默。
 - **截断账目**：`documentSymbols` / `referencesAt` 两处静默截断已改成 `total` 真实 +
   `truncated` 可见（连带 `definitionAt` / `suggestAt` / `codeActionsAt` 同形补齐，旧字段 additive 保留）。
 - **零参工具的 schema 契约**（`1061df6b`）：`app.dataDir` / `editor.cursor` 两枚真无入参的只读工具
