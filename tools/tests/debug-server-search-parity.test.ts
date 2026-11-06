@@ -28,6 +28,12 @@
  * 分诊因里 ACL 权限与符号链接在 JSON 矩阵里表达不了 ⇒ 本文件专设 describe 用本地夹具收口
  * （Rust 判据 = lib.rs 的 count_walk_error / Unreadable / `!ft.is_file()` 只读引文；
  *  icacls deny 与 fs.symlink 在非 Windows / 无开发者模式的机器上造不出 ⇒ skip 并如实记录）。
+ * MCP-PERF-S20（B18 引擎腿的镜像侧收口）：`options.resumeAfterMatches` 逐段续取凭据 +
+ * `resumeAppliedMatches` 对账回显，镜像与 B18 引擎同尺（每文件先丢 N 条、每次调用每文件
+ * 仍 ≤ SEARCH_PER_FILE_CAP(500)、回显 = 实际丢弃之和）。dense-file case 不进共享矩阵——
+ * Rust 侧 harness 只吃四枚固定 options（新键被 serde 忽略）⇒ 复用矩阵会造出「两侧必然
+ * 分叉」的假案；照 B18 判据形态（`resume_pages_under_the_leg_page_math_*`）用**腿的取页
+ * 算术 × 镜像引擎**逐页走到穷尽，与解析式手工真值逐条同序比对。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
@@ -367,4 +373,219 @@ describe('MCP-PERF-S21 · 分诊账本机可造因（Rust 判据引文对拍）'
       await fs.rm(junctionTarget, { recursive: true, force: true }).catch(() => {});
     }
   }, 30000);
+/* ------------------------------- MCP-PERF-S20 · 镜像逐段续取 ------------------------------- */
+
+/** 与 Rust 引擎同尺的三把尺（B18 判据形态逐字照搬，别在这里另立数目） */
+const PER_FILE_CAP = 500; // Rust SEARCH_PER_FILE_CAP
+const HARD_CAP = 5000; // Rust SEARCH_HARD_CAP
+const PAGE_LIMIT = 200; // MCP 腿的取页 limit（把段界压在 500 整倍数上）
+
+interface ResumeMatch {
+  line: number;
+  column: number;
+}
+interface ResumeResult {
+  files: { path: string; matches: ResumeMatch[] }[];
+  totalMatches: number;
+  truncated: boolean;
+  /** B18 对账位：Rust SearchResultDto 恒在（不带凭据恒 0）⇒ 镜像也必须恒在，缺席 = 旧宿主形态 */
+  resumeAppliedMatches?: number;
+}
+
+describe('MCP-PERF-S20 · 镜像逐段续取（B18 引擎腿的镜像侧收口）', () => {
+  /**
+   * 自建树、自起一台宿：与共享矩阵隔离。矩阵的 Rust harness 不认 `resumeAfterMatches`
+   * （serde 忽略新键）⇒ 依赖凭据的真值进了矩阵就是「两侧必然分叉」的假案。
+   * 夹具形状照 Rust `resume_fixture`：每行 `HIT L{k}`，命中 = 行号全序，手工真值零歧义。
+   */
+  const tmp20 = path.join(os.tmpdir(), `kojo-resume-parity-${process.pid}`);
+  let tree20 = '';
+  let base20 = '';
+  let server20: Awaited<ReturnType<typeof createDebugServer>>;
+
+  const invoke20 = async (cmd: string, args?: Record<string, unknown>) => {
+    const res = await fetch(`${base20}/invoke`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ cmd, args: args ?? {} }),
+    });
+    const body = (await res.json()) as { ok: boolean; value?: unknown; error?: string };
+    if (!body.ok) throw new Error(body.error ?? 'invoke failed');
+    return body.value as Record<string, unknown>;
+  };
+
+  const hitLines = async (dir: string, name: string, hits: number) => {
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, name), `${Array.from({ length: hits }, (_, k) => `HIT L${k + 1}`).join('\n')}\n`);
+  };
+
+  /** 腿的取页算术（逐字照搬 B18 判据 resume_pages_under_the_leg_page_math_*）：段界压 500 整倍数 */
+  const legWalk = async (root: string, limit = PAGE_LIMIT) => {
+    const keys: string[] = [];
+    const skips: number[] = [];
+    let offset = 0;
+    for (let calls = 0; calls < 64; calls += 1) {
+      const segment = Math.floor(offset / PER_FILE_CAP);
+      const skip = segment * PER_FILE_CAP;
+      const inSegment = offset - skip;
+      const window = Math.min(HARD_CAP, inSegment + limit);
+      const res = (await invoke20('search_text', {
+        request: {
+          searchId: 1,
+          roots: [root],
+          query: 'HIT',
+          options: {
+            isRegex: false,
+            caseSensitive: false,
+            wholeWord: false,
+            extensions: [],
+            maxResults: window,
+            ...(skip > 0 ? { resumeAfterMatches: skip } : {}),
+          },
+        },
+      })) as unknown as ResumeResult;
+      expect(
+        res.files.every((f) => f.matches.length <= PER_FILE_CAP),
+        `第 ${calls + 1} 次调用：每文件返回仍 ≤ 单文件上限（闸一格没放宽）`,
+      ).toBe(true);
+      // 对账位必须恒在且等于凭据（腿靠这一位判「续上了没有」；缺席 = 旧宿主形态，镜像侧退役）
+      expect(res.resumeAppliedMatches, `第 ${calls + 1} 次调用回显（skip=${skip}）`).toBe(skip);
+      if (skip > 0) skips.push(skip);
+      const seq = res.files.flatMap((f) => f.matches.map((m) => `${path.basename(f.path)}|${m.line}`));
+      const page = seq.slice(inSegment, inSegment + limit);
+      expect(
+        !(page.length === 0 && res.truncated),
+        `第 ${calls + 1} 次调用：空页不许带 truncated（腿会翻出「空页 + hasMore:true」）`,
+      ).toBe(true);
+      offset += page.length;
+      keys.push(...page);
+      if (!res.truncated) break;
+    }
+    return { keys, skips, offset };
+  };
+
+  beforeAll(async () => {
+    tree20 = path.join(tmp20, 'tree');
+    await hitLines(path.join(tree20, 'dense'), 'dense.erb', 2600); // 5 段 + 余 100，跨段界那一格
+    await hitLines(path.join(tree20, 'multi'), 'a.erb', 5);
+    await hitLines(path.join(tree20, 'multi'), 'b.erb', 5);
+    await hitLines(path.join(tree20, 'past'), 'p.erb', 300);
+    await hitLines(path.join(tree20, 'window'), 'w.erb', 1200);
+    await hitLines(path.join(tree20, 'zero'), 'z.erb', 900);
+    server20 = await createDebugServer({ port: 0, sandbox: tmp20, appdata: tmp20, log: () => {} });
+    base20 = `http://127.0.0.1:${server20.port}`;
+  }, 30000);
+
+  afterAll(async () => {
+    await server20.close();
+    await fs.rm(tmp20, { recursive: true, force: true });
+  });
+
+  it('dense-file：腿取页算术 × 镜像引擎——2,600 条 / limit=200 逐页拼接 == 手工真值（无重无漏，段界逐位）', async () => {
+    const truth = Array.from({ length: 2600 }, (_, k) => `dense.erb|${k + 1}`);
+    const { keys, skips, offset } = await legWalk(path.join(tree20, 'dense'));
+    expect(skips.length, '确实试过凭据（不是假装能续）').toBeGreaterThan(0);
+    expect(skips[0]).toBe(500); // 第一段凭据恰是 500（段界整倍数）
+    expect(offset).toBe(2600);
+    expect(keys.length).toBe(2600);
+    expect(new Set(keys).size).toBe(keys.length); // 无重
+    expect(keys, '逐页拼接与手工真值逐条同序（无重、无漏、无错位）').toEqual(truth);
+  });
+
+  it('凭据逐文件生效，回显 = 各文件实际丢弃之和（a/b 各 5 条、skip 3 ⇒ 各回第 4、5 条、回显 6）', async () => {
+    const res = (await invoke20('search_text', {
+      request: {
+        searchId: 1,
+        roots: [path.join(tree20, 'multi')],
+        query: 'HIT',
+        options: {
+          isRegex: false,
+          caseSensitive: false,
+          wholeWord: false,
+          extensions: [],
+          maxResults: 5000,
+          resumeAfterMatches: 3,
+        },
+      },
+    })) as unknown as ResumeResult;
+    const files = res.files
+      .map((f) => ({ name: path.basename(f.path), lines: f.matches.map((m) => m.line) }))
+      .sort((x, y) => x.name.localeCompare(y.name));
+    expect(files).toEqual([
+      { name: 'a.erb', lines: [4, 5] },
+      { name: 'b.erb', lines: [4, 5] },
+    ]);
+    expect(res.totalMatches).toBe(4);
+    expect(res.truncated).toBe(false);
+    expect(res.resumeAppliedMatches, '回显 = 每个文件各丢 3 条的和（6），不是请求值 3').toBe(6);
+  });
+
+  it('凭据越过文件命中总数 ⇒ 空页 + 不触墙 + 回显实际条数（300 条 / skip 500 ⇒ 回显 300）', async () => {
+    const res = (await invoke20('search_text', {
+      request: {
+        searchId: 1,
+        roots: [path.join(tree20, 'past')],
+        query: 'HIT',
+        options: {
+          isRegex: false,
+          caseSensitive: false,
+          wholeWord: false,
+          extensions: [],
+          maxResults: 5000,
+          resumeAfterMatches: 500,
+        },
+      },
+    })) as unknown as ResumeResult;
+    expect(res.files, '文件只有 300 条 ⇒ 第 500 条之后是空页（绝不回吐前 N 条冒充新一页）').toEqual([]);
+    expect(res.truncated, '空页且文件已穷尽 ⇒ 不许报 truncated（那是墙的标志）').toBe(false);
+    expect(res.totalMatches).toBe(0);
+    expect(res.resumeAppliedMatches).toBe(300);
+  });
+
+  it('凭据仍受窗口闸管（1,200 条 / skip 500 / maxResults 100 ⇒ 恰回 501..600、truncated、回显 500）', async () => {
+    const res = (await invoke20('search_text', {
+      request: {
+        searchId: 1,
+        roots: [path.join(tree20, 'window')],
+        query: 'HIT',
+        options: {
+          isRegex: false,
+          caseSensitive: false,
+          wholeWord: false,
+          extensions: [],
+          maxResults: 100,
+          resumeAfterMatches: 500,
+        },
+      },
+    })) as unknown as ResumeResult;
+    expect(res.files).toHaveLength(1);
+    expect(res.files[0]!.matches.map((m) => m.line), '凭据 + 窗口的合成落点必须精确').toEqual(
+      Array.from({ length: 100 }, (_, k) => k + 501),
+    );
+    expect(res.truncated, '窗口用尽而文件还有命中 ⇒ 仍报 truncated（不假称穷尽）').toBe(true);
+    expect(res.resumeAppliedMatches).toBe(500);
+  });
+
+  it('缺省 / 0 ⇒ 旧面逐字同产出、回显 0 恒在；每文件闸与 Rust 同尺（900 条只回 500）', async () => {
+    const options = { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [], maxResults: 5000 };
+    const absent = (await invoke20('search_text', {
+      request: { searchId: 1, roots: [path.join(tree20, 'zero')], query: 'HIT', options },
+    })) as unknown as ResumeResult;
+    const zero = (await invoke20('search_text', {
+      request: {
+        searchId: 1,
+        roots: [path.join(tree20, 'zero')],
+        query: 'HIT',
+        options: { ...options, resumeAfterMatches: 0 },
+      },
+    })) as unknown as ResumeResult;
+    expect(absent.resumeAppliedMatches, '回显位恒在（Rust DTO 同形）：不带凭据也必须是数字 0，不是缺席').toBe(0);
+    expect(zero.resumeAppliedMatches).toBe(0);
+    expect(
+      absent.files.map((f) => f.matches.map((m) => m.line)),
+      '缺省不带键 == 传 0（additive 的形状，旧调用方零改动）',
+    ).toEqual(zero.files.map((f) => f.matches.map((m) => m.line)));
+    expect(absent.files[0]!.matches, '每文件闸 = Rust SEARCH_PER_FILE_CAP 500：900 条只回前 500').toHaveLength(500);
+    expect(absent.truncated).toBe(true);
+  });
 });
