@@ -6252,6 +6252,7 @@ fn e2e_commands_run_allowed_call_walks_the_bridge_and_audits_the_command_id() {
             result: Some(
                 json!({ "commandId": "layout.toggleSidebar", "ran": true, "fireAndForget": true }),
             ),
+            error: None,
         },
     )
     .unwrap();
@@ -6290,7 +6291,8 @@ fn filter_tools_list_hides_commands_run_until_exact_approval() {
         tier: McpTier::Privileged,
         ..empty_scope(Vec::new())
     };
-    let names = names_of(&filter_tools_list(&frame, &unapproved).result);
+    let unapproved_outcome = filter_tools_list(&frame, &unapproved);
+    let names = names_of(&unapproved_outcome.result);
     assert!(names.contains(&"commands.list"));
     assert!(
         !names.contains(&"commands.run"),
@@ -6301,7 +6303,8 @@ fn filter_tools_list_hides_commands_run_until_exact_approval() {
         tier: McpTier::Privileged,
         ..empty_scope(vec![COMMAND_RUN_TOOL.to_string()])
     };
-    let names2 = names_of(&filter_tools_list(&frame, &approved).result);
+    let approved_outcome = filter_tools_list(&frame, &approved);
+    let names2 = names_of(&approved_outcome.result);
     assert!(names2.contains(&"commands.run"));
 
     // 通配批准不算批准（privileged 只认精确名）。
@@ -6309,7 +6312,8 @@ fn filter_tools_list_hides_commands_run_until_exact_approval() {
         tier: McpTier::Privileged,
         ..empty_scope(vec!["commands.*".to_string()])
     };
-    let names3 = names_of(&filter_tools_list(&frame, &wildcard).result);
+    let wildcard_outcome = filter_tools_list(&frame, &wildcard);
+    let names3 = names_of(&wildcard_outcome.result);
     assert!(
         !names3.contains(&"commands.run"),
         "通配把执行面放行了＝第四张表被绕过"
