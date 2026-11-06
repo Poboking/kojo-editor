@@ -3,7 +3,7 @@
  * 两个读者是谁，见包桶 `./index.ts` 的头注。
  *
  * 逐条对齐引擎 `FunctionIdentifier.cs` 的 `funcMatch`：IF→ENDIF / SELECTCASE→ENDSELECT /
- * REPEAT→REND / FOR→NEXT / WHILE→WEND / DO→LOOP / TRYC 六个→CATCH→ENDCATCH /
+ * REPEAT→REND / FOR→NEXT / WHILE→WEND / DO→LOOP / TRYC 八个→CATCH→ENDCATCH /
  * PRINTDATA 系 9 个→ENDDATA / DATALIST→ENDLIST / STRDATA→ENDDATA / NOSKIP→ENDNOSKIP /
  * TRYCALLLIST·TRYGOTOLIST·TRYJUMPLIST→ENDFUNC（配对类 funclist）；`TRYCALL` / `TRYCALLFORM`
  * / `TRYGOTO` / `TRYJUMP` 等是单行语句、不开块（BUG-2 修复）。
@@ -65,11 +65,19 @@ const CLOSE_KINDS: Readonly<Record<string, string>> = {
 const LEAF_KINDS = new Set(['SIF']);
 
 /**
- * TRY 系精确三档（funcMatch :460-487）：
- * - 配 CATCH 的恰为 6 个：TRYCGOTO / TRYCJUMP / TRYCCALL（±FORM）；
+ * TRY 系精确三档（funcMatch 全量逐条过；行号取自 Emuera `FunctionIdentifier.cs` 现况，会漂）：
+ * - 配 CATCH 的恰为 **8** 个：`funcMatch[X] = "CATCH"` 一共 8 行 —— TRYCGOTO / TRYCJUMP /
+ *   TRYCCALL（±FORM）**再加 TRYCJUMPSTR / TRYCCALLSTR**。后两枚是 2026-11-16 D03 批补上的：
+ *   旧表只抄了 6 枚，于是真语料 `ERB/SHOP関連/TEST.ERB:13-17` 那段合法写法
+ *   （`TRYCCALLSTR RESULTS` / `PRINTW …` / `CATCH` / `PRINTW …` / `ENDCATCH`）被连环误报两条
+ *   （`CATCH 不在它所属的块里` + `ENDCATCH 找不到对应的开块语句`）——一次漏词就是两条假缺陷。
  * - 配 ENDFUNC 的恰为 3 个：TRYCALLLIST / TRYGOTOLIST / TRYJUMPLIST（配对类 funclist）；
- * - 其余 TRY*（TRYCALL / TRYCALLFORM / TRYGOTO / TRYGOTOFORM / TRYJUMP / TRYJUMPFORM）
- *   是**单行语句**，不开块——旧版 startsWith('TRY') 把它们误当开块，产生幻影深度。
+ * - 其余 TRY*（TRYCALL / TRYCALLFORM / TRYGOTO / TRYGOTOFORM / TRYJUMP / TRYJUMPFORM /
+ *   **TRYCALLSTR / TRYJUMPSTR**）是**单行语句**，不开块——判据不是"像不像块"，而是注册行为：
+ *   `funcMatch` 里查不到它们 ⇒ 引擎不给它配闭合词。`TRYCALLSTR` / `TRYJUMPSTR` 的注册行是
+ *   `CALLS_Instruction(isJump, isTry, isTryCatch)` 且 `isTryCatch = false`（`IS_TRYC` 未置位），
+ *   而 `TRYCJUMPSTR` / `TRYCCALLSTR` 的第四枚实参是 `true`——只差这一位，一档是块、一档是单行。
+ *   旧版 startsWith('TRY') 把单行档也当开块，产生幻影深度（BUG-2）。
  */
 const TRY_CATCH_OPEN: ReadonlySet<string> = new Set([
   'TRYCGOTO',
@@ -78,6 +86,8 @@ const TRY_CATCH_OPEN: ReadonlySet<string> = new Set([
   'TRYCGOTOFORM',
   'TRYCJUMPFORM',
   'TRYCCALLFORM',
+  'TRYCJUMPSTR',
+  'TRYCCALLSTR',
 ]);
 const TRY_LIST_OPEN: ReadonlySet<string> = new Set(['TRYCALLLIST', 'TRYGOTOLIST', 'TRYJUMPLIST']);
 

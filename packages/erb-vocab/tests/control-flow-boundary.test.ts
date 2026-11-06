@@ -123,7 +123,7 @@ describe('共享事实黄金对拍（库与插件"逐字不变"的兜底）', ()
     ]);
   });
 
-  it('引擎语句词表逐字（44 枚，码元序）', () => {
+  it('引擎语句词表逐字（46 枚，码元序）', () => {
     expect(ERB_CONTROL_STATEMENTS).toEqual([
       'CASE',
       'CASEELSE',
@@ -161,10 +161,12 @@ describe('共享事实黄金对拍（库与插件"逐字不变"的兜底）', ()
       'TRYCALLLIST',
       'TRYCCALL',
       'TRYCCALLFORM',
+      'TRYCCALLSTR',
       'TRYCGOTO',
       'TRYCGOTOFORM',
       'TRYCJUMP',
       'TRYCJUMPFORM',
+      'TRYCJUMPSTR',
       'TRYGOTOLIST',
       'TRYJUMPLIST',
       'WEND',
@@ -186,6 +188,9 @@ describe('共享事实黄金对拍（库与插件"逐字不变"的兜底）', ()
       'TRYCALL',
       'TRYCALLFORM',
       'TRYCCALL',
+      'TRYCCALLSTR',
+      'TRYCJUMPSTR',
+      'TRYCALLSTR',
       'TRYCALLLIST',
       'PRINTDATA',
       'PRINTDATADW',
@@ -205,12 +210,35 @@ describe('共享事实黄金对拍（库与插件"逐字不变"的兜底）', ()
       ['TRYCALL', null],
       ['TRYCALLFORM', null],
       ['TRYCCALL', { role: 'open', pair: 'try' }],
+      // 引擎 `funcMatch`：TRYCJUMPSTR / TRYCCALLSTR 同样映射到 "CATCH"（FunctionIdentifier.cs:501-502）
+      ['TRYCCALLSTR', { role: 'open', pair: 'try' }],
+      ['TRYCJUMPSTR', { role: 'open', pair: 'try' }],
+      // TRYCALLSTR / TRYJUMPSTR **不在** `funcMatch` 里（注册行 `CALLS_Instruction(.., .., false)`
+      // ⇒ 无 IS_TRYC）⇒ 单行语句，不开块
+      ['TRYCALLSTR', null],
       ['TRYCALLLIST', { role: 'open', pair: 'funclist' }],
       ['PRINTDATA', { role: 'open', pair: 'data' }],
       ['PRINTDATADW', { role: 'open', pair: 'data' }],
       ['DIM', null],
       ['FOO', null],
     ]);
+  });
+
+  it('配对表对引擎 funcMatch 的**全量**覆盖（TRY 系两档逐字；新增一词必须同时改这里）', () => {
+    // 真源：Emuera `Runtime/Script/Statements/FunctionIdentifier.cs` 的 `funcMatch[...] = "CATCH"`
+    // 共 **8** 枚（TRYCGOTO / TRYCJUMP / TRYCCALL / TRYCGOTOFORM / TRYCJUMPFORM / TRYCCALLFORM
+    // / TRYCJUMPSTR / TRYCCALLSTR），`= "ENDFUNC"` 共 **3** 枚（TRYCALLLIST / TRYGOTOLIST /
+    // TRYJUMPLIST）。其余 TRY*（TRYCALL / TRYCALLFORM / TRYJUMP / TRYJUMPFORM / TRYGOTO /
+    // TRYGOTOFORM / TRYCALLSTR / TRYJUMPSTR）不在 funcMatch 内 ⇒ 单行语句，不开块。
+    const opens = (pair: string) =>
+      ERB_CONTROL_STATEMENTS.filter((w) => classifyControlFlow(w)?.pair === pair && classifyControlFlow(w)?.role === 'open');
+    expect(opens('try')).toEqual(['TRYCCALL', 'TRYCCALLFORM', 'TRYCCALLSTR', 'TRYCGOTO', 'TRYCGOTOFORM', 'TRYCJUMP', 'TRYCJUMPFORM', 'TRYCJUMPSTR']);
+    expect(opens('funclist')).toEqual(['TRYCALLLIST', 'TRYGOTOLIST', 'TRYJUMPLIST']);
+    // CATCH 只吃 try 与 funclist 两档开块（第二读者 `folding.ts` 的例外同口径）
+    expect(classifyControlFlow('CATCH')).toEqual({ role: 'branch', pair: 'try' });
+    expect(classifyControlFlow('ENDCATCH')).toEqual({ role: 'close', pair: 'try' });
+    for (const w of ['TRYCALL', 'TRYCALLFORM', 'TRYJUMP', 'TRYJUMPFORM', 'TRYGOTO', 'TRYGOTOFORM', 'TRYCALLSTR', 'TRYJUMPSTR'])
+      expect(classifyControlFlow(w), w).toBeNull();
   });
 
   it('配对类别 → 闭合词逐字（反查，不抄第二份表）', () => {
