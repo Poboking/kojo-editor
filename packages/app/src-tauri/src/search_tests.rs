@@ -2267,13 +2267,20 @@ fn resume_credential_absent_cannot_reach_the_501st_hit() {
     let b = run(&resume_request(&dir, "HIT", None, Some(5000)));
     assert!(a.truncated, "单文件超上限必须报 truncated（旧语义）");
     assert_eq!(resume_seq(&a).len(), SEARCH_PER_FILE_CAP);
-    assert_eq!(resume_seq(&a), resume_seq(&b), "同参复跑给同一批前 500 条 ⇒ 没有凭据就是墙");
+    assert_eq!(
+        resume_seq(&a),
+        resume_seq(&b),
+        "同参复跑给同一批前 500 条 ⇒ 没有凭据就是墙"
+    );
     assert_eq!(
         resume_seq(&a),
         resume_expected_seq(&file, SEARCH_PER_FILE_CAP),
         "旧面给的恰是前 500 条，第 501 条起不可达"
     );
-    assert_eq!(a.resume_applied_matches, 0, "不带凭据 ⇒ 回显 0（旧请求体的账一个字没变）");
+    assert_eq!(
+        a.resume_applied_matches, 0,
+        "不带凭据 ⇒ 回显 0（旧请求体的账一个字没变）"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2287,10 +2294,14 @@ fn resume_after_matches_pages_the_same_file_to_exhaustion_without_dup_or_gap() {
     let mut pages: Vec<String> = Vec::new();
     let mut skip = 0usize;
     let mut segments = 0usize;
-    let mut last_truncated = true;
+    let mut last_truncated;
     loop {
         segments += 1;
-        assert!(segments <= 64, "段数必须有界（本夹具实测 {} 段收口）", segments);
+        assert!(
+            segments <= 64,
+            "段数必须有界（本夹具实测 {} 段收口）",
+            segments
+        );
         let res = run(&resume_request(
             &file,
             "HIT",
@@ -2298,7 +2309,9 @@ fn resume_after_matches_pages_the_same_file_to_exhaustion_without_dup_or_gap() {
             Some(5000),
         ));
         assert!(
-            res.files.iter().all(|f| f.matches.len() <= SEARCH_PER_FILE_CAP),
+            res.files
+                .iter()
+                .all(|f| f.matches.len() <= SEARCH_PER_FILE_CAP),
             "每段每文件的**返回**条数仍 ≤ 500：单文件上限没有因为续取被放宽"
         );
         if skip > 0 {
@@ -2317,9 +2330,18 @@ fn resume_after_matches_pages_the_same_file_to_exhaustion_without_dup_or_gap() {
         skip += taken;
     }
     assert_eq!(pages.len(), RESUME_HITS, "穷尽后条数即真值条数");
-    assert_eq!(pages, truth, "逐段拼接与解析式真值逐条同序（无重、无漏、无错位）");
-    assert_eq!(segments, 3, "1,200 条 / 每段 500 ⇒ 恰好三段（段数可预期，不是靠运气收口）");
-    assert!(!last_truncated, "最后一段必须是不触墙的穷尽（truncated:false）");
+    assert_eq!(
+        pages, truth,
+        "逐段拼接与解析式真值逐条同序（无重、无漏、无错位）"
+    );
+    assert_eq!(
+        segments, 3,
+        "1,200 条 / 每段 500 ⇒ 恰好三段（段数可预期，不是靠运气收口）"
+    );
+    assert!(
+        !last_truncated,
+        "最后一段必须是不触墙的穷尽（truncated:false）"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2336,7 +2358,10 @@ fn resume_after_matches_still_respects_the_result_window() {
         truth_slice(&file, 501, 600),
         "第 501..600 条：凭据 + 窗口的合成落点必须精确"
     );
-    assert!(res.truncated, "窗口用尽而文件还有命中 ⇒ 仍报 truncated（不假称穷尽）");
+    assert!(
+        res.truncated,
+        "窗口用尽而文件还有命中 ⇒ 仍报 truncated（不假称穷尽）"
+    );
     assert_eq!(res.resume_applied_matches, 500);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -2355,7 +2380,10 @@ fn resume_credential_zero_is_the_old_path_verbatim() {
     assert_eq!(resume_seq(&old), resume_seq(&same), "Some(0) == 不带这个键");
     assert_eq!(old.total_matches, same.total_matches);
     assert_eq!(old.truncated, same.truncated);
-    assert_eq!(same.resume_applied_matches, 0, "传 0 ⇒ 回显 0，不产生「续过」的假象");
+    assert_eq!(
+        same.resume_applied_matches, 0,
+        "传 0 ⇒ 回显 0，不产生「续过」的假象"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2365,7 +2393,11 @@ fn resume_credential_zero_is_the_old_path_verbatim() {
 fn resume_after_matches_is_per_file_and_the_echo_sums_across_files() {
     let dir = resume_fixture("resume-multi", 5, true); // a.erb + b.erb 各 5 条
     let res = run(&resume_request(&dir, "HIT", Some(3), Some(5000)));
-    assert_eq!(res.files.len(), 2, "两个文件都进了结果（逐文件跳过，不是整批跳过）");
+    assert_eq!(
+        res.files.len(),
+        2,
+        "两个文件都进了结果（逐文件跳过，不是整批跳过）"
+    );
     assert_eq!(
         res.resume_applied_matches, 6,
         "回显 = 每个文件各丢 3 条的和（6），不是请求值 3"
@@ -2390,8 +2422,14 @@ fn resume_past_the_end_is_an_empty_exhausted_page_not_a_repeat() {
     let dir = resume_fixture("resume-past", 300, false);
     let file = dir.join("a.erb");
     let res = run(&resume_request(&file, "HIT", Some(500), Some(5000)));
-    assert!(resume_seq(&res).is_empty(), "文件只有 300 条 ⇒ 第 500 条之后是空页");
-    assert!(!res.truncated, "空页且文件已穷尽 ⇒ 不许报 truncated（那是墙的标志）");
+    assert!(
+        resume_seq(&res).is_empty(),
+        "文件只有 300 条 ⇒ 第 500 条之后是空页"
+    );
+    assert!(
+        !res.truncated,
+        "空页且文件已穷尽 ⇒ 不许报 truncated（那是墙的标志）"
+    );
     assert_eq!(res.total_matches, 0);
     assert_eq!(
         res.resume_applied_matches, 300,
@@ -2416,7 +2454,11 @@ fn resume_credential_is_identical_on_both_scan_paths() {
         resume_seq(&per_line),
         "两条扫描路径在第 601 条起的同一份账上不许分叉"
     );
-    assert_eq!(resume_seq(&flat), truth_slice(&file, 601, 1100), "500 条一段，落点精确");
+    assert_eq!(
+        resume_seq(&flat),
+        truth_slice(&file, 601, 1100),
+        "500 条一段，落点精确"
+    );
     assert_eq!(flat.resume_applied_matches, 600);
     let _ = std::fs::remove_dir_all(&dir);
 }
