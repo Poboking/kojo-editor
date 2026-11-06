@@ -55,6 +55,13 @@ const CALL_SLOT_PINNED: readonly PinnedRow<CallSlotReadings>[] = [
     fp: { erb: 4385, erh: 157, als: 19, digest: 'cddca01d8d2c' },
     expect: { hits: 36 },
   },
+  {
+    // 2026-11-07 实测登记（红消息「当前盘实测读数」= `{"hits":40,"kojoFiles":2406,"functionNames":104514}`）：
+    // 同一条规则在这份盘上命中 40 条，形制不变（仍全 warning、全「数值槽 声明 1 / 转发 0」，K49 模板在场）。
+    label: 'digest 39c2310a060d（erb 4,640 / erh 191 / als 23）= 2026-11-07 实测登记的盘',
+    fp: { erb: 4640, erh: 191, als: 23, digest: '39c2310a060d' },
+    expect: { hits: 40 },
+  },
 ];
 
 describe.skipIf(!SMOKE)('协议覆盖校验规则 —— 真实语料基线', () => {

@@ -23,9 +23,20 @@ import { gunzipBytes } from '../src/gunzip';
 import { parseArchive } from '../src/parse';
 import { serializePayload } from '../src/serialize';
 import { verifyOverrides } from '../src/verify';
+import {
+  corpusFingerprint,
+  discoverCorpusFingerprints,
+  formatFingerprint,
+  resolvePinnedRow,
+  savCandidatesReadout,
+  type CorpusFingerprint,
+  type PinnedRow,
+} from '../../../../tools/corpus-fingerprint.mjs';
 
 const SMOKE_DIR = process.env.KOJO_SMOKE_PROJECT;
 const SAV_DIR = SMOKE_DIR ? nodeJoin(SMOKE_DIR, 'sav') : '';
+/** 显式入口（兜底：金样本盘不在扫描根里、又不是当前语料盘时指过去）；红消息里会点名它。 */
+const GOLDEN_SAV_ENV = 'KOJO_GOLDEN_SAV_DIR';
 
 /**
  * **金样本档集的身份清单**（不是"目录里有什么就验什么"）。
@@ -50,15 +61,108 @@ const GOLDEN_ARCHIVES = [
 
 /** 目录里到底有没有存档（目录不存在 / 为空 都算"没有"——那是语料条件，不是代码缺陷） */
 const HAS_SAV = (() => {
-  if (!SAV_DIR) return false;
+  if (!SMOKE_DIR) return false;
+  if (savNames(SAV_DIR).length > 0) return true;
+  // 当前语料盘的 sav/ 是空的 ⇒ 再看**盘上别的**语料有没有存档；一台机器一枚存档都没有才算 SKIP。
   try {
-    return readdirSync(SAV_DIR).some((n) => n.toLowerCase().endsWith('.sav'));
+    return discoverCorpusFingerprints().some((c) => c.fp.savFiles > 0);
   } catch {
     return false;
   }
 })();
 
-/** 金样本身份清单里**实际缺失**的档名（大小写不敏感）——非空即红 */
+/** 金样本六档所在的那份 sav（**按内容定位**，不看盘名）+ 该盘指纹登记出的期望读数。 */
+interface GoldenSavRoot {
+  dir: string;
+  fp: CorpusFingerprint;
+  expect: GoldenReadings;
+  label: string;
+}
+
+/**
+ * 定位顺序（全按内容判，绝不写死某个目录名）：
+ * ① 显式 `KOJO_GOLDEN_SAV_DIR`（显式即授权）② `KOJO_SMOKE_PROJECT/sav`（当前语料盘）
+ * ③ 盘上**全部**符合内容条件的语料（`tools/corpus.mjs` 的发现链）里第一份含齐六档的。
+ * 找不到 ⇒ **红**并逐盘打出 sav 实测清单（不是 SKIP：SKIP 只留给"这台机器一枚存档都没有"）。
+ */
+function requireGoldenSavRoot(): GoldenSavRoot {
+  const pools: string[] = [];
+  const explicit = (process.env[GOLDEN_SAV_ENV] ?? '').trim();
+  if (explicit) pools.push(explicit);
+  if (SAV_DIR) pools.push(SAV_DIR);
+  let scanned: readonly { dir: string; fp: CorpusFingerprint }[] = [];
+  const scanAll = () => {
+    if (scanned.length === 0) scanned = discoverCorpusFingerprints().map((c) => ({ dir: nodeJoin(c.dir, 'sav'), fp: c.fp }));
+    return scanned;
+  };
+  for (const dir of pools) {
+    if (missingFrom(dir, GOLDEN_ARCHIVES).length === 0) return pinGolden(dir);
+  }
+  for (const cand of scanAll()) {
+    if (missingFrom(cand.dir, GOLDEN_ARCHIVES).length === 0) return pinGolden(cand.dir);
+  }
+  const firstPool = pools[0] ?? '';
+  const fpOf = firstPool ? safeFingerprint(parentOf(firstPool)) : null;
+  const lines = [
+    `【金样本六档定位失败】没有一份 sav 含齐 ${GOLDEN_ARCHIVES.join(' / ')}`,
+    fpOf ? `  当前语料盘指纹：${formatFingerprint(fpOf)}` : `  当前语料盘：${SMOKE_DIR ?? '（未设 KOJO_SMOKE_PROJECT）'}`,
+    `  已试过的落点：${pools.join(' ｜ ') || '（无）'}`,
+    `  盘上各语料的 sav 实测：${savCandidatesReadout(scanAll().map((c) => ({ dir: c.dir, erbCount: c.fp.erb, savCount: c.fp.savFiles, fp: c.fp })))}`,
+    `  处理：这不是 SKIP 条件（SKIP 只留给"这台机器一枚 .sav 都没有"）。`,
+    `    金样本盘在别处 ⇒ 设 ${GOLDEN_SAV_ENV}=<那份 sav 目录>；换了新盘 ⇒ 用上面的实测数在本文件 GOLDEN_PINNED 新增一行（fp + expect 都取实测）。`,
+  ];
+  throw new Error(lines.join('\n'));
+}
+
+const parentOf = (savDir: string): string => nodeJoin(savDir, '..');
+function safeFingerprint(dir: string): CorpusFingerprint | null {
+  try {
+    return corpusFingerprint(dir);
+  } catch {
+    return null;
+  }
+}
+
+/** sav 目录里的 `.sav` 档名（小写；目录不存在 = 空数组） */
+function savNames(dir: string): string[] {
+  try {
+    return readdirSync(dir).filter((n) => /\.sav$/i.test(n)).map((n) => n.toLowerCase());
+  } catch {
+    return [];
+  }
+}
+
+/** 金样本按盘登记的读数（2026-10-12 真实六档复测 ⇒ 逐字节同构 2 / 近似 4 / passthrough 6） */
+interface GoldenReadings {
+  byteVerified: number;
+  approximated: number;
+  passthrough: number;
+}
+
+const GOLDEN_PINNED: readonly PinnedRow<GoldenReadings>[] = [
+  {
+    label: 'savDigest bc399efd264c（6 件 / 344,989B）= 2026-10-12 复测那组档（global + save00–03 + save1000）',
+    fp: { savFiles: 6, savBytes: 344989, savDigest: 'bc399efd264c' },
+    expect: { byteVerified: 2, approximated: 4, passthrough: 6 },
+  },
+];
+
+/** 定位成功后按**盘指纹**取期望；登记表外的盘 ⇒ 红（红消息带这份盘的 sav 实测数）。 */
+function pinGolden(savDir: string): GoldenSavRoot {
+  const diskDir = nodeJoin(savDir, '..');
+  const fp = corpusFingerprint(diskDir);
+  const gate = resolvePinnedRow(
+    `金样本回归：载荷层原样写回（golden-roundtrip.test.ts · sav=${savDir}）`,
+    GOLDEN_PINNED,
+    fp,
+    { savFiles: fp.savFiles, savBytes: fp.savBytes, savNames: fp.savNames.join('/') },
+    () => discoverCorpusFingerprints(),
+  );
+  if (!gate.ok || !gate.row) throw new Error(gate.message);
+  return { dir: savDir, fp, expect: gate.row.expect, label: gate.row.label };
+}
+
+/** 金样本身份清单里**实际缺失**的档名（大小写不敏感）——非空即"这份盘不是金样本盘" */
 function missingFrom(dir: string, wanted: readonly string[]): string[] {
   let present: string[];
   try {
@@ -84,14 +188,14 @@ function firstDiff(a: Uint8Array, b: Uint8Array): { count: number; first: number
 
 describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
   it.skipIf(!HAS_SAV)('金样本六档（身份清单）：serialize∘parse 与原始载荷逐字节一致 + 语义恒等', async () => {
-    // 缺档 = 红（指名缺哪档），不再静默 continue
-    expect({ 缺档: missingFrom(SAV_DIR, GOLDEN_ARCHIVES) }).toEqual({ 缺档: [] });
+    // 缺档 = 红：按**内容**在盘上定位含齐六档的那份 sav（一台机器一枚存档都没有才 SKIP）
+    const sav = requireGoldenSavRoot();
     const report: string[] = [];
     let byteVerified = 0;
     let approximatedCount = 0;
 
     for (const fileName of GOLDEN_ARCHIVES) {
-      const filePath = nodeJoin(SAV_DIR, fileName);
+      const filePath = nodeJoin(sav.dir, fileName);
       const raw = readFileSync(filePath);
       const body = await gunzipBytes(raw.subarray(16));
 
@@ -163,9 +267,9 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
     // `global` + `save00` 无 Int64 近似 → 逐字节同构；`save01–03` + `save1000` 是近似档
     // → 按 §5.19 既有口径跳过字节级（改由下一条"方案 B passthrough"用例覆盖）。
     // 不写死这两个数，"六档逐字节一致"的说法在只剩几档、或引擎换了编码决策时会悄悄成立。
-    expect({ 逐字节同构档数: byteVerified, 近似档数: approximatedCount }).toEqual({
-      逐字节同构档数: 2,
-      近似档数: 4,
+    expect({ 逐字节同构档数: byteVerified, 近似档数: approximatedCount }, `登记表行「${sav.label}」`).toEqual({
+      逐字节同构档数: sav.expect.byteVerified,
+      近似档数: sav.expect.approximated,
     });
 
     // eslint-disable-next-line no-console
@@ -173,14 +277,14 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
   }, 240_000);
 
   it.skipIf(!HAS_SAV)('方案 B：keepRaw passthrough —— 近似档（Int64）也字节级一致 + 注入与守卫', async () => {
-    expect({ 缺档: missingFrom(SAV_DIR, GOLDEN_ARCHIVES) }).toEqual({ 缺档: [] });
+    const sav = requireGoldenSavRoot();
     const report: string[] = [];
     let injected = false;
     let guarded = false;
     let passthroughVerified = 0;
 
     for (const fileName of GOLDEN_ARCHIVES) {
-      const filePath = nodeJoin(SAV_DIR, fileName);
+      const filePath = nodeJoin(sav.dir, fileName);
       const raw = readFileSync(filePath);
       const body = await gunzipBytes(raw.subarray(16));
       const archive = await parseArchive(raw, filePath, { keepArrayCells: true, keepRaw: true });
@@ -243,13 +347,16 @@ describe.skipIf(!SMOKE_DIR)('金样本回归：载荷层原样写回', () => {
     expect(injected).toBe(true);
     expect(guarded).toBe(true);
     // 方案 B 的真实强度：**六档全部** passthrough 逐字节一致（近似档靠 raw 原样复制，不重编码）
-    expect({ 'passthrough 同构档数': passthroughVerified }).toEqual({ 'passthrough 同构档数': 6 });
+    expect({ 'passthrough 同构档数': passthroughVerified }, `登记表行「${sav.label}」`).toEqual({
+      'passthrough 同构档数': sav.expect.passthrough,
+    });
     // eslint-disable-next-line no-console
     console.log(`[golden] 方案 B keepRaw passthrough + 注入：\n  ${report.join('\n  ')}`);
   }, 240_000);
 
   it.skipIf(!HAS_SAV)('第十五批：容器级注入链路（gzip 组装 → 解压回读 → 覆盖值逐条验证）', async () => {
-    const filePath = nodeJoin(SAV_DIR, 'save00.sav');
+    const sav = requireGoldenSavRoot();
+    const filePath = nodeJoin(sav.dir, 'save00.sav');
     const raw = readFileSync(filePath);
 
     // keepRaw 全量解析（注入链路的读侧前置）

@@ -34,6 +34,12 @@ import { createErbParserPlugin } from '@kojo/plugin-erb-parser';
 import { createEratwAdapterPlugin } from '@kojo/plugin-eratw-adapter';
 import { createConditionExtractorPlugin } from '@kojo/plugin-condition-extractor';
 import { createKojoSugarPlugin } from '@kojo/plugin-kojo-sugar';
+import {
+  corpusFingerprint,
+  discoverCorpusFingerprints,
+  resolvePinnedRow,
+  type PinnedRow,
+} from '../../../tools/corpus-fingerprint.mjs';
 
 const SMOKE_DIR = process.env.KOJO_SMOKE_PROJECT;
 const LIMIT = Number(process.env.PROBE_FILE_LIMIT ?? 0);
@@ -193,6 +199,38 @@ const FALLBACK_CLASS_BUDGET: Readonly<Record<FallbackAttributionKey, number>> = 
   controlFlow: 3, // 2026-11-02 换代重取证：实测 2（IF=1 / CASE=1）× 1.1
   other: 8_289, // 2026-11-02 换代重取证：实测 7,536 × 1.1（下一刀名单见上注）
 };
+
+/**
+ * **按盘钉数登记表**（2026-11-06 指纹批）：棘轮的"上限"本来就是**在某份盘上量出来的**，
+ * 所以每格上限必须跟着它所属的那份盘走——换盘不换数是假绿，换盘还吃旧数是假红。
+ * 一行 = 一份盘的内容指纹（`tools/corpus-fingerprint.mjs`，认内容不认目录名）+ 那份盘的逐格上限。
+ * 登记表外的盘 ⇒ **红**，红消息带该盘逐格实测数（= 它"该是多少"）供登记；**不 skip、不放宽、不借邻近盘的数**。
+ *
+ * - `cddca01d8d2c` 行 = 上面 `FALLBACK_CLASS_BUDGET` / `FALLBACK_LINE_BUDGET` 的原样（2026-11-02 取证盘内容）；
+ * - `39c2310a060d` 行 = 2026-11-07 在自动选中的盘上实测登记（逐格取实测原值，不乘系数）。
+ */
+interface SugarBudgetReadings {
+  budget: Record<FallbackAttributionKey, number>;
+  lineBudget: number;
+}
+
+const SUGAR_BUDGET_PINNED: readonly PinnedRow<SugarBudgetReadings>[] = [
+  {
+    label: 'digest cddca01d8d2c（erb 4,385 / erh 157 / als 19）= 2026-11-02 取证盘内容（SANYOUSEI 重打包 4.980）',
+    fp: { erb: 4385, erh: 157, als: 19, digest: 'cddca01d8d2c' },
+    expect: { budget: { ...FALLBACK_CLASS_BUDGET }, lineBudget: FALLBACK_LINE_BUDGET },
+  },
+  {
+    // 2026-11-07 实测登记（红消息「当前盘实测读数」原样取来）：`tryOther` 5（TRY 系单行档异形在这份盘上多 5 行）、
+    // `controlFlow` 3、`other` 8,020、兜底行总数 8,028。棘轮按**本盘登记值**判，不外借 4.980 那格的数。
+    label: 'digest 39c2310a060d（erb 4,640 / erh 191 / als 23）= 2026-11-07 实测登记的盘',
+    fp: { erb: 4640, erh: 191, als: 23, digest: '39c2310a060d' },
+    expect: {
+      budget: { tryNine: 0, tryOther: 5, dataGrouping: 0, printVariant: 0, controlFlow: 3, other: 8_020 },
+      lineBudget: 8_028,
+    },
+  },
+];
 
 /**
  * TRY 系九枚（= `packages/plugins/kojo-sugar/src/sugar-ident.ts` 的
@@ -746,13 +784,28 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       );
       // 归因必须**恰覆盖**每一条兜底行（一行一格；多了漏了都是分类器坏了，不是语料坏了）。
       expect(attributed, '成因归因计数与兜底行总数不平').toBe(fallbackLines);
-      // 逐类棘轮：`tryNine` / `printVariant` 是**结构性 0**（判据可证），其余四格首轮按池份额钉，
-      // 集成轮拿实测分格读数逐格下调（`FALLBACK_CLASS_BUDGET` 只许改小）。
+      // ---- 按盘取上限（2026-11-06 指纹批）：先按指纹确认这份盘登记过，再逐格判棘轮 ----
+      // 上面读数块里打印的是 `FALLBACK_CLASS_BUDGET`（登记表的基准行）；**实际判定**用本盘那一行。
+      const liveBudget = Object.fromEntries(
+        FALLBACK_ATTRIBUTION_KEYS.map((k) => [k, attribution.get(k)!.hits]),
+      ) as Record<FallbackAttributionKey, number>;
+      const budgetGate = resolvePinnedRow(
+        '糖投影兜底成因棘轮（sugar-projection.corpus.test.ts）',
+        SUGAR_BUDGET_PINNED,
+        corpusFingerprint(SMOKE_DIR!),
+        { ...liveBudget, fallbackLines },
+        () => discoverCorpusFingerprints(),
+      );
+      expect(budgetGate.ok, budgetGate.message).toBe(true);
+      const diskBudget = budgetGate.row?.expect.budget ?? {};
+      // 逐类棘轮：`tryNine` / `printVariant` 是**结构性 0**（判据可证），其余四格按本盘登记行判，
+      // 集成轮拿实测分格读数逐格下调（登记表行的 expect 只许改小）。
       for (const k of FALLBACK_ATTRIBUTION_KEYS) {
         expect(
           attribution.get(k)!.hits,
-          `兜底成因「${k}」超上限 ${FALLBACK_CLASS_BUDGET[k]}——一类已知结构没给显示形，或该桶需要拆细`,
-        ).toBeLessThanOrEqual(FALLBACK_CLASS_BUDGET[k]);
+          `兜底成因「${k}」超本盘登记上限 ${diskBudget[k]}（登记表行「${budgetGate.row?.label}」）` +
+            `——一类已知结构没给显示形，或该桶需要拆细`,
+        ).toBeLessThanOrEqual(diskBudget[k] as number);
       }
       // 四类**已知结构**一行都不许落进兜底：注释 / 空行 / SKIP 区 / PRINT 族。
       expect(fallbackClasses.comment.hits).toBe(0);
@@ -761,8 +814,10 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
       expect(fallbackClasses.print.hits).toBe(0);
       expect(fallbackClasses.functionHead.hits).toBe(0);
       expect(fallbackClasses.preprocessor.hits).toBe(0);
-      // 总量棘轮：只许降、不许升（预算 = 修完实测 ×1.1）。
-      expect(fallbackLines).toBeLessThanOrEqual(FALLBACK_LINE_BUDGET);
+      // 总量棘轮：只许降、不许升（预算 = 修完实测 ×1.1，**按盘登记**）。
+      expect(fallbackLines, `兜底行总数超本盘登记预算（行「${budgetGate.row?.label}」）`).toBeLessThanOrEqual(
+        budgetGate.row?.expect.lineBudget as number,
+      );
 
       await kernel.stop();
     },

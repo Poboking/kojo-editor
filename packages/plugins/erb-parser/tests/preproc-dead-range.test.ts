@@ -192,6 +192,13 @@ const A5_PINNED: readonly PinnedRow<A5Readings>[] = [
     fp: { erb: 4385, erh: 157, als: 19, digest: 'cddca01d8d2c' },
     expect: { ranges: 40, deadLines: 393, deadFiles: 26, markers: [['[IF DEBUG]', 39], ['[IF NDEBUG]', 1]] },
   },
+  {
+    // 2026-11-07 在本机自动选中的盘上实测登记（`resolvePinnedRow` 的红消息「当前盘实测读数」原样取来）：
+    // 与上一行的差 = `deadLines` 393→391（`[IF DEBUG]` 块少 2 行正文），ranges/deadFiles/标记种类不变。
+    label: 'digest 39c2310a060d（erb 4,640 / erh 191 / als 23）= 2026-11-07 实测登记的盘',
+    fp: { erb: 4640, erh: 191, als: 23, digest: '39c2310a060d' },
+    expect: { ranges: 40, deadLines: 391, deadFiles: 26, markers: [['[IF DEBUG]', 39], ['[IF NDEBUG]', 1]] },
+  },
 ];
 
 describe('A5 · 被裁支区间 × 真语料', () => {
