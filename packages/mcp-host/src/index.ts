@@ -526,7 +526,7 @@ const RELATIVE_PATH_SCHEMA: Record<string, unknown> = {
   maxLength: 512,
   pattern: '^(?![A-Za-z]:)(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+$',
   description:
-    'Project-root-relative path only. Absolute paths, drive-letter paths and ".." traversal are rejected by schema; the execution layer additionally resolves against approvedRoots and refuses any out-of-domain target (ADR-0003).',
+    'Project-root-relative path only; absolute, drive-letter and ".." paths are rejected by this schema, and the execution layer resolves against approvedRoots and refuses out-of-domain targets (ADR-0003).',
 };
 
 /**
@@ -551,19 +551,29 @@ export const ROOT_ID_SCHEMA: Record<string, unknown> = {
   type: 'string',
   pattern: '^ws:[0-9a-f]{8}$',
   description:
-    'Optional stable root identifier (ws: + 8 lowercase hex digits), NOT a path. Enumerate candidates from the read-only io.workspaceRoots reply (rootIds, index-aligned with roots); the identifier must also be explicitly approved in this session scope (approvedRootIds) by a human in the AI-access settings panel. Omit to stay on the current project root.',
+    'Optional stable root identifier (ws: + 8 lowercase hex digits), NOT a path. Candidates come from the read-only io.workspaceRoots reply (rootIds, index-aligned with roots) and must also be explicitly approved in this session (approvedRootIds) by a human in the AI-access settings panel. Omit to stay on the current project root.',
 };
 
 /**
  * 分页入参的通用 schema 片段（B1 批：**只加可选入参，不加新工具名**）。
  * 定义必须早于下面几张工具表——表是模块级 const，`export const` 对象若定义在其后会在
  * 模块初始化时撞 TDZ（ReferenceError），只有函数声明可以后置。
+ *
+ * B22 去重批（形态 (c)＋同对象内 (a) 指针）：页大小/严格度口径原本被 152 个别名属性各抄
+ * 一份 539 字符（81,389 字节纯重复），现在**每枚面只留一份完整口径**，落点就是本面
+ * `properties.limit` 的 description（同一条 tools/list 记录里，客户端零额外跳转）；
+ * 其余别名属性只带一句指针。属性名、`type`、`minimum`、`required` 一字未动。
  */
+const PAGE_SIZE_CANON_NOTE =
+  'Page size - ONE knob. `limit` is its real name; the page defaults to this surface\'s existing cap and that cap is never widened. ' +
+  'Legacy synonyms declared on this surface are the same knob, not a second page size: the shared gate takes the FIRST value present in the order limit > length > maxChars > maxResults > maxEntries > maxRanges > maxEvents > maxLines and ignores the rest, while a name this surface does not declare is refused. ' +
+  'Send `limit` when new. This schema runs with additionalProperties:false, so an argument name absent from `properties` is rejected with the full legal list, never silently dropped to the default page size.';
+
 export const PAGE_CURSOR_SCHEMA_PROPS: Record<string, unknown> = {
   limit: {
     type: 'integer',
     minimum: 1,
-    description: "Page size for this enumeration (defaults to this surface's existing cap; the cap is never widened).",
+    description: PAGE_SIZE_CANON_NOTE,
   },
   cursor: {
     type: 'string',
@@ -571,21 +581,19 @@ export const PAGE_CURSOR_SCHEMA_PROPS: Record<string, unknown> = {
     maxLength: 32,
     pattern: '^[0-9a-f]{8}:\\d{1,10}$',
     description:
-      "Opaque cursor copied verbatim from the previous response's nextCursor. Omit for the first page. If the underlying data changed mid-paging the cursor is rejected-by-flag: the response carries changedDuringPaging:true and restarts from the head, so pages must NOT be spliced with earlier ones.",
+      "Opaque cursor copied verbatim from the previous response's nextCursor; omit for the first page. changedDuringPaging:true on a reply means the snapshot moved mid-paging - that page restarts from the head and must not be spliced with earlier ones.",
   },
 };
 
-/** 分页面 description 的共用严格化尾注：说清「页大小只有一个旋钮 + 旧别名照收 + 未声明即显式拒收」。
- * （定义必须早于 `PAGE_ACCOUNT_NOTE`——两张工具表都是模块级 const，后置会撞 TDZ。） */
-const PAGE_STRICT_NOTE =
-  'Argument strictness: page size is ONE knob - `limit` is its real name and the legacy synonyms declared on this surface keep working exactly as before, while an argument name that is NOT declared here is rejected with the full legal list instead of being silently ignored (a typo used to answer a default-size page forever, which reads like paging while it is standing still).';
-
-/** 分页返回体的完整性账字段说明（供各面 description 复用，口径统一）。
- * 入参严格化批（B11）在这一句里同时把「页大小只有一个旋钮 + 未声明的入参名显式拒收」说清：
- * 所有分页面的 description 都拼这段，改一处就等于 24 枚面一起改，不会各写一套。 */
+/** 分页面 description 的共用完整性尾注（口径统一）。
+ * B22 去重批：原本这里还完整复述一遍「页大小只有一个旋钮 + 未声明显式拒收」（375 字符 × 23 枚），
+ * 现在那一口径每枚面只在本面 inputSchema 的 `limit` 说明里写一份，描述侧改指过去——
+ * 同一帧 tools/list 内的同一条记录，跳转零次。完整性账（字段集、nextCursor、
+ * changedDuringPaging）逐字仍在本句，一个字都没删。 */
 export const PAGE_ACCOUNT_NOTE =
-  'Every page carries the completeness account {total (spelled `textLength` on text surfaces), offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim for the next page. changedDuringPaging:true means the snapshot changed mid-paging, so that page restarts from the head and must not be spliced with earlier pages. ' +
-  PAGE_STRICT_NOTE;
+  'Every page carries the completeness account {total (spelled `textLength` on text surfaces), offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim. ' +
+  'changedDuringPaging:true means the snapshot changed mid-paging: that page restarts from the head and must not be spliced with earlier ones. ' +
+  "Page size (ONE knob, `limit` is the real name) and the reject-undeclared-argument-names rule are stated once in this tool's inputSchema `limit` description.";
 
 /** 语义读数服务 → 8 枚只读工具（tier 'read' + readOnlyHint）。
  *
@@ -615,23 +623,21 @@ const STRICT_NO_ARG_SCHEMA: Record<string, unknown> = {
  * 页大小读（先到先得，见 `pageSizeOf`）。`additionalProperties:false` 一生效，少声明一个就不是
  * 「省掉一个别名」，而是把该面今天真在用的入参变成拒收——判据「旧别名照旧生效」当场红。
  *
- * 只有一个真参数：正名 `limit`，其余七个是同义旧名。描述里把「同一个旋钮 + 序列先到先得 +
- * 新 callers 请写 limit」写死，不留「好像有两个页大小」的余地。
- * 这里刻意**不带 `maximum`**：体积闸在腿侧 clamp（本批一个闸值都没动），在 schema 再钉一次上限等于
+ * 只有一个真参数：正名 `limit`，其余七个是同义旧名。B22 去重批把「同一个旋钮 + 序列先到先得 +
+ * 新 callers 请写 limit + 未声明显式拒收」这份完整口径收进本面 `properties.limit` 的描述
+ * （`PAGE_SIZE_CANON_NOTE`），别名属性只留一句同对象内的指针——信息等价性由
+ * `packages/app/tests/mcp-tools-list-payload.test.ts` 的「指针落点」一条钉住。
+ * 这里刻意**不带 `maximum`**：体积闸在腿侧 clamp（B11 一个闸值都没动），在 schema 再钉一次上限等于
  * 给旧别名新增一类「改前收、改后拒」的取值，那是收紧到行为变化，不是本批要的事。
  */
-const PAGE_SIZE_ALIAS_NOTE =
-  'Legacy synonym of `limit` on THIS surface - the same single knob, not a second page size. ' +
-  'The shared page-size gate has always accepted these names and takes the first one present in this order: ' +
-  'limit > length > maxChars > maxResults > maxEntries > maxRanges > maxEvents > maxLines; the rest are then ignored. ' +
-  "New callers should send `limit`. Declared explicitly because this surface runs with additionalProperties:false: " +
-  'a name that is not listed here is rejected with the full legal list, never silently dropped to the default page size.';
+const PAGE_SIZE_ALIAS_POINTER =
+  'Legacy synonym of `limit` on this surface - the same single knob. This object\'s `limit` description carries the acceptance order and the additionalProperties:false reject rule.';
 
 /**
  * `limit` 之外、本面经共用分页腿**真正取用**的页大小别名。
  * - `declared`：该面已单独写过描述的名字（fs.tree 的 `maxEntries` 等），跳过即可，面上字面量不动；
  * - `omit`：共用序列里、但本面执行腿**并不会取用**的名字——不声明它们，让它们落进
- *   「未知入参 ⇒ 显式拒收」。「收下却不用」正是本批要消灭的那种静默，不能靠声明把它合法化。
+ *   「未知入参 ⇒ 显式拒收」。「收下却不用」正是 B11 要消灭的那种静默，不能靠声明把它合法化。
  *   （例：problems.diagnostics 的腿先把 `maxResults` clamp 一遍再注入，序列里排在它之后的
  *   `maxEntries`/`maxRanges`/`maxEvents`/`maxLines` 在该面从来不起作用。）
  */
@@ -639,13 +645,13 @@ function pageSizeAliasProps(declared: readonly string[] = [], omit: readonly str
   const out: Record<string, unknown> = {};
   for (const alias of PAGE_SIZE_ARG_ALIASES) {
     if (alias === 'limit' || declared.includes(alias) || omit.includes(alias)) continue;
-    out[alias] = { type: 'integer', minimum: 1, description: PAGE_SIZE_ALIAS_NOTE };
+    out[alias] = { type: 'integer', minimum: 1, description: PAGE_SIZE_ALIAS_POINTER };
   }
   return out;
 }
 
-/** 本面已有的旧别名描述补一句「与 limit 是同一个旋钮」（不动 maximum / default 口径，只把关系说清）。 */
-const ALIAS_OF_LIMIT = ' Same single knob as `limit` (see the alias note on the other page-size names); prefer `limit`.';
+/** 本面已有的旧别名描述补一句「与 limit 是同一个旋钮，完整口径看本面对象的 limit」（不动 maximum / default 闸值）。 */
+const ALIAS_OF_LIMIT = ' Same single knob as `limit`; this object\'s `limit` description carries the acceptance order and the reject rule. Prefer `limit`.';
 
 /**
  * 位置入参（1 基 line/column）——B11 起严格。七枚定位面（definitionAt / hoverAt / suggestAt /
@@ -688,7 +694,7 @@ const LAUNCHER_INSTANCE_ID_SCHEMA: Record<string, unknown> = {
   maxLength: 64,
   pattern: '^[A-Za-z0-9-]+$',
   description:
-    "Instance id copied verbatim from launcher_instance_list / launcher_instance_get. Shape gate is the host's own: ASCII letters/digits plus '-' only, max 64 chars; never invent or guess one.",
+    "Instance id copied verbatim from launcher_instance_list / launcher_instance_get - never invent one. Host's own shape gate: ASCII letters/digits plus '-', 1..64 chars.",
 };
 
 /** 单段 id（包 id / 计划 id / 备份 id / 会话 id）：Rust `launcher::paths::valid_component` 同尺。 */
@@ -698,7 +704,7 @@ const LAUNCHER_COMPONENT_ID_SCHEMA: Record<string, unknown> = {
   maxLength: 64,
   pattern: '^(?!\\.)[A-Za-z0-9._-]+$',
   description:
-    'One host-side component id (pack id / plan id / backup id / session id) copied verbatim from a read surface. ASCII letters, digits, - _ . ; may not start with a dot; max 64 chars.',
+    'One host-side component id (pack / plan / backup / session id) copied verbatim from a read surface: ASCII letters, digits, - _ .; no leading dot; max 64 chars.',
 };
 
 /** 冲突裁决项：与契约 `ConflictResolution` 同形（三键、动作白名单）。 */
@@ -713,9 +719,11 @@ const LAUNCHER_RESOLUTION_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-/** 启动器族 description 的共用尾注（档位 + 分页账口径统一，避免 27 条各写一套）。 */
+/** 启动器族 description 的共用尾注（档位 + 批准口径统一，避免 27 条各写一套）。
+ * B22 去重批：只把长句压成短句（形态 (b)），四个要点一个没丢——privileged、缺省不上帧、
+ * 只认精确名（通配不算批准）、宿主自身闸照旧生效。 */
 const LAUNCHER_TIER_NOTE =
-  'Tier: privileged - this name is absent from tools/list until the session approves it by its EXACT name (the 4th table; wildcards such as launcher_* never approve a privileged tool), and every approval gate the host itself enforces still applies.';
+  'Tier: privileged - absent from tools/list until this session approves this EXACT name (the 4th table; a wildcard such as launcher_* approves nothing), and every host-enforced approval gate still applies on the call.';
 
 
 export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
@@ -1539,12 +1547,12 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'editor.openDocument',
     description:
-      'Open ONE document of the currently open project in the editor GUI and report what actually landed (edit tier: it changes user-visible editor state - which file is on screen - so a read session must not be able to move the author away from their file). ' +
-      'Input is a project-root-relative path only: the SAME gate as fs.readFile (an absolute path, a drive letter, a ".." segment or any other escape is rejected with INVALID_ARGS before anything reaches the host event bus, so the host never receives an out-of-domain target). ' +
+      'Open ONE document of the open project in the editor GUI and report what actually landed (edit tier: it changes which file is on screen, so a read session cannot move the author off their file). ' +
+      'Input: a project-root-relative path only, gated exactly like fs.readFile - an absolute path, a drive letter, a ".." segment or any other escape gets INVALID_ARGS before the host event bus, so the host never receives an out-of-domain target. ' +
       "Execution reuses the host's own navigation channel (the editor.revealLocation event that Go-to-definition / the problem panel / the outline already use) - this tool adds NO second open mechanism, only observation. " +
-      "opened:true is answered ONLY after reading the pane registry back: some pane's active file is this path AND the model on screen is that tab's own model (the same check refuses the transient where the path has already switched but the previous model is still displayed). The reply carries the facts read back - paneId, path, active, lineCount, language, modelUri, readOnly, derivedView (a sugar projection on screen: write tools still refuse there), tabCount - plus the observation account (waitedMs, polls, pollIntervalMs, deadlineMs, intent with channel and subscriber count, alreadyOpen when nothing was emitted). " +
-      'When it cannot be verified the call FAILS loudly instead of pretending the open happened: an exhausted window says how long it waited, how many panes it saw and what each pane displays (TOOL_EXECUTION_FAILED); a registry that cannot be read at all - GUI not mounted, headless host, no subscriber for the channel - refuses BEFORE emitting anything with NOT_WIRED; no project open gives RESOURCE_UNAVAILABLE. ' +
-      'Opening changes nothing on disk and no model bytes: contentChanged:false, dirty stays null with the reason, saved:false and persisted:false always hold - persisting remains on the fileTree.update double-gate / exportFile dialog paths. Positioning is deliberately NOT part of this tool: use editor.setCursor / editor.revealLine with the paneId this returns (both read their result back).',
+      "opened:true is answered ONLY after reading the pane registry back: some pane's active file is this path AND the model on screen is that tab's own model (the same check refuses the transient where the path switched but the previous model still shows). The reply carries what was read back - paneId, path, active, lineCount, language, modelUri, readOnly, derivedView (a sugar projection on screen: write tools still refuse there), tabCount - plus the observation account (waitedMs, polls, pollIntervalMs, deadlineMs, intent with channel and subscriber count, alreadyOpen when nothing was emitted). " +
+      'If it cannot be verified the call FAILS loudly instead of pretending the open happened: an exhausted window says how long it waited, how many panes it saw and what each displays (TOOL_EXECUTION_FAILED); an unreadable registry (GUI not mounted, headless host, no subscriber for the channel) refuses BEFORE emitting, with NOT_WIRED; no project open gives RESOURCE_UNAVAILABLE. ' +
+      'Nothing on disk or in the model changes: contentChanged:false, dirty stays null with the reason, saved:false and persisted:false always hold - persisting stays on the fileTree.update double-gate / exportFile dialog paths. Positioning is deliberately NOT part of this tool: use editor.setCursor / editor.revealLine with the returned paneId (both read their result back).',
     inputSchema: {
       type: 'object',
       properties: {

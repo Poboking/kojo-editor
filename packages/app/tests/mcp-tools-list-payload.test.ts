@@ -1,29 +1,40 @@
 /**
- * B21（LaneAF）· `tools/list` 载荷体积读数钉桩 —— **只钉读数，不改任何生产形态**。
+ * B21（LaneAF）钉读数 · B22（LaneAI）去重后重钉 + **信息等价闸** —— 只钉读数，不改生产形态。
  *
- * 这一份要钉死的是：**「以后谁把工具表撑胖了 ⇒ 直接红，且红得能说出是谁撑的」**，
- * 而不是再交一份「估计的体积」。全部判据都从 `@kojo/mcp-host` 的**注册表真源**现场算
+ * 这一份要钉死的是：**「以后谁把工具表撑胖了 ⇒ 直接红，且红得能说出是谁撑的」**；
+ * 反过来也一样：**「谁去掉重复载荷时顺手把信息删丢了 ⇒ 也直接红」**。
+ * 全部判据都从 `@kojo/mcp-host` 的**注册表真源**现场算
  * （`createMcpCapabilityRegistry({}).listTools(scope)` 与线协议一一对应），
  * 零假注入、零 GUI、零 Tauri、零 HTTP。
  *
- * 四条判据：
+ * 八条判据：
  *  1. **可见面形状**：77 枚具名面（read 37 / edit 11 / privileged 29）、缺省会话（未批准）
- *     只出 read 面 37 枚 —— 与 `docs/STATE.md` 的能力面读数同源；枚数一动这里就红，
- *     红名单直接印出是哪一档变了。
- *  2. **体积带（漂移护栏）**：全量面一帧的 JSON 字节数必须落在**本批实拍带**里
- *     （下界＝挡住「偷偷瘦身不记账」，上界＝挡住「新面把描述无限写长」）。
- *     带子刻意留了 ±10% 的余量：加一枚工具不至于红，连加一屏长描述一定会红。
+ *     只出 read 面 37 枚 —— 与 `docs/STATE.md` 的能力面读数同源；枚数一动这里就红。
+ *  2. **体积带（漂移护栏）**：全量面一帧的 JSON 字节数必须落在**本批实拍带**里，另外还有一条
+ *     **记账下界**（B22 约 −3.5%）：上界＝挡住「新面把描述无限写长」，下界＝挡住
+ *     「瘦身不记账、反向把内容删丢」。带子仍留 ±10%：加一枚工具不至于红，连加一屏长描述一定会红。
  *  3. **线协议形态**：每枚上帧的工具对象键集只许 `{name, description, inputSchema, tier, annotations?}`
  *     ——`run` 是函数、序列化必须消失；键集里冒出别的（或 `tier` 掉了）都在这里红。
- *  4. **体积闸余量**：全量帧距 1 MiB 的 `max_response_bytes` 余量 ≥ 700 KiB（闸值一字不动，
- *     本条只钉「还剩多少」，余量掉下这条线就说明载荷已经快到需要正面讨论分页的那一步）。
+ *  4. **体积闸余量**：全量帧距 1 MiB 的 `max_response_bytes` 余量 ≥ 700 KiB（闸值一字不动）。
+ *  5. **描述长度闸**：Rust `sanitize_tool_descriptor`（`packages/app/src-tauri/src/mcp/protocol.rs`）
+ *     对 >`MAX_DESCRIPTION_CHARS`＝2048 字符的描述是**静默截断**：不报错、照发，尾巴换成 `…[truncated]`
+ *     ⇒ 超标＝那一枚的尾部约束在客户端当场消失。B21 实拍 2 枚超标（`launcher_log_tail` 2,049、
+ *     `editor.openDocument` 2,079），B22 去重后必须 0 枚，且最长一枚留出余量。
+ *  6. **指针落点（去重的合法性）**：页大小/严格度口径原本被 152 个别名属性各抄一份（539 字符×152＝
+ *     81,389 B 纯重复），B22 收成**每枚面一份**，落点＝本面 `inputSchema.properties.limit.description`，
+ *     别名与描述只留指针。本条钉「指针指过去的内容真的存在且完整」：落点缺一个 token 就红。
+ *  7. **逐面语义账**：被压过的文案里闸值 / 上限 / 缺省值 / 只读与危险提示 / 路径约束 / `saved:false`
+ *     这一类必须逐条还在（表驱动，缺 token 就红）。
+ *  8. **分档读数**：description / inputSchema / launcher 族三档上界，红了就知道是哪一档变了。
  *
- * `additionalProperties:false` 的严格化（B11）在本批的实测是 **80 处 / 2,400 字节**，
- * 只占全量帧的 1.1% —— 由第 2、4 条一起兜住，不是单独一条闸。
+ * `additionalProperties:false` 的严格化（B11）实测仍是 **80 处 / 2,400 字节**，本批一处没摘。
+ * 复现读数：`node tools/mcp-list-payload-evidence.mjs static --top 8` 与 `... dedup --top 8`。
  */
 import { describe, expect, it } from 'vitest';
 import {
   KERNEL_IO_TOOL_SPECS,
+  PAGE_ACCOUNT_NOTE,
+  PAGE_SIZE_ARG_ALIASES,
   SEMANTIC_TOOL_SPECS,
   SUPPLEMENTAL_TOOL_SPECS,
   createMcpCapabilityRegistry,
@@ -35,31 +46,55 @@ import {
 
 const HOST_SPECS = [...SEMANTIC_TOOL_SPECS, ...KERNEL_IO_TOOL_SPECS, ...SUPPLEMENTAL_TOOL_SPECS];
 const ALL_NAMES = HOST_SPECS.map((s) => s.name);
-const PRIVILEGED_NAMES = HOST_SPECS.filter((s) => s.tier === 'privileged').map((s) => s.name);
 
 function scope(tier: McpSessionScope['tier'], approvedTools: readonly string[] = []): McpSessionScope {
-  return { sessionId: 'b21-s', clientId: 'b21-c', tier, approvedRoots: [], approvedTools };
+  return { sessionId: 'b22-s', clientId: 'b22-c', tier, approvedRoots: [], approvedTools };
 }
 
 const registry = createMcpCapabilityRegistry({});
 
 /** 一帧 `tools/list` 的线协议字节数：`run` 是函数，JSON 序列化即消失。 */
 function frameBytes(tools: readonly McpTool[]): number {
-  return Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: 'b21', result: { tools } }), 'utf-8');
+  return Buffer.byteLength(JSON.stringify({ jsonrpc: '2.0', id: 'b22', result: { tools } }), 'utf-8');
 }
 
 const fullFace = registry.listTools(scope('privileged', ALL_NAMES));
 const readFace = registry.listTools(scope('read'));
 const editFace = registry.listTools(scope('edit'));
 
+const bytes = (value: unknown) => Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value), 'utf-8');
+/** 一枚面上帧的净字节（`run` 不参与序列化，与量具 `wireTool` 同口径）。 */
+function wireBytes(t: McpTool): number {
+  const { run: _run, ...rest } = t;
+  return bytes(rest);
+}
+const descBytes = fullFace.reduce((a, t) => a + bytes(t.description ?? ''), 0);
+const schemaBytes = fullFace.reduce((a, t) => a + bytes(t.inputSchema ?? {}), 0);
+const launcherBytes = fullFace.filter((t) => t.name.startsWith('launcher_')).reduce((a, t) => a + wireBytes(t), 0);
+
+/** 拿一枚面 `properties` 里的某格（只为指针落点与语义 token 核对，不改任何形状）。 */
+function propOf(tool: McpTool, name: string): Record<string, unknown> | undefined {
+  const props = (tool.inputSchema as { properties?: Record<string, unknown> } | undefined)?.properties;
+  const hit = props?.[name];
+  return hit && typeof hit === 'object' ? (hit as Record<string, unknown>) : undefined;
+}
+function propDesc(tool: McpTool, name: string): string {
+  return String(propOf(tool, name)?.['description'] ?? '');
+}
+
 /* ------------------------------ 本批实拍读数 ------------------------------ */
 
-/** B21 实拍（2026-11-06，LaneAF，静态规格面）：漂移护栏带＝±10%，带外必须是有意识的改动。 */
+/** B21 实拍（2026-11-06，LaneAF，去重前）：只留着核对 Δ，判据已按 B22 重钉。 */
 const B21_FULL_FRAME_BYTES = 218_897;
+/** B22 实拍（2026-11-06，LaneAI，去掉逐字重复后）＝量具 `static` 的 frameBytes。 */
+const B22_FULL_FRAME_BYTES = 168_894;
+/** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。 */
+const B22_ACCOUNTED_FLOOR = 163_000;
 const BAND = 0.1;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
+const RUST_MAX_DESCRIPTION_CHARS = 2048;
 
-describe('B21 tools/list 载荷体积（注册表真源现场算，非估算）', () => {
+describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场算，非估算）', () => {
   it('① 可见面枚数与 STATE 能力面读数同源：77＝read 37 / edit 11 / privileged 29', () => {
     expect(fullFace).toHaveLength(77);
     expect(readFace).toHaveLength(37);
@@ -73,10 +108,13 @@ describe('B21 tools/list 载荷体积（注册表真源现场算，非估算）'
     expect(registry.listTools(scope('read'))).toHaveLength(37);
   });
 
-  it('② 全量帧字节落在本批实拍带内（±10% 漂移护栏）', () => {
-    const bytes = frameBytes(fullFace);
-    expect(bytes).toBeGreaterThanOrEqual(Math.round(B21_FULL_FRAME_BYTES * (1 - BAND)));
-    expect(bytes).toBeLessThanOrEqual(Math.round(B21_FULL_FRAME_BYTES * (1 + BAND)));
+  it('② 全量帧落在 B22 实拍带内（±10% 上界护栏）且不低于 B22 记账下界', () => {
+    const n = frameBytes(fullFace);
+    expect(n).toBeGreaterThanOrEqual(Math.round(B22_FULL_FRAME_BYTES * (1 - BAND)));
+    expect(n).toBeLessThanOrEqual(Math.round(B22_FULL_FRAME_BYTES * (1 + BAND)));
+    expect(n).toBeGreaterThanOrEqual(B22_ACCOUNTED_FLOOR);
+    // 去重前的读数 B21_FULL_FRAME_BYTES 只留着核对 Δ：218,897 → 168,894（−50,003 B＝−22.8%）。
+    expect(B22_FULL_FRAME_BYTES).toBeLessThan(B21_FULL_FRAME_BYTES);
   });
 
   it('③ 上帧键集只有契约那几格，run 必须序列化消失', () => {
@@ -99,10 +137,144 @@ describe('B21 tools/list 载荷体积（注册表真源现场算，非估算）'
     expect(MAX_RESPONSE_BYTES - bytes).toBeGreaterThanOrEqual(700 * 1024);
   });
 
-  it('⑤ description 顶到 Rust 二次截断（2048 字符）的面不多于本批实拍的 2 枚', () => {
-    // 顶闸的面在端点侧会被裁，静态面与真端点面因此不许差出一个量级——这条把「裁了多少」钉成可核对的账。
-    const over = fullFace.filter((t) => (t.description ?? '').length > 2048).map((t) => t.name);
-    expect(over.length).toBeLessThanOrEqual(2);
-    expect(over.sort()).toEqual(['editor.openDocument', 'launcher_log_tail']);
+  it('⑤ 描述长度闸：B22 后 0 枚超标（Rust 侧是静默截断，超标＝尾巴当场丢）', () => {
+    // 实测行为：protocol.rs 的 sanitize_tool_descriptor → truncate_chars(desc, 2048)——
+    // **不报错、照发**，超过 2048 字符的部分被砍掉并补 `…[truncated]`（B21 那 2 枚就是这么丢尾注的）。
+    const over = fullFace.filter((t) => (t.description ?? '').length > RUST_MAX_DESCRIPTION_CHARS).map((t) => t.name);
+    expect(over).toEqual([]);
+    const longest = Math.max(...fullFace.map((t) => (t.description ?? '').length));
+    // 最长一枚（B22 实拍 fs.readMany 2,005 字符）留 ≥40 字符余量：撞上 2048 不会报错，只会被换刀。
+    expect(longest).toBeLessThanOrEqual(RUST_MAX_DESCRIPTION_CHARS - 40);
+  });
+
+  it('⑥ 指针落点：页大小/严格度口径每枚面一份，指针指过去的内容真的存在且完整', () => {
+    // 落点＝本面 `properties.limit` 的 description。凡是（a）描述里带了「见本面 inputSchema limit」指针、
+    // （b）声明了 `limit` 之外的页大小别名、或（c）声明了 `limit` 本身 的面，都必须能在**同一条
+    // tools/list 记录**里读到完整口径——跳转次数＝0，不靠 prompts / _meta / 仓内文档。
+    const CANON_TOKENS = [
+      'ONE knob',
+      'never widened',
+      'limit > length > maxChars > maxResults > maxEntries > maxRanges > maxEvents > maxLines',
+      'additionalProperties:false',
+      'full legal list',
+    ];
+    let canonicalFaces = 0;
+    for (const t of fullFace) {
+      const limitDesc = propDesc(t, 'limit');
+      const pointsHere = (t.description ?? '').includes('inputSchema `limit` description');
+      const aliasSiblings = PAGE_SIZE_ARG_ALIASES.filter((a) => a !== 'limit' && propOf(t, a) !== undefined);
+      if (!limitDesc && !pointsHere) continue;
+      expect(limitDesc, `${t.name} 的描述指向 inputSchema.limit，但本面没有该落点`).not.toBe('');
+      for (const token of CANON_TOKENS) {
+        expect(limitDesc, `${t.name} 的 limit 落点缺 token：${token}`).toContain(token);
+      }
+      canonicalFaces += 1;
+      for (const alias of aliasSiblings) {
+        const d = propDesc(t, alias);
+        expect(d, `${t.name}.${alias} 没有指向 \`limit\` 的指针`).toContain('`limit`');
+        expect(d, `${t.name}.${alias} 的指针必须说明落点就在本对象里`).toContain('limit` description');
+      }
+    }
+    expect(canonicalFaces).toBeGreaterThanOrEqual(20); // B22 实拍 25 枚分页面，一枚一份
+
+    // 启动器族的档位尾注：逐字共用，但只许出现在真的 privileged 的 launcher_* 面上，五个要点齐。
+    const tierTokens = ['privileged', 'tools/list', 'EXACT name', '4th table', 'launcher_*'];
+    for (const t of fullFace.filter((x) => x.name.startsWith('launcher_'))) {
+      for (const token of tierTokens) {
+        expect(t.description ?? '', `${t.name} 的档位说明缺 ${token}`).toContain(token);
+      }
+      expect(t.tier, `${t.name} 带 privileged 尾注却不在 privileged 档`).toBe('privileged');
+    }
+  });
+
+  it('⑦ 逐面语义账：压过的文案里闸值/缺省/只读/危险/路径/回执字段一条都不许丢', () => {
+    const REQUIRED_TOKENS: Record<string, readonly string[]> = {
+      'editor.openDocument': [
+        'INVALID_ARGS',
+        'editor.revealLocation',
+        'paneId',
+        'derivedView',
+        'contentChanged:false',
+        'saved:false',
+        'persisted:false',
+        'TOOL_EXECUTION_FAILED',
+        'NOT_WIRED',
+        'RESOURCE_UNAVAILABLE',
+        'waitedMs',
+        'polls',
+        'pollIntervalMs',
+        'deadlineMs',
+        'alreadyOpen',
+        'lineCount',
+        'language',
+        'modelUri',
+        'readOnly',
+        'tabCount',
+        'exportFile',
+        'fileTree.update',
+        'editor.setCursor',
+        'editor.revealLine',
+        'project-root-relative',
+      ],
+      launcher_log_tail: ['40960', 'base64', 'truncatedByBytes', 'maxBytes', 'CHUNK', 'stream'],
+      'fs.readFile': ['24000', '65000', '65536', 'textLength', 'changedDuringPaging', 'Never writes to disk', 'approvedRoots'],
+      'document.active': ['8000', '65000', '65536', 'textLength', 'cursor'],
+      'io.workspaceRoots': ['rootIds', 'approvedRootIds', 'ws:', 'never mutates state'],
+    };
+    for (const [name, tokens] of Object.entries(REQUIRED_TOKENS)) {
+      const tool = fullFace.find((t) => t.name === name);
+      expect(tool, `${name} 必须仍在册`).toBeDefined();
+      for (const token of tokens) {
+        expect(tool?.description ?? '', `${name} 的 description 丢了 token：${token}`).toContain(token);
+      }
+    }
+
+    // 完整性账字段集：去重只压句式，账上的字段名一个不能少。
+    for (const field of ['total', 'textLength', 'offset', 'limit', 'truncated', 'hasMore', 'nextCursor', 'fingerprint']) {
+      expect(PAGE_ACCOUNT_NOTE, `PAGE_ACCOUNT_NOTE 丢了字段 ${field}`).toContain(field);
+    }
+    expect(PAGE_ACCOUNT_NOTE).toContain('changedDuringPaging');
+
+    // 路径 / 根标识这类共用形状说明：约束逐条还在（B22 只把长句压短，没有搬到别处）。
+    // 口径＝把 schema 树里**每一条**含该 marker 的 description 抠出来（含嵌套 items/子对象），不限属性名。
+    const schemaDescHits = (t: McpTool, needle: string): string[] => {
+      const acc: string[] = [];
+      const walk = (node: unknown): void => {
+        if (Array.isArray(node)) {
+          for (const item of node) walk(item);
+          return;
+        }
+        if (node && typeof node === 'object') {
+          for (const [k, v] of Object.entries(node)) {
+            if (k === 'description' && typeof v === 'string') {
+              if (v.includes(needle)) acc.push(v);
+            } else walk(v);
+          }
+        }
+      };
+      walk(t.inputSchema);
+      return acc;
+    };
+    const relPathHosts = fullFace.flatMap((t) => schemaDescHits(t, 'ADR-0003'));
+    expect(relPathHosts.length).toBe(15); // B22 实拍 15 处共用形状说明
+    for (const d of relPathHosts) {
+      for (const token of ['Project-root-relative', 'absolute', 'drive-letter', '".."', 'approvedRoots', 'ADR-0003']) {
+        expect(d, `相对路径说明丢了 ${token}`).toContain(token);
+      }
+    }
+    const rootIdHosts = fullFace.flatMap((t) => schemaDescHits(t, 'ws: + 8 lowercase hex'));
+    expect(rootIdHosts.length).toBeGreaterThanOrEqual(4);
+    for (const d of rootIdHosts) {
+      for (const token of ['NOT a path', 'io.workspaceRoots', 'approvedRootIds', 'Omit to stay on the current project root']) {
+        expect(d, `rootId 说明丢了 ${token}`).toContain(token);
+      }
+    }
+  });
+
+  it('⑧ 分档读数上界（与 B22 回执同源）：红了就知道是哪一档变了', () => {
+    expect(descBytes).toBeLessThanOrEqual(60_000); // B21 实拍 64,851
+    expect(schemaBytes).toBeLessThanOrEqual(105_000); // B21 实拍 143,762
+    expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323
+    expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });
 });
