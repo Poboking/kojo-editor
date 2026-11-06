@@ -199,7 +199,7 @@ function pluginSrcDirs() {
  * 文案里也算文案）。注释里的句子不是上屏句子，所以这里按字符走一遍状态机，
  * 而不是按行 grep——按行 grep 会把 `${slot}` 与注释一起数进来（假阳性灌满基线）。
  */
-function copySegmentsOf(src) {
+function copySegmentsOf(src, wholeFile = false) {
   const lineStarts = [0];
   for (let k = 0; k < src.length; k++) if (src[k] === '\n') lineStarts.push(k + 1);
   const lineOf = (idx) => {
@@ -268,7 +268,7 @@ function copySegmentsOf(src) {
       }
       if (c === '"' || c === "'" || c === '`') {
         const asCopy =
-          top.copy || top.msgFn || M4_COPY_KEY_RE.test(src.slice(Math.max(0, i - 32), i).trimEnd());
+          wholeFile || top.copy || top.msgFn || M4_COPY_KEY_RE.test(src.slice(Math.max(0, i - 32), i).trimEnd());
         frames.push({ type: 'str', q: c, copy: asCopy, start: i + 1, segs: [], tpl: c === '`' });
         i++;
         continue;
@@ -308,12 +308,24 @@ function copySegmentsOf(src) {
   return out;
 }
 
+/**
+ * M4：这两份文件的**非注释 CJK 字面量全部是诊断句**——句子走 `return` /
+ * `push(line, statement, message)` 进 `ErbStructureIssue.message`，不经 `message:` 键，
+ * 所以键规则抓不到。按文件整体算文案：上屏链在本批逐条查实过（declarations.ts:231-290 的
+ * 每条字符串都是 `dimLineViolations` 的返回值、erh.ts:120-215 的每条都是 `push` 的第三参），
+ * 新增文件进这张表必须先同样查实，不许凭"看起来像诊断文件"加。
+ */
+const M4_WHOLE_FILE_COPY = new Set([
+  'packages/plugins/erb-parser/src/declarations.ts',
+  'packages/plugins/erb-parser/src/erh.ts',
+]);
+
 /** M4：上屏的是**中文句子**；零 CJK 的字面量是枚举/短码（`reason: 'variable-slot'`）⇒ 不算文案 */
 const CJK_RE = /[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]/;
 
 /** M4 单文件采集：返回命中行（去重）与豁免行数 */
-function collectM4(src, rawLines) {
-  const segs = copySegmentsOf(src);
+function collectM4(src, rawLines, wholeFile = false) {
+  const segs = copySegmentsOf(src, wholeFile);
   const hits = new Map();
   let exempt = 0;
   for (const seg of segs) {
@@ -411,7 +423,7 @@ async function collect() {
         const text = await fs.readFile(f, 'utf8');
         const lines = text.split(/\r?\n/);
         if (check.pattern === 'm4CopyWords') {
-          const { hitList, exempt: m4Exempt } = collectM4(text, lines);
+          const { hitList, exempt: m4Exempt } = collectM4(text, lines, M4_WHOLE_FILE_COPY.has(r));
           if (m4Exempt > 0) exempt[r] = (exempt[r] ?? 0) + m4Exempt;
           if (hitList.length > 0) perFile[r] = hitList;
           continue;
