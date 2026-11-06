@@ -662,3 +662,50 @@ describe('⑦ IO 边界', () => {
     h.dispose();
   });
 });
+
+describe('⑧ 失效波（MCP-PERF-S13：file.changedBatch）', () => {
+  const waveOf = (n: number, prefix = '001'): Array<{ kind: string; path: string }> =>
+    Array.from({ length: n }, (_, i) => ({ kind: 'change', path: `${ROOT}/${prefix}/w${i}.ERB` }));
+
+  /** 装配 + 首轮落地（索引广播 → 首帧 → 整轮），返回记账 spy 的轮数读数 */
+  const armed = async (): Promise<{ h: ReturnType<typeof harness>; runs: () => number }> => {
+    const h = harness();
+    h.setProject(project);
+    h.setIndex([B]);
+    h.mount();
+    h.fire('kojo.functionChanged', { projectRoot: project.rootDir, files: [B] });
+    await h.runFrames();
+    const spy = h.latest();
+    return { h, runs: () => spy.runs.length };
+  };
+
+  it('一波 20 文件 ⇒ 扫描重排恰 1 次（波就是集合面的那一次请求）', async () => {
+    const { h, runs } = await armed();
+    expect(runs()).toBe(1);
+    h.fire('file.changedBatch', { changes: waveOf(20) });
+    await h.clock.advance(10_000); // 合批窗口过了，但离上一轮满 60s 还差得远（与 ⑥ 同一点表）
+    expect(runs()).toBe(1);
+    await h.clock.advance(SCAN_FULL_ROUND_MIN_MS);
+    expect(runs()).toBe(2);
+    h.dispose();
+  });
+
+  it('逐文件 + 波同窗（S12 内核形态）⇒ 仍恰 1 轮（同名定时器只留一发，不双跑）', async () => {
+    const { h, runs } = await armed();
+    for (const path of [A, B, C]) h.fire('file.changed', { kind: 'change', path });
+    h.fire('file.changedBatch', { changes: [A, B, C].map((path) => ({ kind: 'change', path })) });
+    await h.clock.advance(10_000);
+    expect(runs()).toBe(1);
+    await h.clock.advance(SCAN_FULL_ROUND_MIN_MS);
+    expect(runs()).toBe(2);
+    h.dispose();
+  });
+
+  it('根外一波不起整轮（与逐文件同一把根尺）', async () => {
+    const { h, runs } = await armed();
+    h.fire('file.changedBatch', { changes: waveOf(20, '../outside') });
+    await h.clock.advance(70_000);
+    expect(runs()).toBe(1);
+    h.dispose();
+  });
+});

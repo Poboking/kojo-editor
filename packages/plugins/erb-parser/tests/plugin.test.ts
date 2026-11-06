@@ -495,6 +495,78 @@ describe('erb-parser 插件', () => {
       await dropped;
       expect(parser.currentIndex()!.files.has('/proj/kojo/saved.ERB')).toBe(false);
     });
+
+    /* ---- MCP-PERF-S13：失效波（`file.changedBatch`）下游消费 ----
+     *
+     * 轮数代理：`flushFileChanges` 每轮对每个待处理 changed 路径恰好一次 `io.exists`
+     * （判删），全插件仅此一处调用 ⇒ exists 调用数 / 波内路径数 = 增量轮数。
+     */
+    function countingIO(files: Record<string, string>): { io: FileIO; existsCalls: () => number } {
+      const base = fakeIO(files);
+      let calls = 0;
+      const io = {
+        ...base,
+        async exists(path: string) {
+          calls++;
+          return base.exists(path);
+        },
+      } as unknown as FileIO;
+      return { io, existsCalls: () => calls };
+    }
+
+    const setupWave = async (files: Record<string, string>) => {
+      const { io, existsCalls } = countingIO(files);
+      const activated = activatePlugin(io);
+      const parser = activated.services.get('erb.parser') as ErbParserService;
+      const opened = new Promise<void>((resolve) => {
+        activated.bus.once('kojo.functionChanged', () => resolve());
+      });
+      activated.emit('project.opened', { project: fakeProject('/proj', ['/proj/kojo']) });
+      await opened;
+      await settleBuild();
+      expect(existsCalls()).toBe(0); // 整扫不走 exists：之后的计数全是增量轮的
+      return { ...activated, parser, existsCalls };
+    };
+
+    const waveOf = (n: number): Array<{ kind: string; path: string }> =>
+      Array.from({ length: n }, (_, i) => ({ kind: 'add', path: `/proj/kojo/w${i}.ERB` }));
+
+    const bulkFiles = (): Record<string, string> => {
+      const files: Record<string, string> = { '/proj/kojo/a.ERB': '@A\n' };
+      for (let i = 0; i < 20; i++) files[`/proj/kojo/w${i}.ERB`] = `@W${i}\nRETURN 1\n`;
+      return files;
+    };
+
+    it('失效波：一波 20 文件 ⇒ 增量轮恰 1 次，落地不等 300ms 逐文件去抖', async () => {
+      const { emit, parser, existsCalls } = await setupWave(bulkFiles());
+      emit('file.changedBatch', { changes: waveOf(20) });
+      // 波落地即增量：只留异步余量，不等 300ms 去抖窗（20 路径 × 1 轮 = 20 次 exists）
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(existsCalls()).toBe(20);
+      expect(parser.currentIndex()!.byName.has('W19')).toBe(true);
+    });
+
+    it('失效波与逐文件事件同窗（S12 内核形态）⇒ 波接管本窗，仍恰 1 轮不双跑', async () => {
+      const { emit, parser, existsCalls } = await setupWave(bulkFiles());
+      for (const c of waveOf(20)) emit('file.changed', c);
+      emit('file.changedBatch', { changes: waveOf(20) });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(existsCalls()).toBe(20);
+      expect(parser.currentIndex()!.byName.has('W19')).toBe(true);
+      // 逐文件 300ms 去抖窗已被波掐掉：不再补发第二轮
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(existsCalls()).toBe(20);
+    });
+
+    it('无波（老内核）退回逐文件：20 条逐文件事件仍由 300ms 去抖并成 1 轮', async () => {
+      const { emit, parser, existsCalls } = await setupWave(bulkFiles());
+      for (const c of waveOf(20)) emit('file.changed', c);
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(existsCalls()).toBe(0); // 去抖窗内不落地（首条起算，旧行为逐字）
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(existsCalls()).toBe(20);
+      expect(parser.currentIndex()!.byName.has('W19')).toBe(true);
+    });
   });
 });
 
