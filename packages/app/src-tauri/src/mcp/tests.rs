@@ -3650,10 +3650,7 @@ fn editor_open_document_is_gated_as_edit_at_host_gate() {
         .err()
         .unwrap_or_else(|| panic!("后门复现：{TOOL} 在 read 会话被端点放行（Ok）"));
     assert_eq!(e.code, "E_TIER_DENIED", "{TOOL}");
-    assert!(
-        e.message.contains(TOOL),
-        "{TOOL} 拒绝必须可见（带工具名）"
-    );
+    assert!(e.message.contains(TOOL), "{TOOL} 拒绝必须可见（带工具名）");
     assert!(
         check_tool_call_permission(TOOL, &edit).is_ok(),
         "{TOOL} edit 会话应放行"
@@ -3673,7 +3670,10 @@ fn editor_open_document_is_gated_as_edit_at_host_gate() {
     // tools/list 第二道闸：read 会话看不见这一枚（与 tools/call 同源判定）。
     let result = json!({ "tools": [ { "name": TOOL } ] });
     let filtered = filter_tools_list(&result, &read);
-    assert!(names_of(&filtered.result).is_empty(), "{TOOL} 未从 read 会话摘掉");
+    assert!(
+        names_of(&filtered.result).is_empty(),
+        "{TOOL} 未从 read 会话摘掉"
+    );
     assert!(filtered.filtered.iter().any(|f| f == TOOL));
 }
 
@@ -3756,7 +3756,9 @@ fn e2e_tools_call_denies_editor_open_document_from_read_session() {
         McpRespondArgs {
             id: payload.id.clone(),
             ok: true,
-            result: Some(json!({ "opened": true, "paneId": "pane-1", "active": true, "saved": false })),
+            result: Some(
+                json!({ "opened": true, "paneId": "pane-1", "active": true, "saved": false }),
+            ),
             error: None,
         },
     )
