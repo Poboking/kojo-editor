@@ -19,6 +19,12 @@ use serde_json::{json, Value};
 /// 冻结契约：发给 WebView 的事件名（路 A 的 host-bridge 收，回 `mcp_respond`）。
 pub const MCP_REQUEST_EVENT: &str = "mcp://request";
 
+/// additive（2026-11-06 接入可见性）：**首次**已鉴权握手到达时推给设置页的事件名。
+/// 这是宿主 → WebView 的 UI 通知，不是 MCP server→client 协议通知，也不进线协议；
+/// 真源是端点内存里的有界接入台账 `mcp_connections_query`，事件只用来触发即时刷新，
+/// 即使前端没订阅 / 事件丢帧，查询读数照样正确（不静默、不靠事件当唯一证据）。
+pub const MCP_CLIENT_CONNECTED_EVENT: &str = "mcp://client-connected";
+
 /// 现行 MCP 规范版本；协商默认值。
 pub const PROTOCOL_VERSION: &str = "2026-07-28";
 /// 旧版 `initialize` 握手兼容：客户端声明这些版本时按请求回显。

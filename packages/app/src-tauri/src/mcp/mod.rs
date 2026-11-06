@@ -118,3 +118,13 @@ pub fn mcp_audit_query(
 pub fn mcp_latency_query(state: tauri::State<'_, McpState>) -> Result<serde_json::Value, String> {
     server::latency_query(state.inner()).map_err(cmd_err)
 }
+
+/// 接入台账（2026-11-06 接入可见性批）：首条已鉴权请求起有正面读数，含本地作答的
+/// `initialize`。纯内存、按 clientId 去重、有界、随运行时存活；服务未启动显式报错。
+/// 与 `mcp_latency_query` 同纵深——只由宿主侧读，MCP 客户端在 `POST /mcp` 里够不到。
+#[tauri::command]
+pub fn mcp_connections_query(
+    state: tauri::State<'_, McpState>,
+) -> Result<Vec<server::ClientConnect>, String> {
+    server::connections_query(state.inner()).map_err(cmd_err)
+}

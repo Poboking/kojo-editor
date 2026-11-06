@@ -70,6 +70,10 @@ const MIRROR_GAPS: Record<string, string> = {
     '读逐请求耗时台账与在途预算（Pending.started → 应答落账）要端点运行时由宿主侧独占写入的' +
     'LatencyLedger 内存状态；服务未启动时 Rust 侧显式报错而不回空台账冒充「零延迟」，web 调试宿' +
     '不启端点、也没有这份台账，伪造读数等于把不存在的性能数据说成真的。参数：无（只经 &McpState 读）。',
+  mcp_connections_query:
+    '接入台账（接入可见性批）是端点运行时内的有界内存表：首条已鉴权请求（含本地作答的 initialize）' +
+    '按 clientId 去重记一笔，服务 stop / 轮换即清空。web 模式既没有 listener 也没有授权闸，' +
+    '造一份空表会冒充「零接入」、造一份假表会冒充「已连上」，两种都不能要。参数：{ }。',
 
   // ---- 更新器（UPD 批）：重启壳进程是桌面壳能力 ----
   updater_relaunch:

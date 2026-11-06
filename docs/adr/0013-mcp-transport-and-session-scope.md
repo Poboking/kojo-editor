@@ -121,6 +121,31 @@
 
 ---
 
+## 增补：接入可见性（2026-11-06，不改变冻结契约）
+
+用户审阅发现「有管理台、没有接入成功那一刻的 UI 信号」，且 `mcp_status().clients`
+被误当成「已连接客户端数」。本批按 **additive** 收口，边界逐条钉死：
+
+- 冻结契约 v1 **一字不改**：`packages/mcp-host/src/index.ts` 的导出、六种 method、
+  `McpSessionScope` 既有字段、写腿 `inputSchema`、危险工具分级、双闸与默认拒绝全部原样。
+  `mcp://client-connected` 是**宿主 → WebView 的 UI 通知**，不是 MCP server→client
+  协议通知；`capabilities` / `subscribe` / `listChanged` 继续说真话，不新增任何线协议方法。
+- `mcp_connections_query` 是 **Tauri 命令（仅宿主侧 WebView 可读）**，MCP 客户端在
+  `POST /mcp` 里没有任何入口读写接入台账；与 `mcp_audit_query` / `mcp_latency_query`
+  同一纵深。新增命令同步 `generate_handler!` 与调试宿镜像缺口清单。
+- 接入台账是**有界内存表**（按 `clientId` 去重，上限 64，最新在前），只在三道闸鉴权
+  通过之后记 `{clientId, ts, method}`；不落盘、不复用 `mcp_audit.jsonl`、不含 token /
+  请求体 / 任意路径；`mcp_stop` 与 token 轮换即清空。**台账是唯一真源**，事件只用于
+  触发即时刷新，事件丢帧也不影响查询读数。
+- `mcp_status` 只 additive 增三格：`connections`（已握手客户端数）/ `authorizedSessions`
+  （第四张表未撤销会话数）/ `discoveryPath`（固定文件名拼出的本机路径，不含 token）。
+  旧三格 `enabled` / `port` / `clients` 逐字不变；`clients` 的语义如实降级为
+  **瞬时并发 TCP 连接数**，不再冒充接入成功。
+- 前端「已接入」必须由台账命中判定；第四张授权表只说明「人批准过」，两者互不推断。
+  界面默认轮询 + 事件即时刷新，缺任一路径都不编造状态。
+
+---
+
 ## 后续演进（**只描述，不实现**）
 
 本节钉 P5 的方向；**Tasks over MCP 已单独拍板并落地**（2026-11-06 `784cc077`，见下条现状），其余三项仍是**只描述、不实现**，开工前需单独拍板。

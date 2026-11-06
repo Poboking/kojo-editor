@@ -575,9 +575,13 @@ describe('⑦ AiAccessSection：4 个命令名 / 投影 / 失败不静默', () =
         { clientId: 'c2', tier: 'read', approvedRoots: [], approvedTools: [], createdAt: 'ts2', revokedAt: 'ts3' },
       ],
     };
+    // 接入可见性批：授权台账不再硬编码 `connected: true`；连接态只认端点接入台账。
     expect(scopeStateToClients(state)).toEqual([
-      { clientId: 'c1', tier: 'edit', connected: true },
+      { clientId: 'c1', tier: 'edit', connected: false },
     ]);
+    expect(
+      scopeStateToClients(state, [{ clientId: 'c1', ts: 'ts4', method: 'initialize' }]),
+    ).toEqual([{ clientId: 'c1', tier: 'edit', connected: true }]);
     const ap = scopeStateToApproval(state);
     expect(ap.clientId).toBe('c1');
     expect(ap.roots).toEqual(['/p']);

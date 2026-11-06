@@ -19,7 +19,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -37,7 +37,7 @@ use super::protocol::{
     is_market_tool, negotiate, negotiate_accept, sanitize_string, sanitize_untrusted_inplace,
     validate_params, AcceptKind, JsonRpcResponse, LocalOutcome, McpError, McpRequestPayload,
     McpRespondArgs, McpSessionScope, McpTier, Negotiation, RequestEnvelope, WebMethod,
-    MCP_REQUEST_EVENT, PROTOCOL_VERSION,
+    MCP_CLIENT_CONNECTED_EVENT, MCP_REQUEST_EVENT, PROTOCOL_VERSION,
 };
 use super::scope;
 
@@ -50,11 +50,36 @@ pub struct McpStartResult {
     pub endpoint: String,
 }
 
+/// `clients` 的语义**只是瞬时并发 TCP 连接数**（`Connection: close` 后即减），
+/// 不能拿来回答「客户端接上了没」。下面三个 additive 字段把三个读数拆开：
+/// - `connections`：本次运行时内**已握手**过的去重 clientId 数（真源＝内存接入台账）；
+/// - `authorizedSessions`：第四张授权表里未撤销的会话数（授权 ≠ 连接）；
+/// - `discoveryPath`：发现文件真实路径（供 UI 展示 / 复制 / 打开目录；不含 token）。
+/// 旧三字段逐字不变、零改名；旧消费方只读前三格时行为零变化。
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct McpStatus {
     pub enabled: bool,
     pub port: Option<u16>,
     pub clients: usize,
+    pub connections: usize,
+    pub authorized_sessions: usize,
+    pub discovery_path: String,
+}
+
+/// 接入台账容量上限（按 clientId 去重，超出淘汰最旧）。纯内存、随运行时存活，
+/// 不写盘、不复用 `mcp_audit.jsonl`（避免污染审计契约、给 `initialize` 热路径添 I/O，
+/// 也避免 token 轮换后残留 clientId 冒充「还连着」）。
+pub const CONNECTION_LEDGER_CAP: usize = 64;
+
+/// 一条接入回执：谁、何时、用哪个 method 首次（或最近一次）触达端点。
+/// 字段全部来自已鉴权请求的受限标识，绝不含 token / 请求体 / 任意路径。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientConnect {
+    pub client_id: String,
+    pub ts: String,
+    pub method: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -328,6 +353,10 @@ impl Drop for Slot {
 /// 免构造 Tauri 运行时即可起真实 listener）。
 pub trait McpBridge: Send + Sync + 'static {
     fn emit_request(&self, payload: McpRequestPayload) -> Result<(), String>;
+    /// additive：接入事件默认空实现，端点级测试桩无需被迫实现；台账查询是唯一真源。
+    fn emit_connected(&self, _payload: ClientConnect) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// 生产桥：`"mcp://request"` Tauri 事件（WebView 侧 host-bridge 收，回 `mcp_respond`）。
@@ -337,6 +366,11 @@ impl McpBridge for TauriBridge {
     fn emit_request(&self, payload: McpRequestPayload) -> Result<(), String> {
         self.0
             .emit(MCP_REQUEST_EVENT, payload)
+            .map_err(|e| e.to_string())
+    }
+    fn emit_connected(&self, payload: ClientConnect) -> Result<(), String> {
+        self.0
+            .emit(MCP_CLIENT_CONNECTED_EVENT, payload)
             .map_err(|e| e.to_string())
     }
 }
@@ -359,6 +393,8 @@ pub struct McpShared {
     pub budget: Arc<CallBudget>,
     /// 逐请求耗时台账（真源 = `Pending.started`）。
     pub latency: Mutex<Ledger>,
+    /// 有界内存接入台账（最新在前，按 clientId 去重）；随运行时存活，stop / 重启清空。
+    pub connections: Mutex<VecDeque<ClientConnect>>,
 }
 
 pub struct McpRuntime {
@@ -503,6 +539,7 @@ pub fn start_with(
         rate: Mutex::new(RateGovernor::default()),
         budget: Arc::new(CallBudget::new(budget_max)),
         latency: Mutex::new(Ledger::with_window(latency_window)),
+        connections: Mutex::new(VecDeque::with_capacity(CONNECTION_LEDGER_CAP)),
     });
     // 首次签发 = 一次 token 轮换：新 token 生效、第四张表从盘上重载、发现文件写
     // {port,token,endpoint}。轮换后旧 token / 旧会话 / 未落盘的旧授权一律失效。
@@ -559,6 +596,10 @@ pub fn stop(state: &McpState) -> Result<(), McpError> {
             });
         }
     }
+    // 旧运行时的接入读数随 listener 一起作废：token 轮换 / 重启后不许残留冒充「还连着」。
+    if let Ok(mut ledger) = rt.shared.connections.lock() {
+        ledger.clear();
+    }
     remove_discovery(&rt.shared.app_data_dir);
     Ok(())
 }
@@ -569,6 +610,9 @@ pub fn status(state: &McpState) -> McpStatus {
             enabled: false,
             port: None,
             clients: 0,
+            connections: 0,
+            authorized_sessions: 0,
+            discovery_path: String::new(),
         };
     };
     match guard.as_ref() {
@@ -576,13 +620,78 @@ pub fn status(state: &McpState) -> McpStatus {
             enabled: true,
             port: Some(rt.port),
             clients: rt.shared.clients.load(Ordering::SeqCst),
+            connections: connection_snapshot(&rt.shared).len(),
+            authorized_sessions: rt
+                .shared
+                .scope_state
+                .lock()
+                .map(|s| s.sessions.iter().filter(|g| g.revoked_at.is_none()).count())
+                .unwrap_or(0),
+            // 只回「固定文件名拼接出的本机路径」，不回 token、不收客户端给的目标路径。
+            discovery_path: scope::endpoint_path(&rt.shared.app_data_dir)
+                .to_string_lossy()
+                .to_string(),
         },
         None => McpStatus {
             enabled: false,
             port: None,
             clients: 0,
+            connections: 0,
+            authorized_sessions: 0,
+            discovery_path: String::new(),
         },
     }
+}
+
+/// 接入台账快照（最新在前）。锁污染显式回落空表，不 panic、不编造读数。
+pub fn connection_snapshot(shared: &Arc<McpShared>) -> Vec<ClientConnect> {
+    shared
+        .connections
+        .lock()
+        .map(|c| c.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// 宿主侧查询（`mcp_connections_query`）：服务没起时显式报错，不回空表冒充「零接入」。
+pub fn connections_query(state: &McpState) -> Result<Vec<ClientConnect>, McpError> {
+    let guard = state.runtime.lock().map_err(|_| lock_err())?;
+    let Some(rt) = guard.as_ref() else {
+        return Err(McpError::new(
+            codes::BRIDGE_UNAVAILABLE,
+            "MCP 服务未启动（接入台账随运行时存活，启动后才有读数）",
+        ));
+    };
+    Ok(connection_snapshot(&rt.shared))
+}
+
+/// 记一笔已鉴权触达：**同 clientId 去重**（刷新 ts / method），新客户端返回 `Some` 供
+/// 调用方 emit 首次握手事件（toast 不刷屏）；超出 cap 淘汰最旧。
+///
+/// 只在 `authenticate` 通过之后调用；method 是线协议上的不可信字符串，先消毒 + 截长。
+/// 台账是唯一真源：emit 失败不影响它，前端查询 / 轮询照样能拿到正面读数。
+pub fn note_client_connect(
+    shared: &Arc<McpShared>,
+    client_id: &str,
+    method: &str,
+) -> Option<ClientConnect> {
+    let entry = ClientConnect {
+        client_id: sanitize_string(client_id, 128),
+        ts: crate::launcher::iso_now(),
+        method: sanitize_string(method, 64),
+    };
+    let Ok(mut ledger) = shared.connections.lock() else {
+        return None;
+    };
+    if let Some(existing) = ledger.iter_mut().find(|c| c.client_id == entry.client_id) {
+        existing.ts = entry.ts;
+        existing.method = entry.method;
+        return None;
+    }
+    ledger.push_front(entry.clone());
+    while ledger.len() > CONNECTION_LEDGER_CAP {
+        ledger.pop_back();
+    }
+    Some(entry)
 }
 
 /// `mcp_respond`：按内部 request id 从路由表取出等待者并回填；id 未知显式报错。
@@ -1134,6 +1243,14 @@ fn process_head(
         .first()
         .ok_or_else(|| McpError::new(codes::INVALID_REQUEST, "空请求"))?;
     let (client_id, session_id) = client_identity(head, first);
+    // 接入信号：鉴权已过 ⇒ 这一次触达（含本地作答的 `initialize` / `ping`）成为正面证据。
+    // 只在**新 clientId 首次出现**时推 UI 事件；台账本身是唯一真源，emit 失败出声但
+    // 不把请求放大成故障（前端查询 / 轮询仍拿得到读数）。
+    if let Some(entry) = note_client_connect(shared, &client_id, &first.method) {
+        if let Err(e) = shared.bridge.emit_connected(entry) {
+            eprintln!("[mcp-connect] 接入事件推送失败（台账已记录）：{e}");
+        }
+    }
     let ctx = ConnCtx {
         shared,
         client_id: &client_id,

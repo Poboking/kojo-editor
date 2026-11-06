@@ -5312,3 +5312,157 @@ fn e2e_multiroot_root_id_is_second_checked_at_endpoint() {
     assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
     assert!(s.rx.try_recv().is_err());
 }
+
+/* ==================================================================== *
+ * 接入可见性批次（2026-11-06）：首条已鉴权请求 = 可查询、可推送的「接入」信号。
+ *
+ * 现实问题：`initialize` 在 Rust 本地作答，既不 emit 也不落审计；`status().clients`
+ * 只是瞬时并发 TCP 连接数（`Connection: close` 后即减）。于是「客户端到底接上没」
+ * 在宿主侧没有任何正面证据，用户只能靠 shim 不报错 / 首次 tools/call 审计间接猜。
+ *
+ * 这里的判据钉住：有界内存台账（不复用 mcp_audit.jsonl）、只在鉴权通过后记、
+ * 同 clientId 去重、首次 emit 事件、查询读数与状态读数 additive、stop/重启清空。
+ * ==================================================================== */
+
+/// 记录 `mcp://client-connected` 的测试桥：默认 `emit_request` 照常回填，
+/// 新事件单独走一条 channel，便于断言「只在首次握手时推送一次」。
+struct EventRecordingBridge {
+    tx: Mutex<std::sync::mpsc::Sender<McpRequestPayload>>,
+    events: Mutex<std::sync::mpsc::Sender<server::ClientConnect>>,
+}
+
+impl McpBridge for EventRecordingBridge {
+    fn emit_request(&self, payload: McpRequestPayload) -> Result<(), String> {
+        self.tx
+            .lock()
+            .unwrap()
+            .send(payload)
+            .map_err(|e| format!("桥接收端已关闭：{e}"))
+    }
+    fn emit_connected(&self, payload: server::ClientConnect) -> Result<(), String> {
+        self.events
+            .lock()
+            .unwrap()
+            .send(payload)
+            .map_err(|e| format!("事件接收端已关闭：{e}"))
+    }
+}
+
+const INIT_BODY: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"harness"}}}"#;
+const PING_BODY: &str = r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#;
+
+#[test]
+fn e2e_initialize_is_a_visible_handshake() {
+    let s = TestServer::start();
+    assert!(server::connections_query(&s.state).unwrap().is_empty());
+    let r = mcp_post_as(s.port, &s.token, "harness-a", INIT_BODY);
+    assert_eq!(r.status, 200);
+
+    let rows = server::connections_query(&s.state).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].client_id, "harness-a");
+    assert_eq!(rows[0].method, "initialize");
+    assert!(!rows[0].ts.is_empty());
+    // 台账不是审计：不落 token、不落请求体、不落端点凭据。
+    let text = serde_json::to_string(&rows).unwrap();
+    assert!(!text.contains(&s.token));
+    assert!(!text.contains("Bearer"));
+
+    // 状态读数 additive：瞬时并发 / 已授权会话 / 已握手 / 发现文件真实路径。
+    let status = server::status(&s.state);
+    assert_eq!(status.clients, 0); // 请求结束即减：这才是它的真实语义
+    assert_eq!(status.connections, 1);
+    assert_eq!(status.authorized_sessions, 0); // 第四张表没批准过任何会话
+    assert!(status.discovery_path.ends_with("mcp-endpoint.json"));
+    assert!(!status.discovery_path.contains(&s.token));
+}
+
+#[test]
+fn e2e_unauthenticated_request_never_records_a_handshake() {
+    let s = TestServer::start();
+    let bad = send_request(
+        s.port,
+        "POST",
+        "/mcp",
+        &[
+            ("Origin", "http://127.0.0.1"),
+            ("Accept", "application/json"),
+        ],
+        Some(INIT_BODY),
+    );
+    // 端点缺 Bearer 的结构化失败状态码（与既有 e2e_bearer_rejects_* 同口径）。
+    assert_eq!(bad.status, 403);
+    assert_eq!(rpc_error_code(&bad), "E_UNAUTHORIZED");
+    assert!(server::connections_query(&s.state).unwrap().is_empty());
+}
+
+#[test]
+fn e2e_same_client_refreshes_one_ledger_entry() {
+    let s = TestServer::start();
+    mcp_post_as(s.port, &s.token, "harness-a", INIT_BODY);
+    mcp_post_as(s.port, &s.token, "harness-a", PING_BODY);
+    let rows = server::connections_query(&s.state).unwrap();
+    assert_eq!(rows.len(), 1, "同 clientId 不该刷出一串条目");
+    assert_eq!(rows[0].method, "ping");
+}
+
+#[test]
+fn e2e_distinct_clients_get_distinct_entries() {
+    let s = TestServer::start();
+    mcp_post_as(s.port, &s.token, "harness-a", INIT_BODY);
+    mcp_post_as(s.port, &s.token, "harness-b", INIT_BODY);
+    let rows = server::connections_query(&s.state).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].client_id, "harness-b"); // 最新在前
+}
+
+#[test]
+fn e2e_connection_ledger_is_bounded() {
+    let s = TestServer::start();
+    for i in 0..(server::CONNECTION_LEDGER_CAP + 8) {
+        mcp_post_as(s.port, &s.token, &format!("client-{i}"), INIT_BODY);
+    }
+    let rows = server::connections_query(&s.state).unwrap();
+    assert_eq!(rows.len(), server::CONNECTION_LEDGER_CAP);
+    assert_eq!(
+        rows[0].client_id,
+        format!("client-{}", server::CONNECTION_LEDGER_CAP + 7)
+    );
+}
+
+#[test]
+fn e2e_connected_event_emits_only_on_first_seen_client() {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (etx, erx) = std::sync::mpsc::channel();
+    let bridge: Arc<dyn McpBridge> = Arc::new(EventRecordingBridge {
+        tx: Mutex::new(tx),
+        events: Mutex::new(etx),
+    });
+    let s = TestServer::spawn(bridge, rx);
+    mcp_post_as(s.port, &s.token, "harness-a", INIT_BODY);
+    let ev = erx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(ev.client_id, "harness-a");
+    assert_eq!(ev.method, "initialize");
+    // 同 clientId 再来一次：台账刷新，但不再推送（toast 不刷屏）。
+    mcp_post_as(s.port, &s.token, "harness-a", PING_BODY);
+    assert!(erx.recv_timeout(Duration::from_millis(200)).is_err());
+    // 另一个客户端首次出现：再推一次。
+    mcp_post_as(s.port, &s.token, "harness-b", INIT_BODY);
+    assert_eq!(
+        erx.recv_timeout(Duration::from_secs(5)).unwrap().client_id,
+        "harness-b"
+    );
+}
+
+#[test]
+fn e2e_connections_query_is_fail_loud_when_stopped() {
+    let s = TestServer::start();
+    mcp_post_as(s.port, &s.token, "harness-a", INIT_BODY);
+    assert_eq!(server::connections_query(&s.state).unwrap().len(), 1);
+    server::stop(&s.state).unwrap();
+    assert!(server::connections_query(&s.state).is_err());
+    // 重启是全新运行时：旧接入读数不许残留冒充「已连接」。
+    let next = server::start(Arc::new(DeadBridge), s.dir.path().to_path_buf(), &s.state).unwrap();
+    assert!(server::connections_query(&s.state).unwrap().is_empty());
+    assert_ne!(next.token, s.token);
+}
