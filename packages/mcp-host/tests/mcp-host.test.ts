@@ -248,14 +248,26 @@ describe('P1-9 能力覆盖补齐（工具清单 + 面向模型 description + �
   });
 
   it('每个工具有面向模型 description（非中文短标题）+ 严格 inputSchema', () => {
+    // 零参工具（真源本来就无入参）不许用空 {type:'object'} 兜底混过闸：必须逐个登记在
+    // 白名单里，且显式声明 properties:{} + additionalProperties:false（拒绝任何入参）。
+    // 新增零参工具若不在此登记，本用例照旧红——闸不放宽，只是把「诚实零参」写进契约。
+    const NO_ARG_TOOLS = new Set(['app.dataDir', 'editor.cursor']);
+    const seenNoArg = new Set<string>();
     for (const s of SUPPLEMENTAL_TOOL_SPECS) {
       expect(s.description.length).toBeGreaterThanOrEqual(60);
       expect(s.inputSchema['type']).toBe('object');
       const props = s.inputSchema['properties'];
       const declared = props !== null && typeof props === 'object' && Object.keys(props as object).length > 0;
       const required = Array.isArray(s.inputSchema['required']) && (s.inputSchema['required'] as unknown[]).length > 0;
-      expect(declared || required).toBe(true); // 不是空 {type:'object'} 兜底
+      const strictNoArgs =
+        NO_ARG_TOOLS.has(s.name) &&
+        s.inputSchema['additionalProperties'] === false &&
+        props !== null && typeof props === 'object' && Object.keys(props as object).length === 0;
+      if (strictNoArgs) seenNoArg.add(s.name);
+      expect(declared || required || strictNoArgs).toBe(true); // 不是空 {type:'object'} 兜底
     }
+    // 白名单不留残项：每个登记名都真在清单里、且真的走零参契约。
+    expect([...seenNoArg].sort()).toEqual([...NO_ARG_TOOLS].sort());
   });
 
   it('只读项全带 readOnlyHint；危险项 privileged + destructiveHint', () => {

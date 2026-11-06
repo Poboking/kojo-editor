@@ -672,7 +672,8 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'app.dataDir',
     description:
       'Read the application data directory path as a plain string (read-only, no arguments). Backed by the Rust app_data_dir primitive. Informational only: it does NOT grant read/write access outside approvedRoots, does not list or touch any file, and must never be used as a write target. Single path string, no truncation.',
-    inputSchema: { type: 'object', properties: {} },
+    // 诚实零参契约：显式拒绝任何入参，不用空 {type:'object'} 兜底（见 mcp-host.test.ts 的 schema 闸）。
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
@@ -779,7 +780,8 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'editor.cursor',
     description:
       'Read the caret position of the active editor (read-only). Returns {path, language, line, column, lineCount} for the focused document; the 1-based cursor comes from the focused editor, not the model. No arguments, no side effects: never moves the caret and never opens a file. Backed by the same read-only workspace source as document.active / editor.info. When no editor is focused the call fails with a visible NOT_WIRED (never a fabricated {line:1,column:1}). This is a READ tool, deliberately separate from the editor.openDocument / editor.revealPosition NOT_WIRED gap.',
-    inputSchema: { type: 'object', properties: {} },
+    // 诚实零参契约：显式拒绝任何入参，不用空 {type:'object'} 兜底（见 mcp-host.test.ts 的 schema 闸）。
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
