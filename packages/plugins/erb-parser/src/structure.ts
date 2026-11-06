@@ -218,7 +218,7 @@ export function checkPreprocStructure(text: string): ErbStructureIssue[] {
           kind: 'orphan-branch',
           line: i + 1,
           statement: markerOf(trimmed),
-          message: `${markerOf(trimmed)} 不在条件块里——上面没有开着的 [IF …]。`,
+          message: `${markerOf(trimmed)}（第 ${i + 1} 行）的上面没有还没闭合的 [IF …]——在它上面补一条 [IF …]，或删掉这一行。`,
         });
       }
     } else if (role === 'close') {
@@ -228,7 +228,7 @@ export function checkPreprocStructure(text: string): ErbStructureIssue[] {
             kind: 'orphan-close',
             line: i + 1,
             statement: '[ENDIF]',
-            message: '[ENDIF] 找不到对应的条件块——多半是多写了一个，或上面少写了 [IF …]。',
+            message: `[ENDIF]（第 ${i + 1} 行）到这里没有还没闭合的 [IF …]——上面删掉的那条 [IF …] 补回来，这条就自己消失；不需要这一支就把这一行删掉。`,
           });
         }
       } else {
@@ -458,10 +458,10 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
       const closer = closerNameForPair(b.pair);
       const message =
         closer === ''
-          ? `${b.kind}（第 ${b.line} 行）到这里还没有闭合。`
+          ? `${b.kind}（第 ${b.line} 行）到这里还没有闭合——在它所属块的末尾补上对应的闭合语句。`
           : swallowedBy === undefined
             ? `${b.kind}（第 ${b.line} 行）到这里还没有闭合，缺 ${closer}。`
-            : `${b.kind}（第 ${b.line} 行）还没闭合，就先被 ${swallowedBy} 收尾了——少一个 ${closer}。`;
+            : `${b.kind}（第 ${b.line} 行）到这里还没有闭合，就先被 ${swallowedBy} 收尾了——在 ${swallowedBy} 那一行之前补一行 ${closer}。`;
       issues.push({
         kind: 'unclosed-open',
         line: b.line,
@@ -503,7 +503,7 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
           kind: 'orphan-branch',
           line,
           statement: statement.kind,
-          message: `${statement.kind} 不在它所属的块里——前面没有开着的配对块。`,
+          message: `${statement.kind}（第 ${line} 行）的前面没有它所属的开块语句——在它上面补那条开块语句，或删掉这一行。`,
         });
       }
       return; // 分支不改栈深：开块继续开着，等它自己的闭合语句
@@ -516,7 +516,7 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
           kind: 'orphan-close',
           line,
           statement: statement.kind,
-          message: `${statement.kind} 找不到对应的开块语句——多半是多写了一个，或上面少写了对应的开块。`,
+          message: `${statement.kind}（第 ${line} 行）到这里没有还没闭合的开块语句——上面删掉的那条开块补回来，这条就自己消失；不需要这一块就把这一行删掉。`,
         });
       }
       return;

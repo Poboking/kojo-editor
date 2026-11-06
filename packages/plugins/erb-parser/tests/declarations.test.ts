@@ -9,6 +9,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { checkDeclarationIssues, dimLineViolations, parseDimLine } from '../src/declarations';
+import { isInstructionName } from '../src/instructions';
+import { builtinSignatureOf } from '../src/builtins';
 
 describe('parseDimLine · 真语料里的声明形态', () => {
   it('一维 + 元素数 / 多维冒号段', () => {
@@ -78,7 +80,7 @@ describe('dimLineViolations · 六条硬规则', () => {
     expect(check('#DIM PRIN')).toEqual([]);
     expect(check('#DIM PRINTX')).toEqual([]);
     expect(check('#DIM PRINT_')).toEqual([]);
-    expect(check('#DIM print')[0]).toContain('引擎内建指令名'); // Emuera 默认 IgnoreCase
+    expect(check('#DIM print')[0]).toContain('已经是指令名'); // 名字大小写不敏感 ⇒ 撞指令名
     expect(check('#DIM MY_PRINT')).toEqual([]);
   });
 
@@ -220,7 +222,8 @@ describe('A3 · 名字撞引擎保留名 × 真语料', () => {
       for (const p of files) {
         const text = readFileSync(p, 'utf8');
         for (const issue of checkDeclarationIssues(text)) {
-          if (!issue.message.includes('引擎内建')) continue;
+          // 判据本体：这个名字撞指令表 / 内建式中函数表（不按文案子串筛，措辞改了判据不动）
+          if (!isInstructionName(issue.statement) && builtinSignatureOf(issue.statement) === null) continue;
           hits.push(`${path.relative(SMOKE!, p)}:${issue.line} ${issue.statement}`);
         }
         // 同一条正则做分母，保证"0 命中"不是因为一条声明都没读到

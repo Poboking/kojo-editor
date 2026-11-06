@@ -441,7 +441,7 @@ function decorationOf(site: ErbCallSite, outcome: ArityOutcome): LineDecoration 
   return {
     line: site.line,
     severity: 'error',
-    message: `函数「${site.name}」的实参个数不对：期望 ${outcome.required} 个，实际 ${outcome.given} 个——第 ${outcome.required} 个形参「${outcome.paramName}」没有默认值，实参不能省略。`,
+    message: `函数「${site.name}」的实参个数不对：期望 ${outcome.required} 个，实际 ${outcome.given} 个——第 ${outcome.required} 个形参「${outcome.paramName}」没有默认值，实参不能省略；在这一行的实参后面用逗号补上第 ${outcome.required} 个。`,
     ...range,
     code: ARITY_MISMATCH_CODE,
   };

@@ -127,7 +127,7 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
       push(
         line,
         headWordOf(body),
-        `头文件里只能写 #DIM / #DIMS / #DEFINE——这一行不是 # 开头，Emuera 会判「头文件里出现了不以 # 开头的行」并中止整轮 .ERH 加载（后面的头文件也不再读）。`,
+        `头文件里只能写 #DIM / #DIMS / #DEFINE——这一行不以 # 开头，会被判「头文件里出现了不以 # 开头的行」并中止整轮 .ERH 加载（后面的头文件也不再读）：删掉这一行，或改成 #DIM / #DIMS / #DEFINE 之一。`,
       );
       return;
     }
@@ -135,7 +135,7 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
       push(
         line,
         '#',
-        '「#」后面没有指令名——Emuera 读不出这条指令，会判「无法解释 # 行」并停止读这个文件。',
+        '「#」后面没有指令名——这一条读不出指令，会被判「无法解释 # 行」并停止读这个文件：补上指令名（#DIM / #DIMS / #DEFINE），或删掉这一行。',
       );
       return;
     }
@@ -144,14 +144,14 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
       push(
         line,
         `#${directive}`,
-        `#${directive} 不能写在头文件里——Emuera 的头文件加载器遇到它直接抛 NotImplemented，整个 .ERH 轮中止。函数定义写到 .ERB 里。`,
+        `#${directive} 不能写在头文件里——头文件里遇到它，整轮 .ERH 加载就中止（后面的头文件也不再读）：函数定义写到 .ERB 文件里。`,
       );
       return;
     }
     push(
       line,
       `#${directive}`,
-      `头文件不认 #${directive}——Emuera 的头文件加载器只认 #DIM / #DIMS / #DEFINE，其余指令会让整轮 .ERH 加载中止。`,
+      `头文件不认 #${directive}——头文件只认 #DIM / #DIMS / #DEFINE，其余指令会让整轮 .ERH 加载中止：这一行挪进 .ERB 文件。`,
     );
   };
 
@@ -172,7 +172,7 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
     const body = erbCodeBodyOf(erbContinuationJoin(joined ?? []).trim()).trim();
     joined = null;
     if (body.length === 0) {
-      push(joinStart, ERB_CONTINUATION_MARKERS.open, '行连接块里没有任何内容——Emuera 会把这条空逻辑行判成「不是 # 开头」并中止。');
+      push(joinStart, ERB_CONTINUATION_MARKERS.open, '行连接块里没有任何内容——这条空逻辑行会被判成「不是 # 开头」并中止整轮加载：在 { 与 } 之间补上一行内容。');
       return;
     }
     judge(body, joinStart);
@@ -197,7 +197,7 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
           push(
             lineNo,
             ERB_CONTINUATION_MARKERS.close,
-            '行连接的收束行 `}` 后面不能再有内容——Emuera 会判「行连接收束符后有多余字符」并中止。',
+            '行连接的收束行 `}` 后面不能再有内容——会被判「行连接收束符后有多余字符」并中止整轮加载：删掉 `}` 后面的那一段。',
           );
           joined = null;
         }
@@ -210,7 +210,7 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
         push(
           lineNo,
           ERB_CONTINUATION_MARKERS.open,
-          '行连接块里不能再开一个 `{`——Emuera 会判「意外的行连接开始」并中止。',
+          '行连接块里不能再开一个 `{`——会被判「意外的行连接开始」并中止整轮加载：先写 `}` 收掉上一块，再开新块。',
         );
         continue;
       }
@@ -229,7 +229,7 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
         push(
           lineNo,
           ERB_CONTINUATION_MARKERS.open,
-          '行连接的 `{` 必须单独占一行——Emuera 会判「行连接符号后有多余字符」并中止。',
+          '行连接的 `{` 必须单独占一行——会被判「行连接符号后有多余字符」并中止整轮加载：把 `{` 后面的内容挪到下一行。',
         );
       }
       continue;
@@ -239,7 +239,7 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
       push(
         lineNo,
         ERB_CONTINUATION_MARKERS.close,
-        '这里没有正在合流的行连接块，却出现了 `}`——Emuera 会判「意外的行连接收束」并中止。',
+        '这里没有正在合流的行连接块，却出现了 `}`——会被判「意外的行连接收束」并中止整轮加载：删掉这一行的 `}`，或把它上面那块用 `}` 收好。',
       );
       continue;
     }
@@ -251,7 +251,7 @@ export function checkHeaderIssues(text: string): ErbStructureIssue[] {
     push(
       joinStart,
       ERB_CONTINUATION_MARKERS.open,
-      '行连接块没有收束的 `}`——Emuera 会判「行连接没有结束」并中止。',
+      '行连接块没有收束的 `}`——会被判「行连接没有结束」并中止整轮加载：在块末补一行单独的 `}`。',
     );
   }
   return issues;

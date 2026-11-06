@@ -1,5 +1,5 @@
 {
-  "_readme": "tools/audit-language.mjs 的棘轮基线：每文件只数代码行命中数（files）与被合法豁免的行数（exempt），两者都只拦增长。收敛后跑 `node tools/audit-language.mjs --update-baseline` 重钉。",
+  "_readme": "tools/audit-language.mjs 的棘轮基线：每文件只数代码行命中数（files）与被合法豁免的行数（exempt），两者都只拦增长。收敛后跑 `node tools/audit-language.mjs --update-baseline` 重钉。M4(上屏文案实现词) 另有 reasons：逐文件写明\"本批为什么没改\"（撞在飞车道的车道归属），新增命中文件必须补一行理由，空串即视为未交代理由。",
   "checks": {
     "M1(游戏名·引擎词汇)": {
       "total": 3,
@@ -80,6 +80,57 @@
         "files": {
           "packages/app/src/bootstrap.ts": 1
         }
+      }
+    },
+    "M4(上屏文案实现词)": {
+      "total": 49,
+      "files": {
+        "packages/plugins/eraav-adapter/src/conventions.ts": 1,
+        "packages/plugins/eratw-adapter/src/kojo2/backend.ts": 1,
+        "packages/plugins/kojo-market/src/service.ts": 23,
+        "packages/plugins/kojo-sugar/src/expression.ts": 1,
+        "packages/plugins/kojo-sugar/src/lift.ts": 1,
+        "packages/plugins/kojo-sugar/src/parser.ts": 1,
+        "packages/plugins/kojo-sugar/src/preview.ts": 2,
+        "packages/plugins/kojo-sugar/src/project.ts": 1,
+        "packages/plugins/launcher-core/src/errors.ts": 1,
+        "packages/plugins/launcher-core/src/log-service.ts": 2,
+        "packages/plugins/launcher-core/src/plugin-manager.ts": 4,
+        "packages/plugins/launcher-core/src/save-manager.ts": 1,
+        "packages/plugins/state-replay/src/engine.ts": 1,
+        "packages/plugins/state-replay/src/locals.ts": 1,
+        "packages/plugins/ui-condition-matrix/src/fill-target.ts": 2,
+        "packages/plugins/ui-kojo-xml/src/kojo-xml-dialect.ts": 1,
+        "packages/plugins/ui-market/src/market-view.ts": 2,
+        "packages/plugins/ui-plugin-status/src/maintenance.ts": 1,
+        "packages/plugins/ui-sugar-editor/src/new-file-flow.ts": 1,
+        "packages/plugins/ui-sugar-lift/src/index.ts": 1
+      },
+      "exempt": {
+        "total": 0,
+        "files": {}
+      },
+      "reasons": {
+        "packages/plugins/eraav-adapter/src/conventions.ts": "adapter 族明列本单之外（D06 §4 撞车面太大）；「函数索引」的检索面措辞归 adapter 车道统一。",
+        "packages/plugins/eratw-adapter/src/kojo2/backend.ts": "adapter 族明列本单之外；「backend 未注入」是教程回放的宿主侧提示，改它要连 eratw 教程面一起改。",
+        "packages/plugins/kojo-market/src/service.ts": "市场面自身的用户既定叫法（注册表 / 索引＝点「拉取列表」那一层），不是 ERB 诊断腿；本单四条腿零命中，市场面另批收。",
+        "packages/plugins/kojo-sugar/src/expression.ts": "kojo-sugar 在飞车道（本单禁改 packages/plugins/kojo-sugar/**），改它会撞糖线那一批；「具名索引」归该车道与 .kojo 术语表一起收。",
+        "packages/plugins/kojo-sugar/src/lift.ts": "kojo-sugar 在飞车道（本单禁改 packages/plugins/kojo-sugar/**），改它会撞糖线那一批；「变量索引」归该车道与 .kojo 术语表一起收。",
+        "packages/plugins/kojo-sugar/src/parser.ts": "kojo-sugar 在飞车道（本单禁改 packages/plugins/kojo-sugar/**），改它会撞糖线那一批；「兜底」归该车道与 .kojo 术语表一起收。",
+        "packages/plugins/kojo-sugar/src/preview.ts": "kojo-sugar 在飞车道（本单禁改 packages/plugins/kojo-sugar/**），改它会撞糖线那一批；「降级」归该车道与 .kojo 术语表一起收。",
+        "packages/plugins/kojo-sugar/src/project.ts": "kojo-sugar 在飞车道（本单禁改 packages/plugins/kojo-sugar/**），改它会撞糖线那一批；「投影」归该车道与 .kojo 术语表一起收。",
+        "packages/plugins/launcher-core/src/errors.ts": "启动器文案面有独立验收口径（ADR-0008 三张表），不归 ERB 诊断腿；「装配」＝启动器接线措辞。",
+        "packages/plugins/launcher-core/src/log-service.ts": "同上：「日志会话」是启动器日志面板的既定名词。",
+        "packages/plugins/launcher-core/src/plugin-manager.ts": "同上：安装/预检面的「装配」「函数索引」，改它要连启动器手测判据一起改。",
+        "packages/plugins/launcher-core/src/save-manager.ts": "同上：「落点」＝保存对话框选定的目标，启动器面词汇。",
+        "packages/plugins/state-replay/src/engine.ts": "state-replay 在另一条诊断车道（本单四条腿之外）；「索引」这里指下标，与变量族措辞一起收。",
+        "packages/plugins/state-replay/src/locals.ts": "同上：「静态解析」是实现词，归该车道。",
+        "packages/plugins/ui-condition-matrix/src/fill-target.ts": "宿主 UI 插件面，与 ProblemPanel / problem-store 同批在飞（本单禁改那四片）。",
+        "packages/plugins/ui-kojo-xml/src/kojo-xml-dialect.ts": "XML 方言面（「引擎落点」），不在本单四条腿。",
+        "packages/plugins/ui-market/src/market-view.ts": "市场面板对用户的既定叫法（注册表），改它要连设置页与市场帮助一起改。",
+        "packages/plugins/ui-plugin-status/src/maintenance.ts": "「旧内核未提供读数接口」＝给开发者看的降级说明，面板不在本单。",
+        "packages/plugins/ui-sugar-editor/src/new-file-flow.ts": "「落点」＝写允许域面板措辞，与 .kojo 校验面板同批在飞（diagnostic-copy 闸 3 钉的两处消费方之一）。",
+        "packages/plugins/ui-sugar-lift/src/index.ts": "kojo-sugar 在飞车道（本单禁改 packages/plugins/kojo-sugar/**），改它会撞糖线那一批；「投影」归该车道与 .kojo 术语表一起收。"
       }
     }
   }

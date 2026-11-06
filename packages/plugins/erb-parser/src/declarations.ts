@@ -231,10 +231,10 @@ export function parseDimLine(rawLine: string): DimLine | null {
 function reservedNameViolation(dim: DimLine): string | null {
   const what = dim.directive === 'DEFINE' ? '宏名' : '变量名';
   if (isInstructionName(dim.name)) {
-    return `「${dim.name}」是引擎内建指令名——拿它当${what}会让 Emuera 加载失败（整个文件被拒绝）。`;
+    return `「${dim.name}」已经是指令名——拿它当${what}会让整个文件加载失败（这条声明读不出来）；换一个名字。`;
   }
   if (builtinSignatureOf(dim.name) !== null) {
-    return `「${dim.name}」是引擎内建式中函数名——拿它当${what}会让 Emuera 加载失败（整个文件被拒绝）。`;
+    return `「${dim.name}」已经是内建式中函数名——拿它当${what}会让整个文件加载失败（这条声明读不出来）；换一个名字。`;
   }
   return null;
 }
@@ -251,13 +251,13 @@ export function dimLineViolations(dim: DimLine): string[] {
   if (reserved !== null) out.push(reserved);
 
   if (dim.dims.length > 3) {
-    out.push(`「${dim.name}」声明了 ${dim.dims.length} 维——Emuera 最多 3 维，超出的部分会让整个文件加载失败。`);
+    out.push(`「${dim.name}」声明了 ${dim.dims.length} 维——最多只能 3 维，第 4 维起会让整个文件加载失败；去掉多出的一维。`);
   }
 
   if (mods.has('CONST')) {
     const conflict = [...mods].filter((m) => CONST_INCOMPATIBLE.has(m));
     if (conflict.length > 0) {
-      out.push(`「${dim.name}」的 CONST 不能与 ${conflict.join(' / ')} 并用（Emuera 加载期报错）。`);
+      out.push(`「${dim.name}」的 CONST 不能与 ${conflict.join(' / ')} 并用——同一行会在加载期报错；去掉其中之一。`);
     }
     // `inits === null` = 有 `=` 但值摊在行连接块里 ⇒ 算"有初值"（不猜个数，也不报缺失）
     const hasInit = dim.inits === null || (dim.inits?.length ?? 0) > 0;
@@ -361,7 +361,7 @@ export function checkDeclarationIssues(text: string): ErbStructureIssue[] {
         severity: 'warning',
         line: i + 1,
         statement: 'RETURN',
-        message: `「${cur.name}」是 #FUNCTION 式中函数，收尾要用 RETURNF 而不是 RETURN——裸 RETURN 不会把值交回调用方。`,
+        message: `「${cur.name}」是 #FUNCTION 式中函数，收尾要用 RETURNF 而不是 RETURN——裸 RETURN 不会把值交回调用方；把这一行的 RETURN 改成 RETURNF。`,
       });
     }
   }

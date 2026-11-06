@@ -55,7 +55,7 @@ describe('checkHeaderIssues · 形状', () => {
       const issues = checkHeaderIssues(lines(head, '@EXPR', 'RETURNF 1'));
       expect(issues).toHaveLength(3); // #FUNCTION + @EXPR + 正文语句，一条都留不下
       expect(issues[0]).toMatchObject({ line: 1, statement: head });
-      expect(issues[0]!.message).toContain('NotImplemented');
+      expect(issues[0]!.message).not.toMatch(/Emuera|NotImplemented/); // 文案面零实现词（M4）
       expect(issues[0]!.message).toContain('.ERB');
     }
   });

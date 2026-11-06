@@ -701,10 +701,10 @@ export function collectUndefinedNameDiagnostics(input: UndefinedNameDiagnosticsI
 
 /** 中文诊断文案：名字 + 依据 + did-you-mean（无候选时不硬凑一句"没有建议"） */
 function buildMessage(name: string, suggestions: readonly string[]): string {
-  const base = `未定义的名称「${name}」：不在已知声明（#DIM / 局部 / 内置 / 引擎全局）中`;
-  if (suggestions.length === 0) return `${base}。`;
+  const message = `未定义的名称「${name}」：这里没有它的声明（#DIM 声明与局部声明都不含它）`;
+  if (suggestions.length === 0) return `${message}——改成已有的名字，或先把它声明出来。`;
   const quoted = suggestions.map((suggestion) => `「${suggestion}」`).join('、');
-  return `${base}；你是不是想写${quoted}？`;
+  return `${message}；你是不是想写${quoted}？`;
 }
 
 /* ============ did-you-mean（「你是不是想写…」候选；原 `did-you-mean.ts`，2026-10-30 并入） ============ */

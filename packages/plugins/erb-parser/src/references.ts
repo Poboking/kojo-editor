@@ -1052,7 +1052,7 @@ export function tryCallTargetDecorations(
     .map((t) => ({
       line: t.line,
       severity: 'info' as const,
-      message: `可选钩子「${t.name}」在项目索引里没有对应函数：TRY 系调用找不到函数是引擎允许的（不算缺陷）`,
+      message: `可选钩子「${t.name}」没有对应的函数定义：TRY 系的调用找不到函数时引擎照常运行，这一条不算缺陷——需要这段逻辑就给这个名字写一条 #FUNCTION 函数。`,
       startColumn: t.column,
       endColumn: t.column + t.name.length,
       code: UNDEFINED_TRY_CALL_CODE,
@@ -1079,7 +1079,7 @@ export function erbReferenceDecorations(
   return scanUndefinedCallTargets(text, hasName).map((t) => ({
     line: t.line,
     severity: 'warning' as const,
-    message: `未定义的调用目标「${t.name}」：项目索引里没有这个函数名（动态拼接请改用 CALLFORM 系）`,
+    message: `未定义的调用目标「${t.name}」：当前项目里没有这个名字的函数——把函数补上，或改成已有的函数名；名字由几段拼出来时请改用 CALLFORM 调用。`,
     startColumn: t.column,
     endColumn: t.column + t.name.length,
     code: UNDEFINED_CALL_CODE,

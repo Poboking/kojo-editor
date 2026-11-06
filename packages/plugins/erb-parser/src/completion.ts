@@ -780,7 +780,7 @@ export const ERB_COMPLETION_SNIPPETS: readonly ErbCompletionSnippet[] = [
     detail: '分派块骨架：CASE / CASEELSE',
   },
   { label: 'CASE', insertText: 'CASE ${1:值}', detail: '分派分支头' },
-  { label: 'CASEELSE', insertText: 'CASEELSE', detail: '分派兜底分支' },
+  { label: 'CASEELSE', insertText: 'CASEELSE', detail: '分派里不带条件的那一支' },
 ];
 
 /* ============================== 行首 / 行中判定 ============================== */

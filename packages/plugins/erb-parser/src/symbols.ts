@@ -895,7 +895,7 @@ export function resolveRenameName(
   if (!hasName(normalizedName)) {
     return {
       kind: 'reject',
-      reason: `「${raw}」不在 ERB 函数索引内，不能重命名（$ 标签与 #DIM 局部名不在射程）`,
+      reason: `「${raw}」当前项目里没有这个名字的函数，不能重命名（$ 标签与 #DIM 局部名不在射程）——先把函数补上，或改到已有的名字上重命名。`,
     };
   }
   return { kind: 'hit', startColumn: word.start + 1, endColumn: word.end + 1, normalizedName };

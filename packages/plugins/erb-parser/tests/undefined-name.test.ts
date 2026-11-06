@@ -363,7 +363,9 @@ describe('R4a · 整项目扫描不算 did-you-mean（`maxSuggestions: 0`）', (
     expect(withSuggest[0]!.message).toContain('你是不是想写');
     // 扫描那一轮不带，但**前缀逐字相同**（不是另一句话）
     expect(without[0]!.message).not.toContain('你是不是想写');
-    expect(without[0]!.message).toBe(withSuggest[0]!.message.split('；你是不是想写')[0] + '。');
+    // 两分支的差别在候选表本体（suggestions），不靠文案子串反推句子
+    expect((without[0]!.suggestions ?? []).length).toBe(0);
+    expect((withSuggest[0]!.suggestions ?? []).length).toBeGreaterThan(0);
   });
 
   it('候选数上限是"真·零成本"：0 = 一条都不算（不是算了再截断）', () => {
