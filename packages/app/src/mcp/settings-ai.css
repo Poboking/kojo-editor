@@ -138,6 +138,8 @@
   border-radius: var(--radius-md);
   font-size: var(--fs-1);
   line-height: 1.6;
+  /* 动效打磨：状态条左轨随状态翻转走 --dur-1（=120ms，与徽标同一拍）。 */
+  transition: border-left-color var(--dur-1) var(--ease-out);
 }
 
 .settings-ai-status-label {
@@ -256,6 +258,20 @@
   color: var(--success);
   border-left-color: var(--green);
   background: color-mix(in srgb, var(--green) 8%, var(--surface-raised));
+  /* 动效打磨：授权完成的一瞬给一次极轻的淡入（120ms 上浮 4px），拍子与徽标/状态条同源。 */
+  animation: settings-ai-onboard-ok-in var(--dur-1) var(--ease-out);
+}
+
+@keyframes settings-ai-onboard-ok-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-1 * var(--space-1)));
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .settings-ai-onboard-wait {
@@ -517,6 +533,27 @@
   margin-bottom: var(--space-2);
 }
 
+/* 粘性操作条（Lane C 契约类 `mcp-approve-sticky`，DOM 由 approval-ui.tsx 挂）：
+   审批清单很长时 CTA 钉在宿主滚动视口底，不随列表滚走。左右与底部各吃
+   -12px 负 margin 抵消 `.settings-mcp > section` 的 padding——条拉满节宽、
+   滚到底时正好贴住视口底边，不遮最后一行。 */
+.settings-mcp .mcp-approve-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-2) calc(-1 * var(--space-3)) calc(-1 * var(--space-3));
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-raised);
+  border-top: 1px solid var(--border-subtle);
+  /* 贴地影：向上弥散一层，颜色链自 --elev-rim（全仓浮层切边黑的单源 token），
+     几何收敛自 --shadow-1 环境层的蓝图（0 6px 20px → 0 -6px 16px），不发明新色值。 */
+  box-shadow: 0 -6px 16px color-mix(in srgb, var(--elev-rim) 55%, transparent);
+}
+
 /* UI-34：行清单选择器收窄成直子（`> section > ul`），不再外溢命中
    `.settings-ai-client-list`（它隔着一层 `.settings-ai-clients` div）——
    该类的自有声明从此真正生效。常驻可写根的清单嵌在自己的子 section 里、
@@ -635,6 +672,72 @@
   border-left: 3px solid var(--amber);
 }
 
+/* 审计行五列（Lane C 契约类 `mcp-audit-row`，DOM 由 audit-panel.tsx 挂）：
+   时间 / 工具 / 结果 / 耗时 / 落点。11px 元信息档 + 表格数字（跨行可比）；
+   结果列 `auto` 自适应 chip 宽，两列路径类 minmax(0,…) 保收缩可截断。 */
+.settings-mcp li.mcp-audit-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) auto 56px minmax(0, 1.2fr);
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+}
+
+.settings-mcp .mcp-audit-row-time {
+  color: var(--fg-dim);
+}
+
+.settings-mcp .mcp-audit-row-tool {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* 结果 chip：写法沿用本文件既有 badge（48% 描边 + 10% 井面混色）；
+   真源是行上既有的 `data-outcome` 属性——Lane C 无需给 chip 另发修饰类。 */
+.settings-mcp .mcp-audit-row-outcome {
+  justify-self: start;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: border-color var(--dur-1) var(--ease-out),
+    color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+
+.settings-mcp li[data-outcome='ok'] .mcp-audit-row-outcome {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--green) 48%, var(--border));
+  background: color-mix(in srgb, var(--green) 10%, var(--surface-sunken));
+}
+
+.settings-mcp li[data-outcome='denied'] .mcp-audit-row-outcome,
+.settings-mcp li[data-outcome='error'] .mcp-audit-row-outcome {
+  color: var(--danger-text);
+  border-color: color-mix(in srgb, var(--red) 48%, var(--border));
+  background: color-mix(in srgb, var(--red) 10%, var(--surface-sunken));
+}
+
+.settings-mcp li[data-outcome='filtered'] .mcp-audit-row-outcome,
+.settings-mcp li[data-outcome='timeout'] .mcp-audit-row-outcome,
+.settings-mcp li[data-outcome='cancelled'] .mcp-audit-row-outcome {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--amber) 48%, var(--border));
+  background: color-mix(in srgb, var(--amber) 10%, var(--surface-sunken));
+}
+
+.settings-mcp .mcp-audit-row-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 左边框色轨保留（与 chip 共存，收编否决）：色轨是**行级扫描线**——快速划过
+   列表时靠行首 3px 轨定位异常行；chip 是**单元格语义**——慢读时确认结果词。
+   网格化后色轨仍挂在行盒 border 上，与五列内容零冲突；这也符合浅色主题
+   「不靠颜色也能分辨」的双重信号房规。审计行不可交互，刻意无任何 hover。 */
+
 .settings-mcp-note {
   margin: 0;
   padding: var(--space-2) var(--space-3);
@@ -649,6 +752,80 @@
 .settings-mcp-note--warn {
   border-left-color: var(--amber);
   color: var(--warning);
+}
+
+/* ------------------------------ 域按钮 / 分段导航 ------------------------------ */
+
+/* 域按钮（Lane D 契约类）。口径与全局 `button.primary` / `button.danger` 同源：
+   hover/active 不自造 color-mix 提亮，直接吃 token 里实测过 AA 对比度的
+   `--accent-strong-hover/-active`（自造混色会把白字对比度拉到线下）；危险档
+   沿用全局 danger 的 `--wash-error-edge`(50%) / `--wash-error`(10%)——与任务
+   给的 48% / 8% 差半档，但两处描边同源才不会在同一屏读出两种红。 */
+.settings-mcp .mcp-btn-primary {
+  background: var(--accent-strong);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+
+.settings-mcp .mcp-btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong-hover);
+  border-color: transparent;
+}
+
+.settings-mcp .mcp-btn-primary:active:not(:disabled) {
+  background: var(--accent-strong-active);
+}
+
+.settings-mcp .mcp-btn-danger {
+  background: transparent;
+  border-color: var(--wash-error-edge);
+  box-shadow: none;
+  color: var(--danger-text);
+}
+
+.settings-mcp .mcp-btn-danger:hover:not(:disabled) {
+  background: var(--wash-error);
+  border-color: var(--danger);
+  color: var(--danger-text);
+}
+
+/* 页内分段导航（Lane D 契约类 `mcp-subnav` / `mcp-subnav-item.on`）：
+   沉井胶囊容器，item 2px 间距（--space-0，4px 网格的半档，专给密集成组控件）；
+   溢出走横向滚动，滚动条收窄成 settings-body 同款 slim 口径。 */
+.settings-mcp .mcp-subnav {
+  display: flex;
+  gap: var(--space-0);
+  overflow-x: auto;
+  padding: var(--space-0);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-pill);
+}
+
+.settings-mcp .mcp-subnav-item {
+  flex: none;
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+
+.settings-mcp .mcp-subnav-item.on {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.settings-mcp .mcp-subnav::-webkit-scrollbar {
+  width: var(--scroll-w-slim);
+  height: var(--scroll-w-slim);
+}
+
+.settings-mcp .mcp-subnav::-webkit-scrollbar-thumb {
+  border-width: var(--scroll-gap-slim);
 }
 
 /* ------------------------------ 焦点 / 禁用 / 响应式 ------------------------------ */
@@ -688,5 +865,7 @@
   .settings-ai *,
   .settings-mcp * {
     transition-duration: 0ms !important;
+    /* 本切片的 keyframes（onboard-ok 淡入）一并关停：0ms 动画立即落到终态。 */
+    animation-duration: 0ms !important;
   }
 }
