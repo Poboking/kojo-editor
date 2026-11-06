@@ -767,3 +767,151 @@ describe('⑧ 覆盖面：所有盘上真源只读腿都附 fsFreshness', () => 
     tracker.dispose();
   });
 });
+
+/* ================================================================== *
+ * ⑨ B13：只读腿改走**读时复核**——窗内命中本次读数即定档，不再回「复核在途」的 null；
+ *   窗外与判不了继续如实（null + 理由，绝不乐观 false、绝不白付 syscall）
+ * ================================================================== */
+
+describe('⑨ B13 只读腿定档（fs.readFile / fs.stat / io.listDir 走 verdictOfRechecked / listingOfRechecked）', () => {
+  it('fs.readFile：窗内自写回声 + 复核证明没变 ⇒ 本次读数 stale:false + recheck.basis mtime-recheck（B13 之前这格是 null「在途」）；窗外首读零探针', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const { kernel } = makeKernel();
+    const stat = vi.fn(async () => ({ exists: true, mtimeMs: T0, size: 10 }));
+    (kernel.io as unknown as Record<string, unknown>)['stat'] = stat;
+    const tracker = createFsFreshnessTracker(kernel);
+    const deps = fakeIoDeps(kernel, {
+      fsFreshness: () => tracker,
+      invoke: async (cmd) => (cmd === 'read_file_bytes' ? 'alpha\n' : null),
+    });
+    const sup = createRunSupplemental(deps);
+    // 第一读：建基线档，没有窗内回声记忆 ⇒ 一个探针 syscall 都不许多付。
+    const first = (await sup('fs.readFile', { relPath: 'a.kojo' }, SCOPE_A)) as Record<string, unknown>;
+    expect((first['fsFreshness'] as Record<string, unknown>)['stale']).toBeNull(); // 首读无基线，如实 null
+    expect(stat).toHaveBeenCalledTimes(0);
+    // 自写 + 监视器回声（并条不推序号——正是 B8 收口的那格假阴性）
+    tracker.noteSelfWrite({ abs: 'D:\\proj\\a.kojo', kind: 'change', scope: SCOPE_A });
+    emitChanged(kernel, 'D:\\proj\\a.kojo');
+    stat.mockClear();
+    // B13：同一次读数里就定档——复核证明没变 ⇒ false（B13 之前这里是 stale:null「复核在途」）
+    const second = (await sup('fs.readFile', { relPath: 'a.kojo' }, SCOPE_A)) as Record<string, unknown>;
+    const ff = second['fsFreshness'] as Record<string, unknown>;
+    expect(ff['stale']).toBe(false);
+    expect(ff['recheck']).toMatchObject({ performed: true, basis: 'mtime-recheck', outcome: 'unchanged' });
+    // 单目标按契约走单路径 stat（N=1 不凑批量）
+    expect(stat).toHaveBeenCalledTimes(1);
+    tracker.dispose();
+  });
+
+  it('fs.stat：窗内确有后续真实外部写（监视回执故意不发）⇒ 本次读数 stale:true，复核把它推进改动账', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const { kernel } = makeKernel();
+    let diskMtime = T0;
+    (kernel.io as unknown as Record<string, unknown>)['stat'] = async () => ({
+      exists: true,
+      mtimeMs: diskMtime,
+      size: 10,
+    });
+    const tracker = createFsFreshnessTracker(kernel);
+    const deps = fakeIoDeps(kernel, {
+      fsFreshness: () => tracker,
+      invoke: async (cmd) => (cmd === 'stat_file' ? { size: 10, mtimeMs: diskMtime, isDirectory: false } : null),
+    });
+    const sup = createRunSupplemental(deps);
+    await sup('fs.stat', { relPath: 'a.kojo' }, SCOPE_A); // 基线
+    tracker.noteSelfWrite({ abs: 'D:\\proj\\a.kojo', kind: 'change', scope: SCOPE_A });
+    diskMtime = T0 + 3_000; // 窗内真外部写：没有 file.changed 事件，只有盘态证据
+    const out = (await sup('fs.stat', { relPath: 'a.kojo' }, SCOPE_A)) as Record<string, unknown>;
+    const ff = out['fsFreshness'] as Record<string, unknown>;
+    expect(ff['stale']).toBe(true);
+    expect(ff['recheck']).toMatchObject({ performed: true, basis: 'mtime-recheck', outcome: 'changed' });
+    expect(ff['changeOrigin']).toBe('unattributed');
+    tracker.dispose();
+  });
+
+  it('fs.readFile：注入面没有 stat 通道 ⇒ 窗内命中仍如实 stale:null +「无从复核」，绝不乐观 false', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const { kernel } = makeKernel(); // makeKernel 的 io 只有 walkDir：探针通道缺席
+    const tracker = createFsFreshnessTracker(kernel);
+    const deps = fakeIoDeps(kernel, {
+      fsFreshness: () => tracker,
+      invoke: async (cmd) => (cmd === 'read_file_bytes' ? 'alpha\n' : null),
+    });
+    const sup = createRunSupplemental(deps);
+    await sup('fs.readFile', { relPath: 'a.kojo' }, SCOPE_A);
+    tracker.noteSelfWrite({ abs: 'D:\\proj\\a.kojo', kind: 'change', scope: SCOPE_A });
+    const out = (await sup('fs.readFile', { relPath: 'a.kojo' }, SCOPE_A)) as Record<string, unknown>;
+    const ff = out['fsFreshness'] as Record<string, unknown>;
+    expect(ff['stale']).toBeNull();
+    expect(String(ff['staleReason'])).toContain('复核');
+    expect(ff['recheck']).toMatchObject({ basis: 'recheck-unavailable', outcome: 'unknown' });
+    tracker.dispose();
+  });
+
+  it('io.listDir（listing 腿）：窗内目录下有真实外部写 ⇒ 本次读数 stale:true（复核核的是窗内自写回声候选）', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const { kernel } = makeKernel();
+    (kernel.io as unknown as Record<string, unknown>)['stat'] = async () => ({
+      exists: true,
+      mtimeMs: T0 + 999,
+      size: 10,
+    });
+    const tracker = createFsFreshnessTracker(kernel);
+    const deps = fakeIoDeps(kernel, {
+      fsFreshness: () => tracker,
+      invoke: async (cmd) =>
+        cmd === 'list_dir' ? [{ name: 'a.kojo', path: 'D:\\proj\\a.kojo', isDirectory: false }] : null,
+    });
+    const sup = createRunSupplemental(deps);
+    await sup('io.listDir', {}, SCOPE_A); // 根级基线
+    tracker.noteSelfWrite({ abs: 'D:\\proj\\a.kojo', kind: 'change', scope: SCOPE_A });
+    const out = (await sup('io.listDir', {}, SCOPE_A)) as Record<string, unknown>;
+    const ff = out['fsFreshness'] as Record<string, unknown>;
+    expect(ff['granularity']).toBe('listing');
+    expect(ff['stale']).toBe(true);
+    expect(ff['recheck']).toMatchObject({ performed: true, outcome: 'changed' });
+    tracker.dispose();
+  });
+
+  it('fs.statFiles 200 条全命中窗内 ⇒ 逐条标注只付一趟批量复核（statFiles 恰 1 次、stat 0 次），无标注器时零探针', async () => {
+    vi.useFakeTimers({ now: T0 }); // 回声窗与 mtime 判据都要确定性墙钟
+    const { kernel } = makeKernel();
+    const rels = Array.from({ length: 200 }, (_, i) => `f${i}.kojo`);
+    const absOf = (rel: string) => `D:\\proj\\${rel}`;
+    const stat = vi.fn(async () => ({ exists: true, mtimeMs: T0 - 5_000, size: 4 }));
+    const statFiles = vi.fn(async (paths: readonly string[]) =>
+      paths.map(() => ({ exists: true, mtimeMs: T0 - 5_000, size: 4 })),
+    );
+    (kernel.io as unknown as Record<string, unknown>)['stat'] = stat;
+    (kernel.io as unknown as Record<string, unknown>)['statFiles'] = statFiles;
+    const tracker = createFsFreshnessTracker(kernel);
+    const deps = fakeIoDeps(kernel, {
+      fsFreshness: () => tracker,
+      invoke: async (cmd, args) =>
+        cmd === 'stat_files'
+          ? ((args?.['paths'] as string[]) ?? []).map((p) => ({ path: p, exists: true, size: 4, mtimeMs: T0 - 5_000 }))
+          : null,
+    });
+    const sup = createRunSupplemental(deps);
+    // 第一趟：没有窗内回声记忆 ⇒ 批量复核一枚探针都不发。
+    await sup('fs.statFiles', { relPaths: rels }, SCOPE_A);
+    expect(stat).toHaveBeenCalledTimes(0);
+    expect(statFiles).toHaveBeenCalledTimes(0);
+    for (const rel of rels) tracker.noteSelfWrite({ abs: absOf(rel), kind: 'change', scope: SCOPE_A });
+    stat.mockClear();
+    statFiles.mockClear();
+    const out = (await sup('fs.statFiles', { relPaths: rels }, SCOPE_A)) as Record<string, unknown>;
+    const items = out['items'] as Record<string, unknown>[];
+    expect(items).toHaveLength(200);
+    // **一趟证明**：200 条命中窗内只并成一趟批量 statFiles；单路径 stat 一枚不发。
+    expect(statFiles).toHaveBeenCalledTimes(1);
+    expect(statFiles.mock.calls[0]![0]).toHaveLength(200);
+    expect(stat).toHaveBeenCalledTimes(0);
+    for (const item of items) {
+      const ff = item['fsFreshness'] as Record<string, unknown>;
+      expect(ff['stale']).toBe(false); // 复核证明没变 ⇒ 逐条定档（不是「在途」null）
+      expect((ff['recheck'] as Record<string, unknown>)['basis']).toBe('mtime-recheck');
+    }
+    tracker.dispose();
+  });
+});

@@ -25,6 +25,7 @@ import {
 } from '@kojo/mcp-host';
 import { createRunSupplemental, type McpIoDeps, type McpKernelLike } from '../src/mcp/real-sources-io';
 import { MCP_BATCH_READ_MAX_PATHS, type BatchTextFile } from '../src/mcp/batch-read-leg';
+import { createFsFreshnessTracker, type FsFreshnessKernelLike } from '../src/mcp/fs-freshness';
 
 const scope: McpSessionScope = {
   sessionId: 's1',
@@ -428,5 +429,82 @@ describe('fs.readMany · 三件齐落（ToolSpec / GAP_MAP / 真源腿表）', (
     const sup = createRunSupplemental(depsOf(fs));
     await expect(sup('fs.readMany', { relPaths: ['../outside.erb'] }, scope)).rejects.toBeInstanceOf(McpFailure);
     await expect(sup('fs.readFile', { relPath: '../outside.erb' }, scope)).rejects.toBeInstanceOf(McpFailure);
+  });
+});
+
+/* ================================================================== *
+ * B13（LaneY，2026-11-06）：逐条 fsFreshness 标注的批量复核**只付一趟**
+ * 判据 2 的「一趟证明」：64 条全命中自写回声窗 ⇒ 判定器侧 statFiles 恰 1 次、stat 0 次；
+ * 失败位与成功位并进同一趟；窗外/无回声 ⇒ 一枚探针 syscall 都不发。
+ * ================================================================== */
+
+describe('fs.readMany · B13 逐条标注一趟批量复核（计数断言）', () => {
+  interface Trackerized {
+    readonly tracker: ReturnType<typeof createFsFreshnessTracker>;
+    readonly stat: ReturnType<typeof vi.fn>;
+    readonly statFiles: ReturnType<typeof vi.fn>;
+    readonly deps: McpIoDeps;
+  }
+  /** 给假桥补上监视自述 + stat/statFiles 探针，并把判定器注入腿的 deps。 */
+  function withTracker(fs: FakeFs): Trackerized {
+    const k = fs.kernel as unknown as { fileWatch?: unknown; io: Record<string, unknown> };
+    k.fileWatch = { state: () => ({ status: 'watching', roots: [ROOT], failures: [] }) };
+    const stat = vi.fn(async () => ({ exists: true, mtimeMs: Date.now() - 5_000, size: 4 }));
+    const statFiles = vi.fn(async (paths: readonly string[]) =>
+      paths.map(() => ({ exists: true, mtimeMs: Date.now() - 5_000, size: 4 })),
+    );
+    k.io['stat'] = stat;
+    k.io['statFiles'] = statFiles;
+    const tracker = createFsFreshnessTracker(k as unknown as FsFreshnessKernelLike);
+    return { tracker, stat, statFiles, deps: { ...depsOf(fs), fsFreshness: () => tracker } };
+  }
+
+  it('64 条全命中窗内 ⇒ statFiles 恰 1 次（64 目标并趟）、stat 0 次，逐条定档 stale:false + mtime-recheck', async () => {
+    const paths = Array.from({ length: MCP_BATCH_READ_MAX_PATHS }, (_, i) => `f${i}.erb`);
+    expect(paths).toHaveLength(64);
+    const fs = fakeFs({ files: Object.fromEntries(paths.map((p) => [p, 'body'])) });
+    const t = withTracker(fs);
+    const sup = createRunSupplemental(t.deps);
+    // 基线趟：没有窗内自写回声 ⇒ 复核一枚探针都不发（成本判据起点）。
+    await sup('fs.readMany', { relPaths: paths }, scope);
+    expect(t.stat).toHaveBeenCalledTimes(0);
+    expect(t.statFiles).toHaveBeenCalledTimes(0);
+    for (const p of paths) t.tracker.noteSelfWrite({ abs: `D:/proj/${p}`, kind: 'change', scope });
+    t.stat.mockClear();
+    t.statFiles.mockClear();
+    const out = (await sup('fs.readMany', { relPaths: paths }, scope)) as Record<string, unknown>;
+    const items = itemsOf(out);
+    expect(items).toHaveLength(64);
+    // **一趟证明**：64 条命中并成同一趟批量 statFiles；单路径 stat 一枚不发（逐条 await 单条复核 = 64 趟，本批要消灭的形态）。
+    expect(t.statFiles).toHaveBeenCalledTimes(1);
+    expect(t.statFiles.mock.calls[0]![0]).toHaveLength(64);
+    expect(t.stat).toHaveBeenCalledTimes(0);
+    for (const it of items) {
+      const ff = it['fsFreshness'] as Record<string, unknown>;
+      expect(ff['stale']).toBe(false); // 复核证明没变 ⇒ 本次读数即定档（不是「在途」null）
+      expect((ff['recheck'] as Record<string, unknown>)['basis']).toBe('mtime-recheck');
+    }
+    t.tracker.dispose();
+  });
+
+  it('批含失败位：成功位与失败位都带标注且并进同一趟（2 目标 ⇒ statFiles 1 次、stat 0 次）', async () => {
+    const fs = fakeFs({ files: { 'a.erb': 'alpha' }, missing: ['gone.erb'] });
+    const t = withTracker(fs);
+    const sup = createRunSupplemental(t.deps);
+    await sup('fs.readMany', { relPaths: ['a.erb', 'gone.erb'] }, scope); // 基线
+    for (const p of ['a.erb', 'gone.erb']) t.tracker.noteSelfWrite({ abs: `D:/proj/${p}`, kind: 'change', scope });
+    t.stat.mockClear();
+    t.statFiles.mockClear();
+    const out = (await sup('fs.readMany', { relPaths: ['a.erb', 'gone.erb'] }, scope)) as Record<string, unknown>;
+    const items = itemsOf(out);
+    expect(items[0]!['ok']).toBe(true);
+    expect(items[1]!['ok']).toBe(false); // 失败位照样占标注位（不静默跳过）
+    expect(t.statFiles).toHaveBeenCalledTimes(1);
+    expect(t.statFiles.mock.calls[0]![0]).toHaveLength(2);
+    expect(t.stat).toHaveBeenCalledTimes(0);
+    for (const it of items) {
+      expect((it['fsFreshness'] as Record<string, unknown>)['available']).toBe(true);
+    }
+    t.tracker.dispose();
   });
 });
