@@ -116,8 +116,11 @@ const B21_FULL_FRAME_BYTES = 218_897;
 /** B22 实拍（2026-11-06，LaneAI，去掉逐字重复后）＝量具 `static` 的 frameBytes。
  *  底数重钉（2026-11-07，组长合并点实测）：168,894 → 171,000——S8 additive 入参批（帧 185,281，
  *  带内）与 S10 `semantic.batchAt` 面（其基帧 185,326）合并后全量帧实拍 **187,557**，超出旧带顶
- *  185,783（+1,774＝两批诚实契约之和）；新带顶 188,100，机械余量 543 B。 */
-const B22_FULL_FRAME_BYTES = 171_000;
+ *  185,783（+1,774＝两批诚实契约之和）；新带顶 188,100，机械余量 543 B。
+ *  S15 底数再钉（2026-11-07，LaneY）：171,000 → 170,000——ADR-0003 共用形状说明指针化后
+ *  全量帧实拍 **186,299**（−1,258＝17 处 × (202 JSON 字节 − 128 指针)）；只许下调：带顶
+ *  188,100 → 187,000，机械余量 701 B；下界 163,000 不动。 */
+const B22_FULL_FRAME_BYTES = 170_000;
 /** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。 */
 const B22_ACCOUNTED_FLOOR = 163_000;
 const BAND = 0.1;
@@ -292,8 +295,11 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     const relPathHosts = fullFace.flatMap((t) => schemaDescHits(t, 'ADR-0003'));
     // B22 实拍 15 处；MCP-PERF-S3 批 +1（fileTree.applyChangeset）；MCP-PERF-S4 批 +1
     // （fs.readRange 的 relPath 与 fs.readFile 同一条 RELATIVE_PATH_SCHEMA 共用形状说明）；
-    // MCP-PERF-S6 批 +1（fileTree.patchLines 的 relPath 同用 RELATIVE_PATH_SCHEMA）。
-    expect(relPathHosts.length).toBe(18);
+    // MCP-PERF-S6 批 +1（fileTree.patchLines 的 relPath 同用 RELATIVE_PATH_SCHEMA）→ 计 18 处逐字重复。
+    // MCP-PERF-S15 批指针化：完整口径收进 fileTree.update 的 properties.relPath，其余 17 处换
+    // RELATIVE_PATH_PTR_SCHEMA 指针（不带 ADR-0003 标记）⇒ 标记计数 18 → **1**；抄写点总枚数
+    // 仍是 18（按形状锚对账，见 ⑨）。
+    expect(relPathHosts.length).toBe(1);
     for (const d of relPathHosts) {
       for (const token of ['Project-root-relative', 'absolute', 'drive-letter', '".."', 'approvedRoots', 'ADR-0003']) {
         expect(d, `相对路径说明丢了 ${token}`).toContain(token);
@@ -318,8 +324,12 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     // desc 实拍 66,122 / schema 实拍 110,571 / frame 实拍 **187,557** ⇒ desc 67,500、
     // schema 110,500 → 111,000 重钉；frame 超旧带顶 185,783 ⇒ 带底数按例重钉
     // 168,894 → 171,000（新带顶 188,100，机械余量 543 B；下界 163,000 不动）。
-    expect(descBytes).toBeLessThanOrEqual(67_500); // B21 实拍 64,851；S4 62,507；S6 64,433；S8 基 64,912；S10 基 65,643
-    expect(schemaBytes).toBeLessThanOrEqual(111_000); // B21 143,762；S4 105,841；S6 107,873；S8 基 109,621；S10 基 108,823
+    // MCP-PERF-S15（LaneY 2026-11-07）schema 侧 ADR-0003 共用形状说明指针化（17 处 200→128 字符，
+    // desc 档本批零变化）：schema 实拍 110,571 → **109,313**（−1,258）/ frame 实拍 187,557 →
+    // **186,299** ⇒ 只许下调：schema 111,000 → 109,700、desc 67,500 → 66,500（按现取收紧，
+    // 实拍 66,122 未动）；frame 带底数 171,000 → 170,000（新带顶 187,000，机械余量 701 B）。
+    expect(descBytes).toBeLessThanOrEqual(66_500); // B21 实拍 64,851；S4 62,507；S6 64,433；S8 基 64,912；S10 基 65,643；S15 基 66,122
+    expect(schemaBytes).toBeLessThanOrEqual(109_700); // B21 143,762；S4 105,841；S6 107,873；S8 基 109,621；S10 基 108,823；S15 基 109,313
     expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；S4 实拍 73,706
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });

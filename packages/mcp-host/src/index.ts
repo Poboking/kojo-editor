@@ -521,15 +521,34 @@ const POS_SCHEMA: Record<string, unknown> = {
  * 写类工具的路径入参：**不暴露任意目标路径**。
  * - `pattern` 拒绝盘符开头（`C:`）、绝对路径分隔符开头、以及任何 `..` 段；
  * - 执行层（`runSupplemental` / headless）还须把相对路径 resolve 到 approvedRoots 内并拒绝域外。
+ *
+ * MCP-PERF-S15 去重批（照 B22 先例指针化）：这份 ADR-0003 共用形状说明（200 字符）原本被
+ * 16 枚面逐字抄 18 份（`rename` 的 from/to、`diff.compare` 的 left/right 各两份）＝3,400 B 纯抄写；
+ * 现在完整口径全局只保**一份**，落点＝`fileTree.update` 的 `properties.relPath.description`
+ * （`fileTree.patchLines` 的既有文案「same gate as fileTree.update」早已把它当命名锚点），
+ * 其余 17 处抄写点换用 `RELATIVE_PATH_PTR_SCHEMA`——形状逐字同构（spread 保形，
+ * type/pattern/长度闸零改动），只有 description 换成一句指针。合法性由
+ * `packages/app/tests/mcp-tools-list-payload.test.ts` 的 ⑨「相对路径共用形状账」钉住：
+ * 按形状锚（盘符守卫 pattern）对账，指针指过去的那份必须真实存在且完整。
  */
+const RELATIVE_PATH_CANON_NOTE =
+  'Project-root-relative path only; absolute, drive-letter and ".." paths are rejected by this schema, and the execution layer resolves against approvedRoots and refuses out-of-domain targets (ADR-0003).';
+
 const RELATIVE_PATH_SCHEMA: Record<string, unknown> = {
   type: 'string',
   minLength: 1,
   maxLength: 512,
   pattern: '^(?![A-Za-z]:)(?![\\\\/])(?!.*(?:^|[\\\\/])\\.\\.(?:[\\\\/]|$)).+$',
-  description:
-    'Project-root-relative path only; absolute, drive-letter and ".." paths are rejected by this schema, and the execution layer resolves against approvedRoots and refuses out-of-domain targets (ADR-0003).',
+  description: RELATIVE_PATH_CANON_NOTE,
 };
+
+/** S15 指针版说明：自带最小本地语义（project-root-relative），完整口径指到 fileTree.update；
+ *  刻意**不带** ADR-0003 标记——那个标记是「完整口径只此一份」的计数锚（payload 闸 ⑨ 数它＝1）。 */
+const RELATIVE_PATH_PTR_NOTE =
+  'Project-root-relative path; full domain gate (pattern + approvedRoots) stated once on `fileTree.update`\'s `relPath` description.';
+
+/** 形状与 `RELATIVE_PATH_SCHEMA` 逐字同构（spread 继承 type/minLength/maxLength/pattern），仅 description 不同。 */
+const RELATIVE_PATH_PTR_SCHEMA: Record<string, unknown> = { ...RELATIVE_PATH_SCHEMA, description: RELATIVE_PATH_PTR_NOTE };
 
 /**
  * 分页入参里 `limit` 可复用的旧名（各面历史口径不一，游标是新能力，旧参数零改动）。
@@ -930,7 +949,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         kind: { type: 'string', enum: ['file', 'directory'], description: 'What to create.' },
         content: { type: 'string', maxLength: 1_000_000, description: 'Initial file content (file only).' },
         rootId: ROOT_ID_SCHEMA,
@@ -965,7 +984,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         recursive: { type: 'boolean', description: 'Allow removing a non-empty directory (default false).' },
         rootId: ROOT_ID_SCHEMA,
       },
@@ -981,7 +1000,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       'Rename/move an entry inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval. Both `from` and `to` are project-root-relative and domain-checked against approvedRoots; any out-of-domain target is refused. Optional `rootId` selects one explicitly approved persistent workspace root for BOTH ends (enumerate via io.workspaceRoots; human approval required). Read the entry first; this changes the path others may reference.',
     inputSchema: {
       type: 'object',
-      properties: { from: RELATIVE_PATH_SCHEMA, to: RELATIVE_PATH_SCHEMA, rootId: ROOT_ID_SCHEMA },
+      properties: { from: RELATIVE_PATH_PTR_SCHEMA, to: RELATIVE_PATH_PTR_SCHEMA, rootId: ROOT_ID_SCHEMA },
       required: ['from', 'to'],
       additionalProperties: false,
     },
@@ -1002,7 +1021,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
           items: {
             type: 'object',
             properties: {
-              path: RELATIVE_PATH_SCHEMA,
+              path: RELATIVE_PATH_PTR_SCHEMA,
               content: { type: 'string', maxLength: 1_000_000, description: 'Full replacement text (same cap as fileTree.update).' },
               encoding: {
                 type: 'string',
@@ -1039,7 +1058,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         hunks: {
           type: 'array',
           minItems: 1,
@@ -1074,8 +1093,8 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: {
         mode: { type: 'string', enum: ['working-vs-snapshot', 'file-vs-file'], description: 'Which two versions to compare.' },
-        left: RELATIVE_PATH_SCHEMA,
-        right: RELATIVE_PATH_SCHEMA,
+        left: RELATIVE_PATH_PTR_SCHEMA,
+        right: RELATIVE_PATH_PTR_SCHEMA,
       },
       required: ['mode'],
       additionalProperties: false,
@@ -1105,7 +1124,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         maxLines: { type: 'integer', minimum: 1, maximum: 2000, description: 'Cap on previewed lines (default 200).' },
       },
       additionalProperties: false,
@@ -1166,7 +1185,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         offset: { type: 'integer', minimum: 0, description: '0-based character offset of the window start (default 0). Ignored (treated as head-restart) when a cursor is given.' },
         length: { type: 'integer', minimum: 1, maximum: 65_000, description: `Characters to return in this page (default 24000, max 65000 — see the host string gate).${ALIAS_OF_LIMIT}` },
         maxChars: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Legacy alias of `length`. Values above 65000 are clamped down to the host gate, not up.' + ALIAS_OF_LIMIT },
@@ -1185,7 +1204,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       'Query metadata (existence, kind, size, modification time) for one path inside the authorized project root (read-only). `relPath` is project-root-relative and domain-checked against approvedRoots; out-of-domain targets are refused. Backed by the Rust stat_file / path_exists primitives. Never writes to disk and never follows a path outside the approved roots.',
     inputSchema: {
       type: 'object',
-      properties: { relPath: RELATIVE_PATH_SCHEMA },
+      properties: { relPath: RELATIVE_PATH_PTR_SCHEMA },
       required: ['relPath'],
       additionalProperties: false,
     },
@@ -1200,7 +1219,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: `Page size (default 500; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         maxDepth: { type: 'integer', minimum: 0, maximum: 16, description: 'Recursion depth cap (default 1).' },
         ...PAGE_PROPS,
@@ -1350,7 +1369,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       'Check whether one path exists inside the authorized project root (read-only). `relPath` MUST be a project-root-relative path — the schema rejects absolute paths, drive letters and ".." traversal, and the execution layer resolves it against approvedRoots and refuses any out-of-domain target. Backed by the Rust path_exists primitive. Returns {path, exists} with the real filesystem answer; never writes to disk.',
     inputSchema: {
       type: 'object',
-      properties: { relPath: RELATIVE_PATH_SCHEMA },
+      properties: { relPath: RELATIVE_PATH_PTR_SCHEMA },
       required: ['relPath'],
       additionalProperties: false,
     },
@@ -1364,7 +1383,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        relPaths: { type: 'array', items: RELATIVE_PATH_SCHEMA, minItems: 1, maxItems: 200, description: 'Project-root-relative paths (each domain-checked).' },
+        relPaths: { type: 'array', items: RELATIVE_PATH_PTR_SCHEMA, minItems: 1, maxItems: 200, description: 'Project-root-relative paths (each domain-checked).' },
         maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned stat items (default 200).' },
       },
       required: ['relPaths'],
@@ -1396,7 +1415,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       properties: {
         relPaths: {
           type: 'array',
-          items: RELATIVE_PATH_SCHEMA,
+          items: RELATIVE_PATH_PTR_SCHEMA,
           minItems: 1,
           maxItems: 64,
           description:
@@ -1689,7 +1708,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         deadlineMs: {
           type: 'integer',
           minimum: 100,
@@ -2173,7 +2192,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         rootId: ROOT_ID_SCHEMA,
         startLine: { type: 'integer', minimum: 1, description: '1-based first line of the window (Monaco position line; 0-based values are rejected).' },
         endLine: { type: 'integer', minimum: 1, description: '1-based LAST line of the window, inclusive. Clamped down to the file end; a window larger than the batch cap is cut at the cap.' },
