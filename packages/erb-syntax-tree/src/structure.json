@@ -61,10 +61,12 @@
       "TRYCALLLIST": "funclist",
       "TRYCCALL": "try",
       "TRYCCALLFORM": "try",
+      "TRYCCALLSTR": "try",
       "TRYCGOTO": "try",
       "TRYCGOTOFORM": "try",
       "TRYCJUMP": "try",
       "TRYCJUMPFORM": "try",
+      "TRYCJUMPSTR": "try",
       "TRYGOTOLIST": "funclist",
       "TRYJUMPLIST": "funclist",
       "WHILE": "while"
@@ -195,10 +197,12 @@
         "open": [
           "TRYCCALL",
           "TRYCCALLFORM",
+          "TRYCCALLSTR",
           "TRYCGOTO",
           "TRYCGOTOFORM",
           "TRYCJUMP",
-          "TRYCJUMPFORM"
+          "TRYCJUMPFORM",
+          "TRYCJUMPSTR"
         ],
         "branch": [
           "CATCH"
