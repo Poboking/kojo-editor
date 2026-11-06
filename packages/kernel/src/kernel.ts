@@ -44,6 +44,14 @@ export interface CreateKernelOptions {
   logger?: Logger;
   /** 存储后端（默认基于 platform 的文件后端；测试可注入内存后端） */
   storageBackend?: import('./storage.js').StorageBackend;
+  /**
+   * 多项目驻留上限（MCP-PERF-S19，2026-11-07）：退役项目驻留档案的容量（**含当前
+   * 项目**计）——缺省 3（合成 4 项目开第 4 个时第 1 个被逐，`project.evicted` 可见）；
+   * 1 或 0 = 零驻留（每次切换即逐出，行为≈引入前+事件痕迹）。优先级：本参数 >
+   * 存储域 `_global.project-residency-cap` > 环境变量 `KOJO_PROJECT_RESIDENCY_CAP` >
+   * 缺省 3；非有限数/负数视为「没说」落到下一级，超 16 截到 16。
+   */
+  projectResidencyCap?: number;
 }
 
 export interface Kernel {
@@ -171,6 +179,7 @@ export async function createKernel(opts: CreateKernelOptions): Promise<Kernel> {
     io,
     globalStorage: storage.global(),
     log: kernelLog,
+    residencyCap: opts.projectResidencyCap,
   });
 
   // 作者工作区：初始化失败（无平台数据目录）不连累内核启动——服务降级为
