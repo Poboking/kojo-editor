@@ -831,6 +831,7 @@ export const MIRROR_GAP_COMMANDS = Object.freeze({
   mcp_revoke: '吊销 MCP 工具授权同上，第四张表只由桌面壳持有',
   mcp_scope_query: '查 MCP 会话授权作用域要端点侧的 scope 状态，web 模式没有',
   mcp_audit_query: '读 mcp_audit.jsonl 审计要桌面壳 app_data 下的审计文件，web 模式没有那份落盘',
+  mcp_latency_query: '读耗时台账与在途预算要端点运行时宿主侧独占写入的 LatencyLedger，web 模式没有、也不伪造零延迟',
 
   // 更新完成后的「立即重启」：要重新拉起宿主进程本身，web 调试宿没有可重启的壳
   updater_relaunch: '重启桌面壳进程（先走退出屏障再拉新实例），web 调试宿是浏览器 + Node，没有可重启的壳',

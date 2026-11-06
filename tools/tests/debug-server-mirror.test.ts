@@ -66,6 +66,10 @@ const MIRROR_GAPS: Record<string, string> = {
   mcp_audit_query:
     '读 mcp_audit.jsonl 审计条目要桌面壳 app_data 下的审计文件（端点独占追加，客户端只读）；' +
     'web 模式既无端点也无该落盘。参数：{ limit?, since? }。',
+  mcp_latency_query:
+    '读逐请求耗时台账与在途预算（Pending.started → 应答落账）要端点运行时由宿主侧独占写入的' +
+    'LatencyLedger 内存状态；服务未启动时 Rust 侧显式报错而不回空台账冒充「零延迟」，web 调试宿' +
+    '不启端点、也没有这份台账，伪造读数等于把不存在的性能数据说成真的。参数：无（只经 &McpState 读）。',
 
   // ---- 更新器（UPD 批）：重启壳进程是桌面壳能力 ----
   updater_relaunch:
