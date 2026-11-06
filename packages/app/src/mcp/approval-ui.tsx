@@ -5,6 +5,10 @@
  * 越界根 / `market_*` 工具在纯函数里就地剔除，UI 不持有写盘权限。
  * 「回滚语义」说明：本面板复用 `TrashManager` / `OpsJournal` 的既有回滚语义是跨包接线，
  * 由主 agent 集成时决定（见交付报告偏差项）；此处不假装已接。
+ *
+ * 已批准状态可见化（additive，2026-11-06）：可选 `approvedTools` 注入第四张表里当前
+ * 会话已批准的工具名，面板逐项挂「已批准」徽标 + 一行清单——批准 / 撤销后 UI 状态
+ * 翻转可观测（铁律 4：批准落没落地不许靠猜）。未注入时零渲染，旧消费方形状不变。
  */
 import { useMemo, useState } from 'react';
 
@@ -137,6 +141,11 @@ export interface ApprovalUiProps {
   before: string;
   after: string;
   onApprove: (batch: ApprovalBatch) => void;
+  /**
+   * 第四张表里当前会话已批准的工具名（additive）：给了就渲染「已批准」徽标与清单行，
+   * 批准 / 撤销后随 scope 刷新翻转；不给（undefined）则完全不渲染，旧形状零变化。
+   */
+  readonly approvedTools?: readonly string[];
 }
 
 export function ApprovalUi({
@@ -146,9 +155,11 @@ export function ApprovalUi({
   before,
   after,
   onApprove,
+  approvedTools,
 }: ApprovalUiProps) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set<string>());
   const diff = useMemo(() => renderDiff(before, after), [before, after]);
+  const approvedSet = useMemo(() => new Set(approvedTools ?? []), [approvedTools]);
   const toggle = (name: string, checked: boolean) => {
     const next = new Set(selected);
     if (checked) next.add(name);
@@ -179,10 +190,20 @@ export function ApprovalUi({
             >
               {item.name}（{item.tier}）— {item.reason}
             </KitCheck>
+            {approvedTools !== undefined && approvedSet.has(item.name) && (
+              <span className="mcp-approve-badge" data-approved="true">
+                已批准
+              </span>
+            )}
           </li>
         ))}
       </ul>
       <p>待批准根：{batch.approvedRoots.join(', ') || '（无）'}</p>
+      {approvedTools !== undefined && (
+        <p data-testid="mcp-approved-tools">
+          已批准工具（第四张表）：{approvedTools.length > 0 ? approvedTools.join('、') : '（无）'}
+        </p>
+      )}
       <button type="button" disabled={chosen.length === 0} onClick={() => onApprove(batch)}>
         批准所选（{chosen.length}）
       </button>

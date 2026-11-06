@@ -43,6 +43,12 @@ export interface SettingsAiProps {
   readonly clients?: readonly McpClientInfo[];
   /** 状态轮询间隔（毫秒），0 = 关闭轮询；默认 4000。 */
   readonly pollMs?: number;
+  /**
+   * 命令执行器注入 seam（additive，2026-11-06）：缺省沿用 `invoke`（生产 Tauri IPC），
+   * 单测注入假实现即可验证「轮换先 stop 再 start」「三态上屏」而不起 GUI / HTTP。
+   * 旧消费方只传 clients / pollMs 时形状零变化；类型定义在下方「可注入动作」区。
+   */
+  readonly runner?: McpCommandRunner;
 }
 
 interface McpStartResult {
@@ -75,7 +81,7 @@ function maskToken(token: string): string {
   return `${token.slice(0, 4)}••••••••${token.slice(-4)}`;
 }
 
-export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProps) {
+export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS, runner }: SettingsAiProps) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [status, setStatus] = useState<McpStatus | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -83,6 +89,15 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
   const [detail, setDetail] = useState<string>('');
   const [rotateArmed, setRotateArmed] = useState(false);
   const mounted = useRef(true);
+  // runner 每次渲染可能是新引用 ⇒ 收进 ref，再包一层恒定的 `run`，避免 refresh 的
+  // useCallback 依赖抖动导致 useEffect 反复刷 IPC（与 AiAccessSection 同口径）。
+  const runnerRef = useRef<McpCommandRunner | undefined>(runner);
+  runnerRef.current = runner;
+  const run = useCallback(
+    (cmd: string, args?: Record<string, unknown>): Promise<unknown> =>
+      runnerRef.current ? runnerRef.current(cmd, args) : invoke(cmd, args),
+    [],
+  );
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -98,7 +113,7 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      const s = await invoke<McpStatus>('mcp_status');
+      const s = (await run('mcp_status')) as McpStatus;
       if (!mounted.current) return;
       setStatus(s);
       setPhase(classify(s));
@@ -112,7 +127,7 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
       setPhase('error'); // 连接失败：显式可见，不静默
       setDetail(`读取 mcp_status 失败：${String(err)}`);
     }
-  }, [classify]);
+  }, [classify, run]);
 
   useEffect(() => {
     void refresh();
@@ -130,7 +145,7 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
   const start = useCallback(async (): Promise<void> => {
     setPhase('busy');
     try {
-      const r = await invoke<McpStartResult>('mcp_start', { enabled: true });
+      const r = (await run('mcp_start', { enabled: true })) as McpStartResult;
       if (!mounted.current) return;
       setToken(r.token);
       setShowToken(false);
@@ -138,12 +153,12 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
     } catch (err) {
       fail('开启 MCP 服务', err);
     }
-  }, [refresh, fail]);
+  }, [refresh, fail, run]);
 
   const stop = useCallback(async (): Promise<void> => {
     setPhase('busy');
     try {
-      await invoke<void>('mcp_stop');
+      await run('mcp_stop');
       if (!mounted.current) return;
       setToken(null);
       setShowToken(false);
@@ -151,7 +166,7 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
     } catch (err) {
       fail('关闭 MCP 服务', err);
     }
-  }, [refresh, fail]);
+  }, [refresh, fail, run]);
 
   const rotate = useCallback(async (): Promise<void> => {
     setRotateArmed(false);
@@ -159,10 +174,10 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
     try {
       // `mcp_start` 幂等（同一运行时返回旧 token）⇒ 轮换必须停一次再起：
       // stop 收回 listener 与发现文件，start 新起运行时首次签发必铸新 token。
-      await invoke<void>('mcp_stop');
+      await run('mcp_stop');
       if (!mounted.current) return;
       setToken(null);
-      const r = await invoke<McpStartResult>('mcp_start', { enabled: true });
+      const r = (await run('mcp_start', { enabled: true })) as McpStartResult;
       if (!mounted.current) return;
       setToken(r.token);
       setShowToken(false);
@@ -176,7 +191,7 @@ export function SettingsAi({ clients, pollMs = POLL_DEFAULT_MS }: SettingsAiProp
     } catch (err) {
       fail('轮换 token', err);
     }
-  }, [refresh, fail]);
+  }, [refresh, fail, run]);
 
   const enabled = status?.enabled ?? false;
   const clientCount = status?.clients ?? 0;
@@ -343,11 +358,13 @@ export function scopeStateToClients(state: McpScopeState | null): McpClientInfo[
   }));
 }
 
-/** 第四张表 → `ApprovalUi` 的 (clientId, pending, roots)。 */
+/** 第四张表 → `ApprovalUi` 的 (clientId, pending, roots, approvedTools)。 */
 export function scopeStateToApproval(state: McpScopeState | null): {
   clientId: string;
   pending: ApprovalItem[];
   roots: string[];
+  /** 当前会话已批准的工具名（铁律 4：批准落没落地要在面板上看得见，不许靠猜）。 */
+  approvedTools: string[];
 } {
   const sessions = activeSessions(state);
   const clientId = sessions[0]?.clientId ?? '';
@@ -360,7 +377,14 @@ export function scopeStateToApproval(state: McpScopeState | null): {
     reason: '特权工具，默认不进 tools/list，需逐会话显式批准（按工具名精确授权）',
   }));
   const roots = [...new Set(sessions.flatMap((s) => s.approvedRoots ?? []))];
-  return { clientId, pending, roots };
+  const approvedTools = [
+    ...new Set(
+      sessions
+        .filter((s) => s.clientId === clientId)
+        .flatMap((s) => s.approvedTools ?? []),
+    ),
+  ];
+  return { clientId, pending, roots, approvedTools };
 }
 
 /** `ApprovalBatch` → `mcp_approve` 的 args（camelCase，对齐 Rust `ApproveArgs`）。 */
@@ -513,19 +537,21 @@ export function AiAccessSection({ runner, pollMs = 0 }: AiAccessSectionProps): R
   );
 
   const clients = scopeStateToClients(scope);
-  const { clientId, pending, roots } = scopeStateToApproval(scope);
+  const { clientId, pending, roots, approvedTools } = scopeStateToApproval(scope);
 
   return (
     <div className="settings-mcp">
-      <SettingsAi clients={clients} pollMs={pollMs} />
+      <SettingsAi clients={clients} pollMs={pollMs} runner={runner} />
 
-      {/* 写前 diff：当前没有挂起的写请求，故 before/after 如实为空（不编造文件内容）。 */}
+      {/* 写前 diff：当前没有挂起的写请求，故 before/after 如实为空（不编造文件内容）。
+          approvedTools：第四张表里本会话已批准的工具，批准 / 撤销后随刷新在面板翻转（不静默）。 */}
       <ApprovalUi
         clientId={clientId}
         pending={pending}
         roots={roots}
         before=""
         after=""
+        approvedTools={approvedTools}
         onApprove={(batch) => void onApprove(batch)}
       />
 
