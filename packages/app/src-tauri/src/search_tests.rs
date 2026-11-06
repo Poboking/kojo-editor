@@ -2053,7 +2053,84 @@ fn wall_per_file_cap_is_not_fixable_by_slicing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// 结论七：编码 / 换行 / 二进制这些**逐文件**判据在分片下不改变结果——
+/// 结论八：**建划必须避开隐藏条目**——引擎遍历按 `is_hidden_name` 跳过点开头的
+/// 目录 / 文件，但**文件根**是 `collect_files` 的 seeds 分支，直接过 `walk_consider`，
+/// 不经这一跳。⇒ 把 `.gitignore` 这类隐藏文件当 `roots` 递进去，它会**被扫**，
+/// 而一次全量扫根本不碰它 ⇒ 分片拼接就会比全量「多出」命中。
+/// 这条实测就是 `search-slice-leg.ts` 建划里「点开头的条目逐条排除」的依据。
+#[test]
+fn wall_hidden_entries_leak_in_when_named_as_file_roots() {
+    let dir = temp_dir("wall-hidden");
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    std::fs::write(dir.join(".git").join("config"), "HIT 隐藏目录\n").unwrap();
+    std::fs::write(dir.join(".gitignore"), "HIT 隐藏文件\n").unwrap();
+    std::fs::write(dir.join("a.erb"), "HIT 正常\n").unwrap();
+
+    // ① 一次全量扫：隐藏的一律不碰
+    let whole = wall_keys(&run(&wall_request(&[dir.clone()], "HIT", Some(5000), 1)));
+    assert_eq!(whole.len(), 1, "全量扫只该看到 a.erb：实际 {whole:?}");
+
+    // ② 把隐藏文件当文件根递进去 ⇒ 它被扫了（等价性在这一步破掉，实测不是推理）
+    let named = wall_keys(&run(&wall_request(
+        &[dir.join("a.erb"), dir.join(".gitignore")],
+        "HIT",
+        Some(5000),
+        1,
+    )));
+    assert_eq!(named.len(), 2, "文件根不经 is_hidden_name ⇒ 隐藏文件也被扫：{named:?}");
+    assert_eq!(
+        named.symmetric_difference(&whole).count(),
+        1,
+        "分片形状比一次全量扫「多出」恰好一条命中（等价性就在这一步破掉）"
+    );
+
+    // ③ 建划按本批口径排除隐藏条目 ⇒ 与一次全量扫逐条相等
+    let visible: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .map(|n| !n.to_string_lossy().starts_with('.'))
+                .unwrap_or(false)
+        })
+        .collect();
+    let planned = wall_keys(&run(&wall_request(&visible, "HIT", Some(5000), 1)));
+    assert_eq!(
+        planned.symmetric_difference(&whole).count(),
+        0,
+        "排除隐藏条目后的分片 == 一次全量扫：{planned:?} vs {whole:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 结论九：**符号链接根不跟随**（`collect_files` 对 symlink 根直接跳过，与 walkdir
+/// `follow_links(false)` 同口径）⇒ 分片计划里的「文件根」若是符号链接，全量扫不碰它、
+/// 分片也不碰它，这一条不需要额外排除（建划因此不必对 symlink -special-case）。
+#[test]
+fn wall_symlink_roots_are_not_followed_either_way() {
+    let dir = temp_dir("wall-symlink");
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = temp_dir("wall-symlink-target");
+    std::fs::write(target.join("t.erb"), "HIT 目标\n").unwrap();
+    let link = dir.join("l.erb");
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target.join("t.erb"), &link).is_ok();
+    #[cfg(not(windows))]
+    let made = std::os::unix::fs::symlink(target.join("t.erb"), &link).is_ok();
+    if !made {
+        // 本机没有建符号链接的权限（Windows 默认如此）⇒ 这条只能跳过，不许假装测过。
+        eprintln!("[B16] 符号链接夹具建不出来（权限）：本条跳过，不进结论");
+        return;
+    }
+    let whole = wall_keys(&run(&wall_request(&[dir.clone()], "HIT", Some(5000), 1)));
+    let named = wall_keys(&run(&wall_request(&[link], "HIT", Some(5000), 1)));
+    assert_eq!(whole.len(), 0, "链接根不跟随：全量扫不该有命中：{whole:?}");
+    assert_eq!(named.len(), 0, "把符号链接直接当文件根也不该有命中：{named:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&target);
+}
+/// 结论十：编码 / 换行 / 二进制这些**逐文件**判据在分片下不改变结果——
 /// 全量、逐目录拼接、逐文件拼接三种形状给出同一个集合（CRLF / GBK / shift_jis /
 /// 无扩展名 / 二进制混样），跳过的账目逐片相加即可（探针：`skipped.binary` 合计 1）。
 #[test]

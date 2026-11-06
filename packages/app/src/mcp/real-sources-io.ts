@@ -111,6 +111,10 @@ import {
 // 路径闸 / 项目上下文 / 失效标注器由本模块注入——该模块只 `import type` 本文件的形状，
 // 不反向 import 运行时（零循环依赖）；改动集中在独立新模块，减少对本热点文件的编辑面。
 import { createBatchReadLeg, type BatchTextFile } from './batch-read-leg';
+// B16 批（LaneZ，2026-11-06）：检索墙（单次 5,000 条命中）的**分片续取**腿。
+// 每片＝一次既有 search_text 调用（零新 Rust 命令 / 零新写通道），只在可选新入参
+// resumeBySlice:true 时接管；判性由 Rust 侧真引擎用例实测（search_tests.rs 的 wall_* 七条）。
+import { createSearchSliceRunner } from './search-slice-leg';
 
 /* ------------------------------- 窄结构类型 ------------------------------- */
 
@@ -722,6 +726,32 @@ function searchWindow(offset: number, limit: number): number {
   return Math.min(SEARCH_ENGINE_HARD_CAP, Math.max(1, offset + limit));
 }
 
+/**
+ * 检索墙的分片续取腿（B16 批，LaneZ 2026-11-06）：**只在 `resumeBySlice:true` 时接管**。
+ * 每片都是一次既有 `search_text` 调用 ⇒ 零新 Rust 命令；窗口逐字复用上面那条
+ * `searchWindow`（闸不放宽）。缺省（不给这个入参）走下面的旧路，一行行为都没变——
+ * 旧面 `search.all` / `workspace.searchAll` / `tasks.start(kind:search)` 的既有语义
+ * （含触墙时 `hasMore:false` + `engineWallReached` + note 那一套）零回退。
+ * 判性与实测账目见 `search-slice-leg.ts` 模块头 + Rust 侧 `search_tests.rs` 的 `wall_*` 用例。
+ */
+function createSliceRunner(deps: McpIoDeps) {
+  return createSearchSliceRunner({
+    getKernel: deps.getKernel,
+    requireProject,
+    searchRootsOf,
+    searchInFiles: deps.searchInFiles,
+    nextSearchId,
+    toRelativePath,
+    searchWindow,
+    engineCap: SEARCH_ENGINE_HARD_CAP,
+  });
+}
+
+/** 分片续取的开关（可选新入参；非 true 一律按旧路走，不留别名）。 */
+function wantsSliceResume(args: Record<string, unknown> | undefined): boolean {
+  return args?.['resumeBySlice'] === true;
+}
+
 /* ------------------------------- kernelIo 3 腿 ------------------------------- */
 
 let searchSeq = 0;
@@ -809,6 +839,20 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
       throw new McpFailure('INVALID_ARGS', 'searchAll 的 query 须为非空字符串');
     }
     const page = pageParamsFor(args ?? {}, { defaultLimit: 50, maxLimit: 200 });
+    if (wantsSliceResume(args)) {
+      // B16：闸下命中不可续（实测），给了 resumeBySlice 才走分片路；不给 ⇒ 下面旧路逐字不变
+      return createSliceRunner(deps)({
+        args: args ?? {},
+        query,
+        project,
+        rootDir,
+        sourcesOnly: false,
+        limit: page.limit,
+        offset: page.offset,
+        hasCursor: page.hasCursor,
+        fsFreshness: fsFreshnessListing(deps, rootDir, '.', scope),
+      });
+    }
     const result = await deps.searchInFiles({
       searchId: nextSearchId(),
       roots: [rootDir],
@@ -1048,6 +1092,28 @@ export function createRunSupplemental(deps: McpIoDeps): (
     // scope:'sources' ⇒ 以 adapter 填充的作品域目录为根集合（契约字段投影，不硬编码领域）。
     const roots = searchRootsOf(project, rootDir, (args ?? {})['scope'] === 'sources');
     const page = pageParamsFor(args ?? {}, { defaultLimit: 50, maxLimit: 200 });
+    if (wantsSliceResume(args)) {
+      // B16：引擎闸下的命中集实测不可续 ⇒ 给了 resumeBySlice 才按互不相交的目录 / 文件分片续取。
+      // 不给这个入参 ⇒ 走下面旧路，触墙时那套三件套 + note 逐字不变（旧面零回退）。
+      return createSliceRunner(deps)({
+        args: args ?? {},
+        query,
+        project,
+        rootDir,
+        sourcesOnly: (args ?? {})['scope'] === 'sources',
+        limit: page.limit,
+        offset: page.offset,
+        hasCursor: page.hasCursor,
+        fsFreshness: fsFreshnessListing(
+          deps,
+          roots[0] ?? rootDir,
+          roots.length > 1
+            ? `${roots[0] ?? rootDir}（本次共 ${roots.length} 个根，另 ${roots.length - 1} 个根未单独建基线）`
+            : '.',
+          scope,
+        ),
+      });
+    }
     const result = await deps.searchInFiles({
       searchId: nextSearchId(),
       roots,
