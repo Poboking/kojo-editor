@@ -40,14 +40,16 @@ fn window_probes(w: [u8; 3]) -> [u32; BLOOM_K] {
 /// per-file 指纹：3 字节窗 Bloom 位图 + 行偏移前缀和。
 pub struct FileFingerprint {
     bits: Vec<u64>,
-    /// 新置位计数（饱和判定用；重复窗只计一次）
-    distinct: u32,
     saturated: bool,
     /// 行起点前缀和（字节偏移；`offsets[k]` = 第 k+1 行的起点，首项恒 0）。
     /// 只对"无 BOM 合法 UTF-8"的文件存在——此时解码文本与原始字节逐字节相同，
     /// 字节层行号 = 文本层行号，切片迭代才能替代 `split('\n')`。
     line_offsets: Option<Vec<u32>>,
     utf8_no_bom: bool,
+    /// 整份字节是合法 UTF-8（**含** BOM 文件：解码只剥前缀，命中字节仍在余部）。
+    /// 查询侧可筛半径的另一半判据（`ascii_radius` 为 false 时只许筛这类文件）——
+    /// 建指纹时 `from_utf8` 已经付过一趟，存下来让调用方零成本复用。
+    utf8_valid: bool,
 }
 
 impl FileFingerprint {
@@ -78,7 +80,8 @@ impl FileFingerprint {
                 }
             }
         }
-        let utf8_no_bom = std::str::from_utf8(bytes).is_ok() && !bytes.starts_with(&UTF8_BOM);
+        let utf8_valid = std::str::from_utf8(bytes).is_ok();
+        let utf8_no_bom = utf8_valid && !bytes.starts_with(&UTF8_BOM);
         let line_offsets = if utf8_no_bom && (bytes.len() as u64) <= LINE_MAP_MAX_BYTES {
             let mut offs: Vec<u32> = Vec::with_capacity(4096);
             offs.push(0u32);
@@ -91,7 +94,7 @@ impl FileFingerprint {
         } else {
             None
         };
-        FileFingerprint { bits, distinct, saturated, line_offsets, utf8_no_bom }
+        FileFingerprint { bits, saturated, line_offsets, utf8_no_bom, utf8_valid }
     }
 
     pub fn saturated(&self) -> bool {
@@ -100,6 +103,11 @@ impl FileFingerprint {
 
     pub fn utf8_no_bom(&self) -> bool {
         self.utf8_no_bom
+    }
+
+    /// 整份字节是合法 UTF-8（含 BOM 文件）。查询侧"只许筛合法 UTF-8"的半径判据用。
+    pub fn utf8_valid(&self) -> bool {
+        self.utf8_valid
     }
 
     /// 行偏移前缀和（字节偏移，首项 0）。仅 utf8_no_bom 且 ≤2MB 的文件存在。
@@ -135,7 +143,14 @@ impl TrigramNeedle {
     /// 命中必须同时含每一个窗（各窗是查询不同区段的必要条件），所以缺**任一**窗就够拒；
     /// 用 `.all()` 会弱化成"窗全缺才拒"，筛选率大半白送（NEEDLE_ABC 打到只含前半的
     /// 文件上就筛不动了）。
-    fn rejected_by(&self, fp: &FileFingerprint) -> bool {
+    ///
+    /// 饱和指纹**永不判拒**：饱和 = 建图中途弃窗（distinct 过半即 break），余下窗没进位图，
+    /// "位图说不在"不再成立——把降级闸内置在这一层而不是靠调用方记得查 `saturated()`，
+    /// 误用即漏报的口子从根上堵死。
+    pub(crate) fn rejected_by(&self, fp: &FileFingerprint) -> bool {
+        if fp.saturated {
+            return false;
+        }
         self.windows.iter().any(|w| {
             w.alternatives.iter().all(|alt| alt.iter().any(|p| fp.window_absent(p)))
         })
@@ -418,8 +433,10 @@ pub struct SearchIndexCache {
 }
 
 impl SearchIndexCache {
-    /// 对账 + 取指纹：键对上 ⇒ 返回现成条目；对不上/没有 ⇒ 从 `bytes` 现场建并回填
-    /// （多线程同文件并发回填是幂等的——同字节建出的指纹相同，最后写赢）。
+    /// 对账 + 取指纹：键对上 ⇒ 返回现成条目；对不上/没有 ⇒ 从 `bytes` 现场建并回填。
+    /// 建（O(n) 字节滑窗，大文件可到几十 ms）在**锁外**做——检索是 8 线程并行的，
+    /// 冷启动那一轮谁都不该在锁里等别人建图；回填前双检（别的线程可能已插同键条目，
+    /// 同字节建出的指纹相同，取谁的都一样，取现成的省一份内存）。
     pub fn ensure(
         &self,
         corpus: &str,
@@ -428,17 +445,27 @@ impl SearchIndexCache {
         mtime_ns: u64,
         bytes: &[u8],
     ) -> std::sync::Arc<FileFingerprint> {
+        {
+            let g = self.corpora.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(fp) = g
+                .get(corpus)
+                .and_then(|b| b.files.get(path))
+                .filter(|e| e.len == len && e.mtime_ns == mtime_ns)
+                .map(|e| e.fp.clone())
+            {
+                return fp;
+            }
+        }
+        let fp = std::sync::Arc::new(FileFingerprint::build(bytes));
         let mut g = self.corpora.lock().unwrap_or_else(|e| e.into_inner());
         let bucket = g.entry(corpus.to_string()).or_default();
-        let fresh = bucket
+        if let Some(e) = bucket
             .files
             .get(path)
             .filter(|e| e.len == len && e.mtime_ns == mtime_ns)
-            .map(|e| e.fp.clone());
-        if let Some(fp) = fresh {
-            return fp;
+        {
+            return e.fp.clone();
         }
-        let fp = std::sync::Arc::new(FileFingerprint::build(bytes));
         bucket.files.insert(
             path.to_path_buf(),
             IndexedEntry { len, mtime_ns, fp: fp.clone() },
@@ -447,7 +474,7 @@ impl SearchIndexCache {
     }
 
     #[cfg(test)]
-    fn entry_count(&self, corpus: &str) -> usize {
+    pub(crate) fn entry_count(&self, corpus: &str) -> usize {
         self.corpora
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -499,6 +526,16 @@ mod tests {
         }
         let fp = FileFingerprint::build(&bytes);
         assert!(fp.saturated(), "高熵大文件必须饱和降级，否则假阳性把筛选率吃光");
+        // 饱和 = 建图中途弃窗 ⇒ 位图不完整 ⇒ 判拒必须整体停用（把真命中的文件拒掉 = 漏报事故）
+        let needle = trigram_needles("abc", false, true).unwrap();
+        let mut with_needle = bytes.clone();
+        with_needle.extend_from_slice(b"xxabcxx");
+        let fp2 = FileFingerprint::build(&with_needle);
+        assert!(fp2.saturated(), "夹具本身必须饱和，否则这条没钉住降级闸");
+        assert!(
+            !needle.rejected_by(&fp2),
+            "饱和指纹永不判拒：文本里明明有 abc，拒了就是漏报"
+        );
     }
 
     #[test]

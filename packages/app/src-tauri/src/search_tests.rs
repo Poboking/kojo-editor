@@ -46,6 +46,7 @@ fn request(root: &Path, query: &str) -> SearchRequestDto {
             max_results: None,
             threads: Some(1),
             resume_after_matches: None, // B18：additive 字段，缺省 None = 旧请求体逐字不变
+            deadline_ms: None, // MCP-PERF-S1：additive 字段，缺省 None = 无时限（旧行为逐字不变）
         },
     }
 }
@@ -710,6 +711,192 @@ fn bench_against_real_corpus() {
     );
 }
 
+/// MCP-PERF-S1 四数探针（不进常规矩阵；判据：字面量 p95 <100ms、首屏 <50ms、
+/// 单文件改动后失效 <100ms、取消 <20ms）：
+/// `KOJO_SEARCH_BENCH_ROOT=<语料目录> cargo test --lib --release -- --ignored --nocapture s1_perf_probe`
+///
+/// warm 口径 = 生产形态：一份 `SearchTextCache` + 一份 `SearchIndexCache` 实例横跨全部
+/// 拍次（对应 State 里跨检索共存的两个缓存），与"每拍现建"的测试入口 `run` 相反。
+/// 语料只读纪律：失效读数**不写语料盘**——复制 300 份语料文件进临时树做失效拍。
+#[test]
+#[ignore]
+fn s1_perf_probe_prints_four_readings() {
+    let Ok(root) = std::env::var("KOJO_SEARCH_BENCH_ROOT") else {
+        eprintln!("跳过：未设 KOJO_SEARCH_BENCH_ROOT");
+        return;
+    };
+    if !Path::new(&root).is_dir() {
+        eprintln!("跳过：{root} 不是目录");
+        return;
+    }
+    let query = std::env::var("KOJO_SEARCH_BENCH_QUERY").unwrap_or_else(|_| "口上".to_string());
+    let extensions: Vec<String> = match std::env::var("KOJO_SEARCH_BENCH_EXT") {
+        Ok(v) => v.split(',').map(|s| s.trim().to_string()).collect(),
+        Err(_) => ["erb", "erh", "erd", "kojo", "txt", "csv", "als"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    };
+    let threads: usize = std::env::var("KOJO_SEARCH_BENCH_THREADS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(8);
+    let ext_set: HashSet<String> = extensions.iter().cloned().collect();
+    // A/B 开关：KOJO_SEARCH_BENCH_NO_NEEDLE=1 ⇒ 正则 + 大小写不敏感 ⇒ 预筛全部关闭
+    //（needle None、byte_prefilter None）＝本批之前的解码+全扫路径，同机同库对拍。
+    let no_needle = std::env::var("KOJO_SEARCH_BENCH_NO_NEEDLE").as_deref() == Ok("1");
+
+    let req_for = |id: u64, roots: Vec<String>| SearchRequestDto {
+        search_id: id,
+        roots,
+        query: query.clone(),
+        options: SearchOptionsDto {
+            is_regex: Some(no_needle),
+            case_sensitive: Some(false), // 两模式恒 ci：字面量主路径本就 ci；正则+ci 恰好 needle=None
+            extensions: Some(extensions.clone()),
+            max_results: Some(5000),
+            threads: Some(threads),
+            ..Default::default()
+        },
+    };
+
+    let cache = crate::SearchTextCache::default();
+    let index = crate::search_index::SearchIndexCache::default();
+    let cancel = Mutex::new(HashSet::new());
+    let empty_progress = |_p: SearchProgressPayload| {};
+
+    // warm 拍：`first` 给了就顺路记第一支非空批次（首屏读数）
+    let run_warm = |id: u64,
+                    roots: Vec<String>,
+                    first: Option<&Mutex<Option<u128>>>|
+     -> SearchResultDto {
+        let started = std::time::Instant::now();
+        let req = req_for(id, roots);
+        let first_ref = first;
+        let out = crate::run_search_with_files(
+            &empty_progress,
+            &|b: &crate::SearchFilesPayload<'_>| {
+                if let Some(fb) = first_ref {
+                    if !b.files.is_empty() {
+                        let mut g = fb.lock().unwrap();
+                        if g.is_none() {
+                            *g = Some(started.elapsed().as_millis());
+                        }
+                    }
+                }
+            },
+            &cancel,
+            &req,
+            &cache,
+            &index,
+        )
+        .unwrap();
+        out
+    };
+
+    // 预热一拍：冷建字节缓存 + 指纹索引（读数从下一拍起才是 warm）
+    let warm0 = run_warm(1, vec![root.clone()], None);
+    // ① 字面量 p95（warm，20 拍）
+    let mut samples: Vec<u128> = Vec::new();
+    for i in 0..20 {
+        samples.push(u128::from(run_warm(100 + i, vec![root.clone()], None).elapsed_ms));
+    }
+    samples.sort();
+    let p95 = samples[(samples.len() * 95 + 99) / 100 - 1];
+    println!(
+        "[S1] ①字面量 p95（warm {} 拍）＝{p95}ms 全样本={:?} 语料文件={} 命中={}",
+        samples.len(),
+        samples,
+        warm0.files_scanned,
+        warm0.total_matches
+    );
+    // ② 首屏（warm）：第一支非空 emit_files 批次到达
+    let first_batch: Mutex<Option<u128>> = Mutex::new(None);
+    let out2 = run_warm(2, vec![root.clone()], Some(&first_batch));
+    println!(
+        "[S1] ②首屏（第一支非空批次）＝{:?}ms（完成态 elapsed={}ms）",
+        first_batch.into_inner().unwrap(),
+        out2.elapsed_ms
+    );
+
+    // ③ 单文件改动后失效：300 份语料副本的临时树，warm 一拍 → 改 1 份（len+mtime 双变）→ warm 再拍
+    let dir = temp_dir("s1-invalidate");
+    let mut copied = 0usize;
+    let mut changed_path: Option<PathBuf> = None;
+    let mut changed_len = 0u64;
+    for entry in walkdir::WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let ext = entry
+            .path()
+            .extension()
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+            .unwrap_or_default();
+        if !ext_set.contains(&ext) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(entry.path()) else {
+            continue;
+        };
+        let dest = dir.join(format!("f{copied:04}.{ext}"));
+        std::fs::write(&dest, &bytes).unwrap();
+        if changed_path.is_none() {
+            changed_path = Some(dest.clone());
+            changed_len = bytes.len() as u64;
+        }
+        copied += 1;
+        if copied >= 300 {
+            break;
+        }
+    }
+    let _ = run_warm(3, vec![dir.to_string_lossy().into_owned()], None);
+    if let Some(p) = changed_path {
+        let mut bytes = std::fs::read(&p).unwrap();
+        bytes.extend_from_slice("\n口上S1_INVALIDATE\n".as_bytes());
+        std::fs::write(&p, &bytes).unwrap();
+        let out3 = run_warm(4, vec![dir.to_string_lossy().into_owned()], None);
+        println!(
+            "[S1] ③单文件改动后失效拍（{copied} 份副本改 1 份 +{changed_len}B→+{}B）＝{}ms",
+            bytes.len(),
+            out3.elapsed_ms
+        );
+    } else {
+        println!("[S1] ③失效拍跳过：语料里没找到可复制的候选文件");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // ④ 取消：冷扫描（新缓存实例保证在途）进行中置位，量「置位 → 收口」
+    let cold_cache = crate::SearchTextCache::default();
+    let cold_index = crate::search_index::SearchIndexCache::default();
+    let req = req_for(5, vec![root.clone()]);
+    std::thread::scope(|s| {
+        let handle = s.spawn(|| {
+            crate::run_search_with_files(
+                &empty_progress,
+                &|_b: &crate::SearchFilesPayload<'_>| {},
+                &cancel,
+                &req,
+                &cold_cache,
+                &cold_index,
+            )
+            .unwrap()
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let t0 = std::time::Instant::now();
+        cancel.lock().unwrap().insert(5);
+        let out4 = handle.join().unwrap();
+        println!(
+            "[S1] ④取消（冷扫描 300ms 时置位 → 收口）＝{}.{:03}ms cancelled={} files_scanned={}",
+            t0.elapsed().as_millis(),
+            t0.elapsed().subsec_millis(),
+            out4.cancelled,
+            out4.files_scanned
+        );
+        assert!(out4.cancelled, "取消必须真的收口成 cancelled（读数才算数）");
+    });
+}
+
 /* --------------------- 流式增量（P2-11） --------------------- */
 //
 // 三条判据钉的是同一件契约：**事件流与完成态必须对得上**。
@@ -748,6 +935,7 @@ fn streamed_batches_cover_every_file_and_close_with_done() {
         &cancel,
         &req,
         &crate::SearchTextCache::default(),
+        &crate::search_index::SearchIndexCache::default(),
     )
     .expect("检索应成功");
     let seen = seen.into_inner().unwrap();
@@ -799,6 +987,7 @@ fn streamed_final_batch_reports_cancellation() {
         &cancel,
         &req,
         &crate::SearchTextCache::default(),
+        &crate::search_index::SearchIndexCache::default(),
     )
     .unwrap();
     let seen = seen.into_inner().unwrap();
@@ -834,6 +1023,7 @@ fn streamed_batches_never_exceed_the_final_result_when_truncated() {
         &cancel,
         &req,
         &crate::SearchTextCache::default(),
+        &crate::search_index::SearchIndexCache::default(),
     )
     .unwrap();
     assert!(out.truncated, "夹具必须真的撞上限");
@@ -1523,13 +1713,29 @@ fn text_cache_reuses_decoded_bodies_and_invalidates_on_change() {
     let cancel = Mutex::new(HashSet::new());
     let cache = crate::SearchTextCache::default();
 
-    let out1 = crate::run_search_with_files(&|_p| {}, &|_b| {}, &cancel, &req, &cache).unwrap();
+    let out1 = crate::run_search_with_files(
+        &|_p| {},
+        &|_b| {},
+        &cancel,
+        &req,
+        &cache,
+        &crate::search_index::SearchIndexCache::default(),
+    )
+    .unwrap();
     assert_eq!(out1.total_matches, 1);
     let (hits1, misses1) = cache.counters();
     assert_eq!(hits1, 0, "第一拍表是空的，必然全未命中");
     assert!(misses1 >= 2, "两个候选文件各查一次表（实际 {misses1}）");
 
-    let out2 = crate::run_search_with_files(&|_p| {}, &|_b| {}, &cancel, &req, &cache).unwrap();
+    let out2 = crate::run_search_with_files(
+        &|_p| {},
+        &|_b| {},
+        &cancel,
+        &req,
+        &cache,
+        &crate::search_index::SearchIndexCache::default(),
+    )
+    .unwrap();
     assert_eq!(out2.total_matches, out1.total_matches);
     assert_eq!(out2.files.len(), out1.files.len());
     let (hits2, _) = cache.counters();
@@ -1538,7 +1744,15 @@ fn text_cache_reuses_decoded_bodies_and_invalidates_on_change() {
     // 改内容（长度与 mtime 双判据都变）⇒ 下一次必须是新真相
     std::thread::sleep(std::time::Duration::from_millis(15));
     std::fs::write(dir.join("a.erb"), "口上 口上\n").unwrap();
-    let out3 = crate::run_search_with_files(&|_p| {}, &|_b| {}, &cancel, &req, &cache).unwrap();
+    let out3 = crate::run_search_with_files(
+        &|_p| {},
+        &|_b| {},
+        &cancel,
+        &req,
+        &cache,
+        &crate::search_index::SearchIndexCache::default(),
+    )
+    .unwrap();
     assert_eq!(out3.total_matches, 2, "缓存不许把改过的文件当成旧内容");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -2517,5 +2731,247 @@ fn resume_credential_is_identical_on_both_scan_paths() {
         "500 条一段，落点精确"
     );
     assert_eq!(flat.resume_applied_matches, 600);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/* ------------------------ 软时限（MCP-PERF-S1） ------------------------ */
+
+/// 命中身份（path|line|column）：部分结果与全量结果的**游标兼容性**钉在这一格上——
+/// B16/B18 的续取账按这份身份对拍；部分结果若混进全量没有的命中，游标续取当场破防。
+fn hit_identity(res: &SearchResultDto) -> HashSet<String> {
+    res.files
+        .iter()
+        .flat_map(|f| {
+            f.matches
+                .iter()
+                .map(move |m| format!("{}|{}|{}", f.path, m.line, m.column))
+        })
+        .collect()
+}
+
+/// 软时限夹具：`a_big.erb`（≈4MB、~210 条 HIT 夹在 250 行填充里——解码+扫描稳定超过 1ms）
+/// + `b_small.erb`（5 条 HIT）。两文件按 path 升序、单线程依次领取：big 先扫，
+/// 1ms 时限必然在「big 扫完、small 未领」（或 big 未领）的窗口里到点。
+/// 返回 (目录, big 的命中条数)——命中数由夹具现场算出，不手抄第二份。
+fn deadline_fixture(tag: &str) -> (PathBuf, usize) {
+    let dir = temp_dir(tag);
+    let filler = "x".repeat(79);
+    let mut body = String::with_capacity(4 * 1024 * 1024);
+    let mut hits = 0usize;
+    while (body.len() as u64) < 4 * 1024 * 1024 {
+        hits += 1;
+        body.push_str(&format!("HIT big {hits}\n"));
+        for _ in 0..250 {
+            body.push_str(&filler);
+            body.push('\n');
+        }
+    }
+    std::fs::write(dir.join("a_big.erb"), &body).unwrap();
+    let small: String = (1..=5).map(|k| format!("HIT small {k}\n")).collect();
+    std::fs::write(dir.join("b_small.erb"), &small).unwrap();
+    (dir, hits)
+}
+
+fn deadline_request(root: &Path, deadline_ms: Option<u64>) -> SearchRequestDto {
+    let mut req = request(root, "HIT");
+    req.options.deadline_ms = deadline_ms;
+    req
+}
+
+/// 判据 ①：缺省（None）与「给了但没到点」都必须是**完整旧结果** + partial 账恒关。
+/// 旧行为逐字不变（red line）：加了字段不等于改了语义。
+#[test]
+fn soft_deadline_absent_or_unhit_is_the_complete_legacy_result() {
+    let (dir, big_hits) = deadline_fixture("deadline-none");
+    let legacy = run(&deadline_request(&dir, None));
+    assert!(
+        !legacy.partial && legacy.partial_reason.is_none(),
+        "缺省无时限：partial 账恒关（partial=false 恒 None）"
+    );
+    let generous = run(&deadline_request(&dir, Some(60_000)));
+    assert!(
+        !generous.partial && generous.partial_reason.is_none(),
+        "时限没到点不许虚报 partial（会骗调用方去续取）"
+    );
+    assert_eq!(
+        hit_identity(&legacy),
+        hit_identity(&generous),
+        "带不带时限字段，结果本身逐字相同"
+    );
+    assert_eq!(
+        legacy.total_matches,
+        (big_hits + 5) as u64,
+        "解析式真值：big 全部命中 + small 5 条，一个不少"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 判据 ②：0ms 预算是**确定性**的到点（monotonic `now >= 起点+0` 恒真，建图 walk 只会
+/// 加大间隔）⇒ 不领取任何文件的部分结果，partial / partialReason / 三账分立一次钉死。
+#[test]
+fn soft_deadline_zero_budget_is_an_immediate_partial_with_reason() {
+    let (dir, _big_hits) = deadline_fixture("deadline-zero");
+    let res = run(&deadline_request(&dir, Some(0)));
+    assert!(res.partial, "0ms 预算在首次领取前必然已到点");
+    assert_eq!(res.partial_reason.as_deref(), Some("deadline"));
+    assert_eq!(res.files.len(), 0, "到点后不再领取任何文件");
+    assert_eq!(res.files_scanned, 0);
+    assert_eq!(res.total_matches, 0);
+    assert!(!res.truncated, "partial 与 truncated（命中上限）两账分立");
+    assert!(!res.cancelled, "partial 与 cancelled（用户取消）两账分立");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 判据 ③：真到点的部分结果（1ms 预算装不下 4MB 解码+扫描）是**全量结果的子集**，
+/// 命中身份同轴（path|line|column）——稳定游标（B16 分片账 / B18 续取账）拼的正是这份身份。
+#[test]
+fn soft_deadline_partial_results_are_a_subset_of_the_full_run() {
+    let (dir, _big_hits) = deadline_fixture("deadline-mid");
+    let full = run(&deadline_request(&dir, None));
+    let cut = run(&deadline_request(&dir, Some(1)));
+    assert!(
+        cut.partial && cut.partial_reason.as_deref() == Some("deadline"),
+        "1ms 预算装不下 4MB 的解码+扫描 ⇒ 必然部分结果"
+    );
+    assert!(cut.files_scanned < 2, "到点即停：绝不在到点后继续领文件（共 2 份）");
+    let full_ids = hit_identity(&full);
+    for id in hit_identity(&cut) {
+        assert!(full_ids.contains(&id), "部分结果混进全量没有的命中：{id}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/* -------------- Rust ↔ Node 镜像同查询同结果对拍（MCP-PERF-S1） -------------- */
+
+/// 共享对拍矩阵（`packages/app/tests/fixtures/search-parity-matrix.json`）：本测试与
+/// Node 镜像测试（`tools/tests/debug-server-search-parity.test.ts`）各按矩阵建**同一棵**
+/// 夹具树、跑**同一批**查询、断言**同一份**解析式手工真值（列号 = UTF-16 码元 +1）。
+/// 期望值不出自任何一侧引擎 ⇒ 哪一侧漂了哪一侧红；两侧同时绿 = 同查询同结果。
+/// 账面口径：path（文件名）→ line+column 命中账 + totalMatches + binary 跳过数 +
+/// filesScanned。预览 / start / end 不进账（表现层已知分叉，见矩阵 comment）；
+/// 遗留族编码不进账（镜像 decoderFor 的已知缺口，见矩阵 comment）。
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityMatrix {
+    files: Vec<ParityFile>,
+    cases: Vec<ParityCase>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityFile {
+    name: String,
+    encoding: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    bytes: Vec<u8>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityCase {
+    name: String,
+    query: String,
+    options: ParityOptions,
+    expect: ParityExpect,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityOptions {
+    is_regex: bool,
+    case_sensitive: bool,
+    whole_word: bool,
+    extensions: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityExpect {
+    files: Vec<ParityExpectFile>,
+    total_matches: u64,
+    binary: u32,
+    files_scanned: u32,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ParityExpectFile {
+    path: String,
+    hits: Vec<(u32, u32)>,
+}
+
+/// 矩阵的 encoding 档 → 原始字节（与 Node 侧 writer 逐字同形：BOM 前缀、UTF-16LE 单元）。
+fn parity_bytes(f: &ParityFile) -> Vec<u8> {
+    match f.encoding.as_str() {
+        "utf-8" => f.text.as_bytes().to_vec(),
+        "utf-8-bom" => {
+            let mut v = vec![0xEF, 0xBB, 0xBF];
+            v.extend_from_slice(f.text.as_bytes());
+            v
+        }
+        "utf-16le" => {
+            let mut v = vec![0xFF, 0xFE];
+            v.extend(f.text.encode_utf16().flat_map(u16::to_le_bytes));
+            v
+        }
+        "bytes" => f.bytes.clone(),
+        other => panic!("对拍矩阵出现未知编码档 {other}"),
+    }
+}
+
+#[test]
+fn parity_matrix_same_query_same_results_as_the_node_mirror() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../tests/fixtures/search-parity-matrix.json");
+    let raw = std::fs::read_to_string(&path)
+        .expect("共享对拍矩阵（packages/app/tests/fixtures/search-parity-matrix.json）应随仓存在");
+    let matrix: ParityMatrix = serde_json::from_str(&raw).expect("对拍矩阵应是合法 JSON");
+    let dir = temp_dir("parity");
+    for f in &matrix.files {
+        std::fs::write(dir.join(&f.name), parity_bytes(f)).unwrap();
+    }
+    for case in &matrix.cases {
+        let mut req = request(&dir, &case.query);
+        req.options.is_regex = Some(case.options.is_regex);
+        req.options.case_sensitive = Some(case.options.case_sensitive);
+        req.options.whole_word = Some(case.options.whole_word);
+        req.options.extensions = Some(case.options.extensions.clone());
+        let res = run(&req);
+        assert!(!res.truncated && !res.cancelled, "[{}] 对拍夹具不许触墙或取消", case.name);
+        assert_eq!(
+            res.skipped.binary, case.expect.binary,
+            "[{}] binary 跳过数与镜像合同不同（同一棵树、同一套三态判据）",
+            case.name
+        );
+        assert_eq!(
+            res.files_scanned, case.expect.files_scanned,
+            "[{}] filesScanned 与镜像合同不同",
+            case.name
+        );
+        assert_eq!(
+            res.total_matches, case.expect.total_matches,
+            "[{}] totalMatches 与镜像合同不同",
+            case.name
+        );
+        let got: Vec<(String, Vec<(u32, u32)>)> = res
+            .files
+            .iter()
+            .map(|f| {
+                (
+                    f.path.rsplit(['\\', '/']).next().unwrap_or(&f.path).to_string(),
+                    f.matches.iter().map(|m| (m.line, m.column)).collect(),
+                )
+            })
+            .collect();
+        let want: Vec<(String, Vec<(u32, u32)>)> = case
+            .expect
+            .files
+            .iter()
+            .map(|f| (f.path.clone(), f.hits.clone()))
+            .collect();
+        assert_eq!(got, want, "[{}] 命中账与镜像合同不同", case.name);
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }

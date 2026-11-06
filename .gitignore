@@ -65,3 +65,6 @@ packages/app/src-tauri/gen/
 # Web 调试模式（2026-10-24 调试模式批）的会话/沙盒/截图落点——编辑器会持续写，不入库
 .kojo-debug/
 .arts/
+
+# 本地 cargo 构建产物（CARGO_TARGET_DIR 指进树内的落点，不入库）
+.cargo-target/

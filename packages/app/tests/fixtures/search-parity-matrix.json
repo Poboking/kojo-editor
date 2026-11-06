@@ -1,0 +1,280 @@
+{
+  "comment": [
+    "MCP-PERF-S1 检索对拍矩阵：Rust 引擎（packages/app/src-tauri/src/search_tests.rs 的 parity_matrix_same_query_same_results_as_the_node_mirror）",
+    "与 Node 调试宿镜像（tools/tests/debug-server-search-parity.test.ts）各按本文件建同一棵夹具树、跑同一批查询、断言同一份期望。",
+    "期望值是解析式手工真值（列号 = UTF-16 码元 +1，与 Monaco 同轴），不出自任何一侧引擎 ⇒ 哪侧漂了哪侧红。",
+    "预览文本 / start / end 不进账：镜像预览窗是 200 字符 ±80、Rust 是 240 单元居中——已知的表现层分叉（呈现口径，非命中口径）。",
+    "遗留族编码（shift_jis/gbk/big5）不进账：镜像 decoderFor 只认 BOM（utf-16le/be）与 utf-8，遗留族解码是镜像的已知缺口。",
+    "bin.dat 的 bytes 字段是字节数组（不引入 base64 依赖面，Rust 侧零新 crate）。",
+    "utf-16 (BOM) 也不进账：镜像 scanFile 的 hasNul 先于 decoderFor ⇒ utf-16 文件在镜像侧恒判二进制——对拍抓出的既有缺口，属 scanFile 段（非 parity 段），本批不动，待该段 owner 收口。"
+  ],
+  "files": [
+    {
+      "name": "a.erb",
+      "encoding": "utf-8",
+      "text": "PRINTL 口上デーです\r\nK12_MSG_here と NEEDLE_ABC\r\nｘｙｚａｂｃｘｙ flag here\r\nneedl needle NEEDLE\r\n終わりの口上デー\r\n"
+    },
+    {
+      "name": "b.erb",
+      "encoding": "utf-8-bom",
+      "text": "口上デー at line one\nplain ascii line\n"
+    },
+    {
+      "name": "bin.dat",
+      "encoding": "bytes",
+      "bytes": [
+        0,
+        1,
+        2
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "name": "cjk-literal-ci",
+      "query": "口上デー",
+      "options": {
+        "isRegex": false,
+        "caseSensitive": false,
+        "wholeWord": false,
+        "extensions": []
+      },
+      "expect": {
+        "files": [
+          {
+            "path": "a.erb",
+            "hits": [
+              [
+                1,
+                8
+              ],
+              [
+                5,
+                5
+              ]
+            ]
+          },
+          {
+            "path": "b.erb",
+            "hits": [
+              [
+                1,
+                1
+              ]
+            ]
+          }
+        ],
+        "totalMatches": 3,
+        "binary": 1,
+        "filesScanned": 3
+      }
+    },
+    {
+      "name": "cjk-literal-cs",
+      "query": "口上デー",
+      "options": {
+        "isRegex": false,
+        "caseSensitive": true,
+        "wholeWord": false,
+        "extensions": []
+      },
+      "expect": {
+        "files": [
+          {
+            "path": "a.erb",
+            "hits": [
+              [
+                1,
+                8
+              ],
+              [
+                5,
+                5
+              ]
+            ]
+          },
+          {
+            "path": "b.erb",
+            "hits": [
+              [
+                1,
+                1
+              ]
+            ]
+          }
+        ],
+        "totalMatches": 3,
+        "binary": 1,
+        "filesScanned": 3
+      }
+    },
+    {
+      "name": "ascii-literal-cs",
+      "query": "NEEDLE_ABC",
+      "options": {
+        "isRegex": false,
+        "caseSensitive": true,
+        "wholeWord": false,
+        "extensions": []
+      },
+      "expect": {
+        "files": [
+          {
+            "path": "a.erb",
+            "hits": [
+              [
+                2,
+                16
+              ]
+            ]
+          }
+        ],
+        "totalMatches": 1,
+        "binary": 1,
+        "filesScanned": 3
+      }
+    },
+    {
+      "name": "regex-literal-segment",
+      "query": "K\\d+_MSG",
+      "options": {
+        "isRegex": true,
+        "caseSensitive": true,
+        "wholeWord": false,
+        "extensions": []
+      },
+      "expect": {
+        "files": [
+          {
+            "path": "a.erb",
+            "hits": [
+              [
+                2,
+                1
+              ]
+            ]
+          }
+        ],
+        "totalMatches": 1,
+        "binary": 1,
+        "filesScanned": 3
+      }
+    },
+    {
+      "name": "ascii-literal-ci",
+      "query": "needl",
+      "options": {
+        "isRegex": false,
+        "caseSensitive": false,
+        "wholeWord": false,
+        "extensions": []
+      },
+      "expect": {
+        "files": [
+          {
+            "path": "a.erb",
+            "hits": [
+              [
+                2,
+                16
+              ],
+              [
+                4,
+                1
+              ],
+              [
+                4,
+                7
+              ],
+              [
+                4,
+                14
+              ]
+            ]
+          }
+        ],
+        "totalMatches": 4,
+        "binary": 1,
+        "filesScanned": 3
+      }
+    },
+    {
+      "name": "whole-word-ci",
+      "query": "needl",
+      "options": {
+        "isRegex": false,
+        "caseSensitive": false,
+        "wholeWord": true,
+        "extensions": []
+      },
+      "expect": {
+        "files": [
+          {
+            "path": "a.erb",
+            "hits": [
+              [
+                4,
+                1
+              ]
+            ]
+          }
+        ],
+        "totalMatches": 1,
+        "binary": 1,
+        "filesScanned": 3
+      }
+    },
+    {
+      "name": "whole-word-width-folded-content",
+      "query": "flag",
+      "options": {
+        "isRegex": false,
+        "caseSensitive": false,
+        "wholeWord": true,
+        "extensions": []
+      },
+      "expect": {
+        "files": [
+          {
+            "path": "a.erb",
+            "hits": [
+              [
+                3,
+                10
+              ]
+            ]
+          }
+        ],
+        "totalMatches": 1,
+        "binary": 1,
+        "filesScanned": 3
+      }
+    },
+    {
+      "name": "regex-eol-anchor-crlf",
+      "query": "デー$",
+      "options": {
+        "isRegex": true,
+        "caseSensitive": false,
+        "wholeWord": false,
+        "extensions": []
+      },
+      "expect": {
+        "files": [
+          {
+            "path": "a.erb",
+            "hits": [
+              [
+                5,
+                7
+              ]
+            ]
+          }
+        ],
+        "totalMatches": 1,
+        "binary": 1,
+        "filesScanned": 3
+      }
+    }
+  ]
+}

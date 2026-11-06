@@ -2834,6 +2834,9 @@ struct SearchState {
     /// ⇒ 把解码后的正文留住，第二拍起只剩内存扫描（见 `SearchTextCache` 的头注）。
     /// 住 State 而不是每次命令现建：缓存的价值全在"跨拍复用"上。
     cache: Arc<SearchTextCache>,
+    /// trigram 指纹索引（MCP-PERF-S1）：与文本缓存同生命周期、同失效键（len+mtime）。
+    /// 跨查询复用是它的全部价值 ⇒ 同样住 State。
+    index: Arc<search_index::SearchIndexCache>,
 }
 
 #[derive(Deserialize, Default)]
@@ -2876,6 +2879,11 @@ struct SearchOptionsDto {
     /// 3. 续取必须**配回显**（`SearchResultDto::resume_applied_matches`）：没有回显的续取
     ///    与「旧宿主把同一批前 N 条反复端上桌」无法区分，那比不续更危险。
     resume_after_matches: Option<usize>,
+    /// 软时限（MCP-PERF-S1，additive）：自检索起点起算的毫秒预算。到点后**不再领取新文件**
+    /// （在手的扫完收口），回 `partial:true` + `partialReason:"deadline"` 的部分结果。
+    /// 缺省 `None` ⇒ 无时限，行为逐字不变；这是"软"的——粒度是单文件，不肢解在扫的文件，
+    /// 也不保证恰好在预算线上停（最后一刀只会切在文件边界上）。
+    deadline_ms: Option<u64>,
 }
 
 /// 续取凭据的资源闸：`skip` 的绝对上限。
@@ -2954,6 +2962,11 @@ struct SearchResultDto {
     /// 请求值被 `SEARCH_RESUME_SKIP_MAX` 夹住（回显＝夹后的和）。
     /// 缺省不带凭据时恒为 0 ⇒ 旧面的账一个字没多。
     resume_applied_matches: u64,
+    /// 结果不完整是因为**软时限**到点（MCP-PERF-S1，additive）。与 `truncated`（命中上限）、
+    /// `cancelled`（用户取消）三账分立；缺省无时限的调用恒 false ⇒ 旧调用方零感知。
+    partial: bool,
+    /// `partial` 的原因码：partial=false 恒 None；当前唯一取值 "deadline"。
+    partial_reason: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -3515,6 +3528,8 @@ fn scan_file(
     file: &SearchFile,
     matcher: &SearchMatcher,
     prefilter: Option<&BytePrefilter>,
+    trigram: Option<&search_index::TrigramNeedle>,
+    index: &search_index::SearchIndexCache,
     cap: usize,
     skip: usize,
     policy: &DecodeProbePolicyDto,
@@ -3567,10 +3582,32 @@ fn scan_file(
     // （解码不改字节 ⇒ 字面量命中必然以同一串字节出现；折叠后的两种宽度形态都已编进
     // 预筛正则）。utf-16 的字节被 0 隔开，预筛对它不成立。
     if !utf16ish {
+        // 字节预筛过了闸 ⇒ 字节里确有折叠形，trigram 指纹必然也放行 ⇒ 不必再问一遍
+        // （两道都是必要条件闸，第二道在第一道之后只剩纯开销，一分筛选率都不添）。
+        let mut byte_gate_spoke = false;
         if let Some(pre) = prefilter {
             let applies = pre.ascii_safe || std::str::from_utf8(bytes).is_ok();
-            if applies && !pre.re.is_match(bytes) {
-                return FileOutcome::Miss(0);
+            if applies {
+                if !pre.re.is_match(bytes) {
+                    return FileOutcome::Miss(0);
+                }
+                byte_gate_spoke = true;
+            }
+        }
+        // trigram 指纹预筛（MCP-PERF-S1）：字节预筛不覆盖的三类查询
+        //（大小写不敏感字面量 / 整词 / 正则的必选字面段）用它先筛候选，
+        // 拒了就连解码都省掉。必要条件闸（漏报零容忍，判拒语义见 search_index 模块头注）：
+        // 指纹 = 原始字节滑 3 字节窗，查询侧只编"命中处必然原样出现"的窗；
+        // 只对半径内（ascii_radius，或整份合法 UTF-8）的文件判拒，半径外照旧全扫。
+        // 失效键 = (len, mtime_ns)，与文本缓存同源同口径（`SearchIndexCache::ensure`）。
+        if !byte_gate_spoke {
+            if let Some(needle) = trigram {
+                if let Some(mtime_ns) = file.mtime_ns {
+                    let fp = index.ensure(corpus, path, len, mtime_ns, bytes);
+                    if (needle.ascii_radius || fp.utf8_valid()) && needle.rejected_by(&fp) {
+                        return FileOutcome::Miss(0);
+                    }
+                }
             }
         }
     }
@@ -4070,7 +4107,14 @@ fn run_search(
     cancel: &Mutex<HashSet<u64>>,
     req: &SearchRequestDto,
 ) -> Result<SearchResultDto, String> {
-    run_search_with_files(emit, &|_batch| {}, cancel, req, &SearchTextCache::default())
+    run_search_with_files(
+        emit,
+        &|_batch| {},
+        cancel,
+        req,
+        &SearchTextCache::default(),
+        &search_index::SearchIndexCache::default(),
+    )
 }
 
 /// 检索主体（P2-11 流式版）：进度与命中文件**共用同一处节流点**。
@@ -4089,6 +4133,7 @@ fn run_search_with_files(
     cancel: &Mutex<HashSet<u64>>,
     req: &SearchRequestDto,
     cache: &SearchTextCache,
+    index: &search_index::SearchIndexCache,
 ) -> Result<SearchResultDto, String> {
     let started = std::time::Instant::now();
     if req.query.is_empty() {
@@ -4103,6 +4148,16 @@ fn run_search_with_files(
     let whole_word = o.whole_word.unwrap_or(false);
     let matcher = build_matcher(&req.query, is_regex, case_sensitive, whole_word)?;
     let prefilter = byte_prefilter(&req.query, is_regex, case_sensitive, whole_word);
+    // trigram 指纹预筛（MCP-PERF-S1）：整查询编译一次。None = 该查询编不出"必在窗"
+    //（<3 字节 / 大小写不敏感含 fold 不稳定字符 / 正则无必选字面段）⇒ 与旧路径逐字相同。
+    let trigram = search_index::trigram_needles(&req.query, is_regex, case_sensitive);
+    // 软时限（MCP-PERF-S1）：缺省 None ⇒ 无时限，行为逐字不变。粒度 = 单文件领取，
+    // 到点后不再领新文件，在手的扫完收口 ⇒ 部分结果 + partialReason:"deadline"。
+    let deadline_at = o.deadline_ms.map(|ms| {
+        std::time::Instant::now()
+            .checked_add(std::time::Duration::from_millis(ms))
+            .unwrap_or_else(|| std::time::Instant::now() + std::time::Duration::from_secs(86_400))
+    });
     // 字面量单趟快道的准入（口径与"为什么等价"见 `scan_text_flat`）：正则查询一律走逐行原口径
     let literal_single_pass = !is_regex && !req.query.contains(['\n', '\r']);
     let max_results = o.max_results.unwrap_or(2000).clamp(1, SEARCH_HARD_CAP);
@@ -4163,6 +4218,8 @@ fn run_search_with_files(
     let resume_applied = AtomicU64::new(0);
     let overflow = AtomicBool::new(false);
     let cancelled = AtomicBool::new(false);
+    // 软时限到点（MCP-PERF-S1）：与 cancelled 同形态的终态位，收口进 partial / partialReason
+    let deadline_hit = AtomicBool::new(false);
     let counters = SkipCounters::default();
     let last_emit = Mutex::new(std::time::Instant::now());
     // 已 emit 批次的累积（收口时与残留批次合并成完成态 ⇒ 事件流与返回值逐条对得上）
@@ -4177,6 +4234,12 @@ fn run_search_with_files(
                     if is_cancelled(cancel, req.search_id) {
                         cancelled.store(true, Ordering::Relaxed);
                         break;
+                    }
+                    if let Some(t) = deadline_at {
+                        if std::time::Instant::now() >= t {
+                            deadline_hit.store(true, Ordering::Relaxed);
+                            break;
+                        }
                     }
                     if overflow.load(Ordering::Relaxed) {
                         break;
@@ -4196,6 +4259,8 @@ fn run_search_with_files(
                         &files[i],
                         &matcher,
                         prefilter.as_ref(),
+                        trigram.as_ref(),
+                        index,
                         cap,
                         resume_skip,
                         policy,
@@ -4295,6 +4360,10 @@ fn run_search_with_files(
     if let Ok(mut g) = cancel.lock() {
         g.remove(&req.search_id); // 本次取消标记用完即清，不留给下一次
     }
+    // 软时限收口（MCP-PERF-S1）：到点**且**还有没扫到的文件才算 partial——
+    // 恰好在最后一份文件领完时到点，结果是完整的，报 partial 会骗调用方去续取。
+    let deadline_hit = deadline_hit.load(Ordering::Relaxed);
+    let partial = deadline_hit && scanned.load(Ordering::SeqCst) < total_files as usize;
     Ok(SearchResultDto {
         files: out_files,
         total_matches,
@@ -4306,6 +4375,10 @@ fn run_search_with_files(
         // 续取对账位（不带凭据恒 0）。回显**只统计实际丢掉的**，不把请求值原样抄回来——
         // 「宿主根本不认这个键」（TS 侧 undefined）与「认了但文件没那么长」必须可区分。
         resume_applied_matches: resume_applied.load(Ordering::Relaxed),
+        // 软时限账（additive，MCP-PERF-S1）：partial=false 恒 None。与 truncated（命中上限）、
+        // cancelled（用户取消）三账分立——"为什么不全"必须能各答各的。
+        partial,
+        partial_reason: if partial { Some("deadline".to_string()) } else { None },
     })
 }
 
@@ -4323,6 +4396,7 @@ async fn search_text(
     let cancel = state.cancelled.clone();
     // 缓存句柄也 clone 出去：`spawn_blocking` 的闭包要 'static，且缓存本身活在图外的 State 里
     let cache = state.cache.clone();
+    let index = state.index.clone();
     // 命令本体跑在阻塞线程池上：这是纯 CPU + 磁盘的活，不许占住异步运行时的执行线程
     tauri::async_runtime::spawn_blocking(move || {
         let emit = |p: SearchProgressPayload| {
@@ -4331,7 +4405,7 @@ async fn search_text(
         let emit_files = |batch: &SearchFilesPayload<'_>| {
             let _ = app.emit(SEARCH_FILES_EVENT, batch.clone());
         };
-        run_search_with_files(&emit, &emit_files, &cancel, &request, &cache)
+        run_search_with_files(&emit, &emit_files, &cancel, &request, &cache, &index)
     })
     .await
     .map_err(|e| format!("检索线程失败：{e}"))?

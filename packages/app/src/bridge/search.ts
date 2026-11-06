@@ -59,6 +59,14 @@ export interface SearchResult {
    * 「这台宿主不认续取凭据」处理，绝不把「没回显」当成「续上了」。
    */
   resumeAppliedMatches?: number;
+  /**
+   * 软时限账（MCP-PERF-S1，additive）：结果不完整是因为 `options.deadlineMs` 到点
+   * （与 `truncated`（命中上限）/ `cancelled`（取消）三账分立）。老宿主没这个键
+   * ⇒ 读取侧按 false 处理，不谎报也不炸。
+   */
+  partial?: boolean;
+  /** `partial` 的原因码：partial=false 恒缺席；当前唯一取值 "deadline"。 */
+  partialReason?: string;
 }
 
 export interface SearchOptions {
@@ -95,6 +103,12 @@ export interface SearchOptions {
    * 现在只有 MCP 分片腿（`resumeBySlice`）用它——界面检索面板不传，行为零变化。
    */
   resumeAfterMatches?: number;
+  /**
+   * 软时限（MCP-PERF-S1，additive）：自检索起点起算的毫秒预算。到点后不再领取新文件，
+   * 回 `partial:true` + `partialReason:"deadline"` 的部分结果。缺省不传 ⇒ 无时限，
+   * 请求体与旧面逐字相同。软保证：粒度是单文件，停在文件边界上。
+   */
+  deadlineMs?: number;
 }
 
 export interface SearchRequest {
