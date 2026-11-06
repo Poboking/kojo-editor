@@ -56,6 +56,9 @@ interface WatchSnapshot {
 
 const WATCHING: WatchSnapshot = { status: 'watching', roots: ['D:\\proj'], failures: [] };
 
+/** B8 用得到的固定墙钟（回声窗与 mtime 复核的判据都要「同一毫秒」的确定性）。 */
+const T0 = Date.parse('2026-11-06T12:00:00Z');
+
 interface FakeBusKernel {
   readonly kernel: FsFreshnessKernelLike & McpKernelLike;
   /** 所有 `bus.on` 的事件名（按调用顺序，可数重复订阅）。 */
@@ -346,15 +349,27 @@ describe('② 监视缺席一律可见（铁律 4）', () => {
  * ================================================================== */
 
 describe('③ 自写归因（noteSelfWrite 与写腿同一调用栈）', () => {
-  it('本会话自写 + 监视器回声：并条不推序号 ⇒ stale:false，回声不冒充第二次外部改动', () => {
+  it('本会话自写 + 监视器回声：并条不推序号 ⇒ stale:false，回声不冒充第二次外部改动', async () => {
+    vi.useFakeTimers({ now: T0 });
     const { kernel } = makeKernel();
+    // B8：窗内的 false 必须由 mtime 复核给（假桥把盘态钉在「就是我们刚写的那一份」：mtime = 自写时刻）
+    (kernel.io as unknown as Record<string, unknown>)['stat'] = async () => ({
+      exists: true,
+      mtimeMs: T0,
+      size: 10,
+    });
     const tracker = createFsFreshnessTracker(kernel);
     const abs = 'D:\\proj\\a.kojo';
     tracker.verdictOf({ abs, rel: 'a.kojo', scope: SCOPE_A });
     tracker.noteSelfWrite({ abs, kind: 'change', scope: SCOPE_A });
     emitChanged(kernel, abs); // ~200ms 去抖后的监视器回声（同一测试内即时送达，在窗口内）
-    const v = tracker.verdictOf({ abs, rel: 'a.kojo', scope: SCOPE_A });
+    // 同步档：窗内命中 ⇒ 复核在途，本档不乐观判 false（B8 之前这里直接谎报 false）
+    const pending = tracker.verdictOf({ abs, rel: 'a.kojo', scope: SCOPE_A });
+    expect(pending.stale).toBeNull();
+    // 定档走复核版（同一次读数里等结论）：并条不推序号这条语义一字未变
+    const v = await tracker.verdictOfRechecked({ abs, rel: 'a.kojo', scope: SCOPE_A });
     expect(v.stale).toBe(false);
+    expect(v.recheck).toMatchObject({ performed: true, basis: 'mtime-recheck', outcome: 'unchanged' });
     expect(v.changeOrigin).toBe('mcp-write');
     expect(v.changedSincePreviousRead).toBe(0);
     const rep = tracker.report();
@@ -375,11 +390,19 @@ describe('③ 自写归因（noteSelfWrite 与写腿同一调用栈）', () => {
   });
 
   it('写腿 fileTree.update 同栈记账：落盘成功后写会话再读不判过期，且无新增写命令', async () => {
+    vi.useFakeTimers({ now: T0 });
     const { kernel } = makeKernel();
     const written: string[] = [];
     const invokes: string[] = [];
     const tracker = createFsFreshnessTracker(kernel);
     const io = kernel.io as unknown as Record<string, unknown>;
+    const statPaths: string[] = [];
+    // B8：窗内的 false 必须由 mtime 复核给。假桥把盘态钉成「就是我们刚写那一份」（mtime = 自写时刻），
+    // 并记下复核走过哪些路径 —— 只读探针，绝不与 deps.invoke / 任何 Rust 写命令混线。
+    io['stat'] = async (abs: string) => {
+      statPaths.push(abs);
+      return { exists: true, mtimeMs: T0, size: 5 };
+    };
     const deps = fakeIoDeps(kernel, {
       fsFreshness: () => tracker,
       invoke: async (cmd) => {
@@ -400,8 +423,15 @@ describe('③ 自写归因（noteSelfWrite 与写腿同一调用栈）', () => {
     expect(written).toEqual(['D:/proj/docs/a.txt']); // resolveWriteTarget 归一形态（与 mcp-write-legs 同尺）
     // 不新建写通道：写腿只经既有内核 io 原语落盘，deps.invoke 零触达（更没有任何 Rust 写命令）。
     expect(invokes).toEqual([]);
-    const v = tracker.verdictOf({ abs: 'D:\\proj\\docs\\a.txt', rel: 'docs/a.txt', scope: WRITE_SCOPE });
+    // 窗内第一读（同步档）：复核在途 ⇒ null（B8 之前这里直接 false）；定档走复核版
+    const pending = tracker.verdictOf({ abs: 'D:\\proj\\docs\\a.txt', rel: 'docs/a.txt', scope: WRITE_SCOPE });
+    expect(pending.stale).toBeNull();
+    const v = await tracker.verdictOfRechecked({ abs: 'D:\\proj\\docs\\a.txt', rel: 'docs/a.txt', scope: WRITE_SCOPE });
     expect(v.stale).toBe(false);
+    // 复核只经内核 io.stat 探针走：deps.invoke 零触达这条一字未动（没有新增任何 Rust 命令）
+    expect(statPaths.every((p) => p === 'D:\\proj\\docs\\a.txt')).toBe(true);
+    expect(statPaths.length).toBeGreaterThanOrEqual(1);
+    expect(invokes).toEqual([]);
     tracker.dispose();
   });
 });

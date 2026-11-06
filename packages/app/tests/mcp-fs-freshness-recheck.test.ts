@@ -31,7 +31,6 @@ import {
   resetFsFreshnessForTest,
   type FsFreshnessKernelLike,
   type FsFreshnessProbe,
-  type FsFreshnessVerdict,
 } from '../src/mcp/fs-freshness';
 
 /* ------------------------------- 假件：可改盘态 + 计数代理 ------------------------------- */
@@ -372,6 +371,11 @@ describe('③ 成本必须可证（这张计数表是本批判据的核心）', 
     expect(fake.calls.stat).toEqual([]);
     expect(fake.calls.statFiles).toEqual([]);
 
+    // (b2) 窗内命中 P1 一次 ⇒ 恰好 1 次
+    const hit = await tracker.verdictOfRechecked({ abs: P1, rel: 'a.kojo', scope: SCOPE_A });
+    expect(hit.stale).toBe(false);
+    expect(totalStatCalls(fake)).toBe(1);
+
     // (c) 判定已经 true（外部改动推了序号）⇒ 不必再复核去证明「变了」
     emitChanged(fake, P2);
     const t = await tracker.verdictOfRechecked({ abs: P2, rel: 'b.kojo', scope: SCOPE_A });
@@ -388,6 +392,12 @@ describe('③ 成本必须可证（这张计数表是本批判据的核心）', 
     expect(n.stale).toBeNull();
     expect(String(n.staleReason)).toContain('不可信');
     expect(totalStatCalls(blind)).toBe(0);
+
+    // (e) 推出回声窗后再读同一目标 ⇒ 复核候选集空 ⇒ 还是 1（不涨）
+    vi.advanceTimersByTime(SELF_WRITE_ECHO_WINDOW_MS + 1);
+    const w = await tracker.verdictOfRechecked({ abs: P1, rel: 'a.kojo', scope: SCOPE_A });
+    expect(w.recheck).toBeNull();
+    expect(totalStatCalls(fake)).toBe(1);
     tracker.dispose();
     tracker2.dispose();
   });
@@ -462,30 +472,47 @@ describe('④ 判不了就 null + staleReason（stat 失败 / mtimeMs:null / sea
     tracker.dispose();
   });
 
-  it('自写是删除（unlink）而盘上确实没有 ⇒ 复核证明没变 false；自写是改写而文件消失 ⇒ 判外部删除 stale:true', async () => {
+  it('自写是删除（unlink）而盘上确实没有 ⇒ 复核证明没变 false；自写是改写而探针报「不在位」⇒ 判不了 null（不猜外部删除）', async () => {
     vi.useFakeTimers({ now: T0 });
-    // (a) 删除自写：期望态 = 不在位
+    // (a) 删除自写：期望态 = 不在位 ⇒ 复核可以证「没变」
     const del = makeRecheckKernel({ [P1]: absent() });
     const tDel = createFsFreshnessTracker(del.kernel);
     await tDel.verdictOfRechecked({ abs: P1, rel: 'a.kojo', scope: SCOPE_A });
     tDel.noteSelfWrite({ abs: P1, kind: 'unlink', scope: SCOPE_A });
     const vd = await tDel.verdictOfRechecked({ abs: P1, rel: 'a.kojo', scope: SCOPE_A });
     expect(vd.stale).toBe(false);
-    expect(vd.recheck).toMatchObject({ outcome: 'unchanged' });
+    expect(vd.recheck).toMatchObject({ outcome: 'unchanged', basis: 'mtime-recheck' });
+    expect(String(vd.recheck?.reason)).toContain('删除');
 
-    // (b) 改写自写后文件被人删了：真实外部改动
+    // (b) 改写自写后探针说「不在位」：stat 通道把「不存在」与「取不到」并成一态
+    //     （Rust `metadata(path).ok()?` / `stat_files` 的 `Err(_) ⇒ exists:false`）⇒ 判不了，
+    //     既不乐观 false，也不把「可能是 stat 失败」乱报成外部删除 true。
     const chg = makeRecheckKernel({ [P2]: present(T0, 10) });
     const tChg = createFsFreshnessTracker(chg.kernel);
     await tChg.verdictOfRechecked({ abs: P2, rel: 'b.kojo', scope: SCOPE_A });
     tChg.noteSelfWrite({ abs: P2, kind: 'change', scope: SCOPE_A });
     chg.setDisk(P2, absent());
     const vc = await tChg.verdictOfRechecked({ abs: P2, rel: 'b.kojo', scope: SCOPE_A });
-    expect(vc.stale).toBe(true);
-    expect(vc.changeOrigin).toBe('unattributed');
-    expect(vc.changeKind).toBe('unlink');
-    expect(chg.calls.stat).toHaveLength(2);
+    expect(vc.stale).toBeNull();
+    expect(String(vc.staleReason)).toContain('合一');
+    expect(vc.recheck?.outcome).toBe('unknown');
+    expect(tChg.report().counters.mtimeRecheckChangesRecorded).toBe(0); // 判不了 ⇒ 绝不多记一笔外部写
     tDel.dispose();
     tChg.dispose();
+  });
+
+  it('改写自写后盘上真被外部删掉、但探针还能给出 mtime（例如目录级改名走了 add）⇒ 复核照样核得出来', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const fake = makeRecheckKernel({ [P2]: present(T0, 10) });
+    const tracker = createFsFreshnessTracker(fake.kernel);
+    await tracker.verdictOfRechecked({ abs: P2, rel: 'b.kojo', scope: SCOPE_A });
+    tracker.noteSelfWrite({ abs: P2, kind: 'add', scope: SCOPE_A });
+    fake.setDisk(P2, present(T0 + 600, 0)); // 外部改写/重建：mtime 前移 ⇒ 定档 true
+    const v = await tracker.verdictOfRechecked({ abs: P2, rel: 'b.kojo', scope: SCOPE_A });
+    expect(v.stale).toBe(true);
+    expect(v.changeOrigin).toBe('unattributed');
+    expect(v.recheck?.probes[0]).toMatchObject({ outcome: 'changed', mtimeMs: T0 + 600 });
+    tracker.dispose();
   });
 
   it('fsFreshnessPayload 序列化把复核读数一起带出去（字段名即契约，不另开第二条通道）', async () => {
@@ -572,41 +599,45 @@ describe('⑤ 同步 verdictOf 的诚实下界：复核在途 ⇒ null，落账�
  * ================================================================== */
 
 describe('⑥ 复核记忆有界（无限增长即判不合格）', () => {
-  it('大量不同路径在窗内命中 ⇒ 复核账按容量淘汰且 dropped/truncated 可见，只发一趟 statFiles', async () => {
+  it('大量不同路径在窗内命中 ⇒ 复核账按容量淘汰且 dropped/truncated 可见，每轮只发一趟 statFiles', async () => {
     vi.useFakeTimers({ now: T0 });
-    const total = CHANGE_LEDGER_CAPACITY + 500;
+    const perRound = 1_200; // 两轮共 2400 个不同路径 ⇒ 必然越过 2000 容量，看的是「有没有界」
     const seed: Record<string, DiskState> = {};
-    const paths: string[] = [];
-    for (let i = 0; i < total; i += 1) {
-      const abs = `${PROJ}\\w${i}.kojo`;
-      paths.push(abs);
-      seed[abs] = present(T0, i);
+    for (let r = 0; r < 2; r += 1) {
+      for (let i = 0; i < perRound; i += 1) seed[`${PROJ}\\r${r}-w${i}.kojo`] = present(T0, i);
     }
     const fake = makeRecheckKernel(seed);
     const tracker = createFsFreshnessTracker(fake.kernel);
-    for (const abs of paths) tracker.noteSelfWrite({ abs, kind: 'change', scope: SCOPE_A });
 
-    const vs: FsFreshnessVerdict[] = await tracker.verdictsOfRechecked(
-      paths.map((abs) => ({ abs, rel: abs.slice(PROJ.length + 1), scope: SCOPE_A })),
-    );
-    expect(vs).toHaveLength(total);
-    expect(fake.calls.statFiles).toHaveLength(1); // N 个路径 ⇒ 一趟
+    for (let r = 0; r < 2; r += 1) {
+      const paths: string[] = [];
+      for (let i = 0; i < perRound; i += 1) paths.push(`${PROJ}\\r${r}-w${i}.kojo`);
+      for (const abs of paths) tracker.noteSelfWrite({ abs, kind: 'change', scope: SCOPE_A });
+      const vs = await tracker.verdictsOfRechecked(
+        paths.map((abs) => ({ abs, rel: abs.slice(PROJ.length + 1), scope: SCOPE_A })),
+      );
+      expect(vs).toHaveLength(perRound);
+      // 盘态都没变（mtime = 自写时刻）⇒ 绝不报 true；溢出降档那档按既有语义给 null + 淘汰理由
+      expect(vs.every((v) => v.stale === false || v.stale === null)).toBe(true);
+    }
+
     expect(fake.calls.stat).toEqual([]);
+    expect(fake.calls.statFiles).toHaveLength(2); // 一轮一趟，绝不为 1200 条发 1200 趟
+    expect(fake.calls.statFiles.every((chunk) => chunk.length <= perRound)).toBe(true);
 
     const rep = tracker.report();
     expect(rep.ledger.rechecks.capacity).toBe(CHANGE_LEDGER_CAPACITY);
     expect(rep.ledger.rechecks.size).toBe(CHANGE_LEDGER_CAPACITY);
-    expect(rep.ledger.rechecks.dropped).toBe(500);
+    expect(rep.ledger.rechecks.dropped).toBeGreaterThan(0);
     expect(rep.ledger.rechecks.truncated).toBe(true);
     expect(rep.ledger.evictedKeys.rechecks).toBeGreaterThan(0);
     // 复核只是第三张账：两张旧账的容量与溢出可见性一字不变。
+    expect(rep.ledger.changes.capacity).toBe(CHANGE_LEDGER_CAPACITY);
+    expect(rep.ledger.reads.capacity).toBe(READ_LEDGER_CAPACITY);
     expect(rep.ledger.changes.size).toBeLessThanOrEqual(CHANGE_LEDGER_CAPACITY);
     expect(rep.ledger.reads.size).toBeLessThanOrEqual(READ_LEDGER_CAPACITY);
-    expect(rep.counters.mtimeRecheckStatCalls).toBe(1);
-    expect(rep.counters.mtimeRecheckProbedPaths).toBe(total);
-    // 盘态都没变（mtime = 自写时刻）⇒ 绝不报 true；溢出降档那档仍按既有语义给 null + 淘汰理由。
-    expect(vs.every((v) => v.stale === false || v.stale === null)).toBe(true);
-    expect(vs.every((v) => v.recheck?.outcome === 'unchanged')).toBe(true);
+    expect(rep.counters.mtimeRecheckStatCalls).toBe(2);
+    expect(rep.counters.mtimeRecheckPending).toBe(0);
     tracker.dispose();
   });
 
