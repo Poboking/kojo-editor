@@ -141,8 +141,10 @@ node tools/kojo-mcp.mjs
 
 ### 5.2 resources（`kojo://project/*`）
 
-`snapshot` / `file-tree` / `diagnostics` / `validation-failures` / `commands` / `plugins` / `events` / `active-document`。
+`snapshot` / `file-tree` / `diagnostics` / `validation-failures` / `commands` / `plugins` / `events` / `active-document` / `fs-freshness`。
 所有资源文本都有**截断上限**并带显式 `truncated` 标记；插件状态 `inactive` 与 `missing[]` 必须可见，不静默。
+`fs-freshness`（2026-11-06 余项③＝`b90d79bb`）自述监视覆盖与两张有界账本读数；同一批把判定结果附在**只读应答**
+的 `fsFreshness` 字段上（不可用 / 未覆盖 / 无基线 / 账溢出 ⇒ `stale:null` + `staleReason`，绝不乐观 `false`）。
 
 ### 5.3 prompts（骨架，零游戏名词）
 
@@ -322,7 +324,7 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 > 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-06 第四/五波落地后按当前树复核）。
 
 - 能力面：命令 **61** / Rust 命令 **89** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
-  tools **40**（read **35** / edit 3 / privileged 2）；resources **8**；prompts **3**；
+  tools **40**（read **35** / edit 3 / privileged 2）；resources **9**；prompts **3**；
 - 缺口：`totalGaps=180` / `wiredGaps=30` / **`deferredGaps=150`**，逐条带原因，
   按七类归因（合计 150，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
 
@@ -397,6 +399,10 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
   三者都与「无状态单端点」形态冲突。
 - **前置条件**：内核资源真源给出失效信号（编辑器内已有事件面可挂）；会话层记录订阅关系并随
   撤销（`revokedAt`）一并清理。
+- **2026-11-06 余项③ 收口后的口径**：前半条已到位（监视回执 + `file.changed` / `file.watchState`
+  经 `fs-freshness` 变成可比对的单调序号基线），但**推送形态仍不开**——传输层是无状态单请求 HTTP，
+  `notifications/resources/updated` 出不去，故收口形态＝**只读应答逐条附 `fsFreshness` 标注**，
+  `subscribe` / `listChanged` 继续如实 `false`（抬成真值即谎报能力）。
 - **未来接入点**：协议面已钉死闸门——`capabilities.resources.subscribe=false`（harness H01/S01
   已把该断言钉进对拍表）；开启时 Rust 侧开 GET /mcp 服务器流 + WebView 桥订阅事件 + shim 增通知转发。
 
