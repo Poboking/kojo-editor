@@ -226,9 +226,9 @@ function createWatchHub(log) {
 
 /* ------------------------------- 全文检索 ------------------------------- */
 
-const SEARCH_MAX_FILE_BYTES = 8 * 1024 * 1024;
-/** 无换行的巨型行不许把「当前行缓冲」撑爆——内存上限 O(最长行) 的护栏 */
-const SEARCH_MAX_LINE_CHARS = 4 * 1024 * 1024;
+// 单文件限额与 Rust `lib.rs` 的 SEARCH_MAX_FILE_BYTES 逐字同值（MCP-PERF-S21 对拍：旧 8MiB
+// 是镜像自选口径，(8,10]MiB 的文件两侧账会分叉——镜像 tooLarge、Rust 照扫，读数没法对）。
+const SEARCH_MAX_FILE_BYTES = 10 * 1024 * 1024;
 /** 每批并行扫描的文件数（批内并发、批间按 readdir 序收口 ⇒ 上限/取消语义可预测） */
 const SEARCH_CONCURRENCY = Math.max(1, Number(process.env.KOJO_DEBUG_SEARCH_CONCURRENCY ?? 8) || 8);
 /** 目录遍历并发（readdir / stat 共用；Windows 上过高反而被 Defender 拖慢） */
@@ -271,13 +271,19 @@ function createLimiter(limit) {
  * 并行 + **顺序确定**的目录遍历：每个目录项按 readdir 序生成「文件串 / 子目录 Promise」，
  * 子目录递归立即入队（限流器压并发），展开时按原序 flatten——结果与旧串行 walkFiles
  * 逐位一致（上限截断的落点因此可复现）。
+ *
+ * MCP-PERF-S21 分诊账：readdir 失败（权限 / 句柄）**必须计数上报**（返回 walkErrors），
+ * 由调用方 fold 进 `skipped.unreadable`——Rust 侧 `read_dir` Err 走 `count_walk_error`
+ * 记账 + 出声，镜像静默吞成空名单就是漏账（ACL 目录拒读的对拍判据当场红）。
  */
 async function walkFiles(root, depthBudget, limit) {
+  let walkErrors = 0;
   const walk = async (dir, depth) => {
     let dirents;
     try {
       dirents = await limit(() => fs.readdir(dir, { withFileTypes: true }));
     } catch {
+      walkErrors += 1;
       return [];
     }
     const parts = [];
@@ -301,7 +307,8 @@ async function walkFiles(root, depthBudget, limit) {
     }
     return out;
   };
-  return walk(root, depthBudget);
+  const files = await walk(root, depthBudget);
+  return { files, walkErrors };
 }
 
 /** 首 8KB 探 NUL（二进制判据；原生 Buffer 搜索，不再逐字节 JS 循环） */
@@ -448,23 +455,18 @@ function scanTextFast(text, fast, maxPerFile) {
   return { entries, overflow };
 }
 
-/** 4MiB 以上才扫一遍行界（旧流式实现的「无换行巨行」护栏，整读形态下同样保留） */
-function hasOverlongLine(text) {
-  if (text.length <= SEARCH_MAX_LINE_CHARS) return false;
-  let start = 0;
-  for (;;) {
-    const nl = text.indexOf('\n', start);
-    if (nl === -1) return text.length - start > SEARCH_MAX_LINE_CHARS;
-    if (nl - start > SEARCH_MAX_LINE_CHARS) return true;
-    start = nl + 1;
-  }
-}
-
 /**
  * 单文件扫描入口（2026-10-26 性能批）：open + fstat + readFile 一路句柄（少一次路径查找），
- * 超 8MiB 直接 tooLarge 不读；≤8MiB 整读整解。并发由批调度封顶（默认 8 ⇒ 峰值 ≤64MiB），
+ * 超 10MiB 直接 tooLarge 不读；≤10MiB 整读整解。并发由批调度封顶（默认 8 ⇒ 峰值 ≤80MiB），
  * 不再需要 2026-10-25 的流式扫描（那轮是为无上限并发/整树行数组的 OOM 兜底）。
  * status 口径不变：ok / binary / too-large / unreadable。
+ *
+ * MCP-PERF-S21 对拍注记：
+ * - 无换行巨行**不再**判 too-large（旧「行缓冲护栏」是流式时代的产物，整读形态下只剩把
+ *   状态标错这一件事——Rust `scan_file` 无此判据，巨行照扫，账上无声。scan 里的那条
+ *   O(最长行) 内存担忧随流式缓冲一起不存在了）；
+ * - readFile 后仍复查一次字节数（stat 后文件长大的 TOCTOU 角）：Rust 侧 fs::read 全收照扫、
+ *   不复查——镜像保留这道纯内存护栏，属已记录的表现层分叉，确定性输入两侧账恒同。
  */
 async function scanFile(file, matcher, maxPerFile, fast) {
   let fh;
@@ -489,9 +491,6 @@ async function scanFile(file, matcher, maxPerFile, fast) {
     const text = decoderFor(buf).decode(buf);
     if (utf16Bom && text.includes('\u0000')) return { status: 'binary', entries: [], overflow: false };
     const r = fast ? scanTextFast(text, fast, maxPerFile) : scanWholeText(text, matcher, maxPerFile);
-    if (hasOverlongLine(text)) {
-      return { status: 'too-large', entries: r.entries, overflow: r.overflow };
-    }
     return { status: 'ok', entries: r.entries, overflow: r.overflow };
   } catch {
     return { status: 'unreadable', entries: [], overflow: false };
@@ -714,9 +713,12 @@ async function searchText(state, request, admitRead) {
   let wasCancelled = false;
 
   try {
-    // 1) 目录遍历并行（结果保持 readdir 序；多根之间也并行，收口时按 roots 序拼接）
+    // 1) 目录遍历并行（结果保持 readdir 序；多根之间也并行，收口时按 roots 序拼接）。
+    //    遍历失败（权限/句柄）计数进 unreadable——Rust `count_walk_error` 同账（S21 分诊账）。
     const walkLimit = createLimiter(WALK_CONCURRENCY);
-    const lists = await Promise.all(roots.map((root) => walkFiles(root, 12, walkLimit)));
+    const walked = await Promise.all(roots.map((root) => walkFiles(root, 12, walkLimit)));
+    const lists = walked.map((w) => w.files);
+    skipped.unreadable += walked.reduce((n, w) => n + w.walkErrors, 0);
     const candidates = [];
     for (let li = 0; li < lists.length; li += 1) {
       // 排除判据的基准 = **相对该检索根**的路径（与 Rust `collect_files` 同一条尺子）；
