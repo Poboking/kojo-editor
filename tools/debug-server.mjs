@@ -479,8 +479,15 @@ async function scanFile(file, matcher, maxPerFile, fast) {
     if (st.size > SEARCH_MAX_FILE_BYTES) return { status: 'too-large', entries: [], overflow: false };
     const buf = await fh.readFile();
     if (buf.length > SEARCH_MAX_FILE_BYTES) return { status: 'too-large', entries: [], overflow: false };
-    if (hasNul(buf)) return { status: 'binary', entries: [], overflow: false };
+    // 判序对齐 Rust `scan_file`（is_utf16_bom_hit → looks_binary）：utf-16le/be BOM 命中先走
+    // 解码路径——utf-16 的 NUL 是编码产物、不是二进制信号（原序 hasNul 先于 decoderFor
+    // 曾把 utf-16 文件恒判 binary，decoderFor 的 utf-16 分支沦为死代码，S1 对拍矩阵记账）。
+    // BOM 不在位才按首 8KB 字节探 NUL；BOM 命中那支解码后仍查真 NUL 字符兜底。
+    const utf16Bom = buf.length >= 2
+      && ((buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff));
+    if (!utf16Bom && hasNul(buf)) return { status: 'binary', entries: [], overflow: false };
     const text = decoderFor(buf).decode(buf);
+    if (utf16Bom && text.includes('\u0000')) return { status: 'binary', entries: [], overflow: false };
     const r = fast ? scanTextFast(text, fast, maxPerFile) : scanWholeText(text, matcher, maxPerFile);
     if (hasOverlongLine(text)) {
       return { status: 'too-large', entries: r.entries, overflow: r.overflow };

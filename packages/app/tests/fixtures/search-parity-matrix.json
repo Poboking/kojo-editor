@@ -6,7 +6,7 @@
     "预览文本 / start / end 不进账：镜像预览窗是 200 字符 ±80、Rust 是 240 单元居中——已知的表现层分叉（呈现口径，非命中口径）。",
     "遗留族编码（shift_jis/gbk/big5）不进账：镜像 decoderFor 只认 BOM（utf-16le/be）与 utf-8，遗留族解码是镜像的已知缺口。",
     "bin.dat 的 bytes 字段是字节数组（不引入 base64 依赖面，Rust 侧零新 crate）。",
-    "utf-16 (BOM) 也不进账：镜像 scanFile 的 hasNul 先于 decoderFor ⇒ utf-16 文件在镜像侧恒判二进制——对拍抓出的既有缺口，属 scanFile 段（非 parity 段），本批不动，待该段 owner 收口。"
+    "utf-16 进账（S1 记账的 scanFile 判序缺口已由 MCP-PERF-S5 收口）：镜像 scanFile 判序对齐 Rust 侧 is_utf16_bom_hit/looks_binary——utf-16le/be BOM 命中先解码、解码内容含 NUL 才判二进制（u16bom.erb，两侧同判可扫描）；BOM 不在位仍按首 8KB 字节探 NUL（u16nul-nobom.dat，两侧同判 binary）。"
   ],
   "files": [
     {
@@ -26,6 +26,49 @@
         0,
         1,
         2
+      ]
+    },
+    {
+      "name": "u16bom.erb",
+      "encoding": "utf-16le",
+      "text": "MARKER_U16BOM first\nsecond MARKER_U16BOM\n"
+    },
+    {
+      "name": "u16nul-nobom.dat",
+      "encoding": "bytes",
+      "bytes": [
+        77,
+        0,
+        65,
+        0,
+        82,
+        0,
+        75,
+        0,
+        69,
+        0,
+        82,
+        0,
+        95,
+        0,
+        78,
+        0,
+        85,
+        0,
+        76,
+        0,
+        32,
+        0,
+        102,
+        0,
+        105,
+        0,
+        108,
+        0,
+        101,
+        0,
+        10,
+        0
       ]
     }
   ],
@@ -65,8 +108,8 @@
           }
         ],
         "totalMatches": 3,
-        "binary": 1,
-        "filesScanned": 3
+        "binary": 2,
+        "filesScanned": 5
       }
     },
     {
@@ -104,8 +147,8 @@
           }
         ],
         "totalMatches": 3,
-        "binary": 1,
-        "filesScanned": 3
+        "binary": 2,
+        "filesScanned": 5
       }
     },
     {
@@ -130,8 +173,8 @@
           }
         ],
         "totalMatches": 1,
-        "binary": 1,
-        "filesScanned": 3
+        "binary": 2,
+        "filesScanned": 5
       }
     },
     {
@@ -156,8 +199,8 @@
           }
         ],
         "totalMatches": 1,
-        "binary": 1,
-        "filesScanned": 3
+        "binary": 2,
+        "filesScanned": 5
       }
     },
     {
@@ -194,8 +237,8 @@
           }
         ],
         "totalMatches": 4,
-        "binary": 1,
-        "filesScanned": 3
+        "binary": 2,
+        "filesScanned": 5
       }
     },
     {
@@ -220,8 +263,8 @@
           }
         ],
         "totalMatches": 1,
-        "binary": 1,
-        "filesScanned": 3
+        "binary": 2,
+        "filesScanned": 5
       }
     },
     {
@@ -246,8 +289,8 @@
           }
         ],
         "totalMatches": 1,
-        "binary": 1,
-        "filesScanned": 3
+        "binary": 2,
+        "filesScanned": 5
       }
     },
     {
@@ -272,8 +315,54 @@
           }
         ],
         "totalMatches": 1,
-        "binary": 1,
-        "filesScanned": 3
+        "binary": 2,
+        "filesScanned": 5
+      }
+    },
+    {
+      "name": "utf16-bom-literal",
+      "query": "MARKER_U16BOM",
+      "options": {
+        "isRegex": false,
+        "caseSensitive": false,
+        "wholeWord": false,
+        "extensions": []
+      },
+      "expect": {
+        "files": [
+          {
+            "path": "u16bom.erb",
+            "hits": [
+              [
+                1,
+                1
+              ],
+              [
+                2,
+                8
+              ]
+            ]
+          }
+        ],
+        "totalMatches": 2,
+        "binary": 2,
+        "filesScanned": 5
+      }
+    },
+    {
+      "name": "utf16-nobom-nul-binary",
+      "query": "MARKER_NUL",
+      "options": {
+        "isRegex": false,
+        "caseSensitive": false,
+        "wholeWord": false,
+        "extensions": []
+      },
+      "expect": {
+        "files": [],
+        "totalMatches": 0,
+        "binary": 2,
+        "filesScanned": 5
       }
     }
   ]
