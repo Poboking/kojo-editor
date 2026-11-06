@@ -232,6 +232,39 @@ describe('B20：注册表 memo × 真源登记竞态（失效重取，不是重�
     expect(again.error?.message).toBe(`能力「fs.readFile」${NOT_WIRED_TEXT}`);
   });
 
+  // B23（LaneAJ，2026-11-06）补 B20 回执留下的口子：判据若只看「登记对象 identity」，
+  // 有人**原地改写**已登记的 McpWiringSources 字段而不再调 registerMcpWiringSources，
+  // memo 看不出换代 ⇒ 继续吃旧腿。本用例全程生产形态、**不**再登记第二次（那正是 B20
+  // 已能处理的情形），只用 Object.assign 在同一对象上换掉 kernelIo 字段。
+  // 位置说明：必须声明在 ⑥ **之前**——⑥ 注入的 deps 按「只给到的项才覆盖」留在模块级
+  // 配置里（B20 既有语义，不许动），⑥ 之后的再登记仍会吃那份 injected deps、不走 wiring。
+  it('⑦ 原地改写已登记 sources 的字段（不再调 registerMcpWiringSources）⇒ 下一条读必须拿到新腿', async () => {
+    const sources = realSources('in-place-old');
+    registerMcpWiringSources(sources);
+    const hz = createHarness();
+    registerBridge(hz);
+    await hz.ready;
+
+    const old = await hz.call('b23-7a', PROJECT_INFO.method, PROJECT_INFO.params);
+    expect(old.ok).toBe(true);
+    expect(old.result).toMatchObject({ from: 'in-place-old' });
+
+    // 原地写字段：登记对象 identity 一字未动——B20 的身份比对在这一拍看不出换代。
+    Object.assign(sources, { kernelIo: { projectInfo: () => ({ from: 'in-place-new', root: '/proj' }) } });
+
+    const after = await hz.call('b23-7b', PROJECT_INFO.method, PROJECT_INFO.params);
+    expect(after.ok).toBe(true);
+    expect(after.result).toMatchObject({ from: 'in-place-new' });
+
+    // 字段级换代不是「整包重登记」：没被改写的 semantic 腿仍持有同一对象上的旧闭包，
+    // 重装配后照旧读出旧印记（换代判据＝逐字段浅快照，不是对象整体）。
+    const semantic = await hz.call('b23-7c', SEMANTIC_DIAGNOSTICS.method, SEMANTIC_DIAGNOSTICS.params);
+    expect(semantic.ok).toBe(true);
+    expect(semantic.result).toMatchObject({ from: 'in-place-old' });
+
+    expect(hz.frames).toHaveLength(3); // 一请求一帧：重取不产生第二帧，也没有轮询
+  });
+
   it('⑥ 显式注入 deps 的测试缝行为不变：注入那份 deps 就是真源，不被 wiring 的换代劫走', async () => {
     const off = registerMcpHostBridge({
       transport: createHarness().transport,
