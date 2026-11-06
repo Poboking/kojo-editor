@@ -152,7 +152,7 @@ node tools/kojo-mcp.mjs
 
 ### 5.4 写腿状态段（真值自 `node tools/mcp-inventory.mjs --json` 的 `writeLegs`）
 
-2026-11-06 第四波收口后，**wired 4 / NOT_WIRED 1**：
+2026-11-06 第四波收口时 **wired 4 / NOT_WIRED 1**；余项① 收口（`b8ff59d4`）后 **wired 5 / NOT_WIRED 0**：
 
 | 工具 | tier | 状态 | 真源 |
 | --- | --- | --- | --- |
@@ -160,10 +160,11 @@ node tools/kojo-mcp.mjs
 | `fileTree.update` | `edit` | wired | `kernel.io.writeText`（`write_file_bytes`） |
 | `fileTree.remove` | `privileged` | wired | `kernel.io.removeFile` / `removeDir` |
 | `fileTree.rename` | `privileged` | wired | `kernel.io.rename`（`from`/`to` 双端过闸） |
-| `problems.quickFix` | `edit` | **NOT_WIRED** | 缺稳定 `actionId` + 宿主受控 codeAction-apply 通道（Monaco quickFix 动作实例只活在弹出层） |
+| `problems.quickFix` | `edit` | wired | 宿主 `provideCodeActionsFor` 既有签发 id（`pane-N:贡献id#seq`）+ 有界台账（≤300 条 / 10min TTL）；apply＝Monaco 模型内单次 `executeEdits`（一个撤销步、可见脏、**不落盘**，零 io/invoke/bus）；文档版本前进或换页 ⇒ 旧 id 显式 `E_QUICKFIX_DOC_CHANGED` |
 
-四枚已接线写腿一律叠**双闸**：写闸一第四张表 `approvedRoots` 复核，写闸二内核
+五枚已接线写腿一律叠**双闸**：写闸一第四张表 `approvedRoots` 复核，写闸二内核
 `writablePaths` 写原语；成功后广播 `file.changed`（remove 发 `unlink`、rename 发源 `unlink` + 目标 `add`）。
+`problems.quickFix` 是唯一**不落盘**的那一枚：它只改模型（可撤销、留脏），落盘仍只经上面两闸。
 `privileged` 两枚默认不进 `tools/list`、按工具名精确批准；`exportFile` 对话框仍是唯一域外写法定通道。
 `NOT_WIRED` 一律显式抛错可见，**绝不挂空串假实现**。
 
@@ -337,7 +338,7 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 
 - **本波读数变化**：`read 28→35`（第四波 6 枚只读具名工具 + 第五波 `editor.cursor`），
   `wiredGaps 24→30` / `deferredGaps 156→150`；`orphanedWires=0` / `missingSources=0`。
-  写腿状态段见 §5.4（wired 4 / NOT_WIRED 1，仅 `problems.quickFix`）。
+  写腿状态段见 §5.4（wired 5 / NOT_WIRED 0，`problems.quickFix` 已于余项① 收口＝`b8ff59d4`）。
 - **刻意不登记**（铁律「真源不存在 = 不登记」，留在缺口里）：第四波 11 条 `cheap-read`
   逐条判性只登记 6 条，余 5 条 = `read_file_bytes_raw` / `read_files_raw`（二进制帧、无结构化
   数据面，且 `read_files_raw` 会暴露任意目标路径参数）、`updater_relaunch`（重启动作）、
