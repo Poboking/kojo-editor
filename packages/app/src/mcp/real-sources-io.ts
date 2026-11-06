@@ -470,51 +470,103 @@ function trackerOf(deps: McpIoDeps): FsFreshnessTracker | null {
 }
 
 /**
- * 单文件读取的失效标注：判定器在场就给完整判定（并把本次读取进账作为下次基线），
- * 缺席也**照样给字段**，值为 `stale:null` + 理由——客户端永远能区分「判定器没装」与「没改过」。
+ * 单文件读取的失效标注（B13：读时复核版）：判定器在场就走
+ * `verdictOfRechecked`——窗内自写回声命中时多核一趟盘态，**本次读数即定档**
+ * （复核证明没变 ⇒ `stale:false` + `recheck.basis:'mtime-recheck'`；核出真实外部写 ⇒
+ * `stale:true`；复核做不了 ⇒ `stale:null` + 理由，绝不乐观 false）。
+ * 窗外 / 没命中 ⇒ 与同步档同判据且**零额外 syscall**（复核只在命中时发，见 buildSettled
+ * 的 `union.size > 0` 闸）。缺席也**照样给字段**，值为 `stale:null` + 理由——
+ * 客户端永远能区分「判定器没装」与「没改过」。
  */
-function fsFreshnessField(
+async function fsFreshnessField(
   deps: McpIoDeps,
   abs: string,
   rel: string,
   scope: McpSessionScope | null | undefined,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   if (abs === '') return fsFreshnessNoBasePayload(rel, 'file');
   const tracker = trackerOf(deps);
   if (!tracker) return fsFreshnessAbsentPayload(rel, 'file');
   try {
-    return fsFreshnessPayload(tracker.verdictOf({ abs, rel, scope }));
+    return fsFreshnessPayload(await tracker.verdictOfRechecked({ abs, rel, scope }));
   } catch (err) {
-    return {
-      available: false,
-      stale: null,
-      staleReason: `失效判定器调用失败（${err instanceof Error ? err.message : String(err)}）：无法判定，不冒充 false`,
-      target: rel,
-      granularity: 'file',
-    };
+    return fsFreshnessRecheckFailedPayload(rel, 'file', err);
   }
 }
 
-/** 目录 / 检索级标注：覆盖期内该目录下任何路径被动过即 `stale:true`。 */
-function fsFreshnessListing(
+/**
+ * 批量单文件标注（B13 判据 2）：`fs.statFiles`（≤200）与 `fs.readMany`（≤64）的逐条
+ * 标注**只付一趟** `verdictsOfRechecked`——窗内命中 N 条也并进同一趟 `statFiles`
+ * （fs-freshness.ts 的 buildSettled 全局候选集去重）。注入面只有 `stat` 没有 `statFiles`
+ * 时该趟退化为逐条单路径 stat（口径由 fs-freshness 侧如实投影在 recheck.trips），本层
+ * 不假装一趟。无基准（abs 空串）的条目不送复核、逐条如实 noBase；复核调用本身抛错 ⇒
+ * 全体 `stale:null` + 理由（不乐观 false）。
+ */
+async function fsFreshnessFields(
+  deps: McpIoDeps,
+  targets: readonly { readonly abs: string; readonly rel: string }[],
+  scope: McpSessionScope | null | undefined,
+): Promise<Record<string, unknown>[]> {
+  if (targets.length === 0) return [];
+  const tracker = trackerOf(deps);
+  if (!tracker) return targets.map((t) => fsFreshnessAbsentPayload(t.rel, 'file'));
+  const indexes: number[] = [];
+  const inputs: { abs: string; rel: string; scope: McpSessionScope | null | undefined }[] = [];
+  targets.forEach((t, i) => {
+    if (t.abs === '') return; // 无基准条目不进复核账（下面逐条 noBase 如实给）
+    indexes.push(i);
+    inputs.push({ abs: t.abs, rel: t.rel, scope });
+  });
+  const out: (Record<string, unknown> | undefined)[] = new Array<Record<string, unknown>>(targets.length);
+  targets.forEach((t, i) => {
+    if (t.abs === '') out[i] = fsFreshnessNoBasePayload(t.rel, 'file');
+  });
+  try {
+    const verdicts = await tracker.verdictsOfRechecked(inputs);
+    indexes.forEach((itemIndex, k) => {
+      const verdict = verdicts[k];
+      out[itemIndex] =
+        verdict !== undefined
+          ? fsFreshnessPayload(verdict)
+          : fsFreshnessRecheckFailedPayload(targets[itemIndex]!.rel, 'file', '批量复核返回条数与入参不等');
+    });
+  } catch (err) {
+    indexes.forEach((itemIndex) => {
+      out[itemIndex] = fsFreshnessRecheckFailedPayload(targets[itemIndex]!.rel, 'file', err);
+    });
+  }
+  return out.map((v, i) => v ?? fsFreshnessRecheckFailedPayload(targets[i]!.rel, 'file', '批量复核未给出该条标注'));
+}
+
+/** 复核调用抛错 / 形状不对时的兜底档：null + 理由，绝不冒充 false（与单条 catch 同口径）。 */
+function fsFreshnessRecheckFailedPayload(
+  target: string,
+  granularity: 'file' | 'listing',
+  err: unknown,
+): Record<string, unknown> {
+  return {
+    available: false,
+    stale: null,
+    staleReason: `失效判定器调用失败（${err instanceof Error ? err.message : String(err)}）：无法判定，不冒充 false`,
+    target,
+    granularity,
+  };
+}
+
+/** 目录 / 检索级标注：覆盖期内该目录下任何路径被动过即 `stale:true`（B13：读时复核版，窗内命中本次定档）。 */
+async function fsFreshnessListing(
   deps: McpIoDeps,
   dirAbs: string,
   dirRel: string,
   scope: McpSessionScope | null | undefined,
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   if (dirAbs === '') return fsFreshnessNoBasePayload(dirRel, 'listing');
   const tracker = trackerOf(deps);
   if (!tracker) return fsFreshnessAbsentPayload(dirRel, 'listing');
   try {
-    return fsFreshnessPayload(tracker.listingOf({ dirAbs, dirRel, scope }));
+    return fsFreshnessPayload(await tracker.listingOfRechecked({ dirAbs, dirRel, scope }));
   } catch (err) {
-    return {
-      available: false,
-      stale: null,
-      staleReason: `失效判定器调用失败（${err instanceof Error ? err.message : String(err)}）：无法判定，不冒充 false`,
-      target: dirRel,
-      granularity: 'listing',
-    };
+    return fsFreshnessRecheckFailedPayload(dirRel, 'listing', err);
   }
 }
 
@@ -738,7 +790,7 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
         ? { sourceCount: raw.length, droppedUnparsable: raw.length - allEntries.length }
         : {}),
       // 目录级失效标注（工具 projectFileTree 与 resource kojo://project/file-tree 同源同标注）。
-      fsFreshness: fsFreshnessListing(deps, rootDir, '.', scope),
+      fsFreshness: await fsFreshnessListing(deps, rootDir, '.', scope),
     };
   };
 
@@ -781,7 +833,7 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
       elapsedMs: result.elapsedMs,
       skipped: result.skipped,
       // 检索结果是从盘上现算的：这里说「自你上一次从本根检索以来，根下动过几处」。
-      fsFreshness: fsFreshnessListing(deps, rootDir, '.', scope),
+      fsFreshness: await fsFreshnessListing(deps, rootDir, '.', scope),
     };
   };
 
@@ -877,7 +929,8 @@ export function createRunSupplemental(deps: McpIoDeps): (
         : {}),
       // Wave4 ③：本次给的是 `atMs` 这一刻的盘态；`stale` 说的是「你上一次从本宿主读到的那份」
       // 之后盘上是否又被动过（真源 = 监视回执 + file.changed 短账，判不了即 null + 理由）。
-      fsFreshness: fsFreshnessField(deps, abs, rel, scope),
+      // B13：读时复核版——自写回声窗内命中时本次读数即定档（复核做不了仍如实 null）。
+      fsFreshness: await fsFreshnessField(deps, abs, rel, scope),
     };
   };
 
@@ -899,7 +952,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       return {
         path: rel,
         exists: false,
-        fsFreshness: fsFreshnessField(deps, abs, rel, scope),
+        fsFreshness: await fsFreshnessField(deps, abs, rel, scope),
       };
     }
     const s = stat as Record<string, unknown>;
@@ -909,7 +962,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       size: typeof s['size'] === 'number' ? s['size'] : null,
       mtimeMs: typeof s['mtimeMs'] === 'number' ? s['mtimeMs'] : null,
       isDirectory: s['isDirectory'] === true,
-      fsFreshness: fsFreshnessField(deps, abs, rel, scope),
+      fsFreshness: await fsFreshnessField(deps, abs, rel, scope),
     };
   };
 
@@ -957,7 +1010,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       ...(p.changedDuringPaging === true ? { changedDuringPaging: true } : {}),
       ...(sourceCount !== allItems.length ? { sourceCount, droppedUnparsable: sourceCount - allItems.length } : {}),
       // 目录级：覆盖期内该目录下任何路径被动过即 stale:true（逐条计数在 entries 账里）。
-      fsFreshness: fsFreshnessListing(deps, abs, relativeOrDot(abs, rootDir), scope),
+      fsFreshness: await fsFreshnessListing(deps, abs, relativeOrDot(abs, rootDir), scope),
     };
   };
 
@@ -1020,7 +1073,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       skipped: result.skipped,
       // 检索结果是从盘上现算的：`fsFreshness` 说「自你上一次检索以来，根下动过几处」。
       // 多根（scope:'sources'）只对第一根建基线，其余根在 target 里点名——不假装全覆盖。
-      fsFreshness: fsFreshnessListing(
+      fsFreshness: await fsFreshnessListing(
         deps,
         roots[0] ?? rootDir,
         roots.length > 1
@@ -1323,6 +1376,9 @@ export function createRunSupplemental(deps: McpIoDeps): (
     const kept = absPaths.slice(0, maxResults);
     const raw = await deps.invoke('stat_files', { paths: kept });
     const items: Record<string, unknown>[] = [];
+    // B13 判据 2：逐项失效标注走**一趟** `verdictsOfRechecked`（窗内命中 N 条也只付
+    // 一趟 statFiles；没命中 ⇒ 零额外 syscall）。逐条 await 单条复核 = N 趟，本面禁止。
+    const freshnessTargets: { abs: string; rel: string }[] = [];
     if (Array.isArray(raw)) {
       raw.forEach((entry, index) => {
         if (!entry || typeof entry !== 'object') return;
@@ -1330,15 +1386,19 @@ export function createRunSupplemental(deps: McpIoDeps): (
         // 逐项失效标注用**请求侧解析出的绝对路径**为准（Rust 未回显 path 时也有基准，不猜）。
         const abs = asString(e['path']) !== '' ? asString(e['path']) : (kept[index] ?? '');
         const rel = toRelativePath(abs, rootDir);
+        freshnessTargets.push({ abs, rel });
         items.push({
           path: rel,
           exists: e['exists'] === true,
           size: typeof e['size'] === 'number' ? e['size'] : null,
           mtimeMs: typeof e['mtimeMs'] === 'number' ? e['mtimeMs'] : null,
-          fsFreshness: fsFreshnessField(deps, abs, rel, scope),
         });
       });
     }
+    const freshnesses = await fsFreshnessFields(deps, freshnessTargets, scope);
+    items.forEach((item, i) => {
+      item['fsFreshness'] = freshnesses[i] ?? fsFreshnessAbsentPayload(String(item['path']), 'file');
+    });
     return { items, total: relPaths.length, truncated: relPaths.length > items.length };
   };
 
@@ -1438,13 +1498,15 @@ export function createRunSupplemental(deps: McpIoDeps): (
   // B2 批（LaneT，2026-11-06）：结构化批读面 `fs.readMany`（只读，真源 = 内核 io.readTexts 的
   // 批量原语；逐条路径闸与 fs.readFile / fs.statFiles 同一个 resolveWithinRoot，超限整批
   // INVALID_ARGS，失败位显式带原因）。实现见 batch-read-leg.ts；此处只做注入与分派。
+  // B13 判据 2：逐条失效标注改**一趟** `verdictsOfRechecked`（fsFreshnessBatch 注入形状，
+  // 批内窗内命中 ≤64 条也只付一趟 statFiles）。
   const readMany = createBatchReadLeg({
     getKernel: deps.getKernel,
     invoke: deps.invoke,
     requireProject,
     resolveWithinRoot,
     toRelativePath,
-    fsFreshness: (abs, rel, scope) => fsFreshnessField(deps, abs, rel, scope),
+    fsFreshnessBatch: (targets, scope2) => fsFreshnessFields(deps, targets, scope2),
     pageChars: { defaultChars: MCP_PAGE_TEXT_DEFAULT_CHARS, maxChars: MCP_PAGE_TEXT_MAX_CHARS },
   });
 
@@ -1617,7 +1679,7 @@ export function createIoResourceData(
           document: null,
           counts: docCounts,
           // 快照是聚合读数：附项目根级失效事实，让「这份快照是否还代表盘上」可见。
-          fsFreshness: fsFreshnessListing(deps, asString(project['rootDir']), '.', scope),
+          fsFreshness: await fsFreshnessListing(deps, asString(project['rootDir']), '.', scope),
         };
       }
       case KOJO_RESOURCE_URIS.fileTree:
@@ -1707,7 +1769,10 @@ export function createFsFreshnessResource(deps: McpIoDeps): McpResource {
     name: '外部写盘失效账本',
     description:
       '文件监视覆盖（含没监视上的根与原因）+ 最近被改动的路径与时刻 + 只读应答里 stale 的判据自述；' +
-      '无协议级推送，失效事实随读取给（on-request）',
+      '无协议级推送，失效事实随读取给（on-request）。B13 起只读腿走读时 mtime 复核：' +
+      '应答里 recheck.basis:"mtime-recheck" 的 stale:false 是"复核核过盘态、证明没变"；' +
+      'recheck:null 的 false 才是"监视事件流没报到改动"（窗外没多付 syscall）；' +
+      '复核做不了 ⇒ null + 理由，绝不乐观判没变',
     mimeType: 'application/json',
     read: async (scope: McpSessionScope) => {
       const tracker = trackerOf(deps);

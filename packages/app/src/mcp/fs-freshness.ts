@@ -45,11 +45,14 @@
  * - 有界：复核侧自己一张账（容量沿用 `CHANGE_LEDGER_CAPACITY`，溢出 `dropped`/`truncated`
  *   可见），两张旧账的容量与溢出降档口径**一字不变**；能力面真值不动
  *   （`subscribe:false` / `listChanged:false`，推不出去这件事与本批无关）。
- * - 两条入口：`verdictOf` / `listingOf`（同步，今日只读腿在用）在窗内**不再乐观 false**，
+ * - 两条入口：`verdictOf` / `listingOf`（同步）在窗内**不再乐观 false**，
  *   改为「发起复核 + 本档 `stale:null`（在途）」，结论落账后下一次读即定档；
  *   `verdictOfRechecked` / `listingOfRechecked` / `verdictsOfRechecked`（异步，批量一趟）
- *   在同一次读数里就把结论给出来——只读腿改用异步入口要动 `real-sources-io.ts` 的
- *   `fsFreshnessField` / `fsFreshnessListing`（每处一个 `await`），本批不越他线文件边界。
+ *   在同一次读数里就把结论给出来。
+ * B13（2026-11-06，LaneY）：`real-sources-io.ts` 的只读腿（`fsFreshnessField` /
+ * `fsFreshnessListing`）已改用异步入口——窗内命中本次读数即定档；批量面
+ * （`fs.readMany` ≤64 / `fs.statFiles` ≤200）经 `verdictsOfRechecked` **一趟**复核。
+ * 同步入口保留（既有测试与「不等待」场景在用），语义不变。
  */
 import { isPathUnder, pathKey } from '@kojo/plugin-api';
 import type { McpSessionScope } from '@kojo/mcp-host';

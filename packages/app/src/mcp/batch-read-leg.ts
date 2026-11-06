@@ -36,6 +36,8 @@
  *
  * 新鲜度（Wave4 余项③ 口径，不许沉默跳过）：每条都附 `fsFreshness`（成功与失败位都附），
  * 与 `fs.statFiles` 的逐项标注同族；本工具名同步进 `fs-freshness.ts` 的 annotatedTools 名单。
+ * B13 判据 2：逐条标注改**一趟**批量注入（`fsFreshnessBatch`）——批内 64 条全部命中
+ * 自写回声窗也只在判定器侧付一趟 `statFiles`；绝不在本腿逐条 await 单条复核（那是 N 趟）。
  *
  * 只读自证：本腿只调 `kernel.io.readTexts`（读侧不过写闸、不建索引、不写盘）与只读
  * `stat_files`；**零 invoke 写命令、零 io 写原语、零编辑器副作用**。
@@ -78,11 +80,14 @@ export interface BatchReadDeps {
   readonly requireProject: (kernel: McpKernelLike | null) => Record<string, unknown>;
   readonly resolveWithinRoot: (rootDir: string, relPath: string) => string;
   readonly toRelativePath: (abs: string, rootDir: string) => string;
-  readonly fsFreshness: (
-    abs: string,
-    rel: string,
+  /**
+   * B13：批量失效标注器（一次调用 = 判定器侧至多一趟 `verdictsOfRechecked`）。
+   * 返回数组必须与 `targets` 一一对应；某位缺失时本腿如实给「标注缺席」载荷，绝不折成没字段。
+   */
+  readonly fsFreshnessBatch: (
+    targets: readonly { readonly abs: string; readonly rel: string }[],
     scope: McpSessionScope | null | undefined,
-  ) => Record<string, unknown>;
+  ) => Promise<readonly Record<string, unknown>[]>;
   /** 文本面单页闸（生产传 `MCP_PAGE_TEXT_DEFAULT_CHARS` / `MCP_PAGE_TEXT_MAX_CHARS`，闸值不放宽）。 */
   readonly pageChars: { readonly defaultChars: number; readonly maxChars: number };
 }
@@ -214,7 +219,8 @@ export function createBatchReadLeg(deps: BatchReadDeps): (
           : null;
       if (file === null) {
         // 失败位显式占位（原因在下面的分诊里填）：绝不折成空串、绝不跳过该条。
-        items.push({ path: rel, ok: false, error: null, fsFreshness: deps.fsFreshness(abs, rel, scope) });
+        // fsFreshness 在批尾统一挂（一趟批量复核，见下），这里先把条目占上。
+        items.push({ path: rel, ok: false, error: null });
         failedAbs.push(abs);
         failedAt.push(items.length - 1);
         continue;
@@ -238,7 +244,6 @@ export function createBatchReadLeg(deps: BatchReadDeps): (
         encoding: file.encoding,
         eol: file.eol,
         mtimeMs: file.mtimeMs,
-        fsFreshness: deps.fsFreshness(abs, rel, scope),
       });
     }
 
@@ -271,6 +276,24 @@ export function createBatchReadLeg(deps: BatchReadDeps): (
         }
       });
     }
+
+    /* ---------------- 逐条失效标注：一趟批量复核（B13 判据 2；成功位与失败位都带） ---------------- */
+    const freshnessTargets = items.map((_it, i) => {
+      const abs = absPaths[i] as string;
+      return { abs, rel: deps.toRelativePath(abs, rootDir) };
+    });
+    const freshnesses = await deps.fsFreshnessBatch(freshnessTargets, scope);
+    items.forEach((it, i) => {
+      const fresh = freshnesses[i];
+      it['fsFreshness'] =
+        fresh ?? ({
+          available: false,
+          stale: null,
+          staleReason: '批量失效标注器未给出该条载荷（返回条数与入参不等）：无法判定，不冒充 false（不静默）',
+          target: String(it['path']),
+          granularity: 'file',
+        } as Record<string, unknown>);
+    });
 
     /* ---------------- 总账 ---------------- */
     const succeeded = items.filter((it) => it['ok'] === true).length;
