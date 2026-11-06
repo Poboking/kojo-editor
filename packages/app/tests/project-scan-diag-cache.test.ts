@@ -222,7 +222,7 @@ function harness(opts: {
         id: 't1',
         decorate: (file) => {
           decorateCalls.push(file.path);
-          return file.text === 'bad' ? [{ line: 1, severity: 'error' as const, message: 'bad!' }] : [];
+          return file.text !== 'clean' ? [{ line: 1, severity: 'error' as const, message: 'bad!' }] : [];
         },
       },
     ],
@@ -347,7 +347,7 @@ describe('createProjectScanner × diagCache · 脏集增量', () => {
       [A, stamp(1, 3)],
       [B, stamp(2, 3)],
     ]);
-    const gen: DiagGen = { indexVersion: 1, declSurface: 'S1' };
+    const gen: { indexVersion: number | null; declSurface: string | null } = { indexVersion: 1, declSurface: 'S1' };
     const h = harness({ files, stamps, gen });
     await h.scanner.run();
     gen.declSurface = 'S2'; // 索引换代且声明面变了（新文件/新函数）
@@ -360,7 +360,7 @@ describe('createProjectScanner × diagCache · 脏集增量', () => {
   });
 
   it('复核轮（rescanOnly）同样吃缓存', async () => {
-    const files = { [A]: 'bad', [B]: 'bad' };
+    const files: Record<string, string> = { [A]: 'bad', [B]: 'bad' };
     const stamps = new Map<string, DiagStamp | null>([
       [A, stamp(1, 3)],
       [B, stamp(2, 3)],

@@ -61,6 +61,7 @@ import {
   type Kojo2ProjectStats,
 } from './kojo2-project-analysis';
 import { isKojo2Path } from './kojo2-open';
+import type { DiagGen, DiagScanCache, DiagStamp } from './diag-cache';
 import type { EditorProblem, ProjectScanCoverage, ProjectScanStatus } from './problem-store';
 
 /** 一路装饰贡献的最小面（与 `marker-pool.MarkerContributor` 同形；槽位贡献天然满足） */
@@ -415,6 +416,19 @@ export interface ProjectScannerDeps {
   readonly kojo2Project?: Kojo2ProjectPassOptions;
   perBatch?: number;
   maxFiles?: number;
+  /**
+   * 诊断增量缓存（additive，MCP-PERF-S7）：**三件齐才启用**——缓存本体、换代事实、
+   * 盘上指纹。任一缺席（或本体未懒装载完）⇒ 逐字旧行为：每轮全量读盘 + 全量重算。
+   *
+   * - `diagCache`：本体（有界 2,000 FIFO、换代即整体失效；见 `diag-cache.ts`）。
+   *   给成**解析函数**而不是值：懒装载是异步的，首轮可能还没就位（null = 该轮保守全量）。
+   * - `diagGen`：换代事实（索引版本 + 声明面指纹）。null = 索引未就绪 ⇒ 该轮不缓存。
+   * - `readStamps`：计划内文件的盘上 (mtime,size)（生产 = `kernel.io.statFiles` 一趟）。
+   *   抛错 ⇒ 本轮整轮保守重算，读数如实（recomputed 全额，不静默假装命中）。
+   */
+  readonly diagCache?: () => DiagScanCache | null;
+  readonly diagGen?: () => DiagGen | null;
+  readonly readStamps?: (paths: readonly string[]) => Promise<ReadonlyMap<string, DiagStamp | null>>;
 }
 
 export interface ScanRunOptions {
@@ -444,6 +458,13 @@ export interface ScanOutcome {
   readonly capped: boolean;
   readonly errors: readonly ScanError[];
   /**
+   * 增量缓存读数（additive，MCP-PERF-S7，不静默）：本轮多少文件**回缓存条目**
+   * （未变：不读盘不重算）、多少**真重算**（脏文件 / 首轮 / 缓存不可用的整轮）。
+   * 两者之和 ≤ scanned（读盘失败被跳过的不进这两个账，它已记在 skipped）。
+   */
+  readonly cached: number;
+  readonly recomputed: number;
+  /**
    * 2.0 项目级分析读数（additive）：`null` = 这一轮没跑（`.kojo2` 为零 / 开关关 / 未装配）。
    * 跑了但零份 `.kojo2` 时也是 `null`——"没这一步"与"这一步跑了但没结论"要说得出区别。
    */
@@ -463,6 +484,8 @@ interface OutcomeDraft {
   batches: number;
   capped: boolean;
   errors: ScanError[];
+  cached: number;
+  recomputed: number;
   kojo2: Kojo2ProjectStats | null;
 }
 
@@ -476,6 +499,8 @@ const idleCoverage = (roots: readonly string[]): ProjectScanCoverage => ({
   outOfRoots: 0,
   pendingRescan: 0,
   capped: false,
+  cached: 0,
+  recomputed: 0,
 });
 
 /** 这一文件的 v1 诊断 + 2.0 项目级结论（空的那一侧直接复用原数组，不白复制一次） */
@@ -555,6 +580,8 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
       batches: 0,
       capped: false,
       errors: [],
+      cached: 0,
+      recomputed: 0,
       kojo2: null,
     };
     const roots = deps.roots();
@@ -591,6 +618,8 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
           outOfRoots: final.outOfRoots,
           pendingRescan: pending(),
           capped: final.capped,
+          cached: final.cached,
+          recomputed: final.recomputed,
         });
       }
       return final;
@@ -614,6 +643,30 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
 
       const contributors = deps.contributors();
       const project = deps.project();
+      /**
+       * 诊断增量缓存（MCP-PERF-S7）：本体 + 换代事实两件在场才启用（读盘指纹由
+       * 计划路径一次性批量取，见下）。换代（声明面 / 贡献方名单变了）由缓存本体
+       * 整份清空；此后逐文件比对 (mtime,size)——未变文件**不读盘不重算**，直接回
+       * 上一轮的整文件结论（`.kojo2` 例外：项目级分析要收本轮全部原文，永不命中）。
+       * 任何一件缺席 ⇒ 本轮保守全量重算，`recomputed` 全额如实记账（不静默假装命中）。
+       */
+      const diagCache = deps.diagCache?.() ?? null;
+      const diagGenRaw = diagCache !== null ? (deps.diagGen?.() ?? null) : null;
+      const diagGen: DiagGen | null =
+        diagCache !== null && diagGenRaw !== null ? { ...diagGenRaw, contributorIds: contributors.map((c) => c.id) } : null;
+      diagCache?.beginRound(diagGen);
+      const cacheActive = diagCache !== null && diagGen !== null && deps.readStamps !== undefined;
+      /** 计划内文件的盘上指纹（stamp 缺席的文件本轮不缓存）；stat 桥炸 ⇒ 整轮不缓存 */
+      const stamps: ReadonlyMap<string, DiagStamp | null> = await (async () => {
+        if (!cacheActive) return new Map<string, DiagStamp | null>();
+        try {
+          return await deps.readStamps!(batches.flatMap((b) => b.paths));
+        } catch {
+          return new Map<string, DiagStamp | null>();
+        }
+      })();
+      if (stale()) return quit('cancelled');
+      const stampOf = (path: string): DiagStamp | null => (cacheActive ? (stamps.get(path) ?? null) : null);
       /**
        * 批量通道的每轮状态（R4b）。随 `run()` 生灭 ⇒ 换一轮就是换一份上下文
        * （索引可能已经重建过，缓存按索引对象失效，不需要这里再管）。
@@ -645,10 +698,15 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
        */
       const inFlight: InFlightChunk[] = [];
 
-      /** 逐文件上账（原样；`prefetch` 里有就走批量算好的那份） */
+      /** 逐文件上账（原样；`prefetch` 里有就走批量算好的那份；重算结论顺手入缓存） */
       const publishFiles = (files: readonly { path: string; text: string }[], prefetch: ScanPrefetch | undefined): void => {
         for (const file of files) {
           const scanned = decorateScanFile(contributors, { path: file.path, text: file.text, project }, prefetch);
+          const fileStamp = stampOf(file.path);
+          if (fileStamp !== null) {
+            diagCache?.put(file.path, fileStamp, { problems: scanned.problems, failedContributors: scanned.failedContributors });
+          }
+          outcome.recomputed++;
           if (scanned.failedContributors.length > 0) {
             outcome.degraded++;
             note(file.path, `诊断方抛错已跳过：${scanned.failedContributors.join('、')}`);
@@ -720,13 +778,30 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
         if (stale()) return quit('cancelled');
         for (let i = 0; i < batch.paths.length; i++) {
           if (stale()) return quit('cancelled');
+          const path = batch.paths[i]!;
+          /**
+           * 增量命中（MCP-PERF-S7）：盘上 (mtime,size) 未变 ⇒ 不读盘、不重算、也不让路
+           * （这一步近零工时），直接回上一轮的整文件结论——degraded 账照记（不静默）。
+           * `.kojo2` 永不命中：项目级分析要收本轮全部原文，缓存会让它缺文件。
+           */
+          const cachedHit = cacheActive && !kojo2IsKojo2(path) ? diagCache!.get(path, stampOf(path)) : null;
+          if (cachedHit !== null) {
+            if (cachedHit.failedContributors.length > 0) {
+              outcome.degraded++;
+              note(path, `诊断方抛错已跳过：${cachedHit.failedContributors.join('、')}`);
+            }
+            deps.publish(path, cachedHit.problems);
+            outcome.published++;
+            outcome.scanned++;
+            outcome.cached++;
+            continue;
+          }
           // 让路点放在**读盘之前**：于是「上一项收尾」与「本项开工」之间必然有一次宏任务
           // 边界（粒度见 `SCAN_YIELD_EVERY_FILES` 头注——旧口径是每批一次，一批 580ms）
           if (i % SCAN_YIELD_EVERY_FILES === 0) {
             await (deps.yieldBetween?.() ?? Promise.resolve());
             if (stale()) return quit('cancelled');
           }
-          const path = batch.paths[i]!;
           let text: string;
           try {
             text = await deps.readFile(path);
@@ -768,6 +843,8 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
           outOfRoots: outcome.outOfRoots,
           pendingRescan: pending(),
           capped: outcome.capped,
+          cached: outcome.cached,
+          recomputed: outcome.recomputed,
         });
       }
       // 收尾：余数也派出去（不足一块照样送），再按 FIFO 把在飞的全部上账。

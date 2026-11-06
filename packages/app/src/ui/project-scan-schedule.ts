@@ -44,6 +44,7 @@
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndex, ErbParserService, GameProject } from '@kojo/plugin-api';
 import { isQuickOpenSourcePath } from './commands';
+import type { DiagScanCache, DiagStamp } from './diag-cache';
 import { pkey } from './file-tree-ops';
 import { isKojo2Path } from './kojo2-open';
 import {
@@ -148,6 +149,29 @@ const NEVER_ACTIVE_AT = Number.NEGATIVE_INFINITY;
 
 /** `erb.parser` 的服务键（宿主既有取用点，App.tsx 的索引同步 effect 同一把钥匙） */
 const ERB_PARSER_SERVICE = 'erb.parser';
+
+/* ---------------- 诊断增量缓存的懒装载（MCP-PERF-S7） ----------------
+ *
+ * 本模块在开机静态图上（App.tsx 静态 import），而 ps10 文件闸 197 顶格——
+ * 缓存本体只许走**动态边**：这里 `import('./diag-cache')` 懒装载，装载完成前
+ * `diagCacheRef` 为 null ⇒ 采集器按"缓存缺席"保守全量重算（首轮本来也是全算）。
+ * 实例**按装配**新建（`armProject` 一次一枚）：换项目 / 关开项目 = 换代边界，
+ * 旧项目的结论一格都不许带到新项目上。装载失败（理论上有：模块在）⇒ null，
+ * 扫描退回逐字旧行为，不静默也不炸链。 */
+let diagCacheRef: DiagScanCache | null = null;
+let diagSurfaceRef: ((files: unknown) => string | null) | null = null;
+
+const armDiagCache = (): void => {
+  void import('./diag-cache')
+    .then((m) => {
+      diagSurfaceRef = m.declarationSurfaceFingerprint;
+      diagCacheRef = m.createDiagScanCache();
+    })
+    .catch(() => {
+      diagCacheRef = null;
+      diagSurfaceRef = null;
+    });
+};
 
 export interface MountProjectScanOptions {
   kernel: ScanKernel;
@@ -444,6 +468,38 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       // 批量通道（R4b）：kind 不在任务表 / transport 挂了 ⇒ 计算池自己回退本地实现，
       // 所以这里不判 `hasWorkerTask`（那条判据的消费者是 `offloadKind` 的编辑器路径）
       offload: (kind, payload) => kernel.compute.offload(kind, payload),
+      // 诊断增量缓存（MCP-PERF-S7）：本体是懒装载的（未就绪 = null ⇒ 该轮保守全量）；
+      // 换代事实 = 索引版本 + 声明面指纹（声明面取不到 = null ⇒ 该轮不缓存）；盘上
+      // (mtime,size) 走 `io.statFiles` 一趟批量（与索引 fileMtimes/fileSizes 同源），
+      // 失败逐文件 null ⇒ 那份文件本轮不缓存。采集器只在三件齐时启用（见其 deps 注）。
+      diagCache: () => diagCacheRef,
+      diagGen: () => {
+        const idx = indexOf();
+        const surface = diagSurfaceRef;
+        if (idx === null || surface === null) return null;
+        return {
+          indexVersion: typeof idx.version === 'number' ? idx.version : null,
+          declSurface: surface(idx.files),
+        };
+      },
+      readStamps: async (paths) => {
+        const out = new Map<string, DiagStamp | null>();
+        try {
+          const stats = await kernel.io.statFiles(paths);
+          for (let i = 0; i < paths.length; i++) {
+            const st = stats[i];
+            out.set(
+              paths[i]!,
+              st !== undefined && st.exists === true && typeof st.mtimeMs === 'number' && typeof st.size === 'number'
+                ? { mtimeMs: st.mtimeMs, size: st.size }
+                : null,
+            );
+          }
+        } catch {
+          for (const p of paths) out.set(p, null);
+        }
+        return out;
+      },
       maxFiles: SCAN_MAX_FILES_PER_RUN,
       // 原样透传：装配面缺席 ⇒ 采集器连 `.kojo2` 判据都不调（v1 行为逐字不变）
       ...(kojo2Pass === undefined ? {} : { kojo2Project: kojo2Pass }),
@@ -514,6 +570,11 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
     // 换项目（不是首次装配）：旧项目的索引条目整份作废，别让新项目查到上一位的文件
     if (armed !== null) resetKojo2Feed();
     scanner = buildScanner(scannerDeps());
+    // 诊断缓存换一枚实例（MCP-PERF-S7）：换项目 = 换代边界，旧项目结论一格不带过去；
+    // 懒装载未完成前 ref 为 null ⇒ 首轮保守全量（本来也是全算）。
+    diagCacheRef = null;
+    diagSurfaceRef = null;
+    armDiagCache();
     armed = project.rootDir;
     lastFullRoundAt = NEVER_ACTIVE_AT;
     indexRoundDone = false;
@@ -577,6 +638,8 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       scanner?.cancel();
       scanner = null;
       armed = null;
+      diagCacheRef = null;
+      diagSurfaceRef = null;
       clearProjectScan();
       // 装配卸载 = 这条喂腿退场：队列丢掉、旧条目撤掉（索引实例本身归编辑器侧清理）
       resetKojo2Feed();

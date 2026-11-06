@@ -192,6 +192,13 @@ export interface ProjectScanCoverage {
   readonly pendingRescan: number;
   /** 撞到批量上限 ⇒ 覆盖不完整 */
   readonly capped: boolean;
+  /**
+   * 增量缓存读数（additive，MCP-PERF-S7，不静默）：本轮多少文件**回缓存条目**
+   * （盘上 (mtime,size) 未变，不读盘不重算）、多少**真重算**。缓存不可用的轮
+   * （缓存未装载 / 索引未就绪 / stamp 取不到）⇒ cached=0 且 recomputed=scanned。
+   */
+  readonly cached: number;
+  readonly recomputed: number;
 }
 
 export const IDLE_SCAN_COVERAGE: ProjectScanCoverage = {
@@ -204,6 +211,8 @@ export const IDLE_SCAN_COVERAGE: ProjectScanCoverage = {
   outOfRoots: 0,
   pendingRescan: 0,
   capped: false,
+  cached: 0,
+  recomputed: 0,
 };
 
 let coverage: ProjectScanCoverage = IDLE_SCAN_COVERAGE;
@@ -418,6 +427,8 @@ const sameCoverage = (a: ProjectScanCoverage, b: ProjectScanCoverage): boolean =
   a.outOfRoots === b.outOfRoots &&
   a.pendingRescan === b.pendingRescan &&
   a.capped === b.capped &&
+  a.cached === b.cached &&
+  a.recomputed === b.recomputed &&
   a.roots.join('\u0001') === b.roots.join('\u0001');
 
 /** 写入覆盖读数；**逐字段比对后**只在真变了时通知（每批一次的写入不该炸渲染） */
