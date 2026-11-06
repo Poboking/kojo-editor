@@ -339,6 +339,13 @@ export interface McpIoDeps {
    * 与事件环 / 登记簿装一份给它；测试注入假件（判据要看的是「闸在调用之前」，不是假件的形状）。
    */
   readonly commandRun?: McpCommandRunAccess;
+  /**
+   * B25 脏缓冲反查 seam（`fs.copyFile` 覆盖已存在落点时用）：abs → 该落点此刻的编辑器脏态读数
+   * （`'dirty' | 'clean' | 'not-open' | 'unprovable' | boolean | null`）。缺席 ⇒ 腿走生产
+   * 动态 import `livePanes` 反查；整枚观察通道拿不到 ⇒ `bufferState:'unknown'` 并放行
+   * （不静默假装干净、也不误拒）。判据注入的假件即这一位。
+   */
+  readonly getBufferDirty?: (abs: string) => unknown;
 }
 
 /* ------------------------------- commands.run 的注入面（B24） ------------------------------- */
@@ -587,6 +594,118 @@ function emitFileChanged(
   } catch {
     return false;
   }
+}
+
+/* ---------------- B25 文件族执行腿共用小件（copy / ensureDir / readBytes） ---------------- */
+
+/** 单次字节面上限：48 000 B ⇒ base64 64 000 字符 < 宿主 65 536 字符不可信串净化闸。 */
+const FS_READ_BYTES_MAX = 48_000;
+
+/** stat 读数规范化：缺席 / 非对象一律 exists:false，绝不拿 size:0 冒充不存在的真读数。 */
+function statFacts(stat: unknown): {
+  readonly exists: boolean;
+  readonly size: number | null;
+  readonly mtimeMs: number | null;
+  readonly isDirectory: boolean;
+} {
+  if (!stat || typeof stat !== 'object') {
+    return { exists: false, size: null, mtimeMs: null, isDirectory: false };
+  }
+  const s = stat as Record<string, unknown>;
+  return {
+    exists: s['exists'] === true,
+    size: typeof s['size'] === 'number' ? s['size'] : null,
+    mtimeMs: typeof s['mtimeMs'] === 'number' ? s['mtimeMs'] : null,
+    isDirectory: s['isDirectory'] === true,
+  };
+}
+
+/** `stat_files` 批量返回按绝对 path 归一建索引（返回项自带 path；缺席的段落当作不在场）。 */
+function indexStatEntries(raw: unknown): Map<string, Record<string, unknown>> {
+  const out = new Map<string, Record<string, unknown>>();
+  if (!Array.isArray(raw)) return out;
+  for (const entry of raw) {
+    if (!entry || typeof entry !== 'object') continue;
+    const e = entry as Record<string, unknown>;
+    if (typeof e['path'] !== 'string' || e['path'] === '') continue;
+    out.set(String(e['path']).replace(/\\/g, '/'), e);
+  }
+  return out;
+}
+
+/** 严格 base64：只收标准字符集 + 合法 padding，且往返编码逐字一致（拒绝非法位 / 多余字符）。 */
+function decodeBase64Strict(text: string): Buffer | null {
+  if (text.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(text)) return null;
+  const buf = Buffer.from(text, 'base64');
+  return buf.toString('base64') === text ? buf : null;
+}
+
+/** 脏缓冲读数分类：注入 seam 的 `'dirty' | 'clean' | 'not-open' | 'unprovable' | boolean | null` 归一。 */
+type BufferState = 'not-open' | 'unknown' | 'not-applicable' | 'clean' | 'dirty' | 'unprovable';
+
+function classifyBufferState(raw: unknown): BufferState {
+  if (raw === 'not-open') return 'not-open';
+  if (raw === 'clean' || raw === false) return 'clean';
+  if (raw === 'dirty' || raw === true) return 'dirty';
+  if (raw === 'unknown') return 'unknown';
+  return 'unprovable'; // 'unprovable' / null / undefined / 其它一律「判不出」，绝不静默当干净
+}
+
+interface BufferPaneCtxLike {
+  readonly filePathRef?: { readonly current: string };
+  readonly entriesRef?: {
+    readonly current: Map<string, { readonly model?: { getAlternativeVersionId?: () => number } }>;
+  };
+}
+interface BufferPoolLike {
+  readonly baseline: (path: string) => number | undefined;
+}
+
+/**
+ * 生产脏缓冲反查（ps10：ui/* 只在执行时动态 import，绝不进开机静态图）：现扫 `livePanes`，
+ * 落点若正开在编辑器里，用 `EditorPane.tsx::computeDirty` 同一个表达式判脏
+ * （`model.getAlternativeVersionId() !== editorModelPool.baseline(path)`，不另立第二份脏账）。
+ * 整枚观察通道拿不到（无头宿 / node 测试里 monaco 摸 window 失败）⇒ `'unknown'`：
+ * 如实放行，不静默假装干净、也不误拒。
+ */
+async function productionBufferState(destAbs: string): Promise<BufferState> {
+  try {
+    const [registry, poolInstance] = await Promise.all([
+      import('../ui/editor-pane-registry'),
+      import('../ui/editor-model-pool-instance'),
+    ]);
+    const panes = (registry as unknown as { livePanes?: Map<string, BufferPaneCtxLike> }).livePanes;
+    const pool = (poolInstance as unknown as { editorModelPool?: BufferPoolLike }).editorModelPool;
+    if (!panes || !pool) return 'unknown';
+    const fold = (p: string): string => p.replace(/\\/g, '/').toLowerCase();
+    const want = fold(destAbs);
+    for (const ctx of panes.values()) {
+      const raw = ctx?.filePathRef?.current;
+      if (typeof raw !== 'string' || raw === '' || fold(raw) !== want) continue;
+      const baseline = pool.baseline(raw);
+      if (baseline === undefined) return 'unprovable';
+      const pooled = ctx.entriesRef?.current?.get(raw)?.model;
+      const version = pooled?.getAlternativeVersionId;
+      if (!pooled || typeof version !== 'function') return 'unprovable';
+      return version.call(pooled) !== baseline ? 'dirty' : 'clean';
+    }
+    return 'not-open';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** 覆盖落点的脏缓冲闸：注入 seam 在场就用假件读数，缺席走生产动态反查。 */
+async function bufferGate(deps: McpIoDeps, destAbs: string): Promise<BufferState> {
+  const probe = deps.getBufferDirty;
+  if (typeof probe === 'function') {
+    try {
+      return classifyBufferState(probe(destAbs));
+    } catch {
+      return 'unprovable';
+    }
+  }
+  return productionBufferState(destAbs);
 }
 
 /* ------------------------------- 失效标注（只读应答附加） ------------------------------- */
@@ -2743,6 +2862,215 @@ export function createRunSupplemental(deps: McpIoDeps): (
     pageChars: { defaultChars: MCP_PAGE_TEXT_DEFAULT_CHARS, maxChars: MCP_PAGE_TEXT_MAX_CHARS },
   });
 
+  /* ---------------- B25 文件族三枚执行腿（只走既有真源，零新增写通道） ----------------
+   * `fs.copyFile` 走内核 `kernel.io.copyFile`（绝不 `deps.invoke('copy_file')` 绕第一道写允许域），
+   * `fs.ensureDir` 走 `kernel.io.ensureDir`（递归 + 幂等，与 fileTree.create 独占非递归是真差异），
+   * `fs.readFileBytes` 只拆根内相对路径子集（`read_file_bytes` base64 孪生，48 000 B 硬闸）。
+   * 写侧一律 `requireWriteTarget`（路径闸 + 写闸一 + rootId）叠 `rethrowWriteGate`（写闸二）。 */
+
+  const fsCopyFile = async (
+    args: Record<string, unknown>,
+    scope: McpSessionScope,
+  ): Promise<unknown> => {
+    const input = args ?? {};
+    const { kernel, rootDir, relPath, abs: destAbs, rootId } = await requireWriteTarget(input, scope);
+    const srcRelPath = asString(input['srcRelPath']);
+    const srcAbs = resolveWithinRoot(rootDir, srcRelPath); // 源是读侧：路径闸与 fs.readFile 同一把尺，不套写闸一
+    if (srcAbs === destAbs) {
+      throw new McpFailure('INVALID_ARGS', `源与落点是同一格（${sanitizeEcho(relPath)}）：copy_file 到自身会把文件抹成零字节`);
+    }
+    const io = kernel.io;
+    const copyFile = io.copyFile;
+    if (typeof copyFile !== 'function') {
+      throw new McpFailure(
+        'NOT_WIRED',
+        'fs.copyFile 未接线：内核实例未提供 copyFile 服务端复制写原语（不静默降级成 read+write 拼出来的第二条写通道）',
+      );
+    }
+    const overwrite = input['overwrite'] === true;
+    // 预检＝恰一趟批量 stat（与 B13 成本口径同尺），两枚路径同时核，绝不逐枚付单文件 stat。
+    const rawStats = await deps.invoke('stat_files', { paths: [srcAbs, destAbs] });
+    const byPath = indexStatEntries(rawStats);
+    const srcEntry = byPath.get(srcAbs);
+    const destEntry = byPath.get(destAbs);
+    if (!srcEntry || srcEntry['exists'] !== true) {
+      throw new McpFailure('TOOL_EXECUTION_FAILED', `复制源不存在：${sanitizeEcho(srcRelPath)}（写原语零触达）`);
+    }
+    if (srcEntry['isDirectory'] === true) {
+      throw new McpFailure('INVALID_ARGS', `复制源是目录，copy_file 只能搬文件：${sanitizeEcho(srcRelPath)}`);
+    }
+    const destExists = destEntry?.['exists'] === true;
+    if (destExists && !overwrite) {
+      throw new McpFailure(
+        'TOOL_EXECUTION_FAILED',
+        `目标已存在且未显式 overwrite:true ⇒ 拒绝覆盖（先 fs.stat 确认或显式给 overwrite；写原语零触达）：${sanitizeEcho(relPath)}`,
+      );
+    }
+    // 脏缓冲红线：只在「覆盖既有落点」那一路反查；新建路径不吃这道闸（不反查、不拒绝）。
+    let bufferState: BufferState = 'not-applicable';
+    if (destExists) {
+      bufferState = await bufferGate(deps, destAbs);
+      if (bufferState === 'dirty') {
+        throw new McpFailure(
+          'PERMISSION_DENIED',
+          `落点 ${sanitizeEcho(relPath)} 正开在编辑器里且有未保存改动（bufferState:dirty）：拒绝覆盖，请先保存或关闭该标签（写原语零触达）`,
+        );
+      }
+      if (bufferState === 'unprovable') {
+        throw new McpFailure(
+          'PERMISSION_DENIED',
+          '落点脏态判不出（bufferState:unprovable / null）：不拿「判不出」当「没脏」，照旧拒绝覆盖；请保存后重试',
+        );
+      }
+    }
+    try {
+      await copyFile.call(io, srcAbs, destAbs); // 绝不 deps.invoke('copy_file') 绕内核第一道写允许域
+    } catch (err) {
+      rethrowWriteGate(err, relPath);
+    }
+    const dest = statFacts(await deps.invoke('stat_file', { path: destAbs }));
+    const srcSize = typeof srcEntry['size'] === 'number' ? srcEntry['size'] : null;
+    const sizeMatched = srcSize !== null && dest.size !== null && dest.size === srcSize;
+    const refreshed = emitFileChanged(kernel, destExists ? 'change' : 'add', destAbs, {
+      tracker: trackerOf(deps), scope,
+    });
+    return {
+      copied: true,
+      overwritten: destExists,
+      path: relPath,
+      srcPath: srcRelPath,
+      dest,
+      srcSize,
+      sizeMatched,
+      via: 'kernel.io.copyFile',
+      refreshed,
+      idempotency: { secondCallSameArgs: 'refuses', reason: '同一对路径再调一次会重新覆盖既有落点（非幂等）' },
+      bufferState,
+      ...(rootId !== null ? { rootId } : {}),
+    };
+  };
+
+  const fsEnsureDir = async (
+    args: Record<string, unknown>,
+    scope: McpSessionScope,
+  ): Promise<unknown> => {
+    const input = args ?? {};
+    const { kernel, rootDir, relPath, abs, rootId } = await requireWriteTarget(input, scope);
+    const io = kernel.io;
+    const ensureDir = io.ensureDir;
+    if (typeof ensureDir !== 'function') {
+      throw new McpFailure(
+        'NOT_WIRED',
+        'fs.ensureDir 未接线：内核实例未提供 ensureDir 递归建目录写原语（不静默、不降级成逐段 create 拼出来的第二条写通道）',
+      );
+    }
+    // 逐段累积（根→目标）：segmentsCreated 要逐层点名确实缺的那几段。
+    const parts = relPath.split('/').filter((s) => s !== '');
+    const segments: { rel: string; abs: string }[] = [];
+    let acc = '';
+    for (const part of parts) {
+      acc = acc === '' ? part : `${acc}/${part}`;
+      segments.push({ rel: acc, abs: resolveWithinRoot(rootDir, acc) });
+    }
+    // 恰一趟批量 stat：目标排第一（paths[0] 恒为目标），祖先段跟随；生产返回与入参一一对应。
+    const probePaths = [abs, ...segments.slice(0, -1).map((s) => s.abs)];
+    const byPath = indexStatEntries(await deps.invoke('stat_files', { paths: probePaths }));
+    // 单文件预检：既是 out.dir 凭据，也是「目标到底是目录还是文件」的判别真源。
+    const dirStat = statFacts(await deps.invoke('stat_file', { path: abs }));
+    const targetEntry = byPath.get(abs);
+    const targetExists = targetEntry?.['exists'] === true;
+    // 同名是文件 ⇒ 显式拒绝，ensureDir 零调用（绝不删东西来建目录）。
+    if (targetEntry?.['isDirectory'] === false) {
+      throw new McpFailure(
+        'TOOL_EXECUTION_FAILED',
+        `同名条目是文件，ensureDir 不能删掉它来建目录：${sanitizeEcho(relPath)}（请改用别的路径）`,
+      );
+    }
+    // 幂等快路：批量预检报目标已在 + 单文件预检确认它是目录 ⇒ 零写原语、segmentsCreated 空。
+    const alreadyExisted = targetExists && dirStat.isDirectory;
+    const segmentsCreated = alreadyExisted
+      ? []
+      : segments.filter((s) => byPath.get(s.abs)?.['exists'] !== true).map((s) => s.rel);
+    let created = false;
+    let refreshed = false;
+    if (!alreadyExisted) {
+      try {
+        await ensureDir.call(io, abs);
+      } catch (err) {
+        rethrowWriteGate(err, relPath);
+      }
+      created = true;
+      refreshed = emitFileChanged(kernel, 'add', abs, { tracker: trackerOf(deps), scope });
+    }
+    return {
+      path: relPath,
+      created,
+      alreadyExisted,
+      segmentsCreated,
+      dir: dirStat,
+      via: 'kernel.io.ensureDir',
+      refreshed,
+      ...(rootId !== null ? { rootId } : {}),
+    };
+  };
+
+  const fsReadFileBytes = async (
+    args: Record<string, unknown>,
+    scope: McpSessionScope | null | undefined,
+  ): Promise<unknown> => {
+    const input = args ?? {};
+    if (input['rootId'] !== undefined) {
+      throw new McpFailure('INVALID_ARGS', 'fs.readFileBytes 只收根内相对路径，不收 rootId（多根写腿专属，只读字节面不混入）');
+    }
+    const project = requireProject(deps.getKernel());
+    const rootDir = asString(project['rootDir']);
+    if (rootDir === '') {
+      throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：读字节无域基准根（不静默）');
+    }
+    const relPath = asString(input['relPath']);
+    const abs = resolveWithinRoot(rootDir, relPath); // 路径闸与 fs.readFile 同一把尺
+    const rel = toRelativePath(abs, rootDir);
+    // 预检＝恰一次单文件 stat；批量 stat 一枚都不许多付。
+    const stat = await deps.invoke('stat_file', { path: abs });
+    if (!stat || typeof stat !== 'object') {
+      throw new McpFailure('TOOL_EXECUTION_FAILED', `读字节源不存在（stat_file 无读数）：${sanitizeEcho(relPath)}（零读原语）`);
+    }
+    const s = stat as Record<string, unknown>;
+    if (s['isDirectory'] === true) {
+      throw new McpFailure('INVALID_ARGS', `读字节源是目录，fs.readFileBytes 只读文件：${sanitizeEcho(relPath)}`);
+    }
+    const size = typeof s['size'] === 'number' ? s['size'] : null;
+    if (size !== null && size > FS_READ_BYTES_MAX) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `文件 ${size} B 超过 48000 B 硬闸（base64 载荷会撞宿主 65536 字符净化闸被静默砍尾）；` +
+          '本面刻意不分页、不静默截断：请分批读或改用 fs.readFile 的文本分页面',
+      );
+    }
+    const raw = await deps.invoke('read_file_bytes', { path: abs });
+    if (typeof raw !== 'string') {
+      throw new McpFailure('TOOL_EXECUTION_FAILED', 'read_file_bytes 未返回 base64 文本（不静默、不编造字节）');
+    }
+    const decoded = decodeBase64Strict(raw);
+    if (decoded === null || (size !== null && decoded.length !== size)) {
+      throw new McpFailure(
+        'TOOL_EXECUTION_FAILED',
+        'base64 载荷与 stat 尺寸判不出同一份（非法 base64 或解码字节数与 stat 尺寸不符）：不拿 stat 的数字冒充读到的字节',
+      );
+    }
+    return {
+      path: rel,
+      base64: raw,
+      encoding: 'base64',
+      bytesReturned: decoded.length,
+      bytesTotal: size,
+      truncated: false,
+      maxBytes: FS_READ_BYTES_MAX,
+      via: 'read_file_bytes',
+      fsFreshness: await fsFreshnessField(deps, abs, rel, scope),
+    };
+  };
+
   const ioTools = new Map<string, (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown> | unknown>([
     ['commands.list', commandsList],
     // B24（LaneAK）：命令面板的执行面——与清单面同一份命令表真源，五道闸全在派发之前。
@@ -2761,6 +3089,10 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['fs.statFiles', statFiles],
     // B2 批（LaneT）：结构化批读（一次调用读多文件）；只读，不触任何写命令 / 索引重建。
     ['fs.readMany', readMany],
+    // B25 文件族三枚：复制 / 递归建目录 / 根内字节读（执行腿见上；裸标识符供 parseLegMaps 判 wired）。
+    ['fs.copyFile', fsCopyFile],
+    ['fs.ensureDir', fsEnsureDir],
+    ['fs.readFileBytes', fsReadFileBytes],
     ['fileTree.create', fileTreeCreate],
     ['fileTree.update', fileTreeUpdate],
     // MCP-PERF-S3 批（2026-11-06）：批量变更事务（≤32 文件 / 一次备份清单 / 逐条 applied/refused）。
