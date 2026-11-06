@@ -24,6 +24,7 @@
     "./native-marks": "./src/native-marks.ts"
   },
   "dependencies": {
+    "@kojo/erb-vocab": "workspace:*",
     "@kojo/kojo-core": "workspace:*",
     "@kojo/plugin-api": "workspace:*"
   }

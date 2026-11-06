@@ -80,6 +80,10 @@ import {
 // 行首缩进 / 纯空白行的字符集唯一真源（CHARSET-SS 批）：此前这里是 `isIndentChar` 的第三份
 // 手写字符比较；现在与 lexer / sugar-ident 同一张表，同一行在三处必然同判。
 import { isAllBlank, leadingBlank } from './blank-charset';
+// 控制流**配对表**真源（D03b 收口批）：下面三张缩进表此前是手抄副本（TRYC 六枚逐词敲过一遍），
+// 真源补一枚引擎开块词这里就少抬一层。现在只有"哪些族不参与缩进"这一条是格式化器自己的
+// 判据，族内逐词名单一律由 `classifyControlFlow` / `ERB_CONTROL_STATEMENTS` 现算。
+import { classifyControlFlow, ERB_CONTROL_STATEMENTS } from '@kojo/erb-vocab/control-flow';
 
 /** 方言：`kojo` = 表层 DSL（缩进是语法）；`erb` = 原生脚本（缩进只是排版） */
 export type FormatDialect = 'erb' | 'kojo';
@@ -404,47 +408,32 @@ export function erbBodyRegionAtLineEnd(prefixText: string): { kind: ErbBodyRegio
  * 同一门槛，也是宿主"窗口腿 = 整篇腿"在切片起点处的既有前提）。
  */
 
-/** 开块 → 配对类别（`erb-parser/scanner.ts` 开块表的镜像；TRY 两档同口径） */
-const ERB_INDENT_OPEN: Readonly<Record<string, string>> = {
-  IF: 'if',
-  SELECTCASE: 'select',
-  FOR: 'for',
-  WHILE: 'while',
-  REPEAT: 'repeat',
-  DO: 'do',
-  NOSKIP: 'noskip',
-  TRYCGOTO: 'try',
-  TRYCJUMP: 'try',
-  TRYCCALL: 'try',
-  TRYCGOTOFORM: 'try',
-  TRYCJUMPFORM: 'try',
-  TRYCCALLFORM: 'try',
-  TRYCALLLIST: 'funclist',
-  TRYGOTOLIST: 'funclist',
-  TRYJUMPLIST: 'funclist',
-};
+/** 不参与缩进配对的族：数据表 / 列表的**块体是正文**，由 `erbBodyLineMask` 整块护住
+ *  （宁可少格式化，不多改字节）⇒ 格式化器只在这些族**之外**套用配对表。 */
+const ERB_INDENT_EXCLUDED_PAIRS: ReadonlySet<string> = new Set(['data', 'list']);
+
+/**
+ * 由真源现算一张 `role → { 词: 配对类别 }` 缩进表（开块 / 分支 / 闭合三张同一条码路）。
+ * 派生而不是抄：真源增删一枚引擎词，这里自动跟随；族外排除只此一处判据。
+ */
+function erbIndentTable(role: 'open' | 'branch' | 'close'): Readonly<Record<string, string>> {
+  const out: Record<string, string> = {};
+  for (const word of ERB_CONTROL_STATEMENTS) {
+    const flow = classifyControlFlow(word);
+    if (flow === null || flow.role !== role || ERB_INDENT_EXCLUDED_PAIRS.has(flow.pair)) continue;
+    out[word] = flow.pair;
+  }
+  return out;
+}
+
+/** 开块 → 配对类别（真源派生；TRY 两档同口径） */
+const ERB_INDENT_OPEN: Readonly<Record<string, string>> = erbIndentTable('open');
 
 /** 分支 → 它所在块的类别（分支自己不开块，兄弟分支同层） */
-const ERB_INDENT_BRANCH: Readonly<Record<string, string>> = {
-  ELSEIF: 'if',
-  ELSE: 'if',
-  CASE: 'select',
-  CASEELSE: 'select',
-  CATCH: 'try',
-};
+const ERB_INDENT_BRANCH: Readonly<Record<string, string>> = erbIndentTable('branch');
 
 /** 闭合 → 它所闭合的类别（与开块表成对；孤儿闭合按普通行排） */
-const ERB_INDENT_CLOSE: Readonly<Record<string, string>> = {
-  ENDIF: 'if',
-  ENDSELECT: 'select',
-  NEXT: 'for',
-  WEND: 'while',
-  REND: 'repeat',
-  LOOP: 'do',
-  ENDNOSKIP: 'noskip',
-  ENDCATCH: 'try',
-  ENDFUNC: 'funclist',
-};
+const ERB_INDENT_CLOSE: Readonly<Record<string, string>> = erbIndentTable('close');
 
 /** `@` 函数定义行（`@"…"` 是跨行 CALL 的续行，不是边界——与 `structure.ts` 的判据一致） */
 const ERB_FUNCTION_HEADER_RE = /^@(?![ \t\u3000]*")/;

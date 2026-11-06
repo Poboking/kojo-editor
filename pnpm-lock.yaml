@@ -305,6 +305,9 @@ importers:
 
   packages/kojo-vocab:
     dependencies:
+      '@kojo/erb-vocab':
+        specifier: workspace:*
+        version: link:../erb-vocab
       '@kojo/kojo-core':
         specifier: workspace:*
         version: link:../kojo-core
@@ -330,6 +333,9 @@ importers:
 
   packages/plugins/condition-extractor:
     dependencies:
+      '@kojo/erb-vocab':
+        specifier: workspace:*
+        version: link:../../erb-vocab
       '@kojo/plugin-api':
         specifier: workspace:*
         version: link:../../plugin-api

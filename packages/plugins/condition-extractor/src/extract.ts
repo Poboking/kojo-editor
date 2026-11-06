@@ -31,6 +31,9 @@ import type {
 } from '@kojo/plugin-api';
 import { erbContinuationJoin, erbContinuationRoleOf } from '@kojo/plugin-api';
 import { dependencyKey, erbCodeBodyOf, erbCodePrefixLength } from '@kojo/plugin-api';
+// 控制流配对表真源（零运行时 import 的自包含叶子；与 erb-parser/scanner.ts 同一条例外，
+// 见 `@kojo/erb-vocab` 包自陈与 `tools/audit-decoupling.mjs` C 项口径——它不是插件）。
+import { classifyControlFlow } from '@kojo/erb-vocab/control-flow';
 import { parseExpression, splitTopLevelCommas, walkExpr } from './expr';
 import { scanBraceTernaries, scanTextTernaries } from './inline';
 import { collectDisplayLines } from './display';
@@ -169,36 +172,14 @@ export type SchemaLookup = (name: string, index?: number | string) => VariableIn
 // 即"该行执行时所处的分支路径"。赋值 A 对使用点 U 可达 ⇔
 // `A.context` 是 `U.context` 的前缀（同路径或祖先路径）。
 //
-// kind 分类与 erb-parser `scanControlFlow` 的配对表逐条一致（同源事实）。
+// **配对表一份不抄**（D03b 收口批）：本段的"这一行开不开块 / 是不是分支 / 是不是
+// 闭合"三问全部走真源 `@kojo/erb-vocab/control-flow` 的 `classifyControlFlow`——与
+// 骨架扫描 `erb-parser/scanner.ts` 吃的就是同一枚函数。此前这里手抄过六张本地表
+// （`CTX_TRY_CATCH_OPEN` / `CTX_TRY_LIST_OPEN` / `CTX_PRINTDATA_OPEN` /
+// `CTX_OPEN_KINDS` / `CTX_BRANCH_KINDS` / `CTX_CLOSE_KINDS`），真源补一枚词这里就跟不上，
+// 后果是同一行在骨架里数进嵌套、在段栈里没数＝**幻影深度**（赋值可达性判错）。
+// 守卫：`packages/app/tests/tryc-pairing-single-source.test.ts`。
 // ---------------------------------------------------------------------------
-
-/** TRY/PRINTDATA 系精确集合（与 erb-parser scanner 同源；引擎 funcMatch :460-487，BUG-2 修复）：
- *  配 CATCH 的 TRYC 六个 + 配 ENDFUNC 的 TRY*LIST 三个 + PRINTDATA 系九个。
- *  TRYCALL/TRYCALLFORM/TRYGOTO/TRYJUMP 等是单行语句，不开块。 */
-const CTX_TRY_CATCH_OPEN = new Set(['TRYCGOTO', 'TRYCJUMP', 'TRYCCALL', 'TRYCGOTOFORM', 'TRYCJUMPFORM', 'TRYCCALLFORM']);
-const CTX_TRY_LIST_OPEN = new Set(['TRYCALLLIST', 'TRYGOTOLIST', 'TRYJUMPLIST']);
-const CTX_PRINTDATA_OPEN = new Set([
-  'PRINTDATA', 'PRINTDATAL', 'PRINTDATAW', 'PRINTDATAK', 'PRINTDATAKL', 'PRINTDATAKW', 'PRINTDATAD', 'PRINTDATADL', 'PRINTDATADW',
-]);
-
-/** 开块语句（与 scanner OPEN_KINDS 及 TRY 系、PRINTDATA 系精确集合一致） */
-const CTX_OPEN_KINDS = new Set(['IF', 'SELECTCASE', 'FOR', 'WHILE', 'REPEAT', 'DO', 'DATALIST', 'STRDATA', 'NOSKIP']);
-/** 分支语句（与 scanner BRANCH_KINDS 一致） */
-const CTX_BRANCH_KINDS = new Set(['ELSEIF', 'ELSE', 'CASE', 'CASEELSE', 'CATCH']);
-/** 闭合语句（与 scanner CLOSE_KINDS 一致） */
-const CTX_CLOSE_KINDS = new Set([
-  'ENDIF',
-  'ENDSELECT',
-  'NEXT',
-  'WEND',
-  'REND',
-  'LOOP',
-  'ENDDATA',
-  'ENDLIST',
-  'ENDNOSKIP',
-  'ENDCATCH',
-  'ENDFUNC',
-]);
 
 interface CtxStackEntry {
   depth: number;
@@ -215,16 +196,17 @@ export function buildContextLookup(stmts: readonly ControlFlowStatement[]): (lin
   let segCounter = 0;
 
   for (const s of stmts) {
-    if (CTX_OPEN_KINDS.has(s.kind) || CTX_TRY_CATCH_OPEN.has(s.kind) || CTX_TRY_LIST_OPEN.has(s.kind) || CTX_PRINTDATA_OPEN.has(s.kind)) {
+    const flow = classifyControlFlow(s.kind);
+    if (flow?.role === 'open') {
       stack.push({ depth: s.depth, seg: `s${++segCounter}` });
-    } else if (CTX_BRANCH_KINDS.has(s.kind)) {
+    } else if (flow?.role === 'branch') {
       for (let i = stack.length - 1; i >= 0; i--) {
         if (stack[i]!.depth === s.depth) {
           stack[i] = { depth: s.depth, seg: `s${++segCounter}` };
           break;
         }
       }
-    } else if (CTX_CLOSE_KINDS.has(s.kind)) {
+    } else if (flow?.role === 'close') {
       for (let i = stack.length - 1; i >= 0; i--) {
         if (stack[i]!.depth === s.depth) {
           stack.length = i;
@@ -232,7 +214,7 @@ export function buildContextLookup(stmts: readonly ControlFlowStatement[]): (lin
         }
       }
     }
-    // 其余（SIF / 未知 kind）：不动栈
+    // 其余（leaf = SIF / 表外 kind）：不动栈，但仍留一个快照
     snapshots.push({ line: s.line, context: stack.map((e) => e.seg) });
   }
 

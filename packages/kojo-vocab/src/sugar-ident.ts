@@ -36,6 +36,10 @@
 // 行首 / 行尾 / 缩进折算的唯一真源（CHARSET-SS 批）：本文件此前手写 `[ \t　]` 两份与一份
 // 折算算法，与 lexer / formatter 各自漂移。`blank-charset.ts` 是零依赖叶子，不造环。
 import { indentLevelOf as sharedIndentLevelOf, leadingBlank, trimTrailingBlank } from './blank-charset';
+// 控制流**配对表**真源（D03b 收口批）：糖侧只保留"显示形态"这一把尺子（`CONTROL_SHAPES`），
+// "这一行开不开块 / 配哪一族"一律问 `@kojo/erb-vocab/control-flow`——与 erb-parser 骨架扫描、
+// 条件抽取段栈、formatter 缩进表同一个函数。零运行时 import 的自包含叶子，不构成环。
+import { classifyControlFlow, openKindsForPair } from '@kojo/erb-vocab/control-flow';
 
 /* ============================== 行工具（两侧共用一份） ============================== */
 
@@ -259,22 +263,17 @@ export const CONTROL_SHAPES: ReadonlyMap<string, ControlShape> = new Map<string,
 export const PRINTDATA_OPEN: ReadonlySet<string> = new Set(
   [...CONTROL_SHAPES.values()].filter((s) => s.kind.startsWith('PRINTDATA')).map((s) => s.kind),
 );
-/** TRY… 条件跳转系开词 */
-export const TRY_CATCH_OPEN: ReadonlySet<string> = new Set([
-  'TRYCGOTO',
-  'TRYCJUMP',
-  'TRYCCALL',
-  'TRYCGOTOFORM',
-  'TRYCJUMPFORM',
-  'TRYCCALLFORM',
-]);
-/** TRY…LIST 函数表开词 */
-export const TRY_LIST_OPEN: ReadonlySet<string> = new Set(['TRYCALLLIST', 'TRYGOTOLIST', 'TRYJUMPLIST']);
+/** TRY… 条件跳转系开词（**配 CATCH 的全集**＝真源派生，D03b：此前是手抄六枚，
+ *  真源按引擎 funcMatch 补词时这里必然落后 ⇒ 结构栈少数一层。枚数不钉死，增词自动跟随） */
+export const TRY_CATCH_OPEN: ReadonlySet<string> = new Set(openKindsForPair('try'));
+/** TRY…LIST 函数表开词（＝真源里配 `ENDFUNC` 的那一族，同样派生） */
+export const TRY_LIST_OPEN: ReadonlySet<string> = new Set(openKindsForPair('funclist'));
 /**
  * TRY 家族的**第三档**：引擎里既不开块也没有配对闭合的单行语句（`funcMatch` 的"其余 TRY*"）。
  *
- * 为什么这张名单住识别核、而不住显示层的动词表：显示面的分诊判据是**档位**——开块那九枚
- * （`TRY_CATCH_OPEN ∪ TRY_LIST_OPEN`）归 ZH-C 的中性形，单行这一档归 ZH-S 的语句动词语。
+ * 为什么这张名单住识别核、而不住显示层的动词表：显示面的分诊判据是**档位**——开块那一档
+ * （`TRY_CATCH_OPEN ∪ TRY_LIST_OPEN`，两枚集合都由真源 `openKindsForPair` 派生、枚数随引擎
+ * 增词自动跟随，D03b）归 ZH-C 的中性形，单行这一档归 ZH-S 的语句动词语。
  * 判据只有一份，`statement.ts` 认领的记号**由本集合派生**；两档互斥由
  * `tests/native-display-statement.test.ts` 逐字钉死（谁也不许认领对方那批，`startsWith('TRY')`
  * 那种前缀扩张更是结构性地不可能命中这里——本集合是**枚举**，不是模式）。
@@ -295,17 +294,19 @@ export const TRY_SINGLE_LINE: ReadonlySet<string> = new Set([
   'TRYGOTOFORM',
 ]);
 
-/** 结构栈：开块语句 → 配对类别（`null` = 不开块）。两侧共用（投影数嵌套、建议侧判块内纯度） */
+/**
+ * 结构栈：开块语句 → 配对类别（`null` = 不开块）。两侧共用（投影数嵌套、建议侧判块内纯度）。
+ *
+ * **配对这一问不自答**（D03b 收口批）：糖表只登记 `open`（块头的显式类别，如 `IF` → `if`），
+ * 其余一律问真源 `classifyControlFlow`。此前这里靠本地 `PRINTDATA_OPEN` / `TRY_CATCH_OPEN` /
+ * `TRY_LIST_OPEN` 三枚集合逐档判定，等于在糖层再抄一份配对表——真源补一枚引擎词（如 TRYC 的
+ * `*STR` 变体），这里就少数一层嵌套，糖视图把块体当台词投影。表外新词由同一条兜底自动跟上。
+ */
 export function pairOf(kind: string): string | null {
-  const s = CONTROL_SHAPES.get(kind);
-  if (s === undefined) return null;
-  if (s.open !== undefined) return s.open;
-  if (s.role === 'structural-open') {
-    if (PRINTDATA_OPEN.has(kind)) return 'data';
-    if (TRY_CATCH_OPEN.has(kind)) return 'try';
-    if (TRY_LIST_OPEN.has(kind)) return 'funclist';
-  }
-  return null;
+  const open = CONTROL_SHAPES.get(kind)?.open;
+  if (open !== undefined) return open;
+  const flow = classifyControlFlow(kind);
+  return flow?.role === 'open' ? flow.pair : null;
 }
 
 /** 结构栈：闭合行（`ENDIF` / `NEXT` / `ENDDATA`…） */

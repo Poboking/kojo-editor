@@ -9,6 +9,7 @@
     "./offload": "./src/offload.ts"
   },
   "dependencies": {
+    "@kojo/erb-vocab": "workspace:*",
     "@kojo/plugin-api": "workspace:*"
   }
 }

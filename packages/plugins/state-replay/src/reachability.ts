@@ -101,6 +101,11 @@ export const JUMP_INSTRUCTIONS: ReadonlySet<string> = new Set([
  * 名字 = 引擎指令表里所有 `TRYC?(GOTO|JUMP)` 起首的动词（`*FORM` / `*LIST` 变体都算），
  * 测试用那张表钉住等式，防手写漂移。语义：跳得成 / 跳不成两条边都可能 ⇒ 本模块只登记
  * （`conditionalJumps`）不限制可达性。
+ *
+ * **这是一把独立的尺子**（D03b 登记，`packages/app/tests/tryc-pairing-single-source.test.ts`
+ * (d) 闸逐字钉住"不得与配对表相等"）：本表问的是"这行造不造两条可达边"，不是"这行开不开
+ * CATCH 块"——它含单行跳转（`TRYGOTO` / `TRYJUMP`，配对表判不开块）、不含 CALL 系。
+ * 真源补 `TRYC*STR` 变体时**本表不自动跟随**：那两枚是否造边属可达性判据，要带语料实测另批。
  */
 export const CONDITIONAL_JUMP_INSTRUCTIONS: ReadonlySet<string> = new Set([
   'TRYCGOTO',

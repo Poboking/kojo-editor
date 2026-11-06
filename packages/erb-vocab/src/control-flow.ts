@@ -155,6 +155,26 @@ export function classifyControlFlow(kind: string): { role: ControlFlowRole; pair
 }
 
 /**
+ * 配对类别 → 该类别的全部**开块**原词（与 `closerNameForPair` 对称的一枚反查）。
+ *
+ * 为什么要有它（D03b 收口批）：`TRY_CATCH_OPEN` / `TRY_LIST_OPEN` / `PRINTDATA_OPEN` 此前是
+ * 私有的，域外读者（条件抽取的段栈、糖层结构栈、格式化缩进表）想问"这一枚开不开 CATCH 块"
+ * 只能**照抄一份名单**——抄本与真源的枚数迟早发散，而发散的表现是同一行在一侧数进嵌套、
+ * 在另一侧没数（幻影深度 / 漏缩进）。本函数从**同一批私有表**现算，配对表增删一词即自动跟随，
+ * 消费方不再需要第二份名单。
+ *
+ * 返回**排序确定**（UTF-16 码元序）的只读数组；`pair` 不在表内 ⇒ 空数组。
+ */
+export function openKindsForPair(pair: string): readonly string[] {
+  const out: string[] = [];
+  for (const [kind, p] of Object.entries(OPEN_KINDS)) if (p === pair) out.push(kind);
+  if (pair === 'try') out.push(...TRY_CATCH_OPEN);
+  if (pair === 'funclist') out.push(...TRY_LIST_OPEN);
+  if (pair === 'data') out.push(...PRINTDATA_OPEN);
+  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
  * 配对类别 → 该类别的闭合语句原词（结构体检的话术要用）。
  * 从 `CLOSE_KINDS` **反查**得到——不抄第二份表；每个类别只有一个闭合词，所以是单值。
  * 查不到返回空串（调用方要能容忍"说不出闭合词"）。
