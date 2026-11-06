@@ -700,25 +700,40 @@ describe('调试宿 · search_text 整读路径的不变量（2026-10-25 性能�
     }
   });
 
-  it('超 8MB 文件按 tooLarge 跳过（fstat 先判，不整文件读入）', async () => {
+  it('S21 限额对齐 Rust 10MiB：(8,10]MiB 照扫不计账，>10MiB 才 tooLarge（fstat 先判，不整文件读入）', async () => {
+    // 旧镜像 8MiB 是自选口径、与 Rust `SEARCH_MAX_FILE_BYTES = 10 * 1024 * 1024` 漂移（MCP-PERF-S21 对拍收口）
+    const mid = path.join(sandbox, 'stream', 'mid-9mib.ERB');
+    await fs.writeFile(mid, Buffer.concat([Buffer.alloc(9 * 1024 * 1024, 0x61), Buffer.from('\nneedle mid\n')]));
     const big = path.join(sandbox, 'stream', 'big.ERB');
-    await fs.writeFile(big, Buffer.alloc(8 * 1024 * 1024 + 1024, 0x61)); // 'a' × ~8MB
+    await fs.writeFile(big, Buffer.alloc(10 * 1024 * 1024 + 1024, 0x61)); // 'a' × (10MiB+1KB)
     const r = await search2({});
     expect(r.ok).toBe(true);
-    const v = r.value as { files: { path: string }[]; skipped: { tooLarge: number } };
-    expect(v.skipped.tooLarge).toBeGreaterThanOrEqual(1);
+    const v = r.value as { files: { path: string; matches: unknown[] }[]; skipped: { tooLarge: number } };
+    expect(v.skipped.tooLarge, '只有 >10MiB 的 big.ERB 计 tooLarge').toBe(1);
     expect(v.files.find((f) => f.path.endsWith('big.ERB'))).toBeUndefined(); // 没命中也没被整读
+    const midFile = v.files.find((f) => f.path.endsWith('mid-9mib.ERB'));
+    expect(midFile, '(8,10]MiB 照扫：命中照出、不进 tooLarge 账').toBeDefined();
+    expect(midFile!.matches).toHaveLength(1);
+    await fs.rm(mid, { force: true });
     await fs.rm(big, { force: true });
-  }, 30000);
+  }, 60000);
 
-  it('无换行巨行触发行缓冲护栏（tooLarge），内存上限 O(最长行) 的兜底', async () => {
+  it('S21 对齐 Rust：无换行巨行照扫不跳账（Rust scan_file 无巨行护栏，不许误记 tooLarge）', async () => {
     const oneline = path.join(sandbox, 'stream', 'oneline.ERB');
-    await fs.writeFile(oneline, Buffer.alloc(4 * 1024 * 1024 + 1024, 0x62)); // 单行 4MB+ 无换行
+    await fs.writeFile(
+      oneline,
+      Buffer.concat([Buffer.alloc(4 * 1024 * 1024 + 1024, 0x62), Buffer.from('\nneedle tail\n')]),
+    );
     const r = await search2({});
     expect(r.ok).toBe(true);
-    expect((r.value as { skipped: { tooLarge: number } }).skipped.tooLarge).toBeGreaterThanOrEqual(1);
+    const v = r.value as { files: { path: string; matches: { line: number }[] }[]; skipped: { tooLarge: number } };
+    expect(v.skipped.tooLarge, '巨行不进 tooLarge 账（旧镜像的行缓冲护栏已随 S21 对齐删除）').toBe(0);
+    const hit = v.files.find((f) => f.path.endsWith('oneline.ERB'));
+    expect(hit, '巨行文件照扫、第二行命中照出').toBeDefined();
+    expect(hit!.matches).toHaveLength(1);
+    expect(hit!.matches[0]!.line).toBe(2);
     await fs.rm(oneline, { force: true });
-  }, 30000);
+  }, 60000);
 });
 
 describe('调试宿 · 命令分发与限额的自审加固（2026-10-25 性能批）', () => {

@@ -22,11 +22,19 @@
  * - `semantic.projectSymbols`（S8 腿3）：镜像命令面**没有**语义/符号投影命令（该脸读的是
  *   WebView 侧 erb.parser 内核服务，宿命令面不承载）⇒ query 过滤在镜像侧无从发生——
  *   如实标注的边界由专例钉死（将来镜像真投影了该脸，那条会红并逼出「同尺过滤」的补齐）。
+ *
+ * MCP-PERF-S21（分诊账维度）：expect 全 case 增补 tooLarge/unreadable/filtered/excluded 四键，
+ * 与 binary 合成 SearchSkippedDto 五键**逐位**对拍（Rust harness serde 忽略新键，只读消费不动）。
+ * 分诊因里 ACL 权限与符号链接在 JSON 矩阵里表达不了 ⇒ 本文件专设 describe 用本地夹具收口
+ * （Rust 判据 = lib.rs 的 count_walk_error / Unreadable / `!ft.is_file()` 只读引文；
+ *  icacls deny 与 fs.symlink 在非 Windows / 无开发者模式的机器上造不出 ⇒ skip 并如实记录）。
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { createDebugServer, SUPPORTED_COMMANDS } from '../debug-server.mjs';
 
 interface ParityFile {
@@ -54,6 +62,11 @@ interface ParityCase {
     totalMatches: number;
     binary: number;
     filesScanned: number;
+    /** MCP-PERF-S21 分诊账五键的其余四键（缺席 = 0；Rust harness serde 忽略，只读消费） */
+    tooLarge?: number;
+    unreadable?: number;
+    filtered?: number;
+    excluded?: number;
   };
 }
 
@@ -124,7 +137,13 @@ describe('MCP-PERF-S1 · Rust ↔ Node 镜像检索对拍', () => {
         files: { path: string; matches: { line: number; column: number; preview?: string; start?: number; end?: number }[] }[];
         totalMatches: number;
         filesScanned: number;
-        skipped: { binary: number };
+        skipped: {
+          binary: number;
+          tooLarge?: number;
+          unreadable?: number;
+          filtered?: number;
+          excluded?: number;
+        };
         truncated: boolean;
         cancelled: boolean;
         partial?: boolean;
@@ -132,7 +151,20 @@ describe('MCP-PERF-S1 · Rust ↔ Node 镜像检索对拍', () => {
       };
       expect(res.truncated, '对拍夹具不许触墙').toBe(false);
       expect(res.cancelled, '对拍夹具不许取消').toBe(false);
-      expect(res.skipped.binary, `[${c.name}] binary 跳过数与合同不同`).toBe(c.expect.binary);
+      // MCP-PERF-S21：分诊账五键逐位（缺键按 0 记账——镜像没发这键 = 旧宿漂移，当场红）
+      const ledger: [string, number][] = [
+        ['binary', c.expect.binary],
+        ['tooLarge', c.expect.tooLarge ?? 0],
+        ['unreadable', c.expect.unreadable ?? 0],
+        ['filtered', c.expect.filtered ?? 0],
+        ['excluded', c.expect.excluded ?? 0],
+      ];
+      for (const [key, want] of ledger) {
+        expect(
+          res.skipped[key as keyof typeof res.skipped] ?? 0,
+          `[${c.name}] skipped.${key} 与合同不同`,
+        ).toBe(want);
+      }
       expect(res.filesScanned, `[${c.name}] filesScanned 与合同不同`).toBe(c.expect.filesScanned);
       expect(res.totalMatches, `[${c.name}] totalMatches 与合同不同`).toBe(c.expect.totalMatches);
       const got = res.files.map((f) => ({
@@ -206,4 +238,133 @@ describe('MCP-PERF-S18 · semantic.projectSymbols 的镜像边界（如实标注
     const symbolish = SUPPORTED_COMMANDS.filter((n) => /symbol|semantic|outline|projectSymbols/i.test(n));
     expect(symbolish, '镜像命令面不该有符号/语义命令（有了就必须同批补 query 过滤）').toEqual([]);
   });
+});
+
+/* ---------------- MCP-PERF-S21 · 分诊账本机可造因（ACL 权限 / 符号链接） ----------------
+ *
+ * 这些因进不了共享矩阵（JSON 表达不了 ACL / symlink），在此用本地夹具与 **Rust 判据引文**
+ * 对拍（lib.rs 只读消费，本批不改 Rust）：
+ * - 目录读不了（权限 / 句柄）：`read_dir` Err → `count_walk_error` → `skipped.unreadable` +1
+ *   ——镜像侧同账 = walkFiles 的 readdir 失败**必须计数**，不许静默吞成空名单；
+ * - 文件读不了（ACL 收紧）：`fs::read` Err → `FileOutcome::Unreadable` → `skipped.unreadable` +1
+ *   ——镜像 scanFile 的 open 失败同账（本就一致，钉住防漂）；
+ * - 非普通文件（符号链接）：`!ft.is_file()` 一律跳过（不入候选、不计数）；符号链接目录不深入
+ *   （follow_links(false) 同口径）——镜像 walkFiles 的 dirent.isFile()/isDirectory() 判据同账。
+ * 夹具：ACL 靠 icacls deny（Windows 自带；teardown 必须 /reset，否则目录删不掉）；symlink 靠
+ * fs.symlink（Windows 需开发者模式，造不出 ⇒ skip 并如实记录；非 Windows 同理本机不可造）。
+ */
+const S21_PERM_QUERY = 'S21PERM';
+const S21_SYM_QUERY = 'S21SYM';
+const WIN_ICACLS = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'icacls.exe');
+const s21IcaclsUsable =
+  process.platform === 'win32' && existsSync(WIN_ICACLS);
+
+describe('MCP-PERF-S21 · 分诊账本机可造因（Rust 判据引文对拍）', () => {
+  it(
+    'ACL 权限因：目录拒读 ⇒ unreadable+1（不许静默吞）；文件拒读 ⇒ unreadable+1；健康文件照扫',
+    { skip: s21IcaclsUsable ? false : 'S21 记录：非 Windows（或无 icacls）本机不可造 ACL 因，此 case 跳过' },
+    async (ctx) => {
+      const root = path.join(tmpRoot, 'triage-perm');
+      const deniedDir = path.join(root, 'denied-dir');
+      const deniedFile = path.join(root, 'denied-file.erb');
+      const deny = (p: string) => execFileSync(WIN_ICACLS, [p, '/deny', '*S-1-1-0:(RD)'], { stdio: 'pipe' });
+      try {
+        await fs.mkdir(deniedDir, { recursive: true });
+        await fs.writeFile(path.join(deniedDir, 'inner.erb'), `${S21_PERM_QUERY} inside denied dir\n`, 'utf-8');
+        await fs.writeFile(deniedFile, `${S21_PERM_QUERY} locked file\n`, 'utf-8');
+        await fs.writeFile(path.join(root, 'open.erb'), `${S21_PERM_QUERY} visible\n`, 'utf-8');
+        try {
+          deny(deniedDir);
+          deny(deniedFile);
+        } catch {
+          await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+          // S21 记录：deny 在本机未生效（策略/权限环境差异）⇒ ACL 因无法构造，跳过不算过
+          ctx.skip();
+          return;
+        }
+        const res = (await invoke('search_text', {
+          request: {
+            searchId: 21,
+            roots: [root],
+            query: S21_PERM_QUERY,
+            options: { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [] },
+          },
+        })) as {
+          files: { path: string; matches: { line: number; column: number }[] }[];
+          totalMatches: number;
+          filesScanned: number;
+          skipped: { binary: number; tooLarge: number; unreadable: number };
+        };
+        // Rust 判据引文：read_dir(denied-dir) Err → unreadable+1；fs::read(denied-file) Err → unreadable+1；
+        // inner.erb 不入候选（遍历就没到它）、denied-file 与 open 都算「扫过」（scan_file 都被调用了）。
+        expect(res.skipped.unreadable, 'ACL 目录 + ACL 文件各记一笔 unreadable（镜像吞掉 walk 错 = 漏账）').toBe(2);
+        expect(res.filesScanned, '被拒文件与健康文件都算扫过').toBe(2);
+        expect(res.totalMatches).toBe(1);
+        const got = res.files.map((f) => ({
+          path: path.basename(f.path),
+          hits: f.matches.map((m) => [m.line, m.column] as [number, number]),
+        }));
+        expect(got, '只有健康文件出命中').toEqual([{ path: 'open.erb', hits: [[1, 1]] }]);
+        expect(res.skipped.binary).toBe(0);
+        expect(res.skipped.tooLarge).toBe(0);
+      } finally {
+        // teardown 必须 /reset：deny 不 reset 的话 rm -rf 也删不掉（EPERM，探针实测）
+        for (const p of [deniedDir, deniedFile]) {
+          try {
+            execFileSync(WIN_ICACLS, [p, '/reset'], { stdio: 'pipe' });
+          } catch {
+            /* reset 失败只留下一个临时目录，不影响断言 */
+          }
+        }
+        await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+      }
+    },
+    30000,
+  );
+
+  it('符号链接因：文件 symlink 与 junction 都不入候选（静默跳过，不污染 unreadable）', async (ctx) => {
+    const root = path.join(tmpRoot, 'triage-sym');
+    // junction 的落点必须是**树外**真目录：写穿 junction 会把内容写进树里变成真文件（假命中）
+    const junctionTarget = path.join(tmpRoot, 'triage-sym-jtarget');
+    try {
+      await fs.mkdir(root, { recursive: true });
+      await fs.mkdir(junctionTarget, { recursive: true });
+      await fs.writeFile(path.join(root, 'target.erb'), `${S21_SYM_QUERY}T target body\n`, 'utf-8');
+      await fs.writeFile(path.join(junctionTarget, 'inside.erb'), `${S21_SYM_QUERY}J inside junction\n`, 'utf-8');
+      await fs.symlink(path.join(root, 'target.erb'), path.join(root, 'link.erb'), 'file');
+      await fs.symlink(junctionTarget, path.join(root, 'jdir'), 'junction');
+    } catch {
+      await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(junctionTarget, { recursive: true, force: true }).catch(() => {});
+      // S21 记录：Windows 需开发者模式才能造文件符号链接；造不出 ⇒ 跳过并如实标注
+      ctx.skip();
+      return;
+    }
+    try {
+      const res = (await invoke('search_text', {
+        request: {
+          searchId: 21,
+          roots: [root],
+          query: S21_SYM_QUERY,
+          options: { isRegex: false, caseSensitive: false, wholeWord: false, extensions: [] },
+        },
+      })) as {
+        files: { path: string; matches: { line: number; column: number }[] }[];
+        totalMatches: number;
+        filesScanned: number;
+        skipped: { binary: number; tooLarge: number; unreadable: number };
+      };
+      // Rust 判据引文：`!ft.is_file()` 跳过符号链接文件；符号链接目录不深入（follow_links(false) 同口径）。
+      // link.erb 与 target.erb 正文相同 ⇒ 若镜像跟随了 symlink，S21SYMT 会多一笔；
+      // jdir 若被深入，S21SYMJ 会冒出来——两个都不许发生。
+      expect(res.skipped.unreadable, '符号链接是静默跳过，不许记成 unreadable').toBe(0);
+      expect(res.filesScanned, '只有 target.erb 一个候选').toBe(1);
+      expect(res.totalMatches).toBe(1);
+      const got = res.files.map((f) => path.basename(f.path));
+      expect(got, '符号链接文件不重复出命中、junction 内容不出命中').toEqual(['target.erb']);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+      await fs.rm(junctionTarget, { recursive: true, force: true }).catch(() => {});
+    }
+  }, 30000);
 });
