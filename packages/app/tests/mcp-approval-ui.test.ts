@@ -357,6 +357,68 @@ describe('② 批准：scope 投影 / camelCase args / 真发给 runner / 徽标
     expect(hz.findAll('[data-approved="true"]')).toHaveLength(0);
     expect(hz.findAll('.mcp-approve-badge')).toHaveLength(0);
   });
+
+  it('逐工具批准：两枚特权工具各自可选中 → mcp_approve 真发两枚 args → data-tool 徽标/清单逐项翻转', async () => {
+    let state: McpScopeState = {
+      version: 1,
+      sessions: [
+        {
+          clientId: 'c1', tier: 'edit', approvedRoots: ['docs'],
+          approvedTools: [], createdAt: 't0',
+        },
+      ],
+    };
+    const calls: { cmd: string; args?: Record<string, unknown> }[] = [];
+    const runner: McpCommandRunner = async (cmd, args) => {
+      calls.push({ cmd, args });
+      if (cmd === 'mcp_scope_query') return state;
+      if (cmd === 'mcp_audit_query') return [];
+      if (cmd === 'mcp_approve') {
+        const batch = (args as { args: ApprovalBatch }).args;
+        state = { version: 1, sessions: [{ ...state.sessions[0]!, approvedTools: batch.approvedTools }] };
+        return state;
+      }
+      return state;
+    };
+    const hz = await mount(h(AiAccessSection, { runner, pollMs: 0 }));
+
+    const approvalSection = hz.find('section[aria-label="MCP 会话授权"]')!;
+    // 逐工具可见性：每个待批准项带 data-tool（= 工具面名字），两枚都在。
+    const items = [...approvalSection.querySelectorAll('li[data-tool]')];
+    expect(items.map((li) => li.getAttribute('data-tool'))).toEqual([
+      'fileTree.remove', 'fileTree.rename',
+    ]);
+    // 逐项勾选：每个 li 内各有一个独立 checkbox，两个都点。
+    for (const li of items) {
+      const box = li.querySelector('input[type="checkbox"]');
+      expect(box, `应有 ${li.getAttribute('data-tool')} 的复选框`).not.toBeNull();
+      await hz.click(box!);
+    }
+    const approveBtn = [...approvalSection.querySelectorAll('button')].find((b) =>
+      (b.textContent ?? '').includes('批准所选'),
+    )!;
+    await hz.click(approveBtn);
+
+    // 真发 args：一次批准把两枚工具名都写进 approvedTools（camelCase、逐工具精确）。
+    const approveCall = calls.find((c) => c.cmd === 'mcp_approve');
+    expect(approveCall, '应下发 mcp_approve').toBeDefined();
+    const sent = (approveCall!.args as { args: ApprovalBatch }).args;
+    expect(sent.approvedTools).toEqual(['fileTree.remove', 'fileTree.rename']);
+    expect(sent.clientId).toBe('c1');
+    expect(sent.approvedRoots).toContain('docs');
+    expect(Object.keys(sent).sort()).toEqual(
+      ['approvedRoots', 'approvedTools', 'clientId', 'tier'].sort(),
+    );
+
+    // 批准后翻转：清单含两枚 + 两枚各自「已批准」徽标按 data-tool 可见（不刷 scope 必红）。
+    const list = hz.find('[data-testid="mcp-approved-tools"]')!.textContent ?? '';
+    expect(list).toContain('fileTree.remove');
+    expect(list).toContain('fileTree.rename');
+    for (const name of ['fileTree.remove', 'fileTree.rename']) {
+      const li = approvalSection.querySelector(`li[data-tool="${name}"]`)!;
+      expect(li.querySelector(`.mcp-approve-badge[data-tool="${name}"]`), `${name} 应有已批准徽标`).not.toBeNull();
+    }
+  });
 });
 
 /* ================================================================== *
@@ -474,5 +536,26 @@ describe('④ 审计 denied 呈现 / cap / clientId', () => {
     // 选了 denied 就不该再有 ok / filtered 行（选项被删 / denied 被过滤都会让这里红）
     expect(hz.text()).not.toContain('[ok]');
     expect(hz.text()).not.toContain('[filtered]');
+  });
+
+  it('fileTree.rename 未批准调用 ⇒ 审计 [denied] 条目可见（note 不吞、不被过滤掉）', async () => {
+    const renameDenied: AuditEntryView = {
+      ts: 't5', clientId: 'c1', tool: 'fileTree.rename',
+      argsDigest: 'from:str(9),to:str(9)', outcome: 'denied', note: '特权工具 fileTree.rename 未批准',
+    };
+    expect(formatAuditEntry(renameDenied)).toContain('[denied]');
+    expect(formatAuditEntry(renameDenied)).toContain('fileTree.rename');
+    expect(formatAuditEntry(renameDenied)).toContain('未批准');
+    // 混进 ok 条目里选 denied，rename 的 denied 必须仍在屏上（被过滤掉必红）。
+    const hz = await mount(h(AuditPanel, { entries: [rows[0]!, renameDenied] }));
+    const select = hz.find('select[aria-label="按结果过滤审计条目"]') as HTMLSelectElement | null;
+    expect(select).not.toBeNull();
+    await hz.changeSelect(select!, 'denied');
+    const lis = hz.findAll('[data-testid="mcp-audit-rows"] li');
+    expect(lis).toHaveLength(1);
+    expect(lis[0]!.textContent).toContain('[denied]');
+    expect(hz.text()).toContain('fileTree.rename');
+    expect(hz.text()).toContain('未批准');
+    expect(hz.text()).not.toContain('[ok]');
   });
 });

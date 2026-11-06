@@ -24,9 +24,15 @@
  *        内核写域拒绝（`WriteNotAllowedError`）⇒ 显式 `WRITE_DISABLED`（这是正确行为不是缺陷）。
  *   create 用独占创建原语（已存在 ⇒ 显式报错，绝不覆盖）；update 先判存在（不存在 ⇒ 显式报错，
  *   绝不静默改成 create 语义）再走 `writeText` 既有保存语义（保编码 / 保换行 / 写前备份）；
- *   成功后尽力广播内核既有 `file.changed` 事件喂给宿主刷新（App.tsx 同款通道），缺席如实标注。
- *   `fileTree.remove` / `fileTree.rename` / `problems.quickFix` 保持 NOT_WIRED（缺宿主授权面 /
- *   缺稳定 actionId 与 apply 通道，见各自报错文案）。
+ *   remove 先经只读 `stat_file`（`deps.invoke` seam）判文件/目录，删目录须显式 recursive:true，
+ *   文件走 `io.removeFile`、目录走 `io.removeDir`；rename 的 `from` / `to` **两端都过**路径闸与
+ *   第四张表复核（任一越界整批拒绝）再走 `io.rename`。四腿一律绑内核 `kernel.io` 既有写原语，
+ *   **绝不 `deps.invoke` 直调 Rust 写命令绕开内核第一道写允许域**（`assertWritable` / Rust
+ *   `ensure_write_allowed` 双闸都不绕）。
+ *   成功后尽力广播内核既有 `file.changed` 事件喂给宿主刷新（App.tsx 同款通道），缺席如实标注；
+ *   删除 / 改名广播沿用 `@kojo/plugin-api` 既有 `FileChangeKind` 的 `'unlink'` / `'add'`（additive，
+ *   旧 `'add' | 'change'` 调用方零改动）。
+ *   `problems.quickFix` 保持 NOT_WIRED（缺稳定 actionId 与 apply 通道，见其报错文案）。
  */
 import { McpFailure } from '@kojo/mcp-host';
 import type {
@@ -85,6 +91,10 @@ export interface McpKernelLike {
     readonly createFileExclusive?: (path: string) => Promise<boolean>;
     readonly createDirExclusive?: (path: string) => Promise<boolean>;
     readonly writeText?: (path: string, text: string, opts?: Record<string, unknown>) => Promise<void>;
+    /** 删除 / 改名写原语（同为 FileIO 契约，内部各自 `assertWritable`；缺席 ⇒ NOT_WIRED）。 */
+    readonly removeFile?: (path: string) => Promise<void>;
+    readonly removeDir?: (path: string) => Promise<void>;
+    readonly rename?: (from: string, to: string) => Promise<void>;
   };
   readonly plugins: { readonly list: () => unknown[] };
   readonly services: { readonly tryGet: <T = unknown>(key: string) => T | undefined };
@@ -277,8 +287,12 @@ function rethrowWriteGate(err: unknown, relPath: string): never {
   throw err;
 }
 
-/** 写成功后尽力广播内核既有 `file.changed`（宿主刷新既有通道，App.tsx 同款）；缺席/失败如实回报。 */
-function emitFileChanged(kernel: McpKernelLike, kind: 'add' | 'change', absPath: string): boolean {
+/**
+ * 写成功后尽力广播内核既有 `file.changed`（宿主刷新既有通道，App.tsx 同款）；缺席/失败如实回报。
+ * `kind` 沿用 `@kojo/plugin-api` 的 `FileChangeKind`：新建 / 改名落点用 `'add'`、内容改写用
+ * `'change'`、删除 / 改名源用 `'unlink'`（additive 扩 kind，旧 `'add' | 'change'` 调用方零改动）。
+ */
+function emitFileChanged(kernel: McpKernelLike, kind: 'add' | 'change' | 'unlink', absPath: string): boolean {
   const emit = kernel.bus.emit;
   if (typeof emit !== 'function') return false;
   try {
@@ -420,11 +434,11 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
 /* ------------------------------- runSupplemental（IO 腿 + 写腿） ------------------------------- */
 
 /**
- * 只读 IO 腿 + 写腿（fileTree.create / fileTree.update）。写腿走**编辑器既有写通道**
- * （内核 `kernel.io` 的 FileIO 写原语），前面叠第四张表 approvedRoots 复核（见模块头注释），
- * 绝不新建旁路写通道。`fileTree.remove` / `fileTree.rename` / `problems.quickFix` 与
- * 暂无真源的（diff.compare / state.replay / preview.document）由 default 分支显式报
- * `NOT_WIRED`——不擅自开放执行、不造假实现。
+ * 只读 IO 腿 + 写腿（fileTree.create / update / remove / rename）。写腿一律走**编辑器既有
+ * 写通道**（内核 `kernel.io` 的 FileIO 写原语；删 / 改名也走此，绝不 `deps.invoke` 直调 Rust
+ * 写命令绕开内核写允许域），前面叠第四张表 approvedRoots 复核（见模块头注释），绝不新建旁路
+ * 写通道。`problems.quickFix` 与暂无真源的（diff.compare / state.replay / preview.document）由
+ * default 分支显式报 `NOT_WIRED`——不擅自开放执行、不造假实现。
  */
 export function createRunSupplemental(deps: McpIoDeps): (
   name: string,
@@ -571,11 +585,8 @@ export function createRunSupplemental(deps: McpIoDeps): (
 
   /* ---------------- 写腿（双闸：第四张表 approvedRoots + 内核写允许域） ---------------- */
 
-  /** 共同前置：内核到场 + 项目已开 + 有 rootDir + 路径闸 + 第四张表复核 ⇒ { kernel, abs }。 */
-  function requireWriteTarget(
-    args: Record<string, unknown>,
-    scope: McpSessionScope,
-  ): { readonly kernel: McpKernelLike; readonly rootDir: string; readonly relPath: string; readonly abs: string } {
+  /** 写腿共同前置：内核到场 + 项目已开 + 有 rootDir（rename 双路径共用一次上下文）。 */
+  function requireWriteContext(): { readonly kernel: McpKernelLike; readonly rootDir: string } {
     const kernel = deps.getKernel();
     if (!kernel) {
       throw new McpFailure('RESOURCE_UNAVAILABLE', '内核未到场：写类工具不可用（不静默）');
@@ -585,9 +596,24 @@ export function createRunSupplemental(deps: McpIoDeps): (
     if (rootDir === '') {
       throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：写无域基准根（不静默）');
     }
+    return { kernel, rootDir };
+  }
+
+  /** 单个目标：路径闸（与 Rust 同尺）+ 域内解析（fail-closed）+ 写闸一（第四张表）⇒ 绝对路径。 */
+  function resolveWriteTarget(rootDir: string, relPath: string, approvedRoots: readonly string[]): string {
+    const abs = resolveWithinRoot(rootDir, relPath);
+    assertMcpWriteDomain(approvedRoots, relPath); // 写闸一：第四张表（独立授权，不继承三张表）
+    return abs;
+  }
+
+  /** 单目标写腿（create / update / remove，收 `relPath`）一次性取齐上下文 + 解析。 */
+  function requireWriteTarget(
+    args: Record<string, unknown>,
+    scope: McpSessionScope,
+  ): { readonly kernel: McpKernelLike; readonly rootDir: string; readonly relPath: string; readonly abs: string } {
+    const { kernel, rootDir } = requireWriteContext();
     const relPath = asString(args['relPath']);
-    const abs = resolveWithinRoot(rootDir, relPath); // 路径闸（与 Rust 同尺）+ 域内解析（fail-closed）
-    assertMcpWriteDomain(scope.approvedRoots, relPath); // 写闸一：第四张表（独立授权，不继承三张表）
+    const abs = resolveWriteTarget(rootDir, relPath, scope.approvedRoots);
     return { kernel, rootDir, relPath, abs };
   }
 
@@ -698,6 +724,76 @@ export function createRunSupplemental(deps: McpIoDeps): (
     return { path: relPath, updated: true, textLength: content.length, refreshed: emitFileChanged(kernel, 'change', abs) };
   };
 
+  /**
+   * fileTree.remove：删除项目根内文件 / 目录。先经只读 `stat_file`（`deps.invoke` seam，与
+   * fs.stat 腿同口径）判类型：不存在 ⇒ 显式失败（不静默成功）；目录须显式 `recursive:true`
+   * 才放行（destructive 保守，空 / 非空无法从 stat 判定）。写动作走内核 `io.removeFile` /
+   * `io.removeDir`——写闸二（内核 `assertWritable`）与 Rust `ensure_write_allowed` 都不绕。
+   */
+  const fileTreeRemove: McpReaderFn = async (args, scope) => {
+    const input = args ?? {};
+    const { kernel, relPath, abs } = requireWriteTarget(input, scope); // 路径闸 + 域内解析 + 写闸一
+    const io = kernel.io;
+    const stat = await deps.invoke('stat_file', { path: abs }); // 只读判类型，绝不经它写盘
+    if (!stat || typeof stat !== 'object') {
+      throw new McpFailure(
+        'TOOL_EXECUTION_FAILED',
+        `目标不存在，remove 不静默成功（先 fs.stat / io.listDir 确认）：${sanitizeEcho(relPath)}`,
+      );
+    }
+    const isDir = (stat as Record<string, unknown>)['isDirectory'] === true;
+    if (isDir && input['recursive'] !== true) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `目标是目录，删除目录须显式 recursive:true（destructive 保守，不猜空 / 非空）：${sanitizeEcho(relPath)}`,
+      );
+    }
+    const primitive = isDir ? io.removeDir : io.removeFile;
+    if (typeof primitive !== 'function') {
+      throw new McpFailure(
+        'NOT_WIRED',
+        `fileTree.remove 未接线：内核实例未提供 ${isDir ? 'removeDir' : 'removeFile'} 写原语（不静默）`,
+      );
+    }
+    try {
+      await primitive.call(io, abs); // 写闸二：内核 `assertWritable`（writablePaths）先于落盘
+    } catch (err) {
+      rethrowWriteGate(err, relPath);
+    }
+    return {
+      path: relPath,
+      removed: true,
+      removedKind: isDir ? 'directory' : 'file',
+      refreshed: emitFileChanged(kernel, 'unlink', abs),
+    };
+  };
+
+  /**
+   * fileTree.rename：`from` / `to` **两端都过**路径闸 + 域内解析 + 写闸一（任一越界整批拒绝，
+   * 写原语零触达），再走内核 `io.rename`（对两端 `assertWritable` + Rust 两端
+   * `ensure_write_allowed`）。成功后广播源 `'unlink'` + 落点 `'add'`（additive）。
+   */
+  const fileTreeRename: McpReaderFn = async (args, scope) => {
+    const input = args ?? {};
+    const { kernel, rootDir } = requireWriteContext();
+    const fromRel = asString(input['from']);
+    const toRel = asString(input['to']);
+    const fromAbs = resolveWriteTarget(rootDir, fromRel, scope.approvedRoots);
+    const toAbs = resolveWriteTarget(rootDir, toRel, scope.approvedRoots);
+    const io = kernel.io;
+    if (typeof io.rename !== 'function') {
+      throw new McpFailure('NOT_WIRED', 'fileTree.rename 未接线：内核实例未提供 rename 写原语（不静默）');
+    }
+    try {
+      await io.rename.call(io, fromAbs, toAbs); // 写闸二：内核对 from / to 两端 `assertWritable`
+    } catch (err) {
+      rethrowWriteGate(err, `${fromRel} → ${toRel}`);
+    }
+    const fromRefreshed = emitFileChanged(kernel, 'unlink', fromAbs);
+    const toRefreshed = emitFileChanged(kernel, 'add', toAbs);
+    return { from: fromRel, to: toRel, renamed: true, refreshed: fromRefreshed && toRefreshed };
+  };
+
   /* ---- 第四波（LaneF）：4 枚 Rust 只读真源腿，全部经既有 invoke seam + 域内路径闸 ---- */
   const ENCODE_STRING_ENCODINGS: readonly string[] = [
     'utf-8', 'utf-8-bom', 'shift_jis', 'gbk', 'gb18030', 'big5', 'utf-16le', 'utf-16be',
@@ -793,6 +889,8 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['fs.statFiles', statFiles],
     ['fileTree.create', fileTreeCreate],
     ['fileTree.update', fileTreeUpdate],
+    ['fileTree.remove', fileTreeRemove],
+    ['fileTree.rename', fileTreeRename],
   ]);
 
   return async (name, args, scope) => {

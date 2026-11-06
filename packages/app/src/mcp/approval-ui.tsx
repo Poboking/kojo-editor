@@ -9,6 +9,11 @@
  * 已批准状态可见化（additive，2026-11-06）：可选 `approvedTools` 注入第四张表里当前
  * 会话已批准的工具名，面板逐项挂「已批准」徽标 + 一行清单——批准 / 撤销后 UI 状态
  * 翻转可观测（铁律 4：批准落没落地不许靠猜）。未注入时零渲染，旧消费方形状不变。
+ *
+ * 逐工具可见性（additive，2026-11-06 Wave4）：每个待批准项 `<li>` 与「已批准」徽标带
+ * `data-tool`（= 工具面名字），宿主 / 回归测试可据此**逐项**核对 `fileTree.remove` /
+ * `fileTree.rename` 各自的勾选、批准落地与 denied 审计，不再只能靠全文包含猜。旧消费方
+ * 查 `input[type=checkbox]` / `data-approved` / `.mcp-approve-badge` 的形状零变化。
  */
 import { useMemo, useState } from 'react';
 
@@ -182,7 +187,7 @@ export function ApprovalUi({
       <h3>一次批量审批</h3>
       <ul>
         {pending.map((item) => (
-          <li key={item.name}>
+          <li key={item.name} data-tool={item.name}>
             <KitCheck
               checked={selected.has(item.name)}
               onChange={(checked) => toggle(item.name, checked)}
@@ -191,7 +196,7 @@ export function ApprovalUi({
               {item.name}（{item.tier}）— {item.reason}
             </KitCheck>
             {approvedTools !== undefined && approvedSet.has(item.name) && (
-              <span className="mcp-approve-badge" data-approved="true">
+              <span className="mcp-approve-badge" data-approved="true" data-tool={item.name}>
                 已批准
               </span>
             )}
