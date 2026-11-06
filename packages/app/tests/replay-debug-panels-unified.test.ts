@@ -16,8 +16,9 @@ import { describe, expect, it } from 'vitest';
 
 const REPLAY = 'packages/plugins/ui-state-replay/src/index.ts';
 const INJECTOR = 'packages/plugins/ui-snapshot-injector/src/injector-panel.ts';
-const PENDING = 'packages/plugins/ui-snapshot-injector/src/pending-box.ts';
 const FRAME = 'packages/plugins/ui-snapshot-injector/src/panel-frame.ts';
+const KIT_COMBOBOX = 'packages/plugin-api/src/ui-combobox.ts';
+const PENDING = 'packages/plugins/ui-snapshot-injector/src/pending-box.ts';
 
 const read = (p: string): string => readFileSync(p, 'utf8');
 
@@ -44,8 +45,15 @@ describe('口上调试 · 同一套外壳', () => {
     expect(read(INJECTOR)).toContain("'dbg-head'");
   });
 
-  it('注入面板的档位行用同一个字段标签类', () => {
-    expect(read(FRAME)).toContain("'dbg-field-label'");
+  it('注入面板的档位行走 kit 通用字段行（标签单源已上提 ui-kit.css）', () => {
+    // 2026-11-07 组合框批：档位行从"宿主 dbg-field-label + 原生 select"换成
+    // plugin-api 的 KitCombobox——插件本来就不该借用宿主 dbg-* 类名，字段标签的
+    // 视觉单源随组件一起搬到 `.kit-combobox-label`（与回放面板的 dbg-field-label
+    // 同字号/同字距/同退灰，判据从"同名类"升级为"同一份 kit 资产"）。
+    // 两腿钉法：①档位行确实经 kit 组合框渲染；②字段标签类确实住在 kit 组件里。
+    expect(read(FRAME)).toContain('@kojo/plugin-api/ui-combobox');
+    expect(read(FRAME)).toContain('KitCombobox');
+    expect(read(KIT_COMBOBOX)).toContain("'kit-combobox-label'");
   });
 });
 

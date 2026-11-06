@@ -776,3 +776,224 @@
 .kit-gallery-elev-3 {
   box-shadow: var(--elev-3);
 }
+
+/* ---------------- KitCombobox（自绘弹层下拉 · 2026-11-07） ----------------
+   组件实现住 `@kojo/plugin-api` 的 ui-combobox（解耦铁律：插件唯一合法依赖，
+   宿主与全部插件共用一枚实现）；此处只管**视觉语言**，零游戏语汇。
+   与 KitSelect 分工：那枚保留原生 select 弹层，本件是「需要自绘弹层时另提」的那枚
+   （分组头 / 副信息 / 计数 / 键位脚注都住在弹层里）。浮层只吃 --elev-2，
+   局部堆叠吃 --z-local，颜色 / 圆角 / 字号 / 动效一律 token。 */
+.kit-combobox {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.kit-combobox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 var(--space-2);
+  text-align: left;
+  font-family: inherit;
+  font-size: var(--fs-1);
+  color: var(--fg);
+  background-color: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--well-edge);
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.kit-combobox-field:hover {
+  border-color: var(--border-strong);
+}
+.kit-combobox-field:focus-visible,
+.kit-combobox-field.is-open {
+  outline: none;
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.kit-combobox-field:disabled {
+  opacity: var(--disabled-opacity);
+  cursor: default;
+}
+.kit-combobox-label {
+  flex: none;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  letter-spacing: 0.06em;
+}
+.kit-combobox-leading {
+  display: inline-flex;
+  flex: none;
+}
+.kit-combobox-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kit-combobox-field.is-placeholder .kit-combobox-value {
+  color: var(--fg-dim);
+}
+.kit-combobox-value-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.kit-combobox-caret,
+.kit-combobox-check {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+.kit-combobox-caret {
+  background-color: var(--fg-dim);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.6 6.2l4.4 4.4 4.4-4.4' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.6 6.2l4.4 4.4 4.4-4.4' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  transition: transform var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+.kit-combobox-field.is-open .kit-combobox-caret {
+  background-color: var(--accent-text);
+  transform: rotate(180deg);
+}
+.kit-combobox-check {
+  background-color: var(--accent-text);
+  opacity: 0;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.8 8.4l3.3 3.3 7.1-7.4' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.8 8.4l3.3 3.3 7.1-7.4' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.kit-combobox-opt.is-selected .kit-combobox-check {
+  opacity: 1;
+}
+.kit-combobox-pop {
+  position: absolute;
+  z-index: var(--z-local);
+  left: 0;
+  right: 0;
+  top: calc(100% + var(--space-1));
+  overflow: hidden;
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--elev-2);
+  animation: kit-combobox-in var(--dur-1) var(--ease-out) both;
+}
+@keyframes kit-combobox-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kit-combobox-pop { animation: none; }
+}
+.kit-combobox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  letter-spacing: 0.06em;
+}
+.kit-combobox-count {
+  flex: none;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  letter-spacing: 0;
+}
+.kit-combobox-list {
+  /* 弹层整体（头 + 列表 + 脚注）必须装得进**未选档时塌缩的面板**（min-height 340px 的
+     预算 ≈ 列表 160 + 头/脚 ≈ 225）；面板域 absolute 浮层没有 portal，短面板上一旦
+     超高就会被面板的 overflow:auto 裁掉尾行。更多档位走列表内滚动，不再加高。 */
+  max-height: 160px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.kit-combobox-list::-webkit-scrollbar {
+  width: var(--space-2);
+}
+.kit-combobox-list::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+.kit-combobox-opt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 30px;
+  padding: var(--space-1) var(--space-2);
+  text-align: left;
+  font-family: inherit;
+  font-size: var(--fs-1);
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  cursor: pointer;
+}
+.kit-combobox-opt:hover,
+.kit-combobox-opt.is-active {
+  background: var(--hover);
+}
+.kit-combobox-opt.is-selected {
+  background: var(--active);
+  border-color: var(--accent);
+}
+.kit-combobox-opt.is-selected .kit-combobox-opt-label {
+  color: var(--accent-text);
+}
+.kit-combobox-opt-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-meta);
+}
+.kit-combobox-opt-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 44%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.kit-combobox-opt.is-placeholder .kit-combobox-opt-label {
+  color: var(--fg-dim);
+  font-family: inherit;
+}
+.kit-combobox-foot,
+.kit-combobox-empty {
+  padding: var(--space-1) var(--space-2);
+  border-top: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+}
+.kit-combobox-empty {
+  border-top: none;
+}

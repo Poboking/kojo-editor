@@ -12,6 +12,8 @@ export const config = defineConfig({
     alias: {
       // 契约层零依赖叶子：**排在桶之前**（alias 口径是「等于 find」或「以 find + / 开头」）
       '@kojo/plugin-api/eol': r('./packages/plugin-api/src/eol.ts'),
+      // 通用自绘下拉是叶子：排在桶之前，且只由插件按需直引（不进开机静态图）
+      '@kojo/plugin-api/ui-combobox': r('./packages/plugin-api/src/ui-combobox.ts'),
       '@kojo/plugin-api': r('./packages/plugin-api/src/index.ts'),
       // 路 B 新包：能力面 registry（零外部依赖，tests 经本 alias 解析到源）
       '@kojo/mcp-host': r('./packages/mcp-host/src/index.ts'),

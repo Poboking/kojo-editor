@@ -1129,3 +1129,7 @@ export type {
 
 /* ---- ERB-PARITY G3 独占追加区块（勿在他处重排）：跳到实现 kind ---- */
 export type { EditorImplementationRequest, EditorImplementationResult } from './slots-types';
+
+/* 通用控件 `KitCombobox` 刻意**不从根桶棒导出**：它是叶子，只走
+   `@kojo/plugin-api/ui-combobox` 子路径（同 `./eol` 的既有模式）。根桶棒在
+   开机静态依赖图里，从这儿 re-export 会把整枚组件挂上首屏（ps10-eager-graph 体积闸）。 */

@@ -23,6 +23,7 @@ import type {
   VariableSchema,
 } from '@kojo/plugin-api';
 import { activeGameAdapter, growWindow } from '@kojo/plugin-api';
+import { KitCombobox } from '@kojo/plugin-api/ui-combobox';
 import {
   CELL_WINDOW,
   VAR_WINDOW,
@@ -474,25 +475,28 @@ export function createInjectorPanel(deps: InjectorPanelDeps): (props: UIPanelPro
     // 去掉它就得换 `archive!`（把可判定的守卫换成不可判定的断言，不划算）。
     if (!archive) return null;
 
-    // 作用域下拉（选项与标签取自 `scopeOpts`：一次算好，不再逐帧重扫角色块）
+    // 作用域下拉（选项与标签取自 `scopeOpts`：一次算好，不再逐帧重扫角色块）。
+    // 2026-11-07：与档位下拉同迁 kit 组合框——WebView2 的原生 option 弹层由系统
+    // 绘制，深色面板里一点开就是浅灰白；KitCombobox 是同一份可复用资产的第二个
+    // 消费者（组件不认业务语义，本面板只把 scopeOpts 映射成选项）。
     const scopeSel = createElement('div', { className: 'inj-scope-wrap' },
-      createElement('select', {
-        className: 'inj-select',
+      createElement(KitCombobox, {
         value: scope.kind === 'char' ? `char:${scope.blockIndex}` : scope.kind,
-        onChange: (e: { target: { value: string } }) => {
-          const v = e.target.value;
+        onChange: (v: string | null) => {
+          const val = v ?? '';
           setSelectedKey(null);
           setEditError(null);
           setVarWindow(undefined); // 换作用域 = 新变量目录，窗口回到初始
           setCellWindow(undefined);
           setQuickDrafts({}); // 换作用域 = 常用卡换了一批行，草稿一并清
-          if (v === 'top') setScope({ kind: 'top' });
-          else if (v === 'em') setScope({ kind: 'em' });
-          else setScope({ kind: 'char', blockIndex: Number(v.slice(5)) });
+          if (val === 'top') setScope({ kind: 'top' });
+          else if (val === 'em') setScope({ kind: 'em' });
+          else setScope({ kind: 'char', blockIndex: Number(val.slice(5)) });
         },
-      },
-        ...scopeOpts.map((o) => createElement('option', { key: o.value, value: o.value }, o.label)),
-      ),
+        options: scopeOpts.map((o) => ({ value: o.value, label: o.label })),
+        ariaLabel: '选择变量作用域',
+        title: '要改谁的状态就选谁；金钱、日期这些全局的选「主变量区」',
+      }),
       // 一句白话路标：新作者不知道「角色块 / 主变量区」是什么，但知道要改谁
       createElement('div', { className: 'dim inj-hint' },
         '要改某个角色的状态就选她的名字；金钱、日期这些全局的选「主变量区」。'));

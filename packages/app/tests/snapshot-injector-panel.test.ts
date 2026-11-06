@@ -310,10 +310,17 @@ describe('状态注入面板：常用卡与中文搜索', () => {
       root.render(createElement(Panel as never, {} as never));
     });
 
-    // 选档（下拉唯一真档位）→ 深解析回包 → 常用卡就位
-    const sel = host.querySelector('.inj-toolbar select') as HTMLSelectElement;
+    // 选档（自绘组合框：点开字段行 → 点唯一真档位；2026-11-07 档位下拉批换 KitCombobox，
+    // 原生 select 的 change 事件路径不复存在）→ 深解析回包 → 常用卡就位
+    const field = host.querySelector('.inj-toolbar .kit-combobox-field') as HTMLButtonElement;
     await act(async () => {
-      changeValue(sel, '/g/sav/save00.sav');
+      field.click();
+    });
+    const opt = [...host.querySelectorAll('.kit-combobox-opt')].find((o) =>
+      o.textContent?.includes('save00.sav'),
+    ) as HTMLButtonElement;
+    await act(async () => {
+      opt.click();
     });
     await act(async () => {});
 
@@ -358,9 +365,16 @@ describe('状态注入面板：常用卡与中文搜索', () => {
     await act(async () => {
       changeValue(filterInput, '');
     });
-    const scopeSel = host.querySelector('.inj-left select') as HTMLSelectElement;
+    // 换主变量区（自绘组合框：点开字段行 → 点「主变量区」；2026-11-07 作用域同迁 KitCombobox）
+    const scopeField = host.querySelector('.inj-left .kit-combobox-field') as HTMLButtonElement;
     await act(async () => {
-      changeValue(scopeSel, 'top');
+      scopeField.click();
+    });
+    const scopeOpt = [...host.querySelectorAll('.inj-left .kit-combobox-opt')].find((o) =>
+      o.textContent?.includes('主变量区'),
+    ) as HTMLButtonElement;
+    await act(async () => {
+      scopeOpt.click();
     });
     expect(host.querySelector('.inj-quick')!.textContent).toContain('所持金');
     expect(host.querySelector('.inj-quick')!.textContent).toContain('1200');

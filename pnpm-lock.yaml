@@ -318,7 +318,15 @@ importers:
         specifier: workspace:*
         version: link:../plugin-api
 
-  packages/plugin-api: {}
+  packages/plugin-api:
+    dependencies:
+      react:
+        specifier: ^18.0.0 || ^19.0.0
+        version: 19.3.0
+    devDependencies:
+      react-dom:
+        specifier: ^19.3.0
+        version: 19.3.0(react@19.3.0)
 
   packages/plugins/condition-extractor:
     dependencies:

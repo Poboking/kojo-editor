@@ -6,6 +6,13 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./eol": "./src/eol.ts"
+    "./eol": "./src/eol.ts",
+    "./ui-combobox": "./src/ui-combobox.ts"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "react-dom": "^19.3.0"
   }
 }

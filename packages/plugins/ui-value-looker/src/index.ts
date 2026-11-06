@@ -555,7 +555,9 @@ export function createUiValueLookerPlugin(): Plugin {
         id: VALUE_LOOKER_PANEL_ID,
         title: '数值看板',
         icon: 'search',
-        order: 63,
+        // 2026-11-07：挪到 aux 组末尾——数值看板不再夹在「状态回放」(60) 与
+        // 「状态注入器」(71) 中间；查阅类面板统一排到写档 / 预览之后。
+        order: 80,
         location: 'aux',
         defaultActive: false,
         component: ValueLookerPanel,

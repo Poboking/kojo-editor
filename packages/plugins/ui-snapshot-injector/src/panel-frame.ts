@@ -8,6 +8,7 @@
 
 import { createElement, type ReactNode } from 'react';
 import type { SnapshotArchiveEntry } from '@kojo/plugin-api';
+import { KitCombobox, type KitComboboxOption } from '@kojo/plugin-api/ui-combobox';
 import { panelPhase, type EmptySlotsReason } from './panel-logic';
 
 export interface ToolbarProps {
@@ -22,25 +23,39 @@ export interface ToolbarProps {
   readonly onRescan?: () => void;
 }
 
-/** 顶部工具条（说明行 + 档位下拉 + 重新扫描） */
+/**
+ * 顶部工具条（档位字段行 + 重新扫描）。
+ *
+ * 2026-11-07：档位下拉改用 `@kojo/plugin-api` 的通用 `KitCombobox`。上一批只是给
+ * 原生 `<select>` 套了深色字段行，但 WebView2 的 option 弹层由系统绘制，CSS 上色
+ * 根本不生效——一点开就是浅灰白，与深色面板割裂。自绘弹层的组件实现（键盘 /
+ * ARIA / 空态）住在 plugin-api（插件唯一合法依赖，宿主与全部插件共用一枚），
+ * 视觉语言住在 `ui-kit.css` 的 `.kit-combobox-*`；本面板只把扫描结果映射成选项。
+ */
 export function renderToolbar(props: ToolbarProps): ReactNode {
   const { path, rows, setPath, scanning = false, onRescan } = props;
-  const sel = createElement('select', {
-    // 未选档＝占位态：字色退一档，与已选定的白字区分（占位不是"报错"）
-    className: `inj-select${path ? '' : ' is-placeholder'}`,
-    'aria-label': '选择存档档位',
-    title: '从当前项目的存档目录中选一档',
-    value: path ?? '',
-    onChange: (e: { target: { value: string } }) => {
-      setPath(e.target.value || null);
-    },
-  },
-    createElement('option', { key: '', value: '' }, '选择档位…'),
-    ...rows.map((e) =>
-      createElement('option', { key: e.path, value: e.path },
-        `${e.fileName} — ${e.meta?.saveMes || `${e.meta?.charCount ?? '?'} 角色`}`),
-    ),
-  );
+  const options: readonly KitComboboxOption[] = [
+    { value: '', label: '选择档位…', hint: '清除选择', placeholder: true },
+    ...rows.map((e) => ({
+      value: e.path,
+      label: e.fileName,
+      hint: e.meta?.saveMes || `${e.meta?.charCount ?? '?'} 角色`,
+    })),
+  ];
+  const combo = createElement(KitCombobox, {
+    value: path,
+    onChange: (v: string | null) => setPath(v || null),
+    options,
+    ariaLabel: '选择存档档位',
+    title: '从当前项目的存档目录中选一档（↑↓ 选择 · Enter 确认）',
+    label: '存档',
+    // 软盘图标是业务语义，留在面板域；通用控件只认 leading 这个槽
+    leading: createElement('span', { className: 'inj-slot-icon', 'aria-hidden': 'true' }),
+    headTitle: '存档档位',
+    count: rows.length,
+    emptyText: '没有找到可解析的存档档位',
+    footHint: '↑↓ 移动 · Enter 确认 · Esc 收起',
+  });
 
   /**
    * 「重新扫描」是**可用性缺口**不是锦上添花：扫描只发生在 `project.opened`，
@@ -57,20 +72,7 @@ export function renderToolbar(props: ToolbarProps): ReactNode {
       }, scanning ? '扫描中…' : '重新扫描')
     : null;
 
-  return createElement('div', { className: 'inj-toolbar' },
-    // 口上调试 UI 打磨批：这一行退成"档位"字段行（原来那句「改写存档变量（写前自动备份…）」
-    // 与面板头副标题重复，窄面板里挤掉的是下拉本身的宽度）。
-    // 2026-11-06 再打磨：整行包成一个字段控件（软盘图标 + 标签 + 去外观的 select +
-    // 自绘 chevron），焦点环由字段行整体承担；原生白控件不再直接落在深色面板上。
-    // label 隐式关联 select：点图标 / 标签都能展开，且读屏器拿到的是同一个字段名。
-    createElement('label', { className: 'inj-slot-field' },
-      createElement('span', { className: 'inj-slot-icon', 'aria-hidden': 'true' }),
-      createElement('span', { className: 'dbg-field-label' }, '存档'),
-      sel,
-      createElement('span', { className: 'inj-slot-caret', 'aria-hidden': 'true' }),
-    ),
-    rescan,
-  );
+  return createElement('div', { className: 'inj-toolbar' }, combo, rescan);
 }
 
 export interface PhaseBoxProps {

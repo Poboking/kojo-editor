@@ -3093,19 +3093,13 @@ button.danger.armed:active:not(:disabled) {
   gap: var(--space-2);
   flex-wrap: wrap;
 }
-.inj-select {
-  flex: 1;
-  min-width: 160px;
-}
-/* 作用域下拉 + 白话路标（「要改谁选谁的名字」那句） */
+/* 作用域下拉 + 白话路标（「要改谁选谁的名字」那句）——
+   2026-11-07 同迁 kit 组合框（.kit-combobox-*），原生 .inj-select 已删除 */
 .inj-scope-wrap {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-}
-.inj-scope-wrap .inj-select {
-  width: 100%;
 }
 /* 变量搜索框（键名 + 中文标签都可搜） */
 .inj-var-filter {
@@ -10398,6 +10392,14 @@ button.resume-session {
   overflow: auto;
 }
 
+/* 空态面板给足呼吸：未选档时面板塌到内容高（~160px），档位下拉的自绘弹层
+   挂在工具条下方、一开就被面板的 overflow:auto 裁掉尾行（真机取证踩过）。
+   只对空态（含 .inj-empty 的面板）撑到 340px——弹层总高 ≈ 头 31 + 列表 168
+   + 脚注 ≈ 225，工具条底缘之下正好装下；就绪态有变量表，不受影响。 */
+.panel-snapshot-injector:has(> .inj-empty) {
+  min-height: 340px;
+}
+
 /* ---- 面板头：左标题 + 右跳转 + 一行副句 ---- */
 .dbg-head {
   display: flex;
@@ -10686,112 +10688,30 @@ button.resume-session {
   line-height: 1.6;
   text-align: center;
 }
-/* 工具条在窄栏里允许换行：档位下拉优先吃满，重新扫描退到下一行也不缩成两个字 */
-.panel-snapshot-injector .inj-toolbar .inj-select {
-  flex: 1 1 150px;
-}
-.panel-snapshot-injector .inj-rescan {
-  flex: none;
-}
-
-/* ---- 档位下拉（2026-11-06 打磨）----
-   此前 .inj-select 只写了 flex/min-width，落到面板上的是浏览器原生白控件：深色主题里
-   一块白底 + 墨黑三角，窄栏还被「重新扫描」挤成一条。现在整行包成字段控件：
-   软盘图标 / 字段标签 / 去外观的 select / 自绘 chevron，hover 与焦点环由字段行统一
-   承担；option 弹层也按 token 上底色（WebView2 认这两条）。 */
+/* ---- 档位字段行（2026-11-07）：控件与视觉语言已抽到可复用资产 ----
+   自绘弹层下拉 = `@kojo/plugin-api` 的 KitCombobox（插件唯一合法依赖，宿主与全部
+   插件共用一枚实现）+ ui-kit.css 的 `.kit-combobox-*`（全站通用控件语言）。
+   本面板只留三件域内物：工具条排布、软盘图标（业务语义）、「重新扫描」按钮。 */
 .panel-snapshot-injector .inj-toolbar {
   flex-wrap: nowrap;
   gap: var(--space-1);
 }
-.panel-snapshot-injector .inj-slot-field {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-6);
-  padding: 0 var(--space-2);
-  background-color: var(--input-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--well-edge);
-  cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
-}
-.panel-snapshot-injector .inj-slot-field:hover {
-  border-color: var(--border-strong);
-}
-.panel-snapshot-injector .inj-slot-field:focus-within {
-  border-color: var(--focus-ring);
-  box-shadow: var(--shadow-focus);
-}
-.panel-snapshot-injector .inj-slot-field .dbg-field-label {
-  width: auto;
-  flex: none;
-  letter-spacing: 0.06em;
-}
-.panel-snapshot-injector .inj-slot-icon,
-.panel-snapshot-injector .inj-slot-caret {
-  flex: none;
-  width: 12px;
-  height: 12px;
+.panel-snapshot-injector .inj-slot-icon {
+  width: 13px;
+  height: 13px;
+  background-color: var(--accent-text);
+  opacity: 0.9;
   -webkit-mask-position: center;
   mask-position: center;
   -webkit-mask-size: contain;
   mask-size: contain;
   -webkit-mask-repeat: no-repeat;
   mask-repeat: no-repeat;
-}
-.panel-snapshot-injector .inj-slot-icon {
-  width: 13px;
-  height: 13px;
-  background-color: var(--accent-text, var(--accent));
-  opacity: 0.9;
   -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.6 2.6h8.8l2 2v8.8H2.6z' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M5.2 2.6v4.2h5.6V2.6M5 13.4V9.8h6v3.6' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
   mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.6 2.6h8.8l2 2v8.8H2.6z' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M5.2 2.6v4.2h5.6V2.6M5 13.4V9.8h6v3.6' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
-.panel-snapshot-injector .inj-slot-caret {
-  background-color: var(--fg-dim);
-  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.6 6.2l4.4 4.4 4.4-4.4' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.6 6.2l4.4 4.4 4.4-4.4' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  transition: transform var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
-}
-.panel-snapshot-injector .inj-slot-field:focus-within .inj-slot-caret {
-  background-color: var(--accent-text, var(--accent));
-  transform: translateY(1px);
-}
-.panel-snapshot-injector .inj-toolbar .inj-select {
-  flex: 1 1 auto;
-  min-width: 0;
-  width: 100%;
-  height: 26px;
-  appearance: none;
-  -webkit-appearance: none;
-  background: transparent;
-  border: none;
-  outline: none;
-  box-shadow: none;
-  padding: 0;
-  color: var(--fg);
-  font-size: var(--fs-1);
-  text-overflow: ellipsis;
-  cursor: pointer;
-}
-.panel-snapshot-injector .inj-toolbar .inj-select.is-placeholder {
-  color: var(--fg-dim);
-}
-.panel-snapshot-injector .inj-toolbar .inj-select:focus-visible {
-  outline: none;
-  border: none;
-  box-shadow: none;
-}
-.panel-snapshot-injector .inj-toolbar .inj-select option {
-  background-color: var(--surface-overlay, var(--bg-2));
-  color: var(--fg);
-}
-.panel-snapshot-injector .inj-toolbar .inj-select option[value=''] {
-  color: var(--fg-dim);
-}
 .panel-snapshot-injector .inj-rescan {
+  flex: none;
   height: 28px;
   border-radius: var(--radius-md);
   white-space: nowrap;
