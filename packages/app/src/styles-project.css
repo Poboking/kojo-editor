@@ -10694,6 +10694,112 @@ button.resume-session {
   flex: none;
 }
 
+/* ---- 档位下拉（2026-11-06 打磨）----
+   此前 .inj-select 只写了 flex/min-width，落到面板上的是浏览器原生白控件：深色主题里
+   一块白底 + 墨黑三角，窄栏还被「重新扫描」挤成一条。现在整行包成字段控件：
+   软盘图标 / 字段标签 / 去外观的 select / 自绘 chevron，hover 与焦点环由字段行统一
+   承担；option 弹层也按 token 上底色（WebView2 认这两条）。 */
+.panel-snapshot-injector .inj-toolbar {
+  flex-wrap: nowrap;
+  gap: var(--space-1);
+}
+.panel-snapshot-injector .inj-slot-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-6);
+  padding: 0 var(--space-2);
+  background-color: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--well-edge);
+  cursor: pointer;
+  transition: border-color var(--dur-1) var(--ease-out), box-shadow var(--dur-1) var(--ease-out);
+}
+.panel-snapshot-injector .inj-slot-field:hover {
+  border-color: var(--border-strong);
+}
+.panel-snapshot-injector .inj-slot-field:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: var(--shadow-focus);
+}
+.panel-snapshot-injector .inj-slot-field .dbg-field-label {
+  width: auto;
+  flex: none;
+  letter-spacing: 0.06em;
+}
+.panel-snapshot-injector .inj-slot-icon,
+.panel-snapshot-injector .inj-slot-caret {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+}
+.panel-snapshot-injector .inj-slot-icon {
+  width: 13px;
+  height: 13px;
+  background-color: var(--accent-text, var(--accent));
+  opacity: 0.9;
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.6 2.6h8.8l2 2v8.8H2.6z' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M5.2 2.6v4.2h5.6V2.6M5 13.4V9.8h6v3.6' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.6 2.6h8.8l2 2v8.8H2.6z' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3Cpath d='M5.2 2.6v4.2h5.6V2.6M5 13.4V9.8h6v3.6' fill='none' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.panel-snapshot-injector .inj-slot-caret {
+  background-color: var(--fg-dim);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.6 6.2l4.4 4.4 4.4-4.4' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.6 6.2l4.4 4.4 4.4-4.4' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  transition: transform var(--dur-1) var(--ease-out), background-color var(--dur-1) var(--ease-out);
+}
+.panel-snapshot-injector .inj-slot-field:focus-within .inj-slot-caret {
+  background-color: var(--accent-text, var(--accent));
+  transform: translateY(1px);
+}
+.panel-snapshot-injector .inj-toolbar .inj-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 26px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  padding: 0;
+  color: var(--fg);
+  font-size: var(--fs-1);
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.panel-snapshot-injector .inj-toolbar .inj-select.is-placeholder {
+  color: var(--fg-dim);
+}
+.panel-snapshot-injector .inj-toolbar .inj-select:focus-visible {
+  outline: none;
+  border: none;
+  box-shadow: none;
+}
+.panel-snapshot-injector .inj-toolbar .inj-select option {
+  background-color: var(--surface-overlay, var(--bg-2));
+  color: var(--fg);
+}
+.panel-snapshot-injector .inj-toolbar .inj-select option[value=''] {
+  color: var(--fg-dim);
+}
+.panel-snapshot-injector .inj-rescan {
+  height: 28px;
+  border-radius: var(--radius-md);
+  white-space: nowrap;
+  /* 旧版 color:inherit 继承的是 :root 的字色（light 主题只翻 --fg，不翻 color）
+     ⇒ 浅色面板上会留一行亮字。这里显式接 token，五套主题同色轨。 */
+  color: var(--fg);
+}
+
 /* 结果区不套卡面：里面本来就有自己的卡片（台词推演 / 预演台 / 分支链），
    再套一层会出"框里套框"。这里只保留分区标题，内容直接落在面板上。 */
 .dbg-sec.dbg-sec-flat {
@@ -10712,6 +10818,8 @@ button.resume-session {
   gap: var(--space-2);
   padding: var(--space-2);
   font-size: var(--fs-1);
+  /* 撑满副侧栏：此前只按内容高（实测 240 / 712），下面空掉一大片，列表只露两三行 */
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
@@ -10930,7 +11038,11 @@ button.resume-session {
   font-weight: 600;
 }
 
-/* ---- 变量字典页：族栏 + 条目列 ---- */
+/* ---- 变量字典页：族栏 + 条目列 ----
+   2026-11-06 修重叠：此前两枚 input 都没写宽度，走浏览器原生 size=20 的固有宽
+   （族栏 108px 的容器里塞进 153px 的输入，实压进右侧条目列 37px ⇒ 两框叠在一起）。
+   现在「栏收口 + 输入框填满所属栏」双管：栏宽带竖线分区，input 一律 width:100%
+   且 box-sizing:border-box，谁都不许越界。两栏各挂一枚栏目眉，左右职责一眼可分。 */
 .vl-vars {
   flex: 1;
   min-height: 0;
@@ -10938,19 +11050,15 @@ button.resume-session {
   gap: var(--space-2);
 }
 .vl-fams {
-  flex: none;
-  width: 108px;
+  flex: 0 0 124px;
+  width: 124px;
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
-}
-.vl-search {
-  flex: none;
-}
-.vl-search-slim .vl-input {
-  padding: 2px var(--space-1);
-  font-size: var(--fs-0);
+  padding-right: var(--space-2);
+  border-right: 1px solid var(--border-subtle, var(--border));
 }
 .vl-entries {
   flex: 1;
@@ -10959,6 +11067,96 @@ button.resume-session {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  padding-left: 2px;
+}
+/* 栏目眉：小字标签 + 计数牌（字距拉开一点，像索引页的书眉） */
+.vl-col-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 1px 2px 0;
+  font-size: var(--fs-0);
+  color: var(--fg-dim);
+  letter-spacing: 0.06em;
+}
+.vl-col-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vl-col-count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-text, var(--accent));
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-1);
+  letter-spacing: 0;
+}
+/* 检索框：放大镜走 mask（颜色随 token 翻主题），输入框在 flex 里吃满栏宽 */
+.vl-search {
+  flex: none;
+  display: flex;
+  align-items: center;
+  position: relative;
+  min-width: 0;
+}
+.vl-search::before {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  left: var(--space-2);
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  transform: translateY(-50%);
+  background-color: var(--fg-dim);
+  opacity: 0.72;
+  pointer-events: none;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.7' cy='6.7' r='4.3' fill='none' stroke='%23000' stroke-width='1.8'/%3E%3Cpath d='M10 10l4.2 4.2' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='6.7' cy='6.7' r='4.3' fill='none' stroke='%23000' stroke-width='1.8'/%3E%3Cpath d='M10 10l4.2 4.2' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  transition: background-color var(--dur-1) var(--ease-out), opacity var(--dur-1) var(--ease-out);
+}
+.vl-search:focus-within::before {
+  background-color: var(--accent-text, var(--accent));
+  opacity: 1;
+}
+.vl-search .vl-input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: 24px; /* 两栏检索框等高：族栏的 slim 只缩字号与图标，不许矮一截 */
+  box-sizing: border-box;
+  padding-left: 26px;
+  padding-right: 20px;
+  text-overflow: ellipsis;
+}
+.vl-search .vl-input:hover {
+  border-color: var(--border-strong);
+}
+.vl-search input[type='search']::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  background-color: var(--fg-dim);
+  cursor: pointer;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 4.5l7 7m0-7l-7 7' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4.5 4.5l7 7m0-7l-7 7' fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.vl-search-slim::before {
+  left: var(--space-2);
+  width: 10px;
+  height: 10px;
+}
+.vl-search-slim .vl-input {
+  padding-left: 22px;
+  padding-right: 18px;
+  font-size: var(--fs-0);
 }
 
 /* ---- 行基元：族 / 条目 / 符号 / 指令 / 使用点（同一条 hover + 选中配方） ---- */

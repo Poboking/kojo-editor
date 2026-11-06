@@ -417,11 +417,18 @@ export function ValueLookerView(props: ValueLookerViewProps): ReactElement {
         { className: 'vl-fams', role: 'list', 'aria-label': '变量族' },
         createElement(
           'div',
+          { className: 'vl-col-head' },
+          createElement('span', { className: 'vl-col-title' }, '变量族'),
+          createElement('span', { className: 'vl-col-count' }, String(familyRows.length)),
+        ),
+        createElement(
+          'div',
           { className: 'vl-search vl-search-slim' },
           createElement('input', {
             className: 'vl-input',
             type: 'search',
-            placeholder: '搜族（如 标志 / FLAG）',
+            placeholder: '搜族名…',
+            title: '按族名或中文名筛选变量族（如 标志 / FLAG）',
             value: familyQuery,
             'aria-label': '搜索变量族',
             onInput: (e: { currentTarget: { value: string } }) => onFamilyQuery(e.currentTarget.value),
@@ -451,13 +458,20 @@ export function ValueLookerView(props: ValueLookerViewProps): ReactElement {
         { className: 'vl-entries' },
         createElement(
           'div',
+          { className: 'vl-col-head' },
+          createElement('span', { className: 'vl-col-title' }, selectedFamily ? `${selectedFamily} · 条目` : '条目'),
+          createElement('span', { className: 'vl-col-count' }, String(entryRows.length)),
+        ),
+        createElement(
+          'div',
           { className: 'vl-search' },
           createElement('input', {
             className: 'vl-input',
             type: 'search',
-            placeholder: selectedFamily
-              ? `在 ${selectedFamily} 里搜（名字 / 编号 / 说明）`
-              : '先选一个变量族，再搜条目',
+            placeholder: selectedFamily ? `在 ${selectedFamily} 里搜…` : '先选变量族',
+            title: selectedFamily
+              ? `按名字 / 编号 / 中文说明筛选 ${selectedFamily} 族的条目`
+              : '先在左侧选一个变量族，再搜它的条目',
             value: entryQuery,
             'aria-label': '搜索变量条目',
             onInput: (e: { currentTarget: { value: string } }) => onEntryQuery(e.currentTarget.value),

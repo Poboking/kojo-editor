@@ -26,7 +26,10 @@ export interface ToolbarProps {
 export function renderToolbar(props: ToolbarProps): ReactNode {
   const { path, rows, setPath, scanning = false, onRescan } = props;
   const sel = createElement('select', {
-    className: 'inj-select',
+    // 未选档＝占位态：字色退一档，与已选定的白字区分（占位不是"报错"）
+    className: `inj-select${path ? '' : ' is-placeholder'}`,
+    'aria-label': '选择存档档位',
+    title: '从当前项目的存档目录中选一档',
     value: path ?? '',
     onChange: (e: { target: { value: string } }) => {
       setPath(e.target.value || null);
@@ -56,9 +59,16 @@ export function renderToolbar(props: ToolbarProps): ReactNode {
 
   return createElement('div', { className: 'inj-toolbar' },
     // 口上调试 UI 打磨批：这一行退成"档位"字段行（原来那句「改写存档变量（写前自动备份…）」
-    // 与面板头副标题重复，窄面板里挤掉的是下拉本身的宽度）
-    createElement('span', { className: 'dbg-field-label' }, '存档'),
-    sel,
+    // 与面板头副标题重复，窄面板里挤掉的是下拉本身的宽度）。
+    // 2026-11-06 再打磨：整行包成一个字段控件（软盘图标 + 标签 + 去外观的 select +
+    // 自绘 chevron），焦点环由字段行整体承担；原生白控件不再直接落在深色面板上。
+    // label 隐式关联 select：点图标 / 标签都能展开，且读屏器拿到的是同一个字段名。
+    createElement('label', { className: 'inj-slot-field' },
+      createElement('span', { className: 'inj-slot-icon', 'aria-hidden': 'true' }),
+      createElement('span', { className: 'dbg-field-label' }, '存档'),
+      sel,
+      createElement('span', { className: 'inj-slot-caret', 'aria-hidden': 'true' }),
+    ),
     rescan,
   );
 }
