@@ -1,5 +1,6 @@
 import type {
   EventBus,
+  FileChangedEvent,
   FileChangeKind,
   FileWatchStateEvent,
   FileWatchStatus,
@@ -23,6 +24,11 @@ import {
  * 分层口径（`platform.ts` 的 `WatchCallback` 注释早已定死）：
  * Rust 只转发原始事件，**去抖 / 归一化 / 判级在这里**。
  *
+ * **失效调度 = 全局批次窗**（MCP-PERF-S12）：去抖从 per-path 各挂计时链改成一个全局窗——
+ * 窗内收齐变更路径集，窗落地时**一次失效波**（`file.changedBatch`，载荷 = 路径集合）
+ * + 逐文件 `file.changed`（事件面逐字不变：fsFreshness 台账、model 重载等逐文件语义原样）。
+ * 下游索引更新只该听波，一个窗一次；旧消费方照旧听逐文件事件，零改动（additive 契约）。
+ *
  * 生命周期由宿主驱动（与 `register_write_domain` 同款：project.opened 起、
  * project.closed 停）。刻意**不**在 `createKernel` 里自动起：内核测试会开一堆
  * 临时项目目录，自动起监视会留下一堆活句柄（测试进程退出被拖、还制造无关事件）。
@@ -34,11 +40,14 @@ import {
  */
 
 /**
- * 尾缘去抖窗口。取值依据：一次原子写（临时文件 + rename）在 Windows 上会投出
- * 2–3 条事件；外部编辑器保存通常是 1 条；`fs.watch` 递归监视在大目录写入时会连发。
- * 200ms 足以把它们并成一次，又短到读者感觉不出与"直接刷新"的差别。
- * 窗口从**首条**事件起算（不是每来一条就重置）：持续写入的文件也保证 200ms 内必有一次
- * 上报，不会被去抖饿死。
+ * 尾缘去抖窗口（MCP-PERF-S12 起为**全局批次窗**：全监视器一份，不再 per-path）。
+ *
+ * 取值沿现取 200ms：一次原子写（临时文件 + rename）在 Windows 上投 2–3 条事件、
+ * 外部编辑器保存 1 条、`fs.watch` 大目录连发——200ms 足以并成一次，又短到读者
+ * 感觉不出与"直接刷新"的差别。加大（如 500ms）能并更散的批量写，但单文件自动重载
+ * 延迟先涨——单文件延迟不劣化是红线；并波收益已由"全局一份"拿到（20 文件 300ms
+ * ⇒ ≤2 波，per-path 是 20 个独立 flush 时刻）。
+ * 窗从**首条**事件起算（不随事件重置）：持续写入也保证 200ms 内必有一波，不饿死。
  */
 export const WATCH_DEBOUNCE_MS = 200;
 
@@ -59,8 +68,9 @@ export interface FileWatchController {
 
 /**
  * 根目录折叠：递归监视是包含式的——`C:\Game` 与 `C:\Game\kojo` 同时登记会让后者
- * 的每个事件报两遍（两个句柄各投一次），去抖窗内也只是"同一个 key 两次"，
- * 看着无害，实际是让同一次变更有了两条独立计时链。折叠后每个路径只有一个来源。
+ * 的每个事件报两遍（两个句柄各投一次）。批次窗的合并账按 pathKey 去重后看着无害，
+ * 但"同一变更两条来源"仍会放大平台层的事件量、且让末态类别的观测次序依赖句柄次序；
+ * 折叠后每个路径只有一个来源，观测即真值。
  */
 function collapseRoots(roots: string[]): string[] {
   const uniq: string[] = [];
@@ -76,9 +86,14 @@ function collapseRoots(roots: string[]): string[] {
 
 export class FileWatcherServiceImpl implements FileWatchController {
   private readonly debounceMs: number;
+  /** 批次窗的待发账（pathKey → 末态类别 / 原样路径；窗内同路径多事件取末态） */
   private readonly pendingKinds = new Map<string, FileChangeKind>();
   private readonly pendingPaths = new Map<string, string>();
-  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  /**
+   * 全局批次窗定时器（MCP-PERF-S12）：**一个窗一份**，不再 per-path 各挂计时链——
+   * 窗内收齐变更路径集 → 一次失效波 → 下游一次索引更新（改前 20 文件 = 20 个 flush 时刻）。
+   */
+  private batchTimer: ReturnType<typeof setTimeout> | null = null;
 
   private unsubscribe: Unsubscribe | null = null;
   private state_: FileWatchStateEvent = { status: 'stopped', roots: [], failures: [] };
@@ -305,31 +320,43 @@ export class FileWatcherServiceImpl implements FileWatchController {
 
   private onRawEvent(kind: FileChangeKind, path: string): void {
     const key = pathKey(path);
-    // 同一去抖窗内多条事件按**最后观测到的类别**上报：平台按时间顺序投递，末态即真值。
+    // 同一批次窗内多条事件按**最后观测到的类别**上报：平台按时间顺序投递，末态即真值。
     // 反例：外部工具用"删除 + 重建"的方式保存 ⇒ 链是 unlink → create，
     // 若取"最保守"的 unlink，消费方会以为文件没了（而它就在盘上）。
     this.pendingKinds.set(key, kind);
     this.pendingPaths.set(key, path);
-    if (this.timers.has(key)) return; // 窗口已从首条事件起算，不再重置（防饿死）
-    const timer = setTimeout(() => this.flush(key), this.debounceMs);
-    this.timers.set(key, timer);
+    if (this.batchTimer !== null) return; // 窗口已从首条事件起算，不再重置（防饿死）
+    this.batchTimer = setTimeout(() => this.flushBatch(), this.debounceMs);
   }
 
-  private flush(key: string): void {
-    this.timers.delete(key);
-    const kind = this.pendingKinds.get(key);
-    const path = this.pendingPaths.get(key);
-    this.pendingKinds.delete(key);
-    this.pendingPaths.delete(key);
-    if (kind === undefined || path === undefined) return;
-    // 路径**原样透传**：消费方用同一个字符串做键（EditorPane 的 entriesRef、
-    // 文件树的 dirCache），此处改写分隔符会让"文件已打开"判空、事件静默失效。
-    this.deps.bus.emit('file.changed', { kind, path });
+  /**
+   * 窗落地 = 一次失效波：先逐文件 `file.changed`（事件面与改前逐字同形），再一条
+   * `file.changedBatch` 集合回调（下游索引更新听它，一个窗一次）。先逐文件后波 =
+   * 波到达时本窗逐文件面已全部送达（波的消费者读逐文件账不缺行）。
+   */
+  private flushBatch(): void {
+    this.batchTimer = null;
+    if (this.pendingKinds.size === 0) return;
+    const batch: FileChangedEvent[] = [];
+    for (const [key, kind] of this.pendingKinds) {
+      const path = this.pendingPaths.get(key);
+      if (path === undefined) continue;
+      // 路径**原样透传**：消费方用同一个字符串做键（EditorPane 的 entriesRef、
+      // 文件树的 dirCache），此处改写分隔符会让"文件已打开"判空、事件静默失效。
+      batch.push({ kind, path });
+    }
+    this.pendingKinds.clear();
+    this.pendingPaths.clear();
+    if (batch.length === 0) return;
+    for (const ev of batch) this.deps.bus.emit('file.changed', ev);
+    this.deps.bus.emit('file.changedBatch', { changes: batch });
   }
 
   private clearTimers(): void {
-    for (const t of this.timers.values()) clearTimeout(t);
-    this.timers.clear();
+    if (this.batchTimer !== null) {
+      clearTimeout(this.batchTimer);
+      this.batchTimer = null;
+    }
     this.pendingKinds.clear();
     this.pendingPaths.clear();
   }
