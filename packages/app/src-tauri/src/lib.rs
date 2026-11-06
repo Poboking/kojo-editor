@@ -2837,6 +2837,9 @@ struct SearchState {
     /// trigram 指纹索引（MCP-PERF-S1）：与文本缓存同生命周期、同失效键（len+mtime）。
     /// 跨查询复用是它的全部价值 ⇒ 同样住 State。
     index: Arc<search_index::SearchIndexCache>,
+    /// 检索走查计划缓存（MCP-PERF-S9）：目录 mtime 短路 read_dir（名单复用、候选重 stat）。
+    /// 与前两份缓存同住 State：价值全在打字即搜的下一拍。
+    walk_plans: Arc<WalkPlanCache>,
 }
 
 #[derive(Deserialize, Default)]
@@ -3802,6 +3805,353 @@ fn is_excluded(rules: &[ExcludeRule], rel: &str, full: &str) -> bool {
     excluded
 }
 
+/* ----------------------- 检索走查计划缓存（MCP-PERF-S9） ----------------------- */
+//
+// 地板账（D:/Game 超集语料 1496 目录 / 16521 文件，NTFS，S9 探针实测）：collect_files
+// 全树走查中位 166ms，其中裸 read_dir 串行 458ms——地板在**目录枚举的系统调用与
+// 每条目开销**上，不在过滤 CPU。本机（过滤驱动活跃）实测两条 stat 原语都救不了地板：
+// std `symlink_metadata`（CreateFileW，进文件打开路径）~47µs/条 ⇒ 13k 候选 790ms；
+// 免句柄 `GetFileAttributesExW` ~25µs/条 ⇒ 565ms——都**比要省的枚举还贵 3-5 倍**。
+// 逐条 stat 的任何形态都到不了判据线 ⇒ 复用是唯一出路，而复用必须先回答失效：
+//
+//   **复用安全依据 = 双闸**（缺一不可，都有专测钉住）：
+//   ① 目录 mtime 闸（belt，每拍现取）：目录 last-write 与建表时一致 ⇒ 该目录的
+//      **名字集合**没变（NTFS：目录 mtime 只在直接子项增/删/改名时前进；改子文件
+//      内容不动目录 mtime——所以它**扛不了内容变更**）。
+//   ② 根级变更通知闸（gate）：对每个**目录型根**挂 `FindFirstChangeNotificationW`
+//      子树监视（FILE_NAME|DIR_NAME|LAST_WRITE|SIZE|ATTRIBUTES），每拍 0 超时查信号
+//      ——内容写推 LAST_WRITE ⇒ 信号 ⇒ 该根子树计划全清、当拍全量重枚举。这是
+//      **唯一的内容变更通道**（mtime 闸对内容写免疫），②补上①的天生盲区。
+//   两闸都静 ⇒ 目录名单与文件级 (len, mtime) **物理上没变过** ⇒ 整目录复用（免
+//   read_dir、免逐条 stat）。文本/指纹缓存的失效判据（S1 的 len+mtime）吃的正是
+//   这份每拍现算的值 ⇒ 语义与"每拍全枚举"逐字一致，只是便宜了。
+//
+//   **通知时序论证**（无损窗口不存在）：武装先于本根任何枚举；检出信号 ⇒ **先 re-arm
+//   再重枚举**——枚举期间/之后的新变更会再次置位 ⇒ 下一拍接住；信号与 re-arm 之间
+//   落下的变更发生在本次枚举之前 ⇒ 本次重枚举已覆盖。
+//
+//   **退化路径**（宁慢勿错）：武装失败（INVALID_HANDLE_VALUE：网络根 / 超长根 / 权限）
+//   或 re-arm 失败 ⇒ 该根记为"恒信号" ⇒ 每拍全量重枚举＝旧行为；mtime 取不到的目录
+//   不建表（下轮照旧全枚举）。
+//
+// mtime 快照纪律：**先取目录 mtime 再枚举**（同一 worker 顺序两步）。快照与枚举之间
+// 若有增删，真实 mtime 已被推前 ⇒ 下一轮必 MISS 重列；旧名单永远不会配上新 mtime。
+// 反过来（先枚举后 stat）会把"新 mtime + 旧名单"存进缓存 ⇒ 永久漏文件，禁止。
+//
+// 复用安全性的完整依据（四条，缺一不缓存/不复用）：
+//   ① 名单+元数据只含**非隐藏 + 目录非符号链接 + 普通文件**——三个判据全部只吃名字
+//      与枚举时的 file_type，跨查询稳定；扩展名 / glob / 排除每轮重判，缓存不掺查询态。
+//   ② mtime 快照先于枚举（上段），快照窗口外的增删必推 mtime ⇒ 下轮 MISS。
+//   ③ **枚举不干净不建表**：read_dir 整体失败或任一条目错误 ⇒ 本轮丢弃建表资格——
+//      残缺名单若配上当前 mtime 会把漏掉的子树钉死到 mtime 下一次前进，而 ACL 变更
+//      只推 ChangeTime 不推 LastWriteTime，旧行为"每轮重试"能自愈的场合不能被缓存堵死。
+//   ④ 通知闸每拍查（上段）：内容/名字/属性任何变更 ⇒ 子树计划全清。
+//
+// FAT/exFAT 的 mtime 只有 2 秒 granularity、SMB 有元数据缓存——本地 NTFS（eraTW 语料
+// 所在）上通知与 mtime 都是内核强保证；异构文件系统上①②双闸与既有 len+mtime 判据
+// 同形同宽地弱化（对齐而不加新洞）。
+//
+// 体量：名单+每文件 (len,mtime) ⇒ 18k 条目语料 ~2-4MB；目录数/根数越界 ⇒ 清空 + 认输
+// （与字节缓存 SEARCH_CACHE_BUDGET_BYTES 同一形态，不做 LRU——超上限的树本来就该走
+// 全枚举）。句柄是稀缺资源：通知句柄在 Drop 与根数越界时显式关闭。
+
+/// 缓存目录数上限（18k 条目语料 ≈ 1.5k 目录 ≈ 2-4MB；上限再大就该认输）。
+const WALK_PLAN_MAX_DIRS: usize = 65_536;
+
+/// 同时监视的检索根数上限（超过 ⇒ 全部弃监视 + 清计划 + 认输）。
+const WALK_MAX_WATCHED_ROOTS: usize = 64;
+
+/// 一个目录的走查计划：mtime 快照 + 非隐藏子目录名 / 非隐藏普通文件的 (名字, len,
+/// mtime)（**未过滤**——扩展名 / glob / 排除每轮重判，判据只吃名字，跨查询稳定；
+/// (len, mtime) 是 S1 文本/指纹缓存的失效判据，复用前提是双闸都静 ⇒ 物理未变）。
+struct DirPlan {
+    mtime_ns: u64,
+    subdirs: Vec<std::ffi::OsString>,
+    files: Vec<(std::ffi::OsString, Option<u64>, Option<u64>)>,
+}
+
+/// 跨查询的走查计划缓存：目录路径分键、根路径分监视句柄。生命周期与文本/指纹缓存
+/// 相同（进程内、跨检索、不落盘）——价值全在"打字即搜的下一拍"。
+#[derive(Default)]
+struct WalkPlanCache {
+    dirs: std::sync::Mutex<
+        std::collections::HashMap<std::path::PathBuf, std::sync::Arc<DirPlan>>,
+    >,
+    /// 每个目录型检索根一把变更通知句柄（Windows）；INVALID_HANDLE_VALUE ＝ 武装失败
+    /// ⇒ 恒信号（每拍全枚举）。句柄按 isize 存（HANDLE = *mut c_void 非 Send/Sync，
+    /// 缓存要跨线程共享；FFI 边界再转回去——句柄本质就是个不透明整数）。锁序：
+    /// roots → dirs（worker 只拿 dirs，无反向）。
+    #[cfg(windows)]
+    roots: std::sync::Mutex<std::collections::HashMap<std::path::PathBuf, isize>>,
+    /// 命中腿计数（测试面观察"这一拍真的走了复用"；生产零成本计数）。
+    hits: std::sync::atomic::AtomicU64,
+}
+
+impl WalkPlanCache {
+    /// 对账 + 取计划：目录 mtime 对上 ⇒ 返回现成名单（调用方免 read_dir）。
+    fn lookup(&self, dir: &Path, mtime_ns: u64) -> Option<std::sync::Arc<DirPlan>> {
+        let hit = self
+            .dirs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(dir)
+            .filter(|p| p.mtime_ns == mtime_ns)
+            .cloned();
+        if hit.is_some() {
+            self.hits
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        hit
+    }
+
+    /// 建表（mtime 拿不到就不缓存——下轮照旧全枚举，宁可慢不可错）。
+    fn store(
+        &self,
+        dir: &Path,
+        mtime_ns: u64,
+        subdirs: Vec<std::ffi::OsString>,
+        files: Vec<(std::ffi::OsString, Option<u64>, Option<u64>)>,
+    ) {
+        let mut g = self.dirs.lock().unwrap_or_else(|e| e.into_inner());
+        if g.len() >= WALK_PLAN_MAX_DIRS {
+            g.clear(); // 越界 ⇒ 清空 + 认输（与字节缓存 SEARCH_CACHE_BUDGET_BYTES 同形态）
+        }
+        g.insert(
+            dir.to_path_buf(),
+            std::sync::Arc::new(DirPlan { mtime_ns, subdirs, files }),
+        );
+    }
+
+    #[cfg(test)]
+    fn plan_count(&self) -> usize {
+        self.dirs.lock().unwrap_or_else(|e| e.into_inner()).len()
+    }
+
+    #[cfg(test)]
+    fn hit_count(&self) -> u64 {
+        self.hits.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 清掉落在 root 子树内的全部计划（根信号 ⇒ 整棵重枚举；Path::starts_with 是
+    /// 按组件的前缀比较，`D:/Game` 不会误伤 `D:/GameX`）。
+    fn purge_under(&self, root: &Path) {
+        self.dirs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|dir, _| !dir.starts_with(root));
+    }
+
+    /// 根级变更闸（每拍、每个目录型根恰好一次，先于该根的任何枚举）：
+    /// 首见武装 → 0 超时查信号 → 有信号则 **先 re-arm 再清该根子树计划**。
+    #[cfg(windows)]
+    fn watch_and_purge(&self, root: &Path) {
+        use windows_sys::Win32::Foundation::{INVALID_HANDLE_VALUE, WAIT_OBJECT_0};
+        use windows_sys::Win32::Storage::FileSystem::{
+            FindCloseChangeNotification, FindNextChangeNotification,
+        };
+        use windows_sys::Win32::System::Threading::WaitForSingleObject;
+        // 只看目录根：文件根没有子树，符号链接根与 follow_links(false) 同口径不深入
+        match std::fs::symlink_metadata(root) {
+            Ok(md) if md.is_dir() && !md.file_type().is_symlink() => {}
+            _ => return,
+        }
+        let signaled = {
+            let mut g = self.roots.lock().unwrap_or_else(|e| e.into_inner());
+            // 根数越界 ⇒ 关句柄 + 清监视 + 清计划（句柄是稀缺资源，与目录上限同形态）
+            if g.len() >= WALK_MAX_WATCHED_ROOTS {
+                for h in g.values() {
+                    if *h != INVALID_HANDLE_VALUE as isize {
+                        // SAFETY：h 是本缓存持有的通知句柄，除本处与 Drop 外无人关闭
+                        unsafe {
+                            FindCloseChangeNotification(*h as _);
+                        }
+                    }
+                }
+                g.clear();
+                self.dirs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clear();
+            }
+            let h = match g.get(root) {
+                Some(&h) => h,
+                None => {
+                    let h = arm_change_watch(root);
+                    g.insert(root.to_path_buf(), h);
+                    h
+                }
+            };
+            if h == INVALID_HANDLE_VALUE as isize {
+                return self.purge_under(root); // 武装失败 ⇒ 恒信号 ⇒ 每拍全枚举（旧行为）
+            }
+            let handle = h as windows_sys::Win32::Foundation::HANDLE;
+            // SAFETY：handle 是合法通知句柄；0 超时＝立即返回，不阻塞检索
+            let signaled = unsafe { WaitForSingleObject(handle, 0) } == WAIT_OBJECT_0;
+            if signaled {
+                // 先 re-arm 再重枚举（时序论证见本段头注）；re-arm 失败 ⇒ 弃柄退恒信号
+                // SAFETY：同上，handle 合法且只在此处推进
+                if unsafe { FindNextChangeNotification(handle) } == 0 {
+                    // SAFETY：弃柄前唯一一次关闭
+                    unsafe {
+                        FindCloseChangeNotification(handle);
+                    }
+                    g.insert(root.to_path_buf(), INVALID_HANDLE_VALUE as isize);
+                }
+            }
+            signaled
+        };
+        if signaled {
+            self.purge_under(root);
+        }
+    }
+
+    /// 非 Windows 无通知原语 ⇒ 恒信号（每拍全枚举＝旧行为，宁慢勿错）。
+    #[cfg(not(windows))]
+    fn watch_and_purge(&self, root: &Path) {
+        match std::fs::symlink_metadata(root) {
+            Ok(md) if md.is_dir() && !md.file_type().is_symlink() => {}
+            _ => return,
+        }
+        self.purge_under(root);
+    }
+}
+
+/// 武装一个根的子树变更监视；失败 ⇒ INVALID_HANDLE_VALUE（调用方记"恒信号"）。
+#[cfg(windows)]
+fn arm_change_watch(root: &Path) -> isize {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FindFirstChangeNotificationW, FILE_NOTIFY_CHANGE_ATTRIBUTES, FILE_NOTIFY_CHANGE_DIR_NAME,
+        FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE,
+    };
+    // 五个过滤位全开：名字增删改（FILE/DIR_NAME）扛名单，内容/体积/属性（LAST_WRITE/
+    // SIZE/ATTRIBUTES）扛文件级 (len,mtime)——双闸各自的失效通道都从这里来
+    const FILTER: u32 = FILE_NOTIFY_CHANGE_FILE_NAME
+        | FILE_NOTIFY_CHANGE_DIR_NAME
+        | FILE_NOTIFY_CHANGE_LAST_WRITE
+        | FILE_NOTIFY_CHANGE_SIZE
+        | FILE_NOTIFY_CHANGE_ATTRIBUTES;
+    let mut wide: Vec<u16> = root.as_os_str().encode_wide().collect();
+    wide.push(0);
+    // SAFETY：wide 是 NUL 结尾的 UTF-16 路径；返回句柄交由 WalkPlanCache 持有，
+    // 在 watch_and_purge（re-arm 失败 / 越界）与 Drop 中关闭，别处不碰
+    unsafe { FindFirstChangeNotificationW(wide.as_ptr(), 1, FILTER) as isize }
+}
+
+impl Drop for WalkPlanCache {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+            use windows_sys::Win32::Storage::FileSystem::FindCloseChangeNotification;
+            for h in self
+                .roots
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+            {
+                if *h != INVALID_HANDLE_VALUE as isize {
+                    // SAFETY：h 是本缓存持有的通知句柄，Drop 是它的最后一位持有者
+                    unsafe {
+                        FindCloseChangeNotification(*h as _);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Metadata → epoch 纳秒（检索 walk 用；pre-1970 / 取失败 ⇒ None）。
+fn mtime_ns_of(md: &std::fs::Metadata) -> Option<u64> {
+    md.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+}
+
+/* ------------------ Windows 免句柄元数据（S9 mtime 闸的现取原语） ------------------ */
+//
+// std 的 `fs::symlink_metadata` 在 Windows 上走 CreateFileW（开句柄 → 查询 → 关闭），
+// 语料机实测摊到每条 ~47µs（过滤驱动在**文件打开路径**上收费）⇒ 13k 候选每拍 ~600ms
+// ——比它要省的 read_dir 枚举还贵 5 倍（S9 探针实测 790ms vs 基线 166ms，2026-11-07）；
+// 免句柄 `GetFileAttributesExW` ~25µs/条 ⇒ 565ms，一样到不了判据线。它在本批的岗位
+// 是 **mtime 闸的每拍现取**（每目录一次，~1.5k 次 ⇒ 并行后 ~5-10ms），不是逐文件 stat。
+// windows-sys 已是本 crate 直接依赖（见 Cargo.toml 启动器段注记），本批给它点亮
+// `Win32_Storage_FileSystem`（GetFileAttributesExW + 变更通知三件套）——不新增包、
+// 不新增编译单元。
+//
+// 与 std 的一致性（闸键必须逐字节对上，否则假失效把热计划全打散）：
+//   * mtime：FILETIME（1601 起的 100ns 刻度）− 纪元差 ⇒ ×100 = UNIX 纳秒，与 std
+//     `modified().duration_since(UNIX_EPOCH).as_nanos()` 的整数算术恒等（无舍入）；
+//   * 普通文件语义：DIRECTORY 与 REPARSE_POINT 一律非普通文件（后者与
+//     `symlink_metadata` 不跟随符号链接同口径）；
+//   * 失败（含 >260 字符长路径——本原语不认 \\?\ 自动补全）⇒ 退回
+//     `std::fs::symlink_metadata`（它自己补前缀），再失败 ⇒ None ⇒ 走既有的
+//     "取不到 ⇒ 扫描时补 stat / 不缓存"旧语义，行为面不变。
+
+/// FILETIME（1601-01-01 起的 100ns 刻度）→ UNIX 纪元纳秒；1970 前的值 ⇒ None
+/// （与 `duration_since(UNIX_EPOCH).ok()` 同语义）。
+#[cfg(windows)]
+fn filetime_to_unix_ns(ft: &windows_sys::Win32::Foundation::FILETIME) -> Option<u64> {
+    // 11644473600 s × 10^7（每秒的 100ns 刻度）——**别写成纳秒口径**（×100 又一处）
+    const EPOCH_DIFF_100NS: u64 = 116_444_736_000_000_000;
+    let ticks = ((ft.dwHighDateTime as u64) << 32) | ft.dwLowDateTime as u64;
+    ticks
+        .checked_sub(EPOCH_DIFF_100NS)
+        .and_then(|t| t.checked_mul(100))
+}
+
+/// 免句柄单条元数据：`(是否普通文件, 体积, mtime 纳秒)`。非 Windows 退回 std
+/// （同语义：symlink_metadata 不跟随；取不到 ⇒ None）。
+#[cfg(windows)]
+fn quick_file_metadata(path: &Path) -> Option<(bool, Option<u64>, Option<u64>)> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileAttributesExW, GetFileExInfoStandard, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_REPARSE_POINT, WIN32_FILE_ATTRIBUTE_DATA,
+    };
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    let zero_ft = windows_sys::Win32::Foundation::FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let mut data = WIN32_FILE_ATTRIBUTE_DATA {
+        dwFileAttributes: 0,
+        ftCreationTime: zero_ft,
+        ftLastAccessTime: zero_ft,
+        ftLastWriteTime: zero_ft,
+        nFileSizeHigh: 0,
+        nFileSizeLow: 0,
+    };
+    // SAFETY：wide 是 NUL 结尾的 UTF-16；data 是本函数私有的可写缓冲。该调用只读
+    // 路径串、只写 data，不保存任一指针越过本调用。
+    let ok = unsafe {
+        GetFileAttributesExW(
+            wide.as_ptr(),
+            GetFileExInfoStandard,
+            &mut data as *mut WIN32_FILE_ATTRIBUTE_DATA as *mut _,
+        )
+    };
+    if ok != 0 {
+        let is_file = data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+            && data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT == 0;
+        let size = Some(((data.nFileSizeHigh as u64) << 32) | data.nFileSizeLow as u64);
+        Some((is_file, size, filetime_to_unix_ns(&data.ftLastWriteTime)))
+    } else {
+        // 长路径等本原语够不着的场合：std 的 symlink_metadata 会补 \\?\ 前缀
+        let md = std::fs::symlink_metadata(path).ok()?;
+        Some((md.is_file(), Some(md.len()), mtime_ns_of(&md)))
+    }
+}
+
+/// 非 Windows：无免句柄原语可吃，直走 std（同语义）。
+#[cfg(not(windows))]
+fn quick_file_metadata(path: &Path) -> Option<(bool, Option<u64>, Option<u64>)> {
+    let md = std::fs::symlink_metadata(path).ok()?;
+    Some((md.is_file(), Some(md.len()), mtime_ns_of(&md)))
+}
+
 /// 收集候选文件（去重 + 路径升序 ⇒ 并行合并后输出顺序与线程数无关）。
 ///
 /// 排序口径**逐字不变**（小写整路径的升序、稳定序、按同键去重），但**每条路径只算一次
@@ -3823,12 +4173,17 @@ fn is_excluded(rules: &[ExcludeRule], rel: &str, full: &str) -> bool {
 /// `globs`（P2-15）：路径形态过滤，与扩展名是**且**的关系（两者都满足才扫；
 /// 空 = 不按形态过滤 = 今天行为逐字不变）。被任一方挡下的文件都计入 `filtered`
 /// （界面上与"被类型过滤挡下"同一行读数——glob 也是类型过滤的一种形态，不静默）。
+///
+/// `plans`（MCP-PERF-S9）：走查计划缓存——根级变更通知闸 + 目录 mtime 闸都静 ⇒
+/// 命中腿整目录复用（名单 + 文件级 (len,mtime)）；任一闸动 ⇒ miss 腿即原枚举路径
+/// 并顺手建表。语义逐字不变（见 WalkPlanCache 头注）。
 fn collect_files(
     roots: &[String],
     extensions: &[String],
     globs: &[String],
     exclude_rules: &[ExcludeRule],
     threads: usize,
+    plans: &WalkPlanCache,
     filtered: &mut u32,
     excluded: &mut u32,
     walk_errors: &mut u32,
@@ -3853,6 +4208,8 @@ fn collect_files(
     // 根先摊平：目录进队列；**文件根**直接当候选（walkdir 对文件根也只产出它自己
     // 一条，这条边界不能因为换了遍历器就丢掉）；符号链接根与 walkdir 的
     // `follow_links(false)` 同口径——不跟随、也不深入。
+    // MCP-PERF-S9：目录根先过变更闸（查信号 + re-arm + 清子树计划）——**先于该根的
+    // 任何枚举**（时序论证见 WalkPlanCache 头注），此后 worker 才开始吃队列。
     let mut seeds: Vec<(String, PathBuf, Option<u64>, Option<u64>)> = Vec::new();
     {
         let mut g = queue.lock().unwrap();
@@ -3881,6 +4238,7 @@ fn collect_files(
                     }
                 }
                 _ => {
+                    plans.watch_and_purge(root);
                     g.stack.push((i, root.clone()));
                     g.pending += 1;
                 }
@@ -3909,13 +4267,65 @@ fn collect_files(
                                 g = wake.wait(g).unwrap();
                             }
                         };
+                        // ── S9 计划腿：先取目录自身 mtime（mtime 闸，快照先于枚举，见
+                        // WalkPlanCache 头注；免句柄原语见 quick_file_metadata 头注——
+                        // std 开句柄的 stat 在过滤驱动底下比 read_dir 本身还贵）
+                        let cur_mtime = quick_file_metadata(&dir).and_then(|(_, _, m)| m);
+                        if let Some(cur_ns) = cur_mtime {
+                            if let Some(plan) = plans.lookup(&dir, cur_ns) {
+                                // 命中腿：通知闸静 + 目录 mtime 未动 ⇒ 名单与文件级
+                                // (len, mtime) 物理上没变过 ⇒ 整目录复用（免 read_dir、
+                                // 免逐条 stat——两条 stat 原语本机实测都比枚举贵，见头注）。
+                                // 判据见 walk_plan_* 测试族（内容改 ⇒ 通知 ⇒ 清计划重枚举）。
+                                for (name, size, mtime_ns) in &plan.files {
+                                    if let Some((key, path, _, _)) = walk_consider(
+                                        dir.join(name),
+                                        &root_paths[ri],
+                                        extensions,
+                                        &glob_res,
+                                        exclude_rules,
+                                        &filtered_n,
+                                        &excluded_n,
+                                        *size,
+                                        *mtime_ns,
+                                    ) {
+                                        local.push((key, path, *size, *mtime_ns));
+                                    }
+                                }
+                                {
+                                    let mut g = queue.lock().unwrap();
+                                    let n = plan.subdirs.len();
+                                    if n > 0 {
+                                        g.pending += n;
+                                        for name in &plan.subdirs {
+                                            g.stack.push((ri, dir.join(name)));
+                                        }
+                                    }
+                                    g.pending -= 1;
+                                    if n > 0 || g.pending == 0 {
+                                        wake.notify_all();
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+                        // ── miss 腿（原枚举路径）+ 名单建表 ──
                         let mut subdirs: Vec<PathBuf> = Vec::new();
+                        let mut plan_subdirs: Vec<std::ffi::OsString> = Vec::new();
+                        let mut plan_files: Vec<(std::ffi::OsString, Option<u64>, Option<u64>)> =
+                            Vec::new();
+                        // 枚举走干净了才许建表：残缺名单配上当前 mtime 会把"漏掉的条目"
+                        // 钉死到 mtime 下一次前进为止，而 read_dir 失败（ACL 收紧后放开）
+                        // 与条目级错误都不推进 LastWriteTime（ACL 改的是 ChangeTime）——
+                        // 旧行为每轮重试能自愈 ⇒ 宁可慢不可错，不干净就不缓存。
+                        let mut plan_clean = true;
                         match std::fs::read_dir(&dir) {
                             Ok(rd) => {
                                 for ent in rd {
                                     let ent = match ent {
                                         Ok(e) => e,
                                         Err(err) => {
+                                            plan_clean = false;
                                             count_walk_error(&errors_n, &reported, &err);
                                             continue;
                                         }
@@ -3928,6 +4338,7 @@ fn collect_files(
                                     let ft = match ent.file_type() {
                                         Ok(t) => t,
                                         Err(err) => {
+                                            plan_clean = false;
                                             count_walk_error(&errors_n, &reported, &err);
                                             continue;
                                         }
@@ -3936,6 +4347,7 @@ fn collect_files(
                                         // 符号链接目录不深入（防环），与 follow_links(false) 同口径
                                         if !ft.is_symlink() {
                                             subdirs.push(dir.join(&name));
+                                            plan_subdirs.push(name);
                                         }
                                         continue;
                                     }
@@ -3949,11 +4361,8 @@ fn collect_files(
                                     // （与 `walk_dir_of` 同一条前提）。取不到 ⇒ None ⇒ 扫描时补 stat。
                                     let md = ent.metadata().ok().filter(|m| m.is_file());
                                     let size = md.as_ref().map(|m| m.len());
-                                    let mtime_ns = md
-                                        .as_ref()
-                                        .and_then(|m| m.modified().ok())
-                                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                                        .map(|d| d.as_nanos() as u64);
+                                    let mtime_ns = md.as_ref().and_then(|m| mtime_ns_of(m));
+                                    plan_files.push((name.clone(), size, mtime_ns));
                                     if let Some(hit) = walk_consider(
                                         dir.join(&name),
                                         &root_paths[ri],
@@ -3970,7 +4379,17 @@ fn collect_files(
                                 }
                             }
                             // 目录读不了（权限 / 句柄 / 超长路径）⇒ 计入 unreadable 并出声
-                            Err(err) => count_walk_error(&errors_n, &reported, &err),
+                            Err(err) => {
+                                plan_clean = false;
+                                count_walk_error(&errors_n, &reported, &err);
+                            }
+                        }
+                        // 建表：mtime 拿不到（取失败 / pre-1970）或枚举没走干净就不缓存
+                        // ——下轮照旧全枚举（同上：残缺名单会永久漏子树，宁可慢不可错）
+                        if let Some(ns) = cur_mtime {
+                            if plan_clean {
+                                plans.store(&dir, ns, plan_subdirs, plan_files);
+                            }
                         }
                         {
                             let mut g = queue.lock().unwrap();
@@ -4114,6 +4533,7 @@ fn run_search(
         req,
         &SearchTextCache::default(),
         &search_index::SearchIndexCache::default(),
+        &WalkPlanCache::default(),
     )
 }
 
@@ -4134,6 +4554,7 @@ fn run_search_with_files(
     req: &SearchRequestDto,
     cache: &SearchTextCache,
     index: &search_index::SearchIndexCache,
+    walk_plans: &WalkPlanCache,
 ) -> Result<SearchResultDto, String> {
     let started = std::time::Instant::now();
     if req.query.is_empty() {
@@ -4205,6 +4626,7 @@ fn run_search_with_files(
         globs,
         &exclude_rules,
         threads,
+        walk_plans,
         &mut filtered,
         &mut excluded,
         &mut walk_errors,
@@ -4397,6 +4819,7 @@ async fn search_text(
     // 缓存句柄也 clone 出去：`spawn_blocking` 的闭包要 'static，且缓存本身活在图外的 State 里
     let cache = state.cache.clone();
     let index = state.index.clone();
+    let walk_plans = state.walk_plans.clone();
     // 命令本体跑在阻塞线程池上：这是纯 CPU + 磁盘的活，不许占住异步运行时的执行线程
     tauri::async_runtime::spawn_blocking(move || {
         let emit = |p: SearchProgressPayload| {
@@ -4405,7 +4828,7 @@ async fn search_text(
         let emit_files = |batch: &SearchFilesPayload<'_>| {
             let _ = app.emit(SEARCH_FILES_EVENT, batch.clone());
         };
-        run_search_with_files(&emit, &emit_files, &cancel, &request, &cache, &index)
+        run_search_with_files(&emit, &emit_files, &cancel, &request, &cache, &index, &walk_plans)
     })
     .await
     .map_err(|e| format!("检索线程失败：{e}"))?

@@ -78,6 +78,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
     "Win32_System_LibraryLoader",
+    # 2026-11-07 检索 S9：命中腿的单条 stat 吃 GetFileAttributesExW（免句柄，不进
+    # 过滤驱动的文件打开路径——lib.rs `quick_file_metadata` 头注有整笔账）。同一依赖
+    # 点 feature，不新增包、不新增编译单元。
+    "Win32_Storage_FileSystem",
 ] }
 
 [profile.release]

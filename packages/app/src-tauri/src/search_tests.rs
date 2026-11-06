@@ -745,6 +745,7 @@ fn s1_perf_probe_prints_four_readings() {
     // A/B 开关：KOJO_SEARCH_BENCH_NO_NEEDLE=1 ⇒ 正则 + 大小写不敏感 ⇒ 预筛全部关闭
     //（needle None、byte_prefilter None）＝本批之前的解码+全扫路径，同机同库对拍。
     let no_needle = std::env::var("KOJO_SEARCH_BENCH_NO_NEEDLE").as_deref() == Ok("1");
+    let walk_plans = crate::WalkPlanCache::default();
 
     // ⓪ walk 地板（MCP-PERF-S9）：`collect_files` 本体单独掐表——检索总耗时里"列出候选"
     // 这一段的地板，S9 批的压缩对象。先丢一轮焐热 OS 文件缓存（与生产 warm 形态一致），
@@ -761,6 +762,7 @@ fn s1_perf_probe_prints_four_readings() {
                 &[],
                 &[],
                 threads,
+                &walk_plans,
                 &mut filtered,
                 &mut excluded,
                 &mut walk_errors,
@@ -855,6 +857,7 @@ fn s1_perf_probe_prints_four_readings() {
             &req,
             &cache,
             &index,
+            &walk_plans,
         )
         .unwrap();
         out
@@ -945,6 +948,7 @@ fn s1_perf_probe_prints_four_readings() {
                 &req,
                 &cold_cache,
                 &cold_index,
+                &crate::WalkPlanCache::default(),
             )
             .unwrap()
         });
@@ -986,6 +990,7 @@ fn s1_perf_probe_prints_four_readings() {
             &miss_req,
             &cache,
             &index,
+            &walk_plans,
         )
         .unwrap();
         println!(
@@ -1035,6 +1040,7 @@ fn streamed_batches_cover_every_file_and_close_with_done() {
         &req,
         &crate::SearchTextCache::default(),
         &crate::search_index::SearchIndexCache::default(),
+        &crate::WalkPlanCache::default(),
     )
     .expect("检索应成功");
     let seen = seen.into_inner().unwrap();
@@ -1087,6 +1093,7 @@ fn streamed_final_batch_reports_cancellation() {
         &req,
         &crate::SearchTextCache::default(),
         &crate::search_index::SearchIndexCache::default(),
+        &crate::WalkPlanCache::default(),
     )
     .unwrap();
     let seen = seen.into_inner().unwrap();
@@ -1123,6 +1130,7 @@ fn streamed_batches_never_exceed_the_final_result_when_truncated() {
         &req,
         &crate::SearchTextCache::default(),
         &crate::search_index::SearchIndexCache::default(),
+        &crate::WalkPlanCache::default(),
     )
     .unwrap();
     assert!(out.truncated, "夹具必须真的撞上限");
@@ -1819,6 +1827,7 @@ fn text_cache_reuses_decoded_bodies_and_invalidates_on_change() {
         &req,
         &cache,
         &crate::search_index::SearchIndexCache::default(),
+        &crate::WalkPlanCache::default(),
     )
     .unwrap();
     assert_eq!(out1.total_matches, 1);
@@ -1833,6 +1842,7 @@ fn text_cache_reuses_decoded_bodies_and_invalidates_on_change() {
         &req,
         &cache,
         &crate::search_index::SearchIndexCache::default(),
+        &crate::WalkPlanCache::default(),
     )
     .unwrap();
     assert_eq!(out2.total_matches, out1.total_matches);
@@ -1850,10 +1860,203 @@ fn text_cache_reuses_decoded_bodies_and_invalidates_on_change() {
         &req,
         &cache,
         &crate::search_index::SearchIndexCache::default(),
+        &crate::WalkPlanCache::default(),
     )
     .unwrap();
     assert_eq!(out3.total_matches, 2, "缓存不许把改过的文件当成旧内容");
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/* --------------------- 走查计划缓存（MCP-PERF-S9）判据 --------------------- */
+
+/// S9 判据专用：文本缓存 + 走查计划**跨拍共享**的检索——让"命中腿重 stat ⇒ 失效判据
+/// 不被骗"走完整缓存链路（每次给新缓存等于把交互拆了，测不到真东西）。
+fn s9_beat(
+    req: &SearchRequestDto,
+    cache: &crate::SearchTextCache,
+    plans: &crate::WalkPlanCache,
+) -> SearchResultDto {
+    crate::run_search_with_files(
+        &|_p| {},
+        &|_b| {},
+        &Mutex::new(HashSet::new()),
+        req,
+        cache,
+        &crate::search_index::SearchIndexCache::default(),
+        plans,
+    )
+    .unwrap()
+}
+
+fn dir_mtime_ns(dir: &Path) -> Option<u64> {
+    std::fs::symlink_metadata(dir)
+        .ok()
+        .and_then(|md| md.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64)
+}
+
+/// 只改文件内容（目录 mtime 不动）⇒ 目录 mtime 闸必然静 ⇒ 复用安全性**只能**靠
+/// 根级变更通知扛：LAST_WRITE 信号 ⇒ 子树计划全清 ⇒ 全量重枚举 ⇒ 文本缓存判据看见
+/// 新 (len,mtime) ⇒ 重解码说新真相。若通知漏接（或命中腿偷懒复用旧元数据），
+/// 旧 (len,mtime) 会骗过失效闸 ⇒ 此测必红。
+#[test]
+fn walk_plan_content_edit_forces_replan_and_stays_truthful() {
+    let dir = temp_dir("s9-hit");
+    std::fs::write(dir.join("a.erb"), "口上 一行\n").unwrap();
+    let req = request(&dir, "口");
+    let cache = crate::SearchTextCache::default();
+    let plans = crate::WalkPlanCache::default();
+
+    let out1 = s9_beat(&req, &cache, &plans);
+    assert_eq!(out1.total_matches, 1);
+    assert_eq!(plans.plan_count(), 1, "第一拍后根目录的走查计划必须已建表");
+    let hits1 = plans.hit_count();
+
+    // 只改内容不动目录。先钉前提：改文件内容不得推进父目录 mtime（NTFS/ext4 语义，
+    // 正是内容失效只能走通知通道的原因）；前提破了此测作废，结论不许建立在流沙上。
+    let before = dir_mtime_ns(&dir).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(15));
+    std::fs::write(dir.join("a.erb"), "口上 口上 口上\n").unwrap();
+    assert_eq!(
+        dir_mtime_ns(&dir),
+        Some(before),
+        "前提：纯内容修改不得推进父目录 mtime"
+    );
+
+    let out2 = s9_beat(&req, &cache, &plans);
+    assert_eq!(
+        out2.total_matches,
+        3,
+        "缓存不许把改过的文件当成旧内容（通知闸必须接住纯内容变更）"
+    );
+    assert_eq!(
+        plans.hit_count(),
+        hits1,
+        "内容改过的那一拍不许有计划命中（子树计划必须被通知清掉重枚举）"
+    );
+    assert_eq!(plans.plan_count(), 1, "重枚举后计划已重建");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 目录 mtime 变（新增子项）⇒ 计划失效 ⇒ 全量重枚举 ⇒ 新文件下一拍就被看见。
+#[test]
+fn walk_plan_dir_mtime_advance_forces_reenumerate_and_finds_new_file() {
+    let dir = temp_dir("s9-add");
+    std::fs::write(dir.join("old.erb"), "口上\n").unwrap();
+    let req = request(&dir, "口");
+    let cache = crate::SearchTextCache::default();
+    let plans = crate::WalkPlanCache::default();
+    let out1 = s9_beat(&req, &cache, &plans);
+    assert_eq!(out1.total_matches, 1);
+
+    std::fs::write(dir.join("new.erb"), "口上 口上\n").unwrap();
+    let out2 = s9_beat(&req, &cache, &plans);
+    let names: Vec<&str> = out2
+        .files
+        .iter()
+        .map(|f| f.path.rsplit(['\\', '/']).next().unwrap_or(""))
+        .collect();
+    assert!(
+        names.contains(&"new.erb"),
+        "新增文件必须进候选（目录 mtime 变 ⇒ 重枚举）：{names:?}"
+    );
+    assert_eq!(out2.total_matches, 3, "old 1 条 + new 2 条");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 目录 mtime 变（删除子项）⇒ 重枚举 ⇒ 删掉的文件下一拍就消失，旧名单不留幽灵。
+#[test]
+fn walk_plan_dir_mtime_advance_on_delete_drops_ghost_file() {
+    let dir = temp_dir("s9-del");
+    std::fs::write(dir.join("a.erb"), "口上\n").unwrap();
+    std::fs::write(dir.join("b.erb"), "口上\n").unwrap();
+    let req = request(&dir, "口");
+    let cache = crate::SearchTextCache::default();
+    let plans = crate::WalkPlanCache::default();
+    let out1 = s9_beat(&req, &cache, &plans);
+    assert_eq!(out1.total_matches, 2);
+
+    std::fs::remove_file(dir.join("a.erb")).unwrap();
+    let out2 = s9_beat(&req, &cache, &plans);
+    let names: Vec<&str> = out2
+        .files
+        .iter()
+        .map(|f| f.path.rsplit(['\\', '/']).next().unwrap_or(""))
+        .collect();
+    assert!(!names.contains(&"a.erb"), "删除的文件不许残留幽灵：{names:?}");
+    assert!(names.contains(&"b.erb"), "没删的照旧在：{names:?}");
+    assert_eq!(out2.total_matches, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 计划名单**未过滤**（存全部非隐藏普通文件名），扩展名 / glob / 排除每轮重判 ⇒
+/// 同一份热计划服务不同过滤条件的查询，结果各自精确、不串味。
+#[test]
+fn walk_plan_reuses_name_list_across_different_filters_exactly() {
+    let dir = temp_dir("s9-filter");
+    std::fs::write(dir.join("a.erb"), "口上\n").unwrap();
+    std::fs::write(dir.join("b.txt"), "口上\n").unwrap();
+    let cache = crate::SearchTextCache::default();
+    let plans = crate::WalkPlanCache::default();
+
+    let mut req_erb = request(&dir, "口");
+    req_erb.options.extensions = Some(vec!["erb".to_string()]);
+    let mut req_txt = request(&dir, "口");
+    req_txt.options.extensions = Some(vec!["txt".to_string()]);
+
+    // 两拍四问：冷拍建表，热拍全走命中腿（免 read_dir 免 stat）——过滤每轮重判不许串味
+    let mut hits_after_beat1 = 0;
+    for beat in 1..=2 {
+        let out_erb = s9_beat(&req_erb, &cache, &plans);
+        assert_eq!(out_erb.files.len(), 1, "第{beat}拍 erb：只 a.erb");
+        let out_txt = s9_beat(&req_txt, &cache, &plans);
+        assert_eq!(out_txt.files.len(), 1, "第{beat}拍 txt：只 b.txt");
+        assert_eq!(
+            out_txt.files[0].path.rsplit(['\\', '/']).next(),
+            Some("b.txt")
+        );
+        if beat == 1 {
+            hits_after_beat1 = plans.hit_count();
+        }
+    }
+    assert_eq!(plans.plan_count(), 1, "全程同一份计划");
+    assert!(
+        plans.hit_count() > hits_after_beat1,
+        "第二拍必须真的走命中腿（免枚举复用），否则 S9 的压缩就是空谈"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 免句柄原语（`quick_file_metadata`，命中腿）与 std 的 `symlink_metadata`（miss 腿
+/// find-data 同源）必须给出**逐字节相同**的 (is_file, len, mtime_ns)——miss 拍建表、
+/// hit 拍现取，两边键对不上 ⇒ 文本缓存每拍假失效，热检索直接退化。mtime 的
+/// FILETIME→UNIX 纳秒换算与 std 整数算术恒等，这里用真文件钉死。
+#[test]
+fn quick_file_metadata_agrees_with_std_metadata_byte_for_byte() {
+    let dir = temp_dir("s9-key");
+    let f = dir.join("a.erb");
+    std::fs::write(&f, "口上 一行\n").unwrap();
+
+    let md = std::fs::symlink_metadata(&f).unwrap();
+    let std_mtime = md
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos() as u64);
+    let (is_file, size, quick_mtime) = crate::quick_file_metadata(&f).expect("普通文件必可取");
+    assert!(is_file);
+    assert_eq!(size, Some(md.len()), "体积两路必须一致");
+    assert_eq!(
+        quick_mtime, std_mtime,
+        "mtime 两路必须逐字节一致（缓存键跨拍恒定）"
+    );
+
+    // 目录：is_file 必须 false（普通文件语义），mtime 仍可取
+    let (dir_is_file, _, dir_mtime) = crate::quick_file_metadata(&dir).expect("目录必可取");
+    assert!(!dir_is_file, "目录不算普通文件（与 symlink_metadata.is_file 同口径）");
+    assert!(dir_mtime.is_some());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
