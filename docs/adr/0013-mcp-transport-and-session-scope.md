@@ -73,6 +73,15 @@
 - **危险工具**（路 B 标 `tier:'privileged'`、路 C 默认不进 `tools/list`）：`launcher_*` / `market_*` / `open_url_external` / `export_file` / `remove_*` / `rename_path`。
 - 命令面板（路 B）：`CommandEntry` 增 `argsSchema? / description? / tier?`，`run(ctx, args?)`，**旧命令零改动**。
 - 第四张表（路 C）：`packages/app/src-tauri/src/mcp/scope.rs` + 上节 JSON 形状。
+- **增补（2026-11-06，人工拍板「授权，按 additive 方案做」）**：上面 v1 五个既有字段
+  **逐字不变、零改名**；`McpSessionScope` additive 增加可选
+  `approvedRootIds?: readonly string[]`（第四张表独立签发、缺省 / 空 ⇒ 默认拒绝），
+  四枚 `fileTree.*` 写腿 additive 收可选 `rootId`——只收 `ws:` + 8 位小写十六进制的
+  **枚举根标识**，绝不收任意目标路径。候选根由人类经系统目录对话框选定、只读
+  `io.workspaceRoots` 枚举，人在「AI 接入」逐项显式批准；端点侧二次复核，落盘双闸
+  （`approvedRoots` 相对前缀 + 内核 / Rust 写允许域）一字不动。不传 `rootId` 零额外 IPC，
+  旧表经 `#[serde(default)]` 读成空 ⇒ 现有行为零变化。详见 `docs/mcp/README.md` §5.7
+  与 `docs/BOARD.md` 的 `MCP-WRITE-DOMAIN-MULTIROOT` 行。
 
 ---
 

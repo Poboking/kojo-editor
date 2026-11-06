@@ -115,6 +115,9 @@ import { createBatchReadLeg, type BatchTextFile } from './batch-read-leg';
 // 每片＝一次既有 search_text 调用（零新 Rust 命令 / 零新写通道），只在可选新入参
 // resumeBySlice:true 时接管；判性由 Rust 侧真引擎用例实测（search_tests.rs 的 wall_* 七条）。
 import { createSearchSliceRunner } from './search-slice-leg';
+// 写域多根（2026-11-06，additive）：rootId 是常驻可写根的**稳定枚举标识**，不是目标路径。
+// 纯函数真源单独成文件（零依赖、零副作用），本模块只做「批准面复核 + 只读真源反查 + 选根」。
+import { findRootById, isRootIdShape, rootIdOf } from './workspace-root-id';
 
 /* ------------------------------- 窄结构类型 ------------------------------- */
 
@@ -1066,8 +1069,12 @@ export function createRunSupplemental(deps: McpIoDeps): (
     const raw = await deps.invoke('workspace_roots');
     const roots = Array.isArray(raw) ? raw.filter((r): r is string => typeof r === 'string') : [];
     const p = paginateByCursor(roots, (r, i) => `${r}#${i}`, args ?? {}, { defaultLimit: 50, maxLimit: 200 });
+    // additive 发现面：与 roots **逐项对齐**的稳定 rootId（按根绝对路径算，不随顺序漂移）。
+    // 只是「可枚举的候选标识」，本身不构成写授权；仍须人类在第四张表 approvedRootIds
+    // 里精确批准，且落盘照旧过 approvedRoots 相对前缀 + 内核写允许域双闸。
     return {
       roots: p.page,
+      rootIds: p.page.map((r) => rootIdOf(r)),
       total: p.total,
       truncated: p.truncated,
       offset: p.offset,
@@ -1171,6 +1178,63 @@ export function createRunSupplemental(deps: McpIoDeps): (
     return { kernel, rootDir };
   }
 
+  /**
+   * additive 写域多根（2026-11-06，用户拍板的 additive 方案）：按**枚举标识**选域基准根。
+   *
+   * - `rootId` 缺席 ⇒ 原路返回项目根，**一次 IPC 都不多发**，旧行为一字不变；
+   * - 有 `rootId` ⇒ 三道拦截后才会换根：① 形状闸（绝不把 rootId 当路径用）
+   *   ② 第四张表 `scope.approvedRootIds` 精确列名批准（默认空 ⇒ 一律拒绝）
+   *   ③ 只读真源 `workspace_roots` 反查（找不到 ⇒ 显式拒绝，绝不退回项目根 / 绝不猜测）；
+   * - 换根只改「`relPath` 相对谁解析」，**不新建写通道**：`approvedRoots` 相对前缀闸
+   *   与内核 / Rust 写允许域两道闸原样保留，Rust 端点还会再复核一次 rootId。
+   */
+  async function resolveWriteRoot(
+    args: Record<string, unknown>,
+    scope: McpSessionScope,
+  ): Promise<{
+    readonly kernel: McpKernelLike;
+    readonly rootDir: string;
+    readonly rootId: string | null;
+  }> {
+    const ctx = requireWriteContext();
+    const rawId = args['rootId'];
+    if (rawId === undefined || rawId === null) {
+      return { ...ctx, rootId: null }; // 零额外 IPC：默认拒绝面一字不变
+    }
+    if (!isRootIdShape(rawId)) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `rootId 形状非法（只收 ws: + 8 位小写十六进制的枚举标识，绝不是目标路径）：${sanitizeEcho(String(rawId))}`,
+      );
+    }
+    const approved = scope.approvedRootIds ?? [];
+    if (!approved.includes(rawId)) {
+      throw new McpFailure(
+        'PERMISSION_DENIED',
+        `rootId ${rawId} 未获本会话批准（第四张表 approvedRootIds 为空或不含该标识）。` +
+          '请由人类在「AI 接入」面板对候选常驻根逐项显式批准；默认拒绝，绝不退回项目根。',
+      );
+    }
+    let rawRoots: unknown;
+    try {
+      rawRoots = await deps.invoke('workspace_roots');
+    } catch (err) {
+      throw new McpFailure(
+        'RESOURCE_UNAVAILABLE',
+        `rootId 反查失败：只读真源 workspace_roots 不可用（${String(err)}）；不猜测根、不退回项目根`,
+      );
+    }
+    const abs = Array.isArray(rawRoots) ? findRootById(rawRoots, rawId) : null;
+    if (abs === null) {
+      throw new McpFailure(
+        'PERMISSION_DENIED',
+        `rootId ${rawId} 在当前常驻可写根读数里找不到（授权可能被撤销 / 目录已不存在）。` +
+          '请用 io.workspaceRoots 重新枚举；绝不退回项目根、绝不猜测路径。',
+      );
+    }
+    return { kernel: ctx.kernel, rootDir: abs, rootId: rawId };
+  }
+
   /** 单个目标：路径闸（与 Rust 同尺）+ 域内解析（fail-closed）+ 写闸一（第四张表）⇒ 绝对路径。 */
   function resolveWriteTarget(rootDir: string, relPath: string, approvedRoots: readonly string[]): string {
     const abs = resolveWithinRoot(rootDir, relPath);
@@ -1179,14 +1243,20 @@ export function createRunSupplemental(deps: McpIoDeps): (
   }
 
   /** 单目标写腿（create / update / remove，收 `relPath`）一次性取齐上下文 + 解析。 */
-  function requireWriteTarget(
+  async function requireWriteTarget(
     args: Record<string, unknown>,
     scope: McpSessionScope,
-  ): { readonly kernel: McpKernelLike; readonly rootDir: string; readonly relPath: string; readonly abs: string } {
-    const { kernel, rootDir } = requireWriteContext();
+  ): Promise<{
+    readonly kernel: McpKernelLike;
+    readonly rootDir: string;
+    readonly relPath: string;
+    readonly abs: string;
+    readonly rootId: string | null;
+  }> {
+    const { kernel, rootDir, rootId } = await resolveWriteRoot(args, scope);
     const relPath = asString(args['relPath']);
     const abs = resolveWriteTarget(rootDir, relPath, scope.approvedRoots);
-    return { kernel, rootDir, relPath, abs };
+    return { kernel, rootDir, relPath, abs, rootId };
   }
 
   /** fileTree.create：独占创建（已存在 ⇒ 显式报错，绝不覆盖）；目录不收 content。 */
@@ -1203,7 +1273,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
     if (content !== undefined && typeof content !== 'string') {
       throw new McpFailure('INVALID_ARGS', 'fileTree.create 的 content 须为字符串');
     }
-    const { kernel, relPath, abs } = requireWriteTarget(input, scope);
+    const { kernel, relPath, abs, rootId } = await requireWriteTarget(input, scope);
     const io = kernel.io;
     if (kind === 'directory') {
       if (content !== undefined) {
@@ -1229,6 +1299,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
         path: relPath,
         kind: 'directory',
         created: true,
+        ...(rootId !== null ? { rootId } : {}), // 诚实标明本次落点用的是哪个域基准根
         refreshed: emitFileChanged(kernel, 'add', abs, { tracker: trackerOf(deps), scope }),
       };
     }
@@ -1265,6 +1336,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       kind: 'file',
       created: true,
       ...(typeof content === 'string' ? { contentChars: content.length } : {}),
+      ...(rootId !== null ? { rootId } : {}),
       refreshed: emitFileChanged(kernel, 'add', abs, { tracker: trackerOf(deps), scope }),
     };
   };
@@ -1276,7 +1348,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
     if (typeof content !== 'string') {
       throw new McpFailure('INVALID_ARGS', 'fileTree.update 的 content 须为字符串（全文替换，不收部分编辑）');
     }
-    const { kernel, relPath, abs } = requireWriteTarget(input, scope);
+    const { kernel, relPath, abs, rootId } = await requireWriteTarget(input, scope);
     const io = kernel.io;
     if (typeof io.writeText !== 'function' || typeof io.exists !== 'function') {
       throw new McpFailure('NOT_WIRED', 'fileTree.update 未接线：内核实例未提供 writeText / exists 原语（不静默）');
@@ -1302,6 +1374,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       path: relPath,
       updated: true,
       textLength: content.length,
+      ...(rootId !== null ? { rootId } : {}),
       refreshed: emitFileChanged(kernel, 'change', abs, { tracker: trackerOf(deps), scope }),
     };
   };
@@ -1314,7 +1387,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
    */
   const fileTreeRemove: McpReaderFn = async (args, scope) => {
     const input = args ?? {};
-    const { kernel, relPath, abs } = requireWriteTarget(input, scope); // 路径闸 + 域内解析 + 写闸一
+    const { kernel, relPath, abs, rootId } = await requireWriteTarget(input, scope); // 选根 + 路径闸 + 域内解析 + 写闸一
     const io = kernel.io;
     const stat = await deps.invoke('stat_file', { path: abs }); // 只读判类型，绝不经它写盘
     if (!stat || typeof stat !== 'object') {
@@ -1346,6 +1419,7 @@ export function createRunSupplemental(deps: McpIoDeps): (
       path: relPath,
       removed: true,
       removedKind: isDir ? 'directory' : 'file',
+      ...(rootId !== null ? { rootId } : {}),
       refreshed: emitFileChanged(kernel, 'unlink', abs, { tracker: trackerOf(deps), scope }),
     };
   };
@@ -1357,7 +1431,8 @@ export function createRunSupplemental(deps: McpIoDeps): (
    */
   const fileTreeRename: McpReaderFn = async (args, scope) => {
     const input = args ?? {};
-    const { kernel, rootDir } = requireWriteContext();
+    // 两端共用同一个域基准根：一次反查 / 一次批准，绝不出现「from 在 A 根、to 在 B 根」的跨域搬运。
+    const { kernel, rootDir, rootId } = await resolveWriteRoot(input, scope);
     const fromRel = asString(input['from']);
     const toRel = asString(input['to']);
     const fromAbs = resolveWriteTarget(rootDir, fromRel, scope.approvedRoots);
@@ -1374,7 +1449,13 @@ export function createRunSupplemental(deps: McpIoDeps): (
     const freshness = { tracker: trackerOf(deps), scope };
     const fromRefreshed = emitFileChanged(kernel, 'unlink', fromAbs, freshness);
     const toRefreshed = emitFileChanged(kernel, 'add', toAbs, freshness);
-    return { from: fromRel, to: toRel, renamed: true, refreshed: fromRefreshed && toRefreshed };
+    return {
+      from: fromRel,
+      to: toRel,
+      renamed: true,
+      ...(rootId !== null ? { rootId } : {}),
+      refreshed: fromRefreshed && toRefreshed,
+    };
   };
 
   /* ---- 第四波（LaneF）：4 枚 Rust 只读真源腿，全部经既有 invoke seam + 域内路径闸 ---- */

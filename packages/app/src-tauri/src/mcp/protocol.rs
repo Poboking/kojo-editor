@@ -75,6 +75,11 @@ pub struct McpSessionScope {
     pub approved_roots: Vec<String>,
     #[serde(rename = "approvedTools")]
     pub approved_tools: Vec<String>,
+    /// additive（2026-11-06 写域多根）：第四张表显式批准的**常驻可写根枚举标识**。
+    /// 缺省 / 空 ⇒ 任何 `rootId` 都不可用（默认拒绝一字不变）。与 `approved_roots`
+    /// 是两张独立的账：前者选「哪个根」，后者限定「根内哪些相对前缀」。
+    #[serde(rename = "approvedRootIds", default)]
+    pub approved_root_ids: Vec<String>,
 }
 
 /// 冻结契约：WebView → Rust 的应答载荷。
@@ -1182,6 +1187,92 @@ pub fn check_tool_call_permission(name: &str, scope: &McpSessionScope) -> Result
                 "工具 {name} 需要 tier >= {}，会话 tier={}，显式拒绝（不静默）",
                 host_required_tier(name).as_str(),
                 scope.tier.as_str()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/* ==================== 写域多根（2026-11-06 additive） ==================== */
+
+/// 常驻可写根的**稳定枚举标识**形状：`ws:` + 8 位小写十六进制。绝不是目标路径：
+/// 客户端只能从只读 `io.workspaceRoots` 回包的 `rootIds` 里挑，再由人类在第四张表
+/// 逐项显式批准。
+pub const ROOT_ID_PREFIX: &str = "ws:";
+
+pub fn is_root_id_shape(raw: &str) -> bool {
+    let Some(hex) = raw.strip_prefix(ROOT_ID_PREFIX) else {
+        return false;
+    };
+    hex.len() == 8
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// 只有这四枚落盘写腿收 `rootId`；其它工具带该参数一律拒绝（防旁路）。
+pub const MULTIROOT_WRITE_TOOLS: &[&str] = &[
+    "fileTree.create",
+    "fileTree.update",
+    "fileTree.remove",
+    "fileTree.rename",
+];
+
+/// `tools/call` 的 `rootId` **端点级二次复核**（纯函数，纵深再深一层）：WebView
+/// 真源腿自己也判一遍，但端点不能只信回帧——注册表被换 / 桥被顶替时这里仍要拒。
+/// 形状非法 / 非写腿 / 未精确批准一律**显式**结构化错误，绝不静默剥离参数、
+/// 绝不退回项目根。只读 `io.workspaceRoots` 回包里的 `rootIds` 是 response，
+/// 不经这道闸。参数位置与 host-bridge 的 `arguments ?? args` 对齐。
+pub fn check_root_id_param(
+    method: WebMethod,
+    params: &Value,
+    scope: &McpSessionScope,
+) -> Result<(), McpError> {
+    if method != WebMethod::ToolsCall {
+        return Ok(());
+    }
+    let args = params.get("arguments").or_else(|| params.get("args"));
+    let Some(raw) = args.and_then(|a| a.get("rootId")) else {
+        return Ok(());
+    };
+    if raw.is_null() {
+        return Ok(()); // 等同未传：现有行为零变化
+    }
+    let Some(id) = raw.as_str() else {
+        return Err(McpError::new(
+            codes::INVALID_PARAMS,
+            "rootId 必须是字符串枚举标识（不是路径、不是对象）",
+        ));
+    };
+    // 任何路径形态都当作「试图拿 rootId 当任意落点入口」，单独给落点禁止码。
+    if id.contains('/') || id.contains('\\') || id.contains("..") {
+        return Err(McpError::new(
+            codes::PATH_TARGET_FORBIDDEN,
+            format!("rootId 不接受任意目标路径：{id}；请从 io.workspaceRoots 的 rootIds 枚举里选"),
+        ));
+    }
+    if !is_root_id_shape(id) {
+        return Err(McpError::new(
+            codes::INVALID_PARAMS,
+            format!("rootId 形状非法（只收 ws: + 8 位小写十六进制的枚举标识）：{id}"),
+        ));
+    }
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+    if !MULTIROOT_WRITE_TOOLS.contains(&name) {
+        return Err(McpError::new(
+            codes::INVALID_PARAMS,
+            format!("rootId 只允许出现在四枚写腿上，工具 {name} 不接受该参数"),
+        ));
+    }
+    if !scope
+        .approved_root_ids
+        .iter()
+        .any(|approved| approved == id)
+    {
+        return Err(McpError::new(
+            codes::TOOL_NOT_APPROVED,
+            format!(
+                "rootId {id} 未获本会话批准（第四张表 approvedRootIds 为空或不含该标识）；默认拒绝，绝不退回项目根"
             ),
         ));
     }

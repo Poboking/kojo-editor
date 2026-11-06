@@ -25,9 +25,11 @@ import {
   ApprovalUi,
   type ApprovalBatch,
   type ApprovalItem,
+  type ApprovalRootCandidate,
 } from './approval-ui';
 import { AuditPanel, type AuditEntryView } from './audit-panel';
 import { Switch } from '../ui/Switch';
+import { rootIdOf } from './workspace-root-id';
 
 export type McpClientTier = 'read' | 'edit' | 'privileged';
 
@@ -327,6 +329,8 @@ export interface McpSessionGrant {
   readonly tier: McpClientTier;
   readonly approvedRoots: readonly string[];
   readonly approvedTools: readonly string[];
+  /** additive（写域多根）：人类逐项批准的常驻可写根枚举标识；旧表缺席 ⇒ 空（默认拒绝）。 */
+  readonly approvedRootIds?: readonly string[];
   readonly createdAt: string;
   readonly revokedAt?: string;
 }
@@ -371,6 +375,19 @@ export interface ApprovalCandidates {
 /** 与 `buildApprovalBatch` 同一把形状闸：列出的项必须真能写进第四张表，不许「列得出、批不进」。 */
 const APPROVABLE_TOOL_NAME = /^[A-Za-z0-9_.-]+$/;
 
+/**
+ * 只读真源 `workspace_roots`（`Vec<String>`）→ 批准面板的候选常驻根。
+ * - `id` 按**根绝对路径**算稳定标识（与 MCP 写腿 / Rust 端点同一函数口径），不随增删顺序漂移；
+ * - `label` 只用于给人看，绝不作为落点入参下发；
+ * - 读数不是数组 / 元素不是字符串 ⇒ 如实得空表（不编造根、不猜路径）。
+ */
+export function workspaceRootIdCandidates(raw: unknown): ApprovalRootCandidate[] {
+  const roots = Array.isArray(raw)
+    ? raw.filter((r): r is string => typeof r === 'string' && r !== '')
+    : [];
+  return roots.map((label) => ({ id: rootIdOf(label), label }));
+}
+
 /** 第四张表 → `ApprovalUi` 的 (clientId, pending, roots, approvedTools)。 */
 export function scopeStateToApproval(
   state: McpScopeState | null,
@@ -381,6 +398,8 @@ export function scopeStateToApproval(
   roots: string[];
   /** 当前会话已批准的工具名（铁律 4：批准落没落地要在面板上看得见，不许靠猜）。 */
   approvedTools: string[];
+  /** additive：当前会话已批准的常驻可写根标识（旧表缺席 ⇒ 空数组）。 */
+  approvedRootIds: string[];
 } {
   const sessions = activeSessions(state);
   const clientId = sessions[0]?.clientId ?? '';
@@ -413,16 +432,29 @@ export function scopeStateToApproval(
         .flatMap((s) => s.approvedTools ?? []),
     ),
   ];
-  return { clientId, pending, roots, approvedTools };
+  const approvedRootIds = [
+    ...new Set(
+      sessions
+        .filter((s) => s.clientId === clientId)
+        .flatMap((s) => s.approvedRootIds ?? []),
+    ),
+  ];
+  return { clientId, pending, roots, approvedTools, approvedRootIds };
 }
 
 /** `ApprovalBatch` → `mcp_approve` 的 args（camelCase，对齐 Rust `ApproveArgs`）。 */
 export function approveArgs(batch: ApprovalBatch): Record<string, unknown> {
+  // additive：未批准任何常驻根时**一字不加**（旧四键形状零变化，Rust `#[serde(default)]`
+  // 把缺席读成空表 ⇒ 默认拒绝）；只有人类真的勾了候选根才把精确列名带下去。
+  const rootIds = [...new Set(batch.approvedRootIds ?? [])].filter((id) =>
+    /^ws:[0-9a-f]{8}$/.test(id),
+  );
   return {
     clientId: batch.clientId,
     tier: batch.tier,
     approvedRoots: batch.approvedRoots,
     approvedTools: batch.approvedTools,
+    ...(rootIds.length > 0 ? { approvedRootIds: rootIds } : {}),
   };
 }
 
@@ -504,6 +536,10 @@ export function AiAccessSection({ runner, pollMs = 0, candidateTools }: AiAccess
   const [audit, setAudit] = useState<readonly AuditEntryView[]>([]);
   const [note, setNote] = useState<string>('');
   const [busy, setBusy] = useState(false);
+  // additive（写域多根）：候选常驻根来自只读真源 workspace_roots；枚举失败单独上屏，
+  // 不连累 scope / audit 两块既有读数（铁律 4：不静默，也不吞掉其它面板）。
+  const [rootCandidates, setRootCandidates] = useState<readonly ApprovalRootCandidate[]>([]);
+  const [rootEnumerationNote, setRootEnumerationNote] = useState<string | undefined>(undefined);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -515,9 +551,24 @@ export function AiAccessSection({ runner, pollMs = 0, candidateTools }: AiAccess
   const refresh = useCallback(async (): Promise<void> => {
     try {
       const [s, entries] = await Promise.all([queryMcpScope(run), queryMcpAudit(run)]);
+      // 候选根只是**发现面**：单独取、单独失败上屏，绝不让一次只读枚举失败把
+      // scope / audit 一起拖成「连接失败」，也绝不静默装作「没有候选根」。
+      let rootRaw: unknown = null;
+      let rootErr = '';
+      try {
+        rootRaw = await run('workspace_roots');
+      } catch (err) {
+        rootErr = String(err);
+      }
       if (!mounted.current) return;
       setScope(s);
       setAudit(entries);
+      setRootCandidates(workspaceRootIdCandidates(rootRaw));
+      setRootEnumerationNote(
+        rootErr === ''
+          ? undefined
+          : `常驻可写根枚举失败：${rootErr}（本次不列候选根；已批准授权不受影响）`,
+      );
       setNote('');
     } catch (err) {
       if (mounted.current) setNote(`读取 mcp_scope_query / mcp_audit_query 失败：${String(err)}`);
@@ -571,7 +622,10 @@ export function AiAccessSection({ runner, pollMs = 0, candidateTools }: AiAccess
   );
 
   const clients = scopeStateToClients(scope);
-  const { clientId, pending, roots, approvedTools } = scopeStateToApproval(scope, { candidateTools });
+  const { clientId, pending, roots, approvedTools, approvedRootIds } = scopeStateToApproval(
+    scope,
+    { candidateTools },
+  );
 
   return (
     <div className="settings-mcp">
@@ -586,6 +640,9 @@ export function AiAccessSection({ runner, pollMs = 0, candidateTools }: AiAccess
         before=""
         after=""
         approvedTools={approvedTools}
+        candidateRootIds={rootCandidates}
+        approvedRootIds={approvedRootIds}
+        {...(rootEnumerationNote !== undefined ? { rootEnumerationNote } : {})}
         onApprove={(batch) => void onApprove(batch)}
       />
 

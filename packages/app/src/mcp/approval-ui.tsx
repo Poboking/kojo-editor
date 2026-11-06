@@ -18,6 +18,7 @@
 import { useMemo, useState } from 'react';
 
 import { KitCheck } from '../ui-kit/kit-check';
+import { isRootIdShape } from './workspace-root-id';
 
 export type McpTier = 'read' | 'edit' | 'privileged';
 
@@ -124,6 +125,17 @@ export interface ApprovalBatch {
   tier: McpTier;
   approvedRoots: string[];
   approvedTools: string[];
+  /**
+   * additive（写域多根）：人类逐项显式批准的常驻可写根**枚举标识**。
+   * 只在非空时出现 ⇒ 旧批次形状（四个键）一字不变，默认拒绝面零变化。
+   */
+  approvedRootIds?: string[];
+}
+
+/** 候选常驻根：id 是稳定枚举标识，label 是给用户看的绝对路径（只展示，绝不作为落点入参）。 */
+export interface ApprovalRootCandidate {
+  readonly id: string;
+  readonly label: string;
 }
 
 /** 一次批量审批：`market_*` 保持 fail-closed；越界根与畸形工具名一律剔除。 */
@@ -132,16 +144,21 @@ export function buildApprovalBatch(
   tier: McpTier,
   items: readonly ApprovalItem[],
   roots: readonly string[],
+  rootIds: readonly string[] = [],
 ): ApprovalBatch {
   const approvedTools = items
     .map((item) => item.name)
     .filter((name) => !name.startsWith('market_'))
     .filter((name) => name.length <= 64 && /^[A-Za-z0-9_.-]+$/.test(name));
+  // rootId 只认 `ws:` + 8 位小写十六进制；畸形 / 绝对路径一律剔除（形状闸与 Rust 端点同尺），
+  // 去重后为空就不写进批次 ⇒ 旧消费方拿到的形状一字不变。
+  const approvedRootIds = [...new Set(rootIds)].filter(isRootIdShape);
   return {
     clientId,
     tier,
     approvedRoots: roots.filter(isSafeRelativePath),
     approvedTools,
+    ...(approvedRootIds.length > 0 ? { approvedRootIds } : {}),
   };
 }
 
@@ -193,6 +210,12 @@ export interface ApprovalUiProps {
    * 批准 / 撤销后随 scope 刷新翻转；不给（undefined）则完全不渲染，旧形状零变化。
    */
   readonly approvedTools?: readonly string[];
+  /** 候选常驻可写根（additive）：不传 / 空 ⇒ 整块零渲染，旧消费方形状一字不变。 */
+  readonly candidateRootIds?: readonly ApprovalRootCandidate[];
+  /** 第四张表里已批准的 rootId（additive）：逐项挂徽标，批准 / 撤销后可见翻转。 */
+  readonly approvedRootIds?: readonly string[];
+  /** 只读枚举失败的原因（additive，铁律 4：不静默）：给了才渲染一行显式提示。 */
+  readonly rootEnumerationNote?: string;
 }
 
 export function ApprovalUi({
@@ -203,21 +226,38 @@ export function ApprovalUi({
   after,
   onApprove,
   approvedTools,
+  candidateRootIds,
+  approvedRootIds,
+  rootEnumerationNote,
 }: ApprovalUiProps) {
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set<string>());
+  const [selectedRootIds, setSelectedRootIds] = useState<ReadonlySet<string>>(new Set<string>());
   const diff = useMemo(() => renderDiff(before, after), [before, after]);
   const approvedSet = useMemo(() => new Set(approvedTools ?? []), [approvedTools]);
+  const approvedRootSet = useMemo(() => new Set(approvedRootIds ?? []), [approvedRootIds]);
+  const rootCandidates = useMemo(
+    () => (candidateRootIds ?? []).filter((c) => isRootIdShape(c.id)),
+    [candidateRootIds],
+  );
   const toggle = (name: string, checked: boolean) => {
     const next = new Set(selected);
     if (checked) next.add(name);
     else next.delete(name);
     setSelected(next);
   };
+  const toggleRoot = (id: string, checked: boolean) => {
+    const next = new Set(selectedRootIds);
+    if (checked) next.add(id);
+    else next.delete(id);
+    setSelectedRootIds(next);
+  };
   const chosen = pending.filter((item) => selected.has(item.name));
   // 「一次批量审批」的档位刻意固定为 edit：privileged 工具靠 approvedTools **精确列名**
   // 放行（WebView tierAllowed 与 Rust check_tool_call_permission 同口径），不靠抬高会话
   // tier。抬档会让同 tier 的其它特权工具顺带可见，等于给危险面开后门。
-  const batch = buildApprovalBatch(clientId, 'edit', chosen, roots);
+  // 常驻根同理：只写 approvedRootIds 精确列名，不放宽任何默认写域。
+  const batch = buildApprovalBatch(clientId, 'edit', chosen, roots, [...selectedRootIds]);
+  const selectionCount = chosen.length + selectedRootIds.size;
   const selectAll = () => setSelected(new Set(pending.map((item) => item.name)));
   const clearAll = () => setSelected(new Set<string>());
   return (
@@ -260,14 +300,48 @@ export function ApprovalUi({
           </li>
         ))}
       </ul>
+      {/* 常驻可写根（additive，写域多根）：整块放在工具清单**之后**，保证旧消费方
+          「第一个 checkbox = 工具项」的形状不变；候选为空 / 未注入 ⇒ 零渲染。 */}
+      {(rootCandidates.length > 0 || rootEnumerationNote !== undefined) && (
+        <section className="mcp-approve-roots" aria-label="MCP 常驻可写根批准">
+          <h4>常驻可写根（逐项显式批准）</h4>
+          <p className="mcp-approve-roots-hint">
+            勾选后 Agent 才能把四枚 fileTree 写腿的 relPath 解析到该根；rootId 是枚举标识，
+            不是目标路径。落盘仍过 approvedRoots 相对前缀 + 内核写允许域双闸。
+          </p>
+          {rootEnumerationNote !== undefined && (
+            <p className="mcp-approve-roots-note" role="status" data-testid="mcp-root-enumeration-note">
+              {rootEnumerationNote}
+            </p>
+          )}
+          <ul>
+            {rootCandidates.map((c) => (
+              <li key={c.id} data-root-id={c.id}>
+                <KitCheck
+                  checked={selectedRootIds.has(c.id)}
+                  onChange={(checked) => toggleRoot(c.id, checked)}
+                  label={`批准常驻根 ${c.label}`}
+                >
+                  <code>{c.id}</code> — {c.label}
+                </KitCheck>
+                {approvedRootIds !== undefined && approvedRootSet.has(c.id) && (
+                  <span className="mcp-approve-badge" data-root-approved="true" data-root-id={c.id}>
+                    已批准
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <p>待批准根：{batch.approvedRoots.join(', ') || '（无）'}</p>
       {approvedTools !== undefined && (
         <p data-testid="mcp-approved-tools">
           已批准工具（第四张表）：{approvedTools.length > 0 ? approvedTools.join('、') : '（无）'}
         </p>
       )}
-      <button type="button" disabled={chosen.length === 0} onClick={() => onApprove(batch)}>
-        批准所选（{chosen.length}）
+      <button type="button" disabled={selectionCount === 0} onClick={() => onApprove(batch)}>
+        批准所选（{selectionCount}）
       </button>
     </section>
   );

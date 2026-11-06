@@ -51,6 +51,7 @@ fn empty_scope(tools: Vec<String>) -> McpSessionScope {
         tier: McpTier::Read,
         approved_roots: Vec::new(),
         approved_tools: tools,
+        approved_root_ids: Vec::new(),
     }
 }
 
@@ -418,6 +419,7 @@ fn scope_roundtrip_and_minimum_default() {
             tier: McpTier::Edit,
             approved_roots: vec!["docs".to_string()],
             approved_tools: vec!["read_*".to_string()],
+            approved_root_ids: vec![],
             created_at: crate::launcher::iso_now(),
             revoked_at: None,
         }],
@@ -440,6 +442,7 @@ fn scope_rejects_tampered_grant() {
             tier: McpTier::Read,
             approved_roots: vec!["../escape".to_string()],
             approved_tools: vec![],
+            approved_root_ids: vec![],
             created_at: crate::launcher::iso_now(),
             revoked_at: None,
         }],
@@ -1567,6 +1570,7 @@ fn scope_save_is_atomic_and_load_rejects_corrupt() {
             tier: McpTier::Edit,
             approved_roots: vec!["docs".to_string()],
             approved_tools: vec!["read_*".to_string()],
+            approved_root_ids: vec![],
             created_at: crate::launcher::iso_now(),
             revoked_at: None,
         }],
@@ -1677,6 +1681,7 @@ fn token_rotation_reloads_scope_from_disk() {
             tier: McpTier::Privileged,
             approved_roots: vec![],
             approved_tools: vec!["export_file".to_string()],
+            approved_root_ids: vec![],
             created_at: crate::launcher::iso_now(),
             revoked_at: None,
         }],
@@ -4990,4 +4995,320 @@ fn sorted(v: &[u64]) -> Vec<u64> {
     let mut x = v.to_vec();
     x.sort_unstable();
     x
+}
+
+/* ---------------- 写域多根（2026-11-06，additive 判据） ---------------- */
+
+/// 稳定枚举标识，**不是路径**：与 TS `workspace-root-id.ts` 的 `ws:` + 8 hex 对齐。
+const ROOT_A: &str = "ws:1a2b3c4d";
+const ROOT_B: &str = "ws:deadbeef";
+
+fn tool_call(name: &str, arguments: Value) -> Value {
+    json!({"name": name, "arguments": arguments})
+}
+
+#[test]
+fn multiroot_root_id_shape_accepts_only_enumerated_ids() {
+    for good in [ROOT_A, ROOT_B, "ws:00000000"] {
+        assert!(is_root_id_shape(good), "应接受 {good}");
+    }
+    for bad in [
+        "",
+        "ws:",
+        "ws:1a2b3c4",
+        "ws:1a2b3c4d5",
+        "ws:ABCDEF12",
+        "ws:zzzzzzzz",
+        "ws:1a2b3c4g",
+        "1a2b3c4d",
+        "D:\\author-workspace",
+        "D:/author-workspace",
+        "../../etc",
+        "ws:1a2b3c4d/../../etc",
+    ] {
+        assert!(!is_root_id_shape(bad), "不该接受 {bad}");
+    }
+}
+
+#[test]
+fn multiroot_endpoint_default_scope_denies_every_root_id() {
+    // 零变化：不带 rootId 的四枚写腿照旧走项目根，端点不额外拦。
+    for name in MULTIROOT_WRITE_TOOLS {
+        let p = tool_call(name, json!({"relPath": "docs/a.erb"}));
+        assert!(check_root_id_param(WebMethod::ToolsCall, &p, &empty_scope(Vec::new())).is_ok());
+    }
+    // 一旦带 rootId，默认拒绝：形状合法也不许过。
+    let p = tool_call("fileTree.create", json!({"rootId": ROOT_A}));
+    let err = check_root_id_param(WebMethod::ToolsCall, &p, &empty_scope(Vec::new())).unwrap_err();
+    assert_eq!(err.code, codes::TOOL_NOT_APPROVED);
+}
+
+#[test]
+fn multiroot_endpoint_second_check_requires_shape_approval_and_write_leg() {
+    let mut scope = empty_scope(Vec::new());
+    scope.approved_root_ids = vec![ROOT_A.to_string()];
+
+    // 四枚写腿逐一：合法 + 精确批准 ⇒ 放行（真源腿还会再反查一次只读真源）。
+    for name in MULTIROOT_WRITE_TOOLS {
+        let p = tool_call(name, json!({"relPath": "docs/a.erb", "rootId": ROOT_A}));
+        assert!(
+            check_root_id_param(WebMethod::ToolsCall, &p, &scope).is_ok(),
+            "{name}"
+        );
+    }
+
+    // 绝对路径 / 盘符 / 穿越形态：钉死「rootId 绝不是任意目标路径入口」。
+    for evil in [
+        "D:\\author-workspace",
+        "D:/author-workspace",
+        "../../etc",
+        "ws:1a2b3c4d/../x",
+    ] {
+        let p = tool_call("fileTree.create", json!({"rootId": evil}));
+        let e = check_root_id_param(WebMethod::ToolsCall, &p, &scope).unwrap_err();
+        assert_eq!(e.code, codes::PATH_TARGET_FORBIDDEN, "{evil}");
+    }
+
+    // 形状非法 / 非字符串 ⇒ 显式 INVALID_PARAMS，绝不静默剥离。
+    for bad in ["ws:ZZZZZZZZ", "ws:1a2b3c4d5", "ws:zzzzzzzz"] {
+        let p = tool_call("fileTree.create", json!({"rootId": bad}));
+        assert_eq!(
+            check_root_id_param(WebMethod::ToolsCall, &p, &scope)
+                .unwrap_err()
+                .code,
+            codes::INVALID_PARAMS
+        );
+    }
+    let numeric = tool_call("fileTree.create", json!({"rootId": 42}));
+    assert_eq!(
+        check_root_id_param(WebMethod::ToolsCall, &numeric, &scope)
+            .unwrap_err()
+            .code,
+        codes::INVALID_PARAMS
+    );
+
+    // 合法形状但没批准 ⇒ 仍拒绝，绝不退回项目根。
+    let other = tool_call("fileTree.update", json!({"rootId": ROOT_B}));
+    assert_eq!(
+        check_root_id_param(WebMethod::ToolsCall, &other, &scope)
+            .unwrap_err()
+            .code,
+        codes::TOOL_NOT_APPROVED
+    );
+
+    // 不得把 rootId 旁路到非写腿（例如 export_file / 只读发现工具）。
+    for name in ["export_file", "io.workspaceRoots", "read_file"] {
+        let p = tool_call(name, json!({"rootId": ROOT_A}));
+        assert_eq!(
+            check_root_id_param(WebMethod::ToolsCall, &p, &scope)
+                .unwrap_err()
+                .code,
+            codes::INVALID_PARAMS,
+            "{name}"
+        );
+    }
+
+    // `args` 别名位置同样被复核（与 host-bridge 的 `arguments ?? args` 对齐）。
+    let alias = json!({"name": "fileTree.rename", "args": {"rootId": ROOT_A}});
+    assert!(check_root_id_param(WebMethod::ToolsCall, &alias, &scope).is_ok());
+    let alias_bad = json!({"name": "fileTree.rename", "args": {"rootId": ROOT_B}});
+    assert_eq!(
+        check_root_id_param(WebMethod::ToolsCall, &alias_bad, &scope)
+            .unwrap_err()
+            .code,
+        codes::TOOL_NOT_APPROVED
+    );
+
+    // null 等同未传；只读发现面的回包是 response，不经过请求侧这道闸。
+    let null_id = tool_call("fileTree.create", json!({"rootId": Value::Null}));
+    assert!(check_root_id_param(WebMethod::ToolsCall, &null_id, &scope).is_ok());
+    let listing = json!({"rootId": ROOT_A});
+    assert!(check_root_id_param(WebMethod::ToolsList, &listing, &scope).is_ok());
+}
+
+#[test]
+fn multiroot_grant_roundtrips_explicit_root_ids() {
+    let d = TempDir::new();
+    let state = scope::approve_with_root_ids(
+        d.path(),
+        "c1",
+        McpTier::Edit,
+        vec!["docs".to_string()],
+        vec!["fileTree.create".to_string()],
+        vec![ROOT_A.to_string(), ROOT_B.to_string(), ROOT_A.to_string()],
+    )
+    .unwrap();
+    assert_eq!(state.sessions.len(), 1);
+    // 落盘序列化用冻结契约字段名，不是 Rust 下划线名；重复项去重。
+    let text = std::fs::read_to_string(scope::scope_path(d.path())).unwrap();
+    assert!(
+        text.contains("approvedRootIds"),
+        "第四张表要落 approvedRootIds"
+    );
+    assert!(text.contains(ROOT_A));
+    assert!(text.contains(ROOT_B));
+    assert_eq!(state.sessions[0].approved_root_ids.len(), 2);
+
+    let loaded = scope::load(d.path()).unwrap();
+    let built = scope::build_scope(&loaded, "c1", "sess-1").unwrap();
+    assert_eq!(
+        built.approved_root_ids,
+        vec![ROOT_A.to_string(), ROOT_B.to_string()]
+    );
+    assert_eq!(built.approved_roots, vec!["docs".to_string()]);
+    assert_eq!(built.tier, McpTier::Edit);
+
+    // 端点复核拿这份 scope 就放行；revoke 后又回到默认拒绝。
+    let p = tool_call("fileTree.create", json!({"rootId": ROOT_A}));
+    assert!(check_root_id_param(WebMethod::ToolsCall, &p, &built).is_ok());
+    scope::revoke(d.path(), "c1").unwrap();
+    let revoked = scope::build_scope(&scope::load(d.path()).unwrap(), "c1", "sess-2").unwrap();
+    assert!(revoked.approved_root_ids.is_empty());
+    assert_eq!(
+        check_root_id_param(WebMethod::ToolsCall, &p, &revoked)
+            .unwrap_err()
+            .code,
+        codes::TOOL_NOT_APPROVED
+    );
+}
+
+#[test]
+fn multiroot_legacy_five_arg_approve_keeps_default_deny() {
+    let d = TempDir::new();
+    scope::approve(
+        d.path(),
+        "legacy",
+        McpTier::Edit,
+        vec!["docs".to_string()],
+        vec!["read_*".to_string()],
+    )
+    .unwrap();
+    let built = scope::build_scope(&scope::load(d.path()).unwrap(), "legacy", "s").unwrap();
+    assert!(
+        built.approved_root_ids.is_empty(),
+        "旧调用不得隐式批准任何根"
+    );
+    let p = tool_call("fileTree.create", json!({"rootId": ROOT_A}));
+    assert_eq!(
+        check_root_id_param(WebMethod::ToolsCall, &p, &built)
+            .unwrap_err()
+            .code,
+        codes::TOOL_NOT_APPROVED
+    );
+}
+
+#[test]
+fn multiroot_bad_root_ids_fail_loud_on_approve_and_load() {
+    let d = TempDir::new();
+    // 批量里混进路径 / 脏形状：整批拒绝，不静默过滤、不落盘。
+    for bad in [
+        "D:\\author-workspace",
+        "ws:ZZZZZZZZ",
+        "ws:1a2b3c4d5",
+        "../escape",
+    ] {
+        let err = scope::approve_with_root_ids(
+            d.path(),
+            "c1",
+            McpTier::Edit,
+            vec![],
+            vec![],
+            vec![ROOT_A.to_string(), bad.to_string()],
+        )
+        .unwrap_err();
+        assert_eq!(err.code, codes::INVALID_PARAMS, "{bad}");
+    }
+    assert!(!scope::scope_path(d.path()).exists(), "拒绝的批次不得落盘");
+
+    // 表里被手工塞进脏 rootId ⇒ build_scope fail loud（不静默丢弃）。
+    let forged = scope::McpScopeState {
+        version: scope::SCOPE_VERSION,
+        sessions: vec![SessionGrant {
+            client_id: "c2".to_string(),
+            tier: McpTier::Edit,
+            approved_roots: vec![],
+            approved_tools: vec![],
+            approved_root_ids: vec!["ws:ZZZZZZZZ".to_string()],
+            created_at: crate::launcher::iso_now(),
+            revoked_at: None,
+        }],
+    };
+    scope::save(d.path(), &forged).unwrap();
+    assert_eq!(
+        scope::build_scope(&scope::load(d.path()).unwrap(), "c2", "s")
+            .unwrap_err()
+            .code,
+        codes::INTERNAL
+    );
+}
+
+/// 真实 TCP 端点：rootId 的第二道闸必须在 **Rust 端点** 命中，而不只是 WebView
+/// 真源腿自己判。四步钉住「默认拒绝 → 批准工具仍拒 → 显式批准根才放行并透传
+/// scope → revoke 收回」，且拒绝路径桥零调用。
+#[test]
+fn e2e_multiroot_root_id_is_second_checked_at_endpoint() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+    let call = r#"{"jsonrpc":"2.0","id":71,"method":"tools/call","params":{"name":"fileTree.create","arguments":{"relPath":"docs/a.erb","kind":"file","content":"x","rootId":"ws:1a2b3c4d"}}}"#.to_string();
+
+    // ① 第四张表缺失（最小权限）：端点显式拒绝，桥从未被调。
+    let r = mcp_post_as(port, &token, "harness-mr", &call);
+    assert_eq!(r.status, 200);
+    assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
+    assert!(s.rx.try_recv().is_err());
+
+    // ② 只提 tier + 精确批准工具、但不批准 rootId ⇒ 照旧拒（工具批准不捎带根）。
+    scope::approve(
+        s.dir.path(),
+        "harness-mr",
+        McpTier::Edit,
+        vec!["docs".to_string()],
+        vec!["fileTree.create".to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let r = mcp_post_as(port, &token, "harness-mr", &call);
+    assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
+    assert!(s.rx.try_recv().is_err());
+
+    // ③ 显式批准 rootId ⇒ 放行到桥；发往 WebView 的 scope 带上 approvedRootIds。
+    scope::approve_with_root_ids(
+        s.dir.path(),
+        "harness-mr",
+        McpTier::Edit,
+        vec!["docs".to_string()],
+        vec!["fileTree.create".to_string()],
+        vec![ROOT_A.to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let token2 = token.clone();
+    let call2 = call.clone();
+    let worker = std::thread::spawn(move || mcp_post_as(port, &token2, "harness-mr", &call2));
+    let payload = s.next_payload();
+    assert_eq!(payload.scope.approved_root_ids, vec![ROOT_A.to_string()]);
+    assert_eq!(payload.params["arguments"]["rootId"], json!(ROOT_A));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(json!({"content": [{"type": "text", "text": "created"}]})),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert_eq!(
+        rpc_json(&r)["result"]["content"][0]["text"],
+        json!("created")
+    );
+
+    // ④ revoke ⇒ 同一调用回到默认拒绝，桥零调用。
+    scope::revoke(s.dir.path(), "harness-mr").unwrap();
+    reload_scope_mirror(&s);
+    let r = mcp_post_as(port, &token, "harness-mr", &call);
+    assert_eq!(rpc_error_code(&r), "E_TOOL_NOT_APPROVED");
+    assert!(s.rx.try_recv().is_err());
 }

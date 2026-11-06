@@ -21,7 +21,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::protocol::{
-    codes, is_market_tool, validate_relative_path, McpError, McpSessionScope, McpTier,
+    codes, is_market_tool, is_root_id_shape, validate_relative_path, McpError, McpSessionScope,
+    McpTier,
 };
 
 pub const SCOPE_FILE: &str = "mcp_approvals.json";
@@ -53,6 +54,10 @@ pub struct SessionGrant {
     pub approved_roots: Vec<String>,
     #[serde(rename = "approvedTools", default)]
     pub approved_tools: Vec<String>,
+    /// additive（2026-11-06 写域多根）：显式批准的常驻可写根枚举标识。
+    /// 缺省 / 空 ⇒ 默认拒绝；旧表（无此键）经 `default` 读成空，行为零变化。
+    #[serde(rename = "approvedRootIds", default)]
+    pub approved_root_ids: Vec<String>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
     #[serde(rename = "revokedAt", default, skip_serializing_if = "Option::is_none")]
@@ -159,9 +164,14 @@ pub fn build_scope(
         .rev()
         .find(|g| g.client_id == client_id && g.revoked_at.is_none())
         .cloned();
-    let (tier, approved_roots, approved_tools) = match grant {
-        Some(g) => (g.tier, g.approved_roots, g.approved_tools),
-        None => (McpTier::Read, Vec::new(), Vec::new()),
+    let (tier, approved_roots, approved_tools, approved_root_ids) = match grant {
+        Some(g) => (
+            g.tier,
+            g.approved_roots,
+            g.approved_tools,
+            g.approved_root_ids,
+        ),
+        None => (McpTier::Read, Vec::new(), Vec::new(), Vec::new()),
     };
     for root in &approved_roots {
         validate_relative_path(root)?;
@@ -175,22 +185,54 @@ pub fn build_scope(
             ));
         }
     }
+    // 表内脏 rootId 属内部状态损坏：fail loud，不静默丢弃、不降级成项目根。
+    for id in &approved_root_ids {
+        if !is_root_id_shape(id) {
+            return Err(McpError::new(
+                codes::INTERNAL,
+                format!("第四张表含非法 rootId：{id}"),
+            ));
+        }
+    }
     Ok(McpSessionScope {
         session_id: session_id.to_string(),
         client_id: client_id.to_string(),
         tier,
         approved_roots,
         approved_tools,
+        approved_root_ids,
     })
 }
 
+/// additive（2026-11-06 写域多根）：`approvedRootIds` 的批量形状闸。
+/// 脏值整批拒（fail loud，不静默过滤），去重保序与 TS `buildApprovalBatch` 一致。
+fn normalize_root_ids(root_ids: Vec<String>) -> Result<Vec<String>, McpError> {
+    let mut out: Vec<String> = Vec::new();
+    for id in root_ids {
+        if !is_root_id_shape(&id) {
+            return Err(McpError::new(
+                codes::INVALID_PARAMS,
+                format!(
+                    "rootId 形状非法（只收 ws: + 8 位小写十六进制的枚举标识，绝不是目标路径）：{id}"
+                ),
+            ));
+        }
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    Ok(out)
+}
+
 /// 一次批量审批：追加一条新 grant，同 client 的旧记录标 `revokedAt`（留痕不物理删）。
-pub fn approve(
+/// 六参版本收 `root_ids`；旧五参 `approve` 原样保留（委托空列表 ⇒ 默认拒绝）。
+pub fn approve_with_root_ids(
     app_data_dir: &Path,
     client_id: &str,
     tier: McpTier,
     roots: Vec<String>,
     tools: Vec<String>,
+    root_ids: Vec<String>,
 ) -> Result<McpScopeState, McpError> {
     validate_client_id(client_id)?;
     for root in &roots {
@@ -199,6 +241,7 @@ pub fn approve(
     for tool in &tools {
         validate_tool_pattern(tool)?;
     }
+    let approved_root_ids = normalize_root_ids(root_ids)?;
     let mut state = load(app_data_dir)?;
     let now = crate::launcher::iso_now();
     for grant in state.sessions.iter_mut() {
@@ -211,11 +254,23 @@ pub fn approve(
         tier,
         approved_roots: roots,
         approved_tools: tools,
+        approved_root_ids,
         created_at: now,
         revoked_at: None,
     });
     save(app_data_dir, &state)?;
     Ok(state)
+}
+
+/// 旧五参入口：零 `approvedRootIds` ⇒ 现有行为一字不变（既有调用点不动）。
+pub fn approve(
+    app_data_dir: &Path,
+    client_id: &str,
+    tier: McpTier,
+    roots: Vec<String>,
+    tools: Vec<String>,
+) -> Result<McpScopeState, McpError> {
+    approve_with_root_ids(app_data_dir, client_id, tier, roots, tools, Vec::new())
 }
 
 pub fn revoke(app_data_dir: &Path, client_id: &str) -> Result<McpScopeState, McpError> {

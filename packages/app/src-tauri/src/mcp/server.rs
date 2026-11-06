@@ -32,11 +32,12 @@ use tauri::{AppHandle, Emitter, Manager};
 use super::audit::{self, AuditEntry, AuditOutcome};
 use super::latency::{self, Ledger};
 use super::protocol::{
-    attach_negotiation_meta, check_protocol_version, check_tool_call_permission, classify_envelope,
-    codes, decode_request, filter_tools_list, is_market_tool, negotiate, negotiate_accept,
-    sanitize_string, sanitize_untrusted_inplace, validate_params, AcceptKind, JsonRpcResponse,
-    LocalOutcome, McpError, McpRequestPayload, McpRespondArgs, McpSessionScope, McpTier,
-    Negotiation, RequestEnvelope, WebMethod, MCP_REQUEST_EVENT, PROTOCOL_VERSION,
+    attach_negotiation_meta, check_protocol_version, check_root_id_param,
+    check_tool_call_permission, classify_envelope, codes, decode_request, filter_tools_list,
+    is_market_tool, negotiate, negotiate_accept, sanitize_string, sanitize_untrusted_inplace,
+    validate_params, AcceptKind, JsonRpcResponse, LocalOutcome, McpError, McpRequestPayload,
+    McpRespondArgs, McpSessionScope, McpTier, Negotiation, RequestEnvelope, WebMethod,
+    MCP_REQUEST_EVENT, PROTOCOL_VERSION,
 };
 use super::scope;
 
@@ -72,6 +73,9 @@ pub struct ApproveArgs {
     pub approved_roots: Vec<String>,
     #[serde(default)]
     pub approved_tools: Vec<String>,
+    /// additive（2026-11-06 写域多根）：人在设置页逐项勾选的常驻根枚举标识。
+    #[serde(default)]
+    pub approved_root_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -664,12 +668,13 @@ pub fn approve_session(
         .map_err(|e| McpError::new(codes::INTERNAL, format!("app_data_dir：{e}")))?;
     let tier = McpTier::parse(&args.tier)
         .ok_or_else(|| McpError::new(codes::INVALID_PARAMS, "tier 非法"))?;
-    let new_state = scope::approve(
+    let new_state = scope::approve_with_root_ids(
         &dir,
         &args.client_id,
         tier,
         args.approved_roots,
         args.approved_tools,
+        args.approved_root_ids,
     )?;
     if let Ok(guard) = state.runtime.lock() {
         if let Some(rt) = guard.as_ref() {
@@ -1336,6 +1341,22 @@ fn dispatch_webview(
         .get("name")
         .and_then(Value::as_str)
         .map(str::to_string);
+    // 闸门 1b：写域多根 `rootId` 的**端点级二次复核**（形状 / 四写腿 / 第四张表
+    // 精确批准）。放在工具 tier 闸之前：低 tier 会话带 rootId 也先按根授权面
+    // 显式拒绝，不因「工具本就被 tier 挡住」而掩盖 rootId 的可见拒绝。
+    if let Err(e) = check_root_id_param(method, &env.params, &scope) {
+        record(
+            ctx,
+            tool_name.as_deref().unwrap_or(method.as_str()),
+            &env.params,
+            AuditOutcome::Denied,
+            Some(e.code.clone()),
+            None,
+            None,
+        );
+        record_http(ctx, &env.method);
+        return Dispatched::Done(Some(JsonRpcResponse::err(id, &e)));
+    }
     // 闸门 2：tools/call 的危险工具（Rust 侧双保险，与 tools/list 过滤同源）。
     // 未获精确授权的 privileged 工具显式拒绝，并写一条审计 denied。
     if method == WebMethod::ToolsCall {

@@ -255,7 +255,7 @@ B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**；B10 打开文档
   实例新建走界面或用 `launcher_instance_duplicate` 复制既有实例；`launcher_runtime_*`＝宿主尚未落地；
   `market_*` 全族＝铸凭据 / 不可逆外发 / 网络 + 安装副作用。
 
-### 5.7 Agent 可达性与写域边界（2026-11-06）
+### 5.7 Agent 可达性与写域多根（2026-11-06；原 §5.6，2026-11-06 编号让位）
 
 - **批准面可达**：静态可批准名单 `APPROVABLE_PRIVILEGED_TOOLS`（B4 起 29 枚：两枚
   `fileTree.*` + 启动器族 27 枚）**不是全部**——命令面板动作是运行时投影成同名工具的，
@@ -269,20 +269,29 @@ B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**；B10 打开文档
   `{dispatched:true, confirmed:false, notice}`；有真实返回值的命令原样透出（旧契约零改动）。
   Agent 不得据此判定落地，须用 `project.info` / `document.active` / `problems.diagnostics`
   等只读真源复核。
-- **写域边界（仍是单项目根，未扩）**：落盘写腿的域基准根固定 `project.current().rootDir`，
-  `relPath` 先过同尺路径闸，再 `resolveWithinRoot` 域内解析，第四张表 `approvedRoots` 是
-  **项目根内的相对前缀**，最后经内核 `writablePaths` 写原语落盘。
-  - **可达**：era 类游戏项目根内的口上创作（`ERB/Lines` 一类目录），前提是人在「可写目录
-    批准」对话框批了 `writablePaths`、并在 MCP 第四张表批了对应 `approvedRoots`。
-  - **不可达**：用户经系统目录对话框选定的常驻可写根（`<appDataDir>/workspace_roots.txt`，
-    由 `io.workspaceRoots` 只读列出）、`<appDataDir>/workspaces/<projectId>` 与仓库插件源码
-    `packages/plugins/*`。内核 `FileIO.isWritable` 虽把这些根算进 `appWritableRoots`，MCP
-    写腿当前**没有按这些根选域**，因此「制作插件补丁写到工作区 / 插件源码」还做不到。
-
-  扩成多根只能按 additive 模型：写腿收**枚举根标识** `rootId`（绝不收任意目标路径）、
-  第四张表新增 `approvedRootIds`（默认空 ⇒ 现有行为零变化）、Rust 端点二次复核、
-  设置页列出候选根供人显式批准；双闸与默认拒绝不变。这属 ADR-0013 第四张表的
-  **写域信任模型变更**，已由人工拍板（2026-11-06），下一批按「判据先红」落地。
+- **写域多根已落地（additive，默认行为零变化）**：落盘写腿的域基准根不再只能是
+  `project.current().rootDir`。四枚写腿 `fileTree.create` / `update` / `remove` / `rename`
+  新增**可选** `rootId`（形状 `ws:` + 8 位小写十六进制，`workspace-root-id.ts` 对归一化
+  绝对路径取 FNV-1a 32 位哈希；不用顺序索引，避免授权漂移），**只收枚举标识、绝不收任意目标路径**。
+  - **发现**：`io.workspaceRoots` 回包新增 `rootIds`，与分页后的 `roots` 逐项对齐；候选根来自
+    人类经系统目录对话框选定的 `workspace_roots.txt`，不是客户端可编造的路径。
+  - **批准**：第四张表新增可选 `approvedRootIds`，默认空 ⇒ 任何 `rootId` 都不可用；「AI 接入」
+    面板从只读 `workspace_roots` 列候选根（枚举失败单独上屏，不拖累既有 scope / audit），逐项
+    勾选后 `approveArgs` 才 additive 带第五键。`approvedRoots` 仍是「根内哪些相对前缀可写」的
+    独立账，**两张账不合并、不互相派生**。
+  - **三道复核**：WebView 真源腿 `resolveWriteRoot()` 过形状闸 → 查 `approvedRootIds` 精确批准
+    → 反查只读 `workspace_roots` 得到绝对路径；找不到 / 反查失败都显式拒绝，绝不退回项目根。
+    Rust 端点 `check_root_id_param()` 在 `validate_params` 之后、tier 闸之前再做一次
+    （形状 / 四写腿 / 精确批准，路径形态单独 `E_PATH_TARGET_FORBIDDEN`），命中写 `Denied`
+    审计且桥零调用。落盘最后仍走 `resolveWithinRoot` 相对路径闸 + `approvedRoots` 写闸一 +
+    内核 `assertWritable` / Rust `ensure_write_allowed` 写闸二，**双闸一字未动**。
+  - **可达**：era 类游戏口上创作（项目根内 `ERB/Lines` 一类目录），以及人类显式批准的常驻
+    工作区根 / 插件源码根 —— 前提是这些根同时也在内核写允许域内、且第四张表 `approvedRoots`
+    批了对应相对前缀。**批准不等于放行**：默认权限、危险工具 fail-closed、`market_*` 恒拒、
+    无任意落点路径入口，均不变。
+  - **向后兼容**：不传 `rootId` 零额外 IPC；旧五参 `scope::approve` 委托空列表；旧
+    `mcp_approvals.json` 无 `approvedRootIds` 键经 `#[serde(default)]` 读成空。这属 ADR-0013
+    第四张表的**写域信任模型 additive 扩展**，由人工拍板（2026-11-06）后按「判据先红」落地。
 
 ### 5.8 端点吞吐与延迟契约（B5＝`d1a43790`）
 
@@ -436,6 +445,7 @@ interface McpSessionScope {
   tier: McpTier;
   approvedRoots: string[];
   approvedTools: string[];
+  approvedRootIds?: string[]; // additive（2026-11-06）：显式批准的常驻可写根枚举标识，见 §5.7
 }
 ```
 

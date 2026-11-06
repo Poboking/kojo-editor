@@ -41,6 +41,12 @@ export interface McpSessionScope {
   tier: McpTier;
   approvedRoots: readonly string[];
   approvedTools: readonly string[];
+  /**
+   * additive（2026-11-06 写域多根）：第四张表显式批准的**常驻可写根枚举标识**。
+   * 缺省 / 空 ⇒ 任何 rootId 都不可用（默认拒绝一字不变）。与 approvedRoots 是两张
+   * 独立的账：前者选「哪个根」，后者限定「根内哪些相对前缀」。
+   */
+  approvedRootIds?: readonly string[];
 }
 
 export interface McpTool {
@@ -532,7 +538,24 @@ const RELATIVE_PATH_SCHEMA: Record<string, unknown> = {
  */
 export const PAGE_SIZE_ARG_ALIASES = ['limit', 'length', 'maxChars', 'maxResults', 'maxEntries', 'maxRanges', 'maxEvents', 'maxLines'] as const;
 
-/** 分页入参的通用 schema 片段（B1 批：**只加可选入参，不加新工具名**）。
+/**
+ * 写腿可选的多根**枚举标识**（additive，ADR-0013 写域多根批）：
+ * - 形状钉死 `ws:` + 8 位小写十六进制；绝不是目标路径，不收盘符 / 绝对路径 / `..`；
+ * - 候选值只能从只读 `io.workspaceRoots` 回执里的 `rootIds` 枚举出来（按根绝对路径做的
+ *   稳定 FNV-1a 标识，不受增删顺序影响）；
+ * - 还必须在本会话第四张表 `scope.approvedRootIds` 里**精确列名**批准，否则一律拒绝；
+ * - Rust 端点按同尺形状 + 精确列名再复核一道（WebView 被替换也绕不过）。
+ * 省略 `rootId` ⇒ 仍写当前项目根，行为一字不变，也不触发任何额外枚举 IPC。
+ */
+export const ROOT_ID_SCHEMA: Record<string, unknown> = {
+  type: 'string',
+  pattern: '^ws:[0-9a-f]{8}$',
+  description:
+    'Optional stable root identifier (ws: + 8 lowercase hex digits), NOT a path. Enumerate candidates from the read-only io.workspaceRoots reply (rootIds, index-aligned with roots); the identifier must also be explicitly approved in this session scope (approvedRootIds) by a human in the AI-access settings panel. Omit to stay on the current project root.',
+};
+
+/**
+ * 分页入参的通用 schema 片段（B1 批：**只加可选入参，不加新工具名**）。
  * 定义必须早于下面几张工具表——表是模块级 const，`export const` 对象若定义在其后会在
  * 模块初始化时撞 TDZ（ReferenceError），只有函数声明可以后置。
  */
@@ -840,13 +863,14 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.create',
     description:
-      'Create a new file or directory inside the authorized project root. `relPath` MUST be a project-root-relative path (schema rejects absolute paths, drive letters and ".."); the execution layer resolves it against approvedRoots and refuses out-of-domain targets. Mutates the filesystem, does NOT overwrite an existing entry.',
+      'Create a new file or directory inside the authorized project root. `relPath` MUST be a project-root-relative path (schema rejects absolute paths, drive letters and ".."); the execution layer resolves it against approvedRoots and refuses out-of-domain targets. Optional `rootId` selects one explicitly approved persistent workspace root instead of the project root (enumerate via io.workspaceRoots; human approval required). Mutates the filesystem, does NOT overwrite an existing entry.',
     inputSchema: {
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_SCHEMA,
         kind: { type: 'string', enum: ['file', 'directory'], description: 'What to create.' },
         content: { type: 'string', maxLength: 1_000_000, description: 'Initial file content (file only).' },
+        rootId: ROOT_ID_SCHEMA,
       },
       required: ['relPath', 'kind'],
       additionalProperties: false,
@@ -857,12 +881,13 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.update',
     description:
-      'Overwrite the full text content of an existing file inside the authorized project root. `relPath` is project-root-relative (schema + approvedRoots domain check). This REPLACES the whole content. For a targeted in-document edit use `problems.quickFix` (wired since 2026-11-06: it applies ONE listed code action inside the editor model as a single undo step, does not write to disk) — this tool is the whole-file path. Idempotent for identical `content`. Mutates the filesystem. Refuses (WRITE_DISABLED) when the session-approved roots or the kernel write domain do not cover the target.',
+      'Overwrite the full text content of an existing file inside the authorized project root. `relPath` is project-root-relative (schema + approvedRoots domain check). This REPLACES the whole content. For a targeted in-document edit use `problems.quickFix` (wired since 2026-11-06: it applies ONE listed code action inside the editor model as a single undo step, does not write to disk) — this tool is the whole-file path. Optional `rootId` selects one explicitly approved persistent workspace root instead of the project root (enumerate via io.workspaceRoots; human approval required). Idempotent for identical `content`. Mutates the filesystem. Refuses (WRITE_DISABLED) when the session-approved roots or the kernel write domain do not cover the target.',
     inputSchema: {
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_SCHEMA,
         content: { type: 'string', maxLength: 1_000_000, description: 'Full replacement text.' },
+        rootId: ROOT_ID_SCHEMA,
       },
       required: ['relPath', 'content'],
       additionalProperties: false,
@@ -873,12 +898,13 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.remove',
     description:
-      'Delete a file or directory inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval (approvedTools) in this session. `relPath` is project-root-relative and domain-checked against approvedRoots. Irreversible from the model perspective; use only after an explicit, itemized approval.',
+      'Delete a file or directory inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval (approvedTools) in this session. `relPath` is project-root-relative and domain-checked against approvedRoots. Optional `rootId` selects one explicitly approved persistent workspace root instead of the project root (enumerate via io.workspaceRoots; human approval required). Irreversible from the model perspective; use only after an explicit, itemized approval.',
     inputSchema: {
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_SCHEMA,
         recursive: { type: 'boolean', description: 'Allow removing a non-empty directory (default false).' },
+        rootId: ROOT_ID_SCHEMA,
       },
       required: ['relPath'],
       additionalProperties: false,
@@ -889,10 +915,10 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.rename',
     description:
-      'Rename/move an entry inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval. Both `from` and `to` are project-root-relative and domain-checked against approvedRoots; any out-of-domain target is refused. Read the entry first; this changes the path others may reference.',
+      'Rename/move an entry inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval. Both `from` and `to` are project-root-relative and domain-checked against approvedRoots; any out-of-domain target is refused. Optional `rootId` selects one explicitly approved persistent workspace root for BOTH ends (enumerate via io.workspaceRoots; human approval required). Read the entry first; this changes the path others may reference.',
     inputSchema: {
       type: 'object',
-      properties: { from: RELATIVE_PATH_SCHEMA, to: RELATIVE_PATH_SCHEMA },
+      properties: { from: RELATIVE_PATH_SCHEMA, to: RELATIVE_PATH_SCHEMA, rootId: ROOT_ID_SCHEMA },
       required: ['from', 'to'],
       additionalProperties: false,
     },
@@ -1047,7 +1073,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'io.workspaceRoots',
     description:
-      'List the workspace roots registered for the current session (read-only). Backed by the Rust workspace_roots primitive. `maxResults`/`limit` size a page (one and the same knob) and `cursor` resumes it; the list carries `total` + `hasMore` so it is fully enumerable. Undeclared argument names are rejected, never silently dropped to the default page. Use this to learn the legitimate domain for subsequent relative paths; it never grants write access outside approvedRoots and never mutates state. ' +
+      'List the workspace roots registered for the current session (read-only). Backed by the Rust workspace_roots primitive. `maxResults`/`limit` size a page (one and the same knob) and `cursor` resumes it; the list carries `total` + `hasMore` so it is fully enumerable. Undeclared argument names are rejected, never silently dropped to the default page. The additive `rootIds` array is index-aligned with `roots`: each is a stable `ws:` identifier usable as the optional `rootId` on the four fileTree write tools — but only after a human explicitly approves that identifier in this session (approvedRootIds). Use this to learn the legitimate domain for subsequent relative paths; it never grants write access outside approvedRoots and never mutates state. ' +
       PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
