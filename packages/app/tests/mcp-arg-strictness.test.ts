@@ -104,10 +104,13 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   // 该面腿先把 maxResults clamp 一遍再注入共用闸 ⇒ 序列里排在 maxResults 之后的四个别名
   // 在这个面上**从不生效**：不生效就不声明，让它们落进「未知入参 ⇒ 显式拒收」。
   'problems.diagnostics': ['limit', 'length', 'maxChars', 'maxResults', 'cursor'],
-  'fileTree.create': ['relPath', 'kind', 'content'],
-  'fileTree.update': ['relPath', 'content'],
-  'fileTree.remove': ['relPath', 'recursive'],
-  'fileTree.rename': ['from', 'to'],
+  // B19 扫描补的事实（不是手改口径）：B7 的写域多根入参 `rootId` 真被这四枚腿读
+  // （`real-sources-io.ts::resolveWriteRoot` 第 1200 行 `args['rootId']`，
+  // 经 `requireWriteTarget(input, …)` 传到腿里），本表此前漏登 ⇒ 由漂移闸暴露、照实补上。
+  'fileTree.create': ['relPath', 'kind', 'content', 'rootId'],
+  'fileTree.update': ['relPath', 'content', 'rootId'],
+  'fileTree.remove': ['relPath', 'recursive', 'rootId'],
+  'fileTree.rename': ['from', 'to', 'rootId'],
   'diff.compare': [], // 无执行腿 ⇒ 显式 NOT_WIRED，一个键都不取用
   'state.replay': [],
   'preview.document': [],
