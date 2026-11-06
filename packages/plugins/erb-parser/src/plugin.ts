@@ -1783,6 +1783,16 @@ export function createErbParserPlugin(): Plugin {
           collectFileChange(ev);
         }),
       );
+      // 失效波（MCP-PERF-S13）：一波 ⇒ 一次增量轮；无波内核不进这条，300ms 逐文件窗照旧。
+      ctx.onDispose(
+        ctx.bus.on('file.changedBatch', (ev) => {
+          refreshScanRoots();
+          for (const c of ev.changes) collectFileChange(c); // 同口收集：去重账/根外过滤/unlink 全同
+          if (pendingTimer !== null) clearTimeout(pendingTimer);
+          pendingTimer = null;
+          void flushFileChanges();
+        }),
+      );
       ctx.onDispose(
         ctx.bus.on('editor.activeFileChanged', () => {
           refreshScanRoots();

@@ -703,7 +703,9 @@ describe('⑧ 失效波（MCP-PERF-S13：file.changedBatch）', () => {
 
   it('根外一波不起整轮（与逐文件同一把根尺）', async () => {
     const { h, runs } = await armed();
-    h.fire('file.changedBatch', { changes: waveOf(20, '../outside') });
+    h.fire('file.changedBatch', {
+      changes: waveOf(20).map(({ kind }, i) => ({ kind, path: `C:/Users/me/Desktop/w${i}.txt` })),
+    });
     await h.clock.advance(70_000);
     expect(runs()).toBe(1);
     h.dispose();

@@ -618,6 +618,12 @@ export function mountProjectScan(opts: MountProjectScanOptions): ProjectScanHand
       }
       requestFullRound(false);
     }),
+    // 失效波（MCP-PERF-S13）：一波 ⇒ 一次扫描重排；销账/重读等逐文件语义仍在逐文件事件上。
+    kernel.bus.on('file.changedBatch', (ev) => {
+      if (scanner === null) return;
+      if (!ev.changes.some((c) => insideScanRoots(c.path))) return;
+      requestFullRound(false);
+    }),
     kernel.bus.on('editor.cursorMoved', () => onEditorActivity()),
     kernel.bus.on('editor.documentChanged', () => onEditorActivity()),
     // 复核队列由问题账自己记（关标签 / 卸载时）；这里只读它，不轮询、不清空
