@@ -120,7 +120,7 @@ node tools/kojo-mcp.mjs
 ## 5. 暴露的能力概览
 
 能力注册表唯一真源 `packages/mcp-host/src/index.ts`（冻结契约 v1）。按 `node tools/mcp-inventory.mjs --print`
-盘点：`tools` 共 **33** 个，按 tier 分组 `read 28 / edit 3 / privileged 2`（详见 §6 授权模型）。
+盘点：`tools` 共 **40** 个，按 tier 分组 `read 35 / edit 3 / privileged 2`（详见 §6 授权模型；2026-11-06 第四/五波只读补齐与写腿落地后复核）。
 这些是**规范定义**的计数；`tools/list` 还会按会话 `tier` 与第四张表进一步过滤，危险工具默认缺席。
 另外，生产真源会把命令面板命令投影成同名工具（`commands.list` 读数与工具 `tier` 同源），但它们
 **一律按 `privileged` fail-closed**，默认不出现在 `tools/list`、也不接受 `edit` 会话调用（§6）；
@@ -130,7 +130,7 @@ node tools/kojo-mcp.mjs
 
 | tier | 代表工具 | 说明 |
 | --- | --- | --- |
-| `read` | `project.info` `fs.tree` `fs.readFile` `fs.stat` `search.all` `workspace.searchAll` `problems.diagnostics` `document.active` `commands.list` `editor.info` `editor.selfCheck` `io.listDir` `io.workspaceRoots` `semantic.definitionAt` `semantic.referencesAt` `semantic.hoverAt` `semantic.suggestAt` `semantic.documentSymbols` `semantic.tokens` `semantic.codeActionsAt` `semantic.diagnostics` `lang.foldingRanges` `lang.highlightsAt` `lang.signatureAt` `lang.markers` `diff.compare` `state.replay` `preview.document` | 只读；`readOnlyHint: true` |
+| `read` | `project.info` `fs.tree` `fs.readFile` `fs.stat` `search.all` `workspace.searchAll` `problems.diagnostics` `document.active` `commands.list` `editor.info` `editor.selfCheck` `io.listDir` `io.workspaceRoots` `semantic.definitionAt` `semantic.referencesAt` `semantic.hoverAt` `semantic.suggestAt` `semantic.documentSymbols` `semantic.tokens` `semantic.codeActionsAt` `semantic.diagnostics` `lang.foldingRanges` `lang.highlightsAt` `lang.signatureAt` `lang.markers` `diff.compare` `state.replay` `preview.document` `app.dataDir` `codec.encodeString` `fs.pathExists` `fs.statFiles` `lang.lensesAt` `lang.selectionRangesAt` `editor.cursor` | 只读；`readOnlyHint: true` |
 | `edit` | `fileTree.create` `fileTree.update` `problems.quickFix` | 需会话 `tier >= edit` + `approvedRoots` 复核 |
 | `privileged` | 危险工具 | 默认**不进 `tools/list`**；须宿主经第四张表逐会话批准 |
 
@@ -149,6 +149,23 @@ node tools/kojo-mcp.mjs
 `workflow.triage-diagnostics` / `workflow.author-review` / `workflow.safe-refactor`。
 骨架**零游戏名词**，领域知识只能经 `mcp.prompt` 槽注入（`collectPromptSlotFragments`）；
 缺槽时显式标注「领域槽未注入」，绝不编造领域事实。
+
+### 5.4 写腿状态段（真值自 `node tools/mcp-inventory.mjs --json` 的 `writeLegs`）
+
+2026-11-06 第四波收口后，**wired 4 / NOT_WIRED 1**：
+
+| 工具 | tier | 状态 | 真源 |
+| --- | --- | --- | --- |
+| `fileTree.create` | `edit` | wired | `createFileExclusive` / `createDirExclusive` |
+| `fileTree.update` | `edit` | wired | `kernel.io.writeText`（`write_file_bytes`） |
+| `fileTree.remove` | `privileged` | wired | `kernel.io.removeFile` / `removeDir` |
+| `fileTree.rename` | `privileged` | wired | `kernel.io.rename`（`from`/`to` 双端过闸） |
+| `problems.quickFix` | `edit` | **NOT_WIRED** | 缺稳定 `actionId` + 宿主受控 codeAction-apply 通道（Monaco quickFix 动作实例只活在弹出层） |
+
+四枚已接线写腿一律叠**双闸**：写闸一第四张表 `approvedRoots` 复核，写闸二内核
+`writablePaths` 写原语；成功后广播 `file.changed`（remove 发 `unlink`、rename 发源 `unlink` + 目标 `add`）。
+`privileged` 两枚默认不进 `tools/list`、按工具名精确批准；`exportFile` 对话框仍是唯一域外写法定通道。
+`NOT_WIRED` 一律显式抛错可见，**绝不挂空串假实现**。
 
 ## 6. tier 与授权模型
 
@@ -214,7 +231,8 @@ interface McpSessionScope {
 - 客户端报 `spawn node ENOENT`：确认 `node` 在 PATH，且从**仓库根目录**启动客户端（相对路径 `tools/kojo-mcp.mjs` 才能解析）。
 - 客户端一直挂住不返回：检查是否在发 `notifications/*` 后错误地等响应——shim 对 notification 不回帧（§3.3）。
 - 「tools/list 里没有写工具」：会话 `tier=read` 或写工具未获第四张表批准（§6），这是预期行为。
-- 想看当前能力面与缺口：`node tools/mcp-inventory.mjs --print`（含按 tier 的覆盖率与剩余缺口原因）。
+- 想看当前能力面与缺口：`node tools/mcp-inventory.mjs --print`（含按 tier 的覆盖率与剩余缺口原因）；
+  机器消费用 `--json`（`counts` / `gaps` 带 `wiringCost` 分级 / `writeLegs` 写腿状态段）。
 ## 10. 协议一致性自检（B3 · `tools/mcp-conformance.mjs`）
 
 ### 10.1 怎么跑
@@ -263,6 +281,12 @@ harness 起一个回环 mock MCP endpoint（`http.createServer` 只 bind `127.0.
 tier 不匹配 `tools/call` → `-32000 TIER_DENIED`（拒绝可见，不静默过滤，H11）；`approvedTools`
 未命中 → `-32000 TOOL_NOT_APPROVED`（H12），命中后可执行（H13）。
 
+> **口径差（2026-11-06 落账，未消除）**：`TIER_DENIED` 这个码目前**只存在于 mock 对拍靶**
+> （H11 / W 靶），**真 Rust 端点没有该码**——真实端点对 tier 不匹配走的是 `tools/list` 二次
+> 过滤与 `PERMISSION_DENIED` / `TOOL_NOT_APPROVED` 路径。读 §10.3 的授权面结论时须区分
+> 「mock 对拍靶」与「Rust 端点」两套口径，别把 harness 的码当成端点契约；要统一须单独
+> 改 Rust 错误码并补端点级回归，本批未动。
+
 **错误帧面**：未知 method `-32601`（H22/S13）；参数错 `-32602`（未知工具 / 缺 name，H08/H09/S 系透传）；
 结构化错误 `{code, message, data}`（`MOCK_FAILURE` 带 `retryable:false`，H10/S12）；错误帧是 200 应答，
 shim 不吞、主循环不死（S14）。
@@ -288,12 +312,12 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 
 ### 10.5 当前能力面读数与剩余缺口（真值自 `node tools/mcp-inventory.mjs --print`）
 
-> 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-05 按当前树复核）。
+> 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-06 第四/五波落地后按当前树复核）。
 
 - 能力面：命令 **61** / Rust 命令 **89** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
-  tools **33**（read 28 / edit 3 / privileged 2）；resources **8**；prompts **3**；
-- 缺口：`totalGaps=180` / `wiredGaps=24` / **`deferredGaps=156`**，逐条带原因，
-  按七类归因（合计 156，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
+  tools **40**（read **35** / edit 3 / privileged 2）；resources **8**；prompts **3**；
+- 缺口：`totalGaps=180` / `wiredGaps=30` / **`deferredGaps=150`**，逐条带原因，
+  按七类归因（合计 150，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
 
 | 原因类 | 条数 |
 | --- | --- |
@@ -301,9 +325,26 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 | 危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准 | 46 |
 | 写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露 | 18 |
 | MCP 会话控制 / 审计内建命令：由宿主线协议与第四张表管理，不作为模型工具 | 8 |
-| 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 7 |
+| 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 3 |
 | 编辑器写 / 光标副作用：首期不面向只读模型面 | 5 |
-| 语义读数：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补） | 4 |
+| 语义读数：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补） | 2 |
+
+- **本波读数变化**：`read 28→35`（第四波 6 枚只读具名工具 + 第五波 `editor.cursor`），
+  `wiredGaps 24→30` / `deferredGaps 156→150`；`orphanedWires=0` / `missingSources=0`。
+  写腿状态段见 §5.4（wired 4 / NOT_WIRED 1，仅 `problems.quickFix`）。
+- **刻意不登记**（铁律「真源不存在 = 不登记」，留在缺口里）：第四波 11 条 `cheap-read`
+  逐条判性只登记 6 条，余 5 条 = `read_file_bytes_raw` / `read_files_raw`（二进制帧、无结构化
+  数据面，且 `read_files_raw` 会暴露任意目标路径参数）、`updater_relaunch`（重启动作）、
+  `debug.type`（输入动作）、`debug.actions`（注入面不可达）；第五波 Wave4 #4 的
+  `editor.openDocument` / `editor.revealPosition` 判性 = 宿主无可诚实回报结果的通道，
+  **不登记**（只留显式缺口 + 防御性 `NOT_WIRED`，不假实现）。调用一律显式可见，不静默。
+- **截断账目**：`documentSymbols` / `referencesAt` 两处静默截断已改成 `total` 真实 +
+  `truncated` 可见（连带 `definitionAt` / `suggestAt` / `codeActionsAt` 同形补齐，旧字段 additive 保留）。
+- **零参工具的 schema 契约**（`1061df6b`）：`app.dataDir` / `editor.cursor` 两枚真无入参的只读工具
+  原先写空 `{type:'object', properties:{}}`，撞上 `packages/mcp-host/tests/mcp-host.test.ts` 的
+  「不许空 schema 兜底」闸，成为 2026-11-06 空闲全量首跑的**唯一真红**（单跑复现，非满载假红）。
+  现改为 `properties:{}` + `additionalProperties:false`（显式拒绝任何入参），闸新增零参白名单：
+  零参工具必须逐个登记且真走零参契约、白名单不留残项；新增零参工具不登记仍红，**闸未放宽**。
 
 ### 10.6 本 harness 不覆盖什么（如实边界）
 
