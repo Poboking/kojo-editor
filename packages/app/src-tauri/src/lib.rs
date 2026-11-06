@@ -53,6 +53,10 @@ mod launcher;
 /// 工具能力仍全在 WebView 内核与插件。命令面见 `mcp`，实现见 `mcp::server` 等。
 mod mcp;
 
+/// 检索索引（MCP-PERF-S1）：per-file trigram 指纹 + 行偏移表。只是预筛，
+/// 最终命中仍走本文件的 matcher；失效键与 `SearchTextCache` 同源。
+mod search_index;
+
 /* --------------------- 写允许域（审阅 M3：纵深防御） --------------------- */
 //
 // JS 层 kernel io 的 writablePaths 白名单是第一道闸；本层是第二道闸：
