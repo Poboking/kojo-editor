@@ -789,6 +789,9 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
    * 另 5 条刻意不登记（理由见 MCP_DEFERRED_GAP_NOTES 与 commit 回执）：
    *   read_file_bytes_raw / read_files_raw（ipc::Response 二进制帧，无模型可调用的结构化数据面）、
    *   updater_relaunch / debug.type（非只读动作）、debug.actions（真源对 MCP 注入面不可达）。
+   * B2 批（LaneT，2026-11-06）改判其中一条：read_files_raw 的结构化子集由具名只读工具
+   *   fs.readMany 覆盖（走 kernel.io.readTexts 的 TextFile 投影 + 逐条项目根内相对路径），
+   *   二进制帧本身仍 deferred；逐条理由见下面 fs.readMany 的 description 与台账条目。
    */
   {
     name: 'app.dataDir',
@@ -837,6 +840,49 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned stat items (default 200).' },
       },
       required: ['relPaths'],
+    },
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
+  /* ---- B2 批（LaneT，2026-11-06）：结构化批读面（一次调用读多文件）----
+   * 判性（拆掉 read_files_raw 留在台账上的两条理由，逐条）：
+   *  ①「无面向模型的结构化只读数据面」⇒ 本工具的输出是 kernel.io.readTexts 的 TextFile 投影
+   *    （正文 / 编码 / EOL / mtime + 逐条分页账），不是 ipc::Response 裸字节帧；二进制帧那条
+   *    开项目热路径性能通道**继续 deferred**（台账条目已改写）。
+   *  ②「收任意 paths 数组 ⇒ 暴露任意目标路径参数」⇒ 本工具只收**项目根内相对路径**，逐条走与
+   *    fs.readFile / fs.statFiles 同一个 resolveWithinRoot（绝对路径 / 盘符 / ".." 整批显式
+   *    INVALID_ARGS，域外路径绝不送到壳层），并加单次 ≤64 条硬上限（超限显式报错，绝不静默截断）。
+   * 只读自证：只调内核批量读原语与只读 stat_files；零写命令、零索引重建、零落盘。
+   */
+  {
+    name: 'fs.readMany',
+    description:
+      'Read the text of SEVERAL files inside the authorized project root in ONE call (read-only) — the batch counterpart of fs.readFile, backed by the kernel primitive io.readTexts (one batch IPC instead of a round trip per file). ' +
+      '`relPaths` are project-root-relative and EACH is schema-checked plus resolved against the authorized project root: an absolute path, drive letter or ".." entry rejects the WHOLE batch with INVALID_ARGS, so nothing out-of-domain reaches the shell. Hard cap 64 paths per call — more is an explicit error telling you to split into batches, never a silently dropped tail. ' +
+      'Per-file paging uses the same text gates as fs.readFile: `offset` (0-based character offset applied to every file) and `limit` (default 24000 / maximum 65000 characters per file — no gate widened); every item carries its own {textLength, truncated, hasMore, nextCursor, fingerprint} and an item cursor feeds straight back to fs.readFile for that one file. The batch nextCursor keys on the relPaths-list fingerprint plus the character offset, so a changed list answers changedDuringPaging:true and restarts at offset 0 — pages never splice silently. ' +
+      'Nothing is hidden in the account: items[] is 1:1 with relPaths (duplicate paths included); a file the kernel could not read stays an explicit {path, ok:false, error:{code,message}} slot — never an empty string, never a skipped entry — and failed slots are triaged by ONE batched stat_files into NOT_FOUND vs READ_FAILED (inconclusive is reported as such, never dressed up as NOT_FOUND). Top-level {requested, succeeded, failed, charsReturned, truncated, hasMore, maxPathsPerCall, overLimit} is always present. ' +
+      'Stated rather than hidden: the batch primitive may answer a slot from the session text cache (validated by mtime+size, so the text still matches what is on disk, whereas fs.readFile always re-reads), and each item adds encoding / eol / mtimeMs plus its own fsFreshness verdict. Never writes to disk, never rebuilds an index; for ONE file use fs.readFile.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        relPaths: {
+          type: 'array',
+          items: RELATIVE_PATH_SCHEMA,
+          minItems: 1,
+          maxItems: 64,
+          description:
+            'Project-root-relative paths, each domain-checked (absolute paths, drive letters and ".." traversal are refused for the whole batch). Duplicates are answered 1:1. Hard cap 64 per call; above that the call fails with INVALID_ARGS instead of truncating the list.',
+        },
+        offset: {
+          type: 'integer',
+          minimum: 0,
+          description:
+            '0-based character offset applied to EVERY file in this batch (default 0). A bare offset carries no continuity guarantee — each item still reports its own text fingerprint.',
+        },
+        ...PAGE_PROPS,
+      },
+      required: ['relPaths'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -1149,6 +1195,12 @@ export const MCP_TOOL_GAP_MAP: readonly {
   { tool: 'editor.setCursor', gap: 'setCursor', source: 'debug' },
   { tool: 'editor.setSelection', gap: 'setSelection', source: 'debug' },
   { tool: 'editor.revealLine', gap: 'revealLine', source: 'debug' },
+  // B2 批（LaneT，2026-11-06）：结构化批读面 fs.readMany 接 kernel.io.readTexts（其实现在
+  // Tauri 侧就是那条 read_files_raw 批量二进制帧，但工具输出是 TextFile 投影 + 逐条
+  // resolveWithinRoot 的项目根内相对路径 + ≤64 条硬上限），故「无结构化数据面 / 暴露任意目标
+  // 路径参数」两条理由对本条不再成立 ⇒ read_files_raw 由 deferred 转为 wired（诚实降级 deferred
+  // 计数，不是凭空宣布覆盖）；同源的单文件二进制帧 read_file_bytes_raw 仍留在 deferred。
+  { tool: 'fs.readMany', gap: 'read_files_raw', source: 'rust' },
 ];
 
 /**
@@ -1163,7 +1215,7 @@ export const MCP_DEFERRED_GAP_NOTES: readonly { readonly scope: string; readonly
   { scope: 'format（编辑器写副作用 · B3 批后仅剩这一条）', reason: '编辑器写/光标副作用一族里 revealLine / setCursor / setSelection / setValue（含 type）已于 B3 批登记为具名 edit 工具（editor.* 五枚，真源 = debug/install-debug.ts 的实现腿）；format 仍留缺口：它是异步 provider 通道（editor.action.formatDocument.run + 前后长度读数），本期刻意不登记半截实现，绝不挂空串假成功。' },
   { scope: 'ui.* 槽贡献（面板 / 装饰 / 语言服务注册）', reason: '纯 UI / 注册贡献，无独立数据面；领域知识只经 mcp.prompt 槽注入。' },
   { scope: '其余未登记只读原语', reason: '真源存在但本波未登记为具名工具：保留在缺口清单，宿主后续按需补，绝不挂空串假实现。' },
-  { scope: 'LaneF 第四波刻意不登记的 5 条 cheap-read', reason: 'read_file_bytes_raw / read_files_raw：ipc::Response 二进制帧（前端拿 ArrayBuffer / 自定义帧），是开项目热路径性能通道，无面向模型的结构化只读数据面，且 read_files_raw 收任意 paths 数组，不登记以免暴露任意目标路径参数（项目根内文本读已由 fs.readFile 覆盖）；updater_relaunch=app.restart() 重启动作、debug.type=applyTypedEdit 编辑器输入动作，均非只读；debug.actions 真源 focusedCtx().editorRef.current.getSupportedActions() 对 MCP 注入面不可达，绝不挂空数组假实现。' },
+  { scope: 'LaneF 第四波刻意不登记的 5 条 cheap-read（B2 批后余项 4 条：read_files_raw 已被具名工具结构化覆盖）', reason: 'read_files_raw 于 B2 批（LaneT 2026-11-06）由具名只读工具 fs.readMany 结构化覆盖：输出走 kernel.io.readTexts 的 TextFile 投影（不是 ipc::Response 裸字节帧）、逐条 resolveWithinRoot 只收项目根内相对路径（绝对路径 / 盘符 / .. 逃逸整批显式 INVALID_ARGS）、单次硬上限 64 条且超限显式报错不静默截断 ⇒ 原「无面向模型的结构化只读数据面」与「暴露任意目标路径参数」两条理由逐条拆除，该缺口由 deferred 转 wired。read_file_bytes_raw 继续 deferred：单文件 ipc::Response 二进制帧（前端拿 ArrayBuffer / 自定义帧），是开项目热路径的性能通道，没有面向模型的结构化数据面，且其 path 就是任意绝对目标路径参数——项目根内的单文件文本读已由 fs.readFile 覆盖、批量文本读已由 fs.readMany 覆盖，登记它只会把「不暴露任意目标路径参数」这条闸重新打开；updater_relaunch=app.restart() 重启动作、debug.type=applyTypedEdit 编辑器输入动作，均非只读；debug.actions 真源 focusedCtx().editorRef.current.getSupportedActions() 对 MCP 注入面不可达，绝不挂空数组假实现。' },
   { scope: 'Wave4 #4 · editor.openDocument / editor.revealPosition（LaneH 判性，显式 NOT_WIRED 判据）', reason: '宿主无可从 MCP 注入面安全复用、且能诚实回报结果的打开文档 / 定位光标真源。逐条不可复用：editor.revealLocation（App.tsx:1379）是 fire-and-forget 事件，无 ack / 无落地确认 / 落地走 React setState 异步重渲染 / routeOpenPath 不校验项目根域 / 订阅者只在 GUI 挂载时存在，发射后回报已打开即假成功；EditorCommandContext（slots-types.ts:399）只读投影无句柄；McpRealSourceHost（real-sources.ts:1008）仅三个只读 getter；CommandEntry.run（commands.ts:138 / ProjectView.tsx:790）忽略 args 且返回 void，gotoLine 经 editor.action.request 触发 Monaco 交互输入框；editor-pane-registry 全为纯读登记簿，openModelAcrossGroups 只查已开 model 而不打开；file-tree-ops 与内核 io.readText(read_file_bytes) 只读文件内容，不打开 GUI 文档也不定位光标。两枚 edit 档工具按铁律刻意不登记（真源不存在 ⇒ 不登记 + 显式缺口，绝不挂空串假实现），既不进工具清单也不进覆盖登记；runSupplemental 前置兜底仍对任何误调抛可见 NOT_WIRED，绝不 emit 无确认事件冒充成功；写盘仍只经第四张表 approvedRoots × 内核 writablePaths 双闸。只读 editor.cursor 是分开记账的加法，绝不冒充写工具。' },
 ];
 
