@@ -120,7 +120,11 @@ describe('生产接线：read / edit 会话不见也调不动面板动作', () =
       ...editScope, tier: 'privileged', approvedTools: ['workbench.saveAll'],
     };
     expect(reg.listTools(approved).some((t) => t.name === 'workbench.saveAll')).toBe(true);
-    await expect(reg.callTool('workbench.saveAll', {}, approved)).resolves.toBeUndefined();
+    // 命令确实派发，但面板动作无 ack ⇒ 回执必须显式说明「未经确认」，不再回 undefined 冒充成功。
+    await expect(reg.callTool('workbench.saveAll', {}, approved)).resolves.toMatchObject({
+      dispatched: true,
+      confirmed: false,
+    });
     expect(saveSpy).toHaveBeenCalledTimes(1);
   });
 

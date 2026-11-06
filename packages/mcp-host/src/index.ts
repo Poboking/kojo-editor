@@ -2336,7 +2336,21 @@ export function commandToTool(cmd: McpCommandSource): McpTool {
     description: cmd.description ?? cmd.title,
     inputSchema: cmd.argsSchema ?? {},
     tier,
-    run: async (args, scope) => cmd.run(args, scope),
+    run: async (args, scope) => {
+      const result = await cmd.run(args, scope);
+      // 命令面板动作是面向人的 UI 动作（开面板 / 弹对话框 / 改布局 / Monaco 交互输入框），
+      // `CommandEntry.run` 返回 void ⇒ 没有 ack、没有落地确认。原样回 undefined 会让调用方
+      // 把 fire-and-forget 当成「执行成功」，与铁律 4「内核不静默 / inactive 必须可见」相冲。
+      // 因此 void 一律换成**诚实回执**；有真实返回值的命令原样透出，旧契约零改动。
+      if (result !== undefined) return result;
+      return {
+        dispatched: true,
+        confirmed: false,
+        notice:
+          '命令已派发但无可核验的落地确认（fire-and-forget，无 ack / 无状态读数）；' +
+          '不可据此判定操作已生效，请用 project.info / document.active / problems.diagnostics 等只读真源复核。',
+      };
+    },
   };
 }
 

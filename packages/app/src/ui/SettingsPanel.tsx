@@ -1292,7 +1292,9 @@ export const SETTINGS_SECTIONS: (props: SettingsPanelProps) => SettingsSection[]
       icon: 'wand',
       render: () => (
         <Suspense fallback={<p className="settings-hint" role="status">正在装载 AI 接入面板…</p>}>
-          <AiAccessSectionLazy />
+          {/* 批准面真源＝统一命令注册表：命令面板动作运行时投影成同名工具，
+              只有把注册表 ID 传进去，人才能在「AI 接入」里逐项/全选批准全部能力。 */}
+          <AiAccessSectionLazy candidateTools={commands.map((c) => c.id)} />
         </Suspense>
       ),
     });

@@ -251,6 +251,35 @@ B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**。下表逐条点�
   实例新建走界面或用 `launcher_instance_duplicate` 复制既有实例；`launcher_runtime_*`＝宿主尚未落地；
   `market_*` 全族＝铸凭据 / 不可逆外发 / 网络 + 安装副作用。
 
+### 5.6 Agent 可达性与写域边界（2026-11-06）
+
+- **批准面可达**：静态可批准名单 `APPROVABLE_PRIVILEGED_TOOLS`（B4 起 29 枚：两枚
+  `fileTree.*` + 启动器族 27 枚）**不是全部**——命令面板动作是运行时投影成同名工具的，
+  静态规格里没有，旧设置页列不出即批不了。现由 `SettingsPanel` 把统一命令注册表 ID
+  注入 `AiAccessSection`，`scopeStateToApproval` 合并两路真源（形状闸与
+  `buildApprovalBatch` / Rust `validate_tool_pattern` 同尺，`market_*` 不进批准面），
+  `ApprovalUi` 增「全选 / 清空」。全选**只**是一次勾选：`approvedTools` 逐项精确列名，
+  会话 tier 固定 `edit`，不抬档、不新增隐式授权、不放宽默认拒绝。
+- **UI 动作不假成功**：`CommandEntry.run` 返回 `void` ⇒ 没有 ack、没有落地确认。过去
+  `commandToTool` 原样回 `undefined`，fire-and-forget 被当成执行成功。现回
+  `{dispatched:true, confirmed:false, notice}`；有真实返回值的命令原样透出（旧契约零改动）。
+  Agent 不得据此判定落地，须用 `project.info` / `document.active` / `problems.diagnostics`
+  等只读真源复核。
+- **写域边界（仍是单项目根，未扩）**：落盘写腿的域基准根固定 `project.current().rootDir`，
+  `relPath` 先过同尺路径闸，再 `resolveWithinRoot` 域内解析，第四张表 `approvedRoots` 是
+  **项目根内的相对前缀**，最后经内核 `writablePaths` 写原语落盘。
+  - **可达**：era 类游戏项目根内的口上创作（`ERB/Lines` 一类目录），前提是人在「可写目录
+    批准」对话框批了 `writablePaths`、并在 MCP 第四张表批了对应 `approvedRoots`。
+  - **不可达**：用户经系统目录对话框选定的常驻可写根（`<appDataDir>/workspace_roots.txt`，
+    由 `io.workspaceRoots` 只读列出）、`<appDataDir>/workspaces/<projectId>` 与仓库插件源码
+    `packages/plugins/*`。内核 `FileIO.isWritable` 虽把这些根算进 `appWritableRoots`，MCP
+    写腿当前**没有按这些根选域**，因此「制作插件补丁写到工作区 / 插件源码」还做不到。
+
+  扩成多根只能按 additive 模型：写腿收**枚举根标识** `rootId`（绝不收任意目标路径）、
+  第四张表新增 `approvedRootIds`（默认空 ⇒ 现有行为零变化）、Rust 端点二次复核、
+  设置页列出候选根供人显式批准；双闸与默认拒绝不变。这属 ADR-0013 第四张表的
+  **写域信任模型变更**，已由人工拍板（2026-11-06），下一批按「判据先红」落地。
+
 ## 6. tier 与授权模型
 
 `McpTier = 'read' | 'edit' | 'privileged'`；会话形状（冻结契约 v1）：
@@ -274,6 +303,8 @@ interface McpSessionScope {
   必须在 `approvedTools` 里**精确列名**才会出现在 `tools/list`，`tools/call` 同样要精确批准。
   Rust 端点（`src-tauri/src/mcp/protocol.rs`）按同名前缀做第二道分级，不采信 WebView 回帧的
   `annotations` / `tier`；`editor.info` / `editor.selfCheck` 等具名只读工具不在前缀内，不受影响。
+  这些动作在批准面**列得出来、批得进去**（真源驱动 + 精确列名 +「全选」），且执行回执
+  不再 fire-and-forget 冒充成功，口径见 §5.6；默认全不批准这一点不变。
 - **第四张表独立**：MCP 会话授权只用 `mcp_approvals.json`，**不继承**三张既有写授权表
   （内核 `writablePaths` / Rust `ensure_write_allowed` / launcher `approvals.json`）。
 - `export_file` 是「系统对话框 + 写盘绑在同一 Rust 命令」的唯一法定绕开通道，

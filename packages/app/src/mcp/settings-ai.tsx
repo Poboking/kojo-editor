@@ -358,8 +358,24 @@ export function scopeStateToClients(state: McpScopeState | null): McpClientInfo[
   }));
 }
 
+/** 批准面候选来源（additive）：不传时保持旧形状（两枚具名特权工具）。 */
+export interface ApprovalCandidates {
+  /**
+   * 宿主注入的**运行时工具目录**（命令注册表 ID ∪ 具名工具名）。命令面板动作是运行时
+   * 动态投影成同名工具的，不在 `*_TOOL_SPECS` 静态规格里，因此只有从宿主真源注入才
+   * 列得全；不注入就退回旧的两枚，旧消费方零改动。
+   */
+  readonly candidateTools?: readonly string[];
+}
+
+/** 与 `buildApprovalBatch` 同一把形状闸：列出的项必须真能写进第四张表，不许「列得出、批不进」。 */
+const APPROVABLE_TOOL_NAME = /^[A-Za-z0-9_.-]+$/;
+
 /** 第四张表 → `ApprovalUi` 的 (clientId, pending, roots, approvedTools)。 */
-export function scopeStateToApproval(state: McpScopeState | null): {
+export function scopeStateToApproval(
+  state: McpScopeState | null,
+  options: ApprovalCandidates = {},
+): {
   clientId: string;
   pending: ApprovalItem[];
   roots: string[];
@@ -368,14 +384,27 @@ export function scopeStateToApproval(state: McpScopeState | null): {
 } {
   const sessions = activeSessions(state);
   const clientId = sessions[0]?.clientId ?? '';
-  // 可批准的特权工具来自安全判据真源（approval-ui 的 APPROVABLE_PRIVILEGED_TOOLS），
-  // 且必须是**工具面名字**：第四张表按 `tools/list` 的工具名精确授权，填命令名等于没批。
-  // 不是伪造的「待批准请求」读数；勾选后由 mcp_approve 写入第四张表。
-  const pending: ApprovalItem[] = APPROVABLE_PRIVILEGED_TOOLS.map((name) => ({
-    name,
-    tier: 'privileged',
-    reason: '特权工具，默认不进 tools/list，需逐会话显式批准（按工具名精确授权）',
-  }));
+  // 静态具名特权工具是规格真源（`APPROVABLE_PRIVILEGED_TOOLS`，由 mcp-security
+  // 漂移闸对拍；B4 起含启动器族，枚数随批次涨）；命令面板动作是运行时投影，
+  // 只能由宿主注入。两者合起来＝完整可批准面。
+  // 第四张表按工具名**精确**授权，所有候选一律 privileged，勾选后由 mcp_approve 写入。
+  // 形状闸与 buildApprovalBatch 同尺：不合法的候选不列（绝不列出来再静默剔除）。
+  const names =
+    options.candidateTools === undefined
+      ? [...APPROVABLE_PRIVILEGED_TOOLS]
+      : [...new Set([...APPROVABLE_PRIVILEGED_TOOLS, ...options.candidateTools])];
+  const pending: ApprovalItem[] = names
+    .filter(
+      (name) =>
+        name.length <= 64 &&
+        APPROVABLE_TOOL_NAME.test(name) &&
+        !name.startsWith('market_'), // market_* 保持 fail-closed，不进批准面
+    )
+    .map((name) => ({
+      name,
+      tier: 'privileged',
+      reason: '特权工具，默认不进 tools/list，需逐会话显式批准（按工具名精确授权）',
+    }));
   const roots = [...new Set(sessions.flatMap((s) => s.approvedRoots ?? []))];
   const approvedTools = [
     ...new Set(
@@ -450,13 +479,18 @@ export interface AiAccessSectionProps {
   readonly runner?: McpCommandRunner;
   /** `SettingsAi` 状态轮询间隔；0 = 关（本组件自己刷 scope/audit，故缺省 0）。 */
   readonly pollMs?: number;
+  /**
+   * 运行时工具目录（additive）：由设置页注入统一命令注册表 ID，让批准面列得出全部
+   * 命令面板动作；不传则退回两枚具名特权工具（旧消费方零改动）。
+   */
+  readonly candidateTools?: readonly string[];
 }
 
 /**
  * 「AI 接入」整节：把三块面板挂在一起并把读数 / 提交接到 Rust 既有命令。
  * 不吞错、不假装成功、不编造读数（铁律 4）；接不到读数时面板显示显式失败文案。
  */
-export function AiAccessSection({ runner, pollMs = 0 }: AiAccessSectionProps): ReactElement {
+export function AiAccessSection({ runner, pollMs = 0, candidateTools }: AiAccessSectionProps): ReactElement {
   // runner 每次渲染可能是新引用 ⇒ 收进 ref，再包一层恒定的 `run`，避免 refresh 的
   // useCallback 依赖抖动导致 useEffect 反复刷新（铁律：不静默地刷爆 IPC）。
   const runnerRef = useRef<McpCommandRunner | undefined>(runner);
@@ -537,7 +571,7 @@ export function AiAccessSection({ runner, pollMs = 0 }: AiAccessSectionProps): R
   );
 
   const clients = scopeStateToClients(scope);
-  const { clientId, pending, roots, approvedTools } = scopeStateToApproval(scope);
+  const { clientId, pending, roots, approvedTools } = scopeStateToApproval(scope, { candidateTools });
 
   return (
     <div className="settings-mcp">

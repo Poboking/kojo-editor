@@ -214,7 +214,12 @@ export function ApprovalUi({
     setSelected(next);
   };
   const chosen = pending.filter((item) => selected.has(item.name));
+  // 「一次批量审批」的档位刻意固定为 edit：privileged 工具靠 approvedTools **精确列名**
+  // 放行（WebView tierAllowed 与 Rust check_tool_call_permission 同口径），不靠抬高会话
+  // tier。抬档会让同 tier 的其它特权工具顺带可见，等于给危险面开后门。
   const batch = buildApprovalBatch(clientId, 'edit', chosen, roots);
+  const selectAll = () => setSelected(new Set(pending.map((item) => item.name)));
+  const clearAll = () => setSelected(new Set<string>());
   return (
     <section aria-label="MCP 会话授权">
       <h3>写前 diff 预览</h3>
@@ -227,6 +232,16 @@ export function ApprovalUi({
         ))}
       </pre>
       <h3>一次批量审批</h3>
+      {/* 全选只是一次勾选动作：逐项精确列名写进 approvedTools，不放宽任何默认权限、
+          不抬高会话 tier、不新增隐式授权。几十条命令面板动作因此具备可操作性。 */}
+      <div className="mcp-approve-actions">
+        <button type="button" disabled={pending.length === 0} onClick={selectAll}>
+          全选（{pending.length}）
+        </button>
+        <button type="button" disabled={selected.size === 0} onClick={clearAll}>
+          清空
+        </button>
+      </div>
       <ul>
         {pending.map((item) => (
           <li key={item.name} data-tool={item.name}>
