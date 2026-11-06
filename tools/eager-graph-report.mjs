@@ -10,7 +10,7 @@
  *   - 已出图（`import type` 擦除）的提示：类型文件不该出现在榜单里
  *
  * 用法：
- *   node tools/eager-graph-report.mjs            # 默认入口 main.tsx、闸 197 文件 / 3,400 KB
+ *   node tools/eager-graph-report.mjs            # 默认入口 main.tsx（闸值从 ps10 判据文件现读）
  *   node tools/eager-graph-report.mjs --top 25   # 多看几枚
  *
  * 口径与 ps10 **必须**同源（同两枚正则、同 `import type` 擦除判据）；ps10 改了这里也要改，
@@ -24,9 +24,23 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const args = process.argv.slice(2);
 const topArg = args.indexOf('--top');
 const TOP = topArg >= 0 ? Number(args[topArg + 1]) || 20 : 20;
-const GATE_FILES = 197;
-const GATE_KB = 3_400; // 2026-11-05 契约字节闸治理批下调（原 3,624，瘦身后余量 ≈5.5 KB）
 const ENTRY = 'packages/app/src/main.tsx';
+
+// 闸值**单源**：直接从 ps10 判据文件里读（`expect(totalKb/files.length).toBeLessThanOrEqual(N)`），
+// 不再手抄第二份数字——2026-11-07 MCP-PERF-S17 批修正：此前的手抄 3,400 在 refs-live 折回批
+// 把闸抬到 3,430 后没跟上，工具对着旧闸误报"已越闸"。头注那句"两处漂了就叫"的根治形态
+// 就是别留第二处。
+function ps10Gate() {
+  const src = readFileSync(path.join(repoRoot, 'packages/app/tests/ps10-eager-graph.test.ts'), 'utf8');
+  const kb = src.match(/expect\(totalKb\)\.toBeLessThanOrEqual\((\d+)_(\d+)\)/);
+  const files = src.match(/expect\(files\.length\)\.toBeLessThanOrEqual\((\d+)\)/);
+  if (!kb || !files) throw new Error('[eager-graph] 读不到 ps10 闸值——判据文件形状变了，来这里同步');
+  return {
+    GATE_KB: Number(`${kb[1]}${kb[2]}`),
+    GATE_FILES: Number(files[1]),
+  };
+}
+const { GATE_KB, GATE_FILES } = ps10Gate();
 
 const read = (abs) => readFileSync(abs, 'utf8');
 const relOf = (abs) => path.relative(repoRoot, abs).split(path.sep).join('/');

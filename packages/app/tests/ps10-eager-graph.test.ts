@@ -1669,6 +1669,48 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //      接入可见性 / UI kit 各批自 3,476,568 B 以来的零星增长合计约 +8.2 KB。
     //     ⇒ KB 闸 **3,400 → 3,430**（机械余量 ≈10.9 KB）。文件闸 197 不动
     //     （现读数 197 顶格，下一枚进图文件**必须先拆面**）。
+    //
+    //   - **MCP-PERF-S17 ps10 减面回血批（2026-11-07，本批）**：读数 **197 文件 / 3,273 KB ·
+    //     3,351,259 B**（改前 **197 文件 / 3,512,830 B**，净 **−161,571 B / −157.8 KB**；
+    //     文件数零变化）。**两枚闸值一字不动**（≤197 文件 / ≤3,430 KB）——减面不是抬闸：
+    //     翻闸点 3,512,832 B 之下的余量从 **2 B** 回血到 **161,573 B**。
+    //     · **前提先核（本批开工第一件事）**：看板卡点名的「settings / keybindings 两面的
+    //       按钮搬各自懒页注册（约 −58 KB）」经走图取证**已是既成事实**——2026-10-23
+    //       PS10-MENU-SPLIT 收口批（本文件上方同日段）已把那笔减法做完：现图内零
+    //       settings-menu / keybindings / editor-options / editor-display-prefs /
+    //       settings-search 面（逐枚探针零命中），菜单键位提示已吃纯数据叶子
+    //       `keybinding-specs.ts`（11,770 B，**刻意在图**——第一波的落点形态），
+    //       生效键位由 `ShellLayout` 挂载时经 `registerMenuKeybindingLookup` 注入。
+    //       台账上方 282-283 行那两行是收口**之前**的欠账原文，读台账请读到同日收口段。
+    //     · 本批改为执行走图报告工具（`tools/eager-graph-report.mjs`）的**可搬候选清单**：
+    //       契约层七枚混装文件的类型面出图，形态照 S15 治理批（`b7e564c7`）——类型声明
+    //       整块搬进 `*-types.ts` 图外叶子（**只许类型、零 const**），原文件留运行时真源
+    //       并经文件尾 `export type *` 保持旧导入路径；判据注释随类型走，一字未删。
+    //     · 七笔逐项（`git cat-file -s` 对账，图内净减合计 **161,571 B 与全图差逐字节相等**；
+    //       括号里是图外新叶的字节）：
+    //       `erb.ts` 73,462 → 28,884（−44,578；叶 46,202）·
+    //       `events.ts` 37,412 → 7,790（−29,622；叶 31,200）·
+    //       `platform.ts` 28,527 → 1,748（−26,779；叶 28,422）·
+    //       `io.ts` 25,144 → 1,043（−24,101；叶 25,516）·
+    //       `conditions.ts` 18,472 → 1,681（−16,791；叶 18,261）·
+    //       `conventions.ts` 12,049 → 1,784（−10,265；叶 11,661）·
+    //       `workspace.ts` 11,278 → 1,843（−9,435；叶 10,748）。
+    //       **留在原文件的运行时面逐枚点名**（一枚都没进懒边、一枚都没藏）：erb 的
+    //       `CANDIDATE_BUDGETS` / `ERB_PREPROC_*` / `ERB_SKIP_MARKERS` / `ERB_CONTINUATION_*`
+    //       / `ERB_BLANK_*` / `ERB_ENGINE_*` 两张词表 / `buildFunctionLookup` 家族 / 槽位格式化；
+    //       events 的 emit / sticky 两张白名单与分类 guard（`KernelEventName` /
+    //       `StickyEventName` 派生类型随表）；platform 的 `DECODE_LABEL` / `DECODE_PROBE_POLICY`；
+    //       io 的 `WriteNotAllowedError`；conditions 的 `dependencyKey`；conventions 的
+    //       `CONVENTION_SEVERITY_ORDER`；workspace 的 `WORKSPACE_MANIFEST_FILE`。
+    //       `CandidateBudgetTier`（`keyof typeof CANDIDATE_BUDGETS`）依赖运行时表，随之留原文件。
+    //     · **判据随动（S15 口径教训的再次兑现）**：`kojo-market/tests/single-source.test.ts`
+    //       三处闭集改指 `platform-types.ts`（`fetchText` / `marketDownload` 家族的**方法名
+    //       原文**随 `PlatformBridge` / `RemoteService` 接口搬进类型叶），`FileIO` 负向闸
+    //       补盖 `io-types.ts`——改前实拍 3 红、改指后 40/40，判据语义零放宽。
+    //     · 成员断言（插件包只许两个常驻 + 已知漏点空集）全绿；「教程/项目级插件不在图」、
+    //       「检索面只在懒边」、「语言面包只许叶子」等既有判据全绿；读数随跑打点在下面
+    //       console（本批 197 文件与闸顶格持平——七枚新叶一枚都没进图，这正是
+    //       "类型经 import type / export type 擦除"的图面形状，不是漏数）。
     console.log(
       `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤197 文件 / ≤3,430 KB）`,
     );
