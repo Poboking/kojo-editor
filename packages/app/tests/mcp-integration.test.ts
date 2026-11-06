@@ -18,7 +18,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { act, createElement as h, isValidElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToString } from 'react-dom/server';
-import type { McpCapabilityRegistry, McpSessionScope } from '@kojo/mcp-host';
+import { createMcpCapabilityRegistry, McpFailure, type McpCapabilityRegistry, type McpSessionScope } from '@kojo/mcp-host';
 import {
   cancelAllMcpRequests,
   cancelMcpRequest,
@@ -29,6 +29,8 @@ import {
   type McpRespondArgs,
 } from '../src/mcp/host-bridge';
 import { SETTINGS_SECTIONS, type SettingsPanelProps } from '../src/ui/SettingsPanel';
+import { createMcpHostDeps } from '../src/mcp/wiring';
+import { createSemanticService } from '../src/mcp/semantic-service';
 import type { ApprovalBatch } from '../src/mcp/approval-ui';
 import {
   AiAccessSection,
@@ -595,5 +597,33 @@ describe('⑦ AiAccessSection：4 个命令名 / 投影 / 失败不静默', () =
 
     await act(async () => root.unmount());
     container.remove();
+  });
+});
+
+/* --------------------- 语义 8 腿经真 registry（semanticService 装配路径） --------------------- */
+
+describe('语义腿经真 registry：结构化失败端到端不洗码 / 只读透出', () => {
+  // 纯注入（createMcpHostDeps + 真 @kojo/mcp-host registry），不经 registerMcpHostBridge
+  // 模块状态，对首用例 ① 的初始态零影响。
+  it('reader 抛 McpFailure(NOT_WIRED) ⇒ callTool 原样 NOT_WIRED（不被洗成 READ_FAILED / TOOL_EXECUTION_FAILED）；codeActions 只读列表原样透出', async () => {
+    const service = createSemanticService({
+      readers: {
+        definitionAt: () => {
+          throw new McpFailure('NOT_WIRED', '语义读数未接线：当前没有活动编辑器（不静默、不伪造读数）');
+        },
+        codeActionsAt: () => [
+          { title: '快速修复', kind: 'quickfix', isPreferred: true, edit: { edits: [] } },
+        ],
+      },
+    });
+    const registry = createMcpCapabilityRegistry(createMcpHostDeps({ semanticService: service }));
+    // 工具仍列出（能力可见），调用才显式报缺线——code 一路透传到客户端
+    expect(registry.listTools(scope).some((t) => t.name === 'semantic.definitionAt')).toBe(true);
+    await expect(
+      registry.callTool('semantic.definitionAt', { line: 1, column: 1 }, scope),
+    ).rejects.toMatchObject({ code: 'NOT_WIRED', message: expect.stringContaining('没有活动编辑器') });
+    // codeActionsAt 只读透出：列表原样返回（服务面无 apply 通道，见 semantic-service 单测）
+    const actions = await registry.callTool('semantic.codeActionsAt', { line: 2, column: 3 }, scope);
+    expect(actions).toEqual([{ title: '快速修复', kind: 'quickfix', isPreferred: true, edit: { edits: [] } }]);
   });
 });

@@ -8,7 +8,8 @@
  * 内核 / bridge**，避免把编辑器运行时拖进常驻路径。
  *
  * 与 `debug/install-debug.ts` 的关系：那边是「绑定焦点编辑器的调试面适配器」，本模块是
- * 「可注入的数据面」。判据同源（见 `slimLocations` / `slimDiagnostics` 的口径），
+ * 「可注入的数据面」。判据同源（见 `slimLocations` / `slimDiagnostics` 的口径，
+ * `*Page` 变体另带 total / truncated 截断账目——截断不静默），
  * `createDebugEditorAdapter()` 给出的薄适配器形态即调试面可委托的目标。
  */
 
@@ -57,9 +58,24 @@ export const SEMANTIC_READING_SPECS: readonly SemanticReadingSpec[] = [
 
 /* ----------------------------- 纯读裁剪（判据同源） ----------------------------- */
 
-/** 落点裁剪：filePath / line / column 三格「不编造」口径（行非正 / 路径空 ⇒ 丢弃）。 */
-export function slimLocations(raw: unknown, limit = 20): { filePath: string; line: number; column: number }[] {
-  if (!Array.isArray(raw)) return [];
+/**
+ * 带截断账目的裁剪结果（不静默口径，与宿主面 slimMarkerList 同尺）：
+ * `total` = 原始条目数（脏行也计），`truncated` = 呈现数 < 原始数（上限截断**或脏行丢弃**
+ * 都算「没全呈现」——少给了就说少给了，绝不冒充完整）。
+ */
+export interface SlimPage<T> {
+  readonly items: T[];
+  readonly total: number;
+  readonly truncated: boolean;
+}
+
+function pageOf<T>(items: T[], rawLength: number): SlimPage<T> {
+  return { items, total: rawLength, truncated: rawLength > items.length };
+}
+
+/** 落点裁剪（带账）：filePath / line / column 三格「不编造」口径（行非正 / 路径空 ⇒ 丢弃）。 */
+export function slimLocationsPage(raw: unknown, limit = 20): SlimPage<{ filePath: string; line: number; column: number }> {
+  if (!Array.isArray(raw)) return pageOf([], 0);
   const out: { filePath: string; line: number; column: number }[] = [];
   for (const item of raw) {
     if (out.length >= limit) break;
@@ -70,12 +86,12 @@ export function slimLocations(raw: unknown, limit = 20): { filePath: string; lin
     if (!filePath || !Number.isFinite(line) || line <= 0) continue;
     out.push({ filePath, line, column: typeof r['column'] === 'number' ? r['column'] : 1 });
   }
-  return out;
+  return pageOf(out, raw.length);
 }
 
-/** 诊断裁剪：message 单行归一 + 300 字符截断 + 上限（与调试面 slimDiagnostics 同尺）。 */
-export function slimDiagnostics(raw: unknown, limit = 200): { message: string; line: number }[] {
-  if (!Array.isArray(raw)) return [];
+/** 诊断裁剪（带账）：message 单行归一 + 300 字符截断 + 上限（与调试面 slimDiagnostics 同尺）。 */
+export function slimDiagnosticsPage(raw: unknown, limit = 200): SlimPage<{ message: string; line: number }> {
+  if (!Array.isArray(raw)) return pageOf([], 0);
   const out: { message: string; line: number }[] = [];
   for (const item of raw) {
     if (out.length >= limit) break;
@@ -87,12 +103,12 @@ export function slimDiagnostics(raw: unknown, limit = 200): { message: string; l
     const line = typeof r['line'] === 'number' ? r['line'] : 1;
     out.push({ message, line });
   }
-  return out;
+  return pageOf(out, raw.length);
 }
 
-/** 符号裁剪：name / kind / depth 三格，脏行跳过、上限保护。 */
-export function slimSymbols(raw: unknown, limit = 200): { name: string; kind: string; depth: number }[] {
-  if (!Array.isArray(raw)) return [];
+/** 符号裁剪（带账）：name / kind / depth 三格，脏行跳过、上限保护。 */
+export function slimSymbolsPage(raw: unknown, limit = 200): SlimPage<{ name: string; kind: string; depth: number }> {
+  if (!Array.isArray(raw)) return pageOf([], 0);
   const out: { name: string; kind: string; depth: number }[] = [];
   for (const item of raw) {
     if (out.length >= limit) break;
@@ -101,7 +117,22 @@ export function slimSymbols(raw: unknown, limit = 200): { name: string; kind: st
     if (typeof r['name'] !== 'string' || r['name'] === '') continue;
     out.push({ name: r['name'], kind: typeof r['kind'] === 'string' ? r['kind'] : '', depth: typeof r['depth'] === 'number' ? r['depth'] : 0 });
   }
-  return out;
+  return pageOf(out, raw.length);
+}
+
+/** 落点裁剪：{@link slimLocationsPage} 的 items 投影（兼容冻结形状，行为不变）。 */
+export function slimLocations(raw: unknown, limit = 20): { filePath: string; line: number; column: number }[] {
+  return slimLocationsPage(raw, limit).items;
+}
+
+/** 诊断裁剪：{@link slimDiagnosticsPage} 的 items 投影（兼容冻结形状，行为不变）。 */
+export function slimDiagnostics(raw: unknown, limit = 200): { message: string; line: number }[] {
+  return slimDiagnosticsPage(raw, limit).items;
+}
+
+/** 符号裁剪：{@link slimSymbolsPage} 的 items 投影（兼容冻结形状，行为不变）。 */
+export function slimSymbols(raw: unknown, limit = 200): { name: string; kind: string; depth: number }[] {
+  return slimSymbolsPage(raw, limit).items;
 }
 
 /* ----------------------------- 结构化失败 ----------------------------- */
@@ -116,6 +147,19 @@ export class SemanticFailure extends Error {
   toJSON(): { code: string; message: string } {
     return { code: this.code, message: this.message };
   }
+}
+
+/**
+ * 结构化失败的最小 Duck 型：自带字符串 `code` + `{code,message}` 序列化口径。
+ * `SemanticFailure` 与宿主侧 `McpFailure`（@kojo/mcp-host）皆此形——本模块零依赖、
+ * 不 import 它，靠形状识别（铁律 4：取数腿抛出的 NOT_WIRED / RESOURCE_UNAVAILABLE
+ * 等两态语义必须原样到调用方，不得在此洗码成 READ_FAILED）。
+ */
+function isStructuredFailure(err: unknown): boolean {
+  if (err instanceof SemanticFailure) return true;
+  if (typeof err !== 'object' || err === null) return false;
+  const e = err as { code?: unknown; toJSON?: unknown };
+  return typeof e.code === 'string' && typeof e.toJSON === 'function';
 }
 
 /* ----------------------------- 注入式服务 ----------------------------- */
@@ -162,7 +206,10 @@ export function createSemanticService(deps: SemanticServiceDeps): SemanticServic
       try {
         return await reader(input);
       } catch (err) {
-        if (err instanceof SemanticFailure) throw err;
+        // 结构化失败（SemanticFailure / 宿主 McpFailure 等同形者）**原样透传**：
+        // 「服务缺席 / 无活动编辑器」（NOT_WIRED）与「读数失败」（READ_FAILED）是两态，
+        // 洗码会让上层把缺线误报成执行失败（不静默、不混态）。
+        if (isStructuredFailure(err)) throw err;
         throw new SemanticFailure('READ_FAILED', `读数 ${name} 失败：${err instanceof Error ? err.message : String(err)}`);
       }
     },
