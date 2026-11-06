@@ -616,6 +616,40 @@ function compileIncludeGlobs(globs) {
   return matchers;
 }
 
+/* ---------------- MCP-PERF-S18（S8 三腿的镜像侧收口）两枚入参闸 ---------------- */
+
+/**
+ * 腿1（S8 腿1 的镜像侧）：`deadlineMs` 软时限入参闸。Rust DTO 是 `Option<u64>`
+ * （lib.rs `deadline_ms`）⇒ 形状闸 = 非负整数，负数 / 小数 / 非数字显式拒收（serde 同判：
+ * u64 收不下这些形状，整条请求在 Rust 侧也是直接失败）；0 = 合法（立即到点）。缺省不带键
+ * ⇒ null = 无时限，请求与行为逐字同旧。越界**不夹取**——MCP 面 `searchDeadlineMsOf` 的
+ * 1..120000 闸是脸级的，宿不重复第二把尺，只守引擎 DTO 的形状。
+ */
+function deadlineMsOf(opts) {
+  const raw = opts?.deadlineMs;
+  if (raw === undefined) return null;
+  if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 0) {
+    throw new HostError(`deadlineMs 须为非负整数（毫秒软时限；收到 ${JSON.stringify(raw)}）`);
+  }
+  return raw;
+}
+
+/**
+ * 腿2（S8 腿2 的镜像侧）：`preview` 命中载荷模式。缺省 / "full" = 逐字旧形态；"none" ⇒
+ * 收口投影剥每条命中 preview 字段（与 MCP 腿 `stripPreviewFields` 同尺：浅剥一格，
+ * line/column/start/end 等其余字段原样保留；totalMatches / truncated 等账在剥之前已按
+ * 全量命中算好 ⇒ 与 full 逐位一致）。枚举外脏值显式拒收，不静默当 full——静默回落就是
+ * 铁律 4 那一刀（同 WS-10 的教训：宿侧不认的入参在浏览器里就是"打了没反应"的假读数）。
+ */
+function previewModeOf(opts) {
+  const raw = opts?.preview;
+  if (raw === undefined || raw === 'full') return 'full';
+  if (raw === 'none') return 'none';
+  throw new HostError(
+    `preview 只收 "full" | "none"（缺省 full；"none" = 剥每条命中 preview 字段；收到 ${JSON.stringify(raw)}）`,
+  );
+}
+
 /**
  * `search_text` 的 Node 镜像（口径对齐 `bridge/search.ts` 的 SearchResult）：
  * 列 UTF-16 code unit 与 Monaco 同轴；命中行超长以命中为中心开窗（省略号含在串里）。
@@ -624,6 +658,12 @@ function compileIncludeGlobs(globs) {
 async function searchText(state, request, admitRead) {
   const started = Date.now();
   const opts = request?.options ?? {};
+  // S18：软时限与命中载荷模式（都可省；缺省 = 旧请求体逐字同形、应答零漂移——除 partial 账，
+  // 那格与 Rust SearchResultDto 同形恒在，见 finalize）。
+  const deadlineMs = deadlineMsOf(opts);
+  const previewMode = previewModeOf(opts);
+  const deadlineAt = deadlineMs === null ? null : started + deadlineMs;
+  let deadlineHit = false;
   const roots = Array.isArray(request?.roots) ? request.roots.map(norm) : [];
   const query = String(request?.query ?? '');
   if (query === '') throw new HostError('检索词为空');
@@ -666,6 +706,9 @@ async function searchText(state, request, admitRead) {
   let truncated = false;
   const skipped = { binary: 0, tooLarge: 0, unreadable: 0, filtered: 0, excluded: 0 };
   let filesScanned = 0;
+  // S18：过滤后的候选总数（= Rust 的 total_files），finalize 的 partial 账要它——
+  // `candidates` 本体在 try 块内，函数作用域只留这个读数。
+  let candidateCount = 0;
   const searchId = Number(request.searchId);
   const cancelled = () => state.cancelledSearches.has(searchId);
   let wasCancelled = false;
@@ -706,12 +749,19 @@ async function searchText(state, request, admitRead) {
         candidates.push(file);
       }
     }
+    candidateCount = candidates.length;
 
     // 2) 逐批并行扫描：批内并发、批间按 readdir 序收口 ⇒ 截断落点确定、读盘不无限超前。
     //    取消在批界与批内逐文件检查（cancel_search 从另一条 HTTP 请求落进来）。
     outer: for (let start = 0; start < candidates.length; start += SEARCH_CONCURRENCY) {
       if (cancelled()) {
         wasCancelled = true;
+        break;
+      }
+      // S18 腿1：软时限到点不再领新批（在手的上一批已收口 ⇒ 停在文件边界，与 Rust
+      // 「领取粒度」的软保证同向；领取前判 ⇒ 被丢下的文件不进 filesScanned 账）。
+      if (deadlineAt !== null && Date.now() >= deadlineAt) {
+        deadlineHit = true;
         break;
       }
       const slice = candidates.slice(start, start + SEARCH_CONCURRENCY);
@@ -754,14 +804,28 @@ async function searchText(state, request, admitRead) {
   return finalize(wasCancelled);
 
   function finalize(wasCancelled) {
+    // S18 腿2：preview:"none" ⇒ 投影层剥每条命中 preview 字段（浅剥一格，其余字段原样保留）。
+    // 账（totalMatches / truncated / skipped）在剥之前已按全量命中算好 ⇒ 与 full 逐位一致。
+    const hitFiles =
+      previewMode === 'none'
+        ? files.map((f) => ({ ...f, matches: f.matches.map(({ preview: _stripped, ...rest }) => rest) }))
+        : files;
+    // S18 腿1 收口（与 Rust lib.rs 同一句纪律）：到点**且**还有没扫到的文件才算 partial——
+    // 恰好在最后一批领完时到点，结果是完整的，报 partial 会骗调用方去续取。
+    const partial = deadlineHit && filesScanned < candidateCount;
     return {
-      files,
+      files: hitFiles,
       totalMatches,
       truncated,
       cancelled: wasCancelled,
       filesScanned,
       skipped,
       elapsedMs: Date.now() - started,
+      // 软时限账（S1 wire 形态，与 Rust SearchResultDto 同形恒在）：partial=false 时
+      // partialReason 恒 null；当前唯一取值 "deadline"。与 truncated（命中上限）/ cancelled
+      // （取消）三账分立——"为什么不全"各答各的。
+      partial,
+      partialReason: partial ? 'deadline' : null,
     };
   }
 }
