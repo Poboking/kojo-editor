@@ -53,6 +53,9 @@
  *   分开归因）；**绝不新建写通道、绝不因感知需要而放宽写闸**。
  *   判定缺席一律可见：监视不可用 / 路径不在监视域 / 会话内没有可比基线 / 账已溢出
  *   ⇒ `stale:null` + `staleReason`，绝不用乐观 `false`、绝不用空串或默认值假装有。
+ *   B13（2026-11-06）：只读腿改走**读时复核**异步入口（`verdictOfRechecked` /
+ *   `listingOfRechecked`；批量面 `fs.statFiles` / `fs.readMany` 逐条标注一趟
+ *   `verdictsOfRechecked`）——自写回声窗内命中时本次读数即定档，复核做不了仍如实 null。
  * - 长任务面（Wave4 余项⑤「长任务 progress」· ADR-0013 P5「Tasks over MCP」）：`tasks.start` /
  *   `tasks.status` / `tasks.cancel` 三枚具名工具与 `kojo://tasks` resource 都**只分派**给注入的
  *   `McpTaskLegs`（真源在 `real-sources-tasks.ts`：表、进度投影、有界性、取消语义都在那一层）。
