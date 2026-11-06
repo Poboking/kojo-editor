@@ -357,8 +357,12 @@ describe('erb-parser 插件', () => {
       expect(next!.byName.has('OLD_FN')).toBe(false);
       expect([...next!.byName.keys()].sort()).toEqual(['FRESH_FN', 'KEEP_FN']);
       expect(parser.currentIndex()).toBe(next);
-      // 反向引用增量后保守失效：不带旧边（下一次访问才排整扫）
-      expect(next!.references).toBeUndefined();
+      // 反向引用增量接管（MCP-PERF-S2）：增量索引带版本号，references 是活视图
+      //（旧形态这里保守 undefined + 下一次访问排整扫）
+      expect(next!.version).toBeDefined();
+      expect(next!.references).toBeDefined();
+      expect(next!.references!.version).toBe(next!.version); // 读数同源：ErbIndex 与其 references 同代
+      expect(next!.references!.staleNames).toBeUndefined(); // 常态增量轮：没有判不了的名字
     });
 
     it('applyFileChanges：删除目录按前缀移除其下全部条目', async () => {
@@ -426,7 +430,7 @@ describe('erb-parser 插件', () => {
       expect([...next!.files.keys()].sort()).toEqual(['/proj/kojo/a.ERB', '/proj/kojo/c.ERB']);
     });
 
-    it('增量后读反向引用：先答"不可用"，同时排一次整扫把 references 恢复', async () => {
+    it('增量后读反向引用：活视图当场可查（受染文件重扫，不再保守 undefined + 排整扫）', async () => {
       const files: Record<string, string> = { '/proj/kojo/a.ERB': '@A\nCALL B\n' };
       const { services, bus, emit } = activatePlugin(fakeIO(files));
       const parser = services.get('erb.parser') as ErbParserService;
@@ -436,17 +440,27 @@ describe('erb-parser 插件', () => {
       emit('project.opened', { project: fakeProject('/proj', ['/proj/kojo']) });
       await opened;
       await settleBuild();
+      // 整扫时 B 还不在名录：a.ERB 的 CALL B 进了候选账但没进引用流水
+      expect(parser.referencesTo!('B')).toEqual([]);
 
       files['/proj/kojo/b.ERB'] = '@B\nRETURN 1\n';
-      await parser.applyFileChanges!({ changed: ['/proj/kojo/b.ERB'], removed: [] });
-      expect(parser.currentIndex()!.references).toBeUndefined();
-
-      const repaired = new Promise<void>((resolve) => {
-        bus.once('kojo.functionChanged', () => resolve());
+      const next = await parser.applyFileChanges!({ changed: ['/proj/kojo/b.ERB'], removed: [] });
+      // 新定义 B 进名录 ⇒ a.ERB 受染（候选哈希撞上对称差）⇒ 当场重扫 ⇒ CALL B 立即可查；
+      // 组内序 = 文件序（a 先 b 后）→ 行 → 列，与全量聚合同口径
+      expect(parser.referencesTo!('B')).toEqual([
+        { filePath: '/proj/kojo/a.ERB', line: 2, column: 6, endColumn: 7, kind: 'call' },
+        { filePath: '/proj/kojo/b.ERB', line: 1, column: 2, endColumn: 3, kind: 'definition' },
+      ]);
+      expect(next!.references!.staleNames).toBeUndefined(); // 常态：没有判不了的名字
+      // 旧形态这一步会排一次整扫（functionChanged 再广播）——现在增量自足，不再有第二轮
+      const noSecondBroadcast = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 150);
+        bus.once('kojo.functionChanged', () => {
+          clearTimeout(timer);
+          reject(new Error('增量轮不该再排整扫'));
+        });
       });
-      expect(parser.referencesTo!('B')).toEqual([]); // 保守：不知道就是空，不编一份旧名单
-      await repaired;
-      expect(parser.currentIndex()!.references).toBeDefined();
+      await noSecondBroadcast;
     });
 
     it('file.changed 去抖后走增量（保存一份文件，索引与 Ctrl+T 立刻跟上）', async () => {

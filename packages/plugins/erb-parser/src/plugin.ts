@@ -67,7 +67,17 @@ import { checkStructure, erbDocumentSymbols } from './structure';
 import { buildStructureFixes } from './structure-fix';
 import { provideErbCompletion, provideErbHover, type ErbHoverAdapterFacts } from './completion';
 import { erbFoldingRanges } from './folding';
-import { buildDimReferenceIndex, buildReferenceIndex, dimNameShapesOf, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileNames, scanFileRefs, splitErbLines, visibleCodeLineList, type FileDimRefs, type FileRefs } from './references';
+import { buildDimReferenceIndex, buildReferenceIndex, dimNameShapesOf, erbReferenceDecorations, erbReferenceLocationsAt, referencesOf, scanFileNames, splitErbLines, visibleCodeLineList, type FileDimRefs, type FileRefs } from './references';
+import {
+  applyRefsLiveDelta,
+  bumpRefsVersion,
+  createRefsLiveState,
+  markRescanFailures,
+  prewarmRefsLive,
+  refsViewOf,
+  type RefsLiveState,
+  type RescanOutcome,
+} from './refs-live';
 import { definitionTargetsAt, erbReferencesAt, functionAt, labelDefinitionLocations, labelLenses, labelScopeAt, mergeSymbolLocations, planErbRename, provideRenameTarget, resolveErbDimDefinition, usageLenses, workspaceSymbolsInIndex } from './symbols';
 import {
   callHierarchySymbolOf,
@@ -98,6 +108,8 @@ import {
   aggregateIndex,
   attachRefs,
   candidateHash,
+  candidateHashesFromTokens,
+  candidateSetHits,
   changedNamesBetween,
   coerceSnapshot,
   countEntries,
@@ -404,6 +416,15 @@ export function createErbParserPlugin(): Plugin {
        * 语义上与 `index` 同寿命：项目关掉就置空。
        */
       let retainedSnapshot: IndexSnapshot | null = null;
+      /**
+       * 反向引用边的**常驻增量态**（MCP-PERF-S2，2026-11-06；判据与数据面见 `./refs-live.ts`）。
+       *
+       * 跨整扫/增量轮存活：整扫轮 `prewarmRefsLive` 铺流出账全集（重扫产出 + 快照条目
+       * 零拷贝回退），增量轮 `applyRefsLiveDelta` 局部重建受影响名字的组。物化（bySymbol
+       * 对象图）时机不变——首次 `index.references` 访问才建；倒排更懒（首次增量轮才铺）。
+       * 热载稳态的净增内存 ≈ 倒排（~2MB 真语料口径）+ 序号表（~32KB），在 5% 红线内。
+       */
+      let refsLive: RefsLiveState = createRefsLiveState();
       /** 在途构建（并发调用 ensureIndex 时共享同一 Promise） */
       let inFlight: Promise<ErbIndex> | null = null;
       /** 当前项目的扫描根（口上根 ∪ 只读基座库根，由 project.opened 提供；**不含**工作区根——那些每次现读） */
@@ -1105,33 +1126,25 @@ export function createErbParserPlugin(): Plugin {
         const refsScanMs = Date.now() - refsStartedAt;
 
         /**
-         * 惰性聚合：首次读 `index.references` 才建 bySymbol。
-         * 复用条目的 refs 就地汇入（快照元组别名，零拷贝）；构建结果自持缓存，
-         * 后续查询零成本。判据（`hasName` = 聚合后的全局名字表）与冷建逐位同源，
-         * 因此"冷建 vs 快照"两条路径的 bySymbol 逐字节一致（references.test 钉死）。
-         * salvage 轮里溯源补正过的文件已经在上面扫过、已在 `refsByPath` 里，不再覆盖。
+         * `index.references` 的视图（MCP-PERF-S2 改造）：物化走 `refsLive` 常驻态——
+         * 首次访问才建 bySymbol（PERF-7 纪律不变），复用条目的 refs 汇入已由
+         * `prewarmRefsLive` 在提交段完成（快照条目零拷贝别名）。构建结果自持缓存；
+         * 物化后增量轮就地重建受影响名字的组，不再触发整树重扫。
+         * 判据（`hasName` = 聚合后的全局名字表）与冷建逐位同源，"冷建 vs 快照"两条
+         * 路径的 bySymbol 逐字节一致（references.test 钉死）。
          */
-        let referencesBuilt: ErbReferenceIndex | null = null;
         const referencesBuild = (): ErbReferenceIndex => {
-          if (referencesBuilt) return referencesBuilt;
-          const t0 = Date.now();
-          let fromSnapshot = 0;
-          for (const path of diff.reusable) {
-            if (refsByPath.has(path)) continue;
-            const reused = snapshot?.entries[path];
-            if (reused?.refs !== undefined) {
-              refsByPath.set(path, reused.refs);
-              fromSnapshot++;
-            }
+          const wasMaterialized = refsLive.bySymbol !== null;
+          const view = refsViewOf(refsLive, files);
+          if (!wasMaterialized) {
+            let sites = 0;
+            for (const list of view.bySymbol.values()) sites += list.length;
+            ctx.log.info(
+              `Index references built on demand (${sites} sites; ` +
+                `scan ${refsScanMs}ms, rescan ${refsToScan.length})`,
+            );
           }
-          referencesBuilt = buildReferenceIndex(ordered, refsByPath);
-          let sites = 0;
-          for (const list of referencesBuilt.bySymbol.values()) sites += list.length;
-          ctx.log.info(
-            `Index references built on demand (${sites} sites, ${Date.now() - t0}ms; ` +
-              `scan ${refsScanMs}ms, rescan ${refsToScan.length}, snapshot ${fromSnapshot})`,
-          );
-          return referencesBuilt;
+          return view;
         };
 
         /**
@@ -1165,7 +1178,7 @@ export function createErbParserPlugin(): Plugin {
         };
 
         const makeIndex = (): ErbIndex => {
-          const idx: ErbIndex = { files, byName, fingerprint, fileMtimes, fileSizes };
+          const idx: ErbIndex = { files, byName, fingerprint, fileMtimes, fileSizes, version: refsLive.version };
           // references / dimReferences 惰性装配（enumerable 保持"索引里有这一项"的既有观感）
           Object.defineProperty(idx, 'references', { get: referencesBuild, enumerable: true, configurable: true });
           Object.defineProperty(idx, 'dimReferences', { get: dimReferencesBuild, enumerable: true, configurable: true });
@@ -1256,11 +1269,27 @@ export function createErbParserPlugin(): Plugin {
         // 仅在仍是当前代际时提交（避免项目快速切换导致旧结果覆盖新结果）
         if (gen !== generation) return makeIndex();
 
+        // 反向引用边的常驻态换代（MCP-PERF-S2）：版本 +1，铺本轮流出账全集——
+        // 重扫产出优先，其余回退快照条目（refs / candidateHashes 都是零拷贝别名）。
+        // 快照条目的 refs 在溯源巡检后都已"判过可信"（命中盖章 / 补扫重扫 / 信封命中），
+        // 直接收进常驻态是安全的；candidatesByPath 与本轮重扫同锁步，候选必在。
+        bumpRefsVersion(refsLive);
+        prewarmRefsLive(
+          refsLive,
+          files,
+          (path) => refsByPath.get(path) ?? snapshot?.entries[path]?.refs,
+          (path) => {
+            if (refsByPath.has(path)) return candidateHashesFromTokens(candidatesByPath.get(path) ?? '');
+            return snapshot?.entries[path]?.candidateHashes;
+          },
+        );
+
         // 量测面镜像（见 `retainedSnapshot` 的注释）：本轮真正留下的那份条目，供内存归因读
         retainedSnapshot = snapshot;
         const built = makeIndex();
         index = built;
-        // 整扫交出的索引带全量反向引用（惰性聚合）：增量那轮置的"待修"标记到此了结
+        // 整扫重建了全量 dim 账（惰性聚合）：增量那轮置的"变量引用待修"标记到此了结
+        //（dim 腿本批不动：这条修复通道的语义与 WS-05 时代逐字相同）
         referencesRepairPending = false;
         // 收尾事实（IDX-STATE）：`ready` 与 `nothing-to-scan` 的分界由 `coverageOf()` 判，
         // 这里只交读数——一个根都没走到的那一轮永远不会被写成"扫完了"。
@@ -1316,9 +1345,10 @@ export function createErbParserPlugin(): Plugin {
       const pendingRemoved = new Map<string, string>();
       let pendingTimer: ReturnType<typeof setTimeout> | null = null;
       /**
-       * 增量把反向引用标成"不可用"（见 {@link applyFileChangesImpl}）：置位后
-       * **下一次访问 `index.references`** 才把整扫排上——不在保存路径上无条件付整树重扫，
-       * 也不给"查找引用"答一份与正文不符的名单（契约的保守口径）。
+       * 增量把**变量引用**（`dimReferences`，dim 腿）标成"不可用"（见
+       * {@link attachIncrementalReferenceViews}）：置位后**下一次读 `index.dimReferences`**
+       * 才把整扫排上——函数引用（`references`）已由 `refs-live.ts` 增量接管，不再走这条路；
+       * dim 腿本批不动（MCP-PERF-S2 刻意取舍：`#DIM` 对称差的巡检判据与函数腿不同源）。
        */
       let referencesRepairPending = false;
 
@@ -1409,10 +1439,11 @@ export function createErbParserPlugin(): Plugin {
        * removed 按前缀移除（目录删改名的正确形态）。读 / 解析失败、形状不符 ⇒ **回退整扫**
        * （`rebuildNow`，既有通道，含快照复用与代际语义），绝不交一份半新半旧的索引。
        *
-       * 反向引用（`references`）**保守失效**：见 `./incremental.ts` 头注——增量只重扫了
-       * 变过的文件，旧边里既有过期的、也有因新增定义而漏掉的，带着它比不带更坏。
-       * 失效靠新索引上的一个 getter 落地：谁读 `index.references`，谁就在这里把整扫排上
-       * （"下一次访问走全量重建"，不在保存路径上无条件付整树重扫）。
+       * 反向引用（`references`）由 `refs-live.ts` 增量接管（MCP-PERF-S2）：当场重扫受染
+       * 文件（变过的文件文本已在手上；受染未变文件按候选哈希巡检重扫，读盘个位数），
+       * 受影响名字的组局部重建，索引版本号 +1；判不了的文件进显式 stale 面（可见、
+       * 不答空、不静默排整树重扫）。变量引用（dim 腿）本批不动：保持现状 undefined
+       * + 读时排整扫。
        */
       async function applyFileChangesImpl(input: {
         readonly changed: readonly string[];
@@ -1445,6 +1476,8 @@ export function createErbParserPlugin(): Plugin {
           // 批量读（一份也走同一条管线：编码探测 / BOM / EOL 归一化与整扫逐字一致）
           const texts = await io.readTexts(keptChanged);
           const updated: IncrementalFileUpdate[] = [];
+          /** 变过文件的**在手文本**（refs 重扫直接用，不再读盘） */
+          const updatedTexts = new Map<string, string>();
           for (let i = 0; i < keptChanged.length; i++) {
             const path = keptChanged[i]!;
             const tf = texts[i];
@@ -1469,6 +1502,7 @@ export function createErbParserPlugin(): Plugin {
               continue;
             }
             updated.push({ path, file: parseErbText(tf.text, path), mtimeMs: tf.mtimeMs, size });
+            updatedTexts.set(path, tf.text);
           }
           // 期间换了项目 / 扫描根变了：新一代已经接管，这趟结果作废（不提交、不广播）
           if (gen !== generation) return inFlight ?? index;
@@ -1477,13 +1511,75 @@ export function createErbParserPlugin(): Plugin {
             ctx.log.info(`Incremental index update: nothing changed (${keptChanged.length} path(s) re-read)`);
             return base;
           }
-          referencesRepairPending = true;
-          attachStaleReferences(result.index);
+          /* ---------------- 反向边增量（MCP-PERF-S2）：当场重扫受染文件 ----------------
+           * 溯源巡检与整扫快照轮同一把尺子（`candidateSetHits` / `changedNamesBetween`）：
+           * 名录对称差哈希与文件候选集不相交 ⇒ 流出账可证不变，免扫；相交 ⇒ 重扫。
+           * 判不了（候选未知 / 读盘失败）⇒ 该文件进显式 stale 面，不静默排整树重扫。 */
+          const refsLiveStartedAt = Date.now();
+          const removedPaths = new Set<string>();
+          for (const path of base.files.keys()) {
+            if (!result.index.files.has(path)) removedPaths.add(path);
+          }
+          const changedNames = changedNamesBetween(new Set(base.byName.keys()), new Set(result.index.byName.keys()));
+          let changedHashes: ReadonlySet<number> | null = null;
+          if (changedNames.size > 0) {
+            const hs = new Set<number>();
+            for (const name of changedNames) hs.add(candidateHash(name));
+            changedHashes = hs;
+          }
+          const updatedPaths = new Set(updated.map((u) => u.path));
+          const contaminated: string[] = [];
+          if (changedHashes !== null) {
+            for (const path of refsLive.refsByPath.keys()) {
+              if (removedPaths.has(path) || updatedPaths.has(path)) continue;
+              const hashes = refsLive.candidatesByPath.get(path);
+              // 候选未知 = 判不了 ⇒ 保守重扫（扫完候选就补齐，与整扫巡检同口径）
+              if (hashes === undefined || candidateSetHits(hashes, changedHashes)) contaminated.push(path);
+            }
+          }
+          const hasName = (upper: string): boolean => result.index.byName.has(upper);
+          const scanRefsOf = (path: string, body: string): RescanOutcome => {
+            const candidates = new Set<string>();
+            // 变量腿（dims）不进增量账：dimReferences 在增量索引上保持现状 undefined（dim 腿本批不动）
+            const refs = scanFileNames(body, { hasName, collect: (upper) => void candidates.add(upper) });
+            return { refs, candidates: candidateHashesFromTokens([...candidates].join('\n')) };
+          };
+          const rescanned = new Map<string, RescanOutcome>();
+          const failures = new Map<string, ReadonlySet<string>>();
+          // 变过的文件：文本已在手上（同一次读盘），直接扫——失败不可能（纯文本扫描），
+          // 读/解析失败早在上面回退整扫了
+          for (const update of updated) {
+            rescanned.set(update.path, scanRefsOf(update.path, updatedTexts.get(update.path)!));
+          }
+          // 受染未变文件：重扫读盘（真语料实测改/名一个中等用量名字只牵动个位数文件）
+          if (contaminated.length > 0) {
+            try {
+              const freshTexts = await io.readTexts(contaminated);
+              for (let i = 0; i < contaminated.length; i++) {
+                const path = contaminated[i]!;
+                const tf = freshTexts[i];
+                if (!tf) {
+                  failures.set(path, changedNames); // 判不了：显式 stale，不静默排整树重扫
+                  continue;
+                }
+                rescanned.set(path, scanRefsOf(path, tf.text));
+              }
+            } catch {
+              // 整批读挂：全部判不了（显式 stale；索引本体仍是上一行的完好结果）
+              for (const path of contaminated) failures.set(path, changedNames);
+            }
+          }
+          bumpRefsVersion(refsLive);
+          applyRefsLiveDelta(refsLive, result.index.files, rescanned, removedPaths);
+          if (failures.size > 0) markRescanFailures(refsLive, failures);
+
+          attachIncrementalReferenceViews(result.index);
           index = result.index;
           noteState(gen, 'settled', result.index.files.size, result.index.byName.size);
           ctx.log.info(
             `ERB index updated incrementally: +${result.added} ~${result.replaced} -${result.dropped} ` +
-              `(skipped ${skipped}, ${Date.now() - startedAt}ms; references invalidated until the next full rebuild)`,
+              `(skipped ${skipped}, ${Date.now() - startedAt}ms; refs live: rescanned ${rescanned.size}, ` +
+              `${Date.now() - refsLiveStartedAt}ms, stale ${refsLive.dirtyNames.size})`,
           );
           ctx.bus.emit('kojo.functionChanged', {
             projectRoot: currentRoot,
@@ -1500,46 +1596,39 @@ export function createErbParserPlugin(): Plugin {
       }
 
       /**
-       * 给增量索引挂上"反向引用不可用"的读数口：读一次就把整扫排上（并只排一次）。
+       * 给增量索引挂上 `references` / `dimReferences` 的读数口（MCP-PERF-S2 改造）。
        *
-       * 为什么用 getter 而不是直接不带这个字段：`referencesOf` / 调用层级 / 行内注解都写的是
-       * `index.references?.bySymbol`——字段缺席它们读到的是"没有引用"。getter 让"下一次访问"
-       * 这个契约口径有落点：先如实答"不可用"，同时替作者把全量引用扫排上。
+       * `references`：**活视图**（`refs-live.ts`）——增量轮已当场重扫受染文件、局部重建了
+       * 受影响名字的组，这里直接交 `refsViewOf`；判不了的名字随 `staleNames` 可见交出。
+       * 为什么用 getter 而不是直接放字段：物化（bySymbol 对象图）仍走 PERF-7 的
+       * "首次消费才建"，getter 是那个时机。
+       *
+       * `dimReferences`：**dim 腿本批不动**——保持现状 undefined，读一次排一次整扫
+       * （既有修复通道；`#DIM` 对称差的巡检判据与函数腿不同源，本批不扩）。
        */
-      function attachStaleReferences(target: ErbIndex): void {
-        let requested = false;
+      function attachIncrementalReferenceViews(target: ErbIndex): void {
+        (target as { version?: number }).version = refsLive.version;
         Object.defineProperty(target, 'references', {
           enumerable: true,
           configurable: true,
-          get: () => {
-            if (!requested) {
-              requested = true;
-              requestReferencesRepair();
-            }
-            return undefined;
-          },
+          get: () => refsViewOf(refsLive, target.files),
         });
-        // 变量引用同一刻失效、同一条修复路径（v17）：新增/删除一个全局 `#DIM` 会让别的文件
-        // 多边或少边，增量只重扫了变过的文件——与 refs 完全同款，不给两份保守口径。
         Object.defineProperty(target, 'dimReferences', {
           enumerable: true,
           configurable: true,
           get: () => {
-            if (!requested) {
-              requested = true;
-              requestReferencesRepair();
-            }
+            requestReferencesRepair();
             return undefined;
           },
         });
       }
 
-      /** 排一次"为恢复反向引用"的整扫（在途有空时才排；没有项目 / 已有整扫 ⇒ 交给它们） */
+      /** 排一次"为恢复变量引用（dim 腿）"的整扫（在途有空时才排；没有项目 / 已有整扫 ⇒ 交给它们） */
       function requestReferencesRepair(): void {
         if (!referencesRepairPending) return;
         if (inFlight !== null || projectRoots.length === 0) return;
         referencesRepairPending = false;
-        ctx.log.info('References unavailable after an incremental index update; scheduling a full rebuild');
+        ctx.log.info('Dim-variable references unavailable after an incremental index update; scheduling a full rebuild');
         generation++;
         void startBuild(generation).catch((err: unknown) => {
           ctx.log.error(`Index rebuild for references failed: ${String(err)}`);
@@ -1621,14 +1710,12 @@ export function createErbParserPlugin(): Plugin {
         // 位置 → 符号（B0）：只读已构建的索引，不读盘；未构建 → undefined（不猜）
         functionAt: (path: string, line: number) => (index ? functionAt(index, path, line) : undefined),
 
-        // 符号 → 引用点（H2）：同上，只读 `index.references`，未构建 → 空数组
-        // WS-05：增量更新后反向引用是**保守失效**的（见 `attachStaleReferences`）——
-        // 读到"不可用"的那一下就把整扫排上，作者下一次查找引用拿到的是真事实。
+        // 符号 → 引用点（H2）：只读 `index.references`，未构建 → 空数组。
+        // MCP-PERF-S2：增量更新后反向引用是**活视图**（refs-live.ts 当场重扫受染文件、
+        // 局部重建受影响名字的组）——保存后立即可查，判不了的名字随 staleNames 可见。
         referencesTo: (name: string) => {
           if (index === null) return [];
-          const refs = referencesOf(index, name);
-          requestReferencesRepair();
-          return refs;
+          return referencesOf(index, name);
         },
       };
 

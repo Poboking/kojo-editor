@@ -279,6 +279,14 @@ export interface ErbIndex {
    */
   readonly dimReferences?: ErbDimReferenceIndex;
   /**
+   * **索引版本号**（**additive 可选**，MCP-PERF-S2，2026-11-06）。
+   *
+   * 每次索引换代 +1：整扫、盘上增量更新各算一次。消费方拿它判断"我手里的派生
+   * 数据对不对应当前索引"（比对象身份比较直白——增量轮每次都交出新对象，但
+   * 只读派生缓存未必每一代都要重建）。缺省 = 提供方未标，消费方按"无从比较"处理。
+   */
+  readonly version?: number;
+  /**
    * **范围戳**（W7 NAV-SCOPE，additive 可选）：这份索引（或这份**派生视图**）是在
    * 哪个"只看"范围下成立的。
    *
@@ -565,6 +573,24 @@ export interface ErbReference {
 export interface ErbReferenceIndex {
   /** 归一化函数名 → 该名的定义点与引用点全集（构建序 → 行 → 列，确定排序） */
   bySymbol: ReadonlyMap<string, readonly ErbReference[]>;
+  /**
+   * 产出这份视图时的**索引版本号**（**additive 可选**，MCP-PERF-S2，2026-11-06）。
+   *
+   * 与 {@link ErbIndex.version} 同源同值：每次索引换代（整扫或增量更新）+1。查询方
+   * 拿它和手里的旧读数比一下就知道数据是不是同一代的，不必自己记 `ErbIndex` 对象。
+   * 缺省 = 提供方未标（旧形态，消费方按"无从比较"处理）。
+   */
+  readonly version?: number;
+  /**
+   * **显式失效标注**（**additive 可选**，MCP-PERF-S2，2026-11-06）：归一化名 →
+   * 这一轮增量里**判不了**（溯源未知 / 重扫失败）的名字。这些名字的组内容仍是
+   * 尽力而为的最新账（**绝不答空**），但可信度由这里的成员如实声明——消费方
+   * （面板 / MCP）可据此显示"此名引用正在重建"而不是默默把旧账当真账。
+   *
+   * 常态（单文件保存）增量轮把受影响名字全部就地重建 ⇒ 这里是空集（键缺席）。
+   * 缺省 = 全部名字都可信（与旧形态同观感）。
+   */
+  readonly staleNames?: ReadonlySet<string>;
 }
 
 /* ---------------- 变量（`#DIM` 族）的项目级引用（2026-11-05，全部 additive） ---------------- */

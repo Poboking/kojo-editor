@@ -113,7 +113,7 @@ describe('applyIndexDelta（WS-05）', () => {
     expect(changed.index.fingerprint).not.toBe(same.index.fingerprint);
   });
 
-  it('反向引用刻意不带：增量结果里没有 references（保守失效，等下一次整扫）', () => {
+  it('反向引用不带在纯函数里：增量结果没有 references（视图由 plugin.ts 接线挂活视图，MCP-PERF-S2）', () => {
     const base = indexOf([erbFile(A, ['A'])]);
     const result = applyIndexDelta({ index: base, updated: [update(A, ['A'])], removed: [] });
     expect(result.index.references).toBeUndefined();

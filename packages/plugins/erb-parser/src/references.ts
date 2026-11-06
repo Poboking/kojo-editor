@@ -47,7 +47,8 @@ const CALL_FAMILY: ReadonlySet<string> = new Set(['CALL', 'TRYCALL', 'TRYCCALL',
 export const KIND_DEFINITION = 0;
 export const KIND_CALL = 1;
 export const KIND_MENTION = 2;
-const KIND_BY_FLAG: readonly ErbReferenceKind[] = ['definition', 'call', 'mention'];
+/** 旗标 → 契约种类（增量局部重建与全量聚合共用同一张映射——各写一遍就是第二判据） */
+export const KIND_BY_FLAG: readonly ErbReferenceKind[] = ['definition', 'call', 'mention'];
 
 /**
  * 单文件引用流水的**步长**：每 4 格一条引用，依次是 `归一化名, 行, 列, 种类旗标`。
