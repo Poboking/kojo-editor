@@ -385,6 +385,48 @@ const STRICT_NO_ARG_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
+/* ---- B4 批（LaneS，2026-11-06）启动器族用到的入参形状（与宿主形状闸同尺） ---- */
+
+/**
+ * 实例 id：与 Rust `launcher::paths::valid_instance_id` 逐字同尺
+ * （ASCII 字母数字 + `-`，长度 1..=64）。形状在闸上先挡一道，腿里再复核一次（纵深，fail-closed）。
+ */
+const LAUNCHER_INSTANCE_ID_SCHEMA: Record<string, unknown> = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 64,
+  pattern: '^[A-Za-z0-9-]+$',
+  description:
+    "Instance id copied verbatim from launcher_instance_list / launcher_instance_get. Shape gate is the host's own: ASCII letters/digits plus '-' only, max 64 chars; never invent or guess one.",
+};
+
+/** 单段 id（包 id / 计划 id / 备份 id / 会话 id）：Rust `launcher::paths::valid_component` 同尺。 */
+const LAUNCHER_COMPONENT_ID_SCHEMA: Record<string, unknown> = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 64,
+  pattern: '^(?!\\.)[A-Za-z0-9._-]+$',
+  description:
+    'One host-side component id (pack id / plan id / backup id / session id) copied verbatim from a read surface. ASCII letters, digits, - _ . ; may not start with a dot; max 64 chars.',
+};
+
+/** 冲突裁决项：与契约 `ConflictResolution` 同形（三键、动作白名单）。 */
+const LAUNCHER_RESOLUTION_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    rootId: LAUNCHER_COMPONENT_ID_SCHEMA,
+    path: { type: 'string', minLength: 1, maxLength: 512, description: 'Root-relative path of the colliding file, exactly as the plan reported it.' },
+    action: { type: 'string', enum: ['skip', 'overwrite', 'replace'], description: 'How to resolve that one collision.' },
+  },
+  required: ['rootId', 'path', 'action'],
+  additionalProperties: false,
+};
+
+/** 启动器族 description 的共用尾注（档位 + 分页账口径统一，避免 27 条各写一套）。 */
+const LAUNCHER_TIER_NOTE =
+  'Tier: privileged - this name is absent from tools/list until the session approves it by its EXACT name (the 4th table; wildcards such as launcher_* never approve a privileged tool), and every approval gate the host itself enforces still applies.';
+
+
 export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
   { name: 'semantic.definitionAt', method: 'definitionAt', description: '转到定义（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
   { name: 'semantic.referencesAt', method: 'referencesAt', description: '查找引用（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
@@ -1124,6 +1166,419 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     tier: 'edit',
     annotations: { idempotentHint: true },
   },
+
+  /* ---- B4 批（LaneS，2026-11-06）：启动器族具名工具（tier 'privileged'）----
+   * 真源 = kernel.launcherHost（一个方法 = 一条 Rust `launcher_*` 命令，执行腿见
+   * `packages/app/src/mcp/real-sources-launcher.ts`）。命名一律 `launcher_<族>_<动词>`
+   * 下划线形态：Rust `is_launcher_tool()` 与 WebView `PRIVILEGED_TOOL_PREFIXES` 都按
+   * `launcher_` **前缀**判 privileged，点号形态（`launcher.instance.list`）不命中判定，
+   * 会掉进「未知名字按 read 放行」的后门 —— 这条命名纪律不许改。
+   * 档位判定与批准语义零改动：privileged 只认第四张表里的**精确名**（`launcher_*` 通配
+   * 不构成批准），与 `fileTree.remove` / `fileTree.rename` 同源。
+   * 授权面零放宽：第三张表（实例 × rootId 的逐根写授权，`launcher/approvals.json`，只由
+   * 原生目录对话框写入）的复验全在宿主，本批没有任何一腿替模型拿落点决定权；
+   * 需要「人选中的输入件绝对路径」的那几条（launcher_content_plan / launcher_save_import /
+   * launcher_project_extract）、对话框即授权的那几条（launcher_pick_*）、信任授予
+   * （launcher_trust_executable）、OS shell 面向人（launcher_instance_open_folder）、
+   * 导出（launcher_log_export / launcher_save_export）、宿主未落地的 launcher_runtime_*
+   * 以及 market_* 全族 ⇒ **刻意不登记**，逐条判性见 MCP_DEFERRED_GAP_NOTES（铁律 4：不静默）。
+   * 本注释刻意不写规格字面量，避免干扰盘点脚本对规格块的正则解析。
+   */
+  {
+    name: 'launcher_instance_list',
+    description:
+      'List the launcher instances registered on this machine (read-only). Returns {instances:[...], total, offset, limit, truncated, hasMore, nextCursor, fingerprint}: each row is the host DTO verbatim (id, adapterId, gameId, createdAt, sourceRoot|null, isolation, instanceRoot, gameRoot, executableTrust, state, name, tags, notes). An empty list is the real reading (zero registered instances), never a wiring failure; if no launcher surface exists at all the call fails visibly with NOT_WIRED instead of returning []. Start paging here and reuse the ids you read. ' +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_instance_get',
+    description:
+      'Inspect one launcher instance (read-only): {instance, executable, runtime, paths, diskUsageBytes, warnings} exactly as the host reports it. `executable` carries the resolved relative path plus the recorded sha256 and whether the trust record exists (approvedAt comes from the native confirmation dialog only - trust can never be granted through MCP). A missing instance id fails with the host structured error (code + retryable + detail in the message), never with a null object. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'] },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_content_list',
+    description:
+      'List the content packs the host has installed into one instance (read-only), reading its own state.json / ownership.json on disk. Returns {contents:[{manifest, installedAt, ownedFiles, enabled, status}], + the page account}; unknown manifest fields are preserved by the host and passed through untouched. `contents[].manifest.id` is the packId other launcher_* tools need. Empty list = nothing installed; an absent P1 surface fails visibly with NOT_WIRED. ' +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_content_diagnose',
+    description:
+      "Diagnose an instance's installed content against what is actually on disk (read-only). Returns {instanceId, issues:[{packId, code, path?, message}], + the page account}. Honesty note on the code table: the host reports two codes the domain contract does not have - 'orphan-file' and 'load-order' - and this surface passes them through instead of folding them into 'conflict', because an orphaned file is otherwise invisible. Zero issues is a real reading; the diagnosis never repairs anything. " +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_process_list',
+    description:
+      'List the game processes currently supervised by the launcher host (read-only): {processes:[{instanceId, state, pid, sessionId, startedAt, elapsedMs, exitCode, exitReason, lastError}], + the page account}. This is the host process table, not the OS process list - a game started outside the launcher is not in it. Empty array = no supervised process, which is a reading, not an error. ' +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_process_status',
+    description:
+      'Read the process state of one instance (read-only): {instanceId, state, pid, sessionId, startedAt, elapsedMs, exitCode, exitReason, lastError} straight from the host supervisor. `state` is one of idle|starting|running|stopping|exited|crashed; null pid / sessionId means "not running", never "unknown". Poll this after launcher_start and launcher_stop instead of assuming a transition happened. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'] },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_task_list',
+    description:
+      "List the launcher task centre's rows (read-only): {tasks:[{id, kind, instanceId, state, progress, createdAt, startedAt, endedAt, error, result, cancellable}], + the page account} plus a faceNote. This table is deliberately its OWN surface: launcher tasks belong to the third table (per-root approvals) and are NOT merged into kojo://tasks, so a launcher job never shows up in the long-task face and vice versa. Rows are how you verify a lifecycle call: take the taskRowId from that reply and read it here. " +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_save_list',
+    description:
+      'List the save files the host can see under an instance (read-only). The host answer is NOT a bare entry array: it is {entries:[{rootId, path, name, bytes, mtimeMs}], roots:[{rootId, approved, exists?}], warnings:[...]} plus the page account over `entries`. `roots[].approved` is the write-back gate for shared/overlay instances (it comes from launcher/approvals.json, written only by the native directory dialog), and `roots[].exists` is the disk reading - read both before proposing launcher_save_restore or launcher_save_apply_import. ' +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_save_backups',
+    description:
+      'List the backups stored in the instance backup directory (read-only): {backups:[{id, instanceId, createdAt, label, bytes, entryCount, reason}], + the page account}. `reason` is manual|pre-restore|pre-plugin|auto and explains who made the row. backupId is what launcher_save_restore / launcher_save_delete_backup require - never invent one. ' +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_log_sessions',
+    description:
+      'List recorded log sessions of one instance (read-only): {sessions:[{id, instanceId, startedAt, stdoutBytes, stderrBytes}], + the page account}. The session id is the handle launcher_log_read needs; byte counters are the host reading of the raw stream files, not decoded line counts. ' +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_log_tail',
+    description:
+      'Read the tail of the newest log session of one instance (read-only), exactly as the host returns it: {session, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account over chunks}. Two honesty points, both load-bearing: (1) the payload is RAW BYTES in base64 - the host does not decode and neither does this face, because the charset decision belongs to the launcher core log service; concatenate bytesBase64 across pages in nextCursor order and decode afterwards. (2) The host default is 1 MiB per stream; this face TIGHTENS the read to at most 40960 bytes per stream so a page stays under the host untrusted-string gate, and reports hostTruncatedNote plus per-chunk truncated. `maxLines` is deliberately not offered: the host truncates by bytes only. ' +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        stream: { type: 'string', enum: ['stdout', 'stderr', 'all'], description: 'Which stream to read (default all, i.e. both chunks).' },
+        maxBytes: { type: 'integer', minimum: 1, maximum: 40960, description: 'Per-stream byte cap handed to the host (default and hard ceiling 40960 - tighter than the host 1 MiB on purpose).' },
+        ...PAGE_PROPS,
+      },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_log_read',
+    description:
+      'Read one recorded log session by id (read-only) - same answer shape as launcher_log_tail ({session, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account}), the difference being the addressing: `sessionId` must come from launcher_log_sessions (the host also verifies session ownership). Bytes stay raw base64 here: charset decoding is the launcher core log service job, so splice pages first, then decode. Per-stream cap is tightened to 40960 bytes, never widened. ' +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: LAUNCHER_COMPONENT_ID_SCHEMA,
+        stream: { type: 'string', enum: ['stdout', 'stderr', 'all'], description: 'Which stream to read (default all).' },
+        maxBytes: { type: 'integer', minimum: 1, maximum: 40960, description: 'Per-stream byte cap (default and ceiling 40960).' },
+        ...PAGE_PROPS,
+      },
+      required: ['sessionId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_project_hash',
+    description:
+      'Stream-hash one plugin source project (read-only): pass {projectDir, artifactDir, entries:[posix-relative paths]} and get {digests:[{path, sha256, size}], requestedEntries, + the page account} back, `path` echoed exactly as requested so pages can be paired. This is the ONLY launcher face that takes an absolute path, and it is an INPUT root, never a write target: the host re-checks that projectDir lies inside the registered writable roots (app data / user-approved workspace roots) and that resolved entries cannot escape artifactDir. This tool does not build, does not pack and does not install anything. ' +
+      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectDir: { type: 'string', minLength: 1, maxLength: 512, description: 'Absolute project root (host-verified against the writable-root registry; read-only input).' },
+        artifactDir: { type: 'string', minLength: 1, maxLength: 64, description: 'Single artifact directory name inside the project (entries resolve under it).' },
+        entries: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 2000,
+          items: { type: 'string', minLength: 1, maxLength: 512, description: 'Path relative to artifactDir, POSIX separators.' },
+          description: 'The file list to hash, in the order the manifest declares (order is the pairing key).',
+        },
+        ...PAGE_PROPS,
+      },
+      required: ['projectDir', 'artifactDir', 'entries'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_instance_update',
+    description:
+      'Update the descriptive fields of one instance (mutating, privileged): give instanceId plus at least one of `name` / `notes` / `tags` and the host applies its own field whitelist, returning the updated instance row. This face DELIBERATELY does not accept executableRelativePath, launch arguments or environment variables - what gets run stays a human decision (trust is granted only in the native confirmation dialog). The host re-checks everything; a rejected field arrives as its structured error code. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        name: { type: 'string', minLength: 1, maxLength: 120, description: 'New display name.' },
+        notes: { type: 'string', maxLength: 2000, description: 'Free-text notes field.' },
+        tags: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 64 }, description: 'Tag list (replaces the existing tags).' },
+      },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_instance_duplicate',
+    description:
+      'Duplicate one instance into a new instance (mutating, privileged): {instanceId, name?} returns {instance, task} - the copy runs as a task row when isolation requires file copying, so read task.id and follow it with launcher_task_list / launcher_task_cancel. Nothing is deleted; the source instance keeps working. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        name: { type: 'string', minLength: 1, maxLength: 120, description: 'Optional name for the copy (host default naming when omitted).' },
+      },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
+  {
+    name: 'launcher_instance_remove',
+    description:
+      'Remove an instance registration (DESTRUCTIVE, privileged): the host stops the process first, then drops the record and optionally the instance directory. `deleteFiles` must be given explicitly - true deletes the instance root, false only unregisters - and there is no default, because guessing here destroys data. `keepBackups` (explicit true) keeps the backup directory even when files go. Returns the void/terminal answer honestly; the deletion is irreversible from the model side, so only call it after the user itemized the target. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        deleteFiles: { type: 'boolean', description: 'Required explicit decision: true = delete the instance directory too.' },
+        keepBackups: { type: 'boolean', description: 'Optional; keep backup files when deleteFiles is true (host default false).' },
+      },
+      required: ['instanceId', 'deleteFiles'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  },
+  {
+    name: 'launcher_content_apply',
+    description:
+      'Second half of the content-pack install (mutating, privileged): consume a one-shot `planId` produced by the UI-side import wizard and optionally carry per-file conflict `resolutions`, then return the task row {taskRowId, taskState, taskCancellable, task} plus the query/cancel faces. Writing only ever lands in roots the user approved per instance and rootId (third table, approvals.json) - the host re-verifies each target and refuses unapproved roots; a stale or consumed planId fails with the host structured error instead of silently re-planning. This face takes NO archive path: launcher_content_plan is deliberately not registered (its archivePath is a native-dialog-produced input file). ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        planId: LAUNCHER_COMPONENT_ID_SCHEMA,
+        resolutions: { type: 'array', maxItems: 200, items: LAUNCHER_RESOLUTION_SCHEMA, description: 'Per-collision decisions; omit to let the host abort on any unresolved conflict.' },
+      },
+      required: ['planId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
+  {
+    name: 'launcher_content_set_enabled',
+    description:
+      'Enable or disable one installed content pack (mutating, privileged; writes the manifest state and returns the task row). `enabled` must be an explicit boolean. Restart semantics are a separate decision: the host does not kill a running game for you, so check launcher_process_status first and stop it when the pack requires a restart. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        packId: LAUNCHER_COMPONENT_ID_SCHEMA,
+        enabled: { type: 'boolean', description: 'Required explicit target state.' },
+      },
+      required: ['instanceId', 'packId', 'enabled'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_content_set_order',
+    description:
+      'Set the load order of installed content packs (mutating, privileged): `packIds` must be a permutation of the ids the instance already has (read them from launcher_content_list) - duplicates are refused here, ids the host does not know are refused by it. Returns a void execution answer, honestly labelled; nothing is added or removed, only the order changes. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        packIds: { type: 'array', minItems: 1, maxItems: 200, items: LAUNCHER_COMPONENT_ID_SCHEMA, description: 'Complete permutation of installed pack ids, in desired load order.' },
+      },
+      required: ['instanceId', 'packIds'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_content_uninstall',
+    description:
+      'Uninstall one content pack (DESTRUCTIVE, privileged). The tool takes only instanceId + packId: the exclusive-file list handed to the host is COMPUTED here from the host own ownership readings (this pack ownedFiles minus every other pack ownedFiles), never from a list the model writes, and the host still re-checks ownership.json - shared files belonging to another pack are left in place. Returns the task row (taskRowId / taskState / taskCancellable) plus ownedFileCount / exclusiveFileCount / sharedFileCount so the blast radius is stated. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, packId: LAUNCHER_COMPONENT_ID_SCHEMA },
+      required: ['instanceId', 'packId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
+  {
+    name: 'launcher_start',
+    description:
+      'Start the game of one instance (mutating, privileged, launches a real OS process). The whole validation chain runs inside the host - instance ready, executable legitimate, recorded executable trust, runtime resolved, per-instance lock - and none of it can be skipped from MCP: executable trust can only be granted by a human in the native confirmation dialog, so an untrusted executable arrives as that host error code. Returns the process status reading; poll launcher_process_status for the truth. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'] },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
+  {
+    name: 'launcher_stop',
+    description:
+      'Stop the running game of one instance (mutating, privileged). Default is a graceful stop with the host timeout; `force:true` terminates the process tree and can lose unsaved in-game state, so it must be an explicit decision, and `timeoutMs` is capped at 120000. Returns the post-stop process status (state, exitCode, exitReason) - read that as the fact, do not assume the process is gone. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        force: { type: 'boolean', description: 'Optional; true = hard kill (risk of losing unsaved game state).' },
+        timeoutMs: { type: 'integer', minimum: 0, maximum: 120000, description: 'Optional graceful-stop budget (0..120000).' },
+      },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  },
+  {
+    name: 'launcher_task_cancel',
+    description:
+      'Request cancellation of one launcher task (mutating, privileged) - the cancel half of the launcher task face, which stays separate from kojo://tasks by design. Cancellation is a request, not an acknowledgement: only cancellable kinds are accepted, rollback is performed by the task itself, and the fact is read back from launcher_task_list. An unknown / already-finished row arrives as the host answer, never as a silent success. `taskId` must come from a task row this host produced. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: { type: 'object', properties: { taskId: LAUNCHER_COMPONENT_ID_SCHEMA }, required: ['taskId'] },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'launcher_save_backup',
+    description:
+      'Back up save files of one instance (mutating, privileged): the host only ever writes into the instance backup directory - there is no target path argument on this face at all. Optional `label`, `reason` (manual | pre-restore | pre-plugin; the host-internal auto slot is not offered) and an `entries` subset of {rootId, path} pairs as reported by launcher_save_list (omitted = all save roots). Returns the terminal task row plus backupId read from task.result.backupId, so the restore handle is never guessed. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        label: { type: 'string', minLength: 1, maxLength: 120, description: 'Human-readable label for the backup row.' },
+        reason: { type: 'string', enum: ['manual', 'pre-restore', 'pre-plugin'], description: 'Backup reason bucket (default manual).' },
+        entries: {
+          type: 'array',
+          maxItems: 200,
+          items: {
+            type: 'object',
+            properties: {
+              rootId: LAUNCHER_COMPONENT_ID_SCHEMA,
+              path: { type: 'string', minLength: 1, maxLength: 512, description: 'Save-root-relative path exactly as launcher_save_list reported it.' },
+            },
+            required: ['rootId', 'path'],
+            additionalProperties: false,
+          },
+          description: 'Optional subset; omit to back up every save root.',
+        },
+      },
+      required: ['instanceId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+  },
+  {
+    name: 'launcher_save_restore',
+    description:
+      'Restore save files from one backup (DESTRUCTIVE, mutating, privileged). The host ALWAYS takes a fresh automatic backup of the current state first (backupCurrent defaults to true; explicit false disables it and is reported back in the answer), then unpacks, verifies and swaps files through temp + rename. Write-back still obeys the third table: a save root without a per-root approval is refused by the host, and a running game is a refusal, not an overwrite. Returns the terminal task row. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        backupId: LAUNCHER_COMPONENT_ID_SCHEMA,
+        backupCurrent: { type: 'boolean', description: 'Optional; default true = the host backs up the current saves before restoring.' },
+      },
+      required: ['instanceId', 'backupId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
+  {
+    name: 'launcher_save_delete_backup',
+    description:
+      'Delete one backup row from the instance backup directory (DESTRUCTIVE, mutating, privileged). Only that directory and only that backupId are touched - the host re-checks that the id resolves inside the backup root, and there is no target path argument. Irreversible: read launcher_save_backups first, confirm the exact id with the user, and remember this is the only copy for backups that were not also exported. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, backupId: LAUNCHER_COMPONENT_ID_SCHEMA },
+      required: ['instanceId', 'backupId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+  },
+  {
+    name: 'launcher_save_apply_import',
+    description:
+      'Second half of the save-import flow (DESTRUCTIVE, mutating, privileged): consume the one-shot `planId` produced by the UI-side import wizard (plus optional per-entry conflict `resolutions`) and return the terminal task row. The archive itself is never chosen here - launcher_save_import takes a native-dialog absolute path and is deliberately NOT registered as a model tool, so an unknown / expired planId arrives as the host structured error rather than being re-planned behind your back. Write-back is still gated per root by the third table. ' +
+      LAUNCHER_TIER_NOTE,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        planId: LAUNCHER_COMPONENT_ID_SCHEMA,
+        resolutions: { type: 'array', maxItems: 200, items: LAUNCHER_RESOLUTION_SCHEMA, description: 'Per-collision decisions; omit to let the host abort on unresolved conflicts.' },
+      },
+      required: ['planId'],
+    },
+    tier: 'privileged',
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false },
+  },
 ];
 
 /**
@@ -1201,6 +1656,36 @@ export const MCP_TOOL_GAP_MAP: readonly {
   // 路径参数」两条理由对本条不再成立 ⇒ read_files_raw 由 deferred 转为 wired（诚实降级 deferred
   // 计数，不是凭空宣布覆盖）；同源的单文件二进制帧 read_file_bytes_raw 仍留在 deferred。
   { tool: 'fs.readMany', gap: 'read_files_raw', source: 'rust' },
+  // B4 批（LaneS，2026-11-06）：启动器族 27 枚具名 privileged 工具逐条覆盖同名 Rust 命令缺口
+  // （一工具 = 一条 `launcher_*` 命令，真源腿表在 app `real-sources-launcher.ts`，经 ioTools 登记）。
+  // 其余 launcher_* / market_* 命令刻意不登记，逐条判性见 MCP_DEFERRED_GAP_NOTES 的 B4 条目。
+  { tool: 'launcher_instance_list', gap: 'launcher_instance_list', source: 'rust' },
+  { tool: 'launcher_instance_get', gap: 'launcher_instance_get', source: 'rust' },
+  { tool: 'launcher_instance_update', gap: 'launcher_instance_update', source: 'rust' },
+  { tool: 'launcher_instance_remove', gap: 'launcher_instance_remove', source: 'rust' },
+  { tool: 'launcher_instance_duplicate', gap: 'launcher_instance_duplicate', source: 'rust' },
+  { tool: 'launcher_content_list', gap: 'launcher_content_list', source: 'rust' },
+  { tool: 'launcher_content_diagnose', gap: 'launcher_content_diagnose', source: 'rust' },
+  { tool: 'launcher_content_apply', gap: 'launcher_content_apply', source: 'rust' },
+  { tool: 'launcher_content_uninstall', gap: 'launcher_content_uninstall', source: 'rust' },
+  { tool: 'launcher_content_set_enabled', gap: 'launcher_content_set_enabled', source: 'rust' },
+  { tool: 'launcher_content_set_order', gap: 'launcher_content_set_order', source: 'rust' },
+  { tool: 'launcher_process_list', gap: 'launcher_process_list', source: 'rust' },
+  { tool: 'launcher_process_status', gap: 'launcher_process_status', source: 'rust' },
+  { tool: 'launcher_task_list', gap: 'launcher_task_list', source: 'rust' },
+  { tool: 'launcher_task_cancel', gap: 'launcher_task_cancel', source: 'rust' },
+  { tool: 'launcher_save_list', gap: 'launcher_save_list', source: 'rust' },
+  { tool: 'launcher_save_backups', gap: 'launcher_save_backups', source: 'rust' },
+  { tool: 'launcher_save_backup', gap: 'launcher_save_backup', source: 'rust' },
+  { tool: 'launcher_save_restore', gap: 'launcher_save_restore', source: 'rust' },
+  { tool: 'launcher_save_delete_backup', gap: 'launcher_save_delete_backup', source: 'rust' },
+  { tool: 'launcher_save_apply_import', gap: 'launcher_save_apply_import', source: 'rust' },
+  { tool: 'launcher_log_sessions', gap: 'launcher_log_sessions', source: 'rust' },
+  { tool: 'launcher_log_tail', gap: 'launcher_log_tail', source: 'rust' },
+  { tool: 'launcher_log_read', gap: 'launcher_log_read', source: 'rust' },
+  { tool: 'launcher_project_hash', gap: 'launcher_project_hash', source: 'rust' },
+  { tool: 'launcher_start', gap: 'launcher_start', source: 'rust' },
+  { tool: 'launcher_stop', gap: 'launcher_stop', source: 'rust' },
 ];
 
 /**
@@ -1217,6 +1702,16 @@ export const MCP_DEFERRED_GAP_NOTES: readonly { readonly scope: string; readonly
   { scope: '其余未登记只读原语', reason: '真源存在但本波未登记为具名工具：保留在缺口清单，宿主后续按需补，绝不挂空串假实现。' },
   { scope: 'LaneF 第四波刻意不登记的 5 条 cheap-read（B2 批后余项 4 条：read_files_raw 已被具名工具结构化覆盖）', reason: 'read_files_raw 于 B2 批（LaneT 2026-11-06）由具名只读工具 fs.readMany 结构化覆盖：输出走 kernel.io.readTexts 的 TextFile 投影（不是 ipc::Response 裸字节帧）、逐条 resolveWithinRoot 只收项目根内相对路径（绝对路径 / 盘符 / .. 逃逸整批显式 INVALID_ARGS）、单次硬上限 64 条且超限显式报错不静默截断 ⇒ 原「无面向模型的结构化只读数据面」与「暴露任意目标路径参数」两条理由逐条拆除，该缺口由 deferred 转 wired。read_file_bytes_raw 继续 deferred：单文件 ipc::Response 二进制帧（前端拿 ArrayBuffer / 自定义帧），是开项目热路径的性能通道，没有面向模型的结构化数据面，且其 path 就是任意绝对目标路径参数——项目根内的单文件文本读已由 fs.readFile 覆盖、批量文本读已由 fs.readMany 覆盖，登记它只会把「不暴露任意目标路径参数」这条闸重新打开；updater_relaunch=app.restart() 重启动作、debug.type=applyTypedEdit 编辑器输入动作，均非只读；debug.actions 真源 focusedCtx().editorRef.current.getSupportedActions() 对 MCP 注入面不可达，绝不挂空数组假实现。' },
   { scope: 'Wave4 #4 · editor.openDocument / editor.revealPosition（LaneH 判性，显式 NOT_WIRED 判据）', reason: '宿主无可从 MCP 注入面安全复用、且能诚实回报结果的打开文档 / 定位光标真源。逐条不可复用：editor.revealLocation（App.tsx:1379）是 fire-and-forget 事件，无 ack / 无落地确认 / 落地走 React setState 异步重渲染 / routeOpenPath 不校验项目根域 / 订阅者只在 GUI 挂载时存在，发射后回报已打开即假成功；EditorCommandContext（slots-types.ts:399）只读投影无句柄；McpRealSourceHost（real-sources.ts:1008）仅三个只读 getter；CommandEntry.run（commands.ts:138 / ProjectView.tsx:790）忽略 args 且返回 void，gotoLine 经 editor.action.request 触发 Monaco 交互输入框；editor-pane-registry 全为纯读登记簿，openModelAcrossGroups 只查已开 model 而不打开；file-tree-ops 与内核 io.readText(read_file_bytes) 只读文件内容，不打开 GUI 文档也不定位光标。两枚 edit 档工具按铁律刻意不登记（真源不存在 ⇒ 不登记 + 显式缺口，绝不挂空串假实现），既不进工具清单也不进覆盖登记；runSupplemental 前置兜底仍对任何误调抛可见 NOT_WIRED，绝不 emit 无确认事件冒充成功；写盘仍只经第四张表 approvedRoots × 内核 writablePaths 双闸。只读 editor.cursor 是分开记账的加法，绝不冒充写工具。' },
+  /* ---- B4 批（LaneS，2026-11-06）：启动器族逐条判性（27 枚已登记，其余一律留账不静默）---- */
+  { scope: 'B4 批刻意永不登记：launcher_pick_archive / launcher_pick_source_root / launcher_pick_write_root', reason: '对话框即授权本身（铁律 6/7）：这三条命令的返回值就是授权动作（选中的绝对路径 + 当场写入第三张表的 approvals.json），把它做成模型可调用的工具等于让 AI 替人按下确认键，也等于开放任意目标路径参数。授权入口只有原生目录对话框一条路，JS 侧永不代拿落点决定权。' },
+  { scope: 'B4 批刻意永不登记：launcher_trust_executable', reason: '可执行文件信任的授予必须是人的动作：宿主在同一命令内算 sha256 并弹原生确认框（approvedBy 恒为 native-dialog），登记成工具即让 AI 自授信任并绕过 launcher_start 校验链里的那一道闸，属新造权限而非新入口。' },
+  { scope: 'B4 批刻意永不登记：launcher_instance_open_folder', reason: 'OS shell 面向人的动作（在资源管理器里打开一个目录），没有模型可消费的数据面，也不产生任何可回读读数；宿主 only 认枚举目标（instance/game/logs/backups/staging），不收子路径。' },
+  { scope: 'B4 批刻意永不登记：launcher_log_export / launcher_save_export', reason: '两条导出都是 exportFile 同形的法定通道：原生保存对话框与写盘绑在同一个 Rust 命令内，落点由对话框当场选定。登记成 MCP 工具即把「人选落点」换成「模型给落点」，铁律 6 不允许，且不新增任何写盘通道。' },
+  { scope: 'B4 批刻意不登记：launcher_runtime_*（宿主未落地）', reason: '真源不存在：Rust commands.rs 的 38 条 COMMAND_NAMES 里没有 launcher_runtime_* 任何一条，桥文件也明确不写（process.rs 的运行时解析因此 fail-closed）。按铁律 4「真源不存在 ⇒ 不登记」，绝不挂空实现或假装有运行时登记表。' },
+  { scope: 'B4 批刻意不登记：market_device_token / market_publish / market_download / market_extract / market_fetch_text（market_* 全族）', reason: '铸凭据、不可逆外发发布、以及带安装副作用的网络取件，三类都不是「读一台机器的状态」；Rust validate_tool_name 对 market_ 前缀保持 fail-closed（TOOL_FAIL_CLOSED），本批零改动，盘点里继续按缺口逐条挂着。' },
+  { scope: 'B4 批判性变更（相对批单）：launcher_content_plan / launcher_save_import / launcher_project_extract 不登记', reason: '三条的 archivePath 入参按宿主自己的注释是「用户在原生对话框里选中的输入件」，宿主的 validate_archive_argument 只做形态闸（绝对路径 / 存在 / 是文件 / 非 UNC / 无控制字符），没有「这台机器上哪些包已被人选过」这一层可复验的登记表；而产出该路径的 launcher_pick_archive 属对话框即授权、刻意不登记。两相叠加：登记这三条等于让模型自行指定任意本机文件让宿主读取并解包 ⇒ 新造了一条读侧的任意路径通道，与铁律 6「不得开放任意目标路径参数」相反。故本批把它们留在缺口清单，改由界面侧向导产出的 planId 驱动 launcher_content_apply / launcher_save_apply_import（planId 是一次性句柄，不是路径，过期即显式拒绝）。' },
+  { scope: 'B4 批判性变更（相对批单）：launcher_instance_create 不登记', reason: '命令载荷是 {request, profile}，其中 profile 由 adapter 的 probe + buildProfile 编译（那是游戏知识，只能进 *-adapter / launcher-core，MCP 腿零游戏知识），且 request.sourceRoot 是 launcher_pick_source_root 对话框产出的绝对路径（即授权本身）。MCP 面既造不出诚实的 profile，也拿不到合法的 sourceRoot ⇒ 登记即造假或越权，留账不登记；实例的新建走界面，或经 launcher_instance_duplicate 复制既有实例。' },
+  { scope: 'B4 批已登记但刻意收窄：launcher_instance_update 不收 executableRelativePath / args / env', reason: '宿主白名单允许这些字段，但「跑什么」属于人的决定（信任只能由原生确认框授予）：具名工具只收 name / notes / tags 三个描述性字段，其余字段在本面被显式拒绝（INVALID_ARGS 说明原因），宿主白名单仍是判据真源。这是收紧，不是放宽，也不影响界面侧既有能力。' },
 ];
 
 /** 内置 resource（≥6 的硬要求；「当前文档与光标」是第一波后的加法，Wave4 余项⑤再加 `kojo://tasks`）。 */

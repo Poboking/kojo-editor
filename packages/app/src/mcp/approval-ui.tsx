@@ -43,8 +43,50 @@ export const PRIVILEGED_TOOL_NAMES: readonly string[] = [
  * 审批面板列出的可批准项：只列工具面真实存在的 privileged 工具。
  * 漂移闸：`mcp-security.test.ts` 会拿 `@kojo/mcp-host` 的工具目录逐项比对，
  * 工具面新增/删除 privileged 工具而这里没跟上时测试直接红。
+ *
+ * B4 批（LaneS，2026-11-06）追加启动器族 27 枚具名工具（`launcher_*` 只读 13 + 生命周期/写 14）。
+ * 三点纪律随这批一起钉住：
+ * 1. **登记即须可批**：档位真源在 Rust `mcp/protocol.rs`（`is_launcher_tool()` 按 `launcher_`
+ *    前缀判 privileged），而第四张表对 privileged 只认**精确名**——名字不进这张表就是
+ *    「登记了也批不动」的静默失效（`fileTree.remove` / `fileTree.rename` 当年踩过同一坑）；
+ * 2. **通配不构成批准**：`launcher_*` 这类前缀通配对 privileged 一律无效（端点与面板同源，
+ *    判定语义零改动）；
+ * 3. **不并入 edit 档**：这 27 枚绝不进 `EDIT_TOOLS_EXACT`，它们的门禁是危险档而非编辑档；
+ *    宿主侧的第三张表复验（实例 × rootId 逐根授权）与确认闸 / 信任闸也不因本表存在而放松。
  */
-export const APPROVABLE_PRIVILEGED_TOOLS: readonly string[] = ['fileTree.remove', 'fileTree.rename'];
+export const APPROVABLE_PRIVILEGED_TOOLS: readonly string[] = [
+  'fileTree.remove',
+  'fileTree.rename',
+  // ---- B4 批：启动器族只读面（13 枚，零副作用）----
+  'launcher_instance_list',
+  'launcher_instance_get',
+  'launcher_content_list',
+  'launcher_content_diagnose',
+  'launcher_process_list',
+  'launcher_process_status',
+  'launcher_task_list',
+  'launcher_save_list',
+  'launcher_save_backups',
+  'launcher_log_sessions',
+  'launcher_log_tail',
+  'launcher_log_read',
+  'launcher_project_hash',
+  // ---- B4 批：启动器族生命周期 / 写面（14 枚，宿主授权闸一律留在宿主）----
+  'launcher_instance_update',
+  'launcher_instance_duplicate',
+  'launcher_instance_remove',
+  'launcher_content_apply',
+  'launcher_content_set_enabled',
+  'launcher_content_set_order',
+  'launcher_content_uninstall',
+  'launcher_start',
+  'launcher_stop',
+  'launcher_task_cancel',
+  'launcher_save_backup',
+  'launcher_save_restore',
+  'launcher_save_delete_backup',
+  'launcher_save_apply_import',
+];
 
 export function classifyToolTier(name: string): McpTier {
   if (

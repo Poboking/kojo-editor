@@ -75,6 +75,12 @@ import { createQuickFixApplyLeg, type QuickFixPaneResolver } from './quick-fix';
 // 真源 = debug/install-debug.ts 已实现并测过的同一批腿；与调试面唯一差别是 MCP 面**没有
 // 「当前聚焦」语义**，一律按 paneId 显式反查（见 editor-write-legs.ts 模块头判性）。
 import { createEditorWriteLegs, type EditorWritePaneResolver } from './editor-write-legs';
+// B4 批（LaneS，2026-11-06）：启动器族 27 枚具名 privileged 工具的执行腿。
+// 真源 = `kernel.launcherHost`（一方法一条 Rust `launcher_*` 命令）；档位与批准语义零改动
+// （`launcher_` 前缀在 Rust `is_launcher_tool()` 与 WebView `PRIVILEGED_TOOL_PREFIXES` 两侧
+// 都判 privileged，第四张表只认精确名），授权面零放宽（第三张表复验全在宿主，本面不收落点）。
+import { createLauncherLegs } from './real-sources-launcher';
+import type { McpLauncherHostLike } from './real-sources-launcher';
 import {
   fsFreshnessAbsentPayload,
   fsFreshnessPayload,
@@ -207,6 +213,14 @@ export interface McpIoDeps {
   readonly fsFreshness?: () => FsFreshnessTracker | null;
   /** 长任务面（`tasks.*` 工具 + `kojo://tasks` 数据腿）；缺席 ⇒ 显式 NOT_WIRED。 */
   readonly tasks?: McpTaskLegs;
+  /**
+   * 启动器宿主面（B4 批，LaneS 2026-11-06）：真源 = `kernel.launcherHost`
+   * （一条方法 = 一条 Rust `launcher_*` 命令，实现腿见 `real-sources-launcher.ts`）。
+   * 生产装配不给这一枚 ⇒ 腿自己从注入的内核实例上取；测试注入假件。
+   * 缺席（浏览器宿 / 无内核）⇒ 每一腿显式 `NOT_WIRED` 带理由，**绝不空数组冒充「没有实例」**
+   * （铁律 4），也绝不从 MCP 面拿任何落点决定权（铁律 6/7：第三张表只在宿主复验）。
+   */
+  readonly getLauncher?: () => McpLauncherHostLike | null;
 }
 
 /* ------------------------------- 路径闸（与 Rust 同尺） ------------------------------- */
@@ -1308,6 +1322,43 @@ export function createRunSupplemental(deps: McpIoDeps): (
   // parseLegMaps 按这个锚判 wired（成员表达式不命中 ⇒ 会把已接线的腿算成 NOT_WIRED 假红）。
   const { editorSetValue, editorType, editorSetCursor, editorSetSelection, editorRevealLine } =
     editorWriteLegs;
+  /* ---------------- 启动器族腿（B4 批，LaneS 2026-11-06）----------------
+   * 27 枚具名 `launcher_*` 工具的执行体全部转交 `real-sources-launcher.ts`（真源
+   * `kernel.launcherHost`，一方法一条 Rust 命令）。这里只做「解构成裸标识符 + 进腿表」，
+   * 理由与上面 editorWriteLegs 逐字相同：`tools/mcp-inventory.mjs::parseLegMaps` 只认
+   * `['工具名', 标识符]` 这一形状，成员表达式不命中 ⇒ 已接线的腿会被算成 NOT_WIRED 假红。
+   * 授权面零放宽：第三张表（实例 × rootId 逐根授权，宿主 approvals.json）复验、确认闸、
+   * 信任闸一律留在宿主，本批**没有任何一腿**向模型开放写落点或对话框授权入口。 */
+  const launcherLegs = createLauncherLegs({ getLauncher: deps.getLauncher, getKernel: deps.getKernel });
+  const {
+    launcher_instance_list: launcherInstanceList,
+    launcher_instance_get: launcherInstanceGet,
+    launcher_instance_update: launcherInstanceUpdate,
+    launcher_instance_remove: launcherInstanceRemove,
+    launcher_instance_duplicate: launcherInstanceDuplicate,
+    launcher_content_list: launcherContentList,
+    launcher_content_diagnose: launcherContentDiagnose,
+    launcher_content_apply: launcherContentApply,
+    launcher_content_uninstall: launcherContentUninstall,
+    launcher_content_set_enabled: launcherContentSetEnabled,
+    launcher_content_set_order: launcherContentSetOrder,
+    launcher_process_list: launcherProcessList,
+    launcher_process_status: launcherProcessStatus,
+    launcher_task_list: launcherTaskList,
+    launcher_task_cancel: launcherTaskCancel,
+    launcher_save_list: launcherSaveList,
+    launcher_save_backups: launcherSaveBackups,
+    launcher_save_backup: launcherSaveBackup,
+    launcher_save_restore: launcherSaveRestore,
+    launcher_save_delete_backup: launcherSaveDeleteBackup,
+    launcher_save_apply_import: launcherSaveApplyImport,
+    launcher_log_sessions: launcherLogSessions,
+    launcher_log_tail: launcherLogTail,
+    launcher_log_read: launcherLogRead,
+    launcher_project_hash: launcherProjectHash,
+    launcher_start: launcherStart,
+    launcher_stop: launcherStop,
+  } = launcherLegs;
 
   /* ---------------- 长任务面腿（Wave4 余项⑤：只登记「进度 + 取消 + 可查询状态」三件套齐备的族） ----------------
    * 真源在 `real-sources-tasks.ts`（表 + 投影 + 有界性都在那一层）；本模块只做分派与缺席兜底。
@@ -1378,12 +1429,53 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['editor.setCursor', editorSetCursor],
     ['editor.setSelection', editorSetSelection],
     ['editor.revealLine', editorRevealLine],
+    // B4 批（LaneS）：启动器族 27 枚具名 privileged 工具（真源 kernel.launcherHost，
+    // 一方法一条 Rust `launcher_*` 命令）。只读那 13 枚零副作用；生命周期 / 写那 14 枚的
+    // 第三张表复验、确认闸、信任闸全在宿主，本面不收任何写落点参数。
+    ['launcher_instance_list', launcherInstanceList],
+    ['launcher_instance_get', launcherInstanceGet],
+    ['launcher_instance_update', launcherInstanceUpdate],
+    ['launcher_instance_remove', launcherInstanceRemove],
+    ['launcher_instance_duplicate', launcherInstanceDuplicate],
+    ['launcher_content_list', launcherContentList],
+    ['launcher_content_diagnose', launcherContentDiagnose],
+    ['launcher_content_apply', launcherContentApply],
+    ['launcher_content_uninstall', launcherContentUninstall],
+    ['launcher_content_set_enabled', launcherContentSetEnabled],
+    ['launcher_content_set_order', launcherContentSetOrder],
+    ['launcher_process_list', launcherProcessList],
+    ['launcher_process_status', launcherProcessStatus],
+    ['launcher_task_list', launcherTaskList],
+    ['launcher_task_cancel', launcherTaskCancel],
+    ['launcher_save_list', launcherSaveList],
+    ['launcher_save_backups', launcherSaveBackups],
+    ['launcher_save_backup', launcherSaveBackup],
+    ['launcher_save_restore', launcherSaveRestore],
+    ['launcher_save_delete_backup', launcherSaveDeleteBackup],
+    ['launcher_save_apply_import', launcherSaveApplyImport],
+    ['launcher_log_sessions', launcherLogSessions],
+    ['launcher_log_tail', launcherLogTail],
+    ['launcher_log_read', launcherLogRead],
+    ['launcher_project_hash', launcherProjectHash],
+    ['launcher_start', launcherStart],
+    ['launcher_stop', launcherStop],
   ]);
 
   return async (name, args, scope) => {
     const tool = ioTools.get(name);
     if (tool) return tool(args ?? {}, scope);
     // 仍 NOT_WIRED 的写类 / 危险动作：逐个写明缺什么（不静默、不造假实现）。
+    // B4 批后 `launcher_*` 的口径（铁律 4：缺席必须逐条可解释，不是一句「未接线」）：
+    //   · 27 枚有诚实数据面 / 宿主复验链齐备的已登记成具名工具（上面腿表），走得到腿；
+    //   · `launcher_pick_*`（对话框即授权本身）、`launcher_trust_executable`（信任授予必须是
+    //     人的动作）、`launcher_instance_open_folder`（OS shell 面向人）、`launcher_log_export` /
+    //     `launcher_save_export`（落点由系统对话框选定＝法定通道）、`launcher_content_plan` /
+    //     `launcher_save_import` / `launcher_project_extract`（入参是对话框产出的输入件绝对路径，
+    //     登记即给模型一条任意的本机读侧通道）、`launcher_instance_create`（profile 由 adapter
+    //     编译，MCP 腿零游戏知识 ⇒ 造不出诚实载荷）、`launcher_runtime_*`（宿主未落地＝真源不存在）
+    //     ⇒ **刻意永不登记**，逐条判性写在 `@kojo/mcp-host` 的 MCP_DEFERRED_GAP_NOTES；
+    //   · `market_*` 全族维持 Rust `validate_tool_name` 的 fail-closed（铸凭据 / 不可逆外发 /
+    //     网络 + 安装副作用），本批零改动。
     if (
       name.startsWith('fileTree.') ||
       name.startsWith('remove_') ||
@@ -1393,7 +1485,15 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ) {
       throw new McpFailure(
         'NOT_WIRED',
-        `工具 ${name} 未接线：写类 / 危险动作不经 MCP 擅自开放执行（需宿主授权面）`,
+        `工具 ${name} 未接线：这一条刻意没有登记成模型可调用工具。` +
+          (name.startsWith('launcher_')
+            ? '启动器族已登记的 27 枚见 tools/list（只读 13 + 生命周期/写 14，档位 privileged、第四张表精确名批准）；' +
+              '剩下的是对话框即授权（launcher_pick_*）、信任授予（launcher_trust_executable）、' +
+              'OS shell（launcher_instance_open_folder）、导出法定通道（launcher_log_export / launcher_save_export）、' +
+              '输入件绝对路径（launcher_content_plan / launcher_save_import / launcher_project_extract）、' +
+              'adapter 编译载荷（launcher_instance_create）与宿主未落地的 launcher_runtime_* 一族，' +
+              '逐条理由见 MCP_DEFERRED_GAP_NOTES。'
+            : '写类 / 危险动作不经 MCP 擅自开放执行（需宿主授权面）。'),
       );
     }
     throw new McpFailure('NOT_WIRED', `工具 ${name} 未接线：宿主未提供该只读真源（不静默、不造假实现）`);
