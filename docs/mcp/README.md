@@ -365,6 +365,66 @@ B3 批之后**观察件第一次真的存在**，于是这一面从「只能承�
 `recheck:null` 的 `false` 是"窗外，监视事件流没报到改动"。复核侧第三张账容量沿用
 `CHANGE_LEDGER_CAPACITY`，溢出 `dropped` / `truncated` 可见。
 
+### 5.11 检索引擎墙的分片续取（B16＝dev `586eafc7`）
+
+`search.all` / `workspace.searchAll` 过去只有一句话：「触墙了，前 5,000 条给你，`knownTotal:false`」。
+B16 把这堵墙变成**可续取**——但开关是显式的，旧行为逐字保留：
+
+- **入参**＝`resumeBySlice:true`（不给 ⇒ 仍是旧的触墙三件套，且没有分片账）。本批**零新增工具名**，
+  分片续取只是既有检索面的入参形态。该入参现已进两枚面的 schema 与 B11 取用对照表（`fc516b0a` / `6637a93e`），
+  但它一度只活在腿里——那段事故与教训见 §5.12 末段。
+- **计划怎么切**：一趟整棵树枚举拿到清单，按**深度 1 目录**分组，小目录整片走、大目录组内再按
+  ≤64 枚文件根切片的（散文件同样按硬上限切多条，绝不静默并片）；片与片**两两不相交**（嵌套根逐条排除、
+  隐藏条目不进计划、按 `label` 自定序，不赌 `walkDir` 的返回序）。分片数超硬上限（65 片）⇒
+  显式 `INVALID_ARGS` + 分批指引，绝不静默少一片。
+- **游标仍是 B1 那一份**：快照指纹失配（翻页途中新增文件）⇒ 从第 0 片第 0 条重发，**绝不与旧页拼接**；
+  只改正文不改清单那种改动，本腿在别片察觉不到，`prefixReverified` 如实标注重扫范围。
+- **账目字段**逐页可见：`planSlices` / `sliceIndex` / `sliceTotal` / `slicesRun` / `perSliceTruncated` /
+  `prefixReverified` / `walkComplete` / `knownTotal` / `totalScope`。任何空页必须当场按墙出声，
+  不出现「空页 + `hasMore:true`」。
+- **`knownTotal` 只有单片计划才许转 `true`**（`totalScope:"project"`）。多片即使走完也只交代
+  「片走完了、每片都没触墙 ⇒ 命中集可自证无重无漏」，**不交代总量**：本腿游标里没有跨片累加器，
+  各片 total 相加不等于引擎会给出的真值（实测闸下集合是调度产物）。多片末态继续
+  `knownTotal:false` + 理由点名「累加器」，`walkComplete:true` 是「客户端逐页 `sliceTotal` 相加即真值」
+  这句话的凭证（`totalScope:"slice"`）。
+- **判据侧的一条硬教训**（红过一整批）：解析式真值的 `path` 半边必须与实现走**同一枚投影腿**
+  `toRelativePath`——旧面 hits.path 就是它（反斜杠投影时归成正斜杠），判据里自己抄一份
+  `path.slice(ROOT.length+1)` 会得到「两边各 6,000 条但成员全错位」这种最难看的红。
+- **仍修不掉的那堵墙**：单文件命中 > `SEARCH_PER_FILE_CAP`（500，`src-tauri/src/lib.rs:2671`）——分片
+  切不到文件内部，`search_tests.rs:2030` 那条结论六把它钉成「分片救不了」；B18 正在给内核加 additive
+  续取凭据。另外：引擎闸下命中集的不可复现只由 Rust `wall_*` 用例承担（MCP 腿全程假注入）。
+
+读数：合并树 MCP 定向 **23 文件 632 passed / 1 skipped**、全量 `cargo test --lib` **432 / 0 / 8**、
+`mcp::tests` 109、conformance 54/0、ps10 197 文件 / 3395 KB、inventory 能力面读数零变化（tools 77）。
+
+### 5.12 入参严格化：未知键当场拒收（B11＝dev `fc516b0a` + `6637a93e`）
+
+以前 MCP 面对未知入参的态度是「照收并静默忽略」——`problems.diagnostics` 挂了四枚在册却不生效的别名，
+模型以为自己在改页大小，其实按默认页跑。B11 把三张契约表（命令投影 / 具名工具 / 补齐面）**逐面**
+`additionalProperties:false`（现 74 处），未知键 ⇒ `INVALID_ARGS`，且回执必须：
+
+- **点名未知键** + 摊开该面的合法清单；
+- **指回最接近的合法名**：名字那条腿是归一化 Damerau-Levenshtein，阈值 `SCHEMA_SUGGEST_MAX_DISTANCE = 0.34`
+  **一个字没抬**（抬到 0.50 实测让「最接近合法名」从 188 组涨到 639 组，等于把无关名字推到模型眼前）；
+- 名字够不着时走**值形状证据**第二通道：未知键的**值**原样满足本面一枚「窄形状」`pattern`、且本面**唯一**命中才指回。
+  「窄」用 12 个普通参数词探子鉴别力度量（≥0.75 拒收才算证据）——`relPath` / `instanceId` 这类兜底形状
+  拒 0/12 不作证据，只有游标 `^[0-9a-f]{8}:\d{1,10}$` 拒 12/12；两枚同样窄的形状并列 ⇒ **沉默**；
+- 违规项有界如实报数（单次 ≤12 条），少报几条必须写在文案里。
+
+**等价性是硬要求**，严格化只能靠「旧别名同批建模」做到：`fs.readFile` 八枚旧别名与 `limit` 逐字同尺、
+`io.listDir` 零参＝改前默认页 500、`commands.list` 零参＝200（上限 500）、`fs.tree` 的 `maxEntries` 与
+`limit` 同尺、`workspace.searchAll` / `search.all` 的 `maxResults` 别名与裸 `offset` 照旧取用。
+在册却不生效的别名（那四枚）现在**显式拒收**，不再静默按默认页。
+启动器 9 枚 privileged 面只改形状：第三张表复验、确认闸、信任闸、下划线命名、嵌套 `items` 严格形态零改动。
+
+⚠ 这一批揭出一个**结构性洞**（已补声明，闸另批在跑）：B16 的分片开关 `resumeBySlice` 当时只写在腿里
+（`real-sources-io.ts` 读 `args?.['resumeBySlice']`），**没进 schema** ⇒ B11 的
+`additionalProperties:false` 一落地，真客户端发它就会当场被拒，而**两边的测试全绿**（B16 的 22 例走注入
+harness 直接叫腿，B11 的取用对照表是手抄的）。现 `fc516b0a` 已把这枚入参声明进两枚检索面、
+`6637a93e` 补进取用对照表，判据 2 从此盯得住它；**机械化的双向漂移闸**（从腿源码扫取用名 ↔ 对账 properties，
+两个方向漏了都红，外加一条真走注册表校验层的通路用例）＝B19 在跑。写进这里是因为这形态会复发：
+凡「能力做在腿里、schema 里看不见」，严格化落地那天就是功能对客户端不可达那天。
+
 ## 6. tier 与授权模型
 
 `McpTier = 'read' | 'edit' | 'privileged'`；会话形状（冻结契约 v1）：
