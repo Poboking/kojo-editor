@@ -9,30 +9,33 @@
  *    主题（dark / light / mint）重定义 token 后自动翻色，这里不写任何裸色值。
  * ==================================================================== */
 
-/* ------------------------------ 整节骨架 ------------------------------ */
+/* ------------------------------ 整节骨架 ------------------------------
+ * UI-08/09：本节不再是「卡片套卡片」。整页只保留设置宿主那层玻璃，节与节之间
+ * 用组间 hairline（同 `.settings-group + .settings-group` 的语法）分隔；
+ * `.settings-mcp` 不再自带 padding，正文左轴落回 `.settings-body` 的 12px 基准
+ * （节内 padding 取 `--space-3`，与 `.settings-row` 同尺）。 */
 
 .settings-mcp {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: var(--space-4);
-  padding: var(--space-4);
-  max-width: 1040px;
-  box-sizing: border-box;
+  gap: var(--space-3);
+  /* UI-32：断点按**宿主宽度**判（container query），不按视口——宿主是
+     min(920px, 94vw)，视口 800px 时宿主早已装不下三卡，媒体查询却还醒着。 */
+  container-type: inline-size;
 }
 
 .settings-ai,
 .settings-mcp > section {
   min-width: 0;
-  padding: var(--space-4) var(--space-5);
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-1);
+  padding: var(--space-3);
 }
 
-.settings-mcp > section + section,
-.settings-mcp > section + p {
-  margin-top: 0;
+.settings-mcp > section ~ section {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-mcp > p {
+  margin: 0;
 }
 
 .settings-mcp h3,
@@ -180,13 +183,9 @@
   min-width: 0;
   padding: var(--space-3);
   background: var(--surface-sunken);
-  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  transition: border-color var(--dur-1) var(--ease-out);
-}
-
-.settings-ai-metric:hover {
-  border-color: var(--border-strong);
+  /* UI-08/30：子卡不描边，井面靠 `--well-*` 给「凹下去」的受光与贴地影。 */
+  box-shadow: var(--well-edge), var(--well-shadow);
 }
 
 .settings-ai-metric-label {
@@ -205,7 +204,7 @@
 
 .settings-ai-metric-hint {
   color: var(--fg-dim);
-  font-size: var(--fs-0);
+  font-size: var(--fs-1); /* UI-28：说明文字 12px；11px 只留给徽标与计数 */
   line-height: 1.55;
 }
 
@@ -215,8 +214,8 @@
   margin-top: var(--space-4);
   padding: var(--space-3) var(--space-4);
   background: var(--surface-sunken);
-  border: 1px solid var(--border);
   border-radius: var(--radius-md);
+  box-shadow: var(--well-edge), var(--well-shadow);
 }
 
 .settings-ai-onboard-head {
@@ -291,8 +290,9 @@
   min-width: 0;
   margin-top: var(--space-3);
   padding: var(--space-2) var(--space-3);
+  /* UI-26：路径胶囊——实线 + 输入井底，不再是「像 disabled 输入框」的虚线框。 */
   background: var(--input-bg);
-  border: 1px dashed var(--border);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
 }
 
@@ -346,7 +346,7 @@
 .settings-ai-onboard-foot {
   margin: var(--space-3) 0 0;
   color: var(--fg-dim);
-  font-size: var(--fs-0);
+  font-size: var(--fs-1); /* UI-28 */
   line-height: 1.6;
 }
 
@@ -457,6 +457,7 @@
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   font-size: var(--fs-1);
+  line-height: 1.55; /* UI-34 后由本类自持（原靠外溢规则供给） */
 }
 
 .settings-ai-client-list code {
@@ -516,7 +517,12 @@
   margin-bottom: var(--space-2);
 }
 
-.settings-mcp > section ul {
+/* UI-34：行清单选择器收窄成直子（`> section > ul`），不再外溢命中
+   `.settings-ai-client-list`（它隔着一层 `.settings-ai-clients` div）——
+   该类的自有声明从此真正生效。常驻可写根的清单嵌在自己的子 section 里、
+   不接直子规则，单独点名（两条规则各有命中对象，无死规则）。 */
+.settings-mcp > section > ul,
+.settings-mcp .mcp-approve-roots ul {
   display: grid;
   gap: var(--space-1);
   margin: 0 0 var(--space-3);
@@ -524,7 +530,8 @@
   list-style: none;
 }
 
-.settings-mcp > section ul > li {
+.settings-mcp > section > ul > li,
+.settings-mcp .mcp-approve-roots ul > li {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -553,14 +560,14 @@
   margin-top: var(--space-3);
   padding: var(--space-3);
   background: var(--surface-sunken);
-  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
+  box-shadow: var(--well-edge), var(--well-shadow);
 }
 
 .settings-mcp .mcp-approve-roots-hint,
 .settings-mcp .mcp-approve-roots-note {
   color: var(--fg-dim);
-  font-size: var(--fs-0);
+  font-size: var(--fs-1); /* UI-28 */
   line-height: 1.6;
 }
 
@@ -660,17 +667,9 @@
   cursor: not-allowed;
 }
 
-@media (max-width: 760px) {
-  .settings-mcp {
-    padding: var(--space-2);
-    gap: var(--space-3);
-  }
-
-  .settings-ai,
-  .settings-mcp > section {
-    padding: var(--space-3);
-  }
-
+/* UI-32：窄档按容器（= 本节宿主）宽度判，阈值 720px ≈ 视口 760px 时的宿主宽
+   （94vw × 760 ≈ 714）。窗口再窄，塌单列与页头纵排跟着**内容宽度**走。 */
+@container (width < 720px) {
   .settings-ai-metrics {
     grid-template-columns: minmax(0, 1fr);
   }
