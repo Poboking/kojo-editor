@@ -183,6 +183,8 @@ export function resolvePinnedRow(gateId, rows, fp, live, candidates) {
   const badFields = rows.flatMap((r) => unknownPinFields(r.fp).map((k) => `${r.label} 行：字段名 ${k} 不在指纹字段表里`));
   const matched = rows.find((r) => matchesFingerprint(fp, r.fp));
   if (matched && badFields.length === 0) return { ok: true, row: matched, message: '' };
+  // 候选遍历只在**红**的时候发生（一次全盘指纹要走上万个文件，不该为绿的路径付钱）。
+  const list = typeof candidates === 'function' ? candidates() : candidates;
   const lines = [];
   lines.push(`【语料盘指纹不符】${gateId}`);
   if (badFields.length > 0) lines.push(`  登记行字段名拼错：\n${badFields.map((s) => `    - ${s}`).join('\n')}`);
@@ -193,9 +195,9 @@ export function resolvePinnedRow(gateId, rows, fp, live, candidates) {
   for (const r of rows) {
     lines.push(`    · ${r.label} ⇒ fp{${Object.entries(r.fp).map(([k, v]) => `${k}:${v}`).join(', ')}} 期望{${formatReadings(r.expect)}}`);
   }
-  if (candidates && candidates.length > 0) {
+  if (list && list.length > 0) {
     lines.push('  盘上其它候选：');
-    for (const c of candidates) lines.push(`    · ${c.dir} ⇒ ${formatFingerprint(c.fp)}`);
+    for (const c of list) lines.push(`    · ${c.dir} ⇒ ${formatFingerprint(c.fp)}`);
   }
   lines.push('  处理：这不是 skip 条件，也不是放宽阈值的理由。');
   lines.push('    若这份盘就是当前基准 ⇒ 用上面「当前盘实测读数」在本闸的登记表新增一行（fp + expect 都取实测）；');

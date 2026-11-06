@@ -43,7 +43,7 @@ export declare function resolvePinnedRow<R>(
   rows: readonly PinnedRow<R>[],
   fp: CorpusFingerprint,
   live?: unknown,
-  candidates?: readonly CandidateWithFingerprint[],
+  candidates?: readonly CandidateWithFingerprint[] | (() => readonly CandidateWithFingerprint[]),
 ): PinnedResolution<R>;
 export declare function savCandidatesReadout(candidates: readonly CandidateWithFingerprint[]): string;
 export declare function assertCorpusDir(dir: string): unknown;

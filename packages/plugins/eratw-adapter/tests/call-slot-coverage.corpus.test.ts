@@ -20,6 +20,12 @@ import type { CharaInfo, ConventionCheckContext, ErbFile, ErbFunctionRef, ErbInd
 import { parseErbText } from '@kojo/plugin-erb-parser';
 import { loadEratwCallProtocol } from '../src/call-protocol';
 import { createCallSlotCoverageRule } from '../src/conventions';
+import {
+  corpusFingerprint,
+  discoverCorpusFingerprints,
+  resolvePinnedRow,
+  type PinnedRow,
+} from '../../../../tools/corpus-fingerprint.mjs';
 
 const SMOKE = process.env.KOJO_SMOKE_PROJECT;
 const silentLog: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
@@ -33,6 +39,23 @@ function walk(dir: string, out: string[] = []): string[] {
   }
   return out;
 }
+
+interface CallSlotReadings {
+  hits: number;
+}
+
+/**
+ * 登记表（每枚盘一行；`fp` 是那份盘的内容指纹，`label` 只是人话注记、不参与匹配）。
+ * - `digest cddca01d8d2c`：2026-10-11 取证那份 4.980 汉化整合版内容 ⇒ 命中 36（本文件头注的原始读数）。
+ * - 其余在盘版本 ⇒ 未登记的盘一律红，红消息里带该盘实测命中数供新增一行。
+ */
+const CALL_SLOT_PINNED: readonly PinnedRow<CallSlotReadings>[] = [
+  {
+    label: 'digest cddca01d8d2c（erb 4,385 / erh 157 / als 19）= 2026-10-11 取证的 4.980 汉化整合版内容',
+    fp: { erb: 4385, erh: 157, als: 19, digest: 'cddca01d8d2c' },
+    expect: { hits: 36 },
+  },
+];
 
 describe.skipIf(!SMOKE)('协议覆盖校验规则 —— 真实语料基线', () => {
   it('口上域全量：覆盖规则命中数与结构稳定', async () => {
@@ -71,8 +94,19 @@ describe.skipIf(!SMOKE)('协议覆盖校验规则 —— 真实语料基线', ()
       message: string;
     }[];
 
-    // 基线：36 条，全部 warning 且形如「数值槽 声明 1 / 转发 0」。
-    expect(issues).toHaveLength(36);
+    // 基线：**按盘登记**（2026-11-06 指纹批）。一行 = 一份内容指纹的盘 + 那份盘上实测的命中数。
+    // 匹配只走指纹（`tools/corpus-fingerprint.mjs`，认内容不认目录名）；登记表外的盘 ⇒ **红**，
+    // 红消息带「期望指纹 / 当前盘指纹 / 当前盘实测命中数」，不 skip、不放宽。
+    const gate = resolvePinnedRow(
+      '口上域全量：覆盖规则命中数（call-slot-coverage.corpus.test.ts）',
+      CALL_SLOT_PINNED,
+      corpusFingerprint(root),
+      { hits: issues.length, kojoFiles: files.size, functionNames: byName.size },
+      () => discoverCorpusFingerprints(),
+    );
+    expect(gate.ok, gate.message).toBe(true);
+
+    expect(issues).toHaveLength(gate.row?.expect.hits);
     expect(issues.every((i) => i.severity === 'warning')).toBe(true);
     expect(issues.every((i) => i.message.includes('数值槽 声明 1 / 转发 0'))).toBe(true);
     // 官方模板 ORTHODOX_K49 亦在其列（说明这是**口上模板**层面的既有约定，而非孤例）

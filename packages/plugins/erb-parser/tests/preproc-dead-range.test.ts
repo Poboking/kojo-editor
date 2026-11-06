@@ -18,6 +18,12 @@ import { describe, expect, it } from 'vitest';
 import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { parseErbText } from '../src/scanner';
 import { collectPreprocDeadRanges, preprocMarkerAt } from '../src/structure';
+import {
+  corpusFingerprint,
+  discoverCorpusFingerprints,
+  resolvePinnedRow,
+  type PinnedRow,
+} from '../../../../tools/corpus-fingerprint.mjs';
 
 const lines = (...rows: string[]): string => rows.join('\n');
 const NONE: ReadonlySet<string> = new Set();
@@ -164,6 +170,30 @@ function dialectFiles(root: string): string[] {
   return out.sort();
 }
 
+/**
+ * **按盘钉数登记表**（2026-11-06 指纹批）：一行 = 一份语料盘 + 那份盘上的实测读数。
+ * 匹配只走**内容指纹**（`tools/corpus-fingerprint.mjs`：逐扩展名计数 + 相对路径|字节数摘要），
+ * `label` 只给人看——盘改名不影响判据，指纹不符的盘**一律红**（不 skip、不放宽），
+ * 红消息里同时给出「期望指纹 / 当前盘指纹 / 当前盘实测读数」，登记新行不用再跑一遍猜。
+ *
+ * 历史口径不变：钉值是「换代 = 重取证」那批（2026-11-02）留下的，只是从"单盘写死"升级成"多盘登记"。
+ */
+interface A5Readings {
+  ranges: number;
+  deadLines: number;
+  deadFiles: number;
+  markers: [string, number][];
+}
+
+const A5_PINNED: readonly PinnedRow<A5Readings>[] = [
+  {
+    // 2026-11-02 取证行（原写死值 `ranges 40 / deadLines 393 / deadFiles 26`）。
+    label: 'digest cddca01d8d2c（erb 4,385 / erh 157 / als 19）= 2026-11-02 取证那份 4.980 内容',
+    fp: { erb: 4385, erh: 157, als: 19, digest: 'cddca01d8d2c' },
+    expect: { ranges: 40, deadLines: 393, deadFiles: 26, markers: [['[IF DEBUG]', 39], ['[IF NDEBUG]', 1]] },
+  },
+];
+
 describe('A5 · 被裁支区间 × 真语料', () => {
   it.skipIf(!SMOKE)(
     '定义集走生产扫描路径；压下的每一支都必须真的没有 #DEFINE',
@@ -203,16 +233,29 @@ describe('A5 · 被裁支区间 × 真语料', () => {
         }
       }
 
-      // 规模闸（**2026-11-02 语料换代重取证**，eraTW 4.980 SANYOUSEI 重打包版：`[IF DEBUG]`
-      // 39 处 + `[IF NDEBUG]` 1 处 / 393 行 / 26 文件；钉值逐区判据闸同轮全过——行号不越界、
-      // 被压宏不在定义集）。旧钉 1/1/1 是 eraNAS 盘时代（A5 批 2026-10-28）的读数；
-      // 换代 = 重取证，不是判据放松。
+      // 规模闸（**按盘登记**，2026-11-06 指纹批）：先算这份盘的实测数，再按指纹取该盘的期望。
+      // 登记表外的盘 ⇒ 红，且红消息里带着这份盘的实测数（= 它"该是多少"）。
+      const live: A5Readings = { ranges, deadLines, deadFiles, markers: [...markers] };
+      const gate = resolvePinnedRow(
+        'A5 · 被裁支区间 × 真语料（preproc-dead-range.test.ts）',
+        A5_PINNED,
+        corpusFingerprint(SMOKE!),
+        { ...live, defines: defines.size, dialectFiles: files.length },
+        () => discoverCorpusFingerprints(),
+      );
+      expect(gate.ok, gate.message).toBe(true);
+
       expect(defines.size).toBeGreaterThan(0);
-      expect({ ranges, deadLines, deadFiles }).toEqual({ ranges: 40, deadLines: 393, deadFiles: 26 });
-      expect([...markers]).toEqual([
-        ['[IF DEBUG]', 39],
-        ['[IF NDEBUG]', 1],
-      ]);
+      const exp = gate.row?.expect;
+      expect(
+        { ranges, deadLines, deadFiles },
+        `登记表行「${gate.row?.label}」的期望 vs 当前盘实测`,
+      ).toEqual({ ranges: exp?.ranges, deadLines: exp?.deadLines, deadFiles: exp?.deadFiles });
+      expect(markers.size, '被裁标记种类必须与登记表一致').toBe(exp?.markers.length);
+      for (const [marker, hits] of exp?.markers ?? []) {
+        expect(markers.get(marker), `标记 ${marker} 的命中数`).toBe(hits);
+      }
+      expect([...markers].sort()).toEqual([...(exp?.markers ?? [])].sort());
     },
   );
 });
