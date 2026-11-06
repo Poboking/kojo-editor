@@ -13,7 +13,7 @@ use crate::{
     is_utf16_bom_hit, literal_width_pattern, looks_binary, preview_window, run_search, scan_hits,
     scan_text, scan_text_flat, unfold_width, utf16_len, SearchFileDto, SearchMatchDto,
     SearchOptionsDto, SearchProgressPayload, SearchRequestDto, SearchResultDto, ELLIPSIS_UNIT,
-    SEARCH_PER_FILE_CAP,
+    SEARCH_HARD_CAP, SEARCH_PER_FILE_CAP,
 };
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -2452,7 +2452,6 @@ fn resume_pages_under_the_leg_page_math_enumerate_one_dense_file_exactly() {
     let truth = resume_expected_seq(&file, hits);
 
     let mut pages: Vec<String> = Vec::new();
-    let let mut_offset = 0usize;
     let mut offset = 0usize;
     let mut calls = 0usize;
     let mut last_truncated = true;
@@ -2469,12 +2468,17 @@ fn resume_pages_under_the_leg_page_math_enumerate_one_dense_file_exactly() {
             Some(window),
         ));
         assert!(
-            res.files.iter().all(|f| f.matches.len() <= SEARCH_PER_FILE_CAP),
+            res.files
+                .iter()
+                .all(|f| f.matches.len() <= SEARCH_PER_FILE_CAP),
             "第 {calls} 次调用：每文件返回仍 ≤ 单文件上限"
         );
         let seq = resume_seq(&res);
         let page: Vec<String> = seq.iter().skip(in_segment).take(limit).cloned().collect();
-        assert!(!(page.is_empty() && res.truncated), "空页还带 truncated ⇒ 腿会翻出「空页 + hasMore:true」");
+        assert!(
+            !(page.is_empty() && res.truncated),
+            "空页还带 truncated ⇒ 腿会翻出「空页 + hasMore:true」"
+        );
         last_truncated = res.truncated;
         offset += page.len();
         pages.extend(page);
@@ -2483,8 +2487,12 @@ fn resume_pages_under_the_leg_page_math_enumerate_one_dense_file_exactly() {
         }
     }
     assert_eq!(pages.len(), hits, "逐页拼接的条数即真值条数");
-    assert_eq!(pages, truth, "腿的取页算术与真引擎合成后：逐条同序、无重、无漏");
-    assert_eq!(new HashSet::<String>::from_iter(pages.iter().cloned()).len(), hits);
+    assert_eq!(
+        pages, truth,
+        "腿的取页算术与真引擎合成后：逐条同序、无重、无漏"
+    );
+    let uniq: HashSet<String> = pages.iter().cloned().collect();
+    assert_eq!(uniq.len(), hits);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
