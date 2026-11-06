@@ -148,27 +148,33 @@ const WITH_TRAILING_COMMENT: readonly Case[] = [
 ];
 
 /**
- * TRY 系九枚（工包 D 的中性显示形）。
+ * TRY 系开块档（工包 D 的中性显示形）。
  *
- * 名单 = `sugar-ident.ts` 的 `TRY_CATCH_OPEN`（六枚，配 `CATCH`）∪ `TRY_LIST_OPEN`
- * （三枚，配 `ENDFUNC`）。写形已由工包 F 落地（`试探 原形 <记号> <原文>` ⇒ 词形已登记进
+ * 名单 = `sugar-ident.ts` 派生的 `TRY_CATCH_OPEN`（**八枚**，配 `CATCH`，真源按引擎 funcMatch
+ * 补了 `TRYCJUMPSTR` / `TRYCCALLSTR`）∪ `TRY_LIST_OPEN`（三枚，配 `ENDFUNC`）= **十一枚**。
+ * 写形已由工包 F 落地（`试探 原形 <记号> <原文>` ⇒ 词形已登记进
  * `KEYWORDS`，通路见 `lexer.ts` 的 `parseTryStatement`，逐字节验收见 `try-family.roundtrip.test.ts`）。
  * 钉值刻意写成 `试探 原形 <记号> <原文>`：**记号逐字回显**（义项档位不替读者下结论）、
  * 载荷逐字带走（不剥 `$`/`*`、不中文化运算符），与 `JUMP` / `DATAFORM` 同一判据。
  */
 const TRY_FAMILY: readonly Case[] = [
-  // 六枚：配 `出错处理`（CATCH）
+  // 八枚：配 `出错处理`（CATCH）
   ['TRYCGOTO *先, LABEL:目标', '试探 原形 TRYCGOTO *先, LABEL:目标'],
   ['TRYCJUMP *退路, LABEL:2', '试探 原形 TRYCJUMP *退路, LABEL:2'],
   ['TRYCCALL FOO(A, 1)', '试探 原形 TRYCCALL FOO(A, 1)'],
   ['TRYCGOTOFORM $GO_BACK, TARGET', '试探 原形 TRYCGOTOFORM $GO_BACK, TARGET'],
   ['TRYCJUMPFORM F_NAME(ARG)', '试探 原形 TRYCJUMPFORM F_NAME(ARG)'],
   ['TRYCCALLFORM GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)', '试探 原形 TRYCCALLFORM GMF_MAP_METHOD(CFLAG:ARG:現在位置, 1, "GETOUT", ARG)'],
+  // 2026-11-06 D03 批补上的两枚（引擎 `CALLS_Instruction(..., isTryCatch=true)` ⇒ 开块档）：
+  // 名字槽走**裸字符串表达式**（`STR_EXPRESSION`，运行时才解出标签），非 `FORM` 模板——
+  // 真语料 `ERB/SHOP関連/TEST.ERB:13` 即 `TRYCCALLSTR RESULTS`。回显逐字节带走，不剥不改。
+  ['TRYCCALLSTR RESULTS', '试探 原形 TRYCCALLSTR RESULTS'],
+  ['TRYCJUMPSTR RESULTS', '试探 原形 TRYCJUMPSTR RESULTS'],
   // 三枚：配 `函数结束`（ENDFUNC）
   ['TRYCALLLIST F1, F2', '试探 原形 TRYCALLLIST F1, F2'],
   ['TRYGOTOLIST *A, *B', '试探 原形 TRYGOTOLIST *A, *B'],
   ['TRYJUMPLIST FUNC(A)', '试探 原形 TRYJUMPLIST FUNC(A)'],
-  // 裸记号（无载荷）也给中性形：这九枚是**已知结构**，落兜底就是谎报"没读懂"
+  // 裸记号（无载荷）也给中性形：这批是**已知结构**，落兜底就是谎报"没读懂"
   ['TRYCGOTO', '试探 原形 TRYCGOTO'],
   ['TRYCALLLIST', '试探 原形 TRYCALLLIST'],
   // 变形：小写记号（名单按归一大写命中，回显用规范大写）
@@ -320,24 +326,24 @@ describe('ZH-C · 预处理行（#DIM / #DIMS / #GLOBAL / #LOCALSIZE / #LOCALSSI
 });
 
 /**
- * 工包 D · TRY 系九枚的**中性显示形**（`试探 原形 <记号> <原文>`）。
+ * 工包 D · TRY 系开块十一枚的**中性显示形**（`试探 原形 <记号> <原文>`）。
  *
  * 三条独立判据各挡一类越界：
  * - **读写同串**：显示形**就是**写形（工包 F 已把通路接上）——`试探` 登记进 `KEYWORDS`，
  *   把这串当 `.kojo` 源喂写侧，产物那一行与源 ERB 行逐字节相同（`try-family.roundtrip.test.ts` 验收本体）；
  * - **分界**：`statement.ts` 认领的**单行档**（`sugar-ident` 的 `TRY_SINGLE_LINE`：`TRYCALL` /
- *   `TRYCALLFORM` / `TRYJUMP` / `TRYGOTO` / `TRYGOTOFORM`，都不在九枚内）零改动——本层的名单是
+ *   `TRYCALLFORM` / `TRYJUMP` / `TRYGOTO` / `TRYGOTOFORM`，都不在这十一枚开块档内）零改动——本层的名单是
  *   `sugar-ident` 的两张**开块**集合，不做 `startsWith('TRY')` 那种粗匹配；
- * - **红线**：命中即与源行逐字不等（`停用 · 原文` 那一档的结构性自证，兜底形不再出现在这九枚上）。
+ * - **红线**：命中即与源行逐字不等（`停用 · 原文` 那一档的结构性自证，兜底形不再出现在这十一枚上）。
  */
-describe('工包 D · TRY 系九枚的中性显示形（显示形即写形）', () => {
+describe('工包 D · TRY 系开块十一枚的中性显示形（显示形即写形）', () => {
   it.each(TRY_FAMILY)('%s', (src, want) => {
     const got = show(src);
     expect(got, src).not.toBeNull();
     expect(got, src).not.toBe(src);
     expect(isVerbatimNativeLine(got ?? '', src), src).toBe(false);
     expect(got, src).toBe(want);
-    // 兜底形不再出现在这九枚上（装配层拿得到中文显示形就不会走 `未识别语句`）
+    // 兜底形不再出现在这批开块词上（装配层拿得到中文显示形就不会走 `未识别语句`）
     expect(localizeNativeLine({ content: src, indent: 0, lookup: LOOKUP }), src).not.toContain('未识别语句');
   });
 
@@ -369,12 +375,12 @@ describe('工包 D · TRY 系九枚的中性显示形（显示形即写形）', 
   });
 
   /**
-   * `TRYGOTO` / `TRYGOTOFORM`（引擎里的**单行语句**、不在这九枚内）归 `statement.ts` 的语句动词表：
+   * `TRYGOTO` / `TRYGOTOFORM`（引擎里的**单行语句**、不在这十一枚开块档内）归 `statement.ts` 的语句动词表：
    * 本层**照样弃权**（`show` 返 `null`、不给 `原形` 回显），但装配层不再走 `未识别语句` 兜底。
    * 归因读数由 `packages/kernel/tests/sugar-projection.corpus.test.ts` 的 `tryOther` 桶负责——
    * 该桶是**只降不升**的棘轮，本层交出认领面只会让它变薄。
    */
-  it('九枚之外的单行 TRY 归 statement；本层弃权但装配层不落兜底', () => {
+  it('开块档之外的单行 TRY 归 statement；本层弃权但装配层不落兜底', () => {
     for (const src of ['TRYGOTO *先', 'TRYGOTOFORM $GO_BACK, TARGET']) {
       expect(show(src), src).toBeNull();
       const got = localizeNativeLine({ content: src, indent: 0, lookup: LOOKUP });
@@ -385,20 +391,31 @@ describe('工包 D · TRY 系九枚的中性显示形（显示形即写形）', 
   });
 
   /**
-   * **名单同源**：显示面认领的记号 = `sugar-ident` 的 `TRY_CATCH_OPEN ∪ TRY_LIST_OPEN`（九枚），
+   * **名单同源**：显示面认领的记号 = `sugar-ident` 的 `TRY_CATCH_OPEN ∪ TRY_LIST_OPEN`
+   * （八枚配 `CATCH` + 三枚配 `ENDFUNC` = **十一枚**，两张集合都由真源 `openKindsForPair` 派生）。
    * 一张不多一张不少——真源加了第十枚而本层没跟上，这条立刻显形（而不是让兜底悄悄变厚）。
    */
-  it('认领的记号恰为 sugar-ident 那九枚（名单同源，不多抄一枚也不漏一枚）', () => {
-    const nine = [...new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN])].sort();
-    expect(nine).toHaveLength(9);
-    for (const kind of nine) {
+  it('认领的记号恰为 sugar-ident 那十一枚（名单同源，不多抄一枚也不漏一枚）', () => {
+    const openBlock = [...new Set([...TRY_CATCH_OPEN, ...TRY_LIST_OPEN])].sort();
+    expect(openBlock, 'TRY_CATCH_OPEN 补到八枚后，开块档 = 8 + 3 = 11').toHaveLength(11);
+    // 逐枚显示形实证（不是只数个数）：每枚都走 `试探 原形 <记号> <原文>` 的记号回显
+    for (const kind of openBlock) {
       const src = `${kind} FOO(A, 1)`;
       expect(show(src), src).toBe(`试探 原形 ${kind} FOO(A, 1)`);
     }
-    // 单行档（含本批新认领的 `TRYGOTO` / `TRYGOTOFORM`）必须**不在**本层名单里
-    // ——防止有人图省事把 `TRY_NEUTRAL_OPEN` 改成 startsWith('TRY') 顺手把语句层那批抢过来
-    for (const kind of ['TRYGOTO', 'TRYGOTOFORM', 'TRYCALL', 'TRYCALLFORM', 'TRYJUMP']) {
-      expect(nine).not.toContain(kind);
+    // 本批新补的两枚开块词（引擎 `isTryCatch=true`）必须**在**名单里，且给中性形——
+    // 这正是 D03 漏词时把 `TEST.ERB:13-17` 合法块误报两条的根因，此处显式钉住。
+    for (const kind of ['TRYCCALLSTR', 'TRYCJUMPSTR']) {
+      expect(openBlock, `${kind} 归开块档（配 CATCH），不许被剪回旧九枚`).toContain(kind);
+      expect(show(`${kind} RESULTS`), kind).toBe(`试探 原形 ${kind} RESULTS`);
+    }
+    // 单行档（含本批新认领的 `TRYGOTO` / `TRYGOTOFORM`）必须**不在**本层开块名单里
+    // ——防止有人图省事把 `TRY_NEUTRAL_OPEN` 改成 startsWith('TRY') 顺手把语句层那批抢过来。
+    // `TRYCALLSTR` / `TRYJUMPSTR` 是**近旁单行词**（引擎 `isTryCatch=false`，与开块的 `*C*STR` 只差一位）：
+    // 它们既不在 `TRY_SINGLE_LINE`（本层动词表未认领 ⇒ 落 tryOther 棘轮桶，见下方"我故意没做的口子"），
+    // 也**绝不能**混进开块档——这条把"档位是判据、`*STR` 前缀不是"钉死。
+    for (const kind of ['TRYGOTO', 'TRYGOTOFORM', 'TRYCALL', 'TRYCALLFORM', 'TRYJUMP', 'TRYCALLSTR', 'TRYJUMPSTR']) {
+      expect(openBlock).not.toContain(kind);
     }
   });
 });
