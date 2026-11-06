@@ -14,9 +14,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpFailure, createMcpCapabilityRegistry, type McpSessionScope } from '@kojo/mcp-host';
 import type { CommandEntry } from '../src/ui/commands';
 import {
+  assertMcpWriteDomain,
   createIoResourceData,
   createKernelIo,
   createRunSupplemental,
+  isWithinApprovedRoots,
   isWithinRoot,
   KOJO_RESOURCE_URIS,
   normalizeRoot,
@@ -53,6 +55,15 @@ const scope: McpSessionScope = {
   clientId: 'c1',
   tier: 'privileged',
   approvedRoots: ['D:/proj'],
+  approvedTools: [],
+};
+
+/** 写腿专用会话：第四张表 approvedRoots 是**项目根内相对路径**（Rust build_scope 同尺）。 */
+const writeScope: McpSessionScope = {
+  sessionId: 's1',
+  clientId: 'c1',
+  tier: 'edit',
+  approvedRoots: ['docs'],
   approvedTools: [],
 };
 
@@ -146,6 +157,11 @@ function fakeDeps(over: Partial<McpSemanticDeps> = {}): McpSemanticDeps {
 interface FakeKernelOverrides {
   readonly current?: unknown;
   readonly walkDir?: (path: string, opts?: Record<string, unknown>) => Promise<unknown[]>;
+  readonly exists?: (path: string) => Promise<boolean>;
+  readonly createFileExclusive?: (path: string) => Promise<boolean>;
+  readonly createDirExclusive?: (path: string) => Promise<boolean>;
+  readonly writeText?: (path: string, text: string, opts?: Record<string, unknown>) => Promise<void>;
+  readonly busEmit?: (name: string, payload: unknown) => void;
   readonly plugins?: unknown[];
   readonly linter?: { report?: () => unknown } | null;
   readonly slots?: readonly unknown[];
@@ -165,7 +181,13 @@ function fakeKernel(over: FakeKernelOverrides = {}): { kernel: McpKernelLike; bu
               charaIndex: new Map([[1, { no: 1, name: 'a' }]]),
             },
     },
-    io: { walkDir: over.walkDir ?? (async () => [{ name: 'a.kojo', path: 'D:\\proj\\a.kojo', isDirectory: false }]) },
+    io: {
+      walkDir: over.walkDir ?? (async () => [{ name: 'a.kojo', path: 'D:\\proj\\a.kojo', isDirectory: false }]),
+      ...(over.exists ? { exists: over.exists } : {}),
+      ...(over.createFileExclusive ? { createFileExclusive: over.createFileExclusive } : {}),
+      ...(over.createDirExclusive ? { createDirExclusive: over.createDirExclusive } : {}),
+      ...(over.writeText ? { writeText: over.writeText } : {}),
+    },
     plugins: { list: () => over.plugins ?? [{ id: 'p1', version: '1', status: 'active' }, { id: 'p2', version: '1', status: 'inactive', missing: ['k.x'] }] },
     services: { tryGet: <T = unknown>(_key: string) => (over.linter ?? undefined) as T | undefined },
     bus: {
@@ -173,6 +195,7 @@ function fakeKernel(over: FakeKernelOverrides = {}): { kernel: McpKernelLike; bu
         busNames.push(name);
         return () => {};
       },
+      ...(over.busEmit ? { emit: over.busEmit } : {}),
     },
     slots: { query: () => over.slots ?? [] },
   };
@@ -406,16 +429,256 @@ describe('runSupplemental：只读 IO 腿', () => {
   });
 });
 
-describe('runSupplemental：写类与危险动作保持 NOT_WIRED', () => {
+describe('runSupplemental：仍 NOT_WIRED 的写类与危险动作', () => {
   const { kernel } = fakeKernel();
   const sup = createRunSupplemental(fakeIoDeps(kernel));
+  // fileTree.create / fileTree.update 已接线（见「写腿」describe）；remove/rename/quickFix 仍缺
+  // 宿主授权面 / 稳定 actionId + apply 通道，显式 NOT_WIRED。
   const NOT_WIRED_NAMES = [
-    'fileTree.create', 'fileTree.update', 'fileTree.remove', 'fileTree.rename',
+    'fileTree.remove', 'fileTree.rename',
     'problems.quickFix', 'diff.compare', 'state.replay', 'preview.document',
     'remove_path', 'launcher_start', 'market_install', '完全未知',
   ];
   it.each(NOT_WIRED_NAMES)('%s ⇒ 显式 NOT_WIRED（写明缺什么，不造假实现）', async (name) => {
     await expect(sup(name, {}, scope)).rejects.toMatchObject({ code: 'NOT_WIRED' });
+  });
+
+  it('problems.quickFix 的 NOT_WIRED 文案写明缺什么（actionId 缺位 + apply 通道缺位）', async () => {
+    const { kernel: k } = fakeKernel();
+    const s = createRunSupplemental(fakeIoDeps(k));
+    await expect(s('problems.quickFix', { actionId: 'x', line: 1, column: 1 }, scope)).rejects.toThrow(
+      /actionId.*apply 通道|codeAction-apply/,
+    );
+  });
+});
+
+/* ------------------------------- 写腿（fileTree.create / fileTree.update） ------------------------------- */
+
+describe('第四张表 approvedRoots 复核（写闸一，MCP 侧）', () => {
+  it('前缀必须落在分隔符边界（/docs 不吃 /docs2）；大小写不敏感；等于根本身算域内', () => {
+    expect(isWithinApprovedRoots(['docs'], 'docs/a.txt')).toBe(true);
+    expect(isWithinApprovedRoots(['docs'], 'docs')).toBe(true);
+    expect(isWithinApprovedRoots(['docs'], 'docs2/a.txt')).toBe(false);
+    expect(isWithinApprovedRoots(['docs'], 'docsy.txt')).toBe(false);
+    expect(isWithinApprovedRoots(['Docs/Sub'], 'docs/sub/x.txt')).toBe(true);
+    expect(isWithinApprovedRoots(['a/b'], 'a/bc.txt')).toBe(false);
+    expect(isWithinApprovedRoots([], 'docs/a.txt')).toBe(false);
+  });
+
+  it('形态不合法的根防御性跳过（只收窄不减宽，fail-closed）', () => {
+    expect(isWithinApprovedRoots(['../evil'], 'evil/x.txt')).toBe(false);
+    expect(isWithinApprovedRoots(['C:/abs'], 'abs/x.txt')).toBe(false);
+    expect(isWithinApprovedRoots(['../evil', 'docs'], 'docs/x.txt')).toBe(true);
+  });
+
+  it('域外目标 ⇒ assertMcpWriteDomain 抛 WRITE_DISABLED；空表文案写明「没有任何已批准写根」', () => {
+    expect(() => assertMcpWriteDomain(['docs'], 'secret.txt')).toThrow(McpFailure);
+    expect(() => assertMcpWriteDomain(['docs'], 'secret.txt')).toThrow(/approvedRoots/);
+    expect(() => assertMcpWriteDomain([], 'docs/a.txt')).toThrow(/没有任何已批准写根/);
+    expect(() => assertMcpWriteDomain(['docs'], 'docs/a.txt')).not.toThrow();
+  });
+});
+
+describe('写腿：fileTree.create / fileTree.update（双闸叠加，走内核 io 既有写通道）', () => {
+  it('create file 带内容：独占创建 + writeText（既有保存语义）+ file.changed(add) 广播', async () => {
+    const createSpy = vi.fn(async () => true);
+    const writeSpy = vi.fn(async () => undefined);
+    const emitSpy = vi.fn();
+    const { kernel } = fakeKernel({ createFileExclusive: createSpy, writeText: writeSpy, busEmit: emitSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    const out = (await sup('fileTree.create', { relPath: 'docs/new.kojo', kind: 'file', content: 'hello' }, writeScope)) as Record<string, unknown>;
+    expect(out).toEqual({ path: 'docs/new.kojo', kind: 'file', created: true, contentChars: 5, refreshed: true });
+    expect(createSpy).toHaveBeenCalledWith('D:/proj/docs/new.kojo');
+    expect(writeSpy).toHaveBeenCalledWith('D:/proj/docs/new.kojo', 'hello');
+    expect(emitSpy).toHaveBeenCalledWith('file.changed', { kind: 'add', path: 'D:/proj/docs/new.kojo' });
+  });
+
+  it('create file 空内容：独占创建后不再走 writeText（内容就是创建原语的空文件）', async () => {
+    const createSpy = vi.fn(async () => true);
+    const writeSpy = vi.fn(async () => undefined);
+    const { kernel } = fakeKernel({ createFileExclusive: createSpy, writeText: writeSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    const out = (await sup('fileTree.create', { relPath: 'docs/empty.txt', kind: 'file', content: '' }, writeScope)) as Record<string, unknown>;
+    expect(out).toMatchObject({ created: true, contentChars: 0 });
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it('create directory：独占建目录；content 入参显式拒绝（不静默吞掉）', async () => {
+    const createDirSpy = vi.fn(async () => true);
+    const emitSpy = vi.fn();
+    const { kernel } = fakeKernel({ createDirExclusive: createDirSpy, busEmit: emitSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    const out = (await sup('fileTree.create', { relPath: 'docs/sub', kind: 'directory' }, writeScope)) as Record<string, unknown>;
+    expect(out).toEqual({ path: 'docs/sub', kind: 'directory', created: true, refreshed: true });
+    expect(createDirSpy).toHaveBeenCalledWith('D:/proj/docs/sub');
+    expect(emitSpy).toHaveBeenCalledWith('file.changed', { kind: 'add', path: 'D:/proj/docs/sub' });
+    await expect(
+      sup('fileTree.create', { relPath: 'docs/sub', kind: 'directory', content: 'x' }, writeScope),
+    ).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    expect(createDirSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('create 幂等冲突语义：目标已存在 ⇒ TOOL_EXECUTION_FAILED，绝不覆盖（写原语零额外调用）', async () => {
+    const createSpy = vi.fn(async () => false);
+    const writeSpy = vi.fn(async () => undefined);
+    const emitSpy = vi.fn();
+    const { kernel } = fakeKernel({ createFileExclusive: createSpy, writeText: writeSpy, busEmit: emitSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    await expect(
+      sup('fileTree.create', { relPath: 'docs/exists.txt', kind: 'file', content: 'x' }, writeScope),
+    ).rejects.toMatchObject({ code: 'TOOL_EXECUTION_FAILED', message: expect.stringContaining('已存在') });
+    expect(writeSpy).not.toHaveBeenCalled();
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
+
+  it('create kind 非法 ⇒ INVALID_ARGS（写原语不触达）', async () => {
+    const createSpy = vi.fn(async () => true);
+    const { kernel } = fakeKernel({ createFileExclusive: createSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    await expect(sup('fileTree.create', { relPath: 'docs/x', kind: 'symlink' }, writeScope)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    await expect(sup('fileTree.create', { relPath: 'docs/x' }, writeScope)).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('update 成功：先 exists 判存在（true）⇒ writeText 全文替换 + file.changed(change) 广播', async () => {
+    const existsSpy = vi.fn(async () => true);
+    const writeSpy = vi.fn(async () => undefined);
+    const emitSpy = vi.fn();
+    const { kernel } = fakeKernel({ exists: existsSpy, writeText: writeSpy, busEmit: emitSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    const out = (await sup('fileTree.update', { relPath: 'docs/a.kojo', content: 'body\n' }, writeScope)) as Record<string, unknown>;
+    expect(out).toEqual({ path: 'docs/a.kojo', updated: true, textLength: 5, refreshed: true });
+    expect(existsSpy).toHaveBeenCalledWith('D:/proj/docs/a.kojo');
+    expect(writeSpy).toHaveBeenCalledWith('D:/proj/docs/a.kojo', 'body\n');
+    expect(emitSpy).toHaveBeenCalledWith('file.changed', { kind: 'change', path: 'D:/proj/docs/a.kojo' });
+  });
+
+  it('update 幂等：同内容重写两次都成功（writeText 两次调用，零改动快道是内核自己的语义）', async () => {
+    const writeSpy = vi.fn(async () => undefined);
+    const { kernel } = fakeKernel({ exists: async () => true, writeText: writeSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    for (let i = 0; i < 2; i += 1) {
+      const out = (await sup('fileTree.update', { relPath: 'docs/a.txt', content: 'same' }, writeScope)) as Record<string, unknown>;
+      expect(out).toMatchObject({ updated: true });
+    }
+    expect(writeSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('update 不存在 ⇒ TOOL_EXECUTION_FAILED（绝不静默改成 create 语义），writeText 零调用', async () => {
+    const writeSpy = vi.fn(async () => undefined);
+    const { kernel } = fakeKernel({ exists: async () => false, writeText: writeSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    await expect(
+      sup('fileTree.update', { relPath: 'docs/ghost.txt', content: 'x' }, writeScope),
+    ).rejects.toMatchObject({ code: 'TOOL_EXECUTION_FAILED', message: expect.stringContaining('不存在') });
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it('approvedRoots 外 ⇒ WRITE_DISABLED（写闸一先拦），写原语零触达；空表同样', async () => {
+    const createSpy = vi.fn(async () => true);
+    const writeSpy = vi.fn(async () => undefined);
+    const { kernel } = fakeKernel({ createFileExclusive: createSpy, exists: async () => true, writeText: writeSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    const outside: McpSessionScope = { ...writeScope, approvedRoots: ['other'] };
+    await expect(
+      sup('fileTree.create', { relPath: 'docs/x.txt', kind: 'file' }, outside),
+    ).rejects.toMatchObject({ code: 'WRITE_DISABLED', message: expect.stringContaining('写闸一') });
+    await expect(
+      sup('fileTree.update', { relPath: 'docs/a.txt', content: 'x' }, outside),
+    ).rejects.toMatchObject({ code: 'WRITE_DISABLED' });
+    const none: McpSessionScope = { ...writeScope, approvedRoots: [] };
+    await expect(
+      sup('fileTree.update', { relPath: 'docs/a.txt', content: 'x' }, none),
+    ).rejects.toMatchObject({ code: 'WRITE_DISABLED', message: expect.stringContaining('没有任何已批准写根') });
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it('路径逃逸 ⇒ INVALID_ARGS（写闸之前），写原语零触达', async () => {
+    const createSpy = vi.fn(async () => true);
+    const writeSpy = vi.fn(async () => undefined);
+    const { kernel } = fakeKernel({ createFileExclusive: createSpy, exists: async () => true, writeText: writeSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    await expect(
+      sup('fileTree.create', { relPath: '../escape.txt', kind: 'file' }, writeScope),
+    ).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    await expect(
+      sup('fileTree.update', { relPath: 'C:/boot.ini', content: 'x' }, writeScope),
+    ).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    await expect(
+      sup('fileTree.update', { relPath: 'a//b.txt', content: 'x' }, writeScope),
+    ).rejects.toMatchObject({ code: 'INVALID_ARGS' });
+    expect(createSpy).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
+  });
+
+  it('内核写域拒绝（WriteNotAllowedError）⇒ WRITE_DISABLED 透传（写闸二，正确行为不是缺陷）', async () => {
+    const notAllowed = (): Promise<boolean> => {
+      const err = new Error("这个位置在只读范围内，不能写入：D:/proj/docs/x.txt（要写就先在「只读」徽章处批准该目录）。");
+      err.name = 'WriteNotAllowedError';
+      return Promise.reject(err);
+    };
+    const writeNotAllowed = (): Promise<void> => {
+      const err = new Error("这个位置在只读范围内，不能写入：D:/proj/docs/a.txt（要写就先在「只读」徽章处批准该目录）。");
+      err.name = 'WriteNotAllowedError';
+      return Promise.reject(err);
+    };
+    const writeSpy = vi.fn(writeNotAllowed);
+    const { kernel } = fakeKernel({ createFileExclusive: notAllowed, exists: async () => true, writeText: writeSpy });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    await expect(
+      sup('fileTree.create', { relPath: 'docs/x.txt', kind: 'file' }, writeScope),
+    ).rejects.toMatchObject({ code: 'WRITE_DISABLED', message: expect.stringContaining('写闸二') });
+    await expect(
+      sup('fileTree.update', { relPath: 'docs/a.txt', content: 'x' }, writeScope),
+    ).rejects.toMatchObject({ code: 'WRITE_DISABLED', message: expect.stringContaining('内核写允许域') });
+  });
+
+  it('写原语其它失败原样上抛（registry 兜底包 TOOL_EXECUTION_FAILED，不洗码、不编造）', async () => {
+    const { kernel } = fakeKernel({
+      exists: async () => true,
+      writeText: async () => {
+        throw new Error('EIO: disk full');
+      },
+    });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    await expect(sup('fileTree.update', { relPath: 'docs/a.txt', content: 'x' }, writeScope)).rejects.toThrow('EIO: disk full');
+  });
+
+  it('缺写原语（测试假件 / 精简桥）⇒ NOT_WIRED，路径与域闸之后才报', async () => {
+    const sup = createRunSupplemental(fakeIoDeps(fakeKernel().kernel));
+    await expect(
+      sup('fileTree.create', { relPath: 'docs/x.txt', kind: 'file' }, writeScope),
+    ).rejects.toMatchObject({ code: 'NOT_WIRED', message: expect.stringContaining('createFileExclusive') });
+    await expect(
+      sup('fileTree.create', { relPath: 'docs/sub', kind: 'directory' }, writeScope),
+    ).rejects.toMatchObject({ code: 'NOT_WIRED', message: expect.stringContaining('createDirExclusive') });
+    await expect(
+      sup('fileTree.update', { relPath: 'docs/a.txt', content: 'x' }, writeScope),
+    ).rejects.toMatchObject({ code: 'NOT_WIRED' });
+    // 域外仍在 NOT_WIRED 之前拦下（闸序：路径 → 域 → 原语）。
+    const outside: McpSessionScope = { ...writeScope, approvedRoots: [] };
+    await expect(
+      sup('fileTree.create', { relPath: 'docs/x.txt', kind: 'file' }, outside),
+    ).rejects.toMatchObject({ code: 'WRITE_DISABLED' });
+  });
+
+  it('bus.emit 缺席 ⇒ 写照常成功、refreshed:false 如实标注（尽力刷新，不造第二套通道）', async () => {
+    const { kernel } = fakeKernel({ createFileExclusive: async () => true, writeText: async () => undefined });
+    const sup = createRunSupplemental(fakeIoDeps(kernel));
+    const out = (await sup('fileTree.create', { relPath: 'docs/x.txt', kind: 'file', content: 'a' }, writeScope)) as Record<string, unknown>;
+    expect(out).toMatchObject({ created: true, refreshed: false });
+  });
+
+  it('项目未打开 / 内核缺席 ⇒ RESOURCE_UNAVAILABLE（不静默）', async () => {
+    const closed = createRunSupplemental(fakeIoDeps(fakeKernel({ current: null }).kernel));
+    await expect(
+      closed('fileTree.update', { relPath: 'docs/a.txt', content: 'x' }, writeScope),
+    ).rejects.toMatchObject({ code: 'RESOURCE_UNAVAILABLE' });
+    const noKernel = createRunSupplemental(fakeIoDeps(null));
+    await expect(
+      noKernel('fileTree.create', { relPath: 'docs/a.txt', kind: 'file' }, writeScope),
+    ).rejects.toMatchObject({ code: 'RESOURCE_UNAVAILABLE' });
   });
 });
 
@@ -834,6 +1097,34 @@ describe('buildRealMcpSources / installRealMcpSources（组装 → wiring 登记
     await expect(reg.callTool('fileTree.remove', { relPath: 'a.txt' }, approvedScope)).rejects.toMatchObject({
       code: 'NOT_WIRED',
     });
+  });
+
+  it('端到端：写腿 fileTree.update 经 registry 全链路（tier 闸 → schema → 写闸 → 假写原语）', async () => {
+    const writeSpy = vi.fn(async () => undefined);
+    const existsSpy = vi.fn(async (p: string) => p === 'D:/proj/docs/a.txt');
+    const { kernel } = fakeKernel({ exists: existsSpy, writeText: writeSpy, busEmit: vi.fn() });
+    await installRealMcpSources(realHost(kernel), {
+      invoke: async () => null,
+      searchInFiles: NO_SEARCH,
+      getMonaco: () => fakeMonaco(),
+      getWorkspace: () => fakeWorkspace(),
+      getLegs: () => fakeLegs(),
+      getFeaturesService: () => null,
+    });
+    const wiring = await import('../src/mcp/wiring');
+    const reg = createMcpCapabilityRegistry(wiring.createMcpHostDeps());
+    // 只读会话 ⇒ registry tier 闸先拦（写腿根本不可见执行机会）。
+    await expect(
+      reg.callTool('fileTree.update', { relPath: 'docs/a.txt', content: 'body' }, { ...writeScope, tier: 'read' }),
+    ).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+    // edit 会话 + 域内目标 ⇒ 全链路写到假写原语。
+    const out = (await reg.callTool('fileTree.update', { relPath: 'docs/a.txt', content: 'body' }, writeScope)) as Record<string, unknown>;
+    expect(out).toMatchObject({ path: 'docs/a.txt', updated: true, textLength: 4 });
+    expect(writeSpy).toHaveBeenCalledWith('D:/proj/docs/a.txt', 'body');
+    // edit 会话 + 域外目标 ⇒ WRITE_DISABLED（第四张表复核，结构性错误透传到 registry 面）。
+    await expect(
+      reg.callTool('fileTree.update', { relPath: 'secret.txt', content: 'x' }, writeScope),
+    ).rejects.toMatchObject({ code: 'WRITE_DISABLED' });
   });
 
   it('resource 全链路：registry.readResource(active-document) 拿真投影', async () => {

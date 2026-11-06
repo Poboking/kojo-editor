@@ -16,8 +16,17 @@
  *   resolve-后前缀复核（纵深，fail-closed）。绝不给 MCP 暴露任意目标路径参数。
  * - 读文件一律有截断上限 + 显式 `truncated` 标记；接不到真源一律显式
  *   `NOT_WIRED` / `RESOURCE_UNAVAILABLE`（铁律 4：不静默、不伪造读数、不空串冒充成功）。
- * - 写类（fileTree.create/update/remove/rename）与危险动作不在本模块开放执行：
- *   `createRunSupplemental` 对它们显式报 `NOT_WIRED`（缺真源授权面，不擅自开放）。
+ * - 写腿（2026-11-06 MCP 写腿批）：`fileTree.create` / `fileTree.update` 接**编辑器既有写通道**
+ *   （内核 `kernel.io` 的 FileIO 契约写原语，测试假件 / 精简桥缺原语 ⇒ 显式 NOT_WIRED），
+ *   双闸叠加、绝不新建旁路写通道：
+ *     ① MCP 侧第四张表复核（`scope.approvedRoots`，相对根前缀；不覆盖 ⇒ `WRITE_DISABLED`）；
+ *     ② 内核 `io` 自带的写允许域（`assertWritable` + Rust `ensure_write_allowed`）——
+ *        内核写域拒绝（`WriteNotAllowedError`）⇒ 显式 `WRITE_DISABLED`（这是正确行为不是缺陷）。
+ *   create 用独占创建原语（已存在 ⇒ 显式报错，绝不覆盖）；update 先判存在（不存在 ⇒ 显式报错，
+ *   绝不静默改成 create 语义）再走 `writeText` 既有保存语义（保编码 / 保换行 / 写前备份）；
+ *   成功后尽力广播内核既有 `file.changed` 事件喂给宿主刷新（App.tsx 同款通道），缺席如实标注。
+ *   `fileTree.remove` / `fileTree.rename` / `problems.quickFix` 保持 NOT_WIRED（缺宿主授权面 /
+ *   缺稳定 actionId 与 apply 通道，见各自报错文案）。
  */
 import { McpFailure } from '@kojo/mcp-host';
 import type {
@@ -63,15 +72,27 @@ export interface McpSearchResultLike {
 /**
  * 内核实例的最窄结构投影（真 `Kernel` 在组装点一次性断言进来：project/io/plugins/
  * services/bus 五面逐字段核对过；测试直接给假对象）。
+ *
+ * `io` 的写原语 / `bus.emit` 为**可选**：真 `FileIO` 契约都有（生产内核结构满足），
+ * 测试假件与精简桥可缺席——缺席时写腿显式 NOT_WIRED（不静默、不造假实现）。
  */
 export interface McpKernelLike {
   readonly project: { readonly current: () => unknown };
   readonly io: {
     readonly walkDir: (path: string, opts?: Record<string, unknown>) => Promise<unknown[]>;
+    /** FileIO 契约写读原语（写腿用；缺席 ⇒ NOT_WIRED）。 */
+    readonly exists?: (path: string) => Promise<boolean>;
+    readonly createFileExclusive?: (path: string) => Promise<boolean>;
+    readonly createDirExclusive?: (path: string) => Promise<boolean>;
+    readonly writeText?: (path: string, text: string, opts?: Record<string, unknown>) => Promise<void>;
   };
   readonly plugins: { readonly list: () => unknown[] };
   readonly services: { readonly tryGet: <T = unknown>(key: string) => T | undefined };
-  readonly bus: { readonly on: (name: string, cb: (payload: unknown) => void) => () => void };
+  readonly bus: {
+    readonly on: (name: string, cb: (payload: unknown) => void) => () => void;
+    /** 写成功后广播 `file.changed`（宿主刷新既有通道）；缺席 ⇒ 跳过并在结果里如实标注。 */
+    readonly emit?: (name: string, payload: unknown) => void;
+  };
   readonly slots: { readonly query: (slot: string) => readonly unknown[] };
 }
 
@@ -193,6 +214,79 @@ export function relativeOrDot(abs: string, rootDir: string): string {
   const rel = toRelativePath(abs, rootDir);
   const root = normalizeRoot(rootDir)?.toLowerCase() ?? '';
   return rel !== '' && rel.toLowerCase() !== root ? rel : '.';
+}
+
+/* --------------------------- 写闸一：第四张表 approvedRoots 复核 --------------------------- */
+
+/**
+ * 目标相对路径是否落在第四张表（MCP 会话授权 `mcp_approvals.json`）的至少一个
+ * `approvedRoots` 内。approvedRoots 是**项目根内相对路径**（Rust `build_scope` 已按
+ * `validate_relative_path` 逐根校验）；此处再防御性复验一次——形态不合法的根**跳过**
+ * （只可能收窄写域，绝不可能放宽，fail-closed），前缀必须落在分隔符边界上、大小写不敏感
+ * （与 `isWithinRoot` 同尺）。
+ */
+export function isWithinApprovedRoots(approvedRoots: readonly string[], relPath: string): boolean {
+  const rel = relPath.replace(/\\/g, '/').toLowerCase();
+  if (rel === '') return false;
+  for (const root of approvedRoots) {
+    try {
+      validateRelativePath(root);
+    } catch {
+      continue; // 形态不合法的根不参与判定（收窄不减宽，fail-closed）
+    }
+    const norm = root.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    if (norm === '') continue;
+    if (rel === norm || rel.startsWith(`${norm}/`)) return true;
+  }
+  return false;
+}
+
+/**
+ * 写闸一：第四张表复核。目标不在任何 approvedRoots 内（含会话一个根都没批）⇒
+ * `WRITE_DISABLED` 结构化失败。这是第四张表独立授权语义的正确行为，不是缺陷——
+ * 它不继承内核 `writablePaths` / `exportFile` / 启动器三张表。
+ */
+export function assertMcpWriteDomain(approvedRoots: readonly string[], relPath: string): void {
+  if (isWithinApprovedRoots(approvedRoots, relPath)) return;
+  const rootsNote =
+    approvedRoots.length === 0
+      ? '本会话没有任何已批准写根（第四张表 approvedRoots 为空）'
+      : `已批准根：${approvedRoots.slice(0, 8).map((r) => sanitizeEcho(r)).join('、')}`;
+  throw new McpFailure(
+    'WRITE_DISABLED',
+    `MCP 写被禁用（写闸一：第四张表 approvedRoots 未覆盖目标 ${sanitizeEcho(relPath)}；${rootsNote}）。` +
+      'MCP 会话授权独立签发，不继承其它三张表；请宿主在 AI 接入面板复核该会话的批准根。',
+  );
+}
+
+/**
+ * 写闸二的拒绝翻译：内核 `io` 写原语抛 `WriteNotAllowedError`（writablePaths +
+ * 常驻可写根未覆盖，游戏目录整体只读）⇒ 显式 `WRITE_DISABLED`；McpFailure 原样透出；
+ * 其余执行失败原样上抛（registry 兜底包成 TOOL_EXECUTION_FAILED，不洗码、不静默）。
+ * 恒不返回（`never`）：调用点据此通过定赋值分析。
+ */
+function rethrowWriteGate(err: unknown, relPath: string): never {
+  if (err instanceof McpFailure) throw err;
+  if (err instanceof Error && err.name === 'WriteNotAllowedError') {
+    throw new McpFailure(
+      'WRITE_DISABLED',
+      `MCP 写被禁用（写闸二：内核写允许域拒绝——游戏目录整体只读，写仅限用户批准的写允许域）。` +
+        `目标：${sanitizeEcho(relPath)}；内核原话：${err.message}`,
+    );
+  }
+  throw err;
+}
+
+/** 写成功后尽力广播内核既有 `file.changed`（宿主刷新既有通道，App.tsx 同款）；缺席/失败如实回报。 */
+function emitFileChanged(kernel: McpKernelLike, kind: 'add' | 'change', absPath: string): boolean {
+  const emit = kernel.bus.emit;
+  if (typeof emit !== 'function') return false;
+  try {
+    emit.call(kernel.bus, 'file.changed', { kind, path: absPath });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /* ------------------------------- 通用小件 ------------------------------- */
@@ -323,12 +417,14 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
   return { projectInfo, fileTree, searchAll };
 }
 
-/* ------------------------------- runSupplemental（IO 腿） ------------------------------- */
+/* ------------------------------- runSupplemental（IO 腿 + 写腿） ------------------------------- */
 
 /**
- * 本工厂只接**只读 IO 腿**。写类与危险动作（fileTree.create/update/remove/rename、
- * problems.quickFix）与暂无真源的（diff.compare / state.replay / preview.document）由
- * default 分支显式报 `NOT_WIRED`——不擅自开放执行、不造假实现。
+ * 只读 IO 腿 + 写腿（fileTree.create / fileTree.update）。写腿走**编辑器既有写通道**
+ * （内核 `kernel.io` 的 FileIO 写原语），前面叠第四张表 approvedRoots 复核（见模块头注释），
+ * 绝不新建旁路写通道。`fileTree.remove` / `fileTree.rename` / `problems.quickFix` 与
+ * 暂无真源的（diff.compare / state.replay / preview.document）由 default 分支显式报
+ * `NOT_WIRED`——不擅自开放执行、不造假实现。
  */
 export function createRunSupplemental(deps: McpIoDeps): (
   name: string,
@@ -473,6 +569,135 @@ export function createRunSupplemental(deps: McpIoDeps): (
     };
   };
 
+  /* ---------------- 写腿（双闸：第四张表 approvedRoots + 内核写允许域） ---------------- */
+
+  /** 共同前置：内核到场 + 项目已开 + 有 rootDir + 路径闸 + 第四张表复核 ⇒ { kernel, abs }。 */
+  function requireWriteTarget(
+    args: Record<string, unknown>,
+    scope: McpSessionScope,
+  ): { readonly kernel: McpKernelLike; readonly rootDir: string; readonly relPath: string; readonly abs: string } {
+    const kernel = deps.getKernel();
+    if (!kernel) {
+      throw new McpFailure('RESOURCE_UNAVAILABLE', '内核未到场：写类工具不可用（不静默）');
+    }
+    const project = requireProject(kernel);
+    const rootDir = asString(project['rootDir']);
+    if (rootDir === '') {
+      throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：写无域基准根（不静默）');
+    }
+    const relPath = asString(args['relPath']);
+    const abs = resolveWithinRoot(rootDir, relPath); // 路径闸（与 Rust 同尺）+ 域内解析（fail-closed）
+    assertMcpWriteDomain(scope.approvedRoots, relPath); // 写闸一：第四张表（独立授权，不继承三张表）
+    return { kernel, rootDir, relPath, abs };
+  }
+
+  /** fileTree.create：独占创建（已存在 ⇒ 显式报错，绝不覆盖）；目录不收 content。 */
+  const fileTreeCreate: McpReaderFn = async (args, scope) => {
+    const input = args ?? {};
+    const kind = input['kind'];
+    if (kind !== 'file' && kind !== 'directory') {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `fileTree.create 的 kind 须为 'file' | 'directory'：${sanitizeEcho(String(kind))}`,
+      );
+    }
+    const content = input['content'];
+    if (content !== undefined && typeof content !== 'string') {
+      throw new McpFailure('INVALID_ARGS', 'fileTree.create 的 content 须为字符串');
+    }
+    const { kernel, relPath, abs } = requireWriteTarget(input, scope);
+    const io = kernel.io;
+    if (kind === 'directory') {
+      if (content !== undefined) {
+        throw new McpFailure('INVALID_ARGS', 'fileTree.create 的 kind=directory 不收 content（不静默吞掉入参）');
+      }
+      const createDirExclusive = io.createDirExclusive;
+      if (typeof createDirExclusive !== 'function') {
+        throw new McpFailure('NOT_WIRED', 'fileTree.create 未接线：内核实例未提供 createDirExclusive 写原语（不静默）');
+      }
+      let created: boolean;
+      try {
+        created = await createDirExclusive.call(io, abs);
+      } catch (err) {
+        rethrowWriteGate(err, relPath);
+      }
+      if (!created) {
+        throw new McpFailure(
+          'TOOL_EXECUTION_FAILED',
+          `目标已存在，create 绝不覆盖既有条目（先 io.listDir / fs.stat 确认再调用）：${sanitizeEcho(relPath)}`,
+        );
+      }
+      return { path: relPath, kind: 'directory', created: true, refreshed: emitFileChanged(kernel, 'add', abs) };
+    }
+    // kind === 'file'：独占创建 + （可选）经既有 writeText 通道写初始内容。
+    const createFileExclusive = io.createFileExclusive;
+    if (typeof createFileExclusive !== 'function') {
+      throw new McpFailure('NOT_WIRED', 'fileTree.create 未接线：内核实例未提供 createFileExclusive 写原语（不静默）');
+    }
+    const wantsContent = typeof content === 'string' && content.length > 0;
+    if (wantsContent && typeof io.writeText !== 'function') {
+      throw new McpFailure('NOT_WIRED', 'fileTree.create 未接线：内核实例未提供 writeText 写原语（带初始内容的创建需要它，不静默）');
+    }
+    let created: boolean;
+    try {
+      created = await createFileExclusive.call(io, abs);
+    } catch (err) {
+      rethrowWriteGate(err, relPath);
+    }
+    if (!created) {
+      throw new McpFailure(
+        'TOOL_EXECUTION_FAILED',
+        `目标已存在，create 绝不覆盖既有条目（先 io.listDir / fs.stat 确认再调用）：${sanitizeEcho(relPath)}`,
+      );
+    }
+    if (wantsContent) {
+      try {
+        await io.writeText!(abs, content as string); // 既有保存语义：保编码 / 保换行 / 写前自动备份
+      } catch (err) {
+        rethrowWriteGate(err, relPath);
+      }
+    }
+    return {
+      path: relPath,
+      kind: 'file',
+      created: true,
+      ...(typeof content === 'string' ? { contentChars: content.length } : {}),
+      refreshed: emitFileChanged(kernel, 'add', abs),
+    };
+  };
+
+  /** fileTree.update：全文替换既有文件（不存在 ⇒ 显式报错，绝不静默改成 create 语义）。 */
+  const fileTreeUpdate: McpReaderFn = async (args, scope) => {
+    const input = args ?? {};
+    const content = input['content'];
+    if (typeof content !== 'string') {
+      throw new McpFailure('INVALID_ARGS', 'fileTree.update 的 content 须为字符串（全文替换，不收部分编辑）');
+    }
+    const { kernel, relPath, abs } = requireWriteTarget(input, scope);
+    const io = kernel.io;
+    if (typeof io.writeText !== 'function' || typeof io.exists !== 'function') {
+      throw new McpFailure('NOT_WIRED', 'fileTree.update 未接线：内核实例未提供 writeText / exists 原语（不静默）');
+    }
+    let present: boolean;
+    try {
+      present = await io.exists.call(io, abs);
+    } catch (err) {
+      rethrowWriteGate(err, relPath);
+    }
+    if (!present) {
+      throw new McpFailure(
+        'TOOL_EXECUTION_FAILED',
+        `目标不存在，update 绝不静默改成 create 语义（先 fs.stat 确认，或改用 fileTree.create）：${sanitizeEcho(relPath)}`,
+      );
+    }
+    try {
+      await io.writeText.call(io, abs, content); // 既有保存语义：保编码 / 保换行 / 写前自动备份
+    } catch (err) {
+      rethrowWriteGate(err, relPath);
+    }
+    return { path: relPath, updated: true, textLength: content.length, refreshed: emitFileChanged(kernel, 'change', abs) };
+  };
+
   const ioTools = new Map<string, (args: Record<string, unknown>, scope: McpSessionScope) => Promise<unknown> | unknown>([
     ['commands.list', commandsList],
     ['fs.readFile', readFile],
@@ -480,13 +705,23 @@ export function createRunSupplemental(deps: McpIoDeps): (
     ['io.listDir', listDir],
     ['io.workspaceRoots', workspaceRoots],
     ['workspace.searchAll', workspaceSearchAll],
+    ['fileTree.create', fileTreeCreate],
+    ['fileTree.update', fileTreeUpdate],
   ]);
 
   return async (name, args, scope) => {
     const tool = ioTools.get(name);
     if (tool) return tool(args ?? {}, scope);
-    // 写类 / 危险动作不开放执行；其余（diff.compare / state.replay / preview.document /
-    // problems.quickFix 等真源不在本模块）一律显式 NOT_WIRED，写明缺什么。
+    // 仍 NOT_WIRED 的写类 / 危险动作：逐个写明缺什么（不静默、不造假实现）。
+    if (name === 'problems.quickFix') {
+      throw new McpFailure(
+        'NOT_WIRED',
+        '工具 problems.quickFix 未接线：只读清单（semantic.codeActionsAt / problems.diagnostics）' +
+          '不携带稳定 actionId（只投影 title/kind/isPreferred/hasEdit），且宿主没有可从 MCP 面复用的 ' +
+          'codeAction-apply 通道（Monaco quickFix 是交互菜单，动作实例只活在弹出层里）——' +
+          '缺这两样，接了就是假实现；需先给只读清单补稳定 id 并新增受控 apply 通道。',
+      );
+    }
     if (
       name.startsWith('fileTree.') ||
       name.startsWith('remove_') ||

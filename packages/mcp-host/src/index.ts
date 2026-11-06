@@ -94,6 +94,7 @@ export type McpErrorCode =
   | 'INVALID_ARGS'
   | 'TOOL_EXECUTION_FAILED'
   | 'NOT_WIRED'
+  | 'WRITE_DISABLED'
   | 'UNKNOWN_RESOURCE'
   | 'RESOURCE_UNAVAILABLE'
   | 'UNKNOWN_PROMPT'
@@ -429,7 +430,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.update',
     description:
-      'Overwrite the full text content of an existing file inside the authorized project root. `relPath` is project-root-relative (schema + approvedRoots domain check). This REPLACES the whole content; prefer problems.quickFix for targeted edits. Idempotent for identical `content`. Mutates the filesystem.',
+      'Overwrite the full text content of an existing file inside the authorized project root. `relPath` is project-root-relative (schema + approvedRoots domain check). This REPLACES the whole content; note problems.quickFix is currently NOT_WIRED, so there is no targeted-edit tool yet. Idempotent for identical `content`. Mutates the filesystem. Refuses (WRITE_DISABLED) when the session-approved roots or the kernel write domain do not cover the target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -686,8 +687,13 @@ export const MCP_TOOL_GAP_MAP: readonly {
   { tool: 'search.all', gap: 'search_text', source: 'rust' },
   { tool: 'workspace.searchAll', gap: 'search_text', source: 'rust' },
   { tool: 'problems.diagnostics', gap: 'diagnostics', source: 'debug' },
+  // 写腿批（2026-11-06）：fileTree.create / fileTree.update 执行体已接线（app real-sources-io.ts
+  // 走内核 io 写原语 createFileExclusive/writeText，双闸＝第四张表 approvedRoots + 内核写允许域；
+  // 内核写域拒绝 ⇒ WRITE_DISABLED）。本两行保留为**覆盖声明**（create_file_exclusive /
+  // write_file_bytes 经具名工具覆盖，不再是「需宿主接线」的剩余缺口），数据结构形状不变。
   { tool: 'fileTree.create', gap: 'create_file_exclusive', source: 'rust' },
   { tool: 'fileTree.update', gap: 'write_file_bytes', source: 'rust' },
+  // fileTree.remove / fileTree.rename 保持 NOT_WIRED（privileged，需宿主授权面），登记照旧。
   { tool: 'fileTree.remove', gap: 'remove_file', source: 'rust' },
   { tool: 'fileTree.rename', gap: 'rename_path', source: 'rust' },
   { tool: 'commands.list', gap: 'commands', source: 'tool-surface' },

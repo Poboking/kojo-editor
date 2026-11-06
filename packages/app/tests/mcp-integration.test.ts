@@ -177,6 +177,9 @@ describe('host-bridge：默认工厂 / 六种分派 / 取消超时体积', () =>
     expect(tools.length).toBeGreaterThan(0);
     expect(tools.some((t) => t.name === 'semantic.definitionAt')).toBe(true);
     expect(tools.some((t) => t.name === 'project.info')).toBe(true);
+    // 写腿工具照常列出（能力可见）：edit 档，执行体在宿主真源装配后走内核 io 写通道。
+    expect(tools.some((t) => t.name === 'fileTree.create')).toBe(true);
+    expect(tools.some((t) => t.name === 'fileTree.update')).toBe(true);
 
     // 空 deps（未登记真源）⇒ 该语义工具的取数腿调用时显式报错，不静默
     hz.emit(evt('real-2', 'tools/call', {
@@ -189,12 +192,26 @@ describe('host-bridge：默认工厂 / 六种分派 / 取消超时体积', () =>
     expect(callFrame.error?.code).toBeTruthy();
     expect(callFrame.error?.message).toContain('未接线');
 
+    // 写腿同口径：宿主未登记 runSupplemental ⇒ fileTree.update 显式 NOT_WIRED（不静默）。
+    // （host-bridge 对非 BridgeError 统一包 mcp/internal，McpFailure 原文随 message 透出——
+    // 与上面 semantic.definitionAt 同一约定。）
+    hz.emit(evt('real-3', 'tools/call', {
+      name: 'fileTree.update',
+      arguments: { relPath: 'docs/a.txt', content: 'x' },
+    }));
+    await hz.waitFor(3);
+    const writeFrame = hz.frames.find((f) => f.id === 'real-3')!;
+    expect(writeFrame.ok).toBe(false);
+    expect(writeFrame.error?.code).toBeTruthy();
+    expect(writeFrame.error?.message).toContain('fileTree.update');
+    expect(writeFrame.error?.message).toContain('未接线');
+
     // resources / prompts 同样来自真 registry
-    hz.emit(evt('real-3', 'resources/list'));
-    hz.emit(evt('real-4', 'prompts/list'));
-    await hz.waitFor(4);
-    const rFrame = hz.frames.find((f) => f.id === 'real-3')!;
-    const pFrame = hz.frames.find((f) => f.id === 'real-4')!;
+    hz.emit(evt('real-5', 'resources/list'));
+    hz.emit(evt('real-6', 'prompts/list'));
+    await hz.waitFor(5);
+    const rFrame = hz.frames.find((f) => f.id === 'real-5')!;
+    const pFrame = hz.frames.find((f) => f.id === 'real-6')!;
     expect(rFrame.ok).toBe(true);
     expect((rFrame.result as unknown[]).length).toBeGreaterThan(0);
     expect(pFrame.ok).toBe(true);
