@@ -8,7 +8,8 @@
  *  ①b 写工具靶：mock.write（tier edit + requiresApproval）/ mock.privilegedWrite（tier privileged）——
  *     写靶即使 edit 档也须逐工具批准（-32000 TOOL_NOT_APPROVED）；批准命中才执行且 payload
  *     只记内存 ep.writes（逐字对拍，绝不写盘）；privileged 写靶默认不进 tools/list、猜名直调
- *     TIER_DENIED；大响应截到 TOOL_TEXT_LIMIT + truncated 显式标记（记录不裁）。
+ *     显式拒绝（闸序与真端点同源：危险面 TOOL_NOT_APPROVED 先于 tier 码 E_TIER_DENIED，
+ *     tier 码字面与 Rust codes::TIER_DENIED 一套口径）；大响应截到 TOOL_TEXT_LIMIT + truncated 显式标记（记录不裁）。
  *  ② 端到端通道：跑一次 `runConformance()`（spawn 真实 `tools/kojo-mcp.mjs`），断言
  *     notification 不挂住 stdio、SSE 逐帧转发、坏帧显式终结、token 不泄漏、全表 0 FAIL
  *     （31 direct + 7 write-target + 15 stdio + 1 hygiene = 54 条，W01..W07 全 PASS）。
@@ -139,7 +140,7 @@ describe('mcp-conformance · direct 通道（mock endpoint 协议面）', () => 
     const tierDenied = JSON.parse(
       (await direct({ token: TEST_TOKENS.read, body: rpc(9, 'tools/call', { name: 'mock.edit.tool', arguments: { path: 'x' } }) })).body,
     );
-    expect(tierDenied.error.data.code).toBe('TIER_DENIED');
+    expect(tierDenied.error.data.code).toBe('E_TIER_DENIED');
 
     const notApproved = JSON.parse(
       (await direct({ token: TEST_TOKENS.priv, body: rpc(10, 'tools/call', { name: 'mock.priv.tool' }) })).body,
@@ -304,13 +305,13 @@ describe('mcp-conformance · 写工具靶（mock.write / mock.privilegedWrite）
     expect(rec.truncated).toBe(true);
   });
 
-  it('mock.privilegedWrite：read/edit 猜名直调 TIER_DENIED；未批准 TOOL_NOT_APPROVED；批准后执行 + 记录', async () => {
+  it('mock.privilegedWrite：read/edit 猜名直调 TOOL_NOT_APPROVED（危险面先于 tier 码）；批准后执行 + 记录', async () => {
     const before = ep.writes.length;
     const tierRead = JSON.parse((await direct({ token: TEST_TOKENS.read, body: rpc(37, 'tools/call', { name: 'mock.privilegedWrite' }) })).body);
-    expect(tierRead.error.data.code).toBe('TIER_DENIED');
+    expect(tierRead.error.data.code).toBe('TOOL_NOT_APPROVED');
     const tierEdit = JSON.parse((await direct({ token: TEST_TOKENS.edit, body: rpc(38, 'tools/call', { name: 'mock.privilegedWrite' }) })).body);
-    expect(tierEdit.error.data.code).toBe('TIER_DENIED');
-    expect(tierEdit.error.data.requiredTier).toBe('privileged');
+    expect(tierEdit.error.data.code).toBe('TOOL_NOT_APPROVED');
+    expect(tierEdit.error.data.tool).toBe('mock.privilegedWrite');
 
     const notApproved = JSON.parse((await direct({ token: TEST_TOKENS.priv, body: rpc(39, 'tools/call', { name: 'mock.privilegedWrite' }) })).body);
     expect(notApproved.error.data.code).toBe('TOOL_NOT_APPROVED');

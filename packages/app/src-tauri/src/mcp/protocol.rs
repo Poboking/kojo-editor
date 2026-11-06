@@ -117,6 +117,9 @@ pub mod codes {
     pub const PATH_SCHEME: &str = "E_PATH_SCHEME";
     pub const TOOL_FAIL_CLOSED: &str = "E_TOOL_FAIL_CLOSED";
     pub const TOOL_NOT_APPROVED: &str = "E_TOOL_NOT_APPROVED";
+    /// `tools/call` 的 tier 闸：会话 tier 低于宿主推断的工具所需 tier 且未显式
+    /// 批准 ⇒ 显式拒绝（与 `tools/list` 的 tier 过滤同源；拒绝可见，不静默）。
+    pub const TIER_DENIED: &str = "E_TIER_DENIED";
     /// `MCP-Protocol-Version` 头声明了宿主不支持的版本（显式结构化错误，不静默回退）。
     pub const UNSUPPORTED_PROTOCOL_VERSION: &str = "E_UNSUPPORTED_PROTOCOL_VERSION";
     pub const BRIDGE_UNAVAILABLE: &str = "E_BRIDGE_UNAVAILABLE";
@@ -1093,7 +1096,11 @@ pub fn approved_privileged_tool(name: &str, scope: &McpSessionScope) -> bool {
 }
 
 /// `tools/call` 的会话闸门（纯函数，端点级可测）：market fail-closed；
-/// privileged 未获精确授权 ⇒ 显式 `E_TOOL_NOT_APPROVED`。
+/// privileged 未获精确授权 ⇒ 显式 `E_TOOL_NOT_APPROVED`；
+/// 非 privileged 但宿主推断所需 tier 高于会话 tier 且未显式批准 ⇒ 显式
+/// `E_TIER_DENIED`（与 `filter_tools_list` 同源判定，纵深第二道闸：WebView
+/// 注册表被换/出错时端点仍拒，不靠 `tools/list` 看不见就当不调）。
+/// 错误码优先序钉死：TOOL_NOT_APPROVED（危险面）先于 TIER_DENIED（档位面）。
 /// 闸门命中处由 `server::handle_webview` 写一条 `AuditOutcome::Denied` 审计。
 pub fn check_tool_call_permission(name: &str, scope: &McpSessionScope) -> Result<(), McpError> {
     validate_tool_name(name)?;
@@ -1101,6 +1108,20 @@ pub fn check_tool_call_permission(name: &str, scope: &McpSessionScope) -> Result
         return Err(McpError::new(
             codes::TOOL_NOT_APPROVED,
             format!("危险工具未获会话授权：{name}"),
+        ));
+    }
+    // 批准语义零放宽：显式列进 approvedTools（精确或 `前缀*` 通配）的工具，
+    // 低 tier 会话照旧放行——与 filter_tools_list 的 approved_tool 短路一致。
+    if !approved_tool(name, scope)
+        && tier_rank(host_required_tier(name)) > tier_rank(scope.tier)
+    {
+        return Err(McpError::new(
+            codes::TIER_DENIED,
+            format!(
+                "工具 {name} 需要 tier >= {}，会话 tier={}，显式拒绝（不静默）",
+                host_required_tier(name).as_str(),
+                scope.tier.as_str()
+            ),
         ));
     }
     Ok(())

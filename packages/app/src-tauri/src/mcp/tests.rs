@@ -1349,6 +1349,47 @@ fn tools_call_denies_unapproved_privileged_with_denied_audit() {
     );
 }
 
+/// 口径差⑥收口：`tools/call` 闸门与 `filter_tools_list` **同源**按 tier 拒绝。
+/// 收口前的实测口径差真身——read 会话（tier=Read、approvedTools 空）猜名直调
+/// `write_bytes` 这类宿主推断 Edit 的工具，`check_tool_call_permission` 返回
+/// `Ok(())`：端点不拒，只有 `tools/list` 看不见它（mock 靶却发 `-32000
+/// TIER_DENIED`）。本测试先钉这一事实，再钉收口后的显式拒绝。
+#[test]
+fn tools_call_denies_tier_mismatch_from_read_session() {
+    let read = empty_scope(Vec::new());
+    for name in ["write_bytes", "edit_buffer", "replace_range"] {
+        assert_eq!(host_required_tier(name), McpTier::Edit, "{name}");
+        let e = check_tool_call_permission(name, &read)
+            .err()
+            .unwrap_or_else(|| panic!("口径差复现：{name} 在 read 会话被闸门放行（Ok）"));
+        // 钉的是线契约字面码（不借常量），与 harness E_TIER_DENIED 口径对拍。
+        assert_eq!(e.code, "E_TIER_DENIED", "{name}");
+        assert!(e.message.contains(name), "{name} 拒绝必须可见（带工具名）");
+    }
+    // edit 会话直调 edit 工具：tier 足够，照旧放行。
+    let edit = McpSessionScope {
+        tier: McpTier::Edit,
+        ..empty_scope(Vec::new())
+    };
+    assert!(check_tool_call_permission("write_bytes", &edit).is_ok());
+    // 批准语义零放宽：显式列进 approvedTools（精确或通配）的工具照旧放行，
+    // 与 filter_tools_list 的 `approved_tool` 短路同源，收口不得误伤。
+    let approved = empty_scope(vec!["write_bytes".to_string()]);
+    assert!(check_tool_call_permission("write_bytes", &approved).is_ok());
+    let wildcard = empty_scope(vec!["write_*".to_string()]);
+    assert!(check_tool_call_permission("write_bytes", &wildcard).is_ok());
+    // 只读工具不受新闸影响。
+    assert!(check_tool_call_permission("read_file", &read).is_ok());
+    // privileged 未批准仍是 E_TOOL_NOT_APPROVED 优先（错误码优先序不变，
+    // 与 harness H12 口径对拍）。
+    assert_eq!(
+        check_tool_call_permission("export_file", &read)
+            .unwrap_err()
+            .code,
+        codes::TOOL_NOT_APPROVED
+    );
+}
+
 #[test]
 fn revoke_falls_back_to_minimum_at_endpoint_gates() {
     let d = TempDir::new();
@@ -2092,6 +2133,71 @@ fn e2e_tools_call_unapproved_privileged_denied_with_audit() {
     assert!(denied[0].args_digest.contains("name:str("));
     // 闸门 2 在 emit 之前拦截：桥从未被调。
     assert!(s.rx.try_recv().is_err());
+}
+
+/// 端点级口径差回归（⑥）：read 会话猜名直调宿主推断 Edit 的工具——
+/// 收口前真实 TCP 端点把它转给 WebView（Rust 闸门 Ok，只有 tools/list 摘得掉它）；
+/// 收口后端点显式回 `-32000 / E_TIER_DENIED`，写一条 denied 审计，桥零调用。
+/// 尾段钉批准语义零放宽：显式列进 approvedTools 后同一调用照旧走桥成功。
+#[test]
+fn e2e_tools_call_denies_tier_mismatch_from_read_session() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"write_file","arguments":{}}}"#;
+    let r = mcp_post(s.port, &s.token, body);
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    assert_eq!(v["id"], json!(5));
+    assert_eq!(v["error"]["code"], json!(-32000));
+    assert_eq!(v["error"]["data"]["code"], json!("E_TIER_DENIED"));
+    assert!(v["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("write_file"));
+    // 闸门命中处一条 Denied 审计（note 即原始码，拒绝可见不静默）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].tool, "write_file");
+    assert_eq!(denied[0].note.as_deref(), Some("E_TIER_DENIED"));
+    // 拒绝发生在 emit 之前：桥从未被调。
+    assert!(s.rx.try_recv().is_err());
+
+    // 批准语义零放宽：第四张表把 write_file 显式列进 approvedTools 后，
+    // 同 tier=Read 会话直调照旧走桥并成功（收口不得误伤已批准工具）。
+    scope::approve(
+        s.dir.path(),
+        "loopback-client",
+        McpTier::Read,
+        vec![],
+        vec!["write_file".to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let port = s.port;
+    let token = s.token.clone();
+    let req = r#"{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"write_file","arguments":{}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id.clone(),
+            ok: true,
+            result: Some(json!({ "content": "written" })),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r2 = worker.join().unwrap();
+    let v2 = rpc_json(&r2);
+    assert_eq!(v2["id"], json!(6));
+    assert!(v2["error"].is_null(), "批准后仍被拒 ⇒ 收口误伤批准语义");
+    assert_eq!(v2["result"]["content"], json!("written"));
 }
 
 #[test]
