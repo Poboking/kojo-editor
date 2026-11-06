@@ -7,7 +7,7 @@
  * （`createMcpCapabilityRegistry({}).listTools(scope)` 与线协议一一对应），
  * 零假注入、零 GUI、零 Tauri、零 HTTP。
  *
- * 八条判据：
+ * 九条判据：
  *  1. **可见面形状**：77 枚具名面（read 37 / edit 11 / privileged 29）、缺省会话（未批准）
  *     只出 read 面 37 枚 —— 与 `docs/STATE.md` 的能力面读数同源；枚数一动这里就红。
  *  2. **体积带（漂移护栏）**：全量面一帧的 JSON 字节数必须落在**本批实拍带**里，另外还有一条
@@ -26,6 +26,9 @@
  *  7. **逐面语义账**：被压过的文案里闸值 / 上限 / 缺省值 / 只读与危险提示 / 路径约束 / `saved:false`
  *     这一类必须逐条还在（表驱动，缺 token 就红）。
  *  8. **分档读数**：description / inputSchema / launcher 族三档上界，红了就知道是哪一档变了。
+ *  9. **相对路径共用形状账（MCP-PERF-S15）**：ADR-0003 那份 200 字符共用形状说明原本被 16 枚面
+ *     逐字抄 18 份，S15 收成一份完整口径（落点＝`fileTree.update` 的 `properties.relPath`）+ 17 处
+ *     指针；按形状锚（盘符守卫 pattern）对账，谁复用这份形状就进这本账。
  *
  * `additionalProperties:false` 的严格化（B11）实测仍是 **80 处 / 2,400 字节**，本批一处没摘。
  * 复现读数：`node tools/mcp-list-payload-evidence.mjs static --top 8` 与 `... dedup --top 8`。
@@ -80,6 +83,30 @@ function propOf(tool: McpTool, name: string): Record<string, unknown> | undefine
 }
 function propDesc(tool: McpTool, name: string): string {
   return String(propOf(tool, name)?.['description'] ?? '');
+}
+function toolByName(name: string): McpTool {
+  const hit = fullFace.find((t) => t.name === name);
+  if (!hit) throw new Error(`面 ${name} 不在注册表真源里`);
+  return hit;
+}
+/** 把 schema 树里**每一条**含该 marker 的 description 抠出来（含嵌套 items/子对象），不限属性名。 */
+function schemaDescHits(t: McpTool, needle: string): string[] {
+  const acc: string[] = [];
+  const walk = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (node && typeof node === 'object') {
+      for (const [k, v] of Object.entries(node)) {
+        if (k === 'description' && typeof v === 'string') {
+          if (v.includes(needle)) acc.push(v);
+        } else walk(v);
+      }
+    }
+  };
+  walk(t.inputSchema);
+  return acc;
 }
 
 /* ------------------------------ 本批实拍读数 ------------------------------ */
@@ -261,25 +288,7 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     expect(PAGE_ACCOUNT_NOTE).toContain('changedDuringPaging');
 
     // 路径 / 根标识这类共用形状说明：约束逐条还在（B22 只把长句压短，没有搬到别处）。
-    // 口径＝把 schema 树里**每一条**含该 marker 的 description 抠出来（含嵌套 items/子对象），不限属性名。
-    const schemaDescHits = (t: McpTool, needle: string): string[] => {
-      const acc: string[] = [];
-      const walk = (node: unknown): void => {
-        if (Array.isArray(node)) {
-          for (const item of node) walk(item);
-          return;
-        }
-        if (node && typeof node === 'object') {
-          for (const [k, v] of Object.entries(node)) {
-            if (k === 'description' && typeof v === 'string') {
-              if (v.includes(needle)) acc.push(v);
-            } else walk(v);
-          }
-        }
-      };
-      walk(t.inputSchema);
-      return acc;
-    };
+    // 口径＝schemaDescHits（模块级，⑨ 也用同一把尺）。
     const relPathHosts = fullFace.flatMap((t) => schemaDescHits(t, 'ADR-0003'));
     // B22 实拍 15 处；MCP-PERF-S3 批 +1（fileTree.applyChangeset）；MCP-PERF-S4 批 +1
     // （fs.readRange 的 relPath 与 fs.readFile 同一条 RELATIVE_PATH_SCHEMA 共用形状说明）；
@@ -313,5 +322,52 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     expect(schemaBytes).toBeLessThanOrEqual(111_000); // B21 143,762；S4 105,841；S6 107,873；S8 基 109,621；S10 基 108,823
     expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；S4 实拍 73,706
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
+  });
+
+  it('⑨ 相对路径共用形状账（MCP-PERF-S15）：ADR-0003 完整口径全局一份，其余抄写点只许指针', () => {
+    // 200 字符的 ADR-0003 共用形状说明（RELATIVE_PATH_SCHEMA）原本被 16 枚面逐字抄 18 份
+    // （fileTree.rename 的 from/to、diff.compare 的 left/right 各两份；dedup 量具实拍抄写 3,400 B）。
+    // S15 照 B22 先例指针化：完整口径保一处，落点＝fileTree.update 的 `properties.relPath`
+    // ——fileTree.patchLines 的既有文案「same gate as fileTree.update」早已把它当命名锚点；
+    // 其余 17 处只留一句指针。**先红基线**：落地前 18 处逐字重复，数 canonical 当场红。
+    // 形状锚＝共用形状 pattern 独有的盘符守卫（`(?![A-Za-z]:)`），与属性名/面名解耦：
+    // 谁复用这份形状就得进这本账，别名躲不过、新面漏不掉。
+    const CANON_TOKENS = ['Project-root-relative', 'absolute', 'drive-letter', '".."', 'approvedRoots', 'ADR-0003'];
+    const shared: { tool: string; addr: string; desc: string }[] = [];
+    const walk = (tool: string, addr: string, node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach((item, i) => walk(tool, `${addr}[${i}]`, item));
+        return;
+      }
+      if (node && typeof node === 'object') {
+        const o = node as Record<string, unknown>;
+        if (o['type'] === 'string' && typeof o['pattern'] === 'string' && o['pattern'].includes('(?![A-Za-z]:)')) {
+          shared.push({ tool, addr: addr || '(root)', desc: String(o['description'] ?? '') });
+        }
+        for (const [k, v] of Object.entries(o)) walk(tool, addr ? `${addr}.${k}` : k, v);
+      }
+    };
+    for (const t of fullFace) walk(t.name, '', t.inputSchema);
+    // 形状指纹账：抄写点枚数只许由有意识的批次改动（S15 前后都是 16 枚面 18 处）。
+    expect(shared.length, `共用形状抄写点变了：${JSON.stringify(shared.map((s) => `${s.tool}#${s.addr}`))}`).toBe(18);
+
+    const canon = shared.filter((s) => s.desc.includes('ADR-0003'));
+    expect(canon.length, `ADR-0003 完整口径必须全局一份，现 ${canon.length} 份（逐字重复＝S15 靶子）`).toBe(1);
+    expect(canon[0]!.tool, '完整口径落点必须是 fileTree.update（既有文案的命名锚点）').toBe('fileTree.update');
+    expect(canon[0]!.addr, '完整口径落点必须是 properties.relPath').toBe('properties.relPath');
+    for (const token of CANON_TOKENS) {
+      expect(canon[0]!.desc, `完整口径丢了 ${token}`).toContain(token);
+    }
+    // 落点真实性：指针指向的那份必须真实存在且完整（⑥ 同款语义的跨面指针版）。
+    expect(propDesc(toolByName('fileTree.update'), 'relPath')).toBe(canon[0]!.desc);
+
+    const pointers = shared.filter((s) => s.desc !== canon[0]!.desc);
+    expect(pointers.length, '除落点外的 17 处都必须是指针').toBe(17);
+    for (const p of pointers) {
+      expect(p.desc, `${p.tool}#${p.addr} 指针必须点名落点 \`fileTree.update\``).toContain('`fileTree.update`');
+      expect(p.desc, `${p.tool}#${p.addr} 指针必须点名落点属性 \`relPath\``).toContain('`relPath`');
+      expect(p.desc, `${p.tool}#${p.addr} 指针仍须自带最小本地语义（project-root-relative）`).toContain('Project-root-relative');
+      expect(p.desc, `${p.tool}#${p.addr} 指针不得复刻完整口径（ADR-0003 标记只许一份）`).not.toContain('ADR-0003');
+    }
   });
 });
