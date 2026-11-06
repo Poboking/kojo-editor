@@ -122,15 +122,78 @@ export function isMcpFailure(value: unknown): value is McpFailure {
  * 3. 最小 inputSchema 校验器（自己写，零外部依赖）
  *
  * 刻意只认 JSON Schema 的一个小子集：`type` / `required` / `properties` /
- * `items` / `enum` / `minimum` / `maximum` / `pattern` / `minLength` / `maxLength`。
+ * `items` / `enum` / `minimum` / `maximum` / `pattern` / `minLength` / `maxLength` /
+ * **`additionalProperties`（仅当逐字写成 `false` 时生效）**。
  * 不认识的关键字一律忽略（不因"没实现校验"而误拒合法入参），只拒绝**明确违反**
  * 已声明约束的取值。`pattern` 编译失败时同样忽略（不误拒），但合法 pattern 会真正
  * 生效——写类工具的「项目内相对路径」约束就靠它兜住。
+ *
+ * 入参严格化批（B11）：`additionalProperties:false` 此前只是**声明**，校验器根本不读它
+ * ⇒ 写错的参数名（`maxResult` / `corridor` …）既不报错也不生效，调用方按默认页大小原地打转
+ * 却以为在翻页（铁律 4 的「静默」）。本批把它变成真闸：面值只认 `false`（缺省＝不声明＝照旧
+ * 宽松，零风险），`additionalProperties` 给 schema 对象或 `true` 时**仍不实现**（不认识＝忽略，
+ * 绝不因"没实现"而误拒）。拒绝文案必带本面合法名清单 + 最接近的合法名，一次改对。
  * ------------------------------------------------------------------ */
+
+/** 单次校验最多报出的违反项条数（入参越界类噪声有界；条数本身如实报出，不静默丢）。 */
+const SCHEMA_ERROR_CAP = 12;
+
+/** 违规项定位串：根上直接用键名（`maxEntry: …`），嵌套保留点路径（`$.resolutions[0].xx: …`）。 */
+function keyLabel(path: string, key: string): string {
+  return path === '' || path === '$' ? key : `${path}.${key}`;
+}
+
+/**
+ * 距离度量＝归一化 Damerau-Levenshtein（含换位，专门兜 `maxRetuns` / `coridor` 这类手误），
+ * 阈值 `SCHEMA_SUGGEST_MAX_DISTANCE`：算不出足够像的候选就**不给猜测**——
+ * 与其把一个压根不相干的键名推到模型眼前，不如只让它照抄本面合法清单。
+ */
+const SCHEMA_SUGGEST_MAX_DISTANCE = 0.34;
+
+function levenshtein(a: string, b: string): number {
+  const n = a.length;
+  const m = b.length;
+  if (n === 0) return m;
+  if (m === 0) return n;
+  let prev2: number[] = [];
+  let prev = Array.from({ length: m + 1 }, (_, j) => j);
+  for (let i = 1; i <= n; i += 1) {
+    const cur = [i];
+    for (let j = 1; j <= m; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let best = Math.min((cur[j - 1] ?? 0) + 1, (prev[j] ?? 0) + 1, (prev[j - 1] ?? 0) + cost);
+      // 换位一步（Damerau）：ab↔ba 与「两格之上 + 代价 1」同价，专门兜住相邻手误。
+      // i>1 && j>1 时 prev2 必然已由上一轮赋值；兜 Infinity 只是给类型看，不参与取小。
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        best = Math.min(best, prev2[j - 2] ?? Number.POSITIVE_INFINITY);
+      }
+      cur[j] = best;
+    }
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[m] as number;
+}
+
+/** 本面合法名里与未知键最接近的一个；没有足够像的候选 ⇒ null（不硬猜）。 */
+function nearestLegalKey(unknown: string, legal: readonly string[]): string | null {
+  let best: string | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const key of legal) {
+    const score = levenshtein(unknown.toLowerCase(), key.toLowerCase()) / Math.max(unknown.length, key.length);
+    if (score < bestScore) {
+      bestScore = score;
+      best = key;
+    }
+  }
+  return bestScore <= SCHEMA_SUGGEST_MAX_DISTANCE ? best : null;
+}
 
 export interface SchemaValidation {
   readonly valid: boolean;
   readonly errors: readonly string[];
+  /** 违反项超过 `SCHEMA_ERROR_CAP` 时被省略的条数（截断可见，不静默；0 ＝一条没少）。 */
+  readonly omittedErrors: number;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -165,26 +228,34 @@ function typeMatches(expected: string, v: unknown): boolean {
   }
 }
 
-/** 结构化校验：返回全部违反项（不提前退出），便于一次报清楚。 */
+/** 结构化校验：返回违反项（不提前退出），便于一次报清楚；超过 `SCHEMA_ERROR_CAP` 条如实记账。 */
 export function validateAgainstSchema(schema: Record<string, unknown>, value: unknown): SchemaValidation {
   const errors: string[] = [];
-  if (!isPlainObject(schema)) return { valid: true, errors };
+  let omitted = 0;
+  // 有界：入参整体走偏（对象套数组套对象）时违规项可能成百上千，只报前 SCHEMA_ERROR_CAP 条。
+  // 「少报了几条」由返回体的 omittedErrors 如实说，并由 callTool 拼进 INVALID_ARGS 文案
+  // （铁律 4：截断必须可见，绝不静默丢违规项）。
+  const push = (message: string): void => {
+    if (errors.length < SCHEMA_ERROR_CAP) errors.push(message);
+    else omitted += 1;
+  };
+  if (!isPlainObject(schema)) return { valid: true, errors, omittedErrors: 0 };
 
   const walk = (s: Record<string, unknown>, v: unknown, path: string): void => {
     const expected = s['type'];
     if (typeof expected === 'string' && !typeMatches(expected, v)) {
-      errors.push(`${path || '$'}: 期望 ${expected}，实得 ${typeOf(v)}`);
+      push(`${path || '$'}: 期望 ${expected}，实得 ${typeOf(v)}`);
       return; // 类型都不对，不再下钻，避免级联噪声
     }
     if (Array.isArray(s['enum'])) {
       const allowed = s['enum'] as readonly unknown[];
-      if (!allowed.some((e) => e === v)) errors.push(`${path || '$'}: 取值不在 enum 白名单内`);
+      if (!allowed.some((e) => e === v)) push(`${path || '$'}: 取值不在 enum 白名单内`);
     }
     if (typeof s['minimum'] === 'number' && typeof v === 'number' && v < (s['minimum'] as number)) {
-      errors.push(`${path || '$'}: 小于 minimum`);
+      push(`${path || '$'}: 小于 minimum`);
     }
     if (typeof s['maximum'] === 'number' && typeof v === 'number' && v > (s['maximum'] as number)) {
-      errors.push(`${path || '$'}: 大于 maximum`);
+      push(`${path || '$'}: 大于 maximum`);
     }
     if (typeof v === 'string') {
       if (typeof s['pattern'] === 'string') {
@@ -194,26 +265,42 @@ export function validateAgainstSchema(schema: Record<string, unknown>, value: un
         } catch {
           re = null; // 非法 pattern 不误拒
         }
-        if (re && !re.test(v)) errors.push(`${path || '$'}: 不匹配 pattern ${String(s['pattern'])}`);
+        if (re && !re.test(v)) push(`${path || '$'}: 不匹配 pattern ${String(s['pattern'])}`);
       }
       if (typeof s['minLength'] === 'number' && v.length < (s['minLength'] as number)) {
-        errors.push(`${path || '$'}: 短于 minLength`);
+        push(`${path || '$'}: 短于 minLength`);
       }
       if (typeof s['maxLength'] === 'number' && v.length > (s['maxLength'] as number)) {
-        errors.push(`${path || '$'}: 长于 maxLength`);
+        push(`${path || '$'}: 长于 maxLength`);
       }
     }
     if (isPlainObject(v)) {
       const required = s['required'];
       if (Array.isArray(required)) {
         for (const key of required) {
-          if (typeof key === 'string' && !(key in v)) errors.push(`${path || '$'}: 缺必填字段 ${key}`);
+          if (typeof key === 'string' && !(key in v)) push(`${path || '$'}: 缺必填字段 ${key}`);
         }
       }
       const properties = s['properties'];
       if (isPlainObject(properties)) {
         for (const [key, sub] of Object.entries(properties)) {
           if (key in v && isPlainObject(sub)) walk(sub, v[key], path ? `${path}.${key}` : key);
+        }
+      }
+      // B11 入参严格化：面值逐字 `false` 才生效（缺省＝不声明＝照旧宽松，零风险）。未知键一律
+      // 显式出声，并当场报回「本面只收这些名 + 最接近的合法名」——绝不让拼错的参数（`maxResult`
+      // / `corridor` …）静默退回该面默认页大小，让调用方以为自己在翻页其实在原地打转。
+      if (s['additionalProperties'] === false) {
+        const legal = isPlainObject(properties) ? Object.keys(properties) : [];
+        for (const key of Object.keys(v)) {
+          if (legal.includes(key)) continue;
+          const near = nearestLegalKey(key, legal);
+          push(
+            `${keyLabel(path, key)}: 未知入参 '${key}'（本面不收它，也不会替它猜一个默认值——` +
+              `本面只收这些入参：${legal.length > 0 ? legal.join(' / ') : '（一个入参都不收）'}${
+                near ? `；最接近的合法名：${near}` : ''
+              }）`,
+          );
         }
       }
     }
@@ -223,7 +310,7 @@ export function validateAgainstSchema(schema: Record<string, unknown>, value: un
   };
 
   walk(schema, value, '$');
-  return { valid: errors.length === 0, errors };
+  return { valid: errors.length === 0, errors, omittedErrors: omitted };
 }
 
 /* ------------------------------------------------------------------ *
@@ -345,7 +432,15 @@ const RELATIVE_PATH_SCHEMA: Record<string, unknown> = {
 };
 
 /**
- * 分页入参的通用 schema 片段（B1 批：**只加可选入参，不加新工具名**）。
+ * 分页入参里 `limit` 可复用的旧名（各面历史口径不一，游标是新能力，旧参数零改动）。
+ * **这一序列就是「执行腿真正取用的页大小入参名」的真源**：`pageSizeOf` 按此顺序取第一个给了的
+ * 数字，因此入参严格化批（B11）必须把这八个名字逐个**声明进每张分页面的 `properties`**——
+ * 少声明一个不是「省掉一个别名」，而是把该面今天真的在用、也真的生效的入参变成拒收。
+ * 导出给契约测试反查「properties ⊇ 取用序列」（漂移护栏，见 tests/mcp-arg-strictness.test.ts）。
+ */
+export const PAGE_SIZE_ARG_ALIASES = ['limit', 'length', 'maxChars', 'maxResults', 'maxEntries', 'maxRanges', 'maxEvents', 'maxLines'] as const;
+
+/** 分页入参的通用 schema 片段（B1 批：**只加可选入参，不加新工具名**）。
  * 定义必须早于下面几张工具表——表是模块级 const，`export const` 对象若定义在其后会在
  * 模块初始化时撞 TDZ（ReferenceError），只有函数声明可以后置。
  */
@@ -365,9 +460,17 @@ export const PAGE_CURSOR_SCHEMA_PROPS: Record<string, unknown> = {
   },
 };
 
-/** 分页返回体的完整性账字段说明（供各面 description 复用，口径统一）。 */
+/** 分页面 description 的共用严格化尾注：说清「页大小只有一个旋钮 + 旧别名照收 + 未声明即显式拒收」。
+ * （定义必须早于 `PAGE_ACCOUNT_NOTE`——两张工具表都是模块级 const，后置会撞 TDZ。） */
+const PAGE_STRICT_NOTE =
+  'Argument strictness: page size is ONE knob - `limit` is its real name and the legacy synonyms declared on this surface keep working exactly as before, while an argument name that is NOT declared here is rejected with the full legal list instead of being silently ignored (a typo used to answer a default-size page forever, which reads like paging while it is standing still).';
+
+/** 分页返回体的完整性账字段说明（供各面 description 复用，口径统一）。
+ * 入参严格化批（B11）在这一句里同时把「页大小只有一个旋钮 + 未声明的入参名显式拒收」说清：
+ * 所有分页面的 description 都拼这段，改一处就等于 24 枚面一起改，不会各写一套。 */
 export const PAGE_ACCOUNT_NOTE =
-  'Every page carries the completeness account {total (spelled `textLength` on text surfaces), offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim for the next page. changedDuringPaging:true means the snapshot changed mid-paging, so that page restarts from the head and must not be spliced with earlier pages.';
+  'Every page carries the completeness account {total (spelled `textLength` on text surfaces), offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim for the next page. changedDuringPaging:true means the snapshot changed mid-paging, so that page restarts from the head and must not be spliced with earlier pages. ' +
+  PAGE_STRICT_NOTE;
 
 /** 语义读数服务 → 8 枚只读工具（tier 'read' + readOnlyHint）。
  *
@@ -375,6 +478,10 @@ export const PAGE_ACCOUNT_NOTE =
  * 单页上限取该面今天已有的硬闸（DIAGNOSTIC_LIMIT / SYMBOL_LIMIT＝200），不放宽；
  * 真·零参面（projectInfo）不再用裸 `{type:'object'}` 兜底，改成严格空对象（拒绝任何入参）。
  * `semantic.tokens` 原本就有 `lineFrom`/`lineTo` 窗口，本批保持其形状不动（它是本批的形状参照）。
+ *
+ * 入参严格化批（B11）：两张列举面逐字 `additionalProperties:false` 并补齐共用分页腿真收的页大小
+ * 别名；定位面走 `STRICT_POS_SCHEMA`；`semantic.referencesAt` 单独用 `REFERENCES_SCHEMA`——它的腿
+ * 一直就在读 `includeDeclaration`，此前没写进 properties 属于「声明不全」而不是「多收」，本批补上。
  */
 const PAGE_PROPS = PAGE_CURSOR_SCHEMA_PROPS;
 
@@ -382,6 +489,75 @@ const PAGE_PROPS = PAGE_CURSOR_SCHEMA_PROPS;
 const STRICT_NO_ARG_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {},
+  additionalProperties: false,
+};
+
+/**
+ * 入参严格化批（B11）：把 `pageSizeOf` 那条**既有的**页大小取值序列写进各分页面的 `properties`。
+ *
+ * 为什么一次声明八个而不是「本文档里点过名的那两个」：取值序列是共用腿的一部分，任何走
+ * `paginateText` / `paginateByCursor` / `pageParamsFor` 的面，今天这八个名字**每一个**都真的被当成
+ * 页大小读（先到先得，见 `pageSizeOf`）。`additionalProperties:false` 一生效，少声明一个就不是
+ * 「省掉一个别名」，而是把该面今天真在用的入参变成拒收——判据「旧别名照旧生效」当场红。
+ *
+ * 只有一个真参数：正名 `limit`，其余七个是同义旧名。描述里把「同一个旋钮 + 序列先到先得 +
+ * 新 callers 请写 limit」写死，不留「好像有两个页大小」的余地。
+ * 这里刻意**不带 `maximum`**：体积闸在腿侧 clamp（本批一个闸值都没动），在 schema 再钉一次上限等于
+ * 给旧别名新增一类「改前收、改后拒」的取值，那是收紧到行为变化，不是本批要的事。
+ */
+const PAGE_SIZE_ALIAS_NOTE =
+  'Legacy synonym of `limit` on THIS surface - the same single knob, not a second page size. ' +
+  'The shared page-size gate has always accepted these names and takes the first one present in this order: ' +
+  'limit > length > maxChars > maxResults > maxEntries > maxRanges > maxEvents > maxLines; the rest are then ignored. ' +
+  "New callers should send `limit`. Declared explicitly because this surface runs with additionalProperties:false: " +
+  'a name that is not listed here is rejected with the full legal list, never silently dropped to the default page size.';
+
+/**
+ * `limit` 之外、本面经共用分页腿**真正取用**的页大小别名。
+ * - `declared`：该面已单独写过描述的名字（fs.tree 的 `maxEntries` 等），跳过即可，面上字面量不动；
+ * - `omit`：共用序列里、但本面执行腿**并不会取用**的名字——不声明它们，让它们落进
+ *   「未知入参 ⇒ 显式拒收」。「收下却不用」正是本批要消灭的那种静默，不能靠声明把它合法化。
+ *   （例：problems.diagnostics 的腿先把 `maxResults` clamp 一遍再注入，序列里排在它之后的
+ *   `maxEntries`/`maxRanges`/`maxEvents`/`maxLines` 在该面从来不起作用。）
+ */
+function pageSizeAliasProps(declared: readonly string[] = [], omit: readonly string[] = []): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const alias of PAGE_SIZE_ARG_ALIASES) {
+    if (alias === 'limit' || declared.includes(alias) || omit.includes(alias)) continue;
+    out[alias] = { type: 'integer', minimum: 1, description: PAGE_SIZE_ALIAS_NOTE };
+  }
+  return out;
+}
+
+/** 本面已有的旧别名描述补一句「与 limit 是同一个旋钮」（不动 maximum / default 口径，只把关系说清）。 */
+const ALIAS_OF_LIMIT = ' Same single knob as `limit` (see the alias note on the other page-size names); prefer `limit`.';
+
+/**
+ * 位置入参（1 基 line/column）——B11 起严格。七枚定位面（definitionAt / hoverAt / suggestAt /
+ * codeActionsAt / lang.highlightsAt / lang.signatureAt）的腿只取 `line` + `column`，一个字段都没多。
+ */
+const STRICT_POS_SCHEMA: Record<string, unknown> = {
+  ...POS_SCHEMA,
+  additionalProperties: false,
+};
+
+/**
+ * `semantic.referencesAt` 的形状＝定位面 + `includeDeclaration`：这个字段**不是**新加的能力，
+ * 判据腿（`buildSemanticReaders.referencesAt`）早就在按 `args['includeDeclaration'] !== false`
+ * 过滤声明处，只是契约面一直没把它写进 properties（写了也不被拒＝静默）。严格化必须把它显式化。
+ */
+const REFERENCES_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    line: { type: 'integer' },
+    column: { type: 'integer' },
+    includeDeclaration: {
+      type: 'boolean',
+      description:
+        'Keep the declaration itself in the result (default true; the leg has always read this field). false drops items whose kind is the definition.',
+    },
+  },
+  required: ['line', 'column'],
   additionalProperties: false,
 };
 
@@ -428,28 +604,36 @@ const LAUNCHER_TIER_NOTE =
 
 
 export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
-  { name: 'semantic.definitionAt', method: 'definitionAt', description: '转到定义（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
-  { name: 'semantic.referencesAt', method: 'referencesAt', description: '查找引用（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
+  { name: 'semantic.definitionAt', method: 'definitionAt', description: '转到定义（只读）', inputSchema: STRICT_POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
+  { name: 'semantic.referencesAt', method: 'referencesAt', description: '查找引用（只读）', inputSchema: REFERENCES_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
   {
     name: 'semantic.diagnostics',
     method: 'diagnostics',
-    description: `当前文档诊断（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。${PAGE_ACCOUNT_NOTE}`,
-    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    description: `当前文档诊断（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，本页同时接受它历史上的同义旧名（maxResults…，序列先到先得）——写错的参数名现在一律显式拒收，不再静默按默认页大小原地打转。${PAGE_ACCOUNT_NOTE}`,
+    inputSchema: {
+      type: 'object',
+      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      additionalProperties: false,
+    },
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
-  { name: 'semantic.hoverAt', method: 'hoverAt', description: '悬停信息（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
-  { name: 'semantic.suggestAt', method: 'suggestAt', description: '补全候选（只读）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
+  { name: 'semantic.hoverAt', method: 'hoverAt', description: '悬停信息（只读）', inputSchema: STRICT_POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
+  { name: 'semantic.suggestAt', method: 'suggestAt', description: '补全候选（只读）', inputSchema: STRICT_POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
   {
     name: 'semantic.documentSymbols',
     method: 'documentSymbols',
-    description: `文档符号（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。${PAGE_ACCOUNT_NOTE}`,
-    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    description: `文档符号（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，其余同义旧名照旧接受（见 pageSize 说明）；不认识的入参名一律显式拒收。${PAGE_ACCOUNT_NOTE}`,
+    inputSchema: {
+      type: 'object',
+      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      additionalProperties: false,
+    },
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
-  { name: 'semantic.tokens', method: 'tokens', description: '词法 token（只读）', inputSchema: { type: 'object', properties: { lineFrom: { type: 'integer' }, lineTo: { type: 'integer' } } }, tier: 'read', annotations: { readOnlyHint: true } },
-  { name: 'semantic.codeActionsAt', method: 'codeActionsAt', description: '可用代码动作（只读，绝不 apply）', inputSchema: POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
+  { name: 'semantic.tokens', method: 'tokens', description: '词法 token（只读）', inputSchema: { type: 'object', properties: { lineFrom: { type: 'integer' }, lineTo: { type: 'integer' } }, additionalProperties: false }, tier: 'read', annotations: { readOnlyHint: true } },
+  { name: 'semantic.codeActionsAt', method: 'codeActionsAt', description: '可用代码动作（只读，绝不 apply）', inputSchema: STRICT_POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
 ];
 
 /** kernel IO → 3 枚只读工具。`fs.tree` 是本批补游标的列举面；`project.info` 是真零参面。 */
@@ -465,14 +649,16 @@ export const KERNEL_IO_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fs.tree',
     method: 'fileTree',
-    description: `项目文件树（只读）。列举面：单页上限沿用本面已有的 maxEntries 上限（未放宽），零参调用＝第一页、行为与旧版逐字一致。${PAGE_ACCOUNT_NOTE}`,
+    description: `项目文件树（只读）。列举面：单页上限沿用本面已有的 maxEntries 上限（未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，本面历史名 \`maxEntries\` 照旧等价；不认识的入参名一律显式拒收（旧行为是静默按默认页大小，翻页的人会以为自己在翻页）。${PAGE_ACCOUNT_NOTE}`,
     inputSchema: {
       type: 'object',
       properties: {
         maxDepth: { type: 'integer', minimum: 0, maximum: 16, description: 'Recursion depth cap (default 6).' },
-        maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: 'Page size (default 500; the pre-existing cap, never widened).' },
+        maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: `Page size (default 500; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['maxEntries']),
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -480,11 +666,17 @@ export const KERNEL_IO_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'search.all',
     method: 'searchAll',
-    description: `全工程检索（只读）。命中列表按 limit+cursor 分页；引擎自身封顶时显式给 knownTotal:false（不硬编假 total）。${PAGE_ACCOUNT_NOTE}`,
+    description: `全工程检索（只读）。命中列表按 limit+cursor 分页；引擎自身封顶时显式给 knownTotal:false（不硬编假 total）。页大小只有一个旋钮：正名 \`limit\`，其余同义旧名照旧接受；本面收 \`query\` / \`offset\` / 页大小别名 / \`cursor\`，**不收 \`scope\`**（要按作品域收窄请用 workspace.searchAll——旧行为是把 scope 静默丢掉、照样全根扫）。${PAGE_ACCOUNT_NOTE}`,
     inputSchema: {
       type: 'object',
-      properties: { query: { type: 'string' }, ...PAGE_PROPS },
+      properties: {
+        query: { type: 'string' },
+        offset: { type: 'integer', minimum: 0, description: '0-based hit offset of this window start when paging without a cursor (default 0). Ignored (cursor wins) when `cursor` is given.' },
+        ...PAGE_PROPS,
+        ...pageSizeAliasProps(),
+      },
       required: ['query'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -499,17 +691,20 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'workspace.searchAll',
     description:
-      'Search the whole project for a text query and return file/line hits. Read-only: never mutates files. Use `query` for the case-insensitive substring, optional `scope` to restrict to source files, `maxResults`/`limit` to size a page and `cursor` to resume the next one. Returns {hits:[{path,line,preview}], total, truncated} plus the page account. Honesty note: the search engine itself has a hard hit wall (5000); when the engine reports it overflowed, this surface answers `knownTotal:false` and `engineTruncated:true` instead of pretending the union of pages equals the true match count — narrow the query or page the files with fs.readFile. ' +
+      'Search the whole project for a text query and return file/line hits. Read-only: never mutates files. Use `query` for the case-insensitive substring, optional `scope` to restrict to source files, `maxResults`/`limit` to size a page and `cursor` to resume the next one. Returns {hits:[{path,line,preview}], total, truncated} plus the page account. Honesty note: the search engine itself has a hard hit wall (5000); when the engine reports it overflowed, this surface answers `knownTotal:false` and `engineTruncated:true` instead of pretending the union of pages equals the true match count — narrow the query or page the files with fs.readFile. Page size is ONE knob: `limit` is its real name, `maxResults` is this surface\'s historical synonym (both work, `limit` wins); anything not listed here is now rejected loudly instead of silently paging at the default size. ' +
       PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', minLength: 1, maxLength: 512, description: 'Substring to find (case-insensitive).' },
         scope: { type: 'string', enum: ['all', 'sources'], description: 'Restrict to source files or search all files (default all).' },
-        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Page size (default 50; the pre-existing cap, never widened).' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: `Page size (default 50; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
+        offset: { type: 'integer', minimum: 0, description: '0-based hit offset of this window start when paging without a cursor (default 0); the cursor wins when given.' },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['maxResults']),
       },
       required: ['query'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -526,6 +721,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         column: { type: 'integer', minimum: 1, description: '1-based column of the finding.' },
       },
       required: ['actionId', 'line', 'column'],
+      additionalProperties: false,
     },
     tier: 'edit',
     annotations: { idempotentHint: false },
@@ -533,14 +729,16 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'problems.diagnostics',
     description:
-      'List current problems-panel diagnostics for the active document/project. Read-only. Returns {items:[{message,line,severity,source?}], total, truncated} plus the page account. This surface pages: `maxResults`/`limit` size a page and `cursor` resumes it, so every finding is enumerable. Inspect available actions before proposing any problems.quickFix; a `truncated:true` result means more pages exist (or that you must narrow the query) — never assume completeness. ' +
+      'List current problems-panel diagnostics for the active document/project. Read-only. Returns {items:[{message,line,severity,source?}], total, truncated} plus the page account. This surface pages: `maxResults`/`limit` size a page and `cursor` resumes it, so every finding is enumerable — they are ONE knob (`limit` is the real name, `maxResults` this surface\'s synonym), and an unlisted argument name is now rejected instead of silently paging at the default size. Stated rather than hidden: this face clamps `maxResults` BEFORE the shared page-size gate, so the aliases that rank behind `maxResults` (`maxEntries` / `maxRanges` / `maxEvents` / `maxLines`) never took effect here and are deliberately NOT accepted — send `limit` or `maxResults`. Inspect available actions before proposing any problems.quickFix; a `truncated:true` result means more pages exist (or that you must narrow the query) — never assume completeness. ' +
       PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
-        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size (default 200; the pre-existing cap, never widened).' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: `Page size (default 200; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['maxResults'], ['maxEntries', 'maxRanges', 'maxEvents', 'maxLines']),
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -557,6 +755,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         content: { type: 'string', maxLength: 1_000_000, description: 'Initial file content (file only).' },
       },
       required: ['relPath', 'kind'],
+      additionalProperties: false,
     },
     tier: 'edit',
     annotations: { idempotentHint: false },
@@ -572,6 +771,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         content: { type: 'string', maxLength: 1_000_000, description: 'Full replacement text.' },
       },
       required: ['relPath', 'content'],
+      additionalProperties: false,
     },
     tier: 'edit',
     annotations: { idempotentHint: true },
@@ -587,6 +787,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         recursive: { type: 'boolean', description: 'Allow removing a non-empty directory (default false).' },
       },
       required: ['relPath'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false },
@@ -599,6 +800,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: { from: RELATIVE_PATH_SCHEMA, to: RELATIVE_PATH_SCHEMA },
       required: ['from', 'to'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { destructiveHint: true, idempotentHint: false, readOnlyHint: false },
@@ -615,6 +817,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         right: RELATIVE_PATH_SCHEMA,
       },
       required: ['mode'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -629,6 +832,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         step: { type: 'integer', minimum: 0, description: 'Recorded step index (0-based, default latest).' },
         maxEvents: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned events (default 100).' },
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -643,6 +847,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         relPath: RELATIVE_PATH_SCHEMA,
         maxLines: { type: 'integer', minimum: 1, maximum: 2000, description: 'Cap on previewed lines (default 200).' },
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -656,15 +861,17 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'commands.list',
     description:
-      'List the commands registered in the command palette (id / title / description / tier). Read-only. Same data source as the kojo://project/commands resource, but this surface pages: `maxResults` (or `limit`) sizes a page and `cursor` from the previous response resumes it, so every registered command is enumerable — `total` is the full count and `hasMore`/`nextCursor` say how to get the rest. ' +
+      'List the commands registered in the command palette (id / title / description / tier). Read-only. Same data source as the kojo://project/commands resource, but this surface pages: `maxResults` (or `limit` — one and the same knob) sizes a page and `cursor` from the previous response resumes it, so every registered command is enumerable — `total` is the full count and `hasMore`/`nextCursor` say how to get the rest. A page-size name that is not declared here is now rejected instead of silently paging at the default size. ' +
       PAGE_ACCOUNT_NOTE +
       ' Discover real ids here before calling any command; never invent a command id.',
     inputSchema: {
       type: 'object',
       properties: {
-        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size (default 200; the pre-existing cap, never widened).' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: `Page size (default 200; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['maxResults']),
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -672,17 +879,19 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'document.active',
     description:
-      'Read the active document text and cursor position as a read-only projection. Same data source as the kojo://project/active-document resource, but this surface pages: `offset` (0-based character offset) + `length` (alias `maxChars`) address a sub-range, and `cursor` from the previous response resumes exactly where it ended — `textLength` is the FULL length, so concatenating pages reproduces the buffer character-for-character. Page size: default 8000, max 65000 characters (the host sanitizer cuts any untrusted string at 65536, so pages are kept under that gate rather than reported-then-trimmed). ' +
+      'Read the active document text and cursor position as a read-only projection. Same data source as the kojo://project/active-document resource, but this surface pages: `offset` (0-based character offset) + `length` (alias `maxChars`) address a sub-range, and `cursor` from the previous response resumes exactly where it ended — `textLength` is the FULL length, so concatenating pages reproduces the buffer character-for-character. Page size: default 8000, max 65000 characters (the host sanitizer cuts any untrusted string at 65536, so pages are kept under that gate rather than reported-then-trimmed). `limit` / `length` / `maxChars` are ONE knob (`limit` is the real name; the other two are this surface\'s historical synonyms, still honored) — an undeclared argument name is now rejected loudly rather than silently defaulting. ' +
       PAGE_ACCOUNT_NOTE +
       ' Read-first: do not infer any text beyond what is returned.',
     inputSchema: {
       type: 'object',
       properties: {
         offset: { type: 'integer', minimum: 0, description: '0-based character offset of the window start (default 0).' },
-        length: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Characters in this page (default 8000, max 65000).' },
-        maxChars: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Legacy alias of `length`; values above 65000 are clamped down to the host gate.' },
+        length: { type: 'integer', minimum: 1, maximum: 65_000, description: `Characters in this page (default 8000, max 65000).${ALIAS_OF_LIMIT}` },
+        maxChars: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Legacy alias of `length`; values above 65000 are clamped down to the host gate.' + ALIAS_OF_LIMIT },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['length', 'maxChars']),
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -692,17 +901,19 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'Read the text content of one file inside the authorized project root (read-only), page by page. `relPath` MUST be a project-root-relative path — the schema rejects absolute paths, drive letters and ".." traversal, and the execution layer re-checks it against approvedRoots. Backed by the Rust read_file_bytes primitive: the whole file is decoded host-side, this tool returns ONE window. Use `offset` (0-based character offset) + `length` (alias `maxChars`, kept for backwards compatibility) to address a sub-range; a plain `cursor` from the previous page is equivalent and self-checking. ' +
       'Completeness: `textLength` is the FULL character length of the file; `hasMore` says whether characters remain after this page; `nextCursor` resumes exactly where this page ended, so concatenating pages reproduces the file character-for-character. If the file changed between pages the response carries `changedDuringPaging:true` and restarts from offset 0 — do not splice that page with earlier ones. ' +
-      'Page size is gated: default 24000 characters, maximum 65000 characters (`length` is clamped). The 65000 ceiling is not a convenience — the host sanitizer cuts any single untrusted string at 65536 characters, so a larger page would have been silently re-truncated after this tool reported its account. Never writes to disk.',
+      'Page size is gated: default 24000 characters, maximum 65000 characters (`length` is clamped). The 65000 ceiling is not a convenience — the host sanitizer cuts any single untrusted string at 65536 characters, so a larger page would have been silently re-truncated after this tool reported its account. One knob, several historical names: `limit` is the real name, `length` / `maxChars` are synonyms this surface keeps accepting; any name NOT declared here is rejected with the legal list instead of silently paging at the default size. Never writes to disk.',
     inputSchema: {
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_SCHEMA,
         offset: { type: 'integer', minimum: 0, description: '0-based character offset of the window start (default 0). Ignored (treated as head-restart) when a cursor is given.' },
-        length: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Characters to return in this page (default 24000, max 65000 — see the host string gate).' },
-        maxChars: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Legacy alias of `length`. Values above 65000 are clamped down to the host gate, not up.' },
+        length: { type: 'integer', minimum: 1, maximum: 65_000, description: `Characters to return in this page (default 24000, max 65000 — see the host string gate).${ALIAS_OF_LIMIT}` },
+        maxChars: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Legacy alias of `length`. Values above 65000 are clamped down to the host gate, not up.' + ALIAS_OF_LIMIT },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['length', 'maxChars']),
       },
       required: ['relPath'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -715,6 +926,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: { relPath: RELATIVE_PATH_SCHEMA },
       required: ['relPath'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -722,16 +934,18 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'io.listDir',
     description:
-      'List the direct children of one directory inside the authorized project root (read-only). `relPath` is optional (defaults to the project root) and must be project-root-relative; `maxEntries` / `limit` size a page and `cursor` resumes the next one, so a large directory is fully enumerable; `maxDepth` bounds recursion and the result carries an explicit `truncated` flag. Backed by the Rust list_dir / walk_dir primitives. Use it to confirm a relative path exists before any write. Never writes to disk. ' +
+      'List the direct children of one directory inside the authorized project root (read-only). `relPath` is optional (defaults to the project root) and must be project-root-relative; `maxEntries` / `limit` size a page and `cursor` resumes the next one, so a large directory is fully enumerable; `maxDepth` bounds recursion and the result carries an explicit `truncated` flag. Backed by the Rust list_dir / walk_dir primitives. Use it to confirm a relative path exists before any write. Page size is ONE knob (`limit` is the real name, `maxEntries` this surface\'s historical synonym); an argument name outside the declared list is now rejected instead of being silently ignored. Never writes to disk. ' +
       PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_SCHEMA,
-        maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: 'Page size (default 500; the pre-existing cap, never widened).' },
+        maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: `Page size (default 500; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         maxDepth: { type: 'integer', minimum: 0, maximum: 16, description: 'Recursion depth cap (default 1).' },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['maxEntries']),
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -739,13 +953,16 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'io.workspaceRoots',
     description:
-      'List the workspace roots registered for the current session (read-only). Backed by the Rust workspace_roots primitive. `maxResults`/`limit` size a page and `cursor` resumes it; the list carries `total` + `hasMore` so it is fully enumerable. Use this to learn the legitimate domain for subsequent relative paths; it never grants write access outside approvedRoots and never mutates state.',
+      'List the workspace roots registered for the current session (read-only). Backed by the Rust workspace_roots primitive. `maxResults`/`limit` size a page (one and the same knob) and `cursor` resumes it; the list carries `total` + `hasMore` so it is fully enumerable. Undeclared argument names are rejected, never silently dropped to the default page. Use this to learn the legitimate domain for subsequent relative paths; it never grants write access outside approvedRoots and never mutates state. ' +
+      PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
-        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Page size (default 50; the pre-existing cap, never widened).' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: `Page size (default 50; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['maxResults']),
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -760,6 +977,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         section: { type: 'string', enum: ['all', 'editor', 'document'], description: 'Which metadata section to project (default all).' },
         maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Cap on returned fields (default 200).' },
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -767,14 +985,16 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'editor.selfCheck',
     description:
-      'Run a read-only self-check of the language/validation layer and return its findings (rule / message / severity). Backed by the semantic `selfCheck` read. `maxResults`/`limit` size a page and `cursor` resumes it, so every finding is enumerable; the result carries an explicit `truncated` flag. It is a diagnostic projection, never a fix and never a write; do not treat it as an authorization to edit. ' +
+      'Run a read-only self-check of the language/validation layer and return its findings (rule / message / severity). Backed by the semantic `selfCheck` read. `maxResults`/`limit` size a page and `cursor` resumes it, so every finding is enumerable (page size is ONE knob; the historical name `maxResults` keeps working); an undeclared argument name is rejected rather than silently paging at the default. The result carries an explicit `truncated` flag. It is a diagnostic projection, never a fix and never a write; do not treat it as an authorization to edit. ' +
       PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
-        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size (default 200; the pre-existing cap, never widened).' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: `Page size (default 200; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['maxResults']),
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -790,6 +1010,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         lineTo: { type: 'integer', minimum: 0, description: '0-based last line of the window.' },
         maxRanges: { type: 'integer', minimum: 1, maximum: 2000, description: 'Cap on returned ranges (default 500).' },
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -798,7 +1019,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'lang.highlightsAt',
     description:
       'Return document highlights for the symbol at a 1-based line/column (read-only). Backed by the semantic `highlightsAt` read. Returns the matched ranges without mutating the document. Use the read-only result to understand symbol usage before proposing any edit; never apply a change from this call.',
-    inputSchema: POS_SCHEMA,
+    inputSchema: STRICT_POS_SCHEMA,
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
@@ -806,21 +1027,23 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'lang.signatureAt',
     description:
       'Return signature help at a 1-based line/column (read-only). Backed by the semantic `signatureAt` read. Returns candidate signatures / active parameter without mutating the document. Domain wording, if any, comes only through mcp.prompt slots; this tool reports the raw language-service output.',
-    inputSchema: POS_SCHEMA,
+    inputSchema: STRICT_POS_SCHEMA,
     tier: 'read',
     annotations: { readOnlyHint: true },
   },
   {
     name: 'lang.markers',
     description:
-      'Return the current marker set for the active document (read-only). Backed by the semantic `markers` read. `maxResults`/`limit` size a page and `cursor` resumes it, so the full marker set is enumerable; the result carries an explicit `truncated` flag. This is a read-only problem/decoration projection — it never clears or edits a marker and never fabricates a finding. ' +
+      'Return the current marker set for the active document (read-only). Backed by the semantic `markers` read. `maxResults`/`limit` size a page (ONE knob; `maxResults` is this surface\'s historical synonym) and `cursor` resumes it, so the full marker set is enumerable; an undeclared argument name is now rejected instead of silently paging at the default size. The result carries an explicit `truncated` flag. This is a read-only problem/decoration projection — it never clears or edits a marker and never fabricates a finding. ' +
       PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
-        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: 'Page size (default 200; the pre-existing cap, never widened).' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 500, description: `Page size (default 200; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(['maxResults']),
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -855,6 +1078,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         encoding: { type: 'string', enum: ['utf-8', 'utf-8-bom', 'shift_jis', 'gbk', 'gb18030', 'big5', 'utf-16le', 'utf-16be'], description: 'Target encoding (fixed whitelist).' },
       },
       required: ['text', 'encoding'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -867,6 +1091,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: { relPath: RELATIVE_PATH_SCHEMA },
       required: ['relPath'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -882,6 +1107,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned stat items (default 200).' },
       },
       required: ['relPaths'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -939,6 +1165,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         line: { type: 'integer', minimum: 1, description: 'Optional 1-based line filter.' },
         maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned lenses (default 30).' },
       },
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -955,6 +1182,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         maxChains: { type: 'integer', minimum: 1, maximum: 200, description: 'Cap on returned chains (default 8).' },
       },
       required: ['line', 'column'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -1056,6 +1284,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         taskId: { type: 'string', minLength: 1, maxLength: 128, description: 'The id returned by tasks.start.' },
       },
       required: ['taskId'],
+      additionalProperties: false,
     },
     tier: 'read',
     annotations: { readOnlyHint: true },
@@ -1070,6 +1299,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         taskId: { type: 'string', minLength: 1, maxLength: 128, description: 'The id returned by tasks.start.' },
       },
       required: ['taskId'],
+      additionalProperties: false,
     },
     tier: 'edit',
     annotations: { readOnlyHint: false, idempotentHint: true },
@@ -1230,9 +1460,13 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'launcher_instance_list',
     description:
-      'List the launcher instances registered on this machine (read-only). Returns {instances:[...], total, offset, limit, truncated, hasMore, nextCursor, fingerprint}: each row is the host DTO verbatim (id, adapterId, gameId, createdAt, sourceRoot|null, isolation, instanceRoot, gameRoot, executableTrust, state, name, tags, notes). An empty list is the real reading (zero registered instances), never a wiring failure; if no launcher surface exists at all the call fails visibly with NOT_WIRED instead of returning []. Start paging here and reuse the ids you read. ' +
+      'List the launcher instances registered on this machine (read-only). Returns {instances:[...], total, offset, limit, truncated, hasMore, nextCursor, fingerprint}: each row is the host DTO verbatim (id, adapterId, gameId, createdAt, sourceRoot|null, isolation, instanceRoot, gameRoot, executableTrust, state, name, tags, notes). An empty list is the real reading (zero registered instances), never a wiring failure; if no launcher surface exists at all the call fails visibly with NOT_WIRED instead of returning []. Start paging here and reuse the ids you read. Page size is ONE knob (`limit` plus the legacy synonyms this face keeps accepting); anything not declared is rejected instead of silently paging at the default. ' +
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    inputSchema: {
+      type: 'object',
+      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      additionalProperties: false,
+    },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -1241,7 +1475,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'Inspect one launcher instance (read-only): {instance, executable, runtime, paths, diskUsageBytes, warnings} exactly as the host reports it. `executable` carries the resolved relative path plus the recorded sha256 and whether the trust record exists (approvedAt comes from the native confirmation dialog only - trust can never be granted through MCP). A missing instance id fails with the host structured error (code + retryable + detail in the message), never with a null object. ' +
       LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'] },
+    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -1252,8 +1486,9 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1265,8 +1500,9 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1276,7 +1512,11 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'List the game processes currently supervised by the launcher host (read-only): {processes:[{instanceId, state, pid, sessionId, startedAt, elapsedMs, exitCode, exitReason, lastError}], + the page account}. This is the host process table, not the OS process list - a game started outside the launcher is not in it. Empty array = no supervised process, which is a reading, not an error. ' +
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    inputSchema: {
+      type: 'object',
+      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      additionalProperties: false,
+    },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -1285,7 +1525,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'Read the process state of one instance (read-only): {instanceId, state, pid, sessionId, startedAt, elapsedMs, exitCode, exitReason, lastError} straight from the host supervisor. `state` is one of idle|starting|running|stopping|exited|crashed; null pid / sessionId means "not running", never "unknown". Poll this after launcher_start and launcher_stop instead of assuming a transition happened. ' +
       LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'] },
+    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -1294,7 +1534,11 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       "List the launcher task centre's rows (read-only): {tasks:[{id, kind, instanceId, state, progress, createdAt, startedAt, endedAt, error, result, cancellable}], + the page account} plus a faceNote. This table is deliberately its OWN surface: launcher tasks belong to the third table (per-root approvals) and are NOT merged into kojo://tasks, so a launcher job never shows up in the long-task face and vice versa. Rows are how you verify a lifecycle call: take the taskRowId from that reply and read it here. " +
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { ...PAGE_PROPS } },
+    inputSchema: {
+      type: 'object',
+      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      additionalProperties: false,
+    },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -1305,8 +1549,9 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1318,8 +1563,9 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1331,8 +1577,9 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1340,17 +1587,19 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'launcher_log_tail',
     description:
-      'Read the tail of the newest log session of one instance (read-only), exactly as the host returns it: {session, truncatedByBytes, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account over chunks}. Two honesty points, both load-bearing: (1) the payload is RAW BYTES in base64 - the host does not decode and neither does this face, because the charset decision belongs to the launcher core log service; concatenate bytesBase64 across pages in nextCursor order and decode afterwards. (2) The host default is 1 MiB per stream; this face TIGHTENS the read to at most 40960 bytes per stream so a page stays under the host untrusted-string gate. `truncatedByBytes` is the host byte reading, the account `truncated`/`hasMore` is the chunk-page reading - they are deliberately two different fields. `maxLines` is not offered: the host truncates by bytes only. ' +
+      'Read the tail of the newest log session of one instance (read-only), exactly as the host returns it: {session, truncatedByBytes, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account over chunks}. Two honesty points, both load-bearing: (1) the payload is RAW BYTES in base64 - the host does not decode and neither does this face, because the charset decision belongs to the launcher core log service; concatenate bytesBase64 across pages in nextCursor order and decode afterwards. (2) The host default is 1 MiB per stream; this face TIGHTENS the read to at most 40960 bytes per stream so a page stays under the host untrusted-string gate. `truncatedByBytes` is the host byte reading, the account `truncated`/`hasMore` is the chunk-page reading - they are deliberately two different fields. Byte size per stream is `maxBytes` (never more than the gate); the page-size names (`limit` and its legacy synonyms) size the CHUNK list, not the byte budget - `maxLines` therefore pages chunks and does not truncate by lines, because the host truncates by bytes only. ' +
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
         instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
         stream: { type: 'string', enum: ['stdout', 'stderr', 'all'], description: 'Which stream to read (default all, i.e. both chunks).' },
-        maxBytes: { type: 'integer', minimum: 1, maximum: 40960, description: 'Per-stream byte cap handed to the host (default and hard ceiling 40960 - tighter than the host 1 MiB on purpose).' },
+        maxBytes: { type: 'integer', minimum: 1, maximum: 40960, description: 'Per-stream byte cap handed to the host (default and hard ceiling 40960 - tighter than the host 1 MiB on purpose). This is the BYTE budget, a different knob from the page size.' },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(),
       },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1358,17 +1607,19 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'launcher_log_read',
     description:
-      'Read one recorded log session by id (read-only) - same answer shape as launcher_log_tail ({session, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account}), the difference being the addressing: `sessionId` must come from launcher_log_sessions (the host also verifies session ownership). Bytes stay raw base64 here: charset decoding is the launcher core log service job, so splice pages first, then decode. Per-stream cap is tightened to 40960 bytes, never widened. ' +
+      'Read one recorded log session by id (read-only) - same answer shape as launcher_log_tail ({session, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account}), the difference being the addressing: `sessionId` must come from launcher_log_sessions (the host also verifies session ownership). Bytes stay raw base64 here: charset decoding is the launcher core log service job, so splice pages first, then decode. Per-stream cap is tightened to 40960 bytes, never widened; `maxBytes` is that byte budget while `limit` and its legacy synonyms page the CHUNK list. ' +
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
         sessionId: LAUNCHER_COMPONENT_ID_SCHEMA,
         stream: { type: 'string', enum: ['stdout', 'stderr', 'all'], description: 'Which stream to read (default all).' },
-        maxBytes: { type: 'integer', minimum: 1, maximum: 40960, description: 'Per-stream byte cap (default and ceiling 40960).' },
+        maxBytes: { type: 'integer', minimum: 1, maximum: 40960, description: 'Per-stream byte cap (default and ceiling 40960). The BYTE budget, a different knob from the page size.' },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(),
       },
       required: ['sessionId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1388,11 +1639,13 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
           minItems: 1,
           maxItems: 2000,
           items: { type: 'string', minLength: 1, maxLength: 512, description: 'Path relative to artifactDir, POSIX separators.' },
-          description: 'The file list to hash, in the order the manifest declares (order is the pairing key).',
+          description: 'The file list to hash, in the order the manifest declares (order is the pairing key). Hard cap 2000 entries, never a silently dropped tail.',
         },
         ...PAGE_PROPS,
+        ...pageSizeAliasProps(),
       },
       required: ['projectDir', 'artifactDir', 'entries'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1411,6 +1664,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         tags: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 64 }, description: 'Tag list (replaces the existing tags).' },
       },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -1427,6 +1681,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         name: { type: 'string', minLength: 1, maxLength: 120, description: 'Optional name for the copy (host default naming when omitted).' },
       },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -1515,7 +1770,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'Start the game of one instance (mutating, privileged, launches a real OS process). The whole validation chain runs inside the host - instance ready, executable legitimate, recorded executable trust, runtime resolved, per-instance lock - and none of it can be skipped from MCP: executable trust can only be granted by a human in the native confirmation dialog, so an untrusted executable arrives as that host error code. Returns the process status reading; poll launcher_process_status for the truth. ' +
       LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'] },
+    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
   },
@@ -1532,6 +1787,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         timeoutMs: { type: 'integer', minimum: 0, maximum: 120000, description: 'Optional graceful-stop budget (0..120000).' },
       },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
@@ -1572,6 +1828,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         },
       },
       required: ['instanceId'],
+      additionalProperties: false,
     },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -2037,8 +2294,8 @@ export function decodePageCursor(cursor: unknown): { readonly fingerprint: strin
   return { fingerprint: m[1] as string, index };
 }
 
-/** 分页入参里 `limit` 可复用的旧名（各面历史口径不一，游标是新能力，旧参数零改动）。 */
-const PAGE_SIZE_ARG_ALIASES = ['limit', 'length', 'maxChars', 'maxResults', 'maxEntries', 'maxRanges', 'maxEvents', 'maxLines'] as const;
+/** 分页入参里 `limit` 可复用的旧名：序列真源已上移到 §5 的 `PAGE_SIZE_ARG_ALIASES`（导出，
+ * 供各面 schema 声明与漂移护栏共用——声明与取值序列必须是同一份名单，否则严格化会拒掉旧别名）。 */
 
 function clampPositiveInt(v: unknown, fallback: number, min: number, max: number): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? Math.floor(v) : fallback;
@@ -2527,7 +2784,12 @@ export function createMcpCapabilityRegistry(deps: McpHostDeps): McpCapabilityReg
       const input = args ?? {};
       const check = validateAgainstSchema(tool.inputSchema, input);
       if (!check.valid) {
-        throw new McpFailure('INVALID_ARGS', `工具 ${name} 入参不合法：${check.errors.join('；')}`);
+        throw new McpFailure(
+          'INVALID_ARGS',
+          `工具 ${name} 入参不合法：${check.errors.join('；')}` +
+            // 违规项被闸住时如实说明少报了几条（口径与其它「截断必带 truncated」的面一致）。
+            (check.omittedErrors > 0 ? `；另有 ${check.omittedErrors} 条违规项未逐条列出（单次最多 ${SCHEMA_ERROR_CAP} 条）` : ''),
+        );
       }
       try {
         return await tool.run(input, scope);
