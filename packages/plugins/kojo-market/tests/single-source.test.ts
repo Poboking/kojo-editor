@@ -289,16 +289,20 @@ describe('市场单一真源守门', () => {
   it('远程面只有一个入口名：fetchRemoteText 全仓 0 次，生产面 fetchText 只住四个文件', () => {
     // 半截改名（桥一个名、服务另一个名）就是"两条路"的开始 ⇒ 当场统一并钉住
     expect(scan([/fetchRemoteText/], ALL)).toEqual([]);
+    // MCP-PERF-S17（2026-11-07）：契约的类型面拆进 `platform-types.ts`（图外叶子），
+    // `RemoteService` / `PlatformBridge` 的**方法名原文**随接口搬了过去——闭集跟着改指
+    // 新落点（S15 治理批同款），真源仍只有这一份。
     expect(
       scan([/fetchText/], PROD_SURFACE).map(rel).sort(),
     ).toEqual([
       'packages/app/src/bridge/tauri-bridge.ts',
       'packages/kernel/src/remote.ts',
-      'packages/plugin-api/src/platform.ts',
+      'packages/plugin-api/src/platform-types.ts',
       'packages/plugins/kojo-market/src/service.ts',
     ]);
-    // FileIO 契约面上没有任何远程方法（远程走 `kernel.remote`，两处并存 = 两份真相）
-    expect(scan([/fetchText|fetchRemote|\bhttps?:\/\//], [nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'io.ts'), nodeJoin(ROOT, 'packages', 'kernel', 'src', 'io.ts')], true)).toEqual([]);
+    // FileIO 契约面上没有任何远程方法（远程走 `kernel.remote`，两处并存 = 两份真相）；
+    // 类型面拆分后 `FileIO` 原文住 `io-types.ts`，负向闸一并盖住它。
+    expect(scan([/fetchText|fetchRemote|\bhttps?:\/\//], [nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'io.ts'), nodeJoin(ROOT, 'packages', 'plugin-api', 'src', 'io-types.ts'), nodeJoin(ROOT, 'packages', 'kernel', 'src', 'io.ts')], true)).toEqual([]);
   });
 });
 
@@ -315,12 +319,14 @@ describe('安装面单一真源守门（KM-10..12）', () => {
     // （住 market.ts）不许误命中。
     // 2026-10-16 发布通道批：`marketPublish` / `marketDeviceToken` 与下载同住那四个文件
     // （桥 / 内核透传 / 契约 / 服务），且各只出现一份。
+    // MCP-PERF-S17：契约类型面拆进 `platform-types.ts`（图外叶子），端口方法名原文随
+    // `PlatformBridge` / `RemoteService` 接口搬了过去——闭集跟着改指新落点（S15 同款）。
     expect(
       scan([/marketDownload\b|marketExtract\b|marketPublish\b|marketDeviceToken\b/], PROD_SURFACE).map(rel).sort(),
     ).toEqual([
       'packages/app/src/bridge/tauri-bridge.ts',
       'packages/kernel/src/remote.ts',
-      'packages/plugin-api/src/platform.ts',
+      'packages/plugin-api/src/platform-types.ts',
       'packages/plugins/kojo-market/src/service.ts',
     ]);
     expect(codeMatchCount(readFileSync(RUST_MARKET_RS, 'utf8'), /#\[tauri::command\]/), 'market.rs 的命令数').toBe(5);
@@ -450,7 +456,7 @@ describe('更新语义与即时失效的单一真源守门（MK-1）', () => {
     expect(scan([/marketDownload\b|marketExtract\b/], PROD_SURFACE).map(rel).sort()).toEqual([
       'packages/app/src/bridge/tauri-bridge.ts',
       'packages/kernel/src/remote.ts',
-      'packages/plugin-api/src/platform.ts',
+      'packages/plugin-api/src/platform-types.ts', // MCP-PERF-S17：接口原文随类型面搬迁（S15 同款改指）
       'packages/plugins/kojo-market/src/service.ts',
     ]);
   });

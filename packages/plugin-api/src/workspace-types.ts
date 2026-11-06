@@ -1,0 +1,205 @@
+/**
+ * 作者工作区服务契约的**类型面**（从 `workspace.ts` 拆出的图外叶子，2026-11-07 MCP-PERF-S17）。
+ *
+ * 为什么单独成文件：ps10 开机闸按**源码字节**累加静态值依赖图，类型声明经
+ * `import type` / `export type` 整段擦除——类型面住这里（没有任何图内文件值 import
+ * 本枚）就不进开机图；`workspace.ts` 只留运行时真源（`WORKSPACE_MANIFEST_FILE`），
+ * 经文件尾 `export type * from './workspace-types'` 保持旧的 `./workspace` 导入路径可用
+ * （S15 治理批 `slots/sugar/replay` 三笔的同一形态）。
+ *
+ * 铁律：**本文件只许有类型**（interface / type / JSDoc）。一枚 `export const` 都会把
+ * 本枚拽回图内文件的值依赖图——运行时真源照旧住 `workspace.ts`。
+ */
+
+import type { TextFile } from './io';
+import type { DirEntry } from './platform';
+
+/** 工作区制品引用（一个制品 = 项目内一个子目录 + 元数据） */
+export interface WorkspaceArtifact {
+  /** 制品 id（项目内唯一，创建时生成） */
+  id: string;
+  /** 显示名 */
+  name: string;
+  /** 项目内的子目录名（单层；制品的全部文件住在这里） */
+  dirName: string;
+  /** 提供方自定义元数据（内核原样透传，不解释） */
+  meta: Record<string, unknown>;
+  createdAt: number;
+}
+
+/** 工作区项目（manifest 持久化形态） */
+export interface WorkspaceProject {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  artifacts: WorkspaceArtifact[];
+  /** 提供方自定义元数据（内核原样透传，不解释） */
+  meta: Record<string, unknown>;
+}
+
+/** 新建制品输入：文件集 = 相对路径（posix 分隔符）→ 文本内容 */
+export interface WorkspaceArtifactInput {
+  name: string;
+  /** 制品目录名（单层、不得含分隔符；冲突时抛错） */
+  dirName: string;
+  files: Record<string, string>;
+  meta?: Record<string, unknown>;
+}
+
+/** 导入外部目录为制品的输入（字节级逐文件复制；源只读、落点在项目内） */
+export interface WorkspaceImportInput {
+  name: string;
+  /** 制品目录名（单层、不得含分隔符；冲突时抛错） */
+  dirName: string;
+  /** 源目录绝对路径（不存在时抛错） */
+  sourceDir: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface WorkspaceService {
+  /**
+   * 工作区**内置**根目录（绝对路径）；服务不可用（无平台数据目录）时抛错。
+   *
+   * 这一条恒等于 `<appDataDir>/workspaces`，**不随用户的「默认工作区」设定改变**
+   * （它还是常驻可写根清单的首位，见 `projectDirs()`）。要问"新建的作品默认落在哪"
+   * 用 `defaultRoot()`。
+   */
+  rootDir(): string;
+  /**
+   * **默认落点根**（2026-11-03 默认工作区批，additive）：`create` / 导入未显式给
+   * `rootDir` 时真正用的那一条。
+   *
+   * = 用户设定的那一条（`customDefaultRoot()`，且仍命中 `roots()`）∣ 否则内置根
+   * `rootDir()`。设定失效（移动硬盘拔掉 / 授权被撤）**不静默**：这里照实回内置根，
+   * 设定本身留着——作者插回磁盘就自动沿用回来，不需要重设一遍。
+   *
+   * 本方法只回答"新建落在哪"，**不扩写允许域**：落点根根身（自选的那一条）仍不进
+   * `projectDirs()`，可写的是它下面解析出的作品目录。抛错口径同 `rootDir()`。
+   */
+  defaultRoot(): string;
+  /**
+   * 用户设定过的默认落点根（绝对路径；`null` = 从未设定 / 设定过内置根 / 已清除）。
+   *
+   * 与 `defaultRoot()` 的差别就是这一句：**这里连当前不可用的那一条也照实返回**，
+   * 设置页才能说出"你选的 X 现在读不到，这次先落回内置位置"。抛错口径同 `rootDir()`。
+   */
+  customDefaultRoot(): string | null;
+  /**
+   * 设定默认落点根（2026-11-03 默认工作区批，additive）。
+   *
+   * 落点不是自由参数：`root` **必须命中 `roots()`**（内置根 ∪ 对话框授权根），否则抛
+   * 中文错误——扩大授权仍只有目录对话框一条通道（铁律 6），本方法只是从已授权的几条里
+   * 挑一条当默认。给了内置根 = 清除设定（回到"未设定"，与历史行为逐字一致）。
+   * 传进来的路径当前不存在但仍在授权名单里（网络盘暂未接入）⇒ 接受并记一声，
+   * 生效与否由 `defaultRoot()` 每次现判。
+   */
+  setDefaultRoot(root: string): Promise<void>;
+  /**
+   * 全部可用落点根：默认根（**恒在首位**）∪ 用户经目录对话框自选并常驻授权的项目位置根
+   * （2026-10-14 新建项目自选位置批）。服务不可用时抛错，口径同 `rootDir()`。
+   *
+   * 授权根的唯一来源是平台侧「对话框即授权」通道（`io.chooseWorkspaceRoot`）；
+   * 本契约**没有**任何"接受一个路径就扩大写允许域"的方法。
+   */
+  roots(): string[];
+  /**
+   * 常驻**可写**的目录清单（2026-10-27 收窄批，additive）：默认根（恒在首位）∪
+   * 已解析的**作品目录**（`dirById` 里位于自选根之下的那些）。
+   *
+   * 与 `roots()` 的区别是这一句：**自选项目位置根的根身不在其中**。
+   * `roots()` 回答"能在哪里新建作品"（自选根整体是候选落点），
+   * `projectDirs()` 回答"此刻哪些目录可写"——把游戏目录选成项目位置时，
+   * 前者仍含游戏目录（要能往里建作品），后者只含建出来的作品目录。
+   *
+   * 服务的常驻可写根登记（`io.setAppWritableRoots`）与文件区域 / 监视 / 检索判定
+   * 都只认这一份。服务不可用时抛错，口径同 `rootDir()`。
+   */
+  projectDirs(): string[];
+  /** 列出全部项目（扫描**所有**根目录读 manifest；损坏项跳过并记日志，不静默。
+   * 同一 id 出现在两处 → 保留默认根那份并记 warn） */
+  list(): Promise<WorkspaceProject[]>;
+  get(projectId: string): Promise<WorkspaceProject | null>;
+  /**
+   * 新建项目（创建目录 + manifest）。
+   * `rootDir` 缺省 = **默认落点根**（`defaultRoot()`：用户设定的那一条，没设定就是内置根）；
+   * 给了它则**必须命中 `roots()` 里的某一条**
+   * （默认根或已授权的自选位置），否则抛错——落点不是自由参数，授权来自目录对话框。
+   */
+  create(input: {
+    name: string;
+    meta?: Record<string, unknown>;
+    rootDir?: string;
+  }): Promise<WorkspaceProject>;
+  /**
+   * 撤销一个**自选**项目位置根的常驻授权（2026-10-27 撤销批，additive）。
+   *
+   * 语义：平台侧（Rust `revoke_workspace_root`）把该目录从常驻授权根与准入根两份清单里
+   * 移除并落盘，本服务同步把它从内存名单里摘掉、重建常驻可写根。
+   * **收窄授权不需要对话框**（铁律 6 管的是"扩大"）：这是个普通路径参数，
+   * 但它只能让写允许域**变小**。
+   *
+   * 两条硬拒绝（都给人话原因）：
+   * - 内置根（`rootDir()`）不可撤销——它就是作者工作区的常驻位置；
+   * - 该根下**仍有作品目录**时拒绝撤销（先移走或删除作品），
+   *   否则撤销后那些作品会被写闸锁成只读。
+   *
+   * 撤掉的正是**当前默认落点根**时：`defaultRoot()` 自动落回内置根（设定记录本身留着，
+   * 作者重新授权同一条根就沿用回来）——不会留成一个必然被 `create` 拒绝的默认值。
+   *
+   * 撤销后是否需要刷新列表由调用方决定（作品被拒撤时根本撤不掉）。
+   */
+  revokeRoot(root: string): Promise<void>;
+  /**
+   * 更新名称 / 元数据（updatedAt 自动刷新）。
+   *
+   * 改名口径（2026-11-02 重命名批）：空名 / 仅空白拒绝；与**同一落点根**下的其它项目
+   * 重名同样拒绝（中文原因），避免列表里出现两个无法区分的同名项目。
+   */
+  update(
+    projectId: string,
+    patch: { name?: string; meta?: Record<string, unknown> },
+  ): Promise<WorkspaceProject>;
+  /**
+   * 复制项目（2026-11-02 项目复制批，additive）。
+   *
+   * 在**该项目当前所在根**（或显式 `rootDir` 且必须命中 `roots()` 的授权根）下新建目录，
+   * 字节级复制原项目全部内容（含二进制），并重写 manifest：新 id / 新 name /
+   * 新 createdAt·updatedAt；制品登记沿用（artifact id 重新生成）。
+   *
+   * `name` 缺省 = 「<原名> 副本」。目标目录已存在 / 目标根里已有同名项目 → 抛中文错误，
+   * **不覆盖**。落点不是自由参数：只允许「已授权根 ∪ 项目当前根」。
+   * 复制完成后 `projectDirs()` 会包含新项目目录（复用既有可写域重建）。
+   */
+  duplicateProject(
+    projectId: string,
+    input?: { name?: string; rootDir?: string },
+  ): Promise<WorkspaceProject>;
+  /** 删除项目（连同目录全部内容） */
+  remove(projectId: string): Promise<void>;
+  /**
+   * 项目目录绝对路径（同步）。
+   *
+   * **限制（必须知道再调用）**：默认根下的项目恒可解析（`<默认根>/<id>`）；
+   * 落在**自选授权根**里的项目要靠 `id → 目录` 缓存，而缓存只由 `list()`
+   * （以及服务初始化时存在授权根的那次扫描）填充。
+   * 因此：**外部根里的项目要经一次 `list()` 才能解析**，未命中时本方法回落默认根。
+   */
+  projectDir(projectId: string): string;
+  /** 在项目中创建制品：写入文件集并登记 manifest */
+  createArtifact(projectId: string, input: WorkspaceArtifactInput): Promise<WorkspaceArtifact>;
+  /**
+   * 导入外部目录为制品（2026-10-12 口上项目批 P-F）：walkDir 枚举 +
+   * readBytes/writeBytes **字节级**逐文件复制（保编码——一次转码毁半库）。
+   * 源目录只读不改动；目标已存在同名目录时抛错不覆盖。
+   */
+  importDirectory(projectId: string, input: WorkspaceImportInput): Promise<WorkspaceArtifact>;
+  /** 删除制品（目录 + manifest 登记） */
+  removeArtifact(projectId: string, artifactId: string): Promise<void>;
+  /** 列项目内某相对目录（缺省 = 项目根） */
+  listDir(projectId: string, relDir?: string): Promise<DirEntry[]>;
+  /** 读项目内文本文件（相对项目根；越界拒绝） */
+  readText(projectId: string, relPath: string): Promise<TextFile>;
+  /** 写项目内文本文件（相对项目根；越界拒绝；内核 io 双闸照常生效） */
+  writeText(projectId: string, relPath: string, text: string): Promise<void>;
+}
