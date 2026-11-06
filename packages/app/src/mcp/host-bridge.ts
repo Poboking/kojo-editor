@@ -29,6 +29,9 @@ import type {
   McpCapabilityRegistry,
   McpSessionScope,
 } from '@kojo/mcp-host';
+// B20 失效通道要认的两张脸：`./wiring` 的运行时句柄与它登记的真源。
+// 两者都只是 `import type`（编译期擦除、零运行时边 ⇒ ps10 开机图读数一字不动）。
+import type { McpWiringSources } from './wiring';
 
 // 从本桥再导出一份契约类型：既保住既有 `from './mcp/host-bridge'` 的调用点，
 // 又让类型只有一处真源（`export type` 同样擦除，不进开机静态图）。
@@ -72,9 +75,29 @@ export interface McpBridgeTransport {
   respond(args: McpRespondArgs): Promise<void>;
 }
 
+/** `./wiring` 的模块句柄类型（只用于类型位；运行时仍走动态 import，开机图零新增边）。 */
+type McpWiringModule = typeof import('./wiring');
+
 export type McpRegistryFactory = (
   deps: McpHostDeps | undefined,
+  /** B20：生产分支把「装配这一份注册表所依据的 wiring 登记」回填这里，供分派前失效比对；自定义工厂可忽略。 */
+  basis?: McpRegistryBasis,
 ) => McpCapabilityRegistry | Promise<McpCapabilityRegistry>;
+
+/**
+ * 装配基准（B20）：注册表是**按哪一份真源登记**装出来的。
+ * `wiring === null` ＝ 这一份不是从 wiring 装的（注入了 deps / 用了自定义工厂）⇒ 不参与换代重取。
+ */
+export interface McpRegistryBasis {
+  wiring: McpWiringModule | null;
+  sources: McpWiringSources | null;
+}
+
+interface RegistryMemo {
+  readonly promise: Promise<McpCapabilityRegistry>;
+  /** 装配基准，由工厂在装配那一拍就地回填（`promise` 落定后才判读）。 */
+  readonly basis: McpRegistryBasis;
+}
 
 export interface McpHostBridgeOptions {
   transport?: McpBridgeTransport;
@@ -110,13 +133,23 @@ const defaultTransport: McpBridgeTransport = {
  * - 注入了 deps（单测 seam / 显式装配）就直接用，不碰 wiring；未注入时用 wiring
  *   `createMcpHostDeps()` 组装真实 McpHostDeps（接不到真源的腿由 registry 显式报 NOT_WIRED /
  *   RESOURCE_UNAVAILABLE，不静默、不伪造读数）。
+ * - B20：走 wiring 那一支时，把**装配所依据的那一份登记**（连同 wiring 句柄）回填进
+ *   `basis`，作为 `ensureFreshRegistry()` 的换代比对基准（注入 deps 不回填 ⇒ 保持旧行为）。
  */
-async function defaultRegistryFactory(deps: McpHostDeps | undefined): Promise<McpCapabilityRegistry> {
+async function defaultRegistryFactory(
+  deps: McpHostDeps | undefined,
+  basis?: McpRegistryBasis,
+): Promise<McpCapabilityRegistry> {
   const hostPromise = import('@kojo/mcp-host');
   const wiringPromise = deps === undefined ? import('./wiring') : Promise.resolve(null);
   const [host, wiring] = await Promise.all([hostPromise, wiringPromise]);
-  const realDeps: McpHostDeps = deps ?? wiring?.createMcpHostDeps() ?? {};
-  return host.createMcpCapabilityRegistry(realDeps);
+  if (wiring === null) return host.createMcpCapabilityRegistry(deps ?? {});
+  const sources = wiring.getMcpWiringSources();
+  if (basis !== undefined) {
+    basis.wiring = wiring;
+    basis.sources = sources;
+  }
+  return host.createMcpCapabilityRegistry(wiring.createMcpHostDeps(sources));
 }
 
 let transport: McpBridgeTransport = defaultTransport;
@@ -124,19 +157,61 @@ let registryFactory: McpRegistryFactory | null = null;
 let registryDeps: McpHostDeps | undefined;
 let timeoutMs = DEFAULT_TIMEOUT_MS;
 let maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES;
-let registryPromise: Promise<McpCapabilityRegistry> | null = null;
 let unlisten: Unlisten | null = null;
 const inFlight = new Map<string, AbortController>();
 
-/** 懒装载注册表：首条请求到达才求值；失败清缓存以便下次重试（同 bootstrap 口径）。 */
-function ensureRegistry(): Promise<McpCapabilityRegistry> {
-  registryPromise ??= Promise.resolve()
-    .then(() => (registryFactory ?? defaultRegistryFactory)(registryDeps))
+/* ------------------------------------------------------------------ *
+ * 注册表 memo 与其失效通道（B20，2026-11-06 LaneAH）
+ *
+ * 病根（B12 取证实拍，改前改后都复现，见 docs/mcp/README.md §5.8 末段）：memo 掉整张注册表
+ * 的那一处在**本模块**（旧 `registryPromise` + `ensureRegistry()`），而缺席结论被固化的那一处
+ * 在 **`@kojo/mcp-host`**：`createMcpCapabilityRegistry` 在构造期就把
+ * `semantic[method] ?? notWired(...)`（index.ts:2850）、`kernelIo[method] ?? notWired(...)`
+ * （:2854）、`deps.runSupplemental ? … : notWired(...)`（:2859-2861）绑进每条工具腿。
+ * 生产里真源是 `ShellLayout` 挂载后**异步**登记的（`installRealMcpSources` →
+ * `registerMcpWiringSources`），首条 `mcp://request` 只要落在登记之前，这张「什么都接不到」
+ * 的腿表就永久生效；当时唯一能让它重取的动作是再调一次 `registerMcpHostBridge()`
+ * （它顺手清了 memo）——这正是取证脚本「等 91.7 s／31 趟不出帧、re-arm 立刻出帧」的真相。
+ *
+ * 修法＝**失效重取**，不是重试掩盖：
+ * - 装配注册表时把「依据的那一份 wiring 真源登记」连同 wiring 句柄一起记进 `McpRegistryBasis`；
+ *   每条请求分派前做一次**同步**身份比对，当拍登记 ≠ 装配时那份 ⇒ 作废 memo、按当拍真源重装配
+ *   （一条请求最多装配两次＝有界，不会退化成轮询）。零定时器、零轮询、零 sleep、零自动重试；
+ *   真源没换代时行为与改前逐字一致（比对只是读一个模块级变量），换代后的那一条请求多付一次
+ *   注册表重装配（同步 CPU，计在它自己的 timeoutMs 账内，且仍只回一帧）。
+ * - 缺席照旧可见：重装配后仍接不到真源 ⇒ 原样 `NOT_WIRED` + 原话术，不空读数、不改文案。
+ * - 显式注入 deps / 自定义工厂（单测缝）不回填基准 ⇒ 不参与重取，旧行为零改动。
+ * - 注销（`off()`）与重新登记一样作废 memo，下一次装配必然按当拍真源重来。
+ * ------------------------------------------------------------------ */
+let memo: RegistryMemo | null = null;
+
+/** 装配一份新注册表；基准由工厂在装配那一拍回填，故 `basis` 走引用（promise 落定后才可判读）。 */
+function buildRegistryMemo(): RegistryMemo {
+  const basis: McpRegistryBasis = { wiring: null, sources: null };
+  const promise = Promise.resolve()
+    .then(() => (registryFactory ?? defaultRegistryFactory)(registryDeps, basis))
     .catch((err: unknown) => {
-      registryPromise = null;
+      // 装配失败不留半成品 memo：清缓存让下一条请求重试（与改前 `ensureRegistry` 同口径）。
+      if (memo !== null && memo.promise === promise) memo = null;
       throw err;
     });
-  return registryPromise;
+  return { promise, basis };
+}
+
+/**
+ * 懒装载注册表 + 分派前的一次失效检查（B20）。
+ * 返回的注册表一定装配自**当前**真源登记；接不到真源就照旧显式 `NOT_WIRED`。
+ */
+async function ensureFreshRegistry(): Promise<McpCapabilityRegistry> {
+  let current = memo ?? (memo = buildRegistryMemo());
+  const registry = await current.promise;
+  const { wiring, sources } = current.basis;
+  if (wiring !== null && wiring.getMcpWiringSources() !== sources) {
+    memo = null;
+    current = memo ?? (memo = buildRegistryMemo());
+    return current.promise;
+  }
+  return registry;
 }
 
 /* ------------------------------------------------------------------ *
@@ -270,7 +345,8 @@ async function handleRequest(event: McpRequestEvent): Promise<void> {
     controller.abort();
   }, timeoutMs);
   try {
-    const registry = await ensureRegistry();
+    // B20：分派前先看真源登记有没有换代——换代就作废 memo 重装配，让这一条读拿到当拍真源。
+    const registry = await ensureFreshRegistry();
     const work = Promise.resolve().then(() => dispatch(method, params, scope, registry));
     const result = await raceAbort(work, controller.signal);
     if (controller.signal.aborted) {
@@ -332,6 +408,9 @@ export function cancelAllMcpRequests(): number {
  * 登记 MCP 桥：订阅 `mcp://request`，返回立刻可用的取消句柄（与 launcher-bridge 的
  * subscribe 同形态——listen 是异步的，未订阅上就取消时等它落定立刻退订，不漏挂监听）。
  * 重复登记会先退订旧监听；`options` 里给到的项才覆盖（缺省保持既有值）。
+ *
+ * B20：登记与注销两侧都**显式作废**注册表 memo（不只是「配置可能变了」）——
+ * 桥的生死就是这份注册表该不该作数的边界，退出时必须让下一次装配重新去看当拍真源。
  */
 export function registerMcpHostBridge(options: McpHostBridgeOptions = {}): Unlisten {
   if (options.transport !== undefined) transport = options.transport;
@@ -339,7 +418,7 @@ export function registerMcpHostBridge(options: McpHostBridgeOptions = {}): Unlis
   if (options.deps !== undefined) registryDeps = options.deps;
   if (options.timeoutMs !== undefined) timeoutMs = options.timeoutMs;
   if (options.maxResponseBytes !== undefined) maxResponseBytes = options.maxResponseBytes;
-  registryPromise = null; // 配置可能变了，注册表重算
+  memo = null; // 配置可能变了，注册表重算（B20：memo 的合法失效入口之一，另一处是下面的注销）
 
   unlisten?.();
   unlisten = null;
@@ -358,5 +437,6 @@ export function registerMcpHostBridge(options: McpHostBridgeOptions = {}): Unlis
     cancelled = true;
     unlisten?.();
     unlisten = null;
+    memo = null; // 注销即失效：不把旧 memo 留给下一位登记者（B20）
   };
 }
