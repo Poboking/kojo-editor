@@ -96,6 +96,9 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   // 无编辑器依赖）——paginateByCursor 走共用闸 ⇒ 整条别名序列 + cursor（腿不读裸 offset）。
   // MCP-PERF-S8（LaneR，2026-11-07）：+ query（次序无关子串过滤 needle，腿真取用）。
   'semantic.projectSymbols': ['query', ...SHARED_LIST],
+  // MCP-PERF-S10（LaneT，2026-11-07）：批量腿——腿只读 args.items（逐项 {line,column,kind} 的
+  // 形状/越界在腿内逐项判）；分页不适用 ⇒ 无 cursor/别名位。
+  'semantic.batchAt': ['items'],
 
   /* ---- kernel IO 3 腿（real-sources-io.ts createKernelIo）---- */
   'project.info': [], // 真零参

@@ -5821,6 +5821,87 @@ fn e2e_read_session_calls_read_range_and_project_symbols_via_bridge() {
     );
 }
 
+/* ==================================================================== *
+ * MCP-PERF-S10 批（LaneT，2026-11-07）：semantic.batchAt 批量读面
+ *
+ * TRAE P1：「语言服务……补批量接口；50 个符号批量 <200ms」。端点级回归同 S4 双钉：
+ *   ① `semantic.batchAt` 是 `命名空间.动词` 点号形态的**纯读**面 ⇒ 宿主按默认 read 放行
+ *      （不点名即 read 是既有口径；本批不进 EDIT_TOOLS_EXACT / PRIVILEGED_EXACT，
+ *      read 会话零批准可调，四张授权表零改动）；
+ *   ② 端到端：read 会话直调放行到桥（items 原样转发），审计 Ok 精确点名、零 Denied
+ *      （未批准语义零变化——本批不给任何既有面新增拦截）。
+ * ==================================================================== */
+
+#[test]
+fn perf_s10_semantic_batch_at_is_read_tier() {
+    assert_eq!(host_required_tier("semantic.batchAt"), McpTier::Read);
+    assert!(
+        !EDIT_TOOLS_EXACT.contains(&"semantic.batchAt"),
+        "semantic.batchAt 是纯读面，进 EDIT 表＝误升档"
+    );
+    assert!(
+        !PRIVILEGED_EXACT.contains(&"semantic.batchAt"),
+        "semantic.batchAt 不碰危险面，进 PRIVILEGED 表＝误升档"
+    );
+    // read 会话（零批准）直调：纯函数闸放行（默认拒绝只对 edit/privileged 生效）。
+    let scope = empty_scope(Vec::new());
+    assert!(check_tool_call_permission("semantic.batchAt", &scope).is_ok());
+}
+
+#[test]
+fn e2e_read_session_calls_semantic_batch_at_via_bridge() {
+    let s = TestServer::start();
+    let port = s.port;
+    let token = s.token.clone();
+
+    // ① read 会话零批准直调 semantic.batchAt：放行到桥，items 原样转发（read 档面不新增拦截）。
+    let req = r#"{"jsonrpc":"2.0","id":910,"method":"tools/call","params":{"name":"semantic.batchAt","arguments":{"items":[{"line":1,"column":1,"kind":"definition"},{"line":2,"column":2,"kind":"references","includeDeclaration":false}]}}}"#.to_string();
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.scope.tier, McpTier::Read);
+    assert_eq!(payload.params["name"], json!("semantic.batchAt"));
+    assert_eq!(
+        payload.params["arguments"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        payload.params["arguments"]["items"][0]["kind"],
+        json!("definition")
+    );
+    assert_eq!(
+        payload.params["arguments"]["items"][1]["includeDeclaration"],
+        json!(false)
+    );
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(json!({"content": [{"type": "text", "text": "batch"}]})),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r = worker.join().unwrap();
+    assert!(
+        rpc_json(&r)["error"].is_null(),
+        "read 会话调 read 批量面不许被端点拦"
+    );
+
+    // ② 审计：恰一条 Ok 精确点名；本用例零 Denied（未批准语义零变化——read 批量面不新拦）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    assert!(rows
+        .iter()
+        .any(|e| e.outcome == AuditOutcome::Ok && e.tool == "semantic.batchAt"));
+    assert!(
+        !rows.iter().any(|e| e.outcome == AuditOutcome::Denied),
+        "read 批量面调用不该产生 Denied 审计"
+    );
+}
+
 /// MCP-PERF-S6 批（LaneN，2026-11-07）：`fileTree.patchLines` 的**档位真源**判据。
 ///
 /// 与 S3 `fileTree.applyChangeset` 三条同型同尺：

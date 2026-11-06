@@ -2,7 +2,8 @@
  * MCP 真源腿 · 语义面与组装器（A3：消灭可接而未接的 NOT_WIRED，只接真源）。
  *
  * 覆盖：semantic 8 腿（definitionAt / referencesAt / diagnostics / hoverAt / suggestAt /
- * documentSymbols / tokens / codeActionsAt —— 全部只读，绝不 apply codeAction）、
+ * documentSymbols / tokens / codeActionsAt —— 全部只读，绝不 apply codeAction）+
+ * 批量腿 batchAt（MCP-PERF-S10：≤50 项 {line,column,kind} 一次往返，同源判据腿零新扫描）、
  * runSupplemental 的 UI 腿（document.active / editor.info / editor.cursor / editor.selfCheck /
  * problems.diagnostics / lang.foldingRanges / lang.highlightsAt / lang.signatureAt /
  * lang.markers）、resource 数据源的 diagnostics / active-document 两个 URI、
@@ -168,6 +169,8 @@ const HOVER_ROW_LIMIT = 40;
 const HOVER_ROW_CHAR_LIMIT = 300;
 const DEFINITION_LIMIT = 20;
 const REFERENCE_LIMIT = 50;
+/** MCP-PERF-S10：`semantic.batchAt` 单批上限（一次往返 ≤50 项；分页不适用，超限显式拆批）。 */
+const SEMANTIC_BATCH_MAX_ITEMS = 50;
 const CODE_ACTION_LIMIT = 30;
 const SYMBOL_LIMIT = 200;
 const DIAGNOSTIC_LIMIT = 200;
@@ -682,6 +685,107 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
     return { items, total: kept.length, truncated: kept.length > items.length };
   };
 
+  /* ---- MCP-PERF-S10（LaneT，2026-11-07）：批量腿 semantic.batchAt（≤50 项一次往返）----
+   * 数据源与单枚面**同一条**：workspace（活动文档 model）+ 装配点判据腿（`semanticLegsNow()`）
+   * ——ERB 侧最终落在 erb-parser 索引上（S2 批起 references 是增量活视图），逐项扇出
+   * **零新扫描**；provider 通道绝不触达（它有 revealLocation 导航副作用）。
+   * 与单枚面两处刻意不同（卡面判据逐字）：
+   * - 服务（workspace / 判据腿）缺席**不抛整批** ⇒ 逐项 `{ok:false,code:'NOT_WIRED'}` 可见；
+   * - 坐标越界**不夹取** ⇒ 逐项 INVALID_ARGS（单枚面的 targetOf 夹取适合「猜最后一行」的
+   *   交互位；批量消费方要的是逐项对错可见，夹取会把猜错的坐标伪装成答案）。
+   * 形状缺陷（非对象 / kind 出白名单 / 行列非正整数）与越界同归逐项 INVALID_ARGS；
+   * 判据腿单项抛错归该项（结构化码原样透传，不洗码）；单项失败不抛整批。
+   */
+  const batchAt: McpReaderFn = async (args) => {
+    const raw = args['items'];
+    if (!Array.isArray(raw)) {
+      throw new McpFailure('INVALID_ARGS', `items 须为数组（1..${SEMANTIC_BATCH_MAX_ITEMS} 项，每项 {line,column,kind}）：${sanitizeEcho(String(raw))}`);
+    }
+    if (raw.length === 0) {
+      throw new McpFailure('INVALID_ARGS', 'items 不能为空数组（不伪造空批应答）');
+    }
+    if (raw.length > SEMANTIC_BATCH_MAX_ITEMS) {
+      throw new McpFailure(
+        'INVALID_ARGS',
+        `items ${raw.length} 项超过单批上限 ${SEMANTIC_BATCH_MAX_ITEMS}：本面分页不适用（一次往返），请拆成多批`,
+      );
+    }
+    // 服务解析**一次**（批量扇出的摊销前提）；解析器抛错同样归入「缺席」，逐项 NOT_WIRED。
+    const safeGet = async <T>(value: Promise<unknown> | unknown): Promise<T | null> => {
+      try {
+        return (await value) as T | null;
+      } catch {
+        return null;
+      }
+    };
+    const wsRaw = await safeGet<McpSemanticWorkspace | null>(deps.getWorkspace());
+    const legsRaw = await safeGet<McpSemanticLegsLike | null>(deps.getLegs());
+    const ws = wsRaw && wsRaw.model && wsRaw.monaco ? wsRaw : null;
+    const legs =
+      legsRaw && typeof legsRaw.definition === 'function' && typeof legsRaw.references === 'function' ? legsRaw : null;
+    const items: Record<string, unknown>[] = [];
+    for (const entry of raw) {
+      // ① 形状（服务无关，先判）：非对象 / kind 出白名单 / 行列非正整数 ⇒ 逐项 INVALID_ARGS。
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        items.push({ ok: false, code: 'INVALID_ARGS' });
+        continue;
+      }
+      const o = entry as Record<string, unknown>;
+      const kind = o['kind'];
+      const line = o['line'];
+      const column = o['column'];
+      const isBatchInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
+      if ((kind !== 'definition' && kind !== 'references') || !isBatchInt(line) || !isBatchInt(column)) {
+        items.push({ ok: false, code: 'INVALID_ARGS' });
+        continue;
+      }
+      // ② 服务缺席 ⇒ 逐项 NOT_WIRED（不静默、不伪造读数；单项失败不抛整批）。
+      if (ws === null || legs === null) {
+        items.push({ ok: false, code: 'NOT_WIRED' });
+        continue;
+      }
+      // ③ 坐标越界 ⇒ 逐项 INVALID_ARGS（批量面不夹取——见上块注）。
+      const lineCount = Math.max(1, ws.model.getLineCount());
+      if (line < 1 || line > lineCount || column < 1 || column > ws.model.getLineMaxColumn(line)) {
+        items.push({ ok: false, code: 'INVALID_ARGS' });
+        continue;
+      }
+      // ④ 同源扇出：判据腿逐项直调；单项抛错归该项（结构化码原样透传，不洗码成 READ_FAILED）。
+      try {
+        const position = new ws.monaco.Position(line, column);
+        if (kind === 'definition') {
+          const locations = legs.definition(ws.model, position) ?? [];
+          const projected = slimLegLocations(locations, ws.rootDir, DEFINITION_LIMIT);
+          items.push({
+            ok: true,
+            result: { items: projected, total: locations.length, truncated: locations.length > projected.length },
+          });
+        } else {
+          const includeDeclaration = o['includeDeclaration'] !== false;
+          const read = legs.references(ws.model, position);
+          const all = read === null ? [] : read.locations;
+          const kept = includeDeclaration ? all : all.filter((l) => l.kind !== 'definition');
+          const projected = slimLegLocations(kept, ws.rootDir, REFERENCE_LIMIT);
+          items.push({
+            ok: true,
+            result: { items: projected, total: kept.length, truncated: kept.length > projected.length },
+          });
+        }
+      } catch (err) {
+        const code = typeof (err as { code?: unknown } | null)?.['code'] === 'string' ? (err as { code: string }).code : '';
+        items.push({ ok: false, code: code !== '' ? code : 'READ_FAILED' });
+      }
+    }
+    const failed = items.reduce((a, i) => (i['ok'] === false ? a + 1 : a), 0);
+    return {
+      requested: raw.length,
+      succeeded: raw.length - failed,
+      failed,
+      items,
+      maxItemsPerCall: SEMANTIC_BATCH_MAX_ITEMS,
+    };
+  };
+
   const diagnostics: McpReaderFn = async (args) => {
     const ws = await requireWorkspace(deps);
     const markers = ws.monaco.editor.getModelMarkers({ resource: ws.model.uri });
@@ -803,7 +907,7 @@ export function buildSemanticReaders(deps: McpSemanticDeps): NonNullable<McpHost
     return { items, total, truncated: total > items.length, providers: stats.unreachable ? null : stats.asked, answered: stats.answered };
   };
 
-  return { definitionAt, referencesAt, diagnostics, hoverAt, suggestAt, documentSymbols, tokens, codeActionsAt };
+  return { definitionAt, referencesAt, batchAt, diagnostics, hoverAt, suggestAt, documentSymbols, tokens, codeActionsAt };
 }
 
 /* ------------------------------- runSupplemental 的 UI 腿 ------------------------------- */

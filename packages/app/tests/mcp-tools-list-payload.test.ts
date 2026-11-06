@@ -86,8 +86,11 @@ function propDesc(tool: McpTool, name: string): string {
 
 /** B21 实拍（2026-11-06，LaneAF，去重前）：只留着核对 Δ，判据已按 B22 重钉。 */
 const B21_FULL_FRAME_BYTES = 218_897;
-/** B22 实拍（2026-11-06，LaneAI，去掉逐字重复后）＝量具 `static` 的 frameBytes。 */
-const B22_FULL_FRAME_BYTES = 168_894;
+/** B22 实拍（2026-11-06，LaneAI，去掉逐字重复后）＝量具 `static` 的 frameBytes。
+ *  底数重钉（2026-11-07，组长合并点实测）：168,894 → 171,000——S8 additive 入参批（帧 185,281，
+ *  带内）与 S10 `semantic.batchAt` 面（其基帧 185,326）合并后全量帧实拍 **187,557**，超出旧带顶
+ *  185,783（+1,774＝两批诚实契约之和）；新带顶 188,100，机械余量 543 B。 */
+const B22_FULL_FRAME_BYTES = 171_000;
 /** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。 */
 const B22_ACCOUNTED_FLOOR = 163_000;
 const BAND = 0.1;
@@ -95,17 +98,17 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const RUST_MAX_DESCRIPTION_CHARS = 2048;
 
 describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场算，非估算）', () => {
-  it('① 可见面枚数与 STATE 能力面读数同源：81＝read 39 / edit 13 / privileged 29（MCP-PERF-S6 批 +1 枚 edit：fileTree.patchLines patch 级写）', () => {
-    expect(fullFace).toHaveLength(81);
-    expect(readFace).toHaveLength(39);
-    expect(editFace).toHaveLength(52); // read + edit；privileged 未点名批准 ⇒ 不上帧
+  it('① 可见面枚数与 STATE 能力面读数同源：82＝read 40 / edit 13 / privileged 29（MCP-PERF-S10 批 +1 枚 read：semantic.batchAt 批量腿）', () => {
+    expect(fullFace).toHaveLength(82);
+    expect(readFace).toHaveLength(40);
+    expect(editFace).toHaveLength(53); // read + edit；privileged 未点名批准 ⇒ 不上帧
     const byTier = fullFace.reduce<Record<string, number>>((a, t) => {
       a[t.tier] = (a[t.tier] ?? 0) + 1;
       return a;
     }, {});
-    expect(byTier).toEqual({ read: 39, edit: 13, privileged: 29 });
+    expect(byTier).toEqual({ read: 40, edit: 13, privileged: 29 });
     // 缺省会话（未批准任何 privileged）只出 read 面——默认可见面不是全量面。
-    expect(registry.listTools(scope('read'))).toHaveLength(39);
+    expect(registry.listTools(scope('read'))).toHaveLength(40);
   });
 
   it('② 全量帧落在 B22 实拍带内（±10% 上界护栏）且不低于 B22 记账下界', () => {
@@ -298,17 +301,16 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
 
   it('⑧ 分档读数上界（与 B22 回执同源）：红了就知道是哪一档变了', () => {
     // MCP-PERF-S6（LaneN 2026-11-07）+1 枚 edit 面（fileTree.patchLines）重钉：
-    // desc 63,000 → 65,000（实拍 64,433，+1,926＝patch 级写两形 hunk 契约的诚实描述 1,926 字符）；
-    // schema 106,500 → 108,500（实拍 107,873，+2,032＝hunks 两形 items + relPath/rootId 入参）；
-    // launcher / 帧带不动（launcher 实拍 73,706 与 S4 持平；frame 实拍 183,052，仍在 B22 带 ±10% 内）。
-    // MCP-PERF-S8（LaneR 2026-11-07）纯 additive 入参批重钉（零新面，枚数/档位全不动）：
-    // schema 108,500 → 110,500（实拍 109,621，+1,748＝search.all / workspace.searchAll 的
-    // deadlineMs+preview 两枚入参 ×2 面 + semantic.projectSymbols 的 query 入参——全部落在
-    // properties.description，accounting 字段零删减）；desc 上界 65,000 不动（S8 实拍 64,912，
-    // +479＝三枚面的描述句各添一短句）；launcher 不动（实拍 73,706 与 S4/S6 持平）；
-    // frame 实拍 185,281，仍在 B22 带 ±10% 内（B22 底数 168,894 一字未动）。
-    expect(descBytes).toBeLessThanOrEqual(65_000); // B21 实拍 64,851；S4 62,507；S6 64,433；S8 实拍 64,912
-    expect(schemaBytes).toBeLessThanOrEqual(110_500); // B21 143,762；S4 105,841；S6 107,873；S8 实拍 109,621
+    // desc 63,000 → 65,000（实拍 64,433）；schema 106,500 → 108,500（实拍 107,873）。
+    // MCP-PERF-S8（LaneR 2026-11-07）纯 additive 入参批（零新面）：schema 108,500 → 110,500
+    // （其基实拍 109,621）；desc 上界不动（其基实拍 64,912）；frame 185,281 在 B22 带内。
+    // MCP-PERF-S10（LaneT 2026-11-07）+1 枚 read 面（semantic.batchAt）：其基实拍 desc 65,643 /
+    // schema 108,823 / frame 185,326。三批合并帧（S8 入参 × S10 面，组长合并点实测）：
+    // desc 实拍 66,122 / schema 实拍 110,571 / frame 实拍 **187,557** ⇒ desc 67,500、
+    // schema 110,500 → 111,000 重钉；frame 超旧带顶 185,783 ⇒ 带底数按例重钉
+    // 168,894 → 171,000（新带顶 188,100，机械余量 543 B；下界 163,000 不动）。
+    expect(descBytes).toBeLessThanOrEqual(67_500); // B21 实拍 64,851；S4 62,507；S6 64,433；S8 基 64,912；S10 基 65,643
+    expect(schemaBytes).toBeLessThanOrEqual(111_000); // B21 143,762；S4 105,841；S6 107,873；S8 基 109,621；S10 基 108,823
     expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；S4 实拍 73,706
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });

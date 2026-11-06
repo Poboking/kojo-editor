@@ -431,7 +431,7 @@ export interface McpCommandSource {
   run(args: Record<string, unknown>, scope: McpSessionScope): Promise<unknown> | unknown;
 }
 
-/** ② 语义读数服务的 8 条纯读腿（见 app/src/mcp/semantic-service.ts）。 */
+/** ② 语义读数服务的 8 条纯读腿 + 1 条批量腿（见 app/src/mcp/semantic-service.ts / real-sources.ts）。 */
 export interface McpSemanticReaders {
   definitionAt: McpReaderFn;
   referencesAt: McpReaderFn;
@@ -441,6 +441,8 @@ export interface McpSemanticReaders {
   documentSymbols: McpReaderFn;
   tokens: McpReaderFn;
   codeActionsAt: McpReaderFn;
+  /** MCP-PERF-S10（LaneT，2026-11-07）：≤50 项批量扇出（definitionAt/referencesAt 同源判据腿）。 */
+  batchAt: McpReaderFn;
 }
 
 /** ③ kernel IO 的只读能力（项目信息 / 文件树 / 全文检索）。 */
@@ -682,6 +684,39 @@ const REFERENCES_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
+/* ---- MCP-PERF-S10（LaneT，2026-11-07）：semantic.batchAt 的 items 形状（逐键点名 + 逐项严格）---- */
+
+const SEMANTIC_BATCH_ITEM_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    line: { type: 'integer', minimum: 1, description: '1-based line in the ACTIVE document (same caliber as semantic.definitionAt).' },
+    column: { type: 'integer', minimum: 1, description: '1-based column (Monaco position caliber).' },
+    kind: { type: 'string', enum: ['definition', 'references'], description: 'Which single-face reading this item fans out to.' },
+    includeDeclaration: {
+      type: 'boolean',
+      description: 'references items only: keep the declaration itself (default true; same semantics as semantic.referencesAt).',
+    },
+  },
+  required: ['line', 'column', 'kind'],
+  additionalProperties: false,
+};
+
+const SEMANTIC_BATCH_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 50,
+      items: SEMANTIC_BATCH_ITEM_SCHEMA,
+      description:
+        '1..50 positions to resolve in ONE round trip; hard cap 50 per call (above that the leg rejects with INVALID_ARGS telling you to split - paging does not apply to this surface).',
+    },
+  },
+  required: ['items'],
+  additionalProperties: false,
+};
+
 /* ---- B4 批（LaneS，2026-11-06）启动器族用到的入参形状（与宿主形状闸同尺） ---- */
 
 /**
@@ -757,6 +792,22 @@ export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
   },
   { name: 'semantic.tokens', method: 'tokens', description: '词法 token（只读）', inputSchema: { type: 'object', properties: { lineFrom: { type: 'integer' }, lineTo: { type: 'integer' } }, additionalProperties: false }, tier: 'read', annotations: { readOnlyHint: true } },
   { name: 'semantic.codeActionsAt', method: 'codeActionsAt', description: '可用代码动作（只读，绝不 apply）', inputSchema: STRICT_POS_SCHEMA, tier: 'read', annotations: { readOnlyHint: true } },
+  {
+    // MCP-PERF-S10（LaneT，2026-11-07）：批量腿——definitionAt/referencesAt 同一数据源逐项扇出，
+    // ≤50 项一次往返（TRAE P1：「50 个符号批量 <200ms」）；逐项 {ok,result}/{ok:false,code} 可见。
+    name: 'semantic.batchAt',
+    method: 'batchAt',
+    description:
+      'Batch the two single-position semantic readings (semantic.definitionAt / semantic.referencesAt) into ONE round trip (read-only; MCP-PERF-S10). ' +
+      '`items` is 1..50 entries of {line, column, kind:"definition"|"references"} - 1-based coordinates against the ACTIVE document, same caliber as the single faces - plus optional `includeDeclaration` (references items only, default true, same semantics as semantic.referencesAt). ' +
+      'Per-item outcome is always visible: an ok item carries exactly what the single face returns ({items, total, truncated}); an out-of-range line/column marks THAT item {ok:false, code:"INVALID_ARGS"} (this face rejects instead of clamping - a clamped guess must not masquerade as an answer); a missing active editor or unwired judgement legs marks every item {ok:false, code:"NOT_WIRED"}; a failing item never aborts the batch. ' +
+      'Results are 1:1 with `items` in order (duplicates included, nothing skipped) and the top-level account {requested, succeeded, failed} is always present. ' +
+      'Paging does not apply: one call answers at most 50 items - split larger batches. ' +
+      'Each item reads the same judgement legs the single faces use (no rescans, no provider channel); this surface never mutates anything.',
+    inputSchema: SEMANTIC_BATCH_SCHEMA,
+    tier: 'read',
+    annotations: { readOnlyHint: true },
+  },
 ];
 
 /** kernel IO → 3 枚只读工具。`fs.tree` 是本批补游标的列举面；`project.info` 是真零参面。 */

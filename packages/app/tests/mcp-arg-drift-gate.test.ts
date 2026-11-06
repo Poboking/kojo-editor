@@ -72,6 +72,8 @@ const ENTRY_OVERRIDES: Readonly<Record<string, { file: string; symbol: string }>
   'semantic.documentSymbols': { file: 'packages/app/src/mcp/real-sources.ts', symbol: 'documentSymbols' },
   'semantic.tokens': { file: 'packages/app/src/mcp/real-sources.ts', symbol: 'tokens' },
   'semantic.codeActionsAt': { file: 'packages/app/src/mcp/real-sources.ts', symbol: 'codeActionsAt' },
+  // MCP-PERF-S10（LaneT，2026-11-07）：批量腿——同 buildSemanticReaders 装配点的具名腿本体。
+  'semantic.batchAt': { file: 'packages/app/src/mcp/real-sources.ts', symbol: 'batchAt' },
   'project.info': { file: 'packages/app/src/mcp/real-sources-io.ts', symbol: 'projectInfo' },
   'fs.tree': { file: 'packages/app/src/mcp/real-sources-io.ts', symbol: 'fileTree' },
   'search.all': { file: 'packages/app/src/mcp/real-sources-io.ts', symbol: 'searchAll' },

@@ -787,10 +787,10 @@ describe('runSupplemental UI 腿（document.active / editor.info / selfCheck / p
 /* ------------------------------- 语义 8 腿 ------------------------------- */
 
 describe('语义 8 腿（判据腿优先 + provider 纯读直调）', () => {
-  it('恰 8 键、全函数', () => {
+  it('恰 9 键、全函数（MCP-PERF-S10 批 +1：batchAt 批量腿，同源判据腿扇出）', () => {
     const readers = buildSemanticReaders(fakeDeps());
     expect(Object.keys(readers).sort()).toEqual([
-      'codeActionsAt', 'definitionAt', 'diagnostics', 'documentSymbols',
+      'batchAt', 'codeActionsAt', 'definitionAt', 'diagnostics', 'documentSymbols',
       'hoverAt', 'referencesAt', 'suggestAt', 'tokens',
     ]);
   });
@@ -1418,7 +1418,7 @@ describe('buildRealMcpSources / installRealMcpSources（组装 → wiring 登记
     bindEventRing(null);
   });
 
-  it('组装：8 字段全到场；semantic 恰 8 键；promptSlots 显式空数组（不编造领域知识）', async () => {
+  it('组装：8 字段全到场；semantic 恰 9 键（8 腿 + batchAt 批量腿）；promptSlots 显式空数组（不编造领域知识）', async () => {
     const { kernel } = fakeKernel();
     const sources = await buildRealMcpSources(realHost(kernel), {
       invoke: async () => null,
@@ -1430,7 +1430,7 @@ describe('buildRealMcpSources / installRealMcpSources（组装 → wiring 登记
     });
     expect(sources.commands?.length).toBe(1);
     expect(sources.commandContext).toBeDefined();
-    expect(Object.keys(sources.semantic ?? {}).length).toBe(8);
+    expect(Object.keys(sources.semantic ?? {}).length).toBe(9);
     expect(Object.keys(sources.kernelIo ?? {}).length).toBe(3);
     expect(typeof sources.readResourceData).toBe('function');
     expect(typeof sources.runSupplemental).toBe('function');
