@@ -113,7 +113,7 @@ describe.skipIf(!SMOKE)('协议覆盖校验规则 —— 真实语料基线', ()
     );
     expect(gate.ok, gate.message).toBe(true);
 
-    expect(issues).toHaveLength(gate.row?.expect.hits);
+    expect(issues).toHaveLength(gate.row!.expect.hits);
     expect(issues.every((i) => i.severity === 'warning')).toBe(true);
     expect(issues.every((i) => i.message.includes('数值槽 声明 1 / 转发 0'))).toBe(true);
     // 官方模板 ORTHODOX_K49 亦在其列（说明这是**口上模板**层面的既有约定，而非孤例）

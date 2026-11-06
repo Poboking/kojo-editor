@@ -797,7 +797,7 @@ describe.skipIf(!SMOKE_DIR)('糖投影真实语料量化验收', () => {
         () => discoverCorpusFingerprints(),
       );
       expect(budgetGate.ok, budgetGate.message).toBe(true);
-      const diskBudget = budgetGate.row?.expect.budget ?? {};
+      const diskBudget: Record<FallbackAttributionKey, number> = budgetGate.row?.expect.budget ?? liveBudget;
       // 逐类棘轮：`tryNine` / `printVariant` 是**结构性 0**（判据可证），其余四格按本盘登记行判，
       // 集成轮拿实测分格读数逐格下调（登记表行的 expect 只许改小）。
       for (const k of FALLBACK_ATTRIBUTION_KEYS) {
