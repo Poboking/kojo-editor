@@ -850,7 +850,8 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
         limit: page.limit,
         offset: page.offset,
         hasCursor: page.hasCursor,
-        fsFreshness: fsFreshnessListing(deps, rootDir, '.', scope),
+        // 与旧路同一枚 await 口径（fsFreshnessListing 是 async：不 await 会把 Promise 塞进返回体）
+        fsFreshness: await fsFreshnessListing(deps, rootDir, '.', scope),
       });
     }
     const result = await deps.searchInFiles({
@@ -1104,7 +1105,8 @@ export function createRunSupplemental(deps: McpIoDeps): (
         limit: page.limit,
         offset: page.offset,
         hasCursor: page.hasCursor,
-        fsFreshness: fsFreshnessListing(
+        // 与旧路同一枚 await 口径（否则 Promise 会被原样塞进返回体）
+        fsFreshness: await fsFreshnessListing(
           deps,
           roots[0] ?? rootDir,
           roots.length > 1

@@ -466,7 +466,16 @@ export function createSearchSliceRunner(deps: SearchSliceDeps) {
     // 片内只剩一个文件根还触墙 ⇒ 单文件 500 条上限，那一堵分片修不掉的墙。
     const slice = plan[sliceIndex] as Slice;
     const irreducible = slice.kind === 'files' && slice.roots.length === 1;
-    const knownTotal = (singleSlice || walkComplete) && !run.engine.truncated && isLastSlice;
+    /**
+     * **只有单片计划**才许转 `knownTotal:true`。
+     * 多片计划即使走完也一样判不了总量：本腿游标里没有跨片的命中累加器，`run.engine.totalMatches`
+     * 只是**本片**的账（`walkComplete` 只交代「片都走完了、每片都没触墙 ⇒ 命中集可自证无重无漏」，
+     * 不等于「总量已知」）。把别片的 total 相加冒充 knownTotal:true 是一句过度声明
+     * ——每片各自可能带自己的截断/窗口口径，相加不是引擎会给出的真值（判性实测：闸下集合是
+     * 调度产物）。真总量的法定拿法是客户端逐页 `sliceTotal` 相加，`walkComplete:true` 就是这句
+     * 话的凭证；本腿自己不知道，就照铁律 4 说不知道。
+     */
+    const knownTotal = singleSlice && !run.engine.truncated && isLastSlice;
 
     const relRoots = slice.roots.map((r) => deps.toRelativePath(r, ctx.rootDir) || r);
     const out: Record<string, unknown> = {
