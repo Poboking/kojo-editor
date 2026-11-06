@@ -120,7 +120,7 @@ node tools/kojo-mcp.mjs
 ## 5. 暴露的能力概览
 
 能力注册表唯一真源 `packages/mcp-host/src/index.ts`（冻结契约 v1）。按 `node tools/mcp-inventory.mjs --print`
-盘点：`tools` 共 **40** 个，按 tier 分组 `read 35 / edit 3 / privileged 2`（详见 §6 授权模型；2026-11-06 第四/五波只读补齐与写腿落地后复核）。
+盘点：`tools` 共 **43** 个，按 tier 分组 `read 36 / edit 5 / privileged 2`（详见 §6 授权模型；2026-11-06 第四/五波只读补齐、余项① / ⑤ 写腿落地后复核）。
 这些是**规范定义**的计数；`tools/list` 还会按会话 `tier` 与第四张表进一步过滤，危险工具默认缺席。
 另外，生产真源会把命令面板命令投影成同名工具（`commands.list` 读数与工具 `tier` 同源），但它们
 **一律按 `privileged` fail-closed**，默认不出现在 `tools/list`、也不接受 `edit` 会话调用（§6）；
@@ -130,8 +130,8 @@ node tools/kojo-mcp.mjs
 
 | tier | 代表工具 | 说明 |
 | --- | --- | --- |
-| `read` | `project.info` `fs.tree` `fs.readFile` `fs.stat` `search.all` `workspace.searchAll` `problems.diagnostics` `document.active` `commands.list` `editor.info` `editor.selfCheck` `io.listDir` `io.workspaceRoots` `semantic.definitionAt` `semantic.referencesAt` `semantic.hoverAt` `semantic.suggestAt` `semantic.documentSymbols` `semantic.tokens` `semantic.codeActionsAt` `semantic.diagnostics` `lang.foldingRanges` `lang.highlightsAt` `lang.signatureAt` `lang.markers` `diff.compare` `state.replay` `preview.document` `app.dataDir` `codec.encodeString` `fs.pathExists` `fs.statFiles` `lang.lensesAt` `lang.selectionRangesAt` `editor.cursor` | 只读；`readOnlyHint: true` |
-| `edit` | `fileTree.create` `fileTree.update` `problems.quickFix` | 需会话 `tier >= edit` + `approvedRoots` 复核 |
+| `read` | `project.info` `fs.tree` `fs.readFile` `fs.stat` `search.all` `workspace.searchAll` `problems.diagnostics` `document.active` `commands.list` `editor.info` `editor.selfCheck` `io.listDir` `io.workspaceRoots` `semantic.definitionAt` `semantic.referencesAt` `semantic.hoverAt` `semantic.suggestAt` `semantic.documentSymbols` `semantic.tokens` `semantic.codeActionsAt` `semantic.diagnostics` `lang.foldingRanges` `lang.highlightsAt` `lang.signatureAt` `lang.markers` `diff.compare` `state.replay` `preview.document` `app.dataDir` `codec.encodeString` `fs.pathExists` `fs.statFiles` `lang.lensesAt` `lang.selectionRangesAt` `editor.cursor` `tasks.status` | 只读；`readOnlyHint: true` |
+| `edit` | `fileTree.create` `fileTree.update` `problems.quickFix` `tasks.start` `tasks.cancel` | 需会话 `tier >= edit` + `approvedRoots` 复核；`tasks.*` 两枚改的是运行态，不占盘 |
 | `privileged` | 危险工具 | 默认**不进 `tools/list`**；须宿主经第四张表逐会话批准 |
 
 每个工具都有面向模型的 `description`、严格 `inputSchema`、正确 `tier` + `annotations`；
@@ -139,9 +139,9 @@ node tools/kojo-mcp.mjs
 **绝不返回空串假实现**。写类只收项目根内**相对路径**：`RELATIVE_PATH_SCHEMA` 拒绝绝对路径、
 盘符、`..` 逃逸，执行层再用 `approvedRoots` 复核。
 
-### 5.2 resources（`kojo://project/*`）
+### 5.2 resources（`kojo://project/*` 与 `kojo://tasks`）
 
-`snapshot` / `file-tree` / `diagnostics` / `validation-failures` / `commands` / `plugins` / `events` / `active-document` / `fs-freshness`。
+`snapshot` / `file-tree` / `diagnostics` / `validation-failures` / `commands` / `plugins` / `events` / `active-document` / `fs-freshness` / `tasks`。
 所有资源文本都有**截断上限**并带显式 `truncated` 标记；插件状态 `inactive` 与 `missing[]` 必须可见，不静默。
 `fs-freshness`（2026-11-06 余项③＝`b90d79bb`）自述监视覆盖与两张有界账本读数；同一批把判定结果附在**只读应答**
 的 `fsFreshness` 字段上（不可用 / 未覆盖 / 无基线 / 账溢出 ⇒ `stale:null` + `staleReason`，绝不乐观 `false`）。
@@ -154,7 +154,8 @@ node tools/kojo-mcp.mjs
 
 ### 5.4 写腿状态段（真值自 `node tools/mcp-inventory.mjs --json` 的 `writeLegs`）
 
-2026-11-06 第四波收口时 **wired 4 / NOT_WIRED 1**；余项① 收口（`b8ff59d4`）后 **wired 5 / NOT_WIRED 0**：
+2026-11-06 第四波收口时 **wired 4 / NOT_WIRED 1**；余项① 收口（`b8ff59d4`）后 **wired 5 / NOT_WIRED 0**；
+余项⑤ 收口（`784cc077`）后 **wired 7 / NOT_WIRED 0**：
 
 | 工具 | tier | 状态 | 真源 |
 | --- | --- | --- | --- |
@@ -163,10 +164,13 @@ node tools/kojo-mcp.mjs
 | `fileTree.remove` | `privileged` | wired | `kernel.io.removeFile` / `removeDir` |
 | `fileTree.rename` | `privileged` | wired | `kernel.io.rename`（`from`/`to` 双端过闸） |
 | `problems.quickFix` | `edit` | wired | 宿主 `provideCodeActionsFor` 既有签发 id（`pane-N:贡献id#seq`）+ 有界台账（≤300 条 / 10min TTL）；apply＝Monaco 模型内单次 `executeEdits`（一个撤销步、可见脏、**不落盘**，零 io/invoke/bus）；文档版本前进或换页 ⇒ 旧 id 显式 `E_QUICKFIX_DOC_CHANGED` |
+| `tasks.start` | `edit` | wired | 缺口 `search_text` / `convention.linter.run(opts)`——起一条真长操作，改的是**运行态**（任务表 + 在途请求），两种 kind 都不落项目盘 |
+| `tasks.cancel` | `edit` | wired | 缺口 `cancel_search`（按行内持有的 `searchId` 认领，**不接受调用方传 id**）/ 本轮 `AbortSignal`；取消是**请求**语义，终态才是事实 |
 
-五枚已接线写腿一律叠**双闸**：写闸一第四张表 `approvedRoots` 复核，写闸二内核
+四枚**盘写**腿一律叠**双闸**：写闸一第四张表 `approvedRoots` 复核，写闸二内核
 `writablePaths` 写原语；成功后广播 `file.changed`（remove 发 `unlink`、rename 发源 `unlink` + 目标 `add`）。
-`problems.quickFix` 是唯一**不落盘**的那一枚：它只改模型（可撤销、留脏），落盘仍只经上面两闸。
+`problems.quickFix` 是盘侧面里唯一**不落盘**的那一枚：它只改模型（可撤销、留脏），落盘仍只经上面两闸。
+`tasks.*` 两枚属**运行态**写（不占盘、不触双闸，但同样判 edit ⇒ read 会话直调被端点 `E_TIER_DENIED` 拒）。
 `privileged` 两枚默认不进 `tools/list`、按工具名精确批准；`exportFile` 对话框仍是唯一域外写法定通道。
 `NOT_WIRED` 一律显式抛错可见，**绝不挂空串假实现**。
 
@@ -324,15 +328,15 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 > 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-06 第四/五波落地后按当前树复核）。
 
 - 能力面：命令 **61** / Rust 命令 **89** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
-  tools **40**（read **35** / edit 3 / privileged 2）；resources **9**；prompts **3**；
-- 缺口：`totalGaps=180` / `wiredGaps=30` / **`deferredGaps=150`**，逐条带原因，
-  按七类归因（合计 150，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
+  tools **43**（read **36** / edit 5 / privileged 2）；resources **10**；prompts **3**；
+- 缺口：`totalGaps=180` / `wiredGaps=31` / **`deferredGaps=149`**，逐条带原因，
+  按七类归因（合计 149，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
 
 | 原因类 | 条数 |
 | --- | --- |
 | 纯 UI / 注册槽贡献：无独立数据面可暴露；领域知识只经 `mcp.prompt` 槽注入 | 68 |
 | 危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准 | 46 |
-| 写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露 | 18 |
+| 写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露 | 17 |
 | MCP 会话控制 / 审计内建命令：由宿主线协议与第四张表管理，不作为模型工具 | 8 |
 | 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 3 |
 | 编辑器写 / 光标副作用：首期不面向只读模型面 | 5 |
@@ -340,7 +344,9 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 
 - **本波读数变化**：`read 28→35`（第四波 6 枚只读具名工具 + 第五波 `editor.cursor`），
   `wiredGaps 24→30` / `deferredGaps 156→150`；`orphanedWires=0` / `missingSources=0`。
-  写腿状态段见 §5.4（wired 5 / NOT_WIRED 0，`problems.quickFix` 已于余项① 收口＝`b8ff59d4`）。
+  余项⑤ 收口（`784cc077`）再 +3 枚具名工具（`tasks.start` / `tasks.status` / `tasks.cancel`），
+  ⇒ tools **43**、resources **10**、`wiredGaps 31` / `deferredGaps 149`（`search_text` 一条缺口转 wired）。
+  写腿状态段见 §5.4（wired 7 / NOT_WIRED 0，`problems.quickFix`＝`b8ff59d4`，`tasks.*`＝`784cc077`）。
 - **刻意不登记**（铁律「真源不存在 = 不登记」，留在缺口里）：第四波 11 条 `cheap-read`
   逐条判性只登记 6 条，余 5 条 = `read_file_bytes_raw` / `read_files_raw`（二进制帧、无结构化
   数据面，且 `read_files_raw` 会暴露任意目标路径参数）、`updater_relaunch`（重启动作）、
@@ -408,11 +414,16 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 
 ### 11.4 progress（长任务进度通知）
 
-- **为何不做**：progress notification 需要 `progressToken` 把通知与在途请求关联，并要求存在
-  「长任务」本体；本仓能力面全是短只读调用，唯一长任务族（索引 / 校验 / 导出）尚未建模成任务资源
-  （ADR-0013「Tasks over MCP」明确只描述不实现）。
-- **前置条件**：任务资源模型（任务 id / 可查询 / 可取消，`kojo://tasks/*`）；`notifications/progress`
-  帧协议与客户端展示契约；超时 / 取消与既有三件套（AbortSignal / 30s / 体积上限）打通。
+- **现状（2026-11-06 余项⑤ 收口＝`784cc077`，ADR-0013 P5 已拍板）**：「长任务」本体**已经建模**——
+  三件套（进度 + 取消 + 可查询状态）齐备的两族登记成 `tasks.start` / `tasks.status` / `tasks.cancel`
+  与资源 `kojo://tasks`；索引 / 导出 / 启动器任务表逐族写明缺什么，缺席事实在 `notIncluded[]` 可见。
+  但 **`notifications/progress` 仍不做**：本端点是无状态单请求 HTTP（`GET /mcp` 回 405，不供服务器流），
+  通知帧推不出去 ⇒ 进度契约＝**轮询读**（`tasks.status` / `kojo://tasks`），
+  `capabilities` 的 `subscribe` / `listChanged` 继续如实 `false`（抬成真值即谎报能力）。
+  本仓其余能力面仍是短只读调用为主，唯一长任务族已从「只描述不实现」变成实现。
+- **前置条件**：任务资源模型（任务 id / 可查询 / 可取消，`kojo://tasks` + `tasks.*`）**已具备**；
+  缺的是可推送的服务器流（GET /mcp 单向流 + 订阅态）；`notifications/progress`
+  帧协议与客户端展示契约；超时 / 取消与既有三件套（AbortSignal / 30s / 体积上限）已部分打通（取消腿真接）。
 - **未来接入点**：`tools/call` 的 `_meta.progressToken` 透传 → 桥分发任务进度 → shim 转发
   `notifications/progress`；任务本身以 resource 形态暴露，复用 tier 与第四张表授权。
 
