@@ -120,18 +120,18 @@ node tools/kojo-mcp.mjs
 ## 5. 暴露的能力概览
 
 能力注册表唯一真源 `packages/mcp-host/src/index.ts`（冻结契约 v1）。按 `node tools/mcp-inventory.mjs --print`
-盘点：`tools` 共 **76** 个，按 tier 分组 `read 37 / edit 10 / privileged 29`（详见 §6 授权模型；2026-11-06 第四/五波只读补齐、余项① / ⑤、B3 编辑器写腿、B2 结构化批读与 B4 启动器族落地后复核）。
+盘点：`tools` 共 **77** 个，按 tier 分组 `read 37 / edit 11 / privileged 29`（详见 §6 授权模型；2026-11-06 第四/五波只读补齐、余项① / ⑤、B3 编辑器写腿、B2 结构化批读、B4 启动器族、B10 打开文档面落地后按同一命令复核）。
 这些是**规范定义**的计数；`tools/list` 还会按会话 `tier` 与第四张表进一步过滤，危险工具默认缺席。
 另外，生产真源会把命令面板命令投影成同名工具（`commands.list` 读数与工具 `tier` 同源），但它们
 **一律按 `privileged` fail-closed**，默认不出现在 `tools/list`、也不接受 `edit` 会话调用（§6）；
-上面的 33 个具名工具计数不含这部分。
+上面的 77 个具名工具计数不含这部分（命令面板投影的条数即 `commands` 读数，见 §10.5）。
 
 ### 5.1 tools（按 tier，面向模型）
 
 | tier | 代表工具 | 说明 |
 | --- | --- | --- |
 | `read` | `project.info` `fs.tree` `fs.readFile` `fs.readMany` `fs.stat` `search.all` `workspace.searchAll` `problems.diagnostics` `document.active` `commands.list` `editor.info` `editor.selfCheck` `io.listDir` `io.workspaceRoots` `semantic.definitionAt` `semantic.referencesAt` `semantic.hoverAt` `semantic.suggestAt` `semantic.documentSymbols` `semantic.tokens` `semantic.codeActionsAt` `semantic.diagnostics` `lang.foldingRanges` `lang.highlightsAt` `lang.signatureAt` `lang.markers` `diff.compare` `state.replay` `preview.document` `app.dataDir` `codec.encodeString` `fs.pathExists` `fs.statFiles` `lang.lensesAt` `lang.selectionRangesAt` `editor.cursor` `tasks.status` | 只读；`readOnlyHint: true` |
-| `edit` | `fileTree.create` `fileTree.update` `problems.quickFix` `tasks.start` `tasks.cancel` `editor.setValue` `editor.type` `editor.setCursor` `editor.setSelection` `editor.revealLine` | 需会话 `tier >= edit`；只有 `fileTree.*` 触盘写双闸，其余三种形态见 §5.4 |
+| `edit` | `fileTree.create` `fileTree.update` `problems.quickFix` `tasks.start` `tasks.cancel` `editor.setValue` `editor.type` `editor.setCursor` `editor.setSelection` `editor.revealLine` `editor.openDocument` | 需会话 `tier >= edit`；只有 `fileTree.*` 触盘写双闸，其余三种形态见 §5.4，`editor.openDocument` 的可观测回执见 §5.9 |
 | `privileged` | `fileTree.remove` `fileTree.rename` + 启动器族 27 枚（`launcher_instance_{list,get,update,remove,duplicate}` · `launcher_content_{list,diagnose,apply,uninstall,set_enabled,set_order}` · `launcher_process_{list,status}` · `launcher_task_{list,cancel}` · `launcher_save_{list,backups,backup,restore,delete_backup,apply_import}` · `launcher_log_{sessions,tail,read}` · `launcher_project_hash` · `launcher_start` · `launcher_stop`） | 默认**不进 `tools/list`**；须宿主经第四张表**逐工具名精确批准**（面板那张三张表同源，见 §5.4 与 §6） |
 
 每个工具都有面向模型的 `description`、严格 `inputSchema`、正确 `tier` + `annotations`；
@@ -145,6 +145,9 @@ node tools/kojo-mcp.mjs
 所有资源文本都有**截断上限**并带显式 `truncated` 标记；插件状态 `inactive` 与 `missing[]` 必须可见，不静默。
 `fs-freshness`（2026-11-06 余项③＝`b90d79bb`）自述监视覆盖与两张有界账本读数；同一批把判定结果附在**只读应答**
 的 `fsFreshness` 字段上（不可用 / 未覆盖 / 无基线 / 账溢出 ⇒ `stale:null` + `staleReason`，绝不乐观 `false`）。
+**窗内的自写回声那一格已从「乐观 false」改成「读时真 stat 复核」**（B8 发起＝`283c35d8`，B13 把只读腿改用异步入口
+＝`843f420a`）：判据 `mtimeMs` + `size` 双等、核出的外部写如实进改动账并归因 `unattributed`、判不了仍 `null` + 理由，
+逐格形态与成本见 §5.10。
 
 ### 5.3 prompts（骨架，零游戏名词）
 
@@ -156,7 +159,8 @@ node tools/kojo-mcp.mjs
 
 2026-11-06 第四波收口时 **wired 4 / NOT_WIRED 1**；余项① 收口（`b8ff59d4`）后 **wired 5 / NOT_WIRED 0**；
 余项⑤ 收口（`784cc077`）后 **wired 7 / NOT_WIRED 0**；B3 编辑器写腿批（`f3dad97c`）后 **wired 12 / NOT_WIRED 0**；
-B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**。下表逐条点名那 12 枚编辑器/文件/任务面写腿；
+B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**；B10 打开文档面（`3b13f7ad`）后 **wired 40 / NOT_WIRED 0**。
+下表逐条点名那 12 枚编辑器/文件/任务面写腿（`editor.openDocument` 见 §5.9）；
 启动器 27 枚（13 只读 + 14 生命周期/写）的接线与授权口径见 §5.6——**它们同样一枚都不许挂空串**。
 
 | 工具 | tier | 状态 | 真源 |
@@ -305,6 +309,62 @@ B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**。下表逐条点�
   （语料不在盘 ⇒ read 面按 `NOT_WIRED` 报错，往返本身是真的）与真壳「改前」对照（需另一次冷构建）——
   不拿镜像数或估算冒充壳内 A/B。
 
+### 5.9 「打开文档」面的诚实收口（B10＝`3b13f7ad`）
+
+Wave4 #4 当年把 `editor.openDocument` / `editor.revealPosition` 判成**刻意不登记**，理由是宿主只有一条
+fire-and-forget 的 `editor.revealLocation` 事件：无 ack、无落地确认、落地走 React 异步重渲染、
+订阅者只在 GUI 挂载时存在（原判性全文见 `MCP_DEFERRED_GAP_NOTES` 的 Wave4 #4 / B10 两条）。
+B3 批之后**观察件第一次真的存在**，于是这一面从「只能承认做不到」变成「可观测回执」：
+
+- **执行体没换**：仍只发射宿主既有的 `editor.revealLocation`（与转到定义 / 问题面板 / 大纲同一条导航通路），
+  **零新事件、零新宿主能力、没给事件加 ack**——观察是加在 MCP 腿上的，不是加在宿主契约上的。
+- **观察真源**：`packages/app/src/mcp/editor-open-legs.ts` 的 `productionObserveEditorPanes(targetAbs)`
+  按 `paneId` 反查 `livePanes` 登记簿（与 B3 同一接缝，**执行时才动态 import**，开机图零新增字节）。
+  判据是两条同时成立：某实例的 `filePathRef` 命中目标 **且** 其上屏 model 就是那一份标签 model。
+- **有界轮询**：窗缺省 `3000 ms`、上限 `10000 ms`（入参 `deadlineMs` 可加，越界**不夹取**、脏值不静默回落缺省窗）、
+  每 `25 ms` 复核一次。成功回包把读回来的事实全部带上：
+  `paneId / lineCount / language / modelUri / readOnly / derivedView / waitedMs / polls / pollIntervalMs / deadlineMs / intent`。
+- **读不到就显式失败并交代账目**：失败理由包含「等了多久 / 窗多大 / 每多久复核」「登记簿里看到几个实例、
+  各实例正显示什么」「为什么判没打开」；登记簿整张读不到、或**发射前**就查到该事件零订阅者 ⇒ **不发射**，
+  直接 `NOT_WIRED`（绝不发射后再假称成功）。
+- **域界由 MCP 侧补上**：入参只收**项目根内相对路径**，走与 `fs.readFile` 同一条 `resolveWithinRoot`，
+  绝对路径 / 盘符 / `..` 当场 `INVALID_ARGS` ⇒ 宿主事件永远拿不到域外落点（附带红利：目标锚在当前根内，
+  换项目分支构造上不可达）。打开文档不写盘、不改模型、不改光标：`contentChanged:false` 与
+  `saved:false` / `persisted:false` 恒定如实回报。
+- **档位与回归同批**：`editor.openDocument` 进 Rust `EDIT_TOOLS_EXACT`（现 11 枚），端点级回归钉
+  「read 会话直调 ⇒ `E_TIER_DENIED` 带工具名 + Denied 审计 + 桥零调用」（cargo `mcp::tests` 107→**109**）。
+- **`editor.revealPosition` 继续不登记**：观察件救不了「一步同时打开并定位」这条组合面——把它登记成工具
+  ＝造第二条没有核对通道的跳转。定位已由两枚各带读回核对的工具覆盖：`editor.revealLine`（视口，回读
+  `revealedLine` 与 `clamped`）与 `editor.setCursor`（光标，回读 `cursor` 与 `clamped`），
+  要操作哪个实例由 `editor.openDocument` / `document.active` / `editor.info` 交回 `paneId`。
+
+### 5.10 只读应答的失效标注：读时复核（B8＝`283c35d8` · B13＝`843f420a`）
+
+余项③ 把监视器回声并条（同一事实不重复计数），代价是**窗内的真实外部写也不推序号** ⇒ 下一次读
+谎报 `stale:false`。这两批把那一格换成一趟真 stat 的结论，形状对客户端是四条事实：
+
+- **窗＝`SELF_WRITE_ECHO_WINDOW_MS = 5_000`**（`fs-freshness.ts:77`）。只在「事件流判出 `false`
+  **且**窗内命中同路径」这一格付 syscall；窗外 / 非同路径 / 已判 `true` 或已 `null` ⇒ 零额外探针
+  （用例逐条计数钉住）。
+- **复核只走既有只读契约**：`kernel.io.stat` / `statFiles`（`plugin-api/src/io.ts:185/199`，不受写允许域
+  约束，也不新建任何写通道）；判据与内核文本缓存同尺＝`mtimeMs` + `size` **双等**。核出的外部写如实进
+  改动账：推序号 + 归因 `unattributed`（证明不了是谁写的）并收掉那笔回声记忆，同一笔外部写不重复记
+  （复核指纹账去重）。
+- **两条入口，别混**：同步 `verdictOf` / `listingOf` 在窗内改为「发起复核 + 本档 `stale:null`」，
+  **窗内自动 `false` 这条路已经没了**；要在同一次读数里定档用异步入口 `verdictOfRechecked` /
+  `listingOfRechecked` / `verdictsOfRechecked`（`fs-freshness.ts:340/342/352`），`settlePendingRechecks`
+  供在途结论落账。B13 把生产只读腿（`fs.readFile` / `fs.stat` / `fs.statFiles` / `fs.readMany` /
+  `io.listDir` / `fs.tree` / `search.all` / `snapshot`）全部改用异步入口 ⇒ 窗内命中即在本次回包里给结论。
+- **批量面只付一趟**：多目标并进同一趟 `statFiles`（`recheck.trips = 1`、`batched:true`），
+  `fs.readMany` ≤64 条与 `fs.statFiles` ≤200 条各钉**恰 1 次 `statFiles`、0 次 `stat`**；注入面只有
+  单路径 stat 时如实退化为逐条趟并由 `recheck.trips` 出声，不假称一趟。
+
+判不了就 `null` + `staleReason`，逐条分档不合并：seam 缺席 / `stat` 抛错 / `mtimeMs:null` /
+「取不到与不存在合一」（Rust `metadata(...).ok()` 两态不分离 ⇒ 不乱报外部删除 `true`）/ 复核在途 /
+队列满。回包读法：`recheck.basis:"mtime-recheck"` 的 `stale:false` 才是"核过盘态证明没变"，
+`recheck:null` 的 `false` 是"窗外，监视事件流没报到改动"。复核侧第三张账容量沿用
+`CHANGE_LEDGER_CAPACITY`，溢出 `dropped` / `truncated` 可见。
+
 ## 6. tier 与授权模型
 
 `McpTier = 'read' | 'edit' | 'privileged'`；会话形状（冻结契约 v1）：
@@ -329,7 +389,7 @@ interface McpSessionScope {
   Rust 端点（`src-tauri/src/mcp/protocol.rs`）按同名前缀做第二道分级，不采信 WebView 回帧的
   `annotations` / `tier`；`editor.info` / `editor.selfCheck` 等具名只读工具不在前缀内，不受影响。
   这些动作在批准面**列得出来、批得进去**（真源驱动 + 精确列名 +「全选」），且执行回执
-  不再 fire-and-forget 冒充成功，口径见 §5.6；默认全不批准这一点不变。
+  不再 fire-and-forget 冒充成功，口径见 §5.7；默认全不批准这一点不变。
 - **第四张表独立**：MCP 会话授权只用 `mcp_approvals.json`，**不继承**三张既有写授权表
   （内核 `writablePaths` / Rust `ensure_write_allowed` / launcher `approvals.json`）。
 - `export_file` 是「系统对话框 + 写盘绑在同一 Rust 命令」的唯一法定绕开通道，
@@ -461,7 +521,7 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 > 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-06 第四/五波落地后按当前树复核）。
 
 - 能力面：命令 **61** / Rust 命令 **90** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
-  tools **76**（read **37** / edit 10 / privileged **29**）；resources **10**；prompts **3**；
+  tools **77**（read **37** / edit **11** / privileged **29**）；resources **10**；prompts **3**；
 - 缺口：`totalGaps=181` / `wiredGaps=64` / **`deferredGaps=117`**，逐条带原因，
   按七类归因（合计 117，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
 
@@ -482,15 +542,21 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
   **零新工具名**，只给分页面加 `limit` / `cursor` 入参与完整性账（见 §5.5）；B2 批读（`e5406978`）+1 枚
   只读 ⇒ tools **49**（read 36→37）、`read_files_raw` 一条 deferred 转 wired；**B4 启动器族**（`e1e9de71`）
   +**27** 枚具名 `privileged` ⇒ tools **76**（privileged 2→**29**）、`wiredGaps 64` / `deferredGaps 116`
-  （危险工具桶 46→19）。`orphanedWires=0` / `missingSources=0` 全程为零；写腿状态段见 §5.4
-  （wired 12→**39** / NOT_WIRED 0）。
+  （危险工具桶 46→19）。**B5 吞吐与延迟**（`d1a43790`）**零新工具名**，只新增一条宿主命令
+  `mcp_latency_query`（会话控制 / 审计内建，不作模型工具）⇒ Rust 命令 **90**、`deferredGaps 116→117`；
+  **B10 打开文档面**（`ebc3d714` / `3b13f7ad`）+1 枚具名 `edit` ⇒ tools **77**（edit **10→11**）、
+  写腿 wired **39→40**，缺口账不变（`totalGaps 181` = `wired 64` + `deferred 117`）。
+  `orphanedWires=0` / `missingSources=0` 全程为零；写腿状态段见 §5.4
+  （wired 12→**40** / NOT_WIRED 0）。
 - **刻意不登记**（铁律「真源不存在 = 不登记」，留在缺口里）：第四波 11 条 `cheap-read`
   逐条判性只登记 6 条，余 3 条 = `read_file_bytes_raw`（二进制帧 + path 即任意绝对目标路径）、
   `updater_relaunch`（重启动作）、`debug.actions`（注入面不可达）——`debug.type` 已于 B3 批由具名工具
   `editor.type` 覆盖，`read_files_raw` 已于 B2 批由结构化面 `fs.readMany` 覆盖（逐条根内相对路径 + ≤64 硬上限）；
   第五波 Wave4 #4 的
-  `editor.openDocument` / `editor.revealPosition` 判性 = 宿主无可诚实回报结果的通道，
-  **不登记**（只留显式缺口 + 防御性 `NOT_WIRED`，不假实现）。`editor.format` 同判（异步 provider
+  `editor.revealPosition` 判性 = 组合面没有独立诚实数据面（视口＝`editor.revealLine`、光标＝
+  `editor.setCursor` 各自带读回核对），**不登记**（只留显式缺口 + 防御性 `NOT_WIRED`，不假实现）；
+  同批的 `editor.openDocument` 已于 B10（`ebc3d714`）转登记为具名 `edit` 工具——四条判性一条没被推翻，
+  变的是观察件（执行时反查上屏登记簿），判据与诚实边界见 §5.9。`editor.format` 同判（异步 provider
   通道 + 前后长度读数，登记即假实现，Rust 侧也不提前点名未接线名）。启动器/市场面的不登记清单逐条见 §5.6。
   调用一律显式可见，不静默。
 - **截断账目**：`documentSymbols` / `referencesAt` 两处静默截断已改成 `total` 真实 +
