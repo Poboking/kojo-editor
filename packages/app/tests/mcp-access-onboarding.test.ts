@@ -24,7 +24,10 @@ import {
   SettingsAi,
   classifyMcpPhase,
   clientConfigSnippet,
+  formatAgeSeconds,
+  formatRelativeTime,
   scopeStateToClients,
+  splitClientId,
   queryMcpConnections,
   toAuditEntryView,
   type McpClientConnection,
@@ -360,5 +363,82 @@ describe('审计视图粒度', () => {
       outcome: 'ok',
     });
     expect(formatAuditEntry(view)).toBe('T c x [ok] d');
+  });
+});
+
+/* ------------- ⑤ UI 修复批（2026-11-06 审查 UI-01/02/03/05/06/21/24） ------------- */
+
+describe('UI 修复批', () => {
+  it('① 停止态：不查台账、不出现「接入台账读取失败」警告（UI-01）', async () => {
+    const rt = makeRuntime({ enabled: false });
+    const hz = await mount(h(AiAccessSection, { runner: rt.runner, pollMs: 0 }));
+    await flush();
+    expect(hz.text()).not.toContain('接入台账读取失败');
+    expect(rt.calls.some((c) => c.cmd === 'mcp_connections_query')).toBe(false);
+  });
+
+  it('② error 态：三张读数卡如实显示「—」，不把未知画成 0（UI-02）', async () => {
+    const rt = makeRuntime();
+    const failing: McpCommandRunner = async (cmd, args) => {
+      if (cmd === 'mcp_status') throw new Error('boom: ipc down');
+      return rt.runner(cmd, args);
+    };
+    const hz = await mount(h(SettingsAi, { runner: failing, pollMs: 0 }));
+    const values = hz
+      .findAll('.settings-ai-metric-value')
+      .map((v) => (v.textContent ?? '').trim());
+    expect(values).toEqual(['—', '—', '—']);
+    expect(hz.findAll('.settings-ai-metric--unknown')).toHaveLength(3);
+  });
+
+  it('③ 跨多个轮询周期后操作回执仍在状态条上，不被 refresh 冲掉（UI-03）', async () => {
+    const rt = makeRuntime();
+    const hz = await mount(h(SettingsAi, { runner: rt.runner, pollMs: 30 }));
+    const box = hz.find('input[type="checkbox"]') as HTMLInputElement;
+    await hz.click(box);
+    expect(hz.find('.settings-ai-status-detail')!.textContent).toContain('已关闭');
+    // 至少跨两个 30ms 轮询周期：receipt 必须活着，detail 只在后台被轮询更新
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 90));
+    });
+    expect(hz.find('.settings-ai-status-detail')!.textContent).toContain('已关闭');
+    expect(rt.calls.filter((c) => c.cmd === 'mcp_status').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('④ token 未显示但服务已启用：端点可见且可复制（UI-06）', async () => {
+    const rt = makeRuntime();
+    const hz = await mount(h(SettingsAi, { runner: rt.runner, pollMs: 0 }));
+    expect(hz.text()).toContain('http://127.0.0.1:7011/mcp');
+    expect(buttonByText(hz, '复制端点')).toBeDefined();
+  });
+
+  it('⑤ 复制按钮给出「已复制 ✓」反馈（UI-05）', async () => {
+    const rt = makeRuntime();
+    const onCopy = vi.fn();
+    const hz = await mount(h(SettingsAi, { runner: rt.runner, pollMs: 0, onCopy }));
+    await hz.click(buttonByText(hz, '复制路径'));
+    expect(onCopy).toHaveBeenCalledWith(DISCOVERY);
+    expect(hz.findAll('button').some((b) => (b.textContent ?? '').trim() === '已复制 ✓')).toBe(true);
+  });
+
+  it('纯函数：formatAgeSeconds / formatRelativeTime / splitClientId（UI-21 / UI-24）', () => {
+    expect(formatAgeSeconds(0)).toBe('0 秒前');
+    expect(formatAgeSeconds(59)).toBe('59 秒前');
+    expect(formatAgeSeconds(60)).toBe('1 分钟前');
+    expect(formatAgeSeconds(3600)).toBe('1 小时前');
+    expect(formatRelativeTime(new Date(Date.now() - 30_000).toISOString())).toBe('刚刚');
+    expect(formatRelativeTime(new Date(Date.now() - 5 * 60_000).toISOString())).toBe('5 分钟前');
+    expect(formatRelativeTime(new Date(Date.now() - 3 * 3_600_000).toISOString())).toBe('3 小时前');
+    expect(formatRelativeTime('not-a-date')).toBe('not-a-date');
+    expect(splitClientId('codex-cli@3f2a19c8')).toEqual({ name: 'codex-cli', hash: '3f2a19c8' });
+    expect(splitClientId('harness-a')).toEqual({ name: 'harness-a', hash: '' });
+  });
+
+  it('徽标短态：徽标只留两三个字，完整状态句保留在状态条（UI-27）', async () => {
+    const rt = makeRuntime();
+    const hz = await mount(h(SettingsAi, { runner: rt.runner, pollMs: 0 }));
+    const badge = hz.find('.settings-ai-badge');
+    expect((badge!.textContent ?? '').trim()).toBe('待握手');
+    expect(hz.find('.settings-ai-status-label')!.textContent).toContain('等待首次握手');
   });
 });

@@ -68,9 +68,9 @@ function defaultSubscribeClientConnected(handler: () => void): () => void {
   };
 }
 
-/** 默认动作 seam：真实实现按需装载，单测注入 spy 即可断言参数。 */
-function defaultCopy(text: string): void {
-  void import('../ui/context-menu-model').then((m) => m.copyTextToClipboard(text));
+/** 默认动作 seam：真实实现按需装载，单测注入 spy 即可断言参数。返回 Promise 供复制反馈判成败。 */
+function defaultCopy(text: string): Promise<void> {
+  return import('../ui/context-menu-model').then((m) => m.copyTextToClipboard(text));
 }
 function defaultReveal(path: string): void {
   void import('../ui/reveal-explorer').then((m) => void m.revealInExplorer(path));
@@ -90,11 +90,23 @@ export interface SettingsAiProps {
   readonly clients?: readonly McpClientInfo[];
   /** additive：Rust 内存接入台账（首条已鉴权请求起，含 `initialize`）。 */
   readonly connections?: readonly McpClientConnection[];
-  /** 注入动作 seam：生产按需装载剪贴板 / 资源管理器，单测注入 spy。 */
-  readonly onCopy?: (text: string) => void;
+  /**
+   * 注入动作 seam：生产按需装载剪贴板 / 资源管理器，单测注入 spy。允许返回 Promise：
+   * resolve ⇒ 按钮短暂变「已复制 ✓」；reject ⇒ 走 notify（UI-05 复制反馈）。旧的
+   * fire-and-forget 形状（返回 void）依旧兼容，旧消费方零改动。
+   */
+  readonly onCopy?: (text: string) => void | Promise<void>;
   readonly onReveal?: (path: string) => void;
   /** 状态轮询间隔（毫秒），0 = 关闭轮询；默认 4000。 */
   readonly pollMs?: number;
+  /** 每次读数（含读失败 ⇒ null）回传 status；宿主据此门控台账查询（UI-01）。 */
+  readonly onStatus?: (s: McpStatus | null) => void;
+  /** 可选：传入后在「已授权会话」每行渲染撤销按钮（UI-14）；缺省不渲染，旧消费方形状不变。 */
+  readonly onRevoke?: (clientId: string) => void;
+  /** 撤销动作进行中：行内撤销按钮禁用。 */
+  readonly revokeDisabled?: boolean;
+  /** 通知 seam（复制失败等）；缺省用全局 NotificationCenter。 */
+  readonly onNotify?: Notify;
   /**
    * 命令执行器注入 seam（additive，2026-11-06）：缺省沿用 `invoke`（生产 Tauri IPC），
    * 单测注入假实现即可验证「轮换先 stop 再 start」「三态上屏」而不起 GUI / HTTP。
@@ -110,7 +122,7 @@ interface McpStartResult {
 }
 
 /** Rust `server.rs::McpStatus`；后三格是接入可见性批的 additive 读数（旧响应可缺席）。 */
-interface McpStatus {
+export interface McpStatus {
   readonly enabled: boolean;
   readonly port: number | null;
   /** 瞬时并发 TCP 连接数（`Connection: close` 后即减），**不是**「已接入客户端数」。 */
@@ -124,7 +136,7 @@ interface McpStatus {
   readonly endpoint?: string;
 }
 
-type Phase =
+export type Phase =
   | 'loading'
   | 'stopped'
   | 'running'
@@ -143,7 +155,64 @@ const PHASE_LABEL: Readonly<Record<Phase, string>> = {
   busy: '处理中…',
 };
 
+/** 徽标短态（UI-27）：徽标只留两三个字，完整状态句由状态条负责。 */
+const PHASE_SHORT: Readonly<Record<Phase, string>> = {
+  loading: '读取中',
+  stopped: '未启动',
+  running: '已接入',
+  awaiting: '待握手',
+  unauthorized: '未授权',
+  error: '失败',
+  busy: '处理中',
+};
+
 const POLL_DEFAULT_MS = 4000;
+/** 操作回执（receipt）保留时长（UI-03）：30s 或到下一次操作。 */
+const RECEIPT_TTL_MS = 30_000;
+/** 复制按钮「已复制 ✓」反馈时长（UI-05）。 */
+const COPY_FEEDBACK_MS = 1200;
+
+/** 档位人话（UI-14 会话行）：原始 tier 收进 title。 */
+const TIER_LABEL: Readonly<Record<McpClientTier, string>> = {
+  read: '只读',
+  edit: '可编辑',
+  privileged: '特权',
+};
+
+/** 错误 → 单行人话：去掉 `Error: ` 前缀（UI-01：黄条不再复读「Error:」）。 */
+function errText(err: unknown): string {
+  return String(err).replace(/^Error:\s*/, '');
+}
+
+/**
+ * ISO 时间戳 → 人话相对时间（UI-21）：<60s「刚刚」/ <60m「N 分钟前」/ <24h「N 小时前」/
+ * 其余落到本地日期。解析失败如实回原串，不编造「刚刚」。
+ */
+export function formatRelativeTime(ts: string): string {
+  const t = Date.parse(ts);
+  if (Number.isNaN(t)) return ts;
+  const diff = Date.now() - t;
+  if (diff < 60_000) return '刚刚';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)} 分钟前`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)} 小时前`;
+  return new Date(t).toLocaleDateString('zh-CN');
+}
+
+/** 秒龄 → 「N 秒前 / N 分钟前 / N 小时前」（UI-24 状态条年龄胶囊；纯函数便于单测）。 */
+export function formatAgeSeconds(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s} 秒前`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  return `${Math.floor(s / 3600)} 小时前`;
+}
+
+/** `name@hash` 拆开（UI-21）：屏上只留名字，hash 随完整 clientId 收进 title。 */
+export function splitClientId(clientId: string): { name: string; hash: string } {
+  const at = clientId.indexOf('@');
+  return at === -1
+    ? { name: clientId, hash: '' }
+    : { name: clientId.slice(0, at), hash: clientId.slice(at + 1) };
+}
 
 /**
  * 状态机（纯函数，可单测）：三读数拆开后再判相，不再拿瞬时并发连接数冒充接入成功。
@@ -190,6 +259,10 @@ export function SettingsAi({
   onReveal = defaultReveal,
   pollMs = POLL_DEFAULT_MS,
   runner,
+  onStatus,
+  onRevoke,
+  revokeDisabled = false,
+  onNotify,
 }: SettingsAiProps) {
   const [phase, setPhase] = useState<Phase>('loading');
   const [status, setStatus] = useState<McpStatus | null>(null);
@@ -197,22 +270,79 @@ export function SettingsAi({
   const [showToken, setShowToken] = useState(false);
   const [detail, setDetail] = useState<string>('');
   const [rotateArmed, setRotateArmed] = useState(false);
+  // 回执通道（UI-03）：开启 / 关闭 / 轮换的成功或失败走 receipt，30s TTL 或到下一次操作；
+  // 4s 轮询的 refresh 只更新 detail、**永不覆盖** receipt。状态条优先显示 receipt。
+  const [receipt, setReceipt] = useState<string>('');
+  // 复制反馈（UI-05）：key ∈ path / config / endpoint，1.2s 后还原按钮文案。
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  // 状态条年龄（UI-24）：最近一次成功 refresh 的时刻 + 每秒跳动的 now ⇒「更新于 N 秒前」。
+  const [lastUpdated, setLastUpdated] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const mounted = useRef(true);
-  // runner 每次渲染可能是新引用 ⇒ 收进 ref，再包一层恒定的 `run`，避免 refresh 的
-  // useCallback 依赖抖动导致 useEffect 反复刷 IPC（与 AiAccessSection 同口径）。
+  const receiptTimerRef = useRef<number | undefined>(undefined);
+  const copyTimerRef = useRef<number | undefined>(undefined);
+  // runner / onCopy / onStatus 每次渲染可能是新引用 ⇒ 收进 ref，避免依赖抖动反复刷 IPC
+  // （与 AiAccessSection 同口径）。
   const runnerRef = useRef<McpCommandRunner | undefined>(runner);
   runnerRef.current = runner;
+  const onCopyRef = useRef(onCopy);
+  onCopyRef.current = onCopy;
+  const onStatusRef = useRef(onStatus);
+  onStatusRef.current = onStatus;
   const run = useCallback(
     (cmd: string, args?: Record<string, unknown>): Promise<unknown> =>
       runnerRef.current ? runnerRef.current(cmd, args) : invoke(cmd, args),
     [],
   );
+  const fallbackNotify = useNotify();
+  const notify = onNotify ?? fallbackNotify;
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
     };
   }, []);
+  // 卸载清尾：回执 / 复制反馈的 setTimeout 不许在组件死后 setState。
+  useEffect(
+    () => () => {
+      window.clearTimeout(receiptTimerRef.current);
+      window.clearTimeout(copyTimerRef.current);
+    },
+    [],
+  );
+  // 「更新于 N 秒前」每秒跳动（UI-24）。
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  /** 操作回执入口（UI-03）：重置 30s TTL。 */
+  const showReceipt = useCallback((message: string): void => {
+    setReceipt(message);
+    window.clearTimeout(receiptTimerRef.current);
+    receiptTimerRef.current = window.setTimeout(() => {
+      if (mounted.current) setReceipt('');
+    }, RECEIPT_TTL_MS);
+  }, []);
+
+  /** 复制 + 按钮反馈（UI-05）：成功短暂变「已复制 ✓」，失败走 notify，不静默。 */
+  const copyWithFeedback = useCallback(
+    async (key: string, text: string): Promise<void> => {
+      try {
+        await onCopyRef.current(text);
+        if (!mounted.current) return;
+        setCopiedKey(key);
+        window.clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = window.setTimeout(() => {
+          if (mounted.current) setCopiedKey(null);
+        }, COPY_FEEDBACK_MS);
+      } catch (err) {
+        if (!mounted.current) return;
+        notify({ kind: 'error', title: '复制失败', message: errText(err) });
+      }
+    },
+    [notify],
+  );
 
   const classify = useCallback((s: McpStatus): Phase => classifyMcpPhase(s), []);
 
@@ -222,15 +352,19 @@ export function SettingsAi({
       if (!mounted.current) return;
       setStatus(s);
       setPhase(classify(s));
+      setLastUpdated(Date.now());
       setDetail(
         s.enabled
           ? `端口 ${s.port ?? '—'} · 瞬时并发连接 ${s.clients} · 已握手 ${s.connections ?? 0}`
           : 'MCP 服务未启动。开启后编辑器会写入 mcp-endpoint.json 供 stdio shim 发现。',
       );
+      onStatusRef.current?.(s);
     } catch (err) {
       if (!mounted.current) return;
       setPhase('error'); // 连接失败：显式可见，不静默
-      setDetail(`读取 mcp_status 失败：${String(err)}`);
+      setStatus(null); // 读数未知 ⇒ 三张读数卡如实「—」，不拿旧值或 0 冒充（UI-02）
+      setDetail(`读取 mcp_status 失败：${errText(err)}`);
+      onStatusRef.current?.(null);
     }
   }, [classify, run]);
 
@@ -241,11 +375,16 @@ export function SettingsAi({
     return () => clearInterval(timer);
   }, [refresh, pollMs]);
 
-  const fail = useCallback((what: string, err: unknown): void => {
-    if (!mounted.current) return;
-    setPhase('error');
-    setDetail(`${what}失败：${String(err)}`);
-  }, []);
+  const fail = useCallback(
+    (what: string, err: unknown): void => {
+      if (!mounted.current) return;
+      setPhase('error');
+      const message = `${what}失败：${errText(err)}`;
+      setDetail(message);
+      showReceipt(message); // 操作失败是回执：不被 4s 轮询冲掉（UI-03）
+    },
+    [showReceipt],
+  );
 
   const start = useCallback(async (): Promise<void> => {
     setPhase('busy');
@@ -255,10 +394,11 @@ export function SettingsAi({
       setToken(r.token);
       setShowToken(false);
       await refresh();
+      showReceipt('MCP 服务已开启：发现文件已写入，等待客户端握手。');
     } catch (err) {
       fail('开启 MCP 服务', err);
     }
-  }, [refresh, fail, run]);
+  }, [refresh, fail, run, showReceipt]);
 
   const stop = useCallback(async (): Promise<void> => {
     setPhase('busy');
@@ -268,10 +408,11 @@ export function SettingsAi({
       setToken(null);
       setShowToken(false);
       await refresh();
+      showReceipt('MCP 服务已关闭：listener 与发现文件已收回。');
     } catch (err) {
       fail('关闭 MCP 服务', err);
     }
-  }, [refresh, fail, run]);
+  }, [refresh, fail, run, showReceipt]);
 
   const rotate = useCallback(async (): Promise<void> => {
     setRotateArmed(false);
@@ -288,7 +429,8 @@ export function SettingsAi({
       setShowToken(false);
       await refresh();
       if (mounted.current) {
-        setDetail(
+        // 轮换回执走 receipt 通道：4s 轮询不再把它冲掉（UI-03）。
+        showReceipt(
           'token 已轮换（端点已重启并换发）：旧 token 立即失效，客户端需用新 token 重连；' +
             '已批准的工具授权按 clientId 保留。',
         );
@@ -296,15 +438,34 @@ export function SettingsAi({
     } catch (err) {
       fail('轮换 token', err);
     }
-  }, [refresh, fail, run]);
+  }, [refresh, fail, run, showReceipt]);
 
   const enabled = status?.enabled ?? false;
   const discoveryPath = status?.discoveryPath ?? '';
-  const concurrentNow = status?.clients ?? 0;
-  const handshakeCount = status?.connections ?? connections.length;
-  const authorizedCount = status?.authorizedSessions ?? (clients?.length ?? 0);
+  // UI-02：status 为 null（读取中 / 读取失败）时读数**未知** ⇒ 一律「—」，不编造 0；
+  // authorizedCount 的第四张表兜底只在真拿到 status 后参与。
+  const concurrentNow = status === null ? null : status.clients;
+  const handshakeCount = status === null ? null : (status.connections ?? connections.length);
+  const authorizedCount =
+    status === null ? null : (status.authorizedSessions ?? (clients?.length ?? 0));
   const hasDetailedClients = clients !== undefined && clients.length > 0;
   const latest = connections[0];
+  // UI-06：端点与 token 解耦——enabled 即显示；优先真源 status.endpoint，缺了才按端口兜底拼接。
+  const endpointUrl =
+    status?.endpoint !== undefined && status.endpoint !== ''
+      ? status.endpoint
+      : status?.port != null
+        ? `http://127.0.0.1:${status.port}/mcp`
+        : '';
+
+  /** 读数卡：未知（null）显「—」并弱化（settings-ai-metric--unknown，样式归 Lane B）。 */
+  const metric = (label: string, value: number | null, hint: string): ReactElement => (
+    <div className={`settings-ai-metric${value === null ? ' settings-ai-metric--unknown' : ''}`}>
+      <span className="settings-ai-metric-label">{label}</span>
+      <strong className="settings-ai-metric-value">{value === null ? '—' : value}</strong>
+      <span className="settings-ai-metric-hint">{value === null ? '读数不可用' : hint}</span>
+    </div>
+  );
 
   return (
     <section className="settings-ai" aria-label="AI 接入">
@@ -316,37 +477,50 @@ export function SettingsAi({
             需 Bearer token 与逐会话授权；危险工具逐项批准。
           </p>
         </div>
+        {/* 徽标只留短态（UI-27）：完整状态句在下方状态条 */}
         <span className={`settings-ai-badge settings-ai-badge--${phase}`} aria-hidden="true">
-          {PHASE_LABEL[phase]}
+          {PHASE_SHORT[phase]}
         </span>
       </header>
 
-      {/* 状态：三态 + 等待握手 / 运行中 / 处理中，一律可见 */}
+      {/* 状态条：三态 + detail 一律可见；receipt（操作回执）优先于轮询 detail（UI-03）；
+          右侧「更新于 N 秒前」胶囊可点击手动刷新（UI-24，替代无反馈的「刷新状态」死按钮） */}
       <div className={`settings-ai-status settings-ai-status--${phase}`} role="status">
         <span className="settings-ai-status-label">状态：{PHASE_LABEL[phase]}</span>
-        <span className="settings-ai-status-detail">{detail}</span>
+        <span className="settings-ai-status-detail">{receipt !== '' ? receipt : detail}</span>
+        {lastUpdated !== null && (
+          <button
+            type="button"
+            className="settings-ai-status-age"
+            aria-label="手动刷新 AI 接入状态"
+            onClick={() => void refresh()}
+          >
+            更新于 {formatAgeSeconds(Math.max(0, Math.floor((nowMs - lastUpdated) / 1000)))}
+          </button>
+        )}
+      </div>
+
+      {/* 主操作前置（UI-13）：开关挪到状态头之后、读数卡之前，首屏就能完成「开启」这一步 */}
+      <div className="settings-ai-row settings-ai-controls">
+        <label className="settings-ai-toggle">
+          <Switch
+            checked={enabled}
+            disabled={phase === 'busy' || phase === 'loading'}
+            onChange={(next) => void (next ? start() : stop())}
+            label="启用 MCP 服务"
+          />
+          <span>启用 MCP 服务</span>
+        </label>
       </div>
 
       {/* 三个读数拆开：并发连接 ≠ 已授权会话 ≠ 已握手客户端（旧实现把三者混成 clients） */}
       <div className="settings-ai-metrics">
-        <div className="settings-ai-metric">
-          <span className="settings-ai-metric-label">瞬时并发连接</span>
-          <strong className="settings-ai-metric-value">{concurrentNow}</strong>
-          <span className="settings-ai-metric-hint">当前打开的 TCP 连接；请求结束即减</span>
-        </div>
-        <div className="settings-ai-metric">
-          <span className="settings-ai-metric-label">已授权会话</span>
-          <strong className="settings-ai-metric-value">{authorizedCount}</strong>
-          <span className="settings-ai-metric-hint">第四张表未撤销的会话；授权不等于连接</span>
-        </div>
-        <div className="settings-ai-metric">
-          <span className="settings-ai-metric-label">已握手客户端</span>
-          <strong className="settings-ai-metric-value">{handshakeCount}</strong>
-          <span className="settings-ai-metric-hint">本次运行时真实触达端点的去重 clientId</span>
-        </div>
+        {metric('瞬时并发连接', concurrentNow, '当前打开的 TCP 连接；请求结束即减')}
+        {metric('已授权会话', authorizedCount, '第四张表未撤销的会话；授权不等于连接')}
+        {metric('已握手客户端', handshakeCount, '本次运行时真实触达端点的去重 clientId')}
       </div>
 
-      {/* 接入确认卡：把「客户端到底接上没」变成正面、可操作的 UI 信号 */}
+      {/* 接入确认卡（UI-12）两态互斥：已接入 → 回执 + 发现文件 + 操作；未接入 → 三步向导 */}
       <section className="settings-ai-onboard" aria-label="MCP 接入确认">
         <div className="settings-ai-onboard-head">
           <h3>接入确认</h3>
@@ -354,21 +528,27 @@ export function SettingsAi({
         </div>
         {latest !== undefined ? (
           <p className="settings-ai-onboard-ok" role="status">
-            已接入：{latest.clientId} · 最近 {latest.method} · {latest.ts}
+            已接入 <span title={latest.clientId}>{splitClientId(latest.clientId).name}</span>
+            {' · '}最近 {latest.method === 'initialize' ? '首次握手' : latest.method}
+            {' · '}
+            {formatRelativeTime(latest.ts)}
             {connections.length > 1 ? ` · 共 ${connections.length} 个客户端` : ''}
           </p>
         ) : (
-          <p className="settings-ai-onboard-wait" role="status">
-            尚未检测到客户端接入：把 stdio shim 配进客户端后，首次握手会在这里变成正面确认。
-          </p>
+          <>
+            <p className="settings-ai-onboard-wait" role="status">
+              尚未检测到客户端接入：完成下面三步，首次握手会在这里变成正面确认。
+            </p>
+            {/* 三步向导（UI-13）：开启服务 → 复制配置 → 等待握手 */}
+            <ol className="settings-ai-onboard-steps">
+              <li>开启服务：拨动上方开关，编辑器写入发现文件（真实路径见下）。</li>
+              <li>
+                复制配置：把 stdio shim（<code>node tools/kojo-mcp.mjs</code>）配进客户端；配置里不含 token。
+              </li>
+              <li>等待握手：客户端首次握手后，本页自动刷新并给出正面确认。</li>
+            </ol>
+          </>
         )}
-        <ol className="settings-ai-onboard-steps">
-          <li>开启 MCP 服务，编辑器写入发现文件（真实路径见下）。</li>
-          <li>
-            把 stdio shim 配进客户端：<code>node tools/kojo-mcp.mjs</code>；配置里不含 token。
-          </li>
-          <li>客户端发起首次握手后，本页自动刷新并给出正面确认。</li>
-        </ol>
         <div className="settings-ai-discovery">
           <span className="settings-ai-discovery-label">发现文件</span>
           <code className="settings-ai-discovery-path" title={discoveryPath || undefined}>
@@ -380,9 +560,9 @@ export function SettingsAi({
             type="button"
             className="small"
             disabled={discoveryPath === ''}
-            onClick={() => onCopy(discoveryPath)}
+            onClick={() => void copyWithFeedback('path', discoveryPath)}
           >
-            复制路径
+            {copiedKey === 'path' ? '已复制 ✓' : '复制路径'}
           </button>
           <button
             type="button"
@@ -392,8 +572,12 @@ export function SettingsAi({
           >
             打开所在目录
           </button>
-          <button type="button" className="small" onClick={() => onCopy(clientConfigSnippet())}>
-            复制客户端配置
+          <button
+            type="button"
+            className="small"
+            onClick={() => void copyWithFeedback('config', clientConfigSnippet())}
+          >
+            {copiedKey === 'config' ? '已复制 ✓' : '复制客户端配置'}
           </button>
         </div>
         <p className="settings-ai-onboard-foot">
@@ -401,27 +585,15 @@ export function SettingsAi({
         </p>
       </section>
 
-      <div className="settings-ai-row settings-ai-controls">
-        <label className="settings-ai-toggle">
-          <Switch
-            checked={enabled}
-            disabled={phase === 'busy' || phase === 'loading'}
-            onChange={(next) => void (next ? start() : stop())}
-            label="启用 MCP 服务"
-          />
-          <span>启用 MCP 服务</span>
-        </label>
-        <button type="button" className="small" onClick={() => void refresh()} disabled={phase === 'busy'}>
-          刷新状态
-        </button>
-      </div>
-
-      {/* token：显示 / 隐藏 / 轮换入口；无 token 时说明原因，不静默留空 */}
+      {/* token 行：空态一句话（UI-22），机制细节收进 title；端点与 token 解耦（UI-06） */}
       <div className="settings-ai-row settings-ai-token">
         <span className="settings-ai-token-label">Token：</span>
         {token === null ? (
-          <span className="settings-ai-token-empty">
-            （未显示：开启或轮换 MCP 服务后由 mcp_start 返回；状态命令不回传明文）
+          <span
+            className="settings-ai-token-empty"
+            title="明文只在开启 / 轮换（mcp_start）的返回值里出现；状态命令不回传明文，token 不进日志、客户端配置或 stdout。stdio shim 运行时从发现文件读取凭据。"
+          >
+            凭据由发现文件托管，无需手动复制
           </span>
         ) : (
           <>
@@ -443,26 +615,63 @@ export function SettingsAi({
             <button type="button" className="small" onClick={() => setRotateArmed(false)}>取消</button>
           </span>
         )}
-        {token !== null && status?.port !== null && status?.port !== undefined && (
-          <span className="settings-ai-endpoint">端点：http://127.0.0.1:{status.port}/mcp</span>
+        {enabled && endpointUrl !== '' && (
+          <span className="settings-ai-endpoint">
+            端点：<code>{endpointUrl}</code>
+            <button
+              type="button"
+              className="small"
+              onClick={() => void copyWithFeedback('endpoint', endpointUrl)}
+            >
+              {copiedKey === 'endpoint' ? '已复制 ✓' : '复制端点'}
+            </button>
+          </span>
         )}
       </div>
 
-      {/* 授权会话列表：来自第四张表；连接态改由上面接入台账判定，不再硬编码 connected */}
+      {/* 已授权会话（UI-14）：撤销做进行内（onRevoke 可选，缺省不渲染按钮）；
+          连接态仍由接入台账判定，最近握手时间用相对时间（UI-21），clientId 拆名、hash 进 title */}
       <div className="settings-ai-clients">
-        <h3>已授权会话（{hasDetailedClients ? clients!.length : authorizedCount}）</h3>
+        <h3>
+          已授权会话（
+          {authorizedCount === null ? '—' : hasDetailedClients ? clients!.length : authorizedCount}）
+        </h3>
         {hasDetailedClients ? (
           <ul className="settings-ai-client-list">
-            {clients!.map((c) => (
-              <li key={c.clientId}>
-                <code>{c.clientId}</code>
-                {c.tier !== undefined && <span className="settings-ai-client-tier">tier {c.tier}</span>}
-                <span className={`settings-ai-client-state settings-ai-client-state--${c.connected === true ? 'on' : 'off'}`}>
-                  {c.connected === true ? '已接入' : '未接入'}
-                </span>
-              </li>
-            ))}
+            {clients!.map((c) => {
+              const seen = connections.find((x) => x.clientId === c.clientId);
+              return (
+                <li key={c.clientId}>
+                  <code title={c.clientId}>{splitClientId(c.clientId).name}</code>
+                  {c.tier !== undefined && (
+                    <span className="settings-ai-client-tier" title={`tier ${c.tier}`}>
+                      {TIER_LABEL[c.tier]}
+                    </span>
+                  )}
+                  <span className={`settings-ai-client-state settings-ai-client-state--${c.connected === true ? 'on' : 'off'}`}>
+                    {c.connected === true ? '已接入' : '未接入'}
+                  </span>
+                  {seen !== undefined && (
+                    <span className="settings-ai-client-seen" title={seen.ts}>
+                      最近握手 {formatRelativeTime(seen.ts)}
+                    </span>
+                  )}
+                  {onRevoke !== undefined && (
+                    <button
+                      type="button"
+                      className="small"
+                      disabled={revokeDisabled}
+                      onClick={() => onRevoke(c.clientId)}
+                    >
+                      撤销
+                    </button>
+                  )}
+                </li>
+              );
+            })}
           </ul>
+        ) : authorizedCount === null ? (
+          <p>会话读数暂不可用（状态读取失败或仍在读取）。</p>
         ) : authorizedCount > 0 ? (
           <p>有 {authorizedCount} 个已授权会话；逐会话明细由第四张授权表（路 C）提供。</p>
         ) : (
@@ -738,7 +947,7 @@ export interface AiAccessSectionProps {
   /** 接入事件订阅 seam；生产默认动态装载 Tauri `listen`，单测注入假订阅即可触发。 */
   readonly subscribeClientConnected?: (handler: () => void) => () => void;
   /** 注入动作 / 通知 seam，透传给 `SettingsAi` 与首次握手 toast。 */
-  readonly onCopy?: (text: string) => void;
+  readonly onCopy?: (text: string) => void | Promise<void>;
   readonly onReveal?: (path: string) => void;
   readonly onNotify?: Notify;
   /**
@@ -777,6 +986,11 @@ export function AiAccessSection({
   // additive（接入可见性）：端点内存接入台账；读失败单独上屏，不连累既有三块面板。
   const [connections, setConnections] = useState<readonly McpClientConnection[]>([]);
   const [connectionNote, setConnectionNote] = useState<string>('');
+  // UI-01：SettingsAi 每次读数经 onStatus 回传；仅 enabled 时才查台账——服务未启动不查、
+  // 不报「读取失败」，disabled 时清空台账与警告。
+  const [mcpStatus, setMcpStatus] = useState<McpStatus | null>(null);
+  // 握手事件到达时 bump：让下方台账 effect 即时重查（不必等下一次 status 轮询）。
+  const [connTick, setConnTick] = useState(0);
   const defaultNotify = useNotify();
   const notify = onNotify ?? defaultNotify;
   // additive（写域多根）：候选常驻根来自只读真源 workspace_roots；枚举失败单独上屏，
@@ -791,18 +1005,13 @@ export function AiAccessSection({
     };
   }, []);
 
+  const onStatus = useCallback((s: McpStatus | null): void => {
+    if (mounted.current) setMcpStatus(s);
+  }, []);
+
   const refresh = useCallback(async (): Promise<void> => {
     try {
       const [s, entries] = await Promise.all([queryMcpScope(run), queryMcpAudit(run)]);
-      // 接入台账同样是**独立读数**：服务未启动时 Rust 显式报错，单独上屏，
-      // 不把 scope / audit 一起拖成「连接失败」，也不静默装作「没有客户端接入」。
-      let conns: readonly McpClientConnection[] = [];
-      let connErr = '';
-      try {
-        conns = await queryMcpConnections(run);
-      } catch (err) {
-        connErr = String(err);
-      }
       // 候选根只是**发现面**：单独取、单独失败上屏，绝不让一次只读枚举失败把
       // scope / audit 一起拖成「连接失败」，也绝不静默装作「没有候选根」。
       let rootRaw: unknown = null;
@@ -815,10 +1024,6 @@ export function AiAccessSection({
       if (!mounted.current) return;
       setScope(s);
       setAudit(entries);
-      setConnections(conns);
-      setConnectionNote(
-        connErr === '' ? '' : `接入台账读取失败：${connErr}（MCP 服务可能未启动）`,
-      );
       setRootCandidates(workspaceRootIdCandidates(rootRaw));
       setRootEnumerationNote(
         rootErr === ''
@@ -835,10 +1040,39 @@ export function AiAccessSection({
     void refresh();
   }, [refresh]);
 
+  // UI-01：台账读数按 status.enabled 门控——服务未启动时不查、不报「读取失败」；
+  // disabled 时清空台账与警告；enabled 下真读失败才上屏（去掉 Error: 前缀）。
+  // status 每次 refresh 都是新对象 ⇒ 本 effect 随轮询自动重查；connTick 供握手事件即时触发。
+  useEffect(() => {
+    if (mcpStatus === null) return; // 状态未知：不查、不报（不编造坏消息）
+    if (!mcpStatus.enabled) {
+      setConnections([]);
+      setConnectionNote('');
+      return;
+    }
+    let cancelled = false;
+    queryMcpConnections(run)
+      .then((conns) => {
+        if (!cancelled && mounted.current) {
+          setConnections(conns);
+          setConnectionNote('');
+        }
+      })
+      .catch((err) => {
+        if (!cancelled && mounted.current) {
+          setConnectionNote(`接入台账读取失败：${errText(err)}`);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mcpStatus, connTick, run]);
+
   /** 首次握手事件：立刻重查台账（不必等 4s 轮询）+ 一条正面通知。 */
   const onClientConnected = useCallback(async (): Promise<void> => {
     await refresh();
     if (!mounted.current) return;
+    setConnTick((t) => t + 1);
     notify({
       kind: 'info',
       title: 'MCP 接入',
@@ -907,6 +1141,10 @@ export function AiAccessSection({
         connections={connections}
         pollMs={pollMs}
         runner={runner}
+        onStatus={onStatus}
+        onRevoke={(id) => void onRevoke(id)}
+        revokeDisabled={busy}
+        onNotify={notify}
         {...(onCopy !== undefined ? { onCopy } : {})}
         {...(onReveal !== undefined ? { onReveal } : {})}
       />
@@ -931,23 +1169,8 @@ export function AiAccessSection({
         onApprove={(batch) => void onApprove(batch)}
       />
 
-      <section className="settings-mcp-revoke" aria-label="MCP 会话撤销">
-        <h3>撤销会话授权</h3>
-        {clients.length === 0 ? (
-          <p>当前没有已授权会话。</p>
-        ) : (
-          <ul>
-            {clients.map((c) => (
-              <li key={c.clientId}>
-                <code>{c.clientId}</code>
-                <button type="button" disabled={busy} onClick={() => void onRevoke(c.clientId)}>
-                  撤销（mcp_revoke）
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {/* UI-14：撤销入口已并入上方「已授权会话」行内，独立撤销卡删除——
+          页面只出现一次 clientId 列表 */}
 
       <AuditPanel entries={audit} />
 
