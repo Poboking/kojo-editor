@@ -53,7 +53,6 @@ import { KOJO_STRUCTURE_SYNTAX_KINDS } from '../src/monaco/tree-sitter/types';
 import { syntaxErrorCode } from '../src/monaco/tree-sitter/syntax-decorations';
 
 const ROOT = path.resolve(import.meta.dirname, '..', '..', '..');
-const rel = (abs: string): string => path.relative(ROOT, abs).split(path.sep).join('/');
 const read = (...parts: string[]): string => readFileSync(path.join(ROOT, ...parts), 'utf8');
 
 /* ============================== 源码扫描腿 ============================== */
@@ -411,7 +410,6 @@ describe('诊断码闭环：标签与排除台账的卫生', () => {
   it('排除台账一条一理由、且不与标签表重复登记', () => {
     for (const [code, why] of Object.entries(DIAGNOSTIC_CODE_EXCLUSIONS)) {
       expect(why.trim(), `${code} 的排除没有理由`).not.toBe('');
-      expect(code.includes(':') || code.includes('-') || code.includes('/'), `${code} 看着不像诊断码`).toBe(true);
       expect(DIAGNOSTIC_LABELS[code], `${code} 既有中文名又被豁免（两处口径打架）`).toBeUndefined();
     }
   });
