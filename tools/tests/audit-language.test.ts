@@ -215,6 +215,8 @@ describe('audit-language · 棘轮与 fail-closed', () => {
     const self = await run('node', [SCRIPT, '--selftest']);
     expect(self.stdout).toContain('自证通过');
     const main = await run('node', [SCRIPT]);
-    expect(main.stdout).toContain('✅ 语言面审计：三类检查均未超出基线。');
+    // D06 加了 M4 ⇒ 汇总行的族数跟着从「三类」变「四类」（这一条曾滞后而假红，2026-11-07）
+    expect(main.stdout).toContain('✅ 语言面审计：四类检查均未超出基线。');
+    expect(main.stdout).toContain('✅ M4(上屏文案实现词)');
   }, 120_000);
 });

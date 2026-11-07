@@ -167,6 +167,7 @@ describe('erbReferenceDecorations · 装饰成形', () => {
         startColumn: 9,
         endColumn: 13,
         code: UNDEFINED_TRY_CALL_CODE,
+        source: 'erb-reference',
       },
     ]);
     expect(UNDEFINED_TRY_CALL_CODE).not.toBe(UNDEFINED_CALL_CODE);

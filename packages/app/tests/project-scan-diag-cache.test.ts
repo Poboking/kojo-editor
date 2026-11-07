@@ -12,7 +12,11 @@
  *    有界 2,000 最旧先出 / 换代即整体失效（声明面变了 / 贡献方名单变了）/ 计数可见；
  * ② 扫描器收口（createProjectScanner × diagCache）：首轮全重算、二轮同 stamp 全命中且
  *    **不再读盘**、单文件保存后恰该文件重算、回执账 cached/recomputed 可见、
- *    缺件（无 stamp / 无 gen）整轮保守回退逐字旧行为。
+ *    缺件（无 stamp / 无 gen）整轮保守回退：一条也不许假装命中，脏文件仍真重算。
+ *
+ * 与 ERBDIAG-F/D10（覆盖游标）的合流口径见 `project-diagnostics.ts` 里 `skip` 的头注：
+ * 缺口 > 0 时游标照挡（预算花在没查过的那一截），缺口 = 0 且缓存可用时不挡（交给指纹），
+ * 缺口 = 0 且缓存缺席时照挡（不真读第二遍）。本文件唯一一条因此改钉的账在「换代事实缺席」。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -207,6 +211,10 @@ function harness(opts: {
   stamps?: Map<string, DiagStamp | null>;
   gen?: DiagGen | null;
   failStamps?: boolean;
+  /** 复核队列（测试可往里 push；与 `extraPaths` 同形，按引用读） */
+  extra?: string[];
+  /** 每轮文件预算（0＝不限；钉「暖缓存下轮转不被架空」时要给出真预算） */
+  maxFiles?: number;
 }) {
   const published = new Map<string, EditorProblem[]>();
   const reads: string[] = [];
@@ -234,6 +242,7 @@ function harness(opts: {
     publish: (path, problems) => {
       published.set(path, [...problems]);
     },
+    extraPaths: () => opts.extra ?? [],
     diagCache: () => cache,
     diagGen: () => opts.gen ?? null,
     readStamps: opts.failStamps
@@ -246,7 +255,7 @@ function harness(opts: {
           return out;
         },
     perBatch: 8,
-    maxFiles: 0,
+    maxFiles: opts.maxFiles ?? 0,
   };
   return { scanner: createProjectScanner(deps), published, reads, decorateCalls, stamps, cache };
 }
@@ -302,6 +311,42 @@ describe('createProjectScanner × diagCache · 脏集增量', () => {
     expect(h.published.get(B)).toEqual([]); // 未变文件账不变
   });
 
+  it('暖缓存 + 整份还没查完 ⇒ 预算花在没查过的那一截（游标不许被缓存架空）', async () => {
+    const files = { [A]: 'bad', [B]: 'clean', [C]: 'bad' };
+    const stamps = new Map<string, DiagStamp | null>([
+      [A, stamp(1, 3)],
+      [B, stamp(2, 5)],
+      [C, stamp(3, 3)],
+    ]);
+    const h = harness({ files, stamps, gen: { indexVersion: 1, declSurface: 'S1' }, maxFiles: 2 });
+
+    const r1 = await h.scanner.run();
+    expect(r1.scanned).toBe(2);
+    expect(r1.covered).toBe(2);
+    expect(r1.remaining).toBe(1);
+    expect(r1.capped).toBe(true);
+    expect(h.reads).toEqual([A, B]);
+
+    /**
+     * D10 × S7 合流的**另一半**（上面那条「换代事实缺席」钉的是缓存缺席侧）：
+     * 缺口 > 0 时即便缓存可用，已查过的也不许铺回计划——铺回来就每轮都撞同一段排序
+     * 前缀（这里 A/B），C 永远轮不到，正是 D10 要断的「91% 的文件从来没被查过」。
+     * 这一条不钉的话，把判据写成 `!cacheActive` 单独一个条件也能全绿（D10 自己的夹具
+     * 不接缓存，两侧在那边逐字同形）——组长 2026-11-07 故意破坏实测过：只有这条会红。
+     */
+    h.reads.length = 0;
+    h.decorateCalls.length = 0;
+    const r2 = await h.scanner.run();
+    expect(h.reads).toEqual([C]);
+    expect(h.decorateCalls).toEqual([C]);
+    expect(r2.scanned).toBe(1);
+    expect(r2.cached).toBe(0);
+    expect(r2.recomputed).toBe(1);
+    expect(r2.covered).toBe(3);
+    expect(r2.remaining).toBe(0);
+    expect(r2.capped).toBe(false);
+  });
+
   it('.kojo2 文件永不走缓存（项目级分析要收本轮全部原文）', async () => {
     const files: Record<string, string> = { [A]: 'clean', [K]: 'export @foo' };
     const stamps = new Map<string, DiagStamp | null>([
@@ -327,17 +372,36 @@ describe('createProjectScanner × diagCache · 脏集增量', () => {
     expect(h.published.get(A)!.map((p) => p.line)).toEqual([1]);
   });
 
-  it('换代事实缺席（索引未就绪）⇒ 整轮不缓存，行为与不接缓存逐字同', async () => {
-    const files = { [A]: 'bad' };
-    const h = harness({ files, gen: null });
+  it('换代事实缺席（索引未就绪）⇒ 整轮不缓存：一条也不许假装命中，脏文件仍真重算', async () => {
+    const files: Record<string, string> = { [A]: 'bad' };
+    const extra: string[] = [];
+    const h = harness({ files, gen: null, extra });
     const r1 = await h.scanner.run();
     expect(r1.recomputed).toBe(1);
     expect(r1.cached).toBe(0);
-    // 二轮依旧全算（没有换代事实就没有缓存资格）
+    expect(r1.covered).toBe(1);
+    /**
+     * 二轮的账（D10 × S7 合流裁决，2026-11-07）：本条原本钉 `recomputed 1 / reads [A]`，
+     * 前提是「不接缓存时逐字旧行为＝每轮全读全算」。ERBDIAG-F/D10 落地后**那个旧行为本身
+     * 已经被判为浪费并断根**：整份查完（缺口 0）之后，没有缓存兜着就不许再真读真算第二遍。
+     * 所以这里改钉合并后的真账 `recomputed 0 / reads []`——不是放宽 S7，S7 要保护的
+     * 「没有换代事实就没有缓存资格、不许静默假装命中」由 `cached 0` 逐字照钉，且下面第三轮
+     * 补了一条**更强**的正向判据：脏文件在没有缓存资格时照样真读真算（不许把旧账当新账）。
+     */
     h.reads.length = 0;
     const r2 = await h.scanner.run();
-    expect(r2.recomputed).toBe(1);
+    expect(r2.recomputed).toBe(0);
     expect(r2.cached).toBe(0);
+    expect(h.reads).toEqual([]);
+    expect(r2.covered).toBe(1);
+    expect(r2.remaining).toBe(0);
+    // 盘上改过 + 走复核通道点名 ⇒ 无缓存资格也必须真重算（这才是「保守回退」的 protective 面）
+    files[A] = 'worse';
+    extra.push(A);
+    h.reads.length = 0;
+    const r3 = await h.scanner.run();
+    expect(r3.cached).toBe(0);
+    expect(r3.recomputed).toBe(1);
     expect(h.reads).toEqual([A]);
   });
 

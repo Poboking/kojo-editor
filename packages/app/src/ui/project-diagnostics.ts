@@ -713,13 +713,42 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
         for (const k of [...covered]) if (!listingKeys.has(k)) covered.delete(k); // 增删 ⇒ 重算
         sweepTotal = listingKeys.size;
       }
+      const contributors = deps.contributors();
+      /**
+       * 诊断增量缓存（MCP-PERF-S7）：本体 + 换代事实两件在场才启用（读盘指纹由
+       * 计划路径一次性批量取，见下）。换代（声明面 / 贡献方名单变了）由缓存本体
+       * 整份清空；此后逐文件比对 (mtime,size)——未变文件**不读盘不重算**，直接回
+       * 上一轮的整文件结论（`.kojo2` 例外：项目级分析要收本轮全部原文，永不命中）。
+       * 任何一件缺席 ⇒ 本轮**不缓存**（一条也不许假装命中，`cached` 恒 0）；至于要不要真读
+       * 真算，由覆盖游标按缺口决定（见下面 `skip` 的头注），不是无条件全量重算。
+       *
+       * **这一段提到计划之前算**（D10 × S7 合流裁决）：覆盖游标要不要挡预算，取决于
+       * 这一轮还有没有缺口、以及缓存是否可用（判据写在下面 `skip` 的头注）。
+       */
+      const diagCache = deps.diagCache?.() ?? null;
+      const diagGenRaw = diagCache !== null ? (deps.diagGen?.() ?? null) : null;
+      const diagGen: DiagGen | null =
+        diagCache !== null && diagGenRaw !== null ? { ...diagGenRaw, contributorIds: contributors.map((c) => c.id) } : null;
+      const cacheActive = diagCache !== null && diagGen !== null && deps.readStamps !== undefined;
       /**
        * 本轮跳过的那些：已查过的减去"待复核点名要重查的"。
        * 复核队列里的那些是盘上内容可能已经变过的，本轮必须重读（`extraPaths` 那条语义一字不退），
        * 所以它们凭本轮的记账把账更新一遍，而不是被游标挡在预算之外。
+       *
+       * **挡不挡，看这一轮还有没有缺口**（D10 × S7 合流口径，两套判据都不放宽）：
+       * - 缺口 > 0（整份还没查完）⇒ 照 D10 挡：预算必须花在没查过的那一截上。缓存可用也不许
+       *   把已查过的铺回来——铺回来就每轮都撞同一批排序靠前的文件，后面那些永远轮不到
+       *   （D10 要断的正是「91% 的文件从来没被查过」）；
+       * - 缺口 = 0 且缓存可用 ⇒ 不挡：全份铺进计划，由 (mtime,size) 决定谁真重算。命中近零
+       *   工时、零读盘，还留了一次"盘上悄悄变了"的核对机会；挡掉就把缓存整条腿架空
+       *   （`cached` 恒 0，S7 的五条判据当场红）。盘上真变过的文件另有 `invalidateCoverage`
+       *   → 复核队列那条法定通道，不靠这里重铺；
+       * - 缺口 = 0 且缓存缺席 ⇒ 照 D10 挡：没有缓存兜着，再铺一遍就是真读真算，那份浪费正是
+       *   游标要断的（D10「扫完那轮之后 scanned=0 / 不读第二遍」两条判据据此继续成立）。
        */
+      const uncovered = remainingOf();
       const skip = new Set<string>();
-      if (!opts.rescanOnly) {
+      if (!opts.rescanOnly && (uncovered > 0 || !cacheActive)) {
         for (const k of covered) skip.add(k);
         for (const p of queued) skip.delete(pkey(p));
       }
@@ -731,29 +760,15 @@ export function createProjectScanner(deps: ProjectScannerDeps): {
        * `capped` 的字面判据（预算）一个字没抬，只是把分母从"清单全量"换成"这轮还该查的量"：
        * 撞上限且**仍有缺口**才算 capped（清单已查完时那几份复核重读不算"没跑完"）。
        */
-      outcome.capped = opts.rescanOnly
-        ? planned < allowed.length
-        : planned < Math.max(0, sweepTotal - covered.size);
+      outcome.capped = opts.rescanOnly ? planned < allowed.length : planned < uncovered;
       if (allowed.length === 0) {
         // 一个都不许读 = 这一轮的结论覆盖面是零，不能伪装成"扫完了、什么都没扫出来"
         return quit(rejected.length > 0 || roots.length === 0 ? 'failed' : 'complete');
       }
 
-      const contributors = deps.contributors();
       const project = deps.project();
-      /**
-       * 诊断增量缓存（MCP-PERF-S7）：本体 + 换代事实两件在场才启用（读盘指纹由
-       * 计划路径一次性批量取，见下）。换代（声明面 / 贡献方名单变了）由缓存本体
-       * 整份清空；此后逐文件比对 (mtime,size)——未变文件**不读盘不重算**，直接回
-       * 上一轮的整文件结论（`.kojo2` 例外：项目级分析要收本轮全部原文，永不命中）。
-       * 任何一件缺席 ⇒ 本轮保守全量重算，`recomputed` 全额如实记账（不静默假装命中）。
-       */
-      const diagCache = deps.diagCache?.() ?? null;
-      const diagGenRaw = diagCache !== null ? (deps.diagGen?.() ?? null) : null;
-      const diagGen: DiagGen | null =
-        diagCache !== null && diagGenRaw !== null ? { ...diagGenRaw, contributorIds: contributors.map((c) => c.id) } : null;
+      // 缓存本体与换代事实已在计划之前取好（见上）；这里只开这一轮的账。
       diagCache?.beginRound(diagGen);
-      const cacheActive = diagCache !== null && diagGen !== null && deps.readStamps !== undefined;
       /** 计划内文件的盘上指纹（stamp 缺席的文件本轮不缓存）；stat 桥炸 ⇒ 整轮不缓存 */
       const stamps: ReadonlyMap<string, DiagStamp | null> = await (async () => {
         if (!cacheActive) return new Map<string, DiagStamp | null>();
