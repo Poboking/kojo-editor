@@ -115,13 +115,81 @@ function skipString(s: string, i: number): number {
   return -1;
 }
 
+/**
+ * `%…%` / `{…}` 插值段的结束位置（`from` = 开分隔符之后；返回闭分隔符之后 / 未闭合 -1）。
+ * 插值里可再出现普通串与嵌套 `@"…"`——它们的引号属于内层表达式，不关闭外层串。
+ */
+function skipInterpBody(s: string, from: number, closer: '}' | '%'): number {
+  let i = from;
+  while (i < s.length) {
+    const c = s[i]!;
+    if (c === closer) return i + 1;
+    if (c === '"' || (c === '@' && s[i + 1] === '"')) {
+      const end = skipLiteral(s, i);
+      if (end < 0) return -1;
+      i = end;
+      continue;
+    }
+    if (c === '\\' && i + 1 < s.length) {
+      i += 2;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * `@"…"` 逐字串的结束位置（`from` = 开引号之后；返回闭引号之后 / 未闭合 -1）。
+ *
+ * 语义与 `expr.ts` 词法器同口径（引擎 `LexicalAnalyzer.AnalyseFormattedString`）：
+ * `%…%` / `{…}` 插值里的引号属于**内层表达式**，不关闭外层串
+ * （`@"%FSYN("射精")%:手插进了你的…"` 是合法字面量，口上语料高频）。
+ * 认不出时回退"下一枚引号即结束"（与旧口径一致，`@"50% OFF"` 这类孤立 `%` 不误开插值）。
+ */
+function skipVerbatimBody(s: string, from: number): number {
+  let i = from;
+  while (i < s.length) {
+    const c = s[i]!;
+    if (c === '"') return i + 1;
+    if (c === '%' || c === '{') {
+      const end = skipInterpBody(s, i + 1, c === '%' ? '%' : '}');
+      if (end < 0) return -1;
+      i = end;
+      continue;
+    }
+    if (c === '\\' && i + 1 < s.length) {
+      i += 2;
+      continue;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/**
+ * 从 `i` 读一枚字面量：`i` 可以是 `"`（普通串）或 `@"` 的 `@`（逐字串）。
+ * 返回闭合引号之后 / 未闭合 -1。
+ *
+ * **为什么要逐字串的这一口**（D18）：之前所有取串都从 `@"` 的那枚 `"` 起按普通串扫，
+ * 撞上内层 `%FSYN("射精")%` 的引号就提前收串 ⇒ 后面的台词被切成"表面"送去诊断，
+ * 语料上表现为一串"多了一个冒号 / 运算符“!”"（`%SPLIT_G(@"a:b:c")%` 族）。
+ */
+function skipLiteral(s: string, i: number): number {
+  if (s[i] === '@' && s[i + 1] === '"') {
+    const end = skipVerbatimBody(s, i + 2);
+    return end >= 0 ? end : skipString(s, i + 1);
+  }
+  return s[i] === '"' ? skipString(s, i) : -1;
+}
+
 /** 引号感知截行内注释：顶层 `;` 起整段丢弃；字符串内的 `;` 原样保留 */
 function stripInlineComment(line: string): string {
   let i = 0;
   while (i < line.length) {
     const c = line[i]!;
-    if (c === '"') {
-      const end = skipString(line, i);
+    if (c === '"' || (c === '@' && line[i + 1] === '"')) {
+      const end = skipLiteral(line, i);
       i = end < 0 ? line.length : end;
       continue;
     }
@@ -185,8 +253,12 @@ function isVarRefLHS(s: string): boolean {
 /** 表达式合法的首记号字符（引号 / 数字 / 括号 / 单目 / 标识符含非 ASCII）；其余打头 = 裸文本赋值 */
 const EXPR_FIRST = /^[A-Za-z0-9_"(+\-!~\u0080-\uffff]/;
 
-/** 全角文本标点（出引号外）：裸文本赋值 / 美术图的强特征；ERB 标识符与运算不含它们 */
-const BARE_TEXT_CHARS = /[「」『』（）！？…‥、。～♪＠￥※┃│]/;
+/**
+ * 全角文本标点（出引号外）：裸文本赋值 / 散文 / 美术图的强特征；ERB 标识符与运算不含它们。
+ * 2026-11-07 D18 补入 `，` `：` `；` `・` 与书名/引号类括号——语料实证的口上散文断句字符
+ * （`RESULTS = 陷落状态4以上，与恋恋一起…`、`时间在21:00以后，…`）。
+ */
+const BARE_TEXT_CHARS = /[「」『』（）！？…‥、。，：；・～♪＠￥※┃│《》〈〉【】〔〕“”‘’]/;
 
 /** `变量:函数调用(…)` 索引（`CSTR:TOINT(X)` / `RAND: 陷落状态()`，冒号后容许空白）：合法 ERA，子集不覆盖 → 不猜 */
 const REF_FUNC_INDEX = /:\s*[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*\s*\(/;
@@ -196,6 +268,96 @@ const PRINT_LIKE_LHS = /^PRINT/i;
 
 const isIdentChar = (c: string): boolean => /[A-Za-z0-9_\u0080-\uffff]/.test(c);
 const isSpaceChar = (c: string): boolean => c === ' ' || c === '\t' || c === '\u3000' || c === '\u00a0';
+
+/** "记号 —— 空白 —— 记号"（真表达式里记号相邻必隔 ASCII 运算符，`X Y` 本身即非法） */
+const SPACE_GAP = /[A-Za-z0-9_\u0080-\uffff][ \t\u3000\u00a0]+[A-Za-z0-9_\u0080-\uffff]/;
+/** 非 ASCII（日文 / 中文）：与 SPACE_GAP 同时出现 = 散文的强证据 */
+const NON_ASCII = /[^\u0000-\u007f]/;
+/** 解码替换符（内核探测式解码对不可解字节的产物）——不是作者写的字符 */
+const DECODE_REPLACEMENT = '\uFFFD';
+
+/** 把表达式里的字符串字面量换成 `""`（`@"…"` 走插值感知口）：散文判据只看代码面 */
+function stripStringLiterals(expr: string): string {
+  let out = '';
+  let i = 0;
+  while (i < expr.length) {
+    const c = expr[i]!;
+    if (c === '"' || (c === '@' && expr[i + 1] === '"')) {
+      const end = skipLiteral(expr, i);
+      if (end < 0) return out; // 未闭合：其后全是串内容
+      out += '""';
+      i = end;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+/**
+ * 散文证据（D18「只在**真表达式位**判」的第一道门，语句路径与赋值 RHS 共用）。
+ *
+ * 语料实证的四类误报都不是表达式位，只是"行首/等号右边恰好长得像表达式"：
+ * - 台词原文 / 美术图整行被当成代码（全角标点：`，` `：` `；` `「」` …）；
+ * - 中日文散文断词（`X误写成SELECTCASE X`：记号之间只有一个空格——真表达式里记号相邻
+ *   必隔 ASCII 运算符，`A B` 本身就是非法 token 序列，作者不会这么写）；
+ * - 括号里一个光秃秃的问号（`觉妖怪与裂空刺眼惊(?)`：三元从不在 `(` 之后就 `?`）；
+ * - 解码替换符（文件不是 UTF-8，内核探测式解码兜出来的 `�`；在其上判语法=判乱码）。
+ *
+ * 判据只看**出引号外**的部分：字符串里的全角标点与空格是正文，不是散文证据。
+ */
+function looksLikeProse(expression: string): boolean {
+  if (expression.includes(DECODE_REPLACEMENT)) return true;
+  const bare = stripStringLiterals(expression);
+  if (BARE_TEXT_CHARS.test(bare)) return true;
+  if (/\(\s*\?/.test(bare)) return true;
+  return NON_ASCII.test(bare) && SPACE_GAP.test(bare);
+}
+
+/**
+ * 表达式在行尾是否"开口"（`(` 有开无闭 / 引号未闭合）——跨行表达式的必要条件。
+ * 只数出引号外的括号：串里的 `(` 是正文。
+ */
+function isUnterminatedAtEol(expression: string): boolean {
+  let depth = 0;
+  let i = 0;
+  while (i < expression.length) {
+    const c = expression[i]!;
+    if (c === '"' || (c === '@' && expression[i + 1] === '"')) {
+      const end = skipLiteral(expression, i);
+      if (end < 0) return true; // 引号没闭合
+      i = end;
+      continue;
+    }
+    if (c === '(') depth++;
+    else if (c === ')') depth = Math.max(0, depth - 1);
+    i++;
+  }
+  return depth > 0;
+}
+
+/** 折行续写最多往后看几行（语料实测最长的跨行实参表 = 5 行整） */
+const MAX_CONTINUATION_LINES = 8;
+
+/**
+ * 折行续写证据（D18 第二道门）：骨架扫描器只有**单行视野**，跨行表达式在它眼里永远是
+ * 残句。判据不用关键字表（"下一行像不像新语句"是开放集），而是**试一试**：
+ * 把后续行逐行接上来，接到某一行能解析通过 ⇒ 这是折行续写，不是残句。
+ *
+ * 语料两例（都是合法 ERA，且都是本腿此前最扎眼的假阳性）：
+ * `SIF GROUPMATCH(LOCALS:1, …` 十二行实参（fromEN/MISC.ERB）、
+ * `IF MAX(` + 五行 `ITEM:…` 列表（COMF413 料理を作る.ERB）。
+ */
+function continuesOnNextLines(expression: string, lines: readonly string[], lineNo: number): boolean {
+  if (!isUnterminatedAtEol(expression)) return false;
+  let joined = expression;
+  for (let k = lineNo; k < lines.length && k < lineNo + MAX_CONTINUATION_LINES; k++) {
+    joined = `${joined} ${lines[k]!}`;
+    if (diagnoseExpression(joined) === null) return true;
+  }
+  return false;
+}
 
 /**
  * 空格断 token 的裸文本（美术图 `AA:05 = 森森森　　林森`、词典 `X = fuck:thrust into:…`、
@@ -228,6 +390,8 @@ function bareTextSpaceGap(text: string, from: number, lastSig: string): boolean 
  * - `变量:函数(…)` 调用式索引（`CFLAG:TOINT(X)`、`Emot:IFEstr()`，语料高频）。
  */
 function rhsBlockReason(rhs: string): boolean {
+  // D18：散文证据（全角断句 / 中日文空格断词 / `(?` / 解码替换符）——不是表达式位
+  if (looksLikeProse(rhs)) return true;
   if (rhs.includes('\\@')) return true;
   if (!EXPR_FIRST.test(rhs)) return true;
   if (REF_FUNC_INDEX.test(rhs)) return true;
@@ -288,6 +452,9 @@ function extractInterp(content: string, line: number, out: ExpressionSurface[]):
   // `%\"…\"%` 美术包裹形态（语料实证：K14 系口上把整幅 AA 用转义引号塞进插值）——
   // 内层花括号/百分号全是图，整段不提取
   if (content.includes('\\' + '"')) return;
+  // D18：`%` 计数为奇数 ⇒ 至少有一枚是字面量（`50%`）或模运算，插值边界从语法上分不清
+  // （语料：`%C_SAMPLE_CHAR:(CNT % VARSIZE("X")) * W%`）。整串 fail-open，不猜。
+  if (countUnescaped(content, '%') % 2 === 1) return;
   let i = 0;
   const n = content.length;
   while (i < n) {
@@ -308,6 +475,20 @@ function extractInterp(content: string, line: number, out: ExpressionSurface[]):
     }
     i++;
   }
+}
+
+/** 未转义的字符计数（`\X` 转义对整体跳过）：判断插值边界是否成对 */
+function countUnescaped(s: string, ch: string): number {
+  let n = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (c === '\\' && i + 1 < s.length) {
+      i++;
+      continue;
+    }
+    if (c === ch) n++;
+  }
+  return n;
 }
 
 /**
@@ -353,6 +534,7 @@ function parenBalance(s: string): 'balanced' | 'unclosed' | 'extra' {
 function maybeSurface(raw: string, line: number, origin: ExpressionSurfaceOrigin, out: ExpressionSurface[]): void {
   const t = raw.trim();
   if (t.length === 0) return;
+  if (t.includes(DECODE_REPLACEMENT)) return; // 解码替换符：判乱码不是判语法
   if (t.includes('\\@') || t.includes("'") || t.includes('.') || t.includes('|')) return;
   if (t.startsWith('\\')) return; // 转义符打头 = 错位提取的垃圾（表达式不以 \ 开头）
   // `#`（ERA 三元）/ `@`（扩展字面量）/ `$`（口上脏话文本，语料实证）都不是表达式记号
@@ -407,21 +589,43 @@ function isHighConfidenceExprRhs(rhs: string): boolean {
   return false; // 单目（`-`/`!`/`~`）与其余打头：裸文本高发（`ARGS:1 = -`、`~ 　ヒ/フ`），不猜
 }
 
+/** 一枚"引号里是显示文本"的判据：整段插值就是这一枚字面量（`%"…"%` / `{"…"}`） */
+function aloneInInterpolation(code: string, openQuote: number, closeQuote: number): boolean {
+  let a = openQuote - 1;
+  while (a >= 0 && isSpaceChar(code[a]!)) a--;
+  let b = closeQuote + 1;
+  while (b < code.length && isSpaceChar(code[b]!)) b++;
+  const before = a >= 0 ? code[a]! : '';
+  const after = b < code.length ? code[b]! : '';
+  return (before === '%' || before === '{') && (after === '' || after === '%' || after === '}');
+}
+
 /** 一行代码（trim 后）→ 该行的表面；三遍线性（span 收集 / 赋值 / 插值），成本形状不变 */
 function scanCodeLine(line: string, lineNo: number, out: ExpressionSurface[]): void {
   const code = stripInlineComment(line);
   // pass 1：字符串字面量 span 收集（未闭合串也记；"引号打头 + 词法错"的形态由
-  // collect 层的字符串边界守卫过滤——美术图行里的 `\"` 会搅乱引号配对）
-  const spans: Array<{ start: number; end: number }> = [];
+  // collect 层的字符串边界守卫过滤——美术图行里的 `\"` 会搅乱引号配对）。
+  // `@"…"` 走**插值感知**口（见 `skipLiteral`），否则内层 `%F("…")%` 的引号会提前收串、
+  // 把台词切成假表面。
+  const spans: Array<{ start: number; end: number; display: boolean; verbatim: boolean }> = [];
   let i = 0;
   while (i < code.length) {
-    if (code[i] !== '"') {
+    const c = code[i]!;
+    if (c !== '"' && !(c === '@' && code[i + 1] === '"')) {
       i++;
       continue;
     }
-    const end = skipString(code, i);
+    const openQuote = c === '@' ? i + 1 : i;
+    const end = skipLiteral(code, i);
     const closed = end >= 0;
-    spans.push({ start: i + 1, end: closed ? end - 1 : code.length });
+    spans.push({
+      start: openQuote + 1,
+      end: closed ? end - 1 : code.length,
+      // D18：`%"…"%` / `{"…"}` 里那枚字面量是**插值的结果值**（显示文本，语料实证全是
+      // ASCII 美术图 `%"　 {:::＼:ヽ:_}…"%`）——插值语法只在格式串里成立，值不是格式串
+      display: closed && aloneInInterpolation(code, openQuote, end - 1),
+      verbatim: c === '@',
+    });
     i = closed ? end : code.length;
   }
   // pass 2：顶层赋值算符（== / != / <= / >= 排除；<<= / >>= 认；+= 系认）。
@@ -429,8 +633,8 @@ function scanCodeLine(line: string, lineNo: number, out: ExpressionSurface[]): v
   i = 0;
   while (i < code.length) {
     const c = code[i]!;
-    if (c === '"') {
-      const end = skipString(code, i);
+    if (c === '"' || (c === '@' && code[i + 1] === '"')) {
+      const end = skipLiteral(code, i);
       i = end < 0 ? code.length : end;
       continue;
     }
@@ -473,9 +677,15 @@ function scanCodeLine(line: string, lineNo: number, out: ExpressionSurface[]): v
     }
     i = rhsFrom;
   }
-  // pass 3：字符串内容 → 插值表面
+  // pass 3：字符串内容 → 插值表面（插值值位置上的字面量不提取，见 `display`）
   for (const s of spans) {
-    extractInterp(code.slice(s.start, s.end), lineNo, out);
+    if (s.display) continue;
+    const content = code.slice(s.start, s.end);
+    // 逐字串里的**内嵌引号**（`@"%FSYN("射精:射")%…"`、`@"%getHtmlXray("XRAY", W)%"`）：
+    // 插值边界的裁决权在引擎的 formatted-string 扫描，本子集不重写 ⇒ 整串不提取
+    // （既有 fail-open，与 `rhsBlockReason` 的"引号总数 > 2"同一条取舍）。
+    if (s.verbatim && countUnescaped(content, '"') >= 2) continue;
+    extractInterp(content, lineNo, out);
   }
 }
 
@@ -580,6 +790,13 @@ export function collectExprSyntaxDecorations(
     }
     if (diag === null) continue;
     if (byLine.has(stmt.line)) continue;
+    // D18「只在真表达式位判」的两道门（只在**已判错**时问，正常行零成本）：
+    // 1) 散文证据 —— 语句关键字也可以是散文行首（语料：更新日志 .erb 里的
+    //    `SELECTCASE RAND:X误写成SELECTCASE X`、`if 破瓜，先是独有部分…`）；
+    if (looksLikeProse(stmt.expression)) continue;
+    // 2) 折行续写证据 —— 扫描器只有单行视野，跨行实参表在它眼里永远是残句
+    //    （语料：`SIF GROUPMATCH(…` 十二行 / `IF MAX(` + 五行 ITEM 列表）。
+    if (continuesOnNextLines(stmt.expression, lines, stmt.line)) continue;
     const entry: ExprSyntaxDecoration = {
       line: stmt.line,
       message: diag.message,
@@ -615,6 +832,9 @@ export function collectExprSyntaxDecorations(
     // 引号配对搅乱）。真 syntax 错（`"a" +`）照报；字符串自身的边界问题不猜。
     if (diag !== null && diag.kind === 'lexical' && s.expression.startsWith('"')) continue;
     if (diag === null) continue;
+    // D18：折行续写的赋值右侧同理不判（语料 `乘数 += LIMIT(` + 六行实参，只有单行视野的
+    // 提取器看到的是残句；表面对与语句面对共用同一条"接上后续行能解析"的证据）
+    if (continuesOnNextLines(s.expression, lines, s.line)) continue;
     byLine.set(s.line, { line: s.line, message: diag.message, code: `erb.expr-${diag.kind}` });
   }
 
