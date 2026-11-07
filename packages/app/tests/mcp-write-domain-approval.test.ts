@@ -15,8 +15,11 @@
  *      首个 checkbox 仍是工具项、组级勾选只动本族（mcp-free-access 的「全选」锚不破）；
  *   ⑨ 无会话锁定（UI-15）：clientId 为空 ⇒ 无清单 / 无全选 / 无 CTA，只留引导；
  *      空 diff（UI-07）不再渲染空 pre；
- *   ⑩ 审计面板（UI-04/18/29）：客户端过滤走 kit 检索框、行结构化、两种空态可区分、
- *      清空筛选恢复全量。
+ *   ⑩ 审计面板（UI-04/18/29 + 实拍收尾）：客户端过滤走 kit 检索框、行结构化（时间短格式
+ *      MM-DD HH:mm:ss、note/完整 ISO 收 title 不上屏、缺项格显 — 不塌列）、两种空态可区分、
+ *      清空筛选恢复全量；
+ *   ⑪ 屏面去黑话与按钮档位（UI-20/23）：条目屏面无 privileged 档位字样（title 里有）、
+ *      只读/可写盘小字标、「已批准工具」不带黑话括注、root hint 人话化、批准所选挂主档。
  *
  * 安全边界：rootId 只是枚举标识；批准根 ≠ 放宽 approvedRoots 相对前缀 ≠ 绕过内核写允许域。
  */
@@ -33,7 +36,7 @@ import {
   type ApprovalBatch,
   type ApprovalItem,
 } from '../src/mcp/approval-ui';
-import { AuditPanel, type AuditEntryView } from '../src/mcp/audit-panel';
+import { AuditPanel, formatAuditTime, type AuditEntryView } from '../src/mcp/audit-panel';
 import {
   approveArgs,
   scopeStateToApproval,
@@ -254,7 +257,11 @@ describe('⑥ ApprovalUi：候选根可见、可勾、批次带精确列名', ()
       rootEnumerationNote: '常驻可写根枚举失败：IPC boom',
       onApprove: () => {},
     }));
-    expect(hz.find('[data-testid="mcp-root-enumeration-note"]')!.textContent).toContain('IPC boom');
+    const note = hz.find('[data-testid="mcp-root-enumeration-note"]')!;
+    expect(note.textContent).toContain('IPC boom');
+    // UI-35：全页唯一 role="status" 是状态条；这里的静态警告只走 aria-live，不抢播报。
+    expect(note.getAttribute('role')).toBeNull();
+    expect(note.getAttribute('aria-live')).toBe('polite');
   });
 });
 
@@ -438,7 +445,7 @@ describe('⑩ AuditPanel：kit 过滤框 / 结构化行 / 空态分场景', () =
     expect(input!.closest('.kit-search-field')).not.toBeNull();
   });
 
-  it('行结构化：五列 span + data-outcome 锚不动；note 保持可见、argsDigest/clientId/sessionId 收进 title', async () => {
+  it('行结构化：五列 span + data-outcome 锚不动；note/argsDigest/clientId/sessionId/完整 ISO 收进 title，note 不再上屏', async () => {
     const hz = await mount(h(AuditPanel, { entries: [row] }));
     const li = hz.find('[data-testid="mcp-audit-rows"] li')!;
     expect(li.getAttribute('data-outcome')).toBe('denied');
@@ -446,15 +453,39 @@ describe('⑩ AuditPanel：kit 过滤框 / 结构化行 / 空态分场景', () =
     for (const part of ['time', 'tool', 'outcome', 'elapsed', 'path']) {
       expect(li.querySelector(`.mcp-audit-row-${part}`), `缺 mcp-audit-row-${part}`).not.toBeNull();
     }
-    expect(li.querySelector('.mcp-audit-row-time')!.textContent).toBe(row.ts);
+    expect(li.querySelector('.mcp-audit-row-time')!.textContent).toBe('11-06 10:00:00');
     expect(li.querySelector('.mcp-audit-row-outcome')!.textContent).toBe('[denied]');
     expect(li.querySelector('.mcp-audit-row-elapsed')!.textContent).toBe('12ms');
     expect(li.querySelector('.mcp-audit-row-path')!.textContent).toContain('docs/a.txt');
-    // 铁律 4：拒绝原因保持可见文本（不许只活在 title 里）；悬浮承载参数摘要与会话
-    expect(li.textContent).toContain('特权工具未批准');
+    // note 不再占列宽（实拍红点：折行挤压第五列），全文进 title——不静默：悬浮可达
+    expect(li.textContent).not.toContain('特权工具未批准');
+    expect(li.getAttribute('title')).toContain('特权工具未批准');
+    // 悬浮承载完整 ISO 时间 + 参数摘要 + 客户端 + 会话
+    expect(li.getAttribute('title')).toContain('2026-11-06T10:00:00.000Z');
     expect(li.getAttribute('title')).toContain('relPath:str(9)');
     expect(li.getAttribute('title')).toContain('c1');
     expect(li.getAttribute('title')).toContain('sess-7');
+  });
+
+  it('缺项行不塌列：无 elapsed / 无落点 ⇒ 对应格显 —，五列照常落位', async () => {
+    const bare: AuditEntryView = {
+      ts: 't1', clientId: 'c1', tool: 'read_file', argsDigest: '{}', outcome: 'ok',
+    };
+    const hz = await mount(h(AuditPanel, { entries: [bare] }));
+    const li = hz.find('[data-testid="mcp-audit-rows"] li')!;
+    expect(li.querySelector('.mcp-audit-row-elapsed')!.textContent).toBe('—');
+    expect(li.querySelector('.mcp-audit-row-path')!.textContent).toBe('—');
+    // 五列 span 齐备（grid 按子元素序落列，条件渲染会把落点挤进耗时列）
+    expect(li.querySelectorAll('span')).toHaveLength(5);
+  });
+
+  it('formatAuditTime：ISO 裁成 MM-DD HH:mm:ss；非 ISO 原样返回（不编造）', () => {
+    expect(formatAuditTime('2026-11-06T23:41:09.123Z')).toBe('11-06 23:41:09');
+    expect(formatAuditTime('2026-11-06 23:41:09')).toBe('11-06 23:41:09');
+    expect(formatAuditTime('2026-01-02T03:04:05Z')).toBe('01-02 03:04:05');
+    expect(formatAuditTime('t1')).toBe('t1');
+    expect(formatAuditTime('')).toBe('');
+    expect(formatAuditTime('2026-11-06T23:41')).toBe('2026-11-06T23:41'); // 秒缺席不裁
   });
 
   it('两种空态可区分：零条目 vs 筛空；清空筛选恢复全量', async () => {
@@ -476,8 +507,101 @@ describe('⑩ AuditPanel：kit 过滤框 / 结构化行 / 空态分场景', () =
   });
 });
 
-/* ------------------------------- 共享夹具 ------------------------------- */
+/* --------------------- ⑪ 屏面去黑话与按钮档位（UI-20 / UI-23） --------------------- */
 
+describe('⑪ UI-20/23：条目屏面只留「名字 — 功能 + 写入标记」，黑话进 title，CTA 挂主档', () => {
+  const pendingOf = (names: readonly string[]): ApprovalItem[] =>
+    names.map((name) => ({
+      name,
+      tier: 'privileged' as const,
+      reason: '特权工具，默认不进 tools/list，需逐会话显式批准（按工具名精确授权）',
+    }));
+
+  it('条目屏面无「privileged」档位字样与 reason 长句；title 里有（形状不变，只是不上屏）', async () => {
+    const hz = await mount(h(ApprovalUi, {
+      clientId: 'c1',
+      pending: pendingOf(['fileTree.remove', 'launcher_instance_list']),
+      roots: [],
+      before: '',
+      after: '',
+      onApprove: () => {},
+    }));
+    const text = hz.text();
+    expect(text).not.toContain('privileged');
+    expect(text).not.toContain('tools/list');
+    expect(text).not.toContain('默认不进');
+    // 屏面仍是「工具名 — 真实功能一句话」（UI-17 口径延续）
+    expect(text).toContain('fileTree.remove — 删除文件树中的文件或目录');
+    expect(text).toContain('launcher_instance_list — 列出已注册的启动器实例');
+    // 黑话与机制长句收进条目 title
+    const li = hz.find('li[data-tool="fileTree.remove"]')!;
+    expect(li.getAttribute('title')).toContain('privileged');
+    expect(li.getAttribute('title')).toContain('按工具名精确授权');
+  });
+
+  it('写入标记：launcher 只读族标「只读」，其余（文件树 / 写面 / other）标「可写盘」', async () => {
+    const hz = await mount(h(ApprovalUi, {
+      clientId: 'c1',
+      pending: pendingOf(['fileTree.remove', 'launcher_instance_list', 'launcher_start', 'workbench.saveAll']),
+      roots: [],
+      before: '',
+      after: '',
+      onApprove: () => {},
+    }));
+    const tagOf = (name: string) =>
+      hz.find(`li[data-tool="${name}"] .mcp-tool-tag`)!.textContent;
+    expect(tagOf('launcher_instance_list')).toBe('只读');
+    expect(tagOf('fileTree.remove')).toBe('可写盘');
+    expect(tagOf('launcher_start')).toBe('可写盘');
+    expect(tagOf('workbench.saveAll')).toBe('可写盘');
+    // 可写盘标记带 data-write 钩子（样式侧用）
+    expect(hz.find('li[data-tool="fileTree.remove"] .mcp-tool-tag')!.getAttribute('data-write')).toBe('true');
+    expect(hz.find('li[data-tool="launcher_instance_list"] .mcp-tool-tag')!.getAttribute('data-write')).toBeNull();
+  });
+
+  it('「已批准工具」去黑话括注；可写根 hint 人话化，技术细节进 title', async () => {
+    const candidates = [{ id: WS_ID, label: WS_ROOT }];
+    const hz = await mount(h(ApprovalUi, {
+      clientId: 'c1',
+      pending: pendingOf(['fileTree.remove']),
+      roots: [],
+      before: '',
+      after: '',
+      approvedTools: ['fileTree.remove'],
+      candidateRootIds: candidates,
+      onApprove: () => {},
+    }));
+    const approved = hz.find('[data-testid="mcp-approved-tools"]')!;
+    expect(approved.textContent).toContain('已批准工具：');
+    expect(approved.textContent).not.toContain('第四张表');
+    expect(approved.getAttribute('title')).toContain('授权记录');
+    // hint 屏面人话 + title 机制
+    const hint = hz.find('.mcp-approve-roots-hint')!;
+    expect(hint.textContent).toContain('勾选后 Agent 才能写入该根');
+    expect(hint.textContent).not.toContain('relPath');
+    expect(hint.getAttribute('title')).toContain('approvedRootIds');
+    expect(hint.getAttribute('title')).toContain('内核写允许域');
+  });
+
+  it('粘性条主操作挂 mcp-btn-primary；全选 / 清空 / 组头按钮不挂', async () => {
+    const hz = await mount(h(ApprovalUi, {
+      clientId: 'c1',
+      pending: pendingOf(['fileTree.remove']),
+      roots: [],
+      before: '',
+      after: '',
+      onApprove: () => {},
+    }));
+    const approveBtn = hz.findAll('button').find((b) => (b.textContent ?? '').includes('批准所选'))!;
+    expect(approveBtn.classList.contains('mcp-btn-primary')).toBe(true);
+    for (const label of ['全选', '清空', '勾选本组', '清空本组']) {
+      const btn = hz.findAll('button').find((b) => (b.textContent ?? '').includes(label))!;
+      expect(btn.classList.contains('mcp-btn-primary'), `${label} 不应是主档`).toBe(false);
+    }
+  });
+});
+
+/* ------------------------------- 共享夹具 ------------------------------- */
 const LAUNCHER_READ_SET: ReadonlySet<string> = new Set([
   'launcher_instance_list',
   'launcher_instance_get',

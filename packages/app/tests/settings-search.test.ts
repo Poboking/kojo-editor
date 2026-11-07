@@ -22,8 +22,10 @@ import {
  * 锚点分散在好几个组件里（语言矩阵在 capability-matrix-view、排版四行与显示偏好八行
  * 各自成块），所以判据要扫整棵 `src/ui`，而不是只盯 SettingsPanel.tsx——只读一个文件时，
  * 别的文件里真存在的锚点会被判成"索引指向不存在的行"，反过来也护不住新增行。
- * 根收在 `src/ui`：设置行一律是 React 组件且都住这里；万一哪天挪出去，方向①会当场红，
- * 而不是悄悄漏判（下面那条"扫描不许空"的地板就是防走错的）。
+ * 扫描面 = `src/ui` + AI 接入节的动态边文件 `src/mcp/settings-ai.tsx`（UI-36）：
+ * 那一节按设计走懒加载、不进设置页静态链，但它的五枚 `data-settings-key` 是真锚点，
+ * 漏扫会让「索引指向不存在的行」假红，也护不住以后新增的 AI 接入行。
+ * 下面那条"扫描不许空"的地板就是防走错目录的。
  */
 function componentSources(dir: URL): string[] {
   const out: string[] = [];
@@ -36,6 +38,8 @@ function componentSources(dir: URL): string[] {
 }
 
 const UI_SRC = new URL('../src/ui/', import.meta.url);
+/** AI 接入节：动态边组件里的锚点（UI-36），与 src/ui 的那些同属一个双向闭合面。 */
+const MCP_AI_SRC = new URL('../src/mcp/settings-ai.tsx', import.meta.url);
 
 /**
  * 节名与行文案的对照面：设置在 SettingsPanel 里成节声明，判据就只该读它——
@@ -51,7 +55,11 @@ const settingsPanelSrc = (): string =>
  */
 function declaredAnchors(): string[] {
   const found = new Set<string>();
-  for (const src of componentSources(UI_SRC)) {
+  const sources = [
+    ...componentSources(UI_SRC),
+    readFileSync(fileURLToPath(MCP_AI_SRC), 'utf8'),
+  ];
+  for (const src of sources) {
     for (const m of src.matchAll(/[\s{]data-settings-key="([^"{$]+)"/g)) found.add(m[1]!);
   }
   return [...found].sort();
@@ -106,6 +114,18 @@ describe('索引自身的诚实性', () => {
     for (const anchor of anchors) {
       expect(keyed, `页面有锚点 "${anchor}"，但索引里没这条 ⇒ 这一行搜不到`).toContain(anchor);
     }
+  });
+
+  it('AI 接入节可搜：token / MCP / 审计 都能落到 ai.* 条目，且五条都有真锚点（UI-36）', () => {
+    expect(searchSettings('token').map((e) => e.id)).toContain('ai.token');
+    expect(searchSettings('MCP').map((e) => e.id)).toContain('ai.service');
+    expect(searchSettings('审计').map((e) => e.id)).toContain('ai.audit');
+    const ai = SETTINGS_SEARCH_INDEX.filter((e) => e.section === 'ai');
+    expect(ai.map((e) => e.id)).toEqual([
+      'ai.service', 'ai.token', 'ai.clients', 'ai.approval', 'ai.audit',
+    ]);
+    const anchors = declaredAnchors();
+    for (const e of ai) expect(anchors, `AI 接入条目 ${e.id} 没有行锚点`).toContain(e.key!);
   });
 });
 

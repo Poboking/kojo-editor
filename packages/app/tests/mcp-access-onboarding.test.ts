@@ -26,6 +26,7 @@ import {
   clientConfigSnippet,
   formatAgeSeconds,
   formatRelativeTime,
+  middleEllipsis,
   scopeStateToClients,
   splitClientId,
   queryMcpConnections,
@@ -222,17 +223,33 @@ describe('状态语义纠偏', () => {
 /* -------------------- ② 接入确认卡与接入引导 -------------------- */
 
 describe('接入确认卡', () => {
-  it('显示发现文件真实路径、三步引导与三个可操作按钮', async () => {
+  it('显示发现文件真实路径（中段省略 + 全文进 title）、三步人话引导与四个可操作按钮', async () => {
     const rt = makeRuntime();
     const hz = await mount(h(SettingsAi, { runner: rt.runner, pollMs: 0 }));
     const card = hz.find('.settings-ai-onboard');
     expect(card).not.toBeNull();
-    expect(card!.textContent).toContain(DISCOVERY);
-    expect(card!.textContent).toContain('stdio shim');
+    // UI-26：长路径屏上只留「头 … 尾」，全文必须仍可经 title / 复制动作取回。
+    const pathEl = card!.querySelector('.settings-ai-discovery-path');
+    expect(pathEl, '发现文件路径胶囊应存在').not.toBeNull();
+    expect(pathEl!.getAttribute('title')).toBe(DISCOVERY);
+    const shown = pathEl!.textContent ?? '';
+    expect(shown).toContain('…');
+    expect(shown.length).toBeLessThanOrEqual(48); // 省略结果不许比上限还长
+    expect(shown.startsWith(DISCOVERY.slice(0, 20))).toBe(true); // 头部与尾部都留得住
+    expect(shown.endsWith(DISCOVERY.slice(-18))).toBe(true);
+    expect(card!.textContent).not.toContain(DISCOVERY); // 屏面不许把长路径整条摊开
+    // UI-20：屏面说人话「转发器」，stdio shim 这个术语只留在 title 里。
+    const step2 = card!.querySelector('.settings-ai-onboard-steps li:nth-child(2)');
+    expect(step2?.textContent).toContain('转发器');
+    expect(step2?.textContent).toContain('node tools/kojo-mcp.mjs');
+    expect(step2?.getAttribute('title')).toContain('stdio shim');
+    expect(card!.textContent).not.toContain('stdio shim');
     expect(card!.textContent).toContain('首次握手');
     for (const label of ['复制路径', '打开所在目录', '复制客户端配置']) {
       expect(hz.findAll('button').some((b) => (b.textContent ?? '').trim() === label), `缺按钮「${label}」`).toBe(true);
     }
+    // UI-06：端点与 token 解耦后的第四个复制动作也必须在页上（不在卡内）。
+    expect(hz.findAll('button').some((b) => (b.textContent ?? '').includes('复制端点')), '缺「复制端点」').toBe(true);
   });
 
   it('复制路径 / 打开所在目录都带真实路径，且不把 token 带进动作', async () => {
@@ -263,13 +280,21 @@ describe('接入确认卡', () => {
     expect(onCopy).toHaveBeenCalledWith(snippet);
   });
 
-  it('已握手时在屏上正面确认「已接入」+ clientId', async () => {
+  it('已握手时在屏上正面确认「已接入」+ 客户端名，且接入确认卡不抢 live region', async () => {
     const rt = makeRuntime({ connections: [HANDSHAKE] });
     const hz = await mount(h(SettingsAi, { runner: rt.runner, pollMs: 0, connections: [HANDSHAKE] }));
-    const ok = hz.find('.settings-ai-onboard [role="status"]');
-    expect(ok).not.toBeNull();
+    // UI-35：全页唯一播报通道是状态条；接入确认回执只是普通文本，不与状态条重复播报。
+    const status = hz.find('.settings-ai-status[role="status"]');
+    expect(status, '状态条应是唯一 live region').not.toBeNull();
+    expect(hz.find('.settings-ai-onboard [role="status"]')).toBeNull();
+    const ok = hz.find('.settings-ai-onboard-ok');
+    expect(ok, '已接入应有正面回执').not.toBeNull();
     expect(ok!.textContent).toContain('已接入');
-    expect(ok!.textContent).toContain('harness-a');
+    expect(ok!.textContent).toContain(splitClientId(HANDSHAKE.clientId).name);
+    // clientId 全文不丢：拆名后 hash / 完整串仍可经 title 追溯。
+    expect(ok!.querySelector('[title]')?.getAttribute('title')).toBe(HANDSHAKE.clientId);
+    // 两态互斥：已接入时三步教程必须消失。
+    expect(hz.find('.settings-ai-onboard-steps')).toBeNull();
   });
 });
 
@@ -440,5 +465,128 @@ describe('UI 修复批', () => {
     const badge = hz.find('.settings-ai-badge');
     expect((badge!.textContent ?? '').trim()).toBe('待握手');
     expect(hz.find('.settings-ai-status-label')!.textContent).toContain('等待首次握手');
+  });
+
+  it('路径中段省略是输出上限：短串原样、长串有界且保留头尾（UI-26）', () => {
+    expect(middleEllipsis('short/path.json')).toBe('short/path.json');
+    expect(middleEllipsis(DISCOVERY)).toContain('…');
+    expect(middleEllipsis(DISCOVERY).length).toBeLessThanOrEqual(48);
+    expect(middleEllipsis(DISCOVERY).startsWith(DISCOVERY.slice(0, 20))).toBe(true);
+    expect(middleEllipsis(DISCOVERY).endsWith(DISCOVERY.slice(-18))).toBe(true);
+    // max 是输出上限，不是只管触发的阈值：小上限的省略结果不许比原串还长。
+    expect(middleEllipsis('abcdefgh', 6).length).toBeLessThanOrEqual(6);
+    expect(middleEllipsis('abcdefgh', 6)).toContain('…');
+  });
+
+  it('页内分段导航：概览 / 授权 / 审计三段可点，无 scrollIntoView 也不炸（UI-19）', async () => {
+    const hz = await mount(h(SettingsAi, { runner: makeRuntime().runner, pollMs: 0 }));
+    const nav = hz.find('.mcp-subnav');
+    expect(nav, '应有页内分段导航').not.toBeNull();
+    const items = [...nav!.querySelectorAll('button')];
+    expect(items.map((b) => (b.textContent ?? '').trim())).toEqual(['概览', '授权', '审计']);
+    expect(items[0]!.className).toContain('on');
+    // 内层组件只带「概览」段；授权 / 审计两段的锚挂在编排层 AiAccessSection，
+    // 所以整页三段是否都落了地要挂真实入口验（点了不能滚向空气）。
+    expect(hz.find('#mcp-sec-overview')).not.toBeNull();
+    const outer = await mount(h(AiAccessSection, {
+      runner: makeRuntime().runner, pollMs: 0, onCopy: vi.fn(), onReveal: vi.fn(),
+    }));
+    for (const id of ['mcp-sec-overview', 'mcp-sec-approval', 'mcp-sec-audit']) {
+      expect(outer.find(`#${id}`), `整页分段 ${id} 应有真实锚点`).not.toBeNull();
+    }
+    // happy-dom 没有 scrollIntoView：点击只应切高亮，不许抛异常。
+    await hz.click(items[1]!);
+    expect(items[1]!.className).toContain('on');
+    expect(items[0]!.className).not.toContain('on');
+  });
+
+  it('屏面说人话：读数卡不带黑话，技术口径只留在 title（UI-20）', async () => {
+    const hz = await mount(h(SettingsAi, { runner: makeRuntime().runner, pollMs: 0 }));
+    const metrics = hz.find('.settings-ai-metrics');
+    expect(metrics).not.toBeNull();
+    expect(metrics!.textContent).not.toContain('第四张表');
+    expect(metrics!.textContent).not.toContain('clientId');
+    expect(metrics!.textContent).toContain('人类批准过且未撤销的会话');
+    expect(metrics!.textContent).toContain('本次运行真实连过端点的客户端');
+    expect(metrics!.querySelector('.settings-ai-metric-label[title]')?.getAttribute('title'))
+      .toContain('mcp_status.clients');
+    expect(hz.find('.settings-ai-onboard-tag')!.textContent).toBe('接入状态');
+  });
+});
+
+/* -------------------- ⑥ 收口批：状态去重 / 一主两辅 / 凭据重签 / 按钮档位 -------------------- */
+
+describe('收口批（UI-10 / UI-11 / UI-22 / UI-23）', () => {
+  it('状态条不再复读三张读数卡的数字，只补环境与下一步（UI-10）', async () => {
+    const rt = makeRuntime({ connections: [HANDSHAKE] });
+    const hz = await mount(h(SettingsAi, { runner: rt.runner, pollMs: 0 }));
+    const detail = hz.find('.settings-ai-status-detail')?.textContent ?? '';
+    expect(detail).toContain('7011'); // 端口是卡片里没有的事实
+    expect(detail).toContain('客户端已连入'); // 已连入时给下一步，不再报数
+    expect(detail).not.toContain('瞬时并发连接');
+    expect(detail).not.toContain('已握手');
+    expect(hz.find('.settings-ai-status-label')?.textContent).toContain('运行中');
+  });
+
+  it('读数一主两辅：已握手客户端是唯一大数，另两枚退成 chip（UI-11）', async () => {
+    const hz = await mount(h(SettingsAi, { runner: makeRuntime().runner, pollMs: 0 }));
+    const hero = hz.findAll('.settings-ai-metric--hero');
+    expect(hero).toHaveLength(1);
+    expect(hero[0]!.textContent).toContain('已握手客户端');
+    expect(hz.findAll('.settings-ai-metric--chip')).toHaveLength(2);
+    expect(hz.findAll('.settings-ai-metric')).toHaveLength(3); // 三读数一个不少
+  });
+
+  it('未启动时整块读数隐藏，首屏不再铺 0 / 0 / 0（UI-11）', async () => {
+    const hz = await mount(h(SettingsAi, { runner: makeRuntime({ enabled: false }).runner, pollMs: 0 }));
+    expect(hz.find('.settings-ai-badge')?.textContent).toContain('未启动');
+    expect(hz.find('.settings-ai-metrics')).toBeNull();
+    expect(hz.text()).not.toContain('瞬时并发连接');
+  });
+
+  it('刷新后 token 为空但服务仍在跑 ⇒「重新签发」不消失，且真能两步轮换（UI-22）', async () => {
+    const rt = makeRuntime();
+    // 状态命令不回明文；mcp_start 的返回值才是唯一明文来源。
+    const runner: McpCommandRunner = async (cmd, args) => {
+      if (cmd === 'mcp_start') {
+        rt.calls.push({ cmd, args }); // 与 rt.runner 同一本流水账，轮换顺序才判得准
+        return { port: 7011, token: 'tok-rotated', endpoint: 'http://127.0.0.1:7011/mcp' };
+      }
+      return rt.runner(cmd, args);
+    };
+    const hz = await mount(h(SettingsAi, { runner, pollMs: 0 }));
+    expect(hz.find('.settings-ai-token-empty'), '状态命令不回明文').not.toBeNull();
+    expect(hz.find('.settings-ai-endpoint'), '服务在跑就有端点').not.toBeNull();
+
+    const btn = buttonByText(hz, '重新签发');
+    expect(btn.getAttribute('title')).toContain('旧凭据立即失效');
+    await hz.click(btn);
+    expect(hz.text()).toContain('确认重新签发');
+    expect(hz.text()).not.toContain('确认轮换');
+    await hz.click(buttonByText(hz, '确认重新签发'));
+
+    // 轮换 = 先 stop 收回 listener / 发现文件，再 start 首次签发新凭据（幂等 start 不会换 token）。
+    const calls = rt.calls.map((c) => c.cmd);
+    expect(calls.indexOf('mcp_stop')).toBeGreaterThanOrEqual(0);
+    expect(calls.indexOf('mcp_stop')).toBeLessThan(calls.indexOf('mcp_start'));
+    await hz.click(buttonByText(hz, '显示'));
+    expect(hz.find('.settings-ai-token code')?.textContent).toBe('tok-rotated');
+    expect(hz.find('.settings-ai-status-detail')?.textContent).toContain('token 已轮换');
+  });
+
+  it('按钮三档统一：主档 / 次档 / 危险档各归其位，图标随文案（UI-23）', async () => {
+    const hz = await mount(h(SettingsAi, { runner: makeRuntime().runner, pollMs: 0 }));
+    const primary = buttonByText(hz, '复制客户端配置');
+    expect(primary.className).toContain('mcp-btn-primary');
+    expect(primary.querySelector('svg.icon')).not.toBeNull();
+    for (const label of ['复制路径', '打开所在目录']) {
+      expect(buttonByText(hz, label).className).toContain('mcp-btn-secondary');
+    }
+    expect(hz.find('.settings-ai-status-age svg.icon'), '刷新胶囊也带图标').not.toBeNull();
+
+    const outer = await mount(h(AiAccessSection, {
+      runner: makeRuntime().runner, pollMs: 0, onCopy: vi.fn(), onReveal: vi.fn(),
+    }));
+    expect(outer.find('.mcp-btn-danger'), '撤销会话走危险档').not.toBeNull();
   });
 });

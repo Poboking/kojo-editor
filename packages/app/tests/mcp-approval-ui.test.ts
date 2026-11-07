@@ -532,7 +532,10 @@ describe('④ 审计 denied 呈现 / cap / clientId', () => {
     expect(lis).toHaveLength(2);
     for (const li of lis) expect(li.textContent).toContain('[denied]');
     expect(hz.text()).toContain('fileTree.remove');
-    expect(hz.text()).toContain('特权工具未批准');
+    // UI-18：note 不再占第五列折行，全文留在行 title（悬浮可查），屏面不许再出现机制长句。
+    expect(lis.some((li) => (li.getAttribute('title') ?? '').includes('特权工具未批准')),
+      '拒绝原因应留在行 title').toBe(true);
+    expect(hz.text()).not.toContain('特权工具未批准');
     // 选了 denied 就不该再有 ok / filtered 行（选项被删 / denied 被过滤都会让这里红）
     expect(hz.text()).not.toContain('[ok]');
     expect(hz.text()).not.toContain('[filtered]');
@@ -555,7 +558,9 @@ describe('④ 审计 denied 呈现 / cap / clientId', () => {
     expect(lis).toHaveLength(1);
     expect(lis[0]!.textContent).toContain('[denied]');
     expect(hz.text()).toContain('fileTree.rename');
-    expect(hz.text()).toContain('未批准');
+    // note 不吞但不上屏：完整拒绝原因在行 title，屏面五列保持干净（不折行、不挤列）。
+    expect(lis[0]!.getAttribute('title')).toContain('未批准');
+    expect(hz.text()).not.toContain('未批准');
     expect(hz.text()).not.toContain('[ok]');
   });
 });

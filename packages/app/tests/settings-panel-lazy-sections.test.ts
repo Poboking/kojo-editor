@@ -161,6 +161,43 @@ describe('设置页只挂当前一节（懒挂载）', () => {
     }
   });
 
+  it('浏览器壳搜到 ai.* 不静默落空：给「需要桌面壳」回执且不切节（UI-36 / 铁律 4）', async () => {
+    // 搜索索引里 ai.* 恒在册（搜 token 要找得到），但这一节只在桌面壳注册。旧逻辑会
+    // setActive('ai') 后悄悄落回「通用」——找得到却到不了，还一声不吭。此判据钉住回执。
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(h(SettingsPanel, panelProps()));
+    });
+    try {
+      const input = container.querySelector<HTMLInputElement>('input[aria-label="搜索设置项"]');
+      expect(input, '设置搜索框应存在').not.toBeNull();
+      // React 受控输入要绕开 value tracker，直接改属性不会派发 onChange。
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+      await act(async () => {
+        setter.call(input, 'token');
+        input!.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      const option = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find((el) =>
+        (el.textContent ?? '').includes('访问凭据（Token）'),
+      );
+      expect(option, '搜 token 应命中 AI 接入的凭据行').toBeDefined();
+      await act(async () => {
+        option!.click();
+      });
+      expect(container.querySelector('.settings-menu-note')?.textContent).toContain('需要桌面壳');
+      // 没切节：通用节的锚点仍在，编辑器节 / AI 接入节的锚点都没被挂进来
+      // （搜索态左栏换成结果列表，故用锚点而不是导航项的 on 类判当前节）。
+      expect(anchorKeys(container).filter((k) => k.startsWith('general.'))).not.toHaveLength(0);
+      expect(anchorKeys(container).filter((k) => k.startsWith('editor.'))).toEqual([]);
+      expect(anchorKeys(container).filter((k) => k.startsWith('ai.'))).toEqual([]);
+    } finally {
+      await act(async () => root.unmount());
+      container.remove();
+    }
+  });
+
   afterEach(() => {
     document.body.innerHTML = '';
   });
