@@ -44,6 +44,15 @@ import type { FileBucket, FileStats } from './snapshot';
  */
 export const EXPR_SYNTAX_DECORATIONS_TASK = 'erb.exprSyntaxDecorations';
 
+/**
+ * 本腿在 `ui.editor.decorator` 槽注册的贡献 id（`./index.ts` 的 `ctx.slots.register`
+ * 与成形点盖的 `source` **共用这一枚**）。
+ *
+ * 契约 `LineDecoration.source` = 产出这条发现的贡献 id；两处各抄一份就会漂移，
+ * 漂移的表现是宿主把出处显示成别的东西（或干脆没有）——那正是本批要补的洞。
+ */
+export const EXPR_SYNTAX_DECORATOR_ID = 'erb-expr-syntax';
+
 /** 本装饰器的适用性判据（口径与改动前的 `decorate` 逐字一致：只有正文才谈表达式） */
 function isExprBearingPath(path: string): boolean {
   return /\.(erb|erm)$/i.test(path);
@@ -69,6 +78,12 @@ export function exprSyntaxDecorations(
     ...(d.startColumn !== undefined && d.endColumn !== undefined
       ? { startColumn: d.startColumn, endColumn: d.endColumn }
       : {}),
+    // `source` = 本腿在 `ctx.slots.register` 里注册的贡献 id 逐字（`./index.ts` 的
+    // `'erb-expr-syntax'`）。**必须住在这里**：本函数是这条波浪线的唯一成形点——
+    // `decorate()`（就地回退）与 `erb.exprSyntaxDecorations` 任务（worker/异步走法）
+    // 两条走法都过它；盖在任一调用点上等于只给那一条走法盖章，另一条上屏的诊断就没有
+    // 出处（宿主按这一格显示"这条是谁说的"）。
+    source: EXPR_SYNTAX_DECORATOR_ID,
   }));
 }
 

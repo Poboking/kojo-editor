@@ -8,13 +8,25 @@
  *    本插件不 cross-import erb-parser（审计 C 项由这张表的存在本身证明是被绕开的）。
  */
 import { describe, expect, it } from 'vitest';
-import type { ControlFlowStatement, LineDecoration } from '@kojo/plugin-api';
+import type {
+  ControlFlowStatement,
+  ErbParserService,
+  FileIO,
+  LineDecoration,
+  Logger,
+  PluginContext,
+  ProjectService,
+  SlotRegistry,
+} from '@kojo/plugin-api';
+import { KernelServices, WellKnownServices } from '@kojo/plugin-api';
 import {
   CONDITION_EXTRACT_FILE_TASK,
   EXPR_SYNTAX_DECORATIONS_TASK,
+  EXPR_SYNTAX_DECORATOR_ID,
   conditionExtractorTasks,
   exprSyntaxDecorations,
 } from '../src/offload';
+import { createConditionExtractorPlugin } from '../src/index';
 import { collectExprSyntaxDecorations } from '../src/decorator';
 
 /** 假骨架：一条真错 IF（括号不配对）+ 一条正常的 WHILE */
@@ -22,6 +34,49 @@ const SCAN = (): readonly ControlFlowStatement[] => [
   { kind: 'IF', expression: 'CFLAG:100 )', depth: 0, line: 3 },
   { kind: 'WHILE', expression: '1 == 1', depth: 0, line: 9 },
 ];
+
+const silent: Logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+
+/**
+ * 最小假 `PluginContext`（零 kernel、零盘）：只为把插件**真激活**一次，取回它
+ * 在 `ui.editor.decorator` 槽注册的那条贡献——"注册的 decorate()" 与"表里的任务"
+ * 是两条走法，本测试比的是这两条，不是同一个函数自比。
+ */
+function activateForReal(): { id: string; decorate: (f: { path: string; text: string }) => LineDecoration[] } {
+  const registered: Array<{ id?: string; decorate?: (f: unknown) => LineDecoration[] }> = [];
+  const slots = {
+    query: () => [],
+    register: (_slot: string, item: { id?: string; decorate?: (f: unknown) => LineDecoration[] }) => {
+      registered.push(item);
+    },
+  } as unknown as SlotRegistry;
+  const parser = {
+    currentIndex: () => null,
+    scanControlFlow: () => SCAN(),
+    scanControlFlowOffloaded: async () => SCAN(),
+    parseText: () => ({ functions: [] }),
+  };
+  const ctx = {
+    inject: (name: string): unknown => {
+      if (name === 'kernel.io') return { readText: async () => ({ text: '' }), readTexts: async () => [] } as unknown as FileIO;
+      if (name === 'kernel.project') return { current: () => null } as unknown as ProjectService;
+      if (name === 'kernel.slots') return slots;
+      if (name === WellKnownServices.ErbParser) return parser as unknown as ErbParserService;
+      if (name === KernelServices.Compute) return {} as never;
+      throw new Error(`unexpected inject ${name}`);
+    },
+    slots,
+    provide: () => {},
+    onDispose: () => {},
+    storage: { get: async () => undefined, set: async () => {}, delete: async () => {} },
+    log: silent,
+    bus: { on: () => () => {} },
+  };
+  createConditionExtractorPlugin().activate(ctx as unknown as PluginContext);
+  const item = registered.find((c) => c.id === EXPR_SYNTAX_DECORATOR_ID);
+  if (!item?.decorate) throw new Error('erb-expr-syntax 装饰器未注册');
+  return { id: item.id!, decorate: item.decorate as (f: { path: string; text: string }) => LineDecoration[] };
+}
 
 const viaTask = (path: string, text: string): LineDecoration[] =>
   (
@@ -50,11 +105,27 @@ describe('condition-extractor · 可搬运任务 erb.exprSyntaxDecorations', () 
         severity: 'warning',
         message: d.message,
         code: d.code,
+        // 契约 `LineDecoration.source` = 产出这条发现的贡献 id（见下一条测试）
+        source: EXPR_SYNTAX_DECORATOR_ID,
         ...(d.startColumn !== undefined && d.endColumn !== undefined
           ? { startColumn: d.startColumn, endColumn: d.endColumn }
           : {}),
       })),
     );
+  });
+
+  it('source：注册的 decorate() 与任务两条走法逐字段相等，且都盖同一个贡献 id', () => {
+    const text = 'PRINTL 甲\nPRINTL 乙\nIF CFLAG:100 )\n';
+    const registered = activateForReal();
+    const viaDecorate = registered.decorate({ path: 'C:/game/ERB/a.erb', text });
+    const viaTaskOut = viaTask('C:/game/ERB/a.erb', text);
+
+    // 两条走法的**逐字段**相等（含 source / 列区间）——多一个字段都算分叉
+    expect(viaTaskOut).toEqual(viaDecorate);
+    expect(viaDecorate).toHaveLength(1);
+    // `source` 与注册 id 逐字相同（宿主靠这一格显示"这条是谁说的"）
+    expect(registered.id).toBe('erb-expr-syntax');
+    expect(viaDecorate[0]!.source).toBe(registered.id);
   });
 
   it('列号透传：LineDecoration.startColumn/endColumn 与装饰层一致（1 基 UTF-16 半开）', () => {

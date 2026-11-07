@@ -31,7 +31,7 @@ import { EXTRACT_STORE_KEY, decodeBuckets, encodeBuckets, extractExpect } from '
 import type { ExtractExpect, FileBucket } from './snapshot';
 import { KernelServices, WellKnownServices, activeGameAdapter } from '@kojo/plugin-api';
 import { ConditionEngine } from './engine';
-import { EXPR_SYNTAX_DECORATIONS_TASK, conditionExtractorTasks, exprSyntaxDecorations } from './offload';
+import { EXPR_SYNTAX_DECORATIONS_TASK, EXPR_SYNTAX_DECORATOR_ID, conditionExtractorTasks, exprSyntaxDecorations } from './offload';
 import { diagnoseExpression } from './expr';
 import type { SchemaLookup } from './extract';
 
@@ -188,7 +188,7 @@ export function createConditionExtractorPlugin(): Plugin {
        两条走法不可能给出两种波浪线。
        */
       ctx.slots.register('ui.editor.decorator', {
-        id: 'erb-expr-syntax',
+        id: EXPR_SYNTAX_DECORATOR_ID,
         title: 'ERB 条件表达式波浪线',
         order: 21,
         offloadKind: EXPR_SYNTAX_DECORATIONS_TASK,
@@ -210,6 +210,7 @@ export { collectExprSyntaxDecorations, type ExprSyntaxDecoration } from './decor
 // 可搬运任务表（装饰热路径批 + PS-11 抽取 offload 批；装配层用 erb-parser 的纯扫描器填这张表）
 export {
   EXPR_SYNTAX_DECORATIONS_TASK,
+  EXPR_SYNTAX_DECORATOR_ID,
   CONDITION_EXTRACT_FILE_TASK,
   conditionExtractorTasks,
   exprSyntaxDecorations,
