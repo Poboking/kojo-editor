@@ -308,6 +308,7 @@ impl WebMethod {
     }
 }
 
+#[allow(dead_code)] // 六方法契约清单：生产路由走 WebMethod::parse，仅 `#[cfg(test)]` 的路由对拍遍历它
 pub const WEB_METHOD_NAMES: &[&str] = &[
     "tools/list",
     "tools/call",

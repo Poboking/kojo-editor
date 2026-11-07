@@ -44,7 +44,9 @@ pub struct FileFingerprint {
     /// 行起点前缀和（字节偏移；`offsets[k]` = 第 k+1 行的起点，首项恒 0）。
     /// 只对"无 BOM 合法 UTF-8"的文件存在——此时解码文本与原始字节逐字节相同，
     /// 字节层行号 = 文本层行号，切片迭代才能替代 `split('\n')`。
+    #[allow(dead_code)] // 两个探针字段只经下面的 accessor 被 `#[cfg(test)]` 判据读；生产筛路只看位图
     line_offsets: Option<Vec<u32>>,
+    #[allow(dead_code)]
     utf8_no_bom: bool,
     /// 整份字节是合法 UTF-8（**含** BOM 文件：解码只剥前缀，命中字节仍在余部）。
     /// 查询侧可筛半径的另一半判据（`ascii_radius` 为 false 时只许筛这类文件）——
@@ -97,10 +99,12 @@ impl FileFingerprint {
         FileFingerprint { bits, saturated, line_offsets, utf8_no_bom, utf8_valid }
     }
 
+    #[allow(dead_code)] // 三个 accessor 都是测试探针：生产路径直读字段，仅 `#[cfg(test)]` 判据调用
     pub fn saturated(&self) -> bool {
         self.saturated
     }
 
+    #[allow(dead_code)]
     pub fn utf8_no_bom(&self) -> bool {
         self.utf8_no_bom
     }
@@ -111,6 +115,7 @@ impl FileFingerprint {
     }
 
     /// 行偏移前缀和（字节偏移，首项 0）。仅 utf8_no_bom 且 ≤2MB 的文件存在。
+    #[allow(dead_code)]
     pub fn line_offsets(&self) -> Option<&[u32]> {
         self.line_offsets.as_deref()
     }

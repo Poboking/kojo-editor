@@ -1777,6 +1777,69 @@ fn audit_rotation_and_corrupt_line_tolerance() {
     assert!(audit::query(d.path(), usize::MAX, None).unwrap().len() <= audit::MAX_AUDIT_QUERY);
 }
 
+/// 并发落账不许把两条 JSON 粘成一行：旧 `writeln!` 拆成「JSON」「换行」两次 write，
+/// O_APPEND 只保证每次 write 原子，请求线程互相插入 ⇒ 读侧报 trailing characters。
+#[test]
+fn audit_concurrent_appends_keep_one_json_per_line() {
+    let d = TempDir::new();
+    let dir = Arc::new(d.path().to_path_buf());
+    let (threads, per_thread) = (8usize, 20usize);
+    let handles: Vec<_> = (0..threads)
+        .map(|t| {
+            let dir = Arc::clone(&dir);
+            std::thread::spawn(move || {
+                for i in 0..per_thread {
+                    let e = sample_entry(AuditOutcome::Ok, &format!("t{t}_n{i}"));
+                    audit::append(dir.as_path(), &e).unwrap();
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    let text = std::fs::read_to_string(audit::audit_path(dir.as_path())).unwrap();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    assert_eq!(lines.len(), threads * per_thread, "每笔调用恰好一行");
+    for (i, l) in lines.iter().enumerate() {
+        serde_json::from_str::<AuditEntry>(l)
+            .unwrap_or_else(|e| panic!("第 {} 行不是单条完整 JSON：{} / {}", i + 1, e, l));
+    }
+    assert_eq!(
+        audit::query(dir.as_path(), 200, None).unwrap().len(),
+        threads * per_thread,
+        "并发落账一条都不许丢"
+    );
+}
+
+/// 历史粘连行（旧版并发写留下的「一行两条 JSON」）逐条读回：只读恢复，不改写审计原文；
+/// 末尾残缺的粘连整行不认，半条记录不许冒充真记录。
+#[test]
+fn audit_query_recovers_concatenated_lines_without_rewriting_them() {
+    let d = TempDir::new();
+    let a = sample_entry(AuditOutcome::Ok, "first");
+    let b = sample_entry(AuditOutcome::Denied, "second");
+    let line = format!(
+        "{}{}\n",
+        serde_json::to_string(&a).unwrap(),
+        serde_json::to_string(&b).unwrap()
+    );
+    let path = audit::audit_path(d.path());
+    std::fs::write(&path, line.as_bytes()).unwrap();
+    let rows = audit::query(d.path(), 200, None).unwrap();
+    assert_eq!(rows.len(), 2, "粘连的两条都得读回");
+    assert_eq!(rows[0].tool, "first");
+    assert_eq!(rows[1].tool, "second");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), line, "盘上原文一字不改");
+    // 第一条完整 + 第二条字段不全 ⇒ 整行按损坏跳过，不多读一条。
+    let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    let broken = format!("{}{}", serde_json::to_string(&a).unwrap(), "{\"ts\":\"t\"}");
+    f.write_all(broken.as_bytes()).unwrap();
+    f.write_all(b"\n").unwrap();
+    drop(f);
+    assert_eq!(audit::query(d.path(), 200, None).unwrap().len(), 2, "残缺粘连不许多读");
+}
+
 /* ---------------------- Origin 白名单：变体与绕过 ---------------------- */
 
 #[test]

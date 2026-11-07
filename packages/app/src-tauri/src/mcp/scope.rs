@@ -263,6 +263,7 @@ pub fn approve_with_root_ids(
 }
 
 /// 旧五参入口：零 `approvedRootIds` ⇒ 现有行为一字不变（既有调用点不动）。
+#[allow(dead_code)] // 兼容入口：生产调用点已全迁 `approve_with_root_ids`，仅 `#[cfg(test)]` 判据仍走旧形
 pub fn approve(
     app_data_dir: &Path,
     client_id: &str,

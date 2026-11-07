@@ -2970,7 +2970,7 @@ fn resume_pages_under_the_leg_page_math_enumerate_one_dense_file_exactly() {
     let mut pages: Vec<String> = Vec::new();
     let mut offset = 0usize;
     let mut calls = 0usize;
-    let mut last_truncated = true;
+    let mut last_truncated; // 首次赋值发生在循环体内，初值必被覆盖（与上方同构的用例一致）
     while calls < 64 {
         calls += 1;
         let segment = offset / SEARCH_PER_FILE_CAP;
