@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { checkControlFlowStructure, MAX_STRUCTURE_ISSUES } from '../src/structure';
+import type { LineDecoration } from '@kojo/plugin-api';
+import {
+  checkControlFlowStructure,
+  checkStructure,
+  checkStructureReport,
+  MAX_STRUCTURE_ISSUES,
+  STRUCTURE_TRUNCATED_CODE,
+} from '../src/structure';
+import { structureDiagnostic, buildStructureFixes } from '../src/structure-fix';
+import { erbStructureDecorations } from '../src/offload';
 import { scanControlFlow } from '../src/scanner';
 
 /**
@@ -259,5 +268,110 @@ describe('checkControlFlowStructure · 修复入口只给得起证据的那一�
       expect(issues[0]!.closer).toBeUndefined();
       expect(issues[0]!.fixBeforeLine).toBeUndefined();
     }
+  });
+});
+
+/* ========================================================================== *
+ * D04b：截断必须出声
+ *
+ * `MAX_STRUCTURE_ISSUES` 到顶后不再追加条目——那是显示预算（Monaco 不画上千个 marker），
+ * 不是"这个文件只有 50 个错"。这一组钉的是**消费方把这件事说出来**：
+ * `checkStructureReport.text.truncated` 给真实计数，装饰器把它变成屏幕上的第 51 条。
+ * 构造口径：一行一个未闭合的 `IF`（`flushOpen` 在文件结尾把它们全部报成 unclosed-open），
+ * 所以"真实条数 = 行数"是**可手算**的，不是拿生产方的输出当自己的期望值。
+ * ========================================================================== */
+
+/** n 条互不配平的开块（每条一个 unclosed-open） */
+const stormOf = (n: number): string => L(...Array.from({ length: n }, () => 'IF A'));
+
+const truncationEntries = (decorations: readonly LineDecoration[]): LineDecoration[] =>
+  decorations.filter((d) => d.code === STRUCTURE_TRUNCATED_CODE);
+
+describe('D04b · 截断计数（checkStructureReport 的 truncated 是真实溢出量）', () => {
+  it('60 条 ⇒ 上屏 50 + 截断 10（数到顶之后继续数，不建对象）', () => {
+    const text = stormOf(60);
+    const report = checkStructureReport(text);
+    expect(report.issues).toHaveLength(MAX_STRUCTURE_ISSUES);
+    expect(report.truncated).toBe(10);
+    // 与 `checkStructure` 同一处判据：列表逐字相同
+    expect(report.issues).toEqual(checkStructure(text));
+  });
+
+  it('崩到 120 条也不会只会回一个"到顶"：truncated = 120 − 50 = 70（溢出量不是 0 也不是封顶值）', () => {
+    const report = checkStructureReport(stormOf(120));
+    expect(report.issues).toHaveLength(MAX_STRUCTURE_ISSUES);
+    expect(report.truncated).toBe(70);
+  });
+
+  it('两张栈的溢出都算进去（预处理块 30 条 + 控制流 40 条 = 70 ⇒ 截断 20）', () => {
+    const text = L(
+      ...Array.from({ length: 30 }, () => '[ENDIF]'),
+      ...Array.from({ length: 40 }, () => 'ENDIF'),
+    );
+    const report = checkStructureReport(text);
+    expect(report.issues).toHaveLength(MAX_STRUCTURE_ISSUES);
+    expect(report.truncated).toBe(20);
+  });
+
+  it('正好到顶不算截断（50 条就是 50 条：列表是完整的）', () => {
+    expect(checkStructureReport(stormOf(MAX_STRUCTURE_ISSUES)).truncated).toBe(0);
+  });
+
+  it('没到顶 ⇒ truncated 恒 0（不许给正常文件挂"还有 N 条"）', () => {
+    expect(checkStructureReport(stormOf(3)).truncated).toBe(0);
+    expect(checkStructureReport('').truncated).toBe(0);
+    expect(checkStructureReport(L('@A', 'IF X', 'PRINT Y', 'ENDIF')).truncated).toBe(0);
+  });
+});
+
+describe('D04b · 装饰器补一句（截断可观测的那一条）', () => {
+  it('60 条 ⇒ 装饰器返回 51 条，最后一条是 info / 新码 / 同一来源，文案带真实条数', () => {
+    const text = stormOf(60);
+    const decorations = erbStructureDecorations({ path: 'a.erb', text });
+    expect(decorations).toHaveLength(MAX_STRUCTURE_ISSUES + 1);
+    // 前 50 条仍是结构发现，形状没被这一条挤动（既有五字段那份逐字相等）
+    expect(decorations.slice(0, MAX_STRUCTURE_ISSUES).every((d) => d.code === 'erb.unclosed-open')).toBe(true);
+    expect(decorations[0]).toEqual(structureDiagnostic(checkStructure(text)[0]!));
+
+    const tail = decorations[MAX_STRUCTURE_ISSUES]!;
+    expect(tail).toMatchObject({ severity: 'info', code: STRUCTURE_TRUNCATED_CODE, source: 'erb-structure' });
+    expect(tail.message).toContain(String(MAX_STRUCTURE_ISSUES));
+    expect(tail.message).toContain('10');
+    expect(tail.message, '文案要说清"没列出来"这件事（不许只说"问题太多"）').toContain('没列出来');
+  });
+
+  it('数对了才说话：120 条 ⇒ 文案里的"另有 N 条"就是 70', () => {
+    const text = stormOf(120);
+    const entries = truncationEntries(erbStructureDecorations({ path: 'a.erb', text }));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.message).toContain('70');
+  });
+
+  it('没截断的文件上**不出现**这一条（一条都不用补）', () => {
+    for (const text of [stormOf(3), stormOf(MAX_STRUCTURE_ISSUES), L('@A', 'IF X', 'ENDIF')]) {
+      expect(truncationEntries(erbStructureDecorations({ path: 'a.erb', text }))).toEqual([]);
+    }
+  });
+});
+
+describe('D04b · 这条信息不污染 💡 快速修复面', () => {
+  it('`buildStructureFixes` 的 diagnostics 里没有这枚码（没有可修的东西）', () => {
+    const text = stormOf(60);
+    const fixes = buildStructureFixes(text);
+    expect(fixes.length, '风暴文件上本来就有 unclosed-open 的动作').toBeGreaterThan(0);
+    expect(fixes.some((f) => f.diagnostic.code === STRUCTURE_TRUNCATED_CODE)).toBe(false);
+  });
+
+  it('宿主把整份装饰列表（含这一条）点名为 requested，也答不出动作', () => {
+    const text = stormOf(60);
+    const decorations = erbStructureDecorations({ path: 'a.erb', text });
+    const tailLine = decorations[MAX_STRUCTURE_ISSUES]!.line;
+    const answered = buildStructureFixes(text, tailLine, decorations);
+    expect(answered.some((f) => f.diagnostic.code === STRUCTURE_TRUNCATED_CODE)).toBe(false);
+  });
+
+  it('它不是结构发现：`checkStructure` 的每一条仍是 `erb.${kind}`（新码不混进那个联合）', () => {
+    const codes = new Set(checkStructure(stormOf(60)).map((issue) => `erb.${issue.kind}`));
+    expect(codes.has(STRUCTURE_TRUNCATED_CODE)).toBe(false);
   });
 });

@@ -37,7 +37,7 @@ import { BUILTIN_FUNCTION_NAMES, collectBuiltinArgDiagnostics } from './builtins
 import { projectDeclaredNames } from './dim-index';
 import { parseErbText, scanControlFlow } from './scanner';
 import { collectUndefinedNameDiagnostics, type UndefinedNameDiagnosticsInput } from './undefined-name';
-import { checkStructure } from './structure';
+import { checkStructureReport, MAX_STRUCTURE_ISSUES, STRUCTURE_TRUNCATED_CODE } from './structure';
 import { structureDiagnostic } from './structure-fix';
 import {
   dimNameShapesOf,
@@ -251,7 +251,8 @@ export function scanRefsNamesOf(
  * 两处各写一遍必然漂移——漂移的表现是"有并行通道时波浪线一种、通道挂了另一种"，
  * 那种不一致比慢十倍更糟。适用性判据（方言扩展名 / 空文本）也在这一份里。
  *
- * **走的是全量入口 `checkStructure(text, path)` 而不是只跑配对那一趟**（2026-10-26 A4）：
+ * **走的是全量入口 `checkStructureReport(text, path)` 而不是只跑配对那一趟**（2026-10-26 A4，
+ * D04b 起换成报告版——判据与 `checkStructure` 同一处，额外的只是"压掉了多少条"）：
  * 声明面两类（`#DIM` 硬规则 / `#FUNCTION` 收尾）与头文件形态此前只到服务面，编辑器
  * 一条都看不到——`checkStructure` 的头注写着"宿主只认一个答案"，而当时宿主根本没调它。
  * 判据（`dim-invalid` / `return-form` / `erh-invalid`）都已按"只在拿得准的地方说话"
@@ -263,7 +264,33 @@ export function erbStructureDecorations({ path, text }: EditorDecoratePayload): 
   // 逐字段的形状只住在 `structureDiagnostic` 一处：💡 那边给出的"我修的是哪条诊断"
   // 用的就是同一个函数 ⇒ 波浪线与快速修复不可能对不上（B9 的关联键全靠它）。
   // `source`（产出贡献的 id）也住在那里——盖在调用点就等于只给装饰器一路盖章。
-  return checkStructure(text, path).map((issue) => structureDiagnostic(issue));
+  const { issues, truncated } = checkStructureReport(text, path);
+  const decorations = issues.map((issue) => structureDiagnostic(issue));
+  // 截断必须出声（D04b）：`structure.ts` 的显示预算到顶后**不再追加**条目，那句
+  // "还有多少条没列出来"就归这里补——它是本贡献产出的一件事，所以 `source` 与其余
+  // 结构诊断同一个 `erb-structure`；档位 `info` 因为它不是又一处缺陷，而是**列表不完整**。
+  if (truncated > 0) decorations.push(truncationDecoration(truncated));
+  return decorations;
+}
+
+/**
+ * 「这张列表不完整」那一条（D04b）——**不是**一条结构发现，故不经过 `structureDiagnostic`。
+ *
+ * 为什么必须与 `structureDiagnostic` 分开：那一份是"发现 ↔ 💡 修复"的关联键，五字段
+ * 逐字相等才有意义；本条目没有可修的东西（`truncated` 描述的是"没上屏的条目有多少"，
+ * 不是某一行的错），若借用同一个形状，作者会在 `Ctrl+.` 里看到一个修不了的动作。
+ * `structure-fix.ts` 的输入是 `ErbStructureIssue`，本条不是发现 ⇒ 💡 面天然看不到它。
+ *
+ * 行号固定第 1 行：它是整份文件的一句话，与"诊断规则本轮执行失败"那条失败账同一种落点。
+ */
+function truncationDecoration(truncated: number): LineDecoration {
+  return {
+    line: 1,
+    severity: 'info',
+    message: `这个文件的结构问题太多：只列出前 ${MAX_STRUCTURE_ISSUES} 条，另有 ${truncated} 条没列出来。`,
+    code: STRUCTURE_TRUNCATED_CODE,
+    source: 'erb-structure',
+  };
 }
 
 /**

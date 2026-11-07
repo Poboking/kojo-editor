@@ -50,6 +50,45 @@ export const MAX_STRUCTURE_ISSUES = 50;
  */
 export const structureIssueCode = (issue: ErbStructureIssue): string => `erb.${issue.kind}`;
 
+/**
+ * 「列表被显示预算截断」这条**信息条目**的诊断码（D04b，2026-11-07）。
+ *
+ * 它**不是**一条结构发现（`ErbStructureIssue['kind']` 里没有它）：它说的是"上面那张列表
+ * 不完整"这件事本身。`MAX_STRUCTURE_ISSUES` 到顶后 `issues` 不再追加，若没有这一条，
+ * 作者会以为"这个文件只有 50 个错"——静默丢掉后面的等于撒谎。
+ *
+ * 码形与 `structureIssueCode` 同前缀同风格（`erb.…`），但它**不参与**"波浪线 ↔ 💡 修复"
+ * 的关联键：这件事没有可修的对象，`buildStructureFixes` 永远不产它（见 `structure-fix.ts`
+ * 的输入是 `ErbStructureIssue`，本条不是发现）。
+ */
+export const STRUCTURE_TRUNCATED_CODE = 'erb.structure-truncated';
+
+/**
+ * 一次全文体检的**报告**（D04b：截断必须可见）。
+ *
+ * `truncated` = 被 `MAX_STRUCTURE_ISSUES` 压掉、**没有**进 `issues` 的条目数（真实计数）。
+ * 为什么它非得单独一格：`issues.length === MAX_STRUCTURE_ISSUES` 既可能是"正好 50 条"，
+ * 也可能是"崩得几万条、只露出前 50"——两种真相完全不同，只看列表长度分不出来。
+ * 到顶之后**只数不建对象**（判据照跑，条目不再成形），所以病态文件上也不多付分配成本。
+ */
+export interface StructureCheckReport {
+  /** 上屏的那一批（≤ `MAX_STRUCTURE_ISSUES`，按行升序） */
+  readonly issues: ErbStructureIssue[];
+  /** 被显示预算压掉的条数（0 = 列表是完整的） */
+  readonly truncated: number;
+}
+
+/**
+ * 一趟体检的产出：上屏条目 + 被预算压掉的条数（内部形状，不对外）。
+ *
+ * `issues` 自己封顶在 `MAX_STRUCTURE_ISSUES`，`dropped` 把"到顶之后还剩多少"补上——
+ * 两数相加才是这一趟的**真实发现数**（`checkStructureReport` 靠它算截断）。
+ */
+interface IssueScan {
+  readonly issues: ErbStructureIssue[];
+  readonly dropped: number;
+}
+
 /** 一个还开着的块（栈元素） */
 interface OpenBlock {
   readonly kind: string;
@@ -191,7 +230,13 @@ export function preprocMarkerAt(lineText: string): PreprocMarkerRead | null {
  * 停用区（`[SKIPSTART]`…`[SKIPEND]`）里的标记不算：那段引擎根本不编译。
  */
 export function checkPreprocStructure(text: string): ErbStructureIssue[] {
+  return scanPreprocStructure(text).issues;
+}
+
+/** 预处理条件块体检的**计数版**（`checkPreprocStructure` 与 `checkStructureReport` 共用一处判据） */
+function scanPreprocStructure(text: string): IssueScan {
   const issues: ErbStructureIssue[] = [];
+  let dropped = 0;
   const lines = splitEolLines(text);
   const open: { kind: string; line: number }[] = [];
   let inSkipBlock = false;
@@ -213,7 +258,9 @@ export function checkPreprocStructure(text: string): ErbStructureIssue[] {
     if (role === 'open') {
       open.push({ kind: markerOf(trimmed), line: i + 1 });
     } else if (role === 'branch') {
-      if (open.length === 0 && issues.length < MAX_STRUCTURE_ISSUES) {
+      if (open.length === 0 && issues.length >= MAX_STRUCTURE_ISSUES) {
+        dropped++; // 到顶：判据照跑，条目不再成形（只数不建对象）
+      } else if (open.length === 0) {
         issues.push({
           kind: 'orphan-branch',
           line: i + 1,
@@ -230,6 +277,8 @@ export function checkPreprocStructure(text: string): ErbStructureIssue[] {
             statement: '[ENDIF]',
             message: `[ENDIF]（第 ${i + 1} 行）到这里没有还没闭合的 [IF …]——上面删掉的那条 [IF …] 补回来，这条就自己消失；不需要这一支就把这一行删掉。`,
           });
+        } else {
+          dropped++;
         }
       } else {
         open.pop();
@@ -239,7 +288,10 @@ export function checkPreprocStructure(text: string): ErbStructureIssue[] {
 
   // 未闭合：报告在开块那一行（与 ERB 控制流同口径），修复点在文件末尾
   for (const b of open) {
-    if (issues.length >= MAX_STRUCTURE_ISSUES) break;
+    if (issues.length >= MAX_STRUCTURE_ISSUES) {
+      dropped++;
+      continue;
+    }
     issues.push({
       kind: 'unclosed-open',
       line: b.line,
@@ -249,7 +301,7 @@ export function checkPreprocStructure(text: string): ErbStructureIssue[] {
       fixBeforeLine: lines.length + 1,
     });
   }
-  return issues;
+  return { issues, dropped };
 }
 
 /** 行首标记原词（`[IF_DEBUG]` / `[ELSE]` …）：只取方括号内，尾随空白与大小写按原文保留 */
@@ -440,10 +492,21 @@ function findPair(stack: readonly OpenBlock[], pair: string): number {
  * 结构体检主入口（纯函数：同一份文本必得同一份结果，不读盘、不看索引、不看项目）。
  *
  * 返回值按行号升序（遍历本身就是行序），最多 `MAX_STRUCTURE_ISSUES` 条。
+ * 需要知道"到顶之后还压掉了多少条"的消费方走 `checkStructureReport`（同一处判据）。
  */
 export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
+  const flow = scanControlFlowIssues(text);
+  const preproc = scanPreprocStructure(text);
+  return mergeByLine(flow.issues, preproc.issues).slice(0, MAX_STRUCTURE_ISSUES);
+}
+
+/** 控制流配对体检的**计数版**（`checkControlFlowStructure` 与 `checkStructureReport` 共用一处判据） */
+function scanControlFlowIssues(text: string): IssueScan {
   const issues: ErbStructureIssue[] = [];
+  let dropped = 0;
   let stack: OpenBlock[] = [];
+  /** 还装得下吗；装不下就把这一条**记进账**（只数不建对象） */
+  const full = (): boolean => issues.length >= MAX_STRUCTURE_ISSUES;
   /** 行尾多空行也算一行：追加点要指着"最后一行之后"，与 walker 用同一种归一 */
   const lastLine = splitEolLines(text).length;
 
@@ -454,7 +517,10 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
    */
   const flushOpen = (blocks: readonly OpenBlock[], fixBefore: number, swallowedBy?: string): void => {
     for (const b of blocks) {
-      if (issues.length >= MAX_STRUCTURE_ISSUES) return;
+      if (full()) {
+        dropped++;
+        continue;
+      }
       const closer = closerNameForPair(b.pair);
       const message =
         closer === ''
@@ -498,20 +564,26 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
       // （真实语料 3,818 个文件里一次都没出现 TRYCALLLIST，无从实测）。
       // 没有证据就不报——这是精度纪律，不是偷懒：宁可漏报一条，也不要让波浪线开始说谎。
       const owned = found >= 0 || (statement.kind === 'CATCH' && hasPair(stack, 'funclist'));
-      if (!owned && issues.length < MAX_STRUCTURE_ISSUES) {
-        issues.push({
-          kind: 'orphan-branch',
-          line,
-          statement: statement.kind,
-          message: `${statement.kind}（第 ${line} 行）的前面没有它所属的开块语句——在它上面补那条开块语句，或删掉这一行。`,
-        });
+      if (!owned) {
+        if (full()) {
+          dropped++;
+        } else {
+          issues.push({
+            kind: 'orphan-branch',
+            line,
+            statement: statement.kind,
+            message: `${statement.kind}（第 ${line} 行）的前面没有它所属的开块语句——在它上面补那条开块语句，或删掉这一行。`,
+          });
+        }
       }
       return; // 分支不改栈深：开块继续开着，等它自己的闭合语句
     }
 
     // 闭合语句
     if (found < 0) {
-      if (issues.length < MAX_STRUCTURE_ISSUES) {
+      if (full()) {
+        dropped++;
+      } else {
         issues.push({
           kind: 'orphan-close',
           line,
@@ -527,8 +599,7 @@ export function checkControlFlowStructure(text: string): ErbStructureIssue[] {
   });
 
   flushOpen(stack, lastLine + 1);
-  // 预处理条件块是**另一张栈**（见 checkPreprocStructure 头注）：两趟各自有序，按行归并。
-  return mergeByLine(issues, checkPreprocStructure(text)).slice(0, MAX_STRUCTURE_ISSUES);
+  return { issues, dropped };
 }
 
 /** 两趟发现按行号归并（同源稳定：控制流在前、预处理器在后），超出上限一并截断 */
@@ -564,13 +635,45 @@ function mergeByLine(a: ErbStructureIssue[], b: ErbStructureIssue[]): ErbStructu
  * 以为有两个错，其实删掉那块就都好了。
  */
 export function checkStructure(text: string, path?: string): ErbStructureIssue[] {
-  const base = mergeByLine(checkControlFlowStructure(text), checkDeclarationIssues(text));
-  if (path === undefined || !isErbDeclarationPath(path)) return base.slice(0, MAX_STRUCTURE_ISSUES);
-  // 同一行已经被配对 / 声明面点过名，就不再叠一条"这行不是头文件能写的"：
-  // 两条都在说"这一行不对"，叠上去只会让作者以为有两个错（`.ERH` 里写 `IF` 就是这种形状）。
-  const flagged = new Set(base.map((i) => i.line));
-  const header = checkHeaderIssues(text).filter((i) => !flagged.has(i.line));
-  return mergeByLine(base, header).slice(0, MAX_STRUCTURE_ISSUES);
+  return checkStructureReport(text, path).issues;
+}
+
+/**
+ * 与 `checkStructure` **同一处判据**的报告版（D04b additive 出口，2026-11-07）。
+ *
+ * 为什么不能靠 `issues.length === MAX_STRUCTURE_ISSUES` 判截断：那是"到顶"而不是
+ * "被压掉"——正好 50 条的文件与崩出 5,000 条的文件在这个数上一模一样。`truncated`
+ * 是**真实计数**：每趟体检到顶后不再成形条目，但判据照跑、只累加一个整数
+ * （`IssueScan.dropped`），所以病态文件上也只多走一遍扫描。
+ *
+ * 合成顺序与 `checkStructure` 逐字同形（先控制流+预处理合一趟并截到上限，再与
+ * 声明面 / 头文件合并后再截一次）——`checkStructure` 只是取 `.issues`，两条路不可能分叉。
+ *
+ * 已知上界（说清楚，不假装无限）：声明面 / 头文件两趟各自带 200 条的内存护栏
+ * （`DECLARATION_ISSUE_CAP` / `HEADER_ISSUE_CAP`），撞到那条护栏时连真实总数也一起封顶；
+ * 它们都远大于 50，不影响"是否有截断"与常见形态下的条数。
+ */
+export function checkStructureReport(text: string, path?: string): StructureCheckReport {
+  const flow = scanControlFlowIssues(text);
+  const preproc = scanPreprocStructure(text);
+  // 与既有路径同序：控制流 + 预处理先合成一趟（≤ 上限），再与声明面合成
+  const flowMerged = mergeByLine(flow.issues, preproc.issues);
+  const declarations = checkDeclarationIssues(text);
+  const base = mergeByLine(flowMerged.slice(0, MAX_STRUCTURE_ISSUES), declarations);
+  // 真实总数：两趟的"上屏 + 压掉"再补上声明面（它自己那一趟不截在 50 上）
+  let total = flow.issues.length + flow.dropped + preproc.issues.length + preproc.dropped + declarations.length;
+  let merged = base;
+  if (path !== undefined && isErbDeclarationPath(path)) {
+    // 同一行已经被配对 / 声明面点过名，就不再叠一条"这行不是头文件能写的"：
+    // 两条都在说"这一行不对"，叠上去只会让作者以为有两个错（`.ERH` 里写 `IF` 就是这种形状）。
+    const flagged = new Set(base.map((i) => i.line));
+    const header = checkHeaderIssues(text).filter((i) => !flagged.has(i.line));
+    // 被去重掉的那几条不算"没列出来"：同一行另一条更具体的发现已经上屏了
+    total += header.length;
+    merged = mergeByLine(base, header);
+  }
+  const issues = merged.slice(0, MAX_STRUCTURE_ISSUES);
+  return { issues, truncated: total - issues.length };
 }
 
 /* ------------------------------------------------------------------ *
