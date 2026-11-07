@@ -144,7 +144,7 @@
 
 - 定向回归 **16 文件 / 209 用例 / 0 红**（含 settings-* 六个消费方与 styles-split 级联闸）；`pnpm typecheck` 0 错；`scan-bytes` 0 命中。
 - 四态（运行中 / 未启动 / 待握手 / 连接失败）× 三主题（dark / light / mint-dark）× 800px 窄档真机渲染逐屏复核；截图在 `.local/shots/`（不入库）。
-- `board-audit` 的 3 个 error 全部来自上游 `1669c21d` 的 MCP-PERF-S6/S7 卡（列数与失效测试引用），**早于本任务组且不在 37 条清单内**，未在本批改动 `BOARD.md`；上游 dev 车道已另改该文件。
+- `board-audit` **15 张卡 · 0 error · 8 warn ⇒ 结构干净**。审查中途读数曾为 3 error（上游 `1669c21d` 的 MCP-PERF-S6/S7 卡列数与失效测试引用），与本任务组无关；rebase 上游 45 笔后由 dev 车道自行修掉，本批未改 `BOARD.md`。
 
 > 实施纪律（对齐审查结论）：`mcp_approve` 契约、fail-closed、精确列名授权一字不变；
 > 三读数口径与四相状态机（未启动 → 未授权 → 待握手 → 运行中）不变；
