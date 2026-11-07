@@ -267,8 +267,12 @@ B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**；B10 打开文档
   （`fs.readFile` 65000、`commands.list` 500、`io.listDir` 与 `fs.tree` 5000、`searchAll` 200）。
 - **刻意 deferred（逐面要建模旧别名，不硬套游标）**：`lang.foldingRanges`（≤2000 仍 slice）、`lang.lensesAt`、
   `lang.selectionRangesAt`、`fs.statFiles`；位置型单点面（`semantic.definitionAt` 等）一页即窗口。
-- **在册欠账**：带参分页面的 `additionalProperties: false` 本批未做（要先逐面声明旧别名，否则严格化会拒掉合法的
-  `maxChars`）——列下一批。B2 的**新**工具没有旧别名包袱，故 `fs.readMany` 出厂即 `additionalProperties:false`。
+- **严格化收口（B27，2026-11-06）**：带参分页面的 `additionalProperties: false` 已全套落地——B11
+  `fc516b0a` 把 74 处顶层入参严格化，B16 `586eafc7` 补齐 `search.all` / `workspace.searchAll` 两枚检索面（`resumeBySlice`
+  同批进 `properties`），B22/B25 起新面出厂即严格；B27 再补一层**嵌套对象闸**（`mcp-arg-strictness.test.ts`
+  结尾一节：注册表里任何 `type:'object'` 节点漏 `additionalProperties:false` 当场红，唯一豁免＝`commands.run`
+  的 `args`——它必须放行任意键，合法键集在腿里按所选命令逐枚 `argsSchema` 校验）。旧别名（`length`/`maxChars`/
+  `maxResults`/`maxEntries`）全部在 `properties` 里显式声明，严格化不再误拒合法旧用法。
 
 ### 5.6 批读面与启动器族（B2＝`e5406978` · B4＝`e1e9de71`）
 

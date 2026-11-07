@@ -418,10 +418,12 @@ describe('fs.readMany · 三件齐落（ToolSpec / GAP_MAP / 真源腿表）', (
     expect(relPaths['items']).toEqual(readRelPath);
   });
 
-  it('GAP_MAP：fs.readMany → read_files_raw（rust）在册；read_file_bytes_raw 仍留在 deferred 台账', () => {
+  it('GAP_MAP：fs.readMany → read_files_raw（rust）在册；B25 起 read_file_bytes_raw 已登记给 fs.readFileBytes（项目根内相对路径子集）', () => {
     expect(MCP_TOOL_GAP_MAP).toContainEqual({ tool: 'fs.readMany', gap: 'read_files_raw', source: 'rust' });
-    expect(MCP_TOOL_GAP_MAP.some((m) => m.tool === 'fs.read_file_bytes_raw')).toBe(false);
-    expect(MCP_TOOL_GAP_MAP.some((m) => m.gap === 'read_file_bytes_raw')).toBe(false);
+    // B25 兑现：单文件二进制帧只拆「项目根内相对路径」那一子集为具名 edit 面 fs.readFileBytes；
+    // 任意绝对路径那一半仍留在 deferred 台账（理由在 MCP_DEFERRED_GAP_NOTES，不造空串假实现）。
+    expect(MCP_TOOL_GAP_MAP).toContainEqual({ tool: 'fs.readFileBytes', gap: 'read_file_bytes_raw', source: 'rust' });
+    expect(MCP_TOOL_GAP_MAP.some((m) => m.tool === 'read_file_bytes_raw')).toBe(false);
   });
 
   it('路径闸与 fs.readFile 同一判据：同一批越界输入两侧都整批 INVALID_ARGS', async () => {

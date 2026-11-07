@@ -575,6 +575,13 @@ export const ROOT_ID_SCHEMA: Record<string, unknown> = {
     'Optional stable root identifier (ws: + 8 lowercase hex digits), NOT a path. Candidates come from the read-only io.workspaceRoots reply (rootIds, index-aligned with roots) and must also be explicitly approved in this session (approvedRootIds) by a human in the AI-access settings panel. Omit to stay on the current project root.',
 };
 
+/** S15 式全量指针化批（B27）：`rootId` 形状口径全局只保一份，落点＝`fileTree.update` 的
+ * `properties.rootId`；其余 8 处换指针（spread 保形，pattern 与长度闸零改动）。 */
+const ROOT_ID_PTR_NOTE =
+  'Optional approved workspace root (ws: + 8 lowercase hex, NOT a path); omit for the project root. Full gate on `fileTree.update`\'s `rootId`.';
+
+const ROOT_ID_PTR_SCHEMA: Record<string, unknown> = { ...ROOT_ID_SCHEMA, description: ROOT_ID_PTR_NOTE };
+
 /**
  * 分页入参的通用 schema 片段（B1 批：**只加可选入参，不加新工具名**）。
  * 定义必须早于下面几张工具表——表是模块级 const，`export const` 对象若定义在其后会在
@@ -606,6 +613,23 @@ export const PAGE_CURSOR_SCHEMA_PROPS: Record<string, unknown> = {
   },
 };
 
+/** S15 式全量指针化批（B27）：游标口径全局只保一份，落点＝`fs.readFile` 的
+ * `properties.cursor`；其余 26 枚分页面换指针（type/pattern/长度闸由 spread 保形，
+ * 「changedDuringPaging 页不得拼接」这层语义在每面 PAGE_ACCOUNT_NOTE 里逐字仍在）。 */
+const PAGE_CURSOR_PTR_NOTE =
+  "Opaque cursor from the previous response's nextCursor; omit on the first page. Full paging contract on `fs.readFile`'s `cursor`.";
+
+const PAGE_CURSOR_PTR_PROPS: Record<string, unknown> = {
+  limit: PAGE_CURSOR_SCHEMA_PROPS.limit,
+  cursor: {
+    type: 'string',
+    minLength: 10,
+    maxLength: 32,
+    pattern: '^[0-9a-f]{8}:\\d{1,10}$',
+    description: PAGE_CURSOR_PTR_NOTE,
+  },
+};
+
 /** 分页面 description 的共用完整性尾注（口径统一）。
  * B22 去重批：原本这里还完整复述一遍「页大小只有一个旋钮 + 未声明显式拒收」（375 字符 × 23 枚），
  * 现在那一口径每枚面只在本面 inputSchema 的 `limit` 说明里写一份，描述侧改指过去——
@@ -628,6 +652,10 @@ export const PAGE_ACCOUNT_NOTE =
  * 一直就在读 `includeDeclaration`，此前没写进 properties 属于「声明不全」而不是「多收」，本批补上。
  */
 const PAGE_PROPS = PAGE_CURSOR_SCHEMA_PROPS;
+
+/** S15 式全量指针化批（B27）：26 枚分页面用的指针版分页片段（`limit` 完整口径仍每面一份，
+ * 只有 `cursor` 换成指针——落点＝同一帧里的 `fs.readFile`）。 */
+const PAGE_PROPS_PTR = PAGE_CURSOR_PTR_PROPS;
 
 /** 严格零参入参形状：诚实声明「不收任何入参」，由零参闸逐个登记（见 NO_ARG_TOOLS 测试）。 */
 const STRICT_NO_ARG_SCHEMA: Record<string, unknown> = {
@@ -751,6 +779,16 @@ const LAUNCHER_INSTANCE_ID_SCHEMA: Record<string, unknown> = {
     "Instance id copied verbatim from launcher_instance_list / launcher_instance_get - never invent one. Host's own shape gate: ASCII letters/digits plus '-', 1..64 chars.",
 };
 
+/** S15 式全量指针化批（B27）：实例 id 口径全局只保一份，落点＝`launcher_instance_get` 的
+ * `properties.instanceId`；其余 18 处换指针（spread 保形，pattern 与长度闸零改动）。 */
+const LAUNCHER_INSTANCE_ID_PTR_NOTE =
+  "Instance id from launcher_instance_list / launcher_instance_get, verbatim - never invent one; full shape gate on `launcher_instance_get`'s `instanceId`.";
+
+const LAUNCHER_INSTANCE_ID_PTR_SCHEMA: Record<string, unknown> = {
+  ...LAUNCHER_INSTANCE_ID_SCHEMA,
+  description: LAUNCHER_INSTANCE_ID_PTR_NOTE,
+};
+
 /** 单段 id（包 id / 计划 id / 备份 id / 会话 id）：Rust `launcher::paths::valid_component` 同尺。 */
 const LAUNCHER_COMPONENT_ID_SCHEMA: Record<string, unknown> = {
   type: 'string',
@@ -761,11 +799,21 @@ const LAUNCHER_COMPONENT_ID_SCHEMA: Record<string, unknown> = {
     'One host-side component id (pack / plan / backup / session id) copied verbatim from a read surface: ASCII letters, digits, - _ .; no leading dot; max 64 chars.',
 };
 
+/** S15 式全量指针化批（B27）：组件 id 口径全局只保一份，落点＝`launcher_log_read` 的
+ * `properties.sessionId`；其余 11 处换指针（spread 保形，pattern 与长度闸零改动）。 */
+const LAUNCHER_COMPONENT_ID_PTR_NOTE =
+  'Host-side id copied verbatim from a read surface; shape gate on `launcher_log_read`\'s `sessionId`.';
+
+const LAUNCHER_COMPONENT_ID_PTR_SCHEMA: Record<string, unknown> = {
+  ...LAUNCHER_COMPONENT_ID_SCHEMA,
+  description: LAUNCHER_COMPONENT_ID_PTR_NOTE,
+};
+
 /** 冲突裁决项：与契约 `ConflictResolution` 同形（三键、动作白名单）。 */
 const LAUNCHER_RESOLUTION_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
-    rootId: LAUNCHER_COMPONENT_ID_SCHEMA,
+    rootId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA,
     path: { type: 'string', minLength: 1, maxLength: 512, description: 'Root-relative path of the colliding file, exactly as the plan reported it.' },
     action: { type: 'string', enum: ['skip', 'overwrite', 'replace'], description: 'How to resolve that one collision.' },
   },
@@ -789,7 +837,7 @@ export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
     description: `当前文档诊断（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，本页同时接受它历史上的同义旧名（maxResults…，序列先到先得）——写错的参数名现在一律显式拒收，不再静默按默认页大小原地打转。${PAGE_ACCOUNT_NOTE}`,
     inputSchema: {
       type: 'object',
-      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       additionalProperties: false,
     },
     tier: 'read',
@@ -803,7 +851,7 @@ export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
     description: `文档符号（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，其余同义旧名照旧接受（见 pageSize 说明）；不认识的入参名一律显式拒收。${PAGE_ACCOUNT_NOTE}`,
     inputSchema: {
       type: 'object',
-      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       additionalProperties: false,
     },
     tier: 'read',
@@ -848,7 +896,7 @@ export const KERNEL_IO_TOOL_SPECS: readonly ToolSpec[] = [
       properties: {
         maxDepth: { type: 'integer', minimum: 0, maximum: 16, description: 'Recursion depth cap (default 6).' },
         maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: `Page size (default 500; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['maxEntries']),
       },
       additionalProperties: false,
@@ -868,7 +916,7 @@ export const KERNEL_IO_TOOL_SPECS: readonly ToolSpec[] = [
         deadlineMs: { type: 'integer', minimum: 1, maximum: 120000, description: 'Soft deadline in ms (S1): when spent the engine stops claiming NEW files and answers partial:true + partialReason:"deadline" (separate from truncated/cancelled). Default absent = no deadline, request byte-identical to legacy. Not accepted with resumeBySlice:true.' },
         preview: { type: 'string', enum: ['full', 'none'], description: 'Hit payload mode. Default "full" = verbatim legacy. "none" strips the preview field from every hit at the projection layer; accounting (total/cursor/fingerprint/knownTotal) is computed BEFORE stripping = bit-identical to "full" (cursors cross-mode); line text via fs.readRange.' },
         resumeBySlice: { type: 'boolean', description: 'B16: opt into slice-by-slice resume past the engine wall (default false = legacy single-window answer). When true the surface builds a plan of pairwise-disjoint depth-1 directories (plus capped file-root chunks), enumerates the tree once and pages through that plan; the page account gains planSlices / sliceIndex / sliceTotal / slicesRun / perSliceTruncated / prefixReverified / walkComplete / totalScope, and knownTotal stays false for any multi-slice plan (summing per-slice totals is NOT this surface\'s claim to make). Paging still follows the same cursor rules: a stale snapshot fingerprint restarts at slice 0 instead of splicing onto the old page.' },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(),
       },
       required: ['query'],
@@ -899,7 +947,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         maxResults: { type: 'integer', minimum: 1, maximum: 200, description: `Page size (default 50; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         offset: { type: 'integer', minimum: 0, description: '0-based hit offset of this window start when paging without a cursor (default 0); the cursor wins when given.' },
         resumeBySlice: { type: 'boolean', description: 'B16: set true to resume past the 5000-hit engine wall by paging a plan of pairwise-disjoint depth-1 directories (plus capped file-root chunks) built from one whole-tree enumeration. Default false keeps the legacy single-window behaviour verbatim (knownTotal:false + engineTruncated on wall hit, no slice account). With true, each page carries planSlices / sliceIndex / sliceTotal / slicesRun / perSliceTruncated / prefixReverified / walkComplete / totalScope; multi-slice plans keep knownTotal:false with the accumulator reason, and the true total is the client summing sliceTotal while walkComplete is true. A snapshot change mid-paging restarts at slice 0 rather than splicing onto the old page. Hidden entries never enter the plan and nested roots are excluded per-entry, so pages cannot overlap.' },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['maxResults']),
       },
       required: ['query'],
@@ -934,7 +982,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: {
         maxResults: { type: 'integer', minimum: 1, maximum: 500, description: `Page size (default 200; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['maxResults'], ['maxEntries', 'maxRanges', 'maxEvents', 'maxLines']),
       },
       additionalProperties: false,
@@ -945,14 +993,14 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.create',
     description:
-      'Create a new file or directory inside the authorized project root. `relPath` MUST be a project-root-relative path (schema rejects absolute paths, drive letters and ".."); the execution layer resolves it against approvedRoots and refuses out-of-domain targets. Optional `rootId` selects one explicitly approved persistent workspace root instead of the project root (enumerate via io.workspaceRoots; human approval required). Mutates the filesystem, does NOT overwrite an existing entry.',
+      'Create a new file or directory inside the authorized project root. `relPath` MUST be a project-root-relative path (schema rejects absolute paths, drive letters and ".."); the execution layer resolves it against approvedRoots and refuses out-of-domain targets. Optional `rootId`: approved workspace root; omit for the project root (gate on `fileTree.update`\'s `rootId`). Mutates the filesystem, does NOT overwrite an existing entry.',
     inputSchema: {
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_PTR_SCHEMA,
         kind: { type: 'string', enum: ['file', 'directory'], description: 'What to create.' },
         content: { type: 'string', maxLength: 1_000_000, description: 'Initial file content (file only).' },
-        rootId: ROOT_ID_SCHEMA,
+        rootId: ROOT_ID_PTR_SCHEMA,
       },
       required: ['relPath', 'kind'],
       additionalProperties: false,
@@ -963,7 +1011,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.update',
     description:
-      'Overwrite the full text content of an existing file inside the authorized project root. `relPath` is project-root-relative (schema + approvedRoots domain check). This REPLACES the whole content. For a targeted in-document edit use `problems.quickFix` (wired since 2026-11-06: it applies ONE listed code action inside the editor model as a single undo step, does not write to disk) — this tool is the whole-file path. Optional `rootId` selects one explicitly approved persistent workspace root instead of the project root (enumerate via io.workspaceRoots; human approval required). Idempotent for identical `content`. Mutates the filesystem. Refuses (WRITE_DISABLED) when the session-approved roots or the kernel write domain do not cover the target.',
+      'Overwrite the full text content of an existing file inside the authorized project root. `relPath` is project-root-relative (schema + approvedRoots domain check). This REPLACES the whole content. For a targeted in-document edit use `problems.quickFix` (wired since 2026-11-06: it applies ONE listed code action inside the editor model as a single undo step, does not write to disk) — this tool is the whole-file path. Optional `rootId`: approved workspace root; omit for the project root (gate on `fileTree.update`\'s `rootId`). Idempotent for identical `content`. Mutates the filesystem. Refuses (WRITE_DISABLED) when the session-approved roots or the kernel write domain do not cover the target.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -980,13 +1028,13 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.remove',
     description:
-      'Delete a file or directory inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval (approvedTools) in this session. `relPath` is project-root-relative and domain-checked against approvedRoots. Optional `rootId` selects one explicitly approved persistent workspace root instead of the project root (enumerate via io.workspaceRoots; human approval required). Irreversible from the model perspective; use only after an explicit, itemized approval.',
+      'Delete a file or directory inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval (approvedTools) in this session. `relPath` is project-root-relative and domain-checked against approvedRoots. Optional `rootId`: approved workspace root; omit for the project root (gate on `fileTree.update`\'s `rootId`). Irreversible from the model perspective; use only after an explicit, itemized approval.',
     inputSchema: {
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_PTR_SCHEMA,
         recursive: { type: 'boolean', description: 'Allow removing a non-empty directory (default false).' },
-        rootId: ROOT_ID_SCHEMA,
+        rootId: ROOT_ID_PTR_SCHEMA,
       },
       required: ['relPath'],
       additionalProperties: false,
@@ -1000,7 +1048,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       'Rename/move an entry inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval. Both `from` and `to` are project-root-relative and domain-checked against approvedRoots; any out-of-domain target is refused. Optional `rootId` selects one explicitly approved persistent workspace root for BOTH ends (enumerate via io.workspaceRoots; human approval required). Read the entry first; this changes the path others may reference.',
     inputSchema: {
       type: 'object',
-      properties: { from: RELATIVE_PATH_PTR_SCHEMA, to: RELATIVE_PATH_PTR_SCHEMA, rootId: ROOT_ID_SCHEMA },
+      properties: { from: RELATIVE_PATH_PTR_SCHEMA, to: RELATIVE_PATH_PTR_SCHEMA, rootId: ROOT_ID_PTR_SCHEMA },
       required: ['from', 'to'],
       additionalProperties: false,
     },
@@ -1039,7 +1087,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
           },
           description: '1..32 whole-file replacements applied in order; a duplicate path within the batch is a batch-level error.',
         },
-        rootId: ROOT_ID_SCHEMA,
+        rootId: ROOT_ID_PTR_SCHEMA,
       },
       required: ['changes'],
       additionalProperties: false,
@@ -1077,7 +1125,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
           },
           description: '1..32 patch hunks applied to ONE file; overlapping line ranges are a batch-level error (nothing is written).',
         },
-        rootId: ROOT_ID_SCHEMA,
+        rootId: ROOT_ID_PTR_SCHEMA,
       },
       required: ['relPath', 'hunks'],
       additionalProperties: false,
@@ -1148,7 +1196,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: {
         maxResults: { type: 'integer', minimum: 1, maximum: 500, description: `Page size (default 200; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['maxResults']),
       },
       additionalProperties: false,
@@ -1205,7 +1253,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         offset: { type: 'integer', minimum: 0, description: '0-based character offset of the window start (default 0).' },
         length: { type: 'integer', minimum: 1, maximum: 65_000, description: `Characters in this page (default 8000, max 65000).${ALIAS_OF_LIMIT}` },
         maxChars: { type: 'integer', minimum: 1, maximum: 65_000, description: 'Legacy alias of `length`; values above 65000 are clamped down to the host gate.' + ALIAS_OF_LIMIT },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['length', 'maxChars']),
       },
       additionalProperties: false,
@@ -1245,7 +1293,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         srcRelPath: RELATIVE_PATH_PTR_SCHEMA,
         relPath: RELATIVE_PATH_PTR_SCHEMA,
         overwrite: { type: 'boolean', description: 'Allow replacing an existing destination (default false). An open buffer with unsaved changes is still refused.' },
-        rootId: ROOT_ID_SCHEMA,
+        rootId: ROOT_ID_PTR_SCHEMA,
       },
       required: ['srcRelPath', 'relPath'],
       additionalProperties: false,
@@ -1261,7 +1309,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_PTR_SCHEMA,
-        rootId: ROOT_ID_SCHEMA,
+        rootId: ROOT_ID_PTR_SCHEMA,
       },
       required: ['relPath'],
       additionalProperties: false,
@@ -1308,7 +1356,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         relPath: RELATIVE_PATH_PTR_SCHEMA,
         maxEntries: { type: 'integer', minimum: 1, maximum: 5000, description: `Page size (default 500; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
         maxDepth: { type: 'integer', minimum: 0, maximum: 16, description: 'Recursion depth cap (default 1).' },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['maxEntries']),
       },
       additionalProperties: false,
@@ -1325,7 +1373,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: {
         maxResults: { type: 'integer', minimum: 1, maximum: 200, description: `Page size (default 50; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['maxResults']),
       },
       additionalProperties: false,
@@ -1357,7 +1405,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: {
         maxResults: { type: 'integer', minimum: 1, maximum: 500, description: `Page size (default 200; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['maxResults']),
       },
       additionalProperties: false,
@@ -1406,7 +1454,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: {
         maxResults: { type: 'integer', minimum: 1, maximum: 500, description: `Page size (default 200; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['maxResults']),
       },
       additionalProperties: false,
@@ -1513,7 +1561,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
           description:
             '0-based character offset applied to EVERY file in this batch (default 0). A bare offset carries no continuity guarantee — each item still reports its own text fingerprint.',
         },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
       },
       required: ['relPaths'],
       additionalProperties: false,
@@ -1834,7 +1882,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       additionalProperties: false,
     },
     tier: 'privileged',
@@ -1856,7 +1904,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       required: ['instanceId'],
       additionalProperties: false,
     },
@@ -1870,7 +1918,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       required: ['instanceId'],
       additionalProperties: false,
     },
@@ -1884,7 +1932,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       additionalProperties: false,
     },
     tier: 'privileged',
@@ -1895,7 +1943,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'Read the process state of one instance (read-only): {instanceId, state, pid, sessionId, startedAt, elapsedMs, exitCode, exitReason, lastError} straight from the host supervisor. `state` is one of idle|starting|running|stopping|exited|crashed; null pid / sessionId means "not running", never "unknown". Poll this after launcher_start and launcher_stop instead of assuming a transition happened. ' +
       LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'], additionalProperties: false },
+    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA }, required: ['instanceId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
   },
@@ -1906,7 +1954,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       additionalProperties: false,
     },
     tier: 'privileged',
@@ -1919,7 +1967,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       required: ['instanceId'],
       additionalProperties: false,
     },
@@ -1933,7 +1981,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       required: ['instanceId'],
       additionalProperties: false,
     },
@@ -1947,7 +1995,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, ...PAGE_PROPS, ...pageSizeAliasProps() },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
       required: ['instanceId'],
       additionalProperties: false,
     },
@@ -1962,10 +2010,10 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA,
         stream: { type: 'string', enum: ['stdout', 'stderr', 'all'], description: 'Which stream to read (default all, i.e. both chunks).' },
         maxBytes: { type: 'integer', minimum: 1, maximum: 40960, description: 'Per-stream byte cap handed to the host (default and hard ceiling 40960 - tighter than the host 1 MiB on purpose). This is the BYTE budget, a different knob from the page size.' },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(),
       },
       required: ['instanceId'],
@@ -1985,7 +2033,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
         sessionId: LAUNCHER_COMPONENT_ID_SCHEMA,
         stream: { type: 'string', enum: ['stdout', 'stderr', 'all'], description: 'Which stream to read (default all).' },
         maxBytes: { type: 'integer', minimum: 1, maximum: 40960, description: 'Per-stream byte cap (default and ceiling 40960). The BYTE budget, a different knob from the page size.' },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(),
       },
       required: ['sessionId'],
@@ -2011,7 +2059,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
           items: { type: 'string', minLength: 1, maxLength: 512, description: 'Path relative to artifactDir, POSIX separators.' },
           description: 'The file list to hash, in the order the manifest declares (order is the pairing key). Hard cap 2000 entries, never a silently dropped tail.',
         },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(),
       },
       required: ['projectDir', 'artifactDir', 'entries'],
@@ -2028,7 +2076,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA,
         name: { type: 'string', minLength: 1, maxLength: 120, description: 'New display name.' },
         notes: { type: 'string', maxLength: 2000, description: 'Free-text notes field.' },
         tags: { type: 'array', maxItems: 32, items: { type: 'string', maxLength: 64 }, description: 'Tag list (replaces the existing tags).' },
@@ -2047,7 +2095,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA,
         name: { type: 'string', minLength: 1, maxLength: 120, description: 'Optional name for the copy (host default naming when omitted).' },
       },
       required: ['instanceId'],
@@ -2064,7 +2112,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA,
         deleteFiles: { type: 'boolean', description: 'Required explicit decision: true = delete the instance directory too.' },
         keepBackups: { type: 'boolean', description: 'Optional; keep backup files when deleteFiles is true (host default false).' },
       },
@@ -2082,7 +2130,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        planId: LAUNCHER_COMPONENT_ID_SCHEMA,
+        planId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA,
         resolutions: { type: 'array', maxItems: 200, items: LAUNCHER_RESOLUTION_SCHEMA, description: 'Per-collision decisions; omit to let the host abort on any unresolved conflict.' },
       },
       required: ['planId'],
@@ -2099,8 +2147,8 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
-        packId: LAUNCHER_COMPONENT_ID_SCHEMA,
+        instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA,
+        packId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA,
         enabled: { type: 'boolean', description: 'Required explicit target state.' },
       },
       required: ['instanceId', 'packId', 'enabled'],
@@ -2117,8 +2165,8 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
-        packIds: { type: 'array', minItems: 1, maxItems: 200, items: LAUNCHER_COMPONENT_ID_SCHEMA, description: 'Complete permutation of installed pack ids, in desired load order.' },
+        instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA,
+        packIds: { type: 'array', minItems: 1, maxItems: 200, items: LAUNCHER_COMPONENT_ID_PTR_SCHEMA, description: 'Complete permutation of installed pack ids, in desired load order.' },
       },
       required: ['instanceId', 'packIds'],
       additionalProperties: false,
@@ -2133,7 +2181,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, packId: LAUNCHER_COMPONENT_ID_SCHEMA },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, packId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA },
       required: ['instanceId', 'packId'],
       additionalProperties: false,
     },
@@ -2145,7 +2193,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'Start the game of one instance (mutating, privileged, launches a real OS process). The whole validation chain runs inside the host - instance ready, executable legitimate, recorded executable trust, runtime resolved, per-instance lock - and none of it can be skipped from MCP: executable trust can only be granted by a human in the native confirmation dialog, so an untrusted executable arrives as that host error code. Returns the process status reading; poll launcher_process_status for the truth. ' +
       LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'], additionalProperties: false },
+    inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA }, required: ['instanceId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
   },
@@ -2157,7 +2205,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA,
         force: { type: 'boolean', description: 'Optional; true = hard kill (risk of losing unsaved game state).' },
         timeoutMs: { type: 'integer', minimum: 0, maximum: 120000, description: 'Optional graceful-stop budget (0..120000).' },
       },
@@ -2172,7 +2220,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'Request cancellation of one launcher task (mutating, privileged) - the cancel half of the launcher task face, which stays separate from kojo://tasks by design. Cancellation is a request, not an acknowledgement: only cancellable kinds are accepted, rollback is performed by the task itself, and the fact is read back from launcher_task_list. An unknown / already-finished row arrives as the host answer, never as a silent success. `taskId` must come from a task row this host produced. ' +
       LAUNCHER_TIER_NOTE,
-    inputSchema: { type: 'object', properties: { taskId: LAUNCHER_COMPONENT_ID_SCHEMA }, required: ['taskId'], additionalProperties: false },
+    inputSchema: { type: 'object', properties: { taskId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA }, required: ['taskId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
   },
@@ -2184,7 +2232,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
+        instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA,
         label: { type: 'string', minLength: 1, maxLength: 120, description: 'Human-readable label for the backup row.' },
         reason: { type: 'string', enum: ['manual', 'pre-restore', 'pre-plugin'], description: 'Backup reason bucket (default manual).' },
         entries: {
@@ -2193,7 +2241,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
           items: {
             type: 'object',
             properties: {
-              rootId: LAUNCHER_COMPONENT_ID_SCHEMA,
+              rootId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA,
               path: { type: 'string', minLength: 1, maxLength: 512, description: 'Save-root-relative path exactly as launcher_save_list reported it.' },
             },
             required: ['rootId', 'path'],
@@ -2216,8 +2264,8 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        instanceId: LAUNCHER_INSTANCE_ID_SCHEMA,
-        backupId: LAUNCHER_COMPONENT_ID_SCHEMA,
+        instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA,
+        backupId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA,
         backupCurrent: { type: 'boolean', description: 'Optional; default true = the host backs up the current saves before restoring.' },
       },
       required: ['instanceId', 'backupId'],
@@ -2233,7 +2281,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
-      properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA, backupId: LAUNCHER_COMPONENT_ID_SCHEMA },
+      properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, backupId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA },
       required: ['instanceId', 'backupId'],
       additionalProperties: false,
     },
@@ -2248,7 +2296,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        planId: LAUNCHER_COMPONENT_ID_SCHEMA,
+        planId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA,
         resolutions: { type: 'array', maxItems: 200, items: LAUNCHER_RESOLUTION_SCHEMA, description: 'Per-collision decisions; omit to let the host abort on unresolved conflicts.' },
       },
       required: ['planId'],
@@ -2279,7 +2327,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: {
         relPath: RELATIVE_PATH_PTR_SCHEMA,
-        rootId: ROOT_ID_SCHEMA,
+        rootId: ROOT_ID_PTR_SCHEMA,
         startLine: { type: 'integer', minimum: 1, description: '1-based first line of the window (Monaco position line; 0-based values are rejected).' },
         endLine: { type: 'integer', minimum: 1, description: '1-based LAST line of the window, inclusive. Clamped down to the file end; a window larger than the batch cap is cut at the cap.' },
       },
@@ -2312,7 +2360,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
       type: 'object',
       properties: {
         query: { type: 'string', maxLength: 512, description: 'Optional order-independent substring filter over definition names: whitespace splits tokens, EVERY token must appear in the (upper-cased, case-insensitive) name, token order is free ("face draw" matches DRAW_FACE). Filters the byName index in place - no rescan; empty/absent = all (verbatim legacy).' },
-        ...PAGE_PROPS,
+        ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(),
       },
       additionalProperties: false,

@@ -282,8 +282,18 @@ describe('⑨ 冻结契约：四枚写腿声明严格形状 rootId', () => {
     (name) => {
       const spec = SUPPLEMENTAL_TOOL_SPECS.find((s) => s.name === name)!;
       const props = spec.inputSchema['properties'] as Record<string, unknown>;
-      expect(props['rootId']).toEqual(ROOT_ID_SCHEMA);
       const schema = props['rootId'] as Record<string, unknown>;
+      // B27（S15 式指针化）：完整口径只留 `fileTree.update` 一份，其余三腿是点名落点的指针；
+      // 形状闸（type / pattern / description 之外的一切）必须仍与冻结契约同源。
+      expect({ type: schema['type'], pattern: schema['pattern'] }).toEqual({
+        type: ROOT_ID_SCHEMA['type'],
+        pattern: ROOT_ID_SCHEMA['pattern'],
+      });
+      if (name === 'fileTree.update') {
+        expect(schema).toEqual(ROOT_ID_SCHEMA);
+      } else {
+        expect(String(schema['description']), `${name} 的 rootId 指针必须点名落点`).toContain('`fileTree.update`');
+      }
       expect(validateAgainstSchema(schema, WS_ID).valid).toBe(true);
       expect(validateAgainstSchema(schema, 'D:\\author-workspace').valid).toBe(false);
       expect(validateAgainstSchema(schema, '../../etc').valid).toBe(false);

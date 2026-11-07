@@ -306,17 +306,32 @@ describe('B11 判据 2 · 面声明的 properties ⊇ 执行腿实际取用的�
     }
   });
 
-  it('游标声明逐面同源：每枚分页面的 cursor 形状就是 B1 钉下的那一份（pattern 未被改写）', () => {
+  it('游标声明逐面同源（B27 后分口径）：形状逐字同源；完整口径只在 fs.readFile，其余是点名落点的指针', () => {
     const paged = HOST_SPECS.filter((s) => Object.keys(propsOf(s.name)).includes('cursor'));
     expect(paged.length).toBe(26); // 24 枚待做 + fs.readMany（B2 出厂即严格）+ semantic.projectSymbols（MCP-PERF-S4）
+    const canon = PAGE_CURSOR_SCHEMA_PROPS['cursor'] as Record<string, unknown>;
+    let canonical = 0;
     for (const spec of paged) {
-      expect(propsOf(spec.name)['cursor'], `${spec.name} 的 cursor 形状必须与契约面同源`).toEqual(
-        PAGE_CURSOR_SCHEMA_PROPS['cursor'],
-      );
+      const cursor = propsOf(spec.name)['cursor'] as Record<string, unknown>;
+      // 形状（type / pattern / 长度闸）逐面同源，B1 钉下的 pattern 与越界零改动。
+      expect(
+        { type: cursor['type'], pattern: cursor['pattern'], minLength: cursor['minLength'], maxLength: cursor['maxLength'] },
+        `${spec.name} 的 cursor 形状必须与契约面同源`,
+      ).toEqual({ type: canon['type'], pattern: canon['pattern'], minLength: canon['minLength'], maxLength: canon['maxLength'] });
+      const desc = String(cursor['description'] ?? '');
+      if (desc === String(canon['description'])) {
+        canonical += 1;
+        expect(spec.name, '完整口径落点必须是 fs.readFile').toBe('fs.readFile');
+      } else {
+        expect(desc, `${spec.name} 的 cursor 指针必须点名落点 \`fs.readFile\``).toContain('`fs.readFile`');
+        expect(desc, `${spec.name} 的 cursor 指针必须点名落点属性 \`cursor\``).toContain('`cursor`');
+        expect(desc, `${spec.name} 的 cursor 指针不得复刻完整口径`).not.toContain('spliced');
+      }
       expect(propsOf(spec.name)['limit'], `${spec.name} 的 limit 形状必须与契约面同源`).toEqual(
         PAGE_CURSOR_SCHEMA_PROPS['limit'],
       );
     }
+    expect(canonical, '完整口径必须恰好一份（B27 指针化后口径）').toBe(1);
   });
 });
 
@@ -594,10 +609,30 @@ describe('B11 判据 4 · 旧别名照旧生效 / limit 照旧生效 / 零参调
     expect(declared).toEqual(expect.arrayContaining(['maxResults', 'limit', 'length', 'maxChars', 'cursor']));
   });
 
-  it('未接线的面（diff.compare / state.replay / preview.document）仍显式 NOT_WIRED，本批没顺手放行', async () => {
-    const call = createRunSupplemental(deps());
-    for (const name of ['diff.compare', 'state.replay', 'preview.document']) {
-      await expect(call(name, {}, scope)).rejects.toThrow(/未接线/);
-    }
+  it('嵌套对象严格化收口（B27）：除 commands.run.args 逐命令自校验外，所有 object 节点都必须 additionalProperties:false', () => {
+    // 背景：B11 的 ① 只钉顶层 inputSchema；带参分页面的嵌套对象（items / changes / args…）此前
+    // 没有统一口径，靠逐面自觉。B27 把这层也钉成闸：注册表里任何 object 节点漏了严格化 ⇒ 红。
+    // 唯一豁免是 commands.run 的 `args`：它必须放行任意键，因为合法键集按所选命令在腿里逐命令
+    // 校验（`entry.argsSchema`），本面顶层 unknown key 仍被拒。
+    const EXEMPT = new Set(['commands.run#properties.args']);
+    const loose: string[] = [];
+    const walk = (tool: string, addr: string, node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach((v, i) => walk(tool, `${addr}[${i}]`, v));
+        return;
+      }
+      if (!node || typeof node !== 'object') return;
+      const o = node as Record<string, unknown>;
+      if (o['type'] === 'object' && o['additionalProperties'] !== false) {
+        const key = `${tool}#${addr}`;
+        if (!EXEMPT.has(key)) loose.push(key);
+      }
+      for (const [k, v] of Object.entries(o)) walk(tool, addr ? `${addr}.${k}` : k, v);
+    };
+    for (const s of HOST_SPECS) walk(s.name, '', s.inputSchema);
+    expect(loose, `未严格化的嵌套对象：${JSON.stringify(loose)}`).toEqual([]);
+    // 豁免必须仍然真实存在且仍不严格（豁免表不许拿空名单跑绿）。
+    expect(propsOf('commands.run')['args']).toMatchObject({ type: 'object' });
+    expect((propsOf('commands.run')['args'] as Record<string, unknown>)['additionalProperties']).toBeUndefined();
   });
 });

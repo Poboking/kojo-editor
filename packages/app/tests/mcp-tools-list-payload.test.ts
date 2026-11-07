@@ -135,8 +135,16 @@ const B21_FULL_FRAME_BYTES = 218_897;
  *  （desc +2,846 / schema +2,354 / 其余为入参帧结构）逐项对账见 ⑧。BAND 0.1 与记账
  *  下界 163,000 一字不动，新带顶 194,700，机械余量 811 B。
  *  ⚠ 连续第四次按例重钉：**下一批增面前必须先做一整轮 S15 式全量指针化瘦身**
- *  （rootId 样板句 7 处 1,543 B 只是已点名的第一刀），不许再抬底数或抬 BAND 过闸。 */
-const B22_FULL_FRAME_BYTES = 177_000;
+ *  （rootId 样板句 7 处 1,543 B 只是已点名的第一刀），不许再抬底数或抬 BAND 过闸。
+ *  B27 兑现（2026-11-06，workbuddy）：**先瘦后钉**——四族共用形状（rootId 327×9 / cursor 245×26 /
+ *  instanceId 188×19 / componentId 159×12）与 9 处 rootId 样板句全部按 S15 同形指针化（spread 保形，
+ *  type/pattern/长度闸零改动，完整口径各只留一处：fileTree.update.rootId / fs.readFile.cursor /
+ *  launcher_instance_get.instanceId / launcher_log_read.sessionId），由 ⑩ 形状指针账钉住。
+ *  现取实测：desc **69,993**（−162）/ schema **107,026**（−5,352）/ frame **188,375**（−5,514，
+ *  static 量具；判据口径 −5 B）。按现取收紧：desc 70,500 → 70,300（余量 307）、schema 112,900 →
+ *  108,000（余量 974）；帧带底数只许下调 177,000 → 172,200（新带顶 189,420，机械余量 1,045 B）。
+ *  BAND 0.1 与记账下界 163,000 一字不动；下一批增面前仍须先瘦再钉。 */
+const B22_FULL_FRAME_BYTES = 172_200;
 /** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。 */
 const B22_ACCOUNTED_FLOOR = 163_000;
 const BAND = 0.1;
@@ -321,10 +329,12 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
         expect(d, `相对路径说明丢了 ${token}`).toContain(token);
       }
     }
-    const rootIdHosts = fullFace.flatMap((t) => schemaDescHits(t, 'ws: + 8 lowercase hex'));
-    expect(rootIdHosts.length).toBeGreaterThanOrEqual(4);
+    // B27（S15 式全量指针化批）：`rootId` 完整口径收进 `fileTree.update` 的 `properties.rootId`，
+    // 其余 8 处换 `ROOT_ID_PTR_SCHEMA` 指针 ⇒ 计数锚（`approvedRootIds` 只许在完整口径里出现）＝1。
+    const rootIdHosts = fullFace.flatMap((t) => schemaDescHits(t, 'approvedRootIds'));
+    expect(rootIdHosts.length).toBe(1);
     for (const d of rootIdHosts) {
-      for (const token of ['NOT a path', 'io.workspaceRoots', 'approvedRootIds', 'Omit to stay on the current project root']) {
+      for (const token of ['NOT a path', 'io.workspaceRoots', 'approvedRootIds', 'Omit to stay on the current project root', 'ws: + 8 lowercase hex']) {
         expect(d, `rootId 说明丢了 ${token}`).toContain(token);
       }
     }
@@ -352,8 +362,12 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     //           launcher 73,706 与 S6 起各批持平 ⇒ 增量全部来自这一枚新面，别处没有膨胀。
     // 按现取实测重钉：desc 66,500 → 68,000（余量 691 B）、schema 109,700 → 111,000（余量 976 B）；
     // launcher 75,000、2048 描述闸、BAND 0.1、记账下界 163,000 一字不动；帧带底数见 ② 上方注释。
-    expect(descBytes).toBeLessThanOrEqual(70_500); // …S15 66,122；B24 合并实拍 67,309；B25 合并实拍 70,155（三面批内瘦身 −289 后）
-    expect(schemaBytes).toBeLessThanOrEqual(112_900); // …S15 109,313；B24 合并实拍 110,024；B25 合并实拍 112,378（四枚新形状全走 S15 指针版）
+    // B27（workbuddy 2026-11-06）先瘦后钉：四族共用形状 + rootId 样板句指针化后现取实测
+    // desc 69,993 / schema 107,026 / frame 188,375（static 量具；判据口径 −5 B）。
+    // 按现取收紧：desc 70,500 → 70,300、schema 112,900 → 108,000；launcher 75,000 与
+    // 2048 描述闸、BAND 0.1、记账下界 163,000 一字不动。
+    expect(descBytes).toBeLessThanOrEqual(70_300); // …B25 70,155；B27 指针化后 69,993
+    expect(schemaBytes).toBeLessThanOrEqual(108_000); // …B25 112,378；B27 指针化后 107,026（−5,352）
     expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；S4 实拍 73,706
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });
@@ -404,6 +418,104 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
       expect(p.desc, `${p.tool}#${p.addr} 指针必须点名落点属性 \`relPath\``).toContain('`relPath`');
       expect(p.desc, `${p.tool}#${p.addr} 指针仍须自带最小本地语义（project-root-relative）`).toContain('Project-root-relative');
       expect(p.desc, `${p.tool}#${p.addr} 指针不得复刻完整口径（ADR-0003 标记只许一份）`).not.toContain('ADR-0003');
+    }
+  });
+
+  it('⑩ 形状指针账（B27 全量指针化）：rootId / cursor / instanceId / componentId 完整口径各一份，其余抄写点只许指针', () => {
+    // 靶子（dedup 量具实拍）：rootId 327 字符 ×9、cursor 245×27、instanceId 188×19、componentId 159×12。
+    // 处理与 S15 完全同形：spread 保形（type/pattern/长度闸零改动），只有 description 换成指针。
+    type Family = {
+      label: string;
+      pattern: string;
+      anchorTool: string;
+      anchorProp: string;
+      canonMark: string; // 只许完整口径出现的计数锚
+      canonTokens: readonly string[];
+      ptrTokens: readonly string[];
+      count: number;
+    };
+    const FAMILIES: readonly Family[] = [
+      {
+        label: 'rootId',
+        pattern: '^ws:[0-9a-f]{8}$',
+        anchorTool: 'fileTree.update',
+        anchorProp: 'rootId',
+        canonMark: 'approvedRootIds',
+        canonTokens: ['NOT a path', 'io.workspaceRoots', 'approvedRootIds', 'Omit to stay on the current project root'],
+        ptrTokens: ['`fileTree.update`', '`rootId`', 'workspace root'],
+        count: 9,
+      },
+      {
+        label: 'cursor',
+        pattern: '^[0-9a-f]{8}:\\d{1,10}$',
+        anchorTool: 'fs.readFile',
+        anchorProp: 'cursor',
+        canonMark: 'changedDuringPaging',
+        canonTokens: ['nextCursor', 'changedDuringPaging', 'spliced'],
+        ptrTokens: ['`fs.readFile`', '`cursor`', 'nextCursor'],
+        count: 26,
+      },
+      {
+        label: 'instanceId',
+        pattern: '^[A-Za-z0-9-]+$',
+        anchorTool: 'launcher_instance_get',
+        anchorProp: 'instanceId',
+        canonMark: "Host's own shape gate",
+        canonTokens: ['never invent one', "'-'", '1..64'],
+        ptrTokens: ['`launcher_instance_get`', '`instanceId`', 'never invent one'],
+        count: 19,
+      },
+      {
+        label: 'componentId',
+        pattern: '^(?!\\.)[A-Za-z0-9._-]+$',
+        anchorTool: 'launcher_log_read',
+        anchorProp: 'sessionId',
+        canonMark: 'no leading dot',
+        canonTokens: ['pack / plan / backup / session id', 'no leading dot', 'max 64'],
+        ptrTokens: ['`launcher_log_read`', '`sessionId`', 'verbatim'],
+        count: 12,
+      },
+    ];
+
+    const collect = (pattern: string): { tool: string; addr: string; desc: string }[] => {
+      const hits: { tool: string; addr: string; desc: string }[] = [];
+      const walk = (tool: string, addr: string, node: unknown): void => {
+        if (Array.isArray(node)) {
+          node.forEach((item, i) => walk(tool, `${addr}[${i}]`, item));
+          return;
+        }
+        if (node && typeof node === 'object') {
+          const o = node as Record<string, unknown>;
+          if (o['type'] === 'string' && o['pattern'] === pattern) {
+            hits.push({ tool, addr: addr || '(root)', desc: String(o['description'] ?? '') });
+          }
+          for (const [k, v] of Object.entries(o)) walk(tool, addr ? `${addr}.${k}` : k, v);
+        }
+      };
+      for (const t of fullFace) walk(t.name, '', t.inputSchema);
+      return hits;
+    };
+
+    for (const f of FAMILIES) {
+      const hits = collect(f.pattern);
+      expect(hits.length, `${f.label} 抄写点枚数变了：${JSON.stringify(hits.map((h) => `${h.tool}#${h.addr}`))}`).toBe(f.count);
+      const canon = hits.filter((h) => h.desc.includes(f.canonMark));
+      expect(canon.length, `${f.label} 完整口径必须全局一份，现 ${canon.length} 份`).toBe(1);
+      expect(canon[0]!.tool, `${f.label} 完整口径落点面`).toBe(f.anchorTool);
+      expect(canon[0]!.addr, `${f.label} 完整口径落点属性`).toBe(`properties.${f.anchorProp}`);
+      for (const token of f.canonTokens) {
+        expect(canon[0]!.desc, `${f.label} 完整口径丢了 ${token}`).toContain(token);
+      }
+      // 落点真实性：指针指向的那份必须真实存在且完整。
+      expect(propDesc(toolByName(f.anchorTool), f.anchorProp)).toBe(canon[0]!.desc);
+      const pointers = hits.filter((h) => h.desc !== canon[0]!.desc);
+      expect(pointers.length, `${f.label} 除落点外必须全是指针`).toBe(f.count - 1);
+      for (const p of pointers) {
+        for (const token of f.ptrTokens) {
+          expect(p.desc, `${f.label} 指针 ${p.tool}#${p.addr} 缺 ${token}`).toContain(token);
+        }
+        expect(p.desc, `${f.label} 指针 ${p.tool}#${p.addr} 不得复刻完整口径（${f.canonMark} 只许一份）`).not.toContain(f.canonMark);
+      }
     }
   });
 });
