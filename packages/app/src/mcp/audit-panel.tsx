@@ -6,8 +6,9 @@
  *
  * 列式行与空态分场景（additive，2026-11-06 UI-04/18/29）：
  *   · 每行改结构化 span（时间 / 工具 / 结果 / 耗时 / 落点），样式走 settings-ai.css 的
- *     `.mcp-audit-row*`；`argsDigest` / `sessionId` / `clientId` 收进 `title` 悬浮，
- *     `note` 保持可见文本（铁律 4：拒绝原因不许折叠进 hover 就消失）；
+ *     `.mcp-audit-row*`；`argsDigest` / `sessionId` / `clientId` / `note` / 完整 ISO 时间
+ *     收进 `title` 悬浮——88px 时间列放短格式（UI 实拍：完整 ISO 必折行）、第五列只放
+ *     `landedPath`（无落点显 `—`），note 不再占列宽折行；
  *   · 结果列保留 `[denied]` 方括号字面量——mcp-approval-ui 回归钉住行文本，色彩
  *     chip 化由 `data-outcome` + CSS 完成，字面不动；
  *   · 空态分两种：一条都没有（还没接入）vs 有条目但筛空了（给「清空筛选」退路）；
@@ -41,6 +42,18 @@ export function formatAuditEntry(entry: AuditEntryView): string {
   const landed = entry.landedPath ? ` → ${entry.landedPath}` : '';
   const note = entry.note ? `（${entry.note}）` : '';
   return `${base}${session}${elapsed}${landed}${note}`;
+}
+
+/**
+ * 审计时间列短格式 `MM-DD HH:mm:ss`（如 `11-06 23:41:09`，88px 列宽正好放下）。
+ * 只做**字面裁切**（宿主 `mcp_audit.jsonl` 的 ISO 串原样摘月日与时分秒），
+ * 不做时区换算——换算会让屏面时间与审计文件对不上，宁短不编。
+ * 非 ISO 形态（旧条目 / 脏数据）原样返回，不静默吞。
+ */
+export function formatAuditTime(ts: string): string {
+  const match = /^(\d{4})-(\d{2}-\d{2})[T ](\d{2}:\d{2}:\d{2})/.exec(ts);
+  if (match === null) return ts;
+  return `${match[2]} ${match[3]}`;
 }
 
 export function filterAuditEntries(
@@ -133,22 +146,21 @@ export function AuditPanel({ entries }: AuditPanelProps) {
               key={`${row.ts}-${row.tool}-${i}`}
               data-outcome={row.outcome}
               className="mcp-audit-row"
-              title={[row.clientId, row.argsDigest, row.sessionId]
+              title={[row.ts, row.clientId, row.argsDigest, row.sessionId, row.note]
                 .filter(Boolean)
                 .join(' · ')}
             >
-              <span className="mcp-audit-row-time">{row.ts}</span>
+              {/* 五列 span 全量渲染（缺项显 —）：grid 按子元素序落列，条件渲染会把
+                  后面的列挤进前面的列宽（elapsed 缺席时落点会掉进 56px 耗时列）。 */}
+              <span className="mcp-audit-row-time" title={row.ts}>{formatAuditTime(row.ts)}</span>
               <span className="mcp-audit-row-tool">{row.tool}</span>
               <span className="mcp-audit-row-outcome">[{row.outcome}]</span>
-              {row.elapsedMs !== undefined && (
-                <span className="mcp-audit-row-elapsed">{row.elapsedMs}ms</span>
-              )}
-              {row.landedPath !== undefined && (
-                <span className="mcp-audit-row-path">→ {row.landedPath}</span>
-              )}
-              {row.note !== undefined && (
-                <span className="mcp-audit-row-note">（{row.note}）</span>
-              )}
+              <span className="mcp-audit-row-elapsed">
+                {row.elapsedMs !== undefined ? `${row.elapsedMs}ms` : '—'}
+              </span>
+              <span className="mcp-audit-row-path">
+                {row.landedPath !== undefined ? `→ ${row.landedPath}` : '—'}
+              </span>
             </li>
           ))}
         </ul>

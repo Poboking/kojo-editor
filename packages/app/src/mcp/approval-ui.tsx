@@ -24,6 +24,13 @@
  *   · 「全选（N）」全局按钮与「批准所选（N）」收进粘性操作条 `.mcp-approve-sticky`
  *     （UI-16：29 行之后按钮不再被顶出视野；样式由 settings-ai.css 侧负责）；
  *   · `before` / `after` 都为空时不再渲染空 `<pre>`（UI-07：黑框换一行空态说明）。
+ *
+ * 屏面去黑话与按钮档位（additive，2026-11-06 UI-20/23）：
+ *   · 条目屏面只留「工具名 — 真实功能一句话 + 只读/可写盘小字标」；`（privileged）` 档位
+ *     括注与 `item.reason` 机制长句撤出屏面，收进条目 `title`（形状不变，reason 原值保留）；
+ *   · 「已批准工具（第四张表）」改「已批准工具」，「写进授权记录」说明进 `title`；
+ *   · 常驻可写根 hint 人话化，rootId / relPath / 双闸等技术细节进 `title`；
+ *   · 粘性条里的「批准所选（N）」挂 `mcp-btn-primary` 主档（样式在 settings-ai.css）。
  */
 import { useMemo, useState } from 'react';
 
@@ -399,7 +406,7 @@ export function ApprovalUi({
             完成接入并出现会话后，这里会出现逐项批准清单。
           </p>
           {rootEnumerationNote !== undefined && (
-            <p className="mcp-approve-roots-note" role="status" data-testid="mcp-root-enumeration-note">
+            <p className="mcp-approve-roots-note" aria-live="polite" data-testid="mcp-root-enumeration-note">
               {rootEnumerationNote}
             </p>
           )}
@@ -431,30 +438,36 @@ export function ApprovalUi({
                   </div>
                 </div>
                 <ul>
-                  {group.items.map((item) => (
-                    <li key={item.name} data-tool={item.name}>
-                      <KitCheck
-                        checked={selected.has(item.name)}
-                        onChange={(checked) => toggle(item.name, checked)}
-                        label={`批准 ${item.name}`}
+                  {group.items.map((item) => {
+                    // UI-20：屏面只留「名字 — 一句话功能」；档位（privileged 等）与
+                    // reason 机制长句收进条目 title（形状不变：reason 原值保留在数据里）。
+                    const description = TOOL_DESCRIPTIONS[item.name];
+                    return (
+                      <li
+                        key={item.name}
+                        data-tool={item.name}
+                        title={[item.tier, item.reason].filter(Boolean).join(' · ')}
                       >
-                        {item.name}（{item.tier}）— {TOOL_DESCRIPTIONS[item.name] ?? item.reason}
-                      </KitCheck>
-                      {group.family !== 'other' && (
-                        <span
-                          className="mcp-tool-tag"
-                          data-write={write ? 'true' : undefined}
+                        <KitCheck
+                          checked={selected.has(item.name)}
+                          onChange={(checked) => toggle(item.name, checked)}
+                          label={`批准 ${item.name}`}
                         >
-                          {write ? '写入' : '只读'}
+                          {description !== undefined ? `${item.name} — ${description}` : item.name}
+                        </KitCheck>
+                        {/* 只读/可写盘小字标：launcher 只读族标「只读」，其余一律按
+                            可写盘标（fail-closed：判不准写不写时按会写报）。 */}
+                        <span className="mcp-tool-tag" data-write={write ? 'true' : undefined}>
+                          {write ? '可写盘' : '只读'}
                         </span>
-                      )}
-                      {approvedTools !== undefined && approvedSet.has(item.name) && (
-                        <span className="mcp-approve-badge" data-approved="true" data-tool={item.name}>
-                          已批准
-                        </span>
-                      )}
-                    </li>
-                  ))}
+                        {approvedTools !== undefined && approvedSet.has(item.name) && (
+                          <span className="mcp-approve-badge" data-approved="true" data-tool={item.name}>
+                            已批准
+                          </span>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             );
@@ -464,12 +477,15 @@ export function ApprovalUi({
           {(rootCandidates.length > 0 || rootEnumerationNote !== undefined) && (
             <section className="mcp-approve-roots" aria-label="MCP 常驻可写根批准">
               <h4>常驻可写根（逐项显式批准）</h4>
-              <p className="mcp-approve-roots-hint">
-                勾选后 Agent 才能把四枚 fileTree 写腿的 relPath 解析到该根；rootId 是枚举标识，
-                不是目标路径。落盘仍过 approvedRoots 相对前缀 + 内核写允许域双闸。
+              {/* UI-20：屏面一句话，rootId 形状闸 / 相对前缀 / 内核允许域等机制进 title。 */}
+              <p
+                className="mcp-approve-roots-hint"
+                title="这里的标识（rootId）经形状闸后写入授权记录的 approvedRootIds 精确列名；实际落盘仍要过 approvedRoots 相对前缀与内核写允许域两道闸。"
+              >
+                勾选后 Agent 才能写入该根；这里的标识是稳定代号、不是路径。实际落盘仍要过多重权限闸。
               </p>
               {rootEnumerationNote !== undefined && (
-                <p className="mcp-approve-roots-note" role="status" data-testid="mcp-root-enumeration-note">
+                <p className="mcp-approve-roots-note" aria-live="polite" data-testid="mcp-root-enumeration-note">
                   {rootEnumerationNote}
                 </p>
               )}
@@ -495,8 +511,11 @@ export function ApprovalUi({
           )}
           <p>待批准根：{batch.approvedRoots.join(', ') || '（无）'}</p>
           {approvedTools !== undefined && (
-            <p data-testid="mcp-approved-tools">
-              已批准工具（第四张表）：{approvedTools.length > 0 ? approvedTools.join('、') : '（无）'}
+            <p
+              data-testid="mcp-approved-tools"
+              title="已批准的工具名写进本会话的授权记录；撤销会话后随之移除。"
+            >
+              已批准工具：{approvedTools.length > 0 ? approvedTools.join('、') : '（无）'}
             </p>
           )}
           {/* UI-16 粘性操作条：全选 / 清空与批准 CTA 收进一条，置底跟随滚动（样式在
@@ -512,7 +531,13 @@ export function ApprovalUi({
                 清空
               </button>
             </div>
-            <button type="button" disabled={selectionCount === 0} onClick={() => onApprove(batch)}>
+            {/* UI-23：主操作挂主档按钮（实底 accent），与「全选 / 清空」次档拉开层级。 */}
+            <button
+              type="button"
+              className="mcp-btn-primary"
+              disabled={selectionCount === 0}
+              onClick={() => onApprove(batch)}
+            >
               批准所选（{selectionCount}）
             </button>
           </div>

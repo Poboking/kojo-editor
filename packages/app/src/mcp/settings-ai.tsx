@@ -30,6 +30,7 @@ import {
 } from './approval-ui';
 import { AuditPanel, type AuditEntryView } from './audit-panel';
 import { Switch } from '../ui/Switch';
+import { Icon } from '../ui/icons';
 import { useNotify, type Notify } from '../ui/NotificationCenter';
 import { rootIdOf } from './workspace-root-id';
 // 专用视觉切片走**懒边**：`AiAccessSection` 由 SettingsPanel 动态 import，本 CSS 不进
@@ -172,6 +173,16 @@ const RECEIPT_TTL_MS = 30_000;
 /** 复制按钮「已复制 ✓」反馈时长（UI-05）。 */
 const COPY_FEEDBACK_MS = 1200;
 
+/**
+ * 页内分段导航（UI-19）：概览 / 授权 / 审计三段，id 与 `AiAccessSection` 编排层的区块
+ * 锚点逐字一致（授权 / 审计两段的 DOM 住在并发车道的组件里，锚挂在本文件编排层）。
+ */
+export const MCP_SUBNAV_SECTIONS = [
+  { id: 'mcp-sec-overview', label: '概览' },
+  { id: 'mcp-sec-approval', label: '授权' },
+  { id: 'mcp-sec-audit', label: '审计' },
+] as const;
+
 /** 档位人话（UI-14 会话行）：原始 tier 收进 title。 */
 const TIER_LABEL: Readonly<Record<McpClientTier, string>> = {
   read: '只读',
@@ -204,6 +215,18 @@ export function formatAgeSeconds(seconds: number): string {
   if (s < 60) return `${s} 秒前`;
   if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
   return `${Math.floor(s / 3600)} 小时前`;
+}
+
+/**
+ * 路径胶囊的中段省略（UI-26）：屏上只留「头 … 尾」，全文另存进 title。
+ * `max` 是**输出上限**而不只是触发阈值——只拿它当阈值时，短串配小上限会省略出比原文
+ * 更长的怪串（头 24 + 尾 20 是写死的）。头尾按上限比例分配，保证结果恒不超长。
+ */
+export function middleEllipsis(s: string, max = 48): string {
+  if (s.length <= max) return s;
+  const keep = Math.max(2, max - 1); // 省略号占一位
+  const head = Math.ceil(keep * 0.55);
+  return `${s.slice(0, head)}…${s.slice(-(keep - head))}`;
 }
 
 /** `name@hash` 拆开（UI-21）：屏上只留名字，hash 随完整 clientId 收进 title。 */
@@ -278,6 +301,8 @@ export function SettingsAi({
   // 状态条年龄（UI-24）：最近一次成功 refresh 的时刻 + 每秒跳动的 now ⇒「更新于 N 秒前」。
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  // 页内分段当前段（UI-19）：点击态高亮，不做 scroll spy。
+  const [subnavActive, setSubnavActive] = useState<string>(MCP_SUBNAV_SECTIONS[0].id);
   const mounted = useRef(true);
   const receiptTimerRef = useRef<number | undefined>(undefined);
   const copyTimerRef = useRef<number | undefined>(undefined);
@@ -325,6 +350,21 @@ export function SettingsAi({
     }, RECEIPT_TTL_MS);
   }, []);
 
+  /**
+   * 页内分段跳转（UI-19）：滚到对应区块并点亮当前段。`scrollIntoView` 做能力判断 +
+   * try/catch——happy-dom 与老实现没有 / 不认 options，点击不能把面板炸了。
+   */
+  const jumpToSubnav = useCallback((id: string): void => {
+    setSubnavActive(id);
+    const el = document.getElementById(id);
+    if (el === null || typeof el.scrollIntoView !== 'function') return;
+    try {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch {
+      el.scrollIntoView();
+    }
+  }, []);
+
   /** 复制 + 按钮反馈（UI-05）：成功短暂变「已复制 ✓」，失败走 notify，不静默。 */
   const copyWithFeedback = useCallback(
     async (key: string, text: string): Promise<void> => {
@@ -353,10 +393,16 @@ export function SettingsAi({
       setStatus(s);
       setPhase(classify(s));
       setLastUpdated(Date.now());
+      // UI-10：状态条只说「状态句 + 环境信息 / 下一步」，不再把三张读数卡的数字复读一遍
+      // （端口是卡片里没有的事实；读数本身由下方一主两辅独占）。
       setDetail(
         s.enabled
-          ? `端口 ${s.port ?? '—'} · 瞬时并发连接 ${s.clients} · 已握手 ${s.connections ?? 0}`
-          : 'MCP 服务未启动。开启后编辑器会写入 mcp-endpoint.json 供 stdio shim 发现。',
+          ? `端口 ${s.port ?? '—'} · ${
+              (s.connections ?? 0) > 0
+                ? '客户端已连入；危险工具仍需逐项批准。'
+                : '复制客户端配置后等待首次握手。'
+            }`
+          : 'MCP 服务未启动。开启后编辑器会写入发现文件，供转发器定位端点。',
       );
       onStatusRef.current?.(s);
     } catch (err) {
@@ -408,7 +454,7 @@ export function SettingsAi({
       setToken(null);
       setShowToken(false);
       await refresh();
-      showReceipt('MCP 服务已关闭：listener 与发现文件已收回。');
+      showReceipt('MCP 服务已关闭：监听已停止，发现文件已收回。');
     } catch (err) {
       fail('关闭 MCP 服务', err);
     }
@@ -432,7 +478,7 @@ export function SettingsAi({
         // 轮换回执走 receipt 通道：4s 轮询不再把它冲掉（UI-03）。
         showReceipt(
           'token 已轮换（端点已重启并换发）：旧 token 立即失效，客户端需用新 token 重连；' +
-            '已批准的工具授权按 clientId 保留。',
+            '已批准的工具授权仍按会话保留。',
         );
       }
     } catch (err) {
@@ -458,17 +504,42 @@ export function SettingsAi({
         ? `http://127.0.0.1:${status.port}/mcp`
         : '';
 
-  /** 读数卡：未知（null）显「—」并弱化（settings-ai-metric--unknown，样式归 Lane B）。 */
-  const metric = (label: string, value: number | null, hint: string): ReactElement => (
-    <div className={`settings-ai-metric${value === null ? ' settings-ai-metric--unknown' : ''}`}>
-      <span className="settings-ai-metric-label">{label}</span>
+  /** 读数卡（UI-11）：一主两辅——「已握手客户端」是唯一大数（hero），另外两枚收成右侧
+      紧凑 chip。DOM 顺序保持「并发 → 授权 → 握手」不变（读屏顺序与既有判据都钉它），
+      主次靠 CSS grid 的显式落位表达，不靠重排 DOM。未知（null）显「—」并弱化（UI-02）。 */
+  const metric = (
+    label: string,
+    value: number | null,
+    hint: string,
+    tech?: string,
+    variant: 'hero' | 'chip' = 'chip',
+  ): ReactElement => (
+    <div
+      className={`settings-ai-metric settings-ai-metric--${variant}${
+        value === null ? ' settings-ai-metric--unknown' : ''
+      }`}
+    >
+      <span className="settings-ai-metric-label" title={tech}>{label}</span>
       <strong className="settings-ai-metric-value">{value === null ? '—' : value}</strong>
       <span className="settings-ai-metric-hint">{value === null ? '读数不可用' : hint}</span>
     </div>
   );
 
   return (
-    <section className="settings-ai" aria-label="AI 接入">
+    <section className="settings-ai" aria-label="AI 接入" id="mcp-sec-overview">
+      {/* 页内分段导航（UI-19）：3101px 长卷收成三段可点；样式类见 settings-ai.css `mcp-subnav` */}
+      <nav className="mcp-subnav" aria-label="AI 接入页内分段">
+        {MCP_SUBNAV_SECTIONS.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className={`mcp-subnav-item${subnavActive === item.id ? ' on' : ''}`}
+            onClick={() => jumpToSubnav(item.id)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
       <header className="settings-ai-head">
         <div className="settings-ai-head-copy">
           <h2>AI 接入（MCP Server）</h2>
@@ -493,15 +564,17 @@ export function SettingsAi({
             type="button"
             className="settings-ai-status-age"
             aria-label="手动刷新 AI 接入状态"
+            title="手动刷新 AI 接入状态"
             onClick={() => void refresh()}
           >
-            更新于 {formatAgeSeconds(Math.max(0, Math.floor((nowMs - lastUpdated) / 1000)))}
+            <Icon name="refresh" size="xs" />更新于 {formatAgeSeconds(Math.max(0, Math.floor((nowMs - lastUpdated) / 1000)))}
           </button>
         )}
       </div>
 
-      {/* 主操作前置（UI-13）：开关挪到状态头之后、读数卡之前，首屏就能完成「开启」这一步 */}
-      <div className="settings-ai-row settings-ai-controls">
+      {/* 主操作前置（UI-13）：开关挪到状态头之后、读数卡之前，首屏就能完成「开启」这一步；
+          本行同时是设置搜索「启用 MCP 服务」的行锚点（UI-36，键与索引条目逐字一致） */}
+      <div className="settings-ai-row settings-ai-controls" data-settings-key="ai.service">
         <label className="settings-ai-toggle">
           <Switch
             checked={enabled}
@@ -513,21 +586,42 @@ export function SettingsAi({
         </label>
       </div>
 
-      {/* 三个读数拆开：并发连接 ≠ 已授权会话 ≠ 已握手客户端（旧实现把三者混成 clients） */}
-      <div className="settings-ai-metrics">
-        {metric('瞬时并发连接', concurrentNow, '当前打开的 TCP 连接；请求结束即减')}
-        {metric('已授权会话', authorizedCount, '第四张表未撤销的会话；授权不等于连接')}
-        {metric('已握手客户端', handshakeCount, '本次运行时真实触达端点的去重 clientId')}
-      </div>
+      {/* 三个读数拆开：并发连接 ≠ 已授权会话 ≠ 已握手客户端（旧实现把三者混成 clients）；
+          屏上说人话，技术口径进 title（UI-20）。UI-11：一主两辅，且未启动时整块隐藏——
+          「没开服务」时再铺 0 / 0 / 0 是噪音，不是信息。 */}
+      {phase !== 'stopped' && (
+        <div className="settings-ai-metrics">
+          {metric(
+            '瞬时并发连接',
+            concurrentNow,
+            '此刻打开着的连接数；请求结束即断开',
+            '瞬时并发 TCP 连接数（mcp_status.clients）',
+          )}
+          {metric(
+            '已授权会话',
+            authorizedCount,
+            '人类批准过且未撤销的会话；授权 ≠ 连接',
+            '逐会话授权台账（mcp_approvals.json 投影）',
+          )}
+          {metric(
+            '已握手客户端',
+            handshakeCount,
+            '本次运行真实连过端点的客户端（去重）',
+            '去重后的 clientId 数（内存接入台账）',
+            'hero',
+          )}
+        </div>
+      )}
 
-      {/* 接入确认卡（UI-12）两态互斥：已接入 → 回执 + 发现文件 + 操作；未接入 → 三步向导 */}
+      {/* 接入确认卡（UI-12）两态互斥：已接入 → 回执 + 发现文件 + 操作；未接入 → 三步向导。
+          两行回执/提示不带 role="status"（UI-35）：全页唯一 live region 是上方状态条 */}
       <section className="settings-ai-onboard" aria-label="MCP 接入确认">
         <div className="settings-ai-onboard-head">
           <h3>接入确认</h3>
-          <span className="settings-ai-onboard-tag">握手回执</span>
+          <span className="settings-ai-onboard-tag">接入状态</span>
         </div>
         {latest !== undefined ? (
-          <p className="settings-ai-onboard-ok" role="status">
+          <p className="settings-ai-onboard-ok">
             已接入 <span title={latest.clientId}>{splitClientId(latest.clientId).name}</span>
             {' · '}最近 {latest.method === 'initialize' ? '首次握手' : latest.method}
             {' · '}
@@ -536,48 +630,52 @@ export function SettingsAi({
           </p>
         ) : (
           <>
-            <p className="settings-ai-onboard-wait" role="status">
+            <p className="settings-ai-onboard-wait">
               尚未检测到客户端接入：完成下面三步，首次握手会在这里变成正面确认。
             </p>
-            {/* 三步向导（UI-13）：开启服务 → 复制配置 → 等待握手 */}
+            {/* 三步向导（UI-13）：开启服务 → 复制配置 → 等待握手；步骤 2 屏上不说 stdio shim，
+                术语收进 title（UI-20） */}
             <ol className="settings-ai-onboard-steps">
               <li>开启服务：拨动上方开关，编辑器写入发现文件（真实路径见下）。</li>
-              <li>
-                复制配置：把 stdio shim（<code>node tools/kojo-mcp.mjs</code>）配进客户端；配置里不含 token。
+              <li title="转发器是一个 stdio shim：它读取发现文件里的端点与凭据，替客户端转发请求。">
+                复制配置：把转发器（<code>node tools/kojo-mcp.mjs</code>）配进客户端；配置里不含 token。
               </li>
               <li>等待握手：客户端首次握手后，本页自动刷新并给出正面确认。</li>
             </ol>
           </>
         )}
+        {/* 路径胶囊（UI-26）：中段省略，全文进 title */}
         <div className="settings-ai-discovery">
           <span className="settings-ai-discovery-label">发现文件</span>
           <code className="settings-ai-discovery-path" title={discoveryPath || undefined}>
-            {discoveryPath || '（服务未启动或路径未知）'}
+            {discoveryPath === '' ? '（服务未启动或路径未知）' : middleEllipsis(discoveryPath)}
           </code>
         </div>
+        {/* UI-23：按钮三档——主档（真的要用户做的那一步）/ 次档（描边）/ 危险档（撤销）。
+            图标随文案走；「已复制 ✓」回执态不带图标，避免 ✓ 与图标抢同一格。 */}
         <div className="settings-ai-onboard-actions">
           <button
             type="button"
-            className="small"
+            className="small mcp-btn-secondary"
             disabled={discoveryPath === ''}
             onClick={() => void copyWithFeedback('path', discoveryPath)}
           >
-            {copiedKey === 'path' ? '已复制 ✓' : '复制路径'}
+            {copiedKey === 'path' ? '已复制 ✓' : <><Icon name="copy" size="xs" />复制路径</>}
           </button>
           <button
             type="button"
-            className="small"
+            className="small mcp-btn-secondary"
             disabled={discoveryPath === ''}
             onClick={() => onReveal(discoveryPath)}
           >
-            打开所在目录
+            <Icon name="files" size="xs" />打开所在目录
           </button>
           <button
             type="button"
-            className="small"
+            className="small mcp-btn-primary"
             onClick={() => void copyWithFeedback('config', clientConfigSnippet())}
           >
-            {copiedKey === 'config' ? '已复制 ✓' : '复制客户端配置'}
+            {copiedKey === 'config' ? '已复制 ✓' : <><Icon name="copy" size="xs" />复制客户端配置</>}
           </button>
         </div>
         <p className="settings-ai-onboard-foot">
@@ -585,9 +683,15 @@ export function SettingsAi({
         </p>
       </section>
 
-      {/* token 行：空态一句话（UI-22），机制细节收进 title；端点与 token 解耦（UI-06） */}
-      <div className="settings-ai-row settings-ai-token">
-        <span className="settings-ai-token-label">Token：</span>
+      {/* token 行：空态一句话（UI-22），机制细节收进 title；端点与 token 解耦（UI-06）；
+          本行是设置搜索「访问凭据（Token）」的行锚点（UI-36） */}
+      <div className="settings-ai-row settings-ai-token" data-settings-key="ai.token">
+        <span
+          className="settings-ai-token-label"
+          title="访问凭据是一个 Bearer token：明文只在开启 / 轮换（mcp_start）的返回值里出现。"
+        >
+          访问凭据（Token）：
+        </span>
         {token === null ? (
           <span
             className="settings-ai-token-empty"
@@ -603,15 +707,25 @@ export function SettingsAi({
             </button>
           </>
         )}
-        {token !== null && !rotateArmed && (
-          <button type="button" className="small" onClick={() => setRotateArmed(true)} disabled={phase === 'busy'}>
-            轮换
+        {/* UI-22：刷新页面后状态命令不回传明文、token 为 null，但服务确实在跑——
+            「重新签发」不该跟着凭据一起消失。按钮只认 enabled（真状态），不认本地 token。 */}
+        {enabled && !rotateArmed && (
+          <button
+            type="button"
+            className="small"
+            title="重新签发访问凭据：旧凭据立即失效，已连接的客户端需要用新凭据重连"
+            onClick={() => setRotateArmed(true)}
+            disabled={phase === 'busy'}
+          >
+            <Icon name="refresh" size="xs" />{token === null ? '重新签发' : '轮换'}
           </button>
         )}
         {rotateArmed && (
           <span className="settings-ai-rotate-confirm">
-            轮换会使现有客户端失效，确认？
-            <button type="button" className="small" onClick={() => void rotate()}>确认轮换</button>
+            重新签发会使现有客户端失效，确认？
+            <button type="button" className="small" onClick={() => void rotate()}>
+              {token === null ? '确认重新签发' : '确认轮换'}
+            </button>
             <button type="button" className="small" onClick={() => setRotateArmed(false)}>取消</button>
           </span>
         )}
@@ -623,15 +737,16 @@ export function SettingsAi({
               className="small"
               onClick={() => void copyWithFeedback('endpoint', endpointUrl)}
             >
-              {copiedKey === 'endpoint' ? '已复制 ✓' : '复制端点'}
+              {copiedKey === 'endpoint' ? '已复制 ✓' : <><Icon name="copy" size="xs" />复制端点</>}
             </button>
           </span>
         )}
       </div>
 
       {/* 已授权会话（UI-14）：撤销做进行内（onRevoke 可选，缺省不渲染按钮）；
-          连接态仍由接入台账判定，最近握手时间用相对时间（UI-21），clientId 拆名、hash 进 title */}
-      <div className="settings-ai-clients">
+          连接态仍由接入台账判定，最近握手时间用相对时间（UI-21），clientId 拆名、hash 进 title；
+          本块是设置搜索「已授权会话」的行锚点（UI-36） */}
+      <div className="settings-ai-clients" data-settings-key="ai.clients">
         <h3>
           已授权会话（
           {authorizedCount === null ? '—' : hasDetailedClients ? clients!.length : authorizedCount}）
@@ -659,12 +774,12 @@ export function SettingsAi({
                   {onRevoke !== undefined && (
                     <button
                       type="button"
-                      className="small"
+                      className="small mcp-btn-danger"
                       disabled={revokeDisabled}
-                      title="撤销会话授权（mcp_revoke）"
+                      title="撤销该会话的授权（mcp_revoke）；撤销后客户端需重新被批准"
                       onClick={() => onRevoke(c.clientId)}
                     >
-                      撤销
+                      <Icon name="trash" size="xs" />撤销
                     </button>
                   )}
                 </li>
@@ -674,7 +789,7 @@ export function SettingsAi({
         ) : authorizedCount === null ? (
           <p>会话读数暂不可用（状态读取失败或仍在读取）。</p>
         ) : authorizedCount > 0 ? (
-          <p>有 {authorizedCount} 个已授权会话；逐会话明细由第四张授权表（路 C）提供。</p>
+          <p>有 {authorizedCount} 个已授权会话；此视图未提供逐会话明细（档位与连接态），仅显示计数。</p>
         ) : (
           <p>当前没有已授权会话。客户端首次握手后仍需在此逐项批准工具。</p>
         )}
@@ -1089,7 +1204,7 @@ export function AiAccessSection({
   const onApprove = useCallback(
     async (batch: ApprovalBatch): Promise<void> => {
       if (batch.clientId === '') {
-        setNote('没有可批准的会话（第四张表无有效客户端）；未提交 mcp_approve。');
+        setNote('没有可批准的会话（尚无有效的客户端会话）；未提交审批。');
         return;
       }
       setBusy(true);
@@ -1097,11 +1212,11 @@ export function AiAccessSection({
         const next = await approveMcpSession(run, batch);
         if (mounted.current) {
           setScope(next);
-          setNote('已提交审批（mcp_approve）。');
+          setNote('已提交审批。');
         }
         await refresh();
       } catch (err) {
-        if (mounted.current) setNote(`提交审批失败（mcp_approve）：${String(err)}`);
+        if (mounted.current) setNote(`提交审批失败：${String(err)}`);
       } finally {
         if (mounted.current) setBusy(false);
       }
@@ -1116,11 +1231,11 @@ export function AiAccessSection({
         const next = await revokeMcpSession(run, clientId);
         if (mounted.current) {
           setScope(next);
-          setNote(`已撤销会话 ${clientId}（mcp_revoke）。`);
+          setNote('已撤销该会话的授权；客户端需重新被批准才能写盘。');
         }
         await refresh();
       } catch (err) {
-        if (mounted.current) setNote(`撤销失败（mcp_revoke）：${String(err)}`);
+        if (mounted.current) setNote(`撤销失败：${String(err)}`);
       } finally {
         if (mounted.current) setBusy(false);
       }
@@ -1149,14 +1264,20 @@ export function AiAccessSection({
         {...(onCopy !== undefined ? { onCopy } : {})}
         {...(onReveal !== undefined ? { onReveal } : {})}
       />
+      {/* UI-35：提示行不是 live region（全页唯一 role="status" 在状态条），
+          动态出现的警告用 aria-live="polite" 保持可感知但不抢播报 */}
       {connectionNote !== '' && (
-        <p className="settings-mcp-note settings-mcp-note--warn" role="status">
+        <p className="settings-mcp-note settings-mcp-note--warn" aria-live="polite">
           {connectionNote}
         </p>
       )}
 
+      {/* 页内导航与搜索的「授权」段锚（UI-19 / UI-36）：授权 / 审计两段的 DOM 住在
+          并发车道的组件里，锚挂在本编排层；零高空锚不占语义，滚动与搜索跳转都认它 */}
+      <div id="mcp-sec-approval" data-settings-key="ai.approval" aria-hidden="true" />
+
       {/* 写前 diff：当前没有挂起的写请求，故 before/after 如实为空（不编造文件内容）。
-          approvedTools：第四张表里本会话已批准的工具，批准 / 撤销后随刷新在面板翻转（不静默）。 */}
+          approvedTools：授权台账里本会话已批准的工具，批准 / 撤销后随刷新在面板翻转（不静默）。 */}
       <ApprovalUi
         clientId={clientId}
         pending={pending}
@@ -1173,10 +1294,12 @@ export function AiAccessSection({
       {/* UI-14：撤销入口已并入上方「已授权会话」行内，独立撤销卡删除——
           页面只出现一次 clientId 列表 */}
 
+      {/* 页内导航与搜索的「审计」段锚（UI-19 / UI-36） */}
+      <div id="mcp-sec-audit" data-settings-key="ai.audit" aria-hidden="true" />
       <AuditPanel entries={audit} />
 
       {note !== '' && (
-        <p className="settings-mcp-note" role="status">
+        <p className="settings-mcp-note" aria-live="polite">
           {note}
         </p>
       )}
