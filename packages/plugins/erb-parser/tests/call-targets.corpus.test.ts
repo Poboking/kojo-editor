@@ -19,6 +19,10 @@
  *    `TRYCALL M_KOJO_COLOR_K[[色名]]` 这类子名形态**连信息档也不许有**；再逐条钉
  *    `ERB/COMMON.ERB:3369` 那一行原样（默认档不报 / 信息档报），以及那两条被切断的
  *    `CALL …立位＆時間停止＆…` 的**全名确实能在名录里查到**（⇒ 误报责任在我们，不在作者）。
+ * 2b. **上屏面也数得出来**（D04b，2026-11-07）：判据面之外再跑一遍 `erbCallTargetDecorations`
+ *    （`plugin.ts` 的 `erb-reference` 贡献逐字调它）——信息档条数必须与 `includeTry` 那一臂
+ *    **等量**（改前贡献只挂 warning 臂 ⇒ 上屏 0 条；改后实测 14 条），且上屏面不许出现
+ *    `erb.call-undefined`（那是另一档的确凿缺陷）。
  * 3. **名录规模自证**：`@` 定义名集合的规模与非 ASCII 占比打印出来做分母，
  *    并把改前 23 条涉及的三个名字逐个查名录 ⇒ 必须"确实不在名录里"
  *    （证明那 23 条不是名录没建起来造成的空集假象）。
@@ -33,7 +37,13 @@ import { isErbDialectPath } from '@kojo/plugin-api';
 import { FileIOServiceImpl } from '../../../kernel/src/io';
 import { NodeBridge } from '../../../kernel/tests/helpers/node-bridge';
 import { parseErbText } from '../src/scanner';
-import { scanUndefinedCallTargets, type UndefinedCallTarget } from '../src/references';
+import {
+  UNDEFINED_CALL_CODE,
+  UNDEFINED_TRY_CALL_CODE,
+  erbCallTargetDecorations,
+  scanUndefinedCallTargets,
+  type UndefinedCallTarget,
+} from '../src/references';
 
 const SMOKE = process.env.KOJO_SMOKE_PROJECT;
 
@@ -82,6 +92,10 @@ describe.skipIf(!SMOKE)('未定义 CALL 目标 · 真实语料零误报（D03）
     // 第二遍：生产判据
     const hits: string[] = [];
     const tryHits: string[] = [];
+    // 第二遍同时量**上屏面**（D04b）：`erbCallTargetDecorations` 就是 `plugin.ts` 里
+    // `erb-reference` 贡献 `decorate()` 调的那一枚 —— 量到的条数 = 作者在编辑器里看得见的条数
+    const shownTry: string[] = [];
+    const shownWarn: string[] = [];
     for (const f of files) {
       const tf = await io.readText(f);
       const rel = f.replace(SMOKE!, '');
@@ -89,11 +103,17 @@ describe.skipIf(!SMOKE)('未定义 CALL 目标 · 真实语料零误报（D03）
         hits.push(`${rel}:${t.line}:${t.column} ${t.name}`);
       for (const t of scanUndefinedCallTargets(tf.text, hasName, { includeTry: true }))
         if (t.isTry === true) tryHits.push(`${rel}:${t.line} ${t.name}`);
+      for (const d of erbCallTargetDecorations({ path: f, text: tf.text }, hasName)) {
+        const at = `${rel}:${d.line}:${d.startColumn ?? 1}`;
+        if (d.code === UNDEFINED_TRY_CALL_CODE) shownTry.push(`${at} ${d.severity}`);
+        else if (d.code === UNDEFINED_CALL_CODE) shownWarn.push(`${at} ${d.severity}`);
+      }
     }
 
     console.log(
       `语料 ${files.length} 文件 / ${lines} 行；名录 ${names.size} 枚（非 ASCII ${nonAscii}）；` +
-        `默认档命中 ${hits.length}；TRY 信息档（includeTry）命中 ${tryHits.length}`,
+        `默认档命中 ${hits.length}；TRY 信息档（includeTry）命中 ${tryHits.length}；` +
+        `上屏面 warning ${shownWarn.length} / info ${shownTry.length}`,
     );
 
     // ①零误报（改前 23 条：21 条 TRY 系 + 2 条记号尺切断）
@@ -109,6 +129,20 @@ describe.skipIf(!SMOKE)('未定义 CALL 目标 · 真实语料零误报（D03）
     );
     expect(tryHits.filter((h) => h.includes(' CustomTraits')).length, 'TRYCALL CustomTraits 应在信息档里').toBe(1);
     expect(tryHits.filter((h) => h.includes(' M_KOJO_COLOR_K')).length, '子名形态连信息档也不报').toBe(0);
+
+    // ②b 上屏面读数（D04b，2026-11-07）：信息档**有出口**才数得出来。
+    //     改前：`erb-reference` 贡献只挂 warning 臂 ⇒ 信息档可见 **0** 条（纯函数早已实现，
+    //           全靠这道语料闸用 `includeTry` 才看得见）；
+    //     改后：两臂合成上屏 ⇒ 与 includeTry 那一臂**逐条等量**（同一条判据、同一条门）。
+    expect(shownWarn, `上屏面不该出现 warning（判据面为 0）：\n${shownWarn.slice(0, 20).join('\n')}`).toEqual([]);
+    expect(shownTry.length, `信息档上屏条数（改前 0，实测 14）：\n${shownTry.slice(0, 30).join('\n')}`).toBeGreaterThanOrEqual(
+      14,
+    );
+    expect(shownTry.length, '上屏面条数 = includeTry 那一臂的条数（同一条判据，不许各数各的）').toBe(tryHits.length);
+    expect(shownTry.every((h) => h.endsWith(' info')), '信息档上屏的 severity 必须全是 info').toBe(true);
+    // 双报闸：同一 (文件, 行) 不可能既上 warning 又上 info（上屏面 warning 为 0，这里再钉一次结构）
+    const shownTryAt = new Set(shownTry.map((h) => h.split(' ')[0]));
+    expect(shownWarn.filter((h) => shownTryAt.has(h.split(' ')[0])), '同一行两档同报').toEqual([]);
 
     // ③改前那 23 条涉及的名字确实不在名录里（不是"名录空集"造成的假零）
     for (const probe of ['CUSTOMTRAITS', 'SET_KOJOCOLOR', 'M_KOJO_COLOR_K'])

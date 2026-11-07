@@ -122,7 +122,8 @@ const ROWS: readonly MatrixRow[] = [
     supplier: null,
     match: 'none',
     action: null,
-    reason: '信息档（引擎允许 TRY 系钩子缺失），本就不是缺陷 = 没有该修的东西；且默认不接 UI',
+    reason:
+      '信息档（引擎允许 TRY 系钩子缺失），本就不是缺陷 = 没有该修的东西；D04b 起该档由 `erb-reference` 贡献上屏（info），与 warning 档同一条判据、互斥，仍不给快修',
     producedBy: 'try-info',
   },
   {

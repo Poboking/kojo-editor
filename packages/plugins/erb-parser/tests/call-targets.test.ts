@@ -11,6 +11,7 @@ import { createErbParserPlugin } from '../src/plugin';
 import {
   UNDEFINED_CALL_CODE,
   UNDEFINED_TRY_CALL_CODE,
+  erbCallTargetDecorations,
   erbReferenceDecorations,
   scanUndefinedCallTargets,
   tryCallTargetDecorations,
@@ -176,14 +177,65 @@ describe('erbReferenceDecorations · 装饰成形', () => {
 });
 
 /* ---------------------------------------------------------------------------
+ * 两档一出口（D04b，2026-11-07）：`ui.editor.decorator` 贡献 `erb-reference` 调的
+ * 就是 `erbCallTargetDecorations` —— 这里逐条钉"信息档有出口"与"绝不双报"。
+ * ------------------------------------------------------------------------- */
+
+describe('erbCallTargetDecorations · 两档一出口（D04b 接线）', () => {
+  it('TRY 目标缺失 ⇒ 恰好一条 info / erb.call-try-missing / source=erb-reference，该行没有 warning 档', () => {
+    const decos = erbCallTargetDecorations({ path: '/a.ERB', text: 'TRYCALL NOPE\n' }, dict([]));
+    expect(decos).toHaveLength(1);
+    expect(decos[0]).toMatchObject({
+      line: 1,
+      severity: 'info',
+      code: UNDEFINED_TRY_CALL_CODE,
+      source: 'erb-reference',
+      startColumn: 9,
+      endColumn: 13,
+    });
+    // 双报闸：同一行绝不冒出 warning 的 `erb.call-undefined`
+    expect(decos.filter((d) => d.code === UNDEFINED_CALL_CODE)).toEqual([]);
+  });
+
+  it('普通 CALL 目标缺失 ⇒ 仍只有 warning 的 erb.call-undefined，信息档不掺和', () => {
+    const decos = erbCallTargetDecorations({ path: '/a.ERB', text: 'CALL NOPE\n' }, dict([]));
+    expect(decos).toHaveLength(1);
+    expect(decos[0]).toMatchObject({ line: 1, severity: 'warning', code: UNDEFINED_CALL_CODE });
+    expect(decos.filter((d) => d.code === UNDEFINED_TRY_CALL_CODE)).toEqual([]);
+  });
+
+  it('混合文件：一行恰好一条、按行升序；每一行的码集合里只有一档', () => {
+    const text = 'TRYCALL HOOK_A\nCALL MISSING\nTRYCALL HOOK_B\nCALL ALPHA\n';
+    const decos = erbCallTargetDecorations({ path: '/a.ERB', text }, dict(['ALPHA']));
+    expect(decos.map((d) => [d.line, d.code, d.severity])).toEqual([
+      [1, UNDEFINED_TRY_CALL_CODE, 'info'],
+      [2, UNDEFINED_CALL_CODE, 'warning'],
+      [3, UNDEFINED_TRY_CALL_CODE, 'info'],
+    ]);
+    const codesByLine = new Map<number, string[]>();
+    for (const d of decos) codesByLine.set(d.line, [...(codesByLine.get(d.line) ?? []), d.code ?? '']);
+    for (const [line, codes] of codesByLine) expect(codes, `第 ${line} 行只许一档`).toHaveLength(1);
+  });
+
+  it('两臂共用一条门：非方言 / 空文本零装饰；名字都在名录里也零装饰', () => {
+    expect(erbCallTargetDecorations({ path: '/a.kojo', text: 'TRYCALL NOPE\nCALL NOPE\n' }, dict([]))).toEqual([]);
+    expect(erbCallTargetDecorations({ path: '/a.ERB', text: '' }, dict([]))).toEqual([]);
+    expect(erbCallTargetDecorations({ path: '/a.ERB', text: 'TRYCALL F\nCALL F\n' }, dict(['F']))).toEqual([]);
+  });
+});
+
+/* ---------------------------------------------------------------------------
  * 装配面：贡献注册 + 索引缺席零误报 + 建好只报真缺口
  * ------------------------------------------------------------------------- */
 
 const A = '/t/A.ERB';
 const B = '/t/B.ERB';
+const C = '/t/C.ERB';
 const FILES: Record<string, string> = {
   [A]: '@ALPHA(ARG)\n\tRETURN 1\n',
   [B]: '@CALLER\n\tCALL ALPHA(1)\n\tCALL NOPE\n',
+  // TRY 系可选钩子缺失（引擎允许）⇒ 只有信息档一条；D04b 接线前这里一条都没有
+  [C]: '@RUNNER\n\tTRYCALL OPTIONAL_HOOK\n\tCALL ALPHA(1)\n',
 };
 const MTIME = 1000;
 
@@ -250,7 +302,12 @@ type DecoratorContribution = {
   id: string;
   title: string;
   offloadKind?: string;
-  decorate(file: { path: string; text: string; project: null }): { line: number; severity: string }[];
+  decorate(file: { path: string; text: string; project: null }): {
+    line: number;
+    severity: string;
+    code?: string;
+    source?: string;
+  }[];
 };
 
 describe('erb-parser · ui.editor.decorator 装配（erb-reference）', () => {
@@ -276,5 +333,32 @@ describe('erb-parser · ui.editor.decorator 装配（erb-reference）', () => {
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ line: 3, severity: 'warning', code: UNDEFINED_CALL_CODE });
     expect(found.decorate({ path: A, text: FILES[A]!, project: null })).toEqual([]);
+  });
+
+  /* D04b：信息档的出口就在这枚贡献上——接线前 `tryCallTargetDecorations` 早已实现，
+   * 但没有任何贡献调它，作者在编辑器里一条都看不见（只有语料闸看得见）。 */
+  it('索引建好 ⇒ TRY 系可选钩子缺失上信息档一条（info / erb.call-try-missing / erb-reference）', async () => {
+    const { services, decorators } = activate();
+    await (services.get('erb.parser') as ErbParserService).buildIndex(['/t']);
+    const found = decorators.get('erb-reference') as unknown as DecoratorContribution;
+    const out = found.decorate({ path: C, text: FILES[C]!, project: null });
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      line: 2,
+      severity: 'info',
+      code: UNDEFINED_TRY_CALL_CODE,
+      source: 'erb-reference',
+    });
+    // 同一份文本里既没有第二条 info，也没有 warning 档（双报闸在装配面同样成立）
+    expect(out.filter((d) => d.code === UNDEFINED_CALL_CODE)).toEqual([]);
+  });
+
+  it('索引缺席 ⇒ 两档一起沉默（fail-open 只认"没建索引"这一态；`hasName` 恒假不是它的替身）', () => {
+    const { decorators } = activate();
+    const found = decorators.get('erb-reference') as unknown as DecoratorContribution;
+    // TRY-only 文件：信息档若无条件上屏，这条会红——索引缺席时它必须与 warning 臂一起零产出
+    expect(found.decorate({ path: C, text: FILES[C]!, project: null })).toEqual([]);
+    // 反向对照：同一份文本在索引建好后确实有输出（见上一条），所以这条 0 不是"贡献没注册"
+    expect(found.decorate({ path: B, text: FILES[B]!, project: null })).toEqual([]);
   });
 });
