@@ -91,6 +91,12 @@ export const SUGAR_DIAGNOSTIC_CODES = [
  * 字符串形态由生产方唯一决定：`erb-parser` 的 `structureIssueCode`（`erb.${kind}`）与
  * `condition-extractor` 的 `erb.expr-${kind}`。这里按同一拼法列闭集，与各自的 kind 联合
  * 逐一对账（同样钉在双向检查里），不许消费方自己拼字符串。
+ *
+ * 2026-11-07（D04b）起多**一枚不是 kind 的**结构码：`erb.structure-truncated`。它是
+ * `erb-parser/src/structure.ts` 的独立常量（不是 `structureIssueCode` 拼出来的，也不是
+ * `ErbStructureIssue['kind']`），说的是"这张问题列表被显示预算截断了"这件事本身——
+ * 它由同一条链（`erb-structure` 装饰贡献）产出，所以仍归本表；但它**没有**对应的
+ * 结构发现与快修动作，故不参与 kind 双向对账（对账那一侧逐条写明这条例外）。
  */
 export const NATIVE_STRUCTURE_CODES = [
   'erb.orphan-close',
@@ -99,6 +105,7 @@ export const NATIVE_STRUCTURE_CODES = [
   'erb.dim-invalid',
   'erb.return-form',
   'erb.erh-invalid',
+  'erb.structure-truncated',
 ] as const;
 
 /** 表达式诊断码闭集（词法错 / 语法错两类） */
@@ -255,6 +262,10 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   'erb.erh-invalid': {
     name: '头文件里写了引擎不认的行',
     detail: '.ERH 只允许 #DIM / #DIMS / #DEFINE；这一行会让 Emuera 中止整轮头文件加载。',
+  },
+  'erb.structure-truncated': {
+    name: '问题列表没列全',
+    detail: '这个文件的结构问题多到超过列表上限，屏幕上只列出前面一部分，其余同类问题没有再逐条列出。',
   },
   'erb.expr-lexical': { name: '表达式有无法识别的字符', detail: '条件表达式里存在词法层面读不懂的内容。' },
   'erb.expr-syntax': { name: '表达式结构不对', detail: '条件表达式的括号、操作数或冒号写法不成立。' },

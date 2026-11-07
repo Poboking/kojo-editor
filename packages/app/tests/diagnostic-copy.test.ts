@@ -53,8 +53,14 @@ const read = (...parts: string[]): string => readFileSync(path.join(ROOT, ...par
 const _sugarFwd: readonly SugarDiagnosticCode[] = SUGAR_DIAGNOSTIC_CODES;
 const _sugarBack: readonly (typeof SUGAR_DIAGNOSTIC_CODES)[number][] =
   [] as readonly SugarDiagnosticCode[];
+/**
+ * 结构类闭集 ⇄ `kind` 联合的双向对账（目标类型是闭集、源类型是 kind 拼法 ⇒ kind 拼法必须
+ * 全部落在闭集里）。D04b 起闭集多**一枚不是 kind 的码**：`erb.structure-truncated` 由
+ * `structure.ts` 的独立常量产出（"这张列表被显示预算截断了"），没有对应的结构发现，
+ * 所以在右侧联合里**逐字点名这一枚例外**——不开开关、不用 `string` 兜底，删了它就红。
+ */
 const _structureBack: readonly (typeof NATIVE_STRUCTURE_CODES)[number][] =
-  [] as readonly `erb.${ErbStructureIssue['kind']}`[];
+  [] as readonly (`erb.${ErbStructureIssue['kind']}` | 'erb.structure-truncated')[];
 /** 结构层：闭集 ⇄ 生产方的 kind 联合双向对账（改一边忘另一边 ⇒ typecheck 红） */
 const _syntaxFwd: readonly (typeof KOJO_STRUCTURE_SYNTAX_CODES)[number][] =
   [] as readonly `kojo.${KojoStructureSyntaxKind}`[];
@@ -174,7 +180,7 @@ describe('诊断码中文显示名：无孤儿条目', () => {
     expect(orphans, `这些条目对应的码已不存在（口径分叉）：${orphans.join(', ')}`).toEqual([]);
   });
 
-  it('结构类闭集与 erb.ts 的 kind 联合逐一对账', () => {
+  it('结构类闭集与 erb.ts 的 kind 联合逐一对账（多一枚登记在案的截断通知码）', () => {
     expect([...NATIVE_STRUCTURE_CODES].sort()).toEqual(
       [
         'erb.dim-invalid',
@@ -182,6 +188,7 @@ describe('诊断码中文显示名：无孤儿条目', () => {
         'erb.orphan-branch',
         'erb.orphan-close',
         'erb.return-form',
+        'erb.structure-truncated',
         'erb.unclosed-open',
       ].sort(),
     );

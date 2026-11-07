@@ -37,7 +37,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { ERB_ENGINE_RESERVED_IDENTIFIERS, ERB_ENGINE_STRING_IDENTIFIERS, NATIVE_STRUCTURE_CODES } from '@kojo/plugin-api';
 import type { LineDecoration } from '@kojo/plugin-api';
-import { checkControlFlowStructure, checkStructure, structureIssueCode } from '../src/structure';
+import { checkControlFlowStructure, checkStructure, structureIssueCode, STRUCTURE_TRUNCATED_CODE } from '../src/structure';
 import { checkDeclarationIssues } from '../src/declarations';
 import { checkHeaderIssues } from '../src/erh';
 import { structureDiagnostic, applyStructureFix, buildStructureFixes } from '../src/structure-fix';
@@ -158,6 +158,16 @@ const ROWS: readonly MatrixRow[] = [
     reason: '内建函数实参类型：把 1 改成 "1" 或反之都是在猜作者要哪种量纲',
     producedBy: 'builtin-type',
   },
+  {
+    // D04b：它不是一条结构发现（`ErbStructureIssue['kind']` 里没有它），而是"这张列表
+    // 被显示预算截断了"这件事本身 ⇒ 没有可修的对象，永远不给供方。
+    code: STRUCTURE_TRUNCATED_CODE,
+    supplier: null,
+    match: 'none',
+    action: null,
+    reason: '「列表不完整」不是某一行的缺陷：这条信息只说"还有多少条没上屏"，没有可修的东西（给它造动作 = 假装能修）',
+    producedBy: 'structure',
+  },
 ];
 
 const ERB_CODES = new Set(ROWS.map((r) => r.code));
@@ -221,16 +231,19 @@ function undefinedNameIssues(): LineDecoration[] {
 }
 
 /**
- * 两枚**只登记来源、不产波浪线**的码位（2026-11-07 实测：本守卫的合成 fixture 产不出它们）：
+ * **只登记来源、不产波浪线**的码位（本守卫的合成 fixture 产不出它们）：
  * - `ERB_ARITY_MISMATCH`：实参对拍要真定义 + 真调用点两侧对齐，合成件造不出来，
  *   它的产出面由 `arity.corpus.test.ts` 的 production 对拍闸钉（473 处 = 对拍 missing-required 条数）；
  * - `ERB_BUILTIN_ARGS`：内建实参**个数**档在 fixture 探测里产不出（本仓逐枚试遍
  *   `BUILTIN_FUNCTION_NAMES` 的少给/多给三型文本，只出得了类型档），产出面由
- *   `builtins.corpus.test.ts` 钉。
- * 这两行的"有没有供方"仍由 (b) 的行为探针真跑（拿一枚同码的合成波浪线去问供方 ⇒ 必须零动作），
+ *   `builtins.corpus.test.ts` 钉；
+ * - `erb.structure-truncated`（D04b）：由装饰器（`erbStructureDecorations`）在结构问题
+ *   超过显示预算时才产出，本文件的生产趟只跑各腿判据、不跑装饰器 ⇒ 产不出；
+ *   产出面由 `structure.test.ts` 的"截断必须出声"那一组钉。
+ * 这些行的"有没有供方"仍由 (b) 的行为探针真跑（拿一枚同码的合成波浪线去问供方 ⇒ 必须零动作），
  * "码位还在不在产"改由源码扫描钉（常量仍被生产方贴进 decoration.code），**不靠注释兜**。
  */
-const SOURCE_ONLY_CODES = new Set([ARITY_MISMATCH_CODE, BUILTIN_ARGS_CODE]);
+const SOURCE_ONLY_CODES = new Set([ARITY_MISMATCH_CODE, BUILTIN_ARGS_CODE, STRUCTURE_TRUNCATED_CODE]);
 
 /**
  * 内建函数两档的 fixture 是**现算出来的**：从 BUILTIN_FUNCTION_NAMES 逐枚试构造调用文本，
@@ -355,10 +368,11 @@ describe('ERB 快修面矩阵（QF-1）', () => {
   const produced = produceAll();
 
   it('(a) 码面闭集：矩阵 = 生产方导出的常量/拼法，逐码双向对账', () => {
-    // 结构六枚取自 plugin-api 的闭集（与 diagnostic-copy 的双向对账同一条码面），拼法只住在 structureIssueCode
+    // 结构腿七枚取自 plugin-api 的闭集（与 diagnostic-copy 的双向对账同一条码面；D04b 起
+    // 多一枚不是 kind 的截断通知码），拼法只住在 structureIssueCode / STRUCTURE_TRUNCATED_CODE
     const structureFromTable = NATIVE_STRUCTURE_CODES.filter((c) => c.startsWith('erb.'));
     const structureFromRows = ROWS.filter((r) => r.producedBy === 'structure' || r.producedBy === 'declaration' || r.producedBy === 'header').map((r) => r.code);
-    expect([...structureFromTable].sort(), '结构/声明/头文件六枚码位 = plugin-api 闭集').toEqual([...structureFromRows].sort());
+    expect([...structureFromTable].sort(), '结构/声明/头文件七枚码位 = plugin-api 闭集').toEqual([...structureFromRows].sort());
     // structureIssueCode 的拼法（erb.${kind}）必须仍是那一枚码的来源，不许生产方另拼
     expect(structureIssueCode({ kind: 'unclosed-open' } as ErbStructureIssue)).toBe('erb.unclosed-open');
     // 语义五枚取自各腿导出的常量（抄字符串就不算对账）
