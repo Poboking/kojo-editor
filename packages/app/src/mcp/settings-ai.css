@@ -170,13 +170,62 @@
   border-left-color: var(--accent);
 }
 
+/* UI-24：「更新于 N 秒前」是唯一的状态条动作。做成右对齐的弱胶囊，
+   不用全局 button 的实心块——它是回执时间戳顺手可点，不是第四个主按钮。 */
+.settings-ai-status-age {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: auto;
+  padding: var(--space-0) var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+
+.settings-ai-status-age:hover {
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+/* UI-14 会话行「最近握手」：相对时间是副信息，退到元信息档并锁不折行。 */
+.settings-ai-client-seen {
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 /* ------------------------------ 三读数卡 ------------------------------ */
 
+/* UI-11：一主两辅。左列「已握手客户端」独占两行做大数，右列两枚 chip 堆叠；
+   DOM 顺序不变（并发 → 授权 → 握手），主次由 grid 显式落位表达，读屏顺序仍是完整三读数。 */
 .settings-ai-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
   gap: var(--space-3);
   margin-top: var(--space-4);
+}
+
+.settings-ai-metric--hero {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+}
+
+.settings-ai-metric--chip {
+  grid-column: 2;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: var(--space-2);
+  row-gap: 0;
+  padding: var(--space-2) var(--space-3);
 }
 
 .settings-ai-metric {
@@ -208,6 +257,39 @@
   color: var(--fg-dim);
   font-size: var(--fs-1); /* UI-28：说明文字 12px；11px 只留给徽标与计数 */
   line-height: 1.55;
+}
+
+/* UI-02：未知读数（—）不配「有数据」的受光井面，数字也退到弱色细体——
+   「没读到」与「读到 0」必须在扫视的同一帧里分得开，这是铁律 4 的视觉侧。 */
+.settings-ai-metric--unknown {
+  box-shadow: none;
+}
+
+.settings-ai-metric--unknown .settings-ai-metric-value {
+  color: var(--fg-dim);
+  font-weight: 500;
+}
+
+/* 主读数：全页唯一的 display 级数字（与欢迎页标题共用同一字阶 token）。
+   两枚 chip 则退到 --fs-2，并把说明压成跨两列的一行副句——数字与解释不抢同一层。 */
+.settings-ai-metric--hero .settings-ai-metric-value {
+  font-size: var(--fs-display);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.settings-ai-metric--hero .settings-ai-metric-hint {
+  align-self: end;
+}
+
+.settings-ai-metric--chip .settings-ai-metric-value {
+  font-size: var(--fs-2);
+}
+
+.settings-ai-metric--chip .settings-ai-metric-hint {
+  grid-column: 1 / -1;
+  font-size: var(--fs-0);
+  line-height: 1.4;
 }
 
 /* ------------------------------ 接入确认卡 ------------------------------ */
@@ -533,6 +615,117 @@
   margin-bottom: var(--space-2);
 }
 
+/* UI-07：空 diff 不再画一块空黑框，只给一行克制的说明。 */
+.settings-mcp .mcp-diff-empty {
+  margin: 0 0 var(--space-3);
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+}
+
+/* UI-15：审批区锁定——amber 左轨 + 沉井，明确「还没到这一步」，
+   不伪装成一份可操作的清单，也不给一个空按钮。 */
+.settings-mcp .mcp-approve-locked {
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  background: var(--surface-sunken);
+  border-left: 3px solid var(--amber);
+  border-radius: var(--radius-md);
+}
+
+.settings-mcp .mcp-approve-locked-hint {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: var(--fs-1);
+  line-height: 1.6;
+}
+
+/* UI-17：工具族分组。组头一行（族名 + 数量 + 本组批量动作），
+   组内是紧凑表格式清单——去原生圆点、行间发丝线，29 行不再铺成 29 张卡。 */
+.settings-mcp .mcp-tool-group {
+  margin-bottom: var(--space-3);
+}
+
+.settings-mcp .mcp-tool-group-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.settings-mcp .mcp-tool-group-head h4 {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--fs-1);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.settings-mcp .mcp-tool-group-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.settings-mcp .mcp-tool-group-actions button {
+  padding: var(--space-0) var(--space-2);
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  cursor: pointer;
+  transition: color var(--dur-1) var(--ease-out), border-color var(--dur-1) var(--ease-out);
+}
+
+.settings-mcp .mcp-tool-group-actions button:hover:not(:disabled) {
+  color: var(--accent-text);
+  border-color: var(--accent);
+}
+
+.settings-mcp .mcp-tool-group ul {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settings-mcp .mcp-tool-group ul > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-1);
+  line-height: 1.55;
+}
+
+.settings-mcp .mcp-tool-group ul > li:last-child {
+  border-bottom: 0;
+}
+
+/* 「可写盘 / 只读」是标记词，不是描述的一部分：推到行尾做小 chip，
+   写入档用 amber 提醒，只读档退到弱色。 */
+.settings-mcp .mcp-tool-tag {
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--fg-dim);
+  font-size: var(--fs-0);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.settings-mcp .mcp-tool-tag[data-write='true'] {
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--amber) 48%, var(--border));
+}
+
 /* 粘性操作条（Lane C 契约类 `mcp-approve-sticky`，DOM 由 approval-ui.tsx 挂）：
    审批清单很长时 CTA 钉在宿主滚动视口底，不随列表滚走。左右与底部各吃
    -12px 负 margin 抵消 `.settings-mcp > section` 的 padding——条拉满节宽、
@@ -776,6 +969,20 @@
   background: var(--accent-strong-active);
 }
 
+/* UI-23 次档：描边透明底。刻意压掉 `.settings-ai-onboard-actions button` 的
+   surface-overlay 实底——整页摊平后，三枚引导按钮不该再各带一块凸起。 */
+.settings-mcp .mcp-btn-secondary {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.settings-mcp .mcp-btn-secondary:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
 .settings-mcp .mcp-btn-danger {
   background: transparent;
   border-color: var(--wash-error-edge);
@@ -849,6 +1056,18 @@
 @container (width < 720px) {
   .settings-ai-metrics {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* 单列时撤销显式列落位（否则 chip 的 grid-column:2 会撑出隐式第二列）；
+     hero 仍钉在第 1 行——窄屏上主读数必须最先被看见，不能落到两枚 chip 后面。 */
+  .settings-ai-metric--hero {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .settings-ai-metric--chip {
+    grid-column: 1;
+    grid-row: auto;
   }
 
   .settings-ai-head {
