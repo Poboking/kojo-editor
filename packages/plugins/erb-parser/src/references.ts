@@ -1037,10 +1037,12 @@ export const UNDEFINED_TRY_CALL_CODE = 'erb.call-try-missing';
 /**
  * TRY 系"可选钩子找不到函数"的信息层装饰（D03 批②的第二问：这层信息要不要留？）。
  *
- * 与 `erbReferenceDecorations` **不同码、不同档**：severity 恒为 `info`、消息说清"引擎允许"，
- * 且**默认不接进任何 UI**（`plugin.ts` 只挂 `erbReferenceDecorations`，本函数是给后续车道
- * 显式开的一扇门；开了也不会稀释 warning 面，因为它带的是另一枚码）。
- * 索引缺席 ⇒ 一条不报（同 fail-open 纪律）。
+ * 与 `erbReferenceDecorations` **不同码、不同档**：severity 恒为 `info`、消息说清"引擎允许"。
+ * D04b（2026-11-07）起它由 {@link erbCallTargetDecorations} 与 warning 臂合成后交给
+ * `plugin.ts` 的 `erb-reference` 贡献上屏——**不稀释 warning 面**：两臂读同一趟扫描、
+ * `includeTry` 互斥，同一行只会有一档。
+ * 索引缺席 ⇒ 一条不报（fail-open 纪律在接线处那条 `if (!idx) return []` 上，
+ * 与 warning 臂共用同一道门）。
  */
 export function tryCallTargetDecorations(
   { path, text }: EditorDecoratePayload,
@@ -1086,6 +1088,42 @@ export function erbReferenceDecorations(
     code: UNDEFINED_CALL_CODE,
     source: 'erb-reference',
   }));
+}
+
+/**
+ * `ui.editor.decorator` 贡献 `erb-reference` 的**整条出口**（D04b，2026-11-07）：
+ * 两臂合成 —— warning 臂（{@link erbReferenceDecorations}，确凿缺陷）+ info 臂
+ * （{@link tryCallTargetDecorations}，TRY 系可选钩子缺失）。
+ *
+ * **为什么合成住在这一处而不是 `plugin.ts` 里各调各的**：语料闸
+ * （`call-targets.corpus.test.ts`）要能量"作者在编辑器里到底看得见几条信息档"，
+ * 量到的就必须是**上屏那一条链**；接线一份、闸里再拼一份就是第二判据，
+ * 表现是"语料闸说有 14 条、编辑器里一条也没有"（D04b 之前的真实状态：
+ * 信息档纯函数早已实现，却没有任何贡献调它 ⇒ 只有语料闸能看见）。
+ *
+ * **为什么不会双报**：两臂读的是同一趟 `scanUndefinedCallTargets`，"TRYCALL 目标缺失"
+ * 这条事实只有一个出口 —— `includeTry` 是**互斥开关**：
+ * - 关（warning 臂的默认档）⇒ TRY 行整条 `continue`（见 {@link scanUndefinedCallTargets}），
+ *   永远不会冒出 `erb.call-undefined`；
+ * - 开（info 臂）⇒ 只取 `isTry === true` 的条目，普通 `CALL` 的未定义目标一条都不进来。
+ * 于是同一行只可能有一条：TRY 缺失 ⇒ info 一条；`CALL` 缺失 ⇒ warning 一条。
+ *
+ * **顺序**：两臂各自按 (行, 列) 升序产出（同一趟可见行遍历），合并后一次稳定排序即全序
+ * ——去重在这里是空操作（两臂位置集合互斥，码也不同），故不重造 `offload.ts` 那套
+ * 去重键（那套的契约是"同位置同码留先到的"，这里没有可合并的同位项）。
+ */
+export function erbCallTargetDecorations(
+  payload: EditorDecoratePayload,
+  hasName: (upper: string) => boolean,
+): LineDecoration[] {
+  const warnings = erbReferenceDecorations(payload, hasName);
+  const infos = tryCallTargetDecorations(payload, hasName);
+  if (infos.length === 0) return warnings;
+  if (warnings.length === 0) return infos;
+  // 稳定排序（ES2019 起 `Array#sort` 保证稳定）：同位只可能跨臂出现，且两臂位置互斥
+  return [...warnings, ...infos].sort(
+    (a, b) => a.line - b.line || (a.startColumn ?? 0) - (b.startColumn ?? 0),
+  );
 }
 
 /**
