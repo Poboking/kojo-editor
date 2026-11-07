@@ -167,12 +167,15 @@ describe('structureDiagnostic · 波浪线与修复共用同一份形状', () =>
   const text = L('@AEGI', 'IF LOCAL', '\tPRINTL 甲');
   const issue = checkControlFlowStructure(text)[0]!;
 
-  it('诊断的四个字段逐一对应那条发现（码走 `structureIssueCode`，不复述第二遍）', () => {
+  it('诊断的五个字段：四个对应那条发现，第五个是产出贡献 id（D04）', () => {
     expect(structureDiagnostic(issue)).toEqual({
       line: issue.line,
       severity: 'error',
       message: issue.message,
       code: structureIssueCode(issue),
+      // `source` 不由发现推导，而是产出它的装饰器贡献 id 的逐字——两条路
+      // （波浪线 / 💡）都从这一个函数取形状，所以它**必须**在这里，不能盖在调用点
+      source: 'erb-structure',
     });
     expect(structureIssueCode(issue)).toBe('erb.unclosed-open');
   });
