@@ -37,6 +37,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import * as pluginApi from '@kojo/plugin-api';
 import {
   APP_FAILURE_CODES,
   DIAGNOSTIC_CODE_EXCLUSIONS,
@@ -306,6 +307,17 @@ describe('诊断码闭环：派生侧自检（别在空集合上自欺）', () =
     for (const roster of ROSTERS) {
       expect(roster.codes.length, `码表 ${roster.name} 是空的`).toBeGreaterThan(0);
     }
+  });
+
+  it('码表清单本身没有漏项：plugin-api 导出的每个 `*_CODES` 数组都在 ROSTERS 里', () => {
+    // ROSTERS 是"闸要覆盖哪些码表"的唯一声明处；漏收一张 ⇒ 闸 2（登记⊆产出）对那张表
+    // 整段失明。所以先钉住这份清单与契约层实际导出同步——加码表的人不改这里就红。
+    const listed = new Set(ROSTERS.map((roster) => roster.name));
+    const bag = pluginApi as unknown as Record<string, unknown>;
+    const missing = Object.keys(bag)
+      .filter((name) => name.endsWith('_CODES') && Array.isArray(bag[name]))
+      .filter((name) => !listed.has(name));
+    expect(missing, `这些码表还没被本闸覆盖（补进 ROSTERS）：${missing.join(', ')}`).toEqual([]);
   });
 });
 
