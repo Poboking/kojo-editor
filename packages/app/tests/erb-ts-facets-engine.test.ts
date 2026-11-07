@@ -1,8 +1,6 @@
 import { afterEach, afterAll, describe, expect, it } from 'vitest';
-import { ERB_SEMANTIC_FACET, ERB_SEMANTIC_LEGEND, encodeErbStructureTokens } from '../src/monaco/tree-sitter/erb-semantic';
-import { ERB_STRUCTURE_RUNTIME } from '../src/monaco/tree-sitter/erb-runtime';
+import { encodeErbStructureTokens } from '../src/monaco/tree-sitter/erb-semantic';
 import { lostStructureSpans } from '../src/monaco/tree-sitter/structure-runtime';
-import { erbEnterRulePatterns } from '@kojo/erb-lang/enter';
 import {
   FIXTURE,
   disposeAllEngines,
@@ -13,9 +11,14 @@ import {
 } from './helpers/erb-ts-facets-kit';
 
 /**
- * ERB-TS-FULL 面②：引擎的语义 / 缩进 / 折叠 / 诊断四面回话（真 wasm）。
+ * ERB-TS-FULL 面②：引擎的语义 / 缩进 / 折叠四面回话（真 wasm）。
  * 拆文件批（2026-10-28）：引擎的 `afterEach` 真 teardown 从模块级挪到每面各自注册——
  * 同一份 worker 里攒十几台 StructureEngine 就是 `Fatal process out of memory: Zone` 的主凶。
+ *
+ * 2026-11-07 再拆第二刀：结构诊断 / 捕获注入 / 运行时常量七例搬到
+ * `erb-ts-facets-engine-structure.test.ts`。`web-tree-sitter` 0.27 的 `Language` 没有 free
+ * API ⇒ 装载次数（不是引擎台数）才是阈值；本枚 8 次、那一枚 6 次（详见 PITFALLS §249）。
+ * 用例名与断言一字未改，两枚合计与拆前逐字相等。
  */
 
 afterEach(disposeAllEngines);
@@ -160,61 +163,5 @@ describe('ERB 引擎 facets · 真 wasm 的四面回话', () => {
       faultRow: 2,
     });
     console.log(`[erb-ts-facets] syntax unclosed-block=${JSON.stringify(syntax.faults[0])}`);
-  });
-
-  it('结构诊断：嵌套错配 ⇒ ERROR 一条（不逐子节点重复报）', async () => {
-    const { replies } = await runEngine('IF X\n  SELECTCASE Y\n  ENDIF\n');
-    const syntax = lastReply(replies, 'syntax');
-    if (!syntax) throw new Error('没有 syntax 回话');
-    expect(syntax.faults).toHaveLength(1);
-    expect(syntax.faults[0]!.kind).toBe('unexpected-token');
-  });
-
-  it('结构诊断：[SKIPSTART] 死区里的坏行不报（体内不解析）', async () => {
-    const { replies } = await runEngine('[SKIPSTART]\nIF X\n"未闭合\n[SKIPEND]\n');
-    const syntax = lastReply(replies, 'syntax');
-    if (!syntax) throw new Error('没有 syntax 回话');
-    expect(syntax.faults).toEqual([]);
-  });
-
-  it('捕获表由语言入口注入：表外捕获报一次，其余照常着色', async () => {
-    const { replies } = await runEngine('IF X\nENDIF\n', {
-      highlightsQuery: '(if_line) @mystery\n(comment_line) @comment\n',
-    });
-    const errors = errorReplies(replies).filter((e) => e.capability === 'semantic');
-    expect(errors).toHaveLength(1);
-    expect(errors[0]!.message).toContain('@mystery');
-    const semantic = lastReply(replies, 'semantic');
-    expect(semantic?.tokens.every((t) => t.tier === 'role.comment')).toBe(true);
-  });
-
-  it('`@none` 是有意不着色的哨兵：不产生回落告警', async () => {
-    const { replies } = await runEngine('IF X\nENDIF\n', { highlightsQuery: '(if_line) @none\n' });
-    expect(errorReplies(replies)).toEqual([]);
-    const semantic = lastReply(replies, 'semantic');
-    expect(semantic?.tokens).toEqual([]);
-  });
-
-  it('四条腿各自缺省：没有 indents 查询时不出 indent 回话，也不报错', async () => {
-    const { replies } = await runEngine('IF X\nENDIF\n', { indentsQuery: undefined });
-    expect(replies.some((r) => r.type === 'indent')).toBe(false);
-    expect(errorReplies(replies)).toEqual([]);
-  });
-
-  it('ERB_STRUCTURE_RUNTIME 声明 semantic + baseIndentPatterns 两面', () => {
-    expect(ERB_STRUCTURE_RUNTIME.semantic).toBe(ERB_SEMANTIC_FACET);
-    expect(typeof ERB_STRUCTURE_RUNTIME.baseIndentPatterns).toBe('function');
-    expect(ERB_STRUCTURE_RUNTIME.semantic?.legend).toBe(ERB_SEMANTIC_LEGEND);
-    expect(ERB_STRUCTURE_RUNTIME.grammarWasmUrl).toContain('tree-sitter-erb.wasm');
-  });
-
-  it('ERB_STRUCTURE_RUNTIME 的基底接 erb-enter 既有层级（含 SIF / 注释两格）', () => {
-    const base = ERB_STRUCTURE_RUNTIME.baseIndentPatterns!();
-    const reference = erbEnterRulePatterns();
-    expect(base.indentOnEnter.map((r) => r.source)).toEqual(reference.indentOnEnter.map((r) => r.source));
-    expect(base.increaseIndentPattern.source).toBe(reference.increaseIndentPattern.source);
-    expect(base.decreaseIndentPattern.source).toBe(reference.decreaseIndentPattern.source);
-    expect(base.indentNextLinePattern?.source).toBe(reference.indentNextLinePattern?.source);
-    expect(base.unIndentedLinePattern?.source).toBe(reference.unIndentedLinePattern?.source);
   });
 });

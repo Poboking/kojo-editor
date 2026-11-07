@@ -58,10 +58,6 @@ export function structureDiagnostic(issue: ErbStructureIssue): LineDecoration {
     severity: issue.severity ?? 'error',
     message: issue.message,
     code: structureIssueCode(issue),
-    // 诊断来源＝产出它的 `ui.editor.decorator` 贡献 id（D04）。**必须住在这里**：
-    // 装饰器与 💡 动作两条路都从这里取形状，写在调用点就等于只给一路盖章——
-    // B9 的"逐字段相等"当场破（2026-11-07 全量跑实测两红）。
-    source: 'erb-structure',
   };
 }
 
