@@ -261,9 +261,9 @@ export function scanRefsNamesOf(
 export function erbStructureDecorations({ path, text }: EditorDecoratePayload): LineDecoration[] {
   if (!isErbDialectPath(path) || text.length === 0) return [];
   // 逐字段的形状只住在 `structureDiagnostic` 一处：💡 那边给出的"我修的是哪条诊断"
-  // 用的就是同一个函数 ⇒ 波浪线与快速修复不可能对不上（B9 的关联键全靠它）
-  // `source` = 产出这条发现的装饰器贡献 id（`plugin.ts` 那条 `ui.editor.decorator` 的 `id` 逐字）
-  return checkStructure(text, path).map((issue) => ({ ...structureDiagnostic(issue), source: 'erb-structure' }));
+  // 用的就是同一个函数 ⇒ 波浪线与快速修复不可能对不上（B9 的关联键全靠它）。
+  // `source`（产出贡献的 id）也住在那里——盖在调用点就等于只给装饰器一路盖章。
+  return checkStructure(text, path).map((issue) => structureDiagnostic(issue));
 }
 
 /**
