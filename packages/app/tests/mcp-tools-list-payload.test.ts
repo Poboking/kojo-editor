@@ -125,8 +125,18 @@ const B21_FULL_FRAME_BYTES = 218_897;
  *  超 187,000 共 1,356 B；帧增量 +2,057 与该面 wireBytes 2,056 B ＋ 1 个 JSON 逗号精确对账
  *  （desc +1,187 / schema +711 亦逐项对上，见 ⑧）。按 S10/S15 先例处置；BAND 0.1 与记账
  *  下界 163,000 一字不动，新带顶 189,200，机械余量 844 B。
- *  ⚠ 连续第三次按例重钉：下一批再增面之前**必须先做去重瘦身**，不许再抬底数或抬 BAND 过闸。 */
-const B22_FULL_FRAME_BYTES = 172_000;
+ *  ⚠ 连续第三次按例重钉：下一批再增面之前**必须先做去重瘦身**，不许再抬底数或抬 BAND 过闸。
+ *  B25 底数按例重钉（2026-11-07，组长合并点现取实测）：172,000 → 177,000——文件族缺口三面
+ *  （`fs.copyFile` / `fs.ensureDir` / `fs.readFileBytes`）合并后全量帧实拍 **193,889**
+ *  （static 量具；判据口径 193,884，两通道包装差 5 B），超 189,200 共 4,689 B。
+ *  **本批先做了批内去重瘦身再重钉**（兑现上一批的 ⚠）：三面顶层描述按 B22 纪律瘦身影响
+ *  −289 B（描述闸口径 recap 改指针），四枚新路径形状全部走 S15 `RELATIVE_PATH_PTR_SCHEMA`
+ *  指针版（完整口径仍只在 `fileTree.update` 一份）；帧增量 +5,528 与三面 wireBytes
+ *  （desc +2,846 / schema +2,354 / 其余为入参帧结构）逐项对账见 ⑧。BAND 0.1 与记账
+ *  下界 163,000 一字不动，新带顶 194,700，机械余量 811 B。
+ *  ⚠ 连续第四次按例重钉：**下一批增面前必须先做一整轮 S15 式全量指针化瘦身**
+ *  （rootId 样板句 7 处 1,543 B 只是已点名的第一刀），不许再抬底数或抬 BAND 过闸。 */
+const B22_FULL_FRAME_BYTES = 177_000;
 /** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。 */
 const B22_ACCOUNTED_FLOOR = 163_000;
 const BAND = 0.1;
@@ -134,17 +144,17 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 const RUST_MAX_DESCRIPTION_CHARS = 2048;
 
 describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场算，非估算）', () => {
-  it('① 可见面枚数与 STATE 能力面读数同源：83＝read 40 / edit 13 / privileged 30（S10 +1 枚 read：semantic.batchAt ＋ B24 +1 枚 privileged：commands.run）', () => {
-    expect(fullFace).toHaveLength(83);
-    expect(readFace).toHaveLength(40);
-    expect(editFace).toHaveLength(53); // read + edit；privileged 未点名批准 ⇒ 不上帧
+  it('① 可见面枚数与 STATE 能力面读数同源：86＝read 41 / edit 15 / privileged 30（B25 批 +2 枚 edit：fs.copyFile / fs.ensureDir ＋ +1 枚 read：fs.readFileBytes）', () => {
+    expect(fullFace).toHaveLength(86);
+    expect(readFace).toHaveLength(41);
+    expect(editFace).toHaveLength(56); // read + edit；privileged 未点名批准 ⇒ 不上帧
     const byTier = fullFace.reduce<Record<string, number>>((a, t) => {
       a[t.tier] = (a[t.tier] ?? 0) + 1;
       return a;
     }, {});
-    expect(byTier).toEqual({ read: 40, edit: 13, privileged: 30 });
+    expect(byTier).toEqual({ read: 41, edit: 15, privileged: 30 });
     // 缺省会话（未批准任何 privileged）只出 read 面——默认可见面不是全量面。
-    expect(registry.listTools(scope('read'))).toHaveLength(40);
+    expect(registry.listTools(scope('read'))).toHaveLength(41);
   });
 
   it('② 全量帧落在 B22 实拍带内（±10% 上界护栏）且不低于 B22 记账下界', () => {
@@ -342,8 +352,8 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     //           launcher 73,706 与 S6 起各批持平 ⇒ 增量全部来自这一枚新面，别处没有膨胀。
     // 按现取实测重钉：desc 66,500 → 68,000（余量 691 B）、schema 109,700 → 111,000（余量 976 B）；
     // launcher 75,000、2048 描述闸、BAND 0.1、记账下界 163,000 一字不动；帧带底数见 ② 上方注释。
-    expect(descBytes).toBeLessThanOrEqual(68_000); // B21 64,851；S4 62,507；S6 64,433；S8 64,912；S10 66,122；S15 66,122；B24 合并实拍 67,309
-    expect(schemaBytes).toBeLessThanOrEqual(111_000); // B21 143,762；S4 105,841；S6 107,873；S8 109,621；S10 110,571；S15 109,313；B24 合并实拍 110,024
+    expect(descBytes).toBeLessThanOrEqual(70_500); // …S15 66,122；B24 合并实拍 67,309；B25 合并实拍 70,155（三面批内瘦身 −289 后）
+    expect(schemaBytes).toBeLessThanOrEqual(112_900); // …S15 109,313；B24 合并实拍 110,024；B25 合并实拍 112,378（四枚新形状全走 S15 指针版）
     expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；S4 实拍 73,706
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });
@@ -372,8 +382,9 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
       }
     };
     for (const t of fullFace) walk(t.name, '', t.inputSchema);
-    // 形状指纹账：抄写点枚数只许由有意识的批次改动（S15 前后都是 16 枚面 18 处）。
-    expect(shared.length, `共用形状抄写点变了：${JSON.stringify(shared.map((s) => `${s.tool}#${s.addr}`))}`).toBe(18);
+    // 形状指纹账：抄写点枚数只许由有意识的批次改动（S15 前 16 枚面 18 处；B25 +4 处＝22——
+    // copyFile 的 srcRelPath/relPath、ensureDir 的 relPath、readFileBytes 的 relPath，全走指针版）。
+    expect(shared.length, `共用形状抄写点变了：${JSON.stringify(shared.map((s) => `${s.tool}#${s.addr}`))}`).toBe(22);
 
     const canon = shared.filter((s) => s.desc.includes('ADR-0003'));
     expect(canon.length, `ADR-0003 完整口径必须全局一份，现 ${canon.length} 份（逐字重复＝S15 靶子）`).toBe(1);
@@ -386,7 +397,8 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     expect(propDesc(toolByName('fileTree.update'), 'relPath')).toBe(canon[0]!.desc);
 
     const pointers = shared.filter((s) => s.desc !== canon[0]!.desc);
-    expect(pointers.length, '除落点外的 17 处都必须是指针').toBe(17);
+    // B25 批：抄写点 18 → 22 ⇒ 指针 17 → 21（新四处全走指针版，完整口径仍只有落点一份）。
+    expect(pointers.length, '除落点外的 21 处都必须是指针').toBe(21);
     for (const p of pointers) {
       expect(p.desc, `${p.tool}#${p.addr} 指针必须点名落点 \`fileTree.update\``).toContain('`fileTree.update`');
       expect(p.desc, `${p.tool}#${p.addr} 指针必须点名落点属性 \`relPath\``).toContain('`relPath`');

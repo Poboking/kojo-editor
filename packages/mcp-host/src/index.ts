@@ -1238,12 +1238,12 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fs.copyFile',
     description:
-      'Copy one file to another path inside the authorized project root (edit tier, mutating; B25). Both `srcRelPath` (source) and `relPath` (destination) are project-root-relative and go through the SAME gate as fs.readFile (schema rejects absolute paths, drive letters and ".."; the execution layer re-checks against approvedRoots and the kernel write domain). Backed by the server-side kernel.io.copyFile primitive (Rust copy_file asserts the writable domain on the destination only) — never a second write channel assembled from read+write. Preflight is ONE batch stat_files of [source, destination]; a missing source / a directory source / an identical source-and-destination are refused loudly; an existing destination is refused unless `overwrite:true` is given explicitly (and an open editor buffer with unsaved changes at the destination is refused before any write). The reply carries the post-write stat receipt (exists/size/mtimeMs/isDirectory), a source-size reconciliation, the broadcast kind and a bufferState reading. Optional `rootId` selects one explicitly approved persistent workspace root (enumerate via io.workspaceRoots; human approval required).',
+      'Copy one file to another path inside the authorized project root (edit tier, mutating; B25). Both `srcRelPath` (source) and `relPath` (destination) use the fs.readFile path gate (schema rejects absolute/drive-letter/".."; the execution layer re-checks approvedRoots and the kernel write domain). Backed by the server-side kernel.io.copyFile primitive (Rust asserts the writable domain on the destination only) — never a read+write second channel. Preflight is ONE batch stat_files of [source, destination]; missing source / directory source / identical ends are refused loudly; an existing destination is refused unless `overwrite:true` (and a dirty editor buffer at the destination is refused before any write). The reply carries the post-write stat receipt, a source-size reconciliation, the broadcast kind and a bufferState reading. Optional `rootId` selects one explicitly approved persistent workspace root (enumerate via io.workspaceRoots; human approval required).',
     inputSchema: {
       type: 'object',
       properties: {
-        srcRelPath: RELATIVE_PATH_SCHEMA,
-        relPath: RELATIVE_PATH_SCHEMA,
+        srcRelPath: RELATIVE_PATH_PTR_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         overwrite: { type: 'boolean', description: 'Allow replacing an existing destination (default false). An open buffer with unsaved changes is still refused.' },
         rootId: ROOT_ID_SCHEMA,
       },
@@ -1256,11 +1256,11 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fs.ensureDir',
     description:
-      'Recursively ensure a directory exists inside the authorized project root (edit tier, mutating; B25). `relPath` is project-root-relative (same gate as fs.readFile). Unlike fileTree.create kind:directory — which is an EXCLUSIVE, non-recursive create that refuses an existing entry — fs.ensureDir is idempotent: an existing directory is reported as alreadyExisted with ZERO write primitives called, while a first creation reports segmentsCreated (the missing path segments) and calls the recursive kernel.io.ensureDir primitive once. A same-named regular file is refused (never deletes anything to make room). Preflight is ONE batch stat_files; the reply carries a post-write isDirectory receipt. Refuses (WRITE_DISABLED) when approvedRoots or the kernel write domain do not cover the target. Optional `rootId` selects one explicitly approved persistent workspace root (enumerate via io.workspaceRoots; human approval required).',
+      'Recursively ensure a directory exists inside the authorized project root (edit tier, mutating; B25). `relPath` uses the fs.readFile path gate. Unlike fileTree.create kind:directory — an EXCLUSIVE, non-recursive create that refuses an existing entry — fs.ensureDir is idempotent: an existing directory reports alreadyExisted with ZERO write primitives called; a first creation reports segmentsCreated (missing path segments) and calls recursive kernel.io.ensureDir once. A same-named regular file is refused (never deletes anything to make room). Preflight is ONE batch stat_files; the reply carries a post-write isDirectory receipt. WRITE_DISABLED when approvedRoots or the kernel write domain do not cover the target. Optional `rootId` selects one explicitly approved persistent workspace root (enumerate via io.workspaceRoots; human approval required).',
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
         rootId: ROOT_ID_SCHEMA,
       },
       required: ['relPath'],
@@ -1272,11 +1272,11 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fs.readFileBytes',
     description:
-      'Read ONE WHOLE SMALL FILE as base64 inside the authorized project root (read-only; B25). `relPath` is project-root-relative (same gate as fs.readFile); this surface does NOT accept rootId, offset, limit, cursor or any paging argument — it is deliberately the root-relative subset of read_file_bytes_raw, NOT the arbitrary-absolute-path ipc::Response binary frame (that half stays deferred). Backed by the Rust read_file_bytes primitive, whose base64 text is byte-for-byte identical to the raw bytes. A hard 48000-byte ceiling keeps the base64 payload (64000 chars) under the host untrusted-string sanitizer gate (65536) so nothing is silently trimmed; an oversized file is refused with INVALID_ARGS and batching guidance instead of being truncated. The reply carries bytesReturned/bytesTotal reconciled against a preflight stat_file, truncated:false, encoding:base64, maxBytes:48000, fsFreshness and via. A missing file / directory / malformed or size-mismatched payload is an explicit failure, never a stat number passed off as read bytes.',
+      'Read ONE WHOLE SMALL FILE as base64 inside the authorized project root (read-only; B25). `relPath` uses the fs.readFile path gate; this surface does NOT accept rootId, offset, limit, cursor or any paging argument — deliberately the root-relative subset of read_file_bytes_raw, NOT the arbitrary-absolute-path ipc::Response binary frame (that half stays deferred). Backed by the Rust read_file_bytes primitive, whose base64 text is byte-for-byte identical to the raw bytes. A hard 48000-byte ceiling keeps the base64 payload (64000 chars) under the host untrusted-string sanitizer gate (65536) so nothing is silently trimmed; an oversized file is refused with INVALID_ARGS and batching guidance instead of being truncated. The reply carries bytesReturned/bytesTotal reconciled against a preflight stat_file, truncated:false, encoding:base64, maxBytes:48000, fsFreshness and via. A missing file / directory / malformed or size-mismatched payload is an explicit failure, never a stat number passed off as read bytes.',
     inputSchema: {
       type: 'object',
       properties: {
-        relPath: RELATIVE_PATH_SCHEMA,
+        relPath: RELATIVE_PATH_PTR_SCHEMA,
       },
       required: ['relPath'],
       additionalProperties: false,

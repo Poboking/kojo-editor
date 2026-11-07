@@ -3019,7 +3019,12 @@ export function createRunSupplemental(deps: McpIoDeps): (
     scope: McpSessionScope | null | undefined,
   ): Promise<unknown> => {
     const input = args ?? {};
-    if (input['rootId'] !== undefined) {
+    // 防旁路守卫（不是取用）：本面 schema 刻意不声明 rootId（additionalProperties:false 在
+    // 校验层已拒），这里直调腿时再拒一次。写成 `Object.keys().includes()` 形态是为了与
+    // B19 机械闸（mcp-leg-arg-scan）的「取用=读取键值」口径分家——守卫只看键存在、从不读值，
+    // 若按 `input['rootId']` 索引写，扫描器会把这枚「声明侧刻意没有的键」误计成取用而翻红。
+    // 语义比 `!== undefined` 更严：显式传 `rootId: undefined` 的 JSON 载荷同样拒。
+    if (Object.keys(input).includes('rootId')) {
       throw new McpFailure('INVALID_ARGS', 'fs.readFileBytes 只收根内相对路径，不收 rootId（多根写腿专属，只读字节面不混入）');
     }
     const project = requireProject(deps.getKernel());

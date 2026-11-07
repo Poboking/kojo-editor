@@ -6124,6 +6124,211 @@ fn patch_lines_is_registered_multiroot_write_leg_and_edit_tier() {
     );
 }
 
+/* ============================ B25：文件族缺口三面 ============================ */
+
+/// B25 批（LaneAQ→组长落地，2026-11-07）：`fs.copyFile` 端点回归。
+///
+/// 与 S6 `fileTree.patchLines` 同型同尺：
+/// ① 点名进 `EDIT_TOOLS_EXACT` 后，read 会话直调 ⇒ E_TIER_DENIED（消息带工具名）；
+/// ② 每条拒绝恰写一条 Denied 审计（note = 原始码），绝不静默；
+/// ③ 拒绝在 emit 之前：桥从未被调 ⇒ read 会话零批准复制不了任何文件；
+/// ④ 精确名批准语义零放宽：列入 approvedTools 后同一调用照旧走桥并成功，
+///    且成功批次在审计台账记一条 Ok（tool 精确点名 ⇒ 可追账）。
+#[test]
+fn e2e_tools_call_denies_fs_copy_file_from_read_session() {
+    const TOOL: &str = "fs.copyFile";
+    let s = TestServer::start();
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","id":940,"method":"tools/call","params":{{"name":"{}","arguments":{{"srcRelPath":"docs/a.kojo","relPath":"docs/b.kojo"}}}}}}"#,
+        TOOL
+    );
+    let r = mcp_post(s.port, &s.token, &body);
+    assert_eq!(r.status, 200, "{TOOL} 必须是 JSON-RPC 错误帧而非传输层失败");
+    let v = rpc_json(&r);
+    assert_eq!(v["id"], json!(940));
+    assert_eq!(v["error"]["code"], json!(-32000), "{TOOL}");
+    assert_eq!(
+        v["error"]["data"]["code"],
+        json!("E_TIER_DENIED"),
+        "{TOOL} 未按 Edit 档拒（缺席点名 ⇒ read 会话零批准即可复制文件）"
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(TOOL),
+        "{TOOL} 拒绝消息必须带上被拒的工具名"
+    );
+    // ② 恰一条 Denied 审计（本用例只发这一枚 ⇒ 恰一条，note 即原始码）。
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(denied.len(), 1, "read 会话直调应恰写一条 Denied 审计");
+    assert!(
+        denied
+            .iter()
+            .any(|e| e.tool == TOOL && e.note.as_deref() == Some("E_TIER_DENIED")),
+        "{TOOL} 缺一条 E_TIER_DENIED 审计"
+    );
+    // ③ 拒绝在 emit 之前：桥从未被调。
+    assert!(
+        s.rx.try_recv().is_err(),
+        "read 会话直调 fs.copyFile 仍被转给 WebView ⇒ 后门复现"
+    );
+
+    // ④ 精确名批准语义零放宽：列入后同一调用照旧走桥并成功，审计台账记一条 Ok。
+    scope::approve(
+        s.dir.path(),
+        "loopback-client",
+        McpTier::Read,
+        vec![],
+        vec![TOOL.to_string()],
+    )
+    .unwrap();
+    reload_scope_mirror(&s);
+    let port = s.port;
+    let token = s.token.clone();
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":941,"method":"tools/call","params":{{"name":"{}","arguments":{{"srcRelPath":"docs/a.kojo","relPath":"docs/b.kojo"}}}}}}"#,
+        TOOL
+    );
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.params["name"], json!(TOOL));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(
+                json!({"content": [{"type": "text", "text": "{\"copied\":true}"}]}),
+            ),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r2 = worker.join().unwrap();
+    let v2 = rpc_json(&r2);
+    assert!(
+        v2["error"].is_null(),
+        "精确名批准后 fs.copyFile 仍被拒 ⇒ 收口误伤批准语义"
+    );
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let ok: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Ok)
+        .collect();
+    assert_eq!(ok.len(), 1, "批准后成功复制应恰记一条 Ok 审计（可追账）");
+    assert_eq!(ok[0].tool, TOOL, "Ok 审计必须精确点名工具");
+}
+
+/// B25 批：`fs.ensureDir` 端点回归（同尺 deny 腿：E_TIER_DENIED + 恰一条 Denied 审计 + 桥零触达）。
+#[test]
+fn e2e_tools_call_denies_fs_ensure_dir_from_read_session() {
+    const TOOL: &str = "fs.ensureDir";
+    let s = TestServer::start();
+    let body = format!(
+        r#"{{"jsonrpc":"2.0","id":942,"method":"tools/call","params":{{"name":"{}","arguments":{{"relPath":"docs/newdir"}}}}}}"#,
+        TOOL
+    );
+    let r = mcp_post(s.port, &s.token, &body);
+    assert_eq!(r.status, 200, "{TOOL}");
+    let v = rpc_json(&r);
+    assert_eq!(v["error"]["code"], json!(-32000), "{TOOL}");
+    assert_eq!(
+        v["error"]["data"]["code"],
+        json!("E_TIER_DENIED"),
+        "{TOOL} 未按 Edit 档拒（缺席点名 ⇒ read 会话零批准即可递归建目录）"
+    );
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(TOOL),
+        "{TOOL} 拒绝消息必须带上被拒的工具名"
+    );
+    let rows = audit::query(s.dir.path(), 50, None).unwrap();
+    let denied: Vec<&AuditEntry> = rows
+        .iter()
+        .filter(|e| e.outcome == AuditOutcome::Denied)
+        .collect();
+    assert_eq!(denied.len(), 1, "read 会话直调应恰写一条 Denied 审计");
+    assert!(
+        denied
+            .iter()
+            .any(|e| e.tool == TOOL && e.note.as_deref() == Some("E_TIER_DENIED")),
+        "{TOOL} 缺一条 E_TIER_DENIED 审计"
+    );
+    assert!(
+        s.rx.try_recv().is_err(),
+        "read 会话直调 fs.ensureDir 仍被转给 WebView ⇒ 后门复现"
+    );
+}
+
+/// B25 批：`fs.readFileBytes` 刻意不收 `rootId`——端点级防旁路复验。
+///
+/// 该面不在 `MULTIROOT_WRITE_TOOLS` ⇒ 带 `rootId` 的调用在端点被 `INVALID_PARAMS`
+/// 显式拒（`check_root_id_param` 的名单闸），桥零触达；参数级 tier 表里它是 read 档，
+/// 绝不因为带 relPath 就被抬进写腿档。
+#[test]
+fn e2e_tools_call_rejects_fs_read_file_bytes_root_id_param() {
+    const TOOL: &str = "fs.readFileBytes";
+    let s = TestServer::start();
+    let call = format!(
+        r#"{{"jsonrpc":"2.0","id":943,"method":"tools/call","params":{{"name":"{}","arguments":{{"relPath":"docs/a.kojo","rootId":"{ROOT_A}"}}}}}}"#,
+        TOOL
+    );
+    let r = mcp_post_as(s.port, &s.token, "harness-rfb", &call);
+    assert_eq!(r.status, 200);
+    assert_eq!(
+        rpc_error_code(&r),
+        "E_INVALID_PARAMS",
+        "{TOOL} 不在 MULTIROOT_WRITE_TOOLS ⇒ rootId 必须被端点名单闸拒收"
+    );
+    assert!(
+        rpc_json(&r)["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(TOOL),
+        "拒绝消息必须点名工具（readFileBytes 不接受 rootId）"
+    );
+    assert!(
+        s.rx.try_recv().is_err(),
+        "rootId 非法使用不许触达桥"
+    );
+    // 不带 rootId 的同面调用不被这道闸误伤（read 档面照旧走到桥）。
+    let port = s.port;
+    let token = s.token.clone();
+    let req = format!(
+        r#"{{"jsonrpc":"2.0","id":944,"method":"tools/call","params":{{"name":"{}","arguments":{{"relPath":"docs/a.kojo"}}}}}}"#,
+        TOOL
+    );
+    let worker = std::thread::spawn(move || mcp_post(port, &token, &req));
+    let payload = s.next_payload();
+    assert_eq!(payload.method, "tools/call");
+    assert_eq!(payload.params["name"], json!(TOOL));
+    server::deliver(
+        &s.state,
+        McpRespondArgs {
+            id: payload.id,
+            ok: true,
+            result: Some(json!({
+                "content": [{"type": "text", "text": "{\"bytesReturned\":3,\"encoding\":\"base64\"}"}]
+            })),
+            error: None,
+        },
+    )
+    .unwrap();
+    let r2 = worker.join().unwrap();
+    assert!(
+        rpc_json(&r2)["error"].is_null(),
+        "不带 rootId 的 readFileBytes 不许被端点误拦"
+    );
+}
+
 /* ============================ B24：命令执行面 commands.run ============================ */
 
 /// 档位真源同批：名字进 `PRIVILEGED_EXACT` ⇒ `host_required_tier` 判 privileged。

@@ -136,6 +136,13 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   // MCP-PERF-S4（LaneK，2026-11-07）：行区间读——腿读 relPath（resolveWithinRoot）+ 可选 rootId
   // （resolveWriteRoot 三道拦截）+ startLine/endLine（1 基闭区间；不走共用分页闸 ⇒ 无游标别名）。
   'fs.readRange': ['relPath', 'rootId', 'startLine', 'endLine'],
+  // B25（LaneAQ→组长落地，2026-11-07）：文件族缺口三面。
+  // copyFile：双路径（resolveWithinRoot 各一次）+ overwrite 开关 + rootId（resolveWriteRoot）；
+  // 脏缓冲反查走注入 seam / livePanes（不取用入参键）。readFileBytes 的 rootId 是防旁路守卫
+  // （只看键存在、从不读值，schema 刻意不声明 ⇒ 不算取用，详见腿内注释）。
+  'fs.copyFile': ['srcRelPath', 'relPath', 'overwrite', 'rootId'],
+  'fs.ensureDir': ['relPath', 'rootId'],
+  'fs.readFileBytes': ['relPath'],
   'fs.stat': ['relPath'],
   'io.listDir': ['relPath', ...SHARED_LIST], // relPath + paginateByCursor(args)
   'io.workspaceRoots': SHARED_LIST,

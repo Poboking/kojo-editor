@@ -883,6 +883,7 @@ export type SiteKind =
   | 'ctx-handoff'
   | 'ctx-member'
   | 'presence'
+  | 'introspect'
   | 'unresolved';
 
 export interface ScanSite {
@@ -1067,6 +1068,16 @@ function classify(r: Run, file: FileScan, i: number, regionEnd: number, bind: Bi
   if (atom.dotAt >= 0) return classifyMember(r, file, i, atom.dotAt, bind, atom.end);
   if (atom.parenIdx >= 0) {
     const pc = close[atom.parenIdx]!;
+    // B25 落地批：`Object.keys(x)` / `Object.hasOwn(x,'k')` / `Object.getOwnPropertyNames(x)`
+    // 是**形状内省**——只碰键名、从不读值 ⇒ 既不构成取用、也不算整只交接。
+    // （fs.readFileBytes 的防旁路守卫用 `Object.keys(input).includes('rootId')` 表达
+    //   「守卫不取用」；此前这里被误报成 unresolved。values/entries 会遍历值 ⇒ 仍按未知处理。）
+    const cname = toks[atom.parenIdx - 1]?.v;
+    const objName = toks[atom.parenIdx - 3]?.v;
+    if (cname && objName === 'Object' && OBJECT_INTROSPECTION_STATICS.has(cname)) {
+      site(r, file, i, 'introspect', snippet(file, i, atom.end), [], `Object.${cname}（形状内省，不读值 ⇒ 非取用）`);
+      return pc;
+    }
     const seg = siblingOf(toks, atom.parenIdx, pc, atom.end);
     if (seg && seg[1] === atom.end) {
       const target = resolveCallee(r, file, atom.parenIdx);
@@ -1267,6 +1278,9 @@ interface CalleeTarget {
  *  - `G(deps)(…)`：把 `G(deps)` 当工厂，取它「函数体只有一条 return 箭头」的那条箭头；
  *  - `EXPR.m(…)`：成员交接 ⇒ 只认挂账（`cfg.handoffs`），挂账给出目标文件 + 符号。
  */
+/** `Object.*` 里只碰键名、不读值的形状内省静态（B25 落地批新增识别；values/entries 遍历值 ⇒ 刻意不收）。 */
+const OBJECT_INTROSPECTION_STATICS: ReadonlySet<string> = new Set(['keys', 'hasOwn', 'getOwnPropertyNames']);
+
 function resolveCallee(r: Run, file: FileScan, parenOpen: number): CalleeTarget | null {
   const toks = file.toks;
   const before = parenOpen - 1;
