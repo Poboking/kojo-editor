@@ -16,8 +16,10 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  APP_FAILURE_CODES,
   DIAGNOSTIC_CODE_EXCLUSIONS,
   DIAGNOSTIC_LABELS,
+  ERB_STRUCTURE_DIAGNOSTIC_CODES,
   KOJO_STRUCTURE_SYNTAX_CODES,
   NATIVE_CALL_CODES,
   NATIVE_EXPR_CODES,
@@ -83,7 +85,7 @@ const CONVENTION_RULE_IDS: readonly string[] = [
   SUGAR_STATIC_CONVENTIONS_RULE_ID,
 ];
 
-/** 全部闭集码（去重后即为「必须有条目」的清单） */
+/** 全部闭集码（去重后即为「必须有条目」的清单；D04a 起含 ERB 结构层与工具链失败码） */
 const ALL_CODES: readonly string[] = [
   ...SUGAR_DIAGNOSTIC_CODES,
   ...NATIVE_STRUCTURE_CODES,
@@ -91,6 +93,8 @@ const ALL_CODES: readonly string[] = [
   ...NATIVE_CALL_CODES,
   ...NATIVE_SEMANTIC_CODES,
   ...KOJO_STRUCTURE_SYNTAX_CODES,
+  ...ERB_STRUCTURE_DIAGNOSTIC_CODES,
+  ...APP_FAILURE_CODES,
   ...CONVENTION_RULE_IDS,
 ];
 

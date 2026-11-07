@@ -297,6 +297,26 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   'kojo.unterminated-interp': { name: '插值花括号没合上', detail: '插值要写在同一行内，左右花括号都得有。' },
   'kojo.unexpected-token': { name: '这一行读不通', detail: '结构解析在这一行读不出成句的写法，通常是上一行缺了收束词、右引号或右花括号。' },
 
+  /* --- ERB 结构层（CST 错误恢复 + 停用区配对；波浪线，悬浮里给码） --- */
+  'erb.unclosed-block': { name: '块没有等到收束', detail: '这一行开的块一直开到文件结尾或函数边界，没等到它的收束语句（如 ENDIF）；请在收回缩进的那一行补上。' },
+  'erb.unterminated-string': { name: '引号开了没合上', detail: '这一行的引号到行尾还没等到闭合；补上它，或改用 @" 续行把这一句接到下一行。' },
+  'erb.unterminated-interp': { name: '插值花括号没合上', detail: '这一行的 { 到行尾还没等到 }；插值要写在同一行内，左右花括号都得有。' },
+  'erb.unexpected-token': { name: '这一行读不通', detail: '结构解析在这一行读不出成句的写法，通常是上一行缺了收束词、引号或括号。' },
+  'erb.unpaired-skip': { name: '停用区标记落单', detail: '[SKIPSTART] 没等到 [SKIPEND]，或出现了落单的 [SKIPEND]；停用区标记要成对写。' },
+
+  /**
+   * 工具链自身失败（`kojo2-problem-wiring.ts:119` / `kojo2-project-analysis.ts:121`
+   * 两枚常量，上账在 `:597` / `:867`）——面板据此区分"稿子写错了"与"这一轮没算成"。
+   */
+  'kojo2/diagnostics-unavailable': {
+    name: '诊断这次没跑成',
+    detail: '工具链这一轮失败了（供方缺席或编译入口抛错）；本文件旧波浪线已清空，修好前不会自动恢复。',
+  },
+  'kojo2/project-analysis-failed': {
+    name: '工程分析没跑成',
+    detail: '这一轮工程级分析失败，结果可能缺项；请带上原码与出问题的文件反馈。',
+  },
+
   /* --- 约定校验规则 id（同一张表供约定面板复用，避免第二份口径） --- */
   'erb.duplicate-function': { name: '函数重名' },
   'sugar.cont-inside-quotes': { name: '续行标记写在引号内' },
