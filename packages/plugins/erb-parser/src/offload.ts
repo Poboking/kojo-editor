@@ -262,7 +262,8 @@ export function erbStructureDecorations({ path, text }: EditorDecoratePayload): 
   if (!isErbDialectPath(path) || text.length === 0) return [];
   // 逐字段的形状只住在 `structureDiagnostic` 一处：💡 那边给出的"我修的是哪条诊断"
   // 用的就是同一个函数 ⇒ 波浪线与快速修复不可能对不上（B9 的关联键全靠它）
-  return checkStructure(text, path).map(structureDiagnostic);
+  // `source` = 产出这条发现的装饰器贡献 id（`plugin.ts` 那条 `ui.editor.decorator` 的 `id` 逐字）
+  return checkStructure(text, path).map((issue) => ({ ...structureDiagnostic(issue), source: 'erb-structure' }));
 }
 
 /**
@@ -700,5 +701,6 @@ export function collectErbSemanticDiagnostics(
     });
   }
 
-  return { decorations: sortAndDedupe(decorations), failedRules };
+  // `source` = 本腿在 `plugin.ts` 注册的贡献 id 逐字（三条子腿 + 失败账都在这一格上屏，出处只有一个）
+  return { decorations: sortAndDedupe(decorations).map((d) => ({ ...d, source: 'erb-semantics' })), failedRules };
 }

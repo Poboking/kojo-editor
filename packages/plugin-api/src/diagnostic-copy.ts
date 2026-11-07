@@ -105,6 +105,31 @@ export const NATIVE_STRUCTURE_CODES = [
 export const NATIVE_EXPR_CODES = ['erb.expr-lexical', 'erb.expr-syntax'] as const;
 
 /**
+ * 调用目标线（erb-parser `references.ts`）上屏的诊断码闭集。
+ *
+ * 键 = 生产方 `export const UNDEFINED_CALL_CODE` / `UNDEFINED_TRY_CALL_CODE` 的**逐字字面量**
+ * （那边是单一真源，这里只抄值不抄名）；对账钉在
+ * `packages/app/tests/diagnostic-code-closure.test.ts`——那边改了值、这里忘了改 ⇒ 当场红。
+ * 2026-11-07 普查缺口①补齐的第一组：这两枚一直在产出，却没进过码表，作者看到的裸 ASCII 码。
+ */
+export const NATIVE_CALL_CODES = ['erb.call-undefined', 'erb.call-try-missing'] as const;
+
+/**
+ * 语义诊断线（erb-parser `arity.ts` / `undefined-name.ts` / `builtins.ts` / 规则失败账）
+ * 上屏的诊断码闭集。
+ *
+ * 命名形态与前两组不同（`SCREAMING_SNAKE`）是**生产方的既有事实**：那几枚常量早于
+ * `erb.*` 拼法约定就进了引擎侧口径，改名即断链（作者报障贴的就是它），故此处照抄不改。
+ * 同样与各自导出的常量逐一对账，判据在那道闭集完整性闸里。 */
+export const NATIVE_SEMANTIC_CODES = [
+  'ERB_UNDEFINED_NAME',
+  'ERB_ARITY_MISMATCH',
+  'ERB_BUILTIN_ARGS',
+  'ERB_BUILTIN_ARG_TYPE',
+  'ERB_DIAGNOSTICS_RULE_FAILED',
+] as const;
+
+/**
  * `.kojo` **结构层**（CST 错误恢复）上屏的诊断码闭集（TSIT2-D）。
  *
  * 为什么不并进 `SugarDiagnosticCode`：那张联合是**转译器**的诊断码，每条都对应"转译器对这份
@@ -127,6 +152,8 @@ export type DiagnosticCodeKey =
   | (typeof SUGAR_DIAGNOSTIC_CODES)[number]
   | (typeof NATIVE_STRUCTURE_CODES)[number]
   | (typeof NATIVE_EXPR_CODES)[number]
+  | (typeof NATIVE_CALL_CODES)[number]
+  | (typeof NATIVE_SEMANTIC_CODES)[number]
   | (typeof KOJO_STRUCTURE_SYNTAX_CODES)[number];
 
 /**
@@ -196,6 +223,38 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   },
   'erb.expr-lexical': { name: '表达式有无法识别的字符', detail: '条件表达式里存在词法层面读不懂的内容。' },
   'erb.expr-syntax': { name: '表达式结构不对', detail: '条件表达式的括号、操作数或冒号写法不成立。' },
+
+  /* --- 调用目标线（erb-parser `references.ts`；普查缺口①补齐，2026-11-07） --- */
+  'erb.call-undefined': {
+    name: '调用目标不存在',
+    detail: '当前项目里没有这个函数名：把函数补上，或改成已有的名字。',
+  },
+  'erb.call-try-missing': {
+    name: '可选钩子没定义',
+    detail: 'TRY 系调用找不到这个函数时引擎照常运行，这一条不算缺陷；要用这段逻辑就把它写出来。',
+  },
+
+  /* --- 语义诊断线（erb-parser 实参 / 未定义名 / 内建实参 / 检查失败账） --- */
+  'ERB_UNDEFINED_NAME': {
+    name: '用了没定义的名字',
+    detail: '这个名字既没有声明（全局与局部都不含它），也不是引擎认得的保留名。',
+  },
+  'ERB_ARITY_MISMATCH': {
+    name: '实参少给了',
+    detail: '这一处调用缺了没有默认值的必需实参，补上那一位才能取到值。',
+  },
+  'ERB_BUILTIN_ARGS': {
+    name: '内建函数实参过多',
+    detail: '这个内建函数不收这么多实参，多出的那几位不会传给函数。',
+  },
+  'ERB_BUILTIN_ARG_TYPE': {
+    name: '内建函数实参类型不符',
+    detail: '这一位的实参形态与该函数要求的不一致，新版引擎不再静默转换。',
+  },
+  'ERB_DIAGNOSTICS_RULE_FAILED': {
+    name: '这一类检查没跑成',
+    detail: '检查本身出错，这一类结果本轮被跳过；请带上原码与文件反馈。',
+  },
 
   /* --- `.kojo` 结构层（CST 错误恢复）诊断（TSIT2-D；波浪线，不进问题面板） --- */
   'kojo.unclosed-block': { name: '块没有收盘', detail: '这一行开的块一直开到后面，没等到它该有的收束语句。' },

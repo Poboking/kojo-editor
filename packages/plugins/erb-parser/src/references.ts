@@ -1056,6 +1056,7 @@ export function tryCallTargetDecorations(
       startColumn: t.column,
       endColumn: t.column + t.name.length,
       code: UNDEFINED_TRY_CALL_CODE,
+      source: 'erb-reference',
     }));
 }
 
@@ -1083,6 +1084,7 @@ export function erbReferenceDecorations(
     startColumn: t.column,
     endColumn: t.column + t.name.length,
     code: UNDEFINED_CALL_CODE,
+    source: 'erb-reference',
   }));
 }
 

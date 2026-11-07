@@ -141,6 +141,7 @@ describe('erbReferenceDecorations · 装饰成形', () => {
         startColumn: 6,
         endColumn: 10,
         code: UNDEFINED_CALL_CODE,
+        source: 'erb-reference',
       },
     ]);
   });
