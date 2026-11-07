@@ -1711,6 +1711,28 @@ describe('PS-10 开机静态依赖图（教程与项目级插件都不许在欢�
     //       「检索面只在懒边」、「语言面包只许叶子」等既有判据全绿；读数随跑打点在下面
     //       console（本批 197 文件与闸顶格持平——七枚新叶一枚都没进图，这正是
     //       "类型经 import type / export type 擦除"的图面形状，不是漏数）。
+    //   - **ERB 诊断止血系列合流批（2026-11-07，本批；rebase 到 `a801a0f5`）**：读数
+    //     **197 文件 / 3,316 KB · 3,395,213 B**（闸 ≤197 / ≤3,430 **一字未动**，余量 **117,619 B**）。
+    //     改前＝dev `a801a0f5` 现取 **197 文件 / 3,360,610 B**（余量 152,222 B；上面 S17 格记的
+    //     161,573 B 是 S17 当时的读数，S18–S21 又吃掉 9,351 B ⇒ 本批以现取为准，不抄台账）。
+    //     ⇒ 本系列净 **+34,603 B**，逐文件归因（`--top 250` 两份榜单逐枚相减，**求和＝总差**）：
+    //       `plugin-api/erb-lexical.ts` +8,937 与 `erb-code-prefix.ts` −4,111（**同一枚改名**，
+    //       净 +4,826＝引擎名字尺 4,442 + 合并头注 384）· `erb-parser/references.ts` +6,869 ·
+    //       `arity.ts` +6,682 · `app/ui/project-diagnostics.ts` +6,626 · `problem-store.ts` +2,549 ·
+    //       `erb-vocab/control-flow.ts` +2,188 · `erb-parser/scanner.ts` +1,498 ·
+    //       `project-scan-schedule.ts` +1,075 · `offload.ts` +605 · `plugin-api/index.ts` +593 ·
+    //       `undefined-name.ts` +440 · `erh.ts` +435 · `structure.ts` +384 · `declarations.ts` +133 ·
+    //       `symbols.ts` +82 · `completion.ts` +15 · `condition-extractor/extract.ts` −397。
+    //     **文件闸为何没抬**：本系列在旧基线上曾把 197→198（新增零 import 叶子
+    //     `plugin-api/erb-name-ruler.ts`）；rebase 到 S17 之后的 dev 时，197 是对面专门
+    //     守回的顶（`f41dd384` 把 refs-live 折回 incremental 就为回这一格）⇒ **不抬闸**，
+    //     改把两把**落点约束逐字相同**的 ERB 词法尺（行首代码前缀 + 引擎名字段）合成一枚
+    //     `erb-lexical.ts`：都是契约层零 import 叶子、都被 `scanner.ts` 再导出、都受同一条裸
+    //     node 约束（`gen-erb-structure.mjs` 动态 import scanner ⇒ 根入口的无扩展名导入会崩）。
+    //     判据份数不变（各仍只有一份定义；守门测试改指新路径，并加钉「名字尺三符号不进桶」），
+    //     图内净少一枚文件。口径教训：**预算闸不许为合流放宽**——同约束叶子合并是设计收敛，
+    //     抬闸是把债留给下一批。另：S7 的缓存命中路径绕开了 D10 唯一的 `credit()`，合流时补上
+    //     （不补则暖缓存下覆盖游标永不收敛，`remaining` 永远 >0）。
     console.log(
       `[ps10-eager-graph] 开机图现读数：${files.length} 文件 / ${totalKb} KB · ${totalBytes} B（闸：≤197 文件 / ≤3,430 KB）`,
     );

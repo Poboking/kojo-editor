@@ -1,6 +1,6 @@
 import type { Kernel } from '@kojo/kernel';
 import type { ErbIndexState, ErbParserService } from '@kojo/plugin-api';
-import { ERB_NAME_RUN_SOURCE } from '@kojo/plugin-api/erb-name-ruler';
+import { ERB_NAME_RUN_SOURCE } from '@kojo/plugin-api/erb-lexical';
 import { kojoReferencesViaSlot, listKojoSourceTexts } from './kojo-source-scan';
 import { nameLedgerIndexCopy } from './index-state-copy';
 import {
@@ -54,7 +54,7 @@ import {
  * 这类"引擎眼里是一个名字"的形状。
  *
  * 正则检索词 / 带空格的短语仍被否掉：`.` `?` `*` `+` 与空白**都是**引擎分隔符（逐码位见
- * `plugin-api/src/erb-name-ruler.ts`），上面这些字符形状**不是**一枚名字段。
+ * `plugin-api/src/erb-lexical.ts`），上面这些字符形状**不是**一枚名字段。
  */
 const NAME_TOKEN_RE = new RegExp(`^${ERB_NAME_RUN_SOURCE}+$`, 'u');
 

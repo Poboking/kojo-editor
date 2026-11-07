@@ -17,7 +17,7 @@ import { erbCodeBodyOf, erbCodePrefixLength, isErbCommentLine } from '@kojo/plug
  * 名字槽的结束判据（`( , 空格 制表 ;`）与 `erb-parser/scanner.ts::parseFunctionDefinition`
  * 逐字同一套。两处各写一遍就是本仓最贵的那类债（漂移的表现：幽灵文本吃掉或漏掉尾巴），
  * 但解析器没有、也不该为本包导出这张表（插件之间禁止交叉 import）。**已上报**组长：
- * 与 `;!;` 那条同法——把边界判据提到 `plugin-api`（先例 `erb-code-prefix.ts`），
+ * 与 `;!;` 那条同法——把边界判据提到 `plugin-api`（先例 `erb-lexical.ts`），
  * 两侧共读一份。在那之前，这里是最小复写 + 逐字注明出处。
  */
 

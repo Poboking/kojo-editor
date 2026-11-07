@@ -6,9 +6,9 @@ import {
   ERB_ENGINE_NAME_DELIMITERS,
   ERB_NAME_RUN_SOURCE,
   isErbEngineNameCode,
-} from '../src/erb-name-ruler';
+} from '../src/erb-lexical';
 import { MODEL_TOKEN_CLASS } from '../src/semantic-locate';
-import * as pluginApiLeaf from '@kojo/plugin-api/erb-name-ruler';
+import * as pluginApiLeaf from '@kojo/plugin-api/erb-lexical';
 import * as scannerModule from '../../plugins/erb-parser/src/scanner';
 
 /**
@@ -20,7 +20,7 @@ import * as scannerModule from '../../plugins/erb-parser/src/scanner';
  *
  * 四条口径：
  * 1. `ERB_ENGINE_NAME_DELIMITERS` / `isErbEngineNameCode` 的**定义**全仓只准住在
- *    `packages/plugin-api/src/erb-name-ruler.ts` 一处；
+ *    `packages/plugin-api/src/erb-lexical.ts` 一处；
  * 2. 分隔集**字面量**（不走常量名、直接再抄一串字符集）也只准出现在那一处 ——
  *    唯一豁免是逐字钉真源的已知向量测试（改了字面它就红，见 `LITERAL_ALLOWED`）；
  * 3. `erb-parser/src/scanner.ts` 只做**再导出**（对外形态零变化），自己不许再留一份定义；
@@ -33,7 +33,7 @@ const ROOT = nodeResolve(fileURLToPath(new URL('../../..', import.meta.url)));
 const PACKAGES = nodeJoin(ROOT, 'packages');
 const SELF = nodeRel(ROOT, fileURLToPath(new URL(import.meta.url))).replace(/\\/g, '/');
 /** 尺子的唯一住处（定义与字面量的合法落点） */
-const RULER_SOURCE = 'packages/plugin-api/src/erb-name-ruler.ts';
+const RULER_SOURCE = 'packages/plugin-api/src/erb-lexical.ts';
 /**
  * 字面量的**点名豁免**：逐字钉住真源的已知向量测试（`undefined-name.drift.test.ts` 的
  * `expect(ERB_ENGINE_NAME_DELIMITERS).toBe('...')` 那一枚）。它的价值恰恰是"第二份抄本
@@ -93,9 +93,14 @@ describe('引擎名字尺：全仓仅一份定义（D01b 单一真源）', () =>
     expect(found, '手抄分隔集的文件').toEqual([RULER_SOURCE]);
   });
 
-  it('契约根入口**不许**再挂这枚叶子（开机图 197 文件闸）；消费方只走子路径', () => {
+  it('契约根入口只挂第一把尺：名字尺三个符号不进桶，消费方只走子路径', () => {
     const index = readFileSync(nodeJoin(ROOT, 'packages/plugin-api/src/index.ts'), 'utf8');
-    expect(/from '\.\/erb-name-ruler'/.test(index), 'index.ts 又把叶子挂进桶了（PS-10 开机图会长一枚文件）').toBe(false);
+    // 叶子上有两把尺：行首代码前缀经桶导出（既有形态），引擎名字尺**只走子路径**——
+    // scanner.ts 的裸 node 消费链吃不下根入口（无扩展名相对导入），进桶等于把那条链打断。
+    expect(/from '\.\/erb-lexical'/.test(index), 'index.ts 应导出叶子的第一把尺（行首代码前缀）').toBe(true);
+    for (const sym of ['ERB_ENGINE_NAME_DELIMITERS', 'isErbEngineNameCode', 'ERB_NAME_RUN_SOURCE']) {
+      expect(index.includes(sym), `名字尺符号 ${sym} 不许出现在契约根入口`).toBe(false);
+    }
     // 宿主与插件两侧的取词消费方必须经子路径拿到**同一枚**导出（不是各自复制）
     expect(pluginApiLeaf.ERB_ENGINE_NAME_DELIMITERS).toBe(ERB_ENGINE_NAME_DELIMITERS);
     expect(pluginApiLeaf.ERB_NAME_RUN_SOURCE).toBe(ERB_NAME_RUN_SOURCE);
@@ -110,7 +115,7 @@ describe('引擎名字尺：全仓仅一份定义（D01b 单一真源）', () =>
     const consumers = ['packages/app/src/ui/name-ledger.ts', 'packages/app/src/ui/reference-utils.ts'];
     for (const rel of consumers) {
       const text = readFileSync(nodeJoin(ROOT, rel), 'utf8');
-      expect(text, `${rel} 未引引擎名字尺`).toContain("@kojo/plugin-api/erb-name-ruler");
+      expect(text, `${rel} 未引引擎名字尺`).toContain("@kojo/plugin-api/erb-lexical");
       expect(text, `${rel} 仍 import 记号尺来按名取词`).not.toMatch(/import[^;\n]*MODEL_TOKEN_CLASS/);
     }
   });
@@ -122,7 +127,7 @@ describe('引擎名字尺：全仓仅一份定义（D01b 单一真源）', () =>
     expect(DEF_RUN_SOURCE.test(scanner), 'scanner 里又写了正则形态').toBe(false);
     expect(scanner.includes(LITERAL_PROBE), 'scanner 里又手抄了一遍字符集').toBe(false);
     expect(scanner, 'scanner 必须经零依赖叶子子路径再导出（裸 node 约束）').toContain(
-      "from '@kojo/plugin-api/erb-name-ruler'",
+      "from '@kojo/plugin-api/erb-lexical'",
     );
   });
 

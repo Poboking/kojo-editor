@@ -6,7 +6,7 @@
  * 把它们当整行注释吞掉的后果不止"少着一点色"：`;!;[SKIPSTART]` 与后面对称的
  * `[SKIPEND]` 会失配，之后整篇文件的行可见性全错。
  *
- * 判据本体住在 `plugin-api`（`erb-code-prefix.ts`）：`condition-extractor` 与
+ * 判据本体住在 `plugin-api`（`erb-lexical.ts`）：`condition-extractor` 与
  * `erb-parser` 是两个插件、禁止互相 import，两边都要这条判据 ⇒ 只能落在契约层。
  * 本文件钉的是**判据本身**，以及它在四个消费面上的落地：骨架扫描 / 控制流 /
  * 预处理块 / 可见行遍历。
@@ -30,7 +30,7 @@ import { checkPreprocStructure, checkStructure } from '../src/structure';
 
 const lines = (...rows: string[]): string => rows.join('\n');
 
-describe('判据本体（plugin-api · erb-code-prefix）', () => {
+describe('判据本体（plugin-api · erb-lexical）', () => {
   it('两种前缀各 3 个字符，且之后不要求空白', () => {
     expect(API_PREFIXES).toEqual([';!;', ';#;']);
     expect(erbCodePrefixLength(';!;PRINTL あ')).toBe(3);

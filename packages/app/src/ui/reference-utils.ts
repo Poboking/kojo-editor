@@ -1,6 +1,6 @@
 import type { EditorSymbolLocation, ErbReference, ErbReferenceKind } from '@kojo/plugin-api';
 import { KOJO_SOURCE_EXTENSION, KOJO_V1_SOURCE_EXTENSIONS, splitModelLines } from '@kojo/plugin-api';
-import { ERB_NAME_RUN_SOURCE } from '@kojo/plugin-api/erb-name-ruler';
+import { ERB_NAME_RUN_SOURCE } from '@kojo/plugin-api/erb-lexical';
 import { KOJO2_SOURCE_EXTENSION } from '@kojo/kojo-lang/constants';
 
 /**
@@ -451,7 +451,7 @@ export async function rewriteClosedFile(
 
 /**
  * 名字段整串扫描用的正则（**引擎那把尺**，D01b 2026-11-06；真源
- * `packages/plugin-api/src/erb-name-ruler.ts` 的 `ERB_NAME_RUN_SOURCE`）。
+ * `packages/plugin-api/src/erb-lexical.ts` 的 `ERB_NAME_RUN_SOURCE`）。
  *
  * 换尺的理由（这条链上"漏"是数据损坏级）：本函数的消费方拿的 `normalizedName` 一律是
  * **ERB 函数名**（`monaco/erb-rename.ts::collectKojoLeg` 与 `ui/name-ledger.ts::kojoSide`），

@@ -4,7 +4,7 @@
  * 来历：B 车道自己在 `src/slot-shape.ts` 的头注里报了这笔债——`NAME_TERMINATORS` 与
  * `erb-parser/scanner.ts::parseFunctionDefinition` 的五个分隔符是**逐字同一套**，但因为
  * 插件之间禁止交叉 import（铁律 3 / 审计 C），本包只能最小复写 + 注明出处。长期解是把
- * 这张表提到 `plugin-api`（先例 `erb-code-prefix.ts`，那枚就是为了同一件事进契约层的）；
+ * 这张表提到 `plugin-api`（先例 `erb-lexical.ts`，那枚就是为了同一件事进契约层的）；
  * 可开机图现在只剩 3 KB 余量，为一张五个字符的表再进一枚常驻模块不值当。
  *
  * 于是换一条不花钱的路：**把"复写会漂"这件事本身钉住**。漂移的表现很具体——幽灵文本

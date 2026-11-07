@@ -462,7 +462,7 @@ export {
   erbCodeBodyOf,
   erbCodePrefixLength,
   isErbCommentLine,
-} from './erb-code-prefix';
+} from './erb-lexical';
 // 预处理器 `[...]` 标记与停用区标记（2026-10-25 ERB 体感批：三处副本收口成一份真源）
 export {
   ERB_PREPROC_CANDIDATES,
@@ -721,11 +721,11 @@ export {
   unicodeTokenAt,
 } from './semantic-locate';
 /*
- * 引擎名字尺（D01b，2026-11-06）**不挂本桶**：真源是零依赖叶子 `./erb-name-ruler`，
- * 消费方一律走子路径 `@kojo/plugin-api/erb-name-ruler`（与 `@kojo/plugin-api/eol` 同形）。
- * 走桶会把叶子拽进开机静态图（PS-10 文件闸 197 ⇒ 现读数 198），而 `erb-parser/scanner.ts`
- * 的裸 node 消费链本来就只能吃子路径。它与 `MODEL_TOKEN_CLASS` 是**两把尺、两个问题**，
- * 不许合并（口径写在那份叶子的头注）。
+ * 引擎名字尺（D01b，2026-11-06）**不挂本桶**：真源是零依赖叶子 `./erb-lexical` 的第二段，
+ * 消费方一律走子路径 `@kojo/plugin-api/erb-lexical`（与 `@kojo/plugin-api/eol` 同形）。
+ * 本桶只导出该叶子的**第一把尺**（行首代码前缀，上面那一格）；名字尺三个符号不进桶，
+ * 因为 `erb-parser/scanner.ts` 的裸 node 消费链只能吃子路径（根入口的无扩展名相对导入会崩）。
+ * 它与 `MODEL_TOKEN_CLASS` 是**两把尺、两个问题**，不许合并（口径写在那份叶子的头注）。
  */
 
 /* ---- 编辑器面第二批（LS-B0 独占追加区块；勿在他处重排）：4 个新 kind 的请求/响应 ---- */

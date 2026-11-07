@@ -68,7 +68,7 @@
  * ## 刻意留在少报一侧
  *
  * `;^;` 也是引擎的代码前缀（`SkipWhiteSpace` 的第三个 case），但本仓的前缀表
- * （`plugin-api/erb-code-prefix.ts` 的 `ERB_CODE_PREFIXES`）只登记 `;!;` / `;#;`。
+ * （`plugin-api/erb-lexical.ts` 的 `ERB_CODE_PREFIXES`）只登记 `;!;` / `;#;`。
  * 这里沿用本仓口径：`;^;` 起头的行按注释放行。8 盘语料 `.ERH` 零处使用 `;^;`，
  * 少报一行不痛；把前缀表扩成三枚是另一件事（会同时改高亮与 scanner 的口径）。
  */

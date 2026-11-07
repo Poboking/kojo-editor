@@ -35,7 +35,7 @@ import { splitEolLines } from '@kojo/plugin-api/eol';
  *
  * ## 一致性
  *
- * 契约层的真源是 `@kojo/plugin-api` 的 `erb-code-prefix.ts`（`condition-extractor` 与宿主
+ * 契约层的真源是 `@kojo/plugin-api` 的 `erb-lexical.ts`（`condition-extractor` 与宿主
  * 都要用，而插件之间禁止互相 import）。本文件是它的字形镜像，`tests/code-prefix.test.ts`
  * 的对拍一节把两处 `ERB_CODE_PREFIXES` 逐项比对——改一处不改另一处当场红。
  */
@@ -267,10 +267,10 @@ export function parseDimDeclaration(trimmed: string): { directive: string; name:
 
 /**
  * 引擎名字尺（`ERB_ENGINE_NAME_DELIMITERS` / `isErbEngineNameCode` / `ERB_NAME_RUN_SOURCE`）
- * ——**判据真源已上提契约层**（D01b，2026-11-06：`packages/plugin-api/src/erb-name-ruler.ts`），
+ * ——**判据真源已上提契约层**（D01b，2026-11-06：`packages/plugin-api/src/erb-lexical.ts` 第二段），
  * 这里只是**再导出**，对外形态零变化。
  *
- * 上提的理由与两把尺不许合并的口径写在那份叶子的头注里；走 `@kojo/plugin-api/erb-name-ruler`
+ * 上提的理由与两把尺不许合并的口径写在那份叶子的头注里；走 `@kojo/plugin-api/erb-lexical`
  * 子路径（而非根入口）是**裸 node 约束**：本文件被
  * `packages/erb-syntax-tree/tools/gen-erb-structure.mjs` 动态 import，根入口的无扩展名相对
  * 导入会让那条链直接崩（与上方 `@kojo/plugin-api/eol` 同一成例、同一理由）。
@@ -279,7 +279,7 @@ export {
   ERB_ENGINE_NAME_DELIMITERS,
   ERB_NAME_RUN_SOURCE,
   isErbEngineNameCode,
-} from '@kojo/plugin-api/erb-name-ruler';
+} from '@kojo/plugin-api/erb-lexical';
 
 /**
  * 名字字符的**码位实现**（声明侧字符集，`isErbDimNameChar` 只是它的字符串外壳）。

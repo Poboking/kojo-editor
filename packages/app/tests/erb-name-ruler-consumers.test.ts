@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ERB_NAME_RUN_SOURCE } from '@kojo/plugin-api/erb-name-ruler';
+import { ERB_NAME_RUN_SOURCE } from '@kojo/plugin-api/erb-lexical';
 import { findNameTokenPositions } from '../src/ui/reference-utils';
 
 /**
