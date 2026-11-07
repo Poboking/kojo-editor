@@ -203,6 +203,17 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'about.developer', section: 'about', sectionLabel: '关于', label: 'GitHub 主页', keywords: ['开发者 poboking 作者'], key: 'about.developer' },
   { id: 'about.contact', section: 'about', sectionLabel: '关于', label: '联系邮箱', keywords: ['邮箱 mail 反馈'], key: 'about.contact' },
   { id: 'about.feedback', section: 'about', sectionLabel: '关于', label: '意见反馈', keywords: ['issue github 反馈'], key: 'about.feedback' },
+
+  // ---- AI 接入（2026-11-07 UI-36；页面行序：开关 → 凭据 → 会话 → 审批 → 审计）----
+  // 这一节走动态边：组件住在 `src/mcp/settings-ai.tsx`，不进设置页静态链，所以锚点也住在那里。
+  // `tests/settings-search.test.ts` 的锚点扫描面同步扩到该文件，双向闭合不许破。
+  // 五条都不写 `isModified`：开停状态/凭据/会话/审批/审计都没有 localStorage 真源，
+  // 猜一个「已修改」出来比不显示更坏（本仓对「已修改」的唯一判据口径）。
+  { id: 'ai.service', section: 'ai', sectionLabel: 'AI 接入', label: '启用 MCP 服务', keywords: ['MCP AI 接入 服务 开关 启动 停止 端口 endpoint'], key: 'ai.service' },
+  { id: 'ai.token', section: 'ai', sectionLabel: 'AI 接入', label: '访问凭据（Token）', keywords: ['token 凭据 密钥 轮换 发现文件 端点 复制配置'], key: 'ai.token' },
+  { id: 'ai.clients', section: 'ai', sectionLabel: 'AI 接入', label: '已授权会话', keywords: ['clientId 客户端 授权 会话 撤销 握手 档位'], key: 'ai.clients' },
+  { id: 'ai.approval', section: 'ai', sectionLabel: 'AI 接入', label: '一次批量审批', keywords: ['批准 工具 特权 写前 diff 可写根 全选 授权记录'], key: 'ai.approval' },
+  { id: 'ai.audit', section: 'ai', sectionLabel: 'AI 接入', label: '调用审计', keywords: ['审计 日志 调用 结果 拒绝 耗时 落点 过滤'], key: 'ai.audit' },
 ];
 
 /** 归一（大小写与空白不参与比对；作者敲 `ctrl + k` 也命中 `Ctrl+K`） */

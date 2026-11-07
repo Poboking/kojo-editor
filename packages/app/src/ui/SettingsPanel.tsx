@@ -1912,16 +1912,35 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   );
   const modifiedCount = settingsModifiedCount();
 
-  // 面板按节 remount ⇒ 本 effect 跑在新一节的 DOM 之后，能真正找到那一行
+  // 面板按节 remount ⇒ 本 effect 跑在新一节的 DOM 之后，能真正找到那一行。
+  // 「AI 接入」是唯一走动态边的节：切到这里时 Suspense 还没解析，锚点要等懒 chunk 挂载后
+  // 才出现，只查一次会静默落空。故带一段有上限的重试（50ms × 40 = 2s），找到即停。
   useEffect(() => {
     if (jump === null) return;
     const hits = document.querySelectorAll('.settings-nav-panel [data-hit="1"]');
     for (const prev of hits) prev.removeAttribute('data-hit');
-    const el = document.querySelector<HTMLElement>(`.settings-nav-panel [data-settings-key="${jump.key}"]`);
-    if (!el) return; // 该节里没有这一行（条目登记了但行不在这节）：切节本身已经给了反馈
-    el.scrollIntoView({ block: 'center' });
-    void el.offsetWidth; // 重排一次，CSS 入场动画才会重放（同一个目标连点两次）
-    el.setAttribute('data-hit', '1');
+    const selector = `.settings-nav-panel [data-settings-key="${jump.key}"]`;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let tries = 0;
+    const land = (): boolean => {
+      const el = document.querySelector<HTMLElement>(selector);
+      if (el === null) return false; // 该节里没有这一行 / 动态边还没挂上
+      // 老壳与 happy-dom 可能没有 scrollIntoView：跳转不该把整页设置打炸。
+      if (typeof el.scrollIntoView === 'function') el.scrollIntoView({ block: 'center' });
+      void el.offsetWidth; // 重排一次，CSS 入场动画才会重放（同一个目标连点两次）
+      el.setAttribute('data-hit', '1');
+      return true;
+    };
+    if (land()) return;
+    const retry = (): void => {
+      if (land()) return;
+      if (++tries >= 40) return; // 超时就安静放弃：切节本身已经是可见反馈，不假报成功
+      timer = setTimeout(retry, 50);
+    };
+    timer = setTimeout(retry, 50);
+    return () => {
+      if (timer !== undefined) clearTimeout(timer);
+    };
   }, [jump]);
 
   /* ---------------- 右键菜单接线（1023 覆盖面批 · 设置页） ---------------- */
@@ -1963,6 +1982,13 @@ export function SettingsPanel(props: SettingsPanelProps): ReactElement {
   };
 
   const pickResult = (entry: SettingsSearchEntry): void => {
+    // 「AI 接入」只在桌面壳注册（唯一走动态边的节）。浏览器调试壳里搜到 ai.* 条目时，
+    // 旧逻辑会 setActive('ai') 后落回第 0 节——看着像点空了却一声不吭（铁律 4）。
+    // 这里给一句明确回执并且不切节：找得到 ≠ 到得了，两件事都要说清。
+    if (entry.section === 'ai' && !isTauri()) {
+      setMenuNote('「AI 接入」需要桌面壳：当前环境没有这一节');
+      return;
+    }
     setActive(entry.section);
     if (entry.key !== undefined) setJump({ key: entry.key, n: ++jumpSeqRef.current });
   };
