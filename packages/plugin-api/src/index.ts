@@ -777,6 +777,8 @@ export {
   NATIVE_CALL_CODES,
   NATIVE_SEMANTIC_CODES,
   KOJO_STRUCTURE_SYNTAX_CODES,
+  ERB_STRUCTURE_DIAGNOSTIC_CODES,
+  APP_FAILURE_CODES,
   diagnosticDisplay,
   type DiagnosticCodeKey,
   type DiagnosticDisplay,

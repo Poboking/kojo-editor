@@ -147,6 +147,39 @@ export const KOJO_STRUCTURE_SYNTAX_CODES = [
   'kojo.unexpected-token',
 ] as const;
 
+/**
+ * ERB **结构层**（CST 错误恢复 + `[SKIPSTART]` 配对）上屏的诊断码闭集。
+ *
+ * 生产方唯一：`app/src/monaco/tree-sitter/erb-diagnostics.ts` 的 `erbCstDiagnostic`
+ * （`${ERB_DIAGNOSTIC_CODE_PREFIX}${fault.kind}`，kind 集 = `KojoStructureSyntaxKind`）与
+ * `erbSkipTagDiagnostics`（`erb.unpaired-skip`），经 `erb-runtime.ts` 发布成波浪线，
+ * 码逐字挂在 marker 的 `code` 上（悬浮里给作者看）。
+ * 与 `erb-parser` 的 `erb.${issue.kind}` 同前缀不同事：那边是**结构配对**（缺 ENDIF 一类），
+ * 这边是**读不成句**（引号 / 花括号 / 收束词缺失），所以两组码表各自独立、不许互相顶替。
+ * 对账钉在 `packages/app/tests/diagnostic-code-closure.test.ts`（kind 集从类型别名派生）。
+ */
+export const ERB_STRUCTURE_DIAGNOSTIC_CODES = [
+  'erb.unclosed-block',
+  'erb.unterminated-string',
+  'erb.unterminated-interp',
+  'erb.unexpected-token',
+  'erb.unpaired-skip',
+] as const;
+
+/**
+ * **工具链自身**失败的稳定码（不是稿子写错了，是这一轮没算成）。
+ *
+ * 生产方：`app/src/ui/kojo2-problem-wiring.ts` 的 `KOJO2_DIAGNOSTICS_FAILURE_CODE`
+ * （`:119` 声明 / `:597` 上账）与 `app/src/ui/kojo2-project-analysis.ts` 的
+ * `KOJO2_PROJECT_FAILURE_CODE`（`:121` 声明 / `:867` 上账）——两条都落进问题面板的
+ * `EditorProblem.code`，面板按 `diagnosticDisplay` 取中文短名。
+ * 对账钉在 `packages/app/tests/diagnostic-code-closure.test.ts`（值逐字对照那两枚常量）。
+ */
+export const APP_FAILURE_CODES = [
+  'kojo2/diagnostics-unavailable',
+  'kojo2/project-analysis-failed',
+] as const;
+
 /** 本表全部键的闭集（全覆盖闸用它与"码的并集"对账：既不许漏名，也不许留孤儿条目） */
 export type DiagnosticCodeKey =
   | (typeof SUGAR_DIAGNOSTIC_CODES)[number]
@@ -154,7 +187,9 @@ export type DiagnosticCodeKey =
   | (typeof NATIVE_EXPR_CODES)[number]
   | (typeof NATIVE_CALL_CODES)[number]
   | (typeof NATIVE_SEMANTIC_CODES)[number]
-  | (typeof KOJO_STRUCTURE_SYNTAX_CODES)[number];
+  | (typeof KOJO_STRUCTURE_SYNTAX_CODES)[number]
+  | (typeof ERB_STRUCTURE_DIAGNOSTIC_CODES)[number]
+  | (typeof APP_FAILURE_CODES)[number];
 
 /**
  * 码 → 中文显示名（＋可选说明）。
