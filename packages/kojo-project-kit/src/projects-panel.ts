@@ -27,7 +27,7 @@
 
 import { createElement as h, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { DirEntry, UIPanelProps, WorkspaceArtifact, WorkspaceProject } from '@kojo/plugin-api';
-import { join } from '@kojo/plugin-api';
+import { join, WORKSPACE_MANIFEST_FILE } from '@kojo/plugin-api';
 import { attributionSummary, type AttributionState, type PackageAttribution } from '@kojo/kojo-project-kit';
 import type { PanelStatus } from './package-actions';
 import {
@@ -151,24 +151,28 @@ export function artifactDir(projectDir: string, artifact: Pick<WorkspaceArtifact
 }
 
 /**
- * 项目根下「不属于任何包」的子目录（2026-10-13 UI 反馈 6）。
+ * 项目根下「不属于任何包」的条目（2026-10-13 UI 反馈 6；2026-11-09 用户反馈补文件）。
  *
  * 项目行原本只列 `workspace.json` 里登记的包，于是作者用右键「新建文件夹」建的平级目录
- * **从来不上树**——盘上真有、界面上没有，读起来仍然像"点了没生效"。这里把这类目录挑出来，
- * 由项目行下面单独列一行区。
+ * **从来不上树**；同一个菜单里的「新建 ERB 文件」建在项目根的文件更是无影无踪——行内框
+ * 一收，盘上有、面上无，读起来就是"文件建丢了"。这里把这类条目挑出来，由项目行下面
+ * 单独列一行区。
  *
- * 三条口径：① 未触发列举 / 在途 / 读失败 ⇒ 空（不猜，也不留半张列表）；
- * ② **只挑目录**——根上的散装文件（`workspace.json`、作者手放的备忘）不进这棵树，
- *    新建文件本身会走 `reveal` 在编辑器里打开，那里才是看得见它的地方；
- * ③ 与任一包目录同名的目录**不列**：那是包本体，重复列会出现两行指向同一个目录。
+ * 四条口径：① 未触发列举 / 在途 / 读失败 ⇒ 空（不猜，也不留半张列表）；
+ * ② 与任一包目录同名的目录**不列**：那是包本体，重复列会出现两行指向同一个目录；
+ * ③ 文件照列（新建在项目根的文件必须有落脚点），**只有项目清单 `workspace.json` 除外**
+ *    ——它是内核的注册表，不是作者的内容，列出来还会让人误以为那是可编辑的作品文件；
+ * ④ 排序沿用 {@link sortDirEntries}（目录在前，其后按名称）。
  */
-export function looseProjectDirs(
+export function looseProjectEntries(
   state: DirListState | undefined,
   artifactDirNames: readonly string[],
 ): DirEntry[] {
   if (!Array.isArray(state)) return [];
   const owned = new Set(artifactDirNames);
-  return sortDirEntries(state.filter((e) => e.isDirectory && !owned.has(e.name)));
+  return sortDirEntries(
+    state.filter((e) => (e.isDirectory ? !owned.has(e.name) : e.name !== WORKSPACE_MANIFEST_FILE)),
+  );
 }
 
 /** 包事实行的输入（三项都可能缺） */
@@ -304,7 +308,7 @@ export function createKojoProjectsPanel(
 
     /**
      * 展开的项目要把**项目根本身**也列一次（2026-10-13 UI 反馈 6）。
-     * 不列就拿不到"包之外的目录"这张清单，作者新建的平级文件夹因此没有落脚点。
+     * 不列就拿不到"包之外的条目"这张清单，作者新建的平级条目因此没有落脚点。
      * `ensureDir` 命中缓存即 no-op，所以这里重复调用不会刮出目录请求风暴。
      */
     useEffect(() => {
@@ -573,7 +577,7 @@ export function createKojoProjectsPanel(
     };
 
     /**
-     * 一条真实目录 / 文件行。包的展开态与项目根「包之外的目录」共用这一个渲染源，
+     * 一条真实目录 / 文件行。包的展开态与项目根「包之外的条目」共用这一个渲染源，
      * 免得两处各自演化出不同的可点性（目录可展开 + 可右键继续往里建；文件点开=进编辑器）。
      */
     function renderEntry(e: DirEntry, depth: number): ReactNode {
@@ -658,7 +662,7 @@ export function createKojoProjectsPanel(
       return h(
         'div',
         { className: 'kp-artifacts' },
-        // 分组头只在"下面还有别的东西"时出现：包与包外目录两段同屏时，不给标题就会被读成
+        // 分组头只在"下面还有别的东西"时出现：包与包外条目两段同屏时，不给标题就会被读成
         // 「这项目冒出了两批包」；只有一批包时项目行本身已经说了几包，再加一行纯属噪音。
         // 这里不再重复计数徽标——项目行右端那枚就是这个数，两格之间再说一遍是噪音。
         withGroupHead
@@ -683,7 +687,7 @@ export function createKojoProjectsPanel(
               {
                 className: 'kp-artifact-row',
                 // 右键整行 = 往这个包的目录里建（作者说"右键根节点"，对他而言"根"就是
-                // 他这个包；项目行同样给菜单，用于在包与包之间加平级文件夹）
+                // 他这个包；项目行同样给菜单，用于在包与包之间加平级文件夹 / 文件）
                 onContextMenu: (ev: PointerEvent) => openCtxMenu(ev, dir),
               },
               h(
@@ -741,16 +745,16 @@ export function createKojoProjectsPanel(
     };
 
     /**
-     * 项目行下面列「包之外的目录」（2026-10-13 UI 反馈 6 的后半条）。
+     * 项目行下面列「包之外的条目」（2026-10-13 UI 反馈 6；2026-11-09 补文件）。
      *
      * 前半条是行内命名框没有槽位（点了菜单界面无变化）；后半条是**即使建成功了也看不见**：
-     * 包行只渲染 `workspace.json` 里登记的包，作者建在包与包之间的平级目录因此从来不上树，
-     * 盘上有、面上无，读起来仍然像"点了没生效"。
+     * 包行只渲染 `workspace.json` 里登记的包，作者建在包与包之间的平级目录、以及右键项目根
+     * 新建的文件因此从来不上树，盘上有、面上无，读起来仍然像"点了没生效"。
      *
      * 只在没有东西可列时整块不渲染（口上树的简洁约束）；有一行就给它一句说明，
      * 免得作者把 `素材` 这类目录误读成"冒出了第二个包"。
      */
-    const renderLooseDirs = (pDir: string, loose: DirEntry[]): ReactNode => {
+    const renderLooseEntries = (pDir: string, loose: DirEntry[]): ReactNode => {
       if (loose.length === 0) return null;
       return h(
         'div',
@@ -759,9 +763,9 @@ export function createKojoProjectsPanel(
           'div',
           {
             className: 'kp-group-title',
-            title: '这些目录不属于任何作者包（右键项目行新建的平级文件夹住在这里）',
+            title: '这些条目不属于任何作者包（右键项目行在项目根新建的平级文件夹 / 文件住在这里）',
           },
-          h('span', null, '包之外的目录'),
+          h('span', null, '包之外的内容'),
           h('span', { className: 'kp-count' }, String(loose.length)),
         ),
         ...loose.map((e) => renderEntry(e, 1)),
@@ -1001,10 +1005,10 @@ export function createKojoProjectsPanel(
         ...projects.map((p) => {
           const pOpen = !closedProjects.has(p.id);
           const pDir = deps.projectDir(p.id);
-          /* 包外目录先在这儿挑出来：既给下面那块用，也决定上面要不要分组头——
-             只有"包 + 包外目录"两段同屏时点名才有意义，否则项目行那枚计数就说清了。 */
+          /* 包外条目先在这儿挑出来：既给下面那块用，也决定上面要不要分组头——
+             只有"包 + 包外条目"两段同屏时点名才有意义，否则项目行那枚计数就说清了。 */
           const loose = pOpen
-            ? looseProjectDirs(deps.dirState(pDir), p.artifacts.map((a) => a.dirName))
+            ? looseProjectEntries(deps.dirState(pDir), p.artifacts.map((a) => a.dirName))
             : [];
           /* 项目行动作：设置 / 重命名 / 复制 / 删除。与包行同一套「悬停或键盘聚焦才显」的克制口径；
              没有对应 deps 的入口不画（缺能力不摆样子）。删除排在最后——破坏性动作不抢首眼。 */
@@ -1098,9 +1102,9 @@ export function createKojoProjectsPanel(
             projectDraftRow(p, 1),
             draftRow(pDir, 1),
             pOpen ? renderArtifacts(p, loose.length > 0) : null,
-            /* 包与包之间的平级目录（反馈 6 的后半条）：建成功了必须在界面上看得见，
-               否则"点了没生效"只解决了一半——盘上有了，面上没有。没有这类目录时整块不渲染。 */
-            pOpen ? renderLooseDirs(pDir, loose) : null,
+            /* 包与包之间的平级条目（反馈 6 的后半条）：建成功了必须在界面上看得见，
+               否则"点了没生效"只解决了一半——盘上有了，面上没有。没有这类条目时整块不渲染。 */
+            pOpen ? renderLooseEntries(pDir, loose) : null,
           );
         }),
       );

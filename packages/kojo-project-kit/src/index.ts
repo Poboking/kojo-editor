@@ -207,7 +207,7 @@ export {
   clampTutorialHeight,
   createKojoProjectsPanel,
   factsFromMeta,
-  looseProjectDirs,
+  looseProjectEntries,
   packageFacts,
   sortDirEntries,
   TUTORIALS_MIN_H,

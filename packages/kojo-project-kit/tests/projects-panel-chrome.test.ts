@@ -226,6 +226,29 @@ describe('作品树 · 文件如实列出（不按 kojo 过滤）', () => {
   });
 });
 
+describe('项目根散装文件 · 新建后必须上树（2026-11-09 用户反馈）', () => {
+  it('根上的 .ERB 进「包之外的内容」区、点行打开它；项目清单 workspace.json 仍不列', () => {
+    const root = '/appdata/workspaces/p0';
+    const entries: DirEntry[] = [
+      { name: 'workspace.json', path: `${root}/workspace.json`, isDirectory: false },
+      { name: 'test.erb', path: `${root}/test.erb`, isDirectory: false },
+    ];
+    const opened: string[] = [];
+    const nodes = render(
+      deps({
+        dirState: (d) => (d === root ? entries : undefined),
+        reveal: (p) => void opened.push(p),
+      }),
+    );
+    const files = byClass(nodes, 'kp-file-name').map((n) => n.text);
+    expect(files).toContain('test.erb');
+    expect(files).not.toContain('workspace.json');
+    const row = nodes.find((n) => has(n, 'kp-file-btn') && n.title === `${root}/test.erb`)!;
+    (row.props.onClick as () => void)();
+    expect(opened).toEqual([`${root}/test.erb`]);
+  });
+});
+
 describe('空态与分组头', () => {
   it('没有项目 ⇒ 虚线空态卡（题头 + 一句指引），CTA 跟着 openNewWizard 走', () => {
     const withDep = render(deps({ projects: () => [], openNewWizard: () => {} }));
@@ -244,9 +267,9 @@ describe('空态与分组头', () => {
     expect(nodes.filter((n) => n.type === 'button' && n.text === '重试')).toHaveLength(1);
   });
 
-  it('包与包外目录同屏 ⇒ 两段各有分组头；只有一段 ⇒ 不凭空加行', () => {
+  it('包与包外条目同屏 ⇒ 两段各有分组头；只有一段 ⇒ 不凭空加行', () => {
     const both = render(deps({ projects: () => project(1) }));
-    expect(byClass(both, 'kp-group-title').map((n) => n.text)).toEqual(['作者包', '包之外的目录1']);
+    expect(byClass(both, 'kp-group-title').map((n) => n.text)).toEqual(['作者包', '包之外的内容1']);
     const onlyPkg = render(deps({ projects: () => project(1), dirState: () => undefined }));
     expect(byClass(onlyPkg, 'kp-group-title')).toEqual([]);
   });

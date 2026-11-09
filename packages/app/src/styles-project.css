@@ -5834,7 +5834,7 @@ button.primary .hint {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-/* 分组头：一段列表的点名行（包 / 包之外的目录两段同屏时才出现）。
+/* 分组头：一段列表的点名行（包 / 包之外的内容两段同屏时才出现）。
    顶线 + 小字 + 行尾计数，与检索面板文件头（.search-file + .ksp-file-count）同一套读法。
    ui-kit-candidate: 面板内分组头（hairline + 名称 + 计数徽标） */
 .kp-group-title {
