@@ -404,6 +404,16 @@ export function createKojoProjectsPanel(
       const wasFile = draft.kind !== 'folder';
       setDraft(null);
       setDraftValue('');
+      // 项目根的展开由 closedProjects 控制，openDirs 只管包与子目录。
+      const owner = deps.projects().find((p) => deps.projectDir(p.id) === draft.dir);
+      if (owner !== undefined) {
+        setClosedProjects((prev) => {
+          if (!prev.has(owner.id)) return prev;
+          const next = new Set(prev);
+          next.delete(owner.id);
+          return next;
+        });
+      }
       // 新建的是文件就直接打开：作者的下一步十有八九是写内容
       if (wasFile) deps.reveal(r.path);
     };

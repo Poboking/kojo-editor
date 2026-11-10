@@ -124,6 +124,91 @@ const flush = async (): Promise<void> => {
   await Promise.resolve();
 };
 
+describe('项目根新建 · 成功后条目可见', () => {
+  function startNewItem(draw: () => FakeNode[], label: string, collapsed = true): void {
+    const row = byClass(draw(), 'kp-project-btn')[0]!;
+    if (collapsed) (row.props.onClick as () => void)();
+    (row.props.onContextMenu as (e: unknown) => void)({
+      clientX: 10,
+      clientY: 10,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    });
+    const item = draw().find((n) => n.props.role === 'menuitem' && n.text.includes(label))!;
+    (item.props.onClick as () => void)();
+    (byClass(draw(), 'kp-draft-input')[0]!.props.onChange as (e: unknown) => void)({
+      target: { value: '测试' },
+    });
+  }
+
+  it.each([
+    { kind: 'erb' as const, label: '新建 ERB 文件', name: '测试.erb', collapsed: true },
+    { kind: 'erb' as const, label: '新建 ERB 文件', name: '测试.erb', collapsed: false },
+    { kind: 'folder' as const, label: '新建文件夹', name: '测试', collapsed: true },
+    { kind: 'folder' as const, label: '新建文件夹', name: '测试', collapsed: false },
+  ])('$kind · collapsed=$collapsed：落点不变、创建后上树，文件打开一次', async ({ kind, label, name, collapsed }) => {
+    const root = '/appdata/workspaces/p1';
+    const path = `${root}/${name}`;
+    const entries: DirEntry[] = [];
+    const reveal = vi.fn();
+    const createItem = vi.fn<KojoProjectsPanelDeps['createItem']>(async () => {
+      entries.push({ name, path, isDirectory: kind === 'folder' });
+      return { ok: true, path, displayName: name };
+    });
+    const { draw } = mount(deps({
+      dirState: (dir) => (dir === root ? entries : undefined),
+      createItem,
+      reveal,
+    }));
+    startNewItem(draw, label, collapsed);
+    (byClass(draw(), 'kp-draft-input')[0]!.props.onKeyDown as (e: unknown) => void)({ key: 'Enter' });
+    await flush();
+
+    expect(createItem).toHaveBeenCalledExactlyOnceWith(root, '测试', kind);
+    expect(byClass(draw(), 'kp-draft-input')).toHaveLength(0);
+    expect(byClass(draw(), 'kp-loose')).toHaveLength(1);
+    expect(byClass(draw(), 'kp-loose')[0]!.text).toContain(name);
+    if (kind === 'erb') expect(reveal).toHaveBeenCalledExactlyOnceWith(path);
+    else expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('创建失败：保留名字和错误，不展开项目、不打开文件', async () => {
+    const reveal = vi.fn();
+    const root = '/appdata/workspaces/p1';
+    const { draw } = mount(deps({
+      dirState: (dir) => (dir === root ? [{ name: '已有.erb', path: `${root}/已有.erb`, isDirectory: false }] : undefined),
+      createItem: async () => ({ ok: false, reason: '同名文件已存在' }),
+      reveal,
+    }));
+    startNewItem(draw, '新建 ERB 文件');
+    (byClass(draw(), 'kp-draft-input')[0]!.props.onKeyDown as (e: unknown) => void)({ key: 'Enter' });
+    await flush();
+
+    expect(byClass(draw(), 'kp-draft-input')[0]!.props.value).toBe('测试');
+    expect(byClass(draw(), 'kp-draft-err')[0]!.text).toBe('同名文件已存在');
+    expect(byClass(draw(), 'kp-loose')).toHaveLength(0);
+    expect(reveal).not.toHaveBeenCalled();
+  });
+
+  it('取消新建：不创建、不展开项目、不打开文件', () => {
+    const createItem = vi.fn<KojoProjectsPanelDeps['createItem']>();
+    const reveal = vi.fn();
+    const root = '/appdata/workspaces/p1';
+    const { draw } = mount(deps({
+      dirState: (dir) => (dir === root ? [{ name: '已有.erb', path: `${root}/已有.erb`, isDirectory: false }] : undefined),
+      createItem,
+      reveal,
+    }));
+    startNewItem(draw, '新建 ERB 文件');
+    (byClass(draw(), 'kp-draft-input')[0]!.props.onKeyDown as (e: unknown) => void)({ key: 'Escape' });
+
+    expect(byClass(draw(), 'kp-draft-input')).toHaveLength(0);
+    expect(byClass(draw(), 'kp-loose')).toHaveLength(0);
+    expect(createItem).not.toHaveBeenCalled();
+    expect(reveal).not.toHaveBeenCalled();
+  });
+});
+
 describe('项目行动作 · 设置 / 删除的入口', () => {
   it('deps 提供时项目行出现「设置」与「删除」（悬停态类组与包行同族）', () => {
     const { draw } = mount(
