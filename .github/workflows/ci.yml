@@ -69,8 +69,10 @@ jobs:
       # 不加 --shell / --corpus：桌面壳冒烟与真实语料集成需要桌面会话 + 本机游戏目录，
       # CI 上属于「没得跑」而非「跑挂了」——release-gate 把这两类记为 SKIP 并写明原因，
       # 不判红（口径见 `node tools/release-gate.mjs --help`）。本步不下载任何额外工具。
+      # --only 点名 version-sync：三处版本逐字一致（AGENTS §七）在**日常 CI** 就抓漂移，
+      # 不必等发版 tag 上的 release.yml；该检查进程内读三个 JSON，零额外耗时。
       - name: Release gate（快速档 · R9.6 机器面）
-        run: node tools/release-gate.mjs --skip-tests
+        run: node tools/release-gate.mjs --skip-tests --only=typecheck-root,typecheck-app,audit,conformance,version-sync
 
   # Rust 侧（Tauri 宿主 IO 原语）独立并行闸：不塞进 verify 前面拖慢它。
   # 本机基线 2026-10-17 实测：128 tests（123 passed / 5 ignored）。
@@ -95,8 +97,19 @@ jobs:
 
       # 必须经 node 起 cargo：Git-Bash 直跑有 TMP 环境变量坑（docs/PITFALLS.md），
       # 且与 AGENTS.md §三 验证矩阵口径一致。
+      # 两轮重试只吸收**已知 flake**（launcher_probe::q1c_unsuspended_assign_race_window
+      # 1/8 竞态窗、mcp::tests::b5_batch_is_dispatched_concurrently_within_inflight_budget
+      # 满载偶发峰值越过预算；口径见 docs/STATE.md，判据一字不改）。真回归两轮都红，
+      # 不会把失败吞掉；与上面 pnpm install 的重试同形，避免徽章被偶发红误伤。
       - name: cargo test --lib
-        run: node -e "require('child_process').execSync('cargo test --lib',{cwd:'packages/app/src-tauri',stdio:'inherit'})"
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 2; $attempt++) {
+            node -e "require('child_process').execSync('cargo test --lib',{cwd:'packages/app/src-tauri',stdio:'inherit'})"
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "cargo test --lib failed (attempt $attempt/2), retrying once..."
+          }
+          exit 1
 
 # ── 夜间 / 发版前置（**建议，未启用**；故只留注释，不占 CI 分钟）──────────────────
 # 快速档已进 verify；全量档的价值是把 `--json` 报告**留档**（逐项 rc/ms/readings/tail 可回溯）。

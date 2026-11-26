@@ -10,7 +10,7 @@
 ![Built with](https://img.shields.io/badge/Tauri_2_·_React_19_·_Monaco-24C8DB?style=flat-square)
 ![Latest Release](https://img.shields.io/github/v/release/Poboking/kojo-editor?style=flat-square)
 ![Downloads](https://img.shields.io/github/downloads/Poboking/kojo-editor/total?style=flat-square)
-![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg?branch=main)
 
 **An editor for era-series game script sources (`.ERB` / `.kojo`).**  
 Find the function you need, read other people's scripts, get told while you type, ship to the game in one click. Windows 10 / 11.

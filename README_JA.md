@@ -10,7 +10,7 @@
 ![Built with](https://img.shields.io/badge/Tauri_2_·_React_19_·_Monaco-24C8DB?style=flat-square)
 ![Latest Release](https://img.shields.io/github/v/release/Poboking/kojo-editor?style=flat-square)
 ![Downloads](https://img.shields.io/github/downloads/Poboking/kojo-editor/total?style=flat-square)
-![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg?branch=main)
 
 **era 系ゲームの口上スクリプト（`.ERB` / `.kojo`）用エディタ。**  
 関数が見つかる、他人の口上が読める、書きながらミスに気づける、出来たらワンクリックでゲームに入る。Windows 10 / 11。

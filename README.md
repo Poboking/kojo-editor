@@ -10,7 +10,7 @@
 ![Built with](https://img.shields.io/badge/Tauri_2_·_React_19_·_Monaco-24C8DB?style=flat-square)
 ![Latest Release](https://img.shields.io/github/v/release/Poboking/kojo-editor?style=flat-square)
 ![Downloads](https://img.shields.io/github/downloads/Poboking/kojo-editor/total?style=flat-square)
-![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/Poboking/kojo-editor/actions/workflows/ci.yml/badge.svg?branch=main)
 
 **era 系游戏口上脚本（`.ERB` / `.kojo`）编辑器。**  
 找得到函数、看得懂别人的口上、写错当场提醒、改完一键进游戏。Windows 10 / 11。

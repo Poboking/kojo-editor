@@ -76,17 +76,17 @@ jobs:
           tagName: v__VERSION__
           releaseName: "kojo-editor v__VERSION__"
           releaseBody: |
-            era 口上作者的结构感知编辑器。**v0.4.3-beta.1 预发布版**——自 v0.4.2 正式版以来的功能预览，欢迎试用与回报；预发布版**不进入稳定版自动更新通道**。
+            era 口上作者的结构感知编辑器。**v0.4.3 正式版**——自 v0.4.2 以来的功能与修复总量，已过完整发版闸；本版进入稳定版自动更新通道。
 
             ## 下载与安装
             - **Windows 10/11（x64）安装版**：下载本页的 `*_x64-setup.exe`，双击安装。
             - **绿色版**：下载本页的 `*_x64-portable.zip`，解压即用，不写注册表、不建开始菜单。
             - `SHA256SUMS.txt` 附安装包与绿色版的校验值。
-            - 本版为预发布：`releases/latest` 仍指向 **v0.4.2**，稳定版自动更新不会收到本 beta；试用请手动下载本页版本，已装 v0.4.2 的用户不受影响。
+            - 本版为正式版：`releases/latest` 与稳定版自动更新通道均指向 **v0.4.3**；已装 v0.4.2 的用户会在「设置 → 更新」收到升级提示。
 
-            ## 本版重点（v0.4.2 → v0.4.3-beta.1）
-            - **AI 接入（MCP，默认关闭）**——新增本地 MCP 服务：只监听 127.0.0.1 动态端口，Bearer token + Origin 双闸，独立的第四张授权表（read / edit / privileged 三级 + 会话审批 + 审计 + token 轮换 / 撤销）。冻结契约 v1 提供 33 个以只读为主的 tools、8 个 `kojo://project/*` 资源与 3 个 prompt 骨架；设置页「AI 接入」可开关、授权、查审计，附 Codex / DeepSeek Harness / 通用三份客户端样例。未启用时零字节进开机图。
-            - **MCP 真壳端到端取证**——真桌面壳 + 真实 stdio shim 跑通 12/12，并修掉两处分层测试抓不到的接缝缺陷：SSE 应答的 `event:` 行污染 stdout、三个 list 回裸数组导致规范形状不符且 Rust 侧 tier / 特权二次过滤整条跳过。**写类与危险工具仍显式 `NOT_WIRED`**，绝不挂空串假实现。
+            ## 本版重点（v0.4.2 → v0.4.3）
+            - **AI 接入（MCP，默认关闭）**——新增本地 MCP 服务：只监听 127.0.0.1 动态端口，Bearer token + Origin 双闸，独立的第四张授权表（read / edit / privileged 三级 + 会话审批 + 审计 + token 轮换 / 撤销）。冻结契约 v1 现提供 **86 个 tools**（read 41 / edit 15 / privileged 30）、`kojo://project/*` 资源与 prompt 骨架；设置页「AI 接入」可开关、授权、查审计，附 Codex / DeepSeek Harness / 通用三份客户端样例。未启用时零字节进开机图。
+            - **MCP 真壳端到端取证**——真桌面壳 + 真实 stdio shim 跑通，并修掉两处分层测试抓不到的接缝缺陷：SSE 应答的 `event:` 行污染 stdout、三个 list 回裸数组导致规范形状不符且 Rust 侧 tier / 特权二次过滤整条跳过。写类工具经逐项授权后可用（含工作区多根授权）；**危险工具仍 fail-closed**，绝不挂空串假实现。
             - **自动更新完善**——应用常开 4 小时定时重查、更新完成接「立即重启」真通道、检查看门狗 / 会话去重 / 进度节流 / 病因透传、changelog 行内富文本与发标链路静态守卫。
             - **项目级变量引用**——`Shift+F12` 可在 `#DIM` 全局变量上查整个工程（变量腿自成一趟切段）；补上归一化真源、提及位置、旧盘重扫与非等长折叠的形状门修复。
             - **数值看板（右侧侧拉）**——写口上时随手翻查变量字典、项目符号、指令速查与反查引用；真机取证 21 族 / 3,931 名、指令表 222 条、符号页 117,123 函数。
@@ -94,8 +94,8 @@ jobs:
             - **稳定与验证面**——市场面板中文排序改码元序（消掉英文 CI runner 上的稳定红）、快照热载计时量具跟上 v18 元组、启动器 env 探针改成逐项点名的允许集；发版闸门产物上界按 190 提交的功能增量逐笔归因重钉。
 
             ## 已知事项
-            - **预发布版**：功能面广且含默认关闭的实验能力，边界问题欢迎提 Issue；长期写作请照常留备份。
-            - **MCP 的边界**：写类与危险工具（`fileTree.*` / `problems.quickFix` / `diff.compare` / `state.replay` / `preview.document`）按 ADR-0013 刻意不接线；sampling / elicitation / resources-subscribe / progress 四项 P5 能力只写了方向、未实现；不含跨机 TLS，stdio shim 需本机桌面壳在跑。
+            - **正式版**：含默认关闭的实验能力（MCP），边界问题欢迎提 Issue；长期写作请照常留备份。
+            - **MCP 的边界**：特权工具默认不进 `tools/list`，须在设置页逐项批准；写盘仅落在用户授权的写域内（游戏目录默认只读，常驻工作区根逐根授权），域外落点只走 `exportFile` 对话框。sampling / elicitation / resources-subscribe / progress 四项 P5 能力只写了方向、未实现；不含跨机 TLS，stdio shim 需本机桌面壳在跑。
             - Kojo 2.0 仍在切流期：跨档切换后语言面与配色需重载窗口才完整生效（设置页会如实提示，不会静默）；一键迁移对真实语料的迁移率约 27%，其余条目维持拦下。
             - 首次进项目若派生快照未命中，仍会有一次十几秒的全量扫描（已归因；稳态 2–3 秒）。
             - 只提供 **Windows x64**（NSIS 安装包 + 绿色版），安装包**未做代码签名**，SmartScreen 可能提示；绿色版依赖系统 WebView2（Windows 11 自带，Windows 10 可能需 Evergreen 运行时）。
@@ -105,8 +105,8 @@ jobs:
 
             开发者：[Poboking](https://github.com/Poboking) ｜ 许可证：[GPL-3.0-or-later](https://github.com/Poboking/kojo-editor/blob/main/LICENSE)
           releaseDraft: false
-          # 预发布判定：标签名含 '-'（如 v0.4.3-beta.1）即 prerelease，
-          # 避免 beta 抢占 releases/latest 的稳定自动更新通道；正式版（如 v0.4.2）仍为稳定发布。
+          # 预发布判定：标签名含 '-'（如 v0.4.4-beta.1）即 prerelease，
+          # 避免 beta 抢占 releases/latest 的稳定自动更新通道；正式版（如 v0.4.3）仍为稳定发布。
           prerelease: ${{ contains(github.ref_name, '-') }}
           includeUpdaterJson: true
           args: ${{ matrix.args }}

@@ -177,11 +177,11 @@ node tools/kojo-mcp.mjs
 ## 5. 暴露的能力概览
 
 能力注册表唯一真源 `packages/mcp-host/src/index.ts`（冻结契约 v1）。按 `node tools/mcp-inventory.mjs --print`
-盘点：`tools` 共 **77** 个，按 tier 分组 `read 37 / edit 11 / privileged 29`（详见 §6 授权模型；2026-11-06 第四/五波只读补齐、余项① / ⑤、B3 编辑器写腿、B2 结构化批读、B4 启动器族、B10 打开文档面落地后按同一命令复核）。
+盘点：`tools` 共 **86** 个，按 tier 分组 `read 41 / edit 15 / privileged 30`（详见 §6 授权模型；2026-11-06 第四/五波只读补齐、余项① / ⑤、B3 编辑器写腿、B2 结构化批读、B4 启动器族、B10 打开文档面落地后按同一命令复核；2026-11-27 v0.4.3 发版按 `node tools/mcp-inventory.mjs --json` 重钉）。
 这些是**规范定义**的计数；`tools/list` 还会按会话 `tier` 与第四张表进一步过滤，危险工具默认缺席。
 另外，生产真源会把命令面板命令投影成同名工具（`commands.list` 读数与工具 `tier` 同源），但它们
 **一律按 `privileged` fail-closed**，默认不出现在 `tools/list`、也不接受 `edit` 会话调用（§6）；
-上面的 77 个具名工具计数不含这部分（命令面板投影的条数即 `commands` 读数，见 §10.5）。
+上面的 86 个具名工具计数不含这部分（命令面板投影的条数即 `commands` 读数，见 §10.5）。
 
 ### 5.1 tools（按 tier，面向模型）
 
