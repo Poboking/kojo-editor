@@ -4148,6 +4148,12 @@ impl McpBridge for B5Bridge {
         };
         std::thread::spawn(move || {
             std::thread::sleep(delay);
+            // 夹具在途计数必须与生产预算同口径：`deliver_shared` 内部会先
+            // `p.slot.release()` 归还预算位，调度器当场就能派发下一条；若桥侧
+            // decrement 落后于它，满载时旧请求仍被算在途、新请求又进来，
+            // peak 虚高到 9 ⇒ 「突破预算 8」假红（b5 CI 两轮连红根因）。
+            // 先减再回帧，保证夹具 peak 与生产 budget peak 逐位对账。
+            inflight.fetch_sub(1, Ordering::SeqCst);
             let _ = server::deliver_shared(
                 &shared,
                 McpRespondArgs {
@@ -4157,7 +4163,6 @@ impl McpBridge for B5Bridge {
                     error: None,
                 },
             );
-            inflight.fetch_sub(1, Ordering::SeqCst);
         });
         Ok(())
     }
