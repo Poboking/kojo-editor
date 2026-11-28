@@ -104,3 +104,12 @@ export const ERATOHOREVERSE = {
    */
   instructionCsv: 'Train.csv',
 } as const;
+
+/* ---------------- 引擎档位锁（P1-6） ---------------- */
+
+/**
+ * eraTohoReverse = v24 档。引擎 `Emuera1824+v1.exe`（真盘实测，本文件头注）；
+ * 1824 系修 bug fork 谱系，v24 为其最近代理（honke_1824 无树）。无词面差集可判，
+ * 锁按引擎系谱声明。
+ */
+export const ENGINE_PROFILE_LOCK = 'v24' as const;

@@ -52,3 +52,13 @@ export const ERAFL = {
    */
   kojoDirPattern: /^(\d+)_(.+)$/,
 } as const;
+
+/* ---------------- 引擎档位锁（P1-6） ---------------- */
+
+/**
+ * eraFL = em_ee 档（最小充分档）。词面判据（app/tests/engine-profile-locks 判据 d）：
+ * 语料差集 129 词全数落 em_ee 语句面；v24 面缺 53 词（DT 族 / XML 族 / MAP 族 /
+ * GDRAW 族 / TOOLTIP 族全家缺席）判死下界；与 snake-only 词（106 个）零交集 ⇒ 词面证据升不到
+ * snake。`VARI`(1942 次)/`VARS`(1588 次) 走条件注册通道（UseScopedVariableInstruction 开）。
+ */
+export const ENGINE_PROFILE_LOCK = 'em_ee' as const;

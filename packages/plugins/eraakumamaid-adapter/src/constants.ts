@@ -50,3 +50,12 @@ export const ERAAKUMA_MAID = {
  * 故按盘实况取全大写。
  */
 export const TRAIN_CSV = 'TRAIN.csv';
+
+/* ---------------- 引擎档位锁（P1-6） ---------------- */
+
+/**
+ * eraAkumaMaid = v24 档（1824 系最近代理）。引擎「Emuera 1824+v18 私家改造版」
+ * （本文件头实测注）；yaml caveat：无原版 1.824 树，v24 = 1824+v24 修 bug fork
+ * 是 1824 系最近代理。无词面差集可判，锁按引擎系谱声明——词面证据来了再调档。
+ */
+export const ENGINE_PROFILE_LOCK = 'v24' as const;

@@ -160,3 +160,13 @@ export const LAUNCH_LOG_RULES: LogParseRules = {
     return trimmed === '' || LAUNCH_SHAPE_ONLY.test(trimmed);
   },
 };
+
+/* ---------------- 引擎档位锁（P1-6） ---------------- */
+
+/**
+ * eraTW = snake 档（4.981 SkiaSharp；1824+v24+EM+EE+Skia）——项目自身的复刻目标。
+ * 结构锁见 `packages/app/tests/engine-profile-locks.test.ts`：erb-parser 指令表 ===
+ * snake 无条件指令面；eratw fork 另有 27 个表达式扩展（ENTITY 族等）不在上游面。
+ * 数据契约：`plugin-api/src/erb-engine-profiles`（深路径，不进开机图）。
+ */
+export const ENGINE_PROFILE_LOCK = 'snake' as const;
