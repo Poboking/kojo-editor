@@ -1,12 +1,13 @@
 // 统一验收 CLI：注册表驱动，只编排不改写（每个检查 = spawn 既有命令）。
 // 用法: node tools/verify.mjs <检查名> [透传参数...]   |   --list（或无参数）看注册表
-//   检查名: unit / typecheck / audit / erbcheck / engine / corpus / dom / ipc / measure / all
+//   检查名: unit / typecheck / audit / erbcheck / mcp-health / mcp-inventory / mcp-conformance
+//           / engine / engine-setup / loadtest / scene / corpus / dom / ipc / measure / all
 //   全局开关: --json  （每检查一行 JSON：{name,status,durationMs,note}，不打人话摘要行）
 // 前置依赖: engine 需 KOJO_CLIDBG_DIR（--CliDebug 引擎沙盒）内含引擎 exe 或 KOJO_CLIDBG_EXE 指到实体；
 //   corpus 需 KOJO_SMOKE_PROJECT 指向真实语料目录（该闸仍显式 opt-in，见下）；ipc/dom 需桌面环境；缺依赖一律 SKIP 不算 FAIL。
 //   loadtest 的语料目录**认内容不认名**（tools/corpus.mjs：--corpus > KOJO_CORPUS_DIR > 扫 C:/game/* 筛 ERB/+CSV/）；
 //   KOJO_CORPUS_DIR 设了但不成立 = 硬失败（列盘上候选、非零退出），不静默换版本。
-// all 取舍: 只跑无需额外参数的检查（unit/typecheck/audit/erbcheck + 条件可跑的 corpus），
+// all 取舍: 只跑无需额外参数的检查（unit/typecheck/audit/erbcheck/mcp-* + 条件可跑的 corpus），
 //   dom/ipc/measure 属桌面冒烟（分钟级、单实例）不进 all；
 //   engine 在 all 中为显式 opt-in——须同时满足 KOJO_VERIFY_ENGINE=1 且引擎沙盒存在，
 //   届时对仓库 golden（kojo-sugar/tests/goldens/corpus-k12-lumia-sekumara.kojo）跑全链路。
@@ -94,6 +95,24 @@ const CHECKS = [
       )),
   },
   {
+    name: 'mcp-health',
+    describe: 'MCP 能力面五格体检（枚数/帧余量/缺口/孤儿写腿/README 漂移；任一格漂移即红）',
+    precheck: () => null,
+    run: async (argv) => exitToResult(await shNode(['tools/mcp-health.mjs', ...argv])),
+  },
+  {
+    name: 'mcp-inventory',
+    describe: 'MCP 盘点缺源闸（--check：某条接线指向的真源已不存在即红；不带 --check 时是只读生成器）',
+    precheck: () => null,
+    run: async (argv) => exitToResult(await shNode(['tools/mcp-inventory.mjs', '--check', ...argv])),
+  },
+  {
+    name: 'mcp-conformance',
+    describe: 'MCP 协议一致性对拍（--self-test：54 条，任一失败即红）',
+    precheck: () => null,
+    run: async (argv) => exitToResult(await shNode(['tools/mcp-conformance.mjs', '--self-test', ...argv])),
+  },
+  {
     name: 'engine',
     describe: 'kojo→ERB→真引擎全链路（clidbg-run.cjs，参数透传）',
     precheck: () => {
@@ -171,7 +190,7 @@ const CHECKS = [
   },
 ];
 
-const ALL_NAMES = ['unit', 'typecheck', 'audit', 'erbcheck', 'engine', 'corpus'];
+const ALL_NAMES = ['unit', 'typecheck', 'audit', 'erbcheck', 'mcp-health', 'mcp-inventory', 'mcp-conformance', 'engine', 'corpus'];
 
 // precheck 返回值三态：null=就绪 / string=缺依赖(SKIP) / {hardFail}=前置指错了(FAIL)。
 const preNote = (reason) => (typeof reason === 'object' && reason !== null ? reason.hardFail : reason);

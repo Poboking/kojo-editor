@@ -29,8 +29,11 @@
  *   node tools/mcp-inventory.mjs --print --markdown
  *   node tools/mcp-inventory.mjs --json                   # 机器可读摘要（稳定 schema，见下）
  *   node tools/mcp-inventory.mjs --root <dir> --print     # 对拍夹具（见 tools/tests/mcp-inventory.test.ts）
+ *   node tools/mcp-inventory.mjs --check                  # 缺源闸：missingSources 非空 ⇒ exit 1 并逐条点名
  *
  * 输出格式优先级：`--markdown`（人类草案）> `--json`（机器摘要）> `--print` / 缺省（全量 JSON）。
+ * `--check` 可与上述任一格式 / `--root` 叠加：输出格式照旧，退出码以缺源判定为准；
+ * 只给 `--check`（无格式开关）时打一行人话结论。
  *
  * `--json` 机器摘要（自身 schemaVersion 从 1 起，与全量 JSON 的 SCHEMA_VERSION 独立演进）：
  *   { schemaVersion, generatedBy, counts, gaps[], writeLegs }
@@ -45,7 +48,7 @@
  * （real-sources-io.ts 的 ioTools ∪ real-sources.ts 的 buildUiSupplemental），缺口登记读
  * MCP_TOOL_GAP_MAP，**不硬编码、不猜**；腿源缺席时如实标注（sourcesMissing）。
  *
- * 退出码：0 = 完成（盘点草案不是质量闸，缺源不判红）；2 = 参数错。
+ * 退出码：0 = 完成（默认盘点草案不是质量闸，缺源不判红）；1 = `--check` 且 missingSources 非空；2 = 参数错。
  */
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
@@ -712,6 +715,13 @@ function markdownDraft(inv) {
 
 /* ---------------- CLI ---------------- */
 
+/** 缺源闸的逐条原因（只说「为什么判缺失」，不复述盘点口径）。 */
+function missingSourceReason(src) {
+  return src === `${SOURCES.pluginsDir}/*`
+    ? '目录不存在或无可解析的 .ts/.tsx 源码（槽贡献读数为 0）'
+    : '文件不存在或不可读（该源读数为 0）';
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const rootIdx = argv.indexOf('--root');
@@ -721,18 +731,34 @@ async function main() {
     return;
   }
   const root = rootIdx >= 0 ? path.resolve(argv[rootIdx + 1]) : path.resolve(import.meta.dirname, '..');
+  const wantCheck = argv.includes('--check');
   const wantMarkdown = argv.includes('--markdown');
   const wantMachine = argv.includes('--json');
   const wantPrint = argv.includes('--print') || wantMarkdown || wantMachine || argv.length === 0;
-  if (!wantPrint) return;
+  if (!wantPrint && !wantCheck) return;
   const inv = await buildInventory(root);
   // 格式优先级（见文件头）：--markdown（人类草案）> --json（机器摘要）> --print / 缺省（全量 JSON）。
-  const out = wantMarkdown
-    ? inv.markdown
-    : wantMachine
-      ? `${JSON.stringify(machineSummary(inv), null, 2)}\n`
-      : `${JSON.stringify(inv, null, 2)}\n`;
-  process.stdout.write(out);
+  if (wantPrint) {
+    const out = wantMarkdown
+      ? inv.markdown
+      : wantMachine
+        ? `${JSON.stringify(machineSummary(inv), null, 2)}\n`
+        : `${JSON.stringify(inv, null, 2)}\n`;
+    process.stdout.write(out);
+  }
+  if (!wantCheck) {
+    process.exitCode = 0;
+    return;
+  }
+  // --check：守体检没守的那一条——某条接线指向的源已经不存在了（mcp-health 不读 missingSources）。
+  // 输出格式照旧（上面已按开关打完），退出码以缺源判定为准；只给 --check 时补一行人话结论。
+  if (inv.missingSources.length > 0) {
+    process.stderr.write(`mcp-inventory --check: FAIL — ${inv.missingSources.length} 处真源缺失（接线指向的源已不存在）\n`);
+    for (const src of inv.missingSources) process.stderr.write(`  - ${src}：${missingSourceReason(src)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!wantPrint) process.stdout.write('mcp-inventory --check: PASS — 四处真源齐全（missingSources = 0）\n');
   process.exitCode = 0;
 }
 
