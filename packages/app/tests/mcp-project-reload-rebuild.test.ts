@@ -32,8 +32,15 @@ const ROOT_DIR = '/proj/a';
 /** 真口径：rootId 由 rootDir 反查得出，测试不自己编一个（否则同源闸会红，见判据④）。 */
 const ROOT_ID = rootIdOf(ROOT_DIR);
 
-const reloadEvent = (rootId = ROOT_ID, rootDir = ROOT_DIR): ProjectReloadEvent =>
-  ({ rootId, rootDir, trigger: 'activate' }) as ProjectReloadEvent;
+const reloadEvent = (rootId = ROOT_ID, rootDir = ROOT_DIR): ProjectReloadEvent => ({
+  rootId,
+  rootDir,
+  // 契约里 `trigger` 只有两枚（`evicted` / `returned`），快切回来固定 `reason:'fast-switch'`。
+  // 这里**不写 as 断言**：夹具必须是生产真能发出的那一种，否则类型闸看不到漂移
+  // （WP-3a 初版写成 `trigger:'activate'` + as，`pnpm --filter @kojo/app typecheck` 一直红）。
+  trigger: 'returned',
+  reason: 'fast-switch',
+});
 
 /** 用真索引 + 假文件系统：接缝就是「盘上有什么」与「索引怎么喂」，重建逻辑本身不假。 */
 function makeSeams(initial: Record<string, string>, options: { throwOn?: string } = {}) {
@@ -159,7 +166,8 @@ describe('WP-3a 增量重建接缝', () => {
     const receipt = (await createS1IncrementalReloadHook(seams)({
       ...reloadEvent(),
       trigger: 'evicted',
-    } as ProjectReloadEvent)) as ProjectReloadResult;
+      reason: 'lru',
+    })) as ProjectReloadResult;
 
     // 该根不在驻留集了：正确动作是清掉它的残留，**不是**给它重建（那会把离开的项目灌回索引）。
     expect(receipt.rebuilt).toMatchObject({ mode: 'prune', removed: 1, added: 0, updated: 0 });

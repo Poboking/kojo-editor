@@ -17,7 +17,12 @@ import type { ProjectReloadEvent } from '@kojo/plugin-api';
 
 const ROOT_DIR = '/proj/a';
 const ROOT_ID = rootIdOf(ROOT_DIR);
-const reloadEvent = () => ({ rootId: ROOT_ID, rootDir: ROOT_DIR, trigger: 'activate' }) as ProjectReloadEvent;
+const reloadEvent = (): ProjectReloadEvent => ({
+  rootId: ROOT_ID,
+  rootDir: ROOT_DIR,
+  trigger: 'returned',
+  reason: 'fast-switch',
+});
 
 function bench(fileCount: number, changed: number) {
   const disk = new Map<string, string>();
