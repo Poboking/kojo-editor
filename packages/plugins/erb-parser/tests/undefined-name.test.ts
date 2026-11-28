@@ -86,16 +86,19 @@ describe('collectUndefinedNameDiagnostics · 真阳性', () => {
   });
 
   it('形参作用域按函数隔离：别的函数里的同名形参不算本函数已知', () => {
-    const text = '@A(P1)\nIF P1 > 0\n@B\nIF P1 > 0';
+    // ERBDIAG-ERATW：样本名避开单字母引擎内建族（A..Z 是引擎合法变量，见
+    // plugin-api/src/erb.ts 的 @erb-engine-names 生成区间），否则 did-you-mean 会给出 P 候选，
+    // 把"形参隔离"这条判据淹在词表细节里。
+    const text = '@A(PP1)\nIF PP1 > 0\n@B\nIF PP1 > 0';
     expect(collect(text)).toEqual([
       {
         line: 4,
         severity: 'warning',
-        message: '未定义的名称「P1」：这里没有它的声明（#DIM 声明与局部声明都不含它）——改成已有的名字，或先把它声明出来。',
+        message: '未定义的名称「PP1」：这里没有它的声明（#DIM 声明与局部声明都不含它）——改成已有的名字，或先把它声明出来。',
         startColumn: 4,
-        endColumn: 6,
+        endColumn: 7,
         code: ERB_UNDEFINED_NAME,
-        name: 'P1',
+        name: 'PP1',
         suggestions: [],
       },
     ]);
@@ -285,9 +288,10 @@ describe('collectUndefinedNameDiagnostics · 批次十一收窄（每条都有�
 describe('collectUndefinedNameDiagnostics · 批次十二（字符串词法盲区）', () => {
   it('`\\"` 转义不让引号配对翻转：CASE 字符表里的 ASCII 片段不是变量', () => {
     expect(collect('CASE "／", "\\"", "l", "y"')).toEqual([]);
-    // 反证：字符串外同样短的名字照报
-    expect(collect('CASE l').map((d) => d.name)).toEqual(['l']);
-    expect(collect('IF y > 0').map((d) => d.name)).toEqual(['y']);
+    // 反证：字符串外同样短的名字照报。样本名避开单字母引擎内建族（A..Z，见
+    // plugin-api/src/erb.ts（@erb-engine-names 生成区间））——l/y 如今是合法引擎变量，不报才对。
+    expect(collect('CASE QQQ').map((d) => d.name)).toEqual(['QQQ']);
+    expect(collect('IF ZZZ > 0').map((d) => d.name)).toEqual(['ZZZ']);
   });
 
   it('`@"…%…%"` 插值串：字面量内容（含 `{…}` 与嵌套字符串）不是变量引用', () => {

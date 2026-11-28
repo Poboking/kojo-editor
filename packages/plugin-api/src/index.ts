@@ -1098,6 +1098,9 @@ export type {
    插件（`@kojo/plugin-erb-parser`）只许依赖 plugin-api ⇒ "永远有定义"的引擎词表住这里；
    着色显示层那份（`ENGINE_VARIABLE_REFERENCE_HEADS`）在 `@kojo/kojo-vocab/engine`。 */
 export { ERB_ENGINE_RESERVED_IDENTIFIERS, ERB_ENGINE_STRING_IDENTIFIERS } from './erb';
+/* ERBDIAG-ERATW：引擎名数据契约（生成区间的只读面；测试据此对拍权威表 ⊆ 生产表）。 */
+export { ERB_ENGINE_NAMES, ERB_ENGINE_NAME_LIST } from './erb';
+export type { ErbEngineNameEntry } from './erb';
 
 /* ---- Monaco 语言面契约（SDK B4，2026-10-27；独占追加区块，勿在他处重排） ----
    与 IC 批同一条纪律：`monaco-language.ts` 是纯类型叶子，桶里只许 `export type`。 */

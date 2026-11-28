@@ -1,0 +1,271 @@
+# variables.yaml — Emuera 变量模型规约
+# 反编译来源: reference/emuera-cs/（版本字符串 1.824.0.0，见 VariableData.cs:1127）
+# 所有 source 均为 "相对路径:行号"；行号以反编译 C# 为准。
+meta:
+  source_assembly: MinorShift.Emuera (Emuera 1.824.0.0)
+  source_sha256: afa5143782d39cb7b6ceacd6f2271f8d322cab0e3f0c9b730a7ac0d3a6bba74e
+  sources:
+    - MinorShift.Emuera.GameData.Variable/VariableData.cs
+    - MinorShift.Emuera.Runtime.Script.Statements.Variable/VariableCode.cs
+    - MinorShift.Emuera.Runtime.Script.Data/ConstantData.cs
+    - MinorShift.Emuera.Runtime.Script.Statements.Variable/CharacterData.cs
+    - MinorShift.Emuera.GameData.Variable/VariableToken.cs
+    - MinorShift.Emuera.GameData.Variable/CharaVariableToken.cs
+    - MinorShift.Emuera.GameData.Variable/LocalVariableToken.cs
+    - MinorShift.Emuera.GameData.Variable/UserDefinedVariableToken.cs
+    - MinorShift.Emuera.GameData.Variable/UserDefinedCharaVariableToken.cs
+    - MinorShift.Emuera.Runtime.Script.Data/UserDefinedVariableData.cs
+    - MinorShift.Emuera.Runtime.Script.Statements.Variable/VariableEvaluator.cs
+
+# 说明:
+# - "index" 为 VariableCode.__LOWERCASE__ (低 16 位) 对应的存储数组下标（VariableToken.cs:68）。
+# - saved 判定依据 VariableToken 构造函数（VariableToken.cs:88-154）；二进制存档按 IsSavedata 逐变量写读（VariableData.cs:3980-3997, 4081-4211）。
+# - 标量整数变量（0 维）当前为空集: VariableData 构造中 dataInteger 长度为 0（VariableData.cs:2962），
+#   且存档循环 `for (i<0)`（VariableData.cs:3518-3525）。所有"看起来像标量"的变量其实都是 1 维数组，
+#   TARGET/MASTER/RESULT 等只是通常只用 [0] 元素（默认值初始化见 VariableData.cs:3491-3510）。
+integer_basics: []   # 无 0 维整数变量
+
+# 1 维整数数组（存储: VariableData.dataIntegerArray[65]，构造见 VariableData.cs:2963-2967）
+# dims 统一为 1；size 默认 1000（ConstantData.cs:212-215），特例另注；size 可被 VariableSize.CSV 修改（ConstantData.cs:309-551）
+integer_arrays:
+  - {name: DAY,       index: 0,  size: 1000, saved: true,  global: false, source: "VariableData.cs:3014", note: "存档判定 VarCodeInt<60 (VariableToken.cs:141-146)"}
+  - {name: MONEY,     index: 1,  size: 1000, saved: true,  global: false, source: "VariableData.cs:3015"}
+  - {name: ITEM,      index: 2,  size: 1000, saved: true,  global: false, source: "VariableData.cs:3016"}
+  - {name: FLAG,      index: 3,  size: 10000, saved: true, global: false, source: "VariableData.cs:3017; ConstantData.cs:216"}
+  - {name: TFLAG,     index: 4,  size: 1000, saved: true,  global: false, source: "VariableData.cs:3018", note: "index 4 < 60 ⇒ 经典存档覆盖 (VariableToken.cs:141-146; VariableData.cs:3526-3529)"}
+  - {name: UP,        index: 5,  size: 1000, saved: true,  global: false, source: "VariableData.cs:3019"}
+  - {name: PALAMLV,   index: 6,  size: 1000, saved: true,  global: false, source: "VariableData.cs:3020", note: "默认值取 Config.PalamLvDef (VariableData.cs:3485-3487)"}
+  - {name: EXPLV,     index: 7,  size: 1000, saved: true,  global: false, source: "VariableData.cs:3021", note: "默认值取 Config.ExpLvDef (VariableData.cs:3488-3490)；size 是出厂值 1000 (ConstantData.cs:212-215)，本语料 CSV/VariableSize.csv:33 写 EXPLV,200 ⇒ 实读 200（改写链 ConstantData.cs:309-551 的 changeVariableSizeData：名字表槽走 :487 写 MaxDataList，全局 1 维整数走 :539 写 VariableIntArrayLength）；EXPLV 不在 23 组主数组↔名字表联动里 (ConstantData.cs:585-607 无它)，长度只有出厂/CSV 两条路。语料以 EXPLV:(能力值+1..+3) 形态索引它 (fromEN/NEW_UPDATE/UPDATE_MAIN.ERB:284、fromEN/MISC.ERB:1716-1902、DLC/魔法DLC/魔法相关函数.ERB:280-303)，能力值 >197 即越界 ⇒ 原版同样抛 CodeEE (Array 索引抛 → CheckElement 术语化 VariableData.cs:81-87，表达式层原样重抛 VariableTerm.cs:57-78 / FixedVariableTerm.cs:65-79)，只由 Process.DoScript 顶层 catch 吞成屏上错误 (Process.cs:462-477 → handleException :595-660，PrintErrorButton 见 EmueraConsole.cs:1097/:3118) 后继续跑 ⇒ 官方同判，不改引擎、不放宽 checkFlat"}
+  - {name: EJAC,      index: 8,  size: 1000, saved: true,  global: false, source: "VariableData.cs:3022", note: "[0] 默认 10000 (VariableData.cs:3506-3510)"}
+  - {name: DOWN,      index: 9,  size: 1000, saved: true,  global: false, source: "VariableData.cs:3023"}
+  - {name: RESULT,    index: 10, size: 1000, saved: true,  global: false, source: "VariableData.cs:3024", note: "函数掉尾：非方法函数清 0，方法保留（Process.cs:1059-1065 if (!state.IsFunctionMethod)）"}
+  - {name: COUNT,     index: 11, size: 1000, saved: true,  global: false, source: "VariableData.cs:3025"}
+  - {name: TARGET,    index: 12, size: 1000, saved: true,  global: false, source: "VariableData.cs:3026", note: "[0] 默认 1 (VariableData.cs:3496-3500); 角色索引"}
+  - {name: ASSI,      index: 13, size: 1000, saved: true,  global: false, source: "VariableData.cs:3027", note: "[0] 默认 -1 (VariableData.cs:3491-3495); 角色索引"}
+  - {name: MASTER,    index: 14, size: 1000, saved: true,  global: false, source: "VariableData.cs:3028", note: "角色索引"}
+  - {name: NOITEM,    index: 15, size: 1000, saved: true,  global: false, source: "VariableData.cs:3029"}
+  - {name: LOSEBASE,  index: 16, size: 1000, saved: true,  global: false, source: "VariableData.cs:3030"}
+  - {name: SELECTCOM, index: 17, size: 1000, saved: true,  global: false, source: "VariableData.cs:3031"}
+  - {name: ASSIPLAY,  index: 18, size: 1000, saved: true,  global: false, source: "VariableData.cs:3032"}
+  - {name: PREVCOM,   index: 19, size: 1000, saved: true,  global: false, source: "VariableData.cs:3033"}
+  - {name: TIME,      index: 20, size: 1000, saved: true,  global: false, source: "VariableData.cs:3034"}
+  - {name: ITEMSALES, index: 21, size: 1000, saved: true,  global: false, source: "VariableData.cs:3035"}
+  - {name: PLAYER,    index: 22, size: 1000, saved: true,  global: false, source: "VariableData.cs:3036", note: "角色索引"}
+  - {name: NEXTCOM,   index: 23, size: 1000, saved: true,  global: false, source: "VariableData.cs:3037"}
+  - {name: PBAND,     index: 24, size: 1000, saved: true,  global: false, source: "VariableData.cs:3038", note: "[0] 默认 Config.PbandDef (VariableData.cs:3501-3505)"}
+  - {name: BOUGHT,    index: 25, size: 1000, saved: true,  global: false, source: "VariableData.cs:3039"}
+  # A..Z: index 26..51 (VariableCode.cs:54-79), 各 1000, saved: true
+  - {name: "A..Z",    index: "26-51", size: 1000, saved: true, global: false, source: "VariableData.cs:3040-3065; VariableCode.cs:54-79", note: "26 个单字母数组"}
+  - {name: GLOBAL,    index: 63, size: 1000, saved: true, global: true, source: "VariableData.cs:3066; VariableData.cs:3804-3814", note: "全局存档单列: SaveGlobalToStream 写 dataIntegerArray[63]"}
+  - {name: RANDDATA,  index: 64, size: 625, saved: true, global: false, source: "VariableData.cs:3067; ConstantData.cs:218", note: "随机数状态; VariableSize.CSV 中禁止改尺寸 (ConstantData.cs:328-332)"}
+  - {name: ITEMPRICE, index: 60, size: 1000, saved: false, global: false, source: "VariableData.cs:3111; ConstantData.cs:451-455", note: "常量数组 (Int1DConstantToken), 数据来自 ITEM.CSV 第 3 列 (ConstantData.cs:1803-1813); 赋值抛错 (VariableData.cs:610-628)"}
+
+# 1 维字符串数组（存储: VariableData.dataStringArray[7]，构造见 VariableData.cs:2968-2973；默认各 100，STR=20000）
+string_arrays:
+  - {name: SAVESTR, index: 0, size: 100,   saved: true,  global: false, source: "VariableData.cs:3068; ConstantData.cs:223"}
+  - {name: STR,     index: 1, size: 20000, saved: true,  global: false, source: "VariableData.cs:3070; ConstantData.cs:223", note: "初始时被 STRNAME.CSV 的名字表填充以兼容旧脚本 (VariableData.cs:3414-3416)"}
+  - {name: RESULTS, index: 2, size: 100,   saved: false, global: false, source: "VariableData.cs:3071", note: "index 2 ≥1 ⇒ IsSavedata=false (VariableToken.cs:147-152); 经典存档只写 dataStringArray[0] (VariableData.cs:3530-3533)"}
+  - {name: GLOBALS, index: 5, size: 100,   saved: true,  global: true,  source: "VariableData.cs:3072; VariableData.cs:3804-3814", note: "与 GLOBAL 同入全局存档"}
+  - {name: TSTR,    index: 6, size: 100,   saved: false, global: false, source: "VariableData.cs:3069", note: "同 RESULTS, 不入经典存档"}
+  - {name: SAVEDATA_TEXT, index: -, size: 1, saved: true, global: false, source: "VariableData.cs:3073", note: "0 维字符串 (StrVariableToken, 直接 dataString[VarCodeInt], VariableData.cs:303-329); dataString 长度 1 (VariableData.cs:2968)"}
+
+# 多维（2D/3D）系统整数数组 —— 2026-10-19 spec 与 C# 交叉验证补条目
+# 此前这 8 个名字只在 default_sizes 的合并说明里以注释形式出现过（"全部 (100,100)  # DITEMTYPE/DA-DE"），
+# 没有逐条登记 ⇒ spec_crosscheck.py 的 varTokenDic 全集比对判为缺条目。
+# 登记依据（逐条行号）：VariableData.cs:3103-3110 的 varTokenDic.Add；
+# 尺寸打包常量：2D = 429496729700L ⇒ (100,100)（ConstantData.cs:224-226），
+#              3D = 109951267635300L ⇒ (100,100,100)（ConstantData.cs:232-234）；
+# 建数组：VariableData.cs:2977（2D）/ :2993（3D）。
+# saved 判定：这 8 个 VariableCode 值（DITEMTYPE=419627008 … DE=419627013、TA=822280192、TB=822280193）
+#   都带 __SAVE_EXTENDED__(268435456) 位 ⇒ IsSavedata=true 走**扩展存档**名字-值对，不入经典定长段
+#   （VariableToken.cs:93-96 命中，:103 的 `Code & 673054720` switch 不参与）。
+multi_dim_arrays:
+  - {name: DITEMTYPE, dim: 2, index: 0, size: "(100,100)", saved: true,  global: false, source: "VariableData.cs:3103; ConstantData.cs:224-226; VariableData.cs:2977", note: "Int2DVariableToken; VarCodeInt = 低 16 位 (VariableCode.cs:142)"}
+  - {name: DA,        dim: 2, index: 1, size: "(100,100)", saved: true,  global: false, source: "VariableData.cs:3104; VariableCode.cs:143"}
+  - {name: DB,        dim: 2, index: 2, size: "(100,100)", saved: true,  global: false, source: "VariableData.cs:3105; VariableCode.cs:144"}
+  - {name: DC,        dim: 2, index: 3, size: "(100,100)", saved: true,  global: false, source: "VariableData.cs:3106; VariableCode.cs:145"}
+  - {name: DD,        dim: 2, index: 4, size: "(100,100)", saved: true,  global: false, source: "VariableData.cs:3107; VariableCode.cs:146"}
+  - {name: DE,        dim: 2, index: 5, size: "(100,100)", saved: true,  global: false, source: "VariableData.cs:3108; VariableCode.cs:147"}
+  - {name: TA,        dim: 3, index: 0, size: "(100,100,100)", saved: true, global: false, source: "VariableData.cs:3109; ConstantData.cs:232-234; VariableData.cs:2993", note: "Int3DVariableToken (VariableCode.cs:150)"}
+  - {name: TB,        dim: 3, index: 1, size: "(100,100,100)", saved: true, global: false, source: "VariableData.cs:3110; VariableCode.cs:151"}
+
+
+# 函数局部变量（按函数名 subID 实例化，不入存档）
+local_vars:
+  - {name: LOCAL,  index: 61, size: 1000, source: "VariableData.cs:3180-3183", note: "LocalVariableToken 按 subId(函数名) 创建 (VariableData.cs:3190-3193); 数组懒初始化 (VariableData.cs:1148-1155)"}
+  - {name: ARG,    index: 62, size: 1000, source: "VariableData.cs:3183"}
+  - {name: LOCALS, index: 3,  size: 100,  source: "VariableData.cs:3184-3187"}
+  - {name: ARGS,   index: 4,  size: 100,  source: "VariableData.cs:3187"}
+  - {name: LOCALF, index: 0, size: 10, source: "fork-src VariableData.cs:376-377; ConstantData.cs:211-217; VariableCode.cs:99", note: "fork 新增的浮点局部数组(double[]，非 SparseArray); 默认长 10 可被 VARIABLESIZE.CSV 改写 (ConstantData.cs:532-533); #LOCALFSIZE 按函数拉大 (LogicalLineParser.cs:257-266); 实际分配在 ExecutionContext.LocalFloats (ExecutionContext.cs:29,55-62; VariableToken.cs:1894)"}
+  - {name: ARGF,   index: 1, size: 10, source: "fork-src VariableData.cs:378-379; ConstantData.cs:211-217; VariableCode.cs:100", note: "浮点型函数实参; 尺寸随函数参数声明拉大且不小于默认 (VariableLocal.cs:46-52); 运行时按需扩容 ctx.ArgFloats (Process.State.cs:672-677; VariableToken.cs:1895)"}
+  - note: "LOCAL/ARG 尺寸可被函数定义中的参数声明拉大: resizeLocalVars (LabelDictionary.cs:66-67); 函数局部变量在每次 SetDefaultLocalValue 清零 (VariableData.cs:3365-3375), 每文件加载后 ClearLocalValue (VariableData.cs:3377-3383)"
+
+# 浮点变量（fork 新增类型；证据源 fork-src = qirchen421/emuera.sk@48494165 develop-skiasharp, 2026-08-28）
+# 取证等级 A(fork-src): 下列行号均指该 fork 仓库文件，不是 reference/emuera-cs 的 1.824 快照。
+float_vars:
+  storage: "存储四件套: dataFloat(double[])、dataFloatArray(double[][])、dataFloatArray2D(double[][,])、dataFloatArray3D(double[][,,]) (VariableData.cs:26,29,32,35)；构造时 dataFloat 长度复用 __COUNT_STRING__(=2)、dataFloatArray 长度复用 __COUNT_STRING_ARRAY__(=7)，各槽先置空数组 (VariableData.cs:155-160)；2D/3D 为空容器 (VariableData.cs:159-160)；SetDefaultValue 只把 dataFloat 全部清 0.0 (VariableData.cs:668-669)"
+  scalars:
+    - {name: RESULTF, dim: 0, index: 1, saved: false, source: "fork-src VariableData.cs:182; VariableCode.cs:124; VariableToken.cs:947-971", note: "浮点标量，实际是 dataFloat[VarCodeInt=1] 的标量包装 (FloatScalarVariableToken GetFloatValue/SetValue, VariableToken.cs:956-969)；读写入口 VariableEvaluator.RESULTF (VariableEvaluator.cs:3105-3108)；由 METHOD 语句按表达式类型写入 (Instraction.Child.cs:613-629, 浮点分支 :626)；RETURNF 不写 RESULTF，而是把返回值塞进 MethodReturnValue (Process.State.cs:762-787)；带 __EXTENDED__ ⇒ IsSavedata=false (VariableToken.cs:51-55)"}
+  dimf: "#DIMF：仅 1 维；2D/3D/0 维一律 ExeEE(AbnormalVarDeclaration) (VariableData.cs:469-474 全局/静态, :553-559 私有静态, :585-591 私有动态)；#REFF 仅标量 (VariableData.cs:451-456, 519-526)；#DIMF 与 CONST/GLOBAL/SAVEDATA/STATIC/DYNAMIC 的关键字互斥规则与整数一致，无浮点专属限制 (UserDefinedVariable.cs:91-264)；初值表接受浮点或整数常量，整数按 double 存 (UserDefinedVariable.cs:317-338)"
+  dimf_chara_quirk: "#DIMF CHARADATA 未建浮点 token：CreateUserDefCharaVariable 只有 TypeIsStr 与 else(整数) 两支，浮点会掉进整数分支 (VariableData.cs:410-429) ⇒ fork 行为疑似 bug，按 ADR-005 需原样复刻并记录 (TODO(verify) 待语料或真机确认)"
+  dimf_default_value: "初值 DefaultFloat 是单值 (UserDefinedVariable.cs:21，区别于 DefaultInt[]/DefaultStr[]) ⇒ #DIMF X, n = v 把 v 广播到全部 n 格；初值表接受浮点或整数常量、整数按 double 存 (:317-338)；无初值 = 0.0 (VariableData.cs:668-669)；多值 = 1.5, 2.5 无第二槽，声明期 CodeEE 拒绝 (TODO(verify) 待真机对拍)"
+  localfsize: "#LOCALFSIZE n 按函数覆盖 LOCALF/ARGF 出厂长度 10 (fork-src LogicalLineParser.cs:257-266、ConstantData.cs:211-217)；移植侧有效长度 = max(VARSIZE 浮点档(出厂10), #LOCALFSIZE, ARGF 形参声明长)；下标判界在 Long 域 (LocalVariableToken.cs:39-45)；VARIABLESIZE.CSV 的浮点档已移植 (见本段 varsize_csv)。⚠ 与 fork 的两处口径差（[g9] 2026-10-31 按锚点 48494165 逐行实测，待组长裁决）：① fork 的 ARGF 只读 func.ArgFloatLength (VariableLocal.cs:48-49)，#LOCALFSIZE 记在 func.LocalFloatLength 上 (LogicalLineParser.cs:257-266)，两者**不互相抬界** ⇒ 严格照抄应为 max(VARSIZE 档, 形参声明长)；② fork 的下界钳制名单只有 ARG/ARGS/ARGF (VariableLocal.cs:52-53)，**不含 LOCALF** ⇒ 非事件函数里 #LOCALFSIZE 4 是缩到 4，只有事件函数在分组时抬到档位 (LabelDictionary.cs:155-173, 226-253)；本仓整数侧 resolveLocalSize 已是 fork 口径 (ARG/ARGS 取 max、LOCAL/LOCALS 声明优先可缩)"
+  varsize_csv: "VARIABLESIZE.CSV 的浮点档 [g9 2026-10-31 移植完成]：表本体 VariableFloatArrayLength，长度 __COUNT_FLOAT_ARRAY__ = 2 ⇒ 只有 LOCALF(槽0)/ARGF(槽1) 两个名字可改 (fork-src ConstantData.cs:106、VariableCode.cs:99-101)；出厂各 10 (ConstantData.cs:211-217，与整数的 1000 :218-219、字符串的 100 :225-226 分档)；写入支 = changeVariableSizeData 的 `else if (id.IsFloat)` (ConstantData.cs:532-533)；消费支 = VariableData.cs:376-379 把这一格当 VariableLocal 的 size。容错口径与整数行**同一条链** (ConstantData.cs:313-357)：0 维(RESULTF) 拒 CanNotChange0DVarSize (:323-327)、0 长拒 ArrayLengthIs0 (:342-345)、负值因 LOCALF/ARGF 带 __CAN_FORBID__ 而改写成一整串 0 = 禁用数组 (:347-356)、IsLocal 下限是 1 而不是 100 (:363-367)、单维上限 1,000,000 (:374-378)、重复定义走 changedCode.Add 告警并以最后一次为准 (:541-542)、名字解析**区分大小写** (VariableIdentifier.cs:137-151,190 的 nameDic 以 Enum.GetName 为键 ⇒ CSV 写 localf,20 判未知名)。浮点**不参与**主数组↔名字表联动：decideActualArraySize (:583-670) 的 23 组联动 + PALAM/JUEL + CDFLAG 专例全部只读 int/str 表，整段 grep Float 零命中 ⇒ 改完即终值。2D/3D/角色浮点四张表 (VariableFloatArray2DLength/3D/CharacterFloatArrayLength/2D, :107-110) 在 fork 里初始化成**空数组** (:212-215，计数常量 :137-138/166-167/186 同为 0)，而名字表里没有对应的名字 ⇒ 那四条 IsFloat 写入支 (:493-494/:502-503/:513-514/:523-524) 在原版不可达，移植侧不建这四张表。语料读数 (2026-10-31 实测 eraTW4.981-261017-EAGLOV3)：CSV/VariableSize.csv 138 行**没有一条浮点行** ⇒ 该档在实机仍取出厂 10；ERB 全树 `#LOCALFSIZE` 0 处、ARGF 形参 0 处、LOCALF 用法仅 1 个文件 (DLC/魔法DLC/使用魔法.ERB:1248-1256 的裸名读写) ⇒ TODO(verify)：跳号形参 (ARGF:5) 与浮点禁用在 4.981 无对拍样本"
+  save_note_classic: "经典(非二进制)存档尾段被 fork 追加 dataFloat(2 个 double) 与 dataFloatArray(7 个数组)：写 VariableData.cs:766-769、读 :792-795 ⇒ 与 4.980/1.824 的经典存档布局不兼容，跨版本读档会错位/抛 FileEE；二进制开关 SystemSaveInBinary 的默认值在 fork 配置文件里未核对 (TODO(verify)) —— 2026-10-31 [f3] 按 fork-src 锚点 commit 48494165 复核补记：fork 默认 **false**(ConfigData.cs:113 的 ConfigItem 第三参，同 :291)，但 eraTW4.981 随包 emuera.config 显式写 YES ⇒ 实机走二进制，尾段只在玩家手改配置时才生效。文本形态：标量一行一个 `value.ToString(「G」)`(当前文化，EraDataStream.cs:686-690)、读侧 `double.TryParse`(同样不带 InvariantCulture，:74-83)；数组写侧**逐个全写不截尾零**(与 long[] 的「截到最后非零」不同构，:719-727)，以 FINISHER 行收尾；读侧超出声明长度的行跳过、读到 FINISHER 后把剩余格子清 0.0(:113-133)。角色块的尾段次序不同：floatCount 标量夹在 intCount 与 intArrayCount **之间**(CharacterData.cs:393-408)，与全局段的「全部数组之后」不可混用。扩展区段集同理：fork 的角色扩展段由 6 段变 **9 段**(CharacterData.cs:437-503，浮点标量/1D/2D 各插在同类型之后，读侧同序 :505-515)、用户变量由 6 桶变 **9 桶**(VariableData.cs:858-876 普通档 / :1080-1101 全局档；桶号 = (Dimension-1)*3 + kindIdx，声明期 :499-505 ⇒ 浮点落桶 2/5/8，读侧 :936-944 / :1103-1113)、**系统扩展段两边都还是 8 段**(fork VariableData.cs:798-856 没给系统区加浮点，系统浮点只走上面的经典尾段)。两版扩展区标记同为 __EMUERA_1808_STRAT__(EraDataStream.cs:49 / :674，读侧 emu_version=1808 :198-200) ⇒ 段集**无法从盘上判**：移植侧由 SaveConfig.textExtensionSegments 显式声明(默认 4.980 六段 ⇒ 产物字节不变，尾段本身不能当版本信号，因为写侧无条件带尾段)。空段与零规则：fork 里带 SAVE_EXTENDED 的 19 个系统 code 全是 int/str(VariableCode.cs:96-202) ⇒ GetExtSaveList(Float, *) 为空(VariableIdentifier.cs:214-220)，系统/角色的浮点段恒为一个孤立分隔符行、段里真有值也只被消费不落条目(查表赋值 VariableData.cs:892-931)；用户浮点只有 1 维可达(#DIMF 声明期只 case 1，VariableData.cs:469-473) ⇒ FLT2/FLT3 两段亦恒空。浮点扩展项文本形态：标量 key:G 且 **0.0 不落**(EraDataStream.cs:776-783)、1D **截到最后一个非零项**(:949-966，与经典尾段的「逐个全写」不同构)、2D 整行零落空行(:968-1008)、3D 每平面 i{ … } 收尾(:1011-1067)；2D/3D 浮点段同受 emu_version 早退门槛(<1708 / <1729 直接返回，:539-540 / :584-585)，0 维与 1 维浮点 reader(:257 / :499) 无门槛"
+  save_note_extended: "扩展存档新增 4 个类型标记 EraSaveDataType.Float=0x04 / FloatArray=0x05 / FloatArray2D=0x06 / FloatArray3D=0x07 (EraBinaryDataReader.cs:21-34)；写分支 EraBinaryDataWriter.cs:132-170；读分支 VariableData.cs:1486-1554(尺寸不匹配时按读出的维度丢弃多余元素) —— 2026-10-31 [f3] 逐行复核的编码与容错口径：①编码是**裸 8 字节小端 IEEE-754**(`writer.Write(double)`/`reader.ReadDouble()`，EraBinaryDataReader.cs:170,283-285)，数组前缀为定长 Int32 长度/维度，**既无整数的变长整数、也无 0 游程标记与结尾 0xFF**，全零元素照写(:138-146)；浮点不进 SparseArray 压缩路径(写侧 `GetArray()` 交出 double[] 直发，:1236-1253/:1267-1284)。②池侧容错与整数数组**不同**：只搬 `min(文件, 声明)` 区间，区间之后一个字节都不碰 ⇒ 声明更长时尾段**保持旧值**、不清零(:1510-1512)；档更长时多余元素「读掉即丢」(:1511-1512/:1530/:1551)。③多维按**流位置**落位(`for i0<len0 for i1<len1 arr[i0,i1]=ReadDouble()`, :1526-1529)：档内行宽 d1 与落位行宽 len1 不等时整块斜铺 —— fork 既有行为，按 ADR-005 原样复刻。④类型/维度守卫四条 case 各自先验 `IsFloat` + `Dimension`(:1487/1493/1518/1536)，不符整条丢弃；`default:` 抛 FileEE(AbnormalData)(:1555-1556)。⑤角色块同样发 0x04-0x07(CharacterData.cs:649-659)，读侧的 `SparseArray<double>` 分支在池满时会把 saveLen 之外的格子落成 0.0(:816-841)，与全局段的「保持旧值」是两条不同路径"
+
+# 伪变量/常量（不可赋值: PseudoVariableToken/ConstantToken 赋值抛错, VariableData.cs:602-634, 789-836）
+pseudo_vars:
+  - {name: RAND,     kind: int, source: "VariableData.cs:3153-3155", note: "RandToken: GetNextRand(上界); CompatiRAND 时取 32768 随机 % n (VariableData.cs:838-876)"}
+  - {name: CHARANUM, kind: int, source: "VariableData.cs:3156", note: "= CharacterList.Count (VariableData.cs:878-889)"}
+  - {name: LASTLOAD_TEXT, kind: str, source: "VariableData.cs:3157; VariableData.cs:2898-2902"}
+  - {name: LASTLOAD_VERSION, kind: int, source: "VariableData.cs:3158", note: "默认 -1"}
+  - {name: LASTLOAD_NO, kind: int, source: "VariableData.cs:3159", note: "默认 -1"}
+  - {name: LINECOUNT, kind: int, source: "VariableData.cs:3160"}
+  - {name: ISTIMEOUT, kind: int, source: "VariableData.cs:3161"}
+  - {name: __INT_MAX__, kind: int, source: "VariableData.cs:3162", note: "= long.MaxValue"}
+  - {name: __INT_MIN__, kind: int, source: "VariableData.cs:3163", note: "= long.MinValue"}
+  - {name: EMUERA_VERSION, kind: str, source: "VariableData.cs:3164", note: "硬编码 \"1.824.0.0\" (VariableData.cs:1127)"}
+  - {name: WINDOW_TITLE, kind: str, source: "VariableData.cs:3165", note: "可写 (VariableData.cs:943-960)"}
+  - {name: MONEYLABEL, kind: str, source: "VariableData.cs:3166", note: "= Config.MoneyLabel"}
+  - {name: DRAWLINESTR, kind: str, source: "VariableData.cs:3167"}
+  - {name: "__FILE__/__FUNCTION__/__LINE__", kind: mixed, source: "VariableData.cs:3168-3179", note: "DebugMode 下返回真实位置, 否则空串/0"}
+
+# CSV 常量名字表（Str1DConstantToken, 从 ConstantData.names 取, 只读）
+csv_constants:
+  source: "VariableData.cs:3112-3139; ConstantData.cs:159-162"
+  names: [ABLNAME, TALENTNAME, EXPNAME, MARKNAME, PALAMNAME, ITEMNAME, TRAINNAME, BASENAME, SOURCENAME, EXNAME, EQUIPNAME, TEQUIPNAME, FLAGNAME, TFLAGNAME, CFLAGNAME, TCVARNAME, CSTRNAME, STAINNAME, CDFLAGNAME1, CDFLAGNAME2, STRNAME, TSTRNAME, SAVESTRNAME, GLOBALNAME, GLOBALSNAME, DAYNAME, TIMENAME, MONEYNAME]
+  note: "共 29 组 nameToIntDics (ConstantData.cs:80,114-121); 名字→序号映射 GetKeywordDictionary (ConstantData.cs:914-1204)"
+  length_rule: "上表 names 的排列是注册序，不是槽位序；单个名字表的长度只认 MaxDataList：names[i] = new string[MaxDataList[i]] (ConstantData.cs:676-680)，与对应 CSV 的行数/最大编号无关，越界行只告警跳过 (loadDataTo, ConstantData.cs:1791-1795)。槽位序见 LoadData 的 29 次 loadDataTo (ConstantData.cs:682-713)：ABL=0 / EXP=1 / TALENT=2 / PALAM=3 / TRAIN=4 / MARK=5 / ITEM=6(+ItemPrice) / BASE=7 / SOURCE=8 / EX=9 / STR=10。"
+  expname: "EXPNAME = 槽 1（Exp.csv，ConstantData.cs:683），出厂 MaxDataList[1]=100 (ConstantData.cs:175)；它与角色主数组 EXP 是 23 组联动之一——_decideActualArraySize_sub(EXP, EXPNAME, CharacterIntArrayLength) (调用 ConstantData.cs:587，函数体 :553-581)：只声明 EXPNAME 则 EXP 跟随 (:574-576)，只声明 EXP 则 EXPNAME 跟随 (:578-580)，两边都声明且不等则同时取最大值并告警 (:559-571)。本语料 CSV/VariableSize.csv:78 写 EXPNAME,200、:97 写 EXP,200 ⇒ 两侧一致，实读 200（不是常数：换成别的语料/删掉这两行就回到 100）。越界同 EXPLV：原版抛 CodeEE (ConstantToken 的 GetStrValue → CheckElement)，DoScript 顶层 catch 吞成屏上错误后继续 (Process.cs:462-477 / :595-660) ⇒ 官方同判。"
+
+gamebase_constants:
+  source: "VariableData.cs:3140-3152"
+  str: [GAMEBASE_AUTHOR(含旧拼 GAMEBASE_AUTHER), GAMEBASE_INFO, GAMEBASE_YEAR, GAMEBASE_TITLE, GAMEBASE_URL, GAMEBASE_VERSIONNAME]
+  int: [GAMEBASE_GAMECODE, GAMEBASE_VERSION, GAMEBASE_ALLOWVERSION, GAMEBASE_DEFAULTCHARA, GAMEBASE_NOITEM]
+  note: "值来自 GAMEBASE.CSV (GameBase 类); 赋值抛错 (ConstantToken, VariableData.cs:602-634)"
+
+# 角色库变量（第 1 个参数为角色位置, 长度由 ConstantData.CharacterXxxArrayLength 决定, CharacterData.cs:55-126）
+# 各角色实例持有自己的数组 (CharacterData); 角色列表为 varData.CharacterList (VariableData.cs:2892)
+character_vars:
+  layout: "dataInteger[2] + dataString[4] + dataIntegerArray[84] + dataStringArray[1] + dataIntegerArray2D[1] + 每个用户 #DIM CHARADATA 的独立数组 (CharacterData.cs:57-125)"
+  saved_int_scalars:  # CharacterData.dataInteger, 长 2
+    - {name: ISASSI, index: 0, source: "VariableData.cs:3074; CharacterData.cs:53"}
+    - {name: NO,     index: 1, source: "VariableData.cs:3075; CharacterData.cs:53"}
+  saved_str_scalars:  # dataString, 长 4
+    - {name: NAME,      index: 0, source: "VariableData.cs:3097"}
+    - {name: CALLNAME,  index: 1, source: "VariableData.cs:3098"}
+    - {name: NICKNAME,  index: 2, source: "VariableData.cs:3099", note: "SAVE_EXTENDED (VariableToken.cs:93-96)"}
+    - {name: MASTERNAME, index: 3, source: "VariableData.cs:3100", note: "SAVE_EXTENDED"}
+  int_1d:   # CharacterData.dataIntegerArray[84], 默认各 100, 特例: [3]TALENT=1000, [9]CFLAG=1000, [10]JUEL=200, [15]GOTJUEL=200 (ConstantData.cs:240-247)
+    - {name: BASE,     index: 0, source: "VariableData.cs:3076"}
+    - {name: MAXBASE,  index: 1, source: "VariableData.cs:3077"}
+    - {name: ABL,      index: 2, source: "VariableData.cs:3078"}
+    - {name: TALENT,   index: 3, source: "VariableData.cs:3079"}
+    - {name: EXP,      index: 4, source: "VariableData.cs:3080"}
+    - {name: MARK,     index: 5, source: "VariableData.cs:3081"}
+    - {name: PALAM,    index: 6, source: "VariableData.cs:3082"}
+    - {name: SOURCE,   index: 7, source: "VariableData.cs:3083"}
+    - {name: EX,       index: 8, source: "VariableData.cs:3084"}
+    - {name: CFLAG,    index: 9, source: "VariableData.cs:3085"}
+    - {name: JUEL,     index: 10, source: "VariableData.cs:3086"}
+    - {name: RELATION, index: 11, source: "VariableData.cs:3087", note: "新建角色时全元素默认 Config.RelationDef (CharacterData.cs:163-167)"}
+    - {name: EQUIP,    index: 12, source: "VariableData.cs:3088"}
+    - {name: TEQUIP,   index: 13, source: "VariableData.cs:3089"}
+    - {name: STAIN,    index: 14, source: "VariableData.cs:3090", note: "SAVE_EXTENDED, 非 17 之内? 见下 saved 范围注"}
+    - {name: GOTJUEL,  index: 15, source: "VariableData.cs:3091"}
+    - {name: NOWEX,    index: 16, source: "VariableData.cs:3092"}
+    - {name: DOWNBASE, index: 17, source: "VariableData.cs:3093", note: "SAVE_EXTENDED (VariableToken.cs:93-96); 经典版 index<17 才 saved (VariableToken.cs:117-122) ⇒ DOWNBASE(17)/CUP(18)/CDOWN(19)/TCVAR(20) 仅 SAVE_EXTENDED 标志者存档"}
+    - {name: CUP,      index: 18, source: "VariableData.cs:3094", note: "SAVE_EXTENDED"}
+    - {name: CDOWN,    index: 19, source: "VariableData.cs:3095", note: "SAVE_EXTENDED"}
+    - {name: TCVAR,    index: 20, source: "VariableData.cs:3096", note: "SAVE_EXTENDED"}
+    - note: "存档范围: 经典格式存 dataIntegerArray[0..16] (CharacterData.cs:361-364); 扩展格式按 GetExtSaveList 写 (CharacterData.cs:403-411); 二进制格式按 IsSavedata 全量写 (CharacterData.cs:513-545)"
+  str_1d:
+    - {name: CSTR, index: 0, size: 100, source: "VariableData.cs:3101; ConstantData.cs:248-251"}
+  int_2d:
+    - {name: CDFLAG, index: 0, size: [1,1], source: "VariableData.cs:3102; ConstantData.cs:252-259", note: "默认 (1,1); 尺寸由 CDFLAG1.CSV/CDFLAG2.CSV 名字数联动 (ConstantData.cs:642-668)"}
+  csv_template_init: "ADDCHARA 时从 CharacterTemplate 拷贝: NO/NAME/CALLNAME/NICKNAME/MASTERNAME; Maxbase→BASE+MAXBASE(双写); Mark→MARK; Exp→EXP; Abl→ABL; Talent→TALENT; Relation→RELATION; CFlag→CFLAG; Equip→EQUIP; Juel→JUEL; CStr→CSTR (CharacterData.cs:128-192)"
+  add_del:
+    add: "VariableEvaluator.AddCharacter: 按 NO 查模板, new CharacterData(constant, tmpl, varData) 后 Add 到 CharacterList 尾部 (VariableEvaluator.cs:1201-1210); AddCharacterFromCsvNo 按 CSV 文件号, 未命中则伪角色 (VariableEvaluator.cs:1223-1232)"
+    del: "DelCharacter 按实参个数分两条重载 (FunctionIdentifier.cs:1387-1394: array.Length==1 走 DelCharacter(long)，否则含 0 个走 DelCharacter(long[]))。单参 (VariableEvaluator.cs:1241-1249): 越界 → CodeEE(format(OoRDelChara, charaNo.ToString())) 带编号 (:1245) → Dispose (:1247) → RemoveAt (:1248)。数组参 (:1251-1273): 边校验边 Dispose、全部校验通过后才逐个 Remove (:1267 与 :1269-1272); 越界判定用 long 对删除前的 Count (:1257)，但 format 实参写的是 charaNoList.ToString() ⇒ 上屏 System.Int64[]、编号丢失 (官方 bug，ADR-005 须复刻，:1259); 判重按对象 list.Contains (:1262-1265)，串带编号 (:1264)。文案骨架 zhs 表形 lang.emuera-zhs.xml:314 与 :315 (注册 Lang.cs:1438/:1442)。移植侧角色表是 SoA 列存，表示不出「已 Dispose 但仍在表内」的失败中间态 ⇒ 该半死态登记不修。DelAllCharacter 清空 (VariableEvaluator.cs:1275-1286)"
+    sort: "SORTCHARA: SetSortKey 取键值, AscCharacterComparison/DescCharacterComparison 排序, 键相同按原顺序稳定 (CharacterData.cs:772-790; VariableEvaluator.cs:1397-1470)"
+    copy_swap: "CopyChara/CopyTo 逐数组拷贝含用户定义角色变量 (CharacterData.cs:239-349); SwapChara (VariableEvaluator.cs:1378)"
+
+# 用户自定义变量 (#DIM 系列) —— 生命周期与作用域
+scoping:
+  parse: "UserDefinedVariableData.Create 解析 #DIM/#DIMS/#DIMF 关键字: CONST/REF/OUT/DYNAMIC/STATIC/GLOBAL/SAVEDATA/CHARADATA, 冲突即 CodeEE (UserDefinedVariableData.cs:44-264; fork-src 增 OUT 与浮点型, UserDefinedVariable.cs:29-41, 71-264; 行号分割点 LogicalLineParser.cs:269-302)"
+  dimension: "逗号分隔的尺寸参数; 缺省 [1]; 单维上限 1,000,000; 总元素数 ≤1,000,000; 维度 ≤3 (4D 报错), CHARADATA ≤2 维 (UserDefinedVariableData.cs:291-341, 437-449)"
+  initial_value: "= 后可跟常量初值表; 初值必须编译为 SingleTerm 常量; CONST 要求初值数 == 长度 (UserDefinedVariableData.cs:344-427)"
+  private_static: "#DIM (函数内, isPrivate=true) 默认 Static=true; STATIC/DYNAMIC 显式指定; 函数外不允许 STATIC/DYNAMIC 关键字 (UserDefinedVariableData.cs:119-170)"
+  static_token: "Static*VariableToken: IsStatic=true, 全进程单份, SetDefault 时清零并回填 defArray; ScopeIn/ScopeOut 为空操作 (VariableData.cs:1295-1386, 1466-1472)"
+  private_dynamic: "Private*VariableToken: ScopeIn 时旧数组压栈并新建(回填初值), ScopeOut 时弹栈恢复——实现函数调用的动态作用域嵌套 (VariableData.cs:1820-1901, 2131-2154)"
+  global: "#DIM GLOBAL: 注册入 userDefinedGlobalVarList, 随全局存档写 (VariableData.cs:3265-3272, 3971-3977); SAVEDATA 入 userDefinedSaveVarList 按 [维度*2-2(+整数+1)] 分桶 (VariableData.cs:3273-3288)"
+  savedata_str_limit: "非二进制存档 (SystemSaveInBinary=false) 时: 全局 SAVEDATA 字符串变量维度>1 或 CHARADATA 字符串变量 → 报错 (UserDefinedVariableData.cs:465-475)"
+  chara: "#DIM CHARADATA: CreateUserDefCharaVariable 建用户角色变量, 每个角色 CharacterData.UserDefCVarDataList[ArrayIndex] 独立数组; CHARADATA 与 GLOBAL/SAVEDATA/CONST/REF 互斥 (VariableData.cs:3220-3244; UserDefinedVariableData.cs:62-77, 251-260)"
+  ref: "#DIMREF (#DIM REF): 引用变量, 绑定目标数组; REF 不得与 CONST/GLOBAL/SAVEDATA/CHARADATA 同用; 不得有初值; 尺寸只能写 0 (UserDefinedVariableData.cs:89-117, 309-335, 357-364); ERH 中的 REF 直接 NotImplCodeEE (ErhLoader.cs:262-265); 空引用读取抛 EmptyRefVar (VariableData.cs:2325-2332)"
+  const: "#DIMCONST: 必须有初值, 不可多维 (UserDefinedVariableData.cs:294-298, 438-441); 赋值抛 AssignToConst"
+  dimf: "fork-src #DIMF: 变量类型标 float (TypeIsFloat), 但仅 1 维可建 token; 2D/3D/0 维在注册时抛 ExeEE(AbnormalVarDeclaration) (UserDefinedVariable.cs:71-78; VariableData.cs:469-474, 554-561, 586-593); 与 CONST/GLOBAL/SAVEDATA/STATIC/DYNAMIC 的关键字互斥规则沿用整数版 (UserDefinedVariable.cs:91-264); CHARADATA 浮点无专属 token, 掉进整数分支 (VariableData.cs:410-429)"
+  reff: "fork-src #REFF: 浮点引用标量, 只有 0 维 (LogicalLineParser.cs:286-302; UserDefinedVariable.cs:29-41; VariableData.cs:451-456 全局, 519-526 私有); #DIMREF 的整数/字符串多维规则不变"
+  local_scope_note: "函数内 #DIM 非 DYNAMIC(即 Static) 时行为等同全局静态单份 (CreatePrivateVariable 走 Static 分支并加入 userDefinedStaticVarList, VariableData.cs:3327-3343)"
+
+# ─────────────────────────────────────────────────────────────
+# 装载期 #DIM/#DIMS 初值折叠口径（2026-11-05 补登，来源 = lane bitvar 交来的 4.981 上报簇
+# 「未定义的变量 COM641_AC_カードタイプ付与BIT配列」46 份 / 28 机 / app 0.2.39）。
+# 下列每条都由本路逐行回 reference 复核后落笔；实现侧的对应件在文末 port_impl / pinning_tests。
+# ─────────────────────────────────────────────────────────────
+dim_const_fold:
+  operator_layers: "`#DIM`/`#DIMS` 的初值段（含 CONST 初值表）与运行期表达式共用同一套算符层。词法**贪长**匹配：spec: MinorShift.Emuera.Runtime.Script.Parser/LexicalAnalyzer.cs:486-492（`&&` 命中 And，否则单 `&` → BitAnd）、:479-485（`||` → Or，单 `|` → BitOr）、:493-499（`^^` → Xor，单 `^` → BitXor）、:461-463/:473-475（`<<`/`>>`）⇒ 单字符 `&`/`|`/`^` 一律是**按位**运算，双字符才是逻辑层（And/Or/Xor：非 0 判真、结果只取 0/1，另有 `!&`/`!|` = Nand/Nor）。**单竖线既不是逻辑或、也不是元素分隔符**。优先级写在 OperatorCode 的低位字节里（`__PRIORITY_MASK__` = 255，spec: OperatorCode.cs:6；取法 OperatorManager.cs:151-154 GetPriority）：位移 `<<`/`>>` = 112（OperatorCode.cs:34-35）> 按位 `&`/`|`/`^` = 80（:29-31，三者**同层**）> 逻辑 `&&`/`||`/`^^`/`!&`/`!|` = 64（:24-28）⇒ `1 << A | 1 << B` 折成 `(1<<A) | (1<<B)`。按位层三个方法都带 `CanRestructure = true`（spec: MinorShift.Emuera.Runtime.Script.Statements.Expression/OperatorMethodManager.cs:467-479 BitAndIntInt 的 :471 / :481-493 BitOrIntInt 的 :485 / :495-507 BitXorIntInt 的 :499；位移 :509-521/:523-535 的 :513/:527；注册段 :737-741；逻辑层注册 :732-736），两侧皆常量时**装载期就折成单值**。按位三层同为 80 ⇒ `a | b ^ c` 折成 `(a | b) ^ c`，**不许照 C 语言的 `&` > `^` > `|` 抄**。"
+  associativity: "同优先级**左结合**：spec: ExpressionParser.cs:86-90 —— 读到运算符时 `while (lastPriority() >= priority) reduceLastThree();`，比较符是 `>=` 而不是 `>` ⇒ 同层先入栈的先约减。移植侧折叠链用 while 循环就地左折（见 port_impl）。"
+  fold_gate: "初值必须折成常量：spec: MinorShift.Emuera.Runtime.Script.Data/UserDefinedVariableData.cs:375 `ExpressionParser.ReduceArguments(wc, ArgsEndWith.EoL, isDefine: false)` 取初值表 → :405 逐元素 `Restructure(GlobalStatic.EMediator)` → :406-408 结果不是 `SingleTerm` 即 `throw new CodeEE(Lang.Error.InitialValueOnlyConst.Text)`。另两条同段闸门：:410-412 初值类型与 `#DIMS`/`#DIM` 不符报 NotMatchVarTypeAndInitialValue；:386-388 `CONST` 要求初值个数恰等于声明长度（不等报 ConstInitialValueDifferentArraySize）。折叠动作本身在 spec: FunctionMethodTerm.cs:35-59，`:54` 要求 `method.CanRestructure` **且**全部实参已折成 SingleTerm 才 `GetValue(exm)`。标识符能否参与折叠取决于自己的标志：spec: UserDefinedVariableToken.cs:35 `base.CanRestructure = isConst` ⇒ 只有 `#DIM CONST` 用户变量可被后一条声明的初值式引用，非 CONST 的用户变量折不动、落 :406-408。"
+  failure_disposition: "折叠失败 ⇒ **整条声明不注册**（不是编译错误、不是只丢初值、不是局部降级）。装载侧 spec: MinorShift.Emuera.Runtime.Script.Loader/ErhLoader.cs:249-340 `analyzeSharpDimLines`：`:261` 建 `UserDefinedVariableData.Create(dimLineWC)`，注册动作在 `:267-268`（`CreateUserDefVariable`/`CreateUserDefCharaVariable` + `idDic.AddUseDefinedVariable`）；一旦 Create 抛异常，`:328-332` 的 `catch (CodeEE)` 只做 `ParserMediator.Warn(codeEE.Message, dimLineWC.SC, 2)` 并置 `result = false`，**:267-268 整个被跳过** ⇒ 名字进不了标识符表。`IdentifierNotFoundCodeEE` 是另一条支路：`:315-321` 先把该行重新入队多跑一趟（为的是吃下跨文件的前向引用），当一整趟没有任何进展时（`:334-337` `dimlines.Count == count` ⇒ `flag = false`）才在 `:324` 同样 Warn 后放弃 ⇒ 结局一致：不注册。运行期表现为**读到该名报「未定义的变量」**，而不是屏上出现装载期原文；移植侧抛点 `core/vars/VariableRegistry.kt:531` 与 `core/vars/VariableStore.kt:649/:652/:655`。本簇的移植侧成因：修复前本仓把单 `|` 按逻辑层折，COM641 那条声明报「尺寸/初值表达式有多余内容」后整表丢弃（同 :328-332 通道），即上报里那 46 份 / 28 机；由 34e307e9 / 872b5934（2026-11-04）修正，失败方向已由 Com641ProductionChainDimLoadPinTest 的第 3 例钉死。"
+  erh_block_merge: "ERH 里跨行的 `{ … }` 初值块在**读行层**合并成一条逻辑行：spec: MinorShift.Emuera.Sub/EraStreamReader.cs:130-184 —— :136-141 只有 trim 后恰为 `{` 的行才开块（有尾巴字符报 CharacterAfterContinuation）；:143-180 逐行读到 trim 后恰为 `}` 的行为止（`}` 行带杂字 → CodeEE :165-171；块内再出现 `{` → CodeEE :173-176；到 EOF 仍未收口 → CodeEE :146-149），每段正文之后插 `Config.ReplaceContinuationBR`（:178-179）；:181 用合并串新建 CharStream ⇒ 声明行与块体属于**同一条**逻辑行，`#DIM … =` 后面为空、内容全在块里也成立。合并后逻辑行的行号 = **收块行（`}` 那一行）的物理行**：spec: 同文件 :77-87 `ReadLine()` 每读一行把 `curNo` 推到该行（`LineNo => curNo` 见 :30，**0 基**），块循环里的 :145 继续调用 ReadLine，break 时 curNo 停在 `}` 那一行。4.981 真形：COMF641 アビリティカード_カードパラメータ.ERH 的 `{` 在 1 基 :225、声明行 `#DIM CONST COM641_AC_カードタイプ付与BIT配列 =` 在 :226、33 个元素在 :227-:259、`}` 在 :260 ⇒ 合并逻辑行 = 1 基 :260（0 基 259）；被引用的五个标量 CONST（ステータス補助 0 / 戦闘補助 1 / 技能補助 2 / うふふ補助 3 / 特殊効果 10）在同文件 :209-:213。移植侧同一口径在 `core/lexer/LogicalLineReader.kt`，行号读数钉在 `core/compile/Com641ProductionChainDimLoadPinTest.kt:62-63`（`MERGED_LOGICAL_LINE = 259`）。"
+  corpus_census: "语料普查读数（2026-11-05 本路自扫 eraTW4.981-261017-EAGLOV3，口径：4,258 个 ERB/ERH，其中 186 个 .ERH；「单竖线」= 左右均非竖线的 `|`）：含单竖线的 **ERH 行只有 14 行**，分布为 —— 10 行 = COMF641 アビリティカード_カードパラメータ.ERH 的 `{ }` 初值块内（1 基 :228/:229/:230/:231/:251/:254/:255/:256/:258/:259，竖线是**刻意的按位或**，该文件 :223 的注释写明「|で挟むことで複数属性を付与可能」）；3 行是纯注释行（`DIM.ERH:960`、`Headers/TASTE_TAGS.ERH:3`、上述 ERH 的 :223）；1 行 = `fromEN/TR_VARS.ERH:46`，该行本身是**活语句** `#DIM CONST CT_EXCLUDED_THE = 1`，单竖线只出现在它行尾的 `;` 注释里。放宽到全部 ERB+ERH：**带活竖线的单行 #DIM/#DIMS/#DIMF 声明 = 0 条**（`;` 起整行丢弃、不进词法，spec: LexicalAnalyzer.cs:919-933；`DIM.ERH:960` 即 `fromEN/TR_VARS.ERH:46` 的注释掉版本）。⇒ 装载期按位折叠在现存语料里只被 COM641 那一条 `{ }` 块真实触发，无第二簇。"
+  port_impl: "移植侧唯一一条 DIM 折叠链在 `core/vars/UserVariables.kt` 的私有 `Folder`（:1448）：`shiftExpr` :1602-1622（112 层 `<<`/`>>`）、`bitExpr` :1552-1572（80 层 `&`/`|`/`^` → and/or/xor）、`orAndExpr` :1574-1600（64 层 `&&`/`||`/`^^`/`!&`/`!|`，非 0 判真、只取 0/1）；词法贪长匹配 :1261-1273。erbcc 出包侧不另建第二份折叠器，经 `DimFunctionFolder`/`DimFunctionFolders`（同文件 :177/:184）复用这条链，消费点 `tools/erbcc/src/main/kotlin/com/eratw/port/erbcc/compile/CorpusCompile.kt:631`。"
+  pinning_tests: "互指测试：`core/vars/DimFoldTest`（折叠链逐层）、`tools/erbcc/…/bridge/DimFoldParityTest` 与 `…/bridge/DimSpecValidationTest`（出包侧同口径）、`core/compile/Com641ProductionChainDimLoadPinTest`（真语料生产链：块合并 + 33 元素的按位期望值 + 合并逻辑行号 + 「修复前把单 `|` 按逻辑层折 ⇒ 整条声明丢弃」的失败方向）。"
+
+# 数组语义
+array_semantics:
+  index_type: "所有下标为 64 位整数 long; 2D/3D 访问处用 checked nint 转换 (VariableData.cs:117, 213)"
+  bounds_check: "CheckElement 逐维检查, 越界抛 CodeEE(OoRVarArg) (VariableData.cs:81-100, 173-183; CharaVariableToken.cs:56-70; UserDefinedVariableToken.cs:58-72); SP/范围指令另有 IsArrayRangeValid (含端点=size 合法, 用于区间赋值)。**例外见 sparse_1d_backplane：1 维内置数组（全局/角色）的动态下标越界不抛**"
+  sparse_1d_backplane: "4.981 fork 把**只有 1 维**的内置数组换成字典背板 ⇒ **运行期下标越界不是错误**，解析期常量下标才抛。①存储：全局 `SparseArray<long>[]` / `SparseArray<string>[]` (VariableData.cs:44 起)、角色 1 维同形 (CharacterData.cs:25 起)；下标器对任意 long 取键、缺席读默认值、写直接落字典、写默认值即删键 (SparseArray.cs:25-40)。②为什么常量仍抛：执行前 Restructure 只对折成 SingleTerm 的实参调 CheckElement (VariableTerm.cs:316-347; UserDefinedVariableToken.cs:58-72 的 CheckBounds 判 i1<0 或 >=size)，动态表达式实参不在检查面内。③边界：2D/3D 仍稠密 `long[][,]` (VariableData.cs:47,50)、CSV 常量表 (Int1DConstantToken/Str1DConstantToken) 与用户 #DIM 未换背板 ⇒ 任何越界照抛。④PC 实测（Emuera.exe `1824+v24+EMv18+EEv56+Skiav16`，2026-11-17 --CliDebug 探针）：X=-1 时 `{ITEM:X}`=0、`ITEM:X=7` 后读回 7、`ITEM:X+=5` 读回 5、`STR:X=\"ab\"` 读回 ab、`{ABLNAME:-1}` 与 `{ITEM:(-1)}`/`{ITEM:99999}` 抛「配列変数…の第1引数(n)は配列の範囲外です」，`#DIM MYV,10` 的动态越界照抛。⑤移植侧：`core/expr/Expr.kt` 的 VarRef 先走严格通道，只在「抛 CodeEE 且最后一个下标是运行期表达式（lastIndexIsDynamic）」时转补径 + `core/vars/VariableStore.kt` 的 readSparseIntOor/readSparseStrOor/writeSparse* 族（越界写用有界覆盖层复刻「写后读回」，resetValues 清空，上限 SPARSE_OVERFLOW_LIMIT）；公共 readInt/writeInt 保持严格口径。用例 core/vars/SparseArrayOorTest。⑥`++`/`--` 与 `+=`/`=` 同口径：前置/后置自增自减**必须**与赋值走同一条稀疏补径（原实现绕开 `VarRef.addIntValue` 直呼 `reader.plusInt`，`X = ++ITEM:IDX` 在 IDX=-1 时照抛，已改，`d3eaeaa8c`；PC 锚 `VariableTerm.cs:218-235` 的 ChangeValue → `Identifier.PlusValue` 返回新值、`OperatorMethodManager.cs:609-627`/`:629-655`；口径 = 前置返回 +1 后的值、后置返回原值，20 例钉在 SparseArrayOorTest）。⑦**浮点面无稀疏语义、不得补**：角色浮点标量/数组在 4.981 计数为 0（`VariableCode.cs:138` `__COUNT_CHARACTER_FLOAT__ = 0x00`、`:167` `__COUNT_CHARACTER_FLOAT_ARRAY__ = 0x00` ⇒ `CharacterData.cs:38`/`:41` 皆 `Array.Empty`），全局浮点只有 `LOCALF`/`ARGF` 且皆 `__LOCAL__`（`VariableCode.cs:99-101`，实分配在 `ExecutionContext.LocalFloats`），背板是密集 `double[][]`（`VariableData.cs:29`）⇒ 给浮点补稀疏钩子是造语义，比不改更糟。"
+  chara_index_check: "角色变量第 1 参先对 CharacterList.Count 检查 (CharaVariableToken.cs:56-61)"
+  forbid: "尺寸为 0 的数组 IsForbid=true, 常量数组同理 (VariableData.cs:25, 112, 676); 存档加载时 IsForbid 名字直接丢弃 (VariableData.cs:4085-4092)"
+  varsize: "VARSIZE 经 GetLength(dimension) 实现: 1D 返回长度, 2D/3D 按维返回, 0 维与伪变量抛错 (VariableData.cs:62-74, 154-166, 202-210; VariableToken.cs:202-210)"
+  range_assign: "批量赋值 SetValue(values, args) 从指定下标起连续覆盖, 调用方须先过 IsArrayRangeValid (VariableData.cs:38-46 等)"
+  setvalueall: "1D 区间 [start,end); 2D/3D 全元素 (VariableData.cs:48-54, 135-146); 私有动态变量在无值时不初始化 (SetDefault 空实现, VariableData.cs:1836-1838)"
+  chara_sort_stability: "AscCharacterComparison: 键值比较结果非 0 时返回之, 否则按 temp_CurrentOrder (装载时的位置) 保证稳定 (CharacterData.cs:772-780)"
+
+# 默认数组尺寸总表 (VariableSize.CSV 可改; 改后名字表与变量长度联动同步, ConstantData.cs:553-670)
+default_sizes:
+  source: "ConstantData.cs:171-260"
+  scalar_int_arrays: "全部 1000; FLAG=10000; ITEMPRICE(index60)=MaxDataList[6](默认1000); RANDDATA(index64)=625"
+  scalar_str_arrays: "全部 100; STR=20000"
+  int_2d: "全部 (100,100)  # DITEMTYPE/DA-DE"
+  int_3d: "全部 (100,100,100)  # TA/TB"
+  chara_int_1d: "全部 100; TALENT=1000; CFLAG=1000; JUEL=200; GOTJUEL=200"
+  chara_str_1d: "CSTR=100"
+  chara_int_2d: "CDFLAG=(1,1)"
+  csv_maxdata: "ABL/EXP/MARK/BASE/EX=100, PALAM=200, TALENT/TRAIN/ITEM/EQUIP/TEQUIP/TFLAG=1000, FLAG=10000, STR/STRNAME=20000, 其余见 ConstantData.cs:173-201"
+  float_1d: "fork-src 全部 10 (LOCALF/ARGF, VariableFloatArrayLength, ConstantData.cs:211,216-217); 可由 VARIABLESIZE.CSV 改名目长度 (ConstantData.cs:532-533); 2D/3D/角色浮点长度数组均为空容器 (ConstantData.cs:212-215)"
+
+# 存档归类摘要
+save_classes:
+  classic: "0..59 号 int 数组 + 0 号 str 数组(SAVESTR) 按定长写入 (VariableData.cs:3516-3534)"
+  extended: "SAVE_EXTENDED 标志的变量 + 用户 SAVEDATA 变量按名字-值对写 (VariableData.cs:3556-3626)"
+  global: "GLOBAL(63)/GLOBALS(5) + #DIM GLOBAL SAVEDATA (VariableData.cs:3804-3909, 3961-3978)"
+  binary: "SystemSaveInBinary 时按 IsSavedata&&!IsCharacterData 遍历 varTokenDic + 用户列表 (VariableData.cs:3961-3997); 加载时按名字查回且拒绝角色/常量/私有/局部/CALC 变量 (VariableData.cs:4081-4211)"
+  chara: "经典格式: dataString[0..1], dataInteger[0..1], dataIntegerArray[0..16] (CharacterData.cs:351-389)"
+  float_append_classic: "fork-src 经典段末尾追加 dataFloat(2 个 double) + dataFloatArray(7 个数组): 写 VariableData.cs:766-769, 读 :792-795 (顺序在经典段之后、扩展名字-值段之前, VariableEvaluator.cs:2790-2798/2821-2823) ⇒ 4.980 的经典存档无此尾段, 跨版本读档会错位 (TODO(verify) 是否抛 FileEE)"
+  float_tags_binary: "fork-src 二进制扩展段新增 4 个类型标记: Float=0x04/FloatArray=0x05/FloatArray2D=0x06/FloatArray3D=0x07 (EraBinaryDataReader.cs:21-34); 写 EraBinaryDataWriter.cs:132-170; 读 VariableData.cs:1486-1554"
+  savedata_bucket_fork: "fork-src SAVEDATA 分桶公式改为 (维度-1)*3 + 类型(串0/整1/浮2) (VariableData.cs:497-510), userDefinedSaveVarList/userDefinedGlobalSaveVarList 槽数 9 (VariableData.cs:161-165) ⇒ 浮点一维 SAVEDATA 落 2 号槽, 与 1.824 的 (维度-1)*2+类型 分桶编号不兼容"
+
+# ─────────────────────────────────────────────────────────────
+# 保存标记勘误（2026-10-17，m2-vars 实现时发现，以源码为准）
+# variables.yaml 上方各条目的 saved 列与源码 IsSavedata 规则有 4 处不一致。
+# 实现已按源码（VariableCode.cs / VariableToken.cs:88-154）执行，下方标注差异：
+#   1) STR   : yaml saved=true  → 源码 false（低16位=1 不满足 <1 的保存门槛）
+#   2) TSTR  : yaml saved=false → 源码 true （带 SAVE_EXTENDED 标志）
+#   3) CDFLAG: yaml 未标        → 源码 true （0x19130000 含 SAVE_EXTENDED）
+#   4) SAVEDATA_TEXT: yaml true → 源码 false（EXTENDED 分支直接 return，疑只走文本扩展段 GetExtSaveList）
+# 待 M4 用二进制存档样本核对后回填本文件（尤其第 4 条）。
+# ─────────────────────────────────────────────────────────────
