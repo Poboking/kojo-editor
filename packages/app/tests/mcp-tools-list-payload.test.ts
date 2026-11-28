@@ -34,6 +34,9 @@
  *
  * `additionalProperties:false` 的严格化（B11）实测仍是 **80 处 / 2,400 字节**，本批一处没摘。
  * 复现读数：`node tools/mcp-list-payload-evidence.mjs static --top 8` 与 `... dedup --top 8`。
+ *
+ * T1（2026-11-28，第二轮全量指针化）：五组逐字重复结构性收口后现取实测
+ * frame **141,889** / desc **60,944** / schema **69,589**，逐字重复 58,045 → **18,227 B（33.1% → 12.8%）**。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -145,10 +148,15 @@ const B21_FULL_FRAME_BYTES = 218_897;
  *  现取实测：desc **69,993**（−162）/ schema **107,026**（−5,352）/ frame **188,375**（−5,514，
  *  static 量具；判据口径 −5 B）。按现取收紧：desc 70,500 → 70,300（余量 307）、schema 112,900 →
  *  108,000（余量 974）；帧带底数只许下调 177,000 → 172,200（新带顶 189,420，机械余量 1,045 B）。
- *  BAND 0.1 与记账下界 163,000 一字不动；下一批增面前仍须先瘦再钉。 */
-const B22_FULL_FRAME_BYTES = 168_000;
-/** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。 */
-const B22_ACCOUNTED_FLOOR = 163_000;
+ *  BAND 0.1 与记账下界 163,000 一字不动；下一批增面前仍须先瘦再钉。
+ *  T1 底数按例重钉（2026-11-28，第二轮全量指针化）：172,200 → **140,000**——五组逐字重复
+ *  （limit 全文 / PAGE_SIZE_ALIAS_POINTER / PAGE_ACCOUNT_NOTE / cursor / instanceId）结构性
+ *  收口后全量帧实拍 **141,889**（static 量具；判据口径 −5 B），记账下界 163,000 → **135,000**
+ *  （约 −3.5%），新带顶 154,000，机械余量 12,111 B。 */
+const B22_FULL_FRAME_BYTES = 140_000;
+/** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。
+ *  T1：163,000 → 135,000（帧 175,337 → 141,889 后按例下调，仍留 ~3.5% 记账余量）。 */
+const B22_ACCOUNTED_FLOOR = 135_000;
 const BAND = 0.1;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const RUST_MAX_DESCRIPTION_CHARS = 2048;
@@ -238,10 +246,12 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     expect(Math.max(...schemaDescLens)).toBeLessThanOrEqual(1024);
   });
 
-  it('⑥ 指针落点：页大小/严格度口径每枚面一份，指针指过去的内容真的存在且完整', () => {
-    // 落点＝本面 `properties.limit` 的 description。凡是（a）描述里带了「见本面 inputSchema limit」指针、
-    // （b）声明了 `limit` 之外的页大小别名、或（c）声明了 `limit` 本身 的面，都必须能在**同一条
-    // tools/list 记录**里读到完整口径——跳转次数＝0，不靠 prompts / _meta / 仓内文档。
+  it('⑥ 指针落点：页大小完整口径全局一份（落点 fs.readFile），其余分页面只许指针', () => {
+    // T1 批（第二轮全量指针化）：完整页大小口径从「每枚面一份」收成「全局一份」——
+    // 落点＝`fs.readFile` 的 `properties.limit`（PAGE_SIZE_CANON_NOTE），其余 25 枚分页面
+    // 的 `limit` 只写一句指向落点的指针（同一条 tools/list 记录内，客户端零额外跳转）。
+    // 描述侧页账同理：完整口径（PAGE_ACCOUNT_NOTE）只留 `fs.readFile` 的 description，
+    // 其余 23 面只挂 `PAGE_ACCOUNT_POINTER`。落点缺一个 token 就红。
     const CANON_TOKENS = [
       'ONE knob',
       'never widened',
@@ -249,24 +259,44 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
       'additionalProperties:false',
       'full legal list',
     ];
-    let canonicalFaces = 0;
+    const canonFaces: string[] = [];
+    const pointerFaces: string[] = [];
     for (const t of fullFace) {
       const limitDesc = propDesc(t, 'limit');
-      const pointsHere = (t.description ?? '').includes('inputSchema `limit` description');
-      const aliasSiblings = PAGE_SIZE_ARG_ALIASES.filter((a) => a !== 'limit' && propOf(t, a) !== undefined);
-      if (!limitDesc && !pointsHere) continue;
-      expect(limitDesc, `${t.name} 的描述指向 inputSchema.limit，但本面没有该落点`).not.toBe('');
-      for (const token of CANON_TOKENS) {
-        expect(limitDesc, `${t.name} 的 limit 落点缺 token：${token}`).toContain(token);
+      if (!limitDesc) continue;
+      if (CANON_TOKENS.every((token) => limitDesc.includes(token))) {
+        canonFaces.push(t.name);
+      } else {
+        // 不是完整口径 ⇒ 必须是指向唯一落点的指针，且点名落点属性。
+        expect(limitDesc, `${t.name}.limit 既不是完整口径、也不是指向 \`fs.readFile\` 的指针`).toContain('`fs.readFile`');
+        expect(limitDesc, `${t.name}.limit 指针必须点名落点属性 \`limit\``).toContain('`limit`');
+        pointerFaces.push(t.name);
       }
-      canonicalFaces += 1;
+      // 本面声明了 `limit` 之外的页大小别名 ⇒ 别名必须说明「同一旋钮 + 拒收规则同源」。
+      const aliasSiblings = PAGE_SIZE_ARG_ALIASES.filter((a) => a !== 'limit' && propOf(t, a) !== undefined);
       for (const alias of aliasSiblings) {
         const d = propDesc(t, alias);
-        expect(d, `${t.name}.${alias} 没有指向 \`limit\` 的指针`).toContain('`limit`');
-        expect(d, `${t.name}.${alias} 的指针必须说明落点就在本对象里`).toContain('limit` description');
+        expect(d, `${t.name}.${alias} 没有说明与 \`limit\` 同一旋钮`).toContain('`limit`');
+        expect(d, `${t.name}.${alias} 没有说明拒收规则同源`).toContain('reject rule');
       }
     }
-    expect(canonicalFaces).toBeGreaterThanOrEqual(20); // B22 实拍 25 枚分页面，一枚一份
+    // 完整口径全局恰好一份，落点＝fs.readFile；其余 25 枚分页面全部是指针。
+    expect(canonFaces, '完整页大小口径必须全局一份，落点 fs.readFile').toEqual(['fs.readFile']);
+    expect(pointerFaces.length, `除落点外的分页面必须全是指针（现 ${pointerFaces.length}）`).toBe(25);
+    for (const token of CANON_TOKENS) {
+      expect(propDesc(toolByName('fs.readFile'), 'limit'), `页大小落点缺 token：${token}`).toContain(token);
+    }
+
+    // 描述侧页账：完整口径（PAGE_ACCOUNT_NOTE）只许在 fs.readFile 一处，其余 23 面只许指针。
+    const noteHosts = fullFace.filter((t) => (t.description ?? '').includes(PAGE_ACCOUNT_NOTE));
+    expect(noteHosts.map((t) => t.name), '页账完整口径必须全局一份，落点 fs.readFile').toEqual(['fs.readFile']);
+    const ACCOUNT_PTR_MARK = 'Page account (field list, nextCursor, changedDuringPaging';
+    const ptrHosts = fullFace.filter((t) => (t.description ?? '').includes(ACCOUNT_PTR_MARK));
+    expect(ptrHosts.length, `其余 23 枚分页面必须挂页账指针（现 ${ptrHosts.length}）`).toBe(23);
+    for (const t of ptrHosts) {
+      expect(t.description ?? '', `${t.name} 的页账指针必须点名落点 \`fs.readFile\``).toContain('`fs.readFile`');
+      expect(t.description ?? '', `${t.name} 的页账指针不得复刻完整口径`).not.toContain(PAGE_ACCOUNT_NOTE);
+    }
 
     // 启动器族的档位尾注：逐字共用，但只许出现在真的 privileged 的 launcher_* 面上，五个要点齐。
     const tierTokens = ['privileged', 'tools/list', 'EXACT name', '4th table', 'launcher_*'];
@@ -308,7 +338,9 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
         'project-root-relative',
       ],
       launcher_log_tail: ['40960', 'base64', 'truncatedByBytes', 'maxBytes', 'CHUNK', 'stream'],
-      'fs.readFile': ['24000', '65000', '65536', 'textLength', 'changedDuringPaging', 'Never writes to disk', 'approvedRoots'],
+      // T1：页账完整口径（PAGE_ACCOUNT_NOTE）的落点已收口到本面 description，故把账上
+      // 只有完整口径才有的 token（total / fingerprint）一并钉在本面——删了落点这里当场红。
+      'fs.readFile': ['24000', '65000', '65536', 'textLength', 'changedDuringPaging', 'Never writes to disk', 'approvedRoots', 'total', 'fingerprint'],
       'document.active': ['8000', '65000', '65536', 'textLength', 'cursor'],
       'io.workspaceRoots': ['rootIds', 'approvedRootIds', 'ws:', 'never mutates state'],
     };
@@ -381,9 +413,15 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     // desc 67,926 / schema 96,055 / frame 175,337（static 量具；判据口径 −5 B）。
     // 按现取收紧：desc 70,300 → 68,800、schema 108,000 → 97,200、帧带底数 172,200 → 168,000；
     // launcher 75,000 与 2048 描述闸、BAND 0.1、记账下界 163,000 一字不动。
-    expect(descBytes).toBeLessThanOrEqual(68_800); // …B27 69,993；WP-4 压缩后 67,926
-    expect(schemaBytes).toBeLessThanOrEqual(97_200); // …B27 107,026；WP-4 压缩后 96,055（−10,971）
-    expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；S4 实拍 73,706
+    // T1（2026-11-28）第二轮全量指针化：limit 全文 / 别名指针 / PAGE_ACCOUNT_NOTE / cursor /
+    // instanceId 五组结构性收口后现取实测 desc **60,944** / schema **69,589** / launcher 48,600 /
+    // frame **141,889**（static 量具；判据口径 −5 B）。上一轮读数 → 本轮读数：
+    // desc 67,926 → 60,944、schema 96,055 → 69,589、frame 175,337 → 141,889。
+    // 按现取收紧：desc 68,800 → 61,500、schema 97,200 → 70,200；launcher 75,000 与 2048
+    // 描述闸、BAND 0.1、记账下界 135,000 一字不动。
+    expect(descBytes).toBeLessThanOrEqual(61_500); // …WP-4 67,926；T1 指针化后 60,944
+    expect(schemaBytes).toBeLessThanOrEqual(70_200); // …WP-4 96,055；T1 指针化后 69,589（−26,466）
+    expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；T1 实拍 48,600
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });
 

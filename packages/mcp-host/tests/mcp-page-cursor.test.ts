@@ -269,11 +269,12 @@ describe('paginateText：完整性账 + 快照保证', () => {
 describe('工具形状（B1 只加入参，不加新工具名；闸值未动）', () => {
   const all = [...SEMANTIC_TOOL_SPECS, ...KERNEL_IO_TOOL_SPECS, ...SUPPLEMENTAL_TOOL_SPECS];
 
-  it('具名分页面的 inputSchema 都声明 limit + cursor，且形状与契约面同源（B27 后口径：只有 fs.readFile 带完整口径）', () => {
+  it('具名分页面的 inputSchema 都声明 limit + cursor，且形状与契约面同源（T1 后口径：只有 fs.readFile 带完整口径）', () => {
     const paged = all.filter((t) => JSON.stringify(t.inputSchema).includes('"cursor"'));
     expect(paged.length).toBeGreaterThanOrEqual(12);
     const canon = PAGE_CURSOR_SCHEMA_PROPS['cursor'] as Record<string, unknown>;
     let fullDesc = 0;
+    let fullLimitDesc = 0;
     for (const t of paged) {
       const props = (t.inputSchema as Record<string, unknown>)['properties'] as Record<string, unknown>;
       expect(props).toHaveProperty('cursor');
@@ -292,9 +293,21 @@ describe('工具形状（B1 只加入参，不加新工具名；闸值未动）'
       } else {
         expect(String(cursor['description']), `${t.name} 的 cursor 指针必须点名落点`).toContain('`fs.readFile`');
       }
-      expect(props['limit']).toEqual(PAGE_CURSOR_SCHEMA_PROPS['limit']);
+      // T1：`limit` 完整口径（PAGE_SIZE_CANON_NOTE）同样只留 fs.readFile 一份，其余面只挂指针。
+      const limit = props['limit'] as Record<string, unknown>;
+      expect({ type: limit['type'], minimum: limit['minimum'] }).toEqual({
+        type: (PAGE_CURSOR_SCHEMA_PROPS['limit'] as Record<string, unknown>)['type'],
+        minimum: (PAGE_CURSOR_SCHEMA_PROPS['limit'] as Record<string, unknown>)['minimum'],
+      });
+      if (limit === PAGE_CURSOR_SCHEMA_PROPS['limit']) {
+        fullLimitDesc += 1;
+        expect(t.name, 'limit 完整口径落点必须是 fs.readFile').toBe('fs.readFile');
+      } else {
+        expect(String(limit['description']), `${t.name} 的 limit 指针必须点名落点`).toContain('`fs.readFile`');
+      }
     }
     expect(fullDesc, 'cursor 完整口径必须恰好一份').toBe(1);
+    expect(fullLimitDesc, 'limit 完整口径必须恰好一份').toBe(1);
   });
 
   it('没有游标入参的面也仍在册（分页是加法，不删面）：三张工具表逐张非空', () => {

@@ -597,6 +597,12 @@ const PAGE_SIZE_CANON_NOTE =
   'Legacy synonyms declared on this surface are the same knob, not a second page size: the shared gate takes the FIRST value present in the order limit > length > maxChars > maxResults > maxEntries > maxRanges > maxEvents > maxLines and ignores the rest, while a name this surface does not declare is refused. ' +
   'Send `limit` when new. This schema runs with additionalProperties:false, so an argument name absent from `properties` is rejected with the full legal list, never silently dropped to the default page size.';
 
+/** T1 批（第二轮全量指针化）：完整页大小口径（`PAGE_SIZE_CANON_NOTE`）全局只保一份，落点＝
+ * `fs.readFile` 的 `properties.limit`；其余 25 枚分页面的 `limit` 只写本指针（同帧内零跳转，
+ * 「一个旋钮 / 别名取值序 / 未声明显式拒收」这层语义逐字仍在落点面）。 */
+const PAGE_SIZE_CANON_POINTER =
+  "Full page-size gate (one knob, order, reject rule) on `fs.readFile`'s `limit`.";
+
 export const PAGE_CURSOR_SCHEMA_PROPS: Record<string, unknown> = {
   limit: {
     type: 'integer',
@@ -614,13 +620,14 @@ export const PAGE_CURSOR_SCHEMA_PROPS: Record<string, unknown> = {
 };
 
 /** S15 式全量指针化批（B27）：游标口径全局只保一份，落点＝`fs.readFile` 的
- * `properties.cursor`；其余 26 枚分页面换指针（type/pattern/长度闸由 spread 保形，
- * 「changedDuringPaging 页不得拼接」这层语义在每面 PAGE_ACCOUNT_NOTE 里逐字仍在）。 */
+ * `properties.cursor`；其余 25 枚分页面换指针（type/pattern/长度闸由 spread 保形，
+ * 「changedDuringPaging 页不得拼接」这层语义在每面 PAGE_ACCOUNT_NOTE / 落点 cursor 里逐字仍在）。
+ * T1 批：指针再压（128→101 字符），`limit` 也从本面完整口径换成指向 `fs.readFile` 的指针。 */
 const PAGE_CURSOR_PTR_NOTE =
-  "Opaque cursor from the previous response's nextCursor; omit on the first page. Full paging contract on `fs.readFile`'s `cursor`.";
+  "Cursor = the previous page's nextCursor; omit on page one. Full contract on `fs.readFile`'s `cursor`.";
 
 const PAGE_CURSOR_PTR_PROPS: Record<string, unknown> = {
-  limit: PAGE_CURSOR_SCHEMA_PROPS.limit,
+  limit: { type: 'integer', minimum: 1, description: PAGE_SIZE_CANON_POINTER },
   cursor: {
     type: 'string',
     minLength: 10,
@@ -639,6 +646,12 @@ export const PAGE_ACCOUNT_NOTE =
   'Every page carries {total (textLength on text surfaces), offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim. ' +
   'changedDuringPaging:true = snapshot changed mid-paging; that page restarts from the head, never splice it with earlier pages. ' +
   "Page size (ONE knob, `limit` is the real name) and the undeclared-argument-name rejection are stated in this tool's inputSchema `limit` description.";
+
+/** T1 批（第二轮全量指针化）：页账完整口径（`PAGE_ACCOUNT_NOTE`）全局只保一份，落点＝
+ * `fs.readFile` 的 description；原本挂完整口径的 23 枚分页面改挂本指针（字段清单 / nextCursor /
+ * changedDuringPaging / 单旋钮 / 拒收规则逐字仍在落点面）。 */
+const PAGE_ACCOUNT_POINTER =
+  'Page account (field list, nextCursor, changedDuringPaging, one knob, reject rule): see `fs.readFile`.';
 
 /** 语义读数服务 → 8 枚只读工具（tier 'read' + readOnlyHint）。
  *
@@ -679,8 +692,7 @@ const STRICT_NO_ARG_SCHEMA: Record<string, unknown> = {
  * 这里刻意**不带 `maximum`**：体积闸在腿侧 clamp（B11 一个闸值都没动），在 schema 再钉一次上限等于
  * 给旧别名新增一类「改前收、改后拒」的取值，那是收紧到行为变化，不是本批要的事。
  */
-const PAGE_SIZE_ALIAS_POINTER =
-  'Synonym of `limit` (same single knob); acceptance order + reject rule in this object\'s `limit` description.';
+const PAGE_SIZE_ALIAS_POINTER = 'Same knob as `limit`, same reject rule.';
 
 /**
  * `limit` 之外、本面经共用分页腿**真正取用**的页大小别名。
@@ -782,7 +794,7 @@ const LAUNCHER_INSTANCE_ID_SCHEMA: Record<string, unknown> = {
 /** S15 式全量指针化批（B27）：实例 id 口径全局只保一份，落点＝`launcher_instance_get` 的
  * `properties.instanceId`；其余 18 处换指针（spread 保形，pattern 与长度闸零改动）。 */
 const LAUNCHER_INSTANCE_ID_PTR_NOTE =
-  "Instance id from launcher_instance_list / launcher_instance_get, verbatim - never invent one; full shape gate on `launcher_instance_get`'s `instanceId`.";
+  "Verbatim instance id - never invent one; full shape gate on `launcher_instance_get`'s `instanceId`.";
 
 const LAUNCHER_INSTANCE_ID_PTR_SCHEMA: Record<string, unknown> = {
   ...LAUNCHER_INSTANCE_ID_SCHEMA,
@@ -834,7 +846,7 @@ export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'semantic.diagnostics',
     method: 'diagnostics',
-    description: `当前文档诊断（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，本页同时接受它历史上的同义旧名（maxResults…，序列先到先得）——写错的参数名现在一律显式拒收，不再静默按默认页大小原地打转。${PAGE_ACCOUNT_NOTE}`,
+    description: `当前文档诊断（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，本页同时接受它历史上的同义旧名（maxResults…，序列先到先得）——写错的参数名现在一律显式拒收，不再静默按默认页大小原地打转。${PAGE_ACCOUNT_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -848,7 +860,7 @@ export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'semantic.documentSymbols',
     method: 'documentSymbols',
-    description: `文档符号（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，其余同义旧名照旧接受（见 pageSize 说明）；不认识的入参名一律显式拒收。${PAGE_ACCOUNT_NOTE}`,
+    description: `文档符号（只读）。列举面：单页上限 200（与旧硬闸同尺，未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，其余同义旧名照旧接受（见 pageSize 说明）；不认识的入参名一律显式拒收。${PAGE_ACCOUNT_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -890,7 +902,7 @@ export const KERNEL_IO_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fs.tree',
     method: 'fileTree',
-    description: `项目文件树（只读）。列举面：单页上限沿用本面已有的 maxEntries 上限（未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，本面历史名 \`maxEntries\` 照旧等价；不认识的入参名一律显式拒收（旧行为是静默按默认页大小，翻页的人会以为自己在翻页）。${PAGE_ACCOUNT_NOTE}`,
+    description: `项目文件树（只读）。列举面：单页上限沿用本面已有的 maxEntries 上限（未放宽），零参调用＝第一页、行为与旧版逐字一致。页大小只有一个旋钮：正名 \`limit\`，本面历史名 \`maxEntries\` 照旧等价；不认识的入参名一律显式拒收（旧行为是静默按默认页大小，翻页的人会以为自己在翻页）。${PAGE_ACCOUNT_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -907,7 +919,7 @@ export const KERNEL_IO_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'search.all',
     method: 'searchAll',
-    description: `全工程检索（只读）。命中列表按 limit+cursor 分页；引擎自身封顶时显式给 knownTotal:false（不硬编假 total）。页大小只有一个旋钮：正名 \`limit\`，其余同义旧名照旧接受；本面收 \`query\` / \`offset\` / 页大小别名 / \`cursor\` / \`resumeBySlice\` / \`deadlineMs\`（软时限→partial）/ \`preview\`（none＝剥 preview 省 token），**不收 \`scope\`**（要按作品域收窄请用 workspace.searchAll——旧行为是把 scope 静默丢掉、照样全根扫）。给 \`resumeBySlice:true\` 才按互不相交的目录分片把 5,000 条以上的命中集逐片续取（缺省＝旧的一次性窗口应答，一字不变；deadlineMs 与 resumeBySlice 不同收）。${PAGE_ACCOUNT_NOTE}`,
+    description: `全工程检索（只读）。命中列表按 limit+cursor 分页；引擎自身封顶时显式给 knownTotal:false（不硬编假 total）。页大小只有一个旋钮：正名 \`limit\`，其余同义旧名照旧接受；本面收 \`query\` / \`offset\` / 页大小别名 / \`cursor\` / \`resumeBySlice\` / \`deadlineMs\`（软时限→partial）/ \`preview\`（none＝剥 preview 省 token），**不收 \`scope\`**（要按作品域收窄请用 workspace.searchAll——旧行为是把 scope 静默丢掉、照样全根扫）。给 \`resumeBySlice:true\` 才按互不相交的目录分片把 5,000 条以上的命中集逐片续取（缺省＝旧的一次性窗口应答，一字不变；deadlineMs 与 resumeBySlice 不同收）。${PAGE_ACCOUNT_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -936,7 +948,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'workspace.searchAll',
     description:
       'Search the whole project for a text query and return file/line hits. Read-only: never mutates files. Use `query` for the case-insensitive substring, optional `scope` to restrict to source files, `maxResults`/`limit` to size a page and `cursor` to resume the next one; optional `deadlineMs` (soft deadline -> partial:true, not with resumeBySlice) and `preview`:"none" (strip previews, compact) are additive. Returns {hits:[{path,line,preview}], total, truncated} plus the page account. Honesty note: the search engine itself has a hard hit wall (5000); when the engine reports it overflowed, this surface answers `knownTotal:false` and `engineTruncated:true` instead of pretending the union of pages equals the true match count — narrow the query or page the files with fs.readFile. Page size is ONE knob: `limit` is its real name, `maxResults` is this surface\'s historical synonym (both work, `limit` wins); anything not listed here is now rejected loudly instead of silently paging at the default size. ' +
-      PAGE_ACCOUNT_NOTE,
+      PAGE_ACCOUNT_POINTER,
     inputSchema: {
       type: 'object',
       properties: {
@@ -977,7 +989,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'problems.diagnostics',
     description:
       'List current problems-panel diagnostics for the active document/project. Read-only. Returns {items:[{message,line,severity,source?}], total, truncated} plus the page account. This surface pages: `maxResults`/`limit` size a page and `cursor` resumes it, so every finding is enumerable — they are ONE knob (`limit` is the real name, `maxResults` this surface\'s synonym), and an unlisted argument name is now rejected instead of silently paging at the default size. Stated rather than hidden: this face clamps `maxResults` BEFORE the shared page-size gate, so the aliases that rank behind `maxResults` (`maxEntries` / `maxRanges` / `maxEvents` / `maxLines`) never took effect here and are deliberately NOT accepted — send `limit` or `maxResults`. Inspect available actions before proposing any problems.quickFix; a `truncated:true` result means more pages exist (or that you must narrow the query) — never assume completeness. ' +
-      PAGE_ACCOUNT_NOTE,
+      PAGE_ACCOUNT_POINTER,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1190,7 +1202,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'commands.list',
     description:
       'List the commands registered in the command palette (id / title / description / tier). Read-only. Same data source as the kojo://project/commands resource, but this surface pages: `maxResults` (or `limit` — one and the same knob) sizes a page and `cursor` from the previous response resumes it, so every registered command is enumerable — `total` is the full count and `hasMore`/`nextCursor` say how to get the rest. A page-size name that is not declared here is now rejected instead of silently paging at the default size. ' +
-      PAGE_ACCOUNT_NOTE +
+      PAGE_ACCOUNT_POINTER +
       ' Discover real ids here before calling any command; never invent a command id.',
     inputSchema: {
       type: 'object',
@@ -1245,7 +1257,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'document.active',
     description:
       'Read the active document text and cursor position as a read-only projection. Same data source as the kojo://project/active-document resource, but this surface pages: `offset` (0-based character offset) + `length` (alias `maxChars`) address a sub-range, and `cursor` from the previous response resumes exactly where it ended — `textLength` is the FULL length, so concatenating pages reproduces the buffer character-for-character. Page size: default 8000, max 65000 characters (the host sanitizer cuts any untrusted string at 65536, so pages are kept under that gate rather than reported-then-trimmed). `limit` / `length` / `maxChars` are ONE knob (`limit` is the real name; the other two are this surface\'s historical synonyms, still honored) — an undeclared argument name is now rejected loudly rather than silently defaulting. ' +
-      PAGE_ACCOUNT_NOTE +
+      PAGE_ACCOUNT_POINTER +
       ' Read-first: do not infer any text beyond what is returned.',
     inputSchema: {
       type: 'object',
@@ -1266,7 +1278,9 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     description:
       'Read the text content of one file inside the authorized project root (read-only), page by page. `relPath` MUST be a project-root-relative path — the schema rejects absolute paths, drive letters and ".." traversal, and the execution layer re-checks it against approvedRoots. Backed by the Rust read_file_bytes primitive: the whole file is decoded host-side, this tool returns ONE window. Use `offset` (0-based character offset) + `length` (alias `maxChars`, kept for backwards compatibility) to address a sub-range; a plain `cursor` from the previous page is equivalent and self-checking. ' +
       'Completeness: `textLength` is the FULL character length of the file; `hasMore` says whether characters remain after this page; `nextCursor` resumes exactly where this page ended, so concatenating pages reproduces the file character-for-character. If the file changed between pages the response carries `changedDuringPaging:true` and restarts from offset 0 — do not splice that page with earlier ones. ' +
-      'Page size is gated: default 24000 characters, maximum 65000 characters (`length` is clamped). The 65000 ceiling is not a convenience — the host sanitizer cuts any single untrusted string at 65536 characters, so a larger page would have been silently re-truncated after this tool reported its account. One knob, several historical names: `limit` is the real name, `length` / `maxChars` are synonyms this surface keeps accepting; any name NOT declared here is rejected with the legal list instead of silently paging at the default size. Never writes to disk.',
+      'Page size is gated: default 24000 characters, maximum 65000 characters (`length` is clamped). The 65000 ceiling is not a convenience — the host sanitizer cuts any single untrusted string at 65536 characters, so a larger page would have been silently re-truncated after this tool reported its account. One knob, several historical names: `limit` is the real name, `length` / `maxChars` are synonyms this surface keeps accepting; any name NOT declared here is rejected with the legal list instead of silently paging at the default size. Never writes to disk. ' +
+      // T1 批：本面＝页账完整口径（`PAGE_ACCOUNT_NOTE`）的唯一落点，其余分页面只挂 `PAGE_ACCOUNT_POINTER`。
+      PAGE_ACCOUNT_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1349,7 +1363,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'io.listDir',
     description:
       'List the direct children of one directory inside the authorized project root (read-only). `relPath` is optional (defaults to the project root) and must be project-root-relative; `maxEntries` / `limit` size a page and `cursor` resumes the next one, so a large directory is fully enumerable; `maxDepth` bounds recursion and the result carries an explicit `truncated` flag. Backed by the Rust list_dir / walk_dir primitives. Use it to confirm a relative path exists before any write. Page size is ONE knob (`limit` is the real name, `maxEntries` this surface\'s historical synonym); an argument name outside the declared list is now rejected instead of being silently ignored. Never writes to disk. ' +
-      PAGE_ACCOUNT_NOTE,
+      PAGE_ACCOUNT_POINTER,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1368,7 +1382,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'io.workspaceRoots',
     description:
       'List the workspace roots registered for the current session (read-only). Backed by the Rust workspace_roots primitive. `maxResults`/`limit` size a page (one and the same knob) and `cursor` resumes it; the list carries `total` + `hasMore` so it is fully enumerable. Undeclared argument names are rejected, never silently dropped to the default page. The additive `rootIds` array is index-aligned with `roots`: each is a stable `ws:` identifier usable as the optional `rootId` on the four fileTree write tools — but only after a human explicitly approves that identifier in this session (approvedRootIds). Use this to learn the legitimate domain for subsequent relative paths; it never grants write access outside approvedRoots and never mutates state. ' +
-      PAGE_ACCOUNT_NOTE,
+      PAGE_ACCOUNT_POINTER,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1400,7 +1414,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'editor.selfCheck',
     description:
       'Run a read-only self-check of the language/validation layer and return its findings (rule / message / severity). Backed by the semantic `selfCheck` read. `maxResults`/`limit` size a page and `cursor` resumes it, so every finding is enumerable (page size is ONE knob; the historical name `maxResults` keeps working); an undeclared argument name is rejected rather than silently paging at the default. The result carries an explicit `truncated` flag. It is a diagnostic projection, never a fix and never a write; do not treat it as an authorization to edit. ' +
-      PAGE_ACCOUNT_NOTE,
+      PAGE_ACCOUNT_POINTER,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1449,7 +1463,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'lang.markers',
     description:
       'Return the current marker set for the active document (read-only). Backed by the semantic `markers` read. `maxResults`/`limit` size a page (ONE knob; `maxResults` is this surface\'s historical synonym) and `cursor` resumes it, so the full marker set is enumerable; an undeclared argument name is now rejected instead of silently paging at the default size. The result carries an explicit `truncated` flag. This is a read-only problem/decoration projection — it never clears or edits a marker and never fabricates a finding. ' +
-      PAGE_ACCOUNT_NOTE,
+      PAGE_ACCOUNT_POINTER,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1879,7 +1893,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_instance_list',
     description:
       'List the launcher instances registered on this machine (read-only). Returns {instances:[...], total, offset, limit, truncated, hasMore, nextCursor, fingerprint}: each row is the host DTO verbatim (id, adapterId, gameId, createdAt, sourceRoot|null, isolation, instanceRoot, gameRoot, executableTrust, state, name, tags, notes). An empty list is the real reading (zero registered instances), never a wiring failure; if no launcher surface exists at all the call fails visibly with NOT_WIRED instead of returning []. Start paging here and reuse the ids you read. Page size is ONE knob (`limit` plus the legacy synonyms this face keeps accepting); anything not declared is rejected instead of silently paging at the default. ' +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1901,7 +1915,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_content_list',
     description:
       'List the content packs the host has installed into one instance (read-only), reading its own state.json / ownership.json on disk. Returns {contents:[{manifest, installedAt, ownedFiles, enabled, status}], + the page account}; unknown manifest fields are preserved by the host and passed through untouched. `contents[].manifest.id` is the packId other launcher_* tools need. Empty list = nothing installed; an absent P1 surface fails visibly with NOT_WIRED. ' +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1915,7 +1929,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_content_diagnose',
     description:
       "Diagnose an instance's installed content against what is actually on disk (read-only). Returns {instanceId, issues:[{packId, code, path?, message}], + the page account}. Honesty note on the code table: the host reports two codes the domain contract does not have - 'orphan-file' and 'load-order' - and this surface passes them through instead of folding them into 'conflict', because an orphaned file is otherwise invisible. Zero issues is a real reading; the diagnosis never repairs anything. " +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1929,7 +1943,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_process_list',
     description:
       'List the game processes currently supervised by the launcher host (read-only): {processes:[{instanceId, state, pid, sessionId, startedAt, elapsedMs, exitCode, exitReason, lastError}], + the page account}. This is the host process table, not the OS process list - a game started outside the launcher is not in it. Empty array = no supervised process, which is a reading, not an error. ' +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1951,7 +1965,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_task_list',
     description:
       "List the launcher task centre's rows (read-only): {tasks:[{id, kind, instanceId, state, progress, createdAt, startedAt, endedAt, error, result, cancellable}], + the page account} plus a faceNote. This table is deliberately its OWN surface: launcher tasks belong to the third table (per-root approvals) and are NOT merged into kojo://tasks, so a launcher job never shows up in the long-task face and vice versa. Rows are how you verify a lifecycle call: take the taskRowId from that reply and read it here. " +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1964,7 +1978,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_save_list',
     description:
       'List the save files the host can see under an instance (read-only). The host answer is NOT a bare entry array: it is {entries:[{rootId, path, name, bytes, mtimeMs}], roots:[{rootId, approved, exists?}], warnings:[...]} plus the page account over `entries`. `roots[].approved` is the write-back gate for shared/overlay instances (it comes from launcher/approvals.json, written only by the native directory dialog), and `roots[].exists` is the disk reading - read both before proposing launcher_save_restore or launcher_save_apply_import. ' +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1978,7 +1992,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_save_backups',
     description:
       'List the backups stored in the instance backup directory (read-only): {backups:[{id, instanceId, createdAt, label, bytes, entryCount, reason}], + the page account}. `reason` is manual|pre-restore|pre-plugin|auto and explains who made the row. backupId is what launcher_save_restore / launcher_save_delete_backup require - never invent one. ' +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1992,7 +2006,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_log_sessions',
     description:
       'List recorded log sessions of one instance (read-only): {sessions:[{id, instanceId, startedAt, stdoutBytes, stderrBytes}], + the page account}. The session id is the handle launcher_log_read needs; byte counters are the host reading of the raw stream files, not decoded line counts. ' +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -2006,7 +2020,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_log_tail',
     description:
       'Read the tail of the newest log session of one instance (read-only), exactly as the host returns it: {session, truncatedByBytes, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account over chunks}. Two honesty points, both load-bearing: (1) the payload is RAW BYTES in base64 - the host does not decode and neither does this face, because the charset decision belongs to the launcher core log service; concatenate bytesBase64 across pages in nextCursor order and decode afterwards. (2) The host default is 1 MiB per stream; this face TIGHTENS the read to at most 40960 bytes per stream so a page stays under the host untrusted-string gate. `truncatedByBytes` is the host byte reading, the account `truncated`/`hasMore` is the chunk-page reading - they are deliberately two different fields. Byte size per stream is `maxBytes` (never more than the gate); the page-size names (`limit` and its legacy synonyms) size the CHUNK list, not the byte budget - `maxLines` therefore pages chunks and does not truncate by lines, because the host truncates by bytes only. ' +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2026,7 +2040,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_log_read',
     description:
       'Read one recorded log session by id (read-only) - same answer shape as launcher_log_tail ({session, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account}), the difference being the addressing: `sessionId` must come from launcher_log_sessions (the host also verifies session ownership). Bytes stay raw base64 here: charset decoding is the launcher core log service job, so splice pages first, then decode. Per-stream cap is tightened to 40960 bytes, never widened; `maxBytes` is that byte budget while `limit` and its legacy synonyms page the CHUNK list. ' +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2046,7 +2060,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_project_hash',
     description:
       'Stream-hash one plugin source project (read-only): pass {projectDir, artifactDir, entries:[posix-relative paths]} and get {digests:[{path, sha256, size}], requestedEntries, + the page account} back, `path` echoed exactly as requested so pages can be paired. This is the ONLY launcher face that takes an absolute path, and it is an INPUT root, never a write target: the host re-checks that projectDir lies inside the registered writable roots (app data / user-approved workspace roots) and that resolved entries cannot escape artifactDir. This tool does not build, does not pack and does not install anything. ' +
-      PAGE_ACCOUNT_NOTE + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
