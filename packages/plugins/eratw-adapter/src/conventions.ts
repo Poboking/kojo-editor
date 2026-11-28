@@ -17,10 +17,13 @@ import type {
   ConventionIssue,
   ConventionProjectUnitEntry,
   ConventionRule,
+  ErbFile,
   ErbParam,
 } from '@kojo/plugin-api';
 import type { EratwCallProtocol } from './call-protocol';
 import { parseKojoFamily } from './family-index';
+import { stableHash } from '@kojo/plugin-api';
+import { normalizeEol } from '@kojo/plugin-api/eol';
 
 /* ------------------------------ 工具 ------------------------------ */
 
@@ -607,5 +610,154 @@ export function createEratwConventions(getProtocol?: () => EratwCallProtocol | u
     formTripleSymbolRule,
     messageCheckStructureRule,
     createCallSlotCoverageRule(getProtocol),
+    eraTwAuditFindingRule,
   ];
 }
+
+/* --------------------- 规则 6：编译器符号审计快照 --------------------- */
+
+/**
+ * eraTW 编译器审计读数（`erbcc audit`）→ 约定诊断规则。
+ *
+ * ## 为什么是"离线读数"而不是把编译器塞进来
+ *
+ * 语义权威在 JVM：`SymbolLinkAudit.kt:29-46` 的八类 `FindingKind` 依赖运行期命名空间
+ * （CSV 系统变量表 + 全局/私有 `#DIM` 安装 + 解析期 `SymbolUses`），Rust 腿
+ * `tools/erbcc-rs/src/audit.rs` 只是确定性 TSV 写出层。编辑器跑在 Tauri 壳里，
+ * 起 JVM 不现实 —— 所以走与 `kojo-vocab` / `eratw-adapter` 事实数据同一套路：
+ * **离线产出确定性读数、编辑器侧只读消费**。
+ *
+ * 数据叶子 `audit-findings.data.ts` 由 `tools/gen-erb-audit-findings.mjs` 生成，经**动态
+ * import** 装载（不进 ps10 开机图）。每条文件项带正文指纹：运行时读到的正文变了就
+ * **整文件不出诊断** —— 离线快照绝不能变成作者改完代码后的陈旧波浪线（宁可漏报不可误报）。
+ *
+ * ## 口径锚（逐条对拍，不许自创）
+ *
+ * - TSV 七列 `kind/file/function/line/name/detail/count` = `SymbolLinkAudit.kt:91` /
+ *   `tools/erbcc-rs/src/audit.rs:24`；`file` 是语料根下相对路径（正斜杠）；
+ * - `line` 是**0 基语句行号**，`-1` = 定位不到（`:258` 的私有 `#DIM` 拒绝项）⇒
+ *   本模块唯一一处 `+1` 换成契约的 1 基；`-1` 整文件级诊断（不给 `line`）；
+ * - `blocking` 位 = `SymbolLinkAudit.kt:29-46`：前七类 `true`（运行期必红），
+ *   只有 `COMPILE_DIM_WARNING` 是 `false`（原版 `ParserMediator.Warn(…, 2)` 只告警）⇒
+ *   前七类 `error`、最后一类 `info`，三档如实不降级；
+ * - `count` = 同一使用点里的出现次数（`SymbolUses.kt:51-52`），进文案不进 key
+ *   （出现次数变化不应造出"新问题"）。
+ */
+
+/** 与生成器 `KINDS` 数组逐位同序（序号是数据行第 0 列，改序必须重跑生成器） */
+export const AUDIT_FINDING_KINDS = [
+  'VAR_UNBOUND',
+  'VAR_TYPE_MISMATCH',
+  'VAR_DIM_MISMATCH',
+  'KEYWORD_UNBOUND',
+  'KEYWORD_USER_VAR',
+  'PRIVATE_DIM_REJECTED',
+  'GLOBAL_DIM_REJECTED',
+  'COMPILE_DIM_WARNING',
+] as const;
+
+export type AuditFindingKind = (typeof AUDIT_FINDING_KINDS)[number];
+
+/** 八类的中文短名与严重度（依据逐条见 `SymbolLinkAudit.kt:29-46` 的注释） */
+export const AUDIT_KIND_META: Readonly<
+  Record<AuditFindingKind, { readonly label: string; readonly severity: 'error' | 'info' }>
+> = {
+  VAR_UNBOUND: { label: '未绑定变量', severity: 'error' },
+  VAR_TYPE_MISMATCH: { label: '变量类型不符', severity: 'error' },
+  VAR_DIM_MISMATCH: { label: '变量维度不符', severity: 'error' },
+  KEYWORD_UNBOUND: { label: '字符串下标未定义', severity: 'error' },
+  KEYWORD_USER_VAR: { label: '用户变量缺索引表', severity: 'error' },
+  PRIVATE_DIM_REJECTED: { label: '私有 #DIM 注册被拒', severity: 'error' },
+  GLOBAL_DIM_REJECTED: { label: '全局 #DIM 安装被拒', severity: 'error' },
+  COMPILE_DIM_WARNING: { label: '#DIM 编译告警', severity: 'info' },
+};
+
+/** 数据行：`[kind序号, functionKey, 0基行号, name, detail, count]` */
+type AuditFindingRow = readonly [number, string, number, string, string, number];
+interface AuditFileEntry {
+  readonly s: string;
+  readonly r: readonly AuditFindingRow[];
+}
+type AuditFiles = Readonly<Record<string, AuditFileEntry>>;
+
+const RULE_ID = 'eratw.audit-findings';
+
+/** 动态 import 只装载一次；失败不缓存成"空数据"（下次校验还有机会） */
+let dataPromise: Promise<AuditFiles> | null = null;
+function loadAuditFiles(): Promise<AuditFiles> {
+  dataPromise ??= import('./audit-findings.data').then((m) => m.AUDIT_FILES as AuditFiles);
+  dataPromise.catch(() => {
+    dataPromise = null;
+  });
+  return dataPromise;
+}
+
+/**
+ * 项目里的绝对路径 → TSV 的 file 列（语料根相对路径，正斜杠、大写归一）。
+ * 兼容两种项目根：游戏根（其下有 `ERB/`）与 ERB 目录本身。
+ */
+export function auditPathOf(ctx: ConventionCheckContext, file: ErbFile): string {
+  const p = file.path.replace(/\\/g, '/');
+  const root = ctx.project.rootDir.replace(/\\/g, '/').replace(/\/$/, '');
+  let rel = p.startsWith(`${root}/`) ? p.slice(root.length + 1) : p;
+  if (/^ERB\//i.test(rel)) rel = rel.slice(4);
+  return rel.replace(/^\.\//, '').toUpperCase();
+}
+
+/** 一条读数 → 一条契约问题；行号换算只在这里发生一次 */
+export function issueOf(row: AuditFindingRow, filePath: string, rel: string): ConventionIssue | null {
+  const [ki, fn, line0, name, detail, count] = row;
+  const kind = AUDIT_FINDING_KINDS[ki];
+  if (!kind) return null; // 数据契约生成器已在源头拒收表外 kind；这里是第二道
+  const meta = AUDIT_KIND_META[kind];
+  const where = fn ? `（@${fn}）` : '';
+  const times = count > 1 ? `〔同点 ${count} 次〕` : '';
+  return {
+    ruleId: `${RULE_ID}.${kind.toLowerCase()}`,
+    severity: meta.severity,
+    message: `编译器审计 · ${meta.label}「${name}」${where}：${detail}${times}`,
+    filePath,
+    // 0 基 → 1 基的唯一换算点；-1 = 定位不到 ⇒ 整文件级诊断
+    ...(line0 >= 0 ? { line: line0 + 1 } : {}),
+    key: `${RULE_ID}|${kind}|${rel}|${line0}|${name}|${fn}`,
+  };
+}
+
+/**
+ * eraTW 符号审计规则（`scope: 'file'`）。
+ *
+ * 逐文件结论由指纹门保证新鲜：正文与快照指纹不符（作者改过）或文件不在快照里 ⇒
+ * 返回空数组（**这一文件没有结论**，不是"没问题"的断言 —— 引擎仍会把它当成该规则
+ * 的逐文件结论缓存，但下一次编辑会重算；见 `checkFile` 契约）。
+ *
+ * `dataProvider` 可注入 —— 测试据此覆盖真实快照里当期为零的 kind（8 类全谱），
+ * 生产装配走默认的动态 import 数据叶子（不进开机图）。
+ */
+export function createEratwAuditFindingRule(
+  dataProvider: () => Promise<AuditFiles> = loadAuditFiles,
+): ConventionRule {
+  return {
+    id: RULE_ID,
+    description: 'eraTW 编译器符号审计快照（8 类 Finding：未绑定/类型/维度/关键字/DIM 注册/编译告警）',
+    severity: 'error',
+    source:
+      'SymbolLinkAudit.kt:29-46（FindingKind 八类 + blocking 位）与 :89-104（TSV 七列 / 0 基行号）',
+    scope: 'file',
+    async checkFile(ctx, file): Promise<ConventionIssue[]> {
+      const files = await dataProvider();
+      const rel = auditPathOf(ctx, file);
+      const entry = files[rel];
+      if (!entry) return [];
+      const text = await ctx.readFile(file.path);
+      if (stableHash(normalizeEol(text)) !== entry.s) return [];
+      const issues: ConventionIssue[] = [];
+      for (const row of entry.r) {
+        const issue = issueOf(row, file.path, rel);
+        if (issue) issues.push(issue);
+      }
+      return issues;
+    },
+  };
+}
+
+export const eraTwAuditFindingRule = createEratwAuditFindingRule();
