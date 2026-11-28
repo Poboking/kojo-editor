@@ -13,8 +13,10 @@ import { ERB_INSTRUCTION_NAMES, isInstructionName } from '../src/instructions';
 import { BUILTIN_FUNCTION_NAMES } from '../src/builtins';
 
 describe('ERB_INSTRUCTION_NAMES · 表的形状', () => {
-  it('301 条（= enum FunctionCode 305 成员 − __NULL__ / SET / VARS / VARI）', () => {
-    expect(ERB_INSTRUCTION_NAMES).toHaveLength(301);
+  it('324 条（= 4.981 snake 语句面 326 − 条件注册的 VARI / VARS）', () => {
+    // 旧口径 301 = emuera.em master 的 enum FunctionCode 305 − __NULL__/SET/VARS/VARI；
+    // 2026-11-28 改按复刻目标 4.981 的注册面取真值，双向对拍见 instruction-names-contract。
+    expect(ERB_INSTRUCTION_NAMES).toHaveLength(324);
   });
 
   it('全大写、无重复、字典序（改表时按这三条自检）', () => {

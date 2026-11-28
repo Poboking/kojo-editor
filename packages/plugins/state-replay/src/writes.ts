@@ -223,14 +223,17 @@ export const CALL_INSTRUCTIONS: ReadonlySet<string> = new Set([
   'CALLFORM',
   'CALLFORMF',
   'CALLSHARP',
+  'CALLSTR',
   'CALLTRAIN',
   'TRYCALL',
   'TRYCALLF',
   'TRYCALLFORM',
   'TRYCALLFORMF',
   'TRYCALLLIST',
+  'TRYCALLSTR',
   'TRYCCALL',
   'TRYCCALLFORM',
+  'TRYCCALLSTR',
 ]);
 
 /**

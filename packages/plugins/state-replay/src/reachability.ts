@@ -112,12 +112,14 @@ export const CONDITIONAL_JUMP_INSTRUCTIONS: ReadonlySet<string> = new Set([
   'TRYCGOTOFORM',
   'TRYCJUMP',
   'TRYCJUMPFORM',
+  'TRYCJUMPSTR',
   'TRYGOTO',
   'TRYGOTOFORM',
   'TRYGOTOLIST',
   'TRYJUMP',
   'TRYJUMPFORM',
   'TRYJUMPLIST',
+  'TRYJUMPSTR',
 ]);
 
 /** `FORM` 变体：目标是表达式算出来的，永远是动态跳转 */
