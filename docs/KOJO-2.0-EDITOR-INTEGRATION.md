@@ -66,7 +66,7 @@ kojo2-project-service.ts         Application Service（createKojo2ProjectService
 | --- | --- | --- | --- |
 | `kojo2.project.compile` | 构建 Kojo 2.0 项目 | `service.refresh('manual')` → 人话汇总（文档/Theater/目标组/错误/告警/耗时）；失败给首因 + 「详见问题面板」。 | `Kojo 2.0 项目构建完成：2 份文档 / 2 个 Theater / 1 个目标组；错误 0 · 告警 0；耗时 1ms。` |
 | `kojo2.project.previewDispatch` | 预览 Kojo 2.0 调度计划 | 汇总 plan + assembly：ready/blocked target、函数名、组装单元数、`theaterErb` 仅预览份数、legacy 文件数。 | 多行 info（目标/函数/组装/预览），见 §6.6。 |
-| `kojo2.project.publish` | 发布 Kojo 2.0 项目 ERB | `refresh('publish')` + `assemble()` → `publish()`；`publishBlockReason` 非空即错误回执；成功只走 `kernel.io.exportFile`，回执带落点与单元数 + 表达式恒等透传的已知缺口提示。 | `已导出：…\sandbox\exports\kojo2-project.ERB（2 个单元）…`，见 §6.6。 |
+| `kojo2.project.publish` | 发布 Kojo 2.0 项目 ERB | `refresh('publish')` + `assemble()` → `publish()`；`publishBlockReason` 非空即错误回执；成功只走 `kernel.io.exportFile`，回执带落点与单元数 + 表达式覆盖口径提示（代词已落、v1 别名面未接入）。 | `已导出：…\sandbox\exports\kojo2-project.ERB（2 个单元）…`，见 §6.6。 |
 
 **问题桶**：项目级（无单文件落点）条目统一落 `kojo2:build` 虚拟组；**带真实 path 的条目保留自身 path**（点开即跳文件）。通道前缀 `[构建]` / `[调度]` / `[调度渲染]` / `[组装]` / `[运行时]`。与 `kojo2:project`（存储/项目分析簇）是不同 bucket key，**互不覆盖**。
 
@@ -245,7 +245,7 @@ Host 多角色场景必须传 `engineFunctionName`（如 `M_KOJO_ENCOUNTER_K12`�
 | `dispatchSelectors` | `ERATW_DISPATCH_SELECTORS`（本批经 bundle `dispatchSelectors`） | `compileKojo2Project.dispatchSelectors` | `requireDispatch:true` 时 fail-closed（`dispatchBackendDiagnostics` 有诊断，无 theaterErb/dispatchErb）；`false` 时 `dispatchErb` 为空、`dispatchComplete:false` |
 | `requireDispatch` | 模式选择：发布 = `true`，预览 = `false` | `compileKojo2Project.requireDispatch`；Service 固定 `true` | 发布模式下漏了它 ⇒ 半成品 dispatch 不会阻断构建（构建 succeeded 但 assembly 仍会判 `dispatch-incomplete`，不如提前拦） |
 | legacy ERB | Host 用 M1 路径编译 `plan.legacyFiles`（本批 = workflow 的 `compileLegacy`） | `assembleProjectErb.legacyErb` | `assembly/legacy-missing` ⇒ 永远 `incomplete`，发布被拒 |
-| `compileExpression` | 生产：v1 表达式管线；测试/当前：恒等透传（`kojo2IdentityCompileExpression`） | `Kojo2CompileBundle.createBackend` 的 deps | 缺省不填会编译报错；恒等透传只保证结构/诊断成立，产物表达式形状不等于最终发布口径（已知缺口） |
+| `compileExpression` | 生产：域符号真管线（`createDomainSymbolExprCompiler`）；诊断链：恒等透传（`kojo2IdentityCompileExpression`） | `Kojo2CompileBundle.createBackend` 的 deps | 缺省不填会编译报错；Service 缺省按 `adapter.domainSymbols` 落代词，v1 别名/条件别名降糖面仍未接入 |
 | `timeValue` / `locationTags` / `timeTags` | 运行时引擎状态（eraTW：`TIME:2`、地点名） | `selectRuntimeTheater` / `service.previewRuntime` | 只影响运行时选择精度；missing = 只按 raw 名匹配 |
 
 **`contextOf` 的语义红线**（`kojo2-project-analysis.ts` 同款）：
@@ -336,7 +336,7 @@ contextOf: () => ({})
 ### 6.4 命令 / 预览入口
 
 - [x] **3 条命令注册**：`kojo2.project.compile` / `kojo2.project.previewDispatch` / `kojo2.project.publish`（category `Kojo 2.0`，`ui/kojo2-project-workflow.ts`）。全部给人话回执；失败带首因 +「详见问题面板」。
-- [x] **发布门禁**：`publishBlockReason` 优先于人话；`publish()` 只写 `exportFile`，取消/失败都有明确回执；成功回执带落点 + 单元数 + 表达式恒等透传的已知缺口提示。
+- [x] **发布门禁**：`publishBlockReason` 优先于人话；`publish()` 只写 `exportFile`，取消/失败都有明确回执；成功回执带落点 + 单元数 + 表达式覆盖口径提示（代词已落、v1 别名面未接入）。
 - [x] 命令前置检查：没项目 / 该游戏没 2.0 编译面 ⇒ info 人话，不报错（`preflight()`）。
 - [ ] 预览面板 GUI：`kojo2-preview-entry.ts` 尚未接 `assembly.units`（当前「预览调度计划」只发通知）；下一阶段接面板并按 `kind` 分组显示 + `previewOnlyTheaterCount` 提示。
 - [ ] 发布落点 UI：当前只用 `exportFile`（原生对话框），没有"最近发布位置/覆盖确认"等产品化交互。
@@ -397,7 +397,7 @@ contextOf: () => ({})
 
 **已知缺口（保留，下一阶段处理）**：
 
-- **表达式端口恒等透传**：`kojo2IdentityCompileExpression` 只保证结构/诊断成立；发布成功回执已显式提示。接真实 v1 `lowerExpression` 后需复验产物表达式形状。
+- **表达式端口（2026-11-28 K2-EXPR-PORT 部分收口）**：发布链路已不再恒等透传——`kojo2-expr-compile.ts::createDomainSymbolExprCompiler` 按当前 adapter 的 `domainSymbols` 把代词落成 engineRef（`我`/`她`→`%CALLNAME:TARGET%`、`你`→`%CALLNAME:MASTER%`），Service 缺省派生、workflow legacy 端口同源；诊断链仍用 `kojo2IdentityCompileExpression`（只看位置/条数，不看产物形状）。**剩余**：v1 的别名 / 条件别名 / 系统函数名等降糖面尚未接入（属性与声明变量按 core 契约原样保留），用到这些写法的产物发布回执已提示在游戏内复验。
 - **运行时预览无 GUI**：`previewRuntime` 已实现，缺引擎 location/time 状态来源与选择器面板。
 - **`KojoDiagnostic` 无 path**：已在 Service 内用 `locateSpan()` 尽可能反查；反查不到即项目级（不猜文件），仍无法覆盖全部渲染失败场景。
 - **发布落点无产品化 UI**：目前只走原生保存对话框。
@@ -548,7 +548,8 @@ if (assembly.status !== 'complete') {
 仍待下一阶段：
 
 - [ ] 运行时选择 GUI（引擎 location/time 事实来源 + 选择器面板）。
-- [ ] 真实 v1 expression 管线接入（当前恒等透传）。
+- [x] 表达式端口代词落点（K2-EXPR-PORT 2026-11-28：域符号真管线，发布链路不再恒等透传）。
+- [ ] v1 expression 管线的别名 / 条件别名 / 系统函数名降糖面接入（当前只落代词）。
 - [ ] 发布落点产品化 UI（最近位置 / 覆盖确认）。
 - [ ] 按文件增量编译（core 无增量契约）。
 - [x] 修 §6.6 的 P2：失败重建时清空旧 `assembly`（已加回归用例）。

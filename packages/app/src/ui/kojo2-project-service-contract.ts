@@ -191,10 +191,11 @@ export interface Kojo2ProjectServiceDeps {
   readonly now?: () => number;
   readonly onState?: (state: Kojo2ProjectServiceState) => void;
   /**
-   * 表达式编译端口（生产由 Host 注入；缺省 = 恒等透传，仅供测试/诊断）。
+   * 表达式编译端口（可选覆盖；缺省 = Service 按当前 bundle 的 `adapter.domainSymbols`
+   * 派生域符号真管线——代词落 engineRef，见 `kojo2-expr-compile.ts`）。
    *
-   * 已知缺口：v1 `lowerExpression` 尚未接进 2.0 面（见 `kojo2-problem-wiring.ts` 头注），
-   * 恒等透传只保证结构/诊断成立；发布产物需在接入真实管线后复验表达式形状。
+   * 显式注入用于测试替身或未来更完整的管线；未注入时不再恒等透传
+   * （那会把 `%我%` 原样写进 ERB）。别名/条件别名等 v1 降糖面尚未接入。
    */
   readonly compileExpression?: Kojo2CompileExpression;
   /** 测试注入：core 项目编译。 */

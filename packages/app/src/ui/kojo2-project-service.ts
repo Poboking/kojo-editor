@@ -52,9 +52,10 @@
  *
  * ## 表达式端口（`deps.compileExpression`）
  *
- * `Kojo2CompileBundle.createBackend` 的 `compileExpression` 必填；Service 从
- * `deps.compileExpression` 取，缺省为**恒等透传**（只保证结构与诊断成立，产物表达式不是
- * 最终发布口径——已知缺口，生产由 workflow/组合根注入 v1 `lowerExpression` 管线）。
+ * `Kojo2CompileBundle.createBackend` 的 `compileExpression` 必填。缺省不再恒等透传：
+ * Service 按当前项目 bundle 的 `adapter.domainSymbols` 派生**域符号真管线**（代词落
+ * engineRef，见 `kojo2-expr-compile.ts`），恒等透传会把 `%我%` 写进 ERB 是真缺陷。
+ * Host 仍可用 `deps.compileExpression` 显式覆盖（测试替身 / 未来更完整的管线）。
  * 也可整体用 `deps.compile` 覆盖项目编译。
  */
 import {
@@ -80,6 +81,7 @@ import {
   type RuntimeSelectionRequest,
 } from '@kojo/kojo-core';
 import { pathKey, stableHash } from '@kojo/plugin-api';
+import { createDomainSymbolExprCompiler } from './kojo2-expr-compile';
 import type {
   Kojo2ProjectLastGood,
   Kojo2ProjectProblem,
@@ -112,7 +114,12 @@ const EMPTY_STATS: Kojo2ProjectServiceStats = Object.freeze({
   cacheHit: false,
 });
 
-/** 缺省表达式端口：恒等透传（**仅供测试/诊断**；生产必须注入真管线，见文件头「契约缺口」）。 */
+/**
+ * 显式注入缺席时的兜底：恒等透传。
+ *
+ * 生产的 `backendOf` 不走这里——它按当前 bundle 的 `adapter.domainSymbols` 派生真管线；
+ * 这里只服务「连 bundle 事实都没有」的极端回退与旧测试替身（不猜游戏事实）。
+ */
 function identityCompileExpression(expression: KojoExprText): string {
   return expression.text;
 }
@@ -423,7 +430,7 @@ function legacyMissingProblem(
 /**
  * 创建项目级 Application Service（契约默认实现）。
  *
- * `deps.compileExpression` 缺省恒等透传（只适合测试/诊断；生产由 Host 注入真管线）。
+ * `deps.compileExpression` 缺省按当前 adapter 的域符号派生真管线（见 `backendOf`）。
  */
 export function createKojo2ProjectService(
   deps: Kojo2ProjectServiceDeps,
@@ -542,7 +549,10 @@ export function createKojo2ProjectService(
       );
     }
     return bundle.createBackend({
-      compileExpression: deps.compileExpression ?? identityCompileExpression,
+      // Host 显式端口优先；否则按当前项目的 adapter 域符号派生真管线（代词落 engineRef），
+      // 不再恒等透传——否则 %我% 会原样进 ERB。缺域符号时工厂自身退化为恒等（不猜）。
+      compileExpression:
+        deps.compileExpression ?? createDomainSymbolExprCompiler(bundle.adapter.domainSymbols),
     });
   }
 

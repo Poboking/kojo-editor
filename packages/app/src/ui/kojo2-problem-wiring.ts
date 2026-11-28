@@ -63,9 +63,9 @@
  * 规则，不报错、只是错）不会回来：取不到两面 ⇒ 插件抛错 ⇒
  * {@link KOJO2_DIAGNOSTICS_FAILURE_CODE} 那条可见面，不给空诊断。
  *
- * 一处**已知缺口**仍在宿主装配侧：表达式端口暂用恒等透传（v1 `lowerExpression` 尚未接进
- * 2.0 面）、角色号只能从 `GameProject.charaIndex[].kojoDir` 的前缀推（推不到时 backend 会
- * 如实报 `unit/backend-incomplete`，不静默造一个假函数名）。
+ * 表达式端口已由 `kojo2-expr-compile.ts` 的域符号真管线承担（代词落 engineRef）；本文件
+ * 保留的恒等函数只作诊断链与回退口径。角色号只能从 `GameProject.charaIndex[].kojoDir` 的
+ * 前缀推（推不到时 backend 会如实报 `unit/backend-incomplete`，不静默造一个假函数名）。
  */
 import type * as Monaco from '../monaco/entry';
 import type { Kernel } from '@kojo/kernel';
@@ -153,12 +153,11 @@ export class Kojo2SessionHasNoProject extends Error {
 export const KOJO2_DIAGNOSTICS_SOURCE = KOJO2_DIAGNOSTIC_SOURCE;
 
 /**
- * **表达式端口**：恒等透传（导出给宿主装配用：组合根那张表只差这一个端口）。
+ * **诊断链的恒等表达式端口**（保留导出；生产发布走 `kojo2-expr-compile.ts` 的真管线）。
  *
- * core 交给 backend 的是表达式源切片（已由 core 做完语法/符号校验）；backend 只负责把它
- * 落成 ERB 表达式。v1 的 `lowerExpression` 尚未接进 2.0 面（切流批的事），所以本批用
- * 恒等透传：**诊断仍然成立**（语法/结构/事件目录/存储期等判据都在 core 与 backend 的
- * 其它腿上），缺的只是"表达式内容在产物里的最终形状"——那不影响波浪线的位置与条数。
+ * 实时诊断只看波浪线的位置与条数（语法/结构/事件目录/存储期等判据都在 core 与 backend
+ * 的其它腿上），表达式内容在产物里的形状不影响诊断，所以这里恒等即可。发布产物那边由
+ * `createDomainSymbolExprCompiler(adapter.domainSymbols)` 落代词，两处各司其职。
  */
 export function kojo2IdentityCompileExpression(expr: { readonly text: string }): string {
   return expr.text;

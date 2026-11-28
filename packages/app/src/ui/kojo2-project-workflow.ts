@@ -32,7 +32,7 @@ import { kojo2CompileBundleForProject } from '../bootstrap';
 import { listSourceFiles, type ShellCommandSpec } from './commands';
 import { kojo2FunctionNameContextForFile, type Kojo2FamilySegmentResolver } from './kojo2-file-context';
 import { collectKojo2ProjectDocuments, type Kojo2ProjectDocument } from './kojo2-project-analysis';
-import { kojo2IdentityCompileExpression } from './kojo2-problem-wiring';
+import { createDomainSymbolExprCompiler } from './kojo2-expr-compile';
 import { clearKojo2ProjectProblems, publishKojo2ProjectProblems } from './kojo2-project-problems';
 import { createKojo2ProjectService } from './kojo2-project-service';
 import type {
@@ -140,7 +140,7 @@ export function mountKojo2ProjectWorkflow(
   const compileLegacyWith = (bundle: Kojo2CompileBundle, document: Kojo2ProjectDocument): string | null => {
     const context = contextOf({ path: document.path, layerId: document.layerId ?? null });
     const backend = bundle.createBackend({
-      compileExpression: kojo2IdentityCompileExpression,
+      compileExpression: createDomainSymbolExprCompiler(bundle.adapter.domainSymbols),
       ...(context.charNo === undefined ? {} : { charNo: context.charNo }),
       ...(context.familySegment === undefined ? {} : { familySegment: context.familySegment }),
     });
@@ -189,12 +189,10 @@ export function mountKojo2ProjectWorkflow(
     exportArtifact: (fileName, bytes) =>
       kernel.io.exportFile(fileName, bytes, { title: '导出 Kojo 2.0 项目 ERB' }),
     /**
-     * 表达式端口：项目后端与 legacy M1 后端共用同一份 Host 端口。
-     *
-     * 当前是恒等透传（v1 `lowerExpression` 尚未接进 2.0 面）：结构与诊断成立，但表达式
-     * 在产物里的最终形状不等于发布口径——发布成功回执必须带这句已知缺口提示。
+     * 表达式端口：不传 ⇒ Service 按当前 bundle 的 `adapter.domainSymbols` 派生真管线
+     * （代词落 engineRef，见 `kojo2-expr-compile.ts`）。legacy M1 端口在 `compileLegacyWith`
+     * 里同源派生，两处口径一致。
      */
-    compileExpression: kojo2IdentityCompileExpression,
     onState: (state) => {
       // 关着开关时零动作：不替作者往问题面板写任何东西。
       if (enabled) publishKojo2ProjectProblems(state.problems);
@@ -358,8 +356,8 @@ export function mountKojo2ProjectWorkflow(
             kind: 'info',
             message:
               `已导出：${result.path ?? '（未返回落点）'}（${result.unitCount} 个单元）` +
-              '（已知缺口：表达式端口当前为恒等透传，v1 表达式管线尚未接入，产物适合结构/联调预览；' +
-              '正式发布前请接入真实表达式管线后复验。）',
+              '（表达式：代词已按当前游戏的域符号落成引擎引用；别名/条件别名等 v1 降糖面尚未接入，' +
+              '用到这些写法的产物请在游戏内复验。）',
           });
           return;
         }

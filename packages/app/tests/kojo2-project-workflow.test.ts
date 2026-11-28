@@ -319,9 +319,9 @@ describe('构建命令 · 显式初见 + legacy 混合项目', () => {
     expect(notice?.kind).toBe('info');
     expect(notice?.message).toContain(`已导出：${exported?.target}`);
     expect(notice?.message).toContain('（2 个单元）');
-    // 已知缺口提示：表达式端口恒等透传，不阻断发布但要随成功回执说清楚。
-    expect(notice?.message).toContain('已知缺口');
-    expect(notice?.message).toContain('恒等透传');
+    // 表达式口径提示：代词已落引擎引用；v1 降糖面尚未接入的部分仍如实说清楚。
+    expect(notice?.message).toContain('代词已按当前游戏的域符号落成引擎引用');
+    expect(notice?.message).toContain('别名/条件别名');
   });
 });
 
