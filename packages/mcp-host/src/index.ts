@@ -2544,6 +2544,8 @@ export const MCP_RESOURCE_SPECS: readonly McpResourceSpec[] = [
   { uri: 'kojo://project/active-document', name: '当前文档与光标', description: 'Active document text and cursor position（投影 + 截断上限 + truncated 标记）', mimeType: 'application/json' },
   // Wave4 余项⑤（LaneL）：长任务表（新条目，与上面 8 条并列，老条目语义零改动）。
   { uri: 'kojo://tasks', name: '长任务表', description: '本会话长任务清单：状态 / 进度账 / 取消位 / 有界终态投影 + notIncluded[] 缺席任务族逐条原因（轮询面，服务端不推送）', mimeType: 'application/json' },
+  // WP-3b（2026-11-28）：驻留换代账本——`project.reload` 的回执可读面（只读、有界、按通道）。
+  { uri: 'kojo://project/reloads', name: '驻留换代账', description: '多项目驻留换代的有界账本：project.evicted / project.reload 原始事件 + reload.result 回执（claim=reloaded 仅在同源证明齐全时；含 dropped 溢出计数）', mimeType: 'application/json' },
 ];
 
 /* ------------------------------------------------------------------ *

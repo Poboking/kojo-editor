@@ -1286,9 +1286,18 @@ describe('任务 B：第四波 6 枚只读具名工具（真读数 / 截断 / �
 /* ------------------------------- resource 数据源 ------------------------------- */
 
 describe('resource 数据源：8 URI 与 RESOURCE_UNAVAILABLE', () => {
-  function buildReader(kernel: McpKernelLike | null, over: Partial<McpIoDeps> = {}) {
+  function buildReader(
+    kernel: McpKernelLike | null,
+    over: Partial<McpIoDeps> = {},
+    readReloads?: () => unknown,
+  ) {
     const seen: unknown[] = [];
-    return createIoResourceData(fakeIoDeps(kernel, over), (max) => seen.slice(0, max), () => seen.length);
+    return createIoResourceData(
+      fakeIoDeps(kernel, over),
+      (max) => seen.slice(0, max),
+      () => seen.length,
+      readReloads,
+    );
   }
 
   it('snapshot：项目摘要 + counts.eventsBuffered 来自真实缓冲计数（不硬编码 0）', async () => {
@@ -1326,6 +1335,48 @@ describe('resource 数据源：8 URI 与 RESOURCE_UNAVAILABLE', () => {
 
   it('events：内核缺席 ⇒ RESOURCE_UNAVAILABLE（不静默）', async () => {
     await expect(buildReader(null)(KOJO_RESOURCE_URIS.events, scope)).rejects.toMatchObject({ code: 'RESOURCE_UNAVAILABLE' });
+  });
+
+  it('reloads（WP-3b）：账本真源原样可读；未注入 ⇒ RESOURCE_UNAVAILABLE（不空表冒充「从未重载」）', async () => {
+    // 缺席：显式不可用，绝不返回 {entries:[]} 冒充「从未发生换代」。
+    await expect(buildReader(fakeKernel().kernel)(KOJO_RESOURCE_URIS.reloads, scope)).rejects.toMatchObject({
+      code: 'RESOURCE_UNAVAILABLE',
+    });
+
+    // 在场：IO 层原样透传账本（同源），不在这里另造一份投影。
+    const ledger = {
+      channel: 'default',
+      capacity: 64,
+      dropped: 0,
+      entries: [
+        {
+          event: 'project.reload',
+          rootId: 'ws:0000abcd',
+          claim: 'unverified',
+          sourceStamp: null,
+          generation: null,
+          trigger: 'returned',
+          elapsedMs: 0,
+          at: 1,
+        },
+        {
+          event: 'reload.result',
+          rootId: 'ws:0000abcd',
+          claim: 'reloaded',
+          sourceStamp: 'ws:0000abcd:7',
+          generation: 7,
+          trigger: 'returned',
+          elapsedMs: 1.2,
+          at: 2,
+        },
+      ],
+    };
+    const out = await buildReader(fakeKernel().kernel, {}, () => ledger)(KOJO_RESOURCE_URIS.reloads, scope);
+    expect(out).toBe(ledger);
+    expect((out as typeof ledger).entries[1]).toMatchObject({
+      claim: 'reloaded',
+      sourceStamp: 'ws:0000abcd:7',
+    });
   });
 
   it('项目未打开 ⇒ snapshot / file-tree 显式 RESOURCE_UNAVAILABLE（不空数组冒充）', async () => {

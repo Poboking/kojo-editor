@@ -61,6 +61,8 @@ import type { EditorWritePaneResolver } from './editor-write-legs';
 import type { McpEditorOpenDeps } from './editor-open-legs';
 import { bindFsFreshness, getFsFreshnessTracker } from './fs-freshness';import type { FsFreshnessTracker } from './fs-freshness';
 import { createMcpTaskLegs, type McpTaskSearchProgress, type McpTaskSearchRunner } from './real-sources-tasks';
+// WP-3b：驻留换代账本的只读面（`kojo://project/reloads`）。本模块只读账本，不重装钩子。
+import { RELOAD_LEDGER_CAPACITY, reloadDropped, reloadLedger } from './project-reload';
 import {
   clampInt,
   createIoResourceData,
@@ -1709,7 +1711,15 @@ export async function buildRealMcpSources(
     commandContext: host.getCommandContext(),
     semantic: buildSemanticReaders(semanticDeps),
     kernelIo: createKernelIo(ioDeps),
-    readResourceData: buildReadResourceData(createIoResourceData(ioDeps, recentEvents, countEvents), semanticDeps),
+    readResourceData: buildReadResourceData(
+      createIoResourceData(ioDeps, recentEvents, countEvents, () => ({
+        channel: 'default',
+        capacity: RELOAD_LEDGER_CAPACITY,
+        dropped: reloadDropped(),
+        entries: reloadLedger(),
+      })),
+      semanticDeps,
+    ),
     // 宿主侧追加的第 9 项 resource（经 wiring 的 `resources` 注入口登记，冻结契约表零改动）。
     resources: [createFsFreshnessResource(ioDeps)],
     runSupplemental: (name, args, scope) => {

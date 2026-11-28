@@ -631,6 +631,12 @@ schema ↔ 腿**双向**、B11 手抄 `CONSUMED` ↔ 扫描逐面相等（表旧
 真壳 / 生产各记各的），不互借 stamp。400 文件重载实测零重解析、p95 30.3 ms（测试护栏 50 ms）。
 取证量具：`node tools/mcp-reload-evidence.mjs debug-host|real-shell`（需先起对应调试会话）。
 
+**只读面（WP-3b，2026-11-28）**：账本不再只写不读——resource `kojo://project/reloads`
+原样回 `{ channel, capacity, dropped, entries }`，`entries` 与 `reloadLedger('default')` 同源，
+`claim=reloaded` 只在三环同源时出现；未注入读函数时显式 `RESOURCE_UNAVAILABLE`，绝不空表冒充
+「从未重载」。取证通道（`debug-host` / `real-shell`）不进生产 resource，读数不互借。
+选 resource 而非新工具：tools/list 的 desc 余量只剩 307 B，按「增面前先瘦」纪律不硬塞新面。
+
 ## 6. tier 与授权模型
 
 `McpTier = 'read' | 'edit' | 'privileged'`；会话形状（冻结契约 v1）：
@@ -790,7 +796,7 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 > 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-28 复核）。
 
 - 能力面：命令 **61** / Rust 命令 **91** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
-  tools **86**（read **41** / edit **15** / privileged **30**）；resources **10**；prompts **3**；
+  tools **86**（read **41** / edit **15** / privileged **30**）；resources **11**；prompts **3**；
 - 缺口：`totalGaps=181` / `wiredGaps=68` / **`deferredGaps=113`**，逐条带原因，
   按七类归因（合计 113，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
 

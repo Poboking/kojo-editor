@@ -3223,6 +3223,11 @@ export const KOJO_RESOURCE_URIS = {
    * （该表本就随批 additive 追加，非字面冻结），故这里是第 10 项。
    */
   tasks: 'kojo://tasks',
+  /**
+   * WP-3b（2026-11-28）：驻留换代账本。`project.reload` 的回执（是否同源、是否重载）
+   * 原先只写不读；这里给出只读面，让模型能自查「刚才那次快切到底重载了没有」。
+   */
+  reloads: 'kojo://project/reloads',
 } as const;
 
 function conventionReport(kernel: McpKernelLike | null): { readonly failedRules: unknown[] } | null {
@@ -3243,6 +3248,8 @@ export function createIoResourceData(
   deps: McpIoDeps,
   readEvents: (max: number) => unknown[],
   countEvents: () => number,
+  /** WP-3b：驻留换代账本读取面；缺席时 `kojo://project/reloads` 显式 `RESOURCE_UNAVAILABLE`。 */
+  readReloads?: () => unknown,
 ): McpResourceDataReader {
   const fileTreeData = createKernelIo(deps).fileTree;
 
@@ -3325,6 +3332,16 @@ export function createIoResourceData(
           );
         }
         return legs.list(scope);
+      }
+      case KOJO_RESOURCE_URIS.reloads: {
+        // 只读、有界（容量 64）：账本本身按通道分开，这里只出生产通道，不借取证通道的数。
+        if (!readReloads) {
+          throw new McpFailure(
+            'RESOURCE_UNAVAILABLE',
+            'resource kojo://project/reloads 没有已接线的真源：宿主未注入驻留换代账（不静默、不空表冒充「从未重载」）',
+          );
+        }
+        return readReloads();
       }
       default:
         throw new McpFailure('RESOURCE_UNAVAILABLE', `resource ${sanitizeEcho(uri)} 没有已接线的真源（不静默）`);
