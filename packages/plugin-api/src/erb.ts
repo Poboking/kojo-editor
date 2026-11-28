@@ -480,6 +480,38 @@ export const ERB_ENGINE_NAMES: readonly ErbEngineNameEntry[] = [
 export const ERB_ENGINE_NAME_LIST: readonly string[] = ERB_ENGINE_NAMES.map((e) => e.name);
 // @erb-engine-names:end
 
+// @erb-event-labels:begin
+/**
+ * 引擎事件标签名 —— **生成区间，勿手改**；由 `node tools/gen-erb-event-labels.mjs` 重生成。
+ *
+ * 真源：4.981 `IdentifierDictionary.cs::IsEventLabelName` 的 switch 全体 case
+ * （快照 `tools/data/IdentifierDictionary.4.981.cs`，EOL 归一化 sha256 `ab05d95d…`）。
+ * 引擎对这批标签**允许多处定义且全部执行**（#ONLY → #PRI → 普通 → #LATER 四桶），
+ * 非事件函数才是后装载者生效（`SortLabel` 直接赋值；`SortLabels` 是死代码）。
+ * 故 `erb.duplicate-function` 按本集合豁免事件族，逐条提示只会制造假问题。
+ */
+export const ERB_EVENT_LABEL_NAMES: readonly string[] = [
+  "BEFORE_ERROR",
+  "BEFORE_THROW",
+  "EVENTBUY",
+  "EVENTCOM",
+  "EVENTCOMEND",
+  "EVENTEND",
+  "EVENTFIRST",
+  "EVENTLOAD",
+  "EVENTSHOP",
+  "EVENTTRAIN",
+  "EVENTTURNEND",
+];
+
+const ERB_EVENT_LABEL_NAME_SET: ReadonlySet<string> = new Set(ERB_EVENT_LABEL_NAMES);
+
+/** 大小写不敏感（eraTW `emuera.config` 首行 `IGNORE CASE:YES`）。 */
+export function isErbEventLabelName(name: string): boolean {
+  return ERB_EVENT_LABEL_NAME_SET.has(name.trim().toUpperCase());
+}
+// @erb-event-labels:end
+
 // @erb-engine-error-texts:begin
 /**
  * 引擎报错原话 —— **生成区间，勿手改**；由 `node tools/gen-erb-error-texts.mjs` 重生成。

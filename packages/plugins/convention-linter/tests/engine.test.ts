@@ -285,23 +285,24 @@ describe('ConventionEngine', () => {
 
   it('内置规则：适配器策略命中的重复不逐条报，汇总成一条 info（不静默）', async () => {
     const index = makeIndex({
-      '/p/a.ERB': '@EVENTTRAIN\nPRINTL 1\n@OTHER\nPRINTL 1\n',
-      '/p/b.ERB': '@eventtrain\nPRINTL 2\n@OTHER\nPRINTL 2\n',
-      '/p/c.ERB': '@EVENTTRAIN\nPRINTL 3\n',
+      '/p/a.ERB': '@CUSTOMDISPATCH\nPRINTL 1\n@OTHER\nPRINTL 1\n',
+      '/p/b.ERB': '@customdispatch\nPRINTL 2\n@OTHER\nPRINTL 2\n',
+      '/p/c.ERB': '@CUSTOMDISPATCH\nPRINTL 3\n',
     });
     const { engine } = harness({
       index,
       policy: [
         {
           ruleId: 'erb.duplicate-function',
-          names: ['EVENTTRAIN'],
+          names: ['CUSTOMDISPATCH'],
           reason: '逐角色各写一份分发器',
         },
       ],
     });
     const rep = await engine.run();
     const dups = rep.issues.filter((i) => i.ruleId === 'erb.duplicate-function');
-    // OTHER 的一条逐条报 + EVENTTRAIN 的一条汇总（2 处被收敛）
+    // OTHER 的一条逐条报 + CUSTOMDISPATCH 的一条汇总（2 处被收敛）
+    // 事件族（EVENTTRAIN 等）现按引擎结构豁免，不再拿来做“适配器白名单”的样例
     expect(dups).toHaveLength(2);
     expect(dups.some((i) => i.message.includes('已按适配器策略收敛 2 处预期重复'))).toBe(true);
     expect(dups.some((i) => i.message.includes('逐角色各写一份分发器'))).toBe(true);
@@ -310,16 +311,16 @@ describe('ConventionEngine', () => {
 
   it('策略只收敛声明的规则 id / 名字：未命中项照旧逐条报', async () => {
     const index = makeIndex({
-      '/p/a.ERB': '@EVENTTRAIN\n@KEEP\n',
-      '/p/b.ERB': '@EVENTTRAIN\n@KEEP\n',
+      '/p/a.ERB': '@CUSTOMDISPATCH\n@KEEP\n',
+      '/p/b.ERB': '@CUSTOMDISPATCH\n@KEEP\n',
     });
     const { engine } = harness({
       index,
-      policy: [{ ruleId: 'other.rule', names: ['EVENTTRAIN'], reason: '别的规则' }],
+      policy: [{ ruleId: 'other.rule', names: ['CUSTOMDISPATCH'], reason: '别的规则' }],
     });
     const rep = await engine.run();
     const dups = rep.issues.filter((i) => i.ruleId === 'erb.duplicate-function');
-    expect(dups).toHaveLength(2); // EVENTTRAIN 1 + KEEP 1
+    expect(dups).toHaveLength(2); // CUSTOMDISPATCH 1 + KEEP 1
     expect(dups.every((i) => !i.message.includes('收敛'))).toBe(true);
   });
 

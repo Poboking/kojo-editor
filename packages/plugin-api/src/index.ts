@@ -1105,6 +1105,9 @@ export type { ErbEngineNameEntry } from './erb';
    编辑器补充信息只许**追加**在原文之后——措辞与玩家实际看到的引擎界面同源。 */
 export { ERB_ENGINE_ERROR_TEXTS, formatEngineErrorText } from './erb';
 export type { ErbEngineErrorText } from './erb';
+/* ERBDIAG-ERATW：引擎事件标签名（4.981 IsEventLabelName 生成区间）。
+   duplicate-function 等规则据此豁免「允许多处定义且全部执行」的事件族。 */
+export { ERB_EVENT_LABEL_NAMES, isErbEventLabelName } from './erb';
 
 /* ---- Monaco 语言面契约（SDK B4，2026-10-27；独占追加区块，勿在他处重排） ----
    与 IC 批同一条纪律：`monaco-language.ts` 是纯类型叶子，桶里只许 `export type`。 */
