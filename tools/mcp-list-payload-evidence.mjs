@@ -43,6 +43,7 @@ import http from 'node:http';
 import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
+import { loadRegistry as loadSharedRegistry } from './lib/mcp-registry-loader.mjs';
 import process from 'node:process';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -190,37 +191,21 @@ function runDebugCli(cliArgs, opts = {}) {
 /**
  * 把 `packages/mcp-host/src/index.ts` 经 vite 的 SSR 变换真的装载成模块。
  * 装载不起来 ⇒ rc=2 退出，**不降级成源码文本正则**（那等于手写一份估计的 schema）。
+ *
+ * 装载样板已抽到 `tools/lib/mcp-registry-loader.mjs`（`mcp-health` 用同一份），
+ * 本函数只保留**本工具的退出码与文案**——行为逐字不变。
  */
 async function loadRegistry() {
-  let vite;
   try {
-    vite = await import('vite');
+    return await loadSharedRegistry({ repoRoot: REPO });
   } catch (err) {
-    console.error(
-      `[FAIL] 装载 vite 失败（${err?.message ?? err}）——复现：node tools/mcp-list-payload-evidence.mjs static`,
-    );
-    process.exit(2);
-  }
-  const server = await vite.createServer({
-    root: REPO,
-    configFile: false,
-    logLevel: 'silent',
-    server: { middlewareMode: true },
-  });
-  try {
-    const mod = await server.ssrLoadModule('/packages/mcp-host/src/index.ts');
-    for (const need of ['createMcpCapabilityRegistry', 'SEMANTIC_TOOL_SPECS', 'KERNEL_IO_TOOL_SPECS', 'SUPPLEMENTAL_TOOL_SPECS']) {
-      if (!mod[need]) {
-        console.error(`[FAIL] 注册表真源装载成功但缺导出 ${need}——A 面读数不可信，如实失败。`);
-        process.exit(2);
-      }
+    if (err?.stage === 'vite') {
+      console.error(`[FAIL] ${err.message}——复现：node tools/mcp-list-payload-evidence.mjs static`);
+    } else if (err?.stage === 'exports') {
+      console.error(`[FAIL] ${err.message}——A 面读数不可信，如实失败。`);
+    } else {
+      console.error(`[FAIL] ${err.message}——A 面拒绝出估算数。复现：node tools/mcp-list-payload-evidence.mjs static`);
     }
-    return { mod, dispose: () => server.close() };
-  } catch (err) {
-    await server.close().catch(() => {});
-    console.error(
-      `[FAIL] 注册表真源装不起来（${err?.message ?? err}）——A 面拒绝出估算数。复现：node tools/mcp-list-payload-evidence.mjs static`,
-    );
     process.exit(2);
   }
 }

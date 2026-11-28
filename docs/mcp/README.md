@@ -815,6 +815,8 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 ### 10.5 当前能力面读数与剩余缺口（真值自 `node tools/mcp-inventory.mjs --print`）
 
 > 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-28 复核）。
+> **本节数字与机器读数的一致性由 `node tools/mcp-health.mjs` 当场对账**（五格体检：枚数 / 帧余量 /
+> 缺口分布 / 孤儿写腿 / README 漂移），漂移即 exit 1 并点名是哪一格——本节不许再靠人手抄对账。
 
 - 能力面：命令 **61** / Rust 命令 **91** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
   tools **86**（read **41** / edit **15** / privileged **30**）；resources **12**（规格清单 11 + 生产注入的 `fs-freshness`）；prompts **3**；
