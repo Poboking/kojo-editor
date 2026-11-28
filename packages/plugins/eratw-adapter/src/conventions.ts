@@ -612,6 +612,7 @@ export function createEratwConventions(getProtocol?: () => EratwCallProtocol | u
     createCallSlotCoverageRule(getProtocol),
     eraTwAuditFindingRule,
     variableBoundsRule,
+    engineLineChecksRule,
   ];
 }
 
@@ -785,5 +786,30 @@ export const variableBoundsRule: ConventionRule = {
   async check(ctx: ConventionCheckContext): Promise<ConventionIssue[]> {
     const { checkVariableBounds } = await import('./variable-bounds-impl');
     return checkVariableBounds(ctx);
+  },
+};
+
+/* --------------------- 规则 8：引擎词法/字面实参相位检查 --------------------- */
+
+/** 约定面板 / 诊断码表共用的规则 id（生产方单一字面量） */
+export const ENGINE_LINE_CHECKS_RULE_ID = 'erb.engine-line-checks';
+
+/**
+ * 引擎原话相位检查（`scope: 'project'`，实现动态 import 不进 PS-10 图）：
+ * - 赋值位 `==`（引擎 level 0 提示照常按 = 执行）→ info
+ * - SETCOLOR/SETBGCOLOR 三值形态字面分量越界（第 4 实参=整值形态不查）、
+ *   ASSERT 字面量 0（非 debug 也抛）→ error
+ * 语料 4,371 文件全量 0 命中（eraTW 作者没写过这几类引擎会说话的行）。
+ */
+export const engineLineChecksRule: ConventionRule = {
+  id: ENGINE_LINE_CHECKS_RULE_ID,
+  description: '引擎词法与字面实参相位（== 赋值位提示；SETCOLOR/ASSERT 字面量越界）',
+  severity: 'warning',
+  source:
+    'eratw LineParser.kt / StatementExecutor.kt；spec LogicalLineParser.cs:548-554、Process.cs:1409-1439 / 1790-1795',
+  scope: 'project',
+  async check(ctx: ConventionCheckContext): Promise<ConventionIssue[]> {
+    const { checkEngineLineChecks } = await import('./engine-line-checks-impl');
+    return checkEngineLineChecks(ctx);
   },
 };

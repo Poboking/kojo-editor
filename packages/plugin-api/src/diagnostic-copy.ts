@@ -336,6 +336,7 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   /* --- 约定校验规则 id（同一张表供约定面板复用，避免第二份口径） --- */
   'erb.duplicate-function': { name: '函数重名' },
   'erb.variable-bounds': { name: '变量下标越界' },
+  'erb.engine-line-checks': { name: '引擎词法与字面实参检查' },
   'sugar.cont-inside-quotes': { name: '续行标记写在引号内' },
   'sugar.choice-multiple': { name: '选项块过多' },
   'sugar.expr-missing-else': { name: '缺少否则分支' },

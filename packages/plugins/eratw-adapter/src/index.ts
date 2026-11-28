@@ -19,7 +19,7 @@ export {
   kojoFamilyMemoStats,
   parseKojoFamily,
 } from './family-index';
-export { createEratwConventions, VARIABLE_BOUNDS_RULE_ID, variableBoundsRule } from './conventions';
+export { createEratwConventions, VARIABLE_BOUNDS_RULE_ID, variableBoundsRule, ENGINE_LINE_CHECKS_RULE_ID, engineLineChecksRule } from './conventions';
 export { createEratwFaceTable } from './face-templates';
 export { ERATW_NAME_GLOSSARY, glossName } from './name-glossary';
 export { loadEratwCallProtocol } from './call-protocol';

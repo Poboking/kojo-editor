@@ -125,7 +125,11 @@ const DISPOSITIONS: readonly Disposition[] = [
       '缺**词法相位**：需复刻 `LexicalAnalyzer` 的 token 流（含 `EvilMask` 宏展开与 ' +
       '`[[]]` 二重方括号）。kojo 的 `plugin-api/src/erb-lexical.ts` 只做行/串/续行的' +
       '粗切，没有 token 级相位；在此之上补字符级判据会与 `[SKIPSTART]`、`@"` 续行、' +
-      '`%…%` 变量记号大面积互相误报',
+      '`%…%` 变量记号大面积互相误报。`Use2EqualToAssign`（赋值位 `==`，level 0 提示）' +
+      '已先行接走（见 consumed 族）。`UnexpectedFullWidthSpace` 欠账已具体化：eraTW 发行' +
+      '配置「全角スペースをホワイトスペースに含める:NO」（引擎会报），但引擎只在**表达式相位**' +
+      '报（`LexicalAnalyzer.Analyse`），PRINT 输出文本位的全角空格合法——eraTW 语料 40,783 处' +
+      '全在输出文本，行级扫描必误报，需 token 级相位才能零误报',
     ids: [
       'MacroOverLimit',
       'UnexpectedFullWidthSpace',
@@ -136,7 +140,6 @@ const DISPOSITIONS: readonly Disposition[] = [
       'CanNotInterpretSharpLine',
       'InvalidCharacterAfterInstruction1',
       'InvalidCharacterAfterInstruction2',
-      'Use2EqualToAssign',
     ],
   },
   {
@@ -206,15 +209,38 @@ const DISPOSITIONS: readonly Disposition[] = [
     ],
   },
   {
+    kind: 'consumed',
+    where:
+      '`plugins/eratw-adapter/src/variable-bounds-impl.ts` 的 `checkVariableBounds`（P1-4）：' +
+      '全局 1 维用 `OoRVarArg`、角色数组第 2 参用 `OoRCharaVar`，文案逐字取本表后追加实读尺寸说明；' +
+      '诊断码 `erb.variable-bounds`。判据 = 字面下标 ≥ 实读尺寸（出厂值先被游戏 CSV/VariableSize.csv ' +
+      '覆盖——CB-002 实证照出厂判会造 12,825 条假缺陷）；动态下标 fail-open 不判',
+    ids: ['OoRVarArg', 'OoRCharaVar'],
+  },
+  {
+    kind: 'consumed',
+    where:
+      '`plugins/eratw-adapter/src/engine-line-checks-impl.ts`（P2-7，诊断码 `erb.engine-line-checks`）：' +
+      '`Use2EqualToAssign` = 赋值位 `==`（info——引擎 level 0 提示照常按 = 执行，spec ' +
+      'LogicalLineParser.cs:548-554；指令词豁免 + 上一可见行 `,`/`(` 收尾的续行豁免）；' +
+      '`SetcolorArgLessThan0` / `SetcolorArgOver255` = SETCOLOR/SETBGCOLOR **恰好 3 实参**' +
+      '形态的字面分量 0..255（spec 三处互证：ArgumentBuilder.cs:2040-2067 单实参 = ' +
+      'SpColorArgument(rgb) 整值形态不查；执行端 Process.ScriptProc.cs:408-431 同构；' +
+      '语料 23,651 处 `SETCOLOR 0xXXXXXX` 单值形态实证）；' +
+      '`AssertArgIs0` = ASSERT 唯一字面量实参为 0（spec Process.cs:1790-1795，非 debug 也抛）。' +
+      'eraTW 语料 4,371 文件三类相位全零',
+    ids: ['Use2EqualToAssign', 'SetcolorArgLessThan0', 'SetcolorArgOver255', 'AssertArgIs0'],
+  },
+  {
     kind: 'not-covered',
     where:
-      '**数组下标越界**：判据是运行时的下标值（`X:ARG` 这类），静态无法定值。' +
-      '能静态判的只有"常量字面量下标 > 声明尺寸"，而真语料里这种写法近乎为零',
+      '**数组下标越界（剩余）**：字面常量形已由 `erb.variable-bounds` 接走（见 consumed 族）。' +
+      '剩余判据是运行时的下标值（`X:ARG` 这类），静态无法定值；`OoRArrayShift/Remove/Sort` 等' +
+      '是命令特有下标（需逐命令 ArgumentBuilder 语义）；角色号字面越界（`OoRCharaVarArg` 型）' +
+      '需 CHARANUM 守卫建模',
     ids: [
       'OoRCharaVarArg',
       'OoRInstructionArg',
-      'OoRVarArg',
-      'OoRCharaVar',
       'OoRArrayShift',
       'OoRArrayRemove',
       'OoRArraySort',
@@ -241,9 +267,6 @@ const DISPOSITIONS: readonly Disposition[] = [
       'DuplicateCharaNo',
       'RefUndefinedChara',
       'OoRForcekanaArg',
-      'AssertArgIs0',
-      'SetcolorArgLessThan0',
-      'SetcolorArgOver255',
       'MaxBarNotPositive',
       'BarNotPositive',
       'TooLongBar',

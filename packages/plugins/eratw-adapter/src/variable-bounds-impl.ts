@@ -144,9 +144,9 @@ function buildRegex(entries: readonly ErbVariableSizeEntry[], userDims: Readonly
   };
 }
 
-function oor(name: string, argIndex: number, value: number, limit: number, source: string): string {
+function oor(key: 'OoRVarArg' | 'OoRCharaVar', name: string, argIndex: number, value: number, limit: number, source: string): string {
   return (
-    formatEngineErrorText('OoRVarArg', [name, String(argIndex), String(value)]) +
+    formatEngineErrorText(key, [name, String(argIndex), String(value)]) +
     `——实读尺寸 ${limit}（${source}），静态可证的字面下标越界会在装载期/执行前抛 CodeEE。`
   );
 }
@@ -198,7 +198,7 @@ export async function checkVariableBounds(ctx: ConventionCheckContext): Promise<
           issues.push({
             ruleId: VARIABLE_BOUNDS_RULE_ID,
             severity: 'warning',
-            message: oor(m[1]!, 2, n, limit, d.source),
+            message: oor('OoRCharaVar', m[1]!, 2, n, limit, d.source),
             filePath,
             line,
             key: `${VARIABLE_BOUNDS_RULE_ID}|${filePath}|${line}|${m[1]}|2|${n}`,
@@ -214,7 +214,7 @@ export async function checkVariableBounds(ctx: ConventionCheckContext): Promise<
           issues.push({
             ruleId: VARIABLE_BOUNDS_RULE_ID,
             severity: 'warning',
-            message: oor(m[1]!, 1, n, limit, d.source),
+            message: oor('OoRVarArg', m[1]!, 1, n, limit, d.source),
             filePath,
             line,
             key: `${VARIABLE_BOUNDS_RULE_ID}|${filePath}|${line}|${m[1]}|1|${n}`,
