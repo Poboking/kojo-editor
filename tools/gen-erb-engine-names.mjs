@@ -30,8 +30,11 @@ const BEGIN = '// @erb-engine-names:begin';
 const END = '// @erb-engine-names:end';
 
 const raw = readFileSync(INPUT, 'utf8');
-const sha256 = createHash('sha256').update(raw, 'utf8').digest('hex');
-const lines = raw.split(/\r?\n/);
+// EOL 归一化后再算 sha：git 的 autocrlf 会在 checkout 时把 CRLF 换成 LF，
+// 直接对原始字节算会让同一份逻辑内容在不同 checkout 下得到不同指纹（rebase 后实测踩过）。
+const normalized = raw.replace(/\r\n?/g, '\n');
+const sha256 = createHash('sha256').update(normalized, 'utf8').digest('hex');
+const lines = normalized.split('\n');
 
 /** 顶层段 → 段内条目名。段名必须顶格（无前导空格），条目形态 `  - {name: XXX, ...}`。 */
 function extractSection(section) {

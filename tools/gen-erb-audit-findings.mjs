@@ -68,7 +68,7 @@ function q(s) {
   return `'${String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r')}'`;
 }
 
-const raw = readFileSync(TSV, 'utf8').replace(/^\uFEFF/, '');
+const raw = readFileSync(TSV, 'utf8').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
 const lines = raw.split('\n');
 if (lines[0] !== HEADER) throw new Error(`TSV 表头不对：${lines[0]}`);
 
@@ -135,7 +135,7 @@ const out = `/**
  *
  * 由 \`node tools/gen-erb-audit-findings.mjs\` 从 eraTW 4.981 全量审计 TSV 生成：
  *   erbcc audit --corpus <语料>/ERB --game-root <语料> --out unresolved-symbols.tsv
- * 源文件 SHA-256 = \`${sha}\`（TSV 逐字）；共 ${entries.length} 个文件 / ${total} 条 Finding。
+ * 源文件 SHA-256 = \`${sha}\`（TSV 去 BOM + EOL 归一化后，避免 checkout 换 EOL 假红）；共 ${entries.length} 个文件 / ${total} 条 Finding。
  *
  * \`s\` = 源文件正文的 stableHash（去 BOM + normalizeEol 后，与 plugin-api 同尺）。
  * \`r\` = 该文件的 Finding 行：\`[kind序号, functionKey, 0基行号, name, detail, count]\`。

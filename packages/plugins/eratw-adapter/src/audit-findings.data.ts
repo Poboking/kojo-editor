@@ -3,7 +3,7 @@
  *
  * 由 `node tools/gen-erb-audit-findings.mjs` 从 eraTW 4.981 全量审计 TSV 生成：
  *   erbcc audit --corpus <语料>/ERB --game-root <语料> --out unresolved-symbols.tsv
- * 源文件 SHA-256 = `4f8dcb9d3dafa5801e3e12f247c0d4461492b79bf15ebd7893fb4f0846208b9e`（TSV 逐字）；共 28 个文件 / 102 条 Finding。
+ * 源文件 SHA-256 = `4f8dcb9d3dafa5801e3e12f247c0d4461492b79bf15ebd7893fb4f0846208b9e`（TSV 去 BOM + EOL 归一化后，避免 checkout 换 EOL 假红）；共 28 个文件 / 102 条 Finding。
  *
  * `s` = 源文件正文的 stableHash（去 BOM + normalizeEol 后，与 plugin-api 同尺）。
  * `r` = 该文件的 Finding 行：`[kind序号, functionKey, 0基行号, name, detail, count]`。

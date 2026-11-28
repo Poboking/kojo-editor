@@ -290,7 +290,7 @@ export function isAllErbBlank(text: string): boolean {
  *
  * 真源：eratw-安卓移植计划 `specs/variables.yaml`
  *       （反编译 C# `VariableData.cs` / `VariableCode.cs` / `ConstantData.cs` 等，逐条带行号锚）。
- * 快照：`tools/data/variables.yaml`，sha256 = `fb4c99ffa1bb926bae4c255b63624a42dc4c528d0d0aeaac0dc892fa9d540968`。
+ * 快照：`tools/data/variables.yaml`，sha256 = `f9e75fab0e459afb09ccbbfa736cfc1d25c8669efa2f7bdc1dfc5a0553f2a0fe`。
  * 名数：161 条（A..Z 展开 26、伪变量族拆 3、GAMEBASE 旧拼拆 2）。
  */
 export interface ErbEngineNameEntry {

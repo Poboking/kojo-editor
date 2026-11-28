@@ -39,7 +39,8 @@ const KNOWN_GAPS = [
 describe('ERB 引擎名数据契约（spec 权威 ∪ 语料补充）', () => {
   it('生成区间的输入 sha256 与快照逐字相符', () => {
     const raw = readFileSync(INPUT, 'utf8');
-    const sha = createHash('sha256').update(raw, 'utf8').digest('hex');
+    // 与生成器同尺：先 EOL 归一化再算 sha，避免 git autocrlf 换 EOL 造成假红。
+    const sha = createHash('sha256').update(raw.replace(/\r\n?/g, '\n'), 'utf8').digest('hex');
     const src = readFileSync(TARGET, 'utf8');
     expect(src, 'variables.yaml 改了但没重跑 node tools/gen-erb-engine-names.mjs')
       .toContain(`sha256 = \`${sha}\``);

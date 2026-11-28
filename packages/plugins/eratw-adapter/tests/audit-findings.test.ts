@@ -52,7 +52,9 @@ function ctxOf(files: Record<string, string>): ConventionCheckContext {
 describe('audit 数据契约（真产物逐字对拍）', () => {
   it('快照 sha256 / 条数 / 文件数与生成数据一致', () => {
     const raw = readFileSync(TSV, 'utf8');
-    expect(createHash('sha256').update(raw, 'utf8').digest('hex')).toBe(AUDIT_SOURCE_SHA256);
+    // 与生成器同尺：先 EOL 归一化再算 sha，避免 git autocrlf 换 EOL 造成假红。
+    const sha = createHash('sha256').update(raw.replace(/\r\n?/g, '\n'), 'utf8').digest('hex');
+    expect(sha).toBe(AUDIT_SOURCE_SHA256);
     const rows = raw.split('\n').filter(Boolean).slice(1);
     expect(rows).toHaveLength(AUDIT_FINDING_COUNT);
     expect(Object.keys(AUDIT_FILES)).toHaveLength(AUDIT_FILE_COUNT);
