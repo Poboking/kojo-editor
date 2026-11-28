@@ -805,7 +805,8 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 - 能力面：命令 **61** / Rust 命令 **91** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
   tools **86**（read **41** / edit **15** / privileged **30**）；resources **11**；prompts **3**；
 - 缺口：`totalGaps=181` / `wiredGaps=68` / **`deferredGaps=113`**，逐条带原因，
-  按七类归因（合计 113，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
+  按七类归因（合计 113，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组；
+  「刻意不登记」两条例外由 `INTENTIONALLY_UNREGISTERED` 表显式点名，机器读数与本节结论同口径）：
 
 | 原因类 | 条数 |
 | --- | --- |
@@ -813,9 +814,8 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 | 危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准 | 19 |
 | 写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露 | 14 |
 | MCP 会话控制 / 审计内建命令：由宿主线协议与第四张表管理，不作为模型工具 | 10 |
-| 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 1 |
 | 编辑器写 / 光标副作用：首期不面向只读模型面（`format` 仍是异步 provider 通道） | 1 |
-| 语义读数：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补） | 1 |
+| 刻意不登记（已判性，WP-5）：`updater_relaunch`＝重启动作（进程生命周期属面向人的操作）· `actions`＝注入面不可达（无稳定读数面/落地观察件） | 2 |
 
 - **读数轨迹**：`read 28→35`（第四波 6 枚只读具名工具 + 第五波 `editor.cursor`）→ 余项① `quickFix`
   （`b8ff59d4`）→ 余项⑤ `tasks.start` / `tasks.status` / `tasks.cancel`（`784cc077`）⇒ tools **43**、

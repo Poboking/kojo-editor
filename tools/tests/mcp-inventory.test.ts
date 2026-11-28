@@ -360,7 +360,7 @@ describe('mcp-inventory · --json 机器摘要（稳定 schema）', () => {
     expect(m.gaps.filter((g) => g.wired)).toHaveLength(m.counts.wiredGaps);
     expect(m.gaps.filter((g) => !g.wired)).toHaveLength(m.counts.deferredGaps);
     // 每条字段形状与枚举合法
-    const COSTS = ['cheap-read', 'needs-write-domain', 'needs-UI', 'needs-protocol', 'unknown', 'wired'];
+    const COSTS = ['cheap-read', 'needs-write-domain', 'needs-UI', 'needs-protocol', 'intentionally-unregistered', 'unknown', 'wired'];
     const PRIOS = ['P1', 'P2', 'P3', 'P4'];
     for (const g of m.gaps) {
       expect(['rust', 'debug', 'plugins']).toContain(g.source);
@@ -381,6 +381,19 @@ describe('mcp-inventory · --json 机器摘要（稳定 schema）', () => {
     expect(create).toBeTruthy();
     expect(create.wired).toBe(true);
     expect(create.tool).toBe('fileTree.create');
+
+    // WP-5：已判性「刻意不登记」必须与文档结论一致——不许再标成「保留缺口待补」。
+    const judged = m.gaps.filter((g) => g.reasonClass.startsWith('刻意不登记（已判性）'));
+    expect(judged.map((g) => g.name).sort()).toEqual(['actions', 'updater_relaunch']);
+    for (const g of judged) {
+      expect(g.wired).toBe(false);
+      expect(g.wiringCost).toBe('intentionally-unregistered');
+      expect(g.suggestedPriority).toBe('P4');
+      expect(g.reasonClass.length).toBeGreaterThan('刻意不登记（已判性）：'.length);
+    }
+    // 反向：这两条不许再落进「只读原语 / 语义读数」待补桶（机器读数与 README §10.5 同口径）。
+    expect(m.gaps.some((g) => g.reasonClass.startsWith('只读原语'))).toBe(false);
+    expect(m.gaps.some((g) => g.reasonClass.startsWith('语义读数'))).toBe(false);
   });
 
   it('真树写腿状态段：候选=registry 非 read 档、wired 与真源腿表联动、缺口登记对拍 gap map', async () => {

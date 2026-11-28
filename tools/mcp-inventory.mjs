@@ -291,6 +291,7 @@ const WIRED_REASON_CLASS = 'wired';
  */
 function wiringCostFor(source, gap, reason) {
   if (reason === WIRED_REASON_CLASS) return { cost: 'wired', priority: null };
+  if (INTENTIONALLY_UNREGISTERED.has(gap)) return { cost: 'intentionally-unregistered', priority: 'P4' };
   if (source === 'plugins') return { cost: 'needs-UI', priority: 'P3' };
   if (source === 'rust') {
     // 与 deferredReason 同序同则：危险档 → mcp 内建 → 写/UI 混合桶（再细分）→ 只读原语兜底。
@@ -317,8 +318,29 @@ function wiringCostFor(source, gap, reason) {
   return { cost: 'unknown', priority: 'P3' };
 }
 
+/**
+ * 已判性「刻意不登记」名单（WP-5，2026-11-28）：机器读数必须与文档结论一致——
+ * 不能一边在 `docs/mcp/README.md` §10.5 写「刻意不登记」，一边在 inventory 里标成
+ * 「保留缺口，宿主后续按需补」。每条带判性理由；新增条目必须同批更新该文档段落。
+ *
+ * 注：`read_file_bytes_raw` 不在此表——它已由结构化面 `fs.readFilesRaw` 覆盖（wired）。
+ */
+const INTENTIONALLY_UNREGISTERED = new Map([
+  [
+    'updater_relaunch',
+    '重启动作：进程生命周期属面向人的操作，MCP 不提供触发器（避免模型把宿主重启当普通工具）。',
+  ],
+  [
+    // debug 源里的 gap name 就是 `actions`（无 `debug.` 前缀）。
+    'actions',
+    '注入面不可达：调试 API 的 actions 不是稳定读数面，没有可核对的落地观察件。',
+  ],
+]);
+
 /** 剩余缺口的显式原因（按类别生成，不逐条编造；诚实标注「有真源但本波未接线」）。 */
 function deferredReason(source, gap) {
+  const judged = INTENTIONALLY_UNREGISTERED.get(gap);
+  if (judged) return `刻意不登记（已判性）：${judged}`;
   if (source === 'rust') {
     if (/^(launcher_|market_|open_url_external$|export_file$|remove_|rename_path$)/.test(gap)) {
       return '危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准。';
