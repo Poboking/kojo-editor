@@ -613,6 +613,21 @@ schema ↔ 腿**双向**、B11 手抄 `CONSUMED` ↔ 扫描逐面相等（表旧
 （`registerMcpWiringSources` 拷贝一份冻结副本登记；生产 `installRealMcpSources` 每次新建对象 ⇒ 零成本），
 届时红路只剩 `Object.getOwnPropertyDescriptor` 级反射。
 
+### 5.16 驻留换代的 reload 钩子（MCP-RELOAD-HOOK，2026-11-28）
+
+多项目驻留档案在**逐出**（`reason:'lru'`）或**快切回来撞上旧档案**（`reason:'superseded'`）时，
+内核发两枚事件：原有 `project.evicted` 与新的 `project.reload`，两枚都带 `rootId`
+（契约层 `rootIdOf(rootDir)`，与 `io.workspaceRoots` 的枚举标识同一枚纯函数）。
+两者都是 KERNEL_ONLY 事实事件；宿主侧单独订阅让 `kojo://project/events` 看得见，
+**不放宽插件 emit 白名单**。
+
+消费方可以**可选**登记 `reload` 钩子（`app/src/mcp/project-reload.ts`）：钩子只读 S1 索引
+快照 `kojo2ProjectIndex.snapshot()`，不重扫源码；回执只有在 `rootId`、根路径反查、
+快照 `sourceStamp = rootId:generation` 三者同源时才记 `reloaded`，否则记 `unverified` +
+理由，**绝不报「已重载」**。不登记钩子时旧行为逐字不变；账本按通道分开（调试宿 /
+真壳 / 生产各记各的），不互借 stamp。400 文件重载实测零重解析、p95 30.3 ms（测试护栏 50 ms）。
+取证量具：`node tools/mcp-reload-evidence.mjs debug-host|real-shell`（需先起对应调试会话）。
+
 ## 6. tier 与授权模型
 
 `McpTier = 'read' | 'edit' | 'privileged'`；会话形状（冻结契约 v1）：

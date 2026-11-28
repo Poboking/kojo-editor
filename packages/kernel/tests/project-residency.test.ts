@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import type { GameProject, Logger, PlatformBridge, Plugin, ProjectEvictedEvent } from '@kojo/plugin-api';
+import type {
+  GameProject,
+  Logger,
+  PlatformBridge,
+  Plugin,
+  ProjectEvictedEvent,
+  ProjectReloadEvent,
+} from '@kojo/plugin-api';
+import { rootIdOf } from '@kojo/plugin-api';
 import { createKernel } from '../src/kernel';
 import { MemoryStorageBackend } from './helpers/memory-storage';
 
@@ -146,7 +154,7 @@ describe('多项目驻留 LRU（MCP-PERF-S19）', () => {
 
     // 逐出事实：P1（最旧非当前）被逐，reason=lru，且只逐这一枚
     expect(rec.evicted).toEqual([
-      { rootDir: projDir(1), adapterId: 'fake-game', reason: 'lru' },
+      { rootDir: projDir(1), adapterId: 'fake-game', reason: 'lru', rootId: rootIdOf(projDir(1)) },
     ]);
     // 当前项目零影响：current 是 P4；opened 4 次、逐字 close 3 次（每次切换照旧走完整 close）
     expect(kernel.project.current()?.rootDir).toBe(projDir(4));
@@ -252,7 +260,9 @@ describe('多项目驻留 LRU（MCP-PERF-S19）', () => {
     await kernel.project.open(projDir(2)); // P1 退役入档
     await kernel.project.open(projDir(1)); // 完整重开 P1：旧档案被取代
     const superseded = rec.evicted.filter((e) => e.reason === 'superseded');
-    expect(superseded).toEqual([{ rootDir: projDir(1), adapterId: 'fake-game', reason: 'superseded' }]);
+    expect(superseded).toEqual([
+      { rootDir: projDir(1), adapterId: 'fake-game', reason: 'superseded', rootId: rootIdOf(projDir(1)) },
+    ]);
     expect(kernel.project.current()?.rootDir).toBe(projDir(1));
     await kernel.stop();
   });
@@ -279,6 +289,53 @@ describe('多项目驻留 LRU（MCP-PERF-S19）', () => {
     await kernel.project.open(projDir(1));
     expect(calls.detect).toEqual([projDir(1), projDir(2), projDir(1)]);
     expect(calls.load).toEqual([projDir(1), projDir(2), projDir(1)]);
+    await kernel.stop();
+  });
+});
+
+describe('MCP-RELOAD-HOOK · 内核事件面（判据先红）', () => {
+  it('② 逐出与快切回来都发 project.reload，两事件都带同源 rootId 且可见', async () => {
+    const calls = { detect: [] as string[], load: [] as string[] };
+    const kernel = await createKernel({
+      platform: stubBridge(),
+      plugins: [makeMultiProjectAdapterPlugin(calls)],
+      logger: noopLogger,
+      storageBackend: new MemoryStorageBackend(),
+      projectResidencyCap: 2,
+    });
+    await kernel.start();
+    const evicted: ProjectEvictedEvent[] = [];
+    const reloads: ProjectReloadEvent[] = [];
+    kernel.bus.on('project.evicted', (p) => evicted.push(p));
+    kernel.bus.on('project.reload', (p) => reloads.push(p));
+
+    await kernel.project.open(projDir(1));
+    await kernel.project.open(projDir(2)); // P1 退役入档
+    await kernel.project.open(projDir(3)); // 上限 2：P1 被逐（evicted + reload/evicted）
+    await kernel.project.open(projDir(2)); // 快切回来：P2 档案被取代（superseded + reload/returned）
+
+    expect(evicted.map((e) => e.rootDir)).toEqual([projDir(1), projDir(2)]);
+    expect(evicted.every((e) => e.rootId === rootIdOf(e.rootDir))).toBe(true);
+    expect(reloads).toEqual([
+      { rootId: rootIdOf(projDir(1)), rootDir: projDir(1), trigger: 'evicted', reason: 'lru' },
+      { rootId: rootIdOf(projDir(2)), rootDir: projDir(2), trigger: 'returned', reason: 'fast-switch' },
+    ]);
+    await kernel.stop();
+  });
+
+  it('① additive：没有任何 reload 消费方时，close / open / 逐出事件的时间线逐字不变', async () => {
+    const { kernel, rec } = await boot();
+    for (let i = 1; i <= 4; i += 1) await kernel.project.open(projDir(i));
+    expect(rec.timeline).toEqual([
+      'opened:C:\\proj-1',
+      'closed:C:\\proj-1',
+      'opened:C:\\proj-2',
+      'closed:C:\\proj-2',
+      'opened:C:\\proj-3',
+      'closed:C:\\proj-3',
+      'evicted:C:\\proj-1(lru)',
+      'opened:C:\\proj-4',
+    ]);
     await kernel.stop();
   });
 });

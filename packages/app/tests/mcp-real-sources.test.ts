@@ -14,6 +14,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { McpFailure, createMcpCapabilityRegistry, MCP_TOOL_GAP_MAP, SUPPLEMENTAL_TOOL_SPECS, type McpSessionScope } from '@kojo/mcp-host';
+import { rootIdOf } from '@kojo/plugin-api';
 import type { CommandEntry } from '../src/ui/commands';
 import {
   assertMcpWriteDomain,
@@ -1394,6 +1395,37 @@ describe('事件环形缓冲（bindEventRing）', () => {
     expect(after).toHaveLength(2);
     expect(after[0]).toMatchObject({ name: first, payload: 'hello' });
     expect(String(after[1]!.payload)).toContain('…');
+  });
+
+  it('MCP-RELOAD-HOOK：逐出与换代事件都进 kojo://project/events，且两枚都带 rootId', async () => {
+    const handlers = new Map<string, Array<(p: unknown) => void>>();
+    const kernel: McpKernelLike = {
+      ...fakeKernel().kernel,
+      bus: {
+        on: (name: string, cb: (p: unknown) => void) => {
+          handlers.set(name, [...(handlers.get(name) ?? []), cb]);
+          return () => {
+            handlers.set(name, (handlers.get(name) ?? []).filter((h) => h !== cb));
+          };
+        },
+      },
+    };
+    bindEventRing(kernel);
+    const sources = await buildRealMcpSources(realHost(kernel), { invoke: async () => null, searchInFiles: NO_SEARCH });
+    const rootDir = 'C:\\proj-evicted';
+    const rootId = rootIdOf(rootDir);
+    for (const cb of handlers.get('project.evicted') ?? []) {
+      cb({ rootDir, adapterId: 'fake-game', reason: 'lru', rootId });
+    }
+    for (const cb of handlers.get('project.reload') ?? []) {
+      cb({ rootDir, rootId, trigger: 'evicted', reason: 'lru' });
+    }
+    const rows = (await sources.readResourceData!(KOJO_RESOURCE_URIS.events, scope)) as {
+      name: string;
+      payload: { rootId?: string };
+    }[];
+    expect(rows.map((r) => r.name)).toEqual(['project.evicted', 'project.reload']);
+    expect(rows.map((r) => r.payload.rootId)).toEqual([rootId, rootId]);
   });
 
   it('重复绑定同一内核幂等（不重复订阅）；换内核先退订旧的', () => {

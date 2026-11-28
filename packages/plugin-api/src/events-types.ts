@@ -122,6 +122,29 @@ export interface ProjectEvictedEvent {
    *   被新加载取代——不是超限，是档案换代，同样出声。
    */
   readonly reason: 'lru' | 'superseded';
+  /**
+   * additive（MCP-RELOAD-HOOK，2026-11-28）：根的稳定枚举标识（`ws:` + 8 位小写十六进制），
+   * 由契约层 `rootIdOf(rootDir)` 算出——与 WebView 侧写域多根枚举**同一枚纯函数**。
+   * 旧消费方不读这一格，行为逐字不变；新消费方用它证明「逐出的就是这一根」。
+   */
+  readonly rootId?: string;
+}
+
+/**
+ * 驻留档案换代时的 reload 请求事件（`project.reload` 载荷；MCP-RELOAD-HOOK，2026-11-28）。
+ *
+ * 这是**请求**，不是「已重载」的事实：消费方拿到它之后可选用 S1 索引快照做增量重载，
+ * 并把同源 stamp 写回回执；没有回执 / stamp 对不上时，账上只能记 `unverified`。
+ */
+export interface ProjectReloadEvent {
+  /** 与同拍 `project.evicted` / 读真源枚举出的 `rootId` 同源（契约层 `rootIdOf`）。 */
+  readonly rootId: string;
+  /** 被逐出或快切回来的项目根绝对路径（仅用于同源反查，绝不作为写落点）。 */
+  readonly rootDir: string;
+  /** `evicted`＝档案被逐；`returned`＝快切回来撞上旧档案，需要换代重载。 */
+  readonly trigger: 'evicted' | 'returned';
+  /** 触发原因；与 `project.evicted.reason` 同口径，快切回来固定 `fast-switch`。 */
+  readonly reason: 'lru' | 'superseded' | 'fast-switch';
 }
 
 /** 文件监视的判级结果（`file.watchState` 载荷；由内核监视器产生） */
@@ -181,6 +204,11 @@ export interface KernelEventMap {
    * 驻留档案只收退役项目，当前项目在结构上进不了档案。
    */
   'project.evicted': ProjectEvictedEvent;
+  /**
+   * 驻留档案换代的可选 reload 请求（MCP-RELOAD-HOOK）：**内核专属**（谁换代 = 内核
+   * 驻留账本事实，插件伪造 = 谎报重载来源）；插件可 `on`，不可 `emit`。
+   */
+  'project.reload': ProjectReloadEvent;
   /** 口上函数集合发生变化（解析器完成一次索引重建后） */
   'kojo.functionChanged': { projectRoot: string; files: string[] };
   /** 插件状态迁移（内核保证：任何插件状态变化都会发此事件） */

@@ -9,7 +9,12 @@ import type {
   SlotMap,
   SlotRegistry,
 } from '@kojo/plugin-api';
-import { AdapterConflictError, ProjectDetectionError, normalizeAdapterDetection } from '@kojo/plugin-api';
+import {
+  AdapterConflictError,
+  ProjectDetectionError,
+  normalizeAdapterDetection,
+  rootIdOf,
+} from '@kojo/plugin-api';
 import { pathKey } from '@kojo/plugin-api';
 
 /**
@@ -294,6 +299,15 @@ export class ProjectServiceImpl implements ProjectService {
       rootDir: stale.rootDir,
       adapterId: stale.adapterId,
       reason: 'superseded',
+      rootId: rootIdOf(stale.rootDir),
+    });
+    // MCP-RELOAD-HOOK：快切回来撞上旧档案 = 换代重载请求。只发请求，绝不替消费方
+    // 宣称「已重载」——回执要由消费方拿 S1 快照的同源 stamp 自己证明。
+    this.deps.bus.emit('project.reload', {
+      rootDir: stale.rootDir,
+      rootId: rootIdOf(stale.rootDir),
+      trigger: 'returned',
+      reason: 'fast-switch',
     });
     this.deps.log.debug(`Residency archive superseded by a fresh load: ${stale.rootDir}`);
   }
@@ -311,9 +325,19 @@ export class ProjectServiceImpl implements ProjectService {
       if (oldest.done) break;
       const entry = this.retired.get(oldest.value)!;
       this.retired.delete(oldest.value);
+      const rootId = rootIdOf(entry.rootDir);
       this.deps.bus.emit('project.evicted', {
         rootDir: entry.rootDir,
         adapterId: entry.adapterId,
+        reason: 'lru',
+        rootId,
+      });
+      // MCP-RELOAD-HOOK：逐出那一拍同时给消费方一枚可选 reload 请求；没有消费方
+      // 时这只是一个事件，close / open / 逐出的时间线逐字不变。
+      this.deps.bus.emit('project.reload', {
+        rootDir: entry.rootDir,
+        rootId,
+        trigger: 'evicted',
         reason: 'lru',
       });
       this.deps.log.info(`Project evicted from residency (lru): ${entry.rootDir}`);

@@ -24,6 +24,7 @@ export type {
   KernelEventName,
   PluginEventMap,
   ProjectEvictedEvent,
+  ProjectReloadEvent,
   RevealRange,
   StickyEventName,
 } from './events';
@@ -63,6 +64,15 @@ export type { ScopedStorage, StorageService } from './storage';
 
 export { WriteNotAllowedError } from './io';
 export type { BackupVersion, EolStyle, FileIO, TextFile, TrashEntry, WriteTextOptions } from './io';
+
+/* ---- 根枚举标识（MCP-RELOAD-HOOK · additive；内核事件与 WebView 同一枚纯函数） ---- */
+export {
+  ROOT_ID_SHAPE,
+  findRootById,
+  isRootIdShape,
+  normalizeRootForId,
+  rootIdOf,
+} from './events';
 export type { FilePickFilter } from './platform';
 
 /* ---- 批操作 journal（1016 undo 批独占追加区块；勿在他处重排） ---- */

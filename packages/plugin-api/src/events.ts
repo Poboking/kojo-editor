@@ -64,6 +64,9 @@ const KERNEL_ONLY_EVENT_NAMES = [
   // 驻留档案逐出（MCP-PERF-S19）：逐出是内核驻留账本的独占决定（谁被逐 = 内核 LRU 事实），
   // 插件伪造 = 谎报内存事实（与写权限事件同档）。
   'project.evicted',
+  // 驻留换代 reload 请求（MCP-RELOAD-HOOK）：换代事实由内核账本独占发出；
+  // 插件伪造 = 谎报「该重载哪一根」，与逐出事件同档。
+  'project.reload',
   // 监视状态 = "自动重载机制是否可信"的保证，与写权限事件同类（BUG-5）
   'file.watchState',
   // 失效波（MCP-PERF-S12）：盘面变更的集合事实由内核监视器垄断发出（与 file.watchState 同档）。
@@ -143,3 +146,51 @@ export type StickyEventName = (typeof STICKY_EVENT_NAMES_ARR)[number];
 
 /** sticky 白名单（运行时视图；值 = 可回放最后一条的事件全集） */
 export const STICKY_EVENT_NAMES: ReadonlySet<StickyEventName> = new Set(STICKY_EVENT_NAMES_ARR);
+
+/**
+ * 项目根的**稳定枚举标识**真源（MCP-RELOAD-HOOK，2026-11-28）。
+ * 落在本文件而非新叶子，是因为 ps10 开机图闸已到 197 文件上限——新增源文件即越闸。
+ *
+ * 与 MCP 写域多根 `rootId` 同口径：FNV-1a 32 位、统一分隔符 / 去尾斜杠、
+ * 不做大小写折叠。放在契约层而不是 app 层，是为了让内核事件里的 `rootId`
+ * 与 WebView 侧枚举出的 `rootId` 走**同一枚纯函数**——「同源」不是靠注释承诺，
+ * 是靠两侧调用同一个实现（判据⑤）。
+ *
+ * 安全边界：`rootId` 只是枚举标识，不是目标路径；任何写落点仍走读真源反查 +
+ * 双写闸，本模块不提供「rootId → 路径」之外的能力。
+ */
+
+const FNV_OFFSET_32 = 0x811c9dc5;
+const FNV_PRIME_32 = 0x01000193;
+
+/** 统一分隔符 / 去尾斜杠，避免同一根因写法不同算出两个标识。 */
+export function normalizeRootForId(rootAbs: string): string {
+  const unified = rootAbs.replace(/\\/g, '/').replace(/\/+$/, '');
+  return unified;
+}
+
+/** 根绝对路径 → 稳定枚举标识（FNV-1a 32 位，UTF-8 字节流）。 */
+export function rootIdOf(rootAbs: string): string {
+  const bytes = new TextEncoder().encode(normalizeRootForId(rootAbs));
+  let hash = FNV_OFFSET_32 >>> 0;
+  for (const byte of bytes) {
+    hash = Math.imul(hash ^ byte, FNV_PRIME_32) >>> 0;
+  }
+  return `ws:${hash.toString(16).padStart(8, '0')}`;
+}
+
+/** rootId 形状闸：只收 8 位小写十六进制，绝不收任意目标路径。 */
+export const ROOT_ID_SHAPE = /^ws:[0-9a-f]{8}$/;
+
+export function isRootIdShape(value: unknown): value is string {
+  return typeof value === 'string' && ROOT_ID_SHAPE.test(value);
+}
+
+/** 从只读真源读数里按 rootId 反查根；找不到 ⇒ null（绝不猜测 / 绝不退回项目根）。 */
+export function findRootById(roots: readonly unknown[], rootId: string): string | null {
+  for (const raw of roots) {
+    if (typeof raw !== 'string') continue;
+    if (rootIdOf(raw) === rootId) return raw;
+  }
+  return null;
+}

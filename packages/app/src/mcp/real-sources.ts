@@ -50,7 +50,7 @@ import type {
   McpSessionScope,
 } from '@kojo/mcp-host';
 import { KERNEL_EVENT_NAMES } from '@kojo/plugin-api';
-import type { EditorCommandContext, EditorSymbolLocation } from '@kojo/plugin-api';
+import type { EditorCommandContext, EditorSymbolLocation, EventBus } from '@kojo/plugin-api';
 import { commandEnabled, type CommandEntry } from '../ui/commands';
 import { recordQuickFixTickets, type QuickFixPaneResolver } from './quick-fix';
 // B3 批（LaneO）：编辑器写 / 光标副作用五枚的 pane 反查 seam 类型（生产解析在
@@ -1259,6 +1259,47 @@ export function bindEventRing(kernel: McpKernelLike | null): void {
       }),
     );
   }
+  // MCP-RELOAD-HOOK：这两枚是 KERNEL_ONLY 事件，刻意不在 KERNEL_EVENT_NAMES（插件 emit
+  // 白名单）里；消费方要看得见逐出与换代请求，就在宿主侧单独订阅——绝不放宽插件 emit 权限。
+  for (const name of ['project.evicted', 'project.reload'] as const) {
+    eventUnsubs.push(
+      kernel.bus.on(name, (payload) => {
+        eventRing[eventHead] = { t: performance.now(), name, payload: slimEventPayload(payload) };
+        eventHead = (eventHead + 1) % EVENT_RING_LIMIT;
+        if (eventCount < EVENT_RING_LIMIT) eventCount += 1;
+      }),
+    );
+  }
+}
+
+/**
+ * MCP-RELOAD-HOOK：生产通道的可选 reload 钩子 + 观察器（幂等绑定，同内核不重复订阅）。
+ *
+ * 钩子只读 S1 索引快照（`kojo2ProjectIndex.snapshot()`），不重扫源码；观察器把
+ * `project.evicted` / `project.reload` 与同源回执记进**独立**的生产通道账，
+ * 既不写盘也不改能力面（tools / resources 计数零变化）。两处真源都走动态 import，
+ * 不给 bootstrap 开机静态图加边。
+ */
+let reloadObserverBoundTo: McpKernelLike | null | undefined;
+let reloadObserverOff: (() => void) | null = null;
+
+async function bindProjectReload(kernel: McpKernelLike | null): Promise<void> {
+  if (reloadObserverBoundTo === kernel) return;
+  reloadObserverOff?.();
+  reloadObserverOff = null;
+  reloadObserverBoundTo = kernel;
+  // S1 索引实例活在 WebView 侧（editor-global-providers 静态拖 Monaco）；Node 测试装配
+  // 真源时没有 window，根本不该装这条钩子——这是浏览器专属观察件，不是能力面缺口。
+  if (!kernel || typeof window === 'undefined') return;
+  const [{ installProjectReloadObserver, registerProjectReloadHook, createS1SnapshotReloadHook }, providers] =
+    await Promise.all([import('./project-reload'), import('../ui/editor-global-providers')]);
+  const channel = 'production';
+  const snapshot = () => providers.kojo2ProjectIndex.snapshot();
+  registerProjectReloadHook(createS1SnapshotReloadHook(snapshot), channel);
+  reloadObserverOff = installProjectReloadObserver(kernel.bus as unknown as EventBus, {
+    snapshot,
+    ledger: channel,
+  });
 }
 
 function recentEvents(max: number): unknown[] {
@@ -1619,6 +1660,7 @@ export async function buildRealMcpSources(
   // Wave4 余项 ③：外部写盘失效短账（订阅既有 file.changed / file.watchState + 读
   // kernel.fileWatch.state()）。与事件环同一幂等绑定策略：同一内核重复装配不重复订阅。
   bindFsFreshness(kernel);
+  await bindProjectReload(kernel);
 
   // 命令读数与工具分级同源：同一份 fail-closed 投影，读到的 tier 就是工具的 tier。
   const mcpCommands = (): CommandEntry[] => projectCommandsForMcp(host.getCommands());
