@@ -19,6 +19,7 @@ import { ERB_DIALECT_EXTENSIONS } from '@kojo/plugin-api';
 import { parseErbText } from '../src/scanner';
 import { aggregateIndex } from '../src/snapshot';
 import {
+  BUILTIN_ARG_RANGE_CODE,
   BUILTIN_ARG_TYPE_CODE,
   BUILTIN_ARGS_CODE,
   BUILTIN_SIGNATURES,
@@ -66,6 +67,7 @@ describe('A1 · 内建实参诊断 × 真语料', () => {
 
       let extra = 0;
       let typeIssues = 0;
+      let rangeIssues = 0;
       const samples: Sample[] = [];
       const lineCache = new Map<string, string[]>();
       const lineAt = (p: string, line: number): string =>
@@ -80,6 +82,7 @@ describe('A1 · 内建实参诊断 × 真语料', () => {
         })) {
           if (d.code === BUILTIN_ARGS_CODE) extra++;
           else if (d.code === BUILTIN_ARG_TYPE_CODE) typeIssues++;
+          else if (d.code === BUILTIN_ARG_RANGE_CODE) rangeIssues++;
           if (samples.length < 24) {
             const m = /「([^」]+)」/.exec(d.message);
             samples.push({ file: path.relative(root, p), line: d.line, code: d.code ?? '', name: m?.[1] ?? '?' });
@@ -91,7 +94,7 @@ describe('A1 · 内建实参诊断 × 真语料', () => {
       console.log('');
       console.log(
         'A1-CORPUS ' +
-          JSON.stringify({ files: files.length, extra, typeIssues, samples }, null, 1),
+          JSON.stringify({ files: files.length, extra, typeIssues, rangeIssues, samples }, null, 1),
       );
 
       // ① 规模闸（阈值 = 2026-10-25 实测水位；改表改签名须连阈值一起复核）
@@ -100,6 +103,9 @@ describe('A1 · 内建实参诊断 × 真语料', () => {
       // 类型留小余量：分支会改签名（eraNAS 的 LOADTEXT 就吃 `@"…"` 文件名形，wiki 只载 int），
       // 系统性编码错误动辄几十上百条，8 条以内视为语料漂白、由可解释闸逐条兜底。
       expect(typeIssues, '类型误报应≈0（实测 eraNAS 4,145 文件 = 0）').toBeLessThanOrEqual(8);
+      // GETBIT 位号越界（CB-004 / CB-013）：全语料仅两处字面 ≥64，一处落在
+      // [SKIPSTART] 死区、一处整行注释，故可证越界必须为 0（非 0 即死区/注释滤闸漏了）。
+      expect(rangeIssues, 'GETBIT 字面位号越界应为 0').toBe(0);
 
       // ② 可解释闸：抽样逐条回查
       for (const s of samples) {

@@ -133,6 +133,7 @@ export const NATIVE_SEMANTIC_CODES = [
   'ERB_ARITY_MISMATCH',
   'ERB_BUILTIN_ARGS',
   'ERB_BUILTIN_ARG_TYPE',
+  'ERB_BUILTIN_ARG_RANGE',
   'ERB_DIAGNOSTICS_RULE_FAILED',
 ] as const;
 
@@ -296,6 +297,10 @@ export const DIAGNOSTIC_LABELS: Readonly<Record<string, DiagnosticLabel>> = tabl
   'ERB_BUILTIN_ARG_TYPE': {
     name: '内建函数实参类型不符',
     detail: '这一位的实参形态与该函数要求的不一致，新版引擎不再静默转换。',
+  },
+  'ERB_BUILTIN_ARG_RANGE': {
+    name: '内建函数实参越界',
+    detail: '这一位的字面量超出引擎硬限（如 GETBIT 位号 0..63），运行到这一行会直接报错。',
   },
   'ERB_DIAGNOSTICS_RULE_FAILED': {
     name: '这一类检查没跑成',

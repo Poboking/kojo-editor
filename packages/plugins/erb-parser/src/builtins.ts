@@ -88,6 +88,19 @@ export const BUILTIN_ARGS_CODE = 'ERB_BUILTIN_ARGS';
 /** 实参类型诊断码（稳定标识） */
 export const BUILTIN_ARG_TYPE_CODE = 'ERB_BUILTIN_ARG_TYPE';
 
+/**
+ * 字面量**值域**越界（与个数 / 类型不同的第三族）。当前只接 `GETBIT` 位号：
+ * 官方键 `ArgIsOutOfRange`，zhs 原话见 `error-texts.yaml` 附二 :1755-1762
+ * （`{0}函数: 第{1}个参数({2})在从{3}到{4}的范围外`）；抛点 1.824
+ * `FunctionMethodCreator.cs:4785`、蛇版 4.981 `Creator.Method.cs:5238-5247`
+ * —— `m < 0 || m > 63` 直接 CodeEE，不夹持。
+ *
+ * 真事故：CB-004（`_TR Lib.ERB` 的位号 64，落在 [SKIPSTART] 死区）与 CB-013
+ * （`BONUS2.ERB` 的按钮值 150 转发进位号）。只判**可证字面量**，变量/表达式不猜；
+ * 死区与整行注释由 `visibleCodeLines` 先滤掉，故真语料那两处都不报。
+ */
+export const BUILTIN_ARG_RANGE_CODE = 'ERB_BUILTIN_ARG_RANGE';
+
 /* ---------------- 静态签名表 ---------------- */
 
 /**
@@ -772,6 +785,30 @@ export function collectBuiltinArgDiagnostics(input: BuiltinArgDiagnosticsInput):
             ...argRange,
             code: BUILTIN_ARGS_CODE,
           });
+        }
+      }
+
+      // 值域：只判可证字面量（GETBIT 位号 0..63）。变量 / 表达式不猜，
+      // 死区与整行注释由 visibleCodeLines 先滤掉——真语料那两处越界字面量都不该报。
+      if (normalizedUpper(site.name) === 'GETBIT' && site.spans.length >= 2) {
+        const span = trimmedSpan(line.raw, site.spans[1]!);
+        if (span !== null) {
+          const literal = line.raw.slice(span.start, span.end).trim();
+          if (/^-?\d+$/.test(literal)) {
+            const bit = Number(literal);
+            if (!Number.isSafeInteger(bit) || bit < 0 || bit > 63) {
+              out.push({
+                line: site.line,
+                severity: 'error',
+                message:
+                  `${site.name}函数: 第2个参数(${literal})在从0到63的范围外` +
+                  `——引擎硬限不夹持，运行到这一行会直接报错。`,
+                startColumn: span.start + 1,
+                endColumn: span.end + 1,
+                code: BUILTIN_ARG_RANGE_CODE,
+              });
+            }
+          }
         }
       }
 
