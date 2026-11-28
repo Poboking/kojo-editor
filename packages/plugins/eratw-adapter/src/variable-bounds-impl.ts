@@ -143,7 +143,7 @@ function buildRegex(entries: readonly ErbVariableSizeEntry[], userDims: Readonly
   for (const d of userDims.values()) (d.dim === 1 ? user1 : user2).push(d.name);
   const alt = (names: string[]) => (names.length ? names.join('|') : '(?!)');
   return {
-    global: new RegExp(`(?<![:\\w])(${alt([...globals, ...user1])}):(\\d+)(?![:\\d])`, 'gi'),
+    global: new RegExp(`(?<![:\\w])(${alt([...globals, ...user1])}):(\\d+|-\\d+)(?![:\\d])`, 'gi'),
     chara: new RegExp(`(?<![:\\w])(${alt([...charas, ...user2])}):(\\d+):(\\d+)(?![:\\d])`, 'gi'),
   };
 }
@@ -212,13 +212,15 @@ export async function checkVariableBounds(ctx: ConventionCheckContext): Promise<
           const d = sizes.get(m[1]!.toUpperCase());
           if (!d) continue;
           const n = Number(m[2]);
-          if (d.sizes.length !== 1) continue;
-          const limit = d.sizes[0]!;
-          if (n < limit) continue;
+          const negative = n < 0;
+          if (!negative && (d.sizes.length !== 1 || n < d.sizes[0]!)) continue;
           issues.push({
             ruleId: VARIABLE_BOUNDS_RULE_ID,
             severity: 'warning',
-            message: oor('OoRVarArg', m[1]!, 1, n, limit, d.source),
+            message: negative
+              ? formatEngineErrorText('OoRVarArg', [m[1]!, '1', String(n)]) +
+                '——负下标必然越界（数组下标从 0 起；CB-033 病灶形态：调用方把哨兵值 -1 存进变量后动态用不在此判，字面 -1 才报）。'
+              : oor('OoRVarArg', m[1]!, 1, n, d.sizes[0]!, d.source),
             filePath,
             line,
             key: `${VARIABLE_BOUNDS_RULE_ID}|${filePath}|${line}|${m[1]}|1|${n}`,

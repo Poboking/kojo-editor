@@ -282,6 +282,58 @@ describe('维度/类型族可证子集（error · VariableParser.cs:177-179 / Id
   });
 });
 
+describe('GETBIT/SETBIT/CLEARBIT/BITXOR 字面位域（error · ArgIsOoRBit · FunctionMethodCreator.cs:4783-4786 / snake Creator.Method.cs:5238-5247）', () => {
+  it('字面 bit ∉ 0..63 报引擎原话（CB-004/013 病灶形态：GETBIT(STAIN:ARG:2,64)）', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB': 'IF GETBIT(STAIN:ARG:2,64)\nSETBIT X, -1, 1\n',
+    });
+    const issues = await run();
+    expect(issues).toHaveLength(2);
+    expect(issues[0]!.severity).toBe('error');
+    expect(issues[0]!.message).toContain('第2参数(64)超出范围(0-63)');
+    expect(issues[1]!.message).toContain('第2参数(-1)超出范围(0-63)');
+  });
+
+  it('合法位 / 动态位 / 注释与 SKIP 块不报（语料探针：K77 的 78 是注释行，_TR Lib 的 64 在 SKIP 块内）', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB':
+        'IF GETBIT(X, 63)\nSETBIT X, 0, 1\nIF GETBIT(X, ARG)\n; GETBIT(X, 78)\n[SKIPSTART]\nIF GETBIT(X, 64)\n[SKIPEND]\n',
+    });
+    expect(await run()).toEqual([]);
+  });
+});
+
+describe('RAND 族字面越界（warning · snake 钳制口径 · eratw ClampWarnings.kt / 4.981 VariableToken.cs:1413-1436）', () => {
+  it('RAND:0 / RAND:-N → snake 钳 0 告警原话（1.824 会抛 RandArgIsNegative 中断，注分歧）', async () => {
+    const { run } = harness({ 'C:/game/ERB/A.ERB': 'X = RAND:0\nY = RAND:-5\n' });
+    const issues = await run();
+    expect(issues).toHaveLength(2);
+    expect(issues[0]!.severity).toBe('warning');
+    expect(issues[0]!.message).toContain('RAND不能指定0以下的值(0)');
+    expect(issues[0]!.message).toContain('已钳制为 0');
+    expect(issues[0]!.message).toContain('1.824');
+    expect(issues[1]!.message).toContain('RAND不能指定0以下的值(-5)');
+  });
+
+  it('RAND(m,n) 字面 max≤min / RAND(n) 字面 n≤0 → 钳下界告警原话', async () => {
+    const { run } = harness({ 'C:/game/ERB/A.ERB': 'X = RAND(5, 3)\nY = RAND(0)\nZ = RAND(-2)\n' });
+    const issues = await run();
+    expect(issues).toHaveLength(3);
+    expect(issues[0]!.message).toContain('函数RAND: 最大值被指定为小于或等于最小值的值(3)');
+    expect(issues[0]!.message).toContain('已钳制为下界');
+    expect(issues[1]!.message).toContain('值(0)');
+    expect(issues[2]!.message).toContain('值(-2)');
+  });
+
+  it('合法区间 / 动态实参 / 输出文本内的 RAND 不报', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB':
+        'X = RAND(3, 5)\nY = RAND:18\nZ = RAND:ARG\nW = RAND(A, B)\nPRINTL RAND:0\n',
+    });
+    expect(await run()).toEqual([]);
+  });
+});
+
 describe('定位与去重键', () => {
   it('issue 带 filePath / line / 稳定 key，同类同行不重复', async () => {
     const { run } = harness({ 'C:/game/ERB/A.ERB': 'A == 1\nA == 2\n' });

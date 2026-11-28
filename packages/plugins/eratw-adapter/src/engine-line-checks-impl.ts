@@ -31,6 +31,13 @@
  *     裸名可能是 str 变量值（动态）、名字带逗号/表达式 → fail-open；名字真值 =
  *     `ERB_ENGINE_NAMES` ∪ 全局用户 `#DIM`/`#DIMS`（函数体内的是局部，同名互不相干
  *     → 收集器不可见 ⇒ fail-open）；名字同时在两处（遮蔽关系判不了）也 fail-open。
+ * (g) **warning · RAND 族字面越界**（P3-9，契约在 `rng-facts.ts`）：`RAND:0`/`RAND:-N`
+ *     字面、`RAND(max)`/`RAND(min,max)` 字面 max≤min——snake 4.981 是「首次告警+钔制继续跑」
+ *     （eratw `ClampWarnings.kt` 逐字文案），1.824 同行会抛错中断，分歧写进文案；
+ *     CompatiRAND 开启时合法，按缺省口径判（文案注明）；PRINT 系输出文本位豁免；动态 fail-open。
+ * (h) **error · 位域字面 0..63**（P3-10 CB-004/013）：GETBIT（括号形）/ SETBIT/CLEARBIT/BITXOR
+ *     （语句位指令，空格逗号形）第 2 参字面 ∉ 0..63 报引擎键 `ArgIsOoRBit` 原话；
+ *     全 36 案 CB 台账映射在 `corpus-bug-ledger.ts`（契约闸 `corpus-bug-ledger.test.ts`）。
  *
  * 可见行复用 `variable-bounds-impl::visibleLines`（SKIP 块、`;` 注释、`@FUNC` 行、
  * 双引号字符串内容全部豁免，与 erb-parser 同尺）。
@@ -43,6 +50,7 @@ import type { ConventionCheckContext, ConventionIssue } from '@kojo/plugin-api';
 import { erbCodeBodyOf, formatEngineErrorText } from '@kojo/plugin-api';
 import { ERB_ENGINE_PROFILES } from '../../../plugin-api/src/erb-engine-profiles';
 import { ERB_ENGINE_NAMES } from '../../../plugin-api/src/erb';
+import { RAND_DIALECT_NOTE, snakeRandMethodClampMessage, snakeRandTokenClampMessage } from './rng-facts';
 import { visibleLines } from './variable-bounds-impl';
 
 export const ENGINE_LINE_CHECKS_RULE_ID = 'erb.engine-line-checks';
@@ -97,7 +105,7 @@ export async function checkEngineLineChecks(ctx: ConventionCheckContext): Promis
     line: number,
     message: string,
     tag: string,
-    severity: 'info' | 'error' = 'error',
+    severity: 'info' | 'warning' | 'error' = 'error',
   ) => {
     issues.push({
       ruleId: ENGINE_LINE_CHECKS_RULE_ID,
@@ -209,6 +217,73 @@ export async function checkEngineLineChecks(ctx: ConventionCheckContext): Promis
             formatEngineErrorText('ZeroDVarHasArg', [name]) +
               '——它是引擎标量（不带下标），写成 NAME:0 会在解析期直接拒载；直接用 NAME 即可。',
             `zerod|${name}|${idx}`,
+          );
+        }
+      }
+
+      // (g) RAND 族字面越界（warning）——snake 钳制告警 / 1.824 抛错，两代分歧注明；
+      // PRINT 系输出文本位豁免（未引号文本不求值）；CompatiRAND 开启时合法，按缺省口径判
+      const head = /^(PRINT[A-Z0-9_]*)\b/i.exec(code);
+      const isPrintText = !!head && INSTRUCTION_WORDS.has(head[1]!.toUpperCase());
+      if (!isPrintText) {
+        for (const [idx, m] of [...code.matchAll(/\bRAND\s*:\s*(-?\d+)\b/gi)].entries()) {
+          const n = Number(m[1]!);
+          if (n > 0) continue;
+          push(
+            filePath,
+            line,
+            snakeRandTokenClampMessage(n) + RAND_DIALECT_NOTE,
+            `rand|tok|${n}|${idx}`,
+            'warning',
+          );
+        }
+        for (const [idx, m] of [...code.matchAll(/\bRAND\s*\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/gi)].entries()) {
+          const a = Number(m[1]!);
+          const b = Number(m[2]!);
+          if (b > a) continue;
+          push(
+            filePath,
+            line,
+            snakeRandMethodClampMessage(b) + RAND_DIALECT_NOTE,
+            `rand|mm|${a},${b}|${idx}`,
+            'warning',
+          );
+        }
+        for (const [idx, m] of [...code.matchAll(/\bRAND\s*\(\s*(-?\d+)\s*\)/gi)].entries()) {
+          const n = Number(m[1]!);
+          if (n > 0) continue;
+          push(
+            filePath,
+            line,
+            snakeRandMethodClampMessage(n) + RAND_DIALECT_NOTE,
+            `rand|one|${n}|${idx}`,
+            'warning',
+          );
+        }
+
+        // (h) 位域字面 0..63（error）——CB-004/013 病灶形态；bit 恒为第 2 参。
+        // GETBIT 是表达式函数（必带括号）；SETBIT/CLEARBIT/BITXOR 是语句位指令（空格+逗号形，
+        // eratw `StatementExecutor.kt execBitFlat` 即语句位），两种形都判
+        for (const [idx, m] of [...code.matchAll(/\b(GETBIT|SETBIT|CLEARBIT|BITXOR)\b\s*(\(?)/gi)].entries()) {
+          const name = m[1]!.toUpperCase();
+          const openParen = m[2] === '(';
+          if (openParen && !m[0]!.endsWith('(')) continue;
+          let parts: readonly string[] | null = null;
+          if (openParen) {
+            const args = extractCallArgs(code, m.index! + m[0].length - 1);
+            if (args) parts = splitTopArgs(args);
+          } else if (!openParen && name !== 'GETBIT') {
+            parts = splitTopArgs(code.slice((m.index ?? 0) + m[0].length));
+          }
+          if (!parts || parts.length < 2) continue; // 括号不闭合/跨行/实参不足 → fail-open
+          const bit = parseLiteral(parts[1]!);
+          if (bit === null || (bit >= 0 && bit <= 63)) continue;
+          push(
+            filePath,
+            line,
+            formatEngineErrorText('ArgIsOoRBit', ['2', String(bit)]) +
+              '——位域是 0..63（CB-004/013 病灶形态：把菜单键/按钮值当 bit 传入会抛错中断）。',
+            `bit|${name}|${bit}|${idx}`,
           );
         }
       }
@@ -409,4 +484,18 @@ function judgeArg(v: VarInfo | null): ArgStatus {
 function parseArraycopyNames(args: string): readonly [string, string] | null {
   const m = /^\s*"([^"]*)"\s*,\s*"([^"]*)"\s*$/.exec(args);
   return m ? [m[1]!, m[2]!] : null;
+}
+
+/** 从 '(' 起取本行内括号平衡的实参区；本行不闭合（跨行调用）→ null（fail-open） */
+function extractCallArgs(code: string, openIdx: number): string | null {
+  let depth = 1;
+  for (let i = openIdx + 1; i < code.length; i++) {
+    const ch = code[i]!;
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return code.slice(openIdx + 1, i);
+    }
+  }
+  return null;
 }

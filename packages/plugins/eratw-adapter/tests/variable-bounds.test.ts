@@ -133,6 +133,26 @@ describe('CB-007 / CB-014：用户数组与动态下标', () => {
 });
 
 describe('可见性与成员链（不得把别的语句里的数字当下标）', () => {
+  it('负字面下标（CB-033 病灶形态 ITEM:-1）→ OoRVarArg，原话与玩家屏上文案同形', async () => {
+    const { run } = harness({
+      'CSV/VariableSize.csv': CSV('FLAG,10'),
+      'C:/game/a.erb': 'IF FLAG:-1 == 1\nPRINTL 1\nENDIF\n',
+    });
+    const issues = await run();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.severity).toBe('warning');
+    expect(issues[0]!.message).toContain('数组变量"FLAG"的第1参数(-1)超出数组范围');
+    expect(issues[0]!.message).toContain('负下标');
+  });
+
+  it('角色维负下标 fail-open（CHARANUM 建模留账）；正下标行为不变', async () => {
+    const { run } = harness({
+      'CSV/VariableSize.csv': CSV('FLAG,10', 'CFLAG,10000'),
+      'C:/game/a.erb': 'X = CFLAG:-1:5\nY = FLAG:9\n',
+    });
+    expect(await run()).toEqual([]);
+  });
+
   it('SKIPSTART 死区、整行注释、字符串均不报', async () => {
     const { run } = harness({
       'CSV/VariableSize.csv': CSV('FLAG,10'),

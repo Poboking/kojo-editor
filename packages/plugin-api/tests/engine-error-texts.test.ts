@@ -246,7 +246,7 @@ const DISPOSITIONS: readonly Disposition[] = [
   {
     kind: 'not-covered',
     where:
-      '**数组下标越界（剩余）**：字面常量形已由 `erb.variable-bounds` 接走（见 consumed 族）。' +
+      '**数组下标越界（剩余）**：字面常量形（含负下标）已由 `erb.variable-bounds` 接走（见 consumed 族）。' +
       '剩余判据是运行时的下标值（`X:ARG` 这类），静态无法定值；`OoRArrayShift/Remove/Sort` 等' +
       '是命令特有下标（需逐命令 ArgumentBuilder 语义）；角色号字面越界（`OoRCharaVarArg` 型）' +
       '需 CHARANUM 守卫建模',
@@ -259,8 +259,18 @@ const DISPOSITIONS: readonly Disposition[] = [
       'OoRPickupcharaArg',
       'OoRSavecharaArg',
       'OoRCvarsetArg',
-      'ArgIsOoRBit',
     ],
+  },
+  {
+    kind: 'consumed',
+    where:
+      '`plugins/eratw-adapter/src/engine-line-checks-impl.ts`（P3-10 CB 规则库，(h)，诊断码 `erb.engine-line-checks`）：' +
+      '`ArgIsOoRBit` = GETBIT（表达式函数，括号形）/ SETBIT/CLEARBIT/BITXOR（语句位指令，空格逗号形）' +
+      '第 2 参字面 ∉ 0..63 报引擎原话（1.824 `FunctionMethodCreator.cs:4783-4786` / snake ' +
+      '`Creator.Method.cs:5238-5247`，eratw `StatementExecutor.kt execBitFlat` 同形；' +
+      'CB-004/013 病灶形态——把菜单键/按钮值当 bit 传）；动态位 fail-open；PRINT 输出文本位豁免。' +
+      'eraTW 语料 4,371 文件字面越界命中 0（两处 64/78 全是注释行/SKIP 死代码，可见行尺天然豁免）',
+    ids: ['ArgIsOoRBit'],
   },
   {
     kind: 'not-covered',
