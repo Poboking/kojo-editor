@@ -611,6 +611,7 @@ export function createEratwConventions(getProtocol?: () => EratwCallProtocol | u
     messageCheckStructureRule,
     createCallSlotCoverageRule(getProtocol),
     eraTwAuditFindingRule,
+    variableBoundsRule,
   ];
 }
 
@@ -761,3 +762,28 @@ export function createEratwAuditFindingRule(
 }
 
 export const eraTwAuditFindingRule = createEratwAuditFindingRule();
+
+/* --------------------- 规则 7：变量字面下标越界（尺寸按游戏 CSV 覆盖） --------------------- */
+
+/** 约定面板 / 诊断码表共用的规则 id（生产方单一字面量） */
+export const VARIABLE_BOUNDS_RULE_ID = 'erb.variable-bounds';
+
+/**
+ * eraTW 变量下标越界规则（`scope: 'project'`）。
+ *
+ * 实现与 119 条引擎尺寸表经**动态 import** 装载（不进 PS-10 开机图），与审计规则同模式。
+ * 领域知识全在 eraTW 侧：出厂尺寸取 eratw `specs/variables.yaml`（逐条 C# 行锚），
+ * 实读尺寸先被游戏的 `CSV/VariableSize.csv` 覆盖——CB-002 实证照出厂判会造出
+ * 12,825 条 `CFLAG:*:1000` 假缺陷。动态下标（SPLIT/TEMP_ID 一类）一律 fail-open。
+ */
+export const variableBoundsRule: ConventionRule = {
+  id: VARIABLE_BOUNDS_RULE_ID,
+  description: '变量字面下标越界（引擎尺寸先按游戏 CSV/VariableSize.csv 覆盖；动态下标不判）',
+  severity: 'warning',
+  source: 'eratw specs/variables.yaml（VariableData.cs / ConstantData.cs 锚）；CB-002/007/014',
+  scope: 'project',
+  async check(ctx: ConventionCheckContext): Promise<ConventionIssue[]> {
+    const { checkVariableBounds } = await import('./variable-bounds-impl');
+    return checkVariableBounds(ctx);
+  },
+};

@@ -230,9 +230,11 @@ function conventionRuleFamily(): DerivedFamily {
   const lintBlock = /export const SUGAR_LINT_DIAGNOSTIC_CODES = \[([\s\S]*?)\] as const/.exec(source);
   if (lintBlock === null) throw new Error('sugar-conventions.ts：找不到 SUGAR_LINT_DIAGNOSTIC_CODES 清单');
   const codes = new Set<string>(literalsOf(lintBlock[1]!).map((code) => `${prefix}${code}`));
-  // 同包的字面量规则 id（不经前缀函数的那两类：结构函数重名 / 静态约定汇总）
+  // 字面量规则 id（不经前缀函数的那些：结构函数重名 / 静态约定汇总 / 适配器里的游戏知识规则）。
+  // 扫描根是**全部插件**而不只 convention-linter：`adapter.conventions` 也是约定面的一等生产方
+  // （eraTW 的变量下标越界按游戏 CSV 判，规则归适配器；见 eratw-adapter/conventions.ts）。
   for (const file of sources()) {
-    if (!file.path.startsWith('packages/plugins/convention-linter/src/')) continue;
+    if (!file.path.startsWith('packages/plugins/')) continue;
     for (const hit of file.text.matchAll(/export const [A-Z][A-Z0-9_]*_RULE_ID = '([^']+)';/g)) codes.add(hit[1]!);
   }
   return { name: `${prefix}${'<码>'}（约定面板规则 id）`, codes: [...codes] };
