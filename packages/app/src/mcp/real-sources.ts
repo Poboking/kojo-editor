@@ -1277,13 +1277,25 @@ export function bindEventRing(kernel: McpKernelLike | null): void {
 /**
  * MCP-RELOAD-HOOK：生产通道的可选 reload 钩子 + 观察器（幂等绑定，同内核不重复订阅）。
  *
- * 钩子只读 S1 索引快照（`kojo2ProjectIndex.snapshot()`），不重扫源码；观察器把
- * `project.evicted` / `project.reload` 与同源回执记进**独立**的生产通道账，
- * 既不写盘也不改能力面（tools / resources 计数零变化）。两处真源都走动态 import，
+ * WP-3a（2026-11-28）起钩子是**真的增量重建**，不再只盖同源的章：
+ *  - `trigger:'returned'`（快切回旧档 ⇒ 该目录正成为当前项目）＝按新根重建：列该根的文件、
+ *    **只喂变过的**（未变的一次都不调 `updateFile`）、把不属于该根的残留移掉；
+ *  - `trigger:'evicted'`（驻留上限逐出档案 ⇒ 已不在驻留集）＝**只清残留**，一次盘读都不做
+ *    （给离开的项目重建等于把它灌回索引，比不做更坏）；
+ *  - 回执带 `rebuilt` 三计数 + `generationBefore`，由 `verifyReloadReceipt` 用
+ *    「generation 增量 === added+updated+removed」当场自证；并发改动会让它对不上 ⇒ `unverified`。
+ * 内核没给批量读原语（`io.readTexts` 缺席）时退回 WP-3b 那枚**只盖章**的钩子，
+ * 账上如实记 `rebuild:'not-attempted'`——不拿「盖了章」冒充「重建了」。
+ *
+ * 观察器把 `project.evicted` / `project.reload` 与同源回执记进**独立**的生产通道账，
+ * 既不写盘也不改能力面（tools / resources 计数零变化）。真源都走动态 import，
  * 不给 bootstrap 开机静态图加边。
  */
 let reloadObserverBoundTo: McpKernelLike | null | undefined;
 let reloadObserverOff: (() => void) | null = null;
+
+/** 索引只吃 2.0 方言（与项目扫描喂入面同一口径）。 */
+const INDEXABLE_SOURCE_RE = /\.kojo2?$/i;
 
 async function bindProjectReload(kernel: McpKernelLike | null): Promise<void> {
   if (reloadObserverBoundTo === kernel) return;
@@ -1293,11 +1305,64 @@ async function bindProjectReload(kernel: McpKernelLike | null): Promise<void> {
   // S1 索引实例活在 WebView 侧（editor-global-providers 静态拖 Monaco）；Node 测试装配
   // 真源时没有 window，根本不该装这条钩子——这是浏览器专属观察件，不是能力面缺口。
   if (!kernel || typeof window === 'undefined') return;
-  const [{ installProjectReloadObserver, registerProjectReloadHook, createS1SnapshotReloadHook }, providers] =
-    await Promise.all([import('./project-reload'), import('../ui/editor-global-providers')]);
+  const [
+    { installProjectReloadObserver, registerProjectReloadHook, createS1SnapshotReloadHook },
+    { createS1IncrementalReloadHook },
+    providers,
+  ] = await Promise.all([
+    import('./project-reload'),
+    import('./project-reload-rebuild'),
+    import('../ui/editor-global-providers'),
+  ]);
   const channel = 'production';
-  const snapshot = () => providers.kojo2ProjectIndex.snapshot();
-  registerProjectReloadHook(createS1SnapshotReloadHook(snapshot), channel);
+  const index = providers.kojo2ProjectIndex;
+  const snapshot = () => index.snapshot();
+  const readTexts = kernel.io.readTexts;
+
+  const hook = readTexts
+    ? createS1IncrementalReloadHook({
+        snapshot,
+        files: () => index.files(),
+        getFile: (path) => index.getFile(path),
+        // 新根的文件清单：内核列目录（与 `fileTree` 同一原语），只要 2.0 方言。
+        listTargets: async (request) => {
+          const raw = (await kernel.io.walkDir(request.rootDir, {
+            maxDepth: 32,
+            includeFiles: true,
+            includeDirs: false,
+          })) as unknown[];
+          const out: string[] = [];
+          for (const item of raw) {
+            if (!item || typeof item !== 'object') continue;
+            const entry = item as Record<string, unknown>;
+            if (entry['isDirectory'] === true) continue;
+            const path = typeof entry['path'] === 'string' ? entry['path'] : '';
+            if (path !== '' && INDEXABLE_SOURCE_RE.test(path)) out.push(path);
+          }
+          return out;
+        },
+        // 批量读一趟取齐（与 `fs.readMany` 同一原语）；读不到的位如实 null ⇒ 计 failed。
+        readMany: async (paths) => {
+          const files = (await readTexts(paths)) as readonly unknown[];
+          return paths.map((_, i) => {
+            const slot = files[i];
+            return slot && typeof slot === 'object' && typeof (slot as { text?: unknown }).text === 'string'
+              ? (slot as { text: string }).text
+              : null;
+          });
+        },
+        readText: async (path) => {
+          const [slot] = (await readTexts([path])) as readonly unknown[];
+          return slot && typeof slot === 'object' && typeof (slot as { text?: unknown }).text === 'string'
+            ? (slot as { text: string }).text
+            : null;
+        },
+        updateFile: (input) => index.updateFile(input),
+        removeFile: (path) => index.removeFile(path),
+      })
+    : createS1SnapshotReloadHook(snapshot);
+
+  registerProjectReloadHook(hook, channel);
   reloadObserverOff = installProjectReloadObserver(kernel.bus as unknown as EventBus, {
     snapshot,
     ledger: channel,

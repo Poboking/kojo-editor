@@ -42,6 +42,37 @@ export interface ProjectReloadResult {
   readonly sourceStamp: string;
   readonly generation: number;
   readonly reusedSnapshot: boolean;
+  /**
+   * 重建前的索引 generation（WP-3a）。带 `rebuilt` 时必填——没有它就自证不了
+   * 「generation 增量 === 自报改动数」。
+   */
+  readonly generationBefore?: number;
+  /** 这一趟到底动了索引的哪几格（WP-3a）。缺席＝只盖了同源的章、没重建（诚实标注 `not-attempted`）。 */
+  readonly rebuilt?: ReloadRebuildSummary;
+  /** 钩子自身的墙钟耗时（毫秒）；账本另有观察器侧的同名字段。 */
+  readonly elapsedMs?: number;
+  /** 重建失败的原因（列目录 / 读盘 / 中断）；带它一律 `unverified`。 */
+  readonly failure?: string;
+}
+
+/**
+ * 增量重建的逐类计数（WP-3a）。
+ *
+ * **自证等式**：`generation - generationBefore === added + updated + removed`。
+ * 并发改动会让它对不上，于是回执被判 `unverified`——不乐观报「已重载」。
+ * `failed` 必须为 0 才算重建完成（读不到 / 解析失败的份数，不静默吞）。
+ */
+export interface ReloadRebuildSummary {
+  /**
+   * `rebuild`＝按新根做增量重建；`prune`＝只清该根的残留（`trigger:'evicted'` 走这条）。
+   * 两者都会让 generation 前进，自证等式一样适用。
+   */
+  readonly mode: 'rebuild' | 'prune';
+  readonly added: number;
+  readonly updated: number;
+  readonly removed: number;
+  readonly unchanged: number;
+  readonly failed: number;
 }
 
 /** 账本中一行；`event` 区分原始事件与回执，两种都记在同一条有界账里。 */
@@ -50,6 +81,16 @@ export interface ReloadLedgerEntry {
   readonly rootId: string | null;
   /** `reloaded` 只在同源证明齐全时出现；原始事件恒为 `unverified`。 */
   readonly claim: 'reloaded' | 'unverified';
+  /**
+   * 重建结论（WP-3a）：
+   *  - `rebuilt`＝增量重建完成且自证等式成立；
+   *  - `not-attempted`＝只证明了同源，**没重建**（WP-3b 那枚钩子即此）；
+   *  - `failed`＝重建动手了但没完成（理由在 `reason`）。
+   * 三种都写在账上，读的人不必猜「reloaded 到底包不包含重建」。
+   */
+  readonly rebuild?: 'rebuilt' | 'not-attempted' | 'failed';
+  /** 逐类计数（`rebuild==='rebuilt'` 时才有）。 */
+  readonly rebuiltCounts?: ReloadRebuildSummary;
   readonly sourceStamp: string | null;
   readonly generation: number | null;
   readonly reason?: string;
@@ -153,25 +194,40 @@ export function createS1SnapshotReloadHook(
   };
 }
 
-interface VerifyResult {
+export interface VerifyResult {
   readonly claim: 'reloaded' | 'unverified';
+  readonly rebuild: 'rebuilt' | 'not-attempted' | 'failed';
+  readonly rebuiltCounts?: ReloadRebuildSummary;
   readonly sourceStamp: string | null;
   readonly generation: number | null;
   readonly reason?: string;
 }
 
-/** 同源证明：三环全齐才准报 reloaded；任一环缺/错都出声。 */
-function verify(
+/**
+ * 同源证明 + **重建自证**（WP-3a）：三环全齐才准报 `reloaded`；任一环缺/错都出声。
+ *
+ * 重建那一半（回执带 `rebuilt` 时）另有两条硬判据：
+ *  ① `failed === 0`——有份数没落地就不叫「重建完成」；
+ *  ② `generation - generationBefore === added + updated + removed`——这是「只做了它宣称的
+ *     那些事」的机械证据；并发改动会让它不成立，此时判 `unverified`，绝不乐观报完成。
+ * 回执不带 `rebuilt`（WP-3b 那枚只盖章的钩子）⇒ `rebuild:'not-attempted'`，
+ * `claim` 仍可为 `reloaded`（同源成立）——两种结论分开记，不混成一个布尔。
+ */
+export function verifyReloadReceipt(
   request: ProjectReloadRequest,
   result: ProjectReloadResult,
   fallbackSnapshot?: () => S1SnapshotLike,
 ): VerifyResult {
-  const reject = (reason: string): VerifyResult => ({
+  const reject = (reason: string, rebuild: VerifyResult['rebuild'] = 'failed'): VerifyResult => ({
     claim: 'unverified',
+    rebuild,
     sourceStamp: null,
     generation: null,
     reason,
   });
+  if (typeof result.failure === 'string' && result.failure.length > 0) {
+    return reject(`重建失败：${result.failure}`);
+  }
   if (!isRootIdShape(result.rootId) || result.rootId !== request.rootId) {
     return reject('回执 rootId 与请求 rootId 不一致（不是同一根）');
   }
@@ -199,8 +255,32 @@ function verify(
   if (stamp !== sourceStampOf(request.rootId, result.generation)) {
     return reject('S1 快照 stamp 与 generation 对不上（未证明同源）');
   }
-  return { claim: 'reloaded', sourceStamp: stamp, generation: result.generation };
+
+  const rebuilt = result.rebuilt;
+  if (!rebuilt) {
+    // 只盖章不重建：同源成立，但账上必须写明「没重建」。
+    return { claim: 'reloaded', rebuild: 'not-attempted', sourceStamp: stamp, generation: result.generation };
+  }
+  if (rebuilt.failed > 0) {
+    return reject(`重建有 ${rebuilt.failed} 份没落地（读不到 / 解析失败，不算完成）`);
+  }
+  if (typeof result.generationBefore !== 'number' || !Number.isInteger(result.generationBefore)) {
+    return reject('回执带 rebuilt 却没有 generationBefore（自证不了增量）');
+  }
+  const claimed = rebuilt.added + rebuilt.updated + rebuilt.removed;
+  const actual = result.generation - result.generationBefore;
+  if (actual !== claimed) {
+    return reject(`重建期间索引被并发改动：自报 ${claimed} 处，generation 增量 ${actual}（对不上）`);
+  }
+  return {
+    claim: 'reloaded',
+    rebuild: 'rebuilt',
+    rebuiltCounts: rebuilt,
+    sourceStamp: stamp,
+    generation: result.generation,
+  };
 }
+
 
 export interface InstallObserverOptions {
   /** 本通道缺失 stamp 时的一次兜底快照读；不传就一律 unverified。 */
@@ -249,6 +329,7 @@ export function installProjectReloadObserver(
         event: 'reload.result',
         rootId: payload.rootId,
         claim: 'unverified',
+        rebuild: 'not-attempted',
         sourceStamp: null,
         generation: null,
         reason: `通道 ${channel} 没有登记 reload 钩子（不借其它通道的数）`,
@@ -261,7 +342,7 @@ export function installProjectReloadObserver(
     void Promise.resolve()
       .then(() => hook(payload))
       .then((result) => {
-        const verdict = verify(payload, result, options.snapshot);
+        const verdict = verifyReloadReceipt(payload, result, options.snapshot);
         append(state, {
           event: 'reload.result',
           rootId: payload.rootId,
@@ -276,6 +357,7 @@ export function installProjectReloadObserver(
           event: 'reload.result',
           rootId: payload.rootId,
           claim: 'unverified',
+          rebuild: 'failed',
           sourceStamp: null,
           generation: null,
           reason: `reload 钩子抛错：${String(err)}`,

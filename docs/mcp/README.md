@@ -645,8 +645,9 @@ schema ↔ 腿**双向**、B11 手抄 `CONSUMED` ↔ 扫描逐面相等（表旧
 两者都是 KERNEL_ONLY 事实事件；宿主侧单独订阅让 `kojo://project/events` 看得见，
 **不放宽插件 emit 白名单**。
 
-消费方可以**可选**登记 `reload` 钩子（`app/src/mcp/project-reload.ts`）：钩子只读 S1 索引
-快照 `kojo2ProjectIndex.snapshot()`，不重扫源码；回执只有在 `rootId`、根路径反查、
+消费方可以**可选**登记 `reload` 钩子（`app/src/mcp/project-reload.ts`）。钩子有两种形态：
+**只盖章**（`createS1SnapshotReloadHook`，只读快照算同源 stamp）与**增量重建**
+（`createS1IncrementalReloadHook`，见本节末）；回执只有在 `rootId`、根路径反查、
 快照 `sourceStamp = rootId:generation` 三者同源时才记 `reloaded`，否则记 `unverified` +
 理由，**绝不报「已重载」**。不登记钩子时旧行为逐字不变；账本按通道分开（调试宿 /
 真壳 / 生产各记各的），不互借 stamp。400 文件重载实测零重解析、p95 30.3 ms（测试护栏 50 ms）。
@@ -657,6 +658,27 @@ schema ↔ 腿**双向**、B11 手抄 `CONSUMED` ↔ 扫描逐面相等（表旧
 `claim=reloaded` 只在三环同源时出现；未注入读函数时显式 `RESOURCE_UNAVAILABLE`，绝不空表冒充
 「从未重载」。取证通道（`debug-host` / `real-shell`）不进生产 resource，读数不互借。
 选 resource 而非新工具：tools/list 的 desc 余量只剩 307 B，按「增面前先瘦」纪律不硬塞新面。
+
+**增量重建（WP-3a，2026-11-28）**：上面那枚钩子**只盖章不干活**——它证明「看的是同一份快照」，
+证明不了「消费方跟上了」。`app/src/mcp/project-reload-rebuild.ts` 补后半句，且**按 trigger 分两种动作**：
+
+| trigger | 场景 | 动作 | 为什么不能省 |
+| --- | --- | --- | --- |
+| `returned` | 快切回旧档 ⇒ 该目录**正在成为当前项目** | 增量重建：列该根文件、只喂变过的、移掉不属于该根的残留 | 上一个项目留在索引里的路径没人清，`refsOf` 会跨项目出结果 |
+| `evicted` | 驻留上限逐出档案 ⇒ 该目录**已不在驻留集** | **只清残留**，一次盘读都不做 | 给它重建等于把已离开的项目灌回索引，比不做更坏 |
+
+回执带 `rebuilt{ mode, added, updated, removed, unchanged, failed }` 与 `generationBefore`，
+判定用**自证等式**：`generation − generationBefore === added + updated + removed`——
+并发改动会让它对不上 ⇒ `unverified` + 理由，绝不乐观报完成；`failed > 0` 同样不算完成。
+账本每行多一格 `rebuild: 'rebuilt' | 'not-attempted' | 'failed'`，读的人不必猜
+「`reloaded` 到底包不包含重建」。内核没给批量读原语（`io.readTexts` 缺席）时退回只盖章的钩子，
+账上如实记 `not-attempted`。
+
+**读数性质要说清**：增量省下的是**解析**，不是 IO——S1 索引只存正文、没有 mtime 指纹，
+所以仍要把该根的文件读齐再逐份比对；`kojo2DocumentOf` 还有全局解析缓存，全量重建多数命中。
+故判据只钉确定性的那一格（喂索引份数 10 vs 200）与一条弱下界（不比重建慢），
+**不编一个好看的倍数**；本批读数是纯内存接缝读数，与真壳读数不互借（PITFALLS 236），
+生产接线（`walkDir` + `readTexts` + 索引三原语）的真壳取证仍待做。
 
 ## 6. tier 与授权模型
 
