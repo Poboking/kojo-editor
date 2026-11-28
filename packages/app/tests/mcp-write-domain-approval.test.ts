@@ -446,37 +446,39 @@ describe('⑩ AuditPanel：kit 过滤框 / 结构化行 / 空态分场景', () =
     expect(input!.closest('.kit-search-field')).not.toBeNull();
   });
 
-  it('行结构化：五列 span + data-outcome 锚不动；note/argsDigest/clientId/sessionId/完整 ISO 收进 title，note 不再上屏', async () => {
+  it('行结构化：五列 span + data-outcome 锚不动；原因上屏，耗时/argsDigest/clientId/sessionId/完整 ISO 收进 title', async () => {
     const hz = await mount(h(AuditPanel, { entries: [row] }));
     const li = hz.find('[data-testid="mcp-audit-rows"] li')!;
     expect(li.getAttribute('data-outcome')).toBe('denied');
     expect(li.classList.contains('mcp-audit-row')).toBe(true);
-    for (const part of ['time', 'tool', 'outcome', 'elapsed', 'path']) {
+    // T3：耗时让位给原因列（列数仍为五），耗时本身进 title 不丢。
+    for (const part of ['time', 'tool', 'outcome', 'reason', 'path']) {
       expect(li.querySelector(`.mcp-audit-row-${part}`), `缺 mcp-audit-row-${part}`).not.toBeNull();
     }
     expect(li.querySelector('.mcp-audit-row-time')!.textContent).toBe('11-06 10:00:00');
     expect(li.querySelector('.mcp-audit-row-outcome')!.textContent).toBe('[denied]');
-    expect(li.querySelector('.mcp-audit-row-elapsed')!.textContent).toBe('12ms');
+    expect(li.querySelector('.mcp-audit-row-reason')!.textContent).toBe('特权工具未批准');
     expect(li.querySelector('.mcp-audit-row-path')!.textContent).toContain('docs/a.txt');
-    // note 不再占列宽（实拍红点：折行挤压第五列），全文进 title——不静默：悬浮可达
-    expect(li.textContent).not.toContain('特权工具未批准');
+    // T3：note 上屏（原因列）+ 全文仍在 title（不静默：悬浮也能读全文）
+    expect(li.textContent).toContain('特权工具未批准');
     expect(li.getAttribute('title')).toContain('特权工具未批准');
-    // 悬浮承载完整 ISO 时间 + 参数摘要 + 客户端 + 会话
+    // 悬浮承载完整 ISO 时间 + 参数摘要 + 客户端 + 会话 + 实测耗时
     expect(li.getAttribute('title')).toContain('2026-11-06T10:00:00.000Z');
     expect(li.getAttribute('title')).toContain('relPath:str(9)');
     expect(li.getAttribute('title')).toContain('c1');
     expect(li.getAttribute('title')).toContain('sess-7');
+    expect(li.getAttribute('title')).toContain('12ms');
   });
 
-  it('缺项行不塌列：无 elapsed / 无落点 ⇒ 对应格显 —，五列照常落位', async () => {
+  it('缺项行不塌列：无 note / 无落点 ⇒ 对应格显 —，五列照常落位', async () => {
     const bare: AuditEntryView = {
       ts: 't1', clientId: 'c1', tool: 'read_file', argsDigest: '{}', outcome: 'ok',
     };
     const hz = await mount(h(AuditPanel, { entries: [bare] }));
     const li = hz.find('[data-testid="mcp-audit-rows"] li')!;
-    expect(li.querySelector('.mcp-audit-row-elapsed')!.textContent).toBe('—');
+    expect(li.querySelector('.mcp-audit-row-reason')!.textContent).toBe('—');
     expect(li.querySelector('.mcp-audit-row-path')!.textContent).toBe('—');
-    // 五列 span 齐备（grid 按子元素序落列，条件渲染会把落点挤进耗时列）
+    // 五列 span 齐备（grid 按子元素序落列，条件渲染会把落点挤进原因列）
     expect(li.querySelectorAll('span')).toHaveLength(5);
   });
 

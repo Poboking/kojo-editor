@@ -4,13 +4,15 @@
  * 审计记录由 Rust 宿主独占追加，MCP 客户端没有写入口（面板只经 `mcp_audit_query`
  * 读，不改不删）；`argsDigest` 只含键名/类型/长度，工具描述与文件内容不落全文。
  *
- * 列式行与空态分场景（additive，2026-11-06 UI-04/18/29）：
- *   · 每行改结构化 span（时间 / 工具 / 结果 / 耗时 / 落点），样式走 settings-ai.css 的
- *     `.mcp-audit-row*`；`argsDigest` / `sessionId` / `clientId` / `note` / 完整 ISO 时间
- *     收进 `title` 悬浮——88px 时间列放短格式（UI 实拍：完整 ISO 必折行）、第五列只放
- *     `landedPath`（无落点显 `—`），note 不再占列宽折行；
+ * 列式行与空态分场景（additive，2026-11-06 UI-04/18/29；T3 会话分组 + 原因列）：
+ *   · 按 `sessionId` 分组（无 sessionId 的旧条目落「未标注会话」，**绝不静默丢弃**），
+ *     组内按 `ts` 升序＝时间线；组头给 sessionId / clientId / 条目数 / 时间范围；
+ *   · 行内五列：时间 / 工具 / 结果 / 原因 / 落点。原因列渲染 `MCP_REASON_COPY` 的
+ *     human（未知原因码原样显示原文，新码上线不会变空白），hint 与完整 ISO 时间、
+ *     `argsDigest`、`clientId`、`sessionId`、`elapsedMs` 一起收进 `title`；
  *   · 结果列保留 `[denied]` 方括号字面量——mcp-approval-ui 回归钉住行文本，色彩
  *     chip 化由 `data-outcome` + CSS 完成，字面不动；
+ *   · `formatAuditEntry` 是**文本导出面**，输出逐字不变（文案表只作用于视觉行）；
  *   · 空态分两种：一条都没有（还没接入）vs 有条目但筛空了（给「清空筛选」退路）；
  *   · 客户端过滤框换 `KitSearchField`（UI-04：暗色下不再出现裸白 input）。
  */
@@ -19,6 +21,7 @@ import { useMemo, useState } from 'react';
 import { KitEmpty } from '../ui-kit';
 import { KitSearchField } from '../ui-kit/kit-search-field';
 import { KitSelect, type KitSelectOption } from '../ui-kit/kit-select';
+import { copyForReason } from './mcp-error-copy';
 
 export type AuditOutcome = 'ok' | 'error' | 'filtered' | 'denied' | 'timeout' | 'cancelled';
 
@@ -56,6 +59,84 @@ export function formatAuditTime(ts: string): string {
   return `${match[2]} ${match[3]}`;
 }
 
+/* ------------------------------ 会话分组 ------------------------------ */
+
+/** 无 `sessionId` 的旧条目落这个具名分组——名字写死一处，屏上与判据同源。 */
+export const UNLABELED_SESSION_LABEL = '未标注会话';
+const UNLABELED_SESSION_KEY = '\u0000unlabeled';
+
+export interface AuditGroup {
+  /** 分组键：`sessionId` 原值，或内部哨兵（不会与真实 sessionId 撞）。 */
+  key: string;
+  /** 无 sessionId 的组没有该字段。 */
+  sessionId?: string;
+  /** 组头主标签：sessionId，或「未标注会话」。 */
+  label: string;
+  /** 组内出现过的 clientId（去重，按首次出现序）。 */
+  clientIds: string[];
+  /** 组内条目，按 `ts` 升序。 */
+  rows: AuditEntryView[];
+  firstTs: string;
+  lastTs: string;
+}
+
+function compareTs(a: string, b: string): number {
+  if (a === b) return 0;
+  return a < b ? -1 : 1;
+}
+
+/**
+ * 按 `sessionId` 分组：组内 `ts` 升序，组间按各自最早 `ts` 升序。
+ * 纯函数——渲染与判据同源；**输入每一条都进某个组**（无 sessionId 落具名组）。
+ */
+export function groupAuditEntries(entries: readonly AuditEntryView[]): AuditGroup[] {
+  const buckets = new Map<string, AuditEntryView[]>();
+  for (const entry of entries) {
+    const key = entry.sessionId ? entry.sessionId : UNLABELED_SESSION_KEY;
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(entry);
+    else buckets.set(key, [entry]);
+  }
+  const groups: AuditGroup[] = [];
+  for (const [key, bucket] of buckets) {
+    const rows = [...bucket].sort((a, b) => compareTs(a.ts, b.ts));
+    const sessionId = key === UNLABELED_SESSION_KEY ? undefined : key;
+    groups.push({
+      key,
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      label: sessionId ?? UNLABELED_SESSION_LABEL,
+      clientIds: [...new Set(rows.map((row) => row.clientId))],
+      rows,
+      firstTs: rows[0]!.ts,
+      lastTs: rows[rows.length - 1]!.ts,
+    });
+  }
+  groups.sort(
+    (a, b) =>
+      compareTs(a.firstTs, b.firstTs) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0),
+  );
+  return groups;
+}
+
+/** 组头时间范围：单条只写一个时刻，多条写 `起 – 止`。 */
+export function formatAuditGroupRange(group: AuditGroup): string {
+  return group.firstTs === group.lastTs
+    ? formatAuditTime(group.firstTs)
+    : `${formatAuditTime(group.firstTs)} – ${formatAuditTime(group.lastTs)}`;
+}
+
+/** 组头一句话：`会话 · clientId · N 条 · 起–止`。 */
+export function formatAuditGroupHead(group: AuditGroup): string {
+  return [
+    group.label,
+    group.clientIds.join('、'),
+    `${group.rows.length} 条`,
+    formatAuditGroupRange(group),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 export function filterAuditEntries(
   entries: readonly AuditEntryView[],
   outcome: AuditOutcome | 'all',
@@ -82,6 +163,34 @@ const OUTCOME_OPTIONS: readonly KitSelectOption[] = [
   { value: 'cancelled', label: 'cancelled' },
 ];
 
+/** 行悬浮文本：完整 ISO 时间 / 参数摘要 / 客户端 / 会话 / 耗时 / 原始 note 全在这里。 */
+function rowTitle(row: AuditEntryView): string {
+  return [
+    row.ts,
+    row.clientId,
+    row.argsDigest,
+    row.sessionId,
+    row.elapsedMs !== undefined ? `${row.elapsedMs}ms` : undefined,
+    row.note,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/**
+ * 原因格：已知原因码走文案表 human；未知码**原样显示**（新原因码上线时不能变空白）。
+ * 无 note 显 `—`（与落点/耗时的缺项口径一致）。
+ */
+function reasonCell(row: AuditEntryView): { text: string; title?: string } {
+  if (!row.note) return { text: '—' };
+  const copy = copyForReason(row.note);
+  if (!copy) return { text: row.note, title: row.note };
+  return {
+    text: copy.human,
+    title: copy.hint !== undefined ? `${row.note} · ${copy.hint}` : row.note,
+  };
+}
+
 export interface AuditPanelProps {
   entries: readonly AuditEntryView[];
 }
@@ -93,6 +202,7 @@ export function AuditPanel({ entries }: AuditPanelProps) {
     () => filterAuditEntries(entries, outcome, clientId, 200),
     [entries, outcome, clientId],
   );
+  const groups = useMemo(() => groupAuditEntries(rows), [rows]);
   const filtered = rows.length === 0 && entries.length > 0;
   const resetFilters = () => {
     setOutcome('all');
@@ -140,30 +250,59 @@ export function AuditPanel({ entries }: AuditPanelProps) {
           />
         )
       ) : (
-        <ul className="settings-mcp-audit-rows" data-testid="mcp-audit-rows">
-          {rows.map((row, i) => (
-            <li
-              key={`${row.ts}-${row.tool}-${i}`}
-              data-outcome={row.outcome}
-              className="mcp-audit-row"
-              title={[row.ts, row.clientId, row.argsDigest, row.sessionId, row.note]
-                .filter(Boolean)
-                .join(' · ')}
-            >
-              {/* 五列 span 全量渲染（缺项显 —）：grid 按子元素序落列，条件渲染会把
-                  后面的列挤进前面的列宽（elapsed 缺席时落点会掉进 56px 耗时列）。 */}
-              <span className="mcp-audit-row-time" title={row.ts}>{formatAuditTime(row.ts)}</span>
-              <span className="mcp-audit-row-tool">{row.tool}</span>
-              <span className="mcp-audit-row-outcome">[{row.outcome}]</span>
-              <span className="mcp-audit-row-elapsed">
-                {row.elapsedMs !== undefined ? `${row.elapsedMs}ms` : '—'}
-              </span>
-              <span className="mcp-audit-row-path">
-                {row.landedPath !== undefined ? `→ ${row.landedPath}` : '—'}
-              </span>
-            </li>
-          ))}
-        </ul>
+        <div className="settings-mcp-audit-rows" data-testid="mcp-audit-rows">
+          {groups.map((group) => {
+            const head = formatAuditGroupHead(group);
+            return (
+              // 组头**不是 li**：既有回归用 `[data-testid="mcp-audit-rows"] li` 数行，
+              // 分组标题做成 li 会让行数断言整体偏移。
+              <section
+                key={group.key}
+                className="mcp-audit-group"
+                role="group"
+                aria-label={head}
+                data-testid="mcp-audit-group"
+                data-session={group.sessionId ?? ''}
+              >
+                <div className="mcp-audit-group-head" title={head}>
+                  <span className="mcp-audit-group-session">{group.label}</span>
+                  <span className="mcp-audit-group-meta">
+                    {[group.clientIds.join('、'), `${group.rows.length} 条`, formatAuditGroupRange(group)]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  </span>
+                </div>
+                <ul className="mcp-audit-group-rows">
+                  {group.rows.map((row, i) => {
+                    const reason = reasonCell(row);
+                    return (
+                      <li
+                        key={`${row.ts}-${row.tool}-${i}`}
+                        data-outcome={row.outcome}
+                        className="mcp-audit-row"
+                        title={rowTitle(row)}
+                      >
+                        {/* 五列 span 全量渲染（缺项显 —）：grid 按子元素序落列，条件渲染会把
+                            后面的列挤进前面的列宽。 */}
+                        <span className="mcp-audit-row-time" title={row.ts}>
+                          {formatAuditTime(row.ts)}
+                        </span>
+                        <span className="mcp-audit-row-tool">{row.tool}</span>
+                        <span className="mcp-audit-row-outcome">[{row.outcome}]</span>
+                        <span className="mcp-audit-row-reason" title={reason.title}>
+                          {reason.text}
+                        </span>
+                        <span className="mcp-audit-row-path">
+                          {row.landedPath !== undefined ? `→ ${row.landedPath}` : '—'}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
       )}
     </section>
   );
