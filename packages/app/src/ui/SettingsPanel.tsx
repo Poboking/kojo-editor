@@ -2478,7 +2478,7 @@ function EditorDisplayRows(): ReactElement {
           onClearCustom={() => saveEditorDisplayPrefs({ fontFamily: '', codeFontPreset: 'default' })}
           canClearCustom={pref.fontFamily !== EDITOR_DISPLAY_PREF_DEFAULT.fontFamily || pref.codeFontPreset !== 'default'}
           placeholder="选「自定义」时填一个字体名（如 Consolas）"
-          note="本仓不打包字体文件：档位只是开源字体的家族名清单，本机装了就生效、没装自动落到栈后面的面（展开清单里逐档标着）；许可证是「可放心自行安装」的凭据，不是「应用内自带」。自定义文本非空时说了算（旧口径原样）。只改显示、不动文件"
+          note="默认档已内置 Nordwand Mono Air；其余档位仍是开源字体家族名清单，本机装了就生效、没装自动落到栈后面的面（展开清单里逐档标着）。自定义文本非空时说了算（旧口径原样）。只改显示、不动文件"
         />
       </div>
       {modifiedCount > 0 ? (

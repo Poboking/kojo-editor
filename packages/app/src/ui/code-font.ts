@@ -5,7 +5,7 @@ import type { EditorOptionPatch } from './editor-options';
  *
  * L20 之后这份仍是**缺省档**（`default`）的真源：可选档位表住在 `font-presets.ts`，
  * 那里每一档代码栈都必须过这里的 `isUsableCodeFontStack` 护栏；`CODE_FONT_STACK` /
- * `CODE_FONT_CSS_LINE` / `CODE_FONT_BASELINE` 三个出口一字未动（两条逐字闸继续绿）。
+ * `CODE_FONT_CSS_LINE` / `CODE_FONT_BASELINE` 三个出口继续同源（两条逐字闸继续绿）。
  *
  * 改前实况：Monaco 干脆没设 `fontFamily`（走它自己的平台默认栈）、`--font-mono` 另写一份、
  * 还有八处散装 `Consolas, 'Cascadia Mono', monospace` —— 编辑器字面 / UI 等宽面 / 流面
@@ -26,20 +26,18 @@ import type { EditorOptionPatch } from './editor-options';
 /**
  * 唯一一条栈：拉丁代码面 → 中文回退 → 泛型兜底。
  *
- * 拉丁：Cascadia Code 打头（Win11 自带、终端向 hinting、单元格 0.586em 比 Consolas 0.55em 透气；
- * 它是变量字体，靠 `fontVariations:false` 走默认实例，轴不进网格）。Cascadia Mono 兜「有系统
- * 没装 Terminal」的机器——连字整体关掉之后 Code/Mono 此刻像素等价，Code 在前只为「哪天开连字
- * 不必重排栈」。JetBrains Mono / Fira Code 是别人机器上的加分项，缺了零成本跳过。Consolas 是
- * Windows 一定有的等宽底线。
+ * 拉丁：Nordwand Mono Air 打头（OFL 1.1，四款字重/样式随应用打包）；Cascadia Code 是 Win11
+ * 自带的终端向等宽面，靠 `fontVariations:false` 走默认实例。JetBrains Mono / Fira Code 是
+ * 别人机器上的加分项，缺了零成本跳过。Consolas 是 Windows 一定有的等宽底线。
  *
- * 中文：实测 Consolas / Cascadia 三张拉丁面都不含汉字与全角标点（gid 0），必然落到这一段。
+ * 中文：上述拉丁面都不含汉字与全角标点，必然落到这一段。
  * `Era Mono SC` 打头——口上作者常自装的等宽中文代码面，全角严格 = 2 半角，整屏网格与
  * `fullwidthCharacterWidth:'twoCells'` 的口径一致；雅黑 / SimHei 是系统级兜底（实测 SimHei
  * 半角 0.5em、全角 1.0em，2:1 严格成立）。**中文字面一律排在拉丁面之后**：位置反了，拉丁字形
  * 会被中文面自带的半比例拉丁接管，整套等宽就废了。
  */
 export const CODE_FONT_STACK =
-  "'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Era Mono SC', 'Microsoft YaHei UI', 'Microsoft YaHei', SimHei, '黑体', 'Noto Sans SC', monospace";
+  "'Nordwand Mono Air', 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Era Mono SC', 'Microsoft YaHei UI', 'Microsoft YaHei', SimHei, '黑体', 'Noto Sans SC', monospace";
 
 /** CSS 侧镜像 token 名（Monaco 不读 CSS；真源在这份 TS） */
 export const CODE_FONT_CSS_TOKEN = '--font-code';

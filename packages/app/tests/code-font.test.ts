@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -42,6 +42,17 @@ describe('单一真源 · CSS 与 TS 逐字镜像', () => {
   it('--font-mono 的值不动（约 30 处既有消费方零改动，它只是"没分档年代的默认档"）', () => {
     expect(tokens()).toContain("--font-mono: Consolas, 'Cascadia Mono', 'JetBrains Mono', monospace;");
   });
+
+  it('默认字体四款样式已登记，WOFF2 与 OFL 许可证都随应用分发', () => {
+    const faces = [...tokens().matchAll(/@font-face\s*\{([^}]+)\}/g)].map((m) => m[1]!);
+    expect(faces).toHaveLength(4);
+    expect(faces.every((face) => face.includes("font-family: 'Nordwand Mono Air';"))).toBe(true);
+    for (const file of ['Regular', 'Italic', 'Bold', 'BoldItalic']) {
+      expect(faces.some((face) => face.includes(`NordwandMonoAir-${file}.woff2`))).toBe(true);
+      expect(existsSync(fileURLToPath(new URL(`../public/fonts/NordwandMonoAir-${file}.woff2`, import.meta.url)))).toBe(true);
+    }
+    expect(existsSync(fileURLToPath(new URL('../public/fonts/LICENSE-FONT.txt', import.meta.url)))).toBe(true);
+  });
 });
 
 describe('CODE_FONT_STACK 的形状（回落路径必须成立）', () => {
@@ -61,8 +72,10 @@ describe('CODE_FONT_STACK 的形状（回落路径必须成立）', () => {
     expect(() => assertCodeFontStack('')).toThrow();
   });
 
-  it('含 Windows 一定有的等宽底线，且拉丁头排在它前面', () => {
+  it('内置默认面打头，并含 Windows 一定有的等宽底线', () => {
+    expect(members[0]).toBe("'Nordwand Mono Air'");
     expect(members).toContain('Consolas');
+    expect(members.indexOf("'Nordwand Mono Air'")).toBeLessThan(members.indexOf("'Cascadia Code'"));
     expect(members.indexOf("'Cascadia Code'")).toBeLessThan(members.indexOf('Consolas'));
   });
 
@@ -70,6 +83,7 @@ describe('CODE_FONT_STACK 的形状（回落路径必须成立）', () => {
     const cjkFirst = members.findIndex((m) => m === "'Era Mono SC'" || m === "'Microsoft YaHei'");
     expect(cjkFirst).toBeGreaterThan(members.indexOf('Consolas'));
     expect(cjkFirst).toBeGreaterThan(members.indexOf("'Cascadia Code'"));
+    expect(cjkFirst).toBeGreaterThan(members.indexOf("'Nordwand Mono Air'"));
   });
 
   it('含空格 / 非 ASCII 的家族名一律带引号（CSS 语法）', () => {

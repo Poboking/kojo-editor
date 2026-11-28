@@ -10,6 +10,38 @@
    ui-kit-candidate: 全站设计 token 单源（间距/圆角/阴影/玻璃/表面/焦点/层级/字号/动效/字体族）
    ============================================================================ */
 
+@font-face {
+  font-family: 'Nordwand Mono Air';
+  src: url('/fonts/NordwandMonoAir-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Nordwand Mono Air';
+  src: url('/fonts/NordwandMonoAir-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Nordwand Mono Air';
+  src: url('/fonts/NordwandMonoAir-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Nordwand Mono Air';
+  src: url('/fonts/NordwandMonoAir-BoldItalic.woff2') format('woff2');
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
   --bg: #1e2227;
   --bg-2: #24292f;
@@ -483,7 +515,7 @@
      `--font-mono` 一份、散装 `Consolas, 'Cascadia Mono', monospace` 八份，三处口径互不相干）。
      --font-code    编辑器代码面。**真源是 TS**：`ui/code-font.ts` 的 CODE_FONT_STACK 同时喂
                     Monaco 与下面这一行（`code-font.test.ts` 逐字比对，改一处必改两处）。
-                    拉丁头是 Cascadia 系（比 Consolas 宽 ~9%）⇒ **凡按 em 标了槽位的规则都不许取它**，
+                    拉丁头是内置 Nordwand Mono Air，Cascadia 系兜系统安装面 ⇒ **凡按 em 标了槽位的规则都不许取它**，
                     那些面一律走 --font-meta。
      --font-meta    UI 里的标识与读数面（规则 ID / 路径:行 / 计数 / 诊断码 / 键位串）。拉丁头
                     与 --font-mono 逐字相同（Consolas 打头 ⇒ 3.4em / 9em 这类槽位零位移），
@@ -494,7 +526,7 @@
                     严格 = 2×ASCII，竖着才对得齐、框线不断列。
      --font-mono    没分档年代的默认档，值不动（约 30 处既有消费方零改动）；新写的规则一律按
                     角色取上面三档，任何人不许再抄 Consolas 字面量。 */
-  --font-code: 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Era Mono SC', 'Microsoft YaHei UI', 'Microsoft YaHei', SimHei, '黑体', 'Noto Sans SC', monospace;
+  --font-code: 'Nordwand Mono Air', 'Cascadia Code', 'Cascadia Mono', 'JetBrains Mono', 'Fira Code', Consolas, 'Era Mono SC', 'Microsoft YaHei UI', 'Microsoft YaHei', SimHei, '黑体', 'Noto Sans SC', monospace;
   --font-meta: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Microsoft YaHei UI', 'Noto Sans CJK SC', monospace;
   --font-console: Consolas, 'Cascadia Mono', 'JetBrains Mono', 'Noto Sans Mono CJK SC', 'MS Gothic', monospace;
   --font-mono: Consolas, 'Cascadia Mono', 'JetBrains Mono', monospace;

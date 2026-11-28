@@ -61,18 +61,17 @@ export const UI_FONT_CSS_LINE = `${UI_FONT_CSS_TOKEN}: ${UI_FONT_SYSTEM_STACK};`
  * 与既有 5 档一起构成可选面。三条硬口径一条没松：拉丁头 → CJK 尾 → 末位 `monospace`，
  * 栈尾的 Consolas / 雅黑 / SimHei 只是系统兜底，不参与"这一档是不是开源"的判断。
  *
- * 口径说明（避免误会）：本仓**不打包字体文件**，档位只是 CSS 家族名清单——装着就生效，
- * 没装自动落到栈后面那张面，设置页的可用性徽章会把这件事逐张标出来。开源许可证是给作者
- * 的"可以放心自行安装"凭据，不是"应用内自带"的承诺。
+ * 口径说明：默认档的 Nordwand Mono Air 随应用打包；其余档位仍是 CSS 家族名清单——装着就生效，
+ * 没装自动落到栈后面那张面，设置页的可用性徽章会把这件事逐张标出来。
  */
 export const CODE_FONT_PRESETS: readonly FontPreset[] = [
   {
     id: 'default',
-    label: '均衡（内置）',
+    label: 'Nordwand Mono Air（内置）',
     stack: CODE_FONT_STACK,
-    note: 'Cascadia 系打头、Era Mono SC 收尾的现缺省栈，缺哪张跳哪张',
-    family: 'Cascadia Code',
-    license: '',
+    note: '内置 Nordwand Mono Air 打头，中文与系统等宽面逐级回退',
+    family: 'Nordwand Mono Air',
+    license: 'OFL 1.1',
     tags: ['内置', '等宽', '中文'],
   },
   {

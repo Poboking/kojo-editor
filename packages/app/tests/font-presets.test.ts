@@ -147,8 +147,12 @@ describe('档位表形状（每张栈都必须自己站得住）', () => {
     }
   });
 
-  it('代码档：default 档逐字 = CODE_FONT_STACK（缺省零漂移）', () => {
-    expect(CODE_FONT_PRESETS.find((p) => p.id === 'default')?.stack).toBe(CODE_FONT_STACK);
+  it('代码档：default 档逐字 = CODE_FONT_STACK，并标明内置 Nordwand Mono Air', () => {
+    expect(CODE_FONT_PRESETS.find((p) => p.id === 'default')).toMatchObject({
+      stack: CODE_FONT_STACK,
+      family: 'Nordwand Mono Air',
+      license: 'OFL 1.1',
+    });
   });
 
   it('代码档：第一个 CJK 成员晚于全部拉丁成员（位置反了等宽就废）', () => {
