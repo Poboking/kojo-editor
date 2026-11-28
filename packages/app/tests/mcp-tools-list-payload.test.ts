@@ -144,7 +144,7 @@ const B21_FULL_FRAME_BYTES = 218_897;
  *  static 量具；判据口径 −5 B）。按现取收紧：desc 70,500 → 70,300（余量 307）、schema 112,900 →
  *  108,000（余量 974）；帧带底数只许下调 177,000 → 172,200（新带顶 189,420，机械余量 1,045 B）。
  *  BAND 0.1 与记账下界 163,000 一字不动；下一批增面前仍须先瘦再钉。 */
-const B22_FULL_FRAME_BYTES = 172_200;
+const B22_FULL_FRAME_BYTES = 168_000;
 /** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。 */
 const B22_ACCOUNTED_FLOOR = 163_000;
 const BAND = 0.1;
@@ -364,10 +364,13 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     // launcher 75,000、2048 描述闸、BAND 0.1、记账下界 163,000 一字不动；帧带底数见 ② 上方注释。
     // B27（workbuddy 2026-11-06）先瘦后钉：四族共用形状 + rootId 样板句指针化后现取实测
     // desc 69,993 / schema 107,026 / frame 188,375（static 量具；判据口径 −5 B）。
-    // 按现取收紧：desc 70,500 → 70,300、schema 112,900 → 108,000；launcher 75,000 与
-    // 2048 描述闸、BAND 0.1、记账下界 163,000 一字不动。
-    expect(descBytes).toBeLessThanOrEqual(70_300); // …B25 70,155；B27 指针化后 69,993
-    expect(schemaBytes).toBeLessThanOrEqual(108_000); // …B25 112,378；B27 指针化后 107,026（−5,352）
+    // WP-4（workbuddy 2026-11-28）先瘦后钉：三处共享文案压缩（PAGE_SIZE_ALIAS_POINTER 180→101、
+    // PAGE_ACCOUNT_NOTE 480→423、LAUNCHER_TIER_NOTE 222→190，语义 token 一个没丢）后现取实测
+    // desc 67,926 / schema 96,055 / frame 175,337（static 量具；判据口径 −5 B）。
+    // 按现取收紧：desc 70,300 → 68,800、schema 108,000 → 97,200、帧带底数 172,200 → 168,000；
+    // launcher 75,000 与 2048 描述闸、BAND 0.1、记账下界 163,000 一字不动。
+    expect(descBytes).toBeLessThanOrEqual(68_800); // …B27 69,993；WP-4 压缩后 67,926
+    expect(schemaBytes).toBeLessThanOrEqual(97_200); // …B27 107,026；WP-4 压缩后 96,055（−10,971）
     expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；S4 实拍 73,706
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });

@@ -636,9 +636,9 @@ const PAGE_CURSOR_PTR_PROPS: Record<string, unknown> = {
  * 同一帧 tools/list 内的同一条记录，跳转零次。完整性账（字段集、nextCursor、
  * changedDuringPaging）逐字仍在本句，一个字都没删。 */
 export const PAGE_ACCOUNT_NOTE =
-  'Every page carries the completeness account {total (spelled `textLength` on text surfaces), offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim. ' +
-  'changedDuringPaging:true means the snapshot changed mid-paging: that page restarts from the head and must not be spliced with earlier ones. ' +
-  "Page size (ONE knob, `limit` is the real name) and the reject-undeclared-argument-names rule are stated once in this tool's inputSchema `limit` description.";
+  'Every page carries {total (textLength on text surfaces), offset, limit, truncated, hasMore, nextCursor, fingerprint}; pass nextCursor back verbatim. ' +
+  'changedDuringPaging:true = snapshot changed mid-paging; that page restarts from the head, never splice it with earlier pages. ' +
+  "Page size (ONE knob, `limit` is the real name) and the undeclared-argument-name rejection are stated in this tool's inputSchema `limit` description.";
 
 /** 语义读数服务 → 8 枚只读工具（tier 'read' + readOnlyHint）。
  *
@@ -680,7 +680,7 @@ const STRICT_NO_ARG_SCHEMA: Record<string, unknown> = {
  * 给旧别名新增一类「改前收、改后拒」的取值，那是收紧到行为变化，不是本批要的事。
  */
 const PAGE_SIZE_ALIAS_POINTER =
-  'Legacy synonym of `limit` on this surface - the same single knob. This object\'s `limit` description carries the acceptance order and the additionalProperties:false reject rule.';
+  'Synonym of `limit` (same single knob); acceptance order + reject rule in this object\'s `limit` description.';
 
 /**
  * `limit` 之外、本面经共用分页腿**真正取用**的页大小别名。
@@ -825,7 +825,7 @@ const LAUNCHER_RESOLUTION_SCHEMA: Record<string, unknown> = {
  * B22 去重批：只把长句压成短句（形态 (b)），四个要点一个没丢——privileged、缺省不上帧、
  * 只认精确名（通配不算批准）、宿主自身闸照旧生效。 */
 const LAUNCHER_TIER_NOTE =
-  'Tier: privileged - absent from tools/list until this session approves this EXACT name (the 4th table; a wildcard such as launcher_* approves nothing), and every host-enforced approval gate still applies on the call.';
+  'Tier: privileged - absent from tools/list until this EXACT name is approved in the 4th table (a wildcard such as launcher_* approves nothing); host approval gates still apply on the call.';
 
 
 export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
