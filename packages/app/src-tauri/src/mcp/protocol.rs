@@ -1375,10 +1375,40 @@ pub fn check_root_id_param(
     Ok(())
 }
 
+/// 剔除原因（审计 note 的字面真源）：判定与记账同源，调用方不再二次推断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterReason {
+    /// `market_*` 无条件 fail-closed。
+    MarketFailClosed,
+    /// privileged 工具未获第四张表精确批准。
+    PrivilegedNotApproved,
+    /// 非 privileged，但宿主推断所需 tier 高于会话 tier。
+    TierFiltered,
+}
+
+impl FilterReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::MarketFailClosed => "market_fail_closed",
+            Self::PrivilegedNotApproved => "privileged_not_approved",
+            Self::TierFiltered => "tier_filtered",
+        }
+    }
+}
+
+/// 单条剔除明细：名字 + 结构化原因。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilteredTool {
+    pub name: String,
+    pub reason: FilterReason,
+}
+
 pub struct FilterOutcome {
     pub result: Value,
-    /// 被剔除的工具名（供审计记 `filtered`）。
+    /// 被剔除的工具名（旧字段，additive 保留：既有消费方零改动）。
     pub filtered: Vec<String>,
+    /// 剔除明细（与 `filtered` 同序同长；审计 note 直接消费，不再猜）。
+    pub details: Vec<FilteredTool>,
 }
 
 /// 危险工具在 Rust 侧再过滤一道（纵深）：按**会话 tier + approvedTools** 双维度过滤。
@@ -1390,21 +1420,35 @@ pub struct FilterOutcome {
 /// 同时把工具描述按不可信输入净化（限体积 + 去控制字符）。
 pub fn filter_tools_list(result: &Value, scope: &McpSessionScope) -> FilterOutcome {
     let mut filtered = Vec::new();
+    let mut details = Vec::new();
     let Some(tools) = result.get("tools").and_then(Value::as_array) else {
         return FilterOutcome {
             result: sanitize_untrusted(result),
             filtered,
+            details,
         };
     };
     let mut kept = Vec::with_capacity(tools.len());
     for tool in tools {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
-        let drop = is_market_tool(name)
-            || (is_privileged_tool(name) && !approved_privileged_tool(name, scope))
-            || (!approved_tool(name, scope)
-                && tier_rank(host_required_tier(name)) > tier_rank(scope.tier));
-        if drop {
+        // 闸序与 `check_tool_call_permission` 同源：危险面（market / privileged）先于档位面。
+        let reason = if is_market_tool(name) {
+            Some(FilterReason::MarketFailClosed)
+        } else if is_privileged_tool(name) && !approved_privileged_tool(name, scope) {
+            Some(FilterReason::PrivilegedNotApproved)
+        } else if !approved_tool(name, scope)
+            && tier_rank(host_required_tier(name)) > tier_rank(scope.tier)
+        {
+            Some(FilterReason::TierFiltered)
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
             filtered.push(name.to_string());
+            details.push(FilteredTool {
+                name: name.to_string(),
+                reason,
+            });
             continue;
         }
         kept.push(sanitize_tool_descriptor(tool));
@@ -1416,6 +1460,7 @@ pub fn filter_tools_list(result: &Value, scope: &McpSessionScope) -> FilterOutco
     FilterOutcome {
         result: out,
         filtered,
+        details,
     }
 }
 

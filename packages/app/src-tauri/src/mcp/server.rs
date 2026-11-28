@@ -34,7 +34,7 @@ use super::latency::{self, Ledger};
 use super::protocol::{
     attach_negotiation_meta, check_protocol_version, check_root_id_param,
     check_tool_call_permission, classify_envelope, codes, command_run_audit_note, decode_request,
-    filter_tools_list, is_market_tool, negotiate, negotiate_accept, sanitize_string,
+    filter_tools_list, negotiate, negotiate_accept, sanitize_string,
     sanitize_untrusted_inplace, validate_params, AcceptKind, JsonRpcResponse, LocalOutcome,
     McpError, McpRequestPayload, McpRespondArgs, McpSessionScope, McpTier, Negotiation,
     RequestEnvelope, WebMethod, MCP_CLIENT_CONNECTED_EVENT, MCP_REQUEST_EVENT, PROTOCOL_VERSION,
@@ -1853,18 +1853,14 @@ fn finalize_reply(
     if method == WebMethod::ToolsList {
         let outcome = filter_tools_list(&result, scope);
         result = outcome.result;
-        for name in &outcome.filtered {
-            let reason = if is_market_tool(name) {
-                "market_fail_closed"
-            } else {
-                "privileged_not_approved"
-            };
+        // 原因由过滤器当场判定（`FilterReason`），审计直接消费——不再二次推断。
+        for detail in &outcome.details {
             record(
                 ctx,
-                name,
+                &detail.name,
                 &Value::Null,
                 AuditOutcome::Filtered,
-                Some(reason.to_string()),
+                Some(detail.reason.as_str().to_string()),
                 None,
                 elapsed_ms,
             );

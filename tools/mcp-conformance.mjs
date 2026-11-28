@@ -321,13 +321,13 @@ export function createMockEndpoint(opts = {}) {
       return errorFrame(id, -32602, `Unknown tool: ${name}`, { code: 'UNKNOWN_TOOL' });
     }
     // 闸序与真 Rust 端点 `check_tool_call_permission`（收口⑥后）同源对拍：
-    // ① privileged 未精确批准 → TOOL_NOT_APPROVED（危险面优先，不看 tier 差）；
+    // ① privileged 未精确批准 → E_TOOL_NOT_APPROVED（危险面优先，不看 tier 差）；
     // ② tier 不足且未显式批准 → E_TIER_DENIED（线契约字面码＝Rust codes::TIER_DENIED，
     //    端点/harness 一套口径；拒绝可见，不静默过滤）；
     // ③ mock 特有写靶口径：requiresApproval 即使 tier 够也须逐工具批准。
     if (spec.tier === 'privileged' && !session.approvedTools.includes(name)) {
       return errorFrame(id, -32000, `工具 ${name} 未获第四张表批准（approvedTools 未命中）`, {
-        code: 'TOOL_NOT_APPROVED',
+        code: 'E_TOOL_NOT_APPROVED',
         tool: name,
       });
     }
@@ -341,7 +341,7 @@ export function createMockEndpoint(opts = {}) {
     }
     if (spec.requiresApproval === true && !session.approvedTools.includes(name)) {
       return errorFrame(id, -32000, `工具 ${name} 未获第四张表批准（approvedTools 未命中）`, {
-        code: 'TOOL_NOT_APPROVED',
+        code: 'E_TOOL_NOT_APPROVED',
         tool: name,
       });
     }
@@ -868,7 +868,7 @@ const DIRECT_CASES = [
   {
     id: 'H12',
     group: 'direct-http',
-    title: 'privileged 会话调未批准危险工具 → -32000 TOOL_NOT_APPROVED',
+    title: 'privileged 会话调未批准危险工具 → -32000 E_TOOL_NOT_APPROVED',
     async run(ctx) {
       const res = await ctx.direct({
         token: ctx.tokens.priv,
@@ -876,7 +876,7 @@ const DIRECT_CASES = [
       });
       const f = parseFrame(res, 13);
       assertEq(f.error.code, -32000, 'error.code');
-      assertEq(f.error.data.code, 'TOOL_NOT_APPROVED', 'error.data.code');
+      assertEq(f.error.data.code, 'E_TOOL_NOT_APPROVED', 'error.data.code');
       return 'tier 匹配但 approvedTools 未命中 → 显式拒绝';
     },
   },
@@ -1191,7 +1191,7 @@ const WRITE_CASES = [
   {
     id: 'W02',
     group: 'write-target',
-    title: 'edit 会话调 mock.write 未批准 → -32000 TOOL_NOT_APPROVED（写靶 edit 档也要逐工具批准）',
+    title: 'edit 会话调 mock.write 未批准 → -32000 E_TOOL_NOT_APPROVED（写靶 edit 档也要逐工具批准）',
     async run(ctx) {
       const before = ctx.mock.writes.length;
       const res = await ctx.direct({
@@ -1205,7 +1205,7 @@ const WRITE_CASES = [
       });
       const f = parseFrame(res, 303);
       assertEq(f.error.code, -32000, 'error.code');
-      assertEq(f.error.data.code, 'TOOL_NOT_APPROVED', 'error.data.code');
+      assertEq(f.error.data.code, 'E_TOOL_NOT_APPROVED', 'error.data.code');
       assertEq(f.error.data.tool, 'mock.write', 'error.data.tool');
       assertEq(ctx.mock.writes.length, before, '拒绝路径不得新增 payload 记录（未批准不执行）');
       return 'tier 匹配但 approvedTools 未命中 → 显式拒绝且不记录';
@@ -1265,7 +1265,7 @@ const WRITE_CASES = [
   {
     id: 'W05',
     group: 'write-target',
-    title: 'mock.privilegedWrite：privileged 会话才见；read/edit 猜名直调 → -32000 TOOL_NOT_APPROVED（危险面优先于 tier 码，与 Rust 闸序一致）',
+    title: 'mock.privilegedWrite：privileged 会话才见；read/edit 猜名直调 → -32000 E_TOOL_NOT_APPROVED（危险面优先于 tier 码，与 Rust 闸序一致）',
     async run(ctx) {
       const before = ctx.mock.writes.length;
       for (const [label, token] of [['read', ctx.tokens.read], ['edit', ctx.tokens.edit]]) {
@@ -1275,7 +1275,7 @@ const WRITE_CASES = [
         });
         const f = parseFrame(res, 306);
         assertEq(f.error.code, -32000, `${label} 会话 error.code`);
-        assertEq(f.error.data.code, 'TOOL_NOT_APPROVED', `${label} 会话 error.data.code`);
+        assertEq(f.error.data.code, 'E_TOOL_NOT_APPROVED', `${label} 会话 error.data.code`);
         assertEq(f.error.data.tool, 'mock.privilegedWrite', `${label} 会话 error.data.tool`);
       }
       const priv = parseFrame(
@@ -1284,13 +1284,13 @@ const WRITE_CASES = [
       );
       assert(priv.result.tools.some((t) => t.name === 'mock.privilegedWrite'), 'privileged 会话应见 mock.privilegedWrite');
       assertEq(ctx.mock.writes.length, before, '猜名直调拒绝路径不得新增 payload 记录');
-      return 'read/edit 猜名直调显式拒绝（危险面码 TOOL_NOT_APPROVED 先于 tier 码，收口⑥后与端点同序）';
+      return 'read/edit 猜名直调显式拒绝（危险面码 E_TOOL_NOT_APPROVED 先于 tier 码，收口⑥后与端点同序）';
     },
   },
   {
     id: 'W06',
     group: 'write-target',
-    title: 'privileged 会话调 mock.privilegedWrite 未批准 → -32000 TOOL_NOT_APPROVED',
+    title: 'privileged 会话调 mock.privilegedWrite 未批准 → -32000 E_TOOL_NOT_APPROVED',
     async run(ctx) {
       const before = ctx.mock.writes.length;
       const res = await ctx.direct({
@@ -1304,7 +1304,7 @@ const WRITE_CASES = [
       });
       const f = parseFrame(res, 308);
       assertEq(f.error.code, -32000, 'error.code');
-      assertEq(f.error.data.code, 'TOOL_NOT_APPROVED', 'error.data.code');
+      assertEq(f.error.data.code, 'E_TOOL_NOT_APPROVED', 'error.data.code');
       assertEq(f.error.data.tool, 'mock.privilegedWrite', 'error.data.tool');
       assertEq(ctx.mock.writes.length, before, '拒绝路径不得新增 payload 记录');
       return 'tier 匹配但 approvedTools 未命中 → 显式拒绝';

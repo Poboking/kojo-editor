@@ -300,6 +300,42 @@ fn command_panel_actions_are_privileged_in_host_gate() {
 }
 
 #[test]
+fn filter_tools_list_reports_structured_reasons() {
+    // WP-1：三种剔除原因必须可区分（审计 note 的真源），旧 `filtered: Vec<String>` 逐字保留。
+    let scope = McpSessionScope {
+        tier: McpTier::Read,
+        ..empty_scope(Vec::new())
+    };
+    let result = json!({
+        "tools": [
+            {"name": "read_file"},
+            {"name": "export_file"},
+            {"name": "market_fetch_text"},
+            {"name": "write_bytes"}
+        ]
+    });
+    let out = filter_tools_list(&result, &scope);
+    let reason_of = |name: &str| {
+        out.details
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.reason.as_str())
+            .unwrap_or("<not filtered>")
+    };
+    assert_eq!(reason_of("market_fetch_text"), "market_fail_closed");
+    assert_eq!(reason_of("export_file"), "privileged_not_approved");
+    // write_bytes 是 edit 面：read 会话档位不足 ⇒ tier_filtered（不是 privileged_not_approved）。
+    assert_eq!(reason_of("write_bytes"), "tier_filtered");
+    assert_eq!(reason_of("read_file"), "<not filtered>");
+    // additive：旧字段与新明细逐条对齐，顺序一致。
+    assert_eq!(out.details.len(), out.filtered.len());
+    assert_eq!(
+        out.details.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(),
+        out.filtered.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn approved_tool_matches_exact_or_prefix() {
     let scope = empty_scope(vec!["export_file".to_string(), "read_*".to_string()]);
     assert!(approved_tool("export_file", &scope));
@@ -2310,6 +2346,9 @@ fn e2e_tools_list_tier_filter_and_scope_promotion() {
     assert_eq!(market.note.as_deref(), Some("market_fail_closed"));
     let export = filtered.iter().find(|e| e.tool == "export_file").unwrap();
     assert_eq!(export.note.as_deref(), Some("privileged_not_approved"));
+    // read 会话档位不足的 edit 工具记 tier_filtered——不再与「privileged 未批准」混成一个标签。
+    let write = filtered.iter().find(|e| e.tool == "write_bytes").unwrap();
+    assert_eq!(write.note.as_deref(), Some("tier_filtered"));
 }
 
 #[test]

@@ -6,9 +6,9 @@
  *     （privileged 默认不在 tools/list）/ batch 中 notification 无响应 / 错误帧
  *     （-32601 / -32602 / 结构化）/ Bearer 拒绝 / Origin 拒绝 / SSE 可选 / Accept 协商 / 单端点。
  *  ①b 写工具靶：mock.write（tier edit + requiresApproval）/ mock.privilegedWrite（tier privileged）——
- *     写靶即使 edit 档也须逐工具批准（-32000 TOOL_NOT_APPROVED）；批准命中才执行且 payload
+ *     写靶即使 edit 档也须逐工具批准（-32000 E_TOOL_NOT_APPROVED）；批准命中才执行且 payload
  *     只记内存 ep.writes（逐字对拍，绝不写盘）；privileged 写靶默认不进 tools/list、猜名直调
- *     显式拒绝（闸序与真端点同源：危险面 TOOL_NOT_APPROVED 先于 tier 码 E_TIER_DENIED，
+ *     显式拒绝（闸序与真端点同源：危险面 E_TOOL_NOT_APPROVED 先于 tier 码 E_TIER_DENIED，
  *     tier 码字面与 Rust codes::TIER_DENIED 一套口径）；大响应截到 TOOL_TEXT_LIMIT + truncated 显式标记（记录不裁）。
  *  ② 端到端通道：跑一次 `runConformance()`（spawn 真实 `tools/kojo-mcp.mjs`），断言
  *     notification 不挂住 stdio、SSE 逐帧转发、坏帧显式终结、token 不泄漏、全表 0 FAIL
@@ -17,8 +17,11 @@
  * 红线对拍：mock 三道闸缺一不可（仅回环 + Bearer + Origin 白名单）；token 不进
  * stdout / stderr / 日志 / 请求摘要。
  */
+import { readFileSync } from 'node:fs';
 import * as http from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import {
   buildSessions,
@@ -145,7 +148,7 @@ describe('mcp-conformance · direct 通道（mock endpoint 协议面）', () => 
     const notApproved = JSON.parse(
       (await direct({ token: TEST_TOKENS.priv, body: rpc(10, 'tools/call', { name: 'mock.priv.tool' }) })).body,
     );
-    expect(notApproved.error.data.code).toBe('TOOL_NOT_APPROVED');
+    expect(notApproved.error.data.code).toBe('E_TOOL_NOT_APPROVED');
   });
 
   it('Bearer 拒绝：缺 token / 错 token → 401 + WWW-Authenticate（且请求记录不含 token 值）', async () => {
@@ -254,7 +257,7 @@ describe('mcp-conformance · 写工具靶（mock.write / mock.privilegedWrite）
     expect(privNames).toContain('mock.privilegedWrite');
   });
 
-  it('mock.write 未批准 → -32000 TOOL_NOT_APPROVED，且不记录 payload', async () => {
+  it('mock.write 未批准 → -32000 E_TOOL_NOT_APPROVED，且不记录 payload', async () => {
     const before = ep.writes.length;
     const res = JSON.parse(
       (
@@ -265,7 +268,7 @@ describe('mcp-conformance · 写工具靶（mock.write / mock.privilegedWrite）
       ).body,
     );
     expect(res.error.code).toBe(-32000);
-    expect(res.error.data.code).toBe('TOOL_NOT_APPROVED');
+    expect(res.error.data.code).toBe('E_TOOL_NOT_APPROVED');
     expect(res.error.data.tool).toBe('mock.write');
     expect(ep.writes.length).toBe(before); // 未批准不执行
   });
@@ -305,16 +308,16 @@ describe('mcp-conformance · 写工具靶（mock.write / mock.privilegedWrite）
     expect(rec.truncated).toBe(true);
   });
 
-  it('mock.privilegedWrite：read/edit 猜名直调 TOOL_NOT_APPROVED（危险面先于 tier 码）；批准后执行 + 记录', async () => {
+  it('mock.privilegedWrite：read/edit 猜名直调 E_TOOL_NOT_APPROVED（危险面先于 tier 码）；批准后执行 + 记录', async () => {
     const before = ep.writes.length;
     const tierRead = JSON.parse((await direct({ token: TEST_TOKENS.read, body: rpc(37, 'tools/call', { name: 'mock.privilegedWrite' }) })).body);
-    expect(tierRead.error.data.code).toBe('TOOL_NOT_APPROVED');
+    expect(tierRead.error.data.code).toBe('E_TOOL_NOT_APPROVED');
     const tierEdit = JSON.parse((await direct({ token: TEST_TOKENS.edit, body: rpc(38, 'tools/call', { name: 'mock.privilegedWrite' }) })).body);
-    expect(tierEdit.error.data.code).toBe('TOOL_NOT_APPROVED');
+    expect(tierEdit.error.data.code).toBe('E_TOOL_NOT_APPROVED');
     expect(tierEdit.error.data.tool).toBe('mock.privilegedWrite');
 
     const notApproved = JSON.parse((await direct({ token: TEST_TOKENS.priv, body: rpc(39, 'tools/call', { name: 'mock.privilegedWrite' }) })).body);
-    expect(notApproved.error.data.code).toBe('TOOL_NOT_APPROVED');
+    expect(notApproved.error.data.code).toBe('E_TOOL_NOT_APPROVED');
     expect(ep.writes.length).toBe(before);
 
     const ok = JSON.parse(
@@ -454,5 +457,35 @@ describe('mcp-conformance · 结构性红线', () => {
     } finally {
       await probe.close();
     }
+  });
+});
+
+// WP-1 · 跨语言码表同源：harness 对拍真端点的码必须逐字来自 Rust `codes::`，
+// 不允许第二份手抄真源（无 `E_` 前缀的旧码一经回退即红）。
+describe('码表同源（mock ↔ Rust codes）', () => {
+  const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+  it('harness 的 E_ 码 ⊆ Rust codes 表，且批准码带 E_ 前缀', () => {
+    const rustSrc = readFileSync(
+      resolve(REPO_ROOT, 'packages/app/src-tauri/src/mcp/protocol.rs'),
+      'utf8',
+    );
+    const rustCodes = new Set(
+      [...rustSrc.matchAll(/pub const [A-Z0-9_]+: &str = "(E_[A-Z0-9_]+)"/g)].map((m) => m[1]!),
+    );
+    // 两枚与 harness 直接对拍的码必须在真源里存在（否则本闸本身就是空转）。
+    expect(rustCodes.has('E_TOOL_NOT_APPROVED')).toBe(true);
+    expect(rustCodes.has('E_TIER_DENIED')).toBe(true);
+
+    const harnessSrc = readFileSync(resolve(REPO_ROOT, 'tools/mcp-conformance.mjs'), 'utf8');
+    const harnessCodes = new Set(
+      [...harnessSrc.matchAll(/'((?:E_)[A-Z0-9_]+)'/g)].map((m) => m[1]!),
+    );
+    expect(harnessCodes.size).toBeGreaterThan(0);
+    const unknown = [...harnessCodes].filter((c) => !rustCodes.has(c));
+    expect(unknown, `harness 出现 Rust 码表里没有的码：${unknown.join(', ')}`).toEqual([]);
+
+    // 旧的无前缀字面不许回退（`'E_TOOL_NOT_APPROVED'` 不含 `'TOOL_NOT_APPROVED'`）。
+    expect(harnessSrc.includes("'TOOL_NOT_APPROVED'")).toBe(false);
   });
 });

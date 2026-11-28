@@ -753,10 +753,12 @@ tier 不匹配 `tools/call` → `-32000 E_TIER_DENIED`（拒绝可见，不静�
 > `tools/list` 的 `filter_tools_list` 严格同源（`host_required_tier` / `tier_rank` / `approved_tool`），
 > 并有端点级回归（真 TCP 帧 `-32000` + `data.code` + 一条 denied 审计 + 桥零调用）。闸序钉死：
 > privileged 未精确批准先吃 `E_TOOL_NOT_APPROVED`（危险面），tier 不足才吃 `E_TIER_DENIED`（档位面）。
-> **残余未消除的一处**：harness 的批准面字面码仍写作 `TOOL_NOT_APPROVED`（无 `E_` 前缀），端点线契约是
-> `E_TOOL_NOT_APPROVED`；本批只统一了 tier 码，批准码的 `E_` 前缀待单独一批连引用面一起改。
-> 另：`tools/list` 审计对被 tier 剔除的条目，note 标签仍笼统记 `privileged_not_approved`
-> （`FilterOutcome` 只带名字不带原因），要精确到 `tier_filtered` 需扩结构，本批未动。
+> **2026-11-28 收口（WP-1）**：harness 批准面字面码已补 `E_` 前缀（`E_TOOL_NOT_APPROVED`，与
+> Rust `codes::TOOL_NOT_APPROVED` 逐字一致），并由一条跨语言断言钉死「harness 的 `E_` 码 ⊆ Rust 码表」，
+> 旧无前缀字面一经回退即红。`tools/list` 审计的剔除原因同时结构化：`FilterOutcome` additive 加
+> `details: Vec<FilteredTool>`（名字 + `FilterReason`），被 tier 剔除记 `tier_filtered`，
+> privileged 未批准仍 `privileged_not_approved`，market 仍 `market_fail_closed`；旧
+> `filtered: Vec<String>` 逐字保留、闸序不变。
 
 **错误帧面**：未知 method `-32601`（H22/S13）；参数错 `-32602`（未知工具 / 缺 name，H08/H09/S 系透传）；
 结构化错误 `{code, message, data}`（`MOCK_FAILURE` 带 `retryable:false`，H10/S12）；错误帧是 200 应答，
