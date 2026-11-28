@@ -311,6 +311,7 @@ describe('B11 判据 2 · 面声明的 properties ⊇ 执行腿实际取用的�
     expect(paged.length).toBe(26); // 24 枚待做 + fs.readMany（B2 出厂即严格）+ semantic.projectSymbols（MCP-PERF-S4）
     const canon = PAGE_CURSOR_SCHEMA_PROPS['cursor'] as Record<string, unknown>;
     let canonical = 0;
+    let limitCanonical = 0;
     for (const spec of paged) {
       const cursor = propsOf(spec.name)['cursor'] as Record<string, unknown>;
       // 形状（type / pattern / 长度闸）逐面同源，B1 钉下的 pattern 与越界零改动。
@@ -327,11 +328,26 @@ describe('B11 判据 2 · 面声明的 properties ⊇ 执行腿实际取用的�
         expect(desc, `${spec.name} 的 cursor 指针必须点名落点属性 \`cursor\``).toContain('`cursor`');
         expect(desc, `${spec.name} 的 cursor 指针不得复刻完整口径`).not.toContain('spliced');
       }
-      expect(propsOf(spec.name)['limit'], `${spec.name} 的 limit 形状必须与契约面同源`).toEqual(
-        PAGE_CURSOR_SCHEMA_PROPS['limit'],
-      );
+      // limit 分口径（T1 第二轮指针化）：**形状**逐面同源（type / minimum 是契约，不许漂），
+      // **完整口径全文**全局恰好一份，落点同样是 fs.readFile；其余面只许挂点名落点的指针。
+      const limit = propsOf(spec.name)['limit'] as Record<string, unknown>;
+      const canonLimit = PAGE_CURSOR_SCHEMA_PROPS['limit'] as Record<string, unknown>;
+      expect(
+        { type: limit['type'], minimum: limit['minimum'] },
+        `${spec.name} 的 limit 形状必须与契约面同源`,
+      ).toEqual({ type: canonLimit['type'], minimum: canonLimit['minimum'] });
+      const limitDesc = String(limit['description'] ?? '');
+      if (limitDesc === String(canonLimit['description'])) {
+        limitCanonical += 1;
+        expect(spec.name, '完整页大小口径落点必须是 fs.readFile').toBe('fs.readFile');
+      } else {
+        expect(limitDesc, `${spec.name} 的 limit 指针必须点名落点 \`fs.readFile\``).toContain('`fs.readFile`');
+        expect(limitDesc, `${spec.name} 的 limit 指针必须点名落点属性 \`limit\``).toContain('`limit`');
+        expect(limitDesc, `${spec.name} 的 limit 指针不得复刻完整口径`).not.toContain('shared gate takes the FIRST value');
+      }
     }
     expect(canonical, '完整口径必须恰好一份（B27 指针化后口径）').toBe(1);
+    expect(limitCanonical, '完整页大小口径必须恰好一份（T1 第二轮指针化后口径）').toBe(1);
   });
 });
 
