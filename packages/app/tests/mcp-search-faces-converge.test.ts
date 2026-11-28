@@ -12,8 +12,9 @@
  *  I3 同参同结果：两个面同入参 ⇒ 载荷深等。
  *  I3b 一份实现的身份断言：两枚面指向同一个（按 deps 记忆的）函数引用。
  *  I4 两面对同名入参的接受面一致：`properties` 键集相等。
- *  I5 帧字节向下：帧 ≤ 137,900 B（改前 139,903）。
- *  I6 面数不变：86 / read 41 / `search_text` 仍映射 2 枚面。
+ *  I5 载荷回执：别名面必须真的比正名面瘦 ≥2,000 B，且入参键集与正名面相等
+ *     （**不是**绝对帧天花板——那会和帧带打架，见 I5 段注释）。
+ *  I6 面数不变：86 / read 41 / `search_text` 仍映射 3 枚面。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -215,9 +216,47 @@ describe('I4 两面对同名入参的接受面一致', () => {
 
 /* ------------------------------ I5 ------------------------------ */
 
-describe('I5 帧字节向下', () => {
-  it('全量帧 ≤ 137,900 B（改前 139,903）', () => {
-    expect(FRAME_BYTES).toBeLessThanOrEqual(137_900);
+/**
+ * I5 是**本单的回执**，不是长期的体积闸（长期闸在 `mcp-tools-list-payload.test.ts` ② 的帧带）。
+ *
+ * 组长复核时把这里从「帧 ≤ 137,900」改成结构性断言，原因：绝对值天花板会和帧带打架
+ * ——谁更紧谁就是事实上的闸，而回执数字（贴着交付那一拍）必然比带顶更紧，
+ * 于是下一批任何合法增长都得先改这张回执，等于把「按例重钉」换个文件继续。
+ *
+ * 改成钉**结构**：别名面不许再有整段全文。这条随两面一起长大、不需要重钉，
+ * 而且它守的正是本单要做的事——`workspace.searchAll` 不再是第二份全文。
+ * 交付实测：正名 3,584 B（desc 536 字符）/ 别名 2,024 B（desc 175 字符，
+ * 属性描述最长 101 字符＝共用的 cursor 指针）；别名原有 4,450 B、desc 1,107 字符。
+ */
+describe('I5 载荷回执：别名面不许再留整段全文', () => {
+  const specOf = (name: string) => {
+    const spec = fullFace.find((t) => t.name === name);
+    expect(spec, `${name} 不在注册表里`).toBeTruthy();
+    return spec!;
+  };
+  const propDescs = (name: string): [string, number][] =>
+    Object.entries((specOf(name).inputSchema as { properties?: Record<string, { description?: string }> }).properties ?? {})
+      .map(([k, v]) => [k, String(v?.description ?? '').length] as [string, number]);
+
+  it('别名面比正名面瘦（谁把别名灌回全文，这里先红）', () => {
+    const alias = Buffer.byteLength(JSON.stringify(specOf('workspace.searchAll')), 'utf-8');
+    const canon = Buffer.byteLength(JSON.stringify(specOf('search.all')), 'utf-8');
+    expect(alias, `正名 ${canon} B / 别名 ${alias} B`).toBeLessThan(canon);
+  });
+
+  it('别名面描述 ≤300 字符：它是指针，不是第二份说明', () => {
+    const len = String(specOf('workspace.searchAll').description ?? '').length;
+    expect(len, `别名面描述 ${len} 字符`).toBeLessThanOrEqual(300);
+    expect(String(specOf('workspace.searchAll').description ?? '')).toContain('search.all');
+  });
+
+  it('别名面每个属性描述 ≤120 字符：只许挂指针，不许复刻整段口径', () => {
+    const tooLong = propDescs('workspace.searchAll').filter(([, n]) => n > 120);
+    expect(tooLong, `超长属性：${tooLong.map(([k, n]) => `${k}=${n}`).join(' / ')}`).toEqual([]);
+  });
+
+  it('别名面仍是一枚真面：入参键集与正名面相等（收敛后不该再分叉）', () => {
+    expect(propKeys('workspace.searchAll')).toEqual(propKeys('search.all'));
   });
 });
 
