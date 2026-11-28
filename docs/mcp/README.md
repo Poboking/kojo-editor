@@ -77,9 +77,16 @@ id 收进悬浮提示），加一条**发现文件路径胶囊**（中间省略�
   （文件树 / 启动器·只读 / 启动器·生命周期与写），每条工具一句**真实功能描述**，
   底部粘性操作条常显「批准所选（N）」。审批的机器契约一字未变：仍是 `mcp_approve`、
   fail-closed、`approvedTools` 逐工具**精确列名**——分组与描述只是呈现方式，授权语义零放宽。
-- **审计面板**：五列（时间 / 工具 / 结果 / 耗时 / 落点）纵向对齐可扫读，结果用色彩 chip，
-  调用参数摘要（`argsDigest`）收进悬浮提示；空态分「还没有审计条目」与「没有匹配当前筛选」
-  两种，过滤能力不变。
+- **审计面板**（T3 改版，2026-11-28）：按 `sessionId` **分组**，组头给 sessionId / clientId /
+  条目数 / 时间范围，组内按 `ts` 升序＝时间线；无 `sessionId` 的旧条目落「未标注会话」组，
+  **绝不静默丢弃**。行内仍是五列，但**耗时让位给「原因」列**：时间 / 工具 / 结果 / 原因 / 落点
+  ——`note`（`tier_filtered` / `privileged_not_approved` / `market_fail_closed`）从悬浮提示
+  提到屏上，渲染人话文案，`hint`（下一步怎么办）进 `title`；未知原因码**原样显示原文**
+  （新码上线不会变成一片空白）。`argsDigest` / `clientId` / `sessionId` / 完整 ISO 时间 /
+  `elapsedMs` 仍全在 `title`。空态分「还没有审计条目」与「没有匹配当前筛选」两种，过滤能力不变。
+  机器码文案真源＝`app/src/mcp/mcp-error-copy.ts`（42 枚 `E_*` + 3 枚原因码），
+  覆盖闸在 `mcp-audit-panel-groups.test.ts` A5——源码里多出一枚没文案的码就红。
+  `formatAuditEntry` 是**文本导出面**，输出逐字不变（文案表只作用于视觉行）。
 
 整节视觉与全站设置页同一语言：平铺分组 + 组间发丝线分隔，无卡片套卡片；按钮分主（实底）/ 次（描边）/ 危险（红描边）三档并配图标；按族分组的工具清单是发丝线表格，不是 29 张卡；明 / 暗 / 薄荷三主题自适应，窄屏按容器宽度塌成单列且主读数仍排第一。
 
@@ -656,6 +663,13 @@ schema ↔ 腿**双向**、B11 手抄 `CONSUMED` ↔ 扫描逐面相等（表旧
   `tools/tests/verify-mcp-steps.test.ts` 6 例。
 - 已知瑕疵（如实记）：`--check` 的结论行走子进程 stdout/stderr，在 `verify --json` 下会与 JSON 混流
   ——这是所有步骤 `stdio: 'inherit'` 的既有行为，本批没借机改 verify 的输出纪律。
+- **这道闸第一次跑就抓到了真缺陷**（2026-11-28，T3 期间）：`pnpm --filter @kojo/app typecheck`
+  在 dev 上一直是红的——WP-3a（`823511f9`）的两份重建判据把夹具写成
+  `{ trigger: 'activate' } as ProjectReloadEvent`，而契约里 `trigger` 只有 `evicted` / `returned`
+  两枚、`reason` 还是必填。`as` 断言把这个错遮到 `reason` 进契约那天才炸。
+  **根因是当时只跑了根 `pnpm typecheck`（根 tsconfig 不含 `packages/app/tests/**`）**，
+  没跑 app 过滤那条——而 `verify typecheck` 两条都跑。修法不是换断言写法，是去掉 `as`
+  让 tsc 真正检查夹具（`4b9e5b2f`）。**「双 typecheck」不是形式主义，这两条覆盖的文件集不同。**
 
 ### 5.16 驻留换代的 reload 钩子（MCP-RELOAD-HOOK，2026-11-28）
 
