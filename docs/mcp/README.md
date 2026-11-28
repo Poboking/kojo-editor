@@ -641,7 +641,24 @@ schema ↔ 腿**双向**、B11 手抄 `CONSUMED` ↔ 扫描逐面相等（表旧
 `Object.getOwnPropertyDescriptor` 级反射。判据＝`mcp-host-bridge-memo.test.ts` ⑦（原地改写不生效 + 重新登记
 才换代）/ ⑧（冻结副本 identity、顶层与数组不可写）。
 
+**T4 三道闸进 `pnpm verify`（2026-11-28）**——上面这些闸此前只能靠人记得手动跑，
+跑全量验收的人拿到「全绿」时并不知道 MCP 面是不是红的。`tools/verify.mjs` 注册表新增三步
+（`mcp-health` / `mcp-inventory --check` / `mcp-conformance --self-test`），三者透传 argv、全进 `ALL_NAMES`。
+
+- **`mcp-conformance` 必须带 `--self-test`**：裸跑只打用法并 exit 0，接漏了就是**假绿**。
+- **`mcp-inventory` 本来是生成器，永远 exit 0**（除参数错 exit 2）⇒ 新增 `--check` 才当得了闸。
+  它守的是体检**没守**的那一条：`missingSources`（某条接线指向的真源已不存在）。
+  `mcp-health` 的第 ④ 格只覆盖 `orphanedWires` 与 `writeLegs NOT_WIRED`，全文不读 `missingSources`
+  ——所以这不是重复劳动。**默认路径逐字不变**（不带 `--check` 仍 rc=0，`missingSources` 照报不判红）。
+- **判据证明的是「接线通了」，不是「多了一行注册」**：改坏 README 的夹具根下
+  `verify mcp-health --root <夹具> --no-payload` ⇒ **exit 1** + `FAIL  mcp-health`，
+  同一夹具直跑 `mcp-health` 也是 exit 1（对照，证明红来自子进程而不是 verify 自己）。
+  `tools/tests/verify-mcp-steps.test.ts` 6 例。
+- 已知瑕疵（如实记）：`--check` 的结论行走子进程 stdout/stderr，在 `verify --json` 下会与 JSON 混流
+  ——这是所有步骤 `stdio: 'inherit'` 的既有行为，本批没借机改 verify 的输出纪律。
+
 ### 5.16 驻留换代的 reload 钩子（MCP-RELOAD-HOOK，2026-11-28）
+
 
 多项目驻留档案在**逐出**（`reason:'lru'`）或**快切回来撞上旧档案**（`reason:'superseded'`）时，
 内核发两枚事件：原有 `project.evicted` 与新的 `project.reload`，两枚都带 `rootId`
@@ -816,6 +833,7 @@ interface McpSessionScope {
 node tools/mcp-conformance.mjs --self-test   # 全量对拍：全过 exit 0，任一失败 exit 1 + stderr 可执行提示
 node tools/mcp-conformance.mjs --json        # 同上，另附结果 JSON
 node node_modules/vitest/vitest.mjs run tools/tests/mcp-conformance.test.ts   # vitest 通道
+pnpm verify mcp-conformance                  # 走统一验收 CLI（§5.15 末，T4）
 ```
 
 零外部 npm 依赖（只用 `node:http` / `node:crypto` 等内置模块），**无需 GUI / Tauri / 运行中的编辑器**：
