@@ -159,8 +159,17 @@ const B21_FULL_FRAME_BYTES = 218_897;
  *  commands.run，每面 +103 B＝1 个空格 + 102）。判据口径实拍 **139,898**（desc 58,958 /
  *  schema 69,589 / launcher 46,305），上一轮 141,889 → 本轮 139,898（−1,991）。
  *  新带顶 143,000，机械余量 **3,102 B**（≥2,000 B 的增面余量：一枚中位面 ~1,200–2,100 B）。
- *  schema 本批零变化（69,589），上界 70,200 不动——不为本批方便而放宽。 */
-const B22_FULL_FRAME_BYTES = 130_000;
+ *  schema 本批零变化（69,589），上界 70,200 不动——不为本批方便而放宽。
+ *  T5 双面收敛（2026-11-28）：`search.all` / `workspace.searchAll` 合并为同一份实现 + 同一套
+ *  入参；`workspace.searchAll` 的描述压成别名指针、四段长 schema 文案改成指向 `search.all`
+ *  对应属性的指针（`Hidden entries never enter the plan … pages cannot overlap` 那句合并进
+ *  `search.all` 的 `resumeBySlice`，没有删）。判据口径实拍 **137,764**（static 量具 137,770，
+ *  两通道包装差 6 B；desc **58,122** / schema **68,294**）。上一轮 139,898 → 本轮 137,764
+ *  （−2,134）。**本批不增面、只腾余量**：帧带底数 130,000 → **125,400**（新带顶 137,940，
+ *  机械余量 176 B；更紧的 137,900 闸在 `mcp-search-faces-converge.test.ts` I5）。
+ *  desc 上界 61,000 → 60,500（余量 2,042 → 2,378）、schema 上界 70,200 → 70,000（余量
+ *  611 → 1,706）——两档都向下钉了一点，同时把省出来的字节留给 T6 增面。 */
+const B22_FULL_FRAME_BYTES = 125_400;
 /** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。
  *  T1：163,000 → 135,000（帧 175,337 → 141,889 后按例下调，仍留 ~3.5% 记账余量）。
  *  T2：135,000 不动——新实拍 139,898 的 −3.5% 恰好是 135,002，这一格本来就在设计位上；
@@ -441,8 +450,11 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     // frame 141,889 → 139,898（−1,991）。
     // 按现取收紧（余量都 ≥2,000 B）：desc 61,500 → 61,000（余量 2,042）、launcher 75,000 →
     // 48,500（余量 2,195）；schema 70,200 **不动**（本批零变化，不放宽也不收紧）。
-    expect(descBytes).toBeLessThanOrEqual(61_000); // …T1 60,944；T2 收口后 58,958
-    expect(schemaBytes).toBeLessThanOrEqual(70_200); // T1 69,589；T2 本批零变化（69,589）
+    // T5（2026-11-28）双面收敛：desc 61,000 → 60,500（实拍 58,122，余量 2,378）、
+    // schema 70,200 → 70,000（实拍 68,294，余量 1,706）。两档都只向下钉 200–500 B，
+    // 省出来的字节作为 T6 增面余量，不拿去抬上界。
+    expect(descBytes).toBeLessThanOrEqual(60_500); // …T2 58,958；T5 收敛后 58,122
+    expect(schemaBytes).toBeLessThanOrEqual(70_000); // T2 69,589；T5 收敛后 68,294
     expect(launcherBytes).toBeLessThanOrEqual(48_500); // B21 实拍全族 100,323；T2 实拍 46,305
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });

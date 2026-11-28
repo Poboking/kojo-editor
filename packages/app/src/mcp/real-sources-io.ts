@@ -1121,6 +1121,125 @@ export function nextSearchId(): number {
   return searchSeq;
 }
 
+/** 两个检索面共用的面名标签：同一条腿 ⇒ 错误文案不再分面名（分面名就得加参数，两份实现就分叉）。 */
+const SEARCH_FACES_LABEL = 'search.all / workspace.searchAll';
+
+/**
+ * T5（2026-11-28）：`search.all` 与 `workspace.searchAll` 的**唯一实现**——同一个能力的
+ * 两张脸。两枚面各是一条 `(args, scope) => searchAllCore(deps, args, scope)` 的薄箭头，
+ * 取用集与行为都落在本函数体里；只压文案不改实现的话，两条腿仍会各自演化，`scope`
+ * 行为迟早分叉。
+ *
+ * 为什么不是「两条腿指向同一个函数引用」：B19 的双向漂移闸（`mcp-leg-arg-scan`）要求
+ * 每个面的执行体第一形参是 `args` 形状，并明确拒绝解析到工厂 / seam（第一形参 `deps`）；
+ * 一个按 deps 记忆的共享引用会把扫描器引到工厂上。于是这里取「一个核心 + 两条薄箭头」，
+ * 「一份实现」由 I3 的同参同载荷（含核心直调对拍）证明，而不是身份断言。
+ *
+ * 两面的差异原本只有一处：`workspace.searchAll` 读 `scope` 收窄根集。收敛后核心自己读
+ * `scope`（缺省 = 项目根，与旧 `search.all` 的 `[rootDir]` 逐字同形），两面同参同结果。
+ */
+export async function searchAllCore(
+  deps: McpIoDeps,
+  args: Record<string, unknown> | undefined,
+  scope: McpSessionScope,
+): Promise<unknown> {
+    const kernel = deps.getKernel();
+    const project = requireProject(kernel);
+    const rootDir = asString(project['rootDir']);
+    if (rootDir === '') {
+      throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：检索无基准根（不静默）');
+    }
+    const query = (args ?? {})['query'];
+    if (typeof query !== 'string' || query.length === 0) {
+      throw new McpFailure('INVALID_ARGS', `${SEARCH_FACES_LABEL} 的 query 须为非空字符串`);
+    }
+    // S8 腿1/腿2：软时限与命中载荷模式（都可省；缺省 = 旧请求体逐字同形、应答零漂移）
+    const deadlineMs = searchDeadlineMsOf(args ?? {}, SEARCH_FACES_LABEL);
+    const previewMode = searchPreviewModeOf(args ?? {}, SEARCH_FACES_LABEL);
+    assertDeadlineNotWithSlice(args ?? {}, SEARCH_FACES_LABEL, deadlineMs);
+    // scope:'sources' ⇒ 以 adapter 填充的作品域目录为根集合（契约字段投影，不硬编码领域）。
+    const roots = searchRootsOf(project, rootDir, (args ?? {})['scope'] === 'sources');
+    const page = pageParamsFor(args ?? {}, { defaultLimit: 50, maxLimit: 200 });
+    if (wantsSliceResume(args)) {
+      // B16：引擎闸下的命中集实测不可续 ⇒ 给了 resumeBySlice 才按互不相交的目录 / 文件分片续取。
+      // 不给这个入参 ⇒ 走下面旧路，触墙时那套三件套 + note 逐字不变（旧面零回退）。
+      const res = await createSliceRunner(deps)({
+        args: args ?? {},
+        query,
+        project,
+        rootDir,
+        sourcesOnly: (args ?? {})['scope'] === 'sources',
+        limit: page.limit,
+        offset: page.offset,
+        hasCursor: page.hasCursor,
+        // 与旧路同一枚 await 口径（fsFreshnessListing 是 async：不 await 会把 Promise 塞进返回体）
+        fsFreshness: await fsFreshnessListing(
+          deps,
+          roots[0] ?? rootDir,
+          roots.length > 1
+            ? `${roots[0] ?? rootDir}（本次共 ${roots.length} 个根，另 ${roots.length - 1} 个根未单独建基线）`
+            : '.',
+          scope,
+        ),
+      });
+      // S8 腿2：分片路同样在投影层剥 preview——账在 runner 内部按全量命中算好 ⇒ 与 full 逐位一致
+      return previewMode === 'none'
+        ? { ...res, hits: stripPreviewFields((res['hits'] as Record<string, unknown>[]) ?? []) }
+        : res;
+    }
+    const result = await deps.searchInFiles({
+      searchId: nextSearchId(),
+      roots,
+      query,
+      options: {
+        isRegex: false,
+        caseSensitive: false,
+        wholeWord: false,
+        extensions: [],
+        maxResults: searchWindow(page.offset, page.limit),
+        // S8 腿1：缺省不带键（旧请求体逐字同形）；给了才带（S1 的 Rust DTO / bridge 类型已在）
+        ...(deadlineMs !== undefined ? { deadlineMs } : {}),
+      },
+    });
+    const hits: Record<string, unknown>[] = [];
+    for (const file of result.files) {
+      for (const match of file.matches) {
+        hits.push({ path: toRelativePath(file.path, rootDir), line: match.line, preview: match.preview });
+      }
+    }
+    const account = pageSearchHits(hits, args ?? {}, page.limit, page.offset, {
+      totalMatches: result.totalMatches,
+      truncated: result.truncated,
+    });
+    return {
+      ...account,
+      // S8 腿2："none" ⇒ 投影层剥 preview（账已按全量命中算好，与 full 逐位一致、游标跨模式互认）
+      ...(previewMode === 'none' ? { hits: stripPreviewFields((account['hits'] as Record<string, unknown>[]) ?? []) } : {}),
+      filesScanned: result.filesScanned,
+      elapsedMs: result.elapsedMs,
+      skipped: result.skipped,
+      // S8 腿1：软时限账透传（S1 语义，不重造）。引擎没报 partial ⇒ 应答不带这个键（旧宿主零漂移）。
+      ...(result.partial === true
+        ? {
+            partial: true,
+            ...(typeof result.partialReason === 'string' && result.partialReason !== ''
+              ? { partialReason: result.partialReason }
+              : {}),
+          }
+        : {}),
+      // 检索结果是从盘上现算的：`fsFreshness` 说「自你上一次检索以来，根下动过几处」。
+      // 多根（scope:'sources'）只对第一根建基线，其余根在 target 里点名——不假装全覆盖。
+      fsFreshness: await fsFreshnessListing(
+        deps,
+        roots[0] ?? rootDir,
+        roots.length > 1
+          ? `${roots[0] ?? rootDir}（本次共 ${roots.length} 个根，另 ${roots.length - 1} 个根未单独建基线）`
+          : '.',
+        scope,
+      ),
+    };
+}
+
 export function createKernelIo(deps: McpIoDeps): McpKernelIo {
   const projectInfo: McpReaderFn = async () => {
     const kernel = deps.getKernel();
@@ -1182,85 +1301,8 @@ export function createKernelIo(deps: McpIoDeps): McpKernelIo {
     };
   };
 
-  const searchAll: McpReaderFn = async (args, scope) => {
-    const kernel = deps.getKernel();
-    const project = requireProject(kernel);
-    const rootDir = asString(project['rootDir']);
-    if (rootDir === '') {
-      throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：检索无基准根（不静默）');
-    }
-    const query = (args ?? {})['query'];
-    if (typeof query !== 'string' || query.length === 0) {
-      throw new McpFailure('INVALID_ARGS', 'searchAll 的 query 须为非空字符串');
-    }
-    // S8 腿1/腿2：软时限与命中载荷模式（都可省；缺省 = 旧请求体逐字同形、应答零漂移）
-    const deadlineMs = searchDeadlineMsOf(args ?? {}, 'search.all');
-    const previewMode = searchPreviewModeOf(args ?? {}, 'search.all');
-    assertDeadlineNotWithSlice(args ?? {}, 'search.all', deadlineMs);
-    const page = pageParamsFor(args ?? {}, { defaultLimit: 50, maxLimit: 200 });
-    if (wantsSliceResume(args)) {
-      // B16：闸下命中不可续（实测），给了 resumeBySlice 才走分片路；不给 ⇒ 下面旧路逐字不变
-      const res = await createSliceRunner(deps)({
-        args: args ?? {},
-        query,
-        project,
-        rootDir,
-        sourcesOnly: false,
-        limit: page.limit,
-        offset: page.offset,
-        hasCursor: page.hasCursor,
-        // 与旧路同一枚 await 口径（fsFreshnessListing 是 async：不 await 会把 Promise 塞进返回体）
-        fsFreshness: await fsFreshnessListing(deps, rootDir, '.', scope),
-      });
-      // S8 腿2：分片路同样在投影层剥 preview——账在 runner 内部按全量命中算好 ⇒ 与 full 逐位一致
-      return previewMode === 'none'
-        ? { ...res, hits: stripPreviewFields((res['hits'] as Record<string, unknown>[]) ?? []) }
-        : res;
-    }
-    const result = await deps.searchInFiles({
-      searchId: nextSearchId(),
-      roots: [rootDir],
-      query,
-      options: {
-        isRegex: false,
-        caseSensitive: false,
-        wholeWord: false,
-        extensions: [],
-        maxResults: searchWindow(page.offset, page.limit),
-        // S8 腿1：缺省不带键（旧请求体逐字同形）；给了才带（S1 的 Rust DTO / bridge 类型已在）
-        ...(deadlineMs !== undefined ? { deadlineMs } : {}),
-      },
-    });
-    const hits: Record<string, unknown>[] = [];
-    for (const file of result.files) {
-      for (const match of file.matches) {
-        hits.push({ path: toRelativePath(file.path, rootDir), line: match.line, preview: match.preview });
-      }
-    }
-    const account = pageSearchHits(hits, args ?? {}, page.limit, page.offset, {
-      totalMatches: result.totalMatches,
-      truncated: result.truncated,
-    });
-    return {
-      ...account,
-      // S8 腿2："none" ⇒ 投影层剥 preview（账已按全量命中算好，与 full 逐位一致、游标跨模式互认）
-      ...(previewMode === 'none' ? { hits: stripPreviewFields((account['hits'] as Record<string, unknown>[]) ?? []) } : {}),
-      filesScanned: result.filesScanned,
-      elapsedMs: result.elapsedMs,
-      skipped: result.skipped,
-      // S8 腿1：软时限账透传（S1 语义，不重造）。引擎没报 partial ⇒ 应答不带这个键（旧宿主零漂移）。
-      ...(result.partial === true
-        ? {
-            partial: true,
-            ...(typeof result.partialReason === 'string' && result.partialReason !== ''
-              ? { partialReason: result.partialReason }
-              : {}),
-          }
-        : {}),
-      // 检索结果是从盘上现算的：这里说「自你上一次从本根检索以来，根下动过几处」。
-      fsFreshness: await fsFreshnessListing(deps, rootDir, '.', scope),
-    };
-  };
+  // T5：与 `workspace.searchAll` 共用同一个核心 `searchAllCore`（薄箭头保 args 形状，B19 可扫）。
+  const searchAll: McpReaderFn = (args, scope) => searchAllCore(deps, args, scope);
 
   return { projectInfo, fileTree, searchAll };
 }
@@ -1755,103 +1797,9 @@ export function createRunSupplemental(deps: McpIoDeps): (
     };
   };
 
-  const workspaceSearchAll: McpReaderFn = async (args, scope) => {
-    const kernel = deps.getKernel();
-    const project = requireProject(kernel);
-    const rootDir = asString(project['rootDir']);
-    if (rootDir === '') {
-      throw new McpFailure('RESOURCE_UNAVAILABLE', '项目载荷缺 rootDir：检索无基准根（不静默）');
-    }
-    const query = (args ?? {})['query'];
-    if (typeof query !== 'string' || query.length === 0) {
-      throw new McpFailure('INVALID_ARGS', 'workspace.searchAll 的 query 须为非空字符串');
-    }
-    // S8 腿1/腿2：软时限与命中载荷模式（都可省；缺省 = 旧请求体逐字同形、应答零漂移）
-    const deadlineMs = searchDeadlineMsOf(args ?? {}, 'workspace.searchAll');
-    const previewMode = searchPreviewModeOf(args ?? {}, 'workspace.searchAll');
-    assertDeadlineNotWithSlice(args ?? {}, 'workspace.searchAll', deadlineMs);
-    // scope:'sources' ⇒ 以 adapter 填充的作品域目录为根集合（契约字段投影，不硬编码领域）。
-    const roots = searchRootsOf(project, rootDir, (args ?? {})['scope'] === 'sources');
-    const page = pageParamsFor(args ?? {}, { defaultLimit: 50, maxLimit: 200 });
-    if (wantsSliceResume(args)) {
-      // B16：引擎闸下的命中集实测不可续 ⇒ 给了 resumeBySlice 才按互不相交的目录 / 文件分片续取。
-      // 不给这个入参 ⇒ 走下面旧路，触墙时那套三件套 + note 逐字不变（旧面零回退）。
-      const res = await createSliceRunner(deps)({
-        args: args ?? {},
-        query,
-        project,
-        rootDir,
-        sourcesOnly: (args ?? {})['scope'] === 'sources',
-        limit: page.limit,
-        offset: page.offset,
-        hasCursor: page.hasCursor,
-        // 与旧路同一枚 await 口径（否则 Promise 会被原样塞进返回体）
-        fsFreshness: await fsFreshnessListing(
-          deps,
-          roots[0] ?? rootDir,
-          roots.length > 1
-            ? `${roots[0] ?? rootDir}（本次共 ${roots.length} 个根，另 ${roots.length - 1} 个根未单独建基线）`
-            : '.',
-          scope,
-        ),
-      });
-      // S8 腿2：分片路同样在投影层剥 preview——账在 runner 内部按全量命中算好 ⇒ 与 full 逐位一致
-      return previewMode === 'none'
-        ? { ...res, hits: stripPreviewFields((res['hits'] as Record<string, unknown>[]) ?? []) }
-        : res;
-    }
-    const result = await deps.searchInFiles({
-      searchId: nextSearchId(),
-      roots,
-      query,
-      options: {
-        isRegex: false,
-        caseSensitive: false,
-        wholeWord: false,
-        extensions: [],
-        maxResults: searchWindow(page.offset, page.limit),
-        // S8 腿1：缺省不带键（旧请求体逐字同形）；给了才带（S1 的 Rust DTO / bridge 类型已在）
-        ...(deadlineMs !== undefined ? { deadlineMs } : {}),
-      },
-    });
-    const hits: Record<string, unknown>[] = [];
-    for (const file of result.files) {
-      for (const match of file.matches) {
-        hits.push({ path: toRelativePath(file.path, rootDir), line: match.line, preview: match.preview });
-      }
-    }
-    const account = pageSearchHits(hits, args ?? {}, page.limit, page.offset, {
-      totalMatches: result.totalMatches,
-      truncated: result.truncated,
-    });
-    return {
-      ...account,
-      // S8 腿2："none" ⇒ 投影层剥 preview（账已按全量命中算好，与 full 逐位一致、游标跨模式互认）
-      ...(previewMode === 'none' ? { hits: stripPreviewFields((account['hits'] as Record<string, unknown>[]) ?? []) } : {}),
-      filesScanned: result.filesScanned,
-      elapsedMs: result.elapsedMs,
-      skipped: result.skipped,
-      // S8 腿1：软时限账透传（S1 语义，不重造）。引擎没报 partial ⇒ 应答不带这个键（旧宿主零漂移）。
-      ...(result.partial === true
-        ? {
-            partial: true,
-            ...(typeof result.partialReason === 'string' && result.partialReason !== ''
-              ? { partialReason: result.partialReason }
-              : {}),
-          }
-        : {}),
-      // 检索结果是从盘上现算的：`fsFreshness` 说「自你上一次检索以来，根下动过几处」。
-      // 多根（scope:'sources'）只对第一根建基线，其余根在 target 里点名——不假装全覆盖。
-      fsFreshness: await fsFreshnessListing(
-        deps,
-        roots[0] ?? rootDir,
-        roots.length > 1
-          ? `${roots[0] ?? rootDir}（本次共 ${roots.length} 个根，另 ${roots.length - 1} 个根未单独建基线）`
-          : '.',
-        scope,
-      ),
-    };
-  };
+  // T5：`workspace.searchAll` 是 `search.all` 的别名——共用同一个核心 `searchAllCore`，
+  // 保留本名只为兼容；行为、入参、错误文案都与 `search.all` 逐字一致。
+  const workspaceSearchAll: McpReaderFn = (args, scope) => searchAllCore(deps, args, scope);
 
   /* ---------------- 写腿（双闸：第四张表 approvedRoots + 内核写允许域） ---------------- */
 

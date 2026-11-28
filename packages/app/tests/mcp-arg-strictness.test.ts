@@ -105,7 +105,7 @@ const CONSUMED: Readonly<Record<string, readonly string[]>> = {
   'fs.tree': ['maxDepth', ...SHARED_LIST], // clampInt(args.maxDepth) + paginateByCursor(args)
   // MCP-PERF-S8（LaneR，2026-11-07）：+ deadlineMs（软时限，腿真带进 search_text 请求）+
   // preview（full|none，投影层剥 preview 字段）；两者都走 `searchDeadlineMsOf` / `searchPreviewModeOf` 闸。
-  'search.all': ['query', 'resumeBySlice', 'deadlineMs', 'preview', ...SHARED_WINDOW], // query + pageParamsFor(args) + B16 分片开关 + S8 软时限/紧凑载荷
+  'search.all': ['query', 'scope', 'resumeBySlice', 'deadlineMs', 'preview', ...SHARED_WINDOW], // T5：两枚检索面收敛为同一份实现，scope 真被腿读
 
   /* ---- 补齐 / 只读具名工具 ---- */
   'workspace.searchAll': ['query', 'scope', 'resumeBySlice', 'deadlineMs', 'preview', ...SHARED_WINDOW], // S8 同上两枚 additive 入参

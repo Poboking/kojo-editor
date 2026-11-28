@@ -922,15 +922,16 @@ export const KERNEL_IO_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'search.all',
     method: 'searchAll',
-    description: `全工程检索（只读）。命中列表按 limit+cursor 分页；引擎自身封顶时显式给 knownTotal:false（不硬编假 total）。页大小只有一个旋钮：正名 \`limit\`，其余同义旧名照旧接受；本面收 \`query\` / \`offset\` / 页大小别名 / \`cursor\` / \`resumeBySlice\` / \`deadlineMs\`（软时限→partial）/ \`preview\`（none＝剥 preview 省 token），**不收 \`scope\`**（要按作品域收窄请用 workspace.searchAll——旧行为是把 scope 静默丢掉、照样全根扫）。给 \`resumeBySlice:true\` 才按互不相交的目录分片把 5,000 条以上的命中集逐片续取（缺省＝旧的一次性窗口应答，一字不变；deadlineMs 与 resumeBySlice 不同收）。${PAGE_ACCOUNT_POINTER}`,
+    description: `全工程检索（只读）。按 limit+cursor 分页；引擎自身封顶时显式给 knownTotal:false + engineTruncated:true（不硬编假 total）。页大小单旋钮（正名 \`limit\`，旧别名照旧接受）；本面收 \`query\` / \`scope\`（\`all\`＝项目根，\`sources\`＝adapter 声明的作品域根）/ \`offset\` / 页大小别名 / \`cursor\` / \`resumeBySlice\` / \`deadlineMs\`（软时限→partial）/ \`preview\`（none＝剥 preview 省 token）。\`workspace.searchAll\` 是本面的兼容别名（同实现、同入参、同结果）。给 \`resumeBySlice:true\` 才按互不相交的目录分片把 5,000 条以上的命中集逐片续取（缺省＝旧的一次性窗口应答，一字不变；deadlineMs 与 resumeBySlice 不同收）。${PAGE_ACCOUNT_POINTER}`,
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string' },
+        scope: { type: 'string', enum: ['all', 'sources'], description: 'Restrict to the project root (default `all`) or the adapter-declared source roots (`sources`).' },
         offset: { type: 'integer', minimum: 0, description: '0-based hit offset of this window start when paging without a cursor (default 0). Ignored (cursor wins) when `cursor` is given.' },
         deadlineMs: { type: 'integer', minimum: 1, maximum: 120000, description: 'Soft deadline in ms (S1): when spent the engine stops claiming NEW files and answers partial:true + partialReason:"deadline" (separate from truncated/cancelled). Default absent = no deadline, request byte-identical to legacy. Not accepted with resumeBySlice:true.' },
         preview: { type: 'string', enum: ['full', 'none'], description: 'Hit payload mode. Default "full" = verbatim legacy. "none" strips the preview field from every hit at the projection layer; accounting (total/cursor/fingerprint/knownTotal) is computed BEFORE stripping = bit-identical to "full" (cursors cross-mode); line text via fs.readRange.' },
-        resumeBySlice: { type: 'boolean', description: 'B16: opt into slice-by-slice resume past the engine wall (default false = legacy single-window answer). When true the surface builds a plan of pairwise-disjoint depth-1 directories (plus capped file-root chunks), enumerates the tree once and pages through that plan; the page account gains planSlices / sliceIndex / sliceTotal / slicesRun / perSliceTruncated / prefixReverified / walkComplete / totalScope, and knownTotal stays false for any multi-slice plan (summing per-slice totals is NOT this surface\'s claim to make). Paging still follows the same cursor rules: a stale snapshot fingerprint restarts at slice 0 instead of splicing onto the old page.' },
+        resumeBySlice: { type: 'boolean', description: 'B16: opt into slice-by-slice resume past the 5000-hit engine wall (default false = legacy single-window). When true the surface pages a plan of pairwise-disjoint depth-1 directories (plus capped file-root chunks) built from one whole-tree enumeration; the page account gains planSlices / sliceIndex / sliceTotal / slicesRun / perSliceTruncated / prefixReverified / walkComplete / totalScope, and knownTotal stays false for any multi-slice plan (summing per-slice totals is NOT this surface\'s claim). A stale snapshot fingerprint restarts at slice 0 instead of splicing onto the old page. Hidden entries never enter the plan and nested roots are excluded per-entry, so pages cannot overlap.' },
         ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(),
       },
@@ -950,18 +951,18 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'workspace.searchAll',
     description:
-      'Search the whole project for a text query and return file/line hits. Read-only: never mutates files. Use `query` for the case-insensitive substring, optional `scope` to restrict to source files, `maxResults`/`limit` to size a page and `cursor` to resume the next one; optional `deadlineMs` (soft deadline -> partial:true, not with resumeBySlice) and `preview`:"none" (strip previews, compact) are additive. Returns {hits:[{path,line,preview}], total, truncated} plus the page account. Honesty note: the search engine itself has a hard hit wall (5000); when the engine reports it overflowed, this surface answers `knownTotal:false` and `engineTruncated:true` instead of pretending the union of pages equals the true match count — narrow the query or page the files with fs.readFile. Page size is ONE knob: `limit` is its real name, `maxResults` is this surface\'s historical synonym (both work, `limit` wins); anything not listed here is now rejected loudly instead of silently paging at the default size. ' +
+      '`search.all` 的别名：本面与 `search.all` 同实现、同入参、同结果，保留本名只为兼容；完整语义见 `search.all`。' +
       PAGE_ACCOUNT_POINTER,
     inputSchema: {
       type: 'object',
       properties: {
         query: { type: 'string', minLength: 1, maxLength: 512, description: 'Substring to find (case-insensitive).' },
-        scope: { type: 'string', enum: ['all', 'sources'], description: 'Restrict to source files or search all files (default all).' },
-        deadlineMs: { type: 'integer', minimum: 1, maximum: 120000, description: 'Soft deadline in ms (S1): when spent the engine stops claiming NEW files and answers partial:true + partialReason:"deadline" (separate from truncated/cancelled). Default absent = no deadline, request byte-identical to legacy. Not accepted with resumeBySlice:true.' },
-        preview: { type: 'string', enum: ['full', 'none'], description: 'Hit payload mode. Default "full" = verbatim legacy. "none" strips the preview field from every hit at the projection layer; accounting (total/cursor/fingerprint/knownTotal) is computed BEFORE stripping = bit-identical to "full" (cursors cross-mode); line text via fs.readRange.' },
-        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: `Page size (default 50; the pre-existing cap, never widened).${ALIAS_OF_LIMIT}` },
-        offset: { type: 'integer', minimum: 0, description: '0-based hit offset of this window start when paging without a cursor (default 0); the cursor wins when given.' },
-        resumeBySlice: { type: 'boolean', description: 'B16: set true to resume past the 5000-hit engine wall by paging a plan of pairwise-disjoint depth-1 directories (plus capped file-root chunks) built from one whole-tree enumeration. Default false keeps the legacy single-window behaviour verbatim (knownTotal:false + engineTruncated on wall hit, no slice account). With true, each page carries planSlices / sliceIndex / sliceTotal / slicesRun / perSliceTruncated / prefixReverified / walkComplete / totalScope; multi-slice plans keep knownTotal:false with the accumulator reason, and the true total is the client summing sliceTotal while walkComplete is true. A snapshot change mid-paging restarts at slice 0 rather than splicing onto the old page. Hidden entries never enter the plan and nested roots are excluded per-entry, so pages cannot overlap.' },
+        scope: { type: 'string', enum: ['all', 'sources'], description: 'See `search.all`\'s `scope`.' },
+        deadlineMs: { type: 'integer', minimum: 1, maximum: 120000, description: 'See `search.all`\'s `deadlineMs`.' },
+        preview: { type: 'string', enum: ['full', 'none'], description: 'See `search.all`\'s `preview`.' },
+        maxResults: { type: 'integer', minimum: 1, maximum: 200, description: 'Same knob as `limit`, same reject rule (default 50, cap 200).' },
+        offset: { type: 'integer', minimum: 0, description: 'See `search.all`\'s `offset`.' },
+        resumeBySlice: { type: 'boolean', description: 'See `search.all`\'s `resumeBySlice`.' },
         ...PAGE_PROPS_PTR,
         ...pageSizeAliasProps(['maxResults']),
       },
