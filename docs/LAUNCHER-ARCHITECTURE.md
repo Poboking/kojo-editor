@@ -1,6 +1,6 @@
 # 启动器模块（Launcher）架构设计与核心接口
 
-- **版本**：v0.4（设计提案，未实现）
+- **版本**：v0.4（**已实现**，见下「状态」行）
 - **日期**：2026-10-26
 - **修订**：v0.2 —— 游戏插件（可修改 / 扩展游戏逻辑）升为一等能力；删除「不做游戏逻辑修改」非目标；
   新增 `PluginManager`、插件清单 / 风险分级 / 函数级冲突 / 存档兼容门禁与信任链。
@@ -12,17 +12,23 @@
   ③补真名称（`snapshot.source`、`kernel.ops`、`bootstrap.ts` 注册点）并纠正 adapter 可达的
   解析通道（壳层 tree-sitter 不可 import）；④补两条实树闸（开机图 / artifact-audit）与真壳
   验收通道；⑤键位改为未占用项（`ctrl+n` 已被 `kojo.newKojoFile` 占用）；⑥脏缓冲保护提到 P1。
-- **状态**：**设计提案 · 待评审**。本文件只回答「启动器怎么长、边界在哪、契约是什么」；
-  落地后的插件数、测试数、性能读数一律以 `docs/STATE.md` 为准。
+- **状态**：**已实现**（2026-11-28 改判；原写「设计提案 · 待评审 · 未实现」已不成立）：
+  `@kojo/plugin-launcher-core` 十三模块（`instance-store` / `instance-lock` / `host` / `process-supervisor` /
+  `plugin-manager` / `plugin-project` / `plugin-project-template` / `content-manager` / `save-host` /
+  `save-manager` / `log-service` / `task-center` / `errors`）与 `app/src/launcher` 十枚（视图 / 面板 /
+  service / model）均在 dev。文首那条「落地前必须以 ADR-0008/0009 把上位文档的非目标表述改掉」**已销**：
+  三份 ADR 已入库（`0008-launcher-privileged-process-host` / `0009-game-plugin-install-and-trust` /
+  `0010-plugin-source-project-and-build`），`ARCHITECTURE.md` §1.2 已改口为「编辑器不静默改，启动器只做
+  显式、可回滚的游戏插件安装」。本文件此后回答「边界在哪、契约是什么」；落地后的插件数 / 测试数 / 性能读数
+  一律以 `docs/STATE.md` 为准。
 - **上位文档**：[ARCHITECTURE.md](ARCHITECTURE.md)（总体架构与铁律）、
   [PITFALLS.md](PITFALLS.md)（写盘 / 探针 / 多 agent 硬坑）。
   本文与上位文档冲突时，**以上位文档的铁律为准**；本文只做 additive 展开，不改既有语义。
-- **与上位文档的有意扩展**：`ARCHITECTURE.md` §1.2 仍写「不直接修改游戏逻辑代码」。本设计对**编辑器**保持该约束，
+- **与上位文档的有意扩展**：`ARCHITECTURE.md` §1.2 原文曾写「不直接修改游戏逻辑代码」。本设计对**编辑器**保持该约束，
   对**启动器**新增「用户显式安装游戏插件」能力；同时新增一条**独立于内核 `writablePaths` 的启动器写授权表**
-  （逐根原生对话框批准，见 §9.1）。落地前必须以 ADR-0008/0009 把上位文档的非目标表述改成
-  「编辑器不静默改；启动器只做显式、可回滚的插件安装」，并把这条新的写授权通道写进铁律，
-  避免两处口径长期打架。
-- **建议配套 ADR**：`docs/adr/0008-launcher-privileged-process-host.md`（进程特权面与服务键边界）、
+  （逐根原生对话框批准，见 §9.1）。该改口**已落**（ADR-0008/0009 入库，§1.2 现文即
+  「编辑器不静默改；启动器只做显式、可回滚的游戏插件安装」，新的写授权通道一并写进铁律），两处口径不再打架。
+- **配套 ADR（已入库）**：`docs/adr/0008-launcher-privileged-process-host.md`（进程特权面与服务键边界）、
   `docs/adr/0009-game-plugin-install-and-trust.md`（插件安装、函数覆盖与信任链）、
   `docs/adr/0010-plugin-source-project-and-build.md`（插件项目 = 工作区项目、确定性构建、源/产物分离）。
 

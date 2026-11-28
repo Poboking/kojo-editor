@@ -4,7 +4,7 @@
 |---|---|
 | 文档版本 | v0.9（设计稿 + 任务清单合并；去重、去历史版本叙述，**规范与技术细节零删减**） |
 | 日期 | 2026-10-21 |
-| 状态 | **设计稿**：已入库、未实现；D0 决策逐条拍板后才开 C1 |
+| 状态 | **规范 + 实施记录**（2026-11-28 改判；原写「设计稿·未实现」已不成立）：§16 的 C1/C2/A3/P5/E4/S5/U6/M7/K8 各 Phase 已按 DoD 落 dev，实现见 `@kojo/kojo-core`（lexer/parser/lower/sema/migrate/incremental）、`@kojo/kojo-lang`（语言服务腿）、`@kojo/plugin-kojo-sugar`（糖层）；**未收的只剩 R9 发布闸**（`K2-RELEASE`）与**真实作者语料**（`K2-CORPUS-SOURCE`，现只有 `fixtures/corpus-v1` 可控夹具），见 `docs/BOARD.md`。本稿此后的职责是**设计取舍的唯一落档**（"为什么这么设计"，代码里读不到），进度以 BOARD / STATE 为准 |
 | 定位 | eraTW-first；adapter SDK 同步打底；叙事面与程序层分层 |
 | 口径 | 单一 2.0 模式；无版本声明；旧写法 error + 迁移；程序层为 extension |
 | 来源 | 本机原稿 `Kojo-2.0-语法设计稿.md` v0.9 与 `Kojo-2.0-重构任务清单.md` v0.9（合并前两份均未入库）；Phase2 批注版是 v0.5，已被 v0.9 取消版本声明/双模式，**不入库** |
