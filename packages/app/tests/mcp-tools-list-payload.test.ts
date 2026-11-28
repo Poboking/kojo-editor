@@ -42,7 +42,9 @@ import {
   PAGE_SIZE_ARG_ALIASES,
   SEMANTIC_TOOL_SPECS,
   SUPPLEMENTAL_TOOL_SPECS,
+  TRANSPORT_RESPONSE_LIMIT_BYTES,
   createMcpCapabilityRegistry,
+  toolsListFrameBytes,
   type McpSessionScope,
   type McpTool,
 } from '@kojo/mcp-host';
@@ -172,6 +174,16 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     expect(n).toBeGreaterThanOrEqual(B22_ACCOUNTED_FLOOR);
     // 去重前的读数 B21_FULL_FRAME_BYTES 只留着核对 Δ：218,897 → 168,894（−50,003 B＝−22.8%）。
     expect(B22_FULL_FRAME_BYTES).toBeLessThan(B21_FULL_FRAME_BYTES);
+  });
+
+  it('②b 单一量具（WP-6a）：本文件的 frameBytes 与运行时 `toolsListFrameBytes` 逐字节相等', () => {
+    // 能力面资源 `kojo://server/capability-face` 报给模型的帧字节用的是同一个函数。
+    // 这条钉的是「测试钉的数」与「模型读到的数」不许分叉：谁改量具口径，两边一起变；
+    // 谁在本文件另起一份量法，这里当场红。
+    expect(frameBytes(fullFace)).toBe(toolsListFrameBytes(fullFace, 'b22'));
+    expect(MAX_RESPONSE_BYTES).toBe(TRANSPORT_RESPONSE_LIMIT_BYTES);
+    // 同一个 id 才算同一帧：id 不同字节数必然不同，这条防止有人「顺手」改了调用侧的 id 还声称没差。
+    expect(toolsListFrameBytes(fullFace, 'b22')).not.toBe(toolsListFrameBytes(fullFace, 'b22-longer-id'));
   });
 
   it('③ 上帧键集只有契约那几格，run 必须序列化消失', () => {

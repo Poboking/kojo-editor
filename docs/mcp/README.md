@@ -196,15 +196,29 @@ node tools/kojo-mcp.mjs
 **绝不返回空串假实现**。写类只收项目根内**相对路径**：`RELATIVE_PATH_SCHEMA` 拒绝绝对路径、
 盘符、`..` 逃逸，执行层再用 `approvedRoots` 复核。
 
-### 5.2 resources（`kojo://project/*` 与 `kojo://tasks`）
+### 5.2 resources（`kojo://project/*`、`kojo://tasks`、`kojo://server/*`）
 
-`snapshot` / `file-tree` / `diagnostics` / `validation-failures` / `commands` / `plugins` / `events` / `active-document` / `fs-freshness` / `tasks`。
+`snapshot` / `file-tree` / `diagnostics` / `validation-failures` / `commands` / `plugins` / `events` / `active-document` / `fs-freshness` / `tasks` / `reloads` / `capability-face`。
 所有资源文本都有**截断上限**并带显式 `truncated` 标记；插件状态 `inactive` 与 `missing[]` 必须可见，不静默。
+**枚数有两个数，别混说**：`MCP_RESOURCE_SPECS` 规格清单 **11** 条，运行期 **12** 条——生产 `real-sources.ts`
+另注入一枚 `fs-freshness`（走 `deps.resources`，同 URI 可覆盖内置项）。判据 `mcp-capability-face.test.ts` ⑦
+把这两个数分开钉住，免得「文档 11 / 代码 10」互相冤枉。
+
 `fs-freshness`（2026-11-06 余项③＝`b90d79bb`）自述监视覆盖与两张有界账本读数；同一批把判定结果附在**只读应答**
 的 `fsFreshness` 字段上（不可用 / 未覆盖 / 无基线 / 账溢出 ⇒ `stale:null` + `staleReason`，绝不乐观 `false`）。
 **窗内的自写回声那一格已从「乐观 false」改成「读时真 stat 复核」**（B8 发起＝`283c35d8`，B13 把只读腿改用异步入口
 ＝`843f420a`）：判据 `mtimeMs` + `size` 双等、核出的外部写如实进改动账并归因 `unattributed`、判不了仍 `null` + 理由，
 逐格形态与成本见 §5.10。
+
+`reloads`（WP-3b＝`b12d3b2b`）是多项目驻留换代的有界账本：`project.evicted` / `project.reload` 原始事件 +
+`reload.result` 回执，`claim=reloaded` 只在同源证明齐全时给，溢出走 `dropped` 计数。
+
+`capability-face`（WP-6a＝本批）是**派生**资源——不接任何外部真源，读时按本会话 `scope` 现算 registry 自己：
+`visible` / `hidden` 逐档计数、`tools/list` 一帧字节、传输闸余量。三条口径写在面上：
+①`hidden` **只给计数不给名字**（不可见面的名字本身就是未授权信息）；②「全量面」取 `allTools` 而不是
+`listTools(privileged)`（未逐项批准时后者照样看不到 privileged 面，拿它当分母会把账算成负数）；
+③只覆盖 tier 判定，`market_*` 的 fail-closed 在 Rust 端，不在本账里冒充。
+选 resource 而不是新工具：`tools/list` 的 desc 余量只剩 874 B，按「增面前先瘦」的纪律，**零 tools/list 增量**是唯一说得过去的形态。
 
 ### 5.3 prompts（骨架，零游戏名词）
 
@@ -803,7 +817,7 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 > 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-28 复核）。
 
 - 能力面：命令 **61** / Rust 命令 **91** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
-  tools **86**（read **41** / edit **15** / privileged **30**）；resources **11**；prompts **3**；
+  tools **86**（read **41** / edit **15** / privileged **30**）；resources **12**（规格清单 11 + 生产注入的 `fs-freshness`）；prompts **3**；
 - 缺口：`totalGaps=181` / `wiredGaps=68` / **`deferredGaps=113`**，逐条带原因，
   按七类归因（合计 113，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组；
   「刻意不登记」两条例外由 `INTENTIONALLY_UNREGISTERED` 表显式点名，机器读数与本节结论同口径）：

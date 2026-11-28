@@ -2533,6 +2533,36 @@ export interface McpResourceSpec {
   readonly mimeType?: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * 5b. 能力面自读（WP-6a）：把「还能不能再加一具面」从测试里搬到模型眼前
+ *
+ * 由来：WP-4 把全量帧从 188,375 压到 175,337 B，但那个数字只活在判据的断言里——
+ * 模型看不见自己的预算，宿主也看不见，于是每次「要不要加一具面」都得人去跑测试。
+ * 这一条把它做成 **resource**（不是工具）：tools/list 的 desc 余量只有 874 B，
+ * 按「增面前先瘦」的纪律，**零 tools/list 增量**才是这里唯一说得过去的形态。
+ * ------------------------------------------------------------------ */
+
+/** 能力面资源 URI（服务级，不属于任何项目，故自成一个 `kojo://server/` 命名空间）。 */
+export const CAPABILITY_FACE_URI = 'kojo://server/capability-face';
+
+/**
+ * 传输闸：Rust `mcp::server::Limits::max_response_bytes`（`1024 * 1024`）。
+ * 这是**真正卡住**一帧的那道；`host-bridge` 的 4 MiB 是更松的桥上限。
+ * 两份真值由 `mcp-capability-face.test.ts` ⑥ 从 Rust 源码现取对拍——只改一边会红。
+ */
+export const TRANSPORT_RESPONSE_LIMIT_BYTES = 1024 * 1024;
+
+const UTF8 = new TextEncoder();
+
+/**
+ * 一帧 `tools/list` 的线协议字节数。**这是唯一量具**：判据与运行时共用，
+ * 免得「测试钉的数」与「模型读到的数」变成两份真值。
+ * `run` 是函数，`JSON.stringify` 会自动丢弃（与线协议一致）。
+ */
+export function toolsListFrameBytes(tools: readonly McpTool[], id: string | number = 'measure'): number {
+  return UTF8.encode(JSON.stringify({ jsonrpc: '2.0', id, result: { tools } })).length;
+}
+
 export const MCP_RESOURCE_SPECS: readonly McpResourceSpec[] = [
   { uri: 'kojo://project/snapshot', name: '项目快照', description: '当前项目的一屏聚合快照', mimeType: 'application/json' },
   { uri: 'kojo://project/file-tree', name: '文件树', description: '项目根内文件树', mimeType: 'application/json' },
@@ -2546,6 +2576,8 @@ export const MCP_RESOURCE_SPECS: readonly McpResourceSpec[] = [
   { uri: 'kojo://tasks', name: '长任务表', description: '本会话长任务清单：状态 / 进度账 / 取消位 / 有界终态投影 + notIncluded[] 缺席任务族逐条原因（轮询面，服务端不推送）', mimeType: 'application/json' },
   // WP-3b（2026-11-28）：驻留换代账本——`project.reload` 的回执可读面（只读、有界、按通道）。
   { uri: 'kojo://project/reloads', name: '驻留换代账', description: '多项目驻留换代的有界账本：project.evicted / project.reload 原始事件 + reload.result 回执（claim=reloaded 仅在同源证明齐全时；含 dropped 溢出计数）', mimeType: 'application/json' },
+  // WP-6a（2026-11-28）：能力面自读——**派生**资源（不接线），按本会话 scope 现算。
+  { uri: CAPABILITY_FACE_URI, name: '能力面自读', description: '本会话可见能力面与体积账（派生自 registry，按 scope 现算）：visible/hidden 逐档计数 + tools/list 一帧字节与传输闸余量；hidden 只给计数不给名字', mimeType: 'application/json' },
 ];
 
 /* ------------------------------------------------------------------ *
@@ -3484,22 +3516,73 @@ export function createMcpCapabilityRegistry(deps: McpHostDeps): McpCapabilityReg
   const allTools = dedupeByName([...commandTools, ...semanticTools, ...kernelTools, ...supplementalTools]);
   const toolByName = new Map(allTools.map((t) => [t.name, t]));
 
-  const builtinResources: readonly McpResource[] = MCP_RESOURCE_SPECS.map((spec) => ({
-    uri: spec.uri,
-    name: spec.name,
-    description: spec.description,
-    ...(spec.mimeType ? { mimeType: spec.mimeType } : {}),
-    read: async (scope: McpSessionScope) => {
-      if (!deps.readResourceData) {
-        throw new McpFailure('RESOURCE_UNAVAILABLE', `resource ${spec.uri} 未提供数据源（不静默）`);
-      }
-      const data = await deps.readResourceData(spec.uri, scope);
-      // 可读性投影（列表/正文带自己的 truncated 标记）→ 文本化 → 总闸截断（带显式 truncated）。
-      const projected = slimResourceData(spec.uri, data);
-      const { text } = truncateResourceText(toText(projected));
-      return { contents: [{ uri: spec.uri, text }] };
-    },
-  }));
+  /**
+   * 能力面（WP-6a）：**派生**读数，不接任何外部真源——它就是 registry 自己。
+   * 因此 `readResourceData` 缺席也能读；给了也不问（外部真源无权替它编数）。
+   * 注意「全量面」＝ `allTools`，不是 `listTools(privileged)`：未逐项批准时后者照样看不到
+   * privileged 面，拿它当分母会把 hidden 算成负数。
+   */
+  const tierCounts = (tools: readonly McpTool[]) => ({
+    read: tools.filter((t) => t.tier === 'read').length,
+    edit: tools.filter((t) => t.tier === 'edit').length,
+    privileged: tools.filter((t) => t.tier === 'privileged').length,
+  });
+  const capabilityFace = (scope: McpSessionScope): unknown => {
+    const visible = allTools.filter((t) => tierAllowed(t, scope).allowed);
+    const all = tierCounts(allTools);
+    const seen = tierCounts(visible);
+    const frame = toolsListFrameBytes(visible, 'capability-face');
+    const headroom = TRANSPORT_RESPONSE_LIMIT_BYTES - frame;
+    return {
+      session: { tier: scope.tier, approvedTools: scope.approvedTools.length },
+      visible: { total: visible.length, byTier: seen },
+      hidden: {
+        total: allTools.length - visible.length,
+        byTier: {
+          read: all.read - seen.read,
+          edit: all.edit - seen.edit,
+          privileged: all.privileged - seen.privileged,
+        },
+        // 只给计数不给名字：不可见面的名字本身就是未授权信息。
+        // 覆盖面如实交代：本账只算 tier 判定，market 族的 fail-closed 在 Rust 端，不在这里冒充。
+        note: '只给计数不给名字（不可见面的名字本身就是未授权信息）。本账只覆盖 tier 判定（read/edit/privileged）；market 族由 Rust 端点 fail-closed，不计入本账。',
+      },
+      payload: {
+        toolsListFrameBytes: frame,
+        transportLimitBytes: TRANSPORT_RESPONSE_LIMIT_BYTES,
+        headroomBytes: headroom,
+        headroomPercent: Math.round((headroom / TRANSPORT_RESPONSE_LIMIT_BYTES) * 1000) / 10,
+      },
+      resources: resources.length,
+      prompts: prompts.length,
+    };
+  };
+  /** 派生资源的读取器表：命中即绕开 `readResourceData`（它们是 registry 的自画像）。 */
+  const derivedReaders = new Map<string, (scope: McpSessionScope) => unknown>([[CAPABILITY_FACE_URI, capabilityFace]]);
+
+  const builtinResources: readonly McpResource[] = MCP_RESOURCE_SPECS.map((spec) => {
+    const derived = derivedReaders.get(spec.uri);
+    return {
+      uri: spec.uri,
+      name: spec.name,
+      description: spec.description,
+      ...(spec.mimeType ? { mimeType: spec.mimeType } : {}),
+      read: async (scope: McpSessionScope) => {
+        const data = derived
+          ? derived(scope)
+          : deps.readResourceData
+            ? await deps.readResourceData(spec.uri, scope)
+            : // 缺席即报错，不静默回空表（派生面不在此列：它们没有「真源缺席」这回事）。
+              (() => {
+                throw new McpFailure('RESOURCE_UNAVAILABLE', `resource ${spec.uri} 未提供数据源（不静默）`);
+              })();
+        // 可读性投影（列表/正文带自己的 truncated 标记）→ 文本化 → 总闸截断（带显式 truncated）。
+        const projected = slimResourceData(spec.uri, data);
+        const { text } = truncateResourceText(toText(projected));
+        return { contents: [{ uri: spec.uri, text }] };
+      },
+    };
+  });
   const resources: McpResource[] = [...builtinResources];
   for (const extra of deps.resources ?? []) {
     const at = resources.findIndex((r) => r.uri === extra.uri);
