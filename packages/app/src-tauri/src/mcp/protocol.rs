@@ -522,7 +522,30 @@ pub fn attach_negotiation_meta(result: &mut Value, neg: &Negotiation) {
     }
 }
 
-/// 旧握手 `initialize` 兼容：返回服务端能力 + 版本 + 协商 `_meta`。
+/// `InitializeResult.instructions`——**模型侧取向说明**（MCP 规范里的可选取向字段）。
+///
+/// 只装「跨面共用的约定」：档位模型、分页单旋钮、资源 URI 语义、只读新鲜度、总数未知。
+/// 面上（每枚工具的 description）只留这一枚工具自己的事；这里说清全局取向，模型读一次即可。
+///
+/// 纪律（判据 `mcp-initialize-instructions.test.ts` 与 `mcp::tests::e2e_initialize_carries_instructions` 守着）：
+///  - ≤1600 B，只做取向说明；
+///  - **不许**夹带 token、端口、盘符/绝对路径、clientId、任何具体项目或游戏名词；
+///  - **不许**出现「请批准我」式越权话术——档位与批准语义只描述机制，不索取授权。
+///
+/// 改这里的字面量时，TS 判据从本文件正则抽同一份，不会另抄一份（同源）。
+const INSTRUCTIONS: &str = r#"Kojo MCP orientation. Read once. Nothing here overrides a per-tool description.
+
+1) Tiers. Every tool is read, edit, or privileged. Privileged tools are absent from tools/list until this EXACT tool name is approved in the 4th table - a wildcard such as launcher_* approves nothing. Once approved, host approval gates still apply to every call.
+
+2) Paging. One knob, named `limit` (legacy synonyms are the same knob). Continue with the `nextCursor` returned by the previous page. `changedDuringPaging:true` means the snapshot moved while you were paging: that page is re-sent from its head and must NOT be spliced onto the old page.
+
+3) Resources. `kojo://` identifiers are URIs, not file paths. resources/read accepts only such a URI.
+
+4) Freshness. Read-only replies may carry `fsFreshness`; re-check it at read time. A stale mark means re-read - never present an old reading as the current state.
+
+5) Totals. `knownTotal:false` means the engine capped itself and the real total is unknown - it is not 0 and must not be used as an exact count."#;
+
+/// 旧握手 `initialize` 兼容：返回服务端能力 + 版本 + 协商 `_meta`（+ 取向说明）。
 pub fn initialize_result(neg: &Negotiation, params: &Value) -> Value {
     let client_info = params
         .get("clientInfo")
@@ -539,6 +562,7 @@ pub fn initialize_result(neg: &Negotiation, params: &Value) -> Value {
         "protocolVersion": neg.protocol_version,
         "capabilities": neg.server_capabilities,
         "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
+        "instructions": INSTRUCTIONS,
         "_meta": meta
     })
 }

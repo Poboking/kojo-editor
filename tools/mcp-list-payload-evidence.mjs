@@ -135,7 +135,7 @@ function splitCount(haystack, needle) {
 
 /**
  * 逐面长描述里**共用的最长后缀**：从真实描述串算，不硬编码文案（`PAGE_STRICT_NOTE` /
- * `LAUNCHER_TIER_NOTE` 这些尾注没导出，正则抓源码等于手写一份估计——都不作数）。
+ * `PRIVILEGED_TIER_NOTE` 这些尾注没导出，正则抓源码等于手写一份估计——都不作数）。
  * 口径＝对每个候选长度 L 把各描述的「末 L 字符」分组，取 `枚数 × L` 最大的那一格，
  * 并要求枚数 ≥minSupport（少于一组同族面不算样板）。复杂度 O(枚数 × 最长描述长度)。
  */

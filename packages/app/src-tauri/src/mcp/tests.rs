@@ -2256,6 +2256,138 @@ fn e2e_initialize_shape_over_real_tcp() {
     assert!(!text.contains("mcp-session-id"));
 }
 
+/* --------------- T2：`initialize.instructions`（模型侧取向说明，additive） --------------- */
+
+/// 连续 ≥n 个十六进制字符（token 形态探测）。
+fn has_hex_run(s: &str, n: usize) -> bool {
+    let mut run = 0usize;
+    for b in s.bytes() {
+        if b.is_ascii_hexdigit() {
+            run += 1;
+            if run >= n {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    false
+}
+
+/// 盘符路径探测：`X:\…` 或 `X:/…`（`kojo://` 这种 scheme 不算——第四位仍是 `/` 的才叫 scheme）。
+fn has_drive_path(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.windows(3)
+        .any(|w| w[0].is_ascii_alphabetic() && w[1] == b':' && w[2] == b'\\')
+        || b.windows(4)
+            .any(|w| w[0].is_ascii_alphabetic() && w[1] == b':' && w[2] == b'/' && w[3] != b'/')
+}
+
+#[test]
+fn e2e_initialize_carries_instructions() {
+    let s = TestServer::start();
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"harness"}}}"#;
+    let r = mcp_post(s.port, &s.token, body);
+    assert_eq!(r.status, 200);
+    let v = rpc_json(&r);
+    // R1：`InitializeResult.instructions` 在场、非空、≤1600 B。
+    let instr = v["result"]["instructions"]
+        .as_str()
+        .expect("initialize 回包必须带 result.instructions（MCP InitializeResult 的可选取向说明）");
+    assert!(!instr.trim().is_empty(), "instructions 不许是空串");
+    assert!(
+        instr.len() <= 1600,
+        "instructions 超预算：{} B > 1600 B",
+        instr.len()
+    );
+    // R2：五个语义点逐个在场（缺一个就红）。
+    for needle in [
+        // ① 档位模型 + 批准语义
+        "read, edit, or privileged",
+        "tools/list",
+        "wildcard such as launcher_* approves nothing",
+        // ② 分页单旋钮 + 续页 + 翻页期间快照变化
+        "`limit`",
+        "`nextCursor`",
+        "`changedDuringPaging:true`",
+        // ③ 资源是 URI 语义
+        "`kojo://`",
+        // ④ 只读应答的新鲜度标注
+        "`fsFreshness`",
+        // ⑤ 引擎封顶时显式「总数不知道」
+        "`knownTotal:false`",
+    ] {
+        assert!(
+            instr.contains(needle),
+            "instructions 丢了语义标记 {needle}（现文：{instr}）"
+        );
+    }
+    // R3 负向：只做取向说明，不许夹带运行期机密或具体落点。
+    assert!(
+        !has_hex_run(instr, 32),
+        "instructions 里出现了 32+ 位十六进制串（token 形态）"
+    );
+    assert!(
+        !instr.contains("http://127.0.0.1:"),
+        "instructions 里出现了本地端口串"
+    );
+    assert!(!has_drive_path(instr), "instructions 里出现了盘符路径");
+    assert!(
+        !instr.contains("/Users/") && !instr.contains("/home/"),
+        "instructions 里出现了绝对家目录"
+    );
+    assert!(
+        !instr.to_ascii_lowercase().contains("clientid"),
+        "instructions 里出现了 clientId"
+    );
+}
+
+#[test]
+fn initialize_result_instructions_is_additive_only() {
+    let params = json!({
+        "protocolVersion": "2024-11-05",
+        "clientInfo": { "name": "harness", "version": "9.9.9" }
+    });
+    let neg = negotiate(&params);
+    let full = initialize_result(&neg, &params);
+
+    // 旧形状：用同一条生产原语重建（meta_for + clientInfo 回显），instructions 之外逐键不变。
+    let mut legacy_meta = meta_for(&neg);
+    legacy_meta.as_object_mut().unwrap().insert(
+        "io.modelcontextprotocol/clientInfo".to_string(),
+        params["clientInfo"].clone(),
+    );
+    let legacy = json!({
+        "protocolVersion": neg.protocol_version.clone(),
+        "capabilities": neg.server_capabilities.clone(),
+        "serverInfo": { "name": SERVER_NAME, "version": SERVER_VERSION },
+        "_meta": legacy_meta
+    });
+
+    let mut stripped = full.clone();
+    stripped
+        .as_object_mut()
+        .expect("initialize 回包必须是对象")
+        .remove("instructions");
+    // R4：删掉新键之后，四个老键（含值、含 clientInfo 回显）必须与旧版逐字节相等。
+    assert_eq!(
+        stripped, legacy,
+        "instructions 只能加键：protocolVersion / capabilities / serverInfo / _meta 一个字节都不许动"
+    );
+    let keys: Vec<&str> = full
+        .as_object()
+        .expect("initialize 回包必须是对象")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys.len(),
+        5,
+        "新增只许一个键（instructions），现为 {keys:?}"
+    );
+    assert!(full.get("instructions").is_some());
+}
+
 #[test]
 fn e2e_tools_list_tier_filter_and_scope_promotion() {
     let s = TestServer::start();

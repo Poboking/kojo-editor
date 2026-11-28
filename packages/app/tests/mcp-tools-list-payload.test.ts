@@ -152,10 +152,19 @@ const B21_FULL_FRAME_BYTES = 218_897;
  *  T1 底数按例重钉（2026-11-28，第二轮全量指针化）：172,200 → **140,000**——五组逐字重复
  *  （limit 全文 / PAGE_SIZE_ALIAS_POINTER / PAGE_ACCOUNT_NOTE / cursor / instanceId）结构性
  *  收口后全量帧实拍 **141,889**（static 量具；判据口径 −5 B），记账下界 163,000 → **135,000**
- *  （约 −3.5%），新带顶 154,000，机械余量 12,111 B。 */
-const B22_FULL_FRAME_BYTES = 140_000;
+ *  （约 −3.5%），新带顶 154,000，机械余量 12,111 B。
+ *  T2 底数再钉（2026-11-28，`initialize.instructions` + 特权档位尾注收口）：**140,000 → 130,000**。
+ *  本轮不增面、只搬字：27 枚 launcher_* 面的 187 字符尾注 → 102 字符（每面 −85 B），
+ *  并把同一条短尾注补给 3 枚原本没挂它的特权面（fileTree.remove / fileTree.rename /
+ *  commands.run，每面 +103 B＝1 个空格 + 102）。判据口径实拍 **139,898**（desc 58,958 /
+ *  schema 69,589 / launcher 46,305），上一轮 141,889 → 本轮 139,898（−1,991）。
+ *  新带顶 143,000，机械余量 **3,102 B**（≥2,000 B 的增面余量：一枚中位面 ~1,200–2,100 B）。
+ *  schema 本批零变化（69,589），上界 70,200 不动——不为本批方便而放宽。 */
+const B22_FULL_FRAME_BYTES = 130_000;
 /** B22 记账下界（约 −3.5%）：还要再瘦必须先改这一格并留下读数，不许把删内容当瘦身。
- *  T1：163,000 → 135,000（帧 175,337 → 141,889 后按例下调，仍留 ~3.5% 记账余量）。 */
+ *  T1：163,000 → 135,000（帧 175,337 → 141,889 后按例下调，仍留 ~3.5% 记账余量）。
+ *  T2：135,000 不动——新实拍 139,898 的 −3.5% 恰好是 135,002，这一格本来就在设计位上；
+ *  抬它只会挡住后续合法瘦身，没有额外信息。 */
 const B22_ACCOUNTED_FLOOR = 135_000;
 const BAND = 0.1;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -298,8 +307,14 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
       expect(t.description ?? '', `${t.name} 的页账指针不得复刻完整口径`).not.toContain(PAGE_ACCOUNT_NOTE);
     }
 
-    // 启动器族的档位尾注：逐字共用，但只许出现在真的 privileged 的 launcher_* 面上，五个要点齐。
-    const tierTokens = ['privileged', 'tools/list', 'EXACT name', '4th table', 'launcher_*'];
+    // 启动器族的档位尾注：逐字共用，但只许出现在真的 privileged 的 launcher_* 面上。
+    // T2 收口：可见性规则（「未批准不出现在 tools/list」/「只认精确名」/「通配不算批准」）
+    // 搬进 `initialize.instructions` 全局一份——那句话只对「看不见这枚工具」的模型有意义，
+    // 而那种会话读不到这枚工具的描述，它在唯一适用的场景里不可读。面上只留模型此刻
+    // 用得上的三件：这是特权档、宿主闸门管每次调用、规则去哪读。
+    // 搬走的那三条不许凭空消失：由 mcp-initialize-instructions.test.ts 的 S4 从 protocol.rs
+    // 的同源字面量里逐条钉住（tools/list / EXACT name / wildcard … approves nothing）。
+    const tierTokens = ['Tier: privileged', 'host approval still gates every call', '`initialize`', 'instructions'];
     for (const t of fullFace.filter((x) => x.name.startsWith('launcher_'))) {
       for (const token of tierTokens) {
         expect(t.description ?? '', `${t.name} 的档位说明缺 ${token}`).toContain(token);
@@ -419,9 +434,16 @@ describe('B22 tools/list 载荷体积＋信息等价闸（注册表真源现场�
     // desc 67,926 → 60,944、schema 96,055 → 69,589、frame 175,337 → 141,889。
     // 按现取收紧：desc 68,800 → 61,500、schema 97,200 → 70,200；launcher 75,000 与 2048
     // 描述闸、BAND 0.1、记账下界 135,000 一字不动。
-    expect(descBytes).toBeLessThanOrEqual(61_500); // …WP-4 67,926；T1 指针化后 60,944
-    expect(schemaBytes).toBeLessThanOrEqual(70_200); // …WP-4 96,055；T1 指针化后 69,589（−26,466）
-    expect(launcherBytes).toBeLessThanOrEqual(75_000); // B21 实拍全族 100,323；T1 实拍 48,600
+    // T2（2026-11-28）`initialize.instructions` 落地 + 特权档位尾注 187 → 102 字符收口后现取实测
+    // desc **58,958** / schema **69,589** / launcher **46,305** / frame **139,898**（判据口径；
+    // static 量具 139,903，两通道包装差 5 B）。上一轮读数 → 本轮读数：
+    // desc 60,944 → 58,958（−1,986）、schema 69,589 → 69,589（0，本批不碰 schema）、
+    // frame 141,889 → 139,898（−1,991）。
+    // 按现取收紧（余量都 ≥2,000 B）：desc 61,500 → 61,000（余量 2,042）、launcher 75,000 →
+    // 48,500（余量 2,195）；schema 70,200 **不动**（本批零变化，不放宽也不收紧）。
+    expect(descBytes).toBeLessThanOrEqual(61_000); // …T1 60,944；T2 收口后 58,958
+    expect(schemaBytes).toBeLessThanOrEqual(70_200); // T1 69,589；T2 本批零变化（69,589）
+    expect(launcherBytes).toBeLessThanOrEqual(48_500); // B21 实拍全族 100,323；T2 实拍 46,305
     expect(schemaBytes).toBeGreaterThan(descBytes); // 口径没被颠倒：瘦掉的是重复，不是内容
   });
 

@@ -833,11 +833,14 @@ const LAUNCHER_RESOLUTION_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
-/** 启动器族 description 的共用尾注（档位 + 批准口径统一，避免 27 条各写一套）。
- * B22 去重批：只把长句压成短句（形态 (b)），四个要点一个没丢——privileged、缺省不上帧、
- * 只认精确名（通配不算批准）、宿主自身闸照旧生效。 */
-const LAUNCHER_TIER_NOTE =
-  'Tier: privileged - absent from tools/list until this EXACT name is approved in the 4th table (a wildcard such as launcher_* approves nothing); host approval gates still apply on the call.';
+/** 特权档 description 的共用尾注（档位 + 批准口径统一，避免 30 条各写一套；T2 起不再只服务
+ *  launcher_* 族——fileTree.remove / fileTree.rename / commands.run 也挂同一句，故改名）。
+ * T2 收口：可见性规则（「未批准不出现在 tools/list」）搬到 `initialize.instructions` 一份，
+ * 面上只留两句模型**此刻用得上**的：这是特权档、宿主闸门管每次调用、规则去哪读。
+ * 为什么搬得走：那句可见性规则只对「看不见这枚工具」的模型有意义，而那种会话压根读不到
+ * 这枚工具的描述——它在唯一适用的场景里是不可读的。事实标记 `Tier: privileged` 一字不动。 */
+const PRIVILEGED_TIER_NOTE =
+  'Tier: privileged - host approval still gates every call; visibility rule in `initialize` instructions.';
 
 
 export const SEMANTIC_TOOL_SPECS: readonly ToolSpec[] = [
@@ -1040,7 +1043,8 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.remove',
     description:
-      'Delete a file or directory inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval (approvedTools) in this session. `relPath` is project-root-relative and domain-checked against approvedRoots. Optional `rootId`: approved workspace root; omit for the project root (gate on `fileTree.update`\'s `rootId`). Irreversible from the model perspective; use only after an explicit, itemized approval.',
+      'Delete a file or directory inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval (approvedTools) in this session. `relPath` is project-root-relative and domain-checked against approvedRoots. Optional `rootId`: approved workspace root; omit for the project root (gate on `fileTree.update`\'s `rootId`). Irreversible from the model perspective; use only after an explicit, itemized approval. ' +
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1057,7 +1061,8 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
   {
     name: 'fileTree.rename',
     description:
-      'Rename/move an entry inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval. Both `from` and `to` are project-root-relative and domain-checked against approvedRoots; any out-of-domain target is refused. Optional `rootId` selects one explicitly approved persistent workspace root for BOTH ends (enumerate via io.workspaceRoots; human approval required). Read the entry first; this changes the path others may reference.',
+      'Rename/move an entry inside the authorized project root. PRIVILEGED + destructive: requires per-tool approval. Both `from` and `to` are project-root-relative and domain-checked against approvedRoots; any out-of-domain target is refused. Optional `rootId` selects one explicitly approved persistent workspace root for BOTH ends (enumerate via io.workspaceRoots; human approval required). Read the entry first; this changes the path others may reference. ' +
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { from: RELATIVE_PATH_PTR_SCHEMA, to: RELATIVE_PATH_PTR_SCHEMA, rootId: ROOT_ID_PTR_SCHEMA },
@@ -1229,7 +1234,8 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     // 写盘类命令照旧只能经 `exportFile` 那一条法定通道，这一枚默认连写盘类都不派发。
     name: 'commands.run',
     description:
-      'Dispatch ONE command-palette entry by exact id (real ids from `commands.list`; no fuzzy/prefix/wildcard), then read back observable facts. Two INDEPENDENT gates run BEFORE dispatch: (1) the entry\'s OWN tier, MISSING ⇒ `privileged` (exact id in approvedTools - tier/authorization as in the launcher_* tier notes / §6, not restated here); (2) an effect-class ledger rejecting write/dialog/network/lifecycle/unclassified unless released by exact id, so a rejected command has zero side effects. Dialogs, the single `exportFile` channel and the fourth table are covered by the shared notes in this same frame (`export_file`, §6): no arbitrary target path, no bypass. `commandId` is required; optional `args` is validated vs that entry\'s OWN argsSchema (see inputSchema). Response is facts, not a success flag: `{commandId, matched, enabled, declaredTier, requiredTier, effectClass, ran, fireAndForget, facts:{before,after,documentChanged,eventsObserved}, gate}`. Fire-and-forget (no ack) ⇒ `fireAndForget:true`, never `confirmed:true`; failures are explicit: RESOURCE_UNAVAILABLE / NOT_WIRED / INVALID_ARGS. Every dispatch and rejection carries a host audit line naming the command id.',
+      'Dispatch ONE command-palette entry by exact id (real ids from `commands.list`; no fuzzy/prefix/wildcard), then read back observable facts. Two INDEPENDENT gates run BEFORE dispatch: (1) the entry\'s OWN tier, MISSING ⇒ `privileged` (exact id in approvedTools - tier/authorization as in the launcher_* tier notes / §6, not restated here); (2) an effect-class ledger rejecting write/dialog/network/lifecycle/unclassified unless released by exact id, so a rejected command has zero side effects. Dialogs, the single `exportFile` channel and the fourth table are covered by the shared notes in this same frame (`export_file`, §6): no arbitrary target path, no bypass. `commandId` is required; optional `args` is validated vs that entry\'s OWN argsSchema (see inputSchema). Response is facts, not a success flag: `{commandId, matched, enabled, declaredTier, requiredTier, effectClass, ran, fireAndForget, facts:{before,after,documentChanged,eventsObserved}, gate}`. Fire-and-forget (no ack) ⇒ `fireAndForget:true`, never `confirmed:true`; failures are explicit: RESOURCE_UNAVAILABLE / NOT_WIRED / INVALID_ARGS. Every dispatch and rejection carries a host audit line naming the command id. ' +
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -1893,7 +1899,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_instance_list',
     description:
       'List the launcher instances registered on this machine (read-only). Returns {instances:[...], total, offset, limit, truncated, hasMore, nextCursor, fingerprint}: each row is the host DTO verbatim (id, adapterId, gameId, createdAt, sourceRoot|null, isolation, instanceRoot, gameRoot, executableTrust, state, name, tags, notes). An empty list is the real reading (zero registered instances), never a wiring failure; if no launcher surface exists at all the call fails visibly with NOT_WIRED instead of returning []. Start paging here and reuse the ids you read. Page size is ONE knob (`limit` plus the legacy synonyms this face keeps accepting); anything not declared is rejected instead of silently paging at the default. ' +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1906,7 +1912,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_instance_get',
     description:
       'Inspect one launcher instance (read-only): {instance, executable, runtime, paths, diskUsageBytes, warnings} exactly as the host reports it. `executable` carries the resolved relative path plus the recorded sha256 and whether the trust record exists (approvedAt comes from the native confirmation dialog only - trust can never be granted through MCP). A missing instance id fails with the host structured error (code + retryable + detail in the message), never with a null object. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_SCHEMA }, required: ['instanceId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1915,7 +1921,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_content_list',
     description:
       'List the content packs the host has installed into one instance (read-only), reading its own state.json / ownership.json on disk. Returns {contents:[{manifest, installedAt, ownedFiles, enabled, status}], + the page account}; unknown manifest fields are preserved by the host and passed through untouched. `contents[].manifest.id` is the packId other launcher_* tools need. Empty list = nothing installed; an absent P1 surface fails visibly with NOT_WIRED. ' +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1929,7 +1935,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_content_diagnose',
     description:
       "Diagnose an instance's installed content against what is actually on disk (read-only). Returns {instanceId, issues:[{packId, code, path?, message}], + the page account}. Honesty note on the code table: the host reports two codes the domain contract does not have - 'orphan-file' and 'load-order' - and this surface passes them through instead of folding them into 'conflict', because an orphaned file is otherwise invisible. Zero issues is a real reading; the diagnosis never repairs anything. " +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1943,7 +1949,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_process_list',
     description:
       'List the game processes currently supervised by the launcher host (read-only): {processes:[{instanceId, state, pid, sessionId, startedAt, elapsedMs, exitCode, exitReason, lastError}], + the page account}. This is the host process table, not the OS process list - a game started outside the launcher is not in it. Empty array = no supervised process, which is a reading, not an error. ' +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1956,7 +1962,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_process_status',
     description:
       'Read the process state of one instance (read-only): {instanceId, state, pid, sessionId, startedAt, elapsedMs, exitCode, exitReason, lastError} straight from the host supervisor. `state` is one of idle|starting|running|stopping|exited|crashed; null pid / sessionId means "not running", never "unknown". Poll this after launcher_start and launcher_stop instead of assuming a transition happened. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA }, required: ['instanceId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true },
@@ -1965,7 +1971,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_task_list',
     description:
       "List the launcher task centre's rows (read-only): {tasks:[{id, kind, instanceId, state, progress, createdAt, startedAt, endedAt, error, result, cancellable}], + the page account} plus a faceNote. This table is deliberately its OWN surface: launcher tasks belong to the third table (per-root approvals) and are NOT merged into kojo://tasks, so a launcher job never shows up in the long-task face and vice versa. Rows are how you verify a lifecycle call: take the taskRowId from that reply and read it here. " +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1978,7 +1984,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_save_list',
     description:
       'List the save files the host can see under an instance (read-only). The host answer is NOT a bare entry array: it is {entries:[{rootId, path, name, bytes, mtimeMs}], roots:[{rootId, approved, exists?}], warnings:[...]} plus the page account over `entries`. `roots[].approved` is the write-back gate for shared/overlay instances (it comes from launcher/approvals.json, written only by the native directory dialog), and `roots[].exists` is the disk reading - read both before proposing launcher_save_restore or launcher_save_apply_import. ' +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -1992,7 +1998,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_save_backups',
     description:
       'List the backups stored in the instance backup directory (read-only): {backups:[{id, instanceId, createdAt, label, bytes, entryCount, reason}], + the page account}. `reason` is manual|pre-restore|pre-plugin|auto and explains who made the row. backupId is what launcher_save_restore / launcher_save_delete_backup require - never invent one. ' +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -2006,7 +2012,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_log_sessions',
     description:
       'List recorded log sessions of one instance (read-only): {sessions:[{id, instanceId, startedAt, stdoutBytes, stderrBytes}], + the page account}. The session id is the handle launcher_log_read needs; byte counters are the host reading of the raw stream files, not decoded line counts. ' +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, ...PAGE_PROPS_PTR, ...pageSizeAliasProps() },
@@ -2020,7 +2026,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_log_tail',
     description:
       'Read the tail of the newest log session of one instance (read-only), exactly as the host returns it: {session, truncatedByBytes, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account over chunks}. Two honesty points, both load-bearing: (1) the payload is RAW BYTES in base64 - the host does not decode and neither does this face, because the charset decision belongs to the launcher core log service; concatenate bytesBase64 across pages in nextCursor order and decode afterwards. (2) The host default is 1 MiB per stream; this face TIGHTENS the read to at most 40960 bytes per stream so a page stays under the host untrusted-string gate. `truncatedByBytes` is the host byte reading, the account `truncated`/`hasMore` is the chunk-page reading - they are deliberately two different fields. Byte size per stream is `maxBytes` (never more than the gate); the page-size names (`limit` and its legacy synonyms) size the CHUNK list, not the byte budget - `maxLines` therefore pages chunks and does not truncate by lines, because the host truncates by bytes only. ' +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2040,7 +2046,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_log_read',
     description:
       'Read one recorded log session by id (read-only) - same answer shape as launcher_log_tail ({session, chunks:[{stream, ts, byteLength, truncated, bytesBase64}], + the page account}), the difference being the addressing: `sessionId` must come from launcher_log_sessions (the host also verifies session ownership). Bytes stay raw base64 here: charset decoding is the launcher core log service job, so splice pages first, then decode. Per-stream cap is tightened to 40960 bytes, never widened; `maxBytes` is that byte budget while `limit` and its legacy synonyms page the CHUNK list. ' +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2060,7 +2066,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_project_hash',
     description:
       'Stream-hash one plugin source project (read-only): pass {projectDir, artifactDir, entries:[posix-relative paths]} and get {digests:[{path, sha256, size}], requestedEntries, + the page account} back, `path` echoed exactly as requested so pages can be paired. This is the ONLY launcher face that takes an absolute path, and it is an INPUT root, never a write target: the host re-checks that projectDir lies inside the registered writable roots (app data / user-approved workspace roots) and that resolved entries cannot escape artifactDir. This tool does not build, does not pack and does not install anything. ' +
-      PAGE_ACCOUNT_POINTER + ' ' + LAUNCHER_TIER_NOTE,
+      PAGE_ACCOUNT_POINTER + ' ' + PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2086,7 +2092,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_instance_update',
     description:
       'Update the descriptive fields of one instance (mutating, privileged): give instanceId plus at least one of `name` / `notes` / `tags` and the host applies its own field whitelist, returning the updated instance row. This face DELIBERATELY does not accept executableRelativePath, launch arguments or environment variables - what gets run stays a human decision (trust is granted only in the native confirmation dialog). The host re-checks everything; a rejected field arrives as its structured error code. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2105,7 +2111,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_instance_duplicate',
     description:
       'Duplicate one instance into a new instance (mutating, privileged): {instanceId, name?} returns {instance, task} - the copy runs as a task row when isolation requires file copying, so read task.id and follow it with launcher_task_list / launcher_task_cancel. Nothing is deleted; the source instance keeps working. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2122,7 +2128,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_instance_remove',
     description:
       'Remove an instance registration (DESTRUCTIVE, privileged): the host stops the process first, then drops the record and optionally the instance directory. `deleteFiles` must be given explicitly - true deletes the instance root, false only unregisters - and there is no default, because guessing here destroys data. `keepBackups` (explicit true) keeps the backup directory even when files go. Returns the void/terminal answer honestly; the deletion is irreversible from the model side, so only call it after the user itemized the target. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2140,7 +2146,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_content_apply',
     description:
       'Second half of the content-pack install (mutating, privileged): consume a one-shot `planId` produced by the UI-side import wizard and optionally carry per-file conflict `resolutions`, then return the task row {taskRowId, taskState, taskCancellable, task} plus the query/cancel faces. Writing only ever lands in roots the user approved per instance and rootId (third table, approvals.json) - the host re-verifies each target and refuses unapproved roots; a stale or consumed planId fails with the host structured error instead of silently re-planning. This face takes NO archive path: launcher_content_plan is deliberately not registered (its archivePath is a native-dialog-produced input file). ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2157,7 +2163,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_content_set_enabled',
     description:
       'Enable or disable one installed content pack (mutating, privileged; writes the manifest state and returns the task row). `enabled` must be an explicit boolean. Restart semantics are a separate decision: the host does not kill a running game for you, so check launcher_process_status first and stop it when the pack requires a restart. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2175,7 +2181,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_content_set_order',
     description:
       'Set the load order of installed content packs (mutating, privileged): `packIds` must be a permutation of the ids the instance already has (read them from launcher_content_list) - duplicates are refused here, ids the host does not know are refused by it. Returns a void execution answer, honestly labelled; nothing is added or removed, only the order changes. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2192,7 +2198,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_content_uninstall',
     description:
       'Uninstall one content pack (DESTRUCTIVE, privileged). The tool takes only instanceId + packId: the exclusive-file list handed to the host is COMPUTED here from the host own ownership readings (this pack ownedFiles minus every other pack ownedFiles), never from a list the model writes, and the host still re-checks ownership.json - shared files belonging to another pack are left in place. Returns the task row (taskRowId / taskState / taskCancellable) plus ownedFileCount / exclusiveFileCount / sharedFileCount so the blast radius is stated. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, packId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA },
@@ -2206,7 +2212,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_start',
     description:
       'Start the game of one instance (mutating, privileged, launches a real OS process). The whole validation chain runs inside the host - instance ready, executable legitimate, recorded executable trust, runtime resolved, per-instance lock - and none of it can be skipped from MCP: executable trust can only be granted by a human in the native confirmation dialog, so an untrusted executable arrives as that host error code. Returns the process status reading; poll launcher_process_status for the truth. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: { type: 'object', properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA }, required: ['instanceId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
@@ -2215,7 +2221,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_stop',
     description:
       'Stop the running game of one instance (mutating, privileged). Default is a graceful stop with the host timeout; `force:true` terminates the process tree and can lose unsaved in-game state, so it must be an explicit decision, and `timeoutMs` is capped at 120000. Returns the post-stop process status (state, exitCode, exitReason) - read that as the fact, do not assume the process is gone. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2233,7 +2239,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_task_cancel',
     description:
       'Request cancellation of one launcher task (mutating, privileged) - the cancel half of the launcher task face, which stays separate from kojo://tasks by design. Cancellation is a request, not an acknowledgement: only cancellable kinds are accepted, rollback is performed by the task itself, and the fact is read back from launcher_task_list. An unknown / already-finished row arrives as the host answer, never as a silent success. `taskId` must come from a task row this host produced. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: { type: 'object', properties: { taskId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA }, required: ['taskId'], additionalProperties: false },
     tier: 'privileged',
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
@@ -2242,7 +2248,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_save_backup',
     description:
       'Back up save files of one instance (mutating, privileged): the host only ever writes into the instance backup directory - there is no target path argument on this face at all. Optional `label`, `reason` (manual | pre-restore | pre-plugin; the host-internal auto slot is not offered) and an `entries` subset of {rootId, path} pairs as reported by launcher_save_list (omitted = all save roots). Returns the terminal task row plus backupId read from task.result.backupId, so the restore handle is never guessed. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2274,7 +2280,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_save_restore',
     description:
       'Restore save files from one backup (DESTRUCTIVE, mutating, privileged). The host ALWAYS takes a fresh automatic backup of the current state first (backupCurrent defaults to true; explicit false disables it and is reported back in the answer), then unpacks, verifies and swaps files through temp + rename. Write-back still obeys the third table: a save root without a per-root approval is refused by the host, and a running game is a refusal, not an overwrite. Returns the terminal task row. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
@@ -2292,7 +2298,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_save_delete_backup',
     description:
       'Delete one backup row from the instance backup directory (DESTRUCTIVE, mutating, privileged). Only that directory and only that backupId are touched - the host re-checks that the id resolves inside the backup root, and there is no target path argument. Irreversible: read launcher_save_backups first, confirm the exact id with the user, and remember this is the only copy for backups that were not also exported. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: { instanceId: LAUNCHER_INSTANCE_ID_PTR_SCHEMA, backupId: LAUNCHER_COMPONENT_ID_PTR_SCHEMA },
@@ -2306,7 +2312,7 @@ export const SUPPLEMENTAL_TOOL_SPECS: readonly ToolSpec[] = [
     name: 'launcher_save_apply_import',
     description:
       'Second half of the save-import flow (DESTRUCTIVE, mutating, privileged): consume the one-shot `planId` produced by the UI-side import wizard (plus optional per-entry conflict `resolutions`) and return the terminal task row. The archive itself is never chosen here - launcher_save_import takes a native-dialog absolute path and is deliberately NOT registered as a model tool, so an unknown / expired planId arrives as the host structured error rather than being re-planned behind your back. Write-back is still gated per root by the third table. ' +
-      LAUNCHER_TIER_NOTE,
+      PRIVILEGED_TIER_NOTE,
     inputSchema: {
       type: 'object',
       properties: {
