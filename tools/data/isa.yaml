@@ -1,0 +1,2706 @@
+meta:
+  source_assembly: Emuera.dll 1.824.0.0
+  source_sha256: afa5143782d39cb7b6ceacd6f2271f8d322cab0e3f0c9b730a7ac0d3a6bba74e
+  primary_source: reference/emuera-cs/MinorShift.Emuera.GameProc.Function/FunctionIdentifier.cs
+  secondary_source: reference/emuera-cs/MinorShift.Emuera.GameProc/Process.cs
+  note: 'name 为实现类名去掉 _Instruction 后缀;aliases 为静态注册表(register 行)中以该实现注册的全部语句名。source 格式: 文件:行号范围,分号分隔多来源。'
+instructions:
+- name: VARI
+  kind: variable
+  arg_form: IntAsignArgument
+  semantics: 作用域私有整型变量进入作用域;若该变量为标量(长度为1)则同时以参数表达式赋初值。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:33-51
+  aliases: VARI
+  register: FunctionIdentifier.cs:4125
+  confidence: high
+  flag: 0
+  flag_source: FunctionIdentifier.cs:4125
+- name: VARS
+  kind: variable
+  arg_form: StrAsignArgument
+  semantics: 作用域私有字符串变量进入作用域;若该变量为标量则同时以参数值赋初值。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:53-71
+  aliases: VARS
+  register: FunctionIdentifier.cs:4126
+  confidence: high
+  flag: 0
+  flag_source: FunctionIdentifier.cs:4126
+# ---- A9 isa-evidence 勘误/操作数面注记（2026-10-20，均给 文件:行号）----
+# PRINT 后缀语法是**有序单遍解析**（PRINT_Instruction 构造器 FunctionIdentifier.cs:85-171）：
+#   PRINT [SINGLE] [V|S|FORMS|FORM] [LC|C] [K] [D] [N] [L|W]，任一时刻只匹配一组；
+#   解析后 charStream 非 EOS 即抛 ExeEE（:167-170）—— 因此合法后缀组合是唯一真值集，
+#   注册表 FunctionIdentifier.cs:3830-3901 + 4130-4134 的 71 个名字就是全部形态。
+# 操作数面（.erbc 真编码依据，只有 1 个槽位是文本/表达式，其余全在语句名里）：
+#   无 V/S/FORM 前缀   -> STR_NULLABLE   : 0 表达式 + 1 常量字符串（ArgumentParser.cs:446-476，IsConst=true）
+#   FORM               -> FORM_STR_NULLABLE: 1 个「格式化串项」= 源文本内 {表达式} 装载期展开（ArgumentParser.cs:488-513）
+#   S                  -> STR_EXPRESSION  : 1 个字符串型表达式（ArgumentParser.cs:1320-1336，省略时补 "" 常量）
+#   V                  -> SP_PRINTV       : 0..n 个表达式，逐项 int/str 拼接（ArgumentParser.cs:312-325 / FunctionIdentifier.cs:186-201）
+#   FORMS              -> STR_EXPRESSION + isForms（FunctionIdentifier.cs:106-111）：**两步语义** ——
+#                        先把表达式求值成字符串，再对该字符串 CheckEscape + 按 FORM 二次展开（:205-209）。
+#                        即 {} 来自字符串**值**而非源文本，与 FORM 不可互换；.erbc 需单独标记该二次展开位。
+# 标志位口径（位定义 FunctionIdentifier.cs:3721-3753，读接口 :4230-4288）：
+#   L -> 256|4 ; W -> 512|256 ; N -> 512（见下条勘误）; K -> 4096|2 ; D -> 2048|2 ; SINGLE -> 1024|2 ; LC/C -> 2
+#   即 bit2(EXTENDED) 在 PRINT 家族里表示"名字含 SINGLE/LC/C/K/D 任一"，与 IsExtended() 复用，不是对齐方向位；
+#   对齐方向只存在于 isC/isLC 私有字段（FunctionIdentifier.cs:215-222，C=右对齐、LC=左对齐），装载期无位可存。
+#   PRINTC/PRINTLC 的**定宽宽度不是操作数**：取 Config.PrintCLength 全局（EmueraConsole.cs:3237-3244）。
+# 勘误（原条目"N=不换行且下次可跳过"与代码不符）：N 分支同时置 isLineEnd=false **和** flag|=512(PRINT_WAITINPUT)
+#   （FunctionIdentifier.cs:146-151），而 OutputToConsole 在 IsWaitInput() 为真时执行 NewLine()+ReadAnyKey()
+#   （ExpressionMediator.cs:58-65，NewLine 定义 EmueraConsole.cs:3333-3337）。
+#   ⇒ PRINTN/PRINTVN/PRINTSN/PRINTFORMN/PRINTFORMSN 实测**会结束当前行并等待按键**，
+#     行为近乎 PRINTW，与文档化的"不换行"相反。按 ADR-005 原样复刻。
+#     TODO(verify): Print(str, lineEnd=false) 与 true 在换行**次序**上的差异需实机对拍确认（文字流终态一致）。
+- name: PRINT
+  kind: display
+  arg_form: 'varies by alias: STR_NULLABLE / STR_EXPRESSION / FORM_STR_NULLABLE / SP_PRINTV'
+  semantics: PRINT 家族统一实现:按语句名后缀决定行为——V=逐项输出表达式,S=输出字符串表达式,FORM=展开文本中 {表达式},FORMS=先求值为字符串再对该字符串二次按 FORM 展开,K=字符串类型转换,D=使用调试配色,SINGLE=单行独立显示,C/LC=右/左对齐定宽输出(宽度取 Config.PrintCLength,非操作数),L=末尾换行,W=末尾换行并等待按键,N=语句名不换行但实现同时置 PRINT_WAITINPUT,故实际仍换行并等待按键(见 source 注释块勘误)。SkipPrint 期间整条跳过。
+  errors: 语句名解析失败时抛 ExeEE(构造期)。
+  display_effect: 向控制台文字流追加文本;可能换行、触发按键等待;受消息跳过(SkipPrint)抑制。
+  source: FunctionIdentifier.cs:73-229
+  aliases: PRINT, PRINTL, PRINTW, PRINTV, PRINTVL, PRINTVW, PRINTS, PRINTSL, PRINTSW, PRINTFORM, PRINTFORML, PRINTFORMW, PRINTFORMS, PRINTFORMSL, PRINTFORMSW, PRINTK, PRINTKL, PRINTKW, PRINTVK, PRINTVKL,
+    PRINTVKW, PRINTSK, PRINTSKL, PRINTSKW, PRINTFORMK, PRINTFORMKL, PRINTFORMKW, PRINTFORMSK, PRINTFORMSKL, PRINTFORMSKW, PRINTD, PRINTDL, PRINTDW, PRINTVD, PRINTVDL, PRINTVDW, PRINTSD, PRINTSDL, PRINTSDW,
+    PRINTFORMD, PRINTFORMDL, PRINTFORMDW, PRINTFORMSD, PRINTFORMSDL, PRINTFORMSDW, PRINTSINGLE, PRINTSINGLEV, PRINTSINGLES, PRINTSINGLEFORM, PRINTSINGLEFORMS, PRINTSINGLEK, PRINTSINGLEVK, PRINTSINGLESK,
+    PRINTSINGLEFORMK, PRINTSINGLEFORMSK, PRINTSINGLED, PRINTSINGLEVD, PRINTSINGLESD, PRINTSINGLEFORMD, PRINTSINGLEFORMSD, PRINTC, PRINTLC, PRINTFORMC, PRINTFORMLC, PRINTCK, PRINTLCK, PRINTFORMCK, PRINTFORMLCK,
+    PRINTCD, PRINTLCD, PRINTFORMCD, PRINTFORMLCD, PRINTN, PRINTVN, PRINTSN, PRINTFORMN, PRINTFORMSN
+  register: FunctionIdentifier.cs:3830-3901,4130-4134
+  confidence: high
+# PRINT —— 77 个注册别名的 flag（PRINT/PRINT_DATA 构造器按名字后缀单遍解析置位，
+  # 值为 tools/spec_crosscheck.py NameSuffixSim 对 FunctionIdentifier.cs 的逐名模拟，
+  # flag_source_by_alias 即模拟依据行；改 C# 后 --section 会对拍报红。口径见 verify-notes.md §10.3/§11。）
+  flag_by_alias:
+    PRINT: 8196
+    PRINTC: 8196
+    PRINTCD: 10246
+    PRINTCK: 12294
+    PRINTD: 10246
+    PRINTDL: 10502
+    PRINTDW: 11010
+    PRINTFORM: 8196
+    PRINTFORMC: 8198
+    PRINTFORMCD: 10246
+    PRINTFORMCK: 12294
+    PRINTFORMD: 10246
+    PRINTFORMDL: 10502
+    PRINTFORMDW: 11010
+    PRINTFORMK: 12294
+    PRINTFORMKL: 12550
+    PRINTFORMKW: 13058
+    PRINTFORML: 8452
+    PRINTFORMLC: 8198
+    PRINTFORMLCD: 10246
+    PRINTFORMLCK: 12294
+    PRINTFORMN: 8708
+    PRINTFORMS: 8196
+    PRINTFORMSD: 10246
+    PRINTFORMSDL: 10502
+    PRINTFORMSDW: 11010
+    PRINTFORMSK: 12294
+    PRINTFORMSKL: 12550
+    PRINTFORMSKW: 13058
+    PRINTFORMSL: 8452
+    PRINTFORMSN: 8708
+    PRINTFORMSW: 8960
+    PRINTFORMW: 8960
+    PRINTK: 12294
+    PRINTKL: 12550
+    PRINTKW: 13058
+    PRINTL: 8452
+    PRINTLC: 8198
+    PRINTLCD: 10246
+    PRINTLCK: 12294
+    PRINTN: 8708
+    PRINTS: 8196
+    PRINTSD: 10246
+    PRINTSDL: 10502
+    PRINTSDW: 11010
+    PRINTSINGLE: 9222
+    PRINTSINGLED: 11270
+    PRINTSINGLEFORM: 9222
+    PRINTSINGLEFORMD: 11270
+    PRINTSINGLEFORMK: 13318
+    PRINTSINGLEFORMS: 9222
+    PRINTSINGLEFORMSD: 11270
+    PRINTSINGLEFORMSK: 13318
+    PRINTSINGLEK: 13318
+    PRINTSINGLES: 9222
+    PRINTSINGLESD: 11270
+    PRINTSINGLESK: 13318
+    PRINTSINGLEV: 9222
+    PRINTSINGLEVD: 11270
+    PRINTSINGLEVK: 13318
+    PRINTSK: 12294
+    PRINTSKL: 12550
+    PRINTSKW: 13058
+    PRINTSL: 8452
+    PRINTSN: 8708
+    PRINTSW: 8960
+    PRINTV: 8196
+    PRINTVD: 10246
+    PRINTVDL: 10502
+    PRINTVDW: 11010
+    PRINTVK: 12294
+    PRINTVKL: 12550
+    PRINTVKW: 13058
+    PRINTVL: 8452
+    PRINTVN: 8708
+    PRINTVW: 8960
+    PRINTW: 8960
+  flag_source_by_alias:
+    PRINT: "FunctionIdentifier.cs:87,117,163,165"
+    PRINTC: "FunctionIdentifier.cs:87,117,127,163,165"
+    PRINTCD: "FunctionIdentifier.cs:87,117,127,141,143,163,165"
+    PRINTCK: "FunctionIdentifier.cs:87,117,127,136,138,163,165"
+    PRINTD: "FunctionIdentifier.cs:87,117,141,143,163,165"
+    PRINTDL: "FunctionIdentifier.cs:87,117,141,143,152,154,155"
+    PRINTDW: "FunctionIdentifier.cs:87,117,141,143,158,160"
+    PRINTFORM: "FunctionIdentifier.cs:87,112,163,165"
+    PRINTFORMC: "FunctionIdentifier.cs:87,112,127,131,163,165"
+    PRINTFORMCD: "FunctionIdentifier.cs:87,112,127,141,143,163,165"
+    PRINTFORMCK: "FunctionIdentifier.cs:87,112,127,136,138,163,165"
+    PRINTFORMD: "FunctionIdentifier.cs:87,112,141,143,163,165"
+    PRINTFORMDL: "FunctionIdentifier.cs:87,112,141,143,152,154,155"
+    PRINTFORMDW: "FunctionIdentifier.cs:87,112,141,143,158,160"
+    PRINTFORMK: "FunctionIdentifier.cs:87,112,136,138,163,165"
+    PRINTFORMKL: "FunctionIdentifier.cs:87,112,136,138,152,154,155"
+    PRINTFORMKW: "FunctionIdentifier.cs:87,112,136,138,158,160"
+    PRINTFORML: "FunctionIdentifier.cs:87,112,152,154,155"
+    PRINTFORMLC: "FunctionIdentifier.cs:87,112,121,123,163,165"
+    PRINTFORMLCD: "FunctionIdentifier.cs:87,112,121,123,141,143,163,165"
+    PRINTFORMLCK: "FunctionIdentifier.cs:87,112,121,123,136,138,163,165"
+    PRINTFORMN: "FunctionIdentifier.cs:87,112,146,149,163,165"
+    PRINTFORMS: "FunctionIdentifier.cs:87,106,163,165"
+    PRINTFORMSD: "FunctionIdentifier.cs:87,106,141,143,163,165"
+    PRINTFORMSDL: "FunctionIdentifier.cs:87,106,141,143,152,154,155"
+    PRINTFORMSDW: "FunctionIdentifier.cs:87,106,141,143,158,160"
+    PRINTFORMSK: "FunctionIdentifier.cs:87,106,136,138,163,165"
+    PRINTFORMSKL: "FunctionIdentifier.cs:87,106,136,138,152,154,155"
+    PRINTFORMSKW: "FunctionIdentifier.cs:87,106,136,138,158,160"
+    PRINTFORMSL: "FunctionIdentifier.cs:87,106,152,154,155"
+    PRINTFORMSN: "FunctionIdentifier.cs:87,106,146,149,163,165"
+    PRINTFORMSW: "FunctionIdentifier.cs:87,106,158,160"
+    PRINTFORMW: "FunctionIdentifier.cs:87,112,158,160"
+    PRINTK: "FunctionIdentifier.cs:87,117,136,138,163,165"
+    PRINTKL: "FunctionIdentifier.cs:87,117,136,138,152,154,155"
+    PRINTKW: "FunctionIdentifier.cs:87,117,136,138,158,160"
+    PRINTL: "FunctionIdentifier.cs:87,117,152,154,155"
+    PRINTLC: "FunctionIdentifier.cs:87,117,121,123,163,165"
+    PRINTLCD: "FunctionIdentifier.cs:87,117,121,123,141,143,163,165"
+    PRINTLCK: "FunctionIdentifier.cs:87,117,121,123,136,138,163,165"
+    PRINTN: "FunctionIdentifier.cs:87,117,146,149,163,165"
+    PRINTS: "FunctionIdentifier.cs:87,101,163,165"
+    PRINTSD: "FunctionIdentifier.cs:87,101,141,143,163,165"
+    PRINTSDL: "FunctionIdentifier.cs:87,101,141,143,152,154,155"
+    PRINTSDW: "FunctionIdentifier.cs:87,101,141,143,158,160"
+    PRINTSINGLE: "FunctionIdentifier.cs:87,90,92,117,163,165"
+    PRINTSINGLED: "FunctionIdentifier.cs:87,90,92,117,141,143,163,165"
+    PRINTSINGLEFORM: "FunctionIdentifier.cs:87,90,92,112,163,165"
+    PRINTSINGLEFORMD: "FunctionIdentifier.cs:87,90,92,112,141,143,163,165"
+    PRINTSINGLEFORMK: "FunctionIdentifier.cs:87,90,92,112,136,138,163,165"
+    PRINTSINGLEFORMS: "FunctionIdentifier.cs:87,90,92,106,163,165"
+    PRINTSINGLEFORMSD: "FunctionIdentifier.cs:87,90,92,106,141,143,163,165"
+    PRINTSINGLEFORMSK: "FunctionIdentifier.cs:87,90,92,106,136,138,163,165"
+    PRINTSINGLEK: "FunctionIdentifier.cs:87,90,92,117,136,138,163,165"
+    PRINTSINGLES: "FunctionIdentifier.cs:87,90,92,101,163,165"
+    PRINTSINGLESD: "FunctionIdentifier.cs:87,90,92,101,141,143,163,165"
+    PRINTSINGLESK: "FunctionIdentifier.cs:87,90,92,101,136,138,163,165"
+    PRINTSINGLEV: "FunctionIdentifier.cs:87,90,92,95,163,165"
+    PRINTSINGLEVD: "FunctionIdentifier.cs:87,90,92,95,141,143,163,165"
+    PRINTSINGLEVK: "FunctionIdentifier.cs:87,90,92,95,136,138,163,165"
+    PRINTSK: "FunctionIdentifier.cs:87,101,136,138,163,165"
+    PRINTSKL: "FunctionIdentifier.cs:87,101,136,138,152,154,155"
+    PRINTSKW: "FunctionIdentifier.cs:87,101,136,138,158,160"
+    PRINTSL: "FunctionIdentifier.cs:87,101,152,154,155"
+    PRINTSN: "FunctionIdentifier.cs:87,101,146,149,163,165"
+    PRINTSW: "FunctionIdentifier.cs:87,101,158,160"
+    PRINTV: "FunctionIdentifier.cs:87,95,163,165"
+    PRINTVD: "FunctionIdentifier.cs:87,95,141,143,163,165"
+    PRINTVDL: "FunctionIdentifier.cs:87,95,141,143,152,154,155"
+    PRINTVDW: "FunctionIdentifier.cs:87,95,141,143,158,160"
+    PRINTVK: "FunctionIdentifier.cs:87,95,136,138,163,165"
+    PRINTVKL: "FunctionIdentifier.cs:87,95,136,138,152,154,155"
+    PRINTVKW: "FunctionIdentifier.cs:87,95,136,138,158,160"
+    PRINTVL: "FunctionIdentifier.cs:87,95,152,154,155"
+    PRINTVN: "FunctionIdentifier.cs:87,95,146,149,163,165"
+    PRINTVW: "FunctionIdentifier.cs:87,95,158,160"
+    PRINTW: "FunctionIdentifier.cs:87,117,158,160"
+
+- name: PRINT_DATA
+  kind: display
+  arg_form: PrintDataArgument (VAR_INT)
+  semantics: 从配对的 DATA/DATALIST 数据节中随机选取一组,逐行打印其字符串(行间换行);可先把随机索引写入指定整型变量;按语句名后缀 L/W 决定末尾换行或换行加等待按键。
+  errors: ''
+  display_effect: 输出多行文本;W 变体会等待按键;受 SkipPrint 抑制;打印后跳转到 ENDDATA 之后。
+  source: FunctionIdentifier.cs:231-320
+  aliases: PRINTDATA, PRINTDATAL, PRINTDATAW, PRINTDATAK, PRINTDATAKL, PRINTDATAKW, PRINTDATAD, PRINTDATADL, PRINTDATADW
+  register: FunctionIdentifier.cs:3902-3910
+  confidence: high
+  # PRINT_DATA —— 9 个注册别名的 flag（PRINT/PRINT_DATA 构造器按名字后缀单遍解析置位，
+  # 值为 tools/spec_crosscheck.py NameSuffixSim 对 FunctionIdentifier.cs 的逐名模拟，
+  # flag_source_by_alias 即模拟依据行；改 C# 后 --section 会对拍报红。口径见 verify-notes.md §10.3/§11。）
+  flag_by_alias:
+    PRINTDATA: 73750
+    PRINTDATAD: 75798
+    PRINTDATADL: 76054
+    PRINTDATADW: 76562
+    PRINTDATAK: 77846
+    PRINTDATAKL: 78102
+    PRINTDATAKW: 78610
+    PRINTDATAL: 74006
+    PRINTDATAW: 74514
+  flag_source_by_alias:
+    PRINTDATA: "FunctionIdentifier.cs:235,260,262"
+    PRINTDATAD: "FunctionIdentifier.cs:235,244,246,260,262"
+    PRINTDATADL: "FunctionIdentifier.cs:235,244,246,249,251,252"
+    PRINTDATADW: "FunctionIdentifier.cs:235,244,246,255,257"
+    PRINTDATAK: "FunctionIdentifier.cs:235,239,241,260,262"
+    PRINTDATAKL: "FunctionIdentifier.cs:235,239,241,249,251,252"
+    PRINTDATAKW: "FunctionIdentifier.cs:235,239,241,255,257"
+    PRINTDATAL: "FunctionIdentifier.cs:235,249,251,252"
+    PRINTDATAW: "FunctionIdentifier.cs:235,255,257"
+- name: HTML_PRINT
+  kind: display
+  arg_form: SpHtmlPrint (SP_HTML_PRINT)
+  semantics: 把参数字符串作为 HTML 片段渲染到控制台;第二个可选整型参数非 0 时启用附加渲染选项。
+  errors: ''
+  display_effect: 输出 HTML 渲染内容;受 SkipPrint 抑制。
+  source: FunctionIdentifier.cs:322-345
+  aliases: HTML_PRINT
+  register: FunctionIdentifier.cs:4083
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:326,4083
+- name: HTML_TAGSPLIT
+  kind: display
+  arg_form: SpHtmlSplitArgument (SP_HTMLSPLIT)
+  semantics: 把 HTML 字符串按标签拆分,标签数写入整型变量、结果写入字符串数组变量;无法拆分时变量写 -1。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:347-369
+  aliases: HTML_TAGSPLIT
+  register: FunctionIdentifier.cs:4084
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:351,4084
+- name: HTML_PRINT_ISLAND
+  kind: display
+  arg_form: SpHtmlPrint (SP_HTML_PRINT)
+  semantics: 把 HTML 片段作为可独立刷新的浮岛输出到控制台。
+  errors: ''
+  display_effect: 新增一个 HTML 浮岛;受 SkipPrint 抑制。
+  source: FunctionIdentifier.cs:371-388
+  aliases: HTML_PRINT_ISLAND
+  register: FunctionIdentifier.cs:4128
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:375,4128
+- name: HTML_PRINT_ISLAND_CLEAR
+  kind: display
+  arg_form: SpHtmlPrint (SP_HTML_PRINT)；注册形态 FunctionArgType.VOID（FunctionIdentifier.cs:395）
+  semantics: 清除控制台上已存在的 HTML 浮岛。
+  errors: ''
+  display_effect: 移除全部浮岛显示。
+  source: FunctionIdentifier.cs:390-402
+  aliases: HTML_PRINT_ISLAND_CLEAR
+  register: FunctionIdentifier.cs:4129
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:394,4129
+- name: PRINT_IMG
+  kind: display
+  arg_form: SpPrintImgArgument (SP_PRINT_IMG)
+  semantics: 在控制台打印图片,可指定普通/遮罩文件名及宽、高、附加参数(px 或百分比)。
+  errors: 参数无效时抛 CodeEE。
+  display_effect: 在文字流中插入图片节点;受 SkipPrint 抑制。
+  source: FunctionIdentifier.cs:404-442
+  aliases: PRINT_IMG
+  register: FunctionIdentifier.cs:4085
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:408,4085
+- name: PRINT_RECT
+  kind: display
+  arg_form: SpPrintShapeArgument (SP_PRINT_RECT)
+  semantics: 在控制台打印矩形色块,参数为尺寸/位置序列(px 或百分比)。
+  errors: 参数无效时抛 CodeEE。
+  display_effect: 插入矩形绘制节点;受 SkipPrint 抑制。
+  source: FunctionIdentifier.cs:444-473
+  aliases: PRINT_RECT
+  register: FunctionIdentifier.cs:4086
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:448,4086
+- name: PRINT_SPACE
+  kind: display
+  arg_form: SpPrintShapeArgument (SP_PRINT_SPACE)
+  semantics: 在控制台插入一段空白,参数为宽度(px 或百分比)。
+  errors: 参数无效时抛 CodeEE。
+  display_effect: 插入空白绘制节点;受 SkipPrint 抑制。
+  source: FunctionIdentifier.cs:475-504
+  aliases: PRINT_SPACE
+  register: FunctionIdentifier.cs:4087
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:479,4087
+- name: CUSTOMDRAWLINE
+  kind: display
+  arg_form: 'CreateArgument: 1 raw primitive (mandatory) → ExpressionArgument const string'
+  semantics: 用参数字符串重复填充一行作为分隔线输出,随后换行。实现类覆写 CreateArgument 自行取参,不走 FunctionArgType 注册表;参数缺失抛 CodeEE（FunctionIdentifier.cs:510-527）。
+  errors: 参数缺失抛 CodeEE。
+  display_effect: 输出一行分隔线并换行;受 SkipPrint 抑制。
+  source: FunctionIdentifier.cs:506-538
+  aliases: CUSTOMDRAWLINE
+  register: FunctionIdentifier.cs:4005
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:511,4005
+- name: DEBUGPRINT
+  kind: debug
+  arg_form: ExpressionArgument (STR_NULLABLE / FORM_STR_NULLABLE)
+  semantics: 把字符串输出到调试窗口(不进入主文字流);L 变体输出后换行,FORM 变体展开表达式。
+  errors: ''
+  display_effect: 不影响主文字流,只写调试窗口。
+  source: FunctionIdentifier.cs:540-568
+  aliases: DEBUGPRINT, DEBUGPRINTL, DEBUGPRINTFORM, DEBUGPRINTFORML
+  register: FunctionIdentifier.cs:4070-4073
+  confidence: high
+- name: DEBUGCLEAR
+  kind: debug
+  arg_form: ExpressionArgument (VOID)
+  semantics: 清空调试窗口内容。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:570-582
+  aliases: DEBUGCLEAR
+  register: FunctionIdentifier.cs:4074
+  confidence: high
+  flag: 14
+  flag_source: FunctionIdentifier.cs:575,4074
+- name: METHOD
+  kind: variable
+  arg_form: MethodArgument (METHOD)
+  semantics: 以语句形式执行方法调用并丢弃结果:整型结果写入 RESULT,字符串结果写入 RESULTS。注册表把所有函数方法名(如 ABS、MAX)映射到此实现。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:584-604
+  aliases: 所有未与语句名冲突的函数方法名
+  register: FunctionIdentifier.cs:4135-4142
+  confidence: medium
+- name: SET
+  kind: variable
+  arg_form: SpSetArgument / SpSetArrayArgument (SP_SET)
+  semantics: 向变量赋值:标量直接赋(整型/字符串),或把逗号分隔的多个值批量赋给数组;+= 形式(AddConst)对整型为累加。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:606-666
+  aliases: SET
+  register: FunctionIdentifier.cs:3829
+  confidence: high
+- name: STRLEN
+  kind: variable
+  arg_form: ExpressionArgument (STR_NULLABLE / FORM_STR_NULLABLE)
+  semantics: 求字符串长度写入 RESULT;U 变体按 Unicode 字符数,否则按显示宽度计;FORM 变体先展开表达式。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:699-729
+  aliases: STRLEN, STRLENFORM, STRLENU, STRLENFORMU
+  register: FunctionIdentifier.cs:3982-3985
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:713,3982,3983,3984,3985
+- name: SETBIT
+  kind: variable
+  arg_form: BitArgument (BIT_ARG)
+  semantics: 对目标整型变量的指定位做位运算:SETBIT 置 1、CLEARBIT 清 0、INVERTBIT 取反;可一次指定多个位。
+  errors: 位号越界(0-63 之外)抛 CodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:731-760
+  aliases: SETBIT, CLEARBIT, INVERTBIT
+  register: FunctionIdentifier.cs:4023-4025
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:738,4023,4024,4025
+- name: VARSET
+  kind: variable
+  arg_form: SpVarSetArgument (SP_VAR_SET)
+  semantics: 把数组变量的指定下标范围(缺省为全数组)内所有元素统一赋为给定值;START/END 给反时自动交换。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1625-1669
+  aliases: VARSET
+  register: FunctionIdentifier.cs:4028
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1630,4028
+- name: CVARSET
+  kind: variable
+  arg_form: SpCVarSetArgument (SP_CVAR_SET)
+  semantics: 对全部角色(或指定角色号范围)的角色变量统一赋值;字符串键必须已在常量表中定义。
+  errors: 范围越界、目标不是角色变量、字符串键未定义时抛 CodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1671-1732
+  aliases: CVARSET
+  register: FunctionIdentifier.cs:4029
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1676,4029
+- name: SPLIT
+  kind: variable
+  arg_form: SpSplitArgument (SP_SPLIT)
+  semantics: 用分隔符把字符串拆分为子串:段数写入计数变量,结果写入字符串数组变量(超出数组容量时截断)。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1561-1576
+  aliases: SPLIT
+  register: FunctionIdentifier.cs:3989
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3989
+- name: ARRAYSHIFT
+  kind: variable
+  arg_form: SpArrayShiftArgument (SP_SHIFT_ARRAY)
+  semantics: 把一维数组从指定下标起整体移位腾出空间,用指定值填充(可限制参与填充的区域范围)。第二参数为移位量,第三参数为起始下标,第四、五参数为填充范围。
+  errors: 目标不是一维数组抛 CodeEE;移位量不能为 0;填充相关参数为负抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1614-1660
+  aliases: ARRAYSHIFT
+  register: FunctionIdentifier.cs:4035
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4035
+- name: ARRAYREMOVE
+  kind: variable
+  arg_form: SpArrayControlArgument (SP_CONTROL_ARRAY)
+  semantics: 从一维数组的指定下标开始删除指定个数的元素,其余元素前移补齐。
+  errors: 目标不是一维数组抛 CodeEE;起始下标为负抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1661-1677
+  aliases: ARRAYREMOVE
+  register: FunctionIdentifier.cs:4036
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4036
+- name: ARRAYSORT
+  kind: variable
+  arg_form: SpArraySortArgument (SP_SORTARRAY)
+  semantics: 对一维数组的指定范围按升/降序排序;第二参数为排序方向,第三、四参数为范围。
+  errors: 目标不是一维数组抛 CodeEE;下标为负抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1678-1710
+  aliases: ARRAYSORT
+  register: FunctionIdentifier.cs:4037
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4037
+- name: ARRAYCOPY
+  kind: variable
+  arg_form: SpCopyArrayArgument (SP_COPY_ARRAY)
+  semantics: 把第一个数组的内容复制到第二个数组(数组以变量名指定)。勘误 2026-10-18：原文写反，源码 VariableEvaluator.cs:947-960 CopyArray(var1, var2) 执行 array2[i]=array[i]（第一→第二），Process.cs:1770 CopyArray(array3[0], array3[1]) 传参顺序即书写顺序。
+  errors: 参数不是变量名、不是数组、是角色变量或常量、维度不一致、类型不一致时抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1711-1772
+  aliases: ARRAYCOPY
+  register: FunctionIdentifier.cs:4038
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4038
+- name: SWAP
+  kind: variable
+  arg_form: SpSwapVarArgument (SP_SWAPVAR)
+  semantics: 交换两个变量的值(整型或字符串)。
+  errors: 两变量类型不同抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1371-1395
+  aliases: SWAP
+  register: FunctionIdentifier.cs:4009
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4009
+- name: VARSIZE
+  kind: variable
+  arg_form: SpVarsizeArgument (SP_VAR)
+  semantics: 查询数组变量的维度大小,结果经 VarSize 返回。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1321-1326
+  aliases: VARSIZE
+  register: FunctionIdentifier.cs:4093
+  confidence: medium
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4093
+- name: POWER
+  kind: variable
+  arg_form: SpPowerArgument (SP_POWER)
+  semantics: 计算 x 的 y 次幂并写入目标变量。
+  errors: 结果为 NaN、无穷大或超出 long 范围时抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1350-1370
+  aliases: POWER
+  register: FunctionIdentifier.cs:4095
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4095
+- name: ENCODETOUNI
+  kind: variable
+  arg_form: ExpressionArgument (FORM_STR_NULLABLE)
+  semantics: 把字符串逐字符转换为 Unicode 码位,写入 RESULT_ARRAY。
+  errors: 字符数超过 RESULT_ARRAY 容量时抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1773-1789
+  aliases: ENCODETOUNI
+  register: FunctionIdentifier.cs:4098
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4098
+- name: TIMES
+  kind: variable
+  arg_form: SpTimesArgument (SP_TIMES)
+  semantics: 把目标整型变量乘以语句中书写的小数系数后写回(截断取整);配置允许时用非严格浮点算法。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1314-1342
+  aliases: TIMES
+  register: FunctionIdentifier.cs:3926
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:1319,3926
+- name: REF
+  kind: variable
+  arg_form: SP_REF / SP_REFBYNAME
+  semantics: 占位语句:运行时直接抛出未实现异常。
+  errors: 始终抛 NotImplCodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1972-1994
+  aliases: REF, REFBYNAME
+  register: FunctionIdentifier.cs:4081-4082
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1987,4081,4082
+- name: PRINTCPERLINE
+  kind: variable
+  arg_form: SpGetIntArgument (SP_GETINT)
+  semantics: 把配置项 PrintCPerLine(每行 PrintC 列数)写入指定变量。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1577-1579
+  aliases: PRINTCPERLINE
+  register: FunctionIdentifier.cs:4096
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4096
+- name: SAVENOS
+  kind: variable
+  arg_form: SpGetIntArgument (SP_GETINT)
+  semantics: 把配置项 SaveDataNos(存档槽数)写入指定变量。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1580-1582
+  aliases: SAVENOS
+  register: FunctionIdentifier.cs:4097
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4097
+- name: UPCHECK
+  kind: variable
+  arg_form: ExpressionArgument (VOID)
+  semantics: 对所有角色执行 UP/PALAM 系统的参数更新结算,可能伴随打印输出。
+  errors: ''
+  display_effect: 更新过程可能向控制台输出。
+  source: Process.cs:1255-1257
+  aliases: UPCHECK
+  register: FunctionIdentifier.cs:3941
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:3941
+- name: CUPCHECK
+  kind: variable
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 对指定角色执行 UP/PALAM 系统的参数更新结算,可能伴随打印输出。
+  errors: ''
+  display_effect: 更新过程可能向控制台输出。
+  source: Process.cs:1258-1263
+  aliases: CUPCHECK
+  register: FunctionIdentifier.cs:3942
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3942
+- name: ADDCHARA
+  kind: variable
+  arg_form: ExpressionArrayArgument (INT_ANY)
+  semantics: 按 CSV 角色号把角色加入角色列表;ADDSPCHARA 加入 SP 角色(SP 未启用时抛错);DELCHARA 删除参数指定的角色。
+  errors: SP 角色未在配置启用时抛 CodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1344-1397
+  aliases: ADDCHARA, ADDSPCHARA, DELCHARA
+  register: FunctionIdentifier.cs:3943-3947
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:1353,3943,3944,3947
+- name: ADDVOIDCHARA
+  kind: variable
+  arg_form: ExpressionArgument (VOID)
+  semantics: 添加一个不带 CSV 数据的空白角色并返回其角色号。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1399-1411
+  aliases: ADDVOIDCHARA
+  register: FunctionIdentifier.cs:3946
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1404,3946
+- name: ADDDEFCHARA
+  kind: variable
+  arg_form: ExpressionArgument (VOID)
+  semantics: 添加 CSV 0 号角色及 GameBase 指定的默认角色。
+  errors: 在 SYSTEM_TITLE 以外的函数中使用抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1284-1294
+  aliases: ADDDEFCHARA
+  register: FunctionIdentifier.cs:3945
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3945
+- name: SWAPCHARA
+  kind: variable
+  arg_form: SpSwapCharaArgument (SP_SWAP)
+  semantics: 交换角色列表中两个角色的位置。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1413-1428
+  aliases: SWAPCHARA
+  register: FunctionIdentifier.cs:3986
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1418,3986
+- name: COPYCHARA
+  kind: variable
+  arg_form: SpSwapCharaArgument (SP_SWAP)
+  semantics: 把一个角色的全部数据复制到目标位置。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1430-1445
+  aliases: COPYCHARA
+  register: FunctionIdentifier.cs:3987
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1435,3987
+- name: ADDCOPYCHARA
+  kind: variable
+  arg_form: ExpressionArrayArgument (INT_ANY)
+  semantics: 把指定角色依次复制为新的角色追加到列表尾。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1447-1463
+  aliases: ADDCOPYCHARA
+  register: FunctionIdentifier.cs:3988
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:1452,3988
+- name: SORTCHARA
+  kind: variable
+  arg_form: SpSortcharaArgument (SP_SORTCHARA)
+  semantics: 以指定角色变量为键对角色列表排序,可指定升/降序;排序保持 MASTER 等角色相对关系(fixMaster)。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1465-1489
+  aliases: SORTCHARA
+  register: FunctionIdentifier.cs:4002
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1470,4002
+- name: DELALLCHARA
+  kind: variable
+  arg_form: ExpressionArgument (VOID)
+  semantics: 删除全部角色。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1264-1266
+  aliases: DELALLCHARA
+  register: FunctionIdentifier.cs:4026
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4026
+- name: PICKUPCHARA
+  kind: variable
+  arg_form: ExpressionArrayArgument (INT_ANY)
+  semantics: 重排角色列表,只保留参数指定的角色(顺序按参数)。
+  errors: 角色号越界抛 CodeEE(MASTER/ASSI/TARGET 变量除外)。
+  display_effect: ''
+  source: Process.cs:1267-1283
+  aliases: PICKUPCHARA
+  register: FunctionIdentifier.cs:4027
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4027
+- name: RESET_STAIN
+  kind: variable
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 把指定角色的污渍(stain)数据重置为默认值。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1557-1560
+  aliases: RESET_STAIN
+  register: FunctionIdentifier.cs:4030
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4030
+- name: RESETCOLOR
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 把前景色恢复为配置默认色。
+  errors: ''
+  display_effect: 影响后续输出的文字颜色。
+  source: FunctionIdentifier.cs:1491-1503
+  aliases: RESETCOLOR
+  register: FunctionIdentifier.cs:3992
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1496,3992
+- name: RESETBGCOLOR
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 把背景色恢复为配置默认色。
+  errors: ''
+  display_effect: 影响后续输出的背景色。
+  source: FunctionIdentifier.cs:1505-1517
+  aliases: RESETBGCOLOR
+  register: FunctionIdentifier.cs:3996
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1510,3996
+- name: SETCOLOR
+  kind: display
+  arg_form: SpColorArgument (SP_COLOR)
+  semantics: 设置前景色,参数为 0xRRGGBB 整数或 R,G,B 三分量。
+  errors: 分量超出 0-255 抛 CodeEE。
+  display_effect: 影响后续输出的文字颜色。
+  source: Process.cs:1409-1439
+  aliases: SETCOLOR
+  register: FunctionIdentifier.cs:3990
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3990
+- name: SETCOLORBYNAME
+  kind: display
+  arg_form: STR (常量字符串)
+  semantics: 按颜色名称(如 RED)设置前景色。
+  errors: 颜色名无效或为 transparent 抛 CodeEE。
+  display_effect: 影响后续输出的文字颜色。
+  source: Process.cs:1440-1454
+  aliases: SETCOLORBYNAME
+  register: FunctionIdentifier.cs:3991
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3991
+- name: SETBGCOLOR
+  kind: display
+  arg_form: SpColorArgument (SP_COLOR)
+  semantics: 设置背景色,参数为 0xRRGGBB 整数或 R,G,B 三分量。
+  errors: 分量超出 0-255 抛 CodeEE。
+  display_effect: 影响后续输出的背景色。
+  source: Process.cs:1455-1492
+  aliases: SETBGCOLOR
+  register: FunctionIdentifier.cs:3993
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3993
+- name: SETBGCOLORBYNAME
+  kind: display
+  arg_form: STR (常量字符串)
+  semantics: 按颜色名称设置背景色。
+  errors: 颜色名无效或为 transparent 抛 CodeEE。
+  display_effect: 影响后续输出的背景色。
+  source: Process.cs:1493-1507
+  aliases: SETBGCOLORBYNAME
+  register: FunctionIdentifier.cs:3995
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3995
+- name: SETBGIMAGE
+  kind: display
+  arg_form: ExpressionArrayArgument (FORM_STR_ANY)
+  semantics: 添加背景图片:文件名、可选深度值与可选不透明度(0-255)。
+  errors: ''
+  display_effect: 背景图层发生变化。
+  source: FunctionIdentifier.cs:1519-1543
+  aliases: SETBGIMAGE
+  register: FunctionIdentifier.cs:3994
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1524,3994
+- name: REMOVEBGIMAGE
+  kind: display
+  arg_form: ExpressionArrayArgument (FORM_STR_ANY)
+  semantics: 按文件名移除指定背景图。
+  errors: ''
+  display_effect: 背景图层发生变化。
+  source: FunctionIdentifier.cs:1545-1558
+  aliases: REMOVEBGIMAGE
+  register: FunctionIdentifier.cs:3998
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1550,3998
+- name: CLEARBGIMAGE
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 清除全部背景图。
+  errors: ''
+  display_effect: 背景图层被清空。
+  source: FunctionIdentifier.cs:1560-1572
+  aliases: CLEARBGIMAGE
+  register: FunctionIdentifier.cs:3997
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1565,3997
+- name: FONTBOLD
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 把文字样式追加为粗体。
+  errors: ''
+  display_effect: 影响后续输出字体样式;仅 Windows 生效。
+  source: FunctionIdentifier.cs:1574-1589
+  aliases: FONTBOLD
+  register: FunctionIdentifier.cs:3999
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1579,3999
+- name: FONTITALIC
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 把文字样式追加为斜体。
+  errors: ''
+  display_effect: 影响后续输出字体样式;仅 Windows 生效。
+  source: FunctionIdentifier.cs:1591-1606
+  aliases: FONTITALIC
+  register: FunctionIdentifier.cs:4000
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1596,4000
+- name: FONTREGULAR
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 把文字样式重置为常规。
+  errors: ''
+  display_effect: 影响后续输出字体样式;仅 Windows 生效。
+  source: FunctionIdentifier.cs:1608-1623
+  aliases: FONTREGULAR
+  register: FunctionIdentifier.cs:4001
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1613,4001
+- name: FONTSTYLE
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION_NULLABLE)
+  semantics: 按位掩码设置字体样式:1=粗体,2=斜体,4=删除线,8=下划线。
+  errors: ''
+  display_effect: 影响后续输出字体样式。
+  source: Process.cs:1508-1530
+  aliases: FONTSTYLE
+  register: FunctionIdentifier.cs:4003
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4003
+- name: SETFONT
+  kind: display
+  arg_form: STR_EXPRESSION_NULLABLE
+  semantics: 按名称设置后续输出使用的字体;空参数恢复默认字体。段宽随字体变,每段按其字体实测像素宽定位(非静态格表)。
+  errors: ''
+  display_effect: 影响后续输出字体,并按该字体换排版宽度(ConsoleStyledString.cs:25,82 Width=GetDisplayLength(Text,Font);ConsoleDisplayLine.cs:66 逐段累加)。
+  source: Process.cs:1531-1534
+  aliases: SETFONT
+  register: FunctionIdentifier.cs:4008
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4008
+- name: ALIGNMENT
+  kind: display
+  arg_form: STR (常量字符串)
+  semantics: 设置当前行对齐方式,参数为 LEFT/CENTER/RIGHT。
+  errors: 参数非法抛 CodeEE。
+  display_effect: 影响行对齐。
+  source: Process.cs:1535-1552
+  aliases: ALIGNMENT
+  register: FunctionIdentifier.cs:4004
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4004
+- name: REDRAW
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 设置控制台重绘模式(0=禁用,1=命令后,2=每行)。
+  errors: ''
+  display_effect: 改变重绘时机。
+  source: Process.cs:1553-1556
+  aliases: REDRAW
+  register: FunctionIdentifier.cs:4013
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4013
+- name: REUSELASTLINE
+  kind: display
+  arg_form: ExpressionArgument (FORM_STR_NULLABLE)
+  semantics: 把最后一行显示内容替换为参数字符串(临时行)。
+  errors: ''
+  display_effect: 重写最后一行。
+  source: FunctionIdentifier.cs:668-681
+  aliases: REUSELASTLINE
+  register: FunctionIdentifier.cs:3940
+  confidence: high
+  flag: 8198
+  flag_source: FunctionIdentifier.cs:673,3940
+- name: CLEARLINE
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 从当前行向上删除指定数量的显示行并刷新。
+  errors: ''
+  display_effect: 移除已有显示行。
+  source: FunctionIdentifier.cs:683-697
+  aliases: CLEARLINE
+  register: FunctionIdentifier.cs:3939
+  confidence: high
+  flag: 8198
+  flag_source: FunctionIdentifier.cs:688,3939
+- name: BAR
+  kind: display
+  arg_form: SpBarArgument (SP_BAR)
+  semantics: 按 (当前值, 最大值, 长度) 生成进度条字符串输出;BARL 变体输出后换行。
+  errors: ''
+  display_effect: 输出进度条文本;BARL 换行。
+  source: FunctionIdentifier.cs:1289-1312
+  aliases: BAR, BARL
+  register: FunctionIdentifier.cs:3924-3925
+  confidence: high
+  flag: 8198
+  flag_source: FunctionIdentifier.cs:1296,3924,3925
+- name: PRINTBUTTON
+  kind: display
+  arg_form: SpButtonArgument (SP_BUTTON)
+  semantics: 输出一个可点击按钮:显示文本与按钮值(整型或字符串);文本中的换行被移除。
+  errors: ''
+  display_effect: 在文字流中生成按钮节点;受 SkipPrint 抑制。
+  source: Process.cs:1107-1124
+  aliases: PRINTBUTTON
+  register: FunctionIdentifier.cs:3911
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3911
+- name: PRINTBUTTONC
+  kind: display
+  arg_form: SpButtonArgument (SP_BUTTON)
+  semantics: 以定宽对齐方式输出按钮;PRINTBUTTONC 右对齐,PRINTBUTTONLC 左对齐。
+  errors: ''
+  display_effect: 在文字流中生成定宽按钮节点;受 SkipPrint 抑制。
+  source: Process.cs:1125-1144
+  aliases: PRINTBUTTONC, PRINTBUTTONLC
+  register: FunctionIdentifier.cs:3912-3913
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3912,3913
+- name: PRINTPLAIN
+  kind: display
+  arg_form: ExpressionArgument (STR_NULLABLE / FORM_STR_NULLABLE)
+  semantics: 以无样式纯文本形式输出字符串(不套用用户配色);PRINTPLAINFORM 变体展开表达式。
+  errors: ''
+  display_effect: 输出纯文本;受 SkipPrint 抑制。
+  source: Process.cs:1145-1154
+  aliases: PRINTPLAIN, PRINTPLAINFORM
+  register: FunctionIdentifier.cs:3914-3915
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3914,3915
+- name: DRAWLINE
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 输出一行默认样式分隔线并换行。
+  errors: ''
+  display_effect: 输出分隔线;受 SkipPrint 抑制。
+  source: Process.cs:1155-1161
+  aliases: DRAWLINE
+  register: FunctionIdentifier.cs:3923
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:3923
+- name: DRAWLINEFORM
+  kind: display
+  arg_form: ExpressionArgument (FORM_STR)
+  semantics: 用参数字符串(可含表达式)重复填充一行作为分隔线输出并换行。
+  errors: ''
+  display_effect: 输出分隔线;受 SkipPrint 抑制。
+  source: Process.cs:1162-1170
+  aliases: DRAWLINEFORM
+  register: FunctionIdentifier.cs:4006
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4006
+- name: PRINT_ABL
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 打印指定角色的能力(ABL)数据汇总串并换行。PRINT_TALENT/PRINT_MARK/PRINT_EXP 分别对应素质/标记/经验,共用同一实现分支。
+  errors: ''
+  display_effect: 输出多行角色数据;受 SkipPrint 抑制。
+  source: Process.cs:1171-1181
+  aliases: PRINT_ABL, PRINT_TALENT, PRINT_MARK, PRINT_EXP
+  register: FunctionIdentifier.cs:3916-3919
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:3916,3917,3918,3919
+- name: PRINT_PALAM
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 按 PrintCPerLine 配置分列打印指定角色的全部参数(PALAM)。
+  errors: ''
+  display_effect: 输出多列参数文本;受 SkipPrint 抑制。
+  source: Process.cs:1182-1206
+  aliases: PRINT_PALAM
+  register: FunctionIdentifier.cs:3920
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:3920
+- name: PRINT_ITEM
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 打印当前持有物品清单并换行。
+  errors: ''
+  display_effect: 输出物品清单;受 SkipPrint 抑制。
+  source: Process.cs:1207-1213
+  aliases: PRINT_ITEM
+  register: FunctionIdentifier.cs:3921
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:3921
+- name: PRINT_SHOPITEM
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 打印商店中所有在售商品(名称、编号、价格),按 PrintCPerLine 分列。
+  errors: ''
+  display_effect: 输出商品清单;受 SkipPrint 抑制。
+  source: Process.cs:1214-1254
+  aliases: PRINT_SHOPITEM
+  register: FunctionIdentifier.cs:3922
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:3922
+- name: CLEARTEXTBOX
+  kind: display
+  arg_form: ExpressionArgument (VOID)
+  semantics: 清空输入框/当前未提交文本。
+  errors: ''
+  display_effect: 输入区被清空。
+  source: Process.cs:1798-1800
+  aliases: CLEARTEXTBOX
+  register: FunctionIdentifier.cs:4007
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4007
+- name: TOOLTIP_SETCOLOR
+  kind: display
+  arg_form: SpSwapCharaArgument (SP_SWAP)
+  semantics: 设置工具提示的前景色与背景色(0xRRGGBB)。
+  errors: 颜色值超出 0-16777215 抛 CodeEE。
+  display_effect: 影响工具提示外观。
+  source: FunctionIdentifier.cs:1996-2021
+  aliases: TOOLTIP_SETCOLOR
+  register: FunctionIdentifier.cs:4088
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2001,4088
+- name: TOOLTIP_SETDELAY
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 设置工具提示弹出延迟(毫秒)。
+  errors: 负值抛 CodeEE。
+  display_effect: 影响工具提示行为。
+  source: FunctionIdentifier.cs:2023-2041
+  aliases: TOOLTIP_SETDELAY
+  register: FunctionIdentifier.cs:4089
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2028,4089
+- name: TOOLTIP_SETDURATION
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 设置工具提示显示时长(毫秒),超过 32767 时截断为 32767。
+  errors: 负值抛 CodeEE。
+  display_effect: 影响工具提示行为。
+  source: FunctionIdentifier.cs:2043-2065
+  aliases: TOOLTIP_SETDURATION
+  register: FunctionIdentifier.cs:4090
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2048,4090
+- name: TOOLTIP_SETFONT
+  kind: display
+  arg_form: ExpressionArgument (STR_EXPRESSION)
+  semantics: 按名称设置工具提示字体。
+  errors: ''
+  display_effect: 影响工具提示外观。
+  source: FunctionIdentifier.cs:2841-2854
+  aliases: TOOLTIP_SETFONT
+  register: FunctionIdentifier.cs:4113
+  confidence: high
+  flag: 2
+  flag_source: FunctionIdentifier.cs:2846,4113
+- name: TOOLTIP_SETFONTSIZE
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 设置工具提示字号。
+  errors: ''
+  display_effect: 影响工具提示外观。
+  source: FunctionIdentifier.cs:2856-2869
+  aliases: TOOLTIP_SETFONTSIZE
+  register: FunctionIdentifier.cs:4114
+  confidence: high
+  flag: 2
+  flag_source: FunctionIdentifier.cs:2861,4114
+- name: TOOLTIP_CUSTOM
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 启用(参数非 0)或禁用(参数为 0)自定义工具提示。
+  errors: ''
+  display_effect: 影响工具提示行为。
+  source: FunctionIdentifier.cs:2871-2890
+  aliases: TOOLTIP_CUSTOM
+  register: FunctionIdentifier.cs:4115
+  confidence: high
+  flag: 2
+  flag_source: FunctionIdentifier.cs:2876,4115
+- name: TOOLTIP_FORMAT
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 设置工具提示的格式标志(格式样式整数值)。
+  errors: ''
+  display_effect: 影响工具提示外观。
+  source: FunctionIdentifier.cs:2892-2905
+  aliases: TOOLTIP_FORMAT
+  register: FunctionIdentifier.cs:4116
+  confidence: high
+  flag: 2
+  flag_source: FunctionIdentifier.cs:2897,4116
+- name: TOOLTIP_IMG
+  kind: display
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 启用(参数非 0)或禁用(参数为 0)工具提示中的图片显示。
+  errors: ''
+  display_effect: 影响工具提示行为。
+  source: FunctionIdentifier.cs:2907-2920
+  aliases: TOOLTIP_IMG
+  register: FunctionIdentifier.cs:4117
+  confidence: high
+  flag: 2
+  flag_source: FunctionIdentifier.cs:2912,4117
+- name: WAIT
+  kind: input
+  arg_form: ExpressionArgument (VOID)
+  semantics: 等待用户按键;FORCEWAIT 变体禁止用消息跳过来中断等待。
+  errors: ''
+  display_effect: 暂停脚本执行直至输入。
+  source: FunctionIdentifier.cs:762-784
+  aliases: WAIT, FORCEWAIT
+  register: FunctionIdentifier.cs:3927,3936
+  confidence: high
+  flag: 8192
+  flag_source: FunctionIdentifier.cs:769,3927,3936
+- name: WAITANYKEY
+  kind: input
+  arg_form: ExpressionArgument (VOID)
+  semantics: 等待任意按键(不限回车)。
+  errors: ''
+  display_effect: 暂停脚本执行直至输入。
+  source: FunctionIdentifier.cs:786-798
+  aliases: WAITANYKEY
+  register: FunctionIdentifier.cs:3935
+  confidence: high
+  flag: 8192
+  flag_source: FunctionIdentifier.cs:791,3935
+- name: TWAIT
+  kind: input
+  arg_form: SpSwapCharaArgument (SP_SWAP)
+  semantics: 先执行一次普通按键等待,再进行限时输入:参数 1 为时限毫秒数,参数 2 非 0 时为定时等待(无需回车)。
+  errors: ''
+  display_effect: 暂停脚本执行直至超时或输入。
+  source: FunctionIdentifier.cs:800-825
+  aliases: TWAIT
+  register: FunctionIdentifier.cs:3934
+  confidence: high
+  flag: 8194
+  flag_source: FunctionIdentifier.cs:805,3934
+- name: INPUT
+  kind: input
+  arg_form: SpInputsArgument (SP_INPUT)
+  semantics: 请求用户输入整数存入 RESULT;可带默认值与是否接受鼠标输入标志;消息跳过激活时直接采用默认值。
+  errors: ''
+  display_effect: 弹出输入框并暂停脚本。
+  source: FunctionIdentifier.cs:827-869
+  aliases: INPUT
+  register: FunctionIdentifier.cs:3928
+  confidence: high
+  flag: 24576
+  flag_source: FunctionIdentifier.cs:832,3928
+- name: INPUTS
+  kind: input
+  arg_form: SpInputsArgument (SP_INPUTS)
+  semantics: 请求用户输入字符串存入 RESULTS;可带默认值与鼠标输入标志;消息跳过激活时直接采用默认值。
+  errors: ''
+  display_effect: 弹出输入框并暂停脚本。
+  source: FunctionIdentifier.cs:871-913
+  aliases: INPUTS
+  register: FunctionIdentifier.cs:3929
+  confidence: high
+  flag: 24576
+  flag_source: FunctionIdentifier.cs:876,3929
+- name: ONEINPUT
+  kind: input
+  arg_form: SpInputsArgument (SP_INPUT)
+  semantics: 请求单键整数输入(一个按键即完成);可带默认值;消息跳过激活时直接采用默认值。
+  errors: ''
+  display_effect: 暂停脚本直至输入。
+  source: FunctionIdentifier.cs:915-957
+  aliases: ONEINPUT
+  register: FunctionIdentifier.cs:3937
+  confidence: high
+  flag: 24578
+  flag_source: FunctionIdentifier.cs:920,3937
+- name: ONEINPUTS
+  kind: input
+  arg_form: SpInputsArgument (SP_INPUTS)
+  semantics: 请求单键字符串输入;可带默认值;消息跳过激活时直接采用默认值。
+  errors: ''
+  display_effect: 暂停脚本直至输入。
+  source: FunctionIdentifier.cs:959-1001
+  aliases: ONEINPUTS
+  register: FunctionIdentifier.cs:3938
+  confidence: high
+  flag: 24578
+  flag_source: FunctionIdentifier.cs:964,3938
+- name: TINPUT
+  kind: input
+  arg_form: SpTInputsArgument (SP_TINPUT)
+  semantics: 限时整数输入:参数为时限毫秒、默认值、是否接受鼠标、是否显示剩余时间、超时提示语(缺省用配置);超时取默认值;TONEINPUT 为单键变体。
+  errors: ''
+  display_effect: 暂停脚本直至输入或超时。
+  source: FunctionIdentifier.cs:1003-1050
+  aliases: TINPUT, TONEINPUT
+  register: FunctionIdentifier.cs:3930,3932
+  confidence: high
+  flag: 24578
+  flag_source: FunctionIdentifier.cs:1010,3930,3932
+- name: TINPUTS
+  kind: input
+  arg_form: SpTInputsArgument (SP_TINPUTS)
+  semantics: 限时字符串输入,行为同 TINPUT;TONEINPUTS 为单键变体。
+  errors: ''
+  display_effect: 暂停脚本直至输入或超时。
+  source: FunctionIdentifier.cs:1052-1099
+  aliases: TINPUTS, TONEINPUTS
+  register: FunctionIdentifier.cs:3931,3933
+  confidence: high
+  flag: 24578
+  flag_source: FunctionIdentifier.cs:1059,3931,3933
+- name: INPUTMOUSEKEY
+  kind: input
+  arg_form: ExpressionsArgument (普通参数)
+  semantics: '请求原始鼠标/键盘输入(写入 RESULT: 系列),参数 1 为可选限时毫秒数。'
+  errors: ''
+  display_effect: 暂停脚本直至输入。
+  source: FunctionIdentifier.cs:2067-2093
+  aliases: INPUTMOUSEKEY
+  register: FunctionIdentifier.cs:4091
+  confidence: high
+  flag: 2
+  flag_source: FunctionIdentifier.cs:2072,4091
+- name: INPUTANY
+  kind: input
+  arg_form: ExpressionArgument (VOID)
+  semantics: 等待任意类型输入(整数/字符串/按键均可),结果写入 RESULT 与 RESULTS。
+  errors: ''
+  display_effect: 暂停脚本直至输入。
+  source: FunctionIdentifier.cs:2095-2111
+  aliases: INPUTANY
+  register: FunctionIdentifier.cs:4112
+  confidence: high
+  flag: 2
+  flag_source: FunctionIdentifier.cs:2100,4112
+- name: BINPUT
+  kind: input
+  arg_form: SpInputsArgument (SP_INPUT)
+  semantics: 等待用户点击画面上已有的整数值按钮,结果存入 RESULT;若无可点击按钮则直接采用默认值;无按钮且无默认值时抛错。执行前先换行并强制刷新显示。
+  errors: 无可用按钮且未提供默认值抛 CodeEE。
+  display_effect: 刷新显示并暂停脚本等待按钮点击。
+  source: FunctionIdentifier.cs:2113-2215
+  aliases: BINPUT
+  register: FunctionIdentifier.cs:4118
+  confidence: high
+  flag: 24576
+  flag_source: FunctionIdentifier.cs:2118,4118
+- name: BINPUTS
+  kind: input
+  arg_form: SpInputsArgument (SP_INPUTS)
+  semantics: 等待用户点击字符串值按钮,结果存入 RESULTS;行为同 BINPUT。
+  errors: 无可用按钮且未提供默认值抛 CodeEE。
+  display_effect: 刷新显示并暂停脚本等待按钮点击。
+  source: FunctionIdentifier.cs:2217-2319
+  aliases: BINPUTS
+  register: FunctionIdentifier.cs:4119
+  confidence: high
+  flag: 24576
+  flag_source: FunctionIdentifier.cs:2222,4119
+- name: ONEBINPUT
+  kind: input
+  arg_form: SpInputsArgument (SP_INPUT)
+  semantics: 单次按钮整数输入:一次点击即完成,行为同 BINPUT。
+  errors: 无可用按钮且未提供默认值抛 CodeEE。
+  display_effect: 刷新显示并暂停脚本等待按钮点击。
+  source: FunctionIdentifier.cs:2321-2424
+  aliases: ONEBINPUT
+  register: FunctionIdentifier.cs:4120
+  confidence: high
+  flag: 24576
+  flag_source: FunctionIdentifier.cs:2326,4120
+- name: ONEBINPUTS
+  kind: input
+  arg_form: SpInputsArgument (SP_INPUTS)
+  semantics: 单次按钮字符串输入:一次点击即完成,行为同 BINPUTS。
+  errors: 无可用按钮且未提供默认值抛 CodeEE。
+  display_effect: 刷新显示并暂停脚本等待按钮点击。
+  source: FunctionIdentifier.cs:2426-2529
+  aliases: ONEBINPUTS
+  register: FunctionIdentifier.cs:4121
+  confidence: high
+  flag: 24576
+  flag_source: FunctionIdentifier.cs:2431,4121
+- name: AWAIT
+  kind: display
+  arg_form: ExpressionArgument (EXPRESSION_NULLABLE)
+  semantics: 暂停指定毫秒数后继续;无参数时无限等待。
+  errors: 参数为负或超过 10000 抛 CodeEE。
+  display_effect: 控制文字流节奏。
+  source: FunctionIdentifier.cs:2581-2606
+  aliases: AWAIT
+  register: FunctionIdentifier.cs:4092
+  confidence: high
+  flag: 2
+  flag_source: FunctionIdentifier.cs:2586,4092
+# ---- A9：CALL 家族全形态清单（操作数编码 + try/TRYC 语义定稿）----
+# 主实现类只有 4 个：CALL_Instruction（FunctionIdentifier.cs:3489-3600）、
+#   GOTO_Instruction（:3629-3719）、CALLEVENT_Instruction（:3602-3627）、
+#   CALLF_Instruction / TRYCALLF_Instruction（:1101-1167 / :1237-1287）；**不存在 JUMP_Instruction**。
+# 构造参数 = (form, isJump, isTry, isTryCatch)，注册表 FunctionIdentifier.cs:4040-4051（CALL 族）与
+#   :4057-4062（GOTO 族）。逐形态（全部 12+6 条，无遗漏）：
+#   JUMP         form=0 jump=1 try=0 tryc=0  CALL_Instruction  flag 33|64 =97          +addFlag 0
+#   CALL         0,0,0                       CALL_Instruction  flag 33      =33         +0
+#   TRYJUMP      0,1,1,0                     CALL_Instruction  33|64|128    =225        +2
+#   TRYCALL      0,0,1,0                     CALL_Instruction  33|128       =161        +2
+#   JUMPFORM     1,1,0                       CALL_Instruction  97                        +2
+#   CALLFORM     1,0,0                       CALL_Instruction  33                        +2
+#   TRYJUMPFORM  1,1,1,0                     225 +2 ; TRYCALLFORM 161 +2
+#   TRYCJUMP     0,1,1,1                     CALL_Instruction  33|64|128|32784 =33505    +2
+#   TRYCCALL     0,0,1,1                     33|128|32784      =33297   +2
+#   TRYCJUMPFORM 1,1,1,1 / TRYCCALLFORM 1,0,1,1 同上两组位模式（form 只换 ArgBuilder，不改 flag）
+#   GOTO         form=0 try=0 tryc=0         GOTO_Instruction  flag 37      =37         +0
+#   TRYGOTO      0,1,0                       37|128            =165   +2
+#   GOTOFORM     1,0,0                       37                =37    +2
+#   TRYGOTOFORM  1,1,0                       165               +2
+#   TRYCGOTO     0,1,1                       37|128|32784      =33285 +2
+#   TRYCGOTOFORM 1,1,1                       同上
+#   CALLF / CALLFORMF     -> CALLF_Instruction(form)  FunctionIdentifier.cs:1101-1167  flag 38（:4053-4054，无 additionalFlag）
+#   TRYCALLF/TRYCALLFORMF -> TRYCALLF_Instruction(form) :1237-1287                     flag 38（:4105-4106）
+#   **TRYCALLF 的 flag 与 CALLF 完全相同（都是 38，不含 IS_TRY=128）** —— try 性只体现在 Instruction 实现类上，
+#     不能从 flag 位推出（对比 :4290-4308 只有 IsTry()/IsJump()）。.erbc 若要按 flag 编码必须另存位。
+#   CALLEVENT -> CALLEVENT_Instruction（:3602-3627）flag 3，ArgType.STR（常量事件名，无实参槽）。
+# 参数面（三槽，ArgumentParser.cs:719-792 / SpCallArgment.cs:8-22 / SpCallFArgment.cs:8-21）：
+#   FuncnameTerm（SP_CALL=常量串 :730 / SP_CALLFORM=FORM 串 :725）、SubNames（`[...]` 列表）、RowArgs（`(...)`/`,` 列表）。
+#   **SubNames 在运行期从不被读取**：全仓仅 ErbLoader.cs:1506 与 :1511 校验 TRYGOTOLIST 成员的 SubNames/RowArgs 必须为空；
+#   CALL/GOTO/CALLF 的 DoInstruction 只用 RowArgs。故 .erbc 的 CALL 操作数 = 名字(常量或 1 表达式) + n 实参，SubNames 可丢弃但需保留"非空即装载期报错"校验位。
+# 结果落点：CALL/JUMP/GOTO/CALLEVENT/TRYCALL* -> 不写 RESULT（DoInstruction 无 SetResult，:3560-3599/:3618-3626/:3681-3717）；
+#   CALLF/TRYCALLF -> `aExpression.GetValue(exm)` 求值后**丢弃**（:1165 / :1285），不写 RESULT/RESULTS；
+#   CALLSHARP -> 变量实参回写（:1218-1233）。RETURN 写 RESULT/RESULTS（:3260-3270），RETURNF 走 state.ReturnF(SingleTerm)（:3477-3486）。
+# **try"查不到"到底是跳过哪一行 —— 定稿：跳过本行（顺序执行下一条），不是跳过下一行。**
+#   CALL 族 FunctionIdentifier.cs:3577-3588：calledFunction==null 时
+#     !isTry -> throw CodeEE（:3581）；isTry -> 仅当 func.JumpToEndCatch != null 才 state.JumpTo（:3583-3586），随后 `return`（:3587）
+#     ；调用方主循环对 return 一律 ShiftNextLine（Process.cs:1011/1021-1057）⇒ 落到**紧随其后的那一行**。
+#   GOTO 族同构：:3699-3709（!IsTry -> throw :3703；IsTry -> JumpToEndCatch 或什么都不做），
+#     装载期常量标签缺失时 GOTO_Instruction.SetJumpTo 只在非 try 上报解析错（:3664-3670），
+#     运行期 const 且 func.JumpTo==null 直接 return（:3688-3691）= 同样跳过本行。
+#   TRYCALLF：装载期 catch-all 静默返回（:1264-1267），运行期 `aExpression?.GetValue(exm)`（:1285）= 空操作，同样跳过本行。
+# **TRYC 系与 TRY 系的差别只有一层，且不在"函数体出错"上 —— 定稿：**
+#   IS_TRYC=32768（FunctionIdentifier.cs:3737）在**全仓没有任何读取者**：无 IsTryC() 访问器（:4290-4308 只有 IsTry/IsJump/IsForceSetArg/IsDebug），
+#   `flag & 32768` / `0x8000` 无匹配。isTryCatch 不产生任何"捕获"运行期行为，它写下的位只被两类读取者用到：
+#   装载期结构约束（下条）与 PARTIAL(16) 位的读取者（再下条）：funcMatch[TRYC*]="CATCH"（:4148-4153）
+#   与 ErbLoader.cs:1169-1177（TRYC* 入栈）、:1339-1349（CATCH 出栈并写 `trycLine.JumpToEndCatch = catchLine`）、
+#   :1350-1358（ENDCATCH 写 `catchLine.JumpToEndCatch = endcatchLine`）。
+#   CATCH_Instruction.DoInstruction 只做 state.JumpTo(JumpToEndCatch)（:3282-3285）= 正常路径跳过 catch 块。
+#   异常边界只有 Process.DoScript 的一层 try（Process.cs:438-478），catch 后 handleException 仅打印错误、不做任何回跳
+#   （Process.cs:595-661，无 TRYC 分支）。⇒ **本版本不存在"被调函数体内部出错 -> 落到 CATCH"的运行期机制**；
+#   TRYCCALL 与 TRYCALL 的唯一可观测差异 = 目标不存在时 TRYC 跳**到 CATCH 行**（跳过 try 体块）、TRY 落到**下一行**（执行 try 体块）。
+#   原 isa.yaml 的"TRYC 变体在函数体出错时进入 CATCH"据此改写为 TODO(verify) 级别以下（high confidence 的"无该机制"结论，
+#   限于反编译 1.824 源码；若官方后续版本补实装需另议）。
+#   **但 isTryCatch 的 `flag |= 32784`（:3516 / :3651）里那半位 PARTIAL(16) 确实有运行期读取者**，
+#   TRYC 系因此带两条可观测的放置限制（.erbc/校验层必须复刻，别当成纯结构位）：
+#     · #FUNCTION 方法体内禁用 PARTIAL 语句 —— EmueraConsole.cs:2216-2219（RunInMethod 闸，同闸还看 IsWaitInput :2208 与 IsMethodSafe :2212）；
+#     · SIF 的紧随语句不能是 PARTIAL —— FunctionIdentifier.cs:3049-3052。
+#   附带口径差异：**GOTO 的 flag=37 含 METHOD_SAFE(4) ⇒ GOTO 可在方法内用；CALL 的 flag=33 不含 ⇒ CALL/JUMP 系在方法内一律 CodeEE**。
+- name: CALL
+  kind: flow
+  arg_form: SpCallArgment (SP_CALL / SP_CALLFORM)
+  semantics: 调用用户定义函数并把实参绑定到其 ARG 变量;JUMP 变体不保留返回点(单向跳转);FORM 变体函数名为表达式;TRY 变体在函数不存在时**跳过本行**(继续执行紧随的下一条语句);TRYC 变体在函数不存在时改跳对应的 CATCH 块。不写 RESULT/RESULTS。注:本反编译版本(1.824)未实现"被调函数体运行期出错转入 CATCH"——IS_TRYC 无任何运行期读取者,见上方形态清单注释块。
+  errors: 运行期函数不存在且非 TRY/TRYC 变体抛 CodeEE(NotDefinedFunc, FunctionIdentifier.cs:3579-3581);装载期常量名查不到且非 try 时置 FunctionoNotFoundName 交 ErbLoader.cs:1615-1625 转成 isError 解析错(:3532-3536);实参转换失败运行期抛 CodeEE(:3592-3596)、装载期 Warn(:3550-3555);目标是事件名(:CalledFunction.cs:100-103)或 #FUNCTION 方法名(:106-109)一律抛 CodeEE 且不受 try 影响。
+  display_effect: ''
+  source: FunctionIdentifier.cs:3489-3600
+  aliases: JUMP, CALL, TRYJUMP, TRYCALL, JUMPFORM, CALLFORM, TRYJUMPFORM, TRYCALLFORM, TRYCJUMP, TRYCCALL, TRYCJUMPFORM, TRYCCALLFORM
+  register: FunctionIdentifier.cs:4040-4051
+  confidence: high
+# ---- A9：CALLF 族 + 动态名调用（_CALL_BY_NAME 的原版对应路径）定稿 ----
+# 原版是**混合模式**，不是纯运行期也不是纯装载期：
+#   常量名（非 FORM）= **装载期绑定**：CALL_Instruction.SetJumpTo FunctionIdentifier.cs:3522-3558
+#     -> :3531 CalledFunction.CallFunction(...) 查表，:3539 写 func.JumpTo=TopLabel，:3550 预转换实参
+#        spCallArgment.UDFArgument = ConvertArg(RowArgs)，:3557 缓存 spCallArgment.CallFunc；
+#     运行期直接取缓存：DoInstruction :3566-3571（IsConst 分支读 CallFunc/ConstStr/UDFArgument，**不查表**）。
+#   FORM / 名字为表达式 = **运行期按名查表**：:3574-3575
+#     FuncnameTerm.GetStrValue(exm) -> CalledFunction.CallFunction(GlobalStatic.Process, text, func)。
+#     查表实现 CalledFunction.cs:87-115：LabelDictionary.GetNonEventLabel(label)（:93），
+#     未命中且 TryLazyLoadErb 成功则重查（:94-97，懒加载），事件名 -> throw CallToEventFunc（:100-103），
+#     #FUNCTION 方法名 -> throw CallToUserFunc（:106-109），否则 return null（:104）交给 isTry 分支。
+#   **装载期失败的报错走 warn 而非 return**：:3532-3536 仅非 try 时置 FunctionoNotFoundName，
+#     由 ErbLoader.cs:1605-1625 转成 printFunctionNotFoundWarning(isError:true)。
+#   useCallForm（ErbLoader.cs:199/1608）一旦被置真，**整个装载退化为二次解析**：:815-827 重扫 depth 层函数并
+#     打印 BeNotFuncCheckBecauseUseCallform；TRYCALLLIST/TRYJUMPLIST 也强制置真（:1627-1630）。
+#     ⇒ 移植侧含义：静态名缺失应在装载期可判，FORM/按名调用必须留到运行期（对齐契约 C5 的 resolveFunctionIndex）。
+#   不对称点（原版既有行为，勿"顺手修正"）：CALL 的 IsConst 快速路径**不看** Console.RunERBFromMemory
+#     （:3566），而 CALLF/TRYCALLF 看了（:1150 / :1274）——内存态重载 ERB 时 CALL 的装载期绑定不刷新。
+# 帧切换与 ARG/ARGS 绑定顺序（契约 C1/C5 依据）：
+#   1) CalledFunction.ConvertArg CalledFunction.cs:128-202 —— 在**调用者帧**内把 RowArgs 规整成
+#      UserDefinedFunctionArgument：数组长度 = TopLabel.Arg.Length（:137）；
+#      **实参多于形参 = 静默丢弃**（4.981 口径，2026-11-12 校准）：复刻目标
+#      reference/emuera-skia-4.981/Emuera/Runtime/Script/Process.CalledFunction.cs:212-357 只循环
+#      func.Arg.Length 次、无 1.824 的 `array.Length < srcArgs.Count -> TooManyFuncArgs` 硬判
+#      （fork 更新记录 CHANGELOG.md「ConvertArg() 多余参数静默丢弃：移除 TooManyFuncArgs 报错」）；
+#      reference/emuera-cs 的 :137-142 只是历史对照锚。现场形态：fromEN/Addition/lib/DATEPICKER.ERB:56
+#      `GET_MONTH(ACTIVE_MONTH, 1)` 打在日時天候管理.ERB:189 的 `@GET_MONTH(ARG)`（单形参）上，
+#      真机正常出日历；1.824 口径会让「婚礼策划 → 日期」抛「GET_MONTH函数: 参数过多」。
+#      逐位：REF 形参必须是带下标的 VariableTerm 且类型匹配（:147-163）；缺失实参取 #DIM ARG 默认值 Def[i]（:167），
+#      无默认且 CompatiFuncArgOptional 关 -> 错（:168-172）；int/str 失配按 CompatiFuncArgAutoConvert 决定是否 TOSTR 包裹（:174-198）。
+#      **Def[i] 与调用点的名字形态无关**（2026-11-17 PC 实测校准）：`CALLFORM "SHOW_INT"()` 与
+#      `TRYCCALLFORM %funcName% , args` 这类运行期名调用，省略位同样取被调 `CalledFunction.Def[i]`
+#      （探针宿主 1824+v24+EMv18+EEv56+Skiav16 ⇒ `dynDefaultInt=7`、`dynDefaultStr=[abc]`）。
+#      ⇒ 移植侧把形参默认值表（侧车 `param-defaults`）**留到运行期**，在
+#      `ProcessRuntime.bindOmittedArgDefault` 的省略位顶替；编译期 `padOmittedArgs` 只覆盖
+#      「编译期能定名」的调用点（`ErbProgramCompiler.kt:2049-2050`），`CALLFORM`/`TRYCALLFORM`/
+#      `TRYCCALLFORM` 必须由运行期补，否则省略位静默落成隐式 0/""。
+#      **形参位是 #DIMF 浮点变量时（4.981 fork 第三型，见 variables.yaml 的 #DIMF）**：省略位
+#      写浮点列、整型实参按 int → float 提升写入（2026-11-17 PC 实测：`CALL DIMF_F, 0` 得 1.5、
+#      `CALL DIMF_F, 0, 2` 得 2.0）⇒ 移植侧在 `ProcessRuntime.bindOmittedArgDefault` 与
+#      `bindCallArgs` 都按 `spec.isFloat` 走 writeFloat（落 writeInt 会抛「浮点变量不能写入整数」）。
+#      **浮点实参（`CALL F, 0, 2.5`）**：PC 实测允许，且只能进浮点形参 ——
+#      `CALL DIMF_F, 0, 2.5` 得 2.5、`CALL F_ARGF2, 0, 2.5` 得 2.5；浮点实参给 int/str 形参
+#      或 `ARG`/`ARGS` 时原版装载期即拒（`CanNotConvertFloatToInt/Str`）。
+#      移植侧落地：帧模型只有整型列/字符串列 ⇒ 编译期发 `_EVAL_FLOAT`（a = 表达式池下标、
+#      b = 帧内整型槽）把值按 `doubleToRawLongBits` **位型**写槽，`CallArg.isFloat` 标记该桶位
+#      （ERBC 段 7 flags bit2），绑定点 `ProcessRuntime.floatArgValue` 重解释；失配在绑定点抛
+#      CodeEE（可观察行为与原版装载期拒绝等价）。
+#   2) UserDefinedFunctionArgument.SetTransporter UserDefinedFunctionArgument.cs:35-69 —— **按下标升序把全部实参求完值**
+#      落到 TransporterInt/Str/Ref（:37-68）。即：所有实参在调用者侧求值完毕，才开始写被调方 ARG，
+#      实参表达式里的副作用不会看到"半新半旧的 ARG 帧"。
+#   3) ProcessState.IntoFunction ProcessState.cs:382-461 —— 顺序为：
+#      事件重入检查（:384-393，已在事件函数中再 CALLEVENT -> throw CalleventBeforeFinishEvent）→
+#      srcArgs.SetTransporter(exm)（:430）→ hasPrivDynamicVar 时 TopLabel.ScopeIn()（:431-434）→
+#      逐位写入 **被调函数自己的 ARG 全局/局部变量**（:435-452，升序；REF 位 SetRef :441，int :445，str :449；
+#      Arguments[i]==null 的位**跳过不写**，:437 —— 故省略位保留 ARG 的既有值，ARG=-1 由别处复位提供）→
+#      functionList.Add(call)（:458）→ currentLine = call.CurrentLabel（:459）→ lineCount++（:460）。
+#      **没有独立的 ARG 寄存器/帧槽**：ARG/ARGS 就是普通具名变量（ARGS 是本地数组 VariableData.cs:3187，
+#      长度由 LabelDictionary.cs:67/178 resizeLocalVars("ARGS", name, ArgsLength) 在装载期设定）。
+#      ⇒ 与契约 C1 一致：移植侧 ARG/ARGS 必须落 VariableStore，VM 的 R0..R(n-1) 只是 Transporter 的暂存镜像。
+#   4) CALLEVENT 走同一条 IntoFunction 但 srcArgs=null（:3624）→ 只 ScopeIn，不写 ARG；
+#      事件组迭代由 CalledFunction.ShiftNext/ShiftNextGroup 的 group<4 四桶推进（CalledFunction.cs:228-257）。
+# CALLF 族与 CALL 的**关键区别**：CALLF 不建帧、不跳转，只把 #FUNCTION 方法当表达式求值后丢弃结果：
+#   装载期 CALLF_Instruction.SetJumpTo :1116-1144（IdentifierDictionary.GetFunctionMethod，userDefinedOnly:true :1126，
+#   缺失 -> ParserMediator.Warn 解析错 :1133-1143；GetFunctionMethod 本体 IdentifierDictionary.cs:538-585，
+#   REFFUNC 表优先 :550-553，#FUNCTION 用户方法 :561-565，非方法名 -> throw UsedNonMethodFunc :566-569）；
+#   运行期 CALLF :1146-1166 —— 常量名走缓存 FuncTerm（:1159），否则现查（:1154）；null -> throw NotDefinedUserFunc（:1163）；
+#   `aExpression.GetValue(exm)`（:1165）返回值**丢弃**，不写 RESULT/RESULTS。
+#   TRYCALLF :1237-1287 —— 装载期 catch-all 静默（:1264-1267），运行期 `?.GetValue`（:1285）；
+#   flag 与 CALLF 同为 38（注册 :4053-4054 / :4105-4106 都无 additionalFlag），**IS_TRY 位不置**。
+- name: CALLF
+  kind: call
+  arg_form: SpCallFArgment (SP_CALLF / SP_CALLFORMF)
+  semantics: '调用用户 #FUNCTION 方法并对结果求值,但不跳转、结果不写入 RESULT(仅供副作用/校验);CALLFORMF 变体函数名为表达式。'
+  errors: 函数未定义抛 CodeEE;解析期未找到函数报解析错误。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1101-1167
+  aliases: CALLF, CALLFORMF
+  register: FunctionIdentifier.cs:4053-4054
+  confidence: high
+  flag: 38
+  flag_source: FunctionIdentifier.cs:1113,4053,4054
+- name: TRYCALLF
+  kind: call
+  arg_form: SpCallFArgment (SP_CALLF / SP_CALLFORMF)
+  semantics: 同 CALLF,但函数不存在时静默跳过**本行**(顺序执行下一条),不报错。装载期 :1264-1267 catch-all 直接 return(不产生 warn),运行期 :1285 用 ?.GetValue 做空操作。flag 与 CALLF 相同(38,不含 IS_TRY),try 性只在实现类上。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1237-1287
+  aliases: TRYCALLF, TRYCALLFORMF
+  register: FunctionIdentifier.cs:4105-4106
+  confidence: high
+  flag: 38
+  flag_source: FunctionIdentifier.cs:1249,4105,4106
+# ─────────────────────────────────────────────────────────────
+# CALLSHARP 条目补登（2026-11-05，来源 = lane modelset 交来；下列每条均由本路逐行回
+# reference/emuera-cs 与 4.981 语料复核后落笔。原 errors 行「解析期找不到本地方法报解析错误」
+# 与移植侧实现不符 —— 移植侧是**执行期** CodeEE，官方也是在这一行被走到时才兑现。）
+#
+# 1) 报错相位与原文（英文文案是官方原样，按 ADR-005 属**待复刻项、不是待翻译项**）：
+#    · 联结期 FunctionIdentifier.cs:1193-1210（CALLSHARP_Instruction.SetJumpTo）：
+#      :1201-1202 `PluginManager.GetInstance()` + `instance.HasMethod(ConstStr)` 未命中时
+#      :1204 `ParserMediator.Warn($"No native method {spCallSharpArgment.ConstStr} found", func, 2, isError: true, isBackComp: false)`
+#      —— **内插串原样即屏上文案**，`<名>` 取脚本里的调用名。
+#    · Warn(isError:true) 不当场抛：ParserMediator.cs:125-136 只把 `line.IsError = true` /
+#      `line.ErrMes = str`（:129-130）记到行上。
+#    · 抛出在执行期：Process.cs:1017-1019（`if (currentLine.IsError) throw new CodeEE(currentLine.ErrMes)`）
+#      与 :1030-1032（惰性 `ArgumentParser.SetArgumentTo` 后再查一次 IsError 同法抛）。
+#    ⇒ 官方口径 = 「错误在装载期登记、在该条语句被走到时以 CodeEE 兑现」。移植侧（B1a，2026-11-06
+#      复刻落定）：注册表挂 store.aux（fn/PluginMethods.kt nativeMethods），而宿主装配点在
+#      app GameHost.wireCorpusNativeMethods（GameHost.kt:3476）—— **晚于** GameSession 构造期的
+#      语料装载 ⇒ 装载期注册表恒空，照抄原版相位会把已接桩的 ModelSet/Chat 全部误杀（0.2.39 上报簇
+#      的复发方向）。故裁决点后移到「该行第一次执行」（宿主装配在 drive() 之前完成，此刻注册表已是
+#      终表），机制 = 行级联结记录 SharpLinkTable（fn/PluginMethods.kt）：
+#      首次执行未命中 → 把 `No native method <名> found` 记进行级错误态；命中 → 方法本体
+#      缓存绑定；**此后不重查**（= 原版联结期绑死 CallFunc / IsError，注册表再长出同名也不复活、
+#      clear 已绑定行不受影响）。
+#      **执行期处置 = 通用策略（2026-11-09，ADR-005 有意偏离，verify-notes §35）**：官方在
+#      Process.cs:1017-1019 抛**记录值**中断脚本；移植侧**不抛** —— 把同一句经 ConsoleSink.printError
+#      打一行错误行后**跳过该语句**（实参不求值、不回写 ⇒ 无副作用），脚本继续；每行键只提示
+#      一次（@CHAT_ACTION 挂 EVENTCOMEND，一段对话会走十几次，逐次打会刷屏）。
+#      已撤回：曾按插件名写本机实现（platform/chat/ChatCallSharpHost + MiniJson，44d9bb20 共 993 行）
+#      —— per-plugin 实现不 scale，且只是把「这一个插件」补成能跑，不是机制。
+#      两条通道：flat 生产路 `StatementExecutor.resolveSharpMethodFlat`（行键 = 语句池下标）与
+#      旧对象树对拍路 `resolveSharpMethodTree`（行键 = SpCallSharpArgument 实例身份）。
+#      const 名判定 = funcNameTerm is StrLiteral（原版名字恒 SingleStrTerm ⇒ IsConst 恒真，
+#      ArgumentParser.cs:800/:850-853，SetJumpTo 的 !IsConst 分支对 CALLSHARP 不可达）。
+#      残余相位差 = **装载期警告面**（原版 warningList 装载完统一上屏，ParserMediator.cs:143-158；
+#      该行不执行也见警告）—— 已由 CSHARP-WIRE 接线复刻：GameHost 装配段三段严格序
+#      wireCorpusNativeMethods → prefillSharpLinks（装载趟扫常量名实参裁决，source/erbc 两路
+#      同一裁决）→ drive() 前警告经 GameSession.sharpLoadWarnings 统一上屏（呈现面 = logcat +
+#      读数面，原版控制台警告样式差登记有意不修，见 verify-notes §13.1 (a2)）。
+#      构造钉 = CallSharpLinkPhaseTest（记行错/抛记录值/不重查/命中绑死，flat 与旧树两通道各两例）
+#      + CallSharpLoadPrefillTest（预填/不物化/幂等，erbc 惰性池通道）。
+# 2) 语料可达面 + 原生名来源：
+#    · 4.980：游戏 ERB 子树 `CALLSHARP` **0 命中**；全树只有 readme 散文提过两处
+#      （`eratw-画蛇添足版eratw4.980/原版+前人整合等各种readme（口上模板及口上教程在内）/更新内容 4.956~汉化.erb:556/:558`，
+#      是「修复了@CALLSHARP()的BUG」「提交了一个@CALLSHARP()的示例DLL」两行说明，不是代码）。
+#    · 4.981：3 处，全在 `ERB/DLC/AI对话补丁/对话调用.erb` —— :35 `CALLSHARP ModelSet(模型API, 模型Key, 模型名称)`、
+#      :36 `CALLSHARP Chat(AI对话返回信息,返回对话)`、:54 的 9 参 `Chat(...)`。
+#      :54 整段被 :45 `[SKIPSTART]` ~ :56 `[SKIPEND]` 包住 ⇒ 预处理期不产逻辑行
+#      （spec: ErbLoader.cs:408-411 + EraStreamReader.cs:130 的 disabled 分支）。
+#      ⇒ **运行期可达的原生名只有 {ModelSet, Chat}**。
+#    · 随包 `plugins/ChatCallSharp.dll`（实测字符串面）另有 ChatExMethod / ChatStreamMethod /
+#      ChatJsonMethod / ChatRawMethod / HttpGetJsonMethod（+ ModelSetMethod / ChatMethod）
+#      ⇒ 即 ChatEx/ChatStream/ChatJson/ChatRaw/HttpGetJson 在本包语料不可达，不设桩、不测。
+#    · 原生名**不是引擎注册表成员**：查表走 `PluginManager.GetInstance()` 的
+#      HasMethod/GetMethod（FunctionIdentifier.cs:1201-1202/:1208），条目由玩家侧 .NET 插件注册
+#      ⇒ 移植层保留宿主注册通道（app `GameHost.wireCorpusNativeMethods`，本版注册表**为空** ——
+#      不加载 .NET 插件 DLL），未提供的方法按通用策略在装载期告警、执行期提示后跳过
+#      （2026-11-09，ADR-005 有意偏离，verify-notes §35）。
+#      钉在 core/proc/CallSharpCorpusCensusTest（可达名集合 + 未注册名提示口径）与
+#      core/proc/AiChatSharpStubTest（无桩侧：两句提示按序、脚本不中断）。
+# 3) 变量实参回写的**有意偏离登记**（重要：这一条不是 bug 修正建议，是记账）：
+#    · 官方回写链**没有常量闸**：FunctionIdentifier.cs:1212-1234（DoInstruction）的 :1218-1232
+#      对每个 `aExpression is VariableTerm` 的实参位直接 `variableTerm.SetValue(...)`
+#      （串 :1226 / 整 :1230）→ VariableTerm.cs:108-129（整数）/ :131-152（字符串），
+#      两者都只是 `Identifier.SetValue(value, transporter)`（:119 / :142），无 IsConst 判定 →
+#      存储层同样只 `array[arguments[0]] = value`（VariableData.cs:1340-1344 静态 1 维整数；各形态同构）。
+#      官方对 const 实参的拦截只存在于**解析期**的 ArgumentBuilder.getChangeableVariable
+#      （ArgumentBuilder.cs:92-105，:99-103 命中 IsConst 报 ArgIsConst），
+#      而 CALLSHARP 用的 SP_CALLCSHARP_ArgumentBuilder（ArgumentParser.cs:795-861）从不调它
+#      ⇒ 官方**允许**本地方法把值写回常量实参槽（写了就变值）。
+#    · 移植侧的常量闸在**存储层**：core/vars/UserVariables.kt:1925（静态整数）与 :1957（静态字符串），
+#      两处都是 `if (spec.isConst) throw CodeEE("变量 X 是常量，不能赋值")`。
+#    · **已落地（lane modelset，合流 `ea8d7726`）**：两条路径的回写环（flat `StatementExecutor.kt:2691` /
+#      旧对象树 `:4921`）收敛成一个出口 `writeBackNativeArg`（`:4957`）——`ref.isConst` 位为真时**跳过回写**，
+#      其余逐字保持官方第 4 步（按接收侧 `operandType` 选 `strValue`/`intValue`）。
+#      为什么不照抄官方：逐字照抄回写在**真语料**上会炸「变量 模型API 是常量，不能赋值」——
+#      `对话调用.erb:35` 的三个实参 模型API/模型Key/模型名称 全是
+#      `#DIMS CONST`（`ERB/DLC/AI对话补丁/AI返回参数.ERH:6/:7/:8`），走到该行即触发。
+#      判据钉 = `core/proc/ChatActionRealCorpusReproTest`（真语料事件 + 真全局维表登记链，
+#      无桩侧断言两句错误行按语料序上屏且脚本不中断；有桩侧断言整段跑完 + 降级提示上屏；
+#      破坏性验证＝摘掉回写常量位跳过恰好红「有桩」那一例，红的正是上面那句错）。
+#      既有 `AiChatSharpStubTest` 仍测不出这一条：它的 fixture 用 `SymbolTable().declareVariable`
+#      手搭（:56-58），不带 CONST 标志、也不接真全局维表。
+#    · 等值性说明：官方「静默写回同值」 vs 解法「跳过回写」，对现存全部语料观测等值
+#      （语料里唯一的 ModelSet 桩不回写任何槽）；残留分歧 = 若将来某本地方法**故意**改写常量实参槽，
+#      官方会变值、移植侧不会。这一条属有意偏离，不是待修 bug。
+# ─────────────────────────────────────────────────────────────
+- name: CALLSHARP
+  kind: call
+  arg_form: SpCallSharpArgment (SP_CALLCSHARP)
+  semantics: "调用宿主/插件注册的本地 C# 方法（原生名**不是**引擎注册表成员，来自玩家侧 .NET dll）；实参逐位转成参数槽、执行后把**变量实参**按槽回写。回写在官方侧没有常量闸，移植侧的偏离见下方注释块第 3 条。"
+  errors: "装载期（联结期相位）不抛，只记行级错误 + 收警告统一上屏；执行期**亦不抛**（通用策略，2026-11-09，ADR-005 有意偏离，登记见 verify-notes §35）：把文案**原样** `No native method <调用名> found`（<调用名> = 脚本原文里的调用名，4.981 真形 = ModelSet）经 ConsoleSink.printError 打一行错误行后**跳过该语句**（实参不求值、不回写），脚本继续；每行键只提示一次。官方原文在此处抛 CodeEE 中断脚本（Process.cs:1017-1019），见下方注释块第 1 条。"
+  display_effect: ''
+  source: FunctionIdentifier.cs:1169-1235
+  aliases: CALLSHARP
+  register: FunctionIdentifier.cs:4055
+  confidence: high
+  flag: 38
+  flag_source: FunctionIdentifier.cs:1174,4055
+- name: CALLEVENT
+  kind: flow
+  arg_form: STR (常量字符串)
+  semantics: 调用指定名称的事件函数组(依次执行全部匹配的事件函数)。
+  errors: 在事件函数内部使用为解析错误。
+  display_effect: ''
+  source: FunctionIdentifier.cs:3602-3627
+  aliases: CALLEVENT
+  register: FunctionIdentifier.cs:4052
+  confidence: high
+  flag: 3
+  flag_source: FunctionIdentifier.cs:3607,4052
+# ---- A9 勘误/补注（GOTO）----
+# TRYGOTO 与 TRYCGOTO 的差别与 TRYCALL/TRYCCALL 完全同构，见 CALL 条目注释块：
+#   运行期标签缺失 -> GOTO_Instruction.cs:3699-3709（!IsTry throw :3703；IsTry 且 JumpToEndCatch!=null 才跳 :3705-3708），
+#   两者皆不成立时顺序落到**下一行**（= 跳过本行）。GOTO 不写 RESULT。
+# GOTO 的 flag=37 **不含 IS_JUMP(64)**（FunctionIdentifier.cs:3644），跳转由 state.JumpTo 直接实现；
+#   IsJump()（:4305-4308）只对 CALL 族的 JUMP/TRYJUMP 变体为真，勿用 IsJump() 判别 GOTO。
+# 装载期常量标签解析：SetJumpTo :3655-3679 —— 非 const 直接返回（:3658-3661，运行期按名解析走
+#   CalledFunction.CallLabel -> LabelDictionary.GetLabelDollar(label, CurrentLabel)，CalledFunction.cs:204-207，
+#   即 **$ 标签作用域 = 当前被调函数**）；const 且缺失时非 try 报解析错、try 静默（:3664-3670）。
+# 结果落点：无。
+# ---- A9 补注（GOTO 标签解析面，lane labeldollar 2026-11-04 逐字核）----
+# 【`$` 前缀口径】官方**从不剥 `$`**：`$` 只在标签**定义行**被词法剥掉（LogicalLineParser.cs:316-328
+#   ShiftNext 跳过行首 '$' 后取标识符），labelDollarList 的键因此恒不带 `$`（AddLabelDollar
+#   :339-348）；引用侧 `GOTO $TAIL` 的参数由 ReadString 原样保留 `$`（LexicalAnalyzer.cs:330-399
+#   无 '$' 分支 + ArgumentParser.cs:730），查表键 "$TAIL" 恒 miss ⇒ 非 TRY 在装载期就报
+#   NotDefinedLabelName（SetJumpTo :3664-3669，ErrMes 模板实参=含 `$` 的原文，屏上双 `$`）。
+#   emuera 正统方言里 GOTO 参数**本就不带 `$`**（双语料 4.980/4.981 实测：`GOTO $X` 0 处、
+#   GOTOFORM 族 0 处、语料 3037 处 GOTO 全裸名）。
+#   **移植侧偏差**：静态通道 `ErbProgramCompiler.kt:2647/2905` 对 label 做 `trimStart('$')`
+#   （`GOTO $TAIL` 会命中 TAIL）——比官方宽，语料不可达，登记不修（收窄与否归 compile agent，
+#   牵连 StaticTargetNotFoundCompileTest 与 THROW 哨兵文案的 {0} 取值，见交付「需组长接线」）。
+#   动态通道（Vm `_JUMP_BY_NAME`）不剥 `$`，与官方同口径。
+# 【未命中文案】zhs 模板 `当前函数中不存在指定的标签名"${0}"`（lang.emuera-zhs.xml:540）**自带
+#   字面 `$`**；{0} = FunctionIdentifier.cs:3703 的 `text` = 求值名**原文**（不大写化、不剥 `$`）。
+#   ⇒ 动态未命中屏上 = `名"$TAIL"`；求值名自带 `$` 时 = `名"$$TAIL"`（双 `$` 照抄不修，ADR-005）。
+#   （旧偏差已修：Vm.kt/ProcessRuntime.resolveLabel 曾漏模板字面 `$`，2026-11-04 lane labeldollar。）
+# 【TRY 变体未命中 = 跳过本行，不存在 `$CATCH`】官方无 `$CATCH` 标签概念：isTry 未命中只跳
+#   `func.JumpToEndCatch`，该字段仅由装载期 TRYC 配对链写入（ErbLoader.cs:1339-1358，只认
+#   TRYC{GOTO,CALL,JUMP}{,FORM} 六语句），CATCH 行自身作跳入点、配合主循环 JumpTo 后先
+#   ShiftNextLine 的口径（Process.cs:1011/1016 + ProcessState.cs:129-133）落进 catch 体首；
+#   纯 TRYGOTO/TRYGOTOFORM 恒无 JumpToEndCatch ⇒ 未命中什么都不做 = 顺序落到下一行（:3699-3709）。
+# 【大小写】查表比较器 = Config.StrComper（LabelDictionary.cs:16）= OrdinalIgnoreCase
+#   （Config.cs:33/299-308；由 IgnoreCase 配置决定，默认 true（ConfigData.cs:45），本游戏
+#   emuera.config 未关）。OrdinalIgnoreCase = 逐字符 **ASCII** 折叠；移植侧键归一 = 
+#   `String.uppercase()`（**全 Unicode** 映射）。ASCII 面两侧恒同；非 ASCII 折叠面（全角拉丁
+#   `ｔ→Ｔ`、`ß→SS`、`ﬁ→FI`、`ı→I`）uppercase() 会合并官方判不同的键 ⇒ 移植侧**多命中**方向。
+#   实测（LabelResolutionFidelityTest 钉死）：汉字标签 uppercase() 恒等、全角大写形恒等，双语料
+#   含全角拉丁的 `$标签` 仅 6 条且引用与定义逐字节同形，两口径同果，语料不可达差异面。
+#   不改折叠实现：大写归一是全工程键口径（VarDef/符号表/loader.md keyOf），单改标签面与已落盘
+#   .erbc/侧车键互斥；若未来 IgnoreCase=NO 装机形态要复刻，须连键归一整体切换到条件 Ordinal。
+# 【同名标签跨函数】官方内层字典键 = FunctionLabelLine **对象引用**（默认引用等值，
+#   LabelDictionary.cs:382-389 + 339-348 + FunctionLabelLine.cs:13 无 Equals 覆盖），查表传
+#   CurrentCalled.CurrentLabel（CalledFunction.cs:204-207）⇒ 命中的只可能是**正在执行的那条
+#   定义**的标签；事件多成员时 CurrentLabel 随 ShiftNext 切到当前成员（:228-243），**不是**
+#   同名事件的并集。移植侧 VM 通道 `program.functions[funcStack[depth]]` 同形；LabelTable
+#   通道 functionKey 按定义唯一（事件成员键 `KEY#defIndex`，BootMetadata.labels KDoc）。
+# 【InvalidLabelName 分支在本反编译版本不可达（TODO(verify)）】FunctionIdentifier.cs:3712-3715
+#   （动态命中 IsError 标签 → `指定的标签名"${0}"无效`，lang.emuera-zhs.xml:541）与 :3671-3674
+#   （常量同形）都以 `GotoLabelLine.IsError` 为前提，但在 reference 全树内**找不到任何**把
+#   IsError=true 写到 GotoLabelLine 的赋值点（ErbLoader.cs:460-467 重复 `$标签` 走
+#   Warn(position 重载, level 2)，标记的是当前装载位置不是标签行对象；坏 `$` 行在
+#   LogicalLineParser.cs:369-382 err() 直接返回 InvalidLine，不进 labelDollarList）。
+#   ⇒ 移植侧不实现 InvalidLabelName 查找面；若 PC 真机报出`无效`文案，即为 fork 专有分支，
+#   本行号族不可在 reference 核，需要另取证据。卡点：无 eraTW skia 二进制反编译。
+- name: GOTO
+  kind: flow
+  arg_form: SpCallArgment (SP_CALL / SP_CALLFORM)
+  semantics: 跳转到同一函数内的 $ 标签;GOTOFORM 变体标签名为表达式;TRYGOTO 在标签不存在时静默跳过**本行**;TRYCGOTO 在标签不存在时跳到对应 CATCH 块。注:本反编译版本(1.824)无"目标行运行期出错转入 CATCH"机制(IS_TRYC 无读取者),与 CALL 条目一致。
+  errors: 标签不存在且非 TRY 变体抛 CodeEE;解析期常量标签不存在报解析错误。
+  display_effect: ''
+  source: FunctionIdentifier.cs:3629-3719
+  aliases: GOTO, TRYGOTO, GOTOFORM, TRYGOTOFORM, TRYCGOTO, TRYCGOTOFORM
+  register: FunctionIdentifier.cs:4057-4062
+  confidence: high
+- name: TRYCALLLIST
+  kind: flow
+  arg_form: 结构块 (列表元素为 SP_CALL 语句行)；注册形态 FunctionArgType.VOID（FunctionIdentifier.cs:4065-4067）
+  semantics: TRYCALLLIST/TRYJUMPLIST:依序尝试调用块内 FUNC 列出的函数(名字逐个按表达式求值后运行期查表),第一个存在的函数即建帧执行并返回;全部不存在时 state.JumpTo(ENDFUNC 行本身)(Process.cs:1888),由该行落到其后语句。TRYJUMPLIST 变体把 IsJump 置真(:1877 取 func.Function.IsJump())故不保留返回点。列表成员的 SubNames/RowArgs 必须为空 —— TRYGOTOLIST 才校验(:1503-1515)。
+  errors: 实参转换失败抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1864-1890
+  aliases: TRYCALLLIST, TRYJUMPLIST
+  register: FunctionIdentifier.cs:4065-4066
+  confidence: high
+- name: TRYGOTOLIST
+  kind: flow
+  arg_form: 结构块 (列表元素为标签名)；注册形态 FunctionArgType.VOID（FunctionIdentifier.cs:4067）
+  semantics: 依序尝试跳转到块内列出的标签,第一个存在的标签生效;全部不存在时继续执行 ENDFUNC 之后的行。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1891-1917
+  aliases: TRYGOTOLIST
+  register: FunctionIdentifier.cs:4067
+  confidence: high
+  flag: 147
+  flag_source: FunctionIdentifier.cs:4067
+- name: FUNC
+  kind: call
+  arg_form: SP_CALLFORM (解析期声明)
+  semantics: '#FUNCTION 函数定义头:声明带 ARG 参数的函数方法;运行时无行为,仅解析期使用。'
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:4068
+  aliases: FUNC
+  register: FunctionIdentifier.cs:4068
+  confidence: medium
+  flag: 51
+  flag_source: FunctionIdentifier.cs:4068
+- name: IF
+  kind: flow
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 依序求值本行及关联 ELSEIF 行的条件,跳转到第一个为真的分支体;全为假且有 ELSE 则进 ELSE,否则跳到 ENDIF 之后。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3108-3143
+  aliases: IF
+  register: FunctionIdentifier.cs:3961
+  confidence: high
+  flag: 53
+  flag_source: FunctionIdentifier.cs:3113,3961
+- name: ELSEIF
+  kind: flow
+  arg_form: ExpressionArgument (INT_EXPRESSION / VOID / CASE)
+  semantics: 执行到达本行即无条件跳转到匹配的分支体结尾之后(条件求值由 IF/SELECTCASE 完成);注册名为 ELSE、ELSEIF、CASE、CASEELSE。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3081-3093
+  aliases: ELSE, ELSEIF, CASE, CASEELSE
+  register: FunctionIdentifier.cs:3962-3967
+  confidence: high
+- name: ENDIF
+  kind: flow
+  arg_form: ExpressionArgument (VOID)
+  semantics: 结构块结束标记,运行时无行为;注册名为 ENDIF、ENDSELECT、DO、ENDCATCH、ENDFUNC。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3095-3106
+  aliases: ENDIF, ENDSELECT, DO, ENDCATCH, ENDFUNC
+  register: FunctionIdentifier.cs:3964,3968,3975,4064,4069
+  confidence: high
+- name: SIF
+  kind: flow
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 条件为真时执行紧随其后的单条语句,否则跳过它。
+  errors: 后随行缺失、为标签或不可作 SIF 目标的部分语句时解析报错;隔空行给兼容性警告。
+  display_effect: ''
+  source: FunctionIdentifier.cs:3030-3079
+  aliases: SIF
+  register: FunctionIdentifier.cs:3960
+  confidence: high
+  flag: 53
+  flag_source: FunctionIdentifier.cs:3035,3960
+- name: SELECTCASE
+  kind: flow
+  arg_form: ExpressionArgument (EXPRESSION)
+  semantics: 对选择值依次匹配各 CASE 行(数值或字符串),跳到第一个匹配分支;无匹配时走 CASEELSE,否则跳到 ENDSELECT 之后。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3145-3211
+  aliases: SELECTCASE
+  register: FunctionIdentifier.cs:3965
+  confidence: high
+  flag: 55
+  flag_source: FunctionIdentifier.cs:3150,3965
+# ---- A9：FOR / REPEAT / NEXT / REND / CONTINUE 循环语义定稿 ----
+# 不存在 For_Instruction：REPEAT 与 FOR **共用** REPEAT_Instruction（FunctionIdentifier.cs:2983-3011，
+#   注册 :3969 REPEAT_Instruction(fornext:false) / :3971 REPEAT_Instruction(fornext:true)），
+#   NEXT 与 REND **共用** REND_Instruction（:3385-3408，注册 :3970 / :3972）；仅 ArgBuilder 与 EXTENDED 位不同
+#   （fornext=true 才换 SP_FOR_NEXT 并 flag|=2，:2988-2992）。
+# 循环变量 = **真变量本身，每次迭代走一次读+一次写**，没有内部计数器/寄存器：
+#   REPEAT_Instruction.DoInstruction :2999-3010 把 `func.LoopCounter = spForNextArgment.Cnt`（:3002，
+#   Cnt 是 VariableTerm，SpForNextArgment.cs:8）——**状态挂在循环头那一行**（InstructionLine.LoopCounter
+#   InstructionLine.cs:54-64），LoopEnd/LoopStep 是头行上的 long（:66-76）。
+#   REND/NEXT :3393-3407：取 instructionLine = func.JumpTo（=头行，装载期双向互指 ErbLoader.cs:1335-1336）→
+#   instructionLine.LoopCounter.**ChangeValue**(LoopStep, exm)（:3401，对变量做 += 步长，含下标变量的读写）→
+#   GetIntValue 回读（:3402）→ 判定（:3403）→ state.JumpTo 回边或落到下一行。
+#   ⇒ 移植侧：LoopCounter 必须落 VariableStore（契约 C1）；且**循环体内部对循环变量的写入会被 NEXT 覆盖**（原版行为）。
+# Start / End / Step **各只求值一次**，都在头行执行：:3003 Start、:3004 End、:3005 Step（GetIntValue 各一次）。
+#   ⇒ **非常量步长不会逐迭代重算**；`FOR A,0,10,STEPVAR` 改 STEPVAR 不影响已开循环。
+# 判定式（负步长支持点，两处，均在 FunctionIdentifier.cs，不在 For_Instruction）：
+#   入口"初始条件不满足直接跳到循环尾" = :3006
+#     `if ((step <= 0 || end <= cnt) && (step >= 0 || end >= cnt)) state.JumpTo(func.JumpTo)`
+#     —— step>0 需 end>cnt 才进入；step<0 需 end<cnt 才进入；**step==0 两子句同时为真 ⇒ 恒跳过，循环体 0 次**。
+#   续跑判定 = :3403 `(step > 0 && end > val) || (step < 0 && end < val)`
+#     ⇒ **上界(或下界)是排他的**：`FOR A, 0, 5, 1` 跑 A=0..4 共 5 次（不是 6 次），终值 A==5；
+#        `FOR A, 5, 0, -1` 跑 A=5..1 共 5 次，终值 A==0。REPEAT 同理（0..n-1）。
+# REPEAT 的改写位置 = **实参构造器内**，不是语句实现内：ArgumentParser.cs:1213-1229（INT_EXPRESSION_ArgumentBuilder 的
+#   REPEAT 特例）：禁止 COUNT 被 forbid（:1215-1218）、常量 <=0 只给 level0 告警（:1219-1222），
+#   然后 `return new SpForNextArgment(VariableTerm(COUNT[0]), SingleLongTerm(0), aExpression, SingleLongTerm(1))`（:1223-1228）。
+#   ⇒ REPEAT n ≡ `FOR COUNT[0], 0, n, 1`，**End 原样传入、不减 1**（排他界天然给 n 次）；
+#     若移植侧循环用**含端**比较（<= / >=），必须减 1 才等价 —— 两端只能选一处减，重复减会少跑一次。TODO(verify): 与 Kotlin 侧核对。
+# CONTINUE 不复用 REND，而是**内联重实现同一套判定**：CONTINUE_Instruction FunctionIdentifier.cs:3330-3381 ——
+#   头行是 REPEAT/FOR 时走 :3333-3350（与 REND :3401-3406 同式的步进+判定，但**出口 JumpTo 是 instructionLine.JumpTo**，:3348），
+#   WHILE 时重判头条件（:3352-3362），DO 时改判 **LOOP 行的条件**（:3364-3379，取 func.JumpTo.JumpTo），
+#   三者都不是则 throw ExeEE AbnormalContinue（:3381）。
+#   BREAK 则不同：:3310-3319 —— 仅当所在循环**不是** WHILE/DO 时**也执行一次步进**（:3314-3316，ChangeValue），
+#   然后跳到 `instructionLine.JumpTo.JumpTo`（:3313 = 尾行的 JumpTo = 头行…实际出口）⇒ **BREAK 会改变 REPEAT/FOR 循环变量的终值**（原版行为，需复刻）。
+# 装载期结构：CONTINUE/BREAK 的所属循环由 ErbLoader.cs:1179-1206 在栈上找最近 REPEAT/FOR/WHILE/DO 写入 func.JumpTo；
+#   REPEAT 嵌套只告警（:1106-1121，NestedRepeat / REPEAT 套在 FOR COUNT 内）；FOR 的循环变量与 COUNT 冲突检测 :1141-1163。
+- name: REPEAT
+  kind: flow
+  arg_form: ExpressionArgument (INT_EXPRESSION) / SpForNextArgment (SP_FOR_NEXT)
+  semantics: REPEAT 以参数为循环次数开始计数循环;FOR 变体参数为 (起始值, 结束值, 步长) 并把计数变量绑定为循环变量;初始条件不满足时直接跳到循环尾。结束值判定为**排他**(end > cnt 才继续;负步长 end < cnt),步长=0 时循环体 0 次;Start/End/Step 各只求值一次。REPEAT n 由实参构造器改写为 FOR COUNT[0], 0, n, 1(ArgumentParser.cs:1223-1228,不减 1)。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:2983-3011
+  aliases: REPEAT, FOR
+  register: FunctionIdentifier.cs:3969,3971
+  confidence: high
+- name: REND
+  kind: flow
+  arg_form: ExpressionArgument (VOID)
+  semantics: REPEAT/FOR 循环尾:对**循环变量本身**(头行 func.JumpTo.LoopCounter,是 VariableTerm 而非内部计数器)做 ChangeValue(+LoopStep)后回读,未达终值则回到循环体,否则继续;判定为排他界(step>0 时 end>val / step<0 时 end<val,FunctionIdentifier.cs:3403)。NEXT 为 FOR 的注册名。LoopEnd/LoopStep 只在头行求值一次(:3004-3005)。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3385-3408
+  aliases: REND, NEXT
+  register: FunctionIdentifier.cs:3970,3972
+  confidence: high
+- name: WHILE
+  kind: flow
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 条件为真进入循环体,为假跳到 WEND 之后。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3013-3028
+  aliases: WHILE
+  register: FunctionIdentifier.cs:3973
+  confidence: high
+  flag: 23
+  flag_source: FunctionIdentifier.cs:3018,3973
+- name: WEND
+  kind: flow
+  arg_form: ExpressionArgument (VOID)
+  semantics: WHILE 循环尾:重新求值 WHILE 条件,为真则回到循环体。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3410-3425
+  aliases: WEND
+  register: FunctionIdentifier.cs:3974
+  confidence: high
+  flag: 23
+  flag_source: FunctionIdentifier.cs:3415,3974
+- name: LOOP
+  kind: flow
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: DO 循环尾:条件为真则回到 DO 继续循环。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3427-3442
+  aliases: LOOP
+  register: FunctionIdentifier.cs:3976
+  confidence: high
+  flag: 55
+  flag_source: FunctionIdentifier.cs:3432,3976
+- name: BREAK
+  kind: flow
+  arg_form: ExpressionArgument (VOID)
+  semantics: 跳出当前循环:对 REPEAT/FOR 先把计数器按步长补进一次再退出,WHILE/DO 直接退出。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3302-3320
+  aliases: BREAK
+  register: FunctionIdentifier.cs:3978
+  confidence: high
+  flag: 5
+  flag_source: FunctionIdentifier.cs:3307,3978
+- name: CONTINUE
+  kind: flow
+  arg_form: ExpressionArgument (VOID)
+  semantics: 进入当前循环的下一次迭代:REPEAT/FOR 先步进计数并判断是否继续;WHILE 重新判断条件;DO 重新判断 LOOP 条件。
+  errors: 不在可识别的循环结构内抛 ExeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:3322-3383
+  aliases: CONTINUE
+  register: FunctionIdentifier.cs:3977
+  confidence: high
+  flag: 5
+  flag_source: FunctionIdentifier.cs:3327,3977
+- name: RETURN
+  kind: flow
+  arg_form: ExpressionArrayArgument (INT_ANY)
+  semantics: '从当前函数返回调用者;参数依次写入 RESULT: 0/1/2…,无参数时 RESULT=0。'
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3242-3272
+  aliases: RETURN
+  register: FunctionIdentifier.cs:3979
+  confidence: high
+  flag: 1
+  flag_source: FunctionIdentifier.cs:3247,3979
+- name: RETURNFORM
+  kind: flow
+  arg_form: ExpressionArgument (FORM_STR)
+  semantics: '把格式化字符串展开后按逗号解析为整数列表,写入 RESULT: 系列并返回调用者(空列表按 0 处理)。'
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3213-3240
+  aliases: RETURNFORM
+  register: FunctionIdentifier.cs:3980
+  confidence: high
+  flag: 3
+  flag_source: FunctionIdentifier.cs:3218,3980
+- name: RETURNF
+  kind: flow
+  arg_form: ExpressionArgument (EXPRESSION_NULLABLE)
+  semantics: '从 #FUNCTION 函数返回值;无参数返回 0/空串。'
+  errors: '在非 #FUNCTION 函数中使用为解析错误;返回类型与函数声明不符为解析警告。'
+  display_effect: ''
+  source: FunctionIdentifier.cs:3444-3487
+  aliases: RETURNF
+  register: FunctionIdentifier.cs:3981
+  confidence: high
+  flag: 7
+  flag_source: FunctionIdentifier.cs:3449,3981
+# ---- A9 补注（CATCH）+ 全 ISA 的关键不变量 ----
+# 【不变量：ProcessState.JumpTo(X) 的实际效果是"从 X **之后**的那一行继续执行"】
+#   主循环是 `do { IL_0000: state.ShiftNextLine(); ...读取 CurrentLine 并执行... } while(...)`
+#   （Process.cs:1006-1081，ShiftNextLine 在 :1011，取行在 :1016；JumpTo 只写 currentLine 不做前进，ProcessState.cs:129-133）。
+#   ⇒ 每次 JumpTo 之后回到循环顶都会先前进一行。交叉验证三处：
+#     · GOTO 命中标签 → JumpTo(labelLine)（FunctionIdentifier.cs:3716）落在 label 之后 = 标签体首行 ✓
+#       （注：这里的 labelLine 是 `$TAIL` **定义行**；GOTO 引用参数按官方方言不带 `$`，
+#        `$` 口径见上文「A9 补注（GOTO 标签解析面）」）
+#       （且主循环遇 GotoLabelLine 本身也是 `goto IL_0000` 再前进，Process.cs:1068-1071）
+#     · CALL 的返回地址 = **CALL 语句行自己**（CalledFunction.CallFunction(..., retAddress=func) :3531/:3575；
+#       ProcessState.Return 把 currentLine = ReturnAddress，ProcessState.cs:289-310）→ 落在 CALL 之后 ✓
+#     · BREAK：func.JumpTo=头行，head.JumpTo=尾行（ErbLoader.cs:1335-1336 双向互指），
+#       state.JumpTo(尾行)（FunctionIdentifier.cs:3313/3318）→ 落在 REND/WEND/LOOP 之后 = 循环出口 ✓
+#   ⇒ **移植侧编码规则**：VM/语句层的 StmtOutcome.Transfer(pc) 是绝对跳转，而原版每个 JumpTo 目标隐含 +1。
+#     具体到本条目：TRYC 行上的 JumpToEndCatch = **CATCH 行** ⇒ 效果是"CATCH 之后" = handler 块首行（handler 确实执行）；
+#     CATCH 行上的 JumpToEndCatch = **ENDCATCH 行** ⇒ 效果是"ENDCATCH 之后" = 整个构造之后。
+#     若 CATCH 在字节码里仍是一条真语句（Opcode.CATCH），A5 必须按 `pc(CATCH)+1` / `pc(ENDCATCH)+1` 发射，
+#     否则会整体错位一行（与契约 C4 的 Transfer 口径核对）。
+#   ⇒ **同一主循环里的两种"前进"口径**（移植侧必须区分）：
+#     · 语句 DoInstruction 什么都不做（return） ⇒ 循环自身 ShiftNextLine ⇒ 只跳过**自己这一行**（TRYCALL 缺失即此）。
+#     · 语句内部**主动**调用 state.ShiftNextLine()（ProcessState.cs:123-127，公开方法）⇒ 额外消耗一行 —— SIF 用这一招跳过
+#       紧随的一条语句（FunctionIdentifier.cs:3072-3078，条件为假时 ShiftNextLine()），**不是**用装载期算好的 func.JumpTo
+#       （:3055 的 JumpTo 只服务 :3066-3069 的"空行后 SIF"告警，运行期无人读取）。
+#     · 语句调用 state.JumpTo(X) ⇒ 从 X **之后**继续（见上方不变量）。
+#   契约 C4 的 StmtOutcome 只有 Normal/Transfer/Stop，缺"跳过后续 N 行"这一档；SIF/TRYC 都用 Transfer(pc+…) 表达即可，
+#   但 A5 落 SIF 时必须按"目标+1"口径核对，否则会多跳一行。
+# 结构配对（装载期，ErbLoader.cs）：TRYC* 入栈 :1169-1178；CATCH :1339-1349（栈顶必须是六个 TRYC* 之一，
+#   否则 Warn(MissingTryc) :1341-1345；`trycLine.JumpToEndCatch = catchLine` :1347；catchLine 入栈 :1348）；
+#   ENDCATCH :1350-1358（栈顶必须是 CATCH；`catchLine.JumpToEndCatch = endcatchLine` :1357）。
+#   ⇒ 同一个 JumpToEndCatch 字段在 TRYC 行与 CATCH 行上是**两种不同用途**，语句层不可统一处理。
+# CATCH 本体只有 `state.JumpTo(func.JumpToEndCatch)`（FunctionIdentifier.cs:3282-3285）——它是"正常路径跳过 handler"的分隔符，
+#   不是 handler 的入口；handler 由 TRYC 行的失败跳转进入。
+- name: CATCH
+  kind: flow
+  arg_form: ExpressionArgument (VOID)
+  semantics: 正常路径执行到达即跳到对应 ENDCATCH 之后(跳过 handler 块);本身不是 handler 入口 —— handler 由 TRYC 行失败时 state.JumpTo(CATCH 行)(=从 CATCH 之后继续)进入。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3274-3286
+  aliases: CATCH
+  register: FunctionIdentifier.cs:4063
+  confidence: high
+  flag: 23
+  flag_source: FunctionIdentifier.cs:3279,4063
+- name: RESTART
+  kind: flow
+  arg_form: ExpressionArgument (VOID)
+  semantics: 跳回当前函数开头重新执行。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:3288-3300
+  aliases: RESTART
+  register: FunctionIdentifier.cs:4056
+  confidence: high
+  flag: 7
+  flag_source: FunctionIdentifier.cs:3293,4056
+- name: BEGIN
+  kind: flow
+  arg_form: STR (常量字符串)
+  semantics: 结束当前函数,把执行状态切换为指定的 BEGIN 入口(如 TITLE/SHOW_STATUS)并重置显示样式;FORCE_BEGIN 为强制变体(当前实现行为一致)。
+  errors: ''
+  display_effect: 重置文字样式。
+  source: FunctionIdentifier.cs:2922-2954
+  aliases: BEGIN
+  register: FunctionIdentifier.cs:3950
+  confidence: high
+  flag: 1
+  flag_source: FunctionIdentifier.cs:2927,3950
+- name: FORCE_BEGIN
+  kind: flow
+  arg_form: STR (常量字符串)
+  semantics: 结束当前函数,把执行状态切换为指定的 BEGIN 入口并重置显示样式;与 BEGIN 的区别在于解析期跳过部分状态检查(当前实现两者行为一致)。
+  errors: ''
+  display_effect: 重置文字样式。
+  source: FunctionIdentifier.cs:2939-2954
+  aliases: FORCE_BEGIN
+  register: FunctionIdentifier.cs:4111
+  confidence: high
+  flag: 1
+  flag_source: FunctionIdentifier.cs:2944,4111
+- name: SAVELOADGAME
+  kind: io
+  arg_form: ExpressionArgument (VOID)
+  semantics: SAVEGAME/LOADGAME:进入存档/读档界面流程。
+  errors: 当前系统状态不允许存读档时抛 CodeEE。
+  display_effect: 进入存读档 UI 流程。
+  source: FunctionIdentifier.cs:2956-2981
+  aliases: SAVEGAME, LOADGAME
+  register: FunctionIdentifier.cs:3951-3952
+  confidence: high
+  flag: 1
+  flag_source: FunctionIdentifier.cs:2963,3951,3952
+- name: SAVEGLOBAL
+  kind: io
+  arg_form: ExpressionArgument (VOID)
+  semantics: 把全局变量写入全局存档文件。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1801-1813
+  aliases: SAVEGLOBAL
+  register: FunctionIdentifier.cs:3956
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1806,3956
+- name: LOADGLOBAL
+  kind: io
+  arg_form: ExpressionArgument (VOID)
+  semantics: 从全局存档文件读取全局变量;RESULT 记录 1=成功,0=失败。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1815-1834
+  aliases: LOADGLOBAL
+  register: FunctionIdentifier.cs:3957
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1820,3957
+- name: RESETDATA
+  kind: io
+  arg_form: ExpressionArgument (VOID)
+  semantics: 重置全部变量数据为初始值并重置显示样式。
+  errors: ''
+  display_effect: 文字样式被重置。
+  source: FunctionIdentifier.cs:1836-1849
+  aliases: RESETDATA
+  register: FunctionIdentifier.cs:3958
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1841,3958
+- name: RESETGLOBAL
+  kind: io
+  arg_form: ExpressionArgument (VOID)
+  semantics: 清空全部全局变量数据。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1851-1863
+  aliases: RESETGLOBAL
+  register: FunctionIdentifier.cs:3959
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1856,3959
+- name: SAVECHARA
+  kind: io
+  arg_form: ExpressionArrayArgument (SP_SAVECHARA)
+  semantics: 把指定角色号的角色数据保存到 (文件名, 描述) 指定的角色存档文件。
+  errors: 角色号越界或重复抛 CodeEE;参数为负抛 CodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1865-1898
+  aliases: SAVECHARA
+  register: FunctionIdentifier.cs:4079
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1870,4079
+- name: LOADCHARA
+  kind: io
+  arg_form: ExpressionArgument (STR_EXPRESSION)
+  semantics: 从指定名称的角色存档文件加载角色并加入角色列表。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1900-1914
+  aliases: LOADCHARA
+  register: FunctionIdentifier.cs:4080
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1905,4080
+- name: SAVEVAR
+  kind: io
+  arg_form: SP_SAVEVAR
+  semantics: 占位语句:运行时抛出未实现异常。
+  errors: 始终抛 NotImplCodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1916-1928
+  aliases: SAVEVAR
+  register: FunctionIdentifier.cs:4077
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1921,4077
+- name: LOADVAR
+  kind: io
+  arg_form: ExpressionArgument (STR_EXPRESSION)
+  semantics: 占位语句:运行时抛出未实现异常。
+  errors: 始终抛 NotImplCodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1930-1942
+  aliases: LOADVAR
+  register: FunctionIdentifier.cs:4078
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1935,4078
+- name: DELDATA
+  kind: io
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 删除指定编号存档槽的存档文件。
+  errors: 槽号为负或过大抛 CodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1944-1957
+  aliases: DELDATA
+  register: FunctionIdentifier.cs:3955
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1949,3955
+- name: SAVEDATA
+  kind: io
+  arg_form: SpSaveDataArgument (SP_SAVEDATA)
+  semantics: 把游戏数据保存到指定槽位,第二个参数为存档描述文本。
+  errors: 槽号为负或超 int 上限、描述含换行抛 CodeEE;保存失败打印错误信息。
+  display_effect: 失败时输出错误行。
+  source: Process.cs:1327-1349
+  aliases: SAVEDATA
+  register: FunctionIdentifier.cs:3953
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:3953
+- name: LOADDATA
+  kind: io
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 从指定槽位读取存档并切换到读档后状态;读档成功后清空调用栈。
+  errors: 槽号为负或超 int 上限、存档损坏抛 CodeEE;读取失败抛 ExeEE。
+  display_effect: ''
+  source: Process.cs:1841-1863
+  aliases: LOADDATA
+  register: FunctionIdentifier.cs:3954
+  confidence: high
+  flag: 3
+  flag_source: FunctionIdentifier.cs:3954
+- name: PUTFORM
+  kind: io
+  arg_form: ExpressionArgument (FORM_STR_NULLABLE)
+  semantics: 把字符串追加到存档描述文本 SAVEDATA_TEXT(供 SAVEDATA 使用)。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1295-1306
+  aliases: PUTFORM
+  register: FunctionIdentifier.cs:3948
+  confidence: high
+  flag: 4
+  flag_source: FunctionIdentifier.cs:3948
+- name: DATA
+  kind: data
+  arg_form: STR_NULLABLE / FORM_STR_NULLABLE(原始文本行；DATA 取前者 FunctionIdentifier.cs:4017，DATAFORM 取后者 :4018)
+  semantics: DATA/DATAFORM 数据行:声明数据内容供 PRINT_DATA 等语句随机抽取;运行时本身无独立行为,由消费方读取。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:4017-4018
+  aliases: DATA, DATAFORM
+  register: FunctionIdentifier.cs:4017-4018
+  confidence: high
+  flag: 22
+  flag_source: FunctionIdentifier.cs:4017,4018
+- name: DATALIST
+  kind: data
+  arg_form: ExpressionArgument (VOID)
+  semantics: 开始一个数据组(DATALIST..ENDLIST 之间各行作为一组被整组抽取)。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:4020-4021
+  aliases: DATALIST, ENDLIST
+  register: FunctionIdentifier.cs:4020-4021
+  confidence: high
+  flag: 22
+  flag_source: FunctionIdentifier.cs:4020,4021
+- name: DO_NOTHING
+  kind: data
+  arg_form: ExpressionArgument (VOID)
+  semantics: 运行时无任何行为;注册名为 ENDDATA,作为 DATA 块结束标记(跳转目标)。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:1959-1970
+  # DISABLE_INPUT_MACRO / ENABLE_INPUT_MACRO：fork 在表达式侧注册为函数
+  # （Creator.Method.cs:9709-9737，返回 int 0 + 切 Process.inputMacroEnabled）；
+  # 4.981 语料 `ERB/コマンド関連/USERCOM.ERB:177` 以**语句行**书写，移植侧
+  # 按 DO_NOTHING 语句别名承接（OpcodeTable.kt:1221-1222）。
+  aliases: ENDDATA, DISABLE_INPUT_MACRO, ENABLE_INPUT_MACRO
+  register: FunctionIdentifier.cs:4019
+  confidence: high
+  flag: 22
+  flag_source: FunctionIdentifier.cs:1964,4019
+- name: STRDATA
+  kind: data
+  arg_form: StrDataArgument (VAR_STR)
+  semantics: 从 STRDATA..ENDDATA 数据节随机抽取一组,把组内各行以换行连接写入指定字符串变量,然后跳到 ENDDATA 之后。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1801-1829
+  aliases: STRDATA
+  register: FunctionIdentifier.cs:4022
+  confidence: high
+  flag: 22
+  flag_source: FunctionIdentifier.cs:4022
+- name: RANDOMIZE
+  kind: other
+  arg_form: ExpressionArgument (INT_EXPRESSION_NULLABLE)
+  semantics: 以参数为种子重置随机序列;启用 UseNewRandom 配置时仅发出警告并忽略。
+  errors: UseNewRandom 时输出警告。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1734-1755
+  aliases: RANDOMIZE
+  register: FunctionIdentifier.cs:4010
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1739,4010
+- name: INITRAND
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 重置随机数初始状态;UseNewRandom 配置下禁止使用并警告。
+  errors: UseNewRandom 时输出警告(不执行)。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1757-1777
+  aliases: INITRAND
+  register: FunctionIdentifier.cs:4012
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1762,4012
+- name: DUMPRAND
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 保存当前随机数状态以便之后恢复;UseNewRandom 配置下禁止使用并警告。
+  errors: UseNewRandom 时输出警告(不执行)。
+  display_effect: ''
+  source: FunctionIdentifier.cs:1779-1799
+  aliases: DUMPRAND
+  register: FunctionIdentifier.cs:4011
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:1784,4011
+- name: PLAYSOUND
+  kind: other
+  arg_form: SpHtmlPrint (SP_HTML_PRINT)
+  semantics: 播放 sound 目录下的音频文件,第二参数为重复次数(最小 1);文件不存在时静默跳过。
+  errors: 音频格式不兼容抛 CodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:2608-2652
+  aliases: PLAYSOUND
+  register: FunctionIdentifier.cs:4099
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2613,4099
+- name: STOPSOUND
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 停止全部正在播放的音效。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:2654-2676
+  aliases: STOPSOUND
+  register: FunctionIdentifier.cs:4100
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2659,4100
+- name: PLAYBGM
+  kind: other
+  arg_form: ExpressionArgument (STR_EXPRESSION)
+  semantics: 循环播放 sound 目录下指定文件作为 BGM;文件不存在时静默跳过。
+  errors: 音频格式不兼容抛 CodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:2678-2704
+  aliases: PLAYBGM
+  register: FunctionIdentifier.cs:4101
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2683,4101
+- name: STOPBGM
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 停止 BGM 播放。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:2706-2718
+  aliases: STOPBGM
+  register: FunctionIdentifier.cs:4102
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2711,4102
+- name: SETSOUNDVOLUME
+  kind: other
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 设置全部音效通道的音量。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:2720-2740
+  aliases: SETSOUNDVOLUME
+  register: FunctionIdentifier.cs:4103
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2725,4103
+- name: SETBGMVOLUME
+  kind: other
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 设置 BGM 音量。
+  errors: ''
+  display_effect: ''
+  source: FunctionIdentifier.cs:2742-2755
+  aliases: SETBGMVOLUME
+  register: FunctionIdentifier.cs:4104
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2747,4104
+- name: SKIPDISP
+  kind: other
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 设置显示跳过标志(参数非 0 开启);RESULT 记录设置后的状态;跳过期间所有 PRINT 类输出被抑制。
+  errors: ''
+  display_effect: 开启后抑制后续 PRINT 输出。
+  source: Process.cs:1587-1592
+  aliases: SKIPDISP
+  register: FunctionIdentifier.cs:4032
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4032
+- name: NOSKIP
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: NOSKIP..ENDNOSKIP 区间内暂时关闭消息跳过(区间结束后恢复)。
+  errors: 缺少配对 ENDNOSKIP 抛 CodeEE。
+  display_effect: 区间内强制显示输出。
+  source: Process.cs:1593-1603
+  aliases: NOSKIP
+  register: FunctionIdentifier.cs:4033
+  confidence: high
+  flag: 22
+  flag_source: FunctionIdentifier.cs:4033
+- name: ENDNOSKIP
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 结束 NOSKIP 区间,恢复此前的跳过设置。
+  errors: 无配对 NOSKIP 抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1604-1613
+  aliases: ENDNOSKIP
+  register: FunctionIdentifier.cs:4034
+  confidence: high
+  flag: 22
+  flag_source: FunctionIdentifier.cs:4034
+- name: SKIPLOG
+  kind: other
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 直接设置消息跳过(MesSkip)标志,参数非 0 开启。
+  errors: ''
+  display_effect: 影响消息跳过行为。
+  source: Process.cs:1830-1833
+  aliases: SKIPLOG
+  register: FunctionIdentifier.cs:4039
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4039
+- name: FORCEKANA
+  kind: other
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 设置假名显示转换模式(整型模式值)。
+  errors: ''
+  display_effect: 影响后续输出的假名形态。
+  source: Process.cs:1583-1586
+  aliases: FORCEKANA
+  register: FunctionIdentifier.cs:4031
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4031
+- name: GETTIME
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 把当前时间写入 RESULT(YYYYMMDDHHMMSSmmm 数字形式)与 RESULTS(yyyy/MM/dd HH:mm:ss 字符串)。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1396-1408
+  aliases: GETTIME
+  register: FunctionIdentifier.cs:4094
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4094
+- name: ASSERT
+  kind: other
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 断言语句:参数为 0 时报错中断执行。
+  errors: 参数为 0 抛 CodeEE。
+  display_effect: ''
+  source: Process.cs:1790-1795
+  aliases: ASSERT
+  register: FunctionIdentifier.cs:4075
+  confidence: high
+  flag: 14
+  flag_source: FunctionIdentifier.cs:4075
+- name: THROW
+  kind: other
+  arg_form: ExpressionArgument (FORM_STR_NULLABLE)
+  semantics: 以参数字符串为消息抛出脚本异常,可被 TRYC 结构捕获。
+  errors: 总是抛 CodeEE(消息为参数值)。
+  display_effect: ''
+  source: Process.cs:1796-1797
+  aliases: THROW
+  register: FunctionIdentifier.cs:4076
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:4076
+- name: CALLTRAIN
+  kind: other
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 进入自动连续执行模式:按指定命令序列自动依次调用训练命令。
+  errors: ''
+  display_effect: 连续执行期间的输出由该模式控制。
+  source: Process.cs:1918-1923
+  aliases: CALLTRAIN
+  register: FunctionIdentifier.cs:4014
+  confidence: high
+  flag: 3
+  flag_source: FunctionIdentifier.cs:4014
+- name: STOPCALLTRAIN
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 停止自动连续执行模式并关闭显示跳过。
+  errors: ''
+  display_effect: ''
+  source: Process.cs:1924-1930
+  aliases: STOPCALLTRAIN
+  register: FunctionIdentifier.cs:4015
+  confidence: high
+  flag: 3
+  flag_source: FunctionIdentifier.cs:4015
+- name: DOTRAIN
+  kind: other
+  arg_form: ExpressionArgument (INT_EXPRESSION)
+  semantics: 切换到指定命令编号的训练执行状态(DO TRAIN 流程)。
+  errors: 当前系统状态不允许、参数为负或超出 TRAINNAME 数组范围抛 CodeEE。
+  display_effect: 进入训练流程后由状态机接管。
+  source: Process.cs:1931-1954
+  aliases: DOTRAIN
+  register: FunctionIdentifier.cs:4016
+  confidence: high
+  flag: 3
+  flag_source: FunctionIdentifier.cs:4016
+- name: UPDATECHECK
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 访问 GameBase 指定的更新检查 URL 比较版本;有新版本时弹窗询问并可选打开下载链接;结果写入 RESULT(0=最新,1=用户拒绝,2=用户接受,3=网络/解析失败,4=被配置禁止,5=无网络)。
+  errors: 网络异常按 RESULT=3 处理,不抛异常。
+  display_effect: 可能弹出系统对话框。
+  source: FunctionIdentifier.cs:2757-2839
+  aliases: UPDATECHECK
+  register: FunctionIdentifier.cs:4107
+  confidence: high
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2762,4107
+- name: QUIT
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 正常退出程序。
+  errors: ''
+  display_effect: 程序结束。
+  source: Process.cs:1307-1309
+  aliases: QUIT
+  register: FunctionIdentifier.cs:3949
+  confidence: high
+  flag: 0
+  flag_source: FunctionIdentifier.cs:3949
+- name: QUIT_AND_RESTART
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 设置重启标志后退出程序(下次启动即重启)。
+  errors: ''
+  display_effect: 程序结束并计划重启。
+  source: Process.cs:1310-1313
+  aliases: QUIT_AND_RESTART
+  register: FunctionIdentifier.cs:4108
+  confidence: high
+  flag: 0
+  flag_source: FunctionIdentifier.cs:4108
+- name: FORCE_QUIT
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 强制退出程序。
+  errors: ''
+  display_effect: 程序结束。
+  source: Process.cs:1314-1316
+  aliases: FORCE_QUIT
+  register: FunctionIdentifier.cs:4109
+  confidence: high
+  flag: 0
+  flag_source: FunctionIdentifier.cs:4109
+- name: FORCE_QUIT_AND_RESTART
+  kind: other
+  arg_form: ExpressionArgument (VOID)
+  semantics: 设置重启标志后强制退出程序。
+  errors: ''
+  display_effect: 程序结束并计划重启。
+  source: Process.cs:1317-1320
+  aliases: FORCE_QUIT_AND_RESTART
+  register: FunctionIdentifier.cs:4110
+  confidence: high
+  flag: 0
+  flag_source: FunctionIdentifier.cs:4110
+- name: DT_COLUMN_OPTIONS
+  kind: other
+  arg_form: SpDtColumnOptions (SP_DT_COLUMN_OPTIONS)
+  semantics: 为数据表列设置选项(当前实现仅支持 Default 默认值)。
+  errors: 数据表不存在时 RESULT=-1、列不存在时 RESULT=0(随后仍继续访问,可能引发空引用异常——疑似实现缺陷);默认值类型与列类型不符抛 CodeEE。
+  display_effect: ''
+  source: FunctionIdentifier.cs:2531-2579
+  aliases: DT_COLUMN_OPTIONS
+  register: FunctionIdentifier.cs:4122
+  confidence: medium
+  flag: 6
+  flag_source: FunctionIdentifier.cs:2536,4122
+# ══════════ 4.981 增量语句（fork-src 证据，2026-10-30 W0） ══════════
+# 证据源：qirchen421/emuera.sk@48494165（branch develop-skiasharp，2026-08-28）的
+#   Emuera/Runtime/Script/Statements/{Instraction.Child.cs, FunctionIdentifier.cs, ArgumentBuilder.cs}。
+# 注册面：fork 的 FunctionIdentifier 静态构造经 addFunction(...)（:48-61），
+#   flag = instruction.Flag | additionalFlag（:562-566）；本段 flag 值即按该校验得出。
+# 小数字面量（4.981 新增，本段未单列语句）：
+#   LexicalAnalyzer.cs:879-900 —— 读到数字串后若下一字符是 '.' 则走 LiteralFloatWord(ReadDouble)，
+#   否则 LiteralIntegerWord(ReadInt64)；ReadDouble（:363-402）接受可选正负号、数字与 '.'、可选 e/E 指数，
+#   末尾 double.Parse(..., CultureInfo.InvariantCulture) —— **字面量解析用不变文化，TOFLOAT 用当前文化**。
+#   我们的 .erbc 目前只有 INT_LITERAL/STR_LITERAL（erbc-format.md:183-184），
+#   承接浮点字面量需要新增 token 槽位（跨模块改动，见 verify-notes.md §23）。
+- name: TINPUTNF
+  kind: input
+  arg_form: SpTInputsArgument (SP_TINPUT)
+  semantics: 限时整数输入的「无焦点」变体（NF = NoFocus，与是否 FORMS 无关）：参数与 TINPUT 相同（时限毫秒、默认值、是否接受鼠标、是否显示剩余时间、超时提示语、可跳过标志，Disp 缺省按 1），唯一差别是走 WaitInputNoFocus——不抢键盘焦点。TONEINPUTNF 为单键变体（同一实现类，oneInput=true）。
+  errors: ''
+  display_effect: 暂停脚本直至输入或超时；不改变输入焦点。
+  source: fork-src Instraction.Child.cs:1080-1133
+  aliases: TINPUTNF, TONEINPUTNF
+  register: fork-src FunctionIdentifier.cs:201,203
+  confidence: high
+  flag: 24578
+  flag_source: fork-src Instraction.Child.cs:1085 (IS_PRINT|IS_INPUT|EXTENDED)
+- name: TINPUTSNF
+  kind: input
+  arg_form: SpTInputsArgument (SP_TINPUTS)
+  semantics: 限时字符串输入的无焦点变体：参数与 TINPUTS 完全一致（时限毫秒、默认字符串、是否接受鼠标、是否显示剩余时间、超时提示语、可跳过标志），唯一差别是走 WaitInputNoFocus——不抢键盘焦点。TONEINPUTSNF 为单键变体（同一实现类，oneInput=true）。语料 qol_MAP.ERB:54 起用它在动画帧间隔（ANIMATERECOLOREDMAPS）超时后轮询 MOUSEB，是地图动画/悬停的核心等待原语。
+  errors: ''
+  display_effect: 暂停脚本直至输入或超时；不改变输入焦点。
+  source: fork-src Instraction.Child.cs:1135-1186
+  aliases: TINPUTSNF, TONEINPUTSNF
+  register: fork-src FunctionIdentifier.cs:202,204
+  confidence: high
+  flag: 24578
+  flag_source: fork-src Instraction.Child.cs:1140 (IS_PRINT|IS_INPUT|EXTENDED)
+- name: HTML_PRINTC
+  kind: display
+  arg_form: SpHtmlPrintC (SP_HTML_PRINTC)
+  semantics: HTML 版的 PRINTC/PRINTLC——按**像素**而不是半角字符数做定宽制表：第 1 参是 HTML 片段字符串，第 2 参可选整型给单元格宽度（像素，≤0 时取 Config.PrintCLength * FontSize / 2）；HTML_PRINTC 右对齐（前补空格）、HTML_PRINTLC 左对齐（后补空格），补足宽度后若当前行超出 DrawableWidth 先 Flush 再写。SkipPrint 期间整条跳过。两个注册名共用一个实现类（构造参数 alignRight 相反）。
+  errors: 实参个数 0 或 >2 在装载期告警（NotEnough/TooMany），第 1 参必须 String、第 2 参必须 Integer。
+  display_effect: 向控制台文字流追加 HTML 渲染内容；可能触发换行；受 SkipPrint 抑制。
+  source: fork-src Instraction.Child.cs:415-434; ArgumentBuilder.cs:408-442; EmueraConsole.Print.cs:521-574
+  aliases: HTML_PRINTC, HTML_PRINTLC
+  register: fork-src FunctionIdentifier.cs:472-473
+  confidence: high
+  flag: 8198
+  flag_source: fork-src Instraction.Child.cs:421 (EXTENDED|METHOD_SAFE) + FunctionIdentifier.cs:472-473,566 (|IS_PRINT)
+- name: TEXT_BGC_ON
+  kind: display
+  arg_form: SpColorAlphaArgument (SP_COLOR_ALPHA)
+  semantics: 开字符背景色（衬底）：两个整型实参——RGB（0xRRGGBB）与不透明度百分比（0..100）；实现按 a = alpha * 255 / 100 拼 Color.FromArgb 后写入 Console.TextBackgroundColor，之后所有文字都带该底色，直到 TEXT_BGC_OFF。常量实参在装载期折叠成 (rgb<<8)+(alpha&0xFF)（ArgumentBuilder.cs:2074-2099）。语料 QOL_IMAGE.ERB:2564 与 DLC/背景图补丁/地点转换.ERB:55 用 LIMIT(衬底透明度*10+1, 1, 100) 作百分比。
+  errors: 实参必须恰好 2 个整型表达式（否则装载期告警）。
+  display_effect: 改变后续文字的背景色（不改已输出的行）。
+  source: fork-src Instraction.Child.cs:1627-1654; ArgumentBuilder.cs:2074-2099; EmueraConsole.cs:94
+  aliases: TEXT_BGC_ON
+  register: fork-src FunctionIdentifier.cs:291
+  confidence: high
+  flag: 6
+  flag_source: fork-src Instraction.Child.cs:1632 (METHOD_SAFE|EXTENDED)
+- name: TEXT_BGC_OFF
+  kind: display
+  arg_form: VOID
+  semantics: 关闭字符背景色（置 Console.TextBackgroundColor = null），无实参、无返回值。
+  errors: ''
+  display_effect: 后续文字恢复无衬底绘制。
+  source: fork-src Instraction.Child.cs:1656-1668
+  aliases: TEXT_BGC_OFF
+  register: fork-src FunctionIdentifier.cs:292
+  confidence: high
+  flag: 6
+  flag_source: fork-src Instraction.Child.cs:1661 (METHOD_SAFE|EXTENDED)
+- name: CALLS
+  kind: flow
+  arg_form: StrExpressionArgument (STR_EXPRESSION)
+  semantics: 按**运行时字符串**调用/跳转函数：字符串写成「函数名(参数…)」或「函数名, 参数…」两种形态，先按 LeftParenthesis_Bracket_Comma_Semicolon 读函数名，再看首字符是 '(' 决定 ReduceArguments 的结束符；随后 CallFunction 取目标、Restructure 实参、ConvertArg 校验后 IntoFunction。isJump 决定是否以跳转语义（call.IsJump）进入，isTry 决定出错是否抛 CodeEE —— TRY* 变体在「表达式解析失败 / 函数未定义 / 实参转换失败」三种情况下都不抛错，而是跳到对应 CATCH 的末尾（JumpToEndCatch）。空串/全空白直接返回。CALLSTR=fork 新增；TRY 家族在装载期靠 funcMatch 要求配 CATCH（TRYCCALLSTR→CATCH→ENDCATCH，FunctionIdentifier.cs:502-503），缺配对由 ErbLoader.cs:1593-1595 告警 MissingCorresponding。
+  errors: 非 TRY 变体在函数未定义/参数转换失败时抛 CodeEE；TRY 变体改跳 CATCH 末尾。
+  display_effect: 转入被调函数（Call）或目标标签（Jump）。
+  source: fork-src Instraction.Child.cs:3950-4066; FunctionIdentifier.cs:364-369,490-519,562-570
+  aliases: CALLSTR, JUMPSTR, TRYCALLSTR, TRYJUMPSTR, TRYCCALLSTR, TRYCJUMPSTR
+  register: fork-src FunctionIdentifier.cs:364-369
+  confidence: high
+  flag: 33
+  flag_by_alias:
+    # fork 真值：TRYCCALLSTR = 32947（含 IS_TRYC 32768），TRYCALLSTR = 163；
+    # 本移植侧 FunctionCode 登记为 163/163（不置 IS_TRYC 位，该位在运行期无读取接口，
+    # 由 TRYC_CODES 显式集合判定，见 FunctionCode.kt:126-131）——差异见 verify-notes §23。
+    # CALLSTR/JUMPSTR/TRYJUMPSTR/TRYCJUMPSTR 的 fork flag（33/97/227/33011）暂不登记：
+    # 这 4 名尚未进 FunctionCode 枚举、语料零使用，见 verify-notes §23 的 TODO(verify)。
+    TRYCALLSTR: 163
+    TRYCCALLSTR: 163
+  flag_source: fork-src Instraction.Child.cs:3957-3960 (FLOW_CONTROL|FORCE_SETARG|IS_JUMP|IS_TRY|IS_TRYC|PARTIAL) + FunctionIdentifier.cs:364-369 (EXTENDED 只加在 TRY 家族), 566 (flag = instruction.Flag | additionalFlag)
+- name: SEQUENCEINPUT
+  kind: input
+  arg_form: StrExpressionArgument (STR_EXPRESSION)
+  semantics: 预置下一次输入等待的提交序列。fork 侧是 FunctionMethod（不是 instruction）：argumentTypeArray = [String]、ReturnType = Integer、CanRestructure = false，函数体把唯一字符串实参整段写入 Process.sequenceInputValue 并置 hasSequenceInput = true，返回 0。下一次 WaitInput / WaitInputNoFocus 首行检查 hasSequenceInput，命中即 SimulatePressEnter：取走该串、清两个标志，把整串当「用户按下回车」交给 PressEnterKey，按 \n 拆段后逐段 RunEmueraProgram。整串只用一次，可为空串；DISABLE_INPUT_MACRO 生效时不再做宏展开，但 \n 分段保留。4.981 全包唯一调用点 USERCOM.ERB:177（@"-1\n%MACRO_PRESET:MACRO_INDEX%"，即「取消 + 预设宏」一次喂给后续输入）。
+  errors: 装载期实参必须是 1 个字符串表达式（argumentTypeArray = [String]）；运行期无错误路径（恒返回 0）。
+  display_effect: 无直接显示效果；被消费的那次等待不再阻塞用户。
+  source: fork-src Creator.Method.cs:9691-9705; Creator.cs:447; Process.SystemProc.cs:117-118; EmueraConsole.cs:704-722,783-788,1419-1530
+  aliases: SEQUENCEINPUT
+  register: fork-src Creator.cs:447
+  confidence: medium
+  flag: 6
+  flag_source: fork-src Creator.cs:447（methodList）+ FunctionIdentifier.cs:4135-4142（methodInstruction 合成 flag = METHOD_SAFE|EXTENDED）
+- name: SETIMAGELAYERL
+  kind: display
+  arg_form: SpSetImageLayerLArgument (SP_SETIMAGELAYERL)
+  semantics: 行锚定版 SETIMAGELAYER。8 个实参槽 = spriteName(String), depth(Integer), xpos(Integer), ypos(Integer), width(Integer), height(Integer), opacity(Integer), CM_ARRAY(Void)，minArg = 2，后 6 槽可缺省（缺省 xpos/ypos/width/height = 0、opacity = 255、CM_ARRAY = null）。装载期只显式校验第 1 参 String、第 2 参 Integer，其余槽不校验类型，超 8 个实参静默丢弃。执行时以 Console.GetLineNo（显示行索引，非 LINECOUNT）为锚点；height <= 0 时回落到 sprite 的 DestBaseSize.Height；x = DrawingParam_ShapePositionShift + xpos，y = GetLinePointY(lineNo) + LineHeight - ClientHeight + (imageHeight - LineHeight) + ypos；最后 SetImageLayer(..., followScroll: true)——followScroll 恒 true、无 lineNo 实参，xpos/ypos 与 HTML img 同口径（xpos=0,ypos=0 时与该行 img 重合）。
+  errors: 实参不足 2 个报 NotEnoughArguments；第 1/2 参为空或类型不符报 IncorrectArg（level 2，整条不执行）。后 6 槽不校验类型。
+  display_effect: 在 depth 指定的图层描画 sprite，锚定到当前显示行并随滚动跟随。
+  source: fork-src Instraction.Child.cs:4161-4209; ArgumentBuilder.cs:2679-2728,255; FunctionArgType.cs:95; FunctionIdentifier.cs:283
+  aliases: SETIMAGELAYERL
+  register: fork-src FunctionIdentifier.cs:283
+  confidence: high
+  flag: 6
+  flag_source: fork-src Instraction.Child.cs:4166 (METHOD_SAFE|EXTENDED)
+summary:
+  total: 177
+  by_kind:
+    call: 4
+    data: 4
+    debug: 2
+    display: 52
+    flow: 25
+    input: 18
+    io: 13
+    other: 26
+    variable: 33
+  by_confidence:
+    high: 172
+    medium: 5
+
+# 条目名型 ghost 的登记（条目名 = 实现类名去 _Instruction 后缀，见 meta.note；它们本身不是 funcDic 注册名）。
+# 注册面由各条目 aliases 承载。tools/spec_crosscheck.py 逐条核对「C# 确有 <条目名>_Instruction 实现类
+# 且 aliases 里至少一个注册名（METHOD 例外：注册面是方法并入循环）」后才计入 --section 的
+# 「已解释（非缺口）」块，并印出类声明行与注册行；缺登记、或登记了但 C# 无该类，照旧报「别名与大小写口径」缺口。
+# C# 依据：DO_NOTHING_Instruction FunctionIdentifier.cs:1959 / 注册 ENDDATA :4019；
+#          METHOD_Instruction :584 / 方法并入 funcDic 的循环 :4135-4142；
+#          PRINT_DATA_Instruction :231 / 注册 PRINTDATA* :3902-3910（经 addPrintDataFunction :3817-3820）；
+#          SAVELOADGAME_Instruction :2956 / 注册 SAVEGAME·LOADGAME :3951-3952。
+entry_name_kind:
+  DO_NOTHING: class_derived
+  METHOD: class_derived
+  PRINT_DATA: class_derived
+  SAVELOADGAME: class_derived

@@ -1108,6 +1108,10 @@ export type { ErbEngineErrorText } from './erb';
 /* ERBDIAG-ERATW：引擎事件标签名（4.981 IsEventLabelName 生成区间）。
    duplicate-function 等规则据此豁免「允许多处定义且全部执行」的事件族。 */
 export { ERB_EVENT_LABEL_NAMES, isErbEventLabelName } from './erb';
+/* ERBDIAG-ERATW：指令 ISA 规约（isa.yaml 生成区间，177 条 / 266 别名）。
+   语句悬停据此展示引擎原话；形态 prose 不用于猜实参个数。 */
+export { ERB_INSTRUCTION_SPECS, erbInstructionSpecOf } from './erb';
+export type { ErbInstructionSpec } from './erb';
 
 /* ---- Monaco 语言面契约（SDK B4，2026-10-27；独占追加区块，勿在他处重排） ----
    与 IC 批同一条纪律：`monaco-language.ts` 是纯类型叶子，桶里只许 `export type`。 */

@@ -63,6 +63,7 @@ import {
   ERB_PREPROC_CANDIDATES,
   ERB_SKIP_MARKERS,
   MODEL_TOKEN_CLASS,
+  erbInstructionSpecOf,
   erbContinuationRoleOf,
   erbPreprocRoleOf,
   isAllErbBlank,
@@ -2390,8 +2391,10 @@ function firstNonBlank(line: string): number {
 }
 
 /**
- * 原生标记分类（v1.9 P2「悬停」面）：只回答"这是什么"，不给逐词文档，也不抢前五路的事实。
- * 判据全部来自单源：预处理 / 行连接角色 = 契约 `erb.ts`；声明族与语句词表 = `./instructions.ts`。
+ * 原生标记分类（v1.9 P2「悬停」面）：只回答"这是什么"，不抢前五路的事实。
+ * 判据全部来自单源：预处理 / 行连接角色 = 契约 `erb.ts`；声明族与语句词表 = `./instructions.ts`；
+ * 行首语句命中 ISA 时**追加引擎原话**（argForm / semantics / errors + 源码行锚）——
+ * 来自 4.981/1.824 有锚的规约，查不到就只答分类，不自行推断实参个数。
  */
 export function resolveErbMarkHover(
   lineText: string,
@@ -2466,12 +2469,20 @@ export function resolveErbMarkHover(
     };
   }
   if (!DIRECTIVE_SET.has(upper)) return undefined;
+  const lines = ['原生 ERB 语句（整行直通，不拆糖形）。'];
+  const spec = erbInstructionSpecOf(upper);
+  if (spec !== undefined) {
+    if (spec.argForm !== '') lines.push(`引擎实参形态：\`${spec.argForm}\``);
+    if (spec.semantics !== '') lines.push(spec.semantics);
+    if (spec.errors !== '') lines.push(`引擎报错：${spec.errors}`);
+    if (spec.source !== '') lines.push(`源码锚：\`${spec.source}\``);
+  }
   return {
     name: upper,
     kind: 'ERB 语句',
     startColumn: token.startColumn,
     endColumn: token.endColumn,
-    lines: ['原生 ERB 语句（整行直通，不拆糖形）。'],
+    lines,
   };
 }
 
