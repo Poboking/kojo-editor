@@ -1101,6 +1101,10 @@ export { ERB_ENGINE_RESERVED_IDENTIFIERS, ERB_ENGINE_STRING_IDENTIFIERS } from '
 /* ERBDIAG-ERATW：引擎名数据契约（生成区间的只读面；测试据此对拍权威表 ⊆ 生产表）。 */
 export { ERB_ENGINE_NAMES, ERB_ENGINE_NAME_LIST } from './erb';
 export type { ErbEngineNameEntry } from './erb';
+/* ERBDIAG-ERATW：引擎报错原话契约（同批生成区间）。诊断文案一律以引擎原文为锚、
+   编辑器补充信息只许**追加**在原文之后——措辞与玩家实际看到的引擎界面同源。 */
+export { ERB_ENGINE_ERROR_TEXTS, formatEngineErrorText } from './erb';
+export type { ErbEngineErrorText } from './erb';
 
 /* ---- Monaco 语言面契约（SDK B4，2026-10-27；独占追加区块，勿在他处重排） ----
    与 IC 批同一条纪律：`monaco-language.ts` 是纯类型叶子，桶里只许 `export type`。 */

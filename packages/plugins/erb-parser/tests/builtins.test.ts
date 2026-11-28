@@ -2,14 +2,17 @@
  * 内建式中函数签名表与实参诊断（`builtins.ts`）单测——**纯函数**：文本进、波浪线数据出。
  *
  * 钉死四组形状：
- * (a) 表完整性：名字集 = 签名表键集、全大写无重复、wiki 未载明签名的只认名字；
- * (b) 个数：多给 = error；少给 = **静默**（引擎合法省略）；可变实参族不设上限；
+ * (a) 表完整性：名字集 = 签名表键集、全大写无重复、规模钉在 eratw 注册表口径；
+ * (b) 个数：**双向**——多给 = error（`TooManyFuncArgs` / `ArgsNotNeeded`），
+ *     少给 = error（`NotEnoughArgs`，内建函数引擎不补默认值），成对变参组违例 =
+ *     `ArgsNotFitExpr`；可变实参族不设上限。文案主体逐字取引擎原话；
  * (c) 类型：只判可证形态（字面量 / FORM / `{…}` / 已知内建返回值），判不出一律不报；
  * (d) 安全边界：非方言路径 / 定义行 / 注释 / 字符串 / `[SKIPSTART]` 区不判；
  *     同名用户函数（影子）整体让位。
  */
 
 import { describe, expect, it } from 'vitest';
+import { formatEngineErrorText } from '@kojo/plugin-api';
 import {
   BUILTIN_ARGS_CODE,
   BUILTIN_ARG_TYPE_CODE,
@@ -32,40 +35,59 @@ describe('BUILTIN_SIGNATURES · 表完整性', () => {
     expect(BUILTIN_FUNCTION_NAMES).toEqual(sorted);
   });
 
-  it('规模钉在 exmeth 口径（177 条目合重载后 ≥ 150 个不同名）', () => {
-    expect(BUILTIN_FUNCTION_NAMES.length).toBeGreaterThanOrEqual(150);
+  it('规模钉在 eratw 运行时注册表口径（331 条，全部真实现）', () => {
+    // 表体由 tools/gen-erb-builtin-signatures.mjs 从 eratw `Builtins.registry` 的
+    // 反射 dump 生成（tools/data/builtin-signatures.tsv）。331 = dump 行数 - 表头。
+    expect(BUILTIN_FUNCTION_NAMES.length).toBe(331);
     // 常用面必须在列（补全与诊断的同一张表）
     for (const name of ['STRLENS', 'SUBSTRING', 'ABS', 'MAX', 'RAND', 'GETBIT', 'TOSTR', 'CSVCFLAG', 'GCREATE']) {
       expect(BUILTIN_FUNCTION_NAMES).toContain(name);
     }
+    // fork 扩展整族进来（旧手抄表缺的 177 条的代表）
+    for (const name of ['DT_CELL_GET', 'MAP_CREATE', 'XML_SET', 'SQL_CONNECT', 'ENTITY_CREATE']) {
+      expect(BUILTIN_FUNCTION_NAMES).toContain(name);
+    }
+    // 旧表的 16 个假内建名必须不在列（两棵反编译树零命中，实为 eraTW 的 @FUNC）
+    for (const name of ['SETBIT', 'CLEARBIT', 'INVERTBIT', 'FIRSTTIME', 'CHK_HININ_LOVE', 'SET_KOJOCOLOR']) {
+      expect(BUILTIN_FUNCTION_NAMES).not.toContain(name);
+    }
   });
 
-  it('签名抽查：必填/可选/可变/未载明四形各就各位', () => {
+  it('签名抽查：必填/可选/可变/成对变参四形各就各位', () => {
     expect(builtinSignatureOf('STRLENS')).toEqual({ ret: 'int', params: [{ type: 'str', optional: false }], variadic: false });
     expect(builtinSignatureOf('SUBSTRING')?.params?.map((p) => p.optional)).toEqual([false, true, true]);
+    // MAX 真值 = 1 个固定参数 + 尾部可变（`MAX(5)` 合法；旧表误标 2 个必需）
     expect(builtinSignatureOf('MAX')).toEqual({
       ret: 'int',
-      params: [
-        { type: 'int', optional: false },
-        { type: 'int', optional: false },
-      ],
+      params: [{ type: 'int', optional: false }],
       variadic: true,
     });
-    // wiki 未载明签名 ⇒ 只认名字，params/ret 双 null
-    expect(builtinSignatureOf('INRANGEARRAY')).toEqual({ ret: null, params: null, variadic: false });
-    // RAND 两形皆可选（wiki 凡例 RAND(100) 单参合法）
-    expect(builtinSignatureOf('RAND')?.params?.every((p) => p.optional)).toBe(true);
+    // INRANGEARRAY 真值 = 3 必需 + 2 可选（Wiki 没载明，eratw 有实现）
+    expect(builtinSignatureOf('INRANGEARRAY')?.params?.map((p) => p.optional)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      true,
+    ]);
+    // 成对变参组（eratw VariadicGroup）
+    expect(builtinSignatureOf('DT_ROW_ADD')?.variadicGroup).toEqual({
+      fixedPrefix: 1,
+      groupSize: 2,
+      exactFormArgs: 4,
+      minGroupArgs: 1,
+    });
     // 大小写不敏感
     expect(builtinSignatureOf('strlens')).toEqual(builtinSignatureOf('STRLENS'));
     expect(builtinSignatureOf('NOT_A_FUNCTION')).toBeNull();
   });
 
-  it('签名文案：可选 `?` / 可变 `…` / 未载明只给名', () => {
+  it('签名文案：可选 `?` / 可变 `…` / 成对变参给组式', () => {
     expect(builtinSignatureLabel('STRLENS')).toBe('STRLENS(str) → int');
     expect(builtinSignatureLabel('SUBSTRING')).toBe('SUBSTRING(str, int?, int?) → str');
-    expect(builtinSignatureLabel('MAX')).toBe('MAX(int, int, …) → int');
+    expect(builtinSignatureLabel('MAX')).toBe('MAX(int, …) → int');
     expect(builtinSignatureLabel('GETTIMES')).toBe('GETTIMES() → str');
-    expect(builtinSignatureLabel('INRANGEARRAY')).toBe('INRANGEARRAY');
+    expect(builtinSignatureLabel('DT_ROW_ADD')).toBe('DT_ROW_ADD(any, …) → int');
     expect(builtinSignatureLabel('NOT_A_FUNCTION')).toBeNull();
   });
 });
@@ -75,27 +97,47 @@ describe('collectBuiltinArgDiagnostics · 个数', () => {
     const out = run('A = STRLENS("a", "b")\n');
     expect(out).toHaveLength(1);
     expect(out[0]).toMatchObject({ line: 1, severity: 'error', code: BUILTIN_ARGS_CODE });
-    expect(out[0]!.message).toContain('最多 1 个，实际 2 个');
+    expect(out[0]!.message).toContain('参数过多——最多 1 个，实际给了 2 个');
     // 实参区 = 首个非空实参起点 .. 末个非空实参终点（`"a", "b"`）
     expect([out[0]!.startColumn, out[0]!.endColumn]).toEqual([13, 21]);
   });
 
-  it('少给 / 零参调用 → 静默（引擎按 0 / 空串兜底）', () => {
-    expect(run('A = STRLENS()\n')).toEqual([]);
+  it('少给 → error（内建函数引擎不补默认值，4.981 报 NotEnoughArgs）', () => {
+    // STRLENS(str)：0 参 = 真少给 ⇒ `FunctionMethod.cs:283` 的 NotEnoughArgs
+    const zero = run('A = STRLENS()\n');
+    expect(zero).toHaveLength(1);
+    expect(zero[0]!.message).toContain('至少需要1个参数');
+    expect(zero[0]!.code).toBe(BUILTIN_ARGS_CODE);
+    // 裸名字（无括号）在 ERB 里是**变量引用**，不是调用 ⇒ 不判
     expect(run('A = STRLENS\n')).toEqual([]);
+    // 可选位省着写 = 合法（SUBSTRING 后两位可选）
     expect(run('A = SUBSTRING("abc")\n')).toEqual([]);
   });
 
-  it('零参函数多给一个也报', () => {
+  it('零参函数多给一个也报（ArgsNotNeeded 是独立一枚键）', () => {
     const out = run('A = GETTIME(1)\n');
     expect(out).toHaveLength(1);
-    expect(out[0]!.message).toContain('最多 0 个，实际 1 个');
+    expect(out[0]!.message).toContain('不需要参数——实际给了 1 个');
   });
 
-  it('可变实参族（MAX/GROUPMATCH/CONVERT）不设上限', () => {
+  it('可变实参族（MAX/GROUPMATCH）不设上限；CONVERT 只 2 参不是可变', () => {
     expect(run('A = MAX(1, 2, 3, 4)\n')).toEqual([]);
+    expect(run('A = MAX(5)\n')).toEqual([]);
     expect(run('A = GROUPMATCH(1, 2, 3)\n')).toEqual([]);
-    expect(run('A = CONVERT(10, "x", "y")\n')).toEqual([]);
+    // CONVERT(value, radix)：真值 2 参，第 3 个是真多给
+    expect(run('A = CONVERT(10, 16)\n')).toEqual([]);
+    expect(run('A = CONVERT(10, "x", "y")\n')).toHaveLength(1);
+  });
+
+  it('成对变参组：DT_ROW_ADD 按 1+2n 判，exact 形单独放行', () => {
+    // 合法：1 参（下界）、3 参、4 参（exact 形）
+    expect(run('A = DT_ROW_ADD(0)\n')).toEqual([]);
+    expect(run('A = DT_ROW_ADD(0, 1, 2)\n')).toEqual([]);
+    expect(run('A = DT_ROW_ADD(0, 1, "a", 2)\n')).toEqual([]);
+    // 违例：2 参（(2-1)%2 = 1）
+    const bad = run('A = DT_ROW_ADD(0, 1)\n');
+    expect(bad).toHaveLength(1);
+    expect(bad[0]!.message).toContain('不满足1+2n');
   });
 
   it('CALL 直系族同样判（括号形与逗号形）', () => {
@@ -107,6 +149,29 @@ describe('collectBuiltinArgDiagnostics · 个数', () => {
     expect(run('A = STRLENS("a",)\n')).toEqual([]);
     // 对照：真多给一个就报
     expect(run('A = STRLENS("a", "b")\n')).toHaveLength(1);
+  });
+
+  /**
+   * 四支文案的**主体**必须逐字等于 `specs/error-texts.yaml` 的原话（经
+   * `ERB_ENGINE_ERROR_TEXTS` 按序号替换后），编辑器只许在后面**追加**定位说明。
+   *
+   * 为什么值得单钉：作者按引擎原话去搜社区/提问才能对上号；kojo 一旦把「参数过多」
+   * 改写成「参数个数超了」这类同义词，这条价值就静默消失，而波浪线看起来毫无变化。
+   */
+  it('文案主体逐字取引擎原话，追加说明在原文之后', () => {
+    const cases: readonly (readonly [string, string])[] = [
+      ['A = STRLENS("a", "b")\n', formatEngineErrorText('TooManyFuncArgs', ['STRLENS'])!],
+      ['A = STRLENS()\n', formatEngineErrorText('NotEnoughArgs', ['STRLENS', 1])!],
+      ['A = GETTIME(1)\n', formatEngineErrorText('ArgsNotNeeded', ['GETTIME'])!],
+      ['A = DT_ROW_ADD(0, 1)\n', formatEngineErrorText('ArgsNotFitExpr', ['DT_ROW_ADD', 2, 1, 2])!],
+    ];
+    for (const [src, head] of cases) {
+      const out = run(src);
+      expect(out, `${src} 应报一条`).toHaveLength(1);
+      expect(out[0]!.message.startsWith(head), `文案没以引擎原话开头：${out[0]!.message}`).toBe(true);
+      // 追加说明确实跟在原文后面（不是把原文顶掉了）
+      expect(out[0]!.message.length).toBeGreaterThan(head.length);
+    }
   });
 });
 
@@ -181,7 +246,11 @@ describe('collectBuiltinArgDiagnostics · 安全边界', () => {
     expect(run('A = ABS("x")\n', 'A.ERB', isUserFunction)).toHaveLength(1);
   });
 
-  it('未载明签名的名字（INRANGEARRAY）只认名、不判', () => {
-    expect(run('A = INRANGEARRAY(FLAG, 0, 100, 1, 2, 3)\n')).toEqual([]);
+  it('表里没有的名字不判（未注册 = 轮不到这一层）', () => {
+    // NOT_A_FUNCTION 不在 331 条注册表里 ⇒ 内建腿一条不报（用户函数腿另判）
+    expect(run('A = NOT_A_FUNCTION(1, 2, 3)\n')).toEqual([]);
+    // 旧表的假内建名已剔出：SETBIT 现在走用户函数腿，内建腿不认它
+    expect(builtinSignatureOf('SETBIT')).toBeNull();
+    expect(run('A = SETBIT(1, 2, 3, 4, 5)\n')).toEqual([]);
   });
 });

@@ -1,0 +1,1942 @@
+# 原版 Lang.Error 文案表 —— 词法 / ArgumentBuilder / 块结构三族
+#
+# 权威来源（只读参考仓）：
+#   - 日文原文：MinorShift.Emuera.Runtime.Utils.EvilMask/Lang.cs
+#   - 中文译文：MinorShift.Emuera.Properties.lang.emuera-zhs.xml
+#   - 调用点：MinorShift.Emuera.GameProc.Function/ArgumentBuilder.cs、ArgumentParser.cs、
+#             MinorShift.Emuera.Runtime.Script.Loader/ErbLoader.cs
+#
+# 代码侧镜像：core/lexer/LangText.kt 的 enum LangKey。本文件与它由
+# core-vm 的 ErrorTextRenderTest 双向对账（id 集合、ja/zhs 模板、占位符个数、两侧行号），
+# 任何一侧漂了都会红。
+#
+# 语言口径（编译层缺陷收口波 L11 裁定）：
+#   - 内核/契约层报错取 ja：Lang.cs 日文原文，{0} 照常展开（LexError / LexWarning 走这档）；
+#   - 使用者面诊断取 zhs：lang.emuera-zhs.xml 译文（BlockChecker、ArgBuilders 的 warn/fail）；
+#   - 照抄纪律：只做按序号原位替换，不 trim、不改引号形态、不修误译（ADR-005）。
+#
+# 字段：
+#   id          Lang.Error 的键名（去掉 Error. 前缀）
+#   lang_cs     Lang.cs 行号（日文原文）
+#   zhs_xml     **仓内 reference 内嵌表**的行号 =
+#               `reference/emuera-cs/MinorShift.Emuera.Properties.lang.emuera-zhs.xml`
+#   zhs_root_xml 语料根表的行号 =
+#               `eratw-画蛇添足版eratw4.980/lang/emuera.zhs.xml`（只随附录段一起记，
+#               不参与对账：该表不在仓内、随共享根走）
+#   args        占位符个数 = string.Format 实参个数
+#   status      wired = 本轮已接线；registered = 键已登记、调用点仍用旧串（见 used_at）
+#   used_at     抛出点锚，**一律不写行号**，形如
+#               `<core 相对路径> <函数/符号> 的「<needle>」`；同一枚键有多个抛点时用
+#               `+` 串接，**每个「」绑定到它左边最近的那个 `.kt`**。needle 取的是产品
+#               文件里必须逐字命中的原文，按接线状态分三档：
+#                 - 已走通道的键 → 写 `LangKey.<键名>`（调用式，如 `LangKey.MissingArg`）；
+#                 - 判「不改-同形」未入通道的键 → 写屏上原文的**静态前缀**（不带 `${}` 插值段）；
+#                 - 尚未接线的键 → 写**将来落点的函数名**（如 `private fun changeable`）。
+#               路径一律相对 `core-vm/src/main/kotlin/com/eratw/port/core/`（`sem/`、`stmt/`、
+#               `vars/`、`err/`、`fn/`、`lexer/`、`code/`、`frontend/`、`data/save/`）；
+#               唯一例外：`tools/` 开头 = erbcc 编译面的抛点，相对仓库根
+#               `eratw-android/` 解析（MODERN-R12-PRE 补）。
+#               没有「」的条目 = 本条无可核锚点（无消费点 / 未移植 / 待接线），闸会打印清单。
+#               为什么不留行号：行号每次重构必漂，且**过去没有任何闸核对过它**。2026-11-05
+#               lane usedat 全量对账读数：97 条里 70 条带 `文件.kt:行号`、共 100 处行号，
+#               其中 67 处已指不到对应抛点（20 处干脆指在注释行上），落到条目级是
+#               50 条漂移 / 20 条仍准（BlockChecker 11、VarErrorText 4、OperatorErrorText 3、
+#               CharaFileIO 2 全准；ArgBuilders 13、LexicalAnalyzer 4、LineParser 2 全错）。
+#               ⇒ 反向核对闸见 core-vm 的 LangKeyUsedAtAnchorTest，钉「文件 + needle 在位」，
+#               不钉行号（钉行号 = 再造一个必然漂的闸）。
+#   ja / zhs    模板原文（{0} 未展开；块标量 |- 保留逐字内容）
+#
+# ## `zhs_xml` 到底索引哪张表（2026-11-05 lane errtext4 实测，别再猜）
+# 两张 zhs 表**同文、不同行号**，本字段一路吃的是 **reference 内嵌表**：
+#   - `MacroOverLimit`：reference 表 :843（本表记的就是 843）；语料根表 :455；
+#     而语料根表的 :843 是 `SystemLine.DoYouOverwrite` ⇒ 按语料根表读会整族错位。
+#   - 全量复核：本文件 42 条既有条目逐条回读 reference 表 `zhs_xml` 那一行，
+#     `tr id` 与 CDATA 文本 42/42 命中（同时 `lang_cs` 那一行的 `TranslatableString`
+#     属性名与日文模板也是 42/42 命中）。闸见
+#     `core-vm/src/test/kotlin/com/eratw/port/core/lexer/LangKeySourceTableTest.kt`。
+#   - ⇒ 新条目一律按「reference 表行号进 `zhs_xml`、语料根表行号进 `zhs_root_xml`」登记，
+#     并逐条自己验过两表同文才落（两表不同文的键按组长裁定不进本表）。
+
+schema: 1
+
+keys:
+  # ---------------------------------------------------------------------
+  # 一、词法层（Lang.cs:3554-3594 / zhs:843-853）
+  # 消费点：LexicalAnalyzer 的 6 条自造句。本轮只补 LexError 的键构造与渲染层，
+  # 调用点接线属 L06 面（见交付回执「需接线」）。
+  # ---------------------------------------------------------------------
+  - id: MacroOverLimit
+    lang_cs: 3554
+    zhs_xml: 843
+    eng_xml: 846
+    args: 1
+    status: registered
+    used_at: lexer/LexicalAnalyzer.kt expandMacros 的「マクロの展開数が1文あたりの上限値100を超えました」（宏展开计数超上限即抛 ja 原文；键接线待组长）
+    ja: |-
+      マクロの展開数が1文あたりの上限値{0}を超えました(自己参照・循環参照のおそれ)
+    zhs: |-
+      宏展开的次数超过单次展开上限值{0}(可能是因为自我调用・循环调用)
+    en: |-
+      Maximum number of macro expansions per sentence {0} has been exceeded (Beware of self or circular references)
+
+  - id: UnexpectedFullWidthSpace
+    lang_cs: 3562
+    zhs_xml: 845
+    eng_xml: 848
+    args: 1
+    status: registered
+    used_at: lexer/LexicalAnalyzer.kt analyse 的「予期しない全角スペースを発見しました」（全角空格且 systemAllowFullSpace 关闭；键接线待组长）
+    ja: |-
+      予期しない全角スペースを発見しました(この警告はシステムオプション「{0}」により無視できます)
+    zhs: |-
+      发现意料之外的全角空格(此警告可以用系统配置「{0}」来无视)
+    en: |-
+      Found an unexpected full-width space (This error can be ignored by using "Include full-width space in whitespace" system option)
+
+  - id: UnexpectedCharacter
+    lang_cs: 3582
+    zhs_xml: 850
+    eng_xml: 853
+    args: 1
+    status: registered
+    used_at: lexer/LexicalAnalyzer.kt analyse 的「字句解析中に予期しない文字」（未知字符，同串多处抛点；键接线待组长）
+    ja: |-
+      字句解析中に予期しない文字'{0}'を発見しました
+    zhs: |-
+      词法解析中出现意料之外的字符'{0}'
+    en: |-
+      Found an unexpected character '{0}' during lexical analysis
+
+  - id: EmptyTwoSBrackets
+    lang_cs: 3586
+    zhs_xml: 851
+    eng_xml: 854
+    args: 0
+    status: registered
+    used_at: lexer/LexicalAnalyzer.kt analyse 的「予期しない文字'[['」（原版 LexicalAnalyzer.cs:808-831 的 [[ 语法在移植侧统一报 UnexpectedCharacter；键接线待组长裁定）
+    ja: |-
+      空の[[]]です
+    zhs: |-
+      空的[[]]
+    en: |-
+      [[]] is empty
+
+  - id: MissingTwoSBrackets
+    lang_cs: 3590
+    zhs_xml: 852
+    eng_xml: 855
+    args: 0
+    status: registered
+    used_at: 无（移植侧未单独区分缺 ]]，无对应抛点可锚 ⇒ 键接线待组长裁定）
+    ja: |-
+      対応する"]]"のない"[["です
+    zhs: |-
+      没有对应"]]"的"[["
+    en: |-
+      Missing corresponding "]]" for "[["
+
+  - id: CanNotRenameKey
+    lang_cs: 3594
+    zhs_xml: 853
+    eng_xml: 856
+    args: 1
+    status: registered
+    used_at: 无（移植侧未走 rename 符号通道，无对应抛点可锚 ⇒ 键接线待组长裁定）
+    ja: |-
+      字句解析中に置換(rename)できない符号{0}を発見しました
+    zhs: |-
+      发现词法解析中无法被替换(rename)的符号{0}
+    en: |-
+      Found an illegal substituted(rename) sign {0} during lexical analysis
+
+  # ---------------------------------------------------------------------
+  # 二、ArgumentBuilder 族（Lang.cs:1918-2086 / zhs:434-476）
+  # 消费点：core/stmt/ArgBuilders 的 fail/warn（统一带「语句名 + 命令:」前缀，
+  # 前缀本体 = Instruction，实参表见 ArgumentBuilder.cs:32）。
+  # ---------------------------------------------------------------------
+  - id: Instruction
+    lang_cs: 1918
+    zhs_xml: 434
+    eng_xml: 437
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt argPrefix 的「instructionPrefix(ctx.statementName)」（前缀本体 = LangKey.Instruction 的渲染入口）
+    ja: |-
+      命令:
+    zhs: |-
+      命令:
+    en: |-
+      Instruction:
+
+  - id: MissingArg
+    lang_cs: 1922
+    zhs_xml: 435
+    eng_xml: 438
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt str/formStr/intAny/formStrAny 的「LangKey.MissingArg」（四条缺参支同键）
+    ja: |-
+      引数が設定されていません
+    zhs: |-
+      缺少参数
+    en: |-
+      Missing argument
+
+  - id: NotEnoughArguments
+    lang_cs: 1926
+    zhs_xml: 436
+    eng_xml: 439
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt checkTypes 的「LangKey.NotEnoughArguments」（实参不足）
+    ja: |-
+      引数が足りません
+    zhs: |-
+      参数过少
+    en: |-
+      Not enough arguments
+
+  - id: TooManyArg
+    lang_cs: 1930
+    zhs_xml: 437
+    eng_xml: 440
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt tooMany 的「LangKey.TooManyArg」（level 1 截断）
+    ja: |-
+      引数が多すぎます
+    zhs: |-
+      参数过多
+    en: |-
+      Too many arguments
+
+  - id: CanNotRecognizeArg
+    lang_cs: 1934
+    zhs_xml: 438
+    eng_xml: 441
+    args: 1
+    status: wired
+    used_at: stmt/ArgBuilders.kt checkTypes 的「LangKey.CanNotRecognizeArg」（空参数位）
+    ja: |-
+      第{0}引数を認識できません
+    zhs: |-
+      无法识别第{0}参数
+    en: |-
+      Argument number {0}: unable to recognize argument
+
+  - id: IncorrectArg
+    lang_cs: 1938
+    zhs_xml: 439
+    eng_xml: 442
+    args: 1
+    status: wired
+    used_at: stmt/ArgBuilders.kt checkTypes 的「LangKey.IncorrectArg」（组长裁定：三处 `fail(ctx, LangKey.IncorrectArg, …)` 已走本键通道，按表头定义记 wired）
+    ja: |-
+      第{0}引数の型が正しくありません
+    zhs: |-
+      第{0}参数的类型错误
+    en: |-
+      Argument number {0}: argument type is incorrect
+
+  - id: ArgIsNotVariable
+    lang_cs: 1942
+    zhs_xml: 440
+    eng_xml: 443
+    args: 1
+    status: wired
+    used_at: stmt/ArgBuilders.kt changeable/varsize 的「LangKey.ArgIsNotVariable」（ArgumentParser.cs:531）
+    ja: |-
+      第{0}引数に変数以外を指定することはできません
+    zhs: |-
+      第{0}参数必须为变量
+    en: |-
+      The {0} argument cannot be anything other than a variable
+
+  - id: ArgIsConst
+    lang_cs: 1946
+    zhs_xml: 441
+    eng_xml: 444
+    args: 1
+    status: registered
+    used_at: stmt/ArgBuilders.kt changeable 的「private fun changeable」（本键产品侧 0 消费点：changeable 未区分常量位 ⇒ 接线待组长）
+    ja: |-
+      第{0}引数に変更できない変数を指定することはできません
+    zhs: |-
+      第{0}参数不能指定为只读变量
+    en: |-
+      The {0} argument cannot be specified with a read-only variable
+
+  - id: WrongFormat
+    lang_cs: 1966
+    zhs_xml: 446
+    eng_xml: 449
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt strDouble 的「LangKey.WrongFormat」（首参表达式归约不出项 → fail；ArgumentParser.cs:2559-2563）
+    ja: |-
+      書式が間違っています
+    zhs: |-
+      格式错误
+    en: |-
+      The format is wrong
+
+  - id: MissingArgAfterComma
+    lang_cs: 1974
+    zhs_xml: 448
+    eng_xml: 451
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt formStrAny 的「LangKey.MissingArgAfterComma」（逗号后耗尽）
+    ja: |-
+      ','の後ろに引数がありません。
+    zhs: |-
+      ,'后面必须存在一个参数
+    en: |-
+      ,' doesn't have an argument after it
+
+  - id: ArgIsNotRequired
+    lang_cs: 1978
+    zhs_xml: 449
+    eng_xml: 452
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt void 的「LangKey.ArgIsNotRequired」（VOID 构造器多余实参）
+    ja: |-
+      引数は不要です
+    zhs: |-
+      不需要参数
+    en: |-
+      Argument is not required
+
+  - id: ExtraCharacterAfterArg
+    lang_cs: 1994
+    zhs_xml: 453
+    eng_xml: 456
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt varsize 的「LangKey.ExtraCharacterAfterArg」（名后多余字符）
+    ja: |-
+      引数の後に余分な文字があります
+    zhs: |-
+      参数后面有一个多余的字符
+    en: |-
+      There's an extra character after the argument
+
+  - id: IgnoreArgBecauseNotInt
+    lang_cs: 2078
+    zhs_xml: 474
+    eng_xml: 477
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt spInputs 的「LangKey.IgnoreArgBecauseNotInt」（INPUTS 第 2 参非整数）
+    ja: |-
+      第2引数は整数型ではないため、無視されます
+    zhs: |-
+      第二个参数因为不是整型数值而被忽略
+    en: |-
+      Second argument will be ignored because not integer
+
+  - id: OmittedArg1
+    lang_cs: 2082
+    zhs_xml: 475
+    eng_xml: 478
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt intExpression 的「LangKey.OmittedArg1」（INT_EXPRESSION 省略实参补 0）
+    ja: |-
+      省略できない引数が省略されています。Emueraは0を補います
+    zhs: |-
+      必要的参数被省略了。Emuera自动补0
+    en: |-
+      Arguments that cannot be omitted were omitted. Emuera will add 0
+
+  - id: OmittedArg2
+    lang_cs: 2086
+    zhs_xml: 476
+    eng_xml: 479
+    args: 0
+    status: wired
+    used_at: stmt/ArgBuilders.kt intExpression 的「LangKey.OmittedArg2」（组长裁定：warn 三元支已走本键通道 ⇒ wired；可达性另记——与 OmittedArg1 同一支、eramaker 兼容档，本作未触发）
+    ja: |-
+      省略できない引数が省略されています。Emueraは0を補いますがeramakerの動作は不定です
+    zhs: |-
+      必要的参数被省略了。Emuera自动补0，但在eramaker中的行为未定义
+    en: |-
+      Arguments that cannot be omitted were omitted. Emuera adds 0, but the behavior of eramaker is undefined
+
+  # ---------------------------------------------------------------------
+  # 三、块结构族（Lang.cs:2590-2714 / zhs:602-633）
+  # 消费点：core/stmt/BlockChecker（配 Table 来自 FunctionIdentifier.cs:4144-4173）。
+  # ---------------------------------------------------------------------
+  - id: OutsideSelectcase
+    lang_cs: 2590
+    zhs_xml: 602
+    eng_xml: 605
+    args: 1
+    status: wired
+    used_at: stmt/BlockChecker.kt check/checkBranch 的「LangKey.OutsideSelectcase」（SELECTCASE 前置区 / CASE 无母块两闸）
+    ja: |-
+      SELECTCASE構文の分岐の外に命令"{0}"が含まれています
+    zhs: |-
+      在SELECTCASE语法的分支以外包含命令"{0}"
+    en: |-
+      Attempted to use instruction outside the branch of SELECTCASE syntax '{0}'
+
+  - id: InvalidElse
+    lang_cs: 2606
+    zhs_xml: 606
+    eng_xml: 609
+    args: 1
+    status: wired
+    used_at: stmt/BlockChecker.kt checkBranch 的「LangKey.InvalidElse」（ELSE/ELSEIF 栈顶不是 IF）
+    ja: |-
+      IF～ENDIFの外で"{0}"文が使われました
+    zhs: |-
+      在IF-ENDIF以外使用了"{0}"
+    en: |-
+      A statement other than IF-ENDIF was used "{0}"
+
+  - id: UnexpectedEndif
+    lang_cs: 2614
+    zhs_xml: 608
+    eng_xml: 611
+    args: 0
+    status: wired
+    used_at: stmt/BlockChecker.kt closeMessage 的「LangKey.UnexpectedEndif」（ENDIF 空栈/错配；zhs 是官方反向误译，照抄）
+    ja: |-
+      対応するIFの無いENDIF文です
+    zhs: |-
+      缺少IF对应的ENDIF
+    en: |-
+      Missing corresponding IF for ENDIF
+
+  - id: InstructionNotClosed
+    lang_cs: 2618
+    zhs_xml: 609
+    eng_xml: 612
+    args: 3
+    status: registered
+    used_at: 无（原版 SELECTCASE 的 stack2 恢复路径 ErbLoader.cs:1247-1256/1275-1287 未移植，无对应抛点可锚 ⇒ 见 BlockChecker KDoc 已知差异）
+    ja: |-
+      {0}文に対応する{1}がない状態で{2}文に到達しました
+    zhs: |-
+      在{0}没有对应{1}情况下运行到{2}语句
+    en: |-
+      {0} statement has reached {1} statement without the corresponding {2} statement
+
+  - id: UnexpectedEndselect
+    lang_cs: 2626
+    zhs_xml: 611
+    eng_xml: 614
+    args: 0
+    status: wired
+    used_at: stmt/BlockChecker.kt closeMessage 的「LangKey.UnexpectedEndselect」（ENDSELECT 空栈/错配）
+    ja: |-
+      対応するSELECTCASEの無いENDSELECT文です
+    zhs: |-
+      应对selectcase无endselect文。
+    en: |-
+      Missing corresponding SELECTCASE for ENDSELECT
+
+  - id: MissingCorresponding
+    lang_cs: 2634
+    zhs_xml: 613
+    eng_xml: 616
+    args: 2
+    status: wired
+    used_at: stmt/BlockChecker.kt check/closeMessage 的「LangKey.MissingCorresponding」（EOF 残留开语句、REND/NEXT/WEND/LOOP 无母块或错配两闸）
+    ja: |-
+      対応する"{0}"の無い"{1}"文です
+    zhs: |-
+      缺少"{0}"对应的"{1}"
+    en: |-
+      Missing corresponding "{0}" for "{1}" statement
+
+  - id: MissingTryc
+    lang_cs: 2638
+    zhs_xml: 614
+    eng_xml: 617
+    args: 0
+    status: wired
+    used_at: stmt/BlockChecker.kt check/closeMessage 的「LangKey.MissingTryc」（CATCH 无 TRYC 系）
+    ja: |-
+      対応するTRYC系命令がありません
+    zhs: |-
+      缺少对应的TRYC系统命令
+    en: |-
+      Missing corresponding TRYC system instruction
+
+  - id: UnexpectedEndcatch
+    lang_cs: 2642
+    zhs_xml: 615
+    eng_xml: 618
+    args: 0
+    status: wired
+    used_at: stmt/BlockChecker.kt closeMessage 的「LangKey.UnexpectedEndcatch」（ENDCATCH 空栈/错配）
+    ja: |-
+      対応するCATCHのないENDCATCHです
+    zhs: |-
+      缺少CATCH对应的ENDCATCH
+    en: |-
+      Missing corresponding CATCH for ENDCATCH
+
+  - id: UnexpectedDatalist
+    lang_cs: 2662
+    zhs_xml: 620
+    eng_xml: 623
+    args: 0
+    status: registered
+    used_at: 无（DATALIST 是 OPEN，BlockChecker 不校验其母块 ⇒ 无对应抛点可锚；原版 ErbLoader.cs:1414）
+    ja: |-
+      対応するPRINTDATA系命令のないDATALISTです
+    zhs: |-
+      缺少PRINTDATA系列命令对应的DATALIST
+    en: |-
+      Missing corresponding PRINTDATA-type instruction for DATALIST
+
+  - id: UnexpectedEndlist
+    lang_cs: 2666
+    zhs_xml: 621
+    eng_xml: 624
+    args: 0
+    status: wired
+    used_at: stmt/BlockChecker.kt closeMessage 的「LangKey.UnexpectedEndlist」（ENDLIST 空栈/错配）
+    ja: |-
+      対応するDATALISTのないENDLISTです
+    zhs: |-
+      缺少DATALIST对应的ENDLIST
+    en: |-
+      Missing corresponding DATALIST for ENDLIST
+
+  - id: MissingPrintdataStrdata
+    lang_cs: 2678
+    zhs_xml: 624
+    eng_xml: 627
+    args: 1
+    status: wired
+    used_at: stmt/BlockChecker.kt closeMessage 的「LangKey.MissingPrintdataStrdata」（ENDDATA 空栈/错配）
+    ja: |-
+      対応するPRINTDATA系命令もしくはSTRDATAのない"{0}"です
+    zhs: |-
+      缺少PRINTDATA系列命令或STRDATA系列命令对应的{0}
+    en: |-
+      Missing corresponding PRINTDATA-type or STRDATA-type instruction for {0}
+
+  - id: MissingTrycalllist
+    lang_cs: 2694
+    zhs_xml: 628
+    eng_xml: 631
+    args: 1
+    status: wired
+    used_at: stmt/BlockChecker.kt closeMessage 的「LangKey.MissingTrycalllist」（ENDFUNC 空栈/错配）
+    ja: |-
+      対応するTRYCALLLIST系命令のない"{0}"です
+    zhs: |-
+      缺少TRYCALLLIST系列命令对应的{0}
+    en: |-
+      Missing corresponding TRYCALLLIST-type instruction for "{0}"
+
+  - id: MissingNoskip
+    lang_cs: 2714
+    zhs_xml: 633
+    eng_xml: 636
+    args: 1
+    status: wired
+    used_at: stmt/BlockChecker.kt closeMessage 的「LangKey.MissingNoskip」（ENDNOSKIP 空栈/错配）
+    ja: |-
+      対応するNOSKIP系命令のない"{0}"です
+    zhs: |-
+      缺少NOSKIP系列命令对应的{0}
+    en: |-
+      Missing corresponding NOSKIP-type instruction for "{0}"
+
+  # ---------------------------------------------------------------------
+  # 四、行解析族（本轮只登记键与行号，接线归 L06 面）
+  # ---------------------------------------------------------------------
+  - id: CanNotInterpretSharpLine
+    lang_cs: 2354
+    zhs_xml: 543
+    eng_xml: 546
+    args: 0
+    status: registered
+    used_at: lexer/LexicalAnalyzer.kt parseSharpLine 的「解釈できない#行です」（# 行关键字为空；键接线待组长）
+    ja: |-
+      解釈できない#行です
+    zhs: |-
+      解析#行失败
+    en: |-
+      Failed to interpret # line
+
+  - id: InvalidCharacterAfterInstruction1
+    lang_cs: 2878
+    zhs_xml: 674
+    eng_xml: 677
+    args: 1
+    status: registered
+    used_at: stmt/LineParser.kt splitArgs 的「指令后跟随全角空格，但 SystemAllowFullSpace 已关闭」（原版给的是「要把该配置打开」那条文案；键接线待组长）
+    ja: |-
+      命令で行が始まっていますが、命令の直後に半角スペース・タブ以外の文字が来ています(この警告はシステムオプション「{0}」により無視できます)
+    zhs: |-
+      以命令开始的行在命令后有半角空格和水平制表符以外的文字(此警告可以用系统配置「{0}」来无视)
+    en: |-
+      Line begins with an instruction, but there are characters other than half-width space or tab following after it (This error can be ignored by using "Include full-width space in whitespace" system option)
+
+  - id: InvalidCharacterAfterInstruction2
+    lang_cs: 2882
+    zhs_xml: 675
+    eng_xml: 678
+    args: 0
+    status: registered
+    used_at: stmt/LineParser.kt splitArgs 的「指令后跟随非法字符」（其余非法字符；键接线待组长）
+    ja: |-
+      命令で行が始まっていますが、命令の直後に半角スペース・タブ以外の文字が来ています
+    zhs: |-
+      以命令开始的行在命令后有半角空格和水平制表符以外的文字
+    en: |-
+      Line begins with an instruction, but there are characters other than half-width space or tab following after it
+
+  - id: Use2EqualToAssign
+    lang_cs: 2890
+    zhs_xml: 677
+    eng_xml: 680
+    args: 0
+    status: wired
+    used_at: stmt/LineParser.kt parseAssignmentLine 的「LangKey.Use2EqualToAssign.renderZhs」（赋值行读出 == ⇒ level 0 提示后照常按 = 执行；spec: LogicalLineParser.cs:548-554）
+    ja: |-
+      代入演算子に"=="が使われています
+    zhs: |-
+      使用”==”作为赋值运算符
+    en: |-
+      Assignment statement is using relational operator "=="
+
+  # ---------------------------------------------------------------------
+  # 五、用户变量名族（私有 #DIM：同函数体重名 + 名字语法闸，IdentifierDictionary.cs:340-392）
+  # 口径见 specs/loader.md D.8.2（重名约定）与 P4（挖虫波第三批）。
+  # ---------------------------------------------------------------------
+  - id: VarNameAlreadyUsed
+    lang_cs: 2854
+    zhs_xml: 668
+    eng_xml: 671
+    args: 1
+    status: wired
+    used_at: frontend/Symbols.kt LabelTable.scanLabels 的 DIM/DIMS 分支「LangKey.VarNameAlreadyUsed.renderZhs」（seenDims 命中后到者）
+    ja: |-
+      変数名"{0}"は既に使用されています
+    zhs: |-
+      变量名"{0}"已经被使用
+    en: |-
+      Variable name "{0}" is already in use
+
+  - id: VarStartedHalfDigit
+    lang_cs: 3702
+    zhs_xml: 879
+    eng_xml: 882
+    args: 1
+    status: wired
+    used_at: frontend/Symbols.kt checkUserPrivateVarName 的「LangKey.VarStartedHalfDigit.renderZhs」（第三条闸，数字开头）
+    ja: |-
+      変数名"{0}"が半角数字から始まっています
+    zhs: |-
+      变量名"{0}"以半角数字开始
+    en: |-
+      Variable name "{0}" starts with a half-width digit
+
+  # ---------------------------------------------------------------------
+  # 六、语句名族（PRINT / PRINTDATA 的后缀不变量）
+  # 两条都是 Instruction 构造尾部的内部不变量断言：名字来自 code.ToString()
+  # （FunctionIdentifier.cs:3814 / :3819），用户写的非法后缀在 funcDic 查表阶段
+  # 就已失败、走不到这里。原版抛 ExeEE ⇒ 属「开发者可见诊断」（ADR-005 例外第 1 条）。
+  # ---------------------------------------------------------------------
+  - id: AbnormalPrint
+    lang_cs: 2250
+    zhs_xml: 517
+    eng_xml: 520
+    args: 0
+    status: wired
+    used_at: stmt/LineParser.kt parseInstructionLine 的「LangKey.AbnormalPrint.render()」（PRINT 家族后缀残留 → StmtParseException；FunctionIdentifier.cs:167-170）
+    ja: |-
+      PRINT異常
+    zhs: |-
+      PRINT异常
+    en: |-
+      Abnormal PRINT
+
+  - id: AbnormalPrintdata
+    lang_cs: 2254
+    zhs_xml: 518
+    eng_xml: 521
+    args: 0
+    status: registered
+    used_at: 待接线（PRINTDATA 走 OpcodeTable 别名表，非法后缀落不到该断言 ⇒ 无对应抛点可锚；FunctionIdentifier.cs:264-267）
+    ja: |-
+      PRINTDATA異常
+    zhs: |-
+      PRINTDATA异常
+    en: |-
+      Abnormal PRINTDATA
+
+  # ---------------------------------------------------------------------
+  # 七、运行期下标 / 运算符 / XML / 标签族（lane errtext4 2026-11-05 收编入本通道）
+  # 这 14 条的运行期文案此前只活在 core/vars/VarErrorText.kt、core/err/OperatorErrorText.kt、
+  # core/fn/XmlMethods.kt 的字面量层，本表与 LangKey 都不认（逐键 grep `id: <键>` 0 命中）。
+  # 14 条**两张 zhs 表逐字同文**（下面逐条给出两表行号），故不受「两表不同文一律不动」的裁定影响。
+  # status: wired = 本波已把抛出点接到 LangKey；registered = 键与本表已登记、
+  #           抛出点仍走上面那三个 sibling 文件里的字面量（同形由 LangKeySourceTableTest 钉）。
+  # ---------------------------------------------------------------------
+
+  # 两张 zhs 表同文：reference 内嵌表 :286 / 语料根表 :236；
+  # 抛出点 OperatorMethodManager.cs:134（DivIntInt）、:153（ModIntInt），官方 0 占位符。
+  - id: DivideByZero
+    lang_cs: 1326
+    zhs_xml: 286
+    eng_xml: 289
+    zhs_root_xml: 236
+    args: 0
+    status: registered
+    used_at: err/OperatorErrorText.kt 的「DIVIDE_BY_ZERO_TEXT」（expr/Expr.kt 与 code/Vm.kt 两通道共用）
+    ja: |-
+      0による除算が行なわれました
+    zhs: |-
+      除数为0的除法运算
+    en: |-
+      A division by zero has been attempted
+
+  # 两张 zhs 表同文：reference :284 / 语料根 :486；抛出点 OperatorMethodManager.cs:99（MultStrInt 负实参支）。
+  - id: MultiplyNegativeToStr
+    lang_cs: 1318
+    zhs_xml: 284
+    eng_xml: 287
+    zhs_root_xml: 486
+    args: 1
+    status: registered
+    used_at: err/OperatorErrorText.kt 的「MULTIPLY_NEGATIVE_TO_STR_TEMPLATE」
+    ja: |-
+      文字列に負の値({0})を乗算しようとしました
+    zhs: |-
+      字符串无法与负值({0})进行相乘运算
+    en: |-
+      Attempted to multiply a string negative amount of times({0})
+
+  # 两张 zhs 表同文：reference :285 / 语料根 :485；抛出点 OperatorMethodManager.cs:103（判式 >= 10000，10000 本身走这一支）。
+  - id: Multiply10kToStr
+    lang_cs: 1322
+    zhs_xml: 285
+    eng_xml: 288
+    zhs_root_xml: 485
+    args: 1
+    status: registered
+    used_at: err/OperatorErrorText.kt 的「MULTIPLY_10K_TO_STR_TEMPLATE」
+    ja: |-
+      文字列に10000以上の値({0})を乗算しようとしました
+    zhs: |-
+      字符串无法与超过10000的值({0})进行相乘运算
+    en: |-
+      Attempted to multiply a string more than 10000 times({0})
+
+  # 两张 zhs 表同文：reference :287 / 语料根 :770；{0} = 函数名、{1} = 解析器消息。注意中文形带「的」。
+  - id: XmlGetError
+    lang_cs: 1330
+    zhs_xml: 287
+    eng_xml: 290
+    zhs_root_xml: 770
+    args: 2
+    status: registered
+    used_at: fn/XmlMethods.kt 的「xmlParseErrorMessage」（非本路文件面，字面量同形由 LangKeySourceTableTest 钉）
+    ja: |-
+      XML_GET関数:"{0}"の解析エラー:{1}
+    zhs: |-
+      XML_GET函数:"{0}"的解析错误:{1}
+    en: |-
+      XML_GET:Interpreted error of "{0}":{1}
+
+  # 两张 zhs 表同文：reference :288 / 语料根 :771；XPath 支，`XPath` 与引号之间没有空格。
+  - id: XmlGetPathError
+    lang_cs: 1334
+    zhs_xml: 288
+    eng_xml: 291
+    zhs_root_xml: 771
+    args: 2
+    status: registered
+    used_at: fn/XmlMethods.kt 的「xmlPathErrorMessage」（同上）
+    ja: |-
+      XML_GET関数:XPath"{0}"の解析エラー:{1}
+    zhs: |-
+      XML_GET函数:XPath"{0}"的解析错误:{1}
+    en: |-
+      XML_GET:Interpreted error of XPath"{0}":{1}
+
+  # 两张 zhs 表同文：reference :346 / 语料根 :774；抛出点 VariableParser.cs:178（0 维变量带下标）。
+  - id: ZeroDVarHasArg
+    lang_cs: 1566
+    zhs_xml: 346
+    eng_xml: 349
+    zhs_root_xml: 774
+    args: 1
+    status: wired
+    used_at: vars/VarErrorText.kt 的「zeroDVarHasArg」（→ LangKey.ZeroDVarHasArg.renderZhs，本层不再存第二份字面量）
+    ja: |-
+      配列でない変数"{0}"を引数付きで呼び出しています
+    zhs: |-
+      变量"{0}"不是数组却带了一个参数
+    en: |-
+      Variable that is not an array "{0}" is being called with an argument
+
+  # 两张 zhs 表同文：reference :360 / 语料根 :568；抛出点 CharaVariableToken.cs:60/64/68。
+  # zhs 把 ja 的「第{1}引数」误译成「第{1}个变量」，ADR-005 原样保留。
+  - id: OoRCharaVarArg
+    lang_cs: 1622
+    zhs_xml: 360
+    eng_xml: 363
+    zhs_root_xml: 568
+    args: 3
+    status: wired
+    used_at: vars/VarErrorText.kt 的「oorCharaVarArg」→ vars/VariableStore.kt 的角色位闸「throw oorCharaVarArg」（模板住在 LangKey）
+    ja: |-
+      キャラクタ配列変数"{0}"の第{1}引数({2})はキャラ登録番号または配列の範囲外です
+    zhs: |-
+      角色数组变量"{0}"的第{1}个变量({2})超出角色登记编号的最大范围
+    en: |-
+      Character array variable "{0}" at the {1} argument ({2}) is out of the range of the character registration number 
+
+  # 两张 zhs 表同文：reference :361 / 语料根 :575；实参依次「语句名、1 基参数号、端点值、变量名」。
+  # 抛出点 UserDefinedVariableToken.cs:95/99、ReferenceToken.cs:83/87、CharaVariableToken.cs:77/81；
+  # VARSET 语句的喂值见 VariableEvaluator.cs:275/:303（"VARSET", 3L, 4L），
+  # 函数侧（SUMARRAY/MATCH/MAXARRAY/FINDELEMENT/INRANGEARRAY/STRJOIN）各带自己的语句名与参数号，
+  # 移植侧那一路已在 fn/VarMethods.kt:622 的 arrayRangeOoR 里接好（非本路文件面）。
+  # 照抄纪律：ja 在 {0} 外带引号、zhs 不带，两形不同 ⇒ 屏上取 zhs 形。
+  - id: OoRInstructionArg
+    lang_cs: 1626
+    zhs_xml: 361
+    eng_xml: 364
+    zhs_root_xml: 575
+    args: 4
+    status: wired
+    used_at: vars/VarErrorText.kt 的「oorInstructionArg」→ vars/VariableStore.kt 的「checkRangeEndpoints」与「throw oorInstructionArg」（区间起点/终点两闸）+ sem/StatementExecutor.kt 的「execVarSetFlat」「execVarSet」负端点双闸（lane negrange 退役 VARSET 区间起点负值自造串族）+ vars/VariableStore.kt 的「isArrayRangeValid」端点两闸（IsArrayRangeValid 移植镜像，参数号默认 1/2）
+    ja: |-
+      "{0}"命令の第{1}引数({2})は配列"{3}"の範囲外です
+    zhs: |-
+      {0}命令的第{1}个参数({2})超出数组"{3}"的范围
+    en: |-
+      The {1} argument of "{0}" instruction ({2}) is out of the range of the "{3}" array
+
+  # 两张 zhs 表同文：reference :362 / 语料根 :329；实参 = 「维数、变量名」，顺序与 ja 同为「维数在前」。
+  # 抛出点 ReferenceToken.cs:40（REF，无参 GetLength 且 rank != 1）、UserDefinedVariableToken.cs:46（用户变量同形态）。
+  # 角色变量是**另外的键**：GetSizeCharaVarWithoutDim（CharaVariableToken.cs:40）、
+  # 0 维角色变量 GetSize0DCharaVar（:38）⇒ 不许与本条混用。
+  - id: GetSizeDimError
+    lang_cs: 1630
+    zhs_xml: 362
+    eng_xml: 365
+    zhs_root_xml: 329
+    args: 2
+    status: wired
+    used_at: vars/VarErrorText.kt 的「getSizeDimError」→ vars/VariableStore.kt 的「throw getSizeDimError」（getLength 的 REF 支与用户变量支）
+    ja: |-
+      {0}次元配列型変数"{1}"の長さを取得しようとしました
+    zhs: |-
+      试图获取一个{0}维数组变量"{1}"的长度
+    en: |-
+      Attempted to get the size of a {0} dimensional array variable "{1}"
+
+  # 两张 zhs 表同文：reference :358 / 语料根 :328；抛出点 CharaVariableToken.cs:40（角色变量、元素维数 > 1）。
+  # 与 GetSizeDimError 是不同键（角色族单独一条），不许混用。
+  - id: GetSizeCharaVarWithoutDim
+    lang_cs: 1614
+    zhs_xml: 358
+    eng_xml: 361
+    zhs_root_xml: 328
+    args: 2
+    status: wired
+    used_at: vars/VarErrorText.kt 的「getSizeCharaVarWithoutDim」→ vars/VariableStore.kt 的「getSizeCharaVarWithoutDim(rank, def.name)」（getLength 注册表支，角色变量侧）
+    ja: |-
+      {0}次元配列型のキャラ変数"{1}"の長さを次元を指定せずに取得しようとしました
+    zhs: |-
+      试图获取一个{0}维角色变量"{1}"的长度
+    en: |-
+      Attempted to get the size of a {0} dimensional character variable "{1}" without specifying the dimension
+
+  # 两张 zhs 表同文：reference :357 / 语料根 :325；抛出点 CharaVariableToken.cs:38（0 维角色变量取整体长度）。
+  - id: GetSize0DCharaVar
+    lang_cs: 1610
+    zhs_xml: 357
+    eng_xml: 360
+    zhs_root_xml: 325
+    args: 1
+    status: wired
+    used_at: vars/VarErrorText.kt 的「getSize0DCharaVar」→ vars/VariableStore.kt 的「getSize0DCharaVar(def.name)」（getLength 注册表支，0 维角色变量）
+    ja: |-
+      配列型でないキャラクタ変数"{0}"の長さを取得しようとしました
+    zhs: |-
+      试图获取一个非数组角色变量"{0}"的长度
+    en: |-
+      Attempted to get the size of a non-array character variable "{0}"
+
+  # 两张 zhs 表同文：reference :364 / 语料根 :585；抛出点 UserDefinedVariableToken.cs:62/66/70、:78/82/86、
+  # LocalVariableToken.cs:43、ReferenceToken.cs:66/70/74、VariableData.cs:85/177。
+  - id: OoRVarArg
+    lang_cs: 1638
+    zhs_xml: 364
+    eng_xml: 367
+    zhs_root_xml: 585
+    args: 3
+    status: wired
+    used_at: vars/VarErrorText.kt 的「oorVarArg」→ vars/VariableStore.kt 的「throw oorVarArg」（逐维下标闸；模板住在 LangKey）
+    ja: |-
+      配列変数"{0}"の第{1}引数({2})は配列の範囲外です
+    zhs: |-
+      数组变量"{0}"的第{1}参数({2})超出数组范围
+    en: |-
+      Array variable "{0}" at the {1} argument ({2}) is out of the range of the array
+
+  # 两张 zhs 表同文：reference :365 / 语料根 :272；抛出点 ReferenceToken.cs:36/49/62/120、VariableData.cs:2329/2338。
+  - id: EmptyRefVar
+    lang_cs: 1642
+    zhs_xml: 365
+    eng_xml: 368
+    zhs_root_xml: 272
+    args: 1
+    status: wired
+    used_at: vars/VarErrorText.kt 的「emptyRefVar」（→ LangKey 渲染）
+    ja: |-
+      参照型変数"{0}"は何も参照していません
+    zhs: |-
+      引用类型变量"{0}"缺少引用对象
+    en: |-
+      Reference type variable "{0}" does not refer to anything
+
+  # 两张 zhs 表同文：reference :540 / 语料根 :513；抛出点 FunctionIdentifier.cs:3703（JUMP 系查不到标签 ⇒ CodeEE）、
+  # :3668（同模板的 warn 支）。`$` 是文案本体（ERB 标签 sigil），写在引号之后、{0} 之前。
+  # Kotlin 侧必须转义成 `\${0}`：漏转义时 `${0}` 被当模板表达式，屏上塌成「标签名"0"」
+  # ——core/code/Vm.kt 的旧字面量正是这个缺陷（本波接 LangKey 修掉），
+  # core/proc/ProcessRuntime.kt:3568 同形仍在，非本路文件面 ⇒ 交组长接线。
+  - id: NotDefinedLabelName
+    lang_cs: 2342
+    zhs_xml: 540
+    eng_xml: 543
+    zhs_root_xml: 513
+    args: 1
+    status: wired
+    used_at: err/LabelErrorText.kt 的「notDefinedLabelName」→ code/Vm.kt 的动态 JUMP 支「notDefinedLabelName」（实参 = 名字原文未大写化）
+    ja: |-
+      指定されたラベル名"${0}"は現在の関数内に存在しません
+    zhs: |-
+      当前函数中不存在指定的标签名"${0}"
+    en: |-
+      Specified label name "${0}" does not exist in the current function
+
+  # ---------------------------------------------------------------------
+  # 八、运行期变量形态 / 参数类型族（lane negrange 2026-11-05「区间·下标·越界族自造文案清零」收编）
+  # 8 枚**两张 zhs 表逐字同文**（逐条回读两表核对；行号分别记 zhs_xml = reference 内嵌表、
+  # zhs_root_xml = 语料根表）。官方通道都是**运行期 CodeEE**，与移植侧抛出点同通道 ⇒ 可接。
+  # ---------------------------------------------------------------------
+
+  # 两张 zhs 表同文：reference :907 / 语料根 :415；抛出点 FunctionMethodCreator.cs:395/:403/:425/:433/:762/:782/:816/:926。
+  # zhs 形不带引号且实参紧贴文案（`X不是变量`）⇒ 退役的自造形「X 不是变量」多一个半角空格，本波接线即换屏。
+  - id: IsNotVar
+    lang_cs: 3814
+    zhs_xml: 907
+    eng_xml: 910
+    zhs_root_xml: 415
+    args: 1
+    status: wired
+    used_at: fn/VarWriteMethods.kt requireWritableVarRef 的「LangKey.IsNotVar.renderZhs」（VarRef 落空位与常量位两支，官方 :760-763 同键）
+    ja: |-
+      "{0}"が変数ではありません
+    zhs: |-
+      {0}不是变量
+    en: |-
+      {0} is not variable
+
+  # 两张 zhs 表同文：reference :908 / 语料根 :411；抛出点 FunctionMethodCreator.cs:399/:768/:8569。
+  # 官方缺陷复刻（ADR-005）：SETVAR 的 :766-777 把 IsNotInt/IsNotStr 用反 —— 字符串变量收到非字符串值报本条。
+  - id: IsNotInt
+    lang_cs: 3818
+    zhs_xml: 908
+    eng_xml: 911
+    zhs_root_xml: 411
+    args: 1
+    status: wired
+    used_at: fn/VarWriteMethods.kt SETVAR 字符串目标支的「LangKey.IsNotInt.renderZhs」（照抄官方的反置）
+    ja: |-
+      "{0}"が整数型ではありません
+    zhs: |-
+      {0}不是整型
+    en: |-
+      {0} is not integer
+
+  # 两张 zhs 表同文：reference :909 / 语料根 :413；抛出点 FunctionMethodCreator.cs:429/:776/:8611。
+  # 与 IsNotInt 是官方反置的另一半。
+  - id: IsNotStr
+    lang_cs: 3822
+    zhs_xml: 909
+    eng_xml: 912
+    zhs_root_xml: 413
+    args: 1
+    status: wired
+    used_at: fn/VarWriteMethods.kt SETVAR 整数目标支的「LangKey.IsNotStr.renderZhs」（照抄官方的反置）
+    ja: |-
+      "{0}"が文字列型ではありません
+    zhs: |-
+      {0}不是字符串型
+    en: |-
+      {0} is not string
+
+  # 两张 zhs 表同文：reference :295 / 语料根 :639；抛出点 FunctionMethodCreator.cs:826（VARSETEX 字符串目标收到非字符串值）。
+  # 旧自造串与本条逐字同形（屏上不变），本波只是收进通道、抛出点不再存第二份字面量。
+  - id: SetStrToInt
+    lang_cs: 1362
+    zhs_xml: 295
+    eng_xml: 298
+    zhs_root_xml: 639
+    args: 1
+    status: wired
+    used_at: fn/VarWriteMethods.kt VARSETEX 字符串支值位类型闸的「LangKey.SetStrToInt.renderZhs」
+    ja: |-
+      文字列型でない変数"{0}"に文字列型を代入しようとしました
+    zhs: |-
+      尝试将字符串赋值给非字符串变量"{0}"
+    en: |-
+      Attempted to set string to Non-string variable "{0}"
+
+  # 两张 zhs 表同文：reference :296 / 语料根 :638；抛出点 FunctionMethodCreator.cs:863（VARSETEX 整数目标）
+  # 与 VariableEvaluator.cs:321（CVARSET 非整数目标，`SetIntToStr` 形）。同上一条，屏上不变。
+  - id: SetIntToStr
+    lang_cs: 1366
+    zhs_xml: 296
+    eng_xml: 299
+    zhs_root_xml: 638
+    args: 1
+    status: wired
+    used_at: fn/VarWriteMethods.kt VARSETEX 整数支值位类型闸的「LangKey.SetIntToStr.renderZhs」
+    ja: |-
+      整数型でない変数"{0}"に整数値を代入しようとしました
+    zhs: |-
+      尝试将整数赋值给非整数型变量"{0}"
+    en: |-
+      Attempted to set integer to Non-integer variable "{0}"
+
+  # 两张 zhs 表同文：reference :349 / 语料根 :481；抛出点 VariableNoArgTerm.cs:19-69
+  # （GetIntValue/GetStrValue/SetValue 各族 —— 需要下标的变量被整体读写）。
+  # 实参 = Identifier.Name（裸变量名），移植侧喂 VarRef.name、不是引用写法原文。
+  # 退役自造串「变量 X 的下标被省略」（fn/VarWriteMethods.kt requireWritableVarRef 的无下标闸）。
+  - id: MissingVarArg
+    lang_cs: 1578
+    zhs_xml: 349
+    eng_xml: 352
+    zhs_root_xml: 481
+    args: 1
+    status: wired
+    used_at: fn/VarWriteMethods.kt requireWritableVarRef 的「LangKey.MissingVarArg.renderZhs」（无下标闸，喂 ref.name）
+    ja: |-
+      変数"{0}"に必要な引数が不足しています
+    zhs: |-
+      变量"{0}"缺少必要的参数
+    en: |-
+      Variable "{0}" is missing required arguments
+
+  # 两张 zhs 表同文：reference :363 / 语料根 :330；抛出点 ReferenceToken.cs:55、UserDefinedVariableToken.cs:55、
+  # LocalVariableToken.cs:36、VariableData.cs:165/:265/:382/:695/:759 —— `VARSIZE X, N` 的 N 超出变量维数。
+  # 与 GetSizeDimError（:1630，「多维变量不带维号取整体长度」）是**不同键**，不许混用。
+  # 退役自造串「变量 X 不存在第 N 维（维度 R）」（REF 支；float/CSV 两支证据未闭合，登记文末附录）。
+  - id: GetSizeNonExistDim
+    lang_cs: 1634
+    zhs_xml: 363
+    eng_xml: 366
+    zhs_root_xml: 330
+    args: 1
+    status: wired
+    used_at: vars/VarErrorText.kt 的「getSizeNonExistDim」→ vars/VariableStore.kt 的「throw getSizeNonExistDim」（getLength 的 REF 超维支）+ vars/VarDef.kt 的「getSizeNonExistDim」length 超维支（2026-11-05 lane errtext6 接线，退役变量不存在第 N 维自造串；注册表支与用户变量支同源）
+    ja: |-
+      配列型変数"{0}"の存在しない次元の長さを取得しようとしました
+    zhs: |-
+      试图获取一个不存在该维度的数组变量"{0}"的长度
+    en: |-
+      Attempted to get the size of the non-existing dimension of an array variable "{0}"
+
+  # 两张 zhs 表同文：reference :355 / 语料根 :91；抛出点 VariableToken.cs:212-216
+  # （`GetArray()` 的 IsCharacterData 支 —— VARSETEX 二/三维整块通道拿到角色变量即炸这一条）。
+  # 退役自造串「函数 X：变量 Y 是角色变量，不能整体操作」。
+  - id: CallCharaVarAsVar
+    lang_cs: 1602
+    zhs_xml: 355
+    eng_xml: 358
+    zhs_root_xml: 91
+    args: 1
+    status: wired
+    used_at: fn/VarWriteMethods.kt requirePlainArray 的「LangKey.CallCharaVarAsVar.renderZhs」（喂 ref.name）
+    ja: |-
+      キャラクタ変数"{0}"を非キャラ変数として呼び出しました
+    zhs: |-
+      角色变量"{0}"被当作非角色变量调用
+    en: |-
+      Character variable "{0}" is called as a non-character variable
+
+  # ---------------------------------------------------------------------
+  # 九、语句族运行期文案（lane errtext6 2026-11-05「negrange 需接线清单」收编）
+  # 33 枚**两张 zhs 表逐字同文**（逐条回读两表核对行号与文本）。移植侧抛出点本就逐字
+  # 等于官方 zhs 展开形（negrange 普查记作「官方同形字面量」）⇒ 判「不改-同形」：
+  # 键进表进枚举、产品字面量不动，屏上零变化；漂移由
+  # core-sem/StatementFamilyErrorTextDriftTest 装行级钉（needle = 产品 throw 行的字面量原文）。
+  # 唯一例外 TransparentUnsupported：vars/UserVariables.kt 的装载期折叠支原是**自造串**
+  # （还漏了 C# 行号上屏），本波接线换官方串。
+  # used_at 的行号 = 2026-11-05 写入日读数，产品行漂移由 drift 闸当场抓红；
+  # 旧树/扁平双路的 needle 相同（一处只钉一次，两条生产行都命中同一 needle）。
+  # ---------------------------------------------------------------------
+
+  # 抛点 VariableEvaluator.cs:712/:781；移植 = StatementExecutor execArrayShift（旧树 :2369 / 扁平 :4401）。
+  - id: OoRArrayShift
+    lang_cs: 1418
+    zhs_xml: 309
+    eng_xml: 312
+    zhs_root_xml: 564
+    args: 2
+    status: registered
+    used_at: sem/StatementExecutor.kt execArrayShiftFlat 的「命令ARRAYSHIFT的第四个参数」+ execArrayShift 同形（旧树支，未走通道，drift 闸钉同形）
+    ja: |-
+      命令ARRAYSHIFTの第4引数({0})が配列"{1}"の範囲を超えています
+    zhs: |-
+      命令ARRAYSHIFT的第四个参数({0})超出了数组"{1}"的范围
+    en: |-
+      The fourth argument of the ARRAYSHIFT instruction ({0}) is out of range of the "{1}" array
+
+  # 抛点 VariableEvaluator.cs:852；移植 = execArrayRemove（旧树 :2432 / 扁平 :4466）。
+  - id: OoRArrayRemove
+    lang_cs: 1422
+    zhs_xml: 310
+    eng_xml: 313
+    zhs_root_xml: 563
+    args: 2
+    status: registered
+    used_at: sem/StatementExecutor.kt execArrayRemoveFlat 的「命令ARRAYREMOVE的第二个参数」+ execArrayRemove 同形（同上）
+    ja: |-
+      命令ARRAYREMOVEの第2引数({0})が配列"{1}"の範囲を超えています
+    zhs: |-
+      命令ARRAYREMOVE的第二个参数({0})超出了数组"{1}"的范围
+    en: |-
+      The second argument of the ARRAYREMOVE instruction ({0}) is out of range of the "{1}" array
+
+  # 抛点 VariableEvaluator.cs:900/:925；移植 = execArraySort（旧树 :2476 / 扁平 :4507）。
+  - id: OoRArraySort
+    lang_cs: 1426
+    zhs_xml: 311
+    eng_xml: 314
+    zhs_root_xml: 565
+    args: 2
+    status: registered
+    used_at: sem/StatementExecutor.kt execArraySortFlat 的「命令ARRAYSORT的第三参数」+ execArraySort 同形（同上）
+    ja: |-
+      命令ARRAYSORTの第3引数({0})が配列"{1}"の範囲を超えています
+    zhs: |-
+      命令ARRAYSORT的第三参数({0})超出了数组"{1}"的范围
+    en: |-
+      The third argument of the ARRAYSORT instruction ({0}) is out of range of the "{1}" array
+
+  # 抛点 VariableEvaluator.cs:336（SetValueAllEachChara 元素下标支，喂 name、"2"、num）；
+  # 移植 = execCVarSet（旧树 :2187 / 扁平 :4260）。与 OoRCharaVarArg（:1622，角色位越界）是**不同键**，不许混用。
+  - id: OoRCharaVar
+    lang_cs: 1414
+    zhs_xml: 308
+    eng_xml: 311
+    zhs_root_xml: 567
+    args: 3
+    status: registered
+    used_at: sem/StatementExecutor.kt execCVarSetFlat 的「角色数组变量」+ execCVarSet 同形（同上）
+    ja: |-
+      キャラクタ配列変数"{0}"の第{1}引数({2})は配列の範囲外です
+    zhs: |-
+      角色数组变量"{0}"的第{1}参数({2})超出数组范围
+    en: |-
+      Character array variable "{0}" at the {1} argument ({2}) is out of range of the array
+
+  # 抛点 Process.cs:1619/:1666/:1683（{0} = 语句名原文）；移植 = 三处「仅对1位数组」支。
+  - id: IsUsableOnly1DVar
+    lang_cs: 3074
+    zhs_xml: 723
+    eng_xml: 726
+    zhs_root_xml: 417
+    args: 1
+    status: registered
+    used_at: sem/StatementExecutor.kt execArrayShiftFlat/execArrayRemoveFlat/execArraySortFlat 的「仅对1位数组以及数组型角色变量有效」（三支同名串，旧树三支同形）
+    ja: |-
+      {0}は1次元配列および配列型キャラクタ変数のみに対応しています
+    zhs: |-
+      {0}仅对1位数组以及数组型角色变量有效
+    en: |-
+      {0} supports only one-dimensional arrays and character array variables
+
+  # 抛点 FunctionIdentifier.cs:2597；移植 = execAwait（旧树 :1129 / 扁平 :3597）。
+  - id: AwaitArgIsNegative
+    lang_cs: 2294
+    zhs_xml: 528
+    eng_xml: 531
+    zhs_root_xml: 83
+    args: 1
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「AWAIT命令:指定了一个负值」+ execInstruction 同形
+    ja: |-
+      AWAIT命令:負の値({0})が指定されました
+    zhs: |-
+      AWAIT命令:指定了一个负值({0})
+    en: |-
+      AWAIT instruction has been assigned with a negative value ({0})
+
+  # 移植喂 `${v}ms`、模板 `({0}ms)` —— ms 是模板静态字，展开形与产品逐字一致。
+  - id: AwaitArgIsOver10Seconds
+    lang_cs: 2298
+    zhs_xml: 529
+    eng_xml: 532
+    zhs_root_xml: 84
+    args: 1
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「AWAIT命令:指定了一个超过10秒的值」+ execInstruction 同形
+    ja: |-
+      AWAIT命令:10秒以上の待機時間({0}ms)が指定されました
+    zhs: |-
+      AWAIT命令:指定了一个超过10秒的值({0}ms)
+    en: |-
+      AWAIT instruction has been assigned with time of 10 seconds or more ({0}ms)
+
+  # 抛点 Process.cs:1333；移植 = execSaveData（旧树 :1156 / 扁平 :3622）。
+  - id: SavedataArgIsNegative
+    lang_cs: 3022
+    zhs_xml: 710
+    eng_xml: 713
+    zhs_root_xml: 634
+    args: 1
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「对SAVEDATA的参数使用负值」+ execInstruction 同形
+    ja: |-
+      SAVEDATAの引数に負の値({0})が指定されました
+    zhs: |-
+      对SAVEDATA的参数使用负值({0})
+    en: |-
+      A negative value has been specified to SAVEDATA ({0})
+
+  - id: TooLargeSavedataArg
+    lang_cs: 3026
+    zhs_xml: 711
+    eng_xml: 714
+    zhs_root_xml: 673
+    args: 1
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「SAVEDATA的参数值过大」+ execInstruction 同形
+    ja: |-
+      SAVEDATAの引数({0})が大きすぎます
+    zhs: |-
+      SAVEDATA的参数值过大({0})
+    en: |-
+      Argument given to SAVEDATA ({0}) is too big
+
+  # 抛点 Process.cs:1342（原版直取 .Text，0 占位符）；zhs「SAVEDATA对的提示文本」为官方原译，照抄（ADR-005）。
+  - id: SavetextContainNewLineCharacter
+    lang_cs: 3030
+    zhs_xml: 712
+    eng_xml: 715
+    zhs_root_xml: 635
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「SAVEDATA对的提示文本使用了换行符号」+ execInstruction 同形
+    ja: |-
+      SAVEDATAのセーブテキストに改行文字が与えられました（セーブデータが破損するため改行文字は使えません）
+    zhs: |-
+      SAVEDATA对的提示文本使用了换行符号（由于会导致存档损坏，不能使用换行符）
+    en: |-
+      SAVEDATA save text contains a new line character (Save data will get corrupted)
+
+  # 抛点 Process.cs:1846；移植 = execLoadData。
+  - id: LoaddataArgIsNegative
+    lang_cs: 3086
+    zhs_xml: 726
+    eng_xml: 729
+    zhs_root_xml: 441
+    args: 1
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「LOADDATA的参数被指定为负数」+ execInstruction 同形
+    ja: |-
+      LOADDATAの引数に負の値({0})が指定されました
+    zhs: |-
+      LOADDATA的参数被指定为负数({0})
+    en: |-
+      A negative value has been specified to LOADDATA (" + target.ToString() + ")
+
+  - id: TooLargeLoaddataArg
+    lang_cs: 3090
+    zhs_xml: 727
+    eng_xml: 730
+    zhs_root_xml: 672
+    args: 1
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「LOADDATA的参数值」+ execInstruction 同形
+    ja: |-
+      LOADDATAの引数({0})が大きすぎます
+    zhs: |-
+      LOADDATA的参数值({0})过大
+    en: |-
+      Argument given to LOADDATA ({0}) is too big
+
+  # 抛点 FunctionIdentifier.cs:1886（{0} = 实参序 i+3）；移植 = data/save/CharaFileIO.kt capture。
+  - id: OoRSavecharaArg
+    lang_cs: 2278
+    zhs_xml: 524
+    eng_xml: 527
+    zhs_root_xml: 580
+    args: 1
+    status: registered
+    used_at: data/save/CharaFileIO.kt 的「参数的值超出角色登记编号的范围」（同形）
+    ja: |-
+      SAVECHARAの第{0}引数の値がキャラ登録番号の範囲を超えています
+    zhs: |-
+      SAVECHARA第{0}参数的值超出角色登记编号的范围
+    en: |-
+      The value of the {0} SAVECHARA argument exceeds the range of character registration number
+
+  # 抛点 FunctionIdentifier.cs:1892；移植 = CharaFileIO capture 去重闸。
+  - id: DuplicateCharaNo
+    lang_cs: 2282
+    zhs_xml: 525
+    eng_xml: 528
+    zhs_root_xml: 248
+    args: 1
+    status: registered
+    used_at: data/save/CharaFileIO.kt 的「被多次指定」（同形）
+    ja: |-
+      同一のキャラ登録番号({0})が複数回指定されました
+    zhs: |-
+      同一个角色登记编号({0})被多次指定
+    en: |-
+      Identical character registration number ({0}) has been specified more than once
+
+  - id: OoRPickupcharaArg
+    lang_cs: 3014
+    zhs_xml: 708
+    eng_xml: 711
+    zhs_root_xml: 579
+    args: 2
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「命令PICKUPCHARA的第」+ execInstruction 同形（同形）
+    ja: |-
+      命令PICKUPCHARAの第{0}引数にキャラリストの範囲外の値({1})が与えられました
+    zhs: |-
+      命令PICKUPCHARA的第{0}个参数的值({1})超过角色列表的范围
+    en: |-
+      Argument number {0} at the PICKUPCHARA instruction has been given a value outside of the character list range ({1})
+
+  - id: RefUndefinedChara
+    lang_cs: 1458
+    zhs_xml: 319
+    eng_xml: 322
+    zhs_root_xml: 615
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「试图引用一个尚未定义的角色」+ execInstruction 同形（同形）
+    ja: |-
+      定義していないキャラクタを参照しようとしました
+    zhs: |-
+      试图引用一个尚未定义的角色
+    en: |-
+      Attempted to refer to an undefined character
+
+  - id: OoRForcekanaArg
+    lang_cs: 1114
+    zhs_xml: 233
+    eng_xml: 236
+    zhs_root_xml: 574
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「命令FORCEKANA的参数超过可指定范围」+ execInstruction 同形（同形）
+    ja: |-
+      命令FORCEKANAの引数が指定可能な範囲(0～3)を超えています
+    zhs: |-
+      命令FORCEKANA的参数超过可指定范围(0～3)
+    en: |-
+      The amount of allowed arguments for FORCEKANA instruction is out of range(0-3)
+
+  # 抛点 Process.cs:1793。
+  - id: AssertArgIs0
+    lang_cs: 3082
+    zhs_xml: 725
+    eng_xml: 728
+    zhs_root_xml: 75
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt execInstructionFlat 的「ASSERT的参数为0」+ execInstruction 同形（同形）
+    ja: |-
+      ASSERT文の引数が0です
+    zhs: |-
+      ASSERT的参数为0
+    en: |-
+      Argument in ASSERT statement is 0
+
+  - id: SetcolorArgLessThan0
+    lang_cs: 3058
+    zhs_xml: 719
+    eng_xml: 722
+    zhs_root_xml: 640
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt evalColorFlat 的「SETCOLOR的参数指定了小于0的值」+ evalColor 同形（同形）
+    ja: |-
+      SETCOLORの引数に0未満の値が指定されました
+    zhs: |-
+      SETCOLOR的参数指定了小于0的值
+    en: |-
+      SETCOLOR was given an argument less than 0
+
+  # zhs 表原文把「超过255」误写成「超过0」，两表同误、照抄（ADR-005）。
+  - id: SetcolorArgOver255
+    lang_cs: 3062
+    zhs_xml: 720
+    eng_xml: 723
+    zhs_root_xml: 641
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt evalColorFlat 的「SETCOLOR的参数指定了超过0的值」+ evalColor 同形（同形）
+    ja: |-
+      SETCOLORの引数に255を超える値が指定されました
+    zhs: |-
+      SETCOLOR的参数指定了超过0的值
+    en: |-
+      SETCOLOR was given an argument greater than 255
+
+  # 喂法 = ArgumentParser.cs:1750 两实参形；运行期 FunctionIdentifier.cs:752 只喂一个实参
+  # （.NET 在该支抛 FormatException，官方潜在缺陷）⇒ 移植屏上按两实参形，判界不动。
+  - id: ArgIsOoRBit
+    lang_cs: 2126
+    zhs_xml: 486
+    eng_xml: 489
+    zhs_root_xml: 55
+    args: 2
+    status: registered
+    used_at: sem/StatementExecutor.kt execBitFlat 的「超出范围(0-63)」+ execBit 同形（SETBIT/CLEARBIT/BITXOR 族，参数号硬编码 2）
+    ja: |-
+      第{0}引数({1})がビット範囲(0～63)を超えています
+    zhs: |-
+      第{0}参数({1})超出范围(0-63)
+    en: |-
+      {0} argument ({1}) is outside the range (0-63)"
+
+  # 抛点 FunctionIdentifier.cs:1691/:1700 —— 第 5 参支官方喂的就是 num2（start），移植照抄。
+  - id: OoRCvarsetArg
+    lang_cs: 2270
+    zhs_xml: 522
+    eng_xml: 525
+    zhs_root_xml: 571
+    args: 2
+    status: registered
+    used_at: sem/StatementExecutor.kt execCVarSetFlat 的「CVARSET命令的第4参数」与「CVARSET命令的第5参数」+ execCVarSet 同形
+    ja: |-
+      命令CVARSETの第{0}引数({1})がキャラクタの範囲外です
+    zhs: |-
+      CVARSET命令的第{0}参数({1})超出角色范围
+    en: |-
+      {0} argument of CVARSET instruction ({1}) is out of character range
+
+  # 抛点 Process.cs:1730/:1742；移植侧参数号硬编码 1/2（与官方实参一致）。
+  - id: ArraycopyArgIsNotArray
+    lang_cs: 2226
+    zhs_xml: 511
+    eng_xml: 514
+    zhs_root_xml: 73
+    args: 2
+    status: registered
+    used_at: sem/StatementExecutor.kt execArrayCopyFlat 的「不是一个数组变量」+ execArrayCopy 同形
+    ja: |-
+      ARRAYCOPY命令の第{0}引数"{1}"は配列変数ではありません
+    zhs: |-
+      ARRAYCOPY命令的第{0}参数"{1}"不是一个数组变量
+    en: |-
+      The {0} argument of the ARRAYCOPY instruction "{1}" is not an array variable
+
+  - id: ArraycopyArgIsCharaVar
+    lang_cs: 2230
+    zhs_xml: 512
+    eng_xml: 515
+    zhs_root_xml: 71
+    args: 2
+    status: registered
+    used_at: sem/StatementExecutor.kt execArrayCopyFlat 的「是一个角色变量(不支持)」+ execArrayCopy 同形
+    ja: |-
+      ARRAYCOPY命令の第{0}引数"{1}"はキャラクタ変数です（対応していません）
+    zhs: |-
+      ARRAYCOPY命令的第{0}参数"{1}"是一个角色变量(不支持)
+    en: |-
+      The {0} argument of the ARRAYCOPY instruction "{1}" is a character variable (not supported)
+
+  # 抛点 Process.cs:1754（直取 .Text）；negrange 清单把这枚记作「屏上偏差」，本波实测
+  # 产品行与 reference :514 / 根表 :230 **逐字同文** ⇒ 更正为「同形、无屏上偏差」。
+  - id: DifferentArraycopyArgsDim
+    lang_cs: 2238
+    zhs_xml: 514
+    eng_xml: 517
+    zhs_root_xml: 230
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt execArrayCopyFlat 的「ARRAYCOPY命令的两个参数维度不一致」+ execArrayCopy 同形
+    ja: |-
+      ARRAYCOPY命令の2つの引数の次元が異なります
+    zhs: |-
+      ARRAYCOPY命令的两个参数维度不一致
+    en: |-
+      The two arguments of the ARRAYCOPY instruction have different dimensions
+
+  # 抛点 Process.cs:1758/:1767；日文模板的 `２` 是全角、中文是半角，各表原样。
+  - id: DifferentArraycopyArgsType
+    lang_cs: 2242
+    zhs_xml: 515
+    eng_xml: 518
+    zhs_root_xml: 231
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt execArrayCopyFlat 的「ARRAYCOPY命令的两个参数的数组变量类型不一致」+ execArrayCopy 同形
+    ja: |-
+      ARRAYCOPY命令の２つの配列変数の型が一致していません
+    zhs: |-
+      ARRAYCOPY命令的两个参数的数组变量类型不一致
+    en: |-
+      The type of the two array variables of the ARRAYCOPY instruction do not match
+
+  - id: MaxBarNotPositive
+    lang_cs: 1118
+    zhs_xml: 234
+    eng_xml: 237
+    zhs_root_xml: 456
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt createBar 的「BAR的最大值不为正值」（同形）
+    ja: |-
+      BARの最大値が正の値ではありません
+    zhs: |-
+      BAR的最大值不为正值
+    en: |-
+      BAR maximum value is not positive
+
+  - id: BarNotPositive
+    lang_cs: 1122
+    zhs_xml: 235
+    eng_xml: 238
+    zhs_root_xml: 85
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt createBar 的「BAR的长度不为正值」（同形）
+    ja: |-
+      BARの長さが正の値ではありません
+    zhs: |-
+      BAR的长度不为正值
+    en: |-
+      BAR length is not positive
+
+  - id: TooLongBar
+    lang_cs: 1126
+    zhs_xml: 236
+    eng_xml: 239
+    zhs_root_xml: 674
+    args: 0
+    status: registered
+    used_at: sem/StatementExecutor.kt createBar 的「BAR过长」（同形）
+    ja: |-
+      BARが長すぎます
+    zhs: |-
+      BAR过长
+    en: |-
+      BAR is too long
+
+  # 抛点 FunctionMethodCreator.cs:3828-3830（直取 .Text）。两条腿都已接线：
+  # vars/UserVariables.kt 的装载期 #DIM 折叠支与 fn/PureMethods.kt 的运行期支
+  # 此前各有一枚自造串（前者「函数 COLOR_FROMNAME 不支持 transparent（原版 …）」、
+  # 后者「函数 COLOR_FROMNAME：transparent 不能转换为颜色值」），两处都退役 ⇒ 屏上与声明期同形；
+  # fn/HtmlStrict.kt 的 ERR_TRANSPARENT 常量本就逐字官方（非接线面）。
+  - id: TransparentUnsupported
+    lang_cs: 1982
+    zhs_xml: 450
+    eng_xml: 453
+    zhs_root_xml: 685
+    args: 0
+    status: wired
+    used_at: vars/UserVariables.kt colorFromName 装载期折叠支的「LangKey.TransparentUnsupported.renderZhs」+ fn/PureMethods.kt COLOR_FROMNAME 运行期支的「LangKey.TransparentUnsupported.renderZhs」（ColorNamesTest 的 transparent 支按本串全等重钉）
+    ja: |-
+      無色透明(Transparent)は色として指定できません
+    zhs: |-
+      不能将透明(Transparent)指定为颜色
+    en: |-
+      Transparent cannot be specified as a color
+
+  # 官方另有 InvalidColorName2（另一枚键），不许混用；移植 = 色名查表失败支。
+  - id: InvalidColorName
+    lang_cs: 1986
+    zhs_xml: 451
+    eng_xml: 454
+    zhs_root_xml: 375
+    args: 1
+    status: registered
+    used_at: sem/StatementExecutor.kt colorByName 的「指定的颜色名」（同形）
+    ja: |-
+      指定された色名"{0}"は無効な色名です
+    zhs: |-
+      指定的颜色名"{0}"无效
+    en: |-
+      Specified color name "{0}" is invalid
+
+  # 抛点 Process.cs:1780。
+  - id: tooLongEncodetouniArg
+    lang_cs: 3078
+    zhs_xml: 724
+    eng_xml: 727
+    zhs_root_xml: 775
+    args: 2
+    status: registered
+    used_at: sem/StatementExecutor.kt execEncodeToUniFlat 的「ENCODETOUNI的参数过长」+ execEncodeToUni 同形（同形）
+    ja: |-
+      ENCODETOUNIの引数が長すぎます（現在{0}文字。最大{1}文字まで）
+    zhs: |-
+      ENCODETOUNI的参数过长（目前共{0}字符。最大{1}字符）
+    en: |-
+      ENCODETOUNI argument is too long (Current - {0}, limit - {1})
+
+  # 移植 = 系统状态位闸（`canUse` 系）；引擎级屏蔽的屏上形。
+  - id: CanNotUseInstruction
+    lang_cs: 3322
+    zhs_xml: 785
+    eng_xml: 788
+    zhs_root_xml: 185
+    args: 1
+    status: registered
+    used_at: sem/StatementExecutor.kt checkCanSaveGate 的「不能使用${scope}命令」（同形；SAVEGAME/LOADGAME 的 __CAN_SAVE__ 门）
+    ja: |-
+      {0}命令は使用できません
+    zhs: |-
+      不能使用{0}命令
+    en: |-
+      {0} Instructions cannot be used
+
+# =====================================================================
+# 附：表达式层「类型名 + 运算符」文案族 —— 原文与行号已取证，LangKey 尚未登记
+#     （路次 g5-expr-float，2026-10-31）
+#
+# 为什么不直接写成 `  - id:` 记录：本表与 core/lexer/LangText.kt 的 enum LangKey 由
+# core/lexer/ErrorTextRenderTest 的「文案表与枚举双向一致」做 **id 集合相等**对拍，
+# 且逐项核 ja / zhs / args / lang_cs / zhs_xml 五个字段。登记新键必须同时给 LangText.kt
+# 加枚举项与两份模板，而 LangText.kt 不在本路文件所有权内 ⇒ 这里先以注释段记录原文与
+# 两侧行号，键登记归组长接线（交付回执「需组长接线」第 1 条）。
+#
+# 本路已把下面两条 zhs 原文接进抛出点（core/expr/Parser.kt 的 canNotAppliedUnaryOp /
+# canNotAppliedBinaryOp 两个私有 helper）：
+#   CanNotAppliedUnaryOp  用于 reduceUnaryTerm 的浮点支与 reduceUnaryAfterTerm 的浮点支；
+#   CanNotAppliedBinaryOp 用于 reduceBinaryTerm 浮点参与而未登记运算符的支（含 `%`）。
+# 类型名三个真实型取 NumericType / StringType / FloatType（Parser.kt 的 typeName 同形），
+# UnknownType 一支是官方缺陷：后置一元的 else 链漏判 Float（见下面第三条注释）。
+#
+# 语言口径：表达式类型错误属使用者面 ⇒ 取 zhs 译文（文件头的 L11 裁定）。
+# 照抄纪律：只做按序号原位替换，不 trim、不改引号形态 —— 下面模板里的引号是**半角**
+# ASCII 0x22，不是全角；zhs 表的 `{{}}` 在 string.Format 展开后是字面 `{}`。
+#
+#   - id: IsNotNumericBrace      lang_cs: 471   zhs_xml: 259   args: 0
+#       ja : {{}}の中の式が数式ではありません
+#       zhs: {{}}中的表达式结果不是数值
+#       现状调用点：FormStringTerm.kt 的 braceOrPercent（自造串「{ } 内的表达式不是数值型」）
+#
+#   - id: NumericType            lang_cs: 516   zhs_xml: 303   args: 0
+#       ja : 数値型            zhs: 数值型
+#   - id: StringType             lang_cs: 517   zhs_xml: 304   args: 0
+#       ja : 文字列型          zhs: 字符串型
+#   - id: FloatType              lang_cs: 518   zhs_xml: 305   args: 0
+#       ja : 浮動小数点型      zhs: 浮点型
+#   - id: UnknownType            lang_cs: 519   zhs_xml: 306   args: 0
+#       ja : 不定型            zhs: 未知类型
+#
+#   - id: CanNotAppliedUnaryOp   lang_cs: 523   zhs_xml: 310   args: 2   status: 本路已接线
+#       ja : {0}に単項演算子"{1}"は適用できません
+#       zhs: 无法对{0}使用单相运算符"{1}"
+#       调用点：fork-src OperatorMethod.cs:161（前置支，{0} 判到 FloatType）与
+#               :189（后置支，{0} 的 else 链 :183-188 **漏判 Float** ⇒ 落 UnknownType）
+#       官方缺陷复刻（ADR-005）：同一件事前置上屏「无法对浮点型使用单相运算符"++"」、
+#       后置上屏「无法对未知类型使用单相运算符"++"」，两支不一致，本仓按原样复刻。
+#
+#   - id: CanNotAppliedBinaryOp  lang_cs: 524   zhs_xml: 311   args: 3   status: 本路已接线
+#       ja : {0}と{1}の演算に二項演算子"{2}"は適用できません
+#       zhs: 无法对{0}和{1}使用二相运算符"{2}"进行运算
+#       调用点：fork-src OperatorMethod.cs:244；浮点取余 `%` 走这里 —— 两张浮点字典
+#       （:80-89 binaryFloatFloatDic、:91-113 binaryMixedFloatDic）都没登记 Mod，
+#       全文件只有 ModIntInt 一条取余（登记 :54、实现 :378）。
+#       展开读数：7.5 % 2.0 → 「无法对浮点型和浮点型使用二相运算符"%"进行运算」；
+#                  7 % 2.5   → 「无法对数值型和浮点型使用二相运算符"%"进行运算」；
+#                  7.5 % 2   → 「无法对浮点型和数值型使用二相运算符"%"进行运算」。
+# =====================================================================
+# 附二：区间 / 下标 / 越界族普查的「fork 专有」判据（lane negrange 2026-11-05）
+#
+# 本波把有官方串且同通道的枚全部接进 LangKey（见第八节 8 条 + OoRInstructionArg 的
+# 新增消费点）。下列抛出点**保留自造文案**，逐条给出判据（不改行为、不改文案）：
+#
+# 1) fn/VarWriteMethods.kt checkRangeEndpoint「变量 X 的区间起点/终点 N 越界（长度 L）」
+#    —— fork 专有闸。官方 VarSetExMethod（FunctionMethodCreator.cs:786-928）对第 4/5 参
+#    **无任何端点校验**：1 维直接进 SetValueAll（:834/:871），而 Int1DVariableToken.SetValueAll
+#    （VariableData.cs:48-54）是裸 for 循环写数组 ⇒ 越界端点在原版是裸 IndexOutOfRangeException；
+#    2D/3D 支（:841-844/:852-855/:890-894/:917-921）同理。官方区间端点的 CodeEE 通道
+#    （IsArrayRangeValid → OoRInstructionArg）的调用点不含 VARSETEX
+#    （全表 grep：仅 VARSET 语句 + SUMARRAY/MATCH/MAX·MINARRAY/FINDELEMENT/INRANGEARRAY/STRJOIN）。
+#    ⇒ 崩溃折码（specs/verify-notes §12），无官方逐字形可换。
+# 2) fn/VarWriteMethods.kt checkedSubscript「…第 N 维下标 X 超出 32 位整型范围」
+#    —— 官方同位是 `(int)checked((nint)x)`（FunctionMethodCreator.cs:843/:854/:892/:919），
+#    溢出抛裸 System.OverflowException，Lang 表无对应键 ⇒ 崩溃折码、自造允许。
+# 3) fn/VarWriteMethods.kt stringArg/intArg「函数 X 的第 N 个参数必须是字符串/整数」
+#    与「函数 SETVAR：缺少第 2 个参数」「函数 VARSETEX 的第 2 个参数（赋值来源）不能省略」
+#    —— 官方对**显式空位**（写了槽却留空）在 arguments[i] 上裸 NullReferenceException
+#    （FunctionMethodCreator.cs:811/:820/:824/:861），对**类型不符**在解析期 ArgTypeList
+#    校验（InvalidArgType 族，Lang.cs:3742）⇒ 本层是运行期折码，官方该形态无 CodeEE 串。
+#    TODO(verify)：解析期串与运行期串跨通道，不许混喂；接法归组长裁定。
+# 4) fn/VarWriteMethods.kt requireArray/convertKey/convertArray（ARRAYMSORT/EX）族
+#    「函数 X：… 不是变量 / 是常量 / 是角色变量 / 不是数组 / 必须是 1 维数组」
+#    —— 官方对应键 NotVarFunc/IsCharaVarFunc/NotDimVarFunc/Not1DFuncArg（FunctionMethodCreator.cs:
+#    534-555 CheckVariableTerm）**两表不同文**（reference `{0}函数:` vs 语料根 `函数{0}:`）
+#    ⇒ 按既有裁定（本文件头 + 表内 zhs_xml 说明）不进通道、不动。
+# 5) vars/VariableStore.kt「变量 X 需要 N 个下标（实际 M）」与「引用变量 X 需要 N 个下标」诸支
+#    —— 官方下标**个数**在装载期由 VariableParser 定型（超维抛 TooMany1DVarArg/TooMany2DVarArg 等，
+#    VariableParser.cs:44/:88/:109/:150/:158；缺维抛 MissingVarArg，VariableNoArgTerm.cs:19-69），
+#    运行期 CheckElement 不查个数 ⇒ 移植侧运行期闸门是折码位，与解析期键不同通道。
+#    TODO(verify)：接哪一枚解析期键（或保持折码）归组长裁定；本轮不动。
+# 6) vars/VariableStore.kt getLength 的 float 支与 CSV_CONST 支「变量 X 不存在第 N 维」
+#    —— REF 支已接 GetSizeNonExistDim（ReferenceToken.cs:55 同形态）；float/CSV 两支的
+#    官方 token 落点未闭合（浮点变量族、CSV 常量在 reference 无对应 GetLength 分支证据）。
+#    TODO(verify)：找到 C# 行号前不改这两支的文案。
+# 7) vars/VariableStore.kt isArrayRangeValid 的「变量 X 不是数组，没有区间」
+#    —— 官方 0 维角色变量进 IsArrayRangeValid 即在 `sizes[0]` 上裸 IndexOutOfRange
+#    （CharaVariableToken.cs:72-83 无前置判）⇒ 崩溃折码、自造允许。
+# 8) 同族但**非本路文件面**（判「官方有串」，需组长接线）：
+#    - fn/VarMethods.kt:773/:776/:779 「X不是变量/不是字符串型/不是整型」—— 与 IsNotVar/
+#      IsNotStr/IsNotInt 逐字同形（未走 LangKey，第二份字面量，漂移闸可加）。
+#    - fn/VarMethods.kt:623 arrayRangeOoR —— 与 OoRInstructionArg 逐字同形（同上）。
+#    - vars/VarDef.kt:198 「变量 X 不存在第 N 维（维度 R）」—— 应接 GetSizeNonExistDim。
+#    - proc/ProcessRuntime.kt:2907 与 code/Vm.kt:855 「函数下标越界(N)」—— 官方对应键未取证，
+#      TODO(verify)（本路禁碰这两个文件）。
+#    - core/sql/SqlMethods.kt:279 「列下标越界」—— sql 族另有 lane（compreadout），只登记。
+# 屏上读数口径：以上接线的抛出点行号一律吃 CodeEE.displayLine / erbDisplayLine 唯一 1 基出口，
+# 本轮无新增自算 +1。
+# =====================================================================
+# 附三：negrange「需组长接线」清单的逐枚定性（lane errtext6 2026-11-05）
+#
+# 清单点名的残余抛点全部复核完毕。判「官方有串且两表同文」的枚已进第九节（同形登记）
+# 或已接线（`TransparentUnsupported`、`GetSizeNonExistDim`→`VarDef.kt`）。下列逐枚给判据，
+# 行号 = 2026-11-05 实测（两表行号为物理行）。既有裁定「两表不同文一律不动」在此族生效：
+# 这些键**不许进第九节/枚举**（`ErrorTextRenderTest`/`LangKeySourceTableTest` 的入表前提
+# 是两表同文）。
+#
+# 一、两表不同文（reference `{0}函数:` vs 语料根 `函数{0}:`，词序相反）⇒ 判「不改」：
+# 1) `ArgIsNegative`（reference :913 / 根表 :31）：
+#    - fn/SaveMethods.kt:50 CHKDATA —— 产品行 = reference 形逐字展开（屏上=权威，登记同形）。
+#    - data/save/CharaFileIO.kt:69 SAVECHARA —— 同上。
+#    - sem/StatementExecutor.kt:2355/2358/4387/4390 ARRAYSHIFT 第4/5参、:2425/4459 ARRAYREMOVE
+#      第2参、:2459/2468/4490/4499 ARRAYSORT 第3/4参 —— reference 形逐字。
+#    - sem/StatementExecutor.kt:1194/3660 DELDATA —— **产品行是根表形 `函数DELDATA: `**
+#      ⇒ 与权威表存在屏上偏差（negrange 清单点名属实）。两表不同文 ⇒ 本波不换文、不进表；
+#      换不换由组长按权威口径单独裁定。
+# 2) `ArgIsTooLarge`（reference :915 / 根表 :61）：fn/SaveMethods.kt:51、
+#    data/save/CharaFileIO.kt:72 = reference 形；sem/StatementExecutor.kt:1195/3661 DELDATA =
+#    根表形（同上屏上偏差）。
+# 3) `CharacterIndexOutOfRange`（reference :911 / 根表 :209）：fn/VarMethods.kt:713/714
+#    FINDCHARA 族 —— 产品行 = reference 形逐字（屏上无偏差，登记）。
+# 4) `ArgIsNotCharacterVar`（reference :888 / 根表 :37）：fn/VarMethods.kt:696
+#    requireCharacterVar —— reference 形逐字。
+# 5) `NotVariableName`（reference :912 / 根表 :547）：
+#    - sem/StatementExecutor.kt:2517/2520/4546/4550 ARRAYCOPY「不是变量名」—— reference 形逐字。
+#    - fn/VarMethods.kt:232 GETNUMB —— 产品形 `函数 GETNUMB：第 1 个参数("X")不是变量名`
+#      （`fn/PureMethods.kt:72` 的 `codeEE` 包装 = 前缀「函数 X：」+ 参数号带半角空格），
+#      与**两张表都不同形** ⇒ 屏上偏差登记；两表不同文禁止换官方串，本波不动。
+#      `fn/PureMethods.kt` 非本路文件面 ⇒ 需组长接线。
+# 6) `ResultIsNaN`（reference :922 / 根表 :622）、`ResultIsInfinity`（reference :923 / 根表 :621）、
+#    `ResultIsOutOfTheRangeOfInt64`（reference :924 / 根表 :623）——三枚全部两表词序相反：
+#    - vars/UserVariables.kt:332/333/335 POWER 折叠三支（negrange 清单注「应接
+#      ResultIsOutOfTheRangeOfInt64，FunctionMethodCreator.cs:4186」）——**实测推翻该注**：
+#      该键两表不同文，按既有裁定不许进通道；且产品自造串把 `（原版 FunctionMethodCreator.cs:…）`
+#      行号漏上屏，属工程线索泄露 —— 换文与去泄露两件事都卡在「两表不同文」裁定上，
+#      登记待组长单独裁（连同 sem/StatementExecutor.kt:2223/2224/2226 与 :4294/4295/4297
+#      幂运算三支一起）。官方抛点实据：FunctionMethodCreator.cs:4177-4187（PowerMethod）、
+#      :4262-4272（LogMethod）、:4290-4300（ExpMethod）同用这三枚键。
+#    - vars/UserVariables.kt:359 UNICODE 越界支 —— 官方键 `ArgIsOutOfRange`
+#      （reference :917 / 根表 :57）同样两表词序相反 ⇒ 不改；产品自造形登记。
+#    - fn/PureMethods.kt:1421 GETBIT 第 2 参越界支（lane d6 2026-11-07 复核追加）——
+#      同一枚官方键 `ArgIsOutOfRange`：抛点 FunctionMethodCreator.cs:4785
+#      `string.Format(Lang.Error.ArgIsOutOfRange.Text, base.Name, 2, intValue2, 0, 63)`，
+#      两表实文逐字回读：reference :917 = `{0}函数: 第{1}个参数({2})在从{3}到{4}的范围外`、
+#      根表 :57 = `函数{0}: 第{1}个参数({2})在从{3}到{4}的范围外`（ja 原文 Lang.cs:3854
+#      = `{0}関数: 第{1}引数({2})が{3}から{4}の範囲外です`）⇒ 词序相反成立，同上「不改」。
+#      产品行是**第三种形**：`codeEE("GETBIT", …)` 包装（fn/PureMethods.kt:73
+#      `CodeEE("函数 $fn：$msg")`）出「函数 GETBIT：第 2 个参数 64 越界（0-63）」——与两张表都不同形，
+#      且把上界写死成 `0-63` 而非模板占位符 ⇒ 屏上偏差登记，本波不换文、不进表。
+#      触发实据（**2026-11-07 收口后复核：该触发点不可达，登记撤回**）：语料
+#      `ERB/fromEN/_TR Lib.ERB:1406` `IF GETBIT(STAIN:ARG:2,64)`（@TINKO_TR，:1394 起）
+#      落在真配对 `[SKIPSTART]` :1186 – `[SKIPEND]` :2296 内 ⇒ 装载期即丢弃、从不编译
+#      （指令判定 ErbLoader.cs:387-406 要求首个非空白字符为 `[`，同文件 :1405/:1430 的
+#      `;[SKIPSTART]`/`;[SKIPEND]` 是注释；EraStreamReader.cs:96-129 只跳空白不剥 `;`）。
+#      实证：4.981 单文件 compat 产物 program.meta labels=5，恰为按区间剔除后的存活标签。
+#      ⇒ 屏上无该行产物，本节仍只作「若将来复活时的文案对照」保留，`corpus-bugs.md` CB-004
+#      已改判不可达并撤销 §3 补丁候选。
+#      fn/PureMethods.kt 非本路文件面 ⇒ 换不换由组长按权威口径单独裁定。
+# 7) `SPCharaConfigIsOff`（reference :521 尾注「SPキャラを使用する」 / 根表 :631 尾注「使用SP角色」
+#    —— 不同文的不止词序、连选项名译文都不同）：消费点 fn/CompatiOptions.kt:70 常量 =
+#    根表形 ⇒ 屏上与权威表有偏差；sem/StatementExecutor.kt:815/3283 只是转发常量（文件非改点）。
+#    fn/CompatiOptions.kt 非本路文件面 ⇒ 需组长接线。
+#
+# 二、reference 表**没有这枚键**（回退 ja 原文）⇒ 判「不改-同形（ja 形）」：
+# 1) `OoRSumArray`（Lang.cs:3622；根表 :582 有译文、reference 内嵌表 0 命中）：
+#    sem/StatementExecutor.kt:2483/4514 —— 产品行 = `Lang.cs:3622` 日文原文逐字展开
+#    （含官方原文的第４引数误写「第4変数」，照抄）。运行期真源不读 lang 表 ⇒ 屏上=ja 形，同形成立。
+#
+# 三、两表同文但**进不了表**（占位符形闸）⇒ 判「不改-同形」：
+# 1) `CvarsetArgIsNotCharaVar`（reference :523 / 根表 :219 同文，0 占位符）：
+#    ja 模板（Lang.cs:2274）带 `{0}` 而 zhs 不带 ⇒ `ErrorTextRenderTest`「ja/zhs 占位符下标
+#    必须同形」不收此键。产品 sem/StatementExecutor.kt:2165/4238 = zhs 逐字 ⇒ 登记，不进表。
+#
+# 四、无官方串（fork 专有 / 移植内部概念）⇒ 判「不改」，检索命令与命中数逐条附：
+# 1) `code/Vm.kt:855/1697/1827`、`proc/ProcessRuntime.kt:2908`「函数下标越界(N)」——
+#    官方无「按函数数组下标装载/执行」概念（入口按名、`TRYCALL` 按名；下标只活在移植 IR/erbc）。
+#    检索：reference 仓 `grep -rn "函数下标\|下标越界" reference/emuera-cs --include=*.cs --include=*.xml`
+#    ⇒ 0 命中；`grep -c "下标"` 对 reference 表 = 2、对语料根表 = 2（`ArgHasNotSubscript`（根表 :26）、
+#    `ArgSubscriptOnlyConst`（根表 :65）—— 都是函数定义参数下标的解析期键，语义不同族，不许混喂）。
+# 2) `code/Vm.kt:864`、`proc/ProcessRuntime.kt:2903` 「VM 不可重入 / 运行期重入调用不受支持」——
+#    移植执行器不变量（ADR-001），官方无此概念 ⇒ 0 检索需求（无对应物）。
+# 3) `sql/SqlMethods.kt` 全族（列下标越界 :309、reader 未 READ :306、缺参 :316/325、
+#    类型闸 :327、SQL_IMPORT_MAP_XML :182/189/342/345/354 等）—— SQL_* 是 eraTW fork 专有。
+#    检索：`grep -rniE "SQL_|sqlite" reference/emuera-cs --include=*.cs | wc -l` ⇒ **0**。
+# 4) `sem/StatementExecutor.kt:2352/4384`「ARRAYSHIFT函数: 第2个参数溢出」—— 官方同位无闸
+#    （`(int)` 裸折返 / `Math.Abs` 原生 OverflowException），已钉 `specs/verify-notes.md` §13
+#    ⇒ 崩溃折码族（附二 #1/#2 同理），判停判界在册、文案移植专有。
+# 5) `sem/StatementExecutor.kt:2135/2204/2316/4207/4277/4331`「未定义的变量 $name」——
+#    reference 表 `grep -c "未定义的变量"` = 0（官方在解析期由 IdentifierDictionary 定型，
+#    运行期无此形态）⇒ 折码位，附二 #5 同通道判据。
+# 6) `fn/VarMethods.kt:745/765/767/770/772` GETVAR/GETVARS 的「函数 X 的第 1 个参数必须是字符串」
+#    「函数 X：无法解释为表达式」「函数 X：<包装 LexError/ExprParseException>」——
+#    官方 `GetVarMethod`（FunctionMethodCreator.cs:377-436，本波已逐行回读）**只有**
+#    IsNotVar/IsNotInt/IsNotStr 三枚直抛，无参数类型闸、无表达式包装键；
+#    检索：reference 表 `grep -c "无法解释\|必须是字符串"` = 0 ⇒ 附二 #3 同判据，登记扩展至本文件。
+# 7) 移植内部机（官方无对应物的运行前置）：`sem/StatementExecutor.kt:463/471/483/2917/2925/2937/4851`
+#    RandProvider、`:1287/1325` 尚未实现、`:1785/4668` VARI/VARS 开关、`:1856/3848` RETURNFORM、
+#    `:4656` SET 形态、`:4768` SystemOps、`:4920/4923` CALLSHARP/native、
+#    `fn/SaveMethods.kt:92` 宿主接线、`data/save/CharaFileIO.kt:133` 兜底转抛、
+#    `vars/VarDef.kt:240/243` dimProduct 尺寸闸（官方同位裸 `NegativeArraySizeException`/OOM）。
+#
+# 五、普查未尽面（TODO(verify) + 卡点）：
+# - `fn/VarMethods.kt:117/132/134/155/157` CSVCSTR/角色关键字族（「引用未定义的角色」「下标越界」）
+#   —— 官方 CsvcstrMethod 在 FunctionMethodCreator.cs:3230，本波未回读其抛点键与实参喂法 ⇒ 未定性，
+#   卡点：角色关键字表命中失败路径的官方文案取证。
+# - ~~`fn/PureMethods.kt` COLOR_FROMNAME 运行期支自造串~~ ⇒ **已结**（`d766ff18`：运行期支换官方
+#   逐字串，装载期折叠支在更早的 errtext6 已接 ⇒ `TransparentUnsupported` 两条腿同一屏上形；
+#   同波把 `core/fn/ColorNamesTest.kt` 的 `contains("transparent")`（小写）换成官方形全等）。
+#   本条留在「未尽面」只做结案留痕，行号按 used_at 同一口径不再登记（必漂）。
+# - `fn/HtmlStrict.kt` 的 ERR_TRANSPARENT 常量逐字等于官方 zhs ⇒ 同形（非本路文件面，已核不改）。
+# =====================================================================
+
+  - id: CanNotOmitRefArg
+    lang_cs: 2906
+    zhs_xml: 681
+    eng_xml: 684
+    args: 2
+    status: wired
+    used_at: proc/ProcessRuntime.kt bindRef / frond 的「LangKey.CanNotOmitRefArg」（5 处抛点全部改走 CodeEE.keyed 三语通道）
+    ja: |-
+      "@{0}"の{1}番目の引数は参照渡しのため省略できません
+    zhs: |-
+      @{0}的第{1}个参数是引用形式因此无法省略
+    en: |-
+      The {1} argument is passed by the reference to "@{0}" function and cannot be omitted
+
+  - id: CalledFailedFunc
+    lang_cs: 2450
+    zhs_xml: 567
+    eng_xml: 570
+    zhs_root_xml: 99
+    args: 0
+    status: wired
+    used_at: tools/erbcc/src/main/kotlin/com/eratw/port/erbcc/compile/CorpusCompile.kt degradedBody 的「LangKey.CalledFailedFunc.renderZhs()」
+    ja: |-
+      ロード時に解析に失敗した関数が呼び出されました
+    zhs: |-
+      调用了一个加载时解析失败的函数
+    en: |-
+      A function that failed parsing at loading was called
+
+  # =====================================================================
+  # 十二、函数实参个数族（arity 闸）—— 2026-11-17 lane arity-family 整族收编
+  # 生产者与官方分支一一对应（1.824 `FunctionMethod.cs` / 4.981 同行族，两版键名与触发支全同）：
+  #   TooManyFuncArgs     1.824 :279 / 4.981 :263 —— 实参多于槽位（`omitStart >= 0` 形）
+  #   NotEnoughArgs       1.824 :283 / 4.981 :269 —— 少于下界（下界 = OmitStart，无省略位时 = 形参表长度）
+  #   ArgsCountNotMatches 1.824 非 Ex :314、Ex :270 / 4.981 :254 —— 定长形参表个数不匹配
+  #   ArgsNotNeeded       1.824 非 Ex :316、Ex :274 / 4.981 :256 —— 形参表长度为 0 却传了实参
+  #   ArgsNotFitExpr      1.824 :191 / 4.981 :157 —— 成对变参组 `(count - 前缀) % 组长 != 0`
+  #
+  # 两表不同文（类头点名的 `ArgIsNot*` / `NotVarFunc` 同判据 ⇒ 收 reference 形）：
+  # 语料根表（`lang/emuera-zhs.xml` :946/:947/:948/:949/:989）把函数名放到冒号后
+  # （`函数{0}: 参数过多`），reference 内嵌表放在冒号前（`{0}函数: 参数过多`）。日文两版
+  # `Lang.cs` 逐字同文、英文两版 eng 表逐字同文（只有行号差）。因此本族**不记 `zhs_root_xml`**：
+  # 一记就进 `LangKeySourceTableTest`「根表可读时逐个核对」的逐字对账，必然因位序判红。
+  # 移植侧本族的现网屏上串本来就是 reference 形（`GET_MONTH函数: 参数过多`，
+  # `fn/Builtins.kt` 与 `fn/FindElementOmitTest` 的既有读数），收这一形 = 零屏上漂移。
+  # =====================================================================
+
+  - id: TooManyFuncArgs
+    lang_cs: 3790
+    zhs_xml: 901
+    eng_xml: 904
+    args: 1
+    status: wired
+    used_at: fn/Builtins.kt checkArity 的「LangKey.TooManyFuncArgs」+ compile/ArgSignatureCheck.kt checkOneBuiltin 的「LangKey.TooManyFuncArgs」
+    ja: |-
+      {0}関数: 引数が多すぎます
+    zhs: |-
+      {0}函数: 参数过多
+    en: |-
+      {0}: Too many arguments
+
+  - id: NotEnoughArgs
+    lang_cs: 3794
+    zhs_xml: 902
+    eng_xml: 905
+    args: 2
+    status: wired
+    used_at: fn/Builtins.kt checkArity 的「LangKey.NotEnoughArgs」+ compile/ArgSignatureCheck.kt checkOneBuiltin 的「LangKey.NotEnoughArgs」
+    ja: |-
+      {0}関数: 少なくとも{1}つの引数が必要です
+    zhs: |-
+      {0}函数: 至少需要{1}个参数
+    en: |-
+      {0}: Required {1} arguments
+
+  - id: ArgsCountNotMatches
+    lang_cs: 3798
+    zhs_xml: 903
+    eng_xml: 906
+    args: 3
+    status: wired
+    used_at: fn/Builtins.kt checkArity 的「LangKey.ArgsCountNotMatches」+ compile/ArgSignatureCheck.kt checkOneBuiltin 的「LangKey.ArgsCountNotMatches」
+    ja: |-
+      {0}関数: {1}つの引数が必要ですが，{2}つが与えられています
+    zhs: |-
+      {0}函数: 需要{1}个参数，但传入了{2}个
+    en: |-
+      {0}: Required {1} arguments but passed {2}
+
+  - id: ArgsNotNeeded
+    lang_cs: 3802
+    zhs_xml: 904
+    eng_xml: 907
+    args: 1
+    status: wired
+    used_at: fn/Builtins.kt checkArity 的「LangKey.ArgsNotNeeded」+ compile/ArgSignatureCheck.kt checkOneBuiltin 的「LangKey.ArgsNotNeeded」
+    ja: |-
+      {0}関数: 引数の必要がありません
+    zhs: |-
+      {0}函数: 不需要参数
+    en: |-
+      {0}: Not required arguments
+
+  - id: ArgsNotFitExpr
+    lang_cs: 3958
+    zhs_xml: 943
+    eng_xml: 946
+    args: 4
+    status: wired
+    used_at: fn/MapDataTableMethods.kt dtRowAdd 的「CodeEE.keyed(LangKey.ArgsNotFitExpr」+ compile/ArgSignatureCheck.kt checkOneBuiltin 的「LangKey.ArgsNotFitExpr」+ tools/erbcc/src/main/kotlin/com/eratw/port/erbcc/compile/PairedArgLoadCheck.kt pairedArgLoadWarning 的「LangKey.ArgsNotFitExpr」
+    ja: |-
+      {0}関数: 引数の数({1})が{2}+{3}nではありません
+    zhs: |-
+      {0}函数: 参数数量({1})不满足{2}+{3}n
+    en: |-
+      {0}: The count of the arguments ({1}) is not matching {2}+{3}n

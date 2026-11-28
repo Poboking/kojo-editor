@@ -73,4 +73,33 @@ describe('ERB 引擎名数据契约（spec 权威 ∪ 语料补充）', () => {
     const extra = [...produced].filter((n) => !authoritative.has(n));
     expect(extra.sort()).toEqual(['NOW']);
   });
+
+  /**
+   * 维度/类型读数必须跟着 spec 的**段口径 + 逐条例外**走，不许按段一把梭。
+   *
+   * 这条断言是踩过坑补的：初版把 `pseudo_vars` 与 `csv_constants` 都默认成 0 维，
+   * 结果 `RAND:n`（语料 76,015 处）与 `ABLNAME:0`（400+ 处）全被判成"标量带参数"。
+   * 段名相似不等于维度相同，一行默认值就能把 7 万处合法写法变成满屏红。
+   */
+  it('维度/类型读数：段口径 + 逐条例外 + 「不猜」的段都如实反映', () => {
+    const byName = new Map(ERB_ENGINE_NAMES.map((e) => [e.name, e]));
+    // 1 维整数 / 字符串 / 函数局部数组（段注释明写 dims 统一为 1）
+    expect(byName.get('FLAG')).toMatchObject({ dim: 1, kind: 'int' });
+    expect(byName.get('STR')).toMatchObject({ dim: 1, kind: 'str' });
+    expect(byName.get('LOCAL')).toMatchObject({ dim: 1, kind: 'int' });
+    // 多元数组：dim 逐条给（VariableData.cs:3103-3110）
+    expect(byName.get('DITEMTYPE')!.dim).toBe(2);
+    expect(byName.get('TA')!.dim).toBe(3);
+    // 逐条例外：字符串段里唯一的 0 维标量（VariableData.cs:3073，`index: -`）
+    expect(byName.get('SAVEDATA_TEXT')).toMatchObject({ dim: 0, kind: 'str' });
+    // CSV 名字表是**一维**只读数组（`Str1DConstantToken`）；GAMEBASE 常量才是 0 维
+    expect(byName.get('ABLNAME')).toMatchObject({ dim: 1, kind: 'str' });
+    expect(byName.get('GAMEBASE_TITLE')).toMatchObject({ dim: 0, kind: 'str' });
+    // 「不猜」：`pseudo_vars` 没有 dim 字段且成员形态不一；`character_vars` 子段结构不统一
+    expect(byName.get('RAND')!.dim).toBeUndefined();
+    expect(byName.get('CHARANUM')!.dim).toBeUndefined();
+    expect(byName.get('CFLAG')!.dim).toBeUndefined();
+    // 反空匹配自证：确实有一大批名字带维度，否则上面全是空断言
+    expect(ERB_ENGINE_NAMES.filter((e) => e.dim !== undefined).length).toBeGreaterThan(100);
+  });
 });

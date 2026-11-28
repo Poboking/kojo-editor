@@ -5,7 +5,7 @@
 > 依据（均已落盘）：`packages/kojo-core/src/project/{compile-project,dispatch-plan,runtime-matcher,erb-assembly,ir,version-check}.ts`、
 > `packages/app/src/ui/{kojo2-project-compile,kojo2-project-provenance,kojo2-file-context,kojo2-runtime-diagnostics}.ts`、
 > `packages/app/src/ui/{kojo2-project-service-contract,kojo2-project-service,kojo2-project-workflow,kojo2-project-problems}.ts`、
-> `docs/KOJO-2.0-M2-P0-CONTRACTS.md` §1.3 / `docs/KOJO-2.0-M3-IMPLEMENTATION.md` / `docs/KOJO-2.0-ARTIFACT-ASSEMBLY.md`。
+> `docs/KOJO-2.0-M2-P0-CONTRACTS.md` §1.3 / `docs/KOJO-2.0-ARTIFACT-ASSEMBLY.md`。
 > 本文只描述**现有接口与接线事实**，不含实现改动。
 >
 > **本批已接线（2026-11-03，Editor Integration 收尾）**：§0.1 的一屏事实已经落地——项目级 Application Service +

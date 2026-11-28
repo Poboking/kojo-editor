@@ -72,7 +72,7 @@ node tools/debug-web-smoke.mjs   # 无头浏览器端到端冒烟（欢迎页→
 - **此外不写任何文档**：不写批次 log、不写总结 / 分析 / 报告、不举行取号仪式。历史由 git 保留，`docs/archive/` 冻结不再追加。
 - 仅两个豁免：硬坑（会造成返工的实际陷阱）一行一条进 `docs/PITFALLS.md`；基线数字（测试数等）真变时顺手改 `docs/STATE.md` 对应行。
 - 规格类文档（`ARCHITECTURE` / `BASELINES` / `SYNTAX-SUGAR-SURFACE-SPEC` / `USER-GUIDE` / `adr/`）只在实现与文档冲突且实现是对的时改一行算一行，不做重写。
-- 旧制残留：`docs/log/` 与 `docs/archive/` 只读；`docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md` 供发版判据引用，不再是看板索引。
+- 旧制残留：`docs/log/` 与 `docs/archive/` 只读。一次性的人工发版清单已于 2026-11-28 清理，发版判据只认 `node tools/release-gate.mjs`（机器面）+ `docs/STATE.md`（读数口径），不再有人工清单文件。
 
 ## 六、分工边界与冲突纪律
 
@@ -82,4 +82,4 @@ node tools/debug-web-smoke.mjs   # 无头浏览器端到端冒烟（欢迎页→
 
 ## 七、版本纪律
 
-抬版本要**三处同步**：root `package.json`、`packages/app/package.json`、`packages/app/src-tauri/tauri.conf.json` 的 `version` 逐字相等（发版提交 `9b2009d` / `e4d4621` 的纪律），现由 `packages/app/tests/app-version.test.ts` 钉住——欢迎页那格即取 app 包清单，不许另抄；`v0.4.0-beta.1` 发版判据见 `docs/MANUAL-CHECKLIST-v0.4.0-beta.1.md`（判定行）；机器面判据＝`node tools/release-gate.mjs --release`（读数口径见 `docs/STATE.md`，README 自 2026-11-02 起改为开发者向，不再承载判据清单）。
+抬版本要**三处同步**：root `package.json`、`packages/app/package.json`、`packages/app/src-tauri/tauri.conf.json` 的 `version` 逐字相等（发版提交 `9b2009d` / `e4d4621` 的纪律），现由 `packages/app/tests/app-version.test.ts` 钉住——欢迎页那格即取 app 包清单，不许另抄；发版判据＝`node tools/release-gate.mjs --release`（读数口径见 `docs/STATE.md`，README 自 2026-11-02 起改为开发者向，不再承载判据清单）。
