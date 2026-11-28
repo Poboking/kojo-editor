@@ -1092,3 +1092,55 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 若将来要跨机器接入，回环 + Bearer + Origin 三道闸需整体升级为 mTLS + 显式主机白名单 + 证书轮换
 （ADR-0013「后续演进」）；这是独立的信任模型变更，不得由「仅回环」配置平滑过渡。本 harness 的
 三道闸对拍（H23–H26）届时是对拍的**下限基线**。
+
+## 12. 能力面演进的两次裁决：T6 能力包 / T7 资源侧分页（2026-11-28）
+
+T1–T5 把「面还能不能再长」从「靠人记」变成了「靠机器守」。剩下的两个候选是在这个基础上
+提出的**演进方向**，不是缺陷。两枚都评估过，结论都是**不做**，理由如下——写下来是为了
+下次有人再提时不必从头想一遍，也为了把「什么条件下该重启」说清楚。
+
+### 12.1 T6 能力包（`packs`：按族收窄 `tools/list`）—— 不做
+
+提案是给 `McpSessionScope` 加 `packs?: string[]`，按族（editor / fs / search / launcher …）
+收窄可见面。听上去两头都赚，但两头的论据都不成立：
+
+1. **字节论据不成立。** read 会话全帧 **59,877 B**，而传输上限 1 MiB——占 **5.7%**。
+   最激进的 pack（只留 fs + semantic + editor）能压到约 2 万 B，省下的 4 万 B 对 1 MiB 毫无意义。
+   T1–T5 那五批瘦身是为了**每面 2,048 字符的描述闸**与自设帧带，**不是**为了撞 1 MiB。
+2. **第三根过滤轴会和现有两根打架。** 现在 `tier`（read / edit / privileged）+
+   `approvedTools`（逐项精确名）已经把「谁能看见什么」说清了。加 `packs` 之后每个组合都要
+   重新回答：`packs:['fs']` 且 `approvedTools:['launcher_start']` 时后者可见吗？特权面被 pack
+   挡掉时审计原因写哪个？——T3 刚把「为什么被拒」做成可见列，packs 会立刻需要**第四枚原因码**，
+   而它回答的是**我们自己造出来的**问题。
+3. **17 个族本身就不可选。** read 会话跨 **17 个族**（semantic 10 枚最大、fs 8 枚、lang 6 枚、
+   editor 3 枚……）。让用户或客户端从 17 个族里挑组合，比让模型从 41 枚面里挑工具**更难**。
+4. **没有可测的需求证据。** 「41 枚面让模型挑不准」是合理猜想，但本仓没有任何量具能证明它。
+   要证伪需要一个选择准确率探针（同一任务、41 面 vs 12 面、比对选中率）——那是研究项目，
+   不是一批能交付的工程。
+5. **已有更便宜的替代。** T2 的 `initialize.instructions` 已把取向说清；
+   `kojo://server/capability-face` 已把「可见 / 隐藏 / 各多少」报给模型；prompts 骨架（3 枚）
+   本来就承担「该怎么用这套面」的引导。
+
+**重启条件（可证伪）**：出现一个能测出「面数 → 选择准确率」下降的探针，且下降幅度大到
+值得多一根过滤轴与第四枚原因码。没有这个读数之前，加 packs 是拿契约复杂度换一个测不出的好处。
+
+### 12.2 T7 资源侧分页（`file-tree?cursor=` 之类）—— 已裁决，不重复认领
+
+**代码里已经写死了这个取舍**，不是没人想过：
+
+- `RESOURCE_TRUNCATION_HINT`（`packages/mcp-host/src/index.ts`）原话：
+  「resources 面按 MCP 协议只有 `uri` 入参、自身无法翻页，所以显式把客户端引到**带游标的工具面**（同数据源）」，
+  并逐一点名 `fs.readFile` / `document.active`（文本面 offset+limit）与
+  `commands.list` / `fs.tree` / `io.listDir` / `problems.diagnostics` / `semantic.*`（列表面 limit+cursor）。
+- `pagingPointer(truncated, tool, unit)` 在 4 处投影里给出结构化指针
+  （`{hasMore, pageableVia:'tool', pageTool, pageUnit, pageHint}`）。
+- 资源侧上限：文本 24,000 字符（`RESOURCE_TEXT_LIMIT`）、列表 200 条（`RESOURCE_ITEM_LIMIT`）；
+  超了给 `{truncated:true, cap, originalLength, preview, hint}` envelope，**fail loud 不静默**。
+
+做 URI 族分页等于给**已经有游标的数据造第二套分页协议**，正好违反 T1–T5 一直在守的
+「一个旋钮」纪律（`limit` 是唯一旋钮、`nextCursor` 是唯一续页凭据）。资源面的定位是
+**取向快照**，取全量是工具面的活。
+
+> 唯一可做但**建议不做**的小改动：`truncateResourceText` 的 `truncated` 返回值在调用点被丢弃
+> （`const { text } = …`）。但 envelope 里已带 `truncated:true`，模型看得见——这不是缺陷，
+> 只是一个没人用的返回值。为它加代码是净负债。
