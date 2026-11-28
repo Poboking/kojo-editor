@@ -98,6 +98,16 @@ const SECTION_DEFAULT = {
 const ENTRY_OVERRIDE = {
   // 0 维字符串标量，`index: -` 即证据（VariableData.cs:3073）
   SAVEDATA_TEXT: { dim: 0 },
+  // local_vars 段的 kind 不能随段默认一刀切成 int：
+  // LOCALS/ARGS 是**字符串**局部（`CreateLocalStr`，VariableData.cs:3184-3187），
+  // LOCALF/ARGF 是**浮点**局部（fork-src VariableData.cs:376-379，double[]）。
+  // LOCAL/ARG 才是整数局部（`CreateLocalInt`，VariableData.cs:3181/3183，与段默认一致不覆盖）。
+  // 2026-11-28 语料闸实证：EagloV_ImgChara.ERB:752 `ARRAYCOPY "LOCALS", "RESULTS"`
+  // 按 int 误判类型不一致 ⇒ 拨乱反正。
+  LOCALS: { kind: 'str' },
+  ARGS: { kind: 'str' },
+  LOCALF: { kind: 'float' },
+  ARGF: { kind: 'float' },
 };
 
 const SECTIONS = [

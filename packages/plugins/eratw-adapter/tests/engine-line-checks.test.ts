@@ -13,7 +13,16 @@
  *     - `SETCOLOR`/`SETBGCOLOR` 三值形态逐分量 0..255；**给出第 4 实参即整值形态
  *       （按位取 RGB），全不查**（spec `Process.cs:1409-1439`，eratw `evalColorFlat` 逐字复刻）；
  *     - `ASSERT` 唯一实参为字面量 0 ⇒ 执行到该行必抛（`Process.cs:1790-1795`，
- *       eratw 无 debug 守卫——正式跑也报）。
+ *       eratw 无 debug 守卫——正式跑也报）；
+ *     - `ARRAYCOPY` 双名实参四判（两实参都是引号字面名才判，其余 fail-open）：
+ *       装载相位 `ArgumentParser.cs:2451-2496`（`ArgumentBuilder.warn`，逐条与运行时
+ *       `Process.cs:1711-1768` 同构；eratw `StatementExecutor.kt execArrayCopyFlat` 同形）：
+ *       非数组（`ArraycopyArgIsNotArray`）、角色变量（`ArraycopyArgIsCharaVar`）、
+ *       维度不一致（`DifferentArraycopyArgsDim`）、类型不一致（`DifferentArraycopyArgsType`），
+ *       判据顺序与引擎一致：未定义/非数组/角色 → 维度 → 类型。
+ *       名字真值 = 引擎名表（`ERB_ENGINE_NAMES`，`section:"角色变量"` = IsCharacterData、
+ *       `dim:0` = 标量、`dim`/`kind` 缺席 = fail-open）∪ 全局用户 `#DIM`/`#DIMS`（函数体内的
+ *       是局部，同名互不相干 → 对收集器不可见 ⇒ fail-open）。
  *
  * 语料探针读数（eraTW 4.981，4,371 文件）：== 赋值位 0、SETCOLOR/ASSERT 字面越界 0；
  * 全角空格 40,783 处全在 PRINT 输出文本（合法）——该键留 not-covered，见归档表。
@@ -144,6 +153,132 @@ describe('ASSERT 字面量 0（error · Process.cs:1790-1795）', () => {
   it('ASSERT 00 / 0x0 同样是字面 0', async () => {
     const { run } = harness({ 'C:/game/ERB/A.ERB': 'ASSERT 00\nASSERT 0x0\n' });
     expect(await run()).toHaveLength(2);
+  });
+});
+
+describe('ARRAYCOPY 双名实参四判（error · ArgumentParser.cs:2451-2496 / Process.cs:1711-1768）', () => {
+  it('标量（dim:0）当实参 → ArraycopyArgIsNotArray，报第几参与原名', async () => {
+    const { run } = harness({ 'C:/game/ERB/A.ERB': 'ARRAYCOPY "GAMEBASE_TITLE", "RESULT"\n' });
+    const issues = await run();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.severity).toBe('error');
+    expect(issues[0]!.message).toContain('ARRAYCOPY命令的第1参数"GAMEBASE_TITLE"不是一个数组变量');
+  });
+
+  it('角色变量当实参 → ArraycopyArgIsCharaVar；两侧都是角色变量各报一条', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB': 'ARRAYCOPY "CFLAG", "RESULT"\nARRAYCOPY "CFLAG", "CSTR"\n',
+    });
+    const issues = await run();
+    expect(issues).toHaveLength(3);
+    expect(issues[0]!.message).toContain('ARRAYCOPY命令的第1参数"CFLAG"是一个角色变量(不支持)');
+    expect(issues[1]!.message).toContain('第1参数"CFLAG"');
+    expect(issues[2]!.message).toContain('第2参数"CSTR"');
+  });
+
+  it('维度不一致（DA 2维 vs RESULT 1维）→ DifferentArraycopyArgsDim', async () => {
+    const { run } = harness({ 'C:/game/ERB/A.ERB': 'ARRAYCOPY "DA", "RESULT"\n' });
+    const issues = await run();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.message).toContain('ARRAYCOPY命令的两个参数维度不一致');
+  });
+
+  it('类型不一致（RESULT int vs RESULTS str）→ DifferentArraycopyArgsType；维度判据先于类型', async () => {
+    const { run } = harness({ 'C:/game/ERB/A.ERB': 'ARRAYCOPY "RESULT", "RESULTS"\n' });
+    const issues = await run();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.message).toContain('ARRAYCOPY命令的两个参数的数组变量类型不一致');
+  });
+
+  it('用户全局 #DIM/#DIMS 进真值：维度/类型按声明判', async () => {
+    const { run } = harness({
+      'C:/game/ERB/decl.ERH': '#DIM MYARR, 10\n#DIMS MYSTRS, 5\n#DIM CHARADATA MYCHARA, 10\n',
+      'C:/game/ERB/A.ERB':
+        'ARRAYCOPY "MYARR", "MYSTRS"\nARRAYCOPY "MYARR", "DA"\nARRAYCOPY "MYCHARA", "RESULT"\nARRAYCOPY "MYARR", "RESULT"\n',
+    });
+    const issues = await run();
+    expect(issues.map((i) => i.message.slice(0, 40))).toEqual([
+      expect.stringContaining('类型不一致'),
+      expect.stringContaining('维度不一致'),
+      expect.stringContaining('是一个角色变量'),
+    ]);
+  });
+
+  it('合法拷贝不报：同维同型（含同名自拷贝）', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB': 'ARRAYCOPY "RESULT", "RESULT"\nARRAYCOPY "STR", "RESULTS"\n',
+    });
+    expect(await run()).toEqual([]);
+  });
+
+  it('两个标量（dim:0）互拷 → 各报一条 ArraycopyArgIsNotArray', async () => {
+    const { run } = harness({ 'C:/game/ERB/A.ERB': 'ARRAYCOPY "SAVEDATA_TEXT", "GAMEBASE_TITLE"\n' });
+    const issues = await run();
+    expect(issues).toHaveLength(2);
+    expect(issues[0]!.message).toContain('第1参数"SAVEDATA_TEXT"');
+    expect(issues[1]!.message).toContain('第2参数"GAMEBASE_TITLE"');
+  });
+
+  it('fail-open：裸名/未知名/函数体 #DIM/名字带逗号/表达式实参', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB':
+        '@F\n#DIM LOCAL_ARR, 5\nARRAYCOPY "LOCAL_ARR", "RESULT"\nARRAYCOPY "UNKNOWN_NAME", "RESULT"\nARRAYCOPY "A,B", "RESULT"\nARRAYCOPY ARG_VARNAME , "RESULT"\n',
+    });
+    expect(await run()).toEqual([]);
+  });
+
+  it('SKIP 块与注释里的 ARRAYCOPY 不报', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB': '[SKIPSTART]\nARRAYCOPY "DA", "RESULT"\n[SKIPEND]\n; ARRAYCOPY "DA", "RESULT"\n',
+    });
+    expect(await run()).toEqual([]);
+  });
+});
+
+describe('维度/类型族可证子集（error · VariableParser.cs:177-179 / IdentifierDictionary.cs:258-300,354-359）', () => {
+  it('全局 #DIM 重名 → VarNameAlreadyUsed，报后到者', async () => {
+    const { run } = harness({
+      'C:/game/ERB/decl.erh': '#DIM DUP_ARR, 5\n',
+      'C:/game/ERB/A.ERB': '#DIM DUP_ARR, 10\nARRAYCOPY "DUP_ARR", "RESULT"\n',
+    });
+    const issues = await run();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.severity).toBe('error');
+    expect(issues[0]!.message).toContain('变量名"DUP_ARR"已经被使用');
+    expect(issues[0]!.line).toBe(1);
+  });
+
+  it('名字以半角数字开头 → VarStartedHalfDigit', async () => {
+    const { run } = harness({ 'C:/game/ERB/A.ERB': '#DIM 1ABC, 5\n' });
+    const issues = await run();
+    expect(issues).toHaveLength(1);
+    expect(issues[0]!.message).toContain('变量名"1ABC"以半角数字开始');
+  });
+
+  it('0 维变量带下标 → ZeroDVarHasArg（VariableParser.cs:177-179 求值前就抛）', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB': 'X = GAMEBASE_TITLE:0\nY = RESULTF:X\nZ = SAVEDATA_TEXT[1]\n',
+    });
+    const issues = await run();
+    expect(issues).toHaveLength(3);
+    expect(issues[0]!.message).toContain('变量"GAMEBASE_TITLE"不是数组却带了一个参数');
+    expect(issues[2]!.message).toContain('变量"SAVEDATA_TEXT"不是数组却带了一个参数');
+  });
+
+  it('fail-open：0 维名裸用合法 / 函数体 #DIM 遮蔽同名 0 维 / SKIP 块与字符串内容', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB':
+        '@F\n#DIM GAMEBASE_TITLE, 5\nX = GAMEBASE_TITLE:0\n[SKIPSTART]\nX = GAMEBASE_TITLE:0\n[SKIPEND]\nPRINTL "GAMEBASE_TITLE:0"\n',
+      'C:/game/ERB/B.ERB': 'X = GAMEBASE_TITLE\n',
+    });
+    expect(await run()).toEqual([]);
+  });
+
+  it('SKIP 块内的全局重名不报（整段死代码，引擎不装载，语料实证 COLOR_CLAC.ERB 形态）', async () => {
+    const { run } = harness({
+      'C:/game/ERB/A.ERB': '[SKIPSTART]\n#DIM DUP2, 5\n#DIM DUP2, 9\n[SKIPEND]\n',
+    });
+    expect(await run()).toEqual([]);
   });
 });
 

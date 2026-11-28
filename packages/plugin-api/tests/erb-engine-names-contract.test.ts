@@ -87,6 +87,13 @@ describe('ERB 引擎名数据契约（spec 权威 ∪ 语料补充）', () => {
     expect(byName.get('FLAG')).toMatchObject({ dim: 1, kind: 'int' });
     expect(byName.get('STR')).toMatchObject({ dim: 1, kind: 'str' });
     expect(byName.get('LOCAL')).toMatchObject({ dim: 1, kind: 'int' });
+    // 函数局部六名的 kind 不能随段默认一刀切成 int（2026-11-28 语料闸实证订正）：
+    // LOCALS/ARGS 是字符串局部（`CreateLocalStr`，VariableData.cs:3184-3187），
+    // LOCALF/ARGF 是浮点局部（fork-src VariableData.cs:376-379）。
+    expect(byName.get('LOCALS')).toMatchObject({ dim: 1, kind: 'str' });
+    expect(byName.get('ARGS')).toMatchObject({ dim: 1, kind: 'str' });
+    expect(byName.get('LOCALF')).toMatchObject({ dim: 1, kind: 'float' });
+    expect(byName.get('ARGF')).toMatchObject({ dim: 1, kind: 'float' });
     // 多元数组：dim 逐条给（VariableData.cs:3103-3110）
     expect(byName.get('DITEMTYPE')!.dim).toBe(2);
     expect(byName.get('TA')!.dim).toBe(3);

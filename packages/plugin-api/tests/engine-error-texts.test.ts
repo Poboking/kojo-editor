@@ -169,11 +169,14 @@ const DISPOSITIONS: readonly Disposition[] = [
   {
     kind: 'not-covered',
     where:
-      '缺**变量维度/类型的静态判定**：维度真值（`dim` / `kind`）已随 `ERB_ENGINE_NAMES`' +
-      '就位，但还没有消费它的检查器，也没有**全部**变量的实时维度推演（`#DIM` 作者声明与' +
-      '引擎内建声明要合成一张表）。这是 F 族里数据已齐、只差判据的一块',
+      '**变量维度/类型的静态判定（剩余）**：维度真值（`dim` / `kind`）已随 `ERB_ENGINE_NAMES`' +
+      '就位，且三键已先行接走（见 consumed 族）。剩余各键都要**表达式级类型/维度推演**：' +
+      '`SetStrToInt` / `SetIntToStr` / `IsNotInt` / `IsNotStr` 要对任意表达式定类型（kojo 只有' +
+      '字面量级静态视野）；`MissingVarArg` 要区分「裸名当数组用」与「命令实参位传整个数组」' +
+      '（后者合法）；`CallCharaVarAsVar` 要对缺角色维的下标个数建模且语料存在 `CFLAG:0` 形态歧义；' +
+      '`GetSize*` 要对 VARSIZE 实参做常量归约；`EmptyRefVar` / `CanNotOmitRefArg` 要 `#DIM REF`' +
+      '形参链建模。逐条补需先建表达式类型推演腿，不是逐条文案的事',
     ids: [
-      'ZeroDVarHasArg',
       'MissingVarArg',
       'GetSizeDimError',
       'GetSizeCharaVarWithoutDim',
@@ -186,11 +189,20 @@ const DISPOSITIONS: readonly Disposition[] = [
       'IsNotStr',
       'SetStrToInt',
       'SetIntToStr',
-      'VarNameAlreadyUsed',
-      'VarStartedHalfDigit',
       'EmptyRefVar',
       'CanNotOmitRefArg',
     ],
+  },
+  {
+    kind: 'consumed',
+    where:
+      '`plugins/eratw-adapter/src/engine-line-checks-impl.ts`（P2-7 维度/类型族可证子集，诊断码 `erb.engine-line-checks`）：' +
+      '`VarNameAlreadyUsed` = 全局 #DIM/#DIMS 重名后到者（eratw `Symbols.kt LabelTable.scanLabels` seenDims 命中后到者；' +
+      'C# 锚 `IdentifierDictionary.cs:258-300` CheckUserVarName + `UserDefinedVariableData.cs:283-288` warnLevel≥2 拒载）；' +
+      '`VarStartedHalfDigit` = 名字以半角数字开头（`IdentifierDictionary.cs:354-359` char.IsDigit）；' +
+      '`ZeroDVarHasArg` = 引擎 0 维名带下标（`VariableParser.cs:177-179` 解析期抛 CodeEE）；函数体 `#DIM` ' +
+      '遮蔽同名 0 维的形态 fail-open（语料 4,371 文件三判全零，`[SKIPSTART]` 内声明不参与重名判定）',
+    ids: ['VarNameAlreadyUsed', 'VarStartedHalfDigit', 'ZeroDVarHasArg'],
   },
   {
     kind: 'not-covered',
@@ -278,11 +290,15 @@ const DISPOSITIONS: readonly Disposition[] = [
     ],
   },
   {
-    kind: 'not-covered',
+    kind: 'consumed',
     where:
-      '`ARRAYCOPY` 四条：判据（两边是否数组、维度是否一致、类型是否一致）全部可由' +
-      '**已有的 `dim` / `kind` 数据**静态判定，是本表里最容易补的一族——只差一个' +
-      '「命令 → 参数语义」的薄壳（同 ArgumentBuilder 缺口）',
+      '`plugins/eratw-adapter/src/engine-line-checks-impl.ts`（P2-7 ARRAYCOPY 判，诊断码 `erb.engine-line-checks`）：' +
+      '两实参均为引号字面名才判——装载相位 `ArgumentParser.cs:2451-2496`（`ArgumentBuilder.warn`，isBackComp:false）与' +
+      '运行时 `Process.cs:1711-1768` 同构（eratw `StatementExecutor.kt execArrayCopyFlat` 同形）；四键按引擎判序：' +
+      '非数组（引擎标量 dim:0，如 GAMEBASE 系 / RESULTF / SAVEDATA_TEXT）→ 角色变量（名表 section=角色变量 或 ' +
+      '`#DIM CHARADATA`）→ 维度（声明尺寸个数 = 维度，`UserDefinedVariableData.cs:437`）→ 类型（int vs str）。' +
+      '名字真值 = `ERB_ENGINE_NAMES` ∪ 全局用户 `#DIM`/`#DIMS`；裸名（str 变量值，动态）/未知名/函数体 `#DIM`/名字带逗号 fail-open；' +
+      '名字同时命中用户与引擎（遮蔽关系判不了）也 fail-open。eraTW 语料 4,371 文件四判全零',
     ids: [
       'ArraycopyArgIsNotArray',
       'ArraycopyArgIsCharaVar',

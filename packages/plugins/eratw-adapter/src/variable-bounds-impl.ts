@@ -56,6 +56,9 @@ function resolvedSizes(entry: ErbVariableSizeEntry, csv: ReadonlyMap<string, num
 export interface VisibleLine {
   readonly line: number;
   readonly code: string;
+  /** 注释尾已剥、**双引号字符串内容保留**的代码体——给需要读实参名的检查
+   *  （ARRAYCOPY 等）；`code` 的字符串已剥成 ""，两字段判据同源不漂移。 */
+  readonly rawCode: string;
 }
 export function visibleLines(text: string): readonly VisibleLine[] {
   const out: VisibleLine[] = [];
@@ -76,8 +79,9 @@ export function visibleLines(text: string): readonly VisibleLine[] {
     if (!trimmed || isErbCommentLine(trimmed) || trimmed.startsWith('#') || trimmed.startsWith('$')) continue;
     // 整行 @FUNC 定义不判；注释尾巴与双引号字符串内容不判
     if (trimmed.startsWith('@')) continue;
-    const code = trimmed.replace(/;.*$/, '').replace(/"(?:[^"\\]|\\.)*"/g, '""');
-    if (code) out.push({ line: i + 1, code });
+    const rawCode = trimmed.replace(/;.*$/, '');
+    const code = rawCode.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    if (code) out.push({ line: i + 1, code, rawCode });
   }
   return out;
 }
