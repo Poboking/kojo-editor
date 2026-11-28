@@ -216,7 +216,8 @@ node tools/kojo-mcp.mjs
 
 2026-11-06 第四波收口时 **wired 4 / NOT_WIRED 1**；余项① 收口（`b8ff59d4`）后 **wired 5 / NOT_WIRED 0**；
 余项⑤ 收口（`784cc077`）后 **wired 7 / NOT_WIRED 0**；B3 编辑器写腿批（`f3dad97c`）后 **wired 12 / NOT_WIRED 0**；
-B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**；B10 打开文档面（`3b13f7ad`）后 **wired 40 / NOT_WIRED 0**。
+B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**；B10 打开文档面（`3b13f7ad`）后 **wired 40 / NOT_WIRED 0**；
+此后 B24 / B25 与 MCP-PERF S 系继续推进，2026-11-28 复核 **wired 45 / NOT_WIRED 0**（真值以 `mcp-inventory --json` 的 `writeLegs` 为准）。
 下表逐条点名那 12 枚编辑器/文件/任务面写腿（`editor.openDocument` 见 §5.9）；
 启动器 27 枚（13 只读 + 14 生命周期/写）的接线与授权口径见 §5.6——**它们同样一枚都不许挂空串**。
 
@@ -238,7 +239,7 @@ B4 启动器族（`e1e9de71`）后 **wired 39 / NOT_WIRED 0**；B10 打开文档
 三种形态要分清：**四枚盘写腿**（`fileTree.*`）一律叠**双闸**——写闸一第四张表 `approvedRoots` 复核，写闸二内核 `writablePaths` 写原语；成功后广播 `file.changed`（remove 发 `unlink`、rename 发源 `unlink` + 目标 `add`）。
 **六枚模型侧写**（`problems.quickFix` + `editor.*` 五枚）**不落盘**：只改 Monaco 模型（可撤销、留脏，回执恒带 `saved:false` 与真实 `dirty` 读数——脏值取自 `EditorPane.computeDirty` 同一条表达式 `getAlternativeVersionId() !== editorModelPool.baseline(path)`，monaco 0.57 的 `ITextModel` **没有** `isDirty`，拿不到就 `dirty:null` + 理由，不另立第二份脏账），落盘仍只经上面两闸；`editor.*` 五枚按 `paneId` 显式反查实例，**这一面没有「当前聚焦」语义**（禁用 `focusedCtx()`），pane 不在 ⇒ `NOT_WIRED` + `E_EDITOR_PANE_GONE`，绝不 `applied:true` 冒充。
 **两枚运行态写**（`tasks.*`）不占盘、不触双闸。三类一律判 `edit` ⇒ read 会话直调被端点 `E_TIER_DENIED` 拒（`editor.*` 五枚与 `tasks.*` 两枚同批点名进 Rust `EDIT_TOOLS_EXACT`，端点级回归钉「拒在 emit 之前 ⇒ 桥零调用」+ 逐条 Denied 审计）。
-`privileged` 具名工具（现 **29** 枚：`fileTree.remove` / `fileTree.rename` + 启动器族 27 枚，见 §5.6）默认不进 `tools/list`、按工具名精确批准；`exportFile` 对话框仍是唯一域外写法定通道。
+`privileged` 具名工具（现 **30** 枚：`fileTree.remove` / `fileTree.rename` + 启动器族 27 枚 + `commands.run`，见 §5.6 / §5.7）默认不进 `tools/list`、按工具名精确批准；`exportFile` 对话框仍是唯一域外写法定通道。
 `NOT_WIRED` 一律显式抛错可见，**绝不挂空串假实现**。
 
 ### 5.5 分页与游标（B1 批＝`5f8c8df5`）
@@ -782,21 +783,21 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
 
 ### 10.5 当前能力面读数与剩余缺口（真值自 `node tools/mcp-inventory.mjs --print`）
 
-> 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-06 第四/五波落地后按当前树复核）。
+> 下列数字随仓库命令 / 槽贡献增减而变，**以脚本当下输出为准**（2026-11-28 复核）。
 
-- 能力面：命令 **61** / Rust 命令 **90** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
-  tools **77**（read **37** / edit **11** / privileged **29**）；resources **10**；prompts **3**；
-- 缺口：`totalGaps=181` / `wiredGaps=64` / **`deferredGaps=117`**，逐条带原因，
-  按七类归因（合计 117，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
+- 能力面：命令 **61** / Rust 命令 **91** / 语义读数 **23** / 槽贡献 **103**（命令类 4）；
+  tools **86**（read **41** / edit **15** / privileged **30**）；resources **10**；prompts **3**；
+- 缺口：`totalGaps=181` / `wiredGaps=68` / **`deferredGaps=113`**，逐条带原因，
+  按七类归因（合计 113，逐条清单跑 `node tools/mcp-inventory.mjs --print` 看 `deferred` 数组）：
 
 | 原因类 | 条数 |
 | --- | --- |
-| 纯 UI / 注册槽贡献：无独立数据面可暴露；领域知识只经 `mcp.prompt` 槽注入 | 68 |
+| 纯 UI / 注册槽贡献：无独立数据面可暴露；领域知识只经 `mcp.prompt` 槽注入 | 67 |
 | 危险工具（privileged）：默认不进 tools/list，须宿主经第四张表逐会话批准 | 19 |
-| 写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露 | 17 |
-| MCP 会话控制 / 审计内建命令：由宿主线协议与第四张表管理，不作为模型工具 | 9 |
-| 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 2 |
-| 编辑器写 / 光标副作用：只剩 `format` 一条（异步 provider 通道，B3 批刻意不登记半截实现） | 1 |
+| 写 / 授权 / 原生 UI 交互：面向人的操作或需宿主接线，首期不默认暴露 | 14 |
+| MCP 会话控制 / 审计内建命令：由宿主线协议与第四张表管理，不作为模型工具 | 10 |
+| 只读原语：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补，绝不挂空串假实现） | 1 |
+| 编辑器写 / 光标副作用：首期不面向只读模型面（`format` 仍是异步 provider 通道） | 1 |
 | 语义读数：真源存在但本波未登记为具名工具（保留缺口，宿主后续按需补） | 1 |
 
 - **读数轨迹**：`read 28→35`（第四波 6 枚只读具名工具 + 第五波 `editor.cursor`）→ 余项① `quickFix`
@@ -811,7 +812,10 @@ notification 转发后不回帧、不挂住 stdio（S02/S05）；batch 数组行
   **B10 打开文档面**（`ebc3d714` / `3b13f7ad`）+1 枚具名 `edit` ⇒ tools **77**（edit **10→11**）、
   写腿 wired **39→40**，缺口账不变（`totalGaps 181` = `wired 64` + `deferred 117`）。
   `orphanedWires=0` / `missingSources=0` 全程为零；写腿状态段见 §5.4
-  （wired 12→**40** / NOT_WIRED 0）。
+  （wired 12→**45** / NOT_WIRED 0）。此后 **B24**（`220c3aa0` `commands.run`）/
+  **B25**（`5a8682b4` 文件族三面）/ **MCP-PERF S 系**（S3 `562ada2f` / S4 `cc76b537` /
+  S6 `d4de3132` / S10 `c640e848`）继续推进 ⇒ 2026-11-28 真值 tools **86**
+  （read 41 / edit 15 / privileged 30）、`wiredGaps 68` / `deferredGaps 113`；逐笔轨迹以 git 提交信息为准。
 - **刻意不登记**（铁律「真源不存在 = 不登记」，留在缺口里）：第四波 11 条 `cheap-read`
   逐条判性只登记 6 条，余 3 条 = `read_file_bytes_raw`（二进制帧 + path 即任意绝对目标路径）、
   `updater_relaunch`（重启动作）、`debug.actions`（注入面不可达）——`debug.type` 已于 B3 批由具名工具
