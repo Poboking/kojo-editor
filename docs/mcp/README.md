@@ -602,6 +602,10 @@ B21 量出的靶子在 schema 侧，不在描述侧——本批照它收口，**
   信息等价闸（`CANON_TOKENS` / `tierTokens`）逐 token 仍绿，`additionalProperties:false` 92 处一字未动。
   重钉：desc ≤ 68,800、schema ≤ 97,200、帧带底数 168,000（带顶 184,800）；`launcher` 75,000、2048 闸、
   BAND 0.1、记账下界 163,000 不动。
+- **T2 再瘦（2026-11-28）**：上面「必要副本」的判断仍成立，但**跨面约定可以搬到握手面**——
+  `initialize.instructions` 落地后，特权档位尾注 187 → 102 字符，帧 141,889 → **139,903**、
+  重复 12.8% → **11.7%**。详见 §5.17。**增面余量警告**：`schema` 上界只剩 611 B、`desc` 只剩
+  2,042 B，下一批加面前必须先瘦（T5 收敛两面正好是瘦身单）。
 
 ### 5.15 三道机械闸：入参漂移、注册表换代、载荷体积（B19 / B20 / B23）
 
@@ -679,6 +683,59 @@ schema ↔ 腿**双向**、B11 手抄 `CONSUMED` ↔ 扫描逐面相等（表旧
 故判据只钉确定性的那一格（喂索引份数 10 vs 200）与一条弱下界（不比重建慢），
 **不编一个好看的倍数**；本批读数是纯内存接缝读数，与真壳读数不互借（PITFALLS 236），
 生产接线（`walkDir` + `readTexts` + 索引三原语）的真壳取证仍待做。
+
+### 5.17 `initialize.instructions`：跨面约定只说一次（T2，2026-11-28）
+
+`InitializeResult.instructions` 是 MCP 规范里的**可选**取向字段，本项目一直没写——后果是「档位模型 /
+分页单旋钮 / 资源 URI 语义 / 只读新鲜度 / 总数未知」这五条**跨面共用**的约定，只能在每枚工具描述里
+各抄一遍。T1 把逐字重复从 33.1% 压到 12.8% 之后，剩下最大的一组正是这类抄写。
+
+**落点**：`protocol.rs` 的 `const INSTRUCTIONS: &str`（**1,044 B**，预算 1,600 B），
+`initialize_result` 只加一个键，`protocolVersion` / `capabilities` / `serverInfo` / `_meta`
+（含 `clientInfo` 回显）**逐字节不变**——由 `initialize_result_instructions_is_additive_only`
+用同一条生产原语重建旧形状后逐键深等证明，不是注释声称。
+
+五段原文（每段一句，机器可断言）：
+
+| # | 取向 | 原文（节选） |
+| --- | --- | --- |
+| ① | 档位与批准 | `Every tool is read, edit, or privileged. Privileged tools are absent from tools/list until this EXACT tool name is approved in the 4th table - a wildcard such as launcher_* approves nothing.` |
+| ② | 分页单旋钮 | `One knob, named \`limit\` … Continue with the \`nextCursor\` … \`changedDuringPaging:true\` … must NOT be spliced onto the old page.` |
+| ③ | 资源是 URI | ``\`kojo://\` identifiers are URIs, not file paths. resources/read accepts only such a URI.`` |
+| ④ | 只读新鲜度 | ``Read-only replies may carry \`fsFreshness\` … A stale mark means re-read.`` |
+| ⑤ | 总数未知 | ``\`knownTotal:false\` … the real total is unknown - it is not 0 and must not be used as an exact count.`` |
+
+**同源判据**：TS 侧 `mcp-initialize-instructions.test.ts` 不另抄一份文本，而是从 `protocol.rs`
+正则抽 `r#"…"#` 那段字面量做断言，并断言 `protocol.rs` 里 `INSTRUCTIONS` **只有一处定义**
+——两份拷贝就是下一轮漂移。Rust 侧 `e2e_initialize_carries_instructions` 走真 TCP 校验
+在场 / 非空 / ≤1600 B / 九个语义标记 / 负向（无 32+ 位十六进制 token、无本地端口、无盘符路径、
+无 `/Users/`、无 `clientId`、无「请批准我」式话术）。
+
+**第一次真实收益：特权档位尾注 187 → 102 字符**（`PRIVILEGED_TIER_NOTE`）。删掉的是
+「absent from tools/list until … (a wildcard … approves nothing)」半句，保留事实标记
+`Tier: privileged`、宿主闸门半句、落点指针 `` `initialize` ``。**为什么搬得走**：那句可见性规则
+只对「看不见这枚工具」的模型有意义，而它看不见时这枚工具的描述**压根不会被读到**——
+它在唯一适用的场景里是不可读的。对已批准会话真正有意义的只有「宿主闸门仍管每次调用」，那半句留在面上。
+
+读数（判据口径 / static 量具）：帧 **141,884 → 139,898**（static **141,889 → 139,903**）、
+描述 60,944 → **58,958**、schema 69,589 → 69,589（本批不碰）、逐字重复
+18,227 B（12.8%）→ **16,323 B（11.7%）**。对账逐字节相等：`27×85 − 3×103 = 1,986 B`。
+
+**取舍与不装好看的地方**：
+
+- 顺带把同一句尾注补给 3 枚原本没挂的 privileged 面（`fileTree.remove` / `fileTree.rename` /
+  `commands.run`），每枚 +103 B，**是净支出**。换来 30/30 特权面口径一致——一枚特权面没有档位
+  标记，比多花 309 B 更坏。
+- instructions **每个会话都发**，所以面上那半句指针是**导航，不是知识**（客户端不渲染 instructions
+  时它指向空处，但也不会误导）。保留它是因为「知道去哪儿读」本身有用，不是因为它承载规则。
+- 本批没有达到「重复降到 10% 以下」：要真到那个量级得把尾注连指针一起删掉，那会让 30 枚面
+  失去档位标记。**没有为了读数好看去删信息。**
+- 载荷闸向下重钉：`B22_FULL_FRAME_BYTES` 140,000 → **130,000**（带顶 143,000，机械余量 3,102 B）、
+  `desc` 上界 61,500 → **61,000**（余量 **2,042 B**）、`launcher` 75,000 → 48,500。
+  `schema` 上界 70,200 与 `B22_ACCOUNTED_FLOOR` 135,000 **不动**——本批 schema 零变化，
+  为「留余量」而抬上界＝反向漂移。
+- **下一批增面前必须先瘦**：`schema` 上界只剩 **611 B**、`desc` 只剩 2,042 B。这是硬事实，
+  不是建议——T5（两面收敛）正好是瘦身单，先做 T5 再考虑增面。
 
 ## 6. tier 与授权模型
 
