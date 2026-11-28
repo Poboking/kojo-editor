@@ -48,12 +48,53 @@ export interface McpWiringSources {
 
 let registeredSources: McpWiringSources | null = null;
 
+/** 需要浅拷贝一层再冻结的纯对象读数面（其余对象 / 类实例保持引用，不冻生产共享实例）。 */
+const SHALLOW_COPY_FIELDS = new Set<keyof McpWiringSources>(['semantic', 'kernelIo']);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * 登记侧冻结副本（WP-2，B23 两格盲区的法定收口路径）：**登记即拷贝 + 冻结**。
+ *
+ * 存引用时，memo 的逐字段浅快照要么漏看原地改写（B23 口子），要么被迫做深比对；
+ * 收口后选择权回到登记点——要换代就重新登记一份新对象（生产 `buildRealMcpSources`
+ * 每次新建 ⇒ 零成本）。
+ *
+ * 冻结边界（如实）：
+ * - 顶层字段重赋 ⇒ 冻结拦下（严格模式 `TypeError`）；
+ * - 数组字段 ⇒ 浅拷贝后冻结，`push` / `splice` 拦下；
+ * - `semantic` / `kernelIo` 纯对象 ⇒ 浅拷贝一层后冻结，换内部属性不再影响副本；
+ * - 类实例 / 函数（`semanticService` / `commandContext` / 各读数函数）⇒ 保持引用不冻，
+ *   避免冻住生产共享实例。这一格的红路只剩 `Object.getOwnPropertyDescriptor` 级反射。
+ */
+function freezeWiringSources(sources: McpWiringSources): McpWiringSources {
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(sources)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      copy[key] = Object.freeze([...value]);
+    } else if (SHALLOW_COPY_FIELDS.has(key as keyof McpWiringSources) && isPlainObject(value)) {
+      copy[key] = Object.freeze({ ...value });
+    } else {
+      copy[key] = value;
+    }
+  }
+  return Object.freeze(copy) as McpWiringSources;
+}
+
 /**
  * 登记 / 清空真源。宿主（握有命令注册表、语义服务、kernel IO 的那一侧）经**动态 import**
  * 调本函数即可把真源交给首条请求时装载的 wiring；传 `null` 恢复「全部缺席」。
+ *
+ * WP-2 起**登记即冻结**：传进来的对象被拷贝一份冻结副本保存，之后对原对象的原地改写
+ * 一律不生效；要换代请重新登记。`getMcpWiringSources()` 返回的就是那份冻结副本。
  */
 export function registerMcpWiringSources(sources: McpWiringSources | null): void {
-  registeredSources = sources;
+  registeredSources = sources === null ? null : freezeWiringSources(sources);
 }
 
 /** 当前登记的真源（未登记返回 `null`）。 */

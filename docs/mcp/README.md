@@ -609,10 +609,12 @@ schema ↔ 腿**双向**、B11 手抄 `CONSUMED` ↔ 扫描逐面相等（表旧
 `Object.is`；**未被读取的键不参与换代**（防「无关键抖动 ⇒ 每请求重装配」的变相轮询）；缺席快照与在场快照互不等 ⇒
 注销/缺席照旧显式。另断两条容易被顺手改掉的：只换 `kernelIo` 时未改写的 `semantic` 腿重装配后**仍持旧闭包印记**
 （判据是逐字段，不是整包），以及帧数＝3＝一请求一帧（重取不产生第二帧）。
-**仍在看不到的两格**（不掩盖）：①对已登记的数组/对象**深地**原地改（`sources.commands.push(...)`、换 `semantic`
-对象内部属性而不换引用）；②装配后同一对象上键被删除再补回旧引用。法定收口路径＝**登记侧收口**
-（`registerMcpWiringSources` 拷贝一份冻结副本登记；生产 `installRealMcpSources` 每次新建对象 ⇒ 零成本），
-届时红路只剩 `Object.getOwnPropertyDescriptor` 级反射。
+**WP-2 收口（2026-11-28）**：法定路径已落地——`registerMcpWiringSources` **登记即冻结**（拷贝一份冻结副本：
+顶层 `Object.freeze`、数组浅拷贝后冻结、`semantic` / `kernelIo` 纯对象浅拷贝一层后冻结；类实例与函数保持
+引用不冻，避免冻住生产共享实例）。此后对原对象的原地改写（含 B23 那两格：深地改数组/嵌套对象、删键再补回）
+一律**不生效**，要换代必须重新登记（生产 `buildRealMcpSources` 每次新建 ⇒ 零成本）。红路只剩
+`Object.getOwnPropertyDescriptor` 级反射。判据＝`mcp-host-bridge-memo.test.ts` ⑦（原地改写不生效 + 重新登记
+才换代）/ ⑧（冻结副本 identity、顶层与数组不可写）。
 
 ### 5.16 驻留换代的 reload 钩子（MCP-RELOAD-HOOK，2026-11-28）
 

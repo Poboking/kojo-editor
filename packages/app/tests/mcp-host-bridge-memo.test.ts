@@ -26,7 +26,11 @@ import {
   type McpRespondArgs,
   type Unlisten,
 } from '../src/mcp/host-bridge';
-import { registerMcpWiringSources, type McpWiringSources } from '../src/mcp/wiring';
+import {
+  getMcpWiringSources,
+  registerMcpWiringSources,
+  type McpWiringSources,
+} from '../src/mcp/wiring';
 
 const scope: McpSessionScope = {
   sessionId: 'b20',
@@ -233,12 +237,14 @@ describe('B20：注册表 memo × 真源登记竞态（失效重取，不是重�
   });
 
   // B23（LaneAJ，2026-11-06）补 B20 回执留下的口子：判据若只看「登记对象 identity」，
-  // 有人**原地改写**已登记的 McpWiringSources 字段而不再调 registerMcpWiringSources，
-  // memo 看不出换代 ⇒ 继续吃旧腿。本用例全程生产形态、**不**再登记第二次（那正是 B20
-  // 已能处理的情形），只用 Object.assign 在同一对象上换掉 kernelIo 字段。
+  // WP-2 收口（B23 两格盲区的法定路径）：登记侧拷贝一份**冻结副本**，登记即拍快照。
+  // 此后对原对象的原地改写（字段重赋 / 数组 push / 嵌套对象换属性）一律**不生效**——
+  // 要换代必须重新 `registerMcpWiringSources` 一份新对象（生产 `buildRealMcpSources`
+  // 每次新建，故零成本）。B23 时代这里会因逐字段浅快照而换代；本批把「检测到」升级为
+  // 「根本不采纳」，红路只剩 `Object.getOwnPropertyDescriptor` 级反射。
   // 位置说明：必须声明在 ⑥ **之前**——⑥ 注入的 deps 按「只给到的项才覆盖」留在模块级
   // 配置里（B20 既有语义，不许动），⑥ 之后的再登记仍会吃那份 injected deps、不走 wiring。
-  it('⑦ 原地改写已登记 sources 的字段（不再调 registerMcpWiringSources）⇒ 下一条读必须拿到新腿', async () => {
+  it('⑦ 登记即冻结：原地改写已登记 sources 不生效，重新登记新对象才换代', async () => {
     const sources = realSources('in-place-old');
     registerMcpWiringSources(sources);
     const hz = createHarness();
@@ -249,20 +255,45 @@ describe('B20：注册表 memo × 真源登记竞态（失效重取，不是重�
     expect(old.ok).toBe(true);
     expect(old.result).toMatchObject({ from: 'in-place-old' });
 
-    // 原地写字段：登记对象 identity 一字未动——B20 的身份比对在这一拍看不出换代。
+    // 原地写字段：冻结副本与原文隔离 ⇒ 这一拍**不生效**（必须重新登记）。
     Object.assign(sources, { kernelIo: { projectInfo: () => ({ from: 'in-place-new', root: '/proj' }) } });
 
-    const after = await hz.call('b23-7b', PROJECT_INFO.method, PROJECT_INFO.params);
-    expect(after.ok).toBe(true);
-    expect(after.result).toMatchObject({ from: 'in-place-new' });
+    const stale = await hz.call('b23-7b', PROJECT_INFO.method, PROJECT_INFO.params);
+    expect(stale.ok).toBe(true);
+    expect(stale.result).toMatchObject({ from: 'in-place-old' });
 
-    // 字段级换代不是「整包重登记」：没被改写的 semantic 腿仍持有同一对象上的旧闭包，
-    // 重装配后照旧读出旧印记（换代判据＝逐字段浅快照，不是对象整体）。
-    const semantic = await hz.call('b23-7c', SEMANTIC_DIAGNOSTICS.method, SEMANTIC_DIAGNOSTICS.params);
+    // 合法换代路径：重新登记一份新对象 ⇒ 照常换代。
+    registerMcpWiringSources(realSources('in-place-new'));
+    const fresh = await hz.call('b23-7c', PROJECT_INFO.method, PROJECT_INFO.params);
+    expect(fresh.ok).toBe(true);
+    expect(fresh.result).toMatchObject({ from: 'in-place-new' });
+
+    const semantic = await hz.call('b23-7d', SEMANTIC_DIAGNOSTICS.method, SEMANTIC_DIAGNOSTICS.params);
     expect(semantic.ok).toBe(true);
-    expect(semantic.result).toMatchObject({ from: 'in-place-old' });
+    expect(semantic.result).toMatchObject({ from: 'in-place-new' });
 
-    expect(hz.frames).toHaveLength(3); // 一请求一帧：重取不产生第二帧，也没有轮询
+    expect(hz.frames).toHaveLength(4); // 一请求一帧：重取不产生第二帧，也没有轮询
+  });
+
+  it('⑧ 登记副本冻结：顶层与数组不可写，get 返回的是拷贝而非原对象', () => {
+    const sources = {
+      ...realSources('frozen'),
+      commands: [{ id: 'x', title: 'X', run: () => {} }],
+    } as unknown as McpWiringSources;
+    registerMcpWiringSources(sources);
+    const got = getMcpWiringSources();
+    expect(got).not.toBeNull();
+    expect(got).not.toBe(sources); // 拷贝：登记即冻结
+    expect(Object.isFrozen(got)).toBe(true);
+    expect(Object.isFrozen((got as { commands?: unknown }).commands)).toBe(true);
+    expect(() => {
+      (got as unknown as { kernelIo: unknown }).kernelIo = null;
+    }).toThrow(TypeError);
+    expect(() => {
+      (got as unknown as { commands: unknown[] }).commands.push({});
+    }).toThrow(TypeError);
+    // 冻结的是登记副本，不冻调用方自己的对象（生产组装点仍可自由持有）。
+    expect(Object.isFrozen(sources)).toBe(false);
   });
 
   it('⑥ 显式注入 deps 的测试缝行为不变：注入那份 deps 就是真源，不被 wiring 的换代劫走', async () => {

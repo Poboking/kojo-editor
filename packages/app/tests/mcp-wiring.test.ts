@@ -53,12 +53,17 @@ function cmd(over: Partial<CommandEntry> = {}): CommandEntry {
 describe('真源登记 seam', () => {
   afterEach(() => registerMcpWiringSources(null));
 
-  it('登记后可读，传 null 恢复「全部缺席」', () => {
+  it('登记后可读（冻结副本），传 null 恢复「全部缺席」', () => {
     registerMcpWiringSources(null);
     expect(getMcpWiringSources()).toBeNull();
     const sources = { commands: [] as const };
     registerMcpWiringSources(sources);
-    expect(getMcpWiringSources()).toBe(sources);
+    // WP-2：登记即冻结——内容相等，但返回的是冻结副本而非原对象。
+    const got = getMcpWiringSources();
+    expect(got).not.toBe(sources);
+    expect(got).toEqual(sources);
+    expect(Object.isFrozen(got)).toBe(true);
+    expect(Object.isFrozen(sources)).toBe(false);
     registerMcpWiringSources(null);
     expect(getMcpWiringSources()).toBeNull();
   });
